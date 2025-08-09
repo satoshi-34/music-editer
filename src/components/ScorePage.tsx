@@ -1,4 +1,5 @@
 import type { PropsWithChildren } from "react";
+// これだけでOK（react-dom ではない）
 
 type ScorePageProps = {
   pageNumber?: number;
