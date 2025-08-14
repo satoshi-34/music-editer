@@ -29,14 +29,19 @@ export default function StaffCanvas({ systems = 6, gap = 110, measuresPerSystem 
     const ctx = renderer.getContext();
     const svg = ref.current.querySelector('svg'); if (!svg) return;
 
-    const left = 16, right = 16, innerW = W - left - right, CLEF_PAD = 44;
+    const left = 16, right = 16;
     // innerW は「段の描画可能幅」。ここから記号ぶんを除いた幅を配分する
-    const allocW = innerW - CLEF_PAD;
+    const innerW = W - left - right;
+    const CLEF_PAD_FIRST = 44; //１段目：ト音記号＋拍子
+    const CLEF_PAD_OTHER = 28; //２段目以降：ト音記号のみ
 
     for (let s = 0; s < systems; s++) {
       const y = top + s * gap;
       const idx0 = s * measuresPerSystem;
       const idx1 = idx0 + measuresPerSystem;
+
+      const CLEF_PAD_THIS = (s === 0) ? CLEF_PAD_FIRST : CLEF_PAD_OTHER;
+      const allocW = innerW - CLEF_PAD_THIS;
 
       // 可変小節幅：短い音が多いほど広げる
       const weights: number[] = [];
@@ -53,7 +58,7 @@ export default function StaffCanvas({ systems = 6, gap = 110, measuresPerSystem 
 
       // 段頭の小節は「内容分」 + CLEF_PAD を与える（← 掛け算！）
       const firstContentW = allocW * w0ratio;
-      const firstW        = firstContentW + CLEF_PAD;
+      const firstW        = firstContentW + CLEF_PAD_THIS;
 
       // 残り小節に配分する内容分の幅
       const restContentW  = allocW - firstContentW;
@@ -70,10 +75,15 @@ export default function StaffCanvas({ systems = 6, gap = 110, measuresPerSystem 
           : restContentW * (restWeightSum > 0 ? (weights[mi] / restWeightSum) : fallbackRatio);
 
         // 実際の小節幅（段頭だけ CLEF_PAD を足す）＋極小幅ガード、詰まる時は16~24で変える
-        const w = Math.max(20, contentW + (mi === 0 ? CLEF_PAD : 0));
+        const w = Math.max(20, contentW + (mi === 0 ? CLEF_PAD_THIS : 0));
 
         const stave = new Stave(x, y, w);
-        if (mi === 0) stave.addClef('treble').addTimeSignature('4/4');
+        if (mi === 0) {
+          stave.addClef('treble');
+          if (s === 0){
+            stave.addTimeSignature('4/4');
+          }
+        } 
         stave.setEndBarType(Barline.type.SINGLE).setContext(ctx).draw();
 
         // 空なら全休符の仮表示（'1' → normalizeToVF で全音符になる）
