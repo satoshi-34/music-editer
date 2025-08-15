@@ -1,42 +1,121 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+/* 画面全体の基本設定 */
+.app-root {
+  min-height: 100dvh;
+  background: #0b2a1a url('/paper-bg.png') center/cover fixed; /* 背景画像＋色 */
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
+/* ヘッダー（ツールバー） */
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 16px;
+  background: #ffffffea;
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid #ddd;
+  box-shadow: 0 4px 16px #877f7f14;
 }
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
+.brand { font-weight: 700; }
+.title-group { display: flex; gap: 8px; }
+.title-input, .subtitle-input {
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  min-width: 220px;
 }
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+.controls { display: flex; gap: 10px; }
+button.ghost {
+  border: 1px solid #ddd;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px 12px;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
+/* ===== 黒帯部分（ウィンドウ幅いっぱい） ===== */
+.paper-rail {
+  width: 100%;                       /* ウィンドウ幅いっぱいに広げる */
+  display: flex;
+  justify-content: center;           /* 中央寄せ */
+  background: #b4b4b4;                /* 黒帯色 */
+  padding: 16px 0;                    /* 上下余白 */
+}
+
+/* ページ群の外枠（spread） */
+.spread {
+  padding: 16px 24px;
+  width: 100%;                        /* 黒帯の幅に合わせる */
+  max-width: 1500px;                  /* 大きすぎないよう制限（お好み） */
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(var(--columns, 2), 1fr);
+  justify-items: center;              /* ページを中央に並べる */
+  border-radius: 8px;
+  background: transparent;            /* 背景色は親(paper-rail)に任せる */
+}
+@media (max-width: 1200px) {
+  .spread { grid-template-columns: 1fr; }
+}
+
+/* ===== 各ページ（紙面の見た目） ===== */
+.page-wrapper {
+  transform: scale(var(--scale, 1));
+  transform-origin: top left;
+  width: calc(210mm * var(--scale, 1));
+  height: calc(297mm * var(--scale, 1));
+}
+
+.print-page {
+  position: relative;
+  width: 210mm;
+  min-height: 297mm;
+  background: #fffdf6;
+  background-image: radial-gradient(#00000008 1px, transparent 1px);
+  background-size: 4px 4px;
+  color: #111;
+  padding: 14mm 14mm 12mm;
+  box-shadow: 0 10px 30px rgba(0,0,0,.15);
+  border: 1px solid #00000010;
+  box-sizing: border-box;
+}
+
+/* ===== タイトル・フッター ===== */
+.page-head { margin-bottom: 6mm; }
+.score-title { margin: 0; font-size: 28px; text-align: center; letter-spacing: .08em; }
+.score-subtitle { margin: 4px 0 0; font-size: 14px; text-align: center; color: #555; }
+.page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; }
+.page-foot { position: absolute; bottom: 6mm; left: 0; right: 0; text-align: center; color: #666; }
+.page-number { font-variant-numeric: tabular-nums; }
+
+/* ===== 印刷用設定 ===== */
+@media print {
+  @page { size: A4; margin: 12mm; }
+  body { background: #fff !important; }
+  .toolbar { display: none !important; }
+  .spread { display: block; width: auto; }
+  .page-wrapper {
+    transform: none !important;
+    width: auto;
+    height: auto;
   }
-  to {
-    transform: rotate(360deg);
+  .print-page {
+    page-break-after: always;
+    box-shadow: none;
+    border: 0;
+    padding: 0;
+    background: #fff;
+    background-image: none;
   }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
+  .score-title { font-size: 24px; }
+  .score-subtitle { font-size: 12px; }
+  /* 線が薄くならないように強制的に黒にする */
+  .print-page svg path,
+  .print-page svg line,
+  .print-page svg rect {
+    stroke: #000 !important;
+    fill: #000 !important;
   }
-}
-
-.card {
-  padding: 2em;
-}
-
-.read-the-docs {
-  color: #888;
 }

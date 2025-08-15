@@ -3,6 +3,7 @@ import { useState } from 'react';
 import ScorePage from './components/ScorePage';
 import StaffCanvas from './components/StaffCanvas';
 import Palette, { type Tool } from './components/Palette';
+import './App.css'
 
 export default function App() {
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false }); // 四分音符から

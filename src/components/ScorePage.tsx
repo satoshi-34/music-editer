@@ -1,87 +1,124 @@
-import type { PropsWithChildren } from "react";
-// これだけでOK（react-dom ではない）
+// src/ScorePage.tsx
+import { useEffect, useMemo, useState } from 'react';
+import Palette, { type Tool } from './Palette';
+import StaffCanvas from './StaffCanvas';
+import { useAutoPageScale } from '../components/useAutoPageScale';
 
-type ScorePageProps = {
-  pageNumber?: number;
-  title?: string;
-  subtitle?: string;
-  credits?: { composer?: string; lyricist?: string; arranger?: string };
-};
+type PageSpec = { systems: number };
 
-export default function ScorePage({
-  children, pageNumber, title, subtitle, credits
-}: PropsWithChildren<ScorePageProps>) {
+export default function ScorePage() {
+  // ツール（音符/休符）状態
+  const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
+  const [title, setTitle] = useState('タイトル');
+  const [subtitle, setSubtitle] = useState('サブタイトル');
+
+  // 列数をウィンドウ幅に応じて決定（通常は2列）
+  const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
+  useEffect(() => {
+    const onResize = () => {
+      setColumns(window.innerWidth < 1200 ? 1 : 2);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // === ページスケール自動計算 ===
+  const { spreadRef, scale: baseScale } = useAutoPageScale(columns, 20);
+  const scale = baseScale * 0.8; // 基本スケールを80%に調整
+
+  // 総段数と1ページあたりの段数
+  const totalSystems = 12;
+  const systemsPerPage = 9;  //1ページあたりの段数
+
+  const pages: PageSpec[] = useMemo(() => {
+    return Array.from(
+      { length: Math.ceil(totalSystems / systemsPerPage) },
+      () => ({ systems: systemsPerPage })
+    );
+  }, [totalSystems, systemsPerPage]);
+
+  // ==== 追加機能 ====
+  // 画面に入りきらないときは1枚だけ表示するための状態
+  const [visiblePages, setVisiblePages] = useState<PageSpec[]>(pages);
+  useEffect(() => {
+    const updateVisiblePages = () => {
+      const vh = window.innerHeight;
+      const pagePixelHeight = 297 * scale * 3.78; // mm → px換算 (1mm ≒ 3.78px)
+      if (pagePixelHeight * 2 > vh) {
+        // 2ページ並べると画面高さを超えるなら1ページだけ
+        setVisiblePages(pages.slice(0, 1));
+      } else {
+        setVisiblePages(pages);
+      }
+    };
+    updateVisiblePages();
+    window.addEventListener('resize', updateVisiblePages);
+    return () => window.removeEventListener('resize', updateVisiblePages);
+  }, [pages, scale]);
+
   return (
-    <div style={pageWrap}>
-      <div style={pageStyle}>
-        {/* ヘッダ（タイトル/サブタイトル） */}
-        {(title || subtitle) && (
-          <div style={headerStyle}>
-            <div>
-              {title && <div style={titleStyle}>{title}</div>}
-              {subtitle && <div style={subtitleStyle}>{subtitle}</div>}
+    <div className="app-root">
+      {/* ツールバー */}
+      <header className="toolbar">
+        <div className="title-group">
+          <input
+            className="title-input"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <input
+            className="subtitle-input"
+            value={subtitle}
+            onChange={(e) => setSubtitle(e.target.value)}
+          />
+        </div>
+        <div className="controls">
+          <Palette value={tool} onChange={setTool} />
+          <button className="ghost" onClick={() => window.print()}>
+            印刷
+          </button>
+        </div>
+      </header>
+
+      {/* 譜面プレビュー */}
+      <div className="paper-rail">
+        <div
+          className="spread"
+          style={
+            {
+              '--scale': String(scale),
+              '--columns': String(columns),
+            } as React.CSSProperties
+          }
+        >
+          {visiblePages.map((p, i) => (
+            <div className="page-wrapper" key={i}>
+              <section className="print-page">
+                <header className="page-head">
+                  {i === 0 ? (
+                    <>
+                      <h1 className="score-title">{title}</h1>
+                      <p className="score-subtitle">{subtitle}</p>
+                    </>
+                  ) : (
+                    <p className="page-title">{title}</p>
+                  )}
+                </header>
+                <div className="score-area">
+                  <StaffCanvas
+                    systems={p.systems}
+                    measuresPerSystem={4}
+                    tool={tool}
+                  />
+                </div>
+                <footer className="page-foot">
+                  <span className="page-number">{i + 1}</span>
+                </footer>
+              </section>
             </div>
-            {/* 右上クレジット */}
-            {credits && (
-              <div style={creditBox}>
-                {credits.lyricist && <div>作詞 {credits.lyricist}</div>}
-                {credits.composer && <div>作曲 {credits.composer}</div>}
-                {credits.arranger && <div>編曲 {credits.arranger}</div>}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* 紙の本文領域（マージン内） */}
-        <div style={contentBox}>{children}</div>
-
-        {/* ページ番号 */}
-        {pageNumber != null && (
-          <div style={pageNum}>{pageNumber}</div>
-        )}
+          ))}
+        </div>
       </div>
     </div>
   );
 }
-
-const pageWrap: React.CSSProperties = {
-  display: "flex", justifyContent: "center", padding: "40px",
-  background: "#f5f7fb", minHeight: "100vh"
-};
-
-// A4縦っぽい比率（pxでOK。紙色＋ごく薄いテクスチャ）
-const pageStyle: React.CSSProperties = {
-  width: 840, height: 1188,  // だいたいA4比
-  background: "linear-gradient(0deg,#f8f3e6 0%, #fbf8ee 100%)",
-  boxShadow: "0 12px 40px rgba(0,0,0,.12)",
-  border: "1px solid #e7dec8",
-  position: "relative",
-  fontFamily: '"Noto Serif JP", "Times New Roman", serif',
-  color: "#222"
-};
-
-const headerStyle: React.CSSProperties = {
-  display: "flex", justifyContent: "space-between",
-  alignItems: "flex-start",
-  padding: "56px 64px 0 64px"
-};
-
-const titleStyle: React.CSSProperties = {
-  fontSize: 36, letterSpacing: 2, marginBottom: 6
-};
-const subtitleStyle: React.CSSProperties = {
-  fontSize: 18, opacity: .8
-};
-
-const creditBox: React.CSSProperties = {
-  textAlign: "right", lineHeight: 1.6, fontSize: 14, marginTop: 6
-};
-
-const contentBox: React.CSSProperties = {
-  position: "absolute", left: 64, right: 64, top: 160, bottom: 72
-};
-
-const pageNum: React.CSSProperties = {
-  position: "absolute", bottom: 32, left: "50%",
-  transform: "translateX(-50%)", fontSize: 14, opacity: .7
-};
