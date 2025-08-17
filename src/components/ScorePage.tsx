@@ -4,6 +4,7 @@ import Palette, { type Tool } from './Palette';
 import StaffCanvas from './StaffCanvas';
 import { useAutoPageScale } from '../components/useAutoPageScale';
 
+// 1ページに必要な情報の型
 type PageSpec = { systems: number };
 
 export default function ScorePage() {
@@ -12,7 +13,8 @@ export default function ScorePage() {
   const [title, setTitle] = useState('タイトル');
   const [subtitle, setSubtitle] = useState('サブタイトル');
 
-  // 列数をウィンドウ幅に応じて決定（通常は2列）
+  // 列数（カラム数）をウィンドウ幅に応じて決定
+  // 通常は 2列（見開き）、幅が狭ければ 1列
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
   useEffect(() => {
     const onResize = () => {
@@ -24,12 +26,14 @@ export default function ScorePage() {
 
   // === ページスケール自動計算 ===
   const { spreadRef, scale: baseScale } = useAutoPageScale(columns, 20);
-  const scale = baseScale * 0.8; // 基本スケールを80%に調整
+  // 基本スケールを少し小さめ（80%）にする
+  const scale = baseScale * 0.8;
 
   // 総段数と1ページあたりの段数
   const totalSystems = 12;
-  const systemsPerPage = 9;  //1ページあたりの段数
+  const systemsPerPage = 9;  // 1ページあたりの段数
 
+  // ページの配列を生成
   const pages: PageSpec[] = useMemo(() => {
     return Array.from(
       { length: Math.ceil(totalSystems / systemsPerPage) },
@@ -37,17 +41,18 @@ export default function ScorePage() {
     );
   }, [totalSystems, systemsPerPage]);
 
-  // ==== 追加機能 ====
-  // 画面に入りきらないときは1枚だけ表示するための状態
+  // ==== 表示するページを決める ====
+  // （ここを「高さ判定」→「幅判定」に修正！）
   const [visiblePages, setVisiblePages] = useState<PageSpec[]>(pages);
   useEffect(() => {
     const updateVisiblePages = () => {
-      const vh = window.innerHeight;
-      const pagePixelHeight = 297 * scale * 3.78; // mm → px換算 (1mm ≒ 3.78px)
-      if (pagePixelHeight * 2 > vh) {
-        // 2ページ並べると画面高さを超えるなら1ページだけ
+      const vw = window.innerWidth;                       // ウィンドウ幅
+      const pagePixelWidth = 210 * scale * 3.78;          // A4 横(mm) → px換算
+      if (pagePixelWidth * 2 > vw) {
+        // 横に2枚並べると入らない場合 → 1ページだけ表示
         setVisiblePages(pages.slice(0, 1));
       } else {
+        // 入るなら見開き表示
         setVisiblePages(pages);
       }
     };
@@ -80,10 +85,11 @@ export default function ScorePage() {
         </div>
       </header>
 
-      {/* 譜面プレビュー */}
+      {/* 譜面プレビュー部分 */}
       <div className="paper-rail">
         <div
           className="spread"
+          ref={spreadRef}
           style={
             {
               '--scale': String(scale),
@@ -94,6 +100,7 @@ export default function ScorePage() {
           {visiblePages.map((p, i) => (
             <div className="page-wrapper" key={i}>
               <section className="print-page">
+                {/* ページ上部のタイトル */}
                 <header className="page-head">
                   {i === 0 ? (
                     <>
@@ -104,6 +111,8 @@ export default function ScorePage() {
                     <p className="page-title">{title}</p>
                   )}
                 </header>
+
+                {/* 五線譜エリア */}
                 <div className="score-area">
                   <StaffCanvas
                     systems={p.systems}
@@ -111,6 +120,8 @@ export default function ScorePage() {
                     tool={tool}
                   />
                 </div>
+
+                {/* ページ番号 */}
                 <footer className="page-foot">
                   <span className="page-number">{i + 1}</span>
                 </footer>

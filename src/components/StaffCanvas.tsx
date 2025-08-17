@@ -4,32 +4,44 @@ import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam } from 'vex
 import type { Tool } from './Palette';
 import { normalizeToVF, type DurKey } from './Palette';
 
-// 1小節分のデータ型。tickablesは音符や休符の配列
+// Measure型は1小節分の音符や休符の配列を持つ
+// tickables: 小節内の音符や休符の情報を格納する配列
+// Measure型は楽譜データの基本単位
+// 例: { tickables: [音符1, 音符2, ...] }
 type Measure = { tickables: any[] };
-// コンポーネントのprops型
+
+// Props型はコンポーネントに渡される設定やツール情報を定義
+// systems: 五線譜の段数 (デフォルトは6段)
+// gap: 段間の間隔 (デフォルトは110px)
+// measuresPerSystem: 1段あたりの小節数 (デフォルトは4小節)
+// tool: 現在選択されているツール情報
 type Props = { systems?: number; gap?: number; measuresPerSystem?: number; tool: Tool };
 
-// 五線譜描画コンポーネント
-export default function StaffCanvas({ systems = 6, gap = 100, measuresPerSystem = 4, tool }: Props) {
-  // 五線譜を描画するdivの参照
+// 五線譜を描画するコンポーネント
+// 楽譜データを管理し、VexFlowを使ってSVG形式で描画
+export default function StaffCanvas({ systems = 6, gap = 110, measuresPerSystem = 4, tool }: Props) {
+  // 五線譜を描画するdiv要素への参照
   const ref = useRef<HTMLDivElement>(null);
-  // 楽譜データ（小節ごとの音符・休符配列）
+
+  // 楽譜データ（各小節の音符・休符情報）
+  // 初期状態では空の小節を生成
   const [score, setScore] = useState<Measure[]>(
     Array.from({ length: systems * measuresPerSystem }, () => ({ tickables: [] }))
   );
 
   // 段数や小節数が変わったとき、楽譜データを初期化
   useEffect(() => {
-    if (!ref.current) return;
+    if (!ref.current) return; // DOM要素がまだ存在しない場合は何もしない
     const container = ref.current;
     container.innerHTML = ''; // 前回の描画をクリア
 
+    // 新しい段数と小節数に基づいて楽譜データを初期化
     setScore(Array.from({ length: systems * measuresPerSystem }, () => ({ tickables: [] })));
   }, [systems, measuresPerSystem]);
 
   // 楽譜データやツールが変わったら五線譜を再描画
   useEffect(() => {
-    if (!ref.current) return;
+    if (!ref.current) return; // DOM要素がまだ存在しない場合は何もしない
     ref.current.innerHTML = ''; // 前回の描画をクリア
 
     // 親要素の幅を取得（なければ700px）
@@ -38,10 +50,10 @@ export default function StaffCanvas({ systems = 6, gap = 100, measuresPerSystem 
     const top = 10, bottom = 30, H = top + systems * gap + bottom;
 
     // VexFlowの描画準備
-    const renderer = new Renderer(ref.current, Renderer.Backends.SVG);
-    renderer.resize(W, H);
-    const ctx = renderer.getContext();
-    const svg = ref.current.querySelector('svg'); if (!svg) return;
+    const renderer = new Renderer(ref.current, Renderer.Backends.SVG); // SVG形式で描画
+    renderer.resize(W, H); // 描画領域のサイズを設定
+    const ctx = renderer.getContext(); // 描画コンテキストを取得
+    const svg = ref.current.querySelector('svg'); if (!svg) return; // SVG要素が取得できなければ終了
 
     // 左右の余白
     const left = 16, right = 16;
