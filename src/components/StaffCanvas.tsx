@@ -4,10 +4,8 @@ import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam } from 'vex
 import type { Tool } from './Palette';
 import { normalizeToVF, type DurKey } from './Palette';
 
-// 1小節分の音符や休符の配列
 type Measure = { tickables: any[] };
 
-// コンポーネントのProps
 type Props = { systems?: number; gap?: number; measuresPerSystem?: number; tool: Tool; scale: number };
 
 export default function StaffCanvas({ systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 1 }: Props) {
@@ -108,17 +106,13 @@ export default function StaffCanvas({ systems = 6, gap = 110, measuresPerSystem 
         rect.setAttribute('pointer-events', 'all');
         rect.style.cursor = 'crosshair';
 
-        // === クリック時の処理 ===
         rect.addEventListener('click', (e) => {
           const svgRect = (svg as SVGSVGElement).getBoundingClientRect();
-
-          // X座標 → 挿入位置を決める
           const clickX = e.clientX - svgRect.left - x;
-
-          // Y座標 → 高さ（音の上下）を決める
           const clickY = e.clientY - svgRect.top;
+
           const rawLine = stave.getLineForY(clickY);
-          const line = Math.round(rawLine * 2) / 2; // 0.5刻みに丸める
+          const line = Math.round(rawLine * 2) / 2;
           const key = vfLineToKeyTreble(line);
 
           setScore(old => {
@@ -131,18 +125,35 @@ export default function StaffCanvas({ systems = 6, gap = 110, measuresPerSystem 
 
             const newNote = makeFromTool(tool, key);
 
-            // X位置に基づいて挿入場所を決定
+            // === 一番近い位置に挿入するロジック ===
             let insertAt = m.tickables.length;
+            let minDist = Infinity;
+
             for (let i = 0; i < m.tickables.length; i++) {
               const note = m.tickables[i] as any;
               if (note.getAbsoluteX) {
-                const noteX = note.getAbsoluteX();
-                if (clickX < noteX) {
-                  insertAt = i;
-                  break;
+                const noteX = note.getAbsoluteX() - x; // 小節内基準
+                const bb = note.getBoundingBox?.();
+                const noteLeft = noteX;
+                const noteRight = noteX + (bb ? bb.getW() : 20);
+
+                if (clickX < noteLeft) {
+                  const dist = noteLeft - clickX;
+                  if (dist < minDist) {
+                    minDist = dist;
+                    insertAt = i;
+                  }
+                }
+                if (clickX > noteRight) {
+                  const dist = clickX - noteRight;
+                  if (dist < minDist) {
+                    minDist = dist;
+                    insertAt = i + 1;
+                  }
                 }
               }
             }
+
             m.tickables.splice(insertAt, 0, newNote);
             return next;
           });
@@ -159,11 +170,7 @@ export default function StaffCanvas({ systems = 6, gap = 110, measuresPerSystem 
 
 // ==== ヘルパー関数 ====
 
-// VexFlowのline番号 → 音名に変換
 function vfLineToKeyTreble(line: number): string {
-  // line=0 → 五線の一番上の線(f/5)
-  // line=4 → 五線の一番下の線(e/4)
-  // 0.5刻みでスペースや加線
   const map: Record<number, string> = {
     0: 'f/5',
     0.5: 'e/5',
