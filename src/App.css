@@ -1,12 +1,12 @@
 /* 画面全体の基本設定 */
 .app-root {
   min-height: 100dvh;
-  background: #0b2a1a url('/paper-bg.png') center/cover fixed; /* 背景画像＋色 */
+  background: #0b2a1a url('/paper-bg.png') center/cover scroll; /* fixed を scroll に変更 */
 }
 
 /* ヘッダー（ツールバー） */
 .toolbar {
-  position: sticky;
+  position: fixed; /* sticky から fixed に変更 */
   top: 0;
   z-index: 20;
   display: grid;
@@ -15,7 +15,6 @@
   align-items: center;
   padding: 10px 16px;
   background: #ffffffea;
-  backdrop-filter: blur(6px);
   border-bottom: 1px solid #ddd;
   box-shadow: 0 4px 16px #877f7f14;
 }
@@ -62,10 +61,8 @@ button.ghost {
 
 /* ===== 各ページ（紙面の見た目） ===== */
 .page-wrapper {
-  transform: scale(var(--scale, 1));
-  transform-origin: top left;
-  width: calc(210mm * var(--scale, 1));
-  height: calc(297mm * var(--scale, 1));
+  zoom: var(--scale, 1); /* 代替案 */
+  will-change: transform;
 }
 
 .print-page {
@@ -118,4 +115,9 @@ button.ghost {
     stroke: #000 !important;
     fill: #000 !important;
   }
+}
+
+svg {
+  animation: none;
+  transition: none;
 }

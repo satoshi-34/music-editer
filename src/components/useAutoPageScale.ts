@@ -1,36 +1,74 @@
-import { useEffect, useRef, useState } from "react";
+// src/components/useAutoPageScale.ts
+// ─────────────────────────────────────────────────────────────
+// 画面幅に合わせて自動で縮尺を決めるフック（ふらつき防止のヒステリシス入り）
+// ・監視対象は“外側のレール”だけ
+// ・±0.5%未満の差は無視
+// ・requestAnimationFrameでスロットリング
+// ─────────────────────────────────────────────────────────────
 
-/** 見開き(列数)に応じて .print-page を縮小して収める */
-export function useAutoPageScale(columns: number, gapPx = 20) {
-  const spreadRef = useRef<HTMLDivElement>(null);
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+export function useAutoPageScale(columns: number, gapPx: number = 20) {
+  const spreadRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
 
+  const lastScaleRef = useRef(1);
+  const rafRef = useRef<number | null>(null);
+
+  const recompute = useCallback(() => {
+    const spread = spreadRef.current;
+    if (!spread) return;
+
+    const rail = spread.parentElement;
+    if (!rail) return;
+
+    const pageWidthPx = 210 * 3.78; // A4 210mm ≒ 3.78px/mm
+    const cols = Math.max(1, columns);
+    const totalGap = (cols - 1) * gapPx;
+
+    const need = pageWidthPx * cols + totalGap;
+    const avail = rail.clientWidth;
+
+    const next = Math.min(1, Math.max(0.1, (avail * 0.98) / need));
+
+    const prev = lastScaleRef.current;
+    const diff = Math.abs(next - prev);
+    if (diff < Math.max(0.005, prev * 0.005)) return; // ±0.5%未満は無視
+
+    lastScaleRef.current = next;
+    setScale(next);
+  }, [columns, gapPx]);
+
   useEffect(() => {
-    const el = spreadRef.current;
-    if (!el) return;
-
-    const update = () => {
-      // 1枚目の実寸を採用（mm指定でも最終的なCSS pxを取得）
-      const firstPage = el.querySelector<HTMLElement>(".print-page");
-      if (!firstPage) return;
-
-      const pageW = firstPage.offsetWidth;   // px
-      const need = columns * pageW + (columns - 1) * gapPx;
-      const container = el.clientWidth;      // px
-      const s = Math.min(1, container / need);
-      setScale(Number.isFinite(s) ? Math.max(0.3, s) : 1);
+    const schedule = () => {
+      if (rafRef.current != null) return;
+      rafRef.current = window.requestAnimationFrame(() => {
+        rafRef.current = null;
+        recompute();
+      });
     };
 
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    window.addEventListener("resize", update);
-    update();
+    schedule(); // 初回
+
+    const spread = spreadRef.current;
+    const rail = spread?.parentElement;
+    if (!rail) return;
+
+    const ro = new ResizeObserver(() => schedule());
+    ro.observe(rail);
+
+    const onWin = () => schedule();
+    window.addEventListener('resize', onWin);
 
     return () => {
       ro.disconnect();
-      window.removeEventListener("resize", update);
+      window.removeEventListener('resize', onWin);
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
-  }, [columns, gapPx]);
+  }, [recompute]);
 
   return { spreadRef, scale };
 }

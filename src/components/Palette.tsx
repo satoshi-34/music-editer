@@ -51,41 +51,37 @@ export function normalizeToVF(d: DurKey): 'w'|'h'|'q'|'8'|'16'|'32'|'64' {
 function NoteIcon({ duration, isRest }: { duration: DurKey; isRest?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-  const el = ref.current; if (!el) return;
-  el.innerHTML = '';
+    const el = ref.current; if (!el) return;
+    el.innerHTML = '';
 
-  const r = new Renderer(el, Renderer.Backends.SVG);
-  r.resize(52, 40);
-  const ctx = r.getContext();
+    const r = new Renderer(el, Renderer.Backends.SVG);
+    r.resize(52, 40);
+    const ctx = r.getContext();
 
-  // 1) 先に五線を作って描画
-  const stave = new Stave(2, 6, 48);
-  stave.setContext(ctx).draw();
+    // 1) 先に五線を作って描画
+    const stave = new Stave(2, 6, 48);
+    stave.setContext(ctx).draw();
 
-  // 2) ノート作成
-  const vfDur = normalizeToVF(duration) + (isRest ? 'r' : '');
-  const note = new StaveNote({
-    clef: 'treble',
-    keys: [isRest ? 'b/4' : 'e/4'],
-    duration: vfDur,
-  });
-  (note as any).setCenterAlignment?.(true);
+    // 2) ノート作成
+    const vfDur = normalizeToVF(duration) + (isRest ? 'r' : '');
+    const note = new StaveNote({
+      clef: 'treble',
+      keys: [isRest ? 'b/4' : 'e/4'],
+      duration: vfDur,
+    });
+    (note as any).setCenterAlignment?.(true);
+    (note as any).setStave?.(stave);
 
-  // ★ ここがポイント：ノートに五線を結びつける
-  //   （formatToStave を使う場合でも安全のため明示しておく）
-  (note as any).setStave?.(stave);
+    // 3) Voice を SOFT モードで
+    const v = new Voice({ time: { num_beats: 1, beat_value: 1 } } as any);
+    v.setMode((Voice as any).Mode.SOFT ?? 1);
+    v.addTickables([note]);
 
-  // 3) Voice を SOFT モードで
-  const v = new Voice({ time: { num_beats: 1, beat_value: 1 } } as any);
-  v.setMode((Voice as any).Mode.SOFT ?? 1);
-  v.addTickables([note]);
+    new Formatter({ align_rests: true }).joinVoices([v]).formatToStave([v], stave);
 
-  // ★ format ではなく formatToStave を使う
-  new Formatter({ align_rests: true }).joinVoices([v]).formatToStave([v], stave);
-
-  // 4) 描画
-  v.draw(ctx, stave);
-}, [duration, isRest]);
+    // 4) 描画
+    v.draw(ctx, stave);
+  }, [duration, isRest]);
 
   return <div ref={ref} />;
 }
