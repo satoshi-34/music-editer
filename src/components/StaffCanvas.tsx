@@ -3,6 +3,19 @@ import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam } from 'vex
 import type { Tool } from './Palette';
 import { normalizeToVF, type DurKey } from './Palette';
 
+/* -----------------------------------------------------------------------------
+  クリック位置ズレの主因
+  ------------------------------------------------------------------------------
+  ・紙面は CSS の `zoom: var(--scale)` で拡大/縮小されている。
+  ・`getBoundingClientRect()` などの DOM 座標は「拡大後の座標」を返す。
+  ・一方、VexFlow が保持する描画座標（stave.x / note.getAbsoluteX() / getLineForYの引数期待値）は
+    「拡大前（=実寸）の座標」で計算・保存されている。
+  → よって、クリック座標をそのまま使うと、縮小率 scale に応じてズレる。
+  ★ 解決策：
+      クリック座標 (clientX / clientY − svgRect) を `scale` で割り、
+      VexFlow の “実寸” 座標系に正規化してから判定に使用する。
+----------------------------------------------------------------------------- */
+
 // ==== 型 ====
 type Measure = { tickables: any[] };
 
@@ -11,7 +24,7 @@ type Props = {
   gap?: number;                 // 行の縦間隔(px)
   measuresPerSystem?: number;   // 目標値（初期4）。入り切らなければ 4→3→2→1 に自動で落とす
   tool: Tool;                   // クリックで置くツール
-  scale: number;                // ページの拡縮（ここでは再描画トリガにだけ使う）
+  scale: number;                // ページの拡縮（DOM座標→VexFlow座標 補正に使う）
 };
 
 // ===== 見た目/レイアウトのパラメータ =====
@@ -108,6 +121,7 @@ export default function StaffCanvas({
 
         // “加重合計”が allocContentW を超えた場合はそのまま（縮小しない）
         let sumContent = contentWidths.reduce((a, b) => a + b, 0);
+        // (sumContent は現在未使用だが、将来の微調整用に残しておく)
 
         // 開始X（中央寄せ）：occupy を使うので左右に( innerW - occupy )/2 の余白
         const startX = left + (innerW - occupy) / 2;
@@ -180,13 +194,32 @@ export default function StaffCanvas({
         rect.setAttribute('pointer-events', 'all');
         rect.style.cursor = 'crosshair';
 
+        // ★★★ 重要：クリック座標を scale で“実寸”に正規化してから使用 ★★★
         rect.addEventListener('click', (e) => {
-          const svgRect = (svg as SVGSVGElement).getBoundingClientRect();
-          const clickX = (e as MouseEvent).clientX - svgRect.left - x; // 小節内基準
-          const clickY = (e as MouseEvent).clientY - svgRect.top;
+          if (!svg) return;
 
-          // クリックY→五線上の line(0.5刻み)
-          const rawLine = stave.getLineForY(clickY);
+          // DOM（拡大後）座標系での SVG 表示位置
+          const svgRect = (svg as SVGSVGElement).getBoundingClientRect();
+
+          // 画面上のクリック位置（クライアント座標）
+          const clientX = (e as MouseEvent).clientX;
+          const clientY = (e as MouseEvent).clientY;
+
+          // 現在のズーム（0 や負値はあり得ないが、念のためガード）
+          const zoom = Number(scale) > 0 ? Number(scale) : 1;
+
+          // SVG ローカル座標（=拡大前の実寸座標）へ正規化
+          //  1) まず SVG 左上からの差分を取り、
+          //  2) それを zoom で割る（CSS zoom による拡大分を取り除く）
+          const localX = (clientX - svgRect.left) / zoom;
+          const localY = (clientY - svgRect.top) / zoom;
+
+          // 小節内基準の X（stave 開始 x を引く）
+          const clickX = localX - x;
+
+          // クリックY→五線上の line(0.5刻み) へ
+          // getLineForY は VexFlow の“実寸”座標を期待するので、localY をそのまま渡す
+          const rawLine = stave.getLineForY(localY);
           const line = Math.round(rawLine * 2) / 2;
           const key = vfLineToKeyTreble(line);
 
@@ -208,7 +241,10 @@ export default function StaffCanvas({
 
             for (let i = 0; i < m.tickables.length; i++) {
               const note = m.tickables[i] as any;
+
+              // 既存ノートの絶対X（VexFlow の実寸座標）
               const absX = note.getAbsoluteX ? note.getAbsoluteX() - x : i * 20;
+
               const bb = note.getBoundingBox?.();
               const leftX = absX;
               const rightX = absX + (bb ? bb.getW() : 20);
