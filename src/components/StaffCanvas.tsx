@@ -3,10 +3,11 @@ import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam } from 'vex
 import type { Tool } from './Palette';
 
 /* ─────────────────────────────────────────────────────────────
-  安定版：クリック不可を修正
-  - ループ変数(globalIndex/x)をイベントで参照しない。各小節ごとに const で捕捉。
-  - VexFlowオブジェクトは state に入れず、描画ごとに新規生成。
-  - 16分・32分が多い小節ほど幅を広げ、4→3→2→1小節の順に自動改行。
+  自動レイアウト（余白さらに縮小 & 譜面を少し縮小）
+  - VexFlowオブジェクトは state に保持しない（毎回新規生成）
+  - 細かい音が多い小節ほど幅を広げ、4→3→2→1小節の順に自動改行
+  - 左右の余白をさらに小さくし、scaleで五線・音符を少し縮小
+  - クリック座標は scale を考慮した逆変換で正しく挿入
 ────────────────────────────────────────────────────────────── */
 
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -14,24 +15,27 @@ type NoteEvent = { dur: DurKey; isRest: boolean; key: string };
 type MeasureData = { events: NoteEvent[] };
 
 type Props = {
-  systems?: number;
-  gap?: number;
-  measuresPerSystem?: number;
-  tool: Tool;
-  scale: number;
+  systems?: number;             // 何段描くか
+  gap?: number;                 // 段間(px)
+  measuresPerSystem?: number;   // 1段の目標小節数（入らなければ 3→2→1）
+  tool: Tool;                   // パレットの選択
+  scale?: number;               // 譜表全体の倍率（1.0=等倍、0.86で14%縮小）
 };
 
-/* 見た目パラメータ */
-const TARGET_FILL = 0.92;
-const MIN_MEASURE_W = 46;
-const NOTE_UNIT_W = 8;
-const FLAG_EXTRA_W = 4;
-const CLEF_PAD_FIRST = 44;
-const CLEF_PAD_OTHER = 28;
-const EMPTY_MEASURE_WEIGHT = 10;
-const BEATS_PER_MEASURE = 4;
+/* ── 見た目パラメータ（今回“余白縮小”に調整） ── */
+const TARGET_FILL = 0.992;      // 行の有効幅の使用率（左右余白を極小に）
+const PAGE_LEFT = 4;            // 左余白（px）
+const PAGE_RIGHT = 4;           // 右余白（px）
+const MIN_MEASURE_W = 50;       // 小節の最低幅（詰まり防止）
+const NOTE_UNIT_W = 10;         // 1音あたり最低ほしい幅
+const DENSITY_K = 0.6;          // 細かさ密度の寄与
+const FLAG_EXTRA_W = 6;         // 16分以上の旗の上乗せ
+const CLEF_PAD_FIRST = 44;      // 1段目：ト音＋拍子ぶん
+const CLEF_PAD_OTHER = 28;      // 2段目以降：ト音のみ
+const EMPTY_MEASURE_WEIGHT = 12;// 空小節の重み
+const BEATS_PER_MEASURE = 4;    // 4/4 前提
 
-/* 安全な音価変換 */
+/* ── 音価変換（安全：未定義は 'q' にフォールバック） ── */
 type VFDur = 'w'|'h'|'q'|'8'|'16'|'32'|'64';
 function toVFDur(d: DurKey | string | undefined | null): VFDur {
   switch (d) {
@@ -55,7 +59,11 @@ function vfToDenom(vf: VFDur | string) {
 }
 
 export default function StaffCanvas({
-  systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 1,
+  systems = 6,
+  gap = 110,
+  measuresPerSystem = 4,
+  tool,
+  scale = 0.86,           // ← “もう少し小さく”の既定値(五線と音符)
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -64,6 +72,7 @@ export default function StaffCanvas({
     Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] }))
   );
 
+  // 行数/段あたり小節数が変わったら作り直し
   useEffect(() => {
     setScore(Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] })));
   }, [systems, measuresPerSystem]);
@@ -82,17 +91,21 @@ export default function StaffCanvas({
     const svg = ref.current.querySelector('svg') as SVGSVGElement | null;
     if (!svg) return;
 
-    /* ===== レイアウト ===== */
-    const left = 16, right = 16;
-    const innerW = W - left - right;
+    // 譜面縮小。描画前にスケールを掛け、座標は 1/scale で渡す。
+    const s = Math.max(0.75, Math.min(1.0, scale ?? 1)); // 0.75〜1.0にクランプ
+    ctx.scale(s, s);
+
+    /* ===== レイアウト（横余白を詰め気味） ===== */
+    const innerW = (W - PAGE_LEFT - PAGE_RIGHT);
+    const left = PAGE_LEFT;
 
     let globalIndex = 0;
 
-    for (let s = 0; s < systems; s++) {
+    for (let line = 0; line < systems; line++) {
       if (globalIndex >= score.length) break;
 
-      const y = top + s * gap;
-      const CLEF_PAD_THIS = (s === 0) ? CLEF_PAD_FIRST : CLEF_PAD_OTHER;
+      const y = top + line * gap;
+      const CLEF_PAD_THIS = (line === 0) ? CLEF_PAD_FIRST : CLEF_PAD_OTHER;
 
       const candidates = [measuresPerSystem, 3, 2, 1].filter((v, i, a) => a.indexOf(v) === i);
 
@@ -100,11 +113,15 @@ export default function StaffCanvas({
       let widths: number[] = [];
       let startX = left;
 
+      // 小節の“最小必要幅”（行頭パディング抜き = コンテンツ幅）を推定
       const minContentWidth = (m: MeasureData | undefined) => {
         if (!m || !m.events || m.events.length === 0) return MIN_MEASURE_W;
-        const flags = m.events.filter(ev => vfToDenom(toVFDur(ev.dur)) >= 16).length;
         const n = m.events.length;
-        return Math.max(MIN_MEASURE_W, n * NOTE_UNIT_W + flags * FLAG_EXTRA_W + 18);
+        const density = m.events.reduce((sum, ev) => sum + vfToDenom(toVFDur(ev.dur)), 0);
+        const flags = m.events.filter(ev => vfToDenom(toVFDur(ev.dur)) >= 16).length;
+        const base = n * NOTE_UNIT_W;
+        const densPlus = Math.max(0, density - 4 * n) * DENSITY_K; // 4分相当より細かい分だけ上乗せ
+        return Math.max(MIN_MEASURE_W, base + densPlus + flags * FLAG_EXTRA_W + 18);
       };
 
       const tryFit = (n: number) => {
@@ -118,7 +135,7 @@ export default function StaffCanvas({
         while (weights.length < n) weights.push(EMPTY_MEASURE_WEIGHT);
 
         let occupy = innerW * TARGET_FILL;
-        if (n === 1) occupy = innerW;
+        if (n === 1) occupy = innerW; // 1小節は行いっぱいまで使う
 
         const allocContentW = Math.max(0, occupy - CLEF_PAD_THIS);
 
@@ -147,22 +164,21 @@ export default function StaffCanvas({
       }
       if (!fitted) { chosenCount = 1; widths = [innerW]; startX = left; }
 
-      /* ===== 実描画 ===== */
+      /* ===== 実描画（ctx.scale(s,s) 済み → 座標は 1/s で渡す） ===== */
       let x = startX;
 
       for (let i = 0; i < chosenCount && globalIndex < score.length; i++, globalIndex++) {
         const w = widths[i];
         const data: MeasureData | undefined = score[globalIndex];
 
-        const stave = new Stave(x, y, w);
+        const stave = new Stave(x / s, y / s, w / s);
         if (i === 0) {
           stave.addClef('treble');
-          if (s === 0) stave.addTimeSignature('4/4');
+          if (line === 0) stave.addTimeSignature('4/4');
         }
         stave.setEndBarType(Barline.type.SINGLE);
         stave.setContext(ctx).draw();
 
-        // 描画用に安全化
         const safeEvents: NoteEvent[] =
           (data && data.events && data.events.length
             ? data.events
@@ -180,20 +196,18 @@ export default function StaffCanvas({
         voice.draw(ctx, stave);
         beams.forEach(b => b.setContext(ctx).draw());
 
-        /* === クリック領域（ここが修正ポイント） ===
-           ループ変数をそのまま使わず、“その時点の値”を const で捕捉してから
-           リスナーを作るのがコツ。*/
-        const measureIndex = globalIndex; // ← この小節のインデックスを固定
-        const x0 = x;                     // ← この小節の開始Xを固定
-        const w0 = w;                     // ← この小節の幅を固定
+        // クリック領域（scale考慮）
+        const measureIndex = globalIndex;
+        const xDraw = x / s;           // rect用の描画座標
+        const wDraw = w / s;
 
         if (svg) {
           const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
           const rectY = stave.getYForLine(0);
           const rectH = stave.getYForLine(4) - rectY;
-          rect.setAttribute('x', String(x0));
+          rect.setAttribute('x', String(xDraw));
           rect.setAttribute('y', String(rectY));
-          rect.setAttribute('width', String(w0));
+          rect.setAttribute('width', String(wDraw));
           rect.setAttribute('height', String(rectH));
           rect.setAttribute('fill', 'transparent');
           rect.setAttribute('pointer-events', 'all');
@@ -201,24 +215,23 @@ export default function StaffCanvas({
 
           rect.addEventListener('click', (e) => {
             const svgRect = (svg as SVGSVGElement).getBoundingClientRect();
-            const relX = (e as MouseEvent).clientX - svgRect.left - x0; // ← x0 を使う
-            const relY = (e as MouseEvent).clientY - svgRect.top;
+            // 画面座標 → 譜面座標（scale を逆変換）
+            const relX = ((e as MouseEvent).clientX - svgRect.left) / s - xDraw;
+            const relY = ((e as MouseEvent).clientY - svgRect.top) / s;
 
-            const line = Math.round(stave.getLineForY(relY) * 2) / 2;
-            const key = lineToKeyTreble(line);
+            const linePos = Math.round(stave.getLineForY(relY) * 2) / 2;
+            const key = lineToKeyTreble(linePos);
 
             setScore(prev => {
               const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
-
-              // measureIndex を安全に参照（なければ作る）
               while (measureIndex >= next.length) next.push({ events: [] });
               const m = next[measureIndex];
 
               const addBeats = beatsFromVF(toVFDur((tool as any)?.duration));
-              const curBeats = m.events.reduce((s, ev) => s + beatsFromVF(toVFDur(ev.dur)), 0);
+              const curBeats = m.events.reduce((s2, ev) => s2 + beatsFromVF(toVFDur(ev.dur)), 0);
               if (curBeats + addBeats > BEATS_PER_MEASURE) return prev;
 
-              const clickBeat = Math.max(0, Math.min(BEATS_PER_MEASURE, (relX / w0) * BEATS_PER_MEASURE));
+              const clickBeat = Math.max(0, Math.min(BEATS_PER_MEASURE, (relX / wDraw) * BEATS_PER_MEASURE));
 
               let acc = 0, insertAt = m.events.length;
               for (let j = 0; j < m.events.length; j++) {
