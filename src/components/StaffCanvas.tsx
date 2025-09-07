@@ -3,11 +3,7 @@ import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam } from 'vex
 import type { Tool } from './Palette';
 
 /* ─────────────────────────────────────────────────────────────
-  自動レイアウト（余白さらに縮小 & 譜面を少し縮小）
-  - VexFlowオブジェクトは state に保持しない（毎回新規生成）
-  - 細かい音が多い小節ほど幅を広げ、4→3→2→1小節の順に自動改行
-  - 左右の余白をさらに小さくし、scaleで五線・音符を少し縮小
-  - クリック座標は scale を考慮した逆変換で正しく挿入
+  MuseScore っぽい小節幅の自動割り付け（全・二分を広め／八分を詰め気味）
 ────────────────────────────────────────────────────────────── */
 
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -15,27 +11,32 @@ type NoteEvent = { dur: DurKey; isRest: boolean; key: string };
 type MeasureData = { events: NoteEvent[] };
 
 type Props = {
-  systems?: number;             // 何段描くか
+  systems?: number;             // 段数
   gap?: number;                 // 段間(px)
-  measuresPerSystem?: number;   // 1段の目標小節数（入らなければ 3→2→1）
-  tool: Tool;                   // パレットの選択
-  scale?: number;               // 譜表全体の倍率（1.0=等倍、0.86で14%縮小）
+  measuresPerSystem?: number;   // 1段の目標小節数
+  tool: Tool;                   // パレット選択
+  scale?: number;               // 譜面の拡大率
 };
 
-/* ── 見た目パラメータ（今回“余白縮小”に調整） ── */
-const TARGET_FILL = 0.992;      // 行の有効幅の使用率（左右余白を極小に）
-const PAGE_LEFT = 4;            // 左余白（px）
-const PAGE_RIGHT = 4;           // 右余白（px）
-const MIN_MEASURE_W = 50;       // 小節の最低幅（詰まり防止）
-const NOTE_UNIT_W = 10;         // 1音あたり最低ほしい幅
-const DENSITY_K = 0.6;          // 細かさ密度の寄与
-const FLAG_EXTRA_W = 6;         // 16分以上の旗の上乗せ
-const CLEF_PAD_FIRST = 44;      // 1段目：ト音＋拍子ぶん
+/* ── 見た目パラメータ ── */
+const TARGET_FILL = 0.99;       // 行の使用率（左右余白を極小に）
+const PAGE_LEFT = 4;            // 左余白
+const PAGE_RIGHT = 4;           // 右余白
+
+const MIN_MEASURE_W = 52;       // 通常の最小幅
+const LONG_HALF_MIN = 80;       // 二分音符を含む小節の最小幅（少し広め）
+const LONG_WHOLE_MIN = 92;      // 全音符を含む小節の最小幅（少し広め）
+
+const BASE_PAD = 14;            // 小節の基礎パディング（小節線や臨時記号の余地）
+const UNIT_WIDTH = 9;           // “スペース単位”1.0に対するpx
+const FLAG_EXTRA_PX = 4;        // 16分以上の旗ぶん微追加
+
+const CLEF_PAD_FIRST = 50;      // 1段目：ト音＋拍子のパディング
 const CLEF_PAD_OTHER = 28;      // 2段目以降：ト音のみ
-const EMPTY_MEASURE_WEIGHT = 12;// 空小節の重み
+const EMPTY_MEASURE_UNITS = 0.6;// 何も置かれていない小節の単位
 const BEATS_PER_MEASURE = 4;    // 4/4 前提
 
-/* ── 音価変換（安全：未定義は 'q' にフォールバック） ── */
+/* 文字列 → VexFlow duration */
 type VFDur = 'w'|'h'|'q'|'8'|'16'|'32'|'64';
 function toVFDur(d: DurKey | string | undefined | null): VFDur {
   switch (d) {
@@ -50,6 +51,7 @@ function toVFDur(d: DurKey | string | undefined | null): VFDur {
   }
 }
 function beatsFromVF(vf: VFDur) {
+  // 4/4 基準の拍数
   return vf==='64'?1/16 : vf==='32'?1/8 : vf==='16'?1/4 :
          vf==='8' ?1/2  : vf==='q' ?1    : vf==='h' ?2   : 4;
 }
@@ -58,21 +60,76 @@ function vfToDenom(vf: VFDur | string) {
          vf==='8' ?8  : vf==='q' ?4  : vf==='h' ?2  : 1;
 }
 
+/* === スペース単位：ここが今回のキモ ===
+   - “1.0 = 四分音符1つぶん” を基準に、各音価の見た目の占有感を数値化
+   - 全音符・二分音符は 1.45 / 1.25 と“少しだけ”厚めに
+   - 八分音符は 1.18 に下げて詰める（以前の 1.4 から縮小）
+   - 16分以上は従来通りしっかり広がる（読める間隔を確保）
+*/
+const UNIT_BY_DENOM: Record<number, number> = {
+  1: 1.45,  // 全音符（もう少し広め）
+  2: 1.25,  // 二分（少し広め）
+  4: 1.00,  // 四分（基準）
+  8: 0.60,  // 八分（詰め気味）ok
+  16: 0.50, // 十六分
+  32: 2.20, // 三十二分
+  64: 2.60, // 六十四分
+};
+
+function unitsForEvent(ev: NoteEvent): number {
+  const denom = vfToDenom(toVFDur(ev.dur));
+  const base = UNIT_BY_DENOM[denom] ?? 1.0;
+  const restFactor = ev.isRest ? 0.85 : 1.0;      // 休符は少し狭く
+  const flagExtra = denom >= 16 ? (FLAG_EXTRA_PX / UNIT_WIDTH) : 0; // 旗の微追加
+  return base * restFactor + flagExtra;
+}
+
+/* 小節の“最小必要幅（コンテンツ幅）”を見積もる
+   - 中身の合計単位 × UNIT_WIDTH + BASE_PAD を基本に
+   - 長い音を含むときにだけ下限を少し引き上げる（やりすぎない）
+*/
+function minContentWidth(m?: MeasureData): number {
+  if (!m || !m.events || m.events.length === 0) {
+    return Math.max(MIN_MEASURE_W, BASE_PAD + UNIT_WIDTH * EMPTY_MEASURE_UNITS);
+  }
+  let hasHalf = false, hasWhole = false;
+  const units = m.events.reduce((s, ev) => {
+    const denom = vfToDenom(toVFDur(ev.dur));
+    if (denom === 2) hasHalf = true;
+    if (denom === 1) hasWhole = true;
+    return s + unitsForEvent(ev);
+  }, 0);
+  const raw = Math.max(MIN_MEASURE_W, BASE_PAD + UNIT_WIDTH * units);
+
+  // 長い音を含む場合だけ“ちょい広め”の下限を適用
+  if (hasWhole) return Math.max(raw, LONG_WHOLE_MIN);
+  if (hasHalf)  return Math.max(raw, LONG_HALF_MIN);
+  return raw;
+}
+
+/* 五線ライン番号(0〜4の0.5刻み) → ト音記号の鍵盤キー */
+function lineToKeyTreble(line: number): string {
+  const map: Record<number, string> = {
+    0: 'f/5', 0.5: 'e/5', 1: 'd/5', 1.5: 'c/5',
+    2: 'b/4', 2.5: 'a/4', 3: 'g/4', 3.5: 'f/4', 4: 'e/4',
+  };
+  return map[line] ?? 'c/4';
+}
+
 export default function StaffCanvas({
   systems = 6,
   gap = 110,
   measuresPerSystem = 4,
   tool,
-  scale = 0.86,           // ← “もう少し小さく”の既定値(五線と音符)
+  scale = 0.86, // デフォルト少し縮小
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
-  // state には軽量データのみ
+  // VexFlowの重いオブジェクトは持たず、軽い配列だけを状態で管理
   const [score, setScore] = useState<MeasureData[]>(
     Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] }))
   );
 
-  // 行数/段あたり小節数が変わったら作り直し
   useEffect(() => {
     setScore(Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] })));
   }, [systems, measuresPerSystem]);
@@ -81,22 +138,21 @@ export default function StaffCanvas({
     if (!ref.current) return;
     ref.current.innerHTML = '';
 
-    /* ===== レンダラ ===== */
     const W = ref.current.parentElement?.clientWidth ?? ref.current.clientWidth ?? 700;
     const top = 10, bottom = 30, H = top + systems * gap + bottom;
 
     const renderer = new Renderer(ref.current, Renderer.Backends.SVG);
     renderer.resize(W, H);
     const ctx = renderer.getContext();
+
     const svg = ref.current.querySelector('svg') as SVGSVGElement | null;
     if (!svg) return;
 
-    // 譜面縮小。描画前にスケールを掛け、座標は 1/scale で渡す。
-    const s = Math.max(0.75, Math.min(1.0, scale ?? 1)); // 0.75〜1.0にクランプ
+    // 見た目だけ縮小。以降の描画座標は 1/scale で渡す必要あり
+    const s = Math.max(0.75, Math.min(1.0, scale ?? 1));
     ctx.scale(s, s);
 
-    /* ===== レイアウト（横余白を詰め気味） ===== */
-    const innerW = (W - PAGE_LEFT - PAGE_RIGHT);
+    const innerW = W - PAGE_LEFT - PAGE_RIGHT;
     const left = PAGE_LEFT;
 
     let globalIndex = 0;
@@ -107,53 +163,44 @@ export default function StaffCanvas({
       const y = top + line * gap;
       const CLEF_PAD_THIS = (line === 0) ? CLEF_PAD_FIRST : CLEF_PAD_OTHER;
 
+      // 4小節で試し、無理なら 3→2→1
       const candidates = [measuresPerSystem, 3, 2, 1].filter((v, i, a) => a.indexOf(v) === i);
 
       let chosenCount = 1;
       let widths: number[] = [];
       let startX = left;
 
-      // 小節の“最小必要幅”（行頭パディング抜き = コンテンツ幅）を推定
-      const minContentWidth = (m: MeasureData | undefined) => {
-        if (!m || !m.events || m.events.length === 0) return MIN_MEASURE_W;
-        const n = m.events.length;
-        const density = m.events.reduce((sum, ev) => sum + vfToDenom(toVFDur(ev.dur)), 0);
-        const flags = m.events.filter(ev => vfToDenom(toVFDur(ev.dur)) >= 16).length;
-        const base = n * NOTE_UNIT_W;
-        const densPlus = Math.max(0, density - 4 * n) * DENSITY_K; // 4分相当より細かい分だけ上乗せ
-        return Math.max(MIN_MEASURE_W, base + densPlus + flags * FLAG_EXTRA_W + 18);
-      };
-
       const tryFit = (n: number) => {
         const last = Math.min(globalIndex + n, score.length);
         const items = score.slice(globalIndex, last);
 
-        const weights = items.map(m => {
-          if (!m.events.length) return EMPTY_MEASURE_WEIGHT;
-          return m.events.reduce((sum, ev) => sum + vfToDenom(toVFDur(ev.dur)), 0);
-        });
-        while (weights.length < n) weights.push(EMPTY_MEASURE_WEIGHT);
-
         let occupy = innerW * TARGET_FILL;
-        if (n === 1) occupy = innerW; // 1小節は行いっぱいまで使う
+        if (n === 1) occupy = innerW; // 1小節行は行いっぱい使う
 
         const allocContentW = Math.max(0, occupy - CLEF_PAD_THIS);
 
         const minWs = items.map(minContentWidth);
         while (minWs.length < n) minWs.push(MIN_MEASURE_W);
 
+        const unitWeights = items.map(m =>
+          (m && m.events && m.events.length)
+            ? m.events.reduce((u, ev) => u + unitsForEvent(ev), 0)
+            : EMPTY_MEASURE_UNITS
+        );
+        while (unitWeights.length < n) unitWeights.push(EMPTY_MEASURE_UNITS);
+
         const sumMin = minWs.reduce((a, b) => a + b, 0);
-        if (sumMin > allocContentW * 1.001) return null;
+        if (sumMin > allocContentW * 1.002) return null;
 
-        const extra = allocContentW - sumMin;
-        const totalWeight = weights.reduce((a,b)=>a+b,0) || 1;
-        const wContent = minWs.map((w, i) => w + extra * (weights[i] / totalWeight));
+        const extra = Math.max(0, allocContentW - sumMin);
+        const weightSum = unitWeights.reduce((a, b) => a + b, 0) || 1;
+        const contentW = minWs.map((w, i) => w + extra * (unitWeights[i] / weightSum));
 
-        const realWs = wContent.map((w, i) => (i === 0 ? w + CLEF_PAD_THIS : w));
+        const realWs = contentW.map((w, i) => (i === 0 ? w + CLEF_PAD_THIS : w));
         const need = realWs.reduce((a, b) => a + b, 0);
         const start = left + (innerW - occupy) / 2;
 
-        if (need > occupy * 1.001 && n > 1) return null;
+        if (need > occupy * 1.002 && n > 1) return null;
         return { widths: realWs, startX: start };
       };
 
@@ -164,7 +211,6 @@ export default function StaffCanvas({
       }
       if (!fitted) { chosenCount = 1; widths = [innerW]; startX = left; }
 
-      /* ===== 実描画（ctx.scale(s,s) 済み → 座標は 1/s で渡す） ===== */
       let x = startX;
 
       for (let i = 0; i < chosenCount && globalIndex < score.length; i++, globalIndex++) {
@@ -196,9 +242,8 @@ export default function StaffCanvas({
         voice.draw(ctx, stave);
         beams.forEach(b => b.setContext(ctx).draw());
 
-        // クリック領域（scale考慮）
         const measureIndex = globalIndex;
-        const xDraw = x / s;           // rect用の描画座標
+        const xDraw = x / s;
         const wDraw = w / s;
 
         if (svg) {
@@ -215,7 +260,7 @@ export default function StaffCanvas({
 
           rect.addEventListener('click', (e) => {
             const svgRect = (svg as SVGSVGElement).getBoundingClientRect();
-            // 画面座標 → 譜面座標（scale を逆変換）
+            // 画面 → 譜面座標（scale を逆変換）
             const relX = ((e as MouseEvent).clientX - svgRect.left) / s - xDraw;
             const relY = ((e as MouseEvent).clientY - svgRect.top) / s;
 
@@ -231,8 +276,8 @@ export default function StaffCanvas({
               const curBeats = m.events.reduce((s2, ev) => s2 + beatsFromVF(toVFDur(ev.dur)), 0);
               if (curBeats + addBeats > BEATS_PER_MEASURE) return prev;
 
+              // クリックした場所に近い側へ挿入
               const clickBeat = Math.max(0, Math.min(BEATS_PER_MEASURE, (relX / wDraw) * BEATS_PER_MEASURE));
-
               let acc = 0, insertAt = m.events.length;
               for (let j = 0; j < m.events.length; j++) {
                 const b = beatsFromVF(toVFDur(m.events[j].dur));
@@ -261,21 +306,12 @@ export default function StaffCanvas({
   return <div ref={ref} />;
 }
 
-/* ───────── ヘルパー ───────── */
-
-function lineToKeyTreble(line: number): string {
-  const map: Record<number, string> = {
-    0: 'f/5', 0.5: 'e/5', 1: 'd/5', 1.5: 'c/5',
-    2: 'b/4', 2.5: 'a/4', 3: 'g/4', 3.5: 'f/4', 4: 'e/4',
-  };
-  return map[line] ?? 'c/4';
-}
-
+/* ───────── VexFlowノート生成 ───────── */
 function makeVFNote(ev: NoteEvent) {
   const vfDur = toVFDur(ev.dur);
   if (ev.isRest) {
     const n = new StaveNote({ clef: 'treble', keys: ['b/4'], duration: (vfDur as VFDur) + 'r' });
-    (n as any).setCenterAlignment?.(true);
+    (n as any).setCenterAlignment?.(true); // 休符は中央寄せ
     return n;
   }
   return new StaveNote({ clef: 'treble', keys: [ev.key], duration: vfDur });
