@@ -3,15 +3,14 @@ import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam } from 'vex
 import type { Tool } from './Palette';
 
 /* ============================================================
-   ✅ クリック座標と描画座標の“基準を統一” & Yは行間スナップで厳密化
+   ✅ クリック座標と描画座標を統一 / 上下の加線領域までクリック可能
+   🆕 ガイド表示：マウス位置にスナップした高さへ薄い破線＋点を描画
    ------------------------------------------------------------
-   ・clientX/Y → getScreenCTM().inverse() で <g>ユーザー座標へ変換
-   ・透明 <rect> も VexFlow と同じ <g> に追加して座標系を一致
-   ・Y→line は getSpacingBetweenLines() を使い 0.5刻みに“吸着”
-   ・Xの挿入は“見た目のX”（getAbsoluteX + BoundingBox）で決定
+   - クリック当たり判定 <rect> は .vf-hit（完全不可視・印刷除外）
+   - Yは getSpacingBetweenLines() を使い 0.5 行間でスナップ
+   - Xは見た目の位置（getAbsoluteX + BoundingBox）で挿入点を決定
    ============================================================ */
 
-/* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
 type NoteEvent = { dur: DurKey; isRest: boolean; key: string };
 type MeasureData = { events: NoteEvent[] };
@@ -21,7 +20,7 @@ type Props = {
   gap?: number;
   measuresPerSystem?: number;
   tool: Tool;
-  scale?: number;               // 0.75〜1.0
+  scale?: number; // 0.75〜1.0 推奨
 };
 
 /* ===== 見た目パラメータ ===== */
@@ -41,6 +40,10 @@ const CLEF_PAD_FIRST = 50;
 const CLEF_PAD_OTHER = 28;
 const EMPTY_MEASURE_UNITS = 0.6;
 const BEATS_PER_MEASURE = 4;
+
+/* ===== 五線の上下もクリック可能にする拡張量 ===== */
+const EXTRA_TOP_LINES = 6;     // 上方向（-6本分）
+const EXTRA_BOTTOM_LINES = 10; // 下方向（+10本分）
 
 /* ===== duration 変換 ===== */
 type VFDur = 'w'|'h'|'q'|'8'|'16'|'32'|'64';
@@ -79,11 +82,11 @@ function minContentWidth(m?: MeasureData): number {
   return raw;
 }
 
-/* ===== line → 音名（ト音記号） =====
-   VexFlow: line=0 が最上線(F5)、0.5刻みで下に増える */
+/* ===== line → 音名（ト音記号基準） =====
+   line=0 が最上線(F5)。0.5刻みで下に増える。 */
 function lineToKeyTreble(line: number): string {
-  const snapped = Math.round(line * 2) / 2;        // 0.5刻みにスナップ
-  const stepsDown = Math.round(snapped * 2);       // F5からの階名ステップ数
+  const snapped = Math.round(line * 2) / 2;
+  const stepsDown = Math.round(snapped * 2);
   const letters = ['c','d','e','f','g','a','b'] as const;
   let idx = 3 - stepsDown; // 3:'f'
   let oct = 5;
@@ -106,19 +109,21 @@ function clientToGroup(svg: SVGSVGElement, group: SVGGElement, clientX: number, 
   return { x: p.x, y: p.y };
 }
 
-/* ===== Y → line を“行間スナップ”で求める（ズレ対策の決定版） ===== */
+/* ===== Y → line を“行間スナップ”で求める ===== */
 function snapLineBySpacing(stave: Stave, y: number): number {
   const topY = stave.getYForLine(0);
   const spacing = (stave.getSpacingBetweenLines?.() as number) || ((stave.getYForLine(4) - topY) / 4);
-  // 五線の外も拾うため、十分広い範囲を 0.5 刻みで探索
+  const minLine = -EXTRA_TOP_LINES;
+  const maxLine = 4 + EXTRA_BOTTOM_LINES;
+
   let bestLine = 0;
   let bestDiff = Infinity;
-  for (let l = -6; l <= 10; l += 0.5) {
-    const yc = topY + l * spacing;       // VexFlowの行間に忠実な理論値
+  for (let l = minLine; l <= maxLine; l += 0.5) {
+    const yc = topY + l * spacing;
     const d = Math.abs(y - yc);
     if (d < bestDiff) { bestDiff = d; bestLine = Number(l.toFixed(1)); }
   }
-  return bestLine; // 0.5刻みに確実にスナップ
+  return bestLine;
 }
 
 /* ===== コンポーネント ===== */
@@ -170,7 +175,7 @@ export default function StaffCanvas({
       const y = top + line * gap;
       const CLEF_PAD_THIS = (line === 0) ? CLEF_PAD_FIRST : CLEF_PAD_OTHER;
 
-      // 目標→3→2→1 でフィット
+      // 段の中でできるだけ多く小節を入れる
       const candidates = [measuresPerSystem, 3, 2, 1].filter((v, i, a) => a.indexOf(v) === i);
       let chosenCount = 1, widths: number[] = [], startX = left;
 
@@ -242,49 +247,91 @@ export default function StaffCanvas({
         voice.draw(ctx, stave);
         beams.forEach(b => b.setContext(ctx).draw());
 
-        // クリック矩形（同じ <g> に置く）
+        // クリック矩形とガイド（同じ <g> に置く）
         const group = getVexflowGroup(svg) || svg;
         const measureIndex = globalIndex;
         const xDraw = x / s;
         const wDraw = w / s;
 
+        // 🟦 ガイド要素（最初に作って非表示に）
+        const guideLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        guideLine.setAttribute('class', 'vf-guide-line');
+        guideLine.style.display = 'none';
+        guideLine.setAttribute('x1', String(xDraw));
+        guideLine.setAttribute('x2', String(xDraw + wDraw));
+        guideLine.setAttribute('y1', '0');
+        guideLine.setAttribute('y2', '0');
+
+        const guideDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        guideDot.setAttribute('class', 'vf-guide-dot');
+        guideDot.style.display = 'none';
+        guideDot.setAttribute('r', '2.8');
+        guideDot.setAttribute('cx', String(xDraw));
+        guideDot.setAttribute('cy', '0');
+
+        (getVexflowGroup(svg) || svg).appendChild(guideLine);
+        (getVexflowGroup(svg) || svg).appendChild(guideDot);
+
+        // 🟩 当たり判定：五線の上下まで拡張
+        const rectTop = stave.getYForLine(-EXTRA_TOP_LINES);
+        const rectBottom = stave.getYForLine(4 + EXTRA_BOTTOM_LINES);
+
         const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        const rectTop = stave.getYForLine(0);
-        const rectBottom = stave.getYForLine(4);
+        rect.setAttribute('class', 'vf-hit');              // 完全不可視＋印刷除外
         rect.setAttribute('x', String(xDraw));
         rect.setAttribute('y', String(rectTop));
         rect.setAttribute('width', String(wDraw));
         rect.setAttribute('height', String(rectBottom - rectTop));
         rect.setAttribute('fill', 'transparent');
+        rect.setAttribute('stroke', 'none');
         rect.setAttribute('pointer-events', 'all');
-        rect.style.cursor = 'crosshair';
+        (rect.style as any).cursor = 'crosshair';
 
-        rect.addEventListener('click', (e) => {
-          // ✅ クリック座標を <g> ユーザー座標へ統一
+        // --- ガイド表示：mousemove で更新、mouseleave で非表示
+        rect.addEventListener('mousemove', (e) => {
           const { x: localX, y: localY } =
             clientToGroup(svg, group as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
 
-          /* ✅ Y→line：行間スナップで厳密に求める
-             （線の太さや描画誤差に強い。“ミソシレ”のソ/レずれ対策の肝） */
+          const snappedLine = snapLineBySpacing(stave, localY);
+          const yGuide = stave.getYForLine(snappedLine);
+
+          guideLine.setAttribute('y1', String(yGuide));
+          guideLine.setAttribute('y2', String(yGuide));
+          guideLine.style.display = 'block';
+
+          const clampedX = Math.max(xDraw, Math.min(localX, xDraw + wDraw));
+          guideDot.setAttribute('cx', String(clampedX));
+          guideDot.setAttribute('cy', String(yGuide));
+          guideDot.style.display = 'block';
+        });
+        rect.addEventListener('mouseleave', () => {
+          guideLine.style.display = 'none';
+          guideDot.style.display = 'none';
+        });
+
+        // --- クリック：音符を挿入
+        rect.addEventListener('click', (e) => {
+          const { x: localX, y: localY } =
+            clientToGroup(svg, group as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
+
           const snappedLine = snapLineBySpacing(stave, localY);
           const key = lineToKeyTreble(snappedLine);
 
-          // Xの挿入先：見た目のXで最も近い隙間
-          const vfForThisMeasure = vfNotes;
+          // Xの挿入位置を決める
           let insertAt = safeEvents.length;
           let minDist = Infinity;
 
-          if (vfForThisMeasure.length > 0) {
+          if (vfNotes.length > 0) {
             const measLeft = xDraw;
             const measRight = xDraw + wDraw;
 
             const dL = Math.abs(localX - measLeft);
             if (dL < minDist) { minDist = dL; insertAt = 0; }
             const dR = Math.abs(localX - measRight);
-            if (dR < minDist) { minDist = dR; insertAt = vfForThisMeasure.length; }
+            if (dR < minDist) { minDist = dR; insertAt = vfNotes.length; }
 
-            for (let j = 0; j < vfForThisMeasure.length; j++) {
-              const n: any = vfForThisMeasure[j];
+            for (let j = 0; j < vfNotes.length; j++) {
+              const n: any = vfNotes[j];
               const leftX = n.getAbsoluteX ? n.getAbsoluteX() : (measLeft + j * 20);
               const bb = n.getBoundingBox?.();
               const width = bb ? bb.getW() : 20;
