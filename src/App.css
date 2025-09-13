@@ -1,19 +1,36 @@
-/* 画面全体の基本設定 */
+/* src/App.css
+ * ────────────────────────────────────────────────────────────
+ * 目的：
+ *  - .toolbar を fixed のまま使うが、重ならないように上余白を確保する
+ *  - 余白量は CSS 変数 --toolbar-h で一括管理（後から調整しやすい）
+ *  - 既存の見た目は維持
+ * ────────────────────────────────────────────────────────────
+ */
+
+/* ヘッダーの想定高さ（＝上余白）。必要なら 64〜88px で微調整してください。 */
+:root { --toolbar-h: 72px; }
+
+/* 画面全体の基本設定（←ツールバー高さぶんの余白を最初から確保） */
 .app-root {
   min-height: 100dvh;
-  background: #0b2a1a url('/paper-bg.png') center/cover scroll; /* fixed を scroll に変更 */
+  background: #0b2a1a url('/paper-bg.png') center/cover scroll;
+  padding-top: var(--toolbar-h); /* ← 重なり解消の肝 */
 }
 
 /* ヘッダー（ツールバー） */
 .toolbar {
-  position: fixed; /* sticky から fixed に変更 */
+  position: fixed;            /* スクロールしても常に上に固定 */
   top: 0;
+  left: 0;
+  right: 0;                   /* 画面幅いっぱいに */
   z-index: 20;
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 12px;
   align-items: center;
   padding: 10px 16px;
+  /* 高さをだいたい --toolbar-h に合わせる（行が折り返すときは増える） */
+  min-height: var(--toolbar-h);
   background: #ffffffea;
   border-bottom: 1px solid #ddd;
   box-shadow: 0 4px 16px #877f7f14;
@@ -36,24 +53,24 @@ button.ghost {
 
 /* ===== 黒帯部分（ウィンドウ幅いっぱい） ===== */
 .paper-rail {
-  width: 100%;                       /* ウィンドウ幅いっぱいに広げる */
+  width: 100%;
   display: flex;
-  justify-content: center;           /* 中央寄せ */
-  background: #b4b4b4;               /* 黒帯色（グレー） */
-  padding: 16px 0;                   /* 上下余白（←広すぎると感じたら 8px に） */
+  justify-content: center;
+  background: #b4b4b4;
+  padding: 16px 0; /* 広すぎるなら 8px に */
 }
 
 /* ページ群の外枠（spread） */
 .spread {
   padding: 16px 24px;
-  width: 100%;                        /* 黒帯の幅に合わせる */
-  max-width: 1500px;                  /* 大きすぎないよう制限（お好み） */
+  width: 100%;
+  max-width: 1500px;
   display: grid;
   gap: 20px;
   grid-template-columns: repeat(var(--columns, 2), 1fr);
-  justify-items: center;              /* ページを中央に並べる */
+  justify-items: center;
   border-radius: 8px;
-  background: transparent;            /* 背景色は親(paper-rail)に任せる */
+  background: transparent;
 }
 @media (max-width: 1200px) {
   .spread { grid-template-columns: 1fr; }
@@ -61,7 +78,7 @@ button.ghost {
 
 /* ===== 各ページ（紙面の見た目） ===== */
 .page-wrapper {
-  /* zoom は見た目だけ縮む＝余白の広さはそのまま。レイアウトを崩しにくい */
+  /* zoom は見た目だけ縮む＝余白はそのまま。レイアウトを崩しにくい */
   zoom: var(--scale, 1);
   will-change: transform;
 }
@@ -88,12 +105,11 @@ button.ghost {
 .page-foot { position: absolute; bottom: 6mm; left: 0; right: 0; text-align: center; color: #666; }
 .page-number { font-variant-numeric: tabular-nums; }
 
-/* ===== クリック当たり判定の四角（VexFlow外側に描く透明rect） =====
-   スクリーンでも印刷でも絶対に見えないようにする */
+/* ===== クリック当たり判定の四角（VexFlow外側に描く透明rect） ===== */
 .vf-hit {
-  fill: transparent !important;   /* 背景で塗られても透明を強制 */
-  stroke: none !important;        /* 枠線も描かない */
-  pointer-events: all;            /* クリックは受け付ける */
+  fill: transparent !important;
+  stroke: none !important;
+  pointer-events: all;
 }
 
 /* ===== 印刷用設定 ===== */
@@ -118,11 +134,9 @@ button.ghost {
   .score-title { font-size: 24px; }
   .score-subtitle { font-size: 12px; }
 
-  /* 線が薄くならないように黒で強制。ただしクリック判定rect(.vf-hit)は除外！ */
+  /* 線が薄くならないように黒で強制。ただしクリック判定 rect(.vf-hit) は除外！ */
   .print-page svg path,
   .print-page svg line { stroke: #000 !important; fill: #000 !important; }
-
-  /* ←ここが重要：.vf-hit を除外して塗らない */
   .print-page svg rect:not(.vf-hit) { stroke: #000 !important; fill: #000 !important; }
   .print-page svg rect.vf-hit { stroke: none !important; fill: transparent !important; }
 }
