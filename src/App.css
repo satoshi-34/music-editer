@@ -1,23 +1,47 @@
-/* 画面全体の基本設定 */
-.app-root {
-  min-height: 100dvh;
-  background: #0b2a1a url('/paper-bg.png') center/cover scroll; /* fixed を scroll に変更 */
+/* src/App.css */
+/* ============================================================
+   画面全体の基本設定
+   ✅ 追加：--toolbar-h（ヘッダーの高さ）を使って本文上部に余白を確保
+   ============================================================ */
+
+:root {
+  /* JS（ScorePage）側で実測値を上書きします。ここは予備値。 */
+  --toolbar-h: 72px;
 }
 
-/* ヘッダー（ツールバー） */
+.app-root {
+  min-height: 100dvh;
+  /* ✅ 固定ヘッダーと重ならないための上パディング */
+  padding-top: var(--toolbar-h);
+  background: #0b2a1a url('/paper-bg.png') center/cover scroll; /* fixed → scroll */
+}
+
+/* ============================================================
+   ヘッダー（ツールバー）
+   - position: fixed なので本文に padding-top が要る（上で対応済み）
+   - 色を明示（ダークモード等で白飛びを防ぐ）
+   - Palette内のSVGアイコンを黒で強制表示（真っ白問題の回避）
+   ============================================================ */
 .toolbar {
-  position: fixed; /* sticky から fixed に変更 */
+  position: fixed;
   top: 0;
-  z-index: 20;
+  left: 0;
+  right: 0;
+  z-index: 1000;                 /* 20 → 1000 に上げて常に最前面へ */
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 12px;
   align-items: center;
   padding: 10px 16px;
-  background: #ffffffea;
+  background: #ffffffea;         /* 半透明の白 */
   border-bottom: 1px solid #ddd;
   box-shadow: 0 4px 16px #877f7f14;
+  color: #222;                   /* ✅ テキスト色を明示 */
 }
+
+/* ヘッダー内のボタンやテキストの色を統一 */
+.toolbar * { color: inherit; }
+
 .brand { font-weight: 700; }
 .title-group { display: flex; gap: 8px; }
 .title-input, .subtitle-input {
@@ -25,43 +49,63 @@
   border: 1px solid #ddd;
   border-radius: 8px;
   min-width: 220px;
+  background: #fff;
+  color: #222;
 }
+
 .controls { display: flex; gap: 10px; }
+
+/* 幽霊ボタン（印刷ボタン用） */
 button.ghost {
   border: 1px solid #ddd;
   background: #fff;
+  color: #222;                   /* ✅ 黒系テキストで“真っ白”を回避 */
   border-radius: 8px;
   padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button.ghost:hover { background: #f6f6f6; }
+
+/* ✅ Palette の SVG（音符/休符アイコン）を黒で明示的に描く */
+.toolbar svg path,
+.toolbar svg line {
+  stroke: #111 !important;
+  fill: #111 !important;
 }
 
-/* ===== 黒帯部分（ウィンドウ幅いっぱい） ===== */
+/* ============================================================
+   黒帯（paper-rail）…ウィンドウ幅いっぱいの背景帯
+   ============================================================ */
 .paper-rail {
-  width: 100%;                       /* ウィンドウ幅いっぱいに広げる */
+  width: 100%;
   display: flex;
-  justify-content: center;           /* 中央寄せ */
-  background: #b4b4b4;               /* 黒帯色（グレー） */
-  padding: 16px 0;                   /* 上下余白（←広すぎると感じたら 8px に） */
+  justify-content: center;
+  background: #b4b4b4;
+  padding: 16px 0;
 }
 
 /* ページ群の外枠（spread） */
 .spread {
   padding: 16px 24px;
-  width: 100%;                        /* 黒帯の幅に合わせる */
-  max-width: 1500px;                  /* 大きすぎないよう制限（お好み） */
+  width: 100%;
+  max-width: 1500px;
   display: grid;
   gap: 20px;
   grid-template-columns: repeat(var(--columns, 2), 1fr);
-  justify-items: center;              /* ページを中央に並べる */
+  justify-items: center;
   border-radius: 8px;
-  background: transparent;            /* 背景色は親(paper-rail)に任せる */
+  background: transparent;
 }
 @media (max-width: 1200px) {
   .spread { grid-template-columns: 1fr; }
 }
 
-/* ===== 各ページ（紙面の見た目） ===== */
+/* ============================================================
+   各ページ（紙面の見た目）
+   ============================================================ */
 .page-wrapper {
-  /* zoom は見た目だけ縮む＝余白の広さはそのまま。レイアウトを崩しにくい */
+  /* zoom は見た目だけ縮む＝余白の広さはそのまま。レイアウトが崩れにくい */
   zoom: var(--scale, 1);
   will-change: transform;
 }
@@ -80,7 +124,7 @@ button.ghost {
   box-sizing: border-box;
 }
 
-/* ===== タイトル・フッター ===== */
+/* タイトル・フッター */
 .page-head { margin-bottom: 6mm; }
 .score-title { margin: 0; font-size: 28px; text-align: center; letter-spacing: .08em; }
 .score-subtitle { margin: 4px 0 0; font-size: 14px; text-align: center; color: #555; }
@@ -88,19 +132,27 @@ button.ghost {
 .page-foot { position: absolute; bottom: 6mm; left: 0; right: 0; text-align: center; color: #666; }
 .page-number { font-variant-numeric: tabular-nums; }
 
-/* ===== クリック当たり判定の四角（VexFlow外側に描く透明rect） =====
-   スクリーンでも印刷でも絶対に見えないようにする */
+/* ============================================================
+   クリック判定の透明rect（VexFlow外側に描く）
+   スクリーンでも印刷でも絶対に見えないようにする
+   ============================================================ */
 .vf-hit {
-  fill: transparent !important;   /* 背景で塗られても透明を強制 */
-  stroke: none !important;        /* 枠線も描かない */
-  pointer-events: all;            /* クリックは受け付ける */
+  fill: transparent !important;
+  stroke: none !important;
+  pointer-events: all;
 }
 
-/* ===== 印刷用設定 ===== */
+/* ============================================================
+   印刷用設定
+   - 印刷時はヘッダー非表示
+   - 余白リセット（--toolbar-h の影響を消す）
+   - クリック判定rect(.vf-hit)は塗らない
+   ============================================================ */
 @media print {
   @page { size: A4; margin: 12mm; }
   body { background: #fff !important; }
   .toolbar { display: none !important; }
+  .app-root { padding-top: 0 !important; }   /* ✅ 上余白を消す */
   .spread { display: block; width: auto; }
   .page-wrapper {
     transform: none !important;
@@ -115,18 +167,14 @@ button.ghost {
     background: #fff;
     background-image: none;
   }
-  .score-title { font-size: 24px; }
-  .score-subtitle { font-size: 12px; }
-
-  /* 線が薄くならないように黒で強制。ただしクリック判定rect(.vf-hit)は除外！ */
+  /* 線が薄くならないように黒で強制。.vf-hit は除外！ */
   .print-page svg path,
   .print-page svg line { stroke: #000 !important; fill: #000 !important; }
-
-  /* ←ここが重要：.vf-hit を除外して塗らない */
   .print-page svg rect:not(.vf-hit) { stroke: #000 !important; fill: #000 !important; }
   .print-page svg rect.vf-hit { stroke: none !important; fill: transparent !important; }
 }
 
+/* 余計なアニメ・トランジションを殺してチラつき防止 */
 svg {
   animation: none;
   transition: none;
