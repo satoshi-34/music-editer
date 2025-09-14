@@ -4,6 +4,7 @@
  *  - .toolbar を fixed のまま使うが、重ならないように上余白を確保する
  *  - 余白量は CSS 変数 --toolbar-h で一括管理（後から調整しやすい）
  *  - 既存の見た目は維持
+ *  - 🆕 編集用の当たり判定と選択枠の見た目を追加
  * ────────────────────────────────────────────────────────────
  */
 
@@ -105,11 +106,29 @@ button.ghost {
 .page-foot { position: absolute; bottom: 6mm; left: 0; right: 0; text-align: center; color: #666; }
 .page-number { font-variant-numeric: tabular-nums; }
 
-/* ===== クリック当たり判定の四角（VexFlow外側に描く透明rect） ===== */
+/* ===== クリック当たり判定（小節全体の矩形） ===== */
 .vf-hit {
   fill: transparent !important;
   stroke: none !important;
   pointer-events: all;
+}
+
+/* 🆕 各音符用の当たり判定（透明） */
+.vf-note-hit {
+  fill: transparent !important;
+  stroke: none !important;
+  pointer-events: all;
+  cursor: pointer;
+}
+
+/* 🆕 選択中の音符の見た目（青い枠。クリック不可） */
+.vf-note-selected {
+  fill: none;
+  stroke: #1d4ed8;
+  stroke-width: 2;
+  pointer-events: none;
+  rx: 4;
+  ry: 4;
 }
 
 /* ===== 印刷用設定 ===== */
@@ -134,11 +153,15 @@ button.ghost {
   .score-title { font-size: 24px; }
   .score-subtitle { font-size: 12px; }
 
-  /* 線が薄くならないように黒で強制。ただしクリック判定 rect(.vf-hit) は除外！ */
+  /* 線が薄くならないように黒で強制。ただしクリック判定 rect(.vf-hit 等) は除外！ */
   .print-page svg path,
   .print-page svg line { stroke: #000 !important; fill: #000 !important; }
-  .print-page svg rect:not(.vf-hit) { stroke: #000 !important; fill: #000 !important; }
-  .print-page svg rect.vf-hit { stroke: none !important; fill: transparent !important; }
+  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected) { stroke: #000 !important; fill: #000 !important; }
+  .print-page svg rect.vf-hit,
+  .print-page svg rect.vf-note-hit,
+  .print-page svg rect.vf-note-selected {
+    stroke: none !important; fill: transparent !important;
+  }
 }
 
 svg {
