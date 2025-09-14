@@ -8,7 +8,7 @@
  * ────────────────────────────────────────────────────────────
  */
 
-/* ヘッダーの想定高さ（＝上余白）。必要なら 64〜88px で微調整してください。 */
+/* ヘッダーの想定高さ（＝上余白）。必要なら 64〜110px で微調整してください。 */
 :root { --toolbar-h: 110px; }
 
 /* 画面全体の基本設定（←ツールバー高さぶんの余白を最初から確保） */
@@ -131,7 +131,10 @@ button.ghost {
   ry: 4;
 }
 
-/* ===== 印刷用設定 ===== */
+/* 🩹 ガイド線/点はクリックをブロックしない */
+.vf-guide-line, .vf-guide-dot { pointer-events: none; }
+
+/* ===== 印刷用 ===== */
 @media print {
   @page { size: A4; margin: 12mm; }
   body { background: #fff !important; }
@@ -164,7 +167,5 @@ button.ghost {
   }
 }
 
-svg {
-  animation: none;
-  transition: none;
-}
+/* SVGのアニメ残り防止 */
+svg { animation: none; transition: none; }
