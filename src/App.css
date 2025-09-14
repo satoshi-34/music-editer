@@ -4,14 +4,14 @@
  *  - .toolbar を fixed のまま使うが、重ならないように上余白を確保する
  *  - 余白量は CSS 変数 --toolbar-h で一括管理（後から調整しやすい）
  *  - 既存の見た目は維持
- *  - 🆕 編集用の当たり判定と選択枠の見た目を追加
+ *  - 編集用の当たり判定と選択枠・ガイドの見た目を追加
  * ────────────────────────────────────────────────────────────
  */
 
-/* ヘッダーの想定高さ（＝上余白）。必要なら 64〜110px で微調整してください。 */
+/* ヘッダーの想定高さ（＝上余白）。必要なら 64〜110px で微調整OK */
 :root { --toolbar-h: 110px; }
 
-/* 画面全体の基本設定（←ツールバー高さぶんの余白を最初から確保） */
+/* 画面全体の基本設定（ツールバー高さぶんの余白を最初から確保） */
 .app-root {
   min-height: 100dvh;
   background: #0b2a1a url('/paper-bg.png') center/cover scroll;
@@ -113,7 +113,7 @@ button.ghost {
   pointer-events: all;
 }
 
-/* 🆕 各音符用の当たり判定（透明） */
+/* 各音符用の当たり判定（透明） */
 .vf-note-hit {
   fill: transparent !important;
   stroke: none !important;
@@ -121,7 +121,7 @@ button.ghost {
   cursor: pointer;
 }
 
-/* 🆕 選択中の音符の見た目（青い枠。クリック不可） */
+/* 選択中の音符の見た目（青い枠。クリック不可） */
 .vf-note-selected {
   fill: none;
   stroke: #1d4ed8;
@@ -131,7 +131,7 @@ button.ghost {
   ry: 4;
 }
 
-/* 🩹 ガイド線/点はクリックをブロックしない */
+/* ガイド線/点はクリックをブロックしない */
 .vf-guide-line, .vf-guide-dot { pointer-events: none; }
 
 /* ===== 印刷用 ===== */
@@ -156,10 +156,12 @@ button.ghost {
   .score-title { font-size: 24px; }
   .score-subtitle { font-size: 12px; }
 
-  /* 線が薄くならないように黒で強制。ただしクリック判定 rect(.vf-hit 等) は除外！ */
+  /* 線が薄くならないように黒で強制。ただしクリック判定 rect は除外！ */
   .print-page svg path,
   .print-page svg line { stroke: #000 !important; fill: #000 !important; }
-  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected) { stroke: #000 !important; fill: #000 !important; }
+  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected) {
+    stroke: #000 !important; fill: #000 !important;
+  }
   .print-page svg rect.vf-hit,
   .print-page svg rect.vf-note-hit,
   .print-page svg rect.vf-note-selected {
