@@ -50,6 +50,35 @@ button.ghost {
   background: #fff;
   border-radius: 8px;
   padding: 8px 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: #f8f9fa;
+  border-color: #adb5bd;
+}
+
+button.ghost:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Save/Load buttons container */
+.save-load-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.error-message {
+  color: #dc3545;
+  font-size: 12px;
+  background: #f8d7da;
+  border: 1px solid #f5c6cb;
+  border-radius: 4px;
+  padding: 4px 8px;
+  max-width: 200px;
 }
 
 /* ===== 黒帯部分（ウィンドウ幅いっぱい） ===== */

@@ -8,7 +8,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import Palette, { type Tool } from './Palette';
 import StaffCanvas from './StaffCanvas';
+import SaveLoadButtons from './SaveLoadButtons';
 import { useAutoPageScale } from './useAutoPageScale';
+import { useScoreStorage } from '../hooks/useScoreStorage';
+import type { MeasureData } from '../types/storage';
 
 type PageSpec = { systems: number };
 
@@ -20,6 +23,53 @@ export default function ScorePage() {
   const [lyricist, setLyricist] = useState('作詞者');
   const [composer, setComposer] = useState('作曲者');
   const [arranger, setArranger] = useState('編曲者');
+
+  // Initialize storage hook
+  const {
+    saveScore,
+    loadScore,
+    hasStoredData,
+    error,
+    isLoading,
+    isSaving
+  } = useScoreStorage();
+
+  // State for managing score data from StaffCanvas
+  const [scoreData, setScoreData] = useState<MeasureData[]>([]);
+
+  // Handle save operation
+  const handleSave = async () => {
+    const metadata = {
+      title,
+      subtitle,
+      lyricist,
+      composer,
+      arranger
+    };
+
+    // Use actual score data from StaffCanvas if available, otherwise use empty measures
+    const measures = scoreData.length > 0 ? scoreData : [{ events: [] }];
+    const systems = totalSystems;
+    const measuresPerSystem = 4;
+
+    await saveScore(metadata, measures, systems, measuresPerSystem);
+  };
+
+  // Handle load operation
+  const handleLoad = async () => {
+    const loadedData = await loadScore();
+    if (loadedData) {
+      // Restore metadata to UI state
+      setTitle(loadedData.metadata.title);
+      setSubtitle(loadedData.metadata.subtitle);
+      setLyricist(loadedData.metadata.lyricist);
+      setComposer(loadedData.metadata.composer);
+      setArranger(loadedData.metadata.arranger);
+      
+      // Restore measure data to score state
+      setScoreData(loadedData.measures);
+    }
+  };
 
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
   useEffect(() => {
@@ -55,6 +105,14 @@ export default function ScorePage() {
       <header className="toolbar">
         <div className="controls">
           <Palette value={tool} onChange={setTool} />
+          <SaveLoadButtons
+            onSave={handleSave}
+            onLoad={handleLoad}
+            isSaving={isSaving}
+            isLoading={isLoading}
+            hasStoredData={hasStoredData()}
+            error={error}
+          />
           <button className="ghost" onClick={() => window.print()}>印刷</button>
         </div>
       </header>
@@ -100,7 +158,14 @@ export default function ScorePage() {
 
                 {/* 五線エリア */}
                 <div className="score-area">
-                  <StaffCanvas systems={p.systems} gap={110} tool={tool} scale={scale} />
+                  <StaffCanvas 
+                    systems={p.systems} 
+                    gap={110} 
+                    tool={tool} 
+                    scale={scale}
+                    initialScoreData={scoreData}
+                    onScoreDataChange={setScoreData}
+                  />
                 </div>
 
                 <footer className="page-foot">

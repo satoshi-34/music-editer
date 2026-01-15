@@ -23,6 +23,8 @@ type Props = {
   measuresPerSystem?: number;
   tool: Tool;
   scale?: number;
+  initialScoreData?: MeasureData[];
+  onScoreDataChange?: (data: MeasureData[]) => void;
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -117,10 +119,13 @@ function getVexflowGroup(svg: SVGSVGElement): SVGGElement | null {
   const groups = svg.querySelectorAll('g');
   return groups.length ? (groups[groups.length - 1] as SVGGElement) : null;
 }
-/* group は SVGGElement に限らず SVGSVGElement でもOKにしておく */
-function clientToGroup(svg: SVGSVGElement, group: any, clientX: number, clientY: number) {
-  const pt = svg.createSVGPoint(); pt.x = clientX; pt.y = clientY;
-  const m = group?.getScreenCTM?.(); if (!m) return { x: 0, y: 0 };
+
+function clientToGroup(svg: SVGSVGElement, group: SVGGElement, clientX: number, clientY: number) {
+  const pt = svg.createSVGPoint();
+  pt.x = clientX; 
+  pt.y = clientY;
+  const m = (group as any).getScreenCTM?.();
+  if (!m) return { x: 0, y: 0 };
   const p = pt.matrixTransform(m.inverse());
   return { x: p.x, y: p.y };
 }
@@ -157,17 +162,40 @@ function makeVFNote(ev: NoteEvent) {
 
 export default function StaffCanvas({
   systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
+  initialScoreData, onScoreDataChange,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
-  const [score, setScore] = useState<MeasureData[]>(
-    Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] }))
-  );
+  const [score, setScore] = useState<MeasureData[]>(() => {
+    // Use initialScoreData if provided, otherwise create empty measures
+    if (initialScoreData && initialScoreData.length > 0) {
+      return initialScoreData;
+    }
+    return Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] }));
+  });
   const [selected, setSelected] = useState<{ measure: number; index: number } | null>(null);
 
+  // Update score when initialScoreData changes (when loading data)
   useEffect(() => {
-    setScore(Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] })));
-    setSelected(null);
-  }, [systems, measuresPerSystem]);
+    if (initialScoreData && initialScoreData.length > 0) {
+      setScore(initialScoreData);
+      setSelected(null); // Clear selection when loading new data
+    }
+  }, [initialScoreData]);
+
+  // Call callback when score data changes
+  useEffect(() => {
+    if (onScoreDataChange) {
+      onScoreDataChange(score);
+    }
+  }, [score, onScoreDataChange]);
+
+  useEffect(() => {
+    // Only reset to empty measures if no initialScoreData is provided
+    if (!initialScoreData || initialScoreData.length === 0) {
+      setScore(Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] })));
+      setSelected(null);
+    }
+  }, [systems, measuresPerSystem, initialScoreData]);
 
   /* ===== キー操作（削除/上下移動/解除） ===== */
   useEffect(() => {
@@ -306,7 +334,10 @@ export default function StaffCanvas({
 
         const safeEvents: NoteEvent[] =
           (data?.events?.length ? data.events : [{ dur:'1', isRest:true, key:'b/4' }])
-          .map(ev => (!ev || !ev.dur ? { dur:'4', isRest:true, key:'b/4' } : ev));
+          .map(ev => (!ev || !ev.dur ? { dur:'4' as DurKey, isRest:true, key:'b/4' } : {
+            ...ev,
+            dur: ev.dur as DurKey
+          }));
 
         const vfNotes: StaveNote[] = safeEvents.map((ev, idx) => {
           const n = makeVFNote(ev) as any;
@@ -315,11 +346,11 @@ export default function StaffCanvas({
           return n as StaveNote;
         });
 
-        const beams = Beam.generateBeams(vfNotes, { beam_rests:false });
+        const beams = Beam.generateBeams(vfNotes, { beamRests: false });
         const voice = new Voice({ time: { num_beats: BEATS_PER_MEASURE, beat_value: 4 } } as any);
         voice.setMode((Voice as any).Mode.SOFT ?? 1);
         voice.addTickables(vfNotes);
-        new Formatter({ align_rests:true }).joinVoices([voice]).formatToStave([voice], stave);
+        new Formatter().joinVoices([voice]).formatToStave([voice], stave);
         voice.draw(ctx, stave);
         beams.forEach(b => b.setContext(ctx).draw());
 
@@ -426,13 +457,45 @@ export default function StaffCanvas({
         (svgRoot as any).appendChild(insertRect);
 
         insertRect.addEventListener('mousemove', (e) => {
-          const { x: lx, y: ly } = clientToGroup(svg, svgRoot, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
+          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
           updateGuide(lx, ly);
         });
         insertRect.addEventListener('mouseleave', hideGuide);
         insertRect.addEventListener('click', (e) => {
-          const { x: lx, y: ly } = clientToGroup(svg, svgRoot, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
-          doInsertAt(lx, ly);
+          // より正確な座標変換：SVGの変換行列を使用
+          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
+          
+          const linePos = Math.round(stave.getLineForY(ly) * 2) / 2;
+          const key = lineToKeyTreble(linePos);
+
+          setScore(prev => {
+            const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
+            while (measureIndex >= next.length) next.push({ events: [] });
+            const m = next[measureIndex];
+
+            const addBeats = beatsFromVF(toVFDur((tool as any)?.duration));
+            const curBeats = m.events.reduce((s2, ev) => s2 + beatsFromVF(toVFDur(ev.dur)), 0);
+            if (curBeats + addBeats > BEATS_PER_MEASURE) return prev;
+
+            // 小節内の相対位置から挿入位置を計算
+            const relX = lx - measLeft;
+            const clickBeat = Math.max(0, Math.min(BEATS_PER_MEASURE, (relX / wDraw) * BEATS_PER_MEASURE));
+
+            let acc = 0, insertAt = m.events.length;
+            for (let j = 0; j < m.events.length; j++) {
+              const b = beatsFromVF(toVFDur(m.events[j].dur));
+              if (clickBeat <= acc + b / 2) { insertAt = j; break; }
+              acc += b;
+            }
+
+            const ev: NoteEvent = {
+              dur: (['1','2','4','8','16','32','64'].includes((tool as any)?.duration) ? (tool as any).duration : '4') as DurKey,
+              isRest: !!(tool as any)?.isRest,
+              key,
+            };
+            m.events.splice(insertAt, 0, ev);
+            return next;
+          });
         });
 
         /* --- セル方式（選択とガイド、そして分岐クリック） --- */
@@ -478,11 +541,11 @@ export default function StaffCanvas({
 
             // セル上でもガイドを出す
             hit.addEventListener('mousemove', (ev) => {
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
               updateGuide(lx, ly);
             });
             hit.addEventListener('mouseenter', (ev) => {
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
               updateGuide(lx, ly);
             });
             hit.addEventListener('mouseleave', hideGuide);
@@ -490,7 +553,7 @@ export default function StaffCanvas({
             // クリック：近ければ選択、離れていれば挿入
             hit.addEventListener('click', (ev) => {
               ev.stopPropagation(); // 小節rectには渡さない
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
               const cellW = rawRight - rawLeft;
               const selRadius = Math.min(SELECT_NEAR_PX, Math.max(0, cellW * SELECT_NEAR_FRAC));
               const dx = Math.abs(lx - anchors[j]);

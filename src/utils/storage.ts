@@ -1,0 +1,422 @@
+// src/utils/storage.ts
+// localStorage utility functions with error handling and data validation
+
+import type { 
+  SavedScoreData, 
+  StorageError, 
+  StorageResult,
+  ScoreMetadata,
+  MeasureData,
+  NoteEvent,
+  DurKey
+} from '../types/storage';
+import { StorageErrorType } from '../types/storage';
+
+// Storage keys
+export const STORAGE_KEYS = {
+  PRIMARY: 'music-score-app-data',
+  BACKUP: 'music-score-app-backup',
+  METADATA: 'music-score-app-meta'
+} as const;
+
+// Current version for data migration
+export const CURRENT_VERSION = '1.0.0';
+
+/**
+ * Generates a simple checksum for data integrity verification
+ */
+function generateChecksum(data: string): string {
+  let hash = 0;
+  for (let i = 0; i < data.length; i++) {
+    const char = data.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash).toString(36);
+}
+
+/**
+ * Validates if a value is a valid duration key
+ */
+function isValidDurKey(value: any): value is DurKey {
+  return typeof value === 'string' && ['1', '2', '4', '8', '16', '32', '64'].includes(value);
+}
+
+/**
+ * Validates a NoteEvent object
+ */
+function validateNoteEvent(event: any): event is NoteEvent {
+  return (
+    event &&
+    typeof event === 'object' &&
+    isValidDurKey(event.dur) &&
+    typeof event.isRest === 'boolean' &&
+    typeof event.key === 'string' &&
+    event.key.length > 0
+  );
+}
+
+/**
+ * Validates a MeasureData object
+ */
+function validateMeasureData(measure: any): measure is MeasureData {
+  return (
+    measure &&
+    typeof measure === 'object' &&
+    Array.isArray(measure.events) &&
+    measure.events.every(validateNoteEvent)
+  );
+}
+
+/**
+ * Validates ScoreMetadata object
+ */
+function validateScoreMetadata(metadata: any): metadata is ScoreMetadata {
+  return (
+    metadata &&
+    typeof metadata === 'object' &&
+    typeof metadata.title === 'string' &&
+    typeof metadata.subtitle === 'string' &&
+    typeof metadata.lyricist === 'string' &&
+    typeof metadata.composer === 'string' &&
+    typeof metadata.arranger === 'string'
+  );
+}
+
+/**
+ * Validates a complete SavedScoreData object
+ */
+function validateSavedScoreData(data: any): data is SavedScoreData {
+  return (
+    data &&
+    typeof data === 'object' &&
+    typeof data.version === 'string' &&
+    typeof data.timestamp === 'number' &&
+    validateScoreMetadata(data.metadata) &&
+    Array.isArray(data.measures) &&
+    data.measures.every(validateMeasureData) &&
+    typeof data.systems === 'number' &&
+    data.systems > 0 &&
+    typeof data.measuresPerSystem === 'number' &&
+    data.measuresPerSystem > 0
+  );
+}
+
+/**
+ * Creates a StorageError with appropriate type and message
+ */
+function createStorageError(error: unknown): StorageError {
+  if (error instanceof DOMException) {
+    if (error.name === 'QuotaExceededError') {
+      return {
+        type: StorageErrorType.QUOTA_EXCEEDED,
+        message: 'Storage quota exceeded. Please clear some data or use export functionality.',
+        recoverable: true
+      };
+    }
+    if (error.name === 'SecurityError') {
+      return {
+        type: StorageErrorType.STORAGE_DISABLED,
+        message: 'Storage is disabled (private browsing mode). Data cannot be saved.',
+        recoverable: false
+      };
+    }
+  }
+
+  if (error instanceof SyntaxError) {
+    return {
+      type: StorageErrorType.CORRUPTED_DATA,
+      message: 'Stored data is corrupted and cannot be parsed.',
+      recoverable: true
+    };
+  }
+
+  return {
+    type: StorageErrorType.UNKNOWN_ERROR,
+    message: error instanceof Error ? error.message : 'An unknown storage error occurred.',
+    recoverable: false
+  };
+}
+
+/**
+ * Checks if localStorage is available and functional
+ */
+export function isStorageAvailable(): boolean {
+  try {
+    const testKey = '__storage_test__';
+    localStorage.setItem(testKey, 'test');
+    localStorage.removeItem(testKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Saves score data to localStorage with error handling
+ */
+export function saveScoreData(data: SavedScoreData): StorageResult<boolean> {
+  try {
+    if (!isStorageAvailable()) {
+      return {
+        success: false,
+        error: {
+          type: StorageErrorType.STORAGE_DISABLED,
+          message: 'localStorage is not available',
+          recoverable: false
+        }
+      };
+    }
+
+    // Validate data before saving
+    if (!validateSavedScoreData(data)) {
+      return {
+        success: false,
+        error: {
+          type: StorageErrorType.CORRUPTED_DATA,
+          message: 'Invalid data format provided for saving',
+          recoverable: true
+        }
+      };
+    }
+
+    const serializedData = JSON.stringify(data);
+    
+    // Try to save to primary key
+    localStorage.setItem(STORAGE_KEYS.PRIMARY, serializedData);
+    
+    // Save backup copy
+    try {
+      localStorage.setItem(STORAGE_KEYS.BACKUP, serializedData);
+    } catch {
+      // Backup save failure is not critical
+    }
+
+    // Save metadata with checksum
+    try {
+      const checksum = generateChecksum(serializedData);
+      const metadata: import('../types/storage').StorageMetadata = {
+        lastSaved: data.timestamp,
+        version: data.version,
+        dataChecksum: checksum
+      };
+      localStorage.setItem(STORAGE_KEYS.METADATA, JSON.stringify(metadata));
+    } catch {
+      // Metadata save failure is not critical
+    }
+
+    return {
+      success: true,
+      data: true
+    };
+
+  } catch (error) {
+    return {
+      success: false,
+      error: createStorageError(error)
+    };
+  }
+}
+
+/**
+ * Loads score data from localStorage with validation
+ */
+export function loadScoreData(): StorageResult<SavedScoreData | null> {
+  try {
+    if (!isStorageAvailable()) {
+      return {
+        success: false,
+        error: {
+          type: StorageErrorType.STORAGE_DISABLED,
+          message: 'localStorage is not available',
+          recoverable: false
+        }
+      };
+    }
+
+    // Try to load from primary key first
+    let rawData = localStorage.getItem(STORAGE_KEYS.PRIMARY);
+    
+    // If primary fails, try backup
+    if (!rawData) {
+      rawData = localStorage.getItem(STORAGE_KEYS.BACKUP);
+    }
+
+    // No data found
+    if (!rawData) {
+      return {
+        success: true,
+        data: null
+      };
+    }
+
+    // Parse JSON
+    let parsedData: any;
+    try {
+      parsedData = JSON.parse(rawData);
+    } catch (error) {
+      return {
+        success: false,
+        error: createStorageError(error)
+      };
+    }
+
+    // Validate parsed data
+    if (!validateSavedScoreData(parsedData)) {
+      return {
+        success: false,
+        error: {
+          type: StorageErrorType.CORRUPTED_DATA,
+          message: 'Stored data format is invalid or corrupted',
+          recoverable: true
+        }
+      };
+    }
+
+    // Verify checksum if available
+    try {
+      const metadataRaw = localStorage.getItem(STORAGE_KEYS.METADATA);
+      if (metadataRaw) {
+        const metadata: import('../types/storage').StorageMetadata = JSON.parse(metadataRaw);
+        if (metadata.dataChecksum) {
+          const currentChecksum = generateChecksum(rawData);
+          if (currentChecksum !== metadata.dataChecksum) {
+            // Checksum mismatch - data may be corrupted
+            // Try backup if available
+            const backupData = localStorage.getItem(STORAGE_KEYS.BACKUP);
+            if (backupData && backupData !== rawData) {
+              // Recursively try to load from backup
+              // Clear primary and retry
+              localStorage.removeItem(STORAGE_KEYS.PRIMARY);
+              return loadScoreData();
+            }
+          }
+        }
+      }
+    } catch {
+      // Checksum verification failure is not critical - continue with loaded data
+    }
+
+    return {
+      success: true,
+      data: parsedData
+    };
+
+  } catch (error) {
+    return {
+      success: false,
+      error: createStorageError(error)
+    };
+  }
+}
+
+/**
+ * Checks if stored data exists
+ */
+export function hasStoredData(): boolean {
+  try {
+    if (!isStorageAvailable()) {
+      return false;
+    }
+    
+    const primaryData = localStorage.getItem(STORAGE_KEYS.PRIMARY);
+    const backupData = localStorage.getItem(STORAGE_KEYS.BACKUP);
+    
+    return !!(primaryData || backupData);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Clears all stored score data
+ */
+export function clearStoredData(): StorageResult<boolean> {
+  try {
+    if (!isStorageAvailable()) {
+      return {
+        success: false,
+        error: {
+          type: StorageErrorType.STORAGE_DISABLED,
+          message: 'localStorage is not available',
+          recoverable: false
+        }
+      };
+    }
+
+    localStorage.removeItem(STORAGE_KEYS.PRIMARY);
+    localStorage.removeItem(STORAGE_KEYS.BACKUP);
+    localStorage.removeItem(STORAGE_KEYS.METADATA);
+
+    return {
+      success: true,
+      data: true
+    };
+
+  } catch (error) {
+    return {
+      success: false,
+      error: createStorageError(error)
+    };
+  }
+}
+
+/**
+ * Creates a SavedScoreData object with current timestamp and version
+ */
+export function createSavedScoreData(
+  metadata: ScoreMetadata,
+  measures: MeasureData[],
+  systems: number,
+  measuresPerSystem: number
+): SavedScoreData {
+  return {
+    version: CURRENT_VERSION,
+    timestamp: Date.now(),
+    metadata,
+    measures,
+    systems,
+    measuresPerSystem
+  };
+}
+
+/**
+ * Migrates data from an older version to the current version
+ * This function is prepared for future version migrations
+ */
+export function migrateData(data: any, fromVersion: string): SavedScoreData | null {
+  // Currently only version 1.0.0 exists, so no migration needed
+  if (fromVersion === CURRENT_VERSION) {
+    return data as SavedScoreData;
+  }
+
+  // Future migrations would be handled here
+  // Example:
+  // if (fromVersion === '0.9.0') {
+  //   return migrateFrom_0_9_0_to_1_0_0(data);
+  // }
+
+  // If we don't know how to migrate, return null
+  return null;
+}
+
+/**
+ * Gets storage metadata including version and last saved timestamp
+ */
+export function getStorageMetadata(): import('../types/storage').StorageMetadata | null {
+  try {
+    if (!isStorageAvailable()) {
+      return null;
+    }
+
+    const metadataRaw = localStorage.getItem(STORAGE_KEYS.METADATA);
+    if (!metadataRaw) {
+      return null;
+    }
+
+    const metadata = JSON.parse(metadataRaw);
+    return metadata;
+  } catch {
+    return null;
+  }
+}

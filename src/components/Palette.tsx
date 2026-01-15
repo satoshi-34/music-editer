@@ -163,7 +163,7 @@ function NoteIcon({ duration, isRest }: { duration: DurKey; isRest?: boolean }) 
       const voice = new Voice({ time: { num_beats: 1, beat_value: 1 } } as any);
       voice.setMode((Voice as any).Mode.SOFT ?? 1);
       voice.addTickables([note]);
-      new Formatter({ align_rests: true }).joinVoices([voice]).formatToStave([voice], stave);
+      new Formatter().joinVoices([voice]).formatToStave([voice], stave);
       voice.draw(ctx, stave);
 
       // 5) SVG取得＆黒で強制（白抜け対策）※ rect も忘れずに！
