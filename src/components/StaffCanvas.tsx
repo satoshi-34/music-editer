@@ -115,32 +115,97 @@ function midiToKey(midi: number, preferSharp: boolean): string {
 }
 
 /* ===== SVGユーティリティ ===== */
+/**
+ * VexflowがレンダリングしたSVGのルートグループを取得する
+ * @param svg SVG要素
+ * @returns ルートグループ要素、または見つからない場合はnull
+ */
 function getVexflowGroup(svg: SVGSVGElement): SVGGElement | null {
   const groups = svg.querySelectorAll('g');
   return groups.length ? (groups[groups.length - 1] as SVGGElement) : null;
 }
 
-function clientToGroup(svg: SVGSVGElement, group: SVGGElement, clientX: number, clientY: number) {
+/**
+ * クライアント座標をSVGグループ座標に変換する
+ * CTM（Current Transformation Matrix）の逆変換を使用して、
+ * 拡大縮小やCSS変形が適用された環境でも正確に変換する
+ * 
+ * @param svg SVG要素
+ * @param group 対象のSVGグループ要素（Vexflowのルートグループ）
+ * @param clientX クライアントX座標（ブラウザビューポート座標）
+ * @param clientY クライアントY座標（ブラウザビューポート座標）
+ * @returns SVG <g> ユーザー座標系での座標
+ */
+function clientToGroup(svg: SVGSVGElement, group: SVGGElement, clientX: number, clientY: number): { x: number; y: number } {
+  // SVGPointオブジェクトを作成してクライアント座標を設定
   const pt = svg.createSVGPoint();
   pt.x = clientX; 
   pt.y = clientY;
+  
+  // getScreenCTM()でスクリーン座標からSVG座標への変換行列を取得
   const m = (group as any).getScreenCTM?.();
-  if (!m) return { x: 0, y: 0 };
-  const p = pt.matrixTransform(m.inverse());
-  return { x: p.x, y: p.y };
+  
+  // nullチェック：変換行列が取得できない場合はフォールバック
+  if (!m) {
+    console.warn('getScreenCTM returned null, using fallback coordinates');
+    return { x: 0, y: 0 };
+  }
+  
+  try {
+    // 逆行列を計算してクライアント座標をSVG座標に変換
+    const p = pt.matrixTransform(m.inverse());
+    
+    // 座標の妥当性チェック
+    if (!isFinite(p.x) || !isFinite(p.y)) {
+      console.warn('Invalid coordinates after transformation:', { x: p.x, y: p.y });
+      return { x: 0, y: 0 };
+    }
+    
+    return { x: p.x, y: p.y };
+  } catch (error) {
+    // 変換エラーが発生した場合のエラーハンドリング
+    console.error('Error during coordinate transformation:', error);
+    return { x: 0, y: 0 };
+  }
 }
 
 /* ===== 行間スナップ ===== */
+/**
+ * Y座標を最も近い五線の線または間にスナップする
+ * getSpacingBetweenLines()を使用して正確な行間隔を取得し、
+ * 0.5行刻みで最も近い位置にスナップする
+ * 
+ * @param stave Vexflowの五線オブジェクト
+ * @param y スナップ対象のY座標（SVG座標系）
+ * @returns スナップされた線番号（0.5刻み、加線域を含む）
+ */
 function snapLineBySpacing(stave: Stave, y: number): number {
+  // 五線の最上部（第1線）のY座標を取得
   const topY = stave.getYForLine(0);
-  const sp = (stave.getSpacingBetweenLines?.() as number) || ((stave.getYForLine(4) - topY) / 4);
-  const minL = -EXTRA_TOP_LINES, maxL = 4 + EXTRA_BOTTOM_LINES;
-  let best = 0, diff = Infinity;
-  for (let l = minL; l <= maxL; l += 0.5) {
-    const yc = topY + l * sp; const d = Math.abs(y - yc);
-    if (d < diff) { diff = d; best = Number(l.toFixed(1)); }
+  
+  // getSpacingBetweenLines()で正確な行間隔を取得
+  // フォールバック：第1線と第5線の間隔から計算
+  const spacing = (stave.getSpacingBetweenLines?.() as number) || ((stave.getYForLine(4) - topY) / 4);
+  
+  // 加線域を含む範囲を設定
+  const minLine = -EXTRA_TOP_LINES;
+  const maxLine = 4 + EXTRA_BOTTOM_LINES;
+  
+  // 最も近い線を探索（0.5行刻み）
+  let bestLine = 0;
+  let minDiff = Infinity;
+  
+  for (let line = minLine; line <= maxLine; line += 0.5) {
+    const yCandidate = topY + line * spacing;
+    const diff = Math.abs(y - yCandidate);
+    
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestLine = Number(line.toFixed(1)); // 浮動小数点誤差を回避
+    }
   }
-  return best;
+  
+  return bestLine;
 }
 
 /* ===== ノート生成（臨時記号を付与） ===== */
@@ -375,13 +440,22 @@ export default function StaffCanvas({
         guideDot.setAttribute('r', '2.8');
 
         const updateGuide = (localX: number, localY: number) => {
+          // Y座標をスナップして音高を決定
           const snapped = snapLineBySpacing(stave, localY);
           const yGuide = stave.getYForLine(snapped);
+          
+          // ガイドラインのX座標を小節の範囲内に制限
+          const clampedX = Math.max(measLeft, Math.min(localX, measRight));
+          
+          // ガイドラインの位置を更新（小節の範囲内のみ）
+          guideLine.setAttribute('x1', String(measLeft));
+          guideLine.setAttribute('x2', String(measRight));
           guideLine.setAttribute('y1', String(yGuide));
           guideLine.setAttribute('y2', String(yGuide));
           guideLine.style.display = 'block';
-          const cx = Math.max(measLeft, Math.min(localX, measRight));
-          guideDot.setAttribute('cx', String(cx));
+          
+          // ガイドドットの位置を更新（小節の範囲内のみ）
+          guideDot.setAttribute('cx', String(clampedX));
           guideDot.setAttribute('cy', String(yGuide));
           guideDot.style.display = 'block';
         };
@@ -458,15 +532,22 @@ export default function StaffCanvas({
 
         insertRect.addEventListener('mousemove', (e) => {
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
-          updateGuide(lx, ly);
+          
+          // マウスが小節の範囲内（X座標とY座標の両方）にある場合のみガイドを表示
+          if (lx >= measLeft && lx <= measRight && ly >= rectTop && ly <= rectBottom) {
+            updateGuide(lx, ly);
+          } else {
+            hideGuide();
+          }
         });
         insertRect.addEventListener('mouseleave', hideGuide);
         insertRect.addEventListener('click', (e) => {
           // より正確な座標変換：SVGの変換行列を使用
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
           
-          const linePos = Math.round(stave.getLineForY(ly) * 2) / 2;
-          const key = lineToKeyTreble(linePos);
+          // Y座標から音高を計算
+          const snappedLine = snapLineBySpacing(stave, ly);
+          const key = lineToKeyTreble(snappedLine);
 
           setScore(prev => {
             const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
@@ -477,15 +558,60 @@ export default function StaffCanvas({
             const curBeats = m.events.reduce((s2, ev) => s2 + beatsFromVF(toVFDur(ev.dur)), 0);
             if (curBeats + addBeats > BEATS_PER_MEASURE) return prev;
 
-            // 小節内の相対位置から挿入位置を計算
-            const relX = lx - measLeft;
-            const clickBeat = Math.max(0, Math.min(BEATS_PER_MEASURE, (relX / wDraw) * BEATS_PER_MEASURE));
+            // X方向の挿入位置を計算
+            // getAbsoluteX()とBoundingBoxを使用して、見た目の横位置に基づいて判定
+            let insertAt = vfNotes.length;
+            let minDist = Infinity;
 
-            let acc = 0, insertAt = m.events.length;
-            for (let j = 0; j < m.events.length; j++) {
-              const b = beatsFromVF(toVFDur(m.events[j].dur));
-              if (clickBeat <= acc + b / 2) { insertAt = j; break; }
-              acc += b;
+            if (vfNotes.length > 0) {
+              // 小節の左端との距離をチェック
+              const distLeft = Math.abs(lx - measLeft);
+              if (distLeft < minDist) {
+                minDist = distLeft;
+                insertAt = 0;
+              }
+
+              // 小節の右端との距離をチェック
+              const distRight = Math.abs(lx - measRight);
+              if (distRight < minDist) {
+                minDist = distRight;
+                insertAt = vfNotes.length;
+              }
+
+              // 各音符の位置との距離をチェック
+              for (let j = 0; j < vfNotes.length; j++) {
+                const note: any = vfNotes[j];
+                const leftX = note.getAbsoluteX ? note.getAbsoluteX() : (measLeft + j * 20);
+                const bb = note.getBoundingBox?.();
+                const width = bb ? bb.getW() : 20;
+                const rightX = leftX + width;
+
+                // クリック位置が音符の範囲内の場合
+                if (lx >= leftX && lx <= rightX) {
+                  // 音符の中心より左なら前に、右なら後ろに挿入
+                  insertAt = (lx < (leftX + rightX) / 2) ? j : (j + 1);
+                  minDist = 0;
+                  break;
+                }
+
+                // 音符の左側との距離
+                if (lx < leftX) {
+                  const dist = leftX - lx;
+                  if (dist < minDist) {
+                    minDist = dist;
+                    insertAt = j;
+                  }
+                }
+
+                // 音符の右側との距離
+                if (lx > rightX) {
+                  const dist = lx - rightX;
+                  if (dist < minDist) {
+                    minDist = dist;
+                    insertAt = j + 1;
+                  }
+                }
+              }
             }
 
             const ev: NoteEvent = {
@@ -542,11 +668,23 @@ export default function StaffCanvas({
             // セル上でもガイドを出す
             hit.addEventListener('mousemove', (ev) => {
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
-              updateGuide(lx, ly);
+              
+              // マウスが小節の範囲内にある場合のみガイドを表示
+              if (lx >= measLeft && lx <= measRight) {
+                updateGuide(lx, ly);
+              } else {
+                hideGuide();
+              }
             });
             hit.addEventListener('mouseenter', (ev) => {
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
-              updateGuide(lx, ly);
+              
+              // マウスが小節の範囲内にある場合のみガイドを表示
+              if (lx >= measLeft && lx <= measRight) {
+                updateGuide(lx, ly);
+              } else {
+                hideGuide();
+              }
             });
             hit.addEventListener('mouseleave', hideGuide);
 
