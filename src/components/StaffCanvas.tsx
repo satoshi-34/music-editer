@@ -23,6 +23,9 @@ type Props = {
   measuresPerSystem?: number;
   tool: Tool;
   scale?: number;
+  initialScoreData?: MeasureData[];
+  onScoreDataChange?: (data: MeasureData[]) => void;
+  startMeasureIndex?: number; // このStaffCanvasが担当する開始小節インデックス
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -113,29 +116,97 @@ function midiToKey(midi: number, preferSharp: boolean): string {
 }
 
 /* ===== SVGユーティリティ ===== */
+/**
+ * VexflowがレンダリングしたSVGのルートグループを取得する
+ * @param svg SVG要素
+ * @returns ルートグループ要素、または見つからない場合はnull
+ */
 function getVexflowGroup(svg: SVGSVGElement): SVGGElement | null {
   const groups = svg.querySelectorAll('g');
   return groups.length ? (groups[groups.length - 1] as SVGGElement) : null;
 }
-/* group は SVGGElement に限らず SVGSVGElement でもOKにしておく */
-function clientToGroup(svg: SVGSVGElement, group: any, clientX: number, clientY: number) {
-  const pt = svg.createSVGPoint(); pt.x = clientX; pt.y = clientY;
-  const m = group?.getScreenCTM?.(); if (!m) return { x: 0, y: 0 };
-  const p = pt.matrixTransform(m.inverse());
-  return { x: p.x, y: p.y };
+
+/**
+ * クライアント座標をSVGグループ座標に変換する
+ * CTM（Current Transformation Matrix）の逆変換を使用して、
+ * 拡大縮小やCSS変形が適用された環境でも正確に変換する
+ * 
+ * @param svg SVG要素
+ * @param group 対象のSVGグループ要素（Vexflowのルートグループ）
+ * @param clientX クライアントX座標（ブラウザビューポート座標）
+ * @param clientY クライアントY座標（ブラウザビューポート座標）
+ * @returns SVG <g> ユーザー座標系での座標
+ */
+function clientToGroup(svg: SVGSVGElement, group: SVGGElement, clientX: number, clientY: number): { x: number; y: number } {
+  // SVGPointオブジェクトを作成してクライアント座標を設定
+  const pt = svg.createSVGPoint();
+  pt.x = clientX; 
+  pt.y = clientY;
+  
+  // getScreenCTM()でスクリーン座標からSVG座標への変換行列を取得
+  const m = (group as any).getScreenCTM?.();
+  
+  // nullチェック：変換行列が取得できない場合はフォールバック
+  if (!m) {
+    console.warn('getScreenCTM returned null, using fallback coordinates');
+    return { x: 0, y: 0 };
+  }
+  
+  try {
+    // 逆行列を計算してクライアント座標をSVG座標に変換
+    const p = pt.matrixTransform(m.inverse());
+    
+    // 座標の妥当性チェック
+    if (!isFinite(p.x) || !isFinite(p.y)) {
+      console.warn('Invalid coordinates after transformation:', { x: p.x, y: p.y });
+      return { x: 0, y: 0 };
+    }
+    
+    return { x: p.x, y: p.y };
+  } catch (error) {
+    // 変換エラーが発生した場合のエラーハンドリング
+    console.error('Error during coordinate transformation:', error);
+    return { x: 0, y: 0 };
+  }
 }
 
 /* ===== 行間スナップ ===== */
+/**
+ * Y座標を最も近い五線の線または間にスナップする
+ * getSpacingBetweenLines()を使用して正確な行間隔を取得し、
+ * 0.5行刻みで最も近い位置にスナップする
+ * 
+ * @param stave Vexflowの五線オブジェクト
+ * @param y スナップ対象のY座標（SVG座標系）
+ * @returns スナップされた線番号（0.5刻み、加線域を含む）
+ */
 function snapLineBySpacing(stave: Stave, y: number): number {
+  // 五線の最上部（第1線）のY座標を取得
   const topY = stave.getYForLine(0);
-  const sp = (stave.getSpacingBetweenLines?.() as number) || ((stave.getYForLine(4) - topY) / 4);
-  const minL = -EXTRA_TOP_LINES, maxL = 4 + EXTRA_BOTTOM_LINES;
-  let best = 0, diff = Infinity;
-  for (let l = minL; l <= maxL; l += 0.5) {
-    const yc = topY + l * sp; const d = Math.abs(y - yc);
-    if (d < diff) { diff = d; best = Number(l.toFixed(1)); }
+  
+  // getSpacingBetweenLines()で正確な行間隔を取得
+  // フォールバック：第1線と第5線の間隔から計算
+  const spacing = (stave.getSpacingBetweenLines?.() as number) || ((stave.getYForLine(4) - topY) / 4);
+  
+  // 加線域を含む範囲を設定
+  const minLine = -EXTRA_TOP_LINES;
+  const maxLine = 4 + EXTRA_BOTTOM_LINES;
+  
+  // 最も近い線を探索（0.5行刻み）
+  let bestLine = 0;
+  let minDiff = Infinity;
+  
+  for (let line = minLine; line <= maxLine; line += 0.5) {
+    const yCandidate = topY + line * spacing;
+    const diff = Math.abs(y - yCandidate);
+    
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestLine = Number(line.toFixed(1)); // 浮動小数点誤差を回避
+    }
   }
-  return best;
+  
+  return bestLine;
 }
 
 /* ===== ノート生成（臨時記号を付与） ===== */
@@ -155,19 +226,85 @@ function makeVFNote(ev: NoteEvent) {
   return n;
 }
 
+/* ===== 範囲チェック（要件3.4対応） ===== */
+/**
+ * 小節インデックスが有効な範囲内かチェックする
+ * @param measureIndex チェック対象の小節インデックス
+ * @param totalMeasures 総小節数
+ * @returns 有効な範囲内の場合はtrue
+ */
+function isValidMeasureIndex(measureIndex: number, totalMeasures: number): boolean {
+  if (measureIndex < 0 || measureIndex >= totalMeasures) {
+    console.error(`[範囲エラー] 小節インデックス ${measureIndex} は範囲外です（有効範囲: 0-${totalMeasures - 1}）`);
+    return false;
+  }
+  return true;
+}
+
+/* ===== デバッグログ（要件4.1, 4.2対応） ===== */
+/**
+ * 音符追加時のデバッグ情報をログ出力する
+ * @param measureIndex 小節インデックス
+ * @param x X座標
+ * @param y Y座標
+ * @param key 音高キー
+ */
+function logNoteAddition(measureIndex: number, x: number, y: number, key: string): void {
+  console.log(`[音符追加] 小節=${measureIndex}, 座標=(${x.toFixed(1)}, ${y.toFixed(1)}), 音高=${key}`);
+}
+
 export default function StaffCanvas({
   systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
+  initialScoreData, onScoreDataChange, startMeasureIndex = 0,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
-  const [score, setScore] = useState<MeasureData[]>(
-    Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] }))
-  );
+  const [score, setScore] = useState<MeasureData[]>(() => {
+    // initialScoreDataが提供されている場合はそれを使用
+    if (initialScoreData && initialScoreData.length > 0) {
+      return initialScoreData;
+    }
+    // それ以外の場合は、このStaffCanvasが必要とする範囲の空の小節を作成
+    // ただし、全体のスコアデータを保持するため、startMeasureIndex + systems * measuresPerSystemまで作成
+    const totalMeasures = startMeasureIndex + systems * measuresPerSystem;
+    return Array.from({ length: totalMeasures }, () => ({ events: [] }));
+  });
   const [selected, setSelected] = useState<{ measure: number; index: number } | null>(null);
 
+  // Update score when initialScoreData changes (when loading data)
   useEffect(() => {
-    setScore(Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] })));
-    setSelected(null);
-  }, [systems, measuresPerSystem]);
+    if (initialScoreData && initialScoreData.length > 0) {
+      // initialScoreDataが提供されている場合、それを使用
+      // ただし、このStaffCanvasが必要とする範囲を確保
+      const requiredLength = startMeasureIndex + systems * measuresPerSystem;
+      if (initialScoreData.length < requiredLength) {
+        // 不足分を空の小節で埋める
+        const extended = [...initialScoreData];
+        while (extended.length < requiredLength) {
+          extended.push({ events: [] });
+        }
+        setScore(extended);
+      } else {
+        setScore(initialScoreData);
+      }
+      setSelected(null); // Clear selection when loading new data
+    }
+  }, [initialScoreData, startMeasureIndex, systems, measuresPerSystem]);
+
+  // Call callback when score data changes
+  useEffect(() => {
+    if (onScoreDataChange) {
+      onScoreDataChange(score);
+    }
+  }, [score, onScoreDataChange]);
+
+  useEffect(() => {
+    // initialScoreDataが提供されていない場合のみ、空の小節で初期化
+    if (!initialScoreData || initialScoreData.length === 0) {
+      const totalMeasures = startMeasureIndex + systems * measuresPerSystem;
+      setScore(Array.from({ length: totalMeasures }, () => ({ events: [] })));
+      setSelected(null);
+    }
+  }, [systems, measuresPerSystem, initialScoreData, startMeasureIndex]);
 
   /* ===== キー操作（削除/上下移動/解除） ===== */
   useEffect(() => {
@@ -255,9 +392,12 @@ export default function StaffCanvas({
     const left = PAGE_LEFT;
 
     let globalIndex = 0;
+    const maxMeasures = systems * measuresPerSystem; // このStaffCanvasが描画する最大小節数
 
     for (let line = 0; line < systems; line++) {
-      if (globalIndex >= score.length) break;
+      if (globalIndex >= maxMeasures) break; // このStaffCanvasの範囲を超えたら終了
+      const absoluteStartIndex = startMeasureIndex + globalIndex;
+      if (absoluteStartIndex >= score.length) break; // 全体のスコアを超えたら終了
 
       const y = top + line * gap;
       const CLEF_PAD_THIS = (line === 0) ? CLEF_PAD_FIRST : CLEF_PAD_OTHER;
@@ -268,7 +408,10 @@ export default function StaffCanvas({
 
       const tryFit = (n: number) => {
         const last = Math.min(globalIndex + n, score.length);
-        const items = score.slice(globalIndex, last);
+        const items = score.slice(globalIndex, last).map((_, idx) => {
+          const absoluteIdx = startMeasureIndex + globalIndex + idx;
+          return absoluteIdx < score.length ? score[absoluteIdx] : undefined;
+        });
         let occupy = innerW * TARGET_FILL; if (n === 1) occupy = innerW;
 
         const alloc = Math.max(0, occupy - CLEF_PAD_THIS);
@@ -295,9 +438,12 @@ export default function StaffCanvas({
 
       let x = startX;
 
-      for (let i = 0; i < chosen && globalIndex < score.length; i++, globalIndex++) {
+      for (let i = 0; i < chosen && globalIndex < maxMeasures; i++, globalIndex++) {
+        const absoluteIndex = startMeasureIndex + globalIndex; // 絶対インデックスを計算
+        if (absoluteIndex >= score.length) break; // 全体のスコアを超えたら終了
+        
         const w = widths[i];
-        const data: MeasureData | undefined = score[globalIndex];
+        const data: MeasureData | undefined = score[absoluteIndex];
 
         const stave = new Stave(x / s, y / s, w / s);
         if (i === 0) { stave.addClef('treble'); if (line === 0) stave.addTimeSignature('4/4'); }
@@ -306,24 +452,27 @@ export default function StaffCanvas({
 
         const safeEvents: NoteEvent[] =
           (data?.events?.length ? data.events : [{ dur:'1', isRest:true, key:'b/4' }])
-          .map(ev => (!ev || !ev.dur ? { dur:'4', isRest:true, key:'b/4' } : ev));
+          .map(ev => (!ev || !ev.dur ? { dur:'4' as DurKey, isRest:true, key:'b/4' } : {
+            ...ev,
+            dur: ev.dur as DurKey
+          }));
 
         const vfNotes: StaveNote[] = safeEvents.map((ev, idx) => {
           const n = makeVFNote(ev) as any;
-          const isSel = !!selected && selected.measure === globalIndex && selected.index === idx;
+          const isSel = !!selected && selected.measure === absoluteIndex && selected.index === idx;
           if (isSel && n.setStyle) n.setStyle({ fillStyle:'#1d4ed8', strokeStyle:'#1d4ed8' });
           return n as StaveNote;
         });
 
-        const beams = Beam.generateBeams(vfNotes, { beam_rests:false });
+        const beams = Beam.generateBeams(vfNotes, { beamRests: false });
         const voice = new Voice({ time: { num_beats: BEATS_PER_MEASURE, beat_value: 4 } } as any);
         voice.setMode((Voice as any).Mode.SOFT ?? 1);
         voice.addTickables(vfNotes);
-        new Formatter({ align_rests:true }).joinVoices([voice]).formatToStave([voice], stave);
+        new Formatter().joinVoices([voice]).formatToStave([voice], stave);
         voice.draw(ctx, stave);
         beams.forEach(b => b.setContext(ctx).draw());
 
-        const measureIndex = globalIndex;
+        const measureIndex = globalIndex; // 相対インデックス（このStaffCanvas内での位置）
         const xDraw = x / s, wDraw = w / s;
         const measLeft = xDraw, measRight = xDraw + wDraw;
 
@@ -344,13 +493,22 @@ export default function StaffCanvas({
         guideDot.setAttribute('r', '2.8');
 
         const updateGuide = (localX: number, localY: number) => {
+          // Y座標をスナップして音高を決定
           const snapped = snapLineBySpacing(stave, localY);
           const yGuide = stave.getYForLine(snapped);
+          
+          // ガイドラインのX座標を小節の範囲内に制限
+          const clampedX = Math.max(measLeft, Math.min(localX, measRight));
+          
+          // ガイドラインの位置を更新（小節の範囲内のみ）
+          guideLine.setAttribute('x1', String(measLeft));
+          guideLine.setAttribute('x2', String(measRight));
           guideLine.setAttribute('y1', String(yGuide));
           guideLine.setAttribute('y2', String(yGuide));
           guideLine.style.display = 'block';
-          const cx = Math.max(measLeft, Math.min(localX, measRight));
-          guideDot.setAttribute('cx', String(cx));
+          
+          // ガイドドットの位置を更新（小節の範囲内のみ）
+          guideDot.setAttribute('cx', String(clampedX));
           guideDot.setAttribute('cy', String(yGuide));
           guideDot.style.display = 'block';
         };
@@ -360,7 +518,15 @@ export default function StaffCanvas({
         };
 
         /* --- 挿入処理（クリック座標→どこに挿入するか決めて追加） --- */
-        const doInsertAt = (localX: number, localY: number) => {
+        const doInsertAt = (localX: number, localY: number, targetMeasureIndex: number) => {
+          // 相対インデックスを絶対インデックスに変換
+          const absoluteMeasureIndex = startMeasureIndex + targetMeasureIndex;
+          
+          // 範囲チェック（要件3.4対応）
+          if (!isValidMeasureIndex(absoluteMeasureIndex, score.length)) {
+            return;
+          }
+          
           const snappedLine = snapLineBySpacing(stave, localY);
           const key = lineToKeyTreble(snappedLine);
 
@@ -386,11 +552,14 @@ export default function StaffCanvas({
               if (localX > rightX) { const d = localX - rightX; if (d < minDist) { minDist = d; insertAt = j + 1; } }
             }
           }
+          
+          // デバッグログ（要件4.1, 4.2対応）
+          logNoteAddition(absoluteMeasureIndex, localX, localY, key);
 
           setScore(prev => {
             const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
-            while (measureIndex >= next.length) next.push({ events: [] });
-            const m = next[measureIndex];
+            while (absoluteMeasureIndex >= next.length) next.push({ events: [] });
+            const m = next[absoluteMeasureIndex];
 
             const vfDur = toVFDur((tool as any)?.duration);
             const addBeats = beatsFromVF(vfDur);
@@ -426,13 +595,22 @@ export default function StaffCanvas({
         (svgRoot as any).appendChild(insertRect);
 
         insertRect.addEventListener('mousemove', (e) => {
-          const { x: lx, y: ly } = clientToGroup(svg, svgRoot, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
-          updateGuide(lx, ly);
+          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
+          
+          // マウスが小節の範囲内（X座標とY座標の両方）にある場合のみガイドを表示
+          if (lx >= measLeft && lx <= measRight && ly >= rectTop && ly <= rectBottom) {
+            updateGuide(lx, ly);
+          } else {
+            hideGuide();
+          }
         });
         insertRect.addEventListener('mouseleave', hideGuide);
         insertRect.addEventListener('click', (e) => {
-          const { x: lx, y: ly } = clientToGroup(svg, svgRoot, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
-          doInsertAt(lx, ly);
+          // より正確な座標変換：SVGの変換行列を使用
+          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
+          
+          // doInsertAt関数を使用して音符を挿入
+          doInsertAt(lx, ly, measureIndex);
         });
 
         /* --- セル方式（選択とガイド、そして分岐クリック） --- */
@@ -478,26 +656,39 @@ export default function StaffCanvas({
 
             // セル上でもガイドを出す
             hit.addEventListener('mousemove', (ev) => {
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
-              updateGuide(lx, ly);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
+              
+              // マウスが小節の範囲内にある場合のみガイドを表示
+              if (lx >= measLeft && lx <= measRight) {
+                updateGuide(lx, ly);
+              } else {
+                hideGuide();
+              }
             });
             hit.addEventListener('mouseenter', (ev) => {
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
-              updateGuide(lx, ly);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
+              
+              // マウスが小節の範囲内にある場合のみガイドを表示
+              if (lx >= measLeft && lx <= measRight) {
+                updateGuide(lx, ly);
+              } else {
+                hideGuide();
+              }
             });
             hit.addEventListener('mouseleave', hideGuide);
 
             // クリック：近ければ選択、離れていれば挿入
             hit.addEventListener('click', (ev) => {
               ev.stopPropagation(); // 小節rectには渡さない
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
               const cellW = rawRight - rawLeft;
               const selRadius = Math.min(SELECT_NEAR_PX, Math.max(0, cellW * SELECT_NEAR_FRAC));
               const dx = Math.abs(lx - anchors[j]);
               if (dx <= selRadius) {
-                setSelected({ measure: measureIndex, index: j });
+                // 選択時は絶対インデックスを使用
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
               } else {
-                doInsertAt(lx, ly);
+                doInsertAt(lx, ly, measureIndex);
               }
             });
 

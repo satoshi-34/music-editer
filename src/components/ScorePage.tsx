@@ -1,29 +1,76 @@
 // src/components/ScorePage.tsx
 // ─────────────────────────────────────────────────────────────
-// ツールバー（Palette）＋五線（StaffCanvas）を「印刷レイアウト」で表示。
-// ✅ 追加ポイント：ヘッダーの実高さを測って CSS 変数 --toolbar-h に反映。
-//    → 本文側（.app-root）に余白がつき、ヘッダーが譜面に重ならなくなる。
+// ・ツールバー（Palette）と五線（StaffCanvas）をまとめる“印刷レイアウト”側
+// ・App からは ScorePage だけをレンダリング（重複描画を防ぐ）
+// ・scale は CSS 変数として見た目にだけ使う（StaffCanvas は親幅で描く）
 // ─────────────────────────────────────────────────────────────
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Palette, { type Tool } from './Palette';
 import StaffCanvas from './StaffCanvas';
+import SaveLoadButtons from './SaveLoadButtons';
 import { useAutoPageScale } from './useAutoPageScale';
+import { useScoreStorage } from '../hooks/useScoreStorage';
+import type { MeasureData } from '../types/storage';
 
 type PageSpec = { systems: number };
 
 export default function ScorePage() {
-  // どの音符ツールを選択しているか（Palette の選択状態）
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
 
-  // タイトル等（1ページ目のみ大きめ表示）
   const [title, setTitle] = useState('タイトル');
   const [subtitle, setSubtitle] = useState('サブタイトル');
   const [lyricist, setLyricist] = useState('作詞者');
   const [composer, setComposer] = useState('作曲者');
   const [arranger, setArranger] = useState('編曲者');
 
-  // 2ページ並べるか1ページにするか（画面幅で切り替え）
+  // Initialize storage hook
+  const {
+    saveScore,
+    loadScore,
+    hasStoredData,
+    error,
+    isLoading,
+    isSaving
+  } = useScoreStorage();
+
+  // State for managing score data from StaffCanvas
+  const [scoreData, setScoreData] = useState<MeasureData[]>([]);
+
+  // Handle save operation
+  const handleSave = async () => {
+    const metadata = {
+      title,
+      subtitle,
+      lyricist,
+      composer,
+      arranger
+    };
+
+    // Use actual score data from StaffCanvas if available, otherwise use empty measures
+    const measures = scoreData.length > 0 ? scoreData : [{ events: [] }];
+    const systems = totalSystems;
+    const measuresPerSystem = 4;
+
+    await saveScore(metadata, measures, systems, measuresPerSystem);
+  };
+
+  // Handle load operation
+  const handleLoad = async () => {
+    const loadedData = await loadScore();
+    if (loadedData) {
+      // Restore metadata to UI state
+      setTitle(loadedData.metadata.title);
+      setSubtitle(loadedData.metadata.subtitle);
+      setLyricist(loadedData.metadata.lyricist);
+      setComposer(loadedData.metadata.composer);
+      setArranger(loadedData.metadata.arranger);
+      
+      // Restore measure data to score state
+      setScoreData(loadedData.measures);
+    }
+  };
+
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
   useEffect(() => {
     const onResize = () => setColumns(window.innerWidth < 1200 ? 1 : 2);
@@ -31,10 +78,8 @@ export default function ScorePage() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // A4見開きの自動スケール
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
 
-  // ページ分割（仮：1ページに9段表示）
   const totalSystems = 12;
   const systemsPerPage = 9;
   const pages: PageSpec[] = useMemo(
@@ -42,12 +87,11 @@ export default function ScorePage() {
     [totalSystems, systemsPerPage]
   );
 
-  // 画面幅に応じて片面/見開きを出し分け
   const [visiblePages, setVisiblePages] = useState<PageSpec[]>(pages);
   useEffect(() => {
     const update = () => {
       const vw = window.innerWidth;
-      const pagePixelWidth = 210 * 3.78 * scale; // 210mm ≒ 3.78px/mm
+      const pagePixelWidth = 210 * 3.78 * scale;
       setVisiblePages(pagePixelWidth * 2 > vw ? pages.slice(0, 1) : pages);
     };
     update();
@@ -55,35 +99,25 @@ export default function ScorePage() {
     return () => window.removeEventListener('resize', update);
   }, [pages, scale]);
 
-  // ─────────────────────────────────────────────────────────
-  // ✅ 追加：ヘッダー実高さを測ってCSS変数に入れる
-  //   - ヘッダーは position: fixed なので、本文側でその高さ分の
-  //     余白（padding-top）を付けないと「重なり」が起きます。
-  //   - --toolbar-h を documentElement にセット → CSS 側で利用。
-  // ─────────────────────────────────────────────────────────
-  const toolbarRef = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    const applyToolbarHeight = () => {
-      const h = toolbarRef.current?.offsetHeight ?? 72; // デフォルト72px
-      document.documentElement.style.setProperty('--toolbar-h', `${h}px`);
-    };
-    applyToolbarHeight();
-    window.addEventListener('resize', applyToolbarHeight);
-    return () => window.removeEventListener('resize', applyToolbarHeight);
-  }, []);
-
   return (
     <div className="app-root">
-      {/* ツールバー（ヘッダー） */}
-      <header className="toolbar" ref={toolbarRef as any}>
+      {/* ツールバー */}
+      <header className="toolbar">
         <div className="controls">
-          {/* 楽譜用のツールパレット（音符/休符アイコン） */}
           <Palette value={tool} onChange={setTool} />
+          <SaveLoadButtons
+            onSave={handleSave}
+            onLoad={handleLoad}
+            isSaving={isSaving}
+            isLoading={isLoading}
+            hasStoredData={hasStoredData()}
+            error={error}
+          />
           <button className="ghost" onClick={() => window.print()}>印刷</button>
         </div>
       </header>
 
-      {/* 譜面プレビュー（固定ヘッダーの下に来る） */}
+      {/* 譜面プレビュー */}
       <div className="paper-rail">
         <div
           className="spread"
@@ -124,7 +158,16 @@ export default function ScorePage() {
 
                 {/* 五線エリア */}
                 <div className="score-area">
-                  <StaffCanvas systems={p.systems} gap={110} tool={tool} scale={scale} />
+                  <StaffCanvas 
+                    systems={p.systems} 
+                    gap={110}
+                    measuresPerSystem={4}
+                    tool={tool} 
+                    scale={scale}
+                    initialScoreData={scoreData}
+                    onScoreDataChange={setScoreData}
+                    startMeasureIndex={i * systemsPerPage * 4}
+                  />
                 </div>
 
                 <footer className="page-foot">
