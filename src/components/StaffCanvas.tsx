@@ -25,6 +25,7 @@ type Props = {
   scale?: number;
   initialScoreData?: MeasureData[];
   onScoreDataChange?: (data: MeasureData[]) => void;
+  startMeasureIndex?: number; // このStaffCanvasが担当する開始小節インデックス
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -225,27 +226,69 @@ function makeVFNote(ev: NoteEvent) {
   return n;
 }
 
+/* ===== 範囲チェック（要件3.4対応） ===== */
+/**
+ * 小節インデックスが有効な範囲内かチェックする
+ * @param measureIndex チェック対象の小節インデックス
+ * @param totalMeasures 総小節数
+ * @returns 有効な範囲内の場合はtrue
+ */
+function isValidMeasureIndex(measureIndex: number, totalMeasures: number): boolean {
+  if (measureIndex < 0 || measureIndex >= totalMeasures) {
+    console.error(`[範囲エラー] 小節インデックス ${measureIndex} は範囲外です（有効範囲: 0-${totalMeasures - 1}）`);
+    return false;
+  }
+  return true;
+}
+
+/* ===== デバッグログ（要件4.1, 4.2対応） ===== */
+/**
+ * 音符追加時のデバッグ情報をログ出力する
+ * @param measureIndex 小節インデックス
+ * @param x X座標
+ * @param y Y座標
+ * @param key 音高キー
+ */
+function logNoteAddition(measureIndex: number, x: number, y: number, key: string): void {
+  console.log(`[音符追加] 小節=${measureIndex}, 座標=(${x.toFixed(1)}, ${y.toFixed(1)}), 音高=${key}`);
+}
+
 export default function StaffCanvas({
   systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
-  initialScoreData, onScoreDataChange,
+  initialScoreData, onScoreDataChange, startMeasureIndex = 0,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [score, setScore] = useState<MeasureData[]>(() => {
-    // Use initialScoreData if provided, otherwise create empty measures
+    // initialScoreDataが提供されている場合はそれを使用
     if (initialScoreData && initialScoreData.length > 0) {
       return initialScoreData;
     }
-    return Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] }));
+    // それ以外の場合は、このStaffCanvasが必要とする範囲の空の小節を作成
+    // ただし、全体のスコアデータを保持するため、startMeasureIndex + systems * measuresPerSystemまで作成
+    const totalMeasures = startMeasureIndex + systems * measuresPerSystem;
+    return Array.from({ length: totalMeasures }, () => ({ events: [] }));
   });
   const [selected, setSelected] = useState<{ measure: number; index: number } | null>(null);
 
   // Update score when initialScoreData changes (when loading data)
   useEffect(() => {
     if (initialScoreData && initialScoreData.length > 0) {
-      setScore(initialScoreData);
+      // initialScoreDataが提供されている場合、それを使用
+      // ただし、このStaffCanvasが必要とする範囲を確保
+      const requiredLength = startMeasureIndex + systems * measuresPerSystem;
+      if (initialScoreData.length < requiredLength) {
+        // 不足分を空の小節で埋める
+        const extended = [...initialScoreData];
+        while (extended.length < requiredLength) {
+          extended.push({ events: [] });
+        }
+        setScore(extended);
+      } else {
+        setScore(initialScoreData);
+      }
       setSelected(null); // Clear selection when loading new data
     }
-  }, [initialScoreData]);
+  }, [initialScoreData, startMeasureIndex, systems, measuresPerSystem]);
 
   // Call callback when score data changes
   useEffect(() => {
@@ -255,12 +298,13 @@ export default function StaffCanvas({
   }, [score, onScoreDataChange]);
 
   useEffect(() => {
-    // Only reset to empty measures if no initialScoreData is provided
+    // initialScoreDataが提供されていない場合のみ、空の小節で初期化
     if (!initialScoreData || initialScoreData.length === 0) {
-      setScore(Array.from({ length: systems * measuresPerSystem }, () => ({ events: [] })));
+      const totalMeasures = startMeasureIndex + systems * measuresPerSystem;
+      setScore(Array.from({ length: totalMeasures }, () => ({ events: [] })));
       setSelected(null);
     }
-  }, [systems, measuresPerSystem, initialScoreData]);
+  }, [systems, measuresPerSystem, initialScoreData, startMeasureIndex]);
 
   /* ===== キー操作（削除/上下移動/解除） ===== */
   useEffect(() => {
@@ -348,9 +392,12 @@ export default function StaffCanvas({
     const left = PAGE_LEFT;
 
     let globalIndex = 0;
+    const maxMeasures = systems * measuresPerSystem; // このStaffCanvasが描画する最大小節数
 
     for (let line = 0; line < systems; line++) {
-      if (globalIndex >= score.length) break;
+      if (globalIndex >= maxMeasures) break; // このStaffCanvasの範囲を超えたら終了
+      const absoluteStartIndex = startMeasureIndex + globalIndex;
+      if (absoluteStartIndex >= score.length) break; // 全体のスコアを超えたら終了
 
       const y = top + line * gap;
       const CLEF_PAD_THIS = (line === 0) ? CLEF_PAD_FIRST : CLEF_PAD_OTHER;
@@ -361,7 +408,10 @@ export default function StaffCanvas({
 
       const tryFit = (n: number) => {
         const last = Math.min(globalIndex + n, score.length);
-        const items = score.slice(globalIndex, last);
+        const items = score.slice(globalIndex, last).map((_, idx) => {
+          const absoluteIdx = startMeasureIndex + globalIndex + idx;
+          return absoluteIdx < score.length ? score[absoluteIdx] : undefined;
+        });
         let occupy = innerW * TARGET_FILL; if (n === 1) occupy = innerW;
 
         const alloc = Math.max(0, occupy - CLEF_PAD_THIS);
@@ -388,9 +438,12 @@ export default function StaffCanvas({
 
       let x = startX;
 
-      for (let i = 0; i < chosen && globalIndex < score.length; i++, globalIndex++) {
+      for (let i = 0; i < chosen && globalIndex < maxMeasures; i++, globalIndex++) {
+        const absoluteIndex = startMeasureIndex + globalIndex; // 絶対インデックスを計算
+        if (absoluteIndex >= score.length) break; // 全体のスコアを超えたら終了
+        
         const w = widths[i];
-        const data: MeasureData | undefined = score[globalIndex];
+        const data: MeasureData | undefined = score[absoluteIndex];
 
         const stave = new Stave(x / s, y / s, w / s);
         if (i === 0) { stave.addClef('treble'); if (line === 0) stave.addTimeSignature('4/4'); }
@@ -406,7 +459,7 @@ export default function StaffCanvas({
 
         const vfNotes: StaveNote[] = safeEvents.map((ev, idx) => {
           const n = makeVFNote(ev) as any;
-          const isSel = !!selected && selected.measure === globalIndex && selected.index === idx;
+          const isSel = !!selected && selected.measure === absoluteIndex && selected.index === idx;
           if (isSel && n.setStyle) n.setStyle({ fillStyle:'#1d4ed8', strokeStyle:'#1d4ed8' });
           return n as StaveNote;
         });
@@ -419,7 +472,7 @@ export default function StaffCanvas({
         voice.draw(ctx, stave);
         beams.forEach(b => b.setContext(ctx).draw());
 
-        const measureIndex = globalIndex;
+        const measureIndex = globalIndex; // 相対インデックス（このStaffCanvas内での位置）
         const xDraw = x / s, wDraw = w / s;
         const measLeft = xDraw, measRight = xDraw + wDraw;
 
@@ -465,7 +518,15 @@ export default function StaffCanvas({
         };
 
         /* --- 挿入処理（クリック座標→どこに挿入するか決めて追加） --- */
-        const doInsertAt = (localX: number, localY: number) => {
+        const doInsertAt = (localX: number, localY: number, targetMeasureIndex: number) => {
+          // 相対インデックスを絶対インデックスに変換
+          const absoluteMeasureIndex = startMeasureIndex + targetMeasureIndex;
+          
+          // 範囲チェック（要件3.4対応）
+          if (!isValidMeasureIndex(absoluteMeasureIndex, score.length)) {
+            return;
+          }
+          
           const snappedLine = snapLineBySpacing(stave, localY);
           const key = lineToKeyTreble(snappedLine);
 
@@ -491,11 +552,14 @@ export default function StaffCanvas({
               if (localX > rightX) { const d = localX - rightX; if (d < minDist) { minDist = d; insertAt = j + 1; } }
             }
           }
+          
+          // デバッグログ（要件4.1, 4.2対応）
+          logNoteAddition(absoluteMeasureIndex, localX, localY, key);
 
           setScore(prev => {
             const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
-            while (measureIndex >= next.length) next.push({ events: [] });
-            const m = next[measureIndex];
+            while (absoluteMeasureIndex >= next.length) next.push({ events: [] });
+            const m = next[absoluteMeasureIndex];
 
             const vfDur = toVFDur((tool as any)?.duration);
             const addBeats = beatsFromVF(vfDur);
@@ -545,83 +609,8 @@ export default function StaffCanvas({
           // より正確な座標変換：SVGの変換行列を使用
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
           
-          // Y座標から音高を計算
-          const snappedLine = snapLineBySpacing(stave, ly);
-          const key = lineToKeyTreble(snappedLine);
-
-          setScore(prev => {
-            const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
-            while (measureIndex >= next.length) next.push({ events: [] });
-            const m = next[measureIndex];
-
-            const addBeats = beatsFromVF(toVFDur((tool as any)?.duration));
-            const curBeats = m.events.reduce((s2, ev) => s2 + beatsFromVF(toVFDur(ev.dur)), 0);
-            if (curBeats + addBeats > BEATS_PER_MEASURE) return prev;
-
-            // X方向の挿入位置を計算
-            // getAbsoluteX()とBoundingBoxを使用して、見た目の横位置に基づいて判定
-            let insertAt = vfNotes.length;
-            let minDist = Infinity;
-
-            if (vfNotes.length > 0) {
-              // 小節の左端との距離をチェック
-              const distLeft = Math.abs(lx - measLeft);
-              if (distLeft < minDist) {
-                minDist = distLeft;
-                insertAt = 0;
-              }
-
-              // 小節の右端との距離をチェック
-              const distRight = Math.abs(lx - measRight);
-              if (distRight < minDist) {
-                minDist = distRight;
-                insertAt = vfNotes.length;
-              }
-
-              // 各音符の位置との距離をチェック
-              for (let j = 0; j < vfNotes.length; j++) {
-                const note: any = vfNotes[j];
-                const leftX = note.getAbsoluteX ? note.getAbsoluteX() : (measLeft + j * 20);
-                const bb = note.getBoundingBox?.();
-                const width = bb ? bb.getW() : 20;
-                const rightX = leftX + width;
-
-                // クリック位置が音符の範囲内の場合
-                if (lx >= leftX && lx <= rightX) {
-                  // 音符の中心より左なら前に、右なら後ろに挿入
-                  insertAt = (lx < (leftX + rightX) / 2) ? j : (j + 1);
-                  minDist = 0;
-                  break;
-                }
-
-                // 音符の左側との距離
-                if (lx < leftX) {
-                  const dist = leftX - lx;
-                  if (dist < minDist) {
-                    minDist = dist;
-                    insertAt = j;
-                  }
-                }
-
-                // 音符の右側との距離
-                if (lx > rightX) {
-                  const dist = lx - rightX;
-                  if (dist < minDist) {
-                    minDist = dist;
-                    insertAt = j + 1;
-                  }
-                }
-              }
-            }
-
-            const ev: NoteEvent = {
-              dur: (['1','2','4','8','16','32','64'].includes((tool as any)?.duration) ? (tool as any).duration : '4') as DurKey,
-              isRest: !!(tool as any)?.isRest,
-              key,
-            };
-            m.events.splice(insertAt, 0, ev);
-            return next;
-          });
+          // doInsertAt関数を使用して音符を挿入
+          doInsertAt(lx, ly, measureIndex);
         });
 
         /* --- セル方式（選択とガイド、そして分岐クリック） --- */
@@ -696,9 +685,10 @@ export default function StaffCanvas({
               const selRadius = Math.min(SELECT_NEAR_PX, Math.max(0, cellW * SELECT_NEAR_FRAC));
               const dx = Math.abs(lx - anchors[j]);
               if (dx <= selRadius) {
-                setSelected({ measure: measureIndex, index: j });
+                // 選択時は絶対インデックスを使用
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
               } else {
-                doInsertAt(lx, ly);
+                doInsertAt(lx, ly, measureIndex);
               }
             });
 

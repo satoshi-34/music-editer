@@ -160,11 +160,13 @@ export default function ScorePage() {
                 <div className="score-area">
                   <StaffCanvas 
                     systems={p.systems} 
-                    gap={110} 
+                    gap={110}
+                    measuresPerSystem={4}
                     tool={tool} 
                     scale={scale}
                     initialScoreData={scoreData}
                     onScoreDataChange={setScoreData}
+                    startMeasureIndex={i * systemsPerPage * 4}
                   />
                 </div>
 
