@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental } from 'vexflow';
 import type { Tool } from './Palette';
+import { adjustRestPositionsV2 } from './RestOverlapFixV2';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -209,12 +210,199 @@ function snapLineBySpacing(stave: Stave, y: number): number {
   return bestLine;
 }
 
+/* ===== 時間ベース位置計算（休符重なり修正用） ===== */
+/**
+ * 時間位置をX座標に変換する
+ * @param timePosition 拍単位での時間位置（0から開始）
+ * @param measureWidth 小節の幅（ピクセル）
+ * @param measureLeft 小節の左端X座標
+ * @returns X座標（ピクセル）
+ */
+function calculateTimeBasedX(
+  timePosition: number, 
+  measureWidth: number, 
+  measureLeft: number
+): number {
+  try {
+    // 入力値の検証
+    if (!Number.isFinite(timePosition) || !Number.isFinite(measureWidth) || !Number.isFinite(measureLeft)) {
+      console.warn('calculateTimeBasedX: 無効な数値が入力されました', { timePosition, measureWidth, measureLeft });
+      // フォールバック: 小節の左端を返す
+      return Number.isFinite(measureLeft) ? measureLeft : 0;
+    }
+
+    // 負の時間位置や範囲外の値を適切に処理
+    if (timePosition < 0) {
+      console.warn('calculateTimeBasedX: 負の時間位置が指定されました', timePosition);
+      // フォールバック: 0拍目として処理
+      timePosition = 0;
+    }
+
+    // 小節幅が0以下の場合の処理
+    if (measureWidth <= 0) {
+      console.warn('calculateTimeBasedX: 無効な小節幅が指定されました', measureWidth);
+      // フォールバック: 小節の左端を返す
+      return measureLeft;
+    }
+
+    // 4拍を小節幅に比例配分
+    const ratio = Math.max(0, Math.min(1, timePosition / BEATS_PER_MEASURE));
+    const result = measureLeft + (measureWidth * ratio);
+
+    // 結果の検証
+    if (!Number.isFinite(result)) {
+      console.warn('calculateTimeBasedX: 計算結果が無効な値になりました', { result, timePosition, measureWidth, measureLeft });
+      // フォールバック: 小節の左端を返す
+      return measureLeft;
+    }
+
+    return result;
+  } catch (error) {
+    console.error('calculateTimeBasedX: 予期しないエラーが発生しました', error);
+    // フォールバック: 小節の左端を返す（安全な値）
+    return Number.isFinite(measureLeft) ? measureLeft : 0;
+  }
+}
+
+/**
+ * 休符の位置を時間ベースで調整する
+ * Formatter実行後に休符の位置を手動調整して重なりを防ぐ
+ * @param vfNotes VexflowのStaveNoteリスト
+ * @param events 元の音符・休符データ
+ * @param measureLeft 小節の左端X座標
+ * @param measureWidth 小節の幅（ピクセル）
+ */
+function adjustRestPositions(
+  vfNotes: StaveNote[], 
+  events: NoteEvent[], 
+  measureLeft: number, 
+  measureWidth: number
+): void {
+  try {
+    // 入力値の検証
+    if (!Array.isArray(vfNotes) || !Array.isArray(events)) {
+      console.warn('adjustRestPositions: 無効な配列が入力されました');
+      return;
+    }
+
+    if (!Number.isFinite(measureLeft) || !Number.isFinite(measureWidth)) {
+      console.warn('adjustRestPositions: 無効な小節パラメータが入力されました', { measureLeft, measureWidth });
+      return;
+    }
+
+    if (measureWidth <= 0) {
+      console.warn('adjustRestPositions: 無効な小節幅が指定されました', measureWidth);
+      return;
+    }
+
+    let currentTime = 0;
+    let adjustedCount = 0;
+    let errorCount = 0;
+    
+    for (let i = 0; i < vfNotes.length && i < events.length; i++) {
+      const note = vfNotes[i];
+      const event = events[i];
+      
+      // 基本的な検証
+      if (!note || !event) {
+        console.warn(`adjustRestPositions: インデックス${i}で無効なnoteまたはeventが見つかりました`);
+        continue;
+      }
+      
+      if (event.isRest) {
+        try {
+          // 時間ベースのX座標を計算
+          const targetX = calculateTimeBasedX(currentTime, measureWidth, measureLeft);
+          
+          // 現在の位置を取得（複数の方法を試行）
+          let currentX: number;
+          try {
+            currentX = (note as any).getAbsoluteX?.() || (note as any).getX?.() || 0;
+          } catch (getXError) {
+            console.warn(`adjustRestPositions: インデックス${i}でX座標取得に失敗`, getXError);
+            // フォールバック: 小節の左端を使用
+            currentX = measureLeft;
+          }
+
+          // 座標の妥当性を検証
+          if (!Number.isFinite(currentX) || !Number.isFinite(targetX)) {
+            console.warn(`adjustRestPositions: インデックス${i}で無効な座標が計算されました`, { currentX, targetX });
+            continue;
+          }
+
+          const offset = targetX - currentX;
+          
+          // 位置を調整（1px以上の差がある場合のみ）
+          if (Math.abs(offset) > 1) {
+            try {
+              // setXShiftメソッドの存在を確認
+              if (typeof (note as any).setXShift === 'function') {
+                (note as any).setXShift(offset);
+                adjustedCount++;
+              } else {
+                console.warn(`adjustRestPositions: インデックス${i}でsetXShiftメソッドが利用できません`);
+              }
+            } catch (setXShiftError) {
+              console.warn(`adjustRestPositions: インデックス${i}でsetXShift呼び出しに失敗`, setXShiftError);
+              errorCount++;
+              
+              // 代替手段を試行
+              try {
+                if (typeof (note as any).setX === 'function') {
+                  (note as any).setX(targetX);
+                  adjustedCount++;
+                } else {
+                  console.warn(`adjustRestPositions: インデックス${i}で代替手段も利用できません`);
+                }
+              } catch (setXError) {
+                console.warn(`adjustRestPositions: インデックス${i}で代替手段も失敗`, setXError);
+              }
+            }
+          }
+        } catch (restError) {
+          console.warn(`adjustRestPositions: インデックス${i}の休符処理でエラーが発生`, restError);
+          errorCount++;
+        }
+      }
+      
+      // 次の時間位置を計算
+      try {
+        const duration = toVFDur(event.dur);
+        const beats = beatsFromVF(duration);
+        
+        if (!Number.isFinite(beats) || beats < 0) {
+          console.warn(`adjustRestPositions: インデックス${i}で無効な拍数が計算されました`, beats);
+          // フォールバック: 4分音符として処理
+          currentTime += 1;
+        } else {
+          currentTime += beats;
+        }
+      } catch (durationError) {
+        console.warn(`adjustRestPositions: インデックス${i}で拍数計算に失敗`, durationError);
+        // フォールバック: 4分音符として処理
+        currentTime += 1;
+      }
+    }
+
+    // 処理結果をログに記録（調整が実際に行われた場合のみ）
+    if (adjustedCount > 0) {
+      console.log(`adjustRestPositions: 完了 - 調整済み: ${adjustedCount}, エラー: ${errorCount}`);
+    } else if (errorCount > 0) {
+      console.warn(`adjustRestPositions: エラーが発生しました - エラー: ${errorCount}`);
+    }
+
+  } catch (error) {
+    console.error('adjustRestPositions: 予期しないエラーが発生しました', error);
+    // フォールバック: 何もしない（既存の位置を維持）
+  }
+}
+
 /* ===== ノート生成（臨時記号を付与） ===== */
 function makeVFNote(ev: NoteEvent) {
   const vfDur = toVFDur(ev.dur);
   if (ev.isRest) {
+    // 休符作成時にsetCenterAlignmentを削除 - 中央揃えを無効化して重なりを防ぐ
     const n = new StaveNote({ clef: 'treble', keys: ['b/4'], duration: (vfDur as VFDur) + 'r' });
-    (n as any).setCenterAlignment?.(true);
     return n;
   }
   const n = new StaveNote({ clef: 'treble', keys: [ev.key], duration: vfDur });
@@ -264,7 +452,6 @@ export default function StaffCanvas({
       return initialScoreData;
     }
     // それ以外の場合は、このStaffCanvasが必要とする範囲の空の小節を作成
-    // ただし、全体のスコアデータを保持するため、startMeasureIndex + systems * measuresPerSystemまで作成
     const totalMeasures = startMeasureIndex + systems * measuresPerSystem;
     return Array.from({ length: totalMeasures }, () => ({ events: [] }));
   });
@@ -291,20 +478,24 @@ export default function StaffCanvas({
   }, [initialScoreData, startMeasureIndex, systems, measuresPerSystem]);
 
   // Call callback when score data changes
+  const prevScoreRef = useRef<MeasureData[]>();
+  const isFirstRender = useRef(true);
+  
   useEffect(() => {
-    if (onScoreDataChange) {
+    // 初回レンダリング時はコールバックを呼び出さない
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      prevScoreRef.current = score;
+      return;
+    }
+    
+    // 前回の値と異なる場合のみコールバックを呼び出す
+    if (onScoreDataChange && JSON.stringify(prevScoreRef.current) !== JSON.stringify(score)) {
       onScoreDataChange(score);
+      prevScoreRef.current = score;
     }
-  }, [score, onScoreDataChange]);
+  }, [score]); // onScoreDataChangeを依存配列から除外して無限ループを防ぐ
 
-  useEffect(() => {
-    // initialScoreDataが提供されていない場合のみ、空の小節で初期化
-    if (!initialScoreData || initialScoreData.length === 0) {
-      const totalMeasures = startMeasureIndex + systems * measuresPerSystem;
-      setScore(Array.from({ length: totalMeasures }, () => ({ events: [] })));
-      setSelected(null);
-    }
-  }, [systems, measuresPerSystem, initialScoreData, startMeasureIndex]);
 
   /* ===== キー操作（削除/上下移動/解除） ===== */
   useEffect(() => {
@@ -451,7 +642,7 @@ export default function StaffCanvas({
         stave.setContext(ctx).draw();
 
         const safeEvents: NoteEvent[] =
-          (data?.events?.length ? data.events : [{ dur:'1', isRest:true, key:'b/4' }])
+          (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, key:'b/4' }])
           .map(ev => (!ev || !ev.dur ? { dur:'4' as DurKey, isRest:true, key:'b/4' } : {
             ...ev,
             dur: ev.dur as DurKey
@@ -469,12 +660,55 @@ export default function StaffCanvas({
         voice.setMode((Voice as any).Mode.SOFT ?? 1);
         voice.addTickables(vfNotes);
         new Formatter().joinVoices([voice]).formatToStave([voice], stave);
-        voice.draw(ctx, stave);
-        beams.forEach(b => b.setContext(ctx).draw());
-
+        
         const measureIndex = globalIndex; // 相対インデックス（このStaffCanvas内での位置）
         const xDraw = x / s, wDraw = w / s;
         const measLeft = xDraw, measRight = xDraw + wDraw;
+
+        // 休符位置調整（Formatter実行後、voice.draw前に実行）
+        // 全休符の場合は小節の中央に配置
+        try {
+          // 音部記号の有無を判定（各行の最初の小節にのみ音部記号がある）
+          const hasClef = (i === 0);
+          
+          // 簡単な全休符中央配置
+          for (let j = 0; j < vfNotes.length && j < safeEvents.length; j++) {
+            const note = vfNotes[j];
+            const event = safeEvents[j];
+            
+            if (event.isRest && event.dur === '1') { // 全休符の場合
+              try {
+                // 音部記号パディングを考慮した中央位置を計算
+                const clefPadding = hasClef ? 50 : 0;
+                const effectiveLeft = xDraw + clefPadding;
+                const effectiveWidth = Math.max(0, wDraw - clefPadding);
+                const centerX = effectiveLeft + effectiveWidth / 2;
+                
+                // 現在の位置を取得
+                const currentX = (note as any).getAbsoluteX?.() || (note as any).getX?.() || effectiveLeft;
+                const offset = centerX - currentX;
+                
+                // 位置を調整
+                if (Math.abs(offset) > 1 && typeof (note as any).setXShift === 'function') {
+                  (note as any).setXShift(offset);
+                }
+              } catch (adjustError) {
+                console.warn(`小節 ${absoluteIndex}: 全休符位置調整に失敗`, adjustError);
+              }
+            }
+          }
+        } catch (adjustError) {
+          console.error('休符位置調整でエラーが発生しました:', adjustError);
+          // フォールバック: 調整なしで描画を続行
+        }
+        
+        try {
+          voice.draw(ctx, stave);
+        } catch (drawError) {
+          console.error('voice描画でエラーが発生しました:', drawError);
+          // フォールバック: ビームのみ描画を試行
+        }
+        beams.forEach(b => b.setContext(ctx).draw());
 
         /* --- ガイド更新/非表示（小節rect/セルrect 両方から呼ぶ） --- */
         const guideLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -581,6 +815,7 @@ export default function StaffCanvas({
         const rectBottom = stave.getYForLine(4 + EXTRA_BOTTOM_LINES);
         const insertRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
         insertRect.setAttribute('class', 'vf-hit');
+        insertRect.setAttribute('data-measure-index', String(absoluteIndex));
         insertRect.setAttribute('x', String(measLeft));
         insertRect.setAttribute('y', String(rectTop));
         insertRect.setAttribute('width', String(wDraw));
@@ -694,7 +929,7 @@ export default function StaffCanvas({
 
             (svgRoot as any).appendChild(hit);
 
-            const isSel = !!selected && selected.measure === measureIndex && selected.index === j;
+            const isSel = !!selected && selected.measure === absoluteIndex && selected.index === j;
             if (isSel) {
               const sel = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
               sel.setAttribute('class', 'vf-note-selected');

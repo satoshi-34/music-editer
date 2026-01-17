@@ -5,7 +5,7 @@
 // ・scale は CSS 変数として見た目にだけ使う（StaffCanvas は親幅で描く）
 // ─────────────────────────────────────────────────────────────
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Palette, { type Tool } from './Palette';
 import StaffCanvas from './StaffCanvas';
 import SaveLoadButtons from './SaveLoadButtons';
@@ -35,7 +35,18 @@ export default function ScorePage() {
   } = useScoreStorage();
 
   // State for managing score data from StaffCanvas
-  const [scoreData, setScoreData] = useState<MeasureData[]>([]);
+  const [scoreData, setScoreData] = useState<MeasureData[] | undefined>(undefined);
+
+  // Memoize the callback to prevent infinite loops
+  const handleScoreDataChange = useCallback((data: MeasureData[]) => {
+    setScoreData(prevData => {
+      // データが同じ場合は更新しない（深い比較）
+      if (prevData && JSON.stringify(prevData) === JSON.stringify(data)) {
+        return prevData;
+      }
+      return data;
+    });
+  }, []);
 
   // Handle save operation
   const handleSave = async () => {
@@ -48,7 +59,7 @@ export default function ScorePage() {
     };
 
     // Use actual score data from StaffCanvas if available, otherwise use empty measures
-    const measures = scoreData.length > 0 ? scoreData : [{ events: [] }];
+    const measures = scoreData && scoreData.length > 0 ? scoreData : [{ events: [] }];
     const systems = totalSystems;
     const measuresPerSystem = 4;
 
@@ -165,7 +176,7 @@ export default function ScorePage() {
                     tool={tool} 
                     scale={scale}
                     initialScoreData={scoreData}
-                    onScoreDataChange={setScoreData}
+                    onScoreDataChange={handleScoreDataChange}
                     startMeasureIndex={i * systemsPerPage * 4}
                   />
                 </div>
