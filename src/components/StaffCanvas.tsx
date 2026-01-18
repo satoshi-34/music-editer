@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental } from 'vexflow';
 import type { Tool } from './Palette';
-import { adjustRestPositionsV2 } from './RestOverlapFixV2';
+import { NotePlayer } from '../audio/NotePlayer';
+import { SoundSource } from '../audio/SoundSource';
+import { defaultAudioEngine } from '../audio/AudioEngine';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -27,6 +29,7 @@ type Props = {
   initialScoreData?: MeasureData[];
   onScoreDataChange?: (data: MeasureData[]) => void;
   startMeasureIndex?: number; // このStaffCanvasが担当する開始小節インデックス
+  disabled?: boolean; // 編集を無効にするフラグ
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -211,191 +214,6 @@ function snapLineBySpacing(stave: Stave, y: number): number {
 }
 
 /* ===== 時間ベース位置計算（休符重なり修正用） ===== */
-/**
- * 時間位置をX座標に変換する
- * @param timePosition 拍単位での時間位置（0から開始）
- * @param measureWidth 小節の幅（ピクセル）
- * @param measureLeft 小節の左端X座標
- * @returns X座標（ピクセル）
- */
-function calculateTimeBasedX(
-  timePosition: number, 
-  measureWidth: number, 
-  measureLeft: number
-): number {
-  try {
-    // 入力値の検証
-    if (!Number.isFinite(timePosition) || !Number.isFinite(measureWidth) || !Number.isFinite(measureLeft)) {
-      console.warn('calculateTimeBasedX: 無効な数値が入力されました', { timePosition, measureWidth, measureLeft });
-      // フォールバック: 小節の左端を返す
-      return Number.isFinite(measureLeft) ? measureLeft : 0;
-    }
-
-    // 負の時間位置や範囲外の値を適切に処理
-    if (timePosition < 0) {
-      console.warn('calculateTimeBasedX: 負の時間位置が指定されました', timePosition);
-      // フォールバック: 0拍目として処理
-      timePosition = 0;
-    }
-
-    // 小節幅が0以下の場合の処理
-    if (measureWidth <= 0) {
-      console.warn('calculateTimeBasedX: 無効な小節幅が指定されました', measureWidth);
-      // フォールバック: 小節の左端を返す
-      return measureLeft;
-    }
-
-    // 4拍を小節幅に比例配分
-    const ratio = Math.max(0, Math.min(1, timePosition / BEATS_PER_MEASURE));
-    const result = measureLeft + (measureWidth * ratio);
-
-    // 結果の検証
-    if (!Number.isFinite(result)) {
-      console.warn('calculateTimeBasedX: 計算結果が無効な値になりました', { result, timePosition, measureWidth, measureLeft });
-      // フォールバック: 小節の左端を返す
-      return measureLeft;
-    }
-
-    return result;
-  } catch (error) {
-    console.error('calculateTimeBasedX: 予期しないエラーが発生しました', error);
-    // フォールバック: 小節の左端を返す（安全な値）
-    return Number.isFinite(measureLeft) ? measureLeft : 0;
-  }
-}
-
-/**
- * 休符の位置を時間ベースで調整する
- * Formatter実行後に休符の位置を手動調整して重なりを防ぐ
- * @param vfNotes VexflowのStaveNoteリスト
- * @param events 元の音符・休符データ
- * @param measureLeft 小節の左端X座標
- * @param measureWidth 小節の幅（ピクセル）
- */
-function adjustRestPositions(
-  vfNotes: StaveNote[], 
-  events: NoteEvent[], 
-  measureLeft: number, 
-  measureWidth: number
-): void {
-  try {
-    // 入力値の検証
-    if (!Array.isArray(vfNotes) || !Array.isArray(events)) {
-      console.warn('adjustRestPositions: 無効な配列が入力されました');
-      return;
-    }
-
-    if (!Number.isFinite(measureLeft) || !Number.isFinite(measureWidth)) {
-      console.warn('adjustRestPositions: 無効な小節パラメータが入力されました', { measureLeft, measureWidth });
-      return;
-    }
-
-    if (measureWidth <= 0) {
-      console.warn('adjustRestPositions: 無効な小節幅が指定されました', measureWidth);
-      return;
-    }
-
-    let currentTime = 0;
-    let adjustedCount = 0;
-    let errorCount = 0;
-    
-    for (let i = 0; i < vfNotes.length && i < events.length; i++) {
-      const note = vfNotes[i];
-      const event = events[i];
-      
-      // 基本的な検証
-      if (!note || !event) {
-        console.warn(`adjustRestPositions: インデックス${i}で無効なnoteまたはeventが見つかりました`);
-        continue;
-      }
-      
-      if (event.isRest) {
-        try {
-          // 時間ベースのX座標を計算
-          const targetX = calculateTimeBasedX(currentTime, measureWidth, measureLeft);
-          
-          // 現在の位置を取得（複数の方法を試行）
-          let currentX: number;
-          try {
-            currentX = (note as any).getAbsoluteX?.() || (note as any).getX?.() || 0;
-          } catch (getXError) {
-            console.warn(`adjustRestPositions: インデックス${i}でX座標取得に失敗`, getXError);
-            // フォールバック: 小節の左端を使用
-            currentX = measureLeft;
-          }
-
-          // 座標の妥当性を検証
-          if (!Number.isFinite(currentX) || !Number.isFinite(targetX)) {
-            console.warn(`adjustRestPositions: インデックス${i}で無効な座標が計算されました`, { currentX, targetX });
-            continue;
-          }
-
-          const offset = targetX - currentX;
-          
-          // 位置を調整（1px以上の差がある場合のみ）
-          if (Math.abs(offset) > 1) {
-            try {
-              // setXShiftメソッドの存在を確認
-              if (typeof (note as any).setXShift === 'function') {
-                (note as any).setXShift(offset);
-                adjustedCount++;
-              } else {
-                console.warn(`adjustRestPositions: インデックス${i}でsetXShiftメソッドが利用できません`);
-              }
-            } catch (setXShiftError) {
-              console.warn(`adjustRestPositions: インデックス${i}でsetXShift呼び出しに失敗`, setXShiftError);
-              errorCount++;
-              
-              // 代替手段を試行
-              try {
-                if (typeof (note as any).setX === 'function') {
-                  (note as any).setX(targetX);
-                  adjustedCount++;
-                } else {
-                  console.warn(`adjustRestPositions: インデックス${i}で代替手段も利用できません`);
-                }
-              } catch (setXError) {
-                console.warn(`adjustRestPositions: インデックス${i}で代替手段も失敗`, setXError);
-              }
-            }
-          }
-        } catch (restError) {
-          console.warn(`adjustRestPositions: インデックス${i}の休符処理でエラーが発生`, restError);
-          errorCount++;
-        }
-      }
-      
-      // 次の時間位置を計算
-      try {
-        const duration = toVFDur(event.dur);
-        const beats = beatsFromVF(duration);
-        
-        if (!Number.isFinite(beats) || beats < 0) {
-          console.warn(`adjustRestPositions: インデックス${i}で無効な拍数が計算されました`, beats);
-          // フォールバック: 4分音符として処理
-          currentTime += 1;
-        } else {
-          currentTime += beats;
-        }
-      } catch (durationError) {
-        console.warn(`adjustRestPositions: インデックス${i}で拍数計算に失敗`, durationError);
-        // フォールバック: 4分音符として処理
-        currentTime += 1;
-      }
-    }
-
-    // 処理結果をログに記録（調整が実際に行われた場合のみ）
-    if (adjustedCount > 0) {
-      console.log(`adjustRestPositions: 完了 - 調整済み: ${adjustedCount}, エラー: ${errorCount}`);
-    } else if (errorCount > 0) {
-      console.warn(`adjustRestPositions: エラーが発生しました - エラー: ${errorCount}`);
-    }
-
-  } catch (error) {
-    console.error('adjustRestPositions: 予期しないエラーが発生しました', error);
-    // フォールバック: 何もしない（既存の位置を維持）
-  }
-}
 
 /* ===== ノート生成（臨時記号を付与） ===== */
 function makeVFNote(ev: NoteEvent) {
@@ -443,7 +261,7 @@ function logNoteAddition(measureIndex: number, x: number, y: number, key: string
 
 export default function StaffCanvas({
   systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
-  initialScoreData, onScoreDataChange, startMeasureIndex = 0,
+  initialScoreData, onScoreDataChange, startMeasureIndex = 0, disabled = false,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [score, setScore] = useState<MeasureData[]>(() => {
@@ -456,6 +274,88 @@ export default function StaffCanvas({
     return Array.from({ length: totalMeasures }, () => ({ events: [] }));
   });
   const [selected, setSelected] = useState<{ measure: number; index: number } | null>(null);
+  
+  // NotePlayerインスタンスの管理
+  const notePlayerRef = useRef<NotePlayer | null>(null);
+  const soundSourceRef = useRef<SoundSource | null>(null);
+  
+  // NotePlayerの初期化
+  useEffect(() => {
+    const initializeNotePlayer = async () => {
+      try {
+        // AudioEngineの初期化を試行（ユーザーインタラクション前は失敗する可能性がある）
+        if (!defaultAudioEngine.isInitializedState()) {
+          console.log('[StaffCanvas] AudioEngineの初期化を試行中...');
+          try {
+            await defaultAudioEngine.initialize();
+          } catch (error) {
+            console.log('[StaffCanvas] AudioEngineの初期化は後で行われます:', error);
+          }
+        }
+        
+        // SoundSourceを作成
+        soundSourceRef.current = new SoundSource(defaultAudioEngine);
+        
+        // デフォルト楽器を読み込み
+        await soundSourceRef.current.loadInstrument(soundSourceRef.current.getCurrentInstrument());
+        
+        // NotePlayerを作成
+        notePlayerRef.current = new NotePlayer(defaultAudioEngine, soundSourceRef.current);
+        console.log('[StaffCanvas] NotePlayerが初期化されました');
+      } catch (error) {
+        console.error('[StaffCanvas] NotePlayerの初期化に失敗:', error);
+      }
+    };
+    
+    initializeNotePlayer();
+    
+    // クリーンアップ
+    return () => {
+      if (notePlayerRef.current) {
+        notePlayerRef.current.dispose();
+        notePlayerRef.current = null;
+      }
+      if (soundSourceRef.current) {
+        soundSourceRef.current.dispose();
+        soundSourceRef.current = null;
+      }
+    };
+  }, []);
+  
+  // 音符再生関数
+  const playNoteEvent = async (noteEvent: NoteEvent) => {
+    if (!notePlayerRef.current) {
+      console.warn('[StaffCanvas] NotePlayerが初期化されていません');
+      return;
+    }
+    
+    try {
+      // AudioContextをユーザーインタラクション時に開始
+      console.log('[StaffCanvas] AudioContextを開始中...');
+      if (!defaultAudioEngine.isInitializedState()) {
+        await defaultAudioEngine.initialize();
+      }
+      await defaultAudioEngine.start();
+      
+      // AudioContextが作成された後、シンセサイザーを再接続
+      if (soundSourceRef.current) {
+        soundSourceRef.current.reconnectAllSynths();
+      }
+      
+      console.log('[StaffCanvas] AudioContext開始完了');
+      
+      // 音符を再生（連続クリック時の前音停止処理は NotePlayer 内で実行される）
+      await notePlayerRef.current.playNoteEvent(noteEvent);
+      console.log(`[StaffCanvas] 音符を再生: ${noteEvent.key}, 音価: ${noteEvent.dur}, 休符: ${noteEvent.isRest}`);
+    } catch (error) {
+      console.error('[StaffCanvas] 音符再生に失敗:', error);
+      
+      // ユーザーに分かりやすいエラーメッセージを表示
+      if (error instanceof Error && error.message.includes('user gesture')) {
+        console.warn('[StaffCanvas] 音符をクリックして音声を有効化してください');
+      }
+    }
+  };
 
   // Update score when initialScoreData changes (when loading data)
   useEffect(() => {
@@ -478,7 +378,7 @@ export default function StaffCanvas({
   }, [initialScoreData, startMeasureIndex, systems, measuresPerSystem]);
 
   // Call callback when score data changes
-  const prevScoreRef = useRef<MeasureData[]>();
+  const prevScoreRef = useRef<MeasureData[]>([]);
   const isFirstRender = useRef(true);
   
   useEffect(() => {
@@ -500,7 +400,7 @@ export default function StaffCanvas({
   /* ===== キー操作（削除/上下移動/解除） ===== */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!selected) return;
+      if (!selected || disabled) return; // disabledチェックを追加
       const { measure, index } = selected;
       const inRange = (arr: any[], i: number) => i >= 0 && i < arr.length;
 
@@ -556,7 +456,7 @@ export default function StaffCanvas({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected]);
+  }, [selected, disabled]); // disabledを依存配列に追加
 
   /* ======================== 描画 ======================== */
   useEffect(() => {
@@ -841,6 +741,11 @@ export default function StaffCanvas({
         });
         insertRect.addEventListener('mouseleave', hideGuide);
         insertRect.addEventListener('click', (e) => {
+          // 編集が無効な場合は何もしない
+          if (disabled) {
+            return;
+          }
+          
           // より正確な座標変換：SVGの変換行列を使用
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
           
@@ -914,6 +819,11 @@ export default function StaffCanvas({
 
             // クリック：近ければ選択、離れていれば挿入
             hit.addEventListener('click', (ev) => {
+              // 編集が無効な場合は何もしない
+              if (disabled) {
+                return;
+              }
+              
               ev.stopPropagation(); // 小節rectには渡さない
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
               const cellW = rawRight - rawLeft;
@@ -922,6 +832,12 @@ export default function StaffCanvas({
               if (dx <= selRadius) {
                 // 選択時は絶対インデックスを使用
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                
+                // 音符クリック再生機能を追加（要件1.1, 1.5対応）
+                const noteEvent = safeEvents[j];
+                if (noteEvent) {
+                  playNoteEvent(noteEvent);
+                }
               } else {
                 doInsertAt(lx, ly, measureIndex);
               }

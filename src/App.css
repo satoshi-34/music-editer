@@ -81,6 +81,500 @@ button.ghost:disabled {
   max-width: 200px;
 }
 
+/* Playback Controls */
+.playback-controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+/* 再生制御ボタン */
+.playback-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.playback-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 80px;
+  justify-content: center;
+}
+
+.playback-button .button-icon {
+  font-size: 14px;
+}
+
+.playback-button .button-text {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.play-pause-button {
+  background: #007bff;
+  color: white;
+  border-color: #007bff;
+}
+
+.play-pause-button:hover:not(:disabled) {
+  background: #0056b3;
+  border-color: #0056b3;
+}
+
+.stop-button:hover:not(:disabled) {
+  background: #dc3545;
+  color: white;
+  border-color: #dc3545;
+}
+
+/* テンポ制御 */
+.tempo-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tempo-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #495057;
+  white-space: nowrap;
+}
+
+.tempo-input-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tempo-input {
+  width: 60px;
+  padding: 4px 6px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.tempo-input:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+.tempo-unit {
+  font-size: 11px;
+  color: #6c757d;
+  white-space: nowrap;
+}
+
+.tempo-slider {
+  width: 100px;
+  height: 4px;
+  background: #dee2e6;
+  border-radius: 2px;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.tempo-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  background: #007bff;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.tempo-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: #007bff;
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+/* 音色制御 */
+.instrument-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.instrument-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #495057;
+  white-space: nowrap;
+}
+
+.instrument-select-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.instrument-select {
+  padding: 4px 8px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 12px;
+  background: white;
+  min-width: 100px;
+}
+
+.instrument-select:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+.instrument-preview-button {
+  padding: 4px 8px;
+  min-width: auto;
+  font-size: 14px;
+}
+
+/* 再生位置表示 */
+.position-display {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #495057;
+  margin-left: auto;
+}
+
+.position-label {
+  font-weight: 500;
+}
+
+.position-value {
+  font-family: 'Courier New', monospace;
+  background: #e9ecef;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* レスポンシブ対応 */
+@media (max-width: 768px) {
+  .playback-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  
+  .playback-buttons {
+    justify-content: center;
+  }
+  
+  .tempo-controls,
+  .instrument-controls {
+    justify-content: space-between;
+  }
+  
+  .position-display {
+    justify-content: center;
+    margin-left: 0;
+  }
+}
+
+/* Instrument Selector */
+.instrument-selector {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+}
+
+.instrument-selector.compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-width: auto;
+}
+
+.instrument-selector-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #495057;
+}
+
+.instrument-dropdown {
+  position: relative;
+}
+
+.instrument-selector-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.instrument-selector-button:hover:not(:disabled) {
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.1);
+}
+
+.instrument-selector-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.instrument-selector-button.open {
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+.selected-instrument {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.instrument-icon {
+  font-size: 18px;
+  width: 24px;
+  text-align: center;
+}
+
+.instrument-details {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.instrument-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #212529;
+}
+
+.instrument-description {
+  font-size: 11px;
+  color: #6c757d;
+  line-height: 1.2;
+}
+
+.dropdown-arrow {
+  font-size: 12px;
+  color: #6c757d;
+  margin-left: 8px;
+}
+
+.instrument-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: white;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  max-height: 300px;
+  overflow-y: auto;
+  margin-top: 2px;
+}
+
+.instrument-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  border-bottom: 1px solid #f8f9fa;
+}
+
+.instrument-option:last-child {
+  border-bottom: none;
+}
+
+.instrument-option:hover {
+  background-color: #f8f9fa;
+}
+
+.instrument-option:focus {
+  outline: none;
+  background-color: #e3f2fd;
+}
+
+.instrument-option.selected {
+  background-color: #007bff;
+  color: white;
+}
+
+.instrument-option.selected .instrument-name {
+  color: white;
+}
+
+.instrument-option.selected .instrument-description {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.instrument-preview-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  font-size: 14px;
+  min-width: auto;
+}
+
+.preview-text {
+  font-size: 12px;
+}
+
+.instrument-preview-mini {
+  padding: 4px 6px;
+  font-size: 12px;
+  min-width: auto;
+  margin-left: auto;
+}
+
+.dropdown-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 999;
+  background: transparent;
+}
+
+/* コンパクト表示のスタイル */
+.instrument-selector.compact .instrument-select {
+  min-width: 120px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.instrument-selector.compact .instrument-preview-button {
+  padding: 4px 8px;
+  font-size: 14px;
+}
+
+/* レスポンシブ対応 */
+@media (max-width: 480px) {
+  .instrument-selector {
+    min-width: 150px;
+  }
+  
+  .instrument-details {
+    gap: 1px;
+  }
+  
+  .instrument-name {
+    font-size: 13px;
+  }
+  
+  .instrument-description {
+    font-size: 10px;
+  }
+  
+  .instrument-dropdown-menu {
+    max-height: 200px;
+  }
+}
+
+/* Playback Highlight */
+.playback-highlight {
+  filter: drop-shadow(0 0 4px rgba(0, 123, 255, 0.5));
+  animation: pulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes pulse {
+  from {
+    opacity: 0.8;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Playback Position Indicator */
+.playback-position-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+  color: #495057;
+  transition: all 0.2s ease;
+}
+
+.playback-position-indicator.playing {
+  background: #e3f2fd;
+  border-color: #007bff;
+  color: #007bff;
+}
+
+.playback-position-indicator.stopped {
+  background: #f8f9fa;
+  border-color: #dee2e6;
+  color: #6c757d;
+}
+
+.position-text {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.playing-indicator {
+  color: #007bff;
+  font-size: 14px;
+  animation: bounce 1s ease-in-out infinite;
+}
+
+@keyframes bounce {
+  0%, 20%, 50%, 80%, 100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-3px);
+  }
+  60% {
+    transform: translateY(-1px);
+  }
+}
+
+/* 小さな画面での調整 */
+@media (max-width: 480px) {
+  .playback-position-indicator {
+    font-size: 11px;
+    padding: 3px 6px;
+  }
+  
+  .playing-indicator {
+    font-size: 12px;
+  }
+}
+
 /* ===== 黒帯部分（ウィンドウ幅いっぱい） ===== */
 .paper-rail {
   width: 100%;
