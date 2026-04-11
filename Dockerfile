@@ -2,16 +2,18 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# まずはパッケージ情報だけコピー
+# 依存だけ先にコピー（キャッシュ効かせる）
 COPY package*.json ./
 
-# コンテナの中で安全にインストールと修復を行う
-RUN npm install && npm audit fix
+# 安全＆再現性のあるインストール
+RUN npm ci --ignore-scripts
 
-# 全ファイルをコピー
+# 非rootユーザーに切り替え
+USER node
+
+# アプリ本体コピー
 COPY . .
 
-# Viteなどの開発サーバー用ポートを開ける
 EXPOSE 5173
 
 CMD ["npm", "run", "dev", "--", "--host"]
