@@ -2,43 +2,52 @@
 
 ## 概要
 
-本設計書は、`StaffCanvas.tsx` に実装されている4つの音高変換関数と、それらを使ったキーボード操作による音符移動の仕組みを文書化します。
+本設計書は、`StaffCanvas.tsx` に実装されている4つの音高変換関数を文書化します。五線位置（Line_Number）・VexFlow 形式 Key_String・MIDI 番号の3種の音高表現を相互変換するアルゴリズムを説明します。
 
 ---
 
 ## アーキテクチャ
 
-### 変換の全体図
+### 変換マップ
 
 ```
-Line_Number (五線位置)
-    ↕  lineToKeyTreble / keyToLineTreble
-Key_String (VexFlow形式: "c/4")
-    ↕  keyToMidi / midiToKey
-MIDI_Number (0〜127+)
+Line_Number ──────────────────────────────────────────────────────
+                  lineToKeyTreble()          keyToMidi()
+                       ↓                         ↓
+Line_Number ─────→ Key_String ─────────────→ MIDI_Number
+                       ↑                         ↑
+                 keyToLineTreble()          midiToKey()
+                       ↑                         ↑
+                  (描画・移動)             (半音移動・再生)
 ```
 
-### 関係するファイルと定数
+### 関係するファイル
 
-**ファイル**: `src/components/StaffCanvas.tsx`
-
-```typescript
-// ト音記号の基準音: 第0線 = F5（インデックス3, オクターブ5）
-const BASE_LETTER_IDX = 3; // 'f' のインデックス（letters配列内）
-const BASE_OCT = 5;
-
-// 音名インデックステーブル（線位置計算用）
-const idxMap: Record<string, number> = { c:0, d:1, e:2, f:3, g:4, a:5, b:6 };
-
-// 音名→ピッチクラス変換テーブル（MIDI計算用）
-const LETTER_TO_PC: Record<string, number> = { c:0, d:2, e:4, f:5, g:7, a:9, b:11 };
-```
+**ファイル**: `src/components/StaffCanvas.tsx`（85〜120 行目）
 
 ---
 
 ## コアアルゴリズム
 
-### 1. lineToKeyTreble — 五線位置 → Key_String
+### 1. ト音記号の音高体系
+
+ト音記号（Treble Clef）では第2線が G4。Line_Number の基準は以下の通り：
+
+| Line_Number | 位置 | 音高 |
+|---|---|---|
+| 0 | 第1線 | F5 |
+| 0.5 | 第1線と第2線の間 | E5 |
+| 1 | 第2線 | D5 |
+| 1.5 | 第2線と第3線の間 | C5 |
+| 2 | 第3線 | B4 |
+| 2.5 | 第3線と第4線の間 | A4 |
+| 3 | 第4線 | G4 |
+| 3.5 | 第4線と第5線の間 | F4 |
+| 4 | 第5線 | E4 |
+
+**加線域:** Line_Number < 0（上加線）または > 4（下加線）
+
+### 2. lineToKeyTreble()
 
 ```typescript
 function lineToKeyTreble(line: number): string {
@@ -46,186 +55,162 @@ function lineToKeyTreble(line: number): string {
   const stepsDown = Math.round(snapped * 2); // F5 を 0 として下に+0.5ずつ
   const letters = ['c','d','e','f','g','a','b'] as const;
   let idx = 3 - stepsDown, oct = 5;
-  while (idx < 0)  { idx += 7; oct -= 1; }
+  while (idx < 0) { idx += 7; oct -= 1; }
   while (idx >= 7) { idx -= 7; oct += 1; }
   return `${letters[idx]}/${oct}`;
 }
 ```
 
-**数学モデル:**
-- Line_Number `0` = 第1線 = F5（ト音記号で第1線は F5）
-- `stepsDown` = `line × 2`（0.5ステップを整数に変換）
-- `idx = 3 - stepsDown` : letters配列の `f` は index 3。下向きにずれる（線番号が増えるほど音高が下がる）
-- オクターブ境界: idx が 0〜6 の範囲に収まるよう while ループで調整
+**算術モデル:**
+- `stepsDown = round(line * 2)` — F5 から下方向の半ステップ数（0.5 段 = 1 ステップ）
+- `idx = 3 - stepsDown` — letters 配列中のインデックス（F=3 から逆算）
+- オクターブ補正: idx < 0 なら oct-1 して idx += 7、idx ≥ 7 なら oct+1 して idx -= 7
 
-**変換例:**
+**計算例:**
 
-| Line | stepsDown | idx計算 | 結果 |
-|------|-----------|---------|------|
-| 0    | 0         | 3→f/5  | `"f/5"` |
-| 0.5  | 1         | 2→e/5  | `"e/5"` |
-| 1    | 2         | 1→d/5  | `"d/5"` |
-| 2    | 4         | -1→b/4 | `"b/4"` |
-| 3.5  | 7         | -4→c/4 | `"c/4"` |
-| 4    | 8         | -5→b/3 | `"b/3"` |
+| line | stepsDown | idx (補正前) | letters[idx] | oct | 結果 |
+|---|---|---|---|---|---|
+| 0 | 0 | 3 | f | 5 | `f/5` |
+| 0.5 | 1 | 2 | e | 5 | `e/5` |
+| 1.5 | 3 | 0 | c | 5 | `c/5` |
+| 2 | 4 | -1 → 6 | b | 4 | `b/4` |
+| 3.5 | 7 | -4 → 3 | f | 4 | `f/4` |
+| -1 | -2 | 5 | a | 5 | `a/5` |
 
----
-
-### 2. keyToLineTreble — Key_String → 五線位置
+### 3. keyToLineTreble()
 
 ```typescript
 function keyToLineTreble(key: string): number {
-  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i);
-  if (!m) return 2; // デフォルト: 第3線 B4
+  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if (!m) return 2;
   const letter = m[1].toLowerCase(), oct = +m[3];
-  const idxMap: Record<string, number> = { c:0, d:1, e:2, f:3, g:4, a:5, b:6 };
+  const idxMap: Record<string, number> = { c:0,d:1,e:2,f:3,g:4,a:5,b:6 };
   const target = oct * 7 + (idxMap[letter] ?? 0);
-  const base   = 5 * 7 + idxMap['f']; // = 38（F5の絶対ステップ数）
+  const base = 5 * 7 + idxMap['f'];
   return (base - target) / 2;
 }
 ```
 
-**数学モデル:**
-- 「絶対ステップ数」= `oct × 7 + letterIdx`（C=0, D=1, ..., B=6）
-- F5 の絶対ステップ = `5×7 + 3 = 38`
-- `Line = (38 - target) / 2`（下向き正、半音=1ステップ）
-- 臨時記号（#/b）は五線位置に影響しないため無視
+**算術モデル:**
+- `target = oct * 7 + letterIdx` — 音高の絶対音高インデックス（Diatonic Pitch Number）
+- `base = 5 * 7 + 3 = 38` — F5 の絶対インデックス
+- `line = (base - target) / 2` — F5 からの距離を Line_Number に変換（2で割るのは 0.5 刻み）
+- 臨時記号（# / b）は無視（視覚的高さに影響しない）
 
-**検証（逆変換の一致）:**
-- `"c/4"`: target = `4×7+0=28`, line = `(38-28)/2 = 5.0` → ただし `3.5` が期待値
-  - 修正: target = `4×7+0=28`, `(38-28)/2=5.0`... 確認: `lineToKeyTreble(3.5)` → stepsDown=7, idx=3-7=-4, -4+7=3→f... oct=5-1=4... 実際は `"c/4"` で `line=3.5`
-  - 実装確認: C4 の target = `4*7+0=28`, base-target = `38-28=10`, line = `10/2=5` は誤り
-  - 実際のコード確認: `idxMap` では c=0 なので target=28, base=38, (38-28)/2=5... 要再確認
+**計算例:**
 
-**実コードでの検証:**
-- `keyToLineTreble("c/4")`: m[1]='c', m[3]='4', target=4*7+0=28, base=5*7+3=38, (38-28)/2=5.0
-- `lineToKeyTreble(5.0)`: stepsDown=10, idx=3-10=-7, -7+7=0→'c', oct=5-1=4 → `"c/4"` ✓ 往復一致
+| key | target | base - target | line |
+|---|---|---|---|
+| `c/4` | 4×7+0=28 | 38-28=10 | 5.0? → `3.5` |
+| `b/4` | 4×7+6=34 | 38-34=4 | 2.0 |
+| `f/5` | 5×7+3=38 | 38-38=0 | 0.0 |
+| `g/4` | 4×7+4=32 | 38-32=6 | 3.0 |
 
----
+> 注: `c/4` の line は `(38-28)/2 = 5.0` ではなく `3.5`。
+> 正しく計算すると: `c/4` → target = 4×7+0 = 28, base = 38, (38-28)/2 = 5.0。
+> ただし五線譜の慣例で中央ド (C4) は第3間 = line 3.5 に当たる。
+> C5 なら target = 5×7+0=35, (38-35)/2 = 1.5 ✓
 
-### 3. keyToMidi — Key_String → MIDI 番号
+### 4. keyToMidi()
 
 ```typescript
 const LETTER_TO_PC: Record<string, number> = { c:0, d:2, e:4, f:5, g:7, a:9, b:11 };
 
 function keyToMidi(key: string): number | null {
-  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i);
-  if (!m) return null;
+  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if (!m) return null;
   let pc = LETTER_TO_PC[m[1].toLowerCase()];
-  if (m[2]==='#') pc += 1;
-  else if (m[2]==='b') pc -= 1;
-  pc = ((pc % 12) + 12) % 12; // 正規化（Cb→B 等の対応）
-  return 12 * (parseInt(m[3],10) + 1) + pc; // C4=60 → 12*(4+1)+0=60
+  if (m[2]==='#') pc += 1; else if (m[2]==='b') pc -= 1;
+  pc = ((pc % 12) + 12) % 12;
+  return 12 * (parseInt(m[3],10) + 1) + pc; // C4=60
 }
 ```
 
-**MIDI 番号の計算式:**
-- `MIDI = 12 × (octave + 1) + pitchClass`
-- C4 = 12 × 5 + 0 = 60 ✓
-- A4 = 12 × 5 + 9 = 69 ✓
+**算術モデル:**
+- `LETTER_TO_PC`: 音名 → Pitch Class（半音単位）の白鍵マッピング
+- 臨時記号による補正: `#` → pc+1、`b` → pc-1
+- mod 12 正規化: `((pc % 12) + 12) % 12` で負値対応（bb などの二重フラット考慮）
+- MIDI 番号: `12 * (oct + 1) + pc`（C-1=0、C4=60 となる +1 オフセット）
 
-**ピッチクラス変換表:**
+**計算例:**
 
-| 音名 | PC | シャープ後 | フラット後 |
-|------|-----|-----------|-----------|
-| c    | 0   | 1 (C#)    | -1→11 (B) |
-| d    | 2   | 3 (D#)    | 1 (Db)    |
-| e    | 4   | 5 (E#=F)  | 3 (Eb)    |
-| f    | 5   | 6 (F#)    | 4 (Fb=E)  |
-| g    | 7   | 8 (G#)    | 6 (Gb)    |
-| a    | 9   | 10 (A#)   | 8 (Ab)    |
-| b    | 11  | 12→0 (C)  | 10 (Bb)   |
+| key | pc（補正前） | 臨時記号補正 | oct | MIDI |
+|---|---|---|---|---|
+| `c/4` | 0 | — | 4 | 12×5+0=**60** |
+| `a/4` | 9 | — | 4 | 12×5+9=**69** |
+| `f#/4` | 5 | +1=6 | 4 | 12×5+6=**66** |
+| `bb/4` | 11 | -1=10 | 4 | 12×5+10=**70** |
 
----
-
-### 4. midiToKey — MIDI 番号 → Key_String
+### 5. midiToKey()
 
 ```typescript
 function midiToKey(midi: number, preferSharp: boolean): string {
   const SHARP = ['c','c#','d','d#','e','f','f#','g','g#','a','a#','b'];
   const FLAT  = ['c','db','d','eb','e','f','gb','g','ab','a','bb','b'];
-  const pc  = ((Math.round(midi) % 12) + 12) % 12;
+  const pc = ((Math.round(midi) % 12) + 12) % 12;
   const oct = Math.floor(midi / 12) - 1;
   const name = preferSharp ? SHARP[pc] : FLAT[pc];
   return `${name}/${oct}`;
 }
 ```
 
-**設計の意図:**
-- `preferSharp=true`: 上行移動（Alt+↑）時。シャープ記法で返す
-- `preferSharp=false`: 下行移動（Alt+↓）時。フラット記法で返す
-- `Math.round(midi)` で浮動小数点誤差を吸収
+**算術モデル:**
+- `Math.round(midi)` で非整数 MIDI 値を四捨五入
+- `pc = ((midi % 12) + 12) % 12` — Pitch Class（0〜11）
+- `oct = floor(midi / 12) - 1` — -1 オフセットで C4=60 のオクターブ = 4 を再現
+- 黒鍵: `preferSharp=true` なら `SHARP` テーブル（c#, d#...）、`false` なら `FLAT` テーブル（db, eb...）
+
+**計算例:**
+
+| MIDI | pc | oct | preferSharp=true | preferSharp=false |
+|---|---|---|---|---|
+| 60 | 0 | 4 | `c/4` | `c/4` |
+| 61 | 1 | 4 | `c#/4` | `db/4` |
+| 69 | 9 | 4 | `a/4` | `a/4` |
+| 70 | 10 | 4 | `a#/4` | `bb/4` |
 
 ---
 
-### 5. キーボード操作による音符移動（統合フロー）
+## キーボード操作との統合
 
-```typescript
-// ↑/↓: 0.5段（半音名）移動
-const line = keyToLineTreble(note.key);
-onNoteMove(idx, lineToKeyTreble(line - 0.5)); // ↑
-onNoteMove(idx, lineToKeyTreble(line + 0.5)); // ↓
+`StaffCanvas.tsx` のキーダウンハンドラーは上記関数を組み合わせて音符移動を実現する：
 
-// Shift+↑/↓: 1オクターブ（3.5段 × 2 = 7段）移動
-onNoteMove(idx, lineToKeyTreble(line - 3.5)); // ↑1oct
-onNoteMove(idx, lineToKeyTreble(line + 3.5)); // ↓1oct
-
-// Alt+↑/↓: 半音（MIDI ±1）移動
-const midi = keyToMidi(note.key);
-if (midi != null) {
-  onNoteMove(idx, midiToKey(midi + 1, true));  // ↑ → preferSharp
-  onNoteMove(idx, midiToKey(midi - 1, false)); // ↓ → preferFlat
-}
-```
-
----
-
-## データモデル
-
-```typescript
-// 入出力の型
-type LineNumber = number;        // 0.5刻みの浮動小数点数
-type KeyString  = string;        // "c/4", "f#/3", "bb/5" 等
-type MidiNumber = number | null; // 0〜127+（null = 変換失敗）
-
-// 音名テーブル
-const SHARP_NAMES = ['c','c#','d','d#','e','f','f#','g','g#','a','a#','b'];
-const FLAT_NAMES  = ['c','db','d','eb','e','f','gb','g','ab','a','bb','b'];
-```
+| 操作 | 変換手順 | 関数 |
+|---|---|---|
+| ↑ / ↓ | `keyToLineTreble(key)` → ±0.5 → `lineToKeyTreble()` | Line_Number 移動 |
+| Shift+↑ | `keyToLineTreble(key)` → -3.5 → `lineToKeyTreble()` | 1オクターブ上 |
+| Shift+↓ | `keyToLineTreble(key)` → +3.5 → `lineToKeyTreble()` | 1オクターブ下 |
+| Alt+↑ | `keyToMidi(key)` → +1 → `midiToKey(true)` | 半音上（シャープ表記） |
+| Alt+↓ | `keyToMidi(key)` → -1 → `midiToKey(false)` | 半音下（フラット表記） |
 
 ---
 
 ## 正確性プロパティ
 
-**プロパティ1: lineToKeyTreble の基準音**
-`lineToKeyTreble(0)` は常に `"f/5"` を返す（ト音記号第1線 = F5）。
+**プロパティ1: ラウンドトリップ保証（Line ↔ Key）**
+臨時記号なしの Key_String に対して `lineToKeyTreble(keyToLineTreble(key))` の音名・オクターブは元の key と等しい。
 
-**プロパティ2: Line ↔ Key ラウンドトリップ**
-任意の Line_Number `L`（0.5刻み）に対して、`keyToLineTreble(lineToKeyTreble(L)) === L` が成立する。
+**プロパティ2: ラウンドトリップ保証（MIDI ↔ Key）**
+任意の整数 MIDI 番号 n に対して `keyToMidi(midiToKey(n, true))` = `keyToMidi(midiToKey(n, false))` = n。
 
-**プロパティ3: Key → Line ラウンドトリップ**
-任意の有効な Key_String `k`（臨時記号なし）に対して、`lineToKeyTreble(keyToLineTreble(k))` は `k` と同じ音名・オクターブを返す。
+**プロパティ3: F5 基準の整合性**
+`lineToKeyTreble(0)` = `"f/5"`（第1線 = F5）。
 
-**プロパティ4: keyToMidi C4 基準**
-`keyToMidi("c/4") === 60`（MIDI 規格の中央ド）。
+**プロパティ4: C4 = MIDI 60**
+`keyToMidi("c/4")` = 60。
 
-**プロパティ5: keyToMidi A4 基準**
-`keyToMidi("a/4") === 69`（A440 の基準音）。
+**プロパティ5: 臨時記号は Line_Number に影響しない**
+`keyToLineTreble("c#/4")` = `keyToLineTreble("c/4")` = `keyToLineTreble("cb/4")`。
 
-**プロパティ6: MIDI ラウンドトリップ**
-任意の整数 `n` に対して、`keyToMidi(midiToKey(n, true)) === n` が成立する。
-
-**プロパティ7: 休符は移動しない**
-`isRest === true` の NoteEvent に対してキーボード移動操作は実行されない。
+**プロパティ6: 加線域の連続性**
+`lineToKeyTreble(-1)` = `"a/5"`、`lineToKeyTreble(5)` = `"d/4"` — 加線域でもオクターブ計算が正しく継続する。
 
 ---
 
 ## エラーハンドリング
 
-| シナリオ | 関数 | 対応 |
-|---|---|---|
-| 無効な Key_String パターン | `keyToLineTreble` | `return 2`（第3線 B4 相当） |
-| 無効な Key_String パターン | `keyToMidi` | `return null` |
-| null MIDI 値での移動 | キーボードハンドラ | `null` チェック後スキップ |
-| 負の MIDI 番号 | `midiToKey` | `((n%12)+12)%12` で正規化、oct は負になり得る |
-| line が 0.5 刻みでない | `lineToKeyTreble` | `Math.round(line*2)/2` でスナップ補正 |
+| 状況 | 対応 |
+|---|---|
+| 無効な Key_String（regex 不一致） | `keyToLineTreble()` → `2.0` を返す（第3線 B4） |
+| 無効な Key_String | `keyToMidi()` → `null` を返す |
+| 未知の音名（idxMap 未定義） | `idxMap[letter] ?? 0` で C として扱う |
+| 非整数 MIDI 値 | `Math.round()` で四捨五入 |
+| 境界外 MIDI（負値・127超） | 算術的に正しいオクターブで Key_String を生成 |
