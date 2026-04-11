@@ -39,13 +39,23 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 
 ## セットアップと起動
 
+### 🐳 Docker（推奨）
 ```bash
 git clone https://github.com/satoshi-34/music-editer.git
 cd music-editer
-npm install
+docker compose up
+```
+
+### ローカル（npm）
+```bash
+git clone https://github.com/satoshi-34/music-editer.git
+cd music-editer
+npm ci
 npm run dev
 ```
-ブラウザで表示された URL（例: http://localhost:5173）へアクセスします。
+
+起動後、ブラウザで以下のURLにアクセスします。 
+http://localhost:5173
 
 ## 使い方
 
