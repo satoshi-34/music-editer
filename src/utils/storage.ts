@@ -281,15 +281,30 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
         if (metadata.dataChecksum) {
           const currentChecksum = generateChecksum(rawData);
           if (currentChecksum !== metadata.dataChecksum) {
-            // Checksum mismatch - data may be corrupted
-            // Try backup if available
-            const backupData = localStorage.getItem(STORAGE_KEYS.BACKUP);
-            if (backupData && backupData !== rawData) {
-              // Recursively try to load from backup
-              // Clear primary and retry
-              localStorage.removeItem(STORAGE_KEYS.PRIMARY);
-              return loadScoreData();
+            // Checksum mismatch on primary - try backup directly (no recursion)
+            const backupRaw = localStorage.getItem(STORAGE_KEYS.BACKUP);
+            if (backupRaw && backupRaw !== rawData) {
+              try {
+                const backupParsed = JSON.parse(backupRaw);
+                if (
+                  validateSavedScoreData(backupParsed) &&
+                  generateChecksum(backupRaw) === metadata.dataChecksum
+                ) {
+                  // Backup is valid - use it
+                  return { success: true, data: backupParsed };
+                }
+              } catch {
+                // Backup also corrupted, fall through to error
+              }
             }
+            return {
+              success: false,
+              error: {
+                type: StorageErrorType.CORRUPTED_DATA,
+                message: 'Stored data checksum verification failed. Data may be corrupted.',
+                recoverable: true
+              }
+            };
           }
         }
       }

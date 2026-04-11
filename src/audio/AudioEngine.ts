@@ -124,23 +124,19 @@ export class AudioEngine {
         console.log('[AudioEngine] Tone.jsのインポートが完了しました');
       }
       
-      console.log('[AudioEngine] 現在のTone.jsコンテキスト状態:', this.Tone.getContext().state);
-      
+      const toneContext = this.Tone.getContext();
+      if (!toneContext) {
+        throw new Error('Tone.jsのAudioContextを取得できませんでした。');
+      }
+      console.log('[AudioEngine] 現在のTone.jsコンテキスト状態:', toneContext.state);
+
       // Tone.jsを使用してAudioContextを開始
-      // これにより、ユーザーインタラクション時にAudioContextが適切に作成・開始される
-      if (this.Tone.getContext().state === 'suspended') {
-        console.log('[AudioEngine] Tone.jsのAudioContextを開始します...');
+      if (toneContext.state !== 'running') {
+        console.log('[AudioEngine] Tone.jsのAudioContextを開始します（状態:', toneContext.state, '）');
         await this.Tone.start();
         console.log('[AudioEngine] Tone.jsのAudioContextが開始されました');
-      } else if (this.Tone.getContext().state === 'closed') {
-        console.log('[AudioEngine] AudioContextが閉じられています。Tone.jsで再作成します...');
-        await this.Tone.start();
-        console.log('[AudioEngine] 新しいAudioContextが作成・開始されました');
-      } else if (this.Tone.getContext().state === 'running') {
-        console.log('[AudioEngine] AudioContextは既に実行中です');
       } else {
-        console.log('[AudioEngine] 不明なAudioContext状態、Tone.start()を実行します:', this.Tone.getContext().state);
-        await this.Tone.start();
+        console.log('[AudioEngine] AudioContextは既に実行中です');
       }
       
       // コンテキストの参照を更新

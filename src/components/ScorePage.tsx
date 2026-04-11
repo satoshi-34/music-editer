@@ -20,14 +20,16 @@ import type { MeasureData } from '../types/storage';
 
 type PageSpec = { systems: number };
 
+const BEATS_PER_MEASURE = 4; // 4/4拍子固定
+
 // 譜面の総再生時間を計算するヘルパー関数
 function calculateScoreDuration(scoreData: MeasureData[], bpm: number): number {
   let totalDuration = 0;
-  
+
   for (const measure of scoreData) {
     if (!measure || !measure.events || measure.events.length === 0) {
-      // 空の小節は全休符として扱う（4拍）
-      totalDuration += (60 / bpm) * 4;
+      // 空の小節は全休符として扱う
+      totalDuration += (60 / bpm) * BEATS_PER_MEASURE;
     } else {
       // 各音符の時間を合計
       for (const event of measure.events) {
@@ -284,9 +286,13 @@ export default function ScorePage() {
 
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
   useEffect(() => {
-    const onResize = () => setColumns(window.innerWidth < 1200 ? 1 : 2);
+    let timer: ReturnType<typeof setTimeout>;
+    const onResize = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setColumns(window.innerWidth < 1200 ? 1 : 2), 150);
+    };
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    return () => { window.removeEventListener('resize', onResize); clearTimeout(timer); };
   }, []);
 
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
