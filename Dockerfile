@@ -1,19 +1,17 @@
-# Build stage
-FROM node:22-alpine AS builder
+FROM node:20-slim
 
 WORKDIR /app
 
+# まずはパッケージ情報だけコピー
 COPY package*.json ./
-RUN npm ci
 
+# コンテナの中で安全にインストールと修復を行う
+RUN npm install && npm audit fix
+
+# 全ファイルをコピー
 COPY . .
-RUN npm run build
 
-# Production stage
-FROM nginx:alpine
+# Viteなどの開発サーバー用ポートを開ける
+EXPOSE 5173
 
-COPY --from=builder /app/dist /usr/share/nginx/html
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["npm", "run", "dev", "--", "--host"]
