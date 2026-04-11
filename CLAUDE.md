@@ -8,9 +8,11 @@
 
 ## コミットメッセージ
 
-- **必ず日本語で記述する**
-- Conventional Commits 形式を使用する（prefix は英語、説明文は日本語）
-- 形式: `<type>: <日本語の説明>`
+**ハイブリッド形式**（1行目は英語、詳細は日本語）で記述する。
+
+- **1行目（要約）**: 英語で記述する（Conventional Commits 形式 `<type>: <summary>`）
+- **2行目以降（詳細）**: 日本語の箇条書きで、修正内容・理由・背景を記述する
+- 詳細が自明な場合は1行目のみでも可
 
 ### type 一覧
 
@@ -26,10 +28,21 @@
 ### 例
 
 ```
-feat: 音符のドラッグ移動機能を追加
-fix: ズーム時のクリック座標のズレを修正
-docs: 音高変換アルゴリズムの設計書を追加
-refactor: 小節幅計算ロジックを関数に分離
+fix: solve coordinate mismatch on scaled canvas
+
+- スケール適用時のクリック座標計算ロジックを修正
+- getScreenCTM の逆行列を使用し、ズーム倍率に関わらず正確な位置を特定できるようにした
+```
+
+```
+feat: add semitone transposition via Alt+arrow keys
+
+- Alt+↑/↓ で半音移動する機能を追加
+- 上移動はシャープ表記、下移動はフラット表記を採用
+```
+
+```
+docs: add pitch conversion design spec
 ```
 
 ## コードスタイル
