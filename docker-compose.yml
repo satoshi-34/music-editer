@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   app:
     build: .
@@ -5,4 +7,8 @@ services:
       - "5173:5173"
     volumes:
       - .:/app
-      - /app/node_modules # ローカルの node_modules を汚さないための工夫
+      - node_modules:/app/node_modules
+    command: npm run dev -- --host
+
+volumes:
+  node_modules:

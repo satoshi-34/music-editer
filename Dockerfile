@@ -8,6 +8,9 @@ COPY package*.json ./
 # 安全＆再現性のあるインストール
 RUN npm ci --ignore-scripts
 
+# 権限修正
+RUN chown -R node:node /app
+
 # 非rootユーザーに切り替え
 USER node
 
