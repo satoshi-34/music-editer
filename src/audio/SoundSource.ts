@@ -269,12 +269,10 @@ export class SoundSource {
         console.log('[SoundSource] Tone.jsのインポートが完了しました');
       }
 
-      // AudioContextが存在しない場合は、楽器設定のみ保存して実際の作成は遅延
+      // AudioContextが存在しない、またはclosedの場合は作成できないためエラー
       const context = this.Tone.getContext();
       if (!context || context.state === 'closed') {
-        console.log(`[SoundSource] AudioContextが未作成のため、楽器 ${type} の作成を遅延します`);
-        // 楽器が「読み込み済み」として扱われるが、実際のシンセサイザーは後で作成
-        return;
+        throw new Error(`AudioContextが利用できないため楽器 ${type} を作成できません。AudioContextを開始してから再試行してください。`);
       }
 
       const config = this._getSynthConfig(type);
@@ -516,14 +514,21 @@ export class SoundSource {
       }
     }
 
-    // 読み込み中の場合はキャンセル（実際のキャンセルは困難なので、完了後に削除）
+    // 読み込み中の場合はPromiseを取り出してから削除し、完了後にsynthを破棄
     if (this.loadingPromises.has(type)) {
-      this.loadingPromises.get(type)?.then(() => {
-        this.unloadInstrument(type);
-      }).catch(() => {
-        // 読み込みエラーの場合は何もしない
-      });
+      const pendingPromise = this.loadingPromises.get(type)!;
       this.loadingPromises.delete(type);
+      pendingPromise.then(() => {
+        // 読み込み完了後に作成されたsynthを破棄
+        const synth = this.synthMap.get(type);
+        if (synth) {
+          try { synth.dispose(); } catch {}
+          this.synthMap.delete(type);
+          console.log(`[SoundSource] 遅延作成された楽器 ${type} を解放しました`);
+        }
+      }).catch(() => {
+        // 読み込みエラーの場合はsynthが作成されないため何もしない
+      });
     }
   }
 

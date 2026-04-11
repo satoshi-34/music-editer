@@ -206,7 +206,7 @@ function snapLineBySpacing(stave: Stave, y: number): number {
     
     if (diff < minDiff) {
       minDiff = diff;
-      bestLine = Number(line.toFixed(1)); // 浮動小数点誤差を回避
+      bestLine = Math.round(line * 2) / 2; // 0.5刻みで正確に丸める
     }
   }
   
@@ -274,7 +274,11 @@ export default function StaffCanvas({
     return Array.from({ length: totalMeasures }, () => ({ events: [] }));
   });
   const [selected, setSelected] = useState<{ measure: number; index: number } | null>(null);
-  
+  const selectedRef = useRef(selected);
+  const disabledRef = useRef(disabled);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { disabledRef.current = disabled; }, [disabled]);
+
   // NotePlayerインスタンスの管理
   const notePlayerRef = useRef<NotePlayer | null>(null);
   const soundSourceRef = useRef<SoundSource | null>(null);
@@ -400,7 +404,8 @@ export default function StaffCanvas({
   /* ===== キー操作（削除/上下移動/解除） ===== */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!selected || disabled) return; // disabledチェックを追加
+      const selected = selectedRef.current;
+      if (!selected || disabledRef.current) return;
       const { measure, index } = selected;
       const inRange = (arr: any[], i: number) => i >= 0 && i < arr.length;
 
@@ -456,7 +461,7 @@ export default function StaffCanvas({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected, disabled]); // disabledを依存配列に追加
+  }, []); // refを使うため依存不要、マウント時に1度だけ登録
 
   /* ======================== 描画 ======================== */
   useEffect(() => {
@@ -671,11 +676,12 @@ export default function StaffCanvas({
             const dL = Math.abs(localX - measLeft); if (dL < minDist) { minDist = dL; insertAt = 0; }
             const dR = Math.abs(localX - measRight); if (dR < minDist) { minDist = dR; insertAt = vfNotes.length; }
 
+            const fallbackNoteWidth = Math.max(20, wDraw / (vfNotes.length + 1));
             for (let j = 0; j < vfNotes.length; j++) {
               const n: any = vfNotes[j];
-              const leftX = n.getAbsoluteX ? n.getAbsoluteX() : (measLeft + j * 20);
+              const leftX = n.getAbsoluteX ? n.getAbsoluteX() : (measLeft + (j + 1) * (wDraw / (vfNotes.length + 1)));
               const bb = n.getBoundingBox?.();
-              const width = bb ? bb.getW() : 20;
+              const width = bb ? bb.getW() : fallbackNoteWidth;
               const rightX = leftX + width;
 
               if (localX >= leftX && localX <= rightX) {
