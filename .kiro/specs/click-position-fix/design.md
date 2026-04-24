@@ -8,23 +8,29 @@
 
 ## アーキテクチャ
 
-### 現在の問題点（前回修正時の分析）
+### 現在の問題点
 
-1. **座標変換の不整合**: クリック座標（clientX/Y）をSVGの`<g>`ユーザー座標へ変換する際、CTM（Current Transformation Matrix）の逆変換が正しく適用されていない
-2. **外部モニターやCSS変形での座標ずれ**: 拡大縮小やCSS変形が適用された環境で座標がずれる
-3. **Y方向スナップの精度不足**: 線上クリックの取りこぼしが発生
-4. **X方向挿入位置の不正確**: 見た目の横位置と実際の挿入位置が一致しない
+1. **Safari CSS zoom 非互換（繰り返し再発）**: `.page-wrapper { zoom: var(--scale, 1) }` と Safari の `getBoundingClientRect()` の非互換により、Safari でのみ Y 座標がずれる。`getScreenCTM().inverse()` もこの問題を解決しない（Safari は CSS zoom を CTM に反映しないため）
+2. **Y方向スナップの精度不足**: 線上クリックの取りこぼしが発生
+3. **X方向挿入位置の不正確**: 見た目の横位置と実際の挿入位置が一致しない
 
-### 解決アプローチ（前回の修正内容を踏襲）
+> ⚠️ **`getScreenCTM().inverse()` は使用禁止** — Safari で CSS zoom を反映しない。
+> 詳細は [`docs/safari-coordinate-transform.md`](../../docs/safari-coordinate-transform.md) を参照。
+
+### 解決アプローチ（現行の正しい実装）
 
 ```
 ブラウザイベント (clientX, clientY)
          ↓
-  getScreenCTM() で変換行列を取得
+  svg.getBoundingClientRect() で SVG の画面上の矩形を取得
          ↓
-  CTM.inverse() で逆変換
+  getAccumulatedCSSZoom(svg) で CSS zoom 累積値を取得
          ↓
-  SVG <g> ユーザー座標 (x, y)
+  getBoundingClientRect が zoom を反映しているか（Chrome か Safari か）を判定
+         ↓
+  viewBox / 視覚幅 の比率で正確にスケール補正
+         ↓
+  SVG viewBox 座標 (x, y)
          ↓
   Y方向: getSpacingBetweenLines() で0.5行刻みスナップ
   X方向: getAbsoluteX() + BoundingBox で挿入位置計算
@@ -32,7 +38,7 @@
   音符配置
 ```
 
-**重要**: 全てのイベントハンドラーで`clientToGroup`を使用し、CTM逆変換による座標統一を徹底します。
+**重要**: 全てのイベントハンドラーで `clientToGroup` を使用し、`getAccumulatedCSSZoom` による補正を徹底します。
 
 ## コンポーネントとインターフェース
 
@@ -60,27 +66,46 @@ function clientToGroup(
 ): { x: number; y: number }
 ```
 
-**改善内容:**
-- `getScreenCTM()`でスクリーン座標からSVG座標への変換行列を取得
-- `inverse()`で逆行列を計算し、クライアント座標をSVG座標に変換
-- 外部モニター、CSS transform、ブラウザズームなど、あらゆる変形に対応
-- 厳密なnullチェックとエラーハンドリング
+**実装内容:**
+- `getBoundingClientRect()` で SVG の画面上の矩形を取得
+- `getAccumulatedCSSZoom()` で祖先要素の CSS zoom 累積値を計算
+- `getBoundingClientRect()` が zoom を反映しているか（Chrome/Safari 判別）を検出
+- viewBox と視覚サイズの比率で正確に座標変換
 
-**実装例:**
+**実装例（現行の正しい実装）:**
 ```typescript
-function clientToGroup(svg: SVGSVGElement, group: SVGGElement, clientX: number, clientY: number) {
-  const pt = svg.createSVGPoint();
-  pt.x = clientX; 
-  pt.y = clientY;
-  const m = group.getScreenCTM();
-  if (!m) {
-    console.warn('getScreenCTM returned null, using fallback coordinates');
-    return { x: 0, y: 0 };
+function getAccumulatedCSSZoom(el: Element): number {
+  let zoom = 1;
+  let node: Element | null = el;
+  while (node && node !== document.documentElement) {
+    const z = parseFloat(window.getComputedStyle(node).zoom || '1');
+    if (Number.isFinite(z) && z !== 1) zoom *= z;
+    node = node.parentElement;
   }
-  const p = pt.matrixTransform(m.inverse());
-  return { x: p.x, y: p.y };
+  return zoom;
+}
+
+function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, clientX: number, clientY: number) {
+  const svgRect = svg.getBoundingClientRect();
+  if (!svgRect.width || !svgRect.height) return { x: 0, y: 0 };
+  const viewBox = svg.viewBox?.baseVal;
+  const vbW = (viewBox && viewBox.width > 0) ? viewBox.width : svg.width.baseVal.value;
+  const vbH = (viewBox && viewBox.height > 0) ? viewBox.height : svg.height.baseVal.value;
+  const logW = svg.width.baseVal.value;
+  const logH = svg.height.baseVal.value;
+  const cssZoom = getAccumulatedCSSZoom(svg);
+  const expectedVisualW = logW * cssZoom;
+  const bcrReflectsZoom = Math.abs(svgRect.width - expectedVisualW) < logW * 0.05;
+  const visualW = bcrReflectsZoom ? svgRect.width : expectedVisualW;
+  const visualH = bcrReflectsZoom ? svgRect.height : logH * cssZoom;
+  const x = (clientX - svgRect.left) * (vbW / visualW);
+  const y = (clientY - svgRect.top)  * (vbH / visualH);
+  if (!isFinite(x) || !isFinite(y)) return { x: 0, y: 0 };
+  return { x, y };
 }
 ```
+
+> ❌ **使ってはいけない旧実装**: `getScreenCTM().inverse()` — Safari で CSS zoom を反映しない
 
 #### `getVexflowGroup`関数（改善版）
 

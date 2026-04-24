@@ -30,6 +30,7 @@ type Props = {
   onScoreDataChange?: (data: MeasureData[]) => void;
   startMeasureIndex?: number; // このStaffCanvasが担当する開始小節インデックス
   disabled?: boolean; // 編集を無効にするフラグ
+  clef?: 'treble' | 'bass'; // 音部記号（デフォルト: treble）
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -101,6 +102,25 @@ function keyToLineTreble(key: string): number {
   return (base - target) / 2;
 }
 
+/* ===== line ⇄ key（ヘ音記号。line 0 = A3 が最上線） ===== */
+function lineToKeyBass(line: number): string {
+  const snapped = Math.round(line * 2) / 2;
+  const stepsDown = Math.round(snapped * 2); // A3 を 0 として下に +0.5 ずつ
+  const letters = ['c','d','e','f','g','a','b'] as const;
+  let idx = 5 - stepsDown, oct = 3; // A3: idx=5, oct=3
+  while (idx < 0) { idx += 7; oct -= 1; }
+  while (idx >= 7) { idx -= 7; oct += 1; }
+  return `${letters[idx]}/${oct}`;
+}
+function keyToLineBass(key: string): number {
+  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if (!m) return 2;
+  const letter = m[1].toLowerCase(), oct = +m[3];
+  const idxMap: Record<string, number> = { c:0,d:1,e:2,f:3,g:4,a:5,b:6 };
+  const target = oct * 7 + (idxMap[letter] ?? 0);
+  const base = 3 * 7 + idxMap['a']; // A3
+  return (base - target) / 2;
+}
+
 /* ===== 半音移動：key ⇄ MIDI ===== */
 const LETTER_TO_PC: Record<string, number> = { c:0, d:2, e:4, f:5, g:7, a:9, b:11 };
 function keyToMidi(key: string): number | null {
@@ -130,48 +150,51 @@ function getVexflowGroup(svg: SVGSVGElement): SVGGElement | null {
   return groups.length ? (groups[groups.length - 1] as SVGGElement) : null;
 }
 
-/**
- * クライアント座標をSVGグループ座標に変換する
- * CTM（Current Transformation Matrix）の逆変換を使用して、
- * 拡大縮小やCSS変形が適用された環境でも正確に変換する
- * 
- * @param svg SVG要素
- * @param group 対象のSVGグループ要素（Vexflowのルートグループ）
- * @param clientX クライアントX座標（ブラウザビューポート座標）
- * @param clientY クライアントY座標（ブラウザビューポート座標）
- * @returns SVG <g> ユーザー座標系での座標
- */
-function clientToGroup(svg: SVGSVGElement, group: SVGGElement, clientX: number, clientY: number): { x: number; y: number } {
-  // SVGPointオブジェクトを作成してクライアント座標を設定
-  const pt = svg.createSVGPoint();
-  pt.x = clientX; 
-  pt.y = clientY;
-  
-  // getScreenCTM()でスクリーン座標からSVG座標への変換行列を取得
-  const m = (group as any).getScreenCTM?.();
-  
-  // nullチェック：変換行列が取得できない場合はフォールバック
-  if (!m) {
-    console.warn('getScreenCTM returned null, using fallback coordinates');
-    return { x: 0, y: 0 };
+// DOM ツリーを上へ辿り、CSS zoom の累積値を返す。
+// Safari 旧版は getBoundingClientRect() が CSS zoom を反映しない（論理サイズを返す）ため補正に使う。
+function getAccumulatedCSSZoom(el: Element): number {
+  let zoom = 1;
+  let node: Element | null = el;
+  while (node && node !== document.documentElement) {
+    const z = parseFloat(window.getComputedStyle(node).zoom || '1');
+    if (Number.isFinite(z) && z !== 1) zoom *= z;
+    node = node.parentElement;
   }
-  
-  try {
-    // 逆行列を計算してクライアント座標をSVG座標に変換
-    const p = pt.matrixTransform(m.inverse());
-    
-    // 座標の妥当性チェック
-    if (!isFinite(p.x) || !isFinite(p.y)) {
-      console.warn('Invalid coordinates after transformation:', { x: p.x, y: p.y });
-      return { x: 0, y: 0 };
-    }
-    
-    return { x: p.x, y: p.y };
-  } catch (error) {
-    // 変換エラーが発生した場合のエラーハンドリング
-    console.error('Error during coordinate transformation:', error);
-    return { x: 0, y: 0 };
-  }
+  return zoom;
+}
+
+// client座標 → SVG viewBox 座標
+// Safari 旧版では getBoundingClientRect() が CSS zoom を反映しないため、
+// zoom 累積値で補正して正確な座標を返す。
+function clientToGroup(
+  svg: SVGSVGElement,
+  _group: SVGGElement,
+  clientX: number,
+  clientY: number
+): { x: number; y: number } {
+  const svgRect = svg.getBoundingClientRect();
+  if (!svgRect.width || !svgRect.height) return { x: 0, y: 0 };
+
+  const viewBox = svg.viewBox?.baseVal;
+  const vbW = (viewBox && viewBox.width > 0) ? viewBox.width : svg.width.baseVal.value;
+  const vbH = (viewBox && viewBox.height > 0) ? viewBox.height : svg.height.baseVal.value;
+  const logW = svg.width.baseVal.value;
+  const logH = svg.height.baseVal.value;
+
+  const cssZoom = getAccumulatedCSSZoom(svg);
+
+  // Chrome: getBoundingClientRect() は CSS zoom 込みの視覚サイズ → svgRect.width ≒ logW * cssZoom
+  // Safari 旧版: CSS zoom を反映しない論理サイズ → svgRect.width ≒ logW
+  const expectedVisualW = logW * cssZoom;
+  const bcrReflectsZoom = Math.abs(svgRect.width - expectedVisualW) < logW * 0.05;
+  const visualW = bcrReflectsZoom ? svgRect.width : expectedVisualW;
+  const visualH = bcrReflectsZoom ? svgRect.height : logH * cssZoom;
+
+  const x = (clientX - svgRect.left) * (vbW / visualW);
+  const y = (clientY - svgRect.top)  * (vbH / visualH);
+
+  if (!isFinite(x) || !isFinite(y)) return { x: 0, y: 0 };
+  return { x, y };
 }
 
 /* ===== 行間スナップ ===== */
@@ -216,14 +239,14 @@ function snapLineBySpacing(stave: Stave, y: number): number {
 /* ===== 時間ベース位置計算（休符重なり修正用） ===== */
 
 /* ===== ノート生成（臨時記号を付与） ===== */
-function makeVFNote(ev: NoteEvent) {
+function makeVFNote(ev: NoteEvent, clef: 'treble' | 'bass' = 'treble') {
   const vfDur = toVFDur(ev.dur);
   if (ev.isRest) {
-    // 休符作成時にsetCenterAlignmentを削除 - 中央揃えを無効化して重なりを防ぐ
-    const n = new StaveNote({ clef: 'treble', keys: ['b/4'], duration: (vfDur as VFDur) + 'r' });
+    const restKey = clef === 'bass' ? 'd/3' : 'b/4';
+    const n = new StaveNote({ clef, keys: [restKey], duration: (vfDur as VFDur) + 'r' });
     return n;
   }
-  const n = new StaveNote({ clef: 'treble', keys: [ev.key], duration: vfDur });
+  const n = new StaveNote({ clef, keys: [ev.key], duration: vfDur });
   const m = ev.key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i);
   const acc = m?.[2] || '';
   if (acc) {
@@ -262,7 +285,11 @@ function logNoteAddition(measureIndex: number, x: number, y: number, key: string
 export default function StaffCanvas({
   systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
   initialScoreData, onScoreDataChange, startMeasureIndex = 0, disabled = false,
+  clef = 'treble',
 }: Props) {
+  // clef に応じた変換関数を選択
+  const lineToKey = clef === 'bass' ? lineToKeyBass : lineToKeyTreble;
+  const keyToLine = clef === 'bass' ? keyToLineBass : keyToLineTreble;
   const ref = useRef<HTMLDivElement>(null);
   const [score, setScore] = useState<MeasureData[]>(() => {
     // initialScoreDataが提供されている場合はそれを使用
@@ -441,7 +468,7 @@ export default function StaffCanvas({
 
           if (e.shiftKey) { // 1オクターブ
             const diff = up ? -3.5 : 3.5;
-            const newKey = lineToKeyTreble(keyToLineTreble(ev.key) + diff);
+            const newKey = lineToKey(keyToLine(ev.key) + diff);
             const next = prev.map(m => ({ events: [...m.events] as NoteEvent[] }));
             next[measure].events[index] = { ...ev, key: newKey };
             return next;
@@ -449,7 +476,7 @@ export default function StaffCanvas({
 
           // 線/間 1段
           const diff = up ? -0.5 : 0.5;
-          const newKey = lineToKeyTreble(keyToLineTreble(ev.key) + diff);
+          const newKey = lineToKey(keyToLine(ev.key) + diff);
           const next = prev.map(m => ({ events: [...m.events] as NoteEvent[] }));
           next[measure].events[index] = { ...ev, key: newKey };
           return next;
@@ -477,6 +504,11 @@ export default function StaffCanvas({
 
     const svg = ref.current.querySelector('svg') as SVGSVGElement | null;
     if (!svg) return;
+
+    // SVGのデフォルトはdisplay:inlineのため、親divの高さが正しく展開されない。
+    // display:blockにすることで親divがSVGの高さ分だけ正しく広がり、
+    // PianoStaffで2つのStaffCanvasを縦に並べたとき重ならなくなる。
+    svg.style.display = 'block';
 
     // 🛠️ ここで一度だけ root グループを取得して、以降は使い回す
     const svgRoot = (getVexflowGroup(svg) as SVGGElement | null) || svg;
@@ -542,7 +574,7 @@ export default function StaffCanvas({
         const data: MeasureData | undefined = score[absoluteIndex];
 
         const stave = new Stave(x / s, y / s, w / s);
-        if (i === 0) { stave.addClef('treble'); if (line === 0) stave.addTimeSignature('4/4'); }
+        if (i === 0) { stave.addClef(clef); if (line === 0) stave.addTimeSignature('4/4'); }
         stave.setEndBarType(Barline.type.SINGLE);
         stave.setContext(ctx).draw();
 
@@ -554,7 +586,7 @@ export default function StaffCanvas({
           }));
 
         const vfNotes: StaveNote[] = safeEvents.map((ev, idx) => {
-          const n = makeVFNote(ev) as any;
+          const n = makeVFNote(ev, clef) as any;
           const isSel = !!selected && selected.measure === absoluteIndex && selected.index === idx;
           if (isSel && n.setStyle) n.setStyle({ fillStyle:'#1d4ed8', strokeStyle:'#1d4ed8' });
           return n as StaveNote;
@@ -583,14 +615,15 @@ export default function StaffCanvas({
             
             if (event.isRest && event.dur === '1') { // 全休符の場合
               try {
-                // 音部記号パディングを考慮した中央位置を計算
-                const clefPadding = hasClef ? 50 : 0;
-                const effectiveLeft = xDraw + clefPadding;
-                const effectiveWidth = Math.max(0, wDraw - clefPadding);
-                const centerX = effectiveLeft + effectiveWidth / 2;
-                
-                // 現在の位置を取得
-                const currentX = (note as any).getAbsoluteX?.() || (note as any).getX?.() || effectiveLeft;
+                // stave.getNoteStartX()で実際のノート描画開始位置を取得（クレフ・拍子記号を正確に考慮）
+                const noteStartX = typeof (stave as any).getNoteStartX === 'function'
+                  ? (stave as any).getNoteStartX()
+                  : xDraw + (hasClef ? 50 : 0);
+                const staveEndX = xDraw + wDraw;
+                const centerX = (noteStartX + staveEndX) / 2;
+
+                // 現在の位置を取得（getAbsoluteXはxShiftを含まない）
+                const currentX = (note as any).getAbsoluteX?.() || noteStartX;
                 const offset = centerX - currentX;
                 
                 // 位置を調整
@@ -667,7 +700,7 @@ export default function StaffCanvas({
           }
           
           const snappedLine = snapLineBySpacing(stave, localY);
-          const key = lineToKeyTreble(snappedLine);
+          const key = lineToKey(snappedLine);
 
           let insertAt = safeEvents.length;
           let minDist = Infinity;
@@ -736,7 +769,7 @@ export default function StaffCanvas({
         (svgRoot as any).appendChild(insertRect);
 
         insertRect.addEventListener('mousemove', (e) => {
-          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
+          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY);
           
           // マウスが小節の範囲内（X座標とY座標の両方）にある場合のみガイドを表示
           if (lx >= measLeft && lx <= measRight && ly >= rectTop && ly <= rectBottom) {
@@ -752,8 +785,7 @@ export default function StaffCanvas({
             return;
           }
           
-          // より正確な座標変換：SVGの変換行列を使用
-          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
+          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY);
           
           // doInsertAt関数を使用して音符を挿入
           doInsertAt(lx, ly, measureIndex);
@@ -785,7 +817,7 @@ export default function StaffCanvas({
             const bb = n.getBoundingBox?.();
             const spacing = (stave.getSpacingBetweenLines?.() as number) || ((stave.getYForLine(4) - stave.getYForLine(0)) / 4);
             const evData = safeEvents[j];
-            const yCenter = evData?.isRest ? stave.getYForLine(2) : stave.getYForLine(keyToLineTreble(evData.key));
+            const yCenter = evData?.isRest ? stave.getYForLine(2) : stave.getYForLine(keyToLine(evData.key));
             const safeH = Math.max(bb?.getH?.() ?? 26, spacing * HIT_MIN_H_FACTOR);
             const yHit = yCenter - safeH / 2;
 
@@ -802,7 +834,7 @@ export default function StaffCanvas({
 
             // セル上でもガイドを出す
             hit.addEventListener('mousemove', (ev) => {
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY);
               
               // マウスが小節の範囲内にある場合のみガイドを表示
               if (lx >= measLeft && lx <= measRight) {
@@ -812,7 +844,7 @@ export default function StaffCanvas({
               }
             });
             hit.addEventListener('mouseenter', (ev) => {
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY);
               
               // マウスが小節の範囲内にある場合のみガイドを表示
               if (lx >= measLeft && lx <= measRight) {
@@ -831,7 +863,7 @@ export default function StaffCanvas({
               }
               
               ev.stopPropagation(); // 小節rectには渡さない
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY);
               const cellW = rawRight - rawLeft;
               const selRadius = Math.min(SELECT_NEAR_PX, Math.max(0, cellW * SELECT_NEAR_FRAC));
               const dx = Math.abs(lx - anchors[j]);

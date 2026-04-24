@@ -10,6 +10,7 @@ import { STORAGE_KEYS } from '../utils/storage';
 import type {
   ScoreMetadata,
   MeasureData,
+  PartData,
   NoteEvent,
   DurKey
 } from '../types/storage';
@@ -92,15 +93,16 @@ describe('useScoreStorage Hook Tests', () => {
           async (metadata, measures, systems, measuresPerSystem) => {
             // Clear storage before each test
             localStorageMock.clear();
-            
+
             const { result } = renderHook(() => useScoreStorage());
-            
+
             // Perform save operation
+            const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
             let saveResult: boolean;
             await act(async () => {
-              saveResult = await result.current.saveScore(metadata, measures, systems, measuresPerSystem);
+              saveResult = await result.current.saveScore(metadata, parts, systems, measuresPerSystem);
             });
-            
+
             // If save was successful, check that data was stored with consistent key
             if (saveResult!) {
               // Should have data stored in the primary key
@@ -147,56 +149,57 @@ describe('useScoreStorage Hook Tests', () => {
           async (metadata, measures, systems, measuresPerSystem) => {
             // Clear storage before each test
             localStorageMock.clear();
-            
+
             const { result } = renderHook(() => useScoreStorage());
-            
+
             // Perform save operation
+            const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
             let saveResult: boolean;
             await act(async () => {
-              saveResult = await result.current.saveScore(metadata, measures, systems, measuresPerSystem);
+              saveResult = await result.current.saveScore(metadata, parts, systems, measuresPerSystem);
             });
-            
+
             // If save was successful, verify all data is preserved
             if (saveResult!) {
               const storedData = localStorageMock.getItem(STORAGE_KEYS.PRIMARY);
               expect(storedData).not.toBeNull();
-              
+
               const parsedData = JSON.parse(storedData!);
-              
+
               // Verify metadata is completely preserved
               expect(parsedData.metadata.title).toBe(metadata.title);
               expect(parsedData.metadata.subtitle).toBe(metadata.subtitle);
               expect(parsedData.metadata.lyricist).toBe(metadata.lyricist);
               expect(parsedData.metadata.composer).toBe(metadata.composer);
               expect(parsedData.metadata.arranger).toBe(metadata.arranger);
-              
+
               // Verify systems and measures per system are preserved
               expect(parsedData.systems).toBe(systems);
               expect(parsedData.measuresPerSystem).toBe(measuresPerSystem);
-              
-              // Verify all measures are preserved
-              expect(parsedData.measures).toHaveLength(measures.length);
-              
+
+              // Verify all measures are preserved (v2 format: parts[0].measures)
+              expect(parsedData.parts[0].measures).toHaveLength(measures.length);
+
               // Verify each measure and its events are preserved
               for (let i = 0; i < measures.length; i++) {
                 const originalMeasure = measures[i];
-                const savedMeasure = parsedData.measures[i];
-                
+                const savedMeasure = parsedData.parts[0].measures[i];
+
                 expect(savedMeasure.events).toHaveLength(originalMeasure.events.length);
-                
+
                 // Verify each note event is preserved
                 for (let j = 0; j < originalMeasure.events.length; j++) {
                   const originalEvent = originalMeasure.events[j];
                   const savedEvent = savedMeasure.events[j];
-                  
+
                   expect(savedEvent.dur).toBe(originalEvent.dur);
                   expect(savedEvent.isRest).toBe(originalEvent.isRest);
                   expect(savedEvent.key).toBe(originalEvent.key);
                 }
               }
-              
+
               // Verify version and timestamp are added
-              expect(parsedData.version).toBe('1.0.0');
+              expect(parsedData.version).toBe('2.0.0');
               expect(typeof parsedData.timestamp).toBe('number');
               expect(parsedData.timestamp).toBeGreaterThan(0);
             }
@@ -225,44 +228,45 @@ describe('useScoreStorage Hook Tests', () => {
           async (metadata, measures, systems, measuresPerSystem) => {
             // Clear storage before each test
             localStorageMock.clear();
-            
+
             const { result } = renderHook(() => useScoreStorage());
-            
+
             // First, save the data
+            const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
             let saveResult: boolean;
             await act(async () => {
-              saveResult = await result.current.saveScore(metadata, measures, systems, measuresPerSystem);
+              saveResult = await result.current.saveScore(metadata, parts, systems, measuresPerSystem);
             });
-            
+
             // If save was successful, test load operation
             if (saveResult!) {
               // Get the raw stored data for comparison
               const rawStoredData = localStorageMock.getItem(STORAGE_KEYS.PRIMARY);
               expect(rawStoredData).not.toBeNull();
-              
+
               const expectedData = JSON.parse(rawStoredData!);
-              
+
               // Now load the data using the hook
               let loadedData: any;
               await act(async () => {
                 loadedData = await result.current.loadScore();
               });
-              
+
               // Should have loaded data
               expect(loadedData).not.toBeNull();
-              
+
               // The loaded data should be exactly the same as what was stored
               expect(loadedData.version).toBe(expectedData.version);
               expect(loadedData.timestamp).toBe(expectedData.timestamp);
               expect(loadedData.systems).toBe(expectedData.systems);
               expect(loadedData.measuresPerSystem).toBe(expectedData.measuresPerSystem);
-              
+
               // Metadata should match exactly
               expect(loadedData.metadata).toEqual(expectedData.metadata);
-              
-              // Measures should match exactly
-              expect(loadedData.measures).toEqual(expectedData.measures);
-              
+
+              // Parts should match exactly (v2 format)
+              expect(loadedData.parts).toEqual(expectedData.parts);
+
               // The entire objects should be deeply equal
               expect(loadedData).toEqual(expectedData);
             }
@@ -305,13 +309,14 @@ describe('useScoreStorage Hook Tests', () => {
         arranger: ''
       };
       const testMeasures = [{ events: [{ dur: '4' as DurKey, isRest: false, key: 'c/4' }] }];
-      
+      const testParts: PartData[] = [{ partId: 'melody', clef: 'treble', measures: testMeasures }];
+
       // Initially no data
       expect(result.current.hasStoredData()).toBe(false);
-      
+
       // Save some data
       await act(async () => {
-        await result.current.saveScore(testMetadata, testMeasures, 1, 1);
+        await result.current.saveScore(testMetadata, testParts, 1, 1);
       });
       
       // Should now have data

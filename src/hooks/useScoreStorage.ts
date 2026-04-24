@@ -12,15 +12,17 @@ import {
 import type {
   SavedScoreData,
   ScoreMetadata,
-  MeasureData
+  PartData,
+  ScoreType
 } from '../types/storage';
 
 export interface UseScoreStorageReturn {
   saveScore: (
     metadata: ScoreMetadata,
-    measures: MeasureData[],
+    parts: PartData[],
     systems: number,
-    measuresPerSystem: number
+    measuresPerSystem: number,
+    scoreType?: ScoreType
   ) => Promise<boolean>;
   loadScore: () => Promise<SavedScoreData | null>;
   hasStoredData: () => boolean;
@@ -45,16 +47,17 @@ export function useScoreStorage(): UseScoreStorageReturn {
 
   const saveScore = useCallback(async (
     metadata: ScoreMetadata,
-    measures: MeasureData[],
+    parts: PartData[],
     systems: number,
-    measuresPerSystem: number
+    measuresPerSystem: number,
+    scoreType: ScoreType = 'single'
   ): Promise<boolean> => {
     setIsSaving(true);
     clearError();
 
     try {
       // Create the saved score data with current timestamp
-      const scoreData = createSavedScoreData(metadata, measures, systems, measuresPerSystem);
+      const scoreData = createSavedScoreData(metadata, parts, systems, measuresPerSystem, scoreType);
       
       // Attempt to save
       const result = saveScoreData(scoreData);

@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { saveScoreData, loadScoreData, clearStoredData, STORAGE_KEYS } from '../utils/storage';
-import type { SavedScoreData, ScoreMetadata, MeasureData, DurKey } from '../types/storage';
+import type { SavedScoreData, ScoreMetadata, MeasureData, PartData, DurKey } from '../types/storage';
 
 // localStorage のモック
 const localStorageMock = (() => {
@@ -89,9 +89,10 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const { result } = renderHook(() => useScoreStorage());
 
       // 保存操作
+      const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
       let saveSuccess = false;
       await act(async () => {
-        saveSuccess = await result.current.saveScore(metadata, measures, systems, measuresPerSystem);
+        saveSuccess = await result.current.saveScore(metadata, parts, systems, measuresPerSystem);
       });
 
       expect(saveSuccess).toBe(true);
@@ -120,19 +121,19 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
         expect(loadedData.systems).toBe(systems);
         expect(loadedData.measuresPerSystem).toBe(measuresPerSystem);
 
-        // 小節データの検証
-        expect(loadedData.measures).toHaveLength(measures.length);
-        
+        // 小節データの検証 (v2: parts[0].measures)
+        expect(loadedData.parts[0].measures).toHaveLength(measures.length);
+
         for (let i = 0; i < measures.length; i++) {
-          expect(loadedData.measures[i].events).toHaveLength(measures[i].events.length);
-          
+          expect(loadedData.parts[0].measures[i].events).toHaveLength(measures[i].events.length);
+
           for (let j = 0; j < measures[i].events.length; j++) {
-            expect(loadedData.measures[i].events[j]).toEqual(measures[i].events[j]);
+            expect(loadedData.parts[0].measures[i].events[j]).toEqual(measures[i].events[j]);
           }
         }
 
         // バージョンとタイムスタンプの検証
-        expect(loadedData.version).toBe('1.0.0');
+        expect(loadedData.version).toBe('2.0.0');
         expect(loadedData.timestamp).toBeGreaterThan(0);
       }
     });
@@ -151,9 +152,10 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const measures1: MeasureData[] = [
         { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
       ];
+      const parts1: PartData[] = [{ partId: 'melody', clef: 'treble', measures: measures1 }];
 
       await act(async () => {
-        await result.current.saveScore(metadata1, measures1, 1, 1);
+        await result.current.saveScore(metadata1, parts1, 1, 1);
       });
 
       let loaded1: SavedScoreData | null = null;
@@ -175,9 +177,10 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
         { events: [{ dur: '2', isRest: false, key: 'd/4' }] },
         { events: [{ dur: '2', isRest: true, key: 'e/4' }] }
       ];
+      const parts2: PartData[] = [{ partId: 'melody', clef: 'treble', measures: measures2 }];
 
       await act(async () => {
-        await result.current.saveScore(metadata2, measures2, 2, 2);
+        await result.current.saveScore(metadata2, parts2, 2, 2);
       });
 
       let loaded2: SavedScoreData | null = null;
@@ -188,7 +191,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       // 最新のデータが読み込まれることを確認
       expect(loaded2?.metadata.title).toBe('曲2');
       expect(loaded2?.metadata.subtitle).toBe('改訂版');
-      expect(loaded2?.measures).toHaveLength(2);
+      expect(loaded2?.parts[0].measures).toHaveLength(2);
       expect(loaded2?.systems).toBe(2);
     });
 
@@ -206,9 +209,10 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const measures: MeasureData[] = [
         { events: [] }
       ];
+      const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       await act(async () => {
-        await result.current.saveScore(metadata, measures, 1, 1);
+        await result.current.saveScore(metadata, parts, 1, 1);
       });
 
       expect(result.current.hasStoredData()).toBe(true);
@@ -234,7 +238,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
     it('localStorage容量超過エラーを適切に処理する', async () => {
       // 元のsetItemを保存
       const originalSetItem = localStorageMock.setItem.bind(localStorageMock);
-      
+
       // setItemをモックして容量超過エラーをシミュレート
       let callCount = 0;
       localStorageMock.setItem = (key: string, value: string) => {
@@ -261,10 +265,11 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const measures: MeasureData[] = [
         { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
       ];
+      const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       let saveSuccess = false;
       await act(async () => {
-        saveSuccess = await result.current.saveScore(metadata, measures, 1, 1);
+        saveSuccess = await result.current.saveScore(metadata, parts, 1, 1);
       });
 
       // 保存は失敗するはず
@@ -321,7 +326,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
     it('localStorage無効時にエラーを処理する', async () => {
       // 元のsetItemを保存
       const originalSetItem = localStorageMock.setItem.bind(localStorageMock);
-      
+
       // setItemをモックしてSecurityErrorをシミュレート
       localStorageMock.setItem = () => {
         const error = new DOMException('SecurityError', 'SecurityError');
@@ -340,10 +345,11 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const measures: MeasureData[] = [
         { events: [] }
       ];
+      const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       let saveSuccess = false;
       await act(async () => {
-        saveSuccess = await result.current.saveScore(metadata, measures, 1, 1);
+        saveSuccess = await result.current.saveScore(metadata, parts, 1, 1);
       });
 
       // 保存は失敗するはず
@@ -376,11 +382,12 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
         composer: '',
         arranger: ''
       };
+      const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       const startSave = performance.now();
       let saveSuccess = false;
       await act(async () => {
-        saveSuccess = await result.current.saveScore(metadata, measures, 6, 4);
+        saveSuccess = await result.current.saveScore(metadata, parts, 6, 4);
       });
       const endSave = performance.now();
 
@@ -396,7 +403,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const endLoad = performance.now();
 
       expect(loadedData).not.toBeNull();
-      expect(loadedData?.measures).toHaveLength(24);
+      expect(loadedData?.parts[0].measures).toHaveLength(24);
       // 読込は1秒以内に完了するはず
       expect(endLoad - startLoad).toBeLessThan(1000);
     });
@@ -418,9 +425,10 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
         { events: [] },
         { events: [] }
       ];
+      const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       await act(async () => {
-        await result.current.saveScore(metadata, measures, 1, 3);
+        await result.current.saveScore(metadata, parts, 1, 3);
       });
 
       let loadedData: SavedScoreData | null = null;
@@ -429,8 +437,8 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       });
 
       expect(loadedData).not.toBeNull();
-      expect(loadedData?.measures).toHaveLength(3);
-      expect(loadedData?.measures[0].events).toHaveLength(0);
+      expect(loadedData?.parts[0].measures).toHaveLength(3);
+      expect(loadedData?.parts[0].measures[0].events).toHaveLength(0);
     });
 
     it('特殊文字を含むメタデータを保存・読込できる', async () => {
@@ -447,9 +455,10 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const measures: MeasureData[] = [
         { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
       ];
+      const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       await act(async () => {
-        await result.current.saveScore(metadata, measures, 1, 1);
+        await result.current.saveScore(metadata, parts, 1, 1);
       });
 
       let loadedData: SavedScoreData | null = null;
@@ -478,6 +487,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const measures: MeasureData[] = [
         { events: [] }
       ];
+      const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       // 初期状態
       expect(result.current.isSaving).toBe(false);
@@ -486,7 +496,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       // 保存中の状態は非同期なので直接確認できないが、
       // 保存完了後はfalseに戻るはず
       await act(async () => {
-        await result.current.saveScore(metadata, measures, 1, 1);
+        await result.current.saveScore(metadata, parts, 1, 1);
       });
 
       expect(result.current.isSaving).toBe(false);
@@ -503,7 +513,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
   describe('ストレージユーティリティ関数の統合テスト', () => {
     it('saveScoreDataとloadScoreDataが連携して動作する', () => {
       const testData: SavedScoreData = {
-        version: '1.0.0',
+        version: '2.0.0',
         timestamp: Date.now(),
         metadata: {
           title: 'ユーティリティテスト',
@@ -512,8 +522,12 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
           composer: '',
           arranger: ''
         },
-        measures: [
-          { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        parts: [
+          {
+            partId: 'melody',
+            clef: 'treble',
+            measures: [{ events: [{ dur: '4', isRest: false, key: 'c/4' }] }]
+          }
         ],
         systems: 1,
         measuresPerSystem: 1
@@ -532,7 +546,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
 
     it('clearStoredDataが全てのストレージキーをクリアする', () => {
       const testData: SavedScoreData = {
-        version: '1.0.0',
+        version: '2.0.0',
         timestamp: Date.now(),
         metadata: {
           title: 'クリアテスト',
@@ -541,14 +555,20 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
           composer: '',
           arranger: ''
         },
-        measures: [],
+        parts: [
+          {
+            partId: 'melody',
+            clef: 'treble',
+            measures: []
+          }
+        ],
         systems: 1,
         measuresPerSystem: 1
       };
 
       // データを保存
       saveScoreData(testData);
-      
+
       // プライマリキーにデータが存在することを確認
       expect(localStorageMock.getItem(STORAGE_KEYS.PRIMARY)).not.toBeNull();
 

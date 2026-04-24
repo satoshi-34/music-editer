@@ -2,16 +2,20 @@
 // StaffCanvasの音符クリック再生機能のテスト
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, waitFor } from '@testing-library/react';
 import StaffCanvas from './StaffCanvas';
 import type { MeasureData, DurKey } from '../types/storage';
+import { NotePlayer } from '../audio/NotePlayer';
+import { defaultAudioEngine } from '../audio/AudioEngine';
 
 // NotePlayerのモック
 vi.mock('../audio/NotePlayer', () => ({
-  NotePlayer: vi.fn().mockImplementation(() => ({
-    playNoteEvent: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn()
-  }))
+  NotePlayer: vi.fn().mockImplementation(function() {
+    return {
+      playNoteEvent: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn()
+    };
+  })
 }));
 
 // AudioEngineのモック
@@ -24,6 +28,17 @@ vi.mock('../audio/AudioEngine', () => ({
   }
 }));
 
+// SoundSourceのモック（loadInstrumentが成功するように）
+vi.mock('../audio/SoundSource', () => ({
+  SoundSource: vi.fn().mockImplementation(function() {
+    return {
+      getCurrentInstrument: vi.fn().mockReturnValue('piano'),
+      loadInstrument: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn()
+    };
+  })
+}));
+
 describe('StaffCanvas 音符クリック再生機能', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -34,12 +49,12 @@ describe('StaffCanvas 音符クリック再生機能', () => {
   });
 
   describe('NotePlayerの統合', () => {
-    it('should initialize NotePlayer on component mount', () => {
+    it('should initialize NotePlayer on component mount', async () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
         { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
       ];
-      
+
       render(
         <StaffCanvas
           systems={1}
@@ -50,18 +65,19 @@ describe('StaffCanvas 音符クリック再生機能', () => {
           initialScoreData={testMeasures}
         />
       );
-      
-      // NotePlayerが初期化されることを確認
-      const { NotePlayer } = require('../audio/NotePlayer');
-      expect(NotePlayer).toHaveBeenCalledTimes(1);
+
+      // NotePlayerが初期化されることを確認（async useEffectを待つ）
+      await waitFor(() => {
+        expect(NotePlayer).toHaveBeenCalledTimes(1);
+      });
     });
 
-    it('should dispose NotePlayer on component unmount', () => {
+    it('should dispose NotePlayer on component unmount', async () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
         { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
       ];
-      
+
       const { unmount } = render(
         <StaffCanvas
           systems={1}
@@ -72,13 +88,17 @@ describe('StaffCanvas 音符クリック再生機能', () => {
           initialScoreData={testMeasures}
         />
       );
-      
+
+      // NotePlayerが初期化されるまで待つ
+      await waitFor(() => {
+        expect(NotePlayer).toHaveBeenCalledTimes(1);
+      });
+
       // コンポーネントをアンマウント
       unmount();
-      
+
       // disposeが呼ばれることを確認
-      const { NotePlayer } = require('../audio/NotePlayer');
-      const mockInstance = NotePlayer.mock.results[0].value;
+      const mockInstance = (NotePlayer as any).mock.results[0].value;
       expect(mockInstance.dispose).toHaveBeenCalledTimes(1);
     });
   });
@@ -149,8 +169,7 @@ describe('StaffCanvas 音符クリック再生機能', () => {
   describe('エラーハンドリング', () => {
     it('should handle AudioEngine initialization failure gracefully', () => {
       // AudioEngineの初期化が失敗する場合をモック
-      const { defaultAudioEngine } = require('../audio/AudioEngine');
-      defaultAudioEngine.initialize.mockRejectedValueOnce(new Error('AudioContext not available'));
+      (defaultAudioEngine.initialize as any).mockRejectedValueOnce(new Error('AudioContext not available'));
       
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
@@ -174,8 +193,7 @@ describe('StaffCanvas 音符クリック再生機能', () => {
 
     it('should handle NotePlayer creation failure gracefully', () => {
       // NotePlayerの作成が失敗する場合をモック
-      const { NotePlayer } = require('../audio/NotePlayer');
-      NotePlayer.mockImplementationOnce(() => {
+      (NotePlayer as any).mockImplementationOnce(() => {
         throw new Error('NotePlayer creation failed');
       });
       
@@ -201,12 +219,12 @@ describe('StaffCanvas 音符クリック再生機能', () => {
   });
 
   describe('要件の検証', () => {
-    it('should integrate note click playback functionality (要件1.1)', () => {
+    it('should integrate note click playback functionality (要件1.1)', async () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
         { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
       ];
-      
+
       const { container } = render(
         <StaffCanvas
           systems={1}
@@ -217,16 +235,17 @@ describe('StaffCanvas 音符クリック再生機能', () => {
           initialScoreData={testMeasures}
         />
       );
-      
+
       // 音符クリック処理に再生機能が統合されていることを確認
       // （実装により、音符のヒット領域にクリックイベントが設定されている）
       const svg = container.querySelector('svg');
       const noteHitRects = svg?.querySelectorAll('rect.vf-note-hit');
       expect(noteHitRects?.length).toBeGreaterThan(0);
-      
-      // NotePlayerが初期化されていることを確認
-      const { NotePlayer } = require('../audio/NotePlayer');
-      expect(NotePlayer).toHaveBeenCalled();
+
+      // NotePlayerが初期化されていることを確認（async useEffectを待つ）
+      await waitFor(() => {
+        expect(NotePlayer).toHaveBeenCalled();
+      });
     });
 
     it('should manage NotePlayer instance properly (要件1.5)', () => {
@@ -247,12 +266,11 @@ describe('StaffCanvas 音符クリック再生機能', () => {
       );
       
       // NotePlayerインスタンスが作成されることを確認
-      const { NotePlayer } = require('../audio/NotePlayer');
       expect(NotePlayer).toHaveBeenCalledTimes(1);
       
       // アンマウント時にリソースが解放されることを確認
       unmount();
-      const mockInstance = NotePlayer.mock.results[0].value;
+      const mockInstance = (NotePlayer as any).mock.results[0].value;
       expect(mockInstance.dispose).toHaveBeenCalledTimes(1);
     });
   });

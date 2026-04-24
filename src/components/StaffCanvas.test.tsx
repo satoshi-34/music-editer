@@ -10,6 +10,7 @@ import { saveScoreData, loadScoreData, createSavedScoreData } from '../utils/sto
 import type {
   ScoreMetadata,
   MeasureData,
+  PartData,
   NoteEvent,
   DurKey
 } from '../types/storage';
@@ -99,64 +100,65 @@ describe('StaffCanvas Integration Tests', () => {
             // Clear storage before each test
             localStorageMock.clear();
             
-            // Create complete score data
+            // Create complete score data (v2 format: wrap measures in parts)
+            const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
             const originalScoreData = createSavedScoreData(
               metadata,
-              measures,
+              parts,
               systems,
               measuresPerSystem
             );
-            
+
             // Save the score data
             const saveResult = saveScoreData(originalScoreData);
             expect(saveResult.success).toBe(true);
-            
+
             // Load the score data
             const loadResult = loadScoreData();
             expect(loadResult.success).toBe(true);
             expect(loadResult.data).not.toBeNull();
-            
+
             if (loadResult.data) {
               const loadedData = loadResult.data;
-              
+
               // Verify metadata is exactly preserved
               expect(loadedData.metadata.title).toBe(originalScoreData.metadata.title);
               expect(loadedData.metadata.subtitle).toBe(originalScoreData.metadata.subtitle);
               expect(loadedData.metadata.lyricist).toBe(originalScoreData.metadata.lyricist);
               expect(loadedData.metadata.composer).toBe(originalScoreData.metadata.composer);
               expect(loadedData.metadata.arranger).toBe(originalScoreData.metadata.arranger);
-              
+
               // Verify systems and measures per system are preserved
               expect(loadedData.systems).toBe(originalScoreData.systems);
               expect(loadedData.measuresPerSystem).toBe(originalScoreData.measuresPerSystem);
-              
+
               // Verify version is preserved
               expect(loadedData.version).toBe(originalScoreData.version);
-              
+
               // Verify timestamp is preserved
               expect(loadedData.timestamp).toBe(originalScoreData.timestamp);
-              
-              // Verify all measures are preserved with exact count
-              expect(loadedData.measures).toHaveLength(originalScoreData.measures.length);
-              
+
+              // Verify all measures are preserved with exact count (v2: parts[0].measures)
+              expect(loadedData.parts[0].measures).toHaveLength(measures.length);
+
               // Verify each measure and its note events are exactly preserved
-              for (let i = 0; i < originalScoreData.measures.length; i++) {
-                const originalMeasure = originalScoreData.measures[i];
-                const loadedMeasure = loadedData.measures[i];
-                
+              for (let i = 0; i < measures.length; i++) {
+                const originalMeasure = measures[i];
+                const loadedMeasure = loadedData.parts[0].measures[i];
+
                 expect(loadedMeasure.events).toHaveLength(originalMeasure.events.length);
-                
+
                 // Verify each note event is exactly preserved
                 for (let j = 0; j < originalMeasure.events.length; j++) {
                   const originalEvent = originalMeasure.events[j];
                   const loadedEvent = loadedMeasure.events[j];
-                  
+
                   expect(loadedEvent.dur).toBe(originalEvent.dur);
                   expect(loadedEvent.isRest).toBe(originalEvent.isRest);
                   expect(loadedEvent.key).toBe(originalEvent.key);
                 }
               }
-              
+
               // Verify the entire loaded data structure is equivalent to original
               expect(loadedData).toEqual(originalScoreData);
             }
@@ -226,8 +228,8 @@ describe('StaffCanvas Integration Tests', () => {
         />
       );
       
-      // Callback should be called with initial data
-      expect(mockCallback).toHaveBeenCalledWith(testMeasures);
+      // Callback is not called on initial mount when data is unchanged
+      expect(mockCallback).not.toHaveBeenCalled();
     });
   });
 
@@ -517,21 +519,21 @@ describe('StaffCanvas Integration Tests', () => {
             };
             
             const { container } = render(
-              <StaffCanvas 
-                systems={Math.ceil(scoreLength / 2)} 
-                gap={110} 
-                measuresPerSystem={2} 
-                tool={testTool} 
-                scale={1} 
+              <StaffCanvas
+                systems={scoreLength}
+                gap={110}
+                measuresPerSystem={1}
+                tool={testTool}
+                scale={1}
                 initialScoreData={initialMeasures}
                 onScoreDataChange={onScoreDataChange}
               />
             );
-            
+
             const svg = container.querySelector('svg');
             expect(svg).toBeTruthy();
             if (!svg) return;
-            
+
             // 実際に描画された小節数とインデックスを確認
             const insertRects = svg.querySelectorAll('rect.vf-hit');
             const actualMeasureIndices = new Set<number>();

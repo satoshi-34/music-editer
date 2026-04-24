@@ -21,11 +21,22 @@ export interface ScoreMetadata {
   arranger: string;
 }
 
+/** スコアの種類（単旋律 or ピアノ大譜表） */
+export type ScoreType = 'single' | 'piano';
+
+/** 1パート（右手・左手など）のデータ */
+export interface PartData {
+  partId: string;           // 'melody' | 'right-hand' | 'left-hand'
+  clef: 'treble' | 'bass';
+  measures: MeasureData[];
+}
+
 export interface SavedScoreData {
   version: string;
   timestamp: number;
   metadata: ScoreMetadata;
-  measures: MeasureData[];
+  scoreType: ScoreType;
+  parts: PartData[];
   systems: number;
   measuresPerSystem: number;
 }

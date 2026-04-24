@@ -79,7 +79,7 @@ describe('ScorePlayer', () => {
     };
     
     // Tone.Partをクラスとしてモック
-    (Tone.Part as any) = vi.fn().mockImplementation(() => mockPart);
+    vi.mocked(Tone.Part).mockImplementation(function() { return mockPart; } as any);
 
     scorePlayer = new ScorePlayer(mockAudioEngine, mockTempoManager, mockSoundSource);
   });
@@ -363,11 +363,8 @@ describe('ScorePlayer', () => {
       scorePlayer.removePlaybackCompleteCallback(completeCallback);
       scorePlayer.removeStateChangeCallback(stateCallback);
 
-      const position: PlaybackPosition = {
-        measureIndex: 0,
-        beatPosition: 1,
-        noteIndex: 1
-      };
+      // コールバック削除後の呼び出し履歴をリセット
+      positionCallback.mockClear();
 
       // コールバックが削除されているかテスト
       // stop()を呼んでも位置変更コールバックが呼ばれないことを確認

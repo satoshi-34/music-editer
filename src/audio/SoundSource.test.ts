@@ -27,6 +27,8 @@ describe('SoundSource', () => {
   let mockSynth: any;
 
   beforeEach(() => {
+    localStorage.clear();
+
     // モックシンセサイザーを作成
     mockSynth = {
       volume: { value: 0 },
@@ -35,7 +37,7 @@ describe('SoundSource', () => {
     };
 
     // Tone.PolySynthのモックを設定
-    (Tone.PolySynth as any).mockImplementation(() => mockSynth);
+    (Tone.PolySynth as any).mockImplementation(function() { return mockSynth; });
 
     // モックAudioEngineを作成
     mockAudioEngine = {
@@ -117,9 +119,12 @@ describe('SoundSource', () => {
 
     it('複数の楽器を事前読み込みできる', async () => {
       const instruments = [InstrumentType.PIANO, InstrumentType.ORGAN, InstrumentType.GUITAR];
-      
+
+      // Load one instrument first to initialize this.Tone (avoids parallel dynamic import race)
+      await soundSource.loadInstrument(InstrumentType.PIANO);
+
       await soundSource.preloadInstruments(instruments);
-      
+
       instruments.forEach(instrument => {
         expect(soundSource.isInstrumentLoaded(instrument)).toBe(true);
       });

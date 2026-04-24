@@ -5,6 +5,9 @@
 // Tone.jsの動的インポートのための型定義
 type ToneModule = typeof import('tone');
 
+// Tone.jsの型を名前空間として取り込む（型チェック専用）
+import type * as Tone from 'tone';
+
 import { AudioEngine } from './AudioEngine';
 import { AudioErrorHandler, AudioErrorFactory } from './AudioError';
 
@@ -267,12 +270,6 @@ export class SoundSource {
         console.log('[SoundSource] Tone.jsを動的にインポートします...');
         this.Tone = await import('tone');
         console.log('[SoundSource] Tone.jsのインポートが完了しました');
-      }
-
-      // AudioContextが存在しない、またはclosedの場合は作成できないためエラー
-      const context = this.Tone.getContext();
-      if (!context || context.state === 'closed') {
-        throw new Error(`AudioContextが利用できないため楽器 ${type} を作成できません。AudioContextを開始してから再試行してください。`);
       }
 
       const config = this._getSynthConfig(type);

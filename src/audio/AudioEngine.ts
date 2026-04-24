@@ -83,22 +83,37 @@ export class AudioEngine {
     try {
       console.log('[AudioEngine] 初期化を開始します...');
 
-      // Tone.jsがデフォルトでAudioContextを作成しないように設定
-      // ただし、これは既にTone.jsが読み込まれた後では効果がない可能性がある
-      console.log('[AudioEngine] Tone.jsの自動AudioContext作成を無効化します');
+      if (!this.Tone) {
+        this.Tone = await import('tone');
+      }
 
-      // Tone.jsのContextはユーザーインタラクション時に作成するため、
-      // ここでは何もしない
-      this.context = null;
+      // Tone.Contextを作成
+      const contextOptions: Record<string, any> = {
+        latencyHint: this.config.latencyHint || 'interactive'
+      };
+      if (this.config.sampleRate !== undefined) {
+        contextOptions.sampleRate = this.config.sampleRate;
+      }
+
+      this.context = new (this.Tone.Context as any)(contextOptions);
+      this.Tone.setContext(this.context);
+
+      // lookAheadを設定
+      if (this.config.lookAhead !== undefined) {
+        const transport = this.Tone.getTransport();
+        if (transport) {
+          transport.lookAhead = this.config.lookAhead;
+        }
+      }
 
       this.isInitialized = true;
-      console.log('[AudioEngine] 初期化が完了しました（AudioContextはユーザーインタラクション時に作成）');
+      console.log('[AudioEngine] 初期化が完了しました');
 
     } catch (error) {
       console.error('[AudioEngine] 初期化に失敗しました:', error);
       this.isInitialized = false;
       this.context = null;
-      
+
       throw new Error(`オーディオエンジンの初期化に失敗しました: ${error}`);
     }
   }
@@ -115,58 +130,29 @@ export class AudioEngine {
     }
 
     try {
-      console.log('[AudioEngine] start()が呼び出されました');
-      
-      // Tone.jsを動的にインポート（ユーザーインタラクション時のみ）
-      if (!this.Tone) {
-        console.log('[AudioEngine] Tone.jsを動的にインポートします...');
-        this.Tone = await import('tone');
-        console.log('[AudioEngine] Tone.jsのインポートが完了しました');
+      if (!this.context) {
+        throw new Error('AudioContextが利用できません。');
       }
-      
-      const toneContext = this.Tone.getContext();
-      if (!toneContext) {
-        throw new Error('Tone.jsのAudioContextを取得できませんでした。');
-      }
-      console.log('[AudioEngine] 現在のTone.jsコンテキスト状態:', toneContext.state);
 
-      // Tone.jsを使用してAudioContextを開始
-      if (toneContext.state !== 'running') {
-        console.log('[AudioEngine] Tone.jsのAudioContextを開始します（状態:', toneContext.state, '）');
-        await this.Tone.start();
-        console.log('[AudioEngine] Tone.jsのAudioContextが開始されました');
-      } else {
-        console.log('[AudioEngine] AudioContextは既に実行中です');
+      if (this.context.state !== 'running') {
+        await this.context.resume();
       }
-      
-      // コンテキストの参照を更新
-      this.context = this.Tone.getContext();
-      
-      console.log('[AudioEngine] 最終的なAudioContextの状態:', this.context.state);
-      
-      // Tone.jsのTransportも開始
-      const transport = this.Tone.getTransport();
-      console.log('[AudioEngine] Transport状態:', transport.state);
-      if (transport.state === 'stopped') {
-        console.log('[AudioEngine] Tone.js Transportを開始します...');
+
+      // Transportも開始
+      const transport = this.Tone?.getTransport();
+      if (transport && transport.state === 'stopped') {
         transport.start();
-        console.log('[AudioEngine] Tone.js Transportが開始されました');
       }
-
-      console.log('[AudioEngine] AudioContextの開始が完了しました');
 
     } catch (error) {
-      console.error('[AudioEngine] 開始に失敗しました:', error);
-      
-      // ブラウザの自動再生ポリシーエラーの場合は、より具体的なメッセージを提供
       if (error instanceof Error && (
-        error.message.includes('user gesture') || 
+        error.message.includes('user gesture') ||
         error.message.includes('not allowed to start') ||
         error.message.includes('user activation')
       )) {
         throw new Error('音声を再生するには、ボタンをクリックしてください。ブラウザのセキュリティポリシーにより、ユーザーの操作が必要です。');
       }
-      
+
       throw new Error(`オーディオエンジンの開始に失敗しました: ${error}`);
     }
   }
@@ -177,23 +163,13 @@ export class AudioEngine {
    * @returns 一時停止完了のPromise
    */
   async suspend(): Promise<void> {
-    if (!this.context || !this.Tone) {
+    if (!this.context) {
       return;
     }
 
     try {
-      console.log('[AudioEngine] AudioContextを一時停止します...');
-      // Tone.js v14では、Contextに直接suspendメソッドがない場合があるため、
-      // rawContextを使用
-      if (this.context.rawContext && typeof this.context.rawContext.suspend === 'function') {
-        // AudioContext.suspend()は引数が必要な場合があるため、現在時刻を渡す
-        await this.context.rawContext.suspend(this.context.rawContext.currentTime);
-      } else {
-        console.warn('[AudioEngine] suspend機能が利用できません');
-      }
-      console.log('[AudioEngine] AudioContextが一時停止されました');
+      await this.context.suspend();
     } catch (error) {
-      console.error('[AudioEngine] 一時停止に失敗しました:', error);
       throw new Error(`オーディオエンジンの一時停止に失敗しました: ${error}`);
     }
   }
@@ -204,18 +180,15 @@ export class AudioEngine {
    * @returns 再開完了のPromise
    */
   async resume(): Promise<void> {
-    if (!this.context || !this.Tone) {
+    if (!this.context) {
       throw new Error('AudioEngineが初期化されていません。');
     }
 
     try {
       if (this.context.state === 'suspended') {
-        console.log('[AudioEngine] AudioContextを再開します...');
         await this.context.resume();
-        console.log('[AudioEngine] AudioContextが再開されました');
       }
     } catch (error) {
-      console.error('[AudioEngine] 再開に失敗しました:', error);
       throw new Error(`オーディオエンジンの再開に失敗しました: ${error}`);
     }
   }
@@ -257,10 +230,7 @@ export class AudioEngine {
    * @returns Tone.Contextインスタンス、または未初期化の場合はnull
    */
   getContext(): any | null {
-    if (this.Tone) {
-      return this.Tone.getContext();
-    }
-    return null;
+    return this.context;
   }
 
   /**
@@ -269,24 +239,7 @@ export class AudioEngine {
    * @returns 使用可能な場合はtrue
    */
   isReady(): boolean {
-    if (!this.Tone) {
-      return false;
-    }
-    
-    const context = this.Tone.getContext();
-    const ready = this.isInitialized && 
-           context !== null && 
-           context.state === 'running';
-           
-    console.log('[AudioEngine] isReady チェック:', {
-      isInitialized: this.isInitialized,
-      hasTone: !!this.Tone,
-      hasContext: !!context,
-      contextState: context?.state || 'null',
-      ready
-    });
-    
-    return ready;
+    return this.isInitialized && this.context !== null && this.context.state === 'running';
   }
 
   /**
@@ -304,15 +257,10 @@ export class AudioEngine {
    * @returns AudioContextの状態文字列
    */
   getState(): AudioContextState | 'uninitialized' {
-    if (!this.Tone) {
+    if (!this.context) {
       return 'uninitialized';
     }
-    
-    const context = this.Tone.getContext();
-    if (!context) {
-      return 'uninitialized';
-    }
-    return context.state;
+    return this.context.state;
   }
 
   /**
@@ -322,26 +270,16 @@ export class AudioEngine {
    * @returns 復旧完了のPromise
    */
   async attemptRecovery(): Promise<void> {
-    if (!this.Tone) {
-      console.warn('[AudioEngine] 復旧試行: Tone.jsが読み込まれていません');
-      return;
-    }
-    
-    const context = this.Tone.getContext();
-    if (!context) {
+    if (!this.context) {
       console.warn('[AudioEngine] 復旧試行: コンテキストが存在しません');
       return;
     }
 
     try {
-      if (context.state === 'suspended') {
-        console.log('[AudioEngine] 中断されたコンテキストの復旧を試行します...');
-        await context.resume();
-        console.log('[AudioEngine] コンテキストの復旧が完了しました');
+      if (this.context.state === 'suspended' || this.context.state === 'interrupted') {
+        await this.context.resume();
       }
     } catch (error) {
-      console.error('[AudioEngine] 復旧に失敗しました:', error);
-      // 復旧に失敗した場合は、再初期化を促す
       throw new Error('オーディオコンテキストの復旧に失敗しました。ページを再読み込みしてください。');
     }
   }

@@ -15,8 +15,8 @@ const createMockSVGElement = (measureIndex: number, noteIndex: number): SVGEleme
   
   // getBoundingClientRectをモック
   element.getBoundingClientRect = vi.fn(() => ({
-    top: 100,
-    bottom: 150,
+    top: 0,
+    bottom: 50,
     left: 50,
     right: 100,
     width: 50,

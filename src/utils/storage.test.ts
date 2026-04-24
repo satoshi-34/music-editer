@@ -16,6 +16,8 @@ import type {
   SavedScoreData,
   ScoreMetadata,
   MeasureData,
+  PartData,
+  ScoreType,
   NoteEvent,
   DurKey
 } from '../types/storage';
@@ -71,11 +73,18 @@ const scoreMetadataArbitrary: fc.Arbitrary<ScoreMetadata> = fc.record({
   arranger: fc.string({ maxLength: 50 })
 });
 
+const partDataArbitrary: fc.Arbitrary<PartData> = fc.record({
+  partId: fc.constantFrom('melody', 'right-hand', 'left-hand'),
+  clef: fc.constantFrom('treble', 'bass') as fc.Arbitrary<'treble' | 'bass'>,
+  measures: fc.array(measureDataArbitrary, { minLength: 1, maxLength: 8 })
+});
+
 const savedScoreDataArbitrary: fc.Arbitrary<SavedScoreData> = fc.record({
-  version: fc.constant('1.0.0'),
+  version: fc.constant('2.0.0'),
   timestamp: fc.integer({ min: 1000000000000, max: 9999999999999 }),
   metadata: scoreMetadataArbitrary,
-  measures: fc.array(measureDataArbitrary, { minLength: 1, maxLength: 24 }),
+  scoreType: fc.constantFrom('single', 'piano') as fc.Arbitrary<ScoreType>,
+  parts: fc.array(partDataArbitrary, { minLength: 1, maxLength: 2 }),
   systems: fc.integer({ min: 1, max: 12 }),
   measuresPerSystem: fc.integer({ min: 1, max: 8 })
 });
@@ -122,22 +131,31 @@ describe('Storage Foundation Tests', () => {
           expect(parsed.metadata.composer).toBe(scoreData.metadata.composer);
           expect(parsed.metadata.arranger).toBe(scoreData.metadata.arranger);
           
-          // Measures should be preserved
-          expect(parsed.measures).toHaveLength(scoreData.measures.length);
-          
-          for (let i = 0; i < scoreData.measures.length; i++) {
-            const originalMeasure = scoreData.measures[i];
-            const parsedMeasure = parsed.measures[i];
-            
-            expect(parsedMeasure.events).toHaveLength(originalMeasure.events.length);
-            
-            for (let j = 0; j < originalMeasure.events.length; j++) {
-              const originalEvent = originalMeasure.events[j];
-              const parsedEvent = parsedMeasure.events[j];
-              
-              expect(parsedEvent.dur).toBe(originalEvent.dur);
-              expect(parsedEvent.isRest).toBe(originalEvent.isRest);
-              expect(parsedEvent.key).toBe(originalEvent.key);
+          // Parts should be preserved
+          expect(parsed.parts).toHaveLength(scoreData.parts.length);
+
+          for (let i = 0; i < scoreData.parts.length; i++) {
+            const originalPart = scoreData.parts[i];
+            const parsedPart = parsed.parts[i];
+
+            expect(parsedPart.partId).toBe(originalPart.partId);
+            expect(parsedPart.clef).toBe(originalPart.clef);
+            expect(parsedPart.measures).toHaveLength(originalPart.measures.length);
+
+            for (let k = 0; k < originalPart.measures.length; k++) {
+              const originalMeasure = originalPart.measures[k];
+              const parsedMeasure = parsedPart.measures[k];
+
+              expect(parsedMeasure.events).toHaveLength(originalMeasure.events.length);
+
+              for (let j = 0; j < originalMeasure.events.length; j++) {
+                const originalEvent = originalMeasure.events[j];
+                const parsedEvent = parsedMeasure.events[j];
+
+                expect(parsedEvent.dur).toBe(originalEvent.dur);
+                expect(parsedEvent.isRest).toBe(originalEvent.isRest);
+                expect(parsedEvent.key).toBe(originalEvent.key);
+              }
             }
           }
         }),
@@ -553,7 +571,7 @@ describe('Storage Foundation Tests', () => {
                 expect(loadResult.data.timestamp).toBeDefined();
                 expect(typeof loadResult.data.timestamp).toBe('number');
                 expect(loadResult.data.metadata).toBeDefined();
-                expect(Array.isArray(loadResult.data.measures)).toBe(true);
+                expect(Array.isArray(loadResult.data.parts)).toBe(true);
                 expect(typeof loadResult.data.systems).toBe('number');
                 expect(typeof loadResult.data.measuresPerSystem).toBe('number');
               }
@@ -642,19 +660,25 @@ describe('Storage Foundation Tests', () => {
             expect(typeof loadResult.data.metadata.composer).toBe('string');
             expect(typeof loadResult.data.metadata.arranger).toBe('string');
             
-            // Verify measures is array
-            expect(Array.isArray(loadResult.data.measures)).toBe(true);
-            
-            // Verify each measure has valid structure
-            for (const measure of loadResult.data.measures) {
-              expect(Array.isArray(measure.events)).toBe(true);
-              
-              // Verify each event has valid structure
-              for (const event of measure.events) {
-                expect(['1', '2', '4', '8', '16', '32', '64']).toContain(event.dur);
-                expect(typeof event.isRest).toBe('boolean');
-                expect(typeof event.key).toBe('string');
-                expect(event.key.length).toBeGreaterThan(0);
+            // Verify parts is array
+            expect(Array.isArray(loadResult.data.parts)).toBe(true);
+            expect(loadResult.data.parts.length).toBeGreaterThan(0);
+
+            // Verify each part has valid structure
+            for (const part of loadResult.data.parts) {
+              expect(typeof part.partId).toBe('string');
+              expect(['treble', 'bass']).toContain(part.clef);
+              expect(Array.isArray(part.measures)).toBe(true);
+
+              for (const measure of part.measures) {
+                expect(Array.isArray(measure.events)).toBe(true);
+
+                for (const event of measure.events) {
+                  expect(['1', '2', '4', '8', '16', '32', '64']).toContain(event.dur);
+                  expect(typeof event.isRest).toBe('boolean');
+                  expect(typeof event.key).toBe('string');
+                  expect(event.key.length).toBeGreaterThan(0);
+                }
               }
             }
             
@@ -685,7 +709,7 @@ describe('Storage Foundation Tests', () => {
           composer: 'Test Composer',
           arranger: 'Test Arranger'
         },
-        [{ events: [{ dur: '4', isRest: false, key: 'c/4' }] }],
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '4', isRest: false, key: 'c/4' }] }] }],
         6,
         4
       );
@@ -701,12 +725,13 @@ describe('Storage Foundation Tests', () => {
       const loadResult = loadScoreData();
       expect(loadResult.success).toBe(true);
       expect(loadResult.data).not.toBeNull();
-      
+
       if (loadResult.data) {
         expect(loadResult.data.metadata.title).toBe('Test Title');
-        expect(loadResult.data.measures).toHaveLength(1);
-        expect(loadResult.data.measures[0].events).toHaveLength(1);
-        expect(loadResult.data.measures[0].events[0].dur).toBe('4');
+        expect(loadResult.data.parts).toHaveLength(1);
+        expect(loadResult.data.parts[0].measures).toHaveLength(1);
+        expect(loadResult.data.parts[0].measures[0].events).toHaveLength(1);
+        expect(loadResult.data.parts[0].measures[0].events[0].dur).toBe('4');
       }
     });
 
@@ -719,7 +744,7 @@ describe('Storage Foundation Tests', () => {
           composer: '',
           arranger: ''
         },
-        [],
+        [{ partId: 'melody', clef: 'treble', measures: [] }],
         1,
         1
       );

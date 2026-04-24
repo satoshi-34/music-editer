@@ -277,6 +277,17 @@ export class SimpleAudioEngine {
   }
 
   /**
+   * 複数パート（右手・左手など）を同時再生する
+   */
+  async playParts(parts: Array<{ measures: Array<{ events: Array<{ dur: string; isRest: boolean; key: string }> }> }>, bpm: number = 120): Promise<void> {
+    if (!this.context) {
+      throw new Error('AudioContextが初期化されていません');
+    }
+    // 全パートを並列でスケジュールする
+    await Promise.all(parts.map(part => this.playScore(part.measures, bpm)));
+  }
+
+  /**
    * リソースを解放する
    */
   dispose(): void {

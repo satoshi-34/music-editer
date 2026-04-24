@@ -1,12 +1,14 @@
 // src/utils/storage.ts
 // localStorage utility functions with error handling and data validation
 
-import type { 
-  SavedScoreData, 
-  StorageError, 
+import type {
+  SavedScoreData,
+  StorageError,
   StorageResult,
   ScoreMetadata,
   MeasureData,
+  PartData,
+  ScoreType,
   NoteEvent,
   DurKey
 } from '../types/storage';
@@ -20,7 +22,7 @@ export const STORAGE_KEYS = {
 } as const;
 
 // Current version for data migration
-export const CURRENT_VERSION = '1.0.0';
+export const CURRENT_VERSION = '2.0.0';
 
 /**
  * Generates a simple checksum for data integrity verification
@@ -84,7 +86,21 @@ function validateScoreMetadata(metadata: any): metadata is ScoreMetadata {
 }
 
 /**
- * Validates a complete SavedScoreData object
+ * Validates a PartData object
+ */
+function validatePartData(part: any): part is PartData {
+  return (
+    part &&
+    typeof part === 'object' &&
+    typeof part.partId === 'string' &&
+    (part.clef === 'treble' || part.clef === 'bass') &&
+    Array.isArray(part.measures) &&
+    part.measures.every(validateMeasureData)
+  );
+}
+
+/**
+ * Validates a complete SavedScoreData object (v2 format)
  */
 function validateSavedScoreData(data: any): data is SavedScoreData {
   return (
@@ -93,12 +109,44 @@ function validateSavedScoreData(data: any): data is SavedScoreData {
     typeof data.version === 'string' &&
     typeof data.timestamp === 'number' &&
     validateScoreMetadata(data.metadata) &&
-    Array.isArray(data.measures) &&
-    data.measures.every(validateMeasureData) &&
+    Array.isArray(data.parts) &&
+    data.parts.length > 0 &&
+    data.parts.every(validatePartData) &&
     typeof data.systems === 'number' &&
     data.systems > 0 &&
     typeof data.measuresPerSystem === 'number' &&
     data.measuresPerSystem > 0
+  );
+}
+
+/**
+ * v1 データ（measures フィールドを持つ）を v2 形式に変換する
+ */
+function migrateV1toV2(data: any): SavedScoreData {
+  return {
+    version: CURRENT_VERSION,
+    timestamp: data.timestamp ?? Date.now(),
+    metadata: data.metadata,
+    scoreType: 'single',
+    parts: [{
+      partId: 'melody',
+      clef: 'treble',
+      measures: data.measures ?? []
+    }],
+    systems: data.systems,
+    measuresPerSystem: data.measuresPerSystem
+  };
+}
+
+/**
+ * データが v1 形式かどうかを判定する
+ */
+function isV1Data(data: any): boolean {
+  return (
+    data &&
+    typeof data === 'object' &&
+    Array.isArray(data.measures) &&
+    !Array.isArray(data.parts)
   );
 }
 
@@ -261,6 +309,11 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
       };
     }
 
+    // v1 → v2 マイグレーション
+    if (isV1Data(parsedData)) {
+      parsedData = migrateV1toV2(parsedData);
+    }
+
     // Validate parsed data
     if (!validateSavedScoreData(parsedData)) {
       return {
@@ -381,15 +434,17 @@ export function clearStoredData(): StorageResult<boolean> {
  */
 export function createSavedScoreData(
   metadata: ScoreMetadata,
-  measures: MeasureData[],
+  parts: PartData[],
   systems: number,
-  measuresPerSystem: number
+  measuresPerSystem: number,
+  scoreType: ScoreType = 'single'
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
     timestamp: Date.now(),
     metadata,
-    measures,
+    scoreType,
+    parts,
     systems,
     measuresPerSystem
   };

@@ -397,3 +397,57 @@ AudioContext が正常な状態で同じ楽器を複数回 `loadInstrument()` �
 | 修正3 | Promise 失敗 | `.catch()` でスキップ（Synth 未作成のため解放不要） |
 | 修正4 | BoundingBox null | 比例幅でフォールバック（デグレードグレース） |
 | 修正7 | getContext() null | 明確なエラーメッセージでスロー |
+
+---
+
+## 修正 10: Safari CSS zoom 座標ズレ修正（繰り返し再発バグ）
+
+**ファイル**: `src/components/StaffCanvas.tsx`
+
+> ⚠️ このバグは過去に複数回再発している。詳細は [`docs/safari-coordinate-transform.md`](../../docs/safari-coordinate-transform.md) を参照。
+
+### 問題
+
+`App.css` の `.page-wrapper { zoom: var(--scale, 1) }` と Safari の `getBoundingClientRect()` の非互換により、Safari でのみカーソル位置と音符描画位置の高さがずれる。
+
+- Chrome: `getBoundingClientRect()` は CSS zoom を反映した視覚サイズを返す
+- Safari 旧版: CSS zoom を反映しない論理サイズを返す
+
+旧実装の `getScreenCTM().inverse()` も Safari で CSS zoom を反映しないため解決にならない。
+
+### 修正設計
+
+`StaffCanvas.tsx` の `clientToGroup()` を `getAccumulatedCSSZoom()` + viewBox 比率変換に置き換える。
+`PianoSystemCanvas.tsx` に同一の実装がある（参照実装）。
+
+```typescript
+function getAccumulatedCSSZoom(el: Element): number {
+  let zoom = 1;
+  let node: Element | null = el;
+  while (node && node !== document.documentElement) {
+    const z = parseFloat(window.getComputedStyle(node).zoom || '1');
+    if (Number.isFinite(z) && z !== 1) zoom *= z;
+    node = node.parentElement;
+  }
+  return zoom;
+}
+
+function clientToGroup(svg, _group, clientX, clientY) {
+  const svgRect = svg.getBoundingClientRect();
+  const cssZoom = getAccumulatedCSSZoom(svg);
+  const expectedVisualW = svg.width.baseVal.value * cssZoom;
+  const bcrReflectsZoom = Math.abs(svgRect.width - expectedVisualW) < svg.width.baseVal.value * 0.05;
+  const visualW = bcrReflectsZoom ? svgRect.width : expectedVisualW;
+  const visualH = bcrReflectsZoom ? svgRect.height : svg.height.baseVal.value * cssZoom;
+  // viewBox 座標に変換
+  const x = (clientX - svgRect.left) * (vbW / visualW);
+  const y = (clientY - svgRect.top)  * (vbH / visualH);
+  return { x, y };
+}
+```
+
+### 再発防止ルール
+
+- SVG キャンバスで mouse/click 座標変換をするコンポーネントを新規追加する際は、上記パターンを必ず使う
+- `getScreenCTM().inverse()` および `getBoundingClientRect()` の単純差分は使わない
+- 修正後は Safari で [`docs/REGRESSION.md`](../../docs/REGRESSION.md) セクション D のチェックを実行する

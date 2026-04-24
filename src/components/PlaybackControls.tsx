@@ -275,10 +275,7 @@ export default function PlaybackControls({
       {/* 再生位置表示 */}
       <div className="position-display">
         <span className="position-label">位置:</span>
-        <span className="position-value">
-          {currentPosition.measureIndex + 1}小節目 
-          {currentPosition.noteIndex + 1}音符目
-        </span>
+        <span className="position-value">{currentPosition.measureIndex + 1}小節目 {currentPosition.noteIndex + 1}音符目</span>
       </div>
     </div>
   );

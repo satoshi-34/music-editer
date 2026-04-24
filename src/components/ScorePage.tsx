@@ -1,13 +1,12 @@
 // src/components/ScorePage.tsx
 // ─────────────────────────────────────────────────────────────
-// ・ツールバー（Palette）と五線（StaffCanvas）をまとめる“印刷レイアウト”側
-// ・App からは ScorePage だけをレンダリング（重複描画を防ぐ）
-// ・scale は CSS 変数として見た目にだけ使う（StaffCanvas は親幅で描く）
+// ・ツールバー（Palette）と五線（StaffCanvas / PianoStaff）をまとめる"印刷レイアウト"側
 // ─────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Palette, { type Tool } from './Palette';
 import StaffCanvas from './StaffCanvas';
+import PianoStaff from './PianoStaff';
 import SaveLoadButtons from './SaveLoadButtons';
 import PlaybackControls, { type PlaybackState } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
@@ -16,44 +15,32 @@ import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useTempoStorage } from '../hooks/useTempoStorage';
 import { defaultSimpleAudioEngine } from '../audio/SimpleAudioEngine';
 import { InstrumentType } from '../audio/SoundSource';
-import type { MeasureData } from '../types/storage';
+import type { MeasureData, PartData, ScoreType } from '../types/storage';
 
 type PageSpec = { systems: number };
 
-const BEATS_PER_MEASURE = 4; // 4/4拍子固定
+const BEATS_PER_MEASURE = 4;
 
-// 譜面の総再生時間を計算するヘルパー関数
 function calculateScoreDuration(scoreData: MeasureData[], bpm: number): number {
   let totalDuration = 0;
-
   for (const measure of scoreData) {
     if (!measure || !measure.events || measure.events.length === 0) {
-      // 空の小節は全休符として扱う
       totalDuration += (60 / bpm) * BEATS_PER_MEASURE;
     } else {
-      // 各音符の時間を合計
       for (const event of measure.events) {
         const durMap: Record<string, number> = {
-          '1': 4,     // 全音符
-          '2': 2,     // 2分音符
-          '4': 1,     // 4分音符
-          '8': 0.5,   // 8分音符
-          '16': 0.25, // 16分音符
-          '32': 0.125,// 32分音符
-          '64': 0.0625// 64分音符
+          '1': 4, '2': 2, '4': 1, '8': 0.5, '16': 0.25, '32': 0.125, '64': 0.0625
         };
-        const beats = durMap[event.dur] || 1;
-        const secondsPerBeat = 60 / bpm;
-        totalDuration += beats * secondsPerBeat;
+        totalDuration += (durMap[event.dur] || 1) * (60 / bpm);
       }
     }
   }
-  
   return totalDuration;
 }
 
 export default function ScorePage() {
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
+  const [scoreType, setScoreType] = useState<ScoreType>('single');
 
   const [title, setTitle] = useState('タイトル');
   const [subtitle, setSubtitle] = useState('サブタイトル');
@@ -61,91 +48,63 @@ export default function ScorePage() {
   const [composer, setComposer] = useState('作曲者');
   const [arranger, setArranger] = useState('編曲者');
 
-  // Initialize storage hooks
-  const {
-    saveScore,
-    loadScore,
-    hasStoredData,
-    error,
-    isLoading,
-    isSaving
-  } = useScoreStorage();
-
+  const { saveScore, loadScore, hasStoredData, error, isLoading, isSaving } = useScoreStorage();
   const { tempoSettings, setBPM } = useTempoStorage();
 
-  // State for managing score data from StaffCanvas
-  const [scoreData, setScoreData] = useState<MeasureData[] | undefined>(undefined);
+  // パートごとのデータ
+  const [rightHandData, setRightHandData] = useState<MeasureData[] | undefined>(undefined);
+  const [leftHandData, setLeftHandData] = useState<MeasureData[] | undefined>(undefined);
 
-  // 音声エンジンの初期化
   const [audioEngine] = useState(() => defaultSimpleAudioEngine);
-
-  // 再生状態の管理
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped');
   const [currentPosition, setCurrentPosition] = useState<{ measureIndex: number; beatPosition: number; noteIndex: number }>({
-    measureIndex: 0,
-    beatPosition: 0,
-    noteIndex: 0
+    measureIndex: 0, beatPosition: 0, noteIndex: 0
   });
   const [currentInstrument, setCurrentInstrument] = useState<InstrumentType>(InstrumentType.PIANO);
 
-  // 音声エンジンの初期化
   useEffect(() => {
-    console.log('[ScorePage] SimpleAudioEngineが準備されました（AudioContextはユーザーインタラクション時に作成）');
+    console.log('[ScorePage] SimpleAudioEngineが準備されました');
   }, [audioEngine]);
 
-  // PlaybackControlsのイベントハンドラー
+  // スコアタイプ切り替え時に左手データを初期化
+  const handleScoreTypeChange = useCallback((newType: ScoreType) => {
+    setScoreType(newType);
+    if (newType === 'piano' && !leftHandData) {
+      setLeftHandData(undefined); // PianoStaff側で空小節として扱われる
+    }
+  }, [leftHandData]);
+
   const handlePlay = useCallback(async () => {
     try {
-      console.log('[ScorePage] 再生開始処理');
-      
-      // AudioContextをユーザーインタラクション時に初期化
-      console.log('[ScorePage] AudioContextを初期化中...');
       await audioEngine.initialize();
-      console.log('[ScorePage] AudioContext初期化完了');
 
-      // 実際の譜面データがある場合はそれを再生、なければテスト音符を再生
-      if (scoreData && scoreData.length > 0) {
-        console.log('[ScorePage] 譜面データを再生中...', scoreData.length, '小節');
-        await audioEngine.playScore(scoreData, tempoSettings.bpm);
-        console.log('[ScorePage] 譜面再生完了');
-        
-        // 再生時間を計算して状態を管理
-        const totalDuration = calculateScoreDuration(scoreData, tempoSettings.bpm);
-        setPlaybackState('playing');
-        
-        // 再生完了後に停止状態に戻す
-        setTimeout(() => {
-          setPlaybackState('stopped');
-          console.log('[ScorePage] 再生完了');
-        }, totalDuration * 1000);
-        
+      const parts: MeasureData[][] = [];
+      if (scoreType === 'piano') {
+        if (rightHandData && rightHandData.length > 0) parts.push(rightHandData);
+        if (leftHandData && leftHandData.length > 0) parts.push(leftHandData);
       } else {
-        // 譜面データがない場合はテスト音符を再生
-        console.log('[ScorePage] テスト音符を再生中...');
+        if (rightHandData && rightHandData.length > 0) parts.push(rightHandData);
+      }
+
+      if (parts.length > 0) {
+        const partObjs = parts.map(measures => ({ measures }));
+        await audioEngine.playParts(partObjs, tempoSettings.bpm);
+
+        const totalDuration = calculateScoreDuration(parts[0], tempoSettings.bpm);
+        setPlaybackState('playing');
+        setTimeout(() => setPlaybackState('stopped'), totalDuration * 1000);
+      } else {
         const frequency = audioEngine.noteToFrequency('C4');
         const duration = audioEngine.durationToSeconds('4', tempoSettings.bpm);
-        
         await audioEngine.playNote(frequency, duration);
-        console.log('[ScorePage] テスト音符再生完了');
-        
         setPlaybackState('playing');
-        
-        // 簡単な再生完了シミュレーション
-        setTimeout(() => {
-          setPlaybackState('stopped');
-          console.log('[ScorePage] 再生完了');
-        }, duration * 1000);
+        setTimeout(() => setPlaybackState('stopped'), duration * 1000);
       }
-      
     } catch (error) {
       console.error('[ScorePage] 再生開始に失敗:', error);
-      
-      // ユーザーに分かりやすいエラーメッセージを表示
       if (error instanceof Error) {
-        if (error.message.includes('user gesture') || 
-            error.message.includes('not allowed to start') ||
-            error.message.includes('user activation') ||
-            error.message.includes('ユーザーの操作が必要')) {
+        if (error.message.includes('user gesture') || error.message.includes('not allowed to start') ||
+            error.message.includes('user activation') || error.message.includes('ユーザーの操作が必要')) {
           alert('音声を再生するには、再生ボタンをクリックしてください。\nブラウザのセキュリティポリシーにより、ユーザーの操作が必要です。');
         } else {
           alert(`再生エラー: ${error.message}`);
@@ -154,133 +113,93 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [audioEngine, tempoSettings.bpm, scoreData]);
+  }, [audioEngine, tempoSettings.bpm, rightHandData, leftHandData, scoreType]);
 
   const handlePause = useCallback(() => {
     setPlaybackState('paused');
-    console.log('[ScorePage] 再生を一時停止しました');
   }, []);
 
   const handleStop = useCallback(() => {
     setPlaybackState('stopped');
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
-    console.log('[ScorePage] 再生を停止しました');
   }, []);
 
   const handleSeek = useCallback((position: { measureIndex: number; beatPosition: number; noteIndex: number }) => {
     setCurrentPosition(position);
-    console.log('[ScorePage] 再生位置を変更しました:', position);
   }, []);
 
   const handleTempoChange = useCallback((bpm: number) => {
     setBPM(bpm);
-    console.log('[ScorePage] テンポを変更しました:', bpm);
   }, [setBPM]);
 
   const handleInstrumentChange = useCallback(async (instrumentType: InstrumentType) => {
     setCurrentInstrument(instrumentType);
-    console.log('[ScorePage] 楽器を変更しました:', instrumentType);
   }, []);
 
   const handleInstrumentPreview = useCallback(async () => {
     try {
-      console.log('[ScorePage] 音色プレビューを開始');
-      
-      // AudioContextをユーザーインタラクション時に初期化
-      console.log('[ScorePage] AudioContextを初期化中...');
       await audioEngine.initialize();
-      console.log('[ScorePage] AudioContext初期化完了');
-      
-      // 譜面データから最初の音符を取得してプレビュー、なければC4を使用
-      let previewNote = 'C4';
-      if (scoreData && scoreData.length > 0) {
-        for (const measure of scoreData) {
-          if (measure && measure.events && measure.events.length > 0) {
-            const firstNote = measure.events.find(event => !event.isRest);
-            if (firstNote) {
-              previewNote = firstNote.key;
-              break;
-            }
-          }
-        }
-      }
-      
-      const frequency = audioEngine.noteToFrequency(previewNote);
-      const duration = 0.5; // 0.5秒
-      
-      console.log('[ScorePage] プレビュー音符を再生中:', previewNote);
-      await audioEngine.playNote(frequency, duration);
-      console.log('[ScorePage] 音色プレビュー完了');
-      
+      const frequency = audioEngine.noteToFrequency('C4');
+      await audioEngine.playNote(frequency, 0.5);
     } catch (error) {
       console.error('[ScorePage] 音色プレビューに失敗:', error);
-      
-      // ユーザーに分かりやすいエラーメッセージを表示
-      if (error instanceof Error) {
-        if (error.message.includes('user gesture') || 
-            error.message.includes('not allowed to start') ||
-            error.message.includes('user activation') ||
-            error.message.includes('ユーザーの操作が必要')) {
-          alert('音声を再生するには、スピーカーボタンをクリックしてください。\nブラウザのセキュリティポリシーにより、ユーザーの操作が必要です。');
-        } else {
-          alert(`音色プレビューエラー: ${error.message}`);
-        }
-      } else {
-        alert('音色プレビューに失敗しました。ページを再読み込みしてお試しください。');
-      }
     }
-  }, [audioEngine, scoreData]);
+  }, [audioEngine]);
 
-  // 再生中の譜面編集制限
   const isEditingDisabled = playbackState === 'playing';
-  // Memoize the callback to prevent infinite loops
-  const handleScoreDataChange = useCallback((data: MeasureData[]) => {
-    // 再生中は譜面編集を制限
-    if (isEditingDisabled) {
-      console.warn('[ScorePage] 再生中は譜面編集できません');
-      return;
-    }
 
-    setScoreData(prevData => {
-      // データが同じ場合は更新しない（深い比較）
-      if (prevData && JSON.stringify(prevData) === JSON.stringify(data)) {
-        return prevData;
-      }
+  const handleRightHandChange = useCallback((data: MeasureData[]) => {
+    if (isEditingDisabled) return;
+    setRightHandData(prev => {
+      if (prev && JSON.stringify(prev) === JSON.stringify(data)) return prev;
       return data;
     });
   }, [isEditingDisabled]);
 
-  // Handle save operation
+  const handleLeftHandChange = useCallback((data: MeasureData[]) => {
+    if (isEditingDisabled) return;
+    setLeftHandData(prev => {
+      if (prev && JSON.stringify(prev) === JSON.stringify(data)) return prev;
+      return data;
+    });
+  }, [isEditingDisabled]);
+
+  // 単旋律モード用（後方互換）
+  const handleScoreDataChange = useCallback((data: MeasureData[]) => {
+    handleRightHandChange(data);
+  }, [handleRightHandChange]);
+
   const handleSave = async () => {
-    const metadata = {
-      title,
-      subtitle,
-      lyricist,
-      composer,
-      arranger
-    };
+    const metadata = { title, subtitle, lyricist, composer, arranger };
 
-    // Use actual score data from StaffCanvas if available, otherwise use empty measures
-    const measures = scoreData && scoreData.length > 0 ? scoreData : [{ events: [] }];
-    const systems = totalSystems;
-    const measuresPerSystem = 4;
+    const parts: PartData[] = scoreType === 'piano'
+      ? [
+          { partId: 'right-hand', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
+          { partId: 'left-hand',  clef: 'bass',   measures: leftHandData  ?? [{ events: [] }] },
+        ]
+      : [
+          { partId: 'melody', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
+        ];
 
-    await saveScore(metadata, measures, systems, measuresPerSystem);
+    await saveScore(metadata, parts, totalSystems, 4, scoreType);
   };
 
-  // Handle load operation
   const handleLoad = async () => {
     const loadedData = await loadScore();
     if (loadedData) {
-      // Restore metadata to UI state
       setTitle(loadedData.metadata.title);
       setSubtitle(loadedData.metadata.subtitle);
       setLyricist(loadedData.metadata.lyricist);
       setComposer(loadedData.metadata.composer);
       setArranger(loadedData.metadata.arranger);
-      
-      // Restore measure data to score state
-      setScoreData(loadedData.measures);
+
+      setScoreType(loadedData.scoreType ?? 'single');
+
+      const rightPart = loadedData.parts.find(p => p.clef === 'treble') ?? loadedData.parts[0];
+      const leftPart  = loadedData.parts.find(p => p.clef === 'bass');
+
+      setRightHandData(rightPart?.measures ?? []);
+      setLeftHandData(leftPart?.measures);
     }
   };
 
@@ -316,20 +235,50 @@ export default function ScorePage() {
     return () => window.removeEventListener('resize', update);
   }, [pages, scale]);
 
-  // コンポーネントのクリーンアップ
   useEffect(() => {
-    return () => {
-      // コンポーネントがアンマウントされる際にリソースを解放
-      audioEngine.dispose();
-    };
+    return () => { audioEngine.dispose(); };
   }, [audioEngine]);
 
   return (
     <div className="app-root">
-      {/* ツールバー */}
       <header className="toolbar">
         <div className="controls">
           <Palette value={tool} onChange={setTool} />
+
+          {/* スコアタイプ切り替え */}
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '0 8px' }}>
+            <button
+              className={scoreType === 'single' ? 'ghost' : 'ghost'}
+              onClick={() => handleScoreTypeChange('single')}
+              style={{
+                border: scoreType === 'single' ? '2px solid #3b82f6' : '1px solid #ccc',
+                borderRadius: 6,
+                padding: '4px 10px',
+                fontSize: 12,
+                cursor: 'pointer',
+                background: scoreType === 'single' ? '#eff6ff' : '#fff',
+              }}
+              title="単旋律譜"
+            >
+              単旋律
+            </button>
+            <button
+              className="ghost"
+              onClick={() => handleScoreTypeChange('piano')}
+              style={{
+                border: scoreType === 'piano' ? '2px solid #3b82f6' : '1px solid #ccc',
+                borderRadius: 6,
+                padding: '4px 10px',
+                fontSize: 12,
+                cursor: 'pointer',
+                background: scoreType === 'piano' ? '#eff6ff' : '#fff',
+              }}
+              title="ピアノ大譜表（右手＋左手）"
+            >
+              ピアノ
+            </button>
+          </div>
+
           <PlaybackControls
             playbackState={playbackState}
             currentPosition={currentPosition}
@@ -356,7 +305,6 @@ export default function ScorePage() {
         </div>
       </header>
 
-      {/* 譜面プレビュー */}
       <div className="paper-rail">
         <div
           className="spread"
@@ -366,7 +314,6 @@ export default function ScorePage() {
           {visiblePages.map((p, i) => (
             <div className="page-wrapper" key={i}>
               <section className="print-page">
-                {/* タイトル等（1ページ目だけ大きめ） */}
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (
                     <>
@@ -385,9 +332,9 @@ export default function ScorePage() {
                         {subtitle}
                       </p>
                       <div style={{ position: 'absolute', top: 0, right: 0, textAlign: 'right', fontSize: 14, color: '#555' }}>
-                        <div contentEditable suppressContentEditableWarning onBlur={(e)=>setLyricist(e.currentTarget.innerText)}>{lyricist}</div>
-                        <div contentEditable suppressContentEditableWarning onBlur={(e)=>setComposer(e.currentTarget.innerText)}>{composer}</div>
-                        <div contentEditable suppressContentEditableWarning onBlur={(e)=>setArranger(e.currentTarget.innerText)}>{arranger}</div>
+                        <div contentEditable suppressContentEditableWarning onBlur={(e) => setLyricist(e.currentTarget.innerText)}>{lyricist}</div>
+                        <div contentEditable suppressContentEditableWarning onBlur={(e) => setComposer(e.currentTarget.innerText)}>{composer}</div>
+                        <div contentEditable suppressContentEditableWarning onBlur={(e) => setArranger(e.currentTarget.innerText)}>{arranger}</div>
                       </div>
                     </>
                   ) : (
@@ -395,21 +342,36 @@ export default function ScorePage() {
                   )}
                 </header>
 
-                {/* 五線エリア */}
                 <div className="score-area">
-                  <StaffCanvas 
-                    systems={p.systems} 
-                    gap={110}
-                    measuresPerSystem={4}
-                    tool={tool} 
-                    scale={scale}
-                    initialScoreData={scoreData}
-                    onScoreDataChange={handleScoreDataChange}
-                    startMeasureIndex={i * systemsPerPage * 4}
-                    disabled={isEditingDisabled}
-                  />
-                  
-                  {/* 再生位置ハイライト */}
+                  {scoreType === 'piano' ? (
+                    <PianoStaff
+                      systems={p.systems}
+                      gap={110}
+                      measuresPerSystem={4}
+                      tool={tool}
+                      scale={scale}
+                      rightHandData={rightHandData}
+                      leftHandData={leftHandData}
+                      onRightHandChange={handleRightHandChange}
+                      onLeftHandChange={handleLeftHandChange}
+                      startMeasureIndex={i * systemsPerPage * 4}
+                      disabled={isEditingDisabled}
+                    />
+                  ) : (
+                    <StaffCanvas
+                      systems={p.systems}
+                      gap={110}
+                      measuresPerSystem={4}
+                      tool={tool}
+                      scale={scale}
+                      clef="treble"
+                      initialScoreData={rightHandData}
+                      onScoreDataChange={handleScoreDataChange}
+                      startMeasureIndex={i * systemsPerPage * 4}
+                      disabled={isEditingDisabled}
+                    />
+                  )}
+
                   <PlaybackHighlight
                     currentPosition={currentPosition}
                     isPlaying={playbackState === 'playing'}

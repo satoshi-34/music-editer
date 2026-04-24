@@ -10,7 +10,7 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 
 ### 楽譜編集
 - React + TypeScript + Vite による高速な開発体験
-- ト音記号・4/4 拍子の五線譜を表示（複数段レイアウト）
+- **単旋律（ト音記号）** と **ピアノ大譜表（右手＋左手）** の切り替えに対応
 - クリックで音符／休符を配置（加線域も含め 0.5 行刻みでスナップ）
 - 小節幅の自動割り付け（全・二分はやや広め。細かい音符は過密回避）
 - 見た目の横位置に最も近い場所へ自然に挿入（getAbsoluteX + BoundingBox）
@@ -77,10 +77,10 @@ http://localhost:5173
 
 ## 実装のポイント（要点）
 
-### 1. クリック座標と描画座標の基準を統一
-- クリックはクライアント座標、VexFlow は `<svg>` 内の `<g>` ユーザー座標です。
-- `getScreenCTM().inverse()` を使い、**client → `<g>` ユーザー座標**へ正確に変換。
-- クリック用の透明 `<rect>` も同じ `<g>` に追加し、座標系を完全一致させています。
+### 1. クリック座標と描画座標の基準を統一（Safari 対応済み）
+- クリックはクライアント座標、VexFlow は SVG viewBox 座標です。
+- `getBoundingClientRect()` + `getAccumulatedCSSZoom()` で **client → SVG viewBox 座標**へ変換。
+- CSS `zoom` プロパティに対し、Safari（論理サイズを返す）と Chrome（視覚サイズを返す）を動的に判別して補正しています。
 
 ### 2. Y 方向スナップ（音高決定）
 - `stave.getSpacingBetweenLines()` を基準に **0.5 行刻み**でスナップ。
@@ -118,7 +118,9 @@ const LINE_BIAS = 0.82; // 例: 0.7〜0.9
 ```
 src/
 ├─ components/
-│  ├─ StaffCanvas.tsx        # クリック精度 / 小節幅ロジック
+│  ├─ StaffCanvas.tsx        # 単旋律譜: クリック精度 / 小節幅ロジック
+│  ├─ PianoStaff.tsx         # ピアノ大譜表: システム管理ラッパー
+│  ├─ PianoSystemCanvas.tsx  # ピアノ大譜表: 右手+左手を1SVGに描画
 │  ├─ Palette.tsx            # 音価/休符の選択 UI
 │  ├─ ScorePage.tsx          # ページレイアウト・スケール
 │  ├─ PlaybackControls.tsx   # 再生制御UI
@@ -156,7 +158,6 @@ src/
 ## 🎯 今後の拡張予定
 
 - 和音（複数音符の同時再生）
-- 複数楽器対応
 - MIDI出力
 - 楽譜のエクスポート（PDF/MusicXML）
 - より多くの音楽記号（スラー、タイ、強弱記号など）

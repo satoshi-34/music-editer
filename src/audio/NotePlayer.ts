@@ -77,15 +77,6 @@ export class NotePlayer {
   }
 
   /**
-   * リニアボリューム（0-1）をデシベル値に変換する
-   * @private
-   */
-  private _linearToDb(linear: number): number {
-    if (linear <= 0) return -Infinity;
-    return 20 * Math.log10(linear);
-  }
-
-  /**
    * 音価から再生時間（秒）を計算する
    * @private
    */
@@ -111,12 +102,15 @@ export class NotePlayer {
    * @private
    */
   private _convertKeyToToneFormat(key: string): string {
-    // VexflowのキーはすでにTone.js互換形式（例: "C4", "F#3"）
-    // スラッシュ記法の場合は変換
+    // Vexflow形式（c/4, f#/3など）をTone.js形式（C4, F#3など）に変換
     if (key.includes('/')) {
-      return key.replace('/', '');
+      // "c/4" → "C4", "f#/3" → "F#3"
+      const parts = key.split('/');
+      const noteName = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+      return noteName + parts[1];
     }
-    return key;
+    // すでにTone.js形式（C4など）の場合は先頭を大文字に統一
+    return key.charAt(0).toUpperCase() + key.slice(1);
   }
 
   /**

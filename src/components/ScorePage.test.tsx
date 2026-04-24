@@ -10,6 +10,7 @@ import { STORAGE_KEYS } from '../utils/storage';
 import type {
   ScoreMetadata,
   MeasureData,
+  PartData,
   NoteEvent,
   DurKey,
   SavedScoreData
@@ -72,10 +73,13 @@ const scoreMetadataArbitrary: fc.Arbitrary<ScoreMetadata> = fc.record({
 });
 
 const savedScoreDataArbitrary: fc.Arbitrary<SavedScoreData> = fc.record({
-  version: fc.constant('1.0.0'),
+  version: fc.constant('2.0.0'),
   timestamp: fc.integer({ min: 1000000000000, max: 9999999999999 }),
   metadata: scoreMetadataArbitrary,
-  measures: fc.array(measureDataArbitrary, { minLength: 1, maxLength: 24 }),
+  scoreType: fc.constant('single' as const),
+  parts: fc.array(measureDataArbitrary, { minLength: 1, maxLength: 24 }).map(
+    (measures): PartData[] => [{ partId: 'melody', clef: 'treble', measures }]
+  ),
   systems: fc.integer({ min: 1, max: 12 }),
   measuresPerSystem: fc.integer({ min: 1, max: 8 })
 });
@@ -136,20 +140,21 @@ describe('ScorePage Integration Tests', () => {
               expect(data.systems).toBe(savedData.systems);
               expect(data.measuresPerSystem).toBe(savedData.measuresPerSystem);
               
-              // Verify all measure data is correctly deserialized and restored
-              expect(data.measures).toHaveLength(savedData.measures.length);
-              
-              for (let i = 0; i < savedData.measures.length; i++) {
-                const originalMeasure = savedData.measures[i];
-                const restoredMeasure = data.measures[i];
-                
+              // Verify all measure data is correctly deserialized and restored (v2: parts[0].measures)
+              const savedMeasures = savedData.parts[0].measures;
+              expect(data.parts[0].measures).toHaveLength(savedMeasures.length);
+
+              for (let i = 0; i < savedMeasures.length; i++) {
+                const originalMeasure = savedMeasures[i];
+                const restoredMeasure = data.parts[0].measures[i];
+
                 expect(restoredMeasure.events).toHaveLength(originalMeasure.events.length);
-                
+
                 // Verify each note event is correctly restored
                 for (let j = 0; j < originalMeasure.events.length; j++) {
                   const originalEvent = originalMeasure.events[j];
                   const restoredEvent = restoredMeasure.events[j];
-                  
+
                   expect(restoredEvent.dur).toBe(originalEvent.dur);
                   expect(restoredEvent.isRest).toBe(originalEvent.isRest);
                   expect(restoredEvent.key).toBe(originalEvent.key);
@@ -177,7 +182,7 @@ describe('ScorePage Integration Tests', () => {
       
       // Add some data
       const testData: SavedScoreData = {
-        version: '1.0.0',
+        version: '2.0.0',
         timestamp: Date.now(),
         metadata: {
           title: 'Test',
@@ -186,7 +191,8 @@ describe('ScorePage Integration Tests', () => {
           composer: '',
           arranger: ''
         },
-        measures: [{ events: [] }],
+        scoreType: 'single',
+        parts: [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
         systems: 1,
         measuresPerSystem: 1
       };
