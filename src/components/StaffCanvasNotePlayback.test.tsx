@@ -248,12 +248,12 @@ describe('StaffCanvas 音符クリック再生機能', () => {
       });
     });
 
-    it('should manage NotePlayer instance properly (要件1.5)', () => {
+    it('should manage NotePlayer instance properly (要件1.5)', async () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
         { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
       ];
-      
+
       const { unmount } = render(
         <StaffCanvas
           systems={1}
@@ -264,10 +264,12 @@ describe('StaffCanvas 音符クリック再生機能', () => {
           initialScoreData={testMeasures}
         />
       );
-      
-      // NotePlayerインスタンスが作成されることを確認
-      expect(NotePlayer).toHaveBeenCalledTimes(1);
-      
+
+      // NotePlayerはuseEffect内で非同期に初期化されるため waitFor で待つ
+      await waitFor(() => {
+        expect(NotePlayer).toHaveBeenCalledTimes(1);
+      });
+
       // アンマウント時にリソースが解放されることを確認
       unmount();
       const mockInstance = (NotePlayer as any).mock.results[0].value;
