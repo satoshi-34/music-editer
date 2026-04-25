@@ -51,6 +51,15 @@ export default function ScorePage() {
   const { saveScore, loadScore, hasStoredData, error, isLoading, isSaving } = useScoreStorage();
   const { tempoSettings, setBPM } = useTempoStorage();
 
+  const [yOffset, setYOffset] = useState<number>(() => {
+    const v = parseFloat(localStorage.getItem('yOffset') ?? '0');
+    return Number.isFinite(v) ? v : 0;
+  });
+  const handleYOffsetChange = (v: number) => {
+    setYOffset(v);
+    localStorage.setItem('yOffset', String(v));
+  };
+
   // パートごとのデータ
   const [rightHandData, setRightHandData] = useState<MeasureData[] | undefined>(undefined);
   const [leftHandData, setLeftHandData] = useState<MeasureData[] | undefined>(undefined);
@@ -302,6 +311,21 @@ export default function ScorePage() {
             error={error}
           />
           <button className="ghost" onClick={() => window.print()}>印刷</button>
+          <div className="y-offset-control">
+            <label htmlFor="y-offset-input" title="音符配置位置のY補正（Safariでズレる場合に調整）">Y補正</label>
+            <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>−</button>
+            <input
+              id="y-offset-input"
+              type="number"
+              value={yOffset}
+              onChange={e => handleYOffsetChange(Number(e.target.value))}
+              aria-label="Y座標補正値"
+            />
+            <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>＋</button>
+            {yOffset !== 0 && (
+              <button type="button" className="ghost y-offset-reset" onClick={() => handleYOffsetChange(0)}>リセット</button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -356,6 +380,7 @@ export default function ScorePage() {
                       onLeftHandChange={handleLeftHandChange}
                       startMeasureIndex={i * systemsPerPage * 4}
                       disabled={isEditingDisabled}
+                      yOffset={yOffset}
                     />
                   ) : (
                     <StaffCanvas
@@ -369,6 +394,7 @@ export default function ScorePage() {
                       onScoreDataChange={handleScoreDataChange}
                       startMeasureIndex={i * systemsPerPage * 4}
                       disabled={isEditingDisabled}
+                      yOffset={yOffset}
                     />
                   )}
 

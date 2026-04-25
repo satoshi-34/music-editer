@@ -31,6 +31,7 @@ type Props = {
   startMeasureIndex?: number; // このStaffCanvasが担当する開始小節インデックス
   disabled?: boolean; // 編集を無効にするフラグ
   clef?: 'treble' | 'bass'; // 音部記号（デフォルト: treble）
+  yOffset?: number; // Safari座標ズレ補正（client px単位）
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -150,22 +151,21 @@ function getVexflowGroup(svg: SVGSVGElement): SVGGElement | null {
   return groups.length ? (groups[groups.length - 1] as SVGGElement) : null;
 }
 
-// DOM ツリーを上へ辿り、CSS zoom の累積値を返す。
-// Safari 旧版は getBoundingClientRect() が CSS zoom を反映しない（論理サイズを返す）ため補正に使う。
+// CSS zoom の実効値を返す。
+// SVG 要素では Safari で --scale が getComputedStyle に継承されないため、
+// HTML 要素である .page-wrapper から読み取る。
 function getAccumulatedCSSZoom(el: Element): number {
-  let zoom = 1;
-  let node: Element | null = el;
-  while (node && node !== document.documentElement) {
-    const z = parseFloat(window.getComputedStyle(node).zoom || '1');
-    if (Number.isFinite(z) && z !== 1) zoom *= z;
-    node = node.parentElement;
+  const wrapper = el.closest('.page-wrapper');
+  if (wrapper) {
+    const v = parseFloat(window.getComputedStyle(wrapper).getPropertyValue('--scale').trim());
+    if (Number.isFinite(v) && v > 0) return v;
   }
-  return zoom;
+  return 1;
 }
 
 // client座標 → SVG viewBox 座標
 // Safari 旧版では getBoundingClientRect() が CSS zoom を反映しないため、
-// zoom 累積値で補正して正確な座標を返す。
+// サイズと位置の両方を補正して正確な座標を返す。
 function clientToGroup(
   svg: SVGSVGElement,
   _group: SVGGElement,
@@ -183,15 +183,29 @@ function clientToGroup(
 
   const cssZoom = getAccumulatedCSSZoom(svg);
 
-  // Chrome: getBoundingClientRect() は CSS zoom 込みの視覚サイズ → svgRect.width ≒ logW * cssZoom
-  // Safari 旧版: CSS zoom を反映しない論理サイズ → svgRect.width ≒ logW
+  // Chrome: BCR は CSS zoom 込みの視覚サイズ/位置を返す → svgRect.width ≒ logW * cssZoom
+  // Safari 旧版: CSS zoom を反映しない論理サイズ/位置を返す → svgRect.width ≒ logW
   const expectedVisualW = logW * cssZoom;
   const bcrReflectsZoom = Math.abs(svgRect.width - expectedVisualW) < logW * 0.05;
   const visualW = bcrReflectsZoom ? svgRect.width : expectedVisualW;
   const visualH = bcrReflectsZoom ? svgRect.height : logH * cssZoom;
 
-  const x = (clientX - svgRect.left) * (vbW / visualW);
-  const y = (clientY - svgRect.top)  * (vbH / visualH);
+  // Safari は left/top も論理座標だが clientX/Y は視覚座標。
+  // .page-wrapper が zoom: var(--scale) の適用点。その BCR.left は zoom 境界の視覚座標として正確。
+  // SVG の論理オフセットに cssZoom を掛けて視覚 origin を求める。
+  let originLeft = svgRect.left;
+  let originTop  = svgRect.top;
+  if (!bcrReflectsZoom) {
+    const zoomContainer = svg.closest('.page-wrapper');
+    if (zoomContainer) {
+      const cr = zoomContainer.getBoundingClientRect();
+      originLeft = cr.left + (svgRect.left - cr.left) * cssZoom;
+      originTop  = cr.top  + (svgRect.top  - cr.top)  * cssZoom;
+    }
+  }
+
+  const x = (clientX - originLeft) * (vbW / visualW);
+  const y = (clientY - originTop)  * (vbH / visualH);
 
   if (!isFinite(x) || !isFinite(y)) return { x: 0, y: 0 };
   return { x, y };
@@ -285,7 +299,7 @@ function logNoteAddition(measureIndex: number, x: number, y: number, key: string
 export default function StaffCanvas({
   systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
   initialScoreData, onScoreDataChange, startMeasureIndex = 0, disabled = false,
-  clef = 'treble',
+  clef = 'treble', yOffset = 0,
 }: Props) {
   // clef に応じた変換関数を選択
   const lineToKey = clef === 'bass' ? lineToKeyBass : lineToKeyTreble;
@@ -303,8 +317,10 @@ export default function StaffCanvas({
   const [selected, setSelected] = useState<{ measure: number; index: number } | null>(null);
   const selectedRef = useRef(selected);
   const disabledRef = useRef(disabled);
+  const yOffsetRef = useRef(yOffset);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { disabledRef.current = disabled; }, [disabled]);
+  useEffect(() => { yOffsetRef.current = yOffset; }, [yOffset]);
 
   // NotePlayerインスタンスの管理
   const notePlayerRef = useRef<NotePlayer | null>(null);
@@ -769,7 +785,7 @@ export default function StaffCanvas({
         (svgRoot as any).appendChild(insertRect);
 
         insertRect.addEventListener('mousemove', (e) => {
-          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY);
+          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
           
           // マウスが小節の範囲内（X座標とY座標の両方）にある場合のみガイドを表示
           if (lx >= measLeft && lx <= measRight && ly >= rectTop && ly <= rectBottom) {
@@ -785,7 +801,7 @@ export default function StaffCanvas({
             return;
           }
           
-          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY);
+          const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
           
           // doInsertAt関数を使用して音符を挿入
           doInsertAt(lx, ly, measureIndex);
@@ -834,7 +850,7 @@ export default function StaffCanvas({
 
             // セル上でもガイドを出す
             hit.addEventListener('mousemove', (ev) => {
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
               
               // マウスが小節の範囲内にある場合のみガイドを表示
               if (lx >= measLeft && lx <= measRight) {
@@ -844,7 +860,7 @@ export default function StaffCanvas({
               }
             });
             hit.addEventListener('mouseenter', (ev) => {
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
               
               // マウスが小節の範囲内にある場合のみガイドを表示
               if (lx >= measLeft && lx <= measRight) {
@@ -863,7 +879,7 @@ export default function StaffCanvas({
               }
               
               ev.stopPropagation(); // 小節rectには渡さない
-              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY);
+              const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
               const cellW = rawRight - rawLeft;
               const selRadius = Math.min(SELECT_NEAR_PX, Math.max(0, cellW * SELECT_NEAR_FRAC));
               const dx = Math.abs(lx - anchors[j]);

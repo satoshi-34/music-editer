@@ -112,26 +112,19 @@ function snapLine(stave: Stave, y: number): number {
 }
 
 /* ===== SVG座標変換（StaffCanvas.tsx と同一ロジック・Safari対応） ===== */
-/**
- * DOM ツリーを上へ辿り、CSS zoom の累積値を返す。
- * Chrome は getBoundingClientRect() が CSS zoom 込みの視覚サイズを返すため不要だが、
- * Safari 旧版は論理サイズ（zoom 前）を返すため、この補正が必要になる。
- */
+// CSS zoom の実効値を返す。
+// SVG 要素では Safari で --scale が getComputedStyle に継承されないため、
+// HTML 要素である .page-wrapper から読み取る。
 function getAccumulatedCSSZoom(el: Element): number {
-  let zoom = 1;
-  let node: Element | null = el;
-  while (node && node !== document.documentElement) {
-    const z = parseFloat(window.getComputedStyle(node).zoom || '1');
-    if (Number.isFinite(z) && z !== 1) zoom *= z;
-    node = node.parentElement;
+  const wrapper = el.closest('.page-wrapper');
+  if (wrapper) {
+    const v = parseFloat(window.getComputedStyle(wrapper).getPropertyValue('--scale').trim());
+    if (Number.isFinite(v) && v > 0) return v;
   }
-  return zoom;
+  return 1;
 }
 
 function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: number): { x: number; y: number } {
-  // VexFlow の ctx.scale(s, s) は viewBox="0 0 W/s H/s" を設定する（<g> に transform なし）。
-  // Safari 旧版では getBoundingClientRect() が CSS zoom を反映しない（論理サイズを返す）。
-  // そのため、祖先要素の CSS zoom を累積して補正する。
   const svgRect = svg.getBoundingClientRect();
   if (!svgRect.width || !svgRect.height) return { x: 0, y: 0 };
 
@@ -141,20 +134,31 @@ function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: 
   const logW = svg.width.baseVal.value;
   const logH = svg.height.baseVal.value;
 
-  // CSS zoom 累積値を取得
   const cssZoom = getAccumulatedCSSZoom(svg);
 
-  // svgRect.width が論理サイズ（≒ logW）か視覚サイズ（≒ logW * cssZoom）かを判定。
-  // Chrome: getBoundingClientRect() は CSS zoom 込みの視覚サイズ → svgRect.width ≒ logW * cssZoom
-  // Safari 旧版: CSS zoom を反映しない論理サイズ → svgRect.width ≒ logW
-  // 期待される視覚幅 logW * cssZoom と svgRect.width の差が小さければ Chrome 方式と判定。
+  // Chrome: BCR は CSS zoom 込みの視覚サイズ/位置を返す → svgRect.width ≒ logW * cssZoom
+  // Safari 旧版: CSS zoom を反映しない論理サイズ/位置を返す → svgRect.width ≒ logW
   const expectedVisualW = logW * cssZoom;
   const bcrReflectsZoom = Math.abs(svgRect.width - expectedVisualW) < logW * 0.05;
   const visualW = bcrReflectsZoom ? svgRect.width : expectedVisualW;
   const visualH = bcrReflectsZoom ? svgRect.height : logH * cssZoom;
 
-  const x = (cx - svgRect.left) * (vbW / visualW);
-  const y = (cy - svgRect.top)  * (vbH / visualH);
+  // Safari は left/top も論理座標だが clientX/Y は視覚座標。
+  // .page-wrapper が zoom: var(--scale) の適用点。その BCR.left は zoom 境界の視覚座標として正確。
+  // SVG の論理オフセットに cssZoom を掛けて視覚 origin を求める。
+  let originLeft = svgRect.left;
+  let originTop  = svgRect.top;
+  if (!bcrReflectsZoom) {
+    const zoomContainer = svg.closest('.page-wrapper');
+    if (zoomContainer) {
+      const cr = zoomContainer.getBoundingClientRect();
+      originLeft = cr.left + (svgRect.left - cr.left) * cssZoom;
+      originTop  = cr.top  + (svgRect.top  - cr.top)  * cssZoom;
+    }
+  }
+
+  const x = (cx - originLeft) * (vbW / visualW);
+  const y = (cy - originTop)  * (vbH / visualH);
 
   if (!isFinite(x) || !isFinite(y)) return { x: 0, y: 0 };
   return { x, y };
@@ -182,6 +186,7 @@ type Props = {
   onBassChange?:   (data: MeasureData[]) => void;
   startMeasureIndex?: number;
   disabled?: boolean;
+  yOffset?: number;
 };
 
 type Sel = { clef:'treble'|'bass'; measure:number; index:number }|null;
@@ -189,7 +194,7 @@ type Sel = { clef:'treble'|'bass'; measure:number; index:number }|null;
 export default function PianoSystemCanvas({
   measuresPerSystem=4, tool, scale=0.86,
   trebleData, bassData, onTrebleChange, onBassChange,
-  startMeasureIndex=0, disabled=false,
+  startMeasureIndex=0, disabled=false, yOffset=0,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -203,8 +208,10 @@ export default function PianoSystemCanvas({
   const [selected, setSelected] = useState<Sel>(null);
   const selRef = useRef<Sel>(null);
   const disRef = useRef(disabled);
+  const yOffRef = useRef(yOffset);
   useEffect(()=>{selRef.current=selected;},[selected]);
   useEffect(()=>{disRef.current=disabled;},[disabled]);
+  useEffect(()=>{yOffRef.current=yOffset;},[yOffset]);
 
   /* ----- 親データ同期 ----- */
   const syncScore = (
@@ -470,14 +477,14 @@ export default function PianoSystemCanvas({
         ir.setAttribute('fill','transparent');ir.setAttribute('stroke','none');
         ir.setAttribute('pointer-events','all');(ir.style as any).cursor='crosshair';
         ir.addEventListener('mousemove',e=>{
-          const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
+          const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           if(lx>=measLeft&&lx<=measRight&&ly>=staveTop&&ly<=staveBot)showGuide(lx,ly,stave);
           else hideGuide();
         });
         ir.addEventListener('mouseleave',hideGuide);
         ir.addEventListener('click',e=>{
           if(disabled)return;
-          const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
+          const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           doInsert(lx,ly);
         });
         svgRoot.appendChild(ir);
@@ -503,14 +510,14 @@ export default function PianoSystemCanvas({
             hit.setAttribute('fill','transparent');hit.setAttribute('stroke','none');
             hit.setAttribute('pointer-events','all');(hit.style as any).cursor='pointer';
             hit.addEventListener('mousemove',e=>{
-              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
+              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
               if(lx>=measLeft&&lx<=measRight)showGuide(lx,ly,stave);else hideGuide();
             });
             hit.addEventListener('mouseleave',hideGuide);
             hit.addEventListener('click',e=>{
               if(disabled)return;
               e.stopPropagation();
-              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
+              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
               const cellW=rr-rl;
               const selR=Math.min(SELECT_NEAR_PX,Math.max(0,cellW*SELECT_NEAR_FRAC));
               if(Math.abs(lx-anchors[j])<=selR)setSelected({clef,measure:absI,index:j});

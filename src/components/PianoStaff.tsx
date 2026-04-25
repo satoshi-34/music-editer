@@ -18,6 +18,7 @@ type Props = {
   onLeftHandChange?: (data: MeasureData[]) => void;
   startMeasureIndex?: number;
   disabled?: boolean;
+  yOffset?: number;
 };
 
 export default function PianoStaff({
@@ -31,6 +32,7 @@ export default function PianoStaff({
   onLeftHandChange,
   startMeasureIndex = 0,
   disabled = false,
+  yOffset = 0,
 }: Props) {
   return (
     <div>
@@ -46,6 +48,7 @@ export default function PianoStaff({
           onBassChange={onLeftHandChange}
           startMeasureIndex={startMeasureIndex + i * measuresPerSystem}
           disabled={disabled}
+          yOffset={yOffset}
         />
       ))}
     </div>
