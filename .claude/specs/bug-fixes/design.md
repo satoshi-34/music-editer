@@ -402,46 +402,57 @@ AudioContext が正常な状態で同じ楽器を複数回 `loadInstrument()` �
 
 ## 修正 10: Safari CSS zoom 座標ズレ修正（繰り返し再発バグ）
 
-**ファイル**: `src/components/StaffCanvas.tsx`
+**ファイル**: `src/components/StaffCanvas.tsx`, `src/components/PianoSystemCanvas.tsx`
 
 > ⚠️ このバグは過去に複数回再発している。詳細は [`docs/safari-coordinate-transform.md`](../../docs/safari-coordinate-transform.md) を参照。
 
 ### 問題
 
-`App.css` の `.page-wrapper { zoom: var(--scale, 1) }` と Safari の `getBoundingClientRect()` の非互換により、Safari でのみカーソル位置と音符描画位置の高さがずれる。
+`App.css` の `.page-wrapper { zoom: var(--scale, 1) }` と Safari の `getBoundingClientRect()` の非互換により、Safari でのみカーソル位置と音符描画位置の高さがずれる。Mac の内蔵ディスプレイ（scale<1.0）でのみ発生し、外部モニター（scale=1.0）では正常。
 
-- Chrome: `getBoundingClientRect()` は CSS zoom を反映した視覚サイズを返す
-- Safari 旧版: CSS zoom を反映しない論理サイズを返す
-
-旧実装の `getScreenCTM().inverse()` も Safari で CSS zoom を反映しないため解決にならない。
+失敗の連鎖:
+1. `getComputedStyle(svgEl).getPropertyValue('--scale')` が Safari では SVG 要素で空を返す
+2. フォールバックの DOM 走査も `getComputedStyle(el).zoom` が `zoom: var(--scale)` を解決できず 1 を返す
+3. `cssZoom = 1` → `bcrReflectsZoom = true`（false positive）→ 補正コードが実行されない
 
 ### 修正設計
 
-`StaffCanvas.tsx` の `clientToGroup()` を `getAccumulatedCSSZoom()` + viewBox 比率変換に置き換える。
-`PianoSystemCanvas.tsx` に同一の実装がある（参照実装）。
+HTML 要素 `.page-wrapper` から `--scale` を読む（CSS カスタムプロパティは HTML 要素で確実に継承される）。
+位置補正は `.page-wrapper.getBoundingClientRect()` を zoom 境界の視覚 anchor として使う。
 
 ```typescript
 function getAccumulatedCSSZoom(el: Element): number {
-  let zoom = 1;
-  let node: Element | null = el;
-  while (node && node !== document.documentElement) {
-    const z = parseFloat(window.getComputedStyle(node).zoom || '1');
-    if (Number.isFinite(z) && z !== 1) zoom *= z;
-    node = node.parentElement;
+  // SVG 要素では Safari で --scale が継承されないため、HTML 要素 .page-wrapper から読む
+  const wrapper = el.closest('.page-wrapper');
+  if (wrapper) {
+    const v = parseFloat(window.getComputedStyle(wrapper).getPropertyValue('--scale').trim());
+    if (Number.isFinite(v) && v > 0) return v;
   }
-  return zoom;
+  return 1;
 }
 
 function clientToGroup(svg, _group, clientX, clientY) {
+  // clientY には yOffsetRef.current を加算済みで渡す
   const svgRect = svg.getBoundingClientRect();
   const cssZoom = getAccumulatedCSSZoom(svg);
-  const expectedVisualW = svg.width.baseVal.value * cssZoom;
-  const bcrReflectsZoom = Math.abs(svgRect.width - expectedVisualW) < svg.width.baseVal.value * 0.05;
+  const logW = svg.width.baseVal.value;
+  const logH = svg.height.baseVal.value;
+  const expectedVisualW = logW * cssZoom;
+  const bcrReflectsZoom = Math.abs(svgRect.width - expectedVisualW) < logW * 0.05;
   const visualW = bcrReflectsZoom ? svgRect.width : expectedVisualW;
-  const visualH = bcrReflectsZoom ? svgRect.height : svg.height.baseVal.value * cssZoom;
-  // viewBox 座標に変換
-  const x = (clientX - svgRect.left) * (vbW / visualW);
-  const y = (clientY - svgRect.top)  * (vbH / visualH);
+  const visualH = bcrReflectsZoom ? svgRect.height : logH * cssZoom;
+
+  let originLeft = svgRect.left, originTop = svgRect.top;
+  if (!bcrReflectsZoom) {
+    const zoomContainer = svg.closest('.page-wrapper');
+    if (zoomContainer) {
+      const cr = zoomContainer.getBoundingClientRect();
+      originLeft = cr.left + (svgRect.left - cr.left) * cssZoom;
+      originTop  = cr.top  + (svgRect.top  - cr.top)  * cssZoom;
+    }
+  }
+  const x = (clientX - originLeft) * (vbW / visualW);
+  const y = (clientY - originTop)  * (vbH / visualH);
   return { x, y };
 }
 ```
@@ -450,4 +461,33 @@ function clientToGroup(svg, _group, clientX, clientY) {
 
 - SVG キャンバスで mouse/click 座標変換をするコンポーネントを新規追加する際は、上記パターンを必ず使う
 - `getScreenCTM().inverse()` および `getBoundingClientRect()` の単純差分は使わない
+- `getAccumulatedCSSZoom` は SVG 要素ではなく HTML 要素から `--scale` を読む
 - 修正後は Safari で [`docs/REGRESSION.md`](../../docs/REGRESSION.md) セクション D のチェックを実行する
+
+---
+
+## 修正 11: Y 補正コントロールによる手動キャリブレーション
+
+**ファイル**: `src/components/ScorePage.tsx`, `src/components/StaffCanvas.tsx`, `src/components/PianoSystemCanvas.tsx`, `src/components/PianoStaff.tsx`
+
+### 背景
+
+修正 10 の自動補正が Safari の特定バージョンや環境で機能しないケースに備え、ユーザーが Y 座標を手動で微調整できる仕組みを追加した。Mac 内蔵ディスプレイ + Safari の環境では `yOffset = 24` で正確に一致することを確認済み。
+
+### 設計
+
+- `ScorePage` がツールバーの「Y補正」ボタン + ポップアップパネルを管理
+- `yOffset`（client px 単位）を `localStorage` に保存・復元
+- `StaffCanvas` / `PianoSystemCanvas` に `yOffset` prop として渡し、各 `clientToGroup` 呼び出しに加算:
+
+```typescript
+// StaffCanvas / PianoSystemCanvas 内
+const yOffsetRef = useRef(yOffset);
+useEffect(() => { yOffsetRef.current = yOffset; }, [yOffset]);
+
+// イベントハンドラ内
+clientToGroup(svg, svgRoot, e.clientX, e.clientY + yOffsetRef.current)
+```
+
+- **方向**: 低音方向（画面下）がプラス、高音方向（画面上）がマイナス
+- **UI**: ↑/↓ボタン、数値直接入力、キーボード ↑↓ キー対応。0 以外のときボタンに値を表示

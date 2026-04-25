@@ -9,11 +9,13 @@
 
 Safari でノートを配置しようとすると、ガイドライン（ホバー時の横線プレビュー）とクリックで実際に描画される音符の高さがずれる。Chrome では正常。
 
+**追記**: 外部モニター（画面幅に余裕あり → scale=1.0）では正常で、Mac の内蔵ディスプレイ（画面幅が狭い → scale<1.0）でのみズレるケースもある。scale=1.0 では zoom が効かないため症状が出ない。
+
 ---
 
 ## 根本原因
 
-### CSS zoom と getBoundingClientRect の非互換
+### CSS zoom と getBoundingClientRect の非互換（サイズ＋位置の両方）
 
 `App.css` でページ全体を CSS `zoom` プロパティでスケールしている:
 
@@ -26,13 +28,17 @@ Safari でノートを配置しようとすると、ガイドライン（ホバ�
 
 `getBoundingClientRect()` の返す値がブラウザによって異なる:
 
-| ブラウザ | getBoundingClientRect() の返す幅 |
-|---|---|
-| Chrome / Firefox | **視覚サイズ**（zoom 後のピクセル値） |
-| Safari 旧版 | **論理サイズ**（zoom 前のピクセル値） |
+| ブラウザ | width/height | left/top |
+|---|---|---|
+| Chrome / Firefox | 視覚サイズ（zoom 後） | 視覚位置（zoom 後） |
+| Safari 旧版 | 論理サイズ（zoom 前） | 論理位置（zoom 前） |
 
-scale=0.86 のとき Chrome は幅 `W * 0.86`、Safari は幅 `W` を返す。
-この差を補正せずに座標計算すると、Safari だけ Y 座標が `1/0.86 ≈ 1.16` 倍ずれる。
+**重要**: Safari は**サイズだけでなく位置（left/top）も**論理座標を返す。一方 `clientX/Y` は視覚座標。
+この座標系の不一致が原因。
+
+具体例（zoom=0.86、SVG の論理 left = 100px）:
+- Chrome: `svgRect.left = 86`（視覚）、クリック時 `clientX = 86` → 差分 = 0 ✓
+- Safari: `svgRect.left = 100`（論理）、クリック時 `clientX = 86` → 差分 = -14 ✗
 
 ### なぜ getScreenCTM().inverse() では直らないのか
 
@@ -48,31 +54,35 @@ scale=0.86 のとき Chrome は幅 `W * 0.86`、Safari は幅 `W` を返す。
 ### 1. CSS zoom 累積値の取得
 
 ```typescript
-// DOM ツリーを上へ辿り、CSS zoom の累積値を返す。
-// Safari 旧版は getBoundingClientRect() が CSS zoom を反映しない（論理サイズを返す）ため補正に使う。
+// CSS zoom の実効値を返す。
+// SVG 要素では Safari で --scale が getComputedStyle に継承されないため、
+// HTML 要素である .page-wrapper から読み取る。
+// （SVG 要素から読んだり、getComputedStyle(el).zoom で zoom: var(--scale) を解決しようとしても
+//   Safari では失敗して 1 が返り、bcrReflectsZoom が false positive になる。）
 function getAccumulatedCSSZoom(el: Element): number {
-  let zoom = 1;
-  let node: Element | null = el;
-  while (node && node !== document.documentElement) {
-    const z = parseFloat(window.getComputedStyle(node).zoom || '1');
-    if (Number.isFinite(z) && z !== 1) zoom *= z;
-    node = node.parentElement;
+  const wrapper = el.closest('.page-wrapper');
+  if (wrapper) {
+    const v = parseFloat(window.getComputedStyle(wrapper).getPropertyValue('--scale').trim());
+    if (Number.isFinite(v) && v > 0) return v;
   }
-  return zoom;
+  return 1;
 }
 ```
 
 ### 2. Safari 対応の clientToGroup
 
+`clientY` には呼び出し元で `yOffsetRef.current`（ユーザー設定の Y 補正値）が加算済みで渡される。
+
 ```typescript
 // client座標 → SVG viewBox 座標
 // Safari 旧版では getBoundingClientRect() が CSS zoom を反映しないため、
-// zoom 累積値で補正して正確な座標を返す。
+// サイズと位置の両方を補正して正確な座標を返す。
+// clientY には事前に yOffset（Y補正値）を加算して呼ぶこと。
 function clientToGroup(
   svg: SVGSVGElement,
   _group: SVGGElement,
   clientX: number,
-  clientY: number
+  clientY: number  // = e.clientY + yOffsetRef.current
 ): { x: number; y: number } {
   const svgRect = svg.getBoundingClientRect();
   if (!svgRect.width || !svgRect.height) return { x: 0, y: 0 };
@@ -85,15 +95,29 @@ function clientToGroup(
 
   const cssZoom = getAccumulatedCSSZoom(svg);
 
-  // Chrome: getBoundingClientRect() は CSS zoom 込みの視覚サイズ → svgRect.width ≒ logW * cssZoom
-  // Safari 旧版: CSS zoom を反映しない論理サイズ → svgRect.width ≒ logW
+  // Chrome: BCR は CSS zoom 込みの視覚サイズ/位置
+  // Safari 旧版: BCR は論理サイズ/位置（zoom 前）
   const expectedVisualW = logW * cssZoom;
   const bcrReflectsZoom = Math.abs(svgRect.width - expectedVisualW) < logW * 0.05;
   const visualW = bcrReflectsZoom ? svgRect.width : expectedVisualW;
   const visualH = bcrReflectsZoom ? svgRect.height : logH * cssZoom;
 
-  const x = (clientX - svgRect.left) * (vbW / visualW);
-  const y = (clientY - svgRect.top)  * (vbH / visualH);
+  // Safari では left/top も論理座標だが clientX/Y は視覚座標。
+  // .page-wrapper は zoom 境界要素で、その BCR.left/top は視覚座標として正確。
+  // そこからの論理オフセットに cssZoom を掛けて視覚 origin を求める。
+  let originLeft = svgRect.left;
+  let originTop  = svgRect.top;
+  if (!bcrReflectsZoom) {
+    const zoomContainer = svg.closest('.page-wrapper');
+    if (zoomContainer) {
+      const cr = zoomContainer.getBoundingClientRect();
+      originLeft = cr.left + (svgRect.left - cr.left) * cssZoom;
+      originTop  = cr.top  + (svgRect.top  - cr.top)  * cssZoom;
+    }
+  }
+
+  const x = (clientX - originLeft) * (vbW / visualW);
+  const y = (clientY - originTop)  * (vbH / visualH);
 
   if (!isFinite(x) || !isFinite(y)) return { x: 0, y: 0 };
   return { x, y };
@@ -127,9 +151,13 @@ if (ctm) {
   return { x: local.x, y: local.y };
 }
 
-// NG: getBoundingClientRect の単純差分は Safari で zoom 分がずれる
+// NG: getBoundingClientRect の単純差分は Safari で zoom 分がずれる（サイズも位置も）
 const rect = svg.getBoundingClientRect();
 return { x: clientX - rect.left, y: clientY - rect.top };
+
+// NG: サイズは補正しても位置（left/top）の補正を忘れるパターン
+const visualW = logW * cssZoom;
+const x = (clientX - svgRect.left) * (vbW / visualW); // svgRect.left が論理座標のままでズレる
 ```
 
 ---
@@ -149,9 +177,29 @@ return { x: clientX - rect.left, y: clientY - rect.top };
 
 ---
 
+---
+
+## 自動補正が効かない場合の手動 Y 補正
+
+自動補正ロジックが Safari の特定バージョンで機能しないケースに備え、ユーザーが手動で Y 座標を補正できる「Y補正」機能を用意している。
+
+- **UI**: ツールバーの「Y補正」ボタンを押すとポップアップが開く
+- **操作**: ↑/↓ボタン、数値入力、またはキーボード ↑↓ キーで調整
+- **方向**: 低音方向（画面下）がプラス、高音方向（画面上）がマイナス
+- **保存**: 設定値は `localStorage` に保存される
+- **実績**: Mac 内蔵ディスプレイ + Safari の環境では `yOffset = 24` で正確に一致することを確認
+
+補正値は `StaffCanvas` / `PianoSystemCanvas` の全 `clientToGroup` 呼び出しに加算される:
+```typescript
+clientToGroup(svg, svgRoot, e.clientX, e.clientY + yOffsetRef.current)
+```
+
+---
+
 ## 関連ファイル
 
 - [src/components/StaffCanvas.tsx](../src/components/StaffCanvas.tsx) — `getAccumulatedCSSZoom`, `clientToGroup`
 - [src/components/PianoSystemCanvas.tsx](../src/components/PianoSystemCanvas.tsx) — 同上（参照実装）
+- [src/components/ScorePage.tsx](../src/components/ScorePage.tsx) — Y補正 UI・状態管理
 - [src/App.css](../src/App.css) — `.page-wrapper { zoom: var(--scale, 1) }` （根本原因の CSS）
 - [docs/REGRESSION.md](REGRESSION.md) — Safari チェックリスト（セクション D）
