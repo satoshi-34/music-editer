@@ -319,7 +319,7 @@ export default function ScorePage() {
               onClick={() => setShowOffsetPanel(v => !v)}
               title="音符配置位置の座標補正"
             >
-              座標補正{yOffset !== 0 ? ` (${yOffset})` : ''}
+              Y補正{yOffset !== 0 ? ` (${yOffset})` : ''}
             </button>
             {showOffsetPanel && (
               <>
