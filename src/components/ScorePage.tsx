@@ -41,6 +41,7 @@ function calculateScoreDuration(scoreData: MeasureData[], bpm: number): number {
 export default function ScorePage() {
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
   const [scoreType, setScoreType] = useState<ScoreType>('single');
+  const [showOffsetPanel, setShowOffsetPanel] = useState(false);
 
   const [title, setTitle] = useState('タイトル');
   const [subtitle, setSubtitle] = useState('サブタイトル');
@@ -311,23 +312,41 @@ export default function ScorePage() {
             error={error}
           />
           <button className="ghost" onClick={() => window.print()}>印刷</button>
-          <div className="y-offset-control">
-            <label htmlFor="y-offset-input" title="↓キー=低音方向(+)、↑キー=高音方向(-)">座標補正</label>
-            <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>↑</button>
-            <input
-              id="y-offset-input"
-              type="number"
-              value={yOffset}
-              onChange={e => handleYOffsetChange(Number(e.target.value))}
-              aria-label="座標補正値（↓で低音方向）"
-              onKeyDown={e => {
-                if (e.key === 'ArrowDown') { e.preventDefault(); handleYOffsetChange(yOffset + 1); }
-                if (e.key === 'ArrowUp')   { e.preventDefault(); handleYOffsetChange(yOffset - 1); }
-              }}
-            />
-            <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>↓</button>
-            {yOffset !== 0 && (
-              <button type="button" className="ghost y-offset-reset" onClick={() => handleYOffsetChange(0)}>リセット</button>
+          <div className="coord-correction-wrap">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setShowOffsetPanel(v => !v)}
+              title="音符配置位置の座標補正"
+            >
+              座標補正{yOffset !== 0 ? ` (${yOffset})` : ''}
+            </button>
+            {showOffsetPanel && (
+              <>
+                <div className="dropdown-overlay" onClick={() => setShowOffsetPanel(false)} />
+                <div className="coord-panel">
+                  <p className="coord-panel-note">高音方向はマイナス、低音方向はプラス</p>
+                  <div className="coord-panel-row">
+                    <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>↑</button>
+                    <input
+                      id="y-offset-input"
+                      type="number"
+                      value={yOffset}
+                      onChange={e => handleYOffsetChange(Number(e.target.value))}
+                      aria-label="座標補正値（↓で低音方向）"
+                      onKeyDown={e => {
+                        if (e.key === 'ArrowDown') { e.preventDefault(); handleYOffsetChange(yOffset + 1); }
+                        if (e.key === 'ArrowUp')   { e.preventDefault(); handleYOffsetChange(yOffset - 1); }
+                      }}
+                      autoFocus
+                    />
+                    <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>↓</button>
+                    {yOffset !== 0 && (
+                      <button type="button" className="ghost y-offset-reset" onClick={() => handleYOffsetChange(0)}>リセット</button>
+                    )}
+                  </div>
+                </div>
+              </>
             )}
           </div>
         </div>

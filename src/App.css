@@ -695,33 +695,54 @@ button.ghost:disabled {
 /* SVGのアニメ残り防止 */
 svg { animation: none; transition: none; }
 
-/* Y補正コントロール */
-.y-offset-control {
+/* 座標補正ボタン＋ポップアップ */
+.coord-correction-wrap {
+  position: relative;
+}
+
+.coord-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 1001;
+  background: #fff;
+  border: 1px solid #ced4da;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: 12px 14px;
+  min-width: 220px;
+  white-space: nowrap;
+}
+
+.coord-panel-note {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: #666;
+  line-height: 1.5;
+}
+
+.coord-panel-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 4px;
-  font-size: 12px;
-  color: #555;
+  gap: 6px;
 }
-.y-offset-control label {
-  white-space: nowrap;
-  cursor: default;
-}
-.y-offset-control input[type="number"] {
-  width: 44px;
+
+.coord-panel-row input[type="number"] {
+  width: 54px;
   text-align: center;
-  font-size: 12px;
-  padding: 2px 4px;
-  border: 1px solid #ddd;
+  font-size: 13px;
+  padding: 3px 6px;
+  border: 1px solid #ced4da;
   border-radius: 4px;
 }
+
 .y-offset-btn {
-  padding: 2px 7px;
-  font-size: 13px;
+  padding: 3px 9px;
+  font-size: 14px;
   line-height: 1;
 }
+
 .y-offset-reset {
-  padding: 2px 6px;
+  padding: 3px 8px;
   font-size: 11px;
 }
