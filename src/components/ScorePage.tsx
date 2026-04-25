@@ -312,16 +312,20 @@ export default function ScorePage() {
           />
           <button className="ghost" onClick={() => window.print()}>印刷</button>
           <div className="y-offset-control">
-            <label htmlFor="y-offset-input" title="音符配置位置のY補正（Safariでズレる場合に調整）">Y補正</label>
-            <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>−</button>
+            <label htmlFor="y-offset-input" title="↓キー=低音方向(+)、↑キー=高音方向(-)">座標補正</label>
+            <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>↑</button>
             <input
               id="y-offset-input"
               type="number"
               value={yOffset}
               onChange={e => handleYOffsetChange(Number(e.target.value))}
-              aria-label="Y座標補正値"
+              aria-label="座標補正値（↓で低音方向）"
+              onKeyDown={e => {
+                if (e.key === 'ArrowDown') { e.preventDefault(); handleYOffsetChange(yOffset + 1); }
+                if (e.key === 'ArrowUp')   { e.preventDefault(); handleYOffsetChange(yOffset - 1); }
+              }}
             />
-            <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>＋</button>
+            <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>↓</button>
             {yOffset !== 0 && (
               <button type="button" className="ghost y-offset-reset" onClick={() => handleYOffsetChange(0)}>リセット</button>
             )}
