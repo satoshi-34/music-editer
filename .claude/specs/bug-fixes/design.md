@@ -466,6 +466,94 @@ function clientToGroup(svg, _group, clientX, clientY) {
 
 ---
 
+## 修正 12: 弦楽四重奏対応・アルト記号サポート（新機能）
+
+**ファイル**: `src/components/PianoSystemCanvas.tsx`, `src/components/QuartetStaff.tsx` (新規), `src/components/clefUtils.ts` (新規), `src/components/ScorePage.tsx`, `src/components/StaffCanvas.tsx`, `src/types/storage.ts`, `src/utils/storage.ts`
+
+### 概要
+
+Violin I / Violin II / Viola / Cello の 4 段譜面と、Viola パートへのアルト記号（ハ音記号）を追加した。既存のピアノ（2 段）は後方互換を維持したまま動作する。
+
+### アルト記号の音高変換ロジック
+
+アルト記号では中央線（line=2）が C4、最上線（line=0）が G4 になる。
+
+```typescript
+// clefUtils.ts
+function lineToKeyAlto(line: number): string {
+  const stepsDown = Math.round(line * 2); // 0.5行=半音ステップ
+  const letters = ['c','d','e','f','g','a','b'] as const;
+  let idx = 4 - stepsDown, oct = 4; // G4: idx=4, oct=4
+  while (idx < 0) { idx += 7; oct -= 1; }
+  while (idx >= 7) { idx -= 7; oct += 1; }
+  return `${letters[idx]}/${oct}`;
+}
+
+function keyToLineAlto(key: string): number {
+  const idxMap: Record<string, number> = { c:0,d:1,e:2,f:3,g:4,a:5,b:6 };
+  const base = 4 * 7 + idxMap['g']; // G4 = 32
+  const target = oct * 7 + idxMap[letter];
+  return (base - target) / 2;
+}
+```
+
+検証: `lineToKey('alto', 0)` → `'g/4'`、`lineToKey('alto', 2)` → `'c/4'`
+
+### N 段汎用レンダリング
+
+`PianoSystemCanvas` に `partsConfig?: PartConfig[]` prop を追加し、段数を動的に対応した。
+
+```typescript
+// PartConfig 型
+type PartConfig = {
+  clef: ClefType;
+  data: MeasureData[];
+  onChange: (data: MeasureData[]) => void;
+  label?: string; // 'Vn. I', 'Vn. II', 'Va.', 'Vc.'
+};
+
+// レイアウト動的計算
+function computeLayout(n: number) {
+  const STAVE_SPACING = 80;
+  const FIRST_STAVE_Y = 20;
+  return {
+    staveYs: Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * STAVE_SPACING),
+    sysH: FIRST_STAVE_Y + n * STAVE_SPACING + 20,
+  };
+}
+// N=2 では staveYs=[20,100], sysH=160 → 旧定数と完全一致
+```
+
+**StaveConnector の自動切替:**
+- N=2 → `BRACE`（ピアノ記号）
+- N>2 → `BRACKET`（オーケストラ角括弧）
+
+### 後方互換設計
+
+`partsConfig` が未指定の場合、既存の `trebleData`/`bassData` prop から 2 パートを組み立てる。ピアノモードの既存コードは変更不要。
+
+### データ形式の拡張
+
+```typescript
+// storage.ts
+type ScoreType = 'single' | 'piano' | 'quartet';  // 'quartet' 追加
+type PartData = {
+  partId: string;  // 'violin-1' | 'violin-2' | 'viola' | 'cello'
+  clef: 'treble' | 'bass' | 'alto';  // 'alto' 追加
+  measures: MeasureData[];
+};
+```
+
+### キーボードハンドラの stale closure 対策
+
+キーボードハンドラはマウント時 1 回だけ登録するため、クロージャが古い clef 値を参照しないよう `partsClefRef` を使う。
+
+```typescript
+const partsClefRef = useRef<ClefType[]>([]);
+// render 本体（useEffect 外）で毎回更新
+partsClefRef.current = parts.map(p => p.clef);
+```
+
 ## 修正 11: Y 補正コントロールによる手動キャリブレーション
 
 **ファイル**: `src/components/ScorePage.tsx`, `src/components/StaffCanvas.tsx`, `src/components/PianoSystemCanvas.tsx`, `src/components/PianoStaff.tsx`
