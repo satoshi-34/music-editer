@@ -93,7 +93,7 @@ function validatePartData(part: any): part is PartData {
     part &&
     typeof part === 'object' &&
     typeof part.partId === 'string' &&
-    (part.clef === 'treble' || part.clef === 'bass') &&
+    (part.clef === 'treble' || part.clef === 'bass' || part.clef === 'alto') &&
     Array.isArray(part.measures) &&
     part.measures.every(validateMeasureData)
   );

@@ -1,6 +1,5 @@
 // PianoSystemCanvas.tsx
-// 1システム分のグランドスタッフ（右手＋左手）を1つのSVGに描画する。
-// StaveConnector で波括弧・縦線・小節線を右手と左手にまたがって描画する。
+// 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -9,17 +8,30 @@ import {
 } from 'vexflow';
 import type { Tool } from './Palette';
 import type { MeasureData } from '../types/storage';
+import type { ClefType } from './clefUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
 type NoteEvent = { dur: DurKey; isRest: boolean; key: string };
 
+export type PartConfig = {
+  clef: ClefType;
+  data: MeasureData[];
+  onChange: (data: MeasureData[]) => void;
+  label?: string;
+};
+
 /* ===== レイアウト定数（SVGビューポートpx） ===== */
 const PAGE_LEFT = 4, PAGE_RIGHT = 4;
-const TREBLE_Y = 20;          // ト音記号段の上辺
-const BASS_Y   = 100;         // ヘ音記号段の上辺
-const SYS_H    = 160;         // 1グランドスタッフシステムのSVG高さ
+const FIRST_STAVE_Y = 20;
+const STAVE_SPACING = 80; // 段と段の間隔（Y方向）
 const BEATS_PER_MEASURE = 4;
+
+function computeLayout(n: number): { staveYs: number[]; sysH: number } {
+  const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * STAVE_SPACING);
+  const sysH = FIRST_STAVE_Y + (n - 1) * STAVE_SPACING + 60 + 20;
+  return { staveYs, sysH };
+}
 
 /* ===== 幅計算 ===== */
 const TARGET_FILL = 0.99;
@@ -59,30 +71,27 @@ function minContentWidth(m?: MeasureData): number {
   return raw;
 }
 
-/* ===== ライン ⇄ キー変換 ===== */
-function lineToKeyTreble(line: number): string {
+/* ===== ライン ⇄ キー変換（treble / bass / alto） ===== */
+function lineToKeyForClef(clef: ClefType, line: number): string {
   const s = Math.round(line*2)/2, steps = Math.round(s*2);
   const L=['c','d','e','f','g','a','b'] as const;
-  let i=3-steps, o=5;
+  // treble: F5 at line 0 (idx=3, oct=5)
+  // bass:   A3 at line 0 (idx=5, oct=3)
+  // alto:   G4 at line 0 (idx=4, oct=4) → C4 at line 2
+  const [baseIdx, baseOct] = clef==='bass'?[5,3]:clef==='alto'?[4,4]:[3,5];
+  let i=baseIdx-steps, o=baseOct;
   while(i<0){i+=7;o--;} while(i>=7){i-=7;o++;}
   return `${L[i]}/${o}`;
 }
-function keyToLineTreble(key: string): number {
+function keyToLineForClef(clef: ClefType, key: string): number {
   const m=key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if(!m)return 2;
   const iMap: Record<string,number>={c:0,d:1,e:2,f:3,g:4,a:5,b:6};
-  return (5*7+iMap['f'] - (+m[3]*7+(iMap[m[1].toLowerCase()]??0)))/2;
+  const target = +m[3]*7+(iMap[m[1].toLowerCase()]??0);
+  const base = clef==='bass'?(3*7+iMap['a']):clef==='alto'?(4*7+iMap['g']):(5*7+iMap['f']);
+  return (base - target) / 2;
 }
-function lineToKeyBass(line: number): string {
-  const s = Math.round(line*2)/2, steps = Math.round(s*2);
-  const L=['c','d','e','f','g','a','b'] as const;
-  let i=5-steps, o=3;
-  while(i<0){i+=7;o--;} while(i>=7){i-=7;o++;}
-  return `${L[i]}/${o}`;
-}
-function keyToLineBass(key: string): number {
-  const m=key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if(!m)return 2;
-  const iMap: Record<string,number>={c:0,d:1,e:2,f:3,g:4,a:5,b:6};
-  return (3*7+iMap['a'] - (+m[3]*7+(iMap[m[1].toLowerCase()]??0)))/2;
+function restKeyForClef(clef: ClefType): string {
+  return clef==='bass'?'d/3':clef==='alto'?'c/4':'b/4';
 }
 
 const LETTER_TO_PC: Record<string,number>={c:0,d:2,e:4,f:5,g:7,a:9,b:11};
@@ -111,10 +120,7 @@ function snapLine(stave: Stave, y: number): number {
   return best;
 }
 
-/* ===== SVG座標変換（StaffCanvas.tsx と同一ロジック・Safari対応） ===== */
-// CSS zoom の実効値を返す。
-// SVG 要素では Safari で --scale が getComputedStyle に継承されないため、
-// HTML 要素である .page-wrapper から読み取る。
+/* ===== SVG座標変換（Safari対応） ===== */
 function getAccumulatedCSSZoom(el: Element): number {
   const wrapper = el.closest('.page-wrapper');
   if (wrapper) {
@@ -135,17 +141,11 @@ function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: 
   const logH = svg.height.baseVal.value;
 
   const cssZoom = getAccumulatedCSSZoom(svg);
-
-  // Chrome: BCR は CSS zoom 込みの視覚サイズ/位置を返す → svgRect.width ≒ logW * cssZoom
-  // Safari 旧版: CSS zoom を反映しない論理サイズ/位置を返す → svgRect.width ≒ logW
   const expectedVisualW = logW * cssZoom;
   const bcrReflectsZoom = Math.abs(svgRect.width - expectedVisualW) < logW * 0.05;
   const visualW = bcrReflectsZoom ? svgRect.width : expectedVisualW;
   const visualH = bcrReflectsZoom ? svgRect.height : logH * cssZoom;
 
-  // Safari は left/top も論理座標だが clientX/Y は視覚座標。
-  // .page-wrapper が zoom: var(--scale) の適用点。その BCR.left は zoom 境界の視覚座標として正確。
-  // SVG の論理オフセットに cssZoom を掛けて視覚 origin を求める。
   let originLeft = svgRect.left;
   let originTop  = svgRect.top;
   if (!bcrReflectsZoom) {
@@ -159,15 +159,14 @@ function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: 
 
   const x = (cx - originLeft) * (vbW / visualW);
   const y = (cy - originTop)  * (vbH / visualH);
-
   if (!isFinite(x) || !isFinite(y)) return { x: 0, y: 0 };
   return { x, y };
 }
 
-function makeVFNote(ev: NoteEvent, clef: 'treble'|'bass') {
+function makeVFNote(ev: NoteEvent, clef: ClefType) {
   const vd=toVFDur(ev.dur);
   if(ev.isRest){
-    return new StaveNote({clef,keys:[clef==='bass'?'d/3':'b/4'],duration:vd+'r'});
+    return new StaveNote({clef,keys:[restKeyForClef(clef)],duration:vd+'r'});
   }
   const n=new StaveNote({clef,keys:[ev.key],duration:vd});
   const acc=ev.key.match(/^[a-g]([#b]?)/i)?.[1]||'';
@@ -180,82 +179,107 @@ type Props = {
   measuresPerSystem?: number;
   tool: Tool;
   scale?: number;
+  // Piano backward compat
   trebleData?: MeasureData[];
   bassData?: MeasureData[];
   onTrebleChange?: (data: MeasureData[]) => void;
   onBassChange?:   (data: MeasureData[]) => void;
+  // N段汎用
+  partsConfig?: PartConfig[];
+  showInstrumentLabels?: boolean;
   startMeasureIndex?: number;
   disabled?: boolean;
   yOffset?: number;
 };
 
-type Sel = { clef:'treble'|'bass'; measure:number; index:number }|null;
+type Sel = { partIndex: number; measure: number; index: number } | null;
 
 export default function PianoSystemCanvas({
   measuresPerSystem=4, tool, scale=0.86,
   trebleData, bassData, onTrebleChange, onBassChange,
+  partsConfig, showInstrumentLabels=false,
   startMeasureIndex=0, disabled=false, yOffset=0,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+
+  // partsConfig 優先、なければ piano backward compat の2段
+  const parts: PartConfig[] = partsConfig ?? [
+    { clef: 'treble', data: trebleData ?? [], onChange: onTrebleChange ?? (() => {}), label: undefined },
+    { clef: 'bass',   data: bassData   ?? [], onChange: onBassChange   ?? (() => {}), label: undefined },
+  ];
 
   const mkInit = (data: MeasureData[]|undefined) => {
     if(data&&data.length>0)return data;
     return Array.from({length:startMeasureIndex+measuresPerSystem},()=>({events:[]}));
   };
 
-  const [trebleScore, setTrebleScore] = useState<MeasureData[]>(()=>mkInit(trebleData));
-  const [bassScore,   setBassScore]   = useState<MeasureData[]>(()=>mkInit(bassData));
+  const [partsScore, setPartsScore] = useState<MeasureData[][]>(
+    () => parts.map(p => mkInit(p.data))
+  );
   const [selected, setSelected] = useState<Sel>(null);
   const selRef = useRef<Sel>(null);
   const disRef = useRef(disabled);
   const yOffRef = useRef(yOffset);
+  // キーボードハンドラが各パートのclefを参照できるようにrefで保持
+  const partsClefRef = useRef(parts.map(p => p.clef));
+
   useEffect(()=>{selRef.current=selected;},[selected]);
   useEffect(()=>{disRef.current=disabled;},[disabled]);
   useEffect(()=>{yOffRef.current=yOffset;},[yOffset]);
+  // partsの変更（基本的にない）に追従
+  partsClefRef.current = parts.map(p => p.clef);
 
   /* ----- 親データ同期 ----- */
-  const syncScore = (
-    data: MeasureData[]|undefined,
-    current: MeasureData[],
-    set: (v:MeasureData[])=>void,
-  ) => {
-    if(!data||data.length===0)return;
-    if(JSON.stringify(data)===JSON.stringify(current))return;
-    const req=startMeasureIndex+measuresPerSystem;
-    if(data.length<req){const e=[...data];while(e.length<req)e.push({events:[]});set(e);}
-    else set(data);
-  };
-  useEffect(()=>syncScore(trebleData,trebleScore,setTrebleScore),[trebleData]);
-  useEffect(()=>syncScore(bassData,bassScore,setBassScore),[bassData]);
+  const partsDataJson = JSON.stringify(parts.map(p => p.data));
+  useEffect(()=>{
+    setPartsScore(prev => {
+      const next = [...prev];
+      let changed = false;
+      parts.forEach((part, i) => {
+        if(!part.data||part.data.length===0)return;
+        if(JSON.stringify(part.data)===JSON.stringify(prev[i]))return;
+        const req=startMeasureIndex+measuresPerSystem;
+        let newScore: MeasureData[];
+        if(part.data.length<req){const e=[...part.data];while(e.length<req)e.push({events:[]});newScore=e;}
+        else newScore=part.data;
+        next[i]=newScore;
+        changed=true;
+      });
+      return changed?next:prev;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[partsDataJson]);
 
   /* ----- 親への通知 ----- */
-  const prevTreble=useRef<MeasureData[]>([]);
-  const firstTreble=useRef(true);
+  const prevPartsScore = useRef<MeasureData[][]>([]);
+  const firstRender = useRef(true);
   useEffect(()=>{
-    if(firstTreble.current){firstTreble.current=false;prevTreble.current=trebleScore;return;}
-    if(onTrebleChange&&JSON.stringify(prevTreble.current)!==JSON.stringify(trebleScore)){
-      onTrebleChange(trebleScore);prevTreble.current=trebleScore;
-    }
-  },[trebleScore]);
+    if(firstRender.current){firstRender.current=false;prevPartsScore.current=partsScore;return;}
+    parts.forEach((part, i) => {
+      if(JSON.stringify(prevPartsScore.current[i])!==JSON.stringify(partsScore[i])){
+        part.onChange(partsScore[i]);
+      }
+    });
+    prevPartsScore.current=partsScore;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[partsScore]);
 
-  const prevBass=useRef<MeasureData[]>([]);
-  const firstBass=useRef(true);
-  useEffect(()=>{
-    if(firstBass.current){firstBass.current=false;prevBass.current=bassScore;return;}
-    if(onBassChange&&JSON.stringify(prevBass.current)!==JSON.stringify(bassScore)){
-      onBassChange(bassScore);prevBass.current=bassScore;
-    }
-  },[bassScore]);
-
-  /* ----- キーボード -----  */
+  /* ----- キーボード ----- */
   useEffect(()=>{
     const onKey=(e:KeyboardEvent)=>{
       const sel=selRef.current;
       if(!sel||disRef.current)return;
-      const {clef,measure,index}=sel;
-      const setS = clef==='treble'?setTrebleScore:setBassScore;
-      const l2k  = clef==='treble'?lineToKeyTreble:lineToKeyBass;
-      const k2l  = clef==='treble'?keyToLineTreble:keyToLineBass;
+      const {partIndex,measure,index}=sel;
+      const clef=partsClefRef.current[partIndex]??'treble';
+      const l2k=(l:number)=>lineToKeyForClef(clef,l);
+      const k2l=(k:string)=>keyToLineForClef(clef,k);
+      const setS=(updater:(prev:MeasureData[])=>MeasureData[])=>{
+        setPartsScore(prev=>{
+          const next=[...prev];
+          next[partIndex]=updater(prev[partIndex]??[]);
+          return next;
+        });
+      };
 
       if(e.key==='Delete'||e.key==='Backspace'){
         setS(prev=>{
@@ -295,18 +319,16 @@ export default function PianoSystemCanvas({
     if(!ref.current)return;
     ref.current.innerHTML='';
 
+    const { staveYs, sysH } = computeLayout(parts.length);
     const W=ref.current.parentElement?.clientWidth??ref.current.clientWidth??700;
     const renderer=new Renderer(ref.current,Renderer.Backends.SVG);
-    renderer.resize(W,SYS_H);
+    renderer.resize(W,sysH);
     const ctx=renderer.getContext();
 
     const svg=ref.current.querySelector('svg') as SVGSVGElement|null;
     if(!svg)return;
-
-    // 波括弧が左端からはみ出さないようにoverflowをvisibleに設定
     svg.style.overflow = 'visible';
 
-    // VexFlowが作成したルートグループ（スケール後に取得 - StaffCanvasと同じ方式）
     const allG=svg.querySelectorAll('g');
     const svgRoot=(allG.length?allG[allG.length-1]:svg) as SVGGElement;
 
@@ -317,10 +339,10 @@ export default function PianoSystemCanvas({
     const innerW=W-PAGE_LEFT-PAGE_RIGHT;
     const minWs=Array.from({length:measuresPerSystem},(_,i)=>{
       const ai=startMeasureIndex+i;
-      return Math.max(
-        minContentWidth(ai<trebleScore.length?trebleScore[ai]:undefined),
-        minContentWidth(ai<bassScore.length?bassScore[ai]:undefined),
-      );
+      return parts.reduce((maxW, _, pi) => {
+        const score=partsScore[pi]??[];
+        return Math.max(maxW, minContentWidth(ai<score.length?score[ai]:undefined));
+      }, 0);
     });
     const pad=CLEF_PAD_FIRST;
     const alloc=Math.max(0,innerW*TARGET_FILL-pad);
@@ -331,41 +353,48 @@ export default function PianoSystemCanvas({
     const totalW=realWs.reduce((a,b)=>a+b,0);
     let x=PAGE_LEFT+(innerW-totalW)/2;
 
-    /* -- 五線を描画しコネクタ用に保存 -- */
-    const tStaves:Stave[]=[],bStaves:Stave[]=[];
+    /* -- 五線を描画 -- */
+    // staveSets[pi][mi] = 段pi・小節mi の Stave
+    const staveSets: Stave[][] = parts.map(() => []);
     for(let i=0;i<measuresPerSystem;i++){
       const w=realWs[i];
-      const ts=new Stave(x/s,TREBLE_Y/s,w/s);
-      if(i===0){ts.addClef('treble');ts.addTimeSignature('4/4');}
-      ts.setEndBarType(Barline.type.SINGLE);
-      ts.setContext(ctx).draw();
-      tStaves.push(ts);
+      parts.forEach((part, pi) => {
+        const stave=new Stave(x/s, staveYs[pi]/s, w/s);
+        if(i===0){
+          stave.addClef(part.clef);
+          if(pi===0)stave.addTimeSignature('4/4');
+        }
+        stave.setEndBarType(Barline.type.SINGLE);
+        stave.setContext(ctx).draw();
+        staveSets[pi].push(stave);
+      });
 
-      const bs=new Stave(x/s,BASS_Y/s,w/s);
-      if(i===0)bs.addClef('bass');
-      bs.setEndBarType(Barline.type.SINGLE);
-      bs.setContext(ctx).draw();
-      bStaves.push(bs);
-
-      // 各小節の右端縦線を両段にまたがって接続
-      new StaveConnector(ts,bs).setType(StaveConnector.type.SINGLE_RIGHT).setContext(ctx).draw();
-
+      // 各小節の右端縦線：第1段 ↔ 最終段 をまたぐ
+      if(parts.length > 1){
+        new StaveConnector(staveSets[0][i], staveSets[parts.length-1][i])
+          .setType(StaveConnector.type.SINGLE_RIGHT).setContext(ctx).draw();
+      }
       x+=w;
     }
 
-    // 左端：波括弧 ＋ 縦線
-    new StaveConnector(tStaves[0],bStaves[0]).setType(StaveConnector.type.BRACE).setContext(ctx).draw();
-    new StaveConnector(tStaves[0],bStaves[0]).setType(StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
+    // 左端コネクタ
+    if(parts.length > 1){
+      const connType = parts.length === 2
+        ? StaveConnector.type.BRACE
+        : StaveConnector.type.BRACKET;
+      new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0])
+        .setType(connType).setContext(ctx).draw();
+      new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0])
+        .setType(StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
+    }
 
     /* -- 音符と操作領域を描画 -- */
     x=PAGE_LEFT+(innerW-totalW)/2;
     for(let i=0;i<measuresPerSystem;i++){
       const absI=startMeasureIndex+i;
       const w=realWs[i];
-      const ts=tStaves[i], bs=bStaves[i];
       const measLeft=x/s, measRight=(x+w)/s;
 
-      // ガイド線
       const guideLine=document.createElementNS('http://www.w3.org/2000/svg','line');
       guideLine.setAttribute('class','vf-guide-line');guideLine.style.display='none';
       guideLine.setAttribute('pointer-events','none');
@@ -385,19 +414,26 @@ export default function PianoSystemCanvas({
       };
       const hideGuide=()=>{guideLine.style.display='none';guideDot.style.display='none';};
 
-      /* -- 1段分の音符・当たり判定を設定 -- */
-      const setupStave=(
-        stave:Stave, clef:'treble'|'bass',
-        score:MeasureData[], setScore:(f:(p:MeasureData[])=>MeasureData[])=>void,
-        lineToKey:(l:number)=>string, keyToLine:(k:string)=>number,
-      )=>{
+      parts.forEach((part, pi) => {
+        const stave=staveSets[pi][i];
+        const score=partsScore[pi]??[];
+        const setScore=(updater:(prev:MeasureData[])=>MeasureData[])=>{
+          setPartsScore(prev=>{
+            const next=[...prev];
+            next[pi]=updater(prev[pi]??[]);
+            return next;
+          });
+        };
+        const l2k=(l:number)=>lineToKeyForClef(part.clef,l);
+        const k2l=(k:string)=>keyToLineForClef(part.clef,k);
+
         const data=absI<score.length?score[absI]:undefined;
-        const safeEvs:NoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,key:clef==='bass'?'d/3':'b/4'}])
+        const safeEvs:NoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,key:restKeyForClef(part.clef)}])
           .map(ev=>(!ev||!ev.dur)?{dur:'4' as DurKey,isRest:true,key:'b/4'}:{...ev,dur:ev.dur as DurKey});
 
         const vfNotes=safeEvs.map((ev,idx)=>{
-          const n=makeVFNote(ev,clef) as any;
-          const isSel=!!selected&&selected.clef===clef&&selected.measure===absI&&selected.index===idx;
+          const n=makeVFNote(ev,part.clef) as any;
+          const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===idx;
           if(isSel&&n.setStyle)n.setStyle({fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
           return n as StaveNote;
         });
@@ -408,20 +444,17 @@ export default function PianoSystemCanvas({
         voice.addTickables(vfNotes);
         new Formatter().joinVoices([voice]).formatToStave([voice],stave);
 
-        // 全休符を小節中央に配置
-        const hasClef = (i === 0);
+        const hasClef=(i===0);
         for(let j=0;j<vfNotes.length&&j<safeEvs.length;j++){
           const ev=safeEvs[j];
           if(ev.isRest&&ev.dur==='1'){
             try{
-              // 音部記号パディングを考慮（CLEF_PAD_FIRSTを使用）
               const clefPad=hasClef?CLEF_PAD_FIRST:0;
               const effectiveLeft=measLeft+clefPad;
               const effectiveWidth=Math.max(0,measRight-measLeft-clefPad);
               const centerX=effectiveLeft+effectiveWidth/2;
               const currentX=(vfNotes[j] as any).getAbsoluteX?.() || (vfNotes[j] as any).getX?.() || effectiveLeft;
               const offset=centerX-currentX;
-              console.log(`[PianoSystemCanvas] 全休符中央配置: i=${i}, measLeft=${measLeft.toFixed(1)}, measRight=${measRight.toFixed(1)}, clefPad=${clefPad}, centerX=${centerX.toFixed(1)}, currentX=${currentX.toFixed(1)}, offset=${offset.toFixed(1)}`);
               if(Math.abs(offset)>1&&typeof (vfNotes[j] as any).setXShift==='function'){
                 (vfNotes[j] as any).setXShift(offset);
               }
@@ -437,7 +470,7 @@ export default function PianoSystemCanvas({
         const sp=(stave.getSpacingBetweenLines?.() as number)||10;
 
         const doInsert=(lx:number,ly:number)=>{
-          const key=lineToKey(snapLine(stave,ly));
+          const key=l2k(snapLine(stave,ly));
           let at=safeEvs.length,minD=Infinity;
           if(vfNotes.length>0){
             [{x:measLeft,j:0},{x:measRight,j:vfNotes.length}].forEach(({x,j})=>{
@@ -469,7 +502,6 @@ export default function PianoSystemCanvas({
           });
         };
 
-        // 小節全体の当たり判定（挿入用）
         const ir=document.createElementNS('http://www.w3.org/2000/svg','rect');
         ir.setAttribute('class','vf-hit');
         ir.setAttribute('x',String(measLeft));ir.setAttribute('y',String(staveTop));
@@ -489,7 +521,6 @@ export default function PianoSystemCanvas({
         });
         svgRoot.appendChild(ir);
 
-        // 音符ごとの当たり判定（選択・挿入）
         if(vfNotes.length>0){
           const anchors=vfNotes.map((n:any,j)=>n.getAbsoluteX?n.getAbsoluteX():measLeft+(j+1)*(measRight-measLeft)/(vfNotes.length+1));
           const mids=anchors.slice(0,-1).map((a,j)=>(a+anchors[j+1])/2);
@@ -499,7 +530,7 @@ export default function PianoSystemCanvas({
             if(xr-xl<HIT_MIN_W){const h=(HIT_MIN_W-(xr-xl))/2;xl=Math.max(measLeft+1,xl-h);xr=Math.min(measRight-1,xr+h);}
             const wHit=Math.max(HIT_MIN_W,xr-xl);
             const ev=safeEvs[j];
-            const yCenter=ev?.isRest?stave.getYForLine(2):stave.getYForLine(keyToLine(ev.key));
+            const yCenter=ev?.isRest?stave.getYForLine(2):stave.getYForLine(k2l(ev.key));
             const hHit=Math.max(sp*2.2,30);
             const yHit=yCenter-hHit/2;
 
@@ -520,12 +551,12 @@ export default function PianoSystemCanvas({
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
               const cellW=rr-rl;
               const selR=Math.min(SELECT_NEAR_PX,Math.max(0,cellW*SELECT_NEAR_FRAC));
-              if(Math.abs(lx-anchors[j])<=selR)setSelected({clef,measure:absI,index:j});
+              if(Math.abs(lx-anchors[j])<=selR)setSelected({partIndex:pi,measure:absI,index:j});
               else doInsert(lx,ly);
             });
             svgRoot.appendChild(hit);
 
-            const isSel=!!selected&&selected.clef===clef&&selected.measure===absI&&selected.index===j;
+            const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===j;
             if(isSel){
               const sr=document.createElementNS('http://www.w3.org/2000/svg','rect');
               sr.setAttribute('class','vf-note-selected');
@@ -536,14 +567,12 @@ export default function PianoSystemCanvas({
             }
           });
         }
-      };
-
-      setupStave(ts,'treble',trebleScore,setTrebleScore,lineToKeyTreble,keyToLineTreble);
-      setupStave(bs,'bass',  bassScore,  setBassScore,  lineToKeyBass,  keyToLineBass);
+      }); // end parts.forEach
 
       x+=w;
     }
-  },[trebleScore,bassScore,tool,scale,selected,startMeasureIndex,measuresPerSystem]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[partsScore,tool,scale,selected,startMeasureIndex,measuresPerSystem]);
 
   return <div ref={ref} style={{overflow:'visible'}}/>;
 }

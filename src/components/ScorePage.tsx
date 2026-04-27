@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Palette, { type Tool } from './Palette';
 import StaffCanvas from './StaffCanvas';
 import PianoStaff from './PianoStaff';
+import QuartetStaff from './QuartetStaff';
 import SaveLoadButtons from './SaveLoadButtons';
 import PlaybackControls, { type PlaybackState } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
@@ -64,6 +65,9 @@ export default function ScorePage() {
   // パートごとのデータ
   const [rightHandData, setRightHandData] = useState<MeasureData[] | undefined>(undefined);
   const [leftHandData, setLeftHandData] = useState<MeasureData[] | undefined>(undefined);
+  const [quartetParts, setQuartetParts] = useState<MeasureData[][]>(
+    () => Array.from({ length: 4 }, () => [])
+  );
 
   const [audioEngine] = useState(() => defaultSimpleAudioEngine);
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped');
@@ -80,7 +84,13 @@ export default function ScorePage() {
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
     setScoreType(newType);
     if (newType === 'piano' && !leftHandData) {
-      setLeftHandData(undefined); // PianoStaff側で空小節として扱われる
+      setLeftHandData(undefined);
+    }
+    if (newType === 'quartet') {
+      setQuartetParts(prev => prev.every(p => p.length === 0)
+        ? Array.from({ length: 4 }, () => [])
+        : prev
+      );
     }
   }, [leftHandData]);
 
@@ -89,7 +99,9 @@ export default function ScorePage() {
       await audioEngine.initialize();
 
       const parts: MeasureData[][] = [];
-      if (scoreType === 'piano') {
+      if (scoreType === 'quartet') {
+        quartetParts.forEach(part => { if (part && part.length > 0) parts.push(part); });
+      } else if (scoreType === 'piano') {
         if (rightHandData && rightHandData.length > 0) parts.push(rightHandData);
         if (leftHandData && leftHandData.length > 0) parts.push(leftHandData);
       } else {
@@ -110,7 +122,7 @@ export default function ScorePage() {
         setPlaybackState('playing');
         setTimeout(() => setPlaybackState('stopped'), duration * 1000);
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[ScorePage] 再生開始に失敗:', error);
       if (error instanceof Error) {
         if (error.message.includes('user gesture') || error.message.includes('not allowed to start') ||
@@ -123,7 +135,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [audioEngine, tempoSettings.bpm, rightHandData, leftHandData, scoreType]);
+  }, [audioEngine, tempoSettings.bpm, rightHandData, leftHandData, quartetParts, scoreType]);
 
   const handlePause = useCallback(() => {
     setPlaybackState('paused');
@@ -179,17 +191,35 @@ export default function ScorePage() {
     handleRightHandChange(data);
   }, [handleRightHandChange]);
 
+  const handleQuartetPartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
+    if (isEditingDisabled) return;
+    setQuartetParts(prev => {
+      const next = [...prev];
+      if (JSON.stringify(next[partIndex]) === JSON.stringify(data)) return prev;
+      next[partIndex] = data;
+      return next;
+    });
+  }, [isEditingDisabled]);
+
   const handleSave = async () => {
     const metadata = { title, subtitle, lyricist, composer, arranger };
 
-    const parts: PartData[] = scoreType === 'piano'
-      ? [
-          { partId: 'right-hand', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
-          { partId: 'left-hand',  clef: 'bass',   measures: leftHandData  ?? [{ events: [] }] },
-        ]
-      : [
-          { partId: 'melody', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
-        ];
+    const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'] as const;
+    const QUARTET_CLEFS: PartData['clef'][] = ['treble', 'treble', 'alto', 'bass'];
+    const parts: PartData[] = scoreType === 'quartet'
+      ? QUARTET_IDS.map((id, i) => ({
+          partId: id,
+          clef: QUARTET_CLEFS[i],
+          measures: quartetParts[i] ?? [{ events: [] }],
+        }))
+      : scoreType === 'piano'
+        ? [
+            { partId: 'right-hand', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
+            { partId: 'left-hand',  clef: 'bass',   measures: leftHandData  ?? [{ events: [] }] },
+          ]
+        : [
+            { partId: 'melody', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
+          ];
 
     await saveScore(metadata, parts, totalSystems, 4, scoreType);
   };
@@ -203,13 +233,20 @@ export default function ScorePage() {
       setComposer(loadedData.metadata.composer);
       setArranger(loadedData.metadata.arranger);
 
-      setScoreType(loadedData.scoreType ?? 'single');
+      const loadedType = loadedData.scoreType ?? 'single';
+      setScoreType(loadedType);
 
-      const rightPart = loadedData.parts.find(p => p.clef === 'treble') ?? loadedData.parts[0];
-      const leftPart  = loadedData.parts.find(p => p.clef === 'bass');
-
-      setRightHandData(rightPart?.measures ?? []);
-      setLeftHandData(leftPart?.measures);
+      if (loadedType === 'quartet') {
+        const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
+        setQuartetParts(QUARTET_IDS.map(id =>
+          loadedData.parts.find(p => p.partId === id)?.measures ?? []
+        ));
+      } else {
+        const rightPart = loadedData.parts.find(p => p.clef === 'treble') ?? loadedData.parts[0];
+        const leftPart  = loadedData.parts.find(p => p.clef === 'bass');
+        setRightHandData(rightPart?.measures ?? []);
+        setLeftHandData(leftPart?.measures);
+      }
     }
   };
 
@@ -286,6 +323,21 @@ export default function ScorePage() {
               title="ピアノ大譜表（右手＋左手）"
             >
               ピアノ
+            </button>
+            <button
+              className="ghost"
+              onClick={() => handleScoreTypeChange('quartet')}
+              style={{
+                border: scoreType === 'quartet' ? '2px solid #3b82f6' : '1px solid #ccc',
+                borderRadius: 6,
+                padding: '4px 10px',
+                fontSize: 12,
+                cursor: 'pointer',
+                background: scoreType === 'quartet' ? '#eff6ff' : '#fff',
+              }}
+              title="弦楽四重奏（Vn. I / Vn. II / Va. / Vc.）"
+            >
+              弦楽四重奏
             </button>
           </div>
 
@@ -390,7 +442,19 @@ export default function ScorePage() {
                 </header>
 
                 <div className="score-area">
-                  {scoreType === 'piano' ? (
+                  {scoreType === 'quartet' ? (
+                    <QuartetStaff
+                      systems={p.systems}
+                      measuresPerSystem={4}
+                      tool={tool}
+                      scale={scale}
+                      partsData={quartetParts}
+                      onPartChange={[0, 1, 2, 3].map(pi => handleQuartetPartChange(pi))}
+                      startMeasureIndex={i * systemsPerPage * 4}
+                      disabled={isEditingDisabled}
+                      yOffset={yOffset}
+                    />
+                  ) : scoreType === 'piano' ? (
                     <PianoStaff
                       systems={p.systems}
                       gap={110}

@@ -21,13 +21,13 @@ export interface ScoreMetadata {
   arranger: string;
 }
 
-/** スコアの種類（単旋律 or ピアノ大譜表） */
-export type ScoreType = 'single' | 'piano';
+/** スコアの種類（単旋律 / ピアノ大譜表 / 弦楽四重奏） */
+export type ScoreType = 'single' | 'piano' | 'quartet';
 
 /** 1パート（右手・左手など）のデータ */
 export interface PartData {
-  partId: string;           // 'melody' | 'right-hand' | 'left-hand'
-  clef: 'treble' | 'bass';
+  partId: string;           // 'melody' | 'right-hand' | 'left-hand' | 'violin-1' | 'violin-2' | 'viola' | 'cello'
+  clef: 'treble' | 'bass' | 'alto';
   measures: MeasureData[];
 }
 

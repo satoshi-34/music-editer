@@ -1,0 +1,62 @@
+// src/components/QuartetStaff.tsx
+// 弦楽四重奏（Vn. I / Vn. II / Va. / Vc.）の N システムを描画するラッパー
+
+import PianoSystemCanvas, { type PartConfig } from './PianoSystemCanvas';
+import type { Tool } from './Palette';
+import type { MeasureData } from '../types/storage';
+
+const QUARTET_PART_CONFIGS: Omit<PartConfig, 'data' | 'onChange'>[] = [
+  { clef: 'treble', label: 'Vn. I'  },
+  { clef: 'treble', label: 'Vn. II' },
+  { clef: 'alto',   label: 'Va.'    },
+  { clef: 'bass',   label: 'Vc.'    },
+];
+
+type Props = {
+  tool: Tool;
+  scale?: number;
+  systems?: number;
+  measuresPerSystem?: number;
+  partsData: MeasureData[][];   // length 4: [vn1, vn2, va, vc]
+  onPartChange: ((data: MeasureData[]) => void)[];
+  startMeasureIndex?: number;
+  disabled?: boolean;
+  yOffset?: number;
+};
+
+export default function QuartetStaff({
+  tool,
+  scale = 0.86,
+  systems = 9,
+  measuresPerSystem = 4,
+  partsData,
+  onPartChange,
+  startMeasureIndex = 0,
+  disabled = false,
+  yOffset = 0,
+}: Props) {
+  return (
+    <div>
+      {Array.from({ length: systems }, (_, i) => {
+        const partsConfig: PartConfig[] = QUARTET_PART_CONFIGS.map((cfg, pi) => ({
+          ...cfg,
+          data: partsData[pi] ?? [],
+          onChange: onPartChange[pi] ?? (() => {}),
+        }));
+        return (
+          <PianoSystemCanvas
+            key={i}
+            measuresPerSystem={measuresPerSystem}
+            tool={tool}
+            scale={scale}
+            partsConfig={partsConfig}
+            showInstrumentLabels={i === 0}
+            startMeasureIndex={startMeasureIndex + i * measuresPerSystem}
+            disabled={disabled}
+            yOffset={yOffset}
+          />
+        );
+      })}
+    </div>
+  );
+}

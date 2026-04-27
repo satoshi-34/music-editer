@@ -30,7 +30,7 @@ type Props = {
   onScoreDataChange?: (data: MeasureData[]) => void;
   startMeasureIndex?: number; // このStaffCanvasが担当する開始小節インデックス
   disabled?: boolean; // 編集を無効にするフラグ
-  clef?: 'treble' | 'bass'; // 音部記号（デフォルト: treble）
+  clef?: 'treble' | 'bass' | 'alto'; // 音部記号（デフォルト: treble）
   yOffset?: number; // Safari座標ズレ補正（client px単位）
 };
 
@@ -119,6 +119,24 @@ function keyToLineBass(key: string): number {
   const idxMap: Record<string, number> = { c:0,d:1,e:2,f:3,g:4,a:5,b:6 };
   const target = oct * 7 + (idxMap[letter] ?? 0);
   const base = 3 * 7 + idxMap['a']; // A3
+  return (base - target) / 2;
+}
+
+/* ===== line ⇄ key（アルト記号。line 0 = G4、line 2 = C4） ===== */
+function lineToKeyAlto(line: number): string {
+  const snapped = Math.round(line * 2) / 2;
+  const stepsDown = Math.round(snapped * 2);
+  const letters = ['c','d','e','f','g','a','b'] as const;
+  let idx = 4 - stepsDown, oct = 4; // G4: idx=4
+  while (idx < 0) { idx += 7; oct -= 1; }
+  while (idx >= 7) { idx -= 7; oct += 1; }
+  return `${letters[idx]}/${oct}`;
+}
+function keyToLineAlto(key: string): number {
+  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if (!m) return 2;
+  const idxMap: Record<string, number> = { c:0,d:1,e:2,f:3,g:4,a:5,b:6 };
+  const target = +m[3] * 7 + (idxMap[m[1].toLowerCase()] ?? 0);
+  const base = 4 * 7 + idxMap['g']; // G4 = 32
   return (base - target) / 2;
 }
 
@@ -253,10 +271,10 @@ function snapLineBySpacing(stave: Stave, y: number): number {
 /* ===== 時間ベース位置計算（休符重なり修正用） ===== */
 
 /* ===== ノート生成（臨時記号を付与） ===== */
-function makeVFNote(ev: NoteEvent, clef: 'treble' | 'bass' = 'treble') {
+function makeVFNote(ev: NoteEvent, clef: 'treble' | 'bass' | 'alto' = 'treble') {
   const vfDur = toVFDur(ev.dur);
   if (ev.isRest) {
-    const restKey = clef === 'bass' ? 'd/3' : 'b/4';
+    const restKey = clef === 'bass' ? 'd/3' : clef === 'alto' ? 'c/4' : 'b/4';
     const n = new StaveNote({ clef, keys: [restKey], duration: (vfDur as VFDur) + 'r' });
     return n;
   }
@@ -302,8 +320,8 @@ export default function StaffCanvas({
   clef = 'treble', yOffset = 0,
 }: Props) {
   // clef に応じた変換関数を選択
-  const lineToKey = clef === 'bass' ? lineToKeyBass : lineToKeyTreble;
-  const keyToLine = clef === 'bass' ? keyToLineBass : keyToLineTreble;
+  const lineToKey = clef === 'bass' ? lineToKeyBass : clef === 'alto' ? lineToKeyAlto : lineToKeyTreble;
+  const keyToLine = clef === 'bass' ? keyToLineBass : clef === 'alto' ? keyToLineAlto : keyToLineTreble;
   const ref = useRef<HTMLDivElement>(null);
   const [score, setScore] = useState<MeasureData[]>(() => {
     // initialScoreDataが提供されている場合はそれを使用
