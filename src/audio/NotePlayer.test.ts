@@ -124,7 +124,7 @@ describe('NotePlayer', () => {
       const noteEvent: NoteEvent = {
         dur: '4',
         isRest: true,
-        key: 'C4'
+        keys: ['C4']
       };
 
       await notePlayer.playNoteEvent(noteEvent);
@@ -137,13 +137,14 @@ describe('NotePlayer', () => {
       const noteEvent: NoteEvent = {
         dur: '4',
         isRest: false,
-        key: 'D4'
+        keys: ['D4']
       };
 
       await notePlayer.playNoteEvent(noteEvent);
       
+      // playNoteEvent は和音対応のため keys 配列をそのまま渡す
       expect(mockSynth.triggerAttackRelease).toHaveBeenCalledWith(
-        'D4',
+        ['D4'],
         expect.any(Number),
         '+0',
         0.5
@@ -236,7 +237,7 @@ describe('NotePlayer', () => {
       // Feature: note-playback, Property 1: 任意の有効な音符データに対して、NotePlayerで再生される音高は元の音符データのキーと正確に一致する必要がある
       await fc.assert(fc.asyncProperty(
         fc.record({
-          key: fc.oneof(
+          keys: fc.array(fc.oneof(
             // 基本的な音符（C-B）とオクターブ（3-6）の組み合わせ
             fc.constantFrom('C3', 'D3', 'E3', 'F3', 'G3', 'A3', 'B3'),
             fc.constantFrom('C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4'),
@@ -245,17 +246,17 @@ describe('NotePlayer', () => {
             // 臨時記号付きの音符
             fc.constantFrom('C#4', 'D#4', 'F#4', 'G#4', 'A#4'),
             fc.constantFrom('Db4', 'Eb4', 'Gb4', 'Ab4', 'Bb4')
-          ),
+          ), { minLength: 1, maxLength: 4 }),
           dur: fc.constantFrom('1', '2', '4', '8', '16', '32', '64') as fc.Arbitrary<DurKey>,
           isRest: fc.constant(false) // 休符ではない音符のみをテスト
         }),
         async (noteEvent) => {
           // 音符を再生
           await notePlayer.playNoteEvent(noteEvent);
-          
-          // モックシンセサイザーが正しいキーで呼び出されたことを確認
+
+          // モックシンセサイザーが正しいキーの配列で呼び出されたことを確認
           expect(mockSynth.triggerAttackRelease).toHaveBeenCalledWith(
-            noteEvent.key, // 元の音符データのキーと一致する必要がある
+            noteEvent.keys, // 和音対応: keys 配列がそのまま渡される
             expect.any(Number), // 音価から計算された時間
             '+0', // デフォルトの開始時刻
             expect.any(Number) // ベロシティ

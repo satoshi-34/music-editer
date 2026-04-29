@@ -6,7 +6,12 @@ export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
 export interface NoteEvent {
   dur: DurKey;
   isRest: boolean;
-  key: string;
+  /**
+   * 音高キーの配列（VexFlow 形式: "c/4", "f#/3" など）
+   * 単音: 1要素、和音: 2要素以上
+   * isRest が true の場合は空配列または任意の値（無視される）
+   */
+  keys: string[];
 }
 
 export interface MeasureData {

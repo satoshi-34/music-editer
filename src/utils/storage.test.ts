@@ -58,7 +58,10 @@ const durKeyArbitrary = fc.constantFrom('1', '2', '4', '8', '16', '32', '64') as
 const noteEventArbitrary: fc.Arbitrary<NoteEvent> = fc.record({
   dur: durKeyArbitrary,
   isRest: fc.boolean(),
-  key: fc.string({ minLength: 3, maxLength: 10 }).filter(s => s.trim().length > 0)
+  keys: fc.array(
+    fc.string({ minLength: 3, maxLength: 10 }).filter(s => s.trim().length > 0),
+    { minLength: 1, maxLength: 4 }
+  )
 });
 
 const measureDataArbitrary: fc.Arbitrary<MeasureData> = fc.record({
@@ -80,7 +83,7 @@ const partDataArbitrary: fc.Arbitrary<PartData> = fc.record({
 });
 
 const savedScoreDataArbitrary: fc.Arbitrary<SavedScoreData> = fc.record({
-  version: fc.constant('2.0.0'),
+  version: fc.constant('3.0.0'),
   timestamp: fc.integer({ min: 1000000000000, max: 9999999999999 }),
   metadata: scoreMetadataArbitrary,
   scoreType: fc.constantFrom('single', 'piano') as fc.Arbitrary<ScoreType>,
@@ -403,7 +406,7 @@ describe('Storage Foundation Tests', () => {
               events: fc.array(fc.record({
                 dur: fc.string(), // Invalid - not a valid DurKey
                 isRest: fc.boolean(),
-                key: fc.string()
+                keys: fc.array(fc.string(), { minLength: 1 })
               }))
             })),
             systems: fc.integer(),
@@ -537,7 +540,7 @@ describe('Storage Foundation Tests', () => {
               events: fc.option(fc.array(fc.record({
                 dur: fc.option(fc.string(), { nil: undefined }),
                 isRest: fc.option(fc.boolean(), { nil: undefined }),
-                key: fc.option(fc.string(), { nil: undefined })
+                keys: fc.option(fc.array(fc.string()), { nil: undefined })
               })), { nil: undefined })
             })), { nil: undefined }),
             systems: fc.option(fc.integer(), { nil: undefined }),
@@ -676,8 +679,8 @@ describe('Storage Foundation Tests', () => {
                 for (const event of measure.events) {
                   expect(['1', '2', '4', '8', '16', '32', '64']).toContain(event.dur);
                   expect(typeof event.isRest).toBe('boolean');
-                  expect(typeof event.key).toBe('string');
-                  expect(event.key.length).toBeGreaterThan(0);
+                  expect(Array.isArray(event.keys)).toBe(true);
+                  expect(event.keys.length).toBeGreaterThan(0);
                 }
               }
             }
@@ -709,7 +712,7 @@ describe('Storage Foundation Tests', () => {
           composer: 'Test Composer',
           arranger: 'Test Arranger'
         },
-        [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '4', isRest: false, key: 'c/4' }] }] }],
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }] }],
         6,
         4
       );

@@ -38,8 +38,8 @@ export interface ScorePlaybackOptions {
  * 再生用にスケジュールされた音符データ
  */
 interface ScheduledNote {
-  /** Tone.js形式の音高（例: "C4", "F#3"） */
-  note: string;
+  /** Tone.js形式の音高配列（単音: ["C4"]、和音: ["C4","E4","G4"]） */
+  note: string[];
   /** ベロシティ（0-1の範囲） */
   velocity: number;
   /** 再生時間（秒） */
@@ -404,10 +404,10 @@ export class ScorePlayer {
         // 音価から再生時間を計算
         const duration = this.durToSeconds(event.dur, tempoSettings.bpm);
         
-        // 休符でない場合のみスケジュールに追加
-        if (!event.isRest) {
+        // 休符でない場合のみスケジュールに追加（和音は配列で保持）
+        if (!event.isRest && event.keys?.length) {
           const scheduledNote: ScheduledNote = {
-            note: this.convertKeyToToneFormat(event.key),
+            note: event.keys.map(k => this.convertKeyToToneFormat(k)),
             velocity: 0.5, // デフォルトベロシティ
             duration: duration,
             time: currentTime + measureTime,

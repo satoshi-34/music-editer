@@ -22,7 +22,7 @@ export const STORAGE_KEYS = {
 } as const;
 
 // Current version for data migration
-export const CURRENT_VERSION = '2.0.0';
+export const CURRENT_VERSION = '3.0.0';
 
 /**
  * Generates a simple checksum for data integrity verification
@@ -53,9 +53,31 @@ function validateNoteEvent(event: any): event is NoteEvent {
     typeof event === 'object' &&
     isValidDurKey(event.dur) &&
     typeof event.isRest === 'boolean' &&
-    typeof event.key === 'string' &&
-    event.key.length > 0
+    // keys は文字列の配列で、1要素以上必要（休符でも配列形式）
+    Array.isArray(event.keys) &&
+    event.keys.length > 0 &&
+    event.keys.every((k: any) => typeof k === 'string' && k.length > 0)
   );
+}
+
+/**
+ * NoteEvent の旧形式（key: string）を新形式（keys: string[]）に変換する（v2→v3 マイグレーション）
+ * LocalStorage に保存済みの旧データを読み込んだときに自動変換する
+ */
+function migrateKeyToKeys(parts: any[]): any[] {
+  return parts.map(part => ({
+    ...part,
+    measures: (part.measures ?? []).map((m: any) => ({
+      events: (m.events ?? []).map((ev: any) => {
+        // 旧形式: key（文字列）があって keys（配列）がない場合は変換する
+        if (ev && typeof ev.key === 'string' && !Array.isArray(ev.keys)) {
+          const { key, ...rest } = ev;
+          return { ...rest, keys: [key] };
+        }
+        return ev;
+      })
+    }))
+  }));
 }
 
 /**
@@ -312,6 +334,11 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
     // v1 → v2 マイグレーション
     if (isV1Data(parsedData)) {
       parsedData = migrateV1toV2(parsedData);
+    }
+
+    // v2 → v3 マイグレーション: NoteEvent.key（文字列）を keys（配列）に変換
+    if (Array.isArray(parsedData.parts)) {
+      parsedData.parts = migrateKeyToKeys(parsedData.parts);
     }
 
     // Validate parsed data

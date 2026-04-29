@@ -579,3 +579,103 @@ clientToGroup(svg, svgRoot, e.clientX, e.clientY + yOffsetRef.current)
 
 - **方向**: 低音方向（画面下）がプラス、高音方向（画面上）がマイナス
 - **UI**: ↑/↓ボタン、数値直接入力、キーボード ↑↓ キー対応。0 以外のときボタンに値を表示
+
+## 修正 13: 和音（複数音符の同時配置・再生）対応
+
+**ファイル**: `src/types/storage.ts`, `src/utils/storage.ts`, `src/components/StaffCanvas.tsx`, `src/components/PianoSystemCanvas.tsx`, `src/audio/NotePlayer.ts`, `src/audio/ScorePlayer.ts`
+
+### 背景
+
+これまで `NoteEvent` は 1 スロット = 1 音しか表現できなかった（`key: string`）。和音（C・E・G など複数音の同時発音）に対応するため、データモデルを `keys: string[]` に変更する。
+
+### データモデル変更
+
+```typescript
+// 旧（v2）
+interface NoteEvent {
+  dur: DurKey;
+  isRest: boolean;
+  key: string;  // 単音
+}
+
+// 新（v3）
+interface NoteEvent {
+  dur: DurKey;
+  isRest: boolean;
+  keys: string[];  // 単音: ['c/4']、和音: ['c/4','e/4','g/4']
+}
+```
+
+`CURRENT_VERSION` を `'2.0.0'` → `'3.0.0'` に更新。
+
+### v2 → v3 マイグレーション
+
+`loadScoreData()` 内で、バリデーション前に `migrateKeyToKeys()` を実行:
+
+```typescript
+function migrateKeyToKeys(parts: any[]): any[] {
+  return parts.map(part => ({
+    ...part,
+    measures: (part.measures ?? []).map((m: any) => ({
+      events: (m.events ?? []).map((ev: any) => {
+        if (ev && typeof ev.key === 'string' && !Array.isArray(ev.keys)) {
+          const { key, ...rest } = ev;
+          return { ...rest, keys: [key] };
+        }
+        return ev;
+      })
+    }))
+  }));
+}
+```
+
+### UI: Shift+クリックで和音追加
+
+クリックハンドラ内で `e.shiftKey` を検出し、既存スロットに新しい音高を追加:
+
+```typescript
+if (ev.shiftKey && !targetEvent.isRest) {
+  const newKey = lineToKey(snapLine);
+  if (targetEvent.keys.includes(newKey)) return prev;  // 重複防止
+  const newKeys = [...targetEvent.keys, newKey]
+    .sort((a, b) => keyToLine(b) - keyToLine(a));  // 低音から高音順
+  next[measure].events[index] = { ...targetEvent, keys: newKeys };
+}
+```
+
+**ソート方向の理由**: VexFlow は `keys` を低音から高音の順で受け取る。`keyToLine` は高い音ほど値が小さいため `b - a` で降順 → 低音が先頭になる。
+
+### キーボードハンドラ: 全音を同時シフト
+
+矢印キーで和音の全音高を同じ量だけ移動（音程を保ったまま）:
+
+```typescript
+// 半音シフト（Alt）
+const delta = up ? 1 : -1;
+const newKeys = ev.keys.map(k => {
+  const midi = keyToMidi(k);
+  return midi != null ? midiToKey(midi + delta, up) : k;
+});
+
+// 線/間 1段シフト（デフォルト）
+const diff = up ? -0.5 : 0.5;
+const newKeys = ev.keys.map(k => lineToKey(keyToLine(k) + diff));
+```
+
+### 音声レイヤー
+
+**NotePlayer**: `playNoteEvent()` が `keys[]` をそのまま PolySynth に渡す:
+
+```typescript
+const toneKeys = noteEvent.keys.map(k => this._convertKeyToToneFormat(k));
+synth.triggerAttackRelease(toneKeys, duration, time, velocity);
+// PolySynth は string[] を受け取り全音を同時発音する
+```
+
+**ScorePlayer**: `ScheduledNote.note: string[]` に変更。`generatePlaybackSchedule()` が `event.keys.map(k => convertKeyToToneFormat(k))` で配列を生成。`createPlaybackPart()` は `synth.triggerAttackRelease(event.note, ...)` でそのまま渡す。
+
+### 影響範囲
+
+- VexFlow の `StaveNote` は `keys: string[]` を元々受け入れており、変更なしで和音を表示できる
+- PolySynth も `string[]` を受け入れるため、音声側の変更は型変更のみ
+- テストファイル全件を `key: 'x/y'` → `keys: ['x/y']` に一括更新（7 ファイル）

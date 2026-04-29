@@ -3,7 +3,7 @@ import { StaveNote } from 'vexflow';
 
 // テスト対象の型定義
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; key: string };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[] };
 
 // 定数
 const BEATS_PER_MEASURE = 4;
@@ -425,7 +425,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           getAbsoluteX: () => 150,
           setXShift: vi.fn(),
         };
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // NaN値のテスト
         adjustRestPositions([mockNote as any], events, NaN, 200);
@@ -466,7 +466,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           getAbsoluteX: () => 150,
           setXShift: vi.fn(),
         };
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // 0の小節幅
         adjustRestPositions([mockNote as any], events, 100, 0);
@@ -491,7 +491,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           getAbsoluteX: () => 150,
           setXShift: vi.fn(),
         };
-        const validEvent: NoteEvent = { dur: '4', isRest: true, key: 'b/4' };
+        const validEvent: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'] };
 
         // null/undefinedが混在する配列
         const mixedNotes = [validNote, null, undefined, validNote];
@@ -519,7 +519,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
         };
 
         // 無効なdurationを持つevent
-        const events: NoteEvent[] = [{ dur: 'invalid' as any, isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: 'invalid' as any, isRest: true, keys: ['b/4'] }];
 
         adjustRestPositions([mockNote as any], events, 100, 200);
 
@@ -536,7 +536,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           setXShift: vi.fn(),
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // 予期しないエラーでもクラッシュしない
         expect(() => {
@@ -552,7 +552,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
 
     describe('makeVFNote関数', () => {
       it('無効なdurationでもデフォルト値で処理される', () => {
-        const invalidEvent: NoteEvent = { dur: 'invalid' as DurKey, isRest: true, key: 'b/4' };
+        const invalidEvent: NoteEvent = { dur: 'invalid' as DurKey, isRest: true, keys: ['b/4'] };
         
         // 例外が発生しないことを確認
         expect(() => {
@@ -562,7 +562,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
       });
 
       it('無効なkeyでもStaveNoteが作成される', () => {
-        const invalidEvent: NoteEvent = { dur: '4', isRest: false, key: 'invalid' };
+        const invalidEvent: NoteEvent = { dur: '4', isRest: false, keys: ['invalid'] };
         
         // VexFlowは無効なkeyに対してエラーを投げるため、これをキャッチする
         expect(() => {
@@ -571,8 +571,8 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
       });
 
       it('null/undefinedのeventプロパティを適切に処理する', () => {
-        const eventWithNullDur: any = { dur: null, isRest: true, key: 'b/4' };
-        const eventWithUndefinedDur: any = { dur: undefined, isRest: true, key: 'b/4' };
+        const eventWithNullDur: any = { dur: null, isRest: true, keys: ['b/4'] };
+        const eventWithUndefinedDur: any = { dur: undefined, isRest: true, keys: ['b/4'] };
         
         // null/undefinedでもデフォルト値で処理される
         expect(() => {
@@ -596,7 +596,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           setXShift: vi.fn(),
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // エラーが発生してもクラッシュしない
         expect(() => {
@@ -622,7 +622,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           setX: vi.fn(), // 代替手段
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // エラーが発生してもクラッシュしない
         expect(() => {
@@ -647,7 +647,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           setX: () => { throw new Error('setX API エラー'); },
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // エラーが発生してもクラッシュしない
         expect(() => {
@@ -672,7 +672,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           // setXShiftメソッドが存在しない
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // エラーが発生してもクラッシュしない
         expect(() => {
@@ -692,7 +692,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           setXShift: vi.fn(),
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // エラーが発生してもクラッシュしない
         expect(() => {
@@ -710,7 +710,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           setXShift: vi.fn(),
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // エラーが発生してもクラッシュしない
         expect(() => {
@@ -726,7 +726,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
 
     describe('StaveNote作成時のAPI失敗', () => {
       it('StaveNoteコンストラクタの失敗を適切に処理する', () => {
-        const event: NoteEvent = { dur: '4', isRest: true, key: 'b/4' };
+        const event: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'] };
         
         // VexFlowのStaveNoteは通常、有効なパラメータで作成される
         // 無効なパラメータの場合はVexFlow内部でエラーが発生する
@@ -760,9 +760,9 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
         ];
 
         const events: NoteEvent[] = [
-          { dur: '4', isRest: true, key: 'b/4' },
-          { dur: '4', isRest: true, key: 'b/4' },
-          { dur: '4', isRest: true, key: 'b/4' }
+          { dur: '4', isRest: true, keys: ['b/4'] },
+          { dur: '4', isRest: true, keys: ['b/4'] },
+          { dur: '4', isRest: true, keys: ['b/4'] }
         ];
 
         // 複数のエラーが発生してもクラッシュしない
@@ -890,7 +890,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
 
         // notesが多い場合
         const moreNotes = [mockNote, mockNote, mockNote];
-        const fewerEvents: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const fewerEvents: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         expect(() => {
           adjustRestPositions(moreNotes as any, fewerEvents, 100, 200);
@@ -902,9 +902,9 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
         // eventsが多い場合
         const fewerNotes = [mockNote];
         const moreEvents: NoteEvent[] = [
-          { dur: '4', isRest: true, key: 'b/4' },
-          { dur: '4', isRest: true, key: 'b/4' },
-          { dur: '4', isRest: true, key: 'b/4' }
+          { dur: '4', isRest: true, keys: ['b/4'] },
+          { dur: '4', isRest: true, keys: ['b/4'] },
+          { dur: '4', isRest: true, keys: ['b/4'] }
         ];
 
         mockNote.setXShift.mockClear();
@@ -1024,7 +1024,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
         setXShift: vi.fn(),
       };
 
-      const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+      const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
       // API失敗時でも処理が継続される
       expect(() => {
@@ -1048,7 +1048,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
           setXShift: vi.fn(),
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // 複数のエラーが発生してもクラッシュしない
         expect(() => {
@@ -1079,7 +1079,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
         setXShift: vi.fn(),
       };
 
-      const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+      const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
       adjustRestPositions([mockNote as any], events, 100, 200);
 
@@ -1100,7 +1100,7 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
         setXShift: vi.fn(),
       };
 
-      const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+      const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
       adjustRestPositions([mockNote as any], events, 100, 200);
 
@@ -1133,9 +1133,9 @@ describe('休符重なり修正 - エラーハンドリングテスト', () => {
       ];
 
       const events: NoteEvent[] = [
-        { dur: '4', isRest: true, key: 'b/4' },
-        { dur: '4', isRest: true, key: 'b/4' },
-        { dur: '4', isRest: false, key: 'c/4' }
+        { dur: '4', isRest: true, keys: ['b/4'] },
+        { dur: '4', isRest: true, keys: ['b/4'] },
+        { dur: '4', isRest: false, keys: ['c/4'] }
       ];
 
       adjustRestPositions(mockNotes as any, events, 100, 200);

@@ -11,7 +11,7 @@ const mockTool: Tool = {
 
 // MeasureDataの型定義
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; key: string };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[] };
 type MeasureData = { events: NoteEvent[] };
 
 describe('休符重なり修正の統合テスト', () => {
@@ -25,10 +25,10 @@ describe('休符重なり修正の統合テスト', () => {
       const scoreData: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: true, key: 'b/4' },
-            { dur: '4', isRest: true, key: 'b/4' },
-            { dur: '4', isRest: true, key: 'b/4' },
-            { dur: '4', isRest: true, key: 'b/4' },
+            { dur: '4', isRest: true, keys: ['b/4'] },
+            { dur: '4', isRest: true, keys: ['b/4'] },
+            { dur: '4', isRest: true, keys: ['b/4'] },
+            { dur: '4', isRest: true, keys: ['b/4'] },
           ]
         }
       ];
@@ -50,10 +50,10 @@ describe('休符重なり修正の統合テスト', () => {
       const scoreData: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'c/4' }, // 音符
-            { dur: '4', isRest: true, key: 'b/4' },  // 休符
-            { dur: '4', isRest: false, key: 'd/4' }, // 音符
-            { dur: '4', isRest: true, key: 'b/4' },  // 休符
+            { dur: '4', isRest: false, keys: ['c/4'] }, // 音符
+            { dur: '4', isRest: true, keys: ['b/4'] },  // 休符
+            { dur: '4', isRest: false, keys: ['d/4'] }, // 音符
+            { dur: '4', isRest: true, keys: ['b/4'] },  // 休符
           ]
         }
       ];
@@ -74,9 +74,9 @@ describe('休符重なり修正の統合テスト', () => {
       const scoreData: MeasureData[] = [
         {
           events: [
-            { dur: '2', isRest: true, key: 'b/4' },  // 2分休符
-            { dur: '4', isRest: true, key: 'b/4' },  // 4分休符
-            { dur: '4', isRest: true, key: 'b/4' },  // 4分休符
+            { dur: '2', isRest: true, keys: ['b/4'] },  // 2分休符
+            { dur: '4', isRest: true, keys: ['b/4'] },  // 4分休符
+            { dur: '4', isRest: true, keys: ['b/4'] },  // 4分休符
           ]
         }
       ];
@@ -99,14 +99,14 @@ describe('休符重なり修正の統合テスト', () => {
       const scoreData: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: true, key: 'b/4' },
-            { dur: '4', isRest: true, key: 'b/4' },
+            { dur: '4', isRest: true, keys: ['b/4'] },
+            { dur: '4', isRest: true, keys: ['b/4'] },
           ]
         },
         {
           events: [
-            { dur: '2', isRest: true, key: 'b/4' },
-            { dur: '2', isRest: true, key: 'b/4' },
+            { dur: '2', isRest: true, keys: ['b/4'] },
+            { dur: '2', isRest: true, keys: ['b/4'] },
           ]
         }
       ];
@@ -129,10 +129,10 @@ describe('休符重なり修正の統合テスト', () => {
       const scoreData: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'c/4' },
-            { dur: '4', isRest: false, key: 'd/4' },
-            { dur: '4', isRest: false, key: 'e/4' },
-            { dur: '4', isRest: false, key: 'f/4' },
+            { dur: '4', isRest: false, keys: ['c/4'] },
+            { dur: '4', isRest: false, keys: ['d/4'] },
+            { dur: '4', isRest: false, keys: ['e/4'] },
+            { dur: '4', isRest: false, keys: ['f/4'] },
           ]
         }
       ];
@@ -168,10 +168,10 @@ describe('休符重なり修正の統合テスト', () => {
 
     it('複数システム（行）の描画が正常に動作する', () => {
       const scoreData: MeasureData[] = [
-        { events: [{ dur: '4', isRest: true, key: 'b/4' }] },
-        { events: [{ dur: '4', isRest: true, key: 'b/4' }] },
-        { events: [{ dur: '4', isRest: true, key: 'b/4' }] },
-        { events: [{ dur: '4', isRest: true, key: 'b/4' }] },
+        { events: [{ dur: '4', isRest: true, keys: ['b/4'] }] },
+        { events: [{ dur: '4', isRest: true, keys: ['b/4'] }] },
+        { events: [{ dur: '4', isRest: true, keys: ['b/4'] }] },
+        { events: [{ dur: '4', isRest: true, keys: ['b/4'] }] },
       ];
 
       expect(() => {
@@ -192,8 +192,8 @@ describe('休符重なり修正の統合テスト', () => {
       const scoreData: MeasureData[] = [
         {
           events: [
-            { dur: 'invalid' as DurKey, isRest: true, key: 'b/4' },
-            { dur: '4', isRest: true, key: 'b/4' },
+            { dur: 'invalid' as DurKey, isRest: true, keys: ['b/4'] },
+            { dur: '4', isRest: true, keys: ['b/4'] },
           ]
         }
       ];
@@ -214,8 +214,8 @@ describe('休符重なり修正の統合テスト', () => {
       const scoreData: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: true, key: 'invalid' },
-            { dur: '4', isRest: true, key: 'b/4' },
+            { dur: '4', isRest: true, keys: ['invalid'] },
+            { dur: '4', isRest: true, keys: ['b/4'] },
           ]
         }
       ];

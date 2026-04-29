@@ -509,7 +509,7 @@ describe('SoundSource Property Tests', () => {
     // Feature: note-playback, Property 10: 任意のテンポ・音色設定に対して、保存後の復元により同じ設定値が得られる必要がある
     fc.assert(fc.property(
       fc.constantFrom(...Object.values(InstrumentType)),
-      fc.float({ min: 0, max: 1 }),
+      fc.float({ min: 0, max: 1, noNaN: true }),
       (instrument, volume) => {
         // 設定を変更
         soundSource.setCurrentInstrument(instrument);

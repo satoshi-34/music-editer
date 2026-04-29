@@ -60,24 +60,24 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const measures: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'c/4' },
-            { dur: '4', isRest: false, key: 'd/4' },
-            { dur: '4', isRest: false, key: 'e/4' },
-            { dur: '4', isRest: false, key: 'f/4' }
+            { dur: '4', isRest: false, keys: ['c/4'] },
+            { dur: '4', isRest: false, keys: ['d/4'] },
+            { dur: '4', isRest: false, keys: ['e/4'] },
+            { dur: '4', isRest: false, keys: ['f/4'] }
           ]
         },
         {
           events: [
-            { dur: '2', isRest: false, key: 'g/4' },
-            { dur: '2', isRest: true, key: 'b/4' }
+            { dur: '2', isRest: false, keys: ['g/4'] },
+            { dur: '2', isRest: true, keys: ['b/4'] }
           ]
         },
         {
           events: [
-            { dur: '8', isRest: false, key: 'a/4' },
-            { dur: '8', isRest: false, key: 'b/4' },
-            { dur: '8', isRest: false, key: 'c/5' },
-            { dur: '8', isRest: false, key: 'd/5' }
+            { dur: '8', isRest: false, keys: ['a/4'] },
+            { dur: '8', isRest: false, keys: ['b/4'] },
+            { dur: '8', isRest: false, keys: ['c/5'] },
+            { dur: '8', isRest: false, keys: ['d/5'] }
           ]
         }
       ];
@@ -133,7 +133,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
         }
 
         // バージョンとタイムスタンプの検証
-        expect(loadedData.version).toBe('2.0.0');
+        expect(loadedData.version).toBe('3.0.0');
         expect(loadedData.timestamp).toBeGreaterThan(0);
       }
     });
@@ -150,7 +150,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
         arranger: ''
       };
       const measures1: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
       const parts1: PartData[] = [{ partId: 'melody', clef: 'treble', measures: measures1 }];
 
@@ -174,8 +174,8 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
         arranger: ''
       };
       const measures2: MeasureData[] = [
-        { events: [{ dur: '2', isRest: false, key: 'd/4' }] },
-        { events: [{ dur: '2', isRest: true, key: 'e/4' }] }
+        { events: [{ dur: '2', isRest: false, keys: ['d/4'] }] },
+        { events: [{ dur: '2', isRest: true, keys: ['e/4'] }] }
       ];
       const parts2: PartData[] = [{ partId: 'melody', clef: 'treble', measures: measures2 }];
 
@@ -263,7 +263,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
         arranger: ''
       };
       const measures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
       const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
@@ -368,10 +368,10 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       // 大量の小節データを生成（24小節）
       const measures: MeasureData[] = Array.from({ length: 24 }, (_, i) => ({
         events: [
-          { dur: '4' as DurKey, isRest: false, key: 'c/4' },
-          { dur: '4' as DurKey, isRest: false, key: 'd/4' },
-          { dur: '4' as DurKey, isRest: false, key: 'e/4' },
-          { dur: '4' as DurKey, isRest: false, key: 'f/4' }
+          { dur: '4' as DurKey, isRest: false, keys: ['c/4'] },
+          { dur: '4' as DurKey, isRest: false, keys: ['d/4'] },
+          { dur: '4' as DurKey, isRest: false, keys: ['e/4'] },
+          { dur: '4' as DurKey, isRest: false, keys: ['f/4'] }
         ]
       }));
 
@@ -453,7 +453,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       };
 
       const measures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
       const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
@@ -526,7 +526,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
           {
             partId: 'melody',
             clef: 'treble',
-            measures: [{ events: [{ dur: '4', isRest: false, key: 'c/4' }] }]
+            measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }]
           }
         ],
         systems: 1,

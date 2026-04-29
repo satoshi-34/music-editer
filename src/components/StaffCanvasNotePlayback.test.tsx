@@ -52,7 +52,7 @@ describe('StaffCanvas 音符クリック再生機能', () => {
     it('should initialize NotePlayer on component mount', async () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
 
       render(
@@ -75,7 +75,7 @@ describe('StaffCanvas 音符クリック再生機能', () => {
     it('should dispose NotePlayer on component unmount', async () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
 
       const { unmount } = render(
@@ -108,9 +108,9 @@ describe('StaffCanvas 音符クリック再生機能', () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
         { events: [
-          { dur: '4', isRest: false, key: 'c/4' },
-          { dur: '4', isRest: false, key: 'd/4' },
-          { dur: '4', isRest: true, key: 'b/4' }
+          { dur: '4', isRest: false, keys: ['c/4'] },
+          { dur: '4', isRest: false, keys: ['d/4'] },
+          { dur: '4', isRest: true, keys: ['b/4'] }
         ]}
       ];
       
@@ -137,7 +137,7 @@ describe('StaffCanvas 音符クリック再生機能', () => {
     it('should maintain existing click functionality with playback integration', () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
       
       const { container } = render(
@@ -173,7 +173,7 @@ describe('StaffCanvas 音符クリック再生機能', () => {
       
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
       
       // エラーが発生してもコンポーネントがレンダリングされることを確認
@@ -199,7 +199,7 @@ describe('StaffCanvas 音符クリック再生機能', () => {
       
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
       
       // エラーが発生してもコンポーネントがレンダリングされることを確認
@@ -222,7 +222,7 @@ describe('StaffCanvas 音符クリック再生機能', () => {
     it('should integrate note click playback functionality (要件1.1)', async () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
 
       const { container } = render(
@@ -251,7 +251,7 @@ describe('StaffCanvas 音符クリック再生機能', () => {
     it('should manage NotePlayer instance properly (要件1.5)', async () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
 
       const { unmount } = render(

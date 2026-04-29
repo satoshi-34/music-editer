@@ -51,7 +51,10 @@ const durKeyArbitrary = fc.constantFrom('1', '2', '4', '8', '16', '32', '64') as
 const noteEventArbitrary: fc.Arbitrary<NoteEvent> = fc.record({
   dur: durKeyArbitrary,
   isRest: fc.boolean(),
-  key: fc.string({ minLength: 3, maxLength: 10 }).filter(s => s.trim().length > 0)
+  keys: fc.array(
+    fc.string({ minLength: 1, maxLength: 5 }).filter(s => s.trim().length > 0),
+    { minLength: 1, maxLength: 4 }
+  )
 });
 
 const measureDataArbitrary: fc.Arbitrary<MeasureData> = fc.record({
@@ -194,12 +197,12 @@ describe('useScoreStorage Hook Tests', () => {
 
                   expect(savedEvent.dur).toBe(originalEvent.dur);
                   expect(savedEvent.isRest).toBe(originalEvent.isRest);
-                  expect(savedEvent.key).toBe(originalEvent.key);
+                  expect(savedEvent.keys).toEqual(originalEvent.keys);
                 }
               }
 
               // Verify version and timestamp are added
-              expect(parsedData.version).toBe('2.0.0');
+              expect(parsedData.version).toBe('3.0.0');
               expect(typeof parsedData.timestamp).toBe('number');
               expect(parsedData.timestamp).toBeGreaterThan(0);
             }
@@ -308,7 +311,7 @@ describe('useScoreStorage Hook Tests', () => {
         composer: '',
         arranger: ''
       };
-      const testMeasures = [{ events: [{ dur: '4' as DurKey, isRest: false, key: 'c/4' }] }];
+      const testMeasures = [{ events: [{ dur: '4' as DurKey, isRest: false, keys: ['c/4'] }] }];
       const testParts: PartData[] = [{ partId: 'melody', clef: 'treble', measures: testMeasures }];
 
       // Initially no data

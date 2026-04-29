@@ -196,7 +196,7 @@ export class SimpleAudioEngine {
   /**
    * 譜面データから音符を順次再生する
    */
-  async playScore(scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; key: string }> }>, bpm: number = 120): Promise<void> {
+  async playScore(scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[] }> }>, bpm: number = 120): Promise<void> {
     if (!this.context) {
       throw new Error('AudioContextが初期化されていません');
     }
@@ -220,9 +220,9 @@ export class SimpleAudioEngine {
         for (const event of measure.events) {
           const duration = this.durationToSeconds(event.dur, bpm);
           
-          if (!event.isRest) {
-            // 音符の場合は再生
-            const frequency = this.noteToFrequency(event.key);
+          if (!event.isRest && event.keys && event.keys.length > 0) {
+            // 音符の場合は最初の音高を再生（単音対応）
+            const frequency = this.noteToFrequency(event.keys[0]);
             await this.playNoteAtTime(frequency, duration, currentTime);
           }
           // 休符の場合は時間だけ進める
@@ -279,7 +279,7 @@ export class SimpleAudioEngine {
   /**
    * 複数パート（右手・左手など）を同時再生する
    */
-  async playParts(parts: Array<{ measures: Array<{ events: Array<{ dur: string; isRest: boolean; key: string }> }> }>, bpm: number = 120): Promise<void> {
+  async playParts(parts: Array<{ measures: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[] }> }> }>, bpm: number = 120): Promise<void> {
     if (!this.context) {
       throw new Error('AudioContextが初期化されていません');
     }

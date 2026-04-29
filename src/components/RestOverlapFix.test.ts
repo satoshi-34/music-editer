@@ -4,7 +4,7 @@ import fc from 'fast-check';
 
 // makeVFNote関数をテストするため、StaffCanvasから抽出
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; key: string };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[] };
 
 // 定数
 const BEATS_PER_MEASURE = 4;
@@ -197,7 +197,7 @@ function makeVFNote(ev: NoteEvent) {
     const n = new StaveNote({ clef: 'treble', keys: ['b/4'], duration: (vfDur as VFDur) + 'r' });
     return n;
   }
-  const n = new StaveNote({ clef: 'treble', keys: [ev.key], duration: vfDur });
+  const n = new StaveNote({ clef: 'treble', keys: ev.keys, duration: vfDur });
   return n;
 }
 
@@ -205,7 +205,7 @@ describe('makeVFNote関数の修正', () => {
   describe('休符の処理', () => {
     it('休符が中央揃えされないことを確認', () => {
       // 4分休符を作成
-      const restEvent: NoteEvent = { dur: '4', isRest: true, key: 'b/4' };
+      const restEvent: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'] };
       const note = makeVFNote(restEvent);
       
       // StaveNoteが作成されることを確認
@@ -225,7 +225,7 @@ describe('makeVFNote関数の修正', () => {
       ];
 
       testCases.forEach(({ dur, expectedVFDur }) => {
-        const restEvent: NoteEvent = { dur, isRest: true, key: 'b/4' };
+        const restEvent: NoteEvent = { dur, isRest: true, keys: ['b/4'] };
         const note = makeVFNote(restEvent);
         
         expect(note).toBeInstanceOf(StaveNote);
@@ -237,7 +237,7 @@ describe('makeVFNote関数の修正', () => {
     });
 
     it('setCenterAlignmentメソッドが呼ばれていないことを確認', () => {
-      const restEvent: NoteEvent = { dur: '4', isRest: true, key: 'b/4' };
+      const restEvent: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'] };
       
       // setCenterAlignmentメソッドをスパイ
       const originalSetCenterAlignment = StaveNote.prototype.setCenterAlignment;
@@ -261,7 +261,7 @@ describe('makeVFNote関数の修正', () => {
 
   describe('音符の処理', () => {
     it('音符の処理が変更されていないことを確認', () => {
-      const noteEvent: NoteEvent = { dur: '4', isRest: false, key: 'c/4' };
+      const noteEvent: NoteEvent = { dur: '4', isRest: false, keys: ['c/4'] };
       const note = makeVFNote(noteEvent);
       
       // StaveNoteが作成されることを確認
@@ -276,7 +276,7 @@ describe('makeVFNote関数の修正', () => {
       const testCases = ['c/4', 'd/4', 'e/4', 'f/4', 'g/4', 'a/4', 'b/4'];
 
       testCases.forEach(key => {
-        const noteEvent: NoteEvent = { dur: '4', isRest: false, key };
+        const noteEvent: NoteEvent = { dur: '4', isRest: false, keys: [key] };
         const note = makeVFNote(noteEvent);
         
         expect(note).toBeInstanceOf(StaveNote);
@@ -288,7 +288,7 @@ describe('makeVFNote関数の修正', () => {
 
   describe('エラーケース', () => {
     it('無効なdurationでもデフォルト値で処理される', () => {
-      const invalidEvent: NoteEvent = { dur: 'invalid' as DurKey, isRest: true, key: 'b/4' };
+      const invalidEvent: NoteEvent = { dur: 'invalid' as DurKey, isRest: true, keys: ['b/4'] };
       const note = makeVFNote(invalidEvent);
       
       expect(note).toBeInstanceOf(StaveNote);
@@ -366,7 +366,7 @@ describe('makeVFNote関数の修正', () => {
       };
       
       const vfNotes = [mockNote as any];
-      const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+      const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
       const measureLeft = 100;
       const measureWidth = 200;
       
@@ -392,8 +392,8 @@ describe('makeVFNote関数の修正', () => {
       
       const vfNotes = [mockNote1 as any, mockNote2 as any];
       const events: NoteEvent[] = [
-        { dur: '4', isRest: true, key: 'b/4' }, // 0拍目
-        { dur: '4', isRest: true, key: 'b/4' }, // 1拍目
+        { dur: '4', isRest: true, keys: ['b/4'] }, // 0拍目
+        { dur: '4', isRest: true, keys: ['b/4'] }, // 1拍目
       ];
       const measureLeft = 100;
       const measureWidth = 200;
@@ -421,8 +421,8 @@ describe('makeVFNote関数の修正', () => {
       
       const vfNotes = [mockNote1 as any, mockNote2 as any];
       const events: NoteEvent[] = [
-        { dur: '4', isRest: false, key: 'c/4' }, // 音符
-        { dur: '4', isRest: true, key: 'b/4' },  // 休符
+        { dur: '4', isRest: false, keys: ['c/4'] }, // 音符
+        { dur: '4', isRest: true, keys: ['b/4'] },  // 休符
       ];
       const measureLeft = 100;
       const measureWidth = 200;
@@ -444,7 +444,7 @@ describe('makeVFNote関数の修正', () => {
       };
       
       const vfNotes = [mockNote as any];
-      const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+      const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
       
       adjustRestPositions(vfNotes, events, 100, 200);
       
@@ -462,7 +462,7 @@ describe('makeVFNote関数の修正', () => {
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       
       const vfNotes = [mockNote as any];
-      const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+      const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
       
       // エラーが発生してもクラッシュしない
       expect(() => {
@@ -644,7 +644,7 @@ describe('makeVFNote関数の修正', () => {
                 setXShift: vi.fn(),
               };
 
-              const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+              const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
               
               adjustRestPositions([mockNote as any], events, measureLeft, measureWidth);
 
@@ -751,7 +751,7 @@ describe('makeVFNote関数の修正', () => {
           getAbsoluteX: () => 150,
           setXShift: vi.fn(),
         };
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // NaN値
         expect(() => {
@@ -781,7 +781,7 @@ describe('makeVFNote関数の修正', () => {
           setXShift: vi.fn(),
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // エラーが発生してもクラッシュしない
         expect(() => {
@@ -801,7 +801,7 @@ describe('makeVFNote関数の修正', () => {
           // setXShiftメソッドが存在しない
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // エラーが発生してもクラッシュしない
         expect(() => {
@@ -817,7 +817,7 @@ describe('makeVFNote関数の修正', () => {
           setX: vi.fn(), // 代替手段
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // エラーが発生してもクラッシュしない
         expect(() => {
@@ -836,7 +836,7 @@ describe('makeVFNote関数の修正', () => {
         };
 
         // 無効なdurationを持つevent
-        const events: NoteEvent[] = [{ dur: 'invalid' as any, isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: 'invalid' as any, isRest: true, keys: ['b/4'] }];
 
         // エラーが発生してもクラッシュしない
         expect(() => {
@@ -851,7 +851,7 @@ describe('makeVFNote関数の修正', () => {
           setXShift: vi.fn(),
         };
 
-        const validEvent: NoteEvent = { dur: '4', isRest: true, key: 'b/4' };
+        const validEvent: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'] };
 
         // null/undefinedが混在する配列
         const mixedNotes = [validNote, null, undefined, validNote];
@@ -872,7 +872,7 @@ describe('makeVFNote関数の修正', () => {
           get isRest() { throw new Error('予期しないエラー'); }
         };
 
-        const events: NoteEvent[] = [{ dur: '4', isRest: true, key: 'b/4' }];
+        const events: NoteEvent[] = [{ dur: '4', isRest: true, keys: ['b/4'] }];
 
         // 予期しないエラーでもクラッシュしない
         expect(() => {
@@ -904,10 +904,10 @@ describe('makeVFNote関数の修正', () => {
         ];
 
         const problematicEvents = [
-          { dur: 'invalid' as any, isRest: true, key: 'b/4' }, // 無効なduration
+          { dur: 'invalid' as any, isRest: true, keys: ['b/4'] }, // 無効なduration
           null, // null event
-          { dur: '4', isRest: true, key: 'b/4' }, // 正常なevent
-          { dur: '4', isRest: false, key: 'c/4' }, // 音符
+          { dur: '4', isRest: true, keys: ['b/4'] }, // 正常なevent
+          { dur: '4', isRest: false, keys: ['c/4'] }, // 音符
         ];
 
         // 複数のエラーが発生してもクラッシュしない

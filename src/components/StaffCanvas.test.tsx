@@ -3,7 +3,7 @@
 // Feature: score-save-load, Property 7: 保存-読込ラウンドトリップ
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, cleanup } from '@testing-library/react';
 import * as fc from 'fast-check';
 import StaffCanvas from './StaffCanvas';
 import { saveScoreData, loadScoreData, createSavedScoreData } from '../utils/storage';
@@ -51,12 +51,14 @@ const durKeyArbitrary = fc.constantFrom('1', '2', '4', '8', '16', '32', '64') as
 const noteEventArbitrary: fc.Arbitrary<NoteEvent> = fc.record({
   dur: durKeyArbitrary,
   isRest: fc.boolean(),
-  key: fc.oneof(
-    // Generate valid musical keys
-    fc.constantFrom('c/4', 'd/4', 'e/4', 'f/4', 'g/4', 'a/4', 'b/4'),
-    fc.constantFrom('c/5', 'd/5', 'e/5', 'f/5', 'g/5', 'a/5', 'b/5'),
-    fc.constantFrom('c#/4', 'd#/4', 'f#/4', 'g#/4', 'a#/4'),
-    fc.constantFrom('db/4', 'eb/4', 'gb/4', 'ab/4', 'bb/4')
+  keys: fc.array(
+    fc.oneof(
+      fc.constantFrom('c/4', 'd/4', 'e/4', 'f/4', 'g/4', 'a/4', 'b/4'),
+      fc.constantFrom('c/5', 'd/5', 'e/5', 'f/5', 'g/5', 'a/5', 'b/5'),
+      fc.constantFrom('c#/4', 'd#/4', 'f#/4', 'g#/4', 'a#/4'),
+      fc.constantFrom('db/4', 'eb/4', 'gb/4', 'ab/4', 'bb/4')
+    ),
+    { minLength: 1, maxLength: 3 }
   )
 });
 
@@ -155,7 +157,7 @@ describe('StaffCanvas Integration Tests', () => {
 
                   expect(loadedEvent.dur).toBe(originalEvent.dur);
                   expect(loadedEvent.isRest).toBe(originalEvent.isRest);
-                  expect(loadedEvent.key).toBe(originalEvent.key);
+                  expect(loadedEvent.keys).toEqual(originalEvent.keys);
                 }
               }
 
@@ -173,7 +175,7 @@ describe('StaffCanvas Integration Tests', () => {
     it('should render with initial score data', () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
       
       render(
@@ -212,7 +214,7 @@ describe('StaffCanvas Integration Tests', () => {
     it('should call onScoreDataChange when score data changes', () => {
       const testTool = { duration: '4' as DurKey, isRest: false };
       const testMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
       ];
       const mockCallback = vi.fn();
       
@@ -251,13 +253,15 @@ describe('StaffCanvas Integration Tests', () => {
             const numPages = Math.ceil(totalMeasures / measuresPerPage);
             const initialMeasures: MeasureData[] = Array.from({ length: totalMeasures }, () => ({ events: [] }));
             const testTool = { duration: '4' as DurKey, isRest: false };
-            
-            render(<StaffCanvas systems={numPages} gap={110} measuresPerSystem={measuresPerPage} tool={testTool} scale={1} initialScoreData={initialMeasures} />);
-            
-            const svg = document.querySelector('svg');
+
+            // プロパティテスト内で render() を複数回呼ぶと古い SVG が
+            // document.querySelector に引っかかるため、render ごとに container を使う
+            const { container } = render(<StaffCanvas systems={numPages} gap={110} measuresPerSystem={measuresPerPage} tool={testTool} scale={1} initialScoreData={initialMeasures} />);
+
+            const svg = container.querySelector('svg');
             expect(svg).toBeTruthy();
-            if (!svg) return;
-            
+            if (!svg) { cleanup(); return; }
+
             const insertRects = svg.querySelectorAll('rect.vf-hit');
             expect(insertRects.length).toBeGreaterThan(0);
             
@@ -292,6 +296,7 @@ describe('StaffCanvas Integration Tests', () => {
               // 描画された小節数が期待値以下であることを確認
               expect(sortedIndices.length).toBeLessThanOrEqual(maxDisplayedMeasures);
             }
+            cleanup();
           }
         ),
         { numRuns: 100 }
@@ -462,7 +467,7 @@ describe('StaffCanvas Integration Tests', () => {
               for (let j = 0; j < before.events.length; j++) {
                 expect(after.events[j].dur).toBe(before.events[j].dur);
                 expect(after.events[j].isRest).toBe(before.events[j].isRest);
-                expect(after.events[j].key).toBe(before.events[j].key);
+                expect(after.events[j].keys).toEqual(before.events[j].keys);
               }
             }
             
@@ -501,7 +506,7 @@ describe('StaffCanvas Integration Tests', () => {
           (scoreLength, testIndex) => {
             // 初期スコアデータを作成
             const initialMeasures: MeasureData[] = Array.from({ length: scoreLength }, () => ({ 
-              events: [{ dur: '4', isRest: false, key: 'c/4' }] 
+              events: [{ dur: '4', isRest: false, keys: ['c/4'] }] 
             }));
             
             // スコアデータのスナップショットを作成
@@ -578,7 +583,7 @@ describe('StaffCanvas Integration Tests', () => {
                 for (let j = 0; j < Math.min(beforeSnapshot[i].events.length, afterSnapshot[i].events.length); j++) {
                   expect(afterSnapshot[i].events[j].dur).toBe(beforeSnapshot[i].events[j].dur);
                   expect(afterSnapshot[i].events[j].isRest).toBe(beforeSnapshot[i].events[j].isRest);
-                  expect(afterSnapshot[i].events[j].key).toBe(beforeSnapshot[i].events[j].key);
+                  expect(afterSnapshot[i].events[j].keys).toEqual(beforeSnapshot[i].events[j].keys);
                 }
               }
             } else {
@@ -626,7 +631,7 @@ describe('StaffCanvas Integration Tests', () => {
           fc.integer({ min: -100, max: -1 }), // 負の小節インデックス
           (scoreLength, negativeIndex) => {
             const initialMeasures: MeasureData[] = Array.from({ length: scoreLength }, () => ({ 
-              events: [{ dur: '4', isRest: false, key: 'c/4' }] 
+              events: [{ dur: '4', isRest: false, keys: ['c/4'] }] 
             }));
             
             const testTool = { duration: '4' as DurKey, isRest: false };
@@ -680,7 +685,7 @@ describe('StaffCanvas Integration Tests', () => {
             const outOfRangeIndex = scoreLength + offset;
             
             const initialMeasures: MeasureData[] = Array.from({ length: scoreLength }, () => ({ 
-              events: [{ dur: '4', isRest: false, key: 'c/4' }] 
+              events: [{ dur: '4', isRest: false, keys: ['c/4'] }] 
             }));
             
             const testTool = { duration: '4' as DurKey, isRest: false };
@@ -1098,7 +1103,7 @@ describe('StaffCanvas Integration Tests', () => {
               for (let j = 0; j < before.events.length; j++) {
                 expect(after.events[j].dur).toBe(before.events[j].dur);
                 expect(after.events[j].isRest).toBe(before.events[j].isRest);
-                expect(after.events[j].key).toBe(before.events[j].key);
+                expect(after.events[j].keys).toEqual(before.events[j].keys);
               }
             }
             
@@ -1653,10 +1658,10 @@ describe('StaffCanvas Integration Tests', () => {
     it('should maintain note selection functionality after measure index fix', () => {
       const totalMeasures = 4;
       const initialMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] },
-        { events: [{ dur: '4', isRest: false, key: 'd/4' }] },
-        { events: [{ dur: '4', isRest: false, key: 'e/4' }] },
-        { events: [{ dur: '4', isRest: false, key: 'f/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
+        { events: [{ dur: '4', isRest: false, keys: ['d/4'] }] },
+        { events: [{ dur: '4', isRest: false, keys: ['e/4'] }] },
+        { events: [{ dur: '4', isRest: false, keys: ['f/4'] }] }
       ];
       const testTool = { duration: '4' as DurKey, isRest: false };
       
@@ -1795,9 +1800,9 @@ describe('StaffCanvas Integration Tests', () => {
     it('should maintain note deletion functionality after measure index fix', () => {
       const totalMeasures = 4;
       const initialMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }, { dur: '4', isRest: false, key: 'd/4' }] },
-        { events: [{ dur: '4', isRest: false, key: 'e/4' }] },
-        { events: [{ dur: '4', isRest: false, key: 'f/4' }] },
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }, { dur: '4', isRest: false, keys: ['d/4'] }] },
+        { events: [{ dur: '4', isRest: false, keys: ['e/4'] }] },
+        { events: [{ dur: '4', isRest: false, keys: ['f/4'] }] },
         { events: [] }
       ];
       const testTool = { duration: '4' as DurKey, isRest: false };
@@ -1880,7 +1885,7 @@ describe('StaffCanvas Integration Tests', () => {
       const measuresPerPage = 2;
       const totalMeasures = numPages * measuresPerPage;
       const initialMeasures: MeasureData[] = Array.from({ length: totalMeasures }, (_, i) => ({
-        events: [{ dur: '4', isRest: false, key: 'c/4' }]
+        events: [{ dur: '4', isRest: false, keys: ['c/4'] }]
       }));
       const testTool = { duration: '4' as DurKey, isRest: false };
       
@@ -1984,7 +1989,7 @@ describe('StaffCanvas Integration Tests', () => {
       testCases.forEach(({ systems, measuresPerSystem }) => {
         const totalMeasures = systems * measuresPerSystem;
         const initialMeasures: MeasureData[] = Array.from({ length: totalMeasures }, () => ({
-          events: [{ dur: '4', isRest: false, key: 'c/4' }]
+          events: [{ dur: '4', isRest: false, keys: ['c/4'] }]
         }));
         const testTool = { duration: '4' as DurKey, isRest: false };
         
@@ -2046,12 +2051,12 @@ describe('StaffCanvas Integration Tests', () => {
       const measuresPerPage = 3;
       const totalMeasures = numPages * measuresPerPage;
       const initialMeasures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'c/4' }] },
-        { events: [{ dur: '4', isRest: false, key: 'd/4' }, { dur: '4', isRest: false, key: 'e/4' }] },
+        { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
+        { events: [{ dur: '4', isRest: false, keys: ['d/4'] }, { dur: '4', isRest: false, keys: ['e/4'] }] },
         { events: [] },
-        { events: [{ dur: '4', isRest: false, key: 'f/4' }] },
-        { events: [{ dur: '4', isRest: false, key: 'g/4' }] },
-        { events: [{ dur: '4', isRest: false, key: 'a/4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['f/4'] }] },
+        { events: [{ dur: '4', isRest: false, keys: ['g/4'] }] },
+        { events: [{ dur: '4', isRest: false, keys: ['a/4'] }] }
       ];
       const testTool = { duration: '4' as DurKey, isRest: false };
       

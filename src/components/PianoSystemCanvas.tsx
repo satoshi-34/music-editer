@@ -12,7 +12,7 @@ import type { ClefType } from './clefUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; key: string };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[] };
 
 export type PartConfig = {
   clef: ClefType;
@@ -168,9 +168,16 @@ function makeVFNote(ev: NoteEvent, clef: ClefType) {
   if(ev.isRest){
     return new StaveNote({clef,keys:[restKeyForClef(clef)],duration:vd+'r'});
   }
-  const n=new StaveNote({clef,keys:[ev.key],duration:vd});
-  const acc=ev.key.match(/^[a-g]([#b]?)/i)?.[1]||'';
-  if(acc){try{(n as any).addModifier?.(0,new Accidental(acc));(n as any).addAccidental?.(0,new Accidental(acc));}catch{}}
+  // keys が空の場合は全休符にフォールバック
+  if(!ev.keys||ev.keys.length===0){
+    return new StaveNote({clef,keys:[restKeyForClef(clef)],duration:vd+'r'});
+  }
+  const n=new StaveNote({clef,keys:ev.keys,duration:vd});
+  // 各音高に臨時記号を付与
+  ev.keys.forEach((key, idx) => {
+    const acc=key.match(/^[a-g]([#b]?)/i)?.[1]||'';
+    if(acc){try{(n as any).addModifier?.(idx,new Accidental(acc));(n as any).addAccidental?.(idx,new Accidental(acc));}catch{}}
+  });
   return n;
 }
 
@@ -298,11 +305,15 @@ export default function PianoSystemCanvas({
           if(!ev||ev.isRest)return prev;
           const n=prev.map(m=>({events:[...m.events] as NoteEvent[]}));
           if(e.altKey){
-            const midi=keyToMidi(ev.key);if(midi==null)return prev;
-            n[measure].events[index]={...ev,key:midiToKey(midi+(up?1:-1),up)};
+            // 半音シフト（和音の場合は全音を同じだけシフト）
+            const delta=up?1:-1;
+            const newKeys=ev.keys.map(k=>{const midi=keyToMidi(k);if(midi==null)return k;return midiToKey(midi+delta,up);});
+            n[measure].events[index]={...ev,keys:newKeys};
           }else{
+            // 線/間 1段またはオクターブシフト（和音の場合は全音を同じだけシフト）
             const diff=e.shiftKey?(up?-3.5:3.5):(up?-0.5:0.5);
-            n[measure].events[index]={...ev,key:l2k(k2l(ev.key)+diff)};
+            const newKeys=ev.keys.map(k=>l2k(k2l(k)+diff));
+            n[measure].events[index]={...ev,keys:newKeys};
           }
           return n;
         });
@@ -428,8 +439,8 @@ export default function PianoSystemCanvas({
         const k2l=(k:string)=>keyToLineForClef(part.clef,k);
 
         const data=absI<score.length?score[absI]:undefined;
-        const safeEvs:NoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,key:restKeyForClef(part.clef)}])
-          .map(ev=>(!ev||!ev.dur)?{dur:'4' as DurKey,isRest:true,key:'b/4'}:{...ev,dur:ev.dur as DurKey});
+        const safeEvs:NoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[restKeyForClef(part.clef)]}])
+          .map(ev=>(!ev||!ev.dur)?{dur:'4' as DurKey,isRest:true,keys:['b/4']}:{...ev,dur:ev.dur as DurKey});
 
         const vfNotes=safeEvs.map((ev,idx)=>{
           const n=makeVFNote(ev,part.clef) as any;
@@ -495,7 +506,7 @@ export default function PianoSystemCanvas({
             if(curB+addB>BEATS_PER_MEASURE)return prev;
             const ev:NoteEvent={
               dur:(['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey,
-              isRest:!!(tool as any)?.isRest, key,
+              isRest:!!(tool as any)?.isRest, keys:[key],
             };
             m.events.splice(Math.max(0,Math.min(at,m.events.length)),0,ev);
             return next;
@@ -530,7 +541,7 @@ export default function PianoSystemCanvas({
             if(xr-xl<HIT_MIN_W){const h=(HIT_MIN_W-(xr-xl))/2;xl=Math.max(measLeft+1,xl-h);xr=Math.min(measRight-1,xr+h);}
             const wHit=Math.max(HIT_MIN_W,xr-xl);
             const ev=safeEvs[j];
-            const yCenter=ev?.isRest?stave.getYForLine(2):stave.getYForLine(k2l(ev.key));
+            const yCenter=ev?.isRest?stave.getYForLine(2):stave.getYForLine(k2l(ev.keys[0]));
             const hHit=Math.max(sp*2.2,30);
             const yHit=yCenter-hHit/2;
 
@@ -548,11 +559,27 @@ export default function PianoSystemCanvas({
             hit.addEventListener('click',e=>{
               if(disabled)return;
               e.stopPropagation();
-              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
-              const cellW=rr-rl;
-              const selR=Math.min(SELECT_NEAR_PX,Math.max(0,cellW*SELECT_NEAR_FRAC));
-              if(Math.abs(lx-anchors[j])<=selR)setSelected({partIndex:pi,measure:absI,index:j});
-              else doInsert(lx,ly);
+              const me=e as MouseEvent;
+              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
+              if(me.shiftKey&&!safeEvs[j]?.isRest){
+                // Shift+クリック: 既存の音符に音を追加して和音にする
+                const newKey=l2k(snapLine(stave,ly));
+                setScore(prev=>{
+                  const next=prev.map(m=>({events:[...(m?.events??[])] as NoteEvent[]}));
+                  if(absI>=next.length)return prev;
+                  const targetEv=next[absI].events[j];
+                  if(!targetEv||targetEv.isRest||targetEv.keys.includes(newKey))return prev;
+                  // 音高の低い順（line値が大きい順）にソートして格納
+                  const newKeys=[...targetEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
+                  next[absI].events[j]={...targetEv,keys:newKeys};
+                  return next;
+                });
+              }else{
+                const cellW=rr-rl;
+                const selR=Math.min(SELECT_NEAR_PX,Math.max(0,cellW*SELECT_NEAR_FRAC));
+                if(Math.abs(lx-anchors[j])<=selR)setSelected({partIndex:pi,measure:absI,index:j});
+                else doInsert(lx,ly);
+              }
             });
             svgRoot.appendChild(hit);
 

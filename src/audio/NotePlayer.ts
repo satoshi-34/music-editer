@@ -21,8 +21,11 @@ export interface NoteEvent {
   dur: DurKey;
   /** 休符かどうか */
   isRest: boolean;
-  /** 音高キー（例: "C4", "F#3"） */
-  key: string;
+  /**
+   * 音高キーの配列（VexFlow 形式: "c/4", "f#/3" など）
+   * 単音: 1要素、和音: 2要素以上
+   */
+  keys: string[];
 }
 
 /**
@@ -206,12 +209,38 @@ export class NotePlayer {
       return;
     }
 
-    // 音価から再生時間を計算（オプションで上書きされていない場合）
+    if (!noteEvent.keys || noteEvent.keys.length === 0) return;
+
+    // Tone.js を動的にインポート（まだインポートされていない場合）
+    if (!this.Tone) {
+      this.Tone = await import('tone');
+    }
+
+    const synth = this._getCurrentSynth();
+    if (!synth || !this.audioEngine.isReady()) return;
+
     if (options.duration === undefined) {
       options.duration = this._durToSeconds(noteEvent.dur);
     }
 
-    return this.playNote(noteEvent.key, options);
+    // 前の音をすべて停止（連続クリック時の排他制御）
+    this.stopAllNotes();
+
+    // Vexflow 形式（c/4）を Tone.js 形式（C4）に変換
+    const toneKeys = noteEvent.keys.map(k => this._convertKeyToToneFormat(k));
+    const velocity = Math.max(0, Math.min(1, options.velocity || 0.5));
+    const duration = options.duration;
+    const time = options.time || '+0';
+
+    // PolySynth は配列を受け付けるため、単音でも和音でも同じ方法で再生できる
+    synth.triggerAttackRelease(toneKeys, duration, time, velocity);
+    toneKeys.forEach(k => this.currentNotes.add(k));
+
+    if (typeof duration === 'number') {
+      setTimeout(() => toneKeys.forEach(k => this.currentNotes.delete(k)), duration * 1000);
+    }
+
+    console.log(`[NotePlayer] 音符を再生: ${toneKeys.join(',')}, 長さ: ${duration}`);
   }
 
   /**

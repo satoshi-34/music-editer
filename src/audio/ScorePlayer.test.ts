@@ -111,13 +111,13 @@ describe('ScorePlayer', () => {
       const measures: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'C4' },
-            { dur: '4', isRest: false, key: 'D4' }
+            { dur: '4', isRest: false, keys: ['C4'] },
+            { dur: '4', isRest: false, keys: ['D4'] }
           ]
         },
         {
           events: [
-            { dur: '2', isRest: false, key: 'E4' }
+            { dur: '2', isRest: false, keys: ['E4'] }
           ]
         }
       ];
@@ -135,9 +135,9 @@ describe('ScorePlayer', () => {
       const measures: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'C4' },
-            { dur: '4', isRest: true, key: 'r' },
-            { dur: '4', isRest: false, key: 'D4' }
+            { dur: '4', isRest: false, keys: ['C4'] },
+            { dur: '4', isRest: true, keys: ['r'] },
+            { dur: '4', isRest: false, keys: ['D4'] }
           ]
         }
       ];
@@ -151,8 +151,8 @@ describe('ScorePlayer', () => {
       const measures: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'C4' },
-            { dur: '4', isRest: false, key: 'D4' }
+            { dur: '4', isRest: false, keys: ['C4'] },
+            { dur: '4', isRest: false, keys: ['D4'] }
           ]
         }
       ];
@@ -207,7 +207,7 @@ describe('ScorePlayer', () => {
   describe('pause', () => {
     beforeEach(async () => {
       const measures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'C4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['C4'] }] }
       ];
       scorePlayer.loadScore(measures);
       // AudioEngineが準備完了状態であることを確認
@@ -233,7 +233,7 @@ describe('ScorePlayer', () => {
   describe('stop', () => {
     beforeEach(async () => {
       const measures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'C4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['C4'] }] }
       ];
       scorePlayer.loadScore(measures);
       // AudioEngineが準備完了状態であることを確認
@@ -264,13 +264,13 @@ describe('ScorePlayer', () => {
       const measures: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'C4' },
-            { dur: '4', isRest: false, key: 'D4' }
+            { dur: '4', isRest: false, keys: ['C4'] },
+            { dur: '4', isRest: false, keys: ['D4'] }
           ]
         },
         {
           events: [
-            { dur: '2', isRest: false, key: 'E4' }
+            { dur: '2', isRest: false, keys: ['E4'] }
           ]
         }
       ];
@@ -318,8 +318,8 @@ describe('ScorePlayer', () => {
       const measures: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'C4' },
-            { dur: '4', isRest: false, key: 'D4' }
+            { dur: '4', isRest: false, keys: ['C4'] },
+            { dur: '4', isRest: false, keys: ['D4'] }
           ]
         }
       ];
@@ -337,7 +337,7 @@ describe('ScorePlayer', () => {
 
     it('状態変更コールバックが呼ばれる', async () => {
       const measures: MeasureData[] = [
-        { events: [{ dur: '4', isRest: false, key: 'C4' }] }
+        { events: [{ dur: '4', isRest: false, keys: ['C4'] }] }
       ];
       scorePlayer.loadScore(measures);
       
@@ -352,8 +352,8 @@ describe('ScorePlayer', () => {
       const measures: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'C4' },
-            { dur: '4', isRest: false, key: 'D4' }
+            { dur: '4', isRest: false, keys: ['C4'] },
+            { dur: '4', isRest: false, keys: ['D4'] }
           ]
         }
       ];
@@ -406,13 +406,13 @@ describe('ScorePlayer', () => {
       const measures: MeasureData[] = [
         {
           events: [
-            { dur: '1', isRest: false, key: 'C4' },  // 全音符
-            { dur: '2', isRest: false, key: 'D4' },  // 2分音符
-            { dur: '4', isRest: false, key: 'E4' },  // 4分音符
-            { dur: '8', isRest: false, key: 'F4' },  // 8分音符
-            { dur: '16', isRest: false, key: 'G4' }, // 16分音符
-            { dur: '32', isRest: false, key: 'A4' }, // 32分音符
-            { dur: '64', isRest: false, key: 'B4' }  // 64分音符
+            { dur: '1', isRest: false, keys: ['C4'] },  // 全音符
+            { dur: '2', isRest: false, keys: ['D4'] },  // 2分音符
+            { dur: '4', isRest: false, keys: ['E4'] },  // 4分音符
+            { dur: '8', isRest: false, keys: ['F4'] },  // 8分音符
+            { dur: '16', isRest: false, keys: ['G4'] }, // 16分音符
+            { dur: '32', isRest: false, keys: ['A4'] }, // 32分音符
+            { dur: '64', isRest: false, keys: ['B4'] }  // 64分音符
           ]
         }
       ];
@@ -424,10 +424,10 @@ describe('ScorePlayer', () => {
       const measures: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'C#4' },
-            { dur: '4', isRest: false, key: 'Db4' },
-            { dur: '4', isRest: false, key: 'F#3' },
-            { dur: '4', isRest: false, key: 'Bb5' }
+            { dur: '4', isRest: false, keys: ['C#4'] },
+            { dur: '4', isRest: false, keys: ['Db4'] },
+            { dur: '4', isRest: false, keys: ['F#3'] },
+            { dur: '4', isRest: false, keys: ['Bb5'] }
           ]
         }
       ];
@@ -439,8 +439,8 @@ describe('ScorePlayer', () => {
       const measures: MeasureData[] = [
         {
           events: [
-            { dur: '4', isRest: false, key: 'c/4' },
-            { dur: '4', isRest: false, key: 'd/4' }
+            { dur: '4', isRest: false, keys: ['c/4'] },
+            { dur: '4', isRest: false, keys: ['d/4'] }
           ]
         }
       ];

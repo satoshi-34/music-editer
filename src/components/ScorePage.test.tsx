@@ -57,7 +57,10 @@ const durKeyArbitrary = fc.constantFrom('1', '2', '4', '8', '16', '32', '64') as
 const noteEventArbitrary: fc.Arbitrary<NoteEvent> = fc.record({
   dur: durKeyArbitrary,
   isRest: fc.boolean(),
-  key: fc.string({ minLength: 3, maxLength: 10 }).filter(s => s.trim().length > 0)
+  keys: fc.array(
+    fc.string({ minLength: 1, maxLength: 5 }).filter(s => s.trim().length > 0),
+    { minLength: 1, maxLength: 3 }
+  )
 });
 
 const measureDataArbitrary: fc.Arbitrary<MeasureData> = fc.record({
@@ -73,7 +76,7 @@ const scoreMetadataArbitrary: fc.Arbitrary<ScoreMetadata> = fc.record({
 });
 
 const savedScoreDataArbitrary: fc.Arbitrary<SavedScoreData> = fc.record({
-  version: fc.constant('2.0.0'),
+  version: fc.constant('3.0.0'),
   timestamp: fc.integer({ min: 1000000000000, max: 9999999999999 }),
   metadata: scoreMetadataArbitrary,
   scoreType: fc.constant('single' as const),
@@ -157,7 +160,7 @@ describe('ScorePage Integration Tests', () => {
 
                   expect(restoredEvent.dur).toBe(originalEvent.dur);
                   expect(restoredEvent.isRest).toBe(originalEvent.isRest);
-                  expect(restoredEvent.key).toBe(originalEvent.key);
+                  expect(restoredEvent.keys).toEqual(originalEvent.keys);
                 }
               }
               

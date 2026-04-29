@@ -17,7 +17,7 @@ import { defaultAudioEngine } from '../audio/AudioEngine';
    ============================================================ */
 
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; key: string };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[] };
 type MeasureData = { events: NoteEvent[] };
 
 type Props = {
@@ -278,12 +278,20 @@ function makeVFNote(ev: NoteEvent, clef: 'treble' | 'bass' | 'alto' = 'treble') 
     const n = new StaveNote({ clef, keys: [restKey], duration: (vfDur as VFDur) + 'r' });
     return n;
   }
-  const n = new StaveNote({ clef, keys: [ev.key], duration: vfDur });
-  const m = ev.key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i);
-  const acc = m?.[2] || '';
-  if (acc) {
-    try { (n as any).addModifier?.(0, new Accidental(acc)); (n as any).addAccidental?.(0, new Accidental(acc)); } catch {}
+  // keys が空の場合は全休符にフォールバック
+  if (!ev.keys || ev.keys.length === 0) {
+    const restKey = clef === 'bass' ? 'd/3' : clef === 'alto' ? 'c/4' : 'b/4';
+    return new StaveNote({ clef, keys: [restKey], duration: (vfDur as VFDur) + 'r' });
   }
+  const n = new StaveNote({ clef, keys: ev.keys, duration: vfDur });
+  // 各音高に臨時記号を付与
+  ev.keys.forEach((key, idx) => {
+    const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i);
+    const acc = m?.[2] || '';
+    if (acc) {
+      try { (n as any).addModifier?.(idx, new Accidental(acc)); (n as any).addAccidental?.(idx, new Accidental(acc)); } catch {}
+    }
+  });
   return n;
 }
 
@@ -411,7 +419,7 @@ export default function StaffCanvas({
       
       // 音符を再生（連続クリック時の前音停止処理は NotePlayer 内で実行される）
       await notePlayerRef.current.playNoteEvent(noteEvent);
-      console.log(`[StaffCanvas] 音符を再生: ${noteEvent.key}, 音価: ${noteEvent.dur}, 休符: ${noteEvent.isRest}`);
+      console.log(`[StaffCanvas] 音符を再生: ${noteEvent.keys.join(',')}, 音価: ${noteEvent.dur}, 休符: ${noteEvent.isRest}`);
     } catch (error) {
       console.error('[StaffCanvas] 音符再生に失敗:', error);
       
@@ -491,28 +499,30 @@ export default function StaffCanvas({
           const ev = cur.events[index];
           if (ev.isRest) return prev;
 
-          if (e.altKey) { // 半音
-            const midi = keyToMidi(ev.key); if (midi == null) return prev;
-            const nextMidi = midi + (up ? 1 : -1);
-            const newKey = midiToKey(nextMidi, up);
+          if (e.altKey) { // 半音（和音の場合は全音を同じだけシフト）
+            const delta = up ? 1 : -1;
+            const newKeys = ev.keys.map(k => {
+              const midi = keyToMidi(k); if (midi == null) return k;
+              return midiToKey(midi + delta, up);
+            });
             const next = prev.map(m => ({ events: [...m.events] as NoteEvent[] }));
-            next[measure].events[index] = { ...ev, key: newKey };
+            next[measure].events[index] = { ...ev, keys: newKeys };
             return next;
           }
 
-          if (e.shiftKey) { // 1オクターブ
+          if (e.shiftKey) { // 1オクターブ（和音の場合は全音を同じだけシフト）
             const diff = up ? -3.5 : 3.5;
-            const newKey = lineToKey(keyToLine(ev.key) + diff);
+            const newKeys = ev.keys.map(k => lineToKey(keyToLine(k) + diff));
             const next = prev.map(m => ({ events: [...m.events] as NoteEvent[] }));
-            next[measure].events[index] = { ...ev, key: newKey };
+            next[measure].events[index] = { ...ev, keys: newKeys };
             return next;
           }
 
-          // 線/間 1段
+          // 線/間 1段（和音の場合は全音を同じだけシフト）
           const diff = up ? -0.5 : 0.5;
-          const newKey = lineToKey(keyToLine(ev.key) + diff);
+          const newKeys = ev.keys.map(k => lineToKey(keyToLine(k) + diff));
           const next = prev.map(m => ({ events: [...m.events] as NoteEvent[] }));
-          next[measure].events[index] = { ...ev, key: newKey };
+          next[measure].events[index] = { ...ev, keys: newKeys };
           return next;
         });
         e.preventDefault(); return;
@@ -613,8 +623,8 @@ export default function StaffCanvas({
         stave.setContext(ctx).draw();
 
         const safeEvents: NoteEvent[] =
-          (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, key:'b/4' }])
-          .map(ev => (!ev || !ev.dur ? { dur:'4' as DurKey, isRest:true, key:'b/4' } : {
+          (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, keys:['b/4'] }])
+          .map(ev => (!ev || !ev.dur ? { dur:'4' as DurKey, isRest:true, keys:['b/4'] } : {
             ...ev,
             dur: ev.dur as DurKey
           }));
@@ -776,7 +786,7 @@ export default function StaffCanvas({
             const ev: NoteEvent = {
               dur: (['1','2','4','8','16','32','64'].includes((tool as any)?.duration) ? (tool as any).duration : '4') as DurKey,
               isRest: !!(tool as any)?.isRest,
-              key,
+              keys: [key],
             };
             m.events.splice(Math.max(0, Math.min(insertAt, m.events.length)), 0, ev);
             return next;
@@ -851,7 +861,7 @@ export default function StaffCanvas({
             const bb = n.getBoundingBox?.();
             const spacing = (stave.getSpacingBetweenLines?.() as number) || ((stave.getYForLine(4) - stave.getYForLine(0)) / 4);
             const evData = safeEvents[j];
-            const yCenter = evData?.isRest ? stave.getYForLine(2) : stave.getYForLine(keyToLine(evData.key));
+            const yCenter = evData?.isRest ? stave.getYForLine(2) : stave.getYForLine(keyToLine(evData.keys[0]));
             const safeH = Math.max(bb?.getH?.() ?? 26, spacing * HIT_MIN_H_FACTOR);
             const yHit = yCenter - safeH / 2;
 
@@ -889,29 +899,37 @@ export default function StaffCanvas({
             });
             hit.addEventListener('mouseleave', hideGuide);
 
-            // クリック：近ければ選択、離れていれば挿入
+            // クリック：Shift+クリックで和音追加、近ければ選択、離れていれば挿入
             hit.addEventListener('click', (ev) => {
-              // 編集が無効な場合は何もしない
-              if (disabled) {
-                return;
-              }
-              
+              if (disabled) return;
               ev.stopPropagation(); // 小節rectには渡さない
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
-              const cellW = rawRight - rawLeft;
-              const selRadius = Math.min(SELECT_NEAR_PX, Math.max(0, cellW * SELECT_NEAR_FRAC));
-              const dx = Math.abs(lx - anchors[j]);
-              if (dx <= selRadius) {
-                // 選択時は絶対インデックスを使用
-                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
-                
-                // 音符クリック再生機能を追加（要件1.1, 1.5対応）
-                const noteEvent = safeEvents[j];
-                if (noteEvent) {
-                  playNoteEvent(noteEvent);
-                }
+
+              if (ev.shiftKey && !safeEvents[j]?.isRest) {
+                // Shift+クリック: 既存の音符に音を追加して和音にする
+                // 同じ音が既にあれば無視し、なければ音高の低い順（line値大＝低音）にソートして追加
+                const snappedLine = snapLineBySpacing(stave, ly);
+                const newKey = lineToKey(snappedLine);
+                setScore(prev => {
+                  const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
+                  if (absoluteIndex >= next.length) return prev;
+                  const targetEv = next[absoluteIndex].events[j];
+                  if (!targetEv || targetEv.isRest || targetEv.keys.includes(newKey)) return prev;
+                  const newKeys = [...targetEv.keys, newKey].sort((a, b) => keyToLine(b) - keyToLine(a));
+                  next[absoluteIndex].events[j] = { ...targetEv, keys: newKeys };
+                  return next;
+                });
               } else {
-                doInsertAt(lx, ly, measureIndex);
+                const cellW = rawRight - rawLeft;
+                const selRadius = Math.min(SELECT_NEAR_PX, Math.max(0, cellW * SELECT_NEAR_FRAC));
+                const dx = Math.abs(lx - anchors[j]);
+                if (dx <= selRadius) {
+                  setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                  const noteEvent = safeEvents[j];
+                  if (noteEvent) playNoteEvent(noteEvent);
+                } else {
+                  doInsertAt(lx, ly, measureIndex);
+                }
               }
             });
 
