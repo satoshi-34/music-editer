@@ -51,8 +51,6 @@ const EXTRA_BOTTOM_LINES = 10;
 const CELL_PAD = 6;
 const HIT_MIN_W = 14;
 const HIT_MIN_H_FACTOR = 2.2;
-const SELECT_NEAR_PX = 10;      // 基準の「選択半径」
-const SELECT_NEAR_FRAC = 0.25;  // セル幅に対する上限（25%）
 
 /* ===== duration 変換 ===== */
 type VFDur = 'w'|'h'|'q'|'8'|'16'|'32'|'64';
@@ -899,37 +897,47 @@ export default function StaffCanvas({
             });
             hit.addEventListener('mouseleave', hideGuide);
 
-            // クリック：Shift+クリックで和音追加、近ければ選択、離れていれば挿入
+            // クリック：音符の描画X範囲内なら和音追加、範囲外（同セルの空白）なら新規挿入
             hit.addEventListener('click', (ev) => {
               if (disabled) return;
               ev.stopPropagation(); // 小節rectには渡さない
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
 
-              if (ev.shiftKey && !safeEvents[j]?.isRest) {
-                // Shift+クリック: 既存の音符に音を追加して和音にする
-                // 同じ音が既にあれば無視し、なければ音高の低い順（line値大＝低音）にソートして追加
+              // 音符のバウンディングボックスX範囲で「同じX座標かどうか」を判定する
+              // Voronoiセルより狭い実際の描画領域を基準にすることで、
+              // セル内の空白クリックを誤って和音追加扱いしない
+              const noteLeftX = anchors[j];
+              const noteBBW = (vfNotes[j] as any).getBoundingBox?.()?.getW() ?? 20;
+              const noteRightX = noteLeftX + noteBBW;
+              const isOnNote = lx >= noteLeftX && lx <= noteRightX;
+
+              if (!safeEvents[j]?.isRest && isOnNote) {
+                // 音符の描画範囲内 → 和音追加（クリックしたY位置の音高を追加）
                 const snappedLine = snapLineBySpacing(stave, ly);
                 const newKey = lineToKey(snappedLine);
-                setScore(prev => {
-                  const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
-                  if (absoluteIndex >= next.length) return prev;
-                  const targetEv = next[absoluteIndex].events[j];
-                  if (!targetEv || targetEv.isRest || targetEv.keys.includes(newKey)) return prev;
-                  const newKeys = [...targetEv.keys, newKey].sort((a, b) => keyToLine(b) - keyToLine(a));
-                  next[absoluteIndex].events[j] = { ...targetEv, keys: newKeys };
-                  return next;
-                });
-              } else {
-                const cellW = rawRight - rawLeft;
-                const selRadius = Math.min(SELECT_NEAR_PX, Math.max(0, cellW * SELECT_NEAR_FRAC));
-                const dx = Math.abs(lx - anchors[j]);
-                if (dx <= selRadius) {
-                  setSelected({ measure: startMeasureIndex + measureIndex, index: j });
-                  const noteEvent = safeEvents[j];
-                  if (noteEvent) playNoteEvent(noteEvent);
-                } else {
-                  doInsertAt(lx, ly, measureIndex);
+                const currentEv = safeEvents[j];
+                let playEvent = currentEv;
+                if (currentEv && !currentEv.keys.includes(newKey)) {
+                  // 新しい音高 → keys[] に追加してソート（低音が先頭）
+                  const newKeys = [...currentEv.keys, newKey].sort((a, b) => keyToLine(b) - keyToLine(a));
+                  playEvent = { ...currentEv, keys: newKeys };
+                  setScore(prev => {
+                    const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
+                    if (absoluteIndex >= next.length) return prev;
+                    const targetEv = next[absoluteIndex].events[j];
+                    if (!targetEv || targetEv.isRest) return prev;
+                    next[absoluteIndex].events[j] = { ...targetEv, keys: newKeys };
+                    return next;
+                  });
                 }
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                if (playEvent) playNoteEvent(playEvent);
+              } else if (safeEvents[j]?.isRest) {
+                // 休符は選択のみ
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+              } else {
+                // 音符のX範囲外（セル内の空白）→ 新規音符挿入
+                doInsertAt(lx, ly, measureIndex);
               }
             });
 

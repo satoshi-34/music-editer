@@ -41,7 +41,7 @@ const EMPTY_MEASURE_UNITS = 0.6;
 const CLEF_PAD_FIRST = 50;
 
 /* ===== ヒット領域 ===== */
-const CELL_PAD = 6, HIT_MIN_W = 14, SELECT_NEAR_PX = 10, SELECT_NEAR_FRAC = 0.25;
+const CELL_PAD = 6, HIT_MIN_W = 14;
 const EXTRA_TOP = 4, EXTRA_BOTTOM = 6;
 
 /* ===== duration変換 ===== */
@@ -561,24 +561,32 @@ export default function PianoSystemCanvas({
               e.stopPropagation();
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
-              if(me.shiftKey&&!safeEvs[j]?.isRest){
-                // Shift+クリック: 既存の音符に音を追加して和音にする
+              // 音符のバウンディングボックスX範囲で「同じX座標かどうか」を判定する
+              const noteLeftX=anchors[j];
+              const noteBBW=(vfNotes[j] as any).getBoundingBox?.()?.getW()??20;
+              const isOnNote=lx>=noteLeftX&&lx<=noteLeftX+noteBBW;
+              if(!safeEvs[j]?.isRest&&isOnNote){
+                // 音符の描画範囲内 → 和音追加
                 const newKey=l2k(snapLine(stave,ly));
-                setScore(prev=>{
-                  const next=prev.map(m=>({events:[...(m?.events??[])] as NoteEvent[]}));
-                  if(absI>=next.length)return prev;
-                  const targetEv=next[absI].events[j];
-                  if(!targetEv||targetEv.isRest||targetEv.keys.includes(newKey))return prev;
-                  // 音高の低い順（line値が大きい順）にソートして格納
-                  const newKeys=[...targetEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
-                  next[absI].events[j]={...targetEv,keys:newKeys};
-                  return next;
-                });
+                const currentEv=safeEvs[j];
+                if(currentEv&&!currentEv.keys.includes(newKey)){
+                  const newKeys=[...currentEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
+                  setScore(prev=>{
+                    const next=prev.map(m=>({events:[...(m?.events??[])] as NoteEvent[]}));
+                    if(absI>=next.length)return prev;
+                    const targetEv=next[absI].events[j];
+                    if(!targetEv||targetEv.isRest)return prev;
+                    next[absI].events[j]={...targetEv,keys:newKeys};
+                    return next;
+                  });
+                }
+                setSelected({partIndex:pi,measure:absI,index:j});
+              }else if(safeEvs[j]?.isRest){
+                // 休符は選択のみ
+                setSelected({partIndex:pi,measure:absI,index:j});
               }else{
-                const cellW=rr-rl;
-                const selR=Math.min(SELECT_NEAR_PX,Math.max(0,cellW*SELECT_NEAR_FRAC));
-                if(Math.abs(lx-anchors[j])<=selR)setSelected({partIndex:pi,measure:absI,index:j});
-                else doInsert(lx,ly);
+                // 音符のX範囲外（セル内の空白）→ 新規音符挿入
+                doInsert(lx,ly);
               }
             });
             svgRoot.appendChild(hit);
