@@ -42,6 +42,11 @@ const CLEF_PAD_FIRST = 50;
 
 /* ===== ヒット領域 ===== */
 const CELL_PAD = 6, HIT_MIN_W = 14;
+// 符頭の左端から左右に加えるパディング（px）。この範囲内のクリックが和音追加ゾーン。
+const CHORD_HIT_PAD = 20;
+// 和音追加のY判定は「五線 ± 3加線」の固定範囲
+const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
+const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）
 const EXTRA_TOP = 4, EXTRA_BOTTOM = 6;
 
 /* ===== duration変換 ===== */
@@ -412,7 +417,11 @@ export default function PianoSystemCanvas({
       const guideDot=document.createElementNS('http://www.w3.org/2000/svg','circle');
       guideDot.setAttribute('class','vf-guide-dot');guideDot.style.display='none';
       guideDot.setAttribute('pointer-events','none');guideDot.setAttribute('r','2.8');
-      svgRoot.appendChild(guideLine);svgRoot.appendChild(guideDot);
+      // 和音追加ゾーンを示す縦ストライプ
+      const guideChordRect=document.createElementNS('http://www.w3.org/2000/svg','rect');
+      guideChordRect.setAttribute('class','vf-guide-chord');guideChordRect.style.display='none';
+      guideChordRect.setAttribute('pointer-events','none');guideChordRect.setAttribute('rx','3');
+      svgRoot.appendChild(guideLine);svgRoot.appendChild(guideDot);svgRoot.appendChild(guideChordRect);
 
       const showGuide=(lx:number,ly:number,stave:Stave)=>{
         const snapped=snapLine(stave,ly);
@@ -424,6 +433,16 @@ export default function PianoSystemCanvas({
         guideDot.setAttribute('cy',String(yG));guideDot.style.display='block';
       };
       const hideGuide=()=>{guideLine.style.display='none';guideDot.style.display='none';};
+      const showChordGuide=(x:number,w:number,stave:Stave)=>{
+        // 五線 ± 3加線の固定範囲で縦ストライプを表示
+        const topY=stave.getYForLine(CHORD_LEDGER_TOP), botY=stave.getYForLine(CHORD_LEDGER_BOT);
+        guideChordRect.setAttribute('x',String(x));
+        guideChordRect.setAttribute('y',String(topY));
+        guideChordRect.setAttribute('width',String(w));
+        guideChordRect.setAttribute('height',String(botY-topY));
+        guideChordRect.style.display='block';
+      };
+      const hideChordGuide=()=>{guideChordRect.style.display='none';};
 
       parts.forEach((part, pi) => {
         const stave=staveSets[pi][i];
@@ -478,7 +497,6 @@ export default function PianoSystemCanvas({
 
         const staveTop=stave.getYForLine(-EXTRA_TOP);
         const staveBot=stave.getYForLine(4+EXTRA_BOTTOM);
-        const sp=(stave.getSpacingBetweenLines?.() as number)||10;
 
         const doInsert=(lx:number,ly:number)=>{
           const key=l2k(snapLine(stave,ly));
@@ -521,10 +539,11 @@ export default function PianoSystemCanvas({
         ir.setAttribute('pointer-events','all');(ir.style as any).cursor='crosshair';
         ir.addEventListener('mousemove',e=>{
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
+          hideChordGuide();
           if(lx>=measLeft&&lx<=measRight&&ly>=staveTop&&ly<=staveBot)showGuide(lx,ly,stave);
           else hideGuide();
         });
-        ir.addEventListener('mouseleave',hideGuide);
+        ir.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
         ir.addEventListener('click',e=>{
           if(disabled)return;
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
@@ -535,15 +554,24 @@ export default function PianoSystemCanvas({
         if(vfNotes.length>0){
           const anchors=vfNotes.map((n:any,j)=>n.getAbsoluteX?n.getAbsoluteX():measLeft+(j+1)*(measRight-measLeft)/(vfNotes.length+1));
           const mids=anchors.slice(0,-1).map((a,j)=>(a+anchors[j+1])/2);
-          vfNotes.forEach((_n:any,j)=>{
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          vfNotes.forEach((n:any,j)=>{
             const rl=j===0?measLeft:mids[j-1], rr=j===vfNotes.length-1?measRight:mids[j];
             let xl=Math.max(measLeft+1,rl-CELL_PAD), xr=Math.min(measRight-1,rr+CELL_PAD);
             if(xr-xl<HIT_MIN_W){const h=(HIT_MIN_W-(xr-xl))/2;xl=Math.max(measLeft+1,xl-h);xr=Math.min(measRight-1,xr+h);}
             const wHit=Math.max(HIT_MIN_W,xr-xl);
-            const ev=safeEvs[j];
-            const yCenter=ev?.isRest?stave.getYForLine(2):stave.getYForLine(k2l(ev.keys[0]));
-            const hHit=Math.max(sp*2.2,30);
-            const yHit=yCenter-hHit/2;
+            // 和音判定Y範囲：五線 ± 3加線の固定範囲（音符の位置に依存しない）
+            const chordTopY=stave.getYForLine(CHORD_LEDGER_TOP);
+            const chordBotY=stave.getYForLine(CHORD_LEDGER_BOT);
+            // 符頭の実際の描画X範囲。getAbsoluteX()はtickの左端でnotehead自体より左になるため
+            // getBoundingBox() で実際に描画された領域を取得する
+            const bb=n.getBoundingBox?.();
+            const noteVisualLeft=bb?.getX?.()??anchors[j];
+            const noteVisualRight=bb?((bb.getX?.()??anchors[j])+(bb.getW?.()??12)):anchors[j]+12;
+            // ヒット rect は和音ゾーン全体（五線±3加線）をカバーする。
+            // 音符のY中心だけをカバーすると加線域へのクリックが insertRect に落ちて和音追加できない。
+            const hHit=chordBotY-chordTopY;
+            const yHit=chordTopY;
 
             const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
             hit.setAttribute('class','vf-note-hit');
@@ -553,18 +581,20 @@ export default function PianoSystemCanvas({
             hit.setAttribute('pointer-events','all');(hit.style as any).cursor='pointer';
             hit.addEventListener('mousemove',e=>{
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
-              if(lx>=measLeft&&lx<=measRight)showGuide(lx,ly,stave);else hideGuide();
+              if(lx<measLeft||lx>measRight){hideGuide();hideChordGuide();return;}
+              // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音ゾーン
+              const inChordZone=!safeEvs[j]?.isRest&&lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
+              if(inChordZone){hideGuide();showChordGuide(xl,wHit,stave);}
+              else{hideChordGuide();showGuide(lx,ly,stave);}
             });
-            hit.addEventListener('mouseleave',hideGuide);
+            hit.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
             hit.addEventListener('click',e=>{
               if(disabled)return;
               e.stopPropagation();
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
-              // 音符のバウンディングボックスX範囲で「同じX座標かどうか」を判定する
-              const noteLeftX=anchors[j];
-              const noteBBW=(vfNotes[j] as any).getBoundingBox?.()?.getW()??20;
-              const isOnNote=lx>=noteLeftX&&lx<=noteLeftX+noteBBW;
+              // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
+              const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
               if(!safeEvs[j]?.isRest&&isOnNote){
                 // 音符の描画範囲内 → 和音追加
                 const newKey=l2k(snapLine(stave,ly));
@@ -582,8 +612,8 @@ export default function PianoSystemCanvas({
                 }
                 setSelected({partIndex:pi,measure:absI,index:j});
               }else if(safeEvs[j]?.isRest){
-                // 休符は選択のみ
-                setSelected({partIndex:pi,measure:absI,index:j});
+                // 休符クリック → 音符を挿入（rect が大きくなり insertRect に届かないため）
+                doInsert(lx,ly);
               }else{
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsert(lx,ly);

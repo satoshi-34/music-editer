@@ -49,8 +49,15 @@ const EXTRA_BOTTOM_LINES = 10;
 
 /* ===== ヒット領域パラメータ ===== */
 const CELL_PAD = 6;
-const HIT_MIN_W = 14;
-const HIT_MIN_H_FACTOR = 2.2;
+const HIT_MIN_W = 10;
+// 符頭の左端から左右に加えるパディング（px）。この範囲内のクリックが和音追加ゾーン。
+// 値を大きくするほど和音追加しやすくなり、小さくすると新規挿入しやすくなる。
+const CHORD_HIT_PAD = 12;
+// 和音追加のY判定は「五線 ± 3加線」の固定範囲（stave.getYForLine(-3) 〜 getYForLine(7)）
+// 音符ごとの位置ではなく段全体の高さで判定するため、どの音符でも同じ範囲になる
+const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
+const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）
+
 
 /* ===== duration 変換 ===== */
 type VFDur = 'w'|'h'|'q'|'8'|'16'|'32'|'64';
@@ -706,6 +713,13 @@ export default function StaffCanvas({
         guideDot.setAttribute('pointer-events', 'none');
         guideDot.setAttribute('r', '2.8');
 
+        // 和音追加ゾーンを示す縦ストライプ（青いハイライト）
+        const guideChordRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        guideChordRect.setAttribute('class', 'vf-guide-chord');
+        guideChordRect.style.display = 'none';
+        guideChordRect.setAttribute('pointer-events', 'none');
+        guideChordRect.setAttribute('rx', '3');
+
         const updateGuide = (localX: number, localY: number) => {
           // Y座標をスナップして音高を決定
           const snapped = snapLineBySpacing(stave, localY);
@@ -730,6 +744,17 @@ export default function StaffCanvas({
           guideLine.style.display = 'none';
           guideDot.style.display = 'none';
         };
+        const showChordGuide = (x: number, w: number) => {
+          // 五線 ± 3加線の固定範囲で縦ストライプを表示
+          const topY = stave.getYForLine(CHORD_LEDGER_TOP);
+          const botY = stave.getYForLine(CHORD_LEDGER_BOT);
+          guideChordRect.setAttribute('x', String(x));
+          guideChordRect.setAttribute('y', String(topY));
+          guideChordRect.setAttribute('width', String(w));
+          guideChordRect.setAttribute('height', String(botY - topY));
+          guideChordRect.style.display = 'block';
+        };
+        const hideChordGuide = () => { guideChordRect.style.display = 'none'; };
 
         /* --- 挿入処理（クリック座標→どこに挿入するか決めて追加） --- */
         const doInsertAt = (localX: number, localY: number, targetMeasureIndex: number) => {
@@ -808,19 +833,19 @@ export default function StaffCanvas({
 
         (svgRoot as any).appendChild(guideLine);
         (svgRoot as any).appendChild(guideDot);
+        (svgRoot as any).appendChild(guideChordRect);
         (svgRoot as any).appendChild(insertRect);
 
         insertRect.addEventListener('mousemove', (e) => {
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
-          
-          // マウスが小節の範囲内（X座標とY座標の両方）にある場合のみガイドを表示
+          hideChordGuide(); // 挿入エリアではコードガイドを隠す
           if (lx >= measLeft && lx <= measRight && ly >= rectTop && ly <= rectBottom) {
             updateGuide(lx, ly);
           } else {
             hideGuide();
           }
         });
-        insertRect.addEventListener('mouseleave', hideGuide);
+        insertRect.addEventListener('mouseleave', () => { hideGuide(); hideChordGuide(); });
         insertRect.addEventListener('click', (e) => {
           // 編集が無効な場合は何もしない
           if (disabled) {
@@ -857,11 +882,17 @@ export default function StaffCanvas({
             const xHit = xLeft;
 
             const bb = n.getBoundingBox?.();
-            const spacing = (stave.getSpacingBetweenLines?.() as number) || ((stave.getYForLine(4) - stave.getYForLine(0)) / 4);
-            const evData = safeEvents[j];
-            const yCenter = evData?.isRest ? stave.getYForLine(2) : stave.getYForLine(keyToLine(evData.keys[0]));
-            const safeH = Math.max(bb?.getH?.() ?? 26, spacing * HIT_MIN_H_FACTOR);
-            const yHit = yCenter - safeH / 2;
+            // 和音判定Y範囲：五線 ± 3加線の固定範囲（音符の位置に依存しない）
+            const chordTopY = stave.getYForLine(CHORD_LEDGER_TOP);
+            const chordBotY = stave.getYForLine(CHORD_LEDGER_BOT);
+            // 符頭の実際の描画X範囲。getAbsoluteX()はtickの左端でnotehead自体より左になるため
+            // getBoundingBox() で実際に描画された領域を取得する
+            const noteVisualLeft = bb?.getX?.() ?? anchors[j];
+            const noteVisualRight = bb ? ((bb.getX?.() ?? anchors[j]) + (bb.getW?.() ?? 12)) : anchors[j] + 12;
+            // ヒット rect は和音ゾーン全体（五線±3加線）をカバーする。
+            // 音符のY中心だけをカバーすると加線域へのクリックが insertRect に落ちて和音追加できない。
+            const yHit = chordTopY;
+            const safeH = chordBotY - chordTopY;
 
             const hit = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
             hit.setAttribute('class', 'vf-note-hit');
@@ -874,28 +905,25 @@ export default function StaffCanvas({
             hit.setAttribute('pointer-events', 'all');
             (hit.style as any).cursor = 'pointer';
 
-            // セル上でもガイドを出す
+            // セル上でもガイドを出す（和音ゾーン: 縦ストライプ、挿入ゾーン: 横線）
+            const updateGuideForNote = (lx: number, ly: number) => {
+              if (lx < measLeft || lx > measRight) { hideGuide(); hideChordGuide(); return; }
+              // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音ゾーン
+              const inChordZone = !safeEvents[j]?.isRest &&
+                lx >= noteVisualLeft - CHORD_HIT_PAD && lx <= noteVisualRight + CHORD_HIT_PAD &&
+                ly >= chordTopY && ly <= chordBotY;
+              if (inChordZone) { hideGuide(); showChordGuide(xHit, wHit); }
+              else { hideChordGuide(); updateGuide(lx, ly); }
+            };
             hit.addEventListener('mousemove', (ev) => {
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
-              
-              // マウスが小節の範囲内にある場合のみガイドを表示
-              if (lx >= measLeft && lx <= measRight) {
-                updateGuide(lx, ly);
-              } else {
-                hideGuide();
-              }
+              updateGuideForNote(lx, ly);
             });
             hit.addEventListener('mouseenter', (ev) => {
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
-              
-              // マウスが小節の範囲内にある場合のみガイドを表示
-              if (lx >= measLeft && lx <= measRight) {
-                updateGuide(lx, ly);
-              } else {
-                hideGuide();
-              }
+              updateGuideForNote(lx, ly);
             });
-            hit.addEventListener('mouseleave', hideGuide);
+            hit.addEventListener('mouseleave', () => { hideGuide(); hideChordGuide(); });
 
             // クリック：音符の描画X範囲内なら和音追加、範囲外（同セルの空白）なら新規挿入
             hit.addEventListener('click', (ev) => {
@@ -903,13 +931,9 @@ export default function StaffCanvas({
               ev.stopPropagation(); // 小節rectには渡さない
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
 
-              // 音符のバウンディングボックスX範囲で「同じX座標かどうか」を判定する
-              // Voronoiセルより狭い実際の描画領域を基準にすることで、
-              // セル内の空白クリックを誤って和音追加扱いしない
-              const noteLeftX = anchors[j];
-              const noteBBW = (vfNotes[j] as any).getBoundingBox?.()?.getW() ?? 20;
-              const noteRightX = noteLeftX + noteBBW;
-              const isOnNote = lx >= noteLeftX && lx <= noteRightX;
+              // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
+              const isOnNote = lx >= noteVisualLeft - CHORD_HIT_PAD && lx <= noteVisualRight + CHORD_HIT_PAD &&
+                ly >= chordTopY && ly <= chordBotY;
 
               if (!safeEvents[j]?.isRest && isOnNote) {
                 // 音符の描画範囲内 → 和音追加（クリックしたY位置の音高を追加）
@@ -933,8 +957,8 @@ export default function StaffCanvas({
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });
                 if (playEvent) playNoteEvent(playEvent);
               } else if (safeEvents[j]?.isRest) {
-                // 休符は選択のみ
-                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                // 休符クリック → 音符を挿入（rect が大きくなり insertRect に届かないため）
+                doInsertAt(lx, ly, measureIndex);
               } else {
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsertAt(lx, ly, measureIndex);

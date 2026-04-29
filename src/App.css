@@ -657,6 +657,14 @@ button.ghost:disabled {
 /* ガイド線/点はクリックをブロックしない */
 .vf-guide-line, .vf-guide-dot { pointer-events: none; }
 
+/* 和音追加ゾーンを示す縦ストライプ */
+.vf-guide-chord {
+  pointer-events: none;
+  fill: rgba(99, 153, 255, 0.18);
+  stroke: rgba(70, 130, 220, 0.55);
+  stroke-width: 1.5;
+}
+
 /* ===== 印刷用 ===== */
 @media print {
   @page { size: A4; margin: 12mm; }
