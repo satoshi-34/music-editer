@@ -31,8 +31,10 @@ export function normalizeToVF(d: DurKey): 'w'|'h'|'q'|'8'|'16'|'32'|'64' {
   return d==='1'?'w':d==='2'?'h':d==='4'?'q':d;
 }
 
-// ツール（「音価」と「休符かどうか」）
-export type Tool = { duration: DurKey; isRest?: boolean };
+// ツール（「音価」と「休符かどうか」、またはタイモード）
+export type Tool =
+  | { duration: DurKey; isRest?: boolean }  // 通常の音符/休符入力
+  | { mode: 'tie' };                        // タイ記号を付けるモード
 
 // 並べるアイテム（上段=音符, 下段=休符）
 const ROW1: Tool[] = ['1','2','4','8','16','32','64'].map(d => ({ duration: d as DurKey }));
@@ -72,48 +74,90 @@ const FILL_TWEAKS: Partial<Record<SymKey, number>> = {
 
 // ─────────────────────────────────────────────────────────────
 
+// タイツールの定数
+const TIE_TOOL: Tool = { mode: 'tie' };
+
 export default function Palette({
   value, onChange,
 }: { value: Tool; onChange: (t: Tool) => void }) {
 
   const items = [...ROW1, ...ROW2]; // 7×2 = 14個
 
+  // タイモードかどうか（判別共用体の型ガード）
+  const tieActive = 'mode' in value && value.mode === 'tie';
+
   return (
-    <div
-      className="palette-grid"
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(7,56px)', // 7列分
-        gap: 8,
-        padding: 8,
-      }}
-    >
-      {items.map((t, i) => {
-        const active = value.duration === t.duration && !!value.isRest === !!t.isRest;
-        return (
-          <button
-            key={i}
-            onClick={() => onChange(t)}
-            aria-label={`${t.isRest ? '休符' : '音符'} ${label(t.duration)}`}
-            title={`${t.isRest ? '休符' : '音符'} ${label(t.duration)}`}
-            style={{
-              width: BUTTON_W,
-              height: BUTTON_H,
-              padding: 0,
-              borderRadius: 10,
-              border: active ? '2px solid #3b82f6' : '1px solid #ccc',
-              background: '#fff',
-              color: '#222',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-            }}
-          >
-            <NoteIcon duration={t.duration} isRest={t.isRest} />
-          </button>
-        );
-      })}
+    <div style={{ padding: 8 }}>
+      {/* 音符・休符ボタン行 */}
+      <div
+        className="palette-grid"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(7,56px)', // 7列分
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        {items.map((t, i) => {
+          // Tool が音符/休符のときだけ duration を参照する（型ガード）
+          const noteActive = !tieActive &&
+            'duration' in value && 'duration' in t &&
+            value.duration === t.duration && !!value.isRest === !!t.isRest;
+          return (
+            <button
+              type="button"
+              key={i}
+              onClick={() => onChange(t)}
+              aria-label={`${'isRest' in t && t.isRest ? '休符' : '音符'} ${label((t as {duration: DurKey}).duration)}`}
+              title={`${'isRest' in t && t.isRest ? '休符' : '音符'} ${label((t as {duration: DurKey}).duration)}`}
+              style={{
+                width: BUTTON_W,
+                height: BUTTON_H,
+                padding: 0,
+                borderRadius: 10,
+                border: noteActive ? '2px solid #3b82f6' : '1px solid #ccc',
+                background: '#fff',
+                color: '#222',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={'isRest' in t ? t.isRest : false} />
+            </button>
+          );
+        })}
+      </div>
+
+      {/* タイボタン行 */}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button
+          type="button"
+          onClick={() => onChange(tieActive ? ROW1[2] : TIE_TOOL)}
+          aria-label="タイ"
+          title="タイ（隣接する同音符を結ぶ弧線）"
+          style={{
+            width: BUTTON_W,
+            height: BUTTON_H,
+            padding: 0,
+            borderRadius: 10,
+            border: tieActive ? '2px solid #3b82f6' : '1px solid #ccc',
+            background: tieActive ? '#eff6ff' : '#fff',
+            color: '#222',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            fontSize: 22,
+          }}
+        >
+          {/* タイの弧を表す SVG アイコン */}
+          <svg width="32" height="20" viewBox="0 0 32 20" fill="none">
+            <path d="M4 14 Q16 2 28 14" stroke="#111" strokeWidth="2" strokeLinecap="round" fill="none"/>
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }

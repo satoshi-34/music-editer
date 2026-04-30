@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
-  Barline, Beam, Accidental, StaveConnector,
+  Barline, Beam, Accidental, StaveConnector, StaveTie,
 } from 'vexflow';
 import type { Tool } from './Palette';
 import type { MeasureData } from '../types/storage';
@@ -12,7 +12,7 @@ import type { ClefType } from './clefUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[] };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean };
 
 export type PartConfig = {
   clef: ClefType;
@@ -234,6 +234,11 @@ export default function PianoSystemCanvas({
   const yOffRef = useRef(yOffset);
   // キーボードハンドラが各パートのclefを参照できるようにrefで保持
   const partsClefRef = useRef(parts.map(p => p.clef));
+  // タイドラッグの開始情報（再レンダリングを発生させないためref管理）
+  const tieStartRef = useRef<{
+    partIndex: number; absoluteIndex: number; noteIndex: number;
+    noteX: number; noteY: number;
+  } | null>(null);
 
   useEffect(()=>{selRef.current=selected;},[selected]);
   useEffect(()=>{disRef.current=disabled;},[disabled]);
@@ -348,6 +353,31 @@ export default function PianoSystemCanvas({
     const allG=svg.querySelectorAll('g');
     const svgRoot=(allG.length?allG[allG.length-1]:svg) as SVGGElement;
 
+    // タイドラッグのプレビュー弧
+    const tiePreviewPath=document.createElementNS('http://www.w3.org/2000/svg','path');
+    tiePreviewPath.setAttribute('fill','none');
+    tiePreviewPath.setAttribute('stroke','#3b82f6');
+    tiePreviewPath.setAttribute('stroke-width','1.5');
+    tiePreviewPath.setAttribute('stroke-dasharray','5 3');
+    tiePreviewPath.setAttribute('opacity','0.8');
+    tiePreviewPath.setAttribute('pointer-events','none');
+    tiePreviewPath.style.display='none';
+    svgRoot.appendChild(tiePreviewPath);
+
+    svg.addEventListener('mousemove',(ev)=>{
+      if(!tieStartRef.current||!('mode' in tool)||tool.mode!=='tie')return;
+      const{x:mx,y:my}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
+      const{noteX:sx,noteY:sy}=tieStartRef.current;
+      const midX=(sx+mx)/2;
+      const arcY=Math.max(sy,my)+18;
+      tiePreviewPath.setAttribute('d',`M ${sx} ${sy} Q ${midX} ${arcY} ${mx} ${my}`);
+      tiePreviewPath.style.display='block';
+    });
+    svg.addEventListener('mouseup',()=>{
+      tieStartRef.current=null;
+      tiePreviewPath.style.display='none';
+    });
+
     const s=Math.max(0.75,Math.min(1.0,scale??1));
     ctx.scale(s,s);
 
@@ -406,6 +436,8 @@ export default function PianoSystemCanvas({
 
     /* -- 音符と操作領域を描画 -- */
     x=PAGE_LEFT+(innerW-totalW)/2;
+    // パートごとの小節をまたぐタイ持ち越し（インデックス = partIndex）
+    const carryTies: Array<{ note: StaveNote } | null> = parts.map(() => null);
     for(let i=0;i<measuresPerSystem;i++){
       const absI=startMeasureIndex+i;
       const w=realWs[i];
@@ -495,8 +527,48 @@ export default function PianoSystemCanvas({
         try{voice.draw(ctx,stave);}catch{}
         beams.forEach(b=>b.setContext(ctx).draw());
 
+        // ① 前の小節から持ち越したタイを現在の小節先頭音符へ繋ぐ
+        if(carryTies[pi]&&vfNotes.length>0&&!safeEvs[0]?.isRest){
+          try{
+            new StaveTie({firstNote:carryTies[pi]!.note,lastNote:vfNotes[0],firstIndexes:[0],lastIndexes:[0]}).setContext(ctx).draw();
+          }catch{/* 音符サイズ不一致などへの保険 */}
+        }
+        carryTies[pi]=null;
+
+        // ② 同一小節内のタイを描画
+        for(let j=0;j<safeEvs.length-1;j++){
+          if(safeEvs[j].tiedToNext&&!safeEvs[j].isRest){
+            try{
+              new StaveTie({firstNote:vfNotes[j],lastNote:vfNotes[j+1],firstIndexes:[0],lastIndexes:[0]}).setContext(ctx).draw();
+            }catch(e){/* 和音サイズ不一致などへの保険 */}
+          }
+        }
+
+        // ③ この小節の最後の音符に tiedToNext があれば次の小節へ持ち越す
+        const lastEvIdx=safeEvs.length-1;
+        if(lastEvIdx>=0&&safeEvs[lastEvIdx].tiedToNext&&!safeEvs[lastEvIdx].isRest){
+          carryTies[pi]={note:vfNotes[lastEvIdx]};
+        }
+
         const staveTop=stave.getYForLine(-EXTRA_TOP);
         const staveBot=stave.getYForLine(4+EXTRA_BOTTOM);
+
+        const applyTies=(m1:number,n1:number,m2:number,n2:number)=>{
+          if(m1>m2||(m1===m2&&n1>n2)){[m1,n1,m2,n2]=[m2,n2,m1,n1];}
+          if(m1===m2&&n1===n2)return;
+          setScore(prev=>{
+            const next=prev.map(m=>({events:[...(m?.events??[])] as NoteEvent[]}));
+            for(let mi=m1;mi<=m2&&mi<next.length;mi++){
+              const evs=next[mi].events;
+              const firstN=(mi===m1)?n1:0;
+              const lastN=(mi===m2)?n2-1:evs.length-1;
+              for(let ni=firstN;ni<=lastN&&ni<evs.length;ni++){
+                if(evs[ni]&&!evs[ni].isRest){evs[ni]={...evs[ni],tiedToNext:true};}
+              }
+            }
+            return next;
+          });
+        };
 
         const doInsert=(lx:number,ly:number)=>{
           const key=l2k(snapLine(stave,ly));
@@ -546,6 +618,7 @@ export default function PianoSystemCanvas({
         ir.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
         ir.addEventListener('click',e=>{
           if(disabled)return;
+          if('mode' in tool&&tool.mode==='tie')return;
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           doInsert(lx,ly);
         });
@@ -588,9 +661,36 @@ export default function PianoSystemCanvas({
               else{hideChordGuide();showGuide(lx,ly,stave);}
             });
             hit.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
+
+            // タイドラッグ開始
+            hit.addEventListener('mousedown',e=>{
+              if(disabled||!('mode' in tool)||tool.mode!=='tie')return;
+              if(safeEvs[j]?.isRest)return;
+              e.preventDefault();
+              const n=vfNotes[j] as unknown as Record<string,(...a:unknown[])=>unknown>;
+              const b=n['getBoundingBox']?.() as {getY:()=>number;getH:()=>number}|undefined;
+              const noteX=(n['getAbsoluteX']?.() as number|undefined)??xl;
+              const noteY=(b?.getY?.()??chordTopY)+(b?.getH?.()??12);
+              tieStartRef.current={partIndex:pi,absoluteIndex:absI,noteIndex:j,noteX,noteY};
+            });
+
+            // タイドラッグ確定
+            hit.addEventListener('mouseup',e=>{
+              if(disabled||!('mode' in tool)||tool.mode!=='tie')return;
+              const start=tieStartRef.current;
+              tiePreviewPath.style.display='none';
+              tieStartRef.current=null;
+              if(!start||start.partIndex!==pi)return;
+              if(safeEvs[j]?.isRest)return;
+              if(start.absoluteIndex===absI&&start.noteIndex===j)return;
+              (e as MouseEvent).stopPropagation();
+              applyTies(start.absoluteIndex,start.noteIndex,absI,j);
+            });
+
             hit.addEventListener('click',e=>{
               if(disabled)return;
               e.stopPropagation();
+              if('mode' in tool&&tool.mode==='tie')return;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン

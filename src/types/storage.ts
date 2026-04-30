@@ -12,6 +12,8 @@ export interface NoteEvent {
    * isRest が true の場合は空配列または任意の値（無視される）
    */
   keys: string[];
+  /** true のとき、この音符から次の音符へタイ（弧線）を引く */
+  tiedToNext?: boolean;
 }
 
 export interface MeasureData {

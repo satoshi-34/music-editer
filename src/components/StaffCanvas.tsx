@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental } from 'vexflow';
+import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, StaveTie } from 'vexflow';
 import type { Tool } from './Palette';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource } from '../audio/SoundSource';
@@ -17,7 +17,7 @@ import { defaultAudioEngine } from '../audio/AudioEngine';
    ============================================================ */
 
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[] };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean };
 type MeasureData = { events: NoteEvent[] };
 
 type Props = {
@@ -353,6 +353,14 @@ export default function StaffCanvas({
   useEffect(() => { disabledRef.current = disabled; }, [disabled]);
   useEffect(() => { yOffsetRef.current = yOffset; }, [yOffset]);
 
+  // タイドラッグの開始情報（useRef で持つ理由: ドラッグ中は再レンダリングを発生させないため）
+  const tieStartRef = useRef<{
+    absoluteIndex: number;
+    noteIndex: number;
+    noteX: number; // SVG座標系（VexFlow未スケール空間）でのX
+    noteY: number; // SVG座標系でのY
+  } | null>(null);
+
   // NotePlayerインスタンスの管理
   const notePlayerRef = useRef<NotePlayer | null>(null);
   const soundSourceRef = useRef<SoundSource | null>(null);
@@ -562,6 +570,35 @@ export default function StaffCanvas({
     // 🛠️ ここで一度だけ root グループを取得して、以降は使い回す
     const svgRoot = (getVexflowGroup(svg) as SVGGElement | null) || svg;
 
+    // タイドラッグのプレビュー弧（ドラッグ中だけ表示する一時的なSVGパス）
+    const tiePreviewPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    tiePreviewPath.setAttribute('fill', 'none');
+    tiePreviewPath.setAttribute('stroke', '#3b82f6');
+    tiePreviewPath.setAttribute('stroke-width', '1.5');
+    tiePreviewPath.setAttribute('stroke-dasharray', '5 3');
+    tiePreviewPath.setAttribute('opacity', '0.8');
+    tiePreviewPath.setAttribute('pointer-events', 'none');
+    tiePreviewPath.style.display = 'none';
+    svgRoot.appendChild(tiePreviewPath);
+
+    // マウス移動中のプレビュー弧更新
+    svg.addEventListener('mousemove', (ev) => {
+      if (!tieStartRef.current || !('mode' in tool) || tool.mode !== 'tie') return;
+      const { x: mx, y: my } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
+      const { noteX: sx, noteY: sy } = tieStartRef.current;
+      const midX = (sx + mx) / 2;
+      // 弧の頂点は始点・終点より少し下（タイは音符の下を通る慣例）
+      const arcY = Math.max(sy, my) + 18;
+      tiePreviewPath.setAttribute('d', `M ${sx} ${sy} Q ${midX} ${arcY} ${mx} ${my}`);
+      tiePreviewPath.style.display = 'block';
+    });
+
+    // SVG 上でマウスを離したらドラッグをキャンセル（音符以外でのリリース）
+    svg.addEventListener('mouseup', () => {
+      tieStartRef.current = null;
+      tiePreviewPath.style.display = 'none';
+    });
+
     const s = Math.max(0.75, Math.min(1.0, scale ?? 1));
     ctx.scale(s, s);
 
@@ -570,6 +607,9 @@ export default function StaffCanvas({
 
     let globalIndex = 0;
     const maxMeasures = systems * measuresPerSystem; // このStaffCanvasが描画する最大小節数
+
+    // 小節をまたぐタイの持ち越し（前の小節末尾の StaveNote を次の小節先頭へ繋ぐ）
+    let carryTie: { note: StaveNote } | null = null;
 
     for (let line = 0; line < systems; line++) {
       if (globalIndex >= maxMeasures) break; // このStaffCanvasの範囲を超えたら終了
@@ -697,6 +737,41 @@ export default function StaffCanvas({
         }
         beams.forEach(b => b.setContext(ctx).draw());
 
+        // ① 前の小節から持ち越したタイを現在の小節の先頭音符へ繋ぐ
+        if (carryTie && vfNotes.length > 0 && !safeEvents[0]?.isRest) {
+          try {
+            new StaveTie({
+              firstNote: carryTie.note,
+              lastNote: vfNotes[0],
+              firstIndexes: [0],
+              lastIndexes: [0],
+            }).setContext(ctx).draw();
+          } catch { /* 音符サイズ不一致などへの保険 */ }
+          carryTie = null;
+        } else {
+          carryTie = null; // 次音符がない・休符の場合は持ち越しを破棄
+        }
+
+        // ② 同一小節内のタイを描画（tiedToNext が true の音符ペアを繋ぐ）
+        for (let j = 0; j < safeEvents.length - 1; j++) {
+          if (safeEvents[j].tiedToNext && !safeEvents[j].isRest) {
+            try {
+              new StaveTie({
+                firstNote: vfNotes[j],
+                lastNote: vfNotes[j + 1],
+                firstIndexes: [0],
+                lastIndexes: [0],
+              }).setContext(ctx).draw();
+            } catch { /* 和音サイズ不一致などへの保険 */ }
+          }
+        }
+
+        // ③ この小節の最後の音符に tiedToNext があれば次の小節へ持ち越す
+        const lastEvIdx = safeEvents.length - 1;
+        if (lastEvIdx >= 0 && safeEvents[lastEvIdx].tiedToNext && !safeEvents[lastEvIdx].isRest) {
+          carryTie = { note: vfNotes[lastEvIdx] };
+        }
+
         /* --- ガイド更新/非表示（小節rect/セルrect 両方から呼ぶ） --- */
         const guideLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
         guideLine.setAttribute('class', 'vf-guide-line');
@@ -755,6 +830,32 @@ export default function StaffCanvas({
           guideChordRect.style.display = 'block';
         };
         const hideChordGuide = () => { guideChordRect.style.display = 'none'; };
+
+        /* --- タイ設置処理（m1:n1 → m2:n2 の範囲に tiedToNext を付与） --- */
+        const applyTies = (m1: number, n1: number, m2: number, n2: number) => {
+          // 始点 > 終点の場合は逆順（ドラッグ方向を問わず動作）
+          if (m1 > m2 || (m1 === m2 && n1 > n2)) {
+            [m1, n1, m2, n2] = [m2, n2, m1, n1];
+          }
+          // 同じ音符は対象外
+          if (m1 === m2 && n1 === n2) return;
+
+          setScore(prev => {
+            const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
+            for (let mi = m1; mi <= m2 && mi < next.length; mi++) {
+              const evs = next[mi].events;
+              // 対象範囲: 始点小節は n1 から末尾、中間は全体、終点小節は n2-1 まで
+              const firstN = (mi === m1) ? n1 : 0;
+              const lastN  = (mi === m2) ? n2 - 1 : evs.length - 1;
+              for (let ni = firstN; ni <= lastN && ni < evs.length; ni++) {
+                if (evs[ni] && !evs[ni].isRest) {
+                  evs[ni] = { ...evs[ni], tiedToNext: true };
+                }
+              }
+            }
+            return next;
+          });
+        };
 
         /* --- 挿入処理（クリック座標→どこに挿入するか決めて追加） --- */
         const doInsertAt = (localX: number, localY: number, targetMeasureIndex: number) => {
@@ -847,14 +948,10 @@ export default function StaffCanvas({
         });
         insertRect.addEventListener('mouseleave', () => { hideGuide(); hideChordGuide(); });
         insertRect.addEventListener('click', (e) => {
-          // 編集が無効な場合は何もしない
-          if (disabled) {
-            return;
-          }
-          
+          if (disabled) return;
+          // タイモード中は音符挿入しない
+          if ('mode' in tool && tool.mode === 'tie') return;
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
-          
-          // doInsertAt関数を使用して音符を挿入
           doInsertAt(lx, ly, measureIndex);
         });
 
@@ -925,10 +1022,37 @@ export default function StaffCanvas({
             });
             hit.addEventListener('mouseleave', () => { hideGuide(); hideChordGuide(); });
 
+            // タイドラッグ開始（mousedown）
+            hit.addEventListener('mousedown', (ev) => {
+              if (disabled || !('mode' in tool) || tool.mode !== 'tie') return;
+              if (safeEvents[j]?.isRest) return;
+              ev.preventDefault(); // テキスト選択を防ぐ
+              const noteX = anchors[j];
+              // 符頭の下端をタイ弧の始点Y に使う（弧が音符の下を通るよう）
+              const noteY = (bb?.getY?.() ?? chordTopY) + (bb?.getH?.() ?? 12);
+              tieStartRef.current = { absoluteIndex, noteIndex: j, noteX, noteY };
+            });
+
+            // タイドラッグ確定（mouseup）
+            hit.addEventListener('mouseup', (ev) => {
+              if (disabled || !('mode' in tool) || tool.mode !== 'tie') return;
+              const start = tieStartRef.current;
+              tiePreviewPath.style.display = 'none';
+              tieStartRef.current = null;
+              if (!start) return;
+              if (safeEvents[j]?.isRest) return;
+              // 同じ音符で離した場合はキャンセル
+              if (start.absoluteIndex === absoluteIndex && start.noteIndex === j) return;
+              ev.stopPropagation();
+              applyTies(start.absoluteIndex, start.noteIndex, absoluteIndex, j);
+            });
+
             // クリック：音符の描画X範囲内なら和音追加、範囲外（同セルの空白）なら新規挿入
             hit.addEventListener('click', (ev) => {
               if (disabled) return;
               ev.stopPropagation(); // 小節rectには渡さない
+              // タイモードではドラッグで操作するため、クリックは何もしない
+              if ('mode' in tool && tool.mode === 'tie') return;
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
 
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
