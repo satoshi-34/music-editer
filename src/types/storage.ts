@@ -3,6 +3,25 @@
 
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
 
+/** タイまたはスラーの弧。開始 NoteEvent の arcs[] に格納する */
+export interface TieArc {
+  fromKey: string;         // 開始符頭の key（例: "e/4"）
+  toKey: string;           // 終了符頭の key
+  toMeasureIndex: number;  // 終了音符の絶対小節インデックス
+  toEventIndex: number;    // 終了音符のイベントインデックス
+  kind: 'tie' | 'slur';
+  /** ユーザーがドラッグで調節したコントロールポイントの縦ズレ量（SVG px）。省略時は 0 */
+  cpDyOffset?: number;
+  /** 向き手動反転フラグ。true のとき自動算出の upward を反転する */
+  flipDirection?: boolean;
+  /** 始点X/Y調節量（SVG px）。省略時は 0 */
+  startDx?: number;
+  startDy?: number;
+  /** 終点X/Y調節量（SVG px）。省略時は 0 */
+  endDx?: number;
+  endDy?: number;
+}
+
 export interface NoteEvent {
   dur: DurKey;
   isRest: boolean;
@@ -12,8 +31,10 @@ export interface NoteEvent {
    * isRest が true の場合は空配列または任意の値（無視される）
    */
   keys: string[];
-  /** true のとき、この音符から次の音符へタイ（弧線）を引く */
+  /** レガシー。既存セーブデータの読み込み互換用に残す */
   tiedToNext?: boolean;
+  /** タイ／スラーの弧リスト。この音符から他音符への接続を保持する */
+  arcs?: TieArc[];
 }
 
 export interface MeasureData {
