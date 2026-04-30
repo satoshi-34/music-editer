@@ -237,7 +237,7 @@ export default function PianoSystemCanvas({
   // タイドラッグの開始情報（再レンダリングを発生させないためref管理）
   const tieStartRef = useRef<{
     partIndex: number; absoluteIndex: number; noteIndex: number;
-    noteX: number; noteY: number;
+    noteX: number; noteY: number; stemDir: number;
   } | null>(null);
 
   useEffect(()=>{selRef.current=selected;},[selected]);
@@ -366,11 +366,11 @@ export default function PianoSystemCanvas({
 
     svg.addEventListener('mousemove',(ev)=>{
       if(!tieStartRef.current||!('mode' in tool)||tool.mode!=='tie')return;
-      const{x:mx,y:my}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
-      const{noteX:sx,noteY:sy}=tieStartRef.current;
+      const{x:mx}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
+      const{noteX:sx,noteY:sy,stemDir}=tieStartRef.current;
       const midX=(sx+mx)/2;
-      const arcY=Math.max(sy,my)+18;
-      tiePreviewPath.setAttribute('d',`M ${sx} ${sy} Q ${midX} ${arcY} ${mx} ${my}`);
+      const arcY=stemDir===1?sy+16:sy-16;
+      tiePreviewPath.setAttribute('d',`M ${sx} ${sy} Q ${midX} ${arcY} ${mx} ${sy}`);
       tiePreviewPath.style.display='block';
     });
     svg.addEventListener('mouseup',()=>{
@@ -670,8 +670,14 @@ export default function PianoSystemCanvas({
               const n=vfNotes[j] as unknown as Record<string,(...a:unknown[])=>unknown>;
               const b=n['getBoundingBox']?.() as {getY:()=>number;getH:()=>number}|undefined;
               const noteX=(n['getAbsoluteX']?.() as number|undefined)??xl;
-              const noteY=(b?.getY?.()??chordTopY)+(b?.getH?.()??12);
-              tieStartRef.current={partIndex:pi,absoluteIndex:absI,noteIndex:j,noteX,noteY};
+              const bbY=b?.getY?.()??chordTopY;
+              const bbH=b?.getH?.()??12;
+              // VexFlow の stemDirection は formatToStave 後に更新されないため、音高位置から自前で算出する
+              const evKeys=safeEvs[j].keys;
+              const avgLine=evKeys.reduce((s,k)=>s+k2l(k),0)/Math.max(evKeys.length,1);
+              const stemDir=avgLine<2?-1:1;
+              const noteY=stemDir===1?bbY+bbH+2:bbY-2;
+              tieStartRef.current={partIndex:pi,absoluteIndex:absI,noteIndex:j,noteX,noteY,stemDir};
             });
 
             // タイドラッグ確定
