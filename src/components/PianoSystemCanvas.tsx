@@ -523,13 +523,15 @@ export default function PianoSystemCanvas({
       }
       // タイ新規ドラッグのプレビュー
       if(!tieStartRef.current||!('mode' in tool)||tool.mode!=='tie')return;
-      const{x:mx}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
+      const{x:mx,y:my}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
       const{noteX:sx,noteY:sy,stemDir}=tieStartRef.current;
       const upward=stemDir!==1;
-      const span=mx-sx;
-      const{dAttr:d}=computeArcGeometry(sx,sy,mx,sy,upward,'slur',stemDir,undefined,0);
+      // 段またぎドラッグでは mx < sx（右→左）になるため Math.abs で判定する
+      const hasMoved=Math.abs(mx-sx)>4||Math.abs(my-sy)>4;
+      // 段またぎ時はマウスY座標も使って始点→現在位置のプレビュー弧を描く
+      const{dAttr:d}=computeArcGeometry(sx,sy,mx,my,upward,'slur',stemDir,undefined,0);
       tiePreviewPath.setAttribute('d',d);
-      tiePreviewPath.style.display=span>4?'block':'none';
+      tiePreviewPath.style.display=hasMoved?'block':'none';
     });
     svg.addEventListener('mouseup',(ev)=>{
       // 始点・終点ドラッグの確定
@@ -618,6 +620,12 @@ export default function PianoSystemCanvas({
         stave.setEndBarType(Barline.type.SINGLE);
         stave.setContext(ctx).draw();
         staveSets[pi].push(stave);
+        // 段の右端X（未スケール）を更新（段またぎ弧の第1セグメント終点算出用）
+        const sysKeyP=Math.round(stave.getYForLine(2));
+        const rightEdgeP=stave.getX()+stave.getWidth();
+        if(!systemRightEdgeMapP.has(sysKeyP)||systemRightEdgeMapP.get(sysKeyP)!<rightEdgeP){
+          systemRightEdgeMapP.set(sysKeyP,rightEdgeP);
+        }
       });
 
       // 各小節の右端縦線：第1段 ↔ 最終段 をまたぐ
@@ -650,6 +658,8 @@ export default function PianoSystemCanvas({
     type PendingArcP={partIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
     const notePositionMapP=new Map<string,{note:StaveNote;stave:Stave;keys:string[]}>();
     const pendingArcsP:PendingArcP[]=[];
+    // 各段の右端X（未スケール）を記録（段またぎ弧の第1セグメント終点算出用）
+    const systemRightEdgeMapP=new Map<number,number>();
 
     // tiedToNext レガシー用: 和音から代表符頭キーを選ぶ（upward なら最高音、downward なら最低音）
     const tieRepKeyP=(clef:ClefType,keys:string[])=>{
@@ -1103,8 +1113,18 @@ export default function PianoSystemCanvas({
           const crossMinNoteY=allNoteYs&&allNoteYs.length>0?Math.min(...allNoteYs):undefined;
           const crossMaxNoteY=allNoteYs&&allNoteYs.length>0?Math.max(...allNoteYs):undefined;
           const obstacleY=crossMinNoteY!==undefined?(upward?crossMinNoteY:crossMaxNoteY):undefined;
-          const edgeX1=startStave.getX()+startStave.getWidth();
-          const edgeX2=dest.stave.getX();
+          // 段の右端は同じ行の最後の小節右端を使う（途中の小節から段またぎした場合も正しく伸ばす）
+          const startSysKeyP=Math.round(startStave.getYForLine(2));
+          const edgeX1=systemRightEdgeMapP.get(startSysKeyP)??(startStave.getX()+startStave.getWidth());
+          // 段の左端は dest が属する行の先頭小節左端（notePositionMapP から最小Xを取る）
+          const destSysKeyP=Math.round(dest.stave.getYForLine(2));
+          const edgeX2=(()=>{
+            let minX=dest.stave.getX();
+            for(const{stave:sv}of notePositionMapP.values()){
+              if(Math.round(sv.getYForLine(2))===destSysKeyP&&sv.getX()<minX)minX=sv.getX();
+            }
+            return minX;
+          })();
           drawArcPathP(x1+startDx,y1+startDy,edgeX1,y1+startDy,upward,arc.kind,stemDir,obstacleY,cpDyOffset,arcKey+'-1',isSelected,crossMinNoteY,crossMaxNoteY,startDx,startDy,0,0);
           drawArcPathP(edgeX2,y2+endDy,x2+endDx,y2+endDy,upward,arc.kind,0,obstacleY,cpDyOffset,arcKey+'-2',isSelected,crossMinNoteY,crossMaxNoteY,0,0,endDx,endDy);
         }catch{/* 保険 */}

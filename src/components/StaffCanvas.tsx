@@ -766,15 +766,16 @@ export default function StaffCanvas({
       }
       // タイ新規ドラッグのプレビュー
       if (!tieStartRef.current || !('mode' in tool) || tool.mode !== 'tie') return;
-      const { x: mx } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
+      const { x: mx, y: my } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
       const { noteX: sx, noteY: sy, stemDir } = tieStartRef.current;
       // stemDir -1 (下向き符幹) = 高音 = 弧は上側、stemDir 1 (上向き符幹) = 低音 = 弧は下側
       const upward = stemDir !== 1;
-      const span = mx - sx;
-      // プレビューも本番と同じ computeArcGeometry を使ってプレビューの形を一致させる
-      const { dAttr: d } = computeArcGeometry(sx, sy, mx, sy, upward, 'slur', stemDir, undefined, 0);
+      // 段またぎドラッグでは mx < sx になるため Math.abs で判定する
+      const hasMoved = Math.abs(mx - sx) > 4 || Math.abs(my - sy) > 4;
+      // 段またぎ時はマウスY座標も使って始点→現在位置のプレビュー弧を描く
+      const { dAttr: d } = computeArcGeometry(sx, sy, mx, my, upward, 'slur', stemDir, undefined, 0);
       tiePreviewPath.setAttribute('d', d);
-      tiePreviewPath.style.display = span > 4 ? 'block' : 'none';
+      tiePreviewPath.style.display = hasMoved ? 'block' : 'none';
     });
 
     // マウスアップ: タイ新規ドラッグのキャンセル / 弧ドラッグの確定保存
@@ -845,6 +846,9 @@ export default function StaffCanvas({
     type PendingArc = { arc: TieArc; arcIndex: number; startNote: StaveNote; startStave: Stave; startMeasureIdx: number; startEventIdx: number };
     const notePositionMap = new Map<string, { note: StaveNote; stave: Stave; keys: string[] }>();
     const pendingArcs: PendingArc[] = [];
+    // 各段（システム行）の右端X座標を記録する（段またぎ弧の第1セグメント終点に使う）
+    // キー: getYForLine(2) を整数に丸めた値（段を一意に識別）、値: 右端X（未スケール）
+    const systemRightEdgeMap = new Map<number, number>();
 
     // tiedToNext レガシー用: 和音から代表符頭キーを選ぶ（upward なら最高音、downward なら最低音）
     // keys は keyToLine 降順ソート（keys[0] = 最低音 / keys[last] = 最高音）
@@ -1054,6 +1058,12 @@ export default function StaffCanvas({
         if (i === 0) { stave.addClef(clef); if (line === 0) stave.addTimeSignature('4/4'); }
         stave.setEndBarType(Barline.type.SINGLE);
         stave.setContext(ctx).draw();
+        // 各段の右端X（未スケール）を更新。段の識別子として getYForLine(2) の整数丸めを使う
+        const sysKey = Math.round(stave.getYForLine(2));
+        const rightEdge = stave.getX() + stave.getWidth();
+        if (!systemRightEdgeMap.has(sysKey) || systemRightEdgeMap.get(sysKey)! < rightEdge) {
+          systemRightEdgeMap.set(sysKey, rightEdge);
+        }
 
         const safeEvents: NoteEvent[] =
           (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, keys:['b/4'] }])
@@ -1576,8 +1586,22 @@ export default function StaffCanvas({
           const crossMinNoteY = allNoteYs && allNoteYs.length > 0 ? Math.min(...allNoteYs) : undefined;
           const crossMaxNoteY = allNoteYs && allNoteYs.length > 0 ? Math.max(...allNoteYs) : undefined;
           const obstacleY = crossMinNoteY !== undefined ? (upward ? crossMinNoteY : crossMaxNoteY) : undefined;
-          const edgeX1 = startStave.getX() + startStave.getWidth();
-          const edgeX2 = dest.stave.getX();
+          // 段の右端は startStave 単体ではなく同じ行の最後の小節右端を使う
+          const startSysKey = Math.round(startStave.getYForLine(2));
+          const edgeX1 = systemRightEdgeMap.get(startSysKey) ?? (startStave.getX() + startStave.getWidth());
+          // 段の左端は dest が属する行の先頭小節左端。デフォルトは dest.stave.getX()
+          const destSysKey = Math.round(dest.stave.getYForLine(2));
+          // 同じ段のすべてのスタヴのうち最小 getX() を取るのが理想だが、
+          // 段先頭は常に dest.stave.getX() より左なので dest.stave.getX() を使う
+          const edgeX2 = (() => {
+            let minX = dest.stave.getX();
+            for (const { stave: sv } of notePositionMap.values()) {
+              if (Math.round(sv.getYForLine(2)) === destSysKey) {
+                if (sv.getX() < minX) minX = sv.getX();
+              }
+            }
+            return minX;
+          })();
           // 始点オフセットは -1 セグメントに、終点オフセットは -2 セグメントに適用する
           drawArcPath(x1 + startDx, y1 + startDy, edgeX1, y1 + startDy, upward, arc.kind, stemDir, obstacleY, cpDyOffset, arcKey + '-1', isSelected, crossMinNoteY, crossMaxNoteY, startDx, startDy, 0, 0);
           drawArcPath(edgeX2, y2 + endDy, x2 + endDx, y2 + endDy, upward, arc.kind, 0, obstacleY, cpDyOffset, arcKey + '-2', isSelected, crossMinNoteY, crossMaxNoteY, 0, 0, endDx, endDy);
