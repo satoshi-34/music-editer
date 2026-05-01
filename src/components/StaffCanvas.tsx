@@ -386,12 +386,14 @@ export default function StaffCanvas({
     startSvgY: number; originalOffset: number;
     baseArcKey: string;  // arcGeomMap 検索用ベースキー（suffix なし）
     flipApplied: boolean; // ドラッグ中に方向反転が起きたか
+    segment: '' | '-1' | '-2'; // 段またぎ時にドラッグ中のセグメント（空文字なら非段またぎ）
   } | null>(null);
 
   // 始点・終点ハンドルのドラッグ状態
   const epDragRef = useRef<{
     fromMeasure: number; fromEvent: number; arcIndex: number;
     endpoint: 'start' | 'end';
+    segment: '' | '-1' | '-2';
     baseArcKey: string;
     startSvgX: number; startSvgY: number;
     originalDx: number; originalDy: number;
@@ -531,6 +533,12 @@ export default function StaffCanvas({
 
   /* ===== キー操作（削除/上下移動/解除） ===== */
   useEffect(() => {
+    const clearArcInteraction = () => {
+      cpDragRef.current = null;
+      epDragRef.current = null;
+      tieStartRef.current = null;
+    };
+
     const onKey = (e: KeyboardEvent) => {
       if (disabledRef.current) return;
 
@@ -548,10 +556,11 @@ export default function StaffCanvas({
             };
             return next;
           });
+          clearArcInteraction();
           setSelectedArc(null);
           e.preventDefault(); return;
         }
-        if (e.key === 'Escape') { setSelectedArc(null); e.preventDefault(); return; }
+        if (e.key === 'Escape') { clearArcInteraction(); setSelectedArc(null); e.preventDefault(); return; }
       }
 
       // 優先2: 音符が選択中 → 音符操作
@@ -635,6 +644,7 @@ export default function StaffCanvas({
   useEffect(() => {
     if (!ref.current) return;
     ref.current.innerHTML = '';
+    ref.current.style.overflow = 'visible';
 
     const W = ref.current.parentElement?.clientWidth ?? ref.current.clientWidth ?? 700;
     const top = 10, bottom = 30, H = top + systems * gap + bottom;
@@ -650,6 +660,8 @@ export default function StaffCanvas({
     // display:blockにすることで親divがSVGの高さ分だけ正しく広がり、
     // PianoStaffで2つのStaffCanvasを縦に並べたとき重ならなくなる。
     svg.style.display = 'block';
+    // 段またぎスラーの切れ目を五線外へ調節できるよう、SVG外側への描画を許可する。
+    svg.style.overflow = 'visible';
 
     // 🛠️ ここで一度だけ root グループを取得して、以降は使い回す
     const svgRoot = (getVexflowGroup(svg) as SVGGElement | null) || svg;
@@ -677,8 +689,14 @@ export default function StaffCanvas({
       cpDyOffset: number;               // 弧曲率オフセット（ep ドラッグ時の再計算に使う）
     }>();
 
-    // SVG 背景クリック → 弧の選択を解除（音符/弧クリック時は stopPropagation で防ぐ）
-    svg.addEventListener('click', () => { setSelectedArc(null); });
+    // SVG 背景クリック → 弧の選択とドラッグ状態を解除
+    svg.addEventListener('click', () => {
+      cpDragRef.current = null;
+      epDragRef.current = null;
+      tieStartRef.current = null;
+      tiePreviewPath.style.display = 'none';
+      setSelectedArc(null);
+    });
 
     // マウス移動: タイ新規ドラッグのプレビュー / 描画済み弧の形状ドラッグ
     svg.addEventListener('mousemove', (ev) => {
@@ -688,36 +706,25 @@ export default function StaffCanvas({
         const { x: svgX, y: svgY } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
         const newDx = drag.originalDx + (svgX - drag.startSvgX);
         const newDy = drag.originalDy + (svgY - drag.startSvgY);
+        const key = drag.baseArcKey + drag.segment;
+        const geom = arcGeomMap.get(key);
+        if (!geom) return;
         if (drag.endpoint === 'start') {
-          // ベースセグメントまたは -1 セグメントの始点を更新
-          for (const suf of ['', '-1']) {
-            const key = drag.baseArcKey + suf;
-            const geom = arcGeomMap.get(key);
-            if (!geom) continue;
-            const nx1 = geom.x1 - geom.startDx + newDx;
-            const ny1 = geom.y1 - geom.startDy + newDy;
-            const { dAttr } = computeArcGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset);
-            (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d', dAttr);
-            (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d', dAttr);
-            const h = (svgRoot as SVGGElement).querySelector(`[data-arc-ep-start="${drag.baseArcKey}"]`);
-            if (h) { h.setAttribute('cx', String(nx1)); h.setAttribute('cy', String(ny1)); }
-            break;
-          }
+          const nx1 = geom.x1 - geom.startDx + newDx;
+          const ny1 = geom.y1 - geom.startDy + newDy;
+          const { dAttr } = computeArcGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset);
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d', dAttr);
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d', dAttr);
+          const h = (svgRoot as SVGGElement).querySelector(`[data-arc-ep-start="${key}"]`);
+          if (h) { h.setAttribute('cx', String(nx1)); h.setAttribute('cy', String(ny1)); }
         } else {
-          // ベースセグメントまたは -2 セグメントの終点を更新
-          for (const suf of ['', '-2']) {
-            const key = drag.baseArcKey + suf;
-            const geom = arcGeomMap.get(key);
-            if (!geom) continue;
-            const nx2 = geom.x2 - geom.endDx + newDx;
-            const ny2 = geom.y2 - geom.endDy + newDy;
-            const { dAttr } = computeArcGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset);
-            (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d', dAttr);
-            (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d', dAttr);
-            const h = (svgRoot as SVGGElement).querySelector(`[data-arc-ep-end="${drag.baseArcKey}"]`);
-            if (h) { h.setAttribute('cx', String(nx2)); h.setAttribute('cy', String(ny2)); }
-            break;
-          }
+          const nx2 = geom.x2 - geom.endDx + newDx;
+          const ny2 = geom.y2 - geom.endDy + newDy;
+          const { dAttr } = computeArcGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset);
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d', dAttr);
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d', dAttr);
+          const h = (svgRoot as SVGGElement).querySelector(`[data-arc-ep-end="${key}"]`);
+          if (h) { h.setAttribute('cx', String(nx2)); h.setAttribute('cy', String(ny2)); }
         }
         return;
       }
@@ -750,18 +757,27 @@ export default function StaffCanvas({
 
         const effectiveOffset = drag.originalOffset + (svgY - drag.startSvgY);
 
-        // 同じ arcKey を持つすべての可視パスを更新（通常1本、段またぎ時は"-1"/"-2"の2本）
-        ['', '-1', '-2'].forEach(suffix => {
+        const updateSegment = (suffix: string, offset: number) => {
           const key = `${drag.baseArcKey}${suffix}`;
           const geom = arcGeomMap.get(key);
           if (!geom) return;
-          // flipApplied なら向きを反転して再計算
           const upward = drag.flipApplied ? !geom.upward : geom.upward;
-          const { dAttr } = computeArcGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, effectiveOffset);
-          // 可視パス（data-arc-key 属性）と透明ヒットパス（data-arc-key-hit 属性）を両方更新
+          const { dAttr } = computeArcGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset);
           (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d', dAttr);
           (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d', dAttr);
-        });
+        };
+
+        if (drag.segment) {
+          // 段またぎ: ドラッグ中のセグメントのみ曲率を更新（独立編集）
+          updateSegment(drag.segment, effectiveOffset);
+          // 向き反転が起きた場合は他のセグメントにも方向を同期
+          const otherSeg = drag.segment === '-1' ? '-2' : '-1';
+          const otherGeom = arcGeomMap.get(drag.baseArcKey + otherSeg);
+          if (otherGeom) updateSegment(otherSeg, otherGeom.cpDyOffset);
+        } else {
+          // 通常（非段またぎ）: 全セグメントを同じ offset で更新
+          ['', '-1', '-2'].forEach(suffix => updateSegment(suffix, effectiveOffset));
+        }
         return;
       }
       // タイ新規ドラッグのプレビュー
@@ -792,9 +808,14 @@ export default function StaffCanvas({
           if (!ev2?.arcs?.[drag.arcIndex]) return prev;
           const patchedArcs = [...ev2.arcs];
           const current = patchedArcs[drag.arcIndex];
-          patchedArcs[drag.arcIndex] = drag.endpoint === 'start'
-            ? { ...current, startDx: newDx, startDy: newDy }
-            : { ...current, endDx: newDx, endDy: newDy };
+          patchedArcs[drag.arcIndex] =
+            drag.segment === '-1' && drag.endpoint === 'end'
+              ? { ...current, breakEndDx: newDx, breakEndDy: newDy }
+              : drag.segment === '-2' && drag.endpoint === 'start'
+                ? { ...current, breakStartDx: newDx, breakStartDy: newDy }
+                : drag.endpoint === 'start'
+                  ? { ...current, startDx: newDx, startDy: newDy }
+                  : { ...current, endDx: newDx, endDy: newDy };
           next[drag.fromMeasure].events[drag.fromEvent] = { ...ev2, arcs: patchedArcs };
           return next;
         });
@@ -812,9 +833,13 @@ export default function StaffCanvas({
           if (!ev2?.arcs?.[drag.arcIndex]) return prev;
           const patchedArcs = [...ev2.arcs];
           const current = patchedArcs[drag.arcIndex];
+          // 段またぎ第2セグメントのドラッグは cpDyOffset2 に保存、それ以外は cpDyOffset
+          const offsetPatch = drag.segment === '-2'
+            ? { cpDyOffset2: newOffset }
+            : { cpDyOffset: newOffset };
           patchedArcs[drag.arcIndex] = {
             ...current,
-            cpDyOffset: newOffset,
+            ...offsetPatch,
             // flipApplied が true なら flipDirection をトグル
             ...(drag.flipApplied ? { flipDirection: !current.flipDirection } : {}),
           };
@@ -846,9 +871,6 @@ export default function StaffCanvas({
     type PendingArc = { arc: TieArc; arcIndex: number; startNote: StaveNote; startStave: Stave; startMeasureIdx: number; startEventIdx: number };
     const notePositionMap = new Map<string, { note: StaveNote; stave: Stave; keys: string[] }>();
     const pendingArcs: PendingArc[] = [];
-    // 各段（システム行）の右端X座標を記録する（段またぎ弧の第1セグメント終点に使う）
-    // キー: getYForLine(2) を整数に丸めた値（段を一意に識別）、値: 右端X（未スケール）
-    const systemRightEdgeMap = new Map<number, number>();
 
     // tiedToNext レガシー用: 和音から代表符頭キーを選ぶ（upward なら最高音、downward なら最低音）
     // keys は keyToLine 降順ソート（keys[0] = 最低音 / keys[last] = 最高音）
@@ -899,8 +921,10 @@ export default function StaffCanvas({
         setSelectedArc({ fromMeasure: fm, fromEvent: fe, arcIndex: ai });
         setSelected(null);
         // ドラッグ開始: 現在の cpDyOffset を originalOffset として記録
+        // 段またぎ suffix から対象セグメントを特定（独立編集に使う）
+        const seg = arcKey.endsWith('-1') ? '-1' : arcKey.endsWith('-2') ? '-2' : '' as '' | '-1' | '-2';
         const { y: svgY } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
-        cpDragRef.current = { fromMeasure: fm, fromEvent: fe, arcIndex: ai, startSvgY: svgY, originalOffset: cpDyOffset, baseArcKey: baseKey, flipApplied: false };
+        cpDragRef.current = { fromMeasure: fm, fromEvent: fe, arcIndex: ai, startSvgY: svgY, originalOffset: cpDyOffset, baseArcKey: baseKey, flipApplied: false, segment: seg };
       });
       hitPath.addEventListener('click', (e) => { e.stopPropagation(); }); // 背景クリックで選択解除されないよう
       (svgRoot as SVGGElement).appendChild(hitPath);
@@ -920,8 +944,9 @@ export default function StaffCanvas({
       // suffix "-1" のセグメントは終点ハンドル不要（段またぎの1段目は始点ハンドルのみ）
       if (isSelected) {
         const baseKey = arcKey.replace(/-[12]$/, '');
-        const showStart = !arcKey.endsWith('-2');
-        const showEnd   = !arcKey.endsWith('-1');
+        const seg = arcKey.endsWith('-1') ? '-1' : arcKey.endsWith('-2') ? '-2' : '' as '' | '-1' | '-2';
+        const showStart = true;
+        const showEnd   = true;
         const makeHandle = (cx: number, cy: number, epAttr: string, origDx: number, origDy: number, ep: 'start' | 'end') => {
           const h = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
           h.setAttribute('cx', String(cx)); h.setAttribute('cy', String(cy));
@@ -930,13 +955,13 @@ export default function StaffCanvas({
           h.setAttribute('stroke-width', '1.5');
           h.setAttribute('pointer-events', 'all');
           h.style.cursor = 'grab';
-          h.setAttribute(epAttr, baseKey);
+          h.setAttribute(epAttr, arcKey);
           h.addEventListener('mousedown', (e) => {
             e.preventDefault(); e.stopPropagation();
             const pts = baseKey.split('-').map(Number);
             const [fm, fe, ai] = pts;
             const { x: sx, y: sy } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
-            epDragRef.current = { fromMeasure: fm, fromEvent: fe, arcIndex: ai, endpoint: ep, baseArcKey: baseKey, startSvgX: sx, startSvgY: sy, originalDx: origDx, originalDy: origDy };
+            epDragRef.current = { fromMeasure: fm, fromEvent: fe, arcIndex: ai, endpoint: ep, segment: seg, baseArcKey: baseKey, startSvgX: sx, startSvgY: sy, originalDx: origDx, originalDy: origDy };
           });
           h.addEventListener('click', e => e.stopPropagation());
           (svgRoot as SVGGElement).appendChild(h);
@@ -1058,13 +1083,6 @@ export default function StaffCanvas({
         if (i === 0) { stave.addClef(clef); if (line === 0) stave.addTimeSignature('4/4'); }
         stave.setEndBarType(Barline.type.SINGLE);
         stave.setContext(ctx).draw();
-        // 各段の右端X（未スケール）を更新。段の識別子として getYForLine(2) の整数丸めを使う
-        const sysKey = Math.round(stave.getYForLine(2));
-        const rightEdge = stave.getX() + stave.getWidth();
-        if (!systemRightEdgeMap.has(sysKey) || systemRightEdgeMap.get(sysKey)! < rightEdge) {
-          systemRightEdgeMap.set(sysKey, rightEdge);
-        }
-
         const safeEvents: NoteEvent[] =
           (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, keys:['b/4'] }])
           .map(ev => (!ev || !ev.dur ? { dur:'4' as DurKey, isRest:true, keys:['b/4'] } : {
@@ -1312,6 +1330,7 @@ export default function StaffCanvas({
         insertRect.addEventListener('mouseleave', () => { hideGuide(); hideChordGuide(); });
         insertRect.addEventListener('click', (e) => {
           if (disabled) return;
+          setSelectedArc(null);
           // タイモード中は音符挿入しない
           if ('mode' in tool && tool.mode === 'tie') return;
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
@@ -1424,6 +1443,7 @@ export default function StaffCanvas({
             hit.addEventListener('click', (ev) => {
               if (disabled) return;
               ev.stopPropagation(); // 小節rectには渡さない
+              setSelectedArc(null);
               // タイモードではドラッグで操作するため、クリックは何もしない
               if ('mode' in tool && tool.mode === 'tie') return;
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
@@ -1560,15 +1580,19 @@ export default function StaffCanvas({
         }
       }
 
-      // 段またぎ判定: 開始スタヴと終了スタヴのY中心が大きく離れていれば別システム行
-      const crossSystem = Math.abs(startStave.getYForLine(2) - dest.stave.getYForLine(2)) > 30;
+      // 段またぎ判定: Y差 > 30 px、または終了音符が開始音符より左（次段は必ず左から始まる）
+      // x2 < x1 は段またぎの確実な証拠なので Y 差チェックの補完として使う
+      type R = Record<string, (...a: unknown[]) => unknown>;
+      const roughAbsX1 = ((startNote as unknown as R)['getAbsoluteX']?.() as number | undefined) ?? Infinity;
+      const roughAbsX2 = ((dest.note   as unknown as R)['getAbsoluteX']?.() as number | undefined) ?? -Infinity;
+      const crossSystem = Math.abs(startStave.getYForLine(2) - dest.stave.getYForLine(2)) > 30
+                       || roughAbsX2 < roughAbsX1;
 
       if (!crossSystem) {
         try { drawTieArc(startNote, arc.fromKey, startStave, dest.note, arc.toKey, dest.stave, arc.kind, allLines, allNoteYs, cpDyOffset, arcKey, isSelected, arc.flipDirection, startDx, startDy, endDx, endDy); } catch { /* 保険 */ }
       } else {
         // 段またぎ: 第1弧（開始音符→段末端）と第2弧（次段先頭→終了音符）に分割
         try {
-          type R = Record<string, (...a: unknown[]) => unknown>;
           const bb1 = (startNote as unknown as R)['getBoundingBox']?.() as { getX: () => number; getW: () => number } | undefined;
           const bb2 = (dest.note as unknown as R)['getBoundingBox']?.() as { getX: () => number; getW: () => number } | undefined;
           const absX1 = ((startNote as unknown as R)['getAbsoluteX']?.() as number | undefined) ?? 0;
@@ -1585,26 +1609,30 @@ export default function StaffCanvas({
           const stemDir = ((startNote as unknown as R)['getStemDirection']?.() as number | undefined) ?? 0;
           const crossMinNoteY = allNoteYs && allNoteYs.length > 0 ? Math.min(...allNoteYs) : undefined;
           const crossMaxNoteY = allNoteYs && allNoteYs.length > 0 ? Math.max(...allNoteYs) : undefined;
-          const obstacleY = crossMinNoteY !== undefined ? (upward ? crossMinNoteY : crossMaxNoteY) : undefined;
-          // 段の右端は startStave 単体ではなく同じ行の最後の小節右端を使う
-          const startSysKey = Math.round(startStave.getYForLine(2));
-          const edgeX1 = systemRightEdgeMap.get(startSysKey) ?? (startStave.getX() + startStave.getWidth());
-          // 段の左端は dest が属する行の先頭小節左端。デフォルトは dest.stave.getX()
-          const destSysKey = Math.round(dest.stave.getYForLine(2));
-          // 同じ段のすべてのスタヴのうち最小 getX() を取るのが理想だが、
-          // 段先頭は常に dest.stave.getX() より左なので dest.stave.getX() を使う
-          const edgeX2 = (() => {
-            let minX = dest.stave.getX();
-            for (const { stave: sv } of notePositionMap.values()) {
-              if (Math.round(sv.getYForLine(2)) === destSysKey) {
-                if (sv.getX() < minX) minX = sv.getX();
-              }
-            }
-            return minX;
-          })();
+          // 上段の右端: 開始音符が属するスタヴの右端（右縦線）を使う
+          const edgeX1 = startStave.getX() + startStave.getWidth();
+          // 下段の左端: 終了音符が属するスタヴの左端（クレフ含む位置）を使う
+          const edgeX2 = dest.stave.getX();
           // 始点オフセットは -1 セグメントに、終点オフセットは -2 セグメントに適用する
-          drawArcPath(x1 + startDx, y1 + startDy, edgeX1, y1 + startDy, upward, arc.kind, stemDir, obstacleY, cpDyOffset, arcKey + '-1', isSelected, crossMinNoteY, crossMaxNoteY, startDx, startDy, 0, 0);
-          drawArcPath(edgeX2, y2 + endDy, x2 + endDx, y2 + endDy, upward, arc.kind, 0, obstacleY, cpDyOffset, arcKey + '-2', isSelected, crossMinNoteY, crossMaxNoteY, 0, 0, endDx, endDy);
+          // 各セグメントの曲率は独立して保存する（cpDyOffset / cpDyOffset2）
+          const cpDy2 = arc.cpDyOffset2 ?? 0;
+          const breakEndDx = arc.breakEndDx ?? 0;
+          const breakEndDy = arc.breakEndDy ?? 0;
+          const breakStartDx = arc.breakStartDx ?? 0;
+          const breakStartDy = arc.breakStartDy ?? 0;
+          // 段境界のエッジ Y: 全体スラーの「仮想ピーク」を計算し、
+          // -1 は音符から右端に向かって弧方向に傾斜、-2 は左端から音符へ収束するよう見せる
+          const effY1 = y1 + startDy;
+          const effY2 = y2 + endDy;
+          // 行またぎ片側セグメントは、全体クラスタではなく各段の音符高さを障害物基準にする。
+          // これで cpDyOffset のドラッグが制御点に素直に反映される。
+          const segmentObstacleY1 = effY1;
+          const segmentObstacleY2 = effY2;
+          // 段またぎの片側セグメントは、境界点の高さを各段の音符高さに揃える。
+          // ふくらみは computeArcGeometry の制御点で作ることで、
+          // 不自然な斜め線や折れた見た目を避ける。
+          drawArcPath(x1 + startDx, effY1, edgeX1 + breakEndDx, effY1 + breakEndDy, upward, arc.kind, stemDir, segmentObstacleY1, cpDyOffset, arcKey + '-1', isSelected, crossMinNoteY, crossMaxNoteY, startDx, startDy, breakEndDx, breakEndDy);
+          drawArcPath(edgeX2 + breakStartDx, effY2 + breakStartDy, x2 + endDx, effY2, upward, arc.kind, 0, segmentObstacleY2, cpDy2, arcKey + '-2', isSelected, crossMinNoteY, crossMaxNoteY, breakStartDx, breakStartDy, endDx, endDy);
         } catch { /* 保険 */ }
       }
     });

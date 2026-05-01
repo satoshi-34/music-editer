@@ -224,7 +224,7 @@ type Sel = { partIndex: number; measure: number; index: number } | null;
 export default function PianoSystemCanvas({
   measuresPerSystem=4, tool, scale=0.86,
   trebleData, bassData, onTrebleChange, onBassChange,
-  partsConfig, showInstrumentLabels=false,
+  partsConfig,
   startMeasureIndex=0, disabled=false, yOffset=0,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
@@ -262,12 +262,14 @@ export default function PianoSystemCanvas({
     startSvgY: number; originalOffset: number;
     baseArcKey: string;   // arcGeomMap 検索用ベースキー（suffix なし）
     flipApplied: boolean; // ドラッグ中に方向反転が起きたか
+    segment: '' | '-1' | '-2'; // ドラッグ対象セグメント（'' = 非段またぎ）
   } | null>(null);
 
   // 始点・終点ハンドルのドラッグ状態
   const epDragRef = useRef<{
     partIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
     endpoint: 'start' | 'end';
+    segment: '' | '-1' | '-2';
     baseArcKey: string;
     startSvgX: number; startSvgY: number;
     originalDx: number; originalDy: number;
@@ -323,6 +325,12 @@ export default function PianoSystemCanvas({
 
   /* ----- キーボード ----- */
   useEffect(()=>{
+    const clearArcInteraction=()=>{
+      cpDragRef.current=null;
+      epDragRef.current=null;
+      tieStartRef.current=null;
+    };
+
     const onKey=(e:KeyboardEvent)=>{
       if(disRef.current)return;
 
@@ -340,9 +348,10 @@ export default function PianoSystemCanvas({
             next[arcSel.partIndex]=partData;
             return next;
           });
+          clearArcInteraction();
           setSelectedArc(null);e.preventDefault();return;
         }
-        if(e.key==='Escape'){setSelectedArc(null);e.preventDefault();return;}
+        if(e.key==='Escape'){clearArcInteraction();setSelectedArc(null);e.preventDefault();return;}
       }
 
       // 優先2: 音符が選択中 → 音符操作
@@ -422,6 +431,7 @@ export default function PianoSystemCanvas({
   useEffect(()=>{
     if(!ref.current)return;
     ref.current.innerHTML='';
+    ref.current.style.overflow='visible';
 
     const { staveYs, sysH } = computeLayout(parts.length);
     const W=ref.current.parentElement?.clientWidth??ref.current.clientWidth??700;
@@ -450,8 +460,14 @@ export default function PianoSystemCanvas({
     // 弧ドラッグ時に再計算できるよう、各弧の形状パラメータをキーで保持する
     const arcGeomMap=new Map<string,{x1:number;y1:number;x2:number;y2:number;upward:boolean;kind:'tie'|'slur';stemDir:number;obstacleY?:number;minNoteY?:number;maxNoteY?:number;startDx:number;startDy:number;endDx:number;endDy:number;cpDyOffset:number}>();
 
-    // SVG 背景クリック → 弧の選択を解除
-    svg.addEventListener('click',()=>{setSelectedArc(null);});
+    // SVG 背景クリック → 弧の選択とドラッグ状態を解除
+    svg.addEventListener('click',()=>{
+      cpDragRef.current=null;
+      epDragRef.current=null;
+      tieStartRef.current=null;
+      tiePreviewPath.style.display='none';
+      setSelectedArc(null);
+    });
 
     svg.addEventListener('mousemove',(ev)=>{
       // 始点・終点ハンドルのドラッグ（cpDrag より優先）
@@ -460,32 +476,23 @@ export default function PianoSystemCanvas({
         const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
         const newDx=drag.originalDx+(svgX-drag.startSvgX);
         const newDy=drag.originalDy+(svgY-drag.startSvgY);
+        const key=drag.baseArcKey+drag.segment;
+        const geom=arcGeomMap.get(key);
+        if(!geom)return;
         if(drag.endpoint==='start'){
-          for(const suf of['','-1']){
-            const key=drag.baseArcKey+suf;
-            const geom=arcGeomMap.get(key);
-            if(!geom)continue;
-            const nx1=geom.x1-geom.startDx+newDx,ny1=geom.y1-geom.startDy+newDy;
-            const{dAttr}=computeArcGeometry(nx1,ny1,geom.x2,geom.y2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset);
-            (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
-            (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',dAttr);
-            const h=(svgRoot as SVGGElement).querySelector(`[data-arc-ep-start="${drag.baseArcKey}"]`);
-            if(h){h.setAttribute('cx',String(nx1));h.setAttribute('cy',String(ny1));}
-            break;
-          }
+          const nx1=geom.x1-geom.startDx+newDx,ny1=geom.y1-geom.startDy+newDy;
+          const{dAttr}=computeArcGeometry(nx1,ny1,geom.x2,geom.y2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset);
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',dAttr);
+          const h=(svgRoot as SVGGElement).querySelector(`[data-arc-ep-start="${key}"]`);
+          if(h){h.setAttribute('cx',String(nx1));h.setAttribute('cy',String(ny1));}
         }else{
-          for(const suf of['','-2']){
-            const key=drag.baseArcKey+suf;
-            const geom=arcGeomMap.get(key);
-            if(!geom)continue;
-            const nx2=geom.x2-geom.endDx+newDx,ny2=geom.y2-geom.endDy+newDy;
-            const{dAttr}=computeArcGeometry(geom.x1,geom.y1,nx2,ny2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset);
-            (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
-            (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',dAttr);
-            const h=(svgRoot as SVGGElement).querySelector(`[data-arc-ep-end="${drag.baseArcKey}"]`);
-            if(h){h.setAttribute('cx',String(nx2));h.setAttribute('cy',String(ny2));}
-            break;
-          }
+          const nx2=geom.x2-geom.endDx+newDx,ny2=geom.y2-geom.endDy+newDy;
+          const{dAttr}=computeArcGeometry(geom.x1,geom.y1,nx2,ny2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset);
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',dAttr);
+          const h=(svgRoot as SVGGElement).querySelector(`[data-arc-ep-end="${key}"]`);
+          if(h){h.setAttribute('cx',String(nx2));h.setAttribute('cy',String(ny2));}
         }
         return;
       }
@@ -510,15 +517,25 @@ export default function PianoSystemCanvas({
         }
 
         const effectiveOffset=drag.originalOffset+(svgY-drag.startSvgY);
-        ['','-1','-2'].forEach(suffix=>{
+        // 段またぎセグメントを独立してドラッグ更新する（segment が指定されている場合はそのセグメントのみ更新）
+        const updateSeg=(suffix:string,offset:number)=>{
           const key=`${drag.baseArcKey}${suffix}`;
           const geom=arcGeomMap.get(key);
           if(!geom)return;
           const upward=drag.flipApplied?!geom.upward:geom.upward;
-          const{dAttr}=computeArcGeometry(geom.x1,geom.y1,geom.x2,geom.y2,upward,geom.kind,geom.stemDir,geom.obstacleY,effectiveOffset);
+          const{dAttr}=computeArcGeometry(geom.x1,geom.y1,geom.x2,geom.y2,upward,geom.kind,geom.stemDir,geom.obstacleY,offset);
           (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
           (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',dAttr);
-        });
+        };
+        if(drag.segment){
+          // 段またぎ: ドラッグ対象セグメントのみ effectiveOffset、もう一方は現状維持
+          updateSeg(drag.segment,effectiveOffset);
+          const otherSeg=drag.segment==='-1'?'-2':'-1';
+          const otherGeom=arcGeomMap.get(drag.baseArcKey+otherSeg);
+          if(otherGeom)updateSeg(otherSeg,otherGeom.cpDyOffset);
+        }else{
+          ['','-1','-2'].forEach(suffix=>updateSeg(suffix,effectiveOffset));
+        }
         return;
       }
       // タイ新規ドラッグのプレビュー
@@ -547,9 +564,14 @@ export default function PianoSystemCanvas({
           if(!ev2?.arcs?.[drag.arcIndex])return prev;
           const patchedArcs=[...ev2.arcs];
           const current=patchedArcs[drag.arcIndex];
-          patchedArcs[drag.arcIndex]=drag.endpoint==='start'
-            ?{...current,startDx:newDx,startDy:newDy}
-            :{...current,endDx:newDx,endDy:newDy};
+          patchedArcs[drag.arcIndex]=
+            drag.segment==='-1'&&drag.endpoint==='end'
+              ?{...current,breakEndDx:newDx,breakEndDy:newDy}
+              :drag.segment==='-2'&&drag.endpoint==='start'
+                ?{...current,breakStartDx:newDx,breakStartDy:newDy}
+                :drag.endpoint==='start'
+                  ?{...current,startDx:newDx,startDy:newDy}
+                  :{...current,endDx:newDx,endDy:newDy};
           partData[drag.fromMeasure].events[drag.fromEvent]={...ev2,arcs:patchedArcs};
           next[drag.partIndex]=partData;
           return next;
@@ -569,9 +591,11 @@ export default function PianoSystemCanvas({
           if(!ev2?.arcs?.[drag.arcIndex])return prev;
           const patchedArcs=[...ev2.arcs];
           const current=patchedArcs[drag.arcIndex];
+          // 段またぎ第2セグメントをドラッグした場合は cpDyOffset2 に保存（第1セグメントとは独立）
+          const offsetPatch=drag.segment==='-2'?{cpDyOffset2:newOffset}:{cpDyOffset:newOffset};
           patchedArcs[drag.arcIndex]={
             ...current,
-            cpDyOffset:newOffset,
+            ...offsetPatch,
             ...(drag.flipApplied?{flipDirection:!current.flipDirection}:{}),
           };
           partData[drag.fromMeasure].events[drag.fromEvent]={...ev2,arcs:patchedArcs};
@@ -620,12 +644,6 @@ export default function PianoSystemCanvas({
         stave.setEndBarType(Barline.type.SINGLE);
         stave.setContext(ctx).draw();
         staveSets[pi].push(stave);
-        // 段の右端X（未スケール）を更新（段またぎ弧の第1セグメント終点算出用）
-        const sysKeyP=Math.round(stave.getYForLine(2));
-        const rightEdgeP=stave.getX()+stave.getWidth();
-        if(!systemRightEdgeMapP.has(sysKeyP)||systemRightEdgeMapP.get(sysKeyP)!<rightEdgeP){
-          systemRightEdgeMapP.set(sysKeyP,rightEdgeP);
-        }
       });
 
       // 各小節の右端縦線：第1段 ↔ 最終段 をまたぐ
@@ -658,8 +676,6 @@ export default function PianoSystemCanvas({
     type PendingArcP={partIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
     const notePositionMapP=new Map<string,{note:StaveNote;stave:Stave;keys:string[]}>();
     const pendingArcsP:PendingArcP[]=[];
-    // 各段の右端X（未スケール）を記録（段またぎ弧の第1セグメント終点算出用）
-    const systemRightEdgeMapP=new Map<number,number>();
 
     // tiedToNext レガシー用: 和音から代表符頭キーを選ぶ（upward なら最高音、downward なら最低音）
     const tieRepKeyP=(clef:ClefType,keys:string[])=>{
@@ -688,7 +704,8 @@ export default function PianoSystemCanvas({
         setSelectedArc({partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
         setSelected(null);
         const{y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
-        cpDragRef.current={partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false};
+        const seg=arcKey.endsWith('-1')?'-1':arcKey.endsWith('-2')?'-2':'' as ''|'-1'|'-2';
+        cpDragRef.current={partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg};
       });
       hitPath.addEventListener('click',(e)=>{e.stopPropagation();});
       svgRoot.appendChild(hitPath);
@@ -704,8 +721,9 @@ export default function PianoSystemCanvas({
       // 選択中: 始点・終点に丸いハンドルを表示（段またぎ -2 には始点不要、-1 には終点不要）
       if(isSelected){
         const baseKey=arcKey.replace(/-[12]$/,'');
-        const showStart=!arcKey.endsWith('-2');
-        const showEnd  =!arcKey.endsWith('-1');
+        const seg=arcKey.endsWith('-1')?'-1':arcKey.endsWith('-2')?'-2':'' as ''|'-1'|'-2';
+        const showStart=true;
+        const showEnd  =true;
         const makeHandle=(cx:number,cy:number,epAttr:string,origDx:number,origDy:number,ep:'start'|'end')=>{
           const h=document.createElementNS('http://www.w3.org/2000/svg','circle');
           h.setAttribute('cx',String(cx));h.setAttribute('cy',String(cy));
@@ -713,13 +731,13 @@ export default function PianoSystemCanvas({
           h.setAttribute('fill','#3b82f6');h.setAttribute('stroke','white');
           h.setAttribute('stroke-width','1.5');
           h.setAttribute('pointer-events','all');h.style.cursor='grab';
-          h.setAttribute(epAttr,baseKey);
+          h.setAttribute(epAttr,arcKey);
           h.addEventListener('mousedown',(e)=>{
             e.preventDefault();e.stopPropagation();
             const pts=baseKey.split('-').map(Number);
             const[pi2,fm2,fe2,ai2]=pts;
             const{x:sx,y:sy}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
-            epDragRef.current={partIndex:pi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy};
+            epDragRef.current={partIndex:pi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,segment:seg,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy};
           });
           h.addEventListener('click',e=>e.stopPropagation());
           svgRoot.appendChild(h);
@@ -923,6 +941,7 @@ export default function PianoSystemCanvas({
         ir.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
         ir.addEventListener('click',e=>{
           if(disabled)return;
+          setSelectedArc(null);
           if('mode' in tool&&tool.mode==='tie')return;
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           doInsert(lx,ly);
@@ -1007,6 +1026,7 @@ export default function PianoSystemCanvas({
             hit.addEventListener('click',e=>{
               if(disabled)return;
               e.stopPropagation();
+              setSelectedArc(null);
               if('mode' in tool&&tool.mode==='tie')return;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
@@ -1091,12 +1111,16 @@ export default function PianoSystemCanvas({
         }
       }
 
-      const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30;
+      // x2 < x1（終了音符が左にある）は段またぎの確実な証拠（音符は左→右に並ぶため）
+      type R=Record<string,(...a:unknown[])=>unknown>;
+      const roughAbsX1P=((startNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??Infinity;
+      const roughAbsX2P=((dest.note as unknown as R)['getAbsoluteX']?.() as number|undefined)??-Infinity;
+      const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30
+                     ||roughAbsX2P<roughAbsX1P;
       if(!crossSystem){
         try{drawTieArcP(clef,startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,allLines,allNoteYs,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy);}catch{/* 保険 */}
       }else{
         try{
-          type R=Record<string,(...a:unknown[])=>unknown>;
           const bb1=(startNote as unknown as R)['getBoundingBox']?.() as{getX:()=>number;getW:()=>number}|undefined;
           const bb2=(dest.note as unknown as R)['getBoundingBox']?.() as{getX:()=>number;getW:()=>number}|undefined;
           const absX1=((startNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
@@ -1112,21 +1136,27 @@ export default function PianoSystemCanvas({
           const stemDir=((startNote as unknown as R)['getStemDirection']?.() as number|undefined)??0;
           const crossMinNoteY=allNoteYs&&allNoteYs.length>0?Math.min(...allNoteYs):undefined;
           const crossMaxNoteY=allNoteYs&&allNoteYs.length>0?Math.max(...allNoteYs):undefined;
-          const obstacleY=crossMinNoteY!==undefined?(upward?crossMinNoteY:crossMaxNoteY):undefined;
-          // 段の右端は同じ行の最後の小節右端を使う（途中の小節から段またぎした場合も正しく伸ばす）
-          const startSysKeyP=Math.round(startStave.getYForLine(2));
-          const edgeX1=systemRightEdgeMapP.get(startSysKeyP)??(startStave.getX()+startStave.getWidth());
-          // 段の左端は dest が属する行の先頭小節左端（notePositionMapP から最小Xを取る）
-          const destSysKeyP=Math.round(dest.stave.getYForLine(2));
-          const edgeX2=(()=>{
-            let minX=dest.stave.getX();
-            for(const{stave:sv}of notePositionMapP.values()){
-              if(Math.round(sv.getYForLine(2))===destSysKeyP&&sv.getX()<minX)minX=sv.getX();
-            }
-            return minX;
-          })();
-          drawArcPathP(x1+startDx,y1+startDy,edgeX1,y1+startDy,upward,arc.kind,stemDir,obstacleY,cpDyOffset,arcKey+'-1',isSelected,crossMinNoteY,crossMaxNoteY,startDx,startDy,0,0);
-          drawArcPathP(edgeX2,y2+endDy,x2+endDx,y2+endDy,upward,arc.kind,0,obstacleY,cpDyOffset,arcKey+'-2',isSelected,crossMinNoteY,crossMaxNoteY,0,0,endDx,endDy);
+          // 上段の右端: 開始音符が属するスタヴ自身の右端（右縦線）を使う
+          const edgeX1=startStave.getX()+startStave.getWidth();
+          // 下段の左端: 終了音符が属するスタヴ自身の左端（クレフ含む位置）を使う
+          const edgeX2=dest.stave.getX();
+          const cpDy2=arc.cpDyOffset2??0;
+          const breakEndDx=arc.breakEndDx??0;
+          const breakEndDy=arc.breakEndDy??0;
+          const breakStartDx=arc.breakStartDx??0;
+          const breakStartDy=arc.breakStartDy??0;
+          // 段境界のエッジ Y: 全体スラーの「仮想ピーク」を計算し、
+          // -1 は音符から右端に向かって弧方向に傾斜、-2 は左端から音符へ収束するよう見せる
+          const effY1P=y1+startDy;
+          const effY2P=y2+endDy;
+          // 行またぎ片側セグメントは、各段の音符高さを障害物基準にする。
+          // これで曲率ドラッグが制御点へ素直に反映される。
+          const segmentObstacleY1P=effY1P;
+          const segmentObstacleY2P=effY2P;
+          // 段またぎの片側セグメントは、境界点の高さを各段の音符高さに揃える。
+          // ふくらみは制御点で作ることで、不自然な斜め線を避ける。
+          drawArcPathP(x1+startDx,effY1P,edgeX1+breakEndDx,effY1P+breakEndDy,upward,arc.kind,stemDir,segmentObstacleY1P,cpDyOffset,arcKey+'-1',isSelected,crossMinNoteY,crossMaxNoteY,startDx,startDy,breakEndDx,breakEndDy);
+          drawArcPathP(edgeX2+breakStartDx,effY2P+breakStartDy,x2+endDx,effY2P,upward,arc.kind,0,segmentObstacleY2P,cpDy2,arcKey+'-2',isSelected,crossMinNoteY,crossMaxNoteY,breakStartDx,breakStartDy,endDx,endDy);
         }catch{/* 保険 */}
       }
     });

@@ -12,6 +12,8 @@ export interface TieArc {
   kind: 'tie' | 'slur';
   /** ユーザーがドラッグで調節したコントロールポイントの縦ズレ量（SVG px）。省略時は 0 */
   cpDyOffset?: number;
+  /** 段またぎ第2セグメント（下段側）の曲率オフセット。省略時は 0 */
+  cpDyOffset2?: number;
   /** 向き手動反転フラグ。true のとき自動算出の upward を反転する */
   flipDirection?: boolean;
   /** 始点X/Y調節量（SVG px）。省略時は 0 */
@@ -20,6 +22,12 @@ export interface TieArc {
   /** 終点X/Y調節量（SVG px）。省略時は 0 */
   endDx?: number;
   endDy?: number;
+  /** 段またぎ上段セグメントの切れ目終点X/Y調節量（SVG px）。省略時は 0 */
+  breakEndDx?: number;
+  breakEndDy?: number;
+  /** 段またぎ下段セグメントの切れ目始点X/Y調節量（SVG px）。省略時は 0 */
+  breakStartDx?: number;
+  breakStartDy?: number;
 }
 
 export interface NoteEvent {
