@@ -18,7 +18,7 @@ import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, PartData, ScoreType } from '../types/storage';
-import { createFurEliseDemoScore } from '../data/demoScores';
+import { createDemoScore, type DemoScoreId } from '../data/demoScores';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
   type PlaybackSoundRuntimeSettings,
@@ -422,8 +422,8 @@ export default function ScorePage() {
     }
   };
 
-  const handleLoadSample = useCallback(() => {
-    const sampleScore = createFurEliseDemoScore();
+  const handleLoadSample = useCallback((sampleId: DemoScoreId) => {
+    const sampleScore = createDemoScore(sampleId);
 
     // 保存データを消さずに、いま表示中の譜面だけ説明用サンプルへ切り替える。
     // 「あとで自分の譜面に戻したい」場合は、既存の保存/読込ボタンで戻せる。
@@ -436,8 +436,9 @@ export default function ScorePage() {
     setRightHandData(sampleScore.rightHand);
     setLeftHandData(sampleScore.leftHand);
     setQuartetParts(Array.from({ length: 4 }, () => []));
-    setCurrentInstrument(InstrumentType.PIANO);
-    getAudioEngine().setInstrument(InstrumentType.PIANO);
+    // サンプルごとに「まずこの楽器で聴くと違いが分かりやすい」を設定しておく。
+    setCurrentInstrument(sampleScore.recommendedInstrument);
+    getAudioEngine().setInstrument(sampleScore.recommendedInstrument);
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     clearPlaybackTimer();
     resetPlaybackClock();

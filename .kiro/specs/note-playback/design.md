@@ -97,6 +97,8 @@ class AudioEngine {
 - `内蔵音源 / SoundFont / プラグイン連携` の 3 方式を選べる。現段階で実際に鳴るのは `内蔵音源` と `SoundFont`
 - `SoundFont` は `soundfont-player` を使って既存の楽器サンプルを読み込み、既定では `MusyngKite`、必要に応じて `FluidR3_GM` など別パック名へ切り替える
 - `SoundFont` の実再生ライブラリを追加するときは、`postinstall` の影響を避けるため、まず Docker 経由で `--ignore-scripts` 付きインストールを行う
+- 音色確認をしやすくするため、説明用のピアノ譜に加えて `金管テストフレーズ` と `弦テストフレーズ` のサンプル譜を用意する
+- サンプル譜は `DemoScoreId` で切り替え、各サンプルに `recommendedInstrument` を持たせて「まずこの楽器で聴くと差が分かりやすい」初期状態を自動設定する
 - Safari では `AudioContext` が `running` に見えても無音になることがあるため、初期化直後と `resume()` 直後にごく短い無音ノードを流して出力経路をウォームアップする
 
 ### NotePlayer

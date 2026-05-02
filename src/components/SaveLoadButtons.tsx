@@ -1,10 +1,14 @@
 // src/components/SaveLoadButtons.tsx
 // Save and Load buttons component with loading states and error display
 
+import { useState } from 'react';
+
+import type { DemoScoreId } from '../data/demoScores';
+
 export interface SaveLoadButtonsProps {
   onSave: () => void;
   onLoad: () => void;
-  onLoadSample?: () => void;
+  onLoadSample?: (sampleId: DemoScoreId) => void;
   isSaving: boolean;
   isLoading: boolean;
   hasStoredData: boolean;
@@ -22,6 +26,9 @@ export default function SaveLoadButtons({
 }: SaveLoadButtonsProps) {
   // Only show error if it's a non-empty string (trim whitespace)
   const hasError = error && error.trim().length > 0;
+  // サンプルは 1 つのボタンにまとめつつ、
+  // どの用途で試したいかだけはユーザーが選べるようにしている。
+  const [selectedSampleId, setSelectedSampleId] = useState<DemoScoreId>('fur-elise');
   
   return (
     <div className="save-load-buttons">
@@ -44,14 +51,28 @@ export default function SaveLoadButtons({
       </button>
 
       {onLoadSample && (
-        <button
-          className="ghost sample-button"
-          onClick={onLoadSample}
-          disabled={isLoading || isSaving}
-          title="説明用のサンプル譜面を読み込み"
-        >
-          サンプル
-        </button>
+        <>
+          <select
+            className="ghost"
+            value={selectedSampleId}
+            onChange={(event) => setSelectedSampleId(event.target.value as DemoScoreId)}
+            disabled={isLoading || isSaving}
+            aria-label="サンプル譜の種類"
+            title="読み込むサンプル譜の種類"
+          >
+            <option value="fur-elise">ピアノ: エリーゼのために</option>
+            <option value="brass-test">金管: テストフレーズ</option>
+            <option value="strings-test">弦: テストフレーズ</option>
+          </select>
+          <button
+            className="ghost sample-button"
+            onClick={() => onLoadSample(selectedSampleId)}
+            disabled={isLoading || isSaving}
+            title="選択したサンプル譜面を読み込み"
+          >
+            サンプル
+          </button>
+        </>
       )}
       
       {hasError && (
