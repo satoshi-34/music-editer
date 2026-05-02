@@ -26,7 +26,9 @@ export interface AudioEngineConfig {
  * ブラウザの自動再生ポリシーに適切に対応する
  */
 export class AudioEngine {
-  private context: any | null = null; // Tone.Context型だが、動的インポートのためanyを使用
+  // Tone.Context をそのまま書きたいが、動的 import との相性で型が複雑になるため
+  // ここでは any にして、公開メソッド側で責務を絞って扱う。
+  private context: any | null = null;
   private isInitialized: boolean = false;
   private initializationPromise: Promise<void> | null = null;
   private config: AudioEngineConfig;
@@ -87,24 +89,22 @@ export class AudioEngine {
         this.Tone = await import('tone');
       }
 
-      // Tone.Contextを作成
+      // Tone.js では「グローバルな現在の Context」を差し替えて使うことが多い。
+      // そのため Context を new したあと、setContext で必ず全体へ反映する。
       const contextOptions: Record<string, any> = {
         latencyHint: this.config.latencyHint || 'interactive'
       };
       if (this.config.sampleRate !== undefined) {
         contextOptions.sampleRate = this.config.sampleRate;
       }
+      if (this.config.lookAhead !== undefined) {
+        // Tone.js 15 では lookAhead は Transport ではなく Context の設定値。
+        // 生成時に渡しておくと、実装と型定義の両方が一致する。
+        contextOptions.lookAhead = this.config.lookAhead;
+      }
 
       this.context = new (this.Tone.Context as any)(contextOptions);
       this.Tone.setContext(this.context);
-
-      // lookAheadを設定
-      if (this.config.lookAhead !== undefined) {
-        const transport = this.Tone.getTransport();
-        if (transport) {
-          transport.lookAhead = this.config.lookAhead;
-        }
-      }
 
       this.isInitialized = true;
       console.log('[AudioEngine] 初期化が完了しました');

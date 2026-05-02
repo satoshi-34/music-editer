@@ -73,6 +73,8 @@ interface AudioEngineConfig {
 class AudioEngine {
   private context: Tone.Context | null = null;
   private isInitialized: boolean = false;
+  // lookAhead は Tone.Transport ではなく Tone.Context に設定する
+  // （Tone.js 15 の型定義に合わせる）
   
   async initialize(config?: AudioEngineConfig): Promise<void>
   async start(): Promise<void>

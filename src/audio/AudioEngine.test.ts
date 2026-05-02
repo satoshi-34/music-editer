@@ -18,7 +18,6 @@ vi.mock('tone', () => ({
   }),
   setContext: vi.fn(),
   getTransport: vi.fn(() => ({
-    lookAhead: 0.1,
     state: 'stopped',
     start: vi.fn(),
     stop: vi.fn(),
@@ -53,7 +52,10 @@ describe('AudioEngine', () => {
       await audioEngine.initialize();
       
       expect(audioEngine.isInitializedState()).toBe(true);
-      expect(Tone.Context).toHaveBeenCalledWith({ latencyHint: 'interactive' });
+      expect(Tone.Context).toHaveBeenCalledWith({
+        latencyHint: 'interactive',
+        lookAhead: 0.1
+      });
       expect(Tone.setContext).toHaveBeenCalled();
     });
 
@@ -68,7 +70,8 @@ describe('AudioEngine', () => {
       
       expect(Tone.Context).toHaveBeenCalledWith({
         sampleRate: 48000,
-        latencyHint: 'playback'
+        latencyHint: 'playback',
+        lookAhead: 0.2
       });
     });
 
@@ -85,7 +88,7 @@ describe('AudioEngine', () => {
       const failingEngine = new AudioEngine();
       
       // Tone.Contextが直接エラーを投げるようにモック
-      vi.mocked(Tone.Context).mockImplementationOnce(() => {
+      vi.mocked(Tone.Context).mockImplementationOnce(function () {
         throw new Error('初期化失敗');
       });
 
@@ -248,7 +251,7 @@ describe('AudioEngine', () => {
       permissionError.name = 'NotAllowedError';
       
       const failingEngine = new AudioEngine();
-      vi.mocked(Tone.Context).mockImplementationOnce(() => {
+      vi.mocked(Tone.Context).mockImplementationOnce(function () {
         throw permissionError;
       });
 
@@ -260,7 +263,7 @@ describe('AudioEngine', () => {
       supportError.name = 'NotSupportedError';
       
       const failingEngine = new AudioEngine();
-      vi.mocked(Tone.Context).mockImplementationOnce(() => {
+      vi.mocked(Tone.Context).mockImplementationOnce(function () {
         throw supportError;
       });
 
