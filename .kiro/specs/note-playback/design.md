@@ -87,6 +87,16 @@ class AudioEngine {
 }
 ```
 
+### SimpleAudioEngine の補足
+
+- `SimpleAudioEngine` は Tone.js の本格的なシンセ設定ではなく、Web Audio API の `OscillatorNode` と `GainNode` を組み合わせた軽量実装
+- 音色差は `getInstrumentConfig()` で管理し、`oscillators`（波形構成）と `attack / decayTarget / releaseFloor / tailSeconds`（音量変化）で調整する
+- ギター音色のように 1 本の波では表現しづらい場合は、複数のオシレーターを薄く重ねてキャラクターを作る
+- 楽器ごとの簡易プリセットは `ピアノ / オルガン / ギター / 木管群 / 金管群 / 弦群 / 打楽器群` を大きめに用意し、必要に応じて個別調整する
+- エンドユーザー向けには `明るさ / アタック感 / 余韻 / 厚み` の 4 スライダーを提供し、内部の発音パラメータへ変換する
+- `内蔵音源 / SoundFont / プラグイン連携` の 3 方式を選べる UI の土台を先に用意し、現段階では `内蔵音源` が実際の再生を担当する
+- Safari では `AudioContext` が `running` に見えても無音になることがあるため、初期化直後と `resume()` 直後にごく短い無音ノードを流して出力経路をウォームアップする
+
 ### NotePlayer
 
 個別音符の再生を担当するクラス。
@@ -194,6 +204,26 @@ enum InstrumentType {
   PIANO = 'piano',
   ORGAN = 'organ',
   GUITAR = 'guitar',
+  PICCOLO = 'piccolo',
+  FLUTE = 'flute',
+  OBOE = 'oboe',
+  ENGLISH_HORN = 'english-horn',
+  BASSOON = 'bassoon',
+  SOPRANO_SAX = 'soprano-sax',
+  ALTO_SAX = 'alto-sax',
+  TENOR_SAX = 'tenor-sax',
+  BARITONE_SAX = 'baritone-sax',
+  TRUMPET = 'trumpet',
+  TROMBONE = 'trombone',
+  HORN = 'horn',
+  EUPHONIUM = 'euphonium',
+  TUBA = 'tuba',
+  TIMPANI = 'timpani',
+  VIOLIN = 'violin',
+  VIOLA = 'viola',
+  CELLO = 'cello',
+  CONTRABASS = 'contrabass',
+  PERCUSSION = 'percussion',
   STRINGS = 'strings',
   BRASS = 'brass',
   WOODWIND = 'woodwind'

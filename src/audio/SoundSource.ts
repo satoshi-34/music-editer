@@ -18,6 +18,26 @@ export enum InstrumentType {
   PIANO = 'piano',
   ORGAN = 'organ',
   GUITAR = 'guitar',
+  PICCOLO = 'piccolo',
+  FLUTE = 'flute',
+  OBOE = 'oboe',
+  ENGLISH_HORN = 'english-horn',
+  BASSOON = 'bassoon',
+  SOPRANO_SAX = 'soprano-sax',
+  ALTO_SAX = 'alto-sax',
+  TENOR_SAX = 'tenor-sax',
+  BARITONE_SAX = 'baritone-sax',
+  TRUMPET = 'trumpet',
+  TROMBONE = 'trombone',
+  HORN = 'horn',
+  EUPHONIUM = 'euphonium',
+  TUBA = 'tuba',
+  TIMPANI = 'timpani',
+  VIOLIN = 'violin',
+  VIOLA = 'viola',
+  CELLO = 'cello',
+  CONTRABASS = 'contrabass',
+  PERCUSSION = 'percussion',
   STRINGS = 'strings',
   BRASS = 'brass',
   WOODWIND = 'woodwind'
@@ -158,6 +178,166 @@ export class SoundSource {
             release: 2.0
           },
           volume: -6 // dB
+        };
+
+      case InstrumentType.PICCOLO:
+        return {
+          oscillator: {
+            type: 'triangle',
+            partialCount: 5
+          },
+          envelope: {
+            attack: 0.03,
+            decay: 0.08,
+            sustain: 0.45,
+            release: 0.5
+          },
+          volume: -11 // dB
+        };
+
+      case InstrumentType.FLUTE:
+        return {
+          oscillator: {
+            type: 'sine',
+            partialCount: 3
+          },
+          envelope: {
+            attack: 0.05,
+            decay: 0.1,
+            sustain: 0.5,
+            release: 0.8
+          },
+          volume: -10 // dB
+        };
+
+      case InstrumentType.OBOE:
+      case InstrumentType.ENGLISH_HORN:
+      case InstrumentType.BASSOON:
+        return {
+          oscillator: {
+            type: 'triangle',
+            partialCount: instrument === InstrumentType.BASSOON ? 4 : 3
+          },
+          envelope: {
+            attack: instrument === InstrumentType.BASSOON ? 0.08 : 0.06,
+            decay: 0.12,
+            sustain: instrument === InstrumentType.ENGLISH_HORN ? 0.58 : 0.52,
+            release: instrument === InstrumentType.BASSOON ? 0.9 : 0.75
+          },
+          volume: instrument === InstrumentType.BASSOON ? -9 : -10 // dB
+        };
+
+      case InstrumentType.SOPRANO_SAX:
+      case InstrumentType.ALTO_SAX:
+      case InstrumentType.TENOR_SAX:
+      case InstrumentType.BARITONE_SAX:
+        return {
+          oscillator: {
+            type: 'sawtooth',
+            partialCount: instrument === InstrumentType.BARITONE_SAX ? 6 : 5
+          },
+          envelope: {
+            attack: 0.04,
+            decay: 0.12,
+            sustain: instrument === InstrumentType.TENOR_SAX || instrument === InstrumentType.BARITONE_SAX ? 0.62 : 0.56,
+            release: 0.85
+          },
+          volume: instrument === InstrumentType.BARITONE_SAX ? -8 : -9 // dB
+        };
+
+      case InstrumentType.TRUMPET:
+      case InstrumentType.TROMBONE:
+      case InstrumentType.HORN:
+      case InstrumentType.EUPHONIUM:
+      case InstrumentType.TUBA:
+        return {
+          oscillator: {
+            type: instrument === InstrumentType.HORN || instrument === InstrumentType.EUPHONIUM ? 'triangle' : 'square',
+            partialCount: instrument === InstrumentType.TUBA ? 6 : 4
+          },
+          envelope: {
+            attack: instrument === InstrumentType.TUBA ? 0.12 : 0.08,
+            decay: 0.1,
+            sustain: instrument === InstrumentType.HORN ? 0.65 : 0.6,
+            release: instrument === InstrumentType.TROMBONE || instrument === InstrumentType.TUBA ? 1.0 : 0.7
+          },
+          volume: instrument === InstrumentType.TRUMPET ? -7 : -8 // dB
+        };
+
+      case InstrumentType.TIMPANI:
+      case InstrumentType.PERCUSSION:
+        return {
+          oscillator: {
+            type: 'triangle',
+            partialCount: instrument === InstrumentType.TIMPANI ? 4 : 2
+          },
+          envelope: {
+            attack: 0.005,
+            decay: instrument === InstrumentType.TIMPANI ? 0.35 : 0.15,
+            sustain: instrument === InstrumentType.TIMPANI ? 0.15 : 0.05,
+            release: instrument === InstrumentType.TIMPANI ? 1.2 : 0.35
+          },
+          volume: -7 // dB
+        };
+
+      case InstrumentType.VIOLIN:
+        return {
+          oscillator: {
+            type: 'sawtooth',
+            partialCount: 5
+          },
+          envelope: {
+            attack: 0.08,
+            decay: 0.15,
+            sustain: 0.6,
+            release: 1.1
+          },
+          volume: -10 // dB
+        };
+
+      case InstrumentType.VIOLA:
+        return {
+          oscillator: {
+            type: 'triangle',
+            partialCount: 4
+          },
+          envelope: {
+            attack: 0.1,
+            decay: 0.2,
+            sustain: 0.58,
+            release: 1.2
+          },
+          volume: -11 // dB
+        };
+
+      case InstrumentType.CELLO:
+        return {
+          oscillator: {
+            type: 'triangle',
+            partialCount: 6
+          },
+          envelope: {
+            attack: 0.12,
+            decay: 0.18,
+            sustain: 0.62,
+            release: 1.5
+          },
+          volume: -9 // dB
+        };
+
+      case InstrumentType.CONTRABASS:
+        return {
+          oscillator: {
+            type: 'triangle',
+            partialCount: 6
+          },
+          envelope: {
+            attack: 0.14,
+            decay: 0.2,
+            sustain: 0.66,
+            release: 1.7
+          },
+          volume: -8 // dB
         };
 
       case InstrumentType.STRINGS:

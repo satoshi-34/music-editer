@@ -57,6 +57,126 @@ const INSTRUMENT_INFO: Record<InstrumentType, InstrumentInfo> = {
     description: 'アコースティックギターサウンド',
     icon: '🎸'
   },
+  [InstrumentType.PICCOLO]: {
+    type: InstrumentType.PICCOLO,
+    name: 'ピッコロ',
+    description: 'フルートより高く鋭い木管サウンド',
+    icon: '🎶'
+  },
+  [InstrumentType.FLUTE]: {
+    type: InstrumentType.FLUTE,
+    name: 'フルート',
+    description: 'やわらかく透明感のある木管サウンド',
+    icon: '🎶'
+  },
+  [InstrumentType.OBOE]: {
+    type: InstrumentType.OBOE,
+    name: 'オーボエ',
+    description: '芯のある歌うような木管サウンド',
+    icon: '🎶'
+  },
+  [InstrumentType.ENGLISH_HORN]: {
+    type: InstrumentType.ENGLISH_HORN,
+    name: 'イングリッシュホルン',
+    description: 'オーボエより少し落ち着いた中低域の木管サウンド',
+    icon: '🎶'
+  },
+  [InstrumentType.BASSOON]: {
+    type: InstrumentType.BASSOON,
+    name: 'ファゴット',
+    description: '低音域を支える木管サウンド',
+    icon: '🎶'
+  },
+  [InstrumentType.SOPRANO_SAX]: {
+    type: InstrumentType.SOPRANO_SAX,
+    name: 'ソプラノサックス',
+    description: '高音域のサックスサウンド',
+    icon: '🎷'
+  },
+  [InstrumentType.ALTO_SAX]: {
+    type: InstrumentType.ALTO_SAX,
+    name: 'アルトサックス',
+    description: '明るく扱いやすいサックスサウンド',
+    icon: '🎷'
+  },
+  [InstrumentType.TENOR_SAX]: {
+    type: InstrumentType.TENOR_SAX,
+    name: 'テナーサックス',
+    description: '太さと歌いやすさのあるサックスサウンド',
+    icon: '🎷'
+  },
+  [InstrumentType.BARITONE_SAX]: {
+    type: InstrumentType.BARITONE_SAX,
+    name: 'バリトンサックス',
+    description: '重心の低いサックスサウンド',
+    icon: '🎷'
+  },
+  [InstrumentType.TRUMPET]: {
+    type: InstrumentType.TRUMPET,
+    name: 'トランペット',
+    description: '明るく前に出る金管サウンド',
+    icon: '🎺'
+  },
+  [InstrumentType.TROMBONE]: {
+    type: InstrumentType.TROMBONE,
+    name: 'トロンボーン',
+    description: '厚みのある中低域の金管サウンド',
+    icon: '🎺'
+  },
+  [InstrumentType.HORN]: {
+    type: InstrumentType.HORN,
+    name: 'ホルン',
+    description: 'やわらかさと厚みを持つ金管サウンド',
+    icon: '🎺'
+  },
+  [InstrumentType.EUPHONIUM]: {
+    type: InstrumentType.EUPHONIUM,
+    name: 'ユーフォニアム',
+    description: '丸く歌いやすい中低域の金管サウンド',
+    icon: '🎺'
+  },
+  [InstrumentType.TUBA]: {
+    type: InstrumentType.TUBA,
+    name: 'チューバ',
+    description: 'オーケストラの低音を支える金管サウンド',
+    icon: '🎺'
+  },
+  [InstrumentType.TIMPANI]: {
+    type: InstrumentType.TIMPANI,
+    name: 'ティンパニ',
+    description: '低音を支える打楽器サウンド',
+    icon: '🥁'
+  },
+  [InstrumentType.VIOLIN]: {
+    type: InstrumentType.VIOLIN,
+    name: 'バイオリン',
+    description: '高音域で歌うように伸びる弦楽器サウンド',
+    icon: '🎻'
+  },
+  [InstrumentType.VIOLA]: {
+    type: InstrumentType.VIOLA,
+    name: 'ヴィオラ',
+    description: 'バイオリンより少し落ち着いた中音域の弦楽器サウンド',
+    icon: '🎻'
+  },
+  [InstrumentType.CELLO]: {
+    type: InstrumentType.CELLO,
+    name: 'チェロ',
+    description: '深みのある低音が特徴の弦楽器サウンド',
+    icon: '🎻'
+  },
+  [InstrumentType.CONTRABASS]: {
+    type: InstrumentType.CONTRABASS,
+    name: 'コントラバス',
+    description: '弦セクション最下段を支える低音サウンド',
+    icon: '🎻'
+  },
+  [InstrumentType.PERCUSSION]: {
+    type: InstrumentType.PERCUSSION,
+    name: '打楽器',
+    description: '打楽器全般の簡易サウンド',
+    icon: '🥁'
+  },
   [InstrumentType.STRINGS]: {
     type: InstrumentType.STRINGS,
     name: 'ストリングス',

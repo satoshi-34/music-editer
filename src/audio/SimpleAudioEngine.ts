@@ -2,6 +2,50 @@
 // Web Audio APIを直接使用したシンプルな音声エンジン
 // ブラウザの自動再生ポリシーに完全対応
 
+import { InstrumentType } from './SoundSource';
+import {
+  DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
+  type PlaybackSoundProfile
+} from './playbackSettings';
+
+interface SimpleInstrumentConfig {
+  // 1つの音色を何本の波で作るかを表す。
+  // 例: ギターなら「胴鳴り」「高い倍音」などを別の波として薄く重ねる。
+  oscillators: Array<{
+    // type は波形の種類。
+    // おおまかな印象:
+    // - sine: いちばん丸い
+    // - triangle: 丸いが、少しだけ輪郭がある
+    // - sawtooth: 明るい、シャリっとしやすい
+    // - square: 硬い、存在感が強い
+    type: OscillatorType;
+    // detune は「ほんの少しだけ音程をずらす量」。
+    // 複数の波を少しずらすと、1本の棒のような音ではなく、
+    // 複数の弦や倍音が鳴っているような広がりを作りやすい。
+    detune?: number;
+    // gainRatio は、その層をどのくらい目立たせるか。
+    // 調整の考え方:
+    // - 上げる: その波形の個性が強く出る
+    // - 下げる: 隠し味になる
+    gainRatio?: number;
+  }>;
+  // attack は「鳴り始めるまでの速さ」。
+  // 値を小さくすると、ピックで弾いたような鋭い立ち上がりになる。
+  attack: number;
+  // peakGain は「最初にどこまで大きくするか」。
+  // 大きすぎると音割れしやすいので、印象と安全性のバランスを見る。
+  peakGain: number;
+  // decayTarget は「最初の強い音が落ち着いたあと、どこまで音量を残すか」。
+  // 小さいほど歯切れがよく、大きいほど鳴りが残る。
+  decayTarget: number;
+  // releaseFloor は「最後に消える直前の小ささ」。
+  // 0に近いほどスッと消え、少し残すと余韻が感じやすい。
+  releaseFloor: number;
+  // tailSeconds は、見た目の音価よりどれだけ長く余韻を残すか。
+  // アコギの残響感を少し出したいときに使う。
+  tailSeconds?: number;
+}
+
 /**
  * シンプルな音声エンジンクラス
  * Tone.jsを使わずにWeb Audio APIを直接使用してブラウザの自動再生ポリシーに対応
@@ -9,7 +53,11 @@
 export class SimpleAudioEngine {
   private context: AudioContext | null = null;
   private isInitialized: boolean = false;
-  private oscillators: Map<string, OscillatorNode> = new Map();
+  private oscillators: Map<string, { oscillators: OscillatorNode[]; gainNode: GainNode }> = new Map();
+  private oscillatorCounter: number = 0;
+  private currentInstrument: InstrumentType = InstrumentType.PIANO;
+  private hasPrimedOutput: boolean = false;
+  private soundProfile: PlaybackSoundProfile = DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile;
 
   constructor() {
     console.log('[SimpleAudioEngine] SimpleAudioEngineが初期化されました（AudioContextはユーザーインタラクション時に作成）');
@@ -19,11 +67,39 @@ export class SimpleAudioEngine {
    * AudioContextを初期化する（ユーザーインタラクション時のみ）
    */
   async initialize(): Promise<void> {
-    if (this.isInitialized && this.context) {
-      return;
-    }
-
     try {
+      if (this.isInitialized && this.context) {
+        const currentState = this.context.state as AudioContextState | 'interrupted';
+
+        if (currentState === 'closed') {
+          console.warn('[SimpleAudioEngine] 既存のAudioContextが closed のため再作成します');
+          this.context = null;
+          this.isInitialized = false;
+        } else {
+          // Safari などでは既存の AudioContext が suspended に戻ることがある。
+          // その場合は再利用前に resume して、再生要求が無音で終わらないようにする。
+          if (currentState === 'suspended' || currentState === 'interrupted') {
+            console.log('[SimpleAudioEngine] 既存のAudioContextを再開します...', currentState);
+            await this.context.resume();
+            console.log('[SimpleAudioEngine] AudioContext再開完了:', this.context.state);
+            this.hasPrimedOutput = false;
+          }
+
+          if (this.context.state === 'running') {
+            return;
+          }
+
+          console.warn('[SimpleAudioEngine] AudioContextが running にならないため再作成します:', this.context.state);
+          try {
+            await this.context.close();
+          } catch {
+            // close 失敗時も新しい context 作成は続行する
+          }
+          this.context = null;
+          this.isInitialized = false;
+        }
+      }
+
       console.log('[SimpleAudioEngine] AudioContextを作成します...');
       
       // ユーザーインタラクション時にAudioContextを作成
@@ -37,6 +113,8 @@ export class SimpleAudioEngine {
         await this.context.resume();
         console.log('[SimpleAudioEngine] AudioContext開始完了:', this.context.state);
       }
+
+      await this.primeOutput();
       
       this.isInitialized = true;
       console.log('[SimpleAudioEngine] 初期化が完了しました');
@@ -51,34 +129,65 @@ export class SimpleAudioEngine {
    * 音符を再生する
    */
   async playNote(frequency: number, duration: number = 0.5): Promise<void> {
-    if (!this.context) {
+    await this.ensureContextReady();
+    const context = this.context;
+    if (!context) {
       throw new Error('AudioContextが初期化されていません');
     }
 
     try {
       console.log('[SimpleAudioEngine] 音符を再生:', frequency, 'Hz', duration, '秒');
+
+      if (this.shouldUseSafariSafeVoice()) {
+        this.playSafariSafeVoice(context, frequency, duration, context.currentTime);
+        console.log('[SimpleAudioEngine] Safari向け簡易発音を使用しました');
+        console.log('[SimpleAudioEngine] 音符再生開始');
+        return;
+      }
       
-      // オシレーターを作成
-      const oscillator = this.context.createOscillator();
-      const gainNode = this.context.createGain();
+      // GainNode は「音量の包み紙」の役割。
+      // 音そのものは OscillatorNode が作り、gain で立ち上がりと余韻を整える。
+      const gainNode = context.createGain();
+      const instrumentConfig = this.getInstrumentConfig();
+      const oscillators = this.createOscillators(
+        context,
+        frequency,
+        context.currentTime,
+        instrumentConfig
+      );
+      const oscillatorId = this.registerOscillators(oscillators, gainNode, instrumentConfig, context.currentTime);
       
-      // 音色設定（シンプルなサイン波）
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(frequency, this.context.currentTime);
+      // エンベロープ（音量の時間変化）を 3 段階で作る。
+      // 1. すぐ立ち上げる
+      // 2. 少しだけ減衰させる
+      // 3. 余韻を残しながら消す
+      const adjustedAttack = this.getAdjustedAttack(instrumentConfig.attack);
+      const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain);
+      const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget);
+      const adjustedReleaseFloor = this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor);
+      const adjustedTailSeconds = this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0);
+      gainNode.gain.setValueAtTime(0, context.currentTime);
+      gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, context.currentTime + adjustedAttack);
+      gainNode.gain.exponentialRampToValueAtTime(
+        adjustedDecayTarget,
+        context.currentTime + Math.max(adjustedAttack + 0.01, duration * 0.3)
+      );
+      gainNode.gain.exponentialRampToValueAtTime(
+        adjustedReleaseFloor,
+        context.currentTime + duration + adjustedTailSeconds
+      );
       
-      // ボリューム設定（エンベロープ付き）
-      gainNode.gain.setValueAtTime(0, this.context.currentTime);
-      gainNode.gain.linearRampToValueAtTime(0.3, this.context.currentTime + 0.01); // アタック
-      gainNode.gain.exponentialRampToValueAtTime(0.1, this.context.currentTime + duration * 0.3); // ディケイ
-      gainNode.gain.exponentialRampToValueAtTime(0.01, this.context.currentTime + duration); // リリース
-      
-      // 接続
-      oscillator.connect(gainNode);
-      gainNode.connect(this.context.destination);
-      
-      // 再生
-      oscillator.start(this.context.currentTime);
-      oscillator.stop(this.context.currentTime + duration);
+      // 先頭のオシレーターだけ ended を監視すれば、
+      // まとまりとしての「この音の終了」を検知できる。
+      oscillators.forEach((oscillator, index) => {
+        oscillator.start(context.currentTime);
+        oscillator.stop(context.currentTime + duration + adjustedTailSeconds);
+        if (index === 0) {
+          oscillator.addEventListener('ended', () => {
+            this.cleanupOscillator(oscillatorId, gainNode);
+          }, { once: true });
+        }
+      });
       
       console.log('[SimpleAudioEngine] 音符再生開始');
       
@@ -187,6 +296,28 @@ export class SimpleAudioEngine {
   }
 
   /**
+   * AudioContext を一時停止する
+   */
+  async suspend(): Promise<void> {
+    if (!this.context) {
+      return;
+    }
+
+    if (this.context.state === 'running') {
+      await this.context.suspend();
+      console.log('[SimpleAudioEngine] AudioContextを一時停止しました');
+    }
+  }
+
+  /**
+   * AudioContext を再開する
+   */
+  async resume(): Promise<void> {
+    await this.ensureContextReady();
+    console.log('[SimpleAudioEngine] AudioContextを再開しました');
+  }
+
+  /**
    * AudioEngineが使用可能かチェックする
    */
   isReady(): boolean {
@@ -197,14 +328,16 @@ export class SimpleAudioEngine {
    * 譜面データから音符を順次再生する
    */
   async playScore(scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[] }> }>, bpm: number = 120): Promise<void> {
-    if (!this.context) {
+    await this.ensureContextReady();
+    const context = this.context;
+    if (!context) {
       throw new Error('AudioContextが初期化されていません');
     }
 
     try {
       console.log('[SimpleAudioEngine] 譜面再生を開始:', scoreData.length, '小節');
       
-      let currentTime = this.context.currentTime;
+      let currentTime = context.currentTime;
       
       // 各小節を順次処理
       for (let measureIndex = 0; measureIndex < scoreData.length; measureIndex++) {
@@ -243,32 +376,56 @@ export class SimpleAudioEngine {
    * 指定した時刻に音符を再生する（内部用）
    */
   private async playNoteAtTime(frequency: number, duration: number, startTime: number): Promise<void> {
-    if (!this.context) {
+    await this.ensureContextReady();
+    const context = this.context;
+    if (!context) {
       throw new Error('AudioContextが初期化されていません');
     }
 
     try {
-      // オシレーターを作成
-      const oscillator = this.context.createOscillator();
-      const gainNode = this.context.createGain();
+      if (this.shouldUseSafariSafeVoice()) {
+        this.playSafariSafeVoice(context, frequency, duration, startTime);
+        return;
+      }
+
+      // playNote と同じ考え方で、未来の時刻に向けた音量変化を予約する。
+      const gainNode = context.createGain();
+      const instrumentConfig = this.getInstrumentConfig();
+      const oscillators = this.createOscillators(
+        context,
+        frequency,
+        startTime,
+        instrumentConfig
+      );
+      const oscillatorId = this.registerOscillators(oscillators, gainNode, instrumentConfig, startTime);
       
-      // 音色設定（シンプルなサイン波）
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(frequency, startTime);
-      
-      // ボリューム設定（エンベロープ付き）
+      // 未来の startTime を基準に、同じエンベロープを予約する。
+      const adjustedAttack = this.getAdjustedAttack(instrumentConfig.attack);
+      const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain);
+      const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget);
+      const adjustedReleaseFloor = this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor);
+      const adjustedTailSeconds = this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0);
       gainNode.gain.setValueAtTime(0, startTime);
-      gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.01); // アタック
-      gainNode.gain.exponentialRampToValueAtTime(0.1, startTime + duration * 0.3); // ディケイ
-      gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + duration); // リリース
+      gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, startTime + adjustedAttack);
+      gainNode.gain.exponentialRampToValueAtTime(
+        adjustedDecayTarget,
+        startTime + Math.max(adjustedAttack + 0.01, duration * 0.3)
+      );
+      gainNode.gain.exponentialRampToValueAtTime(
+        adjustedReleaseFloor,
+        startTime + duration + adjustedTailSeconds
+      );
       
-      // 接続
-      oscillator.connect(gainNode);
-      gainNode.connect(this.context.destination);
-      
-      // 再生スケジュール
-      oscillator.start(startTime);
-      oscillator.stop(startTime + duration);
+      // 再生時刻も停止時刻も「今すぐ」ではなく未来の秒数で予約する。
+      oscillators.forEach((oscillator, index) => {
+        oscillator.start(startTime);
+        oscillator.stop(startTime + duration + adjustedTailSeconds);
+        if (index === 0) {
+          oscillator.addEventListener('ended', () => {
+            this.cleanupOscillator(oscillatorId, gainNode);
+          }, { once: true });
+        }
+      });
       
     } catch (error) {
       console.error('[SimpleAudioEngine] 時刻指定音符再生に失敗:', error);
@@ -280,11 +437,644 @@ export class SimpleAudioEngine {
    * 複数パート（右手・左手など）を同時再生する
    */
   async playParts(parts: Array<{ measures: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[] }> }> }>, bpm: number = 120): Promise<void> {
+    await this.ensureContextReady();
+    // 各パートは同じ AudioContext 上で、同じ現在時刻を基準に予約する。
+    // そのため Promise.all にしても、時間がずれずに同時再生になる。
+    await Promise.all(parts.map(part => this.playScore(part.measures, bpm)));
+  }
+
+  /**
+   * 現在の音色を設定する
+   */
+  setInstrument(instrument: InstrumentType): void {
+    this.currentInstrument = instrument;
+    console.log('[SimpleAudioEngine] 音色を切り替えました:', instrument);
+  }
+
+  /**
+   * 現在の音色設定を返す
+   */
+  getCurrentInstrument(): InstrumentType {
+    return this.currentInstrument;
+  }
+
+  /**
+   * ユーザーが UI で調整した「音のキャラ」を反映する。
+   * 生の ADSR 値を見せるより、まずは耳で分かりやすい 4 項目に絞る。
+   */
+  setSoundProfile(profile: PlaybackSoundProfile): void {
+    this.soundProfile = profile;
+    console.log('[SimpleAudioEngine] 音色プロファイルを更新しました:', profile);
+  }
+
+  /**
+   * 楽器ごとの簡易音色設定を返す
+   */
+  private getInstrumentConfig(): SimpleInstrumentConfig {
+    // 音色調整の中心はこのメソッド。
+    // 迷ったら、まずここを見ると「どの値が何に効くか」を追いやすい。
+    //
+    // 調整の順番のおすすめ:
+    // 1. oscillators を触る
+    //    音のキャラクター（丸い / 明るい / シャリっと / 広がる）を決める
+    // 2. attack を触る
+    //    鳴り始めの速さを決める
+    // 3. peakGain と decayTarget を触る
+    //    最初の強さと、その後どれだけ残すかを決める
+    // 4. releaseFloor と tailSeconds を触る
+    //    消え方と余韻を決める
+    //
+    // アコギを調整するときの目安:
+    // - もっとシャリっと: sawtooth 層の gainRatio を少し上げる
+    // - もっと木っぽく: sine / triangle 層の gainRatio を少し上げる
+    // - もっとジャーン: tailSeconds を少し伸ばす
+    // - もっと歯切れよく: decayTarget を少し下げる
+    // - もっとピック感: attack を少し小さくする
+    //
+    // すぐ試せるおすすめプリセット:
+    // 1. もっとアコギらしく柔らかくしたい
+    //    - sine.gainRatio: 0.35 -> 0.45
+    //    - sawtooth.gainRatio: 0.26 -> 0.18
+    //    - tailSeconds: 0.22 -> 0.28
+    // 2. もっとシャリっと前に出したい
+    //    - sawtooth.gainRatio: 0.26 -> 0.32
+    //    - triangle(detune: 12).gainRatio: 0.18 -> 0.22
+    //    - attack: 0.002 -> 0.0015
+    // 3. もっとジャーンと余韻を長くしたい
+    //    - tailSeconds: 0.22 -> 0.35
+    //    - releaseFloor: 0.0035 -> 0.005
+    // 4. もっと歯切れよく短くしたい
+    //    - decayTarget: 0.02 -> 0.014
+    //    - tailSeconds: 0.22 -> 0.12
+    // 5. エレキ寄りに少し近づけたい
+    //    - 主成分 triangle -> sawtooth
+    //    - peakGain: 0.24 -> 0.28
+    //    - sine.gainRatio: 0.35 -> 0.2
+    //
+    // 今はギターだけでなく、全楽器がこの簡易プリセット方式で鳴る。
+    // つまり「もっと明るくしたい」「もっと丸くしたい」と思ったら、
+    // 基本的にはこの switch の各楽器ブロックを触ればよい。
+    //
+    // 特に弦楽器3兄弟の考え方:
+    // - バイオリン: 高音が前に出る。少し明るく、立ち上がりもやや早め
+    // - ヴィオラ: 中音域が中心。派手すぎず、少し落ち着いた質感
+    // - チェロ: 低音の厚みを優先。丸さと余韻を少し多めにする
+    //
+    // type の違い
+    // - sine: 柔らかい
+    // - triangle: やや柔らかい
+    // - sawtooth: やや硬い
+    // - square: 硬い
+
+    switch (this.currentInstrument) {
+      case InstrumentType.ORGAN:
+        return {
+          // オルガンは倍音が豊かで、押している間は比較的まっすぐ伸びる音を目指す。
+          // square を主成分にして、持続感を出しやすいよう decay 後も少し残す。
+          oscillators: [
+            { type: 'square', gainRatio: 1 },
+            { type: 'triangle', detune: 4, gainRatio: 0.22 }
+          ],
+          attack: 0.01,
+          peakGain: 0.22,
+          decayTarget: 0.18,
+          releaseFloor: 0.02,
+          tailSeconds: 0.04
+        };
+      case InstrumentType.GUITAR:
+        // アコギ寄りにしつつ、弦をはじいた瞬間のシャリッとした高域と
+        // 胴鳴りの余韻が少し残るようにする。
+        return {
+          oscillators: [
+            // 主成分。丸すぎず硬すぎない中域の芯を作る。
+            { type: 'sawtooth', gainRatio: 0.1 },
+            // 低めの成分を少し足して、胴鳴り感を出す。
+            // ここを上げると、より木の箱が鳴っている感じに寄りやすい。
+            { type: 'sine', detune: 1, gainRatio: 0.1 },
+            // シャリッとした高域を薄く足す。
+            // ここを上げると、ピックの当たりや弦のきらつきが増える。
+            { type: 'sawtooth', detune: 6, gainRatio: 1 },
+            // さらに高い層を少量だけ混ぜて、コードの広がりを作る。
+            // 上げすぎると耳に痛くなりやすいので、少しずつ触るのが安全。
+            { type: 'triangle', detune: 1, gainRatio: 0.18 }
+          ],
+          // attack を小さくすると、弦をはじいた瞬間が前に出る。
+          // ただし極端に小さいとクリックノイズっぽく感じやすい。
+          attack: 0.004,
+          // peakGain は最初の一撃の強さ。
+          // 上げると元気になるが、他の楽器より大きく聞こえやすい。
+          peakGain: 0.8,
+          // decayTarget は「最初の一撃のあと、どこまで音を残すか」。
+          // 小さくすると歯切れがよくなり、大きくすると鳴りが残る。
+          decayTarget: 0.2,
+          // releaseFloor は消える直前の小ささ。
+          // 少しだけ残すと、完全に無音へ落ちる前の自然な余韻を作りやすい。
+          releaseFloor: 0.0035,
+          // tailSeconds は、見た目の音価に対して余韻をどれだけ足すか。
+          // 「ジャーン」を長くしたいときは、まずここを少しずつ上げる。
+          tailSeconds: 0.3
+        };
+      case InstrumentType.PICCOLO:
+        return {
+          oscillators: [
+            { type: 'triangle', gainRatio: 1 },
+            { type: 'sine', detune: 7, gainRatio: 0.16 }
+          ],
+          attack: 0.015,
+          peakGain: 0.18,
+          decayTarget: 0.1,
+          releaseFloor: 0.012,
+          tailSeconds: 0.05
+        };
+      case InstrumentType.FLUTE:
+        return {
+          oscillators: [
+            { type: 'sine', gainRatio: 1 },
+            { type: 'triangle', detune: 2, gainRatio: 0.18 }
+          ],
+          attack: 0.03,
+          peakGain: 0.18,
+          decayTarget: 0.11,
+          releaseFloor: 0.014,
+          tailSeconds: 0.08
+        };
+      case InstrumentType.OBOE:
+      case InstrumentType.ENGLISH_HORN:
+      case InstrumentType.BASSOON:
+        return {
+          oscillators: [
+            { type: 'triangle', gainRatio: 1 },
+            { type: 'sawtooth', detune: this.currentInstrument === InstrumentType.BASSOON ? -4 : 3, gainRatio: 0.16 },
+            { type: 'sine', detune: this.currentInstrument === InstrumentType.ENGLISH_HORN ? -8 : -5, gainRatio: 0.12 }
+          ],
+          attack: this.currentInstrument === InstrumentType.BASSOON ? 0.045 : 0.035,
+          peakGain: 0.19,
+          decayTarget: this.currentInstrument === InstrumentType.ENGLISH_HORN ? 0.13 : 0.11,
+          releaseFloor: 0.015,
+          tailSeconds: this.currentInstrument === InstrumentType.BASSOON ? 0.1 : 0.08
+        };
+      case InstrumentType.SOPRANO_SAX:
+      case InstrumentType.ALTO_SAX:
+      case InstrumentType.TENOR_SAX:
+      case InstrumentType.BARITONE_SAX:
+        return {
+          oscillators: [
+            { type: 'sawtooth', gainRatio: 1 },
+            { type: 'triangle', detune: this.currentInstrument === InstrumentType.BARITONE_SAX ? -6 : -2, gainRatio: 0.2 },
+            { type: 'sine', detune: this.currentInstrument === InstrumentType.TENOR_SAX || this.currentInstrument === InstrumentType.BARITONE_SAX ? -10 : -5, gainRatio: 0.15 }
+          ],
+          attack: 0.025,
+          peakGain: 0.21,
+          decayTarget: 0.14,
+          releaseFloor: 0.018,
+          tailSeconds: 0.1
+        };
+      case InstrumentType.TRUMPET:
+      case InstrumentType.TROMBONE:
+      case InstrumentType.HORN:
+      case InstrumentType.EUPHONIUM:
+      case InstrumentType.TUBA:
+        return {
+          oscillators: [
+            { type: this.currentInstrument === InstrumentType.HORN || this.currentInstrument === InstrumentType.EUPHONIUM ? 'triangle' : 'square', gainRatio: 1 },
+            { type: 'sawtooth', detune: this.currentInstrument === InstrumentType.TUBA ? -7 : 4, gainRatio: 0.18 },
+            { type: 'sine', detune: this.currentInstrument === InstrumentType.TUBA ? -12 : -5, gainRatio: 0.14 }
+          ],
+          attack: this.currentInstrument === InstrumentType.TUBA ? 0.05 : 0.025,
+          peakGain: this.currentInstrument === InstrumentType.TRUMPET ? 0.24 : 0.22,
+          decayTarget: this.currentInstrument === InstrumentType.HORN ? 0.15 : 0.13,
+          releaseFloor: 0.02,
+          tailSeconds: this.currentInstrument === InstrumentType.TROMBONE || this.currentInstrument === InstrumentType.TUBA ? 0.14 : 0.09
+        };
+      case InstrumentType.TIMPANI:
+      case InstrumentType.PERCUSSION:
+        return {
+          oscillators: [
+            { type: 'triangle', gainRatio: 1 },
+            { type: 'sine', detune: -12, gainRatio: this.currentInstrument === InstrumentType.TIMPANI ? 0.24 : 0.12 }
+          ],
+          attack: 0.003,
+          peakGain: 0.25,
+          decayTarget: this.currentInstrument === InstrumentType.TIMPANI ? 0.08 : 0.04,
+          releaseFloor: 0.002,
+          tailSeconds: this.currentInstrument === InstrumentType.TIMPANI ? 0.18 : 0.05
+        };
+      case InstrumentType.VIOLIN:
+        return {
+          // バイオリンは高音域が前に出るので、明るめの sawtooth を芯にする。
+          // 少しだけ triangle を混ぜて、耳に痛くなりすぎないよう丸める。
+          oscillators: [
+            { type: 'sawtooth', gainRatio: 1 },
+            { type: 'triangle', detune: 5, gainRatio: 0.24 },
+            { type: 'sine', detune: 12, gainRatio: 0.1 }
+          ],
+          // 弓で鳴らすので、ギターよりは少し遅い立ち上がりにする。
+          attack: 0.03,
+          peakGain: 0.22,
+          // 伸ばしたときに音が急に消えないよう、やや高めに残す。
+          decayTarget: 0.14,
+          releaseFloor: 0.018,
+          tailSeconds: 0.12
+        };
+      case InstrumentType.VIOLA:
+        return {
+          // ヴィオラはバイオリンより落ち着いた中音域を意識する。
+          // triangle を主成分にして、少しだけ sawtooth を足して輪郭を出す。
+          oscillators: [
+            { type: 'triangle', gainRatio: 1 },
+            { type: 'sawtooth', detune: -3, gainRatio: 0.18 },
+            { type: 'sine', detune: -10, gainRatio: 0.16 }
+          ],
+          attack: 0.04,
+          peakGain: 0.2,
+          decayTarget: 0.13,
+          releaseFloor: 0.018,
+          tailSeconds: 0.14
+        };
+      case InstrumentType.CELLO:
+        return {
+          // チェロは低音の厚みが大事なので、丸い波を中心にする。
+          // 低めの sine を混ぜて胴鳴り感を足し、triangle で少しだけ輪郭を残す。
+          oscillators: [
+            { type: 'triangle', gainRatio: 1 },
+            { type: 'sine', detune: -12, gainRatio: 0.34 },
+            { type: 'triangle', detune: 4, gainRatio: 0.18 }
+          ],
+          attack: 0.05,
+          peakGain: 0.22,
+          decayTarget: 0.15,
+          releaseFloor: 0.02,
+          tailSeconds: 0.18
+        };
+      case InstrumentType.CONTRABASS:
+        return {
+          oscillators: [
+            { type: 'triangle', gainRatio: 1 },
+            { type: 'sine', detune: -12, gainRatio: 0.42 },
+            { type: 'triangle', detune: 3, gainRatio: 0.12 }
+          ],
+          attack: 0.06,
+          peakGain: 0.2,
+          decayTarget: 0.14,
+          releaseFloor: 0.02,
+          tailSeconds: 0.2
+        };
+      case InstrumentType.STRINGS:
+        return {
+          // 「ストリングス」は単体楽器ではなく、弦セクション全体の厚みを想定する。
+          // 個別のバイオリンより広がりを出したいので、少し detune した層を重ねる。
+          oscillators: [
+            { type: 'sawtooth', gainRatio: 1 },
+            { type: 'triangle', detune: -4, gainRatio: 0.22 },
+            { type: 'sawtooth', detune: 6, gainRatio: 0.14 }
+          ],
+          attack: 0.08,
+          peakGain: 0.2,
+          decayTarget: 0.14,
+          releaseFloor: 0.022,
+          tailSeconds: 0.18
+        };
+      case InstrumentType.BRASS:
+        return {
+          // ブラスはアタックの強さと押し出し感が大切。
+          // square を芯にしつつ sawtooth を少し足して、金属的な明るさを出す。
+          oscillators: [
+            { type: 'square', gainRatio: 1 },
+            { type: 'sawtooth', detune: 3, gainRatio: 0.22 }
+          ],
+          attack: 0.02,
+          peakGain: 0.26,
+          decayTarget: 0.16,
+          releaseFloor: 0.02,
+          tailSeconds: 0.06
+        };
+      case InstrumentType.WOODWIND:
+        return {
+          // 木管は角が立ちすぎないほうがそれっぽく聞こえやすい。
+          // triangle と sine を中心にして、息のやわらかさを意識する。
+          oscillators: [
+            { type: 'triangle', gainRatio: 1 },
+            { type: 'sine', detune: 2, gainRatio: 0.24 }
+          ],
+          attack: 0.03,
+          peakGain: 0.18,
+          decayTarget: 0.12,
+          releaseFloor: 0.015,
+          tailSeconds: 0.08
+        };
+      case InstrumentType.PIANO:
+      default:
+        return {
+          // ピアノは「最初の打鍵がはっきり、そのあと自然に減衰」が大切。
+          // triangle を芯にして、少しだけ高い成分を足してハンマー感を出す。
+          oscillators: [
+            { type: 'triangle', gainRatio: 1 },
+            { type: 'sine', detune: 12, gainRatio: 0.16 }
+          ],
+          attack: 0.001,
+          peakGain: 0.28,
+          decayTarget: 0.09,
+          releaseFloor: 0.01,
+          tailSeconds: 0.05
+        };
+    }
+  }
+
+  /**
+   * 再生直前に AudioContext が実際に使える状態かを保証する
+   */
+  private async ensureContextReady(): Promise<void> {
+    if (!this.context || !this.isInitialized) {
+      await this.initialize();
+    }
+
     if (!this.context) {
       throw new Error('AudioContextが初期化されていません');
     }
-    // 全パートを並列でスケジュールする
-    await Promise.all(parts.map(part => this.playScore(part.measures, bpm)));
+
+    const currentState = this.context.state as AudioContextState | 'interrupted';
+    if (currentState === 'suspended' || currentState === 'interrupted') {
+      console.log('[SimpleAudioEngine] 再生直前にAudioContextを再開します...', currentState);
+      await this.context.resume();
+      console.log('[SimpleAudioEngine] 再生直前のAudioContext状態:', this.context.state);
+      this.hasPrimedOutput = false;
+    }
+
+    if (this.context.state !== 'running') {
+      throw new Error(`AudioContextが再生可能な状態ではありません: ${this.context.state}`);
+    }
+
+    await this.primeOutput();
+  }
+
+  /**
+   * 現在鳴っている音と予約済みの音をすべて停止する
+   */
+  stopAll(): void {
+    if (!this.context) {
+      return;
+    }
+
+    const stopTime = this.context.currentTime;
+
+    for (const [oscillatorId, { oscillators }] of this.oscillators.entries()) {
+      oscillators.forEach(oscillator => {
+        try {
+          oscillator.stop(stopTime);
+        } catch {
+          // すでに停止済み、または停止予約済みのオシレーターは無視する
+        }
+      });
+
+      this.cleanupOscillator(oscillatorId);
+    }
+
+    console.log('[SimpleAudioEngine] すべての再生を停止しました');
+  }
+
+  /**
+   * オシレーターを追跡対象として登録する
+   * 停止ボタンで予約済みの発音も止められるようにする
+   */
+  private createOscillators(
+    context: AudioContext,
+    frequency: number,
+    startTime: number,
+    instrumentConfig: SimpleInstrumentConfig
+  ): OscillatorNode[] {
+    // ここでは「波の設計図」から実際のオシレーターを作るだけに絞る。
+    // 接続や音量調整は別メソッドに分けて、役割を読みやすくしている。
+    return instrumentConfig.oscillators.map(spec => {
+      const oscillator = context.createOscillator();
+      oscillator.type = spec.type;
+      oscillator.frequency.setValueAtTime(frequency, startTime);
+      if (spec.detune) {
+        oscillator.detune.setValueAtTime(spec.detune, startTime);
+      }
+      return oscillator;
+    });
+  }
+
+  private registerOscillators(
+    oscillators: OscillatorNode[],
+    gainNode: GainNode,
+    instrumentConfig: SimpleInstrumentConfig,
+    startTime: number
+  ): string {
+    const oscillatorId = `osc-${this.oscillatorCounter++}`;
+
+    // 各層をそのまま足すと音量が大きくなりすぎるため、
+    // gainRatio を見ながら薄く混ぜて、最後に 1 つの GainNode に集約する。
+    const layerCount = Math.max(1, instrumentConfig.oscillators.length);
+    oscillators.forEach((oscillator, index) => {
+      const layerGain = this.context!.createGain();
+      const gainRatio = this.getAdjustedLayerGainRatio(instrumentConfig.oscillators[index]);
+      layerGain.gain.setValueAtTime(gainRatio / layerCount, startTime);
+      oscillator.connect(layerGain);
+      layerGain.connect(gainNode);
+    });
+    gainNode.connect(this.context!.destination);
+    this.oscillators.set(oscillatorId, { oscillators, gainNode });
+
+    return oscillatorId;
+  }
+
+  /**
+   * 追跡中のオシレーターを安全に解放する
+   */
+  private cleanupOscillator(oscillatorId: string, gainNode?: GainNode): void {
+    const voice = this.oscillators.get(oscillatorId);
+    if (!voice) {
+      return;
+    }
+
+    const { oscillators, gainNode: storedGainNode } = voice;
+    const targetGainNode = gainNode ?? storedGainNode;
+
+    // stop 済みでも disconnect は必要。
+    // 接続を残すとメモリや音声ノードが積み上がりやすいため、必ず切る。
+    oscillators.forEach(oscillator => {
+      try {
+        oscillator.disconnect();
+      } catch {
+        // すでに切断済みでも停止処理は継続する
+      }
+    });
+
+    try {
+      targetGainNode.disconnect();
+    } catch {
+      // GainNode 側も二重切断を許容する
+    }
+
+    this.oscillators.delete(oscillatorId);
+  }
+
+  /**
+   * Safari は複数の GainNode や多層オシレーター構成で
+   * ときどき「start までは通るのに無音」になることがある。
+   * その場合だけ、1 本のオシレーターに絞った簡易発音経路へ切り替える。
+   */
+  private shouldUseSafariSafeVoice(): boolean {
+    if (typeof navigator === 'undefined') {
+      return false;
+    }
+
+    const userAgent = navigator.userAgent;
+    return /Safari/.test(userAgent) && !/Chrome|Chromium|Edg/.test(userAgent);
+  }
+
+  /**
+   * Safari 向けの簡易発音経路。
+   * まずは「とにかく確実に鳴る」ことを優先して、最初の主成分 1 本だけで鳴らす。
+   */
+  private playSafariSafeVoice(
+    context: AudioContext,
+    frequency: number,
+    duration: number,
+    startTime: number
+  ): void {
+    const instrumentConfig = this.getInstrumentConfig();
+    const primaryOscillatorSpec = instrumentConfig.oscillators[0] ?? { type: 'triangle' as OscillatorType };
+    const oscillator = context.createOscillator();
+    const gainNode = context.createGain();
+
+    oscillator.type = primaryOscillatorSpec.type;
+    oscillator.frequency.setValueAtTime(frequency, startTime);
+    if (primaryOscillatorSpec.detune) {
+      oscillator.detune.setValueAtTime(primaryOscillatorSpec.detune, startTime);
+    }
+
+    const adjustedAttack = this.getAdjustedAttack(instrumentConfig.attack);
+    const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain);
+    const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget);
+    const adjustedTailSeconds = this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0);
+
+    // Safari では複雑なノード構成より、単純な直結のほうが安定しやすい。
+    // その代わり音色差は少し薄くなるが、まず「鳴る」ことを優先する。
+    gainNode.gain.setValueAtTime(0.0001, startTime);
+    gainNode.gain.linearRampToValueAtTime(
+      Math.max(0.12, Math.min(adjustedPeakGain, 0.25)),
+      startTime + Math.max(0.005, adjustedAttack)
+    );
+    gainNode.gain.linearRampToValueAtTime(
+      Math.max(0.02, adjustedDecayTarget),
+      startTime + Math.max(0.08, duration * 0.35)
+    );
+    gainNode.gain.linearRampToValueAtTime(
+      0.0001,
+      startTime + duration + adjustedTailSeconds
+    );
+
+    oscillator.connect(gainNode);
+    gainNode.connect(context.destination);
+    oscillator.start(startTime);
+    oscillator.stop(startTime + duration + adjustedTailSeconds);
+    oscillator.addEventListener('ended', () => {
+      try {
+        oscillator.disconnect();
+      } catch {
+        // 二重切断でも処理は続ける
+      }
+      try {
+        gainNode.disconnect();
+      } catch {
+        // 二重切断でも処理は続ける
+      }
+    }, { once: true });
+  }
+
+  private getAdjustedAttack(baseAttack: number): number {
+    // attack スライダーは「値が大きいほど立ち上がりがはっきりする」向きにしている。
+    const factor = 1.25 - this.soundProfile.attack * 0.9;
+    return Math.max(0.001, baseAttack * factor);
+  }
+
+  private getAdjustedPeakGain(basePeakGain: number): number {
+    const richnessBoost = 0.9 + this.soundProfile.richness * 0.35;
+    return Math.min(0.9, Math.max(0.08, basePeakGain * richnessBoost));
+  }
+
+  private getAdjustedDecayTarget(baseDecayTarget: number): number {
+    const releaseFactor = 0.7 + this.soundProfile.release * 0.8;
+    return Math.max(0.008, baseDecayTarget * releaseFactor);
+  }
+
+  private getAdjustedReleaseFloor(baseReleaseFloor: number): number {
+    const releaseFactor = 0.8 + this.soundProfile.release * 0.9;
+    return Math.max(0.0001, baseReleaseFloor * releaseFactor);
+  }
+
+  private getAdjustedTailSeconds(baseTailSeconds: number): number {
+    return Math.max(0, baseTailSeconds * (0.6 + this.soundProfile.release * 1.2));
+  }
+
+  private getAdjustedLayerGainRatio(
+    oscillatorSpec: { type: OscillatorType; gainRatio?: number } | undefined
+  ): number {
+    if (!oscillatorSpec) {
+      return 1;
+    }
+
+    const baseGainRatio = oscillatorSpec.gainRatio ?? 1;
+    const brightness = this.soundProfile.brightness;
+    const richness = this.soundProfile.richness;
+
+    let colorFactor = 1;
+    if (oscillatorSpec.type === 'sawtooth' || oscillatorSpec.type === 'square') {
+      colorFactor = 0.75 + brightness * 0.7;
+    } else if (oscillatorSpec.type === 'sine') {
+      colorFactor = 1.2 - brightness * 0.45;
+    } else if (oscillatorSpec.type === 'triangle') {
+      colorFactor = 0.95 + brightness * 0.15;
+    }
+
+    const richnessFactor = baseGainRatio === 1 ? 1 : 0.7 + richness * 0.9;
+    return Math.max(0.03, baseGainRatio * colorFactor * richnessFactor);
+  }
+
+  /**
+   * Safari では AudioContext が running でも、出力経路が眠ったままで
+   * 実音が出ないことがある。そのため、ごく短いほぼ無音の音を 1 回だけ流して
+   * 出力経路をウォームアップする。
+   */
+  private async primeOutput(): Promise<void> {
+    if (!this.context || this.context.state !== 'running' || this.hasPrimedOutput) {
+      return;
+    }
+
+    const unlockOscillator = this.context.createOscillator();
+    const unlockGain = this.context.createGain();
+
+    unlockOscillator.type = 'sine';
+    unlockOscillator.frequency.setValueAtTime(440, this.context.currentTime);
+    // 完全な 0 は最適化で捨てられることがあるので、ほぼ無音の値を使う。
+    unlockGain.gain.setValueAtTime(0.00001, this.context.currentTime);
+
+    unlockOscillator.connect(unlockGain);
+    unlockGain.connect(this.context.destination);
+
+    const stopTime = this.context.currentTime + 0.02;
+    unlockOscillator.start(this.context.currentTime);
+    unlockOscillator.stop(stopTime);
+
+    await new Promise<void>((resolve) => {
+      unlockOscillator.addEventListener('ended', () => {
+        try {
+          unlockOscillator.disconnect();
+        } catch {
+          // 二重切断でも処理は続ける
+        }
+        try {
+          unlockGain.disconnect();
+        } catch {
+          // 二重切断でも処理は続ける
+        }
+        this.hasPrimedOutput = true;
+        console.log('[SimpleAudioEngine] 出力経路をウォームアップしました');
+        resolve();
+      }, { once: true });
+    });
   }
 
   /**
@@ -294,16 +1084,7 @@ export class SimpleAudioEngine {
     try {
       console.log('[SimpleAudioEngine] リソースを解放します...');
       
-      // すべてのオシレーターを停止
-      for (const [, oscillator] of this.oscillators) {
-        try {
-          oscillator.stop();
-          oscillator.disconnect();
-        } catch (error) {
-          // 既に停止している場合はエラーを無視
-        }
-      }
-      this.oscillators.clear();
+      this.stopAll();
       
       // AudioContextを閉じる
       if (this.context) {
@@ -312,6 +1093,7 @@ export class SimpleAudioEngine {
       }
       
       this.isInitialized = false;
+      this.hasPrimedOutput = false;
       console.log('[SimpleAudioEngine] リソースの解放が完了しました');
       
     } catch (error) {

@@ -3,7 +3,7 @@
 // ・ツールバー（Palette）と五線（StaffCanvas / PianoStaff）をまとめる"印刷レイアウト"側
 // ─────────────────────────────────────────────────────────────
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Palette, { type Tool } from './Palette';
 import StaffCanvas from './StaffCanvas';
 import PianoStaff from './PianoStaff';
@@ -14,7 +14,7 @@ import PlaybackHighlight from './PlaybackHighlight';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useTempoStorage } from '../hooks/useTempoStorage';
-import { defaultSimpleAudioEngine } from '../audio/SimpleAudioEngine';
+import { SimpleAudioEngine } from '../audio/SimpleAudioEngine';
 import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, PartData, ScoreType } from '../types/storage';
 
@@ -23,8 +23,24 @@ type PageSpec = { systems: number };
 const BEATS_PER_MEASURE = 4;
 
 function calculateScoreDuration(scoreData: MeasureData[], bpm: number): number {
+  // 末尾の空小節は実際には再生対象がないため、終了タイマーには含めない。
+  // 途中の空小節は「全休符の小節」として長さを保持する。
+  let lastUsedMeasureIndex = -1;
+  for (let i = scoreData.length - 1; i >= 0; i--) {
+    const measure = scoreData[i];
+    if (measure?.events && measure.events.length > 0) {
+      lastUsedMeasureIndex = i;
+      break;
+    }
+  }
+
+  if (lastUsedMeasureIndex === -1) {
+    return 0;
+  }
+
   let totalDuration = 0;
-  for (const measure of scoreData) {
+  for (let i = 0; i <= lastUsedMeasureIndex; i++) {
+    const measure = scoreData[i];
     if (!measure || !measure.events || measure.events.length === 0) {
       totalDuration += (60 / bpm) * BEATS_PER_MEASURE;
     } else {
@@ -69,16 +85,91 @@ export default function ScorePage() {
     () => Array.from({ length: 4 }, () => [])
   );
 
-  const [audioEngine] = useState(() => defaultSimpleAudioEngine);
+  const audioEngineRef = useRef<SimpleAudioEngine>(new SimpleAudioEngine());
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped');
   const [currentPosition, setCurrentPosition] = useState<{ measureIndex: number; beatPosition: number; noteIndex: number }>({
     measureIndex: 0, beatPosition: 0, noteIndex: 0
   });
   const [currentInstrument, setCurrentInstrument] = useState<InstrumentType>(InstrumentType.PIANO);
+  // soundRuntimeSettings は「どの音源方式で、どんなキャラの音にするか」の保存用状態。
+  // いきなりシンセの専門用語を見せず、まずはエンドユーザーが触りやすい値にしている。
+  const [soundRuntimeSettings, setSoundRuntimeSettings] = useState<PlaybackSoundRuntimeSettings>(() => {
+    try {
+      const stored = localStorage.getItem('playback-sound-runtime-settings');
+      if (!stored) {
+        return DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS;
+      }
+
+      const parsed = JSON.parse(stored) as Partial<PlaybackSoundRuntimeSettings>;
+      return {
+        engineMode: parsed.engineMode ?? DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.engineMode,
+        pluginName: parsed.pluginName ?? DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.pluginName,
+        profile: {
+          ...DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile,
+          ...(parsed.profile ?? {})
+        }
+      };
+    } catch {
+      return DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS;
+    }
+  });
+  // playbackTimerRef は「再生が終わったら stopped に戻す予約」を保持する。
+  // 再生し直しや停止時に clearTimeout できるよう、ref で持っている。
+  const playbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 一時停止から再開するため、「いつ再生を始めたか」を覚えておく。
+  const playbackStartedAtRef = useRef<number | null>(null);
+  // 一時停止時点で「あと何ミリ秒残っているか」を覚えておく。
+  const remainingPlaybackMsRef = useRef<number>(0);
 
   useEffect(() => {
     console.log('[ScorePage] SimpleAudioEngineが準備されました');
-  }, [audioEngine]);
+  }, []);
+
+  const getAudioEngine = useCallback(() => {
+    return audioEngineRef.current;
+  }, []);
+
+  const recreateAudioEngine = useCallback(() => {
+    // Safari では同じインスタンスを使い回すより、
+    // 新しい音声エンジンへ差し替えたほうが安定することがある。
+    audioEngineRef.current.dispose();
+    audioEngineRef.current = new SimpleAudioEngine();
+    audioEngineRef.current.setInstrument(currentInstrument);
+    audioEngineRef.current.setSoundProfile(soundRuntimeSettings.profile);
+    return audioEngineRef.current;
+  }, [currentInstrument, soundRuntimeSettings.profile]);
+
+  useEffect(() => {
+    // UI で動かした音のキャラ設定を保存しつつ、今のエンジンにも即反映する。
+    // こうしておくと、次回起動時も同じ音色傾向から作業を再開できる。
+    localStorage.setItem('playback-sound-runtime-settings', JSON.stringify(soundRuntimeSettings));
+    getAudioEngine().setSoundProfile(soundRuntimeSettings.profile);
+  }, [getAudioEngine, soundRuntimeSettings]);
+
+  const clearPlaybackTimer = useCallback(() => {
+    if (playbackTimerRef.current !== null) {
+      clearTimeout(playbackTimerRef.current);
+      playbackTimerRef.current = null;
+    }
+  }, []);
+
+  const resetPlaybackClock = useCallback(() => {
+    playbackStartedAtRef.current = null;
+    remainingPlaybackMsRef.current = 0;
+  }, []);
+
+  const armPlaybackCompletionTimer = useCallback((durationMs: number) => {
+    // 毎回タイマーを張り直す前に、古い予約を消して二重実行を防ぐ。
+    clearPlaybackTimer();
+    remainingPlaybackMsRef.current = Math.max(0, durationMs);
+    playbackStartedAtRef.current = Date.now();
+    playbackTimerRef.current = setTimeout(() => {
+      setPlaybackState('stopped');
+      setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+      playbackTimerRef.current = null;
+      resetPlaybackClock();
+    }, durationMs);
+  }, [clearPlaybackTimer, resetPlaybackClock]);
 
   // スコアタイプ切り替え時に左手データを初期化
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
@@ -96,6 +187,20 @@ export default function ScorePage() {
 
   const handlePlay = useCallback(async () => {
     try {
+      if (playbackState === 'paused') {
+        // paused からの再生は「最初から」ではなく AudioContext の resume。
+        await getAudioEngine().resume();
+        setPlaybackState('playing');
+        armPlaybackCompletionTimer(remainingPlaybackMsRef.current);
+        return;
+      }
+
+      // 連続再生時に前回の停止予約が残ると UI だけ先に stopped に戻るため、先に解除する
+      clearPlaybackTimer();
+      resetPlaybackClock();
+      // Safari では見かけ上 running の古い AudioContext が無音になることがある。
+      // ユーザー操作で始まる再生は毎回まったく新しいエンジンへ差し替える。
+      const audioEngine = recreateAudioEngine();
       await audioEngine.initialize();
 
       const parts: MeasureData[][] = [];
@@ -112,15 +217,16 @@ export default function ScorePage() {
         const partObjs = parts.map(measures => ({ measures }));
         await audioEngine.playParts(partObjs, tempoSettings.bpm);
 
-        const totalDuration = calculateScoreDuration(parts[0], tempoSettings.bpm);
+        // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
+        const totalDuration = Math.max(...parts.map(part => calculateScoreDuration(part, tempoSettings.bpm)));
         setPlaybackState('playing');
-        setTimeout(() => setPlaybackState('stopped'), totalDuration * 1000);
+        armPlaybackCompletionTimer(totalDuration * 1000);
       } else {
         const frequency = audioEngine.noteToFrequency('C4');
         const duration = audioEngine.durationToSeconds('4', tempoSettings.bpm);
         await audioEngine.playNote(frequency, duration);
         setPlaybackState('playing');
-        setTimeout(() => setPlaybackState('stopped'), duration * 1000);
+        armPlaybackCompletionTimer(duration * 1000);
       }
     } catch (error: unknown) {
       console.error('[ScorePage] 再生開始に失敗:', error);
@@ -135,16 +241,34 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [audioEngine, tempoSettings.bpm, rightHandData, leftHandData, quartetParts, scoreType]);
+  }, [armPlaybackCompletionTimer, clearPlaybackTimer, getAudioEngine, playbackState, recreateAudioEngine, resetPlaybackClock, tempoSettings.bpm, rightHandData, leftHandData, quartetParts, scoreType]);
 
-  const handlePause = useCallback(() => {
+  const handlePause = useCallback(async () => {
+    if (playbackState !== 'playing') {
+      return;
+    }
+
+    const startedAt = playbackStartedAtRef.current;
+    if (startedAt !== null) {
+      // 一時停止は「残り時間の保存」が大事。
+      // ここで経過時間を引いておくと、再開時に最後までの残りだけ待てる。
+      const elapsedMs = Date.now() - startedAt;
+      remainingPlaybackMsRef.current = Math.max(0, remainingPlaybackMsRef.current - elapsedMs);
+    }
+
+    clearPlaybackTimer();
+    playbackStartedAtRef.current = null;
+    await getAudioEngine().suspend();
     setPlaybackState('paused');
-  }, []);
+  }, [clearPlaybackTimer, getAudioEngine, playbackState]);
 
   const handleStop = useCallback(() => {
+    clearPlaybackTimer();
+    getAudioEngine().stopAll();
     setPlaybackState('stopped');
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
-  }, []);
+    resetPlaybackClock();
+  }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
 
   const handleSeek = useCallback((position: { measureIndex: number; beatPosition: number; noteIndex: number }) => {
     setCurrentPosition(position);
@@ -156,17 +280,34 @@ export default function ScorePage() {
 
   const handleInstrumentChange = useCallback(async (instrumentType: InstrumentType) => {
     setCurrentInstrument(instrumentType);
-  }, []);
+    // UI の表示だけ変えても音は変わらないため、音声エンジン側にも同じ値を渡す。
+    getAudioEngine().setInstrument(instrumentType);
+  }, [getAudioEngine]);
 
   const handleInstrumentPreview = useCallback(async () => {
     try {
+      // 音色プレビューも毎回新しい音声エンジンへ差し替えて、
+      // Safari の「古い context だけ無音」を避ける。
+      const audioEngine = recreateAudioEngine();
       await audioEngine.initialize();
       const frequency = audioEngine.noteToFrequency('C4');
       await audioEngine.playNote(frequency, 0.5);
     } catch (error) {
       console.error('[ScorePage] 音色プレビューに失敗:', error);
     }
-  }, [audioEngine]);
+  }, [recreateAudioEngine]);
+
+  const handleSoundEngineModeChange = useCallback((mode: SoundEngineMode) => {
+    setSoundRuntimeSettings(prev => ({ ...prev, engineMode: mode }));
+  }, []);
+
+  const handlePluginNameChange = useCallback((pluginName: string) => {
+    setSoundRuntimeSettings(prev => ({ ...prev, pluginName }));
+  }, []);
+
+  const handleSoundProfileChange = useCallback((profile: PlaybackSoundRuntimeSettings['profile']) => {
+    setSoundRuntimeSettings(prev => ({ ...prev, profile }));
+  }, []);
 
   const isEditingDisabled = playbackState === 'playing';
 
@@ -283,8 +424,44 @@ export default function ScorePage() {
   }, [pages, scale]);
 
   useEffect(() => {
-    return () => { audioEngine.dispose(); };
-  }, [audioEngine]);
+    return () => {
+      clearPlaybackTimer();
+      resetPlaybackClock();
+      getAudioEngine().dispose();
+    };
+  }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
+
+  useEffect(() => {
+    const resetAudioAfterBackgrounding = () => {
+      // Safari では、長時間放置や別タブ復帰後に AudioContext が
+      // 見かけ上生きていても無音になることがある。
+      // ここで新しい音声エンジンへ差し替えておくと、次のユーザー操作時に
+      // 必ず新しい context から始められる。
+      clearPlaybackTimer();
+      resetPlaybackClock();
+      recreateAudioEngine();
+      setPlaybackState('stopped');
+      setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        resetAudioAfterBackgrounding();
+      }
+    };
+
+    const handlePageShow = () => {
+      resetAudioAfterBackgrounding();
+    };
+
+    window.addEventListener('pageshow', handlePageShow);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('pageshow', handlePageShow);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock]);
 
   return (
     <div className="app-root">
@@ -354,6 +531,10 @@ export default function ScorePage() {
             onTempoChange={handleTempoChange}
             onInstrumentChange={handleInstrumentChange}
             onInstrumentPreview={handleInstrumentPreview}
+            soundRuntimeSettings={soundRuntimeSettings}
+            onSoundEngineModeChange={handleSoundEngineModeChange}
+            onPluginNameChange={handlePluginNameChange}
+            onSoundProfileChange={handleSoundProfileChange}
           />
           <SaveLoadButtons
             onSave={handleSave}
