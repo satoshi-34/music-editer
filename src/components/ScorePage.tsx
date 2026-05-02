@@ -14,7 +14,8 @@ import PlaybackHighlight from './PlaybackHighlight';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useTempoStorage } from '../hooks/useTempoStorage';
-import { SimpleAudioEngine } from '../audio/SimpleAudioEngine';
+import type { PlaybackEngine } from '../audio/PlaybackEngine';
+import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, PartData, ScoreType } from '../types/storage';
 import { createFurEliseDemoScore } from '../data/demoScores';
@@ -91,7 +92,7 @@ export default function ScorePage() {
     () => Array.from({ length: 4 }, () => [])
   );
 
-  const audioEngineRef = useRef<SimpleAudioEngine>(new SimpleAudioEngine());
+  const audioEngineRef = useRef<PlaybackEngine>(createPlaybackEngine(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS));
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped');
   const [currentPosition, setCurrentPosition] = useState<{ measureIndex: number; beatPosition: number; noteIndex: number }>({
     measureIndex: 0, beatPosition: 0, noteIndex: 0
@@ -128,7 +129,7 @@ export default function ScorePage() {
   const remainingPlaybackMsRef = useRef<number>(0);
 
   useEffect(() => {
-    console.log('[ScorePage] SimpleAudioEngineが準備されました');
+    console.log('[ScorePage] 再生エンジンが準備されました');
   }, []);
 
   const getAudioEngine = useCallback(() => {
@@ -136,14 +137,41 @@ export default function ScorePage() {
   }, []);
 
   const recreateAudioEngine = useCallback(() => {
-    // Safari では同じインスタンスを使い回すより、
-    // 新しい音声エンジンへ差し替えたほうが安定することがある。
+    // 音源方式が変わった場合もここを通すことで、
+    // 画面側は「今の設定に合う再生エンジン」を意識せずに扱える。
+    // 例:
+    // - built-in -> soundfont に切り替えたら SoundFontEngine を新しく作る
+    // - SoundFontパック名を変えたら、そのパック用に作り直す
     audioEngineRef.current.dispose();
-    audioEngineRef.current = new SimpleAudioEngine();
+    audioEngineRef.current = createPlaybackEngine(soundRuntimeSettings);
     audioEngineRef.current.setInstrument(currentInstrument);
-    audioEngineRef.current.setSoundProfile(soundRuntimeSettings.profile);
     return audioEngineRef.current;
-  }, [currentInstrument, soundRuntimeSettings.profile]);
+  }, [currentInstrument, soundRuntimeSettings.engineMode, soundRuntimeSettings.pluginName]);
+
+  const prepareAudioEngine = useCallback(async () => {
+    // 内蔵音源は Safari 対策として毎回新しいエンジンを作る。
+    // SoundFont は毎回作り直すと音源再読込が重いため、同じインスタンスを再利用する。
+    // つまり:
+    // - built-in: 安定性優先
+    // - soundfont: 読み込み速度優先
+    // という使い分けをここでしている。
+    const audioEngine = soundRuntimeSettings.engineMode === 'built-in'
+      ? recreateAudioEngine()
+      : getAudioEngine();
+
+    // どの方式でも、毎回「今のUI設定」をエンジン側へ流し直してズレを防ぐ。
+    audioEngine.setInstrument(currentInstrument);
+    audioEngine.setSoundProfile(soundRuntimeSettings.profile);
+    await audioEngine.initialize();
+    return audioEngine;
+  }, [currentInstrument, getAudioEngine, recreateAudioEngine, soundRuntimeSettings.engineMode, soundRuntimeSettings.profile]);
+
+  useEffect(() => {
+    // 音源方式や SoundFont パック名が変わったときだけ、実体を差し替える。
+    // スライダー操作のたびに作り直すと SoundFont の再読込が重くなるため避ける。
+    // ここで engineMode と pluginName だけを監視しているのはそのため。
+    recreateAudioEngine();
+  }, [recreateAudioEngine, soundRuntimeSettings.engineMode, soundRuntimeSettings.pluginName]);
 
   useEffect(() => {
     // UI で動かした音のキャラ設定を保存しつつ、今のエンジンにも即反映する。
@@ -206,8 +234,7 @@ export default function ScorePage() {
       resetPlaybackClock();
       // Safari では見かけ上 running の古い AudioContext が無音になることがある。
       // ユーザー操作で始まる再生は毎回まったく新しいエンジンへ差し替える。
-      const audioEngine = recreateAudioEngine();
-      await audioEngine.initialize();
+      const audioEngine = await prepareAudioEngine();
 
       const parts: MeasureData[][] = [];
       if (scoreType === 'quartet') {
@@ -228,9 +255,10 @@ export default function ScorePage() {
         setPlaybackState('playing');
         armPlaybackCompletionTimer(totalDuration * 1000);
       } else {
-        const frequency = audioEngine.noteToFrequency('C4');
-        const duration = audioEngine.durationToSeconds('4', tempoSettings.bpm);
-        await audioEngine.playNote(frequency, duration);
+        // 譜面が空でも「再生ボタンが壊れていないか」は確認できるように、
+        // 代表音として C4 を 1拍だけ鳴らす。
+        const duration = 60 / tempoSettings.bpm;
+        await audioEngine.playNoteByName('C4', duration);
         setPlaybackState('playing');
         armPlaybackCompletionTimer(duration * 1000);
       }
@@ -247,7 +275,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [armPlaybackCompletionTimer, clearPlaybackTimer, getAudioEngine, playbackState, recreateAudioEngine, resetPlaybackClock, tempoSettings.bpm, rightHandData, leftHandData, quartetParts, scoreType]);
+  }, [armPlaybackCompletionTimer, clearPlaybackTimer, getAudioEngine, playbackState, prepareAudioEngine, resetPlaybackClock, tempoSettings.bpm, rightHandData, leftHandData, quartetParts, scoreType]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -292,16 +320,13 @@ export default function ScorePage() {
 
   const handleInstrumentPreview = useCallback(async () => {
     try {
-      // 音色プレビューも毎回新しい音声エンジンへ差し替えて、
-      // Safari の「古い context だけ無音」を避ける。
-      const audioEngine = recreateAudioEngine();
-      await audioEngine.initialize();
-      const frequency = audioEngine.noteToFrequency('C4');
-      await audioEngine.playNote(frequency, 0.5);
+      // プレビューは「いま選んでいる音源方式 + 楽器 + 音色調整」をそのまま確認するための入口。
+      const audioEngine = await prepareAudioEngine();
+      await audioEngine.playNoteByName('C4', 0.5);
     } catch (error) {
       console.error('[ScorePage] 音色プレビューに失敗:', error);
     }
-  }, [recreateAudioEngine]);
+  }, [prepareAudioEngine]);
 
   const handleSoundEngineModeChange = useCallback((mode: SoundEngineMode) => {
     setSoundRuntimeSettings(prev => ({ ...prev, engineMode: mode }));

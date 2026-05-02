@@ -51,3 +51,10 @@ inclusion: always
 - 破壊的なコマンドは避ける
 - 関係ない差分は戻さない
 - 作業内容が変わったら、今の前提に合わせてドキュメントも更新する
+
+## 7. 依存追加の安全手順
+
+- 新しい依存は、まず `postinstall` を自動で走らせない前提で確認する
+- 可能なら Docker を使い、`--ignore-scripts` 付きで追加する
+- このリポジトリでは `sh ./scripts/safe-add-package-in-docker.sh <package...>` を優先して使う
+- 依存追加後は `npm run build` と必要なテストを確認し、README と設計書にも理由を残す

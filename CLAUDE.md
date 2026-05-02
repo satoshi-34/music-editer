@@ -15,6 +15,13 @@
 - あわせて **`.kiro/steering/implementation-rules.md`** を参照し、作業手順・コメント方針・確認項目をそろえる
 - 機能ごとの背景や設計判断は **`.claude/specs/*`** と **`.kiro/specs/*`** も確認する
 
+## 依存追加ルール
+
+- 新しいライブラリを追加するときは、`postinstall` などの自動 script をすぐに走らせない
+- まずは Docker 経由で **`--ignore-scripts` を付けた安全な追加** を試す
+- 依存追加の補助スクリプトは `scripts/safe-add-package-in-docker.sh` を使う
+- 依存追加後は、なぜそのライブラリが必要かを README または設計書に残す
+
 ## コミットメッセージ
 
 - **日本語**で書く

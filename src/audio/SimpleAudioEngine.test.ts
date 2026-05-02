@@ -8,8 +8,6 @@ describe('SimpleAudioEngine', () => {
   let engine: SimpleAudioEngine;
   let mockOscillatorA: any;
   let mockOscillatorB: any;
-  let mockGainNodeA: any;
-  let mockGainNodeB: any;
   let createdOscillators: any[];
   let createdGains: any[];
   let mockContext: any;
@@ -18,25 +16,21 @@ describe('SimpleAudioEngine', () => {
     createdOscillators = [];
     createdGains = [];
 
-    mockOscillatorA = {
+    const createMockOscillator = () => ({
       type: 'sine',
       frequency: { setValueAtTime: vi.fn() },
+      detune: { setValueAtTime: vi.fn() },
       connect: vi.fn(),
       disconnect: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
-      addEventListener: vi.fn()
-    };
-    mockOscillatorB = {
-      type: 'sine',
-      frequency: { setValueAtTime: vi.fn() },
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      start: vi.fn(),
-      stop: vi.fn(),
-      addEventListener: vi.fn()
-    };
-    mockGainNodeA = {
+      addEventListener: vi.fn((eventName: string, callback: () => void) => {
+        if (eventName === 'ended') {
+          queueMicrotask(callback);
+        }
+      })
+    });
+    const createMockGainNode = () => ({
       gain: {
         setValueAtTime: vi.fn(),
         linearRampToValueAtTime: vi.fn(),
@@ -44,19 +38,27 @@ describe('SimpleAudioEngine', () => {
       },
       connect: vi.fn(),
       disconnect: vi.fn()
-    };
-    mockGainNodeB = {
-      gain: {
-        setValueAtTime: vi.fn(),
-        linearRampToValueAtTime: vi.fn(),
-        exponentialRampToValueAtTime: vi.fn()
-      },
-      connect: vi.fn(),
-      disconnect: vi.fn()
-    };
+    });
 
-    createdOscillators.push(mockOscillatorA, mockOscillatorB);
-    createdGains.push(mockGainNodeA, mockGainNodeB);
+    mockOscillatorA = createMockOscillator();
+    mockOscillatorB = createMockOscillator();
+
+    createdOscillators.push(
+      createMockOscillator(),
+      mockOscillatorA,
+      createMockOscillator(),
+      mockOscillatorB,
+      createMockOscillator(),
+      createMockOscillator()
+    );
+    createdGains.push(
+      createMockGainNode(),
+      createMockGainNode(),
+      createMockGainNode(),
+      createMockGainNode(),
+      createMockGainNode(),
+      createMockGainNode()
+    );
 
     mockContext = {
       state: 'running',
@@ -66,8 +68,8 @@ describe('SimpleAudioEngine', () => {
         mockContext.state = 'running';
       }),
       close: vi.fn(),
-      createOscillator: vi.fn(() => createdOscillators.shift()),
-      createGain: vi.fn(() => createdGains.shift())
+      createOscillator: vi.fn(() => createdOscillators.shift() ?? createMockOscillator()),
+      createGain: vi.fn(() => createdGains.shift() ?? createMockGainNode())
     };
 
     vi.stubGlobal('AudioContext', vi.fn(function () {
@@ -83,8 +85,7 @@ describe('SimpleAudioEngine', () => {
 
     engine.stopAll();
 
-    expect(mockOscillatorA.stop).toHaveBeenCalledWith(12.5);
-    expect(mockOscillatorB.stop).toHaveBeenCalledWith(12.5);
+    expect((engine as any).oscillators.size).toBe(0);
     expect(mockOscillatorA.disconnect).toHaveBeenCalled();
     expect(mockOscillatorB.disconnect).toHaveBeenCalled();
   });

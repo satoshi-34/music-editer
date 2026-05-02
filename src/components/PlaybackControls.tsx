@@ -44,7 +44,7 @@ export interface PlaybackControlsProps {
   soundRuntimeSettings?: PlaybackSoundRuntimeSettings;
   /** 音源方式変更時のコールバック */
   onSoundEngineModeChange?: (mode: SoundEngineMode) => void;
-  /** 想定プラグイン名変更時のコールバック */
+  /** SoundFontパック名 / 想定プラグイン名変更時のコールバック */
   onPluginNameChange?: (pluginName: string) => void;
   /** 音のキャラ変更時のコールバック */
   onSoundProfileChange?: (nextProfile: PlaybackSoundRuntimeSettings['profile']) => void;
@@ -402,8 +402,8 @@ export default function PlaybackControls({
                   gap: 10
                 }}
               >
-                {/* ここは「将来どの音源方式で鳴らすか」を選ぶ入口。
-                    現在の Web 版では built-in が実働で、他は設定の土台を先に見せている。 */}
+                {/* ここで「軽い内蔵音源にするか」「楽器サンプル付きの SoundFont にするか」を切り替える。
+                    plugin は将来の本格連携用なので、今は保存入口だけ残している。 */}
                 <label style={{ display: 'grid', gap: 4 }}>
                   <span>音源方式</span>
                   <select
@@ -412,27 +412,32 @@ export default function PlaybackControls({
                     onChange={handleSoundEngineModeChange}
                     aria-label="音源方式"
                   >
-                    <option value="built-in">内蔵音源（現在の再生方式）</option>
-                    <option value="soundfont">SoundFont（設定保存の土台のみ）</option>
-                    <option value="plugin">プラグイン連携（設定保存の土台のみ）</option>
+                    <option value="built-in">内蔵音源（軽量）</option>
+                    <option value="soundfont">SoundFont（楽器サンプル再生）</option>
+                    <option value="plugin">プラグイン連携（将来拡張）</option>
                   </select>
                 </label>
 
                 <label style={{ display: 'grid', gap: 4 }}>
-                  <span>想定プラグイン名</span>
+                  <span>{soundRuntimeSettings.engineMode === 'soundfont' ? 'SoundFontパック名' : '想定プラグイン名'}</span>
                   <input
                     type="text"
                     value={soundRuntimeSettings.pluginName}
                     onChange={handlePluginNameChange}
-                    placeholder="例: Kontakt / FluidR3 / MuseScore"
-                    aria-label="想定プラグイン名"
-                    disabled={soundRuntimeSettings.engineMode !== 'plugin'}
+                    placeholder={soundRuntimeSettings.engineMode === 'soundfont'
+                      ? '例: MusyngKite / FluidR3_GM'
+                      : '例: Kontakt / MuseScore'}
+                    aria-label={soundRuntimeSettings.engineMode === 'soundfont' ? 'SoundFontパック名' : '想定プラグイン名'}
+                    disabled={soundRuntimeSettings.engineMode === 'built-in'}
                   />
                 </label>
 
                 <div style={{ fontSize: 12, color: '#4b5563', lineHeight: 1.5 }}>
-                  今の Web 版で実際に鳴るのは `内蔵音源` です。
-                  `SoundFont` と `プラグイン連携` は、あとで音源差し替えに進めるための設定入口を先に用意しています。
+                  {/* この説明文は、専門用語だけを並べずに
+                      「どれを選ぶと何が起きるか」を最短で伝えるためのもの。 */}
+                  `内蔵音源` は軽くてすぐ鳴る方式です。
+                  `SoundFont` はネット経由で楽器サンプルを読み込み、より楽器らしい音を目指します。
+                  `プラグイン連携` は今後の拡張用で、現時点では設定名の保存までです。
                 </div>
 
                 {/* 4 本のスライダーは、シンセの専門パラメータを直接見せる代わりに

@@ -3,6 +3,7 @@
 // ブラウザの自動再生ポリシーに完全対応
 
 import { InstrumentType } from './SoundSource';
+import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
   type PlaybackSoundProfile
@@ -50,7 +51,7 @@ interface SimpleInstrumentConfig {
  * シンプルな音声エンジンクラス
  * Tone.jsを使わずにWeb Audio APIを直接使用してブラウザの自動再生ポリシーに対応
  */
-export class SimpleAudioEngine {
+export class SimpleAudioEngine implements PlaybackEngine {
   private context: AudioContext | null = null;
   private isInitialized: boolean = false;
   private oscillators: Map<string, { oscillators: OscillatorNode[]; gainNode: GainNode }> = new Map();
@@ -195,6 +196,14 @@ export class SimpleAudioEngine {
       console.error('[SimpleAudioEngine] 音符再生に失敗:', error);
       throw error;
     }
+  }
+
+  /**
+   * 画面側からは「C4 を 0.5 秒鳴らす」のように音名で呼びたい場面が多い。
+   * SimpleAudioEngine は周波数ベースなので、ここで橋渡しする。
+   */
+  async playNoteByName(note: string, duration: number = 0.5): Promise<void> {
+    await this.playNote(this.noteToFrequency(note), duration);
   }
 
   /**
@@ -436,7 +445,7 @@ export class SimpleAudioEngine {
   /**
    * 複数パート（右手・左手など）を同時再生する
    */
-  async playParts(parts: Array<{ measures: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[] }> }> }>, bpm: number = 120): Promise<void> {
+  async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<void> {
     await this.ensureContextReady();
     // 各パートは同じ AudioContext 上で、同じ現在時刻を基準に予約する。
     // そのため Promise.all にしても、時間がずれずに同時再生になる。

@@ -9,11 +9,13 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest --run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "deps:add:safe": "sh ./scripts/safe-add-package-in-docker.sh"
   },
   "dependencies": {
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "soundfont-player": "^0.12.0",
     "tone": "^15.1.22",
     "vexflow": "^5.0.0"
   },

@@ -1,7 +1,8 @@
 /**
  * 再生時の音源方式。
- * 今の Web 版では built-in が実際に鳴る方式で、
- * soundfont / plugin は将来の拡張先として UI と保存の土台を先に用意する。
+ * built-in は軽量な内蔵音源、
+ * soundfont は楽器サンプルを読み込む再生方式、
+ * plugin は将来の拡張先として予約している。
  */
 export type SoundEngineMode = 'built-in' | 'soundfont' | 'plugin';
 
@@ -20,13 +21,13 @@ export interface PlaybackSoundProfile {
 export interface PlaybackSoundRuntimeSettings {
   /**
    * どの再生方式を使うか。
-   * 現時点で実際に鳴るのは built-in だけだが、
-   * あとから SoundFont や外部音源連携へ進めやすいよう保存項目を先に作っている。
+   * built-in と soundfont は現時点で再生に使う。
+   * plugin はあとから外部音源連携へ進めやすいよう保存項目を先に作っている。
    */
   engineMode: SoundEngineMode;
   /**
-   * 将来の外部音源連携で使う想定の名前。
-   * 例: Kontakt / FluidR3 / MuseScore など
+   * soundfont では音源パック名、plugin では想定プラグイン名として使う。
+   * 例: MusyngKite / FluidR3_GM / Kontakt / MuseScore など
    */
   pluginName: string;
   /** エンドユーザー向けの「音のキャラ」調整値 */
