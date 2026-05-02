@@ -17,6 +17,12 @@ import { useTempoStorage } from '../hooks/useTempoStorage';
 import { SimpleAudioEngine } from '../audio/SimpleAudioEngine';
 import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, PartData, ScoreType } from '../types/storage';
+import { createFurEliseDemoScore } from '../data/demoScores';
+import {
+  DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
+  type PlaybackSoundRuntimeSettings,
+  type SoundEngineMode
+} from '../audio/playbackSettings';
 
 type PageSpec = { systems: number };
 
@@ -391,6 +397,28 @@ export default function ScorePage() {
     }
   };
 
+  const handleLoadSample = useCallback(() => {
+    const sampleScore = createFurEliseDemoScore();
+
+    // 保存データを消さずに、いま表示中の譜面だけ説明用サンプルへ切り替える。
+    // 「あとで自分の譜面に戻したい」場合は、既存の保存/読込ボタンで戻せる。
+    setTitle(sampleScore.metadata.title);
+    setSubtitle(sampleScore.metadata.subtitle);
+    setLyricist(sampleScore.metadata.lyricist);
+    setComposer(sampleScore.metadata.composer);
+    setArranger(sampleScore.metadata.arranger);
+    setScoreType(sampleScore.scoreType);
+    setRightHandData(sampleScore.rightHand);
+    setLeftHandData(sampleScore.leftHand);
+    setQuartetParts(Array.from({ length: 4 }, () => []));
+    setCurrentInstrument(InstrumentType.PIANO);
+    getAudioEngine().setInstrument(InstrumentType.PIANO);
+    setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+    clearPlaybackTimer();
+    resetPlaybackClock();
+    setPlaybackState('stopped');
+  }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
+
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
@@ -539,6 +567,7 @@ export default function ScorePage() {
           <SaveLoadButtons
             onSave={handleSave}
             onLoad={handleLoad}
+            onLoadSample={handleLoadSample}
             isSaving={isSaving}
             isLoading={isLoading}
             hasStoredData={hasStoredData()}

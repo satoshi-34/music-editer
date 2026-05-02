@@ -4,6 +4,7 @@
 export interface SaveLoadButtonsProps {
   onSave: () => void;
   onLoad: () => void;
+  onLoadSample?: () => void;
   isSaving: boolean;
   isLoading: boolean;
   hasStoredData: boolean;
@@ -13,6 +14,7 @@ export interface SaveLoadButtonsProps {
 export default function SaveLoadButtons({
   onSave,
   onLoad,
+  onLoadSample,
   isSaving,
   isLoading,
   hasStoredData,
@@ -40,6 +42,17 @@ export default function SaveLoadButtons({
       >
         {isLoading ? '読込中...' : '読込'}
       </button>
+
+      {onLoadSample && (
+        <button
+          className="ghost sample-button"
+          onClick={onLoadSample}
+          disabled={isLoading || isSaving}
+          title="説明用のサンプル譜面を読み込み"
+        >
+          サンプル
+        </button>
+      )}
       
       {hasError && (
         <div className="error-message" role="alert">
