@@ -25,6 +25,7 @@ const defaultProps: PlaybackControlsProps = {
   onTempoChange: vi.fn(),
   onInstrumentChange: vi.fn(),
   onInstrumentPreview: vi.fn(),
+  onAudioRecovery: vi.fn(),
   soundRuntimeSettings: DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS
 };
 
@@ -48,6 +49,7 @@ describe('PlaybackControls', () => {
       // 音色選択
       expect(screen.getByLabelText('楽器選択')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '音色プレビュー' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '音声復旧' })).toBeInTheDocument();
 
       // 再生位置表示（テキストが複数要素に分かれている可能性を考慮）
       expect(screen.getByText((content, element) => {
@@ -220,6 +222,16 @@ describe('PlaybackControls', () => {
       fireEvent.change(instrumentSelect, { target: { value: InstrumentType.GUITAR } });
       
       expect(onInstrumentChange).toHaveBeenCalledWith(InstrumentType.GUITAR);
+    });
+
+    it('音声復旧ボタンのクリックでonAudioRecoveryが呼ばれる', () => {
+      const onAudioRecovery = vi.fn();
+      render(<PlaybackControls {...defaultProps} onAudioRecovery={onAudioRecovery} />);
+
+      const recoveryButton = screen.getByRole('button', { name: '音声復旧' });
+      fireEvent.click(recoveryButton);
+
+      expect(onAudioRecovery).toHaveBeenCalledTimes(1);
     });
 
     it('音色プレビューボタンクリックでonInstrumentPreviewが呼ばれる', () => {

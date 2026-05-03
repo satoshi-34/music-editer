@@ -40,6 +40,8 @@ export interface PlaybackControlsProps {
   onInstrumentChange: (instrument: InstrumentType) => void;
   /** 音色プレビュー時のコールバック */
   onInstrumentPreview?: (instrument: InstrumentType) => void;
+  /** Safari などで無音になったとき、音声系を手動で復旧するコールバック */
+  onAudioRecovery?: () => void;
   /** 詳細な音源設定 */
   soundRuntimeSettings?: PlaybackSoundRuntimeSettings;
   /** 音源方式変更時のコールバック */
@@ -141,6 +143,7 @@ export default function PlaybackControls({
   onTempoChange,
   onInstrumentChange,
   onInstrumentPreview,
+  onAudioRecovery,
   soundRuntimeSettings,
   onSoundEngineModeChange,
   onPluginNameChange,
@@ -381,6 +384,18 @@ export default function PlaybackControls({
               aria-label="音色プレビュー"
             >
               🔊
+            </button>
+          )}
+
+          {onAudioRecovery && (
+            <button
+              type="button"
+              className="ghost"
+              onClick={onAudioRecovery}
+              title="音声復旧"
+              aria-label="音声復旧"
+            >
+              音声復旧
             </button>
           )}
         </div>

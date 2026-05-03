@@ -14,6 +14,7 @@ import type {
 } from '../types/storage';
 import { StorageErrorType } from '../types/storage';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
+import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 
 // Storage keys
 export const STORAGE_KEYS = {
@@ -23,7 +24,7 @@ export const STORAGE_KEYS = {
 } as const;
 
 // Current version for data migration
-export const CURRENT_VERSION = '3.2.0';
+export const CURRENT_VERSION = '3.3.0';
 
 /**
  * Generates a simple checksum for data integrity verification
@@ -59,7 +60,18 @@ function validateNoteEvent(event: any): event is NoteEvent {
     event.keys.length > 0 &&
     // 保存データに不正な文字列を混ぜないよう、音高キーの形式まで確認する。
     // ここで弾いておくと、描画時に未知の文字列をVexFlowへ渡すリスクを減らせる。
-    event.keys.every((k: any) => isValidNoteKeyString(k))
+    event.keys.every((k: any) => isValidNoteKeyString(k)) &&
+    (
+      event.dynamics === undefined ||
+      (
+        Array.isArray(event.dynamics) &&
+        event.dynamics.every((marking: any) => (
+          marking &&
+          typeof marking === 'object' &&
+          isDynamicMarkingValue(marking.value)
+        ))
+      )
+    )
   );
 }
 

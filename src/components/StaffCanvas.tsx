@@ -18,6 +18,7 @@ import {
   type KeySignature,
 } from '../utils/noteKeyUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
+import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -815,6 +816,11 @@ export default function StaffCanvas({
       endDx: number; endDy: number;     // 終点ユーザー調節量
       cpDyOffset: number;               // 弧曲率オフセット（ep ドラッグ時の再計算に使う）
     }>();
+    const dynamicTextEntries: Array<{
+      anchorX: number;
+      baseY: number;
+      markings: NonNullable<NoteEvent['dynamics']>;
+    }> = [];
 
     // SVG 背景クリック → 弧の選択とドラッグ状態を解除
     svg.addEventListener('click', () => {
@@ -1495,6 +1501,11 @@ export default function StaffCanvas({
             setScore(prev => toggleMeasureRepeatMarker(prev, absoluteIndex, tool.repeat));
             return;
           }
+          if ('mode' in tool && tool.mode === 'dynamic') {
+            // 強弱記号は必ず「既存の音符」に付ける。
+            // 背景クリックで新規音符挿入に化けると、意図しないデータ追加になるため止める。
+            return;
+          }
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
           if ('mode' in tool && tool.mode === 'accidental') {
             if (i === 0 && lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right) {
@@ -1635,6 +1646,7 @@ export default function StaffCanvas({
                 return;
               }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
+              const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
 
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
@@ -1661,6 +1673,23 @@ export default function StaffCanvas({
                 }
                 return;
               }
+              if (dynamicMode && !safeEvents[j]?.isRest) {
+                // 強弱記号は「この音符から効き始める合図」なので、
+                // 音高追加や新規挿入より先にここで確定させる。
+                const currentEv = safeEvents[j];
+                const nextEv = applyDynamicMarkingToEvent(currentEv, dynamicMode);
+                setScore(prev => {
+                  const next = prev.map(cloneMeasureData);
+                  if (absoluteIndex >= next.length) return prev;
+                  const targetEv = next[absoluteIndex].events[j];
+                  if (!targetEv || targetEv.isRest) return prev;
+                  next[absoluteIndex].events[j] = applyDynamicMarkingToEvent(targetEv, dynamicMode);
+                  return next;
+                });
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                playNoteEvent(nextEv);
+                return;
+              }
 
               if (!safeEvents[j]?.isRest && isOnNote) {
 
@@ -1685,6 +1714,7 @@ export default function StaffCanvas({
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });
                 if (playEvent) playNoteEvent(playEvent);
               } else if (safeEvents[j]?.isRest) {
+                if (dynamicMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i === 0 &&
                     lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right;
@@ -1708,6 +1738,7 @@ export default function StaffCanvas({
                 // 休符クリック → 音符を挿入（rect が大きくなり insertRect に届かないため）
                 doInsertAt(lx, ly, measureIndex);
               } else {
+                if (dynamicMode) return;
                 if (accidentalMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsertAt(lx, ly, measureIndex);
@@ -1715,6 +1746,14 @@ export default function StaffCanvas({
             });
 
             (svgRoot as any).appendChild(hit);
+
+            if (!safeEvents[j]?.__isPlaceholder && safeEvents[j]?.dynamics?.length) {
+              dynamicTextEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                baseY: stave.getYForLine(4) + 26,
+                markings: safeEvents[j].dynamics,
+              });
+            }
 
             const isSel = !!selected && selected.measure === absoluteIndex && selected.index === j;
             if (isSel) {
@@ -1732,6 +1771,27 @@ export default function StaffCanvas({
 
         x += w;
       }
+
+      dynamicTextEntries.forEach(({ anchorX, baseY, markings }) => {
+        const orderedMarkings = [...markings].sort((left, right) => {
+          const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
+          const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
+          return leftPriority - rightPriority;
+        });
+        orderedMarkings.forEach((marking, index) => {
+          const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          text.textContent = formatDynamicMarking(marking);
+          text.setAttribute('x', String(anchorX));
+          text.setAttribute('y', String(baseY + index * 14));
+          text.setAttribute('text-anchor', 'middle');
+          text.setAttribute('fill', '#1f2937');
+          text.setAttribute('font-family', '"Times New Roman", serif');
+          text.setAttribute('font-size', marking.value === 'cresc' || marking.value === 'dim' ? '12' : '16');
+          text.setAttribute('font-style', 'italic');
+          text.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(text);
+        });
+      });
 
       // ── 行内タイグループの一括描画 ──────────────────────────────
       // 前行からの持ち越しがある場合: lineNotes 先頭の連続グループの終点まで延伸して一本の弧を描く

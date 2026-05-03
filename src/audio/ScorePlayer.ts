@@ -10,6 +10,7 @@ import { SoundSource } from './SoundSource';
 import { AudioErrorHandler, AudioErrorFactory } from './AudioError';
 import { expandMeasuresForPlayback } from './repeatPlaybackUtils';
 import type { MeasureData, NoteEvent, DurKey } from '../types/storage';
+import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
 
 /**
  * 再生位置を表すインターフェース
@@ -398,10 +399,12 @@ export class ScorePlayer {
     // これを先にやっておくと、下の処理は「前から順に音価を足していく」
     // という単純なロジックのままで済む。
     const expandedMeasures = expandMeasuresForPlayback(measures);
+    const dynamicVelocities = resolveDynamicVelocities(expandedMeasures.map(item => item.measure));
     
     let currentTime = 0; // 累積時間（秒）
 
-    for (const expandedMeasure of expandedMeasures) {
+    for (let expandedMeasureIndex = 0; expandedMeasureIndex < expandedMeasures.length; expandedMeasureIndex++) {
+      const expandedMeasure = expandedMeasures[expandedMeasureIndex];
       const measure = expandedMeasure.measure;
       let measureTime = 0; // 小節内での時間（秒）
 
@@ -415,7 +418,7 @@ export class ScorePlayer {
         if (!event.isRest && event.keys?.length) {
           const scheduledNote: ScheduledNote = {
             note: event.keys.map(k => this.convertKeyToToneFormat(k)),
-            velocity: 0.5, // デフォルトベロシティ
+            velocity: dynamicVelocities.get(buildDynamicEventKey(expandedMeasureIndex, noteIndex)) ?? 0.5,
             duration: duration,
             time: currentTime + measureTime,
             // 展開後に同じ小節が再登場しても、UI 側には元の小節番号を返す。

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { InstrumentType } from './SoundSource';
 import {
+  SoundFontEngine,
   mapInstrumentTypeToSoundFontName,
   resolveSoundFontName
 } from './SoundFontEngine';
@@ -23,5 +24,16 @@ describe('SoundFontEngine helpers', () => {
   it('未知の SoundFont パック名は既定値へ戻す', () => {
     expect(resolveSoundFontName('Kontakt')).toBe('MusyngKite');
     expect(resolveSoundFontName('MyCustomPack')).toBe('MusyngKite');
+  });
+
+  it('再生オプション生成で velocity を gain に反映する', () => {
+    const engine = new SoundFontEngine();
+
+    const quietOptions = (engine as any).buildPlaybackOptions(0.5, 0.22);
+    const loudOptions = (engine as any).buildPlaybackOptions(0.5, 0.74);
+
+    expect(quietOptions.gain).toBeLessThan(loudOptions.gain);
+    expect(quietOptions.gain).toBeGreaterThan(0);
+    expect(loudOptions.gain).toBeLessThanOrEqual(1);
   });
 });

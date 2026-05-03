@@ -13,6 +13,7 @@ import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 import type { AccidentalToolKind } from '../utils/noteKeyUtils';
 import type { RepeatMarkerKind } from '../utils/repeatMarkerUtils';
+import type { DynamicMarkingValue } from '../types/storage';
 
 // ========== 表示サイズ＆色（ボタン側と合わせる） ==========
 const BUTTON_W = 56;   // ボタン幅（CSSと合わせる）
@@ -38,10 +39,12 @@ export type Tool =
   | { duration: DurKey; isRest?: boolean }  // 通常の音符/休符入力
   | { mode: 'tie' }                         // タイ記号を付けるモード
   | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
-  | { mode: 'repeat'; repeat: RepeatMarkerKind };           // リピート記号を付けるモード
+  | { mode: 'repeat'; repeat: RepeatMarkerKind }            // リピート記号を付けるモード
+  | { mode: 'dynamic'; dynamic: DynamicMarkingValue };      // 強弱記号を付けるモード
 
 type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
 type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
+type DynamicTool = Extract<Tool, { mode: 'dynamic' }>;
 
 // 並べるアイテム（上段=音符, 下段=休符）
 const ROW1: Tool[] = ['1','2','4','8','16','32','64'].map(d => ({ duration: d as DurKey }));
@@ -92,6 +95,16 @@ const REPEAT_TOOLS: RepeatTool[] = [
   { mode: 'repeat', repeat: 'start' },
   { mode: 'repeat', repeat: 'end' },
 ];
+const DYNAMIC_TOOLS: DynamicTool[] = [
+  { mode: 'dynamic', dynamic: 'pp' },
+  { mode: 'dynamic', dynamic: 'p' },
+  { mode: 'dynamic', dynamic: 'mp' },
+  { mode: 'dynamic', dynamic: 'mf' },
+  { mode: 'dynamic', dynamic: 'f' },
+  { mode: 'dynamic', dynamic: 'ff' },
+  { mode: 'dynamic', dynamic: 'cresc' },
+  { mode: 'dynamic', dynamic: 'dim' },
+];
 
 export default function Palette({
   value, onChange,
@@ -106,6 +119,9 @@ export default function Palette({
     : null;
   const selectedRepeat = 'mode' in value && value.mode === 'repeat'
     ? value.repeat
+    : null;
+  const selectedDynamic = 'mode' in value && value.mode === 'dynamic'
+    ? value.dynamic
     : null;
 
   return (
@@ -152,7 +168,7 @@ export default function Palette({
         })}
       </div>
 
-      {/* タイボタン行 */}
+      {/* 記号ツール行 */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button
           type="button"
@@ -241,6 +257,38 @@ export default function Palette({
             </button>
           );
         })}
+
+        {DYNAMIC_TOOLS.map((tool) => {
+          const isActive = selectedDynamic === tool.dynamic;
+          return (
+            <button
+              type="button"
+              key={tool.dynamic}
+              onClick={() => onChange(isActive ? ROW1[2] : tool)}
+              aria-label={dynamicLabel(tool.dynamic)}
+              title={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
+              style={{
+                minWidth: BUTTON_W,
+                height: BUTTON_H,
+                padding: '0 10px',
+                borderRadius: 10,
+                border: isActive ? '2px solid #3b82f6' : '1px solid #ccc',
+                background: isActive ? '#eff6ff' : '#fff',
+                color: '#222',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: tool.dynamic === 'cresc' || tool.dynamic === 'dim' ? 15 : 20,
+                fontFamily: '"Times New Roman", serif',
+                fontStyle: 'italic',
+                lineHeight: 1,
+              }}
+            >
+              {dynamicSymbol(tool.dynamic)}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -265,6 +313,16 @@ function repeatSymbol(kind: RepeatMarkerKind) {
 
 function repeatLabel(kind: RepeatMarkerKind) {
   return kind === 'start' ? '開始リピート' : '終了リピート';
+}
+
+function dynamicSymbol(kind: DynamicMarkingValue) {
+  return kind === 'cresc' ? 'cresc.' : kind === 'dim' ? 'dim.' : kind;
+}
+
+function dynamicLabel(kind: DynamicMarkingValue) {
+  if (kind === 'cresc') return 'クレッシェンド';
+  if (kind === 'dim') return 'ディミヌエンド';
+  return `強弱記号 ${kind}`;
 }
 
 /**

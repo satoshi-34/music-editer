@@ -49,6 +49,18 @@ Safari では「見かけ上 running の古い context」が無音のまま残�
 
 - [src/components/ScorePage.tsx](../src/components/ScorePage.tsx)
 
+### 2.5 `音声復旧` ボタンで手動リセットできるようにする
+
+Safari の厄介な点は、再生処理が例外も出さず最後まで通るのに、
+実音だけ出ない `silent failure` があること。
+
+この場合は自動フォールバックが発火しないため、
+ツールバーの `音声復旧` ボタンからユーザー操作つきで
+`AudioContext` を丸ごと作り直せるようにしている。
+
+これで Safari 自体の再起動が必要なケースを完全には消せないが、
+「タブはそのままで復旧する」可能性を上げられる。
+
 ### 3. 出力経路をウォームアップする
 
 これが今回の Safari 対策の決め手。
@@ -95,9 +107,10 @@ Safari でまた鳴らなくなったときは、まず次を確認する。
 ## 再発したときの手順
 
 1. まず Chrome で鳴るか確認
-2. Safari でページを再読み込み
-3. それでもだめならタブを開き直す
-4. さらに再発するなら `SimpleAudioEngine` の `primeOutput()` と `ensureContextReady()` を確認
+2. Safari で `音声復旧` ボタンを押す
+3. それでもだめならページを再読み込み
+4. さらにだめならタブを開き直す
+5. 再発するなら `SimpleAudioEngine` の `primeOutput()` と `ensureContextReady()` を確認
 
 ---
 

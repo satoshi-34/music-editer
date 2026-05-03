@@ -258,6 +258,103 @@ Safari でもまず選択中の音源方式で再生を試し、`initialize()` �
 ### 影響範囲
 
 - `handleInstrumentPreview()`
+
+---
+
+## 修正 11: built-in 再生時の毎回再生成をやめて Safari 無音を減らす
+
+**ファイル**: `src/components/ScorePage.tsx`
+
+### 問題
+
+`ScorePage` は再生ボタンと音色プレビューのたびに `prepareAudioEngine()` を通るが、  
+以前の実装では `engineMode === 'built-in'` のたびに `recreateAudioEngine()` を呼び、
+`SimpleAudioEngine` を毎回新しく作り直していた。
+
+この方針は一見安全に見えるが、Safari では短い間隔で `AudioContext` を閉じて作り直すと、
+ユーザー操作直後でも出力経路が不安定になり、再生開始処理は通るのに実音だけ出ないことがあった。  
+とくに再生ボタンと音色プレビューは同じ経路を通るため、一度この状態に入ると両方まとめて無音になりやすい。
+
+### 修正設計
+
+通常の built-in 再生では既存エンジンを再利用し、毎回の再生成をやめる。  
+作り直しは次の「必要な場面」に限定する。
+
+- 音源方式やパック名を切り替えた直後
+- 一時 built-in フォールバックから本来の方式へ戻すとき
+- 背景復帰後の安全策で新しいエンジンへ差し替えるとき
+- 実際に再生が失敗し、最後の保険として built-in を作り直すとき
+
+これにより、Safari 向けに入れていた `SimpleAudioEngine.initialize()` の
+`resume / primeOutput / closed 再作成` といった復旧処理を生かしつつ、
+不要な `AudioContext` の作り直しだけを減らせる。
+
+```typescript
+// Before
+if (soundRuntimeSettings.engineMode === 'built-in') {
+  temporaryBuiltInFallbackRef.current = false;
+  audioEngine = recreateAudioEngine();
+} else if (temporaryBuiltInFallbackRef.current) {
+  // ...
+}
+
+// After
+if (temporaryBuiltInFallbackRef.current) {
+  temporaryBuiltInFallbackRef.current = false;
+  audioEngine = recreateAudioEngine();
+} else {
+  audioEngine = getAudioEngine();
+}
+```
+
+### 影響範囲
+
+- `prepareAudioEngine()` の built-in 準備経路
+- 再生ボタン (`handlePlay`)
+- 音色プレビュー (`handleInstrumentPreview`)
+
+### セキュリティ・安定性配慮
+
+- 再利用中でも `initialize()` を毎回通すため、`suspended / interrupted / closed` の状態確認は継続する
+- 復旧不能な失敗時は従来どおり `runWithPlaybackFallback()` から built-in 再生成へ退避する
+- 不要な `AudioContext` の増減を減らし、Safari 固有の不安定化を避ける
+
+---
+
+## 修正 12: Safari の silent failure に備えた手動音声復旧
+
+**ファイル**: `src/components/ScorePage.tsx`, `src/components/PlaybackControls.tsx`
+
+### 問題
+
+Safari では、再生開始処理も `initialize()` も成功し、例外も発生しないのに、
+実音だけ出ない `silent failure` が起こることがある。  
+この場合は `runWithPlaybackFallback()` も発火せず、アプリ側から「失敗」と判定しにくい。
+
+### 修正設計
+
+ツールバーに `音声復旧` ボタンを追加し、ユーザーが明示的に押したときだけ
+現在の再生エンジンを停止・破棄し、新しい `AudioContext` で再初期化する。
+
+```typescript
+getAudioEngine().stopAll();
+const recoveredEngine = recreateAudioEngine();
+await recoveredEngine.initialize();
+```
+
+これにより、Safari のタブやブラウザを閉じ直さなくても、
+ページ内だけで音声経路をリセットできる可能性が高くなる。
+
+### 影響範囲
+
+- `PlaybackControls` の音声操作 UI
+- `ScorePage` の音声復旧経路
+
+### セキュリティ・安定性配慮
+
+- 復旧処理はユーザー操作起点のボタンに限定し、自動で大量に `AudioContext` を作り直さない
+- 復旧前に `stopAll()` とタイマー初期化を行い、古い再生予約が残らないようにする
+- 復旧失敗時は、ページ再読み込みや Safari 再起動へ案内する
 - `handlePlay()`（新規再生パス）
 - `playback-sound-runtime-settings` の保持方針
 
@@ -745,3 +842,19 @@ synth.triggerAttackRelease(toneKeys, duration, time, velocity);
 - VexFlow の `StaveNote` は `keys: string[]` を元々受け入れており、変更なしで和音を表示できる
 - PolySynth も `string[]` を受け入れるため、音声側の変更は型変更のみ
 - テストファイル全件を `key: 'x/y'` → `keys: ['x/y']` に一括更新（7 ファイル）
+## 追記: 再生ボタン / プレビューボタンの built-in 最終フォールバック
+
+### 問題
+
+- 実ブラウザでは `SoundFont` 失敗時だけでなく、既存の built-in `AudioContext` が不安定化して無音になることがある
+- 既存の `runWithPlaybackFallback()` は `soundfont` モード時しか built-in へ逃がしておらず、再生ボタンと音色プレビューが同時に無音になるケースを拾い切れない
+
+### 修正
+
+- `src/components/ScorePage.tsx` の `runWithPlaybackFallback()` を一般化し、
+  優先エンジンでの再生が失敗したら **常に新しい built-in エンジンを生成して 1 回再試行** するようにした
+- これにより、SoundFont 読み込み失敗だけでなく、既存 `AudioContext` の不調でもユーザー操作に対して音が出る確率を上げる
+
+### 影響範囲
+
+- `src/components/ScorePage.tsx`

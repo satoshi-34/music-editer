@@ -336,7 +336,10 @@ export class SimpleAudioEngine implements PlaybackEngine {
   /**
    * 譜面データから音符を順次再生する
    */
-  async playScore(scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[] }> }>, bpm: number = 120): Promise<void> {
+  async playScore(
+    scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[]; velocity?: number }> }>,
+    bpm: number = 120
+  ): Promise<void> {
     await this.ensureContextReady();
     const context = this.context;
     if (!context) {
@@ -365,7 +368,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
           if (!event.isRest && event.keys && event.keys.length > 0) {
             // 音符の場合は最初の音高を再生（単音対応）
             const frequency = this.noteToFrequency(event.keys[0]);
-            await this.playNoteAtTime(frequency, duration, currentTime);
+            await this.playNoteAtTime(frequency, duration, currentTime, this.normalizePlaybackVelocity((event as { velocity?: number }).velocity));
           }
           // 休符の場合は時間だけ進める
           
@@ -384,7 +387,12 @@ export class SimpleAudioEngine implements PlaybackEngine {
   /**
    * 指定した時刻に音符を再生する（内部用）
    */
-  private async playNoteAtTime(frequency: number, duration: number, startTime: number): Promise<void> {
+  private async playNoteAtTime(
+    frequency: number,
+    duration: number,
+    startTime: number,
+    velocity: number = 0.5
+  ): Promise<void> {
     await this.ensureContextReady();
     const context = this.context;
     if (!context) {
@@ -410,9 +418,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
       
       // 未来の startTime を基準に、同じエンベロープを予約する。
       const adjustedAttack = this.getAdjustedAttack(instrumentConfig.attack);
-      const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain);
-      const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget);
-      const adjustedReleaseFloor = this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor);
+      // velocity は「その音符だけ、どのくらい強く鳴らすか」。
+      // 音色プリセットの形は保ちつつ、包絡線（音量カーブ）全体へ倍率として掛ける。
+      const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain) * velocity;
+      const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget) * velocity;
+      const adjustedReleaseFloor = Math.max(
+        0.0001,
+        this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor) * velocity
+      );
       const adjustedTailSeconds = this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0);
       gainNode.gain.setValueAtTime(0, startTime);
       gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, startTime + adjustedAttack);
@@ -450,6 +463,18 @@ export class SimpleAudioEngine implements PlaybackEngine {
     // 各パートは同じ AudioContext 上で、同じ現在時刻を基準に予約する。
     // そのため Promise.all にしても、時間がずれずに同時再生になる。
     await Promise.all(parts.map(part => this.playScore(part.measures, bpm)));
+  }
+
+  /**
+   * 画面側や保存データ側から渡る velocity は optional なので、
+   * ここで必ず安全な 0..1 に丸めてから発音へ使う。
+   */
+  private normalizePlaybackVelocity(rawVelocity: number | undefined): number {
+    if (typeof rawVelocity !== 'number' || !Number.isFinite(rawVelocity)) {
+      return 0.5;
+    }
+
+    return Math.max(0, Math.min(1, rawVelocity));
   }
 
   /**

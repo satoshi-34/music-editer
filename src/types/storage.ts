@@ -4,6 +4,14 @@
 import type { KeySignature } from '../utils/noteKeyUtils';
 
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
+export type AbsoluteDynamicMarking = 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff';
+export type RelativeDynamicMarking = 'cresc' | 'dim';
+export type DynamicMarkingValue = AbsoluteDynamicMarking | RelativeDynamicMarking;
+
+/** 強弱記号。NoteEvent にぶら下げて「この音符から効き始める記号」を表す */
+export interface DynamicMarking {
+  value: DynamicMarkingValue;
+}
 
 /** タイまたはスラーの弧。開始 NoteEvent の arcs[] に格納する */
 export interface TieArc {
@@ -45,6 +53,8 @@ export interface NoteEvent {
   tiedToNext?: boolean;
   /** タイ／スラーの弧リスト。この音符から他音符への接続を保持する */
   arcs?: TieArc[];
+  /** 強弱記号。この音符から効き始める記号を保持する */
+  dynamics?: DynamicMarking[];
 }
 
 export interface MeasureData {

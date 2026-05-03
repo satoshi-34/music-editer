@@ -7,6 +7,7 @@ type ToneModule = typeof import('tone');
 import { AudioEngine } from './AudioEngine';
 import { AudioErrorHandler, AudioErrorFactory } from './AudioError';
 import { SoundSource, InstrumentType } from './SoundSource';
+import type { DynamicMarking } from '../types/storage';
 
 /**
  * 音符の音価を表すキー
@@ -26,6 +27,8 @@ export interface NoteEvent {
    * 単音: 1要素、和音: 2要素以上
    */
   keys: string[];
+  /** 強弱記号。個別クリック再生でも大まかな音量差を確認できるようにする */
+  dynamics?: DynamicMarking[];
 }
 
 /**
@@ -228,7 +231,9 @@ export class NotePlayer {
 
     // Vexflow 形式（c/4）を Tone.js 形式（C4）に変換
     const toneKeys = noteEvent.keys.map(k => this._convertKeyToToneFormat(k));
-    const velocity = Math.max(0, Math.min(1, options.velocity || 0.5));
+    // 個別クリック再生は、まず「確実に音が出ること」を優先して従来どおり固定値を使う。
+    // 強弱差は譜面全体再生で反映し、クリック確認音は別タスクで安全に広げる。
+    const velocity = Math.max(0, Math.min(1, options.velocity ?? 0.5));
     const duration = options.duration;
     const time = options.time || '+0';
 

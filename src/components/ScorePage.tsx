@@ -31,6 +31,7 @@ import {
   type SoundEngineMode
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
+import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
 
 type PageSpec = { systems: number };
 
@@ -157,19 +158,19 @@ export default function ScorePage() {
   }, [currentInstrument, soundRuntimeSettings.engineMode, soundRuntimeSettings.pluginName]);
 
   const prepareAudioEngine = useCallback(async () => {
-    // 内蔵音源は Safari 対策として毎回新しいエンジンを作る。
-    // SoundFont は毎回作り直すと音源再読込が重いため、同じインスタンスを再利用する。
-    // つまり:
-    // - built-in: 安定性優先
-    // - soundfont: 読み込み速度優先
-    // という使い分けをここでしている。
+    // 以前は built-in を毎回作り直していたが、
+    // Safari では「再生ボタンを押すたびに AudioContext を閉じて作り直す」ほうが
+    // かえって不安定になり、再生ボタンとプレビューの両方が無音になることがあった。
+    //
+    // そのため通常時は既存エンジンを再利用し、
+    // 次のような「作り直しが本当に必要な場面」だけ再生成する。
+    // - 音源方式を切り替えた直後（useEffect 側で recreate 済み）
+    // - 一時的に built-in へ逃がしたあと、本来の方式へ戻すとき
+    // - 背景復帰後の安全策で新しいエンジンへ差し替えたあと
+    // - 実際に再生が失敗し、フォールバックで built-in を作り直すとき
     let audioEngine: PlaybackEngine;
 
-    if (soundRuntimeSettings.engineMode === 'built-in') {
-      // ユーザーが最初から内蔵音源を選んでいる場合は、毎回その設定で作り直す。
-      temporaryBuiltInFallbackRef.current = false;
-      audioEngine = recreateAudioEngine();
-    } else if (temporaryBuiltInFallbackRef.current) {
+    if (temporaryBuiltInFallbackRef.current) {
       // 直前の再生だけ内蔵音源へ逃がしていた場合は、
       // 次の操作で「本来ユーザーが選んでいた方式」に戻す。
       temporaryBuiltInFallbackRef.current = false;
@@ -206,16 +207,16 @@ export default function ScorePage() {
       const preferredEngine = await prepareAudioEngine();
       return await action(preferredEngine);
     } catch (error) {
-      if (soundRuntimeSettings.engineMode !== 'soundfont') {
-        throw error;
-      }
-
-      console.warn('[ScorePage] SoundFont再生に失敗したため、内蔵音源へフォールバックします:', error);
+      // 実ブラウザでは、SoundFont 失敗だけでなく
+      // 既存の built-in AudioContext が不安定化して無音になることもある。
+      // そのため「一度失敗したら、新しい built-in エンジンで再試行する」
+      // 共通の最終退避経路を用意しておく。
+      console.warn('[ScorePage] 優先エンジンでの再生に失敗したため、内蔵音源へフォールバックします:', error);
 
       const fallbackEngine = await switchToBuiltInFallbackEngine();
       return await action(fallbackEngine);
     }
-  }, [prepareAudioEngine, soundRuntimeSettings.engineMode, switchToBuiltInFallbackEngine]);
+  }, [prepareAudioEngine, switchToBuiltInFallbackEngine]);
 
   useEffect(() => {
     // 音源方式や SoundFont パック名が変わったときだけ、実体を差し替える。
@@ -298,11 +299,27 @@ export default function ScorePage() {
 
       await runWithPlaybackFallback(async (audioEngine) => {
         if (parts.length > 0) {
-          const partObjs = parts.map(measures => ({
-            // 再生エンジンは小節を先頭から順に読むだけなので、
-            // ここで楽譜記号を「実際に鳴らす順番」へ展開してから渡す。
-            measures: expandMeasuresForPlayback(measures).map(item => item.measure)
-          }));
+          const partObjs = parts.map(measures => {
+            // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
+            // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
+            // ここで「展開後の再生順」と「各音符のベロシティ」を一緒に作って渡す。
+            const expandedMeasures = expandMeasuresForPlayback(measures);
+            const dynamicVelocities = resolveDynamicVelocities(expandedMeasures.map(item => item.measure));
+
+            return {
+              measures: expandedMeasures.map((item, expandedMeasureIndex) => ({
+                ...item.measure,
+                events: item.measure.events.map((event, eventIndex) => ({
+                  ...event,
+                  // 強弱未設定や休符では velocity を省略し、
+                  // エンジン側の安全な既定値 0.5 をそのまま使う。
+                  velocity: event.isRest
+                    ? undefined
+                    : dynamicVelocities.get(buildDynamicEventKey(expandedMeasureIndex, eventIndex))
+                }))
+              }))
+            };
+          });
           await audioEngine.playParts(partObjs, tempoSettings.bpm);
 
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
@@ -408,6 +425,36 @@ export default function ScorePage() {
       console.error('[ScorePage] 音色プレビューに失敗:', error);
     }
   }, [runWithPlaybackFallback]);
+
+  const handleAudioRecovery = useCallback(async () => {
+    try {
+      // Safari の silent failure（処理は通るのに実音だけ出ない状態）は、
+      // 例外にならず自動フォールバックでも拾えないことがある。
+      // そのためユーザーが明示的に押したときだけ、
+      // いまの音声エンジンを安全に捨てて新しい AudioContext から復旧し直す。
+      clearPlaybackTimer();
+      resetPlaybackClock();
+      getAudioEngine().stopAll();
+      const recoveredEngine = recreateAudioEngine();
+      temporaryBuiltInFallbackRef.current = false;
+      recoveredEngine.setInstrument(currentInstrument);
+      recoveredEngine.setSoundProfile(soundRuntimeSettings.profile);
+      await recoveredEngine.initialize();
+      setPlaybackState('stopped');
+      setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+      alert('音声エンジンを復旧しました。もう一度、再生ボタンか音色プレビューをお試しください。');
+    } catch (error) {
+      console.error('[ScorePage] 音声復旧に失敗:', error);
+      alert('音声復旧に失敗しました。ページ再読み込み、または Safari の開き直しをお試しください。');
+    }
+  }, [
+    clearPlaybackTimer,
+    currentInstrument,
+    getAudioEngine,
+    recreateAudioEngine,
+    resetPlaybackClock,
+    soundRuntimeSettings.profile,
+  ]);
 
   const handleSoundEngineModeChange = useCallback((mode: SoundEngineMode) => {
     setSoundRuntimeSettings(prev => ({ ...prev, engineMode: mode }));
@@ -697,6 +744,7 @@ export default function ScorePage() {
             onTempoChange={handleTempoChange}
             onInstrumentChange={handleInstrumentChange}
             onInstrumentPreview={handleInstrumentPreview}
+            onAudioRecovery={handleAudioRecovery}
             soundRuntimeSettings={soundRuntimeSettings}
             onSoundEngineModeChange={handleSoundEngineModeChange}
             onPluginNameChange={handlePluginNameChange}

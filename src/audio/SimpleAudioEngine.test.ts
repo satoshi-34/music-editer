@@ -98,4 +98,21 @@ describe('SimpleAudioEngine', () => {
 
     expect(mockContext.resume).toHaveBeenCalled();
   });
+
+  it('playScore で event.velocity を発音時の強さに反映できる', async () => {
+    await engine.initialize();
+    const playNoteAtTimeSpy = vi.spyOn(engine as any, 'playNoteAtTime').mockResolvedValue(undefined);
+
+    await engine.playScore([
+      {
+        events: [
+          { dur: '4', isRest: false, keys: ['c/4'], velocity: 0.22 },
+          { dur: '4', isRest: false, keys: ['d/4'], velocity: 0.74 }
+        ]
+      }
+    ], 120);
+
+    expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(1, expect.any(Number), expect.any(Number), expect.any(Number), 0.22);
+    expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(2, expect.any(Number), expect.any(Number), expect.any(Number), 0.74);
+  });
 });

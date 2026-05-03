@@ -855,4 +855,45 @@ describe('Storage Foundation Tests', () => {
       expect(loadResult.data?.parts[0].measures[1].repeatEnd).toBe(true);
     });
   });
+
+  describe('強弱記号の保存互換', () => {
+    it('音符の dynamics を保存して読み戻せる', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Dynamic Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [
+            {
+              events: [{
+                dur: '4',
+                isRest: false,
+                keys: ['c/4'],
+                dynamics: [{ value: 'mf' }, { value: 'cresc' }]
+              }]
+            }
+          ]
+        }],
+        1,
+        1,
+        'single'
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.parts[0].measures[0].events[0].dynamics).toEqual([
+        { value: 'mf' },
+        { value: 'cresc' }
+      ]);
+    });
+  });
 });

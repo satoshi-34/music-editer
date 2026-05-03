@@ -7,7 +7,7 @@ import {
   Barline, Beam, Accidental, StaveConnector,
 } from 'vexflow';
 import type { Tool } from './Palette';
-import type { MeasureData, TieArc } from '../types/storage';
+import type { MeasureData, TieArc, DynamicMarking } from '../types/storage';
 import type { ClefType } from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
 import { NotePlayer } from '../audio/NotePlayer';
@@ -25,10 +25,11 @@ import {
   type KeySignature,
 } from '../utils/noteKeyUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
+import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[] };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[] };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 
 export type PartConfig = {
@@ -649,6 +650,11 @@ export default function PianoSystemCanvas({
 
     // 弧ドラッグ時に再計算できるよう、各弧の形状パラメータをキーで保持する
     const arcGeomMap=new Map<string,{x1:number;y1:number;x2:number;y2:number;upward:boolean;kind:'tie'|'slur';stemDir:number;obstacleY?:number;minNoteY?:number;maxNoteY?:number;startDx:number;startDy:number;endDx:number;endDy:number;cpDyOffset:number}>();
+    const dynamicTextEntries: Array<{
+      anchorX: number;
+      baseY: number;
+      markings: NonNullable<NoteEvent['dynamics']>;
+    }> = [];
 
     // SVG 背景クリック → 弧の選択とドラッグ状態を解除
     svg.addEventListener('click',()=>{
@@ -1159,6 +1165,10 @@ export default function PianoSystemCanvas({
             toggleRepeatMarkerAcrossParts(absI, tool.repeat);
             return;
           }
+          if('mode' in tool&&tool.mode==='dynamic'){
+            // 強弱記号は既存の音符へ付ける情報なので、背景クリックでは何もしない。
+            return;
+          }
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           if('mode' in tool&&tool.mode==='accidental'){
             if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
@@ -1281,6 +1291,7 @@ export default function PianoSystemCanvas({
                 return;
               }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
+              const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
@@ -1305,6 +1316,22 @@ export default function PianoSystemCanvas({
                 }
                 return;
               }
+              if (dynamicMode && !safeEvs[j]?.isRest) {
+                // 多段譜でも「この音符から強弱が始まる」と分かるよう、
+                // 音符セルクリックで直接 NoteEvent に強弱を付ける。
+                const nextEv = applyDynamicMarkingToEvent(safeEvs[j], dynamicMode);
+                setScore(prev=>{
+                  const next=prev.map(cloneMeasureData);
+                  if(absI>=next.length)return prev;
+                  const targetEv=next[absI].events[j];
+                  if(!targetEv||targetEv.isRest)return prev;
+                  next[absI].events[j]=applyDynamicMarkingToEvent(targetEv, dynamicMode);
+                  return next;
+                });
+                setSelected({partIndex:pi,measure:absI,index:j});
+                playNoteEvent(nextEv);
+                return;
+              }
 
               if(!safeEvs[j]?.isRest&&isOnNote){
 
@@ -1327,6 +1354,7 @@ export default function PianoSystemCanvas({
                 setSelected({partIndex:pi,measure:absI,index:j});
                 playNoteEvent(playEvent);
               }else if(safeEvs[j]?.isRest){
+                if (dynamicMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i===0 &&
                     lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
@@ -1349,12 +1377,21 @@ export default function PianoSystemCanvas({
                 // 休符クリック → 音符を挿入（rect が大きくなり insertRect に届かないため）
                 doInsert(lx,ly);
               }else{
+                if (dynamicMode) return;
                 if (accidentalMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsert(lx,ly);
               }
             });
             svgRoot.appendChild(hit);
+
+            if (!safeEvs[j]?.__isPlaceholder && safeEvs[j]?.dynamics?.length) {
+              dynamicTextEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                baseY: stave.getYForLine(4) + 26,
+                markings: safeEvs[j].dynamics,
+              });
+            }
 
             const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===j;
             if(isSel){
@@ -1371,6 +1408,27 @@ export default function PianoSystemCanvas({
 
       x+=w;
     }
+
+    dynamicTextEntries.forEach(({ anchorX, baseY, markings }) => {
+      const orderedMarkings = [...markings].sort((left, right) => {
+        const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
+        const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
+        return leftPriority - rightPriority;
+      });
+      orderedMarkings.forEach((marking, index) => {
+        const text=document.createElementNS('http://www.w3.org/2000/svg','text');
+        text.textContent=formatDynamicMarking(marking);
+        text.setAttribute('x',String(anchorX));
+        text.setAttribute('y',String(baseY + index * 14));
+        text.setAttribute('text-anchor','middle');
+        text.setAttribute('fill','#1f2937');
+        text.setAttribute('font-family','"Times New Roman", serif');
+        text.setAttribute('font-size',marking.value === 'cresc' || marking.value === 'dim' ? '12' : '16');
+        text.setAttribute('font-style','italic');
+        text.setAttribute('pointer-events','none');
+        svgRoot.appendChild(text);
+      });
+    });
 
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
     pendingArcsP.forEach(({partIndex,arc,arcIndex,startNote,startStave,startMeasureIdx,startEventIdx})=>{

@@ -177,11 +177,12 @@ export class SoundFontEngine implements PlaybackEngine {
           if (!event.isRest && event.keys.length > 0) {
             // 和音は keys を1つずつ同じ時刻で予約する。
             // SoundFont 側は単音 player なので、「同時刻に複数 start」を積む形で和音にする。
+            const velocity = this.normalizePlaybackVelocity(event.velocity);
             event.keys.forEach(key => {
               player.play(
                 this.normalizeNoteFormat(key),
                 partTime,
-                this.buildPlaybackOptions(duration)
+                this.buildPlaybackOptions(duration, velocity)
               );
             });
           }
@@ -319,7 +320,7 @@ export class SoundFontEngine implements PlaybackEngine {
     return note;
   }
 
-  private buildPlaybackOptions(duration: number) {
+  private buildPlaybackOptions(duration: number, velocity: number = 0.5) {
     const { brightness, attack, release, richness } = this.soundProfile;
 
     // SoundFont 側は元サンプルのキャラが強いので、
@@ -330,10 +331,20 @@ export class SoundFontEngine implements PlaybackEngine {
     // - release: 音を離したあとの残り方
     // - duration: release を少し足して、「余韻が増えた」と感じやすくする
     return {
-      gain: 0.45 + brightness * 0.15 + richness * 0.35,
+      // gain は音色キャラに加えて、強弱記号から来た velocity でも上下させる。
+      // ただし極端な値は歪みや無音の原因になるため、最後に安全域へ丸める。
+      gain: Math.max(0.05, Math.min(1, (0.45 + brightness * 0.15 + richness * 0.35) * velocity)),
       attack: 0.001 + attack * 0.04,
       release: 0.05 + release * 0.45,
       duration: duration + release * 0.15
     };
+  }
+
+  private normalizePlaybackVelocity(rawVelocity: number | undefined): number {
+    if (typeof rawVelocity !== 'number' || !Number.isFinite(rawVelocity)) {
+      return 0.5;
+    }
+
+    return Math.max(0, Math.min(1, rawVelocity));
   }
 }

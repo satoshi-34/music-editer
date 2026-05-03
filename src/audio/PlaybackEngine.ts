@@ -5,6 +5,11 @@ export interface PlaybackMeasureEvent {
   dur: string;
   isRest: boolean;
   keys: string[];
+  /**
+   * 再生時の音量係数（0..1）。
+   * 強弱未設定の古いデータやプレビュー互換のため optional にしている。
+   */
+  velocity?: number;
 }
 
 export interface PlaybackPart {

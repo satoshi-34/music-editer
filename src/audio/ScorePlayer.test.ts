@@ -252,6 +252,22 @@ describe('ScorePlayer', () => {
 
       expect(getScheduledEventsFromLatestPart().map(event => event.measureIndex)).toEqual([0, 1, 0, 1, 2]);
     });
+
+    it('強弱記号がある音符はベロシティを変えてスケジュールされる', async () => {
+      const measures: MeasureData[] = [
+        {
+          events: [
+            { dur: '4', isRest: false, keys: ['c/4'], dynamics: [{ value: 'p' }] },
+            { dur: '4', isRest: false, keys: ['d/4'], dynamics: [{ value: 'f' }] }
+          ]
+        }
+      ];
+
+      scorePlayer.loadScore(measures);
+      await scorePlayer.play();
+
+      expect(getScheduledEventsFromLatestPart().map(event => event.velocity)).toEqual([0.34, 0.74]);
+    });
   });
 
   describe('pause', () => {
