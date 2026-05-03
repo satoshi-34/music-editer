@@ -8,6 +8,12 @@ import { InstrumentType } from './SoundSource';
 type SoundFontModule = typeof import('soundfont-player');
 
 const DEFAULT_SOUNDFONT_NAME = 'MusyngKite';
+const KNOWN_SOUNDFONT_NAMES = new Set([
+  'MusyngKite',
+  'FluidR3_GM',
+  'FatBoy',
+  'GeneralUser_GS'
+]);
 
 const DURATION_TO_BEATS: Record<string, number> = {
   '1': 4,
@@ -88,7 +94,18 @@ export function mapInstrumentTypeToSoundFontName(instrument: InstrumentType): st
  */
 export function resolveSoundFontName(rawName: string): string {
   const trimmed = rawName.trim();
-  return trimmed.length > 0 ? trimmed : DEFAULT_SOUNDFONT_NAME;
+  if (trimmed.length === 0) {
+    return DEFAULT_SOUNDFONT_NAME;
+  }
+
+  // SoundFont パック名は外部 URL の一部として使われるため、
+  // 既知の安定した候補以外は既定値へ戻して「無音だけどエラーも分かりにくい」状態を減らす。
+  if (!KNOWN_SOUNDFONT_NAMES.has(trimmed)) {
+    console.warn('[SoundFontEngine] 未対応のSoundFontパック名が指定されたため、既定値へ戻します:', trimmed);
+    return DEFAULT_SOUNDFONT_NAME;
+  }
+
+  return trimmed;
 }
 
 /**

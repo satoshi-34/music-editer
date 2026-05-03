@@ -61,11 +61,11 @@ const toolArbitrary: fc.Arbitrary<Tool> = fc.record({
 const noteEventArbitrary: fc.Arbitrary<NoteEvent> = fc.record({
   dur: durKeyArbitrary,
   isRest: fc.boolean(),
-  key: fc.oneof(
+  keys: fc.array(fc.oneof(
     // Generate valid musical keys
     fc.constantFrom('c/4', 'd/4', 'e/4', 'f/4', 'g/4', 'a/4', 'b/4'),
     fc.constantFrom('c/5', 'd/5', 'e/5', 'f/5', 'g/5', 'a/5', 'b/5')
-  )
+  ), { minLength: 1, maxLength: 3 })
 });
 
 const measureDataArbitrary: fc.Arbitrary<MeasureData> = fc.record({
@@ -108,8 +108,8 @@ describe('Backward Compatibility Tests', () => {
               const buttons = document.querySelectorAll('button');
               expect(buttons.length).toBeGreaterThan(0);
 
-              // Verify all duration buttons are present (7 notes + 7 rests = 14)
-              expect(buttons.length).toBe(14);
+              // 音価14個に加えて、タイ1個・臨時記号3個・リピート2個を表示する。
+              expect(buttons.length).toBe(20);
 
               // Verify buttons are interactive (not disabled by save/load features)
               buttons.forEach(button => {
@@ -144,11 +144,11 @@ describe('Backward Compatibility Tests', () => {
               for (const event of measure.events) {
                 expect(event).toHaveProperty('dur');
                 expect(event).toHaveProperty('isRest');
-                expect(event).toHaveProperty('key');
+                expect(event).toHaveProperty('keys');
                 expect(['1', '2', '4', '8', '16', '32', '64']).toContain(event.dur);
                 expect(typeof event.isRest).toBe('boolean');
-                expect(typeof event.key).toBe('string');
-                expect(event.key.length).toBeGreaterThan(0);
+                expect(Array.isArray(event.keys)).toBe(true);
+                expect(event.keys.length).toBeGreaterThan(0);
               }
             }
           }
@@ -213,8 +213,8 @@ describe('Backward Compatibility Tests', () => {
 
       try {
         const buttons = document.querySelectorAll('button');
-        // 7 note durations + 7 rest durations = 14 buttons
-        expect(buttons.length).toBe(14);
+        // 音価14個 + タイ1個 + 臨時記号3個 + リピート2個
+        expect(buttons.length).toBe(20);
       } finally {
         unmount();
       }

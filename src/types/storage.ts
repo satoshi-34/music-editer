@@ -49,6 +49,10 @@ export interface NoteEvent {
 
 export interface MeasureData {
   events: NoteEvent[];
+  /** 小節の左側に開始リピート（||:）を表示する */
+  repeatStart?: boolean;
+  /** 小節の右側に終了リピート（:||）を表示する */
+  repeatEnd?: boolean;
 }
 
 export interface ScoreMetadata {

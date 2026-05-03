@@ -822,4 +822,37 @@ describe('Storage Foundation Tests', () => {
       expect(loadResult.data?.keySignature).toBe('C');
     });
   });
+
+  describe('リピート記号の保存互換', () => {
+    it('小節の repeatStart / repeatEnd を保存して読み戻せる', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Repeat Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [
+            { events: [{ dur: '4', isRest: false, keys: ['c/4'] }], repeatStart: true },
+            { events: [{ dur: '4', isRest: false, keys: ['d/4'] }], repeatEnd: true }
+          ]
+        }],
+        1,
+        2,
+        'single'
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.parts[0].measures[0].repeatStart).toBe(true);
+      expect(loadResult.data?.parts[0].measures[1].repeatEnd).toBe(true);
+    });
+  });
 });

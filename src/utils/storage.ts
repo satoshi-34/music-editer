@@ -23,7 +23,7 @@ export const STORAGE_KEYS = {
 } as const;
 
 // Current version for data migration
-export const CURRENT_VERSION = '3.1.0';
+export const CURRENT_VERSION = '3.2.0';
 
 /**
  * Generates a simple checksum for data integrity verification
@@ -71,6 +71,7 @@ function migrateKeyToKeys(parts: any[]): any[] {
   return parts.map(part => ({
     ...part,
     measures: (part.measures ?? []).map((m: any) => ({
+      ...m,
       events: (m.events ?? []).map((ev: any) => {
         // 旧形式: key（文字列）があって keys（配列）がない場合は変換する
         if (ev && typeof ev.key === 'string' && !Array.isArray(ev.keys)) {
@@ -91,7 +92,9 @@ function validateMeasureData(measure: any): measure is MeasureData {
     measure &&
     typeof measure === 'object' &&
     Array.isArray(measure.events) &&
-    measure.events.every(validateNoteEvent)
+    measure.events.every(validateNoteEvent) &&
+    (measure.repeatStart === undefined || typeof measure.repeatStart === 'boolean') &&
+    (measure.repeatEnd === undefined || typeof measure.repeatEnd === 'boolean')
   );
 }
 

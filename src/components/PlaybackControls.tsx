@@ -439,6 +439,13 @@ export default function PlaybackControls({
                   />
                 </label>
 
+                {soundRuntimeSettings.engineMode === 'soundfont' && (
+                  <div style={{ fontSize: 12, color: '#4b5563', lineHeight: 1.5 }}>
+                    安全に動作確認しやすい SoundFont パック名は `MusyngKite` / `FluidR3_GM` / `FatBoy` / `GeneralUser_GS` です。
+                    それ以外の名前は、無音を避けるため内部で `MusyngKite` に戻します。
+                  </div>
+                )}
+
                 <div style={{ fontSize: 12, color: '#4b5563', lineHeight: 1.5 }}>
                   {/* この説明文は、専門用語だけを並べずに
                       「どれを選ぶと何が起きるか」を最短で伝えるためのもの。 */}

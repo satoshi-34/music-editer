@@ -24,6 +24,7 @@ import {
   type MeasureAccidentalState,
   type KeySignature,
 } from '../utils/noteKeyUtils';
+import { cloneMeasureData, createEmptyMeasure, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -341,6 +342,11 @@ export default function PianoSystemCanvas({
   const [partsScore, setPartsScore] = useState<MeasureData[][]>(
     () => parts.map(p => mkInit(p.data))
   );
+  const toggleRepeatMarkerAcrossParts = (measureIndex: number, kind: 'start' | 'end') => {
+    // リピート記号はシステム全体でそろって見える方が自然なので、
+    // 多段譜ではクリックした1段だけでなく全パートへ同じ印を付ける。
+    setPartsScore(prev => prev.map(partScore => toggleMeasureRepeatMarker(partScore ?? [], measureIndex, kind)));
+  };
   const [selected, setSelected] = useState<Sel>(null);
   const selRef = useRef<Sel>(null);
   const disRef = useRef(disabled);
@@ -478,7 +484,7 @@ export default function PianoSystemCanvas({
         if(JSON.stringify(part.data)===JSON.stringify(prev[i]))return;
         const req=startMeasureIndex+measuresPerSystem;
         let newScore: MeasureData[];
-        if(part.data.length<req){const e=[...part.data];while(e.length<req)e.push({events:[]});newScore=e;}
+        if(part.data.length<req){const e=[...part.data];while(e.length<req)e.push(createEmptyMeasure());newScore=e;}
         else newScore=part.data;
         next[i]=newScore;
         changed=true;
@@ -519,7 +525,7 @@ export default function PianoSystemCanvas({
         if(e.key==='Delete'||e.key==='Backspace'){
           setPartsScore(prev=>{
             const next=[...prev];
-            const partData=(prev[arcSel.partIndex]??[]).map(m=>({events:[...m.events] as NoteEvent[]}));
+            const partData=(prev[arcSel.partIndex]??[]).map(cloneMeasureData);
             const ev=partData[arcSel.fromMeasure]?.events[arcSel.fromEvent];
             if(!ev?.arcs)return prev;
             const newArcs=ev.arcs.filter((_,i)=>i!==arcSel.arcIndex);
@@ -551,7 +557,7 @@ export default function PianoSystemCanvas({
       if(e.key==='Delete'||e.key==='Backspace'){
         setS(prev=>{
           if(measure>=prev.length)return prev;
-          const n=prev.map(m=>({events:[...m.events] as NoteEvent[]}));
+          const n=prev.map(cloneMeasureData);
           if(index>=n[measure].events.length)return prev;
           n[measure].events.splice(index,1);
           // 削除した音符を終点とする arcs を除去し、後続インデックスを繰り上げる
@@ -743,7 +749,7 @@ export default function PianoSystemCanvas({
         const newDy=drag.originalDy+(svgY-drag.startSvgY);
         setPartsScore(prev=>{
           const next=[...prev];
-          const partData=(prev[drag.partIndex]??[]).map(m=>({events:[...m.events] as NoteEvent[]}));
+          const partData=(prev[drag.partIndex]??[]).map(cloneMeasureData);
           const ev2=partData[drag.fromMeasure]?.events[drag.fromEvent];
           if(!ev2?.arcs?.[drag.arcIndex])return prev;
           const patchedArcs=[...ev2.arcs];
@@ -770,7 +776,7 @@ export default function PianoSystemCanvas({
         const newOffset=drag.originalOffset+(svgY-drag.startSvgY);
         setPartsScore(prev=>{
           const next=[...prev];
-          const partData=(prev[drag.partIndex]??[]).map(m=>({events:[...m.events] as NoteEvent[]}));
+          const partData=(prev[drag.partIndex]??[]).map(cloneMeasureData);
           const ev2=partData[drag.fromMeasure]?.events[drag.fromEvent];
           if(!ev2?.arcs?.[drag.arcIndex])return prev;
           const patchedArcs=[...ev2.arcs];
@@ -820,6 +826,7 @@ export default function PianoSystemCanvas({
     for(let i=0;i<measuresPerSystem;i++){
       const w=realWs[i];
       parts.forEach((part, pi) => {
+        const currentMeasure = (partsScore[pi] ?? part.data)[startMeasureIndex + i];
         const stave=new Stave(x/s, staveYs[pi]/s, w/s);
         if(i===0){
           stave.addClef(part.clef);
@@ -828,7 +835,12 @@ export default function PianoSystemCanvas({
             stave.addKeySignature(normalizedKeySignature);
           }
         }
-        stave.setEndBarType(Barline.type.SINGLE);
+        if (currentMeasure?.repeatStart) {
+          // 多段譜では各段の左端に同じ開始リピート記号を出して、
+          // 楽器ごとに見た目がずれないようにそろえる。
+          stave.setBegBarType(Barline.type.REPEAT_BEGIN);
+        }
+        stave.setEndBarType(currentMeasure?.repeatEnd ? Barline.type.REPEAT_END : Barline.type.SINGLE);
         stave.setContext(ctx);
         stave.format();
         placeKeySignatureAfterTimeSignature(stave);
@@ -1084,7 +1096,7 @@ export default function PianoSystemCanvas({
           if(m1>m2||(m1===m2&&n1>n2)){[m1,n1,m2,n2]=[m2,n2,m1,n1];[fromKey,toKey]=[toKey,fromKey];}
           if(m1===m2&&n1===n2)return;
           setScore(prev=>{
-            const next=prev.map(m=>({events:[...(m?.events??[])] as NoteEvent[]}));
+            const next=prev.map(cloneMeasureData);
             const startEv=next[m1]?.events[n1];
             if(!startEv||startEv.isRest)return prev;
             const arc:TieArc={fromKey,toKey,toMeasureIndex:m2,toEventIndex:n2,kind};
@@ -1110,8 +1122,8 @@ export default function PianoSystemCanvas({
             }
           }
           setScore(prev=>{
-            const next=prev.map(m=>({events:[...(m?.events??[])] as NoteEvent[]}));
-            while(absI>=next.length)next.push({events:[]});
+            const next=prev.map(cloneMeasureData);
+            while(absI>=next.length)next.push(createEmptyMeasure());
             const m=next[absI];
             const vfd=toVFDur((tool as any)?.duration);
             const addB=beatsFromVF(vfd);
@@ -1143,6 +1155,10 @@ export default function PianoSystemCanvas({
           if(disabled)return;
           setSelectedArc(null);
           if('mode' in tool&&tool.mode==='tie')return;
+          if('mode' in tool&&tool.mode==='repeat'){
+            toggleRepeatMarkerAcrossParts(absI, tool.repeat);
+            return;
+          }
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           if('mode' in tool&&tool.mode==='accidental'){
             if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
@@ -1260,6 +1276,10 @@ export default function PianoSystemCanvas({
               e.stopPropagation();
               setSelectedArc(null);
               if('mode' in tool&&tool.mode==='tie')return;
+              if('mode' in tool&&tool.mode==='repeat'){
+                toggleRepeatMarkerAcrossParts(absI, tool.repeat);
+                return;
+              }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
@@ -1272,7 +1292,7 @@ export default function PianoSystemCanvas({
                 // 和音追加より先にこちらを処理する。
                 const nextEv = applyAccidentalToEvent(safeEvs[j], accidentalMode);
                 setScore(prev=>{
-                  const next=prev.map(m=>({events:[...(m?.events??[])] as NoteEvent[]}));
+                  const next=prev.map(cloneMeasureData);
                   if(absI>=next.length)return prev;
                   const targetEv=next[absI].events[j];
                   if(!targetEv||targetEv.isRest)return prev;
@@ -1296,7 +1316,7 @@ export default function PianoSystemCanvas({
                   const newKeys=[...currentEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
                   playEvent = { ...currentEv, keys: newKeys };
                   setScore(prev=>{
-                    const next=prev.map(m=>({events:[...(m?.events??[])] as NoteEvent[]}));
+                    const next=prev.map(cloneMeasureData);
                     if(absI>=next.length)return prev;
                     const targetEv=next[absI].events[j];
                     if(!targetEv||targetEv.isRest)return prev;

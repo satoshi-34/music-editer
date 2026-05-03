@@ -12,6 +12,7 @@
 import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 import type { AccidentalToolKind } from '../utils/noteKeyUtils';
+import type { RepeatMarkerKind } from '../utils/repeatMarkerUtils';
 
 // ========== 表示サイズ＆色（ボタン側と合わせる） ==========
 const BUTTON_W = 56;   // ボタン幅（CSSと合わせる）
@@ -36,9 +37,11 @@ export function normalizeToVF(d: DurKey): 'w'|'h'|'q'|'8'|'16'|'32'|'64' {
 export type Tool =
   | { duration: DurKey; isRest?: boolean }  // 通常の音符/休符入力
   | { mode: 'tie' }                         // タイ記号を付けるモード
-  | { mode: 'accidental'; accidental: AccidentalToolKind }; // 臨時記号を付けるモード
+  | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
+  | { mode: 'repeat'; repeat: RepeatMarkerKind };           // リピート記号を付けるモード
 
 type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
+type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
 
 // 並べるアイテム（上段=音符, 下段=休符）
 const ROW1: Tool[] = ['1','2','4','8','16','32','64'].map(d => ({ duration: d as DurKey }));
@@ -85,6 +88,10 @@ const ACCIDENTAL_TOOLS: AccidentalTool[] = [
   { mode: 'accidental', accidental: 'flat' },
   { mode: 'accidental', accidental: 'natural' },
 ];
+const REPEAT_TOOLS: RepeatTool[] = [
+  { mode: 'repeat', repeat: 'start' },
+  { mode: 'repeat', repeat: 'end' },
+];
 
 export default function Palette({
   value, onChange,
@@ -96,6 +103,9 @@ export default function Palette({
   const tieActive = 'mode' in value && value.mode === 'tie';
   const selectedAccidental = 'mode' in value && value.mode === 'accidental'
     ? value.accidental
+    : null;
+  const selectedRepeat = 'mode' in value && value.mode === 'repeat'
+    ? value.repeat
     : null;
 
   return (
@@ -200,6 +210,37 @@ export default function Palette({
             </button>
           );
         })}
+
+        {REPEAT_TOOLS.map((tool) => {
+          const isActive = selectedRepeat === tool.repeat;
+          return (
+            <button
+              type="button"
+              key={tool.repeat}
+              onClick={() => onChange(isActive ? ROW1[2] : tool)}
+              aria-label={repeatLabel(tool.repeat)}
+              title={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
+              style={{
+                width: BUTTON_W,
+                height: BUTTON_H,
+                padding: 0,
+                borderRadius: 10,
+                border: isActive ? '2px solid #3b82f6' : '1px solid #ccc',
+                background: isActive ? '#eff6ff' : '#fff',
+                color: '#222',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: 18,
+                fontFamily: '"Times New Roman", serif',
+                lineHeight: 1,
+              }}
+            >
+              {repeatSymbol(tool.repeat)}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -216,6 +257,14 @@ function accidentalSymbol(kind: AccidentalToolKind) {
 
 function accidentalLabel(kind: AccidentalToolKind) {
   return kind === 'sharp' ? 'シャープ' : kind === 'flat' ? 'フラット' : 'ナチュラル';
+}
+
+function repeatSymbol(kind: RepeatMarkerKind) {
+  return kind === 'start' ? '||:' : ':||';
+}
+
+function repeatLabel(kind: RepeatMarkerKind) {
+  return kind === 'start' ? '開始リピート' : '終了リピート';
 }
 
 /**

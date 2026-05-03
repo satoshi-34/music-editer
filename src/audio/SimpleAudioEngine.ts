@@ -1068,7 +1068,36 @@ export class SimpleAudioEngine implements PlaybackEngine {
     unlockOscillator.stop(stopTime);
 
     await new Promise<void>((resolve) => {
+      let finished = false;
+      const finish = () => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        this.hasPrimedOutput = true;
+        console.log('[SimpleAudioEngine] 出力経路をウォームアップしました');
+        resolve();
+      };
+
+      // 一部ブラウザでは ended が来ないことがある。
+      // その場合でも初期化が止まり続けないよう、短い保険タイマーで先へ進める。
+      const fallbackTimer = setTimeout(() => {
+        try {
+          unlockOscillator.disconnect();
+        } catch {
+          // 切断済みでも処理は続ける
+        }
+        try {
+          unlockGain.disconnect();
+        } catch {
+          // 切断済みでも処理は続ける
+        }
+        console.warn('[SimpleAudioEngine] ウォームアップ完了イベントが来なかったため、タイムアウトで続行します');
+        finish();
+      }, 120);
+
       unlockOscillator.addEventListener('ended', () => {
+        clearTimeout(fallbackTimer);
         try {
           unlockOscillator.disconnect();
         } catch {
@@ -1079,9 +1108,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
         } catch {
           // 二重切断でも処理は続ける
         }
-        this.hasPrimedOutput = true;
-        console.log('[SimpleAudioEngine] 出力経路をウォームアップしました');
-        resolve();
+        finish();
       }, { once: true });
     });
   }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental} from 'vexflow';
 import type { Tool } from './Palette';
-import type { TieArc } from '../types/storage';
+import type { TieArc, MeasureData, NoteEvent, DurKey } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
@@ -17,6 +17,7 @@ import {
   type MeasureAccidentalState,
   type KeySignature,
 } from '../utils/noteKeyUtils';
+import { cloneMeasureData, createEmptyMeasure, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -29,9 +30,6 @@ import {
    - ガイド（横線&点）は小節rectと各セルrectのどちらに居ても出る
    ============================================================ */
 
-type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[] };
-type MeasureData = { events: NoteEvent[] };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 
 type Props = {
@@ -620,7 +618,7 @@ export default function StaffCanvas({
         // 不足分を空の小節で埋める
         const extended = [...initialScoreData];
         while (extended.length < requiredLength) {
-          extended.push({ events: [] });
+          extended.push(createEmptyMeasure());
         }
         setScore(extended);
       } else {
@@ -666,7 +664,7 @@ export default function StaffCanvas({
       if (arcSel) {
         if (e.key === 'Delete' || e.key === 'Backspace') {
           setScore(prev => {
-            const next = prev.map(m => ({ events: [...m.events] as NoteEvent[] }));
+            const next = prev.map(cloneMeasureData);
             const ev = next[arcSel.fromMeasure]?.events[arcSel.fromEvent];
             if (!ev?.arcs) return prev;
             const newArcs = ev.arcs.filter((_, i) => i !== arcSel.arcIndex);
@@ -691,7 +689,7 @@ export default function StaffCanvas({
       if (e.key === 'Delete' || e.key === 'Backspace') {
         setScore(prev => {
           if (!inRange(prev, measure)) return prev;
-          const next = prev.map(m => ({ events: [...m.events] as NoteEvent[] }));
+          const next = prev.map(cloneMeasureData);
           if (!inRange(next[measure].events, index)) return prev;
           next[measure].events.splice(index, 1);
           // 削除した音符を終点とする arcs を除去し、後続インデックスを繰り上げる
@@ -932,7 +930,7 @@ export default function StaffCanvas({
         const newDx = drag.originalDx + (svgX - drag.startSvgX);
         const newDy = drag.originalDy + (svgY - drag.startSvgY);
         setScore(prev => {
-          const next = prev.map(m => ({ events: [...m.events] as NoteEvent[] }));
+          const next = prev.map(cloneMeasureData);
           const ev2 = next[drag.fromMeasure]?.events[drag.fromEvent];
           if (!ev2?.arcs?.[drag.arcIndex]) return prev;
           const patchedArcs = [...ev2.arcs];
@@ -957,7 +955,7 @@ export default function StaffCanvas({
         const { y: svgY } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
         const newOffset = drag.originalOffset + (svgY - drag.startSvgY);
         setScore(prev => {
-          const next = prev.map(m => ({ events: [...m.events] as NoteEvent[] }));
+          const next = prev.map(cloneMeasureData);
           const ev2 = next[drag.fromMeasure]?.events[drag.fromEvent];
           if (!ev2?.arcs?.[drag.arcIndex]) return prev;
           const patchedArcs = [...ev2.arcs];
@@ -1216,7 +1214,12 @@ export default function StaffCanvas({
             stave.addKeySignature(normalizedKeySignature);
           }
         }
-        stave.setEndBarType(Barline.type.SINGLE);
+        if (data?.repeatStart) {
+          // 小節の先頭に開始リピート記号（||:）を描く。
+          // VexFlow では begin / end を別々に指定するので、左側は setBegBarType を使う。
+          stave.setBegBarType(Barline.type.REPEAT_BEGIN);
+        }
+        stave.setEndBarType(data?.repeatEnd ? Barline.type.REPEAT_END : Barline.type.SINGLE);
         stave.setContext(ctx);
         stave.format();
         placeKeySignatureAfterTimeSignature(stave);
@@ -1373,7 +1376,7 @@ export default function StaffCanvas({
           }
           if (m1 === m2 && n1 === n2) return;
           setScore(prev => {
-            const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
+            const next = prev.map(cloneMeasureData);
             const startEv = next[m1]?.events[n1];
             if (!startEv || startEv.isRest) return prev;
             const arc: TieArc = { fromKey, toKey, toMeasureIndex: m2, toEventIndex: n2, kind };
@@ -1423,8 +1426,8 @@ export default function StaffCanvas({
           logNoteAddition(absoluteMeasureIndex, localX, localY, key);
 
           setScore(prev => {
-            const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
-            while (absoluteMeasureIndex >= next.length) next.push({ events: [] });
+            const next = prev.map(cloneMeasureData);
+            while (absoluteMeasureIndex >= next.length) next.push(createEmptyMeasure());
             const m = next[absoluteMeasureIndex];
 
             const vfDur = toVFDur((tool as any)?.duration);
@@ -1486,6 +1489,12 @@ export default function StaffCanvas({
           setSelectedArc(null);
           // タイモード中は音符挿入しない
           if ('mode' in tool && tool.mode === 'tie') return;
+          if ('mode' in tool && tool.mode === 'repeat') {
+            // リピート記号は「小節単位」の情報なので、
+            // 背景クリックでは音高ではなく小節番号だけを見てトグルする。
+            setScore(prev => toggleMeasureRepeatMarker(prev, absoluteIndex, tool.repeat));
+            return;
+          }
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
           if ('mode' in tool && tool.mode === 'accidental') {
             if (i === 0 && lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right) {
@@ -1621,6 +1630,10 @@ export default function StaffCanvas({
               setSelectedArc(null);
               // タイモードではドラッグで操作するため、クリックは何もしない
               if ('mode' in tool && tool.mode === 'tie') return;
+              if ('mode' in tool && tool.mode === 'repeat') {
+                setScore(prev => toggleMeasureRepeatMarker(prev, absoluteIndex, tool.repeat));
+                return;
+              }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
 
@@ -1635,7 +1648,7 @@ export default function StaffCanvas({
                 const currentEv = safeEvents[j];
                 const nextEv = applyAccidentalToEvent(currentEv, accidentalMode);
                 setScore(prev => {
-                  const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
+                  const next = prev.map(cloneMeasureData);
                   if (absoluteIndex >= next.length) return prev;
                   const targetEv = next[absoluteIndex].events[j];
                   if (!targetEv || targetEv.isRest) return prev;
@@ -1661,7 +1674,7 @@ export default function StaffCanvas({
                   const newKeys = [...currentEv.keys, newKey].sort((a, b) => keyToLine(b) - keyToLine(a));
                   playEvent = { ...currentEv, keys: newKeys };
                   setScore(prev => {
-                    const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
+                    const next = prev.map(cloneMeasureData);
                     if (absoluteIndex >= next.length) return prev;
                     const targetEv = next[absoluteIndex].events[j];
                     if (!targetEv || targetEv.isRest) return prev;

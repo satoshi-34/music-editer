@@ -26,20 +26,28 @@ import {
 } from '../utils/noteKeyUtils';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
+  sanitizePlaybackRuntimeSettings,
   type PlaybackSoundRuntimeSettings,
   type SoundEngineMode
 } from '../audio/playbackSettings';
+import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
 
 type PageSpec = { systems: number };
 
 const BEATS_PER_MEASURE = 4;
+const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 
 function calculateScoreDuration(scoreData: MeasureData[], bpm: number): number {
+  // 再生時間の見積もりも、実際に鳴らす順番と同じでないとずれる。
+  // 例えば 2 小節ぶんを繰り返す譜面なのに元データの長さだけで測ると、
+  // UI が先に stopped へ戻ってしまうため、ここでも先に展開しておく。
+  const expandedScoreData = expandMeasuresForPlayback(scoreData).map(item => item.measure);
+
   // 末尾の空小節は実際には再生対象がないため、終了タイマーには含めない。
   // 途中の空小節は「全休符の小節」として長さを保持する。
   let lastUsedMeasureIndex = -1;
-  for (let i = scoreData.length - 1; i >= 0; i--) {
-    const measure = scoreData[i];
+  for (let i = expandedScoreData.length - 1; i >= 0; i--) {
+    const measure = expandedScoreData[i];
     if (measure?.events && measure.events.length > 0) {
       lastUsedMeasureIndex = i;
       break;
@@ -52,7 +60,7 @@ function calculateScoreDuration(scoreData: MeasureData[], bpm: number): number {
 
   let totalDuration = 0;
   for (let i = 0; i <= lastUsedMeasureIndex; i++) {
-    const measure = scoreData[i];
+    const measure = expandedScoreData[i];
     if (!measure || !measure.events || measure.events.length === 0) {
       totalDuration += (60 / bpm) * BEATS_PER_MEASURE;
     } else {
@@ -111,21 +119,12 @@ export default function ScorePage() {
   // いきなりシンセの専門用語を見せず、まずはエンドユーザーが触りやすい値にしている。
   const [soundRuntimeSettings, setSoundRuntimeSettings] = useState<PlaybackSoundRuntimeSettings>(() => {
     try {
-      const stored = localStorage.getItem('playback-sound-runtime-settings');
+      const stored = localStorage.getItem(PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY);
       if (!stored) {
         return DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS;
       }
 
-      const parsed = JSON.parse(stored) as Partial<PlaybackSoundRuntimeSettings>;
-      return {
-        engineMode: parsed.engineMode ?? DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.engineMode,
-        pluginName: parsed.pluginName ?? DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.pluginName,
-        previewAccidentalOnApply: parsed.previewAccidentalOnApply ?? DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.previewAccidentalOnApply,
-        profile: {
-          ...DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile,
-          ...(parsed.profile ?? {})
-        }
-      };
+      return sanitizePlaybackRuntimeSettings(JSON.parse(stored));
     } catch {
       return DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS;
     }
@@ -137,7 +136,6 @@ export default function ScorePage() {
   const playbackStartedAtRef = useRef<number | null>(null);
   // 一時停止時点で「あと何ミリ秒残っているか」を覚えておく。
   const remainingPlaybackMsRef = useRef<number>(0);
-
   useEffect(() => {
     console.log('[ScorePage] 再生エンジンが準備されました');
   }, []);
@@ -229,34 +227,26 @@ export default function ScorePage() {
   useEffect(() => {
     // UI で動かした音のキャラ設定を保存しつつ、今のエンジンにも即反映する。
     // こうしておくと、次回起動時も同じ音色傾向から作業を再開できる。
-    localStorage.setItem('playback-sound-runtime-settings', JSON.stringify(soundRuntimeSettings));
+    localStorage.setItem(PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY, JSON.stringify(soundRuntimeSettings));
     getAudioEngine().setSoundProfile(soundRuntimeSettings.profile);
   }, [getAudioEngine, soundRuntimeSettings]);
 
   const clearPlaybackTimer = useCallback(() => {
     if (playbackTimerRef.current !== null) {
+      // 再生終了予約は「最後に 1 つだけ」が正しい。
+      // 古い予約を残したままにすると、次の再生中に前の予約が発火して
+      // UI だけ stopped に戻ることがあるため、ここで必ず消す。
       clearTimeout(playbackTimerRef.current);
       playbackTimerRef.current = null;
     }
   }, []);
 
   const resetPlaybackClock = useCallback(() => {
+    // 2 つの ref は「いつ始まったか」と「あと何ミリ秒あるか」のセット。
+    // 片方だけ残すと pause/resume 後の計算が狂うため、初期化は同時に行う。
     playbackStartedAtRef.current = null;
     remainingPlaybackMsRef.current = 0;
   }, []);
-
-  const armPlaybackCompletionTimer = useCallback((durationMs: number) => {
-    // 毎回タイマーを張り直す前に、古い予約を消して二重実行を防ぐ。
-    clearPlaybackTimer();
-    remainingPlaybackMsRef.current = Math.max(0, durationMs);
-    playbackStartedAtRef.current = Date.now();
-    playbackTimerRef.current = setTimeout(() => {
-      setPlaybackState('stopped');
-      setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
-      playbackTimerRef.current = null;
-      resetPlaybackClock();
-    }, durationMs);
-  }, [clearPlaybackTimer, resetPlaybackClock]);
 
   // スコアタイプ切り替え時に左手データを初期化
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
@@ -278,7 +268,15 @@ export default function ScorePage() {
         // paused からの再生は「最初から」ではなく AudioContext の resume。
         await getAudioEngine().resume();
         setPlaybackState('playing');
-        armPlaybackCompletionTimer(remainingPlaybackMsRef.current);
+        const remainingMs = Math.max(0, remainingPlaybackMsRef.current);
+        clearPlaybackTimer();
+        playbackStartedAtRef.current = Date.now();
+        playbackTimerRef.current = setTimeout(() => {
+          playbackTimerRef.current = null;
+          resetPlaybackClock();
+          setPlaybackState('stopped');
+          setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+        }, remainingMs);
         return;
       }
 
@@ -287,6 +285,8 @@ export default function ScorePage() {
       resetPlaybackClock();
 
       const parts: MeasureData[][] = [];
+      // scoreType ごとに保持形式が違うので、
+      // ここで「再生したいパート配列」へいったん正規化してから先へ渡す。
       if (scoreType === 'quartet') {
         quartetParts.forEach(part => { if (part && part.length > 0) parts.push(part); });
       } else if (scoreType === 'piano') {
@@ -298,20 +298,42 @@ export default function ScorePage() {
 
       await runWithPlaybackFallback(async (audioEngine) => {
         if (parts.length > 0) {
-          const partObjs = parts.map(measures => ({ measures }));
+          const partObjs = parts.map(measures => ({
+            // 再生エンジンは小節を先頭から順に読むだけなので、
+            // ここで楽譜記号を「実際に鳴らす順番」へ展開してから渡す。
+            measures: expandMeasuresForPlayback(measures).map(item => item.measure)
+          }));
           await audioEngine.playParts(partObjs, tempoSettings.bpm);
 
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
+          // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
+          // ここでは最大値を採用して全体の終了時刻を決める。
           const totalDuration = Math.max(...parts.map(part => calculateScoreDuration(part, tempoSettings.bpm)));
           setPlaybackState('playing');
-          armPlaybackCompletionTimer(totalDuration * 1000);
+          clearPlaybackTimer();
+          remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
+          playbackStartedAtRef.current = Date.now();
+          playbackTimerRef.current = setTimeout(() => {
+            setPlaybackState('stopped');
+            setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+            playbackTimerRef.current = null;
+            resetPlaybackClock();
+          }, totalDuration * 1000);
         } else {
           // 譜面が空でも「再生ボタンが壊れていないか」は確認できるように、
           // 代表音として C4 を 1拍だけ鳴らす。
           const duration = 60 / tempoSettings.bpm;
           await audioEngine.playNoteByName('C4', duration);
           setPlaybackState('playing');
-          armPlaybackCompletionTimer(duration * 1000);
+          clearPlaybackTimer();
+          remainingPlaybackMsRef.current = Math.max(0, duration * 1000);
+          playbackStartedAtRef.current = Date.now();
+          playbackTimerRef.current = setTimeout(() => {
+            setPlaybackState('stopped');
+            setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+            playbackTimerRef.current = null;
+            resetPlaybackClock();
+          }, duration * 1000);
         }
       });
     } catch (error: unknown) {
@@ -327,7 +349,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [armPlaybackCompletionTimer, clearPlaybackTimer, getAudioEngine, playbackState, resetPlaybackClock, tempoSettings.bpm, rightHandData, leftHandData, quartetParts, scoreType, runWithPlaybackFallback]);
+  }, [clearPlaybackTimer, getAudioEngine, playbackState, resetPlaybackClock, tempoSettings.bpm, rightHandData, leftHandData, quartetParts, scoreType, runWithPlaybackFallback]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -349,6 +371,8 @@ export default function ScorePage() {
   }, [clearPlaybackTimer, getAudioEngine, playbackState]);
 
   const handleStop = useCallback(() => {
+    // stop は「音を止める」だけでなく、「一時停止用の残り時間」も捨てる。
+    // ここで resetPlaybackClock を呼ばないと、次の再生開始時に古い残り時間を再利用してしまう。
     clearPlaybackTimer();
     getAudioEngine().stopAll();
     setPlaybackState('stopped');
@@ -357,10 +381,14 @@ export default function ScorePage() {
   }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
 
   const handleSeek = useCallback((position: { measureIndex: number; beatPosition: number; noteIndex: number }) => {
+    // 現状の再生ボタン経路は「見た目上の位置表示」だけを更新している。
+    // ここで実音のジャンプまではしていないため、責務を広げず state 更新だけにとどめる。
     setCurrentPosition(position);
   }, []);
 
   const handleTempoChange = useCallback((bpm: number) => {
+    // テンポの単一の正本（single source of truth）は useTempoStorage 側に寄せる。
+    // 画面内で別管理し始めると、保存値と表示値が食い違いやすい。
     setBPM(bpm);
   }, [setBPM]);
 

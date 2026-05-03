@@ -8,6 +8,7 @@ import { AudioEngine } from './AudioEngine';
 import { TempoManager, type TempoSettings } from './TempoManager';
 import { SoundSource } from './SoundSource';
 import { AudioErrorHandler, AudioErrorFactory } from './AudioError';
+import { expandMeasuresForPlayback } from './repeatPlaybackUtils';
 import type { MeasureData, NoteEvent, DurKey } from '../types/storage';
 
 /**
@@ -120,7 +121,9 @@ export class ScorePlayer {
       // 現在の再生を停止
       this.stop();
 
-      // 譜面データを保存
+      // 元データ自体も保持しておく。
+      // テンポ変更時の再スケジュールや seek の時間計算では、
+      // 「展開前の譜面全体」が必要になるため。
       this.measures = [...measures];
 
       // 再生スケジュールを生成
@@ -391,11 +394,15 @@ export class ScorePlayer {
   private generatePlaybackSchedule(measures: MeasureData[]): ScheduledNote[] {
     const schedule: ScheduledNote[] = [];
     const tempoSettings = this.tempoManager.getSettings();
+    // リピート記号を含む譜面は、まず「実際に通る小節順」へ並べ替える。
+    // これを先にやっておくと、下の処理は「前から順に音価を足していく」
+    // という単純なロジックのままで済む。
+    const expandedMeasures = expandMeasuresForPlayback(measures);
     
     let currentTime = 0; // 累積時間（秒）
 
-    for (let measureIndex = 0; measureIndex < measures.length; measureIndex++) {
-      const measure = measures[measureIndex];
+    for (const expandedMeasure of expandedMeasures) {
+      const measure = expandedMeasure.measure;
       let measureTime = 0; // 小節内での時間（秒）
 
       for (let noteIndex = 0; noteIndex < measure.events.length; noteIndex++) {
@@ -411,7 +418,9 @@ export class ScorePlayer {
             velocity: 0.5, // デフォルトベロシティ
             duration: duration,
             time: currentTime + measureTime,
-            measureIndex: measureIndex,
+            // 展開後に同じ小節が再登場しても、UI 側には元の小節番号を返す。
+            // これでハイライトが「譜面上のどこを鳴らしているか」と一致する。
+            measureIndex: expandedMeasure.sourceMeasureIndex,
             noteIndex: noteIndex,
             originalEvent: event
           };
@@ -420,10 +429,14 @@ export class ScorePlayer {
         }
 
         // 次の音符の開始時間を計算
+        // 休符も「何も鳴らさない音価」として時間は進める必要があるため、
+        // schedule に push しない場合でも measureTime は必ず足す。
         measureTime += duration;
       }
 
       // 次の小節の開始時間を更新
+      // 小節ごとにまとめて currentTime へ反映しておくと、
+      // 後続の小節は常に「譜面先頭から何秒後か」で扱える。
       currentTime += measureTime;
     }
 

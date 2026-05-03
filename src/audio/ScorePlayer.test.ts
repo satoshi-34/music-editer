@@ -65,6 +65,12 @@ describe('ScorePlayer', () => {
   let scorePlayer: ScorePlayer;
   let mockPart: any;
 
+  const getScheduledEventsFromLatestPart = (): any[] => {
+    const tonePartCalls = vi.mocked(Tone.Part).mock.calls;
+    const latestCall = tonePartCalls[tonePartCalls.length - 1];
+    return (latestCall?.[1] as any[]) ?? [];
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     
@@ -201,6 +207,50 @@ describe('ScorePlayer', () => {
     it('ループ再生を設定する', async () => {
       await scorePlayer.play({ loop: true });
       expect(mockPart.loop).toBe(true);
+    });
+
+    it('リピート記号がある小節は再生時に 1 回だけ折り返す', async () => {
+      const measures: MeasureData[] = [
+        {
+          events: [{ dur: '4', isRest: false, keys: ['c/4'] }]
+        },
+        {
+          events: [{ dur: '4', isRest: false, keys: ['d/4'] }],
+          repeatStart: true
+        },
+        {
+          events: [{ dur: '4', isRest: false, keys: ['e/4'] }],
+          repeatEnd: true
+        },
+        {
+          events: [{ dur: '4', isRest: false, keys: ['f/4'] }]
+        }
+      ];
+
+      scorePlayer.loadScore(measures);
+      await scorePlayer.play();
+
+      expect(getScheduledEventsFromLatestPart().map(event => event.measureIndex)).toEqual([0, 1, 2, 1, 2, 3]);
+    });
+
+    it('開始リピートが無い終了リピートは先頭から再生し直す', async () => {
+      const measures: MeasureData[] = [
+        {
+          events: [{ dur: '4', isRest: false, keys: ['c/4'] }]
+        },
+        {
+          events: [{ dur: '4', isRest: false, keys: ['d/4'] }],
+          repeatEnd: true
+        },
+        {
+          events: [{ dur: '4', isRest: false, keys: ['e/4'] }]
+        }
+      ];
+
+      scorePlayer.loadScore(measures);
+      await scorePlayer.play();
+
+      expect(getScheduledEventsFromLatestPart().map(event => event.measureIndex)).toEqual([0, 1, 0, 1, 2]);
     });
   });
 

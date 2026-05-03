@@ -5,6 +5,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import PlaybackControls, { type PlaybackControlsProps } from './PlaybackControls';
 import { InstrumentType } from '../audio/SoundSource';
+import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS } from '../audio/playbackSettings';
 
 // デフォルトのプロパティ
 const defaultProps: PlaybackControlsProps = {
@@ -23,7 +24,8 @@ const defaultProps: PlaybackControlsProps = {
   onSeek: vi.fn(),
   onTempoChange: vi.fn(),
   onInstrumentChange: vi.fn(),
-  onInstrumentPreview: vi.fn()
+  onInstrumentPreview: vi.fn(),
+  soundRuntimeSettings: DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS
 };
 
 describe('PlaybackControls', () => {
@@ -125,6 +127,7 @@ describe('PlaybackControls', () => {
       const stopButton = screen.getByRole('button', { name: '停止' });
       expect(stopButton).toBeDisabled();
     });
+
   });
 
   describe('テンポ制御', () => {

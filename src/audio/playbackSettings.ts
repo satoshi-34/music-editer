@@ -47,3 +47,52 @@ export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettin
     richness: 0.5
   }
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function clampProfileValue(value: unknown, fallback: number): number {
+  // localStorage はユーザーや拡張機能から自由に書き換えられるため、
+  // 数値でない値や極端な値はここで安全な 0〜1 に丸めてから使う。
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(1, Math.max(0, value));
+}
+
+/**
+ * localStorage から読んだ再生設定を、安全な既定値へ寄せながら正規化する。
+ */
+export function sanitizePlaybackRuntimeSettings(raw: unknown): PlaybackSoundRuntimeSettings {
+  if (!isRecord(raw)) {
+    return DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS;
+  }
+
+  const engineMode = raw.engineMode;
+  const normalizedEngineMode =
+    engineMode === 'built-in' || engineMode === 'soundfont' || engineMode === 'plugin'
+      ? engineMode
+      : DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.engineMode;
+
+  const pluginName = typeof raw.pluginName === 'string'
+    ? raw.pluginName.slice(0, 100)
+    : DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.pluginName;
+
+  const profile = isRecord(raw.profile) ? raw.profile : {};
+
+  return {
+    engineMode: normalizedEngineMode,
+    pluginName,
+    previewAccidentalOnApply: typeof raw.previewAccidentalOnApply === 'boolean'
+      ? raw.previewAccidentalOnApply
+      : DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.previewAccidentalOnApply,
+    profile: {
+      brightness: clampProfileValue(profile.brightness, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.brightness),
+      attack: clampProfileValue(profile.attack, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.attack),
+      release: clampProfileValue(profile.release, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.release),
+      richness: clampProfileValue(profile.richness, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.richness)
+    }
+  };
+}

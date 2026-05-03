@@ -19,4 +19,9 @@ describe('SoundFontEngine helpers', () => {
     expect(resolveSoundFontName('   ')).toBe('MusyngKite');
     expect(resolveSoundFontName('FluidR3_GM')).toBe('FluidR3_GM');
   });
+
+  it('未知の SoundFont パック名は既定値へ戻す', () => {
+    expect(resolveSoundFontName('Kontakt')).toBe('MusyngKite');
+    expect(resolveSoundFontName('MyCustomPack')).toBe('MusyngKite');
+  });
 });
