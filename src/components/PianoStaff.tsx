@@ -5,6 +5,8 @@
 import type { Tool } from './Palette';
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData } from '../types/storage';
+import { InstrumentType } from '../audio/SoundSource';
+import type { KeySignature } from '../utils/noteKeyUtils';
 
 type Props = {
   tool: Tool;
@@ -19,6 +21,10 @@ type Props = {
   startMeasureIndex?: number;
   disabled?: boolean;
   yOffset?: number;
+  currentInstrument?: InstrumentType;
+  previewAccidentalOnApply?: boolean;
+  keySignature?: KeySignature;
+  onKeySignatureChange?: (keySignature: KeySignature) => void;
 };
 
 export default function PianoStaff({
@@ -33,6 +39,10 @@ export default function PianoStaff({
   startMeasureIndex = 0,
   disabled = false,
   yOffset = 0,
+  currentInstrument = InstrumentType.PIANO,
+  previewAccidentalOnApply = true,
+  keySignature = 'C',
+  onKeySignatureChange,
 }: Props) {
   return (
     <div>
@@ -49,6 +59,10 @@ export default function PianoStaff({
           startMeasureIndex={startMeasureIndex + i * measuresPerSystem}
           disabled={disabled}
           yOffset={yOffset}
+          currentInstrument={currentInstrument}
+          previewAccidentalOnApply={previewAccidentalOnApply}
+          keySignature={keySignature}
+          onKeySignatureChange={onKeySignatureChange}
         />
       ))}
     </div>

@@ -48,6 +48,8 @@ export interface PlaybackControlsProps {
   onPluginNameChange?: (pluginName: string) => void;
   /** 音のキャラ変更時のコールバック */
   onSoundProfileChange?: (nextProfile: PlaybackSoundRuntimeSettings['profile']) => void;
+  /** 臨時記号適用時の確認音 ON/OFF 切り替え */
+  onPreviewAccidentalOnApplyChange?: (enabled: boolean) => void;
 }
 
 /**
@@ -142,7 +144,8 @@ export default function PlaybackControls({
   soundRuntimeSettings,
   onSoundEngineModeChange,
   onPluginNameChange,
-  onSoundProfileChange
+  onSoundProfileChange,
+  onPreviewAccidentalOnApplyChange
 }: PlaybackControlsProps) {
   // テンポ入力の内部状態
   const [tempoInput, setTempoInput] = useState(currentTempo.toString());
@@ -250,6 +253,10 @@ export default function PlaybackControls({
       [key]: Number(event.target.value)
     });
   }, [onSoundProfileChange, soundRuntimeSettings]);
+
+  const handlePreviewAccidentalOnApplyChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    onPreviewAccidentalOnApplyChange?.(event.target.checked);
+  }, [onPreviewAccidentalOnApplyChange]);
 
   /**
    * 再生/一時停止ボタンのアイコンとラベルを取得
@@ -439,6 +446,16 @@ export default function PlaybackControls({
                   `SoundFont` はネット経由で楽器サンプルを読み込み、より楽器らしい音を目指します。
                   `プラグイン連携` は今後の拡張用で、現時点では設定名の保存までです。
                 </div>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={soundRuntimeSettings.previewAccidentalOnApply}
+                    onChange={handlePreviewAccidentalOnApplyChange}
+                    aria-label="臨時記号適用時に確認音を鳴らす"
+                  />
+                  <span>臨時記号を付けたときに確認音を鳴らす</span>
+                </label>
 
                 {/* 4 本のスライダーは、シンセの専門パラメータを直接見せる代わりに
                     「耳で分かる言葉」に置き換えた簡易 UI。 */}

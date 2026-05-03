@@ -13,6 +13,7 @@ vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function() {
     return {
       playNoteEvent: vi.fn().mockResolvedValue(undefined),
+      setSoundSource: vi.fn().mockResolvedValue(undefined),
       dispose: vi.fn()
     };
   })
@@ -30,6 +31,14 @@ vi.mock('../audio/AudioEngine', () => ({
 
 // SoundSourceのモック（loadInstrumentが成功するように）
 vi.mock('../audio/SoundSource', () => ({
+  // コンポーネントは既定値として InstrumentType.PIANO を参照する。
+  // テストでは SoundSource 全体をモックするため、enum 相当の値も一緒に返す必要がある。
+  InstrumentType: {
+    PIANO: 'piano',
+    ORGAN: 'organ',
+    GUITAR: 'guitar',
+    STRINGS: 'strings',
+  },
   SoundSource: vi.fn().mockImplementation(function() {
     return {
       getCurrentInstrument: vi.fn().mockReturnValue('piano'),

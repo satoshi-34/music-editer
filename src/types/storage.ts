@@ -1,6 +1,8 @@
 // src/types/storage.ts
 // TypeScript interfaces and data models for score storage
 
+import type { KeySignature } from '../utils/noteKeyUtils';
+
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
 
 /** タイまたはスラーの弧。開始 NoteEvent の arcs[] に格納する */
@@ -72,6 +74,8 @@ export interface SavedScoreData {
   timestamp: number;
   metadata: ScoreMetadata;
   scoreType: ScoreType;
+  /** 調号。旧データ互換のため省略時は C（調号なし）として扱う */
+  keySignature?: KeySignature;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;

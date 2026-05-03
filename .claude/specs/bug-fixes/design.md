@@ -218,6 +218,72 @@ const leftX = n.getAbsoluteX
 bestLine = Number(line.toFixed(1));
 
 // After
+
+---
+
+## 修正 10: SoundFont 再生失敗時の内蔵音源フォールバック
+
+**ファイル**: `src/components/ScorePage.tsx`
+
+### 問題
+
+音色プレビューと全体再生は `PlaybackEngine` を経由していたが、`soundfont` モードで音源パック読み込みや `AudioContext` 再開に失敗した場合、実ブラウザではそのまま無音になりやすかった。  
+とくにプレビューと再生ボタンはどちらも同じエンジン初期化経路を通るため、一度 SoundFont 側で失敗すると「両方とも鳴らない」状態になる。
+
+### 修正設計
+
+`ScorePage` に `runWithPlaybackFallback()` を追加し、通常は選択中の音源方式で再生を試み、`soundfont` 失敗時のみ `built-in` エンジンへ切り替えて再試行する。  
+ただし UI 上の `engineMode` は書き換えず、内蔵音源への切り替えは「その再生操作の間だけ」に限定する。
+
+```typescript
+try {
+  const preferredEngine = await prepareAudioEngine();
+  return await action(preferredEngine);
+} catch (error) {
+  if (soundRuntimeSettings.engineMode !== 'soundfont') {
+    throw error;
+  }
+
+  const fallbackEngine = await switchToBuiltInFallbackEngine();
+  return await action(fallbackEngine);
+}
+```
+
+`switchToBuiltInFallbackEngine()` は一時的なローカル変数ではなく、`audioEngineRef.current` 自体を内蔵音源へ差し替える。これにより、再生予約直後にエンジンが破棄されて音が止まる事故を防ぐ。  
+同時に `temporaryBuiltInFallbackRef` を立てておき、次回 `prepareAudioEngine()` のときに、ユーザーが選んでいた `soundfont` や `plugin` の設定へ戻す。
+
+Safari でもまず選択中の音源方式で再生を試し、`initialize()` や音源読み込みで失敗した場合のみ `built-in` へ逃がす。  
+これにより、SoundFont が正常に鳴る環境では、前回追加したリアル寄りの音色差をそのまま活かせる。
+
+### 影響範囲
+
+- `handleInstrumentPreview()`
+- `handlePlay()`（新規再生パス）
+- `playback-sound-runtime-settings` の保持方針
+
+### 期待される効果
+
+- SoundFont の取得失敗時でも、少なくとも内蔵音源でプレビューや再生が鳴る
+- ユーザーが「ボタンを押しても完全に無音」の状態に留まりにくくなる
+- Safari 対策後も、ユーザーが選んだ SoundFont 設定自体は失われない
+- Safari でも SoundFont が正常に使える環境では、楽器差や SoundFont パック差が再び反映される
+
+## 修正 11: 個別音符再生の音色を現在選択へ同期
+
+**ファイル**: `src/components/ScorePage.tsx`, `src/components/StaffCanvas.tsx`, `src/components/PianoSystemCanvas.tsx`
+
+### 問題
+
+再生ボタンや音色プレビューは `PlaybackEngine` 系で現在の楽器を参照していたが、音符クリックの個別再生は `defaultAudioEngine + SoundSource + NotePlayer` の別経路だった。  
+このため、臨時記号適用後の確認音だけがデフォルト楽器や以前の楽器へ戻ることがあった。
+
+### 修正設計
+
+`ScorePage` の `currentInstrument` を譜面コンポーネントへ渡し、`StaffCanvas` / `PianoSystemCanvas` 側で `notePlayerRef.current.setSoundSource(currentInstrument)` を呼んで同期する。
+
+### 期待される効果
+
+- 個別音符再生、臨時記号クリック後の確認音、全体再生、音色プレビューで同じ楽器音色を保てる
 bestLine = Math.round(line * 2) / 2;
 ```
 

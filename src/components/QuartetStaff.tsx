@@ -4,6 +4,8 @@
 import PianoSystemCanvas, { type PartConfig } from './PianoSystemCanvas';
 import type { Tool } from './Palette';
 import type { MeasureData } from '../types/storage';
+import { InstrumentType } from '../audio/SoundSource';
+import type { KeySignature } from '../utils/noteKeyUtils';
 
 const QUARTET_PART_CONFIGS: Omit<PartConfig, 'data' | 'onChange'>[] = [
   { clef: 'treble', label: 'Vn. I'  },
@@ -22,6 +24,10 @@ type Props = {
   startMeasureIndex?: number;
   disabled?: boolean;
   yOffset?: number;
+  currentInstrument?: InstrumentType;
+  previewAccidentalOnApply?: boolean;
+  keySignature?: KeySignature;
+  onKeySignatureChange?: (keySignature: KeySignature) => void;
 };
 
 export default function QuartetStaff({
@@ -34,6 +40,10 @@ export default function QuartetStaff({
   startMeasureIndex = 0,
   disabled = false,
   yOffset = 0,
+  currentInstrument = InstrumentType.PIANO,
+  previewAccidentalOnApply = true,
+  keySignature = 'C',
+  onKeySignatureChange,
 }: Props) {
   return (
     <div>
@@ -54,6 +64,10 @@ export default function QuartetStaff({
             startMeasureIndex={startMeasureIndex + i * measuresPerSystem}
             disabled={disabled}
             yOffset={yOffset}
+            currentInstrument={currentInstrument}
+            previewAccidentalOnApply={previewAccidentalOnApply}
+            keySignature={keySignature}
+            onKeySignatureChange={onKeySignatureChange}
           />
         );
       })}

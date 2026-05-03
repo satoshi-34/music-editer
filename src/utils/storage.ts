@@ -13,6 +13,7 @@ import type {
   DurKey
 } from '../types/storage';
 import { StorageErrorType } from '../types/storage';
+import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
 
 // Storage keys
 export const STORAGE_KEYS = {
@@ -22,7 +23,7 @@ export const STORAGE_KEYS = {
 } as const;
 
 // Current version for data migration
-export const CURRENT_VERSION = '3.0.0';
+export const CURRENT_VERSION = '3.1.0';
 
 /**
  * Generates a simple checksum for data integrity verification
@@ -56,7 +57,9 @@ function validateNoteEvent(event: any): event is NoteEvent {
     // keys は文字列の配列で、1要素以上必要（休符でも配列形式）
     Array.isArray(event.keys) &&
     event.keys.length > 0 &&
-    event.keys.every((k: any) => typeof k === 'string' && k.length > 0)
+    // 保存データに不正な文字列を混ぜないよう、音高キーの形式まで確認する。
+    // ここで弾いておくと、描画時に未知の文字列をVexFlowへ渡すリスクを減らせる。
+    event.keys.every((k: any) => isValidNoteKeyString(k))
   );
 }
 
@@ -131,6 +134,7 @@ function validateSavedScoreData(data: any): data is SavedScoreData {
     typeof data.version === 'string' &&
     typeof data.timestamp === 'number' &&
     validateScoreMetadata(data.metadata) &&
+    (data.keySignature === undefined || isValidKeySignature(data.keySignature)) &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -150,6 +154,7 @@ function migrateV1toV2(data: any): SavedScoreData {
     timestamp: data.timestamp ?? Date.now(),
     metadata: data.metadata,
     scoreType: 'single',
+    keySignature: 'C',
     parts: [{
       partId: 'melody',
       clef: 'treble',
@@ -340,6 +345,7 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
     if (Array.isArray(parsedData.parts)) {
       parsedData.parts = migrateKeyToKeys(parsedData.parts);
     }
+    parsedData.keySignature = normalizeKeySignature(parsedData.keySignature);
 
     // Validate parsed data
     if (!validateSavedScoreData(parsedData)) {
@@ -371,7 +377,13 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
                   generateChecksum(backupRaw) === metadata.dataChecksum
                 ) {
                   // Backup is valid - use it
-                  return { success: true, data: backupParsed };
+                  return {
+                    success: true,
+                    data: {
+                      ...backupParsed,
+                      keySignature: normalizeKeySignature(backupParsed.keySignature)
+                    }
+                  };
                 }
               } catch {
                 // Backup also corrupted, fall through to error
@@ -394,7 +406,10 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
 
     return {
       success: true,
-      data: parsedData
+      data: {
+        ...parsedData,
+        keySignature: normalizeKeySignature(parsedData.keySignature)
+      }
     };
 
   } catch (error) {
@@ -464,13 +479,15 @@ export function createSavedScoreData(
   parts: PartData[],
   systems: number,
   measuresPerSystem: number,
-  scoreType: ScoreType = 'single'
+  scoreType: ScoreType = 'single',
+  keySignature: KeySignature = 'C'
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
     timestamp: Date.now(),
     metadata,
     scoreType,
+    keySignature,
     parts,
     systems,
     measuresPerSystem
@@ -484,7 +501,10 @@ export function createSavedScoreData(
 export function migrateData(data: any, fromVersion: string): SavedScoreData | null {
   // Currently only version 1.0.0 exists, so no migration needed
   if (fromVersion === CURRENT_VERSION) {
-    return data as SavedScoreData;
+    return {
+      ...(data as SavedScoreData),
+      keySignature: normalizeKeySignature((data as SavedScoreData).keySignature)
+    };
   }
 
   // Future migrations would be handled here

@@ -1,9 +1,11 @@
 import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, NoteEvent, ScoreMetadata, ScoreType } from '../types/storage';
+import type { KeySignature } from '../utils/noteKeyUtils';
 
 export interface DemoScore {
   metadata: ScoreMetadata;
   scoreType: ScoreType;
+  keySignature: KeySignature;
   rightHand: MeasureData[];
   leftHand: MeasureData[];
   recommendedInstrument: InstrumentType;
@@ -210,6 +212,7 @@ export function createFurEliseDemoScore(): DemoScore {
       arranger: 'アプリ内デモ用'
     },
     scoreType: 'piano',
+    keySignature: 'G',
     rightHand: [...rightHandMeasures, ...trailingMeasures],
     leftHand: [...leftHandMeasures, ...emptyMeasures(48 - leftHandMeasures.length)],
     recommendedInstrument: InstrumentType.PIANO
@@ -241,6 +244,7 @@ export function createBrassTestDemoScore(): DemoScore {
       arranger: 'トランペット / ホルン確認用'
     },
     scoreType: 'single',
+    keySignature: 'C',
     rightHand: [...melodyMeasures, ...emptyMeasures(24 - melodyMeasures.length)],
     leftHand: [],
     recommendedInstrument: InstrumentType.TRUMPET
@@ -272,6 +276,7 @@ export function createStringsTestDemoScore(): DemoScore {
       arranger: 'バイオリン / ヴィオラ / チェロ確認用'
     },
     scoreType: 'single',
+    keySignature: 'C',
     rightHand: [...melodyMeasures, ...emptyMeasures(24 - melodyMeasures.length)],
     leftHand: [],
     recommendedInstrument: InstrumentType.VIOLIN

@@ -54,12 +54,18 @@ Object.defineProperty(window, 'localStorage', {
 
 // Fast-check arbitraries for generating test data
 const durKeyArbitrary = fc.constantFrom('1', '2', '4', '8', '16', '32', '64') as fc.Arbitrary<DurKey>;
+const validNoteKeyArbitrary = fc.constantFrom(
+  'c/4', 'd/4', 'e/4', 'f/4', 'g/4', 'a/4', 'b/4',
+  'c#/4', 'd#/4', 'f#/4', 'g#/4', 'a#/4',
+  'db/4', 'eb/4', 'gb/4', 'ab/4', 'bb/4',
+  'C4', 'D4', 'E4', 'F#4', 'Bb3'
+);
 
 const noteEventArbitrary: fc.Arbitrary<NoteEvent> = fc.record({
   dur: durKeyArbitrary,
   isRest: fc.boolean(),
   keys: fc.array(
-    fc.string({ minLength: 3, maxLength: 10 }).filter(s => s.trim().length > 0),
+    validNoteKeyArbitrary,
     { minLength: 1, maxLength: 4 }
   )
 });
@@ -157,7 +163,7 @@ describe('Storage Foundation Tests', () => {
 
                 expect(parsedEvent.dur).toBe(originalEvent.dur);
                 expect(parsedEvent.isRest).toBe(originalEvent.isRest);
-                expect(parsedEvent.key).toBe(originalEvent.key);
+                expect(parsedEvent.keys).toEqual(originalEvent.keys);
               }
             }
           }
@@ -731,11 +737,37 @@ describe('Storage Foundation Tests', () => {
 
       if (loadResult.data) {
         expect(loadResult.data.metadata.title).toBe('Test Title');
+        expect(loadResult.data.keySignature).toBe('C');
         expect(loadResult.data.parts).toHaveLength(1);
         expect(loadResult.data.parts[0].measures).toHaveLength(1);
         expect(loadResult.data.parts[0].measures[0].events).toHaveLength(1);
         expect(loadResult.data.parts[0].measures[0].events[0].dur).toBe('4');
       }
+    });
+
+    it('不正な音高キーを含むデータは保存時に拒否する', () => {
+      const invalidData = createSavedScoreData(
+        {
+          title: 'Invalid Keys',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{ dur: '4', isRest: false, keys: ['../../etc/passwd'] as any }]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const result = saveScoreData(invalidData);
+      expect(result.success).toBe(false);
+      expect(result.error?.type).toBe('corrupted_data');
     });
 
     it('should clear stored data', () => {
@@ -766,6 +798,28 @@ describe('Storage Foundation Tests', () => {
       const loadResult = loadScoreData();
       expect(loadResult.success).toBe(true);
       expect(loadResult.data).toBeNull();
+    });
+
+    it('旧データに調号が無い場合は C として読み込む', () => {
+      localStorageMock.setItem(STORAGE_KEYS.PRIMARY, JSON.stringify({
+        version: '3.0.0',
+        timestamp: Date.now(),
+        metadata: {
+          title: 'Legacy',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        scoreType: 'single',
+        parts: [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        systems: 1,
+        measuresPerSystem: 1
+      }));
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.keySignature).toBe('C');
     });
   });
 });

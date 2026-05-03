@@ -30,6 +30,8 @@ export interface PlaybackSoundRuntimeSettings {
    * 例: MusyngKite / FluidR3_GM / Kontakt / MuseScore など
    */
   pluginName: string;
+  /** 臨時記号を付けた直後に確認音を鳴らすか */
+  previewAccidentalOnApply: boolean;
   /** エンドユーザー向けの「音のキャラ」調整値 */
   profile: PlaybackSoundProfile;
 }
@@ -37,6 +39,7 @@ export interface PlaybackSoundRuntimeSettings {
 export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettings = {
   engineMode: 'built-in',
   pluginName: '',
+  previewAccidentalOnApply: true,
   profile: {
     brightness: 0.5,
     attack: 0.5,

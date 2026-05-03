@@ -11,6 +11,7 @@
 
 import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
+import type { AccidentalToolKind } from '../utils/noteKeyUtils';
 
 // ========== 表示サイズ＆色（ボタン側と合わせる） ==========
 const BUTTON_W = 56;   // ボタン幅（CSSと合わせる）
@@ -34,7 +35,10 @@ export function normalizeToVF(d: DurKey): 'w'|'h'|'q'|'8'|'16'|'32'|'64' {
 // ツール（「音価」と「休符かどうか」、またはタイモード）
 export type Tool =
   | { duration: DurKey; isRest?: boolean }  // 通常の音符/休符入力
-  | { mode: 'tie' };                        // タイ記号を付けるモード
+  | { mode: 'tie' }                         // タイ記号を付けるモード
+  | { mode: 'accidental'; accidental: AccidentalToolKind }; // 臨時記号を付けるモード
+
+type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
 
 // 並べるアイテム（上段=音符, 下段=休符）
 const ROW1: Tool[] = ['1','2','4','8','16','32','64'].map(d => ({ duration: d as DurKey }));
@@ -76,6 +80,11 @@ const FILL_TWEAKS: Partial<Record<SymKey, number>> = {
 
 // タイツールの定数
 const TIE_TOOL: Tool = { mode: 'tie' };
+const ACCIDENTAL_TOOLS: AccidentalTool[] = [
+  { mode: 'accidental', accidental: 'sharp' },
+  { mode: 'accidental', accidental: 'flat' },
+  { mode: 'accidental', accidental: 'natural' },
+];
 
 export default function Palette({
   value, onChange,
@@ -85,6 +94,9 @@ export default function Palette({
 
   // タイモードかどうか（判別共用体の型ガード）
   const tieActive = 'mode' in value && value.mode === 'tie';
+  const selectedAccidental = 'mode' in value && value.mode === 'accidental'
+    ? value.accidental
+    : null;
 
   return (
     <div style={{ padding: 8 }}>
@@ -131,7 +143,7 @@ export default function Palette({
       </div>
 
       {/* タイボタン行 */}
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button
           type="button"
           onClick={() => onChange(tieActive ? ROW1[2] : TIE_TOOL)}
@@ -157,6 +169,37 @@ export default function Palette({
             <path d="M4 14 Q16 2 28 14" stroke="#111" strokeWidth="2" strokeLinecap="round" fill="none"/>
           </svg>
         </button>
+
+        {ACCIDENTAL_TOOLS.map((tool) => {
+          const isActive = selectedAccidental === tool.accidental;
+          return (
+            <button
+              type="button"
+              key={tool.accidental}
+              onClick={() => onChange(isActive ? ROW1[2] : tool)}
+              aria-label={accidentalLabel(tool.accidental)}
+              title={`${accidentalLabel(tool.accidental)}（選択して音符をクリック）`}
+              style={{
+                width: BUTTON_W,
+                height: BUTTON_H,
+                padding: 0,
+                borderRadius: 10,
+                border: isActive ? '2px solid #3b82f6' : '1px solid #ccc',
+                background: isActive ? '#eff6ff' : '#fff',
+                color: '#222',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: 24,
+                fontFamily: '"Times New Roman", serif',
+                lineHeight: 1,
+              }}
+            >
+              {accidentalSymbol(tool.accidental)}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -165,6 +208,14 @@ export default function Palette({
 // ツールチップ用の日本語ラベル（“音符 4分”などに使う）
 function label(d: DurKey) {
   return d==='1'?'全':d==='2'?'2分':d==='4'?'4分':d==='8'?'8分':d==='16'?'16分':d==='32'?'32分':'64分';
+}
+
+function accidentalSymbol(kind: AccidentalToolKind) {
+  return kind === 'sharp' ? '♯' : kind === 'flat' ? '♭' : '♮';
+}
+
+function accidentalLabel(kind: AccidentalToolKind) {
+  return kind === 'sharp' ? 'シャープ' : kind === 'flat' ? 'フラット' : 'ナチュラル';
 }
 
 /**

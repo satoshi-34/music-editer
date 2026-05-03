@@ -665,6 +665,17 @@ button.ghost:disabled {
   stroke-width: 1.5;
 }
 
+/* 調号クリック領域の確認用表示。
+   臨時記号ツール中だけ描画され、クリックを邪魔しないよう pointer-events は持たせない。 */
+.vf-key-signature-debug {
+  pointer-events: none;
+  fill: rgba(245, 158, 11, 0.16);
+  stroke: rgba(180, 83, 9, 0.55);
+  stroke-width: 1.2;
+  rx: 3;
+  ry: 3;
+}
+
 /* ===== 印刷用 ===== */
 @media print {
   @page { size: A4; margin: 12mm; }
@@ -690,12 +701,13 @@ button.ghost:disabled {
   /* 線が薄くならないように黒で強制。ただしクリック判定 rect は除外！ */
   .print-page svg path,
   .print-page svg line { stroke: #000 !important; fill: #000 !important; }
-  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected) {
+  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
     stroke: #000 !important; fill: #000 !important;
   }
   .print-page svg rect.vf-hit,
   .print-page svg rect.vf-note-hit,
-  .print-page svg rect.vf-note-selected {
+  .print-page svg rect.vf-note-selected,
+  .print-page svg rect.vf-key-signature-debug {
     stroke: none !important; fill: transparent !important;
   }
 }

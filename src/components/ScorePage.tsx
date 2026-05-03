@@ -20,6 +20,11 @@ import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, PartData, ScoreType } from '../types/storage';
 import { createDemoScore, type DemoScoreId } from '../data/demoScores';
 import {
+  KEY_SIGNATURE_OPTIONS,
+  normalizeKeySignature,
+  type KeySignature
+} from '../utils/noteKeyUtils';
+import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
   type PlaybackSoundRuntimeSettings,
   type SoundEngineMode
@@ -65,6 +70,7 @@ function calculateScoreDuration(scoreData: MeasureData[], bpm: number): number {
 export default function ScorePage() {
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
   const [scoreType, setScoreType] = useState<ScoreType>('single');
+  const [keySignature, setKeySignature] = useState<KeySignature>('C');
   const [showOffsetPanel, setShowOffsetPanel] = useState(false);
 
   const [title, setTitle] = useState('タイトル');
@@ -93,6 +99,9 @@ export default function ScorePage() {
   );
 
   const audioEngineRef = useRef<PlaybackEngine>(createPlaybackEngine(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS));
+  // Safari や一時的な SoundFont 失敗時は、その1回だけ内蔵音源へ退避する。
+  // ただし UI 上の選択は変えたくないため、「いまの ref は一時避難中か」を別 ref で覚える。
+  const temporaryBuiltInFallbackRef = useRef(false);
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped');
   const [currentPosition, setCurrentPosition] = useState<{ measureIndex: number; beatPosition: number; noteIndex: number }>({
     measureIndex: 0, beatPosition: 0, noteIndex: 0
@@ -111,6 +120,7 @@ export default function ScorePage() {
       return {
         engineMode: parsed.engineMode ?? DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.engineMode,
         pluginName: parsed.pluginName ?? DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.pluginName,
+        previewAccidentalOnApply: parsed.previewAccidentalOnApply ?? DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.previewAccidentalOnApply,
         profile: {
           ...DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile,
           ...(parsed.profile ?? {})
@@ -155,9 +165,20 @@ export default function ScorePage() {
     // - built-in: 安定性優先
     // - soundfont: 読み込み速度優先
     // という使い分けをここでしている。
-    const audioEngine = soundRuntimeSettings.engineMode === 'built-in'
-      ? recreateAudioEngine()
-      : getAudioEngine();
+    let audioEngine: PlaybackEngine;
+
+    if (soundRuntimeSettings.engineMode === 'built-in') {
+      // ユーザーが最初から内蔵音源を選んでいる場合は、毎回その設定で作り直す。
+      temporaryBuiltInFallbackRef.current = false;
+      audioEngine = recreateAudioEngine();
+    } else if (temporaryBuiltInFallbackRef.current) {
+      // 直前の再生だけ内蔵音源へ逃がしていた場合は、
+      // 次の操作で「本来ユーザーが選んでいた方式」に戻す。
+      temporaryBuiltInFallbackRef.current = false;
+      audioEngine = recreateAudioEngine();
+    } else {
+      audioEngine = getAudioEngine();
+    }
 
     // どの方式でも、毎回「今のUI設定」をエンジン側へ流し直してズレを防ぐ。
     audioEngine.setInstrument(currentInstrument);
@@ -165,6 +186,38 @@ export default function ScorePage() {
     await audioEngine.initialize();
     return audioEngine;
   }, [currentInstrument, getAudioEngine, recreateAudioEngine, soundRuntimeSettings.engineMode, soundRuntimeSettings.profile]);
+
+  const switchToBuiltInFallbackEngine = useCallback(async () => {
+    // SoundFont の初期化やサンプル読み込みで失敗したときに、
+    // 「完全に無音」よりは内蔵音源へ安全に逃がすための保険経路。
+    getAudioEngine().dispose();
+    temporaryBuiltInFallbackRef.current = true;
+    const fallbackEngine = createPlaybackEngine({
+      ...soundRuntimeSettings,
+      engineMode: 'built-in',
+    });
+    fallbackEngine.setInstrument(currentInstrument);
+    fallbackEngine.setSoundProfile(soundRuntimeSettings.profile);
+    await fallbackEngine.initialize();
+    audioEngineRef.current = fallbackEngine;
+    return fallbackEngine;
+  }, [currentInstrument, getAudioEngine, soundRuntimeSettings]);
+
+  const runWithPlaybackFallback = useCallback(async <T,>(action: (engine: PlaybackEngine) => Promise<T>) => {
+    try {
+      const preferredEngine = await prepareAudioEngine();
+      return await action(preferredEngine);
+    } catch (error) {
+      if (soundRuntimeSettings.engineMode !== 'soundfont') {
+        throw error;
+      }
+
+      console.warn('[ScorePage] SoundFont再生に失敗したため、内蔵音源へフォールバックします:', error);
+
+      const fallbackEngine = await switchToBuiltInFallbackEngine();
+      return await action(fallbackEngine);
+    }
+  }, [prepareAudioEngine, soundRuntimeSettings.engineMode, switchToBuiltInFallbackEngine]);
 
   useEffect(() => {
     // 音源方式や SoundFont パック名が変わったときだけ、実体を差し替える。
@@ -232,9 +285,6 @@ export default function ScorePage() {
       // 連続再生時に前回の停止予約が残ると UI だけ先に stopped に戻るため、先に解除する
       clearPlaybackTimer();
       resetPlaybackClock();
-      // Safari では見かけ上 running の古い AudioContext が無音になることがある。
-      // ユーザー操作で始まる再生は毎回まったく新しいエンジンへ差し替える。
-      const audioEngine = await prepareAudioEngine();
 
       const parts: MeasureData[][] = [];
       if (scoreType === 'quartet') {
@@ -246,22 +296,24 @@ export default function ScorePage() {
         if (rightHandData && rightHandData.length > 0) parts.push(rightHandData);
       }
 
-      if (parts.length > 0) {
-        const partObjs = parts.map(measures => ({ measures }));
-        await audioEngine.playParts(partObjs, tempoSettings.bpm);
+      await runWithPlaybackFallback(async (audioEngine) => {
+        if (parts.length > 0) {
+          const partObjs = parts.map(measures => ({ measures }));
+          await audioEngine.playParts(partObjs, tempoSettings.bpm);
 
-        // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
-        const totalDuration = Math.max(...parts.map(part => calculateScoreDuration(part, tempoSettings.bpm)));
-        setPlaybackState('playing');
-        armPlaybackCompletionTimer(totalDuration * 1000);
-      } else {
-        // 譜面が空でも「再生ボタンが壊れていないか」は確認できるように、
-        // 代表音として C4 を 1拍だけ鳴らす。
-        const duration = 60 / tempoSettings.bpm;
-        await audioEngine.playNoteByName('C4', duration);
-        setPlaybackState('playing');
-        armPlaybackCompletionTimer(duration * 1000);
-      }
+          // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
+          const totalDuration = Math.max(...parts.map(part => calculateScoreDuration(part, tempoSettings.bpm)));
+          setPlaybackState('playing');
+          armPlaybackCompletionTimer(totalDuration * 1000);
+        } else {
+          // 譜面が空でも「再生ボタンが壊れていないか」は確認できるように、
+          // 代表音として C4 を 1拍だけ鳴らす。
+          const duration = 60 / tempoSettings.bpm;
+          await audioEngine.playNoteByName('C4', duration);
+          setPlaybackState('playing');
+          armPlaybackCompletionTimer(duration * 1000);
+        }
+      });
     } catch (error: unknown) {
       console.error('[ScorePage] 再生開始に失敗:', error);
       if (error instanceof Error) {
@@ -275,7 +327,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [armPlaybackCompletionTimer, clearPlaybackTimer, getAudioEngine, playbackState, prepareAudioEngine, resetPlaybackClock, tempoSettings.bpm, rightHandData, leftHandData, quartetParts, scoreType]);
+  }, [armPlaybackCompletionTimer, clearPlaybackTimer, getAudioEngine, playbackState, resetPlaybackClock, tempoSettings.bpm, rightHandData, leftHandData, quartetParts, scoreType, runWithPlaybackFallback]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -321,12 +373,13 @@ export default function ScorePage() {
   const handleInstrumentPreview = useCallback(async () => {
     try {
       // プレビューは「いま選んでいる音源方式 + 楽器 + 音色調整」をそのまま確認するための入口。
-      const audioEngine = await prepareAudioEngine();
-      await audioEngine.playNoteByName('C4', 0.5);
+      await runWithPlaybackFallback(async (audioEngine) => {
+        await audioEngine.playNoteByName('C4', 0.5);
+      });
     } catch (error) {
       console.error('[ScorePage] 音色プレビューに失敗:', error);
     }
-  }, [prepareAudioEngine]);
+  }, [runWithPlaybackFallback]);
 
   const handleSoundEngineModeChange = useCallback((mode: SoundEngineMode) => {
     setSoundRuntimeSettings(prev => ({ ...prev, engineMode: mode }));
@@ -338,6 +391,14 @@ export default function ScorePage() {
 
   const handleSoundProfileChange = useCallback((profile: PlaybackSoundRuntimeSettings['profile']) => {
     setSoundRuntimeSettings(prev => ({ ...prev, profile }));
+  }, []);
+
+  const handlePreviewAccidentalOnApplyChange = useCallback((enabled: boolean) => {
+    setSoundRuntimeSettings(prev => ({ ...prev, previewAccidentalOnApply: enabled }));
+  }, []);
+
+  const handleKeySignatureChange = useCallback((nextKeySignature: KeySignature) => {
+    setKeySignature(normalizeKeySignature(nextKeySignature));
   }, []);
 
   const isEditingDisabled = playbackState === 'playing';
@@ -393,7 +454,7 @@ export default function ScorePage() {
             { partId: 'melody', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
           ];
 
-    await saveScore(metadata, parts, totalSystems, 4, scoreType);
+    await saveScore(metadata, parts, totalSystems, 4, scoreType, keySignature);
   };
 
   const handleLoad = async () => {
@@ -406,6 +467,7 @@ export default function ScorePage() {
       setArranger(loadedData.metadata.arranger);
 
       const loadedType = loadedData.scoreType ?? 'single';
+      setKeySignature(normalizeKeySignature(loadedData.keySignature));
       setScoreType(loadedType);
 
       if (loadedType === 'quartet') {
@@ -433,6 +495,7 @@ export default function ScorePage() {
     setComposer(sampleScore.metadata.composer);
     setArranger(sampleScore.metadata.arranger);
     setScoreType(sampleScore.scoreType);
+    setKeySignature(normalizeKeySignature(sampleScore.keySignature));
     setRightHandData(sampleScore.rightHand);
     setLeftHandData(sampleScore.leftHand);
     setQuartetParts(Array.from({ length: 4 }, () => []));
@@ -570,6 +633,27 @@ export default function ScorePage() {
             >
               弦楽四重奏
             </button>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 8 }}>
+              <span style={{ fontSize: 12, color: '#444' }}>調号</span>
+              <select
+                value={keySignature}
+                onChange={(event) => setKeySignature(normalizeKeySignature(event.target.value))}
+                aria-label="調号"
+                style={{
+                  border: '1px solid #ccc',
+                  borderRadius: 6,
+                  padding: '4px 8px',
+                  fontSize: 12,
+                  background: '#fff',
+                }}
+              >
+                {KEY_SIGNATURE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <PlaybackControls
@@ -589,6 +673,7 @@ export default function ScorePage() {
             onSoundEngineModeChange={handleSoundEngineModeChange}
             onPluginNameChange={handlePluginNameChange}
             onSoundProfileChange={handleSoundProfileChange}
+            onPreviewAccidentalOnApplyChange={handlePreviewAccidentalOnApplyChange}
           />
           <SaveLoadButtons
             onSave={handleSave}
@@ -689,6 +774,10 @@ export default function ScorePage() {
                       startMeasureIndex={i * systemsPerPage * 4}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
+                      currentInstrument={currentInstrument}
+                      previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
+                      keySignature={keySignature}
+                      onKeySignatureChange={handleKeySignatureChange}
                     />
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
@@ -704,6 +793,10 @@ export default function ScorePage() {
                       startMeasureIndex={i * systemsPerPage * 4}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
+                      currentInstrument={currentInstrument}
+                      previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
+                      keySignature={keySignature}
+                      onKeySignatureChange={handleKeySignatureChange}
                     />
                   ) : (
                     <StaffCanvas
@@ -718,6 +811,10 @@ export default function ScorePage() {
                       startMeasureIndex={i * systemsPerPage * 4}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
+                      currentInstrument={currentInstrument}
+                      previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
+                      keySignature={keySignature}
+                      onKeySignatureChange={handleKeySignatureChange}
                     />
                   )}
 

@@ -100,6 +100,10 @@ class AudioEngine {
 - 音色確認をしやすくするため、説明用のピアノ譜に加えて `金管テストフレーズ` と `弦テストフレーズ` のサンプル譜を用意する
 - サンプル譜は `DemoScoreId` で切り替え、各サンプルに `recommendedInstrument` を持たせて「まずこの楽器で聴くと差が分かりやすい」初期状態を自動設定する
 - Safari では `AudioContext` が `running` に見えても無音になることがあるため、初期化直後と `resume()` 直後にごく短い無音ノードを流して出力経路をウォームアップする
+- Safari でもまず選択中の音源方式で再生を試し、一時的な SoundFont 読み込み失敗時だけ `built-in` に一時フォールバックする
+- ただし `playback-sound-runtime-settings.engineMode` 自体は書き換えず、次回の再生準備でユーザーが選んでいた `soundfont` / `plugin` に戻す
+- 音符クリックの個別再生は `NotePlayer` 経路を使うが、ここも `ScorePage` の現在楽器選択に追従させ、再生ボタン系と音色がずれないようにする
+- 臨時記号適用時の確認音は個別に ON/OFF できるようにし、通常の音符クリック再生とは分けて制御する
 
 ### NotePlayer
 

@@ -3,9 +3,20 @@ import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental
 import type { Tool } from './Palette';
 import type { TieArc } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
-import { SoundSource } from '../audio/SoundSource';
+import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
 import { computeArcGeometry } from './arcUtils';
+import {
+  applyKeySignatureToNaturalKey,
+  hasVisibleKeySignature,
+  normalizeKeySignature,
+  setKeyAccidental,
+  shiftKeySignatureByAccidental,
+  createMeasureAccidentalState,
+  resolveDisplayAccidentalsForKeys,
+  type MeasureAccidentalState,
+  type KeySignature,
+} from '../utils/noteKeyUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -21,6 +32,7 @@ import { computeArcGeometry } from './arcUtils';
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
 type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[] };
 type MeasureData = { events: NoteEvent[] };
+type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 
 type Props = {
   systems?: number;
@@ -34,6 +46,10 @@ type Props = {
   disabled?: boolean; // 編集を無効にするフラグ
   clef?: 'treble' | 'bass' | 'alto'; // 音部記号（デフォルト: treble）
   yOffset?: number; // Safari座標ズレ補正（client px単位）
+  currentInstrument?: InstrumentType; // 個別再生で使う現在の音色
+  previewAccidentalOnApply?: boolean; // 臨時記号適用時に確認音を鳴らすか
+  keySignature?: KeySignature; // 調号
+  onKeySignatureChange?: (keySignature: KeySignature) => void; // 行頭クリックによる調号変更
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -163,6 +179,66 @@ function midiToKey(midi: number, preferSharp: boolean): string {
   const oct = Math.floor(midi / 12) - 1;
   const name = preferSharp ? SHARP[pc] : FLAT[pc];
   return `${name}/${oct}`;
+}
+
+function placeKeySignatureAfterTimeSignature(stave: Stave): void {
+  const modifiers = (stave as any).getModifiers?.() as Array<any> | undefined;
+  if (!modifiers) {
+    return;
+  }
+
+  const keySignature = modifiers.find((modifier) => modifier?.getCategory?.() === 'KeySignature');
+  const timeSignature = modifiers.find((modifier) => modifier?.getCategory?.() === 'TimeSignature');
+  if (!keySignature || !timeSignature) {
+    return;
+  }
+
+  const keyX = keySignature.getX?.();
+  const timeX = timeSignature.getX?.();
+  const keyWidth = keySignature.getWidth?.();
+  const timeWidth = timeSignature.getWidth?.();
+  if (![keyX, timeX, keyWidth, timeWidth].every((value) => typeof value === 'number' && Number.isFinite(value))) {
+    return;
+  }
+
+  const gapBetweenKeyAndTime = timeX - keyX - keyWidth;
+  // VexFlow の BEGIN 修飾子は内部で「調号 → 拍子」に固定ソートされる。
+  // そのため描画前に X 座標だけ入れ替えて、このエディタの見た目要件
+  // （拍子記号の右に調号を置く）を満たす。
+  timeSignature.setX?.(keyX);
+  keySignature.setX?.(keyX + timeWidth + Math.max(0, gapBetweenKeyAndTime));
+}
+
+function getKeySignatureHitBounds(
+  stave: Stave,
+  fallbackLeft: number,
+  fallbackRight: number
+): { left: number; right: number } {
+  const MIN_KEY_SIGNATURE_HIT_WIDTH = 36;
+  const clampBounds = (left: number, right: number) => ({
+    left,
+    // 拍子記号と最初の音符が近い場合でも、調号変更を試せるだけの幅を確保する。
+    right: Math.max(right, left + MIN_KEY_SIGNATURE_HIT_WIDTH),
+  });
+
+  const modifiers = (stave as any).getModifiers?.() as Array<any> | undefined;
+  if (!modifiers) {
+    return clampBounds(fallbackLeft, fallbackRight);
+  }
+
+  const timeSignature = modifiers.find((modifier) => modifier?.getCategory?.() === 'TimeSignature');
+  if (!timeSignature) {
+    return clampBounds(fallbackLeft, fallbackRight);
+  }
+
+  const timeX = timeSignature.getX?.();
+  const timeWidth = timeSignature.getWidth?.();
+  if (typeof timeX !== 'number' || typeof timeWidth !== 'number') {
+    return clampBounds(fallbackLeft, fallbackRight);
+  }
+
+  // 拍子記号がある段では、その右側から音符開始位置までを調号クリック領域にする。
+  return clampBounds(timeX + timeWidth, fallbackRight);
 }
 
 /* ===== SVGユーティリティ ===== */
@@ -296,7 +372,11 @@ function snapLineBySpacing(stave: Stave, y: number): number {
 /* ===== 時間ベース位置計算（休符重なり修正用） ===== */
 
 /* ===== ノート生成（臨時記号を付与） ===== */
-function makeVFNote(ev: NoteEvent, clef: 'treble' | 'bass' | 'alto' = 'treble') {
+function makeVFNote(
+  ev: NoteEvent,
+  accidentalState: MeasureAccidentalState,
+  clef: 'treble' | 'bass' | 'alto' = 'treble'
+) {
   const vfDur = toVFDur(ev.dur);
   if (ev.isRest) {
     const restKey = clef === 'bass' ? 'd/3' : clef === 'alto' ? 'c/4' : 'b/4';
@@ -309,15 +389,32 @@ function makeVFNote(ev: NoteEvent, clef: 'treble' | 'bass' | 'alto' = 'treble') 
     return new StaveNote({ clef, keys: [restKey], duration: (vfDur as VFDur) + 'r' });
   }
   const n = new StaveNote({ clef, keys: ev.keys, duration: vfDur });
-  // 各音高に臨時記号を付与
-  ev.keys.forEach((key, idx) => {
-    const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i);
-    const acc = m?.[2] || '';
-    if (acc) {
-      try { (n as any).addModifier?.(idx, new Accidental(acc)); (n as any).addAccidental?.(idx, new Accidental(acc)); } catch {}
+  // 小節内の過去状態を見て、「今ここで本当に見せるべき臨時記号」だけを付ける。
+  // これにより同じ小節内で # を毎回重ねず、# のあとに元の音へ戻したときは n を表示できる。
+  const displayAccidentals = resolveDisplayAccidentalsForKeys(ev.keys, accidentalState);
+  displayAccidentals.forEach((acc, idx) => {
+    if (!acc) return;
+    try {
+      // VexFlow 5 系では addModifier(Modifier, index) の順で渡す必要がある。
+      // index を先に渡すと、臨時記号オブジェクトとして解釈されず描画されない。
+      (n as any).addModifier?.(new Accidental(acc), idx);
+    } catch {
+      // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
     }
   });
   return n;
+}
+
+function applyAccidentalToEvent(ev: NoteEvent, accidental: 'sharp' | 'flat' | 'natural'): NoteEvent {
+  if (ev.isRest) {
+    return ev;
+  }
+
+  // 和音では「選択中のイベント全体に同じ臨時記号を付ける」方針にする。
+  // 既存の矢印キー移動も和音全体へ一括適用しているため、操作ルールをそろえやすい。
+  const nextKeys = ev.keys.map(key => setKeyAccidental(key, accidental));
+  const changed = nextKeys.some((key, index) => key !== ev.keys[index]);
+  return changed ? { ...ev, keys: nextKeys } : ev;
 }
 
 /* ===== 範囲チェック（要件3.4対応） ===== */
@@ -350,8 +447,10 @@ function logNoteAddition(measureIndex: number, x: number, y: number, key: string
 export default function StaffCanvas({
   systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
   initialScoreData, onScoreDataChange, startMeasureIndex = 0, disabled = false,
-  clef = 'treble', yOffset = 0,
+  clef = 'treble', yOffset = 0, currentInstrument = InstrumentType.PIANO, previewAccidentalOnApply = true, keySignature = 'C',
+  onKeySignatureChange,
 }: Props) {
+  const normalizedKeySignature = normalizeKeySignature(keySignature);
   // clef に応じた変換関数を選択
   const lineToKey = clef === 'bass' ? lineToKeyBass : clef === 'alto' ? lineToKeyAlto : lineToKeyTreble;
   const keyToLine = clef === 'bass' ? keyToLineBass : clef === 'alto' ? keyToLineAlto : keyToLineTreble;
@@ -369,9 +468,11 @@ export default function StaffCanvas({
   const selectedRef = useRef(selected);
   const disabledRef = useRef(disabled);
   const yOffsetRef = useRef(yOffset);
+  const keySignatureRef = useRef<KeySignature>(normalizedKeySignature);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { disabledRef.current = disabled; }, [disabled]);
   useEffect(() => { yOffsetRef.current = yOffset; }, [yOffset]);
+  useEffect(() => { keySignatureRef.current = normalizedKeySignature; }, [normalizedKeySignature]);
 
   // 選択中のスラー/タイ（null = 未選択）
   const [selectedArc, setSelectedArc] = useState<{
@@ -455,6 +556,24 @@ export default function StaffCanvas({
       }
     };
   }, []);
+
+  // 全体再生やプレビューで選んだ楽器を、クリック再生にも合わせる。
+  // これをしないと、音符クリックだけ保存済みの古い音色やデフォルト音色へ戻ってしまう。
+  useEffect(() => {
+    const syncCurrentInstrument = async () => {
+      if (!notePlayerRef.current) {
+        return;
+      }
+
+      try {
+        await notePlayerRef.current.setSoundSource(currentInstrument);
+      } catch (error) {
+        console.error('[StaffCanvas] 個別再生用の音色同期に失敗:', error);
+      }
+    };
+
+    syncCurrentInstrument();
+  }, [currentInstrument]);
   
   // 音符再生関数
   const playNoteEvent = async (noteEvent: NoteEvent) => {
@@ -607,9 +726,19 @@ export default function StaffCanvas({
             const delta = up ? 1 : -1;
             newKeys = ev.keys.map(k => { const midi = keyToMidi(k); return midi == null ? k : midiToKey(midi + delta, up); });
           } else if (e.shiftKey) { // 1オクターブシフト
-            newKeys = ev.keys.map(k => lineToKey(keyToLine(k) + (up ? -3.5 : 3.5)));
+            newKeys = ev.keys.map(k =>
+              applyKeySignatureToNaturalKey(
+                lineToKey(keyToLine(k) + (up ? -3.5 : 3.5)),
+                keySignatureRef.current
+              )
+            );
           } else { // 線/間 1段シフト
-            newKeys = ev.keys.map(k => lineToKey(keyToLine(k) + (up ? -0.5 : 0.5)));
+            newKeys = ev.keys.map(k =>
+              applyKeySignatureToNaturalKey(
+                lineToKey(keyToLine(k) + (up ? -0.5 : 0.5)),
+                keySignatureRef.current
+              )
+            );
           }
 
           // 音高変化に合わせて弧の fromKey / toKey を更新する（キーのズレを防ぐ）
@@ -1080,18 +1209,30 @@ export default function StaffCanvas({
         const data: MeasureData | undefined = score[absoluteIndex];
 
         const stave = new Stave(x / s, y / s, w / s);
-        if (i === 0) { stave.addClef(clef); if (line === 0) stave.addTimeSignature('4/4'); }
+        if (i === 0) {
+          stave.addClef(clef);
+          if (line === 0) stave.addTimeSignature('4/4');
+          if (hasVisibleKeySignature(normalizedKeySignature)) {
+            stave.addKeySignature(normalizedKeySignature);
+          }
+        }
         stave.setEndBarType(Barline.type.SINGLE);
-        stave.setContext(ctx).draw();
-        const safeEvents: NoteEvent[] =
-          (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, keys:['b/4'] }])
+        stave.setContext(ctx);
+        stave.format();
+        placeKeySignatureAfterTimeSignature(stave);
+        stave.draw();
+        const safeEvents: RenderNoteEvent[] =
+          (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, keys:['b/4'], __isPlaceholder: true }])
           .map(ev => (!ev || !ev.dur ? { dur:'4' as DurKey, isRest:true, keys:['b/4'] } : {
             ...ev,
             dur: ev.dur as DurKey
           }));
+        // 臨時記号の効力は小節ごとにリセットされるため、
+        // 描画直前に小節専用の状態を作り、イベント順に更新していく。
+        const accidentalState = createMeasureAccidentalState(normalizedKeySignature);
 
         const vfNotes: StaveNote[] = safeEvents.map((ev, idx) => {
-          const n = makeVFNote(ev, clef) as any;
+          const n = makeVFNote(ev, accidentalState, clef) as any;
           const isSel = !!selected && selected.measure === absoluteIndex && selected.index === idx;
           if (isSel && n.setStyle) n.setStyle({ fillStyle:'#1d4ed8', strokeStyle:'#1d4ed8' });
           return n as StaveNote;
@@ -1106,13 +1247,19 @@ export default function StaffCanvas({
         const measureIndex = globalIndex; // 相対インデックス（このStaffCanvas内での位置）
         const xDraw = x / s, wDraw = w / s;
         const measLeft = xDraw, measRight = xDraw + wDraw;
+        const noteStartX = typeof (stave as any).getNoteStartX === 'function'
+          ? (stave as any).getNoteStartX()
+          : xDraw + ((i === 0) ? 50 : 0);
+        const keySignatureHitBounds = getKeySignatureHitBounds(
+          stave,
+          measLeft,
+          Math.min(measRight, noteStartX)
+        );
 
         // 休符位置調整（Formatter実行後、voice.draw前に実行）
         // 全休符の場合は小節の中央に配置
         try {
           // 音部記号の有無を判定（各行の最初の小節にのみ音部記号がある）
-          const hasClef = (i === 0);
-          
           // 簡単な全休符中央配置
           for (let j = 0; j < vfNotes.length && j < safeEvents.length; j++) {
             const note = vfNotes[j];
@@ -1121,9 +1268,6 @@ export default function StaffCanvas({
             if (event.isRest && event.dur === '1') { // 全休符の場合
               try {
                 // stave.getNoteStartX()で実際のノート描画開始位置を取得（クレフ・拍子記号を正確に考慮）
-                const noteStartX = typeof (stave as any).getNoteStartX === 'function'
-                  ? (stave as any).getNoteStartX()
-                  : xDraw + (hasClef ? 50 : 0);
                 const staveEndX = xDraw + wDraw;
                 const centerX = (noteStartX + staveEndX) / 2;
 
@@ -1249,7 +1393,7 @@ export default function StaffCanvas({
           }
           
           const snappedLine = snapLineBySpacing(stave, localY);
-          const key = lineToKey(snappedLine);
+          const key = applyKeySignatureToNaturalKey(lineToKey(snappedLine), keySignatureRef.current);
 
           let insertAt = safeEvents.length;
           let minDist = Infinity;
@@ -1317,7 +1461,16 @@ export default function StaffCanvas({
         (svgRoot as any).appendChild(guideDot);
         (svgRoot as any).appendChild(guideChordRect);
         (svgRoot as any).appendChild(insertRect);
-
+        if ('mode' in tool && tool.mode === 'accidental' && i === 0) {
+          const keySignatureDebugRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          keySignatureDebugRect.setAttribute('class', 'vf-key-signature-debug');
+          keySignatureDebugRect.setAttribute('x', String(keySignatureHitBounds.left));
+          keySignatureDebugRect.setAttribute('y', String(rectTop));
+          keySignatureDebugRect.setAttribute('width', String(keySignatureHitBounds.right - keySignatureHitBounds.left));
+          keySignatureDebugRect.setAttribute('height', String(rectBottom - rectTop));
+          keySignatureDebugRect.setAttribute('pointer-events', 'none');
+          (svgRoot as any).appendChild(keySignatureDebugRect);
+        }
         insertRect.addEventListener('mousemove', (e) => {
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
           hideChordGuide(); // 挿入エリアではコードガイドを隠す
@@ -1334,6 +1487,23 @@ export default function StaffCanvas({
           // タイモード中は音符挿入しない
           if ('mode' in tool && tool.mode === 'tie') return;
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
+          if ('mode' in tool && tool.mode === 'accidental') {
+            if (i === 0 && lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right) {
+              // 臨時記号ツール中の背景クリックは、調号領域なら調号変更へ回す。
+              console.info('[StaffCanvas] 調号領域クリック', {
+                tool: tool.accidental,
+                current: normalizedKeySignature,
+                next: shiftKeySignatureByAccidental(normalizedKeySignature, tool.accidental),
+                x: lx,
+                bounds: keySignatureHitBounds,
+              });
+              onKeySignatureChange?.(
+                shiftKeySignatureByAccidental(normalizedKeySignature, tool.accidental)
+              );
+            }
+            // 調号領域以外の背景クリックでは、音符を新規挿入しない。
+            return;
+          }
           doInsertAt(lx, ly, measureIndex);
         });
 
@@ -1346,6 +1516,11 @@ export default function StaffCanvas({
           for (let j = 0; j < anchors.length - 1; j++) mids.push((anchors[j] + anchors[j + 1]) / 2);
 
           vfNotes.forEach((n: any, j: number) => {
+            if (safeEvents[j]?.__isPlaceholder) {
+              // 空小節の初期表示用全休符は、編集対象ではなく見た目だけのガイド。
+              // ここに大きいヒット領域を付けると、背景クリックや調号クリックを奪ってしまう。
+              return;
+            }
             const rawLeft  = (j === 0) ? measLeft : mids[j - 1];
             const rawRight = (j === vfNotes.length - 1) ? measRight : mids[j];
 
@@ -1446,16 +1621,39 @@ export default function StaffCanvas({
               setSelectedArc(null);
               // タイモードではドラッグで操作するため、クリックは何もしない
               if ('mode' in tool && tool.mode === 'tie') return;
+              const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
 
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
               const isOnNote = lx >= noteVisualLeft - CHORD_HIT_PAD && lx <= noteVisualRight + CHORD_HIT_PAD &&
                 ly >= chordTopY && ly <= chordBotY;
+              if (accidentalMode && !safeEvents[j]?.isRest) {
+                // 臨時記号ツールは「符頭のど真ん中」だけでなく、
+                // その音符セルをクリックすれば適用できる方が実用的。
+                // ここでは和音追加ゾーン判定より先に処理し、
+                // 少し外したクリックでも記号を置けるようにする。
+                const currentEv = safeEvents[j];
+                const nextEv = applyAccidentalToEvent(currentEv, accidentalMode);
+                setScore(prev => {
+                  const next = prev.map(m => ({ events: [...(m?.events ?? [])] as NoteEvent[] }));
+                  if (absoluteIndex >= next.length) return prev;
+                  const targetEv = next[absoluteIndex].events[j];
+                  if (!targetEv || targetEv.isRest) return prev;
+                  next[absoluteIndex].events[j] = applyAccidentalToEvent(targetEv, accidentalMode);
+                  return next;
+                });
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                if (previewAccidentalOnApply) {
+                  playNoteEvent(nextEv);
+                }
+                return;
+              }
 
               if (!safeEvents[j]?.isRest && isOnNote) {
+
                 // 音符の描画範囲内 → 和音追加（クリックしたY位置の音高を追加）
                 const snappedLine = snapLineBySpacing(stave, ly);
-                const newKey = lineToKey(snappedLine);
+                const newKey = applyKeySignatureToNaturalKey(lineToKey(snappedLine), keySignatureRef.current);
                 const currentEv = safeEvents[j];
                 let playEvent = currentEv;
                 if (currentEv && !currentEv.keys.includes(newKey)) {
@@ -1474,9 +1672,30 @@ export default function StaffCanvas({
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });
                 if (playEvent) playNoteEvent(playEvent);
               } else if (safeEvents[j]?.isRest) {
+                if (accidentalMode) {
+                  const isKeySignatureZone = i === 0 &&
+                    lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right;
+                  if (isKeySignatureZone) {
+                    // 空小節は内部的に全休符プレースホルダーで描いているため、
+                    // その大きいヒット領域が背景クリックを先に受ける。
+                    // 行頭の調号領域だけは、ここでも調号変更へ流す。
+                    console.info('[StaffCanvas] 調号領域クリック', {
+                      tool: accidentalMode,
+                      current: normalizedKeySignature,
+                      next: shiftKeySignatureByAccidental(normalizedKeySignature, accidentalMode),
+                      x: lx,
+                      bounds: keySignatureHitBounds,
+                    });
+                    onKeySignatureChange?.(
+                      shiftKeySignatureByAccidental(normalizedKeySignature, accidentalMode)
+                    );
+                  }
+                  return;
+                }
                 // 休符クリック → 音符を挿入（rect が大きくなり insertRect に届かないため）
                 doInsertAt(lx, ly, measureIndex);
               } else {
+                if (accidentalMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsertAt(lx, ly, measureIndex);
               }
@@ -1636,7 +1855,7 @@ export default function StaffCanvas({
         } catch { /* 保険 */ }
       }
     });
-  }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc]);
+  }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, normalizedKeySignature]);
 
   return <div ref={ref} />;
 }

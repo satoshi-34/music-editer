@@ -10,10 +10,25 @@ import type { Tool } from './Palette';
 import type { MeasureData, TieArc } from '../types/storage';
 import type { ClefType } from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
+import { NotePlayer } from '../audio/NotePlayer';
+import { SoundSource, InstrumentType } from '../audio/SoundSource';
+import { defaultAudioEngine } from '../audio/AudioEngine';
+import {
+  applyKeySignatureToNaturalKey,
+  hasVisibleKeySignature,
+  normalizeKeySignature,
+  setKeyAccidental,
+  shiftKeySignatureByAccidental,
+  createMeasureAccidentalState,
+  resolveDisplayAccidentalsForKeys,
+  type MeasureAccidentalState,
+  type KeySignature,
+} from '../utils/noteKeyUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
 type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[] };
+type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 
 export type PartConfig = {
   clef: ClefType;
@@ -115,6 +130,65 @@ function midiToKey(midi: number, sharp: boolean): string {
   return `${(sharp?S:F)[pc]}/${oct}`;
 }
 
+function placeKeySignatureAfterTimeSignature(stave: Stave): void {
+  const modifiers = (stave as any).getModifiers?.() as Array<any> | undefined;
+  if (!modifiers) {
+    return;
+  }
+
+  const keySignature = modifiers.find((modifier) => modifier?.getCategory?.() === 'KeySignature');
+  const timeSignature = modifiers.find((modifier) => modifier?.getCategory?.() === 'TimeSignature');
+  if (!keySignature || !timeSignature) {
+    return;
+  }
+
+  const keyX = keySignature.getX?.();
+  const timeX = timeSignature.getX?.();
+  const keyWidth = keySignature.getWidth?.();
+  const timeWidth = timeSignature.getWidth?.();
+  if (![keyX, timeX, keyWidth, timeWidth].every((value) => typeof value === 'number' && Number.isFinite(value))) {
+    return;
+  }
+
+  const gapBetweenKeyAndTime = timeX - keyX - keyWidth;
+  // VexFlow の内部順は「調号 → 拍子」に固定されているため、
+  // 描画前に X 座標だけ入れ替えて UI 要件どおりの並びへ補正する。
+  timeSignature.setX?.(keyX);
+  keySignature.setX?.(keyX + timeWidth + Math.max(0, gapBetweenKeyAndTime));
+}
+
+function getKeySignatureHitBounds(
+  stave: Stave,
+  fallbackLeft: number,
+  fallbackRight: number
+): { left: number; right: number } {
+  const MIN_KEY_SIGNATURE_HIT_WIDTH = 36;
+  const clampBounds = (left: number, right: number) => ({
+    left,
+    // 拍子記号と最初の音符が近いとクリック幅がほぼ消えることがある。
+    // 最低幅を持たせると、調号を置く場所を目で確認しながら試せる。
+    right: Math.max(right, left + MIN_KEY_SIGNATURE_HIT_WIDTH),
+  });
+
+  const modifiers = (stave as any).getModifiers?.() as Array<any> | undefined;
+  if (!modifiers) {
+    return clampBounds(fallbackLeft, fallbackRight);
+  }
+
+  const timeSignature = modifiers.find((modifier) => modifier?.getCategory?.() === 'TimeSignature');
+  if (!timeSignature) {
+    return clampBounds(fallbackLeft, fallbackRight);
+  }
+
+  const timeX = timeSignature.getX?.();
+  const timeWidth = timeSignature.getWidth?.();
+  if (typeof timeX !== 'number' || typeof timeWidth !== 'number') {
+    return clampBounds(fallbackLeft, fallbackRight);
+  }
+
+  return clampBounds(timeX + timeWidth, fallbackRight);
+}
+
 function snapLine(stave: Stave, y: number): number {
   const topY=stave.getYForLine(0);
   const sp=(stave.getSpacingBetweenLines?.() as number)||((stave.getYForLine(4)-topY)/4);
@@ -183,7 +257,7 @@ function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: 
   return { x, y };
 }
 
-function makeVFNote(ev: NoteEvent, clef: ClefType) {
+function makeVFNote(ev: NoteEvent, accidentalState: MeasureAccidentalState, clef: ClefType) {
   const vd=toVFDur(ev.dur);
   if(ev.isRest){
     return new StaveNote({clef,keys:[restKeyForClef(clef)],duration:vd+'r'});
@@ -193,12 +267,30 @@ function makeVFNote(ev: NoteEvent, clef: ClefType) {
     return new StaveNote({clef,keys:[restKeyForClef(clef)],duration:vd+'r'});
   }
   const n=new StaveNote({clef,keys:ev.keys,duration:vd});
-  // 各音高に臨時記号を付与
-  ev.keys.forEach((key, idx) => {
-    const acc=key.match(/^[a-g]([#b]?)/i)?.[1]||'';
-    if(acc){try{(n as any).addModifier?.(idx,new Accidental(acc));(n as any).addAccidental?.(idx,new Accidental(acc));}catch{}}
+  // 小節内で効力が継続している記号は省略し、必要な位置だけ # / b / n を付ける。
+  const displayAccidentals = resolveDisplayAccidentalsForKeys(ev.keys, accidentalState);
+  displayAccidentals.forEach((acc, idx) => {
+    if (!acc) return;
+    try {
+      // VexFlow 5 系では addModifier(Modifier, index) の順で渡す必要がある。
+      // index を先に渡すと、臨時記号オブジェクトとして扱われず表示されない。
+      (n as any).addModifier?.(new Accidental(acc), idx);
+    } catch {
+      // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
+    }
   });
   return n;
+}
+
+function applyAccidentalToEvent(ev: NoteEvent, accidental: 'sharp' | 'flat' | 'natural'): NoteEvent {
+  if (ev.isRest) {
+    return ev;
+  }
+
+  // 和音全体へ同じ臨時記号を付けることで、単旋律譜と多段譜の操作ルールをそろえる。
+  const nextKeys = ev.keys.map(key => setKeyAccidental(key, accidental));
+  const changed = nextKeys.some((key, index) => key !== ev.keys[index]);
+  return changed ? { ...ev, keys: nextKeys } : ev;
 }
 
 /* ===== Props ===== */
@@ -217,6 +309,10 @@ type Props = {
   startMeasureIndex?: number;
   disabled?: boolean;
   yOffset?: number;
+  currentInstrument?: InstrumentType;
+  previewAccidentalOnApply?: boolean;
+  keySignature?: KeySignature;
+  onKeySignatureChange?: (keySignature: KeySignature) => void;
 };
 
 type Sel = { partIndex: number; measure: number; index: number } | null;
@@ -225,8 +321,10 @@ export default function PianoSystemCanvas({
   measuresPerSystem=4, tool, scale=0.86,
   trebleData, bassData, onTrebleChange, onBassChange,
   partsConfig,
-  startMeasureIndex=0, disabled=false, yOffset=0,
+  startMeasureIndex=0, disabled=false, yOffset=0, currentInstrument = InstrumentType.PIANO, previewAccidentalOnApply = true, keySignature = 'C',
+  onKeySignatureChange,
 }: Props) {
+  const normalizedKeySignature = normalizeKeySignature(keySignature);
   const ref = useRef<HTMLDivElement>(null);
 
   // partsConfig 優先、なければ piano backward compat の2段
@@ -247,6 +345,9 @@ export default function PianoSystemCanvas({
   const selRef = useRef<Sel>(null);
   const disRef = useRef(disabled);
   const yOffRef = useRef(yOffset);
+  const keySignatureRef = useRef<KeySignature>(normalizedKeySignature);
+  const notePlayerRef = useRef<NotePlayer | null>(null);
+  const soundSourceRef = useRef<SoundSource | null>(null);
   // キーボードハンドラが各パートのclefを参照できるようにrefで保持
   const partsClefRef = useRef(parts.map(p => p.clef));
   // 選択中のスラー/タイ（null = 未選択）
@@ -285,8 +386,86 @@ export default function PianoSystemCanvas({
   useEffect(()=>{selRef.current=selected;},[selected]);
   useEffect(()=>{disRef.current=disabled;},[disabled]);
   useEffect(()=>{yOffRef.current=yOffset;},[yOffset]);
+  useEffect(()=>{keySignatureRef.current=normalizedKeySignature;},[normalizedKeySignature]);
   // partsの変更（基本的にない）に追従
   partsClefRef.current = parts.map(p => p.clef);
+
+  // ピアノ譜 / 四重奏譜でも単旋律譜と同じ経路で音を鳴らす。
+  // ここが無いと、画面種別によって「クリックしても鳴る / 鳴らない」が分かれてしまう。
+  useEffect(() => {
+    const initializeNotePlayer = async () => {
+      try {
+        if (!defaultAudioEngine.isInitializedState()) {
+          try {
+            await defaultAudioEngine.initialize();
+          } catch (error) {
+            console.log('[PianoSystemCanvas] AudioEngineの初期化は後で行われます:', error);
+          }
+        }
+
+        soundSourceRef.current = new SoundSource(defaultAudioEngine);
+        await soundSourceRef.current.loadInstrument(soundSourceRef.current.getCurrentInstrument());
+        notePlayerRef.current = new NotePlayer(defaultAudioEngine, soundSourceRef.current);
+      } catch (error) {
+        console.error('[PianoSystemCanvas] NotePlayerの初期化に失敗:', error);
+      }
+    };
+
+    initializeNotePlayer();
+
+    return () => {
+      if (notePlayerRef.current) {
+        notePlayerRef.current.dispose();
+        notePlayerRef.current = null;
+      }
+      if (soundSourceRef.current) {
+        soundSourceRef.current.dispose();
+        soundSourceRef.current = null;
+      }
+    };
+  }, []);
+
+  // ScorePage で選んだ現在の楽器を、多段譜の個別再生にも反映する。
+  // これで臨時記号クリック後の確認音も、再生ボタンやプレビューと同じ音色で鳴る。
+  useEffect(() => {
+    const syncCurrentInstrument = async () => {
+      if (!notePlayerRef.current) {
+        return;
+      }
+
+      try {
+        await notePlayerRef.current.setSoundSource(currentInstrument);
+      } catch (error) {
+        console.error('[PianoSystemCanvas] 個別再生用の音色同期に失敗:', error);
+      }
+    };
+
+    syncCurrentInstrument();
+  }, [currentInstrument]);
+
+  const playNoteEvent = async (noteEvent: NoteEvent) => {
+    if (!notePlayerRef.current) {
+      console.warn('[PianoSystemCanvas] NotePlayerが初期化されていません');
+      return;
+    }
+
+    try {
+      if (!defaultAudioEngine.isInitializedState()) {
+        await defaultAudioEngine.initialize();
+      }
+      await defaultAudioEngine.start();
+
+      // AudioContext が再作成された直後は、既存のシンセ参照が古いままのことがある。
+      // そのため再生前に必ず再接続して、クリック直後の無音を防ぐ。
+      if (soundSourceRef.current) {
+        soundSourceRef.current.reconnectAllSynths();
+      }
+
+      await notePlayerRef.current.playNoteEvent(noteEvent);
+    } catch (error) {
+      console.error('[PianoSystemCanvas] 音符再生に失敗:', error);
+    }
+  };
 
   /* ----- 親データ同期 ----- */
   const partsDataJson = JSON.stringify(parts.map(p => p.data));
@@ -402,7 +581,12 @@ export default function PianoSystemCanvas({
             newKeys=ev.keys.map(k=>{const midi=keyToMidi(k);return midi==null?k:midiToKey(midi+delta,up);});
           }else{
             const diff=e.shiftKey?(up?-3.5:3.5):(up?-0.5:0.5);
-            newKeys=ev.keys.map(k=>l2k(k2l(k)+diff));
+            newKeys=ev.keys.map(k=>
+              applyKeySignatureToNaturalKey(
+                l2k(k2l(k)+diff),
+                keySignatureRef.current
+              )
+            );
           }
           // 音高変化に合わせて弧の fromKey / toKey を更新する
           const keyMap=new Map(ev.keys.map((k,i)=>[k,newKeys[i]]));
@@ -640,9 +824,15 @@ export default function PianoSystemCanvas({
         if(i===0){
           stave.addClef(part.clef);
           if(pi===0)stave.addTimeSignature('4/4');
+          if (hasVisibleKeySignature(normalizedKeySignature)) {
+            stave.addKeySignature(normalizedKeySignature);
+          }
         }
         stave.setEndBarType(Barline.type.SINGLE);
-        stave.setContext(ctx).draw();
+        stave.setContext(ctx);
+        stave.format();
+        placeKeySignatureAfterTimeSignature(stave);
+        stave.draw();
         staveSets[pi].push(stave);
       });
 
@@ -783,6 +973,14 @@ export default function PianoSystemCanvas({
       const absI=startMeasureIndex+i;
       const w=realWs[i];
       const measLeft=x/s, measRight=(x+w)/s;
+      const firstStaveNoteStartX = typeof (staveSets[0][i] as any).getNoteStartX === 'function'
+        ? (staveSets[0][i] as any).getNoteStartX()
+        : measLeft + ((i === 0) ? CLEF_PAD_FIRST : 0);
+      const firstStaveKeySignatureHitBounds = getKeySignatureHitBounds(
+        staveSets[0][i],
+        measLeft,
+        Math.min(measRight, firstStaveNoteStartX)
+      );
 
       const guideLine=document.createElementNS('http://www.w3.org/2000/svg','line');
       guideLine.setAttribute('class','vf-guide-line');guideLine.style.display='none';
@@ -831,11 +1029,13 @@ export default function PianoSystemCanvas({
         const k2l=(k:string)=>keyToLineForClef(part.clef,k);
 
         const data=absI<score.length?score[absI]:undefined;
-        const safeEvs:NoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[restKeyForClef(part.clef)]}])
+        const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[restKeyForClef(part.clef)],__isPlaceholder:true}])
           .map(ev=>(!ev||!ev.dur)?{dur:'4' as DurKey,isRest:true,keys:['b/4']}:{...ev,dur:ev.dur as DurKey});
+        // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
+        const accidentalState = createMeasureAccidentalState(normalizedKeySignature);
 
         const vfNotes=safeEvs.map((ev,idx)=>{
-          const n=makeVFNote(ev,part.clef) as any;
+          const n=makeVFNote(ev, accidentalState, part.clef) as any;
           const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===idx;
           if(isSel&&n.setStyle)n.setStyle({fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
           return n as StaveNote;
@@ -894,7 +1094,7 @@ export default function PianoSystemCanvas({
         };
 
         const doInsert=(lx:number,ly:number)=>{
-          const key=l2k(snapLine(stave,ly));
+          const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), keySignatureRef.current);
           let at=safeEvs.length,minD=Infinity;
           if(vfNotes.length>0){
             [{x:measLeft,j:0},{x:measRight,j:vfNotes.length}].forEach(({x,j})=>{
@@ -944,15 +1144,47 @@ export default function PianoSystemCanvas({
           setSelectedArc(null);
           if('mode' in tool&&tool.mode==='tie')return;
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
+          if('mode' in tool&&tool.mode==='accidental'){
+            if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
+              // 臨時記号ツール中の背景クリックは、調号領域なら調号変更へ回す。
+              console.info('[PianoSystemCanvas] 調号領域クリック', {
+                tool: tool.accidental,
+                current: normalizedKeySignature,
+                next: shiftKeySignatureByAccidental(normalizedKeySignature, tool.accidental),
+                x: lx,
+                bounds: firstStaveKeySignatureHitBounds,
+              });
+              onKeySignatureChange?.(
+                shiftKeySignatureByAccidental(normalizedKeySignature, tool.accidental)
+              );
+            }
+            // 調号領域以外の背景クリックでは、音符を新規挿入しない。
+            return;
+          }
           doInsert(lx,ly);
         });
         svgRoot.appendChild(ir);
+        if ('mode' in tool && tool.mode === 'accidental' && i === 0) {
+          const keySignatureDebugRect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+          keySignatureDebugRect.setAttribute('class','vf-key-signature-debug');
+          keySignatureDebugRect.setAttribute('x',String(firstStaveKeySignatureHitBounds.left));
+          keySignatureDebugRect.setAttribute('y',String(staveTop));
+          keySignatureDebugRect.setAttribute('width',String(firstStaveKeySignatureHitBounds.right - firstStaveKeySignatureHitBounds.left));
+          keySignatureDebugRect.setAttribute('height',String(staveBot - staveTop));
+          keySignatureDebugRect.setAttribute('pointer-events','none');
+          svgRoot.appendChild(keySignatureDebugRect);
+        }
 
         if(vfNotes.length>0){
           const anchors=vfNotes.map((n:any,j)=>n.getAbsoluteX?n.getAbsoluteX():measLeft+(j+1)*(measRight-measLeft)/(vfNotes.length+1));
           const mids=anchors.slice(0,-1).map((a,j)=>(a+anchors[j+1])/2);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           vfNotes.forEach((n:any,j)=>{
+            if (safeEvs[j]?.__isPlaceholder) {
+              // 空小節の見た目用全休符は編集ヒット領域を持たせない。
+              // 背景クリックを優先して、調号変更や新規入力をしやすくする。
+              return;
+            }
             const rl=j===0?measLeft:mids[j-1], rr=j===vfNotes.length-1?measRight:mids[j];
             let xl=Math.max(measLeft+1,rl-CELL_PAD), xr=Math.min(measRight-1,rr+CELL_PAD);
             if(xr-xl<HIT_MIN_W){const h=(HIT_MIN_W-(xr-xl))/2;xl=Math.max(measLeft+1,xl-h);xr=Math.min(measRight-1,xr+h);}
@@ -1028,16 +1260,41 @@ export default function PianoSystemCanvas({
               e.stopPropagation();
               setSelectedArc(null);
               if('mode' in tool&&tool.mode==='tie')return;
+              const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
+              if (accidentalMode && !safeEvs[j]?.isRest) {
+                // 多段譜でも単旋律譜と同じ感覚で使えるよう、
+                // 臨時記号は音符セル内クリックなら適用できるようにする。
+                // 符頭の狭い当たり判定だけにすると「置けない」と感じやすいため、
+                // 和音追加より先にこちらを処理する。
+                const nextEv = applyAccidentalToEvent(safeEvs[j], accidentalMode);
+                setScore(prev=>{
+                  const next=prev.map(m=>({events:[...(m?.events??[])] as NoteEvent[]}));
+                  if(absI>=next.length)return prev;
+                  const targetEv=next[absI].events[j];
+                  if(!targetEv||targetEv.isRest)return prev;
+                  next[absI].events[j]=applyAccidentalToEvent(targetEv, accidentalMode);
+                  return next;
+                });
+                setSelected({partIndex:pi,measure:absI,index:j});
+                if (previewAccidentalOnApply) {
+                  playNoteEvent(nextEv);
+                }
+                return;
+              }
+
               if(!safeEvs[j]?.isRest&&isOnNote){
+
                 // 音符の描画範囲内 → 和音追加
-                const newKey=l2k(snapLine(stave,ly));
+                const newKey=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), keySignatureRef.current);
                 const currentEv=safeEvs[j];
+                let playEvent = currentEv;
                 if(currentEv&&!currentEv.keys.includes(newKey)){
                   const newKeys=[...currentEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
+                  playEvent = { ...currentEv, keys: newKeys };
                   setScore(prev=>{
                     const next=prev.map(m=>({events:[...(m?.events??[])] as NoteEvent[]}));
                     if(absI>=next.length)return prev;
@@ -1048,10 +1305,31 @@ export default function PianoSystemCanvas({
                   });
                 }
                 setSelected({partIndex:pi,measure:absI,index:j});
+                playNoteEvent(playEvent);
               }else if(safeEvs[j]?.isRest){
+                if (accidentalMode) {
+                  const isKeySignatureZone = i===0 &&
+                    lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
+                  if (isKeySignatureZone) {
+                    // 多段譜でも空小節は全休符プレースホルダーが背景クリックを拾うため、
+                    // 調号領域だけはここから調号変更へ流す。
+                    console.info('[PianoSystemCanvas] 調号領域クリック', {
+                      tool: accidentalMode,
+                      current: normalizedKeySignature,
+                      next: shiftKeySignatureByAccidental(normalizedKeySignature, accidentalMode),
+                      x: lx,
+                      bounds: firstStaveKeySignatureHitBounds,
+                    });
+                    onKeySignatureChange?.(
+                      shiftKeySignatureByAccidental(normalizedKeySignature, accidentalMode)
+                    );
+                  }
+                  return;
+                }
                 // 休符クリック → 音符を挿入（rect が大きくなり insertRect に届かないため）
                 doInsert(lx,ly);
               }else{
+                if (accidentalMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsert(lx,ly);
               }
@@ -1189,7 +1467,7 @@ export default function PianoSystemCanvas({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[partsScore,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem]);
+  },[partsScore,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,normalizedKeySignature]);
 
   return <div ref={ref} style={{overflow:'visible'}}/>;
 }
