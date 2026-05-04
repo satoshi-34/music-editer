@@ -562,7 +562,11 @@ export default function PianoSystemCanvas({
         }
 
         soundSourceRef.current = new SoundSource(defaultAudioEngine);
-        await soundSourceRef.current.loadInstrument(soundSourceRef.current.getCurrentInstrument());
+        // 初期化直後は保存済み楽器が残っていても、
+        // 入力確認音は「いま再生パネルで選んだ楽器」に合わせたい。
+        // そのため生成直後に currentInstrument へそろえてから読み込む。
+        soundSourceRef.current.setCurrentInstrument(currentInstrument);
+        await soundSourceRef.current.loadInstrument(currentInstrument);
         notePlayerRef.current = new NotePlayer(defaultAudioEngine, soundSourceRef.current);
       } catch (error) {
         console.error('[PianoSystemCanvas] NotePlayerの初期化に失敗:', error);
@@ -581,7 +585,7 @@ export default function PianoSystemCanvas({
         soundSourceRef.current = null;
       }
     };
-  }, []);
+  }, [currentInstrument]);
 
   // ScorePage で選んだ現在の楽器を、多段譜の個別再生にも反映する。
   // これで臨時記号クリック後の確認音も、再生ボタンやプレビューと同じ音色で鳴る。

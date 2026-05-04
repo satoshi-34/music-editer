@@ -377,7 +377,8 @@ await recoveredEngine.initialize();
 
 ### 修正設計
 
-`ScorePage` の `currentInstrument` を譜面コンポーネントへ渡し、`StaffCanvas` / `PianoSystemCanvas` 側で `notePlayerRef.current.setSoundSource(currentInstrument)` を呼んで同期する。
+`ScorePage` の `currentInstrument` を譜面コンポーネントへ渡し、`StaffCanvas` / `PianoSystemCanvas` 側で `notePlayerRef.current.setSoundSource(currentInstrument)` を呼んで同期する。  
+さらに `NotePlayer` 初期化直後にも `SoundSource` を `currentInstrument` にそろえてから楽器を読み込み、`useEffect` の初回実行が早すぎて同期を取りこぼすケースを防ぐ。
 
 ### 期待される効果
 

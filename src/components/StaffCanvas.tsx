@@ -622,9 +622,12 @@ export default function StaffCanvas({
         
         // SoundSourceを作成
         soundSourceRef.current = new SoundSource(defaultAudioEngine);
-        
-        // デフォルト楽器を読み込み
-        await soundSourceRef.current.loadInstrument(soundSourceRef.current.getCurrentInstrument());
+
+        // 初期化直後は localStorage の古い楽器が残っていることがあるため、
+        // まず親画面で今選ばれている楽器へそろえてから読み込む。
+        // これで「音符を置いた瞬間の確認音だけピアノに戻る」ずれを防ぐ。
+        soundSourceRef.current.setCurrentInstrument(currentInstrument);
+        await soundSourceRef.current.loadInstrument(currentInstrument);
         
         // NotePlayerを作成
         notePlayerRef.current = new NotePlayer(defaultAudioEngine, soundSourceRef.current);
@@ -647,7 +650,7 @@ export default function StaffCanvas({
         soundSourceRef.current = null;
       }
     };
-  }, []);
+  }, [currentInstrument]);
 
   // 全体再生やプレビューで選んだ楽器を、クリック再生にも合わせる。
   // これをしないと、音符クリックだけ保存済みの古い音色やデフォルト音色へ戻ってしまう。
