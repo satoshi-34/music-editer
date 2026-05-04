@@ -18,7 +18,12 @@ import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, PartData, ScoreType } from '../types/storage';
-import { createDemoScore, type DemoScoreId } from '../data/demoScores';
+import {
+  createDemoScore,
+  hasCustomPianoDemoScore,
+  saveCustomPianoDemoScore,
+  type DemoScoreId
+} from '../data/demoScores';
 import {
   KEY_SIGNATURE_OPTIONS,
   normalizeKeySignature,
@@ -30,15 +35,24 @@ import {
   type PlaybackSoundRuntimeSettings,
   type SoundEngineMode
 } from '../audio/playbackSettings';
-import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
+import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
+import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
+import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import type { TimeSignature } from '../types/storage';
 
 type PageSpec = { systems: number };
-
-const BEATS_PER_MEASURE = 4;
+type ToolbarTab = 'notes' | 'score' | 'playback' | 'other';
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
+const TIME_SIGNATURE_OPTIONS: TimeSignature[] = [
+  [4, 4],
+  [3, 4],
+  [3, 8],
+  [6, 8],
+  [2, 2],
+];
 
-function calculateScoreDuration(scoreData: MeasureData[], bpm: number): number {
+function calculateScoreDuration(scoreData: MeasureData[], bpm: number, timeSignature: TimeSignature): number {
   // 再生時間の見積もりも、実際に鳴らす順番と同じでないとずれる。
   // 例えば 2 小節ぶんを繰り返す譜面なのに元データの長さだけで測ると、
   // UI が先に stopped へ戻ってしまうため、ここでも先に展開しておく。
@@ -60,17 +74,15 @@ function calculateScoreDuration(scoreData: MeasureData[], bpm: number): number {
   }
 
   let totalDuration = 0;
+  const emptyMeasureBeats = getMeasureBeats(timeSignature);
   for (let i = 0; i <= lastUsedMeasureIndex; i++) {
     const measure = expandedScoreData[i];
     if (!measure || !measure.events || measure.events.length === 0) {
-      totalDuration += (60 / bpm) * BEATS_PER_MEASURE;
+      totalDuration += (60 / bpm) * emptyMeasureBeats;
     } else {
-      for (const event of measure.events) {
-        const durMap: Record<string, number> = {
-          '1': 4, '2': 2, '4': 1, '8': 0.5, '16': 0.25, '32': 0.125, '64': 0.0625
-        };
-        totalDuration += (durMap[event.dur] || 1) * (60 / bpm);
-      }
+      // 複数声部小節では voice ごとの長さの最大値を使わないと、
+      // 上声と下声を同時に持つ小節の終わり時刻が短く見積もられてしまう。
+      totalDuration += getMeasureDurationBeats(measure) * (60 / bpm);
     }
   }
   return totalDuration;
@@ -78,9 +90,12 @@ function calculateScoreDuration(scoreData: MeasureData[], bpm: number): number {
 
 export default function ScorePage() {
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
+  const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
   const [scoreType, setScoreType] = useState<ScoreType>('single');
   const [keySignature, setKeySignature] = useState<KeySignature>('C');
   const [showOffsetPanel, setShowOffsetPanel] = useState(false);
+  const [toolbarHeight, setToolbarHeight] = useState(180);
+  const toolbarRef = useRef<HTMLElement | null>(null);
 
   const [title, setTitle] = useState('タイトル');
   const [subtitle, setSubtitle] = useState('サブタイトル');
@@ -89,7 +104,8 @@ export default function ScorePage() {
   const [arranger, setArranger] = useState('編曲者');
 
   const { saveScore, loadScore, hasStoredData, error, isLoading, isSaving } = useScoreStorage();
-  const { tempoSettings, setBPM } = useTempoStorage();
+  const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
+  const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
 
   const [yOffset, setYOffset] = useState<number>(() => {
     const v = parseFloat(localStorage.getItem('yOffset') ?? '0');
@@ -108,6 +124,7 @@ export default function ScorePage() {
   );
 
   const audioEngineRef = useRef<PlaybackEngine>(createPlaybackEngine(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS));
+  const emergencyAudioContextRef = useRef<AudioContext | null>(null);
   // Safari や一時的な SoundFont 失敗時は、その1回だけ内蔵音源へ退避する。
   // ただし UI 上の選択は変えたくないため、「いまの ref は一時避難中か」を別 ref で覚える。
   const temporaryBuiltInFallbackRef = useRef(false);
@@ -299,17 +316,25 @@ export default function ScorePage() {
 
       await runWithPlaybackFallback(async (audioEngine) => {
         if (parts.length > 0) {
-          const partObjs = parts.map(measures => {
+          const referenceMeasures = parts[0] ?? [];
+          const partObjs = parts.map((measures, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
             // ここで「展開後の再生順」と「各音符のベロシティ」を一緒に作って渡す。
-            const expandedMeasures = expandMeasuresForPlayback(measures);
+            // 多段譜では各段が別々に repeat 情報を持つと再生順が分かれやすいので、
+            // 先頭パートの反復順を基準に他パートも同じ順番へそろえる。
+            const expandedMeasures = partIndex === 0
+              ? expandMeasuresForPlayback(measures)
+              : expandMeasuresForPlaybackWithReference(referenceMeasures, measures);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasures.map(item => item.measure));
 
             return {
               measures: expandedMeasures.map((item, expandedMeasureIndex) => ({
                 ...item.measure,
-                events: item.measure.events.map((event, eventIndex) => ({
+                // 再生エンジン側が 3/8 や 6/8 の小節長を正しく保てるよう、
+                // 各小節の「本来ここまで進むべき拍数」を明示して渡す。
+                measureBeats: getMeasureBeats(scoreTimeSignature),
+                events: flattenMeasureForPlayback(item.measure).map((event, eventIndex) => ({
                   ...event,
                   // 強弱未設定や休符では velocity を省略し、
                   // エンジン側の安全な既定値 0.5 をそのまま使う。
@@ -325,7 +350,7 @@ export default function ScorePage() {
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
           // ここでは最大値を採用して全体の終了時刻を決める。
-          const totalDuration = Math.max(...parts.map(part => calculateScoreDuration(part, tempoSettings.bpm)));
+          const totalDuration = Math.max(...parts.map(part => calculateScoreDuration(part, tempoSettings.bpm, scoreTimeSignature)));
           setPlaybackState('playing');
           clearPlaybackTimer();
           remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
@@ -366,7 +391,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, getAudioEngine, playbackState, resetPlaybackClock, tempoSettings.bpm, rightHandData, leftHandData, quartetParts, scoreType, runWithPlaybackFallback]);
+  }, [clearPlaybackTimer, getAudioEngine, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, scoreType, runWithPlaybackFallback]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -426,6 +451,19 @@ export default function ScorePage() {
     }
   }, [runWithPlaybackFallback]);
 
+  const resetAudioSettingsToSafeDefaults = useCallback(() => {
+    // 無音が続くときは「いまの設定を維持したまま復旧」より、
+    // まず確実に鳴る既定状態へ戻すほうが原因切り分けをしやすい。
+    // ここでは built-in + ピアノ + 既定プロファイルへそろえ、
+    // localStorage 側にも同じ安全値を書き戻して次回起動へ持ち越さないようにする。
+    localStorage.setItem(
+      PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY,
+      JSON.stringify(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS)
+    );
+    setSoundRuntimeSettings(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS);
+    setCurrentInstrument(InstrumentType.PIANO);
+  }, []);
+
   const handleAudioRecovery = useCallback(async () => {
     try {
       // Safari の silent failure（処理は通るのに実音だけ出ない状態）は、
@@ -434,27 +472,64 @@ export default function ScorePage() {
       // いまの音声エンジンを安全に捨てて新しい AudioContext から復旧し直す。
       clearPlaybackTimer();
       resetPlaybackClock();
-      getAudioEngine().stopAll();
-      const recoveredEngine = recreateAudioEngine();
+      const staleEngine = getAudioEngine();
+      staleEngine.stopAll();
+      staleEngine.dispose();
+      resetAudioSettingsToSafeDefaults();
+      const recoveredEngine = createPlaybackEngine(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS);
       temporaryBuiltInFallbackRef.current = false;
-      recoveredEngine.setInstrument(currentInstrument);
-      recoveredEngine.setSoundProfile(soundRuntimeSettings.profile);
+      recoveredEngine.setInstrument(InstrumentType.PIANO);
+      recoveredEngine.setSoundProfile(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile);
       await recoveredEngine.initialize();
+      audioEngineRef.current = recoveredEngine;
       setPlaybackState('stopped');
       setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
-      alert('音声エンジンを復旧しました。もう一度、再生ボタンか音色プレビューをお試しください。');
+      alert('音声設定を安全な既定値へ戻して復旧しました。built-in のピアノでもう一度お試しください。');
     } catch (error) {
       console.error('[ScorePage] 音声復旧に失敗:', error);
       alert('音声復旧に失敗しました。ページ再読み込み、または Safari の開き直しをお試しください。');
     }
   }, [
     clearPlaybackTimer,
-    currentInstrument,
     getAudioEngine,
-    recreateAudioEngine,
+    resetAudioSettingsToSafeDefaults,
     resetPlaybackClock,
-    soundRuntimeSettings.profile,
   ]);
+
+  const handleEmergencyBeep = useCallback(async () => {
+    try {
+      let context = emergencyAudioContextRef.current;
+      if (!context || context.state === 'closed') {
+        context = new AudioContext();
+        emergencyAudioContextRef.current = context;
+      }
+
+      if (context.state === 'suspended') {
+        await context.resume();
+      }
+
+      const oscillator = context.createOscillator();
+      const gainNode = context.createGain();
+      const now = context.currentTime;
+
+      // これは再生エンジンを通さない最小構成の確認音。
+      // ここでも無音なら、アプリの譜面再生ロジックより前段の
+      // Web Audio / Safari 出力まわりを疑う材料になる。
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, now);
+      gainNode.gain.setValueAtTime(0.0001, now);
+      gainNode.gain.linearRampToValueAtTime(0.18, now + 0.01);
+      gainNode.gain.linearRampToValueAtTime(0.0001, now + 0.28);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.3);
+    } catch (error) {
+      console.error('[ScorePage] 最小テスト音に失敗:', error);
+      alert('最小テスト音にも失敗しました。Safari の音声出力そのものが不安定な可能性があります。');
+    }
+  }, []);
 
   const handleSoundEngineModeChange = useCallback((mode: SoundEngineMode) => {
     setSoundRuntimeSettings(prev => ({ ...prev, engineMode: mode }));
@@ -529,7 +604,7 @@ export default function ScorePage() {
             { partId: 'melody', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
           ];
 
-    await saveScore(metadata, parts, totalSystems, 4, scoreType, keySignature);
+    await saveScore(metadata, parts, totalSystems, 4, scoreType, keySignature, scoreTimeSignature);
   };
 
   const handleLoad = async () => {
@@ -543,6 +618,7 @@ export default function ScorePage() {
 
       const loadedType = loadedData.scoreType ?? 'single';
       setKeySignature(normalizeKeySignature(loadedData.keySignature));
+      await setTimeSignature(...normalizeTimeSignature(loadedData.timeSignature));
       setScoreType(loadedType);
 
       if (loadedType === 'quartet') {
@@ -571,6 +647,7 @@ export default function ScorePage() {
     setArranger(sampleScore.metadata.arranger);
     setScoreType(sampleScore.scoreType);
     setKeySignature(normalizeKeySignature(sampleScore.keySignature));
+    void setTimeSignature(...sampleScore.timeSignature);
     setRightHandData(sampleScore.rightHand);
     setLeftHandData(sampleScore.leftHand);
     setQuartetParts(Array.from({ length: 4 }, () => []));
@@ -581,7 +658,49 @@ export default function ScorePage() {
     clearPlaybackTimer();
     resetPlaybackClock();
     setPlaybackState('stopped');
-  }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
+    setHasCustomPianoSample(hasCustomPianoDemoScore());
+  }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock, setTimeSignature]);
+
+  const handleSaveCurrentAsSample = useCallback(() => {
+    if (scoreType !== 'piano') {
+      return;
+    }
+
+    // いま画面に出ているピアノ譜を、そのまま「ローカルのサンプル」として保存する。
+    // 固定コードのデモ譜を書き換えるのではなく localStorage を使うので、
+    // ユーザーごとに試作中の譜面を気軽に持ち回せる。
+    const saved = saveCustomPianoDemoScore({
+      metadata: {
+        title,
+        subtitle,
+        lyricist,
+        composer,
+        arranger,
+      },
+      scoreType: 'piano',
+      keySignature: normalizeKeySignature(keySignature),
+      timeSignature: scoreTimeSignature,
+      rightHand: rightHandData ?? [],
+      leftHand: leftHandData ?? [],
+      recommendedInstrument: currentInstrument,
+    });
+
+    if (saved) {
+      setHasCustomPianoSample(true);
+    }
+  }, [
+    arranger,
+    composer,
+    currentInstrument,
+    keySignature,
+    leftHandData,
+    lyricist,
+    rightHandData,
+    scoreTimeSignature,
+    scoreType,
+    subtitle,
+    title,
+  ]);
 
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
   useEffect(() => {
@@ -604,6 +723,7 @@ export default function ScorePage() {
   );
 
   const [visiblePages, setVisiblePages] = useState<PageSpec[]>(pages);
+  const [hasCustomPianoSample, setHasCustomPianoSample] = useState<boolean>(() => hasCustomPianoDemoScore());
   useEffect(() => {
     const update = () => {
       const vw = window.innerWidth;
@@ -620,6 +740,11 @@ export default function ScorePage() {
       clearPlaybackTimer();
       resetPlaybackClock();
       getAudioEngine().dispose();
+      try {
+        emergencyAudioContextRef.current?.close();
+      } catch {
+        // close 失敗でも画面終了は継続する
+      }
     };
   }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
 
@@ -655,149 +780,213 @@ export default function ScorePage() {
     };
   }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock]);
 
+  useEffect(() => {
+    const toolbarElement = toolbarRef.current;
+    if (!toolbarElement) {
+      return;
+    }
+
+    const updateToolbarHeight = () => {
+      // fixed ヘッダーは中身が増えると高さも変わる。
+      // ここを自動測定して本文側の余白へ反映しないと、
+      // タブ切り替え後に楽譜がヘッダーの下へ潜り込んでしまう。
+      const measuredHeight = Math.ceil(toolbarElement.getBoundingClientRect().height);
+      // fixed ヘッダーの実測が何かの拍子に暴走すると、
+      // 本文全体の padding-top まで極端に大きくなって楽譜が見えなくなる。
+      // ここでは「タブ付きヘッダーとして妥当な範囲」へ丸めて、崩れを防ぐ。
+      const clampedHeight = Math.min(220, Math.max(110, measuredHeight));
+      setToolbarHeight(clampedHeight);
+    };
+
+    updateToolbarHeight();
+    const resizeObserver = new ResizeObserver(() => {
+      requestAnimationFrame(updateToolbarHeight);
+    });
+    resizeObserver.observe(toolbarElement);
+    window.addEventListener('resize', updateToolbarHeight);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateToolbarHeight);
+    };
+  }, [activeToolbarTab, showOffsetPanel]);
+
+  const toolbarTabButtons: Array<{ id: ToolbarTab; label: string }> = [
+    { id: 'notes', label: '音符・記号' },
+    { id: 'score', label: '楽譜設定' },
+    { id: 'playback', label: '再生・音色' },
+    { id: 'other', label: 'その他' },
+  ];
+
   return (
-    <div className="app-root">
-      <header className="toolbar">
-        <div className="controls">
-          <Palette value={tool} onChange={setTool} />
-
-          {/* スコアタイプ切り替え */}
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '0 8px' }}>
+    <div className="app-root" style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}>
+      <header className="toolbar" ref={toolbarRef}>
+        <div className="toolbar-tabs" role="tablist" aria-label="編集タブ">
+          {toolbarTabButtons.map((tab) => (
             <button
-              className={scoreType === 'single' ? 'ghost' : 'ghost'}
-              onClick={() => handleScoreTypeChange('single')}
-              style={{
-                border: scoreType === 'single' ? '2px solid #3b82f6' : '1px solid #ccc',
-                borderRadius: 6,
-                padding: '4px 10px',
-                fontSize: 12,
-                cursor: 'pointer',
-                background: scoreType === 'single' ? '#eff6ff' : '#fff',
-              }}
-              title="単旋律譜"
-            >
-              単旋律
-            </button>
-            <button
-              className="ghost"
-              onClick={() => handleScoreTypeChange('piano')}
-              style={{
-                border: scoreType === 'piano' ? '2px solid #3b82f6' : '1px solid #ccc',
-                borderRadius: 6,
-                padding: '4px 10px',
-                fontSize: 12,
-                cursor: 'pointer',
-                background: scoreType === 'piano' ? '#eff6ff' : '#fff',
-              }}
-              title="ピアノ大譜表（右手＋左手）"
-            >
-              ピアノ
-            </button>
-            <button
-              className="ghost"
-              onClick={() => handleScoreTypeChange('quartet')}
-              style={{
-                border: scoreType === 'quartet' ? '2px solid #3b82f6' : '1px solid #ccc',
-                borderRadius: 6,
-                padding: '4px 10px',
-                fontSize: 12,
-                cursor: 'pointer',
-                background: scoreType === 'quartet' ? '#eff6ff' : '#fff',
-              }}
-              title="弦楽四重奏（Vn. I / Vn. II / Va. / Vc.）"
-            >
-              弦楽四重奏
-            </button>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 8 }}>
-              <span style={{ fontSize: 12, color: '#444' }}>調号</span>
-              <select
-                value={keySignature}
-                onChange={(event) => setKeySignature(normalizeKeySignature(event.target.value))}
-                aria-label="調号"
-                style={{
-                  border: '1px solid #ccc',
-                  borderRadius: 6,
-                  padding: '4px 8px',
-                  fontSize: 12,
-                  background: '#fff',
-                }}
-              >
-                {KEY_SIGNATURE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <PlaybackControls
-            playbackState={playbackState}
-            currentPosition={currentPosition}
-            currentTempo={tempoSettings.bpm}
-            currentInstrument={currentInstrument}
-            availableInstruments={Object.values(InstrumentType)}
-            onPlay={handlePlay}
-            onPause={handlePause}
-            onStop={handleStop}
-            onSeek={handleSeek}
-            onTempoChange={handleTempoChange}
-            onInstrumentChange={handleInstrumentChange}
-            onInstrumentPreview={handleInstrumentPreview}
-            onAudioRecovery={handleAudioRecovery}
-            soundRuntimeSettings={soundRuntimeSettings}
-            onSoundEngineModeChange={handleSoundEngineModeChange}
-            onPluginNameChange={handlePluginNameChange}
-            onSoundProfileChange={handleSoundProfileChange}
-            onPreviewAccidentalOnApplyChange={handlePreviewAccidentalOnApplyChange}
-          />
-          <SaveLoadButtons
-            onSave={handleSave}
-            onLoad={handleLoad}
-            onLoadSample={handleLoadSample}
-            isSaving={isSaving}
-            isLoading={isLoading}
-            hasStoredData={hasStoredData()}
-            error={error}
-          />
-          <button className="ghost" onClick={() => window.print()}>印刷</button>
-          <div className="coord-correction-wrap">
-            <button
+              key={tab.id}
               type="button"
-              className="ghost"
-              onClick={() => setShowOffsetPanel(v => !v)}
-              title="音符配置位置の座標補正"
+              className={`ghost toolbar-tab-button${activeToolbarTab === tab.id ? ' active' : ''}`}
+              onClick={() => setActiveToolbarTab(tab.id)}
+              role="tab"
+              aria-selected={activeToolbarTab === tab.id}
             >
-              Y補正{yOffset !== 0 ? ` (${yOffset})` : ''}
+              {tab.label}
             </button>
-            {showOffsetPanel && (
-              <>
-                <div className="dropdown-overlay" onClick={() => setShowOffsetPanel(false)} />
-                <div className="coord-panel">
-                  <p className="coord-panel-note">高音方向はマイナス、低音方向はプラス</p>
-                  <div className="coord-panel-row">
-                    <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>↑</button>
-                    <input
-                      id="y-offset-input"
-                      type="number"
-                      value={yOffset}
-                      onChange={e => handleYOffsetChange(Number(e.target.value))}
-                      aria-label="座標補正値（↓で低音方向）"
-                      onKeyDown={e => {
-                        if (e.key === 'ArrowDown') { e.preventDefault(); handleYOffsetChange(yOffset + 1); }
-                        if (e.key === 'ArrowUp')   { e.preventDefault(); handleYOffsetChange(yOffset - 1); }
-                      }}
-                      autoFocus
-                    />
-                    <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>↓</button>
-                    {yOffset !== 0 && (
-                      <button type="button" className="ghost y-offset-reset" onClick={() => handleYOffsetChange(0)}>リセット</button>
-                    )}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+          ))}
+        </div>
+
+        <div className="toolbar-panel">
+          {activeToolbarTab === 'notes' && (
+            <div className="toolbar-section">
+              <Palette value={tool} onChange={setTool} />
+            </div>
+          )}
+
+          {activeToolbarTab === 'score' && (
+            <div className="toolbar-section toolbar-score-controls">
+              <div className="toolbar-chip-group">
+                <span className="toolbar-group-label">楽譜の種類</span>
+                <button
+                  className={`ghost toolbar-chip-button${scoreType === 'single' ? ' active' : ''}`}
+                  onClick={() => handleScoreTypeChange('single')}
+                  title="単旋律譜"
+                >
+                  単旋律
+                </button>
+                <button
+                  className={`ghost toolbar-chip-button${scoreType === 'piano' ? ' active' : ''}`}
+                  onClick={() => handleScoreTypeChange('piano')}
+                  title="ピアノ大譜表（右手＋左手）"
+                >
+                  ピアノ
+                </button>
+                <button
+                  className={`ghost toolbar-chip-button${scoreType === 'quartet' ? ' active' : ''}`}
+                  onClick={() => handleScoreTypeChange('quartet')}
+                  title="弦楽四重奏（Vn. I / Vn. II / Va. / Vc.）"
+                >
+                  弦楽四重奏
+                </button>
+              </div>
+
+              <div className="toolbar-select-row">
+                <label className="toolbar-select-label">
+                  <span>拍子</span>
+                  <select
+                    value={formatTimeSignature(scoreTimeSignature)}
+                    onChange={(event) => {
+                      const [numerator, denominator] = event.target.value.split('/').map(Number);
+                      void setTimeSignature(numerator, denominator);
+                    }}
+                    aria-label="拍子"
+                  >
+                    {TIME_SIGNATURE_OPTIONS.map((option) => (
+                      <option key={formatTimeSignature(option)} value={formatTimeSignature(option)}>
+                        {formatTimeSignature(option)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="toolbar-select-label">
+                  <span>調号</span>
+                  <select
+                    value={keySignature}
+                    onChange={(event) => setKeySignature(normalizeKeySignature(event.target.value))}
+                    aria-label="調号"
+                  >
+                    {KEY_SIGNATURE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {activeToolbarTab === 'playback' && (
+            <div className="toolbar-section">
+              <PlaybackControls
+                playbackState={playbackState}
+                currentPosition={currentPosition}
+                currentTempo={tempoSettings.bpm}
+                currentInstrument={currentInstrument}
+                availableInstruments={Object.values(InstrumentType)}
+                onPlay={handlePlay}
+                onPause={handlePause}
+                onStop={handleStop}
+                onSeek={handleSeek}
+                onTempoChange={handleTempoChange}
+                onInstrumentChange={handleInstrumentChange}
+                onInstrumentPreview={handleInstrumentPreview}
+                onAudioRecovery={handleAudioRecovery}
+                onEmergencyBeep={handleEmergencyBeep}
+                soundRuntimeSettings={soundRuntimeSettings}
+                onSoundEngineModeChange={handleSoundEngineModeChange}
+                onPluginNameChange={handlePluginNameChange}
+                onSoundProfileChange={handleSoundProfileChange}
+                onPreviewAccidentalOnApplyChange={handlePreviewAccidentalOnApplyChange}
+              />
+            </div>
+          )}
+
+          {activeToolbarTab === 'other' && (
+            <div className="toolbar-section toolbar-other-controls">
+              <SaveLoadButtons
+                onSave={handleSave}
+                onLoad={handleLoad}
+                onLoadSample={handleLoadSample}
+                onSaveCurrentAsSample={handleSaveCurrentAsSample}
+                isSaving={isSaving}
+                isLoading={isLoading}
+                hasStoredData={hasStoredData()}
+                canSaveCurrentAsSample={scoreType === 'piano'}
+                hasCustomPianoSample={hasCustomPianoSample}
+                error={error}
+              />
+              <button className="ghost" onClick={() => window.print()}>印刷</button>
+              <div className="coord-correction-wrap">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => setShowOffsetPanel(v => !v)}
+                  title="音符配置位置の座標補正"
+                >
+                  Y補正{yOffset !== 0 ? ` (${yOffset})` : ''}
+                </button>
+                {showOffsetPanel && (
+                  <>
+                    <div className="dropdown-overlay" onClick={() => setShowOffsetPanel(false)} />
+                    <div className="coord-panel">
+                      <p className="coord-panel-note">高音方向はマイナス、低音方向はプラス</p>
+                      <div className="coord-panel-row">
+                        <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>↑</button>
+                        <input
+                          id="y-offset-input"
+                          type="number"
+                          value={yOffset}
+                          onChange={e => handleYOffsetChange(Number(e.target.value))}
+                          aria-label="座標補正値（↓で低音方向）"
+                          onKeyDown={e => {
+                            if (e.key === 'ArrowDown') { e.preventDefault(); handleYOffsetChange(yOffset + 1); }
+                            if (e.key === 'ArrowUp')   { e.preventDefault(); handleYOffsetChange(yOffset - 1); }
+                          }}
+                          autoFocus
+                        />
+                        <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>↓</button>
+                        {yOffset !== 0 && (
+                          <button type="button" className="ghost y-offset-reset" onClick={() => handleYOffsetChange(0)}>リセット</button>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </header>
 
@@ -853,6 +1042,7 @@ export default function ScorePage() {
                       currentInstrument={currentInstrument}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
+                      timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
                     />
                   ) : scoreType === 'piano' ? (
@@ -872,6 +1062,7 @@ export default function ScorePage() {
                       currentInstrument={currentInstrument}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
+                      timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
                     />
                   ) : (
@@ -890,6 +1081,7 @@ export default function ScorePage() {
                       currentInstrument={currentInstrument}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
+                      timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
                     />
                   )}

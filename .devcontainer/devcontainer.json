@@ -1,0 +1,31 @@
+{
+  "name": "my-music-app",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/app",
+  "runServices": ["app"],
+  "shutdownAction": "stopCompose",
+  "overrideCommand": false,
+  "remoteUser": "node",
+  "forwardPorts": [5173],
+  "portsAttributes": {
+    "5173": {
+      "label": "Vite dev server",
+      "onAutoForward": "notify"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "ms-azuretools.vscode-docker",
+        "vitest.explorer"
+      ]
+    }   
+  }
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {}
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
+  }
+
+}

@@ -82,6 +82,7 @@ export default function PlaybackHighlight({
     for (const container of containers) {
       // 音符要素を検索（VexFlowの音符要素のセレクタ）
       const noteElements = container.querySelectorAll(
+        `.vf-note-hit[data-measure="${measureIndex}"][data-note="${noteIndex}"], ` +
         `.vf-stavenote[data-measure="${measureIndex}"][data-note="${noteIndex}"], ` +
         `.vf-note[data-measure="${measureIndex}"][data-note="${noteIndex}"], ` +
         `g.vf-stavenote:nth-child(${noteIndex + 1})`

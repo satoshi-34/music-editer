@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
-  Barline, Beam, Accidental, StaveConnector,
+  Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType,
 } from 'vexflow';
 import type { Tool } from './Palette';
 import type { MeasureData, TieArc, DynamicMarking } from '../types/storage';
@@ -24,8 +24,11 @@ import {
   type MeasureAccidentalState,
   type KeySignature,
 } from '../utils/noteKeyUtils';
-import { cloneMeasureData, createEmptyMeasure, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
+import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
+import { getMeasureVoices } from '../utils/voiceMeasureUtils';
+import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -43,8 +46,6 @@ export type PartConfig = {
 const PAGE_LEFT = 4, PAGE_RIGHT = 4;
 const FIRST_STAVE_Y = 20;
 const STAVE_SPACING = 80; // 段と段の間隔（Y方向）
-const BEATS_PER_MEASURE = 4;
-
 function computeLayout(n: number): { staveYs: number[]; sysH: number } {
   const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * STAVE_SPACING);
   const sysH = FIRST_STAVE_Y + (n - 1) * STAVE_SPACING + 60 + 20;
@@ -61,7 +62,7 @@ const CLEF_PAD_FIRST = 50;
 /* ===== ヒット領域 ===== */
 const CELL_PAD = 6, HIT_MIN_W = 14;
 // 符頭の左端から左右に加えるパディング（px）。この範囲内のクリックが和音追加ゾーン。
-const CHORD_HIT_PAD = 20;
+const CHORD_HIT_PAD = 15;
 // 和音追加のY判定は「五線 ± 3加線」の固定範囲
 const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
 const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）
@@ -73,6 +74,57 @@ const toVFDur = (d: string|null|undefined): VFDur =>
   d==='1'?'w':d==='2'?'h':d==='4'?'q':d==='8'?'8':d==='16'?'16':d==='32'?'32':d==='64'?'64':'q';
 const beatsFromVF = (v: VFDur) =>
   v==='64'?1/16:v==='32'?1/8:v==='16'?1/4:v==='8'?1/2:v==='q'?1:v==='h'?2:4;
+const DURATION_TOOL_VALUES: DurKey[] = ['1','2','4','8','16','32','64'];
+function durKeyFromBeats(beats: number): DurKey | null {
+  return DURATION_TOOL_VALUES.find((duration) => (
+    Math.abs(beatsFromVF(toVFDur(duration)) - beats) < 0.0001
+  )) ?? null;
+}
+function getDurationTool(tool: Tool): { duration: DurKey; isRest?: boolean } | null {
+  if (!('duration' in tool)) {
+    return null;
+  }
+  const duration = tool.duration as DurKey;
+  return DURATION_TOOL_VALUES.includes(duration) ? { duration, isRest: tool.isRest } : null;
+}
+function buildRestEditReplacement(
+  restEvent: NoteEvent,
+  key: string,
+  tool: Tool,
+  noteAfterRest: boolean
+): NoteEvent[] | null {
+  const durationTool = getDurationTool(tool);
+  if (!durationTool || durationTool.isRest || !restEvent.isRest) {
+    return null;
+  }
+
+  const noteBeats = beatsFromVF(toVFDur(durationTool.duration));
+  const restBeats = beatsFromVF(toVFDur(restEvent.dur));
+  const notePart: NoteEvent = { dur: durationTool.duration, isRest: false, keys: [key] };
+  if (Math.abs(noteBeats - restBeats) < 0.0001) {
+    // 同じ長さなら、休符をそのまま音符へ置き換える。
+    // 例: 16分音符ツールで16分休符をクリック -> 16分音符に変わる。
+    return [notePart];
+  }
+  if (noteBeats > restBeats) {
+    return null;
+  }
+
+  const remainingRestDuration = durKeyFromBeats(restBeats - noteBeats);
+  if (!remainingRestDuration) {
+    return null;
+  }
+
+  // 休符を分割するときは、元の休符を「残り時間の休符」と「新しい音符」に置き換える。
+  // 例: 8分休符を16分音符ツールで右半分クリック -> 16分休符 + 16分音符。
+  const restPart: NoteEvent = {
+    dur: remainingRestDuration,
+    isRest: true,
+    // 分割後も休符の見た目の高さを保てるよう、元の key を引き継ぐ。
+    keys: restEvent.keys.length ? [restEvent.keys[0]] : [],
+  };
+  return noteAfterRest ? [restPart, notePart] : [notePart, restPart];
+}
 const vfToDenom = (v: string) =>
   v==='64'?64:v==='32'?32:v==='16'?16:v==='8'?8:v==='q'?4:v==='h'?2:1;
 const UNIT_BY_DENOM: Record<number,number> = {1:1.45,2:1.25,4:1,8:0.6,16:0.5,32:2.2,64:2.6};
@@ -259,16 +311,34 @@ function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: 
   return { x, y };
 }
 
-function makeVFNote(ev: NoteEvent, accidentalState: MeasureAccidentalState, clef: ClefType) {
+function makeVFNote(
+  ev: NoteEvent,
+  accidentalState: MeasureAccidentalState,
+  clef: ClefType,
+  stemDirection?: 'up' | 'down',
+  renderAsGhostRest = false
+) {
   const vd=toVFDur(ev.dur);
   if(ev.isRest){
-    return new StaveNote({clef,keys:[restKeyForClef(clef)],duration:vd+'r'});
+    if (renderAsGhostRest) {
+      return new GhostNote({ duration: vd });
+    }
+    const restKey = ev.keys[0] || restKeyForClef(clef);
+    return new StaveNote({clef,keys:[restKey],duration:vd+'r'});
   }
   // keys が空の場合は全休符にフォールバック
   if(!ev.keys||ev.keys.length===0){
+    if (renderAsGhostRest) {
+      return new GhostNote({ duration: vd });
+    }
     return new StaveNote({clef,keys:[restKeyForClef(clef)],duration:vd+'r'});
   }
   const n=new StaveNote({clef,keys:ev.keys,duration:vd});
+  if (stemDirection) {
+    // 2 voice では「上声は上向き、下声は下向き」が読みやすさの基本になる。
+    // ここで明示しておくと、VexFlow の自動判定に任せたときのばらつきを減らせる。
+    n.setStemDirection(stemDirection === 'up' ? 1 : -1);
+  }
   // 小節内で効力が継続している記号は省略し、必要な位置だけ # / b / n を付ける。
   const displayAccidentals = resolveDisplayAccidentalsForKeys(ev.keys, accidentalState);
   displayAccidentals.forEach((acc, idx) => {
@@ -282,6 +352,46 @@ function makeVFNote(ev: NoteEvent, accidentalState: MeasureAccidentalState, clef
     }
   });
   return n;
+}
+
+function findFirstSoundingEventIndex(events: NoteEvent[]): number {
+  return events.findIndex((event) => !event.isRest);
+}
+
+function findLastSoundingEventIndex(events: NoteEvent[]): number {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (!events[index].isRest) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function shouldRenderGhostRest(
+  events: NoteEvent[],
+  eventIndex: number,
+  voiceIndex: number
+): boolean {
+  if (voiceIndex === 0) {
+    return false;
+  }
+
+  const event = events[eventIndex];
+  if (!event?.isRest) {
+    return false;
+  }
+
+  const firstSoundingIndex = findFirstSoundingEventIndex(events);
+  if (firstSoundingIndex === -1) {
+    return false;
+  }
+
+  const lastSoundingIndex = findLastSoundingEventIndex(events);
+
+  // 追加 voice の前後に置いた休符は、拍を合わせるためのダミーであることが多い。
+  // そのまま描くと「変に休符が多い譜面」に見えやすいので、表示だけ消して
+  // タイミング情報は GhostNote として維持する。
+  return eventIndex < firstSoundingIndex || eventIndex > lastSoundingIndex;
 }
 
 function applyAccidentalToEvent(ev: NoteEvent, accidental: 'sharp' | 'flat' | 'natural'): NoteEvent {
@@ -314,6 +424,7 @@ type Props = {
   currentInstrument?: InstrumentType;
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
+  timeSignature?: [number, number];
   onKeySignatureChange?: (keySignature: KeySignature) => void;
 };
 
@@ -324,9 +435,15 @@ export default function PianoSystemCanvas({
   trebleData, bassData, onTrebleChange, onBassChange,
   partsConfig,
   startMeasureIndex=0, disabled=false, yOffset=0, currentInstrument = InstrumentType.PIANO, previewAccidentalOnApply = true, keySignature = 'C',
+  timeSignature = [4, 4],
   onKeySignatureChange,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
+  const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
+  const timeSignatureNumerator = normalizedTimeSignature[0];
+  const timeSignatureDenominator = normalizedTimeSignature[1];
+  const beatsPerMeasure = getMeasureBeats(normalizedTimeSignature);
+  const formattedTimeSignature = formatTimeSignature(normalizedTimeSignature);
   const ref = useRef<HTMLDivElement>(null);
 
   // partsConfig 優先、なければ piano backward compat の2段
@@ -347,6 +464,11 @@ export default function PianoSystemCanvas({
     // リピート記号はシステム全体でそろって見える方が自然なので、
     // 多段譜ではクリックした1段だけでなく全パートへ同じ印を付ける。
     setPartsScore(prev => prev.map(partScore => toggleMeasureRepeatMarker(partScore ?? [], measureIndex, kind)));
+  };
+  const toggleEndingAcrossParts = (measureIndex: number, ending: 1 | 2) => {
+    // 終止括弧も段ごとに番号がずれると読みにくいため、
+    // 多段譜では全パートへ同じ ending 番号を一度に付ける。
+    setPartsScore(prev => prev.map(partScore => toggleMeasureEnding(partScore ?? [], measureIndex, ending)));
   };
   const [selected, setSelected] = useState<Sel>(null);
   const selRef = useRef<Sel>(null);
@@ -581,19 +703,28 @@ export default function PianoSystemCanvas({
         setS(prev=>{
           if(measure>=prev.length)return prev;
           const ev=prev[measure].events[index];
-          if(!ev||ev.isRest)return prev;
+          if(!ev)return prev;
           let newKeys:string[];
-          if(e.altKey){
-            const delta=up?1:-1;
-            newKeys=ev.keys.map(k=>{const midi=keyToMidi(k);return midi==null?k:midiToKey(midi+delta,up);});
-          }else{
+          if(ev.isRest){
+            const restBaseKey = ev.keys[0] || restKeyForClef(clef);
             const diff=e.shiftKey?(up?-3.5:3.5):(up?-0.5:0.5);
-            newKeys=ev.keys.map(k=>
-              applyKeySignatureToNaturalKey(
-                l2k(k2l(k)+diff),
-                keySignatureRef.current
-              )
-            );
+            newKeys=[l2k(k2l(restBaseKey)+diff)];
+          }else{
+            if(e.altKey){
+              const delta=up?1:-1;
+              newKeys=ev.keys.map(k=>{const midi=keyToMidi(k);return midi==null?k:midiToKey(midi+delta,up);});
+            }else{
+              const diff=e.shiftKey?(up?-3.5:3.5):(up?-0.5:0.5);
+              newKeys=ev.keys.map(k=>
+                applyKeySignatureToNaturalKey(
+                  l2k(k2l(k)+diff),
+                  keySignatureRef.current
+                )
+              );
+            }
+          }
+          if(ev.isRest){
+            return prev.map((m,mi)=>mi===measure?{...m,events:m.events.map((e2,ei)=>ei===index?{...e2,keys:newKeys}:e2)}:m);
           }
           // 音高変化に合わせて弧の fromKey / toKey を更新する
           const keyMap=new Map(ev.keys.map((k,i)=>[k,newKeys[i]]));
@@ -832,21 +963,42 @@ export default function PianoSystemCanvas({
     for(let i=0;i<measuresPerSystem;i++){
       const w=realWs[i];
       parts.forEach((part, pi) => {
-        const currentMeasure = (partsScore[pi] ?? part.data)[startMeasureIndex + i];
+        // 反復記号と終止括弧は多段譜で段ごとに食い違うと読みにくいので、
+        // 見た目の基準は最上段の小節データへ寄せる。
+        const sharedMeasure = (partsScore[0] ?? parts[0]?.data ?? [])[startMeasureIndex + i];
         const stave=new Stave(x/s, staveYs[pi]/s, w/s);
         if(i===0){
           stave.addClef(part.clef);
-          if(pi===0)stave.addTimeSignature('4/4');
+          // 拍子記号はいまの仕様では「譜面全体のいちばん最初」だけに出す。
+          // 途中で拍子が変わるケースは、別機能として入れるときに再表示を考える。
+          if (startMeasureIndex === 0) {
+            stave.addTimeSignature(formattedTimeSignature);
+          }
           if (hasVisibleKeySignature(normalizedKeySignature)) {
             stave.addKeySignature(normalizedKeySignature);
           }
         }
-        if (currentMeasure?.repeatStart) {
+        if (sharedMeasure?.repeatStart) {
           // 多段譜では各段の左端に同じ開始リピート記号を出して、
           // 楽器ごとに見た目がずれないようにそろえる。
           stave.setBegBarType(Barline.type.REPEAT_BEGIN);
         }
-        stave.setEndBarType(currentMeasure?.repeatEnd ? Barline.type.REPEAT_END : Barline.type.SINGLE);
+        stave.setEndBarType(sharedMeasure?.repeatEnd ? Barline.type.REPEAT_END : Barline.type.SINGLE);
+        if (pi === 0) {
+          const topPartMeasures = partsScore[0] ?? parts[0]?.data ?? [];
+          const voltaConfig = getVoltaRenderConfig(topPartMeasures, startMeasureIndex + i);
+          if (voltaConfig) {
+            const voltaTypeMap = {
+              begin: VoltaType.BEGIN,
+              mid: VoltaType.MID,
+              end: VoltaType.END,
+              begin_end: VoltaType.BEGIN_END,
+            } as const;
+            // ピアノ譜や弦楽四重奏では、終止括弧は最上段だけに描く。
+            // こうすると大譜表全体をまたぐ見た目に近く、下段の視認性も落ちにくい。
+            stave.setVoltaType(voltaTypeMap[voltaConfig.type], voltaConfig.label, -5);
+          }
+        }
         stave.setContext(ctx);
         stave.format();
         placeKeySignatureAfterTimeSignature(stave);
@@ -1051,19 +1203,65 @@ export default function PianoSystemCanvas({
           .map(ev=>(!ev||!ev.dur)?{dur:'4' as DurKey,isRest:true,keys:['b/4']}:{...ev,dur:ev.dur as DurKey});
         // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
         const accidentalState = createMeasureAccidentalState(normalizedKeySignature);
+        const measureVoices = getMeasureVoices(data);
+        const renderedVoiceEntries = measureVoices
+          .map((measureVoice, voiceIndex) => {
+            const sourceEvents = voiceIndex === 0
+              ? safeEvs
+              : (measureVoice.events.length > 0
+                  ? measureVoice.events
+                  : []);
+            if (sourceEvents.length === 0) {
+              return null;
+            }
 
-        const vfNotes=safeEvs.map((ev,idx)=>{
-          const n=makeVFNote(ev, accidentalState, part.clef) as any;
-          const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===idx;
-          if(isSel&&n.setStyle)n.setStyle({fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
-          return n as StaveNote;
-        });
+            const vfNotes = sourceEvents.map((ev, idx) => {
+              const renderAsGhostRest = shouldRenderGhostRest(sourceEvents, idx, voiceIndex);
+              const n=makeVFNote(
+                ev,
+                accidentalState,
+                part.clef,
+                measureVoice.stemDirection,
+                renderAsGhostRest
+              ) as any;
+              const isSel=voiceIndex===0&&!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===idx;
+              if(isSel&&n.setStyle)n.setStyle({fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
+              return n as StaveNote;
+            });
+            const beams=Beam.generateBeams(vfNotes,{beamRests:false});
+            const voice=new Voice({
+              time:{
+                num_beats: timeSignatureNumerator,
+                beat_value: timeSignatureDenominator
+              }
+            } as any);
+            voice.setMode((Voice as any).Mode.SOFT??1);
+            voice.addTickables(vfNotes);
 
-        const beams=Beam.generateBeams(vfNotes,{beamRests:false});
-        const voice=new Voice({time:{num_beats:BEATS_PER_MEASURE,beat_value:4}} as any);
-        voice.setMode((Voice as any).Mode.SOFT??1);
-        voice.addTickables(vfNotes);
-        new Formatter().joinVoices([voice]).formatToStave([voice],stave);
+            return {
+              voiceIndex,
+              sourceEvents,
+              vfNotes,
+              beams,
+              voice,
+            };
+          })
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+        const primaryRenderedVoice = renderedVoiceEntries[0];
+        if (!primaryRenderedVoice) {
+          return;
+        }
+
+        const vfNotes = primaryRenderedVoice.vfNotes;
+
+        new Formatter()
+          .joinVoices(renderedVoiceEntries.map((entry) => entry.voice))
+          // 2 voice では、上下声部の休符が自動調整されないと
+          // 互いにめり込んで「なんか変」な見た目になりやすい。
+          // alignRests を明示して、近い音符や別声部に合わせて
+          // 休符の縦位置をVexFlow側で補正してもらう。
+          .formatToStave(renderedVoiceEntries.map((entry) => entry.voice),stave,{ alignRests: true });
 
         const hasClef=(i===0);
         for(let j=0;j<vfNotes.length&&j<safeEvs.length;j++){
@@ -1083,8 +1281,10 @@ export default function PianoSystemCanvas({
           }
         }
 
-        try{voice.draw(ctx,stave);}catch{}
-        beams.forEach(b=>b.setContext(ctx).draw());
+        renderedVoiceEntries.forEach((entry) => {
+          try{entry.voice.draw(ctx,stave);}catch{}
+          entry.beams.forEach(b=>b.setContext(ctx).draw());
+        });
 
         // タイ描画用に音符データを収集（小節ループ後にパートごとまとめて処理）
         safeEvs.forEach((ev,j)=>{
@@ -1134,7 +1334,7 @@ export default function PianoSystemCanvas({
             const vfd=toVFDur((tool as any)?.duration);
             const addB=beatsFromVF(vfd);
             const curB=m.events.reduce((s,ev)=>s+beatsFromVF(toVFDur(ev.dur)),0);
-            if(curB+addB>BEATS_PER_MEASURE)return prev;
+            if(curB+addB>beatsPerMeasure)return prev;
             const ev:NoteEvent={
               dur:(['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey,
               isRest:!!(tool as any)?.isRest, keys:[key],
@@ -1163,6 +1363,10 @@ export default function PianoSystemCanvas({
           if('mode' in tool&&tool.mode==='tie')return;
           if('mode' in tool&&tool.mode==='repeat'){
             toggleRepeatMarkerAcrossParts(absI, tool.repeat);
+            return;
+          }
+          if('mode' in tool&&tool.mode==='ending'){
+            toggleEndingAcrossParts(absI, tool.ending);
             return;
           }
           if('mode' in tool&&tool.mode==='dynamic'){
@@ -1230,6 +1434,8 @@ export default function PianoSystemCanvas({
 
             const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
             hit.setAttribute('class','vf-note-hit');
+            hit.setAttribute('data-measure', String(absI));
+            hit.setAttribute('data-note', String(j));
             hit.setAttribute('x',String(xl));hit.setAttribute('y',String(yHit));
             hit.setAttribute('width',String(wHit));hit.setAttribute('height',String(hHit));
             hit.setAttribute('fill','transparent');hit.setAttribute('stroke','none');
@@ -1288,6 +1494,10 @@ export default function PianoSystemCanvas({
               if('mode' in tool&&tool.mode==='tie')return;
               if('mode' in tool&&tool.mode==='repeat'){
                 toggleRepeatMarkerAcrossParts(absI, tool.repeat);
+                return;
+              }
+              if('mode' in tool&&tool.mode==='ending'){
+                toggleEndingAcrossParts(absI, tool.ending);
                 return;
               }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
@@ -1374,7 +1584,35 @@ export default function PianoSystemCanvas({
                   }
                   return;
                 }
-                // 休符クリック → 音符を挿入（rect が大きくなり insertRect に届かないため）
+                const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), keySignatureRef.current);
+                const noteAfterRest=lx>=xl+wHit/2;
+                const restReplacement=buildRestEditReplacement(safeEvs[j],key,tool,noteAfterRest);
+                const isSameRestSelected =
+                  selRef.current?.partIndex===pi &&
+                  selRef.current?.measure===absI &&
+                  selRef.current?.index===j;
+                if(restReplacement&&isSameRestSelected){
+                  // 休符クリックでは、同音価なら置換、より短い音価なら分割して差し込む。
+                  // 1回目のクリックでは休符を選択し、
+                  // 同じ休符をもう一度クリックしたときだけ置換・分割を実行する。
+                  // これで Delete や ↑/↓ の対象にもできる。
+                  setScore(prev=>{
+                    const next=prev.map(cloneMeasureData);
+                    const targetEv=next[absI]?.events[j];
+                    if(!targetEv?.isRest)return prev;
+                    const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest);
+                    if(!latestReplacement)return prev;
+                    next[absI].events.splice(j,1,...latestReplacement);
+                    return next;
+                  });
+                  setSelected({partIndex:pi,measure:absI,index:j+(restReplacement.length===2&&noteAfterRest?1:0)});
+                  return;
+                }
+                setSelected({partIndex:pi,measure:absI,index:j});
+                if(restReplacement){
+                  return;
+                }
+                // 分割できない休符では、2回クリックではなく従来どおり近い位置へ音符を挿入する。
                 doInsert(lx,ly);
               }else{
                 if (dynamicMode) return;
@@ -1545,7 +1783,7 @@ export default function PianoSystemCanvas({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[partsScore,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,normalizedKeySignature]);
+  },[partsScore,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure]);
 
   return <div ref={ref} style={{overflow:'visible'}}/>;
 }

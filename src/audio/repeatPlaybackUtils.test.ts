@@ -1,32 +1,38 @@
 import { describe, expect, it } from 'vitest';
-
-import type { MeasureData } from '../types/storage';
 import { expandMeasuresForPlayback } from './repeatPlaybackUtils';
+import type { MeasureData } from '../types/storage';
+
+function measure(name: string, extra: Partial<MeasureData> = {}): MeasureData & { name: string } {
+  return {
+    name,
+    events: [{ dur: '8', isRest: false, keys: ['c/4'] }],
+    ...extra,
+  };
+}
 
 describe('repeatPlaybackUtils', () => {
-  it('開始リピートから終了リピートまでを 1 回だけ折り返す', () => {
-    const measures: MeasureData[] = [
-      { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
-      { events: [{ dur: '4', isRest: false, keys: ['d/4'] }], repeatStart: true },
-      { events: [{ dur: '4', isRest: false, keys: ['e/4'] }] },
-      { events: [{ dur: '4', isRest: false, keys: ['f/4'] }], repeatEnd: true },
-      { events: [{ dur: '4', isRest: false, keys: ['g/4'] }] }
+  it('基本の開始リピートと終了リピートを 1 回だけ展開する', () => {
+    const measures = [
+      measure('A', { repeatStart: true }),
+      measure('B'),
+      measure('C', { repeatEnd: true }),
+      measure('D'),
     ];
 
-    const expanded = expandMeasuresForPlayback(measures);
-
-    expect(expanded.map(item => item.sourceMeasureIndex)).toEqual([0, 1, 2, 3, 1, 2, 3, 4]);
+    const expanded = expandMeasuresForPlayback(measures).map((item) => (item.measure as typeof measures[number]).name);
+    expect(expanded).toEqual(['A', 'B', 'C', 'A', 'B', 'C', 'D']);
   });
 
-  it('開始リピート無しの終了リピートは先頭から折り返す', () => {
-    const measures: MeasureData[] = [
-      { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
-      { events: [{ dur: '4', isRest: false, keys: ['d/4'] }], repeatEnd: true },
-      { events: [{ dur: '4', isRest: false, keys: ['e/4'] }] }
+  it('1番括弧は1周目だけ、2番括弧は2周目だけ鳴らす', () => {
+    const measures = [
+      measure('A', { repeatStart: true }),
+      measure('B'),
+      measure('C1', { ending: 1, repeatEnd: true }),
+      measure('C2', { ending: 2 }),
+      measure('D'),
     ];
 
-    const expanded = expandMeasuresForPlayback(measures);
-
-    expect(expanded.map(item => item.sourceMeasureIndex)).toEqual([0, 1, 0, 1, 2]);
+    const expanded = expandMeasuresForPlayback(measures).map((item) => (item.measure as typeof measures[number]).name);
+    expect(expanded).toEqual(['A', 'B', 'C1', 'A', 'B', 'C2', 'D']);
   });
 });

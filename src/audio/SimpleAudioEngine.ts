@@ -337,7 +337,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
    * 譜面データから音符を順次再生する
    */
   async playScore(
-    scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[]; velocity?: number }> }>,
+    scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[]; startBeat?: number; velocity?: number }>; measureBeats?: number }>,
     bpm: number = 120
   ): Promise<void> {
     await this.ensureContextReady();
@@ -354,26 +354,52 @@ export class SimpleAudioEngine implements PlaybackEngine {
       // 各小節を順次処理
       for (let measureIndex = 0; measureIndex < scoreData.length; measureIndex++) {
         const measure = scoreData[measureIndex];
+        // currentTime は「次のイベントをどこから積むか」を表す一方、
+        // startBeat 付きイベントでは小節頭を基準にしたい。
+        // そのため小節開始時刻を別変数で退避しておく。
+        const measureStartTime = currentTime;
+        const measureBeats = typeof measure?.measureBeats === 'number' ? measure.measureBeats : 4;
+        const measureSeconds = measureBeats * (60 / bpm);
         if (!measure || !measure.events || measure.events.length === 0) {
-          // 空の小節は全休符として扱う
-          const wholeDuration = this.durationToSeconds('1', bpm);
-          currentTime += wholeDuration;
+          // 空小節でも拍子どおりの長さだけ進める。
+          // 3/8 の譜面を 4/4 扱いすると、ここで他パートとずれてしまう。
+          currentTime += measureSeconds;
           continue;
         }
         
+        let maxMeasureEndTime = currentTime;
+
         // 小節内の各音符を処理
         for (const event of measure.events) {
           const duration = this.durationToSeconds(event.dur, bpm);
+          const eventStartTime = typeof event.startBeat === 'number'
+            ? measureStartTime + (event.startBeat * (60 / bpm))
+            : currentTime;
           
           if (!event.isRest && event.keys && event.keys.length > 0) {
             // 音符の場合は最初の音高を再生（単音対応）
             const frequency = this.noteToFrequency(event.keys[0]);
-            await this.playNoteAtTime(frequency, duration, currentTime, this.normalizePlaybackVelocity((event as { velocity?: number }).velocity));
+            await this.playNoteAtTime(
+              frequency,
+              duration,
+              eventStartTime,
+              this.normalizePlaybackVelocity((event as { velocity?: number }).velocity)
+            );
           }
-          // 休符の場合は時間だけ進める
-          
-          currentTime += duration;
+
+          if (typeof event.startBeat === 'number') {
+            // 複数声部イベントは startBeat で時刻が決まるので、
+            // currentTime 自体は進めず「この小節で一番遅く終わる時刻」だけ更新する。
+            maxMeasureEndTime = Math.max(maxMeasureEndTime, eventStartTime + duration);
+          } else {
+            currentTime += duration;
+            maxMeasureEndTime = Math.max(maxMeasureEndTime, currentTime);
+          }
         }
+
+        // 小節内のイベント合計が拍子より短い場合でも、
+        // 次小節の頭は拍子どおりの位置まで送って左右手をそろえる。
+        currentTime = Math.max(maxMeasureEndTime, measureStartTime + measureSeconds);
       }
       
       console.log('[SimpleAudioEngine] 譜面再生スケジュール完了');

@@ -1,27 +1,18 @@
 import type { MeasureData } from '../types/storage';
+import {
+  cloneMeasureData,
+  createEmptyMeasure,
+} from './voiceMeasureUtils';
 
 export type RepeatMarkerKind = 'start' | 'end';
+export type EndingNumber = 1 | 2;
 
 /**
  * 小節データを複製する。
  * events 以外の付加情報（リピート記号など）も落とさないため、
  * 小節を更新するときはこの関数経由で shallow copy する。
  */
-export function cloneMeasureData(measure?: MeasureData): MeasureData {
-  return {
-    ...(measure ?? {}),
-    events: [...(measure?.events ?? [])]
-  };
-}
-
-/**
- * 空小節を作る。
- * 将来、小節単位の追加メタデータが増えても初期形をそろえやすくするため、
- * 生の `{ events: [] }` を散らさず関数化している。
- */
-export function createEmptyMeasure(): MeasureData {
-  return { events: [] };
-}
+export { cloneMeasureData, createEmptyMeasure };
 
 /**
  * 小節配列の指定位置に、開始/終了リピート記号をトグルする。
@@ -54,6 +45,33 @@ export function toggleMeasureRepeatMarker(
     delete target.repeatEnd;
   } else {
     target.repeatEnd = true;
+  }
+  return next;
+}
+
+/**
+ * 小節を 1番括弧 / 2番括弧へ所属させる。
+ * 同じ番号をもう一度押したときは解除して、塗り直しや修正をしやすくする。
+ */
+export function toggleMeasureEnding(
+  measures: MeasureData[],
+  measureIndex: number,
+  ending: EndingNumber
+): MeasureData[] {
+  if (measureIndex < 0) {
+    return measures;
+  }
+
+  const next = measures.map(cloneMeasureData);
+  while (measureIndex >= next.length) {
+    next.push(createEmptyMeasure());
+  }
+
+  const target = next[measureIndex];
+  if (target.ending === ending) {
+    delete target.ending;
+  } else {
+    target.ending = ending;
   }
   return next;
 }

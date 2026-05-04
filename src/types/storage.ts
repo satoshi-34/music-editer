@@ -4,6 +4,7 @@
 import type { KeySignature } from '../utils/noteKeyUtils';
 
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
+export type TimeSignature = [number, number];
 export type AbsoluteDynamicMarking = 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff';
 export type RelativeDynamicMarking = 'cresc' | 'dim';
 export type DynamicMarkingValue = AbsoluteDynamicMarking | RelativeDynamicMarking;
@@ -57,12 +58,33 @@ export interface NoteEvent {
   dynamics?: DynamicMarking[];
 }
 
-export interface MeasureData {
+/**
+ * 同じ小節内の別声部。
+ * まずはピアノ譜の 2 voice を想定し、符幹の向きもここで持てるようにする。
+ */
+export interface VoiceData {
+  id: string;
+  stemDirection?: 'up' | 'down';
   events: NoteEvent[];
+}
+
+export interface MeasureData {
+  /**
+   * 既存実装との互換のため、primary voice は引き続き events にも保持する。
+   * multi-voice 小節では「編集系は events を正本、描画系は voices も参照」として扱う。
+   */
+  events: NoteEvent[];
+  /** ピアノ譜などで同じ小節に複数声部を置きたいときの追加データ */
+  voices?: VoiceData[];
   /** 小節の左側に開始リピート（||:）を表示する */
   repeatStart?: boolean;
   /** 小節の右側に終了リピート（:||）を表示する */
   repeatEnd?: boolean;
+  /**
+   * 1番括弧 / 2番括弧の所属番号。
+   * 連続する同じ番号の小節をまとめて、上に終止括弧として描画する。
+   */
+  ending?: 1 | 2;
 }
 
 export interface ScoreMetadata {
@@ -90,6 +112,8 @@ export interface SavedScoreData {
   scoreType: ScoreType;
   /** 調号。旧データ互換のため省略時は C（調号なし）として扱う */
   keySignature?: KeySignature;
+  /** 拍子。旧データ互換のため省略時は 4/4 として扱う */
+  timeSignature?: TimeSignature;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;

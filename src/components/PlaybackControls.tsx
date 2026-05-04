@@ -42,6 +42,8 @@ export interface PlaybackControlsProps {
   onInstrumentPreview?: (instrument: InstrumentType) => void;
   /** Safari などで無音になったとき、音声系を手動で復旧するコールバック */
   onAudioRecovery?: () => void;
+  /** 再生エンジンを通さない最小テスト音 */
+  onEmergencyBeep?: () => void;
   /** 詳細な音源設定 */
   soundRuntimeSettings?: PlaybackSoundRuntimeSettings;
   /** 音源方式変更時のコールバック */
@@ -144,6 +146,7 @@ export default function PlaybackControls({
   onInstrumentChange,
   onInstrumentPreview,
   onAudioRecovery,
+  onEmergencyBeep,
   soundRuntimeSettings,
   onSoundEngineModeChange,
   onPluginNameChange,
@@ -396,6 +399,18 @@ export default function PlaybackControls({
               aria-label="音声復旧"
             >
               音声復旧
+            </button>
+          )}
+
+          {onEmergencyBeep && (
+            <button
+              type="button"
+              className="ghost"
+              onClick={onEmergencyBeep}
+              title="最小テスト音"
+              aria-label="最小テスト音"
+            >
+              テスト音
             </button>
           )}
         </div>

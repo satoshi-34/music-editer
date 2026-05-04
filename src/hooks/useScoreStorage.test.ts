@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import * as fc from 'fast-check';
 import { useScoreStorage } from './useScoreStorage';
-import { STORAGE_KEYS } from '../utils/storage';
+import { CURRENT_VERSION, STORAGE_KEYS } from '../utils/storage';
 import type {
   ScoreMetadata,
   MeasureData,
@@ -202,7 +202,7 @@ describe('useScoreStorage Hook Tests', () => {
               }
 
               // Verify version and timestamp are added
-              expect(parsedData.version).toBe('3.0.0');
+              expect(parsedData.version).toBe(CURRENT_VERSION);
               expect(typeof parsedData.timestamp).toBe('number');
               expect(parsedData.timestamp).toBeGreaterThan(0);
             }

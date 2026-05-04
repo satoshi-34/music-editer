@@ -10,11 +10,14 @@ import type {
   PartData,
   ScoreType,
   NoteEvent,
-  DurKey
+  DurKey,
+  TimeSignature
 } from '../types/storage';
 import { StorageErrorType } from '../types/storage';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
+import { syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
 
 // Storage keys
 export const STORAGE_KEYS = {
@@ -24,7 +27,7 @@ export const STORAGE_KEYS = {
 } as const;
 
 // Current version for data migration
-export const CURRENT_VERSION = '3.3.0';
+export const CURRENT_VERSION = '3.5.0';
 
 /**
  * Generates a simple checksum for data integrity verification
@@ -55,12 +58,17 @@ function validateNoteEvent(event: any): event is NoteEvent {
     typeof event === 'object' &&
     isValidDurKey(event.dur) &&
     typeof event.isRest === 'boolean' &&
-    // keys は文字列の配列で、1要素以上必要（休符でも配列形式）
+    // 音符は 1 音以上必要、休符は空配列でもよい。
+    // ここを分けておくと、複数声部で「休符を詰めて拍を合わせる」データも安全に保存できる。
     Array.isArray(event.keys) &&
-    event.keys.length > 0 &&
-    // 保存データに不正な文字列を混ぜないよう、音高キーの形式まで確認する。
-    // ここで弾いておくと、描画時に未知の文字列をVexFlowへ渡すリスクを減らせる。
-    event.keys.every((k: any) => isValidNoteKeyString(k)) &&
+    (
+      event.isRest
+        ? event.keys.every((k: any) => typeof k === 'string')
+        : event.keys.length > 0 &&
+          // 保存データに不正な文字列を混ぜないよう、音高キーの形式まで確認する。
+          // ここで弾いておくと、描画時に未知の文字列をVexFlowへ渡すリスクを減らせる。
+          event.keys.every((k: any) => isValidNoteKeyString(k))
+    ) &&
     (
       event.dynamics === undefined ||
       (
@@ -105,6 +113,21 @@ function validateMeasureData(measure: any): measure is MeasureData {
     typeof measure === 'object' &&
     Array.isArray(measure.events) &&
     measure.events.every(validateNoteEvent) &&
+    (
+      measure.voices === undefined ||
+      (
+        Array.isArray(measure.voices) &&
+        measure.voices.every((voice: any) => (
+          voice &&
+          typeof voice === 'object' &&
+          typeof voice.id === 'string' &&
+          (voice.stemDirection === undefined || voice.stemDirection === 'up' || voice.stemDirection === 'down') &&
+          Array.isArray(voice.events) &&
+          voice.events.every(validateNoteEvent)
+        ))
+    )
+    ) &&
+    (measure.ending === undefined || measure.ending === 1 || measure.ending === 2) &&
     (measure.repeatStart === undefined || typeof measure.repeatStart === 'boolean') &&
     (measure.repeatEnd === undefined || typeof measure.repeatEnd === 'boolean')
   );
@@ -150,6 +173,7 @@ function validateSavedScoreData(data: any): data is SavedScoreData {
     typeof data.timestamp === 'number' &&
     validateScoreMetadata(data.metadata) &&
     (data.keySignature === undefined || isValidKeySignature(data.keySignature)) &&
+    (data.timeSignature === undefined || isValidTimeSignature(data.timeSignature)) &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -170,6 +194,7 @@ function migrateV1toV2(data: any): SavedScoreData {
     metadata: data.metadata,
     scoreType: 'single',
     keySignature: 'C',
+    timeSignature: [...DEFAULT_TIME_SIGNATURE],
     parts: [{
       partId: 'melody',
       clef: 'treble',
@@ -258,8 +283,21 @@ export function saveScoreData(data: SavedScoreData): StorageResult<boolean> {
       };
     }
 
+    const normalizedData: SavedScoreData = {
+      ...data,
+      timeSignature: normalizeTimeSignature(data.timeSignature),
+      parts: Array.isArray((data as SavedScoreData).parts)
+        ? data.parts.map((part) => ({
+            ...part,
+            // 既存の編集ロジックは primary voice を measure.events だけ更新する箇所が多い。
+            // 保存直前に voices[0] を同期して、複数声部データの食い違いを防ぐ。
+            measures: syncMeasuresPrimaryVoiceFromEvents(part.measures),
+          }))
+        : (data as any).parts,
+    };
+
     // Validate data before saving
-    if (!validateSavedScoreData(data)) {
+    if (!validateSavedScoreData(normalizedData)) {
       return {
         success: false,
         error: {
@@ -270,7 +308,7 @@ export function saveScoreData(data: SavedScoreData): StorageResult<boolean> {
       };
     }
 
-    const serializedData = JSON.stringify(data);
+    const serializedData = JSON.stringify(normalizedData);
     
     // Try to save to primary key
     localStorage.setItem(STORAGE_KEYS.PRIMARY, serializedData);
@@ -286,8 +324,8 @@ export function saveScoreData(data: SavedScoreData): StorageResult<boolean> {
     try {
       const checksum = generateChecksum(serializedData);
       const metadata: import('../types/storage').StorageMetadata = {
-        lastSaved: data.timestamp,
-        version: data.version,
+        lastSaved: normalizedData.timestamp,
+        version: normalizedData.version,
         dataChecksum: checksum
       };
       localStorage.setItem(STORAGE_KEYS.METADATA, JSON.stringify(metadata));
@@ -361,6 +399,7 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
       parsedData.parts = migrateKeyToKeys(parsedData.parts);
     }
     parsedData.keySignature = normalizeKeySignature(parsedData.keySignature);
+    parsedData.timeSignature = normalizeTimeSignature(parsedData.timeSignature);
 
     // Validate parsed data
     if (!validateSavedScoreData(parsedData)) {
@@ -396,7 +435,8 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
                     success: true,
                     data: {
                       ...backupParsed,
-                      keySignature: normalizeKeySignature(backupParsed.keySignature)
+                      keySignature: normalizeKeySignature(backupParsed.keySignature),
+                      timeSignature: normalizeTimeSignature(backupParsed.timeSignature)
                     }
                   };
                 }
@@ -423,7 +463,8 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
       success: true,
       data: {
         ...parsedData,
-        keySignature: normalizeKeySignature(parsedData.keySignature)
+        keySignature: normalizeKeySignature(parsedData.keySignature),
+        timeSignature: normalizeTimeSignature(parsedData.timeSignature)
       }
     };
 
@@ -495,7 +536,8 @@ export function createSavedScoreData(
   systems: number,
   measuresPerSystem: number,
   scoreType: ScoreType = 'single',
-  keySignature: KeySignature = 'C'
+  keySignature: KeySignature = 'C',
+  timeSignature: TimeSignature = DEFAULT_TIME_SIGNATURE
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -503,6 +545,7 @@ export function createSavedScoreData(
     metadata,
     scoreType,
     keySignature,
+    timeSignature: normalizeTimeSignature(timeSignature),
     parts,
     systems,
     measuresPerSystem
@@ -518,7 +561,8 @@ export function migrateData(data: any, fromVersion: string): SavedScoreData | nu
   if (fromVersion === CURRENT_VERSION) {
     return {
       ...(data as SavedScoreData),
-      keySignature: normalizeKeySignature((data as SavedScoreData).keySignature)
+      keySignature: normalizeKeySignature((data as SavedScoreData).keySignature),
+      timeSignature: normalizeTimeSignature((data as SavedScoreData).timeSignature)
     };
   }
 

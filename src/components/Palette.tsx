@@ -12,7 +12,7 @@
 import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 import type { AccidentalToolKind } from '../utils/noteKeyUtils';
-import type { RepeatMarkerKind } from '../utils/repeatMarkerUtils';
+import type { EndingNumber, RepeatMarkerKind } from '../utils/repeatMarkerUtils';
 import type { DynamicMarkingValue } from '../types/storage';
 
 // ========== 表示サイズ＆色（ボタン側と合わせる） ==========
@@ -40,10 +40,12 @@ export type Tool =
   | { mode: 'tie' }                         // タイ記号を付けるモード
   | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
   | { mode: 'repeat'; repeat: RepeatMarkerKind }            // リピート記号を付けるモード
+  | { mode: 'ending'; ending: EndingNumber }                // 1番括弧 / 2番括弧
   | { mode: 'dynamic'; dynamic: DynamicMarkingValue };      // 強弱記号を付けるモード
 
 type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
 type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
+type EndingTool = Extract<Tool, { mode: 'ending' }>;
 type DynamicTool = Extract<Tool, { mode: 'dynamic' }>;
 
 // 並べるアイテム（上段=音符, 下段=休符）
@@ -95,6 +97,10 @@ const REPEAT_TOOLS: RepeatTool[] = [
   { mode: 'repeat', repeat: 'start' },
   { mode: 'repeat', repeat: 'end' },
 ];
+const ENDING_TOOLS: EndingTool[] = [
+  { mode: 'ending', ending: 1 },
+  { mode: 'ending', ending: 2 },
+];
 const DYNAMIC_TOOLS: DynamicTool[] = [
   { mode: 'dynamic', dynamic: 'pp' },
   { mode: 'dynamic', dynamic: 'p' },
@@ -119,6 +125,9 @@ export default function Palette({
     : null;
   const selectedRepeat = 'mode' in value && value.mode === 'repeat'
     ? value.repeat
+    : null;
+  const selectedEnding = 'mode' in value && value.mode === 'ending'
+    ? value.ending
     : null;
   const selectedDynamic = 'mode' in value && value.mode === 'dynamic'
     ? value.dynamic
@@ -258,6 +267,37 @@ export default function Palette({
           );
         })}
 
+        {ENDING_TOOLS.map((tool) => {
+          const isActive = selectedEnding === tool.ending;
+          return (
+            <button
+              type="button"
+              key={tool.ending}
+              onClick={() => onChange(isActive ? ROW1[2] : tool)}
+              aria-label={endingLabel(tool.ending)}
+              title={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
+              style={{
+                width: BUTTON_W,
+                height: BUTTON_H,
+                padding: 0,
+                borderRadius: 10,
+                border: isActive ? '2px solid #3b82f6' : '1px solid #ccc',
+                background: isActive ? '#eff6ff' : '#fff',
+                color: '#222',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: 18,
+                fontFamily: '"Times New Roman", serif',
+                lineHeight: 1,
+              }}
+            >
+              {endingSymbol(tool.ending)}
+            </button>
+          );
+        })}
+
         {DYNAMIC_TOOLS.map((tool) => {
           const isActive = selectedDynamic === tool.dynamic;
           return (
@@ -313,6 +353,14 @@ function repeatSymbol(kind: RepeatMarkerKind) {
 
 function repeatLabel(kind: RepeatMarkerKind) {
   return kind === 'start' ? '開始リピート' : '終了リピート';
+}
+
+function endingSymbol(ending: EndingNumber) {
+  return `${ending}.`;
+}
+
+function endingLabel(ending: EndingNumber) {
+  return `${ending}番括弧`;
 }
 
 function dynamicSymbol(kind: DynamicMarkingValue) {

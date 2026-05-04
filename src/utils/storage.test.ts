@@ -10,6 +10,7 @@ import {
   hasStoredData,
   clearStoredData,
   createSavedScoreData,
+  CURRENT_VERSION,
   STORAGE_KEYS
 } from './storage';
 import type {
@@ -89,7 +90,7 @@ const partDataArbitrary: fc.Arbitrary<PartData> = fc.record({
 });
 
 const savedScoreDataArbitrary: fc.Arbitrary<SavedScoreData> = fc.record({
-  version: fc.constant('3.0.0'),
+  version: fc.constant(CURRENT_VERSION),
   timestamp: fc.integer({ min: 1000000000000, max: 9999999999999 }),
   metadata: scoreMetadataArbitrary,
   scoreType: fc.constantFrom('single', 'piano') as fc.Arbitrary<ScoreType>,
@@ -802,7 +803,7 @@ describe('Storage Foundation Tests', () => {
 
     it('旧データに調号が無い場合は C として読み込む', () => {
       localStorageMock.setItem(STORAGE_KEYS.PRIMARY, JSON.stringify({
-        version: '3.0.0',
+        version: CURRENT_VERSION,
         timestamp: Date.now(),
         metadata: {
           title: 'Legacy',

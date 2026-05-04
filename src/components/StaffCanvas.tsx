@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental} from 'vexflow';
+import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType } from 'vexflow';
 import type { Tool } from './Palette';
-import type { TieArc, MeasureData, NoteEvent, DurKey } from '../types/storage';
+import type { TieArc, MeasureData, NoteEvent, DurKey, TimeSignature } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
@@ -17,8 +17,10 @@ import {
   type MeasureAccidentalState,
   type KeySignature,
 } from '../utils/noteKeyUtils';
-import { cloneMeasureData, createEmptyMeasure, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
+import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
+import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
+import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -48,6 +50,7 @@ type Props = {
   currentInstrument?: InstrumentType; // 個別再生で使う現在の音色
   previewAccidentalOnApply?: boolean; // 臨時記号適用時に確認音を鳴らすか
   keySignature?: KeySignature; // 調号
+  timeSignature?: TimeSignature; // 拍子
   onKeySignatureChange?: (keySignature: KeySignature) => void; // 行頭クリックによる調号変更
 };
 
@@ -58,7 +61,6 @@ const MIN_MEASURE_W = 52, LONG_HALF_MIN = 80, LONG_WHOLE_MIN = 92;
 const BASE_PAD = 14, UNIT_WIDTH = 9, FLAG_EXTRA_PX = 4;
 const CLEF_PAD_FIRST = 50, CLEF_PAD_OTHER = 28;
 const EMPTY_MEASURE_UNITS = 0.6;
-const BEATS_PER_MEASURE = 4;
 
 /* ===== 範囲拡張（クリックしやすいよう五線の外にも余白） ===== */
 const EXTRA_TOP_LINES = 6;
@@ -82,6 +84,57 @@ const toVFDur = (d: DurKey | string | undefined | null): VFDur =>
   d==='1'?'w':d==='2'?'h':d==='4'?'q':d==='8'?'8':d==='16'?'16':d==='32'?'32':d==='64'?'64':'q';
 const beatsFromVF = (vf: VFDur) =>
   vf==='64'?1/16 : vf==='32'?1/8 : vf==='16'?1/4 : vf==='8'?1/2 : vf==='q'?1 : vf==='h'?2 : 4;
+const DURATION_TOOL_VALUES: DurKey[] = ['1','2','4','8','16','32','64'];
+function durKeyFromBeats(beats: number): DurKey | null {
+  return DURATION_TOOL_VALUES.find((duration) => (
+    Math.abs(beatsFromVF(toVFDur(duration)) - beats) < 0.0001
+  )) ?? null;
+}
+function getDurationTool(tool: Tool): { duration: DurKey; isRest?: boolean } | null {
+  if (!('duration' in tool)) {
+    return null;
+  }
+  const duration = tool.duration as DurKey;
+  return DURATION_TOOL_VALUES.includes(duration) ? { duration, isRest: tool.isRest } : null;
+}
+function buildRestEditReplacement(
+  restEvent: NoteEvent,
+  key: string,
+  tool: Tool,
+  noteAfterRest: boolean
+): NoteEvent[] | null {
+  const durationTool = getDurationTool(tool);
+  if (!durationTool || durationTool.isRest || !restEvent.isRest) {
+    return null;
+  }
+
+  const noteBeats = beatsFromVF(toVFDur(durationTool.duration));
+  const restBeats = beatsFromVF(toVFDur(restEvent.dur));
+  const notePart: NoteEvent = { dur: durationTool.duration, isRest: false, keys: [key] };
+  if (Math.abs(noteBeats - restBeats) < 0.0001) {
+    // 同じ長さなら、休符をそのまま音符へ置き換える。
+    // 例: 16分音符ツールで16分休符をクリック -> 16分音符に変わる。
+    return [notePart];
+  }
+  if (noteBeats > restBeats) {
+    return null;
+  }
+
+  const remainingRestDuration = durKeyFromBeats(restBeats - noteBeats);
+  if (!remainingRestDuration) {
+    return null;
+  }
+
+  // 休符を分割するときは、元の休符を「残り時間の休符」と「新しい音符」に置き換える。
+  // 例: 8分休符を16分音符ツールで右半分クリック -> 16分休符 + 16分音符。
+  const restPart: NoteEvent = {
+    dur: remainingRestDuration,
+    isRest: true,
+    // 分割後も休符の見た目の高さを保てるよう、元の key を引き継ぐ。
+    keys: restEvent.keys.length ? [restEvent.keys[0]] : [],
+  };
+  return noteAfterRest ? [restPart, notePart] : [notePart, restPart];
+}
 const vfToDenom = (vf: VFDur | string) =>
   vf==='64'?64 : vf==='32'?32 : vf==='16'?16 : vf==='8'?8 : vf==='q'?4 : vf==='h'?2 : 1;
 
@@ -378,7 +431,7 @@ function makeVFNote(
 ) {
   const vfDur = toVFDur(ev.dur);
   if (ev.isRest) {
-    const restKey = clef === 'bass' ? 'd/3' : clef === 'alto' ? 'c/4' : 'b/4';
+    const restKey = ev.keys[0] || (clef === 'bass' ? 'd/3' : clef === 'alto' ? 'c/4' : 'b/4');
     const n = new StaveNote({ clef, keys: [restKey], duration: (vfDur as VFDur) + 'r' });
     return n;
   }
@@ -447,9 +500,15 @@ export default function StaffCanvas({
   systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
   initialScoreData, onScoreDataChange, startMeasureIndex = 0, disabled = false,
   clef = 'treble', yOffset = 0, currentInstrument = InstrumentType.PIANO, previewAccidentalOnApply = true, keySignature = 'C',
+  timeSignature = [4, 4],
   onKeySignatureChange,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
+  const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
+  const timeSignatureNumerator = normalizedTimeSignature[0];
+  const timeSignatureDenominator = normalizedTimeSignature[1];
+  const beatsPerMeasure = getMeasureBeats(normalizedTimeSignature);
+  const formattedTimeSignature = formatTimeSignature(normalizedTimeSignature);
   // clef に応じた変換関数を選択
   const lineToKey = clef === 'bass' ? lineToKeyBass : clef === 'alto' ? lineToKeyAlto : lineToKeyTreble;
   const keyToLine = clef === 'bass' ? keyToLineBass : clef === 'alto' ? keyToLineAlto : keyToLineTreble;
@@ -718,10 +777,21 @@ export default function StaffCanvas({
           const cur = prev[measure];
           if (!inRange(cur.events, index)) return prev;
           const ev = cur.events[index];
-          if (ev.isRest) return prev;
 
           let newKeys: string[];
-          if (e.altKey) { // 半音シフト
+          if (ev.isRest) {
+            const defaultRestKey = clef === 'bass' ? 'd/3' : clef === 'alto' ? 'c/4' : 'b/4';
+            const restBaseKey = ev.keys[0] || defaultRestKey;
+            if (e.shiftKey) { // 1オクターブ相当で大きく移動
+              newKeys = [
+                lineToKey(keyToLine(restBaseKey) + (up ? -3.5 : 3.5))
+              ];
+            } else { // 線/間 1段シフト
+              newKeys = [
+                lineToKey(keyToLine(restBaseKey) + (up ? -0.5 : 0.5))
+              ];
+            }
+          } else if (e.altKey) { // 半音シフト
             const delta = up ? 1 : -1;
             newKeys = ev.keys.map(k => { const midi = keyToMidi(k); return midi == null ? k : midiToKey(midi + delta, up); });
           } else if (e.shiftKey) { // 1オクターブシフト
@@ -738,6 +808,11 @@ export default function StaffCanvas({
                 keySignatureRef.current
               )
             );
+          }
+          if (ev.isRest) {
+            const next = prev.map(cloneMeasureData);
+            next[measure].events[index] = { ...next[measure].events[index], keys: newKeys };
+            return next;
           }
 
           // 音高変化に合わせて弧の fromKey / toKey を更新する（キーのズレを防ぐ）
@@ -1215,7 +1290,11 @@ export default function StaffCanvas({
         const stave = new Stave(x / s, y / s, w / s);
         if (i === 0) {
           stave.addClef(clef);
-          if (line === 0) stave.addTimeSignature('4/4');
+          // 拍子記号はいまの仕様では「譜面全体のいちばん最初」だけに出す。
+          // 途中で拍子が変わるケースは、別機能として入れるときに再表示を考える。
+          // startMeasureIndex は「この行が譜面全体の何小節目から始まるか」なので、
+          // 0 なら本当に先頭行、1 以上なら2行目以降と判定できる。
+          if (line === 0 && startMeasureIndex === 0) stave.addTimeSignature(formattedTimeSignature);
           if (hasVisibleKeySignature(normalizedKeySignature)) {
             stave.addKeySignature(normalizedKeySignature);
           }
@@ -1226,6 +1305,18 @@ export default function StaffCanvas({
           stave.setBegBarType(Barline.type.REPEAT_BEGIN);
         }
         stave.setEndBarType(data?.repeatEnd ? Barline.type.REPEAT_END : Barline.type.SINGLE);
+        const voltaConfig = getVoltaRenderConfig(score, absoluteIndex);
+        if (voltaConfig) {
+          const voltaTypeMap = {
+            begin: VoltaType.BEGIN,
+            mid: VoltaType.MID,
+            end: VoltaType.END,
+            begin_end: VoltaType.BEGIN_END,
+          } as const;
+          // 終止括弧は「この小節が 1番 / 2番のどちらに属するか」だけ保存し、
+          // 線の開始・中間・終了は前後の小節を見てここで自動決定する。
+          stave.setVoltaType(voltaTypeMap[voltaConfig.type], voltaConfig.label, -5);
+        }
         stave.setContext(ctx);
         stave.format();
         placeKeySignatureAfterTimeSignature(stave);
@@ -1248,7 +1339,12 @@ export default function StaffCanvas({
         });
 
         const beams = Beam.generateBeams(vfNotes, { beamRests: false });
-        const voice = new Voice({ time: { num_beats: BEATS_PER_MEASURE, beat_value: 4 } } as any);
+        const voice = new Voice({
+          time: {
+            num_beats: timeSignatureNumerator,
+            beat_value: timeSignatureDenominator
+          }
+        } as any);
         voice.setMode((Voice as any).Mode.SOFT ?? 1);
         voice.addTickables(vfNotes);
         new Formatter().joinVoices([voice]).formatToStave([voice], stave);
@@ -1439,7 +1535,7 @@ export default function StaffCanvas({
             const vfDur = toVFDur((tool as any)?.duration);
             const addBeats = beatsFromVF(vfDur);
             const curBeats = m.events.reduce((s2, ev) => s2 + beatsFromVF(toVFDur(ev.dur)), 0);
-            if (curBeats + addBeats > BEATS_PER_MEASURE) return prev;
+            if (curBeats + addBeats > beatsPerMeasure) return prev;
 
             const ev: NoteEvent = {
               dur: (['1','2','4','8','16','32','64'].includes((tool as any)?.duration) ? (tool as any).duration : '4') as DurKey,
@@ -1499,6 +1595,12 @@ export default function StaffCanvas({
             // リピート記号は「小節単位」の情報なので、
             // 背景クリックでは音高ではなく小節番号だけを見てトグルする。
             setScore(prev => toggleMeasureRepeatMarker(prev, absoluteIndex, tool.repeat));
+            return;
+          }
+          if ('mode' in tool && tool.mode === 'ending') {
+            // 1番括弧 / 2番括弧も小節単位の印なので、
+            // 音符位置ではなく「この小節がどの終止括弧に属するか」だけを切り替える。
+            setScore(prev => toggleMeasureEnding(prev, absoluteIndex, tool.ending));
             return;
           }
           if ('mode' in tool && tool.mode === 'dynamic') {
@@ -1570,6 +1672,8 @@ export default function StaffCanvas({
 
             const hit = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
             hit.setAttribute('class', 'vf-note-hit');
+            hit.setAttribute('data-measure', String(absoluteIndex));
+            hit.setAttribute('data-note', String(j));
             hit.setAttribute('x', String(xHit));
             hit.setAttribute('y', String(yHit));
             hit.setAttribute('width', String(wHit));
@@ -1643,6 +1747,10 @@ export default function StaffCanvas({
               if ('mode' in tool && tool.mode === 'tie') return;
               if ('mode' in tool && tool.mode === 'repeat') {
                 setScore(prev => toggleMeasureRepeatMarker(prev, absoluteIndex, tool.repeat));
+                return;
+              }
+              if ('mode' in tool && tool.mode === 'ending') {
+                setScore(prev => toggleMeasureEnding(prev, absoluteIndex, tool.ending));
                 return;
               }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
@@ -1735,7 +1843,35 @@ export default function StaffCanvas({
                   }
                   return;
                 }
-                // 休符クリック → 音符を挿入（rect が大きくなり insertRect に届かないため）
+                const snappedLine = snapLineBySpacing(stave, ly);
+                const key = applyKeySignatureToNaturalKey(lineToKey(snappedLine), keySignatureRef.current);
+                const noteAfterRest = lx >= xHit + wHit / 2;
+                const restReplacement = buildRestEditReplacement(safeEvents[j], key, tool, noteAfterRest);
+                const isSameRestSelected =
+                  selectedRef.current?.measure === startMeasureIndex + measureIndex &&
+                  selectedRef.current?.index === j;
+                if (restReplacement && isSameRestSelected) {
+                  // 休符クリックでは、同音価なら置換、より短い音価なら分割して差し込む。
+                  // 1回目のクリックでは休符を選択し、
+                  // 同じ休符をもう一度クリックしたときだけ置換・分割を実行する。
+                  // これで Delete や ↑/↓ の対象にもできる。
+                  setScore(prev => {
+                    const next = prev.map(cloneMeasureData);
+                    const targetEv = next[absoluteIndex]?.events[j];
+                    if (!targetEv?.isRest) return prev;
+                    const latestReplacement = buildRestEditReplacement(targetEv, key, tool, noteAfterRest);
+                    if (!latestReplacement) return prev;
+                    next[absoluteIndex].events.splice(j, 1, ...latestReplacement);
+                    return next;
+                  });
+                  setSelected({ measure: startMeasureIndex + measureIndex, index: j + (restReplacement.length === 2 && noteAfterRest ? 1 : 0) });
+                  return;
+                }
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                if (restReplacement) {
+                  return;
+                }
+                // 分割できない休符では、2回クリックではなく従来どおり近い位置へ音符を挿入する。
                 doInsertAt(lx, ly, measureIndex);
               } else {
                 if (dynamicMode) return;
@@ -1928,7 +2064,7 @@ export default function StaffCanvas({
         } catch { /* 保険 */ }
       }
     });
-  }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, normalizedKeySignature]);
+  }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure]);
 
   return <div ref={ref} />;
 }

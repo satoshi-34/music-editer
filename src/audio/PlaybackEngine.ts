@@ -5,6 +5,8 @@ export interface PlaybackMeasureEvent {
   dur: string;
   isRest: boolean;
   keys: string[];
+  /** 小節頭からの開始拍。複数声部の同時発音位置をそろえるために使う */
+  startBeat?: number;
   /**
    * 再生時の音量係数（0..1）。
    * 強弱未設定の古いデータやプレビュー互換のため optional にしている。
@@ -15,6 +17,8 @@ export interface PlaybackMeasureEvent {
 export interface PlaybackPart {
   measures: Array<{
     events: PlaybackMeasureEvent[];
+    /** この小節が本来もつ長さ（4分音符=1拍） */
+    measureBeats?: number;
   }>;
 }
 

@@ -166,14 +166,24 @@ export class SoundFontEngine implements PlaybackEngine {
     parts.forEach(part => {
       let partTime = startTime;
       for (const measure of part.measures) {
+        // measureStartTime は「この小節の頭が絶対時刻でどこか」を固定するための値。
+        // startBeat 付きイベントはここを基準に予約すると、
+        // 上声と下声が同じ拍から鳴る小節でもずれにくい。
+        const measureStartTime = partTime;
+        const measureBeats = typeof measure.measureBeats === 'number' ? measure.measureBeats : 4;
+        const measureSeconds = measureBeats * (60 / bpm);
         if (!measure?.events || measure.events.length === 0) {
-          // 空小節は全休符ぶん進めて、後ろの音の位置だけ合わせる。
-          partTime += this.durationToSeconds('1', bpm);
+          // 空小節でも拍子どおりの長さだけ進める。
+          // 3/8 の譜面を 4/4 扱いしてしまうと、左右手がここでずれ始める。
+          partTime += measureSeconds;
           continue;
         }
 
         for (const event of measure.events) {
           const duration = this.durationToSeconds(event.dur, bpm);
+          const eventStartTime = typeof event.startBeat === 'number'
+            ? measureStartTime + (event.startBeat * (60 / bpm))
+            : partTime;
           if (!event.isRest && event.keys.length > 0) {
             // 和音は keys を1つずつ同じ時刻で予約する。
             // SoundFont 側は単音 player なので、「同時刻に複数 start」を積む形で和音にする。
@@ -181,12 +191,31 @@ export class SoundFontEngine implements PlaybackEngine {
             event.keys.forEach(key => {
               player.play(
                 this.normalizeNoteFormat(key),
-                partTime,
+                eventStartTime,
                 this.buildPlaybackOptions(duration, velocity)
               );
             });
           }
-          partTime += duration;
+          if (typeof event.startBeat !== 'number') {
+            // startBeat が無いイベントは、従来どおり「前から順に並ぶ単声部」として進める。
+            partTime += duration;
+          }
+        }
+        if (measure.events.some((event) => typeof event.startBeat === 'number')) {
+          const measureEndOffset = measure.events.reduce((maxEnd, event) => {
+            const startBeat = typeof event.startBeat === 'number'
+              ? event.startBeat
+              : 0;
+            const endBeat = startBeat + (DURATION_TO_BEATS[event.dur] ?? 1);
+            return Math.max(maxEnd, endBeat);
+          }, 0);
+          // 複数声部の小節は、最後の発音位置だけでなく小節本来の長さも守る。
+          // これで「休符で埋めた後半」があっても次小節の頭が前倒しにならない。
+          partTime = measureStartTime + Math.max(measureEndOffset * (60 / bpm), measureSeconds);
+        } else {
+          // 単声部でも、入力途中で小節がまだ埋まり切っていない場合がある。
+          // 再生では拍子を優先して次小節位置をそろえる。
+          partTime = Math.max(partTime, measureStartTime + measureSeconds);
         }
       }
     });
