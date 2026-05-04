@@ -126,7 +126,7 @@ export default function ScorePage() {
   const audioEngineRef = useRef<PlaybackEngine>(createPlaybackEngine(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS));
   const emergencyAudioContextRef = useRef<AudioContext | null>(null);
   // Safari や一時的な SoundFont 失敗時は、その1回だけ内蔵音源へ退避する。
-  // ただし UI 上の選択は変えたくないため、「いまの ref は一時避難中か」を別 ref で覚える。
+  // 保存設定そのものは残しつつ、「今実際に鳴っている方式」だけ別で見せるため ref で覚える。
   const temporaryBuiltInFallbackRef = useRef(false);
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped');
   const [currentPosition, setCurrentPosition] = useState<{ measureIndex: number; beatPosition: number; noteIndex: number }>({
@@ -147,6 +147,12 @@ export default function ScorePage() {
       return DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS;
     }
   });
+  // 選択中の方式と実際に鳴っている方式がずれることがあるため、
+  // UI 用に「現在の実動作モード」を分けて持つ。
+  const [activeSoundEngineMode, setActiveSoundEngineMode] = useState<SoundEngineMode>(
+    soundRuntimeSettings.engineMode
+  );
+  const [isTemporaryBuiltInFallback, setIsTemporaryBuiltInFallback] = useState(false);
   // playbackTimerRef は「再生が終わったら stopped に戻す予約」を保持する。
   // 再生し直しや停止時に clearTimeout できるよう、ref で持っている。
   const playbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -171,6 +177,8 @@ export default function ScorePage() {
     audioEngineRef.current.dispose();
     audioEngineRef.current = createPlaybackEngine(soundRuntimeSettings);
     audioEngineRef.current.setInstrument(currentInstrument);
+    setActiveSoundEngineMode(soundRuntimeSettings.engineMode);
+    setIsTemporaryBuiltInFallback(false);
     return audioEngineRef.current;
   }, [currentInstrument, soundRuntimeSettings.engineMode, soundRuntimeSettings.pluginName]);
 
@@ -200,6 +208,8 @@ export default function ScorePage() {
     audioEngine.setInstrument(currentInstrument);
     audioEngine.setSoundProfile(soundRuntimeSettings.profile);
     await audioEngine.initialize();
+    setActiveSoundEngineMode(soundRuntimeSettings.engineMode);
+    setIsTemporaryBuiltInFallback(false);
     return audioEngine;
   }, [currentInstrument, getAudioEngine, recreateAudioEngine, soundRuntimeSettings.engineMode, soundRuntimeSettings.profile]);
 
@@ -216,6 +226,8 @@ export default function ScorePage() {
     fallbackEngine.setSoundProfile(soundRuntimeSettings.profile);
     await fallbackEngine.initialize();
     audioEngineRef.current = fallbackEngine;
+    setActiveSoundEngineMode('built-in');
+    setIsTemporaryBuiltInFallback(true);
     return fallbackEngine;
   }, [currentInstrument, getAudioEngine, soundRuntimeSettings]);
 
@@ -461,6 +473,8 @@ export default function ScorePage() {
       JSON.stringify(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS)
     );
     setSoundRuntimeSettings(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS);
+    setActiveSoundEngineMode(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.engineMode);
+    setIsTemporaryBuiltInFallback(false);
     setCurrentInstrument(InstrumentType.PIANO);
   }, []);
 
@@ -482,6 +496,8 @@ export default function ScorePage() {
       recoveredEngine.setSoundProfile(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile);
       await recoveredEngine.initialize();
       audioEngineRef.current = recoveredEngine;
+      setActiveSoundEngineMode(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.engineMode);
+      setIsTemporaryBuiltInFallback(false);
       setPlaybackState('stopped');
       setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
       alert('音声設定を安全な既定値へ戻して復旧しました。built-in のピアノでもう一度お試しください。');
@@ -532,6 +548,9 @@ export default function ScorePage() {
   }, []);
 
   const handleSoundEngineModeChange = useCallback((mode: SoundEngineMode) => {
+    temporaryBuiltInFallbackRef.current = false;
+    setActiveSoundEngineMode(mode);
+    setIsTemporaryBuiltInFallback(false);
     setSoundRuntimeSettings(prev => ({ ...prev, engineMode: mode }));
   }, []);
 
@@ -925,6 +944,8 @@ export default function ScorePage() {
                 onAudioRecovery={handleAudioRecovery}
                 onEmergencyBeep={handleEmergencyBeep}
                 soundRuntimeSettings={soundRuntimeSettings}
+                activeSoundEngineMode={activeSoundEngineMode}
+                isTemporaryBuiltInFallback={isTemporaryBuiltInFallback}
                 onSoundEngineModeChange={handleSoundEngineModeChange}
                 onPluginNameChange={handlePluginNameChange}
                 onSoundProfileChange={handleSoundProfileChange}

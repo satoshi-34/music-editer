@@ -46,6 +46,10 @@ export interface PlaybackControlsProps {
   onEmergencyBeep?: () => void;
   /** 詳細な音源設定 */
   soundRuntimeSettings?: PlaybackSoundRuntimeSettings;
+  /** 実際に今鳴っている音源方式 */
+  activeSoundEngineMode?: SoundEngineMode;
+  /** 一時的に内蔵音源へ逃がしているか */
+  isTemporaryBuiltInFallback?: boolean;
   /** 音源方式変更時のコールバック */
   onSoundEngineModeChange?: (mode: SoundEngineMode) => void;
   /** SoundFontパック名 / 想定プラグイン名変更時のコールバック */
@@ -148,6 +152,8 @@ export default function PlaybackControls({
   onAudioRecovery,
   onEmergencyBeep,
   soundRuntimeSettings,
+  activeSoundEngineMode,
+  isTemporaryBuiltInFallback = false,
   onSoundEngineModeChange,
   onPluginNameChange,
   onSoundProfileChange,
@@ -157,6 +163,7 @@ export default function PlaybackControls({
   const [tempoInput, setTempoInput] = useState(currentTempo.toString());
   const [isTempoInputFocused, setIsTempoInputFocused] = useState(false);
   const [isSoundDetailOpen, setIsSoundDetailOpen] = useState(false);
+  const displayedSoundEngineMode = activeSoundEngineMode ?? soundRuntimeSettings?.engineMode ?? 'built-in';
 
   // 外部からのテンポ変更を反映
   useEffect(() => {
@@ -445,7 +452,7 @@ export default function PlaybackControls({
                   <span>音源方式</span>
                   <select
                     className="instrument-select"
-                    value={soundRuntimeSettings.engineMode}
+                    value={displayedSoundEngineMode}
                     onChange={handleSoundEngineModeChange}
                     aria-label="音源方式"
                   >
@@ -473,6 +480,13 @@ export default function PlaybackControls({
                   <div style={{ fontSize: 12, color: '#4b5563', lineHeight: 1.5 }}>
                     安全に動作確認しやすい SoundFont パック名は `MusyngKite` / `FluidR3_GM` / `FatBoy` / `GeneralUser_GS` です。
                     それ以外の名前は、無音を避けるため内部で `MusyngKite` に戻します。
+                  </div>
+                )}
+
+                {isTemporaryBuiltInFallback && (
+                  <div style={{ fontSize: 12, color: '#92400e', lineHeight: 1.6 }}>
+                    SoundFont の準備または再生に失敗したため、現在は一時的に `内蔵音源` で鳴らしています。
+                    次の再生やプレビューでは、選択中の方式へもう一度戻して試します。
                   </div>
                 )}
 

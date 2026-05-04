@@ -102,6 +102,7 @@ class AudioEngine {
 - Safari では `AudioContext` が `running` に見えても無音になることがあるため、初期化直後と `resume()` 直後にごく短い無音ノードを流して出力経路をウォームアップする
 - Safari でもまず選択中の音源方式で再生を試し、一時的な SoundFont 読み込み失敗時だけ `built-in` に一時フォールバックする
 - ただし `playback-sound-runtime-settings.engineMode` 自体は書き換えず、次回の再生準備でユーザーが選んでいた `soundfont` / `plugin` に戻す
+- UI には保存設定とは別に「今実際に鳴っている音源方式」を表示し、一時フォールバック中は `内蔵音源` と案内文を出して見た目と実音をそろえる
 - `ScorePage` の built-in 準備では、通常再生のたびに毎回 `SimpleAudioEngine` を作り直さない。Safari では `AudioContext` の短時間な再生成がかえって無音の引き金になることがあるため、通常時は既存エンジンを再利用し、方式切替・背景復帰・実失敗時だけ再生成する
 - 音符クリックの個別再生は `NotePlayer` 経路を使うが、ここも `ScorePage` の現在楽器選択に追従させ、再生ボタン系と音色がずれないようにする
 - 臨時記号適用時の確認音は個別に ON/OFF できるようにし、通常の音符クリック再生とは分けて制御する

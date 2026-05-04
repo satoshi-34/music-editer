@@ -233,7 +233,7 @@ bestLine = Number(line.toFixed(1));
 ### 修正設計
 
 `ScorePage` に `runWithPlaybackFallback()` を追加し、通常は選択中の音源方式で再生を試み、`soundfont` 失敗時のみ `built-in` エンジンへ切り替えて再試行する。  
-ただし UI 上の `engineMode` は書き換えず、内蔵音源への切り替えは「その再生操作の間だけ」に限定する。
+保存用の `playback-sound-runtime-settings.engineMode` はそのまま残しつつ、UI 表示用には「今実際に鳴っている方式」を別 state で持ち、内蔵音源へ逃がした瞬間だけ `built-in` 表示へ切り替える。
 
 ```typescript
 try {
@@ -250,7 +250,8 @@ try {
 ```
 
 `switchToBuiltInFallbackEngine()` は一時的なローカル変数ではなく、`audioEngineRef.current` 自体を内蔵音源へ差し替える。これにより、再生予約直後にエンジンが破棄されて音が止まる事故を防ぐ。  
-同時に `temporaryBuiltInFallbackRef` を立てておき、次回 `prepareAudioEngine()` のときに、ユーザーが選んでいた `soundfont` や `plugin` の設定へ戻す。
+同時に `temporaryBuiltInFallbackRef` を立てておき、次回 `prepareAudioEngine()` のときに、ユーザーが選んでいた `soundfont` や `plugin` の設定へ戻す。  
+`PlaybackControls` には `activeSoundEngineMode` と `isTemporaryBuiltInFallback` を渡し、選択中は `SoundFont` のままでも、実再生が `built-in` に落ちている間はセレクト表示と補足文を一致させる。
 
 Safari でもまず選択中の音源方式で再生を試し、`initialize()` や音源読み込みで失敗した場合のみ `built-in` へ逃がす。  
 これにより、SoundFont が正常に鳴る環境では、前回追加したリアル寄りの音色差をそのまま活かせる。
