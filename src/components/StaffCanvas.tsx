@@ -1527,24 +1527,31 @@ export default function StaffCanvas({
           // デバッグログ（要件4.1, 4.2対応）
           logNoteAddition(absoluteMeasureIndex, localX, localY, key);
 
+          const currentMeasure = score[absoluteMeasureIndex] ?? createEmptyMeasure();
+          const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration) ? (tool as any).duration : '4') as DurKey;
+          const addBeats = beatsFromVF(toVFDur(addDuration));
+          const currentBeats = currentMeasure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)), 0);
+          if (currentBeats + addBeats > beatsPerMeasure) {
+            return;
+          }
+
+          const insertedEvent: NoteEvent = {
+            dur: addDuration,
+            isRest: !!(tool as any)?.isRest,
+            keys: [key],
+          };
+
           setScore(prev => {
             const next = prev.map(cloneMeasureData);
             while (absoluteMeasureIndex >= next.length) next.push(createEmptyMeasure());
             const m = next[absoluteMeasureIndex];
-
-            const vfDur = toVFDur((tool as any)?.duration);
-            const addBeats = beatsFromVF(vfDur);
-            const curBeats = m.events.reduce((s2, ev) => s2 + beatsFromVF(toVFDur(ev.dur)), 0);
-            if (curBeats + addBeats > beatsPerMeasure) return prev;
-
-            const ev: NoteEvent = {
-              dur: (['1','2','4','8','16','32','64'].includes((tool as any)?.duration) ? (tool as any).duration : '4') as DurKey,
-              isRest: !!(tool as any)?.isRest,
-              keys: [key],
-            };
-            m.events.splice(Math.max(0, Math.min(insertAt, m.events.length)), 0, ev);
+            m.events.splice(Math.max(0, Math.min(insertAt, m.events.length)), 0, insertedEvent);
             return next;
           });
+          if (!insertedEvent.isRest) {
+            // 置いた瞬間に確認音を鳴らすと、マウス入力でも耳で音高を確かめやすい。
+            playNoteEvent(insertedEvent);
+          }
         };
 
         /* --- 小節全体：挿入用透明rect + ガイド --- */
@@ -1865,6 +1872,11 @@ export default function StaffCanvas({
                     return next;
                   });
                   setSelected({ measure: startMeasureIndex + measureIndex, index: j + (restReplacement.length === 2 && noteAfterRest ? 1 : 0) });
+                  const insertedEvent = restReplacement.find((event) => !event.isRest);
+                  if (insertedEvent) {
+                    // 休符を音符へ置換・分割したときも、新しく入った音だけ確認できるようにする。
+                    playNoteEvent(insertedEvent);
+                  }
                   return;
                 }
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });

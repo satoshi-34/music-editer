@@ -1327,21 +1327,32 @@ export default function PianoSystemCanvas({
               if(lx>rx2&&lx-rx2<minD){minD=lx-rx2;at=j+1;}
             }
           }
+
+          const currentMeasure = score[absI] ?? createEmptyMeasure();
+          const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey;
+          const addBeats = beatsFromVF(toVFDur(addDuration));
+          const currentBeats = currentMeasure.events.reduce((sum,event)=>sum+beatsFromVF(toVFDur(event.dur)),0);
+          if(currentBeats + addBeats > beatsPerMeasure){
+            return;
+          }
+
+          const insertedEvent:NoteEvent={
+            dur:addDuration,
+            isRest:!!(tool as any)?.isRest,
+            keys:[key],
+          };
+
           setScore(prev=>{
             const next=prev.map(cloneMeasureData);
             while(absI>=next.length)next.push(createEmptyMeasure());
             const m=next[absI];
-            const vfd=toVFDur((tool as any)?.duration);
-            const addB=beatsFromVF(vfd);
-            const curB=m.events.reduce((s,ev)=>s+beatsFromVF(toVFDur(ev.dur)),0);
-            if(curB+addB>beatsPerMeasure)return prev;
-            const ev:NoteEvent={
-              dur:(['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey,
-              isRest:!!(tool as any)?.isRest, keys:[key],
-            };
-            m.events.splice(Math.max(0,Math.min(at,m.events.length)),0,ev);
+            m.events.splice(Math.max(0,Math.min(at,m.events.length)),0,insertedEvent);
             return next;
           });
+          if(!insertedEvent.isRest){
+            // 置いた直後の確認音があると、右手左手どちらでも音高チェックがしやすい。
+            playNoteEvent(insertedEvent);
+          }
         };
 
         const ir=document.createElementNS('http://www.w3.org/2000/svg','rect');
@@ -1606,6 +1617,11 @@ export default function PianoSystemCanvas({
                     return next;
                   });
                   setSelected({partIndex:pi,measure:absI,index:j+(restReplacement.length===2&&noteAfterRest?1:0)});
+                  const insertedEvent = restReplacement.find((event) => !event.isRest);
+                  if (insertedEvent) {
+                    // 休符を音符へ置換・分割したときも、新しく入った音だけ確認できるようにする。
+                    playNoteEvent(insertedEvent);
+                  }
                   return;
                 }
                 setSelected({partIndex:pi,measure:absI,index:j});
