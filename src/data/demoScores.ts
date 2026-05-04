@@ -163,64 +163,22 @@ export function loadCustomPianoDemoScore(): DemoScore | null {
 
 /**
  * ユーザー説明用のピアノデモ譜。
- * 厳密な原典版の完全再現ではなく、「このアプリで有名曲を表示・再生できる」ことを
- * 分かりやすく見せるための主題デモとして用意している。
+ * 原曲再現よりも、「休符・記号・左右手の役割」をこのアプリで確認しやすいことを優先する。
  */
 export function createFurEliseDemoScore(): DemoScore {
   const rightHandMeasures: MeasureData[] = [
-    // 2枚目の譜例に近い「軽い冒頭」を優先し、
-    // 冒頭は単声部ベースで組んで余計な内声を消す。
     measureWithMarkers([
-      noteWithDynamics('e/5', '16', [{ value: 'pp' }]),
-      note('d#/5', '16'),
-      note('e/5', '16'),
-      note('d#/5', '16'),
-      note('e/5', '16'),
-      note('b/4', '16')
+      noteWithDynamics('e/5', '8', [{ value: 'mp' }]),
+      rest('8', 'treble'),
+      note('g/5', '16'),
+      note('a/5', '16')
     ], { repeatStart: true }),
     measure([
-      note('d/5', '16'),
-      note('c/5', '16'),
-      note('a/4', '16'),
-      note('c/5', '16'),
-      note('e/5', '16'),
-      note('a/4', '16')
-    ]),
-    measure([
-      note('b/4', '8'),
-      rest('8', 'treble'),
-      note('e/4', '16'),
-      note('g#/4', '16')
-    ]),
-    measure([
-      note('a/4', '8'),
-      rest('8', 'treble'),
-      note('e/4', '16'),
-      note('a/4', '16')
-    ]),
-    measure([
-      note('b/4', '8'),
-      rest('8', 'treble'),
-      note('g#/4', '16'),
-      note('b/4', '16')
-    ]),
-    measure([
-      note('c/5', '8'),
+      note('g/5', '8'),
       rest('8', 'treble'),
       note('e/5', '16'),
       note('d/5', '16')
     ]),
-    measureWithMarkers([
-      note('a/4', '8'),
-      rest('8', 'treble'),
-      rest('8', 'treble')
-    ], { repeatEnd: true, ending: 1 }),
-    measureWithMarkers([
-      note('b/4', '8'),
-      rest('8', 'treble'),
-      note('c/5', '16'),
-      note('d/5', '16')
-    ], { ending: 2 }),
     measure([
       note('c/5', '8'),
       rest('8', 'treble'),
@@ -230,57 +188,87 @@ export function createFurEliseDemoScore(): DemoScore {
     measure([
       note('a/4', '8'),
       rest('8', 'treble'),
-      note('e/5', '16'),
+      note('c/5', '16'),
+      note('a/4', '16')
+    ]),
+    measure([
+      note('d/5', '8'),
+      rest('8', 'treble'),
+      note('f/5', '16'),
+      note('e/5', '16')
+    ]),
+    measure([
+      note('c/5', '8'),
+      rest('8', 'treble'),
+      note('a/4', '16'),
+      note('c/5', '16')
+    ]),
+    measureWithMarkers([
+      note('b/4', '8'),
+      rest('8', 'treble'),
+      note('d/5', '16'),
+      note('e/5', '16')
+    ], { repeatEnd: true, ending: 1 }),
+    measureWithMarkers([
+      note('g/4', '8'),
+      rest('8', 'treble'),
+      note('b/4', '16'),
+      note('d/5', '16')
+    ], { ending: 2 }),
+    measure([
+      chord(['c/5', 'e/5'], '8'),
+      rest('8', 'treble'),
+      note('g/5', '16'),
+      note('e/5', '16')
+    ]),
+    measure([
+      note('a/4', '8'),
+      rest('8', 'treble'),
+      note('c/5', '16'),
       note('d/5', '16')
     ]),
     measure([
-      note('g#/4', '8'),
+      note('f/4', '8'),
       rest('8', 'treble'),
-      note('e/5', '16'),
-      note('g#/5', '16')
+      note('a/4', '16'),
+      note('c/5', '16')
     ]),
     measure([
-      note('b/4', '8'),
+      note('g/4', '8'),
       rest('8', 'treble'),
-      note('g#/4', '16'),
-      note('b/4', '16')
+      note('e/4', '16'),
+      note('g/4', '16')
     ]),
   ];
 
   const leftHandMeasures: MeasureData[] = [
-    // 左手は冒頭2小節を空け、その後に軽い分散和音を置く。
-    // これで見本画像の「右手が先に聞こえる」印象へ寄せる。
-    measureWithMarkers([], { repeatStart: true }),
-    measure([]),
-    // 手本の左手は A-C-E の和音型ではなく、
-    // A-E-A / E-E-G# のように広めの分散和音で進む。
-    // 3/8 小節を正しく満たすため、16分3音の後ろに 16分休符 + 8分休符を置く。
+    // 左手は 3/8 の拍感が分かるよう、分散和音 + 休符で軽く支える。
+    measureWithMarkers([note('c/3', '16'), note('g/3', '16'), note('c/4', '16'), rest('16', 'bass'), rest('8', 'bass')], { repeatStart: true }),
+    measure([note('g/2', '16'), note('d/3', '16'), note('g/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
     measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('f/2', '16'), note('c/3', '16'), note('f/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('d/2', '16'), note('a/2', '16'), note('d/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('g/2', '16'), note('d/3', '16'), note('g/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measureWithMarkers([note('e/2', '16'), note('b/2', '16'), note('e/3', '16'), rest('16', 'bass'), rest('8', 'bass')], { repeatEnd: true, ending: 1 }),
+    measureWithMarkers([note('g/2', '16'), note('d/3', '16'), note('g/3', '16'), rest('16', 'bass'), rest('8', 'bass')], { ending: 2 }),
+    measure([note('c/3', '16'), note('g/3', '16'), note('c/4', '16'), rest('16', 'bass'), rest('8', 'bass')]),
     measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
-    measure([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
-    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
-    measureWithMarkers([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')], { repeatEnd: true, ending: 1 }),
-    measureWithMarkers([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16', 'bass'), rest('8', 'bass')], { ending: 2 }),
-    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
-    measure([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
-    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
-    measure([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('f/2', '16'), note('c/3', '16'), note('f/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('c/2', '16'), note('g/2', '16'), note('c/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
   ];
 
   const trailingMeasures = emptyMeasures(48 - rightHandMeasures.length);
 
   return {
     metadata: {
-      title: 'Fur Elise',
-      subtitle: 'Clavierstuck in A Minor - WoO 59',
+      title: 'Piano Demo',
+      subtitle: '3/8 Sample Phrase',
       lyricist: '',
-      composer: 'Ludwig van Beethoven',
-      arranger: ''
+      composer: 'アプリ内デモ用',
+      arranger: 'ピアノ編集・再生確認用'
     },
     scoreType: 'piano',
-    // 「エリーゼのために」冒頭主題に合わせ、調号なし（イ短調系）で置く。
     keySignature: 'C',
-    // 有名な冒頭主題として認識しやすいよう、3/8 の小節感を維持する。
     timeSignature: [3, 8],
     rightHand: [...rightHandMeasures, ...trailingMeasures],
     leftHand: [...leftHandMeasures, ...emptyMeasures(48 - leftHandMeasures.length)],

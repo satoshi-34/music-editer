@@ -66,7 +66,7 @@ export default function SaveLoadButtons({
             aria-label="サンプル譜の種類"
             title="読み込むサンプル譜の種類"
           >
-            <option value="fur-elise">ピアノ: エリーゼのために</option>
+            <option value="fur-elise">ピアノ: デモフレーズ</option>
             <option value="custom-piano" disabled={!hasCustomPianoSample}>ピアノ: いまの譜面</option>
             <option value="brass-test">金管: テストフレーズ</option>
             <option value="strings-test">弦: テストフレーズ</option>
