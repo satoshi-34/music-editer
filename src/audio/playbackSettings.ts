@@ -37,8 +37,10 @@ export interface PlaybackSoundRuntimeSettings {
 }
 
 export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettings = {
-  engineMode: 'built-in',
-  pluginName: '',
+  // ユーザー環境では内蔵音源の準備コストが高いことがあるため、
+  // 初回はそのまま試しやすい SoundFont / FluidR3_GM を既定にする。
+  engineMode: 'soundfont',
+  pluginName: 'FluidR3_GM',
   previewAccidentalOnApply: true,
   profile: {
     brightness: 0.5,
