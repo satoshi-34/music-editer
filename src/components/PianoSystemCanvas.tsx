@@ -9,6 +9,7 @@ import {
 import type { Tool } from './Palette';
 import type { MeasureData, TieArc, DynamicMarking } from '../types/storage';
 import type { ClefType } from './clefUtils';
+import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
@@ -166,7 +167,32 @@ function keyToLineForClef(clef: ClefType, key: string): number {
   return (base - target) / 2;
 }
 function restKeyForClef(clef: ClefType): string {
-  return clef==='bass'?'d/3':clef==='alto'?'c/4':'b/4';
+  return restFormatterKey(clef);
+}
+function defaultRestKeyForClef(clef: ClefType): string {
+  return defaultRestDisplayKey(clef);
+}
+function applyDefaultRestDisplayLine(
+  vfNotes: StaveNote[],
+  events: NoteEvent[],
+  clef: ClefType
+): void {
+  const displayRestKey = defaultRestKeyForClef(clef);
+  if (displayRestKey === restKeyForClef(clef)) {
+    return;
+  }
+  for (let index = 0; index < vfNotes.length && index < events.length; index += 1) {
+    const event = events[index];
+    const note = vfNotes[index] as any;
+    if (!event?.isRest || (event.keys[0] || displayRestKey) !== displayRestKey) {
+      continue;
+    }
+    // VexFlow の標準位置（旧既定位置）からだけ 1 段下げる。
+    // こうしておくと、複数声部で alignRests が別位置へ逃がした休符は上書きしない。
+    if (note.getKeyLine?.(0) === 3) {
+      note.setKeyLine?.(0, note.getKeyLine(0) - 1);
+    }
+  }
 }
 
 const LETTER_TO_PC: Record<string,number>={c:0,d:2,e:4,f:5,g:7,a:9,b:11};
@@ -323,8 +349,11 @@ function makeVFNote(
     if (renderAsGhostRest) {
       return new GhostNote({ duration: vd });
     }
-    const restKey = ev.keys[0] || restKeyForClef(clef);
-    return new StaveNote({clef,keys:[restKey],duration:vd+'r'});
+    const eventRestKey = ev.keys[0] || defaultRestKeyForClef(clef);
+    const renderRestKey = eventRestKey === defaultRestKeyForClef(clef)
+      ? restKeyForClef(clef)
+      : eventRestKey;
+    return new StaveNote({clef,keys:[renderRestKey],duration:vd+'r'});
   }
   // keys が空の場合は全休符にフォールバック
   if(!ev.keys||ev.keys.length===0){
@@ -706,7 +735,7 @@ export default function PianoSystemCanvas({
           if(!ev)return prev;
           let newKeys:string[];
           if(ev.isRest){
-            const restBaseKey = ev.keys[0] || restKeyForClef(clef);
+            const restBaseKey = ev.keys[0] || defaultRestKeyForClef(clef);
             const diff=e.shiftKey?(up?-3.5:3.5):(up?-0.5:0.5);
             newKeys=[l2k(k2l(restBaseKey)+diff)];
           }else{
@@ -1199,8 +1228,8 @@ export default function PianoSystemCanvas({
         const k2l=(k:string)=>keyToLineForClef(part.clef,k);
 
         const data=absI<score.length?score[absI]:undefined;
-        const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[restKeyForClef(part.clef)],__isPlaceholder:true}])
-          .map(ev=>(!ev||!ev.dur)?{dur:'4' as DurKey,isRest:true,keys:['b/4']}:{...ev,dur:ev.dur as DurKey});
+        const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestKeyForClef(part.clef)],__isPlaceholder:true}])
+          .map(ev=>(!ev||!ev.dur)?{dur:'4' as DurKey,isRest:true,keys:[defaultRestKeyForClef(part.clef)]}:{...ev,dur:ev.dur as DurKey});
         // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
         const accidentalState = createMeasureAccidentalState(normalizedKeySignature);
         const measureVoices = getMeasureVoices(data);
@@ -1262,6 +1291,8 @@ export default function PianoSystemCanvas({
           // alignRests を明示して、近い音符や別声部に合わせて
           // 休符の縦位置をVexFlow側で補正してもらう。
           .formatToStave(renderedVoiceEntries.map((entry) => entry.voice),stave,{ alignRests: true });
+
+        applyDefaultRestDisplayLine(vfNotes, safeEvs, part.clef);
 
         const hasClef=(i===0);
         for(let j=0;j<vfNotes.length&&j<safeEvs.length;j++){
@@ -1339,7 +1370,7 @@ export default function PianoSystemCanvas({
           const insertedEvent:NoteEvent={
             dur:addDuration,
             isRest:!!(tool as any)?.isRest,
-            keys:[key],
+            keys:[(tool as any)?.isRest ? defaultRestKeyForClef(part.clef) : key],
           };
 
           setScore(prev=>{

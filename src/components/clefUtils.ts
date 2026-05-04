@@ -71,8 +71,16 @@ export function keyToLine(clef: ClefType, key: string): number {
   return keyToLineTreble(key);
 }
 
+// 休符は「編集データとして保存したい見た目位置」と、
+// VexFlow に一時的に渡す既定位置を分けて扱う。
+// 後者を残しておくと、複数声部で alignRests を使う既存挙動を壊しにくい。
+const DEFAULT_REST_FORMATTER_LINE = 2;
+const DEFAULT_REST_DISPLAY_LINE = 2;
+
 export function restKey(clef: ClefType): string {
-  if (clef === 'bass') return 'd/3';
-  if (clef === 'alto') return 'c/4';
-  return 'b/4';
+  return lineToKey(clef, DEFAULT_REST_FORMATTER_LINE);
+}
+
+export function defaultRestDisplayKey(clef: ClefType): string {
+  return lineToKey(clef, DEFAULT_REST_DISPLAY_LINE);
 }
