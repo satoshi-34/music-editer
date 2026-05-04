@@ -21,6 +21,7 @@ import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasur
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -213,6 +214,37 @@ function keyToLineAlto(key: string): number {
   const target = +m[3] * 7 + (idxMap[m[1].toLowerCase()] ?? 0);
   const base = 4 * 7 + idxMap['g']; // G4 = 32
   return (base - target) / 2;
+}
+
+function defaultRestKeyForClef(clef: 'treble' | 'bass' | 'alto'): string {
+  return defaultRestDisplayKey(clef);
+}
+
+function restKeyForClef(clef: 'treble' | 'bass' | 'alto'): string {
+  return restFormatterKey(clef);
+}
+
+function applyDefaultRestDisplayLine(
+  vfNotes: StaveNote[],
+  events: NoteEvent[],
+  clef: 'treble' | 'bass' | 'alto'
+): void {
+  const displayRestKey = defaultRestKeyForClef(clef);
+  if (displayRestKey === restKeyForClef(clef)) {
+    return;
+  }
+  for (let index = 0; index < vfNotes.length && index < events.length; index += 1) {
+    const event = events[index];
+    const note = vfNotes[index] as any;
+    if (!event?.isRest || (event.keys[0] || displayRestKey) !== displayRestKey) {
+      continue;
+    }
+    // 旧既定位置（中央寄り）にいる休符だけ 1 段下げる。
+    // これなら、将来ほかの要因で動いた休符まで固定位置へ戻さずに済む。
+    if (note.getKeyLine?.(0) === 3) {
+      note.setKeyLine?.(0, note.getKeyLine(0) - 1);
+    }
+  }
 }
 
 /* ===== 半音移動：key ⇄ MIDI ===== */
@@ -431,14 +463,16 @@ function makeVFNote(
 ) {
   const vfDur = toVFDur(ev.dur);
   if (ev.isRest) {
-    const restKey = ev.keys[0] || (clef === 'bass' ? 'd/3' : clef === 'alto' ? 'c/4' : 'b/4');
-    const n = new StaveNote({ clef, keys: [restKey], duration: (vfDur as VFDur) + 'r' });
+    const eventRestKey = ev.keys[0] || defaultRestKeyForClef(clef);
+    const renderRestKey = eventRestKey === defaultRestKeyForClef(clef)
+      ? restKeyForClef(clef)
+      : eventRestKey;
+    const n = new StaveNote({ clef, keys: [renderRestKey], duration: (vfDur as VFDur) + 'r' });
     return n;
   }
   // keys が空の場合は全休符にフォールバック
   if (!ev.keys || ev.keys.length === 0) {
-    const restKey = clef === 'bass' ? 'd/3' : clef === 'alto' ? 'c/4' : 'b/4';
-    return new StaveNote({ clef, keys: [restKey], duration: (vfDur as VFDur) + 'r' });
+    return new StaveNote({ clef, keys: [restKeyForClef(clef)], duration: (vfDur as VFDur) + 'r' });
   }
   const n = new StaveNote({ clef, keys: ev.keys, duration: vfDur });
   // 小節内の過去状態を見て、「今ここで本当に見せるべき臨時記号」だけを付ける。
@@ -780,7 +814,7 @@ export default function StaffCanvas({
 
           let newKeys: string[];
           if (ev.isRest) {
-            const defaultRestKey = clef === 'bass' ? 'd/3' : clef === 'alto' ? 'c/4' : 'b/4';
+            const defaultRestKey = defaultRestKeyForClef(clef);
             const restBaseKey = ev.keys[0] || defaultRestKey;
             if (e.shiftKey) { // 1オクターブ相当で大きく移動
               newKeys = [
@@ -1322,8 +1356,8 @@ export default function StaffCanvas({
         placeKeySignatureAfterTimeSignature(stave);
         stave.draw();
         const safeEvents: RenderNoteEvent[] =
-          (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, keys:['b/4'], __isPlaceholder: true }])
-          .map(ev => (!ev || !ev.dur ? { dur:'4' as DurKey, isRest:true, keys:['b/4'] } : {
+          (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, keys:[defaultRestKeyForClef(clef)], __isPlaceholder: true }])
+          .map(ev => (!ev || !ev.dur ? { dur:'4' as DurKey, isRest:true, keys:[defaultRestKeyForClef(clef)] } : {
             ...ev,
             dur: ev.dur as DurKey
           }));
@@ -1348,6 +1382,7 @@ export default function StaffCanvas({
         voice.setMode((Voice as any).Mode.SOFT ?? 1);
         voice.addTickables(vfNotes);
         new Formatter().joinVoices([voice]).formatToStave([voice], stave);
+        applyDefaultRestDisplayLine(vfNotes, safeEvents, clef);
         
         const measureIndex = globalIndex; // 相対インデックス（このStaffCanvas内での位置）
         const xDraw = x / s, wDraw = w / s;
@@ -1538,7 +1573,7 @@ export default function StaffCanvas({
           const insertedEvent: NoteEvent = {
             dur: addDuration,
             isRest: !!(tool as any)?.isRest,
-            keys: [key],
+            keys: [(tool as any)?.isRest ? defaultRestKeyForClef(clef) : key],
           };
 
           setScore(prev => {

@@ -206,3 +206,37 @@ type TimePosition = {
 **対象プロパティ**:
 1. 休符重なり防止の普遍性
 2. 時間軸順序の一貫性
+
+## 追記: 既定休符位置を五線の第二線へ下げる修正
+
+### 背景
+
+- 既存実装では、休符データの既定キーとして VexFlow の従来位置（`restKey(clef)`）をそのまま保存していた
+- その結果、新規作成した休符や空小節のプレースホルダー休符が五線の中央寄りに見え、
+  「下端を五線の第二線へそろえたい」という見た目要件を満たせていなかった
+- ただし、`Formatter.alignRests` は従来位置の休符を前提に上下声部の衝突回避を行うため、
+  保存データの既定位置だけを単純に差し替えると 2 voice の休符整列が崩れる懸念がある
+
+### 修正方針
+
+1. **保存用の既定位置を分離する**
+   `defaultRestDisplayKey(clef)` を追加し、休符を新規作成するときや空小節プレースホルダーを作るときは、
+   こちらを使って「下から 2 本目の線」に見えるキーを保存する
+2. **Formatter 用の既定位置は維持する**
+   既存の `restKey(clef)` はそのまま残し、描画直前だけ VexFlow の既定位置として使う
+3. **描画後に既定位置だけ 1 段下げる**
+   `formatToStave()` 後に、まだ VexFlow の従来位置 (`getKeyLine(0) === 3`) に残っている休符だけ
+   `setKeyLine()` で 1 段下げる
+   これにより、`alignRests` が別位置へ逃がした休符は上書きせず、
+   単声部や空小節では希望どおりの既定位置へそろえられる
+
+### 影響範囲
+
+- `src/components/clefUtils.ts`
+  休符の「表示用既定位置」と「Formatter 用既定位置」を切り分ける
+- `src/components/StaffCanvas.tsx`
+  単段譜の新規休符作成、プレースホルダー、休符描画後の既定位置補正を更新する
+- `src/components/PianoSystemCanvas.tsx`
+  多段譜でも同じ規則を使い、2 voice の `alignRests` と両立させる
+- `src/components/clefUtils.test.ts`
+  各 clef で表示用 / Formatter 用の既定位置が意図どおりかを固定する

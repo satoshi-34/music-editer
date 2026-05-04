@@ -858,3 +858,32 @@ synth.triggerAttackRelease(toneKeys, duration, time, velocity);
 ### 影響範囲
 
 - `src/components/ScorePage.tsx`
+
+## 追記: 既定休符位置を五線の第二線へそろえる修正
+
+### 問題
+
+- 新しく置いた休符と空小節の見た目用休符が、五線の中央寄りに見えていた
+- 既存の `restKey(clef)` は VexFlow の整列都合には合っていたが、
+  「既定では下から 2 本目の線に見せたい」という UI 要件とは少しずれていた
+- 一方で、2 voice 描画は `Formatter.alignRests` に依存しており、
+  既定キーを雑に差し替えるだけでは既存の重なり回避を壊すリスクがあった
+
+### 修正
+
+- `src/components/clefUtils.ts` に `defaultRestDisplayKey(clef)` を追加し、
+  保存データ側の既定休符位置を「下から 2 本目の線」に統一した
+- 既存の `restKey(clef)` は Formatter 用の従来位置として残し、
+  描画時だけこちらを使って VexFlow の `alignRests` 前提を維持した
+- `StaffCanvas.tsx` / `PianoSystemCanvas.tsx` では `formatToStave()` 後に、
+  まだ従来位置に残っている既定休符だけを 1 段下げる補正を追加した
+- これにより、単声部では見た目を改善しつつ、
+  多声部で自動調整された休符はそのまま尊重できるようにした
+
+### 確認ポイント
+
+- 新規休符の初期位置
+- 空小節プレースホルダー休符の初期位置
+- デモ譜面に埋め込んでいる既存休符データの初期位置
+- 休符選択後の `↑/↓` 移動が見た目とずれないこと
+- 2 voice で `alignRests` による重なり回避が崩れないこと

@@ -1,5 +1,6 @@
 import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, NoteEvent, ScoreMetadata, ScoreType, TimeSignature } from '../types/storage';
+import { defaultRestDisplayKey, type ClefType } from '../components/clefUtils';
 import type { KeySignature } from '../utils/noteKeyUtils';
 
 export interface DemoScore {
@@ -45,11 +46,13 @@ function chord(keys: string[], dur: NoteEvent['dur']): NoteEvent {
   };
 }
 
-function rest(dur: NoteEvent['dur']): NoteEvent {
+function rest(dur: NoteEvent['dur'], clef: ClefType = 'treble'): NoteEvent {
   return {
     dur,
     isRest: true,
-    keys: []
+    // デモ譜面も編集直後の見た目とそろえておくと、
+    // サンプルを開いた瞬間の休符位置が実入力時と一致して分かりやすい。
+    keys: [defaultRestDisplayKey(clef)]
   };
 }
 
@@ -185,60 +188,60 @@ export function createFurEliseDemoScore(): DemoScore {
     ]),
     measure([
       note('b/4', '8'),
-      rest('8'),
+      rest('8', 'treble'),
       note('e/4', '16'),
       note('g#/4', '16')
     ]),
     measure([
       note('a/4', '8'),
-      rest('8'),
+      rest('8', 'treble'),
       note('e/4', '16'),
       note('a/4', '16')
     ]),
     measure([
       note('b/4', '8'),
-      rest('8'),
+      rest('8', 'treble'),
       note('g#/4', '16'),
       note('b/4', '16')
     ]),
     measure([
       note('c/5', '8'),
-      rest('8'),
+      rest('8', 'treble'),
       note('e/5', '16'),
       note('d/5', '16')
     ]),
     measureWithMarkers([
       note('a/4', '8'),
-      rest('8'),
-      rest('8')
+      rest('8', 'treble'),
+      rest('8', 'treble')
     ], { repeatEnd: true, ending: 1 }),
     measureWithMarkers([
       note('b/4', '8'),
-      rest('8'),
+      rest('8', 'treble'),
       note('c/5', '16'),
       note('d/5', '16')
     ], { ending: 2 }),
     measure([
       note('c/5', '8'),
-      rest('8'),
+      rest('8', 'treble'),
       note('e/5', '16'),
       note('g/5', '16')
     ]),
     measure([
       note('a/4', '8'),
-      rest('8'),
+      rest('8', 'treble'),
       note('e/5', '16'),
       note('d/5', '16')
     ]),
     measure([
       note('g#/4', '8'),
-      rest('8'),
+      rest('8', 'treble'),
       note('e/5', '16'),
       note('g#/5', '16')
     ]),
     measure([
       note('b/4', '8'),
-      rest('8'),
+      rest('8', 'treble'),
       note('g#/4', '16'),
       note('b/4', '16')
     ]),
@@ -252,16 +255,16 @@ export function createFurEliseDemoScore(): DemoScore {
     // 手本の左手は A-C-E の和音型ではなく、
     // A-E-A / E-E-G# のように広めの分散和音で進む。
     // 3/8 小節を正しく満たすため、16分3音の後ろに 16分休符 + 8分休符を置く。
-    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16'), rest('8')]),
-    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16'), rest('8')]),
-    measure([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16'), rest('8')]),
-    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16'), rest('8')]),
-    measureWithMarkers([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16'), rest('8')], { repeatEnd: true, ending: 1 }),
-    measureWithMarkers([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16'), rest('8')], { ending: 2 }),
-    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16'), rest('8')]),
-    measure([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16'), rest('8')]),
-    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16'), rest('8')]),
-    measure([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16'), rest('8')]),
+    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measureWithMarkers([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')], { repeatEnd: true, ending: 1 }),
+    measureWithMarkers([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16', 'bass'), rest('8', 'bass')], { ending: 2 }),
+    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('a/2', '16'), note('e/3', '16'), note('a/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
+    measure([note('e/2', '16'), note('e/3', '16'), note('g#/3', '16'), rest('16', 'bass'), rest('8', 'bass')]),
   ];
 
   const trailingMeasures = emptyMeasures(48 - rightHandMeasures.length);
@@ -296,7 +299,7 @@ export function createBrassTestDemoScore(): DemoScore {
     measure([note('d/4', '4'), note('f/4', '4'), note('a/4', '4'), note('d/5', '4')]),
     measure([note('a/4', '2'), note('f/4', '4'), note('d/4', '4')]),
     measure([note('g/4', '4'), note('c/5', '4'), note('e/5', '4'), note('g/5', '4')]),
-    measure([chord(['c/4', 'e/4', 'g/4'], '2'), rest('2')]),
+    measure([chord(['c/4', 'e/4', 'g/4'], '2'), rest('2', 'treble')]),
     measure([note('f/4', '2'), note('d/4', '2')]),
     measure([note('c/4', '1')])
   ];
