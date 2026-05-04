@@ -18,6 +18,7 @@ import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, PartData, ScoreType } from '../types/storage';
+import type { NoteEvent } from '../types/storage';
 import {
   createDemoScore,
   hasCustomPianoDemoScore,
@@ -86,6 +87,20 @@ function calculateScoreDuration(scoreData: MeasureData[], bpm: number, timeSigna
     }
   }
   return totalDuration;
+}
+
+function getPreviewDurationSeconds(dur: NoteEvent['dur']): number {
+  const quarterSeconds = 60 / 120;
+  const ratios: Record<NoteEvent['dur'], number> = {
+    '1': 4,
+    '2': 2,
+    '4': 1,
+    '8': 0.5,
+    '16': 0.25,
+    '32': 0.125,
+    '64': 0.0625,
+  };
+  return quarterSeconds * (ratios[dur] ?? 1);
 }
 
 export default function ScorePage() {
@@ -461,6 +476,19 @@ export default function ScorePage() {
     } catch (error) {
       console.error('[ScorePage] 音色プレビューに失敗:', error);
     }
+  }, [runWithPlaybackFallback]);
+
+  const handleInputNotePreview = useCallback(async (noteEvent: NoteEvent) => {
+    if (noteEvent.isRest || noteEvent.keys.length === 0) {
+      return;
+    }
+
+    const previewDuration = getPreviewDurationSeconds(noteEvent.dur);
+    await runWithPlaybackFallback(async (audioEngine) => {
+      // 入力確認音も再生ボタンと同じ音源経路へ寄せる。
+      // こうすると、楽器選択だけでなく SoundFont / built-in の違いも耳で一致する。
+      await Promise.all(noteEvent.keys.map((key) => audioEngine.playNoteByName(key, previewDuration)));
+    });
   }, [runWithPlaybackFallback]);
 
   const resetAudioSettingsToSafeDefaults = useCallback(() => {
@@ -1061,6 +1089,7 @@ export default function ScorePage() {
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
+                      onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
@@ -1081,6 +1110,7 @@ export default function ScorePage() {
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
+                      onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
@@ -1100,6 +1130,7 @@ export default function ScorePage() {
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
+                      onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}

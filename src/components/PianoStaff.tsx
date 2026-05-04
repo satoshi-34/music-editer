@@ -5,6 +5,7 @@
 import type { Tool } from './Palette';
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData, TimeSignature } from '../types/storage';
+import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
 
@@ -22,6 +23,7 @@ type Props = {
   disabled?: boolean;
   yOffset?: number;
   currentInstrument?: InstrumentType;
+  onPreviewNoteEvent?: (noteEvent: NoteEvent) => Promise<void>;
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
@@ -41,6 +43,7 @@ export default function PianoStaff({
   disabled = false,
   yOffset = 0,
   currentInstrument = InstrumentType.PIANO,
+  onPreviewNoteEvent,
   previewAccidentalOnApply = true,
   keySignature = 'C',
   timeSignature = [4, 4],
@@ -62,6 +65,7 @@ export default function PianoStaff({
           disabled={disabled}
           yOffset={yOffset}
           currentInstrument={currentInstrument}
+          onPreviewNoteEvent={onPreviewNoteEvent}
           previewAccidentalOnApply={previewAccidentalOnApply}
           keySignature={keySignature}
           timeSignature={timeSignature}

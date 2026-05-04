@@ -383,6 +383,23 @@ await recoveredEngine.initialize();
 ### 期待される効果
 
 - 個別音符再生、臨時記号クリック後の確認音、全体再生、音色プレビューで同じ楽器音色を保てる
+
+## 追記: 入力確認音を PlaybackEngine 系へ統一
+
+### 問題
+
+上記の同期だけでは、音符を置いた瞬間の確認音が `NotePlayer + SoundSource` の Tone.js 系シンセを通るため、  
+再生ボタンや音色プレビューが使う `PlaybackEngine` 系の音と完全には一致しなかった。  
+その結果、`ピアノ` を選んでいても SoundFont 側のピアノではなく、Tone.js 側の簡易シンセ音に聞こえるケースが残っていた。
+
+### 修正設計
+
+`ScorePage` に入力確認音専用の `handleInputNotePreview()` を追加し、`runWithPlaybackFallback()` を通じて現在の再生エンジンへ直接 `playNoteByName()` を送る。  
+`StaffCanvas` / `PianoSystemCanvas` / `PianoStaff` / `QuartetStaff` には `onPreviewNoteEvent` を渡し、入力時の確認音は親の `PlaybackEngine` を優先利用する。
+
+### 期待される効果
+
+- 音符を置いた瞬間の確認音も、再生ボタン・音色プレビューと同じ音源方式 / 同じ楽器音色で鳴る
 bestLine = Math.round(line * 2) / 2;
 ```
 

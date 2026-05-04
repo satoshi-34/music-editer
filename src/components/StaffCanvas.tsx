@@ -49,6 +49,7 @@ type Props = {
   clef?: 'treble' | 'bass' | 'alto'; // 音部記号（デフォルト: treble）
   yOffset?: number; // Safari座標ズレ補正（client px単位）
   currentInstrument?: InstrumentType; // 個別再生で使う現在の音色
+  onPreviewNoteEvent?: (noteEvent: NoteEvent) => Promise<void>; // 入力確認音を親の再生エンジンで鳴らす
   previewAccidentalOnApply?: boolean; // 臨時記号適用時に確認音を鳴らすか
   keySignature?: KeySignature; // 調号
   timeSignature?: TimeSignature; // 拍子
@@ -533,7 +534,7 @@ function logNoteAddition(measureIndex: number, x: number, y: number, key: string
 export default function StaffCanvas({
   systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
   initialScoreData, onScoreDataChange, startMeasureIndex = 0, disabled = false,
-  clef = 'treble', yOffset = 0, currentInstrument = InstrumentType.PIANO, previewAccidentalOnApply = true, keySignature = 'C',
+  clef = 'treble', yOffset = 0, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   timeSignature = [4, 4],
   onKeySignatureChange,
 }: Props) {
@@ -672,6 +673,15 @@ export default function StaffCanvas({
   
   // 音符再生関数
   const playNoteEvent = async (noteEvent: NoteEvent) => {
+    if (onPreviewNoteEvent) {
+      try {
+        await onPreviewNoteEvent(noteEvent);
+      } catch (error) {
+        console.error('[StaffCanvas] 親の再生エンジンによる確認音に失敗:', error);
+      }
+      return;
+    }
+
     if (!notePlayerRef.current) {
       console.warn('[StaffCanvas] NotePlayerが初期化されていません');
       return;

@@ -451,6 +451,7 @@ type Props = {
   disabled?: boolean;
   yOffset?: number;
   currentInstrument?: InstrumentType;
+  onPreviewNoteEvent?: (noteEvent: NoteEvent) => Promise<void>;
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: [number, number];
@@ -463,7 +464,7 @@ export default function PianoSystemCanvas({
   measuresPerSystem=4, tool, scale=0.86,
   trebleData, bassData, onTrebleChange, onBassChange,
   partsConfig,
-  startMeasureIndex=0, disabled=false, yOffset=0, currentInstrument = InstrumentType.PIANO, previewAccidentalOnApply = true, keySignature = 'C',
+  startMeasureIndex=0, disabled=false, yOffset=0, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   timeSignature = [4, 4],
   onKeySignatureChange,
 }: Props) {
@@ -606,6 +607,15 @@ export default function PianoSystemCanvas({
   }, [currentInstrument]);
 
   const playNoteEvent = async (noteEvent: NoteEvent) => {
+    if (onPreviewNoteEvent) {
+      try {
+        await onPreviewNoteEvent(noteEvent);
+      } catch (error) {
+        console.error('[PianoSystemCanvas] 親の再生エンジンによる確認音に失敗:', error);
+      }
+      return;
+    }
+
     if (!notePlayerRef.current) {
       console.warn('[PianoSystemCanvas] NotePlayerが初期化されていません');
       return;
