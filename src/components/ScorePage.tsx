@@ -1196,9 +1196,8 @@ export default function ScorePage() {
                 <div className="notation-mode-toggle" role="group" aria-label="表示モード">
                   {/*
                     記譜音表示は、移調楽器が読む譜面（例: B♭クラリネットなら長2度上）を出すモード。
-                    どちらのモードでも編集でき、入力された音符は EnsembleStaff で実音へ
-                    逆変換してから保存されるため、保存データの正本は常に実音で一貫する。
-                    ただし調号変更だけは実音モード時のみ有効（記譜音側の調号は計算結果なので）。
+                    どちらのモードでも編集でき、入力された音符や調号は EnsembleStaff で
+                    実音へ逆変換してから保存されるため、保存データの正本は常に実音で一貫する。
                   */}
                   <span className="notation-mode-label">表示</span>
                   <button

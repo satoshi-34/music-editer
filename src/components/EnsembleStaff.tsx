@@ -149,7 +149,18 @@ export default function EnsembleStaff({
             previewAccidentalOnApply={previewAccidentalOnApply}
             keySignature={keySignature}
             timeSignature={timeSignature}
-            onKeySignatureChange={isWrittenMode ? undefined : onKeySignatureChange}
+            onKeySignatureChange={(newKey, partIndex) => {
+              if (!onKeySignatureChange) return;
+              // 記譜音モードでは canvas から「クリックされた段の記譜音側の新しい調号」が返ってくる。
+              // 実音側の調号に逆変換してから上に渡すことで、保存される調号は常に実音で一貫する。
+              // 実音モードや、移調なしのパートのときは、そのまま渡せばよい。
+              const targetPart = partIndex !== undefined ? instrumentationParts[partIndex] : undefined;
+              const fifths = isWrittenMode && targetPart
+                ? TRANSPOSITION_WRITTEN_OFFSET_FIFTHS[targetPart.transposition] ?? 0
+                : 0;
+              const concertKey = fifths === 0 ? newKey : shiftKeySignatureByFifths(newKey, -fifths);
+              onKeySignatureChange(concertKey);
+            }}
           />
         );
       })}

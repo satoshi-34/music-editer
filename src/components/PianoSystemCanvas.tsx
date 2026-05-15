@@ -462,7 +462,10 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: [number, number];
-  onKeySignatureChange?: (keySignature: KeySignature) => void;
+  // 調号変更ハンドラ。`partIndex` には実際にクリックされた段のインデックスを渡す。
+  // 記譜音表示などで段ごとに調号が違う場合、呼び出し側が「どの段の調号操作だったか」を
+  // 知って、実音側へ逆変換できるようにするため。
+  onKeySignatureChange?: (keySignature: KeySignature, partIndex?: number) => void;
 };
 
 type Sel = { partIndex: number; measure: number; index: number } | null;
@@ -1524,16 +1527,20 @@ export default function PianoSystemCanvas({
           if('mode' in tool&&tool.mode==='accidental'){
             if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
               // 臨時記号ツール中の背景クリックは、調号領域なら調号変更へ回す。
+              // クリックされた段に固有の調号があれば、それを基準にシフトする。
+              // こうすると記譜音モードのときに「画面で見えている調号」に対する
+              // 操作になり、ユーザーの期待通りに動く。
+              const baseKey = partKeyForAccidental;
+              const nextKey = shiftKeySignatureByAccidental(baseKey, tool.accidental);
               console.info('[PianoSystemCanvas] 調号領域クリック', {
                 tool: tool.accidental,
-                current: normalizedKeySignature,
-                next: shiftKeySignatureByAccidental(normalizedKeySignature, tool.accidental),
+                partIndex: pi,
+                current: baseKey,
+                next: nextKey,
                 x: lx,
                 bounds: firstStaveKeySignatureHitBounds,
               });
-              onKeySignatureChange?.(
-                shiftKeySignatureByAccidental(normalizedKeySignature, tool.accidental)
-              );
+              onKeySignatureChange?.(nextKey, pi);
             }
             // 調号領域以外の背景クリックでは、音符を新規挿入しない。
             return;
@@ -1718,16 +1725,18 @@ export default function PianoSystemCanvas({
                   if (isKeySignatureZone) {
                     // 多段譜でも空小節は全休符プレースホルダーが背景クリックを拾うため、
                     // 調号領域だけはここから調号変更へ流す。
+                    // パート固有調号があればそれを基準にシフトし、partIndex を添えて返す。
+                    const baseKey = partKeyForAccidental;
+                    const nextKey = shiftKeySignatureByAccidental(baseKey, accidentalMode);
                     console.info('[PianoSystemCanvas] 調号領域クリック', {
                       tool: accidentalMode,
-                      current: normalizedKeySignature,
-                      next: shiftKeySignatureByAccidental(normalizedKeySignature, accidentalMode),
+                      partIndex: pi,
+                      current: baseKey,
+                      next: nextKey,
                       x: lx,
                       bounds: firstStaveKeySignatureHitBounds,
                     });
-                    onKeySignatureChange?.(
-                      shiftKeySignatureByAccidental(normalizedKeySignature, accidentalMode)
-                    );
+                    onKeySignatureChange?.(nextKey, pi);
                   }
                   return;
                 }
