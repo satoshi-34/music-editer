@@ -8,6 +8,7 @@ import Palette, { type Tool } from './Palette';
 import StaffCanvas from './StaffCanvas';
 import PianoStaff from './PianoStaff';
 import QuartetStaff from './QuartetStaff';
+import EnsembleStaff from './EnsembleStaff';
 import SaveLoadButtons from './SaveLoadButtons';
 import PlaybackControls, { type PlaybackState } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
@@ -17,8 +18,15 @@ import { useTempoStorage } from '../hooks/useTempoStorage';
 import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
-import type { MeasureData, PartData, ScoreType } from '../types/storage';
+import type { InstrumentPartDefinition, MeasureData, PartData, ScoreType } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
+import {
+  getDefaultInstrumentationForScoreType,
+  getInstrumentationPreset,
+  getScoreTypeForInstrumentation,
+  INSTRUMENTATION_PRESETS,
+} from '../data/instrumentationPresets';
+import type { InstrumentationPresetId, ScoreInstrumentation } from '../types/storage';
 import {
   createDemoScore,
   hasCustomPianoDemoScore,
@@ -45,6 +53,16 @@ import type { TimeSignature } from '../types/storage';
 type PageSpec = { systems: number };
 type ToolbarTab = 'notes' | 'score' | 'playback' | 'other';
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
+const DEFAULT_CUSTOM_PART: Omit<InstrumentPartDefinition, 'id' | 'order'> = {
+  name: 'New Part',
+  abbreviation: 'Part',
+  family: 'other',
+  clef: 'treble',
+  staffCount: 1,
+  transposition: 'C',
+  bracketGroup: 'solo',
+  playbackInstrument: InstrumentType.PIANO,
+};
 const TIME_SIGNATURE_OPTIONS: TimeSignature[] = [
   [4, 4],
   [3, 4],
@@ -107,6 +125,7 @@ export default function ScorePage() {
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
   const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
   const [scoreType, setScoreType] = useState<ScoreType>('single');
+  const [instrumentation, setInstrumentation] = useState<ScoreInstrumentation>(() => getDefaultInstrumentationForScoreType('single'));
   const [keySignature, setKeySignature] = useState<KeySignature>('C');
   const [showOffsetPanel, setShowOffsetPanel] = useState(false);
   const [toolbarHeight, setToolbarHeight] = useState(180);
@@ -137,6 +156,7 @@ export default function ScorePage() {
   const [quartetParts, setQuartetParts] = useState<MeasureData[][]>(
     () => Array.from({ length: 4 }, () => [])
   );
+  const [ensembleParts, setEnsembleParts] = useState<MeasureData[][]>(() => []);
 
   const audioEngineRef = useRef<PlaybackEngine>(createPlaybackEngine(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS));
   const emergencyAudioContextRef = useRef<AudioContext | null>(null);
@@ -295,7 +315,9 @@ export default function ScorePage() {
 
   // スコアタイプ切り替え時に左手データを初期化
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
+    const nextInstrumentation = getDefaultInstrumentationForScoreType(newType);
     setScoreType(newType);
+    setInstrumentation(nextInstrumentation);
     if (newType === 'piano' && !leftHandData) {
       setLeftHandData(undefined);
     }
@@ -305,7 +327,106 @@ export default function ScorePage() {
         : prev
       );
     }
+    if (newType !== 'ensemble') {
+      setEnsembleParts([]);
+    } else {
+      setEnsembleParts(prev => nextInstrumentation.parts.map((_, index) => prev[index] ?? []));
+    }
   }, [leftHandData]);
+
+  const handleInstrumentationPresetChange = useCallback((presetId: InstrumentationPresetId) => {
+    const nextInstrumentation = getInstrumentationPreset(presetId);
+    const nextScoreType = getScoreTypeForInstrumentation(presetId);
+    setInstrumentation(nextInstrumentation);
+    setScoreType(nextScoreType);
+    if (nextScoreType === 'quartet') {
+      setQuartetParts(prev => prev.every(p => p.length === 0)
+        ? Array.from({ length: 4 }, () => [])
+        : prev
+      );
+    }
+    if (nextScoreType === 'ensemble') {
+      setEnsembleParts(prev => nextInstrumentation.parts.map((_, index) => prev[index] ?? []));
+    } else {
+      setEnsembleParts([]);
+    }
+  }, []);
+
+  const markInstrumentationCustom = useCallback((parts: InstrumentPartDefinition[]): ScoreInstrumentation => ({
+    presetId: 'custom',
+    name: 'カスタム編成',
+    parts: parts.map((part, index) => ({ ...part, order: index })),
+  }), []);
+
+  const updateInstrumentationParts = useCallback((updater: (parts: InstrumentPartDefinition[]) => InstrumentPartDefinition[]) => {
+    setInstrumentation(prev => {
+      const next = markInstrumentationCustom(updater(prev.parts.map(part => ({ ...part }))));
+      setScoreType('ensemble');
+      setEnsembleParts(current => next.parts.map((_, index) => current[index] ?? []));
+      return next;
+    });
+  }, [markInstrumentationCustom]);
+
+  const handleAddInstrumentationPart = useCallback(() => {
+    updateInstrumentationParts(parts => {
+      const nextNumber = parts.length + 1;
+      return [
+        ...parts,
+        {
+          ...DEFAULT_CUSTOM_PART,
+          id: `custom-part-${Date.now()}`,
+          name: `Part ${nextNumber}`,
+          abbreviation: `P${nextNumber}`,
+          order: parts.length,
+        },
+      ];
+    });
+  }, [updateInstrumentationParts]);
+
+  const handleRemoveInstrumentationPart = useCallback((partIndex: number) => {
+    updateInstrumentationParts(parts => parts.length <= 1
+      ? parts
+      : parts.filter((_, index) => index !== partIndex)
+    );
+    setEnsembleParts(prev => prev.length <= 1 ? prev : prev.filter((_, index) => index !== partIndex));
+  }, [updateInstrumentationParts]);
+
+  const handleInstrumentationPartFieldChange = useCallback((
+    partIndex: number,
+    field: 'name' | 'abbreviation' | 'clef',
+    value: string
+  ) => {
+    updateInstrumentationParts(parts => parts.map((part, index) => {
+      if (index !== partIndex) {
+        return part;
+      }
+      return {
+        ...part,
+        [field]: field === 'clef' && (value === 'treble' || value === 'alto' || value === 'bass')
+          ? value
+          : value,
+      };
+    }));
+  }, [updateInstrumentationParts]);
+
+  const handleMoveInstrumentationPart = useCallback((partIndex: number, direction: -1 | 1) => {
+    updateInstrumentationParts(parts => {
+      const nextIndex = partIndex + direction;
+      if (nextIndex < 0 || nextIndex >= parts.length) {
+        return parts;
+      }
+      const next = [...parts];
+      const [movedPart] = next.splice(partIndex, 1);
+      next.splice(nextIndex, 0, movedPart);
+      setEnsembleParts(current => {
+        const movedData = current[partIndex] ?? [];
+        const nextData = current.filter((_, index) => index !== partIndex);
+        nextData.splice(nextIndex, 0, movedData);
+        return nextData;
+      });
+      return next;
+    });
+  }, [updateInstrumentationParts]);
 
   const handlePlay = useCallback(async () => {
     try {
@@ -334,6 +455,8 @@ export default function ScorePage() {
       // ここで「再生したいパート配列」へいったん正規化してから先へ渡す。
       if (scoreType === 'quartet') {
         quartetParts.forEach(part => { if (part && part.length > 0) parts.push(part); });
+      } else if (scoreType === 'ensemble') {
+        ensembleParts.forEach(part => { if (part && part.length > 0) parts.push(part); });
       } else if (scoreType === 'piano') {
         if (rightHandData && rightHandData.length > 0) parts.push(rightHandData);
         if (leftHandData && leftHandData.length > 0) parts.push(leftHandData);
@@ -418,7 +541,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, getAudioEngine, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, scoreType, runWithPlaybackFallback]);
+  }, [clearPlaybackTimer, getAudioEngine, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, runWithPlaybackFallback]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -631,6 +754,16 @@ export default function ScorePage() {
     });
   }, [isEditingDisabled]);
 
+  const handleEnsemblePartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
+    if (isEditingDisabled) return;
+    setEnsembleParts(prev => {
+      const next = [...prev];
+      if (JSON.stringify(next[partIndex]) === JSON.stringify(data)) return prev;
+      next[partIndex] = data;
+      return next;
+    });
+  }, [isEditingDisabled]);
+
   const handleSave = async () => {
     const metadata = { title, subtitle, lyricist, composer, arranger };
 
@@ -642,6 +775,12 @@ export default function ScorePage() {
           clef: QUARTET_CLEFS[i],
           measures: quartetParts[i] ?? [{ events: [] }],
         }))
+      : scoreType === 'ensemble'
+        ? instrumentation.parts.map((part, i) => ({
+            partId: part.id,
+            clef: part.clef,
+            measures: ensembleParts[i] ?? [{ events: [] }],
+          }))
       : scoreType === 'piano'
         ? [
             { partId: 'right-hand', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
@@ -651,7 +790,7 @@ export default function ScorePage() {
             { partId: 'melody', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
           ];
 
-    await saveScore(metadata, parts, totalSystems, 4, scoreType, keySignature, scoreTimeSignature);
+    await saveScore(metadata, parts, totalSystems, 4, scoreType, keySignature, scoreTimeSignature, instrumentation);
   };
 
   const handleLoad = async () => {
@@ -667,17 +806,25 @@ export default function ScorePage() {
       setKeySignature(normalizeKeySignature(loadedData.keySignature));
       await setTimeSignature(...normalizeTimeSignature(loadedData.timeSignature));
       setScoreType(loadedType);
+      setInstrumentation(loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
 
       if (loadedType === 'quartet') {
         const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
         setQuartetParts(QUARTET_IDS.map(id =>
           loadedData.parts.find(p => p.partId === id)?.measures ?? []
         ));
+        setEnsembleParts([]);
+      } else if (loadedType === 'ensemble') {
+        const loadedInstrumentation = loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType);
+        setEnsembleParts(loadedInstrumentation.parts.map(part =>
+          loadedData.parts.find(p => p.partId === part.id)?.measures ?? []
+        ));
       } else {
         const rightPart = loadedData.parts.find(p => p.clef === 'treble') ?? loadedData.parts[0];
         const leftPart  = loadedData.parts.find(p => p.clef === 'bass');
         setRightHandData(rightPart?.measures ?? []);
         setLeftHandData(leftPart?.measures);
+        setEnsembleParts([]);
       }
     }
   };
@@ -693,11 +840,13 @@ export default function ScorePage() {
     setComposer(sampleScore.metadata.composer);
     setArranger(sampleScore.metadata.arranger);
     setScoreType(sampleScore.scoreType);
+    setInstrumentation(getDefaultInstrumentationForScoreType(sampleScore.scoreType));
     setKeySignature(normalizeKeySignature(sampleScore.keySignature));
     void setTimeSignature(...sampleScore.timeSignature);
     setRightHandData(sampleScore.rightHand);
     setLeftHandData(sampleScore.leftHand);
     setQuartetParts(Array.from({ length: 4 }, () => []));
+    setEnsembleParts([]);
     // サンプルごとに「まずこの楽器で聴くと違いが分かりやすい」を設定しておく。
     setCurrentInstrument(sampleScore.recommendedInstrument);
     getAudioEngine().setInstrument(sampleScore.recommendedInstrument);
@@ -763,7 +912,9 @@ export default function ScorePage() {
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
 
   const totalSystems = 12;
-  const systemsPerPage = 9;
+  const systemsPerPage = scoreType === 'ensemble'
+    ? (instrumentation.parts.length > 10 ? 1 : 2)
+    : 9;
   const pages: PageSpec[] = useMemo(
     () => Array.from({ length: Math.ceil(totalSystems / systemsPerPage) }, () => ({ systems: systemsPerPage })),
     [totalSystems, systemsPerPage]
@@ -841,7 +992,7 @@ export default function ScorePage() {
       // fixed ヘッダーの実測が何かの拍子に暴走すると、
       // 本文全体の padding-top まで極端に大きくなって楽譜が見えなくなる。
       // ここでは「タブ付きヘッダーとして妥当な範囲」へ丸めて、崩れを防ぐ。
-      const clampedHeight = Math.min(220, Math.max(110, measuredHeight));
+      const clampedHeight = Math.min(280, Math.max(110, measuredHeight));
       setToolbarHeight(clampedHeight);
     };
 
@@ -864,6 +1015,14 @@ export default function ScorePage() {
     { id: 'playback', label: '再生・音色' },
     { id: 'other', label: 'その他' },
   ];
+  const instrumentationGroups = useMemo(() => {
+    const groups = new Set(instrumentation.parts.map(part => part.bracketGroup));
+    return Array.from(groups).length;
+  }, [instrumentation.parts]);
+  const instrumentationPreview = useMemo(
+    () => instrumentation.parts.slice(0, 6).map(part => part.abbreviation).join(' / '),
+    [instrumentation.parts]
+  );
 
   return (
     <div className="app-root" style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}>
@@ -915,9 +1074,34 @@ export default function ScorePage() {
                 >
                   弦楽四重奏
                 </button>
+                <button
+                  className={`ghost toolbar-chip-button${scoreType === 'ensemble' ? ' active' : ''}`}
+                  onClick={() => handleScoreTypeChange('ensemble')}
+                  title="編成テンプレートに沿った複数パート譜"
+                >
+                  編成譜
+                </button>
               </div>
 
               <div className="toolbar-select-row">
+                <label className="toolbar-select-label">
+                  <span>編成</span>
+                  <select
+                    value={instrumentation.presetId}
+                    onChange={(event) => handleInstrumentationPresetChange(event.target.value as InstrumentationPresetId)}
+                    aria-label="編成テンプレート"
+                  >
+                    {INSTRUMENTATION_PRESETS.map((preset) => (
+                      <option key={preset.presetId} value={preset.presetId}>
+                        {preset.name}
+                      </option>
+                    ))}
+                    {instrumentation.presetId === 'custom' && (
+                      <option value="custom">カスタム編成</option>
+                    )}
+                  </select>
+                </label>
+
                 <label className="toolbar-select-label">
                   <span>拍子</span>
                   <select
@@ -951,6 +1135,74 @@ export default function ScorePage() {
                   </select>
                 </label>
               </div>
+
+              <div className="instrumentation-summary" aria-live="polite">
+                <span>{instrumentation.parts.length}パート</span>
+                <span>{instrumentationGroups}グループ</span>
+                <span>{instrumentationPreview}</span>
+              </div>
+
+              {scoreType === 'ensemble' && (
+                <div className="instrumentation-editor" aria-label="編成パート編集">
+                  <div className="instrumentation-editor-head">
+                    <span>パート編集</span>
+                    <button type="button" className="ghost compact-button" onClick={handleAddInstrumentationPart}>
+                      追加
+                    </button>
+                  </div>
+                  <div className="instrumentation-part-list">
+                    {instrumentation.parts.map((part, partIndex) => (
+                      <div className="instrumentation-part-row" key={part.id}>
+                        <button
+                          type="button"
+                          className="ghost compact-button icon-button"
+                          onClick={() => handleMoveInstrumentationPart(partIndex, -1)}
+                          disabled={partIndex === 0}
+                          title="上へ"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost compact-button icon-button"
+                          onClick={() => handleMoveInstrumentationPart(partIndex, 1)}
+                          disabled={partIndex === instrumentation.parts.length - 1}
+                          title="下へ"
+                        >
+                          ↓
+                        </button>
+                        <input
+                          value={part.name}
+                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'name', event.target.value)}
+                          aria-label={`${part.name}のパート名`}
+                        />
+                        <input
+                          value={part.abbreviation}
+                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'abbreviation', event.target.value)}
+                          aria-label={`${part.name}の略称`}
+                        />
+                        <select
+                          value={part.clef}
+                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'clef', event.target.value)}
+                          aria-label={`${part.name}の音部記号`}
+                        >
+                          <option value="treble">ト音</option>
+                          <option value="alto">ハ音</option>
+                          <option value="bass">ヘ音</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="ghost compact-button"
+                          onClick={() => handleRemoveInstrumentationPart(partIndex)}
+                          disabled={instrumentation.parts.length <= 1}
+                        >
+                          削除
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1077,7 +1329,26 @@ export default function ScorePage() {
                 </header>
 
                 <div className="score-area">
-                  {scoreType === 'quartet' ? (
+                  {scoreType === 'ensemble' ? (
+                    <EnsembleStaff
+                      systems={p.systems}
+                      measuresPerSystem={4}
+                      tool={tool}
+                      scale={scale}
+                      instrumentationParts={instrumentation.parts}
+                      partsData={ensembleParts}
+                      onPartChange={instrumentation.parts.map((_, pi) => handleEnsemblePartChange(pi))}
+                      startMeasureIndex={i * systemsPerPage * 4}
+                      disabled={isEditingDisabled}
+                      yOffset={yOffset}
+                      currentInstrument={currentInstrument}
+                      onPreviewNoteEvent={handleInputNotePreview}
+                      previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
+                      keySignature={keySignature}
+                      timeSignature={scoreTimeSignature}
+                      onKeySignatureChange={handleKeySignatureChange}
+                    />
+                  ) : scoreType === 'quartet' ? (
                     <QuartetStaff
                       systems={p.systems}
                       measuresPerSystem={4}

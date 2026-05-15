@@ -11,7 +11,9 @@ import type {
   ScoreType,
   NoteEvent,
   DurKey,
-  TimeSignature
+  TimeSignature,
+  ScoreInstrumentation,
+  InstrumentPartDefinition
 } from '../types/storage';
 import { StorageErrorType } from '../types/storage';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
@@ -162,6 +164,46 @@ function validatePartData(part: any): part is PartData {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function validateInstrumentPartDefinition(part: unknown): part is InstrumentPartDefinition {
+  const validFamilies = ['woodwind', 'brass', 'percussion', 'strings', 'keyboard', 'vocal', 'other'];
+  const validBracketGroups = ['woodwinds', 'brass', 'percussion', 'strings', 'keyboard', 'voices', 'solo'];
+  const validTranspositions = ['C', 'Bb', 'Eb', 'F', 'G', 'octave-down', 'none'];
+
+  return (
+    isRecord(part) &&
+    typeof part.id === 'string' &&
+    typeof part.name === 'string' &&
+    typeof part.abbreviation === 'string' &&
+    typeof part.family === 'string' &&
+    validFamilies.includes(part.family) &&
+    (part.clef === 'treble' || part.clef === 'bass' || part.clef === 'alto') &&
+    typeof part.staffCount === 'number' &&
+    part.staffCount >= 1 &&
+    typeof part.transposition === 'string' &&
+    validTranspositions.includes(part.transposition) &&
+    typeof part.bracketGroup === 'string' &&
+    validBracketGroups.includes(part.bracketGroup) &&
+    (part.playbackInstrument === undefined || typeof part.playbackInstrument === 'string') &&
+    typeof part.order === 'number' &&
+    part.order >= 0
+  );
+}
+
+function validateScoreInstrumentation(value: unknown): value is ScoreInstrumentation {
+  return (
+    isRecord(value) &&
+    typeof value.presetId === 'string' &&
+    typeof value.name === 'string' &&
+    Array.isArray(value.parts) &&
+    value.parts.length > 0 &&
+    value.parts.every(validateInstrumentPartDefinition)
+  );
+}
+
 /**
  * Validates a complete SavedScoreData object (v2 format)
  */
@@ -174,6 +216,7 @@ function validateSavedScoreData(data: any): data is SavedScoreData {
     validateScoreMetadata(data.metadata) &&
     (data.keySignature === undefined || isValidKeySignature(data.keySignature)) &&
     (data.timeSignature === undefined || isValidTimeSignature(data.timeSignature)) &&
+    (data.instrumentation === undefined || validateScoreInstrumentation(data.instrumentation)) &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -537,7 +580,8 @@ export function createSavedScoreData(
   measuresPerSystem: number,
   scoreType: ScoreType = 'single',
   keySignature: KeySignature = 'C',
-  timeSignature: TimeSignature = DEFAULT_TIME_SIGNATURE
+  timeSignature: TimeSignature = DEFAULT_TIME_SIGNATURE,
+  instrumentation?: ScoreInstrumentation
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -546,6 +590,7 @@ export function createSavedScoreData(
     scoreType,
     keySignature,
     timeSignature: normalizeTimeSignature(timeSignature),
+    instrumentation,
     parts,
     systems,
     measuresPerSystem

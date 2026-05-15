@@ -2,6 +2,7 @@
 // TypeScript interfaces and data models for score storage
 
 import type { KeySignature } from '../utils/noteKeyUtils';
+import type { InstrumentType } from '../audio/SoundSource';
 
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
 export type TimeSignature = [number, number];
@@ -95,8 +96,42 @@ export interface ScoreMetadata {
   arranger: string;
 }
 
-/** スコアの種類（単旋律 / ピアノ大譜表 / 弦楽四重奏） */
-export type ScoreType = 'single' | 'piano' | 'quartet';
+/** スコアの種類（単旋律 / ピアノ大譜表 / 弦楽四重奏 / 可変編成） */
+export type ScoreType = 'single' | 'piano' | 'quartet' | 'ensemble';
+
+export type InstrumentFamily = 'woodwind' | 'brass' | 'percussion' | 'strings' | 'keyboard' | 'vocal' | 'other';
+export type InstrumentBracketGroup = 'woodwinds' | 'brass' | 'percussion' | 'strings' | 'keyboard' | 'voices' | 'solo';
+
+/** 将来のオケ譜・パート譜生成に使う、譜表単位ではなく楽器パート単位の編成定義 */
+export interface InstrumentPartDefinition {
+  id: string;
+  name: string;
+  abbreviation: string;
+  family: InstrumentFamily;
+  clef: 'treble' | 'bass' | 'alto';
+  staffCount: number;
+  transposition: 'C' | 'Bb' | 'Eb' | 'F' | 'G' | 'octave-down' | 'none';
+  bracketGroup: InstrumentBracketGroup;
+  playbackInstrument?: InstrumentType;
+  order: number;
+}
+
+export type InstrumentationPresetId =
+  | 'single'
+  | 'piano'
+  | 'string-quartet'
+  | 'string-orchestra'
+  | 'chamber-orchestra'
+  | 'classical-orchestra'
+  | 'romantic-orchestra'
+  | 'wind-band'
+  | 'custom';
+
+export interface ScoreInstrumentation {
+  presetId: InstrumentationPresetId;
+  name: string;
+  parts: InstrumentPartDefinition[];
+}
 
 /** 1パート（右手・左手など）のデータ */
 export interface PartData {
@@ -114,6 +149,8 @@ export interface SavedScoreData {
   keySignature?: KeySignature;
   /** 拍子。旧データ互換のため省略時は 4/4 として扱う */
   timeSignature?: TimeSignature;
+  /** 編成テンプレート。旧データ互換のため省略可 */
+  instrumentation?: ScoreInstrumentation;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;

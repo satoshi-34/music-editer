@@ -22,6 +22,7 @@ import type {
   NoteEvent,
   DurKey
 } from '../types/storage';
+import { getInstrumentationPreset } from '../data/instrumentationPresets';
 
 // Mock localStorage for testing
 const localStorageMock = (() => {
@@ -171,6 +172,39 @@ describe('Storage Foundation Tests', () => {
         }),
         { numRuns: 20 }
       );
+    });
+  });
+
+  describe('編成テンプレートの保存互換', () => {
+    it('should save and load instrumentation presets with score data', () => {
+      const scoreData = createSavedScoreData(
+        {
+          title: 'Orchestra Sketch',
+          subtitle: '',
+          lyricist: '',
+          composer: 'Composer',
+          arranger: '',
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{ events: [] }],
+        }],
+        1,
+        4,
+        'single',
+        'C',
+        [4, 4],
+        getInstrumentationPreset('classical-orchestra')
+      );
+
+      const saveResult = saveScoreData(scoreData);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.instrumentation?.presetId).toBe('classical-orchestra');
+      expect(loadResult.data?.instrumentation?.parts.length).toBeGreaterThan(10);
     });
   });
 

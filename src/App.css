@@ -99,6 +99,76 @@
   font-size: 12px;
   background: #fff;
 }
+.instrumentation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  max-width: min(100%, 640px);
+  color: #3f3f46;
+  font-size: 12px;
+}
+.instrumentation-summary span {
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  background: #fafafa;
+  padding: 4px 7px;
+  line-height: 1.2;
+}
+.instrumentation-editor {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: 100%;
+  color: #3f3f46;
+  font-size: 12px;
+}
+.instrumentation-editor-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex: 0 0 auto;
+  font-weight: 600;
+  min-height: 30px;
+}
+.instrumentation-part-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: min(100%, 980px);
+  max-height: 74px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.instrumentation-part-row {
+  display: grid;
+  grid-template-columns: 28px 28px minmax(92px, 140px) minmax(52px, 72px) 70px 48px;
+  gap: 4px;
+  align-items: center;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  background: #fff;
+  padding: 4px;
+}
+.instrumentation-part-row input,
+.instrumentation-part-row select {
+  min-width: 0;
+  border: 1px solid #d4d4d8;
+  border-radius: 5px;
+  padding: 4px 5px;
+  font-size: 12px;
+  background: #fff;
+}
+.compact-button {
+  padding: 4px 7px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.icon-button {
+  width: 28px;
+  padding-inline: 0;
+}
 .brand { font-weight: 700; }
 .title-group { display: flex; gap: 8px; }
 .title-input, .subtitle-input {
