@@ -495,6 +495,14 @@ export default function PianoSystemCanvas({
     { clef: 'treble', data: trebleData ?? [], onChange: onTrebleChange ?? (() => {}), label: undefined },
     { clef: 'bass',   data: bassData   ?? [], onChange: onBassChange   ?? (() => {}), label: undefined },
   ];
+  const partsLayoutSignature = JSON.stringify(parts.map(part => ({
+    clef: part.clef,
+    label: part.label,
+    bracketGroup: part.bracketGroup,
+    subBracketGroup: part.subBracketGroup,
+    keySignature: part.keySignature,
+    playbackInstrument: part.playbackInstrument,
+  })));
 
   const mkInit = (data: MeasureData[]|undefined) => {
     if(data&&data.length>0)return data;
@@ -1988,7 +1996,7 @@ export default function PianoSystemCanvas({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[partsScore,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure]);
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure]);
 
   return <div ref={ref} style={{overflow:'visible'}}/>;
 }

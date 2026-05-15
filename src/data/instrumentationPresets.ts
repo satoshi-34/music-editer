@@ -75,10 +75,15 @@ const STRING_QUARTET_PARTS: PartInput[] = [
 ];
 
 const STRING_ORCHESTRA_PARTS: PartInput[] = [
-  ...STRING_QUARTET_PARTS,
   // 低弦（Vc・Cb）は同じ五線上にまたいで書く流派もあるが、ここではセクションだけ分け、
   // 視覚的にひとまとめに見せたいので低弦のサブグループを追加する。
-  simplePart('contrabass', 'Contrabass', 'Cb.', 'strings', 'strings', 'bass', InstrumentType.CONTRABASS, 'octave-down'),
+  // 弦楽四重奏では Cello だけなので括弧を出さず、弦楽合奏以上に展開するときだけ
+  // Cello と Contrabass を同じ 'low-strings' にして細い括弧でまとめる。
+  ...STRING_QUARTET_PARTS.map(part => part.id === 'cello'
+    ? { ...part, subBracketGroup: 'low-strings' }
+    : part
+  ),
+  simplePart('contrabass', 'Contrabass', 'Cb.', 'strings', 'strings', 'bass', InstrumentType.CONTRABASS, 'octave-down', 'low-strings'),
 ];
 
 const CLASSICAL_WOODWINDS: PartInput[] = [

@@ -241,6 +241,16 @@ describe('Storage Foundation Tests', () => {
       expect(loadResult.data?.instrumentation?.parts[1].subBracketGroup).toBe('violins');
       expect(loadResult.data?.instrumentation?.parts[0].bracketGroup).toBe('strings');
     });
+
+    it('弦楽合奏プリセットでは Vc と Cb を低弦サブ括弧へまとめる', () => {
+      const instrumentation = getInstrumentationPreset('string-orchestra');
+      const cello = instrumentation.parts.find(part => part.id === 'cello');
+      const contrabass = instrumentation.parts.find(part => part.id === 'contrabass');
+
+      expect(cello?.subBracketGroup).toBe('low-strings');
+      expect(contrabass?.subBracketGroup).toBe('low-strings');
+      expect(cello?.order).toBeLessThan(contrabass?.order ?? Number.MAX_SAFE_INTEGER);
+    });
   });
 
   describe('Property 4: エラーハンドリング耐性', () => {
