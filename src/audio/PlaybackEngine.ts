@@ -15,6 +15,11 @@ export interface PlaybackMeasureEvent {
 }
 
 export interface PlaybackPart {
+  /**
+   * このパートを鳴らす楽器。
+   * 省略時は従来どおり、再生パネルで選んだ全体音色を使う。
+   */
+  instrument?: InstrumentType;
   measures: Array<{
     events: PlaybackMeasureEvent[];
     /** この小節が本来もつ長さ（4分音符=1拍） */

@@ -79,6 +79,17 @@
 この 2 つがずれると、見た目のパート名と保存される小節データが入れ替わる。
 そのため、`ScorePage` 側で同時に同期する。
 
+### 6. パート別音色を再生へ渡す
+
+編成譜では、各パートが `playbackInstrument` を持つ。
+`ScorePage` は譜面再生用の `PlaybackPart` を作るときに、この値を `instrument` として渡す。
+
+内蔵音源では、パートごとに一時的に楽器設定を切り替えながら、同じ `AudioContext.currentTime` を開始時刻として予約する。
+これにより、パートごとに音色を変えても発音タイミングはそろう。
+
+SoundFont では、パートごとの `instrument` から対応する SoundFont プレイヤーを取得してから、同じ開始時刻へ予約する。
+先にプレイヤーを読み込んでから開始時刻を決めることで、読み込み待ちのせいで発音時刻が過去になる問題を避ける。
+
 ## 変更対象
 
 - `src/types/storage.ts`
@@ -86,6 +97,9 @@
 - `src/components/EnsembleStaff.tsx`
 - `src/components/ScorePage.tsx`
 - `src/hooks/useScoreStorage.ts`
+- `src/audio/PlaybackEngine.ts`
+- `src/audio/SimpleAudioEngine.ts`
+- `src/audio/SoundFontEngine.ts`
 - `src/utils/storage.ts`
 - `src/utils/storage.test.ts`
 - `src/App.css`
@@ -96,6 +110,7 @@
 - 保存形式に `instrumentation` が増える
 - 旧データでは `instrumentation` がなくても読み込める
 - `ensemble` の再生は、各パートの小節データを既存の `playParts` へ渡す
+- `PlaybackPart.instrument` は省略可能なので、既存の単旋律・ピアノ・弦楽四重奏の再生呼び出しも維持できる
 - 大編成では 1 ページあたりのシステム数を減らし、譜表が詰まりすぎないようにする
 
 ## 今後の課題

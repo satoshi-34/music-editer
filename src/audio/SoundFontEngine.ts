@@ -157,13 +157,16 @@ export class SoundFontEngine implements PlaybackEngine {
 
   async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<void> {
     await this.initialize();
-    const player = await this.getPlayerForCurrentInstrument();
     const context = this.ensureContext();
+    const playableParts = await Promise.all(parts.map(async (part) => ({
+      part,
+      player: await this.getPlayerForInstrument(part.instrument ?? this.currentInstrument),
+    })));
     const startTime = context.currentTime;
 
     // 各パートは同じ「今この瞬間」を基準に予約する。
     // こうすると Promise を待たずに、和音や複数パートが同時にそろって鳴る。
-    parts.forEach(part => {
+    playableParts.forEach(({ part, player }) => {
       let partTime = startTime;
       for (const measure of part.measures) {
         // measureStartTime は「この小節の頭が絶対時刻でどこか」を固定するための値。
@@ -279,7 +282,11 @@ export class SoundFontEngine implements PlaybackEngine {
   }
 
   private async getPlayerForCurrentInstrument(): Promise<SoundFontPlayer> {
-    const instrumentName = mapInstrumentTypeToSoundFontName(this.currentInstrument);
+    return this.getPlayerForInstrument(this.currentInstrument);
+  }
+
+  private async getPlayerForInstrument(instrument: InstrumentType): Promise<SoundFontPlayer> {
+    const instrumentName = mapInstrumentTypeToSoundFontName(instrument);
     const cacheKey = `${this.soundfontName}:${instrumentName}`;
     const cached = this.playerCache.get(cacheKey);
     if (cached) {

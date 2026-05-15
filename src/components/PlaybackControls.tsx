@@ -63,7 +63,7 @@ export interface PlaybackControlsProps {
 /**
  * 楽器名の日本語表示マップ
  */
-const INSTRUMENT_LABELS: Record<InstrumentType, string> = {
+export const INSTRUMENT_LABELS: Record<InstrumentType, string> = {
   [InstrumentType.PIANO]: 'ピアノ',
   [InstrumentType.ORGAN]: 'オルガン',
   [InstrumentType.GUITAR]: 'ギター',
@@ -92,7 +92,7 @@ const INSTRUMENT_LABELS: Record<InstrumentType, string> = {
   [InstrumentType.WOODWIND]: 'ウッドウィンド'
 };
 
-const INSTRUMENT_GROUPS: Array<{ label: string; instruments: InstrumentType[] }> = [
+export const INSTRUMENT_GROUPS: Array<{ label: string; instruments: InstrumentType[] }> = [
   { label: '鍵盤 / ギター', instruments: [InstrumentType.PIANO, InstrumentType.ORGAN, InstrumentType.GUITAR] },
   {
     label: '木管',

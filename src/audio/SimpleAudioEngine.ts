@@ -338,7 +338,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
    */
   async playScore(
     scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[]; startBeat?: number; velocity?: number }>; measureBeats?: number }>,
-    bpm: number = 120
+    bpm: number = 120,
+    startTime?: number
   ): Promise<void> {
     await this.ensureContextReady();
     const context = this.context;
@@ -349,7 +350,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
     try {
       console.log('[SimpleAudioEngine] 譜面再生を開始:', scoreData.length, '小節');
       
-      let currentTime = context.currentTime;
+      let currentTime = startTime ?? context.currentTime;
       
       // 各小節を順次処理
       for (let measureIndex = 0; measureIndex < scoreData.length; measureIndex++) {
@@ -486,9 +487,27 @@ export class SimpleAudioEngine implements PlaybackEngine {
    */
   async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<void> {
     await this.ensureContextReady();
-    // 各パートは同じ AudioContext 上で、同じ現在時刻を基準に予約する。
-    // そのため Promise.all にしても、時間がずれずに同時再生になる。
-    await Promise.all(parts.map(part => this.playScore(part.measures, bpm)));
+    const context = this.context;
+    if (!context) {
+      throw new Error('AudioContextが初期化されていません');
+    }
+
+    const originalInstrument = this.currentInstrument;
+    const sharedStartTime = context.currentTime;
+
+    try {
+      for (const part of parts) {
+        // 内蔵音源は「今の楽器設定」を見て波形を作る。
+        // パートごとに設定を切り替えてから同じ開始時刻へ予約すると、
+        // Flute / Violin などの音色を分けつつ、発音タイミングはそろえられる。
+        this.currentInstrument = part.instrument ?? originalInstrument;
+        await this.playScore(part.measures, bpm, sharedStartTime);
+      }
+    } finally {
+      // 再生後の UI プレビューなどが別パートの音色に引きずられないよう、
+      // 一時的に切り替えた楽器を必ず元へ戻す。
+      this.currentInstrument = originalInstrument;
+    }
   }
 
   /**

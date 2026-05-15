@@ -10,7 +10,11 @@ import PianoStaff from './PianoStaff';
 import QuartetStaff from './QuartetStaff';
 import EnsembleStaff from './EnsembleStaff';
 import SaveLoadButtons from './SaveLoadButtons';
-import PlaybackControls, { type PlaybackState } from './PlaybackControls';
+import PlaybackControls, {
+  INSTRUMENT_GROUPS,
+  INSTRUMENT_LABELS,
+  type PlaybackState
+} from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
@@ -52,6 +56,7 @@ import type { TimeSignature } from '../types/storage';
 
 type PageSpec = { systems: number };
 type ToolbarTab = 'notes' | 'score' | 'playback' | 'other';
+type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 const DEFAULT_CUSTOM_PART: Omit<InstrumentPartDefinition, 'id' | 'order'> = {
   name: 'New Part',
@@ -398,7 +403,7 @@ export default function ScorePage() {
 
   const handleInstrumentationPartFieldChange = useCallback((
     partIndex: number,
-    field: 'name' | 'abbreviation' | 'clef',
+    field: 'name' | 'abbreviation' | 'clef' | 'playbackInstrument',
     value: string
   ) => {
     updateInstrumentationParts(parts => parts.map((part, index) => {
@@ -407,9 +412,11 @@ export default function ScorePage() {
       }
       return {
         ...part,
-        [field]: field === 'clef' && (value === 'treble' || value === 'alto' || value === 'bass')
-          ? value
-          : value,
+        [field]: field === 'clef'
+          ? (value === 'treble' || value === 'alto' || value === 'bass' ? value : part.clef)
+          : field === 'playbackInstrument'
+            ? (Object.values(InstrumentType).includes(value as InstrumentType) ? value as InstrumentType : part.playbackInstrument)
+            : value,
       };
     }));
   }, [updateInstrumentationParts]);
@@ -457,35 +464,53 @@ export default function ScorePage() {
       clearPlaybackTimer();
       resetPlaybackClock();
 
-      const parts: MeasureData[][] = [];
+      const parts: PlaybackPartSource[] = [];
       // scoreType ごとに保持形式が違うので、
       // ここで「再生したいパート配列」へいったん正規化してから先へ渡す。
       if (scoreType === 'quartet') {
-        quartetParts.forEach(part => { if (part && part.length > 0) parts.push(part); });
+        const quartetInstrumentation = getDefaultInstrumentationForScoreType('quartet');
+        quartetParts.forEach((part, partIndex) => {
+          if (part && part.length > 0) {
+            parts.push({
+              measures: part,
+              instrument: quartetInstrumentation.parts[partIndex]?.playbackInstrument,
+            });
+          }
+        });
       } else if (scoreType === 'ensemble') {
-        ensembleParts.forEach(part => { if (part && part.length > 0) parts.push(part); });
+        ensembleParts.forEach((part, partIndex) => {
+          if (part && part.length > 0) {
+            parts.push({
+              measures: part,
+              instrument: instrumentation.parts[partIndex]?.playbackInstrument,
+            });
+          }
+        });
       } else if (scoreType === 'piano') {
-        if (rightHandData && rightHandData.length > 0) parts.push(rightHandData);
-        if (leftHandData && leftHandData.length > 0) parts.push(leftHandData);
+        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: InstrumentType.PIANO });
+        if (leftHandData && leftHandData.length > 0) parts.push({ measures: leftHandData, instrument: InstrumentType.PIANO });
       } else {
-        if (rightHandData && rightHandData.length > 0) parts.push(rightHandData);
+        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: currentInstrument });
       }
 
       await runWithPlaybackFallback(async (audioEngine) => {
         if (parts.length > 0) {
-          const referenceMeasures = parts[0] ?? [];
-          const partObjs = parts.map((measures, partIndex) => {
+          const referenceMeasures = parts[0]?.measures ?? [];
+          const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
             // ここで「展開後の再生順」と「各音符のベロシティ」を一緒に作って渡す。
             // 多段譜では各段が別々に repeat 情報を持つと再生順が分かれやすいので、
             // 先頭パートの反復順を基準に他パートも同じ順番へそろえる。
             const expandedMeasures = partIndex === 0
-              ? expandMeasuresForPlayback(measures)
-              : expandMeasuresForPlaybackWithReference(referenceMeasures, measures);
+              ? expandMeasuresForPlayback(partSource.measures)
+              : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasures.map(item => item.measure));
 
             return {
+              // 編成譜ではパート定義に再生楽器を持たせている。
+              // ここで PlaybackEngine へ渡すと、全体音色1つではなくパート別音色で鳴らせる。
+              instrument: partSource.instrument,
               measures: expandedMeasures.map((item, expandedMeasureIndex) => ({
                 ...item.measure,
                 // 再生エンジン側が 3/8 や 6/8 の小節長を正しく保てるよう、
@@ -507,7 +532,7 @@ export default function ScorePage() {
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
           // ここでは最大値を採用して全体の終了時刻を決める。
-          const totalDuration = Math.max(...parts.map(part => calculateScoreDuration(part, tempoSettings.bpm, scoreTimeSignature)));
+          const totalDuration = Math.max(...parts.map(part => calculateScoreDuration(part.measures, tempoSettings.bpm, scoreTimeSignature)));
           setPlaybackState('playing');
           clearPlaybackTimer();
           remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
@@ -548,7 +573,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, getAudioEngine, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, runWithPlaybackFallback]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, runWithPlaybackFallback]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -1196,6 +1221,21 @@ export default function ScorePage() {
                           <option value="treble">ト音</option>
                           <option value="alto">ハ音</option>
                           <option value="bass">ヘ音</option>
+                        </select>
+                        <select
+                          value={part.playbackInstrument ?? InstrumentType.PIANO}
+                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'playbackInstrument', event.target.value)}
+                          aria-label={`${part.name}の再生音色`}
+                        >
+                          {INSTRUMENT_GROUPS.map((group) => (
+                            <optgroup key={group.label} label={group.label}>
+                              {group.instruments.map((instrument) => (
+                                <option key={instrument} value={instrument}>
+                                  {INSTRUMENT_LABELS[instrument]}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
                         </select>
                         <button
                           type="button"
