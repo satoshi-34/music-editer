@@ -930,12 +930,17 @@ export default function ScorePage() {
     title,
   ]);
 
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const onResize = () => {
       clearTimeout(timer);
-      timer = setTimeout(() => setColumns(window.innerWidth < 1200 ? 1 : 2), 150);
+      timer = setTimeout(() => {
+        const nextWidth = window.innerWidth;
+        setViewportWidth(nextWidth);
+        setColumns(nextWidth < 1200 ? 1 : 2);
+      }, 150);
     };
     window.addEventListener('resize', onResize);
     return () => { window.removeEventListener('resize', onResize); clearTimeout(timer); };
@@ -952,18 +957,14 @@ export default function ScorePage() {
     [totalSystems, systemsPerPage]
   );
 
-  const [visiblePages, setVisiblePages] = useState<PageSpec[]>(pages);
   const [hasCustomPianoSample, setHasCustomPianoSample] = useState<boolean>(() => hasCustomPianoDemoScore());
-  useEffect(() => {
-    const update = () => {
-      const vw = window.innerWidth;
-      const pagePixelWidth = 210 * 3.78 * scale;
-      setVisiblePages(pagePixelWidth * 2 > vw ? pages.slice(0, 1) : pages);
-    };
-    update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
-  }, [pages, scale]);
+  const visiblePages = useMemo(() => {
+    const pagePixelWidth = 210 * 3.78 * scale;
+    // pages は scoreType によって 9段/ページや 2段/ページへ変わる。
+    // これを useState に保存すると、編成譜から単旋律へ戻した瞬間に
+    // 古い「2段ページ」が一瞬残ることがあるため、毎回ここで同期計算する。
+    return pagePixelWidth * 2 > viewportWidth ? pages.slice(0, 1) : pages;
+  }, [pages, scale, viewportWidth]);
 
   useEffect(() => {
     return () => {
