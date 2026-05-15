@@ -9,10 +9,10 @@ import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
 
 const QUARTET_PART_CONFIGS: Omit<PartConfig, 'data' | 'onChange'>[] = [
-  { clef: 'treble', label: 'Vn. I'  },
-  { clef: 'treble', label: 'Vn. II' },
-  { clef: 'alto',   label: 'Va.'    },
-  { clef: 'bass',   label: 'Vc.'    },
+  { clef: 'treble', label: 'Vn. I',  playbackInstrument: InstrumentType.VIOLIN },
+  { clef: 'treble', label: 'Vn. II', playbackInstrument: InstrumentType.VIOLIN },
+  { clef: 'alto',   label: 'Va.',    playbackInstrument: InstrumentType.VIOLA },
+  { clef: 'bass',   label: 'Vc.',    playbackInstrument: InstrumentType.CELLO },
 ];
 
 type Props = {
@@ -26,7 +26,7 @@ type Props = {
   disabled?: boolean;
   yOffset?: number;
   currentInstrument?: InstrumentType;
-  onPreviewNoteEvent?: (noteEvent: NoteEvent) => Promise<void>;
+  onPreviewNoteEvent?: (noteEvent: NoteEvent, instrument?: InstrumentType) => Promise<void>;
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;

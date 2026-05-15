@@ -41,6 +41,7 @@ export type PartConfig = {
   data: MeasureData[];
   onChange: (data: MeasureData[]) => void;
   label?: string;
+  playbackInstrument?: InstrumentType;
 };
 
 /* ===== レイアウト定数（SVGビューポートpx） ===== */
@@ -451,7 +452,7 @@ type Props = {
   disabled?: boolean;
   yOffset?: number;
   currentInstrument?: InstrumentType;
-  onPreviewNoteEvent?: (noteEvent: NoteEvent) => Promise<void>;
+  onPreviewNoteEvent?: (noteEvent: NoteEvent, instrument?: InstrumentType) => Promise<void>;
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: [number, number];
@@ -607,10 +608,10 @@ export default function PianoSystemCanvas({
     syncCurrentInstrument();
   }, [currentInstrument]);
 
-  const playNoteEvent = async (noteEvent: NoteEvent) => {
+  const playNoteEvent = async (noteEvent: NoteEvent, instrument?: InstrumentType) => {
     if (onPreviewNoteEvent) {
       try {
-        await onPreviewNoteEvent(noteEvent);
+        await onPreviewNoteEvent(noteEvent, instrument);
       } catch (error) {
         console.error('[PianoSystemCanvas] 親の再生エンジンによる確認音に失敗:', error);
       }
@@ -623,6 +624,12 @@ export default function PianoSystemCanvas({
     }
 
     try {
+      const shouldTemporarilySwitchInstrument = !!instrument && instrument !== currentInstrument;
+      if (shouldTemporarilySwitchInstrument) {
+        // 親の再生エンジンがない単体利用時も、パート音色で確認音を鳴らす。
+        // 再生後は現在の UI 選択音色へ戻して、次の操作に影響を残さない。
+        await notePlayerRef.current.setSoundSource(instrument);
+      }
       if (!defaultAudioEngine.isInitializedState()) {
         await defaultAudioEngine.initialize();
       }
@@ -634,7 +641,13 @@ export default function PianoSystemCanvas({
         soundSourceRef.current.reconnectAllSynths();
       }
 
-      await notePlayerRef.current.playNoteEvent(noteEvent);
+      try {
+        await notePlayerRef.current.playNoteEvent(noteEvent);
+      } finally {
+        if (shouldTemporarilySwitchInstrument) {
+          await notePlayerRef.current.setSoundSource(currentInstrument);
+        }
+      }
     } catch (error) {
       console.error('[PianoSystemCanvas] 音符再生に失敗:', error);
     }
@@ -1421,7 +1434,7 @@ export default function PianoSystemCanvas({
           });
           if(!insertedEvent.isRest){
             // 置いた直後の確認音があると、右手左手どちらでも音高チェックがしやすい。
-            playNoteEvent(insertedEvent);
+            playNoteEvent(insertedEvent, part.playbackInstrument);
           }
         };
 
@@ -1603,7 +1616,7 @@ export default function PianoSystemCanvas({
                 });
                 setSelected({partIndex:pi,measure:absI,index:j});
                 if (previewAccidentalOnApply) {
-                  playNoteEvent(nextEv);
+                  playNoteEvent(nextEv, part.playbackInstrument);
                 }
                 return;
               }
@@ -1620,7 +1633,7 @@ export default function PianoSystemCanvas({
                   return next;
                 });
                 setSelected({partIndex:pi,measure:absI,index:j});
-                playNoteEvent(nextEv);
+                playNoteEvent(nextEv, part.playbackInstrument);
                 return;
               }
 
@@ -1643,7 +1656,7 @@ export default function PianoSystemCanvas({
                   });
                 }
                 setSelected({partIndex:pi,measure:absI,index:j});
-                playNoteEvent(playEvent);
+                playNoteEvent(playEvent, part.playbackInstrument);
               }else if(safeEvs[j]?.isRest){
                 if (dynamicMode) return;
                 if (accidentalMode) {
@@ -1690,7 +1703,7 @@ export default function PianoSystemCanvas({
                   const insertedEvent = restReplacement.find((event) => !event.isRest);
                   if (insertedEvent) {
                     // 休符を音符へ置換・分割したときも、新しく入った音だけ確認できるようにする。
-                    playNoteEvent(insertedEvent);
+                    playNoteEvent(insertedEvent, part.playbackInstrument);
                   }
                   return;
                 }

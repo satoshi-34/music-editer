@@ -17,7 +17,7 @@ type Props = {
   disabled?: boolean;
   yOffset?: number;
   currentInstrument?: InstrumentType;
-  onPreviewNoteEvent?: (noteEvent: NoteEvent) => Promise<void>;
+  onPreviewNoteEvent?: (noteEvent: NoteEvent, instrument?: InstrumentType) => Promise<void>;
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
@@ -51,6 +51,7 @@ export default function EnsembleStaff({
         const partsConfig: PartConfig[] = instrumentationParts.map((part, partIndex) => ({
           clef: part.clef,
           label: part.abbreviation || part.name,
+          playbackInstrument: part.playbackInstrument,
           data: partsData[partIndex] ?? [],
           onChange: onPartChange[partIndex] ?? (() => {}),
         }));

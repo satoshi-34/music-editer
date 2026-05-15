@@ -93,6 +93,15 @@
 SoundFont では、パートごとの `instrument` から対応する SoundFont プレイヤーを取得してから、同じ開始時刻へ予約する。
 先にプレイヤーを読み込んでから開始時刻を決めることで、読み込み待ちのせいで発音時刻が過去になる問題を避ける。
 
+### 7. 入力確認音もパート音色へそろえる
+
+編成譜では、音符を置いた直後の確認音も `playbackInstrument` を使う。
+`PianoSystemCanvas` はクリックされた `PartConfig` の `playbackInstrument` を `onPreviewNoteEvent` へ渡し、
+`ScorePage` は確認音の再生中だけ音声エンジンの楽器を一時的に切り替える。
+
+UI 上の「現在の音色」まで変更すると、ユーザーが再生パネルで選んだ設定が勝手に動いて見える。
+そのため確認音の後は必ず元の `currentInstrument` へ戻す。
+
 ## 変更対象
 
 - `src/types/storage.ts`
@@ -121,7 +130,6 @@ SoundFont では、パートごとの `instrument` から対応する SoundFont 
 ## 今後の課題
 
 - 移調楽器の記譜音と実音の切り替え
-- パートごとの再生音色
 - グループ括弧や大括弧の表示
 - 打楽器の専用記譜
 - divisi、solo、a2、tutti などの表記

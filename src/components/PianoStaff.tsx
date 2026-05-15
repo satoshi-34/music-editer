@@ -23,7 +23,7 @@ type Props = {
   disabled?: boolean;
   yOffset?: number;
   currentInstrument?: InstrumentType;
-  onPreviewNoteEvent?: (noteEvent: NoteEvent) => Promise<void>;
+  onPreviewNoteEvent?: (noteEvent: NoteEvent, instrument?: InstrumentType) => Promise<void>;
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;

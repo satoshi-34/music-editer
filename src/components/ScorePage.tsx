@@ -633,7 +633,7 @@ export default function ScorePage() {
     }
   }, [runWithPlaybackFallback]);
 
-  const handleInputNotePreview = useCallback(async (noteEvent: NoteEvent) => {
+  const handleInputNotePreview = useCallback(async (noteEvent: NoteEvent, instrument?: InstrumentType) => {
     if (noteEvent.isRest || noteEvent.keys.length === 0) {
       return;
     }
@@ -642,9 +642,21 @@ export default function ScorePage() {
     await runWithPlaybackFallback(async (audioEngine) => {
       // 入力確認音も再生ボタンと同じ音源経路へ寄せる。
       // こうすると、楽器選択だけでなく SoundFont / built-in の違いも耳で一致する。
-      await Promise.all(noteEvent.keys.map((key) => audioEngine.playNoteByName(key, previewDuration)));
+      const shouldTemporarilySwitchInstrument = !!instrument && instrument !== currentInstrument;
+      if (shouldTemporarilySwitchInstrument) {
+        // 編成譜では「いま選択中の全体音色」ではなく、クリックしたパートの音色で鳴らす。
+        // ただし UI の音色選択まで変えるとユーザーの設定が勝手に動くため、再生中だけ一時的に切り替える。
+        audioEngine.setInstrument(instrument);
+      }
+      try {
+        await Promise.all(noteEvent.keys.map((key) => audioEngine.playNoteByName(key, previewDuration)));
+      } finally {
+        if (shouldTemporarilySwitchInstrument) {
+          audioEngine.setInstrument(currentInstrument);
+        }
+      }
     });
-  }, [runWithPlaybackFallback]);
+  }, [currentInstrument, runWithPlaybackFallback]);
 
   const resetAudioSettingsToSafeDefaults = useCallback(() => {
     // 無音が続くときは「いまの設定を維持したまま復旧」より、
