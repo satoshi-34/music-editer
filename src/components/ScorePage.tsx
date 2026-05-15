@@ -1196,8 +1196,9 @@ export default function ScorePage() {
                 <div className="notation-mode-toggle" role="group" aria-label="表示モード">
                   {/*
                     記譜音表示は、移調楽器が読む譜面（例: B♭クラリネットなら長2度上）を出すモード。
-                    実音表示中だけ編集できるようにして、誤って「画面で見えた音 ≠ 保存音」と
-                    なる事故を防いでいる。
+                    どちらのモードでも編集でき、入力された音符は EnsembleStaff で実音へ
+                    逆変換してから保存されるため、保存データの正本は常に実音で一貫する。
+                    ただし調号変更だけは実音モード時のみ有効（記譜音側の調号は計算結果なので）。
                   */}
                   <span className="notation-mode-label">表示</span>
                   <button
@@ -1214,7 +1215,7 @@ export default function ScorePage() {
                     className={`ghost compact-button${notationMode === 'written' ? ' active' : ''}`}
                     onClick={() => setNotationMode('written')}
                     aria-pressed={notationMode === 'written'}
-                    title="移調楽器の奏者が読む譜面を表示する（編集はオフ）"
+                    title="移調楽器の奏者が読む譜面で表示・編集する（入力した音符は実音へ自動変換して保存）"
                   >
                     記譜音
                   </button>

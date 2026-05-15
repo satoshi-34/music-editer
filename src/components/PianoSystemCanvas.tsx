@@ -1445,7 +1445,10 @@ export default function PianoSystemCanvas({
         };
 
         const doInsert=(lx:number,ly:number)=>{
-          const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), keySignatureRef.current);
+          // パート固有の調号があれば、入力された自然音もそのパートの調号に揃える。
+          // 例: 記譜音表示で D メジャー（♯2）になっている B♭管に F の線を置くと、
+          // 自動的に F♯ として保存される。
+          const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
           let at=safeEvs.length,minD=Infinity;
           if(vfNotes.length>0){
             [{x:measLeft,j:0},{x:measRight,j:vfNotes.length}].forEach(({x,j})=>{
@@ -1690,7 +1693,7 @@ export default function PianoSystemCanvas({
               if(!safeEvs[j]?.isRest&&isOnNote){
 
                 // 音符の描画範囲内 → 和音追加
-                const newKey=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), keySignatureRef.current);
+                const newKey=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
                 const currentEv=safeEvs[j];
                 let playEvent = currentEv;
                 if(currentEv&&!currentEv.keys.includes(newKey)){
@@ -1728,7 +1731,7 @@ export default function PianoSystemCanvas({
                   }
                   return;
                 }
-                const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), keySignatureRef.current);
+                const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
                 const noteAfterRest=lx>=xl+wHit/2;
                 const restReplacement=buildRestEditReplacement(safeEvs[j],key,tool,noteAfterRest);
                 const isSameRestSelected =

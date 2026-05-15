@@ -31,7 +31,7 @@ type Props = {
   /**
    * 編成譜の表示モード。`written` のとき、各パートの音符を
    * `transposition` の半音差ぶんシフトして「奏者が読む譜面」を出す。
-   * 表示専用なので、written のときは編集はオフにする。
+   * 編集も許可し、入力された音符は実音へ逆変換してから保存する。
    */
   notationMode?: ScoreNotationMode;
 };
@@ -88,10 +88,9 @@ export default function EnsembleStaff({
   notationMode = 'concert',
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
-  // 編集まで許すと「画面では D に置いたのに保存は C」のような逆変換が必要になり、
-  // 編集ロジック全体に影響が及ぶ。まずは表示専用に限定して安全に出す。
+  // 入力された音符は逆方向にシフトして実音として保存することで、
+  // 保存データの正本は常に実音という整合性を保つ。
   const isWrittenMode = notationMode === 'written';
-  const effectiveDisabled = disabled || isWrittenMode;
   return (
     <div>
       {Array.from({ length: systems }, (_, systemIndex) => {
@@ -113,6 +112,13 @@ export default function EnsembleStaff({
             ? TRANSPOSITION_WRITTEN_OFFSET_FIFTHS[part.transposition] ?? 0
             : 0;
           const partKey = fifthsShift === 0 ? undefined : shiftKeySignatureByFifths(keySignature, fifthsShift);
+          const upstreamChange = onPartChange[partIndex] ?? (() => {});
+          // 記譜音モードでは画面上の音符は記譜音側でやり取りされるため、
+          // 保存する前に逆方向（-semitones）にシフトして実音へ戻す。
+          // これにより、表示モードを切り替えても保存データは常に実音で一貫する。
+          const wrappedChange = semitones === 0
+            ? upstreamChange
+            : (newDisplayed: MeasureData[]) => upstreamChange(transposeMeasuresForDisplay(newDisplayed, -semitones));
           return {
             clef: part.clef,
             label: part.abbreviation || part.name,
@@ -123,7 +129,7 @@ export default function EnsembleStaff({
             bracketGroup: part.bracketGroup,
             keySignature: partKey,
             data: displayData,
-            onChange: onPartChange[partIndex] ?? (() => {}),
+            onChange: wrappedChange,
           };
         });
 
@@ -136,14 +142,14 @@ export default function EnsembleStaff({
             partsConfig={partsConfig}
             showInstrumentLabels={systemIndex === 0}
             startMeasureIndex={startMeasureIndex + systemIndex * measuresPerSystem}
-            disabled={effectiveDisabled}
+            disabled={disabled}
             yOffset={yOffset}
             currentInstrument={currentInstrument}
             onPreviewNoteEvent={onPreviewNoteEvent}
             previewAccidentalOnApply={previewAccidentalOnApply}
             keySignature={keySignature}
             timeSignature={timeSignature}
-            onKeySignatureChange={onKeySignatureChange}
+            onKeySignatureChange={isWrittenMode ? undefined : onKeySignatureChange}
           />
         );
       })}
