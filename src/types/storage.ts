@@ -127,6 +127,16 @@ export type InstrumentationPresetId =
   | 'wind-band'
   | 'custom';
 
+/**
+ * 編成譜の表示モード。
+ *
+ * - `concert`: 実音表示（鳴る音そのままを記譜する）。データの正本もこちら。
+ * - `written`: 記譜音表示（各パートの `transposition` に従って譜面上をシフト）。
+ *   表示専用モードで、編集はオフにする。再生は常に実音側を使うので、
+ *   表示モードを切り替えてもサウンドは変わらない。
+ */
+export type ScoreNotationMode = 'concert' | 'written';
+
 export interface ScoreInstrumentation {
   presetId: InstrumentationPresetId;
   name: string;
@@ -151,6 +161,8 @@ export interface SavedScoreData {
   timeSignature?: TimeSignature;
   /** 編成テンプレート。旧データ互換のため省略可 */
   instrumentation?: ScoreInstrumentation;
+  /** 編成譜の表示モード（実音/記譜音）。旧データ互換のため省略可、省略時は実音表示 */
+  notationMode?: ScoreNotationMode;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;

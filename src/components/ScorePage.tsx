@@ -30,7 +30,7 @@ import {
   getScoreTypeForInstrumentation,
   INSTRUMENTATION_PRESETS,
 } from '../data/instrumentationPresets';
-import type { InstrumentationPresetId, ScoreInstrumentation } from '../types/storage';
+import type { InstrumentationPresetId, ScoreInstrumentation, ScoreNotationMode } from '../types/storage';
 import {
   createDemoScore,
   hasCustomPianoDemoScore,
@@ -131,6 +131,9 @@ export default function ScorePage() {
   const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
   const [scoreType, setScoreType] = useState<ScoreType>('single');
   const [instrumentation, setInstrumentation] = useState<ScoreInstrumentation>(() => getDefaultInstrumentationForScoreType('single'));
+  // 編成譜の表示モード（実音 / 記譜音）。
+  // 既定は実音表示で、移調楽器対応をオフにしたまま素直に編集できるようにしている。
+  const [notationMode, setNotationMode] = useState<ScoreNotationMode>('concert');
   const [keySignature, setKeySignature] = useState<KeySignature>('C');
   const [showOffsetPanel, setShowOffsetPanel] = useState(false);
   const [toolbarHeight, setToolbarHeight] = useState(180);
@@ -834,7 +837,7 @@ export default function ScorePage() {
             { partId: 'melody', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
           ];
 
-    await saveScore(metadata, parts, totalSystems, 4, scoreType, keySignature, scoreTimeSignature, instrumentation);
+    await saveScore(metadata, parts, totalSystems, 4, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
   };
 
   const handleLoad = async () => {
@@ -851,6 +854,8 @@ export default function ScorePage() {
       await setTimeSignature(...normalizeTimeSignature(loadedData.timeSignature));
       setScoreType(loadedType);
       setInstrumentation(loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
+      // 旧データには notationMode が無いので、未指定なら実音表示で開く。
+      setNotationMode(loadedData.notationMode ?? 'concert');
 
       if (loadedType === 'quartet') {
         const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
@@ -1188,6 +1193,35 @@ export default function ScorePage() {
               </div>
 
               {scoreType === 'ensemble' && (
+                <div className="notation-mode-toggle" role="group" aria-label="表示モード">
+                  {/*
+                    記譜音表示は、移調楽器が読む譜面（例: B♭クラリネットなら長2度上）を出すモード。
+                    実音表示中だけ編集できるようにして、誤って「画面で見えた音 ≠ 保存音」と
+                    なる事故を防いでいる。
+                  */}
+                  <span className="notation-mode-label">表示</span>
+                  <button
+                    type="button"
+                    className={`ghost compact-button${notationMode === 'concert' ? ' active' : ''}`}
+                    onClick={() => setNotationMode('concert')}
+                    aria-pressed={notationMode === 'concert'}
+                    title="鳴る音そのままを表示する"
+                  >
+                    実音
+                  </button>
+                  <button
+                    type="button"
+                    className={`ghost compact-button${notationMode === 'written' ? ' active' : ''}`}
+                    onClick={() => setNotationMode('written')}
+                    aria-pressed={notationMode === 'written'}
+                    title="移調楽器の奏者が読む譜面を表示する（編集はオフ）"
+                  >
+                    記譜音
+                  </button>
+                </div>
+              )}
+
+              {scoreType === 'ensemble' && (
                 <div className="instrumentation-editor" aria-label="編成パート編集">
                   <div className="instrumentation-editor-head">
                     <span>パート編集</span>
@@ -1407,6 +1441,7 @@ export default function ScorePage() {
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
+                      notationMode={notationMode}
                     />
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff

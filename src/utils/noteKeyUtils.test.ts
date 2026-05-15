@@ -9,6 +9,7 @@ import {
   parseNoteKey,
   resolveDisplayAccidentalsForKeys,
   shiftKeySignatureByAccidental,
+  transposeKeyBySemitones,
 } from './noteKeyUtils';
 
 describe('noteKeyUtils', () => {
@@ -88,5 +89,30 @@ describe('noteKeyUtils', () => {
     expect(shiftKeySignatureByAccidental('G', 'flat')).toBe('F');
     expect(shiftKeySignatureByAccidental('C', 'flat')).toBe('F');
     expect(shiftKeySignatureByAccidental('Eb', 'natural')).toBe('C');
+  });
+});
+
+describe('transposeKeyBySemitones', () => {
+  it('長2度上（B♭管クラリネット相当）に正しく移調できる', () => {
+    expect(transposeKeyBySemitones('c/4', 2)).toBe('d/4');
+    expect(transposeKeyBySemitones('a/4', 2)).toBe('b/4');
+  });
+
+  it('オクターブをまたいで上昇移調できる', () => {
+    expect(transposeKeyBySemitones('b/4', 2)).toBe('c#/5');
+    expect(transposeKeyBySemitones('a/4', 12)).toBe('a/5');
+  });
+
+  it('F管ホルン相当（完全5度上＝7半音）に移調できる', () => {
+    expect(transposeKeyBySemitones('c/4', 7)).toBe('g/4');
+  });
+
+  it('シャープ系で書き戻し、未知のキーはそのまま返す', () => {
+    expect(transposeKeyBySemitones('f/4', 1)).toBe('f#/4');
+    expect(transposeKeyBySemitones('not-a-key', 2)).toBe('not-a-key');
+  });
+
+  it('半音差 0 では同じキーを返す', () => {
+    expect(transposeKeyBySemitones('eb/3', 0)).toBe('eb/3');
   });
 });

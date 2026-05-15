@@ -234,3 +234,76 @@ export function resolveDisplayAccidentalsForKeys(
 ): Array<DisplayAccidental | null> {
   return keys.map(key => resolveDisplayAccidental(key, accidentalState));
 }
+
+/**
+ * 移調楽器の「記譜音 ↔ 実音」変換に使う半音差。
+ *
+ * 値の符号は「実音 → 記譜音 への加算」。たとえば B♭管クラリネットは、
+ * 実音 C を記譜では D（半音 +2 上）に書くので `Bb` は `+2`。
+ *
+ * - `Bb`: B♭管（クラリネット、トランペットなど）→ 長2度上に記譜
+ * - `Eb`: E♭管（アルトサックスなど）→ 長6度上に記譜（+9半音）
+ * - `F`:  F管（ホルン、イングリッシュホルンなど）→ 完全5度上に記譜（+7半音）
+ * - `G`:  G管（アルトフルートなど）→ 完全4度上に記譜（+5半音）
+ * - `octave-down`: コントラバスなど → 1オクターブ上に記譜
+ * - `C` / `none`: 移調なし
+ */
+export const TRANSPOSITION_WRITTEN_OFFSET_SEMITONES: Record<string, number> = {
+  C: 0,
+  none: 0,
+  Bb: 2,
+  Eb: 9,
+  F: 7,
+  G: 5,
+  'octave-down': 12,
+};
+
+// 半音単位の絶対 MIDI 値計算用テーブル。VexFlow の "c/4" は MIDI 60。
+const LETTER_TO_PITCH_CLASS: Record<ParsedNoteKey['letter'], number> = {
+  c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11,
+};
+// 半音 → 「文字 + 臨時記号」への戻し変換。
+// シャープ系で統一しておくと、移調後に同じ表記体系で復元できる。
+const PITCH_CLASS_TO_LETTER: Array<{ letter: ParsedNoteKey['letter']; accidental: KeyAccidental }> = [
+  { letter: 'c', accidental: '' },
+  { letter: 'c', accidental: '#' },
+  { letter: 'd', accidental: '' },
+  { letter: 'd', accidental: '#' },
+  { letter: 'e', accidental: '' },
+  { letter: 'f', accidental: '' },
+  { letter: 'f', accidental: '#' },
+  { letter: 'g', accidental: '' },
+  { letter: 'g', accidental: '#' },
+  { letter: 'a', accidental: '' },
+  { letter: 'a', accidental: '#' },
+  { letter: 'b', accidental: '' },
+];
+
+/**
+ * 音高キーを半音単位で移調する。
+ *
+ * 例: `transposeKeyBySemitones('c/4', 2)` → `d/4`
+ *
+ * 異名同音は気にせず「シャープ系」で書き戻す。
+ * 移調表示はあくまで「奏者が読む譜面」を一時的に出すための機能で、
+ * 厳密な楽典的綴り（D♭ vs C# など）はまだ扱わない。
+ */
+export function transposeKeyBySemitones(key: string, semitones: number): string {
+  const parsed = parseNoteKey(key);
+  if (!parsed) {
+    return key;
+  }
+  // 半音差ゼロでは綴り（フラット/シャープ）を変えたくないので、解析できたキーをそのまま返す。
+  if (semitones === 0) {
+    return parsed.vexflowKey;
+  }
+  const baseClass = LETTER_TO_PITCH_CLASS[parsed.letter];
+  const accidentalOffset = parsed.accidental === '#' ? 1 : parsed.accidental === 'b' ? -1 : 0;
+  const absolute = baseClass + accidentalOffset + parsed.octave * 12 + semitones;
+
+  // 範囲外（負の値や巨大値）を作らないよう、12 で割って整数オクターブと半音に分ける。
+  const octave = Math.floor(absolute / 12);
+  const pitchClass = ((absolute % 12) + 12) % 12;
+  const { letter, accidental } = PITCH_CLASS_TO_LETTER[pitchClass];
+  return `${letter}${accidental}/${octave}`;
+}

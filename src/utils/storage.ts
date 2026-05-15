@@ -217,6 +217,7 @@ function validateSavedScoreData(data: any): data is SavedScoreData {
     (data.keySignature === undefined || isValidKeySignature(data.keySignature)) &&
     (data.timeSignature === undefined || isValidTimeSignature(data.timeSignature)) &&
     (data.instrumentation === undefined || validateScoreInstrumentation(data.instrumentation)) &&
+    (data.notationMode === undefined || data.notationMode === 'concert' || data.notationMode === 'written') &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -581,7 +582,8 @@ export function createSavedScoreData(
   scoreType: ScoreType = 'single',
   keySignature: KeySignature = 'C',
   timeSignature: TimeSignature = DEFAULT_TIME_SIGNATURE,
-  instrumentation?: ScoreInstrumentation
+  instrumentation?: ScoreInstrumentation,
+  notationMode?: 'concert' | 'written'
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -591,6 +593,7 @@ export function createSavedScoreData(
     keySignature,
     timeSignature: normalizeTimeSignature(timeSignature),
     instrumentation,
+    notationMode,
     parts,
     systems,
     measuresPerSystem
