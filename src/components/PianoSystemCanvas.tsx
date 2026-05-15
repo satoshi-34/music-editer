@@ -42,6 +42,9 @@ export type PartConfig = {
   onChange: (data: MeasureData[]) => void;
   label?: string;
   playbackInstrument?: InstrumentType;
+  // 段に属するグループ識別子。連続する同じ値のパートを
+  // 1 本の括弧でくくり、オーケストラ譜らしい見た目にするために使う。
+  bracketGroup?: string;
 };
 
 /* ===== レイアウト定数（SVGビューポートpx） ===== */
@@ -1075,14 +1078,52 @@ export default function PianoSystemCanvas({
     }
 
     // 左端コネクタ
+    // オーケストラ譜では、木管・金管・弦などの「楽器グループ」を
+    // それぞれ 1 本の括弧でまとめると読みやすくなる。
+    // ここではパートに渡された bracketGroup を見て、
+    // 連続する同じグループのまとまりごとに括弧を描く。
     if(parts.length > 1){
-      const connType = parts.length === 2
-        ? StaveConnector.type.BRACE
-        : StaveConnector.type.BRACKET;
-      new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0])
-        .setType(connType).setContext(ctx).draw();
+      // 連続する同じ bracketGroup のまとまり（[開始, 終了]）を求める。
+      // bracketGroup が無いパートは単独扱いにして括弧を描かない。
+      const groups: Array<{ start: number; end: number; key: string }> = [];
+      for (let i = 0; i < parts.length; i++) {
+        const key = parts[i].bracketGroup;
+        if (!key) continue;
+        const last = groups[groups.length - 1];
+        if (last && last.key === key && last.end === i - 1) {
+          last.end = i;
+        } else {
+          groups.push({ start: i, end: i, key });
+        }
+      }
+
+      // 鍵盤（ピアノ大譜表）だけはブレース、ほかは角括弧で描く。
+      // これは伝統的なオーケストラ記譜の慣習に合わせている。
+      groups.forEach(group => {
+        if (group.end === group.start) return; // 1段だけのグループは括弧不要
+        const connType = group.key === 'keyboard'
+          ? StaveConnector.type.BRACE
+          : StaveConnector.type.BRACKET;
+        new StaveConnector(staveSets[group.start][0], staveSets[group.end][0])
+          .setType(connType).setContext(ctx).draw();
+      });
+
+      // システム全体の左端を貫く 1 本の縦線。
+      // これがないと、グループ括弧だけでは「ここまでが 1 システム」が
+      // 視覚的に伝わりにくいので、最上段から最下段までを縦線で結ぶ。
       new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0])
         .setType(StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
+
+      // どのパートにも bracketGroup が無く、グループ括弧がひとつも
+      // 描かれなかった場合は、従来通り全体を 1 つの括弧でまとめる。
+      // （単旋律 + 単旋律のような自由編成で寂しく見えないようにするため）
+      if (groups.every(g => g.end === g.start)) {
+        const fallbackType = parts.length === 2
+          ? StaveConnector.type.BRACE
+          : StaveConnector.type.BRACKET;
+        new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0])
+          .setType(fallbackType).setContext(ctx).draw();
+      }
     }
 
     if (showInstrumentLabels) {

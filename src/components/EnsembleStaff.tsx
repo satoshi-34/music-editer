@@ -52,6 +52,10 @@ export default function EnsembleStaff({
           clef: part.clef,
           label: part.abbreviation || part.name,
           playbackInstrument: part.playbackInstrument,
+          // 木管・金管・弦などの楽器グループ識別子。
+          // PianoSystemCanvas はこの値が連続するパートをひとまとめにし、
+          // 1 本の括弧で囲って描画する（オーケストラ譜の慣習）。
+          bracketGroup: part.bracketGroup,
           data: partsData[partIndex] ?? [],
           onChange: onPartChange[partIndex] ?? (() => {}),
         }));
