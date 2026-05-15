@@ -1096,11 +1096,13 @@ export default function PianoSystemCanvas({
     // 連続する同じグループのまとまりごとに括弧を描く。
     if(parts.length > 1){
       // 連続する同じ bracketGroup のまとまり（[開始, 終了]）を求める。
-      // bracketGroup が無いパートは単独扱いにして括弧を描かない。
+      // bracketGroup が無いパートや `solo` のパートは単独扱いにして括弧を描かない。
+      // `solo` は「ひとまとまり」ではなく「このパートだけ独立」という意味なので、
+      // 連続していてもグループ括弧にしない。
       const groups: Array<{ start: number; end: number; key: string }> = [];
       for (let i = 0; i < parts.length; i++) {
         const key = parts[i].bracketGroup;
-        if (!key) continue;
+        if (!key || key === 'solo') continue;
         const last = groups[groups.length - 1];
         if (last && last.key === key && last.end === i - 1) {
           last.end = i;
@@ -1126,10 +1128,12 @@ export default function PianoSystemCanvas({
       new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0])
         .setType(StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
 
-      // どのパートにも bracketGroup が無く、グループ括弧がひとつも
-      // 描かれなかった場合は、従来通り全体を 1 つの括弧でまとめる。
-      // （単旋律 + 単旋律のような自由編成で寂しく見えないようにするため）
-      if (groups.every(g => g.end === g.start)) {
+      // グループ括弧がひとつも描かれなかった場合は、従来通り全体を 1 つの括弧でまとめる。
+      // ただし全パートが `solo` 指定なら、ユーザーが明示的に「括弧なし」を選んでいるため
+      // フォールバック括弧も描かない。
+      const hasAnyDrawnGroupBracket = groups.some(g => g.end > g.start);
+      const allPartsAreSolo = parts.every(part => part.bracketGroup === 'solo');
+      if (!hasAnyDrawnGroupBracket && !allPartsAreSolo) {
         const fallbackType = parts.length === 2
           ? StaveConnector.type.BRACE
           : StaveConnector.type.BRACKET;

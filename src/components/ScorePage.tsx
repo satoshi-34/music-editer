@@ -1116,7 +1116,14 @@ export default function ScorePage() {
     { id: 'other', label: 'その他' },
   ];
   const instrumentationGroups = useMemo(() => {
-    const groups = new Set(instrumentation.parts.map(part => part.bracketGroup));
+    // `solo` は「括弧でまとめない」指定なので、画面上のグループ数にも含めない。
+    // 全パートが solo のときは 0 ではなく 1 と表示して、編成自体が空に見えないようにする。
+    const groups = new Set(instrumentation.parts
+      .map(part => part.bracketGroup)
+      .filter(group => group !== 'solo'));
+    if (groups.size === 0 && instrumentation.parts.length > 0) {
+      return 1;
+    }
     return Array.from(groups).length;
   }, [instrumentation.parts]);
   const instrumentationPreview = useMemo(
