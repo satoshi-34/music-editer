@@ -112,6 +112,12 @@ export interface InstrumentPartDefinition {
   staffCount: number;
   transposition: 'C' | 'Bb' | 'Eb' | 'F' | 'G' | 'octave-down' | 'none';
   bracketGroup: InstrumentBracketGroup;
+  /**
+   * セクション内のサブグループ識別子。例: 弦のなかで Vln I/Vln II を
+   * 細い括弧でひとまとめにしたい場合などに使う。
+   * 同じ値が連続するパートだけが 1 本のサブ括弧でくくられる。
+   */
+  subBracketGroup?: string;
   playbackInstrument?: InstrumentType;
   order: number;
 }

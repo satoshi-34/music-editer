@@ -45,6 +45,9 @@ export type PartConfig = {
   // 段に属するグループ識別子。連続する同じ値のパートを
   // 1 本の括弧でくくり、オーケストラ譜らしい見た目にするために使う。
   bracketGroup?: string;
+  // セクション内の細いサブ括弧用識別子。例: 弦のなかで Vln I/Vln II を
+  // ひとまとめに見せる場合などに使う。連続する同じ値だけがサブ括弧で囲まれる。
+  subBracketGroup?: string;
   // パート固有の調号（移調楽器の記譜音表示などで使う）。
   // 省略時はシステム共通の調号が適用される。
   keySignature?: KeySignature;
@@ -1133,6 +1136,43 @@ export default function PianoSystemCanvas({
         new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0])
           .setType(fallbackType).setContext(ctx).draw();
       }
+
+      // セクション内のサブグループ（Vln I/Vln II など）に細い括弧を描く。
+      // VexFlow の StaveConnector はメイン括弧位置に固定なので、
+      // ここではメイン括弧の少し内側（五線寄り）に SVG で角括弧を直接描く。
+      const subGroups: Array<{ start: number; end: number; key: string }> = [];
+      for (let i = 0; i < parts.length; i++) {
+        const key = parts[i].subBracketGroup;
+        if (!key) continue;
+        const last = subGroups[subGroups.length - 1];
+        if (last && last.key === key && last.end === i - 1) {
+          last.end = i;
+        } else {
+          subGroups.push({ start: i, end: i, key });
+        }
+      }
+      subGroups.forEach(group => {
+        if (group.end === group.start) return; // 1段だけのサブグループは描かない
+        const topStave = staveSets[group.start][0];
+        const botStave = staveSets[group.end][0];
+        // メイン括弧の右端より少し内側に置く。-7 はメイン括弧の太さと
+        // 五線の左端の間に収まるよう実測で寄せた位置。
+        const xLeft = Math.max(2, topStave.getX() - 7);
+        // 上下のフックは外向き（左に短く張り出す）にしてサブ括弧の形を保つ。
+        const hook = 4;
+        const yTop = topStave.getY();
+        const yBot = botStave.getY() + 40; // 五線5本分の高さ（VexFlow 既定で約40px）
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute(
+          'd',
+          `M ${xLeft + hook} ${yTop} L ${xLeft} ${yTop} L ${xLeft} ${yBot} L ${xLeft + hook} ${yBot}`
+        );
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', '#111827');
+        path.setAttribute('stroke-width', '1');
+        path.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(path);
+      });
     }
 
     if (showInstrumentLabels) {

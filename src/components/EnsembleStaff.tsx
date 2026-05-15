@@ -127,6 +127,7 @@ export default function EnsembleStaff({
             // PianoSystemCanvas はこの値が連続するパートをひとまとめにし、
             // 1 本の括弧で囲って描画する（オーケストラ譜の慣習）。
             bracketGroup: part.bracketGroup,
+            subBracketGroup: part.subBracketGroup,
             keySignature: partKey,
             data: displayData,
             onChange: wrappedChange,

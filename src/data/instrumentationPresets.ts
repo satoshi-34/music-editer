@@ -34,7 +34,8 @@ function simplePart(
   bracketGroup: InstrumentBracketGroup,
   clef: InstrumentPartDefinition['clef'],
   playbackInstrument: InstrumentType,
-  transposition: InstrumentPartDefinition['transposition'] = 'C'
+  transposition: InstrumentPartDefinition['transposition'] = 'C',
+  subBracketGroup?: string
 ): PartInput {
   return part({
     id,
@@ -45,6 +46,7 @@ function simplePart(
     staffCount: 1,
     transposition,
     bracketGroup,
+    subBracketGroup,
     playbackInstrument,
   });
 }
@@ -64,14 +66,18 @@ const PIANO_PARTS: PartInput[] = [
 ];
 
 const STRING_QUARTET_PARTS: PartInput[] = [
-  simplePart('violin-1', 'Violin I', 'Vln. I', 'strings', 'strings', 'treble', InstrumentType.VIOLIN),
-  simplePart('violin-2', 'Violin II', 'Vln. II', 'strings', 'strings', 'treble', InstrumentType.VIOLIN),
+  // Vln I と Vln II は伝統的に細い括弧でまとめて「ヴァイオリン群」と見せるため、
+  // 同じ subBracketGroup 'violins' を割り当てる。
+  simplePart('violin-1', 'Violin I', 'Vln. I', 'strings', 'strings', 'treble', InstrumentType.VIOLIN, 'C', 'violins'),
+  simplePart('violin-2', 'Violin II', 'Vln. II', 'strings', 'strings', 'treble', InstrumentType.VIOLIN, 'C', 'violins'),
   simplePart('viola', 'Viola', 'Vla.', 'strings', 'strings', 'alto', InstrumentType.VIOLA),
   simplePart('cello', 'Cello', 'Vc.', 'strings', 'strings', 'bass', InstrumentType.CELLO),
 ];
 
 const STRING_ORCHESTRA_PARTS: PartInput[] = [
   ...STRING_QUARTET_PARTS,
+  // 低弦（Vc・Cb）は同じ五線上にまたいで書く流派もあるが、ここではセクションだけ分け、
+  // 視覚的にひとまとめに見せたいので低弦のサブグループを追加する。
   simplePart('contrabass', 'Contrabass', 'Cb.', 'strings', 'strings', 'bass', InstrumentType.CONTRABASS, 'octave-down'),
 ];
 

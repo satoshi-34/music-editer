@@ -187,6 +187,7 @@ function validateInstrumentPartDefinition(part: unknown): part is InstrumentPart
     validTranspositions.includes(part.transposition) &&
     typeof part.bracketGroup === 'string' &&
     validBracketGroups.includes(part.bracketGroup) &&
+    (part.subBracketGroup === undefined || typeof part.subBracketGroup === 'string') &&
     (part.playbackInstrument === undefined || typeof part.playbackInstrument === 'string') &&
     typeof part.order === 'number' &&
     part.order >= 0
