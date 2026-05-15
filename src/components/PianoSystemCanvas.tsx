@@ -45,6 +45,9 @@ export type PartConfig = {
   // 段に属するグループ識別子。連続する同じ値のパートを
   // 1 本の括弧でくくり、オーケストラ譜らしい見た目にするために使う。
   bracketGroup?: string;
+  // パート固有の調号（移調楽器の記譜音表示などで使う）。
+  // 省略時はシステム共通の調号が適用される。
+  keySignature?: KeySignature;
 };
 
 /* ===== レイアウト定数（SVGビューポートpx） ===== */
@@ -1037,8 +1040,11 @@ export default function PianoSystemCanvas({
           if (startMeasureIndex === 0) {
             stave.addTimeSignature(formattedTimeSignature);
           }
-          if (hasVisibleKeySignature(normalizedKeySignature)) {
-            stave.addKeySignature(normalizedKeySignature);
+          // パート固有の調号があればそちらを優先する（移調楽器の記譜音表示用）。
+          // 個別に持たないパートは従来通りシステム共通の調号で描く。
+          const stavePartKey = normalizeKeySignature(part.keySignature ?? normalizedKeySignature);
+          if (hasVisibleKeySignature(stavePartKey)) {
+            stave.addKeySignature(stavePartKey);
           }
         }
         if (sharedMeasure?.repeatStart) {
@@ -1324,7 +1330,10 @@ export default function PianoSystemCanvas({
         const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestKeyForClef(part.clef)],__isPlaceholder:true}])
           .map(ev=>(!ev||!ev.dur)?{dur:'4' as DurKey,isRest:true,keys:[defaultRestKeyForClef(part.clef)]}:{...ev,dur:ev.dur as DurKey});
         // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
-        const accidentalState = createMeasureAccidentalState(normalizedKeySignature);
+        // 移調楽器の記譜音表示などでパート固有の調号がある場合は、
+        // そちらを基準に「調号で既に変化している音」を判定する。
+        const partKeyForAccidental = normalizeKeySignature(part.keySignature ?? normalizedKeySignature);
+        const accidentalState = createMeasureAccidentalState(partKeyForAccidental);
         const measureVoices = getMeasureVoices(data);
         const renderedVoiceEntries = measureVoices
           .map((measureVoice, voiceIndex) => {

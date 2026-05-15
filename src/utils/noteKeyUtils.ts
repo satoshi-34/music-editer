@@ -258,6 +258,47 @@ export const TRANSPOSITION_WRITTEN_OFFSET_SEMITONES: Record<string, number> = {
   'octave-down': 12,
 };
 
+/**
+ * 移調楽器の「記譜音側の調号」を求めるための五度圏オフセット。
+ *
+ * 半音差が +2（長2度上）なら、五度圏上は +2（シャープが 2 つ増える）の方向へ動く。
+ * これに従って、たとえば実音 C メジャー → B♭管は記譜 D メジャー（♯2）になる。
+ *
+ * - `Bb`: 長2度上  → +2 fifths
+ * - `Eb`: 長6度上  → +3 fifths
+ * - `F`:  完全5度上 → +1 fifth
+ * - `G`:  完全4度上 → -1 fifth
+ * - `octave-down`: オクターブ上（同じ調号）
+ * - `C` / `none`: 移調なし
+ */
+export const TRANSPOSITION_WRITTEN_OFFSET_FIFTHS: Record<string, number> = {
+  C: 0,
+  none: 0,
+  Bb: 2,
+  Eb: 3,
+  F: 1,
+  G: -1,
+  'octave-down': 0,
+};
+
+/**
+ * 五度圏オフセットを実音の調号に加算して、記譜音側の調号を返す。
+ *
+ * 例: concert = C（0）に対して `+2` を加えると D（♯2）。
+ * 範囲外（±7 を超える）になった場合は、12 で巻き戻して
+ * 異名同音の調号にそろえる（例: ♯8 → ♭4）。
+ */
+export function shiftKeySignatureByFifths(
+  base: KeySignature,
+  fifths: number
+): KeySignature {
+  const baseCount = KEY_SIGNATURE_ACCIDENTAL_COUNT[base] ?? 0;
+  let next = baseCount + fifths;
+  while (next > 7) next -= 12;
+  while (next < -7) next += 12;
+  return KEY_SIGNATURE_BY_COUNT[next] ?? base;
+}
+
 // 半音単位の絶対 MIDI 値計算用テーブル。VexFlow の "c/4" は MIDI 60。
 const LETTER_TO_PITCH_CLASS: Record<ParsedNoteKey['letter'], number> = {
   c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11,

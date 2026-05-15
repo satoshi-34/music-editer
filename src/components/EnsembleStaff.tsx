@@ -4,7 +4,9 @@ import type { InstrumentPartDefinition, MeasureData, ScoreNotationMode, TimeSign
 import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import {
+  TRANSPOSITION_WRITTEN_OFFSET_FIFTHS,
   TRANSPOSITION_WRITTEN_OFFSET_SEMITONES,
+  shiftKeySignatureByFifths,
   transposeKeyBySemitones,
   type KeySignature,
 } from '../utils/noteKeyUtils';
@@ -104,6 +106,13 @@ export default function EnsembleStaff({
             ? TRANSPOSITION_WRITTEN_OFFSET_SEMITONES[part.transposition] ?? 0
             : 0;
           const displayData = semitones === 0 ? rawData : transposeMeasuresForDisplay(rawData, semitones);
+          // 記譜音表示では、音符だけでなく調号もパートごとにずらす。
+          // 例: 実音 C メジャー（♭♯なし）→ B♭管は記譜 D メジャー（♯2）。
+          // こうしないと、奏者が読む譜面と臨時記号の見え方が食い違う。
+          const fifthsShift = isWrittenMode
+            ? TRANSPOSITION_WRITTEN_OFFSET_FIFTHS[part.transposition] ?? 0
+            : 0;
+          const partKey = fifthsShift === 0 ? undefined : shiftKeySignatureByFifths(keySignature, fifthsShift);
           return {
             clef: part.clef,
             label: part.abbreviation || part.name,
@@ -112,6 +121,7 @@ export default function EnsembleStaff({
             // PianoSystemCanvas はこの値が連続するパートをひとまとめにし、
             // 1 本の括弧で囲って描画する（オーケストラ譜の慣習）。
             bracketGroup: part.bracketGroup,
+            keySignature: partKey,
             data: displayData,
             onChange: onPartChange[partIndex] ?? (() => {}),
           };

@@ -9,6 +9,7 @@ import {
   parseNoteKey,
   resolveDisplayAccidentalsForKeys,
   shiftKeySignatureByAccidental,
+  shiftKeySignatureByFifths,
   transposeKeyBySemitones,
 } from './noteKeyUtils';
 
@@ -114,5 +115,24 @@ describe('transposeKeyBySemitones', () => {
 
   it('半音差 0 では同じキーを返す', () => {
     expect(transposeKeyBySemitones('eb/3', 0)).toBe('eb/3');
+  });
+});
+
+describe('shiftKeySignatureByFifths', () => {
+  it('実音Cメジャーから移調楽器の記譜調号を求める', () => {
+    expect(shiftKeySignatureByFifths('C', 2)).toBe('D');   // B♭管: ♯2
+    expect(shiftKeySignatureByFifths('C', 3)).toBe('A');   // E♭管: ♯3
+    expect(shiftKeySignatureByFifths('C', 1)).toBe('G');   // F管: ♯1
+    expect(shiftKeySignatureByFifths('C', -1)).toBe('F');  // G管: ♭1
+    expect(shiftKeySignatureByFifths('C', 0)).toBe('C');
+  });
+
+  it('範囲外の調号は異名同音側へ巻き戻す', () => {
+    // E メジャー（♯4）+3 = ♯7 (C#)、+4 でも範囲内（B = ♯5）にとどまるパターン
+    expect(shiftKeySignatureByFifths('E', 3)).toBe('C#');
+    // F# メジャー（♯6）+3 → ♯9 → 12 引いて ♭3 (E♭)
+    expect(shiftKeySignatureByFifths('F#', 3)).toBe('Eb');
+    // Gb メジャー（♭6）-3 → ♭9 → 12 足して ♯3 (A)
+    expect(shiftKeySignatureByFifths('Gb', -3)).toBe('A');
   });
 });
