@@ -206,6 +206,41 @@ describe('Storage Foundation Tests', () => {
       expect(loadResult.data?.instrumentation?.presetId).toBe('classical-orchestra');
       expect(loadResult.data?.instrumentation?.parts.length).toBeGreaterThan(10);
     });
+
+    it('記譜音モードとサブ括弧グループを保存して読み戻せる', () => {
+      const instrumentation = getInstrumentationPreset('string-quartet');
+      const scoreData = createSavedScoreData(
+        {
+          title: 'Written Quartet',
+          subtitle: '',
+          lyricist: '',
+          composer: 'Composer',
+          arranger: '',
+        },
+        [{
+          partId: 'violin-1',
+          clef: 'treble',
+          measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }],
+        }],
+        1,
+        4,
+        'ensemble',
+        'C',
+        [4, 4],
+        instrumentation,
+        'written'
+      );
+
+      const saveResult = saveScoreData(scoreData);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.notationMode).toBe('written');
+      expect(loadResult.data?.instrumentation?.parts[0].subBracketGroup).toBe('violins');
+      expect(loadResult.data?.instrumentation?.parts[1].subBracketGroup).toBe('violins');
+      expect(loadResult.data?.instrumentation?.parts[0].bracketGroup).toBe('strings');
+    });
   });
 
   describe('Property 4: エラーハンドリング耐性', () => {
