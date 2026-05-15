@@ -464,6 +464,7 @@ export default function PianoSystemCanvas({
   measuresPerSystem=4, tool, scale=0.86,
   trebleData, bassData, onTrebleChange, onBassChange,
   partsConfig,
+  showInstrumentLabels = false,
   startMeasureIndex=0, disabled=false, yOffset=0, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   timeSignature = [4, 4],
   onKeySignatureChange,
@@ -983,7 +984,10 @@ export default function PianoSystemCanvas({
     ctx.scale(s,s);
 
     /* -- 幅計算 -- */
-    const innerW=W-PAGE_LEFT-PAGE_RIGHT;
+    // パート名を表示するシステムでは、五線の左側に略称用の余白を作る。
+    // 余白を作らずに text だけ置くと、画面端で Fl. や Vln. が切れてしまう。
+    const labelW = showInstrumentLabels ? 74 : 0;
+    const innerW=W-PAGE_LEFT-PAGE_RIGHT-labelW;
     const minWs=Array.from({length:measuresPerSystem},(_,i)=>{
       const ai=startMeasureIndex+i;
       return parts.reduce((maxW, _, pi) => {
@@ -998,7 +1002,7 @@ export default function PianoSystemCanvas({
     const contentWs=minWs.map(w=>w+extra/measuresPerSystem);
     const realWs=contentWs.map((w,i)=>i===0?w+pad:w);
     const totalW=realWs.reduce((a,b)=>a+b,0);
-    let x=PAGE_LEFT+(innerW-totalW)/2;
+    let x=PAGE_LEFT+labelW+(innerW-totalW)/2;
 
     /* -- 五線を描画 -- */
     // staveSets[pi][mi] = 段pi・小節mi の Stave
@@ -1068,8 +1072,29 @@ export default function PianoSystemCanvas({
         .setType(StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
     }
 
+    if (showInstrumentLabels) {
+      parts.forEach((part, pi) => {
+        const label = part.label;
+        if (!label) {
+          return;
+        }
+
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.textContent = label;
+        text.setAttribute('x', String(Math.max(4, staveSets[pi][0].getX() - 10)));
+        text.setAttribute('y', String(staveSets[pi][0].getYForLine(2)));
+        text.setAttribute('text-anchor', 'end');
+        text.setAttribute('dominant-baseline', 'middle');
+        text.setAttribute('fill', '#111827');
+        text.setAttribute('font-family', 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif');
+        text.setAttribute('font-size', parts.length > 10 ? '9' : '11');
+        text.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(text);
+      });
+    }
+
     /* -- 音符と操作領域を描画 -- */
-    x=PAGE_LEFT+(innerW-totalW)/2;
+    x=PAGE_LEFT+labelW+(innerW-totalW)/2;
     // パートごとの小節をまたぐタイ持ち越しと音符データ収集（タイグループ一括処理のため）
     type TieNoteP={note:StaveNote;keys:string[];tiedToNext:boolean;isRest:boolean;stave:Stave};
     const carryTies: Array<{ note: StaveNote; keys: string[]; stave: Stave } | null> = parts.map(() => null);
@@ -1844,7 +1869,7 @@ export default function PianoSystemCanvas({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[partsScore,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure]);
+  },[partsScore,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure]);
 
   return <div ref={ref} style={{overflow:'visible'}}/>;
 }

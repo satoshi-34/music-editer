@@ -68,6 +68,9 @@
 `PianoSystemCanvas` はすでに N 段譜を描けるため、新しい描画エンジンは作らない。
 
 これで既存の入力、再生、調号、拍子の処理をなるべく再利用できる。
+先頭システムでは `showInstrumentLabels` を使い、五線左側にパート略称を表示する。
+略称用の余白を作ってから五線を配置しないと、`Fl.` などがページ端で切れるため、
+`PianoSystemCanvas` 側でラベル幅を加味して描画開始位置をずらす。
 
 ### 5. カスタム編成編集では定義と小節データを同時に動かす
 
@@ -95,6 +98,7 @@ SoundFont では、パートごとの `instrument` から対応する SoundFont 
 - `src/types/storage.ts`
 - `src/data/instrumentationPresets.ts`
 - `src/components/EnsembleStaff.tsx`
+- `src/components/PianoSystemCanvas.tsx`
 - `src/components/ScorePage.tsx`
 - `src/hooks/useScoreStorage.ts`
 - `src/audio/PlaybackEngine.ts`
