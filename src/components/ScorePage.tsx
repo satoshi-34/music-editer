@@ -360,8 +360,13 @@ export default function ScorePage() {
 
   const updateInstrumentationParts = useCallback((updater: (parts: InstrumentPartDefinition[]) => InstrumentPartDefinition[]) => {
     setInstrumentation(prev => {
+      // 編成定義を手で変えた時点で、元のプリセットとは別物として扱う。
+      // こうしておくと「室内オケを少し直した自分用編成」を保存しても、
+      // 次回読み込み時に元プリセットで上書きされない。
       const next = markInstrumentationCustom(updater(prev.parts.map(part => ({ ...part }))));
       setScoreType('ensemble');
+      // パート名などの定義だけ増減しても、実際の小節データ配列が追いつかないと
+      // 画面に表示される段数と保存されるパート数がずれるため、ここで長さをそろえる。
       setEnsembleParts(current => next.parts.map((_, index) => current[index] ?? []));
       return next;
     });
@@ -418,6 +423,8 @@ export default function ScorePage() {
       const next = [...parts];
       const [movedPart] = next.splice(partIndex, 1);
       next.splice(nextIndex, 0, movedPart);
+      // 並び替えでは、パート定義だけでなく入力済み音符データも同じ順番で動かす。
+      // これを忘れると「Flute と Oboe の名前だけ入れ替わり、中身は元のまま」になる。
       setEnsembleParts(current => {
         const movedData = current[partIndex] ?? [];
         const nextData = current.filter((_, index) => index !== partIndex);

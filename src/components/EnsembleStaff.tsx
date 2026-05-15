@@ -45,6 +45,9 @@ export default function EnsembleStaff({
   return (
     <div>
       {Array.from({ length: systems }, (_, systemIndex) => {
+        // ScorePage が持つ「編成のパート定義」を、描画コンポーネントが理解できる
+        // `PartConfig` へ変換する。ここで変換をまとめると、将来パート名表示や
+        // 音部記号の扱いを変えるときも EnsembleStaff だけを見ればよくなる。
         const partsConfig: PartConfig[] = instrumentationParts.map((part, partIndex) => ({
           clef: part.clef,
           label: part.abbreviation || part.name,
