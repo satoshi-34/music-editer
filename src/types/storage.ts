@@ -138,8 +138,8 @@ export type InstrumentationPresetId =
  *
  * - `concert`: 実音表示（鳴る音そのままを記譜する）。データの正本もこちら。
  * - `written`: 記譜音表示（各パートの `transposition` に従って譜面上をシフト）。
- *   表示専用モードで、編集はオフにする。再生は常に実音側を使うので、
- *   表示モードを切り替えてもサウンドは変わらない。
+ *   編集時は画面上の記譜音を実音へ戻して保存する。再生は常に実音側を使うので、
+ *   表示モードを切り替えても響きは変わらない。
  */
 export type ScoreNotationMode = 'concert' | 'written';
 

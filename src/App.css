@@ -150,14 +150,14 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  max-width: min(100%, 980px);
-  max-height: 74px;
+  max-width: min(100%, 1180px);
+  max-height: 118px;
   overflow: auto;
   padding-right: 4px;
 }
 .instrumentation-part-row {
   display: grid;
-  grid-template-columns: 28px 28px minmax(92px, 140px) minmax(52px, 72px) 70px 120px 48px;
+  grid-template-columns: 28px 28px minmax(92px, 140px) minmax(52px, 72px) 74px 70px 82px 96px minmax(72px, 90px) 120px 48px;
   gap: 4px;
   align-items: center;
   border: 1px solid #d4d4d8;

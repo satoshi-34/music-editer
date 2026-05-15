@@ -22,7 +22,14 @@ import { useTempoStorage } from '../hooks/useTempoStorage';
 import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
-import type { InstrumentPartDefinition, MeasureData, PartData, ScoreType } from '../types/storage';
+import type {
+  InstrumentBracketGroup,
+  InstrumentFamily,
+  InstrumentPartDefinition,
+  MeasureData,
+  PartData,
+  ScoreType
+} from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import {
   getDefaultInstrumentationForScoreType,
@@ -74,6 +81,33 @@ const TIME_SIGNATURE_OPTIONS: TimeSignature[] = [
   [3, 8],
   [6, 8],
   [2, 2],
+];
+const INSTRUMENT_FAMILY_OPTIONS: Array<{ value: InstrumentFamily; label: string }> = [
+  { value: 'woodwind', label: '木管' },
+  { value: 'brass', label: '金管' },
+  { value: 'percussion', label: '打楽器' },
+  { value: 'strings', label: '弦' },
+  { value: 'keyboard', label: '鍵盤' },
+  { value: 'vocal', label: '声楽' },
+  { value: 'other', label: 'その他' },
+];
+const INSTRUMENT_BRACKET_GROUP_OPTIONS: Array<{ value: InstrumentBracketGroup; label: string }> = [
+  { value: 'woodwinds', label: '木管括弧' },
+  { value: 'brass', label: '金管括弧' },
+  { value: 'percussion', label: '打楽器括弧' },
+  { value: 'strings', label: '弦括弧' },
+  { value: 'keyboard', label: 'ブレース' },
+  { value: 'voices', label: '声部括弧' },
+  { value: 'solo', label: '単独' },
+];
+const TRANSPOSITION_OPTIONS: Array<{ value: InstrumentPartDefinition['transposition']; label: string }> = [
+  { value: 'C', label: 'C管' },
+  { value: 'Bb', label: 'B♭管' },
+  { value: 'Eb', label: 'E♭管' },
+  { value: 'F', label: 'F管' },
+  { value: 'G', label: 'G管' },
+  { value: 'octave-down', label: 'オク下' },
+  { value: 'none', label: '移調なし' },
 ];
 
 function calculateScoreDuration(scoreData: MeasureData[], bpm: number, timeSignature: TimeSignature): number {
@@ -406,17 +440,33 @@ export default function ScorePage() {
 
   const handleInstrumentationPartFieldChange = useCallback((
     partIndex: number,
-    field: 'name' | 'abbreviation' | 'clef' | 'playbackInstrument',
+    field: 'name' | 'abbreviation' | 'family' | 'clef' | 'transposition' | 'bracketGroup' | 'subBracketGroup' | 'playbackInstrument',
     value: string
   ) => {
     updateInstrumentationParts(parts => parts.map((part, index) => {
       if (index !== partIndex) {
         return part;
       }
+      const isValidFamily = (candidate: string): candidate is InstrumentFamily =>
+        INSTRUMENT_FAMILY_OPTIONS.some(option => option.value === candidate);
+      const isValidBracketGroup = (candidate: string): candidate is InstrumentBracketGroup =>
+        INSTRUMENT_BRACKET_GROUP_OPTIONS.some(option => option.value === candidate);
+      const isValidTransposition = (candidate: string): candidate is InstrumentPartDefinition['transposition'] =>
+        TRANSPOSITION_OPTIONS.some(option => option.value === candidate);
       return {
         ...part,
         [field]: field === 'clef'
           ? (value === 'treble' || value === 'alto' || value === 'bass' ? value : part.clef)
+          : field === 'family'
+            ? (isValidFamily(value) ? value : part.family)
+          : field === 'transposition'
+            ? (isValidTransposition(value) ? value : part.transposition)
+          : field === 'bracketGroup'
+            ? (isValidBracketGroup(value) ? value : part.bracketGroup)
+          : field === 'subBracketGroup'
+            // 空欄は「サブ括弧なし」として保存する。空文字を残すと、見た目上は
+            // グループ名が無いのに同じ空文字同士で括弧候補になってしまうため。
+            ? (value.trim() === '' ? undefined : value.trim())
           : field === 'playbackInstrument'
             ? (Object.values(InstrumentType).includes(value as InstrumentType) ? value as InstrumentType : part.playbackInstrument)
             : value,
@@ -1261,6 +1311,18 @@ export default function ScorePage() {
                           aria-label={`${part.name}の略称`}
                         />
                         <select
+                          value={part.family}
+                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'family', event.target.value)}
+                          aria-label={`${part.name}の楽器族`}
+                          title="楽器族"
+                        >
+                          {INSTRUMENT_FAMILY_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <select
                           value={part.clef}
                           onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'clef', event.target.value)}
                           aria-label={`${part.name}の音部記号`}
@@ -1269,6 +1331,37 @@ export default function ScorePage() {
                           <option value="alto">ハ音</option>
                           <option value="bass">ヘ音</option>
                         </select>
+                        <select
+                          value={part.transposition}
+                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'transposition', event.target.value)}
+                          aria-label={`${part.name}の移調`}
+                          title="移調"
+                        >
+                          {TRANSPOSITION_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={part.bracketGroup}
+                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'bracketGroup', event.target.value)}
+                          aria-label={`${part.name}の括弧グループ`}
+                          title="括弧グループ"
+                        >
+                          {INSTRUMENT_BRACKET_GROUP_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          value={part.subBracketGroup ?? ''}
+                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'subBracketGroup', event.target.value)}
+                          aria-label={`${part.name}のサブ括弧グループ`}
+                          placeholder="サブ括弧"
+                          title="同じ値が連続するパートを細い括弧でまとめます"
+                        />
                         <select
                           value={part.playbackInstrument ?? InstrumentType.PIANO}
                           onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'playbackInstrument', event.target.value)}
