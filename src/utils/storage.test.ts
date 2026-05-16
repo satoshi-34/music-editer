@@ -431,6 +431,34 @@ describe('Storage Foundation Tests', () => {
       );
     });
 
+    it('主データが壊れていてもバックアップが有効なら復旧して読み込める', () => {
+      const backupScore = createSavedScoreData(
+        {
+          title: 'Recovered Backup',
+          subtitle: '',
+          lyricist: '',
+          composer: 'Composer',
+          arranger: '',
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }],
+        }],
+        1,
+        4
+      );
+
+      localStorageMock.setItem(STORAGE_KEYS.PRIMARY, '{broken-json');
+      localStorageMock.setItem(STORAGE_KEYS.BACKUP, JSON.stringify(backupScore));
+
+      const result = loadScoreData();
+
+      expect(result.success).toBe(true);
+      expect(result.data?.metadata.title).toBe('Recovered Backup');
+      expect(result.data?.parts[0].measures[0].events[0].keys).toEqual(['c/4']);
+    });
+
     it('should handle invalid data structure without crashing', () => {
       // Save original localStorage mock methods
       const originalSetItem = localStorageMock.setItem.bind(localStorageMock);

@@ -299,6 +299,48 @@ function isV1Data(data: any): boolean {
   );
 }
 
+function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScoreData> {
+  let parsedData: any;
+  try {
+    parsedData = JSON.parse(rawData);
+  } catch (error) {
+    return {
+      success: false,
+      error: createStorageError(error)
+    };
+  }
+
+  // v1 → v2 マイグレーション
+  if (isV1Data(parsedData)) {
+    parsedData = migrateV1toV2(parsedData);
+  }
+
+  // v2 → v3 マイグレーション: NoteEvent.key（文字列）を keys（配列）に変換
+  if (Array.isArray(parsedData.parts)) {
+    parsedData.parts = migrateKeyToKeys(parsedData.parts);
+  }
+  parsedData.keySignature = normalizeKeySignature(parsedData.keySignature);
+  parsedData.timeSignature = normalizeTimeSignature(parsedData.timeSignature);
+
+  // 保存済みデータはユーザーが手編集した JSON や古いバックアップから来ることがある。
+  // ここで必ず検証してから返すことで、画面側は「読み込めたデータは安全」と考えられる。
+  if (!validateSavedScoreData(parsedData)) {
+    return {
+      success: false,
+      error: {
+        type: StorageErrorType.CORRUPTED_DATA,
+        message: 'Stored data format is invalid or corrupted',
+        recoverable: true
+      }
+    };
+  }
+
+  return {
+    success: true,
+    data: parsedData
+  };
+}
+
 /**
  * Creates a StorageError with appropriate type and message
  */
@@ -445,55 +487,36 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
     }
 
     // Try to load from primary key first
-    let rawData = localStorage.getItem(STORAGE_KEYS.PRIMARY);
-    
-    // If primary fails, try backup
-    if (!rawData) {
-      rawData = localStorage.getItem(STORAGE_KEYS.BACKUP);
-    }
+    const primaryRaw = localStorage.getItem(STORAGE_KEYS.PRIMARY);
+    const backupRaw = localStorage.getItem(STORAGE_KEYS.BACKUP);
 
     // No data found
-    if (!rawData) {
+    if (!primaryRaw && !backupRaw) {
       return {
         success: true,
         data: null
       };
     }
 
-    // Parse JSON
-    let parsedData: any;
-    try {
-      parsedData = JSON.parse(rawData);
-    } catch (error) {
-      return {
-        success: false,
-        error: createStorageError(error)
-      };
-    }
+    let rawData: string = (primaryRaw ?? backupRaw) as string;
+    let parsedResult = parseAndNormalizeStoredScore(rawData);
 
-    // v1 → v2 マイグレーション
-    if (isV1Data(parsedData)) {
-      parsedData = migrateV1toV2(parsedData);
-    }
-
-    // v2 → v3 マイグレーション: NoteEvent.key（文字列）を keys（配列）に変換
-    if (Array.isArray(parsedData.parts)) {
-      parsedData.parts = migrateKeyToKeys(parsedData.parts);
-    }
-    parsedData.keySignature = normalizeKeySignature(parsedData.keySignature);
-    parsedData.timeSignature = normalizeTimeSignature(parsedData.timeSignature);
-
-    // Validate parsed data
-    if (!validateSavedScoreData(parsedData)) {
-      return {
-        success: false,
-        error: {
-          type: StorageErrorType.CORRUPTED_DATA,
-          message: 'Stored data format is invalid or corrupted',
-          recoverable: true
+    if (!parsedResult.success) {
+      // 主データが壊れているときでも、バックアップが読めるならユーザーの譜面を復旧する。
+      // バックアップも壊れている場合は、主データ側のエラーをそのまま返す。
+      if (primaryRaw && backupRaw && backupRaw !== primaryRaw) {
+        const backupResult = parseAndNormalizeStoredScore(backupRaw);
+        if (backupResult.success) {
+          rawData = backupRaw;
+          parsedResult = backupResult;
         }
-      };
+      }
+
+      if (!parsedResult.success) {
+        return parsedResult;
+      }
     }
+    const parsedData = parsedResult.data;
 
     // Verify checksum if available
     try {
@@ -504,22 +527,17 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
           const currentChecksum = generateChecksum(rawData);
           if (currentChecksum !== metadata.dataChecksum) {
             // Checksum mismatch on primary - try backup directly (no recursion)
-            const backupRaw = localStorage.getItem(STORAGE_KEYS.BACKUP);
             if (backupRaw && backupRaw !== rawData) {
               try {
-                const backupParsed = JSON.parse(backupRaw);
+                const backupResult = parseAndNormalizeStoredScore(backupRaw);
                 if (
-                  validateSavedScoreData(backupParsed) &&
+                  backupResult.success &&
                   generateChecksum(backupRaw) === metadata.dataChecksum
                 ) {
                   // Backup is valid - use it
                   return {
                     success: true,
-                    data: {
-                      ...backupParsed,
-                      keySignature: normalizeKeySignature(backupParsed.keySignature),
-                      timeSignature: normalizeTimeSignature(backupParsed.timeSignature)
-                    }
+                    data: backupResult.data
                   };
                 }
               } catch {
@@ -543,11 +561,7 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
 
     return {
       success: true,
-      data: {
-        ...parsedData,
-        keySignature: normalizeKeySignature(parsedData.keySignature),
-        timeSignature: normalizeTimeSignature(parsedData.timeSignature)
-      }
+      data: parsedData
     };
 
   } catch (error) {

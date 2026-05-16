@@ -100,6 +100,8 @@ SoundFont では、パートごとの `instrument` から対応する SoundFont 
 「譜面上は Clarinet だが音は汎用 Woodwind」というずれを避ける。
 保存データの検証でも `playbackInstrument` は `InstrumentType` に実在する値だけを許可し、
 壊れた JSON や手編集された JSON から未知の音色名が再生経路へ入らないようにする。
+読み込み時は主データとバックアップの両方で同じ解析・マイグレーション・検証を行い、
+主データが壊れていてもバックアップが有効なら譜面を復旧する。
 この配線は `SoundSource.test.ts`、`SoundFontEngine.test.ts`、`PlaybackControls.test.tsx`、
 `storage.test.ts` で確認する。
 
