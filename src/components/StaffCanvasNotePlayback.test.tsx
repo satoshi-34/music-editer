@@ -42,6 +42,7 @@ vi.mock('../audio/SoundSource', () => ({
   SoundSource: vi.fn().mockImplementation(function() {
     return {
       getCurrentInstrument: vi.fn().mockReturnValue('piano'),
+      setCurrentInstrument: vi.fn(),
       loadInstrument: vi.fn().mockResolvedValue(undefined),
       dispose: vi.fn()
     };

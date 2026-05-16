@@ -72,6 +72,8 @@ const measureDataArbitrary: fc.Arbitrary<MeasureData> = fc.record({
   events: fc.array(noteEventArbitrary, { maxLength: 4 })
 });
 
+const EXPECTED_PALETTE_BUTTON_COUNT = 30;
+
 describe('Backward Compatibility Tests', () => {
   beforeEach(() => {
     localStorageMock.clear();
@@ -108,8 +110,9 @@ describe('Backward Compatibility Tests', () => {
               const buttons = document.querySelectorAll('button');
               expect(buttons.length).toBeGreaterThan(0);
 
-              // 音価14個に加えて、タイ1個・臨時記号3個・リピート2個を表示する。
-              expect(buttons.length).toBe(20);
+              // 音価14個に加えて、タイ・臨時記号・リピート・括弧・強弱記号を表示する。
+              // 新しい記譜ツールを足したときは、この固定数も仕様として更新する。
+              expect(buttons.length).toBe(EXPECTED_PALETTE_BUTTON_COUNT);
 
               // Verify buttons are interactive (not disabled by save/load features)
               buttons.forEach(button => {
@@ -213,8 +216,8 @@ describe('Backward Compatibility Tests', () => {
 
       try {
         const buttons = document.querySelectorAll('button');
-        // 音価14個 + タイ1個 + 臨時記号3個 + リピート2個
-        expect(buttons.length).toBe(20);
+        // 音価14個 + タイ1個 + 臨時記号3個 + リピート2個 + 括弧2個 + 強弱記号8個
+        expect(buttons.length).toBe(EXPECTED_PALETTE_BUTTON_COUNT);
       } finally {
         unmount();
       }

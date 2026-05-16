@@ -13,6 +13,7 @@ import {
   setKeyAccidental,
   shiftKeySignatureByAccidental,
   createMeasureAccidentalState,
+  isValidNoteKeyString,
   resolveDisplayAccidentalsForKeys,
   type MeasureAccidentalState,
   type KeySignature,
@@ -544,6 +545,35 @@ function getPreviewLedgerLines(snappedLine: number): number[] {
 }
 
 /* ===== 時間ベース位置計算（休符重なり修正用） ===== */
+
+function sanitizeRenderEvent(ev: any, clef: 'treble' | 'bass' | 'alto'): RenderNoteEvent {
+  const defaultRestKey = defaultRestKeyForClef(clef);
+
+  if (!ev || !ev.dur) {
+    return { dur: '4' as DurKey, isRest: true, keys: [defaultRestKey] };
+  }
+
+  const rawKeys: unknown[] = Array.isArray(ev.keys) ? ev.keys : [];
+
+  if (ev.isRest) {
+    // 古いデータや手書きデータでは keys が無い、または VexFlow が読めない文字列のことがある。
+    // 休符は表示位置だけ分かればよいので、不正値はその譜表の標準位置へ戻す。
+    const restKey = typeof rawKeys[0] === 'string' && isValidNoteKeyString(rawKeys[0])
+      ? rawKeys[0]
+      : defaultRestKey;
+    return { ...ev, dur: ev.dur as DurKey, isRest: true, keys: [restKey] };
+  }
+
+  const validKeys = rawKeys.filter((key): key is string => (
+    typeof key === 'string' && isValidNoteKeyString(key)
+  ));
+
+  if (validKeys.length === 0) {
+    return { ...ev, dur: ev.dur as DurKey, isRest: true, keys: [defaultRestKey] };
+  }
+
+  return { ...ev, dur: ev.dur as DurKey, isRest: false, keys: validKeys };
+}
 
 /* ===== ノート生成（臨時記号を付与） ===== */
 function makeVFNote(
@@ -1504,10 +1534,7 @@ export default function StaffCanvas({
         stave.draw();
         const safeEvents: RenderNoteEvent[] =
           (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, keys:[defaultRestKeyForClef(clef)], __isPlaceholder: true }])
-          .map(ev => (!ev || !ev.dur ? { dur:'4' as DurKey, isRest:true, keys:[defaultRestKeyForClef(clef)] } : {
-            ...ev,
-            dur: ev.dur as DurKey
-          }));
+          .map(ev => sanitizeRenderEvent(ev, clef));
         // 臨時記号の効力は小節ごとにリセットされるため、
         // 描画直前に小節専用の状態を作り、イベント順に更新していく。
         const accidentalState = createMeasureAccidentalState(normalizedKeySignature);

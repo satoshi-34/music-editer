@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useScoreStorage } from '../hooks/useScoreStorage';
-import { saveScoreData, loadScoreData, clearStoredData, STORAGE_KEYS } from '../utils/storage';
+import { saveScoreData, loadScoreData, clearStoredData, CURRENT_VERSION, STORAGE_KEYS } from '../utils/storage';
 import type { SavedScoreData, ScoreMetadata, MeasureData, PartData, DurKey } from '../types/storage';
 
 // localStorage のモック
@@ -133,7 +133,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
         }
 
         // バージョンとタイムスタンプの検証
-        expect(loadedData.version).toBe('3.0.0');
+        expect(loadedData.version).toBe(CURRENT_VERSION);
         expect(loadedData.timestamp).toBeGreaterThan(0);
       }
     });

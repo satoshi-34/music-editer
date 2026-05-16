@@ -651,7 +651,10 @@ export class SoundSource {
    * @param volume ボリューム（0-1の範囲）
    */
   setGlobalVolume(volume: number): void {
-    const newVolume = Math.max(0, Math.min(1, volume));
+    // スライダー入力以外から呼ばれても、NaN や Infinity を内部状態へ入れない。
+    // 一度 NaN が入ると比較や保存データまで壊れやすいので、ここで必ず安全な数値へ丸める。
+    const safeVolume = Number.isFinite(volume) ? volume : 0;
+    const newVolume = Math.max(0, Math.min(1, safeVolume));
     
     if (this.globalVolume === newVolume) {
       return; // 値が変更されていない場合は何もしない

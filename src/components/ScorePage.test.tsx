@@ -53,14 +53,19 @@ Object.defineProperty(window, 'print', {
 
 // Fast-check arbitraries for generating test data
 const durKeyArbitrary = fc.constantFrom('1', '2', '4', '8', '16', '32', '64') as fc.Arbitrary<DurKey>;
+const noteKeyArbitrary = fc.constantFrom(
+  'c/3', 'd/3', 'e/3', 'f/3', 'g/3', 'a/3', 'b/3',
+  'c/4', 'd/4', 'e/4', 'f/4', 'g/4', 'a/4', 'b/4',
+  'c#/4', 'db/4', 'f#/4', 'gb/4',
+  'c/5', 'd/5', 'e/5', 'f/5', 'g/5', 'a/5', 'b/5'
+);
 
 const noteEventArbitrary: fc.Arbitrary<NoteEvent> = fc.record({
   dur: durKeyArbitrary,
   isRest: fc.boolean(),
-  keys: fc.array(
-    fc.string({ minLength: 1, maxLength: 5 }).filter(s => s.trim().length > 0),
-    { minLength: 1, maxLength: 3 }
-  )
+  // この property は「有効な保存データ」の復元を確認するテストなので、
+  // VexFlow と保存バリデーションの両方で扱える音名だけを生成する。
+  keys: fc.array(noteKeyArbitrary, { minLength: 1, maxLength: 3 })
 });
 
 const measureDataArbitrary: fc.Arbitrary<MeasureData> = fc.record({
