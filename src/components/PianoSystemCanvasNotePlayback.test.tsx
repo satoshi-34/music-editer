@@ -83,4 +83,45 @@ describe('PianoSystemCanvas 音符クリック再生機能', () => {
       );
     }).not.toThrow();
   });
+
+  it('不正な音名を含むピアノ譜データでも描画を継続する', () => {
+    expect(() => {
+      render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false }}
+          scale={1}
+          trebleData={[{ events: [{ dur: '4', isRest: false, keys: ['invalid'] }] as any }]}
+          bassData={[{ events: [{ dur: '4', isRest: true, keys: ['also-invalid'] }] as any }]}
+        />
+      );
+    }).not.toThrow();
+  });
+
+  it('追加 voice の不正な音名でも編成譜描画を継続する', () => {
+    expect(() => {
+      render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false }}
+          scale={1}
+          parts={[
+            {
+              clef: 'treble',
+              label: 'Flute',
+              data: [{
+                events: [{ dur: '4', isRest: false, keys: ['c/5'] }],
+                voices: [{
+                  id: 'voice-2',
+                  stemDirection: 'down',
+                  events: [{ dur: '4', isRest: false, keys: ['broken-key'] }]
+                }]
+              } as any],
+              onChange: vi.fn(),
+            }
+          ]}
+        />
+      );
+    }).not.toThrow();
+  });
 });

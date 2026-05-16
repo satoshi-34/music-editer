@@ -77,12 +77,14 @@ VexFlow 5 では `StaveNote.addModifier()` の引数順が `addModifier(modifier
 保存検証は基本の防波堤だが、テストデータ・古いデータ・手書きの import データなどは
 `StaffCanvas` へ直接渡されることがある。
 
-そのため単旋律譜の描画直前に `sanitizeRenderEvent()` を通し、次のように安全側へ寄せる。
+そのため単旋律譜の `StaffCanvas` と、ピアノ譜・編成譜を描く `PianoSystemCanvas` の
+描画直前に `sanitizeRenderEvent()` を通し、次のように安全側へ寄せる。
 
 - `keys` が配列でない休符は、その譜表の既定休符位置へ戻す
 - 読めない休符位置キーは、VexFlow へ渡さず既定休符位置へ戻す
 - 読めない音符キーだけを除外し、残りの和音構成音で描画する
 - 音符キーがすべて不正な場合は、描画クラッシュを避けるため休符へフォールバックする
+- 複数声部の `voices[]` も同じ安全化を通し、追加声部だけが壊れている場合でも譜面全体を止めない
 
 保存データを勝手に書き換える処理ではなく、あくまで表示時の安全化として扱う。
 
@@ -92,7 +94,7 @@ VexFlow 5 では `StaveNote.addModifier()` の引数順が `addModifier(modifier
 |---|---|
 | `src/utils/noteKeyUtils.ts` | 音高キー解析、臨時記号表示判定、キー文字列バリデーション |
 | `src/components/StaffCanvas.tsx` | 単旋律譜の小節単位臨時記号表示 |
-| `src/components/PianoSystemCanvas.tsx` | ピアノ譜・四重奏譜の小節単位臨時記号表示 |
+| `src/components/PianoSystemCanvas.tsx` | ピアノ譜・四重奏譜・編成譜の小節単位臨時記号表示と描画直前キー安全化 |
 | `src/utils/storage.ts` | 保存時の `keys` 形式バリデーション強化 |
 | `src/utils/noteKeyUtils.test.ts` | 臨時記号ロジックの単体テスト |
 | `src/utils/storage.test.ts` | 不正な音高キー拒否の回帰テスト |

@@ -21,6 +21,7 @@ import {
   setKeyAccidental,
   shiftKeySignatureByAccidental,
   createMeasureAccidentalState,
+  isValidNoteKeyString,
   resolveDisplayAccidentalsForKeys,
   type MeasureAccidentalState,
   type KeySignature,
@@ -471,6 +472,35 @@ function makeVFNote(
     }
   });
   return n;
+}
+
+function sanitizeRenderEvent(ev: any, clef: ClefType): RenderNoteEvent {
+  const defaultRestKey = defaultRestKeyForClef(clef);
+
+  if (!ev || !ev.dur) {
+    return { dur: '4' as DurKey, isRest: true, keys: [defaultRestKey] };
+  }
+
+  const rawKeys: unknown[] = Array.isArray(ev.keys) ? ev.keys : [];
+
+  if (ev.isRest) {
+    // ピアノ譜・編成譜は保存データ以外に voices[] からも描画する。
+    // どの経路から来ても VexFlow へ不正な休符位置を渡さないよう、描画直前で丸める。
+    const restKey = typeof rawKeys[0] === 'string' && isValidNoteKeyString(rawKeys[0])
+      ? rawKeys[0]
+      : defaultRestKey;
+    return { ...ev, dur: ev.dur as DurKey, isRest: true, keys: [restKey] };
+  }
+
+  const validKeys = rawKeys.filter((key): key is string => (
+    typeof key === 'string' && isValidNoteKeyString(key)
+  ));
+
+  if (validKeys.length === 0) {
+    return { ...ev, dur: ev.dur as DurKey, isRest: true, keys: [defaultRestKey] };
+  }
+
+  return { ...ev, dur: ev.dur as DurKey, isRest: false, keys: validKeys };
 }
 
 function findFirstSoundingEventIndex(events: NoteEvent[]): number {
@@ -1530,7 +1560,7 @@ export default function PianoSystemCanvas({
 
         const data=absI<score.length?score[absI]:undefined;
         const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestKeyForClef(part.clef)],__isPlaceholder:true}])
-          .map(ev=>(!ev||!ev.dur)?{dur:'4' as DurKey,isRest:true,keys:[defaultRestKeyForClef(part.clef)]}:{...ev,dur:ev.dur as DurKey});
+          .map(ev=>sanitizeRenderEvent(ev, part.clef));
         // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
         // 移調楽器の記譜音表示などでパート固有の調号がある場合は、
         // そちらを基準に「調号で既に変化している音」を判定する。
@@ -1542,7 +1572,7 @@ export default function PianoSystemCanvas({
             const sourceEvents = voiceIndex === 0
               ? safeEvs
               : (measureVoice.events.length > 0
-                  ? measureVoice.events
+                  ? measureVoice.events.map(ev => sanitizeRenderEvent(ev, part.clef))
                   : []);
             if (sourceEvents.length === 0) {
               return null;
