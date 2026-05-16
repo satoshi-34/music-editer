@@ -58,6 +58,7 @@ import {
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
+import { alignMeasuresToInstrumentationParts } from '../utils/instrumentationPartUtils';
 import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import type { TimeSignature } from '../types/storage';
@@ -383,6 +384,7 @@ export default function ScorePage() {
   const handleInstrumentationPresetChange = useCallback((presetId: InstrumentationPresetId) => {
     const nextInstrumentation = getInstrumentationPreset(presetId);
     const nextScoreType = getScoreTypeForInstrumentation(presetId);
+    const previousParts = instrumentation.parts;
     setInstrumentation(nextInstrumentation);
     setScoreType(nextScoreType);
     if (nextScoreType === 'quartet') {
@@ -392,11 +394,11 @@ export default function ScorePage() {
       );
     }
     if (nextScoreType === 'ensemble') {
-      setEnsembleParts(prev => nextInstrumentation.parts.map((_, index) => prev[index] ?? []));
+      setEnsembleParts(prev => alignMeasuresToInstrumentationParts(previousParts, prev, nextInstrumentation.parts));
     } else {
       setEnsembleParts([]);
     }
-  }, []);
+  }, [instrumentation.parts]);
 
   const markInstrumentationCustom = useCallback((parts: InstrumentPartDefinition[]): ScoreInstrumentation => ({
     presetId: 'custom',
