@@ -58,7 +58,7 @@ import {
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
-import { alignMeasuresToInstrumentationParts } from '../utils/instrumentationPartUtils';
+import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId } from '../utils/instrumentationPartUtils';
 import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import type { TimeSignature } from '../types/storage';
@@ -429,7 +429,7 @@ export default function ScorePage() {
         ...parts,
         {
           ...DEFAULT_CUSTOM_PART,
-          id: `custom-part-${Date.now()}`,
+          id: createUniqueInstrumentationPartId(parts),
           name: `Part ${nextNumber}`,
           abbreviation: `P${nextNumber}`,
           order: parts.length,

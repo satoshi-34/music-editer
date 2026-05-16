@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { InstrumentType } from '../audio/SoundSource';
 import type { InstrumentPartDefinition, MeasureData } from '../types/storage';
-import { alignMeasuresToInstrumentationParts } from './instrumentationPartUtils';
+import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId } from './instrumentationPartUtils';
 
 function part(id: string): InstrumentPartDefinition {
   return {
@@ -68,5 +68,19 @@ describe('alignMeasuresToInstrumentationParts', () => {
 
     expect(aligned[0][0].events[0].keys).toEqual(['c/5']);
     expect(aligned[1]).toEqual([]);
+  });
+});
+
+describe('createUniqueInstrumentationPartId', () => {
+  it('既存のカスタムパートIDと重複しない番号を返す', () => {
+    const existingParts = [part('custom-part-1'), part('custom-part-2'), part('custom-part-4')];
+
+    expect(createUniqueInstrumentationPartId(existingParts)).toBe('custom-part-3');
+  });
+
+  it('別prefixでも既存IDを見て空き番号を返す', () => {
+    const existingParts = [part('extra-2'), part('extra-3')];
+
+    expect(createUniqueInstrumentationPartId(existingParts, 'extra')).toBe('extra-1');
   });
 });

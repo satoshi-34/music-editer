@@ -97,6 +97,8 @@
 同じ helper をカスタム編成の追加・削除・並び替えにも使い、個別の `setEnsembleParts`
 処理を増やさない。同期ルールが複数あると、中間パート削除時に「一度 ID で合わせたあと、
 もう一度 index で削る」のような二重更新が起きるため。
+カスタムパート追加時の ID は `createUniqueInstrumentationPartId()` で既存 ID を見て採番する。
+保存検証でも `instrumentation.parts[].id` の重複を拒否し、ID ベース同期の前提を守る。
 
 ### 6. パート別音色を再生へ渡す
 

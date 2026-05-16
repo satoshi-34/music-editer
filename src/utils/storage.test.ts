@@ -297,6 +297,39 @@ describe('Storage Foundation Tests', () => {
       expect(result.success).toBe(false);
       expect(result.error?.type).toBe('corrupted_data');
     });
+
+    it('重複したパートIDを持つ編成データは保存時に拒否する', () => {
+      const instrumentation = getInstrumentationPreset('wind-band');
+      instrumentation.parts[1] = {
+        ...instrumentation.parts[1],
+        id: instrumentation.parts[0].id,
+      };
+      const scoreData = createSavedScoreData(
+        {
+          title: 'Duplicate Part IDs',
+          subtitle: '',
+          lyricist: '',
+          composer: 'Composer',
+          arranger: '',
+        },
+        [{
+          partId: 'flute-piccolo',
+          clef: 'treble',
+          measures: [{ events: [] }],
+        }],
+        1,
+        4,
+        'ensemble',
+        'C',
+        [4, 4],
+        instrumentation
+      );
+
+      const result = saveScoreData(scoreData);
+
+      expect(result.success).toBe(false);
+      expect(result.error?.type).toBe('corrupted_data');
+    });
   });
 
   describe('Property 4: エラーハンドリング耐性', () => {

@@ -1,5 +1,21 @@
 import type { InstrumentPartDefinition, MeasureData } from '../types/storage';
 
+export function createUniqueInstrumentationPartId(
+  existingParts: InstrumentPartDefinition[],
+  prefix = 'custom-part'
+): string {
+  const usedIds = new Set(existingParts.map(part => part.id));
+  let nextNumber = 1;
+
+  // Date.now() だけで ID を作ると、同一ミリ秒の連打やテストで重複し得る。
+  // 既存 ID を見ながら最小の空き番号を探せば、保存データ上の対応キーとして安定する。
+  while (usedIds.has(`${prefix}-${nextNumber}`)) {
+    nextNumber += 1;
+  }
+
+  return `${prefix}-${nextNumber}`;
+}
+
 /**
  * 編成定義を切り替えるときに、小節データをパート ID で引き継ぐ。
  *

@@ -232,14 +232,19 @@ function validateInstrumentPartDefinition(part: unknown): part is InstrumentPart
 }
 
 function validateScoreInstrumentation(value: unknown): value is ScoreInstrumentation {
-  return (
-    isRecord(value) &&
-    typeof value.presetId === 'string' &&
-    typeof value.name === 'string' &&
-    Array.isArray(value.parts) &&
-    value.parts.length > 0 &&
-    value.parts.every(validateInstrumentPartDefinition)
-  );
+  if (
+    !isRecord(value) ||
+    typeof value.presetId !== 'string' ||
+    typeof value.name !== 'string' ||
+    !Array.isArray(value.parts) ||
+    value.parts.length === 0 ||
+    !value.parts.every(validateInstrumentPartDefinition)
+  ) {
+    return false;
+  }
+
+  const partIds = value.parts.map(part => part.id);
+  return new Set(partIds).size === partIds.length;
 }
 
 /**
