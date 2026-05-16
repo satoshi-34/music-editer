@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Palette, { type Tool } from './Palette';
 import StaffCanvas from './StaffCanvas';
 import PianoStaff from './PianoStaff';
@@ -170,8 +171,11 @@ export default function ScorePage() {
   const [notationMode, setNotationMode] = useState<ScoreNotationMode>('concert');
   const [keySignature, setKeySignature] = useState<KeySignature>('C');
   const [showOffsetPanel, setShowOffsetPanel] = useState(false);
+  const [showInstrumentationEditor, setShowInstrumentationEditor] = useState(false);
+  const [instrumentationEditorWindow, setInstrumentationEditorWindow] = useState<Window | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(180);
   const toolbarRef = useRef<HTMLElement | null>(null);
+  const instrumentationEditorWindowRef = useRef<Window | null>(null);
 
   const [title, setTitle] = useState('タイトル');
   const [subtitle, setSubtitle] = useState('サブタイトル');
@@ -494,6 +498,151 @@ export default function ScorePage() {
       return next;
     });
   }, [updateInstrumentationParts]);
+
+  const closeInstrumentationEditorWindow = useCallback(() => {
+    // パート編集は React の画面内に置くのではなく、window.open した別ウィンドウへ
+    // React Portal で中身だけ差し込んでいる。閉じるときはブラウザの Window と
+    // React 側の state/ref の両方を片付けないと、次回開くときに古い Window を参照してしまう。
+    const editorWindow = instrumentationEditorWindowRef.current;
+    instrumentationEditorWindowRef.current = null;
+    setInstrumentationEditorWindow(null);
+    setShowInstrumentationEditor(false);
+    if (editorWindow && !editorWindow.closed) {
+      editorWindow.close();
+    }
+  }, []);
+
+  const openInstrumentationEditorWindow = useCallback(() => {
+    // 既にパート編集ウィンドウが開いていれば、新規作成せず前面に出す。
+    // 毎回 window.open すると同じ編集UIが複数できて、どちらが本物か分かりづらくなるため。
+    const existingWindow = instrumentationEditorWindowRef.current;
+    if (existingWindow && !existingWindow.closed) {
+      existingWindow.focus();
+      setShowInstrumentationEditor(true);
+      setInstrumentationEditorWindow(existingWindow);
+      return;
+    }
+
+    // 空の別ウィンドウを作り、その body に React Portal 用の root div を置く。
+    // 別ウィンドウは親画面の CSS を自動では共有しないので、
+    // 最低限必要なスタイルをこのあと style タグとして流し込む。
+    const nextWindow = window.open('', 'my-music-app-instrumentation-editor', 'width=1200,height=680,left=80,top=80');
+    if (!nextWindow) {
+      // ブラウザ設定でポップアップがブロックされた場合。
+      // 例外にせず、ボタンを押しても何も壊れない状態にしておく。
+      return;
+    }
+
+    nextWindow.document.title = 'パート編集';
+    nextWindow.document.body.innerHTML = '<div id="instrumentation-editor-root"></div>';
+    nextWindow.document.body.style.margin = '0';
+    nextWindow.document.body.style.background = '#f8fafc';
+    nextWindow.document.body.style.fontFamily = window.getComputedStyle(document.body).fontFamily;
+
+    // Portal 先のウィンドウは CSS Modules や親 document の stylesheet を持たない。
+    // そのため、パート編集UIで実際に使うクラスだけを小さくコピーしている。
+    // 将来デザインを変えるときは、親画面の CSS とここを両方確認すること。
+    const style = nextWindow.document.createElement('style');
+    style.textContent = `
+      * { box-sizing: border-box; }
+      body { color: #3f3f46; font-size: 12px; }
+      button, input, select { font: inherit; }
+      button.ghost {
+        background: #fff;
+        border: 1px solid #cbd5e1;
+        color: #1f2937;
+        cursor: pointer;
+      }
+      button.ghost:disabled {
+        opacity: .45;
+        cursor: not-allowed;
+      }
+      .compact-button {
+        padding: 4px 7px;
+        border-radius: 6px;
+        font-size: 12px;
+        line-height: 1.2;
+      }
+      .icon-button {
+        width: 28px;
+        padding-inline: 0;
+      }
+      .instrumentation-editor-window {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        background: #fff;
+        padding: 12px;
+      }
+      .instrumentation-editor-titlebar {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        background: #fff;
+        border-bottom: 1px solid #e5e7eb;
+        padding-bottom: 8px;
+      }
+      .instrumentation-editor-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: #111827;
+      }
+      .instrumentation-editor-meta {
+        margin-top: 2px;
+        font-size: 11px;
+        color: #6b7280;
+      }
+      .instrumentation-editor-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex: 0 0 auto;
+      }
+      .instrumentation-part-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        overflow: auto;
+        padding-right: 4px;
+      }
+      .instrumentation-part-row {
+        display: grid;
+        grid-template-columns: 28px 28px minmax(92px, 140px) minmax(52px, 72px) 74px 70px 82px 96px minmax(72px, 90px) 120px 48px;
+        gap: 4px;
+        align-items: center;
+        width: max-content;
+        min-width: min(100%, 1060px);
+        border: 1px solid #d4d4d8;
+        border-radius: 6px;
+        background: #fff;
+        padding: 4px;
+      }
+      .instrumentation-part-row input,
+      .instrumentation-part-row select {
+        min-width: 0;
+        border: 1px solid #d4d4d8;
+        border-radius: 5px;
+        padding: 4px 5px;
+        font-size: 12px;
+        background: #fff;
+      }
+    `;
+    nextWindow.document.head.appendChild(style);
+    nextWindow.addEventListener('beforeunload', () => {
+      instrumentationEditorWindowRef.current = null;
+      setInstrumentationEditorWindow(null);
+      setShowInstrumentationEditor(false);
+    });
+    instrumentationEditorWindowRef.current = nextWindow;
+    setInstrumentationEditorWindow(nextWindow);
+    setShowInstrumentationEditor(true);
+    nextWindow.focus();
+  }, []);
 
   const handlePlay = useCallback(async () => {
     try {
@@ -1107,7 +1256,20 @@ export default function ScorePage() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateToolbarHeight);
     };
-  }, [activeToolbarTab, showOffsetPanel]);
+  }, [activeToolbarTab, showOffsetPanel, scoreType]);
+
+  useEffect(() => {
+    if (scoreType !== 'ensemble') {
+      closeInstrumentationEditorWindow();
+    }
+  }, [closeInstrumentationEditorWindow, scoreType]);
+
+  useEffect(() => () => {
+    const editorWindow = instrumentationEditorWindowRef.current;
+    if (editorWindow && !editorWindow.closed) {
+      editorWindow.close();
+    }
+  }, []);
 
   const toolbarTabButtons: Array<{ id: ToolbarTab; label: string }> = [
     { id: 'notes', label: '音符・記号' },
@@ -1279,123 +1441,21 @@ export default function ScorePage() {
               )}
 
               {scoreType === 'ensemble' && (
-                <div className="instrumentation-editor" aria-label="編成パート編集">
-                  <div className="instrumentation-editor-head">
-                    <span>パート編集</span>
-                    <button type="button" className="ghost compact-button" onClick={handleAddInstrumentationPart}>
-                      追加
-                    </button>
-                  </div>
-                  <div className="instrumentation-part-list">
-                    {instrumentation.parts.map((part, partIndex) => (
-                      <div className="instrumentation-part-row" key={part.id}>
-                        <button
-                          type="button"
-                          className="ghost compact-button icon-button"
-                          onClick={() => handleMoveInstrumentationPart(partIndex, -1)}
-                          disabled={partIndex === 0}
-                          title="上へ"
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost compact-button icon-button"
-                          onClick={() => handleMoveInstrumentationPart(partIndex, 1)}
-                          disabled={partIndex === instrumentation.parts.length - 1}
-                          title="下へ"
-                        >
-                          ↓
-                        </button>
-                        <input
-                          value={part.name}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'name', event.target.value)}
-                          aria-label={`${part.name}のパート名`}
-                        />
-                        <input
-                          value={part.abbreviation}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'abbreviation', event.target.value)}
-                          aria-label={`${part.name}の略称`}
-                        />
-                        <select
-                          value={part.family}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'family', event.target.value)}
-                          aria-label={`${part.name}の楽器族`}
-                          title="楽器族"
-                        >
-                          {INSTRUMENT_FAMILY_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={part.clef}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'clef', event.target.value)}
-                          aria-label={`${part.name}の音部記号`}
-                        >
-                          <option value="treble">ト音</option>
-                          <option value="alto">ハ音</option>
-                          <option value="bass">ヘ音</option>
-                        </select>
-                        <select
-                          value={part.transposition}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'transposition', event.target.value)}
-                          aria-label={`${part.name}の移調`}
-                          title="移調"
-                        >
-                          {TRANSPOSITION_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={part.bracketGroup}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'bracketGroup', event.target.value)}
-                          aria-label={`${part.name}の括弧グループ`}
-                          title="括弧グループ"
-                        >
-                          {INSTRUMENT_BRACKET_GROUP_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <input
-                          value={part.subBracketGroup ?? ''}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'subBracketGroup', event.target.value)}
-                          aria-label={`${part.name}のサブ括弧グループ`}
-                          placeholder="サブ括弧"
-                          title="同じ値が連続するパートを細い括弧でまとめます"
-                        />
-                        <select
-                          value={part.playbackInstrument ?? InstrumentType.PIANO}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'playbackInstrument', event.target.value)}
-                          aria-label={`${part.name}の再生音色`}
-                        >
-                          {INSTRUMENT_GROUPS.map((group) => (
-                            <optgroup key={group.label} label={group.label}>
-                              {group.instruments.map((instrument) => (
-                                <option key={instrument} value={instrument}>
-                                  {INSTRUMENT_LABELS[instrument]}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          className="ghost compact-button"
-                          onClick={() => handleRemoveInstrumentationPart(partIndex)}
-                          disabled={instrumentation.parts.length <= 1}
-                        >
-                          削除
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  className={`ghost compact-button${showInstrumentationEditor ? ' active' : ''}`}
+                  onClick={() => {
+                    if (showInstrumentationEditor) {
+                      closeInstrumentationEditorWindow();
+                    } else {
+                      openInstrumentationEditorWindow();
+                    }
+                  }}
+                  aria-expanded={showInstrumentationEditor}
+                  aria-controls="instrumentation-editor-window"
+                >
+                  パート編集
+                </button>
               )}
             </div>
           )}
@@ -1484,6 +1544,148 @@ export default function ScorePage() {
           )}
         </div>
       </header>
+
+      {scoreType === 'ensemble' && showInstrumentationEditor && instrumentationEditorWindow && !instrumentationEditorWindow.closed && createPortal(
+        <section
+          id="instrumentation-editor-window"
+          className="instrumentation-editor-window"
+          role="dialog"
+          aria-label="編成パート編集"
+        >
+          <div className="instrumentation-editor-titlebar">
+            <div>
+              <div className="instrumentation-editor-title">パート編集</div>
+              <div className="instrumentation-editor-meta">
+                {instrumentation.parts.length}パート / {instrumentationGroups}グループ
+              </div>
+            </div>
+            <div className="instrumentation-editor-actions">
+              <button type="button" className="ghost compact-button" onClick={handleAddInstrumentationPart}>
+                追加
+              </button>
+              <button
+                type="button"
+                className="ghost compact-button icon-button"
+                onClick={closeInstrumentationEditorWindow}
+                aria-label="パート編集を閉じる"
+                title="閉じる"
+              >
+                x
+              </button>
+            </div>
+          </div>
+          <div className="instrumentation-part-list">
+            {instrumentation.parts.map((part, partIndex) => (
+              <div className="instrumentation-part-row" key={part.id}>
+                <button
+                  type="button"
+                  className="ghost compact-button icon-button"
+                  onClick={() => handleMoveInstrumentationPart(partIndex, -1)}
+                  disabled={partIndex === 0}
+                  title="上へ"
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="ghost compact-button icon-button"
+                  onClick={() => handleMoveInstrumentationPart(partIndex, 1)}
+                  disabled={partIndex === instrumentation.parts.length - 1}
+                  title="下へ"
+                >
+                  ↓
+                </button>
+                <input
+                  value={part.name}
+                  onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'name', event.target.value)}
+                  aria-label={`${part.name}のパート名`}
+                />
+                <input
+                  value={part.abbreviation}
+                  onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'abbreviation', event.target.value)}
+                  aria-label={`${part.name}の略称`}
+                />
+                <select
+                  value={part.family}
+                  onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'family', event.target.value)}
+                  aria-label={`${part.name}の楽器族`}
+                  title="楽器族"
+                >
+                  {INSTRUMENT_FAMILY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={part.clef}
+                  onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'clef', event.target.value)}
+                  aria-label={`${part.name}の音部記号`}
+                >
+                  <option value="treble">ト音</option>
+                  <option value="alto">ハ音</option>
+                  <option value="bass">ヘ音</option>
+                </select>
+                <select
+                  value={part.transposition}
+                  onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'transposition', event.target.value)}
+                  aria-label={`${part.name}の移調`}
+                  title="移調"
+                >
+                  {TRANSPOSITION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={part.bracketGroup}
+                  onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'bracketGroup', event.target.value)}
+                  aria-label={`${part.name}の括弧グループ`}
+                  title="括弧グループ"
+                >
+                  {INSTRUMENT_BRACKET_GROUP_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={part.subBracketGroup ?? ''}
+                  onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'subBracketGroup', event.target.value)}
+                  aria-label={`${part.name}のサブ括弧グループ`}
+                  placeholder="サブ括弧"
+                  title="同じ値が連続するパートを細い括弧でまとめます"
+                />
+                <select
+                  value={part.playbackInstrument ?? InstrumentType.PIANO}
+                  onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'playbackInstrument', event.target.value)}
+                  aria-label={`${part.name}の再生音色`}
+                >
+                  {INSTRUMENT_GROUPS.map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.instruments.map((instrument) => (
+                        <option key={instrument} value={instrument}>
+                          {INSTRUMENT_LABELS[instrument]}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="ghost compact-button"
+                  onClick={() => handleRemoveInstrumentationPart(partIndex)}
+                  disabled={instrumentation.parts.length <= 1}
+                >
+                  削除
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>,
+        instrumentationEditorWindow.document.getElementById('instrumentation-editor-root') ?? instrumentationEditorWindow.document.body
+      )}
 
       <div className="paper-rail">
         <div

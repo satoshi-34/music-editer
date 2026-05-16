@@ -130,6 +130,11 @@
   color: #fff;
   border-color: #2563eb;
 }
+.toolbar-section > .compact-button.active {
+  background: #eff6ff;
+  border-color: #2563eb;
+  color: #1d4ed8;
+}
 .instrumentation-editor {
   display: flex;
   gap: 8px;
@@ -174,6 +179,59 @@
   font-size: 12px;
   background: #fff;
 }
+.instrumentation-editor-window {
+  position: fixed;
+  top: calc(var(--toolbar-h, 180px) + 12px);
+  right: 18px;
+  z-index: 950;
+  width: min(1180px, calc(100vw - 36px));
+  max-height: calc(100vh - var(--toolbar-h, 180px) - 34px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #3f3f46;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.22);
+  padding: 10px;
+}
+.instrumentation-editor-titlebar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 8px;
+}
+.instrumentation-editor-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+}
+.instrumentation-editor-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #6b7280;
+}
+.instrumentation-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.instrumentation-editor-window .instrumentation-part-list {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  max-height: none;
+  overflow: auto;
+  padding: 0 4px 2px 0;
+}
+.instrumentation-editor-window .instrumentation-part-row {
+  width: max-content;
+  min-width: min(100%, 1060px);
+}
 .compact-button {
   padding: 4px 7px;
   border-radius: 6px;
@@ -183,6 +241,14 @@
 .icon-button {
   width: 28px;
   padding-inline: 0;
+}
+
+@media (max-width: 760px) {
+  .instrumentation-editor-window {
+    left: 10px;
+    right: 10px;
+    width: auto;
+  }
 }
 .brand { font-weight: 700; }
 .title-group { display: flex; gap: 8px; }
@@ -795,7 +861,9 @@ button.ghost:disabled {
   pointer-events: all;
 }
 
-/* 各音符用の当たり判定（透明） */
+/* 各音符用の当たり判定（透明）
+   StaffCanvas / PianoSystemCanvas が SVG 上に作る実クリック領域。
+   見た目には出ませんが、音符/休符の選択・和音追加・休符置換はここが受けています。 */
 .vf-note-hit {
   fill: transparent !important;
   stroke: none !important;
@@ -803,7 +871,9 @@ button.ghost:disabled {
   cursor: pointer;
 }
 
-/* 選択中の音符の見た目（青い枠。クリック不可） */
+/* 選択中の音符の見た目（青い枠）
+   これはクリック判定ではなく、現在 selected に入っている対象を見せるだけ。
+   pointer-events:none なので、枠がクリックを奪って操作不能になることはありません。 */
 .vf-note-selected {
   fill: none;
   stroke: #1d4ed8;
@@ -814,7 +884,18 @@ button.ghost:disabled {
 }
 
 /* ガイド線/点はクリックをブロックしない */
-.vf-guide-line, .vf-guide-dot { pointer-events: none; }
+.vf-guide-line,
+.vf-guide-dot,
+.vf-guide-ledger {
+  pointer-events: none;
+}
+
+.vf-guide-ledger {
+  stroke: #1d4ed8;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
 
 /* 和音追加ゾーンを示す縦ストライプ */
 .vf-guide-chord {

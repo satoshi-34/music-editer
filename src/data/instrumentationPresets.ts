@@ -89,7 +89,7 @@ const STRING_ORCHESTRA_PARTS: PartInput[] = [
 const CLASSICAL_WOODWINDS: PartInput[] = [
   simplePart('flute-1-2', 'Flute 1-2', 'Fl.', 'woodwind', 'woodwinds', 'treble', InstrumentType.FLUTE),
   simplePart('oboe-1-2', 'Oboe 1-2', 'Ob.', 'woodwind', 'woodwinds', 'treble', InstrumentType.OBOE),
-  simplePart('clarinet-1-2', 'Clarinet 1-2 in Bb', 'Cl.', 'woodwind', 'woodwinds', 'treble', InstrumentType.WOODWIND, 'Bb'),
+  simplePart('clarinet-1-2', 'Clarinet 1-2 in Bb', 'Cl.', 'woodwind', 'woodwinds', 'treble', InstrumentType.CLARINET, 'Bb'),
   simplePart('bassoon-1-2', 'Bassoon 1-2', 'Bsn.', 'woodwind', 'woodwinds', 'bass', InstrumentType.BASSOON),
 ];
 
@@ -134,7 +134,7 @@ export const INSTRUMENTATION_PRESETS: ScoreInstrumentation[] = [
   ]),
   buildInstrumentation('wind-band', '吹奏楽', [
     simplePart('flute-piccolo', 'Flute / Piccolo', 'Fl.', 'woodwind', 'woodwinds', 'treble', InstrumentType.FLUTE),
-    simplePart('clarinet', 'Clarinet in Bb', 'Cl.', 'woodwind', 'woodwinds', 'treble', InstrumentType.WOODWIND, 'Bb'),
+    simplePart('clarinet', 'Clarinet in Bb', 'Cl.', 'woodwind', 'woodwinds', 'treble', InstrumentType.CLARINET, 'Bb'),
     simplePart('alto-sax', 'Alto Saxophone in Eb', 'A. Sax.', 'woodwind', 'woodwinds', 'treble', InstrumentType.ALTO_SAX, 'Eb'),
     simplePart('tenor-sax', 'Tenor Saxophone in Bb', 'T. Sax.', 'woodwind', 'woodwinds', 'treble', InstrumentType.TENOR_SAX, 'Bb'),
     simplePart('trumpet', 'Trumpet in Bb', 'Tpt.', 'brass', 'brass', 'treble', InstrumentType.TRUMPET, 'Bb'),

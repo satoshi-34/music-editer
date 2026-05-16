@@ -81,6 +81,12 @@ const INSTRUMENT_INFO: Record<InstrumentType, InstrumentInfo> = {
     description: 'オーボエより少し落ち着いた中低域の木管サウンド',
     icon: '🎶'
   },
+  [InstrumentType.CLARINET]: {
+    type: InstrumentType.CLARINET,
+    name: 'クラリネット',
+    description: '丸く伸びる中音域の木管サウンド',
+    icon: '🎶'
+  },
   [InstrumentType.BASSOON]: {
     type: InstrumentType.BASSOON,
     name: 'ファゴット',

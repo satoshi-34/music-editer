@@ -45,6 +45,8 @@ export function mapInstrumentTypeToSoundFontName(instrument: InstrumentType): st
       return 'oboe';
     case InstrumentType.ENGLISH_HORN:
       return 'english_horn';
+    case InstrumentType.CLARINET:
+      return 'clarinet';
     case InstrumentType.BASSOON:
       return 'bassoon';
     case InstrumentType.SOPRANO_SAX:

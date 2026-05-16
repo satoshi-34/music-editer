@@ -22,6 +22,7 @@ export enum InstrumentType {
   FLUTE = 'flute',
   OBOE = 'oboe',
   ENGLISH_HORN = 'english-horn',
+  CLARINET = 'clarinet',
   BASSOON = 'bassoon',
   SOPRANO_SAX = 'soprano-sax',
   ALTO_SAX = 'alto-sax',
@@ -212,19 +213,25 @@ export class SoundSource {
 
       case InstrumentType.OBOE:
       case InstrumentType.ENGLISH_HORN:
+      case InstrumentType.CLARINET:
       case InstrumentType.BASSOON:
         return {
+          // 木管は同じ処理枝でまとめているが、クラリネットだけは少し柔らかい
+          // sine 系の波形と長めの sustain/release にしている。
+          // 本物のクラリネットを完全再現する音源ではなく、
+          // 「フルートより丸く、オーボエより鼻にかからない」内蔵音源用の目安。
+          // SoundFont 使用時は SoundFontEngine 側の 'clarinet' マッピングが使われる。
           oscillator: {
-            type: 'triangle',
-            partialCount: instrument === InstrumentType.BASSOON ? 4 : 3
+            type: instrument === InstrumentType.CLARINET ? 'sine' : 'triangle',
+            partialCount: instrument === InstrumentType.BASSOON ? 4 : instrument === InstrumentType.CLARINET ? 4 : 3
           },
           envelope: {
-            attack: instrument === InstrumentType.BASSOON ? 0.08 : 0.06,
-            decay: 0.12,
-            sustain: instrument === InstrumentType.ENGLISH_HORN ? 0.58 : 0.52,
-            release: instrument === InstrumentType.BASSOON ? 0.9 : 0.75
+            attack: instrument === InstrumentType.BASSOON ? 0.08 : instrument === InstrumentType.CLARINET ? 0.045 : 0.06,
+            decay: instrument === InstrumentType.CLARINET ? 0.1 : 0.12,
+            sustain: instrument === InstrumentType.ENGLISH_HORN ? 0.58 : instrument === InstrumentType.CLARINET ? 0.6 : 0.52,
+            release: instrument === InstrumentType.BASSOON ? 0.9 : instrument === InstrumentType.CLARINET ? 0.85 : 0.75
           },
-          volume: instrument === InstrumentType.BASSOON ? -9 : -10 // dB
+          volume: instrument === InstrumentType.BASSOON ? -9 : instrument === InstrumentType.CLARINET ? -9 : -10 // dB
         };
 
       case InstrumentType.SOPRANO_SAX:

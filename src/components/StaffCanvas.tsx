@@ -35,6 +35,7 @@ import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils'
    ============================================================ */
 
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
+type SelectedNote = { measure: number; index: number; keyIndex?: number };
 
 type Props = {
   systems?: number;
@@ -71,6 +72,10 @@ const EXTRA_BOTTOM_LINES = 10;
 /* ===== ヒット領域パラメータ ===== */
 const CELL_PAD = 4;
 const HIT_MIN_W = 8;
+// 音符セルのクリック可能幅は、この下の描画ループで
+//   前後の音符との中間点 + CELL_PAD
+// から作っています。見た目の青枠ではなく、透明な .vf-note-hit rect が実際の当たり判定です。
+// クリックしづらい/隣の音符に吸われる場合は、まず CELL_PAD と HIT_MIN_W を調整してください。
 // 符頭の左端から左右に加えるパディング（px）。この範囲内のクリックが和音追加ゾーン。
 // 値を大きくするほど和音追加しやすくなり、小さくすると新規挿入しやすくなる。
 const CHORD_HIT_PAD = 12;
@@ -78,6 +83,15 @@ const CHORD_HIT_PAD = 12;
 // 音符ごとの位置ではなく段全体の高さで判定するため、どの音符でも同じ範囲になる
 const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
 const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）
+// 和音の「個別音」選択は、クリックYを一度五線の線/間へ丸めてから、
+// keys[] のラインと一致するかで判定します。通常は 0.001 のままでOKです。
+const KEY_SELECT_LINE_EPS = 0.001;
+// 青い選択枠は「選択状態の表示」専用です。クリックは受けません。
+// 個別音選択時の枠の余白/高さを変えたい場合はここを調整してください。
+const SELECTED_KEY_PAD_X = 3;
+const SELECTED_KEY_HALF_HEIGHT = 7;
+const SELECTED_EVENT_PAD = 3;
+const PREVIEW_LEDGER_WIDTH = 22;
 
 
 /* ===== duration 変換 ===== */
@@ -136,6 +150,54 @@ function buildRestEditReplacement(
     keys: restEvent.keys.length ? [restEvent.keys[0]] : [],
   };
   return noteAfterRest ? [restPart, notePart] : [notePart, restPart];
+}
+
+function buildRestEventsForBeats(beats: number, restKey: string): NoteEvent[] {
+  // 指定された拍数ぶんを、できるだけ大きい休符から順に分解する。
+  // 例: 4/4 の空小節なら beats=4 なので全休符 1 個、
+  //     1.5 拍余っていれば 4分休符 + 8分休符、という形になる。
+  //
+  // restKey は「休符を五線のどの高さに描くか」を表す VexFlow の key。
+  // 休符にも keys が必要なので、音高ではなく描画位置として使っている。
+  const rests: NoteEvent[] = [];
+  let remaining = beats;
+  for (const duration of DURATION_TOOL_VALUES) {
+    const durationBeats = beatsFromVF(toVFDur(duration));
+    while (remaining + 0.0001 >= durationBeats) {
+      rests.push({ dur: duration, isRest: true, keys: [restKey] });
+      remaining -= durationBeats;
+    }
+  }
+  return rests;
+}
+
+function fillPriorMeasureRests(
+  measures: MeasureData[],
+  targetMeasureIndex: number,
+  beatsPerMeasure: number,
+  restKey: string
+): void {
+  // 自動休符補完の本体。
+  // ユーザーが「次の小節」を編集し始めたタイミングで、
+  // その前にある未完成小節の末尾へ足りない休符を詰める。
+  //
+  // ここでは targetMeasureIndex 自体は触らない。
+  // これにより「今クリックした小節」はユーザーの入力を優先し、
+  // その前までを楽譜として成立する長さへ整える。
+  //
+  // 注意: measures は setScore 内で作ったコピーなので、ここで push/splice しても
+  // React state の元配列を直接壊すことはない。
+  for (let measureIndex = 0; measureIndex < targetMeasureIndex; measureIndex += 1) {
+    while (measureIndex >= measures.length) {
+      measures.push(createEmptyMeasure());
+    }
+    const measure = measures[measureIndex];
+    const currentBeats = measure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)), 0);
+    const remainingBeats = beatsPerMeasure - currentBeats;
+    if (remainingBeats > 0.0001) {
+      measure.events.push(...buildRestEventsForBeats(remainingBeats, restKey));
+    }
+  }
 }
 const vfToDenom = (vf: VFDur | string) =>
   vf==='64'?64 : vf==='32'?32 : vf==='16'?16 : vf==='8'?8 : vf==='q'?4 : vf==='h'?2 : 1;
@@ -355,6 +417,19 @@ function findNearestKey(
   return bestKey;
 }
 
+function findKeyIndexAtLine(
+  keys: string[],
+  snappedLine: number,
+  keyToLineFn: (k: string) => number
+): number {
+  // 個別音の選択判定。クリックしたY座標そのものではなく、
+  // snapLineBySpacing() で五線の「線/間」の番号に丸めた値を使う。
+  // そのため、少し上下に外しても近い線/間に吸着して選択できる一方、
+  // 隣の線/間へ越えたクリックは別の音高追加/挿入として扱われる。
+  // 判定を甘くしたい場合は KEY_SELECT_LINE_EPS を大きくする。
+  return keys.findIndex((key) => Math.abs(keyToLineFn(key) - snappedLine) < KEY_SELECT_LINE_EPS);
+}
+
 // CSS zoom の実効値を返す。
 // SVG 要素では Safari で --scale が getComputedStyle に継承されないため、
 // HTML 要素である .page-wrapper から読み取る。
@@ -454,6 +529,20 @@ function snapLineBySpacing(stave: Stave, y: number): number {
   return bestLine;
 }
 
+function getPreviewLedgerLines(snappedLine: number): number[] {
+  const lines: number[] = [];
+  if (snappedLine <= -1) {
+    for (let line = -1; line >= Math.ceil(snappedLine); line -= 1) {
+      lines.push(line);
+    }
+  } else if (snappedLine >= 5) {
+    for (let line = 5; line <= Math.floor(snappedLine); line += 1) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
 /* ===== 時間ベース位置計算（休符重なり修正用） ===== */
 
 /* ===== ノート生成（臨時記号を付与） ===== */
@@ -492,14 +581,19 @@ function makeVFNote(
   return n;
 }
 
-function applyAccidentalToEvent(ev: NoteEvent, accidental: 'sharp' | 'flat' | 'natural'): NoteEvent {
+function applyAccidentalToEvent(
+  ev: NoteEvent,
+  accidental: 'sharp' | 'flat' | 'natural',
+  keyIndex?: number
+): NoteEvent {
   if (ev.isRest) {
     return ev;
   }
 
-  // 和音では「選択中のイベント全体に同じ臨時記号を付ける」方針にする。
-  // 既存の矢印キー移動も和音全体へ一括適用しているため、操作ルールをそろえやすい。
-  const nextKeys = ev.keys.map(key => setKeyAccidental(key, accidental));
+  const shouldEditSingleKey = keyIndex !== undefined && keyIndex >= 0 && keyIndex < ev.keys.length;
+  const nextKeys = shouldEditSingleKey
+    ? ev.keys.map((key, index) => index === keyIndex ? setKeyAccidental(key, accidental) : key)
+    : ev.keys.map(key => setKeyAccidental(key, accidental));
   const changed = nextKeys.some((key, index) => key !== ev.keys[index]);
   return changed ? { ...ev, keys: nextKeys } : ev;
 }
@@ -557,7 +651,7 @@ export default function StaffCanvas({
     const totalMeasures = startMeasureIndex + systems * measuresPerSystem;
     return Array.from({ length: totalMeasures }, () => ({ events: [] }));
   });
-  const [selected, setSelected] = useState<{ measure: number; index: number } | null>(null);
+  const [selected, setSelected] = useState<SelectedNote | null>(null);
   const selectedRef = useRef(selected);
   const disabledRef = useRef(disabled);
   const yOffsetRef = useRef(yOffset);
@@ -790,7 +884,7 @@ export default function StaffCanvas({
       // 優先2: 音符が選択中 → 音符操作
       const selected = selectedRef.current;
       if (!selected) return;
-      const { measure, index } = selected;
+      const { measure, index, keyIndex } = selected;
       const inRange = (arr: any[], i: number) => i >= 0 && i < arr.length;
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -798,6 +892,29 @@ export default function StaffCanvas({
           if (!inRange(prev, measure)) return prev;
           const next = prev.map(cloneMeasureData);
           if (!inRange(next[measure].events, index)) return prev;
+          const targetEv = next[measure].events[index];
+          if (!targetEv.isRest && keyIndex !== undefined && keyIndex >= 0 && keyIndex < targetEv.keys.length && targetEv.keys.length > 1) {
+            const removedKey = targetEv.keys[keyIndex];
+            const nextKeys = targetEv.keys.filter((_, keyIdx) => keyIdx !== keyIndex);
+            const nextArcs = targetEv.arcs?.filter(arc => arc.fromKey !== removedKey);
+            next[measure].events[index] = {
+              ...targetEv,
+              keys: nextKeys,
+              arcs: nextArcs?.length ? nextArcs : undefined,
+            };
+            next.forEach(m => {
+              m.events = m.events.map(ev => {
+                if (!ev.arcs?.length) return ev;
+                const patched = ev.arcs.filter(a => !(
+                  a.toMeasureIndex === measure &&
+                  a.toEventIndex === index &&
+                  a.toKey === removedKey
+                ));
+                return patched.length === ev.arcs.length ? ev : { ...ev, arcs: patched.length ? patched : undefined };
+              });
+            });
+            return next;
+          }
           next[measure].events.splice(index, 1);
           // 削除した音符を終点とする arcs を除去し、後続インデックスを繰り上げる
           next.forEach(m => {
@@ -826,6 +943,7 @@ export default function StaffCanvas({
           const ev = cur.events[index];
 
           let newKeys: string[];
+          const editSingleKey = !ev.isRest && keyIndex !== undefined && keyIndex >= 0 && keyIndex < ev.keys.length;
           if (ev.isRest) {
             const defaultRestKey = defaultRestKeyForClef(clef);
             const restBaseKey = ev.keys[0] || defaultRestKey;
@@ -838,6 +956,20 @@ export default function StaffCanvas({
                 lineToKey(keyToLine(restBaseKey) + (up ? -0.5 : 0.5))
               ];
             }
+          } else if (editSingleKey && e.altKey) { // 半音シフト
+            const delta = up ? 1 : -1;
+            newKeys = ev.keys.map((k, idx) => {
+              if (idx !== keyIndex) return k;
+              const midi = keyToMidi(k);
+              return midi == null ? k : midiToKey(midi + delta, up);
+            });
+          } else if (editSingleKey) {
+            const diff = e.shiftKey ? (up ? -3.5 : 3.5) : (up ? -0.5 : 0.5);
+            newKeys = ev.keys.map((k, idx) =>
+              idx === keyIndex
+                ? applyKeySignatureToNaturalKey(lineToKey(keyToLine(k) + diff), keySignatureRef.current)
+                : k
+            );
           } else if (e.altKey) { // 半音シフト
             const delta = up ? 1 : -1;
             newKeys = ev.keys.map(k => { const midi = keyToMidi(k); return midi == null ? k : midiToKey(midi + delta, up); });
@@ -863,7 +995,9 @@ export default function StaffCanvas({
           }
 
           // 音高変化に合わせて弧の fromKey / toKey を更新する（キーのズレを防ぐ）
-          const keyMap = new Map(ev.keys.map((k, i) => [k, newKeys[i]]));
+          const keyMap = editSingleKey
+            ? new Map([[ev.keys[keyIndex], newKeys[keyIndex]]])
+            : new Map(ev.keys.map((k, i) => [k, newKeys[i]]));
           return prev.map((m, mi) => ({
             events: m.events.map((e2, ei) => {
               if (mi === measure && ei === index) {
@@ -1381,7 +1515,11 @@ export default function StaffCanvas({
         const vfNotes: StaveNote[] = safeEvents.map((ev, idx) => {
           const n = makeVFNote(ev, accidentalState, clef) as any;
           const isSel = !!selected && selected.measure === absoluteIndex && selected.index === idx;
-          if (isSel && n.setStyle) n.setStyle({ fillStyle:'#1d4ed8', strokeStyle:'#1d4ed8' });
+          if (isSel && selected.keyIndex !== undefined && !ev.isRest && n.setKeyStyle) {
+            n.setKeyStyle(selected.keyIndex, { fillStyle:'#1d4ed8', strokeStyle:'#1d4ed8' });
+          } else if (isSel && n.setStyle) {
+            n.setStyle({ fillStyle:'#1d4ed8', strokeStyle:'#1d4ed8' });
+          }
           return n as StaveNote;
         });
 
@@ -1474,6 +1612,14 @@ export default function StaffCanvas({
         guideDot.setAttribute('pointer-events', 'none');
         guideDot.setAttribute('r', '2.8');
 
+        const guideLedgerLines = Array.from({ length: Math.max(EXTRA_TOP_LINES, EXTRA_BOTTOM_LINES) }, () => {
+          const ledgerLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          ledgerLine.setAttribute('class', 'vf-guide-ledger');
+          ledgerLine.style.display = 'none';
+          ledgerLine.setAttribute('pointer-events', 'none');
+          return ledgerLine;
+        });
+
         // 和音追加ゾーンを示す縦ストライプ（青いハイライト）
         const guideChordRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
         guideChordRect.setAttribute('class', 'vf-guide-chord');
@@ -1500,10 +1646,28 @@ export default function StaffCanvas({
           guideDot.setAttribute('cx', String(clampedX));
           guideDot.setAttribute('cy', String(yGuide));
           guideDot.style.display = 'block';
+
+          const previewLedgerLines = getPreviewLedgerLines(snapped);
+          guideLedgerLines.forEach((ledgerLine, index) => {
+            const ledger = previewLedgerLines[index];
+            if (ledger === undefined) {
+              ledgerLine.style.display = 'none';
+              return;
+            }
+            const yLedger = stave.getYForLine(ledger);
+            ledgerLine.setAttribute('x1', String(clampedX - PREVIEW_LEDGER_WIDTH / 2));
+            ledgerLine.setAttribute('x2', String(clampedX + PREVIEW_LEDGER_WIDTH / 2));
+            ledgerLine.setAttribute('y1', String(yLedger));
+            ledgerLine.setAttribute('y2', String(yLedger));
+            ledgerLine.style.display = 'block';
+          });
         };
         const hideGuide = () => {
           guideLine.style.display = 'none';
           guideDot.style.display = 'none';
+          guideLedgerLines.forEach((ledgerLine) => {
+            ledgerLine.style.display = 'none';
+          });
         };
         const showChordGuide = (x: number, w: number) => {
           // 五線 ± 3加線の固定範囲で縦ストライプを表示
@@ -1592,6 +1756,7 @@ export default function StaffCanvas({
           setScore(prev => {
             const next = prev.map(cloneMeasureData);
             while (absoluteMeasureIndex >= next.length) next.push(createEmptyMeasure());
+            fillPriorMeasureRests(next, absoluteMeasureIndex, beatsPerMeasure, defaultRestKeyForClef(clef));
             const m = next[absoluteMeasureIndex];
             m.events.splice(Math.max(0, Math.min(insertAt, m.events.length)), 0, insertedEvent);
             return next;
@@ -1619,6 +1784,9 @@ export default function StaffCanvas({
 
         (svgRoot as any).appendChild(guideLine);
         (svgRoot as any).appendChild(guideDot);
+        guideLedgerLines.forEach((ledgerLine) => {
+          (svgRoot as any).appendChild(ledgerLine);
+        });
         (svgRoot as any).appendChild(guideChordRect);
         (svgRoot as any).appendChild(insertRect);
         if ('mode' in tool && tool.mode === 'accidental' && i === 0) {
@@ -1701,6 +1869,9 @@ export default function StaffCanvas({
             const rawLeft  = (j === 0) ? measLeft : mids[j - 1];
             const rawRight = (j === vfNotes.length - 1) ? measRight : mids[j];
 
+            // ここで作る xHit/wHit が「この音符イベント全体」のクリック担当範囲。
+            // 左右の境界は隣の音符との中間点で分けるので、青い選択枠の見た目とは別物。
+            // この範囲内に入ったクリックだけが、この hit rect の click/mousemove に届く。
             let xLeft  = Math.max(measLeft + 1, rawLeft  - CELL_PAD);
             let xRight = Math.min(measRight - 1, rawRight + CELL_PAD);
             if (xRight - xLeft < HIT_MIN_W) {
@@ -1722,6 +1893,11 @@ export default function StaffCanvas({
             const noteVisualRight = bb ? ((bb.getX?.() ?? anchors[j]) + (bb.getW?.() ?? 12)) : anchors[j] + 12;
             // ヒット rect は和音ゾーン全体（五線±3加線）をカバーする。
             // 音符のY中心だけをカバーすると加線域へのクリックが insertRect に落ちて和音追加できない。
+            // ただし「和音として扱うか」は後続の isOnNote で再判定する。
+            // つまり:
+            //   1. xHit/wHit/yHit/safeH = この音符イベントにクリックを届ける透明領域
+            //   2. noteVisualLeft/Right ± CHORD_HIT_PAD = 和音追加/個別音選択として扱うX領域
+            //   3. 青い .vf-note-selected = 選択状態の表示だけ。クリック判定には使わない
             const yHit = chordTopY;
             const safeH = chordBotY - chordTopY;
 
@@ -1821,16 +1997,33 @@ export default function StaffCanvas({
                 // ここでは和音追加ゾーン判定より先に処理し、
                 // 少し外したクリックでも記号を置けるようにする。
                 const currentEv = safeEvents[j];
-                const nextEv = applyAccidentalToEvent(currentEv, accidentalMode);
+                const snappedLine = snapLineBySpacing(stave, ly);
+                const clickedKeyIndex = findKeyIndexAtLine(currentEv.keys, snappedLine, keyToLine);
+                const nextEv = applyAccidentalToEvent(
+                  currentEv,
+                  accidentalMode,
+                  clickedKeyIndex >= 0 ? clickedKeyIndex : undefined
+                );
                 setScore(prev => {
                   const next = prev.map(cloneMeasureData);
                   if (absoluteIndex >= next.length) return prev;
                   const targetEv = next[absoluteIndex].events[j];
                   if (!targetEv || targetEv.isRest) return prev;
-                  next[absoluteIndex].events[j] = applyAccidentalToEvent(targetEv, accidentalMode);
+                  const latestKeyIndex = clickedKeyIndex >= 0
+                    ? findKeyIndexAtLine(targetEv.keys, snappedLine, keyToLine)
+                    : -1;
+                  next[absoluteIndex].events[j] = applyAccidentalToEvent(
+                    targetEv,
+                    accidentalMode,
+                    latestKeyIndex >= 0 ? latestKeyIndex : undefined
+                  );
                   return next;
                 });
-                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                setSelected({
+                  measure: startMeasureIndex + measureIndex,
+                  index: j,
+                  keyIndex: clickedKeyIndex >= 0 ? clickedKeyIndex : undefined,
+                });
                 if (previewAccidentalOnApply) {
                   playNoteEvent(nextEv);
                 }
@@ -1854,16 +2047,34 @@ export default function StaffCanvas({
                 return;
               }
 
-              if (!safeEvents[j]?.isRest && isOnNote) {
+              if (!safeEvents[j]?.isRest) {
 
-                // 音符の描画範囲内 → 和音追加（クリックしたY位置の音高を追加）
                 const snappedLine = snapLineBySpacing(stave, ly);
                 const newKey = applyKeySignatureToNaturalKey(lineToKey(snappedLine), keySignatureRef.current);
                 const currentEv = safeEvents[j];
+                // 和音内の既存音を個別選択する入口。
+                // Y座標を五線の線/間へ丸めた snappedLine が keys[] のどれかと一致したら、
+                // keyIndex を selected に保存する。Delete/矢印/臨時記号はこの keyIndex を見て
+                // 「和音全体」ではなく「その1音だけ」を編集する。
+                // ここは isOnNote より先に見るので、音符セル内で同じ高さをクリックすれば
+                // 符頭のXから少し外れていても既存音を選択できる。
+                const clickedKeyIndex = findKeyIndexAtLine(currentEv.keys, snappedLine, keyToLine);
+                if (clickedKeyIndex >= 0) {
+                  setSelected({ measure: startMeasureIndex + measureIndex, index: j, keyIndex: clickedKeyIndex });
+                  playNoteEvent({ ...currentEv, keys: [currentEv.keys[clickedKeyIndex]] });
+                  return;
+                }
+                if (!isOnNote) {
+                  doInsertAt(lx, ly, measureIndex);
+                  return;
+                }
+                // 音符の描画範囲内 → 和音追加（クリックしたY位置の音高を追加）
                 let playEvent = currentEv;
+                let selectedKeyIndex: number | undefined;
                 if (currentEv && !currentEv.keys.includes(newKey)) {
                   // 新しい音高 → keys[] に追加してソート（低音が先頭）
                   const newKeys = [...currentEv.keys, newKey].sort((a, b) => keyToLine(b) - keyToLine(a));
+                  selectedKeyIndex = newKeys.indexOf(newKey);
                   playEvent = { ...currentEv, keys: newKeys };
                   setScore(prev => {
                     const next = prev.map(cloneMeasureData);
@@ -1874,7 +2085,7 @@ export default function StaffCanvas({
                     return next;
                   });
                 }
-                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j, keyIndex: selectedKeyIndex });
                 if (playEvent) playNoteEvent(playEvent);
               } else if (safeEvents[j]?.isRest) {
                 if (dynamicMode) return;
@@ -1953,12 +2164,27 @@ export default function StaffCanvas({
 
             const isSel = !!selected && selected.measure === absoluteIndex && selected.index === j;
             if (isSel) {
+              const selectedKey = selected.keyIndex !== undefined ? safeEvents[j]?.keys[selected.keyIndex] : undefined;
+              const selectedY = selectedKey ? stave.getYForLine(keyToLine(selectedKey)) : undefined;
               const sel = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
               sel.setAttribute('class', 'vf-note-selected');
-              sel.setAttribute('x', String(xHit - 3));
-              sel.setAttribute('y', String(yHit - 3));
-              sel.setAttribute('width', String(wHit + 6));
-              sel.setAttribute('height', String(safeH + 6));
+              // この青枠は「今どれが selected か」を見せるためだけの描画です。
+              // pointer-events は CSS 側で none にしているため、ここを大きくしても
+              // クリック可能範囲は広がりません。クリック判定を変えるなら、
+              // 上の xHit/wHit や CHORD_HIT_PAD / CHORD_LEDGER_TOP/BOT を調整してください。
+              //
+              // 注意: イベント全体選択時でも xHit/wHit/yHit/safeH は使わない。
+              // それらはクリックしやすくするために五線上下まで広げた透明範囲なので、
+              // 表示枠へ流用すると「小節全体が選択された」ように見えてしまう。
+              // 青枠は VexFlow の実描画 bbox を基準にして、音符/休符そのものだけを囲む。
+              const eventBoxX = bb?.getX?.() ?? noteVisualLeft;
+              const eventBoxY = bb?.getY?.() ?? yHit;
+              const eventBoxW = bb?.getW?.() ?? (noteVisualRight - noteVisualLeft);
+              const eventBoxH = bb?.getH?.() ?? 14;
+              sel.setAttribute('x', String(selectedKey ? noteVisualLeft - SELECTED_KEY_PAD_X : eventBoxX - SELECTED_EVENT_PAD));
+              sel.setAttribute('y', String(selectedY !== undefined ? selectedY - SELECTED_KEY_HALF_HEIGHT : eventBoxY - SELECTED_EVENT_PAD));
+              sel.setAttribute('width', String(selectedKey ? (noteVisualRight - noteVisualLeft + SELECTED_KEY_PAD_X * 2) : (eventBoxW + SELECTED_EVENT_PAD * 2)));
+              sel.setAttribute('height', String(selectedKey ? SELECTED_KEY_HALF_HEIGHT * 2 : (eventBoxH + SELECTED_EVENT_PAD * 2)));
               sel.setAttribute('rx', '4'); sel.setAttribute('ry', '4');
               (svgRoot as any).appendChild(sel);
             }
