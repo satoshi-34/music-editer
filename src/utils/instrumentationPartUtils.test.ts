@@ -47,4 +47,26 @@ describe('alignMeasuresToInstrumentationParts', () => {
     expect(aligned[0][0].events[0].keys).toEqual(['b/4']);
     expect(aligned[1][0].events[0].keys).toEqual(['g/4']);
   });
+
+  it('中間パートを削除しても後続パートの小節データを取り違えない', () => {
+    const previousParts = [part('flute'), part('oboe'), part('bassoon')];
+    const previousMeasures = [measures('c/5'), measures('d/5'), measures('e/3')];
+    const nextParts = [part('flute'), part('bassoon')];
+
+    const aligned = alignMeasuresToInstrumentationParts(previousParts, previousMeasures, nextParts);
+
+    expect(aligned[0][0].events[0].keys).toEqual(['c/5']);
+    expect(aligned[1][0].events[0].keys).toEqual(['e/3']);
+  });
+
+  it('新規追加されたパートは空の小節データで始める', () => {
+    const previousParts = [part('flute')];
+    const previousMeasures = [measures('c/5')];
+    const nextParts = [part('flute'), part('oboe')];
+
+    const aligned = alignMeasuresToInstrumentationParts(previousParts, previousMeasures, nextParts);
+
+    expect(aligned[0][0].events[0].keys).toEqual(['c/5']);
+    expect(aligned[1]).toEqual([]);
+  });
 });

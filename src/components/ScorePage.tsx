@@ -415,7 +415,9 @@ export default function ScorePage() {
       setScoreType('ensemble');
       // パート名などの定義だけ増減しても、実際の小節データ配列が追いつかないと
       // 画面に表示される段数と保存されるパート数がずれるため、ここで長さをそろえる。
-      setEnsembleParts(current => next.parts.map((_, index) => current[index] ?? []));
+      // ただし位置だけでそろえると中間パート削除や並び替えで譜面が別パートへ移るので、
+      // 必ずパート ID で対応づける。
+      setEnsembleParts(current => alignMeasuresToInstrumentationParts(prev.parts, current, next.parts));
       return next;
     });
   }, [markInstrumentationCustom]);
@@ -441,7 +443,6 @@ export default function ScorePage() {
       ? parts
       : parts.filter((_, index) => index !== partIndex)
     );
-    setEnsembleParts(prev => prev.length <= 1 ? prev : prev.filter((_, index) => index !== partIndex));
   }, [updateInstrumentationParts]);
 
   const handleInstrumentationPartFieldChange = useCallback((
@@ -489,14 +490,6 @@ export default function ScorePage() {
       const next = [...parts];
       const [movedPart] = next.splice(partIndex, 1);
       next.splice(nextIndex, 0, movedPart);
-      // 並び替えでは、パート定義だけでなく入力済み音符データも同じ順番で動かす。
-      // これを忘れると「Flute と Oboe の名前だけ入れ替わり、中身は元のまま」になる。
-      setEnsembleParts(current => {
-        const movedData = current[partIndex] ?? [];
-        const nextData = current.filter((_, index) => index !== partIndex);
-        nextData.splice(nextIndex, 0, movedData);
-        return nextData;
-      });
       return next;
     });
   }, [updateInstrumentationParts]);
