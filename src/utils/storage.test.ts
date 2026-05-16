@@ -96,7 +96,11 @@ const savedScoreDataArbitrary: fc.Arbitrary<SavedScoreData> = fc.record({
   timestamp: fc.integer({ min: 1000000000000, max: 9999999999999 }),
   metadata: scoreMetadataArbitrary,
   scoreType: fc.constantFrom('single', 'piano') as fc.Arbitrary<ScoreType>,
-  parts: fc.array(partDataArbitrary, { minLength: 1, maxLength: 2 }),
+  parts: fc.uniqueArray(partDataArbitrary, {
+    minLength: 1,
+    maxLength: 2,
+    selector: part => part.partId,
+  }),
   systems: fc.integer({ min: 1, max: 12 }),
   measuresPerSystem: fc.integer({ min: 1, max: 8 })
 });
@@ -218,11 +222,15 @@ describe('Storage Foundation Tests', () => {
           composer: 'Composer',
           arranger: '',
         },
-        [{
-          partId: 'violin-1',
-          clef: 'treble',
-          measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }],
-        }],
+        instrumentation.parts.map(part => ({
+          partId: part.id,
+          clef: part.clef,
+          measures: [{
+            events: part.id === 'violin-1'
+              ? [{ dur: '4', isRest: false, keys: ['c/4'] }]
+              : [],
+          }],
+        })),
         1,
         4,
         'ensemble',
@@ -329,6 +337,70 @@ describe('Storage Foundation Tests', () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.type).toBe('corrupted_data');
+    });
+
+    it('編成定義に存在しない譜面パートIDを持つデータは保存時に拒否する', () => {
+      const instrumentation = getInstrumentationPreset('chamber-orchestra');
+      const scoreData = createSavedScoreData(
+        {
+          title: 'Mismatched Part',
+          subtitle: '',
+          lyricist: '',
+          composer: 'Composer',
+          arranger: '',
+        },
+        [
+          ...instrumentation.parts.slice(0, -1).map(part => ({
+            partId: part.id,
+            clef: part.clef,
+            measures: [{ events: [] }],
+          })),
+          {
+            partId: 'ghost-part',
+            clef: 'treble',
+            measures: [{ events: [] }],
+          },
+        ],
+        1,
+        4,
+        'ensemble',
+        'C',
+        [4, 4],
+        instrumentation
+      );
+
+      const result = saveScoreData(scoreData);
+
+      expect(result.success).toBe(false);
+      expect(result.error?.type).toBe('corrupted_data');
+    });
+
+    it('編成譜の保存データは編成定義と同じパートID集合なら保存できる', () => {
+      const instrumentation = getInstrumentationPreset('chamber-orchestra');
+      const scoreData = createSavedScoreData(
+        {
+          title: 'Matched Ensemble',
+          subtitle: '',
+          lyricist: '',
+          composer: 'Composer',
+          arranger: '',
+        },
+        instrumentation.parts.map(part => ({
+          partId: part.id,
+          clef: part.clef,
+          measures: [{ events: [] }],
+        })),
+        1,
+        4,
+        'ensemble',
+        'C',
+        [4, 4],
+        instrumentation
+      );
+
+      const result = saveScoreData(scoreData);
+
+      expect(result.success).toBe(true);
     });
   });
 

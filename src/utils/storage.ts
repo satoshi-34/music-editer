@@ -247,6 +247,27 @@ function validateScoreInstrumentation(value: unknown): value is ScoreInstrumenta
   return new Set(partIds).size === partIds.length;
 }
 
+function validateSavedPartIds(data: SavedScoreData): boolean {
+  const savedPartIds = data.parts.map(part => part.partId);
+  if (new Set(savedPartIds).size !== savedPartIds.length) {
+    return false;
+  }
+
+  if (data.scoreType !== 'ensemble' || data.instrumentation === undefined) {
+    return true;
+  }
+
+  const savedPartIdSet = new Set(savedPartIds);
+  const instrumentationPartIds = data.instrumentation.parts.map(part => part.id);
+
+  // 編成譜では instrumentation.parts が「表示するパート」、parts が「その譜面データ」。
+  // 片方だけに存在する ID を許すと、読み込み時に空パートや余った保存データが生まれる。
+  return (
+    instrumentationPartIds.length === savedPartIds.length &&
+    instrumentationPartIds.every(partId => savedPartIdSet.has(partId))
+  );
+}
+
 /**
  * Validates a complete SavedScoreData object (v2 format)
  */
@@ -264,6 +285,7 @@ function validateSavedScoreData(data: any): data is SavedScoreData {
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
+    validateSavedPartIds(data) &&
     typeof data.systems === 'number' &&
     data.systems > 0 &&
     typeof data.measuresPerSystem === 'number' &&

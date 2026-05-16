@@ -99,6 +99,9 @@
 もう一度 index で削る」のような二重更新が起きるため。
 カスタムパート追加時の ID は `createUniqueInstrumentationPartId()` で既存 ID を見て採番する。
 保存検証でも `instrumentation.parts[].id` の重複を拒否し、ID ベース同期の前提を守る。
+さらに編成譜の保存時は、`SavedScoreData.parts[].partId` と `instrumentation.parts[].id` の
+集合が一致することを検証する。これにより、表示されない余剰パートや、譜面データを持たない
+編成パートを保存データへ残さない。
 
 ### 6. パート別音色を再生へ渡す
 
