@@ -61,6 +61,13 @@
 - 吹奏楽
 
 音楽的な細部は今後レビューで調整できるよう、UI や保存形式から独立させている。
+プリセットは保存データの土台にもなるため、`instrumentationPresets.test.ts` で次の整合性を守る。
+
+- プリセット ID の重複がない
+- 各プリセット内のパート ID が重複しない
+- `order` が配列順と一致する
+- `playbackInstrument` が既知の `InstrumentType` である
+- `getInstrumentationPreset()` が元定義を直接返さず clone を返す
 
 ### 4. 可変パート譜は `EnsembleStaff` で描画する
 
