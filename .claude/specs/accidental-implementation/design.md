@@ -88,6 +88,16 @@ VexFlow 5 では `StaveNote.addModifier()` の引数順が `addModifier(modifier
 
 保存データを勝手に書き換える処理ではなく、あくまで表示時の安全化として扱う。
 
+ピアノ譜・四重奏譜・編成譜のラッパー（`PianoStaff` / `QuartetStaff` / `EnsembleStaff`）は
+描画を `PianoSystemCanvas` に委譲するため、上記の安全化を共有する。  
+ただし `EnsembleStaff` の記譜音表示モードでは、描画委譲の前に
+`transposeMeasuresForDisplay()` が小節データを移調コピーする。  
+この前処理が `measure.events` や `event.keys` を無防備に `map` していたため、
+壊れたデータが安全化に到達する前にクラッシュする経路が残っていた。  
+そこで前処理側でも `Array.isArray()` ガードを入れ、壊れた小節・音符は
+シフトせず素通りさせて、最終的な休符フォールバックは
+描画直前の `sanitizeRenderEvent()` に一本化する。
+
 ## 影響範囲
 
 | ファイル | 役割 |
@@ -95,6 +105,8 @@ VexFlow 5 では `StaveNote.addModifier()` の引数順が `addModifier(modifier
 | `src/utils/noteKeyUtils.ts` | 音高キー解析、臨時記号表示判定、キー文字列バリデーション |
 | `src/components/StaffCanvas.tsx` | 単旋律譜の小節単位臨時記号表示 |
 | `src/components/PianoSystemCanvas.tsx` | ピアノ譜・四重奏譜・編成譜の小節単位臨時記号表示と描画直前キー安全化 |
+| `src/components/EnsembleStaff.tsx` | 記譜音表示モードの移調前処理でも壊れた小節・音符を素通りさせるガード |
+| `src/components/MultiStaffBrokenDataRender.test.tsx` | 多段譜ラッパー（Piano/Quartet/Ensemble）の壊れたデータ描画耐性の回帰テスト |
 | `src/utils/storage.ts` | 保存時の `keys` 形式バリデーション強化 |
 | `src/utils/noteKeyUtils.test.ts` | 臨時記号ロジックの単体テスト |
 | `src/utils/storage.test.ts` | 不正な音高キー拒否の回帰テスト |
