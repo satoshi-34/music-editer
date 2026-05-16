@@ -93,6 +93,14 @@
 SoundFont では、パートごとの `instrument` から対応する SoundFont プレイヤーを取得してから、同じ開始時刻へ予約する。
 先にプレイヤーを読み込んでから開始時刻を決めることで、読み込み待ちのせいで発音時刻が過去になる問題を避ける。
 
+クラリネットは `InstrumentType.CLARINET` として独立した音色にしている。
+二管編成オーケストラの `clarinet-1-2` と吹奏楽の `clarinet` は、どちらも
+`playbackInstrument: InstrumentType.CLARINET` と `transposition: 'Bb'` を持つ。
+再生 UI の木管グループ、内蔵音源、SoundFont 名変換にも同じ enum を通すことで、
+「譜面上は Clarinet だが音は汎用 Woodwind」というずれを避ける。
+この配線は `SoundSource.test.ts`、`SoundFontEngine.test.ts`、`PlaybackControls.test.tsx`、
+`storage.test.ts` で確認する。
+
 ### 7. 入力確認音もパート音色へそろえる
 
 編成譜では、音符を置いた直後の確認音も `playbackInstrument` を使う。

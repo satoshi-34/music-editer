@@ -10,6 +10,7 @@ import {
 describe('SoundFontEngine helpers', () => {
   it('楽器タイプを SoundFont の既知名へ変換できる', () => {
     expect(mapInstrumentTypeToSoundFontName(InstrumentType.PIANO)).toBe('acoustic_grand_piano');
+    expect(mapInstrumentTypeToSoundFontName(InstrumentType.CLARINET)).toBe('clarinet');
     expect(mapInstrumentTypeToSoundFontName(InstrumentType.HORN)).toBe('french_horn');
     expect(mapInstrumentTypeToSoundFontName(InstrumentType.STRINGS)).toBe('string_ensemble_1');
     expect(mapInstrumentTypeToSoundFontName(InstrumentType.PERCUSSION)).toBe('taiko_drum');

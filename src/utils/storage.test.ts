@@ -23,6 +23,7 @@ import type {
   DurKey
 } from '../types/storage';
 import { getInstrumentationPreset } from '../data/instrumentationPresets';
+import { InstrumentType } from '../audio/SoundSource';
 
 // Mock localStorage for testing
 const localStorageMock = (() => {
@@ -250,6 +251,18 @@ describe('Storage Foundation Tests', () => {
       expect(cello?.subBracketGroup).toBe('low-strings');
       expect(contrabass?.subBracketGroup).toBe('low-strings');
       expect(cello?.order).toBeLessThan(contrabass?.order ?? Number.MAX_SAFE_INTEGER);
+    });
+
+    it('クラリネットを含む編成プリセットでは専用の再生音色を使う', () => {
+      const classicalOrchestra = getInstrumentationPreset('classical-orchestra');
+      const windBand = getInstrumentationPreset('wind-band');
+      const classicalClarinet = classicalOrchestra.parts.find(part => part.id === 'clarinet-1-2');
+      const windBandClarinet = windBand.parts.find(part => part.id === 'clarinet');
+
+      expect(classicalClarinet?.transposition).toBe('Bb');
+      expect(classicalClarinet?.playbackInstrument).toBe(InstrumentType.CLARINET);
+      expect(windBandClarinet?.transposition).toBe('Bb');
+      expect(windBandClarinet?.playbackInstrument).toBe(InstrumentType.CLARINET);
     });
   });
 

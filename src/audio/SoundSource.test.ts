@@ -60,13 +60,18 @@ describe('SoundSource', () => {
 
     it('利用可能な楽器のリストを取得できる', () => {
       const instruments = soundSource.getAvailableInstruments();
+      // 楽器一覧は編成譜の増強に合わせて増えるため、固定数ではなく enum 全体に追従させる。
+      const allInstrumentTypes = Object.values(InstrumentType);
+
       expect(instruments).toContain(InstrumentType.PIANO);
       expect(instruments).toContain(InstrumentType.ORGAN);
       expect(instruments).toContain(InstrumentType.GUITAR);
+      expect(instruments).toContain(InstrumentType.CLARINET);
       expect(instruments).toContain(InstrumentType.STRINGS);
       expect(instruments).toContain(InstrumentType.BRASS);
       expect(instruments).toContain(InstrumentType.WOODWIND);
-      expect(instruments).toHaveLength(6);
+      expect(instruments).toEqual(expect.arrayContaining(allInstrumentTypes));
+      expect(instruments).toHaveLength(allInstrumentTypes.length);
     });
 
     it('現在の楽器を変更できる', () => {

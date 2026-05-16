@@ -3,7 +3,11 @@
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import PlaybackControls, { type PlaybackControlsProps } from './PlaybackControls';
+import PlaybackControls, {
+  INSTRUMENT_GROUPS,
+  INSTRUMENT_LABELS,
+  type PlaybackControlsProps
+} from './PlaybackControls';
 import { InstrumentType } from '../audio/SoundSource';
 import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS } from '../audio/playbackSettings';
 
@@ -205,6 +209,25 @@ describe('PlaybackControls', () => {
       expect(screen.getByRole('option', { name: 'ピアノ' })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: 'オルガン' })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: 'ギター' })).toBeInTheDocument();
+    });
+
+    it('クラリネットを木管グループの音色として表示できる', () => {
+      const woodwindGroup = INSTRUMENT_GROUPS.find(group => group.label === '木管');
+
+      expect(INSTRUMENT_LABELS[InstrumentType.CLARINET]).toBe('クラリネット');
+      expect(woodwindGroup?.instruments).toContain(InstrumentType.CLARINET);
+
+      render(
+        <PlaybackControls
+          {...defaultProps}
+          currentInstrument={InstrumentType.CLARINET}
+          availableInstruments={[InstrumentType.CLARINET]}
+        />
+      );
+
+      const instrumentSelect = screen.getByLabelText('楽器選択') as HTMLSelectElement;
+      expect(screen.getByRole('option', { name: 'クラリネット' })).toBeInTheDocument();
+      expect(instrumentSelect.value).toBe(InstrumentType.CLARINET);
     });
 
     it('現在の楽器が選択されている', () => {
