@@ -341,6 +341,16 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   };
 }
 
+function restorePrimaryFromBackup(backupRaw: string): void {
+  try {
+    // バックアップからの復旧に成功したら、主データも同じ内容に戻しておく。
+    // そうしないと次回読み込みでも毎回壊れた主データを先に読みに行ってしまう。
+    localStorage.setItem(STORAGE_KEYS.PRIMARY, backupRaw);
+  } catch {
+    // 復旧読み込み自体は成功しているため、主データの書き戻し失敗は致命扱いにしない。
+  }
+}
+
 /**
  * Creates a StorageError with appropriate type and message
  */
@@ -507,6 +517,7 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
       if (primaryRaw && backupRaw && backupRaw !== primaryRaw) {
         const backupResult = parseAndNormalizeStoredScore(backupRaw);
         if (backupResult.success) {
+          restorePrimaryFromBackup(backupRaw);
           rawData = backupRaw;
           parsedResult = backupResult;
         }
@@ -534,6 +545,7 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
                   backupResult.success &&
                   generateChecksum(backupRaw) === metadata.dataChecksum
                 ) {
+                  restorePrimaryFromBackup(backupRaw);
                   // Backup is valid - use it
                   return {
                     success: true,

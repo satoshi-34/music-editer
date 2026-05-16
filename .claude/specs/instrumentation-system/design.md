@@ -102,6 +102,8 @@ SoundFont では、パートごとの `instrument` から対応する SoundFont 
 壊れた JSON や手編集された JSON から未知の音色名が再生経路へ入らないようにする。
 読み込み時は主データとバックアップの両方で同じ解析・マイグレーション・検証を行い、
 主データが壊れていてもバックアップが有効なら譜面を復旧する。
+復旧に成功した場合はバックアップ内容を主データへ書き戻し、次回読み込みで同じ壊れた
+主データを踏み続けないようにする。
 この配線は `SoundSource.test.ts`、`SoundFontEngine.test.ts`、`PlaybackControls.test.tsx`、
 `storage.test.ts` で確認する。
 

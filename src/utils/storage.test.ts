@@ -457,6 +457,36 @@ describe('Storage Foundation Tests', () => {
       expect(result.success).toBe(true);
       expect(result.data?.metadata.title).toBe('Recovered Backup');
       expect(result.data?.parts[0].measures[0].events[0].keys).toEqual(['c/4']);
+      expect(localStorageMock.getItem(STORAGE_KEYS.PRIMARY)).toBe(JSON.stringify(backupScore));
+    });
+
+    it('保存時のチェックサムがある場合もバックアップ復旧後に主データを書き戻す', () => {
+      const scoreData = createSavedScoreData(
+        {
+          title: 'Checksum Recovery',
+          subtitle: '',
+          lyricist: '',
+          composer: 'Composer',
+          arranger: '',
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{ events: [{ dur: '4', isRest: false, keys: ['d/4'] }] }],
+        }],
+        1,
+        4
+      );
+
+      expect(saveScoreData(scoreData).success).toBe(true);
+      localStorageMock.setItem(STORAGE_KEYS.PRIMARY, '{broken-json');
+
+      const result = loadScoreData();
+
+      expect(result.success).toBe(true);
+      expect(result.data?.metadata.title).toBe('Checksum Recovery');
+      expect(result.data?.parts[0].measures[0].events[0].keys).toEqual(['d/4']);
+      expect(localStorageMock.getItem(STORAGE_KEYS.PRIMARY)).toBe(localStorageMock.getItem(STORAGE_KEYS.BACKUP));
     });
 
     it('should handle invalid data structure without crashing', () => {
