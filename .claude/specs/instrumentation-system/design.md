@@ -98,6 +98,8 @@ SoundFont では、パートごとの `instrument` から対応する SoundFont 
 `playbackInstrument: InstrumentType.CLARINET` と `transposition: 'Bb'` を持つ。
 再生 UI の木管グループ、内蔵音源、SoundFont 名変換にも同じ enum を通すことで、
 「譜面上は Clarinet だが音は汎用 Woodwind」というずれを避ける。
+保存データの検証でも `playbackInstrument` は `InstrumentType` に実在する値だけを許可し、
+壊れた JSON や手編集された JSON から未知の音色名が再生経路へ入らないようにする。
 この配線は `SoundSource.test.ts`、`SoundFontEngine.test.ts`、`PlaybackControls.test.tsx`、
 `storage.test.ts` で確認する。
 

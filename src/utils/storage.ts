@@ -20,6 +20,7 @@ import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type 
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 import { syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
+import type { InstrumentType } from '../audio/SoundSource';
 
 // Storage keys
 export const STORAGE_KEYS = {
@@ -168,6 +169,42 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+const VALID_INSTRUMENT_TYPES: Record<InstrumentType, true> = {
+  piano: true,
+  organ: true,
+  guitar: true,
+  piccolo: true,
+  flute: true,
+  oboe: true,
+  'english-horn': true,
+  clarinet: true,
+  bassoon: true,
+  'soprano-sax': true,
+  'alto-sax': true,
+  'tenor-sax': true,
+  'baritone-sax': true,
+  trumpet: true,
+  trombone: true,
+  horn: true,
+  euphonium: true,
+  tuba: true,
+  timpani: true,
+  violin: true,
+  viola: true,
+  cello: true,
+  contrabass: true,
+  percussion: true,
+  strings: true,
+  brass: true,
+  woodwind: true,
+};
+
+function isValidInstrumentType(value: unknown): value is InstrumentType {
+  // 保存データは JSON から戻ってくるため、型だけでは安全と言えない。
+  // enum に実在する値だけを許可して、存在しない音色名が再生経路へ入るのを防ぐ。
+  return typeof value === 'string' && value in VALID_INSTRUMENT_TYPES;
+}
+
 function validateInstrumentPartDefinition(part: unknown): part is InstrumentPartDefinition {
   const validFamilies = ['woodwind', 'brass', 'percussion', 'strings', 'keyboard', 'vocal', 'other'];
   const validBracketGroups = ['woodwinds', 'brass', 'percussion', 'strings', 'keyboard', 'voices', 'solo'];
@@ -188,7 +225,7 @@ function validateInstrumentPartDefinition(part: unknown): part is InstrumentPart
     typeof part.bracketGroup === 'string' &&
     validBracketGroups.includes(part.bracketGroup) &&
     (part.subBracketGroup === undefined || typeof part.subBracketGroup === 'string') &&
-    (part.playbackInstrument === undefined || typeof part.playbackInstrument === 'string') &&
+    (part.playbackInstrument === undefined || isValidInstrumentType(part.playbackInstrument)) &&
     typeof part.order === 'number' &&
     part.order >= 0
   );

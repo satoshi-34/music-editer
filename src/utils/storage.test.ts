@@ -264,6 +264,39 @@ describe('Storage Foundation Tests', () => {
       expect(windBandClarinet?.transposition).toBe('Bb');
       expect(windBandClarinet?.playbackInstrument).toBe(InstrumentType.CLARINET);
     });
+
+    it('存在しない再生音色を持つ編成データは保存時に拒否する', () => {
+      const instrumentation = getInstrumentationPreset('classical-orchestra');
+      instrumentation.parts[0] = {
+        ...instrumentation.parts[0],
+        playbackInstrument: 'imaginary-woodwind' as InstrumentType,
+      };
+      const scoreData = createSavedScoreData(
+        {
+          title: 'Invalid Playback Instrument',
+          subtitle: '',
+          lyricist: '',
+          composer: 'Composer',
+          arranger: '',
+        },
+        [{
+          partId: 'flute-1-2',
+          clef: 'treble',
+          measures: [{ events: [] }],
+        }],
+        1,
+        4,
+        'ensemble',
+        'C',
+        [4, 4],
+        instrumentation
+      );
+
+      const result = saveScoreData(scoreData);
+
+      expect(result.success).toBe(false);
+      expect(result.error?.type).toBe('corrupted_data');
+    });
   });
 
   describe('Property 4: エラーハンドリング耐性', () => {
