@@ -84,6 +84,7 @@ const CHORD_HIT_PAD = 15;
 // 和音追加のY判定は「五線 ± 3加線」の固定範囲
 const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
 const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）
+const REST_BODY_HIT_HALF_WIDTH = 18;
 // 和音内の個別音選択は、クリックYを五線の線/間へ丸めて keys[] と照合します。
 // 通常は 0.001 のままでOK。判定を甘くしたい場合だけ大きくしてください。
 const KEY_SELECT_LINE_EPS = 0.001;
@@ -2042,10 +2043,21 @@ export default function PianoSystemCanvas({
                   return;
                 }
                 const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
+                // 休符の bounding box は横に広く返る場合があるため、
+                // 休符だけは描画アンカー中心の固定幅で「本体クリック」を判定する。
+                const restBodyCenterX=anchors[j];
+                const isOnRest=Math.abs(lx-restBodyCenterX)<=REST_BODY_HIT_HALF_WIDTH&&ly>=chordTopY&&ly<=chordBotY;
+                if(!isOnRest){
+                  // 休符の透明 hit rect は、隣接挿入しやすいよう時間枠全体を覆っている。
+                  // 休符本体から外れたクリックまで置換扱いにすると、
+                  // 「8分休符の次に8分音符」が休符置換になってしまうため挿入へ回す。
+                  doInsert(lx,ly);
+                  return;
+                }
                 // 休符の視覚的中心（符頭バウンディングボックスの中央）を基準にする。
                 // ヒット矩形は小節全体を覆うため、その中点（クレフを含む左端の半分）を使うと
                 // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
-                const noteVisualCenter=(noteVisualLeft+noteVisualRight)/2;
+                const noteVisualCenter=restBodyCenterX;
                 const noteAfterRest=lx>=noteVisualCenter;
                 const restReplacement=buildRestEditReplacement(safeEvs[j],key,tool,noteAfterRest);
                 const isSameRestSelected =

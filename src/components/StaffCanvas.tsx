@@ -85,6 +85,7 @@ const CHORD_HIT_PAD = 12;
 // 音符ごとの位置ではなく段全体の高さで判定するため、どの音符でも同じ範囲になる
 const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
 const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）
+const REST_BODY_HIT_HALF_WIDTH = 18;
 // 和音の「個別音」選択は、クリックYを一度五線の線/間へ丸めてから、
 // keys[] のラインと一致するかで判定します。通常は 0.001 のままでOKです。
 const KEY_SELECT_LINE_EPS = 0.001;
@@ -2159,10 +2160,23 @@ export default function StaffCanvas({
                 }
                 const snappedLine = snapLineBySpacing(stave, ly);
                 const key = applyKeySignatureToNaturalKey(lineToKey(snappedLine), keySignatureRef.current);
+                // 休符の VexFlow bounding box は、音符より横に広く返ることがある。
+                // その値をそのまま使うと、休符の右側に次の音符を置きたいクリックまで
+                // 「休符本体クリック」と誤判定されるため、休符だけは描画アンカー中心の固定幅で見る。
+                const restBodyCenterX = anchors[j];
+                const isOnRest = Math.abs(lx - restBodyCenterX) <= REST_BODY_HIT_HALF_WIDTH &&
+                  ly >= chordTopY && ly <= chordBotY;
+                if (!isOnRest) {
+                  // 休符の透明 hit rect は「その時間枠全体」を覆っている。
+                  // ただし、休符本体から外れた右側/左側の空白クリックは
+                  // 休符置換ではなく「前後に新しく置きたい」操作として扱う。
+                  doInsertAt(lx, ly, measureIndex);
+                  return;
+                }
                 // 休符の視覚的中心（符頭バウンディングボックスの中央）を基準にする。
                 // ヒット矩形は小節全体を覆うため、その中点（クレフを含む左端の半分）を使うと
                 // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
-                const noteVisualCenter = (noteVisualLeft + noteVisualRight) / 2;
+                const noteVisualCenter = restBodyCenterX;
                 const noteAfterRest = lx >= noteVisualCenter;
                 const restReplacement = buildRestEditReplacement(safeEvents[j], key, tool, noteAfterRest);
                 const isSameRestSelected =
