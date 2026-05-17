@@ -6,9 +6,13 @@ export type KeyAccidental = '' | '#' | 'b';
 export type DisplayAccidental = '#' | 'b' | 'n';
 
 /**
- * resolveDisplayAccidental の戻り値。
- * cautionary が true のとき、同じ臨時記号をカッコ付き（注意記号）で表示する。
- * 前の小節で音が変化していたが、小節線を超えて自然音に戻るケースで使われる。
+ * 臨時記号の表示指示。
+ *
+ * type: 表示する記号の種類（'#'=シャープ, 'b'=フラット, 'n'=ナチュラル）
+ * cautionary: true のときはカッコ付き（注意記号）で表示する。
+ *   前の小節で # や b が付いた音が小節線を越えて調号の音に戻るとき、
+ *   奏者が「元の音に戻った」と読み取りやすいよう括弧内に表示する。
+ *   これを courtesy accidental（注意用臨時記号）と呼ぶ。
  */
 export type DisplayAccidentalResult = {
   type: DisplayAccidental;
@@ -229,16 +233,20 @@ export function resolveDisplayAccidental(
     return null;
   }
 
+  // accidentalStateKey は「音名/オクターブ」（例: 'f/4'）の形式。
+  // 臨時記号は同オクターブの同音名にのみ効力を持つため、このキーで状態を管理する。
   const previousAccidental = accidentalState.get(parsed.accidentalStateKey) ?? '';
   accidentalState.set(parsed.accidentalStateKey, parsed.accidental);
 
   if (parsed.accidental === previousAccidental) {
-    // この小節内では変化なし。前の小節との差分だけ確認する。
+    // この小節内では変化なし（同じ状態が続いているので、記号を繰り返す必要はない）。
+    // 前の小節との差分だけ確認する。
     // 前の小節が # や b で終わっていて、現在の音が調号に沿った自然音に戻るなら
-    // カッコ付き臨時記号（courtesy accidental）を付けて読者への注意を促す。
+    // カッコ付き臨時記号（courtesy accidental: 奏者への注意記号）を付ける。
     if (prevMeasureState !== undefined) {
       const prevMeasAcc = prevMeasureState.get(parsed.accidentalStateKey) ?? '';
       if (prevMeasAcc !== parsed.accidental) {
+        // '' は自然音（記号なし）を意味する。自然音へ戻るときは 'n'（ナチュラル記号）を表示する。
         const type: DisplayAccidental = parsed.accidental === '' ? 'n' : parsed.accidental;
         return { type, cautionary: true };
       }
@@ -247,12 +255,17 @@ export function resolveDisplayAccidental(
   }
 
   if (parsed.accidental === '') {
+    // 音は自然音だが、この小節内ですでに # や b が付いていた → ナチュラル記号で打ち消す
     return previousAccidental === '' ? null : { type: 'n', cautionary: false };
   }
 
   return { type: parsed.accidental, cautionary: false };
 }
 
+/**
+ * 和音など複数の音高キーに対して、resolveDisplayAccidental を一括で呼ぶ。
+ * 戻り値は keys と同じ順序の配列で、null は「この位置には記号が不要」を意味する。
+ */
 export function resolveDisplayAccidentalsForKeys(
   keys: string[],
   accidentalState: MeasureAccidentalState,
@@ -262,8 +275,12 @@ export function resolveDisplayAccidentalsForKeys(
 }
 
 /**
- * 小節の描画が終わったあとの臨時記号状態を、次の小節の courtesy accidental 判定に使うため
- * 新しい Map としてコピーして返す。元の state は変化しない。
+ * 小節の描画が終わったあとの臨時記号状態をコピーして返す。
+ *
+ * 臨時記号の効力は小節内だけだが、次の小節の先頭で courtesy accidental
+ * （カッコ付き注意記号）を表示するには「前の小節が最後にどんな状態だったか」が必要になる。
+ * snapshotAccidentalState はその情報を安全に保持するため、元の state を変えずに
+ * 新しい Map としてコピーを作る。
  */
 export function snapshotAccidentalState(state: MeasureAccidentalState): MeasureAccidentalState {
   return new Map(state);
