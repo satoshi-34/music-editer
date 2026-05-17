@@ -906,3 +906,27 @@ synth.triggerAttackRelease(toneKeys, duration, time, velocity);
 - デモ譜面に埋め込んでいる既存休符データの初期位置
 - 休符選択後の `↑/↓` 移動が見た目とずれないこと
 - 2 voice で `alignRests` による重なり回避が崩れないこと
+
+## 追記: 保存後に読込ボタンが有効化されない問題
+
+### 問題
+
+- 実ブラウザQAで「保存」クリック後も「読込」ボタンが disabled のまま残るケースを確認した
+- 保存データの有無は `localStorage` を直接見る `hasStoredData()` で判定していた
+- `localStorage` の中身が変わっても React はそれを state 変更として検知しないため、保存完了後にツールバーが再描画されない場合があった
+
+### 修正
+
+- `ScorePage` に `storedDataAvailable` state を追加し、初期値だけ `hasStoredData()` から読む
+- `saveScore()` が成功したタイミングで `storedDataAvailable` を `true` に更新する
+- `loadScore()` 後にも `hasStoredData()` を読み直し、保存領域の実態とボタン状態をそろえる
+
+### 影響範囲
+
+- `src/components/ScorePage.tsx`
+
+### 確認ポイント
+
+- 初回起動時、保存データがない場合は「読込」が無効であること
+- 「保存」クリック後、ページを切り替えなくても「読込」が有効になること
+- 「読込」クリック後もコンソールエラーが出ず、保存した譜面が復元されること

@@ -185,6 +185,9 @@ export default function ScorePage() {
   const [arranger, setArranger] = useState('編曲者');
 
   const { saveScore, loadScore, hasStoredData, error, isLoading, isSaving } = useScoreStorage();
+  // localStorage 自体は React の state ではないため、保存しても自動では再描画されない。
+  // 「保存後すぐ読込ボタンを押せるか」は画面状態として持ち、保存/読込の節目で更新する。
+  const [storedDataAvailable, setStoredDataAvailable] = useState(() => hasStoredData());
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
 
@@ -1031,11 +1034,15 @@ export default function ScorePage() {
             { partId: 'melody', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
           ];
 
-    await saveScore(metadata, parts, totalSystems, 4, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
+    const saved = await saveScore(metadata, parts, totalSystems, 4, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
+    if (saved) {
+      setStoredDataAvailable(true);
+    }
   };
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
+    setStoredDataAvailable(hasStoredData());
     if (loadedData) {
       setTitle(loadedData.metadata.title);
       setSubtitle(loadedData.metadata.subtitle);
@@ -1492,7 +1499,7 @@ export default function ScorePage() {
                 onSaveCurrentAsSample={handleSaveCurrentAsSample}
                 isSaving={isSaving}
                 isLoading={isLoading}
-                hasStoredData={hasStoredData()}
+                hasStoredData={storedDataAvailable}
                 canSaveCurrentAsSample={scoreType === 'piano'}
                 hasCustomPianoSample={hasCustomPianoSample}
                 error={error}
