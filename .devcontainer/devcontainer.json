@@ -3,6 +3,10 @@
   "dockerComposeFile": "../docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/app",
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
+  },
   "runServices": ["app"],
   "shutdownAction": "stopCompose",
   "overrideCommand": false,
@@ -19,13 +23,9 @@
       "extensions": [
         "dbaeumer.vscode-eslint",
         "ms-azuretools.vscode-docker",
-        "vitest.explorer"
+        "vitest.explorer",
+        "openai.chatgpt"
       ]
-    }   
+    }
   }
-  "features": {
-    "ghcr.io/devcontainers/features/git:1": {}
-    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
-  }
-
 }
