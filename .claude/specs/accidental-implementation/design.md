@@ -127,6 +127,21 @@ VexFlow 5 では `StaveNote.addModifier()` の引数順が `addModifier(modifier
 
 ## 今後の拡張余地
 
-- パレットに `# / b / n` の明示ボタンを追加する
-- 調号（key signature）導入時に、デフォルト状態を「自然音」ではなく「調号由来の状態」へ差し替える
-- 注意用のカッコ付き臨時記号（courtesy accidental）を追加する
+- ~~パレットに `# / b / n` の明示ボタンを追加する~~ → 実装済み
+- ~~調号（key signature）導入時に、デフォルト状態を「自然音」ではなく「調号由来の状態」へ差し替える~~ → 実装済み
+- ~~注意用のカッコ付き臨時記号（courtesy accidental）を追加する~~ → 実装済み（後述）
+
+### courtesy accidental（カッコ付き臨時記号）の実装
+
+`resolveDisplayAccidental` に省略可能な `prevMeasureState` 引数を追加した。
+
+- `DisplayAccidentalResult = { type: DisplayAccidental; cautionary: boolean }` を新設し、
+  戻り値の型を `DisplayAccidental | null` から `DisplayAccidentalResult | null` へ変更
+- 前の小節の最終状態（`snapshotAccidentalState` で取得）を渡すと、
+  小節線を越えて自然音（調号の音）に戻る場合に `{ type, cautionary: true }` を返す
+- `makeVFNote` では `cautionary === true` のとき VexFlow の `Accidental.setAsCautionary()` を呼び、
+  臨時記号をカッコ付きで描画する
+- `StaffCanvas` は単旋律譜の全小節にわたって `prevMeasureAccidentalState` を引き継ぐ
+- `PianoSystemCanvas` はパートごとに `prevMeasureStatePerPart[]` で管理し、
+  主旋律（voice 0）にのみ courtesy を適用する（追加声部はノイズになりやすいため除外）
+- システム（SVG）境界をまたいだ courtesy は現状未対応（次の拡張余地）

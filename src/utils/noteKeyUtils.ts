@@ -4,6 +4,16 @@
 
 export type KeyAccidental = '' | '#' | 'b';
 export type DisplayAccidental = '#' | 'b' | 'n';
+
+/**
+ * resolveDisplayAccidental の戻り値。
+ * cautionary が true のとき、同じ臨時記号をカッコ付き（注意記号）で表示する。
+ * 前の小節で音が変化していたが、小節線を超えて自然音に戻るケースで使われる。
+ */
+export type DisplayAccidentalResult = {
+  type: DisplayAccidental;
+  cautionary: boolean;
+};
 export type AccidentalToolKind = 'sharp' | 'flat' | 'natural';
 export type KeySignature =
   'C' | 'G' | 'D' | 'A' | 'E' | 'B' | 'F#' | 'C#' |
@@ -204,11 +214,16 @@ export function createMeasureAccidentalState(keySignature: KeySignature = 'C'): 
 /**
  * 小節内の過去状態を見て、その音に「今この位置で表示すべき臨時記号」を返す。
  * 返り値が null のときは、同じ小節内ですでに効力が続いているため記号を省略できる。
+ *
+ * prevMeasureState を渡すと、前の小節で臨時記号が付いていた音が
+ * 小節線を超えて自然音に戻るケースにカッコ付き臨時記号（courtesy accidental）を返す。
+ * 同じ小節内での変化は通常の臨時記号として扱い、courtesy にはならない。
  */
 export function resolveDisplayAccidental(
   key: string,
-  accidentalState: MeasureAccidentalState
-): DisplayAccidental | null {
+  accidentalState: MeasureAccidentalState,
+  prevMeasureState?: MeasureAccidentalState
+): DisplayAccidentalResult | null {
   const parsed = parseNoteKey(key);
   if (!parsed) {
     return null;
@@ -218,21 +233,40 @@ export function resolveDisplayAccidental(
   accidentalState.set(parsed.accidentalStateKey, parsed.accidental);
 
   if (parsed.accidental === previousAccidental) {
+    // この小節内では変化なし。前の小節との差分だけ確認する。
+    // 前の小節が # や b で終わっていて、現在の音が調号に沿った自然音に戻るなら
+    // カッコ付き臨時記号（courtesy accidental）を付けて読者への注意を促す。
+    if (prevMeasureState !== undefined) {
+      const prevMeasAcc = prevMeasureState.get(parsed.accidentalStateKey) ?? '';
+      if (prevMeasAcc !== parsed.accidental) {
+        const type: DisplayAccidental = parsed.accidental === '' ? 'n' : parsed.accidental;
+        return { type, cautionary: true };
+      }
+    }
     return null;
   }
 
   if (parsed.accidental === '') {
-    return previousAccidental === '' ? null : 'n';
+    return previousAccidental === '' ? null : { type: 'n', cautionary: false };
   }
 
-  return parsed.accidental;
+  return { type: parsed.accidental, cautionary: false };
 }
 
 export function resolveDisplayAccidentalsForKeys(
   keys: string[],
-  accidentalState: MeasureAccidentalState
-): Array<DisplayAccidental | null> {
-  return keys.map(key => resolveDisplayAccidental(key, accidentalState));
+  accidentalState: MeasureAccidentalState,
+  prevMeasureState?: MeasureAccidentalState
+): Array<DisplayAccidentalResult | null> {
+  return keys.map(key => resolveDisplayAccidental(key, accidentalState, prevMeasureState));
+}
+
+/**
+ * 小節の描画が終わったあとの臨時記号状態を、次の小節の courtesy accidental 判定に使うため
+ * 新しい Map としてコピーして返す。元の state は変化しない。
+ */
+export function snapshotAccidentalState(state: MeasureAccidentalState): MeasureAccidentalState {
+  return new Map(state);
 }
 
 /**

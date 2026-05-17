@@ -8,6 +8,7 @@ import {
   isValidNoteKeyString,
   parseNoteKey,
   resolveDisplayAccidentalsForKeys,
+  snapshotAccidentalState,
   shiftKeySignatureByAccidental,
   shiftKeySignatureByFifths,
   transposeKeyBySemitones,
@@ -33,15 +34,15 @@ describe('noteKeyUtils', () => {
   it('同じ小節で同じシャープが続く場合は2回目を省略する', () => {
     const accidentalState = createMeasureAccidentalState();
 
-    expect(resolveDisplayAccidentalsForKeys(['f#/4'], accidentalState)).toEqual(['#']);
+    expect(resolveDisplayAccidentalsForKeys(['f#/4'], accidentalState)).toEqual([{ type: '#', cautionary: false }]);
     expect(resolveDisplayAccidentalsForKeys(['f#/4'], accidentalState)).toEqual([null]);
   });
 
   it('シャープのあとに元の音へ戻るとナチュラルを表示する', () => {
     const accidentalState = createMeasureAccidentalState();
 
-    expect(resolveDisplayAccidentalsForKeys(['c#/5'], accidentalState)).toEqual(['#']);
-    expect(resolveDisplayAccidentalsForKeys(['c/5'], accidentalState)).toEqual(['n']);
+    expect(resolveDisplayAccidentalsForKeys(['c#/5'], accidentalState)).toEqual([{ type: '#', cautionary: false }]);
+    expect(resolveDisplayAccidentalsForKeys(['c/5'], accidentalState)).toEqual([{ type: 'n', cautionary: false }]);
     expect(resolveDisplayAccidentalsForKeys(['c/5'], accidentalState)).toEqual([null]);
   });
 
@@ -49,7 +50,10 @@ describe('noteKeyUtils', () => {
     const accidentalState = createMeasureAccidentalState();
 
     expect(resolveDisplayAccidentalsForKeys(['b/4', 'b/5'], accidentalState)).toEqual([null, null]);
-    expect(resolveDisplayAccidentalsForKeys(['bb/4', 'bb/5'], accidentalState)).toEqual(['b', 'b']);
+    expect(resolveDisplayAccidentalsForKeys(['bb/4', 'bb/5'], accidentalState)).toEqual([
+      { type: 'b', cautionary: false },
+      { type: 'b', cautionary: false },
+    ]);
   });
 
   it('保存用バリデーションで無効な音高文字列を弾ける', () => {
@@ -70,7 +74,71 @@ describe('noteKeyUtils', () => {
     const accidentalState = createMeasureAccidentalState('G');
 
     expect(resolveDisplayAccidentalsForKeys(['f#/4'], accidentalState)).toEqual([null]);
-    expect(resolveDisplayAccidentalsForKeys(['f/4'], accidentalState)).toEqual(['n']);
+    expect(resolveDisplayAccidentalsForKeys(['f/4'], accidentalState)).toEqual([{ type: 'n', cautionary: false }]);
+  });
+
+  it('前の小節で # が出た音が次の小節で自然音に戻るとカッコ付き臨時記号を表示する', () => {
+    // 前の小節: f#/4 で終わった状態をスナップショットとして用意する
+    const prevState = createMeasureAccidentalState();
+    resolveDisplayAccidentalsForKeys(['f#/4'], prevState);
+    const snapshot = snapshotAccidentalState(prevState);
+
+    // 次の小節: 新しい accidentalState（調号なし = C メジャー）で f/4 を描く
+    const nextState = createMeasureAccidentalState();
+    // prevMeasureState なしでは null（変化なし）
+    expect(resolveDisplayAccidentalsForKeys(['f/4'], nextState)).toEqual([null]);
+
+    // prevMeasureState ありでは cautionary ナチュラルを表示
+    const nextState2 = createMeasureAccidentalState();
+    expect(resolveDisplayAccidentalsForKeys(['f/4'], nextState2, snapshot)).toEqual([
+      { type: 'n', cautionary: true },
+    ]);
+  });
+
+  it('前の小節と同じ変化音が続く場合はカッコ付き臨時記号を出さない', () => {
+    // 前の小節: f#/4 で終わった状態
+    const prevState = createMeasureAccidentalState();
+    resolveDisplayAccidentalsForKeys(['f#/4'], prevState);
+    const snapshot = snapshotAccidentalState(prevState);
+
+    // 次の小節: 同じく f#/4 → 通常の臨時記号（courtesy でない）を表示
+    const nextState = createMeasureAccidentalState();
+    expect(resolveDisplayAccidentalsForKeys(['f#/4'], nextState, snapshot)).toEqual([
+      { type: '#', cautionary: false },
+    ]);
+  });
+
+  it('snapshotAccidentalState は元の状態を変えない', () => {
+    const state = createMeasureAccidentalState();
+    resolveDisplayAccidentalsForKeys(['c#/4'], state);
+    const snapshot = snapshotAccidentalState(state);
+
+    // スナップショット後に状態を更新しても snapshot には影響しない
+    resolveDisplayAccidentalsForKeys(['c/4'], state);
+    expect(snapshot.get('c/4')).toBe('#');
+    expect(state.get('c/4')).toBe('');
+  });
+
+  it('調号つきで前の小節に自然音の変化があった場合も courtesy を表示する', () => {
+    // G メジャー（f# が調号）で、前の小節に f# が出た（= 変化なし）
+    const prevState = createMeasureAccidentalState('G');
+    resolveDisplayAccidentalsForKeys(['f#/4'], prevState);
+    const snapshot = snapshotAccidentalState(prevState);
+
+    // 次の小節（G メジャー）でも f#/4: 同じ状態なので courtesy は不要
+    const nextState = createMeasureAccidentalState('G');
+    expect(resolveDisplayAccidentalsForKeys(['f#/4'], nextState, snapshot)).toEqual([null]);
+
+    // 次の小節（G メジャー）で f/4（ナチュラル）: 調号から外れているので courtesy ナチュラル
+    const nextState2 = createMeasureAccidentalState('G');
+    // まず f#/4 を出して状態を「#」に進め、次に f/4 で 'n' を返すケースとは別。
+    // ここでは小節冒頭（調号状態）から f/4 = 調号の # に対して自然音に戻す。
+    // prevState では f#/4 → accidental = '#', snapshot['f/4'] = '#'.
+    // nextState2 の f/4 は '' (natural), previousAccidental = '#' (from key sig).
+    // 通常は 'n' を返す（必須の臨時記号）ので cautionary にはならない。
+    expect(resolveDisplayAccidentalsForKeys(['f/4'], nextState2, snapshot)).toEqual([
+      { type: 'n', cautionary: false },
+    ]);
   });
 
   it('調号つき入力では自然音キーを既定の変化音へ補正できる', () => {

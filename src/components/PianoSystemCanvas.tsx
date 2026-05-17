@@ -23,6 +23,7 @@ import {
   createMeasureAccidentalState,
   isValidNoteKeyString,
   resolveDisplayAccidentalsForKeys,
+  snapshotAccidentalState,
   type MeasureAccidentalState,
   type KeySignature,
 } from '../utils/noteKeyUtils';
@@ -433,7 +434,8 @@ function makeVFNote(
   accidentalState: MeasureAccidentalState,
   clef: ClefType,
   stemDirection?: 'up' | 'down',
-  renderAsGhostRest = false
+  renderAsGhostRest = false,
+  prevMeasureState?: MeasureAccidentalState
 ) {
   const vd=toVFDur(ev.dur);
   if(ev.isRest){
@@ -460,13 +462,21 @@ function makeVFNote(
     n.setStemDirection(stemDirection === 'up' ? 1 : -1);
   }
   // 小節内で効力が継続している記号は省略し、必要な位置だけ # / b / n を付ける。
-  const displayAccidentals = resolveDisplayAccidentalsForKeys(ev.keys, accidentalState);
-  displayAccidentals.forEach((acc, idx) => {
-    if (!acc) return;
+  // prevMeasureState がある場合は前の小節の最終状態を参照し、
+  // 小節線を超えて自然音に戻る音にはカッコ付き臨時記号（courtesy accidental）を表示する。
+  const displayAccidentals = resolveDisplayAccidentalsForKeys(ev.keys, accidentalState, prevMeasureState);
+  displayAccidentals.forEach((result, idx) => {
+    if (!result) return;
     try {
       // VexFlow 5 系では addModifier(Modifier, index) の順で渡す必要がある。
       // index を先に渡すと、臨時記号オブジェクトとして扱われず表示されない。
-      (n as any).addModifier?.(new Accidental(acc), idx);
+      const acc = new Accidental(result.type);
+      if (result.cautionary) {
+        // カッコ付き臨時記号（courtesy accidental）: 前の小節で変化した音が
+        // 小節線を越えて調号の音に戻るとき、読者への注意として括弧内に表示する。
+        (acc as any).setAsCautionary?.();
+      }
+      (n as any).addModifier?.(acc, idx);
     } catch {
       // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
     }
@@ -1472,6 +1482,12 @@ export default function PianoSystemCanvas({
       drawArcPathP(x1+startDx,y1+startDy,x2+endDx,y2+endDy,upward,kind,stemDir,obstacleY,cpDyOffset,arcKey,isSelected,minNoteY,maxNoteY,startDx,startDy,endDx,endDy);
     };
 
+    // パートごとの前小節臨時記号状態。小節線を越えた courtesy accidental 判定に使う。
+    // PianoSystemCanvas は 1 システム（1 SVG）分だけ描くため、
+    // システム境界をまたぐ引き継ぎは行わない（行頭の courtesy は次の拡張余地）。
+    const prevMeasureStatePerPart: (MeasureAccidentalState | undefined)[] =
+      Array.from({ length: parts.length }, () => undefined);
+
     for(let i=0;i<measuresPerSystem;i++){
       const absI=startMeasureIndex+i;
       const w=realWs[i];
@@ -1566,6 +1582,9 @@ export default function PianoSystemCanvas({
         // そちらを基準に「調号で既に変化している音」を判定する。
         const partKeyForAccidental = normalizeKeySignature(part.keySignature ?? normalizedKeySignature);
         const accidentalState = createMeasureAccidentalState(partKeyForAccidental);
+        // 前の小節の最終状態を courtesy accidental 判定のために取得し、
+        // この小節の描画後に更新する。
+        const thisPrevMeasState = prevMeasureStatePerPart[pi];
         const measureVoices = getMeasureVoices(data);
         const renderedVoiceEntries = measureVoices
           .map((measureVoice, voiceIndex) => {
@@ -1585,7 +1604,10 @@ export default function PianoSystemCanvas({
                 accidentalState,
                 part.clef,
                 measureVoice.stemDirection,
-                renderAsGhostRest
+                renderAsGhostRest,
+                // courtesy accidental は主旋律（voice 0）だけに適用する。
+                // 追加声部は拍合わせ用の音符が多く、courtesy が邪魔になりやすい。
+                voiceIndex === 0 ? thisPrevMeasState : undefined
               ) as any;
               const isSel=voiceIndex===0&&!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===idx;
               if(isSel&&selected.keyIndex!==undefined&&!ev.isRest&&n.setKeyStyle){
@@ -1595,6 +1617,13 @@ export default function PianoSystemCanvas({
               }
               return n as StaveNote;
             });
+            // voice 0 の描画が終わり accidentalState がこの小節の最終状態になった。
+            // 次の小節の courtesy accidental 判定に使うためスナップショットを保存する。
+            // 追加声部（voiceIndex > 0）は accidentalState を共有しているが、
+            // スナップショットは voice 0 終了直後に取れば十分。
+            if (voiceIndex === 0) {
+              prevMeasureStatePerPart[pi] = snapshotAccidentalState(accidentalState);
+            }
             const beams=Beam.generateBeams(vfNotes,{beamRests:false});
             const voice=new Voice({
               time:{

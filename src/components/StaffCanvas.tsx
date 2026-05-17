@@ -15,6 +15,7 @@ import {
   createMeasureAccidentalState,
   isValidNoteKeyString,
   resolveDisplayAccidentalsForKeys,
+  snapshotAccidentalState,
   type MeasureAccidentalState,
   type KeySignature,
 } from '../utils/noteKeyUtils';
@@ -579,7 +580,8 @@ function sanitizeRenderEvent(ev: any, clef: 'treble' | 'bass' | 'alto'): RenderN
 function makeVFNote(
   ev: NoteEvent,
   accidentalState: MeasureAccidentalState,
-  clef: 'treble' | 'bass' | 'alto' = 'treble'
+  clef: 'treble' | 'bass' | 'alto' = 'treble',
+  prevMeasureState?: MeasureAccidentalState
 ) {
   const vfDur = toVFDur(ev.dur);
   if (ev.isRest) {
@@ -596,14 +598,21 @@ function makeVFNote(
   }
   const n = new StaveNote({ clef, keys: ev.keys, duration: vfDur });
   // 小節内の過去状態を見て、「今ここで本当に見せるべき臨時記号」だけを付ける。
-  // これにより同じ小節内で # を毎回重ねず、# のあとに元の音へ戻したときは n を表示できる。
-  const displayAccidentals = resolveDisplayAccidentalsForKeys(ev.keys, accidentalState);
-  displayAccidentals.forEach((acc, idx) => {
-    if (!acc) return;
+  // prevMeasureState がある場合は前の小節の最終状態も参照し、
+  // 小節線を超えて自然音に戻る音にはカッコ付き臨時記号（courtesy accidental）を表示する。
+  const displayAccidentals = resolveDisplayAccidentalsForKeys(ev.keys, accidentalState, prevMeasureState);
+  displayAccidentals.forEach((result, idx) => {
+    if (!result) return;
     try {
       // VexFlow 5 系では addModifier(Modifier, index) の順で渡す必要がある。
       // index を先に渡すと、臨時記号オブジェクトとして解釈されず描画されない。
-      (n as any).addModifier?.(new Accidental(acc), idx);
+      const acc = new Accidental(result.type);
+      if (result.cautionary) {
+        // カッコ付き臨時記号（courtesy accidental）: 前の小節で変化した音が
+        // 小節線を越えて調号の音に戻るとき、読者への注意として括弧内に表示する。
+        (acc as any).setAsCautionary?.();
+      }
+      (n as any).addModifier?.(acc, idx);
     } catch {
       // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
     }
@@ -1443,6 +1452,11 @@ export default function StaffCanvas({
       drawArcPath(x1 + startDx, y1 + startDy, x2 + endDx, y2 + endDy, upward, kind, stemDir, obstacleY, cpDyOffset, arcKey, isSelected, minNoteY, maxNoteY, startDx, startDy, endDx, endDy);
     };
 
+    // 前の小節の臨時記号最終状態を持つ。
+    // 小節線を越えて音が自然音に戻るときのカッコ付き臨時記号（courtesy accidental）判定に使う。
+    // システム境界（改段）をまたいでも引き継ぐことで、段頭でも courtesy を表示できる。
+    let prevMeasureAccidentalState: MeasureAccidentalState | undefined;
+
     for (let line = 0; line < systems; line++) {
       if (globalIndex >= maxMeasures) break; // このStaffCanvasの範囲を超えたら終了
       const absoluteStartIndex = startMeasureIndex + globalIndex;
@@ -1538,9 +1552,12 @@ export default function StaffCanvas({
         // 臨時記号の効力は小節ごとにリセットされるため、
         // 描画直前に小節専用の状態を作り、イベント順に更新していく。
         const accidentalState = createMeasureAccidentalState(normalizedKeySignature);
+        // 前の小節の最終状態を courtesy accidental 判定に使う。
+        // 小節の描画が終わったら snapshotAccidentalState で保存する。
+        const thisPrevMeasState = prevMeasureAccidentalState;
 
         const vfNotes: StaveNote[] = safeEvents.map((ev, idx) => {
-          const n = makeVFNote(ev, accidentalState, clef) as any;
+          const n = makeVFNote(ev, accidentalState, clef, thisPrevMeasState) as any;
           const isSel = !!selected && selected.measure === absoluteIndex && selected.index === idx;
           if (isSel && selected.keyIndex !== undefined && !ev.isRest && n.setKeyStyle) {
             n.setKeyStyle(selected.keyIndex, { fillStyle:'#1d4ed8', strokeStyle:'#1d4ed8' });
@@ -1549,6 +1566,10 @@ export default function StaffCanvas({
           }
           return n as StaveNote;
         });
+
+        // 全音符の描画が終わり、accidentalState がこの小節の最終状態になった。
+        // 次の小節の courtesy accidental 判定のためにスナップショットを保存する。
+        prevMeasureAccidentalState = snapshotAccidentalState(accidentalState);
 
         const beams = Beam.generateBeams(vfNotes, { beamRests: false });
         const voice = new Voice({
