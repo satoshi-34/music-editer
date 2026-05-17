@@ -1448,153 +1448,16 @@ export default function ScorePage() {
                   className={`ghost compact-button${showInstrumentationEditor ? ' active' : ''}`}
                   onClick={() => {
                     if (showInstrumentationEditor) {
-                      setShowInstrumentationEditor(false);
+                      closeInstrumentationEditorWindow();
                     } else {
-                      setShowInstrumentationEditor(true);
+                      openInstrumentationEditorWindow();
                     }
                   }}
                   aria-expanded={showInstrumentationEditor}
-                  aria-controls="instrumentation-editor-inline"
+                  aria-controls="instrumentation-editor-window"
                 >
                   パート編集
                 </button>
-              )}
-
-              {scoreType === 'ensemble' && showInstrumentationEditor && (
-                <section
-                  id="instrumentation-editor-inline"
-                  className="instrumentation-editor"
-                  aria-label="編成パート編集"
-                >
-                  <div className="instrumentation-editor-head">
-                    <span>カスタム編成</span>
-                    <button type="button" className="ghost compact-button" onClick={handleAddInstrumentationPart}>
-                      追加
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost compact-button"
-                      onClick={openInstrumentationEditorWindow}
-                      title="広い別ウィンドウで編集する"
-                    >
-                      別窓
-                    </button>
-                  </div>
-                  <div className="instrumentation-part-list">
-                    {instrumentation.parts.map((part, partIndex) => (
-                      <div className="instrumentation-part-row" key={part.id}>
-                        {/*
-                          この行は「編成定義そのもの」を編集する場所。
-                          入力欄を変えるたびに instrumentation と ensembleParts を同時にそろえ、
-                          表示段数・保存データ・再生音色が別々にずれないようにしている。
-                        */}
-                        <button
-                          type="button"
-                          className="ghost compact-button icon-button"
-                          onClick={() => handleMoveInstrumentationPart(partIndex, -1)}
-                          disabled={partIndex === 0}
-                          title="上へ"
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost compact-button icon-button"
-                          onClick={() => handleMoveInstrumentationPart(partIndex, 1)}
-                          disabled={partIndex === instrumentation.parts.length - 1}
-                          title="下へ"
-                        >
-                          ↓
-                        </button>
-                        <input
-                          value={part.name}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'name', event.target.value)}
-                          aria-label={`${part.name}のパート名`}
-                        />
-                        <input
-                          value={part.abbreviation}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'abbreviation', event.target.value)}
-                          aria-label={`${part.name}の略称`}
-                        />
-                        <select
-                          value={part.family}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'family', event.target.value)}
-                          aria-label={`${part.name}の楽器族`}
-                          title="楽器族"
-                        >
-                          {INSTRUMENT_FAMILY_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={part.clef}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'clef', event.target.value)}
-                          aria-label={`${part.name}の音部記号`}
-                        >
-                          <option value="treble">ト音</option>
-                          <option value="alto">ハ音</option>
-                          <option value="bass">ヘ音</option>
-                        </select>
-                        <select
-                          value={part.transposition}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'transposition', event.target.value)}
-                          aria-label={`${part.name}の移調`}
-                          title="移調"
-                        >
-                          {TRANSPOSITION_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={part.bracketGroup}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'bracketGroup', event.target.value)}
-                          aria-label={`${part.name}の括弧グループ`}
-                          title="括弧グループ"
-                        >
-                          {INSTRUMENT_BRACKET_GROUP_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <input
-                          value={part.subBracketGroup ?? ''}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'subBracketGroup', event.target.value)}
-                          aria-label={`${part.name}のサブ括弧グループ`}
-                          placeholder="サブ括弧"
-                          title="同じ値が連続するパートを細い括弧でまとめます"
-                        />
-                        <select
-                          value={part.playbackInstrument ?? InstrumentType.PIANO}
-                          onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'playbackInstrument', event.target.value)}
-                          aria-label={`${part.name}の再生音色`}
-                        >
-                          {INSTRUMENT_GROUPS.map((group) => (
-                            <optgroup key={group.label} label={group.label}>
-                              {group.instruments.map((instrument) => (
-                                <option key={instrument} value={instrument}>
-                                  {INSTRUMENT_LABELS[instrument]}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          className="ghost compact-button"
-                          onClick={() => handleRemoveInstrumentationPart(partIndex)}
-                          disabled={instrumentation.parts.length <= 1}
-                        >
-                          削除
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </section>
               )}
             </div>
           )}

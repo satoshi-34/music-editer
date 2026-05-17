@@ -139,13 +139,9 @@
   display: flex;
   gap: 8px;
   align-items: flex-start;
-  flex: 1 1 100%;
-  width: 100%;
   max-width: 100%;
   color: #3f3f46;
   font-size: 12px;
-  border-top: 1px solid #e5e7eb;
-  padding-top: 8px;
 }
 .instrumentation-editor-head {
   display: flex;
@@ -159,7 +155,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  flex: 1 1 auto;
   max-width: min(100%, 1180px);
   max-height: 118px;
   overflow: auto;
