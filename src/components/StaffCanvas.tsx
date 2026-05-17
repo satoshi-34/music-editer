@@ -2159,7 +2159,11 @@ export default function StaffCanvas({
                 }
                 const snappedLine = snapLineBySpacing(stave, ly);
                 const key = applyKeySignatureToNaturalKey(lineToKey(snappedLine), keySignatureRef.current);
-                const noteAfterRest = lx >= xHit + wHit / 2;
+                // 休符の視覚的中心（符頭バウンディングボックスの中央）を基準にする。
+                // ヒット矩形は小節全体を覆うため、その中点（クレフを含む左端の半分）を使うと
+                // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
+                const noteVisualCenter = (noteVisualLeft + noteVisualRight) / 2;
+                const noteAfterRest = lx >= noteVisualCenter;
                 const restReplacement = buildRestEditReplacement(safeEvents[j], key, tool, noteAfterRest);
                 const isSameRestSelected =
                   selectedRef.current?.measure === startMeasureIndex + measureIndex &&

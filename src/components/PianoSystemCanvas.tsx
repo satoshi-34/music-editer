@@ -2042,7 +2042,11 @@ export default function PianoSystemCanvas({
                   return;
                 }
                 const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
-                const noteAfterRest=lx>=xl+wHit/2;
+                // 休符の視覚的中心（符頭バウンディングボックスの中央）を基準にする。
+                // ヒット矩形は小節全体を覆うため、その中点（クレフを含む左端の半分）を使うと
+                // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
+                const noteVisualCenter=(noteVisualLeft+noteVisualRight)/2;
+                const noteAfterRest=lx>=noteVisualCenter;
                 const restReplacement=buildRestEditReplacement(safeEvs[j],key,tool,noteAfterRest);
                 const isSameRestSelected =
                   selRef.current?.partIndex===pi &&
