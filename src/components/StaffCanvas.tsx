@@ -433,9 +433,11 @@ function findKeyIndexAtLine(
   return keys.findIndex((key) => Math.abs(keyToLineFn(key) - snappedLine) < KEY_SELECT_LINE_EPS);
 }
 
-// CSS zoom の実効値を返す。
+// ページ縮小率（--scale）の実効値を返す。
 // SVG 要素では Safari で --scale が getComputedStyle に継承されないため、
 // HTML 要素である .page-wrapper から読み取る。
+// 現在の縮小は transform: scale ベース（issue #13 対応）だが、
+// 万一 CSS zoom 方式へ戻ったときの座標補正フォールバックでこの値を使う。
 function getAccumulatedCSSZoom(el: Element): number {
   const wrapper = el.closest('.page-wrapper');
   if (wrapper) {
@@ -446,8 +448,11 @@ function getAccumulatedCSSZoom(el: Element): number {
 }
 
 // client座標 → SVG viewBox 座標
-// Safari 旧版では getBoundingClientRect() が CSS zoom を反映しないため、
-// サイズと位置の両方を補正して正確な座標を返す。
+// ページ縮小は transform: scale で行っており（issue #13 対応）、
+// transform は全ブラウザで getBoundingClientRect に視覚座標として反映されるため、
+// 通常は「BCR との単純差分 × viewBox 比率」だけで正確に変換できる。
+// 下の bcrReflectsZoom 分岐は、CSS zoom 方式（Safari 旧版で BCR に反映されない）へ
+// 退行した場合の保険として残している。
 function clientToGroup(
   svg: SVGSVGElement,
   _group: SVGGElement,

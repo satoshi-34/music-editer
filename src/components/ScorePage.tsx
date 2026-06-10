@@ -17,6 +17,7 @@ import PlaybackControls, {
   type PlaybackState
 } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
+import ScaledPageWrapper from './ScaledPageWrapper';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useTempoStorage } from '../hooks/useTempoStorage';
@@ -1696,7 +1697,7 @@ export default function ScorePage() {
           style={{ '--scale': String(scale), '--columns': String(columns) } as React.CSSProperties}
         >
           {visiblePages.map((p, i) => (
-            <div className="page-wrapper" key={i}>
+            <ScaledPageWrapper key={i} scale={scale}>
               <section className="print-page">
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (
@@ -1820,7 +1821,7 @@ export default function ScorePage() {
                   <span className="page-number">{i + 1}</span>
                 </footer>
               </section>
-            </div>
+            </ScaledPageWrapper>
           ))}
         </div>
       </div>

@@ -71,7 +71,8 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - **印刷対応**: ブラウザの印刷機能で楽譜を印刷
 
 ### Safari 座標補正
-- **Y補正ボタン**: Safari で音符配置位置がカーソルとずれる場合に手動で補正
+- **根本対策（issue #13）**: ページ縮小を CSS `zoom` から `transform: scale` へ変更。`transform` は全ブラウザで `getBoundingClientRect` に反映されるため、Safari 内蔵ディスプレイでの座標ズレが原理的に発生しなくなる
+- **Y補正ボタン**: それでも音符配置位置がカーソルとずれる場合に手動で補正
 - **操作**: ↑/↓ボタンまたはキーボード矢印キーで調整（低音方向=プラス）
 - **保存**: 設定はLocalStorageに保存、次回起動時も維持
 
@@ -235,8 +236,9 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 
 ### 1. クリック座標と描画座標の基準を統一（Safari 対応済み）
 - クリックはクライアント座標、VexFlow は SVG viewBox 座標です。
-- `getAccumulatedCSSZoom()`（HTML 要素 `.page-wrapper` から `--scale` を読取）+ viewBox 比率変換で **client → SVG viewBox 座標**へ変換。
-- CSS `zoom` プロパティに対し、Safari（論理サイズを返す）と Chrome（視覚サイズを返す）を動的に判別して補正。
+- ページ縮小は CSS `zoom` ではなく **`transform: scale`** で行います（issue #13 の根本対策）。`transform` は Safari を含む全ブラウザで `getBoundingClientRect` へ視覚座標として反映されるため、**BCR との単純差分 × viewBox 比率**だけで正確に変換できます。
+- `transform` はレイアウト上の占有サイズを変えないため、`ScaledPageWrapper` がページの実測高さ × scale をラッパーへ設定し、ページ間の余白を保ちます。
+- 旧 `zoom` 方式（Safari が論理サイズを返す）へ退行した場合に備え、`getAccumulatedCSSZoom()` + 動的判別の補正コードはフォールバックとして残しています。
 - 自動補正で解消しない場合はツールバーの **「Y補正」** で手動キャリブレーション可能（設定 localStorage 保存）。
 
 ### 2. Y 方向スナップ（音高決定）
