@@ -363,6 +363,10 @@ function getPreviewLedgerLines(snappedLine: number): number[] {
 }
 
 /* ===== SVG座標変換（Safari対応） ===== */
+// ページ縮小率（--scale）の実効値を返す。
+// 現在の縮小は transform: scale ベース（issue #13 対応）で、transform は
+// 全ブラウザで getBoundingClientRect に反映されるため通常この値は不要。
+// 万一 CSS zoom 方式へ戻ったときの座標補正フォールバック用に残している。
 function getAccumulatedCSSZoom(el: Element): number {
   const wrapper = el.closest('.page-wrapper');
   if (wrapper) {

@@ -17,6 +17,8 @@ import PlaybackControls, {
   type PlaybackState
 } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
+import ScaledPageWrapper from './ScaledPageWrapper';
+import { readInitialYOffset, Y_OFFSET_KEY } from '../utils/yOffsetMigration';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useTempoStorage } from '../hooks/useTempoStorage';
@@ -191,13 +193,12 @@ export default function ScorePage() {
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
 
-  const [yOffset, setYOffset] = useState<number>(() => {
-    const v = parseFloat(localStorage.getItem('yOffset') ?? '0');
-    return Number.isFinite(v) ? v : 0;
-  });
+  // zoom 時代の古い手動Y補正は transform ビルド初回起動時に自動リセットされる
+  // （詳細は src/utils/yOffsetMigration.ts のコメントを参照）
+  const [yOffset, setYOffset] = useState<number>(() => readInitialYOffset());
   const handleYOffsetChange = (v: number) => {
     setYOffset(v);
-    localStorage.setItem('yOffset', String(v));
+    localStorage.setItem(Y_OFFSET_KEY, String(v));
   };
 
   // パートごとのデータ
@@ -1696,7 +1697,7 @@ export default function ScorePage() {
           style={{ '--scale': String(scale), '--columns': String(columns) } as React.CSSProperties}
         >
           {visiblePages.map((p, i) => (
-            <div className="page-wrapper" key={i}>
+            <ScaledPageWrapper key={i} scale={scale}>
               <section className="print-page">
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (
@@ -1820,7 +1821,7 @@ export default function ScorePage() {
                   <span className="page-number">{i + 1}</span>
                 </footer>
               </section>
-            </div>
+            </ScaledPageWrapper>
           ))}
         </div>
       </div>

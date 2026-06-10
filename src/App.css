@@ -827,8 +827,22 @@ button.ghost:disabled {
 
 /* ===== 各ページ（紙面の見た目） ===== */
 .page-wrapper {
-  /* zoom は見た目だけ縮む＝余白はそのまま。レイアウトを崩しにくい */
-  zoom: var(--scale, 1);
+  /* 縮小は zoom ではなく transform: scale で行う（issue #13 の根本対策）。
+     CSS zoom は Safari で getBoundingClientRect に反映されず座標ズレの原因になるが、
+     transform は全ブラウザで getBoundingClientRect へ視覚座標として反映される。 */
+  /* transform はレイアウト上の占有サイズを変えない。そのままだと縮小前のサイズで
+     グリッドに居座ってページ間に大きな余白ができるため、ラッパー自身のサイズを
+     「縮小後の見た目サイズ」へ合わせる。幅はページ幅（A4 = 210mm）固定で CSS だけで決まる。 */
+  width: calc(210mm * var(--scale, 1));
+  /* 高さはページ内容により A4 を超えることがある（大編成の総譜など）ので、
+     ScaledPageWrapper が実測値 × scale をインライン style で上書きする。
+     ここは初回描画用のフォールバック（A4 高さ想定）。 */
+  height: calc(297mm * var(--scale, 1));
+}
+
+.page-wrapper > .print-page {
+  transform: scale(var(--scale, 1));
+  transform-origin: top left;
   will-change: transform;
 }
 
@@ -928,6 +942,8 @@ button.ghost:disabled {
     height: auto;
   }
   .print-page {
+    /* 画面用の縮小は印刷に持ち込まない（印刷は常に原寸 A4） */
+    transform: none !important;
     page-break-after: always;
     box-shadow: none;
     border: 0;

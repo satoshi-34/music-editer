@@ -5,6 +5,22 @@
 
 ---
 
+## 【2026-06 根本対策済み】zoom → transform: scale 置き換え（issue #13）
+
+ページ縮小を CSS `zoom` から **`transform: scale`** へ変更した。これがこのバグの根本対策となる。
+
+- CSS `zoom` は Safari（旧版）で `getBoundingClientRect` に反映されず、以下に書かれた複雑な補正が必要だった
+- CSS `transform` は **全ブラウザで `getBoundingClientRect` へ視覚座標として反映される**（CSSOM 仕様）ため、`(clientX - rect.left) × (viewBox幅 / rect.width)` の単純変換だけで正確になる
+- 実装箇所:
+  - `src/App.css` — `.page-wrapper` のサイズ指定 + `.print-page` への `transform: scale(var(--scale))`
+  - `src/components/ScaledPageWrapper.tsx` — transform はレイアウトサイズを変えないため、ページ実測高さ × scale をラッパー高さに設定して余白を補正
+- `clientToGroup()` 内の `bcrReflectsZoom` 分岐と `getAccumulatedCSSZoom()` は、**万一 zoom 方式へ退行した場合の保険**として残している（transform 方式では常に単純パスを通る）
+
+> **注意**: `.page-wrapper` / `.print-page` に CSS `zoom` を再導入しないこと。
+> 以下のセクションは旧 zoom 方式での原因分析と補正実装の記録である。
+
+---
+
 ## 症状
 
 Safari でノートを配置しようとすると、ガイドライン（ホバー時の横線プレビュー）とクリックで実際に描画される音符の高さがずれる。Chrome では正常。
