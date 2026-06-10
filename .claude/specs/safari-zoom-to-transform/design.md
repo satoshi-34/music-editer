@@ -78,6 +78,28 @@ CSS `transform` は CSSOM 仕様により **全ブラウザで BCR へ視覚座�
 - `src/components/StaffCanvas.tsx` / `PianoSystemCanvas.tsx` — コメント更新のみ（ロジック不変）
 - Y補正（手動キャリブレーション）機能はそのまま維持
 
+## フォローアップ: 旧Y補正の自動リセット（実機検証で判明）
+
+### 実機検証の結果（2026-06-11）
+
+- **新しい Safari（Apple Silicon MacBook Pro）**: 修正前からズレない。新しい Safari は
+  `zoom` を `getBoundingClientRect` に反映するよう改善されており、元のバグ自体が出ない
+- **古い Safari（Intel Mac）**: transform 修正後もズレた。原因は zoom 時代に設定した
+  手動Y補正（`localStorage['yOffset'] = 24`）の残留。`localStorage.removeItem('yOffset')`
+  で**ピッタリ一致**することを実機確認
+
+### 問題
+
+座標が正しくなった transform ビルドでは、残留した旧Y補正がそのまま逆方向のズレになる。
+zoom 時代にY補正を設定した利用者全員が「修正したのにズレる」状態になる。
+
+### 修正設計（`src/utils/yOffsetMigration.ts`）
+
+- transform ビルドの初回起動時に一度だけ `yOffset` を破棄する
+- 「リセット済み」フラグ（`yOffsetResetForTransformScale`）を別キーで保持し、
+  利用者が transform ビルド上で改めて設定したY補正は二度と消さない
+- localStorage が使えない環境（プライベートブラウジング等）では補正なしで動作
+
 ## やってはいけないこと
 
 - `.page-wrapper` / `.print-page` に CSS `zoom` を再導入しない
