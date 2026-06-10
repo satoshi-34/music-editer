@@ -104,6 +104,9 @@ cd music-editer
 docker compose up
 ```
 
+開発サーバーのポートはホスト側 `127.0.0.1` だけにバインドしています（`docker-compose.yml`）。  
+`"5173:5173"` のように書くと LAN 上の他端末からもソースコードを配信する開発サーバーへ届いてしまうため、安全側に倒しています。スマホ実機などから確認したいときだけ、一時的に `"5173:5173"` へ戻してください。
+
 ### Docker で安全に依存を追加する
 
 `postinstall` 付きのライブラリや、初回は安全側で追加したい依存は、まずコンテナ内で `--ignore-scripts` を付けて入れます。  
@@ -123,6 +126,22 @@ npm run deps:add:safe -- soundfont-player
 - `package.json` と `package-lock.json` はホスト側にも反映されます
 - `node_modules` は Docker volume 側を使うため、ローカル環境を汚しにくいです
 - 追加後に本当に script 実行が必要かを確認してから、通常インストールや個別コマンドを検討します
+
+### 依存の脆弱性チェック
+
+依存ライブラリの既知脆弱性は、コンテナ内で `npm audit` を実行して確認できます。
+
+```bash
+docker compose run --rm app npm audit
+# 修正もコンテナ内で（自動 script は走らせない）
+docker compose run --rm app npm audit fix --ignore-scripts
+```
+
+2026-06 のセキュリティレビューで vitest（Critical）と ws（Moderate）の既知脆弱性を更新で解消済みです。詳細は `.claude/specs/security-hardening/design.md` を参照してください。
+
+### 音色データ（SoundFont）の取得先について
+
+音符再生で使う SoundFont の音色サンプルは、初回再生時に外部 CDN（`soundfont-player` の既定配信元）からダウンロードします。オフラインでは SoundFont 音源が鳴らない点と、外部サーバーへアクセスが発生する点に注意してください。パック名は許可リストで検証しているため、保存データ経由で任意の URL へアクセスさせることはできません（`src/audio/SoundFontEngine.ts`）。
 
 ### ローカル（npm）
 ```bash
