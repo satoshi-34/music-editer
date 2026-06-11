@@ -49,6 +49,27 @@ Safari では「見かけ上 running の古い context」が無音のまま残�
 
 - [src/components/ScorePage.tsx](../src/components/ScorePage.tsx)
 
+### 2.4 silent failure を自動検知して復旧する（issue #14 対応）
+
+再生ボタン・音色プレビューの開始から約 600ms 後に、出力経路のヘルスチェックを行う
+（[src/audio/audioOutputHealth.ts](../src/audio/audioOutputHealth.ts)）。
+
+- `currentTime` が進んでいるか（running 表示のままレンダリングが止まる故障の検知）
+- 無音プローブ（destination に繋がないオシレーター + AnalyserNode）で波形が観測できるか
+
+無音が**確定**したときだけ、設定を維持したままエンジンを自動で作り直し、
+再生ボタンの近くに通知を出す。30 秒以内に再発した場合は作り直しを繰り返さず、
+`音声復旧` ボタンとページ再読み込みへ誘導する。
+
+検知時はコンソールに次の形式で診断ログが出る。**Safari 実機で発生したらこの行を issue へ貼る**こと。
+
+```
+[ScorePage] 無音状態を検知しました: verdict=unhealthy / state=running / timeAdvancing=true / currentTimeDelta=0.2507 / signalDetected=false / reason=...
+```
+
+注意: グラフ処理より先（OS の出力デバイス段）で音が消えるケースは JS から観測できないため、
+この検知でも拾えない silent failure は残り得る。その場合は次の `音声復旧` ボタンを使う。
+
 ### 2.5 `音声復旧` ボタンで手動リセットできるようにする
 
 Safari の厄介な点は、再生処理が例外も出さず最後まで通るのに、

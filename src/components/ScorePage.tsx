@@ -19,6 +19,7 @@ import PlaybackControls, {
 import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
 import { readInitialYOffset, Y_OFFSET_KEY } from '../utils/yOffsetMigration';
+import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useTempoStorage } from '../hooks/useTempoStorage';
@@ -69,6 +70,12 @@ type PageSpec = { systems: number };
 type ToolbarTab = 'notes' | 'score' | 'playback' | 'other';
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
+
+// 無音検知（issue #14）のタイミング設定。
+// 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
+const SILENT_FAILURE_CHECK_DELAY_MS = 600;
+// 自動復旧（エンジン再作成）の連発防止。これより短い間隔で再検知したら手動復旧へ誘導する。
+const SILENT_RECOVERY_COOLDOWN_MS = 30_000;
 const DEFAULT_CUSTOM_PART: Omit<InstrumentPartDefinition, 'id' | 'order'> = {
   name: 'New Part',
   abbreviation: 'Part',
@@ -215,6 +222,10 @@ export default function ScorePage() {
   // 保存設定そのものは残しつつ、「今実際に鳴っている方式」だけ別で見せるため ref で覚える。
   const temporaryBuiltInFallbackRef = useRef(false);
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped');
+  // 無音検知（issue #14）の通知文。null のときは何も表示しない
+  const [audioHealthNotice, setAudioHealthNotice] = useState<string | null>(null);
+  // 最後に自動復旧（エンジン再作成）した時刻。クールダウン判定に使う
+  const lastSilentRecoveryAtRef = useRef(0);
   const [currentPosition, setCurrentPosition] = useState<{ measureIndex: number; beatPosition: number; noteIndex: number }>({
     measureIndex: 0, beatPosition: 0, noteIndex: 0
   });
@@ -363,6 +374,59 @@ export default function ScorePage() {
     playbackStartedAtRef.current = null;
     remainingPlaybackMsRef.current = 0;
   }, []);
+
+  const runOutputHealthCheck = useCallback(async (engine: PlaybackEngine) => {
+    try {
+      // Safari の silent failure（issue #14）は例外が出ないため、
+      // 再生開始後に「音が出ているはずの状態か」を能動的に確認する。
+      const report = await checkAudioOutputHealth(engine.getAudioContext?.() ?? null);
+
+      // 正常時も含めて毎回結果を残す。「healthy 判定なのに無音」は
+      // JS から観測できない出力段（OS/Safari 側）の故障を意味するため、
+      // この行が Safari 実機調査の一次情報になる。
+      console.info('[ScorePage] 出力ヘルスチェック:', formatAudioHealthReport(report));
+
+      if (report.verdict === 'healthy') {
+        setAudioHealthNotice(null);
+        return;
+      }
+      if (report.verdict === 'unknown') {
+        // 判定材料が足りないときは何もしない。
+        // unhealthy 扱いにすると、テスト環境や古いブラウザで誤検知の復旧ループになる。
+        return;
+      }
+
+      // Safari 実機からの報告にそのまま貼ってもらえる形式で診断ログを残す
+      console.warn('[ScorePage] 無音状態を検知しました:', formatAudioHealthReport(report));
+
+      const now = Date.now();
+      if (now - lastSilentRecoveryAtRef.current < SILENT_RECOVERY_COOLDOWN_MS) {
+        // 直前に自動復旧したばかりで再発しているなら、作り直しを繰り返しても直らない。
+        // ループを避けて手動の復旧手段へ誘導する。
+        setAudioHealthNotice('音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。');
+        return;
+      }
+      lastSilentRecoveryAtRef.current = now;
+
+      clearPlaybackTimer();
+      resetPlaybackClock();
+      setPlaybackState('stopped');
+      setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+      // 音源方式などのユーザー設定は維持したまま、エンジン（AudioContext）だけ作り直す。
+      // 設定ごと既定値に戻したいときは従来どおり「音声復旧」ボタンを使う。
+      recreateAudioEngine();
+      setAudioHealthNotice('無音状態を検知したため、音声エンジンを自動で再起動しました。もう一度再生をお試しください。');
+    } catch (error) {
+      // 検知自体の失敗で再生機能を巻き込まない
+      console.warn('[ScorePage] 無音ヘルスチェックに失敗しました（無視します）:', error);
+    }
+  }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock]);
+
+  const scheduleOutputHealthCheck = useCallback((engine: PlaybackEngine) => {
+    window.setTimeout(() => {
+      void runOutputHealthCheck(engine);
+    }, SILENT_FAILURE_CHECK_DELAY_MS);
+  }, [runOutputHealthCheck]);
 
   // スコアタイプ切り替え時に左手データを初期化
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
@@ -760,6 +824,10 @@ export default function ScorePage() {
             resetPlaybackClock();
           }, duration * 1000);
         }
+
+        // 再生予約が通っても Safari では実音が出ていないことがある（issue #14）。
+        // 少し待ってから出力経路のヘルスチェックを行い、無音なら自動復旧する。
+        scheduleOutputHealthCheck(audioEngine);
       });
     } catch (error: unknown) {
       console.error('[ScorePage] 再生開始に失敗:', error);
@@ -774,7 +842,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, runWithPlaybackFallback]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -828,11 +896,13 @@ export default function ScorePage() {
       // プレビューは「いま選んでいる音源方式 + 楽器 + 音色調整」をそのまま確認するための入口。
       await runWithPlaybackFallback(async (audioEngine) => {
         await audioEngine.playNoteByName('C4', 0.5);
+        // プレビューも issue #14 の無音対象なので、再生ボタンと同じヘルスチェックを通す
+        scheduleOutputHealthCheck(audioEngine);
       });
     } catch (error) {
       console.error('[ScorePage] 音色プレビューに失敗:', error);
     }
-  }, [runWithPlaybackFallback]);
+  }, [runWithPlaybackFallback, scheduleOutputHealthCheck]);
 
   const handleInputNotePreview = useCallback(async (noteEvent: NoteEvent, instrument?: InstrumentType) => {
     if (noteEvent.isRest || noteEvent.keys.length === 0) {
@@ -896,6 +966,8 @@ export default function ScorePage() {
       setIsTemporaryBuiltInFallback(false);
       setPlaybackState('stopped');
       setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+      // 手動復旧したら無音検知の通知は役目を終えるので消す
+      setAudioHealthNotice(null);
       alert('音声設定を安全な既定値へ戻して復旧しました。built-in のピアノでもう一度お試しください。');
     } catch (error) {
       console.error('[ScorePage] 音声復旧に失敗:', error);
@@ -1479,6 +1551,7 @@ export default function ScorePage() {
                 onInstrumentChange={handleInstrumentChange}
                 onInstrumentPreview={handleInstrumentPreview}
                 onAudioRecovery={handleAudioRecovery}
+                audioHealthNotice={audioHealthNotice}
                 onEmergencyBeep={handleEmergencyBeep}
                 soundRuntimeSettings={soundRuntimeSettings}
                 activeSoundEngineMode={activeSoundEngineMode}

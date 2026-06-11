@@ -42,6 +42,8 @@ export interface PlaybackControlsProps {
   onInstrumentPreview?: (instrument: InstrumentType) => void;
   /** Safari などで無音になったとき、音声系を手動で復旧するコールバック */
   onAudioRecovery?: () => void;
+  /** 無音検知（issue #14）の通知メッセージ。null なら非表示 */
+  audioHealthNotice?: string | null;
   /** 再生エンジンを通さない最小テスト音 */
   onEmergencyBeep?: () => void;
   /** 詳細な音源設定 */
@@ -152,6 +154,7 @@ export default function PlaybackControls({
   onInstrumentChange,
   onInstrumentPreview,
   onAudioRecovery,
+  audioHealthNotice = null,
   onEmergencyBeep,
   soundRuntimeSettings,
   activeSoundEngineMode,
@@ -321,6 +324,17 @@ export default function PlaybackControls({
           <span className="button-text">停止</span>
         </button>
       </div>
+
+      {/* 無音検知（issue #14）の通知。再生ボタンのすぐ近くに出して気づきやすくする */}
+      {audioHealthNotice && (
+        <div
+          className="audio-health-notice"
+          role="status"
+          style={{ fontSize: 12, color: '#92400e', lineHeight: 1.6 }}
+        >
+          {audioHealthNotice}
+        </div>
+      )}
 
       {/* テンポ設定 */}
       <div className="tempo-controls">

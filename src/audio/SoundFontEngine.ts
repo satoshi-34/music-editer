@@ -283,6 +283,14 @@ export class SoundFontEngine implements PlaybackEngine {
     return this.context;
   }
 
+  /**
+   * 診断専用: 内部の AudioContext を返す。
+   * Safari silent failure（issue #14）のヘルスチェックが使う。再生制御には使わない。
+   */
+  getAudioContext(): AudioContext | null {
+    return this.context;
+  }
+
   private async getPlayerForCurrentInstrument(): Promise<SoundFontPlayer> {
     return this.getPlayerForInstrument(this.currentInstrument);
   }
