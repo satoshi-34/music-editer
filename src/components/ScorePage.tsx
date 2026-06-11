@@ -381,6 +381,11 @@ export default function ScorePage() {
       // 再生開始後に「音が出ているはずの状態か」を能動的に確認する。
       const report = await checkAudioOutputHealth(engine.getAudioContext?.() ?? null);
 
+      // 正常時も含めて毎回結果を残す。「healthy 判定なのに無音」は
+      // JS から観測できない出力段（OS/Safari 側）の故障を意味するため、
+      // この行が Safari 実機調査の一次情報になる。
+      console.info('[ScorePage] 出力ヘルスチェック:', formatAudioHealthReport(report));
+
       if (report.verdict === 'healthy') {
         setAudioHealthNotice(null);
         return;
