@@ -438,6 +438,27 @@ export default function PlaybackControls({
           )}
         </div>
 
+        {/* 音量スライダー。音色詳細の中に隠さず、いつでも触れる場所に置く。
+            50% が従来どおりの音量で、100% にすると約2倍まで持ち上がる。 */}
+        {soundRuntimeSettings && onSoundProfileChange && (
+          <div className="volume-controls">
+            <label className="volume-label" htmlFor="master-volume-slider">
+              音量: {Math.round(soundRuntimeSettings.profile.volume * 100)}%
+            </label>
+            <input
+              id="master-volume-slider"
+              className="volume-slider"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={soundRuntimeSettings.profile.volume}
+              onChange={handleSoundProfileSliderChange('volume')}
+              aria-label="再生音量"
+            />
+          </div>
+        )}
+
         {soundRuntimeSettings && (
           <div style={{ marginTop: 8 }}>
             <button
