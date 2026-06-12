@@ -216,12 +216,19 @@ export default function ScorePage() {
   );
   const [ensembleParts, setEnsembleParts] = useState<MeasureData[][]>(() => []);
 
-  const audioEngineRef = useRef<PlaybackEngine>(createPlaybackEngine(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS));
+  // useRef(createPlaybackEngine(...)) と引数に直接書くと、useRef は初回しか値を使わないのに
+  // 引数の式自体は毎レンダー評価され、使い捨てのエンジンが大量に生成されてしまう
+  // （コンソールに「SoundFontEngineが初期化されました」が溢れる原因だった）。
+  // ref は null で持ち、getAudioEngine() の初回呼び出しで一度だけ生成する。
+  const audioEngineRef = useRef<PlaybackEngine | null>(null);
   const emergencyAudioContextRef = useRef<AudioContext | null>(null);
   // Safari や一時的な SoundFont 失敗時は、その1回だけ内蔵音源へ退避する。
   // 保存設定そのものは残しつつ、「今実際に鳴っている方式」だけ別で見せるため ref で覚える。
   const temporaryBuiltInFallbackRef = useRef(false);
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped');
+  // ヘルスチェックは setTimeout 越しに走るため、実行時点の最新の再生状態を ref で参照する。
+  // （state を直接読むと予約時点の古い値に固定されてしまう）
+  const playbackStateRef = useRef<PlaybackState>('stopped');
   // 無音検知（issue #14）の通知文。null のときは何も表示しない
   const [audioHealthNotice, setAudioHealthNotice] = useState<string | null>(null);
   // 最後に自動復旧（エンジン再作成）した時刻。クールダウン判定に使う
@@ -262,6 +269,10 @@ export default function ScorePage() {
   }, []);
 
   const getAudioEngine = useCallback(() => {
+    // 初回アクセス時に一度だけ生成する（遅延初期化）
+    if (!audioEngineRef.current) {
+      audioEngineRef.current = createPlaybackEngine(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS);
+    }
     return audioEngineRef.current;
   }, []);
 
@@ -271,7 +282,7 @@ export default function ScorePage() {
     // 例:
     // - built-in -> soundfont に切り替えたら SoundFontEngine を新しく作る
     // - SoundFontパック名を変えたら、そのパック用に作り直す
-    audioEngineRef.current.dispose();
+    audioEngineRef.current?.dispose();
     audioEngineRef.current = createPlaybackEngine(soundRuntimeSettings);
     audioEngineRef.current.setInstrument(currentInstrument);
     setActiveSoundEngineMode(soundRuntimeSettings.engineMode);
@@ -375,11 +386,31 @@ export default function ScorePage() {
     remainingPlaybackMsRef.current = 0;
   }, []);
 
+  useEffect(() => {
+    // setTimeout 越しのヘルスチェックが「いまの」再生状態を読めるように同期する
+    playbackStateRef.current = playbackState;
+  }, [playbackState]);
+
   const runOutputHealthCheck = useCallback(async (engine: PlaybackEngine) => {
     try {
+      // ユーザーが一時停止した直後は AudioContext が suspended になるのが正しい状態。
+      // ここで判定すると「無音故障」と誤検知してしまうため、チェック自体をやめる。
+      // （実際に Safari で誤検知が起きた: 再生→600ms以内に一時停止→suspended を unhealthy 判定）
+      // 関数で都度読むのは、直接比較だと TS の絞り込みが await 越しに残り
+      // 2 回目の判定で「paused はあり得ない」と誤推論されるのを避けるため。
+      const isPausedByUser = () => playbackStateRef.current === 'paused';
+      if (isPausedByUser()) {
+        return;
+      }
+
       // Safari の silent failure（issue #14）は例外が出ないため、
       // 再生開始後に「音が出ているはずの状態か」を能動的に確認する。
       const report = await checkAudioOutputHealth(engine.getAudioContext?.() ?? null);
+
+      // プローブ中（約250ms）に一時停止された場合も同様に無視する
+      if (isPausedByUser()) {
+        return;
+      }
 
       // 正常時も含めて毎回結果を残す。「healthy 判定なのに無音」は
       // JS から観測できない出力段（OS/Safari 側）の故障を意味するため、

@@ -64,8 +64,25 @@ Safari では `AudioContext.state === 'running'` に見えても実音が出な�
 - `src/components/ScorePage.tsx` — 検知経路の配線。既存の手動「音声復旧」「最小テスト音」は不変
 - `src/components/PlaybackControls.tsx` — 通知表示の追加
 
+## フォローアップ: 一時停止の誤検知修正（Safari 実機で発見）
+
+再生開始から 600ms 以内にユーザーが一時停止すると、suspend された AudioContext を
+ヘルスチェックが「unhealthy (state=suspended)」と誤検知し、自動復旧が走って
+一時停止状態を壊してしまう不具合が Safari 実機で見つかった。
+
+対策: `playbackStateRef`（最新の再生状態を setTimeout 越しに読むための ref）を導入し、
+**ユーザーが一時停止中（'paused'）ならチェック自体をスキップ**する。
+プローブ（約250ms）の最中に一時停止された場合も同様に無視する。
+silent failure の前提は「running 表示なのに無音」なので、意図的な suspended を
+対象から外しても検知能力は落ちない。
+
+実装メモ: 2 回目の paused 判定を `ref.current === 'paused'` と直接書くと、
+1 回目の早期 return の型絞り込みが await 越しに残り TS2367 になる。
+判定を小さな関数（`isPausedByUser()`）に包んで回避している。
+
 ## やってはいけないこと
 
 - `unknown` 判定で自動復旧を動かさない（テスト環境・古いブラウザで復旧ループになる）
 - プローブのオシレーターを `destination` に接続しない（ユーザーに聞こえてしまう）
 - クールダウンを外さない（壊れた環境でエンジン再作成が無限に繰り返される）
+- 一時停止中（playbackState === 'paused'）にヘルスチェックを動かさない（suspended は正常な状態）
