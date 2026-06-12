@@ -16,6 +16,12 @@ export interface PlaybackSoundProfile {
   attack: number;
   release: number;
   richness: number;
+  /**
+   * 全体の再生音量（0〜1）。
+   * 0.5 が従来どおりの音量で、1.0 にすると約 2 倍まで持ち上がる。
+   * 0 にすると完全にミュートされる。
+   */
+  volume: number;
 }
 
 export interface PlaybackSoundRuntimeSettings {
@@ -46,9 +52,25 @@ export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettin
     brightness: 0.5,
     attack: 0.5,
     release: 0.5,
-    richness: 0.5
+    richness: 0.5,
+    volume: 0.5
   }
 };
+
+/**
+ * volume スライダー値（0〜1）を、マスター GainNode に設定する増幅率へ変換する。
+ * 0.5 → 1.0（従来どおり）、1.0 → 4.0（約4倍）、0 → 0（ミュート）。
+ * 二乗カーブにしているのは、50% を従来音量に固定したまま上側の伸びしろを増やすためと、
+ * 人の耳には音量変化が二乗的なカーブのほうが自然に聞こえるため。
+ * 各エンジンは全ノードをマスター GainNode 経由で出力するため、この1か所で音量が決まる。
+ */
+export function getMasterVolumeGain(profile: PlaybackSoundProfile): number {
+  // 古い保存データには volume が無いことがあるため、欠けていたら従来音量にする
+  const volume = typeof profile.volume === 'number' && Number.isFinite(profile.volume)
+    ? Math.min(1, Math.max(0, profile.volume))
+    : 0.5;
+  return (volume * 2) ** 2;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -94,7 +116,8 @@ export function sanitizePlaybackRuntimeSettings(raw: unknown): PlaybackSoundRunt
       brightness: clampProfileValue(profile.brightness, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.brightness),
       attack: clampProfileValue(profile.attack, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.attack),
       release: clampProfileValue(profile.release, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.release),
-      richness: clampProfileValue(profile.richness, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.richness)
+      richness: clampProfileValue(profile.richness, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.richness),
+      volume: clampProfileValue(profile.volume, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.volume)
     }
   };
 }

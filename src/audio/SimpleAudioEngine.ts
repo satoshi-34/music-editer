@@ -6,6 +6,7 @@ import { InstrumentType } from './SoundSource';
 import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
+  getMasterVolumeGain,
   type PlaybackSoundProfile
 } from './playbackSettings';
 
@@ -59,6 +60,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
   private currentInstrument: InstrumentType = InstrumentType.PIANO;
   private hasPrimedOutput: boolean = false;
   private soundProfile: PlaybackSoundProfile = DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile;
+  // すべての発音をこの GainNode 経由で destination へ流す。
+  // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
+  private masterGainNode: GainNode | null = null;
 
   constructor() {
     console.log('[SimpleAudioEngine] SimpleAudioEngineが初期化されました（AudioContextはユーザーインタラクション時に作成）');
@@ -551,7 +555,25 @@ export class SimpleAudioEngine implements PlaybackEngine {
    */
   setSoundProfile(profile: PlaybackSoundProfile): void {
     this.soundProfile = profile;
+    // 音量スライダーは再生中でも即座に効かせたいので、マスター GainNode に直接反映する
+    if (this.masterGainNode) {
+      this.masterGainNode.gain.value = getMasterVolumeGain(profile);
+    }
     console.log('[SimpleAudioEngine] 音色プロファイルを更新しました:', profile);
+  }
+
+  /**
+   * 発音ノードの接続先（マスター GainNode）を返す。
+   * AudioContext が作り直されたときは古い GainNode を使えないため、
+   * 「いまの context に属しているか」を確認して必要なら作り直す。
+   */
+  private getOutputNode(context: AudioContext): AudioNode {
+    if (!this.masterGainNode || this.masterGainNode.context !== context) {
+      this.masterGainNode = context.createGain();
+      this.masterGainNode.gain.value = getMasterVolumeGain(this.soundProfile);
+      this.masterGainNode.connect(context.destination);
+    }
+    return this.masterGainNode;
   }
 
   /**
@@ -960,7 +982,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
       oscillator.connect(layerGain);
       layerGain.connect(gainNode);
     });
-    gainNode.connect(this.context!.destination);
+    gainNode.connect(this.getOutputNode(this.context!));
     this.oscillators.set(oscillatorId, { oscillators, gainNode });
 
     return oscillatorId;
@@ -1054,7 +1076,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
     );
 
     oscillator.connect(gainNode);
-    gainNode.connect(context.destination);
+    gainNode.connect(this.getOutputNode(context));
     oscillator.start(startTime);
     oscillator.stop(startTime + duration + adjustedTailSeconds);
     oscillator.addEventListener('ended', () => {
@@ -1205,6 +1227,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
         this.context.close();
         this.context = null;
       }
+      // 閉じた context に属する GainNode は再利用できないため捨てる
+      this.masterGainNode = null;
       
       this.isInitialized = false;
       this.hasPrimedOutput = false;

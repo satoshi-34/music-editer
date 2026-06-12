@@ -2,7 +2,7 @@ import type { Player as SoundFontPlayer } from 'soundfont-player';
 
 import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
 import type { PlaybackSoundProfile } from './playbackSettings';
-import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS } from './playbackSettings';
+import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS, getMasterVolumeGain } from './playbackSettings';
 import { InstrumentType } from './SoundSource';
 
 type SoundFontModule = typeof import('soundfont-player');
@@ -123,6 +123,9 @@ export class SoundFontEngine implements PlaybackEngine {
   // playerCache は「同じ楽器をもう一度使うときに、毎回ネット読み込みし直さない」ための置き場。
   // キーは「SoundFontパック名 + 楽器名」の組み合わせにしている。
   private readonly playerCache = new Map<string, SoundFontPlayer>();
+  // すべての player の出力をこの GainNode 経由で destination へ流す。
+  // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
+  private masterGainNode: GainNode | null = null;
 
   constructor(soundfontName: string = DEFAULT_SOUNDFONT_NAME) {
     this.soundfontName = resolveSoundFontName(soundfontName);
@@ -260,6 +263,8 @@ export class SoundFontEngine implements PlaybackEngine {
         this.context.close();
         this.context = null;
       }
+      // 閉じた context に属する GainNode は再利用できないため捨てる
+      this.masterGainNode = null;
       console.log('[SoundFontEngine] リソースを解放しました');
     } catch (error) {
       console.error('[SoundFontEngine] dispose中にエラーが発生しました:', error);
@@ -273,7 +278,25 @@ export class SoundFontEngine implements PlaybackEngine {
 
   setSoundProfile(profile: PlaybackSoundProfile): void {
     this.soundProfile = profile;
+    // 音量スライダーは再生中でも即座に効かせたいので、マスター GainNode に直接反映する
+    if (this.masterGainNode) {
+      this.masterGainNode.gain.value = getMasterVolumeGain(profile);
+    }
     console.log('[SoundFontEngine] 音色プロファイルを更新しました:', profile);
+  }
+
+  /**
+   * player の接続先（マスター GainNode）を返す。
+   * AudioContext が作り直されたときは古い GainNode を使えないため、
+   * 「いまの context に属しているか」を確認して必要なら作り直す。
+   */
+  private getOutputNode(context: AudioContext): AudioNode {
+    if (!this.masterGainNode || this.masterGainNode.context !== context) {
+      this.masterGainNode = context.createGain();
+      this.masterGainNode.gain.value = getMasterVolumeGain(this.soundProfile);
+      this.masterGainNode.connect(context.destination);
+    }
+    return this.masterGainNode;
   }
 
   private ensureContext(): AudioContext {
@@ -310,9 +333,11 @@ export class SoundFontEngine implements PlaybackEngine {
     // notes を絞ると初回ダウンロード量は減らせるが、
     // まずは「どの音域でも鳴る」ことを優先してフルレンジを使う。
     // ここで soundfontName を差し替えると、MusyngKite / FluidR3_GM などを試せる。
+    // destination をマスター GainNode にすることで、音量スライダーが全 player に効く。
     const player = await module.instrument(context, instrumentName as never, {
       soundfont: this.soundfontName,
-      format: 'mp3'
+      format: 'mp3',
+      destination: this.getOutputNode(context)
     });
 
     this.playerCache.set(cacheKey, player);
