@@ -59,7 +59,9 @@ export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettin
 
 /**
  * volume スライダー値（0〜1）を、マスター GainNode に設定する増幅率へ変換する。
- * 0.5 → 1.0（従来どおり）、1.0 → 2.0（約2倍）、0 → 0（ミュート）という直感的な対応にする。
+ * 0.5 → 1.0（従来どおり）、1.0 → 4.0（約4倍）、0 → 0（ミュート）。
+ * 二乗カーブにしているのは、50% を従来音量に固定したまま上側の伸びしろを増やすためと、
+ * 人の耳には音量変化が二乗的なカーブのほうが自然に聞こえるため。
  * 各エンジンは全ノードをマスター GainNode 経由で出力するため、この1か所で音量が決まる。
  */
 export function getMasterVolumeGain(profile: PlaybackSoundProfile): number {
@@ -67,7 +69,7 @@ export function getMasterVolumeGain(profile: PlaybackSoundProfile): number {
   const volume = typeof profile.volume === 'number' && Number.isFinite(profile.volume)
     ? Math.min(1, Math.max(0, profile.volume))
     : 0.5;
-  return volume * 2;
+  return (volume * 2) ** 2;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

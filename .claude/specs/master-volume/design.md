@@ -22,7 +22,10 @@ SoundFont（特に FluidR3_GM パック）はサンプル自体の音量が控�
 
 - `PlaybackSoundProfile` に `volume: number`（0〜1）を追加。既定値 0.5
 - `getMasterVolumeGain(profile)`: スライダー値 → GainNode 値の変換
-  - **0.5 → 1.0（従来どおりの音量）、1.0 → 2.0（約2倍）、0 → 0（ミュート）**
+  - **二乗カーブ `(volume × 2)²`: 0.5 → 1.0（従来どおりの音量）、1.0 → 4.0（約4倍）、0 → 0（ミュート）**
+  - 二乗カーブの理由: 50% を従来音量に固定したまま上側の伸びしろを増やせる
+    （線形 ×4 だと 50% が従来の2倍になり、既存ユーザーの聞こえ方が変わってしまう）。
+    また人の耳には二乗的な音量カーブのほうが自然に聞こえる
   - 旧保存データに volume が無い場合は従来音量（1.0）に補完
 - `sanitizePlaybackRuntimeSettings` で 0〜1 へ丸め（localStorage 改ざん対策は既存方針踏襲）
 - profile に乗せたことで、保存（localStorage）・エンジン反映（setSoundProfile）・

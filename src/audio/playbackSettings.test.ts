@@ -78,10 +78,11 @@ describe('sanitizePlaybackRuntimeSettings', () => {
 });
 
 describe('getMasterVolumeGain', () => {
-  it('0.5 で従来どおり（×1.0）、1.0 で約2倍、0 でミュートになる', () => {
+  it('0.5 で従来どおり（×1.0）、1.0 で約4倍、0 でミュートになる', () => {
     const base = DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile;
     expect(getMasterVolumeGain({ ...base, volume: 0.5 })).toBe(1);
-    expect(getMasterVolumeGain({ ...base, volume: 1 })).toBe(2);
+    expect(getMasterVolumeGain({ ...base, volume: 1 })).toBe(4);
+    expect(getMasterVolumeGain({ ...base, volume: 0.75 })).toBeCloseTo(2.25);
     expect(getMasterVolumeGain({ ...base, volume: 0 })).toBe(0);
   });
 
