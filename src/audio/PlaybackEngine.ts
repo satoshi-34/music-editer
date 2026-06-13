@@ -12,6 +12,13 @@ export interface PlaybackMeasureEvent {
    * 強弱未設定の古いデータやプレビュー互換のため optional にしている。
    */
   velocity?: number;
+  /**
+   * 実際に鳴らす長さの倍率（音価に対して何割の長さで切るか）。
+   * スタッカートなら 0.5、フェルマータなら 1 より大きい値が入る。
+   * 省略時は等倍（音価どおり）。タイミング（次の音までの間隔）は変えず、
+   * 「鳴っている長さ」だけを伸縮させるためにエンジン側で使う。
+   */
+  durationScale?: number;
 }
 
 export interface PlaybackPart {

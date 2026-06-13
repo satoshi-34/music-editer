@@ -4,10 +4,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
-  Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType,
+  Barline, Beam, Accidental, Articulation, StaveConnector, GhostNote, VoltaType,
 } from 'vexflow';
 import type { Tool } from './Palette';
-import type { MeasureData, TieArc, DynamicMarking } from '../types/storage';
+import type { MeasureData, TieArc, DynamicMarking, ArticulationMarking } from '../types/storage';
 import type { ClefType } from './clefUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
@@ -29,13 +29,18 @@ import {
 } from '../utils/noteKeyUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
+import {
+  getArticulationVexflowCode,
+  isAboveArticulation,
+  toggleArticulationOnEvent,
+} from '../utils/articulationMarkingUtils';
 import { getMeasureVoices } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[] };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; articulations?: ArticulationMarking[] };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number } | null;
 
@@ -486,7 +491,57 @@ function makeVFNote(
       // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
     }
   });
+  // アーティキュレーション（スタッカート・アクセント等）を符頭に付ける。
+  attachArticulations(n, ev);
   return n;
+}
+
+/**
+ * NoteEvent に保存されたアーティキュレーションを VexFlow の StaveNote へ描画する。
+ * フェルマータ・マルカートは符頭の上、それ以外は VexFlow の自動配置に任せる。
+ */
+function attachArticulations(note: StaveNote, ev: NoteEvent) {
+  (ev.articulations ?? []).forEach((value) => {
+    try {
+      const articulation = new Articulation(getArticulationVexflowCode(value));
+      // VexFlow 5 のデフォルトは ABOVE(3) なので、記号ごとに正しい位置を明示する。
+      // フェルマータ・マルカートは慣習的に常に符頭の上。
+      // それ以外（スタッカート・アクセント・テヌートなど）は符頭側（幹と逆）に付ける:
+      //   幹が上(UP=1) → 符頭は下 → BELOW(4)
+      //   幹が下(DOWN=-1) → 符頭は上 → ABOVE(3)
+      // ※ getStemDirection() はフォーマット前に呼ぶと全音符が UP=1 を返すため、
+      //   音高から幹方向を自前で計算する。
+      let position: number;
+      if (isAboveArticulation(value)) {
+        position = 3; // ABOVE
+      } else {
+        const stemDir = calcStemDirFromKeys(ev.keys);
+        position = stemDir === 1 ? 4 : 3; // UP→BELOW, DOWN→ABOVE
+      }
+      (articulation as any).setPosition?.(position);
+      (note as any).addModifier?.(articulation, 0);
+    } catch {
+      // 記号コードがライブラリ側で未対応でも、譜面全体の描画は止めない。
+    }
+  });
+}
+
+/**
+ * 音符の keys 配列からト音記号基準の幹方向を計算する。
+ * VexFlow はフォーマット前は全音符が UP(1) を返すため、これを代替として使う。
+ * B4（ライン2）より上なら幹下(DOWN=-1)、以下なら幹上(UP=1)。
+ */
+function calcStemDirFromKeys(keys: string[]): number {
+  const noteStep: Record<string, number> = { c: 0, d: 1, e: 2, f: 3, g: 4, a: 5, b: 6 };
+  const avgLine =
+    keys.reduce((sum, key) => {
+      const [rawNote, octStr] = key.toLowerCase().split('/');
+      const name = rawNote.replace(/[^a-g]/g, '');
+      const step = noteStep[name] ?? 2;
+      const oct = parseInt(octStr) || 4;
+      return sum + (oct - 4) * 3.5 + (step - 2) * 0.5;
+    }, 0) / keys.length;
+  return avgLine > 2 ? -1 : 1;
 }
 
 function sanitizeRenderEvent(ev: any, clef: ClefType): RenderNoteEvent {
@@ -1931,6 +1986,7 @@ export default function PianoSystemCanvas({
               }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
+              const articulationMode = 'mode' in tool && tool.mode === 'articulation' ? tool.articulation : null;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
@@ -1984,6 +2040,21 @@ export default function PianoSystemCanvas({
                 playNoteEvent(nextEv, part.playbackInstrument);
                 return;
               }
+              if (articulationMode && !safeEvs[j]?.isRest) {
+                // 多段譜でも音符セルクリックで奏法記号を直接付け外しできるようにする。
+                const nextEv = toggleArticulationOnEvent(safeEvs[j], articulationMode);
+                setScore(prev=>{
+                  const next=prev.map(cloneMeasureData);
+                  if(absI>=next.length)return prev;
+                  const targetEv=next[absI].events[j];
+                  if(!targetEv||targetEv.isRest)return prev;
+                  next[absI].events[j]=toggleArticulationOnEvent(targetEv, articulationMode);
+                  return next;
+                });
+                setSelected({partIndex:pi,measure:absI,index:j});
+                playNoteEvent(nextEv, part.playbackInstrument);
+                return;
+              }
 
               if(!safeEvs[j]?.isRest){
 
@@ -2025,6 +2096,7 @@ export default function PianoSystemCanvas({
                 playNoteEvent(playEvent, part.playbackInstrument);
               }else if(safeEvs[j]?.isRest){
                 if (dynamicMode) return;
+                if (articulationMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i===0 &&
                     lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
@@ -2098,6 +2170,7 @@ export default function PianoSystemCanvas({
                 doInsert(lx,ly);
               }else{
                 if (dynamicMode) return;
+                if (articulationMode) return;
                 if (accidentalMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsert(lx,ly);

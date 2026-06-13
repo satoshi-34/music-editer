@@ -61,6 +61,7 @@ import {
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
+import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId } from '../utils/instrumentationPartUtils';
 import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
@@ -812,14 +813,28 @@ export default function ScorePage() {
                 // 再生エンジン側が 3/8 や 6/8 の小節長を正しく保てるよう、
                 // 各小節の「本来ここまで進むべき拍数」を明示して渡す。
                 measureBeats: getMeasureBeats(scoreTimeSignature),
-                events: flattenMeasureForPlayback(item.measure).map((event, eventIndex) => ({
-                  ...event,
-                  // 強弱未設定や休符では velocity を省略し、
-                  // エンジン側の安全な既定値 0.5 をそのまま使う。
-                  velocity: event.isRest
-                    ? undefined
-                    : dynamicVelocities.get(buildDynamicEventKey(expandedMeasureIndex, eventIndex))
-                }))
+                events: flattenMeasureForPlayback(item.measure).map((event, eventIndex) => {
+                  // アーティキュレーション（スタッカート＝短く、アクセント＝強く 等）を
+                  // 音の長さ・音量の倍率として取り出す。
+                  const articulation = getArticulationPlaybackEffect(event);
+                  // 強弱記号から決まった基準ベロシティ（未設定なら既定 0.5）に
+                  // アクセント等の倍率を掛けて、最後に 0..1 へ収める。
+                  const baseVelocity = dynamicVelocities.get(
+                    buildDynamicEventKey(expandedMeasureIndex, eventIndex)
+                  ) ?? 0.5;
+                  return {
+                    ...event,
+                    // 強弱未設定や休符では velocity を省略し、
+                    // エンジン側の安全な既定値 0.5 をそのまま使う。
+                    velocity: event.isRest
+                      ? undefined
+                      : Math.min(1, Math.max(0, baseVelocity * articulation.velocityScale)),
+                    // 等倍（記号なし）のときは省略して、古い挙動と完全に同じにする。
+                    durationScale: event.isRest || articulation.durationScale === 1
+                      ? undefined
+                      : articulation.durationScale,
+                  };
+                })
               }))
             };
           });
