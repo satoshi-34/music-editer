@@ -641,10 +641,19 @@ function attachArticulations(note: StaveNote, ev: NoteEvent) {
   (ev.articulations ?? []).forEach((value) => {
     try {
       const articulation = new Articulation(getArticulationVexflowCode(value));
+      // VexFlow 5 のデフォルトは ABOVE(3) なので、記号ごとに正しい位置を明示する。
+      // フェルマータ・マルカートは慣習的に常に符頭の上。
+      // それ以外（スタッカート・アクセント・テヌートなど）は符頭側（幹と逆）に付ける:
+      //   幹が上(UP=1) → 符頭は下 → BELOW(4)
+      //   幹が下(DOWN=-1) → 符頭は上 → ABOVE(3)
+      let position: number;
       if (isAboveArticulation(value)) {
-        // VexFlow の Position.ABOVE = 3。フォント差異で定数が無い環境でも動くよう数値で渡す。
-        (articulation as any).setPosition?.(3);
+        position = 3; // ABOVE
+      } else {
+        const stemDir = (note as any).getStemDirection?.() ?? 1;
+        position = stemDir === 1 ? 4 : 3; // UP→BELOW, DOWN→ABOVE
       }
+      (articulation as any).setPosition?.(position);
       (note as any).addModifier?.(articulation, 0);
     } catch {
       // 記号コードがライブラリ側で未対応でも、譜面全体の描画は止めない。
