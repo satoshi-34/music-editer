@@ -349,7 +349,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
    * 譜面データから音符を順次再生する
    */
   async playScore(
-    scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[]; startBeat?: number; velocity?: number }>; measureBeats?: number }>,
+    scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[]; startBeat?: number; velocity?: number; durationScale?: number }>; measureBeats?: number }>,
     bpm: number = 120,
     startTime?: number
   ): Promise<void> {
@@ -385,16 +385,19 @@ export class SimpleAudioEngine implements PlaybackEngine {
         // 小節内の各音符を処理
         for (const event of measure.events) {
           const duration = this.durationToSeconds(event.dur, bpm);
+          // アーティキュレーションで「鳴らす長さ」だけ伸縮させる。
+          // タイミング（次の音までの間隔）は duration のまま据え置く。
+          const soundDuration = duration * (event.durationScale ?? 1);
           const eventStartTime = typeof event.startBeat === 'number'
             ? measureStartTime + (event.startBeat * (60 / bpm))
             : currentTime;
-          
+
           if (!event.isRest && event.keys && event.keys.length > 0) {
             // 音符の場合は最初の音高を再生（単音対応）
             const frequency = this.noteToFrequency(event.keys[0]);
             await this.playNoteAtTime(
               frequency,
-              duration,
+              soundDuration,
               eventStartTime,
               this.normalizePlaybackVelocity((event as { velocity?: number }).velocity)
             );

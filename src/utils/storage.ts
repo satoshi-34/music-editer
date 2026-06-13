@@ -18,6 +18,7 @@ import type {
 import { StorageErrorType } from '../types/storage';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
+import { isArticulationMarkingValue } from './articulationMarkingUtils';
 import { syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
@@ -81,6 +82,13 @@ function validateNoteEvent(event: any): event is NoteEvent {
           typeof marking === 'object' &&
           isDynamicMarkingValue(marking.value)
         ))
+      )
+    ) &&
+    (
+      event.articulations === undefined ||
+      (
+        Array.isArray(event.articulations) &&
+        event.articulations.every((value: any) => isArticulationMarkingValue(value))
       )
     )
   );

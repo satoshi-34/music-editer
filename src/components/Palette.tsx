@@ -13,7 +13,8 @@ import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 import type { AccidentalToolKind } from '../utils/noteKeyUtils';
 import type { EndingNumber, RepeatMarkerKind } from '../utils/repeatMarkerUtils';
-import type { DynamicMarkingValue } from '../types/storage';
+import type { DynamicMarkingValue, ArticulationMarking } from '../types/storage';
+import { ARTICULATION_VALUES } from '../utils/articulationMarkingUtils';
 
 // ========== 表示サイズ＆色（ボタン側と合わせる） ==========
 const BUTTON_W = 56;   // ボタン幅（CSSと合わせる）
@@ -41,12 +42,14 @@ export type Tool =
   | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
   | { mode: 'repeat'; repeat: RepeatMarkerKind }            // リピート記号を付けるモード
   | { mode: 'ending'; ending: EndingNumber }                // 1番括弧 / 2番括弧
-  | { mode: 'dynamic'; dynamic: DynamicMarkingValue };      // 強弱記号を付けるモード
+  | { mode: 'dynamic'; dynamic: DynamicMarkingValue }       // 強弱記号を付けるモード
+  | { mode: 'articulation'; articulation: ArticulationMarking }; // 奏法記号を付けるモード
 
 type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
 type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
 type EndingTool = Extract<Tool, { mode: 'ending' }>;
 type DynamicTool = Extract<Tool, { mode: 'dynamic' }>;
+type ArticulationTool = Extract<Tool, { mode: 'articulation' }>;
 
 // 並べるアイテム（上段=音符, 下段=休符）
 const ROW1: Tool[] = ['1','2','4','8','16','32','64'].map(d => ({ duration: d as DurKey }));
@@ -111,6 +114,9 @@ const DYNAMIC_TOOLS: DynamicTool[] = [
   { mode: 'dynamic', dynamic: 'cresc' },
   { mode: 'dynamic', dynamic: 'dim' },
 ];
+const ARTICULATION_TOOLS: ArticulationTool[] = ARTICULATION_VALUES.map(
+  (articulation) => ({ mode: 'articulation', articulation })
+);
 
 export default function Palette({
   value, onChange,
@@ -131,6 +137,9 @@ export default function Palette({
     : null;
   const selectedDynamic = 'mode' in value && value.mode === 'dynamic'
     ? value.dynamic
+    : null;
+  const selectedArticulation = 'mode' in value && value.mode === 'articulation'
+    ? value.articulation
     : null;
 
   return (
@@ -329,6 +338,37 @@ export default function Palette({
             </button>
           );
         })}
+
+        {ARTICULATION_TOOLS.map((tool) => {
+          const isActive = selectedArticulation === tool.articulation;
+          return (
+            <button
+              type="button"
+              key={tool.articulation}
+              onClick={() => onChange(isActive ? ROW1[2] : tool)}
+              aria-label={articulationLabel(tool.articulation)}
+              title={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
+              style={{
+                width: BUTTON_W,
+                height: BUTTON_H,
+                padding: 0,
+                borderRadius: 10,
+                border: isActive ? '2px solid #3b82f6' : '1px solid #ccc',
+                background: isActive ? '#eff6ff' : '#fff',
+                color: '#222',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: 24,
+                fontFamily: '"Times New Roman", serif',
+                lineHeight: 1,
+              }}
+            >
+              {articulationSymbol(tool.articulation)}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -371,6 +411,28 @@ function dynamicLabel(kind: DynamicMarkingValue) {
   if (kind === 'cresc') return 'クレッシェンド';
   if (kind === 'dim') return 'ディミヌエンド';
   return `強弱記号 ${kind}`;
+}
+
+// ボタンに表示する奏法記号の見た目。
+// フェルマータは専用の音楽記号（U+1D110）、それ以外は読みやすい近似記号を使う。
+function articulationSymbol(kind: ArticulationMarking) {
+  switch (kind) {
+    case 'staccato': return '•';
+    case 'accent': return '>';
+    case 'tenuto': return '‒';
+    case 'marcato': return '^';
+    case 'fermata': return '𝄐';
+  }
+}
+
+function articulationLabel(kind: ArticulationMarking) {
+  switch (kind) {
+    case 'staccato': return 'スタッカート（短く切る）';
+    case 'accent': return 'アクセント（強く）';
+    case 'tenuto': return 'テヌート（音価いっぱい保つ）';
+    case 'marcato': return 'マルカート（強く＋やや短く）';
+    case 'fermata': return 'フェルマータ（長く伸ばす）';
+  }
 }
 
 /**

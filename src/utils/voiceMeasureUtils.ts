@@ -24,6 +24,7 @@ function cloneNoteEvent(event: NoteEvent): NoteEvent {
     keys: [...event.keys],
     arcs: event.arcs ? [...event.arcs] : undefined,
     dynamics: event.dynamics ? [...event.dynamics] : undefined,
+    articulations: event.articulations ? [...event.articulations] : undefined,
   };
 }
 

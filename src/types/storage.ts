@@ -10,6 +10,16 @@ export type AbsoluteDynamicMarking = 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff';
 export type RelativeDynamicMarking = 'cresc' | 'dim';
 export type DynamicMarkingValue = AbsoluteDynamicMarking | RelativeDynamicMarking;
 
+/**
+ * アーティキュレーション（奏法記号）。音符1つの「鳴らし方」を指示する。
+ * - staccato（スタッカート, 点）: 短く切る
+ * - accent（アクセント, >）: その音を強く
+ * - tenuto（テヌート, −）: 音価いっぱい保つ
+ * - marcato（マルカート, ^）: 強く＋やや短く、はっきり
+ * - fermata（フェルマータ, 𝄐）: その音を長めに伸ばす
+ */
+export type ArticulationMarking = 'staccato' | 'accent' | 'tenuto' | 'marcato' | 'fermata';
+
 /** 強弱記号。NoteEvent にぶら下げて「この音符から効き始める記号」を表す */
 export interface DynamicMarking {
   value: DynamicMarkingValue;
@@ -57,6 +67,11 @@ export interface NoteEvent {
   arcs?: TieArc[];
   /** 強弱記号。この音符から効き始める記号を保持する */
   dynamics?: DynamicMarking[];
+  /**
+   * アーティキュレーション（奏法記号）。この音符に付く記号のリスト。
+   * スタッカート＋アクセントのように複数を同時に付けられるため配列で持つ。
+   */
+  articulations?: ArticulationMarking[];
 }
 
 /**

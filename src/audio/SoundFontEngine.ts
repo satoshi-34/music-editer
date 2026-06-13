@@ -189,6 +189,9 @@ export class SoundFontEngine implements PlaybackEngine {
 
         for (const event of measure.events) {
           const duration = this.durationToSeconds(event.dur, bpm);
+          // アーティキュレーションで「鳴らす長さ」だけ伸縮させる。
+          // タイミング（次の音までの間隔）は duration のまま据え置く。
+          const soundDuration = duration * (event.durationScale ?? 1);
           const eventStartTime = typeof event.startBeat === 'number'
             ? measureStartTime + (event.startBeat * (60 / bpm))
             : partTime;
@@ -200,7 +203,7 @@ export class SoundFontEngine implements PlaybackEngine {
               player.play(
                 this.normalizeNoteFormat(key),
                 eventStartTime,
-                this.buildPlaybackOptions(duration, velocity)
+                this.buildPlaybackOptions(soundDuration, velocity)
               );
             });
           }

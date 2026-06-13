@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType } from 'vexflow';
+import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, Articulation, VoltaType } from 'vexflow';
 import type { Tool } from './Palette';
 import type { TieArc, MeasureData, NoteEvent, DurKey, TimeSignature } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
@@ -21,6 +21,11 @@ import {
 } from '../utils/noteKeyUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
+import {
+  getArticulationVexflowCode,
+  isAboveArticulation,
+  toggleArticulationOnEvent,
+} from '../utils/articulationMarkingUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
@@ -623,7 +628,28 @@ function makeVFNote(
       // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
     }
   });
+  // アーティキュレーション（スタッカート・アクセント等）を符頭に付ける。
+  attachArticulations(n, ev);
   return n;
+}
+
+/**
+ * NoteEvent に保存されたアーティキュレーションを VexFlow の StaveNote へ描画する。
+ * フェルマータ・マルカートは符頭の上、それ以外は VexFlow の自動配置に任せる。
+ */
+function attachArticulations(note: StaveNote, ev: NoteEvent) {
+  (ev.articulations ?? []).forEach((value) => {
+    try {
+      const articulation = new Articulation(getArticulationVexflowCode(value));
+      if (isAboveArticulation(value)) {
+        // VexFlow の Position.ABOVE = 3。フォント差異で定数が無い環境でも動くよう数値で渡す。
+        (articulation as any).setPosition?.(3);
+      }
+      (note as any).addModifier?.(articulation, 0);
+    } catch {
+      // 記号コードがライブラリ側で未対応でも、譜面全体の描画は止めない。
+    }
+  });
 }
 
 function applyAccidentalToEvent(
@@ -2040,6 +2066,7 @@ export default function StaffCanvas({
               }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
+              const articulationMode = 'mode' in tool && tool.mode === 'articulation' ? tool.articulation : null;
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
 
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
@@ -2100,6 +2127,23 @@ export default function StaffCanvas({
                 playNoteEvent(nextEv);
                 return;
               }
+              if (articulationMode && !safeEvents[j]?.isRest) {
+                // 奏法記号は音符1つの「鳴らし方」を指示するので、
+                // 強弱記号と同じく、和音追加や新規挿入より先にここで確定させる。
+                const currentEv = safeEvents[j];
+                const nextEv = toggleArticulationOnEvent(currentEv, articulationMode);
+                setScore(prev => {
+                  const next = prev.map(cloneMeasureData);
+                  if (absoluteIndex >= next.length) return prev;
+                  const targetEv = next[absoluteIndex].events[j];
+                  if (!targetEv || targetEv.isRest) return prev;
+                  next[absoluteIndex].events[j] = toggleArticulationOnEvent(targetEv, articulationMode);
+                  return next;
+                });
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                playNoteEvent(nextEv);
+                return;
+              }
 
               if (!safeEvents[j]?.isRest) {
 
@@ -2143,6 +2187,7 @@ export default function StaffCanvas({
                 if (playEvent) playNoteEvent(playEvent);
               } else if (safeEvents[j]?.isRest) {
                 if (dynamicMode) return;
+                if (articulationMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i === 0 &&
                     lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right;
@@ -2217,6 +2262,7 @@ export default function StaffCanvas({
                 doInsertAt(lx, ly, measureIndex);
               } else {
                 if (dynamicMode) return;
+                if (articulationMode) return;
                 if (accidentalMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsertAt(lx, ly, measureIndex);
