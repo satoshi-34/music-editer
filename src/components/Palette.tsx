@@ -9,7 +9,7 @@
 // 初学者向けにコメントを多めに入れています。
 // ─────────────────────────────────────────────────────────────
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 import type { AccidentalToolKind } from '../utils/noteKeyUtils';
 import type { EndingNumber, RepeatMarkerKind } from '../utils/repeatMarkerUtils';
@@ -156,47 +156,19 @@ function accentBtnStyle(active: boolean): React.CSSProperties {
   };
 }
 
-// セクションヘッダーコンポーネント
-function SectionHeader({ label, open, onToggle }: { label: string; open: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 4,
-        background: 'none',
-        border: 'none',
-        cursor: 'pointer',
-        padding: '2px 0',
-        color: '#374151',
-        fontSize: 11,
-        fontWeight: 600,
-        userSelect: 'none',
-        width: '100%',
-        textAlign: 'left',
-      }}
-    >
-      <span style={{ fontSize: 9, color: '#6b7280' }}>{open ? '▾' : '▸'}</span>
-      {label}
-    </button>
-  );
-}
-
 export default function Palette({
   value, onChange,
+  section = 'notes',
   customSymbolDefs = [],
   onOpenSymbolEditor,
 }: {
   value: Tool;
   onChange: (t: Tool) => void;
+  /** 表示するパレットの種別。'notes'=音符・休符、'symbols'=演奏記号 */
+  section?: 'notes' | 'symbols';
   customSymbolDefs?: CustomSymbolDef[];
   onOpenSymbolEditor?: () => void;
 }) {
-  const [notesOpen, setNotesOpen] = useState(true);
-  const [symbolsOpen, setSymbolsOpen] = useState(true);
-
   // 現在の選択状態を判定
   const tieActive = 'mode' in value && value.mode === 'tie';
   const selectedAccidental = 'mode' in value && value.mode === 'accidental' ? value.accidental : null;
@@ -219,283 +191,276 @@ export default function Palette({
 
   const ROW_STYLE: React.CSSProperties = { display: 'flex', gap: 3, flexWrap: 'wrap' as const };
 
+  if (section === 'notes') {
+    return (
+      <div style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {/* 音符行：7音価 + タイ + 臨時記号3 */}
+        <div style={ROW_STYLE}>
+          {ROW1.map((t, i) => {
+            const active = !tieActive && 'duration' in value && 'duration' in t &&
+              value.duration === t.duration && !value.isRest;
+            return (
+              <button
+                key={i}
+                type="button"
+                onClick={() => onChange(t)}
+                title={`音符 ${label((t as {duration: DurKey}).duration)}`}
+                style={btnStyle(active)}
+              >
+                <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={false} />
+              </button>
+            );
+          })}
+          {/* タイ */}
+          <button
+            type="button"
+            onClick={() => onChange(tieActive ? ROW1[2] : TIE_TOOL)}
+            title="タイ（隣接する同音符を結ぶ弧線）"
+            style={btnStyle(tieActive)}
+          >
+            <svg width="24" height="14" viewBox="0 0 24 14" fill="none">
+              <path d="M3 10 Q12 2 21 10" stroke="#111" strokeWidth="2" strokeLinecap="round" fill="none"/>
+            </svg>
+          </button>
+          {/* 臨時記号 */}
+          {ACCIDENTAL_TOOLS.map((tool) => {
+            const active = selectedAccidental === tool.accidental;
+            return (
+              <button
+                key={tool.accidental}
+                type="button"
+                onClick={() => onChange(active ? ROW1[2] : tool)}
+                title={`${accidentalLabel(tool.accidental)}（選択して音符をクリック）`}
+                style={btnStyle(active, { fontSize: 18, fontFamily: '"Times New Roman", serif' })}
+              >
+                {accidentalSymbol(tool.accidental)}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 休符行：7音価 + リピート2 + 括弧2 */}
+        <div style={ROW_STYLE}>
+          {ROW2.map((t, i) => {
+            const active = !tieActive && 'duration' in value && 'duration' in t &&
+              value.duration === t.duration && !!value.isRest;
+            return (
+              <button
+                key={i}
+                type="button"
+                onClick={() => onChange(t)}
+                title={`休符 ${label((t as {duration: DurKey}).duration)}`}
+                style={btnStyle(active)}
+              >
+                <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={true} />
+              </button>
+            );
+          })}
+          {/* リピート記号 */}
+          {REPEAT_TOOLS.map((tool) => {
+            const active = selectedRepeat === tool.repeat;
+            return (
+              <button
+                key={tool.repeat}
+                type="button"
+                onClick={() => onChange(active ? ROW1[2] : tool)}
+                title={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
+                style={btnStyle(active, { fontSize: 13, fontFamily: '"Times New Roman", serif' })}
+              >
+                {repeatSymbol(tool.repeat)}
+              </button>
+            );
+          })}
+          {/* 番号括弧 */}
+          {ENDING_TOOLS.map((tool) => {
+            const active = selectedEnding === tool.ending;
+            return (
+              <button
+                key={tool.ending}
+                type="button"
+                onClick={() => onChange(active ? ROW1[2] : tool)}
+                title={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
+                style={btnStyle(active, { fontSize: 13, fontFamily: '"Times New Roman", serif' })}
+              >
+                {endingSymbol(tool.ending)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // section === 'symbols'
   return (
-    <div style={{ padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <div style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {/* 強弱・速度・拍子行 */}
+      <div style={ROW_STYLE}>
+        {/* テンポ変更 */}
+        <button
+          type="button"
+          onClick={() => onChange(measureTempoActive ? ROW1[2] : { mode: 'measureTempo' })}
+          title="途中テンポ変更（小節をクリックしてBPMを設定）"
+          style={btnStyle(measureTempoActive, { width: 44 })}
+        >
+          <svg width="38" height="18" viewBox="0 0 38 18" aria-hidden="true">
+            <text x="1" y="13" fontSize="11" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">♩=</text>
+            <text x="20" y="13" fontSize="10" fontFamily="sans-serif" fontWeight="bold" fill="#e05">?</text>
+          </svg>
+        </button>
+        {/* 拍子変更 */}
+        <button
+          type="button"
+          onClick={() => onChange(measureTimeSigActive ? ROW1[2] : { mode: 'measureTimeSig' })}
+          title="途中拍子変更（小節をクリックして拍子を選択）"
+          style={btnStyle(measureTimeSigActive, { width: 38 })}
+        >
+          <svg width="30" height="18" viewBox="0 0 30 18" aria-hidden="true">
+            <text x="1" y="9" fontSize="9" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">3</text>
+            <line x1="1" y1="10" x2="10" y2="10" stroke="#111" strokeWidth="1.2"/>
+            <text x="1" y="17" fontSize="9" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">8</text>
+            <text x="12" y="14" fontSize="10" fill="#e05">?</text>
+          </svg>
+        </button>
+        {/* 強弱記号 */}
+        {DYNAMIC_TOOLS.map((tool) => {
+          const active = selectedDynamic === tool.dynamic;
+          return (
+            <button
+              key={tool.dynamic}
+              type="button"
+              onClick={() => onChange(active ? ROW1[2] : tool)}
+              title={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
+              style={btnStyle(active, {
+                minWidth: BUTTON_W,
+                fontSize: tool.dynamic === 'cresc' || tool.dynamic === 'dim' ? 10 : 15,
+                fontFamily: '"Times New Roman", serif',
+                fontStyle: 'italic',
+                padding: '0 4px',
+              })}
+            >
+              {dynamicSymbol(tool.dynamic)}
+            </button>
+          );
+        })}
+      </div>
 
-      {/* ══════════════ 音符・休符 セクション ══════════════ */}
-      <SectionHeader label="音符・休符" open={notesOpen} onToggle={() => setNotesOpen(o => !o)} />
-      {notesOpen && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {/* 音符行：7音価 + タイ + 臨時記号3 */}
-          <div style={ROW_STYLE}>
-            {ROW1.map((t, i) => {
-              const active = !tieActive && 'duration' in value && 'duration' in t &&
-                value.duration === t.duration && !value.isRest;
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => onChange(t)}
-                  title={`音符 ${label((t as {duration: DurKey}).duration)}`}
-                  style={btnStyle(active)}
-                >
-                  <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={false} />
-                </button>
-              );
-            })}
-            {/* タイ */}
+      {/* アーティキュレーション・装飾・テキスト行 */}
+      <div style={ROW_STYLE}>
+        {ARTICULATION_TOOLS.map((tool) => {
+          const active = selectedArticulation === tool.articulation;
+          return (
             <button
+              key={tool.articulation}
               type="button"
-              onClick={() => onChange(tieActive ? ROW1[2] : TIE_TOOL)}
-              title="タイ（隣接する同音符を結ぶ弧線）"
-              style={btnStyle(tieActive)}
+              onClick={() => onChange(active ? ROW1[2] : tool)}
+              title={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
+              style={btnStyle(active)}
             >
-              <svg width="24" height="14" viewBox="0 0 24 14" fill="none">
-                <path d="M3 10 Q12 2 21 10" stroke="#111" strokeWidth="2" strokeLinecap="round" fill="none"/>
-              </svg>
+              <ArticulationIcon type={tool.articulation} />
             </button>
-            {/* 臨時記号 */}
-            {ACCIDENTAL_TOOLS.map((tool) => {
-              const active = selectedAccidental === tool.accidental;
-              return (
-                <button
-                  key={tool.accidental}
-                  type="button"
-                  onClick={() => onChange(active ? ROW1[2] : tool)}
-                  title={`${accidentalLabel(tool.accidental)}（選択して音符をクリック）`}
-                  style={btnStyle(active, { fontSize: 18, fontFamily: '"Times New Roman", serif' })}
-                >
-                  {accidentalSymbol(tool.accidental)}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* 休符行：7音価 + リピート2 + 括弧2 */}
-          <div style={ROW_STYLE}>
-            {ROW2.map((t, i) => {
-              const active = !tieActive && 'duration' in value && 'duration' in t &&
-                value.duration === t.duration && !!value.isRest;
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => onChange(t)}
-                  title={`休符 ${label((t as {duration: DurKey}).duration)}`}
-                  style={btnStyle(active)}
-                >
-                  <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={true} />
-                </button>
-              );
-            })}
-            {/* リピート記号 */}
-            {REPEAT_TOOLS.map((tool) => {
-              const active = selectedRepeat === tool.repeat;
-              return (
-                <button
-                  key={tool.repeat}
-                  type="button"
-                  onClick={() => onChange(active ? ROW1[2] : tool)}
-                  title={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
-                  style={btnStyle(active, { fontSize: 13, fontFamily: '"Times New Roman", serif' })}
-                >
-                  {repeatSymbol(tool.repeat)}
-                </button>
-              );
-            })}
-            {/* 番号括弧 */}
-            {ENDING_TOOLS.map((tool) => {
-              const active = selectedEnding === tool.ending;
-              return (
-                <button
-                  key={tool.ending}
-                  type="button"
-                  onClick={() => onChange(active ? ROW1[2] : tool)}
-                  title={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
-                  style={btnStyle(active, { fontSize: 13, fontFamily: '"Times New Roman", serif' })}
-                >
-                  {endingSymbol(tool.ending)}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ══════════════ 演奏記号 セクション ══════════════ */}
-      <SectionHeader label="演奏記号" open={symbolsOpen} onToggle={() => setSymbolsOpen(o => !o)} />
-      {symbolsOpen && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {/* 強弱・速度・拍子行 */}
-          <div style={ROW_STYLE}>
-            {/* テンポ変更 */}
+          );
+        })}
+        {/* 前打音 */}
+        <button
+          type="button"
+          onClick={() => onChange(graceNoteActive ? ROW1[2] : { mode: 'graceNote' })}
+          title="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
+          style={accentBtnStyle(graceNoteActive)}
+        >
+          <span style={{ fontSize: 12, lineHeight: 1 }}>𝆒♩</span>
+        </button>
+        {/* トリル */}
+        <button
+          type="button"
+          onClick={() => onChange(trillActive ? ROW1[2] : { mode: 'trill' })}
+          title="トリル（対象の音符をクリック。再クリックで解除）"
+          style={accentBtnStyle(trillActive)}
+        >
+          <span style={{ fontSize: 13, lineHeight: 1, fontStyle: 'italic', fontWeight: 'bold' }}>tr</span>
+        </button>
+        {/* テキスト要素 */}
+        {TEXT_ELEMENT_TOOLS.map((tool) => {
+          const active = selectedTextKind === tool.textKind;
+          return (
             <button
+              key={tool.textKind}
               type="button"
-              onClick={() => onChange(measureTempoActive ? ROW1[2] : { mode: 'measureTempo' })}
-              title="途中テンポ変更（小節をクリックしてBPMを設定）"
-              style={btnStyle(measureTempoActive, { width: 44 })}
+              onClick={() => onChange(active ? ROW1[2] : tool)}
+              title={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
+              style={btnStyle(active, {
+                fontSize: 10,
+                fontFamily: tool.textKind === 'chordSymbol' ? '"Times New Roman", serif' : 'sans-serif',
+                fontStyle: tool.textKind === 'expressionMarking' ? 'italic' : 'normal',
+              })}
             >
-              <svg width="38" height="18" viewBox="0 0 38 18" aria-hidden="true">
-                <text x="1" y="13" fontSize="11" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">♩=</text>
-                <text x="20" y="13" fontSize="10" fontFamily="sans-serif" fontWeight="bold" fill="#e05">?</text>
-              </svg>
+              <TextElementIcon kind={tool.textKind} />
             </button>
-            {/* 拍子変更 */}
+          );
+        })}
+        {/* ペダル */}
+        <button
+          type="button"
+          onClick={() => onChange(pedalDownActive ? ROW1[2] : { mode: 'pedal', pedalType: 'down' })}
+          title="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
+          style={accentBtnStyle(pedalDownActive)}
+        >
+          <span style={{ fontSize: 11, lineHeight: 1, fontStyle: 'italic', fontFamily: 'serif' }}>Ped</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange(pedalUpActive ? ROW1[2] : { mode: 'pedal', pedalType: 'up' })}
+          title="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
+          style={accentBtnStyle(pedalUpActive)}
+        >
+          <span style={{ fontSize: 13, lineHeight: 1 }}>✱</span>
+        </button>
+        {/* オッターバ */}
+        {(['8va', '8vb', '8vaEnd', '8vbEnd'] as const).map((ot) => {
+          const active = ot === '8va' ? ottava8vaActive : ot === '8vb' ? ottava8vbActive : ot === '8vaEnd' ? ottava8vaEndActive : ottava8vbEndActive;
+          const lbl = ot.replace('End', '終');
+          return (
             <button
+              key={ot}
               type="button"
-              onClick={() => onChange(measureTimeSigActive ? ROW1[2] : { mode: 'measureTimeSig' })}
-              title="途中拍子変更（小節をクリックして拍子を選択）"
-              style={btnStyle(measureTimeSigActive, { width: 38 })}
+              onClick={() => onChange(active ? ROW1[2] : { mode: 'ottava', ottavaType: ot })}
+              title={`${lbl}記号を付ける。対象の音符をクリック。再クリックで解除`}
+              style={accentBtnStyle(active)}
             >
-              <svg width="30" height="18" viewBox="0 0 30 18" aria-hidden="true">
-                <text x="1" y="9" fontSize="9" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">3</text>
-                <line x1="1" y1="10" x2="10" y2="10" stroke="#111" strokeWidth="1.2"/>
-                <text x="1" y="17" fontSize="9" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">8</text>
-                <text x="12" y="14" fontSize="10" fill="#e05">?</text>
-              </svg>
+              <span style={{ fontSize: 10, lineHeight: 1, fontStyle: 'italic', fontFamily: 'serif' }}>{lbl}</span>
             </button>
-            {/* 強弱記号 */}
-            {DYNAMIC_TOOLS.map((tool) => {
-              const active = selectedDynamic === tool.dynamic;
-              return (
-                <button
-                  key={tool.dynamic}
-                  type="button"
-                  onClick={() => onChange(active ? ROW1[2] : tool)}
-                  title={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
-                  style={btnStyle(active, {
-                    minWidth: BUTTON_W,
-                    fontSize: tool.dynamic === 'cresc' || tool.dynamic === 'dim' ? 10 : 15,
-                    fontFamily: '"Times New Roman", serif',
-                    fontStyle: 'italic',
-                    padding: '0 4px',
-                  })}
-                >
-                  {dynamicSymbol(tool.dynamic)}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* アーティキュレーション・装飾・テキスト行 */}
-          <div style={ROW_STYLE}>
-            {/* アーティキュレーション */}
-            {ARTICULATION_TOOLS.map((tool) => {
-              const active = selectedArticulation === tool.articulation;
-              return (
-                <button
-                  key={tool.articulation}
-                  type="button"
-                  onClick={() => onChange(active ? ROW1[2] : tool)}
-                  title={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
-                  style={btnStyle(active)}
-                >
-                  <ArticulationIcon type={tool.articulation} />
-                </button>
-              );
-            })}
-            {/* 前打音 */}
+          );
+        })}
+        {/* カスタム記号 */}
+        {customSymbolDefs.map((def) => {
+          const active = selectedCustomSymbolId === def.id;
+          const svgStr = symbolDefToPreviewSvg(def, 22);
+          return (
             <button
+              key={def.id}
               type="button"
-              onClick={() => onChange(graceNoteActive ? ROW1[2] : { mode: 'graceNote' })}
-              title="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
-              style={accentBtnStyle(graceNoteActive)}
-            >
-              <span style={{ fontSize: 12, lineHeight: 1 }}>𝆒♩</span>
-            </button>
-            {/* トリル */}
-            <button
-              type="button"
-              onClick={() => onChange(trillActive ? ROW1[2] : { mode: 'trill' })}
-              title="トリル（対象の音符をクリック。再クリックで解除）"
-              style={accentBtnStyle(trillActive)}
-            >
-              <span style={{ fontSize: 13, lineHeight: 1, fontStyle: 'italic', fontWeight: 'bold' }}>tr</span>
-            </button>
-            {/* テキスト要素 */}
-            {TEXT_ELEMENT_TOOLS.map((tool) => {
-              const active = selectedTextKind === tool.textKind;
-              return (
-                <button
-                  key={tool.textKind}
-                  type="button"
-                  onClick={() => onChange(active ? ROW1[2] : tool)}
-                  title={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
-                  style={btnStyle(active, {
-                    fontSize: 10,
-                    fontFamily: tool.textKind === 'chordSymbol' ? '"Times New Roman", serif' : 'sans-serif',
-                    fontStyle: tool.textKind === 'expressionMarking' ? 'italic' : 'normal',
-                  })}
-                >
-                  <TextElementIcon kind={tool.textKind} />
-                </button>
-              );
-            })}
-            {/* ペダル */}
-            <button
-              type="button"
-              onClick={() => onChange(pedalDownActive ? ROW1[2] : { mode: 'pedal', pedalType: 'down' })}
-              title="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
-              style={accentBtnStyle(pedalDownActive)}
-            >
-              <span style={{ fontSize: 11, lineHeight: 1, fontStyle: 'italic', fontFamily: 'serif' }}>Ped</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onChange(pedalUpActive ? ROW1[2] : { mode: 'pedal', pedalType: 'up' })}
-              title="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
-              style={accentBtnStyle(pedalUpActive)}
-            >
-              <span style={{ fontSize: 13, lineHeight: 1 }}>✱</span>
-            </button>
-            {/* オッターバ */}
-            {(['8va', '8vb', '8vaEnd', '8vbEnd'] as const).map((ot) => {
-              const active = ot === '8va' ? ottava8vaActive : ot === '8vb' ? ottava8vbActive : ot === '8vaEnd' ? ottava8vaEndActive : ottava8vbEndActive;
-              const lbl = ot.replace('End', '終');
-              return (
-                <button
-                  key={ot}
-                  type="button"
-                  onClick={() => onChange(active ? ROW1[2] : { mode: 'ottava', ottavaType: ot })}
-                  title={`${lbl}記号を付ける。対象の音符をクリック。再クリックで解除`}
-                  style={accentBtnStyle(active)}
-                >
-                  <span style={{ fontSize: 10, lineHeight: 1, fontStyle: 'italic', fontFamily: 'serif' }}>{lbl}</span>
-                </button>
-              );
-            })}
-            {/* カスタム記号 */}
-            {customSymbolDefs.map((def) => {
-              const active = selectedCustomSymbolId === def.id;
-              const svgStr = symbolDefToPreviewSvg(def, 22);
-              return (
-                <button
-                  key={def.id}
-                  type="button"
-                  onClick={() => onChange(active ? ROW1[2] : { mode: 'customSymbol', symbolId: def.id })}
-                  title={`${def.name}（対象の音符をクリック）`}
-                  style={btnStyle(active)}
-                  dangerouslySetInnerHTML={{ __html: svgStr }}
-                />
-              );
-            })}
-            {/* カスタム記号を新規作成 */}
-            <button
-              type="button"
-              onClick={onOpenSymbolEditor}
-              title="カスタム記号を新規作成"
-              style={{
-                ...btnStyle(false),
-                border: '1px dashed #9ca3af',
-                color: '#6b7280',
-                fontSize: 18,
-              }}
-            >
-              ＋
-            </button>
-          </div>
-        </div>
-      )}
+              onClick={() => onChange(active ? ROW1[2] : { mode: 'customSymbol', symbolId: def.id })}
+              title={`${def.name}（対象の音符をクリック）`}
+              style={btnStyle(active)}
+              dangerouslySetInnerHTML={{ __html: svgStr }}
+            />
+          );
+        })}
+        {/* カスタム記号を新規作成 */}
+        <button
+          type="button"
+          onClick={onOpenSymbolEditor}
+          title="カスタム記号を新規作成"
+          style={{
+            ...btnStyle(false),
+            border: '1px dashed #9ca3af',
+            color: '#6b7280',
+            fontSize: 18,
+          }}
+        >
+          ＋
+        </button>
+      </div>
     </div>
   );
 }

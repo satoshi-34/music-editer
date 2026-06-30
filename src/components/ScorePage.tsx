@@ -71,7 +71,7 @@ import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '..
 import type { TimeSignature } from '../types/storage';
 
 type PageSpec = { systems: number };
-type ToolbarTab = 'notes' | 'score' | 'playback' | 'other';
+type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 
@@ -1545,7 +1545,8 @@ export default function ScorePage() {
   }, []);
 
   const toolbarTabButtons: Array<{ id: ToolbarTab; label: string }> = [
-    { id: 'notes', label: '音符・記号' },
+    { id: 'notes', label: '音符・休符' },
+    { id: 'symbols', label: '演奏記号' },
     { id: 'score', label: '楽譜設定' },
     { id: 'playback', label: '再生・音色' },
     { id: 'other', label: 'その他' },
@@ -1587,7 +1588,13 @@ export default function ScorePage() {
         <div className="toolbar-panel">
           {activeToolbarTab === 'notes' && (
             <div className="toolbar-section">
-              <Palette value={tool} onChange={setTool} />
+              <Palette value={tool} onChange={setTool} section="notes" />
+            </div>
+          )}
+
+          {activeToolbarTab === 'symbols' && (
+            <div className="toolbar-section">
+              <Palette value={tool} onChange={setTool} section="symbols" />
             </div>
           )}
 
