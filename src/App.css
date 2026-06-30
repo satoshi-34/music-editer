@@ -27,19 +27,30 @@
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 5px;
   align-items: stretch;
-  padding: 10px 16px;
-  /* 高さをだいたい --toolbar-h に合わせる（行が折り返すときは増える） */
-  min-height: var(--toolbar-h);
+  padding: 6px 10px;
   background: #ffffffea;
   border-bottom: 1px solid #ddd;
   box-shadow: 0 4px 16px #877f7f14;
 }
 .toolbar-tabs {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
+}
+
+/* ツールバー内のすべての ghost ボタンをコンパクトに統一（タブボタンは除く） */
+.toolbar-panel button.ghost:not(.toolbar-tab-button) {
+  padding: 3px 9px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+/* タブボタンも少し縮める */
+.toolbar-tab-button {
+  padding: 4px 10px;
+  font-size: 13px;
+  border-radius: 7px;
 }
 .toolbar-tab-button.active {
   border-color: #3b82f6;
@@ -61,19 +72,26 @@
 .toolbar-other-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 6px;
   align-items: center;
 }
 .toolbar-chip-group {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 .toolbar-group-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: #495057;
+}
+/* ghost ボタンよりコンパクトなサイズに上書き */
+.toolbar-chip-button {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 6px;
 }
 .toolbar-chip-button.active {
   border-color: #3b82f6;
@@ -82,22 +100,23 @@
 .toolbar-select-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 6px;
   align-items: center;
 }
 .toolbar-select-label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 4px;
+  font-size: 11px;
   color: #444;
 }
 .toolbar-select-label select {
   border: 1px solid #ccc;
   border-radius: 6px;
-  padding: 4px 8px;
+  padding: 2px 6px;
   font-size: 12px;
   background: #fff;
+  height: 28px;
 }
 .instrumentation-summary {
   display: flex;
@@ -299,19 +318,16 @@ button.ghost:disabled {
 /* Playback Controls */
 .playback-controls {
   display: flex;
-  gap: 16px;
+  gap: 8px;
   align-items: center;
-  padding: 8px 12px;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 8px;
+  padding: 4px 0;
   flex-wrap: wrap;
 }
 
 /* 再生制御ボタン */
 .playback-buttons {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   align-items: center;
 }
 
@@ -319,7 +335,7 @@ button.ghost:disabled {
   display: flex;
   align-items: center;
   gap: 4px;
-  min-width: 80px;
+  min-width: 60px;
   justify-content: center;
 }
 

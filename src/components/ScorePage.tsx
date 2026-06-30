@@ -1514,7 +1514,7 @@ export default function ScorePage() {
       // fixed ヘッダーの実測が何かの拍子に暴走すると、
       // 本文全体の padding-top まで極端に大きくなって楽譜が見えなくなる。
       // ここでは「タブ付きヘッダーとして妥当な範囲」へ丸めて、崩れを防ぐ。
-      const clampedHeight = Math.min(280, Math.max(110, measuredHeight));
+      const clampedHeight = Math.min(280, Math.max(60, measuredHeight));
       setToolbarHeight(clampedHeight);
     };
 
