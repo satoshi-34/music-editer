@@ -2376,12 +2376,12 @@ export default function PianoSystemCanvas({
       });
     });
 
-    // ペダル記号: 五線下端より下（botY + 70）に Ped または ✱ を表示する
+    // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
     pedalMarkEntries.forEach(({ anchorX, botY, mark }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = mark === 'down' ? 'Ped' : '✱';
       el.setAttribute('x', String(anchorX));
-      el.setAttribute('y', String(botY + 70));
+      el.setAttribute('y', String(botY + 25));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1e293b');
       el.setAttribute('font-family', 'serif');

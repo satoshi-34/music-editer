@@ -35,8 +35,8 @@
 - `NoteEvent.pedalMark?: 'down' | 'up'`
 - Palette に「ペダル↓」「ペダル↑」ボタン追加
 - StaffCanvas / PianoSystemCanvas で SVG テキスト要素として描画
-  - `'down'` → 五線下端 +70px に斜体 "Ped"
-  - `'up'` → 五線下端 +70px に "✱"
+  - `'down'` → 五線下端 +25 SVG単位に斜体 "Ped"（LINE_SPACING≈13なので約2段分）
+  - `'up'` → 五線下端 +25 SVG単位に "✱"
 
 ### 4. 8va/8vb記号（オッターバ）
 

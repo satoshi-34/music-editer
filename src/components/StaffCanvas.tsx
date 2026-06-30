@@ -2832,13 +2832,14 @@ export default function StaffCanvas({
         svgRoot.appendChild(el);
       });
 
-      // ペダル記号: 五線下端より下（botY + 70）に Ped または ✱ を表示する
+      // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
+      // LINE_SPACING ≈ 13 SVG単位なので +25 ≈ 2段分。標準的な記譜位置。
       // 'down' → イタリック体の "Ped"、'up' → "✱"
       pedalMarkEntries.forEach(({ anchorX, botY, mark }) => {
         const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         el.textContent = mark === 'down' ? 'Ped' : '✱';
         el.setAttribute('x', String(anchorX));
-        el.setAttribute('y', String(botY + 70));
+        el.setAttribute('y', String(botY + 25));
         el.setAttribute('text-anchor', 'middle');
         el.setAttribute('fill', '#1e293b');
         el.setAttribute('font-family', 'serif');
