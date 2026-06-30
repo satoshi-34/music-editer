@@ -675,6 +675,7 @@ export default function PianoSystemCanvas({
 
   const [textEditState, setTextEditState] = useState<{
     kind: TextElementKind;
+    partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
     currentValue: string;
@@ -2063,11 +2064,13 @@ export default function PianoSystemCanvas({
               }
               if (textElementMode && safeEvs[j] && !safeEvs[j].__isPlaceholder) {
                 // テキスト要素はクリック位置にオーバーレイを表示して文字入力を受け付ける。
-                const currentText = safeEvs[j][textElementMode] ?? '';
+                // TextElementKind で NoteEvent を索引するため any キャストを使う
+                const currentText = (safeEvs[j] as any)[textElementMode] ?? '';
                 const containerRect = containerRef.current?.getBoundingClientRect();
                 const me = e as MouseEvent;
                 setTextEditState({
                   kind: textElementMode,
+                  partIndex: pi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
                   currentValue: currentText,
@@ -2389,12 +2392,15 @@ export default function PianoSystemCanvas({
         }
       }
     }
-    setScore(prev => {
-      const next = prev.map(cloneMeasureData);
-      if (measureAbsoluteIndex >= next.length) return prev;
-      next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], timeSignature: timeSig };
-      return next;
-    });
+    // 拍子は全パートで共有するため、すべてのパートの該当小節を更新する
+    setPartsScore(prev =>
+      prev.map(partData => {
+        const next = partData.map(cloneMeasureData);
+        if (measureAbsoluteIndex >= next.length) return partData;
+        next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], timeSignature: timeSig };
+        return next;
+      })
+    );
     setTimeSigEditState(null);
   }
 
@@ -2403,25 +2409,30 @@ export default function PianoSystemCanvas({
     const { measureAbsoluteIndex } = bpmEditState;
     const parsed = parseInt(rawText.trim(), 10);
     const bpm = !isNaN(parsed) && parsed >= 60 && parsed <= 240 ? parsed : undefined;
-    // Piano 譜は全パートで同じ BPM を共有する
-    setScore(prev => {
-      const next = prev.map(cloneMeasureData);
-      if (measureAbsoluteIndex >= next.length) return prev;
-      next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], bpm };
-      return next;
-    });
+    // BPM も全パートで共有するため、すべてのパートの該当小節を更新する
+    setPartsScore(prev =>
+      prev.map(partData => {
+        const next = partData.map(cloneMeasureData);
+        if (measureAbsoluteIndex >= next.length) return partData;
+        next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], bpm };
+        return next;
+      })
+    );
     setBpmEditState(null);
   }
 
   function handleTextConfirm(text: string) {
     if (!textEditState) return;
-    const { kind, measureAbsoluteIndex, eventIndex } = textEditState;
-    setScore(prev => {
-      const next = prev.map(cloneMeasureData);
-      if (measureAbsoluteIndex >= next.length) return prev;
-      const targetEv = next[measureAbsoluteIndex].events[eventIndex];
+    const { kind, partIndex, measureAbsoluteIndex, eventIndex } = textEditState;
+    // テキスト要素はパート・小節・イベントを特定して更新する
+    setPartsScore(prev => {
+      const next = [...prev];
+      const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
+      if (measureAbsoluteIndex >= partData.length) return prev;
+      const targetEv = partData[measureAbsoluteIndex].events[eventIndex];
       if (!targetEv) return prev;
-      next[measureAbsoluteIndex].events[eventIndex] = applyTextElementToEvent(targetEv, kind, text);
+      partData[measureAbsoluteIndex].events[eventIndex] = applyTextElementToEvent(targetEv, kind, text);
+      next[partIndex] = partData;
       return next;
     });
     setTextEditState(null);

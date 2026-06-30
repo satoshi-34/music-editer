@@ -2272,16 +2272,17 @@ export default function StaffCanvas({
               }
               if (textElementMode && safeEvents[j] && !safeEvents[j].__isPlaceholder) {
                 // テキスト要素はクリック位置に入力オーバーレイを表示して文字入力を受け付ける。
-                const ev = safeEvents[j];
-                const currentText = ev[textElementMode] ?? '';
+                const noteEv = safeEvents[j];
+                // TextElementKind で NoteEvent を索引するため any キャストを使う
+                const currentText = (noteEv as any)[textElementMode] ?? '';
                 const containerRect = containerRef.current?.getBoundingClientRect();
                 setTextEditState({
                   kind: textElementMode,
                   measureAbsoluteIndex: absoluteIndex,
                   eventIndex: j,
                   currentValue: currentText,
-                  overlayX: e.clientX - (containerRect?.left ?? 0),
-                  overlayY: e.clientY - (containerRect?.top ?? 0),
+                  overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
+                  overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
                 });
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });
                 return;
@@ -2518,7 +2519,8 @@ export default function StaffCanvas({
       articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings }) => {
         // フェルマータ以外は noteTopY の上に重ならないよう積み上げる
         let aboveOffset = 0;
-        markings.forEach(({ type }) => {
+        // ArticulationMarking は文字列型なので、そのまま type として使う
+        markings.forEach((type) => {
           const ns = 'http://www.w3.org/2000/svg';
           if (type === 'fermata') {
             // フェルマータは五線上端より上に配置する（符頭位置に依存しない）

@@ -19,6 +19,26 @@ export type DynamicMarkingValue = AbsoluteDynamicMarking | RelativeDynamicMarkin
  * - fermata（フェルマータ, 𝄐）: その音を長めに伸ばす
  */
 export type ArticulationMarking = 'staccato' | 'accent' | 'tenuto' | 'marcato' | 'fermata';
+/** `ArticulationType` は `ArticulationMarking` の別名。どちらも同じ文字列 union を指す */
+export type ArticulationType = ArticulationMarking;
+
+// ── カスタム記号（現代音楽用）──────────────────────────────────────────
+
+/**
+ * カスタム記号を構成する図形プリミティブ。
+ * 座標系: (0,0) = 音符への接続点（アンカー）、y がマイナスで上方向。
+ */
+export type ShapePrimitive =
+  | { kind: 'circle'; cx: number; cy: number; r: number; filled: boolean }
+  | { kind: 'line'; x1: number; y1: number; x2: number; y2: number; strokeWidth?: number }
+  | { kind: 'arc'; cx: number; cy: number; r: number; startAngle: number; sweepAngle: number };
+
+/** ユーザーが定義したカスタム記号の定義 */
+export interface CustomSymbolDef {
+  id: string;
+  name: string;
+  shapes: ShapePrimitive[];
+}
 
 /** 強弱記号。NoteEvent にぶら下げて「この音符から効き始める記号」を表す */
 export interface DynamicMarking {
@@ -209,6 +229,8 @@ export interface SavedScoreData {
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;
+  /** ユーザー定義カスタム記号ライブラリ。旧データ互換のため省略可 */
+  customSymbolDefs?: CustomSymbolDef[];
 }
 
 export interface StorageMetadata {
