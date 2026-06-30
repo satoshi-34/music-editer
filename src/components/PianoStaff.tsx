@@ -28,6 +28,8 @@ type Props = {
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
   onKeySignatureChange?: (keySignature: KeySignature) => void;
+  selectedMeasures?: { start: number; end: number };
+  onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
 };
 
 export default function PianoStaff({
@@ -48,6 +50,8 @@ export default function PianoStaff({
   keySignature = 'C',
   timeSignature = [4, 4],
   onKeySignatureChange,
+  selectedMeasures,
+  onMeasureSelect,
 }: Props) {
   return (
     <div>
@@ -70,6 +74,8 @@ export default function PianoStaff({
           keySignature={keySignature}
           timeSignature={timeSignature}
           onKeySignatureChange={onKeySignatureChange}
+          selectedMeasures={selectedMeasures}
+          onMeasureSelect={onMeasureSelect}
         />
       ))}
     </div>

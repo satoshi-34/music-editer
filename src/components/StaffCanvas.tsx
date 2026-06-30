@@ -61,6 +61,8 @@ type Props = {
   timeSignature?: TimeSignature; // 拍子
   onKeySignatureChange?: (keySignature: KeySignature) => void; // 行頭クリックによる調号変更
   customSymbolDefs?: import('../types/storage').CustomSymbolDef[]; // カスタム記号定義
+  selectedMeasures?: { start: number; end: number }; // 選択中の小節範囲（絶対インデックス）
+  onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void; // 小節選択コールバック
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -721,6 +723,8 @@ export default function StaffCanvas({
   timeSignature = [4, 4],
   onKeySignatureChange,
   customSymbolDefs = [],
+  selectedMeasures,
+  onMeasureSelect,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -1959,10 +1963,15 @@ export default function StaffCanvas({
         insertRect.setAttribute('y', String(rectTop));
         insertRect.setAttribute('width', String(wDraw));
         insertRect.setAttribute('height', String(rectBottom - rectTop));
-        insertRect.setAttribute('fill', 'transparent');
-        insertRect.setAttribute('stroke', 'none');
+        // 選択中の小節は薄い青でハイライト、それ以外は透明
+        const isMeasureSelected = selectedMeasures != null &&
+          absoluteIndex >= selectedMeasures.start &&
+          absoluteIndex <= selectedMeasures.end;
+        insertRect.setAttribute('fill', isMeasureSelected ? 'rgba(59,130,246,0.15)' : 'transparent');
+        insertRect.setAttribute('stroke', isMeasureSelected ? '#3b82f6' : 'none');
+        insertRect.setAttribute('stroke-width', '1.5');
         insertRect.setAttribute('pointer-events', 'all');
-        (insertRect.style as any).cursor = 'crosshair';
+        (insertRect.style as any).cursor = ('mode' in tool && tool.mode === 'select') ? 'pointer' : 'crosshair';
 
         (svgRoot as any).appendChild(guideLine);
         (svgRoot as any).appendChild(guideDot);
@@ -2023,6 +2032,11 @@ export default function StaffCanvas({
           }
           if ('mode' in tool && tool.mode === 'textElement') {
             // テキスト要素も既存の音符にのみ付ける。
+            return;
+          }
+          if ('mode' in tool && tool.mode === 'select') {
+            // 選択モード：小節をクリックして選択する（Shift で範囲を拡張）
+            onMeasureSelect?.(absoluteIndex, (e as MouseEvent).shiftKey);
             return;
           }
           if ('mode' in tool && tool.mode === 'pedal') {
@@ -3026,7 +3040,7 @@ export default function StaffCanvas({
         } catch { /* 保険 */ }
       }
     });
-  }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure]);
+  }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures]);
 
   /**
    * 途中拍子変更を確定する。

@@ -597,6 +597,9 @@ type Props = {
   // 記譜音表示などで段ごとに調号が違う場合、呼び出し側が「どの段の調号操作だったか」を
   // 知って、実音側へ逆変換できるようにするため。
   onKeySignatureChange?: (keySignature: KeySignature, partIndex?: number) => void;
+  // コピー＆ペースト用: 選択中の小節範囲（絶対インデックス）と選択コールバック
+  selectedMeasures?: { start: number; end: number };
+  onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
 };
 
 export default function PianoSystemCanvas({
@@ -607,6 +610,8 @@ export default function PianoSystemCanvas({
   startMeasureIndex=0, disabled=false, yOffset=0, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   timeSignature = [4, 4],
   onKeySignatureChange,
+  selectedMeasures,
+  onMeasureSelect,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -1793,12 +1798,18 @@ export default function PianoSystemCanvas({
           }
         };
 
+        const isMeasureSelected = selectedMeasures != null &&
+          absI >= selectedMeasures.start &&
+          absI <= selectedMeasures.end;
         const ir=document.createElementNS('http://www.w3.org/2000/svg','rect');
         ir.setAttribute('class','vf-hit');
         ir.setAttribute('x',String(measLeft));ir.setAttribute('y',String(staveTop));
         ir.setAttribute('width',String(measRight-measLeft));ir.setAttribute('height',String(staveBot-staveTop));
-        ir.setAttribute('fill','transparent');ir.setAttribute('stroke','none');
-        ir.setAttribute('pointer-events','all');(ir.style as any).cursor='crosshair';
+        ir.setAttribute('fill', isMeasureSelected ? 'rgba(59,130,246,0.15)' : 'transparent');
+        ir.setAttribute('stroke', isMeasureSelected ? '#3b82f6' : 'none');
+        ir.setAttribute('stroke-width', '1.5');
+        ir.setAttribute('pointer-events','all');
+        (ir.style as any).cursor = ('mode' in tool && tool.mode === 'select') ? 'pointer' : 'crosshair';
         ir.addEventListener('mousemove',e=>{
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           hideChordGuide();
@@ -1808,6 +1819,11 @@ export default function PianoSystemCanvas({
         ir.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
         ir.addEventListener('click',e=>{
           if(disabled)return;
+          // 選択ツールの場合は小節を選択してリターン
+          if ('mode' in tool && tool.mode === 'select') {
+            onMeasureSelect?.(absI, (e as MouseEvent).shiftKey);
+            return;
+          }
           setSelectedArc(null);
           if('mode' in tool&&tool.mode==='tie')return;
           if('mode' in tool&&tool.mode==='repeat'){
@@ -2544,7 +2560,7 @@ export default function PianoSystemCanvas({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure]);
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures]);
 
   function handleTimeSigConfirm(value: string) {
     if (!timeSigEditState) return;

@@ -40,6 +40,7 @@ export function normalizeToVF(d: DurKey): 'w'|'h'|'q'|'8'|'16'|'32'|'64' {
 // ツール（「音価」と「休符かどうか」、またはタイモード）
 export type Tool =
   | { duration: DurKey; isRest?: boolean }  // 通常の音符/休符入力
+  | { mode: 'select' }                      // 小節選択モード（コピー&ペースト用）
   | { mode: 'tie' }                         // タイ記号を付けるモード
   | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
   | { mode: 'repeat'; repeat: RepeatMarkerKind }            // リピート記号を付けるモード
@@ -170,6 +171,7 @@ export default function Palette({
   onOpenSymbolEditor?: () => void;
 }) {
   // 現在の選択状態を判定
+  const selectActive = 'mode' in value && value.mode === 'select';
   const tieActive = 'mode' in value && value.mode === 'tie';
   const selectedAccidental = 'mode' in value && value.mode === 'accidental' ? value.accidental : null;
   const selectedRepeat = 'mode' in value && value.mode === 'repeat' ? value.repeat : null;
@@ -194,8 +196,20 @@ export default function Palette({
   if (section === 'notes') {
     return (
       <div style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {/* 音符行：7音価 + タイ + 臨時記号3 */}
+        {/* 音符行：選択 + 7音価 + タイ + 臨時記号3 */}
         <div style={ROW_STYLE}>
+          {/* 選択ツール */}
+          <button
+            type="button"
+            onClick={() => onChange(selectActive ? ROW1[2] : { mode: 'select' })}
+            title="小節選択（クリックで選択 → Cmd+C でコピー → Cmd+V でペースト）"
+            style={btnStyle(selectActive, { fontSize: 15 })}
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <rect x="2" y="2" width="14" height="14" rx="2" stroke="#333" strokeWidth="1.5" strokeDasharray="3 2" fill="none"/>
+              <path d="M8 6 L12 9 L9.5 9.5 L11 13 L9.5 13.5 L8 10 L6 12 Z" fill="#333"/>
+            </svg>
+          </button>
           {ROW1.map((t, i) => {
             const active = !tieActive && 'duration' in value && 'duration' in t &&
               value.duration === t.duration && !value.isRest;
