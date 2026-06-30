@@ -49,7 +49,9 @@ export type Tool =
   | { mode: 'customSymbol'; symbolId: string }               // カスタム記号を付けるモード
   | { mode: 'textElement'; textKind: TextElementKind }      // テキスト要素（歌詞・コード・テンポ・発想標語）を付けるモード
   | { mode: 'measureTempo' }                                // 小節単位のテンポ変更モード
-  | { mode: 'measureTimeSig' };                             // 小節単位の拍子変更モード
+  | { mode: 'measureTimeSig' }                             // 小節単位の拍子変更モード
+  | { mode: 'graceNote' }                                  // 前打音（スラッシュ付き短前打音）を付けるモード
+  | { mode: 'trill' };                                     // トリル記号を付けるモード
 
 type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
 type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
@@ -173,6 +175,8 @@ export default function Palette({
     : null;
   const measureTempoActive = 'mode' in value && value.mode === 'measureTempo';
   const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
+  const graceNoteActive = 'mode' in value && value.mode === 'graceNote';
+  const trillActive = 'mode' in value && value.mode === 'trill';
 
   return (
     <div style={{ padding: 8 }}>
@@ -526,6 +530,57 @@ export default function Palette({
             />
           );
         })}
+
+        {/* 装飾音符ボタン（前打音・トリル） */}
+        <button
+          type="button"
+          onClick={() => onChange(graceNoteActive ? ROW1[2] : { mode: 'graceNote' })}
+          aria-label="前打音"
+          title="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
+          style={{
+            width: BUTTON_W,
+            height: BUTTON_H,
+            padding: 0,
+            borderRadius: 10,
+            border: graceNoteActive ? '2px solid #7c3aed' : '1px solid #ccc',
+            background: graceNoteActive ? '#f5f3ff' : '#fff',
+            color: '#222',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexDirection: 'column',
+            gap: 2,
+            fontSize: 15,
+          }}
+        >
+          <span style={{ lineHeight: 1 }}>𝆒♩</span>
+          <span style={{ fontSize: 9, color: graceNoteActive ? '#6d28d9' : '#6b7280' }}>前打音</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange(trillActive ? ROW1[2] : { mode: 'trill' })}
+          aria-label="トリル"
+          title="トリル（対象の音符をクリック。再クリックで解除）"
+          style={{
+            width: BUTTON_W,
+            height: BUTTON_H,
+            padding: 0,
+            borderRadius: 10,
+            border: trillActive ? '2px solid #7c3aed' : '1px solid #ccc',
+            background: trillActive ? '#f5f3ff' : '#fff',
+            color: '#222',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <span style={{ fontSize: 16, lineHeight: 1, fontStyle: 'italic', fontWeight: 'bold' }}>tr</span>
+          <span style={{ fontSize: 9, color: trillActive ? '#6d28d9' : '#6b7280' }}>トリル</span>
+        </button>
 
         {/* カスタム記号を新規作成するボタン */}
         <button

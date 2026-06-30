@@ -2009,6 +2009,8 @@ export default function PianoSystemCanvas({
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
+              const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
+              const trillMode = 'mode' in tool && tool.mode === 'trill';
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
@@ -2060,6 +2062,50 @@ export default function PianoSystemCanvas({
                 });
                 setSelected({partIndex:pi,measure:absI,index:j});
                 playNoteEvent(nextEv, part.playbackInstrument);
+                return;
+              }
+              if (graceNoteMode && !safeEvs[j]?.isRest) {
+                // 前打音をトグルで付け外しする
+                setScore(prev=>{
+                  const next=prev.map(cloneMeasureData);
+                  if(absI>=next.length)return prev;
+                  const targetEv=next[absI].events[j];
+                  if(!targetEv||targetEv.isRest)return prev;
+                  const hasGrace=(targetEv.graceNotes?.length??0)>0;
+                  // 前打音のデフォルト音高は主音符の1音上（stepUp 関数は StaffCanvas と同じロジック）
+                  const graceKey=targetEv.keys[0]??'b/4';
+                  const noteNames=['c','d','e','f','g','a','b'];
+                  const m=graceKey.match(/^([a-g])[#b]?\/(\d+)$/i);
+                  const nextKey=m
+                    ? (()=>{
+                        const idx=noteNames.indexOf(m[1].toLowerCase());
+                        return idx===noteNames.length-1
+                          ? `c/${parseInt(m[2],10)+1}`
+                          : `${noteNames[idx+1]}/${m[2]}`;
+                      })()
+                    : graceKey;
+                  next[absI].events[j]=hasGrace
+                    ?{...targetEv,graceNotes:undefined}
+                    :{...targetEv,graceNotes:[{keys:[nextKey],slash:true}]};
+                  return next;
+                });
+                setSelected({partIndex:pi,measure:absI,index:j});
+                return;
+              }
+              if (trillMode && !safeEvs[j]?.isRest) {
+                // トリル記号をトグルで付け外しする
+                setScore(prev=>{
+                  const next=prev.map(cloneMeasureData);
+                  if(absI>=next.length)return prev;
+                  const targetEv=next[absI].events[j];
+                  if(!targetEv||targetEv.isRest)return prev;
+                  next[absI].events[j]={
+                    ...targetEv,
+                    ornament:targetEv.ornament==='trill'?undefined:'trill',
+                  };
+                  return next;
+                });
+                setSelected({partIndex:pi,measure:absI,index:j});
                 return;
               }
               if (textElementMode && safeEvs[j] && !safeEvs[j].__isPlaceholder) {

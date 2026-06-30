@@ -102,6 +102,17 @@ export interface NoteEvent {
   tempoMarking?: string;
   /** 発想標語（例: espressivo, dolce）。斜体テキストで表示 */
   expressionMarking?: string;
+  /**
+   * 前打音のリスト（装飾音符）。
+   * slash=true でスラッシュ付き（アッチャカトゥーラ）、false でロングアッポジャトゥーラ。
+   * keys は音高（VexFlow 形式: "d/5" など）。複数音の前打音も可。
+   */
+  graceNotes?: { keys: string[]; slash: boolean }[];
+  /**
+   * 装飾音記号の種類。
+   * 'trill': 主音符の上に tr と波線を描く。
+   */
+  ornament?: 'trill';
 }
 
 /**

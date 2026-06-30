@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType } from 'vexflow';
+import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament } from 'vexflow';
 import type { Tool } from './Palette';
 import type { TieArc, MeasureData, NoteEvent, DurKey, TimeSignature } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
@@ -585,6 +585,23 @@ function sanitizeRenderEvent(ev: any, clef: 'treble' | 'bass' | 'alto'): RenderN
   return { ...ev, dur: ev.dur as DurKey, isRest: false, keys: validKeys };
 }
 
+/* ===== 前打音用: 1音上の音高を返す ===== */
+function stepUp(key: string): string {
+  // VexFlow 形式 "c/4", "f#/3" などを受け取り、臨時記号なしで1ダイアトニック音上を返す
+  const match = key.match(/^([a-g])[#b]?\/(\d+)$/i);
+  if (!match) return key;
+  const step = match[1].toLowerCase();
+  const octave = parseInt(match[2], 10);
+  const scale = ['c', 'd', 'e', 'f', 'g', 'a', 'b'];
+  const idx = scale.indexOf(step);
+  if (idx < 0) return key;
+  if (idx === scale.length - 1) {
+    // b → c（1オクターブ上へ）
+    return `c/${octave + 1}`;
+  }
+  return `${scale[idx + 1]}/${octave}`;
+}
+
 /* ===== ノート生成（臨時記号を付与） ===== */
 function makeVFNote(
   ev: NoteEvent,
@@ -626,6 +643,30 @@ function makeVFNote(
       // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
     }
   });
+
+  // 前打音（grace note）を主音符の前に付ける
+  if (ev.graceNotes?.length) {
+    try {
+      const graceVFNotes = ev.graceNotes.map(gn =>
+        new GraceNote({ keys: gn.keys, duration: '8', slash: gn.slash })
+      );
+      const graceGroup = new GraceNoteGroup(graceVFNotes);
+      (n as any).addModifier?.(graceGroup, 0);
+    } catch {
+      // VexFlow バージョン差異で失敗しても描画を止めない
+    }
+  }
+
+  // トリル記号（tr）を音符の上に付ける
+  if (ev.ornament === 'trill') {
+    try {
+      const trill = new Ornament('tr');
+      (n as any).addModifier?.(trill, 0);
+    } catch {
+      // 失敗しても描画を止めない
+    }
+  }
+
   return n;
 }
 
@@ -2178,6 +2219,8 @@ export default function StaffCanvas({
               const articulationMode = 'mode' in tool && tool.mode === 'articulation' ? tool.articulation : null;
               const customSymbolMode = 'mode' in tool && tool.mode === 'customSymbol' ? tool.symbolId : null;
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
+              const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
+              const trillMode = 'mode' in tool && tool.mode === 'trill';
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
 
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
@@ -2264,6 +2307,48 @@ export default function StaffCanvas({
                   const targetEv = next[absoluteIndex].events[j];
                   if (!targetEv || targetEv.isRest) return prev;
                   next[absoluteIndex].events[j] = applyCustomSymbolToEvent(targetEv, customSymbolMode);
+                  return next;
+                });
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                playNoteEvent(nextEv);
+                return;
+              }
+              if (graceNoteMode && !safeEvents[j]?.isRest) {
+                // 前打音をトグルで付け外しする。主音符の1音上を自動設定。
+                const currentEv = safeEvents[j];
+                const hasGrace = (currentEv.graceNotes?.length ?? 0) > 0;
+                const nextEv: NoteEvent = hasGrace
+                  ? { ...currentEv, graceNotes: undefined }
+                  : { ...currentEv, graceNotes: [{ keys: [stepUp(currentEv.keys[0] ?? 'b/4')], slash: true }] };
+                setScore(prev => {
+                  const next = prev.map(cloneMeasureData);
+                  if (absoluteIndex >= next.length) return prev;
+                  const targetEv = next[absoluteIndex].events[j];
+                  if (!targetEv || targetEv.isRest) return prev;
+                  const targetHasGrace = (targetEv.graceNotes?.length ?? 0) > 0;
+                  next[absoluteIndex].events[j] = targetHasGrace
+                    ? { ...targetEv, graceNotes: undefined }
+                    : { ...targetEv, graceNotes: [{ keys: [stepUp(targetEv.keys[0] ?? 'b/4')], slash: true }] };
+                  return next;
+                });
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                playNoteEvent(nextEv);
+                return;
+              }
+              if (trillMode && !safeEvents[j]?.isRest) {
+                // トリル記号をトグルで付け外しする
+                const currentEv = safeEvents[j];
+                const nextOrnament: 'trill' | undefined = currentEv.ornament === 'trill' ? undefined : 'trill';
+                const nextEv: NoteEvent = { ...currentEv, ornament: nextOrnament };
+                setScore(prev => {
+                  const next = prev.map(cloneMeasureData);
+                  if (absoluteIndex >= next.length) return prev;
+                  const targetEv = next[absoluteIndex].events[j];
+                  if (!targetEv || targetEv.isRest) return prev;
+                  next[absoluteIndex].events[j] = {
+                    ...targetEv,
+                    ornament: targetEv.ornament === 'trill' ? undefined : 'trill',
+                  };
                   return next;
                 });
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });
