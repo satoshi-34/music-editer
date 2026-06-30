@@ -13,8 +13,10 @@ import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 import type { AccidentalToolKind } from '../utils/noteKeyUtils';
 import type { EndingNumber, RepeatMarkerKind } from '../utils/repeatMarkerUtils';
-import type { DynamicMarkingValue, ArticulationMarking } from '../types/storage';
-import { ARTICULATION_VALUES } from '../utils/articulationMarkingUtils';
+import type { ArticulationType, CustomSymbolDef, DynamicMarkingValue } from '../types/storage';
+import { articulationLabel } from '../utils/articulationUtils';
+import { symbolDefToPreviewSvg } from '../utils/customSymbolUtils';
+import { type TextElementKind, textElementLabel } from '../utils/textElementUtils';
 
 // ========== 表示サイズ＆色（ボタン側と合わせる） ==========
 const BUTTON_W = 56;   // ボタン幅（CSSと合わせる）
@@ -43,7 +45,11 @@ export type Tool =
   | { mode: 'repeat'; repeat: RepeatMarkerKind }            // リピート記号を付けるモード
   | { mode: 'ending'; ending: EndingNumber }                // 1番括弧 / 2番括弧
   | { mode: 'dynamic'; dynamic: DynamicMarkingValue }       // 強弱記号を付けるモード
-  | { mode: 'articulation'; articulation: ArticulationMarking }; // 奏法記号を付けるモード
+  | { mode: 'articulation'; articulation: ArticulationType }  // アーティキュレーション記号を付けるモード
+  | { mode: 'customSymbol'; symbolId: string }               // カスタム記号を付けるモード
+  | { mode: 'textElement'; textKind: TextElementKind }      // テキスト要素（歌詞・コード・テンポ・発想標語）を付けるモード
+  | { mode: 'measureTempo' }                                // 小節単位のテンポ変更モード
+  | { mode: 'measureTimeSig' };                             // 小節単位の拍子変更モード
 
 type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
 type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
@@ -114,13 +120,31 @@ const DYNAMIC_TOOLS: DynamicTool[] = [
   { mode: 'dynamic', dynamic: 'cresc' },
   { mode: 'dynamic', dynamic: 'dim' },
 ];
-const ARTICULATION_TOOLS: ArticulationTool[] = ARTICULATION_VALUES.map(
-  (articulation) => ({ mode: 'articulation', articulation })
-);
+const ARTICULATION_TOOLS: ArticulationTool[] = [
+  { mode: 'articulation', articulation: 'staccato' },
+  { mode: 'articulation', articulation: 'accent' },
+  { mode: 'articulation', articulation: 'tenuto' },
+  { mode: 'articulation', articulation: 'fermata' },
+];
+
+/** テキスト要素ツール一覧（歌詞・コード記号・テンポ表記・発想標語） */
+const TEXT_ELEMENT_TOOLS: Array<{ mode: 'textElement'; textKind: TextElementKind }> = [
+  { mode: 'textElement', textKind: 'lyrics' },
+  { mode: 'textElement', textKind: 'chordSymbol' },
+  { mode: 'textElement', textKind: 'tempoMarking' },
+  { mode: 'textElement', textKind: 'expressionMarking' },
+];
 
 export default function Palette({
   value, onChange,
-}: { value: Tool; onChange: (t: Tool) => void }) {
+  customSymbolDefs = [],
+  onOpenSymbolEditor,
+}: {
+  value: Tool;
+  onChange: (t: Tool) => void;
+  customSymbolDefs?: CustomSymbolDef[];
+  onOpenSymbolEditor?: () => void;
+}) {
 
   const items = [...ROW1, ...ROW2]; // 7×2 = 14個
 
@@ -141,6 +165,14 @@ export default function Palette({
   const selectedArticulation = 'mode' in value && value.mode === 'articulation'
     ? value.articulation
     : null;
+  const selectedCustomSymbolId = 'mode' in value && value.mode === 'customSymbol'
+    ? value.symbolId
+    : null;
+  const selectedTextKind = 'mode' in value && value.mode === 'textElement'
+    ? value.textKind
+    : null;
+  const measureTempoActive = 'mode' in value && value.mode === 'measureTempo';
+  const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
 
   return (
     <div style={{ padding: 8 }}>
@@ -360,15 +392,164 @@ export default function Palette({
                 alignItems: 'center',
                 justifyContent: 'center',
                 cursor: 'pointer',
-                fontSize: 24,
-                fontFamily: '"Times New Roman", serif',
-                lineHeight: 1,
               }}
             >
-              {articulationSymbol(tool.articulation)}
+              <ArticulationIcon type={tool.articulation} />
             </button>
           );
         })}
+
+        {/* 途中テンポ変更ボタン */}
+        <button
+          type="button"
+          onClick={() => onChange(measureTempoActive ? ROW1[2] : { mode: 'measureTempo' })}
+          aria-label="途中テンポ変更"
+          title="途中テンポ変更（小節をクリックしてBPMを設定。空欄で解除）"
+          style={{
+            minWidth: BUTTON_W,
+            height: BUTTON_H,
+            padding: '0 6px',
+            borderRadius: 10,
+            border: measureTempoActive ? '2px solid #3b82f6' : '1px solid #ccc',
+            background: measureTempoActive ? '#eff6ff' : '#fff',
+            color: '#222',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <svg width="36" height="18" viewBox="0 0 36 18" aria-hidden="true">
+            <text x="1" y="13" fontSize="12" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">♩=</text>
+            <text x="20" y="13" fontSize="11" fontFamily="sans-serif" fontWeight="bold" fill="#e05">?</text>
+          </svg>
+          <span style={{ fontSize: 9, color: measureTempoActive ? '#1d4ed8' : '#6b7280' }}>テンポ変更</span>
+        </button>
+
+        {/* 途中拍子変更ボタン */}
+        <button
+          type="button"
+          onClick={() => onChange(measureTimeSigActive ? ROW1[2] : { mode: 'measureTimeSig' })}
+          aria-label="途中拍子変更"
+          title="途中拍子変更（小節をクリックして拍子を選択。4/4→3/8 など）"
+          style={{
+            minWidth: BUTTON_W,
+            height: BUTTON_H,
+            padding: '0 6px',
+            borderRadius: 10,
+            border: measureTimeSigActive ? '2px solid #3b82f6' : '1px solid #ccc',
+            background: measureTimeSigActive ? '#eff6ff' : '#fff',
+            color: '#222',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <svg width="36" height="18" viewBox="0 0 36 18" aria-hidden="true">
+            <text x="1" y="10" fontSize="10" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">3</text>
+            <line x1="1" y1="11" x2="11" y2="11" stroke="#111" strokeWidth="1.5"/>
+            <text x="1" y="18" fontSize="10" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">8</text>
+            <text x="14" y="14" fontSize="12" fill="#e05">?</text>
+          </svg>
+          <span style={{ fontSize: 9, color: measureTimeSigActive ? '#1d4ed8' : '#6b7280' }}>拍子変更</span>
+        </button>
+
+        {/* テキスト要素ボタン群（歌詞・コード記号・テンポ表記・発想標語） */}
+        {TEXT_ELEMENT_TOOLS.map((tool) => {
+          const isActive = selectedTextKind === tool.textKind;
+          return (
+            <button
+              type="button"
+              key={tool.textKind}
+              onClick={() => onChange(isActive ? ROW1[2] : tool)}
+              aria-label={textElementLabel(tool.textKind)}
+              title={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
+              style={{
+                minWidth: BUTTON_W,
+                height: BUTTON_H,
+                padding: '0 6px',
+                borderRadius: 10,
+                border: isActive ? '2px solid #3b82f6' : '1px solid #ccc',
+                background: isActive ? '#eff6ff' : '#fff',
+                color: '#222',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontFamily: tool.textKind === 'chordSymbol' ? '"Times New Roman", serif' : 'sans-serif',
+                fontStyle: tool.textKind === 'expressionMarking' ? 'italic' : 'normal',
+                fontWeight: tool.textKind === 'tempoMarking' ? 'bold' : 'normal',
+                lineHeight: 1,
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              <TextElementIcon kind={tool.textKind} />
+              <span style={{ fontSize: 9, color: isActive ? '#1d4ed8' : '#6b7280' }}>
+                {textElementLabel(tool.textKind)}
+              </span>
+            </button>
+          );
+        })}
+
+        {/* カスタム記号ボタン群 */}
+        {customSymbolDefs.map((def) => {
+          const isActive = selectedCustomSymbolId === def.id;
+          const svgStr = symbolDefToPreviewSvg(def, 28);
+          return (
+            <button
+              type="button"
+              key={def.id}
+              onClick={() => onChange(isActive ? ROW1[2] : { mode: 'customSymbol', symbolId: def.id })}
+              aria-label={def.name}
+              title={`${def.name}（対象の音符をクリック）`}
+              style={{
+                width: BUTTON_W,
+                height: BUTTON_H,
+                padding: 0,
+                borderRadius: 10,
+                border: isActive ? '2px solid #3b82f6' : '1px solid #ccc',
+                background: isActive ? '#eff6ff' : '#fff',
+                color: '#222',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+              dangerouslySetInnerHTML={{ __html: svgStr }}
+            />
+          );
+        })}
+
+        {/* カスタム記号を新規作成するボタン */}
+        <button
+          type="button"
+          onClick={onOpenSymbolEditor}
+          aria-label="カスタム記号を作成"
+          title="カスタム記号を新規作成"
+          style={{
+            width: BUTTON_W,
+            height: BUTTON_H,
+            padding: 0,
+            borderRadius: 10,
+            border: '1px dashed #9ca3af',
+            background: '#fff',
+            color: '#6b7280',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            fontSize: 22,
+          }}
+        >
+          ＋
+        </button>
       </div>
     </div>
   );
@@ -411,28 +592,6 @@ function dynamicLabel(kind: DynamicMarkingValue) {
   if (kind === 'cresc') return 'クレッシェンド';
   if (kind === 'dim') return 'ディミヌエンド';
   return `強弱記号 ${kind}`;
-}
-
-// ボタンに表示する奏法記号の見た目。
-// フェルマータは専用の音楽記号（U+1D110）、それ以外は読みやすい近似記号を使う。
-function articulationSymbol(kind: ArticulationMarking) {
-  switch (kind) {
-    case 'staccato': return '•';
-    case 'accent': return '>';
-    case 'tenuto': return '‒';
-    case 'marcato': return '^';
-    case 'fermata': return '𝄐';
-  }
-}
-
-function articulationLabel(kind: ArticulationMarking) {
-  switch (kind) {
-    case 'staccato': return 'スタッカート（短く切る）';
-    case 'accent': return 'アクセント（強く）';
-    case 'tenuto': return 'テヌート（音価いっぱい保つ）';
-    case 'marcato': return 'マルカート（強く＋やや短く）';
-    case 'fermata': return 'フェルマータ（長く伸ばす）';
-  }
 }
 
 /**
@@ -548,6 +707,91 @@ function NoteIcon({ duration, isRest }: { duration: DurKey; isRest?: boolean }) 
 
   // はみ出し防止にコンテナサイズも固定
   return <div ref={ref} style={{ width: CANVAS_W, height: CANVAS_H }} aria-hidden="true" />;
+}
+
+/** パレットボタン内のアーティキュレーション記号アイコン（SVG） */
+function ArticulationIcon({ type }: { type: ArticulationType }) {
+  const W = 32, H = 28;
+  switch (type) {
+    case 'staccato':
+      // 小さな黒丸（スタッカート）
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+          <circle cx={W / 2} cy={H / 2} r="4" fill="#111" />
+        </svg>
+      );
+    case 'accent':
+      // 「>」を90°回した楔形（上辺左右から中央下点へ）
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+          <path
+            d={`M ${W / 2 - 10} ${H / 2 - 6} L ${W / 2} ${H / 2 + 6} L ${W / 2 + 10} ${H / 2 - 6}`}
+            stroke="#111" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"
+          />
+        </svg>
+      );
+    case 'tenuto':
+      // 横線（テヌート）
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+          <line
+            x1={W / 2 - 10} y1={H / 2} x2={W / 2 + 10} y2={H / 2}
+            stroke="#111" strokeWidth="2.5" strokeLinecap="round"
+          />
+        </svg>
+      );
+    case 'fermata':
+      // 半円＋中心点（フェルマータ）
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+          {/* 半円: 下部ベースラインから弧を上方向に描く */}
+          <path
+            d={`M ${W / 2 - 10} ${H / 2 + 2} A 10 9 0 0 1 ${W / 2 + 10} ${H / 2 + 2}`}
+            stroke="#111" strokeWidth="1.8" strokeLinecap="round" fill="none"
+          />
+          {/* 中心の点 */}
+          <circle cx={W / 2} cy={H / 2 + 4} r="2.5" fill="#111" />
+        </svg>
+      );
+  }
+}
+
+/** テキスト要素ボタンのアイコン（種別ごとに異なるミニアイコン） */
+function TextElementIcon({ kind }: { kind: TextElementKind }) {
+  const W = 28, H = 20;
+  switch (kind) {
+    case 'lyrics':
+      // 音符＋横線2本（歌詞テキストのイメージ）
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+          <text x="4" y="13" fontSize="11" fontFamily="serif" fill="#111">♩</text>
+          <line x1="15" y1="8" x2="26" y2="8" stroke="#111" strokeWidth="1.5" strokeLinecap="round" />
+          <line x1="15" y1="13" x2="26" y2="13" stroke="#111" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      );
+    case 'chordSymbol':
+      // "Am" のような太字テキスト（コード記号のイメージ）
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+          <text x="4" y="14" fontSize="13" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">Am</text>
+        </svg>
+      );
+    case 'tempoMarking':
+      // 音符＋"=" のようなテンポ記号
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+          <text x="1" y="14" fontSize="11" fontFamily="serif" fill="#111" fontWeight="bold">♩=</text>
+          <text x="18" y="14" fontSize="10" fontFamily="sans-serif" fill="#111" fontWeight="bold">120</text>
+        </svg>
+      );
+    case 'expressionMarking':
+      // 斜体の "espr." テキスト（発想標語のイメージ）
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+          <text x="1" y="14" fontSize="10" fontFamily='"Times New Roman", serif' fontStyle="italic" fill="#111">espr.</text>
+        </svg>
+      );
+  }
 }
 
 // 失敗時フォールバック（環境で字形は多少変わります）

@@ -4,10 +4,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
-  Barline, Beam, Accidental, Articulation, StaveConnector, GhostNote, VoltaType,
+  Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType,
 } from 'vexflow';
 import type { Tool } from './Palette';
-import type { MeasureData, TieArc, DynamicMarking, ArticulationMarking } from '../types/storage';
+import type { MeasureData, TieArc, DynamicMarking } from '../types/storage';
 import type { ClefType } from './clefUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
@@ -29,18 +29,14 @@ import {
 } from '../utils/noteKeyUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
-import {
-  getArticulationVexflowCode,
-  isAboveArticulation,
-  toggleArticulationOnEvent,
-} from '../utils/articulationMarkingUtils';
+import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getMeasureVoices } from '../utils/voiceMeasureUtils';
-import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; articulations?: ArticulationMarking[] };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[] };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number } | null;
 
@@ -368,10 +364,6 @@ function getPreviewLedgerLines(snappedLine: number): number[] {
 }
 
 /* ===== SVG座標変換（Safari対応） ===== */
-// ページ縮小率（--scale）の実効値を返す。
-// 現在の縮小は transform: scale ベース（issue #13 対応）で、transform は
-// 全ブラウザで getBoundingClientRect に反映されるため通常この値は不要。
-// 万一 CSS zoom 方式へ戻ったときの座標補正フォールバック用に残している。
 function getAccumulatedCSSZoom(el: Element): number {
   const wrapper = el.closest('.page-wrapper');
   if (wrapper) {
@@ -491,57 +483,7 @@ function makeVFNote(
       // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
     }
   });
-  // アーティキュレーション（スタッカート・アクセント等）を符頭に付ける。
-  attachArticulations(n, ev);
   return n;
-}
-
-/**
- * NoteEvent に保存されたアーティキュレーションを VexFlow の StaveNote へ描画する。
- * フェルマータ・マルカートは符頭の上、それ以外は VexFlow の自動配置に任せる。
- */
-function attachArticulations(note: StaveNote, ev: NoteEvent) {
-  (ev.articulations ?? []).forEach((value) => {
-    try {
-      const articulation = new Articulation(getArticulationVexflowCode(value));
-      // VexFlow 5 のデフォルトは ABOVE(3) なので、記号ごとに正しい位置を明示する。
-      // フェルマータ・マルカートは慣習的に常に符頭の上。
-      // それ以外（スタッカート・アクセント・テヌートなど）は符頭側（幹と逆）に付ける:
-      //   幹が上(UP=1) → 符頭は下 → BELOW(4)
-      //   幹が下(DOWN=-1) → 符頭は上 → ABOVE(3)
-      // ※ getStemDirection() はフォーマット前に呼ぶと全音符が UP=1 を返すため、
-      //   音高から幹方向を自前で計算する。
-      let position: number;
-      if (isAboveArticulation(value)) {
-        position = 3; // ABOVE
-      } else {
-        const stemDir = calcStemDirFromKeys(ev.keys);
-        position = stemDir === 1 ? 4 : 3; // UP→BELOW, DOWN→ABOVE
-      }
-      (articulation as any).setPosition?.(position);
-      (note as any).addModifier?.(articulation, 0);
-    } catch {
-      // 記号コードがライブラリ側で未対応でも、譜面全体の描画は止めない。
-    }
-  });
-}
-
-/**
- * 音符の keys 配列からト音記号基準の幹方向を計算する。
- * VexFlow はフォーマット前は全音符が UP(1) を返すため、これを代替として使う。
- * B4（ライン2）より上なら幹下(DOWN=-1)、以下なら幹上(UP=1)。
- */
-function calcStemDirFromKeys(keys: string[]): number {
-  const noteStep: Record<string, number> = { c: 0, d: 1, e: 2, f: 3, g: 4, a: 5, b: 6 };
-  const avgLine =
-    keys.reduce((sum, key) => {
-      const [rawNote, octStr] = key.toLowerCase().split('/');
-      const name = rawNote.replace(/[^a-g]/g, '');
-      const step = noteStep[name] ?? 2;
-      const oct = parseInt(octStr) || 4;
-      return sum + (oct - 4) * 3.5 + (step - 2) * 0.5;
-    }, 0) / keys.length;
-  return avgLine > 2 ? -1 : 1;
 }
 
 function sanitizeRenderEvent(ev: any, clef: ClefType): RenderNoteEvent {
@@ -673,6 +615,7 @@ export default function PianoSystemCanvas({
   const beatsPerMeasure = getMeasureBeats(normalizedTimeSignature);
   const formattedTimeSignature = formatTimeSignature(normalizedTimeSignature);
   const ref = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // partsConfig 優先、なければ piano backward compat の2段
   const parts: PartConfig[] = partsConfig ?? [
@@ -716,6 +659,29 @@ export default function PianoSystemCanvas({
   // キーボードハンドラが各パートのclefを参照できるようにrefで保持
   const partsClefRef = useRef(parts.map(p => p.clef));
   // 選択中のスラー/タイ（null = 未選択）
+  const [timeSigEditState, setTimeSigEditState] = useState<{
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
+  const [bpmEditState, setBpmEditState] = useState<{
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
+  const [textEditState, setTextEditState] = useState<{
+    kind: TextElementKind;
+    measureAbsoluteIndex: number;
+    eventIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
   const [selectedArc, setSelectedArc] = useState<{
     partIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
   } | null>(null);
@@ -1846,6 +1812,36 @@ export default function PianoSystemCanvas({
             // 強弱記号は既存の音符へ付ける情報なので、背景クリックでは何もしない。
             return;
           }
+          if('mode' in tool&&tool.mode==='textElement'){
+            // テキスト要素も既存の音符へ付ける情報なので、背景クリックでは何もしない。
+            return;
+          }
+          if('mode' in tool&&tool.mode==='measureTempo'){
+            // 小節テンポ変更: 小節クリックで BPM 入力欄を表示する
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            const me = e as MouseEvent;
+            const currentBpm = partsScore[0]?.[absI]?.bpm;
+            setBpmEditState({
+              measureAbsoluteIndex: absI,
+              currentValue: currentBpm != null ? String(currentBpm) : '',
+              overlayX: me.clientX - (containerRect?.left ?? 0),
+              overlayY: me.clientY - (containerRect?.top ?? 0),
+            });
+            return;
+          }
+          if('mode' in tool&&tool.mode==='measureTimeSig'){
+            // 途中拍子変更: 小節クリックで拍子選択ドロップダウンを表示する
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            const me = e as MouseEvent;
+            const currentTS = partsScore[0]?.[absI]?.timeSignature;
+            setTimeSigEditState({
+              measureAbsoluteIndex: absI,
+              currentValue: currentTS ? `${currentTS[0]}/${currentTS[1]}` : '',
+              overlayX: me.clientX - (containerRect?.left ?? 0),
+              overlayY: me.clientY - (containerRect?.top ?? 0),
+            });
+            return;
+          }
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           if('mode' in tool&&tool.mode==='accidental'){
             if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
@@ -1984,9 +1980,34 @@ export default function PianoSystemCanvas({
                 toggleEndingAcrossParts(absI, tool.ending);
                 return;
               }
+              // 音符の上をクリックしても小節単位ツールが動くよう、hit でも処理する
+              if('mode' in tool&&tool.mode==='measureTempo'){
+                const containerRect=containerRef.current?.getBoundingClientRect();
+                const me=e as MouseEvent;
+                const currentBpm=partsScore[0]?.[absI]?.bpm;
+                setBpmEditState({
+                  measureAbsoluteIndex:absI,
+                  currentValue:currentBpm!=null?String(currentBpm):'',
+                  overlayX:me.clientX-(containerRect?.left??0),
+                  overlayY:me.clientY-(containerRect?.top??0),
+                });
+                return;
+              }
+              if('mode' in tool&&tool.mode==='measureTimeSig'){
+                const containerRect=containerRef.current?.getBoundingClientRect();
+                const me=e as MouseEvent;
+                const currentTS=partsScore[0]?.[absI]?.timeSignature;
+                setTimeSigEditState({
+                  measureAbsoluteIndex:absI,
+                  currentValue:currentTS?`${currentTS[0]}/${currentTS[1]}`:'',
+                  overlayX:me.clientX-(containerRect?.left??0),
+                  overlayY:me.clientY-(containerRect?.top??0),
+                });
+                return;
+              }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
-              const articulationMode = 'mode' in tool && tool.mode === 'articulation' ? tool.articulation : null;
+              const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
@@ -2040,19 +2061,20 @@ export default function PianoSystemCanvas({
                 playNoteEvent(nextEv, part.playbackInstrument);
                 return;
               }
-              if (articulationMode && !safeEvs[j]?.isRest) {
-                // 多段譜でも音符セルクリックで奏法記号を直接付け外しできるようにする。
-                const nextEv = toggleArticulationOnEvent(safeEvs[j], articulationMode);
-                setScore(prev=>{
-                  const next=prev.map(cloneMeasureData);
-                  if(absI>=next.length)return prev;
-                  const targetEv=next[absI].events[j];
-                  if(!targetEv||targetEv.isRest)return prev;
-                  next[absI].events[j]=toggleArticulationOnEvent(targetEv, articulationMode);
-                  return next;
+              if (textElementMode && safeEvs[j] && !safeEvs[j].__isPlaceholder) {
+                // テキスト要素はクリック位置にオーバーレイを表示して文字入力を受け付ける。
+                const currentText = safeEvs[j][textElementMode] ?? '';
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const me = e as MouseEvent;
+                setTextEditState({
+                  kind: textElementMode,
+                  measureAbsoluteIndex: absI,
+                  eventIndex: j,
+                  currentValue: currentText,
+                  overlayX: me.clientX - (containerRect?.left ?? 0),
+                  overlayY: me.clientY - (containerRect?.top ?? 0),
                 });
                 setSelected({partIndex:pi,measure:absI,index:j});
-                playNoteEvent(nextEv, part.playbackInstrument);
                 return;
               }
 
@@ -2096,7 +2118,6 @@ export default function PianoSystemCanvas({
                 playNoteEvent(playEvent, part.playbackInstrument);
               }else if(safeEvs[j]?.isRest){
                 if (dynamicMode) return;
-                if (articulationMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i===0 &&
                     lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
@@ -2170,7 +2191,6 @@ export default function PianoSystemCanvas({
                 doInsert(lx,ly);
               }else{
                 if (dynamicMode) return;
-                if (articulationMode) return;
                 if (accidentalMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsert(lx,ly);
@@ -2355,5 +2375,227 @@ export default function PianoSystemCanvas({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure]);
 
-  return <div ref={ref} style={{overflow:'visible'}}/>;
+  function handleTimeSigConfirm(value: string) {
+    if (!timeSigEditState) return;
+    const { measureAbsoluteIndex } = timeSigEditState;
+    let timeSig: [number, number] | undefined;
+    if (value && value !== 'none') {
+      const parts = value.split('/');
+      if (parts.length === 2) {
+        const num = parseInt(parts[0], 10);
+        const den = parseInt(parts[1], 10);
+        if (isValidTimeSignature([num, den])) {
+          timeSig = [num, den];
+        }
+      }
+    }
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], timeSignature: timeSig };
+      return next;
+    });
+    setTimeSigEditState(null);
+  }
+
+  function handleBpmConfirm(rawText: string) {
+    if (!bpmEditState) return;
+    const { measureAbsoluteIndex } = bpmEditState;
+    const parsed = parseInt(rawText.trim(), 10);
+    const bpm = !isNaN(parsed) && parsed >= 60 && parsed <= 240 ? parsed : undefined;
+    // Piano 譜は全パートで同じ BPM を共有する
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], bpm };
+      return next;
+    });
+    setBpmEditState(null);
+  }
+
+  function handleTextConfirm(text: string) {
+    if (!textEditState) return;
+    const { kind, measureAbsoluteIndex, eventIndex } = textEditState;
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      const targetEv = next[measureAbsoluteIndex].events[eventIndex];
+      if (!targetEv) return prev;
+      next[measureAbsoluteIndex].events[eventIndex] = applyTextElementToEvent(targetEv, kind, text);
+      return next;
+    });
+    setTextEditState(null);
+  }
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <div ref={ref} style={{overflow:'visible'}}/>
+      {timeSigEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: timeSigEditState.overlayX,
+            top: timeSigEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #7c3aed',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            minWidth: 160,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#7c3aed', fontFamily: 'sans-serif' }}>
+            途中拍子変更（「解除」で元に戻す）
+          </span>
+          <select
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            defaultValue={timeSigEditState.currentValue || 'none'}
+            style={{
+              fontSize: 14,
+              fontFamily: '"Times New Roman", serif',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              padding: '2px 4px',
+              outline: 'none',
+            }}
+            onChange={(e) => {
+              handleTimeSigConfirm(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setTimeSigEditState(null);
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              if (e.relatedTarget === null) setTimeSigEditState(null);
+            }}
+          >
+            <option value="none">（解除）</option>
+            <option value="4/4">4/4</option>
+            <option value="3/4">3/4</option>
+            <option value="2/4">2/4</option>
+            <option value="2/2">2/2</option>
+            <option value="6/8">6/8</option>
+            <option value="3/8">3/8</option>
+            <option value="5/4">5/4</option>
+            <option value="7/8">7/8</option>
+            <option value="12/8">12/8</option>
+          </select>
+        </div>
+      )}
+      {bpmEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: bpmEditState.overlayX,
+            top: bpmEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #b45309',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 140,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#b45309', fontFamily: 'sans-serif' }}>
+            途中テンポ変更（60〜240 BPM、空欄で解除）
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 13, fontFamily: '"Times New Roman", serif', fontWeight: 'bold' }}>♩=</span>
+            <input
+              // eslint-disable-next-line jsx-a11y/no-autofocus
+              autoFocus
+              type="number"
+              min={60}
+              max={240}
+              defaultValue={bpmEditState.currentValue}
+              placeholder="例: 80"
+              style={{
+                border: 'none',
+                outline: 'none',
+                fontSize: 13,
+                fontFamily: 'sans-serif',
+                width: 70,
+                padding: 2,
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleBpmConfirm((e.target as HTMLInputElement).value);
+                } else if (e.key === 'Escape') {
+                  setBpmEditState(null);
+                }
+                e.stopPropagation();
+              }}
+              onBlur={(e) => {
+                handleBpmConfirm(e.target.value);
+              }}
+            />
+          </div>
+        </div>
+      )}
+      {textEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: textEditState.overlayX,
+            top: textEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #3b82f6',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 160,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#6b7280', fontFamily: 'sans-serif' }}>
+            {textElementLabel(textEditState.kind)}
+          </span>
+          <input
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            defaultValue={textEditState.currentValue}
+            placeholder={textElementPlaceholder(textEditState.kind)}
+            style={{
+              border: 'none',
+              outline: 'none',
+              fontSize: 13,
+              fontFamily:
+                textEditState.kind === 'expressionMarking' || textEditState.kind === 'tempoMarking'
+                  ? '"Times New Roman", serif'
+                  : 'sans-serif',
+              fontStyle:
+                textEditState.kind === 'expressionMarking' || textEditState.kind === 'tempoMarking'
+                  ? 'italic'
+                  : 'normal',
+              minWidth: 140,
+              padding: 2,
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                handleTextConfirm((e.target as HTMLInputElement).value);
+              } else if (e.key === 'Escape') {
+                setTextEditState(null);
+              }
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              handleTextConfirm(e.target.value);
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, Articulation, VoltaType } from 'vexflow';
+import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType } from 'vexflow';
 import type { Tool } from './Palette';
 import type { TieArc, MeasureData, NoteEvent, DurKey, TimeSignature } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
@@ -21,13 +21,11 @@ import {
 } from '../utils/noteKeyUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
-import {
-  getArticulationVexflowCode,
-  isAboveArticulation,
-  toggleArticulationOnEvent,
-} from '../utils/articulationMarkingUtils';
+import { applyArticulationToEvent } from '../utils/articulationUtils';
+import { applyCustomSymbolToEvent, renderCustomSymbol } from '../utils/customSymbolUtils';
+import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
-import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
 
 /* ============================================================
@@ -62,6 +60,7 @@ type Props = {
   keySignature?: KeySignature; // 調号
   timeSignature?: TimeSignature; // 拍子
   onKeySignatureChange?: (keySignature: KeySignature) => void; // 行頭クリックによる調号変更
+  customSymbolDefs?: import('../types/storage').CustomSymbolDef[]; // カスタム記号定義
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -182,7 +181,7 @@ function buildRestEventsForBeats(beats: number, restKey: string): NoteEvent[] {
 function fillPriorMeasureRests(
   measures: MeasureData[],
   targetMeasureIndex: number,
-  beatsPerMeasure: number,
+  globalBeatsPerMeasure: number,
   restKey: string
 ): void {
   // 自動休符補完の本体。
@@ -200,8 +199,12 @@ function fillPriorMeasureRests(
       measures.push(createEmptyMeasure());
     }
     const measure = measures[measureIndex];
+    // 小節に個別の拍子が設定されていればそちらを優先する（途中拍子変更対応）
+    const effectiveBeats = measure.timeSignature
+      ? getMeasureBeats(measure.timeSignature)
+      : globalBeatsPerMeasure;
     const currentBeats = measure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)), 0);
-    const remainingBeats = beatsPerMeasure - currentBeats;
+    const remainingBeats = effectiveBeats - currentBeats;
     if (remainingBeats > 0.0001) {
       measure.events.push(...buildRestEventsForBeats(remainingBeats, restKey));
     }
@@ -438,11 +441,9 @@ function findKeyIndexAtLine(
   return keys.findIndex((key) => Math.abs(keyToLineFn(key) - snappedLine) < KEY_SELECT_LINE_EPS);
 }
 
-// ページ縮小率（--scale）の実効値を返す。
+// CSS zoom の実効値を返す。
 // SVG 要素では Safari で --scale が getComputedStyle に継承されないため、
 // HTML 要素である .page-wrapper から読み取る。
-// 現在の縮小は transform: scale ベース（issue #13 対応）だが、
-// 万一 CSS zoom 方式へ戻ったときの座標補正フォールバックでこの値を使う。
 function getAccumulatedCSSZoom(el: Element): number {
   const wrapper = el.closest('.page-wrapper');
   if (wrapper) {
@@ -453,11 +454,8 @@ function getAccumulatedCSSZoom(el: Element): number {
 }
 
 // client座標 → SVG viewBox 座標
-// ページ縮小は transform: scale で行っており（issue #13 対応）、
-// transform は全ブラウザで getBoundingClientRect に視覚座標として反映されるため、
-// 通常は「BCR との単純差分 × viewBox 比率」だけで正確に変換できる。
-// 下の bcrReflectsZoom 分岐は、CSS zoom 方式（Safari 旧版で BCR に反映されない）へ
-// 退行した場合の保険として残している。
+// Safari 旧版では getBoundingClientRect() が CSS zoom を反映しないため、
+// サイズと位置の両方を補正して正確な座標を返す。
 function clientToGroup(
   svg: SVGSVGElement,
   _group: SVGGElement,
@@ -628,60 +626,7 @@ function makeVFNote(
       // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
     }
   });
-  // アーティキュレーション（スタッカート・アクセント等）を符頭に付ける。
-  attachArticulations(n, ev);
   return n;
-}
-
-/**
- * NoteEvent に保存されたアーティキュレーションを VexFlow の StaveNote へ描画する。
- * フェルマータ・マルカートは符頭の上、それ以外は VexFlow の自動配置に任せる。
- */
-function attachArticulations(note: StaveNote, ev: NoteEvent) {
-  (ev.articulations ?? []).forEach((value) => {
-    try {
-      const articulation = new Articulation(getArticulationVexflowCode(value));
-      // VexFlow 5 のデフォルトは ABOVE(3) なので、記号ごとに正しい位置を明示する。
-      // フェルマータ・マルカートは慣習的に常に符頭の上。
-      // それ以外（スタッカート・アクセント・テヌートなど）は符頭側（幹と逆）に付ける:
-      //   幹が上(UP=1) → 符頭は下 → BELOW(4)
-      //   幹が下(DOWN=-1) → 符頭は上 → ABOVE(3)
-      // ※ getStemDirection() はフォーマット前に呼ぶと全音符が UP=1 を返すため、
-      //   音高から幹方向を自前で計算する。
-      let position: number;
-      if (isAboveArticulation(value)) {
-        position = 3; // ABOVE
-      } else {
-        const stemDir = calcStemDirFromKeys(ev.keys);
-        position = stemDir === 1 ? 4 : 3; // UP→BELOW, DOWN→ABOVE
-      }
-      (articulation as any).setPosition?.(position);
-      (note as any).addModifier?.(articulation, 0);
-    } catch {
-      // 記号コードがライブラリ側で未対応でも、譜面全体の描画は止めない。
-    }
-  });
-}
-
-/**
- * 音符の keys 配列からト音記号基準の幹方向を計算する。
- * VexFlow はフォーマット前は全音符が UP(1) を返すため、これを代替として使う。
- * B4（ライン2）より上なら幹下(DOWN=-1)、以下なら幹上(UP=1)。
- */
-function calcStemDirFromKeys(keys: string[]): number {
-  const noteStep: Record<string, number> = { c: 0, d: 1, e: 2, f: 3, g: 4, a: 5, b: 6 };
-  const avgLine =
-    keys.reduce((sum, key) => {
-      const [rawNote, octStr] = key.toLowerCase().split('/');
-      // 臨時記号（#, b, n など）を除いて音名だけ取り出す
-      const name = rawNote.replace(/[^a-g]/g, '');
-      const step = noteStep[name] ?? 2; // 不明な場合は E 相当で処理
-      const oct = parseInt(octStr) || 4;
-      // E4=0 を基準にしたライン番号: (oct-4)*3.5 + (step-2)*0.5
-      return sum + (oct - 4) * 3.5 + (step - 2) * 0.5;
-    }, 0) / keys.length;
-  // B4 より上(avgLine > 2)なら DOWN(-1)、以下なら UP(1)
-  return avgLine > 2 ? -1 : 1;
 }
 
 function applyAccidentalToEvent(
@@ -734,6 +679,7 @@ export default function StaffCanvas({
   clef = 'treble', yOffset = 0, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   timeSignature = [4, 4],
   onKeySignatureChange,
+  customSymbolDefs = [],
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -745,6 +691,8 @@ export default function StaffCanvas({
   const lineToKey = clef === 'bass' ? lineToKeyBass : clef === 'alto' ? lineToKeyAlto : lineToKeyTreble;
   const keyToLine = clef === 'bass' ? keyToLineBass : clef === 'alto' ? keyToLineAlto : keyToLineTreble;
   const ref = useRef<HTMLDivElement>(null);
+  // テキスト入力オーバーレイの位置決め用（ref が指す SVG div を内包するラッパー）
+  const containerRef = useRef<HTMLDivElement>(null);
   const [score, setScore] = useState<MeasureData[]>(() => {
     // initialScoreDataが提供されている場合はそれを使用
     if (initialScoreData && initialScoreData.length > 0) {
@@ -770,6 +718,32 @@ export default function StaffCanvas({
   } | null>(null);
   const selectedArcRef = useRef<{ fromMeasure: number; fromEvent: number; arcIndex: number } | null>(null);
   useEffect(() => { selectedArcRef.current = selectedArc; }, [selectedArc]);
+
+  // 小節拍子変更オーバーレイの状態（null のとき非表示）
+  const [timeSigEditState, setTimeSigEditState] = useState<{
+    measureAbsoluteIndex: number;
+    currentValue: string;  // "4/4" 形式の文字列
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
+  // 小節テンポ入力オーバーレイの状態（null のとき非表示）
+  const [bpmEditState, setBpmEditState] = useState<{
+    measureAbsoluteIndex: number;  // BPMを設定する小節の絶対インデックス
+    currentValue: string;          // 既存のBPM値（初期値として入力欄に表示）
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
+  // テキスト要素入力オーバーレイの状態（null のとき非表示）
+  const [textEditState, setTextEditState] = useState<{
+    kind: TextElementKind;
+    measureAbsoluteIndex: number;  // score 配列上の絶対小節インデックス
+    eventIndex: number;            // その小節内の音符インデックス
+    currentValue: string;          // 既存のテキスト（初期値として入力欄に表示）
+    overlayX: number;              // コンテナ相対 CSS px（左端からの距離）
+    overlayY: number;              // コンテナ相対 CSS px（上端からの距離）
+  } | null>(null);
 
   // 弧の直接ドラッグ状態（cpDyOffset をリアルタイム調節 / 反転検知）
   const cpDragRef = useRef<{
@@ -1180,6 +1154,29 @@ export default function StaffCanvas({
       baseY: number;
       markings: NonNullable<NoteEvent['dynamics']>;
     }> = [];
+    // アーティキュレーション記号の描画情報を収集し、全音符描画後にまとめて描く
+    const articulationEntries: Array<{
+      anchorX: number;
+      // 音符の BoundingBox 上端Y（記号をここより上に配置する）
+      noteTopY: number;
+      // 五線の最上線Y（フェルマータの配置基準）
+      staveTopY: number;
+      markings: NonNullable<NoteEvent['articulations']>;
+    }> = [];
+    // カスタム記号の描画情報を収集する
+    const customSymbolEntries: Array<{
+      anchorX: number;
+      anchorY: number; // noteTopY - 余白
+      symbolIds: string[];
+    }> = [];
+    // 途中テンポ変更の描画情報を収集する（各小節の左上に ♩=XXX と表示）
+    const bpmMarkingEntries: Array<{ x: number; topY: number; bpm: number }> = [];
+    // テキスト要素（コード記号・テンポ表記）の描画情報を収集する（五線の上に表示）
+    const chordSymbolEntries: Array<{ anchorX: number; topY: number; text: string }> = [];
+    const tempoMarkingEntries: Array<{ anchorX: number; topY: number; text: string }> = [];
+    // テキスト要素（発想標語・歌詞）の描画情報を収集する（五線の下に表示）
+    const expressionMarkingEntries: Array<{ anchorX: number; botY: number; text: string }> = [];
+    const lyricsEntries: Array<{ anchorX: number; botY: number; text: string }> = [];
 
     // SVG 背景クリック → 弧の選択とドラッグ状態を解除
     svg.addEventListener('click', () => {
@@ -1520,6 +1517,8 @@ export default function StaffCanvas({
     // 小節線を越えて音が自然音に戻るときのカッコ付き臨時記号（courtesy accidental）判定に使う。
     // システム境界（改段）をまたいでも引き継ぐことで、段頭でも courtesy を表示できる。
     let prevMeasureAccidentalState: MeasureAccidentalState | undefined;
+    // 途中拍子変更を追跡する。最初はグローバル拍子、各小節の timeSignature フィールドで上書きされる。
+    let effectiveTimeSig: TimeSignature = [timeSignatureNumerator, timeSignatureDenominator];
 
     for (let line = 0; line < systems; line++) {
       if (globalIndex >= maxMeasures) break; // このStaffCanvasの範囲を超えたら終了
@@ -1577,13 +1576,17 @@ export default function StaffCanvas({
         const data: MeasureData | undefined = score[absoluteIndex];
 
         const stave = new Stave(x / s, y / s, w / s);
+
+        // 途中拍子変更: stave.draw() より前に effectiveTimeSig を更新しないと
+        // Voice の拍数が合わず、かつ addTimeSignature が draw後では効かない
+        if (data?.timeSignature) {
+          effectiveTimeSig = data.timeSignature;
+        }
+
         if (i === 0) {
           stave.addClef(clef);
-          // 拍子記号はいまの仕様では「譜面全体のいちばん最初」だけに出す。
-          // 途中で拍子が変わるケースは、別機能として入れるときに再表示を考える。
-          // startMeasureIndex は「この行が譜面全体の何小節目から始まるか」なので、
-          // 0 なら本当に先頭行、1 以上なら2行目以降と判定できる。
-          if (line === 0 && startMeasureIndex === 0) stave.addTimeSignature(formattedTimeSignature);
+          // 第1段・第1小節: 小節固有の拍子があればそれを、なければグローバル拍子を表示
+          if (line === 0 && startMeasureIndex === 0) stave.addTimeSignature(formatTimeSignature(effectiveTimeSig));
           if (hasVisibleKeySignature(normalizedKeySignature)) {
             stave.addKeySignature(normalizedKeySignature);
           }
@@ -1605,6 +1608,10 @@ export default function StaffCanvas({
           // 終止括弧は「この小節が 1番 / 2番のどちらに属するか」だけ保存し、
           // 線の開始・中間・終了は前後の小節を見てここで自動決定する。
           stave.setVoltaType(voltaTypeMap[voltaConfig.type], voltaConfig.label, -5);
+        }
+        // 途中拍子変更: 第1段・第1小節以外で途中変更がある場合、draw()前に記号を追加する
+        if (data?.timeSignature && !(line === 0 && i === 0)) {
+          stave.addTimeSignature(formatTimeSignature(data.timeSignature));
         }
         stave.setContext(ctx);
         stave.format();
@@ -1636,10 +1643,11 @@ export default function StaffCanvas({
         prevMeasureAccidentalState = snapshotAccidentalState(accidentalState);
 
         const beams = Beam.generateBeams(vfNotes, { beamRests: false });
+        // この小節の有効拍子で Voice を生成する（途中拍子変更対応）
         const voice = new Voice({
           time: {
-            num_beats: timeSignatureNumerator,
-            beat_value: timeSignatureDenominator
+            num_beats: effectiveTimeSig[0],
+            beat_value: effectiveTimeSig[1]
           }
         } as any);
         voice.setMode((Voice as any).Mode.SOFT ?? 1);
@@ -1650,6 +1658,14 @@ export default function StaffCanvas({
         const measureIndex = globalIndex; // 相対インデックス（このStaffCanvas内での位置）
         const xDraw = x / s, wDraw = w / s;
         const measLeft = xDraw, measRight = xDraw + wDraw;
+        // 途中テンポ変更が設定されている小節には、描画後に ♩=XXX を表示する
+        if (data?.bpm) {
+          bpmMarkingEntries.push({
+            x: measLeft,
+            topY: stave.getYForLine(0),
+            bpm: data.bpm,
+          });
+        }
         const noteStartX = typeof (stave as any).getNoteStartX === 'function'
           ? (stave as any).getNoteStartX()
           : xDraw + ((i === 0) ? 50 : 0);
@@ -1852,10 +1868,12 @@ export default function StaffCanvas({
           logNoteAddition(absoluteMeasureIndex, localX, localY, key);
 
           const currentMeasure = score[absoluteMeasureIndex] ?? createEmptyMeasure();
+          // この小節の有効拍子を取得する（途中拍子変更に対応するため effectiveTimeSig を使う）
+          const currentMeasureBeats = getMeasureBeats(currentMeasure.timeSignature ?? effectiveTimeSig);
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration) ? (tool as any).duration : '4') as DurKey;
           const addBeats = beatsFromVF(toVFDur(addDuration));
           const currentBeats = currentMeasure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)), 0);
-          if (currentBeats + addBeats > beatsPerMeasure) {
+          if (currentBeats + addBeats > currentMeasureBeats) {
             return;
           }
 
@@ -1941,6 +1959,42 @@ export default function StaffCanvas({
           if ('mode' in tool && tool.mode === 'dynamic') {
             // 強弱記号は必ず「既存の音符」に付ける。
             // 背景クリックで新規音符挿入に化けると、意図しないデータ追加になるため止める。
+            return;
+          }
+          if ('mode' in tool && tool.mode === 'articulation') {
+            // アーティキュレーションも既存の音符にのみ付ける。
+            return;
+          }
+          if ('mode' in tool && tool.mode === 'customSymbol') {
+            // カスタム記号も既存の音符にのみ付ける。
+            return;
+          }
+          if ('mode' in tool && tool.mode === 'textElement') {
+            // テキスト要素も既存の音符にのみ付ける。
+            return;
+          }
+          if ('mode' in tool && tool.mode === 'measureTempo') {
+            // 小節テンポ変更: 小節クリックで BPM 入力欄を表示する
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            const currentBpm = score[absoluteIndex]?.bpm;
+            setBpmEditState({
+              measureAbsoluteIndex: absoluteIndex,
+              currentValue: currentBpm != null ? String(currentBpm) : '',
+              overlayX: e.clientX - (containerRect?.left ?? 0),
+              overlayY: e.clientY - (containerRect?.top ?? 0),
+            });
+            return;
+          }
+          if ('mode' in tool && tool.mode === 'measureTimeSig') {
+            // 途中拍子変更: 小節クリックで拍子選択ドロップダウンを表示する
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            const currentTS = score[absoluteIndex]?.timeSignature;
+            setTimeSigEditState({
+              measureAbsoluteIndex: absoluteIndex,
+              currentValue: currentTS ? formatTimeSignature(currentTS) : '',
+              overlayX: e.clientX - (containerRect?.left ?? 0),
+              overlayY: e.clientY - (containerRect?.top ?? 0),
+            });
             return;
           }
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
@@ -2096,9 +2150,34 @@ export default function StaffCanvas({
                 setScore(prev => toggleMeasureEnding(prev, absoluteIndex, tool.ending));
                 return;
               }
+              // 音符の上をクリックしても小節単位ツールが動くよう、hit でも処理する
+              if ('mode' in tool && tool.mode === 'measureTempo') {
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const currentBpm = score[absoluteIndex]?.bpm;
+                setBpmEditState({
+                  measureAbsoluteIndex: absoluteIndex,
+                  currentValue: currentBpm != null ? String(currentBpm) : '',
+                  overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
+                  overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
+                });
+                return;
+              }
+              if ('mode' in tool && tool.mode === 'measureTimeSig') {
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const currentTS = score[absoluteIndex]?.timeSignature;
+                setTimeSigEditState({
+                  measureAbsoluteIndex: absoluteIndex,
+                  currentValue: currentTS ? formatTimeSignature(currentTS) : '',
+                  overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
+                  overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
+                });
+                return;
+              }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
               const articulationMode = 'mode' in tool && tool.mode === 'articulation' ? tool.articulation : null;
+              const customSymbolMode = 'mode' in tool && tool.mode === 'customSymbol' ? tool.symbolId : null;
+              const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
 
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
@@ -2160,20 +2239,51 @@ export default function StaffCanvas({
                 return;
               }
               if (articulationMode && !safeEvents[j]?.isRest) {
-                // 奏法記号は音符1つの「鳴らし方」を指示するので、
-                // 強弱記号と同じく、和音追加や新規挿入より先にここで確定させる。
+                // アーティキュレーションは既存音符にトグルで付け外しする。
                 const currentEv = safeEvents[j];
-                const nextEv = toggleArticulationOnEvent(currentEv, articulationMode);
+                const nextEv = applyArticulationToEvent(currentEv, articulationMode);
                 setScore(prev => {
                   const next = prev.map(cloneMeasureData);
                   if (absoluteIndex >= next.length) return prev;
                   const targetEv = next[absoluteIndex].events[j];
                   if (!targetEv || targetEv.isRest) return prev;
-                  next[absoluteIndex].events[j] = toggleArticulationOnEvent(targetEv, articulationMode);
+                  next[absoluteIndex].events[j] = applyArticulationToEvent(targetEv, articulationMode);
                   return next;
                 });
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });
                 playNoteEvent(nextEv);
+                return;
+              }
+              if (customSymbolMode && !safeEvents[j]?.isRest) {
+                // カスタム記号も既存音符にトグルで付け外しする。
+                const currentEv = safeEvents[j];
+                const nextEv = applyCustomSymbolToEvent(currentEv, customSymbolMode);
+                setScore(prev => {
+                  const next = prev.map(cloneMeasureData);
+                  if (absoluteIndex >= next.length) return prev;
+                  const targetEv = next[absoluteIndex].events[j];
+                  if (!targetEv || targetEv.isRest) return prev;
+                  next[absoluteIndex].events[j] = applyCustomSymbolToEvent(targetEv, customSymbolMode);
+                  return next;
+                });
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                playNoteEvent(nextEv);
+                return;
+              }
+              if (textElementMode && safeEvents[j] && !safeEvents[j].__isPlaceholder) {
+                // テキスト要素はクリック位置に入力オーバーレイを表示して文字入力を受け付ける。
+                const ev = safeEvents[j];
+                const currentText = ev[textElementMode] ?? '';
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                setTextEditState({
+                  kind: textElementMode,
+                  measureAbsoluteIndex: absoluteIndex,
+                  eventIndex: j,
+                  currentValue: currentText,
+                  overlayX: e.clientX - (containerRect?.left ?? 0),
+                  overlayY: e.clientY - (containerRect?.top ?? 0),
+                });
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
                 return;
               }
 
@@ -2220,6 +2330,7 @@ export default function StaffCanvas({
               } else if (safeEvents[j]?.isRest) {
                 if (dynamicMode) return;
                 if (articulationMode) return;
+                if (customSymbolMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i === 0 &&
                     lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right;
@@ -2294,8 +2405,9 @@ export default function StaffCanvas({
                 doInsertAt(lx, ly, measureIndex);
               } else {
                 if (dynamicMode) return;
-                if (articulationMode) return;
                 if (accidentalMode) return;
+                if (articulationMode) return;
+                if (customSymbolMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsertAt(lx, ly, measureIndex);
               }
@@ -2309,6 +2421,44 @@ export default function StaffCanvas({
                 baseY: stave.getYForLine(4) + 26,
                 markings: safeEvents[j].dynamics,
               });
+            }
+            if (!safeEvents[j]?.__isPlaceholder && !safeEvents[j]?.isRest && safeEvents[j]?.articulations?.length) {
+              articulationEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                // 符頭 BoundingBox の上端を基準にする（ない場合は五線上端より少し上を使う）
+                noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
+                staveTopY: stave.getYForLine(0),
+                markings: safeEvents[j].articulations,
+              });
+            }
+            if (!safeEvents[j]?.__isPlaceholder && !safeEvents[j]?.isRest && safeEvents[j]?.customSymbols?.length) {
+              customSymbolEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                // アーティキュレーションより少し上（-4）に余白を確保
+                anchorY: (bb?.getY?.() ?? stave.getYForLine(0) - 4) - 4,
+                symbolIds: safeEvents[j].customSymbols!.map(s => s.symbolId),
+              });
+            }
+            // テキスト要素の収集（プレースホルダー音符は除く）
+            if (!safeEvents[j]?.__isPlaceholder) {
+              const ev = safeEvents[j];
+              const cx = noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2);
+              // 五線上端より上に表示する要素
+              const staveTop = stave.getYForLine(0);
+              const staveBot = stave.getYForLine(4);
+              if (ev?.chordSymbol) {
+                chordSymbolEntries.push({ anchorX: cx, topY: staveTop, text: ev.chordSymbol });
+              }
+              if (ev?.tempoMarking) {
+                tempoMarkingEntries.push({ anchorX: cx, topY: staveTop, text: ev.tempoMarking });
+              }
+              // 五線下端より下に表示する要素
+              if (ev?.expressionMarking) {
+                expressionMarkingEntries.push({ anchorX: cx, botY: staveBot, text: ev.expressionMarking });
+              }
+              if (ev?.lyrics) {
+                lyricsEntries.push({ anchorX: cx, botY: staveBot, text: ev.lyrics });
+              }
             }
 
             const isSel = !!selected && selected.measure === absoluteIndex && selected.index === j;
@@ -2362,6 +2512,160 @@ export default function StaffCanvas({
           text.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(text);
         });
+      });
+
+      // ── アーティキュレーション記号を一括描画 ──────────────────────
+      articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings }) => {
+        // フェルマータ以外は noteTopY の上に重ならないよう積み上げる
+        let aboveOffset = 0;
+        markings.forEach(({ type }) => {
+          const ns = 'http://www.w3.org/2000/svg';
+          if (type === 'fermata') {
+            // フェルマータは五線上端より上に配置する（符頭位置に依存しない）
+            const baseY = Math.min(staveTopY, noteTopY) - 14;
+            // 半円弧（下が開いた椀形）
+            const arc = document.createElementNS(ns, 'path');
+            arc.setAttribute('d', `M ${anchorX - 11} ${baseY} A 11 9 0 0 1 ${anchorX + 11} ${baseY}`);
+            arc.setAttribute('stroke', '#1f2937');
+            arc.setAttribute('stroke-width', '1.6');
+            arc.setAttribute('stroke-linecap', 'round');
+            arc.setAttribute('fill', 'none');
+            arc.setAttribute('pointer-events', 'none');
+            svgRoot.appendChild(arc);
+            // 中心の点（弧の内側）
+            const dot = document.createElementNS(ns, 'circle');
+            dot.setAttribute('cx', String(anchorX));
+            dot.setAttribute('cy', String(baseY - 4));
+            dot.setAttribute('r', '2.5');
+            dot.setAttribute('fill', '#1f2937');
+            dot.setAttribute('pointer-events', 'none');
+            svgRoot.appendChild(dot);
+          } else if (type === 'staccato') {
+            // スタッカート: 符頭上方に小さな黒丸
+            const cy = noteTopY - 6 - aboveOffset;
+            const dot = document.createElementNS(ns, 'circle');
+            dot.setAttribute('cx', String(anchorX));
+            dot.setAttribute('cy', String(cy));
+            dot.setAttribute('r', '2.5');
+            dot.setAttribute('fill', '#1f2937');
+            dot.setAttribute('pointer-events', 'none');
+            svgRoot.appendChild(dot);
+            aboveOffset += 10;
+          } else if (type === 'accent') {
+            // アクセント: 下向きの楔形（「>」を90°回した形）
+            const tipY = noteTopY - 5 - aboveOffset;
+            const wingY = tipY - 9;
+            const path = document.createElementNS(ns, 'path');
+            path.setAttribute('d', `M ${anchorX - 10} ${wingY} L ${anchorX} ${tipY} L ${anchorX + 10} ${wingY}`);
+            path.setAttribute('stroke', '#1f2937');
+            path.setAttribute('stroke-width', '1.6');
+            path.setAttribute('stroke-linecap', 'round');
+            path.setAttribute('stroke-linejoin', 'round');
+            path.setAttribute('fill', 'none');
+            path.setAttribute('pointer-events', 'none');
+            svgRoot.appendChild(path);
+            aboveOffset += 14;
+          } else if (type === 'tenuto') {
+            // テヌート: 符頭上方に水平線
+            const lineY = noteTopY - 6 - aboveOffset;
+            const line = document.createElementNS(ns, 'line');
+            line.setAttribute('x1', String(anchorX - 9));
+            line.setAttribute('y1', String(lineY));
+            line.setAttribute('x2', String(anchorX + 9));
+            line.setAttribute('y2', String(lineY));
+            line.setAttribute('stroke', '#1f2937');
+            line.setAttribute('stroke-width', '2.2');
+            line.setAttribute('stroke-linecap', 'round');
+            line.setAttribute('pointer-events', 'none');
+            svgRoot.appendChild(line);
+            aboveOffset += 10;
+          }
+        });
+      });
+
+      // ── カスタム記号を一括描画 ────────────────────────────────────
+      customSymbolEntries.forEach(({ anchorX, anchorY, symbolIds }) => {
+        symbolIds.forEach(id => {
+          const def = customSymbolDefs.find(d => d.id === id);
+          if (def) renderCustomSymbol(def, anchorX, anchorY, svgRoot);
+        });
+      });
+
+      // ── 途中テンポ変更マーキングを一括描画 ──────────────────────
+      // 各小節の左端上方に「♩=XXX」と赤みがかったテキストで表示する。
+      // 五線上端より 36px 上に配置して、コード記号・テンポ表記テキストと重ならないようにする。
+      bpmMarkingEntries.forEach(({ x, topY, bpm }) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        el.textContent = `♩=${bpm}`;
+        el.setAttribute('x', String(x + 2));
+        el.setAttribute('y', String(topY - 36));
+        el.setAttribute('fill', '#b45309');  // 琥珀色で他の記号と区別しやすくする
+        el.setAttribute('font-family', '"Times New Roman", serif');
+        el.setAttribute('font-size', '12');
+        el.setAttribute('font-weight', 'bold');
+        el.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(el);
+      });
+
+      // ── テキスト要素を一括描画 ───────────────────────────────────
+      // コード記号: 五線上端より 8px 上（ト音記号・拍子記号と重なりにくい高さ）
+      chordSymbolEntries.forEach(({ anchorX, topY, text }) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        el.textContent = text;
+        el.setAttribute('x', String(anchorX));
+        el.setAttribute('y', String(topY - 8));
+        el.setAttribute('text-anchor', 'middle');
+        el.setAttribute('fill', '#1f2937');
+        el.setAttribute('font-family', '"Times New Roman", serif');
+        el.setAttribute('font-size', '13');
+        el.setAttribute('font-weight', 'bold');
+        el.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(el);
+      });
+
+      // テンポ表記: コード記号よりさらに 16px 上（最も優先度が高く目立つ場所）
+      tempoMarkingEntries.forEach(({ anchorX, topY, text }) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        el.textContent = text;
+        el.setAttribute('x', String(anchorX));
+        el.setAttribute('y', String(topY - 24));
+        el.setAttribute('text-anchor', 'middle');
+        el.setAttribute('fill', '#1f2937');
+        el.setAttribute('font-family', '"Times New Roman", serif');
+        el.setAttribute('font-size', '13');
+        el.setAttribute('font-weight', 'bold');
+        el.setAttribute('font-style', 'italic');
+        el.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(el);
+      });
+
+      // 発想標語: 強弱記号の下（botY + 40）に斜体で表示
+      expressionMarkingEntries.forEach(({ anchorX, botY, text }) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        el.textContent = text;
+        el.setAttribute('x', String(anchorX));
+        el.setAttribute('y', String(botY + 40));
+        el.setAttribute('text-anchor', 'middle');
+        el.setAttribute('fill', '#1f2937');
+        el.setAttribute('font-family', '"Times New Roman", serif');
+        el.setAttribute('font-size', '11');
+        el.setAttribute('font-style', 'italic');
+        el.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(el);
+      });
+
+      // 歌詞: 発想標語のさらに下（botY + 54）に通常体で表示
+      lyricsEntries.forEach(({ anchorX, botY, text }) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        el.textContent = text;
+        el.setAttribute('x', String(anchorX));
+        el.setAttribute('y', String(botY + 54));
+        el.setAttribute('text-anchor', 'middle');
+        el.setAttribute('fill', '#374151');
+        el.setAttribute('font-family', 'sans-serif');
+        el.setAttribute('font-size', '11');
+        el.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(el);
       });
 
       // ── 行内タイグループの一括描画 ──────────────────────────────
@@ -2501,5 +2805,246 @@ export default function StaffCanvas({
     });
   }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure]);
 
-  return <div ref={ref} />;
+  /**
+   * 途中拍子変更を確定する。
+   * "4/4", "3/8" のような形式の文字列を受け取り、有効ならそのまま保存する。
+   * 空欄 or "none" なら拍子指定を解除する。
+   */
+  function handleTimeSigConfirm(value: string) {
+    if (!timeSigEditState) return;
+    const { measureAbsoluteIndex } = timeSigEditState;
+    let timeSig: TimeSignature | undefined;
+    if (value && value !== 'none') {
+      const parts = value.split('/');
+      if (parts.length === 2) {
+        const num = parseInt(parts[0], 10);
+        const den = parseInt(parts[1], 10);
+        if (isValidTimeSignature([num, den])) {
+          timeSig = [num, den];
+        }
+      }
+    }
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], timeSignature: timeSig };
+      return next;
+    });
+    setTimeSigEditState(null);
+  }
+
+  /**
+   * 小節テンポ変更を確定する。
+   * 数値として有効な値なら保存し、空欄または無効値なら BPM を削除する。
+   */
+  function handleBpmConfirm(rawText: string) {
+    if (!bpmEditState) return;
+    const { measureAbsoluteIndex } = bpmEditState;
+    const parsed = parseInt(rawText.trim(), 10);
+    // 60〜240 の範囲に収まる整数のみ有効とする
+    const bpm = !isNaN(parsed) && parsed >= 60 && parsed <= 240 ? parsed : undefined;
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], bpm };
+      return next;
+    });
+    setBpmEditState(null);
+  }
+
+  /**
+   * テキスト入力を確定する。
+   * Enter キーまたはフォーカス外れで呼ばれる。空欄の場合は既存テキストを削除する。
+   */
+  function handleTextConfirm(text: string) {
+    if (!textEditState) return;
+    const { kind, measureAbsoluteIndex, eventIndex } = textEditState;
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      const targetEv = next[measureAbsoluteIndex].events[eventIndex];
+      if (!targetEv) return prev;
+      next[measureAbsoluteIndex].events[eventIndex] = applyTextElementToEvent(targetEv, kind, text);
+      return next;
+    });
+    setTextEditState(null);
+  }
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <div ref={ref} />
+      {/* 拍子変更オーバーレイ: 拍子変更ツールで小節をクリックすると表示される */}
+      {timeSigEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: timeSigEditState.overlayX,
+            top: timeSigEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #7c3aed',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            minWidth: 160,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#7c3aed', fontFamily: 'sans-serif' }}>
+            途中拍子変更（「解除」で元に戻す）
+          </span>
+          <select
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            defaultValue={timeSigEditState.currentValue || 'none'}
+            style={{
+              fontSize: 14,
+              fontFamily: '"Times New Roman", serif',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              padding: '2px 4px',
+              outline: 'none',
+            }}
+            onChange={(e) => {
+              handleTimeSigConfirm(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setTimeSigEditState(null);
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              // blur 時は変更せずに閉じる（onChange で処理済みのため）
+              if (e.relatedTarget === null) setTimeSigEditState(null);
+            }}
+          >
+            <option value="none">（解除）</option>
+            <option value="4/4">4/4</option>
+            <option value="3/4">3/4</option>
+            <option value="2/4">2/4</option>
+            <option value="2/2">2/2</option>
+            <option value="6/8">6/8</option>
+            <option value="3/8">3/8</option>
+            <option value="5/4">5/4</option>
+            <option value="7/8">7/8</option>
+            <option value="12/8">12/8</option>
+          </select>
+        </div>
+      )}
+      {/* BPM入力オーバーレイ: 途中テンポ変更ツールで小節をクリックすると表示される */}
+      {bpmEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: bpmEditState.overlayX,
+            top: bpmEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #b45309',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 140,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#b45309', fontFamily: 'sans-serif' }}>
+            途中テンポ変更（60〜240 BPM、空欄で解除）
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 13, fontFamily: '"Times New Roman", serif', fontWeight: 'bold' }}>♩=</span>
+            <input
+              // eslint-disable-next-line jsx-a11y/no-autofocus
+              autoFocus
+              type="number"
+              min={60}
+              max={240}
+              defaultValue={bpmEditState.currentValue}
+              placeholder="例: 120"
+              style={{
+                border: 'none',
+                outline: 'none',
+                fontSize: 13,
+                fontFamily: 'sans-serif',
+                width: 70,
+                padding: 2,
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleBpmConfirm((e.target as HTMLInputElement).value);
+                } else if (e.key === 'Escape') {
+                  setBpmEditState(null);
+                }
+                e.stopPropagation();
+              }}
+              onBlur={(e) => {
+                handleBpmConfirm(e.target.value);
+              }}
+            />
+          </div>
+        </div>
+      )}
+      {/* テキスト入力オーバーレイ: テキスト要素ツールで音符をクリックすると表示される */}
+      {textEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: textEditState.overlayX,
+            top: textEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #3b82f6',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 160,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#6b7280', fontFamily: 'sans-serif' }}>
+            {textElementLabel(textEditState.kind)}
+          </span>
+          <input
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            defaultValue={textEditState.currentValue}
+            placeholder={textElementPlaceholder(textEditState.kind)}
+            style={{
+              border: 'none',
+              outline: 'none',
+              fontSize: 13,
+              fontFamily:
+                textEditState.kind === 'expressionMarking' || textEditState.kind === 'tempoMarking'
+                  ? '"Times New Roman", serif'
+                  : 'sans-serif',
+              fontStyle:
+                textEditState.kind === 'expressionMarking' || textEditState.kind === 'tempoMarking'
+                  ? 'italic'
+                  : 'normal',
+              minWidth: 140,
+              padding: 2,
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                handleTextConfirm((e.target as HTMLInputElement).value);
+              } else if (e.key === 'Escape') {
+                // Escape で変更を破棄して閉じる
+                setTextEditState(null);
+              }
+              // オーバーレイのキー操作が楽譜の Delete/矢印に伝播しないようにする
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              handleTextConfirm(e.target.value);
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
 }

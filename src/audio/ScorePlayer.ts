@@ -400,19 +400,26 @@ export class ScorePlayer {
     // という単純なロジックのままで済む。
     const expandedMeasures = expandMeasuresForPlayback(measures);
     const dynamicVelocities = resolveDynamicVelocities(expandedMeasures.map(item => item.measure));
-    
+
     let currentTime = 0; // 累積時間（秒）
+    // 小節単位のテンポ変更に対応するため「現在有効な BPM」を追跡する。
+    // グローバルテンポを初期値とし、各小節の bpm フィールドで上書きする。
+    let currentBpm = tempoSettings.bpm;
 
     for (let expandedMeasureIndex = 0; expandedMeasureIndex < expandedMeasures.length; expandedMeasureIndex++) {
       const expandedMeasure = expandedMeasures[expandedMeasureIndex];
       const measure = expandedMeasure.measure;
+      // 小節に途中テンポが設定されていれば、その小節から BPM を切り替える
+      if (measure.bpm != null) {
+        currentBpm = measure.bpm;
+      }
       let measureTime = 0; // 小節内での時間（秒）
 
       for (let noteIndex = 0; noteIndex < measure.events.length; noteIndex++) {
         const event = measure.events[noteIndex];
-        
-        // 音価から再生時間を計算
-        const duration = this.durToSeconds(event.dur, tempoSettings.bpm);
+
+        // 音価から再生時間を計算（現在有効な BPM を使う）
+        const duration = this.durToSeconds(event.dur, currentBpm);
         
         // 休符でない場合のみスケジュールに追加（和音は配列で保持）
         if (!event.isRest && event.keys?.length) {

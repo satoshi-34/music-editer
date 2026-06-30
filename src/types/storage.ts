@@ -72,6 +72,16 @@ export interface NoteEvent {
    * スタッカート＋アクセントのように複数を同時に付けられるため配列で持つ。
    */
   articulations?: ArticulationMarking[];
+  /** この音符に付けるカスタム記号の参照リスト */
+  customSymbols?: { symbolId: string }[];
+  /** 歌詞テキスト（音符の下に表示） */
+  lyrics?: string;
+  /** コード記号（音符の上に表示。例: Am, G7, Dm/F） */
+  chordSymbol?: string;
+  /** テンポ表記（例: Allegro, ♩=120）。その音符の位置に太字テキストで表示 */
+  tempoMarking?: string;
+  /** 発想標語（例: espressivo, dolce）。斜体テキストで表示 */
+  expressionMarking?: string;
 }
 
 /**
@@ -101,6 +111,18 @@ export interface MeasureData {
    * 連続する同じ番号の小節をまとめて、上に終止括弧として描画する。
    */
   ending?: 1 | 2;
+  /**
+   * この小節から適用するテンポ（BPM）。
+   * 省略時は直前の小節のテンポ、または楽譜全体のグローバルテンポを継続する。
+   * 60〜240 の範囲で設定する。
+   */
+  bpm?: number;
+  /**
+   * この小節から適用する拍子。
+   * 省略時は直前の小節の拍子、または楽譜全体のグローバル拍子を継続する。
+   * 4/4 から 3/8 への変更などを小節単位で記録する。
+   */
+  timeSignature?: TimeSignature;
 }
 
 export interface ScoreMetadata {

@@ -118,3 +118,57 @@
 - ただしサンプルには、リピート記号・1番括弧 / 2番括弧・強弱記号を実データとして入れ、
   ユーザーが機能をすぐ体験できる状態にはしている
 - 1番括弧 / 2番括弧の再生分岐は、まず単純な反復進行を安全に扱う実装を優先している
+
+## 途中拍子変更の追加実装（2026-06-30）
+
+### 問題
+
+グローバル拍子は楽譜全体で 1 つに固定されており、途中から 4/4 → 3/8 のような拍子変更を
+表現できなかった。
+
+### 設計
+
+- `MeasureData.timeSignature?: TimeSignature` フィールドを追加し、小節単位の拍子上書きを保存
+- パレットに「拍子変更」ツール（`mode: 'measureTimeSig'`、紫ボーダー）を追加
+- 小節クリックでドロップダウンオーバーレイを表示（4/4、3/4、2/4、2/2、6/8、3/8、5/4、7/8、12/8、解除）
+- `StaffCanvas` / `PianoSystemCanvas` 両方で `effectiveTimeSig` 変数を段ループ外に宣言し、
+  小節ごとに `MeasureData.timeSignature` があれば更新しながらループ
+- VexFlow Voice の `num_beats / beat_value` は `effectiveTimeSig` を使う
+- VexFlow Voice は SOFT モードにして拍子変更小節での拍数バリデーションエラーを回避
+- 拍子変更がある小節では `stave.addTimeSignature()` で記号を表示（1 段目先頭には表示しない）
+- `fillPriorMeasureRests` は `measure.timeSignature ?? effectiveTimeSig` で正確な拍数を計算
+- 音符挿入の拍数チェックも `currentMeasure.timeSignature ?? effectiveTimeSig` を参照
+- 再生の拍数計算（`ScorePage.calculateScoreDuration`）でも `currentTimeSig` として追跡
+
+### 影響範囲
+
+- `src/types/storage.ts`: `MeasureData.timeSignature` 追加
+- `src/components/Palette.tsx`: `measureTimeSig` ツール追加
+- `src/components/StaffCanvas.tsx`: `effectiveTimeSig` 追跡、Voice 生成、VexFlow 拍子表示、オーバーレイ
+- `src/components/PianoSystemCanvas.tsx`: 同上（ピアノ・編成譜）
+- `src/components/ScorePage.tsx`: `calculateScoreDuration` で `currentTimeSig` 追跡
+
+## バグ修正：拍子変更が反応しない・記号が表示されない（2026-06-30）
+
+### 問題①：小節クリックでドロップダウンが開かない
+
+**原因**：各音符・休符の上に重なっている透明な `hit` 要素（クリック当たり判定）が
+`ev.stopPropagation()` を呼んでいたため、クリックイベントが下の `insertRect`（小節背景）
+まで届かなかった。空の小節（音符なし）では `hit` がないので動いていたが、
+何らかのイベントが入っている小節では一切反応しなかった。
+
+**修正**：`hit` 要素の click ハンドラ内に `measureTimeSig` / `measureTempo` の処理を
+直接追加し、`insertRect` に伝播しなくても動くようにした。
+（`StaffCanvas.tsx` の `hit.addEventListener('click', ...)` と
+`PianoSystemCanvas.tsx` の同箇所）
+
+### 問題②：拍子変更を選択しても楽譜に記号が表示されない
+
+**原因**：VexFlow の `stave.addTimeSignature()` を `stave.draw()` の**後**に呼んでいた。
+VexFlow はモディファイア（拍子記号・調号など）を `draw()` 前に登録しないと描画しない仕様のため、
+`addTimeSignature()` が完全に無視されていた。
+
+**修正**：`effectiveTimeSig` の更新と `stave.addTimeSignature()` の呼び出しを
+`stave.setContext(ctx) → stave.format() → stave.draw()` の**前**へ移動した。
+あわせて、第1段・第1小節（グローバル拍子を表示する場所）でも
+小節固有の拍子がある場合はそちらを優先して表示するよう変更した。

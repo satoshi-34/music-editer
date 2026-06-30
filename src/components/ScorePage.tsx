@@ -144,15 +144,27 @@ function calculateScoreDuration(scoreData: MeasureData[], bpm: number, timeSigna
   }
 
   let totalDuration = 0;
-  const emptyMeasureBeats = getMeasureBeats(timeSignature);
+  const globalEmptyMeasureBeats = getMeasureBeats(timeSignature);
+  // 小節単位のテンポ・拍子変更に対応するため「現在有効な値」を追跡する
+  let currentBpm = bpm;
+  let currentTimeSig = timeSignature;
   for (let i = 0; i <= lastUsedMeasureIndex; i++) {
     const measure = expandedScoreData[i];
+    // 小節に途中テンポが設定されていれば切り替える
+    if (measure?.bpm != null) {
+      currentBpm = measure.bpm;
+    }
+    // 小節に途中拍子が設定されていれば切り替える
+    if (measure?.timeSignature != null) {
+      currentTimeSig = measure.timeSignature;
+    }
+    const emptyBeats = getMeasureBeats(currentTimeSig ?? timeSignature) || globalEmptyMeasureBeats;
     if (!measure || !measure.events || measure.events.length === 0) {
-      totalDuration += (60 / bpm) * emptyMeasureBeats;
+      totalDuration += (60 / currentBpm) * emptyBeats;
     } else {
       // 複数声部小節では voice ごとの長さの最大値を使わないと、
       // 上声と下声を同時に持つ小節の終わり時刻が短く見積もられてしまう。
-      totalDuration += getMeasureDurationBeats(measure) * (60 / bpm);
+      totalDuration += getMeasureDurationBeats(measure) * (60 / currentBpm);
     }
   }
   return totalDuration;
