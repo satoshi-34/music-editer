@@ -233,6 +233,26 @@ export default function ScorePage() {
   );
   const [ensembleParts, setEnsembleParts] = useState<MeasureData[][]>(() => []);
 
+  // 選択中の小節範囲（絶対インデックス）。null のとき未選択
+  const [selectedMeasures, setSelectedMeasures] = useState<{ start: number; end: number } | null>(null);
+  // コピーした小節データ。各パートごとのスナップショット
+  const [clipboard, setClipboard] = useState<{ partId: string; measures: MeasureData[] }[] | null>(null);
+
+  // Undo/Redo 用スナップショット（state ではなく ref で持つ — 変更自体は再レンダーで反映済みなので不要）
+  type ScoreSnapshot = {
+    rightHandData: MeasureData[] | undefined;
+    leftHandData:  MeasureData[] | undefined;
+    quartetParts:  MeasureData[][];
+    ensembleParts: MeasureData[][];
+  };
+  const MAX_HISTORY = 50;
+  const historyStack = useRef<ScoreSnapshot[]>([]);
+  const futureStack  = useRef<ScoreSnapshot[]>([]);
+  // 常に最新のスコア状態を ref として持つ（ハンドラ内で「変更前の値」を取得するため）
+  const currentScoreRef = useRef<ScoreSnapshot>({
+    rightHandData, leftHandData, quartetParts, ensembleParts,
+  });
+
   // useRef(createPlaybackEngine(...)) と引数に直接書くと、useRef は初回しか値を使わないのに
   // 引数の式自体は毎レンダー評価され、使い捨てのエンジンが大量に生成されてしまう
   // （コンソールに「SoundFontEngineが初期化されました」が溢れる原因だった）。
@@ -1102,21 +1122,45 @@ export default function ScorePage() {
 
   const isEditingDisabled = playbackState === 'playing';
 
+  // スコアデータが変わるたびに currentScoreRef を最新に保つ
+  useEffect(() => {
+    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts };
+  }, [rightHandData, leftHandData, quartetParts, ensembleParts]);
+
+  // 変更前のスナップショットを履歴に積む（undo 可能にする）
+  const pushHistory = useCallback(() => {
+    historyStack.current = [
+      ...historyStack.current.slice(-MAX_HISTORY + 1),
+      { ...currentScoreRef.current },
+    ];
+    // 新しい操作をしたら Redo 履歴はリセット
+    futureStack.current = [];
+  }, []);
+
+  // スナップショットを state に適用する（undo/redo 共通）
+  const applySnapshot = useCallback((snap: ScoreSnapshot) => {
+    setRightHandData(snap.rightHandData);
+    setLeftHandData(snap.leftHandData);
+    setQuartetParts(snap.quartetParts);
+    setEnsembleParts(snap.ensembleParts);
+  }, []);
+
   const handleRightHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    setRightHandData(prev => {
-      if (prev && JSON.stringify(prev) === JSON.stringify(data)) return prev;
-      return data;
-    });
-  }, [isEditingDisabled]);
+    // 変更がない場合はスキップ（currentScoreRef は常に最新値を保持）
+    if (currentScoreRef.current.rightHandData &&
+        JSON.stringify(currentScoreRef.current.rightHandData) === JSON.stringify(data)) return;
+    pushHistory();
+    setRightHandData(data);
+  }, [isEditingDisabled, pushHistory]);
 
   const handleLeftHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    setLeftHandData(prev => {
-      if (prev && JSON.stringify(prev) === JSON.stringify(data)) return prev;
-      return data;
-    });
-  }, [isEditingDisabled]);
+    if (currentScoreRef.current.leftHandData &&
+        JSON.stringify(currentScoreRef.current.leftHandData) === JSON.stringify(data)) return;
+    pushHistory();
+    setLeftHandData(data);
+  }, [isEditingDisabled, pushHistory]);
 
   // 単旋律モード用（後方互換）
   const handleScoreDataChange = useCallback((data: MeasureData[]) => {
@@ -1125,23 +1169,25 @@ export default function ScorePage() {
 
   const handleQuartetPartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
     if (isEditingDisabled) return;
+    if (JSON.stringify(currentScoreRef.current.quartetParts[partIndex]) === JSON.stringify(data)) return;
+    pushHistory();
     setQuartetParts(prev => {
       const next = [...prev];
-      if (JSON.stringify(next[partIndex]) === JSON.stringify(data)) return prev;
       next[partIndex] = data;
       return next;
     });
-  }, [isEditingDisabled]);
+  }, [isEditingDisabled, pushHistory]);
 
   const handleEnsemblePartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
     if (isEditingDisabled) return;
+    if (JSON.stringify(currentScoreRef.current.ensembleParts[partIndex]) === JSON.stringify(data)) return;
+    pushHistory();
     setEnsembleParts(prev => {
       const next = [...prev];
-      if (JSON.stringify(next[partIndex]) === JSON.stringify(data)) return prev;
       next[partIndex] = data;
       return next;
     });
-  }, [isEditingDisabled]);
+  }, [isEditingDisabled, pushHistory]);
 
   const handleSave = async () => {
     const metadata = { title, subtitle, lyricist, composer, arranger };
@@ -1338,6 +1384,181 @@ export default function ScorePage() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
+
+  // 小節選択コールバック（StaffCanvas / PianoSystemCanvas から呼ばれる）
+  // Shift+クリックのとき: 既存の start を維持して end だけ更新し範囲選択する
+  const handleMeasureSelect = useCallback((absoluteIndex: number, shiftHeld: boolean) => {
+    setSelectedMeasures(prev => {
+      if (shiftHeld && prev) {
+        const newStart = Math.min(prev.start, absoluteIndex);
+        const newEnd   = Math.max(prev.start, absoluteIndex);
+        return { start: newStart, end: newEnd };
+      }
+      return { start: absoluteIndex, end: absoluteIndex };
+    });
+  }, []);
+
+  // Cmd+Z / Cmd+Shift+Z: Undo / Redo
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) return;
+
+      if (e.key === 'z' && !e.shiftKey) {
+        // Undo: 履歴から1つ前の状態を取り出して適用
+        const prev = historyStack.current.pop();
+        if (!prev) return;
+        futureStack.current.push({ ...currentScoreRef.current });
+        applySnapshot(prev);
+        e.preventDefault();
+        return;
+      }
+      if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+        // Redo: 未来スタックから1つ取り出して適用
+        const next = futureStack.current.pop();
+        if (!next) return;
+        historyStack.current.push({ ...currentScoreRef.current });
+        applySnapshot(next);
+        e.preventDefault();
+        return;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [applySnapshot]);
+
+  // Cmd+C/V とEscape による選択解除ハンドラ
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Escape で選択解除
+      if (e.key === 'Escape') {
+        setSelectedMeasures(null);
+        return;
+      }
+      // 矢印キー: 選択小節をカーソル移動（Shift で範囲拡張）
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        // テキスト入力中・Cmd 修飾中は除外
+        const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) return;
+        if (e.metaKey || e.ctrlKey) return;
+        if (!selectedMeasures) return;
+        const dir = e.key === 'ArrowRight' ? 1 : -1;
+        const totalMeasures = totalSystems * measuresPerSystem;
+        setSelectedMeasures(prev => {
+          if (!prev) return prev;
+          if (e.shiftKey) {
+            // Shift: end を動かして範囲拡張（start は固定）
+            const newEnd = Math.max(prev.start, Math.min(totalMeasures - 1, prev.end + dir));
+            return { start: prev.start, end: newEnd };
+          } else {
+            // Shift なし: 選択を1小節丸ごとシフト
+            const newStart = Math.max(0, Math.min(totalMeasures - 1, prev.start + dir));
+            const len = prev.end - prev.start;
+            const newEnd = Math.min(totalMeasures - 1, newStart + len);
+            return { start: newStart, end: newEnd };
+          }
+        });
+        e.preventDefault();
+        return;
+      }
+      // Cmd+C: 選択中の小節をコピー
+      if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        if (!selectedMeasures) return;
+        const { start, end } = selectedMeasures;
+        const slice = (arr: MeasureData[] | undefined) =>
+          (arr ?? []).slice(start, end + 1);
+        if (scoreType === 'piano') {
+          setClipboard([
+            { partId: 'right', measures: slice(rightHandData) },
+            { partId: 'left',  measures: slice(leftHandData) },
+          ]);
+        } else if (scoreType === 'quartet') {
+          setClipboard(quartetParts.map((part, i) => ({
+            partId: `quartet-${i}`,
+            measures: slice(part),
+          })));
+        } else if (scoreType === 'ensemble') {
+          setClipboard(ensembleParts.map((part, i) => ({
+            partId: `ensemble-${i}`,
+            measures: slice(part),
+          })));
+        } else {
+          // single
+          setClipboard([{ partId: 'single', measures: slice(rightHandData) }]);
+        }
+        e.preventDefault();
+        return;
+      }
+      // Delete / Backspace: 選択小節の音符を削除（テンポ・拍子等の構造属性は残す）
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (!selectedMeasures) return;
+        const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) return;
+        pushHistory();
+        const { start, end } = selectedMeasures;
+        const clearRange = (arr: MeasureData[] | undefined): MeasureData[] => {
+          const copy = [...(arr ?? [])];
+          for (let idx = start; idx <= end; idx++) {
+            if (copy[idx]) {
+              // events と voices だけ空にし、テンポ・拍子・リピート等は維持する
+              copy[idx] = { ...copy[idx], events: [], voices: undefined };
+            }
+          }
+          return copy;
+        };
+        if (scoreType === 'piano') {
+          setRightHandData(clearRange(rightHandData));
+          setLeftHandData(clearRange(leftHandData));
+        } else if (scoreType === 'quartet') {
+          setQuartetParts(prev => prev.map(part => clearRange(part)));
+        } else if (scoreType === 'ensemble') {
+          setEnsembleParts(prev => prev.map(part => clearRange(part)));
+        } else {
+          setRightHandData(clearRange(rightHandData));
+        }
+        e.preventDefault();
+        return;
+      }
+      // Cmd+V: ペースト（選択位置に上書き）
+      if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
+        if (!clipboard || !selectedMeasures) return;
+        pushHistory();
+        const dest = selectedMeasures.start;
+        const paste = (arr: MeasureData[] | undefined, measures: MeasureData[]): MeasureData[] => {
+          const copy = [...(arr ?? [])];
+          measures.forEach((m, i) => { copy[dest + i] = m; });
+          return copy;
+        };
+        if (scoreType === 'piano') {
+          const right = clipboard.find(c => c.partId === 'right');
+          const left  = clipboard.find(c => c.partId === 'left');
+          if (right) setRightHandData(paste(rightHandData, right.measures));
+          if (left)  setLeftHandData(paste(leftHandData, left.measures));
+        } else if (scoreType === 'quartet') {
+          setQuartetParts(prev => prev.map((part, i) => {
+            const src = clipboard.find(c => c.partId === `quartet-${i}`);
+            return src ? paste(part, src.measures) : part;
+          }));
+        } else if (scoreType === 'ensemble') {
+          setEnsembleParts(prev => prev.map((part, i) => {
+            const src = clipboard.find(c => c.partId === `ensemble-${i}`);
+            return src ? paste(part, src.measures) : part;
+          }));
+        } else {
+          const src = clipboard.find(c => c.partId === 'single');
+          if (src) setRightHandData(paste(rightHandData, src.measures));
+        }
+        e.preventDefault();
+        return;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  // totalSystems・measuresPerSystem は useEffect より後に宣言されるため deps に入れられない。
+  // 代わりに ref で最新値を追跡する（arrow key ハンドラ内で参照）。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMeasures, clipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, pushHistory]);
 
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
 
@@ -2088,6 +2309,8 @@ export default function ScorePage() {
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
+                      selectedMeasures={selectedMeasures ?? undefined}
+                      onMeasureSelect={handleMeasureSelect}
                     />
                   ) : (
                     <StaffCanvas
@@ -2108,6 +2331,8 @@ export default function ScorePage() {
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
+                      selectedMeasures={selectedMeasures ?? undefined}
+                      onMeasureSelect={handleMeasureSelect}
                     />
                   )}
 
