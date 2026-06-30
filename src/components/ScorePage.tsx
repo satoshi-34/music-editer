@@ -22,6 +22,9 @@ import { readInitialYOffset, Y_OFFSET_KEY } from '../utils/yOffsetMigration';
 import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
+import { downloadMusicXml } from '../utils/musicXmlExport';
+import { parseMusicXml } from '../utils/musicXmlImport';
+import { downloadMidi } from '../utils/midiExport';
 import { useTempoStorage } from '../hooks/useTempoStorage';
 import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
@@ -199,6 +202,7 @@ export default function ScorePage() {
   const [toolbarHeight, setToolbarHeight] = useState(180);
   const toolbarRef = useRef<HTMLElement | null>(null);
   const instrumentationEditorWindowRef = useRef<Window | null>(null);
+  const musicXmlInputRef = useRef<HTMLInputElement | null>(null);
 
   const [title, setTitle] = useState('タイトル');
   const [subtitle, setSubtitle] = useState('サブタイトル');
@@ -1165,7 +1169,7 @@ export default function ScorePage() {
             { partId: 'melody', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
           ];
 
-    const saved = await saveScore(metadata, parts, totalSystems, 4, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
+    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
     if (saved) {
       setStoredDataAvailable(true);
     }
@@ -1188,6 +1192,9 @@ export default function ScorePage() {
       setInstrumentation(loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
       // 旧データには notationMode が無いので、未指定なら実音表示で開く。
       setNotationMode(loadedData.notationMode ?? 'concert');
+      if (loadedData.measuresPerSystem && loadedData.measuresPerSystem >= 1 && loadedData.measuresPerSystem <= 8) {
+        setMeasuresPerSystem(loadedData.measuresPerSystem);
+      }
 
       if (loadedType === 'quartet') {
         const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
@@ -1295,9 +1302,47 @@ export default function ScorePage() {
     return () => { window.removeEventListener('resize', onResize); clearTimeout(timer); };
   }, []);
 
+  // Finale 風キーボードショートカット: 数字キーで音価を選択する。
+  // テキスト入力中（input/textarea にフォーカスがある場合）は無効にする。
+  useEffect(() => {
+    // Finale 標準の音価キー割り当て（5=四分音符が最も一般的）
+    const DUR_KEYS: Record<string, import('./Palette').Tool> = {
+      '1': { duration: '64', isRest: false },
+      '2': { duration: '32', isRest: false },
+      '3': { duration: '16', isRest: false },
+      '4': { duration: '8',  isRest: false },
+      '5': { duration: '4',  isRest: false },
+      '6': { duration: '2',  isRest: false },
+      '7': { duration: '1',  isRest: false },
+    };
+    const handler = (e: KeyboardEvent) => {
+      // 入力欄にフォーカスがある場合はショートカットを発動させない
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) return;
+      // Ctrl/Cmd が押されている場合も除外（ブラウザのショートカットと衝突する）
+      if (e.ctrlKey || e.metaKey) return;
+      const next = DUR_KEYS[e.key];
+      if (next) {
+        setTool(next);
+        e.preventDefault();
+      }
+      // R キー: 現在の音価で休符入力モードに切り替え
+      if (e.key === 'r' || e.key === 'R') {
+        setTool(prev => {
+          if ('duration' in prev) return { ...prev, isRest: !prev.isRest };
+          return { duration: '4', isRest: true };
+        });
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
 
   const totalSystems = 12;
+  const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
   const systemsPerPage = scoreType === 'ensemble'
     ? (instrumentation.parts.length > 10 ? 1 : 2)
     : 9;
@@ -1305,6 +1350,101 @@ export default function ScorePage() {
     () => Array.from({ length: Math.ceil(totalSystems / systemsPerPage) }, () => ({ systems: systemsPerPage })),
     [totalSystems, systemsPerPage]
   );
+
+  // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
+  // totalSystems と measuresPerSystem の宣言より後に置く必要がある
+  const buildCurrentScoreData = useCallback((): import('../types/storage').SavedScoreData => {
+    const metadata = { title, subtitle, lyricist, composer, arranger };
+    const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'] as const;
+    const QUARTET_CLEFS: import('../types/storage').PartData['clef'][] = ['treble', 'treble', 'alto', 'bass'];
+    const parts: import('../types/storage').PartData[] = scoreType === 'quartet'
+      ? QUARTET_IDS.map((id, i) => ({
+          partId: id,
+          clef: QUARTET_CLEFS[i],
+          measures: quartetParts[i] ?? [{ events: [] }],
+        }))
+      : scoreType === 'ensemble'
+        ? instrumentation.parts.map((part, i) => ({
+            partId: part.id,
+            clef: part.clef,
+            measures: ensembleParts[i] ?? [{ events: [] }],
+          }))
+      : scoreType === 'piano'
+        ? [
+            { partId: 'right-hand', clef: 'treble' as const, measures: rightHandData ?? [{ events: [] }] },
+            { partId: 'left-hand',  clef: 'bass' as const,   measures: leftHandData  ?? [{ events: [] }] },
+          ]
+        : [
+            { partId: 'melody', clef: 'treble' as const, measures: rightHandData ?? [{ events: [] }] },
+          ];
+
+    return {
+      version: '1.0',
+      timestamp: Date.now(),
+      metadata,
+      scoreType,
+      keySignature: normalizeKeySignature(keySignature),
+      timeSignature: scoreTimeSignature,
+      parts,
+      systems: totalSystems,
+      measuresPerSystem,
+    };
+  }, [
+    title, subtitle, lyricist, composer, arranger,
+    scoreType, keySignature, scoreTimeSignature,
+    quartetParts, ensembleParts, rightHandData, leftHandData,
+    instrumentation, totalSystems, measuresPerSystem,
+  ]);
+
+  const handleExportMusicXml = useCallback(() => {
+    downloadMusicXml(buildCurrentScoreData());
+  }, [buildCurrentScoreData]);
+
+  const handleExportMidi = useCallback(() => {
+    downloadMidi(buildCurrentScoreData());
+  }, [buildCurrentScoreData]);
+
+  const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const xml = ev.target?.result as string;
+        const loaded = parseMusicXml(xml);
+        // handleLoad と同じロジックで画面に反映する
+        setTitle(loaded.metadata.title);
+        setSubtitle(loaded.metadata.subtitle);
+        setLyricist(loaded.metadata.lyricist);
+        setComposer(loaded.metadata.composer);
+        setArranger(loaded.metadata.arranger);
+        const loadedType = loaded.scoreType ?? 'single';
+        setKeySignature(normalizeKeySignature(loaded.keySignature));
+        await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
+        setScoreType(loadedType);
+        if (loadedType === 'quartet') {
+          const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
+          setQuartetParts(QUARTET_IDS.map(id =>
+            loaded.parts.find(p => p.partId === id)?.measures ?? []
+          ));
+          setEnsembleParts([]);
+        } else if (loadedType === 'ensemble') {
+          setEnsembleParts(loaded.parts.map(p => p.measures));
+        } else {
+          const rightPart = loaded.parts.find(p => p.clef === 'treble') ?? loaded.parts[0];
+          const leftPart  = loaded.parts.find(p => p.clef === 'bass');
+          setRightHandData(rightPart?.measures ?? []);
+          setLeftHandData(leftPart?.measures);
+          setEnsembleParts([]);
+        }
+      } catch (err) {
+        alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
+      }
+      // 同じファイルを再度選択できるよう値をリセットする
+      if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
+    };
+    reader.readAsText(file);
+  }, [setTimeSignature]);
 
   const [hasCustomPianoSample, setHasCustomPianoSample] = useState<boolean>(() => hasCustomPianoDemoScore());
   const visiblePages = useMemo(() => {
@@ -1637,6 +1777,30 @@ export default function ScorePage() {
                 error={error}
               />
               <button className="ghost" onClick={() => window.print()}>印刷</button>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                段あたり小節数
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={measuresPerSystem}
+                  onChange={e => {
+                    const v = Math.max(1, Math.min(8, Number(e.target.value)));
+                    if (!isNaN(v)) setMeasuresPerSystem(v);
+                  }}
+                  style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
+                />
+              </label>
+              <button className="ghost" onClick={handleExportMusicXml}>MusicXML書出</button>
+              <button className="ghost" onClick={handleExportMidi}>MIDI書出</button>
+              <button className="ghost" onClick={() => musicXmlInputRef.current?.click()}>MusicXML読込</button>
+              <input
+                ref={musicXmlInputRef}
+                type="file"
+                accept=".xml,.musicxml"
+                style={{ display: 'none' }}
+                onChange={handleImportMusicXml}
+              />
               <div className="coord-correction-wrap">
                 <button
                   type="button"
@@ -1862,13 +2026,13 @@ export default function ScorePage() {
                   {scoreType === 'ensemble' ? (
                     <EnsembleStaff
                       systems={p.systems}
-                      measuresPerSystem={4}
+                      measuresPerSystem={measuresPerSystem}
                       tool={tool}
                       scale={scale}
                       instrumentationParts={instrumentation.parts}
                       partsData={ensembleParts}
                       onPartChange={instrumentation.parts.map((_, pi) => handleEnsemblePartChange(pi))}
-                      startMeasureIndex={i * systemsPerPage * 4}
+                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -1882,12 +2046,12 @@ export default function ScorePage() {
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
                       systems={p.systems}
-                      measuresPerSystem={4}
+                      measuresPerSystem={measuresPerSystem}
                       tool={tool}
                       scale={scale}
                       partsData={quartetParts}
                       onPartChange={[0, 1, 2, 3].map(pi => handleQuartetPartChange(pi))}
-                      startMeasureIndex={i * systemsPerPage * 4}
+                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -1901,14 +2065,14 @@ export default function ScorePage() {
                     <PianoStaff
                       systems={p.systems}
                       gap={110}
-                      measuresPerSystem={4}
+                      measuresPerSystem={measuresPerSystem}
                       tool={tool}
                       scale={scale}
                       rightHandData={rightHandData}
                       leftHandData={leftHandData}
                       onRightHandChange={handleRightHandChange}
                       onLeftHandChange={handleLeftHandChange}
-                      startMeasureIndex={i * systemsPerPage * 4}
+                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -1922,13 +2086,13 @@ export default function ScorePage() {
                     <StaffCanvas
                       systems={p.systems}
                       gap={110}
-                      measuresPerSystem={4}
+                      measuresPerSystem={measuresPerSystem}
                       tool={tool}
                       scale={scale}
                       clef="treble"
                       initialScoreData={rightHandData}
                       onScoreDataChange={handleScoreDataChange}
-                      startMeasureIndex={i * systemsPerPage * 4}
+                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}

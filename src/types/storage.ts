@@ -113,6 +113,19 @@ export interface NoteEvent {
    * 'trill': 主音符の上に tr と波線を描く。
    */
   ornament?: 'trill';
+  /**
+   * ペダル記号。
+   * 'down': この音符からペダルを踏む（Ped 記号を表示）
+   * 'up':   この音符でペダルを離す（✱ 記号を表示）
+   */
+  pedalMark?: 'down' | 'up';
+  /**
+   * オッターバ（8va / 8vb）記号。
+   * '8va': 五線の上に 8va 括弧を開始する（1オクターブ上で実音表示）
+   * '8vb': 五線の下に 8vb 括弧を開始する（1オクターブ下で実音表示）
+   * '8vaEnd' / '8vbEnd': 対応する括弧の終端を示す
+   */
+  ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd';
 }
 
 /**

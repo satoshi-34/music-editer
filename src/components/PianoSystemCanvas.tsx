@@ -36,7 +36,7 @@ import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[] };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd' };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number } | null;
 
@@ -1050,6 +1050,15 @@ export default function PianoSystemCanvas({
       baseY: number;
       markings: NonNullable<NoteEvent['dynamics']>;
     }> = [];
+    // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
+    const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
+    // オッターバ（8va/8vb）括弧の描画情報を収集する
+    const ottavaEntries: Array<{
+      kind: '8va' | '8vb';
+      startX: number; endX: number;
+      lineY: number;
+    }> = [];
+    let pendingOttava: { kind: '8va' | '8vb'; startX: number; lineY: number } | null = null;
 
     // SVG 背景クリック → 弧の選択とドラッグ状態を解除
     svg.addEventListener('click',()=>{
@@ -2011,6 +2020,8 @@ export default function PianoSystemCanvas({
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
               const trillMode = 'mode' in tool && tool.mode === 'trill';
+              const pedalMode = 'mode' in tool && tool.mode === 'pedal' ? (tool as any).pedalType as 'down' | 'up' : null;
+              const ottavaMode = 'mode' in tool && tool.mode === 'ottava' ? (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd' : null;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
@@ -2102,6 +2113,38 @@ export default function PianoSystemCanvas({
                   next[absI].events[j]={
                     ...targetEv,
                     ornament:targetEv.ornament==='trill'?undefined:'trill',
+                  };
+                  return next;
+                });
+                setSelected({partIndex:pi,measure:absI,index:j});
+                return;
+              }
+              if (pedalMode && safeEvs[j] && !safeEvs[j].__isPlaceholder) {
+                // ペダル記号をトグルで付け外しする
+                setScore(prev=>{
+                  const next=prev.map(cloneMeasureData);
+                  if(absI>=next.length)return prev;
+                  const targetEv=next[absI].events[j];
+                  if(!targetEv)return prev;
+                  next[absI].events[j]={
+                    ...targetEv,
+                    pedalMark: targetEv.pedalMark===pedalMode?undefined:pedalMode,
+                  };
+                  return next;
+                });
+                setSelected({partIndex:pi,measure:absI,index:j});
+                return;
+              }
+              if (ottavaMode && safeEvs[j] && !safeEvs[j].__isPlaceholder) {
+                // オッターバ記号をトグルで付け外しする
+                setScore(prev=>{
+                  const next=prev.map(cloneMeasureData);
+                  if(absI>=next.length)return prev;
+                  const targetEv=next[absI].events[j];
+                  if(!targetEv)return prev;
+                  next[absI].events[j]={
+                    ...targetEv,
+                    ottava: targetEv.ottava===ottavaMode?undefined:ottavaMode,
                   };
                   return next;
                 });
@@ -2241,6 +2284,8 @@ export default function PianoSystemCanvas({
               }else{
                 if (dynamicMode) return;
                 if (accidentalMode) return;
+                if (pedalMode) return;
+                if (ottavaMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsert(lx,ly);
               }
@@ -2253,6 +2298,30 @@ export default function PianoSystemCanvas({
                 baseY: stave.getYForLine(4) + 26,
                 markings: safeEvs[j].dynamics,
               });
+            }
+            if (!safeEvs[j]?.__isPlaceholder && safeEvs[j]?.pedalMark) {
+              pedalMarkEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                botY: stave.getYForLine(4),
+                mark: safeEvs[j].pedalMark!,
+              });
+            }
+            if (!safeEvs[j]?.__isPlaceholder && safeEvs[j]?.ottava) {
+              const cx = noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2);
+              const topY = stave.getYForLine(0);
+              const botY = stave.getYForLine(4);
+              const ot = safeEvs[j].ottava!;
+              if (ot === '8va') {
+                pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14 };
+              } else if (ot === '8vb') {
+                pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14 };
+              } else if (pendingOttava && ot === '8vaEnd' && pendingOttava.kind === '8va') {
+                ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
+                pendingOttava = null;
+              } else if (pendingOttava && ot === '8vbEnd' && pendingOttava.kind === '8vb') {
+                ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
+                pendingOttava = null;
+              }
             }
 
             const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===j;
@@ -2305,6 +2374,59 @@ export default function PianoSystemCanvas({
         text.setAttribute('pointer-events','none');
         svgRoot.appendChild(text);
       });
+    });
+
+    // ペダル記号: 五線下端より下（botY + 70）に Ped または ✱ を表示する
+    pedalMarkEntries.forEach(({ anchorX, botY, mark }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = mark === 'down' ? 'Ped' : '✱';
+      el.setAttribute('x', String(anchorX));
+      el.setAttribute('y', String(botY + 70));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#1e293b');
+      el.setAttribute('font-family', 'serif');
+      el.setAttribute('font-size', mark === 'down' ? '13' : '14');
+      if (mark === 'down') el.setAttribute('font-style', 'italic');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
+    // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
+    ottavaEntries.forEach(({ kind, startX, endX, lineY }) => {
+      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      label.textContent = kind;
+      label.setAttribute('x', String(startX - 4));
+      label.setAttribute('y', String(lineY));
+      label.setAttribute('text-anchor', 'start');
+      label.setAttribute('fill', '#374151');
+      label.setAttribute('font-family', 'serif');
+      label.setAttribute('font-style', 'italic');
+      label.setAttribute('font-size', '11');
+      label.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(label);
+      const lineStart = startX + 18;
+      if (lineStart < endX) {
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', String(lineStart));
+        line.setAttribute('y1', String(lineY - 3));
+        line.setAttribute('x2', String(endX));
+        line.setAttribute('y2', String(lineY - 3));
+        line.setAttribute('stroke', '#374151');
+        line.setAttribute('stroke-width', '1');
+        line.setAttribute('stroke-dasharray', '4,2');
+        line.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(line);
+      }
+      const bracketDir = kind === '8va' ? 1 : -1;
+      const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      vline.setAttribute('x1', String(endX));
+      vline.setAttribute('y1', String(lineY - 3));
+      vline.setAttribute('x2', String(endX));
+      vline.setAttribute('y2', String(lineY - 3 + 6 * bracketDir));
+      vline.setAttribute('stroke', '#374151');
+      vline.setAttribute('stroke-width', '1');
+      vline.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(vline);
     });
 
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──

@@ -1218,6 +1218,17 @@ export default function StaffCanvas({
     // テキスト要素（発想標語・歌詞）の描画情報を収集する（五線の下に表示）
     const expressionMarkingEntries: Array<{ anchorX: number; botY: number; text: string }> = [];
     const lyricsEntries: Array<{ anchorX: number; botY: number; text: string }> = [];
+    // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
+    const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
+    // オッターバ（8va/8vb）括弧の描画情報を収集する
+    // start と end の x 座標・y 座標を記録して後でまとめて線を引く
+    const ottavaEntries: Array<{
+      kind: '8va' | '8vb';
+      startX: number; endX: number;
+      lineY: number;  // 8va は五線上端より上、8vb は五線下端より下
+    }> = [];
+    // 現在処理中のオッターバ開始情報（ペア待ち）
+    let pendingOttava: { kind: '8va' | '8vb'; startX: number; lineY: number } | null = null;
 
     // SVG 背景クリック → 弧の選択とドラッグ状態を解除
     svg.addEventListener('click', () => {
@@ -2014,6 +2025,14 @@ export default function StaffCanvas({
             // テキスト要素も既存の音符にのみ付ける。
             return;
           }
+          if ('mode' in tool && tool.mode === 'pedal') {
+            // ペダル記号も既存の音符にのみ付ける。
+            return;
+          }
+          if ('mode' in tool && tool.mode === 'ottava') {
+            // オッターバ記号も既存の音符にのみ付ける。
+            return;
+          }
           if ('mode' in tool && tool.mode === 'measureTempo') {
             // 小節テンポ変更: 小節クリックで BPM 入力欄を表示する
             const containerRect = containerRef.current?.getBoundingClientRect();
@@ -2221,6 +2240,8 @@ export default function StaffCanvas({
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
               const trillMode = 'mode' in tool && tool.mode === 'trill';
+              const pedalMode = 'mode' in tool && tool.mode === 'pedal' ? (tool as any).pedalType as 'down' | 'up' : null;
+              const ottavaMode = 'mode' in tool && tool.mode === 'ottava' ? (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd' : null;
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
 
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
@@ -2353,6 +2374,44 @@ export default function StaffCanvas({
                 });
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });
                 playNoteEvent(nextEv);
+                return;
+              }
+              if (pedalMode && safeEvents[j] && !safeEvents[j].__isPlaceholder) {
+                // ペダル記号をトグルで付け外しする
+                const currentEv = safeEvents[j];
+                const next: NoteEvent = currentEv.pedalMark === pedalMode
+                  ? { ...currentEv, pedalMark: undefined }
+                  : { ...currentEv, pedalMark: pedalMode };
+                setScore(prev => {
+                  const nextScore = prev.map(cloneMeasureData);
+                  if (absoluteIndex >= nextScore.length) return prev;
+                  const targetEv = nextScore[absoluteIndex].events[j];
+                  if (!targetEv) return prev;
+                  nextScore[absoluteIndex].events[j] = {
+                    ...targetEv,
+                    pedalMark: targetEv.pedalMark === pedalMode ? undefined : pedalMode,
+                  };
+                  return nextScore;
+                });
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                playNoteEvent(next);
+                return;
+              }
+              if (ottavaMode && safeEvents[j] && !safeEvents[j].__isPlaceholder) {
+                // オッターバ記号をトグルで付け外しする
+                setScore(prev => {
+                  const nextScore = prev.map(cloneMeasureData);
+                  if (absoluteIndex >= nextScore.length) return prev;
+                  const targetEv = nextScore[absoluteIndex].events[j];
+                  if (!targetEv) return prev;
+                  nextScore[absoluteIndex].events[j] = {
+                    ...targetEv,
+                    ottava: targetEv.ottava === ottavaMode ? undefined : ottavaMode,
+                  };
+                  return nextScore;
+                });
+                setSelected({ measure: startMeasureIndex + measureIndex, index: j });
+                playNoteEvent(safeEvents[j]);
                 return;
               }
               if (textElementMode && safeEvents[j] && !safeEvents[j].__isPlaceholder) {
@@ -2544,6 +2603,24 @@ export default function StaffCanvas({
               }
               if (ev?.lyrics) {
                 lyricsEntries.push({ anchorX: cx, botY: staveBot, text: ev.lyrics });
+              }
+              if (ev?.pedalMark) {
+                pedalMarkEntries.push({ anchorX: cx, botY: staveBot, mark: ev.pedalMark });
+              }
+              // オッターバ記号の収集: start → pendingOttava に積む, End → ペアを確定する
+              if (ev?.ottava) {
+                const topY = stave.getYForLine(0);
+                if (ev.ottava === '8va') {
+                  pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14 };
+                } else if (ev.ottava === '8vb') {
+                  pendingOttava = { kind: '8vb', startX: cx, lineY: staveBot + 14 };
+                } else if (pendingOttava && (ev.ottava === '8vaEnd' && pendingOttava.kind === '8va')) {
+                  ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
+                  pendingOttava = null;
+                } else if (pendingOttava && (ev.ottava === '8vbEnd' && pendingOttava.kind === '8vb')) {
+                  ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
+                  pendingOttava = null;
+                }
               }
             }
 
@@ -2753,6 +2830,64 @@ export default function StaffCanvas({
         el.setAttribute('font-size', '11');
         el.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(el);
+      });
+
+      // ペダル記号: 五線下端より下（botY + 70）に Ped または ✱ を表示する
+      // 'down' → イタリック体の "Ped"、'up' → "✱"
+      pedalMarkEntries.forEach(({ anchorX, botY, mark }) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        el.textContent = mark === 'down' ? 'Ped' : '✱';
+        el.setAttribute('x', String(anchorX));
+        el.setAttribute('y', String(botY + 70));
+        el.setAttribute('text-anchor', 'middle');
+        el.setAttribute('fill', '#1e293b');
+        el.setAttribute('font-family', 'serif');
+        el.setAttribute('font-size', mark === 'down' ? '13' : '14');
+        if (mark === 'down') el.setAttribute('font-style', 'italic');
+        el.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(el);
+      });
+
+      // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
+      // 8va は五線上に、8vb は五線下に表示する
+      ottavaEntries.forEach(({ kind, startX, endX, lineY }) => {
+        // テキスト（"8va" / "8vb"）
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.textContent = kind;
+        label.setAttribute('x', String(startX - 4));
+        label.setAttribute('y', String(lineY));
+        label.setAttribute('text-anchor', 'start');
+        label.setAttribute('fill', '#374151');
+        label.setAttribute('font-family', 'serif');
+        label.setAttribute('font-style', 'italic');
+        label.setAttribute('font-size', '11');
+        label.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(label);
+        // 破線（テキスト幅の分だけオフセット）
+        const lineStart = startX + 18;
+        if (lineStart < endX) {
+          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          line.setAttribute('x1', String(lineStart));
+          line.setAttribute('y1', String(lineY - 3));
+          line.setAttribute('x2', String(endX));
+          line.setAttribute('y2', String(lineY - 3));
+          line.setAttribute('stroke', '#374151');
+          line.setAttribute('stroke-width', '1');
+          line.setAttribute('stroke-dasharray', '4,2');
+          line.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(line);
+        }
+        // 終端の縦線
+        const bracketDir = kind === '8va' ? 1 : -1;
+        const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        vline.setAttribute('x1', String(endX));
+        vline.setAttribute('y1', String(lineY - 3));
+        vline.setAttribute('x2', String(endX));
+        vline.setAttribute('y2', String(lineY - 3 + 6 * bracketDir));
+        vline.setAttribute('stroke', '#374151');
+        vline.setAttribute('stroke-width', '1');
+        vline.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(vline);
       });
 
       // ── 行内タイグループの一括描画 ──────────────────────────────

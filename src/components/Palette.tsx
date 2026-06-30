@@ -51,7 +51,9 @@ export type Tool =
   | { mode: 'measureTempo' }                                // 小節単位のテンポ変更モード
   | { mode: 'measureTimeSig' }                             // 小節単位の拍子変更モード
   | { mode: 'graceNote' }                                  // 前打音（スラッシュ付き短前打音）を付けるモード
-  | { mode: 'trill' };                                     // トリル記号を付けるモード
+  | { mode: 'trill' }                                      // トリル記号を付けるモード
+  | { mode: 'pedal'; pedalType: 'down' | 'up' }           // ペダル記号（Ped / ✱）を付けるモード
+  | { mode: 'ottava'; ottavaType: '8va' | '8vb' | '8vaEnd' | '8vbEnd' }; // オッターバ記号を付けるモード
 
 type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
 type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
@@ -177,6 +179,12 @@ export default function Palette({
   const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
   const graceNoteActive = 'mode' in value && value.mode === 'graceNote';
   const trillActive = 'mode' in value && value.mode === 'trill';
+  const pedalDownActive = 'mode' in value && value.mode === 'pedal' && (value as any).pedalType === 'down';
+  const pedalUpActive = 'mode' in value && value.mode === 'pedal' && (value as any).pedalType === 'up';
+  const ottava8vaActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8va';
+  const ottava8vbActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8vb';
+  const ottava8vaEndActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8vaEnd';
+  const ottava8vbEndActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8vbEnd';
 
   return (
     <div style={{ padding: 8 }}>
@@ -581,6 +589,85 @@ export default function Palette({
           <span style={{ fontSize: 16, lineHeight: 1, fontStyle: 'italic', fontWeight: 'bold' }}>tr</span>
           <span style={{ fontSize: 9, color: trillActive ? '#6d28d9' : '#6b7280' }}>トリル</span>
         </button>
+        <button
+          type="button"
+          onClick={() => onChange(pedalDownActive ? ROW1[2] : { mode: 'pedal', pedalType: 'down' })}
+          aria-label="ペダル踏み込み"
+          title="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
+          style={{
+            width: BUTTON_W,
+            height: BUTTON_H,
+            padding: 0,
+            borderRadius: 10,
+            border: pedalDownActive ? '2px solid #7c3aed' : '1px solid #ccc',
+            background: pedalDownActive ? '#f5f3ff' : '#fff',
+            color: '#222',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <span style={{ fontSize: 13, lineHeight: 1, fontStyle: 'italic', fontFamily: 'serif' }}>Ped</span>
+          <span style={{ fontSize: 9, color: pedalDownActive ? '#6d28d9' : '#6b7280' }}>ペダル↓</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange(pedalUpActive ? ROW1[2] : { mode: 'pedal', pedalType: 'up' })}
+          aria-label="ペダル離す"
+          title="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
+          style={{
+            width: BUTTON_W,
+            height: BUTTON_H,
+            padding: 0,
+            borderRadius: 10,
+            border: pedalUpActive ? '2px solid #7c3aed' : '1px solid #ccc',
+            background: pedalUpActive ? '#f5f3ff' : '#fff',
+            color: '#222',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <span style={{ fontSize: 14, lineHeight: 1 }}>✱</span>
+          <span style={{ fontSize: 9, color: pedalUpActive ? '#6d28d9' : '#6b7280' }}>ペダル↑</span>
+        </button>
+        {/* 8va / 8vb 開始・終了ボタン */}
+        {(['8va', '8vb', '8vaEnd', '8vbEnd'] as const).map((ot) => {
+          const active = ot === '8va' ? ottava8vaActive : ot === '8vb' ? ottava8vbActive : ot === '8vaEnd' ? ottava8vaEndActive : ottava8vbEndActive;
+          const label = ot.replace('End', '終');
+          return (
+            <button
+              key={ot}
+              type="button"
+              onClick={() => onChange(active ? ROW1[2] : { mode: 'ottava', ottavaType: ot })}
+              aria-label={label}
+              title={`${label}記号を付ける。対象の音符をクリック。再クリックで解除`}
+              style={{
+                width: BUTTON_W,
+                height: BUTTON_H,
+                padding: 0,
+                borderRadius: 10,
+                border: active ? '2px solid #7c3aed' : '1px solid #ccc',
+                background: active ? '#f5f3ff' : '#fff',
+                color: '#222',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              <span style={{ fontSize: 11, lineHeight: 1, fontStyle: 'italic', fontFamily: 'serif' }}>{label}</span>
+            </button>
+          );
+        })}
 
         {/* カスタム記号を新規作成するボタン */}
         <button
