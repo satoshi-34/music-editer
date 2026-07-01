@@ -980,7 +980,10 @@ button.ghost:disabled {
 
 /* ===== 印刷用 ===== */
 @media print {
-  @page { size: A4; margin: 12mm; }
+  /* margin: 0 にして .print-page の padding（14mm）を余白として使う。
+     @page margin を 12mm にすると印刷可能領域が 186mm になり、
+     width: 210mm の .print-page がはみ出して左ズレする原因になるため。 */
+  @page { size: A4; margin: 0; }
   body { background: #fff !important; }
   .toolbar { display: none !important; }
   .spread { display: block; width: auto; }
@@ -995,7 +998,7 @@ button.ghost:disabled {
     page-break-after: always;
     box-shadow: none;
     border: 0;
-    padding: 0;
+    /* padding はスクリーン側の 14mm 14mm 12mm をそのまま継承して余白に使う */
     background: #fff;
     background-image: none;
   }
