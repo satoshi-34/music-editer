@@ -279,7 +279,9 @@ function validateSavedPartIds(data: SavedScoreData): boolean {
 /**
  * Validates a complete SavedScoreData object (v2 format)
  */
-function validateSavedScoreData(data: any): data is SavedScoreData {
+// ファイルインポートなど localStorage 以外の経路でも深い検証を再利用できるよう export する。
+// （浅いチェックだけで state へ流すと不正データで描画時にクラッシュするため）
+export function validateSavedScoreData(data: any): data is SavedScoreData {
   return (
     data &&
     typeof data === 'object' &&

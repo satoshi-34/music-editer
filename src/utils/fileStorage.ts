@@ -2,6 +2,7 @@
 // 譜面データのファイル書き出し・読み込みユーティリティ
 
 import type { SavedScoreData } from '../types/storage';
+import { validateSavedScoreData } from './storage';
 
 // ファイル名に使えない文字を除去するヘルパー
 function safeFileName(title: string): string {
@@ -80,17 +81,21 @@ export async function importScoreFromFile(file: File): Promise<SavedScoreData> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
+      let data: unknown;
       try {
-        const data = JSON.parse(e.target?.result as string);
-        // 最低限の構造チェック（詳細なバリデーションは storage.ts の loadScoreData に委ねる）
-        if (!data || typeof data !== 'object' || !data.version || !Array.isArray(data.parts)) {
-          reject(new Error('有効な譜面ファイルではありません'));
-          return;
-        }
-        resolve(data as SavedScoreData);
+        data = JSON.parse(e.target?.result as string);
       } catch {
-        reject(new Error('ファイルの解析に失敗しました'));
+        reject(new Error('ファイルの解析に失敗しました（JSON として読めません）'));
+        return;
       }
+      // localStorage 読込と同じ深い検証を通す。
+      // メタデータ・調号・拍子・各パートの音符イベントまで型を検証するので、
+      // 壊れた/細工されたファイルは描画前にここで弾き、クラッシュ（白画面）を防ぐ。
+      if (!validateSavedScoreData(data)) {
+        reject(new Error('有効な譜面ファイルではありません（データ形式が不正です）'));
+        return;
+      }
+      resolve(data);
     };
     reader.onerror = () => reject(new Error('ファイルの読み込みに失敗しました'));
     reader.readAsText(file);
