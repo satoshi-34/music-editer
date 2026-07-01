@@ -851,6 +851,7 @@ button.ghost:disabled {
   padding: 16px 24px;
   width: 100%;
   max-width: 1500px;
+  box-sizing: border-box;
   display: grid;
   gap: 20px;
   grid-template-columns: repeat(var(--columns, 2), 1fr);
