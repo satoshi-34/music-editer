@@ -2800,8 +2800,7 @@ export default function StaffCanvas({
         el.setAttribute('text-anchor', 'middle');
         el.setAttribute('fill', '#1f2937');
         el.setAttribute('font-family', '"Times New Roman", serif');
-        el.setAttribute('font-size', '13');
-        el.setAttribute('font-weight', 'bold');
+        el.setAttribute('font-size', '12');
         el.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(el);
       });
@@ -2815,8 +2814,7 @@ export default function StaffCanvas({
         el.setAttribute('text-anchor', 'middle');
         el.setAttribute('fill', '#1f2937');
         el.setAttribute('font-family', '"Times New Roman", serif');
-        el.setAttribute('font-size', '13');
-        el.setAttribute('font-weight', 'bold');
+        el.setAttribute('font-size', '12');
         el.setAttribute('font-style', 'italic');
         el.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(el);
