@@ -2110,8 +2110,8 @@ export default function ScorePage() {
               <SaveLoadButtons
                 onSave={handleSave}
                 onLoad={handleLoad}
-                onLoadSample={handleLoadSample}
-                onSaveCurrentAsSample={handleSaveCurrentAsSample}
+                onLoadSample={import.meta.env.DEV ? handleLoadSample : undefined}
+                onSaveCurrentAsSample={import.meta.env.DEV ? handleSaveCurrentAsSample : undefined}
                 onExportFile={handleExportFile}
                 onImportFile={() => fileImportRef.current?.click()}
                 isSaving={isSaving}
