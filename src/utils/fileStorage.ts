@@ -35,13 +35,15 @@ export async function exportScoreToFile(
   const json = JSON.stringify(data, null, 2);
 
   // File System Access API 対応チェック
-  if (typeof window.showSaveFilePicker === 'function') {
+  // TypeScript の標準型定義に showSaveFilePicker が含まれていないため any にキャストする
+  const win = window as any;
+  if (typeof win.showSaveFilePicker === 'function') {
     try {
-      let handle = fileHandle ?? null;
+      let handle: FileSystemFileHandle | null = fileHandle ?? null;
 
       if (!handle) {
         // 初回：保存先ダイアログを表示
-        handle = await window.showSaveFilePicker({
+        handle = await win.showSaveFilePicker({
           suggestedName: `${safeFileName(title)}.score.json`,
           types: [
             {
@@ -49,7 +51,7 @@ export async function exportScoreToFile(
               accept: { 'application/json': ['.json'] },
             },
           ],
-        });
+        }) as FileSystemFileHandle;
       }
 
       await writeToFileHandle(handle, json);
