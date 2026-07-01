@@ -2214,6 +2214,11 @@ export default function StaffCanvas({
               if (disabled) return;
               ev.stopPropagation(); // 小節rectには渡さない
               setSelectedArc(null);
+              // 選択モード: 音符をクリックして選択（その後 Delete で1音削除できる）
+              if ('mode' in tool && tool.mode === 'select') {
+                setSelected({ measure: absoluteIndex, index: j });
+                return;
+              }
               // タイモードではドラッグで操作するため、クリックは何もしない
               if ('mode' in tool && tool.mode === 'tie') return;
               if ('mode' in tool && tool.mode === 'repeat') {
