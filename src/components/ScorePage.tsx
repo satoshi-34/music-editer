@@ -22,6 +22,8 @@ import { readInitialYOffset, Y_OFFSET_KEY } from '../utils/yOffsetMigration';
 import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
+import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
+import { createSavedScoreData } from '../utils/storage';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXml } from '../utils/musicXmlImport';
 import { downloadMidi } from '../utils/midiExport';
@@ -1191,9 +1193,10 @@ export default function ScorePage() {
     });
   }, [isEditingDisabled, pushHistory]);
 
-  const handleSave = async () => {
+  // 現在の全 state から保存用データ（parts + metadata）を組み立てるヘルパー。
+  // handleSave / 自動保存 / ファイル書き出しで共通利用する。
+  const buildScoreData = useCallback(() => {
     const metadata = { title, subtitle, lyricist, composer, arranger };
-
     const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'] as const;
     const QUARTET_CLEFS: PartData['clef'][] = ['treble', 'treble', 'alto', 'bass'];
     const parts: PartData[] = scoreType === 'quartet'
@@ -1210,18 +1213,109 @@ export default function ScorePage() {
           }))
       : scoreType === 'piano'
         ? [
-            { partId: 'right-hand', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
-            { partId: 'left-hand',  clef: 'bass',   measures: leftHandData  ?? [{ events: [] }] },
+            { partId: 'right-hand', clef: 'treble' as const, measures: rightHandData ?? [{ events: [] }] },
+            { partId: 'left-hand',  clef: 'bass'   as const, measures: leftHandData  ?? [{ events: [] }] },
           ]
         : [
-            { partId: 'melody', clef: 'treble', measures: rightHandData ?? [{ events: [] }] },
+            { partId: 'melody', clef: 'treble' as const, measures: rightHandData ?? [{ events: [] }] },
           ];
+    return { metadata, parts };
+  }, [title, subtitle, lyricist, composer, arranger, scoreType, instrumentation, quartetParts, ensembleParts, rightHandData, leftHandData]);
 
+  const handleSave = async () => {
+    const { metadata, parts } = buildScoreData();
     const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
     if (saved) {
       setStoredDataAvailable(true);
     }
   };
+
+  // ファイルに書き出す（.score.json ダウンロード）
+  // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
+  const handleExportFile = () => {
+    const { metadata, parts } = buildScoreData();
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
+    exportScoreToFile(data, title);
+  };
+
+  // ファイルから読み込む（.score.json）
+  const fileImportRef = useRef<HTMLInputElement | null>(null);
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // 同じファイルを再度選んでも onChange が発火するようリセット
+    e.target.value = '';
+    try {
+      const data = await importScoreFromFile(file);
+      // handleLoad と同じロジックで画面へ反映する
+      setTitle(data.metadata.title);
+      setSubtitle(data.metadata.subtitle);
+      setLyricist(data.metadata.lyricist);
+      setComposer(data.metadata.composer);
+      setArranger(data.metadata.arranger);
+      const loadedType = data.scoreType ?? 'single';
+      setKeySignature(normalizeKeySignature(data.keySignature));
+      await setTimeSignature(...normalizeTimeSignature(data.timeSignature));
+      setScoreType(loadedType);
+      setInstrumentation(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
+      setNotationMode(data.notationMode ?? 'concert');
+      if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
+        setMeasuresPerSystem(data.measuresPerSystem);
+      }
+      if (loadedType === 'quartet') {
+        const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
+        setQuartetParts(QUARTET_IDS.map(id =>
+          data.parts.find(p => p.partId === id)?.measures ?? []
+        ));
+        setEnsembleParts([]);
+      } else if (loadedType === 'ensemble') {
+        const loadedInstrumentation = data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType);
+        setEnsembleParts(loadedInstrumentation.parts.map(part =>
+          data.parts.find(p => p.partId === part.id)?.measures ?? []
+        ));
+      } else {
+        const rightPart = data.parts.find(p => p.clef === 'treble') ?? data.parts[0];
+        const leftPart  = data.parts.find(p => p.clef === 'bass');
+        setRightHandData(rightPart?.measures ?? []);
+        setLeftHandData(leftPart?.measures);
+        setEnsembleParts([]);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'ファイルの読み込みに失敗しました');
+    }
+  };
+
+  // 自動保存（編集から 1.5 秒後に localStorage へ保存）
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSaveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    // rightHandData が undefined のうちは初期ロード前なので保存しない
+    if (rightHandData === undefined && scoreType !== 'quartet' && scoreType !== 'ensemble') return;
+
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(async () => {
+      setAutoSaveStatus('saving');
+      const { metadata, parts } = buildScoreData();
+      const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
+      if (saved) {
+        setStoredDataAvailable(true);
+        setAutoSaveStatus('saved');
+        if (autoSaveStatusTimerRef.current) clearTimeout(autoSaveStatusTimerRef.current);
+        // 3 秒後に「保存済み」表示を消す
+        autoSaveStatusTimerRef.current = setTimeout(() => setAutoSaveStatus('idle'), 3000);
+      } else {
+        setAutoSaveStatus('idle');
+      }
+    }, 1500);
+
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない。
+  // 値はタイマー発火時（レンダー後）に読まれるので TDZ の問題はない。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
@@ -2012,12 +2106,22 @@ export default function ScorePage() {
                 onLoad={handleLoad}
                 onLoadSample={handleLoadSample}
                 onSaveCurrentAsSample={handleSaveCurrentAsSample}
+                onExportFile={handleExportFile}
+                onImportFile={() => fileImportRef.current?.click()}
                 isSaving={isSaving}
                 isLoading={isLoading}
                 hasStoredData={storedDataAvailable}
                 canSaveCurrentAsSample={scoreType === 'piano'}
                 hasCustomPianoSample={hasCustomPianoSample}
+                autoSaveStatus={autoSaveStatus}
                 error={error}
+              />
+              <input
+                ref={fileImportRef}
+                type="file"
+                accept=".json"
+                style={{ display: 'none' }}
+                onChange={handleImportFile}
               />
               <button className="ghost" onClick={() => window.print()}>印刷</button>
               <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>

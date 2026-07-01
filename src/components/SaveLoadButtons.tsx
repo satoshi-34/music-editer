@@ -10,11 +10,14 @@ export interface SaveLoadButtonsProps {
   onLoad: () => void;
   onLoadSample?: (sampleId: DemoScoreId) => void;
   onSaveCurrentAsSample?: () => void;
+  onExportFile?: () => void;
+  onImportFile?: () => void;
   isSaving: boolean;
   isLoading: boolean;
   hasStoredData: boolean;
   canSaveCurrentAsSample?: boolean;
   hasCustomPianoSample?: boolean;
+  autoSaveStatus?: 'idle' | 'saving' | 'saved';
   error?: string | null;
 }
 
@@ -23,11 +26,14 @@ export default function SaveLoadButtons({
   onLoad,
   onLoadSample,
   onSaveCurrentAsSample,
+  onExportFile,
+  onImportFile,
   isSaving,
   isLoading,
   hasStoredData,
   canSaveCurrentAsSample = false,
   hasCustomPianoSample = false,
+  autoSaveStatus = 'idle',
   error
 }: SaveLoadButtonsProps) {
   // Only show error if it's a non-empty string (trim whitespace)
@@ -42,11 +48,11 @@ export default function SaveLoadButtons({
         className="ghost save-button"
         onClick={onSave}
         disabled={isSaving || isLoading}
-        title="現在の譜面を保存"
+        title="現在の譜面をブラウザに保存"
       >
         {isSaving ? '保存中...' : '保存'}
       </button>
-      
+
       <button
         className="ghost load-button"
         onClick={onLoad}
@@ -55,6 +61,35 @@ export default function SaveLoadButtons({
       >
         {isLoading ? '読込中...' : '読込'}
       </button>
+
+      {onExportFile && (
+        <button
+          className="ghost"
+          onClick={onExportFile}
+          disabled={isSaving || isLoading}
+          title="譜面をファイル（.score.json）として保存"
+        >
+          ファイル保存
+        </button>
+      )}
+
+      {onImportFile && (
+        <button
+          className="ghost"
+          onClick={onImportFile}
+          disabled={isSaving || isLoading}
+          title="譜面ファイル（.score.json）を開く"
+        >
+          ファイルを開く
+        </button>
+      )}
+
+      {autoSaveStatus === 'saving' && (
+        <span style={{ fontSize: 12, color: '#888' }}>自動保存中…</span>
+      )}
+      {autoSaveStatus === 'saved' && (
+        <span style={{ fontSize: 12, color: '#4caf50' }}>✓ 自動保存済み</span>
+      )}
 
       {onLoadSample && (
         <>
