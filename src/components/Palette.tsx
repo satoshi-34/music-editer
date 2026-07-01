@@ -203,6 +203,8 @@ export default function Palette({
             type="button"
             onClick={() => onChange(selectActive ? ROW1[2] : { mode: 'select' })}
             title="小節選択（クリックで選択 → Cmd+C でコピー → Cmd+V でペースト）"
+
+            aria-label="小節選択（クリックで選択 → Cmd+C でコピー → Cmd+V でペースト）"
             style={btnStyle(selectActive, { fontSize: 15 })}
           >
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -219,6 +221,8 @@ export default function Palette({
                 type="button"
                 onClick={() => onChange(t)}
                 title={`音符 ${label((t as {duration: DurKey}).duration)}`}
+
+                aria-label={`音符 ${label((t as {duration: DurKey}).duration)}`}
                 style={btnStyle(active)}
               >
                 <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={false} />
@@ -230,6 +234,8 @@ export default function Palette({
             type="button"
             onClick={() => onChange(tieActive ? ROW1[2] : TIE_TOOL)}
             title="タイ（隣接する同音符を結ぶ弧線）"
+
+            aria-label="タイ（隣接する同音符を結ぶ弧線）"
             style={btnStyle(tieActive)}
           >
             <svg width="24" height="14" viewBox="0 0 24 14" fill="none">
@@ -245,6 +251,8 @@ export default function Palette({
                 type="button"
                 onClick={() => onChange(active ? ROW1[2] : tool)}
                 title={`${accidentalLabel(tool.accidental)}（選択して音符をクリック）`}
+
+                aria-label={`${accidentalLabel(tool.accidental)}（選択して音符をクリック）`}
                 style={btnStyle(active, { fontSize: 18, fontFamily: '"Times New Roman", serif' })}
               >
                 {accidentalSymbol(tool.accidental)}
@@ -264,6 +272,8 @@ export default function Palette({
                 type="button"
                 onClick={() => onChange(t)}
                 title={`休符 ${label((t as {duration: DurKey}).duration)}`}
+
+                aria-label={`休符 ${label((t as {duration: DurKey}).duration)}`}
                 style={btnStyle(active)}
               >
                 <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={true} />
@@ -279,6 +289,8 @@ export default function Palette({
                 type="button"
                 onClick={() => onChange(active ? ROW1[2] : tool)}
                 title={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
+
+                aria-label={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
                 style={btnStyle(active, { fontSize: 13, fontFamily: '"Times New Roman", serif' })}
               >
                 {repeatSymbol(tool.repeat)}
@@ -294,6 +306,8 @@ export default function Palette({
                 type="button"
                 onClick={() => onChange(active ? ROW1[2] : tool)}
                 title={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
+
+                aria-label={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
                 style={btnStyle(active, { fontSize: 13, fontFamily: '"Times New Roman", serif' })}
               >
                 {endingSymbol(tool.ending)}
@@ -315,6 +329,8 @@ export default function Palette({
           type="button"
           onClick={() => onChange(measureTempoActive ? ROW1[2] : { mode: 'measureTempo' })}
           title="途中テンポ変更（小節をクリックしてBPMを設定）"
+
+          aria-label="途中テンポ変更（小節をクリックしてBPMを設定）"
           style={btnStyle(measureTempoActive, { width: 44 })}
         >
           <svg width="38" height="18" viewBox="0 0 38 18" aria-hidden="true">
@@ -327,6 +343,8 @@ export default function Palette({
           type="button"
           onClick={() => onChange(measureTimeSigActive ? ROW1[2] : { mode: 'measureTimeSig' })}
           title="途中拍子変更（小節をクリックして拍子を選択）"
+
+          aria-label="途中拍子変更（小節をクリックして拍子を選択）"
           style={btnStyle(measureTimeSigActive, { width: 38 })}
         >
           <svg width="30" height="18" viewBox="0 0 30 18" aria-hidden="true">
@@ -345,6 +363,8 @@ export default function Palette({
               type="button"
               onClick={() => onChange(active ? ROW1[2] : tool)}
               title={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
+
+              aria-label={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
               style={btnStyle(active, {
                 minWidth: BUTTON_W,
                 fontSize: tool.dynamic === 'cresc' || tool.dynamic === 'dim' ? 10 : 15,
@@ -369,6 +389,8 @@ export default function Palette({
               type="button"
               onClick={() => onChange(active ? ROW1[2] : tool)}
               title={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
+
+              aria-label={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
               style={btnStyle(active)}
             >
               <ArticulationIcon type={tool.articulation} />
@@ -380,6 +402,8 @@ export default function Palette({
           type="button"
           onClick={() => onChange(graceNoteActive ? ROW1[2] : { mode: 'graceNote' })}
           title="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
+
+          aria-label="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
           style={accentBtnStyle(graceNoteActive)}
         >
           <span style={{ fontSize: 12, lineHeight: 1 }}>𝆒♩</span>
@@ -389,6 +413,8 @@ export default function Palette({
           type="button"
           onClick={() => onChange(trillActive ? ROW1[2] : { mode: 'trill' })}
           title="トリル（対象の音符をクリック。再クリックで解除）"
+
+          aria-label="トリル（対象の音符をクリック。再クリックで解除）"
           style={accentBtnStyle(trillActive)}
         >
           <span style={{ fontSize: 13, lineHeight: 1, fontStyle: 'italic', fontWeight: 'bold' }}>tr</span>
@@ -402,6 +428,8 @@ export default function Palette({
               type="button"
               onClick={() => onChange(active ? ROW1[2] : tool)}
               title={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
+
+              aria-label={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
               style={btnStyle(active, {
                 fontSize: 10,
                 fontFamily: tool.textKind === 'chordSymbol' ? '"Times New Roman", serif' : 'sans-serif',
@@ -417,6 +445,8 @@ export default function Palette({
           type="button"
           onClick={() => onChange(pedalDownActive ? ROW1[2] : { mode: 'pedal', pedalType: 'down' })}
           title="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
+
+          aria-label="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
           style={accentBtnStyle(pedalDownActive)}
         >
           <span style={{ fontSize: 11, lineHeight: 1, fontStyle: 'italic', fontFamily: 'serif' }}>Ped</span>
@@ -425,6 +455,8 @@ export default function Palette({
           type="button"
           onClick={() => onChange(pedalUpActive ? ROW1[2] : { mode: 'pedal', pedalType: 'up' })}
           title="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
+
+          aria-label="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
           style={accentBtnStyle(pedalUpActive)}
         >
           <span style={{ fontSize: 13, lineHeight: 1 }}>✱</span>
@@ -439,6 +471,8 @@ export default function Palette({
               type="button"
               onClick={() => onChange(active ? ROW1[2] : { mode: 'ottava', ottavaType: ot })}
               title={`${lbl}記号を付ける。対象の音符をクリック。再クリックで解除`}
+
+              aria-label={`${lbl}記号を付ける。対象の音符をクリック。再クリックで解除`}
               style={accentBtnStyle(active)}
             >
               <span style={{ fontSize: 10, lineHeight: 1, fontStyle: 'italic', fontFamily: 'serif' }}>{lbl}</span>
@@ -455,6 +489,8 @@ export default function Palette({
               type="button"
               onClick={() => onChange(active ? ROW1[2] : { mode: 'customSymbol', symbolId: def.id })}
               title={`${def.name}（対象の音符をクリック）`}
+
+              aria-label={`${def.name}（対象の音符をクリック）`}
               style={btnStyle(active)}
               dangerouslySetInnerHTML={{ __html: svgStr }}
             />
@@ -465,6 +501,8 @@ export default function Palette({
           type="button"
           onClick={onOpenSymbolEditor}
           title="カスタム記号を新規作成"
+
+          aria-label="カスタム記号を新規作成"
           style={{
             ...btnStyle(false),
             border: '1px dashed #9ca3af',
