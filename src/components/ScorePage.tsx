@@ -191,6 +191,8 @@ export default function ScorePage() {
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
   const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
   const [scoreType, setScoreType] = useState<ScoreType>('single');
+  // 楽譜の表示ウェイト（五線・テキストの太さ）
+  const [displayWeight, setDisplayWeight] = useState<'thin' | 'normal' | 'thick'>('normal');
   const [instrumentation, setInstrumentation] = useState<ScoreInstrumentation>(() => getDefaultInstrumentationForScoreType('single'));
   // 編成譜の表示モード（実音 / 記譜音）。
   // 既定は実音表示で、移調楽器対応をオフにしたまま素直に編集できるようにしている。
@@ -1822,6 +1824,19 @@ export default function ScorePage() {
           {activeToolbarTab === 'score' && (
             <div className="toolbar-section toolbar-score-controls">
               <div className="toolbar-chip-group">
+                <span className="toolbar-group-label">表示ウェイト</span>
+                {(['thin', 'normal', 'thick'] as const).map((w) => (
+                  <button
+                    key={w}
+                    className={`ghost toolbar-chip-button${displayWeight === w ? ' active' : ''}`}
+                    onClick={() => setDisplayWeight(w)}
+                  >
+                    {w === 'thin' ? '細い' : w === 'normal' ? '普通' : '太い'}
+                  </button>
+                ))}
+              </div>
+
+              <div className="toolbar-chip-group">
                 <span className="toolbar-group-label">楽譜の種類</span>
                 <button
                   className={`ghost toolbar-chip-button${scoreType === 'single' ? ' active' : ''}`}
@@ -2250,7 +2265,10 @@ export default function ScorePage() {
                   )}
                 </header>
 
-                <div className="score-area">
+                <div className="score-area" style={{
+                  '--score-stroke-width': displayWeight === 'thin' ? '0.8' : displayWeight === 'thick' ? '1.8' : '1.2',
+                  '--score-text-weight': displayWeight === 'thin' ? '300' : displayWeight === 'thick' ? '700' : '400',
+                } as React.CSSProperties}>
                   {scoreType === 'ensemble' ? (
                     <EnsembleStaff
                       systems={p.systems}

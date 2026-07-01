@@ -906,6 +906,17 @@ button.ghost:disabled {
 .page-number { font-variant-numeric: tabular-nums; }
 
 /* ===== クリック当たり判定（小節全体の矩形） ===== */
+/* 表示ウェイト設定: --score-stroke-width / --score-text-weight を .score-area に注入して反映。
+   SVG プレゼンテーション属性より CSS の方が詳細度が高いため上書きできる。
+   選択ハイライト（rect.vf-hit など）は rect 要素なので path セレクタの影響を受けない。 */
+.score-area svg path,
+.score-area svg line {
+  stroke-width: var(--score-stroke-width, 1.2);
+}
+.score-area svg text {
+  font-weight: var(--score-text-weight, 400);
+}
+
 .vf-hit {
   fill: transparent !important;
   stroke: none !important;
