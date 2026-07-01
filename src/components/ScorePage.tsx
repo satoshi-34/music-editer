@@ -1230,12 +1230,18 @@ export default function ScorePage() {
     }
   };
 
-  // ファイルに書き出す（.score.json ダウンロード）
+  // 保存先ファイルハンドル（File System Access API）。
+  // 取得後は同じファイルへ上書きできるよう ref で保持する。
+  const fileHandleRef = useRef<FileSystemFileHandle | null>(null);
+
+  // ファイルに書き出す（.score.json）
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
-  const handleExportFile = () => {
+  const handleExportFile = async () => {
     const { metadata, parts } = buildScoreData();
     const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
-    exportScoreToFile(data, title);
+    // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
+    const handle = await exportScoreToFile(data, title, fileHandleRef.current);
+    if (handle) fileHandleRef.current = handle;
   };
 
   // ファイルから読み込む（.score.json）
