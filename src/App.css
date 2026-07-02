@@ -14,7 +14,9 @@
 /* 画面全体の基本設定（ツールバー高さぶんの余白を最初から確保） */
 .app-root {
   min-height: 100dvh;
-  background: #0b2a1a url('/paper-bg.png') center/cover scroll;
+  /* 背景画像 paper-bg.png は実在せず常に 404 になっていたため、
+     実際に表示されていたフォールバック色（深緑）の単色指定に整理した */
+  background: #0b2a1a;
   padding-top: var(--toolbar-h); /* ← 重なり解消の肝 */
 }
 
