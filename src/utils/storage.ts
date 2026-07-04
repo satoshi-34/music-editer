@@ -13,7 +13,9 @@ import type {
   DurKey,
   TimeSignature,
   ScoreInstrumentation,
-  InstrumentPartDefinition
+  InstrumentPartDefinition,
+  CustomSymbolDef,
+  ShapePrimitive
 } from '../types/storage';
 import { StorageErrorType } from '../types/storage';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
@@ -22,6 +24,17 @@ import { isArticulationMarkingValue } from './articulationMarkingUtils';
 import { syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
+import {
+  MAX_SYMBOL_DEFS,
+  MAX_SHAPES_PER_SYMBOL,
+  MAX_PATH_POINTS,
+  SYMBOL_COORD_MIN,
+  SYMBOL_COORD_MAX,
+  MIN_SYMBOL_NAME_LENGTH,
+  MAX_SYMBOL_NAME_LENGTH,
+  MIN_SYMBOL_SCALE,
+  MAX_SYMBOL_SCALE
+} from './customSymbolUtils';
 
 // Storage keys
 export const STORAGE_KEYS = {
@@ -90,8 +103,125 @@ function validateNoteEvent(event: any): event is NoteEvent {
         Array.isArray(event.articulations) &&
         event.articulations.every((value: any) => isArticulationMarkingValue(value))
       )
+    ) &&
+    (
+      event.customSymbols === undefined ||
+      (
+        Array.isArray(event.customSymbols) &&
+        event.customSymbols.every((ref: any) => (
+          ref &&
+          typeof ref === 'object' &&
+          typeof ref.symbolId === 'string' &&
+          // scale は配置1件ごとのサイズ調整値。省略可・有限数値・範囲内であることを確認する
+          (
+            ref.scale === undefined ||
+            (isFiniteNumber(ref.scale) && ref.scale >= MIN_SYMBOL_SCALE && ref.scale <= MAX_SYMBOL_SCALE)
+          )
+        ))
+      )
     )
   );
+}
+
+/** 数値かつ有限値であることを確認する（NaN・Infinity・文字列混入を弾く） */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** 座標値が許容範囲（±200）に収まっているかを確認する */
+function isWithinSymbolCoordRange(value: number): boolean {
+  return value >= SYMBOL_COORD_MIN && value <= SYMBOL_COORD_MAX;
+}
+
+/**
+ * 線の太さとして妥当かを確認する（省略可）。
+ * 巨大な値は楽譜全体を塗りつぶす「見た目の破壊」につながるため範囲を制限する。
+ */
+function isValidStrokeWidth(value: unknown): boolean {
+  return value === undefined || (isFiniteNumber(value) && value > 0 && value <= 20);
+}
+
+/**
+ * カスタム記号1個ぶんの図形プリミティブ（ShapePrimitive）を検証する。
+ * ファイル読込で外部から入ってくるデータであり、数値フィールドに文字列などが
+ * 混ざったまま SVG 文字列へ補間されると XSS になりうるため、
+ * kind ごとに全数値フィールドを厳格にチェックする。
+ */
+function validateShapePrimitive(shape: any): shape is ShapePrimitive {
+  if (!isRecord(shape) || typeof shape.kind !== 'string') return false;
+
+  switch (shape.kind) {
+    case 'circle':
+      return (
+        isFiniteNumber(shape.cx) && isWithinSymbolCoordRange(shape.cx) &&
+        isFiniteNumber(shape.cy) && isWithinSymbolCoordRange(shape.cy) &&
+        // 半径は 0 以下だと SVG として描画できないため正の値のみ許容する
+        isFiniteNumber(shape.r) && shape.r > 0 && isWithinSymbolCoordRange(shape.r) &&
+        typeof shape.filled === 'boolean'
+      );
+    case 'line':
+      return (
+        isFiniteNumber(shape.x1) && isWithinSymbolCoordRange(shape.x1) &&
+        isFiniteNumber(shape.y1) && isWithinSymbolCoordRange(shape.y1) &&
+        isFiniteNumber(shape.x2) && isWithinSymbolCoordRange(shape.x2) &&
+        isFiniteNumber(shape.y2) && isWithinSymbolCoordRange(shape.y2) &&
+        isValidStrokeWidth(shape.strokeWidth)
+      );
+    case 'arc':
+      return (
+        isFiniteNumber(shape.cx) && isWithinSymbolCoordRange(shape.cx) &&
+        isFiniteNumber(shape.cy) && isWithinSymbolCoordRange(shape.cy) &&
+        isFiniteNumber(shape.r) && shape.r > 0 && isWithinSymbolCoordRange(shape.r) &&
+        isFiniteNumber(shape.startAngle) &&
+        isFiniteNumber(shape.sweepAngle)
+      );
+    case 'path':
+      return (
+        Array.isArray(shape.points) &&
+        shape.points.length > 0 &&
+        shape.points.length <= MAX_PATH_POINTS &&
+        shape.points.every((p: any) => (
+          isRecord(p) &&
+          isFiniteNumber(p.x) && isWithinSymbolCoordRange(p.x) &&
+          isFiniteNumber(p.y) && isWithinSymbolCoordRange(p.y)
+        )) &&
+        isValidStrokeWidth(shape.strokeWidth)
+      );
+    default:
+      return false;
+  }
+}
+
+/**
+ * ユーザー定義のカスタム記号1件を検証する。
+ * id・name は string で長さ上限内、shapes は図形数上限内かつ全て有効な図形であることを要求する。
+ */
+export function validateCustomSymbolDef(def: any): def is CustomSymbolDef {
+  return (
+    isRecord(def) &&
+    typeof def.id === 'string' &&
+    typeof def.name === 'string' &&
+    def.name.length >= MIN_SYMBOL_NAME_LENGTH &&
+    def.name.length <= MAX_SYMBOL_NAME_LENGTH &&
+    Array.isArray(def.shapes) &&
+    def.shapes.length <= MAX_SHAPES_PER_SYMBOL &&
+    def.shapes.every(validateShapePrimitive)
+  );
+}
+
+/**
+ * カスタム記号ライブラリ全体（customSymbolDefs 配列）を検証する。
+ * フィールドは省略可能なので undefined は許容するが、値がある場合は
+ * 記号数の上限・各記号の妥当性・id の重複を厳格にチェックする。
+ * 不正な要素が1つでもあれば、その記号だけ捨てるのではなくデータ全体を invalid にする
+ * （既存バリデータの「壊れたデータはまるごと弾く」方針に合わせる）。
+ */
+function validateCustomSymbolDefs(defs: unknown): defs is CustomSymbolDef[] | undefined {
+  if (defs === undefined) return true;
+  if (!Array.isArray(defs) || defs.length > MAX_SYMBOL_DEFS) return false;
+  if (!defs.every(validateCustomSymbolDef)) return false;
+  const ids = defs.map((d: CustomSymbolDef) => d.id);
+  return new Set(ids).size === ids.length;
 }
 
 /**
@@ -299,7 +429,8 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     typeof data.systems === 'number' &&
     data.systems > 0 &&
     typeof data.measuresPerSystem === 'number' &&
-    data.measuresPerSystem > 0
+    data.measuresPerSystem > 0 &&
+    validateCustomSymbolDefs(data.customSymbolDefs)
   );
 }
 
@@ -684,7 +815,8 @@ export function createSavedScoreData(
   keySignature: KeySignature = 'C',
   timeSignature: TimeSignature = DEFAULT_TIME_SIGNATURE,
   instrumentation?: ScoreInstrumentation,
-  notationMode?: 'concert' | 'written'
+  notationMode?: 'concert' | 'written',
+  customSymbolDefs?: CustomSymbolDef[]
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -697,7 +829,8 @@ export function createSavedScoreData(
     notationMode,
     parts,
     systems,
-    measuresPerSystem
+    measuresPerSystem,
+    customSymbolDefs
   };
 }
 

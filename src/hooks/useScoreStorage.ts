@@ -15,7 +15,8 @@ import type {
   PartData,
   ScoreType,
   TimeSignature,
-  ScoreInstrumentation
+  ScoreInstrumentation,
+  CustomSymbolDef
 } from '../types/storage';
 import type { KeySignature } from '../utils/noteKeyUtils';
 
@@ -29,7 +30,8 @@ export interface UseScoreStorageReturn {
     keySignature?: KeySignature,
     timeSignature?: TimeSignature,
     instrumentation?: ScoreInstrumentation,
-    notationMode?: 'concert' | 'written'
+    notationMode?: 'concert' | 'written',
+    customSymbolDefs?: CustomSymbolDef[]
   ) => Promise<boolean>;
   loadScore: () => Promise<SavedScoreData | null>;
   hasStoredData: () => boolean;
@@ -61,14 +63,15 @@ export function useScoreStorage(): UseScoreStorageReturn {
     keySignature: KeySignature = 'C',
     timeSignature: TimeSignature = [4, 4],
     instrumentation?: ScoreInstrumentation,
-    notationMode?: 'concert' | 'written'
+    notationMode?: 'concert' | 'written',
+    customSymbolDefs?: CustomSymbolDef[]
   ): Promise<boolean> => {
     setIsSaving(true);
     clearError();
 
     try {
       // Create the saved score data with current timestamp
-      const scoreData = createSavedScoreData(metadata, parts, systems, measuresPerSystem, scoreType, keySignature, timeSignature, instrumentation, notationMode);
+      const scoreData = createSavedScoreData(metadata, parts, systems, measuresPerSystem, scoreType, keySignature, timeSignature, instrumentation, notationMode, customSymbolDefs);
       
       // Attempt to save
       const result = saveScoreData(scoreData);

@@ -10,6 +10,7 @@ import StaffCanvas from './StaffCanvas';
 import PianoStaff from './PianoStaff';
 import QuartetStaff from './QuartetStaff';
 import EnsembleStaff from './EnsembleStaff';
+import SymbolEditor from './SymbolEditor';
 import SaveLoadButtons from './SaveLoadButtons';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
@@ -32,6 +33,7 @@ import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
 import type {
+  CustomSymbolDef,
   InstrumentBracketGroup,
   InstrumentFamily,
   InstrumentPartDefinition,
@@ -202,6 +204,9 @@ export default function ScorePage() {
   const [keySignature, setKeySignature] = useState<KeySignature>('C');
   const [showOffsetPanel, setShowOffsetPanel] = useState(false);
   const [showInstrumentationEditor, setShowInstrumentationEditor] = useState(false);
+  // ユーザーが作成したカスタム記号のライブラリと、エディタモーダルの開閉状態
+  const [customSymbolDefs, setCustomSymbolDefs] = useState<CustomSymbolDef[]>([]);
+  const [showSymbolEditor, setShowSymbolEditor] = useState(false);
   const [instrumentationEditorWindow, setInstrumentationEditorWindow] = useState<Window | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(180);
   const toolbarRef = useRef<HTMLElement | null>(null);
@@ -1224,7 +1229,7 @@ export default function ScorePage() {
 
   const handleSave = async () => {
     const { metadata, parts } = buildScoreData();
-    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
+    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs);
     if (saved) {
       setStoredDataAvailable(true);
     }
@@ -1238,7 +1243,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const handleExportFile = async () => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs);
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
     const handle = await exportScoreToFile(data, title, fileHandleRef.current);
     if (handle) fileHandleRef.current = handle;
@@ -1265,6 +1270,8 @@ export default function ScorePage() {
       setScoreType(loadedType);
       setInstrumentation(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
       setNotationMode(data.notationMode ?? 'concert');
+      // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
+      setCustomSymbolDefs(data.customSymbolDefs ?? []);
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
         setMeasuresPerSystem(data.measuresPerSystem);
       }
@@ -1303,7 +1310,7 @@ export default function ScorePage() {
     autoSaveTimerRef.current = setTimeout(async () => {
       setAutoSaveStatus('saving');
       const { metadata, parts } = buildScoreData();
-      const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode);
+      const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs);
       if (saved) {
         setStoredDataAvailable(true);
         setAutoSaveStatus('saved');
@@ -1321,7 +1328,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない。
   // 値はタイマー発火時（レンダー後）に読まれるので TDZ の問題はない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode]);
+  }, [title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
@@ -1340,6 +1347,8 @@ export default function ScorePage() {
       setInstrumentation(loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
       // 旧データには notationMode が無いので、未指定なら実音表示で開く。
       setNotationMode(loadedData.notationMode ?? 'concert');
+      // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
+      setCustomSymbolDefs(loadedData.customSymbolDefs ?? []);
       if (loadedData.measuresPerSystem && loadedData.measuresPerSystem >= 1 && loadedData.measuresPerSystem <= 8) {
         setMeasuresPerSystem(loadedData.measuresPerSystem);
       }
@@ -1917,7 +1926,13 @@ export default function ScorePage() {
 
           {activeToolbarTab === 'symbols' && (
             <div className="toolbar-section">
-              <Palette value={tool} onChange={setTool} section="symbols" />
+              <Palette
+                value={tool}
+                onChange={setTool}
+                section="symbols"
+                customSymbolDefs={customSymbolDefs}
+                onOpenSymbolEditor={() => setShowSymbolEditor(true)}
+              />
             </div>
           )}
 
@@ -2196,6 +2211,21 @@ export default function ScorePage() {
         </div>
       </header>
 
+      {showSymbolEditor && (
+        <SymbolEditor
+          existingDefs={customSymbolDefs}
+          onSave={(def) => setCustomSymbolDefs(prev => [...prev, def])}
+          onDelete={(symbolId) => {
+            // 記号を削除しても、音符側の customSymbols 参照は掃除しない。
+            // 全パート・全 voice を走査する破壊的変更になるうえ、
+            // 描画側（StaffCanvas）は customSymbolDefs.find() が undefined のとき
+            // 描画をスキップするため、宙ぶらりん参照が残っても安全（設計判断）。
+            setCustomSymbolDefs(prev => prev.filter(d => d.id !== symbolId));
+          }}
+          onClose={() => setShowSymbolEditor(false)}
+        />
+      )}
+
       {scoreType === 'ensemble' && showInstrumentationEditor && instrumentationEditorWindow && !instrumentationEditorWindow.closed && createPortal(
         <section
           id="instrumentation-editor-window"
@@ -2461,6 +2491,7 @@ export default function ScorePage() {
                       onKeySignatureChange={handleKeySignatureChange}
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
+                      customSymbolDefs={customSymbolDefs}
                     />
                   )}
 

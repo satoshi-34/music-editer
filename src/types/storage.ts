@@ -31,7 +31,9 @@ export type ArticulationType = ArticulationMarking;
 export type ShapePrimitive =
   | { kind: 'circle'; cx: number; cy: number; r: number; filled: boolean }
   | { kind: 'line'; x1: number; y1: number; x2: number; y2: number; strokeWidth?: number }
-  | { kind: 'arc'; cx: number; cy: number; r: number; startAngle: number; sweepAngle: number };
+  | { kind: 'arc'; cx: number; cy: number; r: number; startAngle: number; sweepAngle: number }
+  // フリーハンドの1ストローク。points は逐次記録した頂点列（アンカー基準の論理座標）
+  | { kind: 'path'; points: { x: number; y: number }[]; strokeWidth?: number };
 
 /** ユーザーが定義したカスタム記号の定義 */
 export interface CustomSymbolDef {
@@ -92,8 +94,12 @@ export interface NoteEvent {
    * スタッカート＋アクセントのように複数を同時に付けられるため配列で持つ。
    */
   articulations?: ArticulationMarking[];
-  /** この音符に付けるカスタム記号の参照リスト */
-  customSymbols?: { symbolId: string }[];
+  /**
+   * この音符に付けるカスタム記号の参照リスト。
+   * scale は配置1件ごとの拡大縮小率（省略時は等倍 1.0）。
+   * 同じ記号を複数の音符に付けても、音符ごとに別々の大きさにできる。
+   */
+  customSymbols?: { symbolId: string; scale?: number }[];
   /** 歌詞テキスト（音符の下に表示） */
   lyrics?: string;
   /** コード記号（音符の上に表示。例: Am, G7, Dm/F） */

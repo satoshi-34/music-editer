@@ -22,7 +22,13 @@ import {
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import { applyArticulationToEvent } from '../utils/articulationUtils';
-import { applyCustomSymbolToEvent, renderCustomSymbol } from '../utils/customSymbolUtils';
+import {
+  applyCustomSymbolToEvent,
+  renderCustomSymbol,
+  setCustomSymbolScale,
+  MIN_SYMBOL_SCALE,
+  MAX_SYMBOL_SCALE,
+} from '../utils/customSymbolUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
@@ -780,6 +786,17 @@ export default function StaffCanvas({
     overlayY: number;
   } | null>(null);
 
+  // カスタム記号サイズ変更オーバーレイの状態（null のとき非表示）
+  // bpmEditState と同じ「クリックで開く→インライン入力→Enterで確定/Escapeでキャンセル」パターン
+  const [symbolResizeEditState, setSymbolResizeEditState] = useState<{
+    measureAbsoluteIndex: number;  // サイズを変更する音符が属する小節の絶対インデックス
+    eventIndex: number;            // その小節内の音符インデックス
+    symbolId: string;              // サイズを変更するカスタム記号のID
+    currentValue: string;          // 既存のscaleを%表記にした値（初期値として入力欄に表示）
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
   // テキスト要素入力オーバーレイの状態（null のとき非表示）
   const [textEditState, setTextEditState] = useState<{
     kind: TextElementKind;
@@ -1212,7 +1229,7 @@ export default function StaffCanvas({
     const customSymbolEntries: Array<{
       anchorX: number;
       anchorY: number; // noteTopY - 余白
-      symbolIds: string[];
+      symbols: { symbolId: string; scale: number }[];
     }> = [];
     // 途中テンポ変更の描画情報を収集する（各小節の左上に ♩=XXX と表示）
     const bpmMarkingEntries: Array<{ x: number; topY: number; bpm: number }> = [];
@@ -2030,6 +2047,10 @@ export default function StaffCanvas({
             // カスタム記号も既存の音符にのみ付ける。
             return;
           }
+          if ('mode' in tool && tool.mode === 'customSymbolResize') {
+            // カスタム記号のサイズ変更も既存の音符にのみ行う。
+            return;
+          }
           if ('mode' in tool && tool.mode === 'textElement') {
             // テキスト要素も既存の音符にのみ付ける。
             return;
@@ -2256,6 +2277,7 @@ export default function StaffCanvas({
               const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
               const articulationMode = 'mode' in tool && tool.mode === 'articulation' ? tool.articulation : null;
               const customSymbolMode = 'mode' in tool && tool.mode === 'customSymbol' ? tool.symbolId : null;
+              const customSymbolResizeMode = 'mode' in tool && tool.mode === 'customSymbolResize' ? tool.symbolId : null;
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
               const trillMode = 'mode' in tool && tool.mode === 'trill';
@@ -2351,6 +2373,25 @@ export default function StaffCanvas({
                 });
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });
                 playNoteEvent(nextEv);
+                return;
+              }
+              if (customSymbolResizeMode && !safeEvents[j]?.isRest) {
+                // サイズ変更は「その音符に対象記号が既に付いている場合」のみオーバーレイを開く。
+                // 付いていない記号を新規に生やしてしまわないよう、含まれない場合は何もしない。
+                const currentEv = safeEvents[j];
+                const existing = currentEv.customSymbols?.find(s => s.symbolId === customSymbolResizeMode);
+                if (!existing) return;
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                // 内部値は倍率（例: 1.2）、入力欄には%表記（例: "120"）で見せる
+                const currentPercent = Math.round((existing.scale ?? 1) * 100);
+                setSymbolResizeEditState({
+                  measureAbsoluteIndex: absoluteIndex,
+                  eventIndex: j,
+                  symbolId: customSymbolResizeMode,
+                  currentValue: String(currentPercent),
+                  overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
+                  overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
+                });
                 return;
               }
               if (graceNoteMode && !safeEvents[j]?.isRest) {
@@ -2495,6 +2536,7 @@ export default function StaffCanvas({
                 if (dynamicMode) return;
                 if (articulationMode) return;
                 if (customSymbolMode) return;
+                if (customSymbolResizeMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i === 0 &&
                     lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right;
@@ -2572,6 +2614,7 @@ export default function StaffCanvas({
                 if (accidentalMode) return;
                 if (articulationMode) return;
                 if (customSymbolMode) return;
+                if (customSymbolResizeMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsertAt(lx, ly, measureIndex);
               }
@@ -2600,7 +2643,8 @@ export default function StaffCanvas({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 // アーティキュレーションより少し上（-4）に余白を確保
                 anchorY: (bb?.getY?.() ?? stave.getYForLine(0) - 4) - 4,
-                symbolIds: safeEvents[j].customSymbols!.map(s => s.symbolId),
+                // scale は配置1件ごとのサイズ調整値。省略時は等倍(1)として扱う
+                symbols: safeEvents[j].customSymbols!.map(s => ({ symbolId: s.symbolId, scale: s.scale ?? 1 })),
               });
             }
             // テキスト要素の収集（プレースホルダー音符は除く）
@@ -2767,10 +2811,10 @@ export default function StaffCanvas({
       });
 
       // ── カスタム記号を一括描画 ────────────────────────────────────
-      customSymbolEntries.forEach(({ anchorX, anchorY, symbolIds }) => {
-        symbolIds.forEach(id => {
-          const def = customSymbolDefs.find(d => d.id === id);
-          if (def) renderCustomSymbol(def, anchorX, anchorY, svgRoot);
+      customSymbolEntries.forEach(({ anchorX, anchorY, symbols }) => {
+        symbols.forEach(({ symbolId, scale }) => {
+          const def = customSymbolDefs.find(d => d.id === symbolId);
+          if (def) renderCustomSymbol(def, anchorX, anchorY, svgRoot, scale);
         });
       });
 
@@ -3093,6 +3137,30 @@ export default function StaffCanvas({
   }
 
   /**
+   * カスタム記号のサイズ変更を確定する。
+   * 入力値は%表記（例: "120"）なので /100 して倍率に戻し、
+   * MIN_SYMBOL_SCALE〜MAX_SYMBOL_SCALE の範囲にクランプして適用する。
+   * 空欄で確定した場合は等倍（scale=1）にリセットする。
+   */
+  function handleSymbolResizeConfirm(rawText: string) {
+    if (!symbolResizeEditState) return;
+    const { measureAbsoluteIndex, eventIndex, symbolId } = symbolResizeEditState;
+    const trimmed = rawText.trim();
+    const parsedPercent = trimmed === '' ? 100 : parseInt(trimmed, 10);
+    const percent = !isNaN(parsedPercent) ? parsedPercent : 100;
+    const scale = Math.min(MAX_SYMBOL_SCALE, Math.max(MIN_SYMBOL_SCALE, percent / 100));
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      const targetEv = next[measureAbsoluteIndex].events[eventIndex];
+      if (!targetEv) return prev;
+      next[measureAbsoluteIndex].events[eventIndex] = setCustomSymbolScale(targetEv, symbolId, scale);
+      return next;
+    });
+    setSymbolResizeEditState(null);
+  }
+
+  /**
    * テキスト入力を確定する。
    * Enter キーまたはフォーカス外れで呼ばれる。空欄の場合は既存テキストを削除する。
    */
@@ -3224,6 +3292,61 @@ export default function StaffCanvas({
                 handleBpmConfirm(e.target.value);
               }}
             />
+          </div>
+        </div>
+      )}
+      {/* カスタム記号サイズ変更オーバーレイ: サイズ変更ツールで対象記号が付いた音符をクリックすると表示される */}
+      {symbolResizeEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: symbolResizeEditState.overlayX,
+            top: symbolResizeEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #0891b2',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 140,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#0891b2', fontFamily: 'sans-serif' }}>
+            記号サイズ変更（25〜400%、空欄で等倍）
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input
+              // eslint-disable-next-line jsx-a11y/no-autofocus
+              autoFocus
+              type="number"
+              min={25}
+              max={400}
+              defaultValue={symbolResizeEditState.currentValue}
+              placeholder="例: 120"
+              style={{
+                border: 'none',
+                outline: 'none',
+                fontSize: 13,
+                fontFamily: 'sans-serif',
+                width: 70,
+                padding: 2,
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleSymbolResizeConfirm((e.target as HTMLInputElement).value);
+                } else if (e.key === 'Escape') {
+                  setSymbolResizeEditState(null);
+                }
+                e.stopPropagation();
+              }}
+              onBlur={(e) => {
+                handleSymbolResizeConfirm(e.target.value);
+              }}
+            />
+            <span style={{ fontSize: 13, fontFamily: 'sans-serif' }}>%</span>
           </div>
         </div>
       )}

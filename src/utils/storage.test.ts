@@ -1185,4 +1185,437 @@ describe('Storage Foundation Tests', () => {
       ]);
     });
   });
+
+  describe('カスタム記号ライブラリの保存互換とバリデーション', () => {
+    it('customSymbolDefs（circle/line/arc/path 込み）を保存して読み戻せる', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Custom Symbol Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{
+              dur: '4',
+              isRest: false,
+              keys: ['c/4'],
+              customSymbols: [{ symbolId: 'sym_1' }]
+            }]
+          }]
+        }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_1',
+            name: 'テスト記号',
+            shapes: [
+              { kind: 'circle', cx: 0, cy: -4, r: 3, filled: true },
+              { kind: 'line', x1: -5, y1: 0, x2: 5, y2: 0, strokeWidth: 1.5 },
+              { kind: 'arc', cx: 0, cy: 0, r: 6, startAngle: 0, sweepAngle: 180 },
+              { kind: 'path', points: [{ x: 0, y: 0 }, { x: 3, y: -3 }, { x: 6, y: 0 }], strokeWidth: 2 }
+            ]
+          }
+        ]
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.customSymbolDefs).toHaveLength(1);
+      expect(loadResult.data?.customSymbolDefs?.[0].shapes).toHaveLength(4);
+      expect(loadResult.data?.parts[0].measures[0].events[0].customSymbols).toEqual([{ symbolId: 'sym_1' }]);
+    });
+
+    it('customSymbolDefs を省略しても保存・読込できる（後方互換）', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'No Symbol',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.customSymbolDefs).toBeUndefined();
+    });
+
+    it('座標が数値でない図形を含む customSymbolDefs は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Invalid Shape',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_bad',
+            name: '不正記号',
+            shapes: [
+              { kind: 'circle', cx: '><script>alert(1)</script>' as any, cy: 0, r: 3, filled: false }
+            ]
+          }
+        ]
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+      expect(result.error?.type).toBe('corrupted_data');
+    });
+
+    it('座標が範囲(±200)を超える図形を含む customSymbolDefs は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Out Of Range',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_range',
+            name: '範囲外記号',
+            shapes: [
+              { kind: 'circle', cx: 9999, cy: 0, r: 3, filled: false }
+            ]
+          }
+        ]
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+
+    it('半径が0以下の円を含む customSymbolDefs は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Zero Radius',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_zero_r',
+            name: '半径ゼロ記号',
+            shapes: [
+              { kind: 'circle', cx: 0, cy: 0, r: 0, filled: false }
+            ]
+          }
+        ]
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+
+    it('線の太さが極端に大きい図形を含む customSymbolDefs は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Huge Stroke',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_huge_stroke',
+            name: '極太記号',
+            shapes: [
+              // 巨大な線幅は楽譜全体を塗りつぶす見た目の破壊につながるため拒否される
+              { kind: 'line', x1: 0, y1: 0, x2: 5, y2: 0, strokeWidth: 1e9 }
+            ]
+          }
+        ]
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+
+    it('名前が空文字の customSymbolDefs は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Empty Name',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          { id: 'sym_empty', name: '', shapes: [{ kind: 'circle', cx: 0, cy: 0, r: 1, filled: false }] }
+        ]
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+
+    it('id が重複する customSymbolDefs は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Dup Id',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          { id: 'sym_dup', name: 'A', shapes: [{ kind: 'circle', cx: 0, cy: 0, r: 1, filled: false }] },
+          { id: 'sym_dup', name: 'B', shapes: [{ kind: 'circle', cx: 0, cy: 0, r: 1, filled: false }] }
+        ]
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+
+    it('path.points に非有限値を含む customSymbolDefs は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Bad Path',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_badpath',
+            name: '不正パス',
+            shapes: [
+              { kind: 'path', points: [{ x: 0, y: 0 }, { x: 'oops' as any, y: 1 }] }
+            ]
+          }
+        ]
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+
+    it('customSymbols に不正な形式を持つ音符イベントは保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Bad Note Ref',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{
+              dur: '4',
+              isRest: false,
+              keys: ['c/4'],
+              customSymbols: [{ symbolId: 123 } as any]
+            }]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+
+    it('customSymbols の scale 込みで保存して読み戻せる（配置ごとの個別サイズ）', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Symbol Scale Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [
+              {
+                dur: '4',
+                isRest: false,
+                keys: ['c/4'],
+                customSymbols: [{ symbolId: 'sym_1', scale: 1.5 }]
+              },
+              {
+                dur: '4',
+                isRest: false,
+                keys: ['d/4'],
+                // scale 省略時は等倍(1)として扱われる想定（後方互換）
+                customSymbols: [{ symbolId: 'sym_1' }]
+              }
+            ]
+          }]
+        }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [{ id: 'sym_1', name: 'テスト記号', shapes: [{ kind: 'circle', cx: 0, cy: -4, r: 3, filled: true }] }]
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.parts[0].measures[0].events[0].customSymbols).toEqual([
+        { symbolId: 'sym_1', scale: 1.5 }
+      ]);
+      expect(loadResult.data?.parts[0].measures[0].events[1].customSymbols).toEqual([
+        { symbolId: 'sym_1' }
+      ]);
+    });
+
+    it('範囲外(MIN_SYMBOL_SCALE〜MAX_SYMBOL_SCALE外)の scale を持つ customSymbols は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Out Of Range Scale',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{
+              dur: '4',
+              isRest: false,
+              keys: ['c/4'],
+              // MAX_SYMBOL_SCALE(4) を超える scale は不正値として拒否される
+              customSymbols: [{ symbolId: 'sym_1', scale: 999 }]
+            }]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+      expect(result.error?.type).toBe('corrupted_data');
+    });
+
+    it('scale が数値でない customSymbols は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Non Numeric Scale',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{
+              dur: '4',
+              isRest: false,
+              keys: ['c/4'],
+              customSymbols: [{ symbolId: 'sym_1', scale: 'huge' as any }]
+            }]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+  });
 });
