@@ -739,8 +739,9 @@ export default function StaffCanvas({
   // テキスト入力オーバーレイの位置決め用（ref が指す SVG div を内包するラッパー）
   const containerRef = useRef<HTMLDivElement>(null);
   const [score, setScore] = useState<MeasureData[]>(() => {
-    // initialScoreDataが提供されている場合はそれを使用
-    if (initialScoreData && initialScoreData.length > 0) {
+    // initialScoreData が空配列でも、それは「譜面を空にする」という親からの明示的な指示。
+    // length だけで判定すると、新規作成後に内部 state の古い音符が残ってしまう。
+    if (initialScoreData) {
       return initialScoreData;
     }
     // それ以外の場合は、このStaffCanvasが必要とする範囲の空の小節を作成
@@ -933,20 +934,15 @@ export default function StaffCanvas({
 
   // Update score when initialScoreData changes (when loading data)
   useEffect(() => {
-    if (initialScoreData && initialScoreData.length > 0) {
-      // initialScoreDataが提供されている場合、それを使用
-      // ただし、このStaffCanvasが必要とする範囲を確保
+    if (initialScoreData) {
+      // initialScoreData が空配列でも、親が「空の譜面へ戻す」と決めた状態なので同期する。
+      // この StaffCanvas が描画するページ範囲だけは必要なため、不足小節は空で補う。
       const requiredLength = startMeasureIndex + systems * measuresPerSystem;
-      if (initialScoreData.length < requiredLength) {
-        // 不足分を空の小節で埋める
-        const extended = [...initialScoreData];
-        while (extended.length < requiredLength) {
-          extended.push(createEmptyMeasure());
-        }
-        setScore(extended);
-      } else {
-        setScore(initialScoreData);
+      const nextScore = [...initialScoreData];
+      while (nextScore.length < requiredLength) {
+        nextScore.push(createEmptyMeasure());
       }
+      setScore(nextScore);
       setSelected(null); // Clear selection when loading new data
     }
   }, [initialScoreData, startMeasureIndex, systems, measuresPerSystem]);

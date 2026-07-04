@@ -50,7 +50,7 @@ describe('SaveLoadButtons Component Tests', () => {
 
             try {
               // Check save button loading state
-              const saveButton = screen.getByTitle('現在の譜面を保存');
+              const saveButton = screen.getByTitle('現在の譜面をブラウザに保存');
               if (isSaving) {
                 // When saving, button should show "保存中..." and be disabled
                 expect(saveButton).toHaveTextContent('保存中...');
@@ -128,7 +128,7 @@ describe('SaveLoadButtons Component Tests', () => {
 
       render(<SaveLoadButtons {...props} />);
 
-      expect(screen.getByTitle('現在の譜面を保存')).toBeInTheDocument();
+      expect(screen.getByTitle('現在の譜面をブラウザに保存')).toBeInTheDocument();
       expect(screen.getByTitle('保存された譜面を読み込み')).toBeInTheDocument();
     });
 
@@ -155,6 +155,21 @@ describe('SaveLoadButtons Component Tests', () => {
       rerender(<SaveLoadButtons {...propsWithoutData} />);
       const disabledLoadButton = screen.getByTitle('保存されたデータがありません');
       expect(disabledLoadButton).toHaveAttribute('title', '保存されたデータがありません');
+    });
+
+    it('should render a new score button when handler is provided', () => {
+      const props: SaveLoadButtonsProps = {
+        onNewScore: vi.fn(),
+        onSave: vi.fn(),
+        onLoad: vi.fn(),
+        isSaving: false,
+        isLoading: false,
+        hasStoredData: true
+      };
+
+      render(<SaveLoadButtons {...props} />);
+
+      expect(screen.getByTitle('新しい空の譜面を作成')).toHaveTextContent('新規作成');
     });
   });
 });
