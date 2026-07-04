@@ -33,7 +33,9 @@ import {
   MIN_SYMBOL_NAME_LENGTH,
   MAX_SYMBOL_NAME_LENGTH,
   MIN_SYMBOL_SCALE,
-  MAX_SYMBOL_SCALE
+  MAX_SYMBOL_SCALE,
+  MIN_SYMBOL_OFFSET,
+  MAX_SYMBOL_OFFSET
 } from './customSymbolUtils';
 
 // Storage keys
@@ -116,6 +118,15 @@ function validateNoteEvent(event: any): event is NoteEvent {
           (
             ref.scale === undefined ||
             (isFiniteNumber(ref.scale) && ref.scale >= MIN_SYMBOL_SCALE && ref.scale <= MAX_SYMBOL_SCALE)
+          ) &&
+          // offsetX / offsetY は配置1件ごとの位置調整値。省略可・有限数値・範囲内であることを確認する
+          (
+            ref.offsetX === undefined ||
+            (isFiniteNumber(ref.offsetX) && ref.offsetX >= MIN_SYMBOL_OFFSET && ref.offsetX <= MAX_SYMBOL_OFFSET)
+          ) &&
+          (
+            ref.offsetY === undefined ||
+            (isFiniteNumber(ref.offsetY) && ref.offsetY >= MIN_SYMBOL_OFFSET && ref.offsetY <= MAX_SYMBOL_OFFSET)
           )
         ))
       )

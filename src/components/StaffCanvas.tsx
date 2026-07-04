@@ -26,8 +26,11 @@ import {
   applyCustomSymbolToEvent,
   renderCustomSymbol,
   setCustomSymbolScale,
+  setCustomSymbolOffset,
   MIN_SYMBOL_SCALE,
   MAX_SYMBOL_SCALE,
+  MIN_SYMBOL_OFFSET,
+  MAX_SYMBOL_OFFSET,
 } from '../utils/customSymbolUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
@@ -797,6 +800,22 @@ export default function StaffCanvas({
     overlayY: number;
   } | null>(null);
 
+  // カスタム記号位置調整オーバーレイの状態（null のとき非表示）
+  // symbolResizeEditState と全く同じパターン（横・縦の2つの数値入力を持つ点のみ違う）
+  const [symbolOffsetEditState, setSymbolOffsetEditState] = useState<{
+    measureAbsoluteIndex: number;  // 位置を変更する音符が属する小節の絶対インデックス
+    eventIndex: number;            // その小節内の音符インデックス
+    symbolId: string;              // 位置を変更するカスタム記号のID
+    currentX: string;              // 既存のoffsetX（初期値として入力欄に表示。空欄扱いは呼び出し側で0にする）
+    currentY: string;              // 既存のoffsetY（初期値として入力欄に表示）
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+  // 横・縦の2つの入力欄はそれぞれ独立した onBlur/onKeyDown を持つため、
+  // 片方を確定するときにもう片方の最新入力値を読むための参照
+  const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
+  const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
+
   // テキスト要素入力オーバーレイの状態（null のとき非表示）
   const [textEditState, setTextEditState] = useState<{
     kind: TextElementKind;
@@ -1228,8 +1247,8 @@ export default function StaffCanvas({
     // カスタム記号の描画情報を収集する
     const customSymbolEntries: Array<{
       anchorX: number;
-      anchorY: number; // noteTopY - 余白
-      symbols: { symbolId: string; scale: number }[];
+      anchorY: number; // 五線上端基準の統一高さ（音高に依存しない）
+      symbols: { symbolId: string; scale: number; offsetX: number; offsetY: number }[];
     }> = [];
     // 途中テンポ変更の描画情報を収集する（各小節の左上に ♩=XXX と表示）
     const bpmMarkingEntries: Array<{ x: number; topY: number; bpm: number }> = [];
@@ -2051,6 +2070,10 @@ export default function StaffCanvas({
             // カスタム記号のサイズ変更も既存の音符にのみ行う。
             return;
           }
+          if ('mode' in tool && tool.mode === 'customSymbolOffset') {
+            // カスタム記号の位置調整も既存の音符にのみ行う。
+            return;
+          }
           if ('mode' in tool && tool.mode === 'textElement') {
             // テキスト要素も既存の音符にのみ付ける。
             return;
@@ -2278,6 +2301,7 @@ export default function StaffCanvas({
               const articulationMode = 'mode' in tool && tool.mode === 'articulation' ? tool.articulation : null;
               const customSymbolMode = 'mode' in tool && tool.mode === 'customSymbol' ? tool.symbolId : null;
               const customSymbolResizeMode = 'mode' in tool && tool.mode === 'customSymbolResize' ? tool.symbolId : null;
+              const customSymbolOffsetMode = 'mode' in tool && tool.mode === 'customSymbolOffset' ? tool.symbolId : null;
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
               const trillMode = 'mode' in tool && tool.mode === 'trill';
@@ -2389,6 +2413,24 @@ export default function StaffCanvas({
                   eventIndex: j,
                   symbolId: customSymbolResizeMode,
                   currentValue: String(currentPercent),
+                  overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
+                  overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
+                });
+                return;
+              }
+              if (customSymbolOffsetMode && !safeEvents[j]?.isRest) {
+                // 位置調整も「その音符に対象記号が既に付いている場合」のみオーバーレイを開く。
+                // 付いていない記号を新規に生やしてしまわないよう、含まれない場合は何もしない。
+                const currentEv = safeEvents[j];
+                const existing = currentEv.customSymbols?.find(s => s.symbolId === customSymbolOffsetMode);
+                if (!existing) return;
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                setSymbolOffsetEditState({
+                  measureAbsoluteIndex: absoluteIndex,
+                  eventIndex: j,
+                  symbolId: customSymbolOffsetMode,
+                  currentX: String(existing.offsetX ?? 0),
+                  currentY: String(existing.offsetY ?? 0),
                   overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
                   overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
                 });
@@ -2537,6 +2579,7 @@ export default function StaffCanvas({
                 if (articulationMode) return;
                 if (customSymbolMode) return;
                 if (customSymbolResizeMode) return;
+                if (customSymbolOffsetMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i === 0 &&
                     lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right;
@@ -2615,6 +2658,7 @@ export default function StaffCanvas({
                 if (articulationMode) return;
                 if (customSymbolMode) return;
                 if (customSymbolResizeMode) return;
+                if (customSymbolOffsetMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsertAt(lx, ly, measureIndex);
               }
@@ -2641,10 +2685,17 @@ export default function StaffCanvas({
             if (!safeEvents[j]?.__isPlaceholder && !safeEvents[j]?.isRest && safeEvents[j]?.customSymbols?.length) {
               customSymbolEntries.push({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                // アーティキュレーションより少し上（-4）に余白を確保
-                anchorY: (bb?.getY?.() ?? stave.getYForLine(0) - 4) - 4,
-                // scale は配置1件ごとのサイズ調整値。省略時は等倍(1)として扱う
-                symbols: safeEvents[j].customSymbols!.map(s => ({ symbolId: s.symbolId, scale: s.scale ?? 1 })),
+                // 音符の符頭上端ではなく、その段の五線上端を基準にした固定値にする。
+                // これにより音高（音符ごとの上下）に関わらず同じ段の記号は同じ高さに揃う。
+                anchorY: stave.getYForLine(0) - 10,
+                // scale は配置1件ごとのサイズ調整値、offsetX/offsetYは配置1件ごとの位置微調整値。
+                // どちらも省略時は既定値（scale=1, offset=0）として扱う
+                symbols: safeEvents[j].customSymbols!.map(s => ({
+                  symbolId: s.symbolId,
+                  scale: s.scale ?? 1,
+                  offsetX: s.offsetX ?? 0,
+                  offsetY: s.offsetY ?? 0,
+                })),
               });
             }
             // テキスト要素の収集（プレースホルダー音符は除く）
@@ -2858,9 +2909,9 @@ export default function StaffCanvas({
 
     // ── カスタム記号を一括描画 ────────────────────────────────────
     customSymbolEntries.forEach(({ anchorX, anchorY, symbols }) => {
-      symbols.forEach(({ symbolId, scale }) => {
+      symbols.forEach(({ symbolId, scale, offsetX, offsetY }) => {
         const def = customSymbolDefs.find(d => d.id === symbolId);
-        if (def) renderCustomSymbol(def, anchorX, anchorY, svgRoot, scale);
+        if (def) renderCustomSymbol(def, anchorX + offsetX, anchorY + offsetY, svgRoot, scale);
       });
     });
 
@@ -3167,6 +3218,32 @@ export default function StaffCanvas({
   }
 
   /**
+   * カスタム記号の位置調整（横・縦オフセット）を確定する。
+   * 空欄は0として扱い、MIN_SYMBOL_OFFSET〜MAX_SYMBOL_OFFSET の範囲にクランプして適用する。
+   */
+  function handleSymbolOffsetConfirm(rawX: string, rawY: string) {
+    if (!symbolOffsetEditState) return;
+    const { measureAbsoluteIndex, eventIndex, symbolId } = symbolOffsetEditState;
+    const parseOffset = (raw: string) => {
+      const trimmed = raw.trim();
+      const parsed = trimmed === '' ? 0 : parseInt(trimmed, 10);
+      const value = !isNaN(parsed) ? parsed : 0;
+      return Math.min(MAX_SYMBOL_OFFSET, Math.max(MIN_SYMBOL_OFFSET, value));
+    };
+    const offsetX = parseOffset(rawX);
+    const offsetY = parseOffset(rawY);
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      const targetEv = next[measureAbsoluteIndex].events[eventIndex];
+      if (!targetEv) return prev;
+      next[measureAbsoluteIndex].events[eventIndex] = setCustomSymbolOffset(targetEv, symbolId, offsetX, offsetY);
+      return next;
+    });
+    setSymbolOffsetEditState(null);
+  }
+
+  /**
    * テキスト入力を確定する。
    * Enter キーまたはフォーカス外れで呼ばれる。空欄の場合は既存テキストを削除する。
    */
@@ -3353,6 +3430,112 @@ export default function StaffCanvas({
               }}
             />
             <span style={{ fontSize: 13, fontFamily: 'sans-serif' }}>%</span>
+          </div>
+        </div>
+      )}
+      {/* カスタム記号位置調整オーバーレイ: 位置調整ツールで対象記号が付いた音符をクリックすると表示される */}
+      {symbolOffsetEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: symbolOffsetEditState.overlayX,
+            top: symbolOffsetEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #0891b2',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 160,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#0891b2', fontFamily: 'sans-serif' }}>
+            記号位置調整（横・縦は{MIN_SYMBOL_OFFSET}〜{MAX_SYMBOL_OFFSET}px、縦は＋で下・−で上、空欄で0）
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <span style={{ fontSize: 12, fontFamily: 'sans-serif' }}>横</span>
+              <input
+                // eslint-disable-next-line jsx-a11y/no-autofocus
+                autoFocus
+                ref={symbolOffsetXInputRef}
+                type="number"
+                min={MIN_SYMBOL_OFFSET}
+                max={MAX_SYMBOL_OFFSET}
+                defaultValue={symbolOffsetEditState.currentX}
+                placeholder="0"
+                style={{
+                  border: '1px solid #ddd',
+                  outline: 'none',
+                  fontSize: 13,
+                  fontFamily: 'sans-serif',
+                  width: 50,
+                  padding: 2,
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSymbolOffsetConfirm(
+                      (e.target as HTMLInputElement).value,
+                      symbolOffsetYInputRef.current?.value ?? symbolOffsetEditState.currentY
+                    );
+                  } else if (e.key === 'Escape') {
+                    setSymbolOffsetEditState(null);
+                  }
+                  e.stopPropagation();
+                }}
+                onBlur={(e) => {
+                  // 横→縦のように、もう片方の入力欄へフォーカスが移っただけのときは
+                  // 確定してオーバーレイを閉じない（2欄を続けて編集できるようにする）
+                  if (e.relatedTarget === symbolOffsetYInputRef.current) return;
+                  handleSymbolOffsetConfirm(
+                    e.target.value,
+                    symbolOffsetYInputRef.current?.value ?? symbolOffsetEditState.currentY
+                  );
+                }}
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <span style={{ fontSize: 12, fontFamily: 'sans-serif' }}>縦</span>
+              <input
+                ref={symbolOffsetYInputRef}
+                type="number"
+                min={MIN_SYMBOL_OFFSET}
+                max={MAX_SYMBOL_OFFSET}
+                defaultValue={symbolOffsetEditState.currentY}
+                placeholder="0"
+                style={{
+                  border: '1px solid #ddd',
+                  outline: 'none',
+                  fontSize: 13,
+                  fontFamily: 'sans-serif',
+                  width: 50,
+                  padding: 2,
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSymbolOffsetConfirm(
+                      symbolOffsetXInputRef.current?.value ?? symbolOffsetEditState.currentX,
+                      (e.target as HTMLInputElement).value
+                    );
+                  } else if (e.key === 'Escape') {
+                    setSymbolOffsetEditState(null);
+                  }
+                  e.stopPropagation();
+                }}
+                onBlur={(e) => {
+                  // 縦→横のように、もう片方の入力欄へフォーカスが移っただけのときは
+                  // 確定してオーバーレイを閉じない（2欄を続けて編集できるようにする）
+                  if (e.relatedTarget === symbolOffsetXInputRef.current) return;
+                  handleSymbolOffsetConfirm(
+                    symbolOffsetXInputRef.current?.value ?? symbolOffsetEditState.currentX,
+                    e.target.value
+                  );
+                }}
+              />
+            </label>
           </div>
         </div>
       )}

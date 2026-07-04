@@ -97,9 +97,10 @@ export interface NoteEvent {
   /**
    * この音符に付けるカスタム記号の参照リスト。
    * scale は配置1件ごとの拡大縮小率（省略時は等倍 1.0）。
-   * 同じ記号を複数の音符に付けても、音符ごとに別々の大きさにできる。
+   * offsetX / offsetY は配置1件ごとの縦横位置の微調整（省略時は0、単位はSVG論理px）。
+   * 同じ記号を複数の音符に付けても、音符ごとに別々の大きさ・位置にできる。
    */
-  customSymbols?: { symbolId: string; scale?: number }[];
+  customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[];
   /** 歌詞テキスト（音符の下に表示） */
   lyrics?: string;
   /** コード記号（音符の上に表示。例: Am, G7, Dm/F） */

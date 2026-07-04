@@ -267,3 +267,96 @@ export const MAX_SYMBOL_SCALE = 4;
 `src/components/StaffCanvas.tsx` のみ（描画ブロックの移動とコメント追加。ロジック変更なし）。
 ブラウザ実測で記号のDOM要素が 9個→1個 になり、スタッカート等の他オーバーレイも重複しないこと、
 見た目・トグル動作が変わらないことを確認済み。
+
+## 追加機能: 記号の高さ統一と個別位置調整
+
+ユーザー要望「記号は五線の上・音符の上に、基本全部同じ高さで、後から位置調整できるように」。
+現状はアンカーYが**各音符の符頭上端**（音高ごとに上下する）ため、同じ記号でも音符ごとに
+高さが変わる（最初の顔記号スクショで2つが別々の高さに浮いていたのがこれ）。これを
+「五線の上端でそろえる（音高非依存の統一高さ）＋配置ごとの手動オフセット」に変更する。
+
+### ゴール
+- カスタム記号の縦位置は、その段の五線上端を基準にした一定の高さに統一する（音高で上下しない）
+- 段が変われば、その段の五線上端に合わせる（段内は統一、段ごとに各五線基準）
+- 配置1件ごとに縦・横の微調整オフセットを後から設定できる（サイズ変更と同じインライン入力）
+
+### 非ゴール
+- ドラッグでの位置調整（今回はインライン数値入力のみ。矢印キー方式も採らない）
+- ピアノ大譜表側の対応（従来どおり単旋律譜のみ）
+
+### データモデル（storage.ts）
+`NoteEvent.customSymbols` の要素に `offsetX?` / `offsetY?` を追加（省略可、既定0、単位はSVG論理px）。
+
+```ts
+customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[];
+```
+
+`customSymbolUtils.ts` に上限定数を追加（他の上限定数と同じ場所）。
+```ts
+export const MIN_SYMBOL_OFFSET = -100;
+export const MAX_SYMBOL_OFFSET = 100;
+```
+
+### 描画（StaffCanvas.tsx）
+- アンカーY統一: `customSymbolEntries.push` の `anchorY` を
+  `(bb?.getY?.() ?? stave.getYForLine(0) - 4) - 4`（音符の符頭上端基準）から
+  **五線上端基準の固定値** `stave.getYForLine(0) - 10`（マージンはブラウザ確認で微調整可）へ変更。
+  これで音高に依存せず同じ段の記号は同じ高さになる
+- 収集を `symbols: { symbolId; scale; offsetX; offsetY }[]`（`s.offsetX ?? 0` / `s.offsetY ?? 0`）に拡張
+- 描画時に `renderCustomSymbol(def, anchorX + offsetX, anchorY + offsetY, svgRoot, scale)` を渡す
+  （`renderCustomSymbol` のシグネチャは変更不要。呼び出し側でオフセットを加算する）
+
+### 操作UI（位置調整モード）
+サイズ変更（`customSymbolResize` / `symbolResizeEditState`）と同じパターンを踏襲する。
+1. `Tool` 型（Palette.tsx）に `{ mode: 'customSymbolOffset'; symbolId: string }` を追加
+2. Palette: 各カスタム記号の「⤢」ボタンの隣に「✥」位置調整ボタンを追加し、
+   クリックで `onChange({ mode: 'customSymbolOffset', symbolId: def.id })`
+   （title/aria-labelは「◯◯の位置を調整（対象の音符をクリック）」）
+3. StaffCanvas: `bpmEditState` 系と同型の `symbolOffsetEditState`
+   （`{ measureAbsoluteIndex, eventIndex, symbolId, currentX: string, currentY: string, overlayX, overlayY }`）を追加。
+   - `tool.mode === 'customSymbolOffset'` のとき、対象記号が付いた音符クリックでのみオーバーレイを開く
+     （付いていなければ何もしない）
+   - オーバーレイは「横」「縦」の2つの数値入力（px）。既存 offset を初期値表示。
+     `MIN_SYMBOL_OFFSET`〜`MAX_SYMBOL_OFFSET` にクランプ。**縦は＋で下・−で上**（SVG座標系）としてラベルに明記
+   - Enterで確定・Escapeでキャンセル・blurで確定（サイズ変更と同じ）
+   - 空欄は0として扱う
+4. `customSymbolUtils.ts` に `setCustomSymbolOffset(event, symbolId, offsetX, offsetY)` を追加
+   （対象 symbolId が存在する場合のみ更新しクランプ。存在しなければ元の event をそのまま返す）
+5. StaffCanvas の「休符クリック early-return」「セル外クリック early-return」の
+   `customSymbolResizeMode` ガードと同じ場所に `customSymbolOffsetMode` ガードを追加
+
+### バリデーション（storage.ts）
+`validateNoteEvent` の `customSymbols` チェックに `offsetX` / `offsetY`
+（各省略可・有限数値・`MIN_SYMBOL_OFFSET`〜`MAX_SYMBOL_OFFSET` の範囲）の検査を追加。
+
+### 影響範囲
+| ファイル | 変更内容 |
+|---|---|
+| `src/types/storage.ts` | `customSymbols` 要素に `offsetX?`/`offsetY?` を追加 |
+| `src/utils/customSymbolUtils.ts` | `MIN/MAX_SYMBOL_OFFSET` 定数、`setCustomSymbolOffset` 新設 |
+| `src/utils/storage.ts` | `customSymbols` の offset バリデーション追加 |
+| `src/components/Palette.tsx` | 記号ごとに「✥」位置調整ボタンを追加、`customSymbolOffset` モード |
+| `src/components/StaffCanvas.tsx` | アンカーY統一、offset収集・描画、`symbolOffsetEditState` とオーバーレイ |
+
+### 既知のリスクと判断
+1. **既存配置の高さが変わる**: 音符追従→五線上端統一に変わるため、既存譜面の記号の見た目高さが変化する。これは要望どおりの意図的変更。offsetは既定0で後方互換
+2. **高い音（上加線）での近接**: 統一高さだと高音符と近づくことがあるが、手動オフセットで回避する設計（推奨案の想定内）
+3. **縦の符号方向**: SVGは下が＋。ユーザー混乱を避けるため入力欄ラベルに「＋で下・−で上」を明記
+
+### 実装メモ（記号の高さ統一と個別位置調整・実装完了後の追記）
+
+上記設計に沿って実装済み。主な実装ファイルと要点は以下の通り（`customSymbolResize` / `symbolResizeEditState` と同じパターンで実装した「双子」機能）。
+
+- `src/types/storage.ts`: `NoteEvent.customSymbols` の要素に `offsetX?: number` / `offsetY?: number` を追加（省略可、既定0、単位はSVG論理px）
+- `src/utils/customSymbolUtils.ts`: `MIN_SYMBOL_OFFSET`(-100) / `MAX_SYMBOL_OFFSET`(100) を他の上限定数と同じ場所に追加。新規 `setCustomSymbolOffset(event, symbolId, offsetX, offsetY)` を追加（`setCustomSymbolScale` と同じ作法で、対象 symbolId が存在する場合のみ offsetX/offsetY を更新しクランプ。存在しなければ元の event をそのまま返す）
+- `src/components/StaffCanvas.tsx`:
+  - `customSymbolEntries.push` の `anchorY` を `(bb?.getY?.() ?? stave.getYForLine(0) - 4) - 4`（音符の符頭上端基準）から `stave.getYForLine(0) - 10`（五線上端基準の固定値）へ変更し、音高に依存せず同じ段の記号が同じ高さになるようにした
+  - 収集を `symbols: { symbolId; scale; offsetX; offsetY }[]`（`s.offsetX ?? 0` / `s.offsetY ?? 0`）に拡張し、描画ループを `renderCustomSymbol(def, anchorX + offsetX, anchorY + offsetY, svgRoot, scale)` に変更（`renderCustomSymbol` のシグネチャは変更なし）
+  - `Tool` 型（`Palette.tsx`）に `{ mode: 'customSymbolOffset'; symbolId: string }` を追加
+  - `symbolResizeEditState` と同型の `symbolOffsetEditState`（`{ measureAbsoluteIndex, eventIndex, symbolId, currentX, currentY, overlayX, overlayY }`）を追加。対象記号が付いた音符クリックでのみオーバーレイを開く（付いていない場合・休符・セル外クリックは何もしない。`customSymbolResizeMode` ガードがある全箇所に `customSymbolOffsetMode` ガードを追加）
+  - オーバーレイは「横」「縦」の2つの数値入力（px）。既存 offsetX/offsetY を初期値表示。MIN_SYMBOL_OFFSET〜MAX_SYMBOL_OFFSET にクランプ。縦は＋で下・−で上とラベルに明記。空欄は0扱い。Enter確定・Escapeキャンセル・blur確定（横・縦それぞれ独立した入力なので、片方を確定する際にもう片方の最新値を参照できるよう `useRef` で相互参照する）
+  - 確定時に `handleSymbolOffsetConfirm` から `setCustomSymbolOffset` を `setScore` 経由で適用
+- `src/components/Palette.tsx`: 各カスタム記号の「⤢」ボタンの隣に「✥」位置調整ボタンを追加。クリックで `onChange({ mode: 'customSymbolOffset', symbolId: def.id })`。title/aria-labelは「◯◯の位置を調整（対象の音符をクリック）」。`selectedCustomSymbolOffsetId` を用意してアクティブ表示
+- `src/utils/storage.ts`: `validateNoteEvent` の `customSymbols` チェックに `offsetX` / `offsetY`（各省略可・有限数値・MIN_SYMBOL_OFFSET〜MAX_SYMBOL_OFFSET範囲内）の検査を追加
+- テスト: `customSymbolUtils.test.ts` に `setCustomSymbolOffset`（更新／存在しないID無変更／クランプ上下限）のテストを追加。`storage.test.ts` に offset込み保存→読込往復・範囲外offset拒否のテストを追加
+- ブラウザ確認: 開発サーバー上でカスタム記号を新規作成→音符へ付与→位置調整ツールで該当音符をクリック→オーバーレイに初期値0/0が表示されることを確認→横15・縦30を入力してEnter確定→SVG上の記号座標が実際に (+15, +30) 移動していることを確認→再度同じ音符をクリックすると保存済みの15/30が初期値として表示されることを確認→Escapeキーでオーバーレイがキャンセルされることを確認。コンソールエラーなし

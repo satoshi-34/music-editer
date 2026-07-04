@@ -28,6 +28,12 @@ export const MAX_SYMBOL_NAME_LENGTH = 30;
  */
 export const MIN_SYMBOL_SCALE = 0.25;
 export const MAX_SYMBOL_SCALE = 4;
+/**
+ * 音符への配置1件ごとの記号位置（offsetX / offsetY）として許容する範囲。
+ * アンカー座標（五線上端基準の統一高さ）からの手動ズレ量の上下限。単位はSVG論理px。
+ */
+export const MIN_SYMBOL_OFFSET = -100;
+export const MAX_SYMBOL_OFFSET = 100;
 
 /** 音符イベントにカスタム記号をトグル（付け外し）する */
 export function applyCustomSymbolToEvent(event: NoteEvent, symbolId: string): NoteEvent {
@@ -51,6 +57,28 @@ export function setCustomSymbolScale(event: NoteEvent, symbolId: string, scale: 
   if (!current || !current.some(s => s.symbolId === symbolId)) return event;
   const clamped = clampNumber(scale, MIN_SYMBOL_SCALE, MAX_SYMBOL_SCALE);
   const next = current.map(s => (s.symbolId === symbolId ? { ...s, scale: clamped } : s));
+  return { ...event, customSymbols: next };
+}
+
+/**
+ * 音符に既に付いているカスタム記号1件の位置（offsetX / offsetY）を変更する。
+ * setCustomSymbolScale と同じ考え方で、位置調整は「すでに付いている記号」に対してのみ
+ * 意味を持つため、指定した symbolId が customSymbols に存在しない場合は
+ * 何もせず元の event をそのまま返す（誤って新規付与してしまう事故を防ぐ）。
+ */
+export function setCustomSymbolOffset(
+  event: NoteEvent,
+  symbolId: string,
+  offsetX: number,
+  offsetY: number,
+): NoteEvent {
+  const current = event.customSymbols;
+  if (!current || !current.some(s => s.symbolId === symbolId)) return event;
+  const clampedX = clampNumber(offsetX, MIN_SYMBOL_OFFSET, MAX_SYMBOL_OFFSET);
+  const clampedY = clampNumber(offsetY, MIN_SYMBOL_OFFSET, MAX_SYMBOL_OFFSET);
+  const next = current.map(s => (
+    s.symbolId === symbolId ? { ...s, offsetX: clampedX, offsetY: clampedY } : s
+  ));
   return { ...event, customSymbols: next };
 }
 

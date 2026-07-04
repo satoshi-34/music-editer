@@ -7,10 +7,13 @@ import {
   applyCustomSymbolToEvent,
   capPointCount,
   fitArcFromDragPoints,
+  MAX_SYMBOL_OFFSET,
   MAX_SYMBOL_SCALE,
+  MIN_SYMBOL_OFFSET,
   MIN_SYMBOL_SCALE,
   pathPointsToD,
   renderCustomSymbol,
+  setCustomSymbolOffset,
   setCustomSymbolScale,
   simplifyPoints,
   symbolDefToPreviewSvg,
@@ -92,6 +95,51 @@ describe('setCustomSymbolScale', () => {
     const event = makeNoteEvent({ customSymbols: [{ symbolId: 'sym_1' }] });
     const next = setCustomSymbolScale(event, 'sym_1', 0.001);
     expect(next.customSymbols?.[0].scale).toBe(MIN_SYMBOL_SCALE);
+  });
+});
+
+describe('setCustomSymbolOffset', () => {
+  it('既に付与済みの symbolId の offsetX/offsetY を更新する', () => {
+    const event = makeNoteEvent({ customSymbols: [{ symbolId: 'sym_1' }] });
+    const next = setCustomSymbolOffset(event, 'sym_1', 10, -5);
+    expect(next.customSymbols).toEqual([{ symbolId: 'sym_1', offsetX: 10, offsetY: -5 }]);
+  });
+
+  it('複数記号のうち対象の symbolId だけ offset を更新し、他は変更しない', () => {
+    const event = makeNoteEvent({
+      customSymbols: [{ symbolId: 'sym_1', offsetX: 3, offsetY: 4 }, { symbolId: 'sym_2' }],
+    });
+    const next = setCustomSymbolOffset(event, 'sym_2', 1, 2);
+    expect(next.customSymbols).toEqual([
+      { symbolId: 'sym_1', offsetX: 3, offsetY: 4 },
+      { symbolId: 'sym_2', offsetX: 1, offsetY: 2 },
+    ]);
+  });
+
+  it('存在しない symbolId を指定した場合は元の event をそのまま返す', () => {
+    const event = makeNoteEvent({ customSymbols: [{ symbolId: 'sym_1' }] });
+    const next = setCustomSymbolOffset(event, 'sym_unknown', 10, 10);
+    expect(next).toBe(event);
+  });
+
+  it('customSymbols が未設定の場合も元の event をそのまま返す', () => {
+    const event = makeNoteEvent();
+    const next = setCustomSymbolOffset(event, 'sym_1', 10, 10);
+    expect(next).toBe(event);
+  });
+
+  it('MAX_SYMBOL_OFFSET を超える値は上限にクランプされる', () => {
+    const event = makeNoteEvent({ customSymbols: [{ symbolId: 'sym_1' }] });
+    const next = setCustomSymbolOffset(event, 'sym_1', 9999, 9999);
+    expect(next.customSymbols?.[0].offsetX).toBe(MAX_SYMBOL_OFFSET);
+    expect(next.customSymbols?.[0].offsetY).toBe(MAX_SYMBOL_OFFSET);
+  });
+
+  it('MIN_SYMBOL_OFFSET を下回る値は下限にクランプされる', () => {
+    const event = makeNoteEvent({ customSymbols: [{ symbolId: 'sym_1' }] });
+    const next = setCustomSymbolOffset(event, 'sym_1', -9999, -9999);
+    expect(next.customSymbols?.[0].offsetX).toBe(MIN_SYMBOL_OFFSET);
+    expect(next.customSymbols?.[0].offsetY).toBe(MIN_SYMBOL_OFFSET);
   });
 });
 

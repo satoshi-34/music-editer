@@ -49,6 +49,7 @@ export type Tool =
   | { mode: 'articulation'; articulation: ArticulationType }  // アーティキュレーション記号を付けるモード
   | { mode: 'customSymbol'; symbolId: string }               // カスタム記号を付けるモード
   | { mode: 'customSymbolResize'; symbolId: string }         // カスタム記号のサイズを変更するモード（対象の音符をクリック）
+  | { mode: 'customSymbolOffset'; symbolId: string }         // カスタム記号の位置を調整するモード（対象の音符をクリック）
   | { mode: 'textElement'; textKind: TextElementKind }      // テキスト要素（歌詞・コード・テンポ・発想標語）を付けるモード
   | { mode: 'measureTempo' }                                // 小節単位のテンポ変更モード
   | { mode: 'measureTimeSig' }                             // 小節単位の拍子変更モード
@@ -181,6 +182,7 @@ export default function Palette({
   const selectedArticulation = 'mode' in value && value.mode === 'articulation' ? value.articulation : null;
   const selectedCustomSymbolId = 'mode' in value && value.mode === 'customSymbol' ? value.symbolId : null;
   const selectedCustomSymbolResizeId = 'mode' in value && value.mode === 'customSymbolResize' ? value.symbolId : null;
+  const selectedCustomSymbolOffsetId = 'mode' in value && value.mode === 'customSymbolOffset' ? value.symbolId : null;
   const selectedTextKind = 'mode' in value && value.mode === 'textElement' ? value.textKind : null;
   const measureTempoActive = 'mode' in value && value.mode === 'measureTempo';
   const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
@@ -485,6 +487,7 @@ export default function Palette({
         {customSymbolDefs.map((def) => {
           const active = selectedCustomSymbolId === def.id;
           const resizeActive = selectedCustomSymbolResizeId === def.id;
+          const offsetActive = selectedCustomSymbolOffsetId === def.id;
           const svgStr = symbolDefToPreviewSvg(def, 22);
           return (
             <div key={def.id} style={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -506,6 +509,16 @@ export default function Palette({
                 style={btnStyle(resizeActive, { width: 20, fontSize: 11, color: '#6b7280' })}
               >
                 ⤢
+              </button>
+              {/* 位置調整ボタン：クリック後に対象の音符をクリックすると、その配置だけの縦横位置を微調整できる */}
+              <button
+                type="button"
+                onClick={() => onChange(offsetActive ? ROW1[2] : { mode: 'customSymbolOffset', symbolId: def.id })}
+                title={`${def.name}の位置を調整（対象の音符をクリック）`}
+                aria-label={`${def.name}の位置を調整（対象の音符をクリック）`}
+                style={btnStyle(offsetActive, { width: 20, fontSize: 11, color: '#6b7280' })}
+              >
+                ✥
               </button>
             </div>
           );

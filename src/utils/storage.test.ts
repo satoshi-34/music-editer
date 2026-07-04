@@ -1617,5 +1617,89 @@ describe('Storage Foundation Tests', () => {
       const result = saveScoreData(data);
       expect(result.success).toBe(false);
     });
+
+    it('customSymbols の offsetX/offsetY 込みで保存して読み戻せる（配置ごとの個別位置調整）', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Symbol Offset Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [
+              {
+                dur: '4',
+                isRest: false,
+                keys: ['c/4'],
+                customSymbols: [{ symbolId: 'sym_1', offsetX: 10, offsetY: -20 }]
+              },
+              {
+                dur: '4',
+                isRest: false,
+                keys: ['d/4'],
+                // offset 省略時は0として扱われる想定（後方互換）
+                customSymbols: [{ symbolId: 'sym_1' }]
+              }
+            ]
+          }]
+        }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [{ id: 'sym_1', name: 'テスト記号', shapes: [{ kind: 'circle', cx: 0, cy: -4, r: 3, filled: true }] }]
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.parts[0].measures[0].events[0].customSymbols).toEqual([
+        { symbolId: 'sym_1', offsetX: 10, offsetY: -20 }
+      ]);
+      expect(loadResult.data?.parts[0].measures[0].events[1].customSymbols).toEqual([
+        { symbolId: 'sym_1' }
+      ]);
+    });
+
+    it('範囲外(MIN_SYMBOL_OFFSET〜MAX_SYMBOL_OFFSET外)の offset を持つ customSymbols は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Out Of Range Offset',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{
+              dur: '4',
+              isRest: false,
+              keys: ['c/4'],
+              // MAX_SYMBOL_OFFSET(100) を超える offsetX は不正値として拒否される
+              customSymbols: [{ symbolId: 'sym_1', offsetX: 9999, offsetY: 0 }]
+            }]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+      expect(result.error?.type).toBe('corrupted_data');
+    });
   });
 });
