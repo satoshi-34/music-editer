@@ -2719,239 +2719,6 @@ export default function StaffCanvas({
         x += w;
       }
 
-      dynamicTextEntries.forEach(({ anchorX, baseY, markings }) => {
-        const orderedMarkings = [...markings].sort((left, right) => {
-          const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
-          const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
-          return leftPriority - rightPriority;
-        });
-        orderedMarkings.forEach((marking, index) => {
-          const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          text.textContent = formatDynamicMarking(marking);
-          text.setAttribute('x', String(anchorX));
-          text.setAttribute('y', String(baseY + index * 14));
-          text.setAttribute('text-anchor', 'middle');
-          text.setAttribute('fill', '#1f2937');
-          text.setAttribute('font-family', '"Times New Roman", serif');
-          text.setAttribute('font-size', marking.value === 'cresc' || marking.value === 'dim' ? '12' : '16');
-          text.setAttribute('font-style', 'italic');
-          text.setAttribute('pointer-events', 'none');
-          svgRoot.appendChild(text);
-        });
-      });
-
-      // ── アーティキュレーション記号を一括描画 ──────────────────────
-      articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings }) => {
-        // フェルマータ以外は noteTopY の上に重ならないよう積み上げる
-        let aboveOffset = 0;
-        // ArticulationMarking は文字列型なので、そのまま type として使う
-        markings.forEach((type) => {
-          const ns = 'http://www.w3.org/2000/svg';
-          if (type === 'fermata') {
-            // フェルマータは五線上端より上に配置する（符頭位置に依存しない）
-            const baseY = Math.min(staveTopY, noteTopY) - 14;
-            // 半円弧（下が開いた椀形）
-            const arc = document.createElementNS(ns, 'path');
-            arc.setAttribute('d', `M ${anchorX - 11} ${baseY} A 11 9 0 0 1 ${anchorX + 11} ${baseY}`);
-            arc.setAttribute('stroke', '#1f2937');
-            arc.setAttribute('stroke-width', '1.6');
-            arc.setAttribute('stroke-linecap', 'round');
-            arc.setAttribute('fill', 'none');
-            arc.setAttribute('pointer-events', 'none');
-            svgRoot.appendChild(arc);
-            // 中心の点（弧の内側）
-            const dot = document.createElementNS(ns, 'circle');
-            dot.setAttribute('cx', String(anchorX));
-            dot.setAttribute('cy', String(baseY - 4));
-            dot.setAttribute('r', '2.5');
-            dot.setAttribute('fill', '#1f2937');
-            dot.setAttribute('pointer-events', 'none');
-            svgRoot.appendChild(dot);
-          } else if (type === 'staccato') {
-            // スタッカート: 符頭上方に小さな黒丸
-            const cy = noteTopY - 6 - aboveOffset;
-            const dot = document.createElementNS(ns, 'circle');
-            dot.setAttribute('cx', String(anchorX));
-            dot.setAttribute('cy', String(cy));
-            dot.setAttribute('r', '2.5');
-            dot.setAttribute('fill', '#1f2937');
-            dot.setAttribute('pointer-events', 'none');
-            svgRoot.appendChild(dot);
-            aboveOffset += 10;
-          } else if (type === 'accent') {
-            // アクセント: 下向きの楔形（「>」を90°回した形）
-            const tipY = noteTopY - 5 - aboveOffset;
-            const wingY = tipY - 9;
-            const path = document.createElementNS(ns, 'path');
-            path.setAttribute('d', `M ${anchorX - 10} ${wingY} L ${anchorX} ${tipY} L ${anchorX + 10} ${wingY}`);
-            path.setAttribute('stroke', '#1f2937');
-            path.setAttribute('stroke-width', '1.6');
-            path.setAttribute('stroke-linecap', 'round');
-            path.setAttribute('stroke-linejoin', 'round');
-            path.setAttribute('fill', 'none');
-            path.setAttribute('pointer-events', 'none');
-            svgRoot.appendChild(path);
-            aboveOffset += 14;
-          } else if (type === 'tenuto') {
-            // テヌート: 符頭上方に水平線
-            const lineY = noteTopY - 6 - aboveOffset;
-            const line = document.createElementNS(ns, 'line');
-            line.setAttribute('x1', String(anchorX - 9));
-            line.setAttribute('y1', String(lineY));
-            line.setAttribute('x2', String(anchorX + 9));
-            line.setAttribute('y2', String(lineY));
-            line.setAttribute('stroke', '#1f2937');
-            line.setAttribute('stroke-width', '2.2');
-            line.setAttribute('stroke-linecap', 'round');
-            line.setAttribute('pointer-events', 'none');
-            svgRoot.appendChild(line);
-            aboveOffset += 10;
-          }
-        });
-      });
-
-      // ── カスタム記号を一括描画 ────────────────────────────────────
-      customSymbolEntries.forEach(({ anchorX, anchorY, symbols }) => {
-        symbols.forEach(({ symbolId, scale }) => {
-          const def = customSymbolDefs.find(d => d.id === symbolId);
-          if (def) renderCustomSymbol(def, anchorX, anchorY, svgRoot, scale);
-        });
-      });
-
-      // ── 途中テンポ変更マーキングを一括描画 ──────────────────────
-      // 各小節の左端上方に「♩=XXX」と赤みがかったテキストで表示する。
-      // 五線上端より 36px 上に配置して、コード記号・テンポ表記テキストと重ならないようにする。
-      bpmMarkingEntries.forEach(({ x, topY, bpm }) => {
-        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        el.textContent = `♩=${bpm}`;
-        el.setAttribute('x', String(x + 2));
-        el.setAttribute('y', String(topY - 36));
-        el.setAttribute('fill', '#b45309');  // 琥珀色で他の記号と区別しやすくする
-        el.setAttribute('font-family', '"Times New Roman", serif');
-        el.setAttribute('font-size', '12');
-        el.setAttribute('font-weight', 'bold');
-        el.setAttribute('pointer-events', 'none');
-        svgRoot.appendChild(el);
-      });
-
-      // ── テキスト要素を一括描画 ───────────────────────────────────
-      // コード記号: 五線上端より 8px 上（ト音記号・拍子記号と重なりにくい高さ）
-      chordSymbolEntries.forEach(({ anchorX, topY, text }) => {
-        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        el.textContent = text;
-        el.setAttribute('x', String(anchorX));
-        el.setAttribute('y', String(topY - 8));
-        el.setAttribute('text-anchor', 'middle');
-        el.setAttribute('fill', '#1f2937');
-        el.setAttribute('font-family', '"Times New Roman", serif');
-        el.setAttribute('font-size', '12');
-        el.setAttribute('pointer-events', 'none');
-        svgRoot.appendChild(el);
-      });
-
-      // テンポ表記: コード記号よりさらに 16px 上（最も優先度が高く目立つ場所）
-      tempoMarkingEntries.forEach(({ anchorX, topY, text }) => {
-        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        el.textContent = text;
-        el.setAttribute('x', String(anchorX));
-        el.setAttribute('y', String(topY - 24));
-        el.setAttribute('text-anchor', 'middle');
-        el.setAttribute('fill', '#1f2937');
-        el.setAttribute('font-family', '"Times New Roman", serif');
-        el.setAttribute('font-size', '12');
-        el.setAttribute('font-style', 'italic');
-        el.setAttribute('pointer-events', 'none');
-        svgRoot.appendChild(el);
-      });
-
-      // 発想標語: 強弱記号の下（botY + 40）に斜体で表示
-      expressionMarkingEntries.forEach(({ anchorX, botY, text }) => {
-        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        el.textContent = text;
-        el.setAttribute('x', String(anchorX));
-        el.setAttribute('y', String(botY + 40));
-        el.setAttribute('text-anchor', 'middle');
-        el.setAttribute('fill', '#1f2937');
-        el.setAttribute('font-family', '"Times New Roman", serif');
-        el.setAttribute('font-size', '11');
-        el.setAttribute('font-style', 'italic');
-        el.setAttribute('pointer-events', 'none');
-        svgRoot.appendChild(el);
-      });
-
-      // 歌詞: 発想標語のさらに下（botY + 54）に通常体で表示
-      lyricsEntries.forEach(({ anchorX, botY, text }) => {
-        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        el.textContent = text;
-        el.setAttribute('x', String(anchorX));
-        el.setAttribute('y', String(botY + 54));
-        el.setAttribute('text-anchor', 'middle');
-        el.setAttribute('fill', '#374151');
-        el.setAttribute('font-family', 'sans-serif');
-        el.setAttribute('font-size', '11');
-        el.setAttribute('pointer-events', 'none');
-        svgRoot.appendChild(el);
-      });
-
-      // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
-      // LINE_SPACING ≈ 13 SVG単位なので +25 ≈ 2段分。標準的な記譜位置。
-      // 'down' → イタリック体の "Ped"、'up' → "✱"
-      pedalMarkEntries.forEach(({ anchorX, botY, mark }) => {
-        const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        el.textContent = mark === 'down' ? 'Ped' : '✱';
-        el.setAttribute('x', String(anchorX));
-        el.setAttribute('y', String(botY + 25));
-        el.setAttribute('text-anchor', 'middle');
-        el.setAttribute('fill', '#1e293b');
-        el.setAttribute('font-family', 'serif');
-        el.setAttribute('font-size', mark === 'down' ? '13' : '14');
-        if (mark === 'down') el.setAttribute('font-style', 'italic');
-        el.setAttribute('pointer-events', 'none');
-        svgRoot.appendChild(el);
-      });
-
-      // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
-      // 8va は五線上に、8vb は五線下に表示する
-      ottavaEntries.forEach(({ kind, startX, endX, lineY }) => {
-        // テキスト（"8va" / "8vb"）
-        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        label.textContent = kind;
-        label.setAttribute('x', String(startX - 4));
-        label.setAttribute('y', String(lineY));
-        label.setAttribute('text-anchor', 'start');
-        label.setAttribute('fill', '#374151');
-        label.setAttribute('font-family', 'serif');
-        label.setAttribute('font-style', 'italic');
-        label.setAttribute('font-size', '11');
-        label.setAttribute('pointer-events', 'none');
-        svgRoot.appendChild(label);
-        // 破線（テキスト幅の分だけオフセット）
-        const lineStart = startX + 18;
-        if (lineStart < endX) {
-          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-          line.setAttribute('x1', String(lineStart));
-          line.setAttribute('y1', String(lineY - 3));
-          line.setAttribute('x2', String(endX));
-          line.setAttribute('y2', String(lineY - 3));
-          line.setAttribute('stroke', '#374151');
-          line.setAttribute('stroke-width', '1');
-          line.setAttribute('stroke-dasharray', '4,2');
-          line.setAttribute('pointer-events', 'none');
-          svgRoot.appendChild(line);
-        }
-        // 終端の縦線
-        const bracketDir = kind === '8va' ? 1 : -1;
-        const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        vline.setAttribute('x1', String(endX));
-        vline.setAttribute('y1', String(lineY - 3));
-        vline.setAttribute('x2', String(endX));
-        vline.setAttribute('y2', String(lineY - 3 + 6 * bracketDir));
-        vline.setAttribute('stroke', '#374151');
-        vline.setAttribute('stroke-width', '1');
-        vline.setAttribute('pointer-events', 'none');
-        svgRoot.appendChild(vline);
-      });
-
       // ── 行内タイグループの一括描画 ──────────────────────────────
       // 前行からの持ち越しがある場合: lineNotes 先頭の連続グループの終点まで延伸して一本の弧を描く
       let fi = 0;
@@ -2991,6 +2758,245 @@ export default function StaffCanvas({
         }
       }
     }
+
+    // ── 音符付随オーバーレイ（強弱・アーティキュレーション・カスタム記号・
+    //    テキスト・ペダル・オッターバ）を一括描画 ────────────────────
+    // 各 entries 配列は全段（上の systems ループ全体）で蓄積される。ループ内で描画すると
+    // 段が進むたびに蓄積済みの全エントリを再描画してしまい、同じ記号が段数ぶん
+    // 同一座標に重複して DOM へ積まれる（見た目は1個でも要素数が膨らむ）。
+    // そのため必ず全段のレンダリング完了後に一度だけ描画する。
+    dynamicTextEntries.forEach(({ anchorX, baseY, markings }) => {
+      const orderedMarkings = [...markings].sort((left, right) => {
+        const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
+        const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
+        return leftPriority - rightPriority;
+      });
+      orderedMarkings.forEach((marking, index) => {
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.textContent = formatDynamicMarking(marking);
+        text.setAttribute('x', String(anchorX));
+        text.setAttribute('y', String(baseY + index * 14));
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('fill', '#1f2937');
+        text.setAttribute('font-family', '"Times New Roman", serif');
+        text.setAttribute('font-size', marking.value === 'cresc' || marking.value === 'dim' ? '12' : '16');
+        text.setAttribute('font-style', 'italic');
+        text.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(text);
+      });
+    });
+
+    // ── アーティキュレーション記号を一括描画 ──────────────────────
+    articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings }) => {
+      // フェルマータ以外は noteTopY の上に重ならないよう積み上げる
+      let aboveOffset = 0;
+      // ArticulationMarking は文字列型なので、そのまま type として使う
+      markings.forEach((type) => {
+        const ns = 'http://www.w3.org/2000/svg';
+        if (type === 'fermata') {
+          // フェルマータは五線上端より上に配置する（符頭位置に依存しない）
+          const baseY = Math.min(staveTopY, noteTopY) - 14;
+          // 半円弧（下が開いた椀形）
+          const arc = document.createElementNS(ns, 'path');
+          arc.setAttribute('d', `M ${anchorX - 11} ${baseY} A 11 9 0 0 1 ${anchorX + 11} ${baseY}`);
+          arc.setAttribute('stroke', '#1f2937');
+          arc.setAttribute('stroke-width', '1.6');
+          arc.setAttribute('stroke-linecap', 'round');
+          arc.setAttribute('fill', 'none');
+          arc.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(arc);
+          // 中心の点（弧の内側）
+          const dot = document.createElementNS(ns, 'circle');
+          dot.setAttribute('cx', String(anchorX));
+          dot.setAttribute('cy', String(baseY - 4));
+          dot.setAttribute('r', '2.5');
+          dot.setAttribute('fill', '#1f2937');
+          dot.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(dot);
+        } else if (type === 'staccato') {
+          // スタッカート: 符頭上方に小さな黒丸
+          const cy = noteTopY - 6 - aboveOffset;
+          const dot = document.createElementNS(ns, 'circle');
+          dot.setAttribute('cx', String(anchorX));
+          dot.setAttribute('cy', String(cy));
+          dot.setAttribute('r', '2.5');
+          dot.setAttribute('fill', '#1f2937');
+          dot.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(dot);
+          aboveOffset += 10;
+        } else if (type === 'accent') {
+          // アクセント: 下向きの楔形（「>」を90°回した形）
+          const tipY = noteTopY - 5 - aboveOffset;
+          const wingY = tipY - 9;
+          const path = document.createElementNS(ns, 'path');
+          path.setAttribute('d', `M ${anchorX - 10} ${wingY} L ${anchorX} ${tipY} L ${anchorX + 10} ${wingY}`);
+          path.setAttribute('stroke', '#1f2937');
+          path.setAttribute('stroke-width', '1.6');
+          path.setAttribute('stroke-linecap', 'round');
+          path.setAttribute('stroke-linejoin', 'round');
+          path.setAttribute('fill', 'none');
+          path.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(path);
+          aboveOffset += 14;
+        } else if (type === 'tenuto') {
+          // テヌート: 符頭上方に水平線
+          const lineY = noteTopY - 6 - aboveOffset;
+          const line = document.createElementNS(ns, 'line');
+          line.setAttribute('x1', String(anchorX - 9));
+          line.setAttribute('y1', String(lineY));
+          line.setAttribute('x2', String(anchorX + 9));
+          line.setAttribute('y2', String(lineY));
+          line.setAttribute('stroke', '#1f2937');
+          line.setAttribute('stroke-width', '2.2');
+          line.setAttribute('stroke-linecap', 'round');
+          line.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(line);
+          aboveOffset += 10;
+        }
+      });
+    });
+
+    // ── カスタム記号を一括描画 ────────────────────────────────────
+    customSymbolEntries.forEach(({ anchorX, anchorY, symbols }) => {
+      symbols.forEach(({ symbolId, scale }) => {
+        const def = customSymbolDefs.find(d => d.id === symbolId);
+        if (def) renderCustomSymbol(def, anchorX, anchorY, svgRoot, scale);
+      });
+    });
+
+    // ── 途中テンポ変更マーキングを一括描画 ──────────────────────
+    // 各小節の左端上方に「♩=XXX」と赤みがかったテキストで表示する。
+    // 五線上端より 36px 上に配置して、コード記号・テンポ表記テキストと重ならないようにする。
+    bpmMarkingEntries.forEach(({ x, topY, bpm }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = `♩=${bpm}`;
+      el.setAttribute('x', String(x + 2));
+      el.setAttribute('y', String(topY - 36));
+      el.setAttribute('fill', '#b45309');  // 琥珀色で他の記号と区別しやすくする
+      el.setAttribute('font-family', '"Times New Roman", serif');
+      el.setAttribute('font-size', '12');
+      el.setAttribute('font-weight', 'bold');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
+    // ── テキスト要素を一括描画 ───────────────────────────────────
+    // コード記号: 五線上端より 8px 上（ト音記号・拍子記号と重なりにくい高さ）
+    chordSymbolEntries.forEach(({ anchorX, topY, text }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = text;
+      el.setAttribute('x', String(anchorX));
+      el.setAttribute('y', String(topY - 8));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#1f2937');
+      el.setAttribute('font-family', '"Times New Roman", serif');
+      el.setAttribute('font-size', '12');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
+    // テンポ表記: コード記号よりさらに 16px 上（最も優先度が高く目立つ場所）
+    tempoMarkingEntries.forEach(({ anchorX, topY, text }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = text;
+      el.setAttribute('x', String(anchorX));
+      el.setAttribute('y', String(topY - 24));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#1f2937');
+      el.setAttribute('font-family', '"Times New Roman", serif');
+      el.setAttribute('font-size', '12');
+      el.setAttribute('font-style', 'italic');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
+    // 発想標語: 強弱記号の下（botY + 40）に斜体で表示
+    expressionMarkingEntries.forEach(({ anchorX, botY, text }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = text;
+      el.setAttribute('x', String(anchorX));
+      el.setAttribute('y', String(botY + 40));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#1f2937');
+      el.setAttribute('font-family', '"Times New Roman", serif');
+      el.setAttribute('font-size', '11');
+      el.setAttribute('font-style', 'italic');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
+    // 歌詞: 発想標語のさらに下（botY + 54）に通常体で表示
+    lyricsEntries.forEach(({ anchorX, botY, text }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = text;
+      el.setAttribute('x', String(anchorX));
+      el.setAttribute('y', String(botY + 54));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#374151');
+      el.setAttribute('font-family', 'sans-serif');
+      el.setAttribute('font-size', '11');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
+    // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
+    // LINE_SPACING ≈ 13 SVG単位なので +25 ≈ 2段分。標準的な記譜位置。
+    // 'down' → イタリック体の "Ped"、'up' → "✱"
+    pedalMarkEntries.forEach(({ anchorX, botY, mark }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = mark === 'down' ? 'Ped' : '✱';
+      el.setAttribute('x', String(anchorX));
+      el.setAttribute('y', String(botY + 25));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#1e293b');
+      el.setAttribute('font-family', 'serif');
+      el.setAttribute('font-size', mark === 'down' ? '13' : '14');
+      if (mark === 'down') el.setAttribute('font-style', 'italic');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
+    // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
+    // 8va は五線上に、8vb は五線下に表示する
+    ottavaEntries.forEach(({ kind, startX, endX, lineY }) => {
+      // テキスト（"8va" / "8vb"）
+      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      label.textContent = kind;
+      label.setAttribute('x', String(startX - 4));
+      label.setAttribute('y', String(lineY));
+      label.setAttribute('text-anchor', 'start');
+      label.setAttribute('fill', '#374151');
+      label.setAttribute('font-family', 'serif');
+      label.setAttribute('font-style', 'italic');
+      label.setAttribute('font-size', '11');
+      label.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(label);
+      // 破線（テキスト幅の分だけオフセット）
+      const lineStart = startX + 18;
+      if (lineStart < endX) {
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', String(lineStart));
+        line.setAttribute('y1', String(lineY - 3));
+        line.setAttribute('x2', String(endX));
+        line.setAttribute('y2', String(lineY - 3));
+        line.setAttribute('stroke', '#374151');
+        line.setAttribute('stroke-width', '1');
+        line.setAttribute('stroke-dasharray', '4,2');
+        line.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(line);
+      }
+      // 終端の縦線
+      const bracketDir = kind === '8va' ? 1 : -1;
+      const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      vline.setAttribute('x1', String(endX));
+      vline.setAttribute('y1', String(lineY - 3));
+      vline.setAttribute('x2', String(endX));
+      vline.setAttribute('y2', String(lineY - 3 + 6 * bracketDir));
+      vline.setAttribute('stroke', '#374151');
+      vline.setAttribute('stroke-width', '1');
+      vline.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(vline);
+    });
 
     // ── arcs[] ベースの弧を一括描画（全小節レンダリング後に実行） ─────
     // arc.fromKey / arc.toKey を使って個別符頭の Y 座標で弧を描く
