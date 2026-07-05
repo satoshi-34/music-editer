@@ -14,6 +14,13 @@
       "runtimeArgs": ["compose", "run", "--rm", "-p", "127.0.0.1:5175:5175", "app", "npm", "run", "dev", "--", "--host", "--port", "5175"],
       "port": 5175,
       "autoPort": false
+    },
+    {
+      "name": "dev-local-temp",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "5176"],
+      "port": 5176,
+      "autoPort": false
     }
   ]
 }
