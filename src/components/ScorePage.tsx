@@ -71,7 +71,7 @@ import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamic
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId } from '../utils/instrumentationPartUtils';
 import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
-import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import { DEFAULT_TIME_SIGNATURE, formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import type { TimeSignature } from '../types/storage';
 
 type PageSpec = { systems: number };
@@ -219,7 +219,7 @@ export default function ScorePage() {
   const [composer, setComposer] = useState('作曲者');
   const [arranger, setArranger] = useState('編曲者');
 
-  const { saveScore, loadScore, hasStoredData, error, isLoading, isSaving } = useScoreStorage();
+  const { saveScore, loadScore, hasStoredData, clearStoredData, error, isLoading, isSaving } = useScoreStorage();
   // localStorage 自体は React の state ではないため、保存しても自動では再描画されない。
   // 「保存後すぐ読込ボタンを押せるか」は画面状態として持ち、保存/読込の節目で更新する。
   const [storedDataAvailable, setStoredDataAvailable] = useState(() => hasStoredData());
@@ -1235,6 +1235,52 @@ export default function ScorePage() {
     }
   };
 
+  const handleNewScore = useCallback(async () => {
+    const shouldReset = window.confirm('現在の画面を空の新規譜面に戻します。保存済みデータも消去しますか？');
+    if (!shouldReset) {
+      return;
+    }
+
+    const cleared = await clearStoredData();
+    if (!cleared) {
+      return;
+    }
+
+    clearPlaybackTimer();
+    resetPlaybackClock();
+    getAudioEngine().stopAll();
+    historyStack.current = [];
+    futureStack.current = [];
+    setSelectedMeasures(null);
+    setClipboard(null);
+    setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+    setPlaybackState('stopped');
+    setTitle('タイトル');
+    setSubtitle('サブタイトル');
+    setLyricist('作詞者');
+    setComposer('作曲者');
+    setArranger('編曲者');
+    setTool({ duration: '4', isRest: false });
+    setScoreType('single');
+    setInstrumentation(getDefaultInstrumentationForScoreType('single'));
+    setNotationMode('concert');
+    setKeySignature('C');
+    await setTimeSignature(...DEFAULT_TIME_SIGNATURE);
+    setMeasuresPerSystem(4);
+    setRightHandData([]);
+    setLeftHandData(undefined);
+    setQuartetParts(Array.from({ length: 4 }, () => []));
+    setEnsembleParts([]);
+    setStoredDataAvailable(false);
+    fileHandleRef.current = null;
+  }, [
+    clearPlaybackTimer,
+    clearStoredData,
+    getAudioEngine,
+    resetPlaybackClock,
+    setTimeSignature,
+  ]);
+
   // 保存先ファイルハンドル（File System Access API）。
   // 取得後は同じファイルへ上書きできるよう ref で保持する。
   const fileHandleRef = useRef<FileSystemFileHandle | null>(null);
@@ -2123,6 +2169,7 @@ export default function ScorePage() {
           {activeToolbarTab === 'other' && (
             <div className="toolbar-section toolbar-other-controls">
               <SaveLoadButtons
+                onNewScore={handleNewScore}
                 onSave={handleSave}
                 onLoad={handleLoad}
                 onLoadSample={import.meta.env.DEV ? handleLoadSample : undefined}

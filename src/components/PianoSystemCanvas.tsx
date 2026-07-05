@@ -637,7 +637,9 @@ export default function PianoSystemCanvas({
   })));
 
   const mkInit = (data: MeasureData[]|undefined) => {
-    if(data&&data.length>0)return data;
+    // 空配列も「親が空の譜面を渡している」という有効な状態。
+    // ここで古い内部 state を優先すると、新規作成後も音符が表示され続ける。
+    if(data)return data;
     return Array.from({length:startMeasureIndex+measuresPerSystem},()=>({events:[]}));
   };
 
@@ -836,12 +838,12 @@ export default function PianoSystemCanvas({
       const next = [...prev];
       let changed = false;
       parts.forEach((part, i) => {
-        if(!part.data||part.data.length===0)return;
-        if(JSON.stringify(part.data)===JSON.stringify(prev[i]))return;
+        if(!part.data)return;
         const req=startMeasureIndex+measuresPerSystem;
         let newScore: MeasureData[];
         if(part.data.length<req){const e=[...part.data];while(e.length<req)e.push(createEmptyMeasure());newScore=e;}
         else newScore=part.data;
+        if(JSON.stringify(newScore)===JSON.stringify(prev[i]))return;
         next[i]=newScore;
         changed=true;
       });

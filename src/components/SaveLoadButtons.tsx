@@ -6,6 +6,7 @@ import { useState } from 'react';
 import type { DemoScoreId } from '../data/demoScores';
 
 export interface SaveLoadButtonsProps {
+  onNewScore?: () => void;
   onSave: () => void;
   onLoad: () => void;
   onLoadSample?: (sampleId: DemoScoreId) => void;
@@ -22,6 +23,7 @@ export interface SaveLoadButtonsProps {
 }
 
 export default function SaveLoadButtons({
+  onNewScore,
   onSave,
   onLoad,
   onLoadSample,
@@ -44,6 +46,17 @@ export default function SaveLoadButtons({
   
   return (
     <div className="save-load-buttons">
+      {onNewScore && (
+        <button
+          className="ghost"
+          onClick={onNewScore}
+          disabled={isSaving || isLoading}
+          title="新しい空の譜面を作成"
+        >
+          新規作成
+        </button>
+      )}
+
       <button
         className="ghost save-button"
         onClick={onSave}
