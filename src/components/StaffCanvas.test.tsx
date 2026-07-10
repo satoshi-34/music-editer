@@ -2165,3 +2165,34 @@ describe('StaffCanvas Integration Tests', () => {
   });
 });
 
+describe('StaffCanvas dense-note layout', () => {
+  it('16分音符で過密な4小節は、同じ段に詰め込まない', () => {
+    const denseMeasure = (): MeasureData => ({
+      events: Array.from({ length: 16 }, (_, index) => ({
+        dur: '16' as DurKey,
+        isRest: false,
+        keys: [index % 2 === 0 ? 'c/4' : 'd/4'],
+      })),
+    });
+    const measures = Array.from({ length: 4 }, denseMeasure);
+
+    const { container } = render(
+      <StaffCanvas
+        systems={2}
+        gap={110}
+        measuresPerSystem={4}
+        tool={{ duration: '16', isRest: false }}
+        scale={1}
+        initialScoreData={measures}
+      />
+    );
+
+    const firstRowY = container.querySelector<SVGRectElement>('rect.vf-hit[data-measure-index="0"]')?.getAttribute('y');
+    const fourthMeasureY = container.querySelector<SVGRectElement>('rect.vf-hit[data-measure-index="3"]')?.getAttribute('y');
+
+    // 4小節とも16分音符16個なら、4小節固定ではなく 3 + 1 小節に改段する。
+    expect(firstRowY).not.toBeNull();
+    expect(fourthMeasureY).not.toBeNull();
+    expect(fourthMeasureY).not.toBe(firstRowY);
+  });
+});

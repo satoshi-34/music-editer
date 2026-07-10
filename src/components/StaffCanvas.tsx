@@ -36,6 +36,7 @@ import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
+import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -77,8 +78,8 @@ type Props = {
 /* ===== レイアウト/スペーシング ===== */
 const TARGET_FILL = 0.99;
 const PAGE_LEFT = 4, PAGE_RIGHT = 4;
-const MIN_MEASURE_W = 52, LONG_HALF_MIN = 80, LONG_WHOLE_MIN = 92;
-const BASE_PAD = 14, UNIT_WIDTH = 9, FLAG_EXTRA_PX = 4;
+const MIN_MEASURE_W = 52;
+const UNIT_WIDTH = 9, FLAG_EXTRA_PX = 4;
 const CLEF_PAD_FIRST = 50, CLEF_PAD_OTHER = 28;
 const EMPTY_MEASURE_UNITS = 0.6;
 
@@ -231,20 +232,6 @@ function unitsForEvent(ev: NoteEvent): number {
   const flagExtra = d >= 16 ? (FLAG_EXTRA_PX / UNIT_WIDTH) : 0;
   return (UNIT_BY_DENOM[d] ?? 1) * (ev.isRest ? 0.85 : 1) + flagExtra;
 }
-function minContentWidth(m?: MeasureData): number {
-  if (!m || !m.events?.length) return Math.max(MIN_MEASURE_W, BASE_PAD + UNIT_WIDTH * EMPTY_MEASURE_UNITS);
-  let hasH=false, hasW=false;
-  const units = m.events.reduce((s, ev) => {
-    const dd = vfToDenom(toVFDur(ev.dur));
-    if (dd===2) hasH = true; if (dd===1) hasW = true;
-    return s + unitsForEvent(ev);
-  }, 0);
-  const raw = Math.max(MIN_MEASURE_W, BASE_PAD + UNIT_WIDTH * units);
-  if (hasW) return Math.max(raw, LONG_WHOLE_MIN);
-  if (hasH) return Math.max(raw, LONG_HALF_MIN);
-  return raw;
-}
-
 /* ===== line ⇄ key（ト音記号。臨時記号は高さに無関係なので無視） ===== */
 function lineToKeyTreble(line: number): string {
   const snapped = Math.round(line * 2) / 2;
@@ -1629,7 +1616,9 @@ export default function StaffCanvas({
         let occupy = innerW * TARGET_FILL; if (n === 1) occupy = innerW;
 
         const alloc = Math.max(0, occupy - CLEF_PAD_THIS);
-        const minWs = items.map(minContentWidth); while (minWs.length < n) minWs.push(MIN_MEASURE_W);
+        // 音価に応じた最低幅で先に改段を判断する。
+        // 均等配置の重みだけでは細かい音符を狭く見積もり、VexFlow の描画後に重なるため。
+        const minWs = items.map(measureMinimumContentWidth); while (minWs.length < n) minWs.push(MIN_MEASURE_W);
         const weights = items.map(m => m?.events?.length
           ? m.events.reduce((u, ev) => u + unitsForEvent(ev), 0)
           : EMPTY_MEASURE_UNITS);
