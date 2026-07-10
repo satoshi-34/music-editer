@@ -3,7 +3,7 @@
 // ・ツールバー（Palette）と五線（StaffCanvas / PianoStaff）をまとめる"印刷レイアウト"側
 // ─────────────────────────────────────────────────────────────
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Palette, { type Tool } from './Palette';
 import StaffCanvas from './StaffCanvas';
@@ -1833,6 +1833,30 @@ export default function ScorePage() {
     return pagePixelWidth * 2 > viewportWidth ? pages.slice(0, 1) : pages;
   }, [pages, scale, viewportWidth]);
 
+  const [sharedPageHeight, setSharedPageHeight] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const spread = spreadRef.current;
+    if (!spread) return;
+
+    const measurePages = () => {
+      const pageElements = Array.from(spread.querySelectorAll<HTMLElement>('.print-page'));
+      const nextHeight = pageElements.reduce((max, page) => Math.max(max, page.offsetHeight), 0);
+      if (nextHeight > 0) {
+        // 1ページ目だけタイトル欄で高くなっても、同じ譜面の紙面は最大高さへそろえる。
+        setSharedPageHeight(previous => previous === nextHeight ? previous : nextHeight);
+      }
+    };
+
+    setSharedPageHeight(null);
+    measurePages();
+
+    const resizeObserver = new ResizeObserver(measurePages);
+    resizeObserver.observe(spread);
+    spread.querySelectorAll<HTMLElement>('.print-page').forEach(page => resizeObserver.observe(page));
+    return () => resizeObserver.disconnect();
+  }, [spreadRef, visiblePages.length, scoreType, instrumentation.parts.length, scale]);
+
   useEffect(() => {
     return () => {
       clearPlaybackTimer();
@@ -2422,7 +2446,7 @@ export default function ScorePage() {
           style={{ '--scale': String(scale), '--columns': String(columns) } as React.CSSProperties}
         >
           {visiblePages.map((p, i) => (
-            <ScaledPageWrapper key={i} scale={scale}>
+            <ScaledPageWrapper key={i} scale={scale} pageHeight={sharedPageHeight}>
               <section className="print-page">
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (

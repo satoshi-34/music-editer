@@ -889,7 +889,8 @@ button.ghost:disabled {
 .print-page {
   position: relative;
   width: 210mm;
-  min-height: 297mm;
+  /* 1ページ目のタイトル欄でページだけが伸びないよう、親から共通高さを受け取る。 */
+  min-height: var(--page-height, 297mm);
   background: #fffdf6;
   background-image: radial-gradient(#00000008 1px, transparent 1px);
   background-size: 4px 4px;
@@ -901,7 +902,12 @@ button.ghost:disabled {
 }
 
 /* ===== タイトル・フッター ===== */
-.page-head { margin-bottom: 6mm; }
+.page-head {
+  /* 1ページ目だけタイトル・作者欄があるため、五線の開始位置を全ページでそろえる。 */
+  min-height: 18mm;
+  box-sizing: border-box;
+  margin-bottom: 6mm;
+}
 .score-title { margin: 0; font-size: 28px; text-align: center; letter-spacing: .08em; }
 .score-subtitle { margin: 4px 0 0; font-size: 14px; text-align: center; color: #555; }
 .page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; }

@@ -11,19 +11,21 @@
 // そのままだと縮小前の高さでグリッドに居座り、ページ間に大きな余白ができる。
 // ページ高さは内容により A4 を超えることがある（大編成の総譜など）ので、
 // ここで実際の高さを測り「実測高さ × scale」をラッパーの高さとして設定する。
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 interface ScaledPageWrapperProps {
   /** ページの表示倍率（useAutoPageScale が算出した値） */
   scale: number;
+  /** 同じ譜面内で共有するページ高さ（未指定時は各ページを個別に測る） */
+  pageHeight?: number | null;
   /** ページ本体（.print-page を直下に1つ置く想定） */
   children: ReactNode;
 }
 
-export default function ScaledPageWrapper({ scale, children }: ScaledPageWrapperProps) {
+export default function ScaledPageWrapper({ scale, pageHeight = null, children }: ScaledPageWrapperProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   // 計測前は null のまま CSS のフォールバック高さ（A4 × scale）に任せる
-  const [pageHeight, setPageHeight] = useState<number | null>(null);
+  const [measuredPageHeight, setMeasuredPageHeight] = useState<number | null>(null);
 
   useEffect(() => {
     // 直下の .print-page を計測対象にする。
@@ -36,7 +38,7 @@ export default function ScaledPageWrapper({ scale, children }: ScaledPageWrapper
       const next = page.offsetHeight;
       // jsdom（テスト環境）ではレイアウトされず 0 になるため、
       // その場合は CSS フォールバックを使い続ける
-      setPageHeight(next > 0 ? next : null);
+      setMeasuredPageHeight(next > 0 ? next : null);
     };
 
     measure();
@@ -46,11 +48,16 @@ export default function ScaledPageWrapper({ scale, children }: ScaledPageWrapper
     return () => ro.disconnect();
   }, []);
 
+  const measuredHeight = pageHeight ?? measuredPageHeight;
+
   return (
     <div
       className="page-wrapper"
       ref={wrapperRef}
-      style={pageHeight != null ? { height: pageHeight * scale } : undefined}
+      style={measuredHeight != null ? {
+        height: measuredHeight * scale,
+        '--page-height': `${measuredHeight}px`,
+      } as CSSProperties : undefined}
     >
       {children}
     </div>
