@@ -96,7 +96,8 @@ const HIT_MIN_W = 8;
 // クリックしづらい/隣の音符に吸われる場合は、まず CELL_PAD と HIT_MIN_W を調整してください。
 // 符頭の左端から左右に加えるパディング（px）。この範囲内のクリックが和音追加ゾーン。
 // 値を大きくするほど和音追加しやすくなり、小さくすると新規挿入しやすくなる。
-const CHORD_HIT_PAD = 12;
+// 隣の音符を置きたいクリックが和音追加に吸われないよう、従来値 12px の 10% に抑える。
+const CHORD_HIT_PAD = 1.2;
 // 和音追加のY判定は「五線 ± 3加線」の固定範囲（stave.getYForLine(-3) 〜 getYForLine(7)）
 // 音符ごとの位置ではなく段全体の高さで判定するため、どの音符でも同じ範囲になる
 const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
@@ -2616,6 +2617,7 @@ export default function StaffCanvas({
                   // これで Delete や ↑/↓ の対象にもできる。
                   setScore(prev => {
                     const next = prev.map(cloneMeasureData);
+                    fillPriorMeasureRests(next, absoluteIndex, beatsPerMeasure, defaultRestKeyForClef(clef));
                     const targetEv = next[absoluteIndex]?.events[j];
                     if (!targetEv?.isRest) return prev;
                     const latestReplacement = buildRestEditReplacement(targetEv, key, tool, noteAfterRest);

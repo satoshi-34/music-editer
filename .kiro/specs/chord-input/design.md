@@ -142,6 +142,7 @@ const bb = n.getBoundingBox?.();
 const noteVisualLeft = bb?.getX?.() ?? anchors[j];
 const noteVisualRight = bb ? ((bb.getX?.() ?? anchors[j]) + (bb.getW?.() ?? 12)) : anchors[j] + 12;
 // 和音ゾーン X 判定: [noteVisualLeft - CHORD_HIT_PAD, noteVisualRight + CHORD_HIT_PAD]
+// CHORD_HIT_PAD は隣接入力しやすいよう、単旋律 1.2px、ピアノ/複数パート 1.5px に抑える。
 ```
 
 **Y 方向の判定**
@@ -178,7 +179,7 @@ const safeH = chordBotY - chordTopY;
 
 **和音入力のトリガー**
 
-Shift キー不要。音符の描画X範囲内（`± CHORD_HIT_PAD`）かつ固定Y範囲内をクリックすると和音追加になる。セル内でも X 範囲外のクリックは新規音符挿入になる。
+Shift キー不要。音符の描画X範囲内（単旋律は左右 `±1.2px`、ピアノ/複数パートは左右 `±1.5px`）かつ固定Y範囲内をクリックすると和音追加になる。セル内でも X 範囲外のクリックは新規音符挿入になる。
 
 #### 和音入力ロジック
 

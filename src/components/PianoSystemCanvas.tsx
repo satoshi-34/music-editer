@@ -33,6 +33,7 @@ import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type
 import { getMeasureVoices } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
+import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -69,9 +70,6 @@ function computeLayout(n: number): { staveYs: number[]; sysH: number } {
 
 /* ===== 幅計算 ===== */
 const TARGET_FILL = 0.99;
-const MIN_MEASURE_W = 52, LONG_HALF_MIN = 80, LONG_WHOLE_MIN = 92;
-const BASE_PAD = 14, UNIT_WIDTH = 9, FLAG_EXTRA_PX = 4;
-const EMPTY_MEASURE_UNITS = 0.6;
 const CLEF_PAD_FIRST = 50;
 
 /* ===== ヒット領域 ===== */
@@ -81,7 +79,8 @@ const CELL_PAD = 6, HIT_MIN_W = 14;
 // から作る透明な .vf-note-hit rect です。青い選択枠は表示専用なので、
 // クリックしづらい/隣に吸われる場合は CELL_PAD と HIT_MIN_W を調整してください。
 // 符頭の左端から左右に加えるパディング（px）。この範囲内のクリックが和音追加ゾーン。
-const CHORD_HIT_PAD = 15;
+// 隣の音符を置きたいクリックが和音追加に吸われないよう、従来値 15px の 10% に抑える。
+const CHORD_HIT_PAD = 1.5;
 // 和音追加のY判定は「五線 ± 3加線」の固定範囲
 const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
 const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）
@@ -195,27 +194,6 @@ function fillPriorMeasureRests(
     }
   }
 }
-const vfToDenom = (v: string) =>
-  v==='64'?64:v==='32'?32:v==='16'?16:v==='8'?8:v==='q'?4:v==='h'?2:1;
-const UNIT_BY_DENOM: Record<number,number> = {1:1.45,2:1.25,4:1,8:0.6,16:0.5,32:2.2,64:2.6};
-
-function unitsForEvent(ev: NoteEvent): number {
-  const d = vfToDenom(toVFDur(ev.dur));
-  return (UNIT_BY_DENOM[d]??1)*(ev.isRest?0.85:1)+(d>=16?FLAG_EXTRA_PX/UNIT_WIDTH:0);
-}
-function minContentWidth(m?: MeasureData): number {
-  if (!m?.events?.length) return Math.max(MIN_MEASURE_W, BASE_PAD+UNIT_WIDTH*EMPTY_MEASURE_UNITS);
-  let hasH=false,hasW=false;
-  const units = m.events.reduce((s,ev)=>{
-    const dd=vfToDenom(toVFDur(ev.dur)); if(dd===2)hasH=true; if(dd===1)hasW=true;
-    return s+unitsForEvent(ev);
-  },0);
-  const raw = Math.max(MIN_MEASURE_W, BASE_PAD+UNIT_WIDTH*units);
-  if(hasW)return Math.max(raw,LONG_WHOLE_MIN);
-  if(hasH)return Math.max(raw,LONG_HALF_MIN);
-  return raw;
-}
-
 /* ===== ライン ⇄ キー変換（treble / bass / alto） ===== */
 function lineToKeyForClef(clef: ClefType, line: number): string {
   const s = Math.round(line*2)/2, steps = Math.round(s*2);
@@ -1228,7 +1206,7 @@ export default function PianoSystemCanvas({
       const ai=startMeasureIndex+i;
       return parts.reduce((maxW, _, pi) => {
         const score=partsScore[pi]??[];
-        return Math.max(maxW, minContentWidth(ai<score.length?score[ai]:undefined));
+        return Math.max(maxW, measureMinimumContentWidth(ai<score.length?score[ai]:undefined));
       }, 0);
     });
     const pad=CLEF_PAD_FIRST;
@@ -2278,6 +2256,7 @@ export default function PianoSystemCanvas({
                   // これで Delete や ↑/↓ の対象にもできる。
                   setScore(prev=>{
                     const next=prev.map(cloneMeasureData);
+                    fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(part.clef));
                     const targetEv=next[absI]?.events[j];
                     if(!targetEv?.isRest)return prev;
                     const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest);
