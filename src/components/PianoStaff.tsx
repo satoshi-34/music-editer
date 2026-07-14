@@ -4,7 +4,7 @@
 
 import type { Tool } from './Palette';
 import PianoSystemCanvas from './PianoSystemCanvas';
-import type { MeasureData, TimeSignature } from '../types/storage';
+import type { MeasureData, TimeSignature, CustomSymbolDef } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
@@ -30,6 +30,7 @@ type Props = {
   onKeySignatureChange?: (keySignature: KeySignature) => void;
   selectedMeasures?: { start: number; end: number };
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
+  customSymbolDefs?: CustomSymbolDef[];
 };
 
 export default function PianoStaff({
@@ -52,6 +53,7 @@ export default function PianoStaff({
   onKeySignatureChange,
   selectedMeasures,
   onMeasureSelect,
+  customSymbolDefs,
 }: Props) {
   return (
     <div>
@@ -76,6 +78,7 @@ export default function PianoStaff({
           onKeySignatureChange={onKeySignatureChange}
           selectedMeasures={selectedMeasures}
           onMeasureSelect={onMeasureSelect}
+          customSymbolDefs={customSymbolDefs}
         />
       ))}
     </div>

@@ -27,7 +27,6 @@ import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynam
 import { applyArticulationToEvent } from '../utils/articulationUtils';
 import {
   applyCustomSymbolToEvent,
-  renderCustomSymbol,
   setCustomSymbolScale,
   setCustomSymbolOffset,
   MIN_SYMBOL_SCALE,
@@ -35,6 +34,7 @@ import {
   MIN_SYMBOL_OFFSET,
   MAX_SYMBOL_OFFSET,
 } from '../utils/customSymbolUtils';
+import { buildCustomSymbolEntry, drawCustomSymbolEntries, type CustomSymbolRenderEntry } from '../utils/customSymbolRenderUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
@@ -1290,11 +1290,7 @@ export default function StaffCanvas({
       markings: NonNullable<NoteEvent['articulations']>;
     }> = [];
     // カスタム記号の描画情報を収集する
-    const customSymbolEntries: Array<{
-      anchorX: number;
-      anchorY: number; // 五線上端基準の統一高さ（音高に依存しない）
-      symbols: { symbolId: string; scale: number; offsetX: number; offsetY: number }[];
-    }> = [];
+    const customSymbolEntries: CustomSymbolRenderEntry[] = [];
     // 途中テンポ変更の描画情報を収集する（各小節の左上に ♩=XXX と表示）
     const bpmMarkingEntries: Array<{ x: number; topY: number; bpm: number }> = [];
     // テキスト要素（コード記号・テンポ表記）の描画情報を収集する（五線の上に表示）
@@ -2832,21 +2828,16 @@ export default function StaffCanvas({
                 markings: safeEvents[j].articulations,
               });
             }
-            if (!safeEvents[j]?.__isPlaceholder && !safeEvents[j]?.isRest && safeEvents[j]?.customSymbols?.length) {
-              customSymbolEntries.push({
-                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                // 音符の符頭上端ではなく、その段の五線上端を基準にした固定値にする。
-                // これにより音高（音符ごとの上下）に関わらず同じ段の記号は同じ高さに揃う。
-                anchorY: stave.getYForLine(0) - 10,
-                // scale は配置1件ごとのサイズ調整値、offsetX/offsetYは配置1件ごとの位置微調整値。
-                // どちらも省略時は既定値（scale=1, offset=0）として扱う
-                symbols: safeEvents[j].customSymbols!.map(s => ({
-                  symbolId: s.symbolId,
-                  scale: s.scale ?? 1,
-                  offsetX: s.offsetX ?? 0,
-                  offsetY: s.offsetY ?? 0,
-                })),
-              });
+            {
+              // 音符の符頭上端ではなく、その段の五線上端を基準にした固定値にする。
+              // これにより音高（音符ごとの上下）に関わらず同じ段の記号は同じ高さに揃う。
+              // （共通ユーティリティ側で anchorY = staveTopY - 10 を計算する）
+              const entry = buildCustomSymbolEntry(
+                safeEvents[j],
+                noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                stave.getYForLine(0),
+              );
+              if (entry) customSymbolEntries.push(entry);
             }
             // テキスト要素の収集（プレースホルダー音符は除く）
             if (!safeEvents[j]?.__isPlaceholder) {
@@ -3058,12 +3049,7 @@ export default function StaffCanvas({
     });
 
     // ── カスタム記号を一括描画 ────────────────────────────────────
-    customSymbolEntries.forEach(({ anchorX, anchorY, symbols }) => {
-      symbols.forEach(({ symbolId, scale, offsetX, offsetY }) => {
-        const def = customSymbolDefs.find(d => d.id === symbolId);
-        if (def) renderCustomSymbol(def, anchorX + offsetX, anchorY + offsetY, svgRoot, scale);
-      });
-    });
+    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot);
 
     // ── 途中テンポ変更マーキングを一括描画 ──────────────────────
     // 各小節の左端上方に「♩=XXX」と赤みがかったテキストで表示する。

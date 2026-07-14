@@ -3,7 +3,7 @@
 
 import PianoSystemCanvas, { type PartConfig } from './PianoSystemCanvas';
 import type { Tool } from './Palette';
-import type { MeasureData, TimeSignature } from '../types/storage';
+import type { MeasureData, TimeSignature, CustomSymbolDef } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
@@ -31,6 +31,7 @@ type Props = {
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
   onKeySignatureChange?: (keySignature: KeySignature) => void;
+  customSymbolDefs?: CustomSymbolDef[];
 };
 
 export default function QuartetStaff({
@@ -49,6 +50,7 @@ export default function QuartetStaff({
   keySignature = 'C',
   timeSignature = [4, 4],
   onKeySignatureChange,
+  customSymbolDefs,
 }: Props) {
   return (
     <div>
@@ -75,6 +77,7 @@ export default function QuartetStaff({
             keySignature={keySignature}
             timeSignature={timeSignature}
             onKeySignatureChange={onKeySignatureChange}
+            customSymbolDefs={customSymbolDefs}
           />
         );
       })}

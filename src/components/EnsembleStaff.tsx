@@ -1,6 +1,6 @@
 import PianoSystemCanvas, { type PartConfig } from './PianoSystemCanvas';
 import type { Tool } from './Palette';
-import type { InstrumentPartDefinition, MeasureData, ScoreNotationMode, TimeSignature } from '../types/storage';
+import type { InstrumentPartDefinition, MeasureData, ScoreNotationMode, TimeSignature, CustomSymbolDef } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import {
@@ -34,6 +34,7 @@ type Props = {
    * 編集も許可し、入力された音符は実音へ逆変換してから保存する。
    */
   notationMode?: ScoreNotationMode;
+  customSymbolDefs?: CustomSymbolDef[];
 };
 
 /**
@@ -93,6 +94,7 @@ export default function EnsembleStaff({
   timeSignature = [4, 4],
   onKeySignatureChange,
   notationMode = 'concert',
+  customSymbolDefs,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -169,6 +171,7 @@ export default function EnsembleStaff({
               const concertKey = fifths === 0 ? newKey : shiftKeySignatureByFifths(newKey, -fifths);
               onKeySignatureChange(concertKey);
             }}
+            customSymbolDefs={customSymbolDefs}
           />
         );
       })}

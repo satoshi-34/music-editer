@@ -2563,6 +2563,7 @@ export default function ScorePage() {
                       timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
                       notationMode={notationMode}
+                      customSymbolDefs={customSymbolDefs}
                     />
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
@@ -2581,6 +2582,7 @@ export default function ScorePage() {
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
+                      customSymbolDefs={customSymbolDefs}
                     />
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
@@ -2604,6 +2606,7 @@ export default function ScorePage() {
                       onKeySignatureChange={handleKeySignatureChange}
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
+                      customSymbolDefs={customSymbolDefs}
                     />
                   ) : (
                     <StaffCanvas

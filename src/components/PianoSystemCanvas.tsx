@@ -7,7 +7,7 @@ import {
   Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType, Dot, Tuplet,
 } from 'vexflow';
 import type { Tool } from './Palette';
-import type { MeasureData, TieArc, DynamicMarking } from '../types/storage';
+import type { MeasureData, TieArc, DynamicMarking, CustomSymbolDef } from '../types/storage';
 import type { ClefType } from './clefUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
@@ -34,6 +34,16 @@ import {
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
+import {
+  applyCustomSymbolToEvent,
+  setCustomSymbolScale,
+  setCustomSymbolOffset,
+  MIN_SYMBOL_SCALE,
+  MAX_SYMBOL_SCALE,
+  MIN_SYMBOL_OFFSET,
+  MAX_SYMBOL_OFFSET,
+} from '../utils/customSymbolUtils';
+import { buildCustomSymbolEntry, drawCustomSymbolEntries, type CustomSymbolRenderEntry } from '../utils/customSymbolRenderUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getMeasureVoices, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
@@ -42,7 +52,7 @@ import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number } };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[] };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number } | null;
 
@@ -599,6 +609,8 @@ type Props = {
   // コピー＆ペースト用: 選択中の小節範囲（絶対インデックス）と選択コールバック
   selectedMeasures?: { start: number; end: number };
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
+  // カスタム記号定義（記号エディタで作成した奏法記号）。省略時は何も描画しない。
+  customSymbolDefs?: CustomSymbolDef[];
 };
 
 export default function PianoSystemCanvas({
@@ -611,6 +623,7 @@ export default function PianoSystemCanvas({
   onKeySignatureChange,
   selectedMeasures,
   onMeasureSelect,
+  customSymbolDefs = [],
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -695,6 +708,31 @@ export default function PianoSystemCanvas({
     overlayX: number;
     overlayY: number;
   } | null>(null);
+
+  // カスタム記号サイズ変更オーバーレイの状態（StaffCanvas の symbolResizeEditState と同じパターン）
+  const [symbolResizeEditState, setSymbolResizeEditState] = useState<{
+    partIndex: number;
+    measureAbsoluteIndex: number;
+    eventIndex: number;
+    symbolId: string;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
+  // カスタム記号位置調整オーバーレイの状態（symbolResizeEditState と同じパターン。横・縦の2入力のみ違う）
+  const [symbolOffsetEditState, setSymbolOffsetEditState] = useState<{
+    partIndex: number;
+    measureAbsoluteIndex: number;
+    eventIndex: number;
+    symbolId: string;
+    currentX: string;
+    currentY: string;
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+  const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
+  const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
 
   const [selectedArc, setSelectedArc] = useState<{
     partIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
@@ -1063,6 +1101,8 @@ export default function PianoSystemCanvas({
       baseY: number;
       markings: NonNullable<NoteEvent['dynamics']>;
     }> = [];
+    // カスタム記号の描画情報を収集する（段ごとの五線上端基準の統一高さで描く）
+    const customSymbolEntries: CustomSymbolRenderEntry[] = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
@@ -2125,6 +2165,9 @@ export default function PianoSystemCanvas({
               }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
+              const customSymbolMode = 'mode' in tool && tool.mode === 'customSymbol' ? tool.symbolId : null;
+              const customSymbolResizeMode = 'mode' in tool && tool.mode === 'customSymbolResize' ? tool.symbolId : null;
+              const customSymbolOffsetMode = 'mode' in tool && tool.mode === 'customSymbolOffset' ? tool.symbolId : null;
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
               const trillMode = 'mode' in tool && tool.mode === 'trill';
@@ -2181,6 +2224,56 @@ export default function PianoSystemCanvas({
                 });
                 setSelected({partIndex:pi,measure:absI,index:j});
                 playNoteEvent(nextEv, part.playbackInstrument);
+                return;
+              }
+              if (customSymbolMode && !safeEvs[j]?.isRest) {
+                // カスタム記号も既存音符にトグルで付け外しする（StaffCanvas と同じ挙動）。
+                const nextEv = applyCustomSymbolToEvent(safeEvs[j], customSymbolMode);
+                setScore(prev=>{
+                  const next=prev.map(cloneMeasureData);
+                  if(absI>=next.length)return prev;
+                  const targetEv=next[absI].events[j];
+                  if(!targetEv||targetEv.isRest)return prev;
+                  next[absI].events[j]=applyCustomSymbolToEvent(targetEv, customSymbolMode);
+                  return next;
+                });
+                setSelected({partIndex:pi,measure:absI,index:j});
+                playNoteEvent(nextEv, part.playbackInstrument);
+                return;
+              }
+              if (customSymbolResizeMode && !safeEvs[j]?.isRest) {
+                // サイズ変更は「その音符に対象記号が既に付いている場合」のみオーバーレイを開く
+                // （StaffCanvas と同じ考え方。付いていない記号を新規に生やす事故を防ぐ）。
+                const existing = safeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolResizeMode);
+                if (!existing) return;
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const currentPercent = Math.round((existing.scale ?? 1) * 100);
+                setSymbolResizeEditState({
+                  partIndex: pi,
+                  measureAbsoluteIndex: absI,
+                  eventIndex: j,
+                  symbolId: customSymbolResizeMode,
+                  currentValue: String(currentPercent),
+                  overlayX: me.clientX - (containerRect?.left ?? 0),
+                  overlayY: me.clientY - (containerRect?.top ?? 0),
+                });
+                return;
+              }
+              if (customSymbolOffsetMode && !safeEvs[j]?.isRest) {
+                // 位置調整も同様に、対象記号が既に付いている場合のみオーバーレイを開く。
+                const existing = safeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolOffsetMode);
+                if (!existing) return;
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                setSymbolOffsetEditState({
+                  partIndex: pi,
+                  measureAbsoluteIndex: absI,
+                  eventIndex: j,
+                  symbolId: customSymbolOffsetMode,
+                  currentX: String(existing.offsetX ?? 0),
+                  currentY: String(existing.offsetY ?? 0),
+                  overlayX: me.clientX - (containerRect?.left ?? 0),
+                  overlayY: me.clientY - (containerRect?.top ?? 0),
+                });
                 return;
               }
               if (graceNoteMode && !safeEvs[j]?.isRest) {
@@ -2318,6 +2411,9 @@ export default function PianoSystemCanvas({
                 playNoteEvent(playEvent, part.playbackInstrument);
               }else if(safeEvs[j]?.isRest){
                 if (dynamicMode) return;
+                if (customSymbolMode) return;
+                if (customSymbolResizeMode) return;
+                if (customSymbolOffsetMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i===0 &&
                     lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
@@ -2408,6 +2504,16 @@ export default function PianoSystemCanvas({
                 markings: safeEvs[j].dynamics,
               });
             }
+            {
+              // その段（パート）の五線上端を基準にした統一高さで描く。
+              // StaffCanvas と同じ共通ユーティリティを使うことで見た目を揃える。
+              const entry = buildCustomSymbolEntry(
+                safeEvs[j],
+                noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                stave.getYForLine(0),
+              );
+              if (entry) customSymbolEntries.push(entry);
+            }
             if (!safeEvs[j]?.__isPlaceholder && safeEvs[j]?.pedalMark) {
               pedalMarkEntries.push({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
@@ -2484,6 +2590,9 @@ export default function PianoSystemCanvas({
         svgRoot.appendChild(text);
       });
     });
+
+    // ── カスタム記号を一括描画（StaffCanvas と同じ共通ユーティリティを使う） ──
+    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot);
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
     pedalMarkEntries.forEach(({ anchorX, botY, mark }) => {
@@ -2653,7 +2762,7 @@ export default function PianoSystemCanvas({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures]);
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs]);
 
   function handleTimeSigConfirm(value: string) {
     if (!timeSigEditState) return;
@@ -2734,6 +2843,58 @@ export default function PianoSystemCanvas({
       return next;
     });
     setTextEditState(null);
+  }
+
+  /**
+   * カスタム記号のサイズ変更を確定する（StaffCanvas の handleSymbolResizeConfirm と同じロジック）。
+   * 入力値は%表記なので /100 して倍率に戻し、範囲外は clamp する。空欄は等倍（100%）扱い。
+   */
+  function handleSymbolResizeConfirm(rawText: string) {
+    if (!symbolResizeEditState) return;
+    const { partIndex, measureAbsoluteIndex, eventIndex, symbolId } = symbolResizeEditState;
+    const trimmed = rawText.trim();
+    const parsedPercent = trimmed === '' ? 100 : parseInt(trimmed, 10);
+    const percent = !isNaN(parsedPercent) ? parsedPercent : 100;
+    const scale = Math.min(MAX_SYMBOL_SCALE, Math.max(MIN_SYMBOL_SCALE, percent / 100));
+    setPartsScore(prev => {
+      const next = [...prev];
+      const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
+      if (measureAbsoluteIndex >= partData.length) return prev;
+      const targetEv = partData[measureAbsoluteIndex].events[eventIndex];
+      if (!targetEv) return prev;
+      partData[measureAbsoluteIndex].events[eventIndex] = setCustomSymbolScale(targetEv, symbolId, scale);
+      next[partIndex] = partData;
+      return next;
+    });
+    setSymbolResizeEditState(null);
+  }
+
+  /**
+   * カスタム記号の位置調整（横・縦オフセット）を確定する。
+   * 空欄は0として扱い、範囲外は clamp する（StaffCanvas と同じロジック）。
+   */
+  function handleSymbolOffsetConfirm(rawX: string, rawY: string) {
+    if (!symbolOffsetEditState) return;
+    const { partIndex, measureAbsoluteIndex, eventIndex, symbolId } = symbolOffsetEditState;
+    const parseOffset = (raw: string) => {
+      const trimmed = raw.trim();
+      const parsed = trimmed === '' ? 0 : parseInt(trimmed, 10);
+      const value = !isNaN(parsed) ? parsed : 0;
+      return Math.min(MAX_SYMBOL_OFFSET, Math.max(MIN_SYMBOL_OFFSET, value));
+    };
+    const offsetX = parseOffset(rawX);
+    const offsetY = parseOffset(rawY);
+    setPartsScore(prev => {
+      const next = [...prev];
+      const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
+      if (measureAbsoluteIndex >= partData.length) return prev;
+      const targetEv = partData[measureAbsoluteIndex].events[eventIndex];
+      if (!targetEv) return prev;
+      partData[measureAbsoluteIndex].events[eventIndex] = setCustomSymbolOffset(targetEv, symbolId, offsetX, offsetY);
+      next[partIndex] = partData;
+      return next;
+    });
+    setSymbolOffsetEditState(null);
   }
 
   return (
@@ -2954,6 +3115,163 @@ export default function PianoSystemCanvas({
               handleTextConfirm(e.target.value);
             }}
           />
+        </div>
+      )}
+      {/* カスタム記号サイズ変更オーバーレイ（StaffCanvas と同じ見た目・操作） */}
+      {symbolResizeEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: symbolResizeEditState.overlayX,
+            top: symbolResizeEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #0891b2',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 140,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#0891b2', fontFamily: 'sans-serif' }}>
+            記号サイズ変更（25〜400%、空欄で等倍）
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input
+              // eslint-disable-next-line jsx-a11y/no-autofocus
+              autoFocus
+              type="number"
+              min={25}
+              max={400}
+              defaultValue={symbolResizeEditState.currentValue}
+              placeholder="例: 120"
+              style={{
+                border: 'none',
+                outline: 'none',
+                fontSize: 13,
+                fontFamily: 'sans-serif',
+                width: 70,
+                padding: 2,
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleSymbolResizeConfirm((e.target as HTMLInputElement).value);
+                } else if (e.key === 'Escape') {
+                  setSymbolResizeEditState(null);
+                }
+                e.stopPropagation();
+              }}
+              onBlur={(e) => {
+                handleSymbolResizeConfirm(e.target.value);
+              }}
+            />
+            <span style={{ fontSize: 13, fontFamily: 'sans-serif' }}>%</span>
+          </div>
+        </div>
+      )}
+      {/* カスタム記号位置調整オーバーレイ（StaffCanvas と同じ見た目・操作） */}
+      {symbolOffsetEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: symbolOffsetEditState.overlayX,
+            top: symbolOffsetEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #0891b2',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 160,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#0891b2', fontFamily: 'sans-serif' }}>
+            記号位置調整（横・縦は{MIN_SYMBOL_OFFSET}〜{MAX_SYMBOL_OFFSET}px、縦は＋で下・−で上、空欄で0）
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <span style={{ fontSize: 12, fontFamily: 'sans-serif' }}>横</span>
+              <input
+                // eslint-disable-next-line jsx-a11y/no-autofocus
+                autoFocus
+                ref={symbolOffsetXInputRef}
+                type="number"
+                min={MIN_SYMBOL_OFFSET}
+                max={MAX_SYMBOL_OFFSET}
+                defaultValue={symbolOffsetEditState.currentX}
+                placeholder="0"
+                style={{
+                  border: '1px solid #ddd',
+                  outline: 'none',
+                  fontSize: 13,
+                  fontFamily: 'sans-serif',
+                  width: 50,
+                  padding: 2,
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSymbolOffsetConfirm(
+                      (e.target as HTMLInputElement).value,
+                      symbolOffsetYInputRef.current?.value ?? symbolOffsetEditState.currentY
+                    );
+                  } else if (e.key === 'Escape') {
+                    setSymbolOffsetEditState(null);
+                  }
+                  e.stopPropagation();
+                }}
+                onBlur={(e) => {
+                  if (e.relatedTarget === symbolOffsetYInputRef.current) return;
+                  handleSymbolOffsetConfirm(
+                    e.target.value,
+                    symbolOffsetYInputRef.current?.value ?? symbolOffsetEditState.currentY
+                  );
+                }}
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <span style={{ fontSize: 12, fontFamily: 'sans-serif' }}>縦</span>
+              <input
+                ref={symbolOffsetYInputRef}
+                type="number"
+                min={MIN_SYMBOL_OFFSET}
+                max={MAX_SYMBOL_OFFSET}
+                defaultValue={symbolOffsetEditState.currentY}
+                placeholder="0"
+                style={{
+                  border: '1px solid #ddd',
+                  outline: 'none',
+                  fontSize: 13,
+                  fontFamily: 'sans-serif',
+                  width: 50,
+                  padding: 2,
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSymbolOffsetConfirm(
+                      symbolOffsetXInputRef.current?.value ?? symbolOffsetEditState.currentX,
+                      (e.target as HTMLInputElement).value
+                    );
+                  } else if (e.key === 'Escape') {
+                    setSymbolOffsetEditState(null);
+                  }
+                  e.stopPropagation();
+                }}
+                onBlur={(e) => {
+                  if (e.relatedTarget === symbolOffsetXInputRef.current) return;
+                  handleSymbolOffsetConfirm(
+                    symbolOffsetXInputRef.current?.value ?? symbolOffsetEditState.currentX,
+                    e.target.value
+                  );
+                }}
+              />
+            </label>
+          </div>
         </div>
       )}
     </div>
