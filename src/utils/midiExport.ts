@@ -130,7 +130,10 @@ function buildNoteTrack(
     }
 
     for (const ev of measure.events) {
-      const ticks = DUR_TO_TICKS[ev.dur] ?? PPQ;
+      // 付点1個で1.5倍、複付点(2個)で1.75倍。四捨五入するのは、
+      // 一部の音価×付点の組み合わせで割り切れない場合があるため。
+      const dotMultiplier = ev.dots === 1 ? 1.5 : ev.dots === 2 ? 1.75 : 1;
+      const ticks = Math.round((DUR_TO_TICKS[ev.dur] ?? PPQ) * dotMultiplier);
       if (!ev.isRest && ev.keys.length > 0) {
         const midiNotes = ev.keys.map(keyToMidi).filter((n): n is number => n !== null);
         // Note-On

@@ -97,11 +97,30 @@ export function syncMeasuresPrimaryVoiceFromEvents(measures: MeasureData[]): Mea
 }
 
 /**
+ * 付点による拍数の倍率。
+ * 付点1個 = 1.5倍（元の長さ + その半分）、複付点(2個) = 1.75倍（元の長さ + 半分 + 4分の1）。
+ */
+export function dotsMultiplier(dots?: 1 | 2): number {
+  if (dots === 1) return 1.5;
+  if (dots === 2) return 1.75;
+  return 1;
+}
+
+/**
+ * 音価（と付点）から「4分音符=1拍」の基準拍数を計算する共通ヘルパー。
+ * 複数ファイルに同じ倍率計算が重複しないよう、ここに集約する。
+ */
+export function getDurationBeats(dur: NoteEvent['dur'], dots?: 1 | 2): number {
+  const base = DURATION_TO_BEATS[dur] ?? 1;
+  return base * dotsMultiplier(dots);
+}
+
+/**
  * 単一イベントの長さを「4分音符=1拍」の基準拍へ変換する。
  * 再生位置の見える化でも同じ計算を使うため、共通関数として公開する。
  */
 export function getEventDurationBeats(event: NoteEvent): number {
-  return DURATION_TO_BEATS[event.dur] ?? 1;
+  return getDurationBeats(event.dur, event.dots);
 }
 
 export function getMeasureDurationBeats(measure: MeasureData): number {

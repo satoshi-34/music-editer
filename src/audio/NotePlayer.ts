@@ -29,6 +29,8 @@ export interface NoteEvent {
   keys: string[];
   /** 強弱記号。個別クリック再生でも大まかな音量差を確認できるようにする */
   dynamics?: DynamicMarking[];
+  /** 付点の数。1 = 付点（1.5倍）、2 = 複付点（1.75倍）。省略時は付点なし */
+  dots?: 1 | 2;
 }
 
 /**
@@ -86,7 +88,7 @@ export class NotePlayer {
    * 音価から再生時間（秒）を計算する
    * @private
    */
-  private _durToSeconds(dur: DurKey, bpm: number = 120): number {
+  private _durToSeconds(dur: DurKey, bpm: number = 120, dots?: 1 | 2): number {
     // 4分音符を基準とした比率
     const ratios: Record<DurKey, number> = {
       '1': 4.0,   // 全音符
@@ -99,8 +101,10 @@ export class NotePlayer {
     };
 
     const ratio = ratios[dur] || 1.0;
+    // 付点1個で1.5倍、複付点(2個)で1.75倍に長さを伸ばす
+    const dotRatio = dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1.0;
     const quarterNoteSeconds = 60 / bpm; // 4分音符の長さ（秒）
-    return quarterNoteSeconds * ratio;
+    return quarterNoteSeconds * ratio * dotRatio;
   }
 
   /**
@@ -223,7 +227,7 @@ export class NotePlayer {
     if (!synth || !this.audioEngine.isReady()) return;
 
     if (options.duration === undefined) {
-      options.duration = this._durToSeconds(noteEvent.dur);
+      options.duration = this._durToSeconds(noteEvent.dur, 120, noteEvent.dots);
     }
 
     // 前の音をすべて停止（連続クリック時の排他制御）

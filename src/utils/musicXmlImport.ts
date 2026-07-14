@@ -42,10 +42,14 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
     const isRest = noteEl.querySelector('rest') !== null;
     const typeEl = noteEl.querySelector('type');
     const dur = TYPE_TO_DUR[typeEl?.textContent ?? ''] ?? '4';
+    // <dot/> の数から付点(1個)・複付点(2個)を読み取る。3個以上は複付点として扱う（当アプリの上限が2のため）
+    // :scope 疑似クラスが使えない環境もあるため、children を直接見て判定する
+    const dotCount = Array.from(noteEl.children).filter((child) => child.tagName === 'dot').length;
+    const dots: 1 | 2 | undefined = dotCount === 1 ? 1 : dotCount >= 2 ? 2 : undefined;
 
     if (isRest) {
       if (chordBuffer) { events.push(chordBuffer); chordBuffer = null; }
-      events.push({ dur: dur as any, isRest: true, keys: [] });
+      events.push({ dur: dur as any, isRest: true, keys: [], dots });
       continue;
     }
 
@@ -59,7 +63,7 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
       chordBuffer.keys.push(key);
     } else {
       if (chordBuffer) events.push(chordBuffer);
-      chordBuffer = { dur: dur as any, isRest: false, keys: [key] };
+      chordBuffer = { dur: dur as any, isRest: false, keys: [key], dots };
 
       // アーティキュレーションを読み込む
       const articulations: string[] = [];

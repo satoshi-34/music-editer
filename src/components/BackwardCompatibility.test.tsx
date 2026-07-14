@@ -72,8 +72,8 @@ const measureDataArbitrary: fc.Arbitrary<MeasureData> = fc.record({
   events: fc.array(noteEventArbitrary, { maxLength: 4 })
 });
 
-// 音符7＋休符7＋タイ1＋臨時記号3＋リピート2＋括弧2＋強弱8＋アーティキュレーション5 = 35
-const EXPECTED_PALETTE_BUTTON_COUNT = 35;
+// 音符7＋休符7＋付点1＋タイ1＋臨時記号3＋リピート2＋括弧2＋強弱8＋アーティキュレーション5 = 36
+const EXPECTED_PALETTE_BUTTON_COUNT = 36;
 
 describe('Backward Compatibility Tests', () => {
   beforeEach(() => {

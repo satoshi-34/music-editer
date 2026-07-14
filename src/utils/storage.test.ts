@@ -1034,6 +1034,66 @@ describe('Storage Foundation Tests', () => {
       }
     });
 
+    it('dots が未指定・1・2 の NoteEvent は保存・読込できる', () => {
+      const testData = createSavedScoreData(
+        {
+          title: 'Dots Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [
+              { dur: '4', isRest: false, keys: ['c/4'] },
+              { dur: '4', isRest: false, keys: ['d/4'], dots: 1 },
+              { dur: '8', isRest: true, keys: ['b/4'], dots: 2 },
+            ]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const saveResult = saveScoreData(testData);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      const events = loadResult.data?.parts[0].measures[0].events ?? [];
+      expect(events[0].dots).toBeUndefined();
+      expect(events[1].dots).toBe(1);
+      expect(events[2].dots).toBe(2);
+    });
+
+    it('dots に不正な値（3や文字列）を含むデータは保存時に拒否する', () => {
+      const invalidData = createSavedScoreData(
+        {
+          title: 'Invalid Dots',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{ dur: '4', isRest: false, keys: ['c/4'], dots: 3 as any }]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const saveResult = saveScoreData(invalidData);
+      expect(saveResult.success).toBe(false);
+      expect(saveResult.error?.type).toBe('corrupted_data');
+    });
+
     it('不正な音高キーを含むデータは保存時に拒否する', () => {
       const invalidData = createSavedScoreData(
         {

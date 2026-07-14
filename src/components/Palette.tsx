@@ -39,7 +39,7 @@ export function normalizeToVF(d: DurKey): 'w'|'h'|'q'|'8'|'16'|'32'|'64' {
 
 // ツール（「音価」と「休符かどうか」、またはタイモード）
 export type Tool =
-  | { duration: DurKey; isRest?: boolean }  // 通常の音符/休符入力
+  | { duration: DurKey; isRest?: boolean; dots?: 1 }  // 通常の音符/休符入力（dots: 1で付点）
   | { mode: 'select' }                      // 小節選択モード（コピー&ペースト用）
   | { mode: 'tie' }                         // タイ記号を付けるモード
   | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
@@ -175,6 +175,7 @@ export default function Palette({
   // 現在の選択状態を判定
   const selectActive = 'mode' in value && value.mode === 'select';
   const tieActive = 'mode' in value && value.mode === 'tie';
+  const dotActive = 'duration' in value && !!value.dots;
   const selectedAccidental = 'mode' in value && value.mode === 'accidental' ? value.accidental : null;
   const selectedRepeat = 'mode' in value && value.mode === 'repeat' ? value.repeat : null;
   const selectedEnding = 'mode' in value && value.mode === 'ending' ? value.ending : null;
@@ -233,6 +234,23 @@ export default function Palette({
               </button>
             );
           })}
+          {/* 付点トグル：ONのまま音符/休符を置くと dots:1 が付く（キーボードの「.」でも切替可） */}
+          <button
+            type="button"
+            onClick={() => {
+              if ('duration' in value) {
+                onChange({ ...value, dots: value.dots ? undefined : 1 });
+              } else {
+                onChange({ ...(ROW1[2] as { duration: DurKey; isRest?: boolean }), dots: 1 });
+              }
+            }}
+            title="付点（音価を1.5倍に伸ばす。「.」キーでも切替可）"
+            aria-label="付点（音価を1.5倍に伸ばす。「.」キーでも切替可）"
+            // 付点ONのときは背景色を変えて、押し忘れ/押しっぱなしが見た目で分かるようにする
+            style={btnStyle(dotActive, { fontSize: 20, fontWeight: 'bold' })}
+          >
+            .
+          </button>
           {/* タイ */}
           <button
             type="button"

@@ -3,12 +3,35 @@ import { describe, expect, it } from 'vitest';
 import type { MeasureData } from '../types/storage';
 import {
   flattenMeasureForPlayback,
+  getDurationBeats,
+  getEventDurationBeats,
   getMeasureDurationBeats,
   getMeasureVoices,
   syncPrimaryVoiceFromEvents,
 } from './voiceMeasureUtils';
 
 describe('voiceMeasureUtils', () => {
+  describe('付点による拍数計算', () => {
+    it('付点1個(dots:1)は音価の1.5倍になる', () => {
+      expect(getDurationBeats('4', 1)).toBeCloseTo(1.5);
+      expect(getDurationBeats('8', 1)).toBeCloseTo(0.75);
+    });
+
+    it('複付点(dots:2)は音価の1.75倍になる', () => {
+      expect(getDurationBeats('4', 2)).toBeCloseTo(1.75);
+      expect(getDurationBeats('2', 2)).toBeCloseTo(3.5);
+    });
+
+    it('dots未指定は付点なしの拍数のまま', () => {
+      expect(getDurationBeats('4')).toBe(1);
+    });
+
+    it('getEventDurationBeats は NoteEvent.dots を反映する', () => {
+      expect(getEventDurationBeats({ dur: '4', isRest: false, keys: ['c/4'], dots: 1 })).toBeCloseTo(1.5);
+      expect(getEventDurationBeats({ dur: '8', isRest: true, keys: [], dots: 2 })).toBeCloseTo(0.875);
+    });
+  });
+
   it('voices が無い小節は events を primary voice として扱う', () => {
     const measure: MeasureData = {
       events: [{ dur: '4', isRest: false, keys: ['c/4'] }]

@@ -77,6 +77,8 @@ function validateNoteEvent(event: any): event is NoteEvent {
     typeof event === 'object' &&
     isValidDurKey(event.dur) &&
     typeof event.isRest === 'boolean' &&
+    // dots は付点の数。1(付点)・2(複付点)・未指定のみ許可し、それ以外の値は不正データとして弾く
+    (event.dots === undefined || event.dots === 1 || event.dots === 2) &&
     // 音符は 1 音以上必要、休符は空配列でもよい。
     // ここを分けておくと、複数声部で「休符を詰めて拍を合わせる」データも安全に保存できる。
     Array.isArray(event.keys) &&

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament } from 'vexflow';
+import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament, Dot } from 'vexflow';
 import type { Tool } from './Palette';
 import type { TieArc, MeasureData, NoteEvent, DurKey, TimeSignature } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
@@ -126,13 +126,15 @@ function durKeyFromBeats(beats: number): DurKey | null {
     Math.abs(beatsFromVF(toVFDur(duration)) - beats) < 0.0001
   )) ?? null;
 }
-function getDurationTool(tool: Tool): { duration: DurKey; isRest?: boolean } | null {
+function getDurationTool(tool: Tool): { duration: DurKey; isRest?: boolean; dots?: 1 } | null {
   if (!('duration' in tool)) {
     return null;
   }
   const duration = tool.duration as DurKey;
-  return DURATION_TOOL_VALUES.includes(duration) ? { duration, isRest: tool.isRest } : null;
+  return DURATION_TOOL_VALUES.includes(duration) ? { duration, isRest: tool.isRest, dots: tool.dots } : null;
 }
+// 付点1個=1.5倍、複付点(2個)=1.75倍。休符差し込み判定・再生位置計算などで共通利用する
+const dotBeatsMultiplier = (dots?: 1 | 2) => (dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1);
 function buildRestEditReplacement(
   restEvent: NoteEvent,
   key: string,
@@ -144,9 +146,11 @@ function buildRestEditReplacement(
     return null;
   }
 
-  const noteBeats = beatsFromVF(toVFDur(durationTool.duration));
-  const restBeats = beatsFromVF(toVFDur(restEvent.dur));
-  const notePart: NoteEvent = { dur: durationTool.duration, isRest: false, keys: [key] };
+  // 付点音符は「その場に少なくとも付点分の長さの空きがあるか」だけで判定する保守的な仕様。
+  // 休符側を付点休符に分割し直すような複雑な処理はしない。
+  const noteBeats = beatsFromVF(toVFDur(durationTool.duration)) * dotBeatsMultiplier(durationTool.dots);
+  const restBeats = beatsFromVF(toVFDur(restEvent.dur)) * dotBeatsMultiplier(restEvent.dots);
+  const notePart: NoteEvent = { dur: durationTool.duration, isRest: false, keys: [key], dots: durationTool.dots };
   if (Math.abs(noteBeats - restBeats) < 0.0001) {
     // 同じ長さなら、休符をそのまま音符へ置き換える。
     // 例: 16分音符ツールで16分休符をクリック -> 16分音符に変わる。
@@ -216,7 +220,7 @@ function fillPriorMeasureRests(
     const effectiveBeats = measure.timeSignature
       ? getMeasureBeats(measure.timeSignature)
       : globalBeatsPerMeasure;
-    const currentBeats = measure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)), 0);
+    const currentBeats = measure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)) * dotBeatsMultiplier(event.dots), 0);
     const remainingBeats = effectiveBeats - currentBeats;
     if (remainingBeats > 0.0001) {
       measure.events.push(...buildRestEventsForBeats(remainingBeats, restKey));
@@ -609,17 +613,26 @@ function makeVFNote(
   prevMeasureState?: MeasureAccidentalState
 ) {
   const vfDur = toVFDur(ev.dur);
+  // 付点(dots)の数だけ Dot.buildAndAttach を呼ぶ。1回呼ぶごとに符点が1個増える仕組み
+  // （VexFlow 側の複付点対応は「同じ音符に複数回 buildAndAttach する」実装のため）。
+  const attachDots = (note: StaveNote) => {
+    const count = ev.dots === 1 ? 1 : ev.dots === 2 ? 2 : 0;
+    for (let i = 0; i < count; i += 1) {
+      Dot.buildAndAttach([note], { all: true });
+    }
+    return note;
+  };
   if (ev.isRest) {
     const eventRestKey = ev.keys[0] || defaultRestKeyForClef(clef);
     const renderRestKey = eventRestKey === defaultRestKeyForClef(clef)
       ? restKeyForClef(clef)
       : eventRestKey;
     const n = new StaveNote({ clef, keys: [renderRestKey], duration: (vfDur as VFDur) + 'r' });
-    return n;
+    return attachDots(n);
   }
   // keys が空の場合は全休符にフォールバック
   if (!ev.keys || ev.keys.length === 0) {
-    return new StaveNote({ clef, keys: [restKeyForClef(clef)], duration: (vfDur as VFDur) + 'r' });
+    return attachDots(new StaveNote({ clef, keys: [restKeyForClef(clef)], duration: (vfDur as VFDur) + 'r' }));
   }
   const n = new StaveNote({ clef, keys: ev.keys, duration: vfDur });
   // 小節内の過去状態を見て、「今ここで本当に見せるべき臨時記号」だけを付ける。
@@ -666,7 +679,7 @@ function makeVFNote(
     }
   }
 
-  return n;
+  return attachDots(n);
 }
 
 function applyAccidentalToEvent(
@@ -1949,8 +1962,9 @@ export default function StaffCanvas({
           // この小節の有効拍子を取得する（途中拍子変更に対応するため effectiveTimeSig を使う）
           const currentMeasureBeats = getMeasureBeats(currentMeasure.timeSignature ?? effectiveTimeSig);
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration) ? (tool as any).duration : '4') as DurKey;
-          const addBeats = beatsFromVF(toVFDur(addDuration));
-          const currentBeats = currentMeasure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)), 0);
+          const addDots: 1 | undefined = (tool as any)?.dots === 1 ? 1 : undefined;
+          const addBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
+          const currentBeats = currentMeasure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)) * dotBeatsMultiplier(event.dots), 0);
           if (currentBeats + addBeats > currentMeasureBeats) {
             return;
           }
@@ -1959,6 +1973,7 @@ export default function StaffCanvas({
             dur: addDuration,
             isRest: !!(tool as any)?.isRest,
             keys: [(tool as any)?.isRest ? defaultRestKeyForClef(clef) : key],
+            dots: addDots,
           };
 
           setScore(prev => {

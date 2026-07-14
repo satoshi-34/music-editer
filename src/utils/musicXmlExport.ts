@@ -78,16 +78,26 @@ function dynamicsDirectionXml(ev: NoteEvent, staff: number): string {
   return `<direction placement="below"><direction-type><dynamics><${dyn.value}/></dynamics></direction-type><staff>${staff}</staff></direction>`;
 }
 
+/** 付点の数から MusicXML の <dot/> 要素を繰り返す文字列を作る */
+function dotsXml(ev: NoteEvent): string {
+  const count = ev.dots === 1 ? 1 : ev.dots === 2 ? 2 : 0;
+  return '<dot/>'.repeat(count);
+}
+
 /** NoteEvent 1つを MusicXML <note> 要素に変換する */
 function noteToXml(ev: NoteEvent, voice: number, staff: number): string {
-  const dur = DUR_TO_DIV[ev.dur] ?? 16;
+  // 付点1個で1.5倍、複付点(2個)で1.75倍。四捨五入するのは、
+  // DIVISIONS(16)を基準にすると 64分音符の複付点などで割り切れないことがあるため。
+  const dotMultiplier = ev.dots === 1 ? 1.5 : ev.dots === 2 ? 1.75 : 1;
+  const dur = Math.round((DUR_TO_DIV[ev.dur] ?? 16) * dotMultiplier);
   const type = DUR_TO_TYPE[ev.dur] ?? 'quarter';
+  const dotXml = dotsXml(ev);
   const voiceXml = `<voice>${voice}</voice>`;
   const staffXml = `<staff>${staff}</staff>`;
   const artXml = articulationsXml(ev);
 
   if (ev.isRest) {
-    return `<note><rest/><duration>${dur}</duration><type>${type}</type>${voiceXml}${staffXml}</note>`;
+    return `<note><rest/><duration>${dur}</duration><type>${type}</type>${dotXml}${voiceXml}${staffXml}</note>`;
   }
 
   // 和音: 最初の音符は通常、2音目以降は <chord/> を付ける
@@ -95,7 +105,7 @@ function noteToXml(ev: NoteEvent, voice: number, staff: number): string {
     const pitchXml = keyToPitchXml(k);
     if (!pitchXml) return '';
     const chordTag = idx > 0 ? '<chord/>' : '';
-    return `<note>${chordTag}${pitchXml}<duration>${dur}</duration><type>${type}</type>${voiceXml}${staffXml}${artXml}</note>`;
+    return `<note>${chordTag}${pitchXml}<duration>${dur}</duration><type>${type}</type>${dotXml}${voiceXml}${staffXml}${artXml}</note>`;
   });
   return pitchNodes.join('');
 }

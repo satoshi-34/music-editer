@@ -1537,6 +1537,14 @@ export default function ScorePage() {
         });
         e.preventDefault();
       }
+      // . キー: 付点のON/OFFを切り替える（音価が選択されているときのみ有効）
+      if (e.key === '.') {
+        setTool(prev => {
+          if ('duration' in prev) return { ...prev, dots: prev.dots ? undefined : 1 };
+          return prev;
+        });
+        e.preventDefault();
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
