@@ -63,6 +63,18 @@
   overflow-x: auto;
   max-width: 100%;
 }
+
+/* Undo/Redo ボタン。タブに関係なく常時操作できるよう toolbar-tabs の隣に置く */
+.toolbar-history-controls {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.toolbar-history-button {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 7px;
+}
 .toolbar-section {
   width: 100%;
   min-width: 0;

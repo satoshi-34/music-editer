@@ -73,6 +73,7 @@ import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId 
 import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
 import { DEFAULT_TIME_SIGNATURE, formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import type { TimeSignature } from '../types/storage';
+import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 
 type PageSpec = { systems: number };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
@@ -1136,14 +1137,22 @@ export default function ScorePage() {
     currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts };
   }, [rightHandData, leftHandData, quartetParts, ensembleParts]);
 
+  // ツールバーの「元に戻す/やり直す」ボタンの活性・非活性を切り替えるためのカウンタ。
+  // historyStack/futureStack は ref のため、その中身が変わっただけでは再レンダーされない。
+  // push/undo/redo のたびにこのカウンタを更新して、ボタンの canUndo/canRedo 表示を最新化する。
+  const [historyVersion, setHistoryVersion] = useState(0);
+
   // 変更前のスナップショットを履歴に積む（undo 可能にする）
   const pushHistory = useCallback(() => {
-    historyStack.current = [
-      ...historyStack.current.slice(-MAX_HISTORY + 1),
+    const { history, future } = pushHistorySnapshot(
+      historyStack.current,
+      futureStack.current,
       { ...currentScoreRef.current },
-    ];
-    // 新しい操作をしたら Redo 履歴はリセット
-    futureStack.current = [];
+      MAX_HISTORY
+    );
+    historyStack.current = history;
+    futureStack.current = future;
+    setHistoryVersion(v => v + 1);
   }, []);
 
   // スナップショットを state に適用する（undo/redo 共通）
@@ -1153,6 +1162,37 @@ export default function ScorePage() {
     setQuartetParts(snap.quartetParts);
     setEnsembleParts(snap.ensembleParts);
   }, []);
+
+  // Undo: 履歴から1つ前の状態を取り出して適用する（キーボードショートカットとボタンの共通処理）
+  const handleUndo = useCallback(() => {
+    const { history, future, snapshot } = undoHistory(
+      historyStack.current,
+      futureStack.current,
+      { ...currentScoreRef.current }
+    );
+    if (!snapshot) return;
+    historyStack.current = history;
+    futureStack.current = future;
+    applySnapshot(snapshot);
+    setHistoryVersion(v => v + 1);
+  }, [applySnapshot]);
+
+  // Redo: 未来スタックから1つ取り出して適用する（キーボードショートカットとボタンの共通処理）
+  const handleRedo = useCallback(() => {
+    const { history, future, snapshot } = redoHistory(
+      historyStack.current,
+      futureStack.current,
+      { ...currentScoreRef.current }
+    );
+    if (!snapshot) return;
+    historyStack.current = history;
+    futureStack.current = future;
+    applySnapshot(snapshot);
+    setHistoryVersion(v => v + 1);
+  }, [applySnapshot]);
+
+  const canUndo = historyVersion >= 0 && historyStack.current.length > 0;
+  const canRedo = historyVersion >= 0 && futureStack.current.length > 0;
 
   const handleRightHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
@@ -1571,27 +1611,19 @@ export default function ScorePage() {
       if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) return;
 
       if (e.key === 'z' && !e.shiftKey) {
-        // Undo: 履歴から1つ前の状態を取り出して適用
-        const prev = historyStack.current.pop();
-        if (!prev) return;
-        futureStack.current.push({ ...currentScoreRef.current });
-        applySnapshot(prev);
+        handleUndo();
         e.preventDefault();
         return;
       }
       if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
-        // Redo: 未来スタックから1つ取り出して適用
-        const next = futureStack.current.pop();
-        if (!next) return;
-        historyStack.current.push({ ...currentScoreRef.current });
-        applySnapshot(next);
+        handleRedo();
         e.preventDefault();
         return;
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [applySnapshot]);
+  }, [handleUndo, handleRedo]);
 
   // Cmd+C/V とEscape による選択解除ハンドラ
   useEffect(() => {
@@ -1993,6 +2025,30 @@ export default function ScorePage() {
               {tab.label}
             </button>
           ))}
+        </div>
+
+        {/* Undo/Redo はタブに関係なく常時操作できるようにする */}
+        <div className="toolbar-history-controls" role="group" aria-label="元に戻す・やり直す">
+          <button
+            type="button"
+            className="ghost toolbar-history-button"
+            onClick={handleUndo}
+            disabled={!canUndo}
+            title="元に戻す (Cmd/Ctrl+Z)"
+            aria-label="元に戻す"
+          >
+            ↶ 元に戻す
+          </button>
+          <button
+            type="button"
+            className="ghost toolbar-history-button"
+            onClick={handleRedo}
+            disabled={!canRedo}
+            title="やり直す (Cmd/Ctrl+Shift+Z)"
+            aria-label="やり直す"
+          >
+            ↷ やり直す
+          </button>
         </div>
 
         <div className="toolbar-panel">
