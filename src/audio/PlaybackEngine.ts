@@ -5,6 +5,11 @@ export interface PlaybackMeasureEvent {
   dur: string;
   isRest: boolean;
   keys: string[];
+  /**
+   * 付点の数。1 = 付点（1.5倍）、2 = 複付点（1.75倍）。省略時は付点なし。
+   * 再生エンジンが音価の長さを計算する際に使う（NoteEvent.dots と同じ意味）。
+   */
+  dots?: 1 | 2;
   /** 小節頭からの開始拍。複数声部の同時発音位置をそろえるために使う */
   startBeat?: number;
   /**

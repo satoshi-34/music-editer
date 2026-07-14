@@ -114,6 +114,24 @@ export function getEventDurationBeats(event): number   // event.dots を反映�
 - `src/utils/musicXmlDots.test.ts`（新規） — MusicXML 付点ラウンドトリップのテスト
 - `src/components/BackwardCompatibility.test.tsx` — パレットボタン数の期待値を +1（付点トグル分）に更新
 
+## 追記: SoundFontEngine の付点対応漏れを修正（2026-07-14）
+
+初回実装のレビューで、`src/audio/SoundFontEngine.ts` が `event.dots` を一切参照していない点が漏れとして見つかった。SoundFont再生（`NotePlayer`/`ScorePlayer` を使わない別経路の再生エンジン）では、付点音符が付点なしの長さで鳴り、以降のイベントのタイミングが前倒しにずれる不具合があった。
+
+対応内容:
+
+- `src/audio/PlaybackEngine.ts` の `PlaybackMeasureEvent` に `dots?: 1 | 2` を追加し、`NoteEvent.dots` と同じ意味のフィールドを再生エンジン間で受け渡せるようにした。
+- `src/audio/SoundFontEngine.ts`
+  - `durationToSeconds(duration, bpm, dots?)` に `dots` 引数を追加し、ローカルに複製していた `DURATION_TO_BEATS` テーブル＋独自倍率計算を廃止して、`voiceMeasureUtils.ts` の `getDurationBeats` を再利用する形に統一した（他の再生系と同じ計算式にすることで、今後の重複漏れを防ぐ狙い）。
+  - `playParts` 内の呼び出し箇所（音符の発音長さ計算）と、複数声部小節の終端拍（`endBeat`）計算の2箇所で `event.dots` を渡すように修正した。
+- テスト: `src/audio/SoundFontEngine.test.ts` に、`durationToSeconds` が dots=1 で1.5倍、dots=2 で1.75倍になることを確認するテストを追加した。
+
+### 影響範囲（追加分）
+
+- `src/audio/PlaybackEngine.ts` — `PlaybackMeasureEvent.dots` 追加
+- `src/audio/SoundFontEngine.ts` — 付点を考慮した長さ計算に修正、ローカルの `DURATION_TO_BEATS` を削除して `voiceMeasureUtils.getDurationBeats` に統一
+- `src/audio/SoundFontEngine.test.ts` — 付点の長さ計算テストを追加
+
 ## 実装内容メモ（実装後の補足）
 
 - ブラウザ確認では、4/4拍子で付点4分音符を配置して丸い付点がVexFlow描画で表示されること、6/8拍子で付点4分音符2個がちょうど1小節を埋め、3個目は入力拒否（測度いっぱいの判定が効く）ことを確認した。

@@ -37,4 +37,16 @@ describe('SoundFontEngine helpers', () => {
     expect(quietOptions.gain).toBeGreaterThan(0);
     expect(loudOptions.gain).toBeLessThanOrEqual(1);
   });
+
+  it('付点音符は dots に応じて1.5倍・1.75倍の長さに変換される', () => {
+    const engine = new SoundFontEngine();
+    const bpm = 120;
+    // BPM=120 なら4分音符=0.5秒。付点4分音符は 0.5 * 1.5 = 0.75秒になるはず。
+    const quarterSeconds = (engine as any).durationToSeconds('4', bpm);
+    const dottedQuarterSeconds = (engine as any).durationToSeconds('4', bpm, 1);
+    const doubleDottedQuarterSeconds = (engine as any).durationToSeconds('4', bpm, 2);
+
+    expect(dottedQuarterSeconds).toBeCloseTo(quarterSeconds * 1.5);
+    expect(doubleDottedQuarterSeconds).toBeCloseTo(quarterSeconds * 1.75);
+  });
 });

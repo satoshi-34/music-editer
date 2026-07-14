@@ -4,6 +4,7 @@ import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
 import type { PlaybackSoundProfile } from './playbackSettings';
 import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS, getMasterVolumeGain } from './playbackSettings';
 import { InstrumentType } from './SoundSource';
+import { getDurationBeats } from '../utils/voiceMeasureUtils';
 
 type SoundFontModule = typeof import('soundfont-player');
 
@@ -14,16 +15,6 @@ const KNOWN_SOUNDFONT_NAMES = new Set([
   'FatBoy',
   'GeneralUser_GS'
 ]);
-
-const DURATION_TO_BEATS: Record<string, number> = {
-  '1': 4,
-  '2': 2,
-  '4': 1,
-  '8': 0.5,
-  '16': 0.25,
-  '32': 0.125,
-  '64': 0.0625
-};
 
 /**
  * アプリ内の楽器名を、SoundFont 側の楽器名へ変換する。
@@ -188,7 +179,7 @@ export class SoundFontEngine implements PlaybackEngine {
         }
 
         for (const event of measure.events) {
-          const duration = this.durationToSeconds(event.dur, bpm);
+          const duration = this.durationToSeconds(event.dur, bpm, event.dots);
           // アーティキュレーションで「鳴らす長さ」だけ伸縮させる。
           // タイミング（次の音までの間隔）は duration のまま据え置く。
           const soundDuration = duration * (event.durationScale ?? 1);
@@ -217,7 +208,9 @@ export class SoundFontEngine implements PlaybackEngine {
             const startBeat = typeof event.startBeat === 'number'
               ? event.startBeat
               : 0;
-            const endBeat = startBeat + (DURATION_TO_BEATS[event.dur] ?? 1);
+            // 付点音符の終端位置も dots を考慮しないと、複数声部小節の
+            // 終わりが実際より短く見積もられ、次小節が前倒しになる。
+            const endBeat = startBeat + getDurationBeats(event.dur as never, event.dots);
             return Math.max(maxEnd, endBeat);
           }, 0);
           // 複数声部の小節は、最後の発音位置だけでなく小節本来の長さも守る。
@@ -370,10 +363,12 @@ export class SoundFontEngine implements PlaybackEngine {
     return moduleLike;
   }
 
-  private durationToSeconds(duration: string, bpm: number): number {
+  private durationToSeconds(duration: string, bpm: number, dots?: 1 | 2): number {
     // 楽譜データは「4」「8」のような音価文字列なので、
     // まず拍数へ直し、そのあと BPM から秒へ変換する。
-    const beats = DURATION_TO_BEATS[duration] ?? 1;
+    // 付点（dots）の倍率も voiceMeasureUtils と同じ計算式で反映しないと、
+    // 付点音符が短く鳴って以降のタイミングが前倒しにずれてしまう。
+    const beats = getDurationBeats(duration as never, dots);
     return beats * (60 / bpm);
   }
 
