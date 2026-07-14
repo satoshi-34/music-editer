@@ -132,6 +132,16 @@ function validateNoteEvent(event: any): event is NoteEvent {
           )
         ))
       )
+    ) &&
+    (
+      event.tuplet === undefined ||
+      (
+        isRecord(event.tuplet) &&
+        typeof event.tuplet.id === 'string' &&
+        event.tuplet.id.length > 0 &&
+        Number.isInteger(event.tuplet.numNotes) && event.tuplet.numNotes > 0 &&
+        Number.isInteger(event.tuplet.notesOccupied) && event.tuplet.notesOccupied > 0
+      )
     )
   );
 }

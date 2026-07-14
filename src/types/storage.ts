@@ -138,6 +138,12 @@ export interface NoteEvent {
    * '8vaEnd' / '8vbEnd': 対応する括弧の終端を示す
    */
   ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd';
+  /**
+   * 連符情報。同じ id を持つ連続イベントが1つの連符グループを構成する。
+   * numNotes 個ぶんの音符を notesOccupied 拍分の時間に詰め込む（例: 3連符なら numNotes=3, notesOccupied=2）。
+   * 旧セーブデータとの互換のため省略可能にする。
+   */
+  tuplet?: { id: string; numNotes: number; notesOccupied: number };
 }
 
 /**

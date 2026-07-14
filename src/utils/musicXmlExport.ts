@@ -85,19 +85,38 @@ function dotsXml(ev: NoteEvent): string {
 }
 
 /** NoteEvent 1つを MusicXML <note> 要素に変換する */
-function noteToXml(ev: NoteEvent, voice: number, staff: number): string {
+function noteToXml(
+  ev: NoteEvent,
+  voice: number,
+  staff: number,
+  tupletPos?: { isFirst: boolean; isLast: boolean }
+): string {
   // 付点1個で1.5倍、複付点(2個)で1.75倍。四捨五入するのは、
   // DIVISIONS(16)を基準にすると 64分音符の複付点などで割り切れないことがあるため。
   const dotMultiplier = ev.dots === 1 ? 1.5 : ev.dots === 2 ? 1.75 : 1;
-  const dur = Math.round((DUR_TO_DIV[ev.dur] ?? 16) * dotMultiplier);
+  // 連符（tuplet）は notesOccupied/numNotes 倍だけ実時間が短くなる（例: 3連符は 2/3 倍）
+  const tupletMultiplier = ev.tuplet && ev.tuplet.numNotes ? ev.tuplet.notesOccupied / ev.tuplet.numNotes : 1;
+  const dur = Math.round((DUR_TO_DIV[ev.dur] ?? 16) * dotMultiplier * tupletMultiplier);
   const type = DUR_TO_TYPE[ev.dur] ?? 'quarter';
   const dotXml = dotsXml(ev);
   const voiceXml = `<voice>${voice}</voice>`;
   const staffXml = `<staff>${staff}</staff>`;
   const artXml = articulationsXml(ev);
+  // 連符情報: <time-modification> は実際の音数と本来の音数の比率、
+  // <notations><tuplet .../></notations> はブラケットの開始/終了位置を表す
+  let timeModXml = '';
+  let tupletNotationXml = '';
+  if (ev.tuplet) {
+    timeModXml = `<time-modification><actual-notes>${ev.tuplet.numNotes}</actual-notes><normal-notes>${ev.tuplet.notesOccupied}</normal-notes></time-modification>`;
+    const startTag = tupletPos?.isFirst ? '<tuplet type="start" number="1"/>' : '';
+    const stopTag = tupletPos?.isLast ? '<tuplet type="stop" number="1"/>' : '';
+    if (startTag || stopTag) {
+      tupletNotationXml = `<notations>${startTag}${stopTag}</notations>`;
+    }
+  }
 
   if (ev.isRest) {
-    return `<note><rest/><duration>${dur}</duration><type>${type}</type>${dotXml}${voiceXml}${staffXml}</note>`;
+    return `<note><rest/><duration>${dur}</duration><type>${type}</type>${dotXml}${timeModXml}${voiceXml}${staffXml}${tupletNotationXml}</note>`;
   }
 
   // 和音: 最初の音符は通常、2音目以降は <chord/> を付ける
@@ -105,7 +124,7 @@ function noteToXml(ev: NoteEvent, voice: number, staff: number): string {
     const pitchXml = keyToPitchXml(k);
     if (!pitchXml) return '';
     const chordTag = idx > 0 ? '<chord/>' : '';
-    return `<note>${chordTag}${pitchXml}<duration>${dur}</duration><type>${type}</type>${dotXml}${voiceXml}${staffXml}${artXml}</note>`;
+    return `<note>${chordTag}${pitchXml}<duration>${dur}</duration><type>${type}</type>${dotXml}${timeModXml}${voiceXml}${staffXml}${artXml}${tupletNotationXml}</note>`;
   });
   return pitchNodes.join('');
 }
@@ -153,10 +172,20 @@ function measureToXml(
   }
 
   // 音符・休符
-  for (const ev of measure.events) {
+  // 連符（tuplet）は同じ id の連続イベントが1グループなので、その先頭/末尾を判定して
+  // <notations><tuplet type="start"/ "stop"/></notations> を出し分ける。
+  const events = measure.events;
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
     const dynDir = dynamicsDirectionXml(ev, options.staff);
     if (dynDir) lines.push(dynDir);
-    lines.push(noteToXml(ev, 1, options.staff));
+    let tupletPos: { isFirst: boolean; isLast: boolean } | undefined;
+    if (ev.tuplet) {
+      const isFirst = i === 0 || events[i - 1].tuplet?.id !== ev.tuplet.id;
+      const isLast = i === events.length - 1 || events[i + 1].tuplet?.id !== ev.tuplet.id;
+      tupletPos = { isFirst, isLast };
+    }
+    lines.push(noteToXml(ev, 1, options.staff, tupletPos));
   }
 
   // リピート終了

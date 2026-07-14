@@ -1,9 +1,12 @@
 import { StaveNote } from 'vexflow';
 
-type NoteEvent = { dur: string; isRest: boolean; key: string; dots?: 1 | 2 };
+type NoteEvent = { dur: string; isRest: boolean; key: string; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number } };
 
 // 付点1個=1.5倍、複付点(2個)=1.75倍
 const dotBeatsMultiplier = (dots?: 1 | 2) => (dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1);
+// 連符（tuplet）の倍率。3連符なら notesOccupied/numNotes = 2/3倍
+const tupletMultiplier = (tuplet?: { numNotes: number; notesOccupied: number }) =>
+  tuplet && tuplet.numNotes ? tuplet.notesOccupied / tuplet.numNotes : 1;
 
 // 定数
 const BEATS_PER_MEASURE = 4;
@@ -179,7 +182,7 @@ export function adjustRestPositionsV2(
       // 次の時間位置を計算
       try {
         const duration = toVFDur(event.dur);
-        const beats = beatsFromVF(duration) * dotBeatsMultiplier(event.dots);
+        const beats = beatsFromVF(duration) * dotBeatsMultiplier(event.dots) * tupletMultiplier(event.tuplet);
         
         if (!Number.isFinite(beats) || beats < 0) {
           console.warn(`adjustRestPositions: インデックス${i}で無効な拍数が計算されました`, beats);

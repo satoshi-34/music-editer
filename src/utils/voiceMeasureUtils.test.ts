@@ -32,6 +32,32 @@ describe('voiceMeasureUtils', () => {
     });
   });
 
+  describe('連符（tuplet）による拍数計算', () => {
+    it('3連符の8分音符1つは通常の8分音符の2/3拍になる', () => {
+      const event = {
+        dur: '8' as const, isRest: false, keys: ['c/4'],
+        tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 },
+      };
+      // 通常の8分音符は0.5拍。3連符は 0.5 * (2/3) = 1/3拍
+      expect(getEventDurationBeats(event)).toBeCloseTo(1 / 3, 6);
+    });
+
+    it('3連符3つ分の合計は通常の8分音符2つ分（=1拍）と等しい', () => {
+      const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+      const events = [
+        { dur: '8' as const, isRest: false, keys: ['c/4'], tuplet },
+        { dur: '8' as const, isRest: true, keys: [], tuplet },
+        { dur: '8' as const, isRest: true, keys: [], tuplet },
+      ];
+      const total = events.reduce((sum, ev) => sum + getEventDurationBeats(ev), 0);
+      expect(total).toBeCloseTo(1, 6);
+    });
+
+    it('tuplet が無いイベントは通常どおりの拍数のまま', () => {
+      expect(getEventDurationBeats({ dur: '8', isRest: false, keys: ['c/4'] })).toBeCloseTo(0.5);
+    });
+  });
+
   it('voices が無い小節は events を primary voice として扱う', () => {
     const measure: MeasureData = {
       events: [{ dur: '4', isRest: false, keys: ['c/4'] }]

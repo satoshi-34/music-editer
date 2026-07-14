@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament, Dot } from 'vexflow';
+import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament, Dot, Tuplet } from 'vexflow';
 import type { Tool } from './Palette';
 import type { TieArc, MeasureData, NoteEvent, DurKey, TimeSignature } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
@@ -37,6 +37,7 @@ import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
+import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -135,6 +136,12 @@ function getDurationTool(tool: Tool): { duration: DurKey; isRest?: boolean; dots
 }
 // 付点1個=1.5倍、複付点(2個)=1.75倍。休符差し込み判定・再生位置計算などで共通利用する
 const dotBeatsMultiplier = (dots?: 1 | 2) => (dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1);
+// イベント1つが実際に占める拍数（付点＋連符の両方を反映）。
+// 連符（tuplet）が付いている音符は notesOccupied/numNotes 倍だけ短くなる（例: 3連符は2/3倍）。
+const EPS = 1e-6;
+function eventOccupiedBeats(ev: Pick<NoteEvent, 'dur' | 'dots' | 'tuplet'>): number {
+  return beatsFromVF(toVFDur(ev.dur)) * dotBeatsMultiplier(ev.dots) * tupletBeatsMultiplier(ev.tuplet);
+}
 function buildRestEditReplacement(
   restEvent: NoteEvent,
   key: string,
@@ -146,12 +153,23 @@ function buildRestEditReplacement(
     return null;
   }
 
+  // 連符（tuplet）内の休符は、音価が完全に一致する場合のみ音符へ置き換える。
+  // 分割してしまうと連符グループの音価バランスが崩れるため、ここでは単純化して
+  // 「同じ音価ならそのまま置換／違えば何もしない」という保守的な仕様にする。
+  if (restEvent.tuplet) {
+    if (restEvent.dur !== durationTool.duration || (restEvent.dots ?? undefined) !== (durationTool.dots ?? undefined)) {
+      return null;
+    }
+    // tuplet フィールドを引き継ぐことで、置き換え後も連符グループの一員として描画・再生される。
+    return [{ dur: durationTool.duration, isRest: false, keys: [key], dots: durationTool.dots, tuplet: restEvent.tuplet }];
+  }
+
   // 付点音符は「その場に少なくとも付点分の長さの空きがあるか」だけで判定する保守的な仕様。
   // 休符側を付点休符に分割し直すような複雑な処理はしない。
   const noteBeats = beatsFromVF(toVFDur(durationTool.duration)) * dotBeatsMultiplier(durationTool.dots);
   const restBeats = beatsFromVF(toVFDur(restEvent.dur)) * dotBeatsMultiplier(restEvent.dots);
   const notePart: NoteEvent = { dur: durationTool.duration, isRest: false, keys: [key], dots: durationTool.dots };
-  if (Math.abs(noteBeats - restBeats) < 0.0001) {
+  if (Math.abs(noteBeats - restBeats) < EPS) {
     // 同じ長さなら、休符をそのまま音符へ置き換える。
     // 例: 16分音符ツールで16分休符をクリック -> 16分音符に変わる。
     return [notePart];
@@ -220,9 +238,9 @@ function fillPriorMeasureRests(
     const effectiveBeats = measure.timeSignature
       ? getMeasureBeats(measure.timeSignature)
       : globalBeatsPerMeasure;
-    const currentBeats = measure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)) * dotBeatsMultiplier(event.dots), 0);
+    const currentBeats = measure.events.reduce((sum, event) => sum + eventOccupiedBeats(event), 0);
     const remainingBeats = effectiveBeats - currentBeats;
-    if (remainingBeats > 0.0001) {
+    if (remainingBeats > EPS) {
       measure.events.push(...buildRestEventsForBeats(remainingBeats, restKey));
     }
   }
@@ -235,7 +253,9 @@ const UNIT_BY_DENOM: Record<number, number> = { 1:1.45, 2:1.25, 4:1.00, 8:0.60, 
 function unitsForEvent(ev: NoteEvent): number {
   const d = vfToDenom(toVFDur(ev.dur));
   const flagExtra = d >= 16 ? (FLAG_EXTRA_PX / UNIT_WIDTH) : 0;
-  return (UNIT_BY_DENOM[d] ?? 1) * (ev.isRest ? 0.85 : 1) + flagExtra;
+  const base = (UNIT_BY_DENOM[d] ?? 1) * (ev.isRest ? 0.85 : 1) + flagExtra;
+  // 連符は実際に占める時間が短いぶん、幅配分もそれに合わせて縮める
+  return base * tupletBeatsMultiplier(ev.tuplet);
 }
 /* ===== line ⇄ key（ト音記号。臨時記号は高さに無関係なので無視） ===== */
 function lineToKeyTreble(line: number): string {
@@ -1048,6 +1068,23 @@ export default function StaffCanvas({
           const next = prev.map(cloneMeasureData);
           if (!inRange(next[measure].events, index)) return prev;
           const targetEv = next[measure].events[index];
+          // 連符（tuplet）内の1イベントを削除する場合は、グループ全体を削除して
+          // 同じ長さの「連符ではない」普通の休符に置き換える。
+          // （部分削除だと連符の音価バランスが崩れて描画・再生が破綻するため、
+          //   このプロジェクトでは「グループごと削除」というシンプルな仕様を採用した）
+          if (targetEv.tuplet) {
+            const tupletId = targetEv.tuplet.id;
+            const events = next[measure].events;
+            let groupStart = index, groupEnd = index;
+            while (groupStart > 0 && events[groupStart - 1]?.tuplet?.id === tupletId) groupStart -= 1;
+            while (groupEnd < events.length - 1 && events[groupEnd + 1]?.tuplet?.id === tupletId) groupEnd += 1;
+            const groupEvents = events.slice(groupStart, groupEnd + 1);
+            const totalBeats = groupEvents.reduce((sum, ev) => sum + eventOccupiedBeats(ev), 0);
+            const restKeyForGroup = groupEvents[0]?.keys[0] || defaultRestKeyForClef(clef);
+            const replacement = buildRestEventsForBeats(totalBeats, restKeyForGroup);
+            next[measure].events.splice(groupStart, groupEvents.length, ...replacement);
+            return next;
+          }
           if (!targetEv.isRest && keyIndex !== undefined && keyIndex >= 0 && keyIndex < targetEv.keys.length && targetEv.keys.length > 1) {
             const removedKey = targetEv.keys[keyIndex];
             const nextKeys = targetEv.keys.filter((_, keyIdx) => keyIdx !== keyIndex);
@@ -1807,6 +1844,29 @@ export default function StaffCanvas({
         }
         beams.forEach(b => b.setContext(ctx).draw());
 
+        // 連符（tuplet）の描画: 同じ tuplet.id を持つ連続イベントをひとまとめにして
+        // VexFlow の Tuplet でくくる（「3」の数字とブラケットが表示される）。
+        // beam の描画より後に行うことで、符幹の向き確定後のノートを正しく束ねられる。
+        try {
+          let tIdx = 0;
+          while (tIdx < safeEvents.length) {
+            const tupletId = safeEvents[tIdx].tuplet?.id;
+            if (!tupletId) { tIdx += 1; continue; }
+            let tEnd = tIdx;
+            while (tEnd + 1 < safeEvents.length && safeEvents[tEnd + 1].tuplet?.id === tupletId) tEnd += 1;
+            const groupNotes = vfNotes.slice(tIdx, tEnd + 1);
+            const info = safeEvents[tIdx].tuplet!;
+            if (groupNotes.length > 0) {
+              const tuplet = new Tuplet(groupNotes, { numNotes: info.numNotes, notesOccupied: info.notesOccupied });
+              (tuplet as any).setContext?.(ctx);
+              tuplet.draw();
+            }
+            tIdx = tEnd + 1;
+          }
+        } catch (tupletError) {
+          console.error('連符の描画でエラーが発生しました:', tupletError);
+        }
+
         // タイ描画用データを収集（行単位でまとめる lineNotes と arc ベースの 2 系統）
         safeEvents.forEach((ev, j) => {
           lineNotes.push({ note: vfNotes[j], keys: ev.keys, tiedToNext: ev.tiedToNext ?? false, isRest: ev.isRest, stave });
@@ -1963,8 +2023,47 @@ export default function StaffCanvas({
           const currentMeasureBeats = getMeasureBeats(currentMeasure.timeSignature ?? effectiveTimeSig);
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration) ? (tool as any).duration : '4') as DurKey;
           const addDots: 1 | undefined = (tool as any)?.dots === 1 ? 1 : undefined;
+          const currentBeats = currentMeasure.events.reduce((sum, event) => sum + eventOccupiedBeats(event), 0);
+
+          // 3連符モード: 1音＋休符2個からなる連符グループを、空きがあれば一度に配置する。
+          // 空きが足りない場合は「一部だけ置く」ようなことはせず、何もしない（既存の空き容量チェックと同じ方針）。
+          if ((tool as any)?.tuplet) {
+            const numNotes = 3, notesOccupied = 2;
+            const perNoteBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots) * (notesOccupied / numNotes);
+            const groupBeats = perNoteBeats * numNotes;
+            if (currentBeats + groupBeats > currentMeasureBeats + EPS) {
+              return;
+            }
+            const tupletId = `tuplet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const tupletInfo = { id: tupletId, numNotes, notesOccupied };
+            const notePart: NoteEvent = {
+              dur: addDuration,
+              isRest: false,
+              keys: [key],
+              dots: addDots,
+              tuplet: tupletInfo,
+            };
+            const restPart = (): NoteEvent => ({
+              dur: addDuration,
+              isRest: true,
+              keys: [defaultRestKeyForClef(clef)],
+              dots: addDots,
+              tuplet: tupletInfo,
+            });
+            const groupEvents: NoteEvent[] = [notePart, restPart(), restPart()];
+            setScore(prev => {
+              const next = prev.map(cloneMeasureData);
+              while (absoluteMeasureIndex >= next.length) next.push(createEmptyMeasure());
+              fillPriorMeasureRests(next, absoluteMeasureIndex, beatsPerMeasure, defaultRestKeyForClef(clef));
+              const m = next[absoluteMeasureIndex];
+              m.events.splice(Math.max(0, Math.min(insertAt, m.events.length)), 0, ...groupEvents);
+              return next;
+            });
+            playNoteEvent(notePart);
+            return;
+          }
+
           const addBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
-          const currentBeats = currentMeasure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)) * dotBeatsMultiplier(event.dots), 0);
           if (currentBeats + addBeats > currentMeasureBeats) {
             return;
           }

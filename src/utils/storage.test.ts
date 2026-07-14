@@ -1246,6 +1246,78 @@ describe('Storage Foundation Tests', () => {
     });
   });
 
+  describe('連符（tuplet）の保存互換とバリデーション', () => {
+    it('音符の tuplet を保存して読み戻せる', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Tuplet Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [
+            {
+              events: [
+                { dur: '8', isRest: false, keys: ['c/4'], tuplet: { id: 'g1', numNotes: 3, notesOccupied: 2 } },
+                { dur: '8', isRest: true, keys: ['b/4'], tuplet: { id: 'g1', numNotes: 3, notesOccupied: 2 } },
+                { dur: '8', isRest: true, keys: ['b/4'], tuplet: { id: 'g1', numNotes: 3, notesOccupied: 2 } },
+              ]
+            }
+          ]
+        }],
+        1,
+        1,
+        'single'
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.parts[0].measures[0].events[0].tuplet).toEqual({ id: 'g1', numNotes: 3, notesOccupied: 2 });
+      expect(loadResult.data?.parts[0].measures[0].events[1].tuplet).toEqual({ id: 'g1', numNotes: 3, notesOccupied: 2 });
+    });
+
+    it('tuplet が無い旧セーブデータもそのまま読み込める（後方互換）', () => {
+      const data = createSavedScoreData(
+        { title: 'No Tuplet', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }] }],
+        1, 1, 'single'
+      );
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.parts[0].measures[0].events[0].tuplet).toBeUndefined();
+    });
+
+    it('不正な tuplet（id が空文字、numNotes が0以下など）を含むデータは読み込み時に拒否される', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.PRIMARY,
+        JSON.stringify({
+          version: CURRENT_VERSION,
+          timestamp: Date.now(),
+          metadata: { title: '', subtitle: '', lyricist: '', composer: '', arranger: '' },
+          scoreType: 'single',
+          parts: [{
+            partId: 'melody',
+            clef: 'treble',
+            measures: [{ events: [{ dur: '8', isRest: false, keys: ['c/4'], tuplet: { id: '', numNotes: 0, notesOccupied: 2 } }] }]
+          }],
+          systems: 1,
+          measuresPerSystem: 1,
+        })
+      );
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(false);
+    });
+  });
+
   describe('カスタム記号ライブラリの保存互換とバリデーション', () => {
     it('customSymbolDefs（circle/line/arc/path 込み）を保存して読み戻せる', () => {
       const data = createSavedScoreData(

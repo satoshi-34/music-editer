@@ -11,6 +11,7 @@ import { AudioErrorHandler, AudioErrorFactory } from './AudioError';
 import { expandMeasuresForPlayback } from './repeatPlaybackUtils';
 import type { MeasureData, NoteEvent, DurKey } from '../types/storage';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
+import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 
 /**
  * 再生位置を表すインターフェース
@@ -419,7 +420,7 @@ export class ScorePlayer {
         const event = measure.events[noteIndex];
 
         // 音価から再生時間を計算（現在有効な BPM を使う）
-        const duration = this.durToSeconds(event.dur, currentBpm, event.dots);
+        const duration = this.durToSeconds(event.dur, currentBpm, event.dots, event.tuplet);
         
         // 休符でない場合のみスケジュールに追加（和音は配列で保持）
         if (!event.isRest && event.keys?.length) {
@@ -522,7 +523,7 @@ export class ScorePlayer {
    * 音価から秒数を計算する
    * @private
    */
-  private durToSeconds(dur: DurKey, bpm: number, dots?: 1 | 2): number {
+  private durToSeconds(dur: DurKey, bpm: number, dots?: 1 | 2, tuplet?: NoteEvent['tuplet']): number {
     const ratios: Record<DurKey, number> = {
       '1': 4.0,   // 全音符
       '2': 2.0,   // 2分音符
@@ -537,7 +538,7 @@ export class ScorePlayer {
     // 付点1個で1.5倍、複付点(2個)で1.75倍に長さを伸ばす
     const dotRatio = dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1.0;
     const quarterNoteSeconds = 60 / bpm;
-    return quarterNoteSeconds * ratio * dotRatio;
+    return quarterNoteSeconds * ratio * dotRatio * tupletBeatsMultiplier(tuplet);
   }
 
   /**
@@ -564,7 +565,7 @@ export class ScorePlayer {
     for (let i = 0; i < position.measureIndex && i < this.measures.length; i++) {
       const measure = this.measures[i];
       for (const event of measure.events) {
-        time += this.durToSeconds(event.dur, tempoSettings.bpm, event.dots);
+        time += this.durToSeconds(event.dur, tempoSettings.bpm, event.dots, event.tuplet);
       }
     }
 
@@ -573,7 +574,7 @@ export class ScorePlayer {
       const measure = this.measures[position.measureIndex];
       for (let i = 0; i < position.noteIndex && i < measure.events.length; i++) {
         const event = measure.events[i];
-        time += this.durToSeconds(event.dur, tempoSettings.bpm, event.dots);
+        time += this.durToSeconds(event.dur, tempoSettings.bpm, event.dots, event.tuplet);
       }
     }
 

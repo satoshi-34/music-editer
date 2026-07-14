@@ -4,7 +4,7 @@ import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
 import type { PlaybackSoundProfile } from './playbackSettings';
 import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS, getMasterVolumeGain } from './playbackSettings';
 import { InstrumentType } from './SoundSource';
-import { getDurationBeats } from '../utils/voiceMeasureUtils';
+import { getDurationBeats, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 
 type SoundFontModule = typeof import('soundfont-player');
 
@@ -179,7 +179,7 @@ export class SoundFontEngine implements PlaybackEngine {
         }
 
         for (const event of measure.events) {
-          const duration = this.durationToSeconds(event.dur, bpm, event.dots);
+          const duration = this.durationToSeconds(event.dur, bpm, event.dots, (event as any).tuplet);
           // アーティキュレーションで「鳴らす長さ」だけ伸縮させる。
           // タイミング（次の音までの間隔）は duration のまま据え置く。
           const soundDuration = duration * (event.durationScale ?? 1);
@@ -210,7 +210,7 @@ export class SoundFontEngine implements PlaybackEngine {
               : 0;
             // 付点音符の終端位置も dots を考慮しないと、複数声部小節の
             // 終わりが実際より短く見積もられ、次小節が前倒しになる。
-            const endBeat = startBeat + getDurationBeats(event.dur as never, event.dots);
+            const endBeat = startBeat + getDurationBeats(event.dur as never, event.dots) * tupletBeatsMultiplier((event as any).tuplet);
             return Math.max(maxEnd, endBeat);
           }, 0);
           // 複数声部の小節は、最後の発音位置だけでなく小節本来の長さも守る。
@@ -363,12 +363,18 @@ export class SoundFontEngine implements PlaybackEngine {
     return moduleLike;
   }
 
-  private durationToSeconds(duration: string, bpm: number, dots?: 1 | 2): number {
+  private durationToSeconds(
+    duration: string,
+    bpm: number,
+    dots?: 1 | 2,
+    tuplet?: { numNotes: number; notesOccupied: number }
+  ): number {
     // 楽譜データは「4」「8」のような音価文字列なので、
     // まず拍数へ直し、そのあと BPM から秒へ変換する。
     // 付点（dots）の倍率も voiceMeasureUtils と同じ計算式で反映しないと、
     // 付点音符が短く鳴って以降のタイミングが前倒しにずれてしまう。
-    const beats = getDurationBeats(duration as never, dots);
+    // 連符（tuplet）の倍率も同様に反映する（例: 3連符は 2/3 倍）。
+    const beats = getDurationBeats(duration as never, dots) * tupletBeatsMultiplier(tuplet);
     return beats * (60 / bpm);
   }
 

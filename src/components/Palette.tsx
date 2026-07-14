@@ -39,7 +39,7 @@ export function normalizeToVF(d: DurKey): 'w'|'h'|'q'|'8'|'16'|'32'|'64' {
 
 // ツール（「音価」と「休符かどうか」、またはタイモード）
 export type Tool =
-  | { duration: DurKey; isRest?: boolean; dots?: 1 }  // 通常の音符/休符入力（dots: 1で付点）
+  | { duration: DurKey; isRest?: boolean; dots?: 1; tuplet?: boolean }  // 通常の音符/休符入力（dots: 1で付点, tuplet: trueで3連符モード）
   | { mode: 'select' }                      // 小節選択モード（コピー&ペースト用）
   | { mode: 'tie' }                         // タイ記号を付けるモード
   | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
@@ -176,6 +176,7 @@ export default function Palette({
   const selectActive = 'mode' in value && value.mode === 'select';
   const tieActive = 'mode' in value && value.mode === 'tie';
   const dotActive = 'duration' in value && !!value.dots;
+  const tupletActive = 'duration' in value && !!value.tuplet;
   const selectedAccidental = 'mode' in value && value.mode === 'accidental' ? value.accidental : null;
   const selectedRepeat = 'mode' in value && value.mode === 'repeat' ? value.repeat : null;
   const selectedEnding = 'mode' in value && value.mode === 'ending' ? value.ending : null;
@@ -250,6 +251,22 @@ export default function Palette({
             style={btnStyle(dotActive, { fontSize: 20, fontWeight: 'bold' })}
           >
             .
+          </button>
+          {/* 3連符トグル：ONの状態で音価ツール+クリックすると、音符1つ＋休符2つの3連符グループを配置する */}
+          <button
+            type="button"
+            onClick={() => {
+              if ('duration' in value) {
+                onChange({ ...value, tuplet: value.tuplet ? undefined : true });
+              } else {
+                onChange({ ...(ROW1[2] as { duration: DurKey; isRest?: boolean }), tuplet: true });
+              }
+            }}
+            title="3連符（選択した音価で1音+休符2つの3連符グループを配置する）"
+            aria-label="3連符（選択した音価で1音+休符2つの3連符グループを配置する）"
+            style={btnStyle(tupletActive, { fontSize: 10, fontWeight: 'bold', width: 30 })}
+          >
+            3連符
           </button>
           {/* タイ */}
           <button

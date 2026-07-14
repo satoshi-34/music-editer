@@ -116,11 +116,22 @@ export function getDurationBeats(dur: NoteEvent['dur'], dots?: 1 | 2): number {
 }
 
 /**
+ * 連符による拍数の倍率。
+ * 例: 3連符（3個の音符を2個ぶんの時間に詰める）は notesOccupied/numNotes = 2/3 倍。
+ * tuplet が無い通常の音符は 1 倍のまま。
+ */
+export function tupletBeatsMultiplier(tuplet?: { numNotes: number; notesOccupied: number }): number {
+  if (!tuplet || !tuplet.numNotes) return 1;
+  return tuplet.notesOccupied / tuplet.numNotes;
+}
+
+/**
  * 単一イベントの長さを「4分音符=1拍」の基準拍へ変換する。
  * 再生位置の見える化でも同じ計算を使うため、共通関数として公開する。
+ * 連符（tuplet）が付いている場合は、実際に占める時間（notesOccupied/numNotes 倍）まで反映する。
  */
 export function getEventDurationBeats(event: NoteEvent): number {
-  return getDurationBeats(event.dur, event.dots);
+  return getDurationBeats(event.dur, event.dots) * tupletBeatsMultiplier(event.tuplet);
 }
 
 export function getMeasureDurationBeats(measure: MeasureData): number {

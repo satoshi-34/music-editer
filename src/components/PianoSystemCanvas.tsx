@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
-  Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType, Dot,
+  Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType, Dot, Tuplet,
 } from 'vexflow';
 import type { Tool } from './Palette';
 import type { MeasureData, TieArc, DynamicMarking } from '../types/storage';
@@ -30,14 +30,14 @@ import {
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
-import { getMeasureVoices } from '../utils/voiceMeasureUtils';
+import { getMeasureVoices, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2 };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number } };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number } | null;
 
@@ -116,6 +116,9 @@ function getDurationTool(tool: Tool): { duration: DurKey; isRest?: boolean; dots
 }
 // 付点1個=1.5倍、複付点(2個)=1.75倍。休符差し込み判定・拍数計算で共通利用する
 const dotBeatsMultiplier = (dots?: 1 | 2) => (dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1);
+// イベント1つが実際に占める拍数（付点＋連符の両方を反映）
+const eventOccupiedBeats = (ev: Pick<NoteEvent, 'dur' | 'dots' | 'tuplet'>) =>
+  beatsFromVF(toVFDur(ev.dur)) * dotBeatsMultiplier(ev.dots) * tupletBeatsMultiplier(ev.tuplet);
 function buildRestEditReplacement(
   restEvent: NoteEvent,
   key: string,
@@ -191,7 +194,7 @@ function fillPriorMeasureRests(
       measures.push(createEmptyMeasure());
     }
     const measure = measures[measureIndex];
-    const currentBeats = measure.events.reduce((sum, event) => sum + beatsFromVF(toVFDur(event.dur)) * dotBeatsMultiplier(event.dots), 0);
+    const currentBeats = measure.events.reduce((sum, event) => sum + eventOccupiedBeats(event), 0);
     const remainingBeats = beatsPerMeasure - currentBeats;
     if (remainingBeats > 0.0001) {
       measure.events.push(...buildRestEventsForBeats(remainingBeats, restKey));
@@ -1718,6 +1721,28 @@ export default function PianoSystemCanvas({
           entry.beams.forEach(b=>b.setContext(ctx).draw());
         });
 
+        // 連符（tuplet）の描画: StaffCanvas と同じロジックで、同じ tuplet.id を持つ
+        // 連続イベントをまとめて Tuplet でくくる。
+        try {
+          let tIdx = 0;
+          while (tIdx < safeEvs.length) {
+            const tupletId = safeEvs[tIdx].tuplet?.id;
+            if (!tupletId) { tIdx += 1; continue; }
+            let tEnd = tIdx;
+            while (tEnd + 1 < safeEvs.length && safeEvs[tEnd + 1].tuplet?.id === tupletId) tEnd += 1;
+            const groupNotes = vfNotes.slice(tIdx, tEnd + 1);
+            const info = safeEvs[tIdx].tuplet!;
+            if (groupNotes.length > 0) {
+              const tuplet = new Tuplet(groupNotes as any, { numNotes: info.numNotes, notesOccupied: info.notesOccupied });
+              (tuplet as any).setContext?.(ctx);
+              tuplet.draw();
+            }
+            tIdx = tEnd + 1;
+          }
+        } catch (tupletError) {
+          console.error('連符の描画でエラーが発生しました:', tupletError);
+        }
+
         // タイ描画用に音符データを収集（小節ループ後にパートごとまとめて処理）
         safeEvs.forEach((ev,j)=>{
           partLineNotes[pi].push({note:vfNotes[j],keys:ev.keys,tiedToNext:ev.tiedToNext??false,isRest:ev.isRest,stave});
@@ -1767,7 +1792,7 @@ export default function PianoSystemCanvas({
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey;
           const addDots: 1 | undefined = (tool as any)?.dots === 1 ? 1 : undefined;
           const addBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
-          const currentBeats = currentMeasure.events.reduce((sum,event)=>sum+beatsFromVF(toVFDur(event.dur)) * dotBeatsMultiplier(event.dots),0);
+          const currentBeats = currentMeasure.events.reduce((sum,event)=>sum+eventOccupiedBeats(event),0);
           if(currentBeats + addBeats > beatsPerMeasure){
             return;
           }

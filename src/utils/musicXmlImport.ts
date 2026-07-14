@@ -30,9 +30,17 @@ const FIFTHS_TO_KEY: Record<number, KeySignature> = {
 };
 
 /** note 要素群をまとめて MeasureData.events に変換する */
+let tupletGroupCounter = 0;
+
 function parseNotes(noteEls: Element[]): NoteEvent[] {
   const events: NoteEvent[] = [];
   let chordBuffer: NoteEvent | null = null;
+  // 連符（tuplet）の読み込み: <time-modification> がある連続した note を
+  // ひとまとまりのグループとみなし、共通の id を割り当てる。
+  // MusicXML は明示的な <tuplet type="start"/"stop"/> でグループ境界を示すこともあるが、
+  // ここでは「time-modification が連続しているかどうか」で十分に判定できる。
+  let currentTupletId: string | null = null;
+  let prevHadTimeMod = false;
 
   for (const noteEl of noteEls) {
     // 前打音は現状スキップ
@@ -47,9 +55,28 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
     const dotCount = Array.from(noteEl.children).filter((child) => child.tagName === 'dot').length;
     const dots: 1 | 2 | undefined = dotCount === 1 ? 1 : dotCount >= 2 ? 2 : undefined;
 
+    // 連符（time-modification）の読み取り
+    const timeModEl = noteEl.querySelector('time-modification');
+    let tuplet: NoteEvent['tuplet'];
+    if (timeModEl) {
+      const actualNotes = parseInt(timeModEl.querySelector('actual-notes')?.textContent ?? '', 10);
+      const normalNotes = parseInt(timeModEl.querySelector('normal-notes')?.textContent ?? '', 10);
+      if (Number.isInteger(actualNotes) && actualNotes > 0 && Number.isInteger(normalNotes) && normalNotes > 0) {
+        if (!prevHadTimeMod || !currentTupletId) {
+          tupletGroupCounter += 1;
+          currentTupletId = `xml-tuplet-${tupletGroupCounter}`;
+        }
+        tuplet = { id: currentTupletId, numNotes: actualNotes, notesOccupied: normalNotes };
+      }
+      prevHadTimeMod = true;
+    } else {
+      prevHadTimeMod = false;
+      currentTupletId = null;
+    }
+
     if (isRest) {
       if (chordBuffer) { events.push(chordBuffer); chordBuffer = null; }
-      events.push({ dur: dur as any, isRest: true, keys: [], dots });
+      events.push({ dur: dur as any, isRest: true, keys: [], dots, tuplet });
       continue;
     }
 
@@ -63,7 +90,7 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
       chordBuffer.keys.push(key);
     } else {
       if (chordBuffer) events.push(chordBuffer);
-      chordBuffer = { dur: dur as any, isRest: false, keys: [key], dots };
+      chordBuffer = { dur: dur as any, isRest: false, keys: [key], dots, tuplet };
 
       // アーティキュレーションを読み込む
       const articulations: string[] = [];
