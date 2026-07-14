@@ -141,19 +141,22 @@ function measureToXml(
     staff: number;
     prevTimeSig?: [number, number];
     prevKeyFifths?: number;
+    effectiveKeyFifths: number;
   }
 ): string {
   const lines: string[] = [];
 
   // attributes（最初の小節、または拍子・調号変更時に出力）
   const timeSig = measure.timeSignature ?? options.globalTimeSig;
-  const keyFifths = options.globalKeyFifths;
+  const keyFifths = options.effectiveKeyFifths;
   const timeSigChanged = options.prevTimeSig &&
     (timeSig[0] !== options.prevTimeSig[0] || timeSig[1] !== options.prevTimeSig[1]);
+  // 途中調号変更: この小節に keySignature 指定があり、直前の調号と異なるときだけ出力する
+  const keyChanged = options.prevKeyFifths !== undefined && keyFifths !== options.prevKeyFifths;
 
-  if (options.isFirstMeasure || timeSigChanged) {
+  if (options.isFirstMeasure || timeSigChanged || keyChanged) {
     const divXml = options.isFirstMeasure ? `<divisions>${DIVISIONS}</divisions>` : '';
-    const keyXml = options.isFirstMeasure ? `<key><fifths>${keyFifths}</fifths><mode>major</mode></key>` : '';
+    const keyXml = (options.isFirstMeasure || keyChanged) ? `<key><fifths>${keyFifths}</fifths><mode>major</mode></key>` : '';
     const timeXml = `<time><beats>${timeSig[0]}</beats><beat-type>${timeSig[1]}</beat-type></time>`;
     const clefXmlStr = options.isFirstMeasure ? clefXml(options.clef) : '';
     lines.push(`<attributes>${divXml}${keyXml}${timeXml}${clefXmlStr}</attributes>`);
@@ -214,7 +217,13 @@ export function scoreToMusicXml(data: SavedScoreData): string {
   // 各パートの小節 XML
   const partXmls = parts.map((p, pi) => {
     let prevTimeSig: [number, number] | undefined;
+    let effectiveKeyFifths = globalKeyFifths;
+    let prevKeyFifths: number | undefined;
     const measuresXml = p.measures.map((m, mi) => {
+      // 途中調号変更: この小節に keySignature があれば、それ以降有効な調号として更新する
+      if (m.keySignature) {
+        effectiveKeyFifths = KEY_FIFTHS[m.keySignature as KeySignature] ?? effectiveKeyFifths;
+      }
       const xml = measureToXml(m, mi + 1, {
         clef: p.clef,
         globalKeyFifths,
@@ -222,8 +231,11 @@ export function scoreToMusicXml(data: SavedScoreData): string {
         isFirstMeasure: mi === 0,
         staff: 1,
         prevTimeSig,
+        prevKeyFifths,
+        effectiveKeyFifths,
       });
       prevTimeSig = m.timeSignature ?? globalTimeSig;
+      prevKeyFifths = effectiveKeyFifths;
       return xml;
     });
     return `<part id="P${pi + 1}">${measuresXml.join('')}</part>`;

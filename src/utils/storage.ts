@@ -293,7 +293,9 @@ function validateMeasureData(measure: any): measure is MeasureData {
     ) &&
     (measure.ending === undefined || measure.ending === 1 || measure.ending === 2) &&
     (measure.repeatStart === undefined || typeof measure.repeatStart === 'boolean') &&
-    (measure.repeatEnd === undefined || typeof measure.repeatEnd === 'boolean')
+    (measure.repeatEnd === undefined || typeof measure.repeatEnd === 'boolean') &&
+    // 小節単位の調号変更。未知の値は保存データとして受け入れず、無効なファイルとして弾く。
+    (measure.keySignature === undefined || isValidKeySignature(measure.keySignature))
   );
 }
 

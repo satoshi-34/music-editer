@@ -134,6 +134,15 @@ export function normalizeKeySignature(value: unknown): KeySignature {
   return isValidKeySignature(value) ? value : 'C';
 }
 
+/**
+ * 調号を五度圏上の位置（fifths）に変換する。
+ * 移調楽器の「記譜音側の調号」を、途中調号変更にも対応させて計算するため、
+ * 2つの調号の fifths の差分を求める用途で使う（PianoSystemCanvas 参照）。
+ */
+export function getKeySignatureFifths(keySignature: KeySignature): number {
+  return KEY_SIGNATURE_ACCIDENTAL_COUNT[keySignature] ?? 0;
+}
+
 export function hasVisibleKeySignature(keySignature: KeySignature): boolean {
   return KEY_SIGNATURE_ACCIDENTAL_COUNT[keySignature] !== 0;
 }

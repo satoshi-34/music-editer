@@ -16,9 +16,12 @@ import {
   isValidNoteKeyString,
   resolveDisplayAccidentalsForKeys,
   snapshotAccidentalState,
+  isValidKeySignature,
+  KEY_SIGNATURE_OPTIONS,
   type MeasureAccidentalState,
   type KeySignature,
 } from '../utils/noteKeyUtils';
+import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import { applyArticulationToEvent } from '../utils/articulationUtils';
@@ -799,6 +802,14 @@ export default function StaffCanvas({
   const [timeSigEditState, setTimeSigEditState] = useState<{
     measureAbsoluteIndex: number;
     currentValue: string;  // "4/4" 形式の文字列
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
+  // 小節調号変更オーバーレイの状態（null のとき非表示）
+  const [keySigEditState, setKeySigEditState] = useState<{
+    measureAbsoluteIndex: number;
+    currentValue: string;  // KeySignature 文字列（例: "G"）。空欄は「解除」を表す
     overlayX: number;
     overlayY: number;
   } | null>(null);
@@ -1645,6 +1656,9 @@ export default function StaffCanvas({
     let prevMeasureAccidentalState: MeasureAccidentalState | undefined;
     // 途中拍子変更を追跡する。最初はグローバル拍子、各小節の timeSignature フィールドで上書きされる。
     let effectiveTimeSig: TimeSignature = [timeSignatureNumerator, timeSignatureDenominator];
+    // 途中調号変更を追跡する。最初はグローバル調号、各小節の keySignature フィールドで上書きされる。
+    // startMeasureIndex より前の小節も見て正しい継続状態から始める（段の途中から描画する場合の対応）。
+    let effectiveKeySig: KeySignature = resolveMeasureKeySignature(score, startMeasureIndex - 1, normalizedKeySignature);
 
     for (let line = 0; line < systems; line++) {
       if (globalIndex >= maxMeasures) break; // このStaffCanvasの範囲を超えたら終了
@@ -1710,14 +1724,23 @@ export default function StaffCanvas({
         if (data?.timeSignature) {
           effectiveTimeSig = data.timeSignature;
         }
+        // 途中調号変更: stave.draw() より前に effectiveKeySig を更新する（拍子と同じ理由）
+        const keySigChangedHere = !!data?.keySignature && data.keySignature !== effectiveKeySig;
+        if (data?.keySignature) {
+          effectiveKeySig = data.keySignature;
+        }
 
         if (i === 0) {
           stave.addClef(clef);
           // 第1段・第1小節: 小節固有の拍子があればそれを、なければグローバル拍子を表示
           if (line === 0 && startMeasureIndex === 0) stave.addTimeSignature(formatTimeSignature(effectiveTimeSig));
-          if (hasVisibleKeySignature(normalizedKeySignature)) {
-            stave.addKeySignature(normalizedKeySignature);
+          // 段頭は「その段の先頭小節時点で有効な調号」を表示する（途中調号変更に対応）
+          if (hasVisibleKeySignature(effectiveKeySig)) {
+            stave.addKeySignature(effectiveKeySig);
           }
+        } else if (keySigChangedHere) {
+          // 段の途中の小節頭で調号が変わった場合はそこに表示する
+          stave.addKeySignature(effectiveKeySig);
         }
         if (data?.repeatStart) {
           // 小節の先頭に開始リピート記号（||:）を描く。
@@ -1750,7 +1773,8 @@ export default function StaffCanvas({
           .map(ev => sanitizeRenderEvent(ev, clef));
         // 臨時記号の効力は小節ごとにリセットされるため、
         // 描画直前に小節専用の状態を作り、イベント順に更新していく。
-        const accidentalState = createMeasureAccidentalState(normalizedKeySignature);
+        // 臨時記号の既定状態は「この小節時点で有効な調号」を使う（途中調号変更対応）
+        const accidentalState = createMeasureAccidentalState(effectiveKeySig);
         // 前の小節の最終状態を courtesy accidental 判定に使う。
         // 小節の描画が終わったら snapshotAccidentalState で保存する。
         const thisPrevMeasState = prevMeasureAccidentalState;
@@ -1989,7 +2013,8 @@ export default function StaffCanvas({
           }
           
           const snappedLine = snapLineBySpacing(stave, localY);
-          const key = applyKeySignatureToNaturalKey(lineToKey(snappedLine), keySignatureRef.current);
+          // この小節時点で有効な調号（途中調号変更対応）を使って既定の♯/♭を付与する
+          const key = applyKeySignatureToNaturalKey(lineToKey(snappedLine), effectiveKeySig);
 
           let insertAt = safeEvents.length;
           let minDist = Infinity;
@@ -2215,6 +2240,18 @@ export default function StaffCanvas({
             });
             return;
           }
+          if ('mode' in tool && tool.mode === 'measureKeySig') {
+            // 途中調号変更: 小節クリックで調号選択ドロップダウンを表示する
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            const currentKS = score[absoluteIndex]?.keySignature;
+            setKeySigEditState({
+              measureAbsoluteIndex: absoluteIndex,
+              currentValue: currentKS ?? '',
+              overlayX: e.clientX - (containerRect?.left ?? 0),
+              overlayY: e.clientY - (containerRect?.top ?? 0),
+            });
+            return;
+          }
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
           if ('mode' in tool && tool.mode === 'accidental') {
             if (i === 0 && lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right) {
@@ -2391,6 +2428,17 @@ export default function StaffCanvas({
                 setTimeSigEditState({
                   measureAbsoluteIndex: absoluteIndex,
                   currentValue: currentTS ? formatTimeSignature(currentTS) : '',
+                  overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
+                  overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
+                });
+                return;
+              }
+              if ('mode' in tool && tool.mode === 'measureKeySig') {
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const currentKS = score[absoluteIndex]?.keySignature;
+                setKeySigEditState({
+                  measureAbsoluteIndex: absoluteIndex,
+                  currentValue: currentKS ?? '',
                   overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
                   overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
                 });
@@ -2637,7 +2685,7 @@ export default function StaffCanvas({
               if (!safeEvents[j]?.isRest) {
 
                 const snappedLine = snapLineBySpacing(stave, ly);
-                const newKey = applyKeySignatureToNaturalKey(lineToKey(snappedLine), keySignatureRef.current);
+                const newKey = applyKeySignatureToNaturalKey(lineToKey(snappedLine), effectiveKeySig);
                 const currentEv = safeEvents[j];
                 // 和音内の既存音を個別選択する入口。
                 // Y座標を五線の線/間へ丸めた snappedLine が keys[] のどれかと一致したら、
@@ -2701,7 +2749,8 @@ export default function StaffCanvas({
                   return;
                 }
                 const snappedLine = snapLineBySpacing(stave, ly);
-                const key = applyKeySignatureToNaturalKey(lineToKey(snappedLine), keySignatureRef.current);
+                // この小節時点で有効な調号（途中調号変更対応）を使って既定の♯/♭を付与する
+                const key = applyKeySignatureToNaturalKey(lineToKey(snappedLine), effectiveKeySig);
                 // 休符の VexFlow bounding box は、音符より横に広く返ることがある。
                 // その値をそのまま使うと、休符の右側に次の音符を置きたいクリックまで
                 // 「休符本体クリック」と誤判定されるため、休符だけは描画アンカー中心の固定幅で見る。
@@ -3276,6 +3325,24 @@ export default function StaffCanvas({
   }
 
   /**
+   * 途中調号変更を確定する。
+   * KeySignature 文字列（例: "F"）を受け取り、有効ならそのまま保存する。
+   * 空欄なら調号指定を解除する（直前の小節の調号を継続する）。
+   */
+  function handleKeySigConfirm(value: string) {
+    if (!keySigEditState) return;
+    const { measureAbsoluteIndex } = keySigEditState;
+    const keySig = value && isValidKeySignature(value) ? (value as KeySignature) : undefined;
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], keySignature: keySig };
+      return next;
+    });
+    setKeySigEditState(null);
+  }
+
+  /**
    * 小節テンポ変更を確定する。
    * 数値として有効な値なら保存し、空欄または無効値なら BPM を削除する。
    */
@@ -3421,6 +3488,58 @@ export default function StaffCanvas({
             <option value="5/4">5/4</option>
             <option value="7/8">7/8</option>
             <option value="12/8">12/8</option>
+          </select>
+        </div>
+      )}
+      {/* 調号変更オーバーレイ: 調号変更ツールで小節をクリックすると表示される */}
+      {keySigEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: keySigEditState.overlayX,
+            top: keySigEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #0f766e',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            minWidth: 200,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#0f766e', fontFamily: 'sans-serif' }}>
+            途中調号変更（「解除」で元に戻す）
+          </span>
+          <select
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            defaultValue={keySigEditState.currentValue || 'none'}
+            style={{
+              fontSize: 13,
+              fontFamily: 'sans-serif',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              padding: '2px 4px',
+              outline: 'none',
+            }}
+            onChange={(e) => {
+              handleKeySigConfirm(e.target.value === 'none' ? '' : e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setKeySigEditState(null);
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              if (e.relatedTarget === null) setKeySigEditState(null);
+            }}
+          >
+            <option value="none">（解除）</option>
+            {KEY_SIGNATURE_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
           </select>
         </div>
       )}

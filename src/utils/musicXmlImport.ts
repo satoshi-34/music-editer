@@ -173,7 +173,7 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     }
 
     const measureEls = Array.from(partEl.querySelectorAll('measure'));
-    const measures: MeasureData[] = measureEls.map(measureEl => {
+    const measures: MeasureData[] = measureEls.map((measureEl, mi) => {
       const noteEls = Array.from(measureEl.querySelectorAll('note'));
       const events = parseNotes(noteEls);
 
@@ -196,12 +196,26 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
         }
       }
 
+      // 小節単位調号変更（先頭小節はグローバル調号として別に扱うため、2小節目以降のみ拾う）
+      let measureKeySig: KeySignature | undefined;
+      if (mi > 0) {
+        const keyEl = measureEl.querySelector('key fifths');
+        if (keyEl) {
+          const fifths = parseInt(keyEl.textContent ?? '', 10);
+          if (!isNaN(fifths) && fifths >= -7 && fifths <= 7) {
+            const ks = FIFTHS_TO_KEY[fifths];
+            if (ks && isValidKeySignature(ks)) measureKeySig = ks;
+          }
+        }
+      }
+
       return {
         events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }],
         repeatStart: leftBarline?.getAttribute('direction') === 'forward' ? true : undefined,
         repeatEnd: rightBarline?.getAttribute('direction') === 'backward' ? true : undefined,
         bpm: bpm && !isNaN(bpm) ? bpm : undefined,
         timeSignature: timeSig,
+        keySignature: measureKeySig,
       };
     });
 

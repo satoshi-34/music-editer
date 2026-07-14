@@ -53,6 +53,7 @@ export type Tool =
   | { mode: 'textElement'; textKind: TextElementKind }      // テキスト要素（歌詞・コード・テンポ・発想標語）を付けるモード
   | { mode: 'measureTempo' }                                // 小節単位のテンポ変更モード
   | { mode: 'measureTimeSig' }                             // 小節単位の拍子変更モード
+  | { mode: 'measureKeySig' }                               // 小節単位の調号変更モード
   | { mode: 'graceNote' }                                  // 前打音（スラッシュ付き短前打音）を付けるモード
   | { mode: 'trill' }                                      // トリル記号を付けるモード
   | { mode: 'pedal'; pedalType: 'down' | 'up' }           // ペダル記号（Ped / ✱）を付けるモード
@@ -188,6 +189,7 @@ export default function Palette({
   const selectedTextKind = 'mode' in value && value.mode === 'textElement' ? value.textKind : null;
   const measureTempoActive = 'mode' in value && value.mode === 'measureTempo';
   const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
+  const measureKeySigActive = 'mode' in value && value.mode === 'measureKeySig';
   const graceNoteActive = 'mode' in value && value.mode === 'graceNote';
   const trillActive = 'mode' in value && value.mode === 'trill';
   const pedalDownActive = 'mode' in value && value.mode === 'pedal' && (value as any).pedalType === 'down';
@@ -391,6 +393,20 @@ export default function Palette({
             <line x1="1" y1="10" x2="10" y2="10" stroke="#111" strokeWidth="1.2"/>
             <text x="1" y="17" fontSize="9" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">8</text>
             <text x="12" y="14" fontSize="10" fill="#e05">?</text>
+          </svg>
+        </button>
+        {/* 調号変更 */}
+        <button
+          type="button"
+          onClick={() => onChange(measureKeySigActive ? ROW1[2] : { mode: 'measureKeySig' })}
+          title="途中調号変更（小節をクリックして調号を選択）"
+
+          aria-label="途中調号変更（小節をクリックして調号を選択）"
+          style={btnStyle(measureKeySigActive, { width: 30 })}
+        >
+          <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true">
+            <text x="0" y="14" fontSize="14" fontFamily="serif" fontWeight="bold" fill="#111">♯</text>
+            <text x="11" y="14" fontSize="14" fontFamily="serif" fontWeight="bold" fill="#111">♭</text>
           </svg>
         </button>
         {/* 強弱記号 */}

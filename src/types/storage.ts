@@ -185,6 +185,12 @@ export interface MeasureData {
    * 4/4 から 3/8 への変更などを小節単位で記録する。
    */
   timeSignature?: TimeSignature;
+  /**
+   * この小節から適用する調号。
+   * 省略時は直前の小節の調号、または楽譜全体のグローバル調号を継続する。
+   * ト長調からヘ長調への変更などを小節単位で記録する。
+   */
+  keySignature?: KeySignature;
 }
 
 export interface ScoreMetadata {

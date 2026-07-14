@@ -1205,6 +1205,55 @@ describe('Storage Foundation Tests', () => {
     });
   });
 
+  describe('途中調号変更（小節単位 keySignature）の保存互換とバリデーション', () => {
+    it('小節の keySignature を保存して読み戻せる', () => {
+      const data = createSavedScoreData(
+        { title: 'Key Signature Test', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [
+            { events: [{ dur: '4', isRest: false, keys: ['g/4'] }] },
+            { events: [{ dur: '4', isRest: false, keys: ['f/4'] }], keySignature: 'F' }
+          ]
+        }],
+        1,
+        2,
+        'single',
+        'G'
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.parts[0].measures[0].keySignature).toBeUndefined();
+      expect(loadResult.data?.parts[0].measures[1].keySignature).toBe('F');
+    });
+
+    it('未知の keySignature 値が入った保存データは無効として弾く', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.PRIMARY,
+        JSON.stringify({
+          version: CURRENT_VERSION,
+          timestamp: Date.now(),
+          metadata: { title: '', subtitle: '', lyricist: '', composer: '', arranger: '' },
+          scoreType: 'single',
+          parts: [{
+            partId: 'melody',
+            clef: 'treble',
+            measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }], keySignature: 'X#' }]
+          }],
+          systems: 1,
+          measuresPerSystem: 1,
+        })
+      );
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(false);
+    });
+  });
+
   describe('強弱記号の保存互換', () => {
     it('音符の dynamics を保存して読み戻せる', () => {
       const data = createSavedScoreData(

@@ -24,9 +24,14 @@ import {
   isValidNoteKeyString,
   resolveDisplayAccidentalsForKeys,
   snapshotAccidentalState,
+  isValidKeySignature,
+  getKeySignatureFifths,
+  shiftKeySignatureByFifths,
+  KEY_SIGNATURE_OPTIONS,
   type MeasureAccidentalState,
   type KeySignature,
 } from '../utils/noteKeyUtils';
+import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
@@ -666,6 +671,13 @@ export default function PianoSystemCanvas({
     overlayX: number;
     overlayY: number;
   } | null>(null);
+  // 小節調号変更オーバーレイの状態（null のとき非表示）。StaffCanvas と同じパターン。
+  const [keySigEditState, setKeySigEditState] = useState<{
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
 
   const [bpmEditState, setBpmEditState] = useState<{
     measureAbsoluteIndex: number;
@@ -1234,6 +1246,21 @@ export default function PianoSystemCanvas({
     const totalW=realWs.reduce((a,b)=>a+b,0);
     let x=PAGE_LEFT+labelW+(innerW-totalW)/2;
 
+    // 途中調号変更を段全体で先に解決しておく。
+    // 調号は最上段（partsScore[0]）の小節データに保存し、下段の楽器はここから
+    // パート固有の移調シフトをかけて使う（stave 生成ループと音符描画ループの両方で同じ値を使う）。
+    const topPartMeasuresForKey = partsScore[0] ?? parts[0]?.data ?? [];
+    const baseGlobalKeySigForSystem = resolveMeasureKeySignature(topPartMeasuresForKey, startMeasureIndex - 1, normalizedKeySignature);
+    const effectiveKeySigPerMeasure: KeySignature[] = [];
+    {
+      let running = baseGlobalKeySigForSystem;
+      for (let mi = 0; mi < measuresPerSystem; mi++) {
+        const ks = topPartMeasuresForKey[startMeasureIndex + mi]?.keySignature;
+        if (ks) running = ks;
+        effectiveKeySigPerMeasure.push(running);
+      }
+    }
+
     /* -- 五線を描画 -- */
     // staveSets[pi][mi] = 段pi・小節mi の Stave
     const staveSets: Stave[][] = parts.map(() => []);
@@ -1244,6 +1271,17 @@ export default function PianoSystemCanvas({
         // 見た目の基準は最上段の小節データへ寄せる。
         const sharedMeasure = (partsScore[0] ?? parts[0]?.data ?? [])[startMeasureIndex + i];
         const stave=new Stave(x/s, staveYs[pi]/s, w/s);
+        // パート固有の移調シフト（fifths）。part.keySignature はグローバル調号を移調楽器用に
+        // シフトした固定値として渡ってくるので、その差分だけ「この小節時点の有効調号」にも適用する。
+        const partFifthsShift = part.keySignature
+          ? getKeySignatureFifths(part.keySignature) - getKeySignatureFifths(normalizedKeySignature)
+          : 0;
+        const effectiveGlobalKeyHere = effectiveKeySigPerMeasure[i];
+        const stavePartKey = partFifthsShift !== 0
+          ? shiftKeySignatureByFifths(effectiveGlobalKeyHere, partFifthsShift)
+          : effectiveGlobalKeyHere;
+        const prevEffectiveGlobalKey = i === 0 ? baseGlobalKeySigForSystem : effectiveKeySigPerMeasure[i - 1];
+        const keySigChangedHere = i > 0 && effectiveGlobalKeyHere !== prevEffectiveGlobalKey;
         if(i===0){
           stave.addClef(part.clef);
           // 拍子記号はいまの仕様では「譜面全体のいちばん最初」だけに出す。
@@ -1253,10 +1291,13 @@ export default function PianoSystemCanvas({
           }
           // パート固有の調号があればそちらを優先する（移調楽器の記譜音表示用）。
           // 個別に持たないパートは従来通りシステム共通の調号で描く。
-          const stavePartKey = normalizeKeySignature(part.keySignature ?? normalizedKeySignature);
+          // 段頭は「その段の先頭小節時点で有効な調号」を表示する（途中調号変更対応）。
           if (hasVisibleKeySignature(stavePartKey)) {
             stave.addKeySignature(stavePartKey);
           }
+        } else if (keySigChangedHere) {
+          // 段の途中の小節頭で調号が変わった場合はそこに表示する
+          stave.addKeySignature(stavePartKey);
         }
         if (sharedMeasure?.repeatStart) {
           // 多段譜では各段の左端に同じ開始リピート記号を出して、
@@ -1617,7 +1658,13 @@ export default function PianoSystemCanvas({
         // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
         // 移調楽器の記譜音表示などでパート固有の調号がある場合は、
         // そちらを基準に「調号で既に変化している音」を判定する。
-        const partKeyForAccidental = normalizeKeySignature(part.keySignature ?? normalizedKeySignature);
+        // この小節時点で有効な調号（途中調号変更対応）に、パート固有の移調シフトを適用する。
+        const partFifthsShiftForAccidental = part.keySignature
+          ? getKeySignatureFifths(part.keySignature) - getKeySignatureFifths(normalizedKeySignature)
+          : 0;
+        const partKeyForAccidental = partFifthsShiftForAccidental !== 0
+          ? shiftKeySignatureByFifths(effectiveKeySigPerMeasure[i], partFifthsShiftForAccidental)
+          : effectiveKeySigPerMeasure[i];
         const accidentalState = createMeasureAccidentalState(partKeyForAccidental);
         // 前の小節の最終状態を courtesy accidental 判定のために取得し、
         // この小節の描画後に更新する。
@@ -1888,6 +1935,19 @@ export default function PianoSystemCanvas({
             });
             return;
           }
+          if('mode' in tool&&tool.mode==='measureKeySig'){
+            // 途中調号変更: 小節クリックで調号選択ドロップダウンを表示する（最上段の小節データに保存する）
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            const me = e as MouseEvent;
+            const currentKS = partsScore[0]?.[absI]?.keySignature;
+            setKeySigEditState({
+              measureAbsoluteIndex: absI,
+              currentValue: currentKS ?? '',
+              overlayX: me.clientX - (containerRect?.left ?? 0),
+              overlayY: me.clientY - (containerRect?.top ?? 0),
+            });
+            return;
+          }
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           if('mode' in tool&&tool.mode==='accidental'){
             if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
@@ -2046,6 +2106,18 @@ export default function PianoSystemCanvas({
                 setTimeSigEditState({
                   measureAbsoluteIndex:absI,
                   currentValue:currentTS?`${currentTS[0]}/${currentTS[1]}`:'',
+                  overlayX:me.clientX-(containerRect?.left??0),
+                  overlayY:me.clientY-(containerRect?.top??0),
+                });
+                return;
+              }
+              if('mode' in tool&&tool.mode==='measureKeySig'){
+                const containerRect=containerRef.current?.getBoundingClientRect();
+                const me=e as MouseEvent;
+                const currentKS=partsScore[0]?.[absI]?.keySignature;
+                setKeySigEditState({
+                  measureAbsoluteIndex:absI,
+                  currentValue:currentKS??'',
                   overlayX:me.clientX-(containerRect?.left??0),
                   overlayY:me.clientY-(containerRect?.top??0),
                 });
@@ -2609,6 +2681,27 @@ export default function PianoSystemCanvas({
     setTimeSigEditState(null);
   }
 
+  /**
+   * 途中調号変更を確定する。
+   * 調号は最上段（partsScore[0]）の小節データにだけ保存する。
+   * 描画時にパートごとの移調シフトを適用するので、全パートへ複製する必要はない
+   * （repeatStart / ending などの「見た目の基準は最上段」パターンと同じ）。
+   */
+  function handleKeySigConfirm(value: string) {
+    if (!keySigEditState) return;
+    const { measureAbsoluteIndex } = keySigEditState;
+    const keySig = value && isValidKeySignature(value) ? (value as KeySignature) : undefined;
+    setPartsScore(prev => {
+      const next = [...prev];
+      const topPartData = (prev[0] ?? []).map(cloneMeasureData);
+      if (measureAbsoluteIndex >= topPartData.length) return prev;
+      topPartData[measureAbsoluteIndex] = { ...topPartData[measureAbsoluteIndex], keySignature: keySig };
+      next[0] = topPartData;
+      return next;
+    });
+    setKeySigEditState(null);
+  }
+
   function handleBpmConfirm(rawText: string) {
     if (!bpmEditState) return;
     const { measureAbsoluteIndex } = bpmEditState;
@@ -2700,6 +2793,57 @@ export default function PianoSystemCanvas({
             <option value="5/4">5/4</option>
             <option value="7/8">7/8</option>
             <option value="12/8">12/8</option>
+          </select>
+        </div>
+      )}
+      {keySigEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: keySigEditState.overlayX,
+            top: keySigEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #0f766e',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            minWidth: 200,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#0f766e', fontFamily: 'sans-serif' }}>
+            途中調号変更（「解除」で元に戻す）
+          </span>
+          <select
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            defaultValue={keySigEditState.currentValue || 'none'}
+            style={{
+              fontSize: 13,
+              fontFamily: 'sans-serif',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              padding: '2px 4px',
+              outline: 'none',
+            }}
+            onChange={(e) => {
+              handleKeySigConfirm(e.target.value === 'none' ? '' : e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setKeySigEditState(null);
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              if (e.relatedTarget === null) setKeySigEditState(null);
+            }}
+          >
+            <option value="none">（解除）</option>
+            {KEY_SIGNATURE_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
           </select>
         </div>
       )}
