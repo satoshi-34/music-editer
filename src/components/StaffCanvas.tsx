@@ -41,6 +41,7 @@ import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTi
 import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
+import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -159,12 +160,10 @@ function buildRestEditReplacement(
   // 連符（tuplet）内の休符は、音価が完全に一致する場合のみ音符へ置き換える。
   // 分割してしまうと連符グループの音価バランスが崩れるため、ここでは単純化して
   // 「同じ音価ならそのまま置換／違えば何もしない」という保守的な仕様にする。
-  if (restEvent.tuplet) {
-    if (restEvent.dur !== durationTool.duration || (restEvent.dots ?? undefined) !== (durationTool.dots ?? undefined)) {
-      return null;
-    }
-    // tuplet フィールドを引き継ぐことで、置き換え後も連符グループの一員として描画・再生される。
-    return [{ dur: durationTool.duration, isRest: false, keys: [key], dots: durationTool.dots, tuplet: restEvent.tuplet }];
+  // （PianoSystemCanvas と共通のロジックを utils/tupletUtils.ts に切り出している）
+  const tupletReplacement = buildTupletRestReplacement(restEvent, key, durationTool);
+  if (tupletReplacement !== undefined) {
+    return tupletReplacement;
   }
 
   // 付点音符は「その場に少なくとも付点分の長さの空きがあるか」だけで判定する保守的な仕様。
@@ -1084,16 +1083,11 @@ export default function StaffCanvas({
           // （部分削除だと連符の音価バランスが崩れて描画・再生が破綻するため、
           //   このプロジェクトでは「グループごと削除」というシンプルな仕様を採用した）
           if (targetEv.tuplet) {
-            const tupletId = targetEv.tuplet.id;
-            const events = next[measure].events;
-            let groupStart = index, groupEnd = index;
-            while (groupStart > 0 && events[groupStart - 1]?.tuplet?.id === tupletId) groupStart -= 1;
-            while (groupEnd < events.length - 1 && events[groupEnd + 1]?.tuplet?.id === tupletId) groupEnd += 1;
-            const groupEvents = events.slice(groupStart, groupEnd + 1);
-            const totalBeats = groupEvents.reduce((sum, ev) => sum + eventOccupiedBeats(ev), 0);
-            const restKeyForGroup = groupEvents[0]?.keys[0] || defaultRestKeyForClef(clef);
-            const replacement = buildRestEventsForBeats(totalBeats, restKeyForGroup);
-            next[measure].events.splice(groupStart, groupEvents.length, ...replacement);
+            // PianoSystemCanvas と共通のロジック（utils/tupletUtils.ts）でグループ削除→休符再構成する。
+            const plan = planTupletGroupDeletion(next[measure].events, index, defaultRestKeyForClef(clef));
+            if (plan) {
+              next[measure].events.splice(plan.groupStart, plan.groupEnd - plan.groupStart + 1, ...plan.replacement);
+            }
             return next;
           }
           if (!targetEv.isRest && keyIndex !== undefined && keyIndex >= 0 && keyIndex < targetEv.keys.length && targetEv.keys.length > 1) {
@@ -2049,29 +2043,16 @@ export default function StaffCanvas({
           // 3連符モード: 1音＋休符2個からなる連符グループを、空きがあれば一度に配置する。
           // 空きが足りない場合は「一部だけ置く」ようなことはせず、何もしない（既存の空き容量チェックと同じ方針）。
           if ((tool as any)?.tuplet) {
-            const numNotes = 3, notesOccupied = 2;
-            const perNoteBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots) * (notesOccupied / numNotes);
-            const groupBeats = perNoteBeats * numNotes;
+            // PianoSystemCanvas と共通のロジック（utils/tupletUtils.ts）でグループを組み立てる。
+            const { groupEvents, groupBeats } = buildTupletGroupPlan(
+              addDuration,
+              addDots,
+              [key],
+              defaultRestKeyForClef(clef)
+            );
             if (currentBeats + groupBeats > currentMeasureBeats + EPS) {
               return;
             }
-            const tupletId = `tuplet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const tupletInfo = { id: tupletId, numNotes, notesOccupied };
-            const notePart: NoteEvent = {
-              dur: addDuration,
-              isRest: false,
-              keys: [key],
-              dots: addDots,
-              tuplet: tupletInfo,
-            };
-            const restPart = (): NoteEvent => ({
-              dur: addDuration,
-              isRest: true,
-              keys: [defaultRestKeyForClef(clef)],
-              dots: addDots,
-              tuplet: tupletInfo,
-            });
-            const groupEvents: NoteEvent[] = [notePart, restPart(), restPart()];
             setScore(prev => {
               const next = prev.map(cloneMeasureData);
               while (absoluteMeasureIndex >= next.length) next.push(createEmptyMeasure());
@@ -2080,7 +2061,7 @@ export default function StaffCanvas({
               m.events.splice(Math.max(0, Math.min(insertAt, m.events.length)), 0, ...groupEvents);
               return next;
             });
-            playNoteEvent(notePart);
+            playNoteEvent(groupEvents[0]);
             return;
           }
 

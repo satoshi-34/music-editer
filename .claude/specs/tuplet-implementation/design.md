@@ -136,7 +136,11 @@ epsilon 比較パターンをそのまま踏襲した（`StaffCanvas.tsx` に `E
 - `src/utils/voiceMeasureUtils.ts` — `tupletBeatsMultiplier` 追加、`getEventDurationBeats` に反映
 - `src/components/Palette.tsx` — `Tool` に `tuplet?: boolean`、「3連符」ボタン追加
 - `src/components/StaffCanvas.tsx` — 3連符配置・削除・置換・描画・幅配分・自動休符補完
-- `src/components/PianoSystemCanvas.tsx` — 拍数計算・描画（tuplet 対応。入力UIは今回未対応）
+- `src/components/PianoSystemCanvas.tsx` — 拍数計算・描画（tuplet 対応）に加え、
+  入力UI（配置・休符置換・グループ削除）も対応（後述の追記セクション参照）
+- `src/utils/tupletUtils.ts`（新規） — StaffCanvas/PianoSystemCanvas 共通の
+  連符グループ組み立て・休符置換ガード・グループ削除ロジック
+- `src/utils/tupletUtils.test.ts`（新規） — 上記ユーティリティの単体テスト
 - `src/components/RestOverlapFixV2.ts` — 休符位置調整の時間計算に tuplet 反映
 - `src/audio/ScorePlayer.ts` — 再生時間計算に tuplet 反映
 - `src/audio/SoundFontEngine.ts` — 再生時間計算に tuplet 反映
@@ -148,14 +152,108 @@ epsilon 比較パターンをそのまま踏襲した（`StaffCanvas.tsx` に `E
 
 ## 既知の制約・今回やらなかったこと
 
-- パレットの「3連符」入力UIは `StaffCanvas.tsx`（単旋律譜）のみ対応。
-  `PianoSystemCanvas.tsx`（ピアノ・弦楽四重奏などの複数段譜）は
-  描画・拍数計算のみ対応し、クリックでの新規配置UIは未実装
-  （既存の複数段エディタの挿入ロジックが `StaffCanvas.tsx` と独立して
-  重複実装されているため、今回は単旋律譜での動作確認を優先した）
 - UIから作成できるのは 3:2（3連符）のみ。5連符・7連符などは
   データモデル上は表現可能だが、パレットのボタンは用意していない
 - MusicXML インポート側は `<tuplet type="start/stop">` を見ておらず、
   `<time-modification>` の連続性のみでグループ境界を判定する
   （多くのエクスポータ出力では十分だが、非連続な同一比率の連符が
   隣接するような特殊なファイルでは誤ってグループ結合される可能性がある）
+
+## 追記: 多段譜（ピアノ大譜表・弦楽四重奏・編成譜）への3連符入力対応
+
+上記「既知の制約」に書いていた「`PianoSystemCanvas.tsx` は描画・拍数計算のみで
+入力UIが未対応」という制限を解消した。
+
+### 何が足りなかったか
+
+`PianoSystemCanvas.tsx` はすでに `tupletBeatsMultiplier` を使った拍数計算と
+`Tuplet` の描画（`Tuplet` インポート済み、`beams.forEach` の後に同じ実装）を
+持っていたが、以下の3つが未実装だった。
+
+1. 小節クリック時の `doInsert()` に「3連符トグルON時はグループを配置する」分岐がない
+   （`tool.tuplet` を見ておらず、常に単一イベントとして挿入していた）
+2. `buildRestEditReplacement()` に連符内休符のガード（音価が一致する場合のみ置換）がない
+   （`StaffCanvas.tsx` にはあったが、`PianoSystemCanvas.tsx` にはこの分岐が漏れていた。
+   放置すると連符内の8分休符を16分音符ツールでクリックしたときに「分割」処理が走り、
+   連符の音価バランスが壊れる不具合になり得た）
+3. Delete/Backspace ハンドラに「連符グループごと削除して通常の休符に戻す」分岐がない
+   （単純に `events.splice(index, 1)` されるため、連符の残り2要素だけが
+   `tuplet.id` を持ったまま残り、描画・再生が破綻する不具合になり得た）
+
+### 採用した設計: ロジックの共通化
+
+`StaffCanvas.tsx` と `PianoSystemCanvas.tsx` は同じ「1音＋連符内休符2」という
+仕様のグループを扱うため、`customSymbolRenderUtils.ts`（カスタム記号）と同じ方針
+「**ロジックだけを共通化し、クリックのヒット判定・state更新（`setScore` /
+`setPartsScore`）は各キャンバス側に残す**」で `src/utils/tupletUtils.ts` を新設した。
+
+- `generateTupletId()`: `tuplet-${Date.now()}-${カウンタ}-${乱数}` で id を発行。
+  旧実装（`StaffCanvas.tsx` に直書きされていた `tuplet-${Date.now()}-${random}`）に
+  モジュール内カウンタを追加し、同一ミリ秒・同一乱数のごく低い衝突確率をさらに下げた。
+  単旋律譜・多段譜のどちらから呼んでも同じ関数を使うため、パート（右手/左手、
+  各弦楽器パートなど）をまたいでも衝突しない
+  （実機確認: ピアノ右手・左手にそれぞれ配置した結果、保存データの
+  `tuplet.id` が異なることを確認済み — 詳細は本ファイル末尾のブラウザ確認結果を参照）
+- `buildTupletGroupPlan(duration, dots, noteKeys, restKey)`: 音符1＋連符内休符2の
+  `NoteEvent[]` とグループ全体の拍数を組み立てる。空き容量チェック
+  （`currentBeats + groupBeats > 小節拍数`）は呼び出し側で行う（`StaffCanvas`/
+  `PianoSystemCanvas` で小節拍数の取得方法が微妙に異なる—`StaffCanvas` は
+  小節ごとの `timeSignature` を見るが `PianoSystemCanvas` は現状グローバルな
+  `beatsPerMeasure` のみを使っている—ため、この差異をユーティリティ側に
+  持ち込まず、そのまま踏襲した）
+- `buildTupletRestReplacement(restEvent, key, durationTool)`: 連符内休符の
+  置換可否を判定する。戻り値は3値
+  （`undefined`=連符ではないので通常ロジックへフォールバック、
+  `null`=連符だが音価不一致で何もしない、配列=置換後のイベント）にして、
+  「連符ではない」と「連符だが弾く」を呼び出し側で区別できるようにした
+- `planTupletGroupDeletion(events, index, defaultRestKey)`: 削除対象イベントの
+  `tuplet.id` から前後の同グループ範囲（`groupStart`/`groupEnd`）を探し、
+  合計拍数から通常休符の配列を組み立てる。対象が連符でなければ `null`
+
+`StaffCanvas.tsx` 側もこの3関数を使うようにリファクタリングし、重複コードを解消した
+（挙動は完全に同一であることをユニットテスト・ブラウザ確認の両方で確認済み）。
+
+### PianoSystemCanvas.tsx 側の変更点
+
+- `doInsert()`: `(tool as any)?.tuplet` が真のとき `buildTupletGroupPlan` で
+  グループを組み立て、`currentBeats + groupBeats > beatsPerMeasure` なら何もしない。
+  収まる場合は `fillPriorMeasureRests` → `m.events.splice(...)` で3イベントをまとめて挿入し、
+  先頭の音符イベントだけ `playNoteEvent` で確認音を鳴らす（`StaffCanvas.tsx` と同じ流れ）
+- `buildRestEditReplacement()`: 冒頭で `buildTupletRestReplacement` を呼び、
+  `undefined` でなければその結果をそのまま返す（連符ガードを追加）
+- Delete/Backspace ハンドラ: `targetEv.tuplet` があれば `planTupletGroupDeletion` の
+  結果で `events.splice` する分岐を、和音キー削除・通常削除より前に追加
+
+### なぜ「クリック処理は各キャンバス側」に残したか
+
+`PianoSystemCanvas.tsx` はパート配列 `partsScore` を扱うため `setScore` が
+`setPartsScore` 経由のラッパー（`partIndex` を閉じ込めた関数）になっている一方、
+`StaffCanvas.tsx` は単一の `setScore` を直接使う。この state 更新の形が違うため、
+`doInsert`/Delete ハンドラ自体を共通化すると型やクロージャの取り回しが複雑になり、
+かえってバグを埋め込みやすい。カスタム記号対応（`customSymbolRenderUtils.ts`）で
+採った「純粋なデータ変換ロジックだけを共通化する」という前例をそのまま踏襲した。
+
+### テスト・確認結果
+
+- 単体テスト: `src/utils/tupletUtils.test.ts`（新規）。
+  - `generateTupletId` の連続200回呼び出しでの一意性
+  - `buildTupletGroupPlan` のグループ構成・拍数・tuplet id の一意性
+    （パートをまたいでも別IDになることを模した2回呼び出しの比較）
+  - `buildTupletRestReplacement` の3パターン（非連符/一致/不一致）
+  - `planTupletGroupDeletion` のグループ境界検出（隣接する別グループを
+    誤って巻き込まないこと）と休符再構成
+- `docker compose run --rm app npx vitest run`: 51ファイル / 695テストすべて成功
+- `docker compose run --rm app npm run build`: 成功（`tsc -b && vite build`）
+- ブラウザ確認（`docker compose run --rm --service-ports app npm run dev -- --host`）:
+  1. ピアノ大譜表・右手（ト音記号）に8分3連を配置 → 「3」ブラケット表示を確認
+  2. 連符内の休符（2つ目）を8分音符ツールでクリック → tuplet情報を保ったまま音符に置換
+  3. 左手（ヘ音記号）にも同様に配置 → 保存データの JSON を確認したところ
+     `tuplet.id` が右手・左手で異なる文字列になっていることを確認
+     （例: `tuplet-1784067778968-1-71o1z2` と `tuplet-1784067803482-2-utbtyz`）
+  4. 左手の連符音符を選択して Delete → グループ全体が同じ長さの通常の4分休符1個に置換
+  5. 元に戻す（Undo）→ 削除前の連符グループが復元
+  6. 「保存」→ ページを再読み込み → 「読込」で復元 → 両手の連符表示が保たれることを確認
+  7. 再生ボタンでリズム確認、コンソールエラーなし
+  8. 単旋律譜（`StaffCanvas.tsx`）でも同じ手順で3連符入力・確認 → リファクタ後も
+     リグレッションがないことを確認
+  9. 全操作を通してブラウザコンソールにエラーなし

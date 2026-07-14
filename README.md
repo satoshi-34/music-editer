@@ -62,7 +62,7 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - 見た目の横位置に最も近い場所へ自然に挿入（getAbsoluteX + BoundingBox）
 - 全音価対応（全音符・二分音符・四分音符・八分音符・十六分音符・三十二分音符・六十四分音符）
 - **付点音符・付点休符**: Palette の `.` トグルボタン（またはキーボードの `.` キー）をONにしてから音符/休符を配置すると、音価が1.5倍になる付点が付く。拍数計算・再生時間・MusicXML/MIDI書き出しにもすべて反映される。休符へ差し込む場合は「その場に付点音符ぶんの空きがあるか」だけで判定する保守的な仕様（休符側を付点休符へ再分割する処理はしない）
-- **3連符入力（単旋律譜のみ）**: Palette の「3連符」トグルボタンをONにしてから音価（例: 8分音符）を選び五線をクリックすると、音符1つ＋休符2つからなる3連符グループ（3個で通常の2個分の長さ）を一度に配置する。小節に空きが足りない場合は何も置かない。連符内の休符は同じ音価の音符でのみ置き換え可能（tuplet情報を引き継ぐ）。連符内のどれか1つを削除するとグループ全体が同じ長さの通常の休符に置き換わる。拍数計算・描画（VexFlowのブラケットと「3」表示）・再生・MusicXML（`time-modification`）・MIDI書き出しにすべて反映される
+- **3連符入力（単旋律譜・ピアノ大譜表・弦楽四重奏・編成譜すべて対応）**: Palette の「3連符」トグルボタンをONにしてから音価（例: 8分音符）を選び五線をクリックすると、音符1つ＋休符2つからなる3連符グループ（3個で通常の2個分の長さ）を一度に配置する。小節に空きが足りない場合は何も置かない。連符内の休符は同じ音価の音符でのみ置き換え可能（tuplet情報を引き継ぐ）。連符内のどれか1つを削除するとグループ全体が同じ長さの通常の休符に置き換わる。拍数計算・描画（VexFlowのブラケットと「3」表示）・再生・MusicXML（`time-modification`）・MIDI書き出しにすべて反映される。多段譜ではパート（右手/左手、各弦楽器パートなど）をまたいでも tuplet id が衝突しないよう発行している
 
 ### 🎶 音符再生機能（NEW!）
 - **個別音符再生**: 音符をクリックして即座に音を確認
@@ -328,6 +328,7 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 - 拍数計算は `voiceMeasureUtils.tupletBeatsMultiplier()`（`notesOccupied/numNotes` 倍）を中心に、`StaffCanvas`/`PianoSystemCanvas`/`RestOverlapFixV2`/`ScorePlayer`/`SoundFontEngine`/`midiExport`/`musicXmlExport` それぞれで同じ倍率を反映（dur から直接拍数を再計算している箇所が複数あるため、中心ヘルパーの変更だけでは不十分）。
 - 描画は VexFlow 5 の `new Tuplet(notes, { numNotes, notesOccupied })` を使用。コンストラクタが自動で各音符の `tupletStack` を更新するため Voice のフォーマット計算（ticks合計）は自動対応するが、ブラケット描画自体は `tuplet.setContext(ctx).draw()` を明示的に呼ぶ必要がある。
 - 削除は「連符グループ内のどれか1つを消すとグループ全体を通常の休符に置き換える」というシンプルな仕様（詳細は `.claude/specs/tuplet-implementation/design.md`）。
+- 入力（配置・休符置換・グループ削除）のロジックは `src/utils/tupletUtils.ts` に共通化し、`StaffCanvas`（単旋律譜）・`PianoSystemCanvas`（多段譜）の両方から呼び出している。クリックのヒット判定や `setScore`/`setPartsScore` への反映は各キャンバス側に残し、「共通化はロジックのみ」という方針（`customSymbolRenderUtils.ts` と同じ）。tuplet id は `generateTupletId()`（時刻＋モジュール内カウンタ＋乱数）で発行し、パートをまたいで呼んでも衝突しない。
 
 ### 5. 🎵 音符再生システム
 - **SimpleAudioEngine**: Web Audio APIを直接使用した軽量な音声エンジン

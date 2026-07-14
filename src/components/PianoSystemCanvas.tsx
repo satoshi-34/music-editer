@@ -46,6 +46,7 @@ import {
 import { buildCustomSymbolEntry, drawCustomSymbolEntries, type CustomSymbolRenderEntry } from '../utils/customSymbolRenderUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getMeasureVoices, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
+import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
@@ -143,6 +144,14 @@ function buildRestEditReplacement(
   const durationTool = getDurationTool(tool);
   if (!durationTool || durationTool.isRest || !restEvent.isRest) {
     return null;
+  }
+
+  // 連符（tuplet）内の休符は、音価が完全に一致する場合のみ音符へ置き換える。
+  // 分割してしまうと連符グループの音価バランスが崩れるため、保守的な仕様にしている。
+  // （StaffCanvas と共通のロジックを utils/tupletUtils.ts に切り出している）
+  const tupletReplacement = buildTupletRestReplacement(restEvent, key, durationTool);
+  if (tupletReplacement !== undefined) {
+    return tupletReplacement;
   }
 
   // 付点音符は「その場に少なくとも付点分の長さの空きがあるか」だけで判定する保守的な仕様。
@@ -962,6 +971,15 @@ export default function PianoSystemCanvas({
           const n=prev.map(cloneMeasureData);
           if(index>=n[measure].events.length)return prev;
           const targetEv=n[measure].events[index];
+          // 連符（tuplet）内の1イベントを削除する場合は、グループ全体を削除して
+          // 同じ長さの「連符ではない」普通の休符に置き換える（StaffCanvas と共通のロジック）。
+          if(targetEv.tuplet){
+            const plan=planTupletGroupDeletion(n[measure].events, index, defaultRestKeyForClef(clef));
+            if(plan){
+              n[measure].events.splice(plan.groupStart, plan.groupEnd - plan.groupStart + 1, ...plan.replacement);
+            }
+            return n;
+          }
           if(!targetEv.isRest&&keyIndex!==undefined&&keyIndex>=0&&keyIndex<targetEv.keys.length&&targetEv.keys.length>1){
             const removedKey=targetEv.keys[keyIndex];
             const nextKeys=targetEv.keys.filter((_,keyIdx)=>keyIdx!==keyIndex);
@@ -1878,8 +1896,33 @@ export default function PianoSystemCanvas({
           const currentMeasure = score[absI] ?? createEmptyMeasure();
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey;
           const addDots: 1 | undefined = (tool as any)?.dots === 1 ? 1 : undefined;
-          const addBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
           const currentBeats = currentMeasure.events.reduce((sum,event)=>sum+eventOccupiedBeats(event),0);
+
+          // 3連符モード: StaffCanvas と共通のロジック（utils/tupletUtils.ts）で
+          // 「音符1＋連符内休符2」のグループを一度に配置する。空きが足りなければ何もしない。
+          if((tool as any)?.tuplet){
+            const { groupEvents, groupBeats } = buildTupletGroupPlan(
+              addDuration,
+              addDots,
+              [key],
+              defaultRestKeyForClef(part.clef)
+            );
+            if(currentBeats + groupBeats > beatsPerMeasure + 0.000001){
+              return;
+            }
+            setScore(prev=>{
+              const next=prev.map(cloneMeasureData);
+              while(absI>=next.length)next.push(createEmptyMeasure());
+              fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(part.clef));
+              const m=next[absI];
+              m.events.splice(Math.max(0,Math.min(at,m.events.length)),0,...groupEvents);
+              return next;
+            });
+            playNoteEvent(groupEvents[0], part.playbackInstrument);
+            return;
+          }
+
+          const addBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
           if(currentBeats + addBeats > beatsPerMeasure){
             return;
           }
