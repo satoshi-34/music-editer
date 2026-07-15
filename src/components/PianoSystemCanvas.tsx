@@ -45,7 +45,7 @@ import {
 } from '../utils/customSymbolUtils';
 import { buildCustomSymbolEntry, drawCustomSymbolEntries, type CustomSymbolRenderEntry } from '../utils/customSymbolRenderUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
-import { getMeasureVoices, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
+import { getMeasureVoices, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
@@ -55,7 +55,9 @@ import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
 type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[] };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
-type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number } | null;
+// voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
+// 未指定（voice0/primary）は既存互換のため 0 扱いにする。
+type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number; voiceIndex?: number } | null;
 
 export type PartConfig = {
   clef: ClefType;
@@ -620,6 +622,9 @@ type Props = {
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
   // カスタム記号定義（記号エディタで作成した奏法記号）。省略時は何も描画しない。
   customSymbolDefs?: CustomSymbolDef[];
+  // 声部切り替えトグル: 0 = 声部1（上声・従来通り measure.events）、1 = 声部2（下声）。
+  // 省略時は 0（従来互換）として扱う。
+  activeVoiceIndex?: 0 | 1;
 };
 
 export default function PianoSystemCanvas({
@@ -633,6 +638,7 @@ export default function PianoSystemCanvas({
   selectedMeasures,
   onMeasureSelect,
   customSymbolDefs = [],
+  activeVoiceIndex = 0,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -964,6 +970,30 @@ export default function PianoSystemCanvas({
           return next;
         });
       };
+
+      // 声部2（下声）の音符を選んでいるときは、MVP として Delete キーによる削除のみ対応する。
+      // 以下の音高変更・アーティキュレーション付与などは声部1（measure.events）の
+      // インデックス前提で書かれているため、そのまま流すと声部1側を誤って書き換えてしまう。
+      // それを防ぐため、Delete 以外はここで打ち切る。
+      if (sel.voiceIndex) {
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          setS(prev => {
+            if (measure >= prev.length) return prev;
+            const n = prev.map(cloneMeasureData);
+            const voiceEvents = n[measure].voices?.[sel.voiceIndex!]?.events;
+            if (!voiceEvents || index >= voiceEvents.length) return prev;
+            n[measure] = withVoiceEventsUpdated(n[measure], sel.voiceIndex!, (events) => {
+              const copy = [...events];
+              copy.splice(index, 1);
+              return copy;
+            });
+            return n;
+          });
+          setSelected(null); e.preventDefault(); return;
+        }
+        if (e.key === 'Escape') { setSelected(null); e.preventDefault(); return; }
+        return;
+      }
 
       if(e.key==='Delete'||e.key==='Backspace'){
         setS(prev=>{
@@ -1751,7 +1781,9 @@ export default function PianoSystemCanvas({
                 // 追加声部は拍合わせ用の音符が多く、courtesy が邪魔になりやすい。
                 voiceIndex === 0 ? thisPrevMeasState : undefined
               ) as any;
-              const isSel=voiceIndex===0&&!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===idx;
+              // 選択中の声部（selected.voiceIndex、未指定時は 0 扱い）と一致する音符だけハイライトする。
+              // こうしないと声部2を選択したときに声部1の同じインデックスも一緒に青くなってしまう。
+              const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===idx&&(selected.voiceIndex??0)===voiceIndex;
               if(isSel&&selected.keyIndex!==undefined&&!ev.isRest&&n.setKeyStyle){
                 n.setKeyStyle(selected.keyIndex,{fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
               }else if(isSel&&n.setStyle){
@@ -1859,6 +1891,37 @@ export default function PianoSystemCanvas({
         const staveTop=stave.getYForLine(-EXTRA_TOP);
         const staveBot=stave.getYForLine(4+EXTRA_BOTTOM);
 
+        // 声部2（下声）の音符は、まだ既存の対話レイヤー（vfNotes = voice0 前提）が
+        // クリックを拾えないので、選択・削除用の透明な当たり判定を別途重ねて置く。
+        // MVP のため対応するのは「クリックで選択」と「Delete キーで削除」のみ。
+        renderedVoiceEntries
+          .filter((entry) => entry.voiceIndex > 0)
+          .forEach((entry) => {
+            entry.vfNotes.forEach((vfNote, j) => {
+              const ev = entry.sourceEvents[j];
+              if (ev.isRest) return; // 休符は選択対象外（音価変更などは未対応）
+              const n: any = vfNote;
+              const bb = n.getBoundingBox?.();
+              const noteX = n.getAbsoluteX ? n.getAbsoluteX() : measLeft;
+              const width = bb ? bb.getW() : 20;
+              const hitRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+              hitRect.setAttribute('class', 'vf-hit-voice2');
+              hitRect.setAttribute('x', String(noteX - 3));
+              hitRect.setAttribute('y', String(staveTop));
+              hitRect.setAttribute('width', String(Math.max(6, width + 6)));
+              hitRect.setAttribute('height', String(staveBot - staveTop));
+              hitRect.setAttribute('fill', 'transparent');
+              hitRect.setAttribute('pointer-events', 'all');
+              (hitRect.style as any).cursor = 'pointer';
+              hitRect.addEventListener('click', (e) => {
+                if (disabled) return;
+                e.stopPropagation();
+                setSelected({ partIndex: pi, measure: absI, index: j, voiceIndex: entry.voiceIndex });
+              });
+              svgRoot.appendChild(hitRect);
+            });
+          });
+
         // タイ／スラーを arcs[] に保存する（始点の NoteEvent に TieArc を追加）
         const applyArc=(m1:number,n1:number,fromKey:string,m2:number,n2:number,toKey:string,kind:'tie'|'slur')=>{
           if(m1>m2||(m1===m2&&n1>n2)){[m1,n1,m2,n2]=[m2,n2,m1,n1];[fromKey,toKey]=[toKey,fromKey];}
@@ -1896,6 +1959,38 @@ export default function PianoSystemCanvas({
           const currentMeasure = score[absI] ?? createEmptyMeasure();
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey;
           const addDots: 1 | undefined = (tool as any)?.dots === 1 ? 1 : undefined;
+
+          // 声部2（下声）がアクティブなときは measure.events ではなく
+          // measure.voices[1] へ追加する。位置指定クリックの x 座標判定は
+          // 声部1の音符レイアウトを前提にしているため、声部2は
+          // 「まず小節末尾へ追記する」だけのシンプルな挙動にする
+          // （将来、位置指定挿入に対応する余地は design.md に残す）。
+          if (activeVoiceIndex === 1) {
+            const voice2Events = currentMeasure.voices?.[1]?.events ?? [];
+            const currentBeats2 = voice2Events.reduce((sum,event)=>sum+eventOccupiedBeats(event),0);
+            const addBeats2 = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
+            if (currentBeats2 + addBeats2 > beatsPerMeasure) {
+              return;
+            }
+            const insertedEvent2: NoteEvent = {
+              dur: addDuration,
+              isRest: !!(tool as any)?.isRest,
+              keys: [(tool as any)?.isRest ? defaultRestKeyForClef(part.clef) : key],
+              dots: addDots,
+            };
+            setScore(prev => {
+              const next = prev.map(cloneMeasureData);
+              while (absI >= next.length) next.push(createEmptyMeasure());
+              fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(part.clef));
+              next[absI] = withVoiceEventsUpdated(next[absI], 1, (events) => [...events, insertedEvent2]);
+              return next;
+            });
+            if (!insertedEvent2.isRest) {
+              playNoteEvent(insertedEvent2, part.playbackInstrument);
+            }
+            return;
+          }
+
           const currentBeats = currentMeasure.events.reduce((sum,event)=>sum+eventOccupiedBeats(event),0);
 
           // 3連符モード: StaffCanvas と共通のロジック（utils/tupletUtils.ts）で
@@ -1946,6 +2041,30 @@ export default function PianoSystemCanvas({
             // 置いた直後の確認音があると、右手左手どちらでも音高チェックがしやすい。
             playNoteEvent(insertedEvent, part.playbackInstrument);
           }
+        };
+
+        // 声部2（下声）がアクティブなときのクリックを一手に引き受けるヘルパー。
+        // 既存の声部2音符の上をクリックしたら「選択」、それ以外は「小節末尾へ追記」にする。
+        // 小節の背景クリック（ir の handler）と、声部1の音符に重なる当たり判定（hit の handler）の
+        // 両方から呼ばれるため、共通化してある（片方にしか実装しないと、クリック位置によって
+        // 挙動が変わってしまい選択できたりできなかったりする事故につながる）。
+        const handleVoice2Click = (lx: number, ly: number) => {
+          const voice2Entry = renderedVoiceEntries.find((entry) => entry.voiceIndex === 1);
+          if (voice2Entry) {
+            for (let vi = 0; vi < voice2Entry.vfNotes.length; vi++) {
+              const ev2 = voice2Entry.sourceEvents[vi];
+              if (ev2.isRest) continue;
+              const vn: any = voice2Entry.vfNotes[vi];
+              const bb2 = vn.getBoundingBox?.();
+              const noteX2 = vn.getAbsoluteX ? vn.getAbsoluteX() : measLeft;
+              const w2 = bb2 ? bb2.getW() : 20;
+              if (lx >= noteX2 - 3 && lx <= noteX2 + w2 + 3 && ly >= staveTop && ly <= staveBot) {
+                setSelected({ partIndex: pi, measure: absI, index: vi, voiceIndex: 1 });
+                return;
+              }
+            }
+          }
+          doInsert(lx, ly);
         };
 
         const isMeasureSelected = selectedMeasures != null &&
@@ -2051,6 +2170,10 @@ export default function PianoSystemCanvas({
               onKeySignatureChange?.(nextKey, pi);
             }
             // 調号領域以外の背景クリックでは、音符を新規挿入しない。
+            return;
+          }
+          if (activeVoiceIndex === 1) {
+            handleVoice2Click(lx, ly);
             return;
           }
           doInsert(lx,ly);
@@ -2218,6 +2341,19 @@ export default function PianoSystemCanvas({
               const ottavaMode = 'mode' in tool && tool.mode === 'ottava' ? (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd' : null;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
+              // 声部2（下声）がアクティブなときは、このクリック位置判定（isOnNote など）が
+              // すべて声部1（safeEvs = measure.events）の音符配置を前提にしているため、
+              // ここで先に doInsert へ流す。声部2は「クリック位置に関わらず小節末尾へ追記」の
+              // シンプルな挙動にする設計（design.md 参照）。臨時記号・強弱などのクリック系ツールは
+              // 声部1の音符インデックス（j）を前提に書かれており、声部2に流用すると誤動作するため、
+              // 特殊ツールモード中は声部2では何もしない。
+              if (activeVoiceIndex === 1) {
+                if ('mode' in tool) return;
+                // 声部2の既存音符をクリックしたときは選択、それ以外は末尾へ追記する。
+                // 判定は handleVoice2Click に共通化してある（小節背景クリック用の ir ハンドラとも共有）。
+                handleVoice2Click(lx, ly);
+                return;
+              }
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
               if (accidentalMode && !safeEvs[j]?.isRest) {

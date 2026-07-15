@@ -7,7 +7,9 @@ import {
   getEventDurationBeats,
   getMeasureDurationBeats,
   getMeasureVoices,
+  getVoiceEvents,
   syncPrimaryVoiceFromEvents,
+  withVoiceEventsUpdated,
 } from './voiceMeasureUtils';
 
 describe('voiceMeasureUtils', () => {
@@ -123,5 +125,57 @@ describe('voiceMeasureUtils', () => {
     const synced = syncPrimaryVoiceFromEvents(measure);
     expect(synced.voices?.[0].events).toEqual(measure.events);
     expect(synced.voices?.[1].events).toEqual(measure.voices?.[1].events);
+  });
+
+  describe('声部2（下声）への入力ヘルパー', () => {
+    it('getVoiceEvents は voiceIndex 0 のとき measure.events を返す', () => {
+      const measure: MeasureData = { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] };
+      expect(getVoiceEvents(measure, 0)).toEqual(measure.events);
+    });
+
+    it('getVoiceEvents は voices が未作成の声部2に対して空配列を返す', () => {
+      const measure: MeasureData = { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] };
+      expect(getVoiceEvents(measure, 1)).toEqual([]);
+    });
+
+    it('withVoiceEventsUpdated は voiceIndex 0 のとき measure.events を直接書き換える', () => {
+      const measure: MeasureData = { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] };
+      const next = withVoiceEventsUpdated(measure, 0, (events) => [...events, { dur: '8', isRest: false, keys: ['d/4'] }]);
+      expect(next.events).toHaveLength(2);
+      expect(next.voices).toBeUndefined();
+    });
+
+    it('withVoiceEventsUpdated は voices が無い小節に声部2を新規作成し、符幹を下向きにする', () => {
+      const measure: MeasureData = { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] };
+      const next = withVoiceEventsUpdated(measure, 1, (events) => [...events, { dur: '2', isRest: false, keys: ['g/3'] }]);
+      // 声部1（primary）は元の events から複製されて維持される
+      expect(next.voices?.[0].events).toEqual(measure.events);
+      // 声部2は新規作成され、追加したイベントが入る
+      expect(next.voices?.[1].events).toEqual([{ dur: '2', isRest: false, keys: ['g/3'] }]);
+      expect(next.voices?.[1].stemDirection).toBe('down');
+      // 元の events はそのまま残り、既存互換が崩れない
+      expect(next.events).toEqual(measure.events);
+    });
+
+    it('withVoiceEventsUpdated は既存の声部2から音符を削除できる', () => {
+      const measure: MeasureData = {
+        events: [{ dur: '4', isRest: false, keys: ['c/4'] }],
+        voices: [
+          { id: 'voice-1', events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
+          { id: 'voice-2', stemDirection: 'down', events: [
+            { dur: '2', isRest: false, keys: ['g/3'] },
+            { dur: '2', isRest: false, keys: ['e/3'] },
+          ] },
+        ],
+      };
+      const next = withVoiceEventsUpdated(measure, 1, (events) => {
+        const copy = [...events];
+        copy.splice(0, 1);
+        return copy;
+      });
+      expect(next.voices?.[1].events).toEqual([{ dur: '2', isRest: false, keys: ['e/3'] }]);
+      // 声部1は触っていないので元のまま
+      expect(next.voices?.[0].events).toEqual(measure.voices?.[0].events);
+    });
   });
 });

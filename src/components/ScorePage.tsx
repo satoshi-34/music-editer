@@ -194,6 +194,10 @@ function getPreviewDurationSeconds(dur: NoteEvent['dur']): number {
 
 export default function ScorePage() {
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
+  // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
+  // 1=声部2（下声・符幹下向き）。ピアノ譜以外では使わないが、
+  // 楽譜種別を切り替えても迷わないように値自体は保持しておく。
+  const [activeVoice, setActiveVoice] = useState<0 | 1>(0);
   const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
   const [scoreType, setScoreType] = useState<ScoreType>('single');
   // 楽譜の表示ウェイト（五線・テキストの太さ）
@@ -1577,6 +1581,13 @@ export default function ScorePage() {
         });
         e.preventDefault();
       }
+      // V キー: ピアノ譜の声部切り替え（声部1↔声部2）。
+      // ショートカット一発で切り替えられるようにしておくと、
+      // 右手のメロディと下声を交互に入力するときにマウスへ戻らずに済む。
+      if (e.key === 'v' || e.key === 'V') {
+        setActiveVoice(prev => (prev === 0 ? 1 : 0));
+        e.preventDefault();
+      }
       // . キー: 付点のON/OFFを切り替える（音価が選択されているときのみ有効）
       if (e.key === '.') {
         setTool(prev => {
@@ -2055,6 +2066,29 @@ export default function ScorePage() {
           {activeToolbarTab === 'notes' && (
             <div className="toolbar-section">
               <Palette value={tool} onChange={setTool} section="notes" />
+              {scoreType === 'piano' && (
+                // ピアノ譜だけ声部切り替えトグルを出す。単旋律譜・弦楽四重奏などは
+                // 声部2の入力先（下声パート）という概念自体がないため出さない。
+                <div className="toolbar-chip-group" role="group" aria-label="声部切り替え">
+                  <span className="toolbar-group-label">声部</span>
+                  <button
+                    type="button"
+                    className={`ghost toolbar-chip-button${activeVoice === 0 ? ' active' : ''}`}
+                    onClick={() => setActiveVoice(0)}
+                    title="声部1（上声・符幹上向き）"
+                  >
+                    声部1（上声）
+                  </button>
+                  <button
+                    type="button"
+                    className={`ghost toolbar-chip-button${activeVoice === 1 ? ' active' : ''}`}
+                    onClick={() => setActiveVoice(1)}
+                    title="声部2（下声・符幹下向き）。ショートカット: V"
+                  >
+                    声部2（下声）
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -2607,6 +2641,7 @@ export default function ScorePage() {
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
                       customSymbolDefs={customSymbolDefs}
+                      activeVoiceIndex={activeVoice}
                     />
                   ) : (
                     <StaffCanvas

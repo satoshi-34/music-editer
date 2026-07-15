@@ -31,6 +31,8 @@ type Props = {
   selectedMeasures?: { start: number; end: number };
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
   customSymbolDefs?: CustomSymbolDef[];
+  // 声部切り替えトグル（0=声部1・上声、1=声部2・下声）。省略時は従来通り声部1のみ。
+  activeVoiceIndex?: 0 | 1;
 };
 
 export default function PianoStaff({
@@ -54,6 +56,7 @@ export default function PianoStaff({
   selectedMeasures,
   onMeasureSelect,
   customSymbolDefs,
+  activeVoiceIndex = 0,
 }: Props) {
   return (
     <div>
@@ -79,6 +82,7 @@ export default function PianoStaff({
           selectedMeasures={selectedMeasures}
           onMeasureSelect={onMeasureSelect}
           customSymbolDefs={customSymbolDefs}
+          activeVoiceIndex={activeVoiceIndex}
         />
       ))}
     </div>

@@ -97,6 +97,56 @@ export function syncMeasuresPrimaryVoiceFromEvents(measures: MeasureData[]): Mea
 }
 
 /**
+ * 指定した声部（voiceIndex）の events 配列を取得する。
+ * voiceIndex 0 は primary voice なので measure.events を正本として返す。
+ * voiceIndex 1 以降は measure.voices[voiceIndex] が無ければ空配列を返す
+ * （まだ何も入力されていない状態を表す）。
+ */
+export function getVoiceEvents(measure: MeasureData, voiceIndex: number): NoteEvent[] {
+  if (voiceIndex <= 0) {
+    return measure.events ?? [];
+  }
+  return measure.voices?.[voiceIndex]?.events ?? [];
+}
+
+/**
+ * 声部を編集するための入力UI（声部切り替えトグル）から呼ばれる更新ヘルパー。
+ * voiceIndex 0 のときは既存互換のため measure.events を直接書き換える。
+ * voiceIndex 1 以降は measure.voices を必要な数だけ作りながら、
+ * 対象の声部だけ events を更新した新しい MeasureData を返す。
+ *
+ * 2声部目（voices[1]）は「下声」として使われることが多いため、
+ * 新規作成時はデフォルトで符幹を下向き（stemDirection: 'down'）にする。
+ * こうしておくと、ユーザーが声部を切り替えて入力しただけで
+ * 上声・下声が符幹の向きで見分けられるようになる。
+ */
+export function withVoiceEventsUpdated(
+  measure: MeasureData,
+  voiceIndex: number,
+  updater: (events: NoteEvent[]) => NoteEvent[],
+): MeasureData {
+  if (voiceIndex <= 0) {
+    return { ...measure, events: updater(measure.events ?? []) };
+  }
+
+  const existingVoices = measure.voices?.map(cloneVoiceData) ?? [
+    { id: 'voice-1', events: (measure.events ?? []).map(cloneNoteEvent) },
+  ];
+  while (existingVoices.length <= voiceIndex) {
+    existingVoices.push({
+      id: `voice-${existingVoices.length + 1}`,
+      events: [],
+      stemDirection: existingVoices.length === 1 ? 'down' : undefined,
+    });
+  }
+  existingVoices[voiceIndex] = {
+    ...existingVoices[voiceIndex],
+    events: updater(existingVoices[voiceIndex].events),
+  };
+  return { ...measure, voices: existingVoices };
+}
+
+/**
  * 付点による拍数の倍率。
  * 付点1個 = 1.5倍（元の長さ + その半分）、複付点(2個) = 1.75倍（元の長さ + 半分 + 4分の1）。
  */
