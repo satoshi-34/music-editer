@@ -1934,17 +1934,22 @@ export default function PianoSystemCanvas({
         // 置かれる」といった誤配置の原因になる。そのため、隣のパートとの中間点
         // （STAVE_SPACINGの半分）でクリップして、必ず最も近いパートだけがクリックを
         // 受け取るようにする。
-        // 中間点は必ず「line0（五線の基準位置）同士の中間」で求める。line4（五線下端）を
-        // 基準にすると上側のクリップ（line0基準）とズレて、五線の高さ分だけ重なってしまう。
-        const halfPartGapY = (STAVE_SPACING / 2) / s;
+        // 境界は「自パートの五線下端（line4）と次パートの五線上端（line0）の中間」に置く。
+        // line0 同士の中間で分割すると、上パートの下側加線域がほとんど残らず、
+        // 低音を置こうとしたクリックが下パートの超高音に化ける逆方向の誤配置が起きるため、
+        // 五線の端からの距離が上下対称になるこの取り方にする。
+        const partGapY = STAVE_SPACING / s;
         const staveLine0 = stave.getYForLine(0);
+        const staveLine4 = stave.getYForLine(4);
+        // 五線の下端と次パートの上端の間の余白を上下のパートで半分ずつ分け合う
+        const halfPartMarginY = (partGapY - (staveLine4 - staveLine0)) / 2;
         let staveTop=stave.getYForLine(-EXTRA_TOP);
         let staveBot=stave.getYForLine(4+EXTRA_BOTTOM);
         if (pi > 0) {
-          staveTop = Math.max(staveTop, staveLine0 - halfPartGapY);
+          staveTop = Math.max(staveTop, staveLine0 - halfPartMarginY);
         }
         if (pi < parts.length - 1) {
-          staveBot = Math.min(staveBot, staveLine0 + halfPartGapY);
+          staveBot = Math.min(staveBot, staveLine4 + halfPartMarginY);
         }
 
         // クリック判定はすべて「アクティブ声部」の描画済み音符から作る。

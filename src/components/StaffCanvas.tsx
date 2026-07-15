@@ -2096,21 +2096,25 @@ export default function StaffCanvas({
         // 段間隔（gap）より広く取ると隣接する段の当たり判定と縦方向に重なってしまう。
         // 重なった状態だとDOM順で先に描画された段が常にクリックを奪ってしまい、
         // 「2段目をクリックしたのに1段目の超低音として置かれる」というバグの原因になる。
-        // そのため、隣の段との中間点（gapの半分）でクリップして、必ず最も近い段だけが
+        // そのため、隣の段との境界でクリップして、必ず最も近い段だけが
         // クリックを受け取るようにする。
-        // 段の基準位置（line0）同士の間隔がちょうど gap/s なので、
-        // 中間点は「自分のline0 ± halfGapY」で求める。l4（五線の下端）を基準にすると
-        // 上側のクリップ（l0基準）と下側のクリップ（l4基準）がズレて、
-        // 五線の高さ分だけ隣接段と重なってしまうため、必ず同じ基準点（line0）を使う。
-        const halfGapY = (gap / 2) / s;
+        // 境界は「自段の五線下端（line4）と次段の五線上端（line0）の中間」に置く。
+        // line0 同士の中間で分割すると、上の段の下側加線域がほとんど残らず、
+        // 「1段目に低音を置こうとすると2段目の超高音になる」逆方向の誤配置が起きるため、
+        // 五線の端からの距離が上下対称になるこの取り方にする。
+        // 段の基準位置（line0）同士の間隔はちょうど gap/s。
+        const gapY = gap / s;
         const staveLine0 = stave.getYForLine(0);
+        const staveLine4 = stave.getYForLine(4);
+        // 五線の下端と次段の上端の間の余白を上下の段で半分ずつ分け合う
+        const halfMarginY = (gapY - (staveLine4 - staveLine0)) / 2;
         let rectTop = stave.getYForLine(-EXTRA_TOP_LINES);
         let rectBottom = stave.getYForLine(4 + EXTRA_BOTTOM_LINES);
         if (line > 0) {
-          rectTop = Math.max(rectTop, staveLine0 - halfGapY);
+          rectTop = Math.max(rectTop, staveLine0 - halfMarginY);
         }
         if (line < systems - 1) {
-          rectBottom = Math.min(rectBottom, staveLine0 + halfGapY);
+          rectBottom = Math.min(rectBottom, staveLine4 + halfMarginY);
         }
         const insertRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
         insertRect.setAttribute('class', 'vf-hit');
