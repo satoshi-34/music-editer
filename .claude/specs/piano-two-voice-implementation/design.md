@@ -179,6 +179,84 @@ interface MeasureData {
   既存実装のまま）。書き出し側で `<voice>2</voice>` と `<backup>` を追加する対応は
   影響範囲が広く、既存のタイ・連符・臨時記号処理と絡むため次回以降に持ち越す。
 
+## 追記: 2声部の描画を標準の浄書ルールに合わせる修正
+
+コミット `e3fbfe4` で2声部入力UIが入った後、ユーザーから「2声部が同じ小節に
+共存すると表示が崩れる（符幹の向きが混在する、音符・休符が重なる、ビームが
+声部をまたいで変になる）」との報告があった。バッハのアルマンドのような
+2声部書法が正しく描けることを目標に、以下の5点を修正した。
+
+### 問題
+
+- `PianoSystemCanvas.tsx` はすでに `getMeasureVoices()` で複数 Voice を読み取り、
+  `Formatter.joinVoices().formatToStave()` で同じ小節へ整形する土台があったが、
+  符幹の向き（`stemDirection`）は `measure.voices[n].stemDirection` に
+  明示的な値が保存されているときしか使われず、既定では未設定（=自動判定）だった。
+  声部2は入力時に既定で `stemDirection: 'down'` を持つが、声部1側は
+  常に未設定のままだったため、声部1の符幹向きが音高によってばらつき、
+  声部2の符幹（下向き固定）と衝突しているように見えることがあった。
+- ビーム生成 (`Beam.generateBeams(vfNotes,{beamRests:false})`) は声部ごとに
+  呼ばれてはいたが、`stemDirection` を渡していなかったため、VexFlow が
+  ビーム内の符幹向きを再計算し、`makeVFNote` 側で明示した向きと食い違う
+  ことがあった。
+- 休符の描画位置は声部を区別せず、常に五線の同じ既定位置
+  （`restKeyForClef` = line 2）に描かれていたため、2声部の休符が
+  同じ位置に重なって表示されていた。
+
+### 修正設計
+
+1. **符幹の向き固定** (`src/utils/voiceMeasureUtils.ts` の `resolveVoiceStemDirections`)
+   - 小節の声部数が2以上のときだけ、`voices[0].stemDirection` を `'up'`、
+     `voices[1]` 以降を `'down'` に強制する純関数を追加した。
+   - 声部が1つしかない小節ではこの関数は入力をそのまま返す（何も上書きしない）ため、
+     既存の「VexFlow の自動判定に任せる」挙動を壊さない（リグレッション防止）。
+   - `PianoSystemCanvas.tsx` の描画ループで `getMeasureVoices(data)` の結果を
+     `resolveVoiceStemDirections()` に通してから `makeVFNote` の `stemDirection`
+     引数へ渡すよう変更した。
+
+2. **声部ごとの独立ビーム**
+   - `Beam.generateBeams(vfNotes, { beamRests:false, stemDirection, maintainStemDirections:true })`
+     のように、2声部共存時は解決済みの符幹向きをビーム生成にも渡すよう変更した。
+     `maintainStemDirections:true` を付けないと、ビーム生成時に VexFlow が
+     符幹向きを自動再計算してしまい、`makeVFNote` 側の指定と食い違うため。
+   - 単声部の小節ではこのオプションを渡さず、従来通りの自動ビームのまま。
+
+3. **符頭衝突の自動オフセット**
+   - もともと `Formatter.joinVoices([voice1, voice2]).formatToStave(...)` を
+     使っており、VexFlow 標準の衝突回避（2度でぶつかる符頭の横ずらし）は
+     すでに効く構成だった。今回の符幹向き固定・独立ビームの修正と合わせて、
+     ブラウザ確認で近い音高の声部1/声部2が正しく左右にずれて両方読めることを確認した。
+
+4. **休符の上下避け** (`src/components/clefUtils.ts` の `restDisplayLineForVoice` / `restKeyForVoice`)
+   - 声部数が1つの小節では従来通り `DEFAULT_REST_DISPLAY_LINE`（line 2）のまま。
+   - 声部数が2以上の小節では、声部1の休符を `line 1`（やや上）、
+     声部2以降の休符を `line 3`（やや下）にずらす。
+   - `PianoSystemCanvas.tsx` の `makeVFNote` に `restKeyOverride` 引数を追加し、
+     「ユーザーが休符位置をカスタマイズしていない（保存データの休符キーが
+     `defaultRestKeyForClef` のまま）」場合にだけ声部別の位置を適用するようにした。
+     ユーザーが休符位置を個別に動かしている場合はその値を優先し、上書きしない。
+
+### ブラウザ確認
+
+ローカル dev サーバー（`docker compose run --rm --service-ports app npm run dev -- --host`）
+に接続し、ピアノ譜（声部1/声部2トグルあり）へ以下を入力して確認した。
+
+- 声部1に8分音符を2つ入力 → 符幹が上向きでビームが繋がった
+- 同じ小節の声部2に4分音符を1つ入力（声部1の1音目と同じ高さ g/5）
+  → 符幹が下向きになり、符頭が声部1側から右にずれて両方見える（衝突回避）
+- 声部2の無い小節（声部1しか入力していない小節）は従来通りの見た目のまま
+  （symptoms of regression なし）
+- ブラウザのコンソールにエラーは出ていない
+
+### 今回のスコープ外（既知の制限）
+
+- 休符の上下避けは自動ユニットテスト（`clefUtils.test.ts`）で計算ロジックを検証したが、
+  声部2の休符挿入は「小節末尾への追記」という既存の制限があり、ブラウザ上で
+  休符を含む2声部小節を対話的に作るところまでは今回のセッションでは確認しきれていない。
+  次回、休符を含むケースもブラウザで実際に確認することが望ましい。
+- `StaffCanvas.tsx`（ピアノ譜以外の五線）は今回もスコープ外のまま
+  （声部2という概念自体がピアノ譜の右手内の上声・下声分離のためのものであるため）。
+
 ## セキュリティ・安定性配慮
 
 - 保存前に `voices[0]` と `events` を同期し、データ不整合を減らす

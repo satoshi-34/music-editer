@@ -9,7 +9,7 @@ import {
 import type { Tool } from './Palette';
 import type { MeasureData, TieArc, DynamicMarking, CustomSymbolDef } from '../types/storage';
 import type { ClefType } from './clefUtils';
-import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
+import { defaultRestDisplayKey, restKey as restFormatterKey, restKeyForVoice } from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
@@ -45,7 +45,7 @@ import {
 } from '../utils/customSymbolUtils';
 import { buildCustomSymbolEntry, drawCustomSymbolEntries, type CustomSymbolRenderEntry } from '../utils/customSymbolRenderUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
-import { getMeasureVoices, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { getMeasureVoices, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
@@ -448,7 +448,11 @@ function makeVFNote(
   clef: ClefType,
   stemDirection?: 'up' | 'down',
   renderAsGhostRest = false,
-  prevMeasureState?: MeasureAccidentalState
+  prevMeasureState?: MeasureAccidentalState,
+  // 2声部が共存する小節で、休符を声部1=やや上/声部2=やや下にずらすための
+  // 描画専用キー。undefined のときは従来通り restKeyForClef(clef) を使う
+  // （単声部小節でのリグレッション防止）。
+  restKeyOverride?: string
 ) {
   const vd=toVFDur(ev.dur);
   // 付点(dots)の数だけ Dot.buildAndAttach を呼ぶ。1回呼ぶごとに付点が1個増える
@@ -466,7 +470,7 @@ function makeVFNote(
     }
     const eventRestKey = ev.keys[0] || defaultRestKeyForClef(clef);
     const renderRestKey = eventRestKey === defaultRestKeyForClef(clef)
-      ? restKeyForClef(clef)
+      ? (restKeyOverride ?? restKeyForClef(clef))
       : eventRestKey;
     return attachDots(new StaveNote({clef,keys:[renderRestKey],duration:vd+'r'}));
   }
@@ -475,7 +479,7 @@ function makeVFNote(
     if (renderAsGhostRest) {
       return new GhostNote({ duration: vd });
     }
-    return attachDots(new StaveNote({clef,keys:[restKeyForClef(clef)],duration:vd+'r'}));
+    return attachDots(new StaveNote({clef,keys:[restKeyOverride ?? restKeyForClef(clef)],duration:vd+'r'}));
   }
   const n=new StaveNote({clef,keys:ev.keys,duration:vd});
   if (stemDirection) {
@@ -1757,7 +1761,12 @@ export default function PianoSystemCanvas({
         // 前の小節の最終状態を courtesy accidental 判定のために取得し、
         // この小節の描画後に更新する。
         const thisPrevMeasState = prevMeasureStatePerPart[pi];
-        const measureVoices = getMeasureVoices(data);
+        const measureVoicesRaw = getMeasureVoices(data);
+        // 2声部が共存する小節だけ、符幹の向き（声部1=上向き/声部2=下向き）を強制する。
+        // 声部1しか無い小節は resolveVoiceStemDirections がそのまま返すので、
+        // 従来通り VexFlow の自動判定に任せられる（リグレッション防止）。
+        const measureVoices = resolveVoiceStemDirections(measureVoicesRaw);
+        const isMultiVoiceMeasure = measureVoices.length > 1;
         const renderedVoiceEntries = measureVoices
           .map((measureVoice, voiceIndex) => {
             const sourceEvents = voiceIndex === 0
@@ -1769,6 +1778,12 @@ export default function PianoSystemCanvas({
               return null;
             }
 
+            // 2声部共存時のみ、休符の描画位置を声部1=やや上/声部2=やや下にずらす。
+            // 単声部小節では undefined を渡し、従来の restKeyForClef(clef) を使う。
+            const restKeyOverride = isMultiVoiceMeasure
+              ? restKeyForVoice(part.clef, voiceIndex, measureVoices.length)
+              : undefined;
+
             const vfNotes = sourceEvents.map((ev, idx) => {
               const renderAsGhostRest = shouldRenderGhostRest(sourceEvents, idx, voiceIndex);
               const n=makeVFNote(
@@ -1779,7 +1794,8 @@ export default function PianoSystemCanvas({
                 renderAsGhostRest,
                 // courtesy accidental は主旋律（voice 0）だけに適用する。
                 // 追加声部は拍合わせ用の音符が多く、courtesy が邪魔になりやすい。
-                voiceIndex === 0 ? thisPrevMeasState : undefined
+                voiceIndex === 0 ? thisPrevMeasState : undefined,
+                restKeyOverride
               ) as any;
               // 選択中の声部（selected.voiceIndex、未指定時は 0 扱い）と一致する音符だけハイライトする。
               // こうしないと声部2を選択したときに声部1の同じインデックスも一緒に青くなってしまう。
@@ -1798,7 +1814,19 @@ export default function PianoSystemCanvas({
             if (voiceIndex === 0) {
               prevMeasureStatePerPart[pi] = snapshotAccidentalState(accidentalState);
             }
-            const beams=Beam.generateBeams(vfNotes,{beamRests:false});
+            // 2声部共存時は、ビームの符幹向きも声部の向き（上/下）にそろえる。
+            // stemDirection を明示すると、VexFlow はビーム内の各音符にもその向きを
+            // 適用してくれる（すでに makeVFNote 側で setStemDirection 済みだが、
+            // maintainStemDirections を付けないとビーム生成時に自動判定へ戻ってしまう）。
+            const beamStemDirection = isMultiVoiceMeasure
+              ? (measureVoice.stemDirection === 'down' ? -1 : 1)
+              : undefined;
+            const beams=Beam.generateBeams(vfNotes,{
+              beamRests:false,
+              ...(beamStemDirection !== undefined
+                ? { stemDirection: beamStemDirection, maintainStemDirections: true }
+                : {}),
+            });
             const voice=new Voice({
               time:{
                 num_beats: timeSignatureNumerator,

@@ -184,6 +184,30 @@ export function getEventDurationBeats(event: NoteEvent): number {
   return getDurationBeats(event.dur, event.dots) * tupletBeatsMultiplier(event.tuplet);
 }
 
+/**
+ * 2声部が共存する小節での符幹の向きを決める純ロジック。
+ *
+ * 標準的な浄書ルール（バッハのアルマンドのような2声部書法）では、
+ * 声部1（上声）は常に符幹上向き、声部2（下声）は常に符幹下向きになる。
+ * ここを VexFlow の自動判定に任せると、音高によって符幹の向きがばらつき、
+ * どちらの声部の音符か読み取りづらくなってしまう。
+ *
+ * - 声部が1つしか無い小節（voices.length <= 1）では、
+ *   従来通りの自動判定に任せたいので、ここでは何も上書きしない
+ *   （stemDirection を明示しないことで既存の見た目を壊さない = リグレッション防止）。
+ * - 声部が2つ以上ある小節でだけ、voices[0] を 'up'、voices[1] 以降を 'down' に強制する。
+ *   既存データに個別の stemDirection が保存されていても、2声部共存時はここで上書きする。
+ */
+export function resolveVoiceStemDirections(voices: VoiceData[]): VoiceData[] {
+  if (voices.length <= 1) {
+    return voices;
+  }
+  return voices.map((voice, index) => ({
+    ...voice,
+    stemDirection: index === 0 ? 'up' : 'down',
+  }));
+}
+
 export function getMeasureDurationBeats(measure: MeasureData): number {
   const voices = getMeasureVoices(measure);
   if (voices.length <= 1) {

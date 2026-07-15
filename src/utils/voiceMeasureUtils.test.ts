@@ -8,6 +8,7 @@ import {
   getMeasureDurationBeats,
   getMeasureVoices,
   getVoiceEvents,
+  resolveVoiceStemDirections,
   syncPrimaryVoiceFromEvents,
   withVoiceEventsUpdated,
 } from './voiceMeasureUtils';
@@ -176,6 +177,45 @@ describe('voiceMeasureUtils', () => {
       expect(next.voices?.[1].events).toEqual([{ dur: '2', isRest: false, keys: ['e/3'] }]);
       // 声部1は触っていないので元のまま
       expect(next.voices?.[0].events).toEqual(measure.voices?.[0].events);
+    });
+  });
+
+  describe('resolveVoiceStemDirections（2声部の符幹向き固定）', () => {
+    it('声部が1つだけなら stemDirection を上書きしない（自動判定のまま）', () => {
+      const voices = [{ id: 'voice-1', events: [{ dur: '4' as const, isRest: false, keys: ['c/4'] }] }];
+      const resolved = resolveVoiceStemDirections(voices);
+      expect(resolved).toBe(voices);
+      expect(resolved[0].stemDirection).toBeUndefined();
+    });
+
+    it('声部が2つ以上あるとき、声部1は常に up、声部2は常に down に強制する', () => {
+      const voices = [
+        { id: 'voice-1', events: [{ dur: '4' as const, isRest: false, keys: ['c/4'] }] },
+        { id: 'voice-2', events: [{ dur: '2' as const, isRest: false, keys: ['g/3'] }] },
+      ];
+      const resolved = resolveVoiceStemDirections(voices);
+      expect(resolved[0].stemDirection).toBe('up');
+      expect(resolved[1].stemDirection).toBe('down');
+    });
+
+    it('保存データに既存の stemDirection があっても、2声部共存時は up/down に強制上書きする', () => {
+      const voices = [
+        { id: 'voice-1', stemDirection: 'down' as const, events: [{ dur: '4' as const, isRest: false, keys: ['c/5'] }] },
+        { id: 'voice-2', stemDirection: 'up' as const, events: [{ dur: '2' as const, isRest: false, keys: ['g/3'] }] },
+      ];
+      const resolved = resolveVoiceStemDirections(voices);
+      expect(resolved[0].stemDirection).toBe('up');
+      expect(resolved[1].stemDirection).toBe('down');
+    });
+
+    it('3声部以上でも voices[0] は up、voices[1] 以降はすべて down にする', () => {
+      const voices = [
+        { id: 'voice-1', events: [{ dur: '4' as const, isRest: false, keys: ['c/5'] }] },
+        { id: 'voice-2', events: [{ dur: '4' as const, isRest: false, keys: ['e/4'] }] },
+        { id: 'voice-3', events: [{ dur: '4' as const, isRest: false, keys: ['c/3'] }] },
+      ];
+      const resolved = resolveVoiceStemDirections(voices);
+      expect(resolved.map((v) => v.stemDirection)).toEqual(['up', 'down', 'down']);
     });
   });
 });

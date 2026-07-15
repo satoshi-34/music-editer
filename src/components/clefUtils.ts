@@ -84,3 +84,31 @@ export function restKey(clef: ClefType): string {
 export function defaultRestDisplayKey(clef: ClefType): string {
   return lineToKey(clef, DEFAULT_REST_DISPLAY_LINE);
 }
+
+// 2声部が共存する小節では、休符も声部1(上声)/声部2(下声)で重なってしまうため、
+// それぞれ五線の中央（DEFAULT_REST_DISPLAY_LINE）から上下にずらして避ける。
+// line は数値が小さいほど五線の上（高い位置）になる（lineToKeyTreble 等の実装を参照）。
+const VOICE_REST_LINE_SHIFT = 1;
+
+/**
+ * 声部数を考慮した休符の描画位置(line)を返す。
+ * 声部が1つだけの小節では、従来通り DEFAULT_REST_DISPLAY_LINE のまま
+ * （リグレッション防止のためここでは分岐を増やさない）。
+ * 声部が2つ以上ある小節では、声部1をやや上寄り、声部2以降をやや下寄りにする。
+ */
+export function restDisplayLineForVoice(voiceIndex: number, voiceCount: number): number {
+  if (voiceCount <= 1) {
+    return DEFAULT_REST_DISPLAY_LINE;
+  }
+  return voiceIndex === 0
+    ? DEFAULT_REST_DISPLAY_LINE - VOICE_REST_LINE_SHIFT
+    : DEFAULT_REST_DISPLAY_LINE + VOICE_REST_LINE_SHIFT;
+}
+
+/**
+ * 声部数を考慮した休符の描画キー（VexFlow に渡す keys[0]）を返す。
+ * makeVFNote 側で「ユーザーが休符位置をカスタマイズしていない」場合にだけ使われる。
+ */
+export function restKeyForVoice(clef: ClefType, voiceIndex: number, voiceCount: number): string {
+  return lineToKey(clef, restDisplayLineForVoice(voiceIndex, voiceCount));
+}

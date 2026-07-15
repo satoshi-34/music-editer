@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { defaultRestDisplayKey, keyToLine, restKey, type ClefType } from './clefUtils';
+import {
+  defaultRestDisplayKey,
+  keyToLine,
+  restDisplayLineForVoice,
+  restKey,
+  restKeyForVoice,
+  type ClefType,
+} from './clefUtils';
 
 describe('clefUtils の休符既定位置', () => {
   const clefs: ClefType[] = ['treble', 'bass', 'alto'];
@@ -14,5 +21,21 @@ describe('clefUtils の休符既定位置', () => {
     // VexFlow の alignRests は従来の既定位置を前提に動くため、
     // 表示位置を下げても内部の整列基準は維持しておく。
     expect(keyToLine(clef, restKey(clef))).toBe(2);
+  });
+});
+
+describe('clefUtils の2声部での休符位置（上下避け）', () => {
+  const clefs: ClefType[] = ['treble', 'bass', 'alto'];
+
+  it.each(clefs)('%s: 声部が1つだけなら休符位置は従来通り line 2', (clef) => {
+    expect(restDisplayLineForVoice(0, 1)).toBe(2);
+    expect(keyToLine(clef, restKeyForVoice(clef, 0, 1))).toBe(2);
+  });
+
+  it.each(clefs)('%s: 2声部共存時は声部1(上)がline1、声部2(下)がline3にずれる', (clef) => {
+    expect(restDisplayLineForVoice(0, 2)).toBe(1);
+    expect(restDisplayLineForVoice(1, 2)).toBe(3);
+    expect(keyToLine(clef, restKeyForVoice(clef, 0, 2))).toBe(1);
+    expect(keyToLine(clef, restKeyForVoice(clef, 1, 2))).toBe(3);
   });
 });
