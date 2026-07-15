@@ -1322,8 +1322,8 @@ export default function StaffCanvas({
     const lyricsEntries: Array<{ anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
-    // 運指番号の描画情報を収集する（符頭のすぐ上に表示）
-    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
+    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     // start と end の x 座標・y 座標を記録して後でまとめて線を引く
     const ottavaEntries: Array<{
@@ -2898,8 +2898,10 @@ export default function StaffCanvas({
             if (!safeEvents[j]?.__isPlaceholder && !safeEvents[j]?.isRest && safeEvents[j]?.fingering) {
               fingeringEntries.push({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                // 符頭 BoundingBox の上端を基準にする（ない場合は五線上端より少し上を使う）
+                // 符頭 BoundingBox の上端（五線より上に飛び出す音の回避用）
                 noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
+                // 統一高さの基準となる五線上端
+                staveTopY: stave.getYForLine(0),
                 text: safeEvents[j].fingering!,
                 adjust: getSymbolAdjust(safeEvents[j], 'fingering'),
               });
@@ -3147,13 +3149,15 @@ export default function StaffCanvas({
     });
 
     // 運指番号: 符頭のすぐ上（noteTopY - 10）に小さめのフォントで表示する。
-    // 符幹の向きによる回避は行わず、常に符頭上端基準の固定オフセットにする
-    // （設計判断: 実装をシンプルに保つため。design.md 参照）。
-    fingeringEntries.forEach(({ anchorX, noteTopY, text, adjust }) => {
+    // 運指番号は音高（符頭の上下）に関わらず、その段の五線上端を基準にした
+    // 統一高さに揃えて表示する（カスタム記号と同じ方針。音符ごとに高さがばらつくと
+    // 楽譜として読みにくいため）。五線より上へ飛び出す高音だけは、記号が符頭と
+    // 重ならないよう、その音符に限り符頭上端の上へ逃がす。
+    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
-      el.setAttribute('y', String(noteTopY - 10 + adjust.offsetY));
+      el.setAttribute('y', String(Math.min(staveTopY - 12, noteTopY - 10) + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
       el.setAttribute('font-family', 'sans-serif');

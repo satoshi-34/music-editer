@@ -1213,8 +1213,8 @@ export default function PianoSystemCanvas({
     const customSymbolEntries: CustomSymbolRenderEntry[] = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
-    // 運指番号の描画情報を収集する（符頭のすぐ上に表示）
-    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
+    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     const ottavaEntries: Array<{
       kind: '8va' | '8vb';
@@ -2776,6 +2776,7 @@ export default function PianoSystemCanvas({
               fingeringEntries.push({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
+                staveTopY: stave.getYForLine(0),
                 text: activeEvs[j].fingering!,
                 adjust: getSymbolAdjust(activeEvs[j], 'fingering'),
               });
@@ -2862,6 +2863,7 @@ export default function PianoSystemCanvas({
                   fingeringEntries.push({
                     anchorX: cx,
                     noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
+                    staveTopY: stave.getYForLine(0),
                     text: ev.fingering,
                     adjust: getSymbolAdjust(ev, 'fingering'),
                   });
@@ -2915,12 +2917,14 @@ export default function PianoSystemCanvas({
     // ── カスタム記号を一括描画（StaffCanvas と同じ共通ユーティリティを使う） ──
     drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot);
 
-    // 運指番号: 符頭のすぐ上（noteTopY - 10）に小さめのフォントで表示する
-    fingeringEntries.forEach(({ anchorX, noteTopY, text, adjust }) => {
+    // 運指番号: 音高に関わらず五線上端基準の統一高さに揃えて表示する
+    // （カスタム記号と同じ方針）。五線より上へ飛び出す高音だけは、
+    // 符頭と重ならないよう、その音符に限り符頭上端の上へ逃がす。
+    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
-      el.setAttribute('y', String(noteTopY - 10 + adjust.offsetY));
+      el.setAttribute('y', String(Math.min(staveTopY - 12, noteTopY - 10) + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
       el.setAttribute('font-family', 'sans-serif');
