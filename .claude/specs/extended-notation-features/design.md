@@ -2,14 +2,77 @@
 
 ## 実装した機能
 
-### 1. 装飾音符（前打音・トリル）
+### 1. 装飾音符（前打音・トリル・モルデント・プラルトリラー・ターン）
 
 - `NoteEvent.graceNotes?: { keys: string[]; slash: boolean }[]` - アッチャカトゥーラ（スラッシュ付き）を前打音として保存
-- `NoteEvent.ornament?: 'trill'` - トリル記号
-- VexFlow の `GraceNote`, `GraceNoteGroup`, `Ornament('tr')` を使用
-- Palette に「前打音」「トリル」ボタンを追加（紫ボーダーでアクティブ表示）
+- `NoteEvent.ornament?: OrnamentType`（`'trill' | 'mordent' | 'mordentInverted' | 'turn'`） - 装飾記号。1音符につき1種類のみ（排他・トグル式）
+- VexFlow の `GraceNote`, `GraceNoteGroup`, `Ornament(...)` を使用
+- Palette に「前打音」「トリル」「モルデント」「プラルトリラー」「ターン」ボタンを追加（紫ボーダーでアクティブ表示）
 - StaffCanvas / PianoSystemCanvas 両方で対応
 - 前打音のデフォルト音高は主音符の1音上（`stepUp` 関数で計算）
+
+#### 1-1. モルデント・プラルトリラー・ターンの追加（2026-07-16）
+
+**背景**: 既存のトリルに加え、モルデント（下隣接音と1往復）・プラルトリラー（上隣接音と1往復）・ターンを追加する要望。
+
+**問題**: VexFlow（SMuFL準拠）の `Ornament` コンストラクタに渡すコード文字列は、
+音楽用語の慣習と逆転しており非常に紛らわしい。`node_modules/vexflow/build/esm/src/tables.js`
+の `ornamentCodes` テーブルを実際に確認したところ、以下の対応だった:
+
+```
+VexFlow コード文字列   → グリフ（SMuFL glyph）        → 見た目
+'mordent'              → Glyphs.ornamentShortTrill    → 波線のみ（縦線なし）
+'mordentInverted'      → Glyphs.ornamentMordent        → 波線＋縦線
+'turn'                 → Glyphs.ornamentTurn           → S字型
+```
+
+（グリフのコードポイントは `glyphs.js` で確認: `ornamentMordent` = U+E56D,
+`ornamentShortTrill` = U+E56C, `ornamentTurn` = U+E567。これは SMuFL 標準の
+"Precomposed trills and mordents" ブロックのコードポイントと一致する。）
+
+一方、音楽記譜の慣習では：
+- **モルデント**（下隣接音と1往復）＝「波線＋縦線」のグリフ
+- **プラルトリラー**（上隣接音と1往復）＝「波線のみ」のグリフ
+
+なので、このアプリの `ornament` 値と VexFlow コード文字列の対応は次のようにねじれる：
+
+```
+アプリの ornament 値                  → VexFlow コード文字列
+'mordent'         （下＝モルデント）    → 'mordentInverted'（波線＋縦線グリフ）
+'mordentInverted' （上＝プラルトリラー）→ 'mordent'        （波線のみグリフ）
+```
+
+**修正設計**:
+- `src/types/storage.ts` に `OrnamentType = 'trill' | 'mordent' | 'mordentInverted' | 'turn'` を追加し、
+  `NoteEvent.ornament` の型を `OrnamentType` に拡張（旧データの `'trill'` のみの値もそのまま有効）
+- 上記のねじれた対応関係を一箇所に集約するため `src/utils/ornamentUtils.ts` を新規作成:
+  - `ornamentToVexCode(type)`: アプリの ornament 値 → VexFlow コード文字列（ねじれの吸収）
+  - `ornamentLabel(type)`: パレットボタンの日本語ラベル
+  - `applyOrnamentToEvent(ev, type)`: トグル付け外し（同じ種類の再指定で解除、別の種類の指定で置き換え）の共通ロジック
+- StaffCanvas.tsx / PianoSystemCanvas.tsx の両方で `ornamentToVexCode` を使って `new Ornament(...)` を生成する共通コードに統一
+  - **PianoSystemCanvas.tsx の既存バグ修正**: 調査の結果、PianoSystemCanvas の音符生成関数（旧 `makeVFNote`）には
+    そもそも前打音（`graceNotes`）・トリル（`ornament`）を描画する処理が存在しなかった
+    （クリック時に `ornament: 'trill'` をデータへ保存する処理はあったが、描画側で反映されていなかった）。
+    今回のモルデント等追加と合わせて、`GraceNote`/`GraceNoteGroup`/`Ornament` の描画処理を追加し、
+    ピアノ譜・編成譜でも装飾記号（トリルを含む）が正しく表示されるように修正した
+- Palette.tsx の `Tool` 型: `{ mode: 'trill' }` を `{ mode: 'ornament'; ornamentType: OrnamentType }` に変更し、
+  トリル/モルデント/プラルトリラー/ターンの4ボタンを同じモードのバリエーションとして扱う（ペダル・オッターバと同じ「mode + サブタイプ」パターン）
+- MusicXML:
+  - 書き出し: `ev.ornament === 'mordent'` → `<ornaments><mordent/></ornaments>`、
+    `'mordentInverted'` → `<inverted-mordent/>`、`'turn'` → `<turn/>`
+    （MusicXML 側の命名は音楽用語通りで VexFlow のようなねじれはない。`<mordent/>`=下、`<inverted-mordent/>`=上）
+  - 読み込み: `<mordent>` / `<inverted-mordent>` / `<turn>` 要素の有無から `ornament` を復元
+- 再生: 表示のみ（トリルと同じ扱い）。装飾音を実際に鳴らす処理は未実装
+- 保存/読込・Undo: 既存の `ornament` フィールドと同じ経路（`setScore` のスナップショット履歴）に乗るため追加対応不要（動作確認済み）
+- テスト: `src/utils/musicXmlOrnament.test.ts` を新規作成し、以下を検証
+  - 4種類の装飾記号それぞれの MusicXML 書き出し
+  - 書き出し→読み込みのラウンドトリップ
+  - `ornamentToVexCode` のねじれた対応関係（`mordent`→`'mordentInverted'`、`mordentInverted`→`'mordent'`）
+  - `applyOrnamentToEvent` のトグル・置き換えロジック
+- ブラウザ確認: dev サーバー上で単旋律譜にモルデント/プラルトリラー/ターンを付与し、
+  実際に描画された SVG の `<text>` 要素のコードポイントが `e56d`（モルデント時）/`e56c`（プラルトリラー時）/`e567`（ターン時）
+  であることを JS で検証。ピアノ譜へ切り替えても同じ記号が表示されること、再クリックでの解除、
+  保存→リロード→読込での復元、Undo による巻き戻しも確認した（コンソールエラーなし）
 
 ### 2. インポート/エクスポート（MusicXML・MIDI）
 
@@ -84,11 +147,15 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
 
 ## 影響範囲
 
-- `src/types/storage.ts`: `NoteEvent` に `graceNotes`, `ornament`, `pedalMark`, `ottava` を追加
-- `src/components/Palette.tsx`: Tool 型に 6 種のモードを追加、対応ボタン追加
+- `src/types/storage.ts`: `NoteEvent` に `graceNotes`, `ornament`, `pedalMark`, `ottava` を追加。`OrnamentType` 型を新設
+- `src/utils/ornamentUtils.ts`（新規）: 装飾記号の VexFlow コード変換・日本語ラベル・トグルロジックを集約
+- `src/components/Palette.tsx`: Tool 型に 6 種のモードを追加、対応ボタン追加（うち装飾記号は `mode: 'ornament'` + `ornamentType` のサブタイプ形式）
 - `src/components/StaffCanvas.tsx`: 各モードのクリック処理・描画エントリ収集・SVG 描画追加
-- `src/components/PianoSystemCanvas.tsx`: 同上。ローカル `NoteEvent` 型に `pedalMark`, `ottava` を追記
+- `src/components/PianoSystemCanvas.tsx`: 同上。ローカル `NoteEvent` 型に `pedalMark`, `ottava` を追記。
+  装飾記号追加に伴い、従来描画されていなかった `graceNotes`/`ornament` の描画処理も追加（既存バグ修正）
 - `src/components/ScorePage.tsx`: エクスポートハンドラ・レイアウト制御・キーボードショートカット追加
+- `src/utils/musicXmlExport.ts` / `src/utils/musicXmlImport.ts`: モルデント・プラルトリラー・ターンの書き出し/読み込み対応
+- `src/utils/musicXmlOrnament.test.ts`（新規）: 装飾記号の MusicXML ラウンドトリップ・`ornamentUtils` のユニットテスト
 
 ## 注意点
 

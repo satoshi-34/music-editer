@@ -22,6 +22,12 @@ export type ArticulationMarking = 'staccato' | 'accent' | 'tenuto' | 'marcato' |
 /** `ArticulationType` は `ArticulationMarking` の別名。どちらも同じ文字列 union を指す */
 export type ArticulationType = ArticulationMarking;
 
+/**
+ * 装飾音記号の種類。詳しい説明は下の `NoteEvent.ornament` を参照。
+ * VexFlow コードとの対応（ねじれあり）は `src/utils/ornamentUtils.ts` を参照。
+ */
+export type OrnamentType = 'trill' | 'mordent' | 'mordentInverted' | 'turn';
+
 // ── カスタム記号（現代音楽用）──────────────────────────────────────────
 
 /**
@@ -121,10 +127,15 @@ export interface NoteEvent {
    */
   graceNotes?: { keys: string[]; slash: boolean }[];
   /**
-   * 装飾音記号の種類。
+   * 装飾音記号の種類。1音符につき1種類のみ（既存のトリルと同じ排他仕様）。
    * 'trill': 主音符の上に tr と波線を描く。
+   * 'mordent': モルデント（下隣接音と1往復）。波線＋縦線の記号。
+   * 'mordentInverted': プラルトリラー（上隣接音と1往復）。波線のみの記号。
+   *   ※ VexFlow / SMuFL のコード名とグリフの対応がねじれているため、
+   *      実際の描画コードとの対応は src/utils/ornamentUtils.ts のコメントを参照。
+   * 'turn': ターン（S字型の記号）。
    */
-  ornament?: 'trill';
+  ornament?: OrnamentType;
   /**
    * ペダル記号。
    * 'down': この音符からペダルを踏む（Ped 記号を表示）

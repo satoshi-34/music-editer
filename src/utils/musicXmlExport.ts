@@ -62,8 +62,14 @@ function articulationsXml(ev: NoteEvent): string {
     ? `<articulations>${artElems.join('')}</articulations>`
     : '';
 
-  const ornamentXml = ev.ornament === 'trill'
-    ? '<ornaments><trill-mark/></ornaments>'
+  // 装飾記号 → MusicXML の <ornaments> 子要素。
+  // 'mordent'(下/モルデント) は MusicXML の <mordent/>、
+  // 'mordentInverted'(上/プラルトリラー) は <inverted-mordent/> に対応する
+  // （MusicXML の命名は音楽用語通りで、VexFlow のようなねじれはない）。
+  const ornamentXml = ev.ornament === 'trill' ? '<ornaments><trill-mark/></ornaments>'
+    : ev.ornament === 'mordent' ? '<ornaments><mordent/></ornaments>'
+    : ev.ornament === 'mordentInverted' ? '<ornaments><inverted-mordent/></ornaments>'
+    : ev.ornament === 'turn' ? '<ornaments><turn/></ornaments>'
     : '';
 
   return `<notations>${articXml}${ornamentXml}</notations>`;

@@ -25,6 +25,7 @@ import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import { applyArticulationToEvent } from '../utils/articulationUtils';
+import { applyOrnamentToEvent, ornamentToVexCode, type OrnamentType } from '../utils/ornamentUtils';
 import {
   applyCustomSymbolToEvent,
   setCustomSymbolScale,
@@ -691,11 +692,11 @@ function makeVFNote(
     }
   }
 
-  // トリル記号（tr）を音符の上に付ける
-  if (ev.ornament === 'trill') {
+  // 装飾記号（トリル・モルデント・プラルトリラー・ターン）を音符の上に付ける
+  if (ev.ornament) {
     try {
-      const trill = new Ornament('tr');
-      (n as any).addModifier?.(trill, 0);
+      const orn = new Ornament(ornamentToVexCode(ev.ornament));
+      (n as any).addModifier?.(orn, 0);
     } catch {
       // 失敗しても描画を止めない
     }
@@ -2451,7 +2452,7 @@ export default function StaffCanvas({
               const customSymbolOffsetMode = 'mode' in tool && tool.mode === 'customSymbolOffset' ? tool.symbolId : null;
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
-              const trillMode = 'mode' in tool && tool.mode === 'trill';
+              const ornamentMode = 'mode' in tool && tool.mode === 'ornament' ? (tool as any).ornamentType as OrnamentType : null;
               const pedalMode = 'mode' in tool && tool.mode === 'pedal' ? (tool as any).pedalType as 'down' | 'up' : null;
               const ottavaMode = 'mode' in tool && tool.mode === 'ottava' ? (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd' : null;
               const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
@@ -2605,20 +2606,16 @@ export default function StaffCanvas({
                 playNoteEvent(nextEv);
                 return;
               }
-              if (trillMode && !safeEvents[j]?.isRest) {
-                // トリル記号をトグルで付け外しする
+              if (ornamentMode && !safeEvents[j]?.isRest) {
+                // 装飾記号（トリル・モルデント・プラルトリラー・ターン）をトグルで付け外しする
                 const currentEv = safeEvents[j];
-                const nextOrnament: 'trill' | undefined = currentEv.ornament === 'trill' ? undefined : 'trill';
-                const nextEv: NoteEvent = { ...currentEv, ornament: nextOrnament };
+                const nextEv: NoteEvent = applyOrnamentToEvent(currentEv, ornamentMode);
                 setScore(prev => {
                   const next = prev.map(cloneMeasureData);
                   if (absoluteIndex >= next.length) return prev;
                   const targetEv = next[absoluteIndex].events[j];
                   if (!targetEv || targetEv.isRest) return prev;
-                  next[absoluteIndex].events[j] = {
-                    ...targetEv,
-                    ornament: targetEv.ornament === 'trill' ? undefined : 'trill',
-                  };
+                  next[absoluteIndex].events[j] = applyOrnamentToEvent(targetEv, ornamentMode);
                   return next;
                 });
                 setSelected({ measure: startMeasureIndex + measureIndex, index: j });

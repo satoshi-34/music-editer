@@ -101,8 +101,11 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
       if (noteEl.querySelector('fermata')) articulations.push('fermata');
       if (articulations.length) chordBuffer.articulations = articulations as any;
 
-      // トリル
+      // 装飾記号（1音符につき1種類。複数該当する場合は最初に見つかったものを優先）
       if (noteEl.querySelector('trill-mark')) chordBuffer.ornament = 'trill';
+      else if (noteEl.querySelector('mordent')) chordBuffer.ornament = 'mordent';
+      else if (noteEl.querySelector('inverted-mordent')) chordBuffer.ornament = 'mordentInverted';
+      else if (noteEl.querySelector('turn')) chordBuffer.ornament = 'turn';
 
       // 歌詞
       const lyricEl = noteEl.querySelector('lyric text');

@@ -5,9 +5,11 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
   Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType, Dot, Tuplet,
+  GraceNote, GraceNoteGroup, Ornament,
 } from 'vexflow';
 import type { Tool } from './Palette';
-import type { MeasureData, TieArc, DynamicMarking, CustomSymbolDef } from '../types/storage';
+import type { MeasureData, TieArc, DynamicMarking, CustomSymbolDef, OrnamentType } from '../types/storage';
+import { applyOrnamentToEvent, ornamentToVexCode } from '../utils/ornamentUtils';
 import type { ClefType } from './clefUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey, restKeyForVoice } from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
@@ -510,6 +512,30 @@ function makeVFNote(
       // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
     }
   });
+
+  // 前打音（grace note）を主音符の前に付ける（StaffCanvas と同じロジック）
+  if ((ev as any).graceNotes?.length) {
+    try {
+      const graceVFNotes = (ev as any).graceNotes.map((gn: { keys: string[]; slash: boolean }) =>
+        new GraceNote({ keys: gn.keys, duration: '8', slash: gn.slash })
+      );
+      const graceGroup = new GraceNoteGroup(graceVFNotes);
+      (n as any).addModifier?.(graceGroup, 0);
+    } catch {
+      // VexFlow バージョン差異で失敗しても描画を止めない
+    }
+  }
+
+  // 装飾記号（トリル・モルデント・プラルトリラー・ターン）を音符の上に付ける
+  if ((ev as any).ornament) {
+    try {
+      const orn = new Ornament(ornamentToVexCode((ev as any).ornament as OrnamentType));
+      (n as any).addModifier?.(orn, 0);
+    } catch {
+      // 失敗しても描画を止めない
+    }
+  }
+
   return attachDots(n);
 }
 
@@ -2363,7 +2389,7 @@ export default function PianoSystemCanvas({
               const customSymbolOffsetMode = 'mode' in tool && tool.mode === 'customSymbolOffset' ? tool.symbolId : null;
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
-              const trillMode = 'mode' in tool && tool.mode === 'trill';
+              const ornamentMode = 'mode' in tool && tool.mode === 'ornament' ? (tool as any).ornamentType as OrnamentType : null;
               const pedalMode = 'mode' in tool && tool.mode === 'pedal' ? (tool as any).pedalType as 'down' | 'up' : null;
               const ottavaMode = 'mode' in tool && tool.mode === 'ottava' ? (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd' : null;
               const me=e as MouseEvent;
@@ -2487,12 +2513,9 @@ export default function PianoSystemCanvas({
                 setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 return;
               }
-              if (trillMode && !activeEvs[j]?.isRest) {
-                // トリル記号をトグルで付け外しする
-                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : {
-                  ...targetEv,
-                  ornament:targetEv.ornament==='trill'?undefined:'trill',
-                });
+              if (ornamentMode && !activeEvs[j]?.isRest) {
+                // 装飾記号（トリル・モルデント・プラルトリラー・ターン）をトグルで付け外しする
+                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : applyOrnamentToEvent(targetEv, ornamentMode));
                 setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 return;
               }

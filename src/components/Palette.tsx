@@ -13,8 +13,9 @@ import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 import type { AccidentalToolKind } from '../utils/noteKeyUtils';
 import type { EndingNumber, RepeatMarkerKind } from '../utils/repeatMarkerUtils';
-import type { ArticulationType, CustomSymbolDef, DynamicMarkingValue } from '../types/storage';
+import type { ArticulationType, CustomSymbolDef, DynamicMarkingValue, OrnamentType } from '../types/storage';
 import { articulationLabel } from '../utils/articulationUtils';
+import { ornamentLabel } from '../utils/ornamentUtils';
 import { symbolDefToPreviewSvg } from '../utils/customSymbolUtils';
 import { type TextElementKind, textElementLabel } from '../utils/textElementUtils';
 
@@ -55,7 +56,7 @@ export type Tool =
   | { mode: 'measureTimeSig' }                             // 小節単位の拍子変更モード
   | { mode: 'measureKeySig' }                               // 小節単位の調号変更モード
   | { mode: 'graceNote' }                                  // 前打音（スラッシュ付き短前打音）を付けるモード
-  | { mode: 'trill' }                                      // トリル記号を付けるモード
+  | { mode: 'ornament'; ornamentType: OrnamentType }       // 装飾記号（トリル/モルデント/プラルトリラー/ターン）を付けるモード
   | { mode: 'pedal'; pedalType: 'down' | 'up' }           // ペダル記号（Ped / ✱）を付けるモード
   | { mode: 'ottava'; ottavaType: '8va' | '8vb' | '8vaEnd' | '8vbEnd' }; // オッターバ記号を付けるモード
 
@@ -191,7 +192,7 @@ export default function Palette({
   const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
   const measureKeySigActive = 'mode' in value && value.mode === 'measureKeySig';
   const graceNoteActive = 'mode' in value && value.mode === 'graceNote';
-  const trillActive = 'mode' in value && value.mode === 'trill';
+  const selectedOrnamentType = 'mode' in value && value.mode === 'ornament' ? value.ornamentType : null;
   const pedalDownActive = 'mode' in value && value.mode === 'pedal' && (value as any).pedalType === 'down';
   const pedalUpActive = 'mode' in value && value.mode === 'pedal' && (value as any).pedalType === 'up';
   const ottava8vaActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8va';
@@ -466,13 +467,46 @@ export default function Palette({
         {/* トリル */}
         <button
           type="button"
-          onClick={() => onChange(trillActive ? ROW1[2] : { mode: 'trill' })}
+          onClick={() => onChange(selectedOrnamentType === 'trill' ? ROW1[2] : { mode: 'ornament', ornamentType: 'trill' })}
           title="トリル（対象の音符をクリック。再クリックで解除）"
 
           aria-label="トリル（対象の音符をクリック。再クリックで解除）"
-          style={accentBtnStyle(trillActive)}
+          style={accentBtnStyle(selectedOrnamentType === 'trill')}
         >
           <span style={{ fontSize: 13, lineHeight: 1, fontStyle: 'italic', fontWeight: 'bold' }}>tr</span>
+        </button>
+        {/* モルデント（下隣接音と1往復。波線＋縦線の記号） */}
+        <button
+          type="button"
+          onClick={() => onChange(selectedOrnamentType === 'mordent' ? ROW1[2] : { mode: 'ornament', ornamentType: 'mordent' })}
+          title={`${ornamentLabel('mordent')}（対象の音符をクリック。再クリックで解除）`}
+
+          aria-label={`${ornamentLabel('mordent')}（対象の音符をクリック。再クリックで解除）`}
+          style={accentBtnStyle(selectedOrnamentType === 'mordent')}
+        >
+          <span style={{ fontSize: 10, lineHeight: 1, fontWeight: 'bold' }}>mor</span>
+        </button>
+        {/* プラルトリラー（上隣接音と1往復。波線のみの記号） */}
+        <button
+          type="button"
+          onClick={() => onChange(selectedOrnamentType === 'mordentInverted' ? ROW1[2] : { mode: 'ornament', ornamentType: 'mordentInverted' })}
+          title={`${ornamentLabel('mordentInverted')}（対象の音符をクリック。再クリックで解除）`}
+
+          aria-label={`${ornamentLabel('mordentInverted')}（対象の音符をクリック。再クリックで解除）`}
+          style={accentBtnStyle(selectedOrnamentType === 'mordentInverted')}
+        >
+          <span style={{ fontSize: 9, lineHeight: 1, fontWeight: 'bold' }}>prall</span>
+        </button>
+        {/* ターン */}
+        <button
+          type="button"
+          onClick={() => onChange(selectedOrnamentType === 'turn' ? ROW1[2] : { mode: 'ornament', ornamentType: 'turn' })}
+          title={`${ornamentLabel('turn')}（対象の音符をクリック。再クリックで解除）`}
+
+          aria-label={`${ornamentLabel('turn')}（対象の音符をクリック。再クリックで解除）`}
+          style={accentBtnStyle(selectedOrnamentType === 'turn')}
+        >
+          <span style={{ fontSize: 15, lineHeight: 1 }}>S</span>
         </button>
         {/* テキスト要素 */}
         {TEXT_ELEMENT_TOOLS.map((tool) => {
