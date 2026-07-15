@@ -28,6 +28,26 @@ export type ArticulationType = ArticulationMarking;
  */
 export type OrnamentType = 'trill' | 'mordent' | 'mordentInverted' | 'turn';
 
+/**
+ * サイズ・位置の配置調整（symbolAdjust）を適用できる標準記号の種類。
+ * カスタム記号（customSymbols）はこれとは別の仕組み（scale/offsetX/offsetY を直接保持）のまま。
+ * - fingering / lyrics / chordSymbol / tempoMarking / expressionMarking:
+ *   テキスト描画のため font-size × scale と位置 + offset の両方に対応
+ * - dynamics: VexFlow が生成する SVG グループへの transform でサイズ・位置に対応
+ * - articulations: VexFlow の Articulation グリフに対する SVG transform で位置調整のみ対応（サイズは未対応）
+ * - ornament: VexFlow の Ornament グリフに対する SVG transform で位置調整のみ対応（サイズは未対応）
+ * 対応範囲の詳細・除外理由は .claude/specs/extended-notation-features/design.md を参照。
+ */
+export type AdjustableSymbolKind =
+  | 'fingering'
+  | 'ornament'
+  | 'dynamics'
+  | 'articulations'
+  | 'lyrics'
+  | 'chordSymbol'
+  | 'tempoMarking'
+  | 'expressionMarking';
+
 // ── カスタム記号（現代音楽用）──────────────────────────────────────────
 
 /**
@@ -112,6 +132,16 @@ export interface NoteEvent {
    * 同じ記号を複数の音符に付けても、音符ごとに別々の大きさ・位置にできる。
    */
   customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[];
+  /**
+   * 標準記号（運指・装飾・強弱など）の配置ごとの表示調整。
+   * customSymbols と同じ考え方（この音符に付いた記号だけの微調整）を、
+   * カスタム記号以外の標準記号にも広げたもの。
+   * キーは記号の種類（AdjustableSymbolKind）で、値の scale/offsetX/offsetY は
+   * customSymbols の scale/offsetX/offsetY と同じ意味・同じ許容範囲を持つ。
+   * 省略時は scale=1, offsetX=0, offsetY=0 として扱う。
+   * MusicXML には出力しない（このアプリ独自の表示調整のため）。
+   */
+  symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>;
   /** 歌詞テキスト（音符の下に表示） */
   lyrics?: string;
   /** コード記号（音符の上に表示。例: Am, G7, Dm/F） */

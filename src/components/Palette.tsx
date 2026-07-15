@@ -51,6 +51,8 @@ export type Tool =
   | { mode: 'customSymbol'; symbolId: string }               // カスタム記号を付けるモード
   | { mode: 'customSymbolResize'; symbolId: string }         // カスタム記号のサイズを変更するモード（対象の音符をクリック）
   | { mode: 'customSymbolOffset'; symbolId: string }         // カスタム記号の位置を調整するモード（対象の音符をクリック）
+  | { mode: 'symbolAdjustResize' }                          // 標準記号（運指・強弱など）も含めた汎用サイズ調整モード（対象の音符をクリック→調整対象を選ぶ）
+  | { mode: 'symbolAdjustOffset' }                           // 標準記号も含めた汎用位置調整モード（対象の音符をクリック→調整対象を選ぶ）
   | { mode: 'textElement'; textKind: TextElementKind }      // テキスト要素（歌詞・コード・テンポ・発想標語）を付けるモード
   | { mode: 'measureTempo' }                                // 小節単位のテンポ変更モード
   | { mode: 'measureTimeSig' }                             // 小節単位の拍子変更モード
@@ -188,6 +190,8 @@ export default function Palette({
   const selectedCustomSymbolId = 'mode' in value && value.mode === 'customSymbol' ? value.symbolId : null;
   const selectedCustomSymbolResizeId = 'mode' in value && value.mode === 'customSymbolResize' ? value.symbolId : null;
   const selectedCustomSymbolOffsetId = 'mode' in value && value.mode === 'customSymbolOffset' ? value.symbolId : null;
+  const symbolAdjustResizeActive = 'mode' in value && value.mode === 'symbolAdjustResize';
+  const symbolAdjustOffsetActive = 'mode' in value && value.mode === 'symbolAdjustOffset';
   const selectedTextKind = 'mode' in value && value.mode === 'textElement' ? value.textKind : null;
   const measureTempoActive = 'mode' in value && value.mode === 'measureTempo';
   const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
@@ -609,6 +613,28 @@ export default function Palette({
             </div>
           );
         })}
+        {/* 汎用サイズ・位置調整: 運指・強弱記号など「標準記号」にも使える⤢/✥。
+            カスタム記号専用の上のボタンと違い、対象の記号を音符クリック時に選ぶ（1種類だけならそのまま開く）。 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <button
+            type="button"
+            onClick={() => onChange(symbolAdjustResizeActive ? ROW1[2] : { mode: 'symbolAdjustResize' })}
+            title="記号のサイズを変更（運指・強弱・カスタム記号など。対象の音符をクリック）"
+            aria-label="記号のサイズを変更（運指・強弱・カスタム記号など。対象の音符をクリック）"
+            style={btnStyle(symbolAdjustResizeActive, { width: 22, fontSize: 12, color: '#374151' })}
+          >
+            ⤢
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange(symbolAdjustOffsetActive ? ROW1[2] : { mode: 'symbolAdjustOffset' })}
+            title="記号の位置を調整（運指・強弱・カスタム記号など。対象の音符をクリック）"
+            aria-label="記号の位置を調整（運指・強弱・カスタム記号など。対象の音符をクリック）"
+            style={btnStyle(symbolAdjustOffsetActive, { width: 22, fontSize: 12, color: '#374151' })}
+          >
+            ✥
+          </button>
+        </div>
         {/* カスタム記号を新規作成 */}
         <button
           type="button"

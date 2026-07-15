@@ -8,7 +8,7 @@ import {
   GraceNote, GraceNoteGroup, Ornament,
 } from 'vexflow';
 import type { Tool } from './Palette';
-import type { MeasureData, TieArc, DynamicMarking, CustomSymbolDef, OrnamentType } from '../types/storage';
+import type { MeasureData, TieArc, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind } from '../types/storage';
 import { applyOrnamentToEvent, ornamentToVexCode } from '../utils/ornamentUtils';
 import type { ClefType } from './clefUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey, restKeyForVoice } from './clefUtils';
@@ -46,6 +46,14 @@ import {
   MAX_SYMBOL_OFFSET,
 } from '../utils/customSymbolUtils';
 import { buildCustomSymbolEntry, drawCustomSymbolEntries, type CustomSymbolRenderEntry } from '../utils/customSymbolRenderUtils';
+import {
+  getSymbolAdjust,
+  listPresentAdjustableSymbolKinds,
+  setSymbolAdjustScale,
+  setSymbolAdjustOffset,
+  ADJUSTABLE_SYMBOL_KIND_LABELS,
+  type ResolvedSymbolAdjust,
+} from '../utils/symbolAdjustUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
@@ -55,7 +63,7 @@ import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>> };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
@@ -757,12 +765,19 @@ export default function PianoSystemCanvas({
     overlayY: number;
   } | null>(null);
 
-  // カスタム記号サイズ変更オーバーレイの状態（StaffCanvas の symbolResizeEditState と同じパターン）
+  // サイズ・位置調整の対象1件。カスタム記号（symbolId で識別）と
+  // 標準記号（kind で識別。fingering/dynamics など）の両方を同じ形で扱えるようにする（StaffCanvas と同じ考え方）。
+  type AdjustTarget =
+    | { type: 'custom'; symbolId: string; name: string }
+    | { type: 'standard'; kind: AdjustableSymbolKind };
+
+  // カスタム記号サイズ変更オーバーレイの状態（StaffCanvas の symbolResizeEditState と同じパターン）。
+  // 標準記号（運指・強弱）のサイズ変更にも同じ state を使う（target で対象を区別する）。
   const [symbolResizeEditState, setSymbolResizeEditState] = useState<{
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
-    symbolId: string;
+    target: AdjustTarget;
     currentValue: string;
     overlayX: number;
     overlayY: number;
@@ -773,7 +788,7 @@ export default function PianoSystemCanvas({
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
-    symbolId: string;
+    target: AdjustTarget;
     currentX: string;
     currentY: string;
     overlayX: number;
@@ -781,6 +796,17 @@ export default function PianoSystemCanvas({
   } | null>(null);
   const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
   const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
+
+  // 汎用サイズ・位置調整ツールで、対象の音符に複数の調整可能記号が付いている場合に出す選択リストの状態
+  const [symbolAdjustPickerState, setSymbolAdjustPickerState] = useState<{
+    partIndex: number;
+    measureAbsoluteIndex: number;
+    eventIndex: number;
+    kind: 'resize' | 'offset';
+    options: AdjustTarget[];
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
 
   const [selectedArc, setSelectedArc] = useState<{
     partIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
@@ -1181,13 +1207,14 @@ export default function PianoSystemCanvas({
       anchorX: number;
       baseY: number;
       markings: NonNullable<NoteEvent['dynamics']>;
+      adjust: ResolvedSymbolAdjust;
     }> = [];
     // カスタム記号の描画情報を収集する（段ごとの五線上端基準の統一高さで描く）
     const customSymbolEntries: CustomSymbolRenderEntry[] = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
     // 運指番号の描画情報を収集する（符頭のすぐ上に表示）
-    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; text: string }> = [];
+    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     const ottavaEntries: Array<{
       kind: '8va' | '8vb';
@@ -2162,6 +2189,10 @@ export default function PianoSystemCanvas({
             // 強弱記号は既存の音符へ付ける情報なので、背景クリックでは何もしない。
             return;
           }
+          if('mode' in tool&&(tool.mode==='symbolAdjustResize'||tool.mode==='symbolAdjustOffset')){
+            // 汎用サイズ・位置調整も既存の音符にのみ行う。
+            return;
+          }
           if('mode' in tool&&tool.mode==='textElement'){
             // テキスト要素も既存の音符へ付ける情報なので、背景クリックでは何もしない。
             return;
@@ -2389,6 +2420,8 @@ export default function PianoSystemCanvas({
               const customSymbolMode = 'mode' in tool && tool.mode === 'customSymbol' ? tool.symbolId : null;
               const customSymbolResizeMode = 'mode' in tool && tool.mode === 'customSymbolResize' ? tool.symbolId : null;
               const customSymbolOffsetMode = 'mode' in tool && tool.mode === 'customSymbolOffset' ? tool.symbolId : null;
+              const symbolAdjustResizeMode = 'mode' in tool && tool.mode === 'symbolAdjustResize';
+              const symbolAdjustOffsetMode = 'mode' in tool && tool.mode === 'symbolAdjustOffset';
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
               const ornamentMode = 'mode' in tool && tool.mode === 'ornament' ? (tool as any).ornamentType as OrnamentType : null;
@@ -2455,6 +2488,7 @@ export default function PianoSystemCanvas({
               // （design.md 参照）。
               if (customSymbolResizeMode && activeVoiceIndex !== 0) return;
               if (customSymbolOffsetMode && activeVoiceIndex !== 0) return;
+              if ((symbolAdjustResizeMode || symbolAdjustOffsetMode) && activeVoiceIndex !== 0) return;
               if (textElementMode && activeVoiceIndex !== 0) return;
               if (customSymbolResizeMode && !activeEvs[j]?.isRest) {
                 // サイズ変更は「その音符に対象記号が既に付いている場合」のみオーバーレイを開く
@@ -2467,7 +2501,7 @@ export default function PianoSystemCanvas({
                   partIndex: pi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
-                  symbolId: customSymbolResizeMode,
+                  target: { type: 'custom', symbolId: customSymbolResizeMode, name: customSymbolResizeMode },
                   currentValue: String(currentPercent),
                   overlayX: me.clientX - (containerRect?.left ?? 0),
                   overlayY: me.clientY - (containerRect?.top ?? 0),
@@ -2483,12 +2517,40 @@ export default function PianoSystemCanvas({
                   partIndex: pi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
-                  symbolId: customSymbolOffsetMode,
+                  target: { type: 'custom', symbolId: customSymbolOffsetMode, name: customSymbolOffsetMode },
                   currentX: String(existing.offsetX ?? 0),
                   currentY: String(existing.offsetY ?? 0),
                   overlayX: me.clientX - (containerRect?.left ?? 0),
                   overlayY: me.clientY - (containerRect?.top ?? 0),
                 });
+                return;
+              }
+              if ((symbolAdjustResizeMode || symbolAdjustOffsetMode) && !activeEvs[j]?.isRest) {
+                // 汎用サイズ・位置調整: カスタム記号＋標準記号のうち、この音符に実際に
+                // 付いているものを列挙する（StaffCanvas と同じロジック）。
+                const currentEv = activeEvs[j];
+                const targets: AdjustTarget[] = [
+                  ...(currentEv.customSymbols?.map((s): AdjustTarget => ({ type: 'custom', symbolId: s.symbolId, name: customSymbolDefs.find(d => d.id === s.symbolId)?.name ?? s.symbolId })) ?? []),
+                  ...listPresentAdjustableSymbolKinds(currentEv).map((kind): AdjustTarget => ({ type: 'standard', kind })),
+                ];
+                if (targets.length === 0) return;
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const overlayX = me.clientX - (containerRect?.left ?? 0);
+                const overlayY = me.clientY - (containerRect?.top ?? 0);
+                const kindKey = symbolAdjustResizeMode ? 'resize' : 'offset';
+                if (targets.length === 1) {
+                  openSymbolAdjustEditor(kindKey, pi, absI, j, targets[0], currentEv, overlayX, overlayY);
+                } else {
+                  setSymbolAdjustPickerState({
+                    partIndex: pi,
+                    measureAbsoluteIndex: absI,
+                    eventIndex: j,
+                    kind: kindKey,
+                    options: targets,
+                    overlayX,
+                    overlayY,
+                  });
+                }
                 return;
               }
               if (graceNoteMode && !activeEvs[j]?.isRest) {
@@ -2594,6 +2656,8 @@ export default function PianoSystemCanvas({
                 if (customSymbolMode) return;
                 if (customSymbolResizeMode) return;
                 if (customSymbolOffsetMode) return;
+                if (symbolAdjustResizeMode) return;
+                if (symbolAdjustOffsetMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i===0 &&
                     lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
@@ -2688,6 +2752,7 @@ export default function PianoSystemCanvas({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 baseY: stave.getYForLine(4) + 26,
                 markings: activeEvs[j].dynamics,
+                adjust: getSymbolAdjust(activeEvs[j], 'dynamics'),
               });
             }
             {
@@ -2712,6 +2777,7 @@ export default function PianoSystemCanvas({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
                 text: activeEvs[j].fingering!,
+                adjust: getSymbolAdjust(activeEvs[j], 'fingering'),
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.ottava) {
@@ -2780,6 +2846,7 @@ export default function PianoSystemCanvas({
                     anchorX: cx,
                     baseY: stave.getYForLine(4) + 26,
                     markings: ev.dynamics,
+                    adjust: getSymbolAdjust(ev, 'dynamics'),
                   });
                 }
                 const symbolEntry = buildCustomSymbolEntry(ev, cx, stave.getYForLine(0));
@@ -2796,6 +2863,7 @@ export default function PianoSystemCanvas({
                     anchorX: cx,
                     noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
                     text: ev.fingering,
+                    adjust: getSymbolAdjust(ev, 'fingering'),
                   });
                 }
                 if (ev.ottava) {
@@ -2821,7 +2889,7 @@ export default function PianoSystemCanvas({
       x+=w;
     }
 
-    dynamicTextEntries.forEach(({ anchorX, baseY, markings }) => {
+    dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust }) => {
       const orderedMarkings = [...markings].sort((left, right) => {
         const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
         const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
@@ -2830,12 +2898,14 @@ export default function PianoSystemCanvas({
       orderedMarkings.forEach((marking, index) => {
         const text=document.createElementNS('http://www.w3.org/2000/svg','text');
         text.textContent=formatDynamicMarking(marking);
-        text.setAttribute('x',String(anchorX));
-        text.setAttribute('y',String(baseY + index * 14));
+        // ⤢/✥ ツールで配置済みの調整値を、位置は座標へ加算・サイズはフォントサイズへの倍率として反映する
+        text.setAttribute('x',String(anchorX + adjust.offsetX));
+        text.setAttribute('y',String(baseY + index * 14 + adjust.offsetY));
         text.setAttribute('text-anchor','middle');
         text.setAttribute('fill','#1f2937');
         text.setAttribute('font-family','"Times New Roman", serif');
-        text.setAttribute('font-size',marking.value === 'cresc' || marking.value === 'dim' ? '12' : '16');
+        const baseFontSize = marking.value === 'cresc' || marking.value === 'dim' ? 12 : 16;
+        text.setAttribute('font-size', String(baseFontSize * adjust.scale));
         text.setAttribute('font-style','italic');
         text.setAttribute('pointer-events','none');
         svgRoot.appendChild(text);
@@ -2846,15 +2916,15 @@ export default function PianoSystemCanvas({
     drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot);
 
     // 運指番号: 符頭のすぐ上（noteTopY - 10）に小さめのフォントで表示する
-    fingeringEntries.forEach(({ anchorX, noteTopY, text }) => {
+    fingeringEntries.forEach(({ anchorX, noteTopY, text, adjust }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
-      el.setAttribute('x', String(anchorX));
-      el.setAttribute('y', String(noteTopY - 10));
+      el.setAttribute('x', String(anchorX + adjust.offsetX));
+      el.setAttribute('y', String(noteTopY - 10 + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
       el.setAttribute('font-family', 'sans-serif');
-      el.setAttribute('font-size', '10');
+      el.setAttribute('font-size', String(10 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });
@@ -3116,7 +3186,7 @@ export default function PianoSystemCanvas({
    */
   function handleSymbolResizeConfirm(rawText: string) {
     if (!symbolResizeEditState) return;
-    const { partIndex, measureAbsoluteIndex, eventIndex, symbolId } = symbolResizeEditState;
+    const { partIndex, measureAbsoluteIndex, eventIndex, target } = symbolResizeEditState;
     const trimmed = rawText.trim();
     const parsedPercent = trimmed === '' ? 100 : parseInt(trimmed, 10);
     const percent = !isNaN(parsedPercent) ? parsedPercent : 100;
@@ -3127,7 +3197,9 @@ export default function PianoSystemCanvas({
       if (measureAbsoluteIndex >= partData.length) return prev;
       const targetEv = partData[measureAbsoluteIndex].events[eventIndex];
       if (!targetEv) return prev;
-      partData[measureAbsoluteIndex].events[eventIndex] = setCustomSymbolScale(targetEv, symbolId, scale);
+      partData[measureAbsoluteIndex].events[eventIndex] = target.type === 'custom'
+        ? setCustomSymbolScale(targetEv, target.symbolId, scale)
+        : setSymbolAdjustScale(targetEv, target.kind, scale);
       next[partIndex] = partData;
       return next;
     });
@@ -3140,7 +3212,7 @@ export default function PianoSystemCanvas({
    */
   function handleSymbolOffsetConfirm(rawX: string, rawY: string) {
     if (!symbolOffsetEditState) return;
-    const { partIndex, measureAbsoluteIndex, eventIndex, symbolId } = symbolOffsetEditState;
+    const { partIndex, measureAbsoluteIndex, eventIndex, target } = symbolOffsetEditState;
     const parseOffset = (raw: string) => {
       const trimmed = raw.trim();
       const parsed = trimmed === '' ? 0 : parseInt(trimmed, 10);
@@ -3155,11 +3227,63 @@ export default function PianoSystemCanvas({
       if (measureAbsoluteIndex >= partData.length) return prev;
       const targetEv = partData[measureAbsoluteIndex].events[eventIndex];
       if (!targetEv) return prev;
-      partData[measureAbsoluteIndex].events[eventIndex] = setCustomSymbolOffset(targetEv, symbolId, offsetX, offsetY);
+      partData[measureAbsoluteIndex].events[eventIndex] = target.type === 'custom'
+        ? setCustomSymbolOffset(targetEv, target.symbolId, offsetX, offsetY)
+        : setSymbolAdjustOffset(targetEv, target.kind, offsetX, offsetY);
       next[partIndex] = partData;
       return next;
     });
     setSymbolOffsetEditState(null);
+  }
+
+  /**
+   * 汎用サイズ・位置調整ツール共通の「オーバーレイを開く」処理（StaffCanvas と同じ役割）。
+   */
+  function openSymbolAdjustEditor(
+    kind: 'resize' | 'offset',
+    partIndex: number,
+    measureAbsoluteIndex: number,
+    eventIndex: number,
+    target: AdjustTarget,
+    event: NoteEvent,
+    overlayX: number,
+    overlayY: number,
+  ) {
+    if (target.type === 'custom') {
+      const existing = event.customSymbols?.find(s => s.symbolId === target.symbolId);
+      if (!existing) return;
+      if (kind === 'resize') {
+        setSymbolResizeEditState({
+          partIndex, measureAbsoluteIndex, eventIndex, target,
+          currentValue: String(Math.round((existing.scale ?? 1) * 100)),
+          overlayX, overlayY,
+        });
+      } else {
+        setSymbolOffsetEditState({
+          partIndex, measureAbsoluteIndex, eventIndex, target,
+          currentX: String(existing.offsetX ?? 0),
+          currentY: String(existing.offsetY ?? 0),
+          overlayX, overlayY,
+        });
+      }
+    } else {
+      const adjust = getSymbolAdjust(event, target.kind);
+      if (kind === 'resize') {
+        setSymbolResizeEditState({
+          partIndex, measureAbsoluteIndex, eventIndex, target,
+          currentValue: String(Math.round(adjust.scale * 100)),
+          overlayX, overlayY,
+        });
+      } else {
+        setSymbolOffsetEditState({
+          partIndex, measureAbsoluteIndex, eventIndex, target,
+          currentX: String(adjust.offsetX),
+          currentY: String(adjust.offsetY),
+          overlayX, overlayY,
+        });
+      }
+    }
+    setSymbolAdjustPickerState(null);
   }
 
   return (
@@ -3537,6 +3661,61 @@ export default function PianoSystemCanvas({
               />
             </label>
           </div>
+        </div>
+      )}
+      {/* 汎用サイズ・位置調整の選択リスト（StaffCanvas と同じUI）:
+          対象の音符に調整可能な記号が複数付いているとき、どれを調整するか先に選ばせる */}
+      {symbolAdjustPickerState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: symbolAdjustPickerState.overlayX,
+            top: symbolAdjustPickerState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #0891b2',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 140,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#0891b2', fontFamily: 'sans-serif' }}>
+            {symbolAdjustPickerState.kind === 'resize' ? 'どの記号のサイズを変える？' : 'どの記号の位置を変える？'}
+          </span>
+          {symbolAdjustPickerState.options.map((opt, idx) => {
+            const label = opt.type === 'custom' ? opt.name : ADJUSTABLE_SYMBOL_KIND_LABELS[opt.kind];
+            return (
+              <button
+                key={idx}
+                type="button"
+                style={{
+                  fontSize: 12,
+                  fontFamily: 'sans-serif',
+                  textAlign: 'left',
+                  border: 'none',
+                  background: 'transparent',
+                  padding: '2px 4px',
+                  cursor: 'pointer',
+                  borderRadius: 4,
+                }}
+                onClick={() => {
+                  const { partIndex, measureAbsoluteIndex, eventIndex, kind } = symbolAdjustPickerState;
+                  const targetEv = partsScore[partIndex]?.[measureAbsoluteIndex]?.events[eventIndex];
+                  if (!targetEv) { setSymbolAdjustPickerState(null); return; }
+                  openSymbolAdjustEditor(
+                    kind, partIndex, measureAbsoluteIndex, eventIndex, opt, targetEv,
+                    symbolAdjustPickerState.overlayX, symbolAdjustPickerState.overlayY,
+                  );
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

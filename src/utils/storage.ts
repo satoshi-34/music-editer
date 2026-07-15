@@ -68,6 +68,12 @@ function isValidDurKey(value: any): value is DurKey {
   return typeof value === 'string' && ['1', '2', '4', '8', '16', '32', '64'].includes(value);
 }
 
+/** symbolAdjust のキーとして許容する標準記号の種類（AdjustableSymbolKind と同じ内容） */
+const ADJUSTABLE_SYMBOL_KINDS = [
+  'fingering', 'ornament', 'dynamics', 'articulations',
+  'lyrics', 'chordSymbol', 'tempoMarking', 'expressionMarking'
+];
+
 /**
  * Validates a NoteEvent object
  */
@@ -141,6 +147,29 @@ function validateNoteEvent(event: any): event is NoteEvent {
         event.tuplet.id.length > 0 &&
         Number.isInteger(event.tuplet.numNotes) && event.tuplet.numNotes > 0 &&
         Number.isInteger(event.tuplet.notesOccupied) && event.tuplet.notesOccupied > 0
+      )
+    ) &&
+    (
+      event.symbolAdjust === undefined ||
+      (
+        isRecord(event.symbolAdjust) &&
+        Object.keys(event.symbolAdjust).every((key: string) => ADJUSTABLE_SYMBOL_KINDS.includes(key as any)) &&
+        Object.values(event.symbolAdjust).every((adjust: any) => (
+          adjust &&
+          typeof adjust === 'object' &&
+          (
+            adjust.scale === undefined ||
+            (isFiniteNumber(adjust.scale) && adjust.scale >= MIN_SYMBOL_SCALE && adjust.scale <= MAX_SYMBOL_SCALE)
+          ) &&
+          (
+            adjust.offsetX === undefined ||
+            (isFiniteNumber(adjust.offsetX) && adjust.offsetX >= MIN_SYMBOL_OFFSET && adjust.offsetX <= MAX_SYMBOL_OFFSET)
+          ) &&
+          (
+            adjust.offsetY === undefined ||
+            (isFiniteNumber(adjust.offsetY) && adjust.offsetY >= MIN_SYMBOL_OFFSET && adjust.offsetY <= MAX_SYMBOL_OFFSET)
+          )
+        ))
       )
     ) &&
     (

@@ -1882,5 +1882,108 @@ describe('Storage Foundation Tests', () => {
       expect(result.success).toBe(false);
       expect(result.error?.type).toBe('corrupted_data');
     });
+
+    it('symbolAdjust（標準記号の配置ごとのサイズ・位置調整）込みで保存して読み戻せる', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Symbol Adjust Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{
+              dur: '4',
+              isRest: false,
+              keys: ['c/4'],
+              fingering: '3',
+              chordSymbol: 'Am',
+              symbolAdjust: {
+                fingering: { scale: 2, offsetX: 10, offsetY: -5 },
+                chordSymbol: { offsetY: 8 }
+              }
+            }]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.parts[0].measures[0].events[0].symbolAdjust).toEqual({
+        fingering: { scale: 2, offsetX: 10, offsetY: -5 },
+        chordSymbol: { offsetY: 8 }
+      });
+    });
+
+    it('symbolAdjust に許容されないキーが含まれる場合は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Invalid Symbol Adjust Key',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{
+              dur: '4',
+              isRest: false,
+              keys: ['c/4'],
+              symbolAdjust: { notARealKind: { scale: 1 } } as any
+            }]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+      expect(result.error?.type).toBe('corrupted_data');
+    });
+
+    it('symbolAdjust の scale/offset が範囲外の場合は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Out Of Range Symbol Adjust',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{
+              dur: '4',
+              isRest: false,
+              keys: ['c/4'],
+              fingering: '3',
+              // MAX_SYMBOL_SCALE(4) を超える scale は不正値として拒否される
+              symbolAdjust: { fingering: { scale: 999 } }
+            }]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+      expect(result.error?.type).toBe('corrupted_data');
+    });
   });
 });

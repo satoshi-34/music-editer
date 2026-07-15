@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament, Dot, Tuplet } from 'vexflow';
 import type { Tool } from './Palette';
-import type { TieArc, MeasureData, NoteEvent, DurKey, TimeSignature } from '../types/storage';
+import type { TieArc, MeasureData, NoteEvent, DurKey, TimeSignature, AdjustableSymbolKind } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
@@ -36,6 +36,14 @@ import {
   MAX_SYMBOL_OFFSET,
 } from '../utils/customSymbolUtils';
 import { buildCustomSymbolEntry, drawCustomSymbolEntries, type CustomSymbolRenderEntry } from '../utils/customSymbolRenderUtils';
+import {
+  getSymbolAdjust,
+  listPresentAdjustableSymbolKinds,
+  setSymbolAdjustScale,
+  setSymbolAdjustOffset,
+  ADJUSTABLE_SYMBOL_KIND_LABELS,
+  type ResolvedSymbolAdjust,
+} from '../utils/symbolAdjustUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
@@ -822,25 +830,42 @@ export default function StaffCanvas({
     overlayY: number;
   } | null>(null);
 
-  // カスタム記号サイズ変更オーバーレイの状態（null のとき非表示）
+  // サイズ・位置調整の対象1件。カスタム記号（symbolId で識別）と
+  // 標準記号（kind で識別。fingering/dynamics など）の両方を同じ形で扱えるようにする。
+  type AdjustTarget =
+    | { type: 'custom'; symbolId: string; name: string }
+    | { type: 'standard'; kind: AdjustableSymbolKind };
+
+  // カスタム記号サイズ変更オーバーレイの状態（null のとき非表示）。
+  // 標準記号（運指・強弱など）のサイズ変更にも同じ state を使う（target で対象を区別する）。
   // bpmEditState と同じ「クリックで開く→インライン入力→Enterで確定/Escapeでキャンセル」パターン
   const [symbolResizeEditState, setSymbolResizeEditState] = useState<{
     measureAbsoluteIndex: number;  // サイズを変更する音符が属する小節の絶対インデックス
     eventIndex: number;            // その小節内の音符インデックス
-    symbolId: string;              // サイズを変更するカスタム記号のID
+    target: AdjustTarget;          // サイズを変更する記号（カスタム記号 or 標準記号）
     currentValue: string;          // 既存のscaleを%表記にした値（初期値として入力欄に表示）
     overlayX: number;
     overlayY: number;
   } | null>(null);
 
-  // カスタム記号位置調整オーバーレイの状態（null のとき非表示）
+  // カスタム記号位置調整オーバーレイの状態（null のとき非表示）。標準記号にも流用する。
   // symbolResizeEditState と全く同じパターン（横・縦の2つの数値入力を持つ点のみ違う）
   const [symbolOffsetEditState, setSymbolOffsetEditState] = useState<{
     measureAbsoluteIndex: number;  // 位置を変更する音符が属する小節の絶対インデックス
     eventIndex: number;            // その小節内の音符インデックス
-    symbolId: string;              // 位置を変更するカスタム記号のID
+    target: AdjustTarget;          // 位置を変更する記号（カスタム記号 or 標準記号）
     currentX: string;              // 既存のoffsetX（初期値として入力欄に表示。空欄扱いは呼び出し側で0にする）
     currentY: string;              // 既存のoffsetY（初期値として入力欄に表示）
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
+  // 汎用サイズ・位置調整ツールで、対象の音符に複数の調整可能記号が付いている場合に出す選択リストの状態
+  const [symbolAdjustPickerState, setSymbolAdjustPickerState] = useState<{
+    measureAbsoluteIndex: number;
+    eventIndex: number;
+    kind: 'resize' | 'offset';    // このあと開くのがサイズ変更オーバーレイか位置調整オーバーレイか
+    options: AdjustTarget[];
     overlayX: number;
     overlayY: number;
   } | null>(null);
@@ -1274,6 +1299,7 @@ export default function StaffCanvas({
       anchorX: number;
       baseY: number;
       markings: NonNullable<NoteEvent['dynamics']>;
+      adjust: ResolvedSymbolAdjust;
     }> = [];
     // アーティキュレーション記号の描画情報を収集し、全音符描画後にまとめて描く
     const articulationEntries: Array<{
@@ -1289,15 +1315,15 @@ export default function StaffCanvas({
     // 途中テンポ変更の描画情報を収集する（各小節の左上に ♩=XXX と表示）
     const bpmMarkingEntries: Array<{ x: number; topY: number; bpm: number }> = [];
     // テキスト要素（コード記号・テンポ表記）の描画情報を収集する（五線の上に表示）
-    const chordSymbolEntries: Array<{ anchorX: number; topY: number; text: string }> = [];
-    const tempoMarkingEntries: Array<{ anchorX: number; topY: number; text: string }> = [];
+    const chordSymbolEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const tempoMarkingEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // テキスト要素（発想標語・歌詞）の描画情報を収集する（五線の下に表示）
-    const expressionMarkingEntries: Array<{ anchorX: number; botY: number; text: string }> = [];
-    const lyricsEntries: Array<{ anchorX: number; botY: number; text: string }> = [];
+    const expressionMarkingEntries: Array<{ anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const lyricsEntries: Array<{ anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
     // 運指番号の描画情報を収集する（符頭のすぐ上に表示）
-    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; text: string }> = [];
+    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     // start と end の x 座標・y 座標を記録して後でまとめて線を引く
     const ottavaEntries: Array<{
@@ -2201,6 +2227,10 @@ export default function StaffCanvas({
             // カスタム記号の位置調整も既存の音符にのみ行う。
             return;
           }
+          if ('mode' in tool && (tool.mode === 'symbolAdjustResize' || tool.mode === 'symbolAdjustOffset')) {
+            // 汎用サイズ・位置調整も既存の音符にのみ行う。
+            return;
+          }
           if ('mode' in tool && tool.mode === 'textElement') {
             // テキスト要素も既存の音符にのみ付ける。
             return;
@@ -2452,6 +2482,8 @@ export default function StaffCanvas({
               const customSymbolMode = 'mode' in tool && tool.mode === 'customSymbol' ? tool.symbolId : null;
               const customSymbolResizeMode = 'mode' in tool && tool.mode === 'customSymbolResize' ? tool.symbolId : null;
               const customSymbolOffsetMode = 'mode' in tool && tool.mode === 'customSymbolOffset' ? tool.symbolId : null;
+              const symbolAdjustResizeMode = 'mode' in tool && tool.mode === 'symbolAdjustResize';
+              const symbolAdjustOffsetMode = 'mode' in tool && tool.mode === 'symbolAdjustOffset';
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
               const ornamentMode = 'mode' in tool && tool.mode === 'ornament' ? (tool as any).ornamentType as OrnamentType : null;
@@ -2561,7 +2593,7 @@ export default function StaffCanvas({
                 setSymbolResizeEditState({
                   measureAbsoluteIndex: absoluteIndex,
                   eventIndex: j,
-                  symbolId: customSymbolResizeMode,
+                  target: { type: 'custom', symbolId: customSymbolResizeMode, name: customSymbolResizeMode },
                   currentValue: String(currentPercent),
                   overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
                   overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
@@ -2578,12 +2610,40 @@ export default function StaffCanvas({
                 setSymbolOffsetEditState({
                   measureAbsoluteIndex: absoluteIndex,
                   eventIndex: j,
-                  symbolId: customSymbolOffsetMode,
+                  target: { type: 'custom', symbolId: customSymbolOffsetMode, name: customSymbolOffsetMode },
                   currentX: String(existing.offsetX ?? 0),
                   currentY: String(existing.offsetY ?? 0),
                   overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
                   overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
                 });
+                return;
+              }
+              if ((symbolAdjustResizeMode || symbolAdjustOffsetMode) && !safeEvents[j]?.isRest) {
+                // 汎用サイズ・位置調整: カスタム記号＋標準記号のうち、この音符に実際に
+                // 付いているものを列挙する。0件なら何もしない、1件なら直接そのオーバーレイを開き、
+                // 複数件なら「どれを調整するか」の選択リストを先に出す。
+                const currentEv = safeEvents[j];
+                const targets: AdjustTarget[] = [
+                  ...(currentEv.customSymbols?.map((s): AdjustTarget => ({ type: 'custom', symbolId: s.symbolId, name: customSymbolDefs.find(d => d.id === s.symbolId)?.name ?? s.symbolId })) ?? []),
+                  ...listPresentAdjustableSymbolKinds(currentEv).map((kind): AdjustTarget => ({ type: 'standard', kind })),
+                ];
+                if (targets.length === 0) return;
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const overlayX = (ev as MouseEvent).clientX - (containerRect?.left ?? 0);
+                const overlayY = (ev as MouseEvent).clientY - (containerRect?.top ?? 0);
+                const kindKey = symbolAdjustResizeMode ? 'resize' : 'offset';
+                if (targets.length === 1) {
+                  openSymbolAdjustEditor(kindKey, absoluteIndex, j, targets[0], currentEv, overlayX, overlayY);
+                } else {
+                  setSymbolAdjustPickerState({
+                    measureAbsoluteIndex: absoluteIndex,
+                    eventIndex: j,
+                    kind: kindKey,
+                    options: targets,
+                    overlayX,
+                    overlayY,
+                  });
+                }
                 return;
               }
               if (graceNoteMode && !safeEvents[j]?.isRest) {
@@ -2726,6 +2786,8 @@ export default function StaffCanvas({
                 if (customSymbolMode) return;
                 if (customSymbolResizeMode) return;
                 if (customSymbolOffsetMode) return;
+                if (symbolAdjustResizeMode) return;
+                if (symbolAdjustOffsetMode) return;
                 if (accidentalMode) {
                   const isKeySignatureZone = i === 0 &&
                     lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right;
@@ -2807,6 +2869,8 @@ export default function StaffCanvas({
                 if (customSymbolMode) return;
                 if (customSymbolResizeMode) return;
                 if (customSymbolOffsetMode) return;
+                if (symbolAdjustResizeMode) return;
+                if (symbolAdjustOffsetMode) return;
                 // 音符のX範囲外（セル内の空白）→ 新規音符挿入
                 doInsertAt(lx, ly, measureIndex);
               }
@@ -2819,6 +2883,7 @@ export default function StaffCanvas({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 baseY: stave.getYForLine(4) + 26,
                 markings: safeEvents[j].dynamics,
+                adjust: getSymbolAdjust(safeEvents[j], 'dynamics'),
               });
             }
             if (!safeEvents[j]?.__isPlaceholder && !safeEvents[j]?.isRest && safeEvents[j]?.articulations?.length) {
@@ -2836,6 +2901,7 @@ export default function StaffCanvas({
                 // 符頭 BoundingBox の上端を基準にする（ない場合は五線上端より少し上を使う）
                 noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
                 text: safeEvents[j].fingering!,
+                adjust: getSymbolAdjust(safeEvents[j], 'fingering'),
               });
             }
             {
@@ -2857,17 +2923,17 @@ export default function StaffCanvas({
               const staveTop = stave.getYForLine(0);
               const staveBot = stave.getYForLine(4);
               if (ev?.chordSymbol) {
-                chordSymbolEntries.push({ anchorX: cx, topY: staveTop, text: ev.chordSymbol });
+                chordSymbolEntries.push({ anchorX: cx, topY: staveTop, text: ev.chordSymbol, adjust: getSymbolAdjust(ev, 'chordSymbol') });
               }
               if (ev?.tempoMarking) {
-                tempoMarkingEntries.push({ anchorX: cx, topY: staveTop, text: ev.tempoMarking });
+                tempoMarkingEntries.push({ anchorX: cx, topY: staveTop, text: ev.tempoMarking, adjust: getSymbolAdjust(ev, 'tempoMarking') });
               }
               // 五線下端より下に表示する要素
               if (ev?.expressionMarking) {
-                expressionMarkingEntries.push({ anchorX: cx, botY: staveBot, text: ev.expressionMarking });
+                expressionMarkingEntries.push({ anchorX: cx, botY: staveBot, text: ev.expressionMarking, adjust: getSymbolAdjust(ev, 'expressionMarking') });
               }
               if (ev?.lyrics) {
-                lyricsEntries.push({ anchorX: cx, botY: staveBot, text: ev.lyrics });
+                lyricsEntries.push({ anchorX: cx, botY: staveBot, text: ev.lyrics, adjust: getSymbolAdjust(ev, 'lyrics') });
               }
               if (ev?.pedalMark) {
                 pedalMarkEntries.push({ anchorX: cx, botY: staveBot, mark: ev.pedalMark });
@@ -2967,7 +3033,7 @@ export default function StaffCanvas({
     // 段が進むたびに蓄積済みの全エントリを再描画してしまい、同じ記号が段数ぶん
     // 同一座標に重複して DOM へ積まれる（見た目は1個でも要素数が膨らむ）。
     // そのため必ず全段のレンダリング完了後に一度だけ描画する。
-    dynamicTextEntries.forEach(({ anchorX, baseY, markings }) => {
+    dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust }) => {
       const orderedMarkings = [...markings].sort((left, right) => {
         const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
         const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
@@ -2976,12 +3042,15 @@ export default function StaffCanvas({
       orderedMarkings.forEach((marking, index) => {
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         text.textContent = formatDynamicMarking(marking);
-        text.setAttribute('x', String(anchorX));
-        text.setAttribute('y', String(baseY + index * 14));
+        // ⤢/✥ ツールで配置済みの調整値（scale/offsetX/offsetY）を、
+        // 位置は座標へ加算・サイズはフォントサイズへの倍率として反映する
+        text.setAttribute('x', String(anchorX + adjust.offsetX));
+        text.setAttribute('y', String(baseY + index * 14 + adjust.offsetY));
         text.setAttribute('text-anchor', 'middle');
         text.setAttribute('fill', '#1f2937');
         text.setAttribute('font-family', '"Times New Roman", serif');
-        text.setAttribute('font-size', marking.value === 'cresc' || marking.value === 'dim' ? '12' : '16');
+        const baseFontSize = marking.value === 'cresc' || marking.value === 'dim' ? 12 : 16;
+        text.setAttribute('font-size', String(baseFontSize * adjust.scale));
         text.setAttribute('font-style', 'italic');
         text.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(text);
@@ -3080,74 +3149,74 @@ export default function StaffCanvas({
     // 運指番号: 符頭のすぐ上（noteTopY - 10）に小さめのフォントで表示する。
     // 符幹の向きによる回避は行わず、常に符頭上端基準の固定オフセットにする
     // （設計判断: 実装をシンプルに保つため。design.md 参照）。
-    fingeringEntries.forEach(({ anchorX, noteTopY, text }) => {
+    fingeringEntries.forEach(({ anchorX, noteTopY, text, adjust }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
-      el.setAttribute('x', String(anchorX));
-      el.setAttribute('y', String(noteTopY - 10));
+      el.setAttribute('x', String(anchorX + adjust.offsetX));
+      el.setAttribute('y', String(noteTopY - 10 + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
       el.setAttribute('font-family', 'sans-serif');
-      el.setAttribute('font-size', '10');
+      el.setAttribute('font-size', String(10 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });
 
     // ── テキスト要素を一括描画 ───────────────────────────────────
     // コード記号: 五線上端より 8px 上（ト音記号・拍子記号と重なりにくい高さ）
-    chordSymbolEntries.forEach(({ anchorX, topY, text }) => {
+    chordSymbolEntries.forEach(({ anchorX, topY, text, adjust }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
-      el.setAttribute('x', String(anchorX));
-      el.setAttribute('y', String(topY - 8));
+      el.setAttribute('x', String(anchorX + adjust.offsetX));
+      el.setAttribute('y', String(topY - 8 + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
       el.setAttribute('font-family', '"Times New Roman", serif');
-      el.setAttribute('font-size', '12');
+      el.setAttribute('font-size', String(12 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });
 
     // テンポ表記: コード記号よりさらに 16px 上（最も優先度が高く目立つ場所）
-    tempoMarkingEntries.forEach(({ anchorX, topY, text }) => {
+    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
-      el.setAttribute('x', String(anchorX));
-      el.setAttribute('y', String(topY - 24));
+      el.setAttribute('x', String(anchorX + adjust.offsetX));
+      el.setAttribute('y', String(topY - 24 + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
       el.setAttribute('font-family', '"Times New Roman", serif');
-      el.setAttribute('font-size', '12');
+      el.setAttribute('font-size', String(12 * adjust.scale));
       el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });
 
     // 発想標語: 強弱記号の下（botY + 40）に斜体で表示
-    expressionMarkingEntries.forEach(({ anchorX, botY, text }) => {
+    expressionMarkingEntries.forEach(({ anchorX, botY, text, adjust }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
-      el.setAttribute('x', String(anchorX));
-      el.setAttribute('y', String(botY + 40));
+      el.setAttribute('x', String(anchorX + adjust.offsetX));
+      el.setAttribute('y', String(botY + 40 + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
       el.setAttribute('font-family', '"Times New Roman", serif');
-      el.setAttribute('font-size', '11');
+      el.setAttribute('font-size', String(11 * adjust.scale));
       el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });
 
     // 歌詞: 発想標語のさらに下（botY + 54）に通常体で表示
-    lyricsEntries.forEach(({ anchorX, botY, text }) => {
+    lyricsEntries.forEach(({ anchorX, botY, text, adjust }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
-      el.setAttribute('x', String(anchorX));
-      el.setAttribute('y', String(botY + 54));
+      el.setAttribute('x', String(anchorX + adjust.offsetX));
+      el.setAttribute('y', String(botY + 54 + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#374151');
       el.setAttribute('font-family', 'sans-serif');
-      el.setAttribute('font-size', '11');
+      el.setAttribute('font-size', String(11 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });
@@ -3381,7 +3450,7 @@ export default function StaffCanvas({
    */
   function handleSymbolResizeConfirm(rawText: string) {
     if (!symbolResizeEditState) return;
-    const { measureAbsoluteIndex, eventIndex, symbolId } = symbolResizeEditState;
+    const { measureAbsoluteIndex, eventIndex, target } = symbolResizeEditState;
     const trimmed = rawText.trim();
     const parsedPercent = trimmed === '' ? 100 : parseInt(trimmed, 10);
     const percent = !isNaN(parsedPercent) ? parsedPercent : 100;
@@ -3391,7 +3460,12 @@ export default function StaffCanvas({
       if (measureAbsoluteIndex >= next.length) return prev;
       const targetEv = next[measureAbsoluteIndex].events[eventIndex];
       if (!targetEv) return prev;
-      next[measureAbsoluteIndex].events[eventIndex] = setCustomSymbolScale(targetEv, symbolId, scale);
+      // target の種類（カスタム記号 / 標準記号）に応じて、保存先のデータ構造を切り替える。
+      // customSymbols[].scale と symbolAdjust[kind].scale は別フィールドのため、
+      // どちらに書き込むかをここで分岐する。
+      next[measureAbsoluteIndex].events[eventIndex] = target.type === 'custom'
+        ? setCustomSymbolScale(targetEv, target.symbolId, scale)
+        : setSymbolAdjustScale(targetEv, target.kind, scale);
       return next;
     });
     setSymbolResizeEditState(null);
@@ -3403,7 +3477,7 @@ export default function StaffCanvas({
    */
   function handleSymbolOffsetConfirm(rawX: string, rawY: string) {
     if (!symbolOffsetEditState) return;
-    const { measureAbsoluteIndex, eventIndex, symbolId } = symbolOffsetEditState;
+    const { measureAbsoluteIndex, eventIndex, target } = symbolOffsetEditState;
     const parseOffset = (raw: string) => {
       const trimmed = raw.trim();
       const parsed = trimmed === '' ? 0 : parseInt(trimmed, 10);
@@ -3417,10 +3491,65 @@ export default function StaffCanvas({
       if (measureAbsoluteIndex >= next.length) return prev;
       const targetEv = next[measureAbsoluteIndex].events[eventIndex];
       if (!targetEv) return prev;
-      next[measureAbsoluteIndex].events[eventIndex] = setCustomSymbolOffset(targetEv, symbolId, offsetX, offsetY);
+      next[measureAbsoluteIndex].events[eventIndex] = target.type === 'custom'
+        ? setCustomSymbolOffset(targetEv, target.symbolId, offsetX, offsetY)
+        : setSymbolAdjustOffset(targetEv, target.kind, offsetX, offsetY);
       return next;
     });
     setSymbolOffsetEditState(null);
+  }
+
+  /**
+   * 汎用サイズ・位置調整ツール共通の「オーバーレイを開く」処理。
+   * target（カスタム記号 or 標準記号）の現在の scale/offset を event から読み出し、
+   * kind に応じて symbolResizeEditState / symbolOffsetEditState のどちらかを開く。
+   * 音符クリック時に「調整対象が1件だけ」だったときと、選択リストで1件を選んだときの
+   * 両方から呼ばれる共通経路。
+   */
+  function openSymbolAdjustEditor(
+    kind: 'resize' | 'offset',
+    measureAbsoluteIndex: number,
+    eventIndex: number,
+    target: AdjustTarget,
+    event: NoteEvent,
+    overlayX: number,
+    overlayY: number,
+  ) {
+    if (target.type === 'custom') {
+      const existing = event.customSymbols?.find(s => s.symbolId === target.symbolId);
+      if (!existing) return;
+      if (kind === 'resize') {
+        setSymbolResizeEditState({
+          measureAbsoluteIndex, eventIndex, target,
+          currentValue: String(Math.round((existing.scale ?? 1) * 100)),
+          overlayX, overlayY,
+        });
+      } else {
+        setSymbolOffsetEditState({
+          measureAbsoluteIndex, eventIndex, target,
+          currentX: String(existing.offsetX ?? 0),
+          currentY: String(existing.offsetY ?? 0),
+          overlayX, overlayY,
+        });
+      }
+    } else {
+      const adjust = getSymbolAdjust(event, target.kind);
+      if (kind === 'resize') {
+        setSymbolResizeEditState({
+          measureAbsoluteIndex, eventIndex, target,
+          currentValue: String(Math.round(adjust.scale * 100)),
+          overlayX, overlayY,
+        });
+      } else {
+        setSymbolOffsetEditState({
+          measureAbsoluteIndex, eventIndex, target,
+          currentX: String(adjust.offsetX),
+          currentY: String(adjust.offsetY),
+          overlayX, overlayY,
+        });
+      }
+    }
+    setSymbolAdjustPickerState(null);
   }
 
   /**
@@ -3769,6 +3898,61 @@ export default function StaffCanvas({
               />
             </label>
           </div>
+        </div>
+      )}
+      {/* 汎用サイズ・位置調整の選択リスト: 対象の音符に調整可能な記号が複数付いているとき、
+          どれを調整するかを先に選ばせる（1件だけならこの画面を出さず直接オーバーレイを開く） */}
+      {symbolAdjustPickerState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: symbolAdjustPickerState.overlayX,
+            top: symbolAdjustPickerState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #0891b2',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 140,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#0891b2', fontFamily: 'sans-serif' }}>
+            {symbolAdjustPickerState.kind === 'resize' ? 'どの記号のサイズを変える？' : 'どの記号の位置を変える？'}
+          </span>
+          {symbolAdjustPickerState.options.map((opt, idx) => {
+            const label = opt.type === 'custom' ? opt.name : ADJUSTABLE_SYMBOL_KIND_LABELS[opt.kind];
+            return (
+              <button
+                key={idx}
+                type="button"
+                style={{
+                  fontSize: 12,
+                  fontFamily: 'sans-serif',
+                  textAlign: 'left',
+                  border: 'none',
+                  background: 'transparent',
+                  padding: '2px 4px',
+                  cursor: 'pointer',
+                  borderRadius: 4,
+                }}
+                onClick={() => {
+                  const { measureAbsoluteIndex, eventIndex, kind } = symbolAdjustPickerState;
+                  const targetEv = score[measureAbsoluteIndex]?.events[eventIndex];
+                  if (!targetEv) { setSymbolAdjustPickerState(null); return; }
+                  openSymbolAdjustEditor(
+                    kind, measureAbsoluteIndex, eventIndex, opt, targetEv,
+                    symbolAdjustPickerState.overlayX, symbolAdjustPickerState.overlayY,
+                  );
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
       )}
       {/* テキスト入力オーバーレイ: テキスト要素ツールで音符をクリックすると表示される */}

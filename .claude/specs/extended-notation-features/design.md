@@ -201,6 +201,76 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
   保存→リロード→「保存された譜面を読み込み」で運指が復元されることを確認、Undo で運指付与前の状態に
   戻ることを確認。コンソールエラーなし。
 
+### 9. 標準記号への配置ごとのサイズ・位置調整の一般化（2026-07-16）
+
+**背景**: カスタム記号（`customSymbols[].scale/offsetX/offsetY`）には既に「⤢（サイズ変更）」「✥（位置調整）」
+ツールがあり、ツール選択→対象記号が付いた音符をクリック→インライン入力欄、という UX が確立していた。
+「運指などの記号も後から大きさ・位置を調整したい」という要望を受け、このパターンを標準記号
+（運指・強弱・アーティキュレーション・装飾記号・歌詞・コード記号・テンポ表記・発想標語）にも広げた。
+
+**設計判断**:
+- **データ型**: `NoteEvent.symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>`
+  を新設（`src/types/storage.ts`）。`customSymbols[].scale/offsetX/offsetY` とは別フィールドにした理由は、
+  customSymbols は「付け外し」自体を配列要素の有無で管理するのに対し、標準記号は付け外しを別の仕組み
+  （`fingering` 文字列や `dynamics` 配列など）で持っているため、symbolAdjust は「すでに付いている記号の
+  見た目だけを上書きする補助データ」として独立させたほうが責務が明確になるため。
+  `AdjustableSymbolKind` = `'fingering' | 'ornament' | 'dynamics' | 'articulations' | 'lyrics' | 'chordSymbol' |
+  'tempoMarking' | 'expressionMarking'` の8種類を型として定義。scale/offset の許容範囲は customSymbols と
+  完全に同じ定数（`MIN_SYMBOL_SCALE`〜`MAX_SYMBOL_SCALE` = 0.25〜4、`MIN_SYMBOL_OFFSET`〜`MAX_SYMBOL_OFFSET` = -100〜100）
+  を再利用し、`src/utils/storage.ts` の `validateNoteEvent` にキー名・値範囲の両方を検証するバリデーションを追加した。
+- **対応した記号（実際にサイズ・位置を反映して描画するもの）**: `fingering` / `dynamics` / `lyrics` /
+  `chordSymbol` / `tempoMarking` / `expressionMarking` の6種類。いずれも「SVGテキスト直描き」方式
+  （VexFlow 標準機能を使わない、このアプリ独自の描画パターン）のため、font-size に `scale` を掛け、
+  x/y 座標に `offsetX`/`offsetY` を加算するだけで自然に反映できた。
+- **除外した記号（データ型には含めるが、UI上の調整対象としては未対応）**: `ornament`（装飾記号）・
+  `articulations`（アーティキュレーション）。この2種は VexFlow の `Ornament`/`Articulation` オブジェクトや
+  手描きの SVG path（円弧・楔形など、`renderCustomSymbol` とは異なる個別実装）で描画されており、
+  グリフ単位でのスケーリングや正確なオフセット適用が本タスクの範囲で確実に作り込めなかったため、
+  `src/utils/symbolAdjustUtils.ts` の `listPresentAdjustableSymbolKinds` で意図的に列挙対象から外した
+  （＝⤢/✥ツールでクリックしても選択肢に出ない。無理に対応させず、確実に動くものだけ入れる方針）。
+  将来対応する場合は、描画後に該当グリフ要素へ SVG `transform` を後付けする方式が候補になる。
+- **共通ロジック**: `src/utils/symbolAdjustUtils.ts`（新規）に `getSymbolAdjust`（読み出し。未設定時は
+  scale=1/offset=0 を返す）・`setSymbolAdjustScale`/`setSymbolAdjustOffset`（書き込み。customSymbols と同様、
+  対象の記号が実際に付いていない音符には書き込まない）・`listPresentAdjustableSymbolKinds`（この音符に
+  付いている調整可能記号の列挙）・`ADJUSTABLE_SYMBOL_KIND_LABELS`（選択リストUI用の日本語ラベル）を実装。
+  customSymbolUtils.ts の `setCustomSymbolScale`/`setCustomSymbolOffset` と全く同じ「対象が存在しない場合は
+  何もせず元の event を返す」という安全側の設計を踏襲した。
+- **UI（既存の⤢/✥ツールの汎用化）**: カスタム記号ごとの個別⤢/✥ボタン（パレットの各カスタム記号の隣）は
+  そのまま残し、後方互換を確保した（既存の動作は一切変更していない）。新たに、パレットの演奏記号タブ末尾に
+  汎用の「⤢」「✥」ボタンを1つずつ追加（`Tool` 型に `{ mode: 'symbolAdjustResize' }` / `{ mode: 'symbolAdjustOffset' }`
+  を新設）。このツールで音符をクリックすると：
+  - その音符の customSymbols と、上記6種のうち実際に付いているものを合わせて列挙する
+  - 0件なら何もしない（誤操作防止）
+  - 1件だけなら、従来のカスタム記号専用ツールと全く同じインライン入力欄を直接開く
+  - 複数件あるなら、入力欄を開く前に小さな選択リスト（記号名のボタン列）を出し、選んだものだけを調整する
+  実装上は、StaffCanvas/PianoSystemCanvas 双方の `symbolResizeEditState`/`symbolOffsetEditState` を
+  「`symbolId: string`」から「`target: { type: 'custom'; symbolId; name } | { type: 'standard'; kind }`」に
+  一般化し、確定処理（`handleSymbolResizeConfirm`/`handleSymbolOffsetConfirm`）は `target.type` で
+  `setCustomSymbolScale`系（カスタム記号）と `setSymbolAdjustScale`系（標準記号）のどちらを呼ぶか分岐するだけに
+  した。これにより既存のオーバーレイJSX（入力欄・Enter確定・Escapeキャンセル・空欄で既定値に戻す挙動）は
+  一切変更せず再利用でき、リグレッションのリスクを最小化した。
+- **PianoSystemCanvas の制約（既知の制限）**: 既存の「カスタム記号のサイズ変更・位置調整・テキスト要素」ツールと
+  同様、汎用⤢/✥ツールも声部1（`activeVoiceIndex === 0`）のみで動作する。理由は既存コメントの通り、確定処理が
+  `partData[...].events[eventIndex]` を直接書き換える前提で、まだ声部（voiceIndex）を持っていないため。
+  声部2の音符へ適用すると声部1側を誤って書き換えてしまう。将来 voiceIndex 対応する際にまとめて解消する。
+- **PianoSystemCanvas は fingering/dynamics のみレンダリング対応**: PianoSystemCanvas のローカル `NoteEvent` 型
+  （line 58 付近）には元々 `lyrics`/`chordSymbol`/`tempoMarking`/`expressionMarking` が存在せず、ピアノ譜では
+  これらのテキスト系記号自体が描画されていない（既存の未実装ギャップ、8節と同じ制約）。そのため
+  symbolAdjust の描画反映も、ピアノ譜側では既に描画されている `fingering`・`dynamics` の2種類のみ行った。
+- **MusicXML には出力しない**: symbolAdjust はこのアプリ独自の表示調整であり、MusicXML の標準的な位置指定
+  （`default-x`/`default-y` 等）とは意味論が異なるため、書き出し・読み込みの対象外とした（customSymbols の
+  scale/offset と同じ扱い）。
+- **テスト**: `src/utils/symbolAdjustUtils.test.ts`（新規）で `listPresentAdjustableSymbolKinds`（休符除外・
+  装飾記号/アーティキュレーション除外・付与済み記号のみ列挙）・`getSymbolAdjust`（既定値・設定済み値）・
+  `setSymbolAdjustScale`/`setSymbolAdjustOffset`（未付与記号への無視・範囲外クランプ・他記号のsymbolAdjustを
+  保持したまま更新）を検証。`src/utils/storage.test.ts` に symbolAdjust 込みの保存/読込ラウンドトリップ・
+  不正キー拒否・範囲外の scale/offset 拒否のテストを追加。
+- **ブラウザ確認**: dev サーバー上で単旋律譜の音符に運指 `3` を付与し、汎用⤢ツールで対象記号が1件のみ
+  （運指のみ）のケースでインライン入力欄が直接開くこと、250%に変更するとフォントサイズが `10px × scale`
+  として反映されること（DOM上の `font-size` 属性で確認）、✥ツールで縦オフセット -25px を設定すると
+  `y` 属性に反映されること、保存後 localStorage に `symbolAdjust: { fingering: { scale, offsetX, offsetY } }`
+  が正しく書き込まれることを確認。コンソールエラーなし。
+
 ## 影響範囲
 
 - `src/types/storage.ts`: `NoteEvent` に `graceNotes`, `ornament`, `pedalMark`, `ottava` を追加。`OrnamentType` 型を新設
@@ -217,8 +287,18 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
 - `src/utils/storage.ts`: `validateNoteEvent` に `fingering`（1〜8文字の文字列）のバリデーションを追加
 - `src/components/PianoSystemCanvas.tsx`: ローカル `NoteEvent` 型に `fingering?: string` を追加。ピアノ譜に元々なかったテキスト系記号の描画のうち、運指番号のみ新規に描画対応した
 - `src/utils/fingering.test.ts`（新規）: 運指番号のバリデーション・MusicXML ラウンドトリップ（単音・和音）のユニットテスト
+- `src/types/storage.ts`: `AdjustableSymbolKind` 型・`NoteEvent.symbolAdjust` を新設
+- `src/utils/symbolAdjustUtils.ts`（新規）: 標準記号の配置ごとのサイズ・位置調整（読み出し・書き込み・列挙・ラベル）を集約
+- `src/utils/symbolAdjustUtils.test.ts`（新規）: 上記のユニットテスト
+- `src/utils/storage.ts`: `validateNoteEvent` に `symbolAdjust`（キー名・scale/offset 範囲）のバリデーションを追加
+- `src/utils/storage.test.ts`: symbolAdjust の保存/読込ラウンドトリップ・不正データ拒否のテストを追加
+- `src/components/Palette.tsx`: `Tool` 型に `symbolAdjustResize`/`symbolAdjustOffset` を追加、汎用⤢/✥ボタンを追加
+- `src/components/StaffCanvas.tsx`: `symbolResizeEditState`/`symbolOffsetEditState` を `target`（カスタム記号/標準記号の判別）ベースに一般化。汎用ツールのクリック処理・選択リストオーバーレイ・記号ごとの描画（font-size×scale、座標+offset）を追加
+- `src/components/PianoSystemCanvas.tsx`: 同上。ローカル `NoteEvent` 型に `symbolAdjust` を追記。fingering/dynamics の描画にのみ symbolAdjust を反映（lyrics/chordSymbol等は元々ピアノ譜で未描画のため対象外）
 
 ## 注意点
 
 - PianoSystemCanvas にはローカル `NoteEvent` 型が定義されており、`types/storage.ts` の `NoteEvent` を直接参照しない。新フィールドを追加する際は両方に追記する必要がある（line 39）
+- symbolAdjust の調整対象UIは ornament（装飾記号）・articulations（アーティキュレーション）を意図的に除外している（`listPresentAdjustableSymbolKinds` 参照）。VexFlowのグリフ/個別SVG実装への安全なスケーリング・オフセット適用が本タスクの範囲で作り込めなかったため。データ型・バリデーションはこの2種も許容する
+- PianoSystemCanvas の汎用⤢/✥ツールは、既存のカスタム記号専用ツールと同じ制約で声部1のみ対応（声部2は未対応の既知の制限）
 - `buildCurrentScoreData` は `totalSystems` と `measuresPerSystem` の宣言より後に置く必要がある（TDZ 制約）
