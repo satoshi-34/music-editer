@@ -60,7 +60,8 @@ export type Tool =
   | { mode: 'graceNote' }                                  // 前打音（スラッシュ付き短前打音）を付けるモード
   | { mode: 'ornament'; ornamentType: OrnamentType }       // 装飾記号（トリル/モルデント/プラルトリラー/ターン）を付けるモード
   | { mode: 'pedal'; pedalType: 'down' | 'up' }           // ペダル記号（Ped / ✱）を付けるモード
-  | { mode: 'ottava'; ottavaType: '8va' | '8vb' | '8vaEnd' | '8vbEnd' }; // オッターバ記号を付けるモード
+  | { mode: 'ottava'; ottavaType: '8va' | '8vb' | '8vaEnd' | '8vbEnd' } // オッターバ記号を付けるモード
+  | { mode: 'hairpin'; hairpinType: 'cresc' | 'dim' };     // 松葉（クレッシェンド＜／ディミヌエンド＞）を付けるモード。タイと同様に開始音符→終了音符へドラッグして設置
 
 type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
 type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
@@ -204,6 +205,7 @@ export default function Palette({
   const ottava8vbActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8vb';
   const ottava8vaEndActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8vaEnd';
   const ottava8vbEndActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8vbEnd';
+  const selectedHairpinType = 'mode' in value && value.mode === 'hairpin' ? value.hairpinType : null;
 
   const ROW_STYLE: React.CSSProperties = { display: 'flex', gap: 3, flexWrap: 'wrap' as const };
 
@@ -438,6 +440,29 @@ export default function Palette({
             </button>
           );
         })}
+        {/* 松葉（クレッシェンド／ディミヌエンド）: タイと同じくドラッグで開始音符→終了音符を結ぶ */}
+        <button
+          type="button"
+          onClick={() => onChange(selectedHairpinType === 'cresc' ? ROW1[2] : { mode: 'hairpin', hairpinType: 'cresc' })}
+          title="クレッシェンドの松葉＜（開始音符から終了音符へドラッグ）"
+          aria-label="クレッシェンドの松葉＜（開始音符から終了音符へドラッグ）"
+          style={btnStyle(selectedHairpinType === 'cresc')}
+        >
+          <svg width="22" height="14" viewBox="0 0 22 14" aria-hidden="true">
+            <path d="M2 7 L20 1 M2 7 L20 13" stroke="#111" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange(selectedHairpinType === 'dim' ? ROW1[2] : { mode: 'hairpin', hairpinType: 'dim' })}
+          title="ディミヌエンドの松葉＞（開始音符から終了音符へドラッグ）"
+          aria-label="ディミヌエンドの松葉＞（開始音符から終了音符へドラッグ）"
+          style={btnStyle(selectedHairpinType === 'dim')}
+        >
+          <svg width="22" height="14" viewBox="0 0 22 14" aria-hidden="true">
+            <path d="M20 7 L2 1 M20 7 L2 13" stroke="#111" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+          </svg>
+        </button>
       </div>
 
       {/* アーティキュレーション・装飾・テキスト行 */}

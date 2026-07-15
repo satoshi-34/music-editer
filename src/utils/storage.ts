@@ -178,6 +178,20 @@ function validateNoteEvent(event: any): event is NoteEvent {
       // 例: '3'（単音）, '1,3,5'（和音）, '5-1'（指替え）
       event.fingering === undefined ||
       (typeof event.fingering === 'string' && event.fingering.length > 0 && event.fingering.length <= 8)
+    ) &&
+    (
+      // 松葉（ヘアピン）: 終了位置は非負整数インデックスであること、種類は cresc/dim のみ許可
+      event.hairpins === undefined ||
+      (
+        Array.isArray(event.hairpins) &&
+        event.hairpins.every((h: any) => (
+          isRecord(h) &&
+          (h.type === 'cresc' || h.type === 'dim') &&
+          isFiniteNumber(h.endMeasure) && Number.isInteger(h.endMeasure) && h.endMeasure >= 0 &&
+          isFiniteNumber(h.endEvent) && Number.isInteger(h.endEvent) && h.endEvent >= 0 &&
+          (h.offsetY === undefined || (isFiniteNumber(h.offsetY) && h.offsetY >= MIN_SYMBOL_OFFSET && h.offsetY <= MAX_SYMBOL_OFFSET))
+        ))
+      )
     )
   );
 }

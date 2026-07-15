@@ -100,6 +100,25 @@ export interface TieArc {
   breakStartDy?: number;
 }
 
+/**
+ * クレッシェンド／ディミヌエンドの松葉（ヘアピン）記号。
+ * TieArc と同じ考え方で、開始 NoteEvent の hairpins[] に「開始点」として保持し、
+ * 終了音符へは絶対小節インデックス・イベントインデックスで参照する。
+ * - 'cresc': だんだん強く（開く松葉 <）
+ * - 'dim'  : だんだん弱く（閉じる松葉 >）
+ * 段（システム）をまたぐケースは未対応（既知の制限。詳細は
+ * .claude/specs/extended-notation-features/design.md を参照）。
+ */
+export interface HairpinMark {
+  type: 'cresc' | 'dim';
+  /** 終了音符の絶対小節インデックス（TieArc.toMeasureIndex と同じ考え方） */
+  endMeasure: number;
+  /** 終了音符のイベントインデックス（TieArc.toEventIndex と同じ考え方） */
+  endEvent: number;
+  /** 縦位置の微調整（SVG px）。省略時は0 */
+  offsetY?: number;
+}
+
 export interface NoteEvent {
   dur: DurKey;
   isRest: boolean;
@@ -118,6 +137,8 @@ export interface NoteEvent {
   tiedToNext?: boolean;
   /** タイ／スラーの弧リスト。この音符から他音符への接続を保持する */
   arcs?: TieArc[];
+  /** クレッシェンド／ディミヌエンドの松葉（ヘアピン）リスト。この音符から効き始める記号を保持する */
+  hairpins?: HairpinMark[];
   /** 強弱記号。この音符から効き始める記号を保持する */
   dynamics?: DynamicMarking[];
   /**

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament, Dot, Tuplet } from 'vexflow';
 import type { Tool } from './Palette';
-import type { TieArc, MeasureData, NoteEvent, DurKey, TimeSignature, AdjustableSymbolKind } from '../types/storage';
+import type { TieArc, HairpinMark, MeasureData, NoteEvent, DurKey, TimeSignature, AdjustableSymbolKind } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
 import { computeArcGeometry } from './arcUtils';
+import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import {
   applyKeySignatureToNaturalKey,
   hasVisibleKeySignature,
@@ -806,6 +807,13 @@ export default function StaffCanvas({
   const selectedArcRef = useRef<{ fromMeasure: number; fromEvent: number; arcIndex: number } | null>(null);
   useEffect(() => { selectedArcRef.current = selectedArc; }, [selectedArc]);
 
+  // 選択中の松葉（ヘアピン）。弧の選択（selectedArc）と同じ「クリックで選択→Deleteで削除」方式
+  const [selectedHairpin, setSelectedHairpin] = useState<{
+    fromMeasure: number; fromEvent: number; hairpinIndex: number;
+  } | null>(null);
+  const selectedHairpinRef = useRef<{ fromMeasure: number; fromEvent: number; hairpinIndex: number } | null>(null);
+  useEffect(() => { selectedHairpinRef.current = selectedHairpin; }, [selectedHairpin]);
+
   // 小節拍子変更オーバーレイの状態（null のとき非表示）
   const [timeSigEditState, setTimeSigEditState] = useState<{
     measureAbsoluteIndex: number;
@@ -1092,6 +1100,26 @@ export default function StaffCanvas({
         if (e.key === 'Escape') { clearArcInteraction(); setSelectedArc(null); e.preventDefault(); return; }
       }
 
+      // 優先1.5: 松葉（ヘアピン）が選択中 → Delete で削除 / Escape で選択解除
+      const hpSel = selectedHairpinRef.current;
+      if (hpSel) {
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          setScore(prev => {
+            const next = prev.map(cloneMeasureData);
+            const ev = next[hpSel.fromMeasure]?.events[hpSel.fromEvent];
+            if (!ev?.hairpins) return prev;
+            const newHairpins = ev.hairpins.filter((_, i) => i !== hpSel.hairpinIndex);
+            next[hpSel.fromMeasure].events[hpSel.fromEvent] = {
+              ...ev, hairpins: newHairpins.length ? newHairpins : undefined,
+            };
+            return next;
+          });
+          setSelectedHairpin(null);
+          e.preventDefault(); return;
+        }
+        if (e.key === 'Escape') { setSelectedHairpin(null); e.preventDefault(); return; }
+      }
+
       // 優先2: 音符が選択中 → 音符操作
       const selected = selectedRef.current;
       if (!selected) return;
@@ -1142,13 +1170,28 @@ export default function StaffCanvas({
           // 削除した音符を終点とする arcs を除去し、後続インデックスを繰り上げる
           next.forEach(m => {
             m.events = m.events.map(ev => {
-              if (!ev.arcs?.length) return ev;
-              const patched = ev.arcs
-                .filter(a => !(a.toMeasureIndex === measure && a.toEventIndex === index))
-                .map(a => a.toMeasureIndex === measure && a.toEventIndex > index
-                  ? { ...a, toEventIndex: a.toEventIndex - 1 } : a);
-              if (patched.length === ev.arcs!.length && patched.every((a, i) => a === ev.arcs![i])) return ev;
-              return { ...ev, arcs: patched.length ? patched : undefined };
+              let patched2 = ev;
+              if (ev.arcs?.length) {
+                const patched = ev.arcs
+                  .filter(a => !(a.toMeasureIndex === measure && a.toEventIndex === index))
+                  .map(a => a.toMeasureIndex === measure && a.toEventIndex > index
+                    ? { ...a, toEventIndex: a.toEventIndex - 1 } : a);
+                if (patched.length !== ev.arcs.length || patched.some((a, i) => a !== ev.arcs![i])) {
+                  patched2 = { ...patched2, arcs: patched.length ? patched : undefined };
+                }
+              }
+              // 松葉（ヘアピン）も同様に、削除した音符を終点とするものは除去し、
+              // 同じ小節の後続音符を指すものはインデックスを繰り上げる
+              if (ev.hairpins?.length) {
+                const patchedHp = ev.hairpins
+                  .filter(h => !(h.endMeasure === measure && h.endEvent === index))
+                  .map(h => h.endMeasure === measure && h.endEvent > index
+                    ? { ...h, endEvent: h.endEvent - 1 } : h);
+                if (patchedHp.length !== ev.hairpins.length || patchedHp.some((h, i) => h !== ev.hairpins![i])) {
+                  patched2 = { ...patched2, hairpins: patchedHp.length ? patchedHp : undefined };
+                }
+              }
+              return patched2;
             });
           });
           return next;
@@ -1341,6 +1384,7 @@ export default function StaffCanvas({
       tieStartRef.current = null;
       tiePreviewPath.style.display = 'none';
       setSelectedArc(null);
+      setSelectedHairpin(null);
     });
 
     // マウス移動: タイ新規ドラッグのプレビュー / 描画済み弧の形状ドラッグ
@@ -1425,17 +1469,22 @@ export default function StaffCanvas({
         }
         return;
       }
-      // タイ新規ドラッグのプレビュー
-      if (!tieStartRef.current || !('mode' in tool) || tool.mode !== 'tie') return;
+      // タイ／松葉 新規ドラッグのプレビュー
+      if (!tieStartRef.current || !('mode' in tool) || (tool.mode !== 'tie' && tool.mode !== 'hairpin')) return;
       const { x: mx, y: my } = clientToGroup(svg, svgRoot as SVGGElement, ev.clientX, ev.clientY + yOffsetRef.current);
       const { noteX: sx, noteY: sy, stemDir } = tieStartRef.current;
       // stemDir -1 (下向き符幹) = 高音 = 弧は上側、stemDir 1 (上向き符幹) = 低音 = 弧は下側
       const upward = stemDir !== 1;
       // 段またぎドラッグでは mx < sx になるため Math.abs で判定する
       const hasMoved = Math.abs(mx - sx) > 4 || Math.abs(my - sy) > 4;
-      // 段またぎ時はマウスY座標も使って始点→現在位置のプレビュー弧を描く
-      const { dAttr: d } = computeArcGeometry(sx, sy, mx, my, upward, 'slur', stemDir, undefined, 0);
-      tiePreviewPath.setAttribute('d', d);
+      if (tool.mode === 'hairpin') {
+        // 松葉は弧ではなく直線区間の記号なので、プレビューも点線の直線で示す
+        tiePreviewPath.setAttribute('d', `M ${sx} ${sy} L ${mx} ${my}`);
+      } else {
+        // 段またぎ時はマウスY座標も使って始点→現在位置のプレビュー弧を描く
+        const { dAttr: d } = computeArcGeometry(sx, sy, mx, my, upward, 'slur', stemDir, undefined, 0);
+        tiePreviewPath.setAttribute('d', d);
+      }
       tiePreviewPath.style.display = hasMoved ? 'block' : 'none';
     });
 
@@ -1516,6 +1565,15 @@ export default function StaffCanvas({
     type PendingArc = { arc: TieArc; arcIndex: number; startNote: StaveNote; startStave: Stave; startMeasureIdx: number; startEventIdx: number };
     const notePositionMap = new Map<string, { note: StaveNote; stave: Stave; keys: string[] }>();
     const pendingArcs: PendingArc[] = [];
+
+    // 松葉（ヘアピン）の描画待ちリスト。arcs と同じく開始音符側に保持されたデータを
+    // 全小節のレンダリング後にまとめて描く（終了音符の位置が確定してから描くため）
+    type PendingHairpin = {
+      hairpin: HairpinMark; hairpinIndex: number;
+      startNote: StaveNote; startStave: Stave;
+      startMeasureIdx: number; startEventIdx: number;
+    };
+    const pendingHairpins: PendingHairpin[] = [];
 
     // tiedToNext レガシー用: 和音から代表符頭キーを選ぶ（upward なら最高音、downward なら最低音）
     // keys は keyToLine 降順ソート（keys[0] = 最低音 / keys[last] = 最高音）
@@ -1916,6 +1974,8 @@ export default function StaffCanvas({
           // arcs[] 方式: 全音符の位置を記録し、arc を持つ音符は pendingArcs に追加
           notePositionMap.set(`${absoluteIndex}-${j}`, { note: vfNotes[j], stave, keys: ev.keys });
           ev.arcs?.forEach((arc, arcIndex) => pendingArcs.push({ arc, arcIndex, startNote: vfNotes[j], startStave: stave, startMeasureIdx: absoluteIndex, startEventIdx: j }));
+          // 松葉（ヘアピン）も同じ方式で開始音符から収集する
+          ev.hairpins?.forEach((hairpin, hairpinIndex) => pendingHairpins.push({ hairpin, hairpinIndex, startNote: vfNotes[j], startStave: stave, startMeasureIdx: absoluteIndex, startEventIdx: j }));
         });
 
         /* --- ガイド更新/非表示（小節rect/セルrect 両方から呼ぶ） --- */
@@ -2017,6 +2077,23 @@ export default function StaffCanvas({
             if (!startEv || startEv.isRest) return prev;
             const arc: TieArc = { fromKey, toKey, toMeasureIndex: m2, toEventIndex: n2, kind };
             next[m1].events[n1] = { ...startEv, arcs: [...(startEv.arcs ?? []), arc] };
+            return next;
+          });
+        };
+
+        /* --- 松葉（ヘアピン）設置処理: hairpins[] に保存 --- */
+        const applyHairpin = (m1: number, n1: number, m2: number, n2: number, type: 'cresc' | 'dim') => {
+          // 逆ドラッグ対応（始点 > 終点なら入れ替え）。タイと違い音高キーは持たないので位置だけ入れ替える
+          if (m1 > m2 || (m1 === m2 && n1 > n2)) {
+            [m1, n1, m2, n2] = [m2, n2, m1, n1];
+          }
+          if (m1 === m2 && n1 === n2) return;
+          setScore(prev => {
+            const next = prev.map(cloneMeasureData);
+            const startEv = next[m1]?.events[n1];
+            if (!startEv || startEv.isRest) return prev;
+            const hairpin: HairpinMark = { type, endMeasure: m2, endEvent: n2 };
+            next[m1].events[n1] = { ...startEv, hairpins: [...(startEv.hairpins ?? []), hairpin] };
             return next;
           });
         };
@@ -2192,8 +2269,9 @@ export default function StaffCanvas({
         insertRect.addEventListener('click', (e) => {
           if (disabled) return;
           setSelectedArc(null);
-          // タイモード中は音符挿入しない
-          if ('mode' in tool && tool.mode === 'tie') return;
+          setSelectedHairpin(null);
+          // タイ／松葉モード中は音符挿入しない
+          if ('mode' in tool && (tool.mode === 'tie' || tool.mode === 'hairpin')) return;
           if ('mode' in tool && tool.mode === 'repeat') {
             // リピート記号は「小節単位」の情報なので、
             // 背景クリックでは音高ではなく小節番号だけを見てトグルする。
@@ -2387,9 +2465,9 @@ export default function StaffCanvas({
             });
             hit.addEventListener('mouseleave', () => { hideGuide(); hideChordGuide(); });
 
-            // タイドラッグ開始（mousedown）
+            // タイ／松葉ドラッグ開始（mousedown）
             hit.addEventListener('mousedown', (ev) => {
-              if (disabled || !('mode' in tool) || tool.mode !== 'tie') return;
+              if (disabled || !('mode' in tool) || (tool.mode !== 'tie' && tool.mode !== 'hairpin')) return;
               if (safeEvents[j]?.isRest) return;
               ev.preventDefault();
               const noteX = anchors[j];
@@ -2405,9 +2483,9 @@ export default function StaffCanvas({
               tieStartRef.current = { absoluteIndex, noteIndex: j, startKey, noteX, noteY, stemDir };
             });
 
-            // タイドラッグ確定（mouseup）
+            // タイ／松葉ドラッグ確定（mouseup）
             hit.addEventListener('mouseup', (ev) => {
-              if (disabled || !('mode' in tool) || tool.mode !== 'tie') return;
+              if (disabled || !('mode' in tool) || (tool.mode !== 'tie' && tool.mode !== 'hairpin')) return;
               const start = tieStartRef.current;
               tiePreviewPath.style.display = 'none';
               tieStartRef.current = null;
@@ -2415,6 +2493,11 @@ export default function StaffCanvas({
               if (safeEvents[j]?.isRest) return;
               if (start.absoluteIndex === absoluteIndex && start.noteIndex === j) return;
               ev.stopPropagation();
+              if (tool.mode === 'hairpin') {
+                // 松葉: 開始音符から終了音符までの区間を hairpins[] に保存する
+                applyHairpin(start.absoluteIndex, start.noteIndex, absoluteIndex, j, tool.hairpinType);
+                return;
+              }
               // 終点符頭を特定し、開始符頭と同じ key ならタイ、異なれば スラー
               const { y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY + yOffsetRef.current);
               const endKey = findNearestKey(safeEvents[j].keys, ly, stave, keyToLine);
@@ -2427,13 +2510,14 @@ export default function StaffCanvas({
               if (disabled) return;
               ev.stopPropagation(); // 小節rectには渡さない
               setSelectedArc(null);
+              setSelectedHairpin(null);
               // 選択モード: 音符をクリックして選択（その後 Delete で1音削除できる）
               if ('mode' in tool && tool.mode === 'select') {
                 setSelected({ measure: absoluteIndex, index: j });
                 return;
               }
-              // タイモードではドラッグで操作するため、クリックは何もしない
-              if ('mode' in tool && tool.mode === 'tie') return;
+              // タイ／松葉モードではドラッグで操作するため、クリックは何もしない
+              if ('mode' in tool && (tool.mode === 'tie' || tool.mode === 'hairpin')) return;
               if ('mode' in tool && tool.mode === 'repeat') {
                 setScore(prev => toggleMeasureRepeatMarker(prev, absoluteIndex, tool.repeat));
                 return;
@@ -3379,7 +3463,59 @@ export default function StaffCanvas({
         } catch { /* 保険 */ }
       }
     });
-  }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures]);
+
+    // ── 松葉（ヘアピン）を一括描画（全小節レンダリング後に実行） ─────
+    // 五線の下（強弱記号と同じ高さ帯）に、開始音符から終了音符まで開く/閉じる2本線を描く
+    pendingHairpins.forEach(({ hairpin, hairpinIndex, startNote, startStave, startMeasureIdx, startEventIdx }) => {
+      const dest = notePositionMap.get(`${hairpin.endMeasure}-${hairpin.endEvent}`);
+      if (!dest) return; // この StaffCanvas の描画範囲外なら無視
+
+      type R = Record<string, (...a: unknown[]) => unknown>;
+      const x1 = ((startNote as unknown as R)['getAbsoluteX']?.() as number | undefined) ?? 0;
+      const x2 = ((dest.note as unknown as R)['getAbsoluteX']?.() as number | undefined) ?? 0;
+      const isSelected = selectedHairpin !== null &&
+        selectedHairpin.fromMeasure === startMeasureIdx &&
+        selectedHairpin.fromEvent === startEventIdx &&
+        selectedHairpin.hairpinIndex === hairpinIndex;
+      const offsetY = hairpin.offsetY ?? 0;
+      const onClick = () => {
+        setSelectedArc(null);
+        setSelectedHairpin({ fromMeasure: startMeasureIdx, fromEvent: startEventIdx, hairpinIndex });
+      };
+
+      // 段またぎ判定はタイ/スラーと同じ基準（五線Y差 > 30px、または終点が始点より左）
+      const crossSystem = Math.abs(startStave.getYForLine(2) - dest.stave.getYForLine(2)) > 30 || x2 < x1;
+
+      if (!crossSystem) {
+        drawHairpinSegment({
+          svgRoot: svgRoot as SVGElement,
+          x1, x2,
+          y: startStave.getYForLine(4) + HAIRPIN_Y_OFFSET + offsetY,
+          type: hairpin.type, fracStart: 0, fracEnd: 1, isSelected, onClick,
+        });
+      } else {
+        // 段またぎ: 上段（開始音符→段の右端）と下段（次段の左端→終了音符）に分割し、
+        // 開き幅（frac）を横幅の比率でつなげて自然に見せる
+        const edgeX1 = startStave.getX() + startStave.getWidth();
+        const edgeX2 = dest.stave.getX();
+        const span1 = Math.max(edgeX1 - x1, 1);
+        const span2 = Math.max(x2 - edgeX2, 1);
+        const breakFrac = span1 / (span1 + span2);
+        drawHairpinSegment({
+          svgRoot: svgRoot as SVGElement,
+          x1, x2: edgeX1,
+          y: startStave.getYForLine(4) + HAIRPIN_Y_OFFSET + offsetY,
+          type: hairpin.type, fracStart: 0, fracEnd: breakFrac, isSelected, onClick,
+        });
+        drawHairpinSegment({
+          svgRoot: svgRoot as SVGElement,
+          x1: edgeX2, x2,
+          y: dest.stave.getYForLine(4) + HAIRPIN_Y_OFFSET + offsetY,
+          type: hairpin.type, fracStart: breakFrac, fracEnd: 1, isSelected, onClick,
+        });
+      }
+    });
+  }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, selectedHairpin, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures]);
 
   /**
    * 途中拍子変更を確定する。

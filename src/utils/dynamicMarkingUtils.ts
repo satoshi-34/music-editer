@@ -193,7 +193,10 @@ export function resolveDynamicVelocities(measures: MeasureData[]): Map<string, n
       velocities.set(buildDynamicEventKey(entry.measureIndex, entry.eventIndex), currentVelocity);
     }
 
-    const relative = getRelativeDynamicFromEvent(entry.event);
+    // 松葉（ヘアピン）もテキストの cresc. / dim. と同じ扱いで
+    // 「次の絶対強弱（なければ ±0.2）まで段階的に変化」させる。
+    // 終了音符位置での打ち切りはしない簡易仕様（テキスト表記との挙動統一を優先）。
+    const relative = getRelativeDynamicFromEvent(entry.event) ?? entry.event.hairpins?.[0]?.type ?? null;
     if (relative) {
       relativePlan = createRelativePlan(flattenedEvents, flatIndex, currentVelocity, relative);
     }

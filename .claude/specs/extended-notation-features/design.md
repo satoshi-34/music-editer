@@ -302,3 +302,75 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
 - symbolAdjust の調整対象UIは ornament（装飾記号）・articulations（アーティキュレーション）を意図的に除外している（`listPresentAdjustableSymbolKinds` 参照）。VexFlowのグリフ/個別SVG実装への安全なスケーリング・オフセット適用が本タスクの範囲で作り込めなかったため。データ型・バリデーションはこの2種も許容する
 - PianoSystemCanvas の汎用⤢/✥ツールは、既存のカスタム記号専用ツールと同じ制約で声部1のみ対応（声部2は未対応の既知の制限）
 - `buildCurrentScoreData` は `totalSystems` と `measuresPerSystem` の宣言より後に置く必要がある（TDZ 制約）
+
+---
+
+# クレッシェンド／ディミヌエンドの松葉（ヘアピン）対応
+
+## 問題
+
+強弱の漸増・漸減は `cresc.` / `dim.` のテキスト表示のみで、実際の楽譜で標準的な松葉記号（`<` `>`）が置けなかった（README ロードマップ項目）。
+
+## 修正設計
+
+### データ型（`src/types/storage.ts`）
+
+タイ/スラー（`TieArc` を開始音符の `arcs[]` に保持し、終了位置を絶対小節インデックス＋イベントインデックスで参照する方式）に合わせて、開始音符に保持する:
+
+```ts
+export interface HairpinMark {
+  type: 'cresc' | 'dim';
+  endMeasure: number;  // 終了音符の絶対小節インデックス（TieArc.toMeasureIndex と同じ流儀）
+  endEvent: number;    // 終了音符のイベントインデックス
+  offsetY?: number;    // 縦位置の微調整(px)。省略時0（現状UIからは未設定。将来の✥対応用の受け皿）
+}
+// NoteEvent.hairpins?: HairpinMark[];
+```
+
+- 旧データ互換: `hairpins` は省略可。`validateNoteEvent`（`src/utils/storage.ts`）で type/endMeasure/endEvent/offsetY を検証（offsetY は symbolAdjust と同じ ±100 範囲）
+- テキストの `cresc.` / `dim.`（`dynamics`）はそのまま残し、両方使える
+
+### 入力UI
+
+- パレット「演奏記号」タブに「＜」「＞」ボタンを追加（`Tool` に `{ mode: 'hairpin'; hairpinType: 'cresc' | 'dim' }`）
+- タイ入力と同じ操作系: ツール選択→開始音符から終了音符へ**ドラッグ**で設置（`tieStartRef` などタイのドラッグ基盤を共用。プレビューは弧ではなく点線の直線）
+- 逆ドラッグは始点・終点を自動で入れ替え。休符では開始・終了できない
+
+### 削除
+
+- 描画済みの松葉をクリックすると青くハイライト（`selectedHairpin` state）→ Delete/Backspace で削除、Escape で選択解除（タイ/スラーの選択削除と同じ方式）
+- 音符削除時は、その音符を終点とする松葉を除去し、同小節の後続音符を指す `endEvent` を繰り上げる（arcs の掃除処理と同じ場所で実施）
+
+### 描画
+
+- `src/utils/hairpinRenderUtils.ts`（新規）に描画を共通化し、StaffCanvas / PianoSystemCanvas の両方から使用
+- 五線の下（強弱記号テキストと同じ高さ帯。五線下端 +22px）に、開始音符から終了音符まで開く/閉じる2本線を SVG で描画。最大開き幅 11px
+- 小節をまたぐ場合に対応。**段をまたぐ場合**はタイ/スラーの段またぎ判定（五線Y差>30px または終点が始点より左）を流用し、上段（開始音符→段右端）と下段（段左端→終了音符）に分割、開き幅を横幅比率で連続させる
+- 注意: `.score-area svg path` の CSS が stroke-width を上書きし、pointer-events も祖先から none を継承するため、当たり判定パスは `pointer-events="stroke"` 属性とインライン style の strokeWidth で明示的に上書きしている
+
+### 再生
+
+- 松葉の開始音符を、テキストの `cresc.` / `dim.` と同じ「次の絶対強弱（なければ ±0.2）まで段階的に変化」として扱う（`resolveDynamicVelocities` で `hairpins[0].type` をフォールバック参照）
+- **判断**: 松葉の終了音符位置での補間打ち切りは実装しない簡易仕様とした。テキスト表記との挙動統一を優先し、工数を抑えるため
+
+### MusicXML
+
+- 書出（`src/utils/musicXmlExport.ts`）: 開始音符の直前に `<direction><direction-type><wedge type="crescendo|diminuendo"/></direction-type></direction>`、終了音符の直後に `<wedge type="stop"/>`。パート全体の開始/終了位置マップを `buildHairpinPositionMaps()` で事前計算
+- **読込は未対応（除外）**: `<wedge>` の start/stop を開始音符参照方式へ逆変換する対応は工数の都合で見送り（既知の制限）
+
+### 既知の制限
+
+- 2声部（ピアノ譜の声部2）への松葉入力は未対応（タイ/スラーと同じく声部1のみ）
+- MusicXML 読込は未対応（上記）
+- offsetY を編集するUIは未提供（データ型・バリデーション・描画は対応済み）
+
+## 影響範囲
+
+- `src/types/storage.ts`: `HairpinMark` 新設、`NoteEvent.hairpins` 追加
+- `src/utils/storage.ts`: `validateNoteEvent` に hairpins のバリデーション追加
+- `src/utils/hairpinRenderUtils.ts`（新規）: 松葉の SVG 描画共通化（段またぎ分割対応）
+- `src/utils/dynamicMarkingUtils.ts`: `resolveDynamicVelocities` が hairpins も参照
+- `src/utils/musicXmlExport.ts`: `<wedge>` 書き出し、`buildHairpinPositionMaps()` 新設
+- `src/components/Palette.tsx`: `Tool` に `hairpin` モード追加、＜/＞ボタン追加
+- `src/components/StaffCanvas.tsx` / `src/components/PianoSystemCanvas.tsx`: ドラッグ入力・選択削除・一括描画・音符削除時の参照掃除
+- `src/utils/hairpin.test.ts`（新規）: バリデーション・位置マップ・MusicXML書出・再生ベロシティのユニットテスト

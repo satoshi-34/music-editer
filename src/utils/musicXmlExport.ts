@@ -96,6 +96,34 @@ function dynamicsDirectionXml(ev: NoteEvent, staff: number): string {
   return `<direction placement="below"><direction-type><dynamics><${dyn.value}/></dynamics></direction-type><staff>${staff}</staff></direction>`;
 }
 
+/**
+ * 松葉（ヘアピン）の開始/終了位置マップをパート単位で作る。
+ * MusicXML の <wedge> は「開始位置に type="crescendo|diminuendo"、
+ * 終了位置に type="stop"」を direction として置く方式のため、
+ * 開始音符に保持しているデータ（endMeasure / endEvent）を
+ * 「この小節・このイベントの直前/直後に direction を出す」形へ変換しておく。
+ */
+export function buildHairpinPositionMaps(measures: MeasureData[]): {
+  starts: Map<string, Array<'crescendo' | 'diminuendo'>>;
+  stops: Map<string, number>;
+} {
+  const starts = new Map<string, Array<'crescendo' | 'diminuendo'>>();
+  const stops = new Map<string, number>();
+  measures.forEach((measure, mi) => {
+    measure.events.forEach((ev, ei) => {
+      ev.hairpins?.forEach((h) => {
+        const startKey = `${mi}-${ei}`;
+        const list = starts.get(startKey) ?? [];
+        list.push(h.type === 'cresc' ? 'crescendo' : 'diminuendo');
+        starts.set(startKey, list);
+        const stopKey = `${h.endMeasure}-${h.endEvent}`;
+        stops.set(stopKey, (stops.get(stopKey) ?? 0) + 1);
+      });
+    });
+  });
+  return { starts, stops };
+}
+
 /** 付点の数から MusicXML の <dot/> 要素を繰り返す文字列を作る */
 function dotsXml(ev: NoteEvent): string {
   const count = ev.dots === 1 ? 1 : ev.dots === 2 ? 2 : 0;
@@ -164,6 +192,10 @@ function measureToXml(
     prevTimeSig?: [number, number];
     prevKeyFifths?: number;
     effectiveKeyFifths: number;
+    /** 松葉（ヘアピン）の開始/終了位置マップ（パート全体で事前計算したもの） */
+    hairpins?: { starts: Map<string, Array<'crescendo' | 'diminuendo'>>; stops: Map<string, number> };
+    /** この小節の絶対インデックス（hairpins のキー照合に使う） */
+    measureIndex?: number;
   }
 ): string {
   const lines: string[] = [];
@@ -204,6 +236,11 @@ function measureToXml(
     const ev = events[i];
     const dynDir = dynamicsDirectionXml(ev, options.staff);
     if (dynDir) lines.push(dynDir);
+    // 松葉（ヘアピン）開始: この音符の直前に <wedge type="crescendo|diminuendo"/> を置く
+    const hpKey = `${options.measureIndex ?? 0}-${i}`;
+    options.hairpins?.starts.get(hpKey)?.forEach((wedgeType) => {
+      lines.push(`<direction placement="below"><direction-type><wedge type="${wedgeType}"/></direction-type><staff>${options.staff}</staff></direction>`);
+    });
     let tupletPos: { isFirst: boolean; isLast: boolean } | undefined;
     if (ev.tuplet) {
       const isFirst = i === 0 || events[i - 1].tuplet?.id !== ev.tuplet.id;
@@ -211,6 +248,11 @@ function measureToXml(
       tupletPos = { isFirst, isLast };
     }
     lines.push(noteToXml(ev, 1, options.staff, tupletPos));
+    // 松葉（ヘアピン）終了: 終了音符の直後に <wedge type="stop"/> を置く
+    const stopCount = options.hairpins?.stops.get(hpKey) ?? 0;
+    for (let k = 0; k < stopCount; k++) {
+      lines.push(`<direction placement="below"><direction-type><wedge type="stop"/></direction-type><staff>${options.staff}</staff></direction>`);
+    }
   }
 
   // リピート終了
@@ -241,6 +283,8 @@ export function scoreToMusicXml(data: SavedScoreData): string {
     let prevTimeSig: [number, number] | undefined;
     let effectiveKeyFifths = globalKeyFifths;
     let prevKeyFifths: number | undefined;
+    // 松葉（ヘアピン）の開始/終了位置をパート全体で事前計算しておく
+    const hairpins = buildHairpinPositionMaps(p.measures);
     const measuresXml = p.measures.map((m, mi) => {
       // 途中調号変更: この小節に keySignature があれば、それ以降有効な調号として更新する
       if (m.keySignature) {
@@ -255,6 +299,8 @@ export function scoreToMusicXml(data: SavedScoreData): string {
         prevTimeSig,
         prevKeyFifths,
         effectiveKeyFifths,
+        hairpins,
+        measureIndex: mi,
       });
       prevTimeSig = m.timeSignature ?? globalTimeSig;
       prevKeyFifths = effectiveKeyFifths;

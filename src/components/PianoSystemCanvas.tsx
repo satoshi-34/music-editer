@@ -8,11 +8,12 @@ import {
   GraceNote, GraceNoteGroup, Ornament,
 } from 'vexflow';
 import type { Tool } from './Palette';
-import type { MeasureData, TieArc, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind } from '../types/storage';
+import type { MeasureData, TieArc, HairpinMark, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind } from '../types/storage';
 import { applyOrnamentToEvent, ornamentToVexCode } from '../utils/ornamentUtils';
 import type { ClefType } from './clefUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey, restKeyForVoice } from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
+import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
@@ -63,7 +64,7 @@ import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>> };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>> };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
@@ -814,6 +815,13 @@ export default function PianoSystemCanvas({
   const selectedArcRef = useRef<{ partIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null>(null);
   useEffect(() => { selectedArcRef.current = selectedArc; }, [selectedArc]);
 
+  // 選択中の松葉（ヘアピン）。弧の選択と同じ「クリックで選択→Deleteで削除」方式
+  const [selectedHairpin, setSelectedHairpin] = useState<{
+    partIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number;
+  } | null>(null);
+  const selectedHairpinRef = useRef<{ partIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null>(null);
+  useEffect(() => { selectedHairpinRef.current = selectedHairpin; }, [selectedHairpin]);
+
   // 弧の直接ドラッグ状態（cpDyOffset をリアルタイム調節 / 反転検知）
   const cpDragRef = useRef<{
     partIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
@@ -1015,6 +1023,25 @@ export default function PianoSystemCanvas({
         if(e.key==='Escape'){clearArcInteraction();setSelectedArc(null);e.preventDefault();return;}
       }
 
+      // 優先1.5: 松葉（ヘアピン）が選択中 → Delete で削除 / Escape で選択解除
+      const hpSel=selectedHairpinRef.current;
+      if(hpSel){
+        if(e.key==='Delete'||e.key==='Backspace'){
+          setPartsScore(prev=>{
+            const next=[...prev];
+            const partData=(prev[hpSel.partIndex]??[]).map(cloneMeasureData);
+            const ev=partData[hpSel.fromMeasure]?.events[hpSel.fromEvent];
+            if(!ev?.hairpins)return prev;
+            const newHairpins=ev.hairpins.filter((_,i)=>i!==hpSel.hairpinIndex);
+            partData[hpSel.fromMeasure].events[hpSel.fromEvent]={...ev,hairpins:newHairpins.length?newHairpins:undefined};
+            next[hpSel.partIndex]=partData;
+            return next;
+          });
+          setSelectedHairpin(null);e.preventDefault();return;
+        }
+        if(e.key==='Escape'){setSelectedHairpin(null);e.preventDefault();return;}
+      }
+
       // 優先2: 音符が選択中 → 音符操作
       const sel=selRef.current;
       if(!sel)return;
@@ -1088,15 +1115,28 @@ export default function PianoSystemCanvas({
             return n;
           }
           n[measure].events.splice(index,1);
-          // 削除した音符を終点とする arcs を除去し、後続インデックスを繰り上げる
+          // 削除した音符を終点とする arcs / hairpins を除去し、後続インデックスを繰り上げる
           n.forEach(m=>{
             m.events=m.events.map(ev=>{
-              if(!ev.arcs?.length)return ev;
-              const patched=ev.arcs
-                .filter(a=>!(a.toMeasureIndex===measure&&a.toEventIndex===index))
-                .map(a=>a.toMeasureIndex===measure&&a.toEventIndex>index?{...a,toEventIndex:a.toEventIndex-1}:a);
-              if(patched.length===ev.arcs!.length&&patched.every((a,i)=>a===ev.arcs![i]))return ev;
-              return{...ev,arcs:patched.length?patched:undefined};
+              let patchedEv=ev;
+              if(ev.arcs?.length){
+                const patched=ev.arcs
+                  .filter(a=>!(a.toMeasureIndex===measure&&a.toEventIndex===index))
+                  .map(a=>a.toMeasureIndex===measure&&a.toEventIndex>index?{...a,toEventIndex:a.toEventIndex-1}:a);
+                if(patched.length!==ev.arcs.length||patched.some((a,i)=>a!==ev.arcs![i])){
+                  patchedEv={...patchedEv,arcs:patched.length?patched:undefined};
+                }
+              }
+              // 松葉（ヘアピン）も同様に、削除した音符を終点とするものは除去し、後続はインデックス繰り上げ
+              if(ev.hairpins?.length){
+                const patchedHp=ev.hairpins
+                  .filter(h=>!(h.endMeasure===measure&&h.endEvent===index))
+                  .map(h=>h.endMeasure===measure&&h.endEvent>index?{...h,endEvent:h.endEvent-1}:h);
+                if(patchedHp.length!==ev.hairpins.length||patchedHp.some((h,i)=>h!==ev.hairpins![i])){
+                  patchedEv={...patchedEv,hairpins:patchedHp.length?patchedHp:undefined};
+                }
+              }
+              return patchedEv;
             });
           });
           return n;
@@ -1230,6 +1270,7 @@ export default function PianoSystemCanvas({
       tieStartRef.current=null;
       tiePreviewPath.style.display='none';
       setSelectedArc(null);
+      setSelectedHairpin(null);
     });
 
     svg.addEventListener('mousemove',(ev)=>{
@@ -1301,16 +1342,21 @@ export default function PianoSystemCanvas({
         }
         return;
       }
-      // タイ新規ドラッグのプレビュー
-      if(!tieStartRef.current||!('mode' in tool)||tool.mode!=='tie')return;
+      // タイ／松葉 新規ドラッグのプレビュー
+      if(!tieStartRef.current||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
       const{x:mx,y:my}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
       const{noteX:sx,noteY:sy,stemDir}=tieStartRef.current;
       const upward=stemDir!==1;
       // 段またぎドラッグでは mx < sx（右→左）になるため Math.abs で判定する
       const hasMoved=Math.abs(mx-sx)>4||Math.abs(my-sy)>4;
-      // 段またぎ時はマウスY座標も使って始点→現在位置のプレビュー弧を描く
-      const{dAttr:d}=computeArcGeometry(sx,sy,mx,my,upward,'slur',stemDir,undefined,0);
-      tiePreviewPath.setAttribute('d',d);
+      if(tool.mode==='hairpin'){
+        // 松葉は弧ではなく直線区間の記号なので、プレビューも点線の直線で示す
+        tiePreviewPath.setAttribute('d',`M ${sx} ${sy} L ${mx} ${my}`);
+      }else{
+        // 段またぎ時はマウスY座標も使って始点→現在位置のプレビュー弧を描く
+        const{dAttr:d}=computeArcGeometry(sx,sy,mx,my,upward,'slur',stemDir,undefined,0);
+        tiePreviewPath.setAttribute('d',d);
+      }
       tiePreviewPath.style.display=hasMoved?'block':'none';
     });
     svg.addEventListener('mouseup',(ev)=>{
@@ -1607,6 +1653,9 @@ export default function PianoSystemCanvas({
     type PendingArcP={partIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
     const notePositionMapP=new Map<string,{note:StaveNote;stave:Stave;keys:string[]}>();
     const pendingArcsP:PendingArcP[]=[];
+    // 松葉（ヘアピン）の描画待ちリスト。arcs と同じく全パート・全小節のレンダリング後にまとめて描く
+    type PendingHairpinP={partIndex:number;hairpin:HairpinMark;hairpinIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
+    const pendingHairpinsP:PendingHairpinP[]=[];
 
     // tiedToNext レガシー用: 和音から代表符頭キーを選ぶ（upward なら最高音、downward なら最低音）
     const tieRepKeyP=(clef:ClefType,keys:string[])=>{
@@ -1980,6 +2029,8 @@ export default function PianoSystemCanvas({
           // arcs[] 方式: 全音符の位置を記録し、arc を持つ音符は pendingArcsP に追加
           notePositionMapP.set(`${pi}-${absI}-${j}`,{note:vfNotes[j],stave,keys:ev.keys});
           ev.arcs?.forEach((arc,arcIndex)=>pendingArcsP.push({partIndex:pi,arc,arcIndex,startNote:vfNotes[j],startStave:stave,startMeasureIdx:absI,startEventIdx:j}));
+          // 松葉（ヘアピン）も同じ方式で開始音符から収集する
+          ev.hairpins?.forEach((hairpin,hairpinIndex)=>pendingHairpinsP.push({partIndex:pi,hairpin,hairpinIndex,startNote:vfNotes[j],startStave:stave,startMeasureIdx:absI,startEventIdx:j}));
         });
 
         // EXTRA_TOP/EXTRA_BOTTOM は五線の外側までクリックしやすくするための余白だが、
@@ -2058,6 +2109,21 @@ export default function PianoSystemCanvas({
             if(!startEv||startEv.isRest)return prev;
             const arc:TieArc={fromKey,toKey,toMeasureIndex:m2,toEventIndex:n2,kind};
             next[m1].events[n1]={...startEv,arcs:[...(startEv.arcs??[]),arc]};
+            return next;
+          });
+        };
+
+        // 松葉（ヘアピン）を hairpins[] に保存する（始点の NoteEvent に追加）
+        const applyHairpin=(m1:number,n1:number,m2:number,n2:number,type:'cresc'|'dim')=>{
+          // 逆ドラッグ対応（始点 > 終点なら入れ替え）。音高キーは持たないので位置だけ入れ替える
+          if(m1>m2||(m1===m2&&n1>n2)){[m1,n1,m2,n2]=[m2,n2,m1,n1];}
+          if(m1===m2&&n1===n2)return;
+          setScore(prev=>{
+            const next=prev.map(cloneMeasureData);
+            const startEv=next[m1]?.events[n1];
+            if(!startEv||startEv.isRest)return prev;
+            const hairpin:HairpinMark={type,endMeasure:m2,endEvent:n2};
+            next[m1].events[n1]={...startEv,hairpins:[...(startEv.hairpins??[]),hairpin]};
             return next;
           });
         };
@@ -2176,7 +2242,8 @@ export default function PianoSystemCanvas({
             return;
           }
           setSelectedArc(null);
-          if('mode' in tool&&tool.mode==='tie')return;
+          setSelectedHairpin(null);
+          if('mode' in tool&&(tool.mode==='tie'||tool.mode==='hairpin'))return;
           if('mode' in tool&&tool.mode==='repeat'){
             toggleRepeatMarkerAcrossParts(absI, tool.repeat);
             return;
@@ -2328,9 +2395,9 @@ export default function PianoSystemCanvas({
             });
             hit.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
 
-            // タイドラッグ開始
+            // タイ／松葉ドラッグ開始
             hit.addEventListener('mousedown',e=>{
-              if(disabled||!('mode' in tool)||tool.mode!=='tie')return;
+              if(disabled||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
               if(activeEvs[j]?.isRest)return;
               e.preventDefault();
               const n=activeVfNotes[j] as unknown as Record<string,(...a:unknown[])=>unknown>;
@@ -2348,9 +2415,9 @@ export default function PianoSystemCanvas({
               tieStartRef.current={partIndex:pi,absoluteIndex:absI,noteIndex:j,startKey,noteX,noteY,stemDir};
             });
 
-            // タイドラッグ確定
+            // タイ／松葉ドラッグ確定
             hit.addEventListener('mouseup',e=>{
-              if(disabled||!('mode' in tool)||tool.mode!=='tie')return;
+              if(disabled||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
               const start=tieStartRef.current;
               tiePreviewPath.style.display='none';
               tieStartRef.current=null;
@@ -2358,6 +2425,11 @@ export default function PianoSystemCanvas({
               if(activeEvs[j]?.isRest)return;
               if(start.absoluteIndex===absI&&start.noteIndex===j)return;
               (e as MouseEvent).stopPropagation();
+              if(tool.mode==='hairpin'){
+                // 松葉: 開始音符から終了音符までの区間を hairpins[] に保存する
+                applyHairpin(start.absoluteIndex,start.noteIndex,absI,j,tool.hairpinType);
+                return;
+              }
               // 終点符頭を特定し、開始符頭と同じ key ならタイ、異なればスラー
               const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
               const endKey=findNearestKey(activeEvs[j].keys,ly,stave,k2l);
@@ -2369,7 +2441,8 @@ export default function PianoSystemCanvas({
               if(disabled)return;
               e.stopPropagation();
               setSelectedArc(null);
-              if('mode' in tool&&tool.mode==='tie')return;
+              setSelectedHairpin(null);
+              if('mode' in tool&&(tool.mode==='tie'||tool.mode==='hairpin'))return;
               if('mode' in tool&&tool.mode==='repeat'){
                 toggleRepeatMarkerAcrossParts(absI, tool.repeat);
                 return;
@@ -3073,6 +3146,41 @@ export default function PianoSystemCanvas({
       }
     });
 
+    // ── 松葉（ヘアピン）を一括描画（全パート・全小節レンダリング後に実行） ─────
+    // 五線の下（強弱記号と同じ高さ帯）に、開始音符から終了音符まで開く/閉じる2本線を描く
+    pendingHairpinsP.forEach(({partIndex,hairpin,hairpinIndex,startNote,startStave,startMeasureIdx,startEventIdx})=>{
+      const dest=notePositionMapP.get(`${partIndex}-${hairpin.endMeasure}-${hairpin.endEvent}`);
+      if(!dest)return; // このキャンバスの描画範囲外なら無視
+      type R=Record<string,(...a:unknown[])=>unknown>;
+      const x1=((startNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
+      const x2=((dest.note as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
+      const isSelected=selectedHairpin!==null&&
+        selectedHairpin.partIndex===partIndex&&
+        selectedHairpin.fromMeasure===startMeasureIdx&&
+        selectedHairpin.fromEvent===startEventIdx&&
+        selectedHairpin.hairpinIndex===hairpinIndex;
+      const offsetY=hairpin.offsetY??0;
+      const onClick=()=>{
+        setSelectedArc(null);
+        setSelectedHairpin({partIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
+      };
+      // 段またぎ判定はタイ/スラーと同じ基準（五線Y差 > 30px、または終点が始点より左）
+      const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30||x2<x1;
+      if(!crossSystem){
+        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1,x2,y:startStave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:0,fracEnd:1,isSelected,onClick});
+      }else{
+        // 段またぎ: 上段（開始音符→段の右端）と下段（次段の左端→終了音符）に分割し、
+        // 開き幅（frac）を横幅の比率でつなげて自然に見せる
+        const edgeX1=startStave.getX()+startStave.getWidth();
+        const edgeX2=dest.stave.getX();
+        const span1=Math.max(edgeX1-x1,1);
+        const span2=Math.max(x2-edgeX2,1);
+        const breakFrac=span1/(span1+span2);
+        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1,x2:edgeX1,y:startStave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:0,fracEnd:breakFrac,isSelected,onClick});
+        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1:edgeX2,x2,y:dest.stave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:breakFrac,fracEnd:1,isSelected,onClick});
+      }
+    });
+
     // ── パートごとの tiedToNext タイグループを一括描画（レガシー） ──────────
     parts.forEach((part,pi)=>{
       const ln=partLineNotes[pi];
@@ -3101,7 +3209,7 @@ export default function PianoSystemCanvas({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs]);
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs]);
 
   function handleTimeSigConfirm(value: string) {
     if (!timeSigEditState) return;
