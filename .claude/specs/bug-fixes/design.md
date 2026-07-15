@@ -978,3 +978,70 @@ synth.triggerAttackRelease(toneKeys, duration, time, velocity);
 
 - 楽譜ページの背景（ツールバー下・ページ外周）が従来どおり深緑の単色で表示されること
 - DevTools の Network タブで `paper-bg.png` への 404 リクエストが発生しないこと
+
+## 追記: 段間クリックの当たり判定バグ（隣の段の加線域に吸われる問題）
+
+### 問題
+
+- 単旋律譜（`StaffCanvas.tsx`）で、2段目の五線をクリックしたつもりが、1段目の超低音（下に加線が6本以上伸びた音）として配置される不具合があった。
+- 原因は、小節ごとの音符挿入用クリック当たり判定 rect（`rect.vf-hit`）の縦方向の範囲（`rectTop`/`rectBottom`）が、加線域を含めるために五線の上下に広く取られていたこと。
+  - `rectTop = stave.getYForLine(-EXTRA_TOP_LINES)`（`EXTRA_TOP_LINES = 6`）
+  - `rectBottom = stave.getYForLine(4 + EXTRA_BOTTOM_LINES)`（`EXTRA_BOTTOM_LINES = 10`）
+  - 段の間隔は `gap`（デフォルト110px）だが、上記の余白の合計（約 (6+10)×10px=160px 相当）が `gap` を上回るケースがあり、隣接する段の当たり判定 rect と縦方向に重なっていた。
+- SVG では DOM で先に描画された（＝上の段の）rect が下の段の rect の上に一部重なって存在する形になり、重なった領域のクリックは常に上の段の rect が受け取ってしまう。そのため「2段目の上部をクリックしたのに1段目の下側の加線域として扱われる」という誤配置が発生していた。
+- 多段譜（`PianoSystemCanvas.tsx`、ピアノ大譜表・弦楽四重奏・編成譜で共通利用）でも、同一システム内の隣接パート（ピアノの右手/左手など）の間で同様の重なりがあった。
+  - `staveTop = stave.getYForLine(-EXTRA_TOP)`（`EXTRA_TOP = 4`）
+  - `staveBot = stave.getYForLine(4 + EXTRA_BOTTOM)`（`EXTRA_BOTTOM = 6`）
+  - パート間隔 `STAVE_SPACING`（80px）に対し、余白合計（(4+6)×10px=100px 相当）の方が大きく、同様に重なっていた。
+
+### 修正設計
+
+「クリックYに最も近い段（または最も近いパート）に必ず割り当てる」方式のうち、既存コードへの侵襲が最も小さい **「当たり判定 rect 自体を隣接する段/パートとの中間点でクリップする」** 方式を採用した。
+
+- 隣接する段（パート）同士は `line0`（五線の基準位置、`stave.getYForLine(0)`）が `gap`（または `STAVE_SPACING`）間隔で並んでいるため、中間点は `自分のline0 ± (gap/2)`（スケール `s` で割った値）で求まる。
+- 上端・下端のクリップ計算は、**必ず同じ基準点（`line0`）を使う**。実装時に一度、上端クリップは `line0` 基準、下端クリップは `line4`（五線下端）基準という非対称な実装をしてしまい、五線の高さ分だけ重なりが残るバグを作り込んだため、レビューで修正した（`staveLine0` という単一の変数にまとめて両側で使うようにした）。
+- 先頭の段（パート）は上側に隣がないためクリップせず、最後の段（パート）は下側に隣がないためクリップしない。
+- 音高スナップ（`snapLineBySpacing` の 0.5行刻みロジック）自体は変更していない。変わるのは「どの段/パートの小節としてクリックを受け取るか」の当たり判定範囲だけであり、判定された段の中での音高計算ロジックは従来通り。
+
+```typescript
+// src/components/StaffCanvas.tsx（挿入用 insertRect の縦範囲）
+const halfGapY = (gap / 2) / s;
+const staveLine0 = stave.getYForLine(0);
+let rectTop = stave.getYForLine(-EXTRA_TOP_LINES);
+let rectBottom = stave.getYForLine(4 + EXTRA_BOTTOM_LINES);
+if (line > 0) {
+  rectTop = Math.max(rectTop, staveLine0 - halfGapY);
+}
+if (line < systems - 1) {
+  rectBottom = Math.min(rectBottom, staveLine0 + halfGapY);
+}
+```
+
+```typescript
+// src/components/PianoSystemCanvas.tsx（パート間の当たり判定）
+const halfPartGapY = (STAVE_SPACING / 2) / s;
+const staveLine0 = stave.getYForLine(0);
+let staveTop = stave.getYForLine(-EXTRA_TOP);
+let staveBot = stave.getYForLine(4 + EXTRA_BOTTOM);
+if (pi > 0) {
+  staveTop = Math.max(staveTop, staveLine0 - halfPartGapY);
+}
+if (pi < parts.length - 1) {
+  staveBot = Math.min(staveBot, staveLine0 + halfPartGapY);
+}
+```
+
+この方式により、五線のすぐ上下の加線2〜3本分のクリックは従来通り入力できる（クリップ境界は段/パート間隔の中間点なので、通常の加線入力範囲までは削られない）一方、隣接する段・パートの当たり判定と重ならなくなる。
+
+### 影響範囲
+
+- `src/components/StaffCanvas.tsx`（単旋律譜・複数段の当たり判定）
+- `src/components/PianoSystemCanvas.tsx`（ピアノ大譜表・弦楽四重奏・編成譜のパート間の当たり判定）
+- `src/components/StaffCanvas.test.tsx`（回帰テストを追加）
+
+### 確認ポイント
+
+- 単旋律譜で2段目の五線内・五線のすぐ上をクリックすると、2段目に正しい音高で配置されること（1段目の超低音として誤配置されないこと）
+- 1段目の五線のすぐ下（加線2本分程度）のクリックは、従来通り1段目の低音として入力できること
+- ピアノ大譜表で右手パートの下端付近・左手パートの上端付近のクリックが、それぞれ正しいパートに割り当てられること
+- 隣接する段・パートの `rect.vf-hit` 同士が縦方向に重ならないこと（ユニットテストで検証）

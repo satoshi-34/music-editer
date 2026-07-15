@@ -2092,8 +2092,26 @@ export default function StaffCanvas({
         };
 
         /* --- 小節全体：挿入用透明rect + ガイド --- */
-        const rectTop = stave.getYForLine(-EXTRA_TOP_LINES);
-        const rectBottom = stave.getYForLine(4 + EXTRA_BOTTOM_LINES);
+        // EXTRA_TOP_LINES/EXTRA_BOTTOM_LINES は五線の外側までクリックしやすくするための余白だが、
+        // 段間隔（gap）より広く取ると隣接する段の当たり判定と縦方向に重なってしまう。
+        // 重なった状態だとDOM順で先に描画された段が常にクリックを奪ってしまい、
+        // 「2段目をクリックしたのに1段目の超低音として置かれる」というバグの原因になる。
+        // そのため、隣の段との中間点（gapの半分）でクリップして、必ず最も近い段だけが
+        // クリックを受け取るようにする。
+        // 段の基準位置（line0）同士の間隔がちょうど gap/s なので、
+        // 中間点は「自分のline0 ± halfGapY」で求める。l4（五線の下端）を基準にすると
+        // 上側のクリップ（l0基準）と下側のクリップ（l4基準）がズレて、
+        // 五線の高さ分だけ隣接段と重なってしまうため、必ず同じ基準点（line0）を使う。
+        const halfGapY = (gap / 2) / s;
+        const staveLine0 = stave.getYForLine(0);
+        let rectTop = stave.getYForLine(-EXTRA_TOP_LINES);
+        let rectBottom = stave.getYForLine(4 + EXTRA_BOTTOM_LINES);
+        if (line > 0) {
+          rectTop = Math.max(rectTop, staveLine0 - halfGapY);
+        }
+        if (line < systems - 1) {
+          rectBottom = Math.min(rectBottom, staveLine0 + halfGapY);
+        }
         const insertRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
         insertRect.setAttribute('class', 'vf-hit');
         insertRect.setAttribute('data-measure-index', String(absoluteIndex));

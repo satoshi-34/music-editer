@@ -1927,8 +1927,25 @@ export default function PianoSystemCanvas({
           ev.arcs?.forEach((arc,arcIndex)=>pendingArcsP.push({partIndex:pi,arc,arcIndex,startNote:vfNotes[j],startStave:stave,startMeasureIdx:absI,startEventIdx:j}));
         });
 
-        const staveTop=stave.getYForLine(-EXTRA_TOP);
-        const staveBot=stave.getYForLine(4+EXTRA_BOTTOM);
+        // EXTRA_TOP/EXTRA_BOTTOM は五線の外側までクリックしやすくするための余白だが、
+        // STAVE_SPACING（パート間の間隔）より広く取ると、隣接パート（ピアノの右手/左手など）の
+        // 当たり判定と縦方向に重なってしまう。重なった状態だと常に先に描画されたパートが
+        // クリックを奪ってしまい、「下パートの近くをクリックしたのに上パートの低音として
+        // 置かれる」といった誤配置の原因になる。そのため、隣のパートとの中間点
+        // （STAVE_SPACINGの半分）でクリップして、必ず最も近いパートだけがクリックを
+        // 受け取るようにする。
+        // 中間点は必ず「line0（五線の基準位置）同士の中間」で求める。line4（五線下端）を
+        // 基準にすると上側のクリップ（line0基準）とズレて、五線の高さ分だけ重なってしまう。
+        const halfPartGapY = (STAVE_SPACING / 2) / s;
+        const staveLine0 = stave.getYForLine(0);
+        let staveTop=stave.getYForLine(-EXTRA_TOP);
+        let staveBot=stave.getYForLine(4+EXTRA_BOTTOM);
+        if (pi > 0) {
+          staveTop = Math.max(staveTop, staveLine0 - halfPartGapY);
+        }
+        if (pi < parts.length - 1) {
+          staveBot = Math.min(staveBot, staveLine0 + halfPartGapY);
+        }
 
         // クリック判定はすべて「アクティブ声部」の描画済み音符から作る。
         // 声部1（voiceIndex 0）のときは従来通り primaryRenderedVoice（= vfNotes/safeEvs）が

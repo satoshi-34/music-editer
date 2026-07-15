@@ -2195,4 +2195,53 @@ describe('StaffCanvas dense-note layout', () => {
     expect(fourthMeasureY).not.toBeNull();
     expect(fourthMeasureY).not.toBe(firstRowY);
   });
+
+  /**
+   * 段間クリックの当たり判定バグの回帰テスト。
+   *
+   * 以前は、小節の当たり判定rect（rect.vf-hit）が加線域を含めて上下に広く取られており、
+   * 段の間隔（gap）よりも広い場合に隣接する段の当たり判定と縦方向に重なっていた。
+   * 重なった状態だとDOM順で先に描画された段（上の段）が常にクリックを奪ってしまい、
+   * 「2段目をクリックしたのに1段目の超低音として置かれる」バグの原因になっていた。
+   *
+   * 修正後は、隣接する段との中間点でクリップされるため、上下の段の当たり判定rectは
+   * 縦方向に重ならないはず（隙間なく接するのはOK）。
+   */
+  it('隣接する段の当たり判定rectが縦方向に重ならない', () => {
+    const totalMeasures = 8;
+    const initialMeasures: MeasureData[] = Array.from({ length: totalMeasures }, () => ({ events: [] }));
+
+    const { container } = render(
+      <StaffCanvas
+        systems={3}
+        gap={110}
+        measuresPerSystem={2}
+        tool={{ duration: '4', isRest: false }}
+        scale={1}
+        initialScoreData={initialMeasures}
+      />
+    );
+
+    const rects = Array.from(container.querySelectorAll<SVGRectElement>('rect.vf-hit'));
+    expect(rects.length).toBeGreaterThan(0);
+
+    // data-measure-index順に (y, y+height) の縦範囲を集め、段ごとにグループ化する。
+    const ranges = rects.map((r) => {
+      const y = parseFloat(r.getAttribute('y') || '0');
+      const h = parseFloat(r.getAttribute('height') || '0');
+      return { top: y, bottom: y + h };
+    });
+
+    // yが異なる（＝別の段に属する）rect同士の範囲は重なってはいけない。
+    for (let i = 0; i < ranges.length; i++) {
+      for (let j = i + 1; j < ranges.length; j++) {
+        const a = ranges[i];
+        const b = ranges[j];
+        const sameRow = Math.abs(a.top - b.top) < 0.01;
+        if (sameRow) continue; // 同じ段の隣接小節同士は比較しない
+        const overlap = a.top < b.bottom - 0.01 && b.top < a.bottom - 0.01;
+        expect(overlap).toBe(false);
+      }
+    }
+  });
 });
