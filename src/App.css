@@ -954,6 +954,17 @@ button.ghost:disabled {
   cursor: pointer;
 }
 
+/* 声部2（下声）の音符用の当たり判定（透明）
+   VexFlow は SVG ルートに stroke=black を付けるため、rect 側で stroke を
+   打ち消さないと黒い縦長の枠として見えてしまう（2声部入力の追加時に発生）。
+   .vf-note-hit と同じく CSS で確実に透明化する。 */
+.vf-hit-voice2 {
+  fill: transparent !important;
+  stroke: none !important;
+  pointer-events: all;
+  cursor: pointer;
+}
+
 /* 選択中の音符の見た目（青い枠）
    これはクリック判定ではなく、現在 selected に入っている対象を見せるだけ。
    pointer-events:none なので、枠がクリックを奪って操作不能になることはありません。 */
@@ -1029,11 +1040,12 @@ button.ghost:disabled {
   /* 線が薄くならないように黒で強制。ただしクリック判定 rect は除外！ */
   .print-page svg path,
   .print-page svg line { stroke: #000 !important; fill: #000 !important; }
-  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-hit-voice2):not(.vf-note-selected):not(.vf-key-signature-debug) {
     stroke: #000 !important; fill: #000 !important;
   }
   .print-page svg rect.vf-hit,
   .print-page svg rect.vf-note-hit,
+  .print-page svg rect.vf-hit-voice2,
   .print-page svg rect.vf-note-selected,
   .print-page svg rect.vf-key-signature-debug {
     stroke: none !important; fill: transparent !important;
