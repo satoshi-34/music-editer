@@ -45,7 +45,7 @@ import {
 } from '../utils/customSymbolUtils';
 import { buildCustomSymbolEntry, drawCustomSymbolEntries, type CustomSymbolRenderEntry } from '../utils/customSymbolRenderUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
-import { getMeasureVoices, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
@@ -99,6 +99,9 @@ const CELL_PAD = 6, HIT_MIN_W = 14;
 // 符頭の左端から左右に加えるパディング（px）。この範囲内のクリックが和音追加ゾーン。
 // 隣の音符を置きたいクリックが和音追加に吸われないよう、従来値 15px の 10% に抑える。
 const CHORD_HIT_PAD = 1.5;
+// 2声部小節で、非アクティブ声部の音符を淡色表示するときの色。
+// 印刷時は App.css 側の @media print で svg path/line を強制的に #000 に戻す（紙面では常に黒）。
+const INACTIVE_VOICE_COLOR = '#9ca3af';
 // 和音追加のY判定は「五線 ± 3加線」の固定範囲
 const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
 const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）
@@ -1800,10 +1803,18 @@ export default function PianoSystemCanvas({
               // 選択中の声部（selected.voiceIndex、未指定時は 0 扱い）と一致する音符だけハイライトする。
               // こうしないと声部2を選択したときに声部1の同じインデックスも一緒に青くなってしまう。
               const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===idx&&(selected.voiceIndex??0)===voiceIndex;
+              // 2声部が共存する小節では、非アクティブ声部の音符を薄いグレーで描画する。
+              // 「今どの声部を編集しているか」を視覚的に分かりやすくするため。
+              // 声部1しか無い小節や、声部トグル自体が無い画面（単旋律譜など）では
+              // isMultiVoiceMeasure が false のままなので、従来通り常に黒で描画される
+              // （リグレッション防止）。
+              const isInactiveVoice = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
               if(isSel&&selected.keyIndex!==undefined&&!ev.isRest&&n.setKeyStyle){
                 n.setKeyStyle(selected.keyIndex,{fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
               }else if(isSel&&n.setStyle){
                 n.setStyle({fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
+              }else if(isInactiveVoice&&n.setStyle){
+                n.setStyle({fillStyle:INACTIVE_VOICE_COLOR,strokeStyle:INACTIVE_VOICE_COLOR});
               }
               return n as StaveNote;
             });
@@ -1919,36 +1930,46 @@ export default function PianoSystemCanvas({
         const staveTop=stave.getYForLine(-EXTRA_TOP);
         const staveBot=stave.getYForLine(4+EXTRA_BOTTOM);
 
-        // 声部2（下声）の音符は、まだ既存の対話レイヤー（vfNotes = voice0 前提）が
-        // クリックを拾えないので、選択・削除用の透明な当たり判定を別途重ねて置く。
-        // MVP のため対応するのは「クリックで選択」と「Delete キーで削除」のみ。
-        renderedVoiceEntries
-          .filter((entry) => entry.voiceIndex > 0)
-          .forEach((entry) => {
-            entry.vfNotes.forEach((vfNote, j) => {
-              const ev = entry.sourceEvents[j];
-              if (ev.isRest) return; // 休符は選択対象外（音価変更などは未対応）
-              const n: any = vfNote;
-              const bb = n.getBoundingBox?.();
-              const noteX = n.getAbsoluteX ? n.getAbsoluteX() : measLeft;
-              const width = bb ? bb.getW() : 20;
-              const hitRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-              hitRect.setAttribute('class', 'vf-hit-voice2');
-              hitRect.setAttribute('x', String(noteX - 3));
-              hitRect.setAttribute('y', String(staveTop));
-              hitRect.setAttribute('width', String(Math.max(6, width + 6)));
-              hitRect.setAttribute('height', String(staveBot - staveTop));
-              hitRect.setAttribute('fill', 'transparent');
-              hitRect.setAttribute('pointer-events', 'all');
-              (hitRect.style as any).cursor = 'pointer';
-              hitRect.addEventListener('click', (e) => {
-                if (disabled) return;
-                e.stopPropagation();
-                setSelected({ partIndex: pi, measure: absI, index: j, voiceIndex: entry.voiceIndex });
-              });
-              svgRoot.appendChild(hitRect);
+        // クリック判定はすべて「アクティブ声部」の描画済み音符から作る。
+        // 声部1（voiceIndex 0）のときは従来通り primaryRenderedVoice（= vfNotes/safeEvs）が
+        // そのままアクティブ声部になるので、既存の見た目・挙動を壊さない。
+        // 声部2 がアクティブなときは、その声部の vfNotes/sourceEvents に差し替えることで、
+        // 声部1と同じ操作体系（クリック位置への挿入・和音追加・臨時記号・強弱・Delete等）を
+        // 声部2の音符に対しても使えるようにする（vf-hit-voice2 の専用当たり判定・
+        // handleVoice2Click の「選択 or 末尾追記」の簡易実装はここで置き換えて廃止する）。
+        const activeRenderedEntry = renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex)
+          ?? primaryRenderedVoice;
+        const activeVfNotes = activeRenderedEntry.vfNotes;
+        const activeEvs = activeRenderedEntry.sourceEvents;
+
+        // アクティブ声部の j 番目のイベントを書き換える共通ヘルパー。
+        // voiceIndex 0 のときは withVoiceEventsUpdated が measure.events を直接更新するので、
+        // 従来通りの保存形（events 直接更新）と完全に同じ挙動になる（リグレッション防止）。
+        // compute が null を返したときは何もしない（対象が休符などで無効な場合のガード用）。
+        const updateActiveEvent = (
+          j: number,
+          // NoteEvent はこのファイル内で臨時記号など編集頻度の高いプロパティだけを
+          // 抜粋した狭い型を独自定義しているため、graceNotes/ornament のような
+          // ストレージ側の拡張プロパティを扱うツール（前打音・トリル等）で型エラーになる。
+          // ここでは既存コードと同じ考え方（一部は any 経由で読み書き）に合わせて
+          // any を許容し、呼び出し側の柔軟性を優先する。
+          compute: (targetEv: any) => any,
+        ) => {
+          setScore(prev=>{
+            const next=prev.map(cloneMeasureData);
+            if(absI>=next.length)return prev;
+            const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
+            if(!targetEv)return prev;
+            const nextEv=compute(targetEv);
+            if(!nextEv)return prev;
+            next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
+              const copy=[...events];
+              copy[j]=nextEv;
+              return copy;
             });
+            return next;
           });
+        };
 
         // タイ／スラーを arcs[] に保存する（始点の NoteEvent に TieArc を追加）
         const applyArc=(m1:number,n1:number,fromKey:string,m2:number,n2:number,toKey:string,kind:'tie'|'slur')=>{
@@ -1969,13 +1990,18 @@ export default function PianoSystemCanvas({
           // 例: 記譜音表示で D メジャー（♯2）になっている B♭管に F の線を置くと、
           // 自動的に F♯ として保存される。
           const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
-          let at=safeEvs.length,minD=Infinity;
-          if(vfNotes.length>0){
-            [{x:measLeft,j:0},{x:measRight,j:vfNotes.length}].forEach(({x,j})=>{
+          // 挿入位置（at）はアクティブ声部の描画済み音符（activeVfNotes）から判定する。
+          // 声部1のときは従来通り voice0 の並びで判定するので挙動は変わらない。
+          // 声部2がアクティブなときも同じロジックで、声部2自身の音符列に対して
+          // クリック位置に最も近い位置へ挿入できるようにする
+          // （以前は「常に末尾へ追記」の簡易実装だったが、声部1と同じ操作体系に揃えた）。
+          let at=activeEvs.length,minD=Infinity;
+          if(activeVfNotes.length>0){
+            [{x:measLeft,j:0},{x:measRight,j:activeVfNotes.length}].forEach(({x,j})=>{
               const d=Math.abs(lx-x);if(d<minD){minD=d;at=j;}
             });
-            for(let j=0;j<vfNotes.length;j++){
-              const n:any=vfNotes[j];
+            for(let j=0;j<activeVfNotes.length;j++){
+              const n:any=activeVfNotes[j];
               const lx2=n.getAbsoluteX?n.getAbsoluteX():measLeft;
               const rx2=lx2+(n.getBoundingBox?.()?.getW()??20);
               if(lx>=lx2&&lx<=rx2){at=lx<(lx2+rx2)/2?j:j+1;minD=0;break;}
@@ -1988,42 +2014,14 @@ export default function PianoSystemCanvas({
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey;
           const addDots: 1 | undefined = (tool as any)?.dots === 1 ? 1 : undefined;
 
-          // 声部2（下声）がアクティブなときは measure.events ではなく
-          // measure.voices[1] へ追加する。位置指定クリックの x 座標判定は
-          // 声部1の音符レイアウトを前提にしているため、声部2は
-          // 「まず小節末尾へ追記する」だけのシンプルな挙動にする
-          // （将来、位置指定挿入に対応する余地は design.md に残す）。
-          if (activeVoiceIndex === 1) {
-            const voice2Events = currentMeasure.voices?.[1]?.events ?? [];
-            const currentBeats2 = voice2Events.reduce((sum,event)=>sum+eventOccupiedBeats(event),0);
-            const addBeats2 = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
-            if (currentBeats2 + addBeats2 > beatsPerMeasure) {
-              return;
-            }
-            const insertedEvent2: NoteEvent = {
-              dur: addDuration,
-              isRest: !!(tool as any)?.isRest,
-              keys: [(tool as any)?.isRest ? defaultRestKeyForClef(part.clef) : key],
-              dots: addDots,
-            };
-            setScore(prev => {
-              const next = prev.map(cloneMeasureData);
-              while (absI >= next.length) next.push(createEmptyMeasure());
-              fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(part.clef));
-              next[absI] = withVoiceEventsUpdated(next[absI], 1, (events) => [...events, insertedEvent2]);
-              return next;
-            });
-            if (!insertedEvent2.isRest) {
-              playNoteEvent(insertedEvent2, part.playbackInstrument);
-            }
-            return;
-          }
-
-          const currentBeats = currentMeasure.events.reduce((sum,event)=>sum+eventOccupiedBeats(event),0);
+          const currentVoiceEvents = getVoiceEvents(currentMeasure, activeVoiceIndex);
+          const currentBeats = currentVoiceEvents.reduce((sum,event)=>sum+eventOccupiedBeats(event),0);
 
           // 3連符モード: StaffCanvas と共通のロジック（utils/tupletUtils.ts）で
           // 「音符1＋連符内休符2」のグループを一度に配置する。空きが足りなければ何もしない。
-          if((tool as any)?.tuplet){
+          // 連符の描画（Tuplet でくくる処理）は声部1（safeEvs/vfNotes）前提のままなので、
+          // 3連符モードは声部1がアクティブなときだけ有効にする（声部2は既知の制限として除外。design.md 参照）。
+          if((tool as any)?.tuplet && activeVoiceIndex === 0){
             const { groupEvents, groupBeats } = buildTupletGroupPlan(
               addDuration,
               addDots,
@@ -2061,38 +2059,17 @@ export default function PianoSystemCanvas({
             const next=prev.map(cloneMeasureData);
             while(absI>=next.length)next.push(createEmptyMeasure());
             fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(part.clef));
-            const m=next[absI];
-            m.events.splice(Math.max(0,Math.min(at,m.events.length)),0,insertedEvent);
+            next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
+              const copy=[...events];
+              copy.splice(Math.max(0,Math.min(at,copy.length)),0,insertedEvent);
+              return copy;
+            });
             return next;
           });
           if(!insertedEvent.isRest){
             // 置いた直後の確認音があると、右手左手どちらでも音高チェックがしやすい。
             playNoteEvent(insertedEvent, part.playbackInstrument);
           }
-        };
-
-        // 声部2（下声）がアクティブなときのクリックを一手に引き受けるヘルパー。
-        // 既存の声部2音符の上をクリックしたら「選択」、それ以外は「小節末尾へ追記」にする。
-        // 小節の背景クリック（ir の handler）と、声部1の音符に重なる当たり判定（hit の handler）の
-        // 両方から呼ばれるため、共通化してある（片方にしか実装しないと、クリック位置によって
-        // 挙動が変わってしまい選択できたりできなかったりする事故につながる）。
-        const handleVoice2Click = (lx: number, ly: number) => {
-          const voice2Entry = renderedVoiceEntries.find((entry) => entry.voiceIndex === 1);
-          if (voice2Entry) {
-            for (let vi = 0; vi < voice2Entry.vfNotes.length; vi++) {
-              const ev2 = voice2Entry.sourceEvents[vi];
-              if (ev2.isRest) continue;
-              const vn: any = voice2Entry.vfNotes[vi];
-              const bb2 = vn.getBoundingBox?.();
-              const noteX2 = vn.getAbsoluteX ? vn.getAbsoluteX() : measLeft;
-              const w2 = bb2 ? bb2.getW() : 20;
-              if (lx >= noteX2 - 3 && lx <= noteX2 + w2 + 3 && ly >= staveTop && ly <= staveBot) {
-                setSelected({ partIndex: pi, measure: absI, index: vi, voiceIndex: 1 });
-                return;
-              }
-            }
-          }
-          doInsert(lx, ly);
         };
 
         const isMeasureSelected = selectedMeasures != null &&
@@ -2200,10 +2177,10 @@ export default function PianoSystemCanvas({
             // 調号領域以外の背景クリックでは、音符を新規挿入しない。
             return;
           }
-          if (activeVoiceIndex === 1) {
-            handleVoice2Click(lx, ly);
-            return;
-          }
+          // 小節背景クリックは常にアクティブ声部への挿入。
+          // 声部2の既存音符の真上をクリックした場合も、doInsert 内の位置判定で
+          // その音符の直前/直後に挿入されるので違和感はない
+          // （個別音符の選択・和音追加は下の vf-note-hit 側で処理する）。
           doInsert(lx,ly);
         });
         svgRoot.appendChild(ir);
@@ -2218,17 +2195,17 @@ export default function PianoSystemCanvas({
           svgRoot.appendChild(keySignatureDebugRect);
         }
 
-        if(vfNotes.length>0){
-          const anchors=vfNotes.map((n:any,j)=>n.getAbsoluteX?n.getAbsoluteX():measLeft+(j+1)*(measRight-measLeft)/(vfNotes.length+1));
+        if(activeVfNotes.length>0){
+          const anchors=activeVfNotes.map((n:any,j)=>n.getAbsoluteX?n.getAbsoluteX():measLeft+(j+1)*(measRight-measLeft)/(activeVfNotes.length+1));
           const mids=anchors.slice(0,-1).map((a,j)=>(a+anchors[j+1])/2);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          vfNotes.forEach((n:any,j)=>{
-            if (safeEvs[j]?.__isPlaceholder) {
+          activeVfNotes.forEach((n:any,j)=>{
+            if (activeEvs[j]?.__isPlaceholder) {
               // 空小節の見た目用全休符は編集ヒット領域を持たせない。
               // 背景クリックを優先して、調号変更や新規入力をしやすくする。
               return;
             }
-            const rl=j===0?measLeft:mids[j-1], rr=j===vfNotes.length-1?measRight:mids[j];
+            const rl=j===0?measLeft:mids[j-1], rr=j===activeVfNotes.length-1?measRight:mids[j];
             // この音符イベントへクリックを届けるための透明 rect 範囲。
             // 左右は隣の音符との中間点で分割し、CELL_PAD だけ広げています。
             // 選択の青枠はここから独立した「表示」なので、クリック範囲調整はここを見る。
@@ -2264,7 +2241,7 @@ export default function PianoSystemCanvas({
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
               if(lx<measLeft||lx>measRight){hideGuide();hideChordGuide();return;}
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音ゾーン
-              const inChordZone=!safeEvs[j]?.isRest&&lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
+              const inChordZone=!activeEvs[j]?.isRest&&lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
               if(inChordZone){hideGuide();showChordGuide(xl,wHit,stave);}
               else{hideChordGuide();showGuide(lx,ly,stave);}
             });
@@ -2273,14 +2250,14 @@ export default function PianoSystemCanvas({
             // タイドラッグ開始
             hit.addEventListener('mousedown',e=>{
               if(disabled||!('mode' in tool)||tool.mode!=='tie')return;
-              if(safeEvs[j]?.isRest)return;
+              if(activeEvs[j]?.isRest)return;
               e.preventDefault();
-              const n=vfNotes[j] as unknown as Record<string,(...a:unknown[])=>unknown>;
+              const n=activeVfNotes[j] as unknown as Record<string,(...a:unknown[])=>unknown>;
               const b=n['getBoundingBox']?.() as {getY:()=>number;getH:()=>number}|undefined;
               const noteX=(n['getAbsoluteX']?.() as number|undefined)??xl;
               const bbY=b?.getY?.()??chordTopY;
               const bbH=b?.getH?.()??12;
-              const evKeys=safeEvs[j].keys;
+              const evKeys=activeEvs[j].keys;
               const avgLine=evKeys.reduce((s,k)=>s+k2l(k),0)/Math.max(evKeys.length,1);
               const stemDir=avgLine<2?-1:1;
               const noteY=stemDir===1?bbY+bbH+2:bbY-2;
@@ -2297,12 +2274,12 @@ export default function PianoSystemCanvas({
               tiePreviewPath.style.display='none';
               tieStartRef.current=null;
               if(!start||start.partIndex!==pi)return;
-              if(safeEvs[j]?.isRest)return;
+              if(activeEvs[j]?.isRest)return;
               if(start.absoluteIndex===absI&&start.noteIndex===j)return;
               (e as MouseEvent).stopPropagation();
               // 終点符頭を特定し、開始符頭と同じ key ならタイ、異なればスラー
               const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
-              const endKey=findNearestKey(safeEvs[j].keys,ly,stave,k2l);
+              const endKey=findNearestKey(activeEvs[j].keys,ly,stave,k2l);
               const kind=start.startKey===endKey?'tie':'slur';
               applyArc(start.absoluteIndex,start.noteIndex,start.startKey,absI,j,endKey,kind);
             });
@@ -2369,89 +2346,70 @@ export default function PianoSystemCanvas({
               const ottavaMode = 'mode' in tool && tool.mode === 'ottava' ? (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd' : null;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
-              // 声部2（下声）がアクティブなときは、このクリック位置判定（isOnNote など）が
-              // すべて声部1（safeEvs = measure.events）の音符配置を前提にしているため、
-              // ここで先に doInsert へ流す。声部2は「クリック位置に関わらず小節末尾へ追記」の
-              // シンプルな挙動にする設計（design.md 参照）。臨時記号・強弱などのクリック系ツールは
-              // 声部1の音符インデックス（j）を前提に書かれており、声部2に流用すると誤動作するため、
-              // 特殊ツールモード中は声部2では何もしない。
-              if (activeVoiceIndex === 1) {
-                if ('mode' in tool) return;
-                // 声部2の既存音符をクリックしたときは選択、それ以外は末尾へ追記する。
-                // 判定は handleVoice2Click に共通化してある（小節背景クリック用の ir ハンドラとも共有）。
-                handleVoice2Click(lx, ly);
-                return;
-              }
+              // この hit rect は既にアクティブ声部（activeVfNotes/activeEvs）から生成されているので、
+              // 以下の判定はそのままアクティブ声部の j 番目のイベントに対して行われる。
+              // 声部1・声部2どちらがアクティブでも同じコードパスで
+              // 和音追加・臨時記号・強弱・削除などの操作ができる。
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
-              if (accidentalMode && !safeEvs[j]?.isRest) {
+              if (accidentalMode && !activeEvs[j]?.isRest) {
                 // 多段譜でも単旋律譜と同じ感覚で使えるよう、
                 // 臨時記号は音符セル内クリックなら適用できるようにする。
                 // 符頭の狭い当たり判定だけにすると「置けない」と感じやすいため、
                 // 和音追加より先にこちらを処理する。
                 const snappedLine = snapLine(stave,ly);
-                const clickedKeyIndex = findKeyIndexAtLine(safeEvs[j].keys, snappedLine, k2l);
+                const clickedKeyIndex = findKeyIndexAtLine(activeEvs[j].keys, snappedLine, k2l);
                 const nextEv = applyAccidentalToEvent(
-                  safeEvs[j],
+                  activeEvs[j],
                   accidentalMode,
                   clickedKeyIndex>=0?clickedKeyIndex:undefined
                 );
-                setScore(prev=>{
-                  const next=prev.map(cloneMeasureData);
-                  if(absI>=next.length)return prev;
-                  const targetEv=next[absI].events[j];
-                  if(!targetEv||targetEv.isRest)return prev;
+                updateActiveEvent(j, (targetEv) => {
+                  if(targetEv.isRest)return null;
                   const latestKeyIndex = clickedKeyIndex>=0
                     ? findKeyIndexAtLine(targetEv.keys, snappedLine, k2l)
                     : -1;
-                  next[absI].events[j]=applyAccidentalToEvent(
+                  return applyAccidentalToEvent(
                     targetEv,
                     accidentalMode,
                     latestKeyIndex>=0?latestKeyIndex:undefined
                   );
-                  return next;
                 });
-                setSelected({partIndex:pi,measure:absI,index:j,keyIndex:clickedKeyIndex>=0?clickedKeyIndex:undefined});
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex>=0?clickedKeyIndex:undefined});
                 if (previewAccidentalOnApply) {
                   playNoteEvent(nextEv, part.playbackInstrument);
                 }
                 return;
               }
-              if (dynamicMode && !safeEvs[j]?.isRest) {
+              if (dynamicMode && !activeEvs[j]?.isRest) {
                 // 多段譜でも「この音符から強弱が始まる」と分かるよう、
                 // 音符セルクリックで直接 NoteEvent に強弱を付ける。
-                const nextEv = applyDynamicMarkingToEvent(safeEvs[j], dynamicMode);
-                setScore(prev=>{
-                  const next=prev.map(cloneMeasureData);
-                  if(absI>=next.length)return prev;
-                  const targetEv=next[absI].events[j];
-                  if(!targetEv||targetEv.isRest)return prev;
-                  next[absI].events[j]=applyDynamicMarkingToEvent(targetEv, dynamicMode);
-                  return next;
-                });
-                setSelected({partIndex:pi,measure:absI,index:j});
+                const nextEv = applyDynamicMarkingToEvent(activeEvs[j], dynamicMode);
+                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : applyDynamicMarkingToEvent(targetEv, dynamicMode));
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 playNoteEvent(nextEv, part.playbackInstrument);
                 return;
               }
-              if (customSymbolMode && !safeEvs[j]?.isRest) {
+              if (customSymbolMode && !activeEvs[j]?.isRest) {
                 // カスタム記号も既存音符にトグルで付け外しする（StaffCanvas と同じ挙動）。
-                const nextEv = applyCustomSymbolToEvent(safeEvs[j], customSymbolMode);
-                setScore(prev=>{
-                  const next=prev.map(cloneMeasureData);
-                  if(absI>=next.length)return prev;
-                  const targetEv=next[absI].events[j];
-                  if(!targetEv||targetEv.isRest)return prev;
-                  next[absI].events[j]=applyCustomSymbolToEvent(targetEv, customSymbolMode);
-                  return next;
-                });
-                setSelected({partIndex:pi,measure:absI,index:j});
+                const nextEv = applyCustomSymbolToEvent(activeEvs[j], customSymbolMode);
+                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : applyCustomSymbolToEvent(targetEv, customSymbolMode));
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 playNoteEvent(nextEv, part.playbackInstrument);
                 return;
               }
-              if (customSymbolResizeMode && !safeEvs[j]?.isRest) {
+              // カスタム記号のサイズ変更・位置調整・テキスト要素は、確定処理（handleSymbolResizeConfirm 等）が
+              // partData[...].events[eventIndex] を直接書き換える前提で実装されており、
+              // まだ声部（voiceIndex）を持っていない。声部2の音符へ適用すると声部1側を誤って
+              // 書き換えてしまうため、これらのツールは当面「声部1のみ対応」の既知の制限とする
+              // （design.md 参照）。
+              if (customSymbolResizeMode && activeVoiceIndex !== 0) return;
+              if (customSymbolOffsetMode && activeVoiceIndex !== 0) return;
+              if (textElementMode && activeVoiceIndex !== 0) return;
+              if (customSymbolResizeMode && !activeEvs[j]?.isRest) {
                 // サイズ変更は「その音符に対象記号が既に付いている場合」のみオーバーレイを開く
                 // （StaffCanvas と同じ考え方。付いていない記号を新規に生やす事故を防ぐ）。
-                const existing = safeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolResizeMode);
+                const existing = activeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolResizeMode);
                 if (!existing) return;
                 const containerRect = containerRef.current?.getBoundingClientRect();
                 const currentPercent = Math.round((existing.scale ?? 1) * 100);
@@ -2466,9 +2424,9 @@ export default function PianoSystemCanvas({
                 });
                 return;
               }
-              if (customSymbolOffsetMode && !safeEvs[j]?.isRest) {
+              if (customSymbolOffsetMode && !activeEvs[j]?.isRest) {
                 // 位置調整も同様に、対象記号が既に付いている場合のみオーバーレイを開く。
-                const existing = safeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolOffsetMode);
+                const existing = activeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolOffsetMode);
                 if (!existing) return;
                 const containerRect = containerRef.current?.getBoundingClientRect();
                 setSymbolOffsetEditState({
@@ -2483,13 +2441,10 @@ export default function PianoSystemCanvas({
                 });
                 return;
               }
-              if (graceNoteMode && !safeEvs[j]?.isRest) {
+              if (graceNoteMode && !activeEvs[j]?.isRest) {
                 // 前打音をトグルで付け外しする
-                setScore(prev=>{
-                  const next=prev.map(cloneMeasureData);
-                  if(absI>=next.length)return prev;
-                  const targetEv=next[absI].events[j];
-                  if(!targetEv||targetEv.isRest)return prev;
+                updateActiveEvent(j, (targetEv) => {
+                  if(targetEv.isRest)return null;
                   const hasGrace=(targetEv.graceNotes?.length??0)>0;
                   // 前打音のデフォルト音高は主音符の1音上（stepUp 関数は StaffCanvas と同じロジック）
                   const graceKey=targetEv.keys[0]??'b/4';
@@ -2503,66 +2458,44 @@ export default function PianoSystemCanvas({
                           : `${noteNames[idx+1]}/${m[2]}`;
                       })()
                     : graceKey;
-                  next[absI].events[j]=hasGrace
+                  return hasGrace
                     ?{...targetEv,graceNotes:undefined}
                     :{...targetEv,graceNotes:[{keys:[nextKey],slash:true}]};
-                  return next;
                 });
-                setSelected({partIndex:pi,measure:absI,index:j});
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 return;
               }
-              if (trillMode && !safeEvs[j]?.isRest) {
+              if (trillMode && !activeEvs[j]?.isRest) {
                 // トリル記号をトグルで付け外しする
-                setScore(prev=>{
-                  const next=prev.map(cloneMeasureData);
-                  if(absI>=next.length)return prev;
-                  const targetEv=next[absI].events[j];
-                  if(!targetEv||targetEv.isRest)return prev;
-                  next[absI].events[j]={
-                    ...targetEv,
-                    ornament:targetEv.ornament==='trill'?undefined:'trill',
-                  };
-                  return next;
+                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : {
+                  ...targetEv,
+                  ornament:targetEv.ornament==='trill'?undefined:'trill',
                 });
-                setSelected({partIndex:pi,measure:absI,index:j});
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 return;
               }
-              if (pedalMode && safeEvs[j] && !safeEvs[j].__isPlaceholder) {
+              if (pedalMode && activeEvs[j] && !activeEvs[j].__isPlaceholder) {
                 // ペダル記号をトグルで付け外しする
-                setScore(prev=>{
-                  const next=prev.map(cloneMeasureData);
-                  if(absI>=next.length)return prev;
-                  const targetEv=next[absI].events[j];
-                  if(!targetEv)return prev;
-                  next[absI].events[j]={
-                    ...targetEv,
-                    pedalMark: targetEv.pedalMark===pedalMode?undefined:pedalMode,
-                  };
-                  return next;
-                });
-                setSelected({partIndex:pi,measure:absI,index:j});
+                updateActiveEvent(j, (targetEv) => ({
+                  ...targetEv,
+                  pedalMark: targetEv.pedalMark===pedalMode?undefined:pedalMode,
+                }));
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 return;
               }
-              if (ottavaMode && safeEvs[j] && !safeEvs[j].__isPlaceholder) {
+              if (ottavaMode && activeEvs[j] && !activeEvs[j].__isPlaceholder) {
                 // オッターバ記号をトグルで付け外しする
-                setScore(prev=>{
-                  const next=prev.map(cloneMeasureData);
-                  if(absI>=next.length)return prev;
-                  const targetEv=next[absI].events[j];
-                  if(!targetEv)return prev;
-                  next[absI].events[j]={
-                    ...targetEv,
-                    ottava: targetEv.ottava===ottavaMode?undefined:ottavaMode,
-                  };
-                  return next;
-                });
-                setSelected({partIndex:pi,measure:absI,index:j});
+                updateActiveEvent(j, (targetEv) => ({
+                  ...targetEv,
+                  ottava: targetEv.ottava===ottavaMode?undefined:ottavaMode,
+                }));
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 return;
               }
-              if (textElementMode && safeEvs[j] && !safeEvs[j].__isPlaceholder) {
+              if (textElementMode && activeEvs[j] && !activeEvs[j].__isPlaceholder) {
                 // テキスト要素はクリック位置にオーバーレイを表示して文字入力を受け付ける。
                 // TextElementKind で NoteEvent を索引するため any キャストを使う
-                const currentText = (safeEvs[j] as any)[textElementMode] ?? '';
+                const currentText = (activeEvs[j] as any)[textElementMode] ?? '';
                 const containerRect = containerRef.current?.getBoundingClientRect();
                 const me = e as MouseEvent;
                 setTextEditState({
@@ -2574,15 +2507,15 @@ export default function PianoSystemCanvas({
                   overlayX: me.clientX - (containerRect?.left ?? 0),
                   overlayY: me.clientY - (containerRect?.top ?? 0),
                 });
-                setSelected({partIndex:pi,measure:absI,index:j});
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 return;
               }
 
-              if(!safeEvs[j]?.isRest){
+              if(!activeEvs[j]?.isRest){
 
                 const snappedLine = snapLine(stave,ly);
                 const newKey=applyKeySignatureToNaturalKey(l2k(snappedLine), partKeyForAccidental);
-                const currentEv=safeEvs[j];
+                const currentEv=activeEvs[j];
                 // 和音内の既存音を個別選択する入口。
                 // snappedLine が currentEv.keys[] のどれかと一致したら keyIndex を保存し、
                 // Delete/矢印/臨時記号がその1音だけに効くようにする。
@@ -2590,7 +2523,7 @@ export default function PianoSystemCanvas({
                 // 同じ高さの既存音をクリックした扱いになります。
                 const clickedKeyIndex = findKeyIndexAtLine(currentEv.keys, snappedLine, k2l);
                 if(clickedKeyIndex>=0){
-                  setSelected({partIndex:pi,measure:absI,index:j,keyIndex:clickedKeyIndex});
+                  setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex});
                   playNoteEvent({...currentEv,keys:[currentEv.keys[clickedKeyIndex]]}, part.playbackInstrument);
                   return;
                 }
@@ -2605,18 +2538,11 @@ export default function PianoSystemCanvas({
                   const newKeys=[...currentEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
                   selectedKeyIndex = newKeys.indexOf(newKey);
                   playEvent = { ...currentEv, keys: newKeys };
-                  setScore(prev=>{
-                    const next=prev.map(cloneMeasureData);
-                    if(absI>=next.length)return prev;
-                    const targetEv=next[absI].events[j];
-                    if(!targetEv||targetEv.isRest)return prev;
-                    next[absI].events[j]={...targetEv,keys:newKeys};
-                    return next;
-                  });
+                  updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : {...targetEv,keys:newKeys});
                 }
-                setSelected({partIndex:pi,measure:absI,index:j,keyIndex:selectedKeyIndex});
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:selectedKeyIndex});
                 playNoteEvent(playEvent, part.playbackInstrument);
-              }else if(safeEvs[j]?.isRest){
+              }else if(activeEvs[j]?.isRest){
                 if (dynamicMode) return;
                 if (customSymbolMode) return;
                 if (customSymbolResizeMode) return;
@@ -2659,11 +2585,12 @@ export default function PianoSystemCanvas({
                 // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
                 const noteVisualCenter=restBodyCenterX;
                 const noteAfterRest=lx>=noteVisualCenter;
-                const restReplacement=buildRestEditReplacement(safeEvs[j],key,tool,noteAfterRest);
+                const restReplacement=buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest);
                 const isSameRestSelected =
                   selRef.current?.partIndex===pi &&
                   selRef.current?.measure===absI &&
-                  selRef.current?.index===j;
+                  selRef.current?.index===j &&
+                  (selRef.current?.voiceIndex??0)===activeVoiceIndex;
                 if(restReplacement&&isSameRestSelected){
                   // 休符クリックでは、同音価なら置換、より短い音価なら分割して差し込む。
                   // 1回目のクリックでは休符を選択し、
@@ -2671,15 +2598,20 @@ export default function PianoSystemCanvas({
                   // これで Delete や ↑/↓ の対象にもできる。
                   setScore(prev=>{
                     const next=prev.map(cloneMeasureData);
+                    // 声部1側の休符補完は従来どおり必要（声部2の拍位置合わせのため）。
                     fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(part.clef));
-                    const targetEv=next[absI]?.events[j];
+                    const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
                     if(!targetEv?.isRest)return prev;
                     const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest);
                     if(!latestReplacement)return prev;
-                    next[absI].events.splice(j,1,...latestReplacement);
+                    next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
+                      const copy=[...events];
+                      copy.splice(j,1,...latestReplacement);
+                      return copy;
+                    });
                     return next;
                   });
-                  setSelected({partIndex:pi,measure:absI,index:j+(restReplacement.length===2&&noteAfterRest?1:0)});
+                  setSelected({partIndex:pi,measure:absI,index:j+(restReplacement.length===2&&noteAfterRest?1:0),voiceIndex:activeVoiceIndex});
                   const insertedEvent = restReplacement.find((event) => !event.isRest);
                   if (insertedEvent) {
                     // 休符を音符へ置換・分割したときも、新しく入った音だけ確認できるようにする。
@@ -2687,7 +2619,7 @@ export default function PianoSystemCanvas({
                   }
                   return;
                 }
-                setSelected({partIndex:pi,measure:absI,index:j});
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 if(restReplacement){
                   return;
                 }
@@ -2704,35 +2636,35 @@ export default function PianoSystemCanvas({
             });
             svgRoot.appendChild(hit);
 
-            if (!safeEvs[j]?.__isPlaceholder && safeEvs[j]?.dynamics?.length) {
+            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.dynamics?.length) {
               dynamicTextEntries.push({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 baseY: stave.getYForLine(4) + 26,
-                markings: safeEvs[j].dynamics,
+                markings: activeEvs[j].dynamics,
               });
             }
             {
               // その段（パート）の五線上端を基準にした統一高さで描く。
               // StaffCanvas と同じ共通ユーティリティを使うことで見た目を揃える。
               const entry = buildCustomSymbolEntry(
-                safeEvs[j],
+                activeEvs[j],
                 noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 stave.getYForLine(0),
               );
               if (entry) customSymbolEntries.push(entry);
             }
-            if (!safeEvs[j]?.__isPlaceholder && safeEvs[j]?.pedalMark) {
+            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.pedalMark) {
               pedalMarkEntries.push({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 botY: stave.getYForLine(4),
-                mark: safeEvs[j].pedalMark!,
+                mark: activeEvs[j].pedalMark!,
               });
             }
-            if (!safeEvs[j]?.__isPlaceholder && safeEvs[j]?.ottava) {
+            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.ottava) {
               const cx = noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2);
               const topY = stave.getYForLine(0);
               const botY = stave.getYForLine(4);
-              const ot = safeEvs[j].ottava!;
+              const ot = activeEvs[j].ottava!;
               if (ot === '8va') {
                 pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14 };
               } else if (ot === '8vb') {
@@ -2746,9 +2678,9 @@ export default function PianoSystemCanvas({
               }
             }
 
-            const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===j;
+            const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===j&&(selected.voiceIndex??0)===activeVoiceIndex;
             if(isSel){
-              const selectedKey = selected.keyIndex!==undefined ? safeEvs[j]?.keys[selected.keyIndex] : undefined;
+              const selectedKey = selected.keyIndex!==undefined ? activeEvs[j]?.keys[selected.keyIndex] : undefined;
               const selectedY = selectedKey ? stave.getYForLine(k2l(selectedKey)) : undefined;
               const sr=document.createElementNS('http://www.w3.org/2000/svg','rect');
               sr.setAttribute('class','vf-note-selected');
@@ -2771,6 +2703,57 @@ export default function PianoSystemCanvas({
               svgRoot.appendChild(sr);
             }
           });
+        }
+
+        // 非アクティブ声部の強弱・カスタム記号・ペダル・オッターバの「見た目」も引き続き描画する。
+        // 上のインタラクティブ層（hit rect・クリックハンドラ）はアクティブ声部だけから作るが、
+        // それだけだと「声部2に切り替えた瞬間、声部1に付けた強弱記号が画面から消える」という
+        // 表示上の退行が起きてしまう。ここでは当たり判定を持たない“見た目だけ”の描画として、
+        // 非アクティブ声部にも同じマーカーを描き足す。
+        if (isMultiVoiceMeasure) {
+          renderedVoiceEntries
+            .filter((entry) => entry.voiceIndex !== activeVoiceIndex)
+            .forEach((entry) => {
+              entry.vfNotes.forEach((n: any, j) => {
+                const ev = entry.sourceEvents[j];
+                if (!ev || ev.__isPlaceholder) return;
+                const bb = n.getBoundingBox?.();
+                const noteVisualLeft = bb?.getX?.() ?? (n.getAbsoluteX?.() ?? measLeft);
+                const noteVisualRight = bb ? noteVisualLeft + (bb.getW?.() ?? 12) : noteVisualLeft + 12;
+                const cx = noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2);
+                if (ev.dynamics?.length) {
+                  dynamicTextEntries.push({
+                    anchorX: cx,
+                    baseY: stave.getYForLine(4) + 26,
+                    markings: ev.dynamics,
+                  });
+                }
+                const symbolEntry = buildCustomSymbolEntry(ev, cx, stave.getYForLine(0));
+                if (symbolEntry) customSymbolEntries.push(symbolEntry);
+                if (ev.pedalMark) {
+                  pedalMarkEntries.push({
+                    anchorX: cx,
+                    botY: stave.getYForLine(4),
+                    mark: ev.pedalMark,
+                  });
+                }
+                if (ev.ottava) {
+                  const topY = stave.getYForLine(0);
+                  const botY = stave.getYForLine(4);
+                  if (ev.ottava === '8va') {
+                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14 };
+                  } else if (ev.ottava === '8vb') {
+                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14 };
+                  } else if (pendingOttava && ev.ottava === '8vaEnd' && pendingOttava.kind === '8va') {
+                    ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
+                    pendingOttava = null;
+                  } else if (pendingOttava && ev.ottava === '8vbEnd' && pendingOttava.kind === '8vb') {
+                    ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
+                    pendingOttava = null;
+                  }
+                }
+              });
+            });
         }
       }); // end parts.forEach
 

@@ -1040,12 +1040,11 @@ button.ghost:disabled {
   /* 線が薄くならないように黒で強制。ただしクリック判定 rect は除外！ */
   .print-page svg path,
   .print-page svg line { stroke: #000 !important; fill: #000 !important; }
-  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-hit-voice2):not(.vf-note-selected):not(.vf-key-signature-debug) {
+  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
     stroke: #000 !important; fill: #000 !important;
   }
   .print-page svg rect.vf-hit,
   .print-page svg rect.vf-note-hit,
-  .print-page svg rect.vf-hit-voice2,
   .print-page svg rect.vf-note-selected,
   .print-page svg rect.vf-key-signature-debug {
     stroke: none !important; fill: transparent !important;

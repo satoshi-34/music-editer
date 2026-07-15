@@ -180,6 +180,90 @@ describe('voiceMeasureUtils', () => {
     });
   });
 
+  // PianoSystemCanvas のクリック処理は「アクティブ声部だけに作用する」ように統一されており、
+  // 挿入・和音追加・休符分割はすべて withVoiceEventsUpdated(measure, activeVoiceIndex, ...) を
+  // 経由する。ここでは実際のクリックハンドラと同じ更新パターンを声部0・声部1の両方で検証し、
+  // 「声部1は従来どおり、声部2も同じ操作体系で編集できる」ことを保証する。
+  describe('クリック位置への挿入・和音追加・休符分割（声部0/声部1で同じ更新パターン）', () => {
+    it('位置指定挿入（splice）は voiceIndex 0 のとき measure.events に直接反映される', () => {
+      const measure: MeasureData = {
+        events: [
+          { dur: '4', isRest: false, keys: ['c/4'] },
+          { dur: '4', isRest: false, keys: ['e/4'] },
+        ],
+      };
+      const inserted = { dur: '4', isRest: false, keys: ['d/4'] } as const;
+      const next = withVoiceEventsUpdated(measure, 0, (events) => {
+        const copy = [...events];
+        copy.splice(1, 0, inserted);
+        return copy;
+      });
+      expect(next.events.map((e) => e.keys[0])).toEqual(['c/4', 'd/4', 'e/4']);
+      expect(next.voices).toBeUndefined();
+    });
+
+    it('位置指定挿入（splice）は voiceIndex 1 のとき声部2のクリック位置に挿入できる（以前は末尾追記のみだった）', () => {
+      const measure: MeasureData = {
+        events: [{ dur: '4', isRest: false, keys: ['c/4'] }],
+        voices: [
+          { id: 'voice-1', events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
+          { id: 'voice-2', stemDirection: 'down', events: [
+            { dur: '4', isRest: false, keys: ['g/3'] },
+            { dur: '4', isRest: false, keys: ['c/3'] },
+          ] },
+        ],
+      };
+      const inserted = { dur: '4', isRest: false, keys: ['e/3'] } as const;
+      const next = withVoiceEventsUpdated(measure, 1, (events) => {
+        const copy = [...events];
+        copy.splice(1, 0, inserted); // 先頭と2番目の間（クリック位置）に差し込む
+        return copy;
+      });
+      expect(next.voices?.[1].events.map((e) => e.keys[0])).toEqual(['g/3', 'e/3', 'c/3']);
+      // 声部1は変更されない
+      expect(next.voices?.[0].events).toEqual(measure.voices?.[0].events);
+    });
+
+    it('和音追加（既存イベントを keys 差し替えで更新）は voiceIndex 1 でも声部1と同じパターンで書ける', () => {
+      const measure: MeasureData = {
+        events: [{ dur: '4', isRest: false, keys: ['c/4'] }],
+        voices: [
+          { id: 'voice-1', events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
+          { id: 'voice-2', stemDirection: 'down', events: [{ dur: '4', isRest: false, keys: ['c/3'] }] },
+        ],
+      };
+      const next = withVoiceEventsUpdated(measure, 1, (events) => {
+        const copy = [...events];
+        copy[0] = { ...copy[0], keys: [...copy[0].keys, 'e/3'] };
+        return copy;
+      });
+      expect(next.voices?.[1].events[0].keys).toEqual(['c/3', 'e/3']);
+    });
+
+    it('休符クリックによる置換・分割（splice で1件→2件）は voiceIndex 1 でも動く', () => {
+      const measure: MeasureData = {
+        events: [{ dur: '4', isRest: false, keys: ['c/4'] }],
+        voices: [
+          { id: 'voice-1', events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
+          { id: 'voice-2', stemDirection: 'down', events: [{ dur: '2', isRest: true, keys: ['d/3'] }] },
+        ],
+      };
+      // 「2分休符」を「4分音符＋4分休符」に分割する想定（休符クリック時の挙動と同じ形）
+      const replacement = [
+        { dur: '4', isRest: false, keys: ['c/3'] },
+        { dur: '4', isRest: true, keys: ['d/3'] },
+      ] as const;
+      const next = withVoiceEventsUpdated(measure, 1, (events) => {
+        const copy = [...events];
+        copy.splice(0, 1, ...replacement);
+        return copy;
+      });
+      expect(next.voices?.[1].events).toHaveLength(2);
+      expect(next.voices?.[1].events[0]).toEqual(replacement[0]);
+      expect(next.voices?.[1].events[1]).toEqual(replacement[1]);
+    });
+  });
+
   describe('resolveVoiceStemDirections（2声部の符幹向き固定）', () => {
     it('声部が1つだけなら stemDirection を上書きしない（自動判定のまま）', () => {
       const voices = [{ id: 'voice-1', events: [{ dur: '4' as const, isRest: false, keys: ['c/4'] }] }];
