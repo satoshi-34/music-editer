@@ -55,7 +55,7 @@ import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[] };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
@@ -1186,6 +1186,8 @@ export default function PianoSystemCanvas({
     const customSymbolEntries: CustomSymbolRenderEntry[] = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
+    // 運指番号の描画情報を収集する（符頭のすぐ上に表示）
+    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; text: string }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     const ottavaEntries: Array<{
       kind: '8va' | '8vb';
@@ -2705,6 +2707,13 @@ export default function PianoSystemCanvas({
                 mark: activeEvs[j].pedalMark!,
               });
             }
+            if (!activeEvs[j]?.__isPlaceholder && !activeEvs[j]?.isRest && activeEvs[j]?.fingering) {
+              fingeringEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
+                text: activeEvs[j].fingering!,
+              });
+            }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.ottava) {
               const cx = noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2);
               const topY = stave.getYForLine(0);
@@ -2782,6 +2791,13 @@ export default function PianoSystemCanvas({
                     mark: ev.pedalMark,
                   });
                 }
+                if (!ev.isRest && ev.fingering) {
+                  fingeringEntries.push({
+                    anchorX: cx,
+                    noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
+                    text: ev.fingering,
+                  });
+                }
                 if (ev.ottava) {
                   const topY = stave.getYForLine(0);
                   const botY = stave.getYForLine(4);
@@ -2828,6 +2844,20 @@ export default function PianoSystemCanvas({
 
     // ── カスタム記号を一括描画（StaffCanvas と同じ共通ユーティリティを使う） ──
     drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot);
+
+    // 運指番号: 符頭のすぐ上（noteTopY - 10）に小さめのフォントで表示する
+    fingeringEntries.forEach(({ anchorX, noteTopY, text }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = text;
+      el.setAttribute('x', String(anchorX));
+      el.setAttribute('y', String(noteTopY - 10));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#1f2937');
+      el.setAttribute('font-family', 'sans-serif');
+      el.setAttribute('font-size', '10');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
     pedalMarkEntries.forEach(({ anchorX, botY, mark }) => {

@@ -5,7 +5,7 @@
 import type { NoteEvent } from '../types/storage';
 
 /** テキスト要素の種別 */
-export type TextElementKind = 'lyrics' | 'chordSymbol' | 'tempoMarking' | 'expressionMarking';
+export type TextElementKind = 'lyrics' | 'chordSymbol' | 'tempoMarking' | 'expressionMarking' | 'fingering';
 
 /**
  * 音符イベントにテキスト要素を設定する。
@@ -31,6 +31,7 @@ export function textElementLabel(kind: TextElementKind): string {
     case 'chordSymbol':      return 'コード記号';
     case 'tempoMarking':     return 'テンポ表記';
     case 'expressionMarking': return '発想標語';
+    case 'fingering':         return '運指';
   }
 }
 
@@ -43,5 +44,6 @@ export function textElementPlaceholder(kind: TextElementKind): string {
     case 'chordSymbol':      return '例: Am, G7';
     case 'tempoMarking':     return '例: Allegro, ♩=120';
     case 'expressionMarking': return '例: espressivo';
+    case 'fingering':         return '例: 3 / 1,3,5 / 5-1';
   }
 }

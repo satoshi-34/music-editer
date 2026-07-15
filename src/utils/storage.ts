@@ -142,6 +142,13 @@ function validateNoteEvent(event: any): event is NoteEvent {
         Number.isInteger(event.tuplet.numNotes) && event.tuplet.numNotes > 0 &&
         Number.isInteger(event.tuplet.notesOccupied) && event.tuplet.notesOccupied > 0
       )
+    ) &&
+    (
+      // 運指番号（fingering）は自由文字列だが、壊れたデータや巨大な文字列が
+      // 紛れ込まないよう「8文字以内の文字列」という緩いバリデーションのみ行う。
+      // 例: '3'（単音）, '1,3,5'（和音）, '5-1'（指替え）
+      event.fingering === undefined ||
+      (typeof event.fingering === 'string' && event.fingering.length > 0 && event.fingering.length <= 8)
     )
   );
 }

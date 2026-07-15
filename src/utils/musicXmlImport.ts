@@ -88,6 +88,14 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
     if (isChord && chordBuffer) {
       // 和音: 前の音符に音高を追加する
       chordBuffer.keys.push(key);
+      // この音にも運指番号があれば、既存の運指リストにカンマ区切りで追加する
+      // （和音の音の順番と運指番号の順番を対応させるため）
+      const chordFingerEl = noteEl.querySelector('technical fingering');
+      if (chordFingerEl?.textContent) {
+        chordBuffer.fingering = chordBuffer.fingering
+          ? `${chordBuffer.fingering},${chordFingerEl.textContent.trim()}`
+          : chordFingerEl.textContent.trim();
+      }
     } else {
       if (chordBuffer) events.push(chordBuffer);
       chordBuffer = { dur: dur as any, isRest: false, keys: [key], dots, tuplet };
@@ -110,6 +118,10 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
       // 歌詞
       const lyricEl = noteEl.querySelector('lyric text');
       if (lyricEl?.textContent) chordBuffer.lyrics = lyricEl.textContent;
+
+      // 運指番号（この音符の1音目ぶん。和音の2音目以降は isChord 分岐側で追加する）
+      const fingerEl = noteEl.querySelector('technical fingering');
+      if (fingerEl?.textContent) chordBuffer.fingering = fingerEl.textContent.trim();
     }
   }
   if (chordBuffer) events.push(chordBuffer);

@@ -1296,6 +1296,8 @@ export default function StaffCanvas({
     const lyricsEntries: Array<{ anchorX: number; botY: number; text: string }> = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
+    // 運指番号の描画情報を収集する（符頭のすぐ上に表示）
+    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; text: string }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     // start と end の x 座標・y 座標を記録して後でまとめて線を引く
     const ottavaEntries: Array<{
@@ -2828,6 +2830,14 @@ export default function StaffCanvas({
                 markings: safeEvents[j].articulations,
               });
             }
+            if (!safeEvents[j]?.__isPlaceholder && !safeEvents[j]?.isRest && safeEvents[j]?.fingering) {
+              fingeringEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                // 符頭 BoundingBox の上端を基準にする（ない場合は五線上端より少し上を使う）
+                noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
+                text: safeEvents[j].fingering!,
+              });
+            }
             {
               // 音符の符頭上端ではなく、その段の五線上端を基準にした固定値にする。
               // これにより音高（音符ごとの上下）に関わらず同じ段の記号は同じ高さに揃う。
@@ -3063,6 +3073,22 @@ export default function StaffCanvas({
       el.setAttribute('font-family', '"Times New Roman", serif');
       el.setAttribute('font-size', '12');
       el.setAttribute('font-weight', 'bold');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
+    // 運指番号: 符頭のすぐ上（noteTopY - 10）に小さめのフォントで表示する。
+    // 符幹の向きによる回避は行わず、常に符頭上端基準の固定オフセットにする
+    // （設計判断: 実装をシンプルに保つため。design.md 参照）。
+    fingeringEntries.forEach(({ anchorX, noteTopY, text }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = text;
+      el.setAttribute('x', String(anchorX));
+      el.setAttribute('y', String(noteTopY - 10));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#1f2937');
+      el.setAttribute('font-family', 'sans-serif');
+      el.setAttribute('font-size', '10');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });

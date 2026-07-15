@@ -145,6 +145,62 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
 - input/textarea フォーカス中・Ctrl/Cmd 押下中は無効化
 - `setTool` で Palette の選択状態を更新するため、視覚的なフィードバックも得られる
 
+### 8. 運指番号（指使いの数字、2026-07-16）
+
+**背景**: バッハのアルマンドのような譜例では音符の上に運指番号（1〜5）が付く。既存のテキスト系記号
+（歌詞・コード記号・テンポ表記・発想標語。`textElementUtils.ts` の `TextElementKind` 経由でパレット→
+音符クリック→インライン入力欄というパターンで実装済み）と、装飾記号（トグル式）の2つの実装パターンが
+既にあったため、運指番号は「自由記述のテキストを音符に1つ付ける」という性質上、前者（テキスト系記号）
+のパターンに素直に乗せた。
+
+**設計判断（実装パターンの選択）**:
+- **データ型**: `NoteEvent.fingering?: string`。1〜5の単一数字が主だが、和音用の複数指定
+  （`'1,3,5'` のようにカンマ区切り）や指替え（`'5-1'`）も入力できるよう自由文字列にした。
+  バリデーションは「1〜8文字の非空文字列」という緩いチェックのみ（`src/utils/storage.ts` の
+  `validateNoteEvent` に追加）。他のテキスト系フィールド（`lyrics`/`chordSymbol`等）は現状バリデーション
+  対象外だが、運指は要件で明示されたため追加した。
+- **入力UI**: `textElementUtils.ts` の `TextElementKind` に `'fingering'` を追加するだけで、
+  パレットの「演奏記号」タブへのボタン追加・インライン入力欄（Enter確定/Escapeキャンセル/空欄で削除）が
+  StaffCanvas・PianoSystemCanvas 両方に自動的に乗る（既存の汎用実装のおかげで追加コード量が少ない）。
+  Palette.tsx にはアイコン（丸で囲んだ「3」）を追加。
+- **描画**: VexFlow の `Annotation`/`FretHandFinger` は使わず、既存のコード記号・歌詞と同じ
+  「SVGテキスト直描き」パターンに統一した（このアプリの装飾記号・テキスト系記号は全てこの方式で、
+  VexFlow 標準機能を使うと位置調整や淡色表示（2声部対応）との統一感が失われるため）。
+  位置は音符の符頭 BoundingBox 上端（`bb.getY()`）から `-10px` の固定オフセット。
+  スタッカート等アーティキュレーションと同様「符幹の向きを避ける」処理までは行わず、
+  常に符頭上端基準にする設計にした（実装をシンプルに保つため。要件でも「実装が複雑なら固定高さで可」と
+  許容されていた）。フォントは sans-serif・10px・非イタリックで、コード記号（Times New Roman・12px）や
+  発想標語（イタリック）と視覚的に区別できるようにした。
+- **PianoSystemCanvas**: ローカル `NoteEvent` 型（`types/storage.ts` を直接参照しない、line 58）に
+  `fingering?: string` を追加。この型には元々 `lyrics`/`chordSymbol`/`tempoMarking`/`expressionMarking`
+  が存在せず、ピアノ譜ではこれらのテキスト系記号は描画されていなかった（既存の未実装ギャップ）。
+  運指番号は要件で明示的にピアノ譜対応が求められたため、アクティブ声部・非アクティブ声部の両方の
+  描画ループに収集処理を追加し、他の記号（ペダル記号など）と同じ場所に描画コードを追加した。
+- **MusicXML**:
+  - 書き出し: `<notations><technical><fingering>N</fingering></technical></notations>`。
+    和音で `fingering` がカンマ区切り（例 `'1,3,5'`）の場合、`ev.fingering.split(',')` で分割し、
+    和音の各音（`<chord/>` で連なる `<note>` 要素）に順番に対応する運指を1つずつ割り当てて、
+    複数の `<fingering>` 要素として書き出す（音1つにつき `<technical>` は1つ）。
+  - 読み込み: 和音の最初の音は通常の `<technical><fingering>` 読み込みロジックで拾い、
+    2音目以降（`<chord/>` 要素）は個別に運指を読み取って `chordBuffer.fingering` にカンマ区切りで
+    追記していく（和音内の音の出現順とカンマの順序が対応する設計）。
+  - 既存の `articulationsXml` 関数を `fingerValue` 引数を取れるよう拡張し、同じ `<notations>` 要素に
+    `<technical>` を追加する形にまとめた（アーティキュレーション・装飾記号・運指を1つの `<notations>` に
+    出力する既存の構造を踏襲）。
+- **保存/読込・Undo**: 既存テキスト系と同じ経路（`applyTextElementToEvent` 経由で `setScore` の
+  スナップショット履歴に乗る）ため追加対応不要。
+- **テスト**: `src/utils/fingering.test.ts`（新規）で以下を検証
+  - `applyTextElementToEvent` による付与・空文字での削除
+  - 日本語ラベル・プレースホルダー
+  - storage.ts バリデーション（8文字以内、空文字は不正、未指定は許可）
+  - MusicXML 書き出し（`<technical><fingering>`）・単音ラウンドトリップ・和音（カンマ区切り→複数
+    `<fingering>` 要素→カンマ区切りで復元）のラウンドトリップ・運指なし音符には `<technical>` が
+    出力されないこと
+- **ブラウザ確認**: dev サーバー上で単旋律譜の音符に運指 `3` を付与して符頭上に表示されることを確認、
+  空欄確定で削除されることを確認、ピアノ譜（大譜表）に切り替えても既存の運指が表示され続けることを確認、
+  保存→リロード→「保存された譜面を読み込み」で運指が復元されることを確認、Undo で運指付与前の状態に
+  戻ることを確認。コンソールエラーなし。
+
 ## 影響範囲
 
 - `src/types/storage.ts`: `NoteEvent` に `graceNotes`, `ornament`, `pedalMark`, `ottava` を追加。`OrnamentType` 型を新設
@@ -154,8 +210,13 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
 - `src/components/PianoSystemCanvas.tsx`: 同上。ローカル `NoteEvent` 型に `pedalMark`, `ottava` を追記。
   装飾記号追加に伴い、従来描画されていなかった `graceNotes`/`ornament` の描画処理も追加（既存バグ修正）
 - `src/components/ScorePage.tsx`: エクスポートハンドラ・レイアウト制御・キーボードショートカット追加
-- `src/utils/musicXmlExport.ts` / `src/utils/musicXmlImport.ts`: モルデント・プラルトリラー・ターンの書き出し/読み込み対応
+- `src/utils/musicXmlExport.ts` / `src/utils/musicXmlImport.ts`: モルデント・プラルトリラー・ターンの書き出し/読み込み対応。運指番号（`<technical><fingering>`）の書き出し/読み込み対応も追加
 - `src/utils/musicXmlOrnament.test.ts`（新規）: 装飾記号の MusicXML ラウンドトリップ・`ornamentUtils` のユニットテスト
+- `src/types/storage.ts`: `NoteEvent.fingering?: string` を追加
+- `src/utils/textElementUtils.ts`: `TextElementKind` に `'fingering'` を追加（ラベル「運指」）
+- `src/utils/storage.ts`: `validateNoteEvent` に `fingering`（1〜8文字の文字列）のバリデーションを追加
+- `src/components/PianoSystemCanvas.tsx`: ローカル `NoteEvent` 型に `fingering?: string` を追加。ピアノ譜に元々なかったテキスト系記号の描画のうち、運指番号のみ新規に描画対応した
+- `src/utils/fingering.test.ts`（新規）: 運指番号のバリデーション・MusicXML ラウンドトリップ（単音・和音）のユニットテスト
 
 ## 注意点
 

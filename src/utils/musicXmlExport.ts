@@ -45,10 +45,14 @@ function keyToPitchXml(key: string): string {
   return `<pitch><step>${step}</step>${alterXml}<octave>${octave}</octave></pitch>`;
 }
 
-/** アーティキュレーション → MusicXML notations */
-function articulationsXml(ev: NoteEvent): string {
+/**
+ * アーティキュレーション・装飾記号・運指番号 → MusicXML notations
+ * fingerValue はこの note 要素（和音の場合は1つの音）に対応する運指番号（1文字〜数文字）。
+ * 和音で '1,3,5' のように複数指定されている場合は、呼び出し側で音ごとに分割して渡す。
+ */
+function articulationsXml(ev: NoteEvent, fingerValue?: string): string {
   const arts = ev.articulations ?? [];
-  if (!arts.length && !ev.ornament) return '';
+  if (!arts.length && !ev.ornament && !fingerValue) return '';
 
   const artElems: string[] = [];
   for (const a of arts) {
@@ -72,7 +76,15 @@ function articulationsXml(ev: NoteEvent): string {
     : ev.ornament === 'turn' ? '<ornaments><turn/></ornaments>'
     : '';
 
-  return `<notations>${articXml}${ornamentXml}</notations>`;
+  // 運指番号 → <technical><fingering>N</fingering></technical>
+  const fingeringXml = fingerValue ? `<technical><fingering>${escapeXmlText(fingerValue)}</fingering></technical>` : '';
+
+  return `<notations>${articXml}${ornamentXml}${fingeringXml}</notations>`;
+}
+
+/** XML テキストとして安全に埋め込めるようエスケープする */
+function escapeXmlText(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /** 強弱記号 → MusicXML dynamics direction（音符の直前に配置する） */
@@ -107,7 +119,8 @@ function noteToXml(
   const dotXml = dotsXml(ev);
   const voiceXml = `<voice>${voice}</voice>`;
   const staffXml = `<staff>${staff}</staff>`;
-  const artXml = articulationsXml(ev);
+  // 運指番号: 単音なら丸ごと1つの音符に、和音なら 'カンマ区切り' を音の順番に割り当てる
+  const fingerParts = ev.fingering ? ev.fingering.split(',').map(s => s.trim()).filter(Boolean) : [];
   // 連符情報: <time-modification> は実際の音数と本来の音数の比率、
   // <notations><tuplet .../></notations> はブラケットの開始/終了位置を表す
   let timeModXml = '';
@@ -130,6 +143,9 @@ function noteToXml(
     const pitchXml = keyToPitchXml(k);
     if (!pitchXml) return '';
     const chordTag = idx > 0 ? '<chord/>' : '';
+    // 単音（fingerParts が1個）ならその音に、和音なら順番に対応する指番号を割り当てる
+    const fingerValue = fingerParts[idx];
+    const artXml = articulationsXml(ev, fingerValue);
     return `<note>${chordTag}${pitchXml}<duration>${dur}</duration><type>${type}</type>${dotXml}${timeModXml}${voiceXml}${staffXml}${artXml}${tupletNotationXml}</note>`;
   });
   return pitchNodes.join('');

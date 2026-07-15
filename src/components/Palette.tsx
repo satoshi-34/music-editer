@@ -131,6 +131,7 @@ const TEXT_ELEMENT_TOOLS: Array<{ mode: 'textElement'; textKind: TextElementKind
   { mode: 'textElement', textKind: 'chordSymbol' },
   { mode: 'textElement', textKind: 'tempoMarking' },
   { mode: 'textElement', textKind: 'expressionMarking' },
+  { mode: 'textElement', textKind: 'fingering' },
 ];
 
 // ボタン共通スタイルを生成するヘルパー
@@ -839,6 +840,14 @@ function TextElementIcon({ kind }: { kind: TextElementKind }) {
       return (
         <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
           <text x="1" y="13" fontSize="9" fontFamily='"Times New Roman", serif' fontStyle="italic" fill="#111">espr.</text>
+        </svg>
+      );
+    case 'fingering':
+      // 運指番号: 丸で囲んだ「3」で「指番号」を直感的に表す
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+          <circle cx="12" cy="9" r="7" fill="none" stroke="#111" strokeWidth="1" />
+          <text x="12" y="12.5" fontSize="9" fontFamily="sans-serif" textAnchor="middle" fill="#111">3</text>
         </svg>
       );
   }
