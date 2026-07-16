@@ -3,9 +3,20 @@
 // score-partwise 形式（Finale / Sibelius / MuseScore 等が出力する標準形式）に対応。
 
 import type { SavedScoreData, MeasureData, NoteEvent, PartData } from '../types/storage';
+import type { ClefType } from '../components/clefUtils';
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
 import { isValidTimeSignature } from './timeSignatureUtils';
+
+/**
+ * MusicXML の <clef><sign>/<line> を ClefType に変換する。
+ * C 記号は line によってアルト記号（3線目）とテナー記号（4線目）を区別する。
+ */
+function xmlClefToClefType(sign: string, line?: string | null): ClefType {
+  if (sign === 'F') return 'bass';
+  if (sign === 'C') return line === '4' ? 'tenor' : 'alto';
+  return 'treble';
+}
 
 /** MusicXML の pitch 要素から VexFlow キー形式に変換する */
 function pitchToKey(stepEl: Element | null, alterEl: Element | null, octaveEl: Element | null): string {
@@ -153,7 +164,7 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
   // デフォルト設定（最初の attributes から取得する）
   let globalKeyFifths = 0;
   let globalTimeSig: [number, number] = [4, 4];
-  let defaultClef: 'treble' | 'bass' | 'alto' = 'treble';
+  let defaultClef: ClefType = 'treble';
 
   // 最初のパートの最初の小節の attributes を見てグローバル設定を取得
   const firstAttrs = doc.querySelector('measure attributes');
@@ -166,7 +177,8 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     if (isValidTimeSignature([beats, beatType])) globalTimeSig = [beats, beatType];
 
     const clefSign = firstAttrs.querySelector('clef sign')?.textContent ?? 'G';
-    defaultClef = clefSign === 'F' ? 'bass' : clefSign === 'C' ? 'alto' : 'treble';
+    const clefLine = firstAttrs.querySelector('clef line')?.textContent;
+    defaultClef = xmlClefToClefType(clefSign, clefLine);
   }
 
   const keySignature: KeySignature = FIFTHS_TO_KEY[globalKeyFifths] ?? 'C';
@@ -181,10 +193,11 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
 
     // 音部記号（パートごとに取得）
     const firstPartAttrs = partEl.querySelector('attributes');
-    let clef: 'treble' | 'bass' | 'alto' = defaultClef;
+    let clef: ClefType = defaultClef;
     if (firstPartAttrs) {
       const sign = firstPartAttrs.querySelector('clef sign')?.textContent ?? 'G';
-      clef = sign === 'F' ? 'bass' : sign === 'C' ? 'alto' : 'treble';
+      const line = firstPartAttrs.querySelector('clef line')?.textContent;
+      clef = xmlClefToClefType(sign, line);
     }
 
     const measureEls = Array.from(partEl.querySelectorAll('measure'));

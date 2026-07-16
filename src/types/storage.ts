@@ -3,6 +3,7 @@
 
 import type { KeySignature } from '../utils/noteKeyUtils';
 import type { InstrumentType } from '../audio/SoundSource';
+import type { ClefType } from '../components/clefUtils';
 
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
 export type TimeSignature = [number, number];
@@ -260,6 +261,12 @@ export interface MeasureData {
    * ト長調からヘ長調への変更などを小節単位で記録する。
    */
   keySignature?: KeySignature;
+  /**
+   * この小節から適用する音部記号（クレフ）。
+   * 省略時は直前の小節のクレフ、またはパートの既定クレフ（PartData.clef）を継続する。
+   * チェロのテナー記号への切り替えなど、曲の途中でのクレフ変更を記録する。
+   */
+  clef?: ClefType;
 }
 
 export interface ScoreMetadata {
@@ -326,7 +333,7 @@ export interface ScoreInstrumentation {
 /** 1パート（右手・左手など）のデータ */
 export interface PartData {
   partId: string;           // 'melody' | 'right-hand' | 'left-hand' | 'violin-1' | 'violin-2' | 'viola' | 'cello'
-  clef: 'treble' | 'bass' | 'alto';
+  clef: ClefType;
   measures: MeasureData[];
 }
 

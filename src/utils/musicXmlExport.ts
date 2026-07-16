@@ -3,6 +3,8 @@
 
 import type { SavedScoreData, NoteEvent, MeasureData } from '../types/storage';
 import type { KeySignature } from './noteKeyUtils';
+import type { ClefType } from '../components/clefUtils';
+import { resolveMeasureClef } from './clefMeasureUtils';
 
 // 分割数（division）: 四分音符 = 16分割。全音符〜64分音符を整数で表せる最小値
 const DIVISIONS = 16;
@@ -23,9 +25,10 @@ const KEY_FIFTHS: Record<KeySignature, number> = {
 };
 
 // 音部記号 → MusicXML clef (sign, line)
-function clefXml(clef: 'treble' | 'bass' | 'alto'): string {
+function clefXml(clef: ClefType): string {
   if (clef === 'bass') return '<clef><sign>F</sign><line>4</line></clef>';
   if (clef === 'alto')  return '<clef><sign>C</sign><line>3</line></clef>';
+  if (clef === 'tenor') return '<clef><sign>C</sign><line>4</line></clef>';
   return '<clef><sign>G</sign><line>2</line></clef>';
 }
 
@@ -184,7 +187,8 @@ function measureToXml(
   measure: MeasureData,
   measureNum: number,
   options: {
-    clef: 'treble' | 'bass' | 'alto';
+    clef: ClefType;
+    prevClef?: ClefType;
     globalKeyFifths: number;
     globalTimeSig: [number, number];
     isFirstMeasure: boolean;
@@ -207,12 +211,14 @@ function measureToXml(
     (timeSig[0] !== options.prevTimeSig[0] || timeSig[1] !== options.prevTimeSig[1]);
   // 途中調号変更: この小節に keySignature 指定があり、直前の調号と異なるときだけ出力する
   const keyChanged = options.prevKeyFifths !== undefined && keyFifths !== options.prevKeyFifths;
+  // 途中クレフ変更: この小節時点で有効なクレフが直前の小節と異なるときだけ出力する
+  const clefChanged = options.prevClef !== undefined && options.clef !== options.prevClef;
 
-  if (options.isFirstMeasure || timeSigChanged || keyChanged) {
+  if (options.isFirstMeasure || timeSigChanged || keyChanged || clefChanged) {
     const divXml = options.isFirstMeasure ? `<divisions>${DIVISIONS}</divisions>` : '';
     const keyXml = (options.isFirstMeasure || keyChanged) ? `<key><fifths>${keyFifths}</fifths><mode>major</mode></key>` : '';
     const timeXml = `<time><beats>${timeSig[0]}</beats><beat-type>${timeSig[1]}</beat-type></time>`;
-    const clefXmlStr = options.isFirstMeasure ? clefXml(options.clef) : '';
+    const clefXmlStr = (options.isFirstMeasure || clefChanged) ? clefXml(options.clef) : '';
     lines.push(`<attributes>${divXml}${keyXml}${timeXml}${clefXmlStr}</attributes>`);
   }
 
@@ -283,6 +289,7 @@ export function scoreToMusicXml(data: SavedScoreData): string {
     let prevTimeSig: [number, number] | undefined;
     let effectiveKeyFifths = globalKeyFifths;
     let prevKeyFifths: number | undefined;
+    let prevClef: ClefType | undefined;
     // 松葉（ヘアピン）の開始/終了位置をパート全体で事前計算しておく
     const hairpins = buildHairpinPositionMaps(p.measures);
     const measuresXml = p.measures.map((m, mi) => {
@@ -290,8 +297,11 @@ export function scoreToMusicXml(data: SavedScoreData): string {
       if (m.keySignature) {
         effectiveKeyFifths = KEY_FIFTHS[m.keySignature as KeySignature] ?? effectiveKeyFifths;
       }
+      // 途中クレフ変更: この小節時点で有効なクレフを解決する
+      const effectiveClef = resolveMeasureClef(p.measures, mi, p.clef);
       const xml = measureToXml(m, mi + 1, {
-        clef: p.clef,
+        clef: effectiveClef,
+        prevClef,
         globalKeyFifths,
         globalTimeSig,
         isFirstMeasure: mi === 0,
@@ -302,6 +312,7 @@ export function scoreToMusicXml(data: SavedScoreData): string {
         hairpins,
         measureIndex: mi,
       });
+      prevClef = effectiveClef;
       prevTimeSig = m.timeSignature ?? globalTimeSig;
       prevKeyFifths = effectiveKeyFifths;
       return xml;

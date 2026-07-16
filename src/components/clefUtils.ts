@@ -1,7 +1,9 @@
 // Shared pitch conversion utilities for all clef types.
 // StaffCanvas and PianoSystemCanvas both import from here.
 
-export type ClefType = 'treble' | 'bass' | 'alto';
+// 'tenor' はテナー記号（C 記号を第4線に置くもの）。チェロ・ファゴット・トロンボーンの
+// 高音域で使う。VexFlow は 'tenor' をそのままサポートしている。
+export type ClefType = 'treble' | 'bass' | 'alto' | 'tenor';
 
 // ===== treble (line 0 = F5) =====
 function lineToKeyTreble(line: number): string {
@@ -57,17 +59,37 @@ function keyToLineAlto(key: string): number {
   return (base - target) / 2;
 }
 
+// ===== tenor (C clef, 第4線 = C4。line 0 = E4（最上線）) =====
+function lineToKeyTenor(line: number): string {
+  const s = Math.round(line * 2) / 2;
+  const stepsDown = Math.round(s * 2);
+  const letters = ['c','d','e','f','g','a','b'] as const;
+  let idx = 2 - stepsDown, oct = 4; // E4: idx=2
+  while (idx < 0) { idx += 7; oct -= 1; }
+  while (idx >= 7) { idx -= 7; oct += 1; }
+  return `${letters[idx]}/${oct}`;
+}
+function keyToLineTenor(key: string): number {
+  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if (!m) return 2;
+  const idxMap: Record<string, number> = { c:0,d:1,e:2,f:3,g:4,a:5,b:6 };
+  const target = +m[3] * 7 + (idxMap[m[1].toLowerCase()] ?? 0);
+  const base = 4 * 7 + idxMap['e']; // E4
+  return (base - target) / 2;
+}
+
 // ===== Public dispatchers =====
 
 export function lineToKey(clef: ClefType, line: number): string {
   if (clef === 'bass') return lineToKeyBass(line);
   if (clef === 'alto') return lineToKeyAlto(line);
+  if (clef === 'tenor') return lineToKeyTenor(line);
   return lineToKeyTreble(line);
 }
 
 export function keyToLine(clef: ClefType, key: string): number {
   if (clef === 'bass') return keyToLineBass(key);
   if (clef === 'alto') return keyToLineAlto(key);
+  if (clef === 'tenor') return keyToLineTenor(key);
   return keyToLineTreble(key);
 }
 

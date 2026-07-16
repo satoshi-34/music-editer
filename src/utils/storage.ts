@@ -24,6 +24,7 @@ import { isArticulationMarkingValue } from './articulationMarkingUtils';
 import { syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
+import type { ClefType } from '../components/clefUtils';
 import {
   MAX_SYMBOL_DEFS,
   MAX_SHAPES_PER_SYMBOL,
@@ -345,7 +346,9 @@ function validateMeasureData(measure: any): measure is MeasureData {
     (measure.repeatStart === undefined || typeof measure.repeatStart === 'boolean') &&
     (measure.repeatEnd === undefined || typeof measure.repeatEnd === 'boolean') &&
     // 小節単位の調号変更。未知の値は保存データとして受け入れず、無効なファイルとして弾く。
-    (measure.keySignature === undefined || isValidKeySignature(measure.keySignature))
+    (measure.keySignature === undefined || isValidKeySignature(measure.keySignature)) &&
+    // 小節単位のクレフ（音部記号）変更。同様に未知の値は無効として弾く。
+    (measure.clef === undefined || isValidClefType(measure.clef))
   );
 }
 
@@ -372,10 +375,18 @@ function validatePartData(part: any): part is PartData {
     part &&
     typeof part === 'object' &&
     typeof part.partId === 'string' &&
-    (part.clef === 'treble' || part.clef === 'bass' || part.clef === 'alto') &&
+    isValidClefType(part.clef) &&
     Array.isArray(part.measures) &&
     part.measures.every(validateMeasureData)
   );
+}
+
+/**
+ * クレフ（音部記号）として有効な値かどうかを判定する。
+ * ClefType（'treble' | 'bass' | 'alto' | 'tenor'）と同じ集合を保つ。
+ */
+function isValidClefType(value: unknown): value is ClefType {
+  return value === 'treble' || value === 'bass' || value === 'alto' || value === 'tenor';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

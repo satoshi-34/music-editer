@@ -35,6 +35,7 @@ import {
   type KeySignature,
 } from '../utils/noteKeyUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
+import { resolveMeasureClef } from '../utils/clefMeasureUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import {
@@ -744,6 +745,15 @@ export default function PianoSystemCanvas({
   // 小節調号変更オーバーレイの状態（null のとき非表示）。StaffCanvas と同じパターン。
   const [keySigEditState, setKeySigEditState] = useState<{
     measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+  // 小節クレフ（音部記号）変更オーバーレイの状態（null のとき非表示）。
+  // 調号と違い、クレフはパートごと（クリックした段）にしか変わらないため partIndex を持つ。
+  const [clefEditState, setClefEditState] = useState<{
+    measureAbsoluteIndex: number;
+    partIndex: number;
     currentValue: string;
     overlayX: number;
     overlayY: number;
@@ -1478,8 +1488,17 @@ export default function PianoSystemCanvas({
           : effectiveGlobalKeyHere;
         const prevEffectiveGlobalKey = i === 0 ? baseGlobalKeySigForSystem : effectiveKeySigPerMeasure[i - 1];
         const keySigChangedHere = i > 0 && effectiveGlobalKeyHere !== prevEffectiveGlobalKey;
+        // 途中クレフ変更: 調号と違い、クレフはパートごとの小節データ（part.data）に持つ
+        // （楽器ごとに違うタイミングで変わりうるため。例: チェロだけテナー記号に変わる）。
+        // クレフは partsScore（内部 state。編集中の最新データ）から解決する。
+        // part.data は親から渡された初期値の可能性があり、編集後の値を反映しないため使わない。
+        const partMeasuresForClef = partsScore[pi] ?? part.data;
+        const effectiveClefHere = resolveMeasureClef(partMeasuresForClef, startMeasureIndex + i, part.clef);
+        const prevEffectiveClef = resolveMeasureClef(partMeasuresForClef, startMeasureIndex + i - 1, part.clef);
+        const clefChangedHere = i > 0 && effectiveClefHere !== prevEffectiveClef;
         if(i===0){
-          stave.addClef(part.clef);
+          // 段頭は「その段の先頭小節時点で有効なクレフ」を通常サイズで表示する（途中クレフ変更対応）
+          stave.addClef(effectiveClefHere);
           // 拍子記号はいまの仕様では「譜面全体のいちばん最初」だけに出す。
           // 途中で拍子が変わるケースは、別機能として入れるときに再表示を考える。
           if (startMeasureIndex === 0) {
@@ -1494,6 +1513,10 @@ export default function PianoSystemCanvas({
         } else if (keySigChangedHere) {
           // 段の途中の小節頭で調号が変わった場合はそこに表示する
           stave.addKeySignature(stavePartKey);
+        }
+        if (i !== 0 && clefChangedHere) {
+          // 段の途中の小節頭でクレフが変わった場合は小型クレフをそこに表示する
+          stave.addClef(effectiveClefHere, 'small');
         }
         if (sharedMeasure?.repeatStart) {
           // 多段譜では各段の左端に同じ開始リピート記号を出して、
@@ -1848,12 +1871,17 @@ export default function PianoSystemCanvas({
             return next;
           });
         };
-        const l2k=(l:number)=>lineToKeyForClef(part.clef,l);
-        const k2l=(k:string)=>keyToLineForClef(part.clef,k);
+        // この小節時点で有効なクレフ（途中クレフ変更対応）。パートごとの小節データ（part.data）から解決する。
+        // クリックハンドラなど後から呼ばれる処理でも、absI は forEach 反復ごとに固定された const のため
+        // ここで解決した clefHere をそのまま安全に参照できる。
+        // score は partsScore[pi]（内部 state）を指すため、こちらから解決する（part.data は初期値のみ）
+        const clefHere=resolveMeasureClef(score, absI, part.clef);
+        const l2k=(l:number)=>lineToKeyForClef(clefHere,l);
+        const k2l=(k:string)=>keyToLineForClef(clefHere,k);
 
         const data=absI<score.length?score[absI]:undefined;
-        const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestKeyForClef(part.clef)],__isPlaceholder:true}])
-          .map(ev=>sanitizeRenderEvent(ev, part.clef));
+        const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestKeyForClef(clefHere)],__isPlaceholder:true}])
+          .map(ev=>sanitizeRenderEvent(ev, clefHere));
         // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
         // 移調楽器の記譜音表示などでパート固有の調号がある場合は、
         // そちらを基準に「調号で既に変化している音」を判定する。
@@ -1879,7 +1907,7 @@ export default function PianoSystemCanvas({
             const sourceEvents = voiceIndex === 0
               ? safeEvs
               : (measureVoice.events.length > 0
-                  ? measureVoice.events.map(ev => sanitizeRenderEvent(ev, part.clef))
+                  ? measureVoice.events.map(ev => sanitizeRenderEvent(ev, clefHere))
                   : []);
             if (sourceEvents.length === 0) {
               return null;
@@ -1888,7 +1916,7 @@ export default function PianoSystemCanvas({
             // 2声部共存時のみ、休符の描画位置を声部1=やや上/声部2=やや下にずらす。
             // 単声部小節では undefined を渡し、従来の restKeyForClef(clef) を使う。
             const restKeyOverride = isMultiVoiceMeasure
-              ? restKeyForVoice(part.clef, voiceIndex, measureVoices.length)
+              ? restKeyForVoice(clefHere, voiceIndex, measureVoices.length)
               : undefined;
 
             const vfNotes = sourceEvents.map((ev, idx) => {
@@ -1896,7 +1924,7 @@ export default function PianoSystemCanvas({
               const n=makeVFNote(
                 ev,
                 accidentalState,
-                part.clef,
+                clefHere,
                 measureVoice.stemDirection,
                 renderAsGhostRest,
                 // courtesy accidental は主旋律（voice 0）だけに適用する。
@@ -1976,7 +2004,7 @@ export default function PianoSystemCanvas({
           // 休符の縦位置をVexFlow側で補正してもらう。
           .formatToStave(renderedVoiceEntries.map((entry) => entry.voice),stave,{ alignRests: true });
 
-        applyDefaultRestDisplayLine(vfNotes, safeEvs, part.clef);
+        applyDefaultRestDisplayLine(vfNotes, safeEvs, clefHere);
 
         const hasClef=(i===0);
         for(let j=0;j<vfNotes.length&&j<safeEvs.length;j++){
@@ -2169,7 +2197,7 @@ export default function PianoSystemCanvas({
               addDuration,
               addDots,
               [key],
-              defaultRestKeyForClef(part.clef)
+              defaultRestKeyForClef(clefHere)
             );
             if(currentBeats + groupBeats > beatsPerMeasure + 0.000001){
               return;
@@ -2177,7 +2205,7 @@ export default function PianoSystemCanvas({
             setScore(prev=>{
               const next=prev.map(cloneMeasureData);
               while(absI>=next.length)next.push(createEmptyMeasure());
-              fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(part.clef));
+              fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(clefHere));
               const m=next[absI];
               m.events.splice(Math.max(0,Math.min(at,m.events.length)),0,...groupEvents);
               return next;
@@ -2194,14 +2222,14 @@ export default function PianoSystemCanvas({
           const insertedEvent:NoteEvent={
             dur:addDuration,
             isRest:!!(tool as any)?.isRest,
-            keys:[(tool as any)?.isRest ? defaultRestKeyForClef(part.clef) : key],
+            keys:[(tool as any)?.isRest ? defaultRestKeyForClef(clefHere) : key],
             dots: addDots,
           };
 
           setScore(prev=>{
             const next=prev.map(cloneMeasureData);
             while(absI>=next.length)next.push(createEmptyMeasure());
-            fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(part.clef));
+            fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(clefHere));
             next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
               const copy=[...events];
               copy.splice(Math.max(0,Math.min(at,copy.length)),0,insertedEvent);
@@ -2298,6 +2326,20 @@ export default function PianoSystemCanvas({
             setKeySigEditState({
               measureAbsoluteIndex: absI,
               currentValue: currentKS ?? '',
+              overlayX: me.clientX - (containerRect?.left ?? 0),
+              overlayY: me.clientY - (containerRect?.top ?? 0),
+            });
+            return;
+          }
+          if('mode' in tool&&tool.mode==='measureClef'){
+            // 途中クレフ変更: クリックした段（パート）自身の小節データに保存する
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            const me = e as MouseEvent;
+            const currentClef = partsScore[pi]?.[absI]?.clef;
+            setClefEditState({
+              measureAbsoluteIndex: absI,
+              partIndex: pi,
+              currentValue: currentClef ?? '',
               overlayX: me.clientX - (containerRect?.left ?? 0),
               overlayY: me.clientY - (containerRect?.top ?? 0),
             });
@@ -2471,6 +2513,19 @@ export default function PianoSystemCanvas({
                 setTimeSigEditState({
                   measureAbsoluteIndex:absI,
                   currentValue:currentTS?`${currentTS[0]}/${currentTS[1]}`:'',
+                  overlayX:me.clientX-(containerRect?.left??0),
+                  overlayY:me.clientY-(containerRect?.top??0),
+                });
+                return;
+              }
+              if('mode' in tool&&tool.mode==='measureClef'){
+                const containerRect=containerRef.current?.getBoundingClientRect();
+                const me=e as MouseEvent;
+                const currentClef=partsScore[pi]?.[absI]?.clef;
+                setClefEditState({
+                  measureAbsoluteIndex:absI,
+                  partIndex:pi,
+                  currentValue:currentClef??'',
                   overlayX:me.clientX-(containerRect?.left??0),
                   overlayY:me.clientY-(containerRect?.top??0),
                 });
@@ -2783,7 +2838,7 @@ export default function PianoSystemCanvas({
                   setScore(prev=>{
                     const next=prev.map(cloneMeasureData);
                     // 声部1側の休符補完は従来どおり必要（声部2の拍位置合わせのため）。
-                    fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(part.clef));
+                    fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(clefHere));
                     const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
                     if(!targetEv?.isRest)return prev;
                     const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest);
@@ -3258,6 +3313,27 @@ export default function PianoSystemCanvas({
     setKeySigEditState(null);
   }
 
+  /**
+   * 途中クレフ変更を確定する。
+   * 調号と違い、クレフはクリックした段（パート）自身の小節データにだけ保存する
+   * （楽器ごとに違うタイミングでクレフが変わりうるため。例: チェロだけテナー記号にする）。
+   */
+  function handleClefConfirm(value: string) {
+    if (!clefEditState) return;
+    const { measureAbsoluteIndex, partIndex } = clefEditState;
+    const isValidClef = value === 'treble' || value === 'bass' || value === 'alto' || value === 'tenor';
+    const newClef = isValidClef ? (value as ClefType) : undefined;
+    setPartsScore(prev => {
+      const next = [...prev];
+      const targetPartData = (prev[partIndex] ?? []).map(cloneMeasureData);
+      if (measureAbsoluteIndex >= targetPartData.length) return prev;
+      targetPartData[measureAbsoluteIndex] = { ...targetPartData[measureAbsoluteIndex], clef: newClef };
+      next[partIndex] = targetPartData;
+      return next;
+    });
+    setClefEditState(null);
+  }
+
   function handleBpmConfirm(rawText: string) {
     if (!bpmEditState) return;
     const { measureAbsoluteIndex } = bpmEditState;
@@ -3506,6 +3582,58 @@ export default function PianoSystemCanvas({
             {KEY_SIGNATURE_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
+          </select>
+        </div>
+      )}
+      {clefEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: clefEditState.overlayX,
+            top: clefEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #0f766e',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            minWidth: 200,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#0f766e', fontFamily: 'sans-serif' }}>
+            途中音部記号変更（「解除」で元に戻す）
+          </span>
+          <select
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            defaultValue={clefEditState.currentValue || 'none'}
+            style={{
+              fontSize: 13,
+              fontFamily: 'sans-serif',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              padding: '2px 4px',
+              outline: 'none',
+            }}
+            onChange={(e) => {
+              handleClefConfirm(e.target.value === 'none' ? '' : e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setClefEditState(null);
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              if (e.relatedTarget === null) setClefEditState(null);
+            }}
+          >
+            <option value="none">（解除）</option>
+            <option value="treble">ト音記号</option>
+            <option value="bass">ヘ音記号</option>
+            <option value="alto">アルト記号</option>
+            <option value="tenor">テナー記号</option>
           </select>
         </div>
       )}

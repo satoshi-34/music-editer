@@ -57,6 +57,7 @@ export type Tool =
   | { mode: 'measureTempo' }                                // 小節単位のテンポ変更モード
   | { mode: 'measureTimeSig' }                             // 小節単位の拍子変更モード
   | { mode: 'measureKeySig' }                               // 小節単位の調号変更モード
+  | { mode: 'measureClef' }                                  // 小節単位のクレフ（音部記号）変更モード
   | { mode: 'graceNote' }                                  // 前打音（スラッシュ付き短前打音）を付けるモード
   | { mode: 'ornament'; ornamentType: OrnamentType }       // 装飾記号（トリル/モルデント/プラルトリラー/ターン）を付けるモード
   | { mode: 'pedal'; pedalType: 'down' | 'up' }           // ペダル記号（Ped / ✱）を付けるモード
@@ -197,6 +198,7 @@ export default function Palette({
   const measureTempoActive = 'mode' in value && value.mode === 'measureTempo';
   const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
   const measureKeySigActive = 'mode' in value && value.mode === 'measureKeySig';
+  const measureClefActive = 'mode' in value && value.mode === 'measureClef';
   const graceNoteActive = 'mode' in value && value.mode === 'graceNote';
   const selectedOrnamentType = 'mode' in value && value.mode === 'ornament' ? value.ornamentType : null;
   const pedalDownActive = 'mode' in value && value.mode === 'pedal' && (value as any).pedalType === 'down';
@@ -415,6 +417,19 @@ export default function Palette({
           <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true">
             <text x="0" y="14" fontSize="14" fontFamily="serif" fontWeight="bold" fill="#111">♯</text>
             <text x="11" y="14" fontSize="14" fontFamily="serif" fontWeight="bold" fill="#111">♭</text>
+          </svg>
+        </button>
+        {/* 音部記号変更（途中クレフ変更） */}
+        <button
+          type="button"
+          onClick={() => onChange(measureClefActive ? ROW1[2] : { mode: 'measureClef' })}
+          title="途中音部記号変更（小節をクリックしてクレフを選択）"
+
+          aria-label="途中音部記号変更（小節をクリックしてクレフを選択）"
+          style={btnStyle(measureClefActive, { width: 30 })}
+        >
+          <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true">
+            <text x="0" y="15" fontSize="15" fontFamily="serif" fontWeight="bold" fill="#111">𝄞</text>
           </svg>
         </button>
         {/* 強弱記号 */}

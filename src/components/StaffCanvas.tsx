@@ -48,7 +48,8 @@ import {
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
-import { defaultRestDisplayKey, restKey as restFormatterKey } from './clefUtils';
+import { defaultRestDisplayKey, restKey as restFormatterKey, lineToKey as lineToKeyForClef, keyToLine as keyToLineForClef, type ClefType } from './clefUtils';
+import { resolveMeasureClef } from '../utils/clefMeasureUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
@@ -77,7 +78,7 @@ type Props = {
   onScoreDataChange?: (data: MeasureData[]) => void;
   startMeasureIndex?: number; // このStaffCanvasが担当する開始小節インデックス
   disabled?: boolean; // 編集を無効にするフラグ
-  clef?: 'treble' | 'bass' | 'alto'; // 音部記号（デフォルト: treble）
+  clef?: ClefType; // 音部記号（デフォルト: treble）。小節単位の変更は MeasureData.clef を参照
   yOffset?: number; // Safari座標ズレ補正（client px単位）
   currentInstrument?: InstrumentType; // 個別再生で使う現在の音色
   onPreviewNoteEvent?: (noteEvent: NoteEvent) => Promise<void>; // 入力確認音を親の再生エンジンで鳴らす
@@ -325,18 +326,18 @@ function keyToLineAlto(key: string): number {
   return (base - target) / 2;
 }
 
-function defaultRestKeyForClef(clef: 'treble' | 'bass' | 'alto'): string {
+function defaultRestKeyForClef(clef: ClefType): string {
   return defaultRestDisplayKey(clef);
 }
 
-function restKeyForClef(clef: 'treble' | 'bass' | 'alto'): string {
+function restKeyForClef(clef: ClefType): string {
   return restFormatterKey(clef);
 }
 
 function applyDefaultRestDisplayLine(
   vfNotes: StaveNote[],
   events: NoteEvent[],
-  clef: 'treble' | 'bass' | 'alto'
+  clef: ClefType
 ): void {
   const displayRestKey = defaultRestKeyForClef(clef);
   if (displayRestKey === restKeyForClef(clef)) {
@@ -591,7 +592,7 @@ function getPreviewLedgerLines(snappedLine: number): number[] {
 
 /* ===== 時間ベース位置計算（休符重なり修正用） ===== */
 
-function sanitizeRenderEvent(ev: any, clef: 'treble' | 'bass' | 'alto'): RenderNoteEvent {
+function sanitizeRenderEvent(ev: any, clef: ClefType): RenderNoteEvent {
   const defaultRestKey = defaultRestKeyForClef(clef);
 
   if (!ev || !ev.dur) {
@@ -641,7 +642,7 @@ function stepUp(key: string): string {
 function makeVFNote(
   ev: NoteEvent,
   accidentalState: MeasureAccidentalState,
-  clef: 'treble' | 'bass' | 'alto' = 'treble',
+  clef: ClefType = 'treble',
   prevMeasureState?: MeasureAccidentalState
 ) {
   const vfDur = toVFDur(ev.dur);
@@ -826,6 +827,14 @@ export default function StaffCanvas({
   const [keySigEditState, setKeySigEditState] = useState<{
     measureAbsoluteIndex: number;
     currentValue: string;  // KeySignature 文字列（例: "G"）。空欄は「解除」を表す
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
+  // 小節クレフ（音部記号）変更オーバーレイの状態（null のとき非表示）
+  const [clefEditState, setClefEditState] = useState<{
+    measureAbsoluteIndex: number;
+    currentValue: string;  // ClefType 文字列（例: "tenor"）。空欄は「解除」を表す
     overlayX: number;
     overlayY: number;
   } | null>(null);
@@ -1736,6 +1745,9 @@ export default function StaffCanvas({
     // 途中調号変更を追跡する。最初はグローバル調号、各小節の keySignature フィールドで上書きされる。
     // startMeasureIndex より前の小節も見て正しい継続状態から始める（段の途中から描画する場合の対応）。
     let effectiveKeySig: KeySignature = resolveMeasureKeySignature(score, startMeasureIndex - 1, normalizedKeySignature);
+    // 途中クレフ（音部記号）変更を追跡する。最初はパートの既定クレフ、各小節の clef フィールドで上書きされる。
+    // 調号と同じ理由で、段の途中から描画する場合に備え startMeasureIndex より前の小節も見て初期化する。
+    let effectiveClef: ClefType = resolveMeasureClef(score, startMeasureIndex - 1, clef);
 
     for (let line = 0; line < systems; line++) {
       if (globalIndex >= maxMeasures) break; // このStaffCanvasの範囲を超えたら終了
@@ -1789,6 +1801,10 @@ export default function StaffCanvas({
 
       for (let i = 0; i < chosen && globalIndex < maxMeasures; i++, globalIndex++) {
         const absoluteIndex = startMeasureIndex + globalIndex; // 絶対インデックスを計算
+        // この小節時点で有効なクレフ（途中クレフ変更対応）。
+        // クリックハンドラは後から（非同期に）呼ばれるため、ループの共有変数 effectiveClef ではなく
+        // absoluteIndex から都度解決する（絶対インデックスは const でループ反復ごとに固定されるため安全）。
+        const clefHere = resolveMeasureClef(score, absoluteIndex, clef);
         if (absoluteIndex >= score.length) break; // 全体のスコアを超えたら終了
         
         const w = widths[i];
@@ -1806,9 +1822,16 @@ export default function StaffCanvas({
         if (data?.keySignature) {
           effectiveKeySig = data.keySignature;
         }
+        // 途中クレフ変更: stave.draw() より前に effectiveClef を更新する（調号と同じ理由。
+        // addClef は draw() 前でないと反映されない）
+        const clefChangedHere = !!data?.clef && data.clef !== effectiveClef;
+        if (data?.clef) {
+          effectiveClef = data.clef;
+        }
 
         if (i === 0) {
-          stave.addClef(clef);
+          // 段頭は「その段の先頭小節時点で有効なクレフ」を通常サイズで表示する（途中クレフ変更に対応）
+          stave.addClef(effectiveClef);
           // 第1段・第1小節: 小節固有の拍子があればそれを、なければグローバル拍子を表示
           if (line === 0 && startMeasureIndex === 0) stave.addTimeSignature(formatTimeSignature(effectiveTimeSig));
           // 段頭は「その段の先頭小節時点で有効な調号」を表示する（途中調号変更に対応）
@@ -1818,6 +1841,10 @@ export default function StaffCanvas({
         } else if (keySigChangedHere) {
           // 段の途中の小節頭で調号が変わった場合はそこに表示する
           stave.addKeySignature(effectiveKeySig);
+        }
+        if (i !== 0 && clefChangedHere) {
+          // 段の途中の小節頭でクレフが変わった場合は小型クレフをそこに表示する
+          stave.addClef(effectiveClef, 'small');
         }
         if (data?.repeatStart) {
           // 小節の先頭に開始リピート記号（||:）を描く。
@@ -1846,8 +1873,8 @@ export default function StaffCanvas({
         placeKeySignatureAfterTimeSignature(stave);
         stave.draw();
         const safeEvents: RenderNoteEvent[] =
-          (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, keys:[defaultRestKeyForClef(clef)], __isPlaceholder: true }])
-          .map(ev => sanitizeRenderEvent(ev, clef));
+          (data && data.events && data.events.length > 0 ? data.events : [{ dur:'1', isRest:true, keys:[defaultRestKeyForClef(effectiveClef)], __isPlaceholder: true }])
+          .map(ev => sanitizeRenderEvent(ev, effectiveClef));
         // 臨時記号の効力は小節ごとにリセットされるため、
         // 描画直前に小節専用の状態を作り、イベント順に更新していく。
         // 臨時記号の既定状態は「この小節時点で有効な調号」を使う（途中調号変更対応）
@@ -1857,7 +1884,7 @@ export default function StaffCanvas({
         const thisPrevMeasState = prevMeasureAccidentalState;
 
         const vfNotes: StaveNote[] = safeEvents.map((ev, idx) => {
-          const n = makeVFNote(ev, accidentalState, clef, thisPrevMeasState) as any;
+          const n = makeVFNote(ev, accidentalState, effectiveClef, thisPrevMeasState) as any;
           const isSel = !!selected && selected.measure === absoluteIndex && selected.index === idx;
           if (isSel && selected.keyIndex !== undefined && !ev.isRest && n.setKeyStyle) {
             n.setKeyStyle(selected.keyIndex, { fillStyle:'#1d4ed8', strokeStyle:'#1d4ed8' });
@@ -1882,7 +1909,7 @@ export default function StaffCanvas({
         voice.setMode((Voice as any).Mode.SOFT ?? 1);
         voice.addTickables(vfNotes);
         new Formatter().joinVoices([voice]).formatToStave([voice], stave);
-        applyDefaultRestDisplayLine(vfNotes, safeEvents, clef);
+        applyDefaultRestDisplayLine(vfNotes, safeEvents, effectiveClef);
         
         const measureIndex = globalIndex; // 相対インデックス（このStaffCanvas内での位置）
         const xDraw = x / s, wDraw = w / s;
@@ -2102,15 +2129,17 @@ export default function StaffCanvas({
         const doInsertAt = (localX: number, localY: number, targetMeasureIndex: number) => {
           // 相対インデックスを絶対インデックスに変換
           const absoluteMeasureIndex = startMeasureIndex + targetMeasureIndex;
-          
+
           // 範囲チェック（要件3.4対応）
           if (!isValidMeasureIndex(absoluteMeasureIndex, score.length)) {
             return;
           }
-          
+
+          // この小節時点で有効なクレフ（途中クレフ変更対応）でクリック位置の音高を解決する
+          const clefHere = resolveMeasureClef(score, absoluteMeasureIndex, clef);
           const snappedLine = snapLineBySpacing(stave, localY);
           // この小節時点で有効な調号（途中調号変更対応）を使って既定の♯/♭を付与する
-          const key = applyKeySignatureToNaturalKey(lineToKey(snappedLine), effectiveKeySig);
+          const key = applyKeySignatureToNaturalKey(lineToKeyForClef(clefHere, snappedLine), effectiveKeySig);
 
           let insertAt = safeEvents.length;
           let minDist = Infinity;
@@ -2154,7 +2183,7 @@ export default function StaffCanvas({
               addDuration,
               addDots,
               [key],
-              defaultRestKeyForClef(clef)
+              defaultRestKeyForClef(clefHere)
             );
             if (currentBeats + groupBeats > currentMeasureBeats + EPS) {
               return;
@@ -2162,7 +2191,7 @@ export default function StaffCanvas({
             setScore(prev => {
               const next = prev.map(cloneMeasureData);
               while (absoluteMeasureIndex >= next.length) next.push(createEmptyMeasure());
-              fillPriorMeasureRests(next, absoluteMeasureIndex, beatsPerMeasure, defaultRestKeyForClef(clef));
+              fillPriorMeasureRests(next, absoluteMeasureIndex, beatsPerMeasure, defaultRestKeyForClef(clefHere));
               const m = next[absoluteMeasureIndex];
               m.events.splice(Math.max(0, Math.min(insertAt, m.events.length)), 0, ...groupEvents);
               return next;
@@ -2179,14 +2208,14 @@ export default function StaffCanvas({
           const insertedEvent: NoteEvent = {
             dur: addDuration,
             isRest: !!(tool as any)?.isRest,
-            keys: [(tool as any)?.isRest ? defaultRestKeyForClef(clef) : key],
+            keys: [(tool as any)?.isRest ? defaultRestKeyForClef(clefHere) : key],
             dots: addDots,
           };
 
           setScore(prev => {
             const next = prev.map(cloneMeasureData);
             while (absoluteMeasureIndex >= next.length) next.push(createEmptyMeasure());
-            fillPriorMeasureRests(next, absoluteMeasureIndex, beatsPerMeasure, defaultRestKeyForClef(clef));
+            fillPriorMeasureRests(next, absoluteMeasureIndex, beatsPerMeasure, defaultRestKeyForClef(clefHere));
             const m = next[absoluteMeasureIndex];
             m.events.splice(Math.max(0, Math.min(insertAt, m.events.length)), 0, insertedEvent);
             return next;
@@ -2362,6 +2391,18 @@ export default function StaffCanvas({
             });
             return;
           }
+          if ('mode' in tool && tool.mode === 'measureClef') {
+            // 途中クレフ変更: 小節クリックでクレフ選択ドロップダウンを表示する
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            const currentClef = score[absoluteIndex]?.clef;
+            setClefEditState({
+              measureAbsoluteIndex: absoluteIndex,
+              currentValue: currentClef ?? '',
+              overlayX: e.clientX - (containerRect?.left ?? 0),
+              overlayY: e.clientY - (containerRect?.top ?? 0),
+            });
+            return;
+          }
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
           if ('mode' in tool && tool.mode === 'accidental') {
             if (i === 0 && lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right) {
@@ -2474,12 +2515,12 @@ export default function StaffCanvas({
               const bbY  = bb?.getY?.() ?? chordTopY;
               const bbH  = bb?.getH?.() ?? 12;
               const keys = safeEvents[j].keys;
-              const avgLine = keys.reduce((s, k) => s + keyToLine(k), 0) / Math.max(keys.length, 1);
+              const avgLine = keys.reduce((s, k) => s + keyToLineForClef(clefHere, k), 0) / Math.max(keys.length, 1);
               const stemDir = avgLine < 2 ? -1 : 1;
               const noteY = stemDir === 1 ? bbY + bbH + 2 : bbY - 2;
               // クリックしたY座標に最も近い符頭 key を特定する
               const { y: ly } = clientToGroup(svg, svgRoot as SVGGElement, (ev as MouseEvent).clientX, (ev as MouseEvent).clientY + yOffsetRef.current);
-              const startKey = findNearestKey(keys, ly, stave, keyToLine);
+              const startKey = findNearestKey(keys, ly, stave, (k) => keyToLineForClef(clefHere, k));
               tieStartRef.current = { absoluteIndex, noteIndex: j, startKey, noteX, noteY, stemDir };
             });
 
@@ -2560,6 +2601,17 @@ export default function StaffCanvas({
                 });
                 return;
               }
+              if ('mode' in tool && tool.mode === 'measureClef') {
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const currentClef = score[absoluteIndex]?.clef;
+                setClefEditState({
+                  measureAbsoluteIndex: absoluteIndex,
+                  currentValue: currentClef ?? '',
+                  overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
+                  overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
+                });
+                return;
+              }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
               const articulationMode = 'mode' in tool && tool.mode === 'articulation' ? tool.articulation : null;
@@ -2585,7 +2637,7 @@ export default function StaffCanvas({
                 // 少し外したクリックでも記号を置けるようにする。
                 const currentEv = safeEvents[j];
                 const snappedLine = snapLineBySpacing(stave, ly);
-                const clickedKeyIndex = findKeyIndexAtLine(currentEv.keys, snappedLine, keyToLine);
+                const clickedKeyIndex = findKeyIndexAtLine(currentEv.keys, snappedLine, (k) => keyToLineForClef(clefHere, k));
                 const nextEv = applyAccidentalToEvent(
                   currentEv,
                   accidentalMode,
@@ -2827,7 +2879,7 @@ export default function StaffCanvas({
               if (!safeEvents[j]?.isRest) {
 
                 const snappedLine = snapLineBySpacing(stave, ly);
-                const newKey = applyKeySignatureToNaturalKey(lineToKey(snappedLine), effectiveKeySig);
+                const newKey = applyKeySignatureToNaturalKey(lineToKeyForClef(clefHere, snappedLine), effectiveKeySig);
                 const currentEv = safeEvents[j];
                 // 和音内の既存音を個別選択する入口。
                 // Y座標を五線の線/間へ丸めた snappedLine が keys[] のどれかと一致したら、
@@ -2835,7 +2887,7 @@ export default function StaffCanvas({
                 // 「和音全体」ではなく「その1音だけ」を編集する。
                 // ここは isOnNote より先に見るので、音符セル内で同じ高さをクリックすれば
                 // 符頭のXから少し外れていても既存音を選択できる。
-                const clickedKeyIndex = findKeyIndexAtLine(currentEv.keys, snappedLine, keyToLine);
+                const clickedKeyIndex = findKeyIndexAtLine(currentEv.keys, snappedLine, (k) => keyToLineForClef(clefHere, k));
                 if (clickedKeyIndex >= 0) {
                   setSelected({ measure: startMeasureIndex + measureIndex, index: j, keyIndex: clickedKeyIndex });
                   playNoteEvent({ ...currentEv, keys: [currentEv.keys[clickedKeyIndex]] });
@@ -2850,7 +2902,7 @@ export default function StaffCanvas({
                 let selectedKeyIndex: number | undefined;
                 if (currentEv && !currentEv.keys.includes(newKey)) {
                   // 新しい音高 → keys[] に追加してソート（低音が先頭）
-                  const newKeys = [...currentEv.keys, newKey].sort((a, b) => keyToLine(b) - keyToLine(a));
+                  const newKeys = [...currentEv.keys, newKey].sort((a, b) => keyToLineForClef(clefHere, b) - keyToLineForClef(clefHere, a));
                   selectedKeyIndex = newKeys.indexOf(newKey);
                   playEvent = { ...currentEv, keys: newKeys };
                   setScore(prev => {
@@ -2894,7 +2946,7 @@ export default function StaffCanvas({
                 }
                 const snappedLine = snapLineBySpacing(stave, ly);
                 // この小節時点で有効な調号（途中調号変更対応）を使って既定の♯/♭を付与する
-                const key = applyKeySignatureToNaturalKey(lineToKey(snappedLine), effectiveKeySig);
+                const key = applyKeySignatureToNaturalKey(lineToKeyForClef(clefHere, snappedLine), effectiveKeySig);
                 // 休符の VexFlow bounding box は、音符より横に広く返ることがある。
                 // その値をそのまま使うと、休符の右側に次の音符を置きたいクリックまで
                 // 「休符本体クリック」と誤判定されるため、休符だけは描画アンカー中心の固定幅で見る。
@@ -2924,7 +2976,7 @@ export default function StaffCanvas({
                   // これで Delete や ↑/↓ の対象にもできる。
                   setScore(prev => {
                     const next = prev.map(cloneMeasureData);
-                    fillPriorMeasureRests(next, absoluteIndex, beatsPerMeasure, defaultRestKeyForClef(clef));
+                    fillPriorMeasureRests(next, absoluteIndex, beatsPerMeasure, defaultRestKeyForClef(clefHere));
                     const targetEv = next[absoluteIndex]?.events[j];
                     if (!targetEv?.isRest) return prev;
                     const latestReplacement = buildRestEditReplacement(targetEv, key, tool, noteAfterRest);
@@ -3044,7 +3096,7 @@ export default function StaffCanvas({
             const isSel = !!selected && selected.measure === absoluteIndex && selected.index === j;
             if (isSel) {
               const selectedKey = selected.keyIndex !== undefined ? safeEvents[j]?.keys[selected.keyIndex] : undefined;
-              const selectedY = selectedKey ? stave.getYForLine(keyToLine(selectedKey)) : undefined;
+              const selectedY = selectedKey ? stave.getYForLine(keyToLineForClef(clefHere, selectedKey)) : undefined;
               const sel = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
               sel.setAttribute('class', 'vf-note-selected');
               // この青枠は「今どれが selected か」を見せるためだけの描画です。
@@ -3564,6 +3616,25 @@ export default function StaffCanvas({
   }
 
   /**
+   * 途中クレフ変更を確定する。
+   * ClefType 文字列（例: "tenor"）を受け取り、有効ならそのまま保存する。
+   * 空欄ならクレフ指定を解除する（直前の小節のクレフ、またはパートの既定クレフを継続する）。
+   */
+  function handleClefConfirm(value: string) {
+    if (!clefEditState) return;
+    const { measureAbsoluteIndex } = clefEditState;
+    const isValidClef = value === 'treble' || value === 'bass' || value === 'alto' || value === 'tenor';
+    const newClef = isValidClef ? (value as ClefType) : undefined;
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], clef: newClef };
+      return next;
+    });
+    setClefEditState(null);
+  }
+
+  /**
    * 小節テンポ変更を確定する。
    * 数値として有効な値なら保存し、空欄または無効値なら BPM を削除する。
    */
@@ -3821,6 +3892,59 @@ export default function StaffCanvas({
             {KEY_SIGNATURE_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
+          </select>
+        </div>
+      )}
+      {/* クレフ変更オーバーレイ: 音部記号変更ツールで小節をクリックすると表示される */}
+      {clefEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: clefEditState.overlayX,
+            top: clefEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #0f766e',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            minWidth: 200,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#0f766e', fontFamily: 'sans-serif' }}>
+            途中音部記号変更（「解除」で元に戻す）
+          </span>
+          <select
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            defaultValue={clefEditState.currentValue || 'none'}
+            style={{
+              fontSize: 13,
+              fontFamily: 'sans-serif',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              padding: '2px 4px',
+              outline: 'none',
+            }}
+            onChange={(e) => {
+              handleClefConfirm(e.target.value === 'none' ? '' : e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setClefEditState(null);
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              if (e.relatedTarget === null) setClefEditState(null);
+            }}
+          >
+            <option value="none">（解除）</option>
+            <option value="treble">ト音記号</option>
+            <option value="bass">ヘ音記号</option>
+            <option value="alto">アルト記号</option>
+            <option value="tenor">テナー記号</option>
           </select>
         </div>
       )}
