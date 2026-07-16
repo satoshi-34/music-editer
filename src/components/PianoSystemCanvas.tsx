@@ -14,6 +14,7 @@ import type { ClefType } from './clefUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey, restKeyForVoice } from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
+import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
@@ -1339,7 +1340,9 @@ export default function PianoSystemCanvas({
     // リハーサルマーク（練習番号）の描画情報を収集する。最上段（pi===0）の上にだけ表示する。
     const rehearsalMarkEntries: Array<{ x: number; topY: number; mark: string }> = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
-    const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
+    // stave も持たせておくのは、down→up の破線ブリッジが段またぎになるかどうかを
+    // 松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため。
+    const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }> = [];
     // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
     const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
@@ -3038,6 +3041,7 @@ export default function PianoSystemCanvas({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 botY: stave.getYForLine(4),
                 mark: activeEvs[j].pedalMark!,
+                stave,
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && !activeEvs[j]?.isRest && activeEvs[j]?.fingering) {
@@ -3125,6 +3129,7 @@ export default function PianoSystemCanvas({
                     anchorX: cx,
                     botY: stave.getYForLine(4),
                     mark: ev.pedalMark,
+                    stave,
                   });
                 }
                 if (!ev.isRest && ev.fingering) {
@@ -3231,11 +3236,16 @@ export default function PianoSystemCanvas({
     });
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
-    pedalMarkEntries.forEach(({ anchorX, botY, mark }) => {
+    // Ped と ✱ が時系列でペアになる区間は、間を破線でつないで「踏み続けている範囲」を示す
+    // （実装の詳細・設計判断は StaffCanvas.tsx の同名処理・pedalBridgeUtils.ts を参照）
+    const pedalTextY = (botY: number) => botY + 25;
+    const PED_TEXT_HALF_WIDTH = 12;
+    const AST_TEXT_HALF_WIDTH = 6;
+    const drawPedalText = (anchorX: number, botY: number, mark: 'down' | 'up') => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = mark === 'down' ? 'Ped' : '✱';
       el.setAttribute('x', String(anchorX));
-      el.setAttribute('y', String(botY + 25));
+      el.setAttribute('y', String(pedalTextY(botY)));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1e293b');
       el.setAttribute('font-family', 'serif');
@@ -3243,8 +3253,45 @@ export default function PianoSystemCanvas({
       if (mark === 'down') el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+    };
+    pairPedalMarks(pedalMarkEntries).forEach((result) => {
+      if (result.kind === 'down') {
+        drawPedalText(result.down.anchorX, result.down.botY, 'down');
+        return;
+      }
+      if (result.kind === 'up') {
+        drawPedalText(result.up.anchorX, result.up.botY, 'up');
+        return;
+      }
+      const { down, up } = result;
+      drawPedalText(down.anchorX, down.botY, 'down');
+      drawPedalText(up.anchorX, up.botY, 'up');
+      const crossSystem = Math.abs(down.stave.getYForLine(2) - up.stave.getYForLine(2)) > 30
+        || up.anchorX < down.anchorX;
+      if (!crossSystem) {
+        drawPedalBridgeLine({
+          svgRoot: svgRoot as unknown as SVGElement,
+          x1: down.anchorX + PED_TEXT_HALF_WIDTH,
+          x2: up.anchorX - AST_TEXT_HALF_WIDTH,
+          y: pedalTextY(down.botY) - 4,
+        });
+      } else {
+        const edgeX1 = down.stave.getX() + down.stave.getWidth();
+        const edgeX2 = up.stave.getX();
+        drawPedalBridgeLine({
+          svgRoot: svgRoot as unknown as SVGElement,
+          x1: down.anchorX + PED_TEXT_HALF_WIDTH,
+          x2: edgeX1,
+          y: pedalTextY(down.botY) - 4,
+        });
+        drawPedalBridgeLine({
+          svgRoot: svgRoot as unknown as SVGElement,
+          x1: edgeX2,
+          x2: up.anchorX - AST_TEXT_HALF_WIDTH,
+          y: pedalTextY(up.botY) - 4,
+        });
+      }
     });
-
     // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
     ottavaEntries.forEach(({ kind, startX, endX, lineY }) => {
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
