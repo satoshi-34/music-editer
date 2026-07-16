@@ -2243,7 +2243,8 @@ export default function StaffCanvas({
           const addDots: 1 | undefined = (tool as any)?.dots === 1 ? 1 : undefined;
           const currentBeats = currentMeasure.events.reduce((sum, event) => sum + eventOccupiedBeats(event), 0);
 
-          // 3連符モード: 1音＋休符2個からなる連符グループを、空きがあれば一度に配置する。
+          // 連符モード（3/5/6/7連符）: 1音＋連符内休符(numNotes-1)個からなるグループを、
+          // 空きがあれば一度に配置する。
           // 空きが足りない場合は「一部だけ置く」ようなことはせず、何もしない（既存の空き容量チェックと同じ方針）。
           if ((tool as any)?.tuplet) {
             // PianoSystemCanvas と共通のロジック（utils/tupletUtils.ts）でグループを組み立てる。
@@ -2251,7 +2252,8 @@ export default function StaffCanvas({
               addDuration,
               addDots,
               [key],
-              defaultRestKeyForClef(clefHere)
+              defaultRestKeyForClef(clefHere),
+              (tool as any).tuplet
             );
             if (currentBeats + groupBeats > currentMeasureBeats + EPS) {
               return;

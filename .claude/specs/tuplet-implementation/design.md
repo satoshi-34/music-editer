@@ -152,8 +152,6 @@ epsilon 比較パターンをそのまま踏襲した（`StaffCanvas.tsx` に `E
 
 ## 既知の制約・今回やらなかったこと
 
-- UIから作成できるのは 3:2（3連符）のみ。5連符・7連符などは
-  データモデル上は表現可能だが、パレットのボタンは用意していない
 - MusicXML インポート側は `<tuplet type="start/stop">` を見ておらず、
   `<time-modification>` の連続性のみでグループ境界を判定する
   （多くのエクスポータ出力では十分だが、非連続な同一比率の連符が
@@ -257,3 +255,85 @@ epsilon 比較パターンをそのまま踏襲した（`StaffCanvas.tsx` に `E
   8. 単旋律譜（`StaffCanvas.tsx`）でも同じ手順で3連符入力・確認 → リファクタ後も
      リグレッションがないことを確認
   9. 全操作を通してブラウザコンソールにエラーなし
+
+## 追記2: 5連符・6連符・7連符への拡張
+
+「今回やらなかったこと」に書いていた「UIから作成できるのは3:2（3連符）のみ」という
+制約を解消し、5連符（5:4）・6連符（6:4）・7連符（7:4）をパレットから配置できるように
+拡張した。
+
+### 何が最初から一般化されていたか
+
+3連符実装時点で `NoteEvent.tuplet = { id, numNotes, notesOccupied }` は
+すでに任意の N:M 比率を表現できる形になっており、以下は変更不要だった。
+
+- `voiceMeasureUtils.tupletBeatsMultiplier()`（`notesOccupied/numNotes` を返すだけ）
+- `StaffCanvas.tsx`/`PianoSystemCanvas.tsx` の `eventOccupiedBeats()`
+- `RestOverlapFixV2.ts`・`ScorePlayer.ts`・`SoundFontEngine.ts`・`midiExport.ts`
+- `musicXmlExport.ts`（`<time-modification>` は `ev.tuplet.numNotes`/`notesOccupied`
+  をそのまま出力するだけ）・`musicXmlImport.ts`（`<time-modification>` から
+  `numNotes`/`notesOccupied` を読み込むだけ）
+- `storage.ts` の `validateNoteEvent`（`numNotes`/`notesOccupied` が正の整数か
+  だけをチェックする一般的な検証）
+- VexFlow の描画（`new Tuplet(notes, { numNotes, notesOccupied })` はコンストラクタに
+  そのまま渡すだけ。VexFlow 側が比率に応じて自動的に「3」または「N:M」の表示を選ぶ）
+
+### 実際に変更が必要だった箇所
+
+1. **`src/utils/tupletUtils.ts`**:
+   - `TupletKind`型と`TUPLET_KINDS`定数（3:2 / 5:4 / 6:4 / 7:4の一覧）を新設。
+   - `buildTupletGroupPlan()` に第5引数 `tupletSpec: TupletKind` を追加
+     （省略時は `DEFAULT_TUPLET_NUM_NOTES`/`DEFAULT_TUPLET_NOTES_OCCUPIED`＝3:2で
+     従来通り動作する後方互換）。
+   - 連符内休符の個数を固定の2個から `numNotes - 1` 個に一般化
+     （`Array.from({ length: numNotes - 1 }, () => restPart())`）。
+2. **`src/components/Palette.tsx`**:
+   - `Tool` 型の `tuplet?: boolean` を `tuplet?: TupletKind`（`{numNotes, notesOccupied}`）
+     へ変更。真偽値ではなく「どの連符か」を保持するようにした。
+   - 「3連符」単独ボタンを、`TUPLET_KINDS` を map した4つのボタン
+     （3連符/5連符/6連符/7連符）に置き換えた。押すたびに対応する `TupletKind` を
+     `tool.tuplet` にセットし、同じ数字を再度押すと解除する（他の数字を押すと
+     自動的に切り替わる）。
+3. **`StaffCanvas.tsx`/`PianoSystemCanvas.tsx`**: `buildTupletGroupPlan()` の呼び出しに
+   `(tool as any).tuplet` をそのまま第5引数として渡すよう1行追加しただけ
+   （`(tool as any)?.tuplet` の truthy 判定はオブジェクトでもそのまま機能するため、
+   分岐ロジック自体は変更不要）。
+
+### 2連符（2:3）を対象外とした理由
+
+2連符は「付点音価2つ分の時間に2つの音符を詰める」記譜で、8分の6拍子などの
+複合拍子でのみ自然に使われる（単純拍子では「2連符なのに音価が伸びる」という
+直感に反する挙動になる）。今回のタスクでは3/5/6/7連符の追加が主目的であり、
+複合拍子特有の付点音価との組み合わせUIまで設計すると工数が膨らむため、
+今回のスコープからは除外した。データモデル（`numNotes`/`notesOccupied`は任意の値を
+受け付ける）は2連符も表現できるので、将来的にパレットへボタンを追加するだけで
+対応できる。
+
+### テスト
+
+- `src/utils/tupletUtils.test.ts` に5/6/7連符のグループ構成・拍数のテストを追加
+  （tupletSpec省略時に3連符のまま後方互換であることの確認も含む）。
+- `src/utils/musicXmlTuplet.test.ts` に5連符（16分音符×5、5:4）の
+  export→import ラウンドトリップテストを追加。
+- `docker compose run --rm app npx vitest run`: 60ファイル / 822テストすべて成功。
+- `docker compose run --rm app npm run build`: 成功。
+
+### ブラウザ確認結果
+
+- 単旋律譜（`StaffCanvas.tsx`）:
+  - 8分音符＋5連符トグルで五線をクリック → 「5」のブラケットと、1拍（4分音符ぶん）に
+    8分音符5個（音符1＋休符4）が収まって表示されることを確認。
+  - 16分音符＋6連符トグルで五線をクリック → 「6:4」のブラケットと、1拍に
+    16分音符6個（音符1＋休符5）が収まって表示されることを確認
+    （VexFlowは3連符のときだけ単純な「3」表示になり、5/6/7連符は`N:4`という
+    比率表示になる。これはVexFlow標準の挙動でありバグではない）。
+  - Undo（元に戻すボタン）で直前の操作を取り消せることを確認。
+  - 「保存」→ページ再読み込み→「読込」で、配置した6連符（ブラケット・音符・休符構成）が
+    そのまま復元されることを確認。
+  - 操作を通してブラウザコンソールにエラーが出ないことを確認。
+- ピアノ大譜表（`PianoSystemCanvas.tsx`）: パレットに3/5/6/7連符ボタンが表示され、
+  声部1がアクティブな状態でのみ有効になる（既存の3連符と同じ制限）ことをコードと
+  単体テストで確認。実機での連符配置クリックは、ブラウザ自動操作ツール側の
+  クリック座標とVexFlowの描画座標のマッピングがうまく取れず、ピクセル単位での
+  目視確認は完了できなかった（単旋律譜側では同じ`buildTupletGroupPlan`呼び出しが
+  正しく動作することを確認済みのため、ロジック面のリスクは低いと判断）。

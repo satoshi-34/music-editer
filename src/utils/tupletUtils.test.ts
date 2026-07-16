@@ -43,6 +43,39 @@ describe('tupletUtils', () => {
       const planB = buildTupletGroupPlan('8', undefined, ['g/3'], 'd/3');
       expect(planA.groupEvents[0].tuplet?.id).not.toBe(planB.groupEvents[0].tuplet?.id);
     });
+
+    it('5連符(5:4)を組み立てる: 16分音符5個で音符1＋連符内休符4個、実長は16分音符4個分', () => {
+      const plan = buildTupletGroupPlan('16', undefined, ['c/4'], 'b/4', { numNotes: 5, notesOccupied: 4 });
+      expect(plan.groupEvents).toHaveLength(5);
+      expect(plan.groupEvents[0].isRest).toBe(false);
+      expect(plan.groupEvents.slice(1).every((ev) => ev.isRest)).toBe(true);
+      expect(plan.groupEvents.every((ev) => ev.tuplet?.numNotes === 5 && ev.tuplet?.notesOccupied === 4)).toBe(true);
+      // 16分音符5個(5×0.25=1.25拍)が5:4連符では4/5倍→ 16分音符4個分(1拍)になる
+      expect(plan.groupBeats).toBeCloseTo(1);
+    });
+
+    it('6連符(6:4)を組み立てる: 音符1＋連符内休符5個', () => {
+      const plan = buildTupletGroupPlan('16', undefined, ['c/4'], 'b/4', { numNotes: 6, notesOccupied: 4 });
+      expect(plan.groupEvents).toHaveLength(6);
+      expect(plan.groupEvents[0].isRest).toBe(false);
+      expect(plan.groupEvents.slice(1).every((ev) => ev.isRest)).toBe(true);
+      // 16分音符6個(1.5拍)が6:4連符では4/6倍→ 16分音符4個分(1拍)になる
+      expect(plan.groupBeats).toBeCloseTo(1);
+    });
+
+    it('7連符(7:4)を組み立てる: 音符1＋連符内休符6個', () => {
+      const plan = buildTupletGroupPlan('16', undefined, ['c/4'], 'b/4', { numNotes: 7, notesOccupied: 4 });
+      expect(plan.groupEvents).toHaveLength(7);
+      expect(plan.groupEvents.slice(1).every((ev) => ev.isRest)).toBe(true);
+      // 16分音符7個(1.75拍)が7:4連符では4/7倍→ 16分音符4個分(1拍)になる
+      expect(plan.groupBeats).toBeCloseTo(1);
+    });
+
+    it('tupletSpec を省略すると従来どおり3連符(3:2)になる（後方互換）', () => {
+      const plan = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4');
+      expect(plan.groupEvents).toHaveLength(3);
+      expect(plan.groupEvents[0].tuplet).toEqual({ id: plan.groupEvents[0].tuplet!.id, numNotes: 3, notesOccupied: 2 });
+    });
   });
 
   describe('buildTupletRestReplacement', () => {

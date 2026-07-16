@@ -6,11 +6,29 @@ const DURATION_TOOL_VALUES: DurKey[] = ['1', '2', '4', '8', '16', '32', '64'];
 
 /**
  * 3連符（3個の音符を2個ぶんの時間に詰める連符）のデフォルト構成。
- * 将来 5連符・6連符など他の連符に対応するときは、この定数を
- * ツールから渡された numNotes/notesOccupied に置き換える想定。
+ * buildTupletGroupPlan の第5引数（tupletSpec）を省略したときに使う既定値で、
+ * 呼び出し側を変更しなくても既存の3連符挙動がそのまま維持される。
  */
 export const DEFAULT_TUPLET_NUM_NOTES = 3;
 export const DEFAULT_TUPLET_NOTES_OCCUPIED = 2;
+
+/** パレットから選べる連符の種類（数字と比率のセット）。 */
+export type TupletKind = { numNotes: number; notesOccupied: number };
+
+/**
+ * パレットに用意する連符の一覧。
+ * - 3連符 (3:2) … 既存
+ * - 5連符 (5:4) / 6連符 (6:4) / 7連符 (7:4) … 今回追加
+ * 2連符 (2:3) は複合拍子（8分の6拍子など）でしか意味を持たず、
+ * 単純拍子では「2連符なのに音価が伸びる」という直感に反する挙動になるため、
+ * 今回のスコープからは除外した（design.md 参照）。
+ */
+export const TUPLET_KINDS: TupletKind[] = [
+  { numNotes: 3, notesOccupied: 2 },
+  { numNotes: 5, notesOccupied: 4 },
+  { numNotes: 6, notesOccupied: 4 },
+  { numNotes: 7, notesOccupied: 4 },
+];
 
 let tupletIdCounter = 0;
 
@@ -40,15 +58,18 @@ export type TupletGroupPlan = {
  * @param dots 付点（1個のみ対応。複付点は連符では未対応のため呼び出し側で弾く想定）
  * @param noteKeys 音符側イベントの keys（和音は非対応、単音のみ）
  * @param restKey 連符内休符の描画位置（音部記号ごとの既定休符位置）
+ * @param tupletSpec 連符の種類（numNotes/notesOccupied）。省略時は3連符(3:2)。
+ *   5連符なら {numNotes:5, notesOccupied:4} のように渡す
+ *   （音符1つ＋連符内休符 numNotes-1 個のグループになる）。
  */
 export function buildTupletGroupPlan(
   duration: DurKey,
   dots: 1 | undefined,
   noteKeys: string[],
-  restKey: string
+  restKey: string,
+  tupletSpec: TupletKind = { numNotes: DEFAULT_TUPLET_NUM_NOTES, notesOccupied: DEFAULT_TUPLET_NOTES_OCCUPIED }
 ): TupletGroupPlan {
-  const numNotes = DEFAULT_TUPLET_NUM_NOTES;
-  const notesOccupied = DEFAULT_TUPLET_NOTES_OCCUPIED;
+  const { numNotes, notesOccupied } = tupletSpec;
   const tupletId = generateTupletId();
   const tupletInfo = { id: tupletId, numNotes, notesOccupied };
 
@@ -70,7 +91,9 @@ export function buildTupletGroupPlan(
     tuplet: tupletInfo,
   });
 
-  return { groupEvents: [notePart, restPart(), restPart()], groupBeats };
+  // 音符1つ＋連符内休符(numNotes-1)個。3連符なら休符2つ、5連符なら休符4つになる。
+  const restParts = Array.from({ length: Math.max(numNotes - 1, 0) }, () => restPart());
+  return { groupEvents: [notePart, ...restParts], groupBeats };
 }
 
 /**

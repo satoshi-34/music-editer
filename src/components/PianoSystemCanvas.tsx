@@ -2263,7 +2263,8 @@ export default function PianoSystemCanvas({
               addDuration,
               addDots,
               [key],
-              defaultRestKeyForClef(clefHere)
+              defaultRestKeyForClef(clefHere),
+              (tool as any).tuplet
             );
             if(currentBeats + groupBeats > beatsPerMeasure + 0.000001){
               return;

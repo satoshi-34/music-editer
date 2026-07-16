@@ -67,6 +67,39 @@ describe('MusicXML の連符（tuplet）対応', () => {
     expect(events[2].tuplet?.id).toBe(events[0].tuplet?.id);
   });
 
+  it('5連符（16分音符×5, 5:4）を export → import しても numNotes/notesOccupied がそのまま復元される', () => {
+    const tuplet = { id: 'g5', numNotes: 5, notesOccupied: 4 };
+    const data = createSavedScoreData(
+      { title: 'Quintuplet Roundtrip', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{
+        partId: 'melody',
+        clef: 'treble',
+        measures: [{
+          events: [
+            { dur: '16', isRest: false, keys: ['c/4'], tuplet },
+            { dur: '16', isRest: true, keys: [], tuplet },
+            { dur: '16', isRest: true, keys: [], tuplet },
+            { dur: '16', isRest: true, keys: [], tuplet },
+            { dur: '16', isRest: true, keys: [], tuplet },
+          ]
+        }]
+      }],
+      1,
+      1
+    );
+
+    const xml = scoreToMusicXml(data);
+    expect(xml).toContain('<actual-notes>5</actual-notes>');
+    expect(xml).toContain('<normal-notes>4</normal-notes>');
+
+    const parsed = parseMusicXml(xml);
+    const events = parsed.parts[0].measures[0].events;
+    expect(events).toHaveLength(5);
+    expect(events[0].tuplet?.numNotes).toBe(5);
+    expect(events[0].tuplet?.notesOccupied).toBe(4);
+    expect(events.every((ev) => ev.tuplet?.id === events[0].tuplet?.id)).toBe(true);
+  });
+
   it('tuplet が無い音符には time-modification も notations/tuplet も出力されない', () => {
     const data = createSavedScoreData(
       { title: 'No Tuplet', subtitle: '', lyricist: '', composer: '', arranger: '' },
