@@ -62,6 +62,8 @@ import {
   normalizeKeySignature,
   type KeySignature
 } from '../utils/noteKeyUtils';
+import { transposeMeasureRange } from '../utils/transposeUtils';
+import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
   sanitizePlaybackRuntimeSettings,
@@ -273,6 +275,11 @@ export default function ScorePage() {
   const [selectedMeasures, setSelectedMeasures] = useState<{ start: number; end: number } | null>(null);
   // コピーした小節データ。各パートごとのスナップショット
   const [clipboard, setClipboard] = useState<{ partId: string; measures: MeasureData[] }[] | null>(null);
+
+  // 選択範囲の移調（トランスポーズ）用の UI 状態
+  const [showTransposePanel, setShowTransposePanel] = useState(false);
+  const [transposeSemitoneInput, setTransposeSemitoneInput] = useState('0');
+  const [transposeError, setTransposeError] = useState<string | null>(null);
 
   // Undo/Redo 用スナップショット（state ではなく ref で持つ — 変更自体は再レンダーで反映済みなので不要）
   type ScoreSnapshot = {
@@ -1202,6 +1209,67 @@ export default function ScorePage() {
     setHistoryVersion(v => v + 1);
   }, []);
 
+  // 選択中の小節範囲を半音単位で移調する。
+  // Cmd+C/V のコピペと同じく「選択範囲 × 全パート」を対象にする
+  // （小節選択の意味を「その小節位置にある全パートのデータ」として扱う既存の挙動に合わせる）。
+  // 1音でも対応音域（オクターブ0〜9）を外れる場合は、どのパートにも一切反映せず中止する
+  // （途中まで移調されたパートと元のままのパートが混在する事故を防ぐため）。
+  const handleTranspose = useCallback((semitones: number) => {
+    if (!selectedMeasures || semitones === 0) return;
+    const { start, end } = selectedMeasures;
+
+    type PartEntry = { measures: MeasureData[]; apply: (next: MeasureData[]) => void };
+    const parts: PartEntry[] = [];
+
+    if (scoreType === 'piano') {
+      if (rightHandData) parts.push({ measures: rightHandData, apply: setRightHandData });
+      if (leftHandData) parts.push({ measures: leftHandData, apply: setLeftHandData });
+    } else if (scoreType === 'quartet') {
+      quartetParts.forEach((part, i) => {
+        parts.push({
+          measures: part,
+          apply: (next) => setQuartetParts(prev => prev.map((p, idx) => (idx === i ? next : p))),
+        });
+      });
+    } else if (scoreType === 'ensemble') {
+      ensembleParts.forEach((part, i) => {
+        parts.push({
+          measures: part,
+          apply: (next) => setEnsembleParts(prev => prev.map((p, idx) => (idx === i ? next : p))),
+        });
+      });
+    } else {
+      if (rightHandData) parts.push({ measures: rightHandData, apply: setRightHandData });
+    }
+
+    // 先にすべてのパートで移調結果を計算してから反映する（部分適用を防ぐための2段階処理）。
+    const results = parts.map(({ measures }) =>
+      transposeMeasureRange(
+        measures,
+        start,
+        end,
+        semitones,
+        (index) => resolveMeasureKeySignature(measures, index, keySignature)
+      )
+    );
+
+    const failed = results.find(r => !r.ok) as { ok: false; error: string } | undefined;
+    if (failed) {
+      setTransposeError(failed.error);
+      return;
+    }
+
+    pushHistory();
+    parts.forEach((part, i) => {
+      const result = results[i];
+      if (result.ok) {
+        part.apply(result.measures);
+      }
+    });
+    setTransposeError(null);
+    setShowTransposePanel(false);
+  }, [selectedMeasures, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, keySignature, pushHistory]);
+
   // スナップショットを state に適用する（undo/redo 共通）
   const applySnapshot = useCallback((snap: ScoreSnapshot) => {
     setRightHandData(snap.rightHandData);
@@ -1687,6 +1755,15 @@ export default function ScorePage() {
         setSelectedMeasures(null);
         return;
       }
+      // Cmd/Ctrl+Shift+↑/↓: 選択小節を半音移調
+      // 単音選択時の Alt+↑/↓（半音シフト）、Shift+↑/↓（オクターブ相当シフト）と衝突しないよう
+      // 修飾キーを1つ増やして区別する（.claude/specs/transpose-selection/design.md 参照）。
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        if (!selectedMeasures) return;
+        handleTranspose(e.key === 'ArrowUp' ? 1 : -1);
+        e.preventDefault();
+        return;
+      }
       // 矢印キー: 選択小節をカーソル移動（Shift で範囲拡張）
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         // テキスト入力中・Cmd 修飾中は除外
@@ -1809,7 +1886,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は useEffect より後に宣言されるため deps に入れられない。
   // 代わりに ref で最新値を追跡する（arrow key ハンドラ内で参照）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMeasures, clipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, pushHistory]);
+  }, [selectedMeasures, clipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, pushHistory, handleTranspose]);
 
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
 
@@ -2358,6 +2435,58 @@ export default function ScorePage() {
                 onChange={handleImportFile}
               />
               <button className="ghost" onClick={() => window.print()}>印刷</button>
+              {selectedMeasures && (
+                <div className="coord-correction-wrap">
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => { setTransposeError(null); setShowTransposePanel(v => !v); }}
+                    title="選択中の小節を半音/全音/オクターブ単位で移調します"
+                  >
+                    移調
+                  </button>
+                  {showTransposePanel && (
+                    <>
+                      <div className="dropdown-overlay" onClick={() => setShowTransposePanel(false)} />
+                      <div className="coord-panel">
+                        <p className="coord-panel-note">選択中の小節（全パート）を移調します</p>
+                        <div className="coord-panel-row" style={{ flexWrap: 'wrap', gap: 4 }}>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(1)}>半音上</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(-1)}>半音下</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(2)}>全音上</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(-2)}>全音下</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(12)}>オクターブ上</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(-12)}>オクターブ下</button>
+                        </div>
+                        <div className="coord-panel-row">
+                          <input
+                            type="number"
+                            min={-12}
+                            max={12}
+                            value={transposeSemitoneInput}
+                            onChange={e => setTransposeSemitoneInput(e.target.value)}
+                            aria-label="移調する半音数"
+                            style={{ width: 56 }}
+                          />
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => {
+                              const n = Math.max(-12, Math.min(12, Number(transposeSemitoneInput)));
+                              if (!Number.isNaN(n)) handleTranspose(n);
+                            }}
+                          >
+                            半音数指定で移調
+                          </button>
+                        </div>
+                        {transposeError && (
+                          <p className="coord-panel-note" style={{ color: 'crimson' }}>{transposeError}</p>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
               {partExtractionOptions.length > 0 && (
                 <label className="toolbar-select-label" title="合奏練習用に、選んだ1パートだけの譜面を表示・印刷します（閲覧・印刷専用）">
                   <span>パート譜表示</span>
