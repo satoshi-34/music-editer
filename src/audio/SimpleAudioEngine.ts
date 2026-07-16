@@ -9,6 +9,7 @@ import {
   getMasterVolumeGain,
   type PlaybackSoundProfile
 } from './playbackSettings';
+import { applySwingToTiming } from '../utils/swingUtils';
 
 interface SimpleInstrumentConfig {
   // 1つの音色を何本の波で作るかを表す。
@@ -60,6 +61,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
   private currentInstrument: InstrumentType = InstrumentType.PIANO;
   private hasPrimedOutput: boolean = false;
   private soundProfile: PlaybackSoundProfile = DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile;
+  // スウィング再生のON/OFF。記譜は変えず、再生タイミングだけに影響する。
+  private swingEnabled: boolean = DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.swingEnabled;
   // すべての発音をこの GainNode 経由で destination へ流す。
   // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
   private masterGainNode: GainNode | null = null;
@@ -349,7 +352,20 @@ export class SimpleAudioEngine implements PlaybackEngine {
    * 譜面データから音符を順次再生する
    */
   async playScore(
-    scoreData: Array<{ events: Array<{ dur: string; isRest: boolean; keys: string[]; startBeat?: number; velocity?: number; durationScale?: number }>; measureBeats?: number }>,
+    scoreData: Array<{
+      events: Array<{
+        dur: string;
+        isRest: boolean;
+        keys: string[];
+        startBeat?: number;
+        velocity?: number;
+        durationScale?: number;
+        dots?: 1 | 2;
+        tuplet?: { numNotes: number; notesOccupied: number };
+      }>;
+      measureBeats?: number;
+      isCompoundMeter?: boolean;
+    }>,
     bpm: number = 120,
     startTime?: number
   ): Promise<void> {
@@ -381,16 +397,35 @@ export class SimpleAudioEngine implements PlaybackEngine {
         }
         
         let maxMeasureEndTime = currentTime;
+        const secondsPerBeat = 60 / bpm;
+        // スウィングは複合拍子（6/8 等）では対象外にする（swingUtils 参照）。
+        const swingActiveForMeasure = this.swingEnabled && !measure.isCompoundMeter;
 
         // 小節内の各音符を処理
         for (const event of measure.events) {
           const duration = this.durationToSeconds(event.dur, bpm);
+          // startBeat を持たない単声部イベントは、直前までの累積時間から拍位置を逆算する。
+          const nominalStartBeat = typeof event.startBeat === 'number'
+            ? event.startBeat
+            : (currentTime - measureStartTime) / secondsPerBeat;
+          const nominalDurationBeats = duration / secondsPerBeat;
+
+          // スウィング変換は「鳴らす瞬間の開始位置・長さ」だけに効かせる。
+          // 小節内の並び（currentTime や maxMeasureEndTime）は変換前の duration のまま進め、
+          // スウィングON/OFFで小節の長さ自体がズレないようにする。
+          const swingTiming = swingActiveForMeasure
+            ? applySwingToTiming(
+                { startBeat: nominalStartBeat, durationBeats: nominalDurationBeats },
+                event.dur as never,
+                event.dots,
+                event.tuplet
+              )
+            : { startBeat: nominalStartBeat, durationBeats: nominalDurationBeats };
+
           // アーティキュレーションで「鳴らす長さ」だけ伸縮させる。
           // タイミング（次の音までの間隔）は duration のまま据え置く。
-          const soundDuration = duration * (event.durationScale ?? 1);
-          const eventStartTime = typeof event.startBeat === 'number'
-            ? measureStartTime + (event.startBeat * (60 / bpm))
-            : currentTime;
+          const soundDuration = (swingTiming.durationBeats * secondsPerBeat) * (event.durationScale ?? 1);
+          const eventStartTime = measureStartTime + (swingTiming.startBeat * secondsPerBeat);
 
           if (!event.isRest && event.keys && event.keys.length > 0) {
             // 音符の場合は最初の音高を再生（単音対応）
@@ -563,6 +598,11 @@ export class SimpleAudioEngine implements PlaybackEngine {
       this.masterGainNode.gain.value = getMasterVolumeGain(profile);
     }
     console.log('[SimpleAudioEngine] 音色プロファイルを更新しました:', profile);
+  }
+
+  setSwingEnabled(enabled: boolean): void {
+    this.swingEnabled = enabled;
+    console.log('[SimpleAudioEngine] スウィング再生を切り替えました:', enabled);
   }
 
   /**

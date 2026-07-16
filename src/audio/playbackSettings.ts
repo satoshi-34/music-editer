@@ -40,6 +40,12 @@ export interface PlaybackSoundRuntimeSettings {
   previewAccidentalOnApply: boolean;
   /** エンドユーザー向けの「音のキャラ」調整値 */
   profile: PlaybackSoundProfile;
+  /**
+   * スウィング再生（ジャズの「跳ねる」リズム）を有効にするか。
+   * 記譜（見た目・保存データの音価）は一切変えず、再生タイミングだけを揺らす設定。
+   * 既定は false（ストレート再生）で、既存ユーザーの再生結果を変えないようにする。
+   */
+  swingEnabled: boolean;
 }
 
 export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettings = {
@@ -48,6 +54,7 @@ export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettin
   engineMode: 'soundfont',
   pluginName: 'FluidR3_GM',
   previewAccidentalOnApply: true,
+  swingEnabled: false,
   profile: {
     brightness: 0.5,
     attack: 0.5,
@@ -112,6 +119,9 @@ export function sanitizePlaybackRuntimeSettings(raw: unknown): PlaybackSoundRunt
     previewAccidentalOnApply: typeof raw.previewAccidentalOnApply === 'boolean'
       ? raw.previewAccidentalOnApply
       : DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.previewAccidentalOnApply,
+    swingEnabled: typeof raw.swingEnabled === 'boolean'
+      ? raw.swingEnabled
+      : DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.swingEnabled,
     profile: {
       brightness: clampProfileValue(profile.brightness, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.brightness),
       attack: clampProfileValue(profile.attack, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.attack),

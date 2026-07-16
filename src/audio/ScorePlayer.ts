@@ -11,7 +11,8 @@ import { AudioErrorHandler, AudioErrorFactory } from './AudioError';
 import { expandMeasuresForPlayback } from './repeatPlaybackUtils';
 import type { MeasureData, NoteEvent, DurKey } from '../types/storage';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
-import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
+import { getDurationBeats, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
+import { applySwingToTiming, shouldApplySwing } from '../utils/swingUtils';
 
 /**
  * 再生位置を表すインターフェース
@@ -94,6 +95,9 @@ export class ScorePlayer {
 
   // 再生オプション
   private currentOptions: ScorePlaybackOptions = {};
+
+  // スウィング再生のON/OFF。記譜は変えず、再生タイミングだけに影響する。
+  private swingEnabled: boolean = false;
 
   constructor(
     private audioEngine: AudioEngine,
@@ -406,6 +410,9 @@ export class ScorePlayer {
     // 小節単位のテンポ変更に対応するため「現在有効な BPM」を追跡する。
     // グローバルテンポを初期値とし、各小節の bpm フィールドで上書きする。
     let currentBpm = tempoSettings.bpm;
+    // 小節単位の拍子変更にも対応するため「現在有効な拍子」を追跡する。
+    // スウィングは複合拍子（6/8 等）を対象外にするための判定に使う。
+    let currentTimeSignature = tempoSettings.timeSignature;
 
     for (let expandedMeasureIndex = 0; expandedMeasureIndex < expandedMeasures.length; expandedMeasureIndex++) {
       const expandedMeasure = expandedMeasures[expandedMeasureIndex];
@@ -414,41 +421,50 @@ export class ScorePlayer {
       if (measure.bpm != null) {
         currentBpm = measure.bpm;
       }
-      let measureTime = 0; // 小節内での時間（秒）
+      if (measure.timeSignature != null) {
+        currentTimeSignature = measure.timeSignature;
+      }
+      const secondsPerBeat = 60 / currentBpm;
+      const swingActiveForMeasure = shouldApplySwing(this.swingEnabled, currentTimeSignature);
+      let measureBeatPosition = 0; // 小節内での拍位置（4分音符=1拍）
 
       for (let noteIndex = 0; noteIndex < measure.events.length; noteIndex++) {
         const event = measure.events[noteIndex];
 
-        // 音価から再生時間を計算（現在有効な BPM を使う）
-        const duration = this.durToSeconds(event.dur, currentBpm, event.dots, event.tuplet);
-        
+        // 音価を拍数へ変換してから、スウィング対象なら開始位置・長さを変換する。
+        const durationBeats = getDurationBeats(event.dur, event.dots) * tupletBeatsMultiplier(event.tuplet);
+        const nominalTiming = { startBeat: measureBeatPosition, durationBeats };
+        const swingTiming = swingActiveForMeasure
+          ? applySwingToTiming(nominalTiming, event.dur, event.dots, event.tuplet)
+          : nominalTiming;
+
         // 休符でない場合のみスケジュールに追加（和音は配列で保持）
         if (!event.isRest && event.keys?.length) {
           const scheduledNote: ScheduledNote = {
             note: event.keys.map(k => this.convertKeyToToneFormat(k)),
             velocity: dynamicVelocities.get(buildDynamicEventKey(expandedMeasureIndex, noteIndex)) ?? 0.5,
-            duration: duration,
-            time: currentTime + measureTime,
+            duration: swingTiming.durationBeats * secondsPerBeat,
+            time: currentTime + (swingTiming.startBeat * secondsPerBeat),
             // 展開後に同じ小節が再登場しても、UI 側には元の小節番号を返す。
             // これでハイライトが「譜面上のどこを鳴らしているか」と一致する。
             measureIndex: expandedMeasure.sourceMeasureIndex,
             noteIndex: noteIndex,
             originalEvent: event
           };
-          
+
           schedule.push(scheduledNote);
         }
 
-        // 次の音符の開始時間を計算
-        // 休符も「何も鳴らさない音価」として時間は進める必要があるため、
-        // schedule に push しない場合でも measureTime は必ず足す。
-        measureTime += duration;
+        // 次の音符の開始位置は、スウィングの影響を受けない「本来の拍位置」で進める。
+        // ここをスウィング後の値で進めてしまうと、以降の音符すべてが少しずつ
+        // ズレていってしまう（スウィングは各ペア内で完結させたい）。
+        measureBeatPosition += durationBeats;
       }
 
       // 次の小節の開始時間を更新
       // 小節ごとにまとめて currentTime へ反映しておくと、
       // 後続の小節は常に「譜面先頭から何秒後か」で扱える。
-      currentTime += measureTime;
+      currentTime += measureBeatPosition * secondsPerBeat;
     }
 
     return schedule;
@@ -676,6 +692,27 @@ export class ScorePlayer {
     });
 
     console.log('[ScorePlayer] 再生が完了しました');
+  }
+
+  /**
+   * スウィング再生のON/OFFを設定する。
+   * テンポ変更と同じく、再生中なら現在位置を保ったまま再スケジュールする。
+   */
+  setSwingEnabled(enabled: boolean): void {
+    if (this.swingEnabled === enabled) {
+      return;
+    }
+    this.swingEnabled = enabled;
+    console.log('[ScorePlayer] スウィング再生を切り替えました:', enabled);
+
+    if (this.playbackState === (PLAYBACK_STATE.PLAYING as PlaybackState)) {
+      const currentPos = this.getCurrentPosition();
+      this.stop();
+      this.loadScore(this.measures);
+      this.play({ ...this.currentOptions, startPosition: currentPos });
+    } else if (this.measures.length > 0) {
+      this.scheduledNotes = this.generatePlaybackSchedule(this.measures);
+    }
   }
 
   /**

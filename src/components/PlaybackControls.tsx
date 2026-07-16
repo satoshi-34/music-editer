@@ -60,6 +60,11 @@ export interface PlaybackControlsProps {
   onSoundProfileChange?: (nextProfile: PlaybackSoundRuntimeSettings['profile']) => void;
   /** 臨時記号適用時の確認音 ON/OFF 切り替え */
   onPreviewAccidentalOnApplyChange?: (enabled: boolean) => void;
+  /**
+   * スウィング再生（ジャズの「跳ねる」リズム）の ON/OFF 切り替え。
+   * 記譜（見た目・保存データ）は変えず、再生タイミングだけに影響する。
+   */
+  onSwingEnabledChange?: (enabled: boolean) => void;
 }
 
 /**
@@ -162,7 +167,8 @@ export default function PlaybackControls({
   onSoundEngineModeChange,
   onPluginNameChange,
   onSoundProfileChange,
-  onPreviewAccidentalOnApplyChange
+  onPreviewAccidentalOnApplyChange,
+  onSwingEnabledChange
 }: PlaybackControlsProps) {
   // テンポ入力の内部状態
   const [tempoInput, setTempoInput] = useState(currentTempo.toString());
@@ -275,6 +281,10 @@ export default function PlaybackControls({
   const handlePreviewAccidentalOnApplyChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     onPreviewAccidentalOnApplyChange?.(event.target.checked);
   }, [onPreviewAccidentalOnApplyChange]);
+
+  const handleSwingEnabledChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    onSwingEnabledChange?.(event.target.checked);
+  }, [onSwingEnabledChange]);
 
   /**
    * 再生/一時停止ボタンのアイコンとラベルを取得
@@ -543,6 +553,23 @@ export default function PlaybackControls({
                     aria-label="臨時記号適用時に確認音を鳴らす"
                   />
                   <span>臨時記号を付けたときに確認音を鳴らす</span>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={soundRuntimeSettings.swingEnabled}
+                    onChange={handleSwingEnabledChange}
+                    aria-label="スウィング再生"
+                  />
+                  <span>
+                    スウィング再生（ジャズ）
+                    {/* 記譜（見た目・保存データの音価）は変わらず、再生タイミングだけが跳ねる設定であることを
+                        チェックボックスの隣で一言添えておく。楽譜が変わったと誤解されないようにするため。 */}
+                    <span style={{ display: 'block', fontSize: 11, color: '#6b7280' }}>
+                      記譜は変えず、8分音符の再生だけを「タッタ」と跳ねさせます
+                    </span>
+                  </span>
                 </label>
 
                 {/* 4 本のスライダーは、シンセの専門パラメータを直接見せる代わりに

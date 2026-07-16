@@ -74,6 +74,7 @@ import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId } from '../utils/instrumentationPartUtils';
 import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
 import { DEFAULT_TIME_SIGNATURE, formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import { isCompoundTimeSignature } from '../utils/swingUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
@@ -387,11 +388,12 @@ export default function ScorePage() {
     // どの方式でも、毎回「今のUI設定」をエンジン側へ流し直してズレを防ぐ。
     audioEngine.setInstrument(currentInstrument);
     audioEngine.setSoundProfile(soundRuntimeSettings.profile);
+    audioEngine.setSwingEnabled(soundRuntimeSettings.swingEnabled);
     await audioEngine.initialize();
     setActiveSoundEngineMode(soundRuntimeSettings.engineMode);
     setIsTemporaryBuiltInFallback(false);
     return audioEngine;
-  }, [currentInstrument, getAudioEngine, recreateAudioEngine, soundRuntimeSettings.engineMode, soundRuntimeSettings.profile]);
+  }, [currentInstrument, getAudioEngine, recreateAudioEngine, soundRuntimeSettings.engineMode, soundRuntimeSettings.profile, soundRuntimeSettings.swingEnabled]);
 
   const switchToBuiltInFallbackEngine = useCallback(async () => {
     // SoundFont の初期化やサンプル読み込みで失敗したときに、
@@ -404,6 +406,7 @@ export default function ScorePage() {
     });
     fallbackEngine.setInstrument(currentInstrument);
     fallbackEngine.setSoundProfile(soundRuntimeSettings.profile);
+    fallbackEngine.setSwingEnabled(soundRuntimeSettings.swingEnabled);
     await fallbackEngine.initialize();
     audioEngineRef.current = fallbackEngine;
     setActiveSoundEngineMode('built-in');
@@ -439,6 +442,7 @@ export default function ScorePage() {
     // こうしておくと、次回起動時も同じ音色傾向から作業を再開できる。
     localStorage.setItem(PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY, JSON.stringify(soundRuntimeSettings));
     getAudioEngine().setSoundProfile(soundRuntimeSettings.profile);
+    getAudioEngine().setSwingEnabled(soundRuntimeSettings.swingEnabled);
   }, [getAudioEngine, soundRuntimeSettings]);
 
   const clearPlaybackTimer = useCallback(() => {
@@ -896,6 +900,8 @@ export default function ScorePage() {
                 // 再生エンジン側が 3/8 や 6/8 の小節長を正しく保てるよう、
                 // 各小節の「本来ここまで進むべき拍数」を明示して渡す。
                 measureBeats: getMeasureBeats(scoreTimeSignature),
+                // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
+                isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
                 events: flattenMeasureForPlayback(item.measure).map((event, eventIndex) => {
                   // アーティキュレーション（スタッカート＝短く、アクセント＝強く 等）を
                   // 音の長さ・音量の倍率として取り出す。
@@ -1161,6 +1167,10 @@ export default function ScorePage() {
 
   const handlePreviewAccidentalOnApplyChange = useCallback((enabled: boolean) => {
     setSoundRuntimeSettings(prev => ({ ...prev, previewAccidentalOnApply: enabled }));
+  }, []);
+
+  const handleSwingEnabledChange = useCallback((enabled: boolean) => {
+    setSoundRuntimeSettings(prev => ({ ...prev, swingEnabled: enabled }));
   }, []);
 
   const handleKeySignatureChange = useCallback((nextKeySignature: KeySignature) => {
@@ -2317,6 +2327,7 @@ export default function ScorePage() {
                 onPluginNameChange={handlePluginNameChange}
                 onSoundProfileChange={handleSoundProfileChange}
                 onPreviewAccidentalOnApplyChange={handlePreviewAccidentalOnApplyChange}
+                onSwingEnabledChange={handleSwingEnabledChange}
               />
             </div>
           )}

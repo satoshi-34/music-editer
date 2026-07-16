@@ -2,6 +2,7 @@ import type { MeasureData, TimeSignature } from '../types/storage';
 import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
 import { getMeasureBeats } from './timeSignatureUtils';
 import { getEventDurationBeats, getMeasureDurationBeats } from './voiceMeasureUtils';
+import { applySwingToTiming, shouldApplySwing } from './swingUtils';
 
 export interface PlaybackTimelinePosition {
   measureIndex: number;
@@ -26,7 +27,8 @@ export interface PlaybackTimelineItem {
 export function buildPlaybackPositionTimeline(
   measures: MeasureData[],
   bpm: number,
-  timeSignature: TimeSignature
+  timeSignature: TimeSignature,
+  swingEnabled: boolean = false
 ): PlaybackTimelineItem[] {
   const expandedMeasures = expandMeasuresForPlayback(measures);
   const msPerBeat = (60 / bpm) * 1000;
@@ -37,20 +39,36 @@ export function buildPlaybackPositionTimeline(
   expandedMeasures.forEach(({ sourceMeasureIndex, measure }) => {
     const visibleEvents = measure.events ?? [];
     let beatPosition = 0;
+    // 小節ごとに拍子が変わる譜面では、その小節の拍子でスウィング対象かどうかを判定する。
+    const measureTimeSignature = measure.timeSignature ?? timeSignature;
+    const swingActiveForMeasure = shouldApplySwing(swingEnabled, measureTimeSignature);
 
     visibleEvents.forEach((event, noteIndex) => {
       // 休符は光らせず、実際に音が鳴るイベントだけタイムラインへ積む。
       if (!event.isRest && Array.isArray(event.keys) && event.keys.length > 0) {
+        // 見た目のハイライトも、実際に鳴る位置（スウィング後）に合わせる。
+        // こうしないと、スウィングON時に「音はズレて鳴っているのにハイライトは
+        // 均等なまま」という違和感が出てしまう。
+        const swingTiming = swingActiveForMeasure
+          ? applySwingToTiming(
+              { startBeat: beatPosition, durationBeats: getEventDurationBeats(event) },
+              event.dur,
+              event.dots,
+              event.tuplet
+            )
+          : { startBeat: beatPosition, durationBeats: getEventDurationBeats(event) };
+
         timeline.push({
-          atMs: elapsedBeats * msPerBeat + beatPosition * msPerBeat,
+          atMs: elapsedBeats * msPerBeat + swingTiming.startBeat * msPerBeat,
           position: {
             measureIndex: sourceMeasureIndex,
-            beatPosition,
+            beatPosition: swingTiming.startBeat,
             noteIndex,
           },
         });
       }
 
+      // 次の音符の位置は、スウィングの影響を受けない「本来の拍位置」で進める。
       beatPosition += getEventDurationBeats(event);
     });
 

@@ -10,9 +10,14 @@ import type { PlaybackSoundRuntimeSettings } from './playbackSettings';
 export function createPlaybackEngine(
   settings: PlaybackSoundRuntimeSettings
 ): PlaybackEngine {
-  if (settings.engineMode === 'soundfont') {
-    return new SoundFontEngine(resolveSoundFontName(settings.pluginName));
-  }
+  const engine = settings.engineMode === 'soundfont'
+    ? new SoundFontEngine(resolveSoundFontName(settings.pluginName))
+    : new SimpleAudioEngine();
 
-  return new SimpleAudioEngine();
+  // 生成直後にも現在のスウィング設定を反映しておく。
+  // こうしないと、エンジンを作り直した直後の初回再生だけ
+  // ストレートに戻ってしまう瞬間ができてしまう。
+  engine.setSwingEnabled(settings.swingEnabled);
+
+  return engine;
 }

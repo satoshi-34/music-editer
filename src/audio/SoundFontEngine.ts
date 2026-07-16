@@ -5,6 +5,7 @@ import type { PlaybackSoundProfile } from './playbackSettings';
 import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS, getMasterVolumeGain } from './playbackSettings';
 import { InstrumentType } from './SoundSource';
 import { getDurationBeats, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
+import { applySwingToTiming } from '../utils/swingUtils';
 
 type SoundFontModule = typeof import('soundfont-player');
 
@@ -110,6 +111,8 @@ export class SoundFontEngine implements PlaybackEngine {
   private module: SoundFontModule | null = null;
   private currentInstrument: InstrumentType = InstrumentType.PIANO;
   private soundProfile: PlaybackSoundProfile = DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile;
+  // スウィング再生のON/OFF。記譜は変えず、再生タイミングだけに影響する。
+  private swingEnabled: boolean = DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.swingEnabled;
   private readonly soundfontName: string;
   // playerCache は「同じ楽器をもう一度使うときに、毎回ネット読み込みし直さない」ための置き場。
   // キーは「SoundFontパック名 + 楽器名」の組み合わせにしている。
@@ -178,14 +181,29 @@ export class SoundFontEngine implements PlaybackEngine {
           continue;
         }
 
+        // スウィングは複合拍子（6/8 等）では対象外にする（swingUtils 参照）。
+        const swingActiveForMeasure = this.swingEnabled && !measure.isCompoundMeter;
+        // startBeat を持たない単声部イベント用に、小節頭からの拍位置を自前で積み上げていく。
+        let sequentialBeatPosition = 0;
+
         for (const event of measure.events) {
+          const durationBeats = getDurationBeats(event.dur as never, event.dots) * tupletBeatsMultiplier((event as any).tuplet);
           const duration = this.durationToSeconds(event.dur, bpm, event.dots, (event as any).tuplet);
+          // 和音・複数声部で同時発音位置をそろえるための開始拍。
+          // startBeat が無い単声部イベントは、直前までの累積位置を使う。
+          const nominalStartBeat = typeof event.startBeat === 'number' ? event.startBeat : sequentialBeatPosition;
+
+          // スウィング変換は「鳴らす瞬間の開始位置・長さ」だけに効かせる。
+          // 次の音符の並び（sequentialBeatPosition や measure 終端の計算）は
+          // 変換前の拍数のまま進めることで、スウィングON/OFFで小節の長さ自体はズレないようにする。
+          const swingTiming = swingActiveForMeasure
+            ? applySwingToTiming({ startBeat: nominalStartBeat, durationBeats }, event.dur, event.dots, (event as any).tuplet)
+            : { startBeat: nominalStartBeat, durationBeats };
+
           // アーティキュレーションで「鳴らす長さ」だけ伸縮させる。
           // タイミング（次の音までの間隔）は duration のまま据え置く。
-          const soundDuration = duration * (event.durationScale ?? 1);
-          const eventStartTime = typeof event.startBeat === 'number'
-            ? measureStartTime + (event.startBeat * (60 / bpm))
-            : partTime;
+          const soundDuration = (swingTiming.durationBeats * (60 / bpm)) * (event.durationScale ?? 1);
+          const eventStartTime = measureStartTime + (swingTiming.startBeat * (60 / bpm));
           if (!event.isRest && event.keys.length > 0) {
             // 和音は keys を1つずつ同じ時刻で予約する。
             // SoundFont 側は単音 player なので、「同時刻に複数 start」を積む形で和音にする。
@@ -200,7 +218,9 @@ export class SoundFontEngine implements PlaybackEngine {
           }
           if (typeof event.startBeat !== 'number') {
             // startBeat が無いイベントは、従来どおり「前から順に並ぶ単声部」として進める。
+            // ここは変換前の duration を使い、スウィングでも小節内の合計拍数がズレないようにする。
             partTime += duration;
+            sequentialBeatPosition += durationBeats;
           }
         }
         if (measure.events.some((event) => typeof event.startBeat === 'number')) {
@@ -279,6 +299,11 @@ export class SoundFontEngine implements PlaybackEngine {
       this.masterGainNode.gain.value = getMasterVolumeGain(profile);
     }
     console.log('[SoundFontEngine] 音色プロファイルを更新しました:', profile);
+  }
+
+  setSwingEnabled(enabled: boolean): void {
+    this.swingEnabled = enabled;
+    console.log('[SoundFontEngine] スウィング再生を切り替えました:', enabled);
   }
 
   /**

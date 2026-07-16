@@ -36,6 +36,12 @@ export interface PlaybackPart {
     events: PlaybackMeasureEvent[];
     /** この小節が本来もつ長さ（4分音符=1拍） */
     measureBeats?: number;
+    /**
+     * この小節が複合拍子（6/8, 9/8, 12/8 など）かどうか。
+     * スウィング再生は「4分音符=1拍」を前提にした表拍/裏拍判定のため、
+     * 複合拍子ではこのフラグを見て対象から除外する（swingUtils.isCompoundTimeSignature 参照）。
+     */
+    isCompoundMeter?: boolean;
   }>;
 }
 
@@ -53,6 +59,12 @@ export interface PlaybackEngine {
   dispose(): void;
   setInstrument(instrument: InstrumentType): void;
   setSoundProfile(profile: PlaybackSoundProfile): void;
+  /**
+   * スウィング再生（記譜はそのまま、再生タイミングだけ跳ねさせる）の ON/OFF を設定する。
+   * 未実装のエンジンでも呼べるように optional にはせず、
+   * 対応する全エンジン（内蔵音源 / SoundFont）で実装する。
+   */
+  setSwingEnabled(enabled: boolean): void;
   /**
    * 診断専用: 内部の AudioContext を返す（未初期化なら null）。
    * Safari silent failure（issue #14）のヘルスチェックが
