@@ -293,7 +293,8 @@ export default function Palette({
                 }}
                 title={`${kind.numNotes}連符（選択した音価で1音+休符${kind.numNotes - 1}個の${kind.numNotes}連符グループを配置する）`}
                 aria-label={`${kind.numNotes}連符（選択した音価で1音+休符${kind.numNotes - 1}個の${kind.numNotes}連符グループを配置する）`}
-                style={btnStyle(active, { fontSize: 10, fontWeight: 'bold', width: 26 })}
+                // 他のボタンと同じ幅・高さ（BUTTON_W/H）に揃え、ラベルは折り返さない
+                style={btnStyle(active, { fontSize: 11, fontWeight: 'bold', whiteSpace: 'nowrap' })}
               >
                 {kind.numNotes}連符
               </button>
@@ -345,10 +346,10 @@ export default function Palette({
               </button>
             );
           })}
-        </div>
-
-        {/* 休符行：7音価 + リピート2 + 括弧2 */}
-        <div style={ROW_STYLE}>
+          {/* 休符・リピート・括弧も同じ折り返し行に続ける。
+              以前は音符行と休符行を別の行に分けていたが、広い画面では右側が
+              大きく空いてしまうため、1つの折り返し行にして横幅を使い切り、
+              狭い画面では自動で折り返すようにする。 */}
           {ROW2.map((t, i) => {
             const active = !tieActive && 'duration' in value && 'duration' in t &&
               value.duration === t.duration && !!value.isRest;
