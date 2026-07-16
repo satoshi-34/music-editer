@@ -733,9 +733,10 @@ function accidentalLabel(kind: AccidentalToolKind) {
 }
 
 function microtoneSymbol(type: MicrotoneType) {
-  // 𝄲 = 四分音上げ、𝄳 = 四分音下げ（Unicode 音楽記号）。
-  // フォントが無い環境でも意味が伝わるよう title/aria-label 側で日本語表記を補っている。
-  return type === 'quarterSharp' ? '\u{1D132}' : '\u{1D133}';
+  // U+1D132/1D133（四分音記号）は多くの環境でフォントが無く「□」（豆腐）になるため、
+  // どの環境でも確実に表示できる「¼♯ / ¼♭」というテキスト表記にする。
+  // 正式なグリフは楽譜側（VexFlow）で描画されるので、ボタンは意味が伝われば十分。
+  return type === 'quarterSharp' ? '¼♯' : '¼♭';
 }
 
 function microtoneLabel(type: MicrotoneType) {
