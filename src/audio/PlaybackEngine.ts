@@ -24,6 +24,11 @@ export interface PlaybackMeasureEvent {
    * 「鳴っている長さ」だけを伸縮させるためにエンジン側で使う。
    */
   durationScale?: number;
+  /**
+   * 微分音（四分音）の臨時記号。keys配列のインデックス（keyIndex）ごとに ±50セントを反映する。
+   * NoteEvent.microtones（src/types/storage.ts）と同じ形。
+   */
+  microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[];
 }
 
 export interface PlaybackPart {

@@ -19,8 +19,10 @@ import {
   snapshotAccidentalState,
   isValidKeySignature,
   KEY_SIGNATURE_OPTIONS,
+  microtoneAccidentalCode,
   type MeasureAccidentalState,
   type KeySignature,
+  type MicrotoneType,
 } from '../utils/noteKeyUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
@@ -689,6 +691,18 @@ function makeVFNote(
     }
   });
 
+  // 微分音（四分音）の臨時記号。通常の ♯/♭/♮ とは独立して、対象の keyIndex にだけ表示する。
+  // 小節内での持続（courtesy accidental）の概念は持たず、毎回明示的に表示する。
+  ev.microtones?.forEach(({ keyIndex, type }) => {
+    if (keyIndex < 0 || keyIndex >= ev.keys.length) return;
+    try {
+      const acc = new Accidental(microtoneAccidentalCode(type));
+      (n as any).addModifier?.(acc, keyIndex);
+    } catch {
+      // ライブラリ差異で失敗しても、譜面全体の描画は止めない。
+    }
+  });
+
   // 前打音（grace note）を主音符の前に付ける
   if (ev.graceNotes?.length) {
     try {
@@ -729,7 +743,61 @@ function applyAccidentalToEvent(
     ? ev.keys.map((key, index) => index === keyIndex ? setKeyAccidental(key, accidental) : key)
     : ev.keys.map(key => setKeyAccidental(key, accidental));
   const changed = nextKeys.some((key, index) => key !== ev.keys[index]);
-  return changed ? { ...ev, keys: nextKeys } : ev;
+
+  // ♯/♭/♮ と微分音（四分音）は同じ keyIndex に同時には付けない（排他）。
+  // 通常の臨時記号を適用したら、対象 keyIndex の四分音は消す。
+  const affectedIndexes = shouldEditSingleKey
+    ? [keyIndex]
+    : ev.keys.map((_, index) => index);
+  const nextMicrotones = ev.microtones?.filter(m => !affectedIndexes.includes(m.keyIndex));
+  const microtonesChanged = (ev.microtones?.length ?? 0) !== (nextMicrotones?.length ?? 0);
+
+  if (!changed && !microtonesChanged) {
+    return ev;
+  }
+  return {
+    ...ev,
+    keys: changed ? nextKeys : ev.keys,
+    microtones: nextMicrotones,
+  };
+}
+
+/**
+ * 微分音（四分音）の臨時記号を音符に適用する。
+ * 既に同じ type が付いている場合はトグルで解除する。
+ * 適用時は対象 keyIndex の ♯/♭ を取り除き、自然音の綴りへ揃える（通常の臨時記号と排他）。
+ */
+function applyMicrotoneToEvent(
+  ev: NoteEvent,
+  type: MicrotoneType,
+  keyIndex?: number
+): NoteEvent {
+  if (ev.isRest) {
+    return ev;
+  }
+
+  const targetIndexes = keyIndex !== undefined && keyIndex >= 0 && keyIndex < ev.keys.length
+    ? [keyIndex]
+    : ev.keys.map((_, index) => index);
+
+  const existing = ev.microtones ?? [];
+  const isTogglingOff = targetIndexes.every(idx => existing.some(m => m.keyIndex === idx && m.type === type));
+
+  const keptMicrotones = existing.filter(m => !targetIndexes.includes(m.keyIndex));
+  const nextMicrotones = isTogglingOff
+    ? keptMicrotones
+    : [...keptMicrotones, ...targetIndexes.map(idx => ({ keyIndex: idx, type }))];
+
+  // 微分音を新しく付けるときは、その音を自然音の綴りに揃える（♯/♭ との排他のため）。
+  const nextKeys = isTogglingOff
+    ? ev.keys
+    : ev.keys.map((key, index) => targetIndexes.includes(index) ? setKeyAccidental(key, 'natural') : key);
+
+  return {
+    ...ev,
+    keys: nextKeys,
+    microtones: nextMicrotones.length > 0 ? nextMicrotones : undefined,
+  };
 }
 
 /* ===== 範囲チェック（要件3.4対応） ===== */
@@ -2613,6 +2681,7 @@ export default function StaffCanvas({
                 return;
               }
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
+              const microtoneMode = 'mode' in tool && tool.mode === 'microtone' ? tool.type : null;
               const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
               const articulationMode = 'mode' in tool && tool.mode === 'articulation' ? tool.articulation : null;
               const customSymbolMode = 'mode' in tool && tool.mode === 'customSymbol' ? tool.symbolId : null;
@@ -2654,6 +2723,41 @@ export default function StaffCanvas({
                   next[absoluteIndex].events[j] = applyAccidentalToEvent(
                     targetEv,
                     accidentalMode,
+                    latestKeyIndex >= 0 ? latestKeyIndex : undefined
+                  );
+                  return next;
+                });
+                setSelected({
+                  measure: startMeasureIndex + measureIndex,
+                  index: j,
+                  keyIndex: clickedKeyIndex >= 0 ? clickedKeyIndex : undefined,
+                });
+                if (previewAccidentalOnApply) {
+                  playNoteEvent(nextEv);
+                }
+                return;
+              }
+              if (microtoneMode && !safeEvents[j]?.isRest) {
+                // 微分音（四分音）ツールも、通常の臨時記号と同じ「音符セルクリックで適用」操作にする。
+                const currentEv = safeEvents[j];
+                const snappedLine = snapLineBySpacing(stave, ly);
+                const clickedKeyIndex = findKeyIndexAtLine(currentEv.keys, snappedLine, (k) => keyToLineForClef(clefHere, k));
+                const nextEv = applyMicrotoneToEvent(
+                  currentEv,
+                  microtoneMode,
+                  clickedKeyIndex >= 0 ? clickedKeyIndex : undefined
+                );
+                setScore(prev => {
+                  const next = prev.map(cloneMeasureData);
+                  if (absoluteIndex >= next.length) return prev;
+                  const targetEv = next[absoluteIndex].events[j];
+                  if (!targetEv || targetEv.isRest) return prev;
+                  const latestKeyIndex = clickedKeyIndex >= 0
+                    ? findKeyIndexAtLine(targetEv.keys, snappedLine, keyToLine)
+                    : -1;
+                  next[absoluteIndex].events[j] = applyMicrotoneToEvent(
+                    targetEv,
+                    microtoneMode,
                     latestKeyIndex >= 0 ? latestKeyIndex : undefined
                   );
                   return next;

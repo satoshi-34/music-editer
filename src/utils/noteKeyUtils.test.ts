@@ -6,6 +6,9 @@ import {
   createMeasureAccidentalState,
   hasVisibleKeySignature,
   isValidNoteKeyString,
+  isValidMicrotoneType,
+  microtoneAccidentalCode,
+  microtoneCents,
   parseNoteKey,
   resolveDisplayAccidentalsForKeys,
   snapshotAccidentalState,
@@ -202,5 +205,25 @@ describe('shiftKeySignatureByFifths', () => {
     expect(shiftKeySignatureByFifths('F#', 3)).toBe('Eb');
     // Gb メジャー（♭6）-3 → ♭9 → 12 足して ♯3 (A)
     expect(shiftKeySignatureByFifths('Gb', -3)).toBe('A');
+  });
+});
+
+describe('微分音（四分音）ユーティリティ', () => {
+  it('セント値は四分音上げ+50、四分音下げ-50', () => {
+    expect(microtoneCents('quarterSharp')).toBe(50);
+    expect(microtoneCents('quarterFlat')).toBe(-50);
+  });
+
+  it('VexFlowの臨時記号コードは四分音上げ+、四分音下げd', () => {
+    expect(microtoneAccidentalCode('quarterSharp')).toBe('+');
+    expect(microtoneAccidentalCode('quarterFlat')).toBe('d');
+  });
+
+  it('isValidMicrotoneTypeは想定外の値を弾く', () => {
+    expect(isValidMicrotoneType('quarterSharp')).toBe(true);
+    expect(isValidMicrotoneType('quarterFlat')).toBe(true);
+    expect(isValidMicrotoneType('sharp')).toBe(false);
+    expect(isValidMicrotoneType(undefined)).toBe(false);
+    expect(isValidMicrotoneType(null)).toBe(false);
   });
 });

@@ -216,8 +216,10 @@ export class SimpleAudioEngine implements PlaybackEngine {
   /**
    * 音高名から周波数を計算する
    * Vexflow形式（c/4）とMIDI形式（C4）の両方に対応
+   *
+   * @param centsOffset 微分音（四分音）などのセント単位の補正。+50/-50で四分音上げ下げになる。
    */
-  noteToFrequency(note: string): number {
+  noteToFrequency(note: string, centsOffset: number = 0): number {
     // Vexflow形式（c/4）をMIDI形式（C4）に変換
     const normalizedNote = this.normalizeNoteFormat(note);
     
@@ -248,9 +250,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
     const semitoneRatio = Math.pow(2, 1/12);
     const semitonesFromA4 = (octave - 4) * 12 + (noteNumber - 9);
     
-    const frequency = A4 * Math.pow(semitoneRatio, semitonesFromA4);
+    let frequency = A4 * Math.pow(semitoneRatio, semitonesFromA4);
+    // 微分音（四分音）の補正。centsOffset が 0 のときは何も変わらない。
+    if (centsOffset !== 0) {
+      frequency *= Math.pow(2, centsOffset / 1200);
+    }
     console.log('[SimpleAudioEngine] 音高変換:', note, '->', normalizedNote, '->', frequency.toFixed(2), 'Hz');
-    
+
     return frequency;
   }
 
@@ -362,6 +368,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
         durationScale?: number;
         dots?: 1 | 2;
         tuplet?: { numNotes: number; notesOccupied: number };
+        microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[];
       }>;
       measureBeats?: number;
       isCompoundMeter?: boolean;
@@ -428,8 +435,15 @@ export class SimpleAudioEngine implements PlaybackEngine {
           const eventStartTime = measureStartTime + (swingTiming.startBeat * secondsPerBeat);
 
           if (!event.isRest && event.keys && event.keys.length > 0) {
-            // 音符の場合は最初の音高を再生（単音対応）
-            const frequency = this.noteToFrequency(event.keys[0]);
+            // 音符の場合は最初の音高を再生（単音対応）。
+            // 微分音（四分音）は先頭音（keyIndex 0）にだけ対応する既知の制限がある。
+            // 和音2音目以降の微分音は、クリック確認音・ピアノ譜描画では反映されるが、
+            // 内蔵エンジンでの譜面全体再生では鳴らない（README参照）。
+            const microtoneForFirstKey = event.microtones?.find(m => m.keyIndex === 0);
+            const centsOffset = microtoneForFirstKey
+              ? (microtoneForFirstKey.type === 'quarterSharp' ? 50 : -50)
+              : 0;
+            const frequency = this.noteToFrequency(event.keys[0], centsOffset);
             await this.playNoteAtTime(
               frequency,
               soundDuration,

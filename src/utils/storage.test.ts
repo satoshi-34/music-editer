@@ -1344,6 +1344,126 @@ describe('Storage Foundation Tests', () => {
     });
   });
 
+  describe('微分音（四分音）の保存互換とバリデーション', () => {
+    it('音符の microtones を保存して読み戻せる', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Microtone Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [
+            {
+              events: [{
+                dur: '4',
+                isRest: false,
+                keys: ['c/4', 'e/4'],
+                microtones: [{ keyIndex: 0, type: 'quarterSharp' }, { keyIndex: 1, type: 'quarterFlat' }]
+              }]
+            }
+          ]
+        }],
+        1,
+        1,
+        'single'
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.parts[0].measures[0].events[0].microtones).toEqual([
+        { keyIndex: 0, type: 'quarterSharp' },
+        { keyIndex: 1, type: 'quarterFlat' }
+      ]);
+    });
+
+    it('keyIndex が keys の範囲外の microtones は不正データとして読み込みを拒否する', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.PRIMARY,
+        JSON.stringify({
+          version: CURRENT_VERSION,
+          timestamp: Date.now(),
+          metadata: { title: '', subtitle: '', lyricist: '', composer: '', arranger: '' },
+          scoreType: 'single',
+          parts: [{
+            partId: 'melody',
+            clef: 'treble',
+            measures: [{
+              events: [{
+                dur: '4',
+                isRest: false,
+                keys: ['c/4'],
+                microtones: [{ keyIndex: 5, type: 'quarterSharp' }]
+              }]
+            }]
+          }],
+          systems: 1,
+          measuresPerSystem: 1,
+        })
+      );
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(false);
+    });
+
+    it('未知の microtone type は不正データとして読み込みを拒否する', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.PRIMARY,
+        JSON.stringify({
+          version: CURRENT_VERSION,
+          timestamp: Date.now(),
+          metadata: { title: '', subtitle: '', lyricist: '', composer: '', arranger: '' },
+          scoreType: 'single',
+          parts: [{
+            partId: 'melody',
+            clef: 'treble',
+            measures: [{
+              events: [{
+                dur: '4',
+                isRest: false,
+                keys: ['c/4'],
+                microtones: [{ keyIndex: 0, type: 'threeQuarterSharp' }]
+              }]
+            }]
+          }],
+          systems: 1,
+          measuresPerSystem: 1,
+        })
+      );
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(false);
+    });
+
+    it('旧セーブデータ（microtonesフィールドなし）も互換して読み込める', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.PRIMARY,
+        JSON.stringify({
+          version: CURRENT_VERSION,
+          timestamp: Date.now(),
+          metadata: { title: '', subtitle: '', lyricist: '', composer: '', arranger: '' },
+          scoreType: 'single',
+          parts: [{
+            partId: 'melody',
+            clef: 'treble',
+            measures: [{
+              events: [{ dur: '4', isRest: false, keys: ['c/4'] }]
+            }]
+          }],
+          systems: 1,
+          measuresPerSystem: 1,
+        })
+      );
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+    });
+  });
+
   describe('連符（tuplet）の保存互換とバリデーション', () => {
     it('音符の tuplet を保存して読み戻せる', () => {
       const data = createSavedScoreData(

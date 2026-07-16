@@ -214,6 +214,13 @@ export interface NoteEvent {
    * 旧セーブデータとの互換のため省略可能にする。
    */
   tuplet?: { id: string; numNotes: number; notesOccupied: number };
+  /**
+   * 微分音（四分音）の臨時記号。和音の各音（keys配列のインデックス=keyIndex）ごとに1つ持つ。
+   * 'quarterSharp': 半音の半分（+50セント）上げる、'quarterFlat': 半音の半分（-50セント）下げる。
+   * 通常の ♯/♭/♮ とは排他（同じ keyIndex に両方は持たない）。3/4音は対象外。
+   * 旧セーブデータとの互換のため省略可能にする。
+   */
+  microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[];
 }
 
 /**

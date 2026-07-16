@@ -31,6 +31,11 @@ export interface NoteEvent {
   dynamics?: DynamicMarking[];
   /** 付点の数。1 = 付点（1.5倍）、2 = 複付点（1.75倍）。省略時は付点なし */
   dots?: 1 | 2;
+  /**
+   * 微分音（四分音）の臨時記号。keys配列のインデックス（keyIndex）ごとに ±50セントを反映する。
+   * 通常の ♯/♭/♮ とは独立したフィールド（src/types/storage.ts の NoteEvent と同じ形）。
+   */
+  microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[];
 }
 
 /**
@@ -234,7 +239,19 @@ export class NotePlayer {
     this.stopAllNotes();
 
     // Vexflow 形式（c/4）を Tone.js 形式（C4）に変換
-    const toneKeys = noteEvent.keys.map(k => this._convertKeyToToneFormat(k));
+    // 微分音（四分音）が付いた音は、文字列の音名ではなく ±50セント補正した周波数（Hz）で鳴らす。
+    // Tone.js の triggerAttackRelease は配列の各要素を個別に音高解決するため、
+    // 文字列（音名）と数値（Hz）を同じ配列に混ぜても問題なく動く。
+    const toneKeys: (string | number)[] = noteEvent.keys.map((k, idx) => {
+      const toneKey = this._convertKeyToToneFormat(k);
+      const microtone = noteEvent.microtones?.find(m => m.keyIndex === idx);
+      if (!microtone || !this.Tone) {
+        return toneKey;
+      }
+      const cents = microtone.type === 'quarterSharp' ? 50 : -50;
+      const baseFrequency = this.Tone.Frequency(toneKey).toFrequency();
+      return baseFrequency * Math.pow(2, cents / 1200);
+    });
     // 個別クリック再生は、まず「確実に音が出ること」を優先して従来どおり固定値を使う。
     // 強弱差は譜面全体再生で反映し、クリック確認音は別タスクで安全に広げる。
     const velocity = Math.max(0, Math.min(1, options.velocity ?? 0.5));
@@ -243,10 +260,10 @@ export class NotePlayer {
 
     // PolySynth は配列を受け付けるため、単音でも和音でも同じ方法で再生できる
     synth.triggerAttackRelease(toneKeys, duration, time, velocity);
-    toneKeys.forEach(k => this.currentNotes.add(k));
+    toneKeys.forEach(k => this.currentNotes.add(String(k)));
 
     if (typeof duration === 'number') {
-      setTimeout(() => toneKeys.forEach(k => this.currentNotes.delete(k)), duration * 1000);
+      setTimeout(() => toneKeys.forEach(k => this.currentNotes.delete(String(k))), duration * 1000);
     }
 
     console.log(`[NotePlayer] 音符を再生: ${toneKeys.join(',')}, 長さ: ${duration}`);

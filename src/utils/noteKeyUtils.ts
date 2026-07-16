@@ -6,6 +6,33 @@ export type KeyAccidental = '' | '#' | 'b';
 export type DisplayAccidental = '#' | 'b' | 'n';
 
 /**
+ * 微分音（四分音）の種類。
+ * 'quarterSharp': 半音の半分（+50セント）上げる
+ * 'quarterFlat' : 半音の半分（-50セント）下げる
+ * 通常の ♯/♭/♮ とは独立・排他で扱う（3/4音は対象外）。
+ */
+export type MicrotoneType = 'quarterSharp' | 'quarterFlat';
+
+/** 微分音1つぶんのセント値（±50セント = 半音の半分）。 */
+export function microtoneCents(type: MicrotoneType): 50 | -50 {
+  return type === 'quarterSharp' ? 50 : -50;
+}
+
+/**
+ * VexFlow の Accidental に渡すコード。
+ * '+' = 四分音上げ（Stein の quarter-tone sharp）
+ * 'd' = 四分音下げ（Stein の quarter-tone flat）
+ * node_modules/vexflow/build/esm/src/tables.js の accidentals マップで確認済み。
+ */
+export function microtoneAccidentalCode(type: MicrotoneType): '+' | 'd' {
+  return type === 'quarterSharp' ? '+' : 'd';
+}
+
+export function isValidMicrotoneType(value: unknown): value is MicrotoneType {
+  return value === 'quarterSharp' || value === 'quarterFlat';
+}
+
+/**
  * 臨時記号の表示指示。
  *
  * type: 表示する記号の種類（'#'=シャープ, 'b'=フラット, 'n'=ナチュラル）

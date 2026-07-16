@@ -274,6 +274,17 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 - **重複抑制**: 同じ小節内で同じ臨時記号状態が続く場合、不要な `#` / `b` の重複表示を省きます
 - **確認音の切替**: 音色詳細内のチェックボックスで、臨時記号を付けた直後の確認音を ON/OFF できます
 
+### 微分音（四分音）の臨時記号
+- **パレット操作**: `♯ / ♭ / ♮` の隣にある「四分音上げ（𝄲）」「四分音下げ（𝄳）」ボタンを選び、対象の音符セル（和音の場合は個別音）をクリックすると付与します。もう一度同じ音をクリックすると解除できます
+- **通常の臨時記号と排他**: 四分音を付けるとその音の `♯ / ♭` は自然音へ戻り、逆に `♯ / ♭ / ♮` を適用するとその音の四分音は外れます（同じ音に両方が同時に付くことはありません）
+- **描画**: VexFlow の四分音上げ（`+`）・四分音下げ（`d`）の臨時記号（Stein のクォータートーン記号）を符頭の左に表示します。単旋律譜・ピアノ大譜表の両方で対応
+- **再生（内蔵音源）**: クリック確認音（`NotePlayer`）は和音全体の四分音を反映して ±50セントのピッチシフトで鳴ります。譜面全体再生（`SimpleAudioEngine`）は先頭音（和音の1音目）のみ反映する既知の制限があります
+- **再生（SoundFont）**: `soundfont-player` はセント単位のピッチシフト手段を持たないため、SoundFont 再生では四分音は半音に丸まって鳴ります（既知の制限）
+- **保存**: `NoteEvent.microtones`（`{ keyIndex, type: 'quarterSharp' | 'quarterFlat' }[]`）に保存され、旧セーブデータとの互換を保ちます
+- **MusicXML書き出し**: `<alter>0.5</alter>` / `<alter>-0.5</alter>` と `<accidental>quarter-sharp</accidental>` / `<accidental>quarter-flat</accidental>` を出力します。読み込み（import）側の四分音復元は対象外です
+- **対象外**: 3/4音（3 quarter tones）の記号は今回のスコープ外です
+- **設計メモ**: 詳細は `.claude/specs/microtone-implementation/design.md` を参照してください
+
 ### 強弱記号
 - **パレット操作**: `pp / p / mp / mf / f / ff / cresc. / dim.` ボタンを選び、対象の音符セルをクリックします
 - **解除方法**: 同じ強弱ボタンを選んだまま同じ音符をもう一度クリックすると、その種類の記号を外せます
@@ -433,6 +444,12 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 - 描画時は小節ごとに `Map<音名/オクターブ, 現在有効な臨時記号>` を持ち、必要な位置にだけ `# / b / n` を付ける。
 - 同じ小節内で同じ状態が続く場合は記号を省略し、変化した音を自然音へ戻したときだけ `n` を表示する。
 - 保存時は `src/utils/storage.ts` で音高キー文字列を検証し、未知の文字列が描画系へ流れ込まないようにしている。
+
+### 7.5 微分音（四分音）の臨時記号
+- `keys`（音高文字列）は変えず、`NoteEvent.microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[]` という独立フィールドで持つ。keyIndex は `keys` 配列のインデックス（和音の何番目の音か）に対応する。
+- 通常の `♯/♭/♮` とは排他: 片方を適用するともう片方はその keyIndex から取り除かれる（`StaffCanvas.tsx` / `PianoSystemCanvas.tsx` の `applyAccidentalToEvent` / `applyMicrotoneToEvent`）。
+- 描画は VexFlow の Accidental に `'+'`（四分音上げ）/ `'d'`（四分音下げ）を渡すだけ。通常の臨時記号の「小節内で持続する」ロジックとは独立させ、毎回明示的に表示する。
+- 再生は `frequency *= 2 ** (cents / 1200)` で ±50セントを反映する（`SimpleAudioEngine.noteToFrequency` の `centsOffset` 引数、`NotePlayer.playNoteEvent` の `Tone.Frequency(...).toFrequency()` 経由の数値周波数）。
 
 ### 8. タイ／スラー（TieArc）入力と編集
 
@@ -601,7 +618,6 @@ src/
 
 ### ジャンル特化
 
-5. **微分音記号**（現代音楽） — 四分音上げ/下げなどの臨時記号。VexFlow の microtonal accidental（`+` など）を利用し、再生は50セント単位のピッチシフトで対応
 6. **その他の連符** — 現在は3連符のみ。5連・6連・7連へ拡張する（`tupletUtils.ts` は numNotes/notesOccupied のパラメータ化を想定した設計になっている）
 
 ### 実用・仕上げ系

@@ -11,7 +11,7 @@
 
 import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
-import type { AccidentalToolKind } from '../utils/noteKeyUtils';
+import type { AccidentalToolKind, MicrotoneType } from '../utils/noteKeyUtils';
 import type { EndingNumber, RepeatMarkerKind } from '../utils/repeatMarkerUtils';
 import type { ArticulationType, CustomSymbolDef, DynamicMarkingValue, OrnamentType } from '../types/storage';
 import { articulationLabel } from '../utils/articulationUtils';
@@ -44,6 +44,7 @@ export type Tool =
   | { mode: 'select' }                      // 小節選択モード（コピー&ペースト用）
   | { mode: 'tie' }                         // タイ記号を付けるモード
   | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
+  | { mode: 'microtone'; type: MicrotoneType }              // 微分音（四分音）の臨時記号を付けるモード
   | { mode: 'repeat'; repeat: RepeatMarkerKind }            // リピート記号を付けるモード
   | { mode: 'ending'; ending: EndingNumber }                // 1番括弧 / 2番括弧
   | { mode: 'dynamic'; dynamic: DynamicMarkingValue }       // 強弱記号を付けるモード
@@ -65,6 +66,7 @@ export type Tool =
   | { mode: 'hairpin'; hairpinType: 'cresc' | 'dim' };     // 松葉（クレッシェンド＜／ディミヌエンド＞）を付けるモード。タイと同様に開始音符→終了音符へドラッグして設置
 
 type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
+type MicrotoneTool = Extract<Tool, { mode: 'microtone' }>;
 type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
 type EndingTool = Extract<Tool, { mode: 'ending' }>;
 type DynamicTool = Extract<Tool, { mode: 'dynamic' }>;
@@ -103,6 +105,10 @@ const ACCIDENTAL_TOOLS: AccidentalTool[] = [
   { mode: 'accidental', accidental: 'sharp' },
   { mode: 'accidental', accidental: 'flat' },
   { mode: 'accidental', accidental: 'natural' },
+];
+const MICROTONE_TOOLS: MicrotoneTool[] = [
+  { mode: 'microtone', type: 'quarterSharp' },
+  { mode: 'microtone', type: 'quarterFlat' },
 ];
 const REPEAT_TOOLS: RepeatTool[] = [
   { mode: 'repeat', repeat: 'start' },
@@ -185,6 +191,7 @@ export default function Palette({
   const dotActive = 'duration' in value && !!value.dots;
   const tupletActive = 'duration' in value && !!value.tuplet;
   const selectedAccidental = 'mode' in value && value.mode === 'accidental' ? value.accidental : null;
+  const selectedMicrotone = 'mode' in value && value.mode === 'microtone' ? value.type : null;
   const selectedRepeat = 'mode' in value && value.mode === 'repeat' ? value.repeat : null;
   const selectedEnding = 'mode' in value && value.mode === 'ending' ? value.ending : null;
   const selectedDynamic = 'mode' in value && value.mode === 'dynamic' ? value.dynamic : null;
@@ -307,6 +314,22 @@ export default function Palette({
                 style={btnStyle(active, { fontSize: 18, fontFamily: '"Times New Roman", serif' })}
               >
                 {accidentalSymbol(tool.accidental)}
+              </button>
+            );
+          })}
+          {/* 微分音（四分音）: 半音の半分（50セント）だけ上げ下げする現代音楽向けの臨時記号 */}
+          {MICROTONE_TOOLS.map((tool) => {
+            const active = selectedMicrotone === tool.type;
+            return (
+              <button
+                key={tool.type}
+                type="button"
+                onClick={() => onChange(active ? ROW1[2] : tool)}
+                title={`${microtoneLabel(tool.type)}（選択して音符をクリック）`}
+                aria-label={`${microtoneLabel(tool.type)}（選択して音符をクリック）`}
+                style={btnStyle(active, { fontSize: 16, fontFamily: '"Times New Roman", serif' })}
+              >
+                {microtoneSymbol(tool.type)}
               </button>
             );
           })}
@@ -707,6 +730,16 @@ function accidentalSymbol(kind: AccidentalToolKind) {
 
 function accidentalLabel(kind: AccidentalToolKind) {
   return kind === 'sharp' ? 'シャープ' : kind === 'flat' ? 'フラット' : 'ナチュラル';
+}
+
+function microtoneSymbol(type: MicrotoneType) {
+  // 𝄲 = 四分音上げ、𝄳 = 四分音下げ（Unicode 音楽記号）。
+  // フォントが無い環境でも意味が伝わるよう title/aria-label 側で日本語表記を補っている。
+  return type === 'quarterSharp' ? '\u{1D132}' : '\u{1D133}';
+}
+
+function microtoneLabel(type: MicrotoneType) {
+  return type === 'quarterSharp' ? '四分音上げ（+50セント）' : '四分音下げ（-50セント）';
 }
 
 function repeatSymbol(kind: RepeatMarkerKind) {

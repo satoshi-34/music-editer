@@ -193,6 +193,19 @@ function validateNoteEvent(event: any): event is NoteEvent {
           (h.offsetY === undefined || (isFiniteNumber(h.offsetY) && h.offsetY >= MIN_SYMBOL_OFFSET && h.offsetY <= MAX_SYMBOL_OFFSET))
         ))
       )
+    ) &&
+    (
+      // 微分音（四分音）: keyIndex は keys 配列の範囲内の整数、type は quarterSharp/quarterFlat のみ許可
+      event.microtones === undefined ||
+      (
+        Array.isArray(event.microtones) &&
+        event.microtones.every((m: any) => (
+          isRecord(m) &&
+          isFiniteNumber(m.keyIndex) && Number.isInteger(m.keyIndex) &&
+          m.keyIndex >= 0 && m.keyIndex < event.keys.length &&
+          (m.type === 'quarterSharp' || m.type === 'quarterFlat')
+        ))
+      )
     )
   );
 }

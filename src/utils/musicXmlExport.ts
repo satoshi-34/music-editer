@@ -36,16 +36,34 @@ function clefXml(clef: ClefType): string {
  * VexFlow 形式のキー文字列（"c/4", "f#/3", "bb/4"）を
  * MusicXML の pitch 要素に変換する。
  */
-function keyToPitchXml(key: string): string {
+function keyToPitchXml(key: string, microtoneType?: 'quarterSharp' | 'quarterFlat'): string {
   const m = key.match(/^([a-g])(#{1,2}|b{1,2})?\/(\d+)$/i);
   if (!m) return '';
   const step = m[1].toUpperCase();
   const acc = m[2] ?? '';
   const octave = m[3];
   // alter: # = +1, ## = +2, b = -1, bb = -2
-  const alter = acc === '#' ? 1 : acc === '##' ? 2 : acc === 'b' ? -1 : acc === 'bb' ? -2 : 0;
+  // 微分音（四分音）は MusicXML では小数の alter（+0.5 / -0.5）で表す。
+  // 通常の ♯/♭ とは排他（keys 側は setKeyAccidental で 'natural' に揃えてから microtones を付けているため、
+  // ここで acc と microtone が同時に付くことは通常ない）。
+  const alter = microtoneType === 'quarterSharp'
+    ? 0.5
+    : microtoneType === 'quarterFlat'
+      ? -0.5
+      : (acc === '#' ? 1 : acc === '##' ? 2 : acc === 'b' ? -1 : acc === 'bb' ? -2 : 0);
   const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : '';
   return `<pitch><step>${step}</step>${alterXml}<octave>${octave}</octave></pitch>`;
+}
+
+/**
+ * 微分音（四分音）の <accidental> 要素。
+ * MusicXML の要素順序では <type>/<dot> の後・<time-modification> の前に置く必要があるため、
+ * keyToPitchXml とは別関数にして noteToXml 側で正しい位置に挿入する。
+ */
+function microtoneAccidentalXml(microtoneType?: 'quarterSharp' | 'quarterFlat'): string {
+  if (microtoneType === 'quarterSharp') return '<accidental>quarter-sharp</accidental>';
+  if (microtoneType === 'quarterFlat') return '<accidental>quarter-flat</accidental>';
+  return '';
 }
 
 /**
@@ -171,13 +189,15 @@ function noteToXml(
 
   // 和音: 最初の音符は通常、2音目以降は <chord/> を付ける
   const pitchNodes = ev.keys.map((k, idx) => {
-    const pitchXml = keyToPitchXml(k);
+    const microtone = ev.microtones?.find(m => m.keyIndex === idx);
+    const pitchXml = keyToPitchXml(k, microtone?.type);
     if (!pitchXml) return '';
     const chordTag = idx > 0 ? '<chord/>' : '';
     // 単音（fingerParts が1個）ならその音に、和音なら順番に対応する指番号を割り当てる
     const fingerValue = fingerParts[idx];
     const artXml = articulationsXml(ev, fingerValue);
-    return `<note>${chordTag}${pitchXml}<duration>${dur}</duration><type>${type}</type>${dotXml}${timeModXml}${voiceXml}${staffXml}${artXml}${tupletNotationXml}</note>`;
+    const accidentalXml = microtoneAccidentalXml(microtone?.type);
+    return `<note>${chordTag}${pitchXml}<duration>${dur}</duration><type>${type}</type>${dotXml}${accidentalXml}${timeModXml}${voiceXml}${staffXml}${artXml}${tupletNotationXml}</note>`;
   });
   return pitchNodes.join('');
 }

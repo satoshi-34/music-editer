@@ -208,6 +208,9 @@ export class SoundFontEngine implements PlaybackEngine {
             // 和音は keys を1つずつ同じ時刻で予約する。
             // SoundFont 側は単音 player なので、「同時刻に複数 start」を積む形で和音にする。
             const velocity = this.normalizePlaybackVelocity(event.velocity);
+            // 既知の制限: soundfont-player は detune/playbackRate 相当のセント単位ピッチシフトを
+            // 提供していない（サンプル自体の音高固定のため）。そのため微分音（四分音, event.microtones）
+            // は SoundFont 再生では反映されず、記譜どおりの半音に丸まって鳴る（README参照）。
             event.keys.forEach(key => {
               player.play(
                 this.normalizeNoteFormat(key),
