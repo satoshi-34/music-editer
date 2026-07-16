@@ -528,10 +528,9 @@ export default function Palette({
             <path d="M20 7 L2 1 M20 7 L2 13" stroke="#111" strokeWidth="1.5" strokeLinecap="round" fill="none" />
           </svg>
         </button>
-      </div>
-
-      {/* アーティキュレーション・装飾・テキスト行 */}
-      <div style={ROW_STYLE}>
+        {/* アーティキュレーション・装飾・テキストも同じ折り返し行に続ける。
+            音符・休符タブと同様、広い画面では1行で横幅を使い切り、
+            狭い画面では自動で折り返す。 */}
         {ARTICULATION_TOOLS.map((tool) => {
           const active = selectedArticulation === tool.articulation;
           return (
