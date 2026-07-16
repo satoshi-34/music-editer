@@ -86,6 +86,26 @@ type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 
+// 曲の長さ（総段数）に関する定数。
+// 以前は totalSystems = 12 の固定値だったが、可変長対応にあたり
+// 「初期値・下限・上限」として意味を持たせる。
+const DEFAULT_TOTAL_SYSTEMS = 12;
+const MIN_TOTAL_SYSTEMS = 1;
+const MAX_TOTAL_SYSTEMS = 200;
+
+/**
+ * 与えられた小節データ群を、指定の「段あたり小節数」で最低何段あれば
+ * 全て収まるかを計算する。MusicXML 読み込みなど、外部データの小節数が
+ * 既定の段数を超えている場合に、段が足りず末尾が表示されなくなるのを防ぐために使う。
+ * 何も小節が無い場合は既定値（DEFAULT_TOTAL_SYSTEMS）を返す。
+ */
+function computeMinTotalSystems(measuresPerPart: MeasureData[][], measuresPerSystem: number): number {
+  const maxMeasureCount = measuresPerPart.reduce((max, measures) => Math.max(max, measures.length), 0);
+  if (maxMeasureCount === 0) return DEFAULT_TOTAL_SYSTEMS;
+  const needed = Math.ceil(maxMeasureCount / Math.max(1, measuresPerSystem));
+  return Math.min(MAX_TOTAL_SYSTEMS, Math.max(DEFAULT_TOTAL_SYSTEMS, needed));
+}
+
 // 無音検知（issue #14）のタイミング設定。
 // 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
 const SILENT_FAILURE_CHECK_DELAY_MS = 600;
@@ -206,6 +226,15 @@ export default function ScorePage() {
   const [activeVoice, setActiveVoice] = useState<0 | 1>(0);
   const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
   const [scoreType, setScoreType] = useState<ScoreType>('single');
+  // 曲の長さ（総段数）。以前は 12 固定だったが、段の追加・削除・
+  // 最終段への自動追記に対応するため state 化した。
+  // currentScoreRef（下の Undo 用スナップショット）より前に宣言する必要がある
+  // （ref の初期値でこの変数を参照するため。後方宣言だと TDZ エラーになる）。
+  const [totalSystems, setTotalSystems] = useState(DEFAULT_TOTAL_SYSTEMS);
+  // 段あたり小節数。以前は totalSystems の宣言の少し後（ページ計算の近く）に
+  // あったが、段の追加・削除ハンドラなど本ファイル前半のコールバックからも
+  // 参照するようになったため、totalSystems と一緒に早い位置へ移動した。
+  const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
   // 楽譜の表示ウェイト（五線・テキストの太さ）
   const [displayWeight, setDisplayWeight] = useState<'thin' | 'normal' | 'thick'>('normal');
   const [instrumentation, setInstrumentation] = useState<ScoreInstrumentation>(() => getDefaultInstrumentationForScoreType('single'));
@@ -287,13 +316,15 @@ export default function ScorePage() {
     leftHandData:  MeasureData[] | undefined;
     quartetParts:  MeasureData[][];
     ensembleParts: MeasureData[][];
+    // 段の追加・削除も Undo 対象にするため、スナップショットに含める
+    totalSystems:  number;
   };
   const MAX_HISTORY = 50;
   const historyStack = useRef<ScoreSnapshot[]>([]);
   const futureStack  = useRef<ScoreSnapshot[]>([]);
   // 常に最新のスコア状態を ref として持つ（ハンドラ内で「変更前の値」を取得するため）
   const currentScoreRef = useRef<ScoreSnapshot>({
-    rightHandData, leftHandData, quartetParts, ensembleParts,
+    rightHandData, leftHandData, quartetParts, ensembleParts, totalSystems,
   });
 
   // useRef(createPlaybackEngine(...)) と引数に直接書くと、useRef は初回しか値を使わないのに
@@ -1188,8 +1219,8 @@ export default function ScorePage() {
 
   // スコアデータが変わるたびに currentScoreRef を最新に保つ
   useEffect(() => {
-    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts };
-  }, [rightHandData, leftHandData, quartetParts, ensembleParts]);
+    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, totalSystems };
+  }, [rightHandData, leftHandData, quartetParts, ensembleParts, totalSystems]);
 
   // ツールバーの「元に戻す/やり直す」ボタンの活性・非活性を切り替えるためのカウンタ。
   // historyStack/futureStack は ref のため、その中身が変わっただけでは再レンダーされない。
@@ -1276,6 +1307,7 @@ export default function ScorePage() {
     setLeftHandData(snap.leftHandData);
     setQuartetParts(snap.quartetParts);
     setEnsembleParts(snap.ensembleParts);
+    setTotalSystems(snap.totalSystems);
   }, []);
 
   // Undo: 履歴から1つ前の状態を取り出して適用する（キーボードショートカットとボタンの共通処理）
@@ -1309,6 +1341,22 @@ export default function ScorePage() {
   const canUndo = historyVersion >= 0 && historyStack.current.length > 0;
   const canRedo = historyVersion >= 0 && futureStack.current.length > 0;
 
+  // 最終段（totalSystems 段目）に音符が入力されたら、自動で次の段を1つ追加する
+  // （Finale などにある「書き進めれば譜面が伸びる」体験）。
+  // 呼び出し側（各パートの change ハンドラ）で pushHistory() を呼んだ直後に
+  // 呼ぶことで、入力による変更と段の自動追加を同じ Undo エントリにまとめている。
+  // 判定は「最終段の範囲にイベントを持つ小節が1つでもあるか」だけを見る簡易版。
+  const autoExpandIfLastSystemHasContent = useCallback((measures: MeasureData[]) => {
+    if (totalSystems >= MAX_TOTAL_SYSTEMS) return;
+    const lastSystemStart = (totalSystems - 1) * measuresPerSystem;
+    const hasContent = measures.slice(lastSystemStart).some(m =>
+      m.events.length > 0 || (m.voices?.some(v => v.events.length > 0) ?? false)
+    );
+    if (hasContent) {
+      setTotalSystems(t => Math.min(MAX_TOTAL_SYSTEMS, t + 1));
+    }
+  }, [totalSystems, measuresPerSystem]);
+
   const handleRightHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
     // 変更がない場合はスキップ（currentScoreRef は常に最新値を保持）
@@ -1316,7 +1364,8 @@ export default function ScorePage() {
         JSON.stringify(currentScoreRef.current.rightHandData) === JSON.stringify(data)) return;
     pushHistory();
     setRightHandData(data);
-  }, [isEditingDisabled, pushHistory]);
+    autoExpandIfLastSystemHasContent(data);
+  }, [isEditingDisabled, pushHistory, autoExpandIfLastSystemHasContent]);
 
   const handleLeftHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
@@ -1324,7 +1373,8 @@ export default function ScorePage() {
         JSON.stringify(currentScoreRef.current.leftHandData) === JSON.stringify(data)) return;
     pushHistory();
     setLeftHandData(data);
-  }, [isEditingDisabled, pushHistory]);
+    autoExpandIfLastSystemHasContent(data);
+  }, [isEditingDisabled, pushHistory, autoExpandIfLastSystemHasContent]);
 
   // 単旋律モード用（後方互換）
   const handleScoreDataChange = useCallback((data: MeasureData[]) => {
@@ -1340,7 +1390,8 @@ export default function ScorePage() {
       next[partIndex] = data;
       return next;
     });
-  }, [isEditingDisabled, pushHistory]);
+    autoExpandIfLastSystemHasContent(data);
+  }, [isEditingDisabled, pushHistory, autoExpandIfLastSystemHasContent]);
 
   const handleEnsemblePartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
     if (isEditingDisabled) return;
@@ -1351,7 +1402,49 @@ export default function ScorePage() {
       next[partIndex] = data;
       return next;
     });
-  }, [isEditingDisabled, pushHistory]);
+    autoExpandIfLastSystemHasContent(data);
+  }, [isEditingDisabled, pushHistory, autoExpandIfLastSystemHasContent]);
+
+  // 現在表示中の全パートの小節データを、スコア種別ごとに1つの配列へまとめる。
+  // 「末尾の段を削除してよいか（音符が入っているか）」の判定に使う。
+  const collectAllPartMeasures = useCallback((): MeasureData[][] => {
+    if (scoreType === 'quartet') return quartetParts;
+    if (scoreType === 'ensemble') return ensembleParts;
+    if (scoreType === 'piano') return [rightHandData ?? [], leftHandData ?? []];
+    return [rightHandData ?? []];
+  }, [scoreType, quartetParts, ensembleParts, rightHandData, leftHandData]);
+
+  // 段を1つ追加する（末尾に空小節を1段ぶん追記）。
+  // 実データの追記自体は各 StaffCanvas 側が systems 増加を検知して自動で行うため、
+  // ここでは totalSystems を増やすだけでよい。
+  const handleAddSystem = useCallback(() => {
+    if (totalSystems >= MAX_TOTAL_SYSTEMS) return;
+    pushHistory();
+    setTotalSystems(t => Math.min(MAX_TOTAL_SYSTEMS, t + 1));
+  }, [totalSystems, pushHistory]);
+
+  // 末尾の段を削除する。末尾の段に音符が入っている場合は確認ダイアログを出す。
+  const handleRemoveLastSystem = useCallback(() => {
+    if (totalSystems <= MIN_TOTAL_SYSTEMS) return;
+    const lastSystemStart = (totalSystems - 1) * measuresPerSystem;
+    const allMeasures = collectAllPartMeasures();
+    const hasContent = allMeasures.some(measures =>
+      measures.slice(lastSystemStart).some(m =>
+        m.events.length > 0 || (m.voices?.some(v => v.events.length > 0) ?? false)
+      )
+    );
+    if (hasContent) {
+      const ok = window.confirm('末尾の段には音符が入力されています。削除するとその内容も失われます。よろしいですか？');
+      if (!ok) return;
+    }
+    pushHistory();
+    // 末尾段の小節データ自体（events）は各パートの配列にそのまま残るが、
+    // totalSystems を減らせば描画・書き出し対象から除外される
+    // （再び段を追加すればまた表示される点は既知の割り切り。厳密に切り詰めたい場合は
+    // 各パートの measures 配列も一緒にスライスする必要があるが、
+    // 小節の途中挿入・削除は次タスクで扱うため、今回はここまでとする）。
+    setTotalSystems(t => Math.max(MIN_TOTAL_SYSTEMS, t - 1));
+  }, [totalSystems, measuresPerSystem, collectAllPartMeasures, pushHistory]);
 
   // 現在の全 state から保存用データ（parts + metadata）を組み立てるヘルパー。
   // handleSave / 自動保存 / ファイル書き出しで共通利用する。
@@ -1476,6 +1569,13 @@ export default function ScorePage() {
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
         setMeasuresPerSystem(data.measuresPerSystem);
       }
+      // 段数（totalSystems）を復元する。旧セーブデータ（12段固定時代）には
+      // systems フィールドが無いことがあるため、その場合は既定値（12）にフォールバックする。
+      if (data.systems && data.systems >= MIN_TOTAL_SYSTEMS && data.systems <= MAX_TOTAL_SYSTEMS) {
+        setTotalSystems(data.systems);
+      } else {
+        setTotalSystems(DEFAULT_TOTAL_SYSTEMS);
+      }
       if (loadedType === 'quartet') {
         const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
         setQuartetParts(QUARTET_IDS.map(id =>
@@ -1553,6 +1653,13 @@ export default function ScorePage() {
       if (loadedData.measuresPerSystem && loadedData.measuresPerSystem >= 1 && loadedData.measuresPerSystem <= 8) {
         setMeasuresPerSystem(loadedData.measuresPerSystem);
       }
+      // 段数（totalSystems）を復元する。旧セーブデータ（12段固定時代）には
+      // systems フィールドが無いことがあるため、その場合は既定値（12）にフォールバックする。
+      if (loadedData.systems && loadedData.systems >= MIN_TOTAL_SYSTEMS && loadedData.systems <= MAX_TOTAL_SYSTEMS) {
+        setTotalSystems(loadedData.systems);
+      } else {
+        setTotalSystems(DEFAULT_TOTAL_SYSTEMS);
+      }
 
       if (loadedType === 'quartet') {
         const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
@@ -1593,6 +1700,8 @@ export default function ScorePage() {
     setLeftHandData(sampleScore.leftHand);
     setQuartetParts(Array.from({ length: 4 }, () => []));
     setEnsembleParts([]);
+    // サンプル譜は既定の段数（12段）に収まる短いものなので、段数もリセットする
+    setTotalSystems(DEFAULT_TOTAL_SYSTEMS);
     // サンプルごとに「まずこの楽器で聴くと違いが分かりやすい」を設定しておく。
     setCurrentInstrument(sampleScore.recommendedInstrument);
     getAudioEngine().setInstrument(sampleScore.recommendedInstrument);
@@ -1890,15 +1999,22 @@ export default function ScorePage() {
 
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
 
-  const totalSystems = 12;
-  const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
   const systemsPerPage = scoreType === 'ensemble'
     ? (instrumentation.parts.length > 10 ? 1 : 2)
     : 9;
-  const pages: PageSpec[] = useMemo(
-    () => Array.from({ length: Math.ceil(totalSystems / systemsPerPage) }, () => ({ systems: systemsPerPage })),
-    [totalSystems, systemsPerPage]
-  );
+  // ページ数・各ページの段数を totalSystems から計算する。
+  // 以前は「最終ページも常に systemsPerPage 段ぶん」描画しており、
+  // totalSystems を増減しても最終ページの見た目の段数が変わらなかった
+  // （空段が常に埋まっていたため）。可変長対応では最終ページだけ
+  // 「残り段数」だけを描画するようにし、段の追加・削除がそのまま見た目に反映されるようにする。
+  const pages: PageSpec[] = useMemo(() => {
+    const numPages = Math.max(1, Math.ceil(totalSystems / systemsPerPage));
+    return Array.from({ length: numPages }, (_, i) => {
+      const isLastPage = i === numPages - 1;
+      const remaining = totalSystems - i * systemsPerPage;
+      return { systems: isLastPage ? Math.max(1, remaining) : systemsPerPage };
+    });
+  }, [totalSystems, systemsPerPage]);
 
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
   // totalSystems と measuresPerSystem の宣言より後に置く必要がある
@@ -1993,6 +2109,10 @@ export default function ScorePage() {
           setLeftHandData(leftPart?.measures);
           setEnsembleParts([]);
         }
+        // MusicXML には段数（totalSystems）の概念が無いため、
+        // 読み込んだ小節数が既定段数に収まるかどうかから逆算する
+        // （収まらない場合に末尾の小節が表示されなくなるのを防ぐ）。
+        setTotalSystems(computeMinTotalSystems(loaded.parts.map(p => p.measures), measuresPerSystem));
       } catch (err) {
         alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
       }
@@ -2000,7 +2120,7 @@ export default function ScorePage() {
       if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
     };
     reader.readAsText(file);
-  }, [setTimeSignature]);
+  }, [setTimeSignature, measuresPerSystem]);
 
   const [hasCustomPianoSample, setHasCustomPianoSample] = useState<boolean>(() => hasCustomPianoDemoScore());
   const visiblePages = useMemo(() => {
@@ -2525,6 +2645,29 @@ export default function ScorePage() {
                   style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
                 />
               </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }} title="曲の長さ（総段数）。段の追加・削除ボタンでも変更できます">
+                段数
+                <input
+                  type="number"
+                  min={MIN_TOTAL_SYSTEMS}
+                  max={MAX_TOTAL_SYSTEMS}
+                  value={totalSystems}
+                  onChange={e => {
+                    const v = Math.max(MIN_TOTAL_SYSTEMS, Math.min(MAX_TOTAL_SYSTEMS, Number(e.target.value)));
+                    if (!isNaN(v) && v !== totalSystems) {
+                      pushHistory();
+                      setTotalSystems(v);
+                    }
+                  }}
+                  style={{ width: 52, fontSize: 13, padding: '2px 4px' }}
+                />
+              </label>
+              <button className="ghost" onClick={handleAddSystem} disabled={totalSystems >= MAX_TOTAL_SYSTEMS} title="末尾に段を1つ追加します">
+                段を追加
+              </button>
+              <button className="ghost" onClick={handleRemoveLastSystem} disabled={totalSystems <= MIN_TOTAL_SYSTEMS} title="末尾の段を1つ削除します（音符が入っている場合は確認します）">
+                末尾の段を削除
+              </button>
               <button className="ghost" onClick={handleExportMusicXml}>MusicXML書出</button>
               <button className="ghost" onClick={handleExportMidi}>MIDI書出</button>
               <button className="ghost" onClick={() => musicXmlInputRef.current?.click()}>MusicXML読込</button>
