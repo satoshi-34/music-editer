@@ -57,6 +57,9 @@ export function drawHairpinSegment(params: HairpinSegmentParams): void {
     hit.setAttribute('fill', 'none');
     hit.setAttribute('stroke', 'transparent');
     hit.setAttribute('pointer-events', 'stroke');
+    // 印刷時に App.css の @media print が svg path を黒で強制するため、
+    // このクラスを目印にして「透明なクリック判定用パス」だけは印刷から除外する
+    hit.setAttribute('class', 'vf-hairpin-hit');
     hit.style.strokeWidth = '10';
     hit.style.cursor = 'pointer';
     hit.addEventListener('click', (ev) => { ev.stopPropagation(); onClick(ev as MouseEvent); });

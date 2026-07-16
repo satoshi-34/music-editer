@@ -1953,6 +1953,13 @@ export default function ScorePage() {
     downloadMidi(buildCurrentScoreData());
   }, [buildCurrentScoreData]);
 
+  // PDF書出: 自前でPDFを生成せず、ブラウザの印刷ダイアログを開く方式にする。
+  // App.css の @media print が既に A4 整形済みの印刷スタイルを用意しているため、
+  // ここでは window.print() を呼ぶだけで良い（ユーザーが印刷ダイアログで「PDFとして保存」を選ぶ）。
+  const handleExportPdf = useCallback(() => {
+    window.print();
+  }, []);
+
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -2434,7 +2441,7 @@ export default function ScorePage() {
                 style={{ display: 'none' }}
                 onChange={handleImportFile}
               />
-              <button className="ghost" onClick={() => window.print()}>印刷</button>
+              <button className="ghost" onClick={handleExportPdf} title="ブラウザの印刷ダイアログを開き、「PDFとして保存」を選ぶと楽譜をPDF書出できます">PDF書出 / 印刷</button>
               {selectedMeasures && (
                 <div className="coord-correction-wrap">
                   <button

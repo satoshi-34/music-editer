@@ -1037,9 +1037,20 @@ button.ghost:disabled {
   .score-title { font-size: 24px; }
   .score-subtitle { font-size: 12px; }
 
-  /* 線が薄くならないように黒で強制。ただしクリック判定 rect は除外！ */
-  .print-page svg path,
+  /* 線が薄くならないように黒で強制。ただしクリック判定 rect/path は除外！
+     （松葉やタイ／スラーには、見た目の線とは別に「太い透明なクリック判定パス」が
+     重ねて描かれている。ここを除外し忘れると、印刷時にだけ太い黒線が現れてしまう） */
+  .print-page svg path:not(.vf-arc-hit):not(.vf-hairpin-hit),
   .print-page svg line { stroke: #000 !important; fill: #000 !important; }
+  .print-page svg path.vf-arc-hit,
+  .print-page svg path.vf-hairpin-hit {
+    stroke: none !important; fill: none !important;
+  }
+  /* カスタム記号の circle は fill="none"（輪郭だけの記号）のことがあるため、
+     path/line と違って fill を一律 #000 にはしない（塗りつぶし記号に変わってしまう）。
+     枠線の色だけ黒にし、塗りは元の値（none または色）を尊重する */
+  .print-page svg circle { stroke: #000 !important; }
+  .print-page svg circle:not([fill="none"]) { fill: #000 !important; }
   .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
     stroke: #000 !important; fill: #000 !important;
   }
@@ -1049,6 +1060,9 @@ button.ghost:disabled {
   .print-page svg rect.vf-key-signature-debug {
     stroke: none !important; fill: transparent !important;
   }
+  /* 強弱記号・運指番号・リハーサルマーク・ペダル・オッターバなどのテキストは
+     ダークグレー系（#1f2937 等）で描かれているため、印刷では純粋な黒に統一する */
+  .print-page svg text { fill: #000 !important; }
 }
 
 /* SVGのアニメ残り防止 */

@@ -1699,6 +1699,8 @@ export default function StaffCanvas({
       hitPath.setAttribute('stroke-width', '10');
       hitPath.setAttribute('fill', 'none');
       hitPath.setAttribute('pointer-events', 'stroke');
+      // 印刷時に svg path を黒で強制するCSSがあるため、透明な当たり判定パスだと分かるよう目印を付けて印刷から除外する
+      hitPath.setAttribute('class', 'vf-arc-hit');
       hitPath.setAttribute('data-arc-key-hit', arcKey);
       hitPath.style.cursor = 'grab';
       hitPath.addEventListener('mousedown', (e) => {
