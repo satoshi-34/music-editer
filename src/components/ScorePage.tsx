@@ -10,6 +10,8 @@ import StaffCanvas from './StaffCanvas';
 import PianoStaff from './PianoStaff';
 import QuartetStaff from './QuartetStaff';
 import EnsembleStaff from './EnsembleStaff';
+import PartExtractionStaff from './PartExtractionStaff';
+import { QUARTET_PART_CONFIGS } from './QuartetStaff';
 import SymbolEditor from './SymbolEditor';
 import SaveLoadButtons from './SaveLoadButtons';
 import PlaybackControls, {
@@ -74,6 +76,7 @@ import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voi
 import { DEFAULT_TIME_SIGNATURE, formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
+import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 
 type PageSpec = { systems: number };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
@@ -207,6 +210,11 @@ export default function ScorePage() {
   // 既定は実音表示で、移調楽器対応をオフにしたまま素直に編集できるようにしている。
   const [notationMode, setNotationMode] = useState<ScoreNotationMode>('concert');
   const [keySignature, setKeySignature] = useState<KeySignature>('C');
+  // パート譜表示（総譜から1パートだけ抜き出して表示・印刷するモード）。
+  // 選択中パートの ID を持ち、null は「総譜（通常）表示」を意味する。
+  // 保存データには含めない一時的なビューなので、リロードすると総譜表示に戻る
+  // （詳細は .claude/specs/part-extraction/design.md を参照）。
+  const [partExtractionId, setPartExtractionId] = useState<string | null>(null);
   const [showOffsetPanel, setShowOffsetPanel] = useState(false);
   const [showInstrumentationEditor, setShowInstrumentationEditor] = useState(false);
   // ユーザーが作成したカスタム記号のライブラリと、エディタモーダルの開閉状態
@@ -246,6 +254,19 @@ export default function ScorePage() {
     () => Array.from({ length: 4 }, () => [])
   );
   const [ensembleParts, setEnsembleParts] = useState<MeasureData[][]>(() => []);
+
+  // パート譜表示の選択肢と、現在選択中のパート。
+  // 単旋律譜・ピアノ大譜表では対象外（getPartExtractionOptions が空配列を返す）。
+  // handlePlay など後段のロジックから参照するため、state 宣言の直後で計算しておく。
+  const partExtractionOptions = useMemo(
+    () => getPartExtractionOptions(scoreType, instrumentation.parts),
+    [scoreType, instrumentation.parts]
+  );
+  const partExtractionSelection = useMemo(
+    () => resolvePartExtractionSelection(partExtractionOptions, partExtractionId),
+    [partExtractionOptions, partExtractionId]
+  );
+  const isPartExtractionActive = partExtractionSelection !== null;
 
   // 選択中の小節範囲（絶対インデックス）。null のとき未選択
   const [selectedMeasures, setSelectedMeasures] = useState<{ start: number; end: number } | null>(null);
@@ -514,6 +535,8 @@ export default function ScorePage() {
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
     const nextInstrumentation = getDefaultInstrumentationForScoreType(newType);
     setScoreType(newType);
+    // 楽譜種別が変わるとパートの並び・IDが変わるため、パート譜表示は総譜表示へ戻す
+    setPartExtractionId(null);
     setInstrumentation(nextInstrumentation);
     if (newType === 'piano' && !leftHandData) {
       setLeftHandData(undefined);
@@ -537,6 +560,8 @@ export default function ScorePage() {
     const previousParts = instrumentation.parts;
     setInstrumentation(nextInstrumentation);
     setScoreType(nextScoreType);
+    // 編成テンプレートを切り替えるとパート ID が変わるため、パート譜表示は総譜表示へ戻す
+    setPartExtractionId(null);
     if (nextScoreType === 'quartet') {
       setQuartetParts(prev => prev.every(p => p.length === 0)
         ? Array.from({ length: 4 }, () => [])
@@ -814,9 +839,14 @@ export default function ScorePage() {
       const parts: PlaybackPartSource[] = [];
       // scoreType ごとに保持形式が違うので、
       // ここで「再生したいパート配列」へいったん正規化してから先へ渡す。
+      // パート譜表示中（isPartExtractionActive）は、選んだパート以外を除外して
+      // 「そのパートだけ再生」にする。総譜表示に戻れば従来通り全パート再生になる。
       if (scoreType === 'quartet') {
         const quartetInstrumentation = getDefaultInstrumentationForScoreType('quartet');
         quartetParts.forEach((part, partIndex) => {
+          if (isPartExtractionActive && partExtractionSelection?.index !== partIndex) {
+            return;
+          }
           if (part && part.length > 0) {
             parts.push({
               measures: part,
@@ -826,6 +856,9 @@ export default function ScorePage() {
         });
       } else if (scoreType === 'ensemble') {
         ensembleParts.forEach((part, partIndex) => {
+          if (isPartExtractionActive && partExtractionSelection?.index !== partIndex) {
+            return;
+          }
           if (part && part.length > 0) {
             parts.push({
               measures: part,
@@ -938,7 +971,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -2314,6 +2347,23 @@ export default function ScorePage() {
                 onChange={handleImportFile}
               />
               <button className="ghost" onClick={() => window.print()}>印刷</button>
+              {partExtractionOptions.length > 0 && (
+                <label className="toolbar-select-label" title="合奏練習用に、選んだ1パートだけの譜面を表示・印刷します（閲覧・印刷専用）">
+                  <span>パート譜表示</span>
+                  <select
+                    value={partExtractionSelection?.id ?? ''}
+                    onChange={(event) => setPartExtractionId(event.target.value === '' ? null : event.target.value)}
+                    aria-label="パート譜表示"
+                  >
+                    <option value="">総譜（通常）</option>
+                    {partExtractionOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
                 段あたり小節数
                 <input
@@ -2563,6 +2613,13 @@ export default function ScorePage() {
                       >
                         {subtitle}
                       </p>
+                      {isPartExtractionActive && (
+                        // パート譜表示中は、どのパートを見ているか・編集できないことが
+                        // 一目で分かるようにタイトル欄の下へ小さく表示する。
+                        <p className="score-part-extraction-label" style={{ fontSize: 13, color: '#555', margin: '2px 0 0' }}>
+                          パート譜: {partExtractionSelection?.label}（閲覧・印刷専用）
+                        </p>
+                      )}
                       <div style={{ position: 'absolute', top: 0, right: 0, textAlign: 'right', fontSize: 14, color: '#555' }}>
                         <div contentEditable suppressContentEditableWarning onBlur={(e) => setLyricist(e.currentTarget.innerText)}>{lyricist}</div>
                         <div contentEditable suppressContentEditableWarning onBlur={(e) => setComposer(e.currentTarget.innerText)}>{composer}</div>
@@ -2570,7 +2627,10 @@ export default function ScorePage() {
                       </div>
                     </>
                   ) : (
-                    <p className="page-title">{title}</p>
+                    <p className="page-title">
+                      {title}
+                      {isPartExtractionActive && ` — ${partExtractionSelection?.label}`}
+                    </p>
                   )}
                 </header>
 
@@ -2578,7 +2638,51 @@ export default function ScorePage() {
                   '--score-stroke-width': displayWeight === 'thin' ? '0.8' : displayWeight === 'thick' ? '1.8' : '1.2',
                   '--score-text-weight': displayWeight === 'thin' ? '300' : displayWeight === 'thick' ? '700' : '400',
                 } as React.CSSProperties}>
-                  {scoreType === 'ensemble' ? (
+                  {isPartExtractionActive && scoreType === 'ensemble' ? (
+                    // パート譜表示（編成譜）: instrumentationParts/partsData/onPartChange を
+                    // 選択中パート1件だけに絞って EnsembleStaff へ渡す。
+                    // EnsembleStaff 内部の partsConfig 生成は配列長に依存しない実装のため、
+                    // 要素数1でも括弧なし単一五線として自然に描画される（移調楽器の記譜音表示・
+                    // 調号シフトなどのロジックもそのまま流用できる）。
+                    <EnsembleStaff
+                      systems={p.systems}
+                      measuresPerSystem={measuresPerSystem}
+                      tool={tool}
+                      scale={scale}
+                      instrumentationParts={[instrumentation.parts[partExtractionSelection!.index]]}
+                      partsData={[ensembleParts[partExtractionSelection!.index] ?? []]}
+                      onPartChange={[() => {}]}
+                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      disabled
+                      yOffset={yOffset}
+                      currentInstrument={currentInstrument}
+                      onPreviewNoteEvent={handleInputNotePreview}
+                      previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
+                      keySignature={keySignature}
+                      timeSignature={scoreTimeSignature}
+                      notationMode={notationMode}
+                      customSymbolDefs={customSymbolDefs}
+                    />
+                  ) : isPartExtractionActive && scoreType === 'quartet' ? (
+                    // パート譜表示（弦楽四重奏）: QuartetStaff は4段固定のレイアウトのため、
+                    // 単一パート用の PartExtractionStaff（PianoSystemCanvas を直接1段だけ呼ぶ）を使う。
+                    <PartExtractionStaff
+                      systems={p.systems}
+                      measuresPerSystem={measuresPerSystem}
+                      tool={tool}
+                      scale={scale}
+                      partConfig={QUARTET_PART_CONFIGS[partExtractionSelection!.index]}
+                      data={quartetParts[partExtractionSelection!.index] ?? []}
+                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      yOffset={yOffset}
+                      currentInstrument={currentInstrument}
+                      onPreviewNoteEvent={handleInputNotePreview}
+                      previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
+                      keySignature={keySignature}
+                      timeSignature={scoreTimeSignature}
+                      customSymbolDefs={customSymbolDefs}
+                    />
+                  ) : scoreType === 'ensemble' ? (
                     <EnsembleStaff
                       systems={p.systems}
                       measuresPerSystem={measuresPerSystem}

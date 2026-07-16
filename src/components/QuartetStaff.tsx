@@ -8,7 +8,8 @@ import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
 
-const QUARTET_PART_CONFIGS: Omit<PartConfig, 'data' | 'onChange'>[] = [
+// パート譜表示（PartExtractionStaff）からも同じ clef/楽器定義を使うため export する
+export const QUARTET_PART_CONFIGS: Omit<PartConfig, 'data' | 'onChange'>[] = [
   { clef: 'treble', label: 'Vn. I',  playbackInstrument: InstrumentType.VIOLIN },
   { clef: 'treble', label: 'Vn. II', playbackInstrument: InstrumentType.VIOLIN },
   { clef: 'alto',   label: 'Va.',    playbackInstrument: InstrumentType.VIOLA },
