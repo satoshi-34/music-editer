@@ -274,6 +274,13 @@ export interface MeasureData {
    * チェロのテナー記号への切り替えなど、曲の途中でのクレフ変更を記録する。
    */
   clef?: ClefType;
+  /**
+   * この小節に付くリハーサルマーク（練習番号）。
+   * "A" 〜 "Z"、"AA" のようなアルファベット、または "1" のような数字も
+   * 自由入力できるように文字列型にしている（1〜4文字）。
+   * 省略時は「この小節にはリハーサルマークが無い」ことを表す。
+   */
+  rehearsalMark?: string;
 }
 
 export interface ScoreMetadata {

@@ -55,6 +55,7 @@ import { resolveMeasureClef } from '../utils/clefMeasureUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
+import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -915,6 +916,14 @@ export default function StaffCanvas({
     overlayY: number;
   } | null>(null);
 
+  // リハーサルマーク入力オーバーレイの状態（null のとき非表示）
+  const [rehearsalEditState, setRehearsalEditState] = useState<{
+    measureAbsoluteIndex: number;  // マークを設定する小節の絶対インデックス
+    currentValue: string;          // 既存のマーク、無ければ自動連番で提案する値（初期値として入力欄に表示）
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
   // サイズ・位置調整の対象1件。カスタム記号（symbolId で識別）と
   // 標準記号（kind で識別。fingering/dynamics など）の両方を同じ形で扱えるようにする。
   type AdjustTarget =
@@ -1434,6 +1443,8 @@ export default function StaffCanvas({
     const customSymbolEntries: CustomSymbolRenderEntry[] = [];
     // 途中テンポ変更の描画情報を収集する（各小節の左上に ♩=XXX と表示）
     const bpmMarkingEntries: Array<{ x: number; topY: number; bpm: number }> = [];
+    // リハーサルマーク（練習番号）の描画情報を収集する（各小節の左上、テンポ表記よりさらに上に表示）
+    const rehearsalMarkEntries: Array<{ x: number; topY: number; mark: string }> = [];
     // テキスト要素（コード記号・テンポ表記）の描画情報を収集する（五線の上に表示）
     const chordSymbolEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     const tempoMarkingEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
@@ -1990,6 +2001,14 @@ export default function StaffCanvas({
             bpm: data.bpm,
           });
         }
+        // リハーサルマークが設定されている小節には、テンポ表記よりさらに上に四角枠付きで表示する
+        if (data?.rehearsalMark) {
+          rehearsalMarkEntries.push({
+            x: measLeft,
+            topY: stave.getYForLine(0),
+            mark: data.rehearsalMark,
+          });
+        }
         const noteStartX = typeof (stave as any).getNoteStartX === 'function'
           ? (stave as any).getNoteStartX()
           : xDraw + ((i === 0) ? 50 : 0);
@@ -2473,6 +2492,19 @@ export default function StaffCanvas({
             });
             return;
           }
+          if ('mode' in tool && tool.mode === 'measureRehearsal') {
+            // リハーサルマーク（練習番号）: 小節クリックで入力欄を表示する。
+            // 既存の値があればそれを、無ければ次の連番（A, B, C…）を提案する。
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            const currentMark = score[absoluteIndex]?.rehearsalMark;
+            setRehearsalEditState({
+              measureAbsoluteIndex: absoluteIndex,
+              currentValue: currentMark ?? suggestNextRehearsalMark(score),
+              overlayX: e.clientX - (containerRect?.left ?? 0),
+              overlayY: e.clientY - (containerRect?.top ?? 0),
+            });
+            return;
+          }
           const { x: lx, y: ly } = clientToGroup(svg, svgRoot as SVGGElement, e.clientX, e.clientY + yOffsetRef.current);
           if ('mode' in tool && tool.mode === 'accidental') {
             if (i === 0 && lx >= keySignatureHitBounds.left && lx <= keySignatureHitBounds.right) {
@@ -2677,6 +2709,17 @@ export default function StaffCanvas({
                 setClefEditState({
                   measureAbsoluteIndex: absoluteIndex,
                   currentValue: currentClef ?? '',
+                  overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
+                  overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
+                });
+                return;
+              }
+              if ('mode' in tool && tool.mode === 'measureRehearsal') {
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const currentMark = score[absoluteIndex]?.rehearsalMark;
+                setRehearsalEditState({
+                  measureAbsoluteIndex: absoluteIndex,
+                  currentValue: currentMark ?? suggestNextRehearsalMark(score),
                   overlayX: (ev as MouseEvent).clientX - (containerRect?.left ?? 0),
                   overlayY: (ev as MouseEvent).clientY - (containerRect?.top ?? 0),
                 });
@@ -3390,6 +3433,39 @@ export default function StaffCanvas({
       svgRoot.appendChild(el);
     });
 
+    // ── リハーサルマーク（練習番号）を一括描画 ──────────────────
+    // 標準的な浄書ルールに合わせ、四角い枠で囲んだ太字で表示する。
+    // 途中テンポ変更（♩=XXX）よりさらに上に置くことで、同じ小節に両方が
+    // 付いても重ならないようにする（テンポは五線上端の36px上、
+    // リハーサルマークはそれよりさらに20px上＝56px上）。
+    rehearsalMarkEntries.forEach(({ x, topY, mark }) => {
+      const boxWidth = Math.max(16, mark.length * 8 + 8);
+      const boxHeight = 16;
+      const boxX = x + 2;
+      const boxY = topY - 56 - boxHeight;
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', String(boxX));
+      rect.setAttribute('y', String(boxY));
+      rect.setAttribute('width', String(boxWidth));
+      rect.setAttribute('height', String(boxHeight));
+      rect.setAttribute('fill', 'none');
+      rect.setAttribute('stroke', '#111827');
+      rect.setAttribute('stroke-width', '1.4');
+      rect.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(rect);
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = mark;
+      el.setAttribute('x', String(boxX + boxWidth / 2));
+      el.setAttribute('y', String(boxY + boxHeight - 4));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#111827');
+      el.setAttribute('font-family', 'sans-serif');
+      el.setAttribute('font-size', '12');
+      el.setAttribute('font-weight', 'bold');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
     // 運指番号: 符頭のすぐ上（noteTopY - 10）に小さめのフォントで表示する。
     // 運指番号は音高（符頭の上下）に関わらず、その段の五線上端を基準にした
     // 統一高さに揃えて表示する（カスタム記号と同じ方針。音符ごとに高さがばらつくと
@@ -3760,6 +3836,24 @@ export default function StaffCanvas({
   }
 
   /**
+   * リハーサルマーク（練習番号）を確定する。
+   * 1〜4文字の有効な文字列なら保存し、空欄なら削除する（無効な値も削除扱い）。
+   */
+  function handleRehearsalConfirm(rawText: string) {
+    if (!rehearsalEditState) return;
+    const { measureAbsoluteIndex } = rehearsalEditState;
+    const trimmed = rawText.trim();
+    const rehearsalMark = trimmed !== '' && isValidRehearsalMark(trimmed) ? trimmed : undefined;
+    setScore(prev => {
+      const next = prev.map(cloneMeasureData);
+      if (measureAbsoluteIndex >= next.length) return prev;
+      next[measureAbsoluteIndex] = { ...next[measureAbsoluteIndex], rehearsalMark };
+      return next;
+    });
+    setRehearsalEditState(null);
+  }
+
+  /**
    * カスタム記号のサイズ変更を確定する。
    * 入力値は%表記（例: "120"）なので /100 して倍率に戻し、
    * MIN_SYMBOL_SCALE〜MAX_SYMBOL_SCALE の範囲にクランプして適用する。
@@ -4107,6 +4201,58 @@ export default function StaffCanvas({
               }}
             />
           </div>
+        </div>
+      )}
+      {/* リハーサルマーク入力オーバーレイ: リハーサルマークツールで小節をクリックすると表示される */}
+      {rehearsalEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: rehearsalEditState.overlayX,
+            top: rehearsalEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #111827',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 140,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#111827', fontFamily: 'sans-serif' }}>
+            リハーサルマーク（1〜4文字、空欄で解除）
+          </span>
+          <input
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            type="text"
+            maxLength={4}
+            defaultValue={rehearsalEditState.currentValue}
+            placeholder="例: A"
+            style={{
+              border: 'none',
+              outline: 'none',
+              fontSize: 13,
+              fontFamily: 'sans-serif',
+              fontWeight: 'bold',
+              width: 90,
+              padding: 2,
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                handleRehearsalConfirm((e.target as HTMLInputElement).value);
+              } else if (e.key === 'Escape') {
+                setRehearsalEditState(null);
+              }
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              handleRehearsalConfirm(e.target.value);
+            }}
+          />
         </div>
       )}
       {/* カスタム記号サイズ変更オーバーレイ: サイズ変更ツールで対象記号が付いた音符をクリックすると表示される */}

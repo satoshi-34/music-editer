@@ -60,6 +60,7 @@ export type Tool =
   | { mode: 'measureTimeSig' }                             // 小節単位の拍子変更モード
   | { mode: 'measureKeySig' }                               // 小節単位の調号変更モード
   | { mode: 'measureClef' }                                  // 小節単位のクレフ（音部記号）変更モード
+  | { mode: 'measureRehearsal' }                            // 小節単位のリハーサルマーク（練習番号）設定モード
   | { mode: 'graceNote' }                                  // 前打音（スラッシュ付き短前打音）を付けるモード
   | { mode: 'ornament'; ornamentType: OrnamentType }       // 装飾記号（トリル/モルデント/プラルトリラー/ターン）を付けるモード
   | { mode: 'pedal'; pedalType: 'down' | 'up' }           // ペダル記号（Ped / ✱）を付けるモード
@@ -208,6 +209,7 @@ export default function Palette({
   const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
   const measureKeySigActive = 'mode' in value && value.mode === 'measureKeySig';
   const measureClefActive = 'mode' in value && value.mode === 'measureClef';
+  const measureRehearsalActive = 'mode' in value && value.mode === 'measureRehearsal';
   const graceNoteActive = 'mode' in value && value.mode === 'graceNote';
   const selectedOrnamentType = 'mode' in value && value.mode === 'ornament' ? value.ornamentType : null;
   const pedalDownActive = 'mode' in value && value.mode === 'pedal' && (value as any).pedalType === 'down';
@@ -463,6 +465,20 @@ export default function Palette({
         >
           <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true">
             <text x="0" y="15" fontSize="15" fontFamily="serif" fontWeight="bold" fill="#111">𝄞</text>
+          </svg>
+        </button>
+        {/* リハーサルマーク（練習番号） */}
+        <button
+          type="button"
+          onClick={() => onChange(measureRehearsalActive ? ROW1[2] : { mode: 'measureRehearsal' })}
+          title="リハーサルマーク（練習番号。小節をクリックしてA, B, C…を設定）"
+
+          aria-label="リハーサルマーク（練習番号。小節をクリックしてA, B, C…を設定）"
+          style={btnStyle(measureRehearsalActive, { width: 26 })}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <rect x="2" y="2" width="14" height="14" rx="1" stroke="#111" strokeWidth="1.5" fill="none"/>
+            <text x="9" y="13" fontSize="11" fontFamily="sans-serif" fontWeight="bold" fill="#111" textAnchor="middle">A</text>
           </svg>
         </button>
         {/* 強弱記号 */}

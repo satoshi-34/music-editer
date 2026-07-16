@@ -213,6 +213,13 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
       const soundEl = measureEl.querySelector('sound[tempo]');
       const bpm = soundEl ? parseInt(soundEl.getAttribute('tempo') ?? '', 10) : undefined;
 
+      // リハーサルマーク（練習番号）: <direction-type><rehearsal> を拾う
+      const rehearsalEl = measureEl.querySelector('direction-type rehearsal');
+      const rehearsalText = rehearsalEl?.textContent?.trim();
+      const rehearsalMark = rehearsalText && rehearsalText.length > 0 && rehearsalText.length <= 4
+        ? rehearsalText
+        : undefined;
+
       // 小節単位拍子変更
       const attrEl = measureEl.querySelector('attributes time');
       let timeSig: [number, number] | undefined;
@@ -244,6 +251,7 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
         bpm: bpm && !isNaN(bpm) ? bpm : undefined,
         timeSignature: timeSig,
         keySignature: measureKeySig,
+        rehearsalMark,
       };
     });
 

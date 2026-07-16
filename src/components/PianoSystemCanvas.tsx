@@ -64,6 +64,7 @@ import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeleti
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
+import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -832,6 +833,14 @@ export default function PianoSystemCanvas({
     overlayY: number;
   } | null>(null);
 
+  // リハーサルマーク入力オーバーレイの状態。調号と同じく最上段（partsScore[0]）にのみ保存する。
+  const [rehearsalEditState, setRehearsalEditState] = useState<{
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+  } | null>(null);
+
   const [textEditState, setTextEditState] = useState<{
     kind: TextElementKind;
     partIndex: number;
@@ -1327,6 +1336,8 @@ export default function PianoSystemCanvas({
     }> = [];
     // カスタム記号の描画情報を収集する（段ごとの五線上端基準の統一高さで描く）
     const customSymbolEntries: CustomSymbolRenderEntry[] = [];
+    // リハーサルマーク（練習番号）の描画情報を収集する。最上段（pi===0）の上にだけ表示する。
+    const rehearsalMarkEntries: Array<{ x: number; topY: number; mark: string }> = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up' }> = [];
     // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
@@ -1610,6 +1621,14 @@ export default function PianoSystemCanvas({
         placeKeySignatureAfterTimeSignature(stave);
         stave.draw();
         staveSets[pi].push(stave);
+        // リハーサルマークは最上段（pi===0）の上にだけ表示する（repeatStart/ending と同じ「最上段基準」の方針）
+        if (pi === 0 && sharedMeasure?.rehearsalMark) {
+          rehearsalMarkEntries.push({
+            x: x / s,
+            topY: stave.getYForLine(0),
+            mark: sharedMeasure.rehearsalMark,
+          });
+        }
       });
 
       // 各小節の右端縦線：第1段 ↔ 最終段 をまたぐ
@@ -2412,6 +2431,19 @@ export default function PianoSystemCanvas({
             });
             return;
           }
+          if('mode' in tool&&tool.mode==='measureRehearsal'){
+            // リハーサルマーク（練習番号）: 調号と同じく最上段（partsScore[0]）の小節データに保存する
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            const me = e as MouseEvent;
+            const currentMark = partsScore[0]?.[absI]?.rehearsalMark;
+            setRehearsalEditState({
+              measureAbsoluteIndex: absI,
+              currentValue: currentMark ?? suggestNextRehearsalMark(partsScore[0] ?? []),
+              overlayX: me.clientX - (containerRect?.left ?? 0),
+              overlayY: me.clientY - (containerRect?.top ?? 0),
+            });
+            return;
+          }
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           if('mode' in tool&&tool.mode==='accidental'){
             if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
@@ -2605,6 +2637,18 @@ export default function PianoSystemCanvas({
                 setKeySigEditState({
                   measureAbsoluteIndex:absI,
                   currentValue:currentKS??'',
+                  overlayX:me.clientX-(containerRect?.left??0),
+                  overlayY:me.clientY-(containerRect?.top??0),
+                });
+                return;
+              }
+              if('mode' in tool&&tool.mode==='measureRehearsal'){
+                const containerRect=containerRef.current?.getBoundingClientRect();
+                const me=e as MouseEvent;
+                const currentMark=partsScore[0]?.[absI]?.rehearsalMark;
+                setRehearsalEditState({
+                  measureAbsoluteIndex:absI,
+                  currentValue:currentMark??suggestNextRehearsalMark(partsScore[0] ?? []),
                   overlayX:me.clientX-(containerRect?.left??0),
                   overlayY:me.clientY-(containerRect?.top??0),
                 });
@@ -3139,6 +3183,35 @@ export default function PianoSystemCanvas({
     // ── カスタム記号を一括描画（StaffCanvas と同じ共通ユーティリティを使う） ──
     drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot);
 
+    // ── リハーサルマーク（練習番号）を一括描画（StaffCanvas と同じ四角枠+太字） ──
+    rehearsalMarkEntries.forEach(({ x, topY, mark }) => {
+      const boxWidth = Math.max(16, mark.length * 8 + 8);
+      const boxHeight = 16;
+      const boxX = x + 2;
+      const boxY = topY - 56 - boxHeight;
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', String(boxX));
+      rect.setAttribute('y', String(boxY));
+      rect.setAttribute('width', String(boxWidth));
+      rect.setAttribute('height', String(boxHeight));
+      rect.setAttribute('fill', 'none');
+      rect.setAttribute('stroke', '#111827');
+      rect.setAttribute('stroke-width', '1.4');
+      rect.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(rect);
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = mark;
+      el.setAttribute('x', String(boxX + boxWidth / 2));
+      el.setAttribute('y', String(boxY + boxHeight - 4));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#111827');
+      el.setAttribute('font-family', 'sans-serif');
+      el.setAttribute('font-size', '12');
+      el.setAttribute('font-weight', 'bold');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
     // 運指番号: 音高に関わらず五線上端基準の統一高さに揃えて表示する
     // （カスタム記号と同じ方針）。五線より上へ飛び出す高音だけは、
     // 符頭と重ならないよう、その音符に限り符頭上端の上へ逃がす。
@@ -3443,6 +3516,27 @@ export default function PianoSystemCanvas({
       })
     );
     setBpmEditState(null);
+  }
+
+  /**
+   * リハーサルマーク（練習番号）を確定する。
+   * 調号と同じく最上段（partsScore[0]）の小節データにだけ保存する
+   * （描画も最上段の上にだけ出すため、他パートへ複製する必要はない）。
+   */
+  function handleRehearsalConfirm(rawText: string) {
+    if (!rehearsalEditState) return;
+    const { measureAbsoluteIndex } = rehearsalEditState;
+    const trimmed = rawText.trim();
+    const rehearsalMark = trimmed !== '' && isValidRehearsalMark(trimmed) ? trimmed : undefined;
+    setPartsScore(prev => {
+      const next = [...prev];
+      const topPartData = (prev[0] ?? []).map(cloneMeasureData);
+      if (measureAbsoluteIndex >= topPartData.length) return prev;
+      topPartData[measureAbsoluteIndex] = { ...topPartData[measureAbsoluteIndex], rehearsalMark };
+      next[0] = topPartData;
+      return next;
+    });
+    setRehearsalEditState(null);
   }
 
   function handleTextConfirm(text: string) {
@@ -3783,6 +3877,57 @@ export default function PianoSystemCanvas({
               }}
             />
           </div>
+        </div>
+      )}
+      {rehearsalEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: rehearsalEditState.overlayX,
+            top: rehearsalEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #111827',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 140,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#111827', fontFamily: 'sans-serif' }}>
+            リハーサルマーク（1〜4文字、空欄で解除）
+          </span>
+          <input
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            type="text"
+            maxLength={4}
+            defaultValue={rehearsalEditState.currentValue}
+            placeholder="例: A"
+            style={{
+              border: 'none',
+              outline: 'none',
+              fontSize: 13,
+              fontFamily: 'sans-serif',
+              fontWeight: 'bold',
+              width: 90,
+              padding: 2,
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                handleRehearsalConfirm((e.target as HTMLInputElement).value);
+              } else if (e.key === 'Escape') {
+                setRehearsalEditState(null);
+              }
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              handleRehearsalConfirm(e.target.value);
+            }}
+          />
         </div>
       )}
       {textEditState && (

@@ -361,7 +361,12 @@ function validateMeasureData(measure: any): measure is MeasureData {
     // 小節単位の調号変更。未知の値は保存データとして受け入れず、無効なファイルとして弾く。
     (measure.keySignature === undefined || isValidKeySignature(measure.keySignature)) &&
     // 小節単位のクレフ（音部記号）変更。同様に未知の値は無効として弾く。
-    (measure.clef === undefined || isValidClefType(measure.clef))
+    (measure.clef === undefined || isValidClefType(measure.clef)) &&
+    // リハーサルマーク（練習番号）。1〜4文字の空でない文字列のみ許可する。
+    (measure.rehearsalMark === undefined ||
+      (typeof measure.rehearsalMark === 'string' &&
+        measure.rehearsalMark.trim().length > 0 &&
+        measure.rehearsalMark.trim().length <= 4))
   );
 }
 

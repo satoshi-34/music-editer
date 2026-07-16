@@ -249,6 +249,13 @@ function measureToXml(
     );
   }
 
+  // リハーサルマーク（練習番号）: MusicXML の標準的な <rehearsal> 要素で出力する
+  if (measure.rehearsalMark) {
+    lines.push(
+      `<direction placement="above"><direction-type><rehearsal>${escapeXmlText(measure.rehearsalMark)}</rehearsal></direction-type></direction>`
+    );
+  }
+
   // リピート開始
   if (measure.repeatStart) {
     lines.push('<barline location="left"><bar-style>heavy-light</bar-style><repeat direction="forward"/></barline>');
