@@ -1037,22 +1037,33 @@ button.ghost:disabled {
   .score-title { font-size: 24px; }
   .score-subtitle { font-size: 12px; }
 
-  /* 線が薄くならないように黒で強制。ただしクリック判定 rect/path は除外！
-     （松葉やタイ／スラーには、見た目の線とは別に「太い透明なクリック判定パス」が
-     重ねて描かれている。ここを除外し忘れると、印刷時にだけ太い黒線が現れてしまう） */
-  .print-page svg path:not(.vf-arc-hit):not(.vf-hairpin-hit),
-  .print-page svg line { stroke: #000 !important; fill: #000 !important; }
+  /* 薄い色（グレー系）の線・塗りを印刷では黒に寄せる。
+     ただし「fill / stroke の有無」は元の描画を尊重し、色だけを黒へ統一する。
+     以前は path/rect に stroke と fill を一律 #000 で強制していたが、
+     - fill="none" の輪郭要素（スラー・タイの弧、リハーサルマークの枠など）に
+       塗りが付いて黒い塊になる
+     - 塗りのみのグリフ（符頭・音部記号）や五線 rect に輪郭線が付いて
+       楽譜全体が一回り太く印刷される
+     という問題があった。属性セレクタで「元から線／塗りがある要素」だけ黒にする。
+     クリック判定パス（vf-arc-hit / vf-hairpin-hit）は透明のまま印刷から除外する */
+  .print-page svg path[stroke]:not([stroke="none"]):not(.vf-arc-hit):not(.vf-hairpin-hit) {
+    stroke: #000 !important;
+  }
+  .print-page svg path[fill]:not([fill="none"]) { fill: #000 !important; }
+  .print-page svg line { stroke: #000 !important; }
   .print-page svg path.vf-arc-hit,
   .print-page svg path.vf-hairpin-hit {
     stroke: none !important; fill: none !important;
   }
-  /* カスタム記号の circle は fill="none"（輪郭だけの記号）のことがあるため、
-     path/line と違って fill を一律 #000 にはしない（塗りつぶし記号に変わってしまう）。
-     枠線の色だけ黒にし、塗りは元の値（none または色）を尊重する */
-  .print-page svg circle { stroke: #000 !important; }
+  /* circle / rect も同じ方針: 色だけ黒にし、fill="none"（輪郭だけの記号・枠）は
+     塗りつぶさない。リハーサルマークの囲み枠 rect はここで文字が見えるようになる */
+  .print-page svg circle[stroke]:not([stroke="none"]) { stroke: #000 !important; }
   .print-page svg circle:not([fill="none"]) { fill: #000 !important; }
-  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
-    stroke: #000 !important; fill: #000 !important;
+  .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+    stroke: #000 !important;
+  }
+  .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+    fill: #000 !important;
   }
   .print-page svg rect.vf-hit,
   .print-page svg rect.vf-note-hit,
