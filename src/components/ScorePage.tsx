@@ -1929,9 +1929,18 @@ export default function ScorePage() {
 
   const totalSystems = 12;
   const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
+  // 1ページ（A4 実寸 297mm ≒ 1123px）に収まる段数。
+  // 本文の予算はタイトルページで約 938px（A4 高 − 上下余白 − タイトル欄 − ページ番号）。
+  // 実測の1段あたり高さ（単旋律 ≒114px / ピアノ大譜表 ≒180px / 四重奏 ≒340px）から、
+  // 予算内に収まる最大段数を楽譜種別ごとに決めている。
+  // ここを増やすとページが A4 からあふれ、印刷時に段が紙面の境目で切断される。
   const systemsPerPage = scoreType === 'ensemble'
     ? (instrumentation.parts.length > 10 ? 1 : 2)
-    : 9;
+    : scoreType === 'quartet'
+      ? 2
+      : scoreType === 'piano'
+        ? 5
+        : 8;
   const pages: PageSpec[] = useMemo(
     () => Array.from({ length: Math.ceil(totalSystems / systemsPerPage) }, () => ({ systems: systemsPerPage })),
     [totalSystems, systemsPerPage]

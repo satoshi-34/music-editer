@@ -901,8 +901,12 @@ button.ghost:disabled {
 .print-page {
   position: relative;
   width: 210mm;
-  /* 1ページ目のタイトル欄でページだけが伸びないよう、親から共通高さを受け取る。 */
-  min-height: var(--page-height, 297mm);
+  /* 画面の1ページを常に A4 実寸（297mm）に固定する。
+     こうすると編集画面のページ割りと印刷のページ割りが一致し、
+     紙面の途中で段が切れたり、継ぎのシートにタイトルが無い問題が起きない。
+     ページ内に収まる段数は ScorePage.tsx の systemsPerPage で楽譜種別ごとに調整する */
+  height: 297mm;
+  overflow: hidden;
   background: #fffdf6;
   background-image: radial-gradient(#00000008 1px, transparent 1px);
   background-size: 4px 4px;
