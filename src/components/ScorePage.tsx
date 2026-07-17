@@ -79,6 +79,7 @@ import { DEFAULT_TIME_SIGNATURE, formatTimeSignature, getMeasureBeats, normalize
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
+import { isSameScoreIgnoringPadding } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 
 type PageSpec = { systems: number };
@@ -1272,10 +1273,23 @@ export default function ScorePage() {
 
   // スナップショットを state に適用する（undo/redo 共通）
   const applySnapshot = useCallback((snap: ScoreSnapshot) => {
-    setRightHandData(snap.rightHandData);
-    setLeftHandData(snap.leftHandData);
-    setQuartetParts(snap.quartetParts);
-    setEnsembleParts(snap.ensembleParts);
+    // 「まだ一度も編集していない状態」のスナップショットは rightHandData が undefined のことがある。
+    // undefined のまま復元すると StaffCanvas / PianoSystemCanvas の同期 effect が
+    // 「if (initialScoreData)」ガードで無視してしまい、画面が再描画されない
+    // （＝最初の編集を Undo しても表示が残る）。空配列＝「譜面を空にする」に正規化して復元する。
+    const restored: ScoreSnapshot = {
+      ...snap,
+      rightHandData: snap.rightHandData ?? [],
+      leftHandData: snap.leftHandData ?? [],
+    };
+    // currentScoreRef は useEffect（レンダー後）でも更新されるが、ここでも同期的に更新する。
+    // 復元直後にキャンバスの onScoreDataChange 通知が届いたとき、古い ref と比較して
+    // 「変更あり」と誤判定し、復元したはずのデータが上書きされるのを防ぐため。
+    currentScoreRef.current = restored;
+    setRightHandData(restored.rightHandData);
+    setLeftHandData(restored.leftHandData);
+    setQuartetParts(restored.quartetParts);
+    setEnsembleParts(restored.ensembleParts);
   }, []);
 
   // Undo: 履歴から1つ前の状態を取り出して適用する（キーボードショートカットとボタンの共通処理）
@@ -1311,18 +1325,34 @@ export default function ScorePage() {
 
   const handleRightHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    // 変更がない場合はスキップ（currentScoreRef は常に最新値を保持）
-    if (currentScoreRef.current.rightHandData &&
-        JSON.stringify(currentScoreRef.current.rightHandData) === JSON.stringify(data)) return;
+    // 実質的な変更がない場合はスキップする。
+    // キャンバスはページ範囲まで末尾に空小節を補って通知してくるため、
+    // 「パディングの長さが違うだけ」を変更扱いにすると無意味な Undo 履歴が積まれてしまう。
+    if (isSameScoreIgnoringPadding(currentScoreRef.current.rightHandData, data)) {
+      // データ内容は同じでも配列長（パディング）は違うことがあるので、
+      // 以後の比較のために ref と state は最新の形に揃えておく（履歴には積まない）
+      currentScoreRef.current = { ...currentScoreRef.current, rightHandData: data };
+      setRightHandData(data);
+      return;
+    }
     pushHistory();
+    // ref は useEffect（レンダー後）でも更新されるが、ここで同期的にも更新する。
+    // 複数ページのキャンバスが同じレンダーサイクル内で連続して onScoreDataChange を
+    // 呼んだとき、古い ref のまま pushHistory すると壊れたスナップショット
+    // （undefined や1つ前の状態）が履歴に積まれ、Undo しても画面が戻らなくなるため。
+    currentScoreRef.current = { ...currentScoreRef.current, rightHandData: data };
     setRightHandData(data);
   }, [isEditingDisabled, pushHistory]);
 
   const handleLeftHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    if (currentScoreRef.current.leftHandData &&
-        JSON.stringify(currentScoreRef.current.leftHandData) === JSON.stringify(data)) return;
+    if (isSameScoreIgnoringPadding(currentScoreRef.current.leftHandData, data)) {
+      currentScoreRef.current = { ...currentScoreRef.current, leftHandData: data };
+      setLeftHandData(data);
+      return;
+    }
     pushHistory();
+    currentScoreRef.current = { ...currentScoreRef.current, leftHandData: data };
     setLeftHandData(data);
   }, [isEditingDisabled, pushHistory]);
 
@@ -1333,8 +1363,12 @@ export default function ScorePage() {
 
   const handleQuartetPartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    if (JSON.stringify(currentScoreRef.current.quartetParts[partIndex]) === JSON.stringify(data)) return;
-    pushHistory();
+    // 右手・左手と同じく、パディング差だけの通知は履歴に積まず ref と state だけ揃える
+    const paddingOnly = isSameScoreIgnoringPadding(currentScoreRef.current.quartetParts[partIndex], data);
+    if (!paddingOnly) pushHistory();
+    const nextParts = [...currentScoreRef.current.quartetParts];
+    nextParts[partIndex] = data;
+    currentScoreRef.current = { ...currentScoreRef.current, quartetParts: nextParts };
     setQuartetParts(prev => {
       const next = [...prev];
       next[partIndex] = data;
@@ -1344,8 +1378,11 @@ export default function ScorePage() {
 
   const handleEnsemblePartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    if (JSON.stringify(currentScoreRef.current.ensembleParts[partIndex]) === JSON.stringify(data)) return;
-    pushHistory();
+    const paddingOnly = isSameScoreIgnoringPadding(currentScoreRef.current.ensembleParts[partIndex], data);
+    if (!paddingOnly) pushHistory();
+    const nextParts = [...currentScoreRef.current.ensembleParts];
+    nextParts[partIndex] = data;
+    currentScoreRef.current = { ...currentScoreRef.current, ensembleParts: nextParts };
     setEnsembleParts(prev => {
       const next = [...prev];
       next[partIndex] = data;
