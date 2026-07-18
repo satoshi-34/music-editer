@@ -1681,16 +1681,13 @@ export default function ScorePage() {
     title,
   ]);
 
-  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const onResize = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        const nextWidth = window.innerWidth;
-        setViewportWidth(nextWidth);
-        setColumns(nextWidth < 1200 ? 1 : 2);
+        setColumns(window.innerWidth < 1200 ? 1 : 2);
       }, 150);
     };
     window.addEventListener('resize', onResize);
@@ -2050,13 +2047,11 @@ export default function ScorePage() {
   }, [setTimeSignature]);
 
   const [hasCustomPianoSample, setHasCustomPianoSample] = useState<boolean>(() => hasCustomPianoDemoScore());
-  const visiblePages = useMemo(() => {
-    const pagePixelWidth = 210 * 3.78 * scale;
-    // pages は scoreType によって 9段/ページや 2段/ページへ変わる。
-    // これを useState に保存すると、編成譜から単旋律へ戻した瞬間に
-    // 古い「2段ページ」が一瞬残ることがあるため、毎回ここで同期計算する。
-    return pagePixelWidth * 2 > viewportWidth ? pages.slice(0, 1) : pages;
-  }, [pages, scale, viewportWidth]);
+  // 以前は「2ページ分の幅がない画面では1ページ目だけ描画する」間引きをしていたが、
+  // - 狭いウィンドウでは2ページ目以降がアプリ上で一切見られない
+  // - 印刷も画面の DOM をそのまま刷るため、2ページ目以降が印刷されない
+  // という問題があったため廃止した。狭い画面では columns=1（縦1列）で全ページ並ぶ。
+  const visiblePages = pages;
 
   const [sharedPageHeight, setSharedPageHeight] = useState<number | null>(null);
 
