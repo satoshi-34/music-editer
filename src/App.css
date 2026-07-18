@@ -1020,6 +1020,10 @@ button.ghost:disabled {
      @page margin を 12mm にすると印刷可能領域が 186mm になり、
      width: 210mm の .print-page がはみ出して左ズレする原因になるため。 */
   @page { size: A4; margin: 0; }
+  /* 印刷インク色。通常は #000（黒）。
+     黒インク切れなどで一時的に別色で刷りたいときはここだけ変える。
+     ※現在は黒インク切れ対応で一時的に青にしている。戻すときは #000 へ */
+  :root { --print-ink: #1d4ed8; }
   /* body のデフォルト margin（8px）が残ると1枚目全体が下へずれ、
      ページ末尾の段が次の紙へ押し出されてしまう */
   body { background: #fff !important; margin: 0 !important; }
@@ -1080,23 +1084,25 @@ button.ghost:disabled {
      という問題があった。属性セレクタで「元から線／塗りがある要素」だけ黒にする。
      クリック判定パス（vf-arc-hit / vf-hairpin-hit）は透明のまま印刷から除外する */
   .print-page svg path[stroke]:not([stroke="none"]):not(.vf-arc-hit):not(.vf-hairpin-hit) {
-    stroke: #000 !important;
+    stroke: var(--print-ink) !important;
   }
-  .print-page svg path[fill]:not([fill="none"]) { fill: #000 !important; }
-  .print-page svg line { stroke: #000 !important; }
+  /* fill 属性なし（SVGデフォルト黒のグリフ: 符頭・音部記号など）も対象にするため
+     [fill] の存在条件は付けない。fill="none"（弧・枠）とヒット判定だけ除外する */
+  .print-page svg path:not([fill="none"]):not(.vf-arc-hit):not(.vf-hairpin-hit) { fill: var(--print-ink) !important; }
+  .print-page svg line { stroke: var(--print-ink) !important; }
   .print-page svg path.vf-arc-hit,
   .print-page svg path.vf-hairpin-hit {
     stroke: none !important; fill: none !important;
   }
   /* circle / rect も同じ方針: 色だけ黒にし、fill="none"（輪郭だけの記号・枠）は
      塗りつぶさない。リハーサルマークの囲み枠 rect はここで文字が見えるようになる */
-  .print-page svg circle[stroke]:not([stroke="none"]) { stroke: #000 !important; }
-  .print-page svg circle:not([fill="none"]) { fill: #000 !important; }
+  .print-page svg circle[stroke]:not([stroke="none"]) { stroke: var(--print-ink) !important; }
+  .print-page svg circle:not([fill="none"]) { fill: var(--print-ink) !important; }
   .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
-    stroke: #000 !important;
+    stroke: var(--print-ink) !important;
   }
   .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
-    fill: #000 !important;
+    fill: var(--print-ink) !important;
   }
   .print-page svg rect.vf-hit,
   .print-page svg rect.vf-note-hit,
@@ -1106,7 +1112,18 @@ button.ghost:disabled {
   }
   /* 強弱記号・運指番号・リハーサルマーク・ペダル・オッターバなどのテキストは
      ダークグレー系（#1f2937 等）で描かれているため、印刷では純粋な黒に統一する */
-  .print-page svg text { fill: #000 !important; }
+  .print-page svg text { fill: var(--print-ink) !important; }
+  /* VexFlow は五線・符幹などの色を親の <g stroke="..." fill="..."> に付けて
+     子要素へ継承させることがある。要素単位のルールでは拾えないため、
+     グループ側の色もインク色へ差し替える（none は元の描画を尊重） */
+  .print-page svg g[stroke]:not([stroke="none"]) { stroke: var(--print-ink) !important; }
+  .print-page svg g[fill]:not([fill="none"]) { fill: var(--print-ink) !important; }
+  /* VexFlow は svg ルート要素にも stroke="black" を付けており、
+     五線・符幹の多く（自前の stroke 属性を持たない path）はここから継承している */
+  .print-page svg[stroke]:not([stroke="none"]) { stroke: var(--print-ink) !important; }
+  .print-page svg[fill]:not([fill="none"]) { fill: var(--print-ink) !important; }
+  /* タイトル・サブタイトル・ページ番号などの HTML テキストも同じインク色で刷る */
+  .print-page, .print-page .page-head *, .print-page .page-foot * { color: var(--print-ink) !important; }
 }
 
 /* SVGのアニメ残り防止 */
