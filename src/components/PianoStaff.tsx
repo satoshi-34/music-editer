@@ -33,6 +33,9 @@ type Props = {
   customSymbolDefs?: CustomSymbolDef[];
   // 声部切り替えトグル（0=声部1・上声、1=声部2・下声）。省略時は従来通り声部1のみ。
   activeVoiceIndex?: 0 | 1;
+  // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
+  // 省略時は全段を印刷する。画面表示には影響しない。
+  printVisibleSystems?: number;
 };
 
 export default function PianoStaff({
@@ -57,13 +60,15 @@ export default function PianoStaff({
   onMeasureSelect,
   customSymbolDefs,
   activeVoiceIndex = 0,
+  printVisibleSystems,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
     <div className="system-stack">
       {Array.from({ length: systems }, (_, i) => (
+        // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
+        <div key={i} className={printVisibleSystems != null && i >= printVisibleSystems ? 'print-hidden-system' : undefined}>
         <PianoSystemCanvas
-          key={i}
           measuresPerSystem={measuresPerSystem}
           tool={tool}
           scale={scale}
@@ -85,6 +90,7 @@ export default function PianoStaff({
           customSymbolDefs={customSymbolDefs}
           activeVoiceIndex={activeVoiceIndex}
         />
+        </div>
       ))}
     </div>
   );

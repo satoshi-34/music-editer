@@ -1140,6 +1140,12 @@ button.ghost:disabled {
   .print-page svg[fill]:not([fill="none"]) { fill: var(--print-ink) !important; }
   /* タイトル・サブタイトル・ページ番号などの HTML テキストも同じインク色で刷る */
   .print-page, .print-page .page-head *, .print-page .page-foot * { color: var(--print-ink) !important; }
+
+  /* 内容のない末尾の段・ページは印刷しない（紙とインクの節約）。
+     画面では編集用にそのまま表示される。ScorePage.tsx が内容のある段数を
+     計算し、print-hidden-system / print-hidden-page を付けている */
+  .print-hidden-system { display: none !important; }
+  .print-hidden-page { display: none !important; }
 }
 
 /* SVGのアニメ残り防止 */

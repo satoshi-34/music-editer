@@ -35,6 +35,9 @@ type Props = {
    */
   notationMode?: ScoreNotationMode;
   customSymbolDefs?: CustomSymbolDef[];
+  // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
+  // 省略時は全段を印刷する。画面表示には影響しない。
+  printVisibleSystems?: number;
 };
 
 /**
@@ -95,6 +98,7 @@ export default function EnsembleStaff({
   onKeySignatureChange,
   notationMode = 'concert',
   customSymbolDefs,
+  printVisibleSystems,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -145,8 +149,9 @@ export default function EnsembleStaff({
         });
 
         return (
+          // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
+          <div key={systemIndex} className={printVisibleSystems != null && systemIndex >= printVisibleSystems ? 'print-hidden-system' : undefined}>
           <PianoSystemCanvas
-            key={systemIndex}
             measuresPerSystem={measuresPerSystem}
             tool={tool}
             scale={scale}
@@ -174,6 +179,7 @@ export default function EnsembleStaff({
             }}
             customSymbolDefs={customSymbolDefs}
           />
+          </div>
         );
       })}
     </div>

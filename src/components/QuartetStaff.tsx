@@ -33,6 +33,9 @@ type Props = {
   timeSignature?: TimeSignature;
   onKeySignatureChange?: (keySignature: KeySignature) => void;
   customSymbolDefs?: CustomSymbolDef[];
+  // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
+  // 省略時は全段を印刷する。画面表示には影響しない。
+  printVisibleSystems?: number;
 };
 
 export default function QuartetStaff({
@@ -52,6 +55,7 @@ export default function QuartetStaff({
   timeSignature = [4, 4],
   onKeySignatureChange,
   customSymbolDefs,
+  printVisibleSystems,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
@@ -63,8 +67,9 @@ export default function QuartetStaff({
           onChange: onPartChange[pi] ?? (() => {}),
         }));
         return (
+          // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
+          <div key={i} className={printVisibleSystems != null && i >= printVisibleSystems ? 'print-hidden-system' : undefined}>
           <PianoSystemCanvas
-            key={i}
             measuresPerSystem={measuresPerSystem}
             tool={tool}
             scale={scale}
@@ -81,6 +86,7 @@ export default function QuartetStaff({
             onKeySignatureChange={onKeySignatureChange}
             customSymbolDefs={customSymbolDefs}
           />
+          </div>
         );
       })}
     </div>

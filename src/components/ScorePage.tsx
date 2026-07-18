@@ -79,7 +79,7 @@ import { DEFAULT_TIME_SIGNATURE, formatTimeSignature, getMeasureBeats, normalize
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
-import { isSameScoreIgnoringPadding } from '../utils/scoreDataEquality';
+import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 
 type PageSpec = { systems: number };
@@ -1950,6 +1950,22 @@ export default function ScorePage() {
     return Number.isFinite(n) && n >= 1 ? n : null;
   });
   const systemsPerPage = Math.max(1, Math.min(maxSystemsPerPage, systemsPerPageSetting ?? recommendedSystemsPerPage));
+
+  // 印刷用: 内容のある最後の小節までを段数に換算する。
+  // これ以降の「空の段」「空のページ」は印刷から除外する（画面では編集用に表示し続ける）。
+  // 途中の空小節は内容として残したいので、末尾の空小節だけを取り除いて数える。
+  const contentMeasureCount = useMemo(() => {
+    const activeParts: MeasureData[][] = scoreType === 'piano'
+      ? [rightHandData ?? [], leftHandData ?? []]
+      : scoreType === 'quartet'
+        ? quartetParts
+        : scoreType === 'ensemble'
+          ? ensembleParts
+          : [rightHandData ?? []];
+    return activeParts.reduce((max, part) => Math.max(max, trimTrailingEmptyMeasures(part).length), 0);
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts]);
+  // 完全に空の楽譜でも最低1段は印刷する（白紙が出るより五線だけの1段が自然なため）
+  const printContentSystems = Math.max(1, Math.ceil(contentMeasureCount / measuresPerSystem));
   const pages: PageSpec[] = useMemo(
     () => Array.from({ length: Math.ceil(totalSystems / systemsPerPage) }, () => ({ systems: systemsPerPage })),
     [totalSystems, systemsPerPage]
@@ -2815,7 +2831,8 @@ export default function ScorePage() {
         >
           {visiblePages.map((p, i) => (
             <ScaledPageWrapper key={i} scale={scale} pageHeight={sharedPageHeight}>
-              <section className="print-page">
+              {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
+              <section className={`print-page${printContentSystems - i * systemsPerPage <= 0 ? ' print-hidden-page' : ''}`}>
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (
                     <>
@@ -2866,6 +2883,7 @@ export default function ScorePage() {
                     // 調号シフトなどのロジックもそのまま流用できる）。
                     <EnsembleStaff
                       systems={p.systems}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
                       tool={tool}
                       scale={scale}
@@ -2905,6 +2923,7 @@ export default function ScorePage() {
                   ) : scoreType === 'ensemble' ? (
                     <EnsembleStaff
                       systems={p.systems}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
                       tool={tool}
                       scale={scale}
@@ -2926,6 +2945,7 @@ export default function ScorePage() {
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
                       systems={p.systems}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
                       tool={tool}
                       scale={scale}
@@ -2945,6 +2965,7 @@ export default function ScorePage() {
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
                       systems={p.systems}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       gap={110}
                       measuresPerSystem={measuresPerSystem}
                       tool={tool}
