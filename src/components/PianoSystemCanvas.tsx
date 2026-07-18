@@ -1985,6 +1985,7 @@ export default function PianoSystemCanvas({
       const allVoicesForFormatting: Voice[] = [];
 
       parts.forEach((part, pi) => {
+        const stave=staveSets[pi][i];
         const score=partsScore[pi]??[];
         // この小節時点で有効なクレフ（途中クレフ変更対応）。パートごとの小節データ（part.data）から解決する。
         // クリックハンドラなど後から呼ばれる処理でも、absI は forEach 反復ごとに固定された const のため
@@ -2091,6 +2092,13 @@ export default function PianoSystemCanvas({
             } as any);
             voice.setMode((Voice as any).Mode.SOFT??1);
             voice.addTickables(vfNotes);
+            // この Voice を「自分のパートの五線」に載せる。
+            // 合同フォーマット（Pass 2）で全 Voice を最上段の五線へ載せてしまうと、
+            // 低音（左手 g3 など）が最上段基準で幅計算され、間隔配分が歪む。
+            // 先に自分の五線を設定して preFormat しておくと、VexFlow は
+            // 「stave 未設定の音符にだけ」stave を伝播する仕様のため、後続の
+            // formatToStave が最上段で上書きするのを防げる。
+            voice.setStave(stave);
 
             return {
               voiceIndex,
@@ -2124,6 +2132,12 @@ export default function PianoSystemCanvas({
       // 同じ小節幅（measLeft〜measRight）で作られているため、代表として最初の
       // パートの stave を渡せば足りる。
       if (allVoicesForFormatting.length > 0) {
+        // 各 Voice を「自分の五線」で先に preFormat し、音符に正しい五線を伝播させる。
+        // VexFlow は preFormat 済み（preFormatted=true）の Voice を再 preFormat しないため、
+        // この後の formatToStave が最上段の五線で音符を上書きするのを防げる。
+        // これをしないと左手の低音が最上段（ト音記号）基準で幅計算され、
+        // 小節内の間隔配分が左右非対称に歪む。
+        allVoicesForFormatting.forEach((v) => v.preFormat());
         new Formatter()
           .joinVoices(allVoicesForFormatting)
           // 2 voice では、上下声部の休符が自動調整されないと
