@@ -86,6 +86,8 @@ type PageSpec = { systems: number };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
+// 「段数/ページ」のユーザー設定（その他タブ）。楽譜データではなく画面設定として保存する
+const SYSTEMS_PER_PAGE_KEY = 'score-systems-per-page';
 
 // 無音検知（issue #14）のタイミング設定。
 // 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
@@ -1929,16 +1931,25 @@ export default function ScorePage() {
   // 1ページ（A4 実寸 297mm ≒ 1123px）に収まる段数。
   // 本文の予算はタイトルページで約 938px（A4 高 − 上下余白 − タイトル欄 − ページ番号）。
   // 実測の1段あたり高さ（単旋律 ≒114px / ピアノ大譜表 ≒180px / 四重奏 ≒340px）から、
-  // 予算内に収まる最大段数を楽譜種別ごとに決めている。
-  // ここを増やすとページが A4 からあふれ、印刷時に段が紙面の境目で切断される。
-  const systemsPerPage = scoreType === 'ensemble'
+  // 予算内に収まる最大段数（maxSystemsPerPage）を楽譜種別ごとに決めている。
+  // 上限を超えるとページが A4 からあふれ、印刷時に段が紙面の境目で切断される。
+  const maxSystemsPerPage = scoreType === 'ensemble'
     ? (instrumentation.parts.length > 10 ? 1 : 2)
     : scoreType === 'quartet'
       ? 2
       : scoreType === 'piano'
-        // 5段でも A4 に収まるが、市販譜のような行間（段の間隔）を確保するため4段にしている
-        ? 4
+        ? 5
         : 8;
+  // 推奨値（初期値）。ピアノは5段でも収まるが、市販譜のような行間を確保するため4段
+  const recommendedSystemsPerPage = scoreType === 'piano' ? 4 : maxSystemsPerPage;
+  // ユーザー設定（その他タブの「段数/ページ」）。null = 未設定（推奨値を使う）。
+  // 楽譜種別を切り替えても安全なように、表示時に必ず 1〜上限へクランプする
+  const [systemsPerPageSetting, setSystemsPerPageSetting] = useState<number | null>(() => {
+    const raw = localStorage.getItem(SYSTEMS_PER_PAGE_KEY);
+    const n = raw == null ? NaN : parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 1 ? n : null;
+  });
+  const systemsPerPage = Math.max(1, Math.min(maxSystemsPerPage, systemsPerPageSetting ?? recommendedSystemsPerPage));
   const pages: PageSpec[] = useMemo(
     () => Array.from({ length: Math.ceil(totalSystems / systemsPerPage) }, () => ({ systems: systemsPerPage })),
     [totalSystems, systemsPerPage]
@@ -2563,6 +2574,26 @@ export default function ScorePage() {
                   onChange={e => {
                     const v = Math.max(1, Math.min(8, Number(e.target.value)));
                     if (!isNaN(v)) setMeasuresPerSystem(v);
+                  }}
+                  style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
+                />
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`1ページに並べる段数。A4に収まる上限（この楽譜の種類では${maxSystemsPerPage}段）までで設定できます`}
+              >
+                段数/ページ
+                <input
+                  type="number"
+                  min={1}
+                  max={maxSystemsPerPage}
+                  value={systemsPerPage}
+                  onChange={e => {
+                    const v = Math.max(1, Math.min(maxSystemsPerPage, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setSystemsPerPageSetting(v);
+                      localStorage.setItem(SYSTEMS_PER_PAGE_KEY, String(v));
+                    }
                   }}
                   style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
                 />
