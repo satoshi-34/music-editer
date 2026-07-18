@@ -71,6 +71,16 @@ import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehears
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
 type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[] };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
+// 1声部ぶんの VexFlow 描画データ（音符・ビーム・タイミング管理オブジェクト）。
+// 右手/左手など複数パートの Formatter を1回にまとめるためのキャッシュ型として使う
+// （詳細は PianoSystemCanvas 内の Pass 1/2/3 のコメントを参照）。
+type RenderedVoiceEntry = {
+  voiceIndex: number;
+  sourceEvents: RenderNoteEvent[];
+  vfNotes: StaveNote[];
+  beams: Beam[];
+  voice: Voice;
+};
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
 type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number; voiceIndex?: number } | null;
@@ -1951,23 +1961,32 @@ export default function PianoSystemCanvas({
       };
       const hideChordGuide=()=>{guideChordRect.style.display='none';};
 
+      // Pass 1: 全パート・全声部の Voice（VexFlow のタイミング管理オブジェクト）を計算する。
+      // 右手・左手（各パート）を1つの Formatter で一括 format しないと、
+      // 各パートが独立した密度でジャスティファイされて拍の x 座標が食い違い、
+      // 「右手・左手の拍が縦に揃わない」問題が起きるため、ここでは Voice の
+      // 生成だけを済ませ、実際のフォーマットは全パート分そろってから1回だけ行う
+      // （下の Pass 2）。結果は partVoiceCache に貯めて Pass 3（描画・イベント
+      // ハンドラ設定）で使い回す。
+      const partVoiceCache: Array<{
+        clefHere: ClefType;
+        data: MeasureData | undefined;
+        safeEvs: RenderNoteEvent[];
+        partKeyForAccidental: KeySignature;
+        isMultiVoiceMeasure: boolean;
+        renderedVoiceEntries: RenderedVoiceEntry[];
+        primaryRenderedVoice: RenderedVoiceEntry;
+        vfNotes: StaveNote[];
+      } | null> = [];
+      const allVoicesForFormatting: Voice[] = [];
+
       parts.forEach((part, pi) => {
-        const stave=staveSets[pi][i];
         const score=partsScore[pi]??[];
-        const setScore=(updater:(prev:MeasureData[])=>MeasureData[])=>{
-          setPartsScore(prev=>{
-            const next=[...prev];
-            next[pi]=updater(prev[pi]??[]);
-            return next;
-          });
-        };
         // この小節時点で有効なクレフ（途中クレフ変更対応）。パートごとの小節データ（part.data）から解決する。
         // クリックハンドラなど後から呼ばれる処理でも、absI は forEach 反復ごとに固定された const のため
         // ここで解決した clefHere をそのまま安全に参照できる。
         // score は partsScore[pi]（内部 state）を指すため、こちらから解決する（part.data は初期値のみ）
         const clefHere=resolveMeasureClef(score, absI, part.clef);
-        const l2k=(l:number)=>lineToKeyForClef(clefHere,l);
-        const k2l=(k:string)=>keyToLineForClef(clefHere,k);
 
         const data=absI<score.length?score[absI]:undefined;
         const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestKeyForClef(clefHere)],__isPlaceholder:true}])
@@ -2086,13 +2105,49 @@ export default function PianoSystemCanvas({
 
         const vfNotes = primaryRenderedVoice.vfNotes;
 
+        partVoiceCache[pi] = {
+          clefHere, data, safeEvs, partKeyForAccidental,
+          isMultiVoiceMeasure, renderedVoiceEntries, primaryRenderedVoice, vfNotes,
+        };
+        renderedVoiceEntries.forEach((entry) => allVoicesForFormatting.push(entry.voice));
+      });
+
+      // Pass 2: 全パート・全声部の Voice を1回の Formatter でまとめて整形する。
+      // これにより、右手・左手など複数パートで同じ拍の音符が同じ x 座標に揃う
+      // （パートごとに別々の Formatter で整形すると、パートごとの音価密度の違いで
+      // 独立にジャスティファイされ、拍の位置がずれてしまうため）。
+      // 幅の計算には stave の noteStartX/noteEndX しか使われず、全パートの stave は
+      // 同じ小節幅（measLeft〜measRight）で作られているため、代表として最初の
+      // パートの stave を渡せば足りる。
+      if (allVoicesForFormatting.length > 0) {
         new Formatter()
-          .joinVoices(renderedVoiceEntries.map((entry) => entry.voice))
+          .joinVoices(allVoicesForFormatting)
           // 2 voice では、上下声部の休符が自動調整されないと
           // 互いにめり込んで「なんか変」な見た目になりやすい。
           // alignRests を明示して、近い音符や別声部に合わせて
           // 休符の縦位置をVexFlow側で補正してもらう。
-          .formatToStave(renderedVoiceEntries.map((entry) => entry.voice),stave,{ alignRests: true });
+          .formatToStave(allVoicesForFormatting, staveSets[0][i], { alignRests: true });
+      }
+
+      // Pass 3: フォーマット済みの Voice を使って実際の描画・イベントハンドラ設定を行う。
+      parts.forEach((part, pi) => {
+        const cache = partVoiceCache[pi];
+        if (!cache) return;
+        const {
+          clefHere, data, safeEvs, partKeyForAccidental,
+          isMultiVoiceMeasure, renderedVoiceEntries, primaryRenderedVoice, vfNotes,
+        } = cache;
+        const stave=staveSets[pi][i];
+        const score=partsScore[pi]??[];
+        const setScore=(updater:(prev:MeasureData[])=>MeasureData[])=>{
+          setPartsScore(prev=>{
+            const next=[...prev];
+            next[pi]=updater(prev[pi]??[]);
+            return next;
+          });
+        };
+        const l2k=(l:number)=>lineToKeyForClef(clefHere,l);
+        const k2l=(k:string)=>keyToLineForClef(clefHere,k);
 
         applyDefaultRestDisplayLine(vfNotes, safeEvs, clefHere);
 
