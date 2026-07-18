@@ -1058,6 +1058,18 @@ button.ghost:disabled {
   .score-title { font-size: 24px; }
   .score-subtitle { font-size: 12px; }
 
+  /* 印刷は市販譜の濃度感に近づける:
+     - 譜面全体を少し縮小（0.9倍。紙のインク滲みで太って見える分の補正も兼ねる）
+     - 線の太さは画面の表示ウェイト設定に関わらず「細い」相当（0.8）へ固定
+     倍率・太さを変えたいときはこの2箇所を調整する */
+  .print-page .score-area {
+    transform: scale(0.9);
+    transform-origin: top center;
+  }
+  .print-page .score-area {
+    --score-stroke-width: 0.8 !important;
+  }
+
   /* 薄い色（グレー系）の線・塗りを印刷では黒に寄せる。
      ただし「fill / stroke の有無」は元の描画を尊重し、色だけを黒へ統一する。
      以前は path/rect に stroke と fill を一律 #000 で強制していたが、
