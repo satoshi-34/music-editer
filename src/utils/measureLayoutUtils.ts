@@ -63,3 +63,74 @@ export function measureMinimumContentWidth(measure?: MeasureData): number {
   }
   return Math.max(contentWidth, MIN_MEASURE_CONTENT_WIDTH);
 }
+
+// 音価 → 拍数（4/4基準）。開始拍（オンセット）の計算に使う
+const DURATION_BEATS: Record<NoteEvent['dur'], number> = {
+  '1': 4, '2': 2, '4': 1, '8': 0.5, '16': 0.25, '32': 0.125, '64': 0.0625,
+};
+
+/** イベントが占有する拍数（付点・連符込み） */
+function eventOccupiedBeatsForLayout(event: NoteEvent): number {
+  let beats = DURATION_BEATS[event.dur] ?? 1;
+  if (event.dots === 1) beats *= 1.5;
+  else if (event.dots === 2) beats *= 1.75;
+  if (event.tuplet) beats *= event.tuplet.notesOccupied / event.tuplet.numNotes;
+  return beats;
+}
+
+/**
+ * 同じ小節位置にある複数パート（＋各パートの追加声部）をまとめて描画する場合の
+ * 最低横幅を見積もる。
+ *
+ * 複数パートを1回の VexFlow Formatter で合同フォーマットすると、
+ * 「同じ開始拍の音符は同じ列を共有し、異なる開始拍はそれぞれ独立した列になる」
+ * ため、必要な横幅は各パート単体の最大値ではなく「開始拍の和集合」で決まる。
+ * 例: 右手が3連符×2＋4分×2、左手が8分×8の小節は、単体ではどちらも8列だが、
+ * 合同では開始拍がほとんど重ならず13列必要になる。
+ * ここではその実挙動に合わせ、開始拍ごとに（その拍で始まるイベントの最大幅を
+ * その列の幅として）合計する。
+ */
+export function combinedMeasureMinimumContentWidth(measures: (MeasureData | undefined)[]): number {
+  // key: 開始拍を1/960拍単位へ丸めた整数（浮動小数の誤差で同じ拍が別列に割れるのを防ぐ）
+  const columnWidths = new Map<number, number>();
+  let hasWhole = false;
+  let hasHalf = false;
+  let hasAnyEvent = false;
+
+  for (const measure of measures) {
+    if (!measure) continue;
+    // 主声部（events）＋追加声部（voices[1] 以降）。voices[0] は events の複製なので除外
+    const voiceEventLists: NoteEvent[][] = [Array.isArray(measure.events) ? measure.events : []];
+    if (Array.isArray(measure.voices)) {
+      measure.voices.slice(1).forEach((voice) => {
+        if (Array.isArray(voice?.events)) voiceEventLists.push(voice.events);
+      });
+    }
+    for (const events of voiceEventLists) {
+      let onsetBeats = 0;
+      for (const event of events) {
+        hasAnyEvent = true;
+        if (event.dur === '1') hasWhole = true;
+        if (event.dur === '2') hasHalf = true;
+        const columnKey = Math.round(onsetBeats * 960);
+        const width = eventMinimumWidth(event);
+        columnWidths.set(columnKey, Math.max(columnWidths.get(columnKey) ?? 0, width));
+        onsetBeats += eventOccupiedBeatsForLayout(event);
+      }
+    }
+  }
+
+  if (!hasAnyEvent) {
+    return MIN_MEASURE_CONTENT_WIDTH;
+  }
+  let contentWidth = MEASURE_SIDE_PADDING;
+  for (const width of columnWidths.values()) contentWidth += width;
+
+  if (hasWhole) {
+    return Math.max(contentWidth, LONG_WHOLE_MIN_WIDTH);
+  }
+  if (hasHalf) {
+    return Math.max(contentWidth, LONG_HALF_MIN_WIDTH);
+  }
+  return Math.max(contentWidth, MIN_MEASURE_CONTENT_WIDTH);
+}

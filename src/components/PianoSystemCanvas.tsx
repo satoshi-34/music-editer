@@ -64,7 +64,7 @@ import { getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBea
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
-import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
+import { combinedMeasureMinimumContentWidth } from '../utils/measureLayoutUtils';
 import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 
 /* ===== 型 ===== */
@@ -1526,12 +1526,16 @@ export default function PianoSystemCanvas({
     // 余白を作らずに text だけ置くと、画面端で Fl. や Vln. が切れてしまう。
     const labelW = showInstrumentLabels ? 74 : 0;
     const innerW=W-PAGE_LEFT-PAGE_RIGHT-labelW;
+    // 全パートを1回の Formatter で合同フォーマットするため（拍の縦揃え）、
+    // 小節の最低幅も「パート単体の最大」ではなく「全パートの開始拍の和集合」で
+    // 見積もる。単体基準のままだと、右手と左手で拍がずれる密な小節
+    // （例: 3連符 vs 8分音符）が最小幅を確保できず、隣の小節へはみ出す。
     const minWs=Array.from({length:measuresPerSystem},(_,i)=>{
       const ai=startMeasureIndex+i;
-      return parts.reduce((maxW, _, pi) => {
+      return combinedMeasureMinimumContentWidth(parts.map((_, pi) => {
         const score=partsScore[pi]??[];
-        return Math.max(maxW, measureMinimumContentWidth(ai<score.length?score[ai]:undefined));
-      }, 0);
+        return ai<score.length?score[ai]:undefined;
+      }));
     });
     const pad=CLEF_PAD_FIRST;
     const alloc=Math.max(0,innerW*TARGET_FILL-pad);
