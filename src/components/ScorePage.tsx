@@ -1939,7 +1939,8 @@ export default function ScorePage() {
     : scoreType === 'quartet'
       ? 2
       : scoreType === 'piano'
-        ? 5
+        // 5段でも A4 に収まるが、市販譜のような行間（段の間隔）を確保するため4段にしている
+        ? 4
         : 8;
   const pages: PageSpec[] = useMemo(
     () => Array.from({ length: Math.ceil(totalSystems / systemsPerPage) }, () => ({ systems: systemsPerPage })),

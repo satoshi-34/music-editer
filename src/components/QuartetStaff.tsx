@@ -54,7 +54,8 @@ export default function QuartetStaff({
   customSymbolDefs,
 }: Props) {
   return (
-    <div>
+    // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
+    <div className="system-stack">
       {Array.from({ length: systems }, (_, i) => {
         const partsConfig: PartConfig[] = QUARTET_PART_CONFIGS.map((cfg, pi) => ({
           ...cfg,

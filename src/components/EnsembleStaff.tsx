@@ -101,7 +101,8 @@ export default function EnsembleStaff({
   // 保存データの正本は常に実音という整合性を保つ。
   const isWrittenMode = notationMode === 'written';
   return (
-    <div>
+    // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
+    <div className="system-stack">
       {Array.from({ length: systems }, (_, systemIndex) => {
         // ScorePage が持つ「編成のパート定義」を、描画コンポーネントが理解できる
         // `PartConfig` へ変換する。ここで変換をまとめると、将来パート名表示や

@@ -907,6 +907,10 @@ button.ghost:disabled {
      ページ内に収まる段数は ScorePage.tsx の systemsPerPage で楽譜種別ごとに調整する */
   height: 297mm;
   overflow: hidden;
+  /* ヘッダー・譜面・フッターを縦に並べ、譜面（.score-area）へ残り高さを渡す。
+     市販譜のように段をページ全体へ均等配置するための土台 */
+  display: flex;
+  flex-direction: column;
   background: #fffdf6;
   background-image: radial-gradient(#00000008 1px, transparent 1px);
   background-size: 4px 4px;
@@ -928,6 +932,22 @@ button.ghost:disabled {
 .score-subtitle { margin: 4px 0 0; font-size: 14px; text-align: center; color: #555; }
 .page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; }
 .page-foot { position: absolute; bottom: 6mm; left: 0; right: 0; text-align: center; color: #666; }
+
+/* 譜面エリア: ページの残り高さを受け取り、段（.system-stack の子）を
+   市販譜のように縦方向へ均等配置する。段数を減らすほど行間が広がる */
+.score-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.score-area .system-stack {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+}
 .page-number { font-variant-numeric: tabular-nums; }
 
 /* ===== クリック当たり判定（小節全体の矩形） ===== */
@@ -1063,13 +1083,9 @@ button.ghost:disabled {
   .score-subtitle { font-size: 12px; }
 
   /* 印刷は市販譜の濃度感に近づける:
-     - 譜面全体を少し縮小（0.9倍。紙のインク滲みで太って見える分の補正も兼ねる）
-     - 線の太さは画面の表示ウェイト設定に関わらず「細い」相当（0.8）へ固定
-     倍率・太さを変えたいときはこの2箇所を調整する */
-  .print-page .score-area {
-    transform: scale(0.9);
-    transform-origin: top center;
-  }
+     線の太さは画面の表示ウェイト設定に関わらず「細い」相当（0.8）へ固定。
+     ※以前あった transform: scale(0.9) は「左右の余白だけが大きくなる」ため廃止した
+     （svg は画面幅で描画済みなので、CSS縮小では余白が増えるだけで紙面を活かせない） */
   .print-page .score-area {
     --score-stroke-width: 0.8 !important;
   }
