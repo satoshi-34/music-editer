@@ -2,46 +2,37 @@
 // ─────────────────────────────────────────────────────────────
 // ページごとの「段数（system 数）配分」を計算するヘルパー。
 //
-// 市販の楽譜は、タイトル・作曲者名などのヘッダーが載る1ページ目だけ、
-// ヘッダーぶんの余白を確保するために譜面の段数を1段減らして組むのが作法。
-// （2ページ目以降はヘッダーが無い/小さいので、設定どおりの段数まで詰め込める）
+// 以前はタイトル・作曲者名などのヘッダーが載る1ページ目だけ、
+// 市販譜の作法にならって段数を1段減らして組んでいた。
+// しかし実際に印刷して確認したところ、タイトル下の余白が大きくなりすぎ
+// 紙面が無駄になるとの判断から、この方式はやめて
+// 「全ページ、常に同じ段数（systemsPerPage）を入れる」方式に統一した。
+// タイトルページはヘッダーの実高さぶんだけ譜面領域が狭くなるが、
+// その中で段を均等配置するだけでよい（見た目の行位置が中間ページと
+// 揃わなくなる点は、紙面効率を優先するため許容している）。
+// 詳細な経緯は .claude/specs/final-barline/design.md を参照。
 //
-// ページごとに段数が変わりうるため、「iページ目の開始位置」を求めるときに
-// 単純に `i * systemsPerPage` のような掛け算をしてはいけない。
-// このファイルの関数を必ず経由し、1ページ目だけ特別な段数であることを
-// 累積計算（オフセット）としてまとめて扱う。
+// 全ページ段数が同じになったことで、「iページ目の開始位置」も
+// 単純な `i * systemsPerPage` の掛け算で求められるようになった。
+// それでも呼び出し側でこの計算を重複させないよう、引き続き
+// このファイルの関数を経由する。
 export type PageSystemLayoutOptions = {
-  // 1ページあたりの基本段数（ユーザー設定の「段数/ページ」）
+  // 1ページあたりの段数（ユーザー設定の「段数/ページ」）
   systemsPerPage: number;
-  // タイトル・作曲者名などのヘッダーが1ページ目にあるかどうか。
-  // false のときは従来どおり全ページ同じ段数のまま（市販譜の作法を適用する意味が薄いため）
-  hasTitlePageHeader: boolean;
 };
 
-// 1ページ目の段数だけ、ヘッダー分を差し引いて減らすべきかどうかを判定する。
-// systemsPerPage が1のときに減らすと0段（空ページ）になってしまうため、
-// そのときだけ例外的に減らさない。
-export function shouldReduceFirstPageSystems(options: PageSystemLayoutOptions): boolean {
-  return options.hasTitlePageHeader && options.systemsPerPage > 1;
-}
-
 // pageIndex 番目のページに入る段数（キャパシティ）を返す。
-// ページ割りロジック全体は、必ずこの関数を通してページごとの段数を得ること。
-export function getPageSystemsCapacity(pageIndex: number, options: PageSystemLayoutOptions): number {
-  const { systemsPerPage } = options;
-  if (pageIndex === 0 && shouldReduceFirstPageSystems(options)) {
-    return systemsPerPage - 1;
-  }
-  return systemsPerPage;
+// 全ページ同じ段数になったため、pageIndex に関わらず systemsPerPage を返す。
+// ページ割りロジック全体は、必ずこの関数を通してページごとの段数を得ること
+// （将来また「1ページ目だけ特別扱い」が必要になった場合に、ここだけ直せば済むように）。
+export function getPageSystemsCapacity(_pageIndex: number, options: PageSystemLayoutOptions): number {
+  return options.systemsPerPage;
 }
 
 // pageIndex 番目のページより前に、何段ぶんの段が既に置かれているか（＝そのページの開始オフセット）。
-// 1ページ目だけ段数が異なりうるため、`pageIndex * systemsPerPage` のような単純な掛け算は使えず、
-// 必ずこの累積計算を経由する。
 export function getPageSystemOffset(pageIndex: number, options: PageSystemLayoutOptions): number {
   if (pageIndex <= 0) return 0;
-  const firstPageSystems = getPageSystemsCapacity(0, options);
-  return firstPageSystems + (pageIndex - 1) * options.systemsPerPage;
+  return pageIndex * options.systemsPerPage;
 }
 
 // 「内容のある段の総数（0始まりの最後の段インデックス）」が何ページ目に収まるかを求める。

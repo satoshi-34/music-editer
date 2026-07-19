@@ -412,3 +412,59 @@
 - 検証後は「複雑テスト楽譜」読み込み状態のまま、段数/ページ=5、
   画面表示のズーム/音符の大きさ/小節幅の均等さ=100%/100%/65%、
   段割り上書きなしの状態に戻して終了した。
+
+## 追補7: タイトルページも他ページと同じ段数を入れて紙面を有効活用する（2026-07-20）
+
+### 問題
+
+追補5・追補6で「タイトル・作曲者名のある1ページ目だけ段数を1段減らし、
+行グリッドで中間ページと縦位置を揃える」方式にしていたが、実際に物理印刷
+して確認したところ、タイトル下の余白が大きくなりすぎて紙面が無駄になる
+ことが分かった（ユーザーコメント: 「タイトル下にもう一行入るよね」）。
+市販譜の作法よりも紙面効率を優先すべき、との判断で方式を変更する。
+
+### 修正設計: 全ページ同数へ統一し、行グリッドの特例を撤去
+
+- `src/utils/pageSystemLayoutUtils.ts`: `shouldReduceFirstPageSystems` を
+  削除し、`getPageSystemsCapacity` は常に `systemsPerPage` を返すだけの
+  関数へ簡素化。`getPageSystemOffset` も `pageIndex * systemsPerPage` の
+  単純な掛け算になった（`hasTitlePageHeader` オプション自体を型から削除）。
+  `ScorePage.tsx` 側の呼び出し方（`pageIndex` を渡して段数／オフセットを
+  得る）は変えていないため、呼び出し側の他ロジックは無修正で動く。
+- `ScorePage.tsx`: `hasTitlePageHeader` の算出と `pageSystemLayoutOptions`
+  への注入をやめ、`{ systemsPerPage }` だけの薄いオブジェクトにした。
+  `system-stack-spacer`（タイトルページの段数を1段ぶん埋め合わせる空
+  スロット）と、段調整コントロール欄の高さ合わせ用プレースホルダー行を
+  どちらも削除（全ページ同数になったため、そもそも埋め合わせが不要）。
+- `App.css`: `.system-stack-spacer` クラスを削除。`--page-capacity` に
+  よる `.system-stack` の `flex-grow` 自体は残した（常に systemsPerPage
+  と同値になるだけで、害はなく、将来また段数がページごとに変わる場合の
+  ための余地として残している）。タイトルページはヘッダーの実高さぶんだけ
+  `.score-area` が他ページより低くなるため、段の高さ・縦位置は中間ページ
+  と揃わなくなるが、これは意図した挙動として許容する。
+
+### 影響範囲
+
+- `src/utils/pageSystemLayoutUtils.ts` / `pageSystemLayoutUtils.test.ts`
+  （テストは14件→7件へ整理。「1ページ目だけ段数が違う」ケースが
+  無くなったため、対応するテストケースも削除した）。
+- `src/components/ScorePage.tsx`（import・`pageSystemLayoutOptions`・
+  spacer JSX 2箇所）。
+- `src/App.css`（`.system-stack-spacer` 削除、コメント更新）。
+
+### 検証
+
+- `docker compose run --rm app npx tsc --noEmit`: エラーなし。
+- `docker compose run --rm app npx vitest run`: 69 Test Files / 915 Tests
+  すべて成功（921 → 915 は上記テスト整理ぶんの減少）。
+- ブラウザ確認（「複雑テスト楽譜」、段数/ページ=5、音符の大きさ130%＝
+  最も厳しい条件）: 4ページとも `.system-stack > *` が5段ずつ描画され、
+  `.print-page` の `scrollHeight <= clientHeight`（A4実寸=297mm＝
+  約1121px、overflow:hidden で切れる場合は scrollHeight が上回る）を
+  全ページで確認し、どのページも段が切れていないことを実測で確認した。
+  タイトルページ（1ページ目）も他ページと同じ5段になり、ヘッダー直下
+  から段が詰まって配置されることをスクリーンショットで確認した。
+- コンソールエラーなし。
+- 検証後は「複雑テスト楽譜」読み込み状態のまま、段数/ページ=5、
+  画面表示のズーム/音符の大きさ/小節幅の均等さ=100%/100%/65%、
+  段割り上書きなしの状態に戻して終了した。

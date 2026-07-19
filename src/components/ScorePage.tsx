@@ -95,7 +95,7 @@ import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
-import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure, shouldReduceFirstPageSystems } from '../utils/pageSystemLayoutUtils';
+import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
@@ -2183,16 +2183,17 @@ export default function ScorePage() {
   // 完全に空の楽譜でも最低1段は印刷する（白紙が出るより五線だけの1段が自然なため）
   const printContentSystems = Math.max(1, plannedRanges.filter((range) => range.start < contentMeasureCount).length);
 
-  // 市販譜の作法: タイトル・作曲者名が入っているページ（＝1ページ目）は、
-  // タイトル・作曲者ヘッダーぶんの余白を確保するため、譜面の段数を他ページより1段減らす。
-  // タイトルも作曲者名も空のときは「タイトルページ」として特別扱いする意味が薄いため、
-  // 従来どおり全ページ同じ段数のままにする。
-  // systemsPerPage が1のときは1段減らすと0段になってしまうため、そのときだけ例外的に減らさない。
-  const hasTitlePageHeader = title.trim() !== '' || composer.trim() !== '';
+  // 以前は市販譜の作法にならい、タイトル・作曲者名が入っているページ（＝1ページ目）だけ
+  // 譜面の段数を他ページより1段減らしていた。しかし物理印刷して確認したところ
+  // タイトル下の余白が大きくなりすぎ紙面が無駄になったため、紙面効率を優先し
+  // 「全ページ、常に同じ段数（systemsPerPage）を入れる」方式へ変更した。
+  // タイトルページはヘッダーの実高さぶんだけ譜面領域（.score-area）が狭くなるが、
+  // その中で段を均等配置するだけでよく、行位置が中間ページと揃わなくなる点は許容する
+  // （詳細は .claude/specs/final-barline/design.md を参照）。
   // ページ段割りの本体は src/utils/pageSystemLayoutUtils.ts の純粋関数に集約し、
-  // ここでは現在の設定（systemsPerPage / hasTitlePageHeader）を束ねた薄いラッパーだけを持つ。
+  // ここでは現在の設定（systemsPerPage）を束ねた薄いラッパーだけを持つ。
   // こうすることで、段割りロジック自体はコンポーネントを経由せずに単体テストできる。
-  const pageSystemLayoutOptions = useMemo(() => ({ systemsPerPage, hasTitlePageHeader }), [systemsPerPage, hasTitlePageHeader]);
+  const pageSystemLayoutOptions = useMemo(() => ({ systemsPerPage }), [systemsPerPage]);
   // ページ index → そのページに入る段数（キャパシティ）を返すヘルパー。
   const getPageSystemsCapacity = useCallback((pageIndex: number): number => (
     getPageSystemsCapacityPure(pageIndex, pageSystemLayoutOptions)
@@ -3247,12 +3248,6 @@ export default function ScorePage() {
                       この小節は最小の1小節/段でも紙幅を超えます。音符を減らすか、用紙設定を広げてください。
                     </p>
                   )}
-                  {/* system-stack-spacer: タイトルページ（ヘッダーぶんで段数が1つ少ない）だけに
-                      挿入する、高さ1段ぶんの空スロット。.system-stack と同じ flex 比率の土俵に乗せることで
-                      「タイトルページの1段目 ＝ 中間ページの2段目」の縦位置が一致する（App.css 参照）。 */}
-                  {i === 0 && shouldReduceFirstPageSystems(pageSystemLayoutOptions) && (
-                    <div className="system-stack-spacer" aria-hidden="true" />
-                  )}
                   {isPartExtractionActive && scoreType === 'ensemble' ? (
                     // パート譜表示（編成譜）: instrumentationParts/partsData/onPartChange を
                     // 選択中パート1件だけに絞って EnsembleStaff へ渡す。
@@ -3462,18 +3457,6 @@ export default function ScorePage() {
                           </div>
                         );
                       })}
-                      {/* タイトルページは段数が1つ少ないぶん、このコントロール欄も他ページより1行少なくなる。
-                          高さが違うとページごとに system-stack へ回る残り高さが変わり、行グリッド
-                          （--page-capacity）の1段の高さがページ間でわずかにズレてしまうため、
-                          見えない1行ぶんのプレースホルダーで高さを揃える（クリックもできない）。 */}
-                      {i === 0 && shouldReduceFirstPageSystems(pageSystemLayoutOptions) && (
-                        <div className="system-measure-override-row" aria-hidden="true" style={{ visibility: 'hidden' }}>
-                          <span className="system-measure-override-label">段</span>
-                          <button type="button" className="system-measure-override-button" tabIndex={-1}>◀</button>
-                          <span className="system-measure-override-count">0小節</span>
-                          <button type="button" className="system-measure-override-button" tabIndex={-1}>▶</button>
-                        </div>
-                      )}
                     </div>
                   )}
 

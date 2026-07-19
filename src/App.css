@@ -941,13 +941,15 @@ button.ghost:disabled {
   display: flex;
   flex-direction: column;
 }
-/* 行グリッド: 全ページが同じ「1段ぶんの高さ」を共有するための土台。
-   .system-stack の flex-grow を「このページの段数（--page-capacity）」にし、
-   さらに直下の各段（system-stack-spacer を含む）を flex:1 1 0 で等分することで、
-   1段の高さ = 残り高さ ÷ 基本段数（systemsPerPage）に固定される。
-   タイトルページはヘッダーぶんで段数が1つ少ないが、代わりに system-stack-spacer が
-   1段ぶんのスロットを埋めるため、実際の1段目は中間ページの2段目と同じ位置から始まる。
-   （--page-capacity は ScorePage.tsx が .score-area に注入し、CSS変数の継承で子孫へ伝わる） */
+/* 行グリッド: 全ページが同じ段数（systemsPerPage）を持つため、
+   .system-stack はページの残り高さ（.score-area）をそのまま受け取り、
+   直下の各段を flex:1 1 0 で等分するだけでよい。
+   タイトルページはヘッダーの実高さぶんだけ .score-area 自体が他ページより
+   低くなるため、結果として段間はタイトルページだけ詰まって見えるが、
+   これは意図した挙動（紙面効率を優先し、タイトルページにも他ページと
+   同じ段数を入れるようにした。詳細は .claude/specs/final-barline/design.md 参照）。
+   （--page-capacity は現状常に systemsPerPage と同じ値になるが、
+   ScorePage.tsx 側の計算を素直に反映できるよう変数自体は残してある） */
 .score-area .system-stack {
   flex: var(--page-capacity, 1) 1 0%;
   min-height: 0;
@@ -955,10 +957,6 @@ button.ghost:disabled {
   flex-direction: column;
 }
 .score-area .system-stack > * {
-  flex: 1 1 0%;
-  min-height: 0;
-}
-.system-stack-spacer {
   flex: 1 1 0%;
   min-height: 0;
 }
