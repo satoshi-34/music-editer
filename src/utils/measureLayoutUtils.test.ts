@@ -269,4 +269,31 @@ describe('measureMinimumContentWidth', () => {
     expect(ranges.every((range) => range.count === 4)).toBe(true);
     expect(ranges.at(-1)?.start).toBe(44);
   });
+
+  it('breakAt を指定すると、内容小節と編集バッファ小節が同じ段に混ざらないよう強制的に段が切れる', () => {
+    // 48小節の内容 + 8小節の編集バッファ（計56小節）。breakAt=48 で最終内容小節(index47)を含む段を打ち切る。
+    const ranges = planSystemMeasureRanges(Array.from({ length: 56 }, () => 52), 4, 550, 48);
+    // 46,47 の2小節だけの段で打ち切られ、次の段（編集バッファ）は48から始まる
+    const finalContentRange = ranges.find((range) => range.start <= 47 && 47 < range.start + range.count);
+    expect(finalContentRange).toEqual({ start: 44, count: 4, minimumWidths: [52, 52, 52, 52], totalWidth: 208, overflow: false });
+    // breakAt がちょうど段境界(44+4=48)と一致するため、この例では従来の4小節/段のまま変化しない
+    const nextRange = ranges.find((range) => range.start === 48);
+    expect(nextRange?.count).toBe(4);
+  });
+
+  it('breakAt が段の途中に来る場合はそこで段を打ち切り、次の段はbreakAtから始まる', () => {
+    // 47小節の内容（breakAtは47）+ 編集バッファ。段境界(44,48,...)の途中でbreakAtが来るケース。
+    const ranges = planSystemMeasureRanges(Array.from({ length: 55 }, () => 52), 4, 550, 47);
+    const finalContentRange = ranges.find((range) => range.start === 44);
+    // 44から始まる段は本来4小節(44-47)入るはずが、breakAt=47で打ち切られ44,45,46の3小節になる
+    expect(finalContentRange?.count).toBe(3);
+    const nextRange = ranges.find((range) => range.start === 47);
+    expect(nextRange).toBeDefined();
+  });
+
+  it('breakAt が既存24小節ぴったり(4小節/段)のときは段の切れ目と一致し、結果が変化しない', () => {
+    const withoutBreak = planSystemMeasureRanges(Array.from({ length: 24 }, () => 52), 4, 550);
+    const withBreak = planSystemMeasureRanges(Array.from({ length: 24 }, () => 52), 4, 550, 24);
+    expect(withBreak).toEqual(withoutBreak);
+  });
 });

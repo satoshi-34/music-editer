@@ -2072,7 +2072,11 @@ export default function ScorePage() {
     plannerMinimumWidths,
     measuresPerSystem,
     worstCaseSystemContentBudget() / SCORE_LAYOUT_RENDER_SCALE,
-  ), [plannerMinimumWidths, measuresPerSystem]);
+    // 内容小節（終止線が付く最後の小節を含む段）と、それ以降の編集用の空きバッファ小節を
+    // 同じ段に混ぜない。こうしないと最終小節の終止線が段の右端まで届かず余白が残ってしまう
+    // （空の楽譜 contentMeasureCount===0 のときは強制しない＝undefined で従来どおり）。
+    contentMeasureCount > 0 ? contentMeasureCount : undefined,
+  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount]);
   const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
   // 表示する段数は plannedRanges（内容＋末尾の編集用余白）にそのまま従う。
   // 以前は固定 totalSystems(12) を下回らないよう底上げしていたが、これだと

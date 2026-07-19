@@ -439,11 +439,23 @@ export function planSystemMeasureRanges(
   minimumWidths: number[],
   requestedMeasuresPerSystem: number,
   availableWidth: number,
+  /**
+   * 指定した絶対小節インデックスで段を強制的に打ち切る（省略時は従来どおり）。
+   * 「内容のある最後の小節（終止線が付く小節）」と「編集用の空きバッファ小節」が
+   * 同じ段に混ざると、終止線が段の右端まで届かず余白が残ってしまうため、
+   * ScorePage から contentMeasureCount を渡して段の境界をそこへ強制する用途を想定している。
+   * breakAt がちょうど段の切れ目と一致する場合（例: 24小節ぴったりで4小節/段）は
+   * 従来と同じ結果になり、既存のページ割りに影響しない。
+   */
+  breakAt?: number,
 ): SystemMeasureRange[] {
   const requested = Math.max(1, Math.floor(requestedMeasuresPerSystem));
   const ranges: SystemMeasureRange[] = [];
   for (let start = 0; start < minimumWidths.length;) {
-    const maxCount = Math.min(requested, minimumWidths.length - start);
+    let maxCount = Math.min(requested, minimumWidths.length - start);
+    if (breakAt != null && breakAt > start && breakAt < start + maxCount) {
+      maxCount = breakAt - start;
+    }
     let count = maxCount;
     while (count > 1 && minimumWidths.slice(start, start + count).reduce((sum, width) => sum + width, 0) > availableWidth) {
       count -= 1;

@@ -65,6 +65,56 @@
 - 保存データ・楽譜データ形式・既存のレイアウト計画（`plannedRanges` / `printContentSystems` /
   `measureWidthEvenness` / 段またぎスラー等）には変更なし。表示専用の追加機能。
 
+## 追補: 最終内容小節が段の右端まで届かない不具合の修正
+
+### 症状
+
+- レビュー実測で判明: `complex-test-score`（末尾 `repeatEnd` 除去版、内容48小節）を読み込むと、
+  最終内容段（終止線が付く段）が「M47・M48（終止線付き）・空小節・空小節」の4小節構成になり、
+  終止線の右側に編集用の空きバッファ小節2つが続いて段の右端まで伸びてしまっていた。
+  終止線自体はM48の右に正しく描かれるが、「最終小節が段の右端（＝印刷でページ右下角）で終わる」
+  という要件を満たしていなかった。
+
+### 原因
+
+- `planSystemMeasureRanges`（`measureLayoutUtils.ts`）は「内容48小節＋編集バッファの空小節」を
+  区別せず、単純に希望小節数（既定4）ずつ貪欲に段を切っていた。そのため、内容の終わり（48小節目）が
+  ちょうど段の境界と一致しない場合、最終内容小節と直後の編集バッファ小節が同じ段に混在していた。
+
+### 修正
+
+- `planSystemMeasureRanges` に第4引数 `breakAt?: number` を追加。指定した絶対小節インデックスを
+  段の強制的な打ち切り位置として扱い、`start < breakAt < start + maxCount` のときだけ
+  `maxCount` を `breakAt - start` に縮める（`breakAt` がちょうど段境界と一致する、または
+  範囲外のときは従来と同じ挙動のまま変化しない）。
+- `ScorePage.tsx` の `plannedRanges` 算出で、`breakAt` に `contentMeasureCount`（内容が1小節以上ある
+  場合のみ。0のときは `undefined` で従来どおり）を渡す。これにより「内容のある最後の小節を含む段」は
+  そこで必ず打ち切られ、編集バッファの空小節は次の段以降に回る。段内の小節幅配分（`allocateCombinedMeasureWidths`）
+  は既存ロジックのまま段の右端までジャスティファイするため、追加の実装なしで最終小節が段の右端に届く。
+- 画面での「末尾に空段があって入力を続けられる」UXはそのまま維持（空段自体はページの後段・次ページに残る。
+  最終内容段にだけ混ざらなくなる）。
+
+### テスト追加
+
+- `src/utils/measureLayoutUtils.test.ts` に3ケース追加:
+  1. `breakAt` が段境界と一致する場合は結果不変（56小節、breakAt=48 で 44-47 の段はそのまま4小節）
+  2. `breakAt` が段の途中に来る場合はそこで打ち切られる（55小節、breakAt=47 で 44-46 の3小節に短縮）
+  3. `breakAt` が既存の段境界（24小節・4小節/段）と完全一致する場合は `breakAt` なしの結果と完全一致
+
+### 動作確認（追補分）
+
+- `docker compose run --rm app npx tsc --noEmit`: エラーなし
+- `docker compose run --rm app npx vitest run`: 68 Test Files / 896 Tests すべて成功
+  （既存893 + 追加3。SaveLoadButtons.test.tsx の既知flakyは今回発生せず）
+- ブラウザ確認: `complex-test-score.json`（末尾 `repeatEnd` 除去）で最終内容段が
+  「M47・M48（終止線付き）」の2小節のみとなり、終止線が段の右端に接することを確認。
+  それ以降の空小節は次の段（print-hidden-system で印刷時のみ非表示）へ回っている。
+- ブラウザ確認: `print-test-score.json`（24小節＝4の倍数、breakAtが段境界と一致するケース）で
+  最終内容段が従来どおり4小節のまま変化しないことを確認（回帰なし）。
+- 印刷エミュレーション（`@media print` ルールを無条件適用）で、最終内容ページの最終段（M47・M48のみ）
+  がページ下端側に寄り、青インク（`rgb(29,78,216)`）の終止線が右下角に来ることをスクリーンショットで確認。
+- コンソールエラーなし。
+
 ## 動作確認
 
 - `docker compose run --rm app npx tsc --noEmit`: エラーなし。
