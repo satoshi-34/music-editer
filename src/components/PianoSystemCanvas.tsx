@@ -1549,7 +1549,12 @@ export default function PianoSystemCanvas({
       tiePreviewPath.style.display='none';
     });
 
-    const requestedScale=SCORE_LAYOUT_RENDER_SCALE;
+    // scale prop は ScorePage から「実効レンダースケール」（SCORE_LAYOUT_RENDER_SCALE ×
+    // その他タブの『音符の大きさ』ユーザー倍率）を渡す口。以前は SCORE_LAYOUT_RENDER_SCALE を
+    // 直接ハードコードしており、この prop が実際の描画計算に反映されない不具合があった
+    // （deps 配列にだけ scale が入っていて再計算のトリガーにしか使われていなかった）。
+    // scale が未指定（テスト等）のときのみ、既定値として SCORE_LAYOUT_RENDER_SCALE を使う。
+    const requestedScale=scale ?? SCORE_LAYOUT_RENDER_SCALE;
 
     /* -- 幅計算 -- */
     // パート名を表示するシステムでは、五線の左側に略称用の余白を作る。

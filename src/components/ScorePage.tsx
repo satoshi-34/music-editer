@@ -109,6 +109,12 @@ const MEASURE_WIDTH_EVENNESS_KEY = 'score-measure-width-evenness';
 // useAutoPageScale が算出する自動縮尺（--scale）に掛け合わせる倍率として使う。
 // 1.0 = 自動縮尺そのまま（従来どおりの表示）。印刷には影響させない（App.css の @media print 側で解除される）
 const VIEW_ZOOM_KEY = 'score-view-zoom';
+// 「音符の大きさ」のユーザー設定（その他タブのスライダー、0.8〜1.3）。
+// SCORE_LAYOUT_RENDER_SCALE（VexFlow の論理座標→物理SVG座標の倍率）に掛け合わせ、
+// 実際に描画・レイアウト計算へ使う「実効スケール」を作る。VIEW_ZOOM と違い、
+// これは画面表示だけでなく印刷結果や段組み（1段に入る小節数）にも影響する。
+// 1.0 = 既定（従来どおりの 0.44 のまま）。
+const NOTATION_SIZE_KEY = 'score-notation-size';
 
 // 無音検知（issue #14）のタイミング設定。
 // 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
@@ -1968,6 +1974,20 @@ export default function ScorePage() {
   // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
   const effectiveScale = scale * viewZoom;
 
+  // ユーザー設定（その他タブの「音符の大きさ」スライダー、0.8〜1.3）。
+  // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.8〜1.3 へクランプする
+  const [notationSizeMultiplier, setNotationSizeMultiplier] = useState<number>(() => {
+    const raw = localStorage.getItem(NOTATION_SIZE_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n) ? Math.max(0.8, Math.min(1.3, n)) : 1;
+  });
+  // SCORE_LAYOUT_RENDER_SCALE（既定0.44）に音符の大きさ倍率を掛けた、実際の
+  // レイアウト計算・描画に使う実効スケール。段組み計画（planEffectiveMeasuresPerSystem /
+  // planSystemMeasureRanges）と各 Canvas への scale prop の両方に必ずこの値を使い、
+  // SCORE_LAYOUT_RENDER_SCALE を直接使う箇所を残さない（単位の食い違いによる
+  // レイアウト崩れを防ぐため）。
+  const effectiveRenderScale = SCORE_LAYOUT_RENDER_SCALE * notationSizeMultiplier;
+
   const totalSystems = 12;
   const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
   // 1ページ（A4 実寸 297mm ≒ 1123px）に収まる段数。
@@ -2079,12 +2099,12 @@ export default function ScorePage() {
     normalizeKeySignature(keySignature),
     measuresPerSystem,
     worstCaseSystemContentBudget(),
-    SCORE_LAYOUT_RENDER_SCALE,
+    effectiveRenderScale,
     // Ensemble の記譜音表示だけ、移調後に臨時記号が増える最悪ケースの安全マージンを見込む。
     // ピアノ・四重奏はここで盛ると実際に表示されない臨時記号ぶんまで幅を確保してしまい、
     // 1段に入る小節数が不当に減る（読込直後にほぼ全小節が1小節/段へ膨張する不具合の一因）。
     { includeTranspositionAccidentalWorstCase: scoreType === 'ensemble' },
-  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType]);
+  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType, effectiveRenderScale]);
   const plannerMinimumWidths = useMemo(() => {
     // 末尾の空小節は「入力を続けられるように」数小節ぶんの余白段だけ残す。
     // 以前は totalSystems(12) × measuresPerSystem を固定の編集枠としていたが、
@@ -2108,12 +2128,12 @@ export default function ScorePage() {
     // 逆変換して揃える。
     plannerMinimumWidths,
     measuresPerSystem,
-    worstCaseSystemContentBudget() / SCORE_LAYOUT_RENDER_SCALE,
+    worstCaseSystemContentBudget() / effectiveRenderScale,
     // 内容小節（終止線が付く最後の小節を含む段）と、それ以降の編集用の空きバッファ小節を
     // 同じ段に混ぜない。こうしないと最終小節の終止線が段の右端まで届かず余白が残ってしまう
     // （空の楽譜 contentMeasureCount===0 のときは強制しない＝undefined で従来どおり）。
     contentMeasureCount > 0 ? contentMeasureCount : undefined,
-  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount]);
+  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale]);
   const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
   // 終止線を描く「内容のある最後の小節」の絶対インデックス。
   // 内容が1小節も無い（空の楽譜）ときは undefined にして、どの Canvas でも終止線を描かせない。
@@ -2876,6 +2896,30 @@ export default function ScorePage() {
                 {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
                 <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(viewZoom * 100)}%</span>
               </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="音符・記号そのものの大きさです。画面表示だけでなく印刷結果にも反映されます（『画面表示のズーム』とは異なり印刷にも影響します）。100% が既定の大きさです"
+              >
+                音符の大きさ
+                <input
+                  type="range"
+                  min={80}
+                  max={130}
+                  step={5}
+                  value={Math.round(notationSizeMultiplier * 100)}
+                  onChange={e => {
+                    // スライダーは 80〜130(%) で扱い、内部では 0.8〜1.3 の倍率として保持する
+                    const v = Math.max(0.8, Math.min(1.3, Number(e.target.value) / 100));
+                    if (!isNaN(v)) {
+                      setNotationSizeMultiplier(v);
+                      localStorage.setItem(NOTATION_SIZE_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 90 }}
+                />
+                {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
+                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
+              </label>
               <button className="ghost" onClick={handleExportMusicXml}>MusicXML書出</button>
               <button className="ghost" onClick={handleExportMidi}>MIDI書出</button>
               <button className="ghost" onClick={() => musicXmlInputRef.current?.click()}>MusicXML読込</button>
@@ -3160,7 +3204,7 @@ export default function ScorePage() {
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={SCORE_LAYOUT_RENDER_SCALE}
+                      scale={effectiveRenderScale}
                       instrumentationParts={[instrumentation.parts[partExtractionSelection!.index]]}
                       partsData={[ensembleParts[partExtractionSelection!.index] ?? []]}
                       onPartChange={[() => {}]}
@@ -3187,7 +3231,7 @@ export default function ScorePage() {
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={SCORE_LAYOUT_RENDER_SCALE}
+                      scale={effectiveRenderScale}
                       partConfig={QUARTET_PART_CONFIGS[partExtractionSelection!.index]}
                       data={quartetParts[partExtractionSelection!.index] ?? []}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
@@ -3210,7 +3254,7 @@ export default function ScorePage() {
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={SCORE_LAYOUT_RENDER_SCALE}
+                      scale={effectiveRenderScale}
                       instrumentationParts={instrumentation.parts}
                       partsData={ensembleParts}
                       onPartChange={instrumentation.parts.map((_, pi) => handleEnsemblePartChange(pi))}
@@ -3237,7 +3281,7 @@ export default function ScorePage() {
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={SCORE_LAYOUT_RENDER_SCALE}
+                      scale={effectiveRenderScale}
                       partsData={quartetParts}
                       onPartChange={[0, 1, 2, 3].map(pi => handleQuartetPartChange(pi))}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
@@ -3263,7 +3307,7 @@ export default function ScorePage() {
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={SCORE_LAYOUT_RENDER_SCALE}
+                      scale={effectiveRenderScale}
                       rightHandData={rightHandData}
                       leftHandData={leftHandData}
                       onRightHandChange={handleRightHandChange}
@@ -3293,7 +3337,7 @@ export default function ScorePage() {
                           rangeLocked
                           incomingArcIndex={incomingArcIndex}
                           tool={tool}
-                          scale={SCORE_LAYOUT_RENDER_SCALE}
+                          scale={effectiveRenderScale}
                           clef="treble"
                           initialScoreData={rightHandData}
                           onScoreDataChange={handleScoreDataChange}

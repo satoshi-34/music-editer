@@ -149,6 +149,12 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - **印刷への影響**: 印刷は `@media print` で `.page-wrapper { transform: none !important; width: auto !important; height: auto !important; }` により画面用の縮小・ズームを丸ごと解除する既存設計（`src/App.css`）に従うため、ズームの値に関わらず印刷結果は変わらない
 - **座標系への影響**: 音符クリックなどのヒットテストは `.page-wrapper` の `--scale`（Safari 対策で `closest('.page-wrapper')` から読む実装、`StaffCanvas.tsx` / `PianoSystemCanvas.tsx`）を経由するため、ズームで `--scale` の値が変わっても座標変換は自動的に追従する
 
+### 音符の大きさ調整（印刷にも反映）
+- **どこで変えるか**: **その他タブの「音符の大きさ」スライダー**（80〜130%、5%刻み）で音符・五線・記号そのものの物理サイズを調節できる。設定はブラウザ（localStorage キー `score-notation-size`）に保存され、リロード後も維持される
+- **「画面表示のズーム」との違い**: 「画面表示のズーム」は `--scale`（`transform: scale()`）による**画面表示だけ**の拡大縮小で、印刷結果には一切影響しない。一方この「音符の大きさ」は `SCORE_LAYOUT_RENDER_SCALE`（`measureLayoutUtils.ts`、VexFlow の論理座標→物理SVG座標の倍率）そのものに掛け合わせる倍率のため、画面表示と印刷結果の両方に反映される。用途が異なるので、目的に応じて使い分ける（画面だけ大きく見たい→ズーム／実際に大きい・小さい音符で印刷したい→音符の大きさ）
+- **実装**: 定数 `SCORE_LAYOUT_RENDER_SCALE` 自体は書き換えず、`ScorePage.tsx` の `effectiveRenderScale = SCORE_LAYOUT_RENDER_SCALE * notationSizeMultiplier` を段組み計画（`planEffectiveMeasuresPerSystem` / `planSystemMeasureRanges`）と各 Canvas への `scale` prop の両方に一貫して渡す。100%（notationSizeMultiplier = 1）のときは従来どおりの見た目・印刷結果になる
+- **自動改段への反映**: 音符が大きくなれば1段に入る小節数は減り、小さくなれば増える。`effectiveRenderScale` が段組み計画の `useMemo` 依存に含まれているため、スライダーを動かすたびに段・ページ割りが自動で再計算される（詳細は `.claude/specs/view-zoom/design.md` の「音符・記号の大きさ調整（notation-size）」章を参照）
+
 ### ページレイアウトの実装ポイント
 - `ScorePage` が表示中の `.print-page` の高さを測り、最大値を `ScaledPageWrapper` へ渡す
 - `ScaledPageWrapper` は共通高さを紙面と外側ラッパーへ反映するため、タイトル欄の有無でページサイズが分かれない
@@ -558,6 +564,7 @@ src/
 - scale=1.0 / 0.86 / 0.8 で E4→G4→B4→D5（ミ・ソ・シ・レ）が狙い通り置ける
 - その他タブの「画面表示のズーム」を 150%・70% にしても、クリックした位置に狙い通り音符が置けること（自動縮尺との合成後も座標変換が追従すること）
 - ズームを変更してリロードしても設定値が保持されること。ズームの値に関わらず印刷結果（`@media print` のレイアウト）が変わらないこと
+- その他タブの「音符の大きさ」を 80%・100%・130% にしても、`svg[data-layout-overflow="true"]` が出ないこと（自動改段が追従すること）、クリックした位置に狙い通り音符が置けること、リロード後も設定値が保持されること
 - 線の上クリックでも間に吸われない
 - 16 分×3 + 二分 などでも小節から溢れない
 - 休符は 1 回目のクリックで選択でき、Delete で削除できること
