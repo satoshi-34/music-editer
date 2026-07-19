@@ -98,6 +98,12 @@ type Props = {
   customSymbolDefs?: import('../types/storage').CustomSymbolDef[]; // カスタム記号定義
   selectedMeasures?: { start: number; end: number }; // 選択中の小節範囲（絶対インデックス）
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void; // 小節選択コールバック
+  /**
+   * 内容のある最後の小節（絶対インデックス）。この小節の右小節線に終止線
+   * （細＋太の二重線）を描く。repeatEnd が付いている小節ではそちらを優先する。
+   * 省略時（undefined）は終止線を描かない。
+   */
+  finalMeasureIndex?: number;
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -843,6 +849,7 @@ export default function StaffCanvas({
   customSymbolDefs = [],
   selectedMeasures,
   onMeasureSelect,
+  finalMeasureIndex,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -1944,7 +1951,18 @@ export default function StaffCanvas({
           // VexFlow では begin / end を別々に指定するので、左側は setBegBarType を使う。
           stave.setBegBarType(Barline.type.REPEAT_BEGIN);
         }
-        stave.setEndBarType(data?.repeatEnd ? Barline.type.REPEAT_END : Barline.type.SINGLE);
+        // 終止線（細＋太の二重線）は「内容のある最後の小節」だけに出す。
+        // 終了リピート記号が付いている小節はそちらを優先する。
+        const isFinalBarlineHere = finalMeasureIndex != null
+          && absoluteIndex === finalMeasureIndex
+          && !data?.repeatEnd;
+        stave.setEndBarType(
+          data?.repeatEnd
+            ? Barline.type.REPEAT_END
+            : isFinalBarlineHere
+              ? Barline.type.END
+              : Barline.type.SINGLE
+        );
         const voltaConfig = getVoltaRenderConfig(score, absoluteIndex);
         if (voltaConfig) {
           const voltaTypeMap = {

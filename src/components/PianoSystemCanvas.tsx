@@ -768,6 +768,13 @@ type Props = {
    * 値の意味は measureLayoutUtils.ts の定数コメントを参照。
    */
   measureWidthEvenness?: number;
+  /**
+   * 内容のある最後の小節（絶対インデックス）。この小節の右小節線に終止線
+   * （細＋太の二重線）を描く。repeatEnd が付いている小節ではそちらを優先し、
+   * ここでは何もしない。省略時（undefined）は終止線を描かない
+   * （末尾の空き段・単体プレビューなどで誤って終止線が出ないようにするため）。
+   */
+  finalMeasureIndex?: number;
 };
 
 export default function PianoSystemCanvas({
@@ -776,6 +783,7 @@ export default function PianoSystemCanvas({
   partsConfig,
   showInstrumentLabels = false,
   startMeasureIndex=0, disabled=false, yOffset=0, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
+  finalMeasureIndex,
   timeSignature = [4, 4],
   onKeySignatureChange,
   selectedMeasures,
@@ -1619,6 +1627,13 @@ export default function PianoSystemCanvas({
     const staveSets: Stave[][] = parts.map(() => []);
     for(let i=0;i<measuresPerSystem;i++){
       const w=realWs[i];
+      // 段の右端縦線（StaveConnector）は、この列が終止線を描く列かどうかで
+      // 使う種類（細線 or 太い二重線）を切り替える。sharedMeasure は最上段基準なので
+      // 各パートの forEach 内より前、列単位で一度だけ判定する。
+      const sharedMeasureForColumn = (partsScore[0] ?? parts[0]?.data ?? [])[startMeasureIndex + i];
+      const isFinalBarlineColumn = finalMeasureIndex != null
+        && startMeasureIndex + i === finalMeasureIndex
+        && !sharedMeasureForColumn?.repeatEnd;
       parts.forEach((part, pi) => {
         // 反復記号と終止括弧は多段譜で段ごとに食い違うと読みにくいので、
         // 見た目の基準は最上段の小節データへ寄せる。
@@ -1670,7 +1685,15 @@ export default function PianoSystemCanvas({
           // 楽器ごとに見た目がずれないようにそろえる。
           stave.setBegBarType(Barline.type.REPEAT_BEGIN);
         }
-        stave.setEndBarType(sharedMeasure?.repeatEnd ? Barline.type.REPEAT_END : Barline.type.SINGLE);
+        // 終止線（細＋太の二重線）は「内容のある最後の小節」だけに出す。
+        // ただし終了リピート記号が付いている小節はそちらを優先し、終止線は描かない。
+        stave.setEndBarType(
+          sharedMeasure?.repeatEnd
+            ? Barline.type.REPEAT_END
+            : isFinalBarlineColumn
+              ? Barline.type.END
+              : Barline.type.SINGLE
+        );
         if (pi === 0) {
           const topPartMeasures = partsScore[0] ?? parts[0]?.data ?? [];
           const voltaConfig = getVoltaRenderConfig(topPartMeasures, startMeasureIndex + i);
@@ -1702,9 +1725,12 @@ export default function PianoSystemCanvas({
       });
 
       // 各小節の右端縦線：第1段 ↔ 最終段 をまたぐ
+      // 終止線の列だけは、段をまたぐ側も対応する太い二重線（BOLD_DOUBLE_RIGHT）にして、
+      // 各パートの stave が個別に描く終止線と見た目をそろえる。
       if(parts.length > 1){
         new StaveConnector(staveSets[0][i], staveSets[parts.length-1][i])
-          .setType(StaveConnector.type.SINGLE_RIGHT).setContext(ctx).draw();
+          .setType(isFinalBarlineColumn ? StaveConnector.type.BOLD_DOUBLE_RIGHT : StaveConnector.type.SINGLE_RIGHT)
+          .setContext(ctx).draw();
       }
       x+=w;
     }

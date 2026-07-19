@@ -2079,8 +2079,15 @@ export default function ScorePage() {
   // 内容が少ない曲でも常に12段ぶんの空段が画面に出てしまうため廃止した。
   // 編集を続けるための余白は plannerMinimumWidths 側の editingBufferMeasures で確保済み。
   const effectiveTotalSystems = Math.max(1, plannedRanges.length);
+  // 終止線を描く「内容のある最後の小節」の絶対インデックス。
+  // 内容が1小節も無い（空の楽譜）ときは undefined にして、どの Canvas でも終止線を描かせない。
+  const finalMeasureIndex = contentMeasureCount > 0 ? contentMeasureCount - 1 : undefined;
   // 完全に空の楽譜でも最低1段は印刷する（白紙が出るより五線だけの1段が自然なため）
   const printContentSystems = Math.max(1, plannedRanges.filter((range) => range.start < contentMeasureCount).length);
+  // 印刷時、内容のある最後のページだけ最後の段をページ下端へ寄せる（App.css の
+  // .print-final-page .system-stack 参照）。printContentSystems は「内容のある段の総数」
+  // （最低1）なので、それが何ページ目に収まるかを逆算する。
+  const finalContentPageIndex = Math.floor((printContentSystems - 1) / systemsPerPage);
   const pages: PageSpec[] = useMemo(
     () => Array.from({ length: Math.ceil(effectiveTotalSystems / systemsPerPage) }, (_, pageIndex) => {
       const systemRanges = plannedRanges.slice(pageIndex * systemsPerPage, (pageIndex + 1) * systemsPerPage);
@@ -2974,7 +2981,8 @@ export default function ScorePage() {
           {visiblePages.map((p, i) => (
             <ScaledPageWrapper key={i} scale={scale} pageHeight={sharedPageHeight}>
               {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
-              <section className={`print-page${printContentSystems - i * systemsPerPage <= 0 ? ' print-hidden-page' : ''}`}>
+              {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
+              <section className={`print-page${printContentSystems - i * systemsPerPage <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}`}>
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (
                     <>
@@ -3033,6 +3041,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={partExtractionIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
@@ -3060,6 +3069,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={partExtractionIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      finalMeasureIndex={finalMeasureIndex}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
                       tool={tool}
@@ -3081,6 +3091,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={ensembleDisplayIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
@@ -3107,6 +3118,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
@@ -3131,6 +3143,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       gap={110}
                       measuresPerSystem={measuresPerSystem}
@@ -3182,6 +3195,7 @@ export default function ScorePage() {
                           selectedMeasures={selectedMeasures ?? undefined}
                           onMeasureSelect={handleMeasureSelect}
                           customSymbolDefs={customSymbolDefs}
+                          finalMeasureIndex={finalMeasureIndex}
                         />
                       ))}
                     </div>

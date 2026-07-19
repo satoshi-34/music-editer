@@ -1156,6 +1156,14 @@ button.ghost:disabled {
      計算し、print-hidden-system / print-hidden-page を付けている */
   .print-hidden-system { display: none !important; }
   .print-hidden-page { display: none !important; }
+
+  /* 内容のある最後のページだけ、最後の段をページ下端へ寄せる。
+     .system-stack は通常 space-evenly で段を均等配置しているが、末尾の空段が
+     print-hidden-system で消えると最後の段の下に余白だけ残ってしまう。
+     space-between にすると最初の段は上端、最後の段は下端へ付き、
+     終止線がページ右下角で締まって見える（画面表示には影響しない）。
+     段が1つだけのページは space-between でも上端に寄るだけで問題ない。 */
+  .print-final-page .system-stack { justify-content: space-between; }
 }
 
 /* SVGのアニメ残り防止 */

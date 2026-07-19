@@ -41,6 +41,8 @@ type Props = {
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
   // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
   measureWidthEvenness?: number;
+  // 終止線を描く「内容のある最後の小節」の絶対インデックス。省略時は終止線を描かない。
+  finalMeasureIndex?: number;
 };
 
 // 何も起きない onChange。パート譜表示は閲覧・印刷専用のため、
@@ -63,6 +65,7 @@ export default function PartExtractionStaff({
   timeSignature = [4, 4],
   customSymbolDefs, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
+  finalMeasureIndex,
 }: Props) {
   return (
     <div>
@@ -95,6 +98,7 @@ export default function PartExtractionStaff({
             plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
             incomingArcIndex={incomingArcIndex}
             measureWidthEvenness={measureWidthEvenness}
+            finalMeasureIndex={finalMeasureIndex}
           />
         );
       })}

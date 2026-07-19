@@ -45,6 +45,8 @@ type Props = {
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
   // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
   measureWidthEvenness?: number;
+  // 終止線を描く「内容のある最後の小節」の絶対インデックス。省略時は終止線を描かない。
+  finalMeasureIndex?: number;
 };
 
 export default function EnsembleStaff({
@@ -68,6 +70,7 @@ export default function EnsembleStaff({
   customSymbolDefs,
   printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
+  finalMeasureIndex,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -150,6 +153,7 @@ export default function EnsembleStaff({
             plannedMeasureWidths={systemRanges?.[systemIndex]?.minimumWidths ?? plannedMeasureWidths?.slice(systemIndex * measuresPerSystem, (systemIndex + 1) * measuresPerSystem)}
             incomingArcIndex={incomingArcIndex}
             measureWidthEvenness={measureWidthEvenness}
+            finalMeasureIndex={finalMeasureIndex}
           />
           </div>
         );
