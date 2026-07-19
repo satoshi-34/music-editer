@@ -95,7 +95,7 @@ import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
-import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
+import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure, shouldReduceFirstPageSystems } from '../utils/pageSystemLayoutUtils';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
@@ -3235,11 +3235,23 @@ export default function ScorePage() {
                 <div className="score-area" style={{
                   '--score-stroke-width': displayWeight === 'thin' ? '0.8' : displayWeight === 'thick' ? '1.8' : '1.2',
                   '--score-text-weight': displayWeight === 'thin' ? '300' : displayWeight === 'thick' ? '700' : '400',
+                  // 行グリッド: 全ページで「1段ぶんの高さ」を揃えるための比率。
+                  // --page-capacity はこのページの段数（キャパシティ）で、.system-stack の
+                  // flex-grow に使う（App.css 参照）。CSS カスタムプロパティは子孫へ継承されるため、
+                  // .system-stack 自体は EnsembleStaff などの子コンポーネントが描画していても
+                  // ここで指定した値をそのまま参照できる。
+                  '--page-capacity': String(getPageSystemsCapacity(i)),
                 } as React.CSSProperties}>
                   {effectiveMeasurePlan.hasUnavoidableOverflow && (
                     <p role="alert" className="layout-overflow-alert">
                       この小節は最小の1小節/段でも紙幅を超えます。音符を減らすか、用紙設定を広げてください。
                     </p>
+                  )}
+                  {/* system-stack-spacer: タイトルページ（ヘッダーぶんで段数が1つ少ない）だけに
+                      挿入する、高さ1段ぶんの空スロット。.system-stack と同じ flex 比率の土俵に乗せることで
+                      「タイトルページの1段目 ＝ 中間ページの2段目」の縦位置が一致する（App.css 参照）。 */}
+                  {i === 0 && shouldReduceFirstPageSystems(pageSystemLayoutOptions) && (
+                    <div className="system-stack-spacer" aria-hidden="true" />
                   )}
                   {isPartExtractionActive && scoreType === 'ensemble' ? (
                     // パート譜表示（編成譜）: instrumentationParts/partsData/onPartChange を
@@ -3382,8 +3394,10 @@ export default function ScorePage() {
                   ) : (
                     <div className="system-stack">
                       {p.systemRanges.map((range) => (
+                        // 行グリッド（App.css の .score-area .system-stack > * 参照）のため、
+                        // 他の楽器編成（EnsembleStaff など）と同じく1段=1 div でラップする。
+                        <div key={range.start}>
                         <StaffCanvas
-                          key={range.start}
                           systems={1}
                           gap={110}
                           measuresPerSystem={range.count}
@@ -3408,6 +3422,7 @@ export default function ScorePage() {
                           customSymbolDefs={customSymbolDefs}
                           finalMeasureIndex={finalMeasureIndex}
                         />
+                        </div>
                       ))}
                     </div>
                   )}
@@ -3447,6 +3462,18 @@ export default function ScorePage() {
                           </div>
                         );
                       })}
+                      {/* タイトルページは段数が1つ少ないぶん、このコントロール欄も他ページより1行少なくなる。
+                          高さが違うとページごとに system-stack へ回る残り高さが変わり、行グリッド
+                          （--page-capacity）の1段の高さがページ間でわずかにズレてしまうため、
+                          見えない1行ぶんのプレースホルダーで高さを揃える（クリックもできない）。 */}
+                      {i === 0 && shouldReduceFirstPageSystems(pageSystemLayoutOptions) && (
+                        <div className="system-measure-override-row" aria-hidden="true" style={{ visibility: 'hidden' }}>
+                          <span className="system-measure-override-label">段</span>
+                          <button type="button" className="system-measure-override-button" tabIndex={-1}>◀</button>
+                          <span className="system-measure-override-count">0小節</span>
+                          <button type="button" className="system-measure-override-button" tabIndex={-1}>▶</button>
+                        </div>
+                      )}
                     </div>
                   )}
 

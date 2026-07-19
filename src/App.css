@@ -941,12 +941,26 @@ button.ghost:disabled {
   display: flex;
   flex-direction: column;
 }
+/* 行グリッド: 全ページが同じ「1段ぶんの高さ」を共有するための土台。
+   .system-stack の flex-grow を「このページの段数（--page-capacity）」にし、
+   さらに直下の各段（system-stack-spacer を含む）を flex:1 1 0 で等分することで、
+   1段の高さ = 残り高さ ÷ 基本段数（systemsPerPage）に固定される。
+   タイトルページはヘッダーぶんで段数が1つ少ないが、代わりに system-stack-spacer が
+   1段ぶんのスロットを埋めるため、実際の1段目は中間ページの2段目と同じ位置から始まる。
+   （--page-capacity は ScorePage.tsx が .score-area に注入し、CSS変数の継承で子孫へ伝わる） */
 .score-area .system-stack {
-  flex: 1;
+  flex: var(--page-capacity, 1) 1 0%;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: space-evenly;
+}
+.score-area .system-stack > * {
+  flex: 1 1 0%;
+  min-height: 0;
+}
+.system-stack-spacer {
+  flex: 1 1 0%;
+  min-height: 0;
 }
 
 /* ＋小節を追加: 内容のある最後の段の直後に置く、画面専用の控えめな追加ボタン。
@@ -1237,6 +1251,18 @@ button.ghost:disabled {
      print-hidden-system で消えると最後の段の下に余白だけ残ってしまう。
      space-between にすると最初の段は上端、最後の段は下端へ付き、
      終止線がページ右下角で締まって見える（画面表示には影響しない）。 */
+  /* 最終ページは行グリッド（--page-capacity による flex-grow 等分）を無効化し、
+     従来どおり「段の実サイズ＋ justify-content」で配置する。
+     行グリッドのまま space-between/flex-start を付けても、子が flex-grow で
+     残り高さを埋め切ってしまい隙間が生まれず、下端寄せ／上揃えの効果が出ないため。 */
+  .print-final-page .system-stack,
+  .print-final-page-single .system-stack {
+    flex: 1 1 0% !important;
+  }
+  .print-final-page .system-stack > *,
+  .print-final-page-single .system-stack > * {
+    flex: 0 0 auto !important;
+  }
   .print-final-page .system-stack { justify-content: space-between; }
   /* ただし、その最後のページの可視段が1段だけの場合は例外として「上揃え」にする。
      1段しかないページを下端へ落とすと、上が大きく空いて紙面が不自然に見えるため
@@ -1247,9 +1273,16 @@ button.ghost:disabled {
 }
 
 /* 画面表示でも、最終ページの可視段が1段だけのときは上揃えにする。
-   通常ページの space-evenly だと1段だけのページでは段が縦中央へ浮いてしまい、
-   楽譜として不自然なため（印刷側の上記ルールと同じ考え方）。 */
-.print-final-page-single .system-stack { justify-content: flex-start; }
+   通常ページのグリッド配置（flex-grow 等分）だと1段だけのページでは段が
+   縦中央へ浮いてしまい、楽譜として不自然なため（印刷側の上記ルールと同じ考え方）。
+   行グリッドを無効化し、段の実サイズ＋ justify-content で上揃えにする。 */
+.print-final-page-single .system-stack {
+  flex: 1 1 0% !important;
+  justify-content: flex-start;
+}
+.print-final-page-single .system-stack > * {
+  flex: 0 0 auto !important;
+}
 
 /* SVGのアニメ残り防止 */
 svg { animation: none; transition: none; }

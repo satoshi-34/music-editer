@@ -327,3 +327,88 @@
 - ブラウザ確認（タイトル・作曲者名を両方空にする）: 1ページ目も他ページと
   同じ段数（5段）に戻ることを確認。
 - コンソールエラーなし。
+
+## 追補6: 全ページで段の行グリッドを共有し、タイトルページの段を中間ページと揃える（2026-07-20）
+
+### 問題
+
+追補5でタイトルページ（1ページ目）の段数を `systemsPerPage - 1` に
+減らしたが、`.system-stack` は `justify-content: space-evenly` で
+「そのページの段数」ぶんを均等配置していたため、段数が違うページ同士は
+段の縦位置（行ピッチ）が揃わなかった。実測では中間ページ（5段）の
+各段の上端が 125/284/443/602/761px（行ピッチ159px）だったのに対し、
+タイトルページ（4段）は 143/319/496/672px（開始位置・行ピッチとも不一致）
+だった。市販譜のように「タイトルページの1段目 ＝ 中間ページの2段目」の
+縦位置に来る（以降も1行ずつずれて一致）のが理想的な組み方。
+
+### 修正設計: flex-grow 比率による「行グリッド」
+
+`.score-area` の子要素（`.system-stack` 本体と、タイトルページだけに
+挿入する空スロット）に「基本段数（systemsPerPage）ぶんのスロット」を
+割り当て、各スロットの高さを固定することで実現した。
+
+- `App.css`: `.score-area .system-stack` の `flex` を固定の `1` から
+  `var(--page-capacity, 1) 1 0%` に変更。`--page-capacity` はそのページの
+  実際の段数（`getPageSystemsCapacity(i)`）で、`ScorePage.tsx` が
+  `.score-area` の inline style に注入する（CSS カスタムプロパティは
+  子孫へ継承されるため、`.system-stack` 自体を描画している
+  `EnsembleStaff`/`PianoStaff`/`QuartetStaff` 側を変更する必要はない）。
+  `.score-area .system-stack > *`（各段のラッパー div）は `flex: 1 1 0%`
+  にし、`.system-stack` の高さを段数で均等分割する。
+- `ScorePage.tsx`: タイトルページ（`i === 0 && shouldReduceFirstPageSystems(...)`）
+  だけ、`.system-stack` の直前に `.system-stack-spacer`（`flex: 1 1 0%`、
+  中身なし）を1つ挿入する。これにより `.score-area` の中の
+  「スロットの合計」は spacer(1) + system-stack(`systemsPerPage - 1`) =
+  `systemsPerPage` となり、他ページの `system-stack`（`systemsPerPage`
+  スロット）と同じ土俵で比例配分される。結果、タイトルページの実際の
+  1段目は spacer の次＝中間ページの2段目と同じ縦位置から始まる。
+- 単旋律（`scoreType: 'single'`、`StaffCanvas` を直接並べる分岐）だけ
+  段ごとの div ラップが無かったため、他の楽器編成と同じく1段=1 div へ
+  揃えた（`.score-area .system-stack > *` セレクタが正しく効くように
+  するため）。
+- 段ごとの小節数調整コントロール（`.system-measure-override-controls`、
+  画面専用）は `.system-stack` の下の兄弟要素で、行数がページごとに
+  違うと「そのページで `.system-stack` に回る残り高さ」がページごとに
+  微妙にずれ、行グリッドの1段の高さがページ間で数px 狂う原因になった
+  （印刷では `display:none` なので影響しないが、画面では見えてしまう）。
+  タイトルページだけ1行少ないぶん、`visibility: hidden` の
+  プレースホルダー行を1本足して行数を揃え、この誤差を無くした。
+- 最終ページ（`.print-final-page` / 可視段1段の `.print-final-page-single`）は、
+  最後の段をページ下端へ寄せる／上揃えにする従来の特別処理
+  （`justify-content: space-between` / `flex-start`）と行グリッドが
+  両立しないため、行グリッドの対象から除外した
+  （`flex: 1 1 0% !important` で `.system-stack` を通常の「残り高さ全部」に
+  戻し、直下の各段も `flex: 0 0 auto !important` で実サイズに戻して
+  `justify-content` が効くようにした）。タイトルページ自体が最終ページに
+  なる場合（1ページに収まる短い曲）は、揃える相手のページが無いため
+  実害はない。
+
+### 影響範囲
+
+- `src/App.css`: `.score-area .system-stack` 関連のルールと、
+  `@media print` 内外の `.print-final-page` / `.print-final-page-single`
+  ルールを変更。
+- `src/components/ScorePage.tsx`: `.score-area` への `--page-capacity`
+  注入、`.system-stack-spacer` の挿入、単旋律分岐の段ラップ、
+  小節数調整コントロールのプレースホルダー行を追加。
+- `src/utils/pageSystemLayoutUtils.ts` からは `shouldReduceFirstPageSystems`
+  を追加インポートしただけで、ロジック自体は変更していない。
+
+### 検証
+
+- `docker compose run --rm app npx tsc --noEmit`: エラーなし。
+- `docker compose run --rm app npx vitest run`: 69 Test Files / 921 Tests
+  すべて成功。
+- ブラウザ確認（「複雑テスト楽譜」、段数/ページ=5、画面）: 各ページの
+  `.system-stack > *` の `getBoundingClientRect().top - ページ top` を
+  実測し、1ページ目（4段）の1段目=266px と2ページ目（5段）の2段目=266px、
+  以降の段も1段ずつずれて完全一致することを確認（最終ページである
+  3ページ目は従来どおりの下端寄せ挙動で対象外）。
+- 印刷エミュレーション（`@media print` の CSSルールを一時 `<style>` へ
+  注入して screen へ強制適用）でも同様に、1ページ目1段目=330px と
+  2ページ目2段目=330px が完全一致することを確認。
+- 段数/ページを 4・6 に変更しても同様に1ページ目と2ページ目の対応する
+  段の縦位置が一致すること、コンソールエラーが出ないことを確認。
+- 検証後は「複雑テスト楽譜」読み込み状態のまま、段数/ページ=5、
+  画面表示のズーム/音符の大きさ/小節幅の均等さ=100%/100%/65%、
+  段割り上書きなしの状態に戻して終了した。
