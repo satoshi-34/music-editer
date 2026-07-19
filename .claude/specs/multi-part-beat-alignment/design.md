@@ -397,3 +397,55 @@ contentWidth = base + EVENNESS * (equalShare - base)
   2小節でほぼ等分のため妥当。
 - print-test-score（24小節）は2ページ・全段4小節/段のまま。全音符・2分
   音符を含む段の幅比が 2.7 → 1.8 に縮み、より均等に見える。
+
+## 追補7: 「小節幅の均等さ」スライダーで画面から調節可能に（2026-07-19）
+
+### 要望
+
+追補6の `MEASURE_WIDTH_EVENNESS` を、コード定数ではなく画面から
+調節できるようにしてほしい。
+
+### UI
+
+「その他」タブの「段あたり小節数」「段数/ページ」の並びに
+「小節幅の均等さ」スライダー（`input type="range"`、0〜100%・5%刻み）を
+追加した。既存のラベル付き入力（label + input の flex 行、fontSize 13）と
+見た目を揃え、`title` 属性で 0%/100% の意味とトレードオフを説明する。
+スライダーの隣に現在値（%）を小さく表示する。
+
+### 状態管理
+
+`ScorePage.tsx` に `measureWidthEvenness` state（0〜1）を追加。
+`systemsPerPageSetting` と同じパターンで、localStorage キー
+`score-measure-width-evenness` に**画面設定として**永続化する
+（SavedScoreData には含めない）。初期値はコード定数
+`MEASURE_WIDTH_EVENNESS`（0.5）。壊れた保存値でも安全なよう読み出し時に
+0〜1 へクランプする。定数は「スライダー未設定時の既定値」として存続。
+
+### 配線
+
+`ScorePage` → `PianoStaff` / `QuartetStaff` / `EnsembleStaff` /
+`PartExtractionStaff`（計5箇所の使用サイト）→ `PianoSystemCanvas` へ
+`measureWidthEvenness` prop を中継し、Canvas の描画 useEffect の deps に
+含めてスライダー操作で即座に再描画されるようにした。値は
+`allocateCombinedMeasureWidths(minWs, alloc, scale, measureWidthEvenness)`
+の第4引数（追補6で追加済みの省略可能引数）へ渡す。
+
+- プランナー側（改段判定）は最低幅ベースのままで、スライダー値は段確定後の
+  幅配分だけに効く。そのため値を変えても段割り・ページ数は変わらない。
+- 単旋律譜の `StaffCanvas` は独自の重み付き配分（unitsForEvent ベース）を
+  持つ別実装のため対象外（従来どおり）。
+- デバウンスは入れていない（複雑テスト楽譜でもスライダー操作は体感で
+  カクつかず、即時反映のままで問題なし）。
+
+### 検証
+
+- `tsc --noEmit` エラーなし。`vitest run` 68ファイル893件成功。
+- ブラウザ（port 5175）で complex-test-score を読込み、スライダーを動かして
+  64分ラン段（4小節）の最大小節占有率を実測:
+  **0% → 56.9% / 50% → 40.0% / 100% → 30.6%**（全段ほぼ等幅）。
+  リロード後もスライダー値が保持されること（100 のまま復元）を確認。
+- print-test-score で 100% にしても2ページ・全段4小節/段のまま崩れず、
+  全小節が等幅（比1.32、先頭小節の clef 余白ぶんのみの差）になる。
+- いずれも overflow=0・警告バナーなし・コンソールエラーなし。
+  段またぎスラー・拍の縦揃えは不変。

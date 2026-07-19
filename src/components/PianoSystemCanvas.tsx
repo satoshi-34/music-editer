@@ -67,6 +67,7 @@ import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
   allocateCombinedMeasureWidths,
   combinedMeasureMinimumContentWidth,
+  MEASURE_WIDTH_EVENNESS,
   measurePlannerSafetyPadding,
   SCORE_LAYOUT_RENDER_SCALE,
   SYSTEM_FIRST_CLEF_PADDING,
@@ -761,6 +762,12 @@ type Props = {
   /** ScorePage の線形Plannerが計測済みの、現在システム内の小節幅。 */
   plannedMeasureWidths?: number[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
+  /**
+   * 小節幅の均し具合（0〜1）。「その他」タブのスライダーから渡される。
+   * 省略時はコード側の既定値 MEASURE_WIDTH_EVENNESS を使う。
+   * 値の意味は measureLayoutUtils.ts の定数コメントを参照。
+   */
+  measureWidthEvenness?: number;
 };
 
 export default function PianoSystemCanvas({
@@ -775,6 +782,7 @@ export default function PianoSystemCanvas({
   onMeasureSelect,
   customSymbolDefs = [],
   activeVoiceIndex = 0,
+  measureWidthEvenness = MEASURE_WIDTH_EVENNESS,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -1577,7 +1585,9 @@ export default function PianoSystemCanvas({
     });
     const pad=CLEF_PAD_FIRST;
     const alloc=Math.max(0,innerW*TARGET_FILL-pad);
-    const widthAllocation=allocateCombinedMeasureWidths(minWs,alloc,requestedScale);
+    // measureWidthEvenness は「その他」タブのスライダー値。段確定後の幅配分だけに効く
+    // （改段判定は最低幅ベースのままなので、値を変えても段割り・ページ数は変わらない）。
+    const widthAllocation=allocateCombinedMeasureWidths(minWs,alloc,requestedScale,measureWidthEvenness);
     // scoreLayoutScale は画面の viewport 縮小とは独立した譜刻用倍率。
     // ScorePage が最低 0.75 倍でも収まる段数を決めてから渡すため、ここで追加縮小しない。
     const s=requestedScale;
@@ -3634,7 +3644,8 @@ export default function PianoSystemCanvas({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs]);
+  // measureWidthEvenness を deps に含め、スライダー操作で即座に再描画されるようにする
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness]);
 
   function handleTimeSigConfirm(value: string) {
     if (!timeSigEditState) return;

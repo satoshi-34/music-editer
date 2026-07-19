@@ -69,6 +69,7 @@ import { buildIncomingArcIndex } from '../utils/incomingArcUtils';
 import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
 import {
   planEffectiveMeasuresPerSystem,
+  MEASURE_WIDTH_EVENNESS,
   SCORE_LAYOUT_RENDER_SCALE,
   MIN_MEASURE_CONTENT_WIDTH,
   worstCaseSystemContentBudget,
@@ -100,6 +101,9 @@ type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 // 「段数/ページ」のユーザー設定（その他タブ）。楽譜データではなく画面設定として保存する
 const SYSTEMS_PER_PAGE_KEY = 'score-systems-per-page';
+// 「小節幅の均等さ」のユーザー設定（その他タブのスライダー、0〜1）。
+// SavedScoreData には含めず、SYSTEMS_PER_PAGE_KEY と同じく画面設定として保存する
+const MEASURE_WIDTH_EVENNESS_KEY = 'score-measure-width-evenness';
 
 // 無音検知（issue #14）のタイミング設定。
 // 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
@@ -1963,6 +1967,16 @@ export default function ScorePage() {
   });
   const systemsPerPage = Math.max(1, Math.min(maxSystemsPerPage, systemsPerPageSetting ?? recommendedSystemsPerPage));
 
+  // ユーザー設定（その他タブの「小節幅の均等さ」スライダー、0〜1）。
+  // 初期値はコード側の既定値 MEASURE_WIDTH_EVENNESS（0.5）。楽譜データには保存せず、
+  // 「段数/ページ」と同じくブラウザの画面設定（localStorage）として永続化する。
+  const [measureWidthEvenness, setMeasureWidthEvenness] = useState<number>(() => {
+    const raw = localStorage.getItem(MEASURE_WIDTH_EVENNESS_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0〜1 へクランプする
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : MEASURE_WIDTH_EVENNESS;
+  });
+
   // 印刷用: 内容のある最後の小節までを段数に換算する。
   // これ以降の「空の段」「空のページ」は印刷から除外する（画面では編集用に表示し続ける）。
   // 途中の空小節は内容として残したいので、末尾の空小節だけを取り除いて数える。
@@ -2718,6 +2732,30 @@ export default function ScorePage() {
                   style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
                 />
               </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="密な小節と疎な小節の幅の差を調節します。0% = 音符量どおりの幅（差が大きい）、100% = 全小節を等幅に。密な小節は詰まります"
+              >
+                小節幅の均等さ
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(measureWidthEvenness * 100)}
+                  onChange={e => {
+                    // スライダーは 0〜100(%) で扱い、内部では 0〜1 に変換して保持する
+                    const v = Math.max(0, Math.min(1, Number(e.target.value) / 100));
+                    if (!isNaN(v)) {
+                      setMeasureWidthEvenness(v);
+                      localStorage.setItem(MEASURE_WIDTH_EVENNESS_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 90 }}
+                />
+                {/* 現在値（%）。スライダーだけだと今いくつか分からないため小さく添える */}
+                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(measureWidthEvenness * 100)}%</span>
+              </label>
               <button className="ghost" onClick={handleExportMusicXml}>MusicXML書出</button>
               <button className="ghost" onClick={handleExportMidi}>MIDI書出</button>
               <button className="ghost" onClick={() => musicXmlInputRef.current?.click()}>MusicXML読込</button>
@@ -2994,6 +3032,7 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       incomingArcIndex={partExtractionIncomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
@@ -3020,6 +3059,7 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       incomingArcIndex={partExtractionIncomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
                       tool={tool}
@@ -3040,6 +3080,7 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       incomingArcIndex={ensembleDisplayIncomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
@@ -3065,6 +3106,7 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       incomingArcIndex={incomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
@@ -3088,6 +3130,7 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       incomingArcIndex={incomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       gap={110}
                       measuresPerSystem={measuresPerSystem}

@@ -39,6 +39,8 @@ type Props = {
   plannedMeasureWidths?: number[];
   systemRanges?: SystemMeasureRange[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
+  // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
+  measureWidthEvenness?: number;
 };
 
 // 何も起きない onChange。パート譜表示は閲覧・印刷専用のため、
@@ -60,6 +62,7 @@ export default function PartExtractionStaff({
   keySignature = 'C',
   timeSignature = [4, 4],
   customSymbolDefs, plannedMeasureWidths, systemRanges, incomingArcIndex,
+  measureWidthEvenness,
 }: Props) {
   return (
     <div>
@@ -91,6 +94,7 @@ export default function PartExtractionStaff({
             customSymbolDefs={customSymbolDefs}
             plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
             incomingArcIndex={incomingArcIndex}
+            measureWidthEvenness={measureWidthEvenness}
           />
         );
       })}

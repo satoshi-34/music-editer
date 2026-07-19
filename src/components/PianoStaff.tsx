@@ -41,6 +41,8 @@ type Props = {
   plannedMeasureWidths?: number[];
   systemRanges?: SystemMeasureRange[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
+  // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
+  measureWidthEvenness?: number;
 };
 
 export default function PianoStaff({
@@ -66,6 +68,7 @@ export default function PianoStaff({
   customSymbolDefs,
   activeVoiceIndex = 0,
   printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
+  measureWidthEvenness,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
@@ -96,6 +99,7 @@ export default function PianoStaff({
           activeVoiceIndex={activeVoiceIndex}
           plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
           incomingArcIndex={incomingArcIndex}
+          measureWidthEvenness={measureWidthEvenness}
         />
         </div>
       ))}
