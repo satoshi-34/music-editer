@@ -252,3 +252,78 @@
 検証: 画面・印刷エミュレーションの両方で justify-content: flex-start を確認、
 1段（M47-48・終止線付き）がページ上部に配置され下が余白になること、
 複数段ページ・他機能への回帰なし（vitest 896件成功）を確認。
+
+## 追補5: タイトルのある1ページ目だけ段数を1段減らす（2026-07-19）
+
+### 問題
+
+市販譜では、タイトル・作曲者名などのヘッダーが載る1ページ目だけ、
+ヘッダーぶんの余白を確保するために譜面の段数を他ページより1段減らして
+組むのが作法。従来はどのページも `systemsPerPage` 段で固定だったため、
+1ページ目だけタイトル分の余白を段の間隔で吸収するしかなく、市販譜と
+比べて1ページ目の段間が窮屈に（あるいは他ページと不揃いに）見えていた。
+
+### 修正設計
+
+- ページごとの段数配分（「iページ目に何段入るか」「iページ目が何段目
+  から始まるか」）を `src/utils/pageSystemLayoutUtils.ts` の純粋関数へ
+  1か所に集約した。
+  - `shouldReduceFirstPageSystems(options)`: タイトル・作曲者名の
+    どちらかが空でなく、かつ `systemsPerPage > 1` のときだけ true。
+    `systemsPerPage === 1` のときに減らすと0段（空ページ）になって
+    しまうため、そのときだけ例外的に減らさない。
+  - `getPageSystemsCapacity(pageIndex, options)`: pageIndex 番目の
+    ページに入る段数。1ページ目だけ `systemsPerPage - 1`、それ以外は
+    `systemsPerPage`。
+  - `getPageSystemOffset(pageIndex, options)`: pageIndex 番目のページ
+    より前に何段置かれているか（＝そのページの開始オフセット）。
+    1ページ目だけ段数が異なりうるため、単純な `pageIndex * systemsPerPage`
+    は使えず、必ず累積計算で求める。
+  - `findPageIndexForSystem(targetSystemIndex, options)`: 「内容のある
+    段の総数（0始まりの最後の段インデックス）」が何ページ目に収まるかを
+    累積オフセットを1ページずつ進めながら探す（各ページの段数は必ず
+    1以上のため有限回で終わる）。
+- `ScorePage.tsx` 側は `pageSystemLayoutOptions`（`systemsPerPage` と
+  `hasTitlePageHeader` をまとめたもの）を作り、上記関数の薄いラッパー
+  （`getPageSystemsCapacity` / `getPageSystemOffset`）を `useCallback`
+  で用意した。
+  - `finalContentPageIndex` は `findPageIndexForSystem(printContentSystems - 1, ...)`
+    で求めるよう変更（従来は `Math.floor((printContentSystems - 1) / systemsPerPage)`
+    という固定段数前提の計算だった）。
+  - `finalContentPageVisibleSystems` は `getPageSystemsCapacity` /
+    `getPageSystemOffset` を使うよう変更。
+  - `pages`（`PageSpec[]`）の組み立ても、固定幅の `Array.from({ length: ... })`
+    + `slice(pageIndex * systemsPerPage, ...)` から、`getPageSystemsCapacity`
+    で決まる可変長のオフセットを1ページずつ進めるループへ変更。
+  - JSX 内の以下の箇所もすべて `i * systemsPerPage` 相当の掛け算を
+    `getPageSystemOffset(i)` / `getPageSystemOffset(i + 1)` に置き換えた
+    （`print-hidden-page` の判定、各 Staff コンポーネントの
+    `printVisibleSystems` / `plannedMeasureWidths` の `slice` 範囲 /
+    `startMeasureIndex` のフォールバック）。
+
+### 影響範囲
+
+- 画面表示・印刷の両方で、1ページ目の段数だけ `systemsPerPage - 1` に
+  なる（タイトル・作曲者名が両方空のときは従来どおり全ページ同数）。
+- `finalContentPageIndex` / `finalContentPageVisibleSystems` /
+  `print-hidden-page` / `print-final-page` / `print-final-page-single`
+  の判定はすべて累積オフセット経由になったため、1ページ目の段数が
+  減っても最終ページの判定・上揃え/下揃えロジックは正しく動く。
+- `systemsPerPage === 1` のときは1ページ目も1段のまま（0段にならない）
+  ことをユニットテスト（`src/utils/pageSystemLayoutUtils.test.ts`）と
+  ブラウザ確認の両方で担保した。
+
+### 検証
+
+- `docker compose run --rm app npx tsc --noEmit`: エラーなし。
+- `docker compose run --rm app npx vitest run`: 69 Test Files / 910 Tests
+  すべて成功（新規追加した `pageSystemLayoutUtils.test.ts` の14件を含む）。
+- ブラウザ確認（localStorage の「複雑テスト楽譜」、段数/ページ=5）:
+  DOM で `.print-page .system-stack` の子要素数を計測し、1ページ目=4段、
+  2ページ目=5段、3ページ目（最終・`print-final-page`）=2段になることを
+  確認。
+- ブラウザ確認（段数/ページ=1）: 全ページ1段のままで、1ページ目が0段に
+  ならないこと、最終ページに `print-final-page-single` が付くことを確認。
+- ブラウザ確認（タイトル・作曲者名を両方空にする）: 1ページ目も他ページと
+  同じ段数（5段）に戻ることを確認。
+- コンソールエラーなし。

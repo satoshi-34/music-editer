@@ -270,3 +270,16 @@ rect / circle も同様（クリック判定・デバッグ用クラスは従来
   楽譜種別を切り替えた場合も表示時に必ず上限へクランプして適用する。
 - 検証: ピアノ譜で 5/2/4 段へ変更し、ページ数が 3/6/3 と再計算されること、
   全ページが A4 高さ（1123px）を維持することをブラウザで確認。
+
+### 追補9: タイトルのある1ページ目だけ段数を1段減らす（2026-07-19）
+
+市販譜の作法に合わせ、タイトル・作曲者名が入る1ページ目だけ段数を
+`systemsPerPage - 1` に減らし、ヘッダーぶんの余白を確保するようにした。
+ページごとの段数配分は `src/utils/pageSystemLayoutUtils.ts` に集約し、
+`ScorePage.tsx` の `printContentSystems - i * systemsPerPage` のような
+固定段数前提の計算をすべて累積オフセット（`getPageSystemOffset` /
+`getPageSystemsCapacity` / `findPageIndexForSystem`）経由に置き換えた。
+詳細な設計・検証結果は `.claude/specs/final-barline/design.md` の
+「追補5」を参照（印刷（`@media print`）と画面表示の両方で同じページ割り
+関数を共有するため、この変更は印刷結果にも画面表示にも同じロジックで
+一貫して反映される）。

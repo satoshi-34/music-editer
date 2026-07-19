@@ -94,6 +94,7 @@ import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
+import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
@@ -2102,6 +2103,28 @@ export default function ScorePage() {
   const finalMeasureIndex = contentMeasureCount > 0 ? contentMeasureCount - 1 : undefined;
   // 完全に空の楽譜でも最低1段は印刷する（白紙が出るより五線だけの1段が自然なため）
   const printContentSystems = Math.max(1, plannedRanges.filter((range) => range.start < contentMeasureCount).length);
+
+  // 市販譜の作法: タイトル・作曲者名が入っているページ（＝1ページ目）は、
+  // タイトル・作曲者ヘッダーぶんの余白を確保するため、譜面の段数を他ページより1段減らす。
+  // タイトルも作曲者名も空のときは「タイトルページ」として特別扱いする意味が薄いため、
+  // 従来どおり全ページ同じ段数のままにする。
+  // systemsPerPage が1のときは1段減らすと0段になってしまうため、そのときだけ例外的に減らさない。
+  const hasTitlePageHeader = title.trim() !== '' || composer.trim() !== '';
+  // ページ段割りの本体は src/utils/pageSystemLayoutUtils.ts の純粋関数に集約し、
+  // ここでは現在の設定（systemsPerPage / hasTitlePageHeader）を束ねた薄いラッパーだけを持つ。
+  // こうすることで、段割りロジック自体はコンポーネントを経由せずに単体テストできる。
+  const pageSystemLayoutOptions = useMemo(() => ({ systemsPerPage, hasTitlePageHeader }), [systemsPerPage, hasTitlePageHeader]);
+  // ページ index → そのページに入る段数（キャパシティ）を返すヘルパー。
+  const getPageSystemsCapacity = useCallback((pageIndex: number): number => (
+    getPageSystemsCapacityPure(pageIndex, pageSystemLayoutOptions)
+  ), [pageSystemLayoutOptions]);
+  // pageIndex 番目のページより前に何段ぶん段が置かれているか（＝そのページの開始オフセット）。
+  // 1ページ目だけ段数が違う可能性があるため、単純な pageIndex * systemsPerPage は使えず、
+  // 必ずこの累積計算を経由する。
+  const getPageSystemOffset = useCallback((pageIndex: number): number => (
+    getPageSystemOffsetPure(pageIndex, pageSystemLayoutOptions)
+  ), [pageSystemLayoutOptions]);
+
   // 画面に表示する段数（楽譜の作法として「最後の音符がある小節が譜面の最後」になるよう、
   // 内容のない末尾の空き段はデフォルトで表示しない。印刷の printContentSystems と同じ基準に、
   // 「＋小節を追加」ボタンでユーザーが明示的に増やした段数（extraEditingSystems）だけを足す。
@@ -2117,18 +2140,33 @@ export default function ScorePage() {
   // 印刷時、内容のある最後のページだけ最後の段をページ下端へ寄せる（App.css の
   // .print-final-page .system-stack 参照）。printContentSystems は「内容のある段の総数」
   // （最低1）なので、それが何ページ目に収まるかを逆算する。
-  const finalContentPageIndex = Math.floor((printContentSystems - 1) / systemsPerPage);
+  // ページごとの段数が可変（1ページ目だけ少ない）ため、単純な割り算ではなく
+  // 累積オフセットを1ページずつ進めながら「その段が何ページ目に収まるか」を探す。
+  const finalContentPageIndex = useMemo(
+    () => findPageIndexForSystem(printContentSystems - 1, pageSystemLayoutOptions),
+    [printContentSystems, pageSystemLayoutOptions]
+  );
   // 最終内容ページに表示される「内容のある段数」。これが1段だけだと space-between は
   // 子が1つしかないため上端に寄ってしまい、終止線がページ下端に届かない
   // （App.css の .print-final-page-single 参照）。
-  const finalContentPageVisibleSystems = Math.max(0, Math.min(systemsPerPage, printContentSystems - finalContentPageIndex * systemsPerPage));
-  const pages: PageSpec[] = useMemo(
-    () => Array.from({ length: Math.ceil(effectiveTotalSystems / systemsPerPage) }, (_, pageIndex) => {
-      const systemRanges = visiblePlannedRanges.slice(pageIndex * systemsPerPage, (pageIndex + 1) * systemsPerPage);
-      return { systems: systemRanges.length || systemsPerPage, systemRanges };
-    }),
-    [effectiveTotalSystems, systemsPerPage, visiblePlannedRanges]
-  );
+  const finalContentPageVisibleSystems = Math.max(0, Math.min(
+    getPageSystemsCapacity(finalContentPageIndex),
+    printContentSystems - getPageSystemOffset(finalContentPageIndex)
+  ));
+  const pages: PageSpec[] = useMemo(() => {
+    const result: PageSpec[] = [];
+    let offset = 0;
+    let pageIndex = 0;
+    // 段が1段も無くても、最低1ページは常に用意する
+    while (offset < effectiveTotalSystems || result.length === 0) {
+      const capacity = getPageSystemsCapacity(pageIndex);
+      const systemRanges = visiblePlannedRanges.slice(offset, offset + capacity);
+      result.push({ systems: systemRanges.length || capacity, systemRanges });
+      offset += capacity;
+      pageIndex += 1;
+    }
+    return result;
+  }, [effectiveTotalSystems, getPageSystemsCapacity, visiblePlannedRanges]);
 
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
   // totalSystems と measuresPerSystem の宣言より後に置く必要がある
@@ -3017,7 +3055,7 @@ export default function ScorePage() {
               {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
               {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
               {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}
-              <section className={`print-page${printContentSystems - i * systemsPerPage <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}`}>
+              <section className={`print-page${printContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}`}>
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (
                     <>
@@ -3077,15 +3115,15 @@ export default function ScorePage() {
                       incomingArcIndex={partExtractionIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       finalMeasureIndex={finalMeasureIndex}
-                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
-                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
                       scale={SCORE_LAYOUT_RENDER_SCALE}
                       instrumentationParts={[instrumentation.parts[partExtractionSelection!.index]]}
                       partsData={[ensembleParts[partExtractionSelection!.index] ?? []]}
                       onPartChange={[() => {}]}
-                      startMeasureIndex={p.systemRanges[0]?.start ?? i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -3106,12 +3144,12 @@ export default function ScorePage() {
                       measureWidthEvenness={measureWidthEvenness}
                       finalMeasureIndex={finalMeasureIndex}
                       measuresPerSystem={measuresPerSystem}
-                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
                       scale={SCORE_LAYOUT_RENDER_SCALE}
                       partConfig={QUARTET_PART_CONFIGS[partExtractionSelection!.index]}
                       data={quartetParts[partExtractionSelection!.index] ?? []}
-                      startMeasureIndex={p.systemRanges[0]?.start ?? i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
@@ -3127,15 +3165,15 @@ export default function ScorePage() {
                       incomingArcIndex={ensembleDisplayIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       finalMeasureIndex={finalMeasureIndex}
-                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
-                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
                       scale={SCORE_LAYOUT_RENDER_SCALE}
                       instrumentationParts={instrumentation.parts}
                       partsData={ensembleParts}
                       onPartChange={instrumentation.parts.map((_, pi) => handleEnsemblePartChange(pi))}
-                      startMeasureIndex={p.systemRanges[0]?.start ?? i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -3154,14 +3192,14 @@ export default function ScorePage() {
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       finalMeasureIndex={finalMeasureIndex}
-                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
-                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
                       scale={SCORE_LAYOUT_RENDER_SCALE}
                       partsData={quartetParts}
                       onPartChange={[0, 1, 2, 3].map(pi => handleQuartetPartChange(pi))}
-                      startMeasureIndex={p.systemRanges[0]?.start ?? i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -3179,17 +3217,17 @@ export default function ScorePage() {
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       finalMeasureIndex={finalMeasureIndex}
-                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       gap={110}
                       measuresPerSystem={measuresPerSystem}
-                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
                       scale={SCORE_LAYOUT_RENDER_SCALE}
                       rightHandData={rightHandData}
                       leftHandData={leftHandData}
                       onRightHandChange={handleRightHandChange}
                       onLeftHandChange={handleLeftHandChange}
-                      startMeasureIndex={p.systemRanges[0]?.start ?? i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
