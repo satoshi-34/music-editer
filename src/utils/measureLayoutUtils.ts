@@ -389,21 +389,31 @@ export function allocateCombinedMeasureWidths(
   // 必要な物理幅になる。Stave には contentWidth/s を渡して論理幅を戻す。
   const physicalMinimumWidths = minimumWidths.map((width) => width * renderScale);
   const sumMin = physicalMinimumWidths.reduce((sum, width) => sum + width, 0);
-  const extra = Math.max(0, usableWidth - sumMin);
+  const measureCount = minimumWidths.length;
+  // 通常の自動改段（planEffectiveMeasuresPerSystem / planSystemMeasureRanges の貪欲法）は
+  // 必ず sumMin <= usableWidth になるよう段の小節数を選ぶため、ここに来る時点で
+  // sumMin > usableWidth なのは「段ごとの小節数のユーザー上書き」で最低幅の合計が
+  // 使用可能幅を超えたケースにほぼ限られる。フォントや五線の縦サイズ（renderScale）は
+  // 変えず、小節へ配る幅だけを比例的に縮小して段の右端を他の段と揃える。
+  // VexFlow の Formatter は与えられた幅へ詰め込む挙動なので、音符間隔が詰まるだけで
+  // 描画自体は破綻しない（詰め込みすぎれば符頭同士が重なりうるが、それはユーザーが
+  // 小節数を増やしすぎた場合の許容範囲として扱う）。
+  const compressionRatio = sumMin > usableWidth && sumMin > 0 ? usableWidth / sumMin : 1;
+  const workingWidths = compressionRatio === 1
+    ? physicalMinimumWidths
+    : physicalMinimumWidths.map((width) => width * compressionRatio);
+  const workingSum = compressionRatio === 1 ? sumMin : usableWidth;
+  const extra = Math.max(0, usableWidth - workingSum);
   // 余剰幅（extra）は各小節へまず「均等」に配る（baseWidths = 最低幅 + extra/n）。
   // 以前は最低幅に比例して配っていた（width + extra * width/sumMin）が、密な小節
   // （32分トレモロ・64分16連など、最低幅が大きい小節）ほど余剰も多く受け取り、
   // 幅の差が増幅されて「1小節が段幅の大半を占め、他の小節が窮屈」になっていた。
-  const measureCount = minimumWidths.length;
   const extraPerMeasure = measureCount > 0 ? extra / measureCount : 0;
-  const baseWidths = physicalMinimumWidths.map((width) => width + extraPerMeasure);
-  const doesFit = sumMin <= usableWidth;
-  // 段に収まらない（=余剰が無い）ときは、等分幅へ寄せると密な小節が最低幅すら
-  // 下回るまで圧縮され、はみ出し（衝突）を隠してしまう。この場合はブレンドせず
-  // 最低幅どおり（baseWidths = physicalMin）で返し、overflow を正直に出す。
-  if (!doesFit) {
-    return { contentWidths: baseWidths, doesFit };
-  }
+  const baseWidths = workingWidths.map((width) => width + extraPerMeasure);
+  // 比例圧縮でも usableWidth ちょうどに収まる（sumMin===0 の空段も自明に収まる）ため、
+  // ここへ来た時点で常に fit している。data-layout-overflow は「圧縮してでも収めたら false」
+  // という自然な扱いにする。
+  const doesFit = true;
   // baseWidths の均等配分でも、密な小節は「最低幅そのもの」が大きいため差が残る。
   // その残差を MEASURE_WIDTH_EVENNESS で等分幅（equalShare）へ線形にブレンドして縮める。
   //   contentWidth = base + EVENNESS * (equalShare - base)

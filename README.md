@@ -148,6 +148,7 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - **リセット**: その他タブの「段割りをリセット」ボタンで、手動調整をすべて解除して自動計画（幅ベースの `planSystemMeasureRanges`）に戻せる
 - **データモデル**: `SavedScoreData.systemMeasureOverrides?: { startMeasure: number; count: number }[]`（`src/types/storage.ts`）。「絶対小節インデックス `startMeasure` から始まる段は `count` 小節」という意味で保持し、段の並び順ではなく小節番号をキーにしているため、他の段の編集で多少ずれても意味を保ちやすい。旧データ互換のため省略可（省略時は自動計画のみ）
 - **計画ロジック**: `planSystemMeasureRanges`（`src/utils/measureLayoutUtils.ts`）が、貪欲法で段の開始位置を進める際に上書き一覧を参照する。開始位置が上書きの `startMeasure` と一致する段はその小節数をそのまま使い（使用可能幅を超えても許容し、`overflow: true` を返すだけで縮めない＝はみ出しはユーザー判断）、一致しない段は従来どおりの自動計画が続く。そのため上書きした段より後ろは自動的に続きから再計画される
+- **描画時の右端揃え**: 上書きで最低幅の合計が使用可能幅を超えた段は、`allocateCombinedMeasureWidths`（同ファイル）が小節の割り当て幅だけを比例圧縮し、他の段と同じ右端（SVG幅）に揃えて描画する。フォント・五線の縦サイズ（`renderScale`）は変えないため、「音符の大きさ」スライダーの値に関わらず全段の SVG 幅が一致する。圧縮後は必ず使用可能幅に収まるため `svg[data-layout-overflow]` は `false` になる（詰め込みすぎて符頭同士が近づく見た目上の詰まりは許容する設計）。自動計画のみの段（上書きなし）は元々収まる幅しか選ばれないため、圧縮は発動しない
 - **Undo/Redo・保存/読込との整合**: 上書き一覧は `ScorePage.tsx` の Undo/Redo スナップショット（`ScoreSnapshot.systemMeasureOverrides`）に含め、＋1/−1・リセットの操作も他の編集と同様に元に戻せる。保存（`saveScoreData`/`createSavedScoreData`）・読込（`loadScoreData`）・ファイル書出/読込（`fileStorage.ts`）でも他のフィールドと同様に往復する。`storage.ts` の `validateSystemMeasureOverrides` が `startMeasure` の重複・負数・`count<1` を弾く
 - 詳細は `.claude/specs/system-measure-override/design.md` を参照
 

@@ -213,11 +213,25 @@ describe('measureMinimumContentWidth', () => {
     expect(effectiveSystemCount(12, 4, 2, 51)).toBe(26);
   });
 
-  it('最低幅が入らない場合も、追加縮小をせず fit 状態を返す', () => {
-    const allocation = allocateCombinedMeasureWidths([280, 140, 90, 90], 420, 0.75);
+  it('最低幅の合計が使える幅を超える場合は比例圧縮して段の右端を揃える（段の小節数上書きでの詰め込み対策）', () => {
+    // 物理最低幅 = [280,140,90,90]*0.75 = [210,105,67.5,67.5]、合計450 > 使用可能幅420。
+    // フォントや五線の縦サイズ（renderScale）は変えず、割り当て幅だけ 420/450 倍へ比例縮小する。
+    const allocation = allocateCombinedMeasureWidths([280, 140, 90, 90], 420, 0.75, 0);
 
-    expect(allocation.doesFit).toBe(false);
-    expect(allocation.contentWidths.reduce((sum, width) => sum + width, 0)).toBe(450);
+    // evenness=0（余剰配分のみ、圧縮後の余剰は0なので base=圧縮後の幅そのもの）。
+    expect(allocation.contentWidths.map((w) => Math.round(w * 100) / 100)).toEqual([196, 98, 63, 63]);
+    // 総和は使用可能幅ちょうどに保たれる（=段の右端が揃う）。
+    expect(allocation.contentWidths.reduce((sum, width) => sum + width, 0)).toBeCloseTo(420, 5);
+    // 圧縮して使用可能幅に収めた以上、はみ出しとしては扱わない。
+    expect(allocation.doesFit).toBe(true);
+  });
+
+  it('圧縮が発生しない通常ケースでは従来どおり最低幅を尊重する', () => {
+    const allocation = allocateCombinedMeasureWidths([100, 100, 100, 100], 1000, 1, 0);
+
+    // sumMin=400 <= usableWidth=1000 なので圧縮は発生せず、従来どおり均等余剰配分（evenness=0）。
+    expect(allocation.contentWidths).toEqual([250, 250, 250, 250]);
+    expect(allocation.doesFit).toBe(true);
   });
 
   it('evenness=0 では余剰を均等配分するだけで最低幅の差を残す', () => {

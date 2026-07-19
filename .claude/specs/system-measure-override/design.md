@@ -115,3 +115,57 @@ export interface SavedScoreData {
   小節数が増え後続段が再配置されること、Undo/Redo で戻せること、保存→再読込で上書きが
   維持されること、リセットで解除されること、印刷 CSS（`@media print`）でコントロールが
   非表示になること、コンソールエラーが出ないことを確認済み
+
+## 追補: 上書き段が「音符の大きさ」変更で右端からはみ出す不具合の修正
+
+### 問題
+
+上で書いたとおり `planSystemMeasureRanges` は、上書きした段の最低幅合計が
+`availableWidth` を超えても `overflow: true` を返すだけで縮めない。この
+`overflow: true` の段を Canvas 側（`PianoSystemCanvas.tsx` / `PianoStaff.tsx`）へ渡すと、
+「音符の大きさ」スライダー（`effectiveRenderScale`、コミット 98e5bad）で `renderScale` が
+大きくなるほど、各小節の物理最低幅（`論理幅 × renderScale`）の合計も比例して増える。
+上書きした段だけこの合計が使用可能幅を超えたまま SVG に渡ると、その段の SVG だけ他の段
+より右へ広がって描画され、ページの右マージンをはみ出して見えてしまっていた
+（実機スクリーンショットで確認）。
+
+### 修正設計
+
+`src/utils/measureLayoutUtils.ts` の `allocateCombinedMeasureWidths`（小節の合同幅を
+実際の描画幅へ配分する、唯一の配分ロジック）に、圧縮処理を集約した。
+
+- 物理最低幅の合計 `sumMin` が使用可能幅 `usableWidth` を超える場合だけ、
+  `compressionRatio = usableWidth / sumMin` を全小節の物理最低幅に一律で掛けて縮小する。
+- `renderScale`（フォント・五線の縦サイズに効く倍率）自体は変更しない。VexFlow の
+  `Formatter` は割り当てられた幅へ詰め込む挙動なので、幅の配分だけを縮めれば音符間隔が
+  詰まって収まる（極端に小節数を増やした場合に符頭同士が近づくのは許容する設計）。
+- 圧縮後は必ず `usableWidth` ちょうどに収まるため、`doesFit` は常に `true` を返す。
+  呼び出し元（`PianoSystemCanvas.tsx`）はこれをそのまま `svg.dataset.layoutOverflow` に
+  反映しているため、「圧縮して収めたら overflow 扱いにしない」という自然な挙動になる。
+- 自動計画（上書きなし）の段は `planEffectiveMeasuresPerSystem` が事前に
+  `sumMin <= availableWidth` を保証してから段の小節数を選ぶため、この関数へ来る時点で
+  常に `sumMin <= usableWidth` になっており、圧縮は発動しない（従来どおりの配分）。
+  圧縮が効くのは実質的に「段の小節数のユーザー上書きで最低幅合計が予算を超えた」経路のみ。
+- 圧縮とその後の余剰配分・`MEASURE_WIDTH_EVENNESS` によるブレンドは同じ関数内で一度だけ
+  行われるため、二重に圧縮されることはない。
+
+呼び出し元（`PianoSystemCanvas.tsx` の該当箇所、`PianoStaff.tsx` の
+`plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? ...}`）や
+`planSystemMeasureRanges` 自体（`overflow` フラグの意味・上書きの許容仕様）は変更していない。
+
+### 影響範囲
+
+- `src/utils/measureLayoutUtils.ts`: `allocateCombinedMeasureWidths` に比例圧縮を追加
+- `src/utils/measureLayoutUtils.test.ts`: 圧縮発動時の配分・総和・`doesFit`、非発動時の
+  従来挙動維持を検証するテストを追加・既存テストの期待値を更新
+
+### 検証
+
+- `docker compose run --rm app npx tsc --noEmit` / `npx vitest run`（69ファイル922テスト
+  全緑）
+- ブラウザ確認（`docker compose` の dev-alt サーバー、複雑テスト楽譜シード、段3を2小節へ
+  上書きした状態）: 「音符の大きさ」を 80% / 100% / 130% のいずれに変更しても、全段の
+  SVG 幅（`getBoundingClientRect().width`）が一致し（504px）、`data-layout-overflow` が
+  すべて `false` になることを確認。上書きなしでの自動計画の段幅・段割りは変化なし。
+  コンソールエラーなし。最終状態は複雑テスト楽譜読込・ズーム100%/音符の大きさ100%/
+  小節幅の均等さ65%・段割り上書きなしに戻して終了。
