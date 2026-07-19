@@ -948,6 +948,29 @@ button.ghost:disabled {
   flex-direction: column;
   justify-content: space-evenly;
 }
+
+/* ＋小節を追加: 内容のある最後の段の直後に置く、画面専用の控えめな追加ボタン。
+   楽譜の作法として「最後の音符がある小節が譜面の最後」になるよう、既定では
+   末尾の空き段を表示しなくした代わりに、曲の続きを入力するための入口として用意する。
+   目立ちすぎないよう薄いグレーの点線＋淡色文字にし、印刷には出さない（@media print 側参照）。 */
+.add-measures-ghost-button {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 6px 0 2px;
+  padding: 4px 14px;
+  font-size: 12px;
+  color: #9ca3af;
+  background: transparent;
+  border: 1px dashed #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.add-measures-ghost-button:hover {
+  color: #6b7280;
+  border-color: #9ca3af;
+  background: #f9fafb;
+}
+
 .layout-overflow-alert {
   margin: 0 0 8px;
   padding: 6px 8px;
@@ -1058,6 +1081,8 @@ button.ghost:disabled {
   .toolbar { display: none !important; }
   /* 入力を直すための画面上の警告であり、演奏用の印刷譜には出さない。 */
   .layout-overflow-alert { display: none !important; }
+  /* 画面専用の「＋小節を追加」ボタンは編集用UIなので印刷には出さない。 */
+  .add-measures-ghost-button { display: none !important; }
   /* 固定ツールバー分の逃し（padding-top: 60px）も印刷では不要。
      残すと1枚目だけ60px下へずれ、ページ末尾が次の紙へ押し出される */
   .app-root { padding-top: 0 !important; }

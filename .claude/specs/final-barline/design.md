@@ -167,3 +167,68 @@
     （1段ケースと同じ値で一致、上端の隙間は約143.6px）。回帰なし。
 - 画面表示（`@media print` 適用前）は変化なし。
 - コンソールエラーなし。
+
+## 追補3: 画面表示でも末尾の空段・空ページを出さないようにする（＋小節を追加ボタン）
+
+### 要望
+
+- ユーザーいわく「今は音符のない行（空の段）が画面に2行ある。最後の音符がある小節がページの最後の
+  小節であるべき。これは楽譜の作法」。印刷では追補1・2までで `print-hidden-system` /
+  `print-hidden-page` により内容のない末尾の段・ページを除外できていたが、**画面表示**では
+  従来どおり「内容＋常時2段ぶんの編集用空きバッファ」を丸ごと描画していたため、この作法を
+  満たしていなかった。
+
+### 修正方式: 画面描画対象を content ぶんに絞る「描画制限方式」
+
+実データ（`rightHandData` 等）に空小節を直接 push する方式ではなく、**画面へ渡す `plannedRanges`
+の範囲を絞る**方式を採用した（既存の幅計画・段分割ロジックをそのまま流用でき、実データ変更に
+伴う Undo/保存への副作用を避けられるため）。
+
+- `extraEditingSystems`（初期値0）という画面専用の state を追加。「＋ 小節を追加」ボタンを押すたびに
+  1 ずつ増える。楽譜データそのものは変更しないため、履歴（Undo）には積まれない。
+- `plannerMinimumWidths` の編集バッファ量を、常に「`extraEditingSystems + 2` 段ぶん」に変更
+  （旧実装は常に固定 `2段ぶん`）。これにより「ユーザーが増やした段数＋常に1段ぶんの予備」を
+  維持したまま `planSystemMeasureRanges` が十分な数の空きセグメントを計画できる。
+- `visibleTotalSystems = printContentSystems + extraEditingSystems`（`plannedRanges.length` で
+  クランプ）を算出し、`visiblePlannedRanges = plannedRanges.slice(0, visibleTotalSystems)` を
+  画面のページ組み（`pages`）に使う。印刷用の `printContentSystems` / `printVisibleSystems` /
+  `print-hidden-system` / `print-hidden-page` / `print-final-page(-single)` の算出ロジックは
+  一切変更していない（従来どおり内容小節だけを基準に判定する）。
+- 「＋ 小節を追加」ボタンは、画面に表示されている最後のページの譜面エリア内・最後の段の
+  直後に置く（`i === visiblePages.length - 1` のページにだけ描画）。パート譜表示中
+  （閲覧・印刷専用）は出さない。押すと `extraEditingSystems` が1増え、次の空きセグメントが
+  画面に現れる。ボタンは薄いグレーの点線＋淡色文字の控えめな見た目にし、
+  `@media print { .add-measures-ghost-button { display: none !important; } }` で印刷から除外する。
+- 新規作成・localStorageからの読込・ファイルからの読込・サンプル読込では、直前の譜面用に
+  増やした `extraEditingSystems` を 0 へリセットする（別の譜面を開いたときに前の譜面の
+  空き段設定を引きずらないため）。
+
+### 影響範囲
+
+- `src/components/ScorePage.tsx`: `extraEditingSystems` state の追加、`plannerMinimumWidths` の
+  編集バッファ量の変更、`visibleTotalSystems` / `visiblePlannedRanges` の追加と `pages` への適用、
+  「＋ 小節を追加」ボタンの描画、`handleNewScore` / `handleLoad` / `handleImportFile` /
+  `handleLoadSample` でのリセット処理。
+- `src/App.css`: `.add-measures-ghost-button` のスタイルと、`@media print` 側での非表示ルール。
+- 印刷側のロジック（`printContentSystems` / `finalMeasureIndex` / `print-final-page(-single)` /
+  `StaveConnector` / `Barline.type.END` など）は無変更。終止線は引き続き最終内容小節に付く。
+
+### 動作確認（追補3分）
+
+- `docker compose run --rm app npx tsc --noEmit`: エラーなし。
+- `docker compose run --rm app npx vitest run`: 68 Test Files / 896 Tests すべて成功（回帰なし）。
+- ブラウザ確認（`complex-test-score.json`、repeatEnd 除去版）: 画面でも最終段（M47・M48、終止線付き）
+  が譜面の最後になり、空の段・空のページが表示されないことを確認（最終ページの system 数が1つの
+  みであることを DOM で確認）。「＋ 小節を追加」ボタンをクリックすると空の段が1段現れ、
+  その中の音符をクリックして音符（M49）を配置できた。配置した音符は localStorage の保存データに
+  も反映されることを確認（`measures[48].events` に音符データが入る）。Undo を押すと配置した音符
+  だけが取り消され、追加した空の段自体は表示され続けることを確認（ボタン操作自体は履歴化されて
+  いないことの裏付け）。
+- ブラウザ確認（新規作成相当＝localStorage を空にしてリロード）: 従来どおり1段（4小節、全休符）が
+  表示され、入力を続けられることを確認（`contentMeasureCount === 0` の最低1段ルールを維持）。
+- ブラウザ確認（`print-test-score.json`、24小節）: 画面の段数がちょうど6段（24÷4）で終わり、
+  後ろに空段が続かないことを確認。
+- 印刷エミュレーション（`@media print` ルールを無条件適用）: 従来どおりの表示（青インク、
+  最終段の下端寄せ）に回帰がないことを確認。「＋ 小節を追加」ボタンの `computedStyle.display`
+  が `none` になっており、印刷に出ないことを確認。
+- コンソールエラーなし。
