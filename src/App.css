@@ -1161,9 +1161,14 @@ button.ghost:disabled {
      .system-stack は通常 space-evenly で段を均等配置しているが、末尾の空段が
      print-hidden-system で消えると最後の段の下に余白だけ残ってしまう。
      space-between にすると最初の段は上端、最後の段は下端へ付き、
-     終止線がページ右下角で締まって見える（画面表示には影響しない）。
-     段が1つだけのページは space-between でも上端に寄るだけで問題ない。 */
+     終止線がページ右下角で締まって見える（画面表示には影響しない）。 */
   .print-final-page .system-stack { justify-content: space-between; }
+  /* ただし、その最後のページの可視段が1段だけの場合は space-between が効かず
+     （flexの子が1つだと上端に寄ったままになる）、終止線がページ下端まで届かない。
+     その場合だけ flex-end で1段を丸ごと下端へ寄せる（ScorePage.tsx が
+     print-final-page-single を付与）。2段以上のページは従来の space-between のまま
+     （space-between + margin-top:auto の併用は複数段時に段間が崩れるため使わない）。 */
+  .print-final-page-single .system-stack { justify-content: flex-end; }
 }
 
 /* SVGのアニメ残り防止 */

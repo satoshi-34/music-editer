@@ -2092,6 +2092,10 @@ export default function ScorePage() {
   // .print-final-page .system-stack 参照）。printContentSystems は「内容のある段の総数」
   // （最低1）なので、それが何ページ目に収まるかを逆算する。
   const finalContentPageIndex = Math.floor((printContentSystems - 1) / systemsPerPage);
+  // 最終内容ページに表示される「内容のある段数」。これが1段だけだと space-between は
+  // 子が1つしかないため上端に寄ってしまい、終止線がページ下端に届かない
+  // （App.css の .print-final-page-single 参照）。
+  const finalContentPageVisibleSystems = Math.max(0, Math.min(systemsPerPage, printContentSystems - finalContentPageIndex * systemsPerPage));
   const pages: PageSpec[] = useMemo(
     () => Array.from({ length: Math.ceil(effectiveTotalSystems / systemsPerPage) }, (_, pageIndex) => {
       const systemRanges = plannedRanges.slice(pageIndex * systemsPerPage, (pageIndex + 1) * systemsPerPage);
@@ -2986,7 +2990,8 @@ export default function ScorePage() {
             <ScaledPageWrapper key={i} scale={scale} pageHeight={sharedPageHeight}>
               {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
               {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
-              <section className={`print-page${printContentSystems - i * systemsPerPage <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}`}>
+              {/* print-final-page-single: そのページの可視段が1段だけのときは space-between が効かないため flex-end で下端へ寄せる */}
+              <section className={`print-page${printContentSystems - i * systemsPerPage <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}`}>
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (
                     <>

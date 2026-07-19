@@ -128,3 +128,42 @@
   終止線を含む全要素が青系印刷インク色（`rgb(29, 78, 216)`）で描かれることを確認。
   途中ページは従来どおり段が均等配置されたまま変化しないことも確認。
 - コンソールエラーなし。
+
+## 追補2: 最終内容ページの可視段が1段だけのとき下端に付かない不具合の修正
+
+### 症状
+
+- 追補1の修正（`breakAt` による段分割）の結果、`complex-test-score`（`repeatEnd` 除去版）では
+  最終内容ページ（`print-final-page`）の可視段が **1段だけ**（M47・M48）になった。
+  `justify-content: space-between` は flex の子が1つだけだと上端に寄る仕様のため、
+  実測で最終段の下端からページ下端まで約795pxの空きが残り、
+  「終止線がページ右下角に来る」という要件を満たしていなかった。
+  最終ページに2段以上残る `print-test-score` では space-between が正しく機能しており、
+  この不具合は「最終ページの可視段がちょうど1段になる」エッジケース限定だった。
+
+### 修正
+
+- `ScorePage.tsx` に `finalContentPageVisibleSystems`
+  （`printContentSystems - finalContentPageIndex * systemsPerPage` を 0〜`systemsPerPage` へクランプした値）
+  を追加し、最終内容ページの可視段数を算出する。
+- その値が `1` のときだけ、`print-final-page` に加えて `print-final-page-single` クラスを付与する。
+- `App.css` の `@media print` に `.print-final-page-single .system-stack { justify-content: flex-end; }`
+  を追加。可視段が1段だけのページはこちらが効いて段を丸ごと下端へ寄せる。
+  2段以上のページは従来どおり `.print-final-page .system-stack { justify-content: space-between; }`
+  のままとし、`space-between` と `flex-end`／`margin-top:auto` を同時に使わない
+  （space-between との併用は複数段時に段間の間隔が崩れるため避ける）。
+- 画面表示には影響しない（`print-final-page-single` は `@media print` の外では何もしない）。
+
+### 動作確認（追補2分）
+
+- `docker compose run --rm app npx tsc --noEmit`: エラーなし。
+- `docker compose run --rm app npx vitest run`: 68 Test Files / 896 Tests すべて成功（回帰なし）。
+- 印刷エミュレーション（`@media print` ルールを無条件適用）で実測:
+  - `complex-test-score.json`（repeatEnd 除去、最終ページ可視段1段）:
+    `print-final-page-single` が付与され、最終段の下端とページ下端の隙間は **約45.4px**
+    （修正前は約795px）。他ページの先頭余白と同程度の自然な下マージンに収まった。
+  - `print-test-score.json`（最終ページ可視段2段、従来の space-between のまま）:
+    `print-final-page-single` は付与されず、最終段の下端とページ下端の隙間は **約45.4px**
+    （1段ケースと同じ値で一致、上端の隙間は約143.6px）。回帰なし。
+- 画面表示（`@media print` 適用前）は変化なし。
+- コンソールエラーなし。
