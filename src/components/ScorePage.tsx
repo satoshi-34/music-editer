@@ -2162,14 +2162,16 @@ export default function ScorePage() {
   const adjustSystemMeasureOverride = useCallback((range: SystemMeasureRange, delta: number) => {
     const nextCount = range.count + delta;
     if (nextCount < 1) return;
-    if (delta > 0 && range.start + nextCount > plannerMinimumWidths.length) return;
+    // 引き込めるのは「内容のある小節」まで。編集用の空きバッファ小節まで引き込むと、
+    // 「最後の音符がある小節が譜面の最後の小節」という楽譜の作法（終止線の位置）が壊れるため。
+    if (delta > 0 && range.start + nextCount > contentMeasureCount) return;
     pushHistory();
     setSystemMeasureOverrides((prev) => {
       const next = prev.filter((o) => o.startMeasure !== range.start);
       next.push({ startMeasure: range.start, count: nextCount });
       return next;
     });
-  }, [plannerMinimumWidths.length, pushHistory]);
+  }, [contentMeasureCount, pushHistory]);
 
   // その他タブの「段割りをリセット」ボタン用: 手動上書きをすべて解除し、自動計画へ戻す。
   const handleResetSystemMeasureOverrides = useCallback(() => {
@@ -3431,7 +3433,9 @@ export default function ScorePage() {
                     <div className="system-measure-override-controls">
                       {p.systemRanges.map((range, rangeIndex) => {
                         const canDecrease = range.count > 1;
-                        const canIncrease = range.start + range.count < plannerMinimumWidths.length;
+                        // 引き込める「内容のある小節」が次に残っている段だけ ▶ を押せる。
+                        // 空きバッファ小節まで引き込むと終止線の作法が壊れるため上限は contentMeasureCount
+                        const canIncrease = range.start + range.count < contentMeasureCount;
                         return (
                           <div className="system-measure-override-row" key={range.start}>
                             <span className="system-measure-override-label">段{getPageSystemOffset(i) + rangeIndex + 1}</span>
