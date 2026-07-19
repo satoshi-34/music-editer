@@ -18,6 +18,8 @@ import type { Tool } from './Palette';
 import type { MeasureData, TimeSignature, CustomSymbolDef, NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
+import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
+import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 
 type Props = {
   tool: Tool;
@@ -34,6 +36,9 @@ type Props = {
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
   customSymbolDefs?: CustomSymbolDef[];
+  plannedMeasureWidths?: number[];
+  systemRanges?: SystemMeasureRange[];
+  incomingArcIndex?: Map<number, IncomingArcEntry[]>;
 };
 
 // 何も起きない onChange。パート譜表示は閲覧・印刷専用のため、
@@ -54,11 +59,11 @@ export default function PartExtractionStaff({
   previewAccidentalOnApply = true,
   keySignature = 'C',
   timeSignature = [4, 4],
-  customSymbolDefs,
+  customSymbolDefs, plannedMeasureWidths, systemRanges, incomingArcIndex,
 }: Props) {
   return (
     <div>
-      {Array.from({ length: systems }, (_, i) => {
+      {Array.from({ length: systemRanges?.length ?? systems }, (_, i) => {
         const partsConfig: PartConfig[] = [
           {
             ...partConfig,
@@ -69,12 +74,12 @@ export default function PartExtractionStaff({
         return (
           <PianoSystemCanvas
             key={i}
-            measuresPerSystem={measuresPerSystem}
+            measuresPerSystem={systemRanges?.[i]?.count ?? measuresPerSystem}
             tool={tool}
             scale={scale}
             partsConfig={partsConfig}
             showInstrumentLabels={false}
-            startMeasureIndex={startMeasureIndex + i * measuresPerSystem}
+            startMeasureIndex={systemRanges?.[i]?.start ?? startMeasureIndex + i * measuresPerSystem}
             // パート譜表示は常に編集無効（閲覧・印刷専用）
             disabled
             yOffset={yOffset}
@@ -84,6 +89,8 @@ export default function PartExtractionStaff({
             keySignature={keySignature}
             timeSignature={timeSignature}
             customSymbolDefs={customSymbolDefs}
+            plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
+            incomingArcIndex={incomingArcIndex}
           />
         );
       })}

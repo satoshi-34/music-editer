@@ -20,7 +20,7 @@ export function isEmptyMeasure(measure: MeasureData | undefined): boolean {
   if (!measure) return true;
   // events 以外のプロパティ（bpm・timeSignature など）が何か付いていれば空ではない
   const keys = Object.keys(measure).filter((k) => {
-    const value = (measure as Record<string, unknown>)[k];
+    const value = (measure as unknown as Record<string, unknown>)[k];
     return value !== undefined;
   });
   if (keys.some((k) => k !== 'events')) return false;

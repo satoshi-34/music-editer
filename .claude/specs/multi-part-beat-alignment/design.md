@@ -141,3 +141,164 @@ stave を伝播し、`preFormatted` フラグで再実行を防ぐ仕様。こ�
 - complex-test-score（3連符 vs 8分、2声部など）で音符の小節外はみ出しは
   前打音 bbox 由来の既知1件のみ。全段を目視で崩れなしを確認。
 - tsc / vitest 872件成功、コンソールエラーなし。
+
+## 追補3: 付点・連符の tick と実測小節幅を合同フォーマットへ反映（2026-07-19）
+
+### 問題
+
+拍の縦揃えを導入した後、付点音符・連符・臨時記号・複数声部を混ぜた密な
+ピアノ譜で、符頭同士、臨時記号、または小節線へ音符が重なった。
+
+`Dot.buildAndAttach()` は付点を描く Modifier を追加するだけで、音符の tick を
+伸ばさない。一方アプリ側の拍数計算は付点を1.5倍/1.75倍としていたため、
+「アプリ上の開始拍」と「VexFlow Formatter の開始拍」がずれていた。また、
+`Tuplet` を Pass 3（Formatter 後）に生成していたため、連符の tick 倍率も合同
+Formatter へ届いていなかった。
+
+### 修正
+
+1. `makeVFNote` で `StaveNote` / `GhostNote` の `dots` オプションへ付点数を渡し、
+   既存の `Dot.buildAndAttach()` は視覚的な点の描画として維持した。
+2. `createVexFlowTuplets()` を新設し、同じ `tuplet.id` の連続音符から `Tuplet` を
+   **Voice へ追加する前**に生成した。Tuplet のコンストラクタが tick 倍率を適用する
+   ため、Pass 2 の全パート合同 Formatter が正しい拍位置を使える。生成した Tuplet
+   は Pass 3 では再生成せず、ブラケットだけを描画する。声部2にも同じ処理を適用する。
+3. `vexFlowCombinedMeasureMinimumContentWidth()` を追加し、各小節の全パート・全声部を
+   仮 Voice として合同 Formatter の `preCalculateMinTotalWidth()` へ渡す。従来の
+   開始拍ベース推定値と実測値の大きい方を最低幅にし、編集中の壊れた/不完全なデータで
+   実測に失敗した場合だけ従来の推定値へフォールバックする。
+4. 既存の「最低幅に比例して余剰幅を配る」変更は保持した。これにより実測で広いと
+   判定された64分音符・臨時記号の多い小節は、余った段幅も相対的に多く受け取る。
+
+### 再レビュー追補: 調号状態・全体改段・印刷倍率（2026-07-19）
+
+- VexFlow 幅計測は本描画と同じく `joinVoices(voices)` を先に呼び、共有した
+  TickContext で `preCalculateMinTotalWidth()` を実行する。これによりパート単独の
+  幅ではなく、拍を揃えた合同列として測定する。
+- 幅計測は `noteKeyUtils.createMeasureAccidentalState()` /
+  `resolveDisplayAccidentalsForKeys()` / `snapshotAccidentalState()` を本描画と共用する。
+  そのため有効調号、パートの clef、前小節の最終状態、同小節内の自然記号、courtesy
+  accidental を仮 `StaveNote` に同じ順で付けられる。微分音と前打音も仮ノートへ追加する。
+  VexFlow 5 の事前幅が臨時記号列を小さく返す環境差だけは、「実際に表示すると確定した」
+  記号ごとに22pxの安全幅を加える（キー文字列中の #/b を数える旧方式は廃止）。
+- 現在の `PianoStaff` / `QuartetStaff` / `EnsembleStaff` / `ScorePage` は、すべて
+  `startMeasureIndex + systemIndex * measuresPerSystem` と固定幅の添字でページ・印刷・
+  小節番号・タイ/スラー参照を作る。この前提を保ったまま `ScorePage` に
+  `planEffectiveMeasuresPerSystem()` を置き、全パート・全小節の連続グループを評価して
+  保存された `measuresPerSystem` を上限とする共通値（4→3→2→1）を選ぶ。これを
+  `startMeasureIndex`、ページ数、`printContentSystems`、各ラッパーへ一貫して渡すため、
+  小節の重複・欠落がない。保存値はユーザー希望の上限のまま保持し、effective値は表示・
+  印刷専用である。`allocateCombinedMeasureWidths()` は確定後の余白配分だけを担い、
+  無制限の縮小fallbackを持たない。
+- `useAutoPageScale()` の viewport scale は `ScaledPageWrapper` のCSS transformだけへ渡す。
+  VexFlow の `scale` は固定等倍で、印刷時にも画面幅由来の内部SVG倍率が混入しない。
+  transform/座標補正の Safari 対応は従来どおり `ScaledPageWrapper` と座標変換側に残す。
+- 幅の単位は `minLogical`（VexFlow論理幅）と `contentPhysical`（SVG物理幅）を分ける。
+  共通の `allocateCombinedMeasureWidths()` は `contentPhysical = minLogical * renderScale + extra`
+  を返し、Canvas は `Stave(..., contentPhysical / renderScale)` と `ctx.scale(renderScale)` を
+  組み合わせる。現在の renderScale は等倍であり、将来変更しても Planner と Canvas が
+  同じ値・同じ本文予算（A4幅−左右余白−ラベル幅、TARGET_FILL、先頭clef余白控除後）を使う。
+- 1小節/段でもこの予算を超える入力は縮小で隠さず `hasUnavoidableOverflow` として画面に
+  警告する。編集中の空枠は `ceil(12 * 保存measuresPerSystem / effectiveMeasuresPerSystem)`
+  段以上を確保し、印刷だけは内容末尾で引き続きトリミングする。
+
+### 回帰テスト
+
+### 可変system range追補（2026-07-19）
+
+全曲共通のeffective小節数では通常小節まで1小節/段になり得るため、`planSystemMeasureRanges()`へ変更した。全小節の安全幅を一度だけ計測し、各段で希望値以下の最大countを貪欲に選んだ `{ start, count, minimumWidths }` をページ単位で渡す。Piano/Quartet/Ensemble/PartExtractionはこの絶対startを使うため、ページ境界で小節の重複・欠落を起こさない。
+
+- `vexFlowTimingUtils.test.ts`: 付点の tick が1.5/1.75倍になること、3連符の tick が
+  2/3倍になること、不完全な連符グループでは安全に通常音符へフォールバックすること。
+- `measureLayoutUtils.test.ts`: 付点・多声部・3/5連符・臨時記号、および64分音符を
+  含む小節で VexFlow 実測幅を取得できること。調号由来のnatural、courtesy、三和音の
+  臨時記号が約110px以上の幅を確保すること、全体共通のeffective小節数へ下げることも確認する。
+
+## 追補4: 自動小節幅・改段のレイアウト破綻を修正（2026-07-19）
+
+### 症状
+
+実曲風の24小節ピアノ譜（`test-data/print-test-score.json`、段あたり
+小節数=4）を読み込むと8ページ・30段へ膨張し、1小節だけが全幅に
+引き伸ばされる段が24本・4小節の段が6本になった。48小節の複雑テスト譜
+（`test-data/complex-test-score.json`）でも10ページ・38段＋
+「最小の1小節/段でも紙幅を超える」誤警告が出た。
+
+### 原因A: 末尾の空小節ぶんまで段を生成していた
+
+`ScorePage.tsx` の `plannerMinimumWidths` は、旧実装の固定12段グリッド
+（`totalSystems(12) × measuresPerSystem`）をそのまま「編集用の空き枠」と
+みなし、常に48小節ぶんのスロットを `planSystemMeasureRanges()` へ渡して
+いた。内容が24小節しかなくても残り24小節ぶんの空段が生成され、画面へ
+描画されてしまう（印刷は print-hidden で隠れるが画面には残る）。
+
+`plannerMinimumWidths` の長さを `contentMeasureCount + editingBufferMeasures`
+（`editingBufferMeasures = max(effectiveMeasuresPerSystem, measuresPerSystem) * 2`、
+だいたい2段ぶん）に変更し、内容量に応じた小さな編集用余白だけを残すように
+した。あわせて `effectiveTotalSystems` の `Math.max(plannedRanges.length, totalSystems(12))`
+という下駄（常に12段以上を確保）も廃止し、`plannedRanges.length` にそのまま
+従うようにした。
+
+### 原因B: 小節の最低幅見積もりが実際の描画より約2〜2.5倍過大だった
+
+2点の要因が重なっていた。
+
+1. `measurePlannerSafetyPadding()` が、Ensemble の移調後に臨時記号が増える
+   最悪ケース（和音の全キーが臨時記号になる想定で `keys.length * 10px`）を
+   **全ての楽譜種別で無条件に**加算していた。ピアノ・四重奏は移調をしない
+   ため実際に表示されない臨時記号ぶんまで幅を確保しており不要。さらに
+   microtones・grace notes ぶんの安全幅も、`vexFlowCombinedMeasureMinimumContentWidth`
+   側の `modifierSafetyWidth` で既に実測込みのため二重加算になっていた。
+   → `measurePlannerSafetyPadding()` に `includeTranspositionAccidentalWorstCase`
+   オプションを追加し、Ensemble（`scoreType === 'ensemble'`）のときだけ
+   臨時記号の最悪ケースを加える。microtones・grace notes の重複加算は削除。
+2. より支配的だったのは `SCORE_LAYOUT_RENDER_SCALE`（VexFlow の論理座標→
+   物理SVG座標の倍率）が `1`（等倍）だったこと。VexFlow の `StaveNote` /
+   `Formatter` はデフォルトで五線の高さ約40論理単位を前提にした比較的
+   大きな符頭・符尾サイズで最低幅を計算する。これを等倍のまま物理ページ幅
+   （182mm ≒ 688px）へ当てはめると、五線の高さが実測で約10.6mm相当になり、
+   一般的な印刷譜（六〜七分＝約6〜7mm）の1.5〜1.8倍のサイズになっていた。
+   実測では右手5音・左手8分×8程度の軽い1小節でも合同フォーマットの最低幅が
+   約300〜330論理pxに達し、段あたり予算（約550px）に1〜2小節しか入らなかった
+   （jsdomのテスト環境ではCanvasのテキスト計測が空文字幅を返すため、この
+   過大な実測値はブラウザで確認するまで気づけなかった）。
+   → `SCORE_LAYOUT_RENDER_SCALE` を `1` から `0.4` へ変更。実測（print-test-score
+   の代表的な1小節=約330論理px）から、段あたり4小節という一般的な組版密度に
+   収まる実寸相当のスケールとして選んだ。
+
+さらに、この変更に伴い `ScorePage.tsx` の `plannedRanges`（`planSystemMeasureRanges()`
+呼び出し）が **VexFlow論理単位のまま**の `plannerMinimumWidths` と、
+**物理px単位**の `worstCaseSystemContentBudget()` を単位を揃えずに比較していた
+潜在バグも顕在化した（renderScale=1のときは論理px=物理pxで偶然一致していたが、
+0.4に変更すると常に「1小節でも予算超過」と誤判定される）。budget側を
+`worstCaseSystemContentBudget() / SCORE_LAYOUT_RENDER_SCALE` で論理単位へ
+逆変換して揃えるよう修正した。
+
+### 影響範囲
+
+- `src/utils/measureLayoutUtils.ts`: `SCORE_LAYOUT_RENDER_SCALE` の値、
+  `measurePlannerSafetyPadding()` のオプション追加、`planEffectiveMeasuresPerSystem()`
+  への `safetyOptions` パラメータ追加。
+- `src/components/ScorePage.tsx`: `plannerMinimumWidths` の長さ計算、
+  `effectiveTotalSystems` の下駄廃止、`plannedRanges` の単位変換、
+  `planEffectiveMeasuresPerSystem()` 呼び出しへ ensemble 判定を追加。
+
+### 検証
+
+- `docker compose run --rm app npx tsc --noEmit`: エラーなし。
+- `docker compose run --rm app npx vitest run`: 68ファイル890件成功
+  （既知の flaky である `SaveLoadButtons.test.tsx` のローディング状態テストも
+  今回は成功）。
+- ブラウザ（`.claude/launch.json` の `dev-alt`、port 5175）で
+  `test-data/print-test-score.json`（24小節・段あたり4小節）を読込:
+  修正前は8ページ・30段（1小節/段が24本・4小節/段が6本）だったのが、
+  修正後は **2ページ・8段（すべて4小節/段、末尾は編集用の空小節）** になった。
+  DOM の `[data-measure]` 属性で各段が実際に4つの異なる小節を描画している
+  ことを確認。コンソールエラーなし。
+- `test-data/complex-test-score.json`（48小節）を読込: 修正前は10ページ・
+  38段＋「最小の1小節/段でも紙幅を超えます」の赤い警告バナーが出ていたが、
+  修正後は **4ページ・15段**（大半が4小節/段、密な小節を含む段だけ2小節/段）
+  になり、警告バナーは表示されなくなった（`hasUnavoidableOverflow: false`）。
+  64分音符16連符を含む密な小節はスクリーンショットで確認した限り、隣の
+  小節へめり込まず自分の小節幅に収まっている。段またぎのスラーも接続を
+  維持している。コンソールエラーなし。

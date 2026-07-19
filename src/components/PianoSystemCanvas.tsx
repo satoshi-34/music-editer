@@ -64,7 +64,18 @@ import { getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBea
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
-import { combinedMeasureMinimumContentWidth } from '../utils/measureLayoutUtils';
+import {
+  allocateCombinedMeasureWidths,
+  combinedMeasureMinimumContentWidth,
+  measurePlannerSafetyPadding,
+  SCORE_LAYOUT_RENDER_SCALE,
+  SYSTEM_FIRST_CLEF_PADDING,
+  SYSTEM_PAGE_SIDE_PADDING,
+  SYSTEM_TARGET_FILL,
+  vexFlowCombinedMeasureMinimumContentWidth,
+} from '../utils/measureLayoutUtils';
+import { createVexFlowTuplets, vexFlowDotCount } from '../utils/vexFlowTimingUtils';
+import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 
 /* ===== 型 ===== */
@@ -79,6 +90,7 @@ type RenderedVoiceEntry = {
   sourceEvents: RenderNoteEvent[];
   vfNotes: StaveNote[];
   beams: Beam[];
+  tuplets: Tuplet[];
   voice: Voice;
 };
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
@@ -103,7 +115,7 @@ export type PartConfig = {
 };
 
 /* ===== レイアウト定数（SVGビューポートpx） ===== */
-const PAGE_LEFT = 4, PAGE_RIGHT = 4;
+const PAGE_LEFT = SYSTEM_PAGE_SIDE_PADDING, PAGE_RIGHT = SYSTEM_PAGE_SIDE_PADDING;
 const FIRST_STAVE_Y = 20;
 const STAVE_SPACING = 80; // 段と段の間隔（Y方向）
 function computeLayout(n: number): { staveYs: number[]; sysH: number } {
@@ -113,8 +125,8 @@ function computeLayout(n: number): { staveYs: number[]; sysH: number } {
 }
 
 /* ===== 幅計算 ===== */
-const TARGET_FILL = 0.99;
-const CLEF_PAD_FIRST = 50;
+const TARGET_FILL = SYSTEM_TARGET_FILL;
+const CLEF_PAD_FIRST = SYSTEM_FIRST_CLEF_PADDING;
 
 /* ===== ヒット領域 ===== */
 const CELL_PAD = 6, HIT_MIN_W = 14;
@@ -495,22 +507,22 @@ function makeVFNote(
   };
   if(ev.isRest){
     if (renderAsGhostRest) {
-      return new GhostNote({ duration: vd });
+      return new GhostNote({ duration: vd, dots: vexFlowDotCount(ev.dots) });
     }
     const eventRestKey = ev.keys[0] || defaultRestKeyForClef(clef);
     const renderRestKey = eventRestKey === defaultRestKeyForClef(clef)
       ? (restKeyOverride ?? restKeyForClef(clef))
       : eventRestKey;
-    return attachDots(new StaveNote({clef,keys:[renderRestKey],duration:vd+'r'}));
+    return attachDots(new StaveNote({clef,keys:[renderRestKey],duration:vd+'r',dots:vexFlowDotCount(ev.dots)}));
   }
   // keys が空の場合は全休符にフォールバック
   if(!ev.keys||ev.keys.length===0){
     if (renderAsGhostRest) {
-      return new GhostNote({ duration: vd });
+      return new GhostNote({ duration: vd, dots: vexFlowDotCount(ev.dots) });
     }
-    return attachDots(new StaveNote({clef,keys:[restKeyOverride ?? restKeyForClef(clef)],duration:vd+'r'}));
+    return attachDots(new StaveNote({clef,keys:[restKeyOverride ?? restKeyForClef(clef)],duration:vd+'r',dots:vexFlowDotCount(ev.dots)}));
   }
-  const n=new StaveNote({clef,keys:ev.keys,duration:vd});
+  const n=new StaveNote({clef,keys:ev.keys,duration:vd,dots:vexFlowDotCount(ev.dots)});
   if (stemDirection) {
     // 2 voice では「上声は上向き、下声は下向き」が読みやすさの基本になる。
     // ここで明示しておくと、VexFlow の自動判定に任せたときのばらつきを減らせる。
@@ -746,10 +758,13 @@ type Props = {
   // 声部切り替えトグル: 0 = 声部1（上声・従来通り measure.events）、1 = 声部2（下声）。
   // 省略時は 0（従来互換）として扱う。
   activeVoiceIndex?: 0 | 1;
+  /** ScorePage の線形Plannerが計測済みの、現在システム内の小節幅。 */
+  plannedMeasureWidths?: number[];
+  incomingArcIndex?: Map<number, IncomingArcEntry[]>;
 };
 
 export default function PianoSystemCanvas({
-  measuresPerSystem=4, tool, scale=0.86,
+  measuresPerSystem=4, tool, scale=0.86, plannedMeasureWidths, incomingArcIndex,
   trebleData, bassData, onTrebleChange, onBassChange,
   partsConfig,
   showInstrumentLabels = false,
@@ -1518,38 +1533,66 @@ export default function PianoSystemCanvas({
       tiePreviewPath.style.display='none';
     });
 
-    const s=Math.max(0.75,Math.min(1.0,scale??1));
-    ctx.scale(s,s);
+    const requestedScale=SCORE_LAYOUT_RENDER_SCALE;
 
     /* -- 幅計算 -- */
     // パート名を表示するシステムでは、五線の左側に略称用の余白を作る。
     // 余白を作らずに text だけ置くと、画面端で Fl. や Vln. が切れてしまう。
     const labelW = showInstrumentLabels ? 74 : 0;
     const innerW=W-PAGE_LEFT-PAGE_RIGHT-labelW;
+    // 途中調号は最上段の小節データが正本。幅計測でも本描画と同じ正本を参照する。
+    const topPartMeasuresForKey = partsScore[0] ?? parts[0]?.data ?? [];
     // 全パートを1回の Formatter で合同フォーマットするため（拍の縦揃え）、
     // 小節の最低幅も「パート単体の最大」ではなく「全パートの開始拍の和集合」で
     // 見積もる。単体基準のままだと、右手と左手で拍がずれる密な小節
     // （例: 3連符 vs 8分音符）が最小幅を確保できず、隣の小節へはみ出す。
     const minWs=Array.from({length:measuresPerSystem},(_,i)=>{
+      const plannedWidth = plannedMeasureWidths?.[i];
+      if (plannedWidth != null && Number.isFinite(plannedWidth)) return plannedWidth;
       const ai=startMeasureIndex+i;
-      return combinedMeasureMinimumContentWidth(parts.map((_, pi) => {
+      const measuresAtPosition = parts.map((_, pi) => {
         const score=partsScore[pi]??[];
         return ai<score.length?score[ai]:undefined;
-      }));
+      });
+      const estimatedWidth = combinedMeasureMinimumContentWidth(measuresAtPosition);
+      const vexFlowWidth = vexFlowCombinedMeasureMinimumContentWidth(
+        measuresAtPosition,
+        [timeSignatureNumerator, timeSignatureDenominator],
+        {
+          measureIndex: ai,
+          keySignature: normalizedKeySignature,
+          parts: parts.map((part, pi) => ({
+            measures: partsScore[pi] ?? part.data,
+            keySignatureMeasures: topPartMeasuresForKey,
+            clef: resolveMeasureClef(partsScore[pi] ?? part.data, ai, part.clef),
+            keySignature: part.keySignature,
+          })),
+        },
+      );
+      // 旧データの編集中など VexFlow が計測できない場合だけ、従来の推定値を使う。
+      // 計測できる通常ケースでは実測幅を下限にするので、臨時記号や和音の張り出しも守れる。
+      // Planner と同じ小節単位の安全幅をここにも加え、途中調号などが「段の合計だけ」
+      // 広がるのではなく、該当小節自身へ配分されるようにする。
+      return Math.max(estimatedWidth, vexFlowWidth ?? 0) + measurePlannerSafetyPadding(measuresAtPosition);
     });
     const pad=CLEF_PAD_FIRST;
     const alloc=Math.max(0,innerW*TARGET_FILL-pad);
-    const sumMin=minWs.reduce((a,b)=>a+b,0);
-    const extra=Math.max(0,alloc-sumMin);
-    const contentWs=minWs.map(w=>w+extra/measuresPerSystem);
+    const widthAllocation=allocateCombinedMeasureWidths(minWs,alloc,requestedScale);
+    // scoreLayoutScale は画面の viewport 縮小とは独立した譜刻用倍率。
+    // ScorePage が最低 0.75 倍でも収まる段数を決めてから渡すため、ここで追加縮小しない。
+    const s=requestedScale;
+    // 通常経路では ScorePage の全体計画が必ず fit させる。単体Canvasや壊れた途中データで
+    // 例外的に入らない場合も、勝手な縮小はせず状態をDOMへ明示して親が検知できるようにする。
+    svg.dataset.layoutOverflow = widthAllocation.doesFit ? 'false' : 'true';
+    const contentWs=widthAllocation.contentWidths;
     const realWs=contentWs.map((w,i)=>i===0?w+pad:w);
     const totalW=realWs.reduce((a,b)=>a+b,0);
     let x=PAGE_LEFT+labelW+(innerW-totalW)/2;
+    ctx.scale(s,s);
 
     // 途中調号変更を段全体で先に解決しておく。
     // 調号は最上段（partsScore[0]）の小節データに保存し、下段の楽器はここから
     // パート固有の移調シフトをかけて使う（stave 生成ループと音符描画ループの両方で同じ値を使う）。
-    const topPartMeasuresForKey = partsScore[0] ?? parts[0]?.data ?? [];
     const baseGlobalKeySigForSystem = resolveMeasureKeySignature(topPartMeasuresForKey, startMeasureIndex - 1, normalizedKeySignature);
     const effectiveKeySigPerMeasure: KeySignature[] = [];
     {
@@ -2084,6 +2127,9 @@ export default function PianoSystemCanvas({
                 ? { stemDirection: beamStemDirection, maintainStemDirections: true }
                 : {}),
             });
+            // Tuplet の生成時に tick 倍率を音符へ反映する。合同 Formatter より後に
+            // 作ると、3連符などを通常音符の拍位置で整列してしまう。
+            const tuplets=createVexFlowTuplets(sourceEvents, vfNotes);
             const voice=new Voice({
               time:{
                 num_beats: timeSignatureNumerator,
@@ -2105,6 +2151,7 @@ export default function PianoSystemCanvas({
               sourceEvents,
               vfNotes,
               beams,
+              tuplets,
               voice,
             };
           })
@@ -2152,7 +2199,7 @@ export default function PianoSystemCanvas({
         const cache = partVoiceCache[pi];
         if (!cache) return;
         const {
-          clefHere, data, safeEvs, partKeyForAccidental,
+          clefHere, safeEvs, partKeyForAccidental,
           isMultiVoiceMeasure, renderedVoiceEntries, primaryRenderedVoice, vfNotes,
         } = cache;
         const stave=staveSets[pi][i];
@@ -2190,29 +2237,15 @@ export default function PianoSystemCanvas({
         renderedVoiceEntries.forEach((entry) => {
           try{entry.voice.draw(ctx,stave);}catch{}
           entry.beams.forEach(b=>b.setContext(ctx).draw());
-        });
-
-        // 連符（tuplet）の描画: StaffCanvas と同じロジックで、同じ tuplet.id を持つ
-        // 連続イベントをまとめて Tuplet でくくる。
-        try {
-          let tIdx = 0;
-          while (tIdx < safeEvs.length) {
-            const tupletId = safeEvs[tIdx].tuplet?.id;
-            if (!tupletId) { tIdx += 1; continue; }
-            let tEnd = tIdx;
-            while (tEnd + 1 < safeEvs.length && safeEvs[tEnd + 1].tuplet?.id === tupletId) tEnd += 1;
-            const groupNotes = vfNotes.slice(tIdx, tEnd + 1);
-            const info = safeEvs[tIdx].tuplet!;
-            if (groupNotes.length > 0) {
-              const tuplet = new Tuplet(groupNotes as any, { numNotes: info.numNotes, notesOccupied: info.notesOccupied });
+          entry.tuplets.forEach(tuplet => {
+            try {
               (tuplet as any).setContext?.(ctx);
               tuplet.draw();
+            } catch (tupletError) {
+              console.error('連符の描画でエラーが発生しました:', tupletError);
             }
-            tIdx = tEnd + 1;
-          }
-        } catch (tupletError) {
-          console.error('連符の描画でエラーが発生しました:', tupletError);
-        }
+          });
+        });
 
         // タイ描画用に音符データを収集（小節ループ後にパートごとまとめて処理）
         safeEvs.forEach((ev,j)=>{
@@ -3406,7 +3439,6 @@ export default function PianoSystemCanvas({
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
     pendingArcsP.forEach(({partIndex,arc,arcIndex,startNote,startStave,startMeasureIdx,startEventIdx})=>{
       const dest=notePositionMapP.get(`${partIndex}-${arc.toMeasureIndex}-${arc.toEventIndex}`);
-      if(!dest)return;
       const clef=parts[partIndex]?.clef??'treble';
       const kl=(k:string)=>keyToLineForClef(clef,k);
 
@@ -3419,6 +3451,25 @@ export default function PianoSystemCanvas({
         selectedArc.fromMeasure===startMeasureIdx&&
         selectedArc.fromEvent===startEventIdx&&
         selectedArc.arcIndex===arcIndex;
+
+      // 可変rangeでは終点が別Canvasにあり得る。従来はここでreturnして開始側の
+      // segment自体が消えていたため、開始音符から現在段右端までを先に描く。
+      if(!dest){
+        try{
+          type R=Record<string,(...a:unknown[])=>unknown>;
+          const bb=(startNote as unknown as R)['getBoundingBox']?.() as{getX:()=>number;getW:()=>number}|undefined;
+          const absX=((startNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
+          const x1=bb?bb.getX()+bb.getW():absX+4;
+          const fromLine=kl(arc.fromKey);
+          let upward=fromLine<2;
+          if(arc.flipDirection)upward=!upward;
+          const y=startStave.getYForLine(fromLine)+(upward?-3:3)+startDy;
+          const stemDir=((startNote as unknown as R)['getStemDirection']?.() as number|undefined)??0;
+          const edgeX=startStave.getX()+startStave.getWidth();
+          drawArcPathP(x1+startDx,y,edgeX+(arc.breakEndDx??0),y+(arc.breakEndDy??0),upward,arc.kind,stemDir,y,cpDyOffset,arcKey+'-1',isSelected,undefined,undefined,startDx,startDy,arc.breakEndDx??0,arc.breakEndDy??0);
+        }catch{/* 段境界でも本文描画を止めない */}
+        return;
+      }
 
       let allLines:number[]|undefined;
       let allNoteYs:number[]|undefined;
@@ -3489,6 +3540,36 @@ export default function PianoSystemCanvas({
         }catch{/* 保険 */}
       }
     });
+
+    // 終点側Canvas: 範囲外の開始音符を持つ arc をスコア全体から逆引きし、段頭から
+    // 終点へ向かう第2segmentを描く。start/count が可変でも絶対小節番号で照合する。
+    Array.from({ length: measuresPerSystem }, (_, offset) => startMeasureIndex + offset)
+      .flatMap((targetMeasure) => incomingArcIndex?.get(targetMeasure) ?? [])
+      .forEach(({ partIndex, fromMeasure, fromEvent, arcIndex, arc }) => {
+          const targetKey=`${partIndex}-${arc.toMeasureIndex}-${arc.toEventIndex}`;
+          const dest=notePositionMapP.get(targetKey);
+          // 開始音符がこのCanvas内なら既存のpendingArcsPが両segmentを描くので重複しない。
+          if(!dest || notePositionMapP.has(`${partIndex}-${fromMeasure}-${fromEvent}`)) return;
+          try{
+            const clef=parts[partIndex]?.clef??'treble';
+            // 段またぎの上下方向は終点音ではなく、開始側の fromKey で一度だけ決める。
+            // d5→b4 のように高さが大きく変わっても -1/-2 segment のふくらみをそろえる。
+            const fromLine=keyToLineForClef(clef,arc.fromKey);
+            const toLine=keyToLineForClef(clef,arc.toKey);
+            let upward=fromLine<2;
+            if(arc.flipDirection)upward=!upward;
+            type R=Record<string,(...a:unknown[])=>unknown>;
+            const bb=(dest.note as unknown as R)['getBoundingBox']?.() as{getX:()=>number}|undefined;
+            const absX=((dest.note as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
+            const x2=bb?bb.getX():absX-4;
+            // 方向は開始音のまま保つ一方、終点座標は実際の toKey の五線位置を使う。
+            const y=dest.stave.getYForLine(toLine)+(upward?-3:3)+(arc.endDy??0);
+            const edgeX=dest.stave.getX();
+            const baseKey=`${partIndex}-${fromMeasure}-${fromEvent}-${arcIndex}`;
+            const selectedHere=selectedArc!==null&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
+            drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0);
+          }catch{/* 壊れた旧arcでも他の譜面描画を止めない */}
+      });
 
     // ── 松葉（ヘアピン）を一括描画（全パート・全小節レンダリング後に実行） ─────
     // 五線の下（強弱記号と同じ高さ帯）に、開始音符から終了音符まで開く/閉じる2本線を描く

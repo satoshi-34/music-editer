@@ -948,6 +948,14 @@ button.ghost:disabled {
   flex-direction: column;
   justify-content: space-evenly;
 }
+.layout-overflow-alert {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  font-size: 12px;
+}
 .page-number { font-variant-numeric: tabular-nums; }
 
 /* ===== クリック当たり判定（小節全体の矩形） ===== */
@@ -1048,6 +1056,8 @@ button.ghost:disabled {
      ページ末尾の段が次の紙へ押し出されてしまう */
   body { background: #fff !important; margin: 0 !important; }
   .toolbar { display: none !important; }
+  /* 入力を直すための画面上の警告であり、演奏用の印刷譜には出さない。 */
+  .layout-overflow-alert { display: none !important; }
   /* 固定ツールバー分の逃し（padding-top: 60px）も印刷では不要。
      残すと1枚目だけ60px下へずれ、ページ末尾が次の紙へ押し出される */
   .app-root { padding-top: 0 !important; }

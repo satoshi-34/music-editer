@@ -7,6 +7,8 @@ import type { MeasureData, TimeSignature, CustomSymbolDef } from '../types/stora
 import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
+import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
+import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 
 // パート譜表示（PartExtractionStaff）からも同じ clef/楽器定義を使うため export する
 export const QUARTET_PART_CONFIGS: Omit<PartConfig, 'data' | 'onChange'>[] = [
@@ -36,6 +38,9 @@ type Props = {
   // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
   // 省略時は全段を印刷する。画面表示には影響しない。
   printVisibleSystems?: number;
+  plannedMeasureWidths?: number[];
+  systemRanges?: SystemMeasureRange[];
+  incomingArcIndex?: Map<number, IncomingArcEntry[]>;
 };
 
 export default function QuartetStaff({
@@ -55,12 +60,12 @@ export default function QuartetStaff({
   timeSignature = [4, 4],
   onKeySignatureChange,
   customSymbolDefs,
-  printVisibleSystems,
+  printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
     <div className="system-stack">
-      {Array.from({ length: systems }, (_, i) => {
+      {Array.from({ length: systemRanges?.length ?? systems }, (_, i) => {
         const partsConfig: PartConfig[] = QUARTET_PART_CONFIGS.map((cfg, pi) => ({
           ...cfg,
           data: partsData[pi] ?? [],
@@ -70,12 +75,12 @@ export default function QuartetStaff({
           // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
           <div key={i} className={printVisibleSystems != null && i >= printVisibleSystems ? 'print-hidden-system' : undefined}>
           <PianoSystemCanvas
-            measuresPerSystem={measuresPerSystem}
+            measuresPerSystem={systemRanges?.[i]?.count ?? measuresPerSystem}
             tool={tool}
             scale={scale}
             partsConfig={partsConfig}
             showInstrumentLabels={i === 0}
-            startMeasureIndex={startMeasureIndex + i * measuresPerSystem}
+            startMeasureIndex={systemRanges?.[i]?.start ?? startMeasureIndex + i * measuresPerSystem}
             disabled={disabled}
             yOffset={yOffset}
             currentInstrument={currentInstrument}
@@ -85,6 +90,8 @@ export default function QuartetStaff({
             timeSignature={timeSignature}
             onKeySignatureChange={onKeySignatureChange}
             customSymbolDefs={customSymbolDefs}
+            plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
+            incomingArcIndex={incomingArcIndex}
           />
           </div>
         );

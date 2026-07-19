@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament, Dot, Tuplet } from 'vexflow';
+import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament, Dot } from 'vexflow';
 import type { Tool } from './Palette';
 import type { TieArc, HairpinMark, MeasureData, NoteEvent, DurKey, TimeSignature, AdjustableSymbolKind } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
@@ -54,6 +54,8 @@ import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTi
 import { defaultRestDisplayKey, restKey as restFormatterKey, lineToKey as lineToKeyForClef, keyToLine as keyToLineForClef, type ClefType } from './clefUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
+import { createVexFlowTuplets, vexFlowDotCount } from '../utils/vexFlowTimingUtils';
+import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
@@ -76,6 +78,9 @@ type Props = {
   systems?: number;
   gap?: number;
   measuresPerSystem?: number;
+  /** ScorePage の可変range経由ではこの段の小節数を維持する。 */
+  rangeLocked?: boolean;
+  incomingArcIndex?: Map<number, IncomingArcEntry[]>;
   tool: Tool;
   scale?: number;
   initialScoreData?: MeasureData[];
@@ -664,14 +669,14 @@ function makeVFNote(
     const renderRestKey = eventRestKey === defaultRestKeyForClef(clef)
       ? restKeyForClef(clef)
       : eventRestKey;
-    const n = new StaveNote({ clef, keys: [renderRestKey], duration: (vfDur as VFDur) + 'r' });
+    const n = new StaveNote({ clef, keys: [renderRestKey], duration: (vfDur as VFDur) + 'r', dots: vexFlowDotCount(ev.dots) });
     return attachDots(n);
   }
   // keys が空の場合は全休符にフォールバック
   if (!ev.keys || ev.keys.length === 0) {
-    return attachDots(new StaveNote({ clef, keys: [restKeyForClef(clef)], duration: (vfDur as VFDur) + 'r' }));
+    return attachDots(new StaveNote({ clef, keys: [restKeyForClef(clef)], duration: (vfDur as VFDur) + 'r', dots: vexFlowDotCount(ev.dots) }));
   }
-  const n = new StaveNote({ clef, keys: ev.keys, duration: vfDur });
+  const n = new StaveNote({ clef, keys: ev.keys, duration: vfDur, dots: vexFlowDotCount(ev.dots) });
   // 小節内の過去状態を見て、「今ここで本当に見せるべき臨時記号」だけを付ける。
   // prevMeasureState がある場合は前の小節の最終状態も参照し、
   // 小節線を超えて自然音に戻る音にはカッコ付き臨時記号（courtesy accidental）を表示する。
@@ -830,7 +835,7 @@ function logNoteAddition(measureIndex: number, x: number, y: number, key: string
 }
 
 export default function StaffCanvas({
-  systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
+  systems = 6, gap = 110, measuresPerSystem = 4, rangeLocked = false, incomingArcIndex, tool, scale = 0.86,
   initialScoreData, onScoreDataChange, startMeasureIndex = 0, disabled = false,
   clef = 'treble', yOffset = 0, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   timeSignature = [4, 4],
@@ -1842,7 +1847,11 @@ export default function StaffCanvas({
       const CLEF_PAD_THIS = (line === 0) ? CLEF_PAD_FIRST : CLEF_PAD_OTHER;
 
       // 何小節入れるか試す
-      const candidates = [measuresPerSystem, 3, 2, 1].filter((v,i,a)=>a.indexOf(v)===i);
+      // ScorePage 経由では effectiveMeasuresPerSystem が通常の段数を決める。一方で
+      // 単体利用・壊れた編集中データでは、この従来の候補列が安全網になる。
+      const candidates = rangeLocked
+        ? [measuresPerSystem]
+        : [measuresPerSystem, 3, 2, 1].filter((v,i,a)=>a.indexOf(v)===i);
       let chosen = 1, widths: number[] = [], startX = left;
 
       const tryFit = (n: number) => {
@@ -1983,6 +1992,9 @@ export default function StaffCanvas({
         prevMeasureAccidentalState = snapshotAccidentalState(accidentalState);
 
         const beams = Beam.generateBeams(vfNotes, { beamRests: false });
+        // Tuplet は生成時に各音符の tick を連符比率へ変換するため、Voice/Formatter の前に作る。
+        // ここを描画直前にすると、横配置だけ通常音符の時間で計算されてしまう。
+        const tuplets = createVexFlowTuplets(safeEvents, vfNotes);
         // この小節の有効拍子で Voice を生成する（途中拍子変更対応）
         const voice = new Voice({
           time: {
@@ -2064,28 +2076,14 @@ export default function StaffCanvas({
         }
         beams.forEach(b => b.setContext(ctx).draw());
 
-        // 連符（tuplet）の描画: 同じ tuplet.id を持つ連続イベントをひとまとめにして
-        // VexFlow の Tuplet でくくる（「3」の数字とブラケットが表示される）。
-        // beam の描画より後に行うことで、符幹の向き確定後のノートを正しく束ねられる。
-        try {
-          let tIdx = 0;
-          while (tIdx < safeEvents.length) {
-            const tupletId = safeEvents[tIdx].tuplet?.id;
-            if (!tupletId) { tIdx += 1; continue; }
-            let tEnd = tIdx;
-            while (tEnd + 1 < safeEvents.length && safeEvents[tEnd + 1].tuplet?.id === tupletId) tEnd += 1;
-            const groupNotes = vfNotes.slice(tIdx, tEnd + 1);
-            const info = safeEvents[tIdx].tuplet!;
-            if (groupNotes.length > 0) {
-              const tuplet = new Tuplet(groupNotes, { numNotes: info.numNotes, notesOccupied: info.notesOccupied });
-              (tuplet as any).setContext?.(ctx);
-              tuplet.draw();
-            }
-            tIdx = tEnd + 1;
+        tuplets.forEach(tuplet => {
+          try {
+            (tuplet as any).setContext?.(ctx);
+            tuplet.draw();
+          } catch (tupletError) {
+            console.error('連符の描画でエラーが発生しました:', tupletError);
           }
-        } catch (tupletError) {
-          console.error('連符の描画でエラーが発生しました:', tupletError);
-        }
+        });
 
         // タイ描画用データを収集（行単位でまとめる lineNotes と arc ベースの 2 系統）
         safeEvents.forEach((ev, j) => {
@@ -3660,7 +3658,6 @@ export default function StaffCanvas({
     // arc.fromKey / arc.toKey を使って個別符頭の Y 座標で弧を描く
     pendingArcs.forEach(({ arc, arcIndex, startNote, startStave, startMeasureIdx, startEventIdx }) => {
       const dest = notePositionMap.get(`${arc.toMeasureIndex}-${arc.toEventIndex}`);
-      if (!dest) return; // この StaffCanvas の描画範囲外なら無視
 
       const arcKey = `${startMeasureIdx}-${startEventIdx}-${arcIndex}`;
       const cpDyOffset = arc.cpDyOffset ?? 0;
@@ -3670,6 +3667,23 @@ export default function StaffCanvas({
         selectedArc.fromMeasure === startMeasureIdx &&
         selectedArc.fromEvent   === startEventIdx   &&
         selectedArc.arcIndex    === arcIndex;
+
+      if (!dest) {
+        // 可変range境界: 終点が次Canvasでも開始側の右端segmentを残す。
+        try {
+          type R = Record<string, (...a: unknown[]) => unknown>;
+          const bb = (startNote as unknown as R)['getBoundingBox']?.() as { getX: () => number; getW: () => number } | undefined;
+          const x1 = bb ? bb.getX() + bb.getW() : (((startNote as unknown as R)['getAbsoluteX']?.() as number | undefined) ?? 0) + 4;
+          const fromLine = keyToLine(arc.fromKey);
+          let upward = fromLine < 2;
+          if (arc.flipDirection) upward = !upward;
+          const y = startStave.getYForLine(fromLine) + (upward ? -3 : 3) + startDy;
+          const edgeX = startStave.getX() + startStave.getWidth();
+          const stemDir = ((startNote as unknown as R)['getStemDirection']?.() as number | undefined) ?? 0;
+          drawArcPath(x1 + startDx, y, edgeX + (arc.breakEndDx ?? 0), y + (arc.breakEndDy ?? 0), upward, arc.kind, stemDir, y, cpDyOffset, arcKey + '-1', isSelected, undefined, undefined, startDx, startDy, arc.breakEndDx ?? 0, arc.breakEndDy ?? 0);
+        } catch { /* 保険 */ }
+        return;
+      }
 
       // スラーの場合: 開始〜終了の全音符ライン番号とY座標を収集する
       // allLines → 方向（upward）の決定に使う
@@ -3716,8 +3730,8 @@ export default function StaffCanvas({
           const x2 = bb2 ? bb2.getX() : absX2 - 4;
           const fromLine = keyToLine(arc.fromKey);
           const toLine   = keyToLine(arc.toKey);
-          const avgLines = (allLines && allLines.length > 0) ? allLines : [fromLine, toLine];
-          let upward = avgLines.reduce((s, l) => s + l, 0) / avgLines.length < 2;
+          // 段またぎの両segmentは開始側fromKeyで同じ方向を使う。
+          let upward = fromLine < 2;
           if (arc.flipDirection) upward = !upward;
           const y1 = startStave.getYForLine(fromLine) + (upward ? -3 : 3);
           const y2 = dest.stave.getYForLine(toLine)   + (upward ? -3 : 3);
@@ -3751,6 +3765,29 @@ export default function StaffCanvas({
         } catch { /* 保険 */ }
       }
     });
+
+    // 終点側rangeでは開始音符がこのCanvasに無い。絶対小節番号で過去arcを見つけ、
+    // 段左端から終点へ第2segmentを描く（固定MPS境界にも同じ処理を使える）。
+    Array.from({ length: systems * measuresPerSystem }, (_, offset) => startMeasureIndex + offset)
+      .flatMap((targetMeasure) => incomingArcIndex?.get(targetMeasure) ?? [])
+      .forEach(({ fromMeasure, fromEvent, arcIndex, arc }) => {
+        const dest = notePositionMap.get(`${arc.toMeasureIndex}-${arc.toEventIndex}`);
+        if (!dest || notePositionMap.has(`${fromMeasure}-${fromEvent}`)) return;
+        try {
+          const fromLine = keyToLine(arc.fromKey);
+          let upward = fromLine < 2;
+          if (arc.flipDirection) upward = !upward;
+          type R = Record<string, (...a: unknown[]) => unknown>;
+          const bb = (dest.note as unknown as R)['getBoundingBox']?.() as { getX: () => number } | undefined;
+          const x2 = bb ? bb.getX() : (((dest.note as unknown as R)['getAbsoluteX']?.() as number | undefined) ?? 0) - 4;
+          const toLine = keyToLine(arc.toKey);
+          const y = dest.stave.getYForLine(toLine) + (upward ? -3 : 3) + (arc.endDy ?? 0);
+          const edgeX = dest.stave.getX();
+          const key = `${fromMeasure}-${fromEvent}-${arcIndex}`;
+          const selectedHere = selectedArc !== null && selectedArc.fromMeasure === fromMeasure && selectedArc.fromEvent === fromEvent && selectedArc.arcIndex === arcIndex;
+          drawArcPath(edgeX + (arc.breakStartDx ?? 0), y + (arc.breakStartDy ?? 0), x2 + (arc.endDx ?? 0), y, upward, arc.kind, 0, y, arc.cpDyOffset2 ?? 0, key + '-2', selectedHere, undefined, undefined, arc.breakStartDx ?? 0, arc.breakStartDy ?? 0, arc.endDx ?? 0, arc.endDy ?? 0);
+        } catch { /* 保険 */ }
+      });
 
     // ── 松葉（ヘアピン）を一括描画（全小節レンダリング後に実行） ─────
     // 五線の下（強弱記号と同じ高さ帯）に、開始音符から終了音符まで開く/閉じる2本線を描く
@@ -3803,7 +3840,7 @@ export default function StaffCanvas({
         });
       }
     });
-  }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, selectedHairpin, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures]);
+  }, [systems, gap, measuresPerSystem, rangeLocked, score, tool, scale, selected, selectedArc, selectedHairpin, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures]);
 
   /**
    * 途中拍子変更を確定する。

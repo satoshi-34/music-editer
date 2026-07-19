@@ -60,10 +60,22 @@ import {
 import {
   KEY_SIGNATURE_OPTIONS,
   normalizeKeySignature,
+  TRANSPOSITION_WRITTEN_OFFSET_SEMITONES,
   type KeySignature
 } from '../utils/noteKeyUtils';
 import { transposeMeasureRange } from '../utils/transposeUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
+import { buildIncomingArcIndex } from '../utils/incomingArcUtils';
+import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
+import {
+  planEffectiveMeasuresPerSystem,
+  SCORE_LAYOUT_RENDER_SCALE,
+  MIN_MEASURE_CONTENT_WIDTH,
+  worstCaseSystemContentBudget,
+  planSystemMeasureRanges,
+  type SystemMeasureRange,
+  type MeasureLayoutPartContext,
+} from '../utils/measureLayoutUtils';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
   sanitizePlaybackRuntimeSettings,
@@ -82,7 +94,7 @@ import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHis
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 
-type PageSpec = { systems: number };
+type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
@@ -1964,11 +1976,103 @@ export default function ScorePage() {
           : [rightHandData ?? []];
     return activeParts.reduce((max, part) => Math.max(max, trimTrailingEmptyMeasures(part).length), 0);
   }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts]);
+  const layoutParts = useMemo((): MeasureLayoutPartContext[] => {
+    if (scoreType === 'piano') {
+      const keySignatureMeasures = rightHandData ?? [];
+      return [
+        { measures: rightHandData ?? [], keySignatureMeasures, clef: 'treble' },
+        { measures: leftHandData ?? [], keySignatureMeasures, clef: 'bass' },
+      ];
+    }
+    if (scoreType === 'quartet') {
+      const keySignatureMeasures = quartetParts[0] ?? [];
+      return QUARTET_PART_CONFIGS.map((part, index) => ({
+        measures: quartetParts[index] ?? [], keySignatureMeasures, clef: part.clef,
+      }));
+    }
+    if (scoreType === 'ensemble') {
+      const keySignatureMeasures = ensembleParts[0] ?? [];
+      return instrumentation.parts.map((part, index) => ({
+        measures: ensembleParts[index] ?? [], keySignatureMeasures, clef: part.clef,
+      }));
+    }
+    return [{ measures: rightHandData ?? [], clef: 'treble' }];
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, instrumentation.parts]);
+  const incomingArcIndex = useMemo(
+    () => buildIncomingArcIndex(layoutParts.map((part) => part.measures)),
+    [layoutParts],
+  );
+  // 記譜音表示ではアーク端点の音高も表示用に移調される。
+  // ページや段ごとに全パートを走査し直さず、ScorePage で一度だけ表示空間の索引を作る。
+  const ensembleDisplayIncomingArcIndex = useMemo(() => {
+    if (scoreType !== 'ensemble' || notationMode !== 'written') return incomingArcIndex;
+    return buildIncomingArcIndex(instrumentation.parts.map((part, index) => {
+      const semitones = TRANSPOSITION_WRITTEN_OFFSET_SEMITONES[part.transposition] ?? 0;
+      const measures = ensembleParts[index] ?? [];
+      return transposeMeasuresForDisplay(measures, semitones);
+    }));
+  }, [scoreType, notationMode, incomingArcIndex, instrumentation.parts, ensembleParts]);
+  const partExtractionIncomingArcIndex = useMemo(() => {
+    if (!isPartExtractionActive || !partExtractionSelection) return incomingArcIndex;
+    const measures = scoreType === 'ensemble'
+      ? ensembleParts[partExtractionSelection.index] ?? []
+      : scoreType === 'quartet'
+        ? quartetParts[partExtractionSelection.index] ?? []
+        : [];
+    // 抽出譜のCanvasはパート配列を要素0として描くため、索引も選択パートだけで作り直す。
+    // 編成譜の記譜音表示では、通常譜と同じ表示空間（移調後）の端点を索引化する。
+    const semitones = scoreType === 'ensemble' && notationMode === 'written'
+      ? TRANSPOSITION_WRITTEN_OFFSET_SEMITONES[instrumentation.parts[partExtractionSelection.index]?.transposition] ?? 0
+      : 0;
+    return buildIncomingArcIndex([transposeMeasuresForDisplay(measures, semitones)]);
+  }, [isPartExtractionActive, partExtractionSelection, scoreType, notationMode, ensembleParts, quartetParts, instrumentation.parts, incomingArcIndex]);
+  const effectiveMeasurePlan = useMemo(() => planEffectiveMeasuresPerSystem(
+    layoutParts,
+    scoreTimeSignature,
+    normalizeKeySignature(keySignature),
+    measuresPerSystem,
+    worstCaseSystemContentBudget(),
+    SCORE_LAYOUT_RENDER_SCALE,
+    // Ensemble の記譜音表示だけ、移調後に臨時記号が増える最悪ケースの安全マージンを見込む。
+    // ピアノ・四重奏はここで盛ると実際に表示されない臨時記号ぶんまで幅を確保してしまい、
+    // 1段に入る小節数が不当に減る（読込直後にほぼ全小節が1小節/段へ膨張する不具合の一因）。
+    { includeTranspositionAccidentalWorstCase: scoreType === 'ensemble' },
+  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType]);
+  const plannerMinimumWidths = useMemo(() => {
+    // 末尾の空小節は「入力を続けられるように」数小節ぶんの余白段だけ残す。
+    // 以前は totalSystems(12) × measuresPerSystem を固定の編集枠としていたが、
+    // 段あたりの実小節数（effectiveMeasuresPerSystem）を無視して常に48スロットぶんを
+    // 計画してしまい、末尾の空小節からも余分な段が大量に生まれる原因になっていた。
+    const editingBufferMeasures = Math.max(effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem) * 2;
+    const length = Math.max(contentMeasureCount + editingBufferMeasures, effectiveMeasurePlan.minimumWidths.length);
+    return Array.from({ length }, (_, index) => (
+      effectiveMeasurePlan.minimumWidths[index] ?? MIN_MEASURE_CONTENT_WIDTH
+    ));
+  }, [contentMeasureCount, effectiveMeasurePlan.minimumWidths, effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem]);
+  const plannedRanges = useMemo(() => planSystemMeasureRanges(
+    // plannerMinimumWidths は（Canvas 描画にそのまま渡せるよう）VexFlow の論理単位のまま。
+    // 一方 worstCaseSystemContentBudget() は物理ページ幅（SCORE_LAYOUT_RENDER_SCALE 倍後）
+    // なので、そのまま比較すると単位が食い違い常に「1小節でも予算超過」と誤判定してしまう
+    // （読込直後にほぼ全小節が1小節/段へ膨張する不具合の一因）。budget 側を論理単位へ
+    // 逆変換して揃える。
+    plannerMinimumWidths,
+    measuresPerSystem,
+    worstCaseSystemContentBudget() / SCORE_LAYOUT_RENDER_SCALE,
+  ), [plannerMinimumWidths, measuresPerSystem]);
+  const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
+  // 表示する段数は plannedRanges（内容＋末尾の編集用余白）にそのまま従う。
+  // 以前は固定 totalSystems(12) を下回らないよう底上げしていたが、これだと
+  // 内容が少ない曲でも常に12段ぶんの空段が画面に出てしまうため廃止した。
+  // 編集を続けるための余白は plannerMinimumWidths 側の editingBufferMeasures で確保済み。
+  const effectiveTotalSystems = Math.max(1, plannedRanges.length);
   // 完全に空の楽譜でも最低1段は印刷する（白紙が出るより五線だけの1段が自然なため）
-  const printContentSystems = Math.max(1, Math.ceil(contentMeasureCount / measuresPerSystem));
+  const printContentSystems = Math.max(1, plannedRanges.filter((range) => range.start < contentMeasureCount).length);
   const pages: PageSpec[] = useMemo(
-    () => Array.from({ length: Math.ceil(totalSystems / systemsPerPage) }, () => ({ systems: systemsPerPage })),
-    [totalSystems, systemsPerPage]
+    () => Array.from({ length: Math.ceil(effectiveTotalSystems / systemsPerPage) }, (_, pageIndex) => {
+      const systemRanges = plannedRanges.slice(pageIndex * systemsPerPage, (pageIndex + 1) * systemsPerPage);
+      return { systems: systemRanges.length || systemsPerPage, systemRanges };
+    }),
+    [effectiveTotalSystems, systemsPerPage, plannedRanges]
   );
 
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
@@ -2875,6 +2979,11 @@ export default function ScorePage() {
                   '--score-stroke-width': displayWeight === 'thin' ? '0.8' : displayWeight === 'thick' ? '1.8' : '1.2',
                   '--score-text-weight': displayWeight === 'thin' ? '300' : displayWeight === 'thick' ? '700' : '400',
                 } as React.CSSProperties}>
+                  {effectiveMeasurePlan.hasUnavoidableOverflow && (
+                    <p role="alert" className="layout-overflow-alert">
+                      この小節は最小の1小節/段でも紙幅を超えます。音符を減らすか、用紙設定を広げてください。
+                    </p>
+                  )}
                   {isPartExtractionActive && scoreType === 'ensemble' ? (
                     // パート譜表示（編成譜）: instrumentationParts/partsData/onPartChange を
                     // 選択中パート1件だけに絞って EnsembleStaff へ渡す。
@@ -2883,14 +2992,17 @@ export default function ScorePage() {
                     // 調号シフトなどのロジックもそのまま流用できる）。
                     <EnsembleStaff
                       systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={partExtractionIncomingArcIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={scale}
+                      scale={SCORE_LAYOUT_RENDER_SCALE}
                       instrumentationParts={[instrumentation.parts[partExtractionSelection!.index]]}
                       partsData={[ensembleParts[partExtractionSelection!.index] ?? []]}
                       onPartChange={[() => {}]}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? i * systemsPerPage * measuresPerSystem}
                       disabled
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -2906,12 +3018,15 @@ export default function ScorePage() {
                     // 単一パート用の PartExtractionStaff（PianoSystemCanvas を直接1段だけ呼ぶ）を使う。
                     <PartExtractionStaff
                       systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={partExtractionIncomingArcIndex}
                       measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={scale}
+                      scale={SCORE_LAYOUT_RENDER_SCALE}
                       partConfig={QUARTET_PART_CONFIGS[partExtractionSelection!.index]}
                       data={quartetParts[partExtractionSelection!.index] ?? []}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? i * systemsPerPage * measuresPerSystem}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
@@ -2923,14 +3038,17 @@ export default function ScorePage() {
                   ) : scoreType === 'ensemble' ? (
                     <EnsembleStaff
                       systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={ensembleDisplayIncomingArcIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={scale}
+                      scale={SCORE_LAYOUT_RENDER_SCALE}
                       instrumentationParts={instrumentation.parts}
                       partsData={ensembleParts}
                       onPartChange={instrumentation.parts.map((_, pi) => handleEnsemblePartChange(pi))}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? i * systemsPerPage * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -2945,13 +3063,16 @@ export default function ScorePage() {
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
                       systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={incomingArcIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={scale}
+                      scale={SCORE_LAYOUT_RENDER_SCALE}
                       partsData={quartetParts}
                       onPartChange={[0, 1, 2, 3].map(pi => handleQuartetPartChange(pi))}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? i * systemsPerPage * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -2965,16 +3086,19 @@ export default function ScorePage() {
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
                       systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={incomingArcIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - i * systemsPerPage))}
                       gap={110}
                       measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(i * systemsPerPage * effectiveMeasuresPerSystem, (i + 1) * systemsPerPage * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={scale}
+                      scale={SCORE_LAYOUT_RENDER_SCALE}
                       rightHandData={rightHandData}
                       leftHandData={leftHandData}
                       onRightHandChange={handleRightHandChange}
                       onLeftHandChange={handleLeftHandChange}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? i * systemsPerPage * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -2989,28 +3113,35 @@ export default function ScorePage() {
                       activeVoiceIndex={activeVoice}
                     />
                   ) : (
-                    <StaffCanvas
-                      systems={p.systems}
-                      gap={110}
-                      measuresPerSystem={measuresPerSystem}
-                      tool={tool}
-                      scale={scale}
-                      clef="treble"
-                      initialScoreData={rightHandData}
-                      onScoreDataChange={handleScoreDataChange}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
-                      disabled={isEditingDisabled}
-                      yOffset={yOffset}
-                      currentInstrument={currentInstrument}
-                      onPreviewNoteEvent={handleInputNotePreview}
-                      previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
-                      keySignature={keySignature}
-                      timeSignature={scoreTimeSignature}
-                      onKeySignatureChange={handleKeySignatureChange}
-                      selectedMeasures={selectedMeasures ?? undefined}
-                      onMeasureSelect={handleMeasureSelect}
-                      customSymbolDefs={customSymbolDefs}
-                    />
+                    <div className="system-stack">
+                      {p.systemRanges.map((range) => (
+                        <StaffCanvas
+                          key={range.start}
+                          systems={1}
+                          gap={110}
+                          measuresPerSystem={range.count}
+                          rangeLocked
+                          incomingArcIndex={incomingArcIndex}
+                          tool={tool}
+                          scale={SCORE_LAYOUT_RENDER_SCALE}
+                          clef="treble"
+                          initialScoreData={rightHandData}
+                          onScoreDataChange={handleScoreDataChange}
+                          startMeasureIndex={range.start}
+                          disabled={isEditingDisabled}
+                          yOffset={yOffset}
+                          currentInstrument={currentInstrument}
+                          onPreviewNoteEvent={handleInputNotePreview}
+                          previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
+                          keySignature={keySignature}
+                          timeSignature={scoreTimeSignature}
+                          onKeySignatureChange={handleKeySignatureChange}
+                          selectedMeasures={selectedMeasures ?? undefined}
+                          onMeasureSelect={handleMeasureSelect}
+                          customSymbolDefs={customSymbolDefs}
+                        />
+                      ))}
+                    </div>
                   )}
 
                   <PlaybackHighlight

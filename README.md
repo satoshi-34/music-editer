@@ -131,9 +131,10 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - A4を超える大編成譜では、必要な高さを保ったまま全ページを同じ高さへそろえる
 
 ### 音符密度に応じた改段
-- `measureMinimumContentWidth` が符頭・細かい音価のビーム・臨時記号・前打音の最低幅を見積もる
+- `measureMinimumContentWidth` / `vexFlowCombinedMeasureMinimumContentWidth` が符頭・細かい音価のビーム・臨時記号・前打音の最低幅を見積もる
 - 指定した「段あたり小節数」から 3・2・1 小節の順に収まる段を選び、過密な小節で音符が重ならないようにする
 - 自動休符補完や休符の置換・分割で小節内容が変わった直後も、この最低幅で再レイアウトする
+- `SCORE_LAYOUT_RENDER_SCALE`（VexFlow の論理座標→物理SVG座標の倍率、`measureLayoutUtils.ts`）は等倍だと五線が実際の印刷譜（約6〜7mm）より1.5〜1.8倍大きくなり、1小節の最低幅が過大評価されて「1小節しか段に入らない」レイアウト崩れを招くため 0.4 に調整している。`measurePlannerSafetyPadding` の移調楽器向け安全マージン（臨時記号の最悪ケース加算）も Ensemble のときだけ適用し、ピアノ・四重奏では実測値をそのまま使う（詳細は `.claude/specs/multi-part-beat-alignment/design.md` 追補4を参照）
 
 ### ページレイアウトの実装ポイント
 - `ScorePage` が表示中の `.print-page` の高さを測り、最大値を `ScaledPageWrapper` へ渡す
@@ -369,6 +370,7 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 ### 4. 小節幅の自動割り付け
 - `measureMinimumContentWidth` で小節ごとの最低幅を計算し、全・二分を含む小節は下限幅を広めに確保。
 - 16 分や 32 分が並ぶ小節は最低幅の合計で先に改段判定するため、符頭やビームが重なりにくい。
+- ピアノ大譜表・編成譜の合同フォーマットでは、推定幅に加えて VexFlow の `preCalculateMinTotalWidth()` で付点・連符・和音・表示済み臨時記号を含む実測最低幅を取得する。臨時記号は `noteKeyUtils` の調号・小節内状態・前小節courtesy判定を本描画と共用し、実際に表示する記号だけを仮ノートへ付ける。`ScorePage` は全小節を先に検査して、保存された希望値を上限に `4→3→2→1` の共通 `effectiveMeasuresPerSystem` を選ぶため、Canvas 単位の無制限縮小やページ外へのはみ出しを起こさない。画面の viewport 縮小はページラッパーだけが担い、譜刻・印刷の内部倍率は固定の等倍で一致する。付点は Note の `dots`、連符は `Tuplet` を Voice/Formatter の前に作成して tick も一致させるため、右手・左手の拍揃えと密な小節の自動幅調整を両立する。
 
 ### 4.5 連符（tuplet）: 3連符・5連符・6連符・7連符
 - `NoteEvent.tuplet = { id, numNotes, notesOccupied }` で連符グループを表現（同じ id を持つ連続イベントが1グループ）。`numNotes`/`notesOccupied` は最初から一般化されており、3連符(3:2)に限らず任意の N:M 比を表現できる。
@@ -376,6 +378,7 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 - パレット（`Palette.tsx`）の `Tool.tuplet` フィールドは `boolean` から `{ numNotes, notesOccupied } | undefined` へ拡張。「3連符」「5連符」「6連符」「7連符」の4ボタンが並び、それぞれ対応する `TupletKind` をトグルする。
 - 拍数計算は `voiceMeasureUtils.tupletBeatsMultiplier()`（`notesOccupied/numNotes` 倍、比率に関わらず汎用）を中心に、`StaffCanvas`/`PianoSystemCanvas`/`RestOverlapFixV2`/`ScorePlayer`/`SoundFontEngine`/`midiExport`/`musicXmlExport` それぞれで同じ倍率を反映（dur から直接拍数を再計算している箇所が複数あるため、中心ヘルパーの変更だけでは不十分）。これらは3連符実装時点からすでに numNotes/notesOccupied 汎用の式だったため、5/6/7連符でも変更不要だった。
 - 描画は VexFlow 5 の `new Tuplet(notes, { numNotes, notesOccupied })` を使用。コンストラクタが自動で各音符の `tupletStack` を更新するため Voice のフォーマット計算（ticks合計）は自動対応するが、ブラケット描画自体は `tuplet.setContext(ctx).draw()` を明示的に呼ぶ必要がある。数字表示は VexFlow が自動判定し、3連符は「3」、5/6/7連符は「N:4」（比率表示）になる。
+- `StaveNote` の `dots` は tick（拍の内部単位）を伸ばし、`Dot.buildAndAttach()` は点の見た目だけを追加する。そこで両方を指定し、さらに `Tuplet` は Formatter 後ではなく Voice に追加する前に生成する。これにより、付点・連符と右手/左手の合同拍位置が食い違わない。
 - 削除は「連符グループ内のどれか1つを消すとグループ全体を通常の休符に置き換える」というシンプルな仕様（詳細は `.claude/specs/tuplet-implementation/design.md`）。
 - 入力（配置・休符置換・グループ削除）のロジックは `src/utils/tupletUtils.ts` に共通化し、`StaffCanvas`（単旋律譜）・`PianoSystemCanvas`（多段譜）の両方から呼び出している。クリックのヒット判定や `setScore`/`setPartsScore` への反映は各キャンバス側に残し、「共通化はロジックのみ」という方針（`customSymbolRenderUtils.ts` と同じ）。tuplet id は `generateTupletId()`（時刻＋モジュール内カウンタ＋乱数）で発行し、パートをまたいで呼んでも衝突しない。
 - 2連符（2:3）は複合拍子（8分の6拍子など）でしか自然に意味を持たず、単純拍子では「2連符なのに音価が伸びる」という直感に反する挙動になるため、今回のスコープからは除外した。
