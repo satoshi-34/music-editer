@@ -45,7 +45,9 @@ export const LONG_WHOLE_MIN_WIDTH = 92;
 // 膨張する」不具合の主因になっていた（.claude/specs/multi-part-beat-alignment/design.md 参照）。
 // 0.4 は実測（print-test-score.json の代表的な1小節=約330論理px）から、
 // 段あたり4小節という一般的な組版密度に収まる実寸相当のスケールとして選んだ値。
-export const SCORE_LAYOUT_RENDER_SCALE = 0.4;
+// 0.44 = 0.4 × 1.1。印刷テストで記号や音符が市販譜よりひと回り小さかったため、
+// 1.1倍に拡大した（値を上げるほど音符が大きくなり、1段に入る小節数は減る）。
+export const SCORE_LAYOUT_RENDER_SCALE = 0.44;
 export const SYSTEM_PAGE_SIDE_PADDING = 4;
 export const SYSTEM_TARGET_FILL = 0.99;
 export const SYSTEM_FIRST_CLEF_PADDING = 50;

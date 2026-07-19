@@ -134,7 +134,7 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - `measureMinimumContentWidth` / `vexFlowCombinedMeasureMinimumContentWidth` が符頭・細かい音価のビーム・臨時記号・前打音の最低幅を見積もる
 - 指定した「段あたり小節数」から 3・2・1 小節の順に収まる段を選び、過密な小節で音符が重ならないようにする
 - 自動休符補完や休符の置換・分割で小節内容が変わった直後も、この最低幅で再レイアウトする
-- `SCORE_LAYOUT_RENDER_SCALE`（VexFlow の論理座標→物理SVG座標の倍率、`measureLayoutUtils.ts`）は等倍だと五線が実際の印刷譜（約6〜7mm）より1.5〜1.8倍大きくなり、1小節の最低幅が過大評価されて「1小節しか段に入らない」レイアウト崩れを招くため 0.4 に調整している。`measurePlannerSafetyPadding` の移調楽器向け安全マージン（臨時記号の最悪ケース加算）も Ensemble のときだけ適用し、ピアノ・四重奏では実測値をそのまま使う（詳細は `.claude/specs/multi-part-beat-alignment/design.md` 追補4を参照）
+- `SCORE_LAYOUT_RENDER_SCALE`（VexFlow の論理座標→物理SVG座標の倍率、`measureLayoutUtils.ts`）は等倍だと五線が実際の印刷譜（約6〜7mm）より1.5〜1.8倍大きくなり、1小節の最低幅が過大評価されて「1小節しか段に入らない」レイアウト崩れを招くため 0.4 を基準に調整している（印刷テストで記号・音符が市販譜よりひと回り小さかったため、現在は 1.1 倍の 0.44。音符の大きさを変えたいときはこの定数を変更する）。`measurePlannerSafetyPadding` の移調楽器向け安全マージン（臨時記号の最悪ケース加算）も Ensemble のときだけ適用し、ピアノ・四重奏では実測値をそのまま使う（詳細は `.claude/specs/multi-part-beat-alignment/design.md` 追補4を参照）
 
 ### 小節幅の均等さの調整
 - **どこで変えるか**: **その他タブの「小節幅の均等さ」スライダー**（0〜100%）で画面から調節できる。密な小節（32分トレモロ・64分16連など、音符が多く最低幅が大きい小節）と疎な小節の**幅の差**を変えられる。設定はブラウザ（localStorage キー `score-measure-width-evenness`）に保存され、楽譜データには含まれない
