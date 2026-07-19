@@ -3016,7 +3016,7 @@ export default function ScorePage() {
             <ScaledPageWrapper key={i} scale={scale} pageHeight={sharedPageHeight}>
               {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
               {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
-              {/* print-final-page-single: そのページの可視段が1段だけのときは space-between が効かないため flex-end で下端へ寄せる */}
+              {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}
               <section className={`print-page${printContentSystems - i * systemsPerPage <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}`}>
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (

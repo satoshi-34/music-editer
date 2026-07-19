@@ -1188,13 +1188,18 @@ button.ghost:disabled {
      space-between にすると最初の段は上端、最後の段は下端へ付き、
      終止線がページ右下角で締まって見える（画面表示には影響しない）。 */
   .print-final-page .system-stack { justify-content: space-between; }
-  /* ただし、その最後のページの可視段が1段だけの場合は space-between が効かず
-     （flexの子が1つだと上端に寄ったままになる）、終止線がページ下端まで届かない。
-     その場合だけ flex-end で1段を丸ごと下端へ寄せる（ScorePage.tsx が
-     print-final-page-single を付与）。2段以上のページは従来の space-between のまま
-     （space-between + margin-top:auto の併用は複数段時に段間が崩れるため使わない）。 */
-  .print-final-page-single .system-stack { justify-content: flex-end; }
+  /* ただし、その最後のページの可視段が1段だけの場合は例外として「上揃え」にする。
+     1段しかないページを下端へ落とすと、上が大きく空いて紙面が不自然に見えるため
+     （市販譜でも最終ページが1段だけのときは上に置き、下は余白のままにする作法）。
+     終止線が段の右端に付くことは変わらないので、曲の締まりは損なわれない。
+     2段以上のページは従来の space-between のまま（最後の段が下端へ付く）。 */
+  .print-final-page-single .system-stack { justify-content: flex-start; }
 }
+
+/* 画面表示でも、最終ページの可視段が1段だけのときは上揃えにする。
+   通常ページの space-evenly だと1段だけのページでは段が縦中央へ浮いてしまい、
+   楽譜として不自然なため（印刷側の上記ルールと同じ考え方）。 */
+.print-final-page-single .system-stack { justify-content: flex-start; }
 
 /* SVGのアニメ残り防止 */
 svg { animation: none; transition: none; }
