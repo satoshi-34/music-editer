@@ -143,6 +143,14 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - **既定値**: スライダー未設定時はコードの定数 `MEASURE_WIDTH_EVENNESS`（`src/utils/measureLayoutUtils.ts`、0.5）が使われる。アプリ全体の初期値を変えたい場合はこの定数を変更する
 - 実装は「余剰幅を各小節へ均等配分した base」を「段内の等分幅 equalShare」へ線形にブレンドする方式で、総和は段の使用可能幅に保たれる（総和保存）。段に収まらない小節（overflow）はブレンドせず最低幅どおりに描き、はみ出し警告を隠さない。スライダー値は段確定後の幅配分だけに効き、改段（段割り・ページ数）には影響しない（詳細は `.claude/specs/multi-part-beat-alignment/design.md` 追補6・追補7を参照）
 
+### 段ごとの小節数の個別調整
+- **どこで変えるか**: 譜面エリアの下（各段の一覧）に並ぶ「段N ◀ N小節 ▶」コントロールで、段ごとに小節数を1つずつ増減できる。▶ で次段の先頭小節をこの段へ引き込み（+1）、◀ でこの段の末尾小節を次段へ送る（−1）。編集モードのときだけ表示し、印刷には出ない（`.system-measure-override-controls` を `@media print` で非表示にしている）
+- **リセット**: その他タブの「段割りをリセット」ボタンで、手動調整をすべて解除して自動計画（幅ベースの `planSystemMeasureRanges`）に戻せる
+- **データモデル**: `SavedScoreData.systemMeasureOverrides?: { startMeasure: number; count: number }[]`（`src/types/storage.ts`）。「絶対小節インデックス `startMeasure` から始まる段は `count` 小節」という意味で保持し、段の並び順ではなく小節番号をキーにしているため、他の段の編集で多少ずれても意味を保ちやすい。旧データ互換のため省略可（省略時は自動計画のみ）
+- **計画ロジック**: `planSystemMeasureRanges`（`src/utils/measureLayoutUtils.ts`）が、貪欲法で段の開始位置を進める際に上書き一覧を参照する。開始位置が上書きの `startMeasure` と一致する段はその小節数をそのまま使い（使用可能幅を超えても許容し、`overflow: true` を返すだけで縮めない＝はみ出しはユーザー判断）、一致しない段は従来どおりの自動計画が続く。そのため上書きした段より後ろは自動的に続きから再計画される
+- **Undo/Redo・保存/読込との整合**: 上書き一覧は `ScorePage.tsx` の Undo/Redo スナップショット（`ScoreSnapshot.systemMeasureOverrides`）に含め、＋1/−1・リセットの操作も他の編集と同様に元に戻せる。保存（`saveScoreData`/`createSavedScoreData`）・読込（`loadScoreData`）・ファイル書出/読込（`fileStorage.ts`）でも他のフィールドと同様に往復する。`storage.ts` の `validateSystemMeasureOverrides` が `startMeasure` の重複・負数・`count<1` を弾く
+- 詳細は `.claude/specs/system-measure-override/design.md` を参照
+
 ### 画面表示のズーム調整
 - **どこで変えるか**: **その他タブの「画面表示のズーム」スライダー**（50〜150%、5%刻み）で画面の表示サイズを調節できる。設定はブラウザ（localStorage キー `score-view-zoom`）に保存され、リロード後も維持される
 - **既存の自動縮尺との関係**: このアプリはもともと `useAutoPageScale`（`src/components/useAutoPageScale.ts`）が画面幅に合わせて自動で縮尺（`--scale`）を計算し、`ScaledPageWrapper`（`src/components/ScaledPageWrapper.tsx`）が `transform: scale(var(--scale))` で画面表示だけを縮小している（issue #13: CSS `zoom` は Safari で `getBoundingClientRect` に反映されず音符のクリック座標がずれるため、全ブラウザで座標に反映される `transform` を採用）。ズームスライダーはこの自動縮尺に**倍率として掛け合わせる**だけで（`ScorePage.tsx` の `effectiveScale = scale * viewZoom`）、既存の縮尺計算・座標変換の仕組みはそのまま利用する。100% がスライダー未操作時の従来どおりの表示（自動縮尺そのまま）

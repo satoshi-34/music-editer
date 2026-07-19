@@ -41,7 +41,8 @@ import type {
   InstrumentPartDefinition,
   MeasureData,
   PartData,
-  ScoreType
+  ScoreType,
+  SystemMeasureOverride
 } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import {
@@ -287,6 +288,9 @@ export default function ScorePage() {
     () => Array.from({ length: 4 }, () => [])
   );
   const [ensembleParts, setEnsembleParts] = useState<MeasureData[][]>(() => []);
+  // 段ごとの小節数のユーザー上書き（「小節 X から始まる段は Y 小節」の一覧）。
+  // 自動計画（planSystemMeasureRanges）ではなく、ユーザーが個別に段の▶◀ボタンで調整した段だけを保持する。
+  const [systemMeasureOverrides, setSystemMeasureOverrides] = useState<SystemMeasureOverride[]>([]);
 
   // パート譜表示の選択肢と、現在選択中のパート。
   // 単旋律譜・ピアノ大譜表では対象外（getPartExtractionOptions が空配列を返す）。
@@ -317,13 +321,15 @@ export default function ScorePage() {
     leftHandData:  MeasureData[] | undefined;
     quartetParts:  MeasureData[][];
     ensembleParts: MeasureData[][];
+    // 段割りの手動上書きも Undo/Redo の対象にする（+1/-1 操作やリセットを元に戻せるように）。
+    systemMeasureOverrides: SystemMeasureOverride[];
   };
   const MAX_HISTORY = 50;
   const historyStack = useRef<ScoreSnapshot[]>([]);
   const futureStack  = useRef<ScoreSnapshot[]>([]);
   // 常に最新のスコア状態を ref として持つ（ハンドラ内で「変更前の値」を取得するため）
   const currentScoreRef = useRef<ScoreSnapshot>({
-    rightHandData, leftHandData, quartetParts, ensembleParts,
+    rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides,
   });
 
   // useRef(createPlaybackEngine(...)) と引数に直接書くと、useRef は初回しか値を使わないのに
@@ -1218,8 +1224,8 @@ export default function ScorePage() {
 
   // スコアデータが変わるたびに currentScoreRef を最新に保つ
   useEffect(() => {
-    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts };
-  }, [rightHandData, leftHandData, quartetParts, ensembleParts]);
+    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides };
+  }, [rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides]);
 
   // ツールバーの「元に戻す/やり直す」ボタンの活性・非活性を切り替えるためのカウンタ。
   // historyStack/futureStack は ref のため、その中身が変わっただけでは再レンダーされない。
@@ -1310,6 +1316,7 @@ export default function ScorePage() {
       ...snap,
       rightHandData: snap.rightHandData ?? [],
       leftHandData: snap.leftHandData ?? [],
+      systemMeasureOverrides: snap.systemMeasureOverrides ?? [],
     };
     // currentScoreRef は useEffect（レンダー後）でも更新されるが、ここでも同期的に更新する。
     // 復元直後にキャンバスの onScoreDataChange 通知が届いたとき、古い ref と比較して
@@ -1319,6 +1326,7 @@ export default function ScorePage() {
     setLeftHandData(restored.leftHandData);
     setQuartetParts(restored.quartetParts);
     setEnsembleParts(restored.ensembleParts);
+    setSystemMeasureOverrides(restored.systemMeasureOverrides);
   }, []);
 
   // Undo: 履歴から1つ前の状態を取り出して適用する（キーボードショートカットとボタンの共通処理）
@@ -1450,7 +1458,7 @@ export default function ScorePage() {
 
   const handleSave = async () => {
     const { metadata, parts } = buildScoreData();
-    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs);
+    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides);
     if (saved) {
       setStoredDataAvailable(true);
     }
@@ -1496,6 +1504,8 @@ export default function ScorePage() {
     fileHandleRef.current = null;
     // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
     setExtraEditingSystems(0);
+    // 前の譜面用の段割り手動上書きも引き継がない
+    setSystemMeasureOverrides([]);
   }, [
     clearPlaybackTimer,
     clearStoredData,
@@ -1512,7 +1522,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const handleExportFile = async () => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides);
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
     const handle = await exportScoreToFile(data, title, fileHandleRef.current);
     if (handle) fileHandleRef.current = handle;
@@ -1564,6 +1574,8 @@ export default function ScorePage() {
       }
       // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
       setExtraEditingSystems(0);
+      // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
+      setSystemMeasureOverrides(data.systemMeasureOverrides ?? []);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'ファイルの読み込みに失敗しました');
     }
@@ -1581,7 +1593,7 @@ export default function ScorePage() {
     autoSaveTimerRef.current = setTimeout(async () => {
       setAutoSaveStatus('saving');
       const { metadata, parts } = buildScoreData();
-      const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs);
+      const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides);
       if (saved) {
         setStoredDataAvailable(true);
         setAutoSaveStatus('saved');
@@ -1599,7 +1611,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない。
   // 値はタイマー発火時（レンダー後）に読まれるので TDZ の問題はない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs]);
+  }, [title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
@@ -1644,6 +1656,8 @@ export default function ScorePage() {
       }
       // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
       setExtraEditingSystems(0);
+      // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
+      setSystemMeasureOverrides(loadedData.systemMeasureOverrides ?? []);
     }
   };
 
@@ -1675,6 +1689,8 @@ export default function ScorePage() {
     setHasCustomPianoSample(hasCustomPianoDemoScore());
     // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
     setExtraEditingSystems(0);
+    // 前の譜面用の段割り手動上書きも引き継がない
+    setSystemMeasureOverrides([]);
   }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock, setTimeSignature]);
 
   const handleSaveCurrentAsSample = useCallback(() => {
@@ -2133,8 +2149,34 @@ export default function ScorePage() {
     // 同じ段に混ぜない。こうしないと最終小節の終止線が段の右端まで届かず余白が残ってしまう
     // （空の楽譜 contentMeasureCount===0 のときは強制しない＝undefined で従来どおり）。
     contentMeasureCount > 0 ? contentMeasureCount : undefined,
-  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale]);
+    // 段ごとの小節数のユーザー上書き。上書きのある段はその小節数を使い、無い段は
+    // 従来どおりの自動計画のまま続く（上書き段より後ろの小節位置から再計算される）。
+    systemMeasureOverrides,
+  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides]);
   const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
+
+  // 段ごとの小節数の手動上書きを1段ぶんだけ増減する。
+  // 「小節 range.start から始まる段は count 小節」という上書きを配列に upsert するだけで、
+  // それより後ろの段は次の描画で自動的に続きから再計算される（planSystemMeasureRanges の
+  // 貪欲法が、上書きの無い start にだけ従来ロジックを適用するため）。
+  const adjustSystemMeasureOverride = useCallback((range: SystemMeasureRange, delta: number) => {
+    const nextCount = range.count + delta;
+    if (nextCount < 1) return;
+    if (delta > 0 && range.start + nextCount > plannerMinimumWidths.length) return;
+    pushHistory();
+    setSystemMeasureOverrides((prev) => {
+      const next = prev.filter((o) => o.startMeasure !== range.start);
+      next.push({ startMeasure: range.start, count: nextCount });
+      return next;
+    });
+  }, [plannerMinimumWidths.length, pushHistory]);
+
+  // その他タブの「段割りをリセット」ボタン用: 手動上書きをすべて解除し、自動計画へ戻す。
+  const handleResetSystemMeasureOverrides = useCallback(() => {
+    if (systemMeasureOverrides.length === 0) return;
+    pushHistory();
+    setSystemMeasureOverrides([]);
+  }, [systemMeasureOverrides.length, pushHistory]);
   // 終止線を描く「内容のある最後の小節」の絶対インデックス。
   // 内容が1小節も無い（空の楽譜）ときは undefined にして、どの Canvas でも終止線を描かせない。
   const finalMeasureIndex = contentMeasureCount > 0 ? contentMeasureCount - 1 : undefined;
@@ -2298,6 +2340,8 @@ export default function ScorePage() {
           setLeftHandData(leftPart?.measures);
           setEnsembleParts([]);
         }
+        // MusicXML には段割り上書きの概念が無いため、前の譜面ぶんを引き継がずリセットする
+        setSystemMeasureOverrides([]);
       } catch (err) {
         alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
       }
@@ -2872,6 +2916,15 @@ export default function ScorePage() {
                 {/* 現在値（%）。スライダーだけだと今いくつか分からないため小さく添える */}
                 <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(measureWidthEvenness * 100)}%</span>
               </label>
+              <button
+                type="button"
+                onClick={handleResetSystemMeasureOverrides}
+                disabled={systemMeasureOverrides.length === 0}
+                style={{ fontSize: 13, padding: '3px 8px' }}
+                title="各段の◀▶ボタンで個別調整した小節数の上書きをすべて解除し、自動計画へ戻します"
+              >
+                段割りをリセット
+              </button>
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
                 title="画面表示の拡大縮小です。印刷結果には影響しません。100% が既定の自動縮尺です"
@@ -3356,6 +3409,44 @@ export default function ScorePage() {
                           finalMeasureIndex={finalMeasureIndex}
                         />
                       ))}
+                    </div>
+                  )}
+
+                  {/* 段ごとの小節数を個別に調整するコントロール。段の自動計画（幅ベース）だけでは
+                      「この段だけ1小節増やしたい／減らしたい」という要望に応えられないため、
+                      ページ内の各段の直後に「◀ N小節 ▶」を1本ずつ並べる。▶ で次段の先頭小節を
+                      この段へ引き込み（+1）、◀ でこの段の末尾小節を次段へ送る（-1）。
+                      編集モードのときだけ表示し、印刷には出さない（App.css の @media print 参照）。 */}
+                  {!isPartExtractionActive && !isEditingDisabled && (
+                    <div className="system-measure-override-controls">
+                      {p.systemRanges.map((range, rangeIndex) => {
+                        const canDecrease = range.count > 1;
+                        const canIncrease = range.start + range.count < plannerMinimumWidths.length;
+                        return (
+                          <div className="system-measure-override-row" key={range.start}>
+                            <span className="system-measure-override-label">段{getPageSystemOffset(i) + rangeIndex + 1}</span>
+                            <button
+                              type="button"
+                              className="system-measure-override-button"
+                              disabled={!canDecrease}
+                              onClick={() => adjustSystemMeasureOverride(range, -1)}
+                              title="この段の末尾の小節を次の段へ送る"
+                            >
+                              ◀
+                            </button>
+                            <span className="system-measure-override-count">{range.count}小節</span>
+                            <button
+                              type="button"
+                              className="system-measure-override-button"
+                              disabled={!canIncrease}
+                              onClick={() => adjustSystemMeasureOverride(range, 1)}
+                              title="次の段の先頭の小節をこの段へ引き込む"
+                            >
+                              ▶
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
 

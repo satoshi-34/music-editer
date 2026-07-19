@@ -437,6 +437,9 @@ export type SystemMeasureRange = {
  * 小節幅は一度だけ計測し、現在位置から希望値以下で入る最大個数を貪欲に選ぶ。
  * range は絶対小節番号を保持するため、ページ境界でも小節の重複・欠落を起こさない。
  */
+/** 「小節 startMeasure から始まる段は count 小節」というユーザー上書き。measureLayoutUtils 内での利用のみを想定した最小の型（storage.ts の SystemMeasureOverride と同じ形）。 */
+export type SystemMeasureOverrideInput = { startMeasure: number; count: number };
+
 export function planSystemMeasureRanges(
   minimumWidths: number[],
   requestedMeasuresPerSystem: number,
@@ -450,10 +453,36 @@ export function planSystemMeasureRanges(
    * 従来と同じ結果になり、既存のページ割りに影響しない。
    */
   breakAt?: number,
+  /**
+   * 段ごとの小節数のユーザー上書き（「段割りを個別調整」機能）。
+   * start が上書きの startMeasure と一致する段はその count 小節を使い、最低幅の合計が
+   * availableWidth を超えていても許容する（音符が詰まる／はみ出す可能性はユーザー判断に
+   * 委ねる。totalWidth > availableWidth の場合は overflow=true を返すのでスコア側で
+   * data-layout-overflow を付けられる）。上書きが無い start では従来どおりの貪欲法を使う。
+   * 複数の上書きが同じ start を指す場合は配列の最後を優先する。
+   */
+  overrides?: SystemMeasureOverrideInput[],
 ): SystemMeasureRange[] {
   const requested = Math.max(1, Math.floor(requestedMeasuresPerSystem));
+  const overrideByStart = new Map<number, number>();
+  overrides?.forEach(({ startMeasure, count }) => {
+    if (Number.isInteger(startMeasure) && startMeasure >= 0 && Number.isInteger(count) && count >= 1) {
+      overrideByStart.set(startMeasure, count);
+    }
+  });
   const ranges: SystemMeasureRange[] = [];
   for (let start = 0; start < minimumWidths.length;) {
+    const overrideCount = overrideByStart.get(start);
+    if (overrideCount != null) {
+      // ユーザー上書き: 残り小節数までにクランプするだけで、幅超過チェックはしない
+      // （はみ出しはユーザーの意図した挙動として許容する）。
+      const count = Math.min(overrideCount, minimumWidths.length - start);
+      const widths = minimumWidths.slice(start, start + count);
+      const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+      ranges.push({ start, count, minimumWidths: widths, totalWidth, overflow: totalWidth > availableWidth });
+      start += count;
+      continue;
+    }
     let maxCount = Math.min(requested, minimumWidths.length - start);
     if (breakAt != null && breakAt > start && breakAt < start + maxCount) {
       maxCount = breakAt - start;

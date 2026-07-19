@@ -971,6 +971,54 @@ button.ghost:disabled {
   background: #f9fafb;
 }
 
+/* 段ごとの小節数を個別調整するコントロール（◀ N小節 ▶）。
+   ページ内の各段につき1行、score-area の下に控えめに並べる。画面専用で印刷には出さない
+   （@media print 側で display:none にする）。 */
+.system-measure-override-controls {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0;
+  align-items: center;
+}
+.system-measure-override-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #9ca3af;
+}
+.system-measure-override-label {
+  width: 36px;
+  text-align: right;
+}
+.system-measure-override-count {
+  width: 44px;
+  text-align: center;
+}
+.system-measure-override-button {
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  padding: 0;
+  font-size: 11px;
+  color: #6b7280;
+  background: transparent;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.system-measure-override-button:hover:not(:disabled) {
+  color: #374151;
+  border-color: #9ca3af;
+  background: #f9fafb;
+}
+.system-measure-override-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .layout-overflow-alert {
   margin: 0 0 8px;
   padding: 6px 8px;
@@ -1083,6 +1131,8 @@ button.ghost:disabled {
   .layout-overflow-alert { display: none !important; }
   /* 画面専用の「＋小節を追加」ボタンは編集用UIなので印刷には出さない。 */
   .add-measures-ghost-button { display: none !important; }
+  /* 段ごとの小節数調整コントロール（◀ N小節 ▶）も編集用UIなので印刷には出さない。 */
+  .system-measure-override-controls { display: none !important; }
   /* 固定ツールバー分の逃し（padding-top: 60px）も印刷では不要。
      残すと1枚目だけ60px下へずれ、ページ末尾が次の紙へ押し出される */
   .app-root { padding-top: 0 !important; }

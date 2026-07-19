@@ -296,4 +296,84 @@ describe('measureMinimumContentWidth', () => {
     const withBreak = planSystemMeasureRanges(Array.from({ length: 24 }, () => 52), 4, 550, 24);
     expect(withBreak).toEqual(withoutBreak);
   });
+
+  describe('systemMeasureOverrides（段ごとの小節数のユーザー上書き）', () => {
+    it('上書きのある段はその小節数を使い、無い段は自動計画のまま続きから再計算される', () => {
+      // 8小節・4小節/段の自動計画なら [0-3][4-7] の2段になるはずだが、
+      // start=0 の段だけ 3小節へ上書きすると、次の段は自動計画で 3 から続く。
+      const ranges = planSystemMeasureRanges(
+        Array.from({ length: 8 }, () => 52),
+        4,
+        550,
+        undefined,
+        [{ startMeasure: 0, count: 3 }],
+      );
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 3 },
+        { start: 3, count: 4 },
+        { start: 7, count: 1 },
+      ]);
+    });
+
+    it('▶（+1）相当: 上書きで段の最低幅合計が使用可能幅を超えても許容し、overflow を返す', () => {
+      // 1小節あたり最低幅300で、2小節に上書きすると600 > availableWidth(410) となり overflow=true。
+      const ranges = planSystemMeasureRanges(
+        [300, 300, 300, 300],
+        1,
+        410,
+        undefined,
+        [{ startMeasure: 0, count: 2 }],
+      );
+      expect(ranges[0]).toEqual({ start: 0, count: 2, minimumWidths: [300, 300], totalWidth: 600, overflow: true });
+    });
+
+    it('◀（-1）相当: count を1へ上書きすると、その段は1小節だけになり残りは自動計画へ戻る', () => {
+      const ranges = planSystemMeasureRanges(
+        Array.from({ length: 8 }, () => 52),
+        4,
+        550,
+        undefined,
+        [{ startMeasure: 0, count: 1 }],
+      );
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 1 },
+        { start: 1, count: 4 },
+        { start: 5, count: 3 },
+      ]);
+    });
+
+    it('上書きの startMeasure が実際の段境界とずれている場合は無視され、自動計画のまま進む', () => {
+      // start=2 は段の途中（自動計画では 0-3 の段の中）なので、この上書きは一致せず適用されない。
+      const ranges = planSystemMeasureRanges(
+        Array.from({ length: 8 }, () => 52),
+        4,
+        550,
+        undefined,
+        [{ startMeasure: 2, count: 5 }],
+      );
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 4 },
+        { start: 4, count: 4 },
+      ]);
+    });
+
+    it('残り小節数を超える上書きはクランプされる', () => {
+      const ranges = planSystemMeasureRanges(
+        Array.from({ length: 5 }, () => 52),
+        4,
+        550,
+        undefined,
+        [{ startMeasure: 0, count: 10 }],
+      );
+      expect(ranges).toEqual([
+        { start: 0, count: 5, minimumWidths: Array.from({ length: 5 }, () => 52), totalWidth: 260, overflow: false },
+      ]);
+    });
+
+    it('overrides が空・未指定でも従来どおりの結果を返す（後方互換）', () => {
+      const withUndefined = planSystemMeasureRanges(Array.from({ length: 8 }, () => 52), 4, 550);
+      const withEmpty = planSystemMeasureRanges(Array.from({ length: 8 }, () => 52), 4, 550, undefined, []);
+      expect(withEmpty).toEqual(withUndefined);
+    });
+  });
 });

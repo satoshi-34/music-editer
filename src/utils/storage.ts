@@ -489,6 +489,30 @@ function validateScoreInstrumentation(value: unknown): value is ScoreInstrumenta
   return new Set(partIds).size === partIds.length;
 }
 
+/**
+ * 段ごとの小節数上書き（systemMeasureOverrides）を検証する。
+ * 省略可能なフィールドなので undefined は許容するが、値がある場合は各要素が
+ * 非負整数の startMeasure と 1 以上の整数 count を持つことを要求する。
+ * startMeasure の重複は「同じ開始小節に矛盾する段の切り方」を意味するため無効とする。
+ */
+function validateSystemMeasureOverrides(value: unknown): value is SavedScoreData['systemMeasureOverrides'] {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  if (!value.every((item) => (
+    isRecord(item) &&
+    typeof item.startMeasure === 'number' &&
+    Number.isInteger(item.startMeasure) &&
+    item.startMeasure >= 0 &&
+    typeof item.count === 'number' &&
+    Number.isInteger(item.count) &&
+    item.count >= 1
+  ))) {
+    return false;
+  }
+  const starts = value.map((item: any) => item.startMeasure);
+  return new Set(starts).size === starts.length;
+}
+
 function validateSavedPartIds(data: SavedScoreData): boolean {
   const savedPartIds = data.parts.map(part => part.partId);
   if (new Set(savedPartIds).size !== savedPartIds.length) {
@@ -534,7 +558,8 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     data.systems > 0 &&
     typeof data.measuresPerSystem === 'number' &&
     data.measuresPerSystem > 0 &&
-    validateCustomSymbolDefs(data.customSymbolDefs)
+    validateCustomSymbolDefs(data.customSymbolDefs) &&
+    validateSystemMeasureOverrides(data.systemMeasureOverrides)
   );
 }
 
@@ -920,7 +945,8 @@ export function createSavedScoreData(
   timeSignature: TimeSignature = DEFAULT_TIME_SIGNATURE,
   instrumentation?: ScoreInstrumentation,
   notationMode?: 'concert' | 'written',
-  customSymbolDefs?: CustomSymbolDef[]
+  customSymbolDefs?: CustomSymbolDef[],
+  systemMeasureOverrides?: SavedScoreData['systemMeasureOverrides']
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -934,7 +960,8 @@ export function createSavedScoreData(
     parts,
     systems,
     measuresPerSystem,
-    customSymbolDefs
+    customSymbolDefs,
+    systemMeasureOverrides
   };
 }
 

@@ -2155,4 +2155,71 @@ describe('Storage Foundation Tests', () => {
       expect(result.error?.type).toBe('corrupted_data');
     });
   });
+
+  describe('段ごとの小節数上書き（systemMeasureOverrides）の保存互換とバリデーション', () => {
+    const metadata = { title: 'Override Test', subtitle: '', lyricist: '', composer: '', arranger: '' };
+    const parts = [{ partId: 'melody', clef: 'treble' as const, measures: [{ events: [] }] }];
+
+    it('systemMeasureOverrides を保存して読み戻せる', () => {
+      const data = createSavedScoreData(
+        metadata, parts, 1, 4, 'single', 'C', [4, 4],
+        undefined, undefined, undefined,
+        [{ startMeasure: 0, count: 3 }, { startMeasure: 3, count: 2 }],
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.systemMeasureOverrides).toEqual([
+        { startMeasure: 0, count: 3 },
+        { startMeasure: 3, count: 2 },
+      ]);
+    });
+
+    it('systemMeasureOverrides を省略しても保存・読込できる（後方互換）', () => {
+      const data = createSavedScoreData(metadata, parts, 1, 4);
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.systemMeasureOverrides).toBeUndefined();
+    });
+
+    it('startMeasure が重複する systemMeasureOverrides は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        metadata, parts, 1, 4, 'single', 'C', [4, 4],
+        undefined, undefined, undefined,
+        [{ startMeasure: 0, count: 3 }, { startMeasure: 0, count: 5 }],
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+
+    it('count が0以下の systemMeasureOverrides は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        metadata, parts, 1, 4, 'single', 'C', [4, 4],
+        undefined, undefined, undefined,
+        [{ startMeasure: 0, count: 0 }],
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+
+    it('startMeasure が負数の systemMeasureOverrides は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        metadata, parts, 1, 4, 'single', 'C', [4, 4],
+        undefined, undefined, undefined,
+        [{ startMeasure: -1, count: 2 }],
+      );
+
+      const result = saveScoreData(data);
+      expect(result.success).toBe(false);
+    });
+  });
 });
