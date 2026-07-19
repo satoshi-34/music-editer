@@ -374,11 +374,16 @@ export function allocateCombinedMeasureWidths(
   const physicalMinimumWidths = minimumWidths.map((width) => width * renderScale);
   const sumMin = physicalMinimumWidths.reduce((sum, width) => sum + width, 0);
   const extra = Math.max(0, usableWidth - sumMin);
+  // 余剰幅（extra）は各小節へ「均等」に配る。
+  // 以前は最低幅に比例して配っていた（width + extra * width/sumMin）が、密な小節
+  // （32分トレモロ・64分16連など、最低幅が大きい小節）ほど余剰も多く受け取り、
+  // 幅の差が増幅されて「1小節が段幅の大半を占め、他の小節が窮屈」になっていた。
+  // 均等配分に戻すと、密な小節が元々必要とする最低幅の差は残るが（=はみ出し防止の下限は維持）、
+  // 余剰による差の増幅がなくなり、段内の各小節がより均等な幅に見える。
+  const measureCount = minimumWidths.length;
+  const extraPerMeasure = measureCount > 0 ? extra / measureCount : 0;
   return {
-    // 密な小節の最低幅を正しく計測した後なら、比例配分は密な小節に追加の呼吸を渡せる。
-    contentWidths: physicalMinimumWidths.map((width) => (
-      sumMin > 0 ? width + extra * (width / sumMin) : width + extra / minimumWidths.length
-    )),
+    contentWidths: physicalMinimumWidths.map((width) => width + extraPerMeasure),
     doesFit: sumMin <= usableWidth,
   };
 }

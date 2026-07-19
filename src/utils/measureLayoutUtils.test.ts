@@ -220,6 +220,19 @@ describe('measureMinimumContentWidth', () => {
     expect(allocation.contentWidths.reduce((sum, width) => sum + width, 0)).toBe(450);
   });
 
+  it('余剰幅は比例ではなく均等に配り、密な小節が段幅を独占しないようにする', () => {
+    // 密な小節（最低幅300）と通常小節（最低幅100×3）を1段に置く。余剰は 1000-600=400。
+    const allocation = allocateCombinedMeasureWidths([300, 100, 100, 100], 1000, 1);
+
+    // 均等配分なら余剰400を4小節へ100ずつ → [400, 200, 200, 200]。
+    expect(allocation.contentWidths).toEqual([400, 200, 200, 200]);
+    // 比例配分だった頃は密な小節が 300 + 400*(300/600) = 500 まで膨らみ差が増幅されていた。
+    expect(allocation.contentWidths[0]).toBeLessThan(500);
+    expect(allocation.doesFit).toBe(true);
+    // 密な小節の最低幅（下限）は必ず維持し、はみ出しを防ぐ。
+    expect(allocation.contentWidths[0]).toBeGreaterThanOrEqual(300);
+  });
+
   it('可変system rangeは通常小節を4のまま保ち、密な小節だけを縮めて連続にする', () => {
     const ranges = planSystemMeasureRanges([100, 100, 100, 100, 420, 100, 100, 100, 100], 4, 410);
     expect(ranges.map((range) => range.count)).toEqual([4, 1, 4]);
