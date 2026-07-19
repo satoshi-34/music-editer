@@ -220,17 +220,38 @@ describe('measureMinimumContentWidth', () => {
     expect(allocation.contentWidths.reduce((sum, width) => sum + width, 0)).toBe(450);
   });
 
-  it('余剰幅は比例ではなく均等に配り、密な小節が段幅を独占しないようにする', () => {
+  it('evenness=0 では余剰を均等配分するだけで最低幅の差を残す', () => {
     // 密な小節（最低幅300）と通常小節（最低幅100×3）を1段に置く。余剰は 1000-600=400。
-    const allocation = allocateCombinedMeasureWidths([300, 100, 100, 100], 1000, 1);
+    const allocation = allocateCombinedMeasureWidths([300, 100, 100, 100], 1000, 1, 0);
 
-    // 均等配分なら余剰400を4小節へ100ずつ → [400, 200, 200, 200]。
+    // evenness=0 は「最低幅 + extra/n」= [400, 200, 200, 200]（従来の均等余剰配分）。
     expect(allocation.contentWidths).toEqual([400, 200, 200, 200]);
     // 比例配分だった頃は密な小節が 300 + 400*(300/600) = 500 まで膨らみ差が増幅されていた。
     expect(allocation.contentWidths[0]).toBeLessThan(500);
     expect(allocation.doesFit).toBe(true);
-    // 密な小節の最低幅（下限）は必ず維持し、はみ出しを防ぐ。
-    expect(allocation.contentWidths[0]).toBeGreaterThanOrEqual(300);
+  });
+
+  it('evenness=1 では全小節を完全に等幅へ寄せる（総和は保存）', () => {
+    const allocation = allocateCombinedMeasureWidths([300, 100, 100, 100], 1000, 1, 1);
+
+    // equalShare = 1000/4 = 250。evenness=1 なら全小節がこの等分幅になる。
+    expect(allocation.contentWidths).toEqual([250, 250, 250, 250]);
+    // 総和は使用可能幅（1000）に保たれる。
+    expect(allocation.contentWidths.reduce((sum, width) => sum + width, 0)).toBe(1000);
+  });
+
+  it('evenness=0.5 では最低幅ベース配分と等幅のちょうど中間へ均す（既定挙動）', () => {
+    // 既定の MEASURE_WIDTH_EVENNESS=0.5 を明示的に渡して固定する。
+    const allocation = allocateCombinedMeasureWidths([300, 100, 100, 100], 1000, 1, 0.5);
+
+    // base=[400,200,200,200], equalShare=250 → base + 0.5*(250-base)
+    //   → [400-75, 200+25, 200+25, 200+25] = [325, 225, 225, 225]
+    expect(allocation.contentWidths).toEqual([325, 225, 225, 225]);
+    // 密な小節の占有率は evenness=0 の 400/1000=40% から 325/1000=32.5% へ縮む。
+    expect(allocation.contentWidths[0]).toBeLessThan(400);
+    // 総和は保存され、余剰配分だけの版より密・疎の差が小さい。
+    expect(allocation.contentWidths.reduce((sum, width) => sum + width, 0)).toBe(1000);
+    expect(allocation.doesFit).toBe(true);
   });
 
   it('可変system rangeは通常小節を4のまま保ち、密な小節だけを縮めて連続にする', () => {

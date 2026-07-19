@@ -357,6 +357,16 @@ export function vexFlowCombinedMeasureMinimumContentWidth(
   }
 }
 
+// 小節幅の「均し具合」。密な小節（音符が多く最低幅が大きい小節）の幅を、
+// 段内の等分幅（equalShare = 段の使用可能幅 / 小節数）へどれだけ寄せるかを 0..1 で指定する。
+//   0   = 各小節を最低必要幅どおりに配分（幅の差が最大。密な小節が段を独占しがち）
+//   1   = 全小節を完全に等幅へ（差ゼロ。ただし密な小節は音符が横に詰まる）
+//   0.5 = 中間（各小節の幅を、最低幅ベースの配分と等分幅のちょうど中間へ寄せる）
+// ここを大きくすると小節幅は均等に近づくが、64分16連など極端に密な小節は
+// 符頭が近づく（黒い塊に見えやすくなる）トレードオフがある。まず 0.5 で様子見。
+// ※小節幅の密・疎の差が気になるときは、この 1 箇所の値だけを変えれば調節できる。
+export const MEASURE_WIDTH_EVENNESS = 0.5;
+
 /**
  * 合同フォーマットした小節へ横幅を配る。
  *
@@ -367,6 +377,9 @@ export function allocateCombinedMeasureWidths(
   minimumWidths: number[],
   availableWidth: number,
   renderScale = SCORE_LAYOUT_RENDER_SCALE,
+  // 通常は上の定数をそのまま使う。引数で上書きできるのはテストや将来の
+  // 「段ごとに均し具合を変えたい」拡張に備えた口で、既定値は定数と同じ。
+  evenness = MEASURE_WIDTH_EVENNESS,
 ): { contentWidths: number[]; doesFit: boolean } {
   const usableWidth = Math.max(1, availableWidth);
   // minWidth は VexFlow の論理幅。ctx.scale(s, s) で描く実Canvasでは minWidth*s が
@@ -374,17 +387,30 @@ export function allocateCombinedMeasureWidths(
   const physicalMinimumWidths = minimumWidths.map((width) => width * renderScale);
   const sumMin = physicalMinimumWidths.reduce((sum, width) => sum + width, 0);
   const extra = Math.max(0, usableWidth - sumMin);
-  // 余剰幅（extra）は各小節へ「均等」に配る。
+  // 余剰幅（extra）は各小節へまず「均等」に配る（baseWidths = 最低幅 + extra/n）。
   // 以前は最低幅に比例して配っていた（width + extra * width/sumMin）が、密な小節
   // （32分トレモロ・64分16連など、最低幅が大きい小節）ほど余剰も多く受け取り、
   // 幅の差が増幅されて「1小節が段幅の大半を占め、他の小節が窮屈」になっていた。
-  // 均等配分に戻すと、密な小節が元々必要とする最低幅の差は残るが（=はみ出し防止の下限は維持）、
-  // 余剰による差の増幅がなくなり、段内の各小節がより均等な幅に見える。
   const measureCount = minimumWidths.length;
   const extraPerMeasure = measureCount > 0 ? extra / measureCount : 0;
+  const baseWidths = physicalMinimumWidths.map((width) => width + extraPerMeasure);
+  const doesFit = sumMin <= usableWidth;
+  // 段に収まらない（=余剰が無い）ときは、等分幅へ寄せると密な小節が最低幅すら
+  // 下回るまで圧縮され、はみ出し（衝突）を隠してしまう。この場合はブレンドせず
+  // 最低幅どおり（baseWidths = physicalMin）で返し、overflow を正直に出す。
+  if (!doesFit) {
+    return { contentWidths: baseWidths, doesFit };
+  }
+  // baseWidths の均等配分でも、密な小節は「最低幅そのもの」が大きいため差が残る。
+  // その残差を MEASURE_WIDTH_EVENNESS で等分幅（equalShare）へ線形にブレンドして縮める。
+  //   contentWidth = base + EVENNESS * (equalShare - base)
+  // Σ baseWidths = Σ equalShare = usableWidth なので、ブレンド後も総和は usableWidth に
+  // 保たれる（総和保存）。EVENNESS を上げると密な小節は最低幅を下回りうる（=符頭が
+  // 詰まる）が、これは「詰めてでも均等に」という意図した挙動。
+  const equalShare = measureCount > 0 ? usableWidth / measureCount : 0;
   return {
-    contentWidths: physicalMinimumWidths.map((width) => width + extraPerMeasure),
-    doesFit: sumMin <= usableWidth,
+    contentWidths: baseWidths.map((width) => width + evenness * (equalShare - width)),
+    doesFit,
   };
 }
 
