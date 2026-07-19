@@ -105,6 +105,10 @@ const SYSTEMS_PER_PAGE_KEY = 'score-systems-per-page';
 // 「小節幅の均等さ」のユーザー設定（その他タブのスライダー、0〜1）。
 // SavedScoreData には含めず、SYSTEMS_PER_PAGE_KEY と同じく画面設定として保存する
 const MEASURE_WIDTH_EVENNESS_KEY = 'score-measure-width-evenness';
+// 「画面表示のズーム」のユーザー設定（その他タブのスライダー、0.5〜1.5）。
+// useAutoPageScale が算出する自動縮尺（--scale）に掛け合わせる倍率として使う。
+// 1.0 = 自動縮尺そのまま（従来どおりの表示）。印刷には影響させない（App.css の @media print 側で解除される）
+const VIEW_ZOOM_KEY = 'score-view-zoom';
 
 // 無音検知（issue #14）のタイミング設定。
 // 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
@@ -1950,6 +1954,19 @@ export default function ScorePage() {
   }, [selectedMeasures, clipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, pushHistory, handleTranspose]);
 
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
+  // ユーザー設定（その他タブの「画面表示のズーム」スライダー、0.5〜1.5）。
+  // 自動縮尺（useAutoPageScale の scale）に掛け合わせて画面上の表示サイズだけを変える。
+  // 印刷は @media print で transform: none !important により解除されるため影響しない。
+  const [viewZoom, setViewZoom] = useState<number>(() => {
+    const raw = localStorage.getItem(VIEW_ZOOM_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.5〜1.5 へクランプする
+    return Number.isFinite(n) ? Math.max(0.5, Math.min(1.5, n)) : 1;
+  });
+  // 自動縮尺にユーザーのズーム倍率を掛けた、実際に画面へ適用する縮尺。
+  // クリック等の座標系は --scale から読むため、ここで一本化しておけば
+  // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
+  const effectiveScale = scale * viewZoom;
 
   const totalSystems = 12;
   const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
@@ -2299,7 +2316,7 @@ export default function ScorePage() {
     resizeObserver.observe(spread);
     spread.querySelectorAll<HTMLElement>('.print-page').forEach(page => resizeObserver.observe(page));
     return () => resizeObserver.disconnect();
-  }, [spreadRef, visiblePages.length, scoreType, instrumentation.parts.length, scale]);
+  }, [spreadRef, visiblePages.length, scoreType, instrumentation.parts.length, effectiveScale]);
 
   useEffect(() => {
     return () => {
@@ -2835,6 +2852,30 @@ export default function ScorePage() {
                 {/* 現在値（%）。スライダーだけだと今いくつか分からないため小さく添える */}
                 <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(measureWidthEvenness * 100)}%</span>
               </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="画面表示の拡大縮小です。印刷結果には影響しません。100% が既定の自動縮尺です"
+              >
+                画面表示のズーム
+                <input
+                  type="range"
+                  min={50}
+                  max={150}
+                  step={5}
+                  value={Math.round(viewZoom * 100)}
+                  onChange={e => {
+                    // スライダーは 50〜150(%) で扱い、内部では 0.5〜1.5 の倍率として保持する
+                    const v = Math.max(0.5, Math.min(1.5, Number(e.target.value) / 100));
+                    if (!isNaN(v)) {
+                      setViewZoom(v);
+                      localStorage.setItem(VIEW_ZOOM_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 90 }}
+                />
+                {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
+                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(viewZoom * 100)}%</span>
+              </label>
               <button className="ghost" onClick={handleExportMusicXml}>MusicXML書出</button>
               <button className="ghost" onClick={handleExportMidi}>MIDI書出</button>
               <button className="ghost" onClick={() => musicXmlInputRef.current?.click()}>MusicXML読込</button>
@@ -3048,10 +3089,10 @@ export default function ScorePage() {
         <div
           className="spread"
           ref={spreadRef}
-          style={{ '--scale': String(scale), '--columns': String(columns) } as React.CSSProperties}
+          style={{ '--scale': String(effectiveScale), '--columns': String(columns) } as React.CSSProperties}
         >
           {visiblePages.map((p, i) => (
-            <ScaledPageWrapper key={i} scale={scale} pageHeight={sharedPageHeight}>
+            <ScaledPageWrapper key={i} scale={effectiveScale} pageHeight={sharedPageHeight}>
               {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
               {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
               {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}

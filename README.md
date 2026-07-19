@@ -143,6 +143,12 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - **既定値**: スライダー未設定時はコードの定数 `MEASURE_WIDTH_EVENNESS`（`src/utils/measureLayoutUtils.ts`、0.5）が使われる。アプリ全体の初期値を変えたい場合はこの定数を変更する
 - 実装は「余剰幅を各小節へ均等配分した base」を「段内の等分幅 equalShare」へ線形にブレンドする方式で、総和は段の使用可能幅に保たれる（総和保存）。段に収まらない小節（overflow）はブレンドせず最低幅どおりに描き、はみ出し警告を隠さない。スライダー値は段確定後の幅配分だけに効き、改段（段割り・ページ数）には影響しない（詳細は `.claude/specs/multi-part-beat-alignment/design.md` 追補6・追補7を参照）
 
+### 画面表示のズーム調整
+- **どこで変えるか**: **その他タブの「画面表示のズーム」スライダー**（50〜150%、5%刻み）で画面の表示サイズを調節できる。設定はブラウザ（localStorage キー `score-view-zoom`）に保存され、リロード後も維持される
+- **既存の自動縮尺との関係**: このアプリはもともと `useAutoPageScale`（`src/components/useAutoPageScale.ts`）が画面幅に合わせて自動で縮尺（`--scale`）を計算し、`ScaledPageWrapper`（`src/components/ScaledPageWrapper.tsx`）が `transform: scale(var(--scale))` で画面表示だけを縮小している（issue #13: CSS `zoom` は Safari で `getBoundingClientRect` に反映されず音符のクリック座標がずれるため、全ブラウザで座標に反映される `transform` を採用）。ズームスライダーはこの自動縮尺に**倍率として掛け合わせる**だけで（`ScorePage.tsx` の `effectiveScale = scale * viewZoom`）、既存の縮尺計算・座標変換の仕組みはそのまま利用する。100% がスライダー未操作時の従来どおりの表示（自動縮尺そのまま）
+- **印刷への影響**: 印刷は `@media print` で `.page-wrapper { transform: none !important; width: auto !important; height: auto !important; }` により画面用の縮小・ズームを丸ごと解除する既存設計（`src/App.css`）に従うため、ズームの値に関わらず印刷結果は変わらない
+- **座標系への影響**: 音符クリックなどのヒットテストは `.page-wrapper` の `--scale`（Safari 対策で `closest('.page-wrapper')` から読む実装、`StaffCanvas.tsx` / `PianoSystemCanvas.tsx`）を経由するため、ズームで `--scale` の値が変わっても座標変換は自動的に追従する
+
 ### ページレイアウトの実装ポイント
 - `ScorePage` が表示中の `.print-page` の高さを測り、最大値を `ScaledPageWrapper` へ渡す
 - `ScaledPageWrapper` は共通高さを紙面と外側ラッパーへ反映するため、タイトル欄の有無でページサイズが分かれない
@@ -550,6 +556,8 @@ src/
 
 ### 楽譜編集
 - scale=1.0 / 0.86 / 0.8 で E4→G4→B4→D5（ミ・ソ・シ・レ）が狙い通り置ける
+- その他タブの「画面表示のズーム」を 150%・70% にしても、クリックした位置に狙い通り音符が置けること（自動縮尺との合成後も座標変換が追従すること）
+- ズームを変更してリロードしても設定値が保持されること。ズームの値に関わらず印刷結果（`@media print` のレイアウト）が変わらないこと
 - 線の上クリックでも間に吸われない
 - 16 分×3 + 二分 などでも小節から溢れない
 - 休符は 1 回目のクリックで選択でき、Delete で削除できること
