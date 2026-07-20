@@ -40,7 +40,7 @@ describe('SingleStaff', () => {
         tool="select"
         systems={4}
         measuresPerSystem={3}
-        initialScoreData={sampleData}
+        data={sampleData}
       />
     );
 
@@ -55,7 +55,7 @@ describe('SingleStaff', () => {
         systems={3}
         measuresPerSystem={2}
         startMeasureIndex={10}
-        initialScoreData={sampleData}
+        data={sampleData}
       />
     );
 
@@ -69,7 +69,7 @@ describe('SingleStaff', () => {
 
   it('initialScoreData/clef を partsConfig 要素数1に変換して渡す', () => {
     render(
-      <SingleStaff tool="select" systems={1} initialScoreData={sampleData} />
+      <SingleStaff tool="select" systems={1} data={sampleData} />
     );
 
     const canvas = screen.getByTestId('piano-system-canvas');
@@ -84,7 +84,7 @@ describe('SingleStaff', () => {
         systems={1}
         disabled
         keySignature="G"
-        initialScoreData={sampleData}
+        data={sampleData}
       />
     );
 
@@ -97,5 +97,24 @@ describe('SingleStaff', () => {
     render(<SingleStaff tool="select" />);
     const canvases = screen.getAllByTestId('piano-system-canvas');
     expect(canvases).toHaveLength(9); // デフォルト systems=9
+  });
+
+  it('systemRanges を渡すと段数・startMeasureIndex・measuresPerSystem が可変長で決まる', () => {
+    render(
+      <SingleStaff
+        tool="select"
+        systems={99} // systemRanges 優先のため無視されるはず
+        data={sampleData}
+        systemRanges={[
+          { start: 0, count: 3 },
+          { start: 3, count: 2 },
+        ] as any}
+      />
+    );
+
+    const canvases = screen.getAllByTestId('piano-system-canvas');
+    expect(canvases).toHaveLength(2);
+    expect(canvases.map((c) => c.getAttribute('data-start-measure-index'))).toEqual(['0', '3']);
+    expect(canvases.map((c) => c.getAttribute('data-measures-per-system'))).toEqual(['3', '2']);
   });
 });
