@@ -1571,7 +1571,7 @@ export default function ScorePage() {
     setStoredDataAvailable(false);
     fileHandleRef.current = null;
     // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
-    setExtraEditingSystems(0);
+    setExtraEditingMeasures(0);
     // 前の譜面用の段割り手動上書きも引き継がない
     setSystemMeasureOverrides([]);
   }, [
@@ -1641,7 +1641,7 @@ export default function ScorePage() {
         setEnsembleParts([]);
       }
       // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
-      setExtraEditingSystems(0);
+      setExtraEditingMeasures(0);
       // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
       setSystemMeasureOverrides(data.systemMeasureOverrides ?? []);
     } catch (err) {
@@ -1723,7 +1723,7 @@ export default function ScorePage() {
         setEnsembleParts([]);
       }
       // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
-      setExtraEditingSystems(0);
+      setExtraEditingMeasures(0);
       // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
       setSystemMeasureOverrides(loadedData.systemMeasureOverrides ?? []);
     }
@@ -1756,7 +1756,7 @@ export default function ScorePage() {
     setPlaybackState('stopped');
     setHasCustomPianoSample(hasCustomPianoDemoScore());
     // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
-    setExtraEditingSystems(0);
+    setExtraEditingMeasures(0);
     // 前の譜面用の段割り手動上書きも引き継がない
     setSystemMeasureOverrides([]);
   }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock, setTimeSignature]);
@@ -2184,12 +2184,16 @@ export default function ScorePage() {
     return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : MEASURE_WIDTH_EVENNESS;
   });
 
-  // 画面専用の「＋小節を追加」ボタンで、内容のある最後の段より後ろに
-  // 追加でいくつ編集用の空き段を表示するか（クリック1回につき1段ぶん）。
-  // 楽譜データそのものは変えず、表示する段数だけを一時的に増やす画面状態のため、
+  // 画面専用の「＋小節を追加」ボタンで、内容のある最後の小節より後ろに
+  // 追加でいくつ編集用の空き小節を表示するか（クリック1回につき1小節ぶん）。
+  // 以前は「段(システム)」単位で増やしていたため、1行目がすでに埋まっている状態で
+  // 押すと2行目に自動段割りの1行ぶん（例: 4小節）がまとめて出現し、「1小節ずつ増える」
+  // という期待と食い違っていた（.claude/specs 参照）。小節単位に変更し、下の
+  // visiblePlannedRanges で「今の行の残り容量ぶんだけ埋めてから次の行へ流す」処理をする。
+  // 楽譜データそのものは変えず、表示する小節数だけを一時的に増やす画面状態のため、
   // Undo履歴には積まない（ボタン操作自体は setState のみで pushHistorySnapshot を呼ばない）。
   // 新規作成・読込・サンプル読込など楽譜データを丸ごと差し替える操作では 0 へ戻す。
-  const [extraEditingSystems, setExtraEditingSystems] = useState(0);
+  const [extraEditingMeasures, setExtraEditingMeasures] = useState(0);
 
   // 印刷用: 内容のある最後の小節までを段数に換算する。
   // これ以降の「空の段」「空のページ」は印刷から除外する（画面では編集用に表示し続ける）。
@@ -2273,14 +2277,14 @@ export default function ScorePage() {
     // 計画してしまい、末尾の空小節からも余分な段が大量に生まれる原因になっていた。
     // 画面では既定で内容段の直後の空き段は表示しない（下の visibleTotalSystems 参照）ため、
     // ここでの「2段ぶん」は常に描画される量ではなく、あくまで「＋小節を追加」で
-    // すぐ表示できる予備の計画データ（幅計算済みの空き枠）。ユーザーが追加した段数
-    // （extraEditingSystems）ぶんは必ず用意しつつ、その先にも常に1段分の予備を残す。
-    const editingBufferMeasures = Math.max(effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem) * (extraEditingSystems + 2);
+    // すぐ表示できる予備の計画データ（幅計算済みの空き枠）。ユーザーが追加した小節数
+    // （extraEditingMeasures）ぶんは必ず用意しつつ、その先にも常に2段分の予備を残す。
+    const editingBufferMeasures = Math.max(effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem) * 2 + extraEditingMeasures;
     const length = Math.max(contentMeasureCount + editingBufferMeasures, effectiveMeasurePlan.minimumWidths.length);
     return Array.from({ length }, (_, index) => (
       effectiveMeasurePlan.minimumWidths[index] ?? MIN_MEASURE_CONTENT_WIDTH
     ));
-  }, [contentMeasureCount, effectiveMeasurePlan.minimumWidths, effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem, extraEditingSystems]);
+  }, [contentMeasureCount, effectiveMeasurePlan.minimumWidths, effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem, extraEditingMeasures]);
   const plannedRanges = useMemo(() => planSystemMeasureRanges(
     // plannerMinimumWidths は（Canvas 描画にそのまま渡せるよう）VexFlow の論理単位のまま。
     // 一方 worstCaseSystemContentBudget() は物理ページ幅（SCORE_LAYOUT_RENDER_SCALE 倍後）
@@ -2352,17 +2356,34 @@ export default function ScorePage() {
     getPageSystemOffsetPure(pageIndex, pageSystemLayoutOptions)
   ), [pageSystemLayoutOptions]);
 
-  // 画面に表示する段数（楽譜の作法として「最後の音符がある小節が譜面の最後」になるよう、
-  // 内容のない末尾の空き段はデフォルトで表示しない。印刷の printContentSystems と同じ基準に、
-  // 「＋小節を追加」ボタンでユーザーが明示的に増やした段数（extraEditingSystems）だけを足す。
-  // plannerMinimumWidths 側で常に extraEditingSystems+1 段ぶんの予備を計画しているため、
-  // plannedRanges の範囲を超えることはない）。
-  const visibleTotalSystems = Math.max(1, Math.min(plannedRanges.length, printContentSystems + extraEditingSystems));
-  const visiblePlannedRanges = plannedRanges.slice(0, visibleTotalSystems);
-  // 表示する段数は visiblePlannedRanges（内容＋ユーザーが増やした編集用余白）にそのまま従う。
-  // 以前は plannedRanges 全体（内容＋常時2段ぶんの空き段）をそのまま画面にも出していたが、
-  // それだと「最後の音符がある小節が譜面の最後になる」という楽譜の作法に反するため、
-  // 画面用は visiblePlannedRanges に絞った。
+  // 画面に表示する段（内容＋「＋小節を追加」で増やした編集用の空き小節）。
+  // 楽譜の作法として「最後の音符がある小節が譜面の最後」になるよう、内容のない
+  // 末尾の空き段はデフォルトで表示しない（印刷の printContentSystems と同じ基準）。
+  // 以前は「＋小節を追加」を押すたび段(システム)を丸ごと1つ足していたため、1行目が
+  // すでに埋まっている状態で押すと2行目に自動段割りの1行ぶん（例:4小節）がまとめて
+  // 出現してしまっていた。小節単位で1つずつ増やし、まず内容の直後の段の「残り容量」
+  // だけを埋め、埋まったらその次の段へ1小節だけ流れるようにする。
+  // 内容側（contentRanges）は printContentSystems の基準そのままで一切変更しない
+  // （plannedRanges 自体は print と共有しているため、ここで書き換えると印刷側の
+  // 段割り・終止線の位置まで変わってしまう。そのためバッファ側だけを新しい配列として
+  // 複製・切り詰め、印刷用の plannedRanges 本体には手を加えない）。
+  const contentRanges = plannedRanges.slice(0, printContentSystems);
+  const bufferRanges: SystemMeasureRange[] = [];
+  let remainingExtraMeasures = extraEditingMeasures;
+  for (let i = printContentSystems; i < plannedRanges.length && remainingExtraMeasures > 0; i += 1) {
+    const range = plannedRanges[i];
+    const takeCount = Math.min(range.count, remainingExtraMeasures);
+    const widths = range.minimumWidths.slice(0, takeCount);
+    bufferRanges.push({
+      start: range.start,
+      count: takeCount,
+      minimumWidths: widths,
+      totalWidth: widths.reduce((sum, w) => sum + w, 0),
+      overflow: range.overflow && takeCount === range.count,
+    });
+    remainingExtraMeasures -= takeCount;
+  }
+  const visiblePlannedRanges = [...contentRanges, ...bufferRanges];
   const effectiveTotalSystems = Math.max(1, visiblePlannedRanges.length);
   // 印刷時、内容のある最後のページだけ最後の段をページ下端へ寄せる（App.css の
   // .print-final-page .system-stack 参照）。printContentSystems は「内容のある段の総数」
@@ -3758,14 +3779,15 @@ export default function ScorePage() {
                   {/* ＋小節を追加: 最後の音符がある小節が譜面の最後になるよう、既定では
                       内容のない末尾の空き段を画面にも表示しない（楽譜の作法）。それでも
                       曲の続きを入力できるよう、最後に表示しているページの末尾にだけ
-                      控えめなボタンを置き、押すたびに空の段を1段ずつ表示する。
+                      控えめなボタンを置き、押すたびに空の小節を1小節ずつ表示する
+                      （まず直後の段の残り容量を埋め、埋まったら次の段へ流れる）。
                       印刷には出さない（App.css の @media print で非表示）。
                       パート譜表示・空の楽譜での初期起動時は編集不可なので出さない。 */}
                   {i === visiblePages.length - 1 && !isPartExtractionActive && (
                     <button
                       type="button"
                       className="add-measures-ghost-button"
-                      onClick={() => setExtraEditingSystems((prev) => prev + 1)}
+                      onClick={() => setExtraEditingMeasures((prev) => prev + 1)}
                     >
                       ＋ 小節を追加
                     </button>

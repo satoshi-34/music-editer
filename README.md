@@ -529,6 +529,7 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 - **向き自動反転**: 曲率ドラッグ中にカーソルが音符クラスタを 20px 超えると `flipDirection` が自動トグル。
 - **始終点ドラッグ**: 選択中の弧に青い丸ハンドルを表示。ドラッグで `startDx/Dy` または `endDx/Dy` を調節。
 - **Delete キー優先順位**: スラー選択中は Delete で弧のみ削除（音符は残る）。音符選択中は従来通り音符を削除。
+- **音符削除時の編集オーバーレイの後始末**: 歌詞・記号サイズ/位置調整などの編集オーバーレイ（`textEditState` / `symbolResizeEditState` / `symbolOffsetEditState` / `symbolAdjustPickerState`）を開いたまま対象の音符を Delete で削除すると、以前はオーバーレイが画面に残り続けた（Escape でのみ閉じられた）。`StaffCanvas.tsx` / `PianoSystemCanvas.tsx` の Delete ハンドラに `closeEventEditOverlaysFor(measure, index[, partIndex])` を追加し、削除したイベントを指しているオーバーレイ state だけを `null` にクリアするよう修正（無関係な音符を指すオーバーレイは残す）。
 
 #### arcGeomMap
 各弧の形状パラメータ（座標・向き・ep オフセット・cpDyOffset）を `useEffect` 内で保持。ライブドラッグ時の再計算に使用し、React 再レンダを経由しないで応答速度を確保する。

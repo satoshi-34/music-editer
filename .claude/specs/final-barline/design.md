@@ -468,3 +468,76 @@
 - 検証後は「複雑テスト楽譜」読み込み状態のまま、段数/ページ=5、
   画面表示のズーム/音符の大きさ/小節幅の均等さ=100%/100%/65%、
   段割り上書きなしの状態に戻して終了した。
+
+## 追補8: 「＋小節を追加」を段単位から小節単位へ変更（2026-07-20）
+
+### 問題
+
+追補3で導入した「＋ 小節を追加」ボタンは、名前に反して実際には段（システム）を
+まるごと1つ増やしていた（`extraEditingSystems` を1ずつ増やし、それを
+`printContentSystems` に足して表示する段数を決めていたため）。1行目がすでに
+自動段割りの容量いっぱい（例: 4小節）まで埋まっている状態でボタンを押すと、
+2行目に一気に4小節（1段ぶん）が現れてしまい、「小節を1つずつ追加する」という
+ボタン名・ユーザーの期待と食い違っていた。
+
+### 修正方針
+
+`extraEditingSystems`（段カウント）を `extraEditingMeasures`（小節カウント）へ
+置き換え、クリックのたびに小節を1つだけ画面に追加できるようにした。
+
+- `planSystemMeasureRanges` には既に `breakAt` 引数があり、「`breakAt` で指定した
+  絶対小節インデックスで強制的に段を打ち切る」機能を持つ。これは本来「内容のある
+  最後の小節と、それ以降の空きバッファ小節を同じ段に混ぜない」ために
+  `contentMeasureCount` を渡す用途で使われている（`plannedRanges` の計算）。
+  この `plannedRanges` は印刷（`printContentSystems` のスライス）とも共有しているため、
+  ここ自体は変更せず（変更すると印刷側の段割り・終止線位置まで動いてしまうため）、
+  画面専用の `visiblePlannedRanges` を組み立てる段階でだけ小節単位の絞り込みを行う。
+- `visiblePlannedRanges` の構築を「`printContentSystems` ぶんの内容段（`contentRanges`。
+  従来の `plannedRanges` そのまま、無変更）」＋「バッファ段を先頭から辿り、
+  `extraEditingMeasures` を使い切るまで各段の `count`/`minimumWidths`/`totalWidth` を
+  切り詰めた新しいレンジオブジェクトを作る（`bufferRanges`）」の連結に変更した
+  （`plannedRanges` 自体は書き換えず、複製した新しいオブジェクトを返すだけなので
+  印刷側には一切影響しない）。
+  - 例: 1段の容量が4小節、`contentMeasureCount=0` のとき、内容段は既存仕様どおり
+    最低1段（4小節、空欄）を表示する（ここは本追補の対象外・従来どおり）。
+    ここで＋ボタンを1回押す（`extraEditingMeasures=1`）と、次のバッファ段
+    （4小節ぶん計画済み）から先頭1小節だけを切り出して2行目に表示する。
+    2〜4回目のクリックでその段が4小節まで埋まり、5回目のクリックで
+    3行目に1小節だけ現れる、という「1段目を1小節ずつ埋め、埋まったら
+    次の段へ流れる」挙動になる。
+- `plannerMinimumWidths` の編集バッファ量は `Math.max(effectiveMeasuresPerSystem,
+  measuresPerSystem) * (extraEditingSystems + 2)`（段単位）から
+  `Math.max(effectiveMeasuresPerSystem, measuresPerSystem) * 2 + extraEditingMeasures`
+  （常に2段ぶんの予備 + 小節単位で増えた分）へ変更。ユーザーが増やした小節数ぶんは
+  必ず計画済み幅データが存在するようにしつつ、常に2段分の予備を維持する点は従来と同じ。
+- 新規作成・localStorage 読込・ファイル読込・サンプル読込でのリセット対象を
+  `setExtraEditingSystems(0)` から `setExtraEditingMeasures(0)` へ機械的に置き換え。
+  リセットするタイミング・箇所は変更していない。
+- 初期表示（`contentMeasureCount` が段容量の倍数、または0のとき先頭の段が満杯で
+  表示される現象）は本追補の対象外・従来のまま変更していない。これは「内容の
+  ある最後の小節」の直後で強制的に段を区切る `breakAt` の性質上、区切り位置が
+  ちょうど段境界と一致する場合はその段が最初から満杯になる仕様であり、
+  「＋小節を追加」ボタンの挙動改修とは独立した既存の設計判断のため。
+
+### 影響範囲
+
+- `src/components/ScorePage.tsx`: `extraEditingSystems` → `extraEditingMeasures`
+  にリネーム、`plannerMinimumWidths` の編集バッファ計算式の変更、
+  `visibleTotalSystems`/`visiblePlannedRanges` の算出ロジックを
+  「内容段はそのまま・バッファ段だけ小節単位で切り詰めて連結」する方式へ変更、
+  「＋ 小節を追加」ボタンの `onClick` とコメントの更新。
+- `README.md`: 「＋ 小節を追加」の説明を「段が1段ずつ増える」から
+  「小節が1小節ずつ増え、段が埋まったら次の段へ流れる」へ更新。
+- 印刷側のロジック（`plannedRanges` 本体、`printContentSystems`、
+  `finalMeasureIndex`、終止線）は無変更。
+
+### 検証
+
+- `docker compose run --rm app npm run build`: エラーなし（tsc -b / vite build とも成功）。
+- `docker compose run --rm app npm test`: 353 Test Files / 4661 Tests すべて成功。
+- ブラウザ確認（新規作成の空の楽譜、単旋律譜）: 初期表示は1行目に4小節（既存仕様どおり）。
+  「＋ 小節を追加」を1回押すと2行目に1小節だけ現れ、続けて3回押すと2行目が4小節まで
+  埋まり、さらに1回押すと3行目に1小節だけ現れることをスクリーンショットで確認した。
+  以前は1回のクリックで2行目に4小節がまとめて出現していたことと比較して、
+  改修が意図どおり機能していることを確認。
+- コンソールエラーなし。
