@@ -187,3 +187,44 @@ state だけを閉じるヘルパー `closeEventEditOverlaysFor` を追加した
   入力欄の外にある想定を模したケース含む）→ 音符が削除されると同時に
   歌詞入力オーバーレイも画面から消えることを確認。直後に Undo すると
   歌詞付きの音符が復元されることを確認。コンソールエラーなし。
+
+## 追補: PianoSystemCanvas に途中テンポ変更（♩=BPM）表示を移植（2026-07-20）
+
+### 問題
+
+`MeasureData.bpm`（途中テンポ変更）は編集オーバーレイ・保存・再生には
+反映されていたが、`PianoSystemCanvas.tsx`（ピアノ大譜表・四重奏・編成譜、
+および `SingleStaff` 経由の単旋律譜）では譜面上に「♩=XXX」のテキスト描画が
+未実装だった。旧 `StaffCanvas.tsx`（1341行付近で収集・3382行付近で描画）に
+実装が残っていたのを、フェーズ2の PianoSystemCanvas 統合の中でこの1点だけ
+移植し忘れていたもの。
+
+### 修正方針
+
+`rehearsalMarkEntries`（練習番号）と同じ「最上段（`pi===0`）基準」の方針で
+`bpmMarkingEntries` を新設し、`sharedMeasure?.bpm` があれば最上段の小節の
+上にだけ収集・描画する。描画は `StaffCanvas.tsx` と同じ座標・色（五線上端の
+36px上、`fill: #b45309` の琥珀色、`♩=XXX`）をそのまま踏襲し、リハーサル
+マーク（56px上）との縦の重なりも既存の位置関係を維持した。
+
+共通ユーティリティへの切り出しは行わず、`StaffCanvas.tsx` /
+`PianoSystemCanvas.tsx` それぞれに直書きした（リハーサルマーク描画も
+同様に2ファイルへ直書きされており、既存の踏襲パターンに合わせた。
+ロジックが数行程度で、収集元の型（`sharedMeasure` vs `data`）が
+ファイルごとに異なるため、共通化の効果が薄いと判断）。
+
+### 影響範囲
+
+- `src/components/PianoSystemCanvas.tsx`: `bpmMarkingEntries` の収集
+  （`pi === 0 && sharedMeasure?.bpm` の条件で最上段のみ）と一括描画を追加。
+- `src/components/PianoSystemCanvasBpmMarking.test.tsx`（新規）: 単旋律譜
+  相当（`partsConfig` 1パート）・ピアノ大譜表（treble+bass）それぞれで
+  `♩=XXX` テキストが描画されること、bpm 未設定の小節では描画されないことを
+  検証。
+
+### 検証
+
+- `docker compose run --rm app npm test` / `npm run build`: エラー・失敗なし。
+- ブラウザ確認（単旋律譜）: 「途中テンポ変更」ツールで小節をクリック →
+  90 を入力して確定 → 譜面上に `♩=90`（`fill: #b45309`）が表示されることを
+  確認。コンソールエラーなし。
