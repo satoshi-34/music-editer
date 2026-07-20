@@ -21,6 +21,7 @@ import {
 import { computeArcGeometry } from './arcUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
+import { keyToMidi, midiToKey } from '../utils/noteMidiUtils';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
@@ -285,20 +286,6 @@ function applyDefaultRestDisplayLine(
   }
 }
 
-const LETTER_TO_PC: Record<string,number>={c:0,d:2,e:4,f:5,g:7,a:9,b:11};
-function keyToMidi(key: string): number|null {
-  const m=key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if(!m)return null;
-  let pc=LETTER_TO_PC[m[1].toLowerCase()];
-  if(m[2]==='#')pc++;else if(m[2]==='b')pc--;
-  pc=((pc%12)+12)%12;
-  return 12*(parseInt(m[3],10)+1)+pc;
-}
-function midiToKey(midi: number, sharp: boolean): string {
-  const S=['c','c#','d','d#','e','f','f#','g','g#','a','a#','b'];
-  const F=['c','db','d','eb','e','f','gb','g','ab','a','bb','b'];
-  const pc=((Math.round(midi)%12)+12)%12, oct=Math.floor(midi/12)-1;
-  return `${(sharp?S:F)[pc]}/${oct}`;
-}
 
 function placeKeySignatureAfterTimeSignature(stave: Stave): void {
   const modifiers = (stave as any).getModifiers?.() as Array<any> | undefined;

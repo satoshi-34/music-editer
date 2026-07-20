@@ -57,6 +57,7 @@ import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
+import { keyToMidi, midiToKey } from '../utils/noteMidiUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -359,24 +360,6 @@ function applyDefaultRestDisplayLine(
       note.setKeyLine?.(0, note.getKeyLine(0) - 1);
     }
   }
-}
-
-/* ===== 半音移動：key ⇄ MIDI ===== */
-const LETTER_TO_PC: Record<string, number> = { c:0, d:2, e:4, f:5, g:7, a:9, b:11 };
-function keyToMidi(key: string): number | null {
-  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if (!m) return null;
-  let pc = LETTER_TO_PC[m[1].toLowerCase()];
-  if (m[2]==='#') pc += 1; else if (m[2]==='b') pc -= 1;
-  pc = ((pc % 12) + 12) % 12;
-  return 12 * (parseInt(m[3],10) + 1) + pc; // C4=60
-}
-function midiToKey(midi: number, preferSharp: boolean): string {
-  const SHARP = ['c','c#','d','d#','e','f','f#','g','g#','a','a#','b'];
-  const FLAT  = ['c','db','d','eb','e','f','gb','g','ab','a','bb','b'];
-  const pc = ((Math.round(midi) % 12) + 12) % 12;
-  const oct = Math.floor(midi / 12) - 1;
-  const name = preferSharp ? SHARP[pc] : FLAT[pc];
-  return `${name}/${oct}`;
 }
 
 function placeKeySignatureAfterTimeSignature(stave: Stave): void {
