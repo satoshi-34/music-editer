@@ -16,7 +16,7 @@
 
 - `ScorePage.tsx` がユーザー設定（`pageMarginSideMm` / `pageMarginVerticalMm` / `systemRowGapPx`、いずれも localStorage 保存）を state として持ち、`<section className="print-page">` に `--page-margin-side` / `--page-margin-top` / `--page-margin-bottom` を、`.score-area` に `--system-row-gap` をインラインスタイルとして注入する。
 - `App.css` 側は `padding: var(--page-margin-top, 14mm) var(--page-margin-side, 14mm) var(--page-margin-bottom, 12mm);` と `.score-area .system-stack { gap: var(--system-row-gap, 0px); }` のように、値をそのまま消費するだけにし、CSSとJSでの二重定義を避けた。
-- 上下余白は「上 padding の値」をスライダーで直接動かし、下 padding は常に「上 − 2mm」を保つ（従来の 14mm/12mm という2mm差を維持し、既定値のときに完全に元のレイアウトへ戻るようにするため）。
+- 上下余白は当初「上 padding の値」を1本のスライダーで直接動かし、下 padding は常に「上 − 2mm」を保つ仕様だった（従来の 14mm/12mm という2mm差を維持し、既定値のときに完全に元のレイアウトへ戻るようにするため）。**この仕様は後日「余白(上)」「余白(下)」の2本に分離した。詳細は本ファイル末尾の追補（2026-07-20）を参照。**
 
 ### 段数/ページ上限（maxSystemsPerPage）との連動
 
@@ -99,3 +99,30 @@ CSS の `gap` プロパティは負値を受け付けない（無効な宣言と
   - 上下余白25mm + 段の間隔30px でも `.score-area` の `scrollHeight === clientHeight`（縦あふれなし）、段同士の矩形重なりなし。
   - 「レイアウトをリセット」で全設定が既定値（14mm/14mm/0px）に戻ることを確認。
   - コンソールエラーなし。
+
+## 追補: 「余白(上下)」を「余白(上)」「余白(下)」に分離（2026-07-20）
+
+### 問題
+
+「余白(上下)」は1本のスライダーで上 padding の値を直接動かし、下 padding は常に「上 − 2mm」を保つ仕様だった。これは既定値（上14mm/下12mm）を再現するための実装上の割り切りであり、ユーザーが上下を独立して調整したい場合（例: ページ番号フッターのスペースだけ広げたい、上だけタイトル用に広げたいなど）に対応できなかった。
+
+### 修正設計
+
+- `ScorePage.tsx` の state を `pageMarginVerticalMm`（1つ）から `pageMarginTopMm` / `pageMarginBottomMm`（2つ）に分離した。
+- 定数: `PAGE_MARGIN_TOP_KEY = 'score-page-margin-top'` / `PAGE_MARGIN_BOTTOM_KEY = 'score-page-margin-bottom'`（新キー）、`PAGE_MARGIN_VERTICAL_LEGACY_KEY = 'score-page-margin-vertical'`（旧キー、読み取り専用で後方互換のために残す）。範囲は両方とも既存と同じ8〜25mm。既定値は `DEFAULT_PAGE_MARGIN_TOP_MM = 14` / `DEFAULT_PAGE_MARGIN_BOTTOM_MM = 12`（分離前の実効値をそのまま既定値にし、初回表示の見た目を変えない）。
+- 後方互換: 新キー（`score-page-margin-top` / `score-page-margin-bottom`）が未保存の場合のみ、旧キー（`score-page-margin-vertical`）の値を読み、旧仕様と同じ計算（上=旧値、下=旧値−2mm）で新state初期値へ引き継ぐ。引き継いだ値も8〜25mmへクランプするため、旧値が10mm未満だった場合（下=旧値−2mmが8mm未満になる場合）は下側が8mmに底上げされる（範囲制約による境界での丸め、意図的な仕様）。
+- `maxSystemsPerPage` の縦予算計算は、従来「上 + max(0, 上−2mm)」だった `verticalMarginTotalMm` を「`pageMarginTopMm + pageMarginBottomMm`」（上下の実際の合計）に置き換えた。既定合計は変わらず26mm（14+12）のため、既定値使用時の挙動は不変。
+- 「レイアウトをリセット」は `pageMarginTopMm` / `pageMarginBottomMm` をそれぞれの既定値へ戻し、新キー2つへ書き込む（旧キーは削除しない。次回起動時は新キーが優先されるため実害はない）。
+- UI: 「その他」タブの「レイアウト」欄に「余白(上)」「余白(下)」の2本のスライダーを配置（旧「余白(上下)」を置き換え）。挙動・保存タイミングは他のレイアウトスライダーと同一。
+
+### 検証結果
+
+- `docker compose run --rm app npx tsc --noEmit`: エラーなし。
+- `docker compose run --rm app npx vitest run`: 69ファイル927テスト全緑（既存テストのみで、予算計算への直接のユニットテストは既になし。挙動はブラウザ実測で確認）。
+- ブラウザ実測（「複雑テスト楽譜」データ、dev サーバー port 5175）:
+  - 上=8mm/下=25mm、上=25mm/下=8mm のいずれでも `.print-page` の `padding-top`/`padding-bottom` が指定どおり非対称に変化し、譜面領域（`.score-area`）の高さも追随。縦あふれなし（`scoreBottom < pageBottom` を全ページで確認）。
+  - 上下合計が変わると「段数/ページ」の上限（入力欄の `max`）が連動して変化することを確認。
+  - 旧キー（`score-page-margin-vertical` = 9）のみを保存した状態でスライダーを初期表示すると、上=9mm・下=8mm（旧仕様の計算値7mmが8〜25mmの範囲でクランプされ8mmになる、意図した仕様）に引き継がれることを確認。
+  - 「レイアウトをリセット」で上=14mm/下=12mm（既定値）に戻ることを確認。
+  - コンソールエラーなし。
+  - 検証中に動かした値は、検証後にユーザーのテスト環境設定値（左右14mm・上9mm・下8mm・段の間隔−20px・音符115%・ズーム150%）へ戻した。
