@@ -12,7 +12,6 @@ import {
   applyKeySignatureToNaturalKey,
   hasVisibleKeySignature,
   normalizeKeySignature,
-  setKeyAccidental,
   shiftKeySignatureByAccidental,
   createMeasureAccidentalState,
   isValidNoteKeyString,
@@ -23,8 +22,8 @@ import {
   microtoneAccidentalCode,
   type MeasureAccidentalState,
   type KeySignature,
-  type MicrotoneType,
 } from '../utils/noteKeyUtils';
+import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accidentalUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
@@ -712,77 +711,6 @@ function makeVFNote(
   }
 
   return attachDots(n);
-}
-
-function applyAccidentalToEvent(
-  ev: NoteEvent,
-  accidental: 'sharp' | 'flat' | 'natural',
-  keyIndex?: number
-): NoteEvent {
-  if (ev.isRest) {
-    return ev;
-  }
-
-  const shouldEditSingleKey = keyIndex !== undefined && keyIndex >= 0 && keyIndex < ev.keys.length;
-  const nextKeys = shouldEditSingleKey
-    ? ev.keys.map((key, index) => index === keyIndex ? setKeyAccidental(key, accidental) : key)
-    : ev.keys.map(key => setKeyAccidental(key, accidental));
-  const changed = nextKeys.some((key, index) => key !== ev.keys[index]);
-
-  // ♯/♭/♮ と微分音（四分音）は同じ keyIndex に同時には付けない（排他）。
-  // 通常の臨時記号を適用したら、対象 keyIndex の四分音は消す。
-  const affectedIndexes = shouldEditSingleKey
-    ? [keyIndex]
-    : ev.keys.map((_, index) => index);
-  const nextMicrotones = ev.microtones?.filter(m => !affectedIndexes.includes(m.keyIndex));
-  const microtonesChanged = (ev.microtones?.length ?? 0) !== (nextMicrotones?.length ?? 0);
-
-  if (!changed && !microtonesChanged) {
-    return ev;
-  }
-  return {
-    ...ev,
-    keys: changed ? nextKeys : ev.keys,
-    microtones: nextMicrotones,
-  };
-}
-
-/**
- * 微分音（四分音）の臨時記号を音符に適用する。
- * 既に同じ type が付いている場合はトグルで解除する。
- * 適用時は対象 keyIndex の ♯/♭ を取り除き、自然音の綴りへ揃える（通常の臨時記号と排他）。
- */
-function applyMicrotoneToEvent(
-  ev: NoteEvent,
-  type: MicrotoneType,
-  keyIndex?: number
-): NoteEvent {
-  if (ev.isRest) {
-    return ev;
-  }
-
-  const targetIndexes = keyIndex !== undefined && keyIndex >= 0 && keyIndex < ev.keys.length
-    ? [keyIndex]
-    : ev.keys.map((_, index) => index);
-
-  const existing = ev.microtones ?? [];
-  const isTogglingOff = targetIndexes.every(idx => existing.some(m => m.keyIndex === idx && m.type === type));
-
-  const keptMicrotones = existing.filter(m => !targetIndexes.includes(m.keyIndex));
-  const nextMicrotones = isTogglingOff
-    ? keptMicrotones
-    : [...keptMicrotones, ...targetIndexes.map(idx => ({ keyIndex: idx, type }))];
-
-  // 微分音を新しく付けるときは、その音を自然音の綴りに揃える（♯/♭ との排他のため）。
-  const nextKeys = isTogglingOff
-    ? ev.keys
-    : ev.keys.map((key, index) => targetIndexes.includes(index) ? setKeyAccidental(key, 'natural') : key);
-
-  return {
-    ...ev,
-    keys: nextKeys,
-    microtones: nextMicrotones.length > 0 ? nextMicrotones : undefined,
-  };
 }
 
 /* ===== 範囲チェック（要件3.4対応） ===== */
