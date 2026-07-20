@@ -40,7 +40,7 @@ export function textElementLabel(kind: TextElementKind): string {
  */
 export function textElementPlaceholder(kind: TextElementKind): string {
   switch (kind) {
-    case 'lyrics':           return '例: さ く ら';
+    case 'lyrics':           return '例: あ, ah';
     case 'chordSymbol':      return '例: Am, G7';
     case 'tempoMarking':     return '例: Allegro, ♩=120';
     case 'expressionMarking': return '例: espressivo';
