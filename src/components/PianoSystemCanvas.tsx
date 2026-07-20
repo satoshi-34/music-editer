@@ -419,6 +419,26 @@ function findNearestKey(
   return bestKey;
 }
 
+// 「クリックしたら選択になるか、追加になるか」がホバーだけでは分からず、
+// クリックしてみて初めて分かる（=事前に予測できない）というユーザーテストでの
+// 指摘に対応するためのホバーフィードバック。
+// click ハンドラの nearNoteX / findKeyIndexAtLine と同じ判定式で
+// 「このまま押したら個別音選択になる」かどうかを求め、符頭を薄くする。
+// mousemove のたびに React の再レンダーを走らせるとコストが高いため、
+// StaveNote の SVG 要素を直接操作する（DOM直接操作）。
+function setNoteHoverHighlight(vfNote: unknown, active: boolean): void {
+  try {
+    const svgEl = (vfNote as { getSVGElement?: () => SVGElement | undefined })?.getSVGElement?.();
+    if (!svgEl) return;
+    // opacity を落とすだけで「選択ゾーンに入っている」ことが視覚的に分かる。
+    // 色を変えると選択中（青）や非アクティブ声部（グレー）の表示と衝突するため、
+    // どんな色の音符にも効く opacity を使う。
+    svgEl.style.opacity = active ? '0.55' : '';
+  } catch {
+    /* SVG未対応環境などでは無視（ホバー演出が出ないだけで機能には影響しない） */
+  }
+}
+
 function findKeyIndexAtLine(
   keys: string[],
   snappedLine: number,
@@ -2765,13 +2785,26 @@ export default function PianoSystemCanvas({
             hit.setAttribute('pointer-events','all');(hit.style as any).cursor='pointer';
             hit.addEventListener('mousemove',e=>{
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
-              if(lx<measLeft||lx>measRight){hideGuide();hideChordGuide();return;}
+              if(lx<measLeft||lx>measRight){hideGuide();hideChordGuide();setNoteHoverHighlight(n,false);return;}
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音ゾーン
               const inChordZone=!activeEvs[j]?.isRest&&lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
+              // 「選択」と「追加（新規挿入／和音追加）」のどちらになるかをクリック前に
+              // 見分けられるよう、click ハンドラの nearNoteX / findKeyIndexAtLine と
+              // 同じ判定式でここでも「押したら個別音選択になるか」を求める。
+              // クリック時と判定がずれるとホバー表示だけ信用できなくなるため、
+              // 定数（KEY_SELECT_X_PAD）も含めて完全に同じ式にしている。
+              const nearNoteXForHover = lx>=noteVisualLeft-KEY_SELECT_X_PAD && lx<=noteVisualRight+KEY_SELECT_X_PAD;
+              const snappedLineForHover = snapLine(stave, ly);
+              const wouldSelectKey = !activeEvs[j]?.isRest && nearNoteXForHover
+                && findKeyIndexAtLine(activeEvs[j].keys, snappedLineForHover, k2l) >= 0;
+              setNoteHoverHighlight(n, wouldSelectKey);
+              // カーソル形状: 選択になる位置は 'pointer'、それ以外（新規挿入・和音追加・
+              // 休符の置換分割）は「ここに置く」感を出す 'copy' にする。
+              (hit.style as any).cursor = wouldSelectKey ? 'pointer' : 'copy';
               if(inChordZone){hideGuide();showChordGuide(xl,wHit,stave);}
               else{hideChordGuide();showGuide(lx,ly,stave);}
             });
-            hit.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
+            hit.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();setNoteHoverHighlight(n,false);});
 
             // タイ／松葉ドラッグ開始
             hit.addEventListener('mousedown',e=>{

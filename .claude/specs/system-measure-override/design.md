@@ -214,3 +214,46 @@ export interface SavedScoreData {
   同じ高さの4分音符を3つ入力し、4拍目の空き領域を同じ高さでクリック
   （クリックターゲットは最後の音符の `.vf-note-hit`）→ 4音目が追加されることを確認。
   コンソールエラーなし。
+
+### 追補（2026-07-21）: 選択/追加のホバーフィードバック
+
+上記の `KEY_SELECT_X_PAD` によるX範囲ゲートは「クリックしたら選択になるか追加になるか」を
+正しく振り分けられるようにしたが、ユーザーテストでは「クリックする前にどちらになるか
+画面上で分からない」という指摘が別途あった（≒仕様としては正しく動いているが、
+体感として予測できない）。
+
+**修正設計**: `.vf-note-hit` の `mousemove` ハンドラに、click ハンドラの
+`nearNoteX`（符頭の描画X範囲 ± `KEY_SELECT_X_PAD`）+ `findKeyIndexAtLine`
+（`snapLine` で丸めたYが `keys[]` のどれかと一致するか）と全く同じ判定式を追加し、
+「今この位置でクリックしたら個別音選択になるか」をホバー時点で事前計算するようにした。
+判定式をクリック時とホバー時で完全に一致させているのは、ズレるとホバー表示が
+信用できなくなるため（「グレーになったのにクリックしたら選択にならなかった」という
+新たな混乱を生まないように）。
+
+- 選択になる位置: カーソルを `pointer` にし、対象の `StaveNote` の SVG 要素
+  （`getSVGElement()`）に `opacity: 0.55` を設定して符頭を薄くする
+  （新設のヘルパー `setNoteHoverHighlight()`）。
+- それ以外（新規挿入・和音追加・休符置換分割など）: カーソルを `copy` にする。
+  小節背景（`.vf-hit`）のクリックで新規挿入になる領域は、既存の実装がすでに
+  `crosshair` を設定していたため変更していない。
+- 挿入位置プレビューは、既存の `showGuide`（ガイド線）/`showChordGuide`
+  （和音追加ゾーンのハイライト）がすでに mousemove のたびに更新されており、
+  これがそのまま「ここに置く」という視覚フィードバックを兼ねるため、
+  今回は新たに追加していない（最低限のコストで既存の仕組みを活かす）。
+- `mousemove` ごとに React の再レンダーを走らせるとコストが高いため、
+  DOM（SVG要素の `style.cursor` / `style.opacity`）を直接操作する方式にした
+  （`PianoSystemCanvas.tsx` の既存の `showGuide`/`showChordGuide` も同じ直接DOM操作方式）。
+
+**影響範囲**:
+- `src/components/PianoSystemCanvas.tsx`: `setNoteHoverHighlight()` 追加、
+  `.vf-note-hit` の `mousemove`/`mouseleave` ハンドラを拡張
+- `src/components/PianoSystemCanvasHoverFeedback.test.tsx`（新規）: 符頭近傍の
+  ホバーで `pointer` カーソル＋符頭の `opacity: 0.55`、小節端（空き拍）のホバーで
+  `copy` カーソルになることを検証
+
+**ブラウザ確認（2026-07-21）**: 4/4小節に4分音符を3つ入力し、実DOM座標（`clientToGroup`
+と同じ変換式で client 座標を算出）で1音目の符頭付近へ `mousemove` を発火させたところ、
+カーソルが `pointer` になり符頭の `<g>` 要素が `opacity: 0.55` になることを確認した。
+コンソールエラーなし。単旋律譜・ピアノ大譜表・弦楽四重奏はすべて同じ
+`PianoSystemCanvas.tsx` のコードパスを共有しているため、個別に確認しなくても
+同じ修正が効く。
