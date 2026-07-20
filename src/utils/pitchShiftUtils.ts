@@ -114,10 +114,10 @@ export function applyPitchChangeToMeasures(
     ? new Map([[ev.keys[keyIndex!], newKeys[keyIndex!]]])
     : new Map(ev.keys.map((k, i) => [k, newKeys[i]]));
 
-  // 注意: 元のStaffCanvas/PianoSystemCanvas実装がそうだったため、ここでは
-  // MeasureData の events 以外のフィールド（repeatStart等）を明示的にスプレッドしていない。
-  // これは既存挙動をそのまま踏襲するためで、抽出時の仕様変更ではない。
+  // `...m` を忘れると repeatStart や拍子変更などの小節メタ情報が全小節から消えてしまう
+  // （元の StaffCanvas/PianoSystemCanvas 実装に実際にあったバグなので注意）
   return measures.map((m, mi) => ({
+    ...m,
     events: m.events.map((e2, ei): NoteEvent => {
       if (mi === measure && ei === index) {
         // 移動する音符自体: keys と発する arcs の fromKey を更新

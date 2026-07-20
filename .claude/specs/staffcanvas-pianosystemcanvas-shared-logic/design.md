@@ -98,3 +98,28 @@
   `lyricsEntries` の収集（アクティブ声部・非アクティブ声部の両方）と描画呼び出しを追加。
 - ブラウザ確認: ピアノ大譜表・単旋律譜のそれぞれで歌詞ツールから音符クリック→入力→確定
   すると、音符の下に歌詞が表示されることを確認。コンソールエラーなし。
+
+## 追記: applyPitchChangeToMeasures が小節メタ情報を落とすバグの修正
+
+### 問題
+
+`applyPitchChangeToMeasures`（`src/utils/pitchShiftUtils.ts`）の非休符分岐が
+`measures.map((m) => ({ events: ... }))` と `events` だけのオブジェクトを返しており、
+ArrowUp/ArrowDown で音符の音高を変更すると、**全小節**から `repeatStart` / `repeatEnd` /
+`ending` / `timeSignature` / `bpm` などのメタ情報が消えていた。
+これは抽出元の StaffCanvas / PianoSystemCanvas に元からあった潜在バグで、
+ブラウザで「開始リピートを設定 → 音符を選択 → ArrowUp」と操作すると
+リピート記号が消えることを実際に再現・確認した。
+
+### 修正設計
+
+- 非休符分岐の戻り値を `{ ...m, events: ... }` に変更し、小節のメタ情報を保持する
+  （休符分岐は元から `...m` 付きで問題なし）。
+
+### 影響範囲
+
+- `src/utils/pitchShiftUtils.ts`: 1行の修正（スプレッド追加）とコメント更新。
+- `pitchShiftUtils.test.ts`: 回帰テスト2件を追加（音符/休符それぞれでメタ情報が残ること）。
+  全テスト（71ファイル・930件）通過を確認。
+- ブラウザ確認: 開始リピートを設定した楽譜で音符を ArrowUp した後も
+  リピート記号が表示され続けることを確認。コンソールエラーなし。

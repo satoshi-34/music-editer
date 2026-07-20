@@ -114,6 +114,28 @@ describe('applyPitchChangeToMeasures', () => {
     expect(next[0].events[0].arcs?.[0].fromKey).toBe('f/4');
   });
 
+  it('音符の音高変更で小節のメタ情報（repeatStart等）を落とさない', () => {
+    // かつて非休符の分岐で `{ events: ... }` とだけ返していて、
+    // repeatStart / timeSignature / bpm などが全小節から消えるバグがあった（回帰テスト）
+    const ms: MeasureData[] = [
+      { events: [ev({ keys: ['c/4'] })], repeatStart: true, timeSignature: [3, 4], bpm: 120 },
+      { events: [ev({ keys: ['e/4'] })], repeatEnd: true, ending: 2 },
+    ];
+    const next = applyPitchChangeToMeasures(ms, 0, 0, undefined, ['d/4']);
+    expect(next[0].events[0].keys).toEqual(['d/4']);
+    expect(next[0].repeatStart).toBe(true);
+    expect(next[0].timeSignature).toEqual([3, 4]);
+    expect(next[0].bpm).toBe(120);
+    expect(next[1].repeatEnd).toBe(true);
+    expect(next[1].ending).toBe(2);
+  });
+
+  it('休符の音高変更でも小節のメタ情報を落とさない', () => {
+    const ms: MeasureData[] = [{ events: [ev({ isRest: true, keys: ['b/4'] })], repeatStart: true }];
+    const next = applyPitchChangeToMeasures(ms, 0, 0, undefined, ['a/4']);
+    expect(next[0].repeatStart).toBe(true);
+  });
+
   it('範囲外イベントはno-opで元の参照を返す', () => {
     const ms = measures([ev()]);
     expect(applyPitchChangeToMeasures(ms, 5, 0, undefined, ['c/4'])).toBe(ms);
