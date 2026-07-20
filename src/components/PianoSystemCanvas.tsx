@@ -2737,6 +2737,10 @@ export default function PianoSystemCanvas({
             hit.setAttribute('class','vf-note-hit');
             hit.setAttribute('data-measure', String(absI));
             hit.setAttribute('data-note', String(j));
+            // 符頭の実描画X範囲。個別音選択は KEY_SELECT_X_PAD でこの範囲近傍に限定されるため、
+            // テストが「確実に選択になる位置」を計算できるよう属性として公開しておく（表示には影響しない）
+            hit.setAttribute('data-note-left', String(noteVisualLeft));
+            hit.setAttribute('data-note-right', String(noteVisualRight));
             hit.setAttribute('x',String(xl));hit.setAttribute('y',String(yHit));
             hit.setAttribute('width',String(wHit));hit.setAttribute('height',String(hHit));
             hit.setAttribute('fill','transparent');hit.setAttribute('stroke','none');

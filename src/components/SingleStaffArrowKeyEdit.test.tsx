@@ -54,12 +54,34 @@ const makeData = (): MeasureData[] => ([
   { events: [{ dur: '4', isRest: false, keys: [CLICKED_KEY] }] },
 ]);
 
-// 各段（システム）の SVG から音符クリック用ヒット領域を取り、クリックで選択する
+// クリック座標→五線座標の変換（clientToGroup）が使う svg.getBoundingClientRect() と
+// width/height.baseVal を「クライアント座標 = SVG内座標」になるようモックする。
+// jsdom は実寸を返さないため、X座標に意味を持たせたいテストでは必須
+// （PianoSystemCanvasEmptyBeatClick.test.tsx と同じ手法）。
+const mockSvgLayout = (svg: SVGSVGElement) => {
+  const width = parseFloat(svg.getAttribute('width') ?? '0') || 700;
+  const height = parseFloat(svg.getAttribute('height') ?? '0') || 300;
+  svg.getBoundingClientRect = vi.fn(() => ({
+    left: 0, top: 0, right: width, bottom: height,
+    width, height, x: 0, y: 0, toJSON: () => ({}),
+  })) as any;
+  Object.defineProperty(svg, 'width', { value: { baseVal: { value: width } }, configurable: true });
+  Object.defineProperty(svg, 'height', { value: { baseVal: { value: height } }, configurable: true });
+};
+
+// 各段（システム）の SVG から音符クリック用ヒット領域を取り、符頭の描画X位置で
+// クリックして選択する。個別音選択は符頭 ± KEY_SELECT_X_PAD に限定されている
+// （空き拍クリックを音符追加に回す修正）ため、ヒット領域のどこでも良いわけではなく、
+// data-note-left/right が示す符頭範囲内を狙う必要がある。
 const clickNoteInSystem = (container: HTMLElement, systemIndex: number) => {
   const svgs = container.querySelectorAll('.system-stack svg');
-  const hit = svgs[systemIndex]?.querySelector('rect.vf-note-hit');
+  const svg = svgs[systemIndex] as SVGSVGElement;
+  const hit = svg?.querySelector('rect.vf-note-hit');
   expect(hit, `段${systemIndex + 1} の音符ヒット領域`).toBeTruthy();
-  fireEvent.click(hit!);
+  mockSvgLayout(svg);
+  const noteLeft = parseFloat(hit!.getAttribute('data-note-left') ?? '0');
+  const noteRight = parseFloat(hit!.getAttribute('data-note-right') ?? '0');
+  fireEvent.click(hit!, { clientX: (noteLeft + noteRight) / 2, clientY: 0 });
 };
 
 describe('SingleStaff 複数段での矢印キー音高編集', () => {
