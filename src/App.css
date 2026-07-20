@@ -1171,6 +1171,12 @@ button.ghost:disabled {
   .add-measures-ghost-button { display: none !important; }
   /* 段ごとの小節数調整コントロール（◀ N小節 ▶）も編集用UIなので印刷には出さない。 */
   .system-measure-override-controls { display: none !important; }
+  /* 拍が埋まっていない小節の残り拍に「入力先が分かるよう」表示するパディング休符
+     （PianoSystemCanvas がデータには保存せず見た目だけ描画する薄いグレーの休符）。
+     未完成の小節をそのまま印刷物に残すと紙面が汚くなるため、印刷では消す。
+     完成した小節（拍がすべて埋まっている）には付かないクラスなので、
+     通常の楽譜印刷には影響しない。 */
+  .vf-padding-rest { display: none !important; }
   /* 固定ツールバー分の逃し（padding-top: 60px）も印刷では不要。
      残すと1枚目だけ60px下へずれ、ページ末尾が次の紙へ押し出される */
   .app-root { padding-top: 0 !important; }

@@ -440,3 +440,24 @@ interface MeasureData {
 - `startBeat` と `velocity` は再生直前に安全な数値として扱う
 - 既存の単声部データは `voices` なしのままそのまま読める
 - 編集系はまず primary voice を正本に据え、複数箇所の一括改修を避けて退行を抑える
+
+### 追補（2026-07-20）: 単声部小節への拡張
+
+ユーザーテストで「単旋律の小節に3拍分しか音符が無いとき、4拍目が空白のままで入力先が
+視覚的に分からない」という指摘があり、上記3.の `isMultiVoiceMeasure` 限定を外し、
+声部数によらず常に `computeVoiceDisplayPadding` を呼ぶよう変更した（`PianoSystemCanvas.tsx`）。
+
+- 全休符プレースホルダ（`data.events` が空の小節）は `computeVoiceDisplayPadding` が
+  追加分0件を返すため、既存の見た目（全休符1個）は変わらない。
+- スタイリングも合わせて拡張し、`__isPlaceholder && ev.isRest` の音符は常に
+  `INACTIVE_VOICE_COLOR`（`#9ca3af`）の薄いグレーで描画するようにした
+  （以前は多声小節の非アクティブ声部だけがグレーだった）。これにより空小節の全休符
+  プレースホルダも含めて「データにまだ無い」ものが一目でグレーだと分かるようになった
+  （これは意図した仕様変更で、以前は空小節の全休符が黒で描かれていた）。
+- 印刷（PDF書出）でこのパディング休符が紙面に残ると「未完成の小節がそのまま印刷される」ため、
+  `PianoSystemCanvas.tsx` の描画後に `StaveNote.getSVGElement()` へ `vf-padding-rest` クラスを
+  付与し、`App.css` の `@media print { .vf-padding-rest { display: none !important; } }` で
+  印刷時のみ非表示にする。画面表示は変えない。
+- テスト: `src/components/PianoSystemCanvasPaddingRest.test.tsx`
+  （3拍入力時に `.vf-padding-rest` が1個描画される／編集ヒット領域を持たない／
+  4拍ぴったり埋まっている小節には出ない、の3点を確認）

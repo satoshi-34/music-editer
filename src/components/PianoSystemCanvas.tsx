@@ -2154,20 +2154,22 @@ export default function PianoSystemCanvas({
                   ? measureVoice.events.map(ev => sanitizeRenderEvent(ev, clefHere))
                   : []);
 
-            // 多声（voices が複数ある）小節で、この声部の音価合計が拍子ぶんに満たないときは、
-            // 表示用に末尾へ休符を補完する（保存データ＝measure.events/voices は一切書き換えない、
-            // 見た目だけの補完）。市販譜では埋まっていない拍に休符を明示するのが作法なので、
-            // ここを何もしないと「拍が余っている声部の残りが単に空白になる」見た目になってしまう。
-            // 単声部小節（isMultiVoiceMeasure が false）はここを通らないので、
-            // 既存の見た目には一切影響しない（リグレッション防止）。
+            // ある声部の音価合計が拍子ぶんに満たないときは、表示用に末尾へ休符を補完する
+            // （保存データ＝measure.events/voices は一切書き換えない、見た目だけの補完）。
+            // 市販譜では埋まっていない拍に休符を明示するのが作法なので、
+            // ここを何もしないと「拍が余った残りが単に空白になる」見た目になってしまう。
+            // 以前は多声（isMultiVoiceMeasure）小節限定だったが、単声部小節でも
+            // 「入力先が視覚的に分からない」というUX上の問題があったため、
+            // 声部数によらず常にこの補完を行うようにした。
+            // 全休符の小節（safeEvs が __isPlaceholder のプレースホルダー1件だけ）は
+            // すでに1小節ぶんの休符が入っているため、computeVoiceDisplayPadding が
+            // 追加分0件を返し、何も変わらない（リグレッション防止）。
+            const restKeyForPadding = restKeyForVoice(clefHere, voiceIndex, measureVoices.length);
+            const paddingRests: RenderNoteEvent[] = computeVoiceDisplayPadding(rawSourceEvents, beatsPerMeasure, restKeyForPadding)
+              .map(rest => ({ ...sanitizeRenderEvent(rest, clefHere), __isPlaceholder: true }));
             let sourceEvents: RenderNoteEvent[] = rawSourceEvents;
-            if (isMultiVoiceMeasure) {
-              const restKeyForPadding = restKeyForVoice(clefHere, voiceIndex, measureVoices.length);
-              const paddingRests: RenderNoteEvent[] = computeVoiceDisplayPadding(rawSourceEvents, beatsPerMeasure, restKeyForPadding)
-                .map(rest => ({ ...sanitizeRenderEvent(rest, clefHere), __isPlaceholder: true }));
-              if (paddingRests.length > 0) {
-                sourceEvents = [...rawSourceEvents, ...paddingRests];
-              }
+            if (paddingRests.length > 0) {
+              sourceEvents = [...rawSourceEvents, ...paddingRests];
             }
 
             if (sourceEvents.length === 0) {
@@ -2202,11 +2204,15 @@ export default function PianoSystemCanvas({
               // isMultiVoiceMeasure が false のままなので、従来通り常に黒で描画される
               // （リグレッション防止）。
               const isInactiveVoice = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+              // computeVoiceDisplayPadding が補完した「拍が足りない残りを埋めるだけの休符」は
+              // データに保存されていない表示専用のものなので、薄いグレーにして
+              // 「ここは実際にはまだ空いている」ことが一目で分かるようにする。
+              const isPaddingRest = !!ev.__isPlaceholder && ev.isRest;
               if(isSel&&selected.keyIndex!==undefined&&!ev.isRest&&n.setKeyStyle){
                 n.setKeyStyle(selected.keyIndex,{fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
               }else if(isSel&&n.setStyle){
                 n.setStyle({fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
-              }else if(isInactiveVoice&&n.setStyle){
+              }else if((isInactiveVoice||isPaddingRest)&&n.setStyle){
                 n.setStyle({fillStyle:INACTIVE_VOICE_COLOR,strokeStyle:INACTIVE_VOICE_COLOR});
               }
               return n as StaveNote;
@@ -2340,6 +2346,18 @@ export default function PianoSystemCanvas({
 
         renderedVoiceEntries.forEach((entry) => {
           try{entry.voice.draw(ctx,stave);}catch{}
+          // 表示専用のパディング休符（データには保存されていない）に
+          // クラスを付けておき、印刷（PDF書出）時は App.css の @media print で
+          // 非表示にする。「未完成の小節」がそのまま印刷物に残らないようにするため。
+          entry.sourceEvents.forEach((ev, idx) => {
+            if (!(ev as RenderNoteEvent).__isPlaceholder) return;
+            try {
+              const svgEl = (entry.vfNotes[idx] as any)?.getSVGElement?.();
+              svgEl?.classList?.add('vf-padding-rest');
+            } catch {
+              /* SVG未対応環境などでは無視 */
+            }
+          });
           entry.beams.forEach(b=>b.setContext(ctx).draw());
           entry.tuplets.forEach(tuplet => {
             try {
