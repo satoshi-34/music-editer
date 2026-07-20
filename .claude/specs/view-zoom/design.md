@@ -53,3 +53,38 @@
 - `docker compose run --rm app npx tsc --noEmit`: エラーなし
 - `docker compose run --rm app npx vitest run`: 69 ファイル・910 テスト全緑（既存テストへの影響なし）
 - ブラウザ確認（dev-alt, port 5175、`test-data/complex-test-score.json` を読み込んだ状態）: スライダーを 80%・100%・130% に変えて、どの値でも `svg[data-layout-overflow="true"]` が0件であること、`.print-page` 要素で `scrollHeight <= clientHeight`（クリッピングなし）であること、音符クリックによる選択（`.vf-note-selected`）が実際のヒット領域の座標どおりに機能すること、コンソールエラーが出ないことを確認。130% では自動改段によりページ数が3→5へ増え、段組みがスライダーに追従することを確認。最終的にスライダーを100%へ戻し、コンソールエラーなし。
+
+---
+
+# 音符の大きさの上限拡大と段数/ページ上限の動的化（notation-size-max-expansion）
+
+## 背景・問題
+- 「音符の大きさ」スライダーは 80〜130% までしか上げられず、より大きな譜面（弱視対応・見やすさ重視の印刷など）を求めるユーザーの要望に応えられなかった。
+- 一方、単純にスライダーの上限を引き上げるだけでは別の問題が起きる。音符が大きくなるほど1段（`.score-area .system-stack` 1個分）の高さも比例して増えるが、「段数/ページ」（`maxSystemsPerPage`）は楽譜種別ごとの固定値（ピアノ5段・単旋律8段・四重奏2段・編成譜1〜2段）のままだった。そのため音符を大きくした状態で段数/ページを変えずにいると、A4（`.print-page`、297mm 固定）の譜面領域から段がはみ出し、印刷時に段の途中が紙面の境目で切断される不具合が起きうる。
+
+## 修正設計
+- **スライダー上限の拡大**: `NOTATION_SIZE_KEY` の値域を 0.8〜1.3 から **0.8〜2.0** へ拡大（5%刻みは変更なし）。`ScorePage.tsx` に `NOTATION_SIZE_MULTIPLIER_MIN` / `NOTATION_SIZE_MULTIPLIER_MAX` 定数を追加し、state 初期化時のクランプとスライダーの `onChange` クランプの両方で同じ範囲を参照するようにした（範囲のズレを防ぐ）。スライダー本体の `min`/`max` 属性も `80`/`200` に変更。
+- **段数/ページ上限の動的計算**: `maxSystemsPerPage`（従来は楽譜種別ごとのハードコード定数）を、`notationSizeMultiplier` に連動する `useMemo` へ変更した。
+  - `SCORE_AREA_BUDGET_PX = 938`（px）: 譜面領域の高さ予算。既存コメントにあった「タイトルページで約938px（A4高 − 上下余白 − タイトル欄 − ページ番号）」の実測値をそのまま使う。全ページで段の行グリッド（`--page-capacity`）を共有する設計（`view-zoom/design.md` 内の別コミット参照）のため、タイトルページ基準の狭い方の予算を安全側の値として全ページ共通で使う（中間ページはこれより余裕があるため、この予算で計算した段数なら常に収まる）。
+  - `BASE_SYSTEM_HEIGHT_PX`: 楽譜種別ごとの「音符の大きさ100%」時の1段あたり実測高さ（単旋律 114px / ピアノ 180px / 四重奏 340px）。編成譜（ensemble）はパート数で段の高さが大きく変わるため、旧実装のしきい値（10パート超で1段、以下で2段）を 100% 時に再現するよう `ensembleSmall = 400px` / `ensembleLarge = 800px` の二段階値を設定した。
+  - `maxSystemsPerPage = Math.max(1, Math.floor(SCORE_AREA_BUDGET_PX / (baseHeight * notationSizeMultiplier)))`。100%（notationSizeMultiplier = 1）のときに旧来のハードコード値（単旋律8・ピアノ5・四重奏2・編成譜1or2）と一致することを算数で確認済み（例: ピアノ `floor(938/180) = 5`、単旋律 `floor(938/114) = 8`）。floor で切り捨てるため必ず安全側（あふれない方向）に丸まる。最低でも1段は確保する（0段だと編集不能になるため）。
+  - `recommendedSystemsPerPage`（初期値）はピアノのみ `Math.min(4, maxSystemsPerPage)` とし、上限が4を下回った場合でも矛盾した値にならないようにした。
+- **既存のクランプがそのまま効く**: `systemsPerPage = Math.max(1, Math.min(maxSystemsPerPage, systemsPerPageSetting ?? recommendedSystemsPerPage))` は変更していない。`maxSystemsPerPage` が動的値になったことで、ユーザーが以前設定した「段数/ページ」が新しい（音符を大きくして小さくなった）上限を超えていれば自動でクランプされる。入力欄の `max={maxSystemsPerPage}` 属性とツールチップ文言（`title={...この楽譜の種類では${maxSystemsPerPage}段...}`）も既存コードがそのまま `maxSystemsPerPage` を参照しているため、変更なしで追従する。
+
+## 影響範囲
+- `src/components/ScorePage.tsx`:
+  - 定数 `NOTATION_SIZE_MULTIPLIER_MIN` / `NOTATION_SIZE_MULTIPLIER_MAX` / `SCORE_AREA_BUDGET_PX` / `BASE_SYSTEM_HEIGHT_PX` の追加。
+  - `notationSizeMultiplier` state のクランプ範囲を 0.8〜1.3 から 0.8〜2.0 へ変更。
+  - `maxSystemsPerPage` を固定式（三項演算子）から `useMemo`（`notationSizeMultiplier` 依存）へ変更。`recommendedSystemsPerPage` の計算式を微修正。
+  - 「音符の大きさ」スライダーの `min`/`max`/クランプ式を 80〜200 / 0.8〜2.0 へ変更。
+- 段数/ページの入力欄・ツールチップ・`systemsPerPage` のクランプロジック自体は変更なし（`maxSystemsPerPage` が動的になったことで自然に追従する）。
+
+## 検証
+- `docker compose run --rm app npx tsc --noEmit`: エラーなし。
+- `docker compose run --rm app npx vitest run`: 69ファイル・915テスト全緑（既存テストへの影響なし）。
+- ブラウザ確認（dev-alt, port 5175、`test-data/complex-test-score.json` をピアノ譜として読み込んだ状態）:
+  - 音符の大きさ 100% → 150% → 200% と変えたとき、「段数/ページ」の上限がツールチップ・`max` 属性込みで `5 → 3 → 2` と自動的に下がること（式どおり `floor(938/180)=5`, `floor(938/270)=3`, `floor(938/360)=2`）、かつユーザー設定の段数/ページが自動でその値へクランプされることを確認。
+  - 各倍率（100%・150%・200%）で `.print-page` 全ページの `scrollHeight - clientHeight === 0`（縦あふれなし）、かつ同一ページ内の `.score-area svg` 同士の矩形が縦方向に重ならない（隣接段の重なりなし）ことを実測で確認。
+  - コンソールエラーなし。200% では既存の「小節が紙幅を超える」横方向の警告（`allocateCombinedMeasureWidths` 由来、本修正の対象外）が別途表示されたが、これは段数上限とは独立した既存機構であり正常動作。
+  - 四重奏・編成譜は楽譜切り替えに `window.confirm` が伴うため切り替えは行わず、`BASE_SYSTEM_HEIGHT_PX` の値が100%時に旧ハードコード値と一致することの算数確認とコードレビューで整合性を確認した。
+  - 最終的にスライダーを音符の大きさ100%・段数/ページ5・楽譜は「複雑テスト楽譜」読込状態のまま、上書き保存はせずに終了した。

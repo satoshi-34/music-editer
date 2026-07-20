@@ -110,12 +110,38 @@ const MEASURE_WIDTH_EVENNESS_KEY = 'score-measure-width-evenness';
 // useAutoPageScale が算出する自動縮尺（--scale）に掛け合わせる倍率として使う。
 // 1.0 = 自動縮尺そのまま（従来どおりの表示）。印刷には影響させない（App.css の @media print 側で解除される）
 const VIEW_ZOOM_KEY = 'score-view-zoom';
-// 「音符の大きさ」のユーザー設定（その他タブのスライダー、0.8〜1.3）。
+// 「音符の大きさ」のユーザー設定（その他タブのスライダー、0.8〜2.0）。
 // SCORE_LAYOUT_RENDER_SCALE（VexFlow の論理座標→物理SVG座標の倍率）に掛け合わせ、
 // 実際に描画・レイアウト計算へ使う「実効スケール」を作る。VIEW_ZOOM と違い、
 // これは画面表示だけでなく印刷結果や段組み（1段に入る小節数）にも影響する。
 // 1.0 = 既定（従来どおりの 0.44 のまま）。
 const NOTATION_SIZE_KEY = 'score-notation-size';
+// 音符の大きさスライダーが取りうる倍率の範囲（0.8〜2.0）。
+// スライダーの min/max、state 初期化時のクランプ、maxSystemsPerPage の動的計算で
+// 同じ範囲を使うため、値のズレが起きないよう定数化しておく。
+const NOTATION_SIZE_MULTIPLIER_MIN = 0.8;
+const NOTATION_SIZE_MULTIPLIER_MAX = 2.0;
+// 段数/ページの上限（maxSystemsPerPage）を動的計算する際に使う、
+// 譜面領域（.score-area）の高さ予算（px）。
+// タイトルページはヘッダー・作曲者欄の分だけ他ページより本文が狭くなるため、
+// 全ページで共有する行グリッド（--page-capacity）が破綻しないよう、
+// タイトルページ基準の狭い方の予算（実測 約938px。A4高 - 上下余白 - タイトル欄 - ページ番号）
+// を安全側の値として全ページ共通で使う。
+const SCORE_AREA_BUDGET_PX = 938;
+// 楽譜種別ごとの「音符の大きさ100%」時の1段あたり実測高さ（px）。
+// 音符の大きさスライダーの倍率をここに掛けて SCORE_AREA_BUDGET_PX を割ることで、
+// あふれずに収まる最大段数（maxSystemsPerPage）を求める（floor で切り捨て、安全側）。
+// 値は実測（単旋律 ≒114px / ピアノ大譜表 ≒180px / 四重奏 ≒340px）に基づく。
+// 編成譜（ensemble）はパート数で段の高さが大きく変わるため、パート数 10 を境に
+// 二段階の目安値（≒400px / ≒800px）を使う。以前のハードコード
+// （10パート超で1段、以下で2段）と 100% 時に一致するよう調整した値。
+const BASE_SYSTEM_HEIGHT_PX: Record<'single' | 'piano' | 'quartet' | 'ensembleSmall' | 'ensembleLarge', number> = {
+  single: 114,
+  piano: 180,
+  quartet: 340,
+  ensembleSmall: 400,
+  ensembleLarge: 800,
+};
 
 // 無音検知（issue #14）のタイミング設定。
 // 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
@@ -1990,12 +2016,12 @@ export default function ScorePage() {
   // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
   const effectiveScale = scale * viewZoom;
 
-  // ユーザー設定（その他タブの「音符の大きさ」スライダー、0.8〜1.3）。
-  // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.8〜1.3 へクランプする
+  // ユーザー設定（その他タブの「音符の大きさ」スライダー、0.8〜2.0）。
+  // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.8〜2.0 へクランプする
   const [notationSizeMultiplier, setNotationSizeMultiplier] = useState<number>(() => {
     const raw = localStorage.getItem(NOTATION_SIZE_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
-    return Number.isFinite(n) ? Math.max(0.8, Math.min(1.3, n)) : 1;
+    return Number.isFinite(n) ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n)) : 1;
   });
   // SCORE_LAYOUT_RENDER_SCALE（既定0.44）に音符の大きさ倍率を掛けた、実際の
   // レイアウト計算・描画に使う実効スケール。段組み計画（planEffectiveMeasuresPerSystem /
@@ -2007,19 +2033,27 @@ export default function ScorePage() {
   const totalSystems = 12;
   const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
   // 1ページ（A4 実寸 297mm ≒ 1123px）に収まる段数。
-  // 本文の予算はタイトルページで約 938px（A4 高 − 上下余白 − タイトル欄 − ページ番号）。
-  // 実測の1段あたり高さ（単旋律 ≒114px / ピアノ大譜表 ≒180px / 四重奏 ≒340px）から、
-  // 予算内に収まる最大段数（maxSystemsPerPage）を楽譜種別ごとに決めている。
-  // 上限を超えるとページが A4 からあふれ、印刷時に段が紙面の境目で切断される。
-  const maxSystemsPerPage = scoreType === 'ensemble'
-    ? (instrumentation.parts.length > 10 ? 1 : 2)
-    : scoreType === 'quartet'
-      ? 2
-      : scoreType === 'piano'
-        ? 5
-        : 8;
-  // 推奨値（初期値）。ピアノは5段でも収まるが、市販譜のような行間を確保するため4段
-  const recommendedSystemsPerPage = scoreType === 'piano' ? 4 : maxSystemsPerPage;
+  // 「音符の大きさ」スライダーで音符・五線が拡大されると1段あたりの高さも
+  // ほぼ比例して増えるため、段数上限は notationSizeMultiplier と連動する動的計算にする
+  // （固定値のままだと、大きいサイズで段数/ページを変えずにいると印刷時に段が
+  // ページの境目で切断されてしまう）。SCORE_AREA_BUDGET_PX（予算）を
+  // BASE_SYSTEM_HEIGHT_PX（楽譜種別ごとの基準段高）× notationSizeMultiplier で割り、
+  // floor で切り捨てることで「絶対にあふれない」最大段数を安全側に求める。
+  const maxSystemsPerPage = useMemo(() => {
+    const baseHeight = scoreType === 'ensemble'
+      ? (instrumentation.parts.length > 10 ? BASE_SYSTEM_HEIGHT_PX.ensembleLarge : BASE_SYSTEM_HEIGHT_PX.ensembleSmall)
+      : scoreType === 'quartet'
+        ? BASE_SYSTEM_HEIGHT_PX.quartet
+        : scoreType === 'piano'
+          ? BASE_SYSTEM_HEIGHT_PX.piano
+          : BASE_SYSTEM_HEIGHT_PX.single;
+    // 最低でも1段は入れられることにする（0段になると編集自体ができなくなるため）。
+    return Math.max(1, Math.floor(SCORE_AREA_BUDGET_PX / (baseHeight * notationSizeMultiplier)));
+  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier]);
+  // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段が既定。市販譜のような
+  // 行間を確保するため、上限いっぱいの5段ではなく1段減らした4段を初期値にしている。
+  // 音符を大きくして上限が4段を下回った場合は、上限自体を推奨値として使う。
+  const recommendedSystemsPerPage = scoreType === 'piano' ? Math.min(4, maxSystemsPerPage) : maxSystemsPerPage;
   // ユーザー設定（その他タブの「段数/ページ」）。null = 未設定（推奨値を使う）。
   // 楽譜種別を切り替えても安全なように、表示時に必ず 1〜上限へクランプする
   const [systemsPerPageSetting, setSystemsPerPageSetting] = useState<number | null>(() => {
@@ -2960,12 +2994,12 @@ export default function ScorePage() {
                 <input
                   type="range"
                   min={80}
-                  max={130}
+                  max={200}
                   step={5}
                   value={Math.round(notationSizeMultiplier * 100)}
                   onChange={e => {
-                    // スライダーは 80〜130(%) で扱い、内部では 0.8〜1.3 の倍率として保持する
-                    const v = Math.max(0.8, Math.min(1.3, Number(e.target.value) / 100));
+                    // スライダーは 80〜200(%) で扱い、内部では 0.8〜2.0 の倍率として保持する
+                    const v = Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, Number(e.target.value) / 100));
                     if (!isNaN(v)) {
                       setNotationSizeMultiplier(v);
                       localStorage.setItem(NOTATION_SIZE_KEY, String(v));
