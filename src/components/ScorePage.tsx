@@ -6,8 +6,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Palette, { type Tool } from './Palette';
-import StaffCanvas from './StaffCanvas';
 import PianoStaff from './PianoStaff';
+import SingleStaff from './SingleStaff';
 import QuartetStaff from './QuartetStaff';
 import EnsembleStaff from './EnsembleStaff';
 import PartExtractionStaff from './PartExtractionStaff';
@@ -3653,41 +3653,34 @@ export default function ScorePage() {
                       symbolsClickable={activeToolbarTab === 'symbols'}
                     />
                   ) : (
-                    <div className="system-stack">
-                      {p.systemRanges.map((range) => (
-                        // 行グリッド（App.css の .score-area .system-stack > * 参照）のため、
-                        // 他の楽器編成（EnsembleStaff など）と同じく1段=1 div でラップする。
-                        <div key={range.start}>
-                        <StaffCanvas
-                          systems={1}
-                          gap={110}
-                          measuresPerSystem={range.count}
-                          rangeLocked
-                          incomingArcIndex={incomingArcIndex}
-                          tool={tool}
-                          scale={effectiveRenderScale}
-                          clef="treble"
-                          initialScoreData={rightHandData}
-                          onScoreDataChange={handleScoreDataChange}
-                          startMeasureIndex={range.start}
-                          disabled={isEditingDisabled}
-                          yOffset={yOffset}
-                          currentInstrument={currentInstrument}
-                          onPreviewNoteEvent={handleInputNotePreview}
-                          previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
-                          keySignature={keySignature}
-                          timeSignature={scoreTimeSignature}
-                          onKeySignatureChange={handleKeySignatureChange}
-                          selectedMeasures={selectedMeasures ?? undefined}
-                          onMeasureSelect={handleMeasureSelect}
-                          customSymbolDefs={customSymbolDefs}
-                          finalMeasureIndex={finalMeasureIndex}
-                          pageMarginSideMm={pageMarginSideMm}
-                          symbolsClickable={activeToolbarTab === 'symbols'}
-                        />
-                        </div>
-                      ))}
-                    </div>
+                    <SingleStaff
+                      systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={incomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
+                      finalMeasureIndex={finalMeasureIndex}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
+                      measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
+                      tool={tool}
+                      scale={effectiveRenderScale}
+                      data={rightHandData}
+                      onChange={handleScoreDataChange}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
+                      disabled={isEditingDisabled}
+                      yOffset={yOffset}
+                      currentInstrument={currentInstrument}
+                      onPreviewNoteEvent={handleInputNotePreview}
+                      previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
+                      keySignature={keySignature}
+                      timeSignature={scoreTimeSignature}
+                      onKeySignatureChange={handleKeySignatureChange}
+                      selectedMeasures={selectedMeasures ?? undefined}
+                      onMeasureSelect={handleMeasureSelect}
+                      customSymbolDefs={customSymbolDefs}
+                      symbolsClickable={activeToolbarTab === 'symbols'}
+                    />
                   )}
 
                   {/* 段ごとの小節数を個別に調整するコントロール。段の自動計画（幅ベース）だけでは
