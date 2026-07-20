@@ -37,6 +37,9 @@ export type OrnamentType = 'trill' | 'mordent' | 'mordentInverted' | 'turn';
  * - dynamics: VexFlow が生成する SVG グループへの transform でサイズ・位置に対応
  * - articulations: VexFlow の Articulation グリフに対する SVG transform で位置調整のみ対応（サイズは未対応）
  * - ornament: VexFlow の Ornament グリフに対する SVG transform で位置調整のみ対応（サイズは未対応）
+ * - ottava: 8va/8vb ブラケット（破線＋テキスト）を手組み SVG で描画しており、
+ *   offsetX/offsetY はブラケット全体（破線・終端の縦線・テキスト）に効き、scale はテキストの
+ *   font-size と線の太さに効く。開始イベント（'8va'/'8vb'）の symbolAdjust にのみ保存する。
  * 対応範囲の詳細・除外理由は .claude/specs/extended-notation-features/design.md を参照。
  */
 export type AdjustableSymbolKind =
@@ -47,7 +50,8 @@ export type AdjustableSymbolKind =
   | 'lyrics'
   | 'chordSymbol'
   | 'tempoMarking'
-  | 'expressionMarking';
+  | 'expressionMarking'
+  | 'ottava';
 
 // ── カスタム記号（現代音楽用）──────────────────────────────────────────
 

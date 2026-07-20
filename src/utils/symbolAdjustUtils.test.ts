@@ -41,6 +41,16 @@ describe('listPresentAdjustableSymbolKinds', () => {
     const ev = baseNote({ isRest: true, articulations: ['fermata'] });
     expect(listPresentAdjustableSymbolKinds(ev)).toEqual([]);
   });
+
+  it('8va/8vb の開始イベントはオッターヴァを列挙する', () => {
+    expect(listPresentAdjustableSymbolKinds(baseNote({ ottava: '8va' }))).toEqual(['ottava']);
+    expect(listPresentAdjustableSymbolKinds(baseNote({ ottava: '8vb' }))).toEqual(['ottava']);
+  });
+
+  it('8va/8vb の終了イベントはオッターヴァを列挙しない（開始側のみ調整対象）', () => {
+    expect(listPresentAdjustableSymbolKinds(baseNote({ ottava: '8vaEnd' }))).toEqual([]);
+    expect(listPresentAdjustableSymbolKinds(baseNote({ ottava: '8vbEnd' }))).toEqual([]);
+  });
 });
 
 describe('getSymbolAdjust', () => {

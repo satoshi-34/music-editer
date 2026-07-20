@@ -1443,8 +1443,9 @@ export default function PianoSystemCanvas({
       kind: '8va' | '8vb';
       startX: number; endX: number;
       lineY: number;
+      adjust: ResolvedSymbolAdjust;
     }> = [];
-    let pendingOttava: { kind: '8va' | '8vb'; startX: number; lineY: number } | null = null;
+    let pendingOttava: { kind: '8va' | '8vb'; startX: number; lineY: number; adjust: ResolvedSymbolAdjust } | null = null;
 
     // SVG 背景クリック → 弧の選択とドラッグ状態を解除
     svg.addEventListener('click',()=>{
@@ -3315,9 +3316,9 @@ export default function PianoSystemCanvas({
               const botY = stave.getYForLine(4);
               const ot = activeEvs[j].ottava!;
               if (ot === '8va') {
-                pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14 };
+                pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(activeEvs[j], 'ottava') };
               } else if (ot === '8vb') {
-                pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14 };
+                pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(activeEvs[j], 'ottava') };
               } else if (pendingOttava && ot === '8vaEnd' && pendingOttava.kind === '8va') {
                 ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
                 pendingOttava = null;
@@ -3418,9 +3419,9 @@ export default function PianoSystemCanvas({
                   const topY = stave.getYForLine(0);
                   const botY = stave.getYForLine(4);
                   if (ev.ottava === '8va') {
-                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14 };
+                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(ev, 'ottava') };
                   } else if (ev.ottava === '8vb') {
-                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14 };
+                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(ev, 'ottava') };
                   } else if (pendingOttava && ev.ottava === '8vaEnd' && pendingOttava.kind === '8va') {
                     ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
                     pendingOttava = null;
@@ -3665,39 +3666,45 @@ export default function PianoSystemCanvas({
       }
     });
     // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
-    ottavaEntries.forEach(({ kind, startX, endX, lineY }) => {
+    ottavaEntries.forEach(({ kind, startX, endX, lineY, adjust }) => {
+      // symbolAdjust: offsetX/offsetY はブラケット全体に、scale はテキストの font-size と線の太さに効かせる
+      const ax = startX + adjust.offsetX;
+      const aex = endX + adjust.offsetX;
+      const ay = lineY + adjust.offsetY;
+      const fontSize = 11 * adjust.scale;
+      const strokeWidth = 1 * adjust.scale;
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       label.textContent = kind;
-      label.setAttribute('x', String(startX - 4));
-      label.setAttribute('y', String(lineY));
+      label.setAttribute('x', String(ax - 4));
+      label.setAttribute('y', String(ay));
       label.setAttribute('text-anchor', 'start');
       label.setAttribute('fill', '#374151');
       label.setAttribute('font-family', 'serif');
       label.setAttribute('font-style', 'italic');
-      label.setAttribute('font-size', '11');
+      label.setAttribute('font-size', String(fontSize));
       label.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(label);
-      const lineStart = startX + 18;
-      if (lineStart < endX) {
+      const lineStart = ax + 18;
+      if (lineStart < aex) {
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
         line.setAttribute('x1', String(lineStart));
-        line.setAttribute('y1', String(lineY - 3));
-        line.setAttribute('x2', String(endX));
-        line.setAttribute('y2', String(lineY - 3));
+        line.setAttribute('y1', String(ay - 3));
+        line.setAttribute('x2', String(aex));
+        line.setAttribute('y2', String(ay - 3));
         line.setAttribute('stroke', '#374151');
-        line.setAttribute('stroke-width', '1');
+        line.setAttribute('stroke-width', String(strokeWidth));
         line.setAttribute('stroke-dasharray', '4,2');
         line.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(line);
       }
       const bracketDir = kind === '8va' ? 1 : -1;
       const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      vline.setAttribute('x1', String(endX));
-      vline.setAttribute('y1', String(lineY - 3));
-      vline.setAttribute('x2', String(endX));
-      vline.setAttribute('y2', String(lineY - 3 + 6 * bracketDir));
+      vline.setAttribute('x1', String(aex));
+      vline.setAttribute('y1', String(ay - 3));
+      vline.setAttribute('x2', String(aex));
+      vline.setAttribute('y2', String(ay - 3 + 6 * bracketDir));
       vline.setAttribute('stroke', '#374151');
-      vline.setAttribute('stroke-width', '1');
+      vline.setAttribute('stroke-width', String(strokeWidth));
       vline.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(vline);
     });

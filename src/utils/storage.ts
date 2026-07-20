@@ -72,7 +72,7 @@ function isValidDurKey(value: any): value is DurKey {
 /** symbolAdjust のキーとして許容する標準記号の種類（AdjustableSymbolKind と同じ内容） */
 const ADJUSTABLE_SYMBOL_KINDS = [
   'fingering', 'ornament', 'dynamics', 'articulations',
-  'lyrics', 'chordSymbol', 'tempoMarking', 'expressionMarking'
+  'lyrics', 'chordSymbol', 'tempoMarking', 'expressionMarking', 'ottava'
 ];
 
 /**

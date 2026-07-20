@@ -276,6 +276,54 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
   `y` 属性に反映されること、保存後 localStorage に `symbolAdjust: { fingering: { scale, offsetX, offsetY } }`
   が正しく書き込まれることを確認。コンソールエラーなし。
 
+### 10. オクターヴ記号（8va/8vb）への配置ごとのサイズ・位置調整の追加（2026-07-20）
+
+**背景**: 高音域で音符が密集する箇所に 8va の破線ブラケットが重なって読みにくいという報告を受け、
+9節の汎用⤢/✥ツールの対象に `ottava`（8va/8vb ブラケット）を追加した。9節の articulations 追加と
+同じ拡張パターン（`AdjustableSymbolKind` にキーを追加し、描画側で `getSymbolAdjust(event, 'ottava')` を
+読んで反映する）を踏襲している。
+
+**設計判断**:
+- **データ型**: `AdjustableSymbolKind` に `'ottava'` を追加（`src/types/storage.ts`）。
+  `src/utils/storage.ts` の `ADJUSTABLE_SYMBOL_KINDS` にも同様に追加してバリデーションの許容キーに含めた。
+- **調整対象は開始イベントのみ**: `NoteEvent.ottava` は `'8va' | '8vb' | '8vaEnd' | '8vbEnd'` の4値を取るが、
+  `listPresentAdjustableSymbolKinds` では `'8va'`/`'8vb'`（開始マーク）の場合のみ `'ottava'` を列挙し、
+  終了イベント（`'8vaEnd'`/`'8vbEnd'`）はそもそも調整対象に出さない。ブラケット全体（開始〜終了）の
+  見た目は開始イベント側の `symbolAdjust` だけで一元管理する設計とした。
+- **offsetX/offsetY の適用範囲**: ブラケットは「"8va"/"8vb" テキスト＋破線＋終端の縦線」の3要素で
+  構成されており、いずれも `startX`/`endX`/`lineY` を起点に座標計算しているため、offsetX/offsetY は
+  3要素すべてに一律加算する（テキストだけでなく破線・終端の縦線も一緒に動く）。ユーザーの主目的が
+  「offsetY で上下に逃がして音符との重なりを回避すること」だったため、これが最も自然な挙動と判断した。
+- **scale の適用範囲**: テキストの `font-size`（既定11px × scale）と、破線・終端の縦線の `stroke-width`
+  （既定1px × scale）の両方に scale を掛けた。線の長さ（startX〜endX の区間）自体は scale の対象外
+  （音符の間隔に合わせて決まる値であり、見た目のサイズ調整とは独立させるべきと判断）。
+- **段またぎの扱い**: 8va/8vb の描画は `pendingOttava`（開始情報を一時保持するローカル変数）→
+  終了イベントでペア確定→ `ottavaEntries` に1エントリとして push、という既存の実装のままで、
+  **松葉（hairpin）やペダル記号のような段またぎ分割処理は元々実装されていない**（開始・終了が
+  異なる段にまたがる場合、直線でつながず単純に `startX`〜`endX` の座標で1本の線を引くだけ）。
+  今回の対応でもこの既存の制約はそのまま維持し、分割ロジックの新設は行っていない（スコープ外）。
+  `pendingOttava` に `adjust: ResolvedSymbolAdjust` を追加で保持させ、終了イベント側で
+  `{ ...pendingOttava, endX }` として `ottavaEntries` に含める形にした。
+- **StaffCanvas と PianoSystemCanvas の両対応、および実装中に見つかった既存バグの修正**:
+  StaffCanvas.tsx は ottava の収集ブロックが1箇所のみだったが、PianoSystemCanvas.tsx には
+  ottava 収集ブロックが実装上2箇所存在した（片方は本来の描画パス、もう片方は別の描画分岐で
+  同じ `pendingOttava`/`ottavaEntries` を操作するコード）。今回 `adjust` フィールドを追加する際に
+  1箇所目のみ修正して2箇所目を見落とし、`adjust` が `undefined` のまま `ottavaEntries.push` される
+  経路が残ってしまい、`adjust.offsetX` 読み取り時に `TypeError: Cannot read properties of undefined
+  (reading 'offsetX')` が発生してピアノ大譜表の画面が白紙になる不具合を作り込んだ
+  （ブラウザ確認で発覚し、2箇所目にも同じ `getSymbolAdjust(activeEvs[j], 'ottava')` を追加して解消）。
+  同種の「同じロジックが複数箇所に重複している」設計は、今後 symbolAdjust 対象を追加する際に
+  同じ見落としを繰り返すリスクがあるため、次に標準記号を追加する際は `grep` で該当フィールドの
+  出現箇所をすべて洗い出してから着手するとよい。
+- **テスト**: `src/utils/symbolAdjustUtils.test.ts` に、8va/8vb 開始イベントで `'ottava'` が列挙されること、
+  8va終/8vb終（終了イベント）では列挙されないことを検証するテストを追加。
+- **ブラウザ確認**: 複雑テスト楽譜（ピアノ大譜表）で 8va/8vb ブラケットの開始音符を✥ツールでクリックし、
+  「オクターヴ記号(8va/8vb)」の調整パネル（他の調整可能記号がないため選択リストは出ず直接入力欄が開く）で
+  縦オフセット -15px を設定すると "8va"/"8vb" テキストと破線の y 座標が実測で上へ移動すること、
+  ⤢ツールでサイズ 150% を設定するとテキストの `font-size` が 11→16.5、破線・終端の縦線の `stroke-width`
+  が 1→1.5 に変わることを DOM 上の属性値で確認。元に戻す（Undo）で全て初期状態に復帰することも確認。
+  コンソールエラーなし。
+
 ## 影響範囲
 
 - `src/types/storage.ts`: `NoteEvent` に `graceNotes`, `ornament`, `pedalMark`, `ottava` を追加。`OrnamentType` 型を新設
