@@ -52,6 +52,8 @@ type Props = {
   pageMarginSideMm?: number;
   // 終止線を描く「内容のある最後の小節」の絶対インデックス。省略時は終止線を描かない。
   finalMeasureIndex?: number;
+  // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
+  symbolsClickable?: boolean;
 };
 
 export default function QuartetStaff({
@@ -75,6 +77,7 @@ export default function QuartetStaff({
   measureWidthEvenness,
   pageMarginSideMm,
   finalMeasureIndex,
+  symbolsClickable,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
@@ -109,6 +112,7 @@ export default function QuartetStaff({
             measureWidthEvenness={measureWidthEvenness}
             pageMarginSideMm={pageMarginSideMm}
             finalMeasureIndex={finalMeasureIndex}
+            symbolsClickable={symbolsClickable}
           />
           </div>
         );

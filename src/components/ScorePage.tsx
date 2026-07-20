@@ -130,14 +130,21 @@ const NOTATION_SIZE_MULTIPLIER_MAX = 2.0;
 const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
 const PAGE_MARGIN_SIDE_MIN_MM = 8;
 const PAGE_MARGIN_SIDE_MAX_MM = 25;
-// 「ページ余白（上下）」のユーザー設定（その他タブのスライダー、mm単位）。
-// 上 padding の値をスライダーで動かし、下 padding は常に「上 − 2mm」を保つ
-// （従来の固定値が 上14mm/下12mm だったため、この2mm差を保つことで既定値のときに
-// 従来と完全に同じレイアウトへ戻せる）。
-const PAGE_MARGIN_VERTICAL_KEY = 'score-page-margin-vertical';
+// 「ページ余白（上）」「ページ余白（下）」のユーザー設定（その他タブのスライダー、各8〜25mm）。
+// 以前は「余白(上下)」1本のスライダーで、上 padding の値をそのまま使い、下 padding は
+// 常に「上 − 2mm」を保つ仕様だった（従来の固定値が 上14mm/下12mm だったため）。
+// これを上下別々に調整できるよう2本のスライダーへ分離した。既定値は分離前と同じ
+// 上14mm/下12mmを保つことで、初回表示時の見た目を変えない。
+// 旧キー（score-page-margin-vertical）に保存済みの値がある場合は、後方互換として
+// 旧仕様と同じ計算（上=旧値、下=旧値-2mm）で新キーの初期値へ引き継ぐ。
+const PAGE_MARGIN_VERTICAL_LEGACY_KEY = 'score-page-margin-vertical';
+const PAGE_MARGIN_TOP_KEY = 'score-page-margin-top';
+const PAGE_MARGIN_BOTTOM_KEY = 'score-page-margin-bottom';
 const PAGE_MARGIN_VERTICAL_MIN_MM = 8;
 const PAGE_MARGIN_VERTICAL_MAX_MM = 25;
 const PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM = 2;
+const DEFAULT_PAGE_MARGIN_TOP_MM = DEFAULT_PAGE_SIDE_MARGIN_MM;
+const DEFAULT_PAGE_MARGIN_BOTTOM_MM = DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM;
 // 「段の間隔」のユーザー設定（その他タブのスライダー、px単位）。
 // 0以上のときは行グリッド（.score-area .system-stack の gap）へそのまま渡す上乗せ間隔で、
 // 段は flex:1 1 0% で完全に等分されたまま、その等分の取り分から gap ぶんが差し引かれる
@@ -2069,11 +2076,37 @@ export default function ScorePage() {
     const n = raw == null ? NaN : parseFloat(raw);
     return Number.isFinite(n) ? Math.max(PAGE_MARGIN_SIDE_MIN_MM, Math.min(PAGE_MARGIN_SIDE_MAX_MM, n)) : DEFAULT_PAGE_SIDE_MARGIN_MM;
   });
-  // ユーザー設定（その他タブの「ページ余白（上下）」スライダー、8〜25mm）。上 padding の値。
-  const [pageMarginVerticalMm, setPageMarginVerticalMm] = useState<number>(() => {
-    const raw = localStorage.getItem(PAGE_MARGIN_VERTICAL_KEY);
-    const n = raw == null ? NaN : parseFloat(raw);
-    return Number.isFinite(n) ? Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, n)) : DEFAULT_PAGE_SIDE_MARGIN_MM;
+  // ユーザー設定（その他タブの「ページ余白（上）」スライダー、8〜25mm）。
+  // 新キーが未保存で旧キー（上下共通スライダー時代の値）が残っている場合は、
+  // 旧仕様と同じ値（旧値そのもの）を初期値として引き継ぐ。
+  const [pageMarginTopMm, setPageMarginTopMm] = useState<number>(() => {
+    const rawNew = localStorage.getItem(PAGE_MARGIN_TOP_KEY);
+    const nNew = rawNew == null ? NaN : parseFloat(rawNew);
+    if (Number.isFinite(nNew)) {
+      return Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, nNew));
+    }
+    const rawLegacy = localStorage.getItem(PAGE_MARGIN_VERTICAL_LEGACY_KEY);
+    const nLegacy = rawLegacy == null ? NaN : parseFloat(rawLegacy);
+    if (Number.isFinite(nLegacy)) {
+      return Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, nLegacy));
+    }
+    return DEFAULT_PAGE_MARGIN_TOP_MM;
+  });
+  // ユーザー設定（その他タブの「ページ余白（下）」スライダー、8〜25mm）。
+  // 新キーが未保存で旧キーが残っている場合は、旧仕様と同じ値（旧値-2mm）を引き継ぐ。
+  const [pageMarginBottomMm, setPageMarginBottomMm] = useState<number>(() => {
+    const rawNew = localStorage.getItem(PAGE_MARGIN_BOTTOM_KEY);
+    const nNew = rawNew == null ? NaN : parseFloat(rawNew);
+    if (Number.isFinite(nNew)) {
+      return Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, nNew));
+    }
+    const rawLegacy = localStorage.getItem(PAGE_MARGIN_VERTICAL_LEGACY_KEY);
+    const nLegacy = rawLegacy == null ? NaN : parseFloat(rawLegacy);
+    if (Number.isFinite(nLegacy)) {
+      const legacyBottom = Math.max(0, nLegacy - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM);
+      return Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, legacyBottom));
+    }
+    return DEFAULT_PAGE_MARGIN_BOTTOM_MM;
   });
   // ユーザー設定（その他タブの「段の間隔」スライダー、-30〜30px）。
   const [systemRowGapPx, setSystemRowGapPx] = useState<number>(() => {
@@ -2084,10 +2117,12 @@ export default function ScorePage() {
   // 「レイアウトをリセット」: ページ余白・段の間隔の3設定をまとめて既定値へ戻す。
   const handleResetPageLayout = useCallback(() => {
     setPageMarginSideMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
-    setPageMarginVerticalMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
+    setPageMarginTopMm(DEFAULT_PAGE_MARGIN_TOP_MM);
+    setPageMarginBottomMm(DEFAULT_PAGE_MARGIN_BOTTOM_MM);
     setSystemRowGapPx(0);
     localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(DEFAULT_PAGE_SIDE_MARGIN_MM));
-    localStorage.setItem(PAGE_MARGIN_VERTICAL_KEY, String(DEFAULT_PAGE_SIDE_MARGIN_MM));
+    localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(DEFAULT_PAGE_MARGIN_TOP_MM));
+    localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(DEFAULT_PAGE_MARGIN_BOTTOM_MM));
     localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(0));
   }, []);
 
@@ -2109,10 +2144,10 @@ export default function ScorePage() {
           ? BASE_SYSTEM_HEIGHT_PX.piano
           : BASE_SYSTEM_HEIGHT_PX.single;
     // SCORE_AREA_BUDGET_PX は「上14mm/下12mm」（=上下合計26mm）の実測値。
-    // 「ページ余白（上下）」スライダーで上下合計が変わった分だけ、px換算で budget を増減する
-    // （上げれば譜面領域が狭くなり、段数上限が下がる）。
-    const verticalMarginTotalMm = pageMarginVerticalMm + Math.max(0, pageMarginVerticalMm - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM);
-    const defaultVerticalMarginTotalMm = DEFAULT_PAGE_SIDE_MARGIN_MM + (DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM);
+    // 「ページ余白（上）」「ページ余白（下）」スライダーで上下合計が変わった分だけ、
+    // px換算で budget を増減する（合計を上げれば譜面領域が狭くなり、段数上限が下がる）。
+    const verticalMarginTotalMm = pageMarginTopMm + pageMarginBottomMm;
+    const defaultVerticalMarginTotalMm = DEFAULT_PAGE_MARGIN_TOP_MM + DEFAULT_PAGE_MARGIN_BOTTOM_MM;
     const verticalMarginDeltaPx = (verticalMarginTotalMm - defaultVerticalMarginTotalMm) * MM_TO_PX;
     const effectiveBudgetPx = Math.max(1, SCORE_AREA_BUDGET_PX - verticalMarginDeltaPx);
     // 「段の間隔」スライダー（systemRowGapPx）ぶんの隙間も、段の高さに上乗せしたのと
@@ -2121,7 +2156,7 @@ export default function ScorePage() {
     // 常に「あふれない」方向に丸まるため安全側になる）。
     // 最低でも1段は入れられることにする（0段になると編集自体ができなくなるため）。
     return Math.max(1, Math.floor(effectiveBudgetPx / (baseHeight * notationSizeMultiplier + systemRowGapPx)));
-  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier, pageMarginVerticalMm, systemRowGapPx]);
+  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier, pageMarginTopMm, pageMarginBottomMm, systemRowGapPx]);
   // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段が既定。市販譜のような
   // 行間を確保するため、上限いっぱいの5段ではなく1段減らした4段を初期値にしている。
   // 音符を大きくして上限が4段を下回った場合は、上限自体を推奨値として使う。
@@ -3110,25 +3145,47 @@ export default function ScorePage() {
               </label>
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title={`ページの上下余白です。1ページに入る段数の上限もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
+                title={`ページの上余白です。1ページに入る段数の上限は上下余白の合計値に合わせて自動で連動します。既定は${DEFAULT_PAGE_MARGIN_TOP_MM}mmです`}
               >
-                余白(上下)
+                余白(上)
                 <input
                   type="range"
                   min={PAGE_MARGIN_VERTICAL_MIN_MM}
                   max={PAGE_MARGIN_VERTICAL_MAX_MM}
                   step={1}
-                  value={pageMarginVerticalMm}
+                  value={pageMarginTopMm}
                   onChange={e => {
                     const v = Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Number(e.target.value)));
                     if (!isNaN(v)) {
-                      setPageMarginVerticalMm(v);
-                      localStorage.setItem(PAGE_MARGIN_VERTICAL_KEY, String(v));
+                      setPageMarginTopMm(v);
+                      localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(v));
                     }
                   }}
                   style={{ width: 70 }}
                 />
-                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginVerticalMm}mm</span>
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginTopMm}mm</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`ページの下余白です。1ページに入る段数の上限は上下余白の合計値に合わせて自動で連動します。既定は${DEFAULT_PAGE_MARGIN_BOTTOM_MM}mmです`}
+              >
+                余白(下)
+                <input
+                  type="range"
+                  min={PAGE_MARGIN_VERTICAL_MIN_MM}
+                  max={PAGE_MARGIN_VERTICAL_MAX_MM}
+                  step={1}
+                  value={pageMarginBottomMm}
+                  onChange={e => {
+                    const v = Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setPageMarginBottomMm(v);
+                      localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginBottomMm}mm</span>
               </label>
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
@@ -3383,13 +3440,13 @@ export default function ScorePage() {
               <section
                 className={`print-page${printContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}`}
                 style={{
-                  // ページ余白（左右・上下）。正本はこの3値のみで、App.css 側は
+                  // ページ余白（左右・上・下）。正本はこの3値のみで、App.css 側は
                   // var(--page-margin-*) を padding へそのまま渡すだけにしてある
-                  // （CSSとJSでの二重定義を避けるため）。下 padding は「上 − 2mm」を保ち、
-                  // 既定値（14mm）のときに従来の 14mm/14mm/12mm と完全に一致させる。
+                  // （CSSとJSでの二重定義を避けるため）。上下は別々のスライダーで、
+                  // 既定値（上14mm/下12mm）のときに従来と完全に一致させる。
                   '--page-margin-side': `${pageMarginSideMm}mm`,
-                  '--page-margin-top': `${pageMarginVerticalMm}mm`,
-                  '--page-margin-bottom': `${Math.max(0, pageMarginVerticalMm - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM)}mm`,
+                  '--page-margin-top': `${pageMarginTopMm}mm`,
+                  '--page-margin-bottom': `${pageMarginBottomMm}mm`,
                 } as React.CSSProperties}
               >
                 <header className="page-head" style={{ position: 'relative' }}>
@@ -3479,6 +3536,7 @@ export default function ScorePage() {
                       timeSignature={scoreTimeSignature}
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                     />
                   ) : isPartExtractionActive && scoreType === 'quartet' ? (
                     // パート譜表示（弦楽四重奏）: QuartetStaff は4段固定のレイアウトのため、
@@ -3532,6 +3590,7 @@ export default function ScorePage() {
                       onKeySignatureChange={handleKeySignatureChange}
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                     />
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
@@ -3558,6 +3617,7 @@ export default function ScorePage() {
                       timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
                       customSymbolDefs={customSymbolDefs}
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                     />
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
@@ -3590,6 +3650,7 @@ export default function ScorePage() {
                       onMeasureSelect={handleMeasureSelect}
                       customSymbolDefs={customSymbolDefs}
                       activeVoiceIndex={activeVoice}
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                     />
                   ) : (
                     <div className="system-stack">
@@ -3622,6 +3683,7 @@ export default function ScorePage() {
                           customSymbolDefs={customSymbolDefs}
                           finalMeasureIndex={finalMeasureIndex}
                           pageMarginSideMm={pageMarginSideMm}
+                          symbolsClickable={activeToolbarTab === 'symbols'}
                         />
                         </div>
                       ))}

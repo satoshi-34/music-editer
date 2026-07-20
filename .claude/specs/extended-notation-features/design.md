@@ -276,6 +276,54 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
   `y` 属性に反映されること、保存後 localStorage に `symbolAdjust: { fingering: { scale, offsetX, offsetY } }`
   が正しく書き込まれることを確認。コンソールエラーなし。
 
+### 10. オクターヴ記号（8va/8vb）への配置ごとのサイズ・位置調整の追加（2026-07-20）
+
+**背景**: 高音域で音符が密集する箇所に 8va の破線ブラケットが重なって読みにくいという報告を受け、
+9節の汎用⤢/✥ツールの対象に `ottava`（8va/8vb ブラケット）を追加した。9節の articulations 追加と
+同じ拡張パターン（`AdjustableSymbolKind` にキーを追加し、描画側で `getSymbolAdjust(event, 'ottava')` を
+読んで反映する）を踏襲している。
+
+**設計判断**:
+- **データ型**: `AdjustableSymbolKind` に `'ottava'` を追加（`src/types/storage.ts`）。
+  `src/utils/storage.ts` の `ADJUSTABLE_SYMBOL_KINDS` にも同様に追加してバリデーションの許容キーに含めた。
+- **調整対象は開始イベントのみ**: `NoteEvent.ottava` は `'8va' | '8vb' | '8vaEnd' | '8vbEnd'` の4値を取るが、
+  `listPresentAdjustableSymbolKinds` では `'8va'`/`'8vb'`（開始マーク）の場合のみ `'ottava'` を列挙し、
+  終了イベント（`'8vaEnd'`/`'8vbEnd'`）はそもそも調整対象に出さない。ブラケット全体（開始〜終了）の
+  見た目は開始イベント側の `symbolAdjust` だけで一元管理する設計とした。
+- **offsetX/offsetY の適用範囲**: ブラケットは「"8va"/"8vb" テキスト＋破線＋終端の縦線」の3要素で
+  構成されており、いずれも `startX`/`endX`/`lineY` を起点に座標計算しているため、offsetX/offsetY は
+  3要素すべてに一律加算する（テキストだけでなく破線・終端の縦線も一緒に動く）。ユーザーの主目的が
+  「offsetY で上下に逃がして音符との重なりを回避すること」だったため、これが最も自然な挙動と判断した。
+- **scale の適用範囲**: テキストの `font-size`（既定11px × scale）と、破線・終端の縦線の `stroke-width`
+  （既定1px × scale）の両方に scale を掛けた。線の長さ（startX〜endX の区間）自体は scale の対象外
+  （音符の間隔に合わせて決まる値であり、見た目のサイズ調整とは独立させるべきと判断）。
+- **段またぎの扱い**: 8va/8vb の描画は `pendingOttava`（開始情報を一時保持するローカル変数）→
+  終了イベントでペア確定→ `ottavaEntries` に1エントリとして push、という既存の実装のままで、
+  **松葉（hairpin）やペダル記号のような段またぎ分割処理は元々実装されていない**（開始・終了が
+  異なる段にまたがる場合、直線でつながず単純に `startX`〜`endX` の座標で1本の線を引くだけ）。
+  今回の対応でもこの既存の制約はそのまま維持し、分割ロジックの新設は行っていない（スコープ外）。
+  `pendingOttava` に `adjust: ResolvedSymbolAdjust` を追加で保持させ、終了イベント側で
+  `{ ...pendingOttava, endX }` として `ottavaEntries` に含める形にした。
+- **StaffCanvas と PianoSystemCanvas の両対応、および実装中に見つかった既存バグの修正**:
+  StaffCanvas.tsx は ottava の収集ブロックが1箇所のみだったが、PianoSystemCanvas.tsx には
+  ottava 収集ブロックが実装上2箇所存在した（片方は本来の描画パス、もう片方は別の描画分岐で
+  同じ `pendingOttava`/`ottavaEntries` を操作するコード）。今回 `adjust` フィールドを追加する際に
+  1箇所目のみ修正して2箇所目を見落とし、`adjust` が `undefined` のまま `ottavaEntries.push` される
+  経路が残ってしまい、`adjust.offsetX` 読み取り時に `TypeError: Cannot read properties of undefined
+  (reading 'offsetX')` が発生してピアノ大譜表の画面が白紙になる不具合を作り込んだ
+  （ブラウザ確認で発覚し、2箇所目にも同じ `getSymbolAdjust(activeEvs[j], 'ottava')` を追加して解消）。
+  同種の「同じロジックが複数箇所に重複している」設計は、今後 symbolAdjust 対象を追加する際に
+  同じ見落としを繰り返すリスクがあるため、次に標準記号を追加する際は `grep` で該当フィールドの
+  出現箇所をすべて洗い出してから着手するとよい。
+- **テスト**: `src/utils/symbolAdjustUtils.test.ts` に、8va/8vb 開始イベントで `'ottava'` が列挙されること、
+  8va終/8vb終（終了イベント）では列挙されないことを検証するテストを追加。
+- **ブラウザ確認**: 複雑テスト楽譜（ピアノ大譜表）で 8va/8vb ブラケットの開始音符を✥ツールでクリックし、
+  「オクターヴ記号(8va/8vb)」の調整パネル（他の調整可能記号がないため選択リストは出ず直接入力欄が開く）で
+  縦オフセット -15px を設定すると "8va"/"8vb" テキストと破線の y 座標が実測で上へ移動すること、
+  ⤢ツールでサイズ 150% を設定するとテキストの `font-size` が 11→16.5、破線・終端の縦線の `stroke-width`
+  が 1→1.5 に変わることを DOM 上の属性値で確認。元に戻す（Undo）で全て初期状態に復帰することも確認。
+  コンソールエラーなし。
+
 ## 影響範囲
 
 - `src/types/storage.ts`: `NoteEvent` に `graceNotes`, `ornament`, `pedalMark`, `ottava` を追加。`OrnamentType` 型を新設
@@ -379,3 +427,68 @@ export interface HairpinMark {
 - `src/components/Palette.tsx`: `Tool` に `hairpin` モード追加、＜/＞ボタン追加
 - `src/components/StaffCanvas.tsx` / `src/components/PianoSystemCanvas.tsx`: ドラッグ入力・選択削除・一括描画・音符削除時の参照掃除
 - `src/utils/hairpin.test.ts`（新規）: バリデーション・位置マップ・MusicXML書出・再生ベロシティのユニットテスト
+
+## 演奏記号の直接クリック調整（第1弾: 強弱・アーティキュレーション・8va/8vb）
+
+### 問題
+
+- symbolAdjust（記号ごとのサイズ・位置調整）は、汎用⤢/✥ツールを選んでから「音符」をクリックする必要があり、記号自体をクリックしても何も起きなかった。記号が密集した箇所では、どの音符に対応する調整UIを開いているのか直感的でなく、操作コストも高かった。
+
+### 修正設計
+
+- StaffCanvas.tsx / PianoSystemCanvas.tsx それぞれの描画 useEffect 内に `appendSymbolHitRegion` 関数を追加。強弱記号・アーティキュレーション（フェルマータ/スタッカート/アクセント/テヌート/マルカート）・オクターヴ記号（8va/8vb）の各 SVG 要素を描いた直後に、その回で `svgRoot.appendChild` した要素を配列に集め、`getBBox()` で実測した範囲を ±3px 広げた透明 `rect` を重ねる。文字幅などを手計算せず、実際の描画結果から当たり判定を作る方式にした（フォント・スケールが変わっても自動的に追従する）。
+- 新しい prop `symbolsClickable?: boolean` を StaffCanvas / PianoSystemCanvas に追加。`true` のときだけヒット領域の `pointer-events` を `auto` にし、hover ハイライト（薄い水色）とクリックリスナー（`openSymbolAdjustEditor('offset', ...)` を直接呼び出し、既存の✥ツールと同じ位置調整オーバーレイを開く）を有効にする。`false`（既定値）のときは `pointer-events: none` で完全に素通しし、従来の音符クリック処理（`hit.addEventListener('click', ...)`）を一切妨げない。ヒット領域のクリックリスナーは `stopPropagation()` で SVG 背景クリック（弧/松葉選択解除など）より先に処理されるため、記号と音符が重なる位置では記号側が優先される。
+- `symbolsClickable` は `ScorePage.tsx` の `activeToolbarTab === 'symbols'`（ツールバー「演奏記号」タブ選択中）から、`EnsembleStaff` / `QuartetStaff` / `PianoStaff` / 単一譜表（`StaffCanvas` 直呼び出し）へ prop 中継する（`measureWidthEvenness` と同じ中継パターン）。`PartExtractionStaff`（閲覧・印刷専用のパート譜表示、`disabled` 固定）には配線していない。
+- PianoSystemCanvas は複数パート（段）を1つの SVG にまとめて描くため、`openSymbolAdjustEditor` は `partIndex` を追加引数に取る。ヒット領域を作る各エントリ（`dynamicTextEntries` / `articulationEntries` / `ottavaEntries`）に `partIndex` / `measureAbsoluteIndex` / `eventIndex` / `event` を optional で持たせ、アクティブ声部の描画箇所だけこれらを渡す。非アクティブ声部の「見た目だけ」再描画（`isMultiVoiceMeasure` のとき声部2切替中でも声部1の記号を見せ続ける処理）には index 情報を渡さず、`appendSymbolHitRegion` 側で `undefined` ならヒット領域自体を作らない（誤ってクリックできてしまうのを防ぐ）。
+
+### 対象範囲・既知の制限
+
+- 第1弾として強弱記号・アーティキュレーション・8va/8vb の3種類のみ対応。運指・歌詞・コード記号・テンポ表記・発想標語・カスタム記号は今回未対応（引き続き汎用⤢/✥ツール経由でのみ調整可能）。装飾記号（トリル等）は元々 symbolAdjust の調整対象外のため対象外。
+- クリックで開くのは位置調整オーバーレイ（✥ 相当）のみ。サイズ調整（⤢）は今回は直接クリックの対象にせず、従来どおり⤢ツール経由。
+- 印刷: ヒット領域は透明な rect のため見た目には影響しないが、`class="symbol-hit-region"` を付与しており、将来印刷で問題が出た場合は `@media print { .symbol-hit-region { display: none; } }` を追加できるようにしてある。
+
+## 影響範囲（演奏記号の直接クリック調整）
+
+- `src/components/StaffCanvas.tsx`: `symbolsClickable` prop 追加、`appendSymbolHitRegion` 関数新設、dynamicTextEntries/articulationEntries/ottavaEntries に index 情報を追加
+- `src/components/PianoSystemCanvas.tsx`: 同上（`partIndex` も含む）
+- `src/components/EnsembleStaff.tsx` / `QuartetStaff.tsx` / `PianoStaff.tsx`: `symbolsClickable` prop 中継
+
+## 演奏記号の直接クリック調整（第2弾: 残りの記号種への展開）
+
+### 問題
+
+- 第1弾（強弱・アーティキュレーション・8va/8vb）で導入した `appendSymbolHitRegion` パターンを、運指・歌詞・コード記号・テンポ表記・発想標語・カスタム記号にも展開する必要があった。
+
+### 修正設計
+
+- `appendSymbolHitRegion` の引数を `kind: AdjustableSymbolKind` 固定から、TypeScript のオーバーロードで「標準記号（`kind`）」と「カスタム記号（`symbolId: string` + `isCustomSymbolId: true`）」の両方を受け付けるように変更。関数内部で `AdjustTarget`（`{type:'standard', kind}` または `{type:'custom', symbolId, name}`）を組み立ててから `openSymbolAdjustEditor` を呼ぶ。StaffCanvas / PianoSystemCanvas 両方で同じ形に揃えた。
+- 運指（`fingeringEntries`）・コード記号（`chordSymbolEntries`）・テンポ表記（`tempoMarkingEntries`）・発想標語（`expressionMarkingEntries`）・歌詞（`lyricsEntries`、StaffCanvas のみ）は、既存の dynamics/articulations と同じパターンで `measureAbsoluteIndex` / `eventIndex` / `event`（PianoSystemCanvas はさらに `partIndex`）をエントリに追加し、描画直後に `appendSymbolHitRegion([el], ...)` を呼ぶ。
+- カスタム記号は、共通描画ユーティリティ `src/utils/customSymbolRenderUtils.ts` の `drawCustomSymbolEntries()` に第4引数 `onSymbolDrawn?: (entry, symbolId, g: SVGGElement) => void` を追加。`renderCustomSymbol()` は複数の SVG プリミティブを直接 `svgRoot` へ追加するだけで参照を返さないため、記号1個ぶんを一時的な `<g>` でラップしてから `svgRoot` へ付け替え、その `<g>` を `onSymbolDrawn` へ渡す。呼び出し側（StaffCanvas / PianoSystemCanvas）は `[g]` を `appendSymbolHitRegion(..., symbolId, true)` に渡してヒット領域を作る。`CustomSymbolRenderEntry` に `measureAbsoluteIndex` / `eventIndex` / `event` / `partIndex?`（PianoSystemCanvas 用、省略可）を追加し、`buildCustomSymbolEntry()` の呼び出し側で渡す。
+- PianoSystemCanvas の非アクティブ声部「見た目だけ」描画パス（`buildCustomSymbolEntry(ev, cx, staveTopY)` を index 省略で呼ぶ箇所）は `partIndex` が `undefined` のままになるため、`drawCustomSymbolEntries` のコールバック内で `entry.partIndex === undefined` ならヒット領域を作らずに return する（第1弾と同じ方針）。同様に fingering/tempoMarking も非アクティブ声部描画では index 情報を渡さない。
+
+### 対象範囲・既知の制限
+
+- PianoSystemCanvas は元々コード記号・発想標語・歌詞（`chordSymbol`/`expressionMarking`/`lyrics`）を描画していない（`ev.lyrics` 等を読む箇所がそもそも存在しない）ため、これらは PianoSystemCanvas では対象外のまま（StaffCanvas のみ対応）。運指・テンポ表記・カスタム記号は両方対応。
+- クリックで開くのは位置調整オーバーレイ（✥ 相当）のみで、第1弾と同じ制限が引き続き適用される。
+
+## 調整オーバーレイの no-op コミット修正（Undo 履歴の汚染防止）
+
+### 問題
+
+- `symbolOffsetEditState` / `symbolResizeEditState`（StaffCanvas・PianoSystemCanvas の各2箇所、計4箇所）の確定処理（`handleSymbolOffsetConfirm` / `handleSymbolResizeConfirm`）は、値を変えずに blur だけでオーバーレイを閉じた場合でも常に `setScore` / `setPartsScore` を呼んでいた。その結果、明示的な `offset 0` / `scale 100%` が `NoteEvent.symbolAdjust` / `customSymbols[].offsetX/offsetY/scale` に書き込まれ、実質何も変えていないのに Undo 履歴が1件積まれてしまっていた。
+
+### 修正設計
+
+- 4つの確定関数それぞれで、パース・クランプ後の値をオーバーレイを開いた時点の現在値（`currentValue` / `currentX`・`currentY`）と比較し、完全に一致する場合は `setScore`/`setPartsScore` を呼ばずに `setXxxEditState(null)` だけ行って早期 return する。
+  - `handleSymbolResizeConfirm`: `String(Math.round(scale * 100)) === currentValue` なら no-op
+  - `handleSymbolOffsetConfirm`: `String(offsetX) === currentX.trim() && String(offsetY) === currentY.trim()` なら no-op
+- カスタム記号側は別実装ではなく、既に `AdjustTarget`（`{type:'custom', symbolId}` / `{type:'standard', kind}`）で統一されているため、上記4関数の修正だけで標準記号・カスタム記号の両方に効く。
+- ブラウザ確認: 演奏記号タブで記号をクリックしてオーバーレイを開き、値を変えずに blur で閉じても「元に戻す」ボタンが disabled のまま変化しないことを確認。値を変えて確定した場合は従来どおり反映され「元に戻す」が enabled になり、Undo で正しく元に戻ることも確認済み。
+
+## 影響範囲（第2弾・no-op 修正）
+
+- `src/components/StaffCanvas.tsx`: `appendSymbolHitRegion` のオーバーロード化、fingering/chordSymbol/tempoMarking/expressionMarking/lyrics エントリへの index 追加とヒット領域呼び出し、カスタム記号のヒット領域呼び出し、`handleSymbolResizeConfirm`/`handleSymbolOffsetConfirm` の no-op 早期return
+- `src/components/PianoSystemCanvas.tsx`: 同上（fingering/tempoMarking のみ。chordSymbol/expressionMarking/lyrics は元々未描画のため対象外）
+- `src/utils/customSymbolRenderUtils.ts`: `CustomSymbolRenderEntry` に `measureAbsoluteIndex`/`eventIndex`/`event`/`partIndex?` 追加、`buildCustomSymbolEntry()` に index 引数追加（既定値付きで後方互換）、`drawCustomSymbolEntries()` に `onSymbolDrawn` コールバック追加
+- `src/utils/customSymbolRenderUtils.test.ts`: 新フィールド追加に伴うテスト期待値の更新
+- `src/components/ScorePage.tsx`: 各描画コンポーネントへ `symbolsClickable={activeToolbarTab === 'symbols'}` を渡す

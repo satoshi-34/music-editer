@@ -63,6 +63,9 @@ export function listPresentAdjustableSymbolKinds(event: NoteEvent): AdjustableSy
   if (event.chordSymbol) kinds.push('chordSymbol');
   if (event.tempoMarking) kinds.push('tempoMarking');
   if (event.expressionMarking) kinds.push('expressionMarking');
+  // ottava は開始イベント（'8va' / '8vb'）のみを調整対象にする。
+  // 終了イベント（'8vaEnd' / '8vbEnd'）は開始側の調整値がブラケット全体に効くため、対象にしない。
+  if (event.ottava === '8va' || event.ottava === '8vb') kinds.push('ottava');
   return kinds;
 }
 
@@ -110,4 +113,5 @@ export const ADJUSTABLE_SYMBOL_KIND_LABELS: Record<AdjustableSymbolKind, string>
   chordSymbol: 'コード記号',
   tempoMarking: 'テンポ表記',
   expressionMarking: '発想標語',
+  ottava: 'オクターヴ記号(8va/8vb)',
 };

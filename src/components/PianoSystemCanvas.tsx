@@ -798,6 +798,13 @@ type Props = {
    * 二重の対策にしてある。
    */
   pageMarginSideMm?: number;
+  /**
+   * 演奏記号（強弱・アーティキュレーション・8va等）を直接クリックして調整オーバーレイを
+   * 開けるようにするかどうか。ScorePage の「演奏記号」タブが選択されているときだけ true にする。
+   * false のときは記号のヒット領域は pointer-events を無効化して完全に素通しし、
+   * 従来の音符クリック（音符入力・和音追加・選択）を一切妨げない。StaffCanvas.tsx と同じ役割。
+   */
+  symbolsClickable?: boolean;
 };
 
 export default function PianoSystemCanvas({
@@ -815,6 +822,7 @@ export default function PianoSystemCanvas({
   activeVoiceIndex = 0,
   measureWidthEvenness = MEASURE_WIDTH_EVENNESS,
   pageMarginSideMm,
+  symbolsClickable = false,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -1407,6 +1415,81 @@ export default function PianoSystemCanvas({
     tiePreviewPath.style.display='none';
     svgRoot.appendChild(tiePreviewPath);
 
+    /**
+     * 演奏記号のクリック判定を作る（StaffCanvas.tsx の同名関数と同じ役割）。
+     * 「演奏記号」タブが選択されているとき（symbolsClickable === true）だけ、
+     * 記号の描画 bbox より少し広め（±SYMBOL_HIT_PAD px）の透明 rect を重ねてクリックを受け付ける。
+     * それ以外のタブでは pointer-events を無効化して完全に素通しする。
+     */
+    const SYMBOL_HIT_PAD = 3;
+    function appendSymbolHitRegion(
+      elements: SVGGraphicsElement[],
+      partIndex: number,
+      measureAbsoluteIndex: number,
+      eventIndex: number,
+      event: NoteEvent,
+      kind: AdjustableSymbolKind,
+      isCustomSymbolId?: false,
+    ): void;
+    function appendSymbolHitRegion(
+      elements: SVGGraphicsElement[],
+      partIndex: number,
+      measureAbsoluteIndex: number,
+      eventIndex: number,
+      event: NoteEvent,
+      symbolId: string,
+      isCustomSymbolId: true,
+    ): void;
+    function appendSymbolHitRegion(
+      elements: SVGGraphicsElement[],
+      partIndex: number,
+      measureAbsoluteIndex: number,
+      eventIndex: number,
+      event: NoteEvent,
+      kindOrSymbolId: AdjustableSymbolKind | string,
+      isCustomSymbolId?: boolean,
+    ) {
+      if (elements.length === 0) return;
+      const target: AdjustTarget = isCustomSymbolId
+        ? { type: 'custom', symbolId: kindOrSymbolId, name: customSymbolDefs.find(d => d.id === kindOrSymbolId)?.name ?? kindOrSymbolId }
+        : { type: 'standard', kind: kindOrSymbolId as AdjustableSymbolKind };
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      elements.forEach((el) => {
+        try {
+          const bbox = el.getBBox();
+          minX = Math.min(minX, bbox.x);
+          minY = Math.min(minY, bbox.y);
+          maxX = Math.max(maxX, bbox.x + bbox.width);
+          maxY = Math.max(maxY, bbox.y + bbox.height);
+        } catch {
+          // getBBox は要素が非表示の場合などに例外を投げることがあるため、その場合は無視する
+        }
+      });
+      if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) return;
+      const ns = 'http://www.w3.org/2000/svg';
+      const hit = document.createElementNS(ns, 'rect');
+      hit.setAttribute('x', String(minX - SYMBOL_HIT_PAD));
+      hit.setAttribute('y', String(minY - SYMBOL_HIT_PAD));
+      hit.setAttribute('width', String(maxX - minX + SYMBOL_HIT_PAD * 2));
+      hit.setAttribute('height', String(maxY - minY + SYMBOL_HIT_PAD * 2));
+      hit.setAttribute('fill', 'rgba(37, 99, 235, 0)');
+      hit.setAttribute('class', 'symbol-hit-region');
+      hit.style.pointerEvents = symbolsClickable ? 'auto' : 'none';
+      if (symbolsClickable) {
+        hit.style.cursor = 'pointer';
+        hit.addEventListener('mouseenter', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0.16)'));
+        hit.addEventListener('mouseleave', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0)'));
+        hit.addEventListener('click', (domEvent) => {
+          domEvent.stopPropagation();
+          const containerRect = containerRef.current?.getBoundingClientRect();
+          const overlayX = (domEvent as MouseEvent).clientX - (containerRect?.left ?? 0);
+          const overlayY = (domEvent as MouseEvent).clientY - (containerRect?.top ?? 0);
+          openSymbolAdjustEditor('offset', partIndex, measureAbsoluteIndex, eventIndex, target, event, overlayX, overlayY);
+        });
+      }
+      svgRoot.appendChild(hit);
+    }
+
     // 弧ドラッグ時に再計算できるよう、各弧の形状パラメータをキーで保持する
     const arcGeomMap=new Map<string,{x1:number;y1:number;x2:number;y2:number;upward:boolean;kind:'tie'|'slur';stemDir:number;obstacleY?:number;minNoteY?:number;maxNoteY?:number;startDx:number;startDy:number;endDx:number;endDy:number;cpDyOffset:number}>();
     const dynamicTextEntries: Array<{
@@ -1414,6 +1497,11 @@ export default function PianoSystemCanvas({
       baseY: number;
       markings: NonNullable<NoteEvent['dynamics']>;
       adjust: ResolvedSymbolAdjust;
+      // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
+      partIndex?: number;
+      measureAbsoluteIndex?: number;
+      eventIndex?: number;
+      event?: NoteEvent;
     }> = [];
     // カスタム記号の描画情報を収集する（段ごとの五線上端基準の統一高さで描く）
     const customSymbolEntries: CustomSymbolRenderEntry[] = [];
@@ -1424,7 +1512,11 @@ export default function PianoSystemCanvas({
     // 松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため。
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }> = [];
     // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
-    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const fingeringEntries: Array<{
+      anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust;
+      // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
+      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+    }> = [];
     // アーティキュレーション記号（フェルマータ・スタッカート等）の描画情報を収集する。
     // StaffCanvas と同じ方式で、全音符描画後にまとめて描く。
     const articulationEntries: Array<{
@@ -1435,16 +1527,31 @@ export default function PianoSystemCanvas({
       staveTopY: number;
       markings: NonNullable<NoteEvent['articulations']>;
       adjust: ResolvedSymbolAdjust;
+      partIndex?: number;
+      measureAbsoluteIndex?: number;
+      eventIndex?: number;
+      event?: NoteEvent;
     }> = [];
     // 途中テンポ変更の文字表記（"Fine" など）の描画情報を収集する（五線上端より上に表示）
-    const tempoMarkingEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const tempoMarkingEntries: Array<{
+      anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
+      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+    }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     const ottavaEntries: Array<{
       kind: '8va' | '8vb';
       startX: number; endX: number;
       lineY: number;
+      adjust: ResolvedSymbolAdjust;
+      partIndex?: number;
+      measureAbsoluteIndex?: number;
+      eventIndex?: number;
+      event?: NoteEvent;
     }> = [];
-    let pendingOttava: { kind: '8va' | '8vb'; startX: number; lineY: number } | null = null;
+    let pendingOttava: {
+      kind: '8va' | '8vb'; startX: number; lineY: number; adjust: ResolvedSymbolAdjust;
+      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+    } | null = null;
 
     // SVG 背景クリック → 弧の選択とドラッグ状態を解除
     svg.addEventListener('click',()=>{
@@ -3263,6 +3370,7 @@ export default function PianoSystemCanvas({
                 baseY: stave.getYForLine(4) + 26,
                 markings: activeEvs[j].dynamics,
                 adjust: getSymbolAdjust(activeEvs[j], 'dynamics'),
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
               });
             }
             {
@@ -3272,6 +3380,9 @@ export default function PianoSystemCanvas({
                 activeEvs[j],
                 noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 stave.getYForLine(0),
+                absI,
+                j,
+                pi,
               );
               if (entry) customSymbolEntries.push(entry);
             }
@@ -3290,6 +3401,7 @@ export default function PianoSystemCanvas({
                 staveTopY: stave.getYForLine(0),
                 text: activeEvs[j].fingering!,
                 adjust: getSymbolAdjust(activeEvs[j], 'fingering'),
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && !activeEvs[j]?.isRest && activeEvs[j]?.articulations?.length) {
@@ -3299,6 +3411,7 @@ export default function PianoSystemCanvas({
                 staveTopY: stave.getYForLine(0),
                 markings: activeEvs[j].articulations!,
                 adjust: getSymbolAdjust(activeEvs[j], 'articulations'),
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.tempoMarking) {
@@ -3307,6 +3420,7 @@ export default function PianoSystemCanvas({
                 topY: stave.getYForLine(0),
                 text: activeEvs[j].tempoMarking!,
                 adjust: getSymbolAdjust(activeEvs[j], 'tempoMarking'),
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.ottava) {
@@ -3315,9 +3429,9 @@ export default function PianoSystemCanvas({
               const botY = stave.getYForLine(4);
               const ot = activeEvs[j].ottava!;
               if (ot === '8va') {
-                pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14 };
+                pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(activeEvs[j], 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j] };
               } else if (ot === '8vb') {
-                pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14 };
+                pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(activeEvs[j], 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j] };
               } else if (pendingOttava && ot === '8vaEnd' && pendingOttava.kind === '8va') {
                 ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
                 pendingOttava = null;
@@ -3418,9 +3532,9 @@ export default function PianoSystemCanvas({
                   const topY = stave.getYForLine(0);
                   const botY = stave.getYForLine(4);
                   if (ev.ottava === '8va') {
-                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14 };
+                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(ev, 'ottava') };
                   } else if (ev.ottava === '8vb') {
-                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14 };
+                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(ev, 'ottava') };
                   } else if (pendingOttava && ev.ottava === '8vaEnd' && pendingOttava.kind === '8va') {
                     ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
                     pendingOttava = null;
@@ -3437,12 +3551,13 @@ export default function PianoSystemCanvas({
       x+=w;
     }
 
-    dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust }) => {
+    dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
       const orderedMarkings = [...markings].sort((left, right) => {
         const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
         const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
         return leftPriority - rightPriority;
       });
+      const drawnElements: SVGGraphicsElement[] = [];
       orderedMarkings.forEach((marking, index) => {
         const text=document.createElementNS('http://www.w3.org/2000/svg','text');
         text.textContent=formatDynamicMarking(marking);
@@ -3457,11 +3572,20 @@ export default function PianoSystemCanvas({
         text.setAttribute('font-style','italic');
         text.setAttribute('pointer-events','none');
         svgRoot.appendChild(text);
+        drawnElements.push(text);
       });
+      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+        appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'dynamics');
+      }
     });
 
     // ── カスタム記号を一括描画（StaffCanvas と同じ共通ユーティリティを使う） ──
-    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot);
+    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot, (entry, symbolId, g) => {
+      // 非アクティブ声部の「見た目だけ」描画（partIndex 省略）にはクリック判定を作らない
+      if (entry.partIndex === undefined) return;
+      appendSymbolHitRegion([g], entry.partIndex, entry.measureAbsoluteIndex, entry.eventIndex, entry.event, symbolId, true);
+    });
 
     // ── リハーサルマーク（練習番号）を一括描画（StaffCanvas と同じ四角枠+太字） ──
     rehearsalMarkEntries.forEach(({ x, topY, mark }) => {
@@ -3495,7 +3619,7 @@ export default function PianoSystemCanvas({
     // 運指番号: 音高に関わらず五線上端基準の統一高さに揃えて表示する
     // （カスタム記号と同じ方針）。五線より上へ飛び出す高音だけは、
     // 符頭と重ならないよう、その音符に限り符頭上端の上へ逃がす。
-    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust }) => {
+    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3506,16 +3630,21 @@ export default function PianoSystemCanvas({
       el.setAttribute('font-size', String(10 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+        appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'fingering');
+      }
     });
 
     // ── アーティキュレーション記号を一括描画（StaffCanvas と同じ描き方に揃える） ──
-    articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings, adjust }) => {
+    articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
       // ⤢/✥ ツールの調整値を反映する（StaffCanvas と同じ考え方）。
       // offsetX/offsetY は座標へ加算、scale は各図形の半径・線幅・線の長さへの倍率として使う。
       const ax = anchorX + adjust.offsetX;
       const s = adjust.scale;
       // フェルマータ以外は noteTopY の上に重ならないよう積み上げる（積み上げ間隔も scale に応じて伸縮する）
       let aboveOffset = 0;
+      const drawnElements: SVGGraphicsElement[] = [];
       markings.forEach((type) => {
         const ns = 'http://www.w3.org/2000/svg';
         if (type === 'fermata') {
@@ -3530,6 +3659,7 @@ export default function PianoSystemCanvas({
           arc.setAttribute('fill', 'none');
           arc.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(arc);
+          drawnElements.push(arc);
           // 中心の点（弧の内側）
           const dot = document.createElementNS(ns, 'circle');
           dot.setAttribute('cx', String(ax));
@@ -3538,6 +3668,7 @@ export default function PianoSystemCanvas({
           dot.setAttribute('fill', '#1f2937');
           dot.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(dot);
+          drawnElements.push(dot);
         } else if (type === 'staccato') {
           // スタッカート: 符頭上方に小さな黒丸
           const cy = noteTopY - 6 - aboveOffset + adjust.offsetY;
@@ -3548,6 +3679,7 @@ export default function PianoSystemCanvas({
           dot.setAttribute('fill', '#1f2937');
           dot.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(dot);
+          drawnElements.push(dot);
           aboveOffset += 10 * s;
         } else if (type === 'accent') {
           // アクセント: 下向きの楔形（「>」を90°回した形）
@@ -3562,6 +3694,7 @@ export default function PianoSystemCanvas({
           path.setAttribute('fill', 'none');
           path.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(path);
+          drawnElements.push(path);
           aboveOffset += 14 * s;
         } else if (type === 'tenuto') {
           // テヌート: 符頭上方に水平線
@@ -3576,6 +3709,7 @@ export default function PianoSystemCanvas({
           line.setAttribute('stroke-linecap', 'round');
           line.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(line);
+          drawnElements.push(line);
           aboveOffset += 10 * s;
         } else if (type === 'marcato') {
           // マルカート: 塗りつぶした山形（ストロークのみのアクセントと区別するため塗りで表現する）
@@ -3586,14 +3720,19 @@ export default function PianoSystemCanvas({
           path.setAttribute('fill', '#1f2937');
           path.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(path);
+          drawnElements.push(path);
           aboveOffset += 14 * s;
         }
       });
+      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+        appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'articulations');
+      }
     });
 
     // テンポ表記（"Fine" 等）: 五線上端より24px上、イタリック体で表示する
     // （StaffCanvas の tempoMarkingEntries と同じ描き方）
-    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust }) => {
+    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3605,6 +3744,10 @@ export default function PianoSystemCanvas({
       el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+        appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'tempoMarking');
+      }
     });
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
@@ -3665,41 +3808,54 @@ export default function PianoSystemCanvas({
       }
     });
     // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
-    ottavaEntries.forEach(({ kind, startX, endX, lineY }) => {
+    ottavaEntries.forEach(({ kind, startX, endX, lineY, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+      // symbolAdjust: offsetX/offsetY はブラケット全体に、scale はテキストの font-size と線の太さに効かせる
+      const ax = startX + adjust.offsetX;
+      const aex = endX + adjust.offsetX;
+      const ay = lineY + adjust.offsetY;
+      const fontSize = 11 * adjust.scale;
+      const strokeWidth = 1 * adjust.scale;
+      const drawnElements: SVGGraphicsElement[] = [];
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       label.textContent = kind;
-      label.setAttribute('x', String(startX - 4));
-      label.setAttribute('y', String(lineY));
+      label.setAttribute('x', String(ax - 4));
+      label.setAttribute('y', String(ay));
       label.setAttribute('text-anchor', 'start');
       label.setAttribute('fill', '#374151');
       label.setAttribute('font-family', 'serif');
       label.setAttribute('font-style', 'italic');
-      label.setAttribute('font-size', '11');
+      label.setAttribute('font-size', String(fontSize));
       label.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(label);
-      const lineStart = startX + 18;
-      if (lineStart < endX) {
+      drawnElements.push(label);
+      const lineStart = ax + 18;
+      if (lineStart < aex) {
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
         line.setAttribute('x1', String(lineStart));
-        line.setAttribute('y1', String(lineY - 3));
-        line.setAttribute('x2', String(endX));
-        line.setAttribute('y2', String(lineY - 3));
+        line.setAttribute('y1', String(ay - 3));
+        line.setAttribute('x2', String(aex));
+        line.setAttribute('y2', String(ay - 3));
         line.setAttribute('stroke', '#374151');
-        line.setAttribute('stroke-width', '1');
+        line.setAttribute('stroke-width', String(strokeWidth));
         line.setAttribute('stroke-dasharray', '4,2');
         line.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(line);
+        drawnElements.push(line);
       }
       const bracketDir = kind === '8va' ? 1 : -1;
       const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      vline.setAttribute('x1', String(endX));
-      vline.setAttribute('y1', String(lineY - 3));
-      vline.setAttribute('x2', String(endX));
-      vline.setAttribute('y2', String(lineY - 3 + 6 * bracketDir));
+      vline.setAttribute('x1', String(aex));
+      vline.setAttribute('y1', String(ay - 3));
+      vline.setAttribute('x2', String(aex));
+      vline.setAttribute('y2', String(ay - 3 + 6 * bracketDir));
       vline.setAttribute('stroke', '#374151');
-      vline.setAttribute('stroke-width', '1');
+      vline.setAttribute('stroke-width', String(strokeWidth));
       vline.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(vline);
+      drawnElements.push(vline);
+      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+        appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'ottava');
+      }
     });
 
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
@@ -3903,7 +4059,7 @@ export default function PianoSystemCanvas({
   // measureWidthEvenness を deps に含め、スライダー操作で即座に再描画されるようにする
   // pageMarginSideMm: 値自体は使わないが、ResizeObserver の発火漏れ対策として
   // 呼び出し元（ScorePage）の余白変更を確実にこの effect へ伝える依存トリガー。
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm]);
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable]);
 
   function handleTimeSigConfirm(value: string) {
     if (!timeSigEditState) return;
@@ -4034,11 +4190,16 @@ export default function PianoSystemCanvas({
    */
   function handleSymbolResizeConfirm(rawText: string) {
     if (!symbolResizeEditState) return;
-    const { partIndex, measureAbsoluteIndex, eventIndex, target } = symbolResizeEditState;
+    const { partIndex, measureAbsoluteIndex, eventIndex, target, currentValue } = symbolResizeEditState;
     const trimmed = rawText.trim();
     const parsedPercent = trimmed === '' ? 100 : parseInt(trimmed, 10);
     const percent = !isNaN(parsedPercent) ? parsedPercent : 100;
     const scale = Math.min(MAX_SYMBOL_SCALE, Math.max(MIN_SYMBOL_SCALE, percent / 100));
+    // 値を変えずに blur だけで閉じたケース（no-op）では setPartsScore を呼ばない（Undo 履歴を汚さないため）。
+    if (String(Math.round(scale * 100)) === currentValue) {
+      setSymbolResizeEditState(null);
+      return;
+    }
     setPartsScore(prev => {
       const next = [...prev];
       const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
@@ -4060,7 +4221,7 @@ export default function PianoSystemCanvas({
    */
   function handleSymbolOffsetConfirm(rawX: string, rawY: string) {
     if (!symbolOffsetEditState) return;
-    const { partIndex, measureAbsoluteIndex, eventIndex, target } = symbolOffsetEditState;
+    const { partIndex, measureAbsoluteIndex, eventIndex, target, currentX, currentY } = symbolOffsetEditState;
     const parseOffset = (raw: string) => {
       const trimmed = raw.trim();
       const parsed = trimmed === '' ? 0 : parseInt(trimmed, 10);
@@ -4069,6 +4230,11 @@ export default function PianoSystemCanvas({
     };
     const offsetX = parseOffset(rawX);
     const offsetY = parseOffset(rawY);
+    // 値を変えずに blur だけで閉じたケース（no-op）では setPartsScore を呼ばない（Undo 履歴を汚さないため）。
+    if (String(offsetX) === currentX.trim() && String(offsetY) === currentY.trim()) {
+      setSymbolOffsetEditState(null);
+      return;
+    }
     setPartsScore(prev => {
       const next = [...prev];
       const partData = (prev[partIndex] ?? []).map(cloneMeasureData);

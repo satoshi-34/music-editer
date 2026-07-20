@@ -54,6 +54,8 @@ type Props = {
   pageMarginSideMm?: number;
   // 終止線を描く「内容のある最後の小節」の絶対インデックス。省略時は終止線を描かない。
   finalMeasureIndex?: number;
+  // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
+  symbolsClickable?: boolean;
 };
 
 export default function EnsembleStaff({
@@ -79,6 +81,7 @@ export default function EnsembleStaff({
   measureWidthEvenness,
   pageMarginSideMm,
   finalMeasureIndex,
+  symbolsClickable,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -163,6 +166,7 @@ export default function EnsembleStaff({
             measureWidthEvenness={measureWidthEvenness}
             pageMarginSideMm={pageMarginSideMm}
             finalMeasureIndex={finalMeasureIndex}
+            symbolsClickable={symbolsClickable}
           />
           </div>
         );
