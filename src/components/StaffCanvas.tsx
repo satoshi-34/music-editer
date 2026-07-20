@@ -58,6 +58,7 @@ import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 import { keyToMidi, midiToKey } from '../utils/noteMidiUtils';
+import { deleteEventFromMeasures } from '../utils/noteDeletionUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -1098,75 +1099,11 @@ export default function StaffCanvas({
       const inRange = (arr: any[], i: number) => i >= 0 && i < arr.length;
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        setScore(prev => {
-          if (!inRange(prev, measure)) return prev;
-          const next = prev.map(cloneMeasureData);
-          if (!inRange(next[measure].events, index)) return prev;
-          const targetEv = next[measure].events[index];
-          // 連符（tuplet）内の1イベントを削除する場合は、グループ全体を削除して
-          // 同じ長さの「連符ではない」普通の休符に置き換える。
-          // （部分削除だと連符の音価バランスが崩れて描画・再生が破綻するため、
-          //   このプロジェクトでは「グループごと削除」というシンプルな仕様を採用した）
-          if (targetEv.tuplet) {
-            // PianoSystemCanvas と共通のロジック（utils/tupletUtils.ts）でグループ削除→休符再構成する。
-            const plan = planTupletGroupDeletion(next[measure].events, index, defaultRestKeyForClef(clef));
-            if (plan) {
-              next[measure].events.splice(plan.groupStart, plan.groupEnd - plan.groupStart + 1, ...plan.replacement);
-            }
-            return next;
-          }
-          if (!targetEv.isRest && keyIndex !== undefined && keyIndex >= 0 && keyIndex < targetEv.keys.length && targetEv.keys.length > 1) {
-            const removedKey = targetEv.keys[keyIndex];
-            const nextKeys = targetEv.keys.filter((_, keyIdx) => keyIdx !== keyIndex);
-            const nextArcs = targetEv.arcs?.filter(arc => arc.fromKey !== removedKey);
-            next[measure].events[index] = {
-              ...targetEv,
-              keys: nextKeys,
-              arcs: nextArcs?.length ? nextArcs : undefined,
-            };
-            next.forEach(m => {
-              m.events = m.events.map(ev => {
-                if (!ev.arcs?.length) return ev;
-                const patched = ev.arcs.filter(a => !(
-                  a.toMeasureIndex === measure &&
-                  a.toEventIndex === index &&
-                  a.toKey === removedKey
-                ));
-                return patched.length === ev.arcs.length ? ev : { ...ev, arcs: patched.length ? patched : undefined };
-              });
-            });
-            return next;
-          }
-          next[measure].events.splice(index, 1);
-          // 削除した音符を終点とする arcs を除去し、後続インデックスを繰り上げる
-          next.forEach(m => {
-            m.events = m.events.map(ev => {
-              let patched2 = ev;
-              if (ev.arcs?.length) {
-                const patched = ev.arcs
-                  .filter(a => !(a.toMeasureIndex === measure && a.toEventIndex === index))
-                  .map(a => a.toMeasureIndex === measure && a.toEventIndex > index
-                    ? { ...a, toEventIndex: a.toEventIndex - 1 } : a);
-                if (patched.length !== ev.arcs.length || patched.some((a, i) => a !== ev.arcs![i])) {
-                  patched2 = { ...patched2, arcs: patched.length ? patched : undefined };
-                }
-              }
-              // 松葉（ヘアピン）も同様に、削除した音符を終点とするものは除去し、
-              // 同じ小節の後続音符を指すものはインデックスを繰り上げる
-              if (ev.hairpins?.length) {
-                const patchedHp = ev.hairpins
-                  .filter(h => !(h.endMeasure === measure && h.endEvent === index))
-                  .map(h => h.endMeasure === measure && h.endEvent > index
-                    ? { ...h, endEvent: h.endEvent - 1 } : h);
-                if (patchedHp.length !== ev.hairpins.length || patchedHp.some((h, i) => h !== ev.hairpins![i])) {
-                  patched2 = { ...patched2, hairpins: patchedHp.length ? patchedHp : undefined };
-                }
-              }
-              return patched2;
-            });
-          });
-          return next;
-        });
+        setScore(prev =>
+          // StaffCanvas / PianoSystemCanvas で完全一致していた削除ロジック（連符グループ削除・
+          // 和音1音削除・arc/hairpin のインデックス補正）は utils/noteDeletionUtils.ts に共通化した。
+          deleteEventFromMeasures(prev, measure, index, keyIndex, defaultRestKeyForClef(clef))
+        );
         setSelected(null);
         e.preventDefault(); return;
       }

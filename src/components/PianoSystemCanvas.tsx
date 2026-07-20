@@ -22,6 +22,7 @@ import { computeArcGeometry } from './arcUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
 import { keyToMidi, midiToKey } from '../utils/noteMidiUtils';
+import { deleteEventFromMeasures } from '../utils/noteDeletionUtils';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
@@ -1050,65 +1051,8 @@ export default function PianoSystemCanvas({
       }
 
       if(e.key==='Delete'||e.key==='Backspace'){
-        setS(prev=>{
-          if(measure>=prev.length)return prev;
-          const n=prev.map(cloneMeasureData);
-          if(index>=n[measure].events.length)return prev;
-          const targetEv=n[measure].events[index];
-          // 連符（tuplet）内の1イベントを削除する場合は、グループ全体を削除して
-          // 同じ長さの「連符ではない」普通の休符に置き換える（StaffCanvas と共通のロジック）。
-          if(targetEv.tuplet){
-            const plan=planTupletGroupDeletion(n[measure].events, index, defaultRestKeyForClef(clef));
-            if(plan){
-              n[measure].events.splice(plan.groupStart, plan.groupEnd - plan.groupStart + 1, ...plan.replacement);
-            }
-            return n;
-          }
-          if(!targetEv.isRest&&keyIndex!==undefined&&keyIndex>=0&&keyIndex<targetEv.keys.length&&targetEv.keys.length>1){
-            const removedKey=targetEv.keys[keyIndex];
-            const nextKeys=targetEv.keys.filter((_,keyIdx)=>keyIdx!==keyIndex);
-            const nextArcs=targetEv.arcs?.filter(arc=>arc.fromKey!==removedKey);
-            n[measure].events[index]={...targetEv,keys:nextKeys,arcs:nextArcs?.length?nextArcs:undefined};
-            n.forEach(m=>{
-              m.events=m.events.map(ev=>{
-                if(!ev.arcs?.length)return ev;
-                const patched=ev.arcs.filter(a=>!(
-                  a.toMeasureIndex===measure&&
-                  a.toEventIndex===index&&
-                  a.toKey===removedKey
-                ));
-                return patched.length===ev.arcs.length?ev:{...ev,arcs:patched.length?patched:undefined};
-              });
-            });
-            return n;
-          }
-          n[measure].events.splice(index,1);
-          // 削除した音符を終点とする arcs / hairpins を除去し、後続インデックスを繰り上げる
-          n.forEach(m=>{
-            m.events=m.events.map(ev=>{
-              let patchedEv=ev;
-              if(ev.arcs?.length){
-                const patched=ev.arcs
-                  .filter(a=>!(a.toMeasureIndex===measure&&a.toEventIndex===index))
-                  .map(a=>a.toMeasureIndex===measure&&a.toEventIndex>index?{...a,toEventIndex:a.toEventIndex-1}:a);
-                if(patched.length!==ev.arcs.length||patched.some((a,i)=>a!==ev.arcs![i])){
-                  patchedEv={...patchedEv,arcs:patched.length?patched:undefined};
-                }
-              }
-              // 松葉（ヘアピン）も同様に、削除した音符を終点とするものは除去し、後続はインデックス繰り上げ
-              if(ev.hairpins?.length){
-                const patchedHp=ev.hairpins
-                  .filter(h=>!(h.endMeasure===measure&&h.endEvent===index))
-                  .map(h=>h.endMeasure===measure&&h.endEvent>index?{...h,endEvent:h.endEvent-1}:h);
-                if(patchedHp.length!==ev.hairpins.length||patchedHp.some((h,i)=>h!==ev.hairpins![i])){
-                  patchedEv={...patchedEv,hairpins:patchedHp.length?patchedHp:undefined};
-                }
-              }
-              return patchedEv;
-            });
-          });
-          return n;
-        });
+        // StaffCanvas と完全一致していた削除ロジックは utils/noteDeletionUtils.ts に共通化した。
+        setS(prev=>deleteEventFromMeasures(prev, measure, index, keyIndex, defaultRestKeyForClef(clef)));
         setSelected(null);e.preventDefault();return;
       }
       if(e.key==='ArrowUp'||e.key==='ArrowDown'){
