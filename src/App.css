@@ -311,6 +311,17 @@ button.ghost:disabled {
   cursor: not-allowed;
 }
 
+/* 印刷プレビュートグルなど、ON/OFF を持つ .ghost ボタンの選択状態表示 */
+button.ghost.active {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+button.ghost.active:hover:not(:disabled) {
+  background: #1e40af;
+  border-color: #1e40af;
+}
+
 /* Save/Load buttons container */
 .save-load-buttons {
   display: flex;
@@ -1309,6 +1320,68 @@ button.ghost:disabled {
      2段以上のページは従来の space-between のまま（最後の段が下端へ付く）。 */
   .print-final-page-single .system-stack { justify-content: flex-start; }
 }
+
+/* ===== 印刷プレビュー（画面上で印刷結果を再現するモード） =====
+   .print-preview は「その他」タブの「印刷プレビュー」トグルで app-root に付与される。
+   上の @media print と同じ見た目（A4紙面の余白・インク色・段区切り）を画面上でも
+   再現するためのルール群。CSS の @media print はブラウザの印刷時にしか適用されず、
+   画面表示中は効かせられないため、同じ内容をクラスベースで複製している
+   （本来は共通クラスへ一本化したいが、@media print 側の !important 込みのセレクタを
+   丸ごと括り出す変更は影響範囲が大きいため、今回はコメントで対応関係を明記した
+   重複定義にとどめた。詳細は .claude/specs/print-preview/design.md 参照）。
+   ただし以下は @media print と異なり、プレビュー中も操作できるよう「隠さない」:
+   - .toolbar（ツールバー全体。レイアウト調整コントロールがここにあるため）
+   - .system-measure-override-controls（段ごとの小節数 ◀▶）
+   - 段ごとの間隔調整、ページ余白・段の間隔・音符サイズのスライダー類（ツールバー内） */
+.print-preview .layout-overflow-alert { display: none !important; }
+.print-preview .add-measures-ghost-button { display: none !important; }
+.print-preview .vf-padding-rest { display: none !important; }
+/* システム調整コントロールは隠さず、紙面の邪魔をしにくい半透明フローティング行として見せる */
+.print-preview .system-measure-override-controls {
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 6px;
+}
+.print-preview .system-measure-override-controls:hover,
+.print-preview .system-measure-override-controls:focus-within {
+  opacity: 1;
+}
+.print-preview .paper-rail { background: #e5e7eb; }
+.print-preview .print-page {
+  --score-stroke-width: 0.8;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}
+.print-preview .print-page svg path[stroke]:not([stroke="none"]):not(.vf-arc-hit):not(.vf-hairpin-hit) {
+  stroke: var(--print-ink, #000);
+}
+.print-preview .print-page svg path:not([fill="none"]):not(.vf-arc-hit):not(.vf-hairpin-hit) { fill: var(--print-ink, #000); }
+.print-preview .print-page svg line { stroke: var(--print-ink, #000); }
+.print-preview .print-page svg path.vf-arc-hit,
+.print-preview .print-page svg path.vf-hairpin-hit {
+  stroke: none; fill: none;
+}
+.print-preview .print-page svg circle[stroke]:not([stroke="none"]) { stroke: var(--print-ink, #000); }
+.print-preview .print-page svg circle:not([fill="none"]) { fill: var(--print-ink, #000); }
+.print-preview .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+  stroke: var(--print-ink, #000);
+}
+.print-preview .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+  fill: var(--print-ink, #000);
+}
+.print-preview .print-page svg rect.vf-hit,
+.print-preview .print-page svg rect.vf-note-hit,
+.print-preview .print-page svg rect.vf-note-selected,
+.print-preview .print-page svg rect.vf-key-signature-debug {
+  stroke: none; fill: transparent;
+}
+.print-preview .print-page svg text { fill: var(--print-ink, #000); }
+.print-preview .print-page svg g[stroke]:not([stroke="none"]) { stroke: var(--print-ink, #000); }
+.print-preview .print-page svg g[fill]:not([fill="none"]) { fill: var(--print-ink, #000); }
+.print-preview .print-page svg[stroke]:not([stroke="none"]) { stroke: var(--print-ink, #000); }
+.print-preview .print-page svg[fill]:not([fill="none"]) { fill: var(--print-ink, #000); }
+/* ページの境界がひと目で分かるよう、ページ同士の間隔を広げてはっきり区切る */
+.print-preview .spread { gap: 32px 40px; }
 
 /* 画面表示でも、最終ページの可視段が1段だけのときは上揃えにする。
    通常ページのグリッド配置（flex-grow 等分）だと1段だけのページでは段が

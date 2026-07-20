@@ -322,6 +322,12 @@ export default function ScorePage() {
   // （詳細は .claude/specs/part-extraction/design.md を参照）。
   const [partExtractionId, setPartExtractionId] = useState<string | null>(null);
   const [showOffsetPanel, setShowOffsetPanel] = useState(false);
+  // 印刷プレビューモード。ON のとき、@media print と同じ見た目（A4紙面・余白・
+  // 段区切り）を画面上でも再現する（.print-preview クラスを app-root に付与し、
+  // App.css 側の .print-preview 系ルールで見た目を切り替える）。
+  // レイアウト調整用のコントロール（段の間隔・小節数・ページ余白など）は
+  // ツールバー側にあるため、プレビュー中でもそのまま操作できる（要件どおり）。
+  const [isPrintPreview, setIsPrintPreview] = useState(false);
   const [showInstrumentationEditor, setShowInstrumentationEditor] = useState(false);
   // ユーザーが作成したカスタム記号のライブラリと、エディタモーダルの開閉状態
   const [customSymbolDefs, setCustomSymbolDefs] = useState<CustomSymbolDef[]>([]);
@@ -2746,7 +2752,10 @@ export default function ScorePage() {
   );
 
   return (
-    <div className="app-root" style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}>
+    <div
+      className={`app-root${isPrintPreview ? ' print-preview' : ''}`}
+      style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
+    >
       <header className="toolbar" ref={toolbarRef}>
         <div className="toolbar-tabs" role="tablist" aria-label="編集タブ">
           {toolbarTabButtons.map((tab) => (
@@ -3040,6 +3049,15 @@ export default function ScorePage() {
                 onChange={handleImportFile}
               />
               <button className="ghost" onClick={handleExportPdf} title="ブラウザの印刷ダイアログを開き、「PDFとして保存」を選ぶと楽譜をPDF書出できます">PDF書出 / 印刷</button>
+              <button
+                type="button"
+                className={`ghost${isPrintPreview ? ' active' : ''}`}
+                onClick={() => setIsPrintPreview(v => !v)}
+                aria-pressed={isPrintPreview}
+                title="実際に印刷される見た目（A4ページ・余白・段区切り）を画面上で確認しながら、ページ余白や段の間隔などのレイアウト調整ができます"
+              >
+                印刷プレビュー{isPrintPreview ? ' ON' : ''}
+              </button>
               {selectedMeasures && (
                 <div className="coord-correction-wrap">
                   <button
