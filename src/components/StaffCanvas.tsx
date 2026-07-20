@@ -1464,7 +1464,27 @@ export default function StaffCanvas({
       eventIndex: number,
       event: NoteEvent,
       kind: AdjustableSymbolKind,
+      isCustomSymbolId?: false,
+    ): void;
+    function appendSymbolHitRegion(
+      elements: SVGGraphicsElement[],
+      measureAbsoluteIndex: number,
+      eventIndex: number,
+      event: NoteEvent,
+      symbolId: string,
+      isCustomSymbolId: true,
+    ): void;
+    function appendSymbolHitRegion(
+      elements: SVGGraphicsElement[],
+      measureAbsoluteIndex: number,
+      eventIndex: number,
+      event: NoteEvent,
+      kindOrSymbolId: AdjustableSymbolKind | string,
+      isCustomSymbolId?: boolean,
     ) {
+      const target: AdjustTarget = isCustomSymbolId
+        ? { type: 'custom', symbolId: kindOrSymbolId, name: customSymbolDefs.find(d => d.id === kindOrSymbolId)?.name ?? kindOrSymbolId }
+        : { type: 'standard', kind: kindOrSymbolId as AdjustableSymbolKind };
       if (elements.length === 0) return;
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       elements.forEach((el) => {
@@ -1501,7 +1521,7 @@ export default function StaffCanvas({
           const containerRect = containerRef.current?.getBoundingClientRect();
           const overlayX = (domEvent as MouseEvent).clientX - (containerRect?.left ?? 0);
           const overlayY = (domEvent as MouseEvent).clientY - (containerRect?.top ?? 0);
-          openSymbolAdjustEditor('offset', measureAbsoluteIndex, eventIndex, { type: 'standard', kind }, event, overlayX, overlayY);
+          openSymbolAdjustEditor('offset', measureAbsoluteIndex, eventIndex, target, event, overlayX, overlayY);
         });
       }
       svgRoot.appendChild(hit);
@@ -1558,17 +1578,19 @@ export default function StaffCanvas({
     // リハーサルマーク（練習番号）の描画情報を収集する（各小節の左上、テンポ表記よりさらに上に表示）
     const rehearsalMarkEntries: Array<{ x: number; topY: number; mark: string }> = [];
     // テキスト要素（コード記号・テンポ表記）の描画情報を収集する（五線の上に表示）
-    const chordSymbolEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
-    const tempoMarkingEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    type TextEntry = { anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust; measureAbsoluteIndex: number; eventIndex: number; event: NoteEvent };
+    type BotTextEntry = { anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust; measureAbsoluteIndex: number; eventIndex: number; event: NoteEvent };
+    const chordSymbolEntries: TextEntry[] = [];
+    const tempoMarkingEntries: TextEntry[] = [];
     // テキスト要素（発想標語・歌詞）の描画情報を収集する（五線の下に表示）
-    const expressionMarkingEntries: Array<{ anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
-    const lyricsEntries: Array<{ anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const expressionMarkingEntries: BotTextEntry[] = [];
+    const lyricsEntries: BotTextEntry[] = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     // stave も持たせておくのは、down→up の破線ブリッジが段またぎになるかどうかを
     // 松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため。
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }> = [];
     // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
-    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust; measureAbsoluteIndex: number; eventIndex: number; event: NoteEvent }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     // start と end の x 座標・y 座標を記録して後でまとめて線を引く
     const ottavaEntries: Array<{
@@ -3323,6 +3345,9 @@ export default function StaffCanvas({
                 staveTopY: stave.getYForLine(0),
                 text: safeEvents[j].fingering!,
                 adjust: getSymbolAdjust(safeEvents[j], 'fingering'),
+                measureAbsoluteIndex: absoluteIndex,
+                eventIndex: j,
+                event: safeEvents[j],
               });
             }
             {
@@ -3333,6 +3358,8 @@ export default function StaffCanvas({
                 safeEvents[j],
                 noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 stave.getYForLine(0),
+                absoluteIndex,
+                j,
               );
               if (entry) customSymbolEntries.push(entry);
             }
@@ -3344,17 +3371,17 @@ export default function StaffCanvas({
               const staveTop = stave.getYForLine(0);
               const staveBot = stave.getYForLine(4);
               if (ev?.chordSymbol) {
-                chordSymbolEntries.push({ anchorX: cx, topY: staveTop, text: ev.chordSymbol, adjust: getSymbolAdjust(ev, 'chordSymbol') });
+                chordSymbolEntries.push({ anchorX: cx, topY: staveTop, text: ev.chordSymbol, adjust: getSymbolAdjust(ev, 'chordSymbol'), measureAbsoluteIndex: absoluteIndex, eventIndex: j, event: ev });
               }
               if (ev?.tempoMarking) {
-                tempoMarkingEntries.push({ anchorX: cx, topY: staveTop, text: ev.tempoMarking, adjust: getSymbolAdjust(ev, 'tempoMarking') });
+                tempoMarkingEntries.push({ anchorX: cx, topY: staveTop, text: ev.tempoMarking, adjust: getSymbolAdjust(ev, 'tempoMarking'), measureAbsoluteIndex: absoluteIndex, eventIndex: j, event: ev });
               }
               // 五線下端より下に表示する要素
               if (ev?.expressionMarking) {
-                expressionMarkingEntries.push({ anchorX: cx, botY: staveBot, text: ev.expressionMarking, adjust: getSymbolAdjust(ev, 'expressionMarking') });
+                expressionMarkingEntries.push({ anchorX: cx, botY: staveBot, text: ev.expressionMarking, adjust: getSymbolAdjust(ev, 'expressionMarking'), measureAbsoluteIndex: absoluteIndex, eventIndex: j, event: ev });
               }
               if (ev?.lyrics) {
-                lyricsEntries.push({ anchorX: cx, botY: staveBot, text: ev.lyrics, adjust: getSymbolAdjust(ev, 'lyrics') });
+                lyricsEntries.push({ anchorX: cx, botY: staveBot, text: ev.lyrics, adjust: getSymbolAdjust(ev, 'lyrics'), measureAbsoluteIndex: absoluteIndex, eventIndex: j, event: ev });
               }
               if (ev?.pedalMark) {
                 pedalMarkEntries.push({ anchorX: cx, botY: staveBot, mark: ev.pedalMark, stave });
@@ -3577,7 +3604,12 @@ export default function StaffCanvas({
     });
 
     // ── カスタム記号を一括描画 ────────────────────────────────────
-    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot);
+    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot, (entry, symbolId, g) => {
+      // カスタム記号のクリック判定。appendSymbolHitRegion と同じ考え方だが、
+      // target が {type:'custom', symbolId} になる点だけ異なるため、ここで個別に組み立てる。
+      const { measureAbsoluteIndex, eventIndex, event } = entry;
+      appendSymbolHitRegion([g], measureAbsoluteIndex, eventIndex, event, symbolId, true);
+    });
 
     // ── 途中テンポ変更マーキングを一括描画 ──────────────────────
     // 各小節の左端上方に「♩=XXX」と赤みがかったテキストで表示する。
@@ -3633,7 +3665,7 @@ export default function StaffCanvas({
     // 統一高さに揃えて表示する（カスタム記号と同じ方針。音符ごとに高さがばらつくと
     // 楽譜として読みにくいため）。五線より上へ飛び出す高音だけは、記号が符頭と
     // 重ならないよう、その音符に限り符頭上端の上へ逃がす。
-    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust }) => {
+    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3644,11 +3676,12 @@ export default function StaffCanvas({
       el.setAttribute('font-size', String(10 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      appendSymbolHitRegion([el], measureAbsoluteIndex, eventIndex, event, 'fingering');
     });
 
     // ── テキスト要素を一括描画 ───────────────────────────────────
     // コード記号: 五線上端より 8px 上（ト音記号・拍子記号と重なりにくい高さ）
-    chordSymbolEntries.forEach(({ anchorX, topY, text, adjust }) => {
+    chordSymbolEntries.forEach(({ anchorX, topY, text, adjust, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3659,10 +3692,11 @@ export default function StaffCanvas({
       el.setAttribute('font-size', String(12 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      appendSymbolHitRegion([el], measureAbsoluteIndex, eventIndex, event, 'chordSymbol');
     });
 
     // テンポ表記: コード記号よりさらに 16px 上（最も優先度が高く目立つ場所）
-    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust }) => {
+    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3674,10 +3708,11 @@ export default function StaffCanvas({
       el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      appendSymbolHitRegion([el], measureAbsoluteIndex, eventIndex, event, 'tempoMarking');
     });
 
     // 発想標語: 強弱記号の下（botY + 40）に斜体で表示
-    expressionMarkingEntries.forEach(({ anchorX, botY, text, adjust }) => {
+    expressionMarkingEntries.forEach(({ anchorX, botY, text, adjust, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3689,10 +3724,11 @@ export default function StaffCanvas({
       el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      appendSymbolHitRegion([el], measureAbsoluteIndex, eventIndex, event, 'expressionMarking');
     });
 
     // 歌詞: 発想標語のさらに下（botY + 54）に通常体で表示
-    lyricsEntries.forEach(({ anchorX, botY, text, adjust }) => {
+    lyricsEntries.forEach(({ anchorX, botY, text, adjust, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3703,6 +3739,7 @@ export default function StaffCanvas({
       el.setAttribute('font-size', String(11 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      appendSymbolHitRegion([el], measureAbsoluteIndex, eventIndex, event, 'lyrics');
     });
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
@@ -4126,11 +4163,17 @@ export default function StaffCanvas({
    */
   function handleSymbolResizeConfirm(rawText: string) {
     if (!symbolResizeEditState) return;
-    const { measureAbsoluteIndex, eventIndex, target } = symbolResizeEditState;
+    const { measureAbsoluteIndex, eventIndex, target, currentValue } = symbolResizeEditState;
     const trimmed = rawText.trim();
     const parsedPercent = trimmed === '' ? 100 : parseInt(trimmed, 10);
     const percent = !isNaN(parsedPercent) ? parsedPercent : 100;
     const scale = Math.min(MAX_SYMBOL_SCALE, Math.max(MIN_SYMBOL_SCALE, percent / 100));
+    // 値を変えずに blur だけで閉じたケース（no-op）では setScore を呼ばない。
+    // 呼んでしまうと offset 0 / scale 100% が明示的に書き込まれ、Undo 履歴が無駄に1件増えてしまう。
+    if (String(Math.round(scale * 100)) === currentValue) {
+      setSymbolResizeEditState(null);
+      return;
+    }
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;
@@ -4153,7 +4196,7 @@ export default function StaffCanvas({
    */
   function handleSymbolOffsetConfirm(rawX: string, rawY: string) {
     if (!symbolOffsetEditState) return;
-    const { measureAbsoluteIndex, eventIndex, target } = symbolOffsetEditState;
+    const { measureAbsoluteIndex, eventIndex, target, currentX, currentY } = symbolOffsetEditState;
     const parseOffset = (raw: string) => {
       const trimmed = raw.trim();
       const parsed = trimmed === '' ? 0 : parseInt(trimmed, 10);
@@ -4162,6 +4205,11 @@ export default function StaffCanvas({
     };
     const offsetX = parseOffset(rawX);
     const offsetY = parseOffset(rawY);
+    // 値を変えずに blur だけで閉じたケース（no-op）では setScore を呼ばない（Undo 履歴を汚さないため）。
+    if (String(offsetX) === currentX.trim() && String(offsetY) === currentY.trim()) {
+      setSymbolOffsetEditState(null);
+      return;
+    }
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;

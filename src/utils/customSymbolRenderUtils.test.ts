@@ -48,6 +48,9 @@ describe('buildCustomSymbolEntry', () => {
       anchorX: 50,
       anchorY: 90, // getCustomSymbolAnchorY(100)
       symbols: [{ symbolId: 'sym_1', scale: 1, offsetX: 0, offsetY: 0 }],
+      measureAbsoluteIndex: 0,
+      eventIndex: 0,
+      event,
     });
   });
 

@@ -1429,8 +1429,30 @@ export default function PianoSystemCanvas({
       eventIndex: number,
       event: NoteEvent,
       kind: AdjustableSymbolKind,
+      isCustomSymbolId?: false,
+    ): void;
+    function appendSymbolHitRegion(
+      elements: SVGGraphicsElement[],
+      partIndex: number,
+      measureAbsoluteIndex: number,
+      eventIndex: number,
+      event: NoteEvent,
+      symbolId: string,
+      isCustomSymbolId: true,
+    ): void;
+    function appendSymbolHitRegion(
+      elements: SVGGraphicsElement[],
+      partIndex: number,
+      measureAbsoluteIndex: number,
+      eventIndex: number,
+      event: NoteEvent,
+      kindOrSymbolId: AdjustableSymbolKind | string,
+      isCustomSymbolId?: boolean,
     ) {
       if (elements.length === 0) return;
+      const target: AdjustTarget = isCustomSymbolId
+        ? { type: 'custom', symbolId: kindOrSymbolId, name: customSymbolDefs.find(d => d.id === kindOrSymbolId)?.name ?? kindOrSymbolId }
+        : { type: 'standard', kind: kindOrSymbolId as AdjustableSymbolKind };
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       elements.forEach((el) => {
         try {
@@ -1462,7 +1484,7 @@ export default function PianoSystemCanvas({
           const containerRect = containerRef.current?.getBoundingClientRect();
           const overlayX = (domEvent as MouseEvent).clientX - (containerRect?.left ?? 0);
           const overlayY = (domEvent as MouseEvent).clientY - (containerRect?.top ?? 0);
-          openSymbolAdjustEditor('offset', partIndex, measureAbsoluteIndex, eventIndex, { type: 'standard', kind }, event, overlayX, overlayY);
+          openSymbolAdjustEditor('offset', partIndex, measureAbsoluteIndex, eventIndex, target, event, overlayX, overlayY);
         });
       }
       svgRoot.appendChild(hit);
@@ -1490,7 +1512,11 @@ export default function PianoSystemCanvas({
     // 松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため。
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }> = [];
     // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
-    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const fingeringEntries: Array<{
+      anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust;
+      // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
+      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+    }> = [];
     // アーティキュレーション記号（フェルマータ・スタッカート等）の描画情報を収集する。
     // StaffCanvas と同じ方式で、全音符描画後にまとめて描く。
     const articulationEntries: Array<{
@@ -1507,7 +1533,10 @@ export default function PianoSystemCanvas({
       event?: NoteEvent;
     }> = [];
     // 途中テンポ変更の文字表記（"Fine" など）の描画情報を収集する（五線上端より上に表示）
-    const tempoMarkingEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const tempoMarkingEntries: Array<{
+      anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
+      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+    }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     const ottavaEntries: Array<{
       kind: '8va' | '8vb';
@@ -3351,6 +3380,9 @@ export default function PianoSystemCanvas({
                 activeEvs[j],
                 noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 stave.getYForLine(0),
+                absI,
+                j,
+                pi,
               );
               if (entry) customSymbolEntries.push(entry);
             }
@@ -3369,6 +3401,7 @@ export default function PianoSystemCanvas({
                 staveTopY: stave.getYForLine(0),
                 text: activeEvs[j].fingering!,
                 adjust: getSymbolAdjust(activeEvs[j], 'fingering'),
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && !activeEvs[j]?.isRest && activeEvs[j]?.articulations?.length) {
@@ -3387,6 +3420,7 @@ export default function PianoSystemCanvas({
                 topY: stave.getYForLine(0),
                 text: activeEvs[j].tempoMarking!,
                 adjust: getSymbolAdjust(activeEvs[j], 'tempoMarking'),
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.ottava) {
@@ -3547,7 +3581,11 @@ export default function PianoSystemCanvas({
     });
 
     // ── カスタム記号を一括描画（StaffCanvas と同じ共通ユーティリティを使う） ──
-    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot);
+    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot, (entry, symbolId, g) => {
+      // 非アクティブ声部の「見た目だけ」描画（partIndex 省略）にはクリック判定を作らない
+      if (entry.partIndex === undefined) return;
+      appendSymbolHitRegion([g], entry.partIndex, entry.measureAbsoluteIndex, entry.eventIndex, entry.event, symbolId, true);
+    });
 
     // ── リハーサルマーク（練習番号）を一括描画（StaffCanvas と同じ四角枠+太字） ──
     rehearsalMarkEntries.forEach(({ x, topY, mark }) => {
@@ -3581,7 +3619,7 @@ export default function PianoSystemCanvas({
     // 運指番号: 音高に関わらず五線上端基準の統一高さに揃えて表示する
     // （カスタム記号と同じ方針）。五線より上へ飛び出す高音だけは、
     // 符頭と重ならないよう、その音符に限り符頭上端の上へ逃がす。
-    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust }) => {
+    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3592,6 +3630,10 @@ export default function PianoSystemCanvas({
       el.setAttribute('font-size', String(10 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+        appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'fingering');
+      }
     });
 
     // ── アーティキュレーション記号を一括描画（StaffCanvas と同じ描き方に揃える） ──
@@ -3690,7 +3732,7 @@ export default function PianoSystemCanvas({
 
     // テンポ表記（"Fine" 等）: 五線上端より24px上、イタリック体で表示する
     // （StaffCanvas の tempoMarkingEntries と同じ描き方）
-    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust }) => {
+    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3702,6 +3744,10 @@ export default function PianoSystemCanvas({
       el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+        appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'tempoMarking');
+      }
     });
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
@@ -4144,11 +4190,16 @@ export default function PianoSystemCanvas({
    */
   function handleSymbolResizeConfirm(rawText: string) {
     if (!symbolResizeEditState) return;
-    const { partIndex, measureAbsoluteIndex, eventIndex, target } = symbolResizeEditState;
+    const { partIndex, measureAbsoluteIndex, eventIndex, target, currentValue } = symbolResizeEditState;
     const trimmed = rawText.trim();
     const parsedPercent = trimmed === '' ? 100 : parseInt(trimmed, 10);
     const percent = !isNaN(parsedPercent) ? parsedPercent : 100;
     const scale = Math.min(MAX_SYMBOL_SCALE, Math.max(MIN_SYMBOL_SCALE, percent / 100));
+    // 値を変えずに blur だけで閉じたケース（no-op）では setPartsScore を呼ばない（Undo 履歴を汚さないため）。
+    if (String(Math.round(scale * 100)) === currentValue) {
+      setSymbolResizeEditState(null);
+      return;
+    }
     setPartsScore(prev => {
       const next = [...prev];
       const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
@@ -4170,7 +4221,7 @@ export default function PianoSystemCanvas({
    */
   function handleSymbolOffsetConfirm(rawX: string, rawY: string) {
     if (!symbolOffsetEditState) return;
-    const { partIndex, measureAbsoluteIndex, eventIndex, target } = symbolOffsetEditState;
+    const { partIndex, measureAbsoluteIndex, eventIndex, target, currentX, currentY } = symbolOffsetEditState;
     const parseOffset = (raw: string) => {
       const trimmed = raw.trim();
       const parsed = trimmed === '' ? 0 : parseInt(trimmed, 10);
@@ -4179,6 +4230,11 @@ export default function PianoSystemCanvas({
     };
     const offsetX = parseOffset(rawX);
     const offsetY = parseOffset(rawY);
+    // 値を変えずに blur だけで閉じたケース（no-op）では setPartsScore を呼ばない（Undo 履歴を汚さないため）。
+    if (String(offsetX) === currentX.trim() && String(offsetY) === currentY.trim()) {
+      setSymbolOffsetEditState(null);
+      return;
+    }
     setPartsScore(prev => {
       const next = [...prev];
       const partData = (prev[partIndex] ?? []).map(cloneMeasureData);

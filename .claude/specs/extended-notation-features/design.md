@@ -452,4 +452,43 @@ export interface HairpinMark {
 - `src/components/StaffCanvas.tsx`: `symbolsClickable` prop 追加、`appendSymbolHitRegion` 関数新設、dynamicTextEntries/articulationEntries/ottavaEntries に index 情報を追加
 - `src/components/PianoSystemCanvas.tsx`: 同上（`partIndex` も含む）
 - `src/components/EnsembleStaff.tsx` / `QuartetStaff.tsx` / `PianoStaff.tsx`: `symbolsClickable` prop 中継
+
+## 演奏記号の直接クリック調整（第2弾: 残りの記号種への展開）
+
+### 問題
+
+- 第1弾（強弱・アーティキュレーション・8va/8vb）で導入した `appendSymbolHitRegion` パターンを、運指・歌詞・コード記号・テンポ表記・発想標語・カスタム記号にも展開する必要があった。
+
+### 修正設計
+
+- `appendSymbolHitRegion` の引数を `kind: AdjustableSymbolKind` 固定から、TypeScript のオーバーロードで「標準記号（`kind`）」と「カスタム記号（`symbolId: string` + `isCustomSymbolId: true`）」の両方を受け付けるように変更。関数内部で `AdjustTarget`（`{type:'standard', kind}` または `{type:'custom', symbolId, name}`）を組み立ててから `openSymbolAdjustEditor` を呼ぶ。StaffCanvas / PianoSystemCanvas 両方で同じ形に揃えた。
+- 運指（`fingeringEntries`）・コード記号（`chordSymbolEntries`）・テンポ表記（`tempoMarkingEntries`）・発想標語（`expressionMarkingEntries`）・歌詞（`lyricsEntries`、StaffCanvas のみ）は、既存の dynamics/articulations と同じパターンで `measureAbsoluteIndex` / `eventIndex` / `event`（PianoSystemCanvas はさらに `partIndex`）をエントリに追加し、描画直後に `appendSymbolHitRegion([el], ...)` を呼ぶ。
+- カスタム記号は、共通描画ユーティリティ `src/utils/customSymbolRenderUtils.ts` の `drawCustomSymbolEntries()` に第4引数 `onSymbolDrawn?: (entry, symbolId, g: SVGGElement) => void` を追加。`renderCustomSymbol()` は複数の SVG プリミティブを直接 `svgRoot` へ追加するだけで参照を返さないため、記号1個ぶんを一時的な `<g>` でラップしてから `svgRoot` へ付け替え、その `<g>` を `onSymbolDrawn` へ渡す。呼び出し側（StaffCanvas / PianoSystemCanvas）は `[g]` を `appendSymbolHitRegion(..., symbolId, true)` に渡してヒット領域を作る。`CustomSymbolRenderEntry` に `measureAbsoluteIndex` / `eventIndex` / `event` / `partIndex?`（PianoSystemCanvas 用、省略可）を追加し、`buildCustomSymbolEntry()` の呼び出し側で渡す。
+- PianoSystemCanvas の非アクティブ声部「見た目だけ」描画パス（`buildCustomSymbolEntry(ev, cx, staveTopY)` を index 省略で呼ぶ箇所）は `partIndex` が `undefined` のままになるため、`drawCustomSymbolEntries` のコールバック内で `entry.partIndex === undefined` ならヒット領域を作らずに return する（第1弾と同じ方針）。同様に fingering/tempoMarking も非アクティブ声部描画では index 情報を渡さない。
+
+### 対象範囲・既知の制限
+
+- PianoSystemCanvas は元々コード記号・発想標語・歌詞（`chordSymbol`/`expressionMarking`/`lyrics`）を描画していない（`ev.lyrics` 等を読む箇所がそもそも存在しない）ため、これらは PianoSystemCanvas では対象外のまま（StaffCanvas のみ対応）。運指・テンポ表記・カスタム記号は両方対応。
+- クリックで開くのは位置調整オーバーレイ（✥ 相当）のみで、第1弾と同じ制限が引き続き適用される。
+
+## 調整オーバーレイの no-op コミット修正（Undo 履歴の汚染防止）
+
+### 問題
+
+- `symbolOffsetEditState` / `symbolResizeEditState`（StaffCanvas・PianoSystemCanvas の各2箇所、計4箇所）の確定処理（`handleSymbolOffsetConfirm` / `handleSymbolResizeConfirm`）は、値を変えずに blur だけでオーバーレイを閉じた場合でも常に `setScore` / `setPartsScore` を呼んでいた。その結果、明示的な `offset 0` / `scale 100%` が `NoteEvent.symbolAdjust` / `customSymbols[].offsetX/offsetY/scale` に書き込まれ、実質何も変えていないのに Undo 履歴が1件積まれてしまっていた。
+
+### 修正設計
+
+- 4つの確定関数それぞれで、パース・クランプ後の値をオーバーレイを開いた時点の現在値（`currentValue` / `currentX`・`currentY`）と比較し、完全に一致する場合は `setScore`/`setPartsScore` を呼ばずに `setXxxEditState(null)` だけ行って早期 return する。
+  - `handleSymbolResizeConfirm`: `String(Math.round(scale * 100)) === currentValue` なら no-op
+  - `handleSymbolOffsetConfirm`: `String(offsetX) === currentX.trim() && String(offsetY) === currentY.trim()` なら no-op
+- カスタム記号側は別実装ではなく、既に `AdjustTarget`（`{type:'custom', symbolId}` / `{type:'standard', kind}`）で統一されているため、上記4関数の修正だけで標準記号・カスタム記号の両方に効く。
+- ブラウザ確認: 演奏記号タブで記号をクリックしてオーバーレイを開き、値を変えずに blur で閉じても「元に戻す」ボタンが disabled のまま変化しないことを確認。値を変えて確定した場合は従来どおり反映され「元に戻す」が enabled になり、Undo で正しく元に戻ることも確認済み。
+
+## 影響範囲（第2弾・no-op 修正）
+
+- `src/components/StaffCanvas.tsx`: `appendSymbolHitRegion` のオーバーロード化、fingering/chordSymbol/tempoMarking/expressionMarking/lyrics エントリへの index 追加とヒット領域呼び出し、カスタム記号のヒット領域呼び出し、`handleSymbolResizeConfirm`/`handleSymbolOffsetConfirm` の no-op 早期return
+- `src/components/PianoSystemCanvas.tsx`: 同上（fingering/tempoMarking のみ。chordSymbol/expressionMarking/lyrics は元々未描画のため対象外）
+- `src/utils/customSymbolRenderUtils.ts`: `CustomSymbolRenderEntry` に `measureAbsoluteIndex`/`eventIndex`/`event`/`partIndex?` 追加、`buildCustomSymbolEntry()` に index 引数追加（既定値付きで後方互換）、`drawCustomSymbolEntries()` に `onSymbolDrawn` コールバック追加
+- `src/utils/customSymbolRenderUtils.test.ts`: 新フィールド追加に伴うテスト期待値の更新
 - `src/components/ScorePage.tsx`: 各描画コンポーネントへ `symbolsClickable={activeToolbarTab === 'symbols'}` を渡す
