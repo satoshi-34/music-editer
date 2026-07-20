@@ -564,8 +564,8 @@ const LINE_BIAS = 0.82; // 例: 0.7〜0.9
 ```
 src/
 ├─ components/
-│  ├─ StaffCanvas.tsx        # 単旋律譜（旧実装）: クリック精度 / 小節幅ロジック
-│  ├─ SingleStaff.tsx        # 単旋律譜: PianoSystemCanvas ベースのシステム管理ラッパー（PianoStaff 等と同型。段組みは呼び出し側がループして担う。フェーズ2移行の第1段）
+│  ├─ StaffCanvas.tsx        # 単旋律譜（旧実装、退役済み）: ScorePage.tsx からは呼ばれなくなったが、RestOverlapIntegration.test.tsx が直接依存しているため未削除
+│  ├─ SingleStaff.tsx        # 単旋律譜（現行実装）: PianoSystemCanvas ベースのシステム管理ラッパー（PianoStaff と同型。systemRanges を受け取り、段組みは自身がループして担う。フェーズ2移行完了）
 │  ├─ PianoStaff.tsx         # ピアノ大譜表: システム管理ラッパー
 │  ├─ PianoSystemCanvas.tsx  # N段譜表: 右手+左手 / 4パート を1SVGに描画
 │  ├─ QuartetStaff.tsx       # 弦楽四重奏: システム管理ラッパー

@@ -1,47 +1,49 @@
 ## 進捗（実装）
 
-> **⚠️ 手順2は印刷ブランチのマージで一時巻き戻し（2026-07-20）**:
+> **手順2は印刷ブランチのマージで一時巻き戻された後、再適用済み（2026-07-20）**:
 > 印刷開発ブランチ（自動段割り: `p.systemRanges` を呼び出し側で計算し、段ごとに
-> 可変小節数で `StaffCanvas` を1段ずつ描く方式）を main にマージした際、
-> `ScorePage.tsx` の単旋律分岐は印刷ブランチ側の新設計を採用した。
-> `SingleStaff` は `rangeLocked` / `incomingArcIndex` / `finalMeasureIndex` /
-> `pageMarginSideMm` / `symbolsClickable` 等の新 props に未対応のため、
-> 単旋律分岐は一時的に `StaffCanvas`（systemRanges 方式）に戻っている。
-> 歌詞の「五線の上」表示は `StaffCanvas` 側にも実装したため、ユーザー向けの
-> 見た目は維持されている。手順2の再適用は「`SingleStaff`（および
-> `PianoSystemCanvas`）を systemRanges 方式の新 props に対応させる」ことが
-> 前提条件になる（下記手順3の前に実施）。
+> 可変小節数で描く方式）を main にマージした際、`ScorePage.tsx` の単旋律分岐は
+> 一時的に `StaffCanvas`（systemRanges 方式）に戻っていた。今回、`SingleStaff` を
+> `PianoStaff.tsx` と同じ「呼び出し側は `systemRanges` を渡すだけ、段のループと
+> `incomingArcIndex` / `finalMeasureIndex` / `pageMarginSideMm` / `symbolsClickable` /
+> `measureWidthEvenness` / `printVisibleSystems` / `plannedMeasureWidths` の
+> 分配は `SingleStaff` 内部で行う」設計に改修し、`ScorePage.tsx` の単旋律分岐を
+> 再び `SingleStaff` に切り替えた。`rangeLocked`（StaffCanvas が内部で複数段の
+> 自動折返しを行うときのみ意味を持つ prop）は、`PianoSystemCanvas` ベースの設計
+> では「1回の呼び出しで1段だけ描き、段の内容は呼び出し側が `systemRanges` で
+> 事前に決める」ため元々不要で、`PianoStaff` 同様 `SingleStaff` にも実装していない。
 
 - **手順1（`SingleStaff` ラッパー新設）完了**: `src/components/SingleStaff.tsx` を
   `PartExtractionStaff`/`PianoStaff` と同型のパターンで実装した
   （`Array.from({length: systems})` で `PianoSystemCanvas` をループ、
   `partsConfig` は要素数1・`clef: 'treble'` 固定）。編集可能なラッパーのため
   props の通し方は `PianoStaff.tsx` に合わせた（`onChange` を実際に呼ぶ）。
-  `gap` は StaffCanvas 由来の互換 props として受け取るが、上記「移行手順案」の
-  想定どおり実装では使っていない（PianoSystemCanvas 側に段間隔を明示指定する
-  仕組みが無いため）。単体テスト `src/components/SingleStaff.test.tsx` を追加
-  （`PianoSystemCanvas` をモックし、段数ぶんレンダーされるか・
-  `startMeasureIndex` のずれ・`partsConfig` への変換・props 伝搬を検証）。
-- **手順2（`ScorePage.tsx` の単旋律分岐切替）完了**: `ScorePage.tsx:3041` 付近の
-  単旋律譜 else 分岐を `StaffCanvas` から `SingleStaff` に置き換えた。
-  props はほぼそのまま横流し（`clef="treble"` は `SingleStaff` 側で固定して
-  いるため呼び出し側では渡していない）。`StaffCanvas` の import は使われなく
-  なったため削除した（コンポーネント本体・テストファイルは手順3まで削除しない）。
+- **手順2（`ScorePage.tsx` の単旋律分岐切替、再適用）完了**: `SingleStaff` を
+  `systemRanges` / `incomingArcIndex` / `finalMeasureIndex` / `pageMarginSideMm` /
+  `symbolsClickable` / `measureWidthEvenness` / `printVisibleSystems` /
+  `plannedMeasureWidths` に対応させ（`PianoStaff.tsx` と同じ受け渡し方）、
+  `ScorePage.tsx` の単旋律 else 分岐を「`p.systemRanges.map` で `StaffCanvas` を
+  1段ずつ描く」実装から `SingleStaff` の1回呼び出しに置き換えた。
+  `StaffCanvas` の import は使われなくなったため削除した（コンポーネント本体・
+  テストファイルは削除していない。理由は下記「StaffCanvas 削除の可否」参照）。
   ブラウザで確認した内容:
-  - 音符クリックでの入力（休符→音符）、選択ツールでのノート選択、
-    段の追加・削除（コミット e2d9bc7 の機能）、歌詞入力が動作することを確認。
-    コンソールエラーは出ていない。
-  - 歌詞は設計どおり「五線の下」から「五線の上」に表示が変わることを確認
-    （意図した仕様変更）。
-  - ページリロード後にブラウザの自動保存データが画面に反映されない事象が
-    あったが、これは `localStorage`（`music-score-app-data`）には入力内容が
-    正しく書き込まれていることを確認済みで、リロード時の自動読込みタイミング
-    に関する既存アプリの挙動（`SingleStaff` 固有の問題ではない可能性が高い）。
-    今回のスコープでは深追いしていないため、別途調査が必要であれば別issueで
-    扱う。
-  - ピアノ大譜表・弦楽四重奏モードは今回の diff で触っていない
-    （`else` 分岐以外は無変更）ため、リグレッションのリスクは低いと判断し、
-    ブラウザでの再確認は簡易に留めた。
+  - 音符クリックでの入力、↑↓キーでの音高変更、Delete での削除、コンソール
+    エラーが出ないことを確認。
+  - 音符を増やして自動段割りが2段に増えること（コミット e2d9bc7 の機能）、
+    段ごとの「◀ N小節 ▶」コントロールが段数ぶん表示されることを確認。
+  - 「楽譜設定」タブで単旋律→ピアノ→単旋律と切り替え、ピアノ大譜表側に
+    リグレッションが無いこと（今回の diff は単旋律分岐のみ）を確認。
+
+### StaffCanvas 削除の可否
+
+`StaffCanvas.tsx` はもう `ScorePage.tsx` を含むどのプロダクションコードからも
+importされていないが、`src/components/RestOverlapIntegration.test.tsx` が
+休符の重なり処理のテストとして `StaffCanvas` を直接使っている。このテストを
+`PianoSystemCanvas`（または `SingleStaff`）ベースへ移行しない限り
+`StaffCanvas.tsx` / `StaffCanvas.test.tsx` / `StaffCanvasNotePlayback.test.tsx` の
+削除は他テストのカバレッジを失うため見送った。次のステップとして、
+`RestOverlapIntegration.test.tsx` を `PianoSystemCanvas` ベースへ移行したうえで
+削除するタスクを別途行う。
 
 # フェーズ2: StaffCanvas 退役の実現可能性メモ（v2: レイアウトAPI不一致を調査）
 
