@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@testing-library/react';
-import StaffCanvas from './StaffCanvas';
+import SingleStaff from './SingleStaff';
 import type { Tool } from './Palette';
 
 // テスト用のツール設定
@@ -14,6 +14,10 @@ type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
 type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[] };
 type MeasureData = { events: NoteEvent[] };
 
+// 単旋律譜は StaffCanvas から SingleStaff（PianoSystemCanvas ベース）へ移行済みのため、
+// このテストも SingleStaff 経由で PianoSystemCanvas の休符重なり処理を検証する。
+// 検証意図（複数休符・音符と休符の混在・異なる長さの休符・複数小節/複数段・
+// 不正データ耐性・パフォーマンス）は StaffCanvas 時代のテストから変更していない。
 describe('休符重なり修正の統合テスト', () => {
   beforeEach(() => {
     // コンソール警告をモック（Vexflowの警告を抑制）
@@ -36,11 +40,11 @@ describe('休符重なり修正の統合テスト', () => {
       // コンポーネントが正常にレンダリングされることを確認
       expect(() => {
         render(
-          <StaffCanvas
+          <SingleStaff
             systems={1}
             measuresPerSystem={1}
             tool={mockTool}
-            initialScoreData={scoreData}
+            data={scoreData}
           />
         );
       }).not.toThrow();
@@ -60,11 +64,11 @@ describe('休符重なり修正の統合テスト', () => {
 
       expect(() => {
         render(
-          <StaffCanvas
+          <SingleStaff
             systems={1}
             measuresPerSystem={1}
             tool={mockTool}
-            initialScoreData={scoreData}
+            data={scoreData}
           />
         );
       }).not.toThrow();
@@ -83,11 +87,11 @@ describe('休符重なり修正の統合テスト', () => {
 
       expect(() => {
         render(
-          <StaffCanvas
+          <SingleStaff
             systems={1}
             measuresPerSystem={1}
             tool={mockTool}
-            initialScoreData={scoreData}
+            data={scoreData}
           />
         );
       }).not.toThrow();
@@ -113,11 +117,11 @@ describe('休符重なり修正の統合テスト', () => {
 
       expect(() => {
         render(
-          <StaffCanvas
+          <SingleStaff
             systems={1}
             measuresPerSystem={2}
             tool={mockTool}
-            initialScoreData={scoreData}
+            data={scoreData}
           />
         );
       }).not.toThrow();
@@ -139,11 +143,11 @@ describe('休符重なり修正の統合テスト', () => {
 
       expect(() => {
         render(
-          <StaffCanvas
+          <SingleStaff
             systems={1}
             measuresPerSystem={1}
             tool={mockTool}
-            initialScoreData={scoreData}
+            data={scoreData}
           />
         );
       }).not.toThrow();
@@ -156,11 +160,11 @@ describe('休符重なり修正の統合テスト', () => {
 
       expect(() => {
         render(
-          <StaffCanvas
+          <SingleStaff
             systems={1}
             measuresPerSystem={1}
             tool={mockTool}
-            initialScoreData={scoreData}
+            data={scoreData}
           />
         );
       }).not.toThrow();
@@ -176,11 +180,11 @@ describe('休符重なり修正の統合テスト', () => {
 
       expect(() => {
         render(
-          <StaffCanvas
+          <SingleStaff
             systems={2}
             measuresPerSystem={2}
             tool={mockTool}
-            initialScoreData={scoreData}
+            data={scoreData}
           />
         );
       }).not.toThrow();
@@ -200,11 +204,11 @@ describe('休符重なり修正の統合テスト', () => {
 
       expect(() => {
         render(
-          <StaffCanvas
+          <SingleStaff
             systems={1}
             measuresPerSystem={1}
             tool={mockTool}
-            initialScoreData={scoreData}
+            data={scoreData}
           />
         );
       }).not.toThrow();
@@ -222,11 +226,11 @@ describe('休符重なり修正の統合テスト', () => {
 
       expect(() => {
         render(
-          <StaffCanvas
+          <SingleStaff
             systems={1}
             measuresPerSystem={1}
             tool={mockTool}
-            initialScoreData={scoreData}
+            data={scoreData}
           />
         );
       }).not.toThrow();
@@ -239,7 +243,7 @@ describe('休符重なり修正の統合テスト', () => {
       const events: NoteEvent[] = Array.from({ length: 20 }, () => ({
         dur: '16' as DurKey,
         isRest: true,
-        key: 'b/4'
+        keys: ['b/4'],
       }));
 
       const scoreData: MeasureData[] = [
@@ -248,14 +252,14 @@ describe('休符重なり修正の統合テスト', () => {
       ];
 
       const startTime = performance.now();
-      
+
       expect(() => {
         render(
-          <StaffCanvas
+          <SingleStaff
             systems={1}
             measuresPerSystem={2}
             tool={mockTool}
-            initialScoreData={scoreData}
+            data={scoreData}
           />
         );
       }).not.toThrow();
