@@ -58,3 +58,43 @@
 `docs/phase2-staffcanvas-retirement-feasibility.md` に、StaffCanvas を退役させて
 単旋律譜も `PianoSystemCanvas`（`partsConfig` 要素数1）に統一する構想の実現可能性メモを
 別途まとめた。今回の共通化はその前段階として、まず「ロジックだけ」を一本化したもの。
+
+## 追記: 歌詞（lyrics）描画の PianoSystemCanvas 対応
+
+前掲のフェーズ2メモで「ブロッカー級」としていた、歌詞が `PianoSystemCanvas` に
+未実装だった問題を解消した。
+
+### 問題
+
+歌詞データ（`NoteEvent.lyrics`）の入力・保存経路（Palette の textElement ツール →
+`applyTextElementToEvent`）は `PianoSystemCanvas` にも既に実装されていたが、描画側だけが
+未実装で、`lyrics` への参照が一切なかった。そのため多段譜（ピアノ大譜表・弦楽四重奏・
+編成譜）に切り替えると、歌詞を入力しても画面に表示されない状態だった。
+
+### 修正設計
+
+- `StaffCanvas.tsx` にあった「歌詞1件を SVG に描く」処理（座標: 音符中心X、五線下端Y+54、
+  スタイル: sans-serif 11px・`#374151`・通常体）を純粋関数 `drawLyricsEntry`
+  （`src/utils/lyricsRenderUtils.ts`）へ切り出し、`StaffCanvas` はその関数を呼ぶだけに置き換えた。
+- `PianoSystemCanvas.tsx` のローカル `NoteEvent` 型に `lyrics?: string` を追加し、
+  描画ループ内で `ev.lyrics` を持つイベントを `lyricsEntries` に収集、段（パート）ごとの
+  五線下端（`stave.getYForLine(4)`）を基準に `drawLyricsEntry` で描画するようにした
+  （StaffCanvas の `expressionMarkingEntries`/`lyricsEntries` 収集パターンを踏襲）。
+  多パート譜では歌詞データを持つイベントが属する段の下に描かれるデータ駆動の実装で、
+  特定パート固定にはしていない。
+- クリックでの歌詞編集（textElement ツールで音符クリック→オーバーレイ→確定）は、
+  `textElementMode`（`TextElementKind` 全般を汎用的に扱うクリックハンドラ）がすでに
+  `'lyrics'` を含む全種別に対応していたため、追加対応は不要だった。
+- サイズ・位置調整（`symbolAdjust`）も `listPresentAdjustableSymbolKinds` が
+  `event.lyrics` の有無を見て自動的に調整対象へ含めるため、追加対応は不要だった。
+
+### 影響範囲
+
+- `src/utils/lyricsRenderUtils.ts`（新規）: `drawLyricsEntry` とその型 `LyricsRenderEntry`。
+  テストは `lyricsRenderUtils.test.ts`（2件）。
+- `src/components/StaffCanvas.tsx`: 歌詞描画部分を `drawLyricsEntry` の呼び出しに置き換え
+  （座標計算・見た目は変更なし）。
+- `src/components/PianoSystemCanvas.tsx`: `NoteEvent` 型に `lyrics` を追加、
+  `lyricsEntries` の収集（アクティブ声部・非アクティブ声部の両方）と描画呼び出しを追加。
+- ブラウザ確認: ピアノ大譜表・単旋律譜のそれぞれで歌詞ツールから音符クリック→入力→確定
+  すると、音符の下に歌詞が表示されることを確認。コンソールエラーなし。

@@ -17,13 +17,21 @@
 
 実際にコードを確認して洗い出した差分。
 
-### ブロッカー級
+### ブロッカー級（解消済み）
 
-1. **歌詞（lyrics）が PianoSystemCanvas に未実装**
+1. **歌詞（lyrics）が PianoSystemCanvas に未実装 → 対応済み**
    `StaffCanvas.tsx` は `NoteEvent.lyrics` を読み、`lyricsEntries` として各音符の下に
-   歌詞テキストを描画している。`PianoSystemCanvas.tsx` には `lyrics` への参照が
-   一切無く、多段譜に切り替えると歌詞が表示されなくなる。単旋律譜は歌詞入力の
-   主要な用途の一つと想定されるため、これが最大のブロッカー。
+   歌詞テキストを描画していたが、`PianoSystemCanvas.tsx` には `lyrics` への参照が
+   一切無く、多段譜に切り替えると歌詞が表示されない状態だった。
+   座標計算・描画ロジックを `drawLyricsEntry`（`src/utils/lyricsRenderUtils.ts`）へ
+   共通化した上で `PianoSystemCanvas.tsx` にも歌詞データの収集・描画を実装し、
+   単旋律譜・多段譜（ピアノ大譜表/弦楽四重奏/編成譜）のどちらでも同じ見た目で
+   表示されるようになった。歌詞を持つイベントが属する段（パート）の下に描かれる
+   データ駆動の実装のため、特定パート固定にはならない。テキスト編集オーバーレイを
+   開くクリック判定・`symbolAdjust`（サイズ・位置調整）は既存の汎用実装
+   （`textElementMode` / `listPresentAdjustableSymbolKinds`）がそのまま対応しており、
+   追加の分岐は不要だった。詳細は `.claude/specs/staffcanvas-pianosystemcanvas-shared-logic/design.md`
+   を参照。
 
 2. **レイアウトAPIの違い（`systems`/`gap`/`initialScoreData` vs `partsConfig`）**
    `StaffCanvas` は `systems`（段数）・`gap`（段間隔）・`initialScoreData`/
@@ -63,10 +71,10 @@
 
 ## 結論（現時点の暫定判断）
 
-- 「ロジック共通化」フェーズ（本コミット群）は完了。次に踏み込むなら、
-  まず**歌詞のPianoSystemCanvas対応**をブロッカー解消の第一歩として着手するのが
-  筋が良さそうに見える（lyricsEntries の描画ロジックを共通化して両方から呼べる形にする）。
-- レイアウトAPIの統一は影響範囲が大きく（既存の保存データ・呼び出し元の props
-  すべてに関わる）、歌詞対応より後回しにして良い。
+- 「ロジック共通化」フェーズ（本コミット群）は完了。**歌詞のPianoSystemCanvas対応も
+  完了し、ブロッカー級の項目は解消済み**（上記1参照）。
+- 残るブロッカーはレイアウトAPIの違い（`systems`/`gap`/`initialScoreData` vs
+  `partsConfig`）のみ。影響範囲が大きく（既存の保存データ・呼び出し元の props
+  すべてに関わる）、次に着手するならここが本丸になる。
 - 本格的な `StaffCanvas` 退役はこのメモの範囲を超えるため、着手する場合は
   別途 `.claude/specs/` に独立した設計ドキュメントを起こすこと。
