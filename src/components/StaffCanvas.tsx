@@ -3569,6 +3569,13 @@ export default function StaffCanvas({
     });
   }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, selectedHairpin, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures]);
 
+  // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
+  // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setScore で
+  // 単一パートを直接更新）は PianoSystemCanvas の setPartsScore（全パート共有/
+  // 最上段のみ/該当パートのみの書き分け）と構造が異なるため未統合。
+  // StaffCanvas を PianoSystemCanvas（partsConfig 要素数1）へ統合するフェーズ2で
+  // まとめて検討する（docs/phase2-staffcanvas-retirement-feasibility.md 参照）。
+
   /**
    * 途中拍子変更を確定する。
    * "4/4", "3/8" のような形式の文字列を受け取り、有効ならそのまま保存する。
@@ -3711,6 +3718,11 @@ export default function StaffCanvas({
    * kind に応じて symbolResizeEditState / symbolOffsetEditState のどちらかを開く。
    * 音符クリック時に「調整対象が1件だけ」だったときと、選択リストで1件を選んだときの
    * 両方から呼ばれる共通経路。
+   *
+   * TODO(phase2): PianoSystemCanvas の同名関数とロジックはほぼ同じだが、状態更新の型
+   * （measureAbsoluteIndex のみ vs partIndex 込み）が違うため今回は共通化していない。
+   * StaffCanvas を PianoSystemCanvas（partsConfig 要素数1）へ統合するフェーズ2で
+   * まとめて検討する（docs/phase2-staffcanvas-retirement-feasibility.md 参照）。
    */
   function openSymbolAdjustEditor(
     kind: 'resize' | 'offset',

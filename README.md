@@ -483,6 +483,17 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 - `StaveConnector` を N=2 で BRACE（ピアノ）、N>2 で BRACKET（オーケストラ）に自動切替。
 - **アルト記号（ハ音記号）**: `clefUtils.ts` の `lineToKey('alto', line)` が `G4=line0, C4=line2` を基準に音高を計算。VexFlow 5 はネイティブで `'alto'` 文字列に対応。
 
+### 10. StaffCanvas/PianoSystemCanvas の共通ロジック整理
+`StaffCanvas.tsx`（単旋律譜）と `PianoSystemCanvas.tsx`（多段譜）は同じ操作仕様を別々に実装していた箇所が多く、片方だけ直して挙動がズレる事故が起きやすかった。単一パートの `MeasureData[]` に対する純粋な変換として書ける部分は `src/utils/` へ抽出し、両コンポーネントから import して使う方針で段階的に整理している。
+- `noteMidiUtils.ts` … `keyToMidi`/`midiToKey`（半音シフトの基準）
+- `accidentalUtils.ts` … 臨時記号・微分音の適用
+- `staveModifierLayoutUtils.ts` … 調号の配置
+- `noteDeletionUtils.ts` … Delete キーでの音符削除（連符グループ削除・和音1音削除・arc/hairpin のインデックス補正）
+- `pitchShiftUtils.ts` … ↑↓キーでの音高シフトと、音高変更に追従する arc の fromKey/toKey 更新
+- `measureMetaInputUtils.ts` … 拍子/BPM/リハーサルマーク/クレフ/調号/記号サイズ・位置の各種オーバーレイ入力のパース・検証
+
+`NoteEvent` 型は `StaffCanvas`（`src/types/storage.ts`）と `PianoSystemCanvas`（ファイル内ローカル定義）とで別々に定義されているため、型定義そのものは統合せず、各ユーティリティが実際に読み書きするフィールドだけを満たす最小構造型（またはジェネリクス）を使っている（`accidentalUtils.ts` の `AccidentalEditableEvent` が最初の例）。setState 呼び出し部分（`setScore` 単一パート vs `setPartsScore` 全パート/最上段/該当パートの書き分け）は、パートの持ち方が構造的に異なるためコンポーネント側に残している。詳細は `.claude/specs/staffcanvas-pianosystemcanvas-shared-logic/design.md` を参照。
+
 ## クリック精度のチューニング
 
 `src/components/StaffCanvas.tsx` の定数で調整できます。

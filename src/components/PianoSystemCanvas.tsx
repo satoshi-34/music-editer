@@ -3270,6 +3270,13 @@ export default function PianoSystemCanvas({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs]);
 
+  // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
+  // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
+  // 全パート共有/最上段のみ/該当パートのみを書き分け）は StaffCanvas の setScore
+  // （単一パートを直接更新）と構造が異なるため未統合。
+  // StaffCanvas を PianoSystemCanvas（partsConfig 要素数1）へ統合するフェーズ2で
+  // まとめて検討する（docs/phase2-staffcanvas-retirement-feasibility.md 参照）。
+
   function handleTimeSigConfirm(value: string) {
     if (!timeSigEditState) return;
     const { measureAbsoluteIndex } = timeSigEditState;
@@ -3429,6 +3436,11 @@ export default function PianoSystemCanvas({
 
   /**
    * 汎用サイズ・位置調整ツール共通の「オーバーレイを開く」処理（StaffCanvas と同じ役割）。
+   *
+   * TODO(phase2): StaffCanvas の同名関数とロジックはほぼ同じだが、partIndex の有無で
+   * 状態の型が異なるため今回は共通化していない。StaffCanvas を PianoSystemCanvas
+   * （partsConfig 要素数1）へ統合するフェーズ2でまとめて検討する
+   * （docs/phase2-staffcanvas-retirement-feasibility.md 参照）。
    */
   function openSymbolAdjustEditor(
     kind: 'resize' | 'offset',
