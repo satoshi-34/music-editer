@@ -463,7 +463,7 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 - **ページ段数の同期計算**: 編成譜と単旋律で 1 ページあたりの段数が違うため、表示ページは state に残さず現在の楽譜種類と画面幅から毎回計算する
 - **強弱の保存検証**: `dynamics.value` は許可済み文字列だけを localStorage から受け入れ、未知の値が描画や再生へ流れないようにする
 - **強弱の再生解決**: `dynamicMarkingUtils.ts` で絶対強弱と `cresc.` / `dim.` の段階変化を共通計算し、`ScorePage -> PlaybackEngine.playParts()` の現在経路でも譜面再生音量へ反映する
-- **奏法記号の保存と描画**: `NoteEvent.articulations` に文字列の配列で保持し、`storage.ts` で許可済みの値だけを受け入れる。描画は VexFlow の `Articulation` モディファイアを `makeVFNote` で符頭へ付ける（フェルマータ・マルカートは上付きに固定）
+- **奏法記号の保存と描画**: `NoteEvent.articulations` に文字列の配列で保持し、`storage.ts` で許可済みの値だけを受け入れる。描画は VexFlow の `Articulation` モディファイアではなく、符頭の位置情報（BoundingBox・五線上端Y）から座標を計算して弧・点・楔形・水平線を直接 SVG 要素として組み立てる自前描画（フェルマータ・スタッカート・アクセント・テヌートに対応、`marcato` は未対応）。`StaffCanvas.tsx`（単旋律譜）・`PianoSystemCanvas.tsx`（ピアノ大譜表・弦楽四重奏・編成譜）の両方に同じ描き方で実装されている（`tempoMarking` の途中テキスト表記も同様に両方に対応）
 - **奏法記号の再生反映**: `articulationMarkingUtils.ts` が各記号を「音の長さ倍率 / 音量倍率」へ畳み込み、`ScorePage` で強弱由来のベロシティへ掛け合わせる。長さ倍率は `PlaybackMeasureEvent.durationScale` として両エンジンへ渡し、発音の長さだけ伸縮させる（次の音までの間隔は変えない）
 - **編成データの保存**: `SavedScoreData.instrumentation` に編成テンプレートとパート定義を保存し、旧データでは省略可能として後方互換を保つ
 - **可変編成の描画**: `ScorePage` で `ensemble` モードを持ち、`EnsembleStaff` から既存の N 段対応 `PianoSystemCanvas` へパート配列を渡す

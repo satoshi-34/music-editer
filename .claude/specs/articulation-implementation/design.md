@@ -96,3 +96,44 @@ export interface NoteEvent {
 - `src/components/ScorePage.tsx` — 再生時の長さ・音量へ反映
 - `src/audio/PlaybackEngine.ts` — `PlaybackMeasureEvent.durationScale` 追加
 - `src/audio/SoundFontEngine.ts` / `SimpleAudioEngine.ts` — 発音長へ `durationScale` を適用
+
+## 追記（バグ修正）: PianoSystemCanvas でフェルマータ・途中テンポ変更（tempoMarking）が描画されていなかった
+
+上の「描画とクリック付与」の節は StaffCanvas/PianoSystemCanvas 両方に描画があると書いていたが、
+実際には **`PianoSystemCanvas.tsx`（ピアノ2段譜・弦楽四重奏などの複数段編成）には
+`articulations` / `tempoMarking` を描く経路が一切無かった**。クリックで `articulations` 配列自体は
+保存データへ正しく付与されるが、画面に何も表示されないまま気付きにくいサイレント欠落になっていた
+（複雑テスト楽譜の低音部 `c/2,g/2,c/3`・`fermata` 付き全音符などで再現）。
+
+### 原因
+
+- `PianoSystemCanvas.tsx` のローカル `NoteEvent` 型（ファイル冒頭）に `articulations` / `tempoMarking`
+  フィールドが定義されておらず、`dynamics` や `fingering` と違って描画情報を集める配列
+  （`dynamicTextEntries` 相当）自体が存在しなかった。
+- なお VexFlow の `StaveNote` 自体は正しく全音符の符頭（3和音なら3個）を構築・描画しており、
+  「符頭が欠ける」という現象は本調査では再現しなかった（一時的なレイアウト再計算前の
+  古い DOM を見ていた可能性が高い）。
+
+### 修正
+
+`StaffCanvas.tsx` の実装（VexFlow の `Articulation` モディファイアではなく、**素の SVG 要素を
+音符の位置情報から計算して自前描画する方式**）をそのまま `PianoSystemCanvas.tsx` へ移植した。
+
+- `NoteEvent` 型に `articulations?: ArticulationMarking[]` と `tempoMarking?: string` を追加
+- `articulationEntries` / `tempoMarkingEntries` 収集配列を追加し、アクティブ声部・非アクティブ声部の
+  両方のイベント走査ループで push する（`fingeringEntries` と同じ位置・同じ方針）
+- 全音符描画後に一括で SVG を組み立てる描画ループを追加（フェルマータ＝弧＋点、
+  スタッカート＝符頭上の小さい丸、アクセント＝楔形、テヌート＝水平線。`marcato` は
+  StaffCanvas 側も未実装のため今回も未対応のまま）
+- `tempoMarking` はコード記号と同じ位置（五線上端より24px上）にイタリック体で表示
+
+### 検証
+
+- `docker compose run --rm app npx tsc --noEmit` / `npx vitest run`（925件）とも green（既存の
+  回帰テストのみ。新規の描画ロジックは SVG 要素の手組み立てで、既存の `fingeringEntries` 等と
+  同型のためユニットテストは追加していない）
+- ブラウザ DOM 実測: 複雑テスト楽譜 measure index 23（左手 `c/2,g/2,c/3` + フェルマータ、右手
+  `c/5,e/5,g/5,c/6` + フェルマータ + `tempoMarking:"Fine"`）で、修正前は `svg.querySelector('[class*=fermata]')`
+  が無く `text` 要素にも `"Fine"` が見つからなかったが、修正後は両方の五線に半円弧＋点のフェルマータが
+  描画され、`svg` 内の `text` 一覧に `"Fine"` が含まれることを確認した。符頭数は修正前後とも
+  左手3個・右手4個で変化なし（符頭欠けは本修正の対象ではなかった）。

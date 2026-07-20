@@ -8,7 +8,7 @@ import {
   GraceNote, GraceNoteGroup, Ornament,
 } from 'vexflow';
 import type { Tool } from './Palette';
-import type { MeasureData, TieArc, HairpinMark, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind } from '../types/storage';
+import type { MeasureData, TieArc, HairpinMark, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind, ArticulationMarking } from '../types/storage';
 import { applyOrnamentToEvent, ornamentToVexCode } from '../utils/ornamentUtils';
 import type { ClefType } from './clefUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey, restKeyForVoice } from './clefUtils';
@@ -81,7 +81,7 @@ import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehears
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[] };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[]; articulations?: ArticulationMarking[]; tempoMarking?: string };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 // 1声部ぶんの VexFlow 描画データ（音符・ビーム・タイミング管理オブジェクト）。
 // 右手/左手など複数パートの Formatter を1回にまとめるためのキャッシュ型として使う
@@ -1425,6 +1425,18 @@ export default function PianoSystemCanvas({
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }> = [];
     // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
     const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    // アーティキュレーション記号（フェルマータ・スタッカート等）の描画情報を収集する。
+    // StaffCanvas と同じ方式で、全音符描画後にまとめて描く。
+    const articulationEntries: Array<{
+      anchorX: number;
+      // 音符の BoundingBox 上端Y（記号をここより上に配置する）
+      noteTopY: number;
+      // 五線の最上線Y（フェルマータの配置基準）
+      staveTopY: number;
+      markings: NonNullable<NoteEvent['articulations']>;
+    }> = [];
+    // 途中テンポ変更の文字表記（"Fine" など）の描画情報を収集する（五線上端より上に表示）
+    const tempoMarkingEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     const ottavaEntries: Array<{
       kind: '8va' | '8vb';
@@ -3279,6 +3291,22 @@ export default function PianoSystemCanvas({
                 adjust: getSymbolAdjust(activeEvs[j], 'fingering'),
               });
             }
+            if (!activeEvs[j]?.__isPlaceholder && !activeEvs[j]?.isRest && activeEvs[j]?.articulations?.length) {
+              articulationEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
+                staveTopY: stave.getYForLine(0),
+                markings: activeEvs[j].articulations!,
+              });
+            }
+            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.tempoMarking) {
+              tempoMarkingEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                topY: stave.getYForLine(0),
+                text: activeEvs[j].tempoMarking!,
+                adjust: getSymbolAdjust(activeEvs[j], 'tempoMarking'),
+              });
+            }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.ottava) {
               const cx = noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2);
               const topY = stave.getYForLine(0);
@@ -3365,6 +3393,22 @@ export default function PianoSystemCanvas({
                     staveTopY: stave.getYForLine(0),
                     text: ev.fingering,
                     adjust: getSymbolAdjust(ev, 'fingering'),
+                  });
+                }
+                if (!ev.isRest && ev.articulations?.length) {
+                  articulationEntries.push({
+                    anchorX: cx,
+                    noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
+                    staveTopY: stave.getYForLine(0),
+                    markings: ev.articulations,
+                  });
+                }
+                if (ev.tempoMarking) {
+                  tempoMarkingEntries.push({
+                    anchorX: cx,
+                    topY: stave.getYForLine(0),
+                    text: ev.tempoMarking,
+                    adjust: getSymbolAdjust(ev, 'tempoMarking'),
                   });
                 }
                 if (ev.ottava) {
@@ -3457,6 +3501,91 @@ export default function PianoSystemCanvas({
       el.setAttribute('fill', '#1f2937');
       el.setAttribute('font-family', 'sans-serif');
       el.setAttribute('font-size', String(10 * adjust.scale));
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
+    // ── アーティキュレーション記号を一括描画（StaffCanvas と同じ描き方に揃える） ──
+    articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings }) => {
+      // フェルマータ以外は noteTopY の上に重ならないよう積み上げる
+      let aboveOffset = 0;
+      markings.forEach((type) => {
+        const ns = 'http://www.w3.org/2000/svg';
+        if (type === 'fermata') {
+          // フェルマータは五線上端より上に配置する（符頭位置に依存しない）
+          const baseY = Math.min(staveTopY, noteTopY) - 14;
+          // 半円弧（下が開いた椀形）
+          const arc = document.createElementNS(ns, 'path');
+          arc.setAttribute('d', `M ${anchorX - 11} ${baseY} A 11 9 0 0 1 ${anchorX + 11} ${baseY}`);
+          arc.setAttribute('stroke', '#1f2937');
+          arc.setAttribute('stroke-width', '1.6');
+          arc.setAttribute('stroke-linecap', 'round');
+          arc.setAttribute('fill', 'none');
+          arc.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(arc);
+          // 中心の点（弧の内側）
+          const dot = document.createElementNS(ns, 'circle');
+          dot.setAttribute('cx', String(anchorX));
+          dot.setAttribute('cy', String(baseY - 4));
+          dot.setAttribute('r', '2.5');
+          dot.setAttribute('fill', '#1f2937');
+          dot.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(dot);
+        } else if (type === 'staccato') {
+          // スタッカート: 符頭上方に小さな黒丸
+          const cy = noteTopY - 6 - aboveOffset;
+          const dot = document.createElementNS(ns, 'circle');
+          dot.setAttribute('cx', String(anchorX));
+          dot.setAttribute('cy', String(cy));
+          dot.setAttribute('r', '2.5');
+          dot.setAttribute('fill', '#1f2937');
+          dot.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(dot);
+          aboveOffset += 10;
+        } else if (type === 'accent') {
+          // アクセント: 下向きの楔形（「>」を90°回した形）
+          const tipY = noteTopY - 5 - aboveOffset;
+          const wingY = tipY - 9;
+          const path = document.createElementNS(ns, 'path');
+          path.setAttribute('d', `M ${anchorX - 10} ${wingY} L ${anchorX} ${tipY} L ${anchorX + 10} ${wingY}`);
+          path.setAttribute('stroke', '#1f2937');
+          path.setAttribute('stroke-width', '1.6');
+          path.setAttribute('stroke-linecap', 'round');
+          path.setAttribute('stroke-linejoin', 'round');
+          path.setAttribute('fill', 'none');
+          path.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(path);
+          aboveOffset += 14;
+        } else if (type === 'tenuto') {
+          // テヌート: 符頭上方に水平線
+          const lineY = noteTopY - 6 - aboveOffset;
+          const line = document.createElementNS(ns, 'line');
+          line.setAttribute('x1', String(anchorX - 9));
+          line.setAttribute('y1', String(lineY));
+          line.setAttribute('x2', String(anchorX + 9));
+          line.setAttribute('y2', String(lineY));
+          line.setAttribute('stroke', '#1f2937');
+          line.setAttribute('stroke-width', '2.2');
+          line.setAttribute('stroke-linecap', 'round');
+          line.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(line);
+          aboveOffset += 10;
+        }
+      });
+    });
+
+    // テンポ表記（"Fine" 等）: 五線上端より24px上、イタリック体で表示する
+    // （StaffCanvas の tempoMarkingEntries と同じ描き方）
+    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = text;
+      el.setAttribute('x', String(anchorX + adjust.offsetX));
+      el.setAttribute('y', String(topY - 24 + adjust.offsetY));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#1f2937');
+      el.setAttribute('font-family', '"Times New Roman", serif');
+      el.setAttribute('font-size', String(12 * adjust.scale));
+      el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });
