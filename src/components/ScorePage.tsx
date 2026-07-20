@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Palette, { type Tool } from './Palette';
-import StaffCanvas from './StaffCanvas';
+import SingleStaff from './SingleStaff';
 import PianoStaff from './PianoStaff';
 import QuartetStaff from './QuartetStaff';
 import EnsembleStaff from './EnsembleStaff';
@@ -3038,13 +3038,12 @@ export default function ScorePage() {
                       activeVoiceIndex={activeVoice}
                     />
                   ) : (
-                    <StaffCanvas
+                    <SingleStaff
                       systems={p.systems}
                       gap={110}
                       measuresPerSystem={measuresPerSystem}
                       tool={tool}
                       scale={scale}
-                      clef="treble"
                       initialScoreData={rightHandData}
                       onScoreDataChange={handleScoreDataChange}
                       startMeasureIndex={i * systemsPerPage * measuresPerSystem}
