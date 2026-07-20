@@ -3453,6 +3453,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={partExtractionIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
@@ -3481,6 +3482,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={partExtractionIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
@@ -3503,6 +3505,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={ensembleDisplayIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
@@ -3530,6 +3533,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
@@ -3555,6 +3559,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       gap={110}
@@ -3610,6 +3615,7 @@ export default function ScorePage() {
                           onMeasureSelect={handleMeasureSelect}
                           customSymbolDefs={customSymbolDefs}
                           finalMeasureIndex={finalMeasureIndex}
+                          pageMarginSideMm={pageMarginSideMm}
                         />
                         </div>
                       ))}

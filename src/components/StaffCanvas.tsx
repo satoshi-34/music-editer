@@ -104,6 +104,12 @@ type Props = {
    * 省略時（undefined）は終止線を描かない。
    */
   finalMeasureIndex?: number;
+  /**
+   * ページの左右余白(mm)。値そのものは描画計算に使わず、下の描画 useEffect の
+   * 依存配列に含めるためだけに受け取る（PianoSystemCanvas.tsx の同名 props の
+   * コメントを参照。ResizeObserver だけでは発火が漏れるケースがあったための対策）。
+   */
+  pageMarginSideMm?: number;
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -850,6 +856,7 @@ export default function StaffCanvas({
   selectedMeasures,
   onMeasureSelect,
   finalMeasureIndex,
+  pageMarginSideMm,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -3873,7 +3880,9 @@ export default function StaffCanvas({
         });
       }
     });
-  }, [systems, gap, measuresPerSystem, rangeLocked, score, tool, scale, selected, selectedArc, selectedHairpin, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures, containerWidthTick]);
+  // pageMarginSideMm: 値自体は使わないが、ResizeObserver の発火漏れ対策として
+  // 呼び出し元（ScorePage）の余白変更を確実にこの effect へ伝える依存トリガー。
+  }, [systems, gap, measuresPerSystem, rangeLocked, score, tool, scale, selected, selectedArc, selectedHairpin, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures, containerWidthTick, pageMarginSideMm]);
 
   /**
    * 途中拍子変更を確定する。

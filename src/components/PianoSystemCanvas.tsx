@@ -775,6 +775,21 @@ type Props = {
    * （末尾の空き段・単体プレビューなどで誤って終止線が出ないようにするため）。
    */
   finalMeasureIndex?: number;
+  /**
+   * ページの左右余白(mm)。値そのものは描画計算に使わず、下の描画 useEffect の
+   * 依存配列に含めるためだけに受け取る。
+   *
+   * 背景: 描画 useEffect は ref.current.parentElement.clientWidth を実行時に
+   * 一度だけ読むため、親要素の実幅が変わったときにこの effect 自体が再実行
+   * されないと古い幅のまま描画され続ける（小節が新しい余白へ追従しない）。
+   * ResizeObserver（下の containerWidthTick）で親要素の幅変化を検知して
+   * いるが、スコア読込直後の最初の余白変更などタイミングによっては
+   * ResizeObserver のコールバックが発火しないケースが確認されたため、
+   * 呼び出し元（ScorePage）が確実に知っている「今の左右余白」を明示的な
+   * props として渡し、React の通常の再レンダー経路でも再描画されるように
+   * 二重の対策にしてある。
+   */
+  pageMarginSideMm?: number;
 };
 
 export default function PianoSystemCanvas({
@@ -791,6 +806,7 @@ export default function PianoSystemCanvas({
   customSymbolDefs = [],
   activeVoiceIndex = 0,
   measureWidthEvenness = MEASURE_WIDTH_EVENNESS,
+  pageMarginSideMm,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -3691,7 +3707,9 @@ export default function PianoSystemCanvas({
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   // measureWidthEvenness を deps に含め、スライダー操作で即座に再描画されるようにする
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick]);
+  // pageMarginSideMm: 値自体は使わないが、ResizeObserver の発火漏れ対策として
+  // 呼び出し元（ScorePage）の余白変更を確実にこの effect へ伝える依存トリガー。
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm]);
 
   function handleTimeSigConfirm(value: string) {
     if (!timeSigEditState) return;

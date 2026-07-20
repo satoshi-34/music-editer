@@ -29,12 +29,25 @@
 
 対策として両コンポーネントに `ResizeObserver` を追加し、`ref.current.parentElement` の幅変化を検知して `containerWidthTick` という state を更新、これを描画 `useEffect` の依存配列に加えることで、余白変更時にも正しく再描画・再配分されるようにした（テスト環境 jsdom に `ResizeObserver` が無い場合は何もしない安全なガード付き）。
 
+## 追補: ResizeObserver 単独では再描画が漏れるケースの修正
+
+レビューで、「段数/ページ5・音符100%・レイアウト既定」から「余白(左右)」を14→22mmへ変更すると、**1ページ目の先頭2段（PianoSystemCanvas インスタンス）だけ**旧幅のまま再描画されず右余白へはみ出す、というバグが再現性を持って見つかった。
+
+調査の結果、ResizeObserver 自体は多くのケースで機能していたが、スコア読込直後の最初の余白変更など特定のタイミングでは、特定のインスタンスの ResizeObserver コールバックが発火しないケースがあることを実測で確認した（原因はブラウザ/Reactのコミットタイミングに依存するレースで、再現条件を完全には特定できなかった）。ResizeObserver だけに頼ると「発火しなければ永久に古い幅のまま」というフェイルセーフのない失敗モードになるため、決定的な対策として以下を追加した。
+
+- `ScorePage.tsx` の `pageMarginSideMm`（余白(左右)の現在値）を、`PianoStaff` / `EnsembleStaff` / `QuartetStaff` / `PartExtractionStaff` / 直接呼び出しの `StaffCanvas` を経由して末端の `PianoSystemCanvas` / `StaffCanvas` まで、既存の `measureWidthEvenness` と全く同じパターンで props として中継する。
+- 両コンポーネントの描画 `useEffect` の依存配列に `pageMarginSideMm` を追加する。値そのものは描画計算に使わないが、余白が変わるたびに React の通常の props 比較で確実にこの effect が再実行され、その時点の `ref.current.parentElement.clientWidth`（既に新しい padding が反映済み）を読み直すようになる。
+- ResizeObserver（`containerWidthTick`）はそのまま残し、二重の対策とした（ウィンドウのブラウザズームなど、余白スライダー以外の要因で親要素の幅が変わるケースにも追従できるようにするため）。
+
+この方式は React の再レンダー・エフェクト実行という確定的な経路に乗るため、タイミング依存のレースが原理的に発生しない。
+
 ## 影響範囲
 
 - `src/utils/measureLayoutUtils.ts`: `printScoreAreaWidthPx` / `worstCaseSystemContentBudget` の余白引数化。
 - `src/components/ScorePage.tsx`: 余白・段間隔の state、`maxSystemsPerPage` の連動計算、CSS変数の注入、「その他」タブの新UI（余白左右・余白上下・段の間隔・レイアウトをリセット）。
 - `src/App.css`: `.print-page` の padding、`.score-area .system-stack` の gap を CSS 変数化。
-- `src/components/PianoSystemCanvas.tsx` / `src/components/StaffCanvas.tsx`: 親要素の幅変化を検知して再描画する `ResizeObserver` を追加（既存のリサイズ非対応バグの修正を兼ねる）。
+- `src/components/PianoSystemCanvas.tsx` / `src/components/StaffCanvas.tsx`: 親要素の幅変化を検知して再描画する `ResizeObserver` を追加（既存のリサイズ非対応バグの修正を兼ねる）。加えて `pageMarginSideMm` props を描画 `useEffect` の依存配列に追加し、ResizeObserver 単独では発火が漏れるケースの決定的な対策とした。
+- `src/components/PianoStaff.tsx` / `EnsembleStaff.tsx` / `QuartetStaff.tsx` / `PartExtractionStaff.tsx`: `pageMarginSideMm` props を `measureWidthEvenness` と同じパターンで中継。
 - `src/utils/measureLayoutUtils.test.ts`: 余白引数と本文幅・予算の連動を検証するテストを追加。
 
 ## 検証結果

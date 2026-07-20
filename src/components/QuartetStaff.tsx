@@ -43,6 +43,13 @@ type Props = {
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
   // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
   measureWidthEvenness?: number;
+  /**
+   * ページの左右余白(mm)。値そのものは使わず、余白変更時に子の PianoSystemCanvas の
+   * 描画 useEffect を確実に再実行させるための依存トリガーとして中継するだけ。
+   * 詳細は PianoSystemCanvas.tsx 側のコメントを参照（ResizeObserver だけでは
+   * 特定のタイミングで再描画が漏れることがあったための対策）。
+   */
+  pageMarginSideMm?: number;
   // 終止線を描く「内容のある最後の小節」の絶対インデックス。省略時は終止線を描かない。
   finalMeasureIndex?: number;
 };
@@ -66,6 +73,7 @@ export default function QuartetStaff({
   customSymbolDefs,
   printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
+  pageMarginSideMm,
   finalMeasureIndex,
 }: Props) {
   return (
@@ -99,6 +107,7 @@ export default function QuartetStaff({
             plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
             incomingArcIndex={incomingArcIndex}
             measureWidthEvenness={measureWidthEvenness}
+            pageMarginSideMm={pageMarginSideMm}
             finalMeasureIndex={finalMeasureIndex}
           />
           </div>
