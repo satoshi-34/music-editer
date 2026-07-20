@@ -17,7 +17,6 @@ import {
   isValidNoteKeyString,
   resolveDisplayAccidentalsForKeys,
   snapshotAccidentalState,
-  isValidKeySignature,
   KEY_SIGNATURE_OPTIONS,
   microtoneAccidentalCode,
   type MeasureAccidentalState,
@@ -34,8 +33,6 @@ import {
   applyCustomSymbolToEvent,
   setCustomSymbolScale,
   setCustomSymbolOffset,
-  MIN_SYMBOL_SCALE,
-  MAX_SYMBOL_SCALE,
   MIN_SYMBOL_OFFSET,
   MAX_SYMBOL_OFFSET,
 } from '../utils/customSymbolUtils';
@@ -50,15 +47,24 @@ import {
 } from '../utils/symbolAdjustUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
-import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey, lineToKey as lineToKeyForClef, keyToLine as keyToLineForClef, type ClefType } from './clefUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement } from '../utils/tupletUtils';
-import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
+import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 import { deleteEventFromMeasures } from '../utils/noteDeletionUtils';
 import { computeShiftedKeys, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
+import {
+  parseTimeSignatureInput,
+  parseBpmInput,
+  parseRehearsalInput,
+  parseClefInput,
+  parseKeySigInput,
+  parseSymbolScaleInput,
+  parseSymbolOffsetInput,
+} from '../utils/measureMetaInputUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -3571,17 +3577,7 @@ export default function StaffCanvas({
   function handleTimeSigConfirm(value: string) {
     if (!timeSigEditState) return;
     const { measureAbsoluteIndex } = timeSigEditState;
-    let timeSig: TimeSignature | undefined;
-    if (value && value !== 'none') {
-      const parts = value.split('/');
-      if (parts.length === 2) {
-        const num = parseInt(parts[0], 10);
-        const den = parseInt(parts[1], 10);
-        if (isValidTimeSignature([num, den])) {
-          timeSig = [num, den];
-        }
-      }
-    }
+    const timeSig = parseTimeSignatureInput(value);
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;
@@ -3599,7 +3595,7 @@ export default function StaffCanvas({
   function handleKeySigConfirm(value: string) {
     if (!keySigEditState) return;
     const { measureAbsoluteIndex } = keySigEditState;
-    const keySig = value && isValidKeySignature(value) ? (value as KeySignature) : undefined;
+    const keySig = parseKeySigInput(value);
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;
@@ -3617,8 +3613,7 @@ export default function StaffCanvas({
   function handleClefConfirm(value: string) {
     if (!clefEditState) return;
     const { measureAbsoluteIndex } = clefEditState;
-    const isValidClef = value === 'treble' || value === 'bass' || value === 'alto' || value === 'tenor';
-    const newClef = isValidClef ? (value as ClefType) : undefined;
+    const newClef = parseClefInput(value) as ClefType | undefined;
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;
@@ -3635,9 +3630,7 @@ export default function StaffCanvas({
   function handleBpmConfirm(rawText: string) {
     if (!bpmEditState) return;
     const { measureAbsoluteIndex } = bpmEditState;
-    const parsed = parseInt(rawText.trim(), 10);
-    // 60〜240 の範囲に収まる整数のみ有効とする
-    const bpm = !isNaN(parsed) && parsed >= 60 && parsed <= 240 ? parsed : undefined;
+    const bpm = parseBpmInput(rawText);
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;
@@ -3654,8 +3647,7 @@ export default function StaffCanvas({
   function handleRehearsalConfirm(rawText: string) {
     if (!rehearsalEditState) return;
     const { measureAbsoluteIndex } = rehearsalEditState;
-    const trimmed = rawText.trim();
-    const rehearsalMark = trimmed !== '' && isValidRehearsalMark(trimmed) ? trimmed : undefined;
+    const rehearsalMark = parseRehearsalInput(rawText);
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;
@@ -3674,10 +3666,7 @@ export default function StaffCanvas({
   function handleSymbolResizeConfirm(rawText: string) {
     if (!symbolResizeEditState) return;
     const { measureAbsoluteIndex, eventIndex, target } = symbolResizeEditState;
-    const trimmed = rawText.trim();
-    const parsedPercent = trimmed === '' ? 100 : parseInt(trimmed, 10);
-    const percent = !isNaN(parsedPercent) ? parsedPercent : 100;
-    const scale = Math.min(MAX_SYMBOL_SCALE, Math.max(MIN_SYMBOL_SCALE, percent / 100));
+    const scale = parseSymbolScaleInput(rawText);
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;
@@ -3701,14 +3690,8 @@ export default function StaffCanvas({
   function handleSymbolOffsetConfirm(rawX: string, rawY: string) {
     if (!symbolOffsetEditState) return;
     const { measureAbsoluteIndex, eventIndex, target } = symbolOffsetEditState;
-    const parseOffset = (raw: string) => {
-      const trimmed = raw.trim();
-      const parsed = trimmed === '' ? 0 : parseInt(trimmed, 10);
-      const value = !isNaN(parsed) ? parsed : 0;
-      return Math.min(MAX_SYMBOL_OFFSET, Math.max(MIN_SYMBOL_OFFSET, value));
-    };
-    const offsetX = parseOffset(rawX);
-    const offsetY = parseOffset(rawY);
+    const offsetX = parseSymbolOffsetInput(rawX);
+    const offsetY = parseSymbolOffsetInput(rawY);
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;
