@@ -86,3 +86,24 @@
   - 元に戻す（Undo）で 11→12 に復帰することを確認。
   - ブラウザ保存→リロード→読込で `systems` の値（13）が正しく復元されることを確認。
   - コンソールエラー無し（HMR 起因の古いエラーはサーバー再起動で解消済み）。
+
+## 追記（マージ時の置き換えについて）
+
+本機能（`totalSystems` の state 化・段の追加/削除ボタン・最終段への自動追記）は、
+`claude/friendly-bohr-1400e3` ブランチで実装された「内容のある小節数から段割りを自動計算し、
+末尾の空段は表示・印刷とも自動で出さず、『＋小節を追加』ボタン（`extraEditingSystems`）で
+編集用の空段だけを任意に増やせる」設計に置き換えられた。
+
+- `totalSystems` state・`DEFAULT_TOTAL_SYSTEMS`/`MIN_TOTAL_SYSTEMS`/`MAX_TOTAL_SYSTEMS` 定数・
+  `computeMinTotalSystems`・`autoExpandIfLastSystemHasContent`・`handleAddSystem`・
+  `handleRemoveLastSystem`・`collectAllPartMeasures`、および「その他」タブの「段数」入力欄・
+  「段を追加」「末尾の段を削除」ボタンは、いずれも新設計と二重管理になるため統合時に削除した。
+- `totalSystems` という識別子自体は、`saveScore`/`createSavedScoreData` の引数名として
+  `const totalSystems = 12` の固定値のままファイル後半に残っている（保存フォーマットの
+  互換性維持のための後方互換パラメータ）。可変長化はしていない。
+- 「段が足りず末尾の内容が表示されない」「最終ページの段数が伸縮しない」という本設計が
+  解決しようとしていた問題自体は、新設計の自動段割り（`contentMeasureCount` から
+  `plannedRanges`/`visibleTotalSystems` を都度再計算する方式）で構造的に発生しなくなっている
+  ため、`totalSystems` の可変化という手段は不要と判断した。
+- MusicXML読込・サンプル読込時の「段数を小節数から再計算する」という実利についても、
+  新設計では段数を保持する state 自体が無く自動計算されるため、同等の考慮は不要（破棄）。

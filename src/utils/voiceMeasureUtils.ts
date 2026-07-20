@@ -208,6 +208,63 @@ export function resolveVoiceStemDirections(voices: VoiceData[]): VoiceData[] {
   }));
 }
 
+/**
+ * 音価の大きい順に並べた「休符分割の候補」一覧。
+ * buildTrailingRestEventsForBeats の貪欲分割で、大きい音価から順に使う。
+ */
+const GREEDY_REST_DURATIONS: Array<{ dur: NoteEvent['dur']; beats: number }> = [
+  { dur: '1', beats: 4 },
+  { dur: '2', beats: 2 },
+  { dur: '4', beats: 1 },
+  { dur: '8', beats: 0.5 },
+  { dur: '16', beats: 0.25 },
+  { dur: '32', beats: 0.125 },
+  { dur: '64', beats: 0.0625 },
+];
+
+/**
+ * 指定した拍数を、休符イベントの配列へ貪欲に分割する。
+ * 例: 1.5拍 → 付点は使わず「4分休符 + 8分休符」のように大きい音価から埋める
+ * （付点休符への分割は複雑になるため、今回はシンプルな貪欲分割にとどめる）。
+ */
+export function buildTrailingRestEventsForBeats(beats: number, restKey: string): NoteEvent[] {
+  const rests: NoteEvent[] = [];
+  let remaining = beats;
+  // 無限ループ防止（理論上は64分音符まで使えば十分収束する）。
+  let guard = 0;
+  while (remaining > 0.0001 && guard < 100) {
+    guard += 1;
+    const candidate = GREEDY_REST_DURATIONS.find((d) => d.beats <= remaining + 0.0001);
+    if (!candidate) break;
+    rests.push({ dur: candidate.dur, isRest: true, keys: [restKey] });
+    remaining -= candidate.beats;
+  }
+  return rests;
+}
+
+/**
+ * 多声（voices が複数ある）小節で、ある声部の音価合計が拍子ぶんに満たないとき、
+ * 表示用に末尾へ補う休符イベントを計算する。
+ *
+ * - 保存データ（measure.events / measure.voices）は一切書き換えない。
+ *   これは「見た目だけの補完」であり、呼び出し側（描画コード）が
+ *   実データに追加せず、レンダリング用のコピーへ結果を足すことを想定している。
+ * - 拍子ぶんちょうど埋まっている、またはオーバーしている声部には空配列を返す
+ *   （既存の正しく埋まっている多声小節の見た目を変えないため）。
+ */
+export function computeVoiceDisplayPadding(
+  events: NoteEvent[],
+  totalBeats: number,
+  restKey: string,
+): NoteEvent[] {
+  const occupiedBeats = events.reduce((sum, event) => sum + getEventDurationBeats(event), 0);
+  const remainingBeats = totalBeats - occupiedBeats;
+  if (remainingBeats <= 0.0001) {
+    return [];
+  }
+  return buildTrailingRestEventsForBeats(remainingBeats, restKey);
+}
+
 export function getMeasureDurationBeats(measure: MeasureData): number {
   const voices = getMeasureVoices(measure);
   if (voices.length <= 1) {

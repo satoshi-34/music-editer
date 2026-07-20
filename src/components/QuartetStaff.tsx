@@ -7,6 +7,8 @@ import type { MeasureData, TimeSignature, CustomSymbolDef } from '../types/stora
 import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
+import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
+import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 
 // パート譜表示（PartExtractionStaff）からも同じ clef/楽器定義を使うため export する
 export const QUARTET_PART_CONFIGS: Omit<PartConfig, 'data' | 'onChange'>[] = [
@@ -33,6 +35,25 @@ type Props = {
   timeSignature?: TimeSignature;
   onKeySignatureChange?: (keySignature: KeySignature) => void;
   customSymbolDefs?: CustomSymbolDef[];
+  // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
+  // 省略時は全段を印刷する。画面表示には影響しない。
+  printVisibleSystems?: number;
+  plannedMeasureWidths?: number[];
+  systemRanges?: SystemMeasureRange[];
+  incomingArcIndex?: Map<number, IncomingArcEntry[]>;
+  // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
+  measureWidthEvenness?: number;
+  /**
+   * ページの左右余白(mm)。値そのものは使わず、余白変更時に子の PianoSystemCanvas の
+   * 描画 useEffect を確実に再実行させるための依存トリガーとして中継するだけ。
+   * 詳細は PianoSystemCanvas.tsx 側のコメントを参照（ResizeObserver だけでは
+   * 特定のタイミングで再描画が漏れることがあったための対策）。
+   */
+  pageMarginSideMm?: number;
+  // 終止線を描く「内容のある最後の小節」の絶対インデックス。省略時は終止線を描かない。
+  finalMeasureIndex?: number;
+  // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
+  symbolsClickable?: boolean;
 };
 
 export default function QuartetStaff({
@@ -52,24 +73,31 @@ export default function QuartetStaff({
   timeSignature = [4, 4],
   onKeySignatureChange,
   customSymbolDefs,
+  printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
+  measureWidthEvenness,
+  pageMarginSideMm,
+  finalMeasureIndex,
+  symbolsClickable,
 }: Props) {
   return (
-    <div>
-      {Array.from({ length: systems }, (_, i) => {
+    // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
+    <div className="system-stack">
+      {Array.from({ length: systemRanges?.length ?? systems }, (_, i) => {
         const partsConfig: PartConfig[] = QUARTET_PART_CONFIGS.map((cfg, pi) => ({
           ...cfg,
           data: partsData[pi] ?? [],
           onChange: onPartChange[pi] ?? (() => {}),
         }));
         return (
+          // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
+          <div key={i} className={printVisibleSystems != null && i >= printVisibleSystems ? 'print-hidden-system' : undefined}>
           <PianoSystemCanvas
-            key={i}
-            measuresPerSystem={measuresPerSystem}
+            measuresPerSystem={systemRanges?.[i]?.count ?? measuresPerSystem}
             tool={tool}
             scale={scale}
             partsConfig={partsConfig}
             showInstrumentLabels={i === 0}
-            startMeasureIndex={startMeasureIndex + i * measuresPerSystem}
+            startMeasureIndex={systemRanges?.[i]?.start ?? startMeasureIndex + i * measuresPerSystem}
             disabled={disabled}
             yOffset={yOffset}
             currentInstrument={currentInstrument}
@@ -79,7 +107,14 @@ export default function QuartetStaff({
             timeSignature={timeSignature}
             onKeySignatureChange={onKeySignatureChange}
             customSymbolDefs={customSymbolDefs}
+            plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
+            incomingArcIndex={incomingArcIndex}
+            measureWidthEvenness={measureWidthEvenness}
+            pageMarginSideMm={pageMarginSideMm}
+            finalMeasureIndex={finalMeasureIndex}
+            symbolsClickable={symbolsClickable}
           />
+          </div>
         );
       })}
     </div>

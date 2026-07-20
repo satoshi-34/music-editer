@@ -901,13 +901,24 @@ button.ghost:disabled {
 .print-page {
   position: relative;
   width: 210mm;
-  /* 1ページ目のタイトル欄でページだけが伸びないよう、親から共通高さを受け取る。 */
-  min-height: var(--page-height, 297mm);
+  /* 画面の1ページを常に A4 実寸（297mm）に固定する。
+     こうすると編集画面のページ割りと印刷のページ割りが一致し、
+     紙面の途中で段が切れたり、継ぎのシートにタイトルが無い問題が起きない。
+     ページ内に収まる段数は ScorePage.tsx の systemsPerPage で楽譜種別ごとに調整する */
+  height: 297mm;
+  overflow: hidden;
+  /* ヘッダー・譜面・フッターを縦に並べ、譜面（.score-area）へ残り高さを渡す。
+     市販譜のように段をページ全体へ均等配置するための土台 */
+  display: flex;
+  flex-direction: column;
   background: #fffdf6;
   background-image: radial-gradient(#00000008 1px, transparent 1px);
   background-size: 4px 4px;
   color: #111;
-  padding: 14mm 14mm 12mm;
+  /* 正本は ScorePage.tsx が算出する --page-margin-* （その他タブの「ページ余白」
+     スライダー）。ここでは CSS 変数をそのまま padding へ渡すだけにし、
+     JS 側と別の余白定義を持たない（未設定時のフォールバックは従来と同じ 14mm/14mm/12mm）。 */
+  padding: var(--page-margin-top, 14mm) var(--page-margin-side, 14mm) var(--page-margin-bottom, 12mm);
   box-shadow: 0 10px 30px rgba(0,0,0,.15);
   border: 1px solid #00000010;
   box-sizing: border-box;
@@ -923,7 +934,138 @@ button.ghost:disabled {
 .score-title { margin: 0; font-size: 28px; text-align: center; letter-spacing: .08em; }
 .score-subtitle { margin: 4px 0 0; font-size: 14px; text-align: center; color: #555; }
 .page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; }
-.page-foot { position: absolute; bottom: 6mm; left: 0; right: 0; text-align: center; color: #666; }
+/* pointer-events: none — ページ番号は absolute 配置のため、上下余白を狭くしたり
+   段の間隔をマイナスにすると、ページ最下段の「◀ N小節 ▶」コントロールに重なって
+   クリックを吸ってしまう。フッターはクリック操作を受ける必要がないので素通しにする */
+.page-foot { position: absolute; bottom: 6mm; left: 0; right: 0; text-align: center; color: #666; pointer-events: none; }
+
+/* 譜面エリア: ページの残り高さを受け取り、段（.system-stack の子）を
+   市販譜のように縦方向へ均等配置する。段数を減らすほど行間が広がる */
+.score-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 行グリッド: 全ページが同じ段数（systemsPerPage）を持つため、
+   .system-stack はページの残り高さ（.score-area）をそのまま受け取り、
+   直下の各段を flex:1 1 0 で等分するだけでよい。
+   タイトルページはヘッダーの実高さぶんだけ .score-area 自体が他ページより
+   低くなるため、結果として段間はタイトルページだけ詰まって見えるが、
+   これは意図した挙動（紙面効率を優先し、タイトルページにも他ページと
+   同じ段数を入れるようにした。詳細は .claude/specs/final-barline/design.md 参照）。
+   （--page-capacity は現状常に systemsPerPage と同じ値になるが、
+   ScorePage.tsx 側の計算を素直に反映できるよう変数自体は残してある） */
+.score-area .system-stack {
+  flex: var(--page-capacity, 1) 1 0%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* その他タブの「段の間隔」スライダー（-30〜30px）。既定 0px は従来どおり間隔なし。
+     0以上のときだけこの gap を使う。flex:1 1 0% の等分配置はそのままに、
+     gap ぶんだけ各段の取り分が減る形で間隔が生まれる
+     （ScorePage.tsx 側で maxSystemsPerPage もこの値と連動して増減する）。
+     負値のときは CSS の gap が負値を受け付けないため、下の
+     .score-area--tight-rows 側のルールで別方式（flex:0 0 auto + 負のマージン）に切り替える。 */
+  gap: max(0px, var(--system-row-gap, 0px));
+}
+.score-area .system-stack > * {
+  flex: 1 1 0%;
+  min-height: 0;
+}
+/* 「段の間隔」スライダーが負値のとき（.score-area--tight-rows）は CSS の gap プロパティが
+   負値を受け付けられないため、equal-fill（flex:1 1 0% で残り高さを均等配分）をやめて、
+   段を内容の実サイズ（flex:0 0 auto）のまま上から詰めて並べ、段の間には負のマージンで
+   間隔そのものを狭める。段を伸縮させないぶん、あまった高さは system-stack の下部に
+   自動的に残る（市販譜で行間を詰めると下側が余るのと同じ考え方）。 */
+.score-area--tight-rows .system-stack {
+  gap: 0;
+}
+.score-area--tight-rows .system-stack > * {
+  flex: 0 0 auto;
+}
+.score-area--tight-rows .system-stack > * + * {
+  margin-top: var(--system-row-gap, 0px);
+}
+
+/* ＋小節を追加: 内容のある最後の段の直後に置く、画面専用の控えめな追加ボタン。
+   楽譜の作法として「最後の音符がある小節が譜面の最後」になるよう、既定では
+   末尾の空き段を表示しなくした代わりに、曲の続きを入力するための入口として用意する。
+   目立ちすぎないよう薄いグレーの点線＋淡色文字にし、印刷には出さない（@media print 側参照）。 */
+.add-measures-ghost-button {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 6px 0 2px;
+  padding: 4px 14px;
+  font-size: 12px;
+  color: #9ca3af;
+  background: transparent;
+  border: 1px dashed #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.add-measures-ghost-button:hover {
+  color: #6b7280;
+  border-color: #9ca3af;
+  background: #f9fafb;
+}
+
+/* 段ごとの小節数を個別調整するコントロール（◀ N小節 ▶）。
+   ページ内の各段につき1行、score-area の下に控えめに並べる。画面専用で印刷には出さない
+   （@media print 側で display:none にする）。 */
+.system-measure-override-controls {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0;
+  align-items: center;
+}
+.system-measure-override-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #9ca3af;
+}
+.system-measure-override-label {
+  width: 36px;
+  text-align: right;
+}
+.system-measure-override-count {
+  width: 44px;
+  text-align: center;
+}
+.system-measure-override-button {
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  padding: 0;
+  font-size: 11px;
+  color: #6b7280;
+  background: transparent;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.system-measure-override-button:hover:not(:disabled) {
+  color: #374151;
+  border-color: #9ca3af;
+  background: #f9fafb;
+}
+.system-measure-override-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.layout-overflow-alert {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  font-size: 12px;
+}
 .page-number { font-variant-numeric: tabular-nums; }
 
 /* ===== クリック当たり判定（小節全体の矩形） ===== */
@@ -1016,13 +1158,39 @@ button.ghost:disabled {
      @page margin を 12mm にすると印刷可能領域が 186mm になり、
      width: 210mm の .print-page がはみ出して左ズレする原因になるため。 */
   @page { size: A4; margin: 0; }
-  body { background: #fff !important; }
+  /* 印刷インク色。通常は #000（黒）。
+     黒インク切れなどで一時的に別色で刷りたいときはここだけ変える（例: #1d4ed8） */
+  :root { --print-ink: #000; }
+  /* body のデフォルト margin（8px）が残ると1枚目全体が下へずれ、
+     ページ末尾の段が次の紙へ押し出されてしまう */
+  body { background: #fff !important; margin: 0 !important; }
   .toolbar { display: none !important; }
-  .spread { display: block; width: auto; }
+  /* 入力を直すための画面上の警告であり、演奏用の印刷譜には出さない。 */
+  .layout-overflow-alert { display: none !important; }
+  /* 画面専用の「＋小節を追加」ボタンは編集用UIなので印刷には出さない。 */
+  .add-measures-ghost-button { display: none !important; }
+  /* 段ごとの小節数調整コントロール（◀ N小節 ▶）も編集用UIなので印刷には出さない。 */
+  .system-measure-override-controls { display: none !important; }
+  /* 固定ツールバー分の逃し（padding-top: 60px）も印刷では不要。
+     残すと1枚目だけ60px下へずれ、ページ末尾が次の紙へ押し出される */
+  .app-root { padding-top: 0 !important; }
+  /* 画面用の余白（paper-rail 16px / spread 16px 24px / gap）は印刷に持ち込まない。
+     ここが残ると「タイトルの上の余白が画面より大きい」「紙のページ割りが
+     .print-page の 297mm とずれていく」原因になる */
+  .paper-rail { padding: 0 !important; background: #fff !important; }
+  .spread {
+    display: block;
+    width: auto;
+    max-width: none !important;
+    padding: 0 !important;
+    gap: 0 !important;
+  }
   .page-wrapper {
     transform: none !important;
-    width: auto;
-    height: auto;
+    /* 画面用の縮小高さ（measuredHeight × scale）はインラインstyleで
+       設定されるため、!important を付けないと打ち消せない点に注意 */
+    width: auto !important;
+    height: auto !important;
   }
   .print-page {
     /* 画面用の縮小は印刷に持ち込まない（印刷は常に原寸 A4） */
@@ -1037,22 +1205,43 @@ button.ghost:disabled {
   .score-title { font-size: 24px; }
   .score-subtitle { font-size: 12px; }
 
-  /* 線が薄くならないように黒で強制。ただしクリック判定 rect/path は除外！
-     （松葉やタイ／スラーには、見た目の線とは別に「太い透明なクリック判定パス」が
-     重ねて描かれている。ここを除外し忘れると、印刷時にだけ太い黒線が現れてしまう） */
-  .print-page svg path:not(.vf-arc-hit):not(.vf-hairpin-hit),
-  .print-page svg line { stroke: #000 !important; fill: #000 !important; }
+  /* 印刷は市販譜の濃度感に近づける:
+     線の太さは画面の表示ウェイト設定に関わらず「細い」相当（0.8）へ固定。
+     ※以前あった transform: scale(0.9) は「左右の余白だけが大きくなる」ため廃止した
+     （svg は画面幅で描画済みなので、CSS縮小では余白が増えるだけで紙面を活かせない） */
+  .print-page .score-area {
+    --score-stroke-width: 0.8 !important;
+  }
+
+  /* 薄い色（グレー系）の線・塗りを印刷では黒に寄せる。
+     ただし「fill / stroke の有無」は元の描画を尊重し、色だけを黒へ統一する。
+     以前は path/rect に stroke と fill を一律 #000 で強制していたが、
+     - fill="none" の輪郭要素（スラー・タイの弧、リハーサルマークの枠など）に
+       塗りが付いて黒い塊になる
+     - 塗りのみのグリフ（符頭・音部記号）や五線 rect に輪郭線が付いて
+       楽譜全体が一回り太く印刷される
+     という問題があった。属性セレクタで「元から線／塗りがある要素」だけ黒にする。
+     クリック判定パス（vf-arc-hit / vf-hairpin-hit）は透明のまま印刷から除外する */
+  .print-page svg path[stroke]:not([stroke="none"]):not(.vf-arc-hit):not(.vf-hairpin-hit) {
+    stroke: var(--print-ink) !important;
+  }
+  /* fill 属性なし（SVGデフォルト黒のグリフ: 符頭・音部記号など）も対象にするため
+     [fill] の存在条件は付けない。fill="none"（弧・枠）とヒット判定だけ除外する */
+  .print-page svg path:not([fill="none"]):not(.vf-arc-hit):not(.vf-hairpin-hit) { fill: var(--print-ink) !important; }
+  .print-page svg line { stroke: var(--print-ink) !important; }
   .print-page svg path.vf-arc-hit,
   .print-page svg path.vf-hairpin-hit {
     stroke: none !important; fill: none !important;
   }
-  /* カスタム記号の circle は fill="none"（輪郭だけの記号）のことがあるため、
-     path/line と違って fill を一律 #000 にはしない（塗りつぶし記号に変わってしまう）。
-     枠線の色だけ黒にし、塗りは元の値（none または色）を尊重する */
-  .print-page svg circle { stroke: #000 !important; }
-  .print-page svg circle:not([fill="none"]) { fill: #000 !important; }
-  .print-page svg rect:not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
-    stroke: #000 !important; fill: #000 !important;
+  /* circle / rect も同じ方針: 色だけ黒にし、fill="none"（輪郭だけの記号・枠）は
+     塗りつぶさない。リハーサルマークの囲み枠 rect はここで文字が見えるようになる */
+  .print-page svg circle[stroke]:not([stroke="none"]) { stroke: var(--print-ink) !important; }
+  .print-page svg circle:not([fill="none"]) { fill: var(--print-ink) !important; }
+  .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+    stroke: var(--print-ink) !important;
+  }
+  .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+    fill: var(--print-ink) !important;
   }
   .print-page svg rect.vf-hit,
   .print-page svg rect.vf-note-hit,
@@ -1062,7 +1251,61 @@ button.ghost:disabled {
   }
   /* 強弱記号・運指番号・リハーサルマーク・ペダル・オッターバなどのテキストは
      ダークグレー系（#1f2937 等）で描かれているため、印刷では純粋な黒に統一する */
-  .print-page svg text { fill: #000 !important; }
+  .print-page svg text { fill: var(--print-ink) !important; }
+  /* VexFlow は五線・符幹などの色を親の <g stroke="..." fill="..."> に付けて
+     子要素へ継承させることがある。要素単位のルールでは拾えないため、
+     グループ側の色もインク色へ差し替える（none は元の描画を尊重） */
+  .print-page svg g[stroke]:not([stroke="none"]) { stroke: var(--print-ink) !important; }
+  .print-page svg g[fill]:not([fill="none"]) { fill: var(--print-ink) !important; }
+  /* VexFlow は svg ルート要素にも stroke="black" を付けており、
+     五線・符幹の多く（自前の stroke 属性を持たない path）はここから継承している */
+  .print-page svg[stroke]:not([stroke="none"]) { stroke: var(--print-ink) !important; }
+  .print-page svg[fill]:not([fill="none"]) { fill: var(--print-ink) !important; }
+  /* タイトル・サブタイトル・ページ番号などの HTML テキストも同じインク色で刷る */
+  .print-page, .print-page .page-head *, .print-page .page-foot * { color: var(--print-ink) !important; }
+
+  /* 内容のない末尾の段・ページは印刷しない（紙とインクの節約）。
+     画面では編集用にそのまま表示される。ScorePage.tsx が内容のある段数を
+     計算し、print-hidden-system / print-hidden-page を付けている */
+  .print-hidden-system { display: none !important; }
+  .print-hidden-page { display: none !important; }
+
+  /* 内容のある最後のページだけ、最後の段をページ下端へ寄せる。
+     .system-stack は通常 space-evenly で段を均等配置しているが、末尾の空段が
+     print-hidden-system で消えると最後の段の下に余白だけ残ってしまう。
+     space-between にすると最初の段は上端、最後の段は下端へ付き、
+     終止線がページ右下角で締まって見える（画面表示には影響しない）。 */
+  /* 最終ページは行グリッド（--page-capacity による flex-grow 等分）を無効化し、
+     従来どおり「段の実サイズ＋ justify-content」で配置する。
+     行グリッドのまま space-between/flex-start を付けても、子が flex-grow で
+     残り高さを埋め切ってしまい隙間が生まれず、下端寄せ／上揃えの効果が出ないため。 */
+  .print-final-page .system-stack,
+  .print-final-page-single .system-stack {
+    flex: 1 1 0% !important;
+  }
+  .print-final-page .system-stack > *,
+  .print-final-page-single .system-stack > * {
+    flex: 0 0 auto !important;
+  }
+  .print-final-page .system-stack { justify-content: space-between; }
+  /* ただし、その最後のページの可視段が1段だけの場合は例外として「上揃え」にする。
+     1段しかないページを下端へ落とすと、上が大きく空いて紙面が不自然に見えるため
+     （市販譜でも最終ページが1段だけのときは上に置き、下は余白のままにする作法）。
+     終止線が段の右端に付くことは変わらないので、曲の締まりは損なわれない。
+     2段以上のページは従来の space-between のまま（最後の段が下端へ付く）。 */
+  .print-final-page-single .system-stack { justify-content: flex-start; }
+}
+
+/* 画面表示でも、最終ページの可視段が1段だけのときは上揃えにする。
+   通常ページのグリッド配置（flex-grow 等分）だと1段だけのページでは段が
+   縦中央へ浮いてしまい、楽譜として不自然なため（印刷側の上記ルールと同じ考え方）。
+   行グリッドを無効化し、段の実サイズ＋ justify-content で上揃えにする。 */
+.print-final-page-single .system-stack {
+  flex: 1 1 0% !important;
+  justify-content: flex-start;
+}
+.print-final-page-single .system-stack > * {
+  flex: 0 0 auto !important;
 }
 
 /* SVGのアニメ残り防止 */

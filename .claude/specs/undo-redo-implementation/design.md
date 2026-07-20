@@ -125,3 +125,52 @@ dev サーバー（`npm run dev`）で以下を目視確認した。
 3. Undo 後に新しい音符を配置すると「やり直す」ボタンが再びグレーアウトする
    （redo 履歴が破棄されている）。
 4. コンソールエラーは発生しない。
+
+## 追補: 小節単位ツールの Undo が画面に反映されない不具合の修正（2026-07-18）
+
+### 問題
+
+途中テンポ変更（`MeasureData.bpm`）などの小節単位ツールを Undo すると、
+履歴スタックは消費されるのに ♩=XXX の表示が画面に残り、直後にキャンバスからの
+`onScoreDataChange` 通知でデータまで元（変更後）の状態に書き戻ってしまっていた。
+
+### 原因
+
+1. **`currentScoreRef` の更新が `useEffect`（レンダー後）のみだった**。
+   複数ページの `StaffCanvas` / `PianoSystemCanvas` が同じレンダーサイクル内で
+   連続して `onScoreDataChange` を呼ぶと、2回目以降の `pushHistory` が
+   古い ref（初回は `undefined`）のまま実行され、壊れたスナップショット
+   （`rightHandData: undefined` や1つ前の状態）が履歴に積まれる。
+2. **`undefined` スナップショットは復元されない**。キャンバス側の同期 effect は
+   `if (initialScoreData)` ガードで `undefined` を無視するため、Undo しても
+   再描画されず、その後キャンバスが変更後のデータを親へ再通知して Undo が実質
+   キャンセルされる。
+3. **末尾パディング差だけでも履歴が積まれていた**。キャンバスは自分の描画範囲まで
+   末尾に空小節を補って通知するため、ページごとに配列長が異なり（例: 36 vs 72）、
+   単純な JSON 比較では「変更あり」と誤判定して無意味な Undo 段数が生まれていた。
+
+### 修正設計
+
+- `src/utils/scoreDataEquality.ts`（新規）: `isEmptyMeasure` / `trimTrailingEmptyMeasures` /
+  `isSameScoreIgnoringPadding` を追加。空小節は `{ events: [] }` のみで、`bpm` などの
+  小節プロパティが付いていれば空とみなさない（テンポ変更が確実に「編集」と判定される）。
+- `ScorePage.tsx` の各 `handleXXXChange`: 変更判定を `isSameScoreIgnoringPadding` に変更。
+  パディング差だけの通知は履歴に積まず、ref と state だけ最新に揃える。
+  実変更時は `pushHistory` の直後に `currentScoreRef` を**同期的に**更新する。
+- `applySnapshot`: 復元時も `currentScoreRef` を同期的に更新し、`undefined` の
+  スナップショットは空配列（＝譜面を空にする指示）に正規化して復元する。
+
+### 影響範囲
+
+- `src/utils/scoreDataEquality.ts` / `src/utils/scoreDataEquality.test.ts`（新規）
+- `src/components/ScorePage.tsx`: `applySnapshot` / `handleRightHandChange` /
+  `handleLeftHandChange` / `handleQuartetPartChange` / `handleEnsemblePartChange`
+
+### 動作確認（ブラウザ）
+
+1. 途中テンポ変更で ♩=180 を設定 → Cmd+Z / ツールバーの「元に戻す」で
+   表示・自動保存データの両方から bpm が消える。
+2. 「やり直す」で ♩=180 が表示・データとも復元される。
+3. まっさらな譜面への最初の編集（音符配置）も Undo で表示・データとも戻る。
+4. 起動直後のパディング通知では「元に戻す」が有効化されない。
+5. コンソールエラーなし。`docker compose run --rm app npx vitest run` 全件パス。

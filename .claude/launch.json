@@ -16,6 +16,13 @@
       "autoPort": false
     },
     {
+      "name": "dev-alt2",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "run", "--rm", "-p", "127.0.0.1:5177:5177", "app", "npm", "run", "dev", "--", "--host", "--port", "5177"],
+      "port": 5177,
+      "autoPort": false
+    },
+    {
       "name": "dev-local-temp",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--", "--port", "5176"],

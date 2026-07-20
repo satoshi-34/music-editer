@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament, Dot, Tuplet } from 'vexflow';
+import { Renderer, Stave, StaveNote, Voice, Formatter, Barline, Beam, Accidental, VoltaType, GraceNote, GraceNoteGroup, Ornament, Dot } from 'vexflow';
 import type { Tool } from './Palette';
 import type { TieArc, HairpinMark, MeasureData, NoteEvent, DurKey, TimeSignature, AdjustableSymbolKind } from '../types/storage';
 import { NotePlayer } from '../audio/NotePlayer';
@@ -52,6 +52,8 @@ import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '..
 import { defaultRestDisplayKey, restKey as restFormatterKey, lineToKey as lineToKeyForClef, keyToLine as keyToLineForClef, type ClefType } from './clefUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
+import { createVexFlowTuplets, vexFlowDotCount } from '../utils/vexFlowTimingUtils';
+import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement } from '../utils/tupletUtils';
 import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
@@ -85,6 +87,9 @@ type Props = {
   systems?: number;
   gap?: number;
   measuresPerSystem?: number;
+  /** ScorePage の可変range経由ではこの段の小節数を維持する。 */
+  rangeLocked?: boolean;
+  incomingArcIndex?: Map<number, IncomingArcEntry[]>;
   tool: Tool;
   scale?: number;
   initialScoreData?: MeasureData[];
@@ -102,6 +107,25 @@ type Props = {
   customSymbolDefs?: import('../types/storage').CustomSymbolDef[]; // カスタム記号定義
   selectedMeasures?: { start: number; end: number }; // 選択中の小節範囲（絶対インデックス）
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void; // 小節選択コールバック
+  /**
+   * 内容のある最後の小節（絶対インデックス）。この小節の右小節線に終止線
+   * （細＋太の二重線）を描く。repeatEnd が付いている小節ではそちらを優先する。
+   * 省略時（undefined）は終止線を描かない。
+   */
+  finalMeasureIndex?: number;
+  /**
+   * ページの左右余白(mm)。値そのものは描画計算に使わず、下の描画 useEffect の
+   * 依存配列に含めるためだけに受け取る（PianoSystemCanvas.tsx の同名 props の
+   * コメントを参照。ResizeObserver だけでは発火が漏れるケースがあったための対策）。
+   */
+  pageMarginSideMm?: number;
+  /**
+   * 演奏記号（強弱・アーティキュレーション・8va等）を直接クリックして調整オーバーレイを
+   * 開けるようにするかどうか。ScorePage の「演奏記号」タブが選択されているときだけ true にする。
+   * false のときは記号のヒット領域は pointer-events を無効化して完全に素通しし、
+   * 従来の音符クリック（音符入力・和音追加・選択）を一切妨げない。
+   */
+  symbolsClickable?: boolean;
 };
 
 /* ===== レイアウト/スペーシング ===== */
@@ -627,14 +651,14 @@ function makeVFNote(
     const renderRestKey = eventRestKey === defaultRestKeyForClef(clef)
       ? restKeyForClef(clef)
       : eventRestKey;
-    const n = new StaveNote({ clef, keys: [renderRestKey], duration: (vfDur as VFDur) + 'r' });
+    const n = new StaveNote({ clef, keys: [renderRestKey], duration: (vfDur as VFDur) + 'r', dots: vexFlowDotCount(ev.dots) });
     return attachDots(n);
   }
   // keys が空の場合は全休符にフォールバック
   if (!ev.keys || ev.keys.length === 0) {
-    return attachDots(new StaveNote({ clef, keys: [restKeyForClef(clef)], duration: (vfDur as VFDur) + 'r' }));
+    return attachDots(new StaveNote({ clef, keys: [restKeyForClef(clef)], duration: (vfDur as VFDur) + 'r', dots: vexFlowDotCount(ev.dots) }));
   }
-  const n = new StaveNote({ clef, keys: ev.keys, duration: vfDur });
+  const n = new StaveNote({ clef, keys: ev.keys, duration: vfDur, dots: vexFlowDotCount(ev.dots) });
   // 小節内の過去状態を見て、「今ここで本当に見せるべき臨時記号」だけを付ける。
   // prevMeasureState がある場合は前の小節の最終状態も参照し、
   // 小節線を超えて自然音に戻る音にはカッコ付き臨時記号（courtesy accidental）を表示する。
@@ -722,7 +746,7 @@ function logNoteAddition(measureIndex: number, x: number, y: number, key: string
 }
 
 export default function StaffCanvas({
-  systems = 6, gap = 110, measuresPerSystem = 4, tool, scale = 0.86,
+  systems = 6, gap = 110, measuresPerSystem = 4, rangeLocked = false, incomingArcIndex, tool, scale = 0.86,
   initialScoreData, onScoreDataChange, startMeasureIndex = 0, disabled = false,
   clef = 'treble', yOffset = 0, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   timeSignature = [4, 4],
@@ -730,6 +754,9 @@ export default function StaffCanvas({
   customSymbolDefs = [],
   selectedMeasures,
   onMeasureSelect,
+  finalMeasureIndex,
+  pageMarginSideMm,
+  symbolsClickable = false,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -743,6 +770,21 @@ export default function StaffCanvas({
   const ref = useRef<HTMLDivElement>(null);
   // テキスト入力オーバーレイの位置決め用（ref が指す SVG div を内包するラッパー）
   const containerRef = useRef<HTMLDivElement>(null);
+  // 描画幅は下の描画 useEffect の実行時に ref.current.parentElement.clientWidth を
+  // 一度だけ読む。ページ余白（その他タブの「余白(左右)」スライダー）などで
+  // 親要素の実幅が変わっても、その変化だけでは描画 useEffect の依存配列が
+  // 変化しないため再描画されない。ResizeObserver で親要素の幅変化を検知し、
+  // カウンタを更新して描画 useEffect の依存配列に含めることで追従させる。
+  const [containerWidthTick, setContainerWidthTick] = useState(0);
+  useEffect(() => {
+    const parent = ref.current?.parentElement;
+    // テスト環境（jsdom）には ResizeObserver が無いことがあるため、無ければ何もしない
+    // （その場合でも初回描画時の clientWidth は正しく使われるため、テストの前提は崩れない）。
+    if (!parent || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setContainerWidthTick((tick) => tick + 1));
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, []);
   const [score, setScore] = useState<MeasureData[]>(() => {
     // initialScoreData が空配列でも、それは「譜面を空にする」という親からの明示的な指示。
     // length だけで判定すると、新規作成後に内部 state の古い音符が残ってしまう。
@@ -1168,6 +1210,88 @@ export default function StaffCanvas({
     // 🛠️ ここで一度だけ root グループを取得して、以降は使い回す
     const svgRoot = (getVexflowGroup(svg) as SVGGElement | null) || svg;
 
+    /**
+     * 演奏記号（強弱・アーティキュレーション・8va等）のクリック判定を作る。
+     *
+     * 「演奏記号」タブが選択されているとき（symbolsClickable === true）だけ、
+     * 記号の描画 bbox より少し広め（±HIT_PAD px）の透明 rect を重ねてクリックを受け付ける。
+     * それ以外のタブでは pointer-events を無効化して完全に素通しし、
+     * 従来の音符クリック（音符入力・和音追加・選択）を一切妨げない。
+     *
+     * elements には「その記号1件ぶん」として直前に appendChild した SVG 要素を渡す。
+     * getBBox() で実際の描画範囲を取り、それらを内包する矩形をヒット領域にする
+     * （テキストの文字幅などを手計算しなくて済むよう、DOM から実測する方針）。
+     */
+    const SYMBOL_HIT_PAD = 3;
+    function appendSymbolHitRegion(
+      elements: SVGGraphicsElement[],
+      measureAbsoluteIndex: number,
+      eventIndex: number,
+      event: NoteEvent,
+      kind: AdjustableSymbolKind,
+      isCustomSymbolId?: false,
+    ): void;
+    function appendSymbolHitRegion(
+      elements: SVGGraphicsElement[],
+      measureAbsoluteIndex: number,
+      eventIndex: number,
+      event: NoteEvent,
+      symbolId: string,
+      isCustomSymbolId: true,
+    ): void;
+    function appendSymbolHitRegion(
+      elements: SVGGraphicsElement[],
+      measureAbsoluteIndex: number,
+      eventIndex: number,
+      event: NoteEvent,
+      kindOrSymbolId: AdjustableSymbolKind | string,
+      isCustomSymbolId?: boolean,
+    ) {
+      const target: AdjustTarget = isCustomSymbolId
+        ? { type: 'custom', symbolId: kindOrSymbolId, name: customSymbolDefs.find(d => d.id === kindOrSymbolId)?.name ?? kindOrSymbolId }
+        : { type: 'standard', kind: kindOrSymbolId as AdjustableSymbolKind };
+      if (elements.length === 0) return;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      elements.forEach((el) => {
+        try {
+          const bbox = el.getBBox();
+          minX = Math.min(minX, bbox.x);
+          minY = Math.min(minY, bbox.y);
+          maxX = Math.max(maxX, bbox.x + bbox.width);
+          maxY = Math.max(maxY, bbox.y + bbox.height);
+        } catch {
+          // getBBox は要素が非表示（display:none）などの場合に例外を投げることがある。
+          // その場合はヒット領域の計算対象から外すだけで、描画自体には影響させない。
+        }
+      });
+      if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) return;
+      const ns = 'http://www.w3.org/2000/svg';
+      const hit = document.createElementNS(ns, 'rect');
+      hit.setAttribute('x', String(minX - SYMBOL_HIT_PAD));
+      hit.setAttribute('y', String(minY - SYMBOL_HIT_PAD));
+      hit.setAttribute('width', String(maxX - minX + SYMBOL_HIT_PAD * 2));
+      hit.setAttribute('height', String(maxY - minY + SYMBOL_HIT_PAD * 2));
+      hit.setAttribute('fill', 'rgba(37, 99, 235, 0)');
+      hit.setAttribute('class', 'symbol-hit-region');
+      // 演奏記号タブ以外では pointer-events:none にして完全に素通しする（従来の音符クリックを妨げない）。
+      hit.style.pointerEvents = symbolsClickable ? 'auto' : 'none';
+      if (symbolsClickable) {
+        hit.style.cursor = 'pointer';
+        // hover 時は薄い水色でハイライトして「クリックできる」ことを示す
+        hit.addEventListener('mouseenter', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0.16)'));
+        hit.addEventListener('mouseleave', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0)'));
+        hit.addEventListener('click', (domEvent) => {
+          // 音符クリックのハンドラより手前で止め、記号クリックを優先する
+          domEvent.stopPropagation();
+          const containerRect = containerRef.current?.getBoundingClientRect();
+          const overlayX = (domEvent as MouseEvent).clientX - (containerRect?.left ?? 0);
+          const overlayY = (domEvent as MouseEvent).clientY - (containerRect?.top ?? 0);
+          openSymbolAdjustEditor('offset', measureAbsoluteIndex, eventIndex, target, event, overlayX, overlayY);
+        });
+      }
+      svgRoot.appendChild(hit);
+    }
+
     // タイドラッグのプレビュー弧（ドラッグ中だけ表示する一時的なSVGパス）
     const tiePreviewPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     tiePreviewPath.setAttribute('fill', 'none');
@@ -1195,6 +1319,9 @@ export default function StaffCanvas({
       baseY: number;
       markings: NonNullable<NoteEvent['dynamics']>;
       adjust: ResolvedSymbolAdjust;
+      measureAbsoluteIndex: number;
+      eventIndex: number;
+      event: NoteEvent;
     }> = [];
     // アーティキュレーション記号の描画情報を収集し、全音符描画後にまとめて描く
     const articulationEntries: Array<{
@@ -1204,6 +1331,10 @@ export default function StaffCanvas({
       // 五線の最上線Y（フェルマータの配置基準）
       staveTopY: number;
       markings: NonNullable<NoteEvent['articulations']>;
+      adjust: ResolvedSymbolAdjust;
+      measureAbsoluteIndex: number;
+      eventIndex: number;
+      event: NoteEvent;
     }> = [];
     // カスタム記号の描画情報を収集する
     const customSymbolEntries: CustomSymbolRenderEntry[] = [];
@@ -1212,26 +1343,37 @@ export default function StaffCanvas({
     // リハーサルマーク（練習番号）の描画情報を収集する（各小節の左上、テンポ表記よりさらに上に表示）
     const rehearsalMarkEntries: Array<{ x: number; topY: number; mark: string }> = [];
     // テキスト要素（コード記号・テンポ表記）の描画情報を収集する（五線の上に表示）
-    const chordSymbolEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
-    const tempoMarkingEntries: Array<{ anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    type TextEntry = { anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust; measureAbsoluteIndex: number; eventIndex: number; event: NoteEvent };
+    type BotTextEntry = { anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust; measureAbsoluteIndex: number; eventIndex: number; event: NoteEvent };
+    const chordSymbolEntries: TextEntry[] = [];
+    const tempoMarkingEntries: TextEntry[] = [];
     // テキスト要素（発想標語・歌詞）の描画情報を収集する（五線の下に表示）
-    const expressionMarkingEntries: Array<{ anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
-    const lyricsEntries: Array<{ anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const expressionMarkingEntries: BotTextEntry[] = [];
+    // 歌詞は他の下側テキストと違い「五線の上」に表示する（PianoSystemCanvas と統一した仕様）ため、
+    // 上側配置の基準になる五線上端 Y も一緒に持たせる
+    const lyricsEntries: Array<BotTextEntry & { staveTopY: number }> = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     // stave も持たせておくのは、down→up の破線ブリッジが段またぎになるかどうかを
     // 松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため。
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }> = [];
     // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
-    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust; measureAbsoluteIndex: number; eventIndex: number; event: NoteEvent }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     // start と end の x 座標・y 座標を記録して後でまとめて線を引く
     const ottavaEntries: Array<{
       kind: '8va' | '8vb';
       startX: number; endX: number;
       lineY: number;  // 8va は五線上端より上、8vb は五線下端より下
+      adjust: ResolvedSymbolAdjust;
+      measureAbsoluteIndex: number;
+      eventIndex: number;
+      event: NoteEvent;
     }> = [];
     // 現在処理中のオッターバ開始情報（ペア待ち）
-    let pendingOttava: { kind: '8va' | '8vb'; startX: number; lineY: number } | null = null;
+    let pendingOttava: {
+      kind: '8va' | '8vb'; startX: number; lineY: number; adjust: ResolvedSymbolAdjust;
+      measureAbsoluteIndex: number; eventIndex: number; event: NoteEvent;
+    } | null = null;
 
     // SVG 背景クリック → 弧の選択とドラッグ状態を解除
     svg.addEventListener('click', () => {
@@ -1607,7 +1749,11 @@ export default function StaffCanvas({
       const CLEF_PAD_THIS = (line === 0) ? CLEF_PAD_FIRST : CLEF_PAD_OTHER;
 
       // 何小節入れるか試す
-      const candidates = [measuresPerSystem, 3, 2, 1].filter((v,i,a)=>a.indexOf(v)===i);
+      // ScorePage 経由では effectiveMeasuresPerSystem が通常の段数を決める。一方で
+      // 単体利用・壊れた編集中データでは、この従来の候補列が安全網になる。
+      const candidates = rangeLocked
+        ? [measuresPerSystem]
+        : [measuresPerSystem, 3, 2, 1].filter((v,i,a)=>a.indexOf(v)===i);
       let chosen = 1, widths: number[] = [], startX = left;
 
       const tryFit = (n: number) => {
@@ -1700,7 +1846,18 @@ export default function StaffCanvas({
           // VexFlow では begin / end を別々に指定するので、左側は setBegBarType を使う。
           stave.setBegBarType(Barline.type.REPEAT_BEGIN);
         }
-        stave.setEndBarType(data?.repeatEnd ? Barline.type.REPEAT_END : Barline.type.SINGLE);
+        // 終止線（細＋太の二重線）は「内容のある最後の小節」だけに出す。
+        // 終了リピート記号が付いている小節はそちらを優先する。
+        const isFinalBarlineHere = finalMeasureIndex != null
+          && absoluteIndex === finalMeasureIndex
+          && !data?.repeatEnd;
+        stave.setEndBarType(
+          data?.repeatEnd
+            ? Barline.type.REPEAT_END
+            : isFinalBarlineHere
+              ? Barline.type.END
+              : Barline.type.SINGLE
+        );
         const voltaConfig = getVoltaRenderConfig(score, absoluteIndex);
         if (voltaConfig) {
           const voltaTypeMap = {
@@ -1748,6 +1905,9 @@ export default function StaffCanvas({
         prevMeasureAccidentalState = snapshotAccidentalState(accidentalState);
 
         const beams = Beam.generateBeams(vfNotes, { beamRests: false });
+        // Tuplet は生成時に各音符の tick を連符比率へ変換するため、Voice/Formatter の前に作る。
+        // ここを描画直前にすると、横配置だけ通常音符の時間で計算されてしまう。
+        const tuplets = createVexFlowTuplets(safeEvents, vfNotes);
         // この小節の有効拍子で Voice を生成する（途中拍子変更対応）
         const voice = new Voice({
           time: {
@@ -1829,28 +1989,14 @@ export default function StaffCanvas({
         }
         beams.forEach(b => b.setContext(ctx).draw());
 
-        // 連符（tuplet）の描画: 同じ tuplet.id を持つ連続イベントをひとまとめにして
-        // VexFlow の Tuplet でくくる（「3」の数字とブラケットが表示される）。
-        // beam の描画より後に行うことで、符幹の向き確定後のノートを正しく束ねられる。
-        try {
-          let tIdx = 0;
-          while (tIdx < safeEvents.length) {
-            const tupletId = safeEvents[tIdx].tuplet?.id;
-            if (!tupletId) { tIdx += 1; continue; }
-            let tEnd = tIdx;
-            while (tEnd + 1 < safeEvents.length && safeEvents[tEnd + 1].tuplet?.id === tupletId) tEnd += 1;
-            const groupNotes = vfNotes.slice(tIdx, tEnd + 1);
-            const info = safeEvents[tIdx].tuplet!;
-            if (groupNotes.length > 0) {
-              const tuplet = new Tuplet(groupNotes, { numNotes: info.numNotes, notesOccupied: info.notesOccupied });
-              (tuplet as any).setContext?.(ctx);
-              tuplet.draw();
-            }
-            tIdx = tEnd + 1;
+        tuplets.forEach(tuplet => {
+          try {
+            (tuplet as any).setContext?.(ctx);
+            tuplet.draw();
+          } catch (tupletError) {
+            console.error('連符の描画でエラーが発生しました:', tupletError);
           }
-        } catch (tupletError) {
-          console.error('連符の描画でエラーが発生しました:', tupletError);
-        }
+        });
 
         // タイ描画用データを収集（行単位でまとめる lineNotes と arc ベースの 2 系統）
         safeEvents.forEach((ev, j) => {
@@ -2939,6 +3085,9 @@ export default function StaffCanvas({
                 baseY: stave.getYForLine(4) + 26,
                 markings: safeEvents[j].dynamics,
                 adjust: getSymbolAdjust(safeEvents[j], 'dynamics'),
+                measureAbsoluteIndex: absoluteIndex,
+                eventIndex: j,
+                event: safeEvents[j],
               });
             }
             if (!safeEvents[j]?.__isPlaceholder && !safeEvents[j]?.isRest && safeEvents[j]?.articulations?.length) {
@@ -2948,6 +3097,10 @@ export default function StaffCanvas({
                 noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
                 staveTopY: stave.getYForLine(0),
                 markings: safeEvents[j].articulations,
+                adjust: getSymbolAdjust(safeEvents[j], 'articulations'),
+                measureAbsoluteIndex: absoluteIndex,
+                eventIndex: j,
+                event: safeEvents[j],
               });
             }
             if (!safeEvents[j]?.__isPlaceholder && !safeEvents[j]?.isRest && safeEvents[j]?.fingering) {
@@ -2959,6 +3112,9 @@ export default function StaffCanvas({
                 staveTopY: stave.getYForLine(0),
                 text: safeEvents[j].fingering!,
                 adjust: getSymbolAdjust(safeEvents[j], 'fingering'),
+                measureAbsoluteIndex: absoluteIndex,
+                eventIndex: j,
+                event: safeEvents[j],
               });
             }
             {
@@ -2969,6 +3125,8 @@ export default function StaffCanvas({
                 safeEvents[j],
                 noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
                 stave.getYForLine(0),
+                absoluteIndex,
+                j,
               );
               if (entry) customSymbolEntries.push(entry);
             }
@@ -2980,17 +3138,17 @@ export default function StaffCanvas({
               const staveTop = stave.getYForLine(0);
               const staveBot = stave.getYForLine(4);
               if (ev?.chordSymbol) {
-                chordSymbolEntries.push({ anchorX: cx, topY: staveTop, text: ev.chordSymbol, adjust: getSymbolAdjust(ev, 'chordSymbol') });
+                chordSymbolEntries.push({ anchorX: cx, topY: staveTop, text: ev.chordSymbol, adjust: getSymbolAdjust(ev, 'chordSymbol'), measureAbsoluteIndex: absoluteIndex, eventIndex: j, event: ev });
               }
               if (ev?.tempoMarking) {
-                tempoMarkingEntries.push({ anchorX: cx, topY: staveTop, text: ev.tempoMarking, adjust: getSymbolAdjust(ev, 'tempoMarking') });
+                tempoMarkingEntries.push({ anchorX: cx, topY: staveTop, text: ev.tempoMarking, adjust: getSymbolAdjust(ev, 'tempoMarking'), measureAbsoluteIndex: absoluteIndex, eventIndex: j, event: ev });
               }
               // 五線下端より下に表示する要素
               if (ev?.expressionMarking) {
-                expressionMarkingEntries.push({ anchorX: cx, botY: staveBot, text: ev.expressionMarking, adjust: getSymbolAdjust(ev, 'expressionMarking') });
+                expressionMarkingEntries.push({ anchorX: cx, botY: staveBot, text: ev.expressionMarking, adjust: getSymbolAdjust(ev, 'expressionMarking'), measureAbsoluteIndex: absoluteIndex, eventIndex: j, event: ev });
               }
               if (ev?.lyrics) {
-                lyricsEntries.push({ anchorX: cx, botY: staveBot, text: ev.lyrics, adjust: getSymbolAdjust(ev, 'lyrics') });
+                lyricsEntries.push({ anchorX: cx, botY: staveBot, staveTopY: stave.getYForLine(0), text: ev.lyrics, adjust: getSymbolAdjust(ev, 'lyrics'), measureAbsoluteIndex: absoluteIndex, eventIndex: j, event: ev });
               }
               if (ev?.pedalMark) {
                 pedalMarkEntries.push({ anchorX: cx, botY: staveBot, mark: ev.pedalMark, stave });
@@ -2999,9 +3157,9 @@ export default function StaffCanvas({
               if (ev?.ottava) {
                 const topY = stave.getYForLine(0);
                 if (ev.ottava === '8va') {
-                  pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14 };
+                  pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(ev, 'ottava'), measureAbsoluteIndex: absoluteIndex, eventIndex: j, event: ev };
                 } else if (ev.ottava === '8vb') {
-                  pendingOttava = { kind: '8vb', startX: cx, lineY: staveBot + 14 };
+                  pendingOttava = { kind: '8vb', startX: cx, lineY: staveBot + 14, adjust: getSymbolAdjust(ev, 'ottava'), measureAbsoluteIndex: absoluteIndex, eventIndex: j, event: ev };
                 } else if (pendingOttava && (ev.ottava === '8vaEnd' && pendingOttava.kind === '8va')) {
                   ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
                   pendingOttava = null;
@@ -3090,12 +3248,13 @@ export default function StaffCanvas({
     // 段が進むたびに蓄積済みの全エントリを再描画してしまい、同じ記号が段数ぶん
     // 同一座標に重複して DOM へ積まれる（見た目は1個でも要素数が膨らむ）。
     // そのため必ず全段のレンダリング完了後に一度だけ描画する。
-    dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust }) => {
+    dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, measureAbsoluteIndex, eventIndex, event }) => {
       const orderedMarkings = [...markings].sort((left, right) => {
         const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
         const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
         return leftPriority - rightPriority;
       });
+      const drawnElements: SVGGraphicsElement[] = [];
       orderedMarkings.forEach((marking, index) => {
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         text.textContent = formatDynamicMarking(marking);
@@ -3111,81 +3270,113 @@ export default function StaffCanvas({
         text.setAttribute('font-style', 'italic');
         text.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(text);
+        drawnElements.push(text);
       });
+      // 演奏記号タブでのクリック判定（複数の強弱記号がまとまって1つの調整対象になる）
+      appendSymbolHitRegion(drawnElements, measureAbsoluteIndex, eventIndex, event, 'dynamics');
     });
 
     // ── アーティキュレーション記号を一括描画 ──────────────────────
-    articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings }) => {
-      // フェルマータ以外は noteTopY の上に重ならないよう積み上げる
+    articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings, adjust, measureAbsoluteIndex, eventIndex, event }) => {
+      // ⤢/✥ ツールの調整値を反映する。offsetX/offsetY は座標へ加算、
+      // scale は各図形の半径・線幅・線の長さへの倍率として使う
+      // （テキストのフォントサイズと同じ考え方。図形の中心はアンカー点に固定して拡大縮小する）。
+      const ax = anchorX + adjust.offsetX;
+      const s = adjust.scale;
+      // フェルマータ以外は noteTopY の上に重ならないよう積み上げる（積み上げ間隔も scale に応じて伸縮する）
       let aboveOffset = 0;
+      const drawnElements: SVGGraphicsElement[] = [];
       // ArticulationMarking は文字列型なので、そのまま type として使う
       markings.forEach((type) => {
         const ns = 'http://www.w3.org/2000/svg';
         if (type === 'fermata') {
           // フェルマータは五線上端より上に配置する（符頭位置に依存しない）
-          const baseY = Math.min(staveTopY, noteTopY) - 14;
+          const baseY = Math.min(staveTopY, noteTopY) - 14 + adjust.offsetY;
           // 半円弧（下が開いた椀形）
           const arc = document.createElementNS(ns, 'path');
-          arc.setAttribute('d', `M ${anchorX - 11} ${baseY} A 11 9 0 0 1 ${anchorX + 11} ${baseY}`);
+          arc.setAttribute('d', `M ${ax - 11 * s} ${baseY} A ${11 * s} ${9 * s} 0 0 1 ${ax + 11 * s} ${baseY}`);
           arc.setAttribute('stroke', '#1f2937');
-          arc.setAttribute('stroke-width', '1.6');
+          arc.setAttribute('stroke-width', String(1.6 * s));
           arc.setAttribute('stroke-linecap', 'round');
           arc.setAttribute('fill', 'none');
           arc.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(arc);
+          drawnElements.push(arc);
           // 中心の点（弧の内側）
           const dot = document.createElementNS(ns, 'circle');
-          dot.setAttribute('cx', String(anchorX));
-          dot.setAttribute('cy', String(baseY - 4));
-          dot.setAttribute('r', '2.5');
+          dot.setAttribute('cx', String(ax));
+          dot.setAttribute('cy', String(baseY - 4 * s));
+          dot.setAttribute('r', String(2.5 * s));
           dot.setAttribute('fill', '#1f2937');
           dot.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(dot);
+          drawnElements.push(dot);
         } else if (type === 'staccato') {
           // スタッカート: 符頭上方に小さな黒丸
-          const cy = noteTopY - 6 - aboveOffset;
+          const cy = noteTopY - 6 - aboveOffset + adjust.offsetY;
           const dot = document.createElementNS(ns, 'circle');
-          dot.setAttribute('cx', String(anchorX));
+          dot.setAttribute('cx', String(ax));
           dot.setAttribute('cy', String(cy));
-          dot.setAttribute('r', '2.5');
+          dot.setAttribute('r', String(2.5 * s));
           dot.setAttribute('fill', '#1f2937');
           dot.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(dot);
-          aboveOffset += 10;
+          drawnElements.push(dot);
+          aboveOffset += 10 * s;
         } else if (type === 'accent') {
           // アクセント: 下向きの楔形（「>」を90°回した形）
-          const tipY = noteTopY - 5 - aboveOffset;
-          const wingY = tipY - 9;
+          const tipY = noteTopY - 5 - aboveOffset + adjust.offsetY;
+          const wingY = tipY - 9 * s;
           const path = document.createElementNS(ns, 'path');
-          path.setAttribute('d', `M ${anchorX - 10} ${wingY} L ${anchorX} ${tipY} L ${anchorX + 10} ${wingY}`);
+          path.setAttribute('d', `M ${ax - 10 * s} ${wingY} L ${ax} ${tipY} L ${ax + 10 * s} ${wingY}`);
           path.setAttribute('stroke', '#1f2937');
-          path.setAttribute('stroke-width', '1.6');
+          path.setAttribute('stroke-width', String(1.6 * s));
           path.setAttribute('stroke-linecap', 'round');
           path.setAttribute('stroke-linejoin', 'round');
           path.setAttribute('fill', 'none');
           path.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(path);
-          aboveOffset += 14;
+          drawnElements.push(path);
+          aboveOffset += 14 * s;
         } else if (type === 'tenuto') {
           // テヌート: 符頭上方に水平線
-          const lineY = noteTopY - 6 - aboveOffset;
+          const lineY = noteTopY - 6 - aboveOffset + adjust.offsetY;
           const line = document.createElementNS(ns, 'line');
-          line.setAttribute('x1', String(anchorX - 9));
+          line.setAttribute('x1', String(ax - 9 * s));
           line.setAttribute('y1', String(lineY));
-          line.setAttribute('x2', String(anchorX + 9));
+          line.setAttribute('x2', String(ax + 9 * s));
           line.setAttribute('y2', String(lineY));
           line.setAttribute('stroke', '#1f2937');
-          line.setAttribute('stroke-width', '2.2');
+          line.setAttribute('stroke-width', String(2.2 * s));
           line.setAttribute('stroke-linecap', 'round');
           line.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(line);
-          aboveOffset += 10;
+          drawnElements.push(line);
+          aboveOffset += 10 * s;
+        } else if (type === 'marcato') {
+          // マルカート: 塗りつぶした山形（ストロークのみのアクセントと区別するため塗りで表現する）
+          const tipY = noteTopY - 5 - aboveOffset + adjust.offsetY;
+          const wingY = tipY - 9 * s;
+          const path = document.createElementNS(ns, 'path');
+          path.setAttribute('d', `M ${ax - 8 * s} ${wingY} L ${ax} ${tipY - 4 * s} L ${ax + 8 * s} ${wingY} L ${ax} ${tipY} Z`);
+          path.setAttribute('fill', '#1f2937');
+          path.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(path);
+          drawnElements.push(path);
+          aboveOffset += 14 * s;
         }
       });
+      // 演奏記号タブでのクリック判定（この音符に付いた全アーティキュレーションをまとめて1つの調整対象にする）
+      appendSymbolHitRegion(drawnElements, measureAbsoluteIndex, eventIndex, event, 'articulations');
     });
 
     // ── カスタム記号を一括描画 ────────────────────────────────────
-    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot);
+    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot, (entry, symbolId, g) => {
+      // カスタム記号のクリック判定。appendSymbolHitRegion と同じ考え方だが、
+      // target が {type:'custom', symbolId} になる点だけ異なるため、ここで個別に組み立てる。
+      const { measureAbsoluteIndex, eventIndex, event } = entry;
+      appendSymbolHitRegion([g], measureAbsoluteIndex, eventIndex, event, symbolId, true);
+    });
 
     // ── 途中テンポ変更マーキングを一括描画 ──────────────────────
     // 各小節の左端上方に「♩=XXX」と赤みがかったテキストで表示する。
@@ -3241,7 +3432,7 @@ export default function StaffCanvas({
     // 統一高さに揃えて表示する（カスタム記号と同じ方針。音符ごとに高さがばらつくと
     // 楽譜として読みにくいため）。五線より上へ飛び出す高音だけは、記号が符頭と
     // 重ならないよう、その音符に限り符頭上端の上へ逃がす。
-    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust }) => {
+    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3252,11 +3443,12 @@ export default function StaffCanvas({
       el.setAttribute('font-size', String(10 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      appendSymbolHitRegion([el], measureAbsoluteIndex, eventIndex, event, 'fingering');
     });
 
     // ── テキスト要素を一括描画 ───────────────────────────────────
     // コード記号: 五線上端より 8px 上（ト音記号・拍子記号と重なりにくい高さ）
-    chordSymbolEntries.forEach(({ anchorX, topY, text, adjust }) => {
+    chordSymbolEntries.forEach(({ anchorX, topY, text, adjust, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3267,10 +3459,11 @@ export default function StaffCanvas({
       el.setAttribute('font-size', String(12 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      appendSymbolHitRegion([el], measureAbsoluteIndex, eventIndex, event, 'chordSymbol');
     });
 
     // テンポ表記: コード記号よりさらに 16px 上（最も優先度が高く目立つ場所）
-    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust }) => {
+    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3282,10 +3475,11 @@ export default function StaffCanvas({
       el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      appendSymbolHitRegion([el], measureAbsoluteIndex, eventIndex, event, 'tempoMarking');
     });
 
     // 発想標語: 強弱記号の下（botY + 40）に斜体で表示
-    expressionMarkingEntries.forEach(({ anchorX, botY, text, adjust }) => {
+    expressionMarkingEntries.forEach(({ anchorX, botY, text, adjust, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -3297,11 +3491,17 @@ export default function StaffCanvas({
       el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
+      appendSymbolHitRegion([el], measureAbsoluteIndex, eventIndex, event, 'expressionMarking');
     });
 
     // 歌詞: 発想標語のさらに下（botY + 54）に通常体で表示
-    // 座標計算・スタイルは PianoSystemCanvas と共通の drawLyricsEntry（lyricsRenderUtils.ts）に切り出し済み
-    lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, entry));
+    // 座標計算・スタイルは PianoSystemCanvas と共通の drawLyricsEntry（lyricsRenderUtils.ts）に切り出し済み。
+    // 描画した text 要素を受け取り、演奏記号タブでの直接クリック調整用のヒット領域を重ねる。
+    // 歌詞はフェーズ2の仕様統一で、単旋律譜でも五線の上（placement: 'above'）に表示する
+    lyricsEntries.forEach((entry) => {
+      const el = drawLyricsEntry(svgRoot, { ...entry, placement: 'above' });
+      appendSymbolHitRegion([el], entry.measureAbsoluteIndex, entry.eventIndex, entry.event, 'lyrics');
+    });
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
     // LINE_SPACING ≈ 13 SVG単位なので +25 ≈ 2段分。標準的な記譜位置。
@@ -3371,51 +3571,63 @@ export default function StaffCanvas({
 
     // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
     // 8va は五線上に、8vb は五線下に表示する
-    ottavaEntries.forEach(({ kind, startX, endX, lineY }) => {
+    ottavaEntries.forEach(({ kind, startX, endX, lineY, adjust, measureAbsoluteIndex, eventIndex, event }) => {
+      // symbolAdjust: offsetX/offsetY はブラケット全体（テキスト・破線・終端の縦線）に効かせ、
+      // scale はテキストの font-size と線の太さに効かせる（線の長さ自体は変えない）
+      const ax = startX + adjust.offsetX;
+      const aex = endX + adjust.offsetX;
+      const ay = lineY + adjust.offsetY;
+      const fontSize = 11 * adjust.scale;
+      const strokeWidth = 1 * adjust.scale;
+      const drawnElements: SVGGraphicsElement[] = [];
       // テキスト（"8va" / "8vb"）
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       label.textContent = kind;
-      label.setAttribute('x', String(startX - 4));
-      label.setAttribute('y', String(lineY));
+      label.setAttribute('x', String(ax - 4));
+      label.setAttribute('y', String(ay));
       label.setAttribute('text-anchor', 'start');
       label.setAttribute('fill', '#374151');
       label.setAttribute('font-family', 'serif');
       label.setAttribute('font-style', 'italic');
-      label.setAttribute('font-size', '11');
+      label.setAttribute('font-size', String(fontSize));
       label.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(label);
+      drawnElements.push(label);
       // 破線（テキスト幅の分だけオフセット）
-      const lineStart = startX + 18;
-      if (lineStart < endX) {
+      const lineStart = ax + 18;
+      if (lineStart < aex) {
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
         line.setAttribute('x1', String(lineStart));
-        line.setAttribute('y1', String(lineY - 3));
-        line.setAttribute('x2', String(endX));
-        line.setAttribute('y2', String(lineY - 3));
+        line.setAttribute('y1', String(ay - 3));
+        line.setAttribute('x2', String(aex));
+        line.setAttribute('y2', String(ay - 3));
         line.setAttribute('stroke', '#374151');
-        line.setAttribute('stroke-width', '1');
+        line.setAttribute('stroke-width', String(strokeWidth));
         line.setAttribute('stroke-dasharray', '4,2');
         line.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(line);
+        drawnElements.push(line);
       }
       // 終端の縦線
       const bracketDir = kind === '8va' ? 1 : -1;
       const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      vline.setAttribute('x1', String(endX));
-      vline.setAttribute('y1', String(lineY - 3));
-      vline.setAttribute('x2', String(endX));
-      vline.setAttribute('y2', String(lineY - 3 + 6 * bracketDir));
+      vline.setAttribute('x1', String(aex));
+      vline.setAttribute('y1', String(ay - 3));
+      vline.setAttribute('x2', String(aex));
+      vline.setAttribute('y2', String(ay - 3 + 6 * bracketDir));
       vline.setAttribute('stroke', '#374151');
-      vline.setAttribute('stroke-width', '1');
+      vline.setAttribute('stroke-width', String(strokeWidth));
       vline.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(vline);
+      drawnElements.push(vline);
+      // 演奏記号タブでのクリック判定（テキスト・破線・終端の縦線をまとめて1つの調整対象にする）
+      appendSymbolHitRegion(drawnElements, measureAbsoluteIndex, eventIndex, event, 'ottava');
     });
 
     // ── arcs[] ベースの弧を一括描画（全小節レンダリング後に実行） ─────
     // arc.fromKey / arc.toKey を使って個別符頭の Y 座標で弧を描く
     pendingArcs.forEach(({ arc, arcIndex, startNote, startStave, startMeasureIdx, startEventIdx }) => {
       const dest = notePositionMap.get(`${arc.toMeasureIndex}-${arc.toEventIndex}`);
-      if (!dest) return; // この StaffCanvas の描画範囲外なら無視
 
       const arcKey = `${startMeasureIdx}-${startEventIdx}-${arcIndex}`;
       const cpDyOffset = arc.cpDyOffset ?? 0;
@@ -3425,6 +3637,23 @@ export default function StaffCanvas({
         selectedArc.fromMeasure === startMeasureIdx &&
         selectedArc.fromEvent   === startEventIdx   &&
         selectedArc.arcIndex    === arcIndex;
+
+      if (!dest) {
+        // 可変range境界: 終点が次Canvasでも開始側の右端segmentを残す。
+        try {
+          type R = Record<string, (...a: unknown[]) => unknown>;
+          const bb = (startNote as unknown as R)['getBoundingBox']?.() as { getX: () => number; getW: () => number } | undefined;
+          const x1 = bb ? bb.getX() + bb.getW() : (((startNote as unknown as R)['getAbsoluteX']?.() as number | undefined) ?? 0) + 4;
+          const fromLine = keyToLine(arc.fromKey);
+          let upward = fromLine < 2;
+          if (arc.flipDirection) upward = !upward;
+          const y = startStave.getYForLine(fromLine) + (upward ? -3 : 3) + startDy;
+          const edgeX = startStave.getX() + startStave.getWidth();
+          const stemDir = ((startNote as unknown as R)['getStemDirection']?.() as number | undefined) ?? 0;
+          drawArcPath(x1 + startDx, y, edgeX + (arc.breakEndDx ?? 0), y + (arc.breakEndDy ?? 0), upward, arc.kind, stemDir, y, cpDyOffset, arcKey + '-1', isSelected, undefined, undefined, startDx, startDy, arc.breakEndDx ?? 0, arc.breakEndDy ?? 0);
+        } catch { /* 保険 */ }
+        return;
+      }
 
       // スラーの場合: 開始〜終了の全音符ライン番号とY座標を収集する
       // allLines → 方向（upward）の決定に使う
@@ -3471,8 +3700,8 @@ export default function StaffCanvas({
           const x2 = bb2 ? bb2.getX() : absX2 - 4;
           const fromLine = keyToLine(arc.fromKey);
           const toLine   = keyToLine(arc.toKey);
-          const avgLines = (allLines && allLines.length > 0) ? allLines : [fromLine, toLine];
-          let upward = avgLines.reduce((s, l) => s + l, 0) / avgLines.length < 2;
+          // 段またぎの両segmentは開始側fromKeyで同じ方向を使う。
+          let upward = fromLine < 2;
           if (arc.flipDirection) upward = !upward;
           const y1 = startStave.getYForLine(fromLine) + (upward ? -3 : 3);
           const y2 = dest.stave.getYForLine(toLine)   + (upward ? -3 : 3);
@@ -3506,6 +3735,29 @@ export default function StaffCanvas({
         } catch { /* 保険 */ }
       }
     });
+
+    // 終点側rangeでは開始音符がこのCanvasに無い。絶対小節番号で過去arcを見つけ、
+    // 段左端から終点へ第2segmentを描く（固定MPS境界にも同じ処理を使える）。
+    Array.from({ length: systems * measuresPerSystem }, (_, offset) => startMeasureIndex + offset)
+      .flatMap((targetMeasure) => incomingArcIndex?.get(targetMeasure) ?? [])
+      .forEach(({ fromMeasure, fromEvent, arcIndex, arc }) => {
+        const dest = notePositionMap.get(`${arc.toMeasureIndex}-${arc.toEventIndex}`);
+        if (!dest || notePositionMap.has(`${fromMeasure}-${fromEvent}`)) return;
+        try {
+          const fromLine = keyToLine(arc.fromKey);
+          let upward = fromLine < 2;
+          if (arc.flipDirection) upward = !upward;
+          type R = Record<string, (...a: unknown[]) => unknown>;
+          const bb = (dest.note as unknown as R)['getBoundingBox']?.() as { getX: () => number } | undefined;
+          const x2 = bb ? bb.getX() : (((dest.note as unknown as R)['getAbsoluteX']?.() as number | undefined) ?? 0) - 4;
+          const toLine = keyToLine(arc.toKey);
+          const y = dest.stave.getYForLine(toLine) + (upward ? -3 : 3) + (arc.endDy ?? 0);
+          const edgeX = dest.stave.getX();
+          const key = `${fromMeasure}-${fromEvent}-${arcIndex}`;
+          const selectedHere = selectedArc !== null && selectedArc.fromMeasure === fromMeasure && selectedArc.fromEvent === fromEvent && selectedArc.arcIndex === arcIndex;
+          drawArcPath(edgeX + (arc.breakStartDx ?? 0), y + (arc.breakStartDy ?? 0), x2 + (arc.endDx ?? 0), y, upward, arc.kind, 0, y, arc.cpDyOffset2 ?? 0, key + '-2', selectedHere, undefined, undefined, arc.breakStartDx ?? 0, arc.breakStartDy ?? 0, arc.endDx ?? 0, arc.endDy ?? 0);
+        } catch { /* 保険 */ }
+      });
 
     // ── 松葉（ヘアピン）を一括描画（全小節レンダリング後に実行） ─────
     // 五線の下（強弱記号と同じ高さ帯）に、開始音符から終了音符まで開く/閉じる2本線を描く
@@ -3558,7 +3810,9 @@ export default function StaffCanvas({
         });
       }
     });
-  }, [systems, gap, measuresPerSystem, score, tool, scale, selected, selectedArc, selectedHairpin, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures]);
+  // pageMarginSideMm: 値自体は使わないが、ResizeObserver の発火漏れ対策として
+  // 呼び出し元（ScorePage）の余白変更を確実にこの effect へ伝える依存トリガー。
+  }, [systems, gap, measuresPerSystem, rangeLocked, score, tool, scale, selected, selectedArc, selectedHairpin, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures, containerWidthTick, pageMarginSideMm, symbolsClickable]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setScore で
@@ -3663,8 +3917,14 @@ export default function StaffCanvas({
    */
   function handleSymbolResizeConfirm(rawText: string) {
     if (!symbolResizeEditState) return;
-    const { measureAbsoluteIndex, eventIndex, target } = symbolResizeEditState;
+    const { measureAbsoluteIndex, eventIndex, target, currentValue } = symbolResizeEditState;
     const scale = parseSymbolScaleInput(rawText);
+    // 値を変えずに blur だけで閉じたケース（no-op）では setScore を呼ばない。
+    // 呼んでしまうと offset 0 / scale 100% が明示的に書き込まれ、Undo 履歴が無駄に1件増えてしまう。
+    if (String(Math.round(scale * 100)) === currentValue) {
+      setSymbolResizeEditState(null);
+      return;
+    }
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;
@@ -3687,9 +3947,14 @@ export default function StaffCanvas({
    */
   function handleSymbolOffsetConfirm(rawX: string, rawY: string) {
     if (!symbolOffsetEditState) return;
-    const { measureAbsoluteIndex, eventIndex, target } = symbolOffsetEditState;
+    const { measureAbsoluteIndex, eventIndex, target, currentX, currentY } = symbolOffsetEditState;
     const offsetX = parseSymbolOffsetInput(rawX);
     const offsetY = parseSymbolOffsetInput(rawY);
+    // 値を変えずに blur だけで閉じたケース（no-op）では setScore を呼ばない（Undo 履歴を汚さないため）。
+    if (String(offsetX) === currentX.trim() && String(offsetY) === currentY.trim()) {
+      setSymbolOffsetEditState(null);
+      return;
+    }
     setScore(prev => {
       const next = prev.map(cloneMeasureData);
       if (measureAbsoluteIndex >= next.length) return prev;

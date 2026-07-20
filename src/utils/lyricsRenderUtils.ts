@@ -34,7 +34,7 @@ export interface LyricsRenderEntry {
  * 運指番号（staveTopY - 12 が基準）・カスタム記号（staveTopY - 10）よりも
  * 上に来るよう、字の高さぶんの余白（約14px）を空けて決めている。
  */
-export function drawLyricsEntry(svgRoot: SVGGElement, entry: LyricsRenderEntry): void {
+export function drawLyricsEntry(svgRoot: SVGGElement, entry: LyricsRenderEntry): SVGTextElement {
   const { anchorX, botY, staveTopY, text, adjust, placement = 'below' } = entry;
   const y =
     placement === 'above'
@@ -50,4 +50,7 @@ export function drawLyricsEntry(svgRoot: SVGGElement, entry: LyricsRenderEntry):
   el.setAttribute('font-size', String(11 * adjust.scale));
   el.setAttribute('pointer-events', 'none');
   svgRoot.appendChild(el);
+  // 呼び出し側が「記号を直接クリックして調整する」ためのヒット領域を重ねられるよう、
+  // 描画した text 要素を返す。
+  return el;
 }

@@ -43,10 +43,14 @@ export function getSymbolAdjust(event: NoteEvent, kind: AdjustableSymbolKind): R
  * この音符に実際に付いている（＝調整の対象になりうる）標準記号の種類を列挙する。
  * ⤢/✥ ツールで音符をクリックしたとき、「何を調整するか」の選択肢を作るのに使う。
  *
- * 注意: ornament（装飾記号）・articulations（アーティキュレーション）は
- * VexFlow が生成するグリフの構造上、サイズ・位置の両方を安全に反映する描画対応が
- * 今回の範囲では確実に作り込めなかったため、意図的にここでは列挙しない
- * （データ型 AdjustableSymbolKind 自体には含めているが、UI上の調整対象としては未対応）。
+ * 注意: ornament（装飾記号）は VexFlow のモディファイアとして描画しており、
+ * サイズ・位置の両方を安全に反映する描画対応が今回の範囲では確実に作り込めなかったため、
+ * 意図的にここでは列挙しない（データ型 AdjustableSymbolKind 自体には含めているが、
+ * UI上の調整対象としては未対応）。
+ * articulations（スタッカート・アクセント・テヌート・マルカート・フェルマータ）は、
+ * StaffCanvas.tsx / PianoSystemCanvas.tsx の両方で VexFlow のモディファイアを使わず
+ * 手組みの SVG（円・パス・線）として描画するようになったため、他の標準記号と同じ
+ * offsetX/offsetY/scale の反映が可能になり、ここでも列挙する。
  * 詳細は .claude/specs/extended-notation-features/design.md を参照。
  */
 export function listPresentAdjustableSymbolKinds(event: NoteEvent): AdjustableSymbolKind[] {
@@ -54,10 +58,14 @@ export function listPresentAdjustableSymbolKinds(event: NoteEvent): AdjustableSy
   const kinds: AdjustableSymbolKind[] = [];
   if (event.fingering) kinds.push('fingering');
   if (event.dynamics && event.dynamics.length > 0) kinds.push('dynamics');
+  if (event.articulations && event.articulations.length > 0) kinds.push('articulations');
   if (event.lyrics) kinds.push('lyrics');
   if (event.chordSymbol) kinds.push('chordSymbol');
   if (event.tempoMarking) kinds.push('tempoMarking');
   if (event.expressionMarking) kinds.push('expressionMarking');
+  // ottava は開始イベント（'8va' / '8vb'）のみを調整対象にする。
+  // 終了イベント（'8vaEnd' / '8vbEnd'）は開始側の調整値がブラケット全体に効くため、対象にしない。
+  if (event.ottava === '8va' || event.ottava === '8vb') kinds.push('ottava');
   return kinds;
 }
 
@@ -105,4 +113,5 @@ export const ADJUSTABLE_SYMBOL_KIND_LABELS: Record<AdjustableSymbolKind, string>
   chordSymbol: 'コード記号',
   tempoMarking: 'テンポ表記',
   expressionMarking: '発想標語',
+  ottava: 'オクターヴ記号(8va/8vb)',
 };

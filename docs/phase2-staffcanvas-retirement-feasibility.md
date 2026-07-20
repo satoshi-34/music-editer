@@ -1,5 +1,17 @@
 ## 進捗（実装）
 
+> **⚠️ 手順2は印刷ブランチのマージで一時巻き戻し（2026-07-20）**:
+> 印刷開発ブランチ（自動段割り: `p.systemRanges` を呼び出し側で計算し、段ごとに
+> 可変小節数で `StaffCanvas` を1段ずつ描く方式）を main にマージした際、
+> `ScorePage.tsx` の単旋律分岐は印刷ブランチ側の新設計を採用した。
+> `SingleStaff` は `rangeLocked` / `incomingArcIndex` / `finalMeasureIndex` /
+> `pageMarginSideMm` / `symbolsClickable` 等の新 props に未対応のため、
+> 単旋律分岐は一時的に `StaffCanvas`（systemRanges 方式）に戻っている。
+> 歌詞の「五線の上」表示は `StaffCanvas` 側にも実装したため、ユーザー向けの
+> 見た目は維持されている。手順2の再適用は「`SingleStaff`（および
+> `PianoSystemCanvas`）を systemRanges 方式の新 props に対応させる」ことが
+> 前提条件になる（下記手順3の前に実施）。
+
 - **手順1（`SingleStaff` ラッパー新設）完了**: `src/components/SingleStaff.tsx` を
   `PartExtractionStaff`/`PianoStaff` と同型のパターンで実装した
   （`Array.from({length: systems})` で `PianoSystemCanvas` をループ、

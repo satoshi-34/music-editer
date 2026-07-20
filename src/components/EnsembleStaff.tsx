@@ -7,9 +7,11 @@ import {
   TRANSPOSITION_WRITTEN_OFFSET_FIFTHS,
   TRANSPOSITION_WRITTEN_OFFSET_SEMITONES,
   shiftKeySignatureByFifths,
-  transposeKeyBySemitones,
   type KeySignature,
 } from '../utils/noteKeyUtils';
+import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
+import type { IncomingArcEntry } from '../utils/incomingArcUtils';
+import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
 
 type Props = {
   tool: Tool;
@@ -35,46 +37,26 @@ type Props = {
    */
   notationMode?: ScoreNotationMode;
   customSymbolDefs?: CustomSymbolDef[];
+  // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
+  // 省略時は全段を印刷する。画面表示には影響しない。
+  printVisibleSystems?: number;
+  plannedMeasureWidths?: number[];
+  systemRanges?: SystemMeasureRange[];
+  incomingArcIndex?: Map<number, IncomingArcEntry[]>;
+  // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
+  measureWidthEvenness?: number;
+  /**
+   * ページの左右余白(mm)。値そのものは使わず、余白変更時に子の PianoSystemCanvas の
+   * 描画 useEffect を確実に再実行させるための依存トリガーとして中継するだけ。
+   * 詳細は PianoSystemCanvas.tsx 側のコメントを参照（ResizeObserver だけでは
+   * 特定のタイミングで再描画が漏れることがあったための対策）。
+   */
+  pageMarginSideMm?: number;
+  // 終止線を描く「内容のある最後の小節」の絶対インデックス。省略時は終止線を描かない。
+  finalMeasureIndex?: number;
+  // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
+  symbolsClickable?: boolean;
 };
-
-/**
- * 1 パート分の小節データを記譜音表示用にシフトする。
- *
- * 実音データはそのまま保存しておきたいので、ここでは
- * 「表示用の MeasureData」を新しく作って返す。
- * 元データを書き換えないことで、表示モードを戻したときに
- * 元の音高がそのまま復元される。
- */
-function transposeMeasuresForDisplay(
-  measures: MeasureData[],
-  semitones: number
-): MeasureData[] {
-  if (semitones === 0) {
-    return measures;
-  }
-  return measures.map(measure => ({
-    ...measure,
-    // 古い保存データや import データでは events が配列でないことがある。
-    // ここで落とすと記譜音表示モードのとき編成譜全体が描けなくなるため、
-    // 壊れた小節はシフトせずそのまま下流（PianoSystemCanvas の安全化）へ渡す。
-    events: Array.isArray(measure.events)
-      ? measure.events.map(event => {
-      // keys が配列でない壊れた音符は、ここでシフトせず素通りさせる。
-      // 最終的な休符フォールバックは描画直前の sanitizeRenderEvent が担う。
-      if (event.isRest || !Array.isArray(event.keys)) {
-        return event;
-      }
-      const shiftedKeys = event.keys.map(key => transposeKeyBySemitones(key, semitones));
-      const shiftedArcs = event.arcs?.map(arc => ({
-        ...arc,
-        fromKey: transposeKeyBySemitones(arc.fromKey, semitones),
-        toKey: transposeKeyBySemitones(arc.toKey, semitones),
-      }));
-      return { ...event, keys: shiftedKeys, arcs: shiftedArcs };
-        })
-      : measure.events,
-  }));
-}
 
 export default function EnsembleStaff({
   tool,
@@ -95,14 +77,20 @@ export default function EnsembleStaff({
   onKeySignatureChange,
   notationMode = 'concert',
   customSymbolDefs,
+  printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
+  measureWidthEvenness,
+  pageMarginSideMm,
+  finalMeasureIndex,
+  symbolsClickable,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
   // 保存データの正本は常に実音という整合性を保つ。
   const isWrittenMode = notationMode === 'written';
   return (
-    <div>
-      {Array.from({ length: systems }, (_, systemIndex) => {
+    // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
+    <div className="system-stack">
+      {Array.from({ length: systemRanges?.length ?? systems }, (_, systemIndex) => {
         // ScorePage が持つ「編成のパート定義」を、描画コンポーネントが理解できる
         // `PartConfig` へ変換する。ここで変換をまとめると、将来パート名表示や
         // 音部記号の扱いを変えるときも EnsembleStaff だけを見ればよくなる。
@@ -144,14 +132,15 @@ export default function EnsembleStaff({
         });
 
         return (
+          // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
+          <div key={systemIndex} className={printVisibleSystems != null && systemIndex >= printVisibleSystems ? 'print-hidden-system' : undefined}>
           <PianoSystemCanvas
-            key={systemIndex}
-            measuresPerSystem={measuresPerSystem}
+            measuresPerSystem={systemRanges?.[systemIndex]?.count ?? measuresPerSystem}
             tool={tool}
             scale={scale}
             partsConfig={partsConfig}
             showInstrumentLabels={systemIndex === 0}
-            startMeasureIndex={startMeasureIndex + systemIndex * measuresPerSystem}
+            startMeasureIndex={systemRanges?.[systemIndex]?.start ?? startMeasureIndex + systemIndex * measuresPerSystem}
             disabled={disabled}
             yOffset={yOffset}
             currentInstrument={currentInstrument}
@@ -172,7 +161,14 @@ export default function EnsembleStaff({
               onKeySignatureChange(concertKey);
             }}
             customSymbolDefs={customSymbolDefs}
+            plannedMeasureWidths={systemRanges?.[systemIndex]?.minimumWidths ?? plannedMeasureWidths?.slice(systemIndex * measuresPerSystem, (systemIndex + 1) * measuresPerSystem)}
+            incomingArcIndex={incomingArcIndex}
+            measureWidthEvenness={measureWidthEvenness}
+            pageMarginSideMm={pageMarginSideMm}
+            finalMeasureIndex={finalMeasureIndex}
+            symbolsClickable={symbolsClickable}
           />
+          </div>
         );
       })}
     </div>

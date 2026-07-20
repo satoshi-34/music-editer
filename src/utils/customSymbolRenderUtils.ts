@@ -23,6 +23,13 @@ export interface CustomSymbolRenderEntry {
   anchorX: number;
   anchorY: number;
   symbols: { symbolId: string; scale: number; offsetX: number; offsetY: number }[];
+  // クリック判定（記号クリックで調整オーバーレイを開く）に使う付随情報。
+  // buildCustomSymbolEntry の呼び出し側（音符描画ループ）が持っている値をそのまま積む。
+  measureAbsoluteIndex: number;
+  eventIndex: number;
+  event: NoteEvent;
+  // PianoSystemCanvas（複数パート譜）だけが使うパート番号。StaffCanvas では常に undefined。
+  partIndex?: number;
 }
 
 /**
@@ -44,6 +51,9 @@ export function buildCustomSymbolEntry(
   event: NoteEvent & { __isPlaceholder?: boolean },
   anchorX: number,
   staveTopY: number,
+  measureAbsoluteIndex = 0,
+  eventIndex = 0,
+  partIndex?: number,
 ): CustomSymbolRenderEntry | null {
   if (event.isRest || event.__isPlaceholder || !event.customSymbols?.length) return null;
   return {
@@ -55,22 +65,43 @@ export function buildCustomSymbolEntry(
       offsetX: s.offsetX ?? 0,
       offsetY: s.offsetY ?? 0,
     })),
+    measureAbsoluteIndex,
+    eventIndex,
+    event,
+    partIndex,
   };
 }
 
 /**
  * 収集済みの customSymbolEntries をまとめて SVG へ描画する。
  * StaffCanvas / PianoSystemCanvas の両方の描画ループ末尾から呼び出す共通処理。
+ *
+ * onSymbolDrawn を渡すと、記号1個ぶんの描画が終わるたびに
+ * 「その記号だけを包む <g> 要素」を通知する。呼び出し側はこれを使って
+ * 演奏記号タブでのクリック判定（ヒット領域）を重ねられる。
+ * renderCustomSymbol 自体は複数の SVG プリミティブを直接 svgRoot へ追加するだけで
+ * 参照を返さないため、ここで一時的な <g> でラップしてから svgRoot へ付け替える。
  */
 export function drawCustomSymbolEntries(
   entries: CustomSymbolRenderEntry[],
   customSymbolDefs: CustomSymbolDef[],
   svgRoot: Element,
+  onSymbolDrawn?: (entry: CustomSymbolRenderEntry, symbolId: string, el: SVGGElement) => void,
 ): void {
-  entries.forEach(({ anchorX, anchorY, symbols }) => {
+  entries.forEach((entry) => {
+    const { anchorX, anchorY, symbols } = entry;
     symbols.forEach(({ symbolId, scale, offsetX, offsetY }) => {
       const def = customSymbolDefs.find(d => d.id === symbolId);
-      if (def) renderCustomSymbol(def, anchorX + offsetX, anchorY + offsetY, svgRoot, scale);
+      if (!def) return;
+      if (onSymbolDrawn) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const g = document.createElementNS(ns, 'g') as SVGGElement;
+        renderCustomSymbol(def, anchorX + offsetX, anchorY + offsetY, g, scale);
+        svgRoot.appendChild(g);
+        onSymbolDrawn(entry, symbolId, g);
+      } else {
+        renderCustomSymbol(def, anchorX + offsetX, anchorY + offsetY, svgRoot, scale);
+      }
     });
   });
 }
