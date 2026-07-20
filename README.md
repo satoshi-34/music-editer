@@ -165,6 +165,15 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - **自動改段への反映**: 音符が大きくなれば1段に入る小節数は減り、小さくなれば増える。`effectiveRenderScale` が段組み計画の `useMemo` 依存に含まれているため、スライダーを動かすたびに段・ページ割りが自動で再計算される（詳細は `.claude/specs/view-zoom/design.md` の「音符・記号の大きさ調整（notation-size）」章を参照）
 - **段数/ページ上限との連動**: 音符が大きくなると1段の高さも比例して増えるため、`ScorePage.tsx` の `maxSystemsPerPage` は固定値ではなく `notationSizeMultiplier` に連動した動的計算（`Math.floor(SCORE_AREA_BUDGET_PX / (楽譜種別ごとの基準段高 × notationSizeMultiplier))`）になっている。ユーザーが設定した「段数/ページ」が新しい上限を超えたら自動でクランプされ（既存の `Math.min(maxSystemsPerPage, …)` がそのまま効く）、入力欄の `max` 属性・ツールチップの上限表示も追従する。基準段高（単旋律 114px / ピアノ 180px / 四重奏 340px / 編成譜 400px・800px）は音符の大きさ100%時の実測値で、`SCORE_AREA_BUDGET_PX`（938px）はタイトルページ（ヘッダー分が狭い）基準の安全側の予算を全ページ共通で使う
 
+### ページ余白・段の間隔の調整
+- **どこで変えるか**: **その他タブの「レイアウト」欄**（余白系スライダーを1行にまとめた場所）に3つのスライダーがある。設定はブラウザ（localStorage キー `score-page-margin-side` / `score-page-margin-vertical` / `score-system-row-gap`）に保存され、リロード後も維持される。**「レイアウトをリセット」ボタン**で3つとも既定値へ一括で戻せる
+  - **余白(左右)**（8〜25mm、既定14mm）: ページの左右余白。本文幅（小節を並べる幅 = 210mm − 余白×2）が自動で連動し、1段に入る小節数の自動改段もこの新しい本文幅を基準に再計算される
+  - **余白(上下)**（8〜25mm、既定14mm）: ページの上 padding の値。下 padding は常に「上余白 − 2mm」を保つ（従来の固定値 上14mm/下12mm という2mm差をそのまま踏襲し、既定値のときに元のレイアウトへ完全に戻すため）。譜面領域（`.score-area`）が縦に狭くなる／広くなる分だけ、1ページに入る段数の上限（`maxSystemsPerPage`）も連動して増減する
+  - **段の間隔**（0〜30px、既定0px）: 段と段の間に上乗せする間隔。既定0はこれまでどおり行グリッドで完全等分。広げるほど1段あたりの高さ見積もりが増え、段数上限が自動で下がる（縦にあふれない安全側の近似計算）
+- **画面・印刷の両方に反映**: いずれも `.print-page` の `padding` と `.score-area .system-stack` の `gap` に CSS カスタムプロパティ（`--page-margin-side` / `--page-margin-top` / `--page-margin-bottom` / `--system-row-gap`）として渡しており、`@media print` 側で個別に上書きしていないため印刷にもそのまま反映される
+- **正本の一本化**: 本文幅の予算は `measureLayoutUtils.ts` の `printScoreAreaWidthPx(sideMarginMm)` / `worstCaseSystemContentBudget(sideMarginMm)` に集約し、CSS 側（`App.css`）は `padding: var(--page-margin-top, 14mm) var(--page-margin-side, 14mm) var(--page-margin-bottom, 12mm);` のように渡された値をそのまま使うだけにして、CSSとJSでの二重定義を避けている（詳細は `.claude/specs/page-layout-controls/design.md` を参照）
+- **余白変更時の再描画バグ修正**: `PianoSystemCanvas.tsx` / `StaffCanvas.tsx` の VexFlow 描画 `useEffect` は、従来「ページは A4 固定なのでマウント後に幅が変わらない」という前提で、親要素の `clientWidth` を副作用実行時に一度読むだけだった。余白スライダーの追加でこの前提が崩れ、余白を変えても古い幅のまま再描画されず小節が右余白へはみ出すバグが判明したため、両コンポーネントに `ResizeObserver` を追加し、親要素の幅変化を検知して再描画するよう修正した
+
 ### ページレイアウトの実装ポイント
 - `ScorePage` が表示中の `.print-page` の高さを測り、最大値を `ScaledPageWrapper` へ渡す
 - `ScaledPageWrapper` は共通高さを紙面と外側ラッパーへ反映するため、タイトル欄の有無でページサイズが分かれない

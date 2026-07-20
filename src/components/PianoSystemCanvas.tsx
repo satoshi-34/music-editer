@@ -800,6 +800,21 @@ export default function PianoSystemCanvas({
   const formattedTimeSignature = formatTimeSignature(normalizedTimeSignature);
   const ref = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // 描画幅は下の描画 useEffect の実行時に ref.current.parentElement.clientWidth を
+  // 一度だけ読む。ページ余白（その他タブの「余白(左右)」スライダー）などで
+  // 親要素の実幅が変わっても、その変化だけでは描画 useEffect の依存配列が
+  // 変化しないため再描画されない。ResizeObserver で親要素の幅変化を検知し、
+  // カウンタを更新して描画 useEffect の依存配列に含めることで追従させる。
+  const [containerWidthTick, setContainerWidthTick] = useState(0);
+  useEffect(() => {
+    const parent = ref.current?.parentElement;
+    // テスト環境（jsdom）には ResizeObserver が無いことがあるため、無ければ何もしない
+    // （その場合でも初回描画時の clientWidth は正しく使われるため、テストの前提は崩れない）。
+    if (!parent || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setContainerWidthTick((tick) => tick + 1));
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, []);
 
   // partsConfig 優先、なければ piano backward compat の2段
   const parts: PartConfig[] = partsConfig ?? [
@@ -3676,7 +3691,7 @@ export default function PianoSystemCanvas({
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   // measureWidthEvenness を deps に含め、スライダー操作で即座に再描画されるようにする
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness]);
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick]);
 
   function handleTimeSigConfirm(value: string) {
     if (!timeSigEditState) return;

@@ -74,6 +74,7 @@ import {
   SCORE_LAYOUT_RENDER_SCALE,
   MIN_MEASURE_CONTENT_WIDTH,
   worstCaseSystemContentBudget,
+  DEFAULT_PAGE_SIDE_MARGIN_MM,
   planSystemMeasureRanges,
   type SystemMeasureRange,
   type MeasureLayoutPartContext,
@@ -121,6 +122,30 @@ const NOTATION_SIZE_KEY = 'score-notation-size';
 // 同じ範囲を使うため、値のズレが起きないよう定数化しておく。
 const NOTATION_SIZE_MULTIPLIER_MIN = 0.8;
 const NOTATION_SIZE_MULTIPLIER_MAX = 2.0;
+// 「ページ余白（左右）」のユーザー設定（その他タブのスライダー、mm単位）。
+// 正本は measureLayoutUtils.ts の printScoreAreaWidthPx()/worstCaseSystemContentBudget() に集約し、
+// CSS 側（.print-page の padding）へはここで作る値を CSS カスタムプロパティとして渡す
+// （CSSとJSでの二重定義を避ける）。既定値 14mm は従来の固定 padding と同じにし、
+// スライダーを一度も触らなければ見た目が変わらないようにする。
+const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
+const PAGE_MARGIN_SIDE_MIN_MM = 8;
+const PAGE_MARGIN_SIDE_MAX_MM = 25;
+// 「ページ余白（上下）」のユーザー設定（その他タブのスライダー、mm単位）。
+// 上 padding の値をスライダーで動かし、下 padding は常に「上 − 2mm」を保つ
+// （従来の固定値が 上14mm/下12mm だったため、この2mm差を保つことで既定値のときに
+// 従来と完全に同じレイアウトへ戻せる）。
+const PAGE_MARGIN_VERTICAL_KEY = 'score-page-margin-vertical';
+const PAGE_MARGIN_VERTICAL_MIN_MM = 8;
+const PAGE_MARGIN_VERTICAL_MAX_MM = 25;
+const PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM = 2;
+// 「段の間隔」のユーザー設定（その他タブのスライダー、px単位）。
+// 行グリッド（.score-area .system-stack の gap）へそのまま渡す上乗せ間隔。
+// 既定値 0 は従来どおり間隔なし（段は flex:1 1 0% で完全に等分されるだけ）。
+const SYSTEM_ROW_GAP_KEY = 'score-system-row-gap';
+const SYSTEM_ROW_GAP_MIN_PX = 0;
+const SYSTEM_ROW_GAP_MAX_PX = 30;
+// mm → px 換算（1mm ≒ 3.7795px、96dpi基準）。CSS の mm 単位と同じ換算率を使う。
+const MM_TO_PX = 96 / 25.4;
 // 段数/ページの上限（maxSystemsPerPage）を動的計算する際に使う、
 // 譜面領域（.score-area）の高さ予算（px）。
 // タイトルページはヘッダー・作曲者欄の分だけ他ページより本文が狭くなるため、
@@ -2030,6 +2055,36 @@ export default function ScorePage() {
   // レイアウト崩れを防ぐため）。
   const effectiveRenderScale = SCORE_LAYOUT_RENDER_SCALE * notationSizeMultiplier;
 
+  // ユーザー設定（その他タブの「ページ余白（左右）」スライダー、8〜25mm）。
+  // 壊れた保存値でも安全なよう必ずクランプする。既定値は measureLayoutUtils の
+  // DEFAULT_PAGE_SIDE_MARGIN_MM（14mm）と一致させ、未設定時は従来と同じ幅になるようにする。
+  const [pageMarginSideMm, setPageMarginSideMm] = useState<number>(() => {
+    const raw = localStorage.getItem(PAGE_MARGIN_SIDE_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n) ? Math.max(PAGE_MARGIN_SIDE_MIN_MM, Math.min(PAGE_MARGIN_SIDE_MAX_MM, n)) : DEFAULT_PAGE_SIDE_MARGIN_MM;
+  });
+  // ユーザー設定（その他タブの「ページ余白（上下）」スライダー、8〜25mm）。上 padding の値。
+  const [pageMarginVerticalMm, setPageMarginVerticalMm] = useState<number>(() => {
+    const raw = localStorage.getItem(PAGE_MARGIN_VERTICAL_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n) ? Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, n)) : DEFAULT_PAGE_SIDE_MARGIN_MM;
+  });
+  // ユーザー設定（その他タブの「段の間隔」スライダー、0〜30px）。
+  const [systemRowGapPx, setSystemRowGapPx] = useState<number>(() => {
+    const raw = localStorage.getItem(SYSTEM_ROW_GAP_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n) ? Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, n)) : 0;
+  });
+  // 「レイアウトをリセット」: ページ余白・段の間隔の3設定をまとめて既定値へ戻す。
+  const handleResetPageLayout = useCallback(() => {
+    setPageMarginSideMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
+    setPageMarginVerticalMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
+    setSystemRowGapPx(0);
+    localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(DEFAULT_PAGE_SIDE_MARGIN_MM));
+    localStorage.setItem(PAGE_MARGIN_VERTICAL_KEY, String(DEFAULT_PAGE_SIDE_MARGIN_MM));
+    localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(0));
+  }, []);
+
   const totalSystems = 12;
   const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
   // 1ページ（A4 実寸 297mm ≒ 1123px）に収まる段数。
@@ -2047,9 +2102,20 @@ export default function ScorePage() {
         : scoreType === 'piano'
           ? BASE_SYSTEM_HEIGHT_PX.piano
           : BASE_SYSTEM_HEIGHT_PX.single;
+    // SCORE_AREA_BUDGET_PX は「上14mm/下12mm」（=上下合計26mm）の実測値。
+    // 「ページ余白（上下）」スライダーで上下合計が変わった分だけ、px換算で budget を増減する
+    // （上げれば譜面領域が狭くなり、段数上限が下がる）。
+    const verticalMarginTotalMm = pageMarginVerticalMm + Math.max(0, pageMarginVerticalMm - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM);
+    const defaultVerticalMarginTotalMm = DEFAULT_PAGE_SIDE_MARGIN_MM + (DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM);
+    const verticalMarginDeltaPx = (verticalMarginTotalMm - defaultVerticalMarginTotalMm) * MM_TO_PX;
+    const effectiveBudgetPx = Math.max(1, SCORE_AREA_BUDGET_PX - verticalMarginDeltaPx);
+    // 「段の間隔」スライダー（systemRowGapPx）ぶんの隙間も、段の高さに上乗せしたのと
+    // 同じ扱いで安全側に見積もる（N段なら本来 (N-1)×gap だが、ここでは 1段あたり
+    // baseHeight*倍率 + gap を占有すると仮定して floor する方が計算が単純で、
+    // 常に「あふれない」方向に丸まるため安全側になる）。
     // 最低でも1段は入れられることにする（0段になると編集自体ができなくなるため）。
-    return Math.max(1, Math.floor(SCORE_AREA_BUDGET_PX / (baseHeight * notationSizeMultiplier)));
-  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier]);
+    return Math.max(1, Math.floor(effectiveBudgetPx / (baseHeight * notationSizeMultiplier + systemRowGapPx)));
+  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier, pageMarginVerticalMm, systemRowGapPx]);
   // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段が既定。市販譜のような
   // 行間を確保するため、上限いっぱいの5段ではなく1段減らした4段を初期値にしている。
   // 音符を大きくして上限が4段を下回った場合は、上限自体を推奨値として使う。
@@ -2148,13 +2214,13 @@ export default function ScorePage() {
     scoreTimeSignature,
     normalizeKeySignature(keySignature),
     measuresPerSystem,
-    worstCaseSystemContentBudget(),
+    worstCaseSystemContentBudget(pageMarginSideMm),
     effectiveRenderScale,
     // Ensemble の記譜音表示だけ、移調後に臨時記号が増える最悪ケースの安全マージンを見込む。
     // ピアノ・四重奏はここで盛ると実際に表示されない臨時記号ぶんまで幅を確保してしまい、
     // 1段に入る小節数が不当に減る（読込直後にほぼ全小節が1小節/段へ膨張する不具合の一因）。
     { includeTranspositionAccidentalWorstCase: scoreType === 'ensemble' },
-  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType, effectiveRenderScale]);
+  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType, effectiveRenderScale, pageMarginSideMm]);
   const plannerMinimumWidths = useMemo(() => {
     // 末尾の空小節は「入力を続けられるように」数小節ぶんの余白段だけ残す。
     // 以前は totalSystems(12) × measuresPerSystem を固定の編集枠としていたが、
@@ -2178,7 +2244,7 @@ export default function ScorePage() {
     // 逆変換して揃える。
     plannerMinimumWidths,
     measuresPerSystem,
-    worstCaseSystemContentBudget() / effectiveRenderScale,
+    worstCaseSystemContentBudget(pageMarginSideMm) / effectiveRenderScale,
     // 内容小節（終止線が付く最後の小節を含む段）と、それ以降の編集用の空きバッファ小節を
     // 同じ段に混ぜない。こうしないと最終小節の終止線が段の右端まで届かず余白が残ってしまう
     // （空の楽譜 contentMeasureCount===0 のときは強制しない＝undefined で従来どおり）。
@@ -2186,7 +2252,7 @@ export default function ScorePage() {
     // 段ごとの小節数のユーザー上書き。上書きのある段はその小節数を使い、無い段は
     // 従来どおりの自動計画のまま続く（上書き段より後ろの小節位置から再計算される）。
     systemMeasureOverrides,
-  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides]);
+  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm]);
   const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
 
   // 段ごとの小節数の手動上書きを1段ぶんだけ増減する。
@@ -3010,6 +3076,84 @@ export default function ScorePage() {
                 {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
                 <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
               </label>
+              {/* ページレイアウト系スライダー（余白・段間隔）は1行にまとめて、その他タブが
+                  横に長くなりすぎないようにしている。挙動は他のスライダーと同じ
+                  （localStorage 保存・画面と印刷の両方に反映・既定値は従来と同一）。 */}
+              <span className="toolbar-group-label">レイアウト</span>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`ページの左右余白です。本文幅（小節を並べる幅）もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
+              >
+                余白(左右)
+                <input
+                  type="range"
+                  min={PAGE_MARGIN_SIDE_MIN_MM}
+                  max={PAGE_MARGIN_SIDE_MAX_MM}
+                  step={1}
+                  value={pageMarginSideMm}
+                  onChange={e => {
+                    const v = Math.max(PAGE_MARGIN_SIDE_MIN_MM, Math.min(PAGE_MARGIN_SIDE_MAX_MM, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setPageMarginSideMm(v);
+                      localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginSideMm}mm</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`ページの上下余白です。1ページに入る段数の上限もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
+              >
+                余白(上下)
+                <input
+                  type="range"
+                  min={PAGE_MARGIN_VERTICAL_MIN_MM}
+                  max={PAGE_MARGIN_VERTICAL_MAX_MM}
+                  step={1}
+                  value={pageMarginVerticalMm}
+                  onChange={e => {
+                    const v = Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setPageMarginVerticalMm(v);
+                      localStorage.setItem(PAGE_MARGIN_VERTICAL_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginVerticalMm}mm</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="段と段の間に空ける追加の間隔です。広げると1ページに入る段数の上限が自動で下がります。既定は0px（間隔なし）です"
+              >
+                段の間隔
+                <input
+                  type="range"
+                  min={SYSTEM_ROW_GAP_MIN_PX}
+                  max={SYSTEM_ROW_GAP_MAX_PX}
+                  step={1}
+                  value={systemRowGapPx}
+                  onChange={e => {
+                    const v = Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setSystemRowGapPx(v);
+                      localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{systemRowGapPx}px</span>
+              </label>
+              <button
+                type="button"
+                onClick={handleResetPageLayout}
+                style={{ fontSize: 13, padding: '3px 8px' }}
+                title="ページ余白（左右・上下）と段の間隔を既定値へ戻します"
+              >
+                レイアウトをリセット
+              </button>
               <button className="ghost" onClick={handleExportMusicXml}>MusicXML書出</button>
               <button className="ghost" onClick={handleExportMidi}>MIDI書出</button>
               <button className="ghost" onClick={() => musicXmlInputRef.current?.click()}>MusicXML読込</button>
@@ -3230,7 +3374,18 @@ export default function ScorePage() {
               {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
               {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
               {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}
-              <section className={`print-page${printContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}`}>
+              <section
+                className={`print-page${printContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}`}
+                style={{
+                  // ページ余白（左右・上下）。正本はこの3値のみで、App.css 側は
+                  // var(--page-margin-*) を padding へそのまま渡すだけにしてある
+                  // （CSSとJSでの二重定義を避けるため）。下 padding は「上 − 2mm」を保ち、
+                  // 既定値（14mm）のときに従来の 14mm/14mm/12mm と完全に一致させる。
+                  '--page-margin-side': `${pageMarginSideMm}mm`,
+                  '--page-margin-top': `${pageMarginVerticalMm}mm`,
+                  '--page-margin-bottom': `${Math.max(0, pageMarginVerticalMm - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM)}mm`,
+                } as React.CSSProperties}
+              >
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (
                     <>
@@ -3278,6 +3433,9 @@ export default function ScorePage() {
                   // .system-stack 自体は EnsembleStaff などの子コンポーネントが描画していても
                   // ここで指定した値をそのまま参照できる。
                   '--page-capacity': String(getPageSystemsCapacity(i)),
+                  // 段の間隔（その他タブの「段の間隔」スライダー）。CSS カスタムプロパティは
+                  // 子孫（.system-stack）へ継承されるため、ここで指定すれば十分。
+                  '--system-row-gap': `${systemRowGapPx}px`,
                 } as React.CSSProperties}>
                   {effectiveMeasurePlan.hasUnavoidableOverflow && (
                     <p role="alert" className="layout-overflow-alert">

@@ -863,6 +863,21 @@ export default function StaffCanvas({
   const ref = useRef<HTMLDivElement>(null);
   // テキスト入力オーバーレイの位置決め用（ref が指す SVG div を内包するラッパー）
   const containerRef = useRef<HTMLDivElement>(null);
+  // 描画幅は下の描画 useEffect の実行時に ref.current.parentElement.clientWidth を
+  // 一度だけ読む。ページ余白（その他タブの「余白(左右)」スライダー）などで
+  // 親要素の実幅が変わっても、その変化だけでは描画 useEffect の依存配列が
+  // 変化しないため再描画されない。ResizeObserver で親要素の幅変化を検知し、
+  // カウンタを更新して描画 useEffect の依存配列に含めることで追従させる。
+  const [containerWidthTick, setContainerWidthTick] = useState(0);
+  useEffect(() => {
+    const parent = ref.current?.parentElement;
+    // テスト環境（jsdom）には ResizeObserver が無いことがあるため、無ければ何もしない
+    // （その場合でも初回描画時の clientWidth は正しく使われるため、テストの前提は崩れない）。
+    if (!parent || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setContainerWidthTick((tick) => tick + 1));
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, []);
   const [score, setScore] = useState<MeasureData[]>(() => {
     // initialScoreData が空配列でも、それは「譜面を空にする」という親からの明示的な指示。
     // length だけで判定すると、新規作成後に内部 state の古い音符が残ってしまう。
@@ -3858,7 +3873,7 @@ export default function StaffCanvas({
         });
       }
     });
-  }, [systems, gap, measuresPerSystem, rangeLocked, score, tool, scale, selected, selectedArc, selectedHairpin, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures]);
+  }, [systems, gap, measuresPerSystem, rangeLocked, score, tool, scale, selected, selectedArc, selectedHairpin, normalizedKeySignature, formattedTimeSignature, timeSignatureNumerator, timeSignatureDenominator, beatsPerMeasure, selectedMeasures, containerWidthTick]);
 
   /**
    * 途中拍子変更を確定する。

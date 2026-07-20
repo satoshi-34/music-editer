@@ -52,13 +52,24 @@ export const SYSTEM_PAGE_SIDE_PADDING = 4;
 export const SYSTEM_TARGET_FILL = 0.99;
 export const SYSTEM_FIRST_CLEF_PADDING = 50;
 export const SYSTEM_MAX_LABEL_WIDTH = 74;
-// .print-page は box-sizing:border-box で左右14mmのpaddingを持つ。Canvas 親の実幅は
-// この本文182mmであり、A4全幅からの別計算をしない（CSSとの二重定義を避ける）。
-export const PRINT_SCORE_AREA_WIDTH_PX = 182 * (96 / 25.4);
+// .print-page は box-sizing:border-box で左右のpaddingを持つ（既定14mm）。Canvas 親の実幅は
+// 「A4幅210mm − 左右余白×2」の本文幅であり、A4全幅からの別計算をしない（CSSとの二重定義を避ける）。
+// 左右余白はその他タブの「ページ余白（左右）」スライダーでユーザーが変更できるため、
+// 固定値ではなく sideMarginMm 引数を受け取る関数を正本にする。
+// 既定の14mmを省略時の値として使うことで、スライダーを一度も触らないユーザーには
+// 従来どおり全く同じ値（PRINT_SCORE_AREA_WIDTH_PX 相当）が返る。
+export const DEFAULT_PAGE_SIDE_MARGIN_MM = 14;
+
+export function printScoreAreaWidthPx(sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM): number {
+  return (210 - sideMarginMm * 2) * (96 / 25.4);
+}
+
+// 後方互換用の定数（既定余白14mm時の値）。新規コードは printScoreAreaWidthPx() を使うこと。
+export const PRINT_SCORE_AREA_WIDTH_PX = printScoreAreaWidthPx();
 
 /** 楽器名がある最悪ケースでも、Canvas の alloc と一致する小節本文の物理幅。 */
-export function worstCaseSystemContentBudget(): number {
-  const innerWidth = PRINT_SCORE_AREA_WIDTH_PX - SYSTEM_PAGE_SIDE_PADDING * 2 - SYSTEM_MAX_LABEL_WIDTH;
+export function worstCaseSystemContentBudget(sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM): number {
+  const innerWidth = printScoreAreaWidthPx(sideMarginMm) - SYSTEM_PAGE_SIDE_PADDING * 2 - SYSTEM_MAX_LABEL_WIDTH;
   return Math.max(1, innerWidth * SYSTEM_TARGET_FILL - SYSTEM_FIRST_CLEF_PADDING);
 }
 

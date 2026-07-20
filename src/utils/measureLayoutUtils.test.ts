@@ -7,7 +7,35 @@ import {
   planEffectiveMeasuresPerSystem,
   planSystemMeasureRanges,
   vexFlowCombinedMeasureMinimumContentWidth,
+  printScoreAreaWidthPx,
+  worstCaseSystemContentBudget,
+  PRINT_SCORE_AREA_WIDTH_PX,
+  DEFAULT_PAGE_SIDE_MARGIN_MM,
 } from './measureLayoutUtils';
+
+describe('printScoreAreaWidthPx / worstCaseSystemContentBudget（ページ余白と本文幅の連動）', () => {
+  it('引数省略時は既定余白14mmの従来値と一致する', () => {
+    expect(printScoreAreaWidthPx()).toBeCloseTo(PRINT_SCORE_AREA_WIDTH_PX, 6);
+    expect(printScoreAreaWidthPx(DEFAULT_PAGE_SIDE_MARGIN_MM)).toBeCloseTo(PRINT_SCORE_AREA_WIDTH_PX, 6);
+  });
+
+  it('左右余白を広げると本文幅が狭くなる', () => {
+    const narrow = printScoreAreaWidthPx(25);
+    const wide = printScoreAreaWidthPx(8);
+    expect(narrow).toBeLessThan(printScoreAreaWidthPx(14));
+    expect(wide).toBeGreaterThan(printScoreAreaWidthPx(14));
+    // 210mm - margin*2 の物理計算どおりであることを確認
+    expect(narrow).toBeCloseTo((210 - 25 * 2) * (96 / 25.4), 6);
+  });
+
+  it('worstCaseSystemContentBudget も余白拡大に連動して縮む', () => {
+    const budgetDefault = worstCaseSystemContentBudget();
+    const budgetWideMargin = worstCaseSystemContentBudget(25);
+    const budgetNarrowMargin = worstCaseSystemContentBudget(8);
+    expect(budgetWideMargin).toBeLessThan(budgetDefault);
+    expect(budgetNarrowMargin).toBeGreaterThan(budgetDefault);
+  });
+});
 
 describe('measureMinimumContentWidth', () => {
   it('16分音符が16個の小節には、ビームを含めた幅を確保する', () => {
