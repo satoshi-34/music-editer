@@ -155,6 +155,16 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - **Undo/Redo・保存/読込との整合**: 上書き一覧は `ScorePage.tsx` の Undo/Redo スナップショット（`ScoreSnapshot.systemMeasureOverrides`）に含め、＋1/−1・リセットの操作も他の編集と同様に元に戻せる。保存（`saveScoreData`/`createSavedScoreData`）・読込（`loadScoreData`）・ファイル書出/読込（`fileStorage.ts`）でも他のフィールドと同様に往復する。`storage.ts` の `validateSystemMeasureOverrides` が `startMeasure` の重複・負数・`count<1` を弾く
 - 詳細は `.claude/specs/system-measure-override/design.md` を参照
 
+### 段ごとの間隔（上の段との距離）の個別調整
+- **どこで変えるか**: 「段ごとの小節数の個別調整」と同じ行に並ぶ「間隔 － Npx ＋」コントロールで、段ごとに上の段との距離を追加で増減できる（－／＋1回につき4px、範囲は全体設定と同じ −30〜30px）。編集モードのときだけ表示し、印刷には出ない（同じ `.system-measure-override-controls` コンテナのため既存の `@media print` 非表示がそのまま効く）
+- **全体設定との合成**: その他タブの「段の間隔」（全体設定、`systemRowGapPx`）に、この段だけの追加オフセットを**足し込む**形で効く。全体設定は CSS カスタムプロパティ（`--system-row-gap`）で全段に一律反映され、段ごとのオフセットはその段の直前へ `marginTop` として個別に上乗せする（`SingleStaff.tsx` / `PianoStaff.tsx` / `QuartetStaff.tsx` / `EnsembleStaff.tsx` の `systemGapOverridesPx` prop）。値が0の段は従来どおりスタイル自体を付けない
+- **下限**: 段ごとのオフセット単体を全体設定と同じ範囲（−30〜30px）にクランプする。全体設定をマイナスにしたうえで段ごとにさらにマイナスへ寄せることもでき、詰めすぎた場合は見た目上、段同士が近づく（重なりを機械的に禁止してはいないため、詰めすぎには注意）
+- **データモデル**: `SavedScoreData.systemRowGapOverrides?: { startMeasure: number; gapPx: number }[]`（`src/types/storage.ts`）。`systemMeasureOverrides` と同様、段の並び順ではなく絶対小節インデックス `startMeasure` をキーに保持するため、小節の挿入・削除があっても意味を保ちやすい。旧データ互換のため省略可（省略時は全段とも追加オフセット0）
+- **Undo/Redo・保存/読込との整合**: 上書き一覧は `ScorePage.tsx` の Undo/Redo スナップショット（`ScoreSnapshot.systemRowGapOverrides`）に含め、－／＋の操作も他の編集と同様に元に戻せる。保存（`saveScoreData`/`createSavedScoreData`）・読込（`loadScoreData`）・ファイル書出/読込（`fileStorage.ts`）でも他のフィールドと同様に往復する。`storage.ts` の `validateSystemRowGapOverrides` が `startMeasure` の重複・負数・`gapPx` が数値でない場合を弾く
+- **「レイアウトをリセット」との関係**: その他タブの「レイアウトをリセット」ボタンは、ページ余白・段の間隔（全体設定）の3つに加えて、この段ごとのオフセットもまとめて空配列へ戻す（他の3設定は画面専用の localStorage 設定だが、段ごとのオフセットは楽譜データ側の状態のため、リセット時も Undo できるよう履歴に積んでからクリアする）
+- **対応範囲**: 単旋律・ピアノ・弦楽四重奏・編成譜のすべてで動作する。パート譜抽出表示（閲覧・印刷専用）には対象コントロール自体を出していない
+- 詳細は `.claude/specs/page-layout-controls/design.md` を参照
+
 ### 画面表示のズーム調整
 - **どこで変えるか**: **その他タブの「画面表示のズーム」スライダー**（50〜150%、5%刻み）で画面の表示サイズを調節できる。設定はブラウザ（localStorage キー `score-view-zoom`）に保存され、リロード後も維持される
 - **既存の自動縮尺との関係**: このアプリはもともと `useAutoPageScale`（`src/components/useAutoPageScale.ts`）が画面幅に合わせて自動で縮尺（`--scale`）を計算し、`ScaledPageWrapper`（`src/components/ScaledPageWrapper.tsx`）が `transform: scale(var(--scale))` で画面表示だけを縮小している（issue #13: CSS `zoom` は Safari で `getBoundingClientRect` に反映されず音符のクリック座標がずれるため、全ブラウザで座標に反映される `transform` を採用）。ズームスライダーはこの自動縮尺に**倍率として掛け合わせる**だけで（`ScorePage.tsx` の `effectiveScale = scale * viewZoom`）、既存の縮尺計算・座標変換の仕組みはそのまま利用する。100% がスライダー未操作時の従来どおりの表示（自動縮尺そのまま）

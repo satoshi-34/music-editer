@@ -126,3 +126,43 @@ CSS の `gap` プロパティは負値を受け付けない（無効な宣言と
   - 「レイアウトをリセット」で上=14mm/下=12mm（既定値）に戻ることを確認。
   - コンソールエラーなし。
   - 検証中に動かした値は、検証後にユーザーのテスト環境設定値（左右14mm・上9mm・下8mm・段の間隔−20px・音符115%・ズーム150%）へ戻した。
+
+## 追補: 段ごとに個別の間隔（上の段との距離）を調整できるようにする（2026-07-21）
+
+### 問題
+
+「段の間隔」（`systemRowGapPx`）は全段に一律で効く全体設定で、特定の1段だけ間隔を広げたい／詰めたい（例: 楽節の切れ目を視覚的に示したい、特定の段だけ余裕を持たせたい）という要望に応えられなかった。既存の「段ごとの小節数の個別調整」（`systemMeasureOverrides`、`.claude/specs/system-measure-override/design.md`）が「段の並び順ではなく絶対小節番号をキーに保存データへ持つ」という設計・UI配置（各段直後の1行コントロール）の前例になっていたため、同じ流儀を踏襲した。
+
+### 修正設計
+
+- **データモデル**: `SavedScoreData.systemRowGapOverrides?: { startMeasure: number; gapPx: number }[]`（`src/types/storage.ts`）。`systemMeasureOverrides` と同じキー設計（絶対小節インデックス `startMeasure`）で、「この段（`startMeasure` から始まる段）は全体設定に `gapPx` を追加する」を表す。`gapPx` が0の要素は配列に含めない（`adjustSystemRowGapOverride` が upsert 時に0なら除去する）。
+- **バリデーション**: `storage.ts` の `validateSystemRowGapOverrides` が `systemMeasureOverrides` 用の `validateSystemMeasureOverrides` と対になる形で、`startMeasure` の重複・負数、`gapPx` が有限数でない場合を拒否する（`count>=1` のような下限は無い＝負値もそのまま許容、既に個別クランプ済みの値を保存する前提のため保存時点では範囲チェックしない）。
+- **UI**: 「段N ◀ N小節 ▶」の同じ行に「間隔 － Npx ＋」を追加（`ScorePage.tsx`、`.system-measure-override-row` 内）。－／＋1回につき `SYSTEM_ROW_GAP_OVERRIDE_STEP_PX = 4px`。表示範囲・クランプ下限上限は全体設定の「段の間隔」と同じ `SYSTEM_ROW_GAP_MIN_PX`（−30）〜`SYSTEM_ROW_GAP_MAX_PX`（30）を、段ごとのオフセット単体に適用する（合成後の実効値ではなく、追加オフセット自体をこの範囲に収める設計）。
+- **合成方法（全体設定 + 段ごとのオフセット）**: 全体の「段の間隔」は従来どおり CSS カスタムプロパティ `--system-row-gap` として `.score-area` へ注入され、`.score-area .system-stack` の `gap`（または tight-rows 時の `margin-top`）に一律反映される。段ごとのオフセットはこれとは別経路で、各 Staff コンポーネント（`SingleStaff` / `PianoStaff` / `QuartetStaff` / `EnsembleStaff`）が `.system-stack` の直下に描く「1段ぶんのラッパー `<div>`」（`systemRanges` を `Array.from` でループして生成している要素）へ、`style={{ marginTop: gapOverridePx }}` として個別に追加する。CSS の `margin-top` は `gap` や既存の `margin-top`（tight-rows時）と加算的に効くため、「全体設定＋段ごとの追加オフセット」の合成は自然に成立する。値が0の段はスタイル自体を付けず、従来の見た目を変えない。
+- **`ScorePage.tsx` 側の配線**: `getSystemGapOverridesPx(ranges: SystemMeasureRange[]): number[]` というヘルパーを追加し、ページごとに `p.systemRanges` を渡して「その段一覧ぶんのオフセット配列」を作り、各 Staff コンポーネントの新 prop `systemGapOverridesPx` へそのまま渡す（`plannedMeasureWidths` を `systemRanges` ごとにスライスして渡している既存パターンと同じ考え方）。
+- **Undo/Redo**: `ScoreSnapshot` に `systemRowGapOverrides` を追加し、`systemMeasureOverrides` と全く同じ扱いで Undo/Redo・保存/読込・ファイル書出入・サンプル読込・新規作成・MusicXML読込のすべてのリセット/復元経路に配線した（`setSystemRowGapOverrides([])` を「前の譜面を引き継がない」箇所に、`data.systemRowGapOverrides ?? []` を「保存データから復元する」箇所に、既存の `systemMeasureOverrides` の隣に追加しただけで、個別の新しい分岐は増やしていない）。
+- **「レイアウトをリセット」との関係**: 全体の「段の間隔」（`systemRowGapPx`）を含む4つの画面専用 localStorage 設定に加え、段ごとのオフセット（`systemRowGapOverrides`）もこのボタンでまとめて空配列へ戻す。段ごとのオフセットは楽譜データ側の状態（Undo対象）のため、他3設定と違い `pushHistory()` を呼んでからクリアし、リセット自体も Undo できるようにした。
+- **対応範囲**: 単旋律（`SingleStaff`）・ピアノ（`PianoStaff`）・弦楽四重奏（`QuartetStaff`）・編成譜（`EnsembleStaff`）の主表示すべてに配線した。パート譜抽出用の表示（`PartExtractionStaff`、閲覧・印刷専用）には対象コントロール・prop を追加していない（編集不可のビューであり、要件の対象外と判断）。
+
+### 検証結果
+
+- `docker compose run --rm app npm test`: 441ファイル5653テスト全緑（`storage.test.ts` に `systemRowGapOverrides` の保存/読込往復・後方互換・バリデーション（重複・負数・非数値）のテストを5件追加）。
+- `docker compose run --rm app npm run build`: `tsc -b && vite build` エラーなし。
+- ブラウザ実測（dev サーバー port 5178、単旋律譜4段・ピアノ譜3段）:
+  - 段2の「＋」を複数回押すと段2だけ marginTop が加算され、段1との間隔が広がる（段3以降は連動して押し下げられる。スタック型レイアウトの自然な帰結）ことを実測確認。
+  - 「－」を下限に達するまで押すと −30px でボタンが disabled になり、それ以上詰まらないことを確認。
+  - 保存（`saveScoreData`）直後の `localStorage['music-score-app-data']` に `systemRowGapOverrides: [{ startMeasure, gapPx }]` の形で書き込まれることを確認。
+  - 「レイアウトをリセット」で段ごとのオフセットがすべて0（配列が空）に戻ることを確認。
+  - ピアノ譜（大譜表）でも同じ操作で段2が個別に押し下がることを確認。
+  - コンソールエラーなし。
+  - CLAUDE.md の既知バグ（起動時自動読込が無く、リロードで自動保存データが空スコアに上書きされる）を踏まえ、検証中はページリロードを行わず、保存後の状態確認は `localStorage` の直接読み取りと「読込」ボタン（`handleLoad`）経由の再適用で行った。
+
+### 影響範囲
+
+- `src/types/storage.ts`: `SavedScoreData.systemRowGapOverrides` フィールドと `SystemRowGapOverride` 型を追加。
+- `src/utils/storage.ts`: `validateSystemRowGapOverrides` を追加し `validateSavedScoreData` に組み込み、`createSavedScoreData` に `systemRowGapOverrides` 引数を追加。
+- `src/hooks/useScoreStorage.ts`: `saveScore` に `systemRowGapOverrides` 引数を追加。
+- `src/components/ScorePage.tsx`: `systemRowGapOverrides` state・`SYSTEM_ROW_GAP_OVERRIDE_STEP_PX` 定数・`adjustSystemRowGapOverride` / `getSystemGapOverridesPx` ハンドラ・`ScoreSnapshot` への統合・保存/読込/ファイル入出力/Undo/リセットの全経路への配線・「間隔 － Npx ＋」UI。
+- `src/components/SingleStaff.tsx` / `PianoStaff.tsx` / `QuartetStaff.tsx` / `EnsembleStaff.tsx`: `systemGapOverridesPx` prop を追加し、段ラッパー `<div>` へ `marginTop` として適用。
+- `src/App.css`: `.system-row-gap-override-label` を追加（既存の `.system-measure-override-label` と対になる小さなラベルスタイル）。
+- `src/utils/storage.test.ts`: `systemRowGapOverrides` の保存互換・バリデーションのテストを追加。
