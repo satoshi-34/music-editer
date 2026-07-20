@@ -1159,9 +1159,8 @@ button.ghost:disabled {
      width: 210mm の .print-page がはみ出して左ズレする原因になるため。 */
   @page { size: A4; margin: 0; }
   /* 印刷インク色。通常は #000（黒）。
-     黒インク切れなどで一時的に別色で刷りたいときはここだけ変える。
-     ※現在は黒インク切れ対応で一時的に青にしている。戻すときは #000 へ */
-  :root { --print-ink: #1d4ed8; }
+     黒インク切れなどで一時的に別色で刷りたいときはここだけ変える（例: #1d4ed8） */
+  :root { --print-ink: #000; }
   /* body のデフォルト margin（8px）が残ると1枚目全体が下へずれ、
      ページ末尾の段が次の紙へ押し出されてしまう */
   body { background: #fff !important; margin: 0 !important; }
