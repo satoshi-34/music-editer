@@ -222,13 +222,18 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
   `chordSymbol` / `tempoMarking` / `expressionMarking` の6種類。いずれも「SVGテキスト直描き」方式
   （VexFlow 標準機能を使わない、このアプリ独自の描画パターン）のため、font-size に `scale` を掛け、
   x/y 座標に `offsetX`/`offsetY` を加算するだけで自然に反映できた。
-- **除外した記号（データ型には含めるが、UI上の調整対象としては未対応）**: `ornament`（装飾記号）・
-  `articulations`（アーティキュレーション）。この2種は VexFlow の `Ornament`/`Articulation` オブジェクトや
-  手描きの SVG path（円弧・楔形など、`renderCustomSymbol` とは異なる個別実装）で描画されており、
-  グリフ単位でのスケーリングや正確なオフセット適用が本タスクの範囲で確実に作り込めなかったため、
-  `src/utils/symbolAdjustUtils.ts` の `listPresentAdjustableSymbolKinds` で意図的に列挙対象から外した
+- **除外した記号（データ型には含めるが、UI上の調整対象としては未対応）**: `ornament`（装飾記号）のみ。
+  VexFlow の `Ornament` モディファイアとして描画しており、グリフ単位でのスケーリングや正確なオフセット
+  適用が本タスクの範囲で確実に作り込めなかったため、`src/utils/symbolAdjustUtils.ts` の
+  `listPresentAdjustableSymbolKinds` で意図的に列挙対象から外している
   （＝⤢/✥ツールでクリックしても選択肢に出ない。無理に対応させず、確実に動くものだけ入れる方針）。
   将来対応する場合は、描画後に該当グリフ要素へ SVG `transform` を後付けする方式が候補になる。
+  - **追記（articulation-implementation タスクで解消）**: 上記の初版では `articulations`（スタッカート・
+    アクセント・テヌート・マルカート・フェルマータ）も同じ理由（VexFlow の `Articulation` オブジェクト）
+    で除外していたが、その後 StaffCanvas.tsx / PianoSystemCanvas.tsx のアーティキュレーション描画は
+    VexFlow モディファイアを使わない手組みの SVG（円・パス・線）へ置き換わったため、他の標準記号と同じ
+    「座標へ offsetX/offsetY を加算・図形サイズへ scale を掛ける」方式で安全に反映できるようになった。
+    詳細は `.claude/specs/articulation-implementation/design.md` を参照。
 - **共通ロジック**: `src/utils/symbolAdjustUtils.ts`（新規）に `getSymbolAdjust`（読み出し。未設定時は
   scale=1/offset=0 を返す）・`setSymbolAdjustScale`/`setSymbolAdjustOffset`（書き込み。customSymbols と同様、
   対象の記号が実際に付いていない音符には書き込まない）・`listPresentAdjustableSymbolKinds`（この音符に

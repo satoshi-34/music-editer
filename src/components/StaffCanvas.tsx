@@ -1473,6 +1473,7 @@ export default function StaffCanvas({
       // 五線の最上線Y（フェルマータの配置基準）
       staveTopY: number;
       markings: NonNullable<NoteEvent['articulations']>;
+      adjust: ResolvedSymbolAdjust;
     }> = [];
     // カスタム記号の描画情報を収集する
     const customSymbolEntries: CustomSymbolRenderEntry[] = [];
@@ -3221,6 +3222,7 @@ export default function StaffCanvas({
                 noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
                 staveTopY: stave.getYForLine(0),
                 markings: safeEvents[j].articulations,
+                adjust: getSymbolAdjust(safeEvents[j], 'articulations'),
               });
             }
             if (!safeEvents[j]?.__isPlaceholder && !safeEvents[j]?.isRest && safeEvents[j]?.fingering) {
@@ -3388,71 +3390,86 @@ export default function StaffCanvas({
     });
 
     // ── アーティキュレーション記号を一括描画 ──────────────────────
-    articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings }) => {
-      // フェルマータ以外は noteTopY の上に重ならないよう積み上げる
+    articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings, adjust }) => {
+      // ⤢/✥ ツールの調整値を反映する。offsetX/offsetY は座標へ加算、
+      // scale は各図形の半径・線幅・線の長さへの倍率として使う
+      // （テキストのフォントサイズと同じ考え方。図形の中心はアンカー点に固定して拡大縮小する）。
+      const ax = anchorX + adjust.offsetX;
+      const s = adjust.scale;
+      // フェルマータ以外は noteTopY の上に重ならないよう積み上げる（積み上げ間隔も scale に応じて伸縮する）
       let aboveOffset = 0;
       // ArticulationMarking は文字列型なので、そのまま type として使う
       markings.forEach((type) => {
         const ns = 'http://www.w3.org/2000/svg';
         if (type === 'fermata') {
           // フェルマータは五線上端より上に配置する（符頭位置に依存しない）
-          const baseY = Math.min(staveTopY, noteTopY) - 14;
+          const baseY = Math.min(staveTopY, noteTopY) - 14 + adjust.offsetY;
           // 半円弧（下が開いた椀形）
           const arc = document.createElementNS(ns, 'path');
-          arc.setAttribute('d', `M ${anchorX - 11} ${baseY} A 11 9 0 0 1 ${anchorX + 11} ${baseY}`);
+          arc.setAttribute('d', `M ${ax - 11 * s} ${baseY} A ${11 * s} ${9 * s} 0 0 1 ${ax + 11 * s} ${baseY}`);
           arc.setAttribute('stroke', '#1f2937');
-          arc.setAttribute('stroke-width', '1.6');
+          arc.setAttribute('stroke-width', String(1.6 * s));
           arc.setAttribute('stroke-linecap', 'round');
           arc.setAttribute('fill', 'none');
           arc.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(arc);
           // 中心の点（弧の内側）
           const dot = document.createElementNS(ns, 'circle');
-          dot.setAttribute('cx', String(anchorX));
-          dot.setAttribute('cy', String(baseY - 4));
-          dot.setAttribute('r', '2.5');
+          dot.setAttribute('cx', String(ax));
+          dot.setAttribute('cy', String(baseY - 4 * s));
+          dot.setAttribute('r', String(2.5 * s));
           dot.setAttribute('fill', '#1f2937');
           dot.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(dot);
         } else if (type === 'staccato') {
           // スタッカート: 符頭上方に小さな黒丸
-          const cy = noteTopY - 6 - aboveOffset;
+          const cy = noteTopY - 6 - aboveOffset + adjust.offsetY;
           const dot = document.createElementNS(ns, 'circle');
-          dot.setAttribute('cx', String(anchorX));
+          dot.setAttribute('cx', String(ax));
           dot.setAttribute('cy', String(cy));
-          dot.setAttribute('r', '2.5');
+          dot.setAttribute('r', String(2.5 * s));
           dot.setAttribute('fill', '#1f2937');
           dot.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(dot);
-          aboveOffset += 10;
+          aboveOffset += 10 * s;
         } else if (type === 'accent') {
           // アクセント: 下向きの楔形（「>」を90°回した形）
-          const tipY = noteTopY - 5 - aboveOffset;
-          const wingY = tipY - 9;
+          const tipY = noteTopY - 5 - aboveOffset + adjust.offsetY;
+          const wingY = tipY - 9 * s;
           const path = document.createElementNS(ns, 'path');
-          path.setAttribute('d', `M ${anchorX - 10} ${wingY} L ${anchorX} ${tipY} L ${anchorX + 10} ${wingY}`);
+          path.setAttribute('d', `M ${ax - 10 * s} ${wingY} L ${ax} ${tipY} L ${ax + 10 * s} ${wingY}`);
           path.setAttribute('stroke', '#1f2937');
-          path.setAttribute('stroke-width', '1.6');
+          path.setAttribute('stroke-width', String(1.6 * s));
           path.setAttribute('stroke-linecap', 'round');
           path.setAttribute('stroke-linejoin', 'round');
           path.setAttribute('fill', 'none');
           path.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(path);
-          aboveOffset += 14;
+          aboveOffset += 14 * s;
         } else if (type === 'tenuto') {
           // テヌート: 符頭上方に水平線
-          const lineY = noteTopY - 6 - aboveOffset;
+          const lineY = noteTopY - 6 - aboveOffset + adjust.offsetY;
           const line = document.createElementNS(ns, 'line');
-          line.setAttribute('x1', String(anchorX - 9));
+          line.setAttribute('x1', String(ax - 9 * s));
           line.setAttribute('y1', String(lineY));
-          line.setAttribute('x2', String(anchorX + 9));
+          line.setAttribute('x2', String(ax + 9 * s));
           line.setAttribute('y2', String(lineY));
           line.setAttribute('stroke', '#1f2937');
-          line.setAttribute('stroke-width', '2.2');
+          line.setAttribute('stroke-width', String(2.2 * s));
           line.setAttribute('stroke-linecap', 'round');
           line.setAttribute('pointer-events', 'none');
           svgRoot.appendChild(line);
-          aboveOffset += 10;
+          aboveOffset += 10 * s;
+        } else if (type === 'marcato') {
+          // マルカート: 塗りつぶした山形（ストロークのみのアクセントと区別するため塗りで表現する）
+          const tipY = noteTopY - 5 - aboveOffset + adjust.offsetY;
+          const wingY = tipY - 9 * s;
+          const path = document.createElementNS(ns, 'path');
+          path.setAttribute('d', `M ${ax - 8 * s} ${wingY} L ${ax} ${tipY - 4 * s} L ${ax + 8 * s} ${wingY} L ${ax} ${tipY} Z`);
+          path.setAttribute('fill', '#1f2937');
+          path.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(path);
+          aboveOffset += 14 * s;
         }
       });
     });

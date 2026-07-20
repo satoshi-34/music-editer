@@ -27,8 +27,18 @@ describe('listPresentAdjustableSymbolKinds', () => {
     expect(listPresentAdjustableSymbolKinds(ev).sort()).toEqual(['chordSymbol', 'dynamics', 'fingering'].sort());
   });
 
-  it('装飾記号・アーティキュレーションは対応対象外なので列挙しない', () => {
-    const ev = baseNote({ ornament: 'trill', articulations: ['staccato'] });
+  it('装飾記号は対応対象外なので列挙しない', () => {
+    const ev = baseNote({ ornament: 'trill' });
+    expect(listPresentAdjustableSymbolKinds(ev)).toEqual([]);
+  });
+
+  it('アーティキュレーションは手組みSVG描画のため列挙する', () => {
+    const ev = baseNote({ articulations: ['staccato'] });
+    expect(listPresentAdjustableSymbolKinds(ev)).toEqual(['articulations']);
+  });
+
+  it('休符に付いたアーティキュレーションは列挙しない', () => {
+    const ev = baseNote({ isRest: true, articulations: ['fermata'] });
     expect(listPresentAdjustableSymbolKinds(ev)).toEqual([]);
   });
 });
