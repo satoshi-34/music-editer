@@ -1760,6 +1760,29 @@ export default function PianoSystemCanvas({
         }
       });
 
+      // 途中クレフ変更（stave.addClef(..., 'small')）は、変更があったパートの
+      // stave にだけ小型クレフ分の幅が足される。VexFlow の Note.getAbsoluteX() は
+      // 「tickContext.getX() + 自分の stave.getNoteStartX()」で絶対座標を出すため、
+      // 同じ列でもパートごとに noteStartX が違うと、Pass2 の合同 Formatter で
+      // tick が揃っていても見た目の x 座標がずれてしまう。
+      // ここで列内の全パートの noteStartX を「いちばん広い」値へそろえることで、
+      // クレフ変更が起きたパートに合わせて他パートの音符位置も一致させる。
+      if (parts.length > 1) {
+        const noteStartXsThisColumn = staveSets
+          .map(s => s[i])
+          .filter((stave): stave is Stave => !!stave)
+          .map(stave => stave.getNoteStartX());
+        if (noteStartXsThisColumn.length > 1) {
+          const maxNoteStartX = Math.max(...noteStartXsThisColumn);
+          staveSets.forEach(s => {
+            const stave = s[i];
+            if (stave && stave.getNoteStartX() !== maxNoteStartX) {
+              stave.setNoteStartX(maxNoteStartX);
+            }
+          });
+        }
+      }
+
       // 各小節の右端縦線：第1段 ↔ 最終段 をまたぐ
       // 終止線の列だけは、段をまたぐ側も対応する太い二重線（BOLD_DOUBLE_RIGHT）にして、
       // 各パートの stave が個別に描く終止線と見た目をそろえる。

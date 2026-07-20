@@ -449,3 +449,70 @@ contentWidth = base + EVENNESS * (equalShare - base)
   全小節が等幅（比1.32、先頭小節の clef 余白ぶんのみの差）になる。
 - いずれも overflow=0・警告バナーなし・コンソールエラーなし。
   段またぎスラー・拍の縦揃えは不変。
+
+## 追補8: 途中クレフ変更がある小節でパート間の拍位置がずれる不具合
+
+### 問題
+
+複雑テスト楽譜（`test-data/complex-test-score.json`）の左手パート小節14に
+だけクレフ変更（`"clef": "treble"`、既定は `bass`）が入っており、この小節の
+右手5連符直後の二分音符（3拍目開始）と左手3つ目の四分音符（同じく3拍目開始）
+は本来同じ x 座標になるべきだが、ブラウザ実測で **17.9px** ずれていた。
+
+原因は連符の tick 計算ではなく、**パートごとに `noteStartX`
+（音部記号・調号などを差し引いた「音符の描き始め位置」）が異なっていた**こと。
+`PianoSystemCanvas.tsx` の小節列生成ループ（各 `parts.forEach` 内、旧
+1673〜1761行付近）は、途中クレフ変更があるパートの `Stave` にだけ
+`stave.addClef(effectiveClefHere, 'small')` で小型クレフを追加する。この
+呼び出しは `stave.format()` 内で `noteStartX` を再計算するため、クレフ変更が
+入ったパートの stave だけ `noteStartX` が広がる。
+
+VexFlow の `Note.getAbsoluteX()`（`node_modules/vexflow/.../src/note.js`）は
+`tickContext.getX() + this.stave.getNoteStartX() + Stave.padding` で絶対座標を
+算出する。Pass2 の合同 Formatter（`multi-part-beat-alignment` 本体の設計）は
+`tickContext.getX()` を全パート・全声部で正しく一致させるが、各音符が参照する
+`this.stave`（Pass1 で `voice.setStave(stave)` によりパートごとに設定済み）の
+`noteStartX` がパート間で異なると、tick が揃っていても最終的な絶対 x がずれる。
+これは連符特有の問題ではなく、**「一部のパートだけに途中クレフ変更がある小節」
+全般で発生する**（その小節の全音符が一律にずれる）。
+
+### 修正
+
+`PianoSystemCanvas.tsx` の小節列 `i` を作る `for` ループ内、その列の
+`parts.forEach`（stave 生成・`stave.draw()`）が終わった直後に、その列の
+全パートの `stave.getNoteStartX()` の最大値を求め、`stave.setNoteStartX()`
+で全パートの stave へ同じ値をそろえる処理を追加した。`stave.draw()` は
+クレフ・調号などの記号を「その stave 自身の noteStartX 計算時点の位置」に
+描画済みのため、描画後に `noteStartX` だけ広げても記号の見た目は変わらず、
+以降の音符配置（Pass1/Pass2）にだけ効く。
+
+```ts
+if (parts.length > 1) {
+  const noteStartXsThisColumn = staveSets
+    .map(s => s[i])
+    .filter((stave): stave is Stave => !!stave)
+    .map(stave => stave.getNoteStartX());
+  if (noteStartXsThisColumn.length > 1) {
+    const maxNoteStartX = Math.max(...noteStartXsThisColumn);
+    staveSets.forEach(s => {
+      const stave = s[i];
+      if (stave && stave.getNoteStartX() !== maxNoteStartX) {
+        stave.setNoteStartX(maxNoteStartX);
+      }
+    });
+  }
+}
+```
+
+### 検証
+
+- `tsc --noEmit` エラーなし。`vitest run` 69ファイル918件成功（既存の連符・
+  多声部テストを含め回帰なし）。
+- ブラウザで complex-test-score を読込み、修正前後の小節14の音符 x 座標
+  （SVG `.vf-notehead text` の `x` 属性）を実測:
+  - 修正前: 右手二分音符 x=870.773 / 左手3つ目の四分音符 x=888.662（**17.9px ずれ**）
+  - 修正後: 右手二分音符 x=878.909 / 左手3つ目の四分音符 x=878.909（**完全一致**）。
+    小節先頭の1拍目（右手1音目・左手1音目）も x=712.006 で一致。
+  - 通常の3連符小節（小節2、クレフ変更なし）でも一致点は修正前後で変わらず、
+    回帰なし。
+- コンソールエラーなし。
