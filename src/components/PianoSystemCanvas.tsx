@@ -161,6 +161,19 @@ const INACTIVE_VOICE_COLOR = '#9ca3af';
 const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
 const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）
 const REST_BODY_HIT_HALF_WIDTH = 18;
+
+// 楽譜全体で「選択は常に1つだけ」を保証するための仕組み。
+// SingleStaff / PianoStaff などは「1段 = 1つの PianoSystemCanvas」を並べる構造で、
+// 各インスタンスが独自の選択 state と window keydown リスナーを持つ。
+// 別の段で作った選択がクリアされずに残ると、1回の矢印キー入力に複数インスタンスが
+// 同時に反応し、それぞれが「楽譜全体のコピー」を onChange で親へ送るため、
+// 最後に通知したインスタンスの内容が勝って他の変更が上書きで消えてしまう
+// （= クリックした音符の音高が矢印キーで変わらないように見える）不具合があった。
+// そこで「選択を作ったインスタンス」がこのイベントを発行し、
+// それ以外のインスタンスは自分の選択（音符・スラー/タイ・松葉）を解除する。
+const SELECTION_CLAIMED_EVENT = 'pianosystemcanvas-selection-claimed';
+// インスタンスを区別するための連番。描画順とは無関係で、一意でありさえすればよい。
+let selectionOwnerSeq = 0;
 // 和音内の個別音選択は、クリックYを五線の線/間へ丸めて keys[] と照合します。
 // 通常は 0.001 のままでOK。判定を甘くしたい場合だけ大きくしてください。
 const KEY_SELECT_LINE_EPS = 0.001;
@@ -913,6 +926,31 @@ export default function PianoSystemCanvas({
   } | null>(null);
 
   useEffect(()=>{selRef.current=selected;},[selected]);
+
+  // 選択の一意化（SELECTION_CLAIMED_EVENT のコメント参照）。
+  // このインスタンスで何かが選択されたら、他のインスタンスへ「選択を手放して」と通知する。
+  const selectionOwnerIdRef = useRef(0);
+  if (selectionOwnerIdRef.current === 0) selectionOwnerIdRef.current = ++selectionOwnerSeq;
+  useEffect(() => {
+    if (selected == null && selectedArc == null && selectedHairpin == null) return;
+    window.dispatchEvent(new CustomEvent(SELECTION_CLAIMED_EVENT, {
+      detail: { owner: selectionOwnerIdRef.current },
+    }));
+  }, [selected, selectedArc, selectedHairpin]);
+  useEffect(() => {
+    const onClaim = (e: Event) => {
+      const owner = (e as CustomEvent<{ owner: number }>).detail?.owner;
+      if (owner === selectionOwnerIdRef.current) return;
+      // 選択解除は state 経由で行う（selected は描画 useEffect の deps に入っているので、
+      // クリアすれば青い選択枠も再描画で消える）。
+      setSelected(null);
+      setSelectedArc(null);
+      setSelectedHairpin(null);
+    };
+    window.addEventListener(SELECTION_CLAIMED_EVENT, onClaim);
+    return () => window.removeEventListener(SELECTION_CLAIMED_EVENT, onClaim);
+  }, []);
+
   useEffect(()=>{disRef.current=disabled;},[disabled]);
   useEffect(()=>{yOffRef.current=yOffset;},[yOffset]);
   useEffect(()=>{keySignatureRef.current=normalizedKeySignature;},[normalizedKeySignature]);
