@@ -394,6 +394,17 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 
 ## 実装のポイント（要点）
 
+> **単旋律譜の描画コンポーネントについて（2026-07-20）**: 以下の各節で「`StaffCanvas.tsx`
+> （単旋律譜）」と書いている箇所は、実装当時の描画コンポーネントを指す歴史的な記述
+> です。現在は `ScorePage.tsx` の単旋律分岐は `SingleStaff.tsx`（`PianoStaff.tsx` と
+> 同型の、`PianoSystemCanvas` を `systemRanges` ぶんループするラッパー）を使っており、
+> `StaffCanvas.tsx` 自体はどのプロダクションコードからも import されなくなりました
+> （`RestOverlapIntegration.test.tsx` などのテストからは引き続き参照されているため、
+> ファイル自体はまだ削除していません）。各節に書かれている「クリック座標変換」
+> 「符頭のヒット判定」「奏法記号の自前描画」などのロジックは、単旋律譜については
+> 実質的に `PianoSystemCanvas.tsx` 側の実装が使われている点に読み替えてください。
+> 詳細は `docs/phase2-staffcanvas-retirement-feasibility.md` を参照。
+
 ### 1. クリック座標と描画座標の基準を統一（Safari 対応済み）
 - クリックはクライアント座標、VexFlow は SVG viewBox 座標です。
 - ページ縮小は CSS `zoom` ではなく **`transform: scale`** で行います（issue #13 の根本対策）。`transform` は Safari を含む全ブラウザで `getBoundingClientRect` へ視覚座標として反映されるため、**BCR との単純差分 × viewBox 比率**だけで正確に変換できます。
