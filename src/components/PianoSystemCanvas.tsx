@@ -164,6 +164,12 @@ const REST_BODY_HIT_HALF_WIDTH = 18;
 // 和音内の個別音選択は、クリックYを五線の線/間へ丸めて keys[] と照合します。
 // 通常は 0.001 のままでOK。判定を甘くしたい場合だけ大きくしてください。
 const KEY_SELECT_LINE_EPS = 0.001;
+// 個別音選択を有効にする、符頭の描画X範囲からの左右パディング（px）。
+// 音符のヒット領域（.vf-note-hit）は隣の音符との中間点〜小節端まで広がるため、
+// Y（音高ライン）の一致だけで選択にすると、小節末尾の空き拍を同じ高さで
+// クリックしたときに「音符追加」ではなく「最後の音符の選択」に吸われてしまう。
+// そこで選択はこのX範囲内に限定し、範囲外の同じ高さのクリックは挿入へ回す。
+const KEY_SELECT_X_PAD = 12;
 // 青い選択枠はクリック不可の見た目です。見た目だけ調整したい場合はここを変更。
 const SELECTED_KEY_PAD_X = 3;
 const SELECTED_KEY_HALF_HEIGHT = 7;
@@ -3067,7 +3073,11 @@ export default function PianoSystemCanvas({
                 // Delete/矢印/臨時記号がその1音だけに効くようにする。
                 // isOnNote より先に判定するため、符頭Xから少し外れても
                 // 同じ高さの既存音をクリックした扱いになります。
-                const clickedKeyIndex = findKeyIndexAtLine(currentEv.keys, snappedLine, k2l);
+                // ただし X 方向は符頭±KEY_SELECT_X_PAD に限定する。
+                // ヒット領域全体（最後の音符では小節右端まで）で選択にすると、
+                // 空き拍の領域を同じ高さでクリックしたとき音符を追加できなくなるため。
+                const nearNoteX = lx>=noteVisualLeft-KEY_SELECT_X_PAD && lx<=noteVisualRight+KEY_SELECT_X_PAD;
+                const clickedKeyIndex = nearNoteX ? findKeyIndexAtLine(currentEv.keys, snappedLine, k2l) : -1;
                 if(clickedKeyIndex>=0){
                   setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex});
                   playNoteEvent({...currentEv,keys:[currentEv.keys[clickedKeyIndex]]}, part.playbackInstrument);
