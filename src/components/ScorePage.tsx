@@ -3536,6 +3536,7 @@ export default function ScorePage() {
                       timeSignature={scoreTimeSignature}
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                     />
                   ) : isPartExtractionActive && scoreType === 'quartet' ? (
                     // パート譜表示（弦楽四重奏）: QuartetStaff は4段固定のレイアウトのため、
@@ -3589,6 +3590,7 @@ export default function ScorePage() {
                       onKeySignatureChange={handleKeySignatureChange}
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                     />
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
@@ -3615,6 +3617,7 @@ export default function ScorePage() {
                       timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
                       customSymbolDefs={customSymbolDefs}
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                     />
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
@@ -3647,6 +3650,7 @@ export default function ScorePage() {
                       onMeasureSelect={handleMeasureSelect}
                       customSymbolDefs={customSymbolDefs}
                       activeVoiceIndex={activeVoice}
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                     />
                   ) : (
                     <div className="system-stack">
@@ -3679,6 +3683,7 @@ export default function ScorePage() {
                           customSymbolDefs={customSymbolDefs}
                           finalMeasureIndex={finalMeasureIndex}
                           pageMarginSideMm={pageMarginSideMm}
+                          symbolsClickable={activeToolbarTab === 'symbols'}
                         />
                         </div>
                       ))}

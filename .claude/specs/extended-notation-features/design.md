@@ -427,3 +427,29 @@ export interface HairpinMark {
 - `src/components/Palette.tsx`: `Tool` に `hairpin` モード追加、＜/＞ボタン追加
 - `src/components/StaffCanvas.tsx` / `src/components/PianoSystemCanvas.tsx`: ドラッグ入力・選択削除・一括描画・音符削除時の参照掃除
 - `src/utils/hairpin.test.ts`（新規）: バリデーション・位置マップ・MusicXML書出・再生ベロシティのユニットテスト
+
+## 演奏記号の直接クリック調整（第1弾: 強弱・アーティキュレーション・8va/8vb）
+
+### 問題
+
+- symbolAdjust（記号ごとのサイズ・位置調整）は、汎用⤢/✥ツールを選んでから「音符」をクリックする必要があり、記号自体をクリックしても何も起きなかった。記号が密集した箇所では、どの音符に対応する調整UIを開いているのか直感的でなく、操作コストも高かった。
+
+### 修正設計
+
+- StaffCanvas.tsx / PianoSystemCanvas.tsx それぞれの描画 useEffect 内に `appendSymbolHitRegion` 関数を追加。強弱記号・アーティキュレーション（フェルマータ/スタッカート/アクセント/テヌート/マルカート）・オクターヴ記号（8va/8vb）の各 SVG 要素を描いた直後に、その回で `svgRoot.appendChild` した要素を配列に集め、`getBBox()` で実測した範囲を ±3px 広げた透明 `rect` を重ねる。文字幅などを手計算せず、実際の描画結果から当たり判定を作る方式にした（フォント・スケールが変わっても自動的に追従する）。
+- 新しい prop `symbolsClickable?: boolean` を StaffCanvas / PianoSystemCanvas に追加。`true` のときだけヒット領域の `pointer-events` を `auto` にし、hover ハイライト（薄い水色）とクリックリスナー（`openSymbolAdjustEditor('offset', ...)` を直接呼び出し、既存の✥ツールと同じ位置調整オーバーレイを開く）を有効にする。`false`（既定値）のときは `pointer-events: none` で完全に素通しし、従来の音符クリック処理（`hit.addEventListener('click', ...)`）を一切妨げない。ヒット領域のクリックリスナーは `stopPropagation()` で SVG 背景クリック（弧/松葉選択解除など）より先に処理されるため、記号と音符が重なる位置では記号側が優先される。
+- `symbolsClickable` は `ScorePage.tsx` の `activeToolbarTab === 'symbols'`（ツールバー「演奏記号」タブ選択中）から、`EnsembleStaff` / `QuartetStaff` / `PianoStaff` / 単一譜表（`StaffCanvas` 直呼び出し）へ prop 中継する（`measureWidthEvenness` と同じ中継パターン）。`PartExtractionStaff`（閲覧・印刷専用のパート譜表示、`disabled` 固定）には配線していない。
+- PianoSystemCanvas は複数パート（段）を1つの SVG にまとめて描くため、`openSymbolAdjustEditor` は `partIndex` を追加引数に取る。ヒット領域を作る各エントリ（`dynamicTextEntries` / `articulationEntries` / `ottavaEntries`）に `partIndex` / `measureAbsoluteIndex` / `eventIndex` / `event` を optional で持たせ、アクティブ声部の描画箇所だけこれらを渡す。非アクティブ声部の「見た目だけ」再描画（`isMultiVoiceMeasure` のとき声部2切替中でも声部1の記号を見せ続ける処理）には index 情報を渡さず、`appendSymbolHitRegion` 側で `undefined` ならヒット領域自体を作らない（誤ってクリックできてしまうのを防ぐ）。
+
+### 対象範囲・既知の制限
+
+- 第1弾として強弱記号・アーティキュレーション・8va/8vb の3種類のみ対応。運指・歌詞・コード記号・テンポ表記・発想標語・カスタム記号は今回未対応（引き続き汎用⤢/✥ツール経由でのみ調整可能）。装飾記号（トリル等）は元々 symbolAdjust の調整対象外のため対象外。
+- クリックで開くのは位置調整オーバーレイ（✥ 相当）のみ。サイズ調整（⤢）は今回は直接クリックの対象にせず、従来どおり⤢ツール経由。
+- 印刷: ヒット領域は透明な rect のため見た目には影響しないが、`class="symbol-hit-region"` を付与しており、将来印刷で問題が出た場合は `@media print { .symbol-hit-region { display: none; } }` を追加できるようにしてある。
+
+## 影響範囲（演奏記号の直接クリック調整）
+
+- `src/components/StaffCanvas.tsx`: `symbolsClickable` prop 追加、`appendSymbolHitRegion` 関数新設、dynamicTextEntries/articulationEntries/ottavaEntries に index 情報を追加
+- `src/components/PianoSystemCanvas.tsx`: 同上（`partIndex` も含む）
+- `src/components/EnsembleStaff.tsx` / `QuartetStaff.tsx` / `PianoStaff.tsx`: `symbolsClickable` prop 中継
+- `src/components/ScorePage.tsx`: 各描画コンポーネントへ `symbolsClickable={activeToolbarTab === 'symbols'}` を渡す
