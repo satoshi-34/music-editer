@@ -44,6 +44,7 @@ import {
   type MicrotoneType,
 } from '../utils/noteKeyUtils';
 import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accidentalUtils';
+import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
@@ -286,33 +287,6 @@ function applyDefaultRestDisplayLine(
   }
 }
 
-
-function placeKeySignatureAfterTimeSignature(stave: Stave): void {
-  const modifiers = (stave as any).getModifiers?.() as Array<any> | undefined;
-  if (!modifiers) {
-    return;
-  }
-
-  const keySignature = modifiers.find((modifier) => modifier?.getCategory?.() === 'KeySignature');
-  const timeSignature = modifiers.find((modifier) => modifier?.getCategory?.() === 'TimeSignature');
-  if (!keySignature || !timeSignature) {
-    return;
-  }
-
-  const keyX = keySignature.getX?.();
-  const timeX = timeSignature.getX?.();
-  const keyWidth = keySignature.getWidth?.();
-  const timeWidth = timeSignature.getWidth?.();
-  if (![keyX, timeX, keyWidth, timeWidth].every((value) => typeof value === 'number' && Number.isFinite(value))) {
-    return;
-  }
-
-  const gapBetweenKeyAndTime = timeX - keyX - keyWidth;
-  // VexFlow の内部順は「調号 → 拍子」に固定されているため、
-  // 描画前に X 座標だけ入れ替えて UI 要件どおりの並びへ補正する。
-  timeSignature.setX?.(keyX);
-  keySignature.setX?.(keyX + timeWidth + Math.max(0, gapBetweenKeyAndTime));
-}
 
 function getKeySignatureHitBounds(
   stave: Stave,

@@ -24,6 +24,7 @@ import {
   type KeySignature,
 } from '../utils/noteKeyUtils';
 import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accidentalUtils';
+import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
@@ -359,34 +360,6 @@ function applyDefaultRestDisplayLine(
       note.setKeyLine?.(0, note.getKeyLine(0) - 1);
     }
   }
-}
-
-function placeKeySignatureAfterTimeSignature(stave: Stave): void {
-  const modifiers = (stave as any).getModifiers?.() as Array<any> | undefined;
-  if (!modifiers) {
-    return;
-  }
-
-  const keySignature = modifiers.find((modifier) => modifier?.getCategory?.() === 'KeySignature');
-  const timeSignature = modifiers.find((modifier) => modifier?.getCategory?.() === 'TimeSignature');
-  if (!keySignature || !timeSignature) {
-    return;
-  }
-
-  const keyX = keySignature.getX?.();
-  const timeX = timeSignature.getX?.();
-  const keyWidth = keySignature.getWidth?.();
-  const timeWidth = timeSignature.getWidth?.();
-  if (![keyX, timeX, keyWidth, timeWidth].every((value) => typeof value === 'number' && Number.isFinite(value))) {
-    return;
-  }
-
-  const gapBetweenKeyAndTime = timeX - keyX - keyWidth;
-  // VexFlow の BEGIN 修飾子は内部で「調号 → 拍子」に固定ソートされる。
-  // そのため描画前に X 座標だけ入れ替えて、このエディタの見た目要件
-  // （拍子記号の右に調号を置く）を満たす。
-  timeSignature.setX?.(keyX);
-  keySignature.setX?.(keyX + timeWidth + Math.max(0, gapBetweenKeyAndTime));
 }
 
 function getKeySignatureHitBounds(
