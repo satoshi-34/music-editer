@@ -300,6 +300,10 @@ export default function ScorePage() {
   // 楽譜種別を切り替えても迷わないように値自体は保持しておく。
   const [activeVoice, setActiveVoice] = useState<0 | 1>(0);
   const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
+  // 「音符・休符」タブで直前に選んでいたツール（音価・タイ・臨時記号など）を覚えておくための ref。
+  // 他のタブ（演奏記号タブなど）へ切り替えたあと再び「音符・休符」タブへ戻ったときに、
+  // 選んでいた音価などが失われて毎回4分音符に戻ってしまうと不自然なので復元する。
+  const lastNotesToolRef = useRef<Tool>({ duration: '4', isRest: false });
   const [scoreType, setScoreType] = useState<ScoreType>('single');
   // 楽譜の表示ウェイト（五線・テキストの太さ）
   const [displayWeight, setDisplayWeight] = useState<'thin' | 'normal' | 'thick'>('normal');
@@ -2608,12 +2612,40 @@ export default function ScorePage() {
     }
   }, [closeInstrumentationEditorWindow, scoreType]);
 
+  // 「音符・休符」タブにいる間だけ、選択中ツールを lastNotesToolRef に記録しておく。
+  // タブを切り替えて戻ってきたときにこの値を復元する（上の handleToolbarTabChange 参照）。
+  useEffect(() => {
+    if (activeToolbarTab === 'notes') {
+      lastNotesToolRef.current = tool;
+    }
+  }, [activeToolbarTab, tool]);
+
   useEffect(() => () => {
     const editorWindow = instrumentationEditorWindowRef.current;
     if (editorWindow && !editorWindow.closed) {
       editorWindow.close();
     }
   }, []);
+
+  // タブを切り替えるときのハンドラ。
+  // 「演奏記号」タブなどで「途中テンポ変更」のような編集オーバーレイ系ツールを選んだまま
+  // タブを切り替えると、選択中ツールがそのまま残ってしまい、次に譜面をクリックしたときに
+  // 意図しないBPM入力欄などが開いてしまう不具合があった。
+  // タブを切り替えたタイミングでツールをそのタブの既定値にリセットすることで防ぐ。
+  // 「音符・休符」タブに戻ったときだけは、直前に選んでいた音価ツールなどを復元する
+  // （毎回4分音符に戻ると不自然なため）。
+  const handleToolbarTabChange = (tabId: ToolbarTab) => {
+    if (tabId === activeToolbarTab) return;
+    setActiveToolbarTab(tabId);
+    if (tabId === 'notes') {
+      setTool(lastNotesToolRef.current);
+    } else {
+      // 演奏記号・楽譜設定・再生・音色・その他タブでは、無害な既定ツール（4分音符）に戻す。
+      // これらのタブではPaletteの音符ボタン自体は表示されないが、tool state は
+      // 譜面クリック時の挙動に影響するため、編集オーバーレイを開くようなモードを残さない。
+      setTool({ duration: '4', isRest: false });
+    }
+  };
 
   const toolbarTabButtons: Array<{ id: ToolbarTab; label: string }> = [
     { id: 'notes', label: '音符・休符' },
@@ -2647,7 +2679,7 @@ export default function ScorePage() {
               key={tab.id}
               type="button"
               className={`ghost toolbar-tab-button${activeToolbarTab === tab.id ? ' active' : ''}`}
-              onClick={() => setActiveToolbarTab(tab.id)}
+              onClick={() => handleToolbarTabChange(tab.id)}
               role="tab"
               aria-selected={activeToolbarTab === tab.id}
             >
