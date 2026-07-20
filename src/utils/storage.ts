@@ -513,6 +513,29 @@ function validateSystemMeasureOverrides(value: unknown): value is SavedScoreData
   return new Set(starts).size === starts.length;
 }
 
+/**
+ * 段ごとの間隔上書き（systemRowGapOverrides）を検証する。
+ * 省略可能なフィールドなので undefined は許容するが、値がある場合は各要素が
+ * 非負整数の startMeasure と有限数の gapPx を持つことを要求する。
+ * startMeasure の重複は「同じ段に矛盾する間隔指定」を意味するため無効とする。
+ */
+function validateSystemRowGapOverrides(value: unknown): value is SavedScoreData['systemRowGapOverrides'] {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  if (!value.every((item) => (
+    isRecord(item) &&
+    typeof item.startMeasure === 'number' &&
+    Number.isInteger(item.startMeasure) &&
+    item.startMeasure >= 0 &&
+    typeof item.gapPx === 'number' &&
+    Number.isFinite(item.gapPx)
+  ))) {
+    return false;
+  }
+  const starts = value.map((item: any) => item.startMeasure);
+  return new Set(starts).size === starts.length;
+}
+
 function validateSavedPartIds(data: SavedScoreData): boolean {
   const savedPartIds = data.parts.map(part => part.partId);
   if (new Set(savedPartIds).size !== savedPartIds.length) {
@@ -559,7 +582,8 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     typeof data.measuresPerSystem === 'number' &&
     data.measuresPerSystem > 0 &&
     validateCustomSymbolDefs(data.customSymbolDefs) &&
-    validateSystemMeasureOverrides(data.systemMeasureOverrides)
+    validateSystemMeasureOverrides(data.systemMeasureOverrides) &&
+    validateSystemRowGapOverrides(data.systemRowGapOverrides)
   );
 }
 
@@ -946,7 +970,8 @@ export function createSavedScoreData(
   instrumentation?: ScoreInstrumentation,
   notationMode?: 'concert' | 'written',
   customSymbolDefs?: CustomSymbolDef[],
-  systemMeasureOverrides?: SavedScoreData['systemMeasureOverrides']
+  systemMeasureOverrides?: SavedScoreData['systemMeasureOverrides'],
+  systemRowGapOverrides?: SavedScoreData['systemRowGapOverrides']
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -961,7 +986,8 @@ export function createSavedScoreData(
     systems,
     measuresPerSystem,
     customSymbolDefs,
-    systemMeasureOverrides
+    systemMeasureOverrides,
+    systemRowGapOverrides
   };
 }
 

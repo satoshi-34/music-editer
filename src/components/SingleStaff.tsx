@@ -58,6 +58,13 @@ type Props = {
   finalMeasureIndex?: number;
   // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
   symbolsClickable?: boolean;
+  /**
+   * 段ごとの間隔（上の段との距離）の追加オフセット(px)。systemRanges と同じ並び順の配列で、
+   * 各段の直前に marginTop として乗せる。その他タブの「段の間隔」設定（全体値）に、
+   * この段固有のオフセットを足し込む形で個別調整できるようにするため（詳細は
+   * .claude/specs/page-layout-controls/design.md 参照）。省略時・値が0のときは従来どおり。
+   */
+  systemGapOverridesPx?: number[];
 };
 
 export default function SingleStaff({
@@ -84,6 +91,7 @@ export default function SingleStaff({
   pageMarginSideMm,
   finalMeasureIndex,
   symbolsClickable,
+  systemGapOverridesPx,
 }: Props) {
   const scoreData = data ?? [];
   const handleChange = onChange ?? (() => {});
@@ -99,9 +107,15 @@ export default function SingleStaff({
             onChange: handleChange,
           },
         ];
+        // 段ごとの間隔の個別オフセット。0のときは style を付けず従来どおりの見た目にする。
+        const gapOverride = systemGapOverridesPx?.[i] ?? 0;
         return (
           // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
-          <div key={i} className={printVisibleSystems != null && i >= printVisibleSystems ? 'print-hidden-system' : undefined}>
+          <div
+            key={i}
+            className={printVisibleSystems != null && i >= printVisibleSystems ? 'print-hidden-system' : undefined}
+            style={gapOverride !== 0 ? { marginTop: gapOverride } : undefined}
+          >
             <PianoSystemCanvas
               measuresPerSystem={systemRanges?.[i]?.count ?? measuresPerSystem}
               tool={tool}

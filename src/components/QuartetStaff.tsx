@@ -54,6 +54,11 @@ type Props = {
   finalMeasureIndex?: number;
   // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
   symbolsClickable?: boolean;
+  /**
+   * 段ごとの間隔（上の段との距離）の追加オフセット(px)。systemRanges と同じ並び順の配列で、
+   * 各段の直前に marginTop として乗せる（詳細は SingleStaff.tsx 側のコメント参照）。
+   */
+  systemGapOverridesPx?: number[];
 };
 
 export default function QuartetStaff({
@@ -78,6 +83,7 @@ export default function QuartetStaff({
   pageMarginSideMm,
   finalMeasureIndex,
   symbolsClickable,
+  systemGapOverridesPx,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
@@ -88,9 +94,14 @@ export default function QuartetStaff({
           data: partsData[pi] ?? [],
           onChange: onPartChange[pi] ?? (() => {}),
         }));
+        const gapOverride = systemGapOverridesPx?.[i] ?? 0;
         return (
           // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
-          <div key={i} className={printVisibleSystems != null && i >= printVisibleSystems ? 'print-hidden-system' : undefined}>
+          <div
+            key={i}
+            className={printVisibleSystems != null && i >= printVisibleSystems ? 'print-hidden-system' : undefined}
+            style={gapOverride !== 0 ? { marginTop: gapOverride } : undefined}
+          >
           <PianoSystemCanvas
             measuresPerSystem={systemRanges?.[i]?.count ?? measuresPerSystem}
             tool={tool}

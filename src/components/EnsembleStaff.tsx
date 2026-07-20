@@ -56,6 +56,11 @@ type Props = {
   finalMeasureIndex?: number;
   // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
   symbolsClickable?: boolean;
+  /**
+   * 段ごとの間隔（上の段との距離）の追加オフセット(px)。systemRanges と同じ並び順の配列で、
+   * 各段の直前に marginTop として乗せる（詳細は SingleStaff.tsx 側のコメント参照）。
+   */
+  systemGapOverridesPx?: number[];
 };
 
 export default function EnsembleStaff({
@@ -82,6 +87,7 @@ export default function EnsembleStaff({
   pageMarginSideMm,
   finalMeasureIndex,
   symbolsClickable,
+  systemGapOverridesPx,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -131,9 +137,14 @@ export default function EnsembleStaff({
           };
         });
 
+        const gapOverride = systemGapOverridesPx?.[systemIndex] ?? 0;
         return (
           // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
-          <div key={systemIndex} className={printVisibleSystems != null && systemIndex >= printVisibleSystems ? 'print-hidden-system' : undefined}>
+          <div
+            key={systemIndex}
+            className={printVisibleSystems != null && systemIndex >= printVisibleSystems ? 'print-hidden-system' : undefined}
+            style={gapOverride !== 0 ? { marginTop: gapOverride } : undefined}
+          >
           <PianoSystemCanvas
             measuresPerSystem={systemRanges?.[systemIndex]?.count ?? measuresPerSystem}
             tool={tool}

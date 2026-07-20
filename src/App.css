@@ -1036,6 +1036,14 @@ button.ghost:disabled {
   width: 44px;
   text-align: center;
 }
+/* 段ごとの間隔（上の段との距離）を個別調整する「間隔 － Npx ＋」のラベル。
+   小節数側の .system-measure-override-label と見た目を揃えつつ、
+   同じ行に並べるので少し幅を詰めている。 */
+.system-row-gap-override-label {
+  width: 28px;
+  text-align: right;
+  margin-left: 4px;
+}
 .system-measure-override-button {
   width: 20px;
   height: 20px;

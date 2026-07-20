@@ -42,7 +42,8 @@ import type {
   MeasureData,
   PartData,
   ScoreType,
-  SystemMeasureOverride
+  SystemMeasureOverride,
+  SystemRowGapOverride
 } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import {
@@ -157,6 +158,9 @@ const DEFAULT_PAGE_MARGIN_BOTTOM_MM = DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_
 const SYSTEM_ROW_GAP_KEY = 'score-system-row-gap';
 const SYSTEM_ROW_GAP_MIN_PX = -30;
 const SYSTEM_ROW_GAP_MAX_PX = 30;
+// 段ごとの間隔（上の段との距離）を「－／＋」ボタン1回で増減するステップ幅(px)。
+// 全体の「段の間隔」スライダーと同じ範囲（-30〜30px）を、この刻みで細かく調整できるようにする。
+const SYSTEM_ROW_GAP_OVERRIDE_STEP_PX = 4;
 // mm → px 換算（1mm ≒ 3.7795px、96dpi基準）。CSS の mm 単位と同じ換算率を使う。
 const MM_TO_PX = 96 / 25.4;
 // 段数/ページの上限（maxSystemsPerPage）を動的計算する際に使う、
@@ -359,6 +363,10 @@ export default function ScorePage() {
   // 段ごとの小節数のユーザー上書き（「小節 X から始まる段は Y 小節」の一覧）。
   // 自動計画（planSystemMeasureRanges）ではなく、ユーザーが個別に段の▶◀ボタンで調整した段だけを保持する。
   const [systemMeasureOverrides, setSystemMeasureOverrides] = useState<SystemMeasureOverride[]>([]);
+  // 段ごとの間隔（上の段との距離）のユーザー上書き（「小節 X から始まる段は、全体設定に
+  // Ypx を追加する」の一覧）。その他タブの「段の間隔」（全体設定）とは別に、段ごとの
+  // ◀▶コントロールの並びで個別に増減できる（.claude/specs/page-layout-controls/design.md 参照）。
+  const [systemRowGapOverrides, setSystemRowGapOverrides] = useState<SystemRowGapOverride[]>([]);
 
   // パート譜表示の選択肢と、現在選択中のパート。
   // 単旋律譜・ピアノ大譜表では対象外（getPartExtractionOptions が空配列を返す）。
@@ -391,13 +399,15 @@ export default function ScorePage() {
     ensembleParts: MeasureData[][];
     // 段割りの手動上書きも Undo/Redo の対象にする（+1/-1 操作やリセットを元に戻せるように）。
     systemMeasureOverrides: SystemMeasureOverride[];
+    // 段ごとの間隔の手動上書きも Undo/Redo の対象にする（+/- 操作やリセットを元に戻せるように）。
+    systemRowGapOverrides: SystemRowGapOverride[];
   };
   const MAX_HISTORY = 50;
   const historyStack = useRef<ScoreSnapshot[]>([]);
   const futureStack  = useRef<ScoreSnapshot[]>([]);
   // 常に最新のスコア状態を ref として持つ（ハンドラ内で「変更前の値」を取得するため）
   const currentScoreRef = useRef<ScoreSnapshot>({
-    rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides,
+    rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides, systemRowGapOverrides,
   });
 
   // useRef(createPlaybackEngine(...)) と引数に直接書くと、useRef は初回しか値を使わないのに
@@ -1292,8 +1302,8 @@ export default function ScorePage() {
 
   // スコアデータが変わるたびに currentScoreRef を最新に保つ
   useEffect(() => {
-    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides };
-  }, [rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides]);
+    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides, systemRowGapOverrides };
+  }, [rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides, systemRowGapOverrides]);
 
   // ツールバーの「元に戻す/やり直す」ボタンの活性・非活性を切り替えるためのカウンタ。
   // historyStack/futureStack は ref のため、その中身が変わっただけでは再レンダーされない。
@@ -1385,6 +1395,7 @@ export default function ScorePage() {
       rightHandData: snap.rightHandData ?? [],
       leftHandData: snap.leftHandData ?? [],
       systemMeasureOverrides: snap.systemMeasureOverrides ?? [],
+      systemRowGapOverrides: snap.systemRowGapOverrides ?? [],
     };
     // currentScoreRef は useEffect（レンダー後）でも更新されるが、ここでも同期的に更新する。
     // 復元直後にキャンバスの onScoreDataChange 通知が届いたとき、古い ref と比較して
@@ -1395,6 +1406,7 @@ export default function ScorePage() {
     setQuartetParts(restored.quartetParts);
     setEnsembleParts(restored.ensembleParts);
     setSystemMeasureOverrides(restored.systemMeasureOverrides);
+    setSystemRowGapOverrides(restored.systemRowGapOverrides);
   }, []);
 
   // Undo: 履歴から1つ前の状態を取り出して適用する（キーボードショートカットとボタンの共通処理）
@@ -1526,7 +1538,7 @@ export default function ScorePage() {
 
   const handleSave = async () => {
     const { metadata, parts } = buildScoreData();
-    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides);
+    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
     if (saved) {
       setStoredDataAvailable(true);
     }
@@ -1574,6 +1586,8 @@ export default function ScorePage() {
     setExtraEditingMeasures(0);
     // 前の譜面用の段割り手動上書きも引き継がない
     setSystemMeasureOverrides([]);
+    // 前の譜面用の段の間隔手動上書きも引き継がない
+    setSystemRowGapOverrides([]);
   }, [
     clearPlaybackTimer,
     clearStoredData,
@@ -1590,7 +1604,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const handleExportFile = async () => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
     const handle = await exportScoreToFile(data, title, fileHandleRef.current);
     if (handle) fileHandleRef.current = handle;
@@ -1644,6 +1658,8 @@ export default function ScorePage() {
       setExtraEditingMeasures(0);
       // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
       setSystemMeasureOverrides(data.systemMeasureOverrides ?? []);
+      // 段の間隔の手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
+      setSystemRowGapOverrides(data.systemRowGapOverrides ?? []);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'ファイルの読み込みに失敗しました');
     }
@@ -1661,7 +1677,7 @@ export default function ScorePage() {
     autoSaveTimerRef.current = setTimeout(async () => {
       setAutoSaveStatus('saving');
       const { metadata, parts } = buildScoreData();
-      const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides);
+      const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
       if (saved) {
         setStoredDataAvailable(true);
         setAutoSaveStatus('saved');
@@ -1679,7 +1695,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない。
   // 値はタイマー発火時（レンダー後）に読まれるので TDZ の問題はない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides]);
+  }, [title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
@@ -1726,6 +1742,8 @@ export default function ScorePage() {
       setExtraEditingMeasures(0);
       // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
       setSystemMeasureOverrides(loadedData.systemMeasureOverrides ?? []);
+      // 段の間隔の手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
+      setSystemRowGapOverrides(loadedData.systemRowGapOverrides ?? []);
     }
   };
 
@@ -1759,6 +1777,8 @@ export default function ScorePage() {
     setExtraEditingMeasures(0);
     // 前の譜面用の段割り手動上書きも引き継がない
     setSystemMeasureOverrides([]);
+    // 前の譜面用の段の間隔手動上書きも引き継がない
+    setSystemRowGapOverrides([]);
   }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock, setTimeSignature]);
 
   const handleSaveCurrentAsSample = useCallback(() => {
@@ -2118,7 +2138,7 @@ export default function ScorePage() {
     const n = raw == null ? NaN : parseFloat(raw);
     return Number.isFinite(n) ? Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, n)) : 0;
   });
-  // 「レイアウトをリセット」: ページ余白・段の間隔の3設定をまとめて既定値へ戻す。
+  // 「レイアウトをリセット」: ページ余白・段の間隔（全体・段ごと）の設定をまとめて既定値へ戻す。
   const handleResetPageLayout = useCallback(() => {
     setPageMarginSideMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
     setPageMarginTopMm(DEFAULT_PAGE_MARGIN_TOP_MM);
@@ -2128,7 +2148,13 @@ export default function ScorePage() {
     localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(DEFAULT_PAGE_MARGIN_TOP_MM));
     localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(DEFAULT_PAGE_MARGIN_BOTTOM_MM));
     localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(0));
-  }, []);
+    // 段ごとの間隔の個別上書きは楽譜データ側（保存データ）の状態なので、Undo できるよう
+    // pushHistory してからクリアする（他の3設定は画面専用の localStorage 設定のため対象外）。
+    if (systemRowGapOverrides.length > 0) {
+      pushHistory();
+      setSystemRowGapOverrides([]);
+    }
+  }, [systemRowGapOverrides.length, pushHistory]);
 
   const totalSystems = 12;
   const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
@@ -2328,6 +2354,32 @@ export default function ScorePage() {
     pushHistory();
     setSystemMeasureOverrides([]);
   }, [systemMeasureOverrides.length, pushHistory]);
+
+  // 段ごとの間隔（上の段との距離）の手動上書きを1クリックぶんだけ増減する。
+  // 「小節 range.start から始まる段は、全体設定に gapPx を追加する」という上書きを
+  // 配列に upsert する。全体の「段の間隔」スライダーと同じ下限（SYSTEM_ROW_GAP_MIN_PX）を
+  // 追加オフセット単体にも適用し、詰めすぎて段同士が重なるのを防ぐ
+  // （合計値ではなく追加オフセット単体をクランプするだけの単純な方式。実際に画面へ
+  // 反映する合計値のクランプは CSS の margin-top に任せ、視覚的な破綻はレイアウト側で防ぐ）。
+  const adjustSystemRowGapOverride = useCallback((startMeasure: number, delta: number) => {
+    pushHistory();
+    setSystemRowGapOverrides((prev) => {
+      const current = prev.find((o) => o.startMeasure === startMeasure)?.gapPx ?? 0;
+      const nextGapPx = Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, current + delta));
+      const next = prev.filter((o) => o.startMeasure !== startMeasure);
+      if (nextGapPx !== 0) {
+        next.push({ startMeasure, gapPx: nextGapPx });
+      }
+      return next;
+    });
+  }, [pushHistory]);
+
+  // 指定した段一覧（systemRanges）ぶんの「段ごとの間隔の追加オフセット(px)」配列を作る。
+  // 各 Staff コンポーネント（SingleStaff等）の systemGapOverridesPx props にそのまま渡し、
+  // 該当する段の直前へ marginTop として反映させる。上書きが無い段は 0（従来どおり）。
+  const getSystemGapOverridesPx = useCallback((ranges: SystemMeasureRange[]): number[] => (
+    ranges.map((range) => systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0)
+  ), [systemRowGapOverrides]);
   // 終止線を描く「内容のある最後の小節」の絶対インデックス。
   // 内容が1小節も無い（空の楽譜）ときは undefined にして、どの Canvas でも終止線を描かせない。
   const finalMeasureIndex = contentMeasureCount > 0 ? contentMeasureCount - 1 : undefined;
@@ -2511,6 +2563,8 @@ export default function ScorePage() {
         }
         // MusicXML には段割り上書きの概念が無いため、前の譜面ぶんを引き継がずリセットする
         setSystemMeasureOverrides([]);
+        // 段の間隔の手動上書きも同様に引き継がずリセットする
+        setSystemRowGapOverrides([]);
       } catch (err) {
         alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
       }
@@ -3620,6 +3674,7 @@ export default function ScorePage() {
                     <EnsembleStaff
                       systems={p.systems}
                       systemRanges={p.systemRanges}
+                      systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
                       incomingArcIndex={ensembleDisplayIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       pageMarginSideMm={pageMarginSideMm}
@@ -3649,6 +3704,7 @@ export default function ScorePage() {
                     <QuartetStaff
                       systems={p.systems}
                       systemRanges={p.systemRanges}
+                      systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       pageMarginSideMm={pageMarginSideMm}
@@ -3676,6 +3732,7 @@ export default function ScorePage() {
                     <PianoStaff
                       systems={p.systems}
                       systemRanges={p.systemRanges}
+                      systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       pageMarginSideMm={pageMarginSideMm}
@@ -3709,6 +3766,7 @@ export default function ScorePage() {
                     <SingleStaff
                       systems={p.systems}
                       systemRanges={p.systemRanges}
+                      systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       pageMarginSideMm={pageMarginSideMm}
@@ -3736,10 +3794,13 @@ export default function ScorePage() {
                     />
                   )}
 
-                  {/* 段ごとの小節数を個別に調整するコントロール。段の自動計画（幅ベース）だけでは
-                      「この段だけ1小節増やしたい／減らしたい」という要望に応えられないため、
-                      ページ内の各段の直後に「◀ N小節 ▶」を1本ずつ並べる。▶ で次段の先頭小節を
-                      この段へ引き込み（+1）、◀ でこの段の末尾小節を次段へ送る（-1）。
+                  {/* 段ごとの小節数・間隔を個別に調整するコントロール。段の自動計画（幅ベース）だけでは
+                      「この段だけ1小節増やしたい／減らしたい」「この段の上だけ間隔を広げたい」
+                      という要望に応えられないため、ページ内の各段の直後に「◀ N小節 ▶」と
+                      「間隔 － Npx ＋」を1本ずつ並べる。▶ で次段の先頭小節をこの段へ引き込み
+                      （+1）、◀ でこの段の末尾小節を次段へ送る（-1）。間隔の－／＋は、その他
+                      タブの「段の間隔」（全体設定）に加えてこの段だけ追加で詰める/広げる
+                      （.claude/specs/page-layout-controls/design.md 参照）。
                       編集モードのときだけ表示し、印刷には出さない（App.css の @media print 参照）。 */}
                   {!isPartExtractionActive && !isEditingDisabled && (
                     <div className="system-measure-override-controls">
@@ -3748,6 +3809,9 @@ export default function ScorePage() {
                         // 引き込める「内容のある小節」が次に残っている段だけ ▶ を押せる。
                         // 空きバッファ小節まで引き込むと終止線の作法が壊れるため上限は contentMeasureCount
                         const canIncrease = range.start + range.count < contentMeasureCount;
+                        const rowGapPx = systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0;
+                        const canDecreaseGap = rowGapPx > SYSTEM_ROW_GAP_MIN_PX;
+                        const canIncreaseGap = rowGapPx < SYSTEM_ROW_GAP_MAX_PX;
                         return (
                           <div className="system-measure-override-row" key={range.start}>
                             <span className="system-measure-override-label">段{getPageSystemOffset(i) + rangeIndex + 1}</span>
@@ -3769,6 +3833,26 @@ export default function ScorePage() {
                               title="次の段の先頭の小節をこの段へ引き込む"
                             >
                               ▶
+                            </button>
+                            <span className="system-row-gap-override-label">間隔</span>
+                            <button
+                              type="button"
+                              className="system-measure-override-button"
+                              disabled={!canDecreaseGap}
+                              onClick={() => adjustSystemRowGapOverride(range.start, -SYSTEM_ROW_GAP_OVERRIDE_STEP_PX)}
+                              title="この段の間隔（上の段との距離）を詰める"
+                            >
+                              －
+                            </button>
+                            <span className="system-measure-override-count">{rowGapPx >= 0 ? `+${rowGapPx}` : rowGapPx}px</span>
+                            <button
+                              type="button"
+                              className="system-measure-override-button"
+                              disabled={!canIncreaseGap}
+                              onClick={() => adjustSystemRowGapOverride(range.start, SYSTEM_ROW_GAP_OVERRIDE_STEP_PX)}
+                              title="この段の間隔（上の段との距離）を広げる"
+                            >
+                              ＋
                             </button>
                           </div>
                         );
