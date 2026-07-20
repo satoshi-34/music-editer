@@ -21,8 +21,8 @@ import {
 import { computeArcGeometry } from './arcUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
-import { keyToMidi, midiToKey } from '../utils/noteMidiUtils';
 import { deleteEventFromMeasures } from '../utils/noteDeletionUtils';
+import { computeShiftedKeys, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
@@ -70,7 +70,7 @@ import {
 } from '../utils/symbolAdjustUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
-import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
+import { buildTupletGroupPlan, buildTupletRestReplacement } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
@@ -1061,59 +1061,15 @@ export default function PianoSystemCanvas({
           if(measure>=prev.length)return prev;
           const ev=prev[measure].events[index];
           if(!ev)return prev;
-          let newKeys:string[];
-          const editSingleKey=!ev.isRest&&keyIndex!==undefined&&keyIndex>=0&&keyIndex<ev.keys.length;
-          if(ev.isRest){
-            const restBaseKey = ev.keys[0] || defaultRestKeyForClef(clef);
-            const diff=e.shiftKey?(up?-3.5:3.5):(up?-0.5:0.5);
-            newKeys=[l2k(k2l(restBaseKey)+diff)];
-          }else{
-            if(editSingleKey&&e.altKey){
-              const delta=up?1:-1;
-              newKeys=ev.keys.map((k,idx)=>{
-                if(idx!==keyIndex)return k;
-                const midi=keyToMidi(k);
-                return midi==null?k:midiToKey(midi+delta,up);
-              });
-            }else if(editSingleKey){
-              const diff=e.shiftKey?(up?-3.5:3.5):(up?-0.5:0.5);
-              newKeys=ev.keys.map((k,idx)=>
-                idx===keyIndex
-                  ? applyKeySignatureToNaturalKey(l2k(k2l(k)+diff), keySignatureRef.current)
-                  : k
-              );
-            }else if(e.altKey){
-              const delta=up?1:-1;
-              newKeys=ev.keys.map(k=>{const midi=keyToMidi(k);return midi==null?k:midiToKey(midi+delta,up);});
-            }else{
-              const diff=e.shiftKey?(up?-3.5:3.5):(up?-0.5:0.5);
-              newKeys=ev.keys.map(k=>
-                applyKeySignatureToNaturalKey(
-                  l2k(k2l(k)+diff),
-                  keySignatureRef.current
-                )
-              );
-            }
-          }
-          if(ev.isRest){
-            return prev.map((m,mi)=>mi===measure?{...m,events:m.events.map((e2,ei)=>ei===index?{...e2,keys:newKeys}:e2)}:m);
-          }
-          // 音高変化に合わせて弧の fromKey / toKey を更新する
-          const keyMap=editSingleKey
-            ? new Map([[ev.keys[keyIndex],newKeys[keyIndex]]])
-            : new Map(ev.keys.map((k,i)=>[k,newKeys[i]]));
-          return prev.map((m,mi)=>({
-            events:m.events.map((e2,ei)=>{
-              if(mi===measure&&ei===index){
-                return{...e2,keys:newKeys,arcs:e2.arcs?.map(a=>({...a,fromKey:keyMap.get(a.fromKey)??a.fromKey}))};
-              }
-              if(!e2.arcs?.length)return e2;
-              const patched=e2.arcs.map(a=>
-                a.toMeasureIndex===measure&&a.toEventIndex===index?{...a,toKey:keyMap.get(a.toKey)??a.toKey}:a
-              );
-              return patched.every((a,pi)=>a===e2.arcs![pi])?e2:{...e2,arcs:patched};
-            }) as NoteEvent[]
-          }));
+          // StaffCanvas/PianoSystemCanvas で完全一致していた音高シフトのロジックは
+          // utils/pitchShiftUtils.ts に共通化した。
+          const newKeys=computeShiftedKeys(
+            ev,
+            keyIndex,
+            { up, shiftKey: e.shiftKey, altKey: e.altKey },
+            { lineToKey: l2k, keyToLine: k2l, keySignature: keySignatureRef.current, defaultRestKey: defaultRestKeyForClef(clef) }
+          );
+          return applyPitchChangeToMeasures(prev, measure, index, keyIndex, newKeys);
         });
         e.preventDefault();return;
       }

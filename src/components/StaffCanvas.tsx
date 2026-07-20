@@ -55,10 +55,10 @@ import { defaultRestDisplayKey, restKey as restFormatterKey, lineToKey as lineTo
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
 import { measureMinimumContentWidth } from '../utils/measureLayoutUtils';
 import { tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
-import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
+import { buildTupletGroupPlan, buildTupletRestReplacement } from '../utils/tupletUtils';
 import { isValidRehearsalMark, suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
-import { keyToMidi, midiToKey } from '../utils/noteMidiUtils';
 import { deleteEventFromMeasures } from '../utils/noteDeletionUtils';
+import { computeShiftedKeys, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 
 /* ============================================================
    ✅ 編集まとめ（初心者向けメモ）
@@ -1116,78 +1116,15 @@ export default function StaffCanvas({
           if (!inRange(cur.events, index)) return prev;
           const ev = cur.events[index];
 
-          let newKeys: string[];
-          const editSingleKey = !ev.isRest && keyIndex !== undefined && keyIndex >= 0 && keyIndex < ev.keys.length;
-          if (ev.isRest) {
-            const defaultRestKey = defaultRestKeyForClef(clef);
-            const restBaseKey = ev.keys[0] || defaultRestKey;
-            if (e.shiftKey) { // 1オクターブ相当で大きく移動
-              newKeys = [
-                lineToKey(keyToLine(restBaseKey) + (up ? -3.5 : 3.5))
-              ];
-            } else { // 線/間 1段シフト
-              newKeys = [
-                lineToKey(keyToLine(restBaseKey) + (up ? -0.5 : 0.5))
-              ];
-            }
-          } else if (editSingleKey && e.altKey) { // 半音シフト
-            const delta = up ? 1 : -1;
-            newKeys = ev.keys.map((k, idx) => {
-              if (idx !== keyIndex) return k;
-              const midi = keyToMidi(k);
-              return midi == null ? k : midiToKey(midi + delta, up);
-            });
-          } else if (editSingleKey) {
-            const diff = e.shiftKey ? (up ? -3.5 : 3.5) : (up ? -0.5 : 0.5);
-            newKeys = ev.keys.map((k, idx) =>
-              idx === keyIndex
-                ? applyKeySignatureToNaturalKey(lineToKey(keyToLine(k) + diff), keySignatureRef.current)
-                : k
-            );
-          } else if (e.altKey) { // 半音シフト
-            const delta = up ? 1 : -1;
-            newKeys = ev.keys.map(k => { const midi = keyToMidi(k); return midi == null ? k : midiToKey(midi + delta, up); });
-          } else if (e.shiftKey) { // 1オクターブシフト
-            newKeys = ev.keys.map(k =>
-              applyKeySignatureToNaturalKey(
-                lineToKey(keyToLine(k) + (up ? -3.5 : 3.5)),
-                keySignatureRef.current
-              )
-            );
-          } else { // 線/間 1段シフト
-            newKeys = ev.keys.map(k =>
-              applyKeySignatureToNaturalKey(
-                lineToKey(keyToLine(k) + (up ? -0.5 : 0.5)),
-                keySignatureRef.current
-              )
-            );
-          }
-          if (ev.isRest) {
-            const next = prev.map(cloneMeasureData);
-            next[measure].events[index] = { ...next[measure].events[index], keys: newKeys };
-            return next;
-          }
-
-          // 音高変化に合わせて弧の fromKey / toKey を更新する（キーのズレを防ぐ）
-          const keyMap = editSingleKey
-            ? new Map([[ev.keys[keyIndex], newKeys[keyIndex]]])
-            : new Map(ev.keys.map((k, i) => [k, newKeys[i]]));
-          return prev.map((m, mi) => ({
-            events: m.events.map((e2, ei) => {
-              if (mi === measure && ei === index) {
-                // 移動する音符自体: keys と発する arcs の fromKey を更新
-                return { ...e2, keys: newKeys,
-                  arcs: e2.arcs?.map(a => ({ ...a, fromKey: keyMap.get(a.fromKey) ?? a.fromKey })) };
-              }
-              if (!e2.arcs?.length) return e2;
-              // 他の音符の arcs で、この音符を終点とするものの toKey を更新
-              const patched = e2.arcs.map(a =>
-                a.toMeasureIndex === measure && a.toEventIndex === index
-                  ? { ...a, toKey: keyMap.get(a.toKey) ?? a.toKey } : a
-              );
-              return patched.every((a, pi) => a === e2.arcs![pi]) ? e2 : { ...e2, arcs: patched };
-            }) as NoteEvent[]
-          }));
+          // StaffCanvas/PianoSystemCanvas で完全一致していた音高シフトのロジックは
+          // utils/pitchShiftUtils.ts に共通化した。
+          const newKeys = computeShiftedKeys(
+            ev,
+            keyIndex,
+            { up, shiftKey: e.shiftKey, altKey: e.altKey },
+            { lineToKey, keyToLine, keySignature: keySignatureRef.current, defaultRestKey: defaultRestKeyForClef(clef) }
+          );
+          return applyPitchChangeToMeasures(prev, measure, index, keyIndex, newKeys);
         });
         e.preventDefault(); return;
       }
