@@ -942,11 +942,15 @@ function TextElementIcon({ kind }: { kind: TextElementKind }) {
   const W = 24, H = 18;
   switch (kind) {
     case 'lyrics':
+      // 歌詞: 口を開けて歌っている顔 + 音符で「歌う」ことを直感的に表す
+      // （以前は「♩と横線」だったが、何のツールか分かりにくいという指摘で変更した）
       return (
         <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
-          <text x="2" y="12" fontSize="10" fontFamily="serif" fill="#111">♩</text>
-          <line x1="13" y1="7" x2="22" y2="7" stroke="#111" strokeWidth="1.2" strokeLinecap="round" />
-          <line x1="13" y1="11" x2="22" y2="11" stroke="#111" strokeWidth="1.2" strokeLinecap="round" />
+          <circle cx="9" cy="9" r="7" fill="none" stroke="#111" strokeWidth="1.2" />
+          <circle cx="6.5" cy="7" r="1" fill="#111" />
+          <circle cx="11.5" cy="7" r="1" fill="#111" />
+          <ellipse cx="9" cy="11.5" rx="1.8" ry="2.4" fill="#111" />
+          <text x="16" y="9" fontSize="9" fontFamily="serif" fill="#111">♪</text>
         </svg>
       );
     case 'chordSymbol':
