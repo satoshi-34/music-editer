@@ -89,7 +89,10 @@ describe('SaveLoadButtons Component Tests', () => {
               if (error && error.trim().length > 0) {
                 const errorElement = screen.getByRole('alert');
                 expect(errorElement).toBeInTheDocument();
-                expect(errorElement).toHaveTextContent(error.trim());
+                // toHaveTextContent は DOM 側のテキストの連続空白を 1 つに潰して比較するが、
+                // 期待値の文字列はそのまま使うため、エラー文言に連続空白が含まれると
+                // （例: "!  !"）一致しなくなる。期待値側も同じルールで正規化してから比較する
+                expect(errorElement).toHaveTextContent(error.trim().replace(/\s+/g, ' '));
               } else {
                 expect(screen.queryByRole('alert')).not.toBeInTheDocument();
               }
