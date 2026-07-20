@@ -1064,6 +1064,20 @@ export default function PianoSystemCanvas({
       tieStartRef.current=null;
     };
 
+    // 削除された音符/休符（イベント）を参照している編集オーバーレイ（歌詞入力欄・
+    // 記号のサイズ/位置調整欄・調整対象の選択リスト）を閉じるヘルパー。
+    // 対象イベントを指したままオーバーレイが画面に残り続けてしまう不具合の修正。
+    // setState の updater 形式（prev => ...）を使うことで、useEffect の外側で作った
+    // 古いクロージャでも常に最新の state を見て判定できるようにしている。
+    const closeEventEditOverlaysFor=(partIndex:number,measure:number,index:number)=>{
+      const matches=(s:{partIndex:number;measureAbsoluteIndex:number;eventIndex:number}|null)=>
+        !!s && s.partIndex===partIndex && s.measureAbsoluteIndex===measure && s.eventIndex===index;
+      setTextEditState(prev=>matches(prev)?null:prev);
+      setSymbolResizeEditState(prev=>matches(prev)?null:prev);
+      setSymbolOffsetEditState(prev=>matches(prev)?null:prev);
+      setSymbolAdjustPickerState(prev=>matches(prev)?null:prev);
+    };
+
     const onKey=(e:KeyboardEvent)=>{
       if(disRef.current)return;
 
@@ -1139,6 +1153,7 @@ export default function PianoSystemCanvas({
             });
             return n;
           });
+          closeEventEditOverlaysFor(partIndex, measure, index);
           setSelected(null); e.preventDefault(); return;
         }
         if (e.key === 'Escape') { setSelected(null); e.preventDefault(); return; }
@@ -1148,6 +1163,7 @@ export default function PianoSystemCanvas({
       if(e.key==='Delete'||e.key==='Backspace'){
         // StaffCanvas と完全一致していた削除ロジックは utils/noteDeletionUtils.ts に共通化した。
         setS(prev=>deleteEventFromMeasures(prev, measure, index, keyIndex, defaultRestKeyForClef(clef)));
+        closeEventEditOverlaysFor(partIndex, measure, index);
         setSelected(null);e.preventDefault();return;
       }
       if(e.key==='ArrowUp'||e.key==='ArrowDown'){

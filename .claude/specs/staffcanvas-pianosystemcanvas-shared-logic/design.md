@@ -137,3 +137,53 @@
   歌詞を両方付けても重ならず、運指が下・歌詞が上に並んで表示されることを確認。
   単旋律譜（`StaffCanvas`）は従来どおり五線の下に歌詞が表示されることを確認（回帰なし）。
   いずれもコンソールエラーなし。
+
+## 追補: 音符削除時に編集オーバーレイが取り残される不具合の修正（2026-07-20）
+
+### 問題
+
+歌詞・記号サイズ調整・記号位置調整・調整対象選択リストなどの編集オーバーレイ
+（`textEditState` / `symbolResizeEditState` / `symbolOffsetEditState` /
+`symbolAdjustPickerState`）を開いたまま、そのオーバーレイが指している音符を
+Delete キーで削除すると、オーバーレイが画面に残り続けたまま操作対象のイベント
+だけが消えてしまう不具合があった（Escape キーでは閉じられるが、Delete では
+閉じられなかった）。
+
+### 修正方針
+
+`StaffCanvas.tsx` / `PianoSystemCanvas.tsx` の Delete/Backspace ハンドラ
+（`useEffect` 内の `onKey`）に、削除するイベントを参照しているオーバーレイ
+state だけを閉じるヘルパー `closeEventEditOverlaysFor` を追加した。
+
+- 各オーバーレイ state は `measureAbsoluteIndex` / `eventIndex`（`PianoSystemCanvas`
+  はさらに `partIndex`）で対象イベントを特定しているため、削除する
+  `measure`/`index`（`partIndex`）と一致する場合だけ `setState(prev => matches(prev)
+  ? null : prev)` の形で `null` にする。一致しない（無関係な音符を指している）
+  オーバーレイは触らない。
+- 全オーバーレイを無差別に閉じる方式ではなく、削除対象を指しているものだけを
+  閉じる方式を選んだのは、例えば「歌詞オーバーレイを開いたまま、離れた場所の
+  別の音符を選択して Delete する」ような操作で無関係なオーバーレイまで
+  閉じてしまうと、入力途中のテキストを無用に失わせてしまうため。
+- 対象は `textEditState` / `symbolResizeEditState` / `symbolOffsetEditState` /
+  `symbolAdjustPickerState` の4つ。`bpmEditState` / `clefEditState` /
+  `rehearsalEditState` は小節単位（`measureAbsoluteIndex` のみ）で音符とは
+  紐付かないため対象外（音符削除では小節自体は消えないので影響を受けない）。
+
+### 影響範囲
+
+- `src/components/StaffCanvas.tsx`: `closeEventEditOverlaysFor(measure, index)` の
+  追加と、Delete/Backspace ハンドラからの呼び出し。
+- `src/components/PianoSystemCanvas.tsx`: `closeEventEditOverlaysFor(partIndex,
+  measure, index)` の追加と、声部1・声部2それぞれの Delete/Backspace ハンドラ
+  からの呼び出し。
+- `README.md`: 「弧の選択と編集」節に音符削除時のオーバーレイ後始末の説明を追記。
+
+### 検証
+
+- `docker compose run --rm app npm run build` / `npm test`: エラー・失敗なし
+  （4661 Tests すべて成功）。
+- ブラウザ確認（ピアノ大譜表・右手パート）: 音符を配置 → 歌詞ツールで
+  「あ」と入力中（未確定）の状態のまま、Delete キーを送出（フォーカスが
+  入力欄の外にある想定を模したケース含む）→ 音符が削除されると同時に
+  歌詞入力オーバーレイも画面から消えることを確認。直後に Undo すると
+  歌詞付きの音符が復元されることを確認。コンソールエラーなし。

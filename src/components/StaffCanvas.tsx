@@ -1097,6 +1097,19 @@ export default function StaffCanvas({
       tieStartRef.current = null;
     };
 
+    // 削除された音符/休符（イベント）を参照している編集オーバーレイ（歌詞入力欄・
+    // 記号のサイズ/位置調整欄・調整対象の選択リスト）を閉じるヘルパー。
+    // 対象イベントを指したままオーバーレイが画面に残り続けてしまう不具合の修正
+    // （PianoSystemCanvas.tsx の同名ヘルパーと同じ考え方）。
+    const closeEventEditOverlaysFor = (measure: number, index: number) => {
+      const matches = (s: { measureAbsoluteIndex: number; eventIndex: number } | null) =>
+        !!s && s.measureAbsoluteIndex === measure && s.eventIndex === index;
+      setTextEditState(prev => (matches(prev) ? null : prev));
+      setSymbolResizeEditState(prev => (matches(prev) ? null : prev));
+      setSymbolOffsetEditState(prev => (matches(prev) ? null : prev));
+      setSymbolAdjustPickerState(prev => (matches(prev) ? null : prev));
+    };
+
     const onKey = (e: KeyboardEvent) => {
       if (disabledRef.current) return;
 
@@ -1153,6 +1166,7 @@ export default function StaffCanvas({
           // 和音1音削除・arc/hairpin のインデックス補正）は utils/noteDeletionUtils.ts に共通化した。
           deleteEventFromMeasures(prev, measure, index, keyIndex, defaultRestKeyForClef(clef))
         );
+        closeEventEditOverlaysFor(measure, index);
         setSelected(null);
         e.preventDefault(); return;
       }
