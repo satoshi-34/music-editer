@@ -934,7 +934,10 @@ button.ghost:disabled {
 .score-title { margin: 0; font-size: 28px; text-align: center; letter-spacing: .08em; }
 .score-subtitle { margin: 4px 0 0; font-size: 14px; text-align: center; color: #555; }
 .page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; }
-.page-foot { position: absolute; bottom: 6mm; left: 0; right: 0; text-align: center; color: #666; }
+/* pointer-events: none — ページ番号は absolute 配置のため、上下余白を狭くしたり
+   段の間隔をマイナスにすると、ページ最下段の「◀ N小節 ▶」コントロールに重なって
+   クリックを吸ってしまう。フッターはクリック操作を受ける必要がないので素通しにする */
+.page-foot { position: absolute; bottom: 6mm; left: 0; right: 0; text-align: center; color: #666; pointer-events: none; }
 
 /* 譜面エリア: ページの残り高さを受け取り、段（.system-stack の子）を
    市販譜のように縦方向へ均等配置する。段数を減らすほど行間が広がる */
