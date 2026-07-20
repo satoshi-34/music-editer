@@ -1,3 +1,17 @@
+## 進捗（実装）
+
+- **手順1（`SingleStaff` ラッパー新設）完了**: `src/components/SingleStaff.tsx` を
+  `PartExtractionStaff`/`PianoStaff` と同型のパターンで実装した
+  （`Array.from({length: systems})` で `PianoSystemCanvas` をループ、
+  `partsConfig` は要素数1・`clef: 'treble'` 固定）。編集可能なラッパーのため
+  props の通し方は `PianoStaff.tsx` に合わせた（`onChange` を実際に呼ぶ）。
+  `gap` は StaffCanvas 由来の互換 props として受け取るが、上記「移行手順案」の
+  想定どおり実装では使っていない（PianoSystemCanvas 側に段間隔を明示指定する
+  仕組みが無いため）。単体テスト `src/components/SingleStaff.test.tsx` を追加
+  （`PianoSystemCanvas` をモックし、段数ぶんレンダーされるか・
+  `startMeasureIndex` のずれ・`partsConfig` への変換・props 伝搬を検証）。
+- 手順2（`ScorePage.tsx` の単旋律分岐切替）は別コミットで実施。
+
 # フェーズ2: StaffCanvas 退役の実現可能性メモ（v2: レイアウトAPI不一致を調査）
 
 このメモは実装計画ではなく、「単旋律譜も `PianoSystemCanvas`（`partsConfig` 要素数1）に
