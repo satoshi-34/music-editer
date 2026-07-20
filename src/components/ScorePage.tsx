@@ -2458,7 +2458,7 @@ export default function ScorePage() {
       if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
     };
     reader.readAsText(file);
-  }, [setTimeSignature]);
+  }, [setTimeSignature, measuresPerSystem]);
 
   const [hasCustomPianoSample, setHasCustomPianoSample] = useState<boolean>(() => hasCustomPianoDemoScore());
   // 以前は「2ページ分の幅がない画面では1ページ目だけ描画する」間引きをしていたが、
