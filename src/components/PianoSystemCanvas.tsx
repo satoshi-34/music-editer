@@ -60,7 +60,7 @@ import {
   type ResolvedSymbolAdjust,
 } from '../utils/symbolAdjustUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
-import { getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, isValidTimeSignature, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
@@ -640,6 +640,14 @@ function shouldRenderGhostRest(
 
   const event = events[eventIndex];
   if (!event?.isRest) {
+    return false;
+  }
+
+  // computeVoiceDisplayPadding が末尾に補完した表示用休符（__isPlaceholder）は、
+  // 「拍が足りない声部の残りを休符で明示する」ためにわざと追加したものなので、
+  // ここで ghost（非表示）扱いにしてしまうと元も子もない。
+  // ユーザーが保存データへ直接入力した末尾休符（ダミー休符）だけを ghost 対象にする。
+  if ((event as RenderNoteEvent).__isPlaceholder) {
     return false;
   }
 
@@ -2156,11 +2164,28 @@ export default function PianoSystemCanvas({
         const isMultiVoiceMeasure = measureVoices.length > 1;
         const renderedVoiceEntries = measureVoices
           .map((measureVoice, voiceIndex) => {
-            const sourceEvents = voiceIndex === 0
+            const rawSourceEvents: RenderNoteEvent[] = voiceIndex === 0
               ? safeEvs
               : (measureVoice.events.length > 0
                   ? measureVoice.events.map(ev => sanitizeRenderEvent(ev, clefHere))
                   : []);
+
+            // 多声（voices が複数ある）小節で、この声部の音価合計が拍子ぶんに満たないときは、
+            // 表示用に末尾へ休符を補完する（保存データ＝measure.events/voices は一切書き換えない、
+            // 見た目だけの補完）。市販譜では埋まっていない拍に休符を明示するのが作法なので、
+            // ここを何もしないと「拍が余っている声部の残りが単に空白になる」見た目になってしまう。
+            // 単声部小節（isMultiVoiceMeasure が false）はここを通らないので、
+            // 既存の見た目には一切影響しない（リグレッション防止）。
+            let sourceEvents: RenderNoteEvent[] = rawSourceEvents;
+            if (isMultiVoiceMeasure) {
+              const restKeyForPadding = restKeyForVoice(clefHere, voiceIndex, measureVoices.length);
+              const paddingRests: RenderNoteEvent[] = computeVoiceDisplayPadding(rawSourceEvents, beatsPerMeasure, restKeyForPadding)
+                .map(rest => ({ ...sanitizeRenderEvent(rest, clefHere), __isPlaceholder: true }));
+              if (paddingRests.length > 0) {
+                sourceEvents = [...rawSourceEvents, ...paddingRests];
+              }
+            }
+
             if (sourceEvents.length === 0) {
               return null;
             }

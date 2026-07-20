@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { MeasureData } from '../types/storage';
 import {
+  computeVoiceDisplayPadding,
   flattenMeasureForPlayback,
   getDurationBeats,
   getEventDurationBeats,
@@ -300,6 +301,61 @@ describe('voiceMeasureUtils', () => {
       ];
       const resolved = resolveVoiceStemDirections(voices);
       expect(resolved.map((v) => v.stemDirection)).toEqual(['up', 'down', 'down']);
+    });
+  });
+
+  describe('computeVoiceDisplayPadding（多声小節で拍が余った声部への表示用休符補完）', () => {
+    it('4/4で下声が2拍しか埋まっていないとき、残り2拍ぶんの休符を補完する', () => {
+      const events = [{ dur: '2' as const, isRest: false, keys: ['c/4'] }];
+      const padding = computeVoiceDisplayPadding(events, 4, 'b/4');
+      expect(padding).toEqual([{ dur: '2', isRest: true, keys: ['b/4'] }]);
+    });
+
+    it('声部がちょうど拍子ぶん埋まっているときは補完しない（既存の正しい多声小節を壊さない）', () => {
+      const events = [
+        { dur: '2' as const, isRest: false, keys: ['c/4'] },
+        { dur: '2' as const, isRest: false, keys: ['e/4'] },
+      ];
+      expect(computeVoiceDisplayPadding(events, 4, 'b/4')).toEqual([]);
+    });
+
+    it('声部が拍子をオーバーしているときも補完しない（マイナスの休符を作らない）', () => {
+      const events = [{ dur: '1' as const, isRest: false, keys: ['c/4'] }];
+      expect(computeVoiceDisplayPadding(events, 3, 'b/4')).toEqual([]);
+    });
+
+    it('声部がまったく空のとき、拍子ぶん全部を休符で埋める（大きい音価から貪欲に分割）', () => {
+      const padding = computeVoiceDisplayPadding([], 4, 'd/5');
+      expect(padding).toEqual([{ dur: '1', isRest: true, keys: ['d/5'] }]);
+    });
+
+    it('半端な拍数（1.5拍）は大きい音価から貪欲に分割する（4分休符+8分休符）', () => {
+      const events = [{ dur: '2' as const, isRest: false, keys: ['c/4'], dots: 1 as const }]; // 3拍
+      const padding = computeVoiceDisplayPadding(events, 4.5, 'b/4');
+      expect(padding).toEqual([
+        { dur: '4', isRest: true, keys: ['b/4'] },
+        { dur: '8', isRest: true, keys: ['b/4'] },
+      ]);
+    });
+
+    it('付点で埋まった声部（3拍）に残り1拍を4分休符で補完する', () => {
+      const events = [{ dur: '2' as const, isRest: false, keys: ['c/4'], dots: 1 as const }]; // 3拍
+      const padding = computeVoiceDisplayPadding(events, 4, 'b/4');
+      expect(padding).toEqual([{ dur: '4', isRest: true, keys: ['b/4'] }]);
+    });
+
+    it('3連符で埋まった分は tuplet 倍率を考慮して残り拍数を計算する', () => {
+      // 8分音符3連符×3（1拍ぶん）を除いた残り3拍を、2分休符+4分休符で埋める
+      const events = [
+        { dur: '8' as const, isRest: false, keys: ['c/4'], tuplet: { numNotes: 3, notesOccupied: 2 } },
+        { dur: '8' as const, isRest: false, keys: ['d/4'], tuplet: { numNotes: 3, notesOccupied: 2 } },
+        { dur: '8' as const, isRest: false, keys: ['e/4'], tuplet: { numNotes: 3, notesOccupied: 2 } },
+      ];
+      const padding = computeVoiceDisplayPadding(events, 4, 'b/4');
+      expect(padding).toEqual([
+        { dur: '2', isRest: true, keys: ['b/4'] },
+        { dur: '4', isRest: true, keys: ['b/4'] },
+      ]);
     });
   });
 });
