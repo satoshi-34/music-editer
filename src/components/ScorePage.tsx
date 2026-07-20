@@ -2990,6 +2990,261 @@ export default function ScorePage() {
                   パート編集
                 </button>
               )}
+
+              {/* ここから下はレイアウト系設定（「その他」タブから移動）。
+                  段組み・幅・拡大縮小・余白など、譜面の見た目に関する設定をまとめている。 */}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                段あたり小節数
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={measuresPerSystem}
+                  onChange={e => {
+                    const v = Math.max(1, Math.min(8, Number(e.target.value)));
+                    if (!isNaN(v)) setMeasuresPerSystem(v);
+                  }}
+                  style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
+                />
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`1ページに並べる段数。A4に収まる上限（この楽譜の種類では${maxSystemsPerPage}段）までで設定できます`}
+              >
+                段数/ページ
+                <input
+                  type="number"
+                  min={1}
+                  max={maxSystemsPerPage}
+                  value={systemsPerPage}
+                  onChange={e => {
+                    const v = Math.max(1, Math.min(maxSystemsPerPage, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setSystemsPerPageSetting(v);
+                      localStorage.setItem(SYSTEMS_PER_PAGE_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
+                />
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="密な小節と疎な小節の幅の差を調節します。0% = 音符量どおりの幅（差が大きい）、100% = 全小節を等幅に。密な小節は詰まります"
+              >
+                小節幅の均等さ
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(measureWidthEvenness * 100)}
+                  onChange={e => {
+                    // スライダーは 0〜100(%) で扱い、内部では 0〜1 に変換して保持する
+                    const v = Math.max(0, Math.min(1, Number(e.target.value) / 100));
+                    if (!isNaN(v)) {
+                      setMeasureWidthEvenness(v);
+                      localStorage.setItem(MEASURE_WIDTH_EVENNESS_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 90 }}
+                />
+                {/* 現在値（%）。スライダーだけだと今いくつか分からないため小さく添える */}
+                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(measureWidthEvenness * 100)}%</span>
+              </label>
+              <button
+                type="button"
+                onClick={handleResetSystemMeasureOverrides}
+                disabled={systemMeasureOverrides.length === 0}
+                style={{ fontSize: 13, padding: '3px 8px' }}
+                title="各段の◀▶ボタンで個別調整した小節数の上書きをすべて解除し、自動計画へ戻します"
+              >
+                段割りをリセット
+              </button>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="画面表示の拡大縮小です。印刷結果には影響しません。100% が既定の自動縮尺です"
+              >
+                画面表示のズーム
+                <input
+                  type="range"
+                  min={50}
+                  max={150}
+                  step={5}
+                  value={Math.round(viewZoom * 100)}
+                  onChange={e => {
+                    // スライダーは 50〜150(%) で扱い、内部では 0.5〜1.5 の倍率として保持する
+                    const v = Math.max(0.5, Math.min(1.5, Number(e.target.value) / 100));
+                    if (!isNaN(v)) {
+                      setViewZoom(v);
+                      localStorage.setItem(VIEW_ZOOM_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 90 }}
+                />
+                {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
+                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(viewZoom * 100)}%</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="音符・記号そのものの大きさです。画面表示だけでなく印刷結果にも反映されます（『画面表示のズーム』とは異なり印刷にも影響します）。100% が既定の大きさです"
+              >
+                音符の大きさ
+                <input
+                  type="range"
+                  min={80}
+                  max={200}
+                  step={5}
+                  value={Math.round(notationSizeMultiplier * 100)}
+                  onChange={e => {
+                    // スライダーは 80〜200(%) で扱い、内部では 0.8〜2.0 の倍率として保持する
+                    const v = Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, Number(e.target.value) / 100));
+                    if (!isNaN(v)) {
+                      setNotationSizeMultiplier(v);
+                      localStorage.setItem(NOTATION_SIZE_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 90 }}
+                />
+                {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
+                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
+              </label>
+              {/* ページレイアウト系スライダー（余白・段間隔）は1行にまとめて、楽譜設定タブが
+                  横に長くなりすぎないようにしている。挙動は他のスライダーと同じ
+                  （localStorage 保存・画面と印刷の両方に反映・既定値は従来と同一）。 */}
+              <span className="toolbar-group-label">レイアウト</span>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`ページの左右余白です。本文幅（小節を並べる幅）もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
+              >
+                余白(左右)
+                <input
+                  type="range"
+                  min={PAGE_MARGIN_SIDE_MIN_MM}
+                  max={PAGE_MARGIN_SIDE_MAX_MM}
+                  step={1}
+                  value={pageMarginSideMm}
+                  onChange={e => {
+                    const v = Math.max(PAGE_MARGIN_SIDE_MIN_MM, Math.min(PAGE_MARGIN_SIDE_MAX_MM, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setPageMarginSideMm(v);
+                      localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginSideMm}mm</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`ページの上余白です。1ページに入る段数の上限は上下余白の合計値に合わせて自動で連動します。既定は${DEFAULT_PAGE_MARGIN_TOP_MM}mmです`}
+              >
+                余白(上)
+                <input
+                  type="range"
+                  min={PAGE_MARGIN_VERTICAL_MIN_MM}
+                  max={PAGE_MARGIN_VERTICAL_MAX_MM}
+                  step={1}
+                  value={pageMarginTopMm}
+                  onChange={e => {
+                    const v = Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setPageMarginTopMm(v);
+                      localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginTopMm}mm</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`ページの下余白です。1ページに入る段数の上限は上下余白の合計値に合わせて自動で連動します。既定は${DEFAULT_PAGE_MARGIN_BOTTOM_MM}mmです`}
+              >
+                余白(下)
+                <input
+                  type="range"
+                  min={PAGE_MARGIN_VERTICAL_MIN_MM}
+                  max={PAGE_MARGIN_VERTICAL_MAX_MM}
+                  step={1}
+                  value={pageMarginBottomMm}
+                  onChange={e => {
+                    const v = Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setPageMarginBottomMm(v);
+                      localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginBottomMm}mm</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="段と段の間隔です。プラスで広げ、マイナスで狭められます。広げると1ページに入る段数の上限が自動で下がり、狭めると自動で増えます。既定は0px（間隔なし）です"
+              >
+                段の間隔
+                <input
+                  type="range"
+                  min={SYSTEM_ROW_GAP_MIN_PX}
+                  max={SYSTEM_ROW_GAP_MAX_PX}
+                  step={1}
+                  value={systemRowGapPx}
+                  onChange={e => {
+                    const v = Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setSystemRowGapPx(v);
+                      localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{systemRowGapPx}px</span>
+              </label>
+              <button
+                type="button"
+                onClick={handleResetPageLayout}
+                style={{ fontSize: 13, padding: '3px 8px' }}
+                title="ページ余白（左右・上下）と段の間隔を既定値へ戻します"
+              >
+                レイアウトをリセット
+              </button>
+              <div className="coord-correction-wrap">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => setShowOffsetPanel(v => !v)}
+                  title="音符配置位置の座標補正"
+                >
+                  Y補正{yOffset !== 0 ? ` (${yOffset})` : ''}
+                </button>
+                {showOffsetPanel && (
+                  <>
+                    <div className="dropdown-overlay" onClick={() => setShowOffsetPanel(false)} />
+                    <div className="coord-panel">
+                      <p className="coord-panel-note">高音方向はマイナス、低音方向はプラス</p>
+                      <div className="coord-panel-row">
+                        <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>↑</button>
+                        <input
+                          id="y-offset-input"
+                          type="number"
+                          value={yOffset}
+                          onChange={e => handleYOffsetChange(Number(e.target.value))}
+                          aria-label="座標補正値（↓で低音方向）"
+                          onKeyDown={e => {
+                            if (e.key === 'ArrowDown') { e.preventDefault(); handleYOffsetChange(yOffset + 1); }
+                            if (e.key === 'ArrowUp')   { e.preventDefault(); handleYOffsetChange(yOffset - 1); }
+                          }}
+                          autoFocus
+                        />
+                        <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>↓</button>
+                        {yOffset !== 0 && (
+                          <button type="button" className="ghost y-offset-reset" onClick={() => handleYOffsetChange(0)}>リセット</button>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           )}
 
@@ -3127,221 +3382,6 @@ export default function ScorePage() {
                   </select>
                 </label>
               )}
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
-                段あたり小節数
-                <input
-                  type="number"
-                  min={1}
-                  max={8}
-                  value={measuresPerSystem}
-                  onChange={e => {
-                    const v = Math.max(1, Math.min(8, Number(e.target.value)));
-                    if (!isNaN(v)) setMeasuresPerSystem(v);
-                  }}
-                  style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
-                />
-              </label>
-              <label
-                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title={`1ページに並べる段数。A4に収まる上限（この楽譜の種類では${maxSystemsPerPage}段）までで設定できます`}
-              >
-                段数/ページ
-                <input
-                  type="number"
-                  min={1}
-                  max={maxSystemsPerPage}
-                  value={systemsPerPage}
-                  onChange={e => {
-                    const v = Math.max(1, Math.min(maxSystemsPerPage, Number(e.target.value)));
-                    if (!isNaN(v)) {
-                      setSystemsPerPageSetting(v);
-                      localStorage.setItem(SYSTEMS_PER_PAGE_KEY, String(v));
-                    }
-                  }}
-                  style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
-                />
-              </label>
-              <label
-                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title="密な小節と疎な小節の幅の差を調節します。0% = 音符量どおりの幅（差が大きい）、100% = 全小節を等幅に。密な小節は詰まります"
-              >
-                小節幅の均等さ
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={5}
-                  value={Math.round(measureWidthEvenness * 100)}
-                  onChange={e => {
-                    // スライダーは 0〜100(%) で扱い、内部では 0〜1 に変換して保持する
-                    const v = Math.max(0, Math.min(1, Number(e.target.value) / 100));
-                    if (!isNaN(v)) {
-                      setMeasureWidthEvenness(v);
-                      localStorage.setItem(MEASURE_WIDTH_EVENNESS_KEY, String(v));
-                    }
-                  }}
-                  style={{ width: 90 }}
-                />
-                {/* 現在値（%）。スライダーだけだと今いくつか分からないため小さく添える */}
-                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(measureWidthEvenness * 100)}%</span>
-              </label>
-              <button
-                type="button"
-                onClick={handleResetSystemMeasureOverrides}
-                disabled={systemMeasureOverrides.length === 0}
-                style={{ fontSize: 13, padding: '3px 8px' }}
-                title="各段の◀▶ボタンで個別調整した小節数の上書きをすべて解除し、自動計画へ戻します"
-              >
-                段割りをリセット
-              </button>
-              <label
-                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title="画面表示の拡大縮小です。印刷結果には影響しません。100% が既定の自動縮尺です"
-              >
-                画面表示のズーム
-                <input
-                  type="range"
-                  min={50}
-                  max={150}
-                  step={5}
-                  value={Math.round(viewZoom * 100)}
-                  onChange={e => {
-                    // スライダーは 50〜150(%) で扱い、内部では 0.5〜1.5 の倍率として保持する
-                    const v = Math.max(0.5, Math.min(1.5, Number(e.target.value) / 100));
-                    if (!isNaN(v)) {
-                      setViewZoom(v);
-                      localStorage.setItem(VIEW_ZOOM_KEY, String(v));
-                    }
-                  }}
-                  style={{ width: 90 }}
-                />
-                {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
-                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(viewZoom * 100)}%</span>
-              </label>
-              <label
-                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title="音符・記号そのものの大きさです。画面表示だけでなく印刷結果にも反映されます（『画面表示のズーム』とは異なり印刷にも影響します）。100% が既定の大きさです"
-              >
-                音符の大きさ
-                <input
-                  type="range"
-                  min={80}
-                  max={200}
-                  step={5}
-                  value={Math.round(notationSizeMultiplier * 100)}
-                  onChange={e => {
-                    // スライダーは 80〜200(%) で扱い、内部では 0.8〜2.0 の倍率として保持する
-                    const v = Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, Number(e.target.value) / 100));
-                    if (!isNaN(v)) {
-                      setNotationSizeMultiplier(v);
-                      localStorage.setItem(NOTATION_SIZE_KEY, String(v));
-                    }
-                  }}
-                  style={{ width: 90 }}
-                />
-                {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
-                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
-              </label>
-              {/* ページレイアウト系スライダー（余白・段間隔）は1行にまとめて、その他タブが
-                  横に長くなりすぎないようにしている。挙動は他のスライダーと同じ
-                  （localStorage 保存・画面と印刷の両方に反映・既定値は従来と同一）。 */}
-              <span className="toolbar-group-label">レイアウト</span>
-              <label
-                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title={`ページの左右余白です。本文幅（小節を並べる幅）もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
-              >
-                余白(左右)
-                <input
-                  type="range"
-                  min={PAGE_MARGIN_SIDE_MIN_MM}
-                  max={PAGE_MARGIN_SIDE_MAX_MM}
-                  step={1}
-                  value={pageMarginSideMm}
-                  onChange={e => {
-                    const v = Math.max(PAGE_MARGIN_SIDE_MIN_MM, Math.min(PAGE_MARGIN_SIDE_MAX_MM, Number(e.target.value)));
-                    if (!isNaN(v)) {
-                      setPageMarginSideMm(v);
-                      localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(v));
-                    }
-                  }}
-                  style={{ width: 70 }}
-                />
-                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginSideMm}mm</span>
-              </label>
-              <label
-                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title={`ページの上余白です。1ページに入る段数の上限は上下余白の合計値に合わせて自動で連動します。既定は${DEFAULT_PAGE_MARGIN_TOP_MM}mmです`}
-              >
-                余白(上)
-                <input
-                  type="range"
-                  min={PAGE_MARGIN_VERTICAL_MIN_MM}
-                  max={PAGE_MARGIN_VERTICAL_MAX_MM}
-                  step={1}
-                  value={pageMarginTopMm}
-                  onChange={e => {
-                    const v = Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Number(e.target.value)));
-                    if (!isNaN(v)) {
-                      setPageMarginTopMm(v);
-                      localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(v));
-                    }
-                  }}
-                  style={{ width: 70 }}
-                />
-                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginTopMm}mm</span>
-              </label>
-              <label
-                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title={`ページの下余白です。1ページに入る段数の上限は上下余白の合計値に合わせて自動で連動します。既定は${DEFAULT_PAGE_MARGIN_BOTTOM_MM}mmです`}
-              >
-                余白(下)
-                <input
-                  type="range"
-                  min={PAGE_MARGIN_VERTICAL_MIN_MM}
-                  max={PAGE_MARGIN_VERTICAL_MAX_MM}
-                  step={1}
-                  value={pageMarginBottomMm}
-                  onChange={e => {
-                    const v = Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Number(e.target.value)));
-                    if (!isNaN(v)) {
-                      setPageMarginBottomMm(v);
-                      localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(v));
-                    }
-                  }}
-                  style={{ width: 70 }}
-                />
-                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginBottomMm}mm</span>
-              </label>
-              <label
-                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title="段と段の間隔です。プラスで広げ、マイナスで狭められます。広げると1ページに入る段数の上限が自動で下がり、狭めると自動で増えます。既定は0px（間隔なし）です"
-              >
-                段の間隔
-                <input
-                  type="range"
-                  min={SYSTEM_ROW_GAP_MIN_PX}
-                  max={SYSTEM_ROW_GAP_MAX_PX}
-                  step={1}
-                  value={systemRowGapPx}
-                  onChange={e => {
-                    const v = Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, Number(e.target.value)));
-                    if (!isNaN(v)) {
-                      setSystemRowGapPx(v);
-                      localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(v));
-                    }
-                  }}
-                  style={{ width: 70 }}
-                />
-                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{systemRowGapPx}px</span>
-              </label>
-              <button
-                type="button"
-                onClick={handleResetPageLayout}
-                style={{ fontSize: 13, padding: '3px 8px' }}
-                title="ページ余白（左右・上下）と段の間隔を既定値へ戻します"
-              >
-                レイアウトをリセット
-              </button>
               <button className="ghost" onClick={handleExportMusicXml}>MusicXML書出</button>
               <button className="ghost" onClick={handleExportMidi}>MIDI書出</button>
               <button className="ghost" onClick={() => musicXmlInputRef.current?.click()}>MusicXML読込</button>
@@ -3352,43 +3392,6 @@ export default function ScorePage() {
                 style={{ display: 'none' }}
                 onChange={handleImportMusicXml}
               />
-              <div className="coord-correction-wrap">
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => setShowOffsetPanel(v => !v)}
-                  title="音符配置位置の座標補正"
-                >
-                  Y補正{yOffset !== 0 ? ` (${yOffset})` : ''}
-                </button>
-                {showOffsetPanel && (
-                  <>
-                    <div className="dropdown-overlay" onClick={() => setShowOffsetPanel(false)} />
-                    <div className="coord-panel">
-                      <p className="coord-panel-note">高音方向はマイナス、低音方向はプラス</p>
-                      <div className="coord-panel-row">
-                        <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>↑</button>
-                        <input
-                          id="y-offset-input"
-                          type="number"
-                          value={yOffset}
-                          onChange={e => handleYOffsetChange(Number(e.target.value))}
-                          aria-label="座標補正値（↓で低音方向）"
-                          onKeyDown={e => {
-                            if (e.key === 'ArrowDown') { e.preventDefault(); handleYOffsetChange(yOffset + 1); }
-                            if (e.key === 'ArrowUp')   { e.preventDefault(); handleYOffsetChange(yOffset - 1); }
-                          }}
-                          autoFocus
-                        />
-                        <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>↓</button>
-                        {yOffset !== 0 && (
-                          <button type="button" className="ghost y-offset-reset" onClick={() => handleYOffsetChange(0)}>リセット</button>
-                        )}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
             </div>
           )}
         </div>

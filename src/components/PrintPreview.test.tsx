@@ -1,8 +1,9 @@
 // src/components/PrintPreview.test.tsx
 // 印刷プレビューモード（その他タブの「印刷プレビュー」トグル）の最小限の動作確認。
 // - トグルを押すと app-root に .print-preview クラスが付く/外れる
-// - プレビュー中でも段の間隔・小節数などのレイアウト調整コントロールが操作できる
-//   （＝トグルを押してもツールバー自体は隠れず操作を続けられる）ことを確認する
+// - プレビュー中に「楽譜設定」タブへ切り替えても段の間隔・小節数などのレイアウト
+//   調整コントロールが操作でき、プレビューが解除されない
+//   （＝タブ切替は印刷プレビューの状態を持つ isPrintPreview 自体には影響しない）ことを確認する
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
@@ -63,8 +64,8 @@ describe('印刷プレビューモード', () => {
     expect(appRoot?.classList.contains('print-preview')).toBe(false);
   });
 
-  it('プレビュー中もページ余白などのレイアウト調整コントロールが操作できる', async () => {
-    render(<ScorePage />);
+  it('プレビュー中に楽譜設定タブへ切り替えてもプレビューが維持され、ページ余白などのレイアウト調整コントロールが操作できる', async () => {
+    const { container } = render(<ScorePage />);
 
     const otherTab = screen.getByRole('tab', { name: 'その他' });
     fireEvent.click(otherTab);
@@ -72,7 +73,18 @@ describe('印刷プレビューモード', () => {
     const toggleButton = await screen.findByRole('button', { name: /印刷プレビュー/ });
     fireEvent.click(toggleButton);
 
-    // プレビューON中でも「その他」タブのスライダー類（例: ページ余白）が
+    const appRoot = container.querySelector('.app-root');
+    expect(appRoot?.classList.contains('print-preview')).toBe(true);
+
+    // レイアウト調整コントロール（ページ余白・段の間隔など）は「楽譜設定」タブに
+    // 移動しているため、そちらへ切り替える。タブ切替は isPrintPreview の state を
+    // リセットしないため、プレビューは維持されたままレイアウトを調整できるはず。
+    const scoreTab = screen.getByRole('tab', { name: '楽譜設定' });
+    fireEvent.click(scoreTab);
+
+    expect(appRoot?.classList.contains('print-preview')).toBe(true);
+
+    // プレビューON中でも「楽譜設定」タブのスライダー類（例: ページ余白）が
     // disabled になっていないことを確認する
     const sliders = screen.getAllByRole('slider');
     expect(sliders.length).toBeGreaterThan(0);
