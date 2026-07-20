@@ -46,6 +46,7 @@ import {
   type ResolvedSymbolAdjust,
 } from '../utils/symbolAdjustUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
+import { drawLyricsEntry } from '../utils/lyricsRenderUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { defaultRestDisplayKey, restKey as restFormatterKey, lineToKey as lineToKeyForClef, keyToLine as keyToLineForClef, type ClefType } from './clefUtils';
@@ -3299,18 +3300,8 @@ export default function StaffCanvas({
     });
 
     // 歌詞: 発想標語のさらに下（botY + 54）に通常体で表示
-    lyricsEntries.forEach(({ anchorX, botY, text, adjust }) => {
-      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      el.textContent = text;
-      el.setAttribute('x', String(anchorX + adjust.offsetX));
-      el.setAttribute('y', String(botY + 54 + adjust.offsetY));
-      el.setAttribute('text-anchor', 'middle');
-      el.setAttribute('fill', '#374151');
-      el.setAttribute('font-family', 'sans-serif');
-      el.setAttribute('font-size', String(11 * adjust.scale));
-      el.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(el);
-    });
+    // 座標計算・スタイルは PianoSystemCanvas と共通の drawLyricsEntry（lyricsRenderUtils.ts）に切り出し済み
+    lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, entry));
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
     // LINE_SPACING ≈ 13 SVG単位なので +25 ≈ 2段分。標準的な記譜位置。
