@@ -11,7 +11,13 @@ import type { Tool } from './Palette';
 import type { MeasureData, TieArc, HairpinMark, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind } from '../types/storage';
 import { applyOrnamentToEvent, ornamentToVexCode } from '../utils/ornamentUtils';
 import type { ClefType } from './clefUtils';
-import { defaultRestDisplayKey, restKey as restFormatterKey, restKeyForVoice } from './clefUtils';
+import {
+  defaultRestDisplayKey,
+  restKey as restFormatterKey,
+  restKeyForVoice,
+  lineToKey as lineToKeyForClef,
+  keyToLine as keyToLineForClef,
+} from './clefUtils';
 import { computeArcGeometry } from './arcUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
@@ -246,25 +252,10 @@ function fillPriorMeasureRests(
     }
   }
 }
-/* ===== ライン ⇄ キー変換（treble / bass / alto） ===== */
-function lineToKeyForClef(clef: ClefType, line: number): string {
-  const s = Math.round(line*2)/2, steps = Math.round(s*2);
-  const L=['c','d','e','f','g','a','b'] as const;
-  // treble: F5 at line 0 (idx=3, oct=5)
-  // bass:   A3 at line 0 (idx=5, oct=3)
-  // alto:   G4 at line 0 (idx=4, oct=4) → C4 at line 2
-  const [baseIdx, baseOct] = clef==='bass'?[5,3]:clef==='alto'?[4,4]:[3,5];
-  let i=baseIdx-steps, o=baseOct;
-  while(i<0){i+=7;o--;} while(i>=7){i-=7;o++;}
-  return `${L[i]}/${o}`;
-}
-function keyToLineForClef(clef: ClefType, key: string): number {
-  const m=key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if(!m)return 2;
-  const iMap: Record<string,number>={c:0,d:1,e:2,f:3,g:4,a:5,b:6};
-  const target = +m[3]*7+(iMap[m[1].toLowerCase()]??0);
-  const base = clef==='bass'?(3*7+iMap['a']):clef==='alto'?(4*7+iMap['g']):(5*7+iMap['f']);
-  return (base - target) / 2;
-}
+/* ===== ライン ⇄ キー変換（treble / bass / alto / tenor） =====
+   以前はここにローカル実装があったが、tenor クレフに対応していなかった
+   （bass/alto/treble のいずれかとして誤変換されてしまっていた）。
+   StaffCanvas と同じ clefUtils の共有実装（tenor 対応済み）に統一する。 */
 function restKeyForClef(clef: ClefType): string {
   return restFormatterKey(clef);
 }
