@@ -139,10 +139,16 @@ const PAGE_MARGIN_VERTICAL_MIN_MM = 8;
 const PAGE_MARGIN_VERTICAL_MAX_MM = 25;
 const PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM = 2;
 // 「段の間隔」のユーザー設定（その他タブのスライダー、px単位）。
-// 行グリッド（.score-area .system-stack の gap）へそのまま渡す上乗せ間隔。
-// 既定値 0 は従来どおり間隔なし（段は flex:1 1 0% で完全に等分されるだけ）。
+// 0以上のときは行グリッド（.score-area .system-stack の gap）へそのまま渡す上乗せ間隔で、
+// 段は flex:1 1 0% で完全に等分されたまま、その等分の取り分から gap ぶんが差し引かれる
+// （＝段が少し縮み、間隔が広がる）。
+// 負値のときは CSS の gap プロパティが負値を受け付けないため、equal-fill（flex:1 1 0%）を
+// やめて段を内容の実サイズ（flex:0 0 auto）で詰め、段の間に負のマージンを入れて
+// 間隔そのものを狭める方式に切り替える（.score-area--tight-rows、App.css 参照）。
+// 段を上から詰めて並べるぶん、あまった高さはページ下部に残る（市販譜で行間を詰めると
+// 下が余るのと同じ考え方）。既定値 0 は従来どおり間隔なし。
 const SYSTEM_ROW_GAP_KEY = 'score-system-row-gap';
-const SYSTEM_ROW_GAP_MIN_PX = 0;
+const SYSTEM_ROW_GAP_MIN_PX = -30;
 const SYSTEM_ROW_GAP_MAX_PX = 30;
 // mm → px 換算（1mm ≒ 3.7795px、96dpi基準）。CSS の mm 単位と同じ換算率を使う。
 const MM_TO_PX = 96 / 25.4;
@@ -2069,7 +2075,7 @@ export default function ScorePage() {
     const n = raw == null ? NaN : parseFloat(raw);
     return Number.isFinite(n) ? Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, n)) : DEFAULT_PAGE_SIDE_MARGIN_MM;
   });
-  // ユーザー設定（その他タブの「段の間隔」スライダー、0〜30px）。
+  // ユーザー設定（その他タブの「段の間隔」スライダー、-30〜30px）。
   const [systemRowGapPx, setSystemRowGapPx] = useState<number>(() => {
     const raw = localStorage.getItem(SYSTEM_ROW_GAP_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
@@ -3126,7 +3132,7 @@ export default function ScorePage() {
               </label>
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title="段と段の間に空ける追加の間隔です。広げると1ページに入る段数の上限が自動で下がります。既定は0px（間隔なし）です"
+                title="段と段の間隔です。プラスで広げ、マイナスで狭められます。広げると1ページに入る段数の上限が自動で下がり、狭めると自動で増えます。既定は0px（間隔なし）です"
               >
                 段の間隔
                 <input
@@ -3424,7 +3430,7 @@ export default function ScorePage() {
                   )}
                 </header>
 
-                <div className="score-area" style={{
+                <div className={`score-area${systemRowGapPx < 0 ? ' score-area--tight-rows' : ''}`} style={{
                   '--score-stroke-width': displayWeight === 'thin' ? '0.8' : displayWeight === 'thick' ? '1.8' : '1.2',
                   '--score-text-weight': displayWeight === 'thin' ? '300' : displayWeight === 'thick' ? '700' : '400',
                   // 行グリッド: 全ページで「1段ぶんの高さ」を揃えるための比率。
