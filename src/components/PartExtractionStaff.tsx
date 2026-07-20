@@ -18,6 +18,8 @@ import type { Tool } from './Palette';
 import type { MeasureData, TimeSignature, CustomSymbolDef, NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
+import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
+import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 
 type Props = {
   tool: Tool;
@@ -34,6 +36,20 @@ type Props = {
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
   customSymbolDefs?: CustomSymbolDef[];
+  plannedMeasureWidths?: number[];
+  systemRanges?: SystemMeasureRange[];
+  incomingArcIndex?: Map<number, IncomingArcEntry[]>;
+  // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
+  measureWidthEvenness?: number;
+  /**
+   * ページの左右余白(mm)。値そのものは使わず、余白変更時に子の PianoSystemCanvas の
+   * 描画 useEffect を確実に再実行させるための依存トリガーとして中継するだけ。
+   * 詳細は PianoSystemCanvas.tsx 側のコメントを参照（ResizeObserver だけでは
+   * 特定のタイミングで再描画が漏れることがあったための対策）。
+   */
+  pageMarginSideMm?: number;
+  // 終止線を描く「内容のある最後の小節」の絶対インデックス。省略時は終止線を描かない。
+  finalMeasureIndex?: number;
 };
 
 // 何も起きない onChange。パート譜表示は閲覧・印刷専用のため、
@@ -54,11 +70,14 @@ export default function PartExtractionStaff({
   previewAccidentalOnApply = true,
   keySignature = 'C',
   timeSignature = [4, 4],
-  customSymbolDefs,
+  customSymbolDefs, plannedMeasureWidths, systemRanges, incomingArcIndex,
+  measureWidthEvenness,
+  pageMarginSideMm,
+  finalMeasureIndex,
 }: Props) {
   return (
     <div>
-      {Array.from({ length: systems }, (_, i) => {
+      {Array.from({ length: systemRanges?.length ?? systems }, (_, i) => {
         const partsConfig: PartConfig[] = [
           {
             ...partConfig,
@@ -69,12 +88,12 @@ export default function PartExtractionStaff({
         return (
           <PianoSystemCanvas
             key={i}
-            measuresPerSystem={measuresPerSystem}
+            measuresPerSystem={systemRanges?.[i]?.count ?? measuresPerSystem}
             tool={tool}
             scale={scale}
             partsConfig={partsConfig}
             showInstrumentLabels={false}
-            startMeasureIndex={startMeasureIndex + i * measuresPerSystem}
+            startMeasureIndex={systemRanges?.[i]?.start ?? startMeasureIndex + i * measuresPerSystem}
             // パート譜表示は常に編集無効（閲覧・印刷専用）
             disabled
             yOffset={yOffset}
@@ -84,6 +103,11 @@ export default function PartExtractionStaff({
             keySignature={keySignature}
             timeSignature={timeSignature}
             customSymbolDefs={customSymbolDefs}
+            plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
+            incomingArcIndex={incomingArcIndex}
+            measureWidthEvenness={measureWidthEvenness}
+            pageMarginSideMm={pageMarginSideMm}
+            finalMeasureIndex={finalMeasureIndex}
           />
         );
       })}

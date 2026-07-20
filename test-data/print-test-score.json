@@ -1,0 +1,2188 @@
+{
+  "version": "3.5.0",
+  "timestamp": 1784415792331,
+  "metadata": {
+    "title": "印刷テスト用小品",
+    "subtitle": "ト長調 / 4-4 / 24小節",
+    "lyricist": "",
+    "composer": "印刷確認用",
+    "arranger": ""
+  },
+  "scoreType": "piano",
+  "keySignature": "G",
+  "timeSignature": [
+    4,
+    4
+  ],
+  "instrumentation": {
+    "presetId": "piano",
+    "name": "ピアノ",
+    "parts": [
+      {
+        "id": "piano",
+        "name": "Piano",
+        "abbreviation": "Pno.",
+        "family": "keyboard",
+        "clef": "treble",
+        "staffCount": 2,
+        "transposition": "C",
+        "bracketGroup": "keyboard",
+        "playbackInstrument": "piano",
+        "order": 0
+      }
+    ]
+  },
+  "notationMode": "concert",
+  "parts": [
+    {
+      "partId": "right-hand",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ],
+              "dynamics": [
+                {
+                  "value": "mp"
+                }
+              ],
+              "arcs": [
+                {
+                  "fromKey": "d/5",
+                  "toKey": "b/4",
+                  "toMeasureIndex": 1,
+                  "toEventIndex": 0,
+                  "kind": "slur"
+                }
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            }
+          ],
+          "rehearsalMark": "A"
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            },
+            {
+              "dur": "2",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "e/5"
+              ],
+              "arcs": [
+                {
+                  "fromKey": "e/5",
+                  "toKey": "c/5",
+                  "toMeasureIndex": 3,
+                  "toEventIndex": 0,
+                  "kind": "slur"
+                }
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "a/4"
+              ]
+            },
+            {
+              "dur": "2",
+              "isRest": false,
+              "keys": [
+                "g/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ],
+              "dynamics": [
+                {
+                  "value": "mf"
+                }
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/5"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "a/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "e/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ],
+              "articulations": [
+                "tenuto"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ],
+              "articulations": [
+                "tenuto"
+              ]
+            },
+            {
+              "dur": "2",
+              "isRest": false,
+              "keys": [
+                "a/4"
+              ],
+              "arcs": [
+                {
+                  "fromKey": "a/4",
+                  "toKey": "g/4",
+                  "toMeasureIndex": 7,
+                  "toEventIndex": 0,
+                  "kind": "slur"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "1",
+              "isRest": false,
+              "keys": [
+                "g/4"
+              ],
+              "articulations": [
+                "fermata"
+              ]
+            }
+          ],
+          "repeatEnd": true
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ],
+              "dynamics": [
+                {
+                  "value": "p"
+                }
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            }
+          ],
+          "rehearsalMark": "B"
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/5"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/5"
+              ],
+              "dynamics": [
+                {
+                  "value": "cresc"
+                }
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "a/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "f#/5"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "2",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "2",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "e/5"
+              ],
+              "dynamics": [
+                {
+                  "value": "f"
+                }
+              ],
+              "arcs": [
+                {
+                  "fromKey": "e/5",
+                  "toKey": "d/5",
+                  "toMeasureIndex": 12,
+                  "toEventIndex": 1,
+                  "kind": "slur"
+                }
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "a/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/5"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "a/5"
+              ],
+              "articulations": [
+                "accent"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            },
+            {
+              "dur": "2",
+              "isRest": false,
+              "keys": [
+                "f#/5"
+              ],
+              "arcs": [
+                {
+                  "fromKey": "f#/5",
+                  "toKey": "g/5",
+                  "toMeasureIndex": 15,
+                  "toEventIndex": 0,
+                  "kind": "slur"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "1",
+              "isRest": false,
+              "keys": [
+                "g/4",
+                "b/4",
+                "d/5"
+              ],
+              "dynamics": [
+                {
+                  "value": "ff"
+                }
+              ],
+              "articulations": [
+                "fermata"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ],
+              "dynamics": [
+                {
+                  "value": "mp"
+                }
+              ],
+              "arcs": [
+                {
+                  "fromKey": "d/5",
+                  "toKey": "b/4",
+                  "toMeasureIndex": 17,
+                  "toEventIndex": 0,
+                  "kind": "slur"
+                }
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ]
+            }
+          ],
+          "rehearsalMark": "A"
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            },
+            {
+              "dur": "2",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "e/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "a/4"
+              ],
+              "arcs": [
+                {
+                  "fromKey": "a/4",
+                  "toKey": "g/4",
+                  "toMeasureIndex": 19,
+                  "toEventIndex": 1,
+                  "kind": "slur"
+                }
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/4"
+              ]
+            },
+            {
+              "dur": "2",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ],
+              "dynamics": [
+                {
+                  "value": "dim"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/5"
+              ],
+              "dynamics": [
+                {
+                  "value": "p"
+                }
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "e/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "a/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ],
+              "articulations": [
+                "tenuto"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ],
+              "articulations": [
+                "tenuto"
+              ]
+            },
+            {
+              "dur": "2",
+              "isRest": false,
+              "keys": [
+                "g/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "a/4"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "c/5"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "d/5"
+              ],
+              "dynamics": [
+                {
+                  "value": "dim"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "1",
+              "isRest": false,
+              "keys": [
+                "g/4",
+                "b/4",
+                "d/5",
+                "g/5"
+              ],
+              "dynamics": [
+                {
+                  "value": "pp"
+                }
+              ],
+              "articulations": [
+                "fermata"
+              ]
+            }
+          ],
+          "repeatEnd": true
+        }
+      ]
+    },
+    {
+      "partId": "left-hand",
+      "clef": "bass",
+      "measures": [
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "f#/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "f#/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "f#/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "f#/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "1",
+              "isRest": false,
+              "keys": [
+                "g/2",
+                "g/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "4",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "f#/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "f#/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "f#/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "f#/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "1",
+              "isRest": false,
+              "keys": [
+                "g/2",
+                "d/3",
+                "g/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "f#/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "f#/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "e/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "g/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "b/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/4"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "d/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "c/4"
+              ]
+            },
+            {
+              "dur": "8",
+              "isRest": false,
+              "keys": [
+                "a/3"
+              ]
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "dur": "1",
+              "isRest": false,
+              "keys": [
+                "g/2",
+                "d/3",
+                "g/3"
+              ]
+            }
+          ],
+          "repeatEnd": true
+        }
+      ]
+    }
+  ],
+  "systems": 12,
+  "measuresPerSystem": 4,
+  "customSymbolDefs": []
+}

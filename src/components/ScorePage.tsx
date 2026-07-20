@@ -41,7 +41,8 @@ import type {
   InstrumentPartDefinition,
   MeasureData,
   PartData,
-  ScoreType
+  ScoreType,
+  SystemMeasureOverride
 } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import {
@@ -60,10 +61,24 @@ import {
 import {
   KEY_SIGNATURE_OPTIONS,
   normalizeKeySignature,
+  TRANSPOSITION_WRITTEN_OFFSET_SEMITONES,
   type KeySignature
 } from '../utils/noteKeyUtils';
 import { transposeMeasureRange } from '../utils/transposeUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
+import { buildIncomingArcIndex } from '../utils/incomingArcUtils';
+import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
+import {
+  planEffectiveMeasuresPerSystem,
+  MEASURE_WIDTH_EVENNESS,
+  SCORE_LAYOUT_RENDER_SCALE,
+  MIN_MEASURE_CONTENT_WIDTH,
+  worstCaseSystemContentBudget,
+  DEFAULT_PAGE_SIDE_MARGIN_MM,
+  planSystemMeasureRanges,
+  type SystemMeasureRange,
+  type MeasureLayoutPartContext,
+} from '../utils/measureLayoutUtils';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
   sanitizePlaybackRuntimeSettings,
@@ -79,32 +94,85 @@ import { DEFAULT_TIME_SIGNATURE, formatTimeSignature, getMeasureBeats, normalize
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
+import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
+import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
 
-type PageSpec = { systems: number };
+type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
-
-// 曲の長さ（総段数）に関する定数。
-// 以前は totalSystems = 12 の固定値だったが、可変長対応にあたり
-// 「初期値・下限・上限」として意味を持たせる。
-const DEFAULT_TOTAL_SYSTEMS = 12;
-const MIN_TOTAL_SYSTEMS = 1;
-const MAX_TOTAL_SYSTEMS = 200;
-
-/**
- * 与えられた小節データ群を、指定の「段あたり小節数」で最低何段あれば
- * 全て収まるかを計算する。MusicXML 読み込みなど、外部データの小節数が
- * 既定の段数を超えている場合に、段が足りず末尾が表示されなくなるのを防ぐために使う。
- * 何も小節が無い場合は既定値（DEFAULT_TOTAL_SYSTEMS）を返す。
- */
-function computeMinTotalSystems(measuresPerPart: MeasureData[][], measuresPerSystem: number): number {
-  const maxMeasureCount = measuresPerPart.reduce((max, measures) => Math.max(max, measures.length), 0);
-  if (maxMeasureCount === 0) return DEFAULT_TOTAL_SYSTEMS;
-  const needed = Math.ceil(maxMeasureCount / Math.max(1, measuresPerSystem));
-  return Math.min(MAX_TOTAL_SYSTEMS, Math.max(DEFAULT_TOTAL_SYSTEMS, needed));
-}
+// 「段数/ページ」のユーザー設定（その他タブ）。楽譜データではなく画面設定として保存する
+const SYSTEMS_PER_PAGE_KEY = 'score-systems-per-page';
+// 「小節幅の均等さ」のユーザー設定（その他タブのスライダー、0〜1）。
+// SavedScoreData には含めず、SYSTEMS_PER_PAGE_KEY と同じく画面設定として保存する
+const MEASURE_WIDTH_EVENNESS_KEY = 'score-measure-width-evenness';
+// 「画面表示のズーム」のユーザー設定（その他タブのスライダー、0.5〜1.5）。
+// useAutoPageScale が算出する自動縮尺（--scale）に掛け合わせる倍率として使う。
+// 1.0 = 自動縮尺そのまま（従来どおりの表示）。印刷には影響させない（App.css の @media print 側で解除される）
+const VIEW_ZOOM_KEY = 'score-view-zoom';
+// 「音符の大きさ」のユーザー設定（その他タブのスライダー、0.8〜2.0）。
+// SCORE_LAYOUT_RENDER_SCALE（VexFlow の論理座標→物理SVG座標の倍率）に掛け合わせ、
+// 実際に描画・レイアウト計算へ使う「実効スケール」を作る。VIEW_ZOOM と違い、
+// これは画面表示だけでなく印刷結果や段組み（1段に入る小節数）にも影響する。
+// 1.0 = 既定（従来どおりの 0.44 のまま）。
+const NOTATION_SIZE_KEY = 'score-notation-size';
+// 音符の大きさスライダーが取りうる倍率の範囲（0.8〜2.0）。
+// スライダーの min/max、state 初期化時のクランプ、maxSystemsPerPage の動的計算で
+// 同じ範囲を使うため、値のズレが起きないよう定数化しておく。
+const NOTATION_SIZE_MULTIPLIER_MIN = 0.8;
+const NOTATION_SIZE_MULTIPLIER_MAX = 2.0;
+// 「ページ余白（左右）」のユーザー設定（その他タブのスライダー、mm単位）。
+// 正本は measureLayoutUtils.ts の printScoreAreaWidthPx()/worstCaseSystemContentBudget() に集約し、
+// CSS 側（.print-page の padding）へはここで作る値を CSS カスタムプロパティとして渡す
+// （CSSとJSでの二重定義を避ける）。既定値 14mm は従来の固定 padding と同じにし、
+// スライダーを一度も触らなければ見た目が変わらないようにする。
+const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
+const PAGE_MARGIN_SIDE_MIN_MM = 8;
+const PAGE_MARGIN_SIDE_MAX_MM = 25;
+// 「ページ余白（上下）」のユーザー設定（その他タブのスライダー、mm単位）。
+// 上 padding の値をスライダーで動かし、下 padding は常に「上 − 2mm」を保つ
+// （従来の固定値が 上14mm/下12mm だったため、この2mm差を保つことで既定値のときに
+// 従来と完全に同じレイアウトへ戻せる）。
+const PAGE_MARGIN_VERTICAL_KEY = 'score-page-margin-vertical';
+const PAGE_MARGIN_VERTICAL_MIN_MM = 8;
+const PAGE_MARGIN_VERTICAL_MAX_MM = 25;
+const PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM = 2;
+// 「段の間隔」のユーザー設定（その他タブのスライダー、px単位）。
+// 0以上のときは行グリッド（.score-area .system-stack の gap）へそのまま渡す上乗せ間隔で、
+// 段は flex:1 1 0% で完全に等分されたまま、その等分の取り分から gap ぶんが差し引かれる
+// （＝段が少し縮み、間隔が広がる）。
+// 負値のときは CSS の gap プロパティが負値を受け付けないため、equal-fill（flex:1 1 0%）を
+// やめて段を内容の実サイズ（flex:0 0 auto）で詰め、段の間に負のマージンを入れて
+// 間隔そのものを狭める方式に切り替える（.score-area--tight-rows、App.css 参照）。
+// 段を上から詰めて並べるぶん、あまった高さはページ下部に残る（市販譜で行間を詰めると
+// 下が余るのと同じ考え方）。既定値 0 は従来どおり間隔なし。
+const SYSTEM_ROW_GAP_KEY = 'score-system-row-gap';
+const SYSTEM_ROW_GAP_MIN_PX = -30;
+const SYSTEM_ROW_GAP_MAX_PX = 30;
+// mm → px 換算（1mm ≒ 3.7795px、96dpi基準）。CSS の mm 単位と同じ換算率を使う。
+const MM_TO_PX = 96 / 25.4;
+// 段数/ページの上限（maxSystemsPerPage）を動的計算する際に使う、
+// 譜面領域（.score-area）の高さ予算（px）。
+// タイトルページはヘッダー・作曲者欄の分だけ他ページより本文が狭くなるため、
+// 全ページで共有する行グリッド（--page-capacity）が破綻しないよう、
+// タイトルページ基準の狭い方の予算（実測 約938px。A4高 - 上下余白 - タイトル欄 - ページ番号）
+// を安全側の値として全ページ共通で使う。
+const SCORE_AREA_BUDGET_PX = 938;
+// 楽譜種別ごとの「音符の大きさ100%」時の1段あたり実測高さ（px）。
+// 音符の大きさスライダーの倍率をここに掛けて SCORE_AREA_BUDGET_PX を割ることで、
+// あふれずに収まる最大段数（maxSystemsPerPage）を求める（floor で切り捨て、安全側）。
+// 値は実測（単旋律 ≒114px / ピアノ大譜表 ≒180px / 四重奏 ≒340px）に基づく。
+// 編成譜（ensemble）はパート数で段の高さが大きく変わるため、パート数 10 を境に
+// 二段階の目安値（≒400px / ≒800px）を使う。以前のハードコード
+// （10パート超で1段、以下で2段）と 100% 時に一致するよう調整した値。
+const BASE_SYSTEM_HEIGHT_PX: Record<'single' | 'piano' | 'quartet' | 'ensembleSmall' | 'ensembleLarge', number> = {
+  single: 114,
+  piano: 180,
+  quartet: 340,
+  ensembleSmall: 400,
+  ensembleLarge: 800,
+};
 
 // 無音検知（issue #14）のタイミング設定。
 // 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
@@ -226,15 +294,6 @@ export default function ScorePage() {
   const [activeVoice, setActiveVoice] = useState<0 | 1>(0);
   const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
   const [scoreType, setScoreType] = useState<ScoreType>('single');
-  // 曲の長さ（総段数）。以前は 12 固定だったが、段の追加・削除・
-  // 最終段への自動追記に対応するため state 化した。
-  // currentScoreRef（下の Undo 用スナップショット）より前に宣言する必要がある
-  // （ref の初期値でこの変数を参照するため。後方宣言だと TDZ エラーになる）。
-  const [totalSystems, setTotalSystems] = useState(DEFAULT_TOTAL_SYSTEMS);
-  // 段あたり小節数。以前は totalSystems の宣言の少し後（ページ計算の近く）に
-  // あったが、段の追加・削除ハンドラなど本ファイル前半のコールバックからも
-  // 参照するようになったため、totalSystems と一緒に早い位置へ移動した。
-  const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
   // 楽譜の表示ウェイト（五線・テキストの太さ）
   const [displayWeight, setDisplayWeight] = useState<'thin' | 'normal' | 'thick'>('normal');
   const [instrumentation, setInstrumentation] = useState<ScoreInstrumentation>(() => getDefaultInstrumentationForScoreType('single'));
@@ -286,6 +345,9 @@ export default function ScorePage() {
     () => Array.from({ length: 4 }, () => [])
   );
   const [ensembleParts, setEnsembleParts] = useState<MeasureData[][]>(() => []);
+  // 段ごとの小節数のユーザー上書き（「小節 X から始まる段は Y 小節」の一覧）。
+  // 自動計画（planSystemMeasureRanges）ではなく、ユーザーが個別に段の▶◀ボタンで調整した段だけを保持する。
+  const [systemMeasureOverrides, setSystemMeasureOverrides] = useState<SystemMeasureOverride[]>([]);
 
   // パート譜表示の選択肢と、現在選択中のパート。
   // 単旋律譜・ピアノ大譜表では対象外（getPartExtractionOptions が空配列を返す）。
@@ -316,15 +378,15 @@ export default function ScorePage() {
     leftHandData:  MeasureData[] | undefined;
     quartetParts:  MeasureData[][];
     ensembleParts: MeasureData[][];
-    // 段の追加・削除も Undo 対象にするため、スナップショットに含める
-    totalSystems:  number;
+    // 段割りの手動上書きも Undo/Redo の対象にする（+1/-1 操作やリセットを元に戻せるように）。
+    systemMeasureOverrides: SystemMeasureOverride[];
   };
   const MAX_HISTORY = 50;
   const historyStack = useRef<ScoreSnapshot[]>([]);
   const futureStack  = useRef<ScoreSnapshot[]>([]);
   // 常に最新のスコア状態を ref として持つ（ハンドラ内で「変更前の値」を取得するため）
   const currentScoreRef = useRef<ScoreSnapshot>({
-    rightHandData, leftHandData, quartetParts, ensembleParts, totalSystems,
+    rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides,
   });
 
   // useRef(createPlaybackEngine(...)) と引数に直接書くと、useRef は初回しか値を使わないのに
@@ -1219,8 +1281,8 @@ export default function ScorePage() {
 
   // スコアデータが変わるたびに currentScoreRef を最新に保つ
   useEffect(() => {
-    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, totalSystems };
-  }, [rightHandData, leftHandData, quartetParts, ensembleParts, totalSystems]);
+    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides };
+  }, [rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides]);
 
   // ツールバーの「元に戻す/やり直す」ボタンの活性・非活性を切り替えるためのカウンタ。
   // historyStack/futureStack は ref のため、その中身が変わっただけでは再レンダーされない。
@@ -1303,11 +1365,25 @@ export default function ScorePage() {
 
   // スナップショットを state に適用する（undo/redo 共通）
   const applySnapshot = useCallback((snap: ScoreSnapshot) => {
-    setRightHandData(snap.rightHandData);
-    setLeftHandData(snap.leftHandData);
-    setQuartetParts(snap.quartetParts);
-    setEnsembleParts(snap.ensembleParts);
-    setTotalSystems(snap.totalSystems);
+    // 「まだ一度も編集していない状態」のスナップショットは rightHandData が undefined のことがある。
+    // undefined のまま復元すると StaffCanvas / PianoSystemCanvas の同期 effect が
+    // 「if (initialScoreData)」ガードで無視してしまい、画面が再描画されない
+    // （＝最初の編集を Undo しても表示が残る）。空配列＝「譜面を空にする」に正規化して復元する。
+    const restored: ScoreSnapshot = {
+      ...snap,
+      rightHandData: snap.rightHandData ?? [],
+      leftHandData: snap.leftHandData ?? [],
+      systemMeasureOverrides: snap.systemMeasureOverrides ?? [],
+    };
+    // currentScoreRef は useEffect（レンダー後）でも更新されるが、ここでも同期的に更新する。
+    // 復元直後にキャンバスの onScoreDataChange 通知が届いたとき、古い ref と比較して
+    // 「変更あり」と誤判定し、復元したはずのデータが上書きされるのを防ぐため。
+    currentScoreRef.current = restored;
+    setRightHandData(restored.rightHandData);
+    setLeftHandData(restored.leftHandData);
+    setQuartetParts(restored.quartetParts);
+    setEnsembleParts(restored.ensembleParts);
+    setSystemMeasureOverrides(restored.systemMeasureOverrides);
   }, []);
 
   // Undo: 履歴から1つ前の状態を取り出して適用する（キーボードショートカットとボタンの共通処理）
@@ -1341,40 +1417,38 @@ export default function ScorePage() {
   const canUndo = historyVersion >= 0 && historyStack.current.length > 0;
   const canRedo = historyVersion >= 0 && futureStack.current.length > 0;
 
-  // 最終段（totalSystems 段目）に音符が入力されたら、自動で次の段を1つ追加する
-  // （Finale などにある「書き進めれば譜面が伸びる」体験）。
-  // 呼び出し側（各パートの change ハンドラ）で pushHistory() を呼んだ直後に
-  // 呼ぶことで、入力による変更と段の自動追加を同じ Undo エントリにまとめている。
-  // 判定は「最終段の範囲にイベントを持つ小節が1つでもあるか」だけを見る簡易版。
-  const autoExpandIfLastSystemHasContent = useCallback((measures: MeasureData[]) => {
-    if (totalSystems >= MAX_TOTAL_SYSTEMS) return;
-    const lastSystemStart = (totalSystems - 1) * measuresPerSystem;
-    const hasContent = measures.slice(lastSystemStart).some(m =>
-      m.events.length > 0 || (m.voices?.some(v => v.events.length > 0) ?? false)
-    );
-    if (hasContent) {
-      setTotalSystems(t => Math.min(MAX_TOTAL_SYSTEMS, t + 1));
-    }
-  }, [totalSystems, measuresPerSystem]);
-
   const handleRightHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    // 変更がない場合はスキップ（currentScoreRef は常に最新値を保持）
-    if (currentScoreRef.current.rightHandData &&
-        JSON.stringify(currentScoreRef.current.rightHandData) === JSON.stringify(data)) return;
+    // 実質的な変更がない場合はスキップする。
+    // キャンバスはページ範囲まで末尾に空小節を補って通知してくるため、
+    // 「パディングの長さが違うだけ」を変更扱いにすると無意味な Undo 履歴が積まれてしまう。
+    if (isSameScoreIgnoringPadding(currentScoreRef.current.rightHandData, data)) {
+      // データ内容は同じでも配列長（パディング）は違うことがあるので、
+      // 以後の比較のために ref と state は最新の形に揃えておく（履歴には積まない）
+      currentScoreRef.current = { ...currentScoreRef.current, rightHandData: data };
+      setRightHandData(data);
+      return;
+    }
     pushHistory();
+    // ref は useEffect（レンダー後）でも更新されるが、ここで同期的にも更新する。
+    // 複数ページのキャンバスが同じレンダーサイクル内で連続して onScoreDataChange を
+    // 呼んだとき、古い ref のまま pushHistory すると壊れたスナップショット
+    // （undefined や1つ前の状態）が履歴に積まれ、Undo しても画面が戻らなくなるため。
+    currentScoreRef.current = { ...currentScoreRef.current, rightHandData: data };
     setRightHandData(data);
-    autoExpandIfLastSystemHasContent(data);
-  }, [isEditingDisabled, pushHistory, autoExpandIfLastSystemHasContent]);
+  }, [isEditingDisabled, pushHistory]);
 
   const handleLeftHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    if (currentScoreRef.current.leftHandData &&
-        JSON.stringify(currentScoreRef.current.leftHandData) === JSON.stringify(data)) return;
+    if (isSameScoreIgnoringPadding(currentScoreRef.current.leftHandData, data)) {
+      currentScoreRef.current = { ...currentScoreRef.current, leftHandData: data };
+      setLeftHandData(data);
+      return;
+    }
     pushHistory();
+    currentScoreRef.current = { ...currentScoreRef.current, leftHandData: data };
     setLeftHandData(data);
-    autoExpandIfLastSystemHasContent(data);
-  }, [isEditingDisabled, pushHistory, autoExpandIfLastSystemHasContent]);
+  }, [isEditingDisabled, pushHistory]);
 
   // 単旋律モード用（後方互換）
   const handleScoreDataChange = useCallback((data: MeasureData[]) => {
@@ -1383,68 +1457,32 @@ export default function ScorePage() {
 
   const handleQuartetPartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    if (JSON.stringify(currentScoreRef.current.quartetParts[partIndex]) === JSON.stringify(data)) return;
-    pushHistory();
+    // 右手・左手と同じく、パディング差だけの通知は履歴に積まず ref と state だけ揃える
+    const paddingOnly = isSameScoreIgnoringPadding(currentScoreRef.current.quartetParts[partIndex], data);
+    if (!paddingOnly) pushHistory();
+    const nextParts = [...currentScoreRef.current.quartetParts];
+    nextParts[partIndex] = data;
+    currentScoreRef.current = { ...currentScoreRef.current, quartetParts: nextParts };
     setQuartetParts(prev => {
       const next = [...prev];
       next[partIndex] = data;
       return next;
     });
-    autoExpandIfLastSystemHasContent(data);
-  }, [isEditingDisabled, pushHistory, autoExpandIfLastSystemHasContent]);
+  }, [isEditingDisabled, pushHistory]);
 
   const handleEnsemblePartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    if (JSON.stringify(currentScoreRef.current.ensembleParts[partIndex]) === JSON.stringify(data)) return;
-    pushHistory();
+    const paddingOnly = isSameScoreIgnoringPadding(currentScoreRef.current.ensembleParts[partIndex], data);
+    if (!paddingOnly) pushHistory();
+    const nextParts = [...currentScoreRef.current.ensembleParts];
+    nextParts[partIndex] = data;
+    currentScoreRef.current = { ...currentScoreRef.current, ensembleParts: nextParts };
     setEnsembleParts(prev => {
       const next = [...prev];
       next[partIndex] = data;
       return next;
     });
-    autoExpandIfLastSystemHasContent(data);
-  }, [isEditingDisabled, pushHistory, autoExpandIfLastSystemHasContent]);
-
-  // 現在表示中の全パートの小節データを、スコア種別ごとに1つの配列へまとめる。
-  // 「末尾の段を削除してよいか（音符が入っているか）」の判定に使う。
-  const collectAllPartMeasures = useCallback((): MeasureData[][] => {
-    if (scoreType === 'quartet') return quartetParts;
-    if (scoreType === 'ensemble') return ensembleParts;
-    if (scoreType === 'piano') return [rightHandData ?? [], leftHandData ?? []];
-    return [rightHandData ?? []];
-  }, [scoreType, quartetParts, ensembleParts, rightHandData, leftHandData]);
-
-  // 段を1つ追加する（末尾に空小節を1段ぶん追記）。
-  // 実データの追記自体は各 StaffCanvas 側が systems 増加を検知して自動で行うため、
-  // ここでは totalSystems を増やすだけでよい。
-  const handleAddSystem = useCallback(() => {
-    if (totalSystems >= MAX_TOTAL_SYSTEMS) return;
-    pushHistory();
-    setTotalSystems(t => Math.min(MAX_TOTAL_SYSTEMS, t + 1));
-  }, [totalSystems, pushHistory]);
-
-  // 末尾の段を削除する。末尾の段に音符が入っている場合は確認ダイアログを出す。
-  const handleRemoveLastSystem = useCallback(() => {
-    if (totalSystems <= MIN_TOTAL_SYSTEMS) return;
-    const lastSystemStart = (totalSystems - 1) * measuresPerSystem;
-    const allMeasures = collectAllPartMeasures();
-    const hasContent = allMeasures.some(measures =>
-      measures.slice(lastSystemStart).some(m =>
-        m.events.length > 0 || (m.voices?.some(v => v.events.length > 0) ?? false)
-      )
-    );
-    if (hasContent) {
-      const ok = window.confirm('末尾の段には音符が入力されています。削除するとその内容も失われます。よろしいですか？');
-      if (!ok) return;
-    }
-    pushHistory();
-    // 末尾段の小節データ自体（events）は各パートの配列にそのまま残るが、
-    // totalSystems を減らせば描画・書き出し対象から除外される
-    // （再び段を追加すればまた表示される点は既知の割り切り。厳密に切り詰めたい場合は
-    // 各パートの measures 配列も一緒にスライスする必要があるが、
-    // 小節の途中挿入・削除は次タスクで扱うため、今回はここまでとする）。
-    setTotalSystems(t => Math.max(MIN_TOTAL_SYSTEMS, t - 1));
-  }, [totalSystems, measuresPerSystem, collectAllPartMeasures, pushHistory]);
+  }, [isEditingDisabled, pushHistory]);
 
   // 現在の全 state から保存用データ（parts + metadata）を組み立てるヘルパー。
   // handleSave / 自動保存 / ファイル書き出しで共通利用する。
@@ -1477,7 +1515,7 @@ export default function ScorePage() {
 
   const handleSave = async () => {
     const { metadata, parts } = buildScoreData();
-    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs);
+    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides);
     if (saved) {
       setStoredDataAvailable(true);
     }
@@ -1521,6 +1559,10 @@ export default function ScorePage() {
     setEnsembleParts([]);
     setStoredDataAvailable(false);
     fileHandleRef.current = null;
+    // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
+    setExtraEditingSystems(0);
+    // 前の譜面用の段割り手動上書きも引き継がない
+    setSystemMeasureOverrides([]);
   }, [
     clearPlaybackTimer,
     clearStoredData,
@@ -1537,7 +1579,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const handleExportFile = async () => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides);
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
     const handle = await exportScoreToFile(data, title, fileHandleRef.current);
     if (handle) fileHandleRef.current = handle;
@@ -1569,13 +1611,6 @@ export default function ScorePage() {
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
         setMeasuresPerSystem(data.measuresPerSystem);
       }
-      // 段数（totalSystems）を復元する。旧セーブデータ（12段固定時代）には
-      // systems フィールドが無いことがあるため、その場合は既定値（12）にフォールバックする。
-      if (data.systems && data.systems >= MIN_TOTAL_SYSTEMS && data.systems <= MAX_TOTAL_SYSTEMS) {
-        setTotalSystems(data.systems);
-      } else {
-        setTotalSystems(DEFAULT_TOTAL_SYSTEMS);
-      }
       if (loadedType === 'quartet') {
         const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
         setQuartetParts(QUARTET_IDS.map(id =>
@@ -1594,6 +1629,10 @@ export default function ScorePage() {
         setLeftHandData(leftPart?.measures);
         setEnsembleParts([]);
       }
+      // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
+      setExtraEditingSystems(0);
+      // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
+      setSystemMeasureOverrides(data.systemMeasureOverrides ?? []);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'ファイルの読み込みに失敗しました');
     }
@@ -1611,7 +1650,7 @@ export default function ScorePage() {
     autoSaveTimerRef.current = setTimeout(async () => {
       setAutoSaveStatus('saving');
       const { metadata, parts } = buildScoreData();
-      const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs);
+      const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides);
       if (saved) {
         setStoredDataAvailable(true);
         setAutoSaveStatus('saved');
@@ -1629,7 +1668,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない。
   // 値はタイマー発火時（レンダー後）に読まれるので TDZ の問題はない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs]);
+  }, [title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
@@ -1653,13 +1692,6 @@ export default function ScorePage() {
       if (loadedData.measuresPerSystem && loadedData.measuresPerSystem >= 1 && loadedData.measuresPerSystem <= 8) {
         setMeasuresPerSystem(loadedData.measuresPerSystem);
       }
-      // 段数（totalSystems）を復元する。旧セーブデータ（12段固定時代）には
-      // systems フィールドが無いことがあるため、その場合は既定値（12）にフォールバックする。
-      if (loadedData.systems && loadedData.systems >= MIN_TOTAL_SYSTEMS && loadedData.systems <= MAX_TOTAL_SYSTEMS) {
-        setTotalSystems(loadedData.systems);
-      } else {
-        setTotalSystems(DEFAULT_TOTAL_SYSTEMS);
-      }
 
       if (loadedType === 'quartet') {
         const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
@@ -1679,6 +1711,10 @@ export default function ScorePage() {
         setLeftHandData(leftPart?.measures);
         setEnsembleParts([]);
       }
+      // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
+      setExtraEditingSystems(0);
+      // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
+      setSystemMeasureOverrides(loadedData.systemMeasureOverrides ?? []);
     }
   };
 
@@ -1700,8 +1736,6 @@ export default function ScorePage() {
     setLeftHandData(sampleScore.leftHand);
     setQuartetParts(Array.from({ length: 4 }, () => []));
     setEnsembleParts([]);
-    // サンプル譜は既定の段数（12段）に収まる短いものなので、段数もリセットする
-    setTotalSystems(DEFAULT_TOTAL_SYSTEMS);
     // サンプルごとに「まずこの楽器で聴くと違いが分かりやすい」を設定しておく。
     setCurrentInstrument(sampleScore.recommendedInstrument);
     getAudioEngine().setInstrument(sampleScore.recommendedInstrument);
@@ -1710,6 +1744,10 @@ export default function ScorePage() {
     resetPlaybackClock();
     setPlaybackState('stopped');
     setHasCustomPianoSample(hasCustomPianoDemoScore());
+    // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
+    setExtraEditingSystems(0);
+    // 前の譜面用の段割り手動上書きも引き継がない
+    setSystemMeasureOverrides([]);
   }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock, setTimeSignature]);
 
   const handleSaveCurrentAsSample = useCallback(() => {
@@ -1753,16 +1791,13 @@ export default function ScorePage() {
     title,
   ]);
 
-  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const onResize = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        const nextWidth = window.innerWidth;
-        setViewportWidth(nextWidth);
-        setColumns(nextWidth < 1200 ? 1 : 2);
+        setColumns(window.innerWidth < 1200 ? 1 : 2);
       }, 150);
     };
     window.addEventListener('resize', onResize);
@@ -1998,23 +2033,328 @@ export default function ScorePage() {
   }, [selectedMeasures, clipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, pushHistory, handleTranspose]);
 
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
+  // ユーザー設定（その他タブの「画面表示のズーム」スライダー、0.5〜1.5）。
+  // 自動縮尺（useAutoPageScale の scale）に掛け合わせて画面上の表示サイズだけを変える。
+  // 印刷は @media print で transform: none !important により解除されるため影響しない。
+  const [viewZoom, setViewZoom] = useState<number>(() => {
+    const raw = localStorage.getItem(VIEW_ZOOM_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.5〜1.5 へクランプする
+    return Number.isFinite(n) ? Math.max(0.5, Math.min(1.5, n)) : 1;
+  });
+  // 自動縮尺にユーザーのズーム倍率を掛けた、実際に画面へ適用する縮尺。
+  // クリック等の座標系は --scale から読むため、ここで一本化しておけば
+  // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
+  const effectiveScale = scale * viewZoom;
 
-  const systemsPerPage = scoreType === 'ensemble'
-    ? (instrumentation.parts.length > 10 ? 1 : 2)
-    : 9;
-  // ページ数・各ページの段数を totalSystems から計算する。
-  // 以前は「最終ページも常に systemsPerPage 段ぶん」描画しており、
-  // totalSystems を増減しても最終ページの見た目の段数が変わらなかった
-  // （空段が常に埋まっていたため）。可変長対応では最終ページだけ
-  // 「残り段数」だけを描画するようにし、段の追加・削除がそのまま見た目に反映されるようにする。
-  const pages: PageSpec[] = useMemo(() => {
-    const numPages = Math.max(1, Math.ceil(totalSystems / systemsPerPage));
-    return Array.from({ length: numPages }, (_, i) => {
-      const isLastPage = i === numPages - 1;
-      const remaining = totalSystems - i * systemsPerPage;
-      return { systems: isLastPage ? Math.max(1, remaining) : systemsPerPage };
+  // ユーザー設定（その他タブの「音符の大きさ」スライダー、0.8〜2.0）。
+  // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.8〜2.0 へクランプする
+  const [notationSizeMultiplier, setNotationSizeMultiplier] = useState<number>(() => {
+    const raw = localStorage.getItem(NOTATION_SIZE_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n) ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n)) : 1;
+  });
+  // SCORE_LAYOUT_RENDER_SCALE（既定0.44）に音符の大きさ倍率を掛けた、実際の
+  // レイアウト計算・描画に使う実効スケール。段組み計画（planEffectiveMeasuresPerSystem /
+  // planSystemMeasureRanges）と各 Canvas への scale prop の両方に必ずこの値を使い、
+  // SCORE_LAYOUT_RENDER_SCALE を直接使う箇所を残さない（単位の食い違いによる
+  // レイアウト崩れを防ぐため）。
+  const effectiveRenderScale = SCORE_LAYOUT_RENDER_SCALE * notationSizeMultiplier;
+
+  // ユーザー設定（その他タブの「ページ余白（左右）」スライダー、8〜25mm）。
+  // 壊れた保存値でも安全なよう必ずクランプする。既定値は measureLayoutUtils の
+  // DEFAULT_PAGE_SIDE_MARGIN_MM（14mm）と一致させ、未設定時は従来と同じ幅になるようにする。
+  const [pageMarginSideMm, setPageMarginSideMm] = useState<number>(() => {
+    const raw = localStorage.getItem(PAGE_MARGIN_SIDE_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n) ? Math.max(PAGE_MARGIN_SIDE_MIN_MM, Math.min(PAGE_MARGIN_SIDE_MAX_MM, n)) : DEFAULT_PAGE_SIDE_MARGIN_MM;
+  });
+  // ユーザー設定（その他タブの「ページ余白（上下）」スライダー、8〜25mm）。上 padding の値。
+  const [pageMarginVerticalMm, setPageMarginVerticalMm] = useState<number>(() => {
+    const raw = localStorage.getItem(PAGE_MARGIN_VERTICAL_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n) ? Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, n)) : DEFAULT_PAGE_SIDE_MARGIN_MM;
+  });
+  // ユーザー設定（その他タブの「段の間隔」スライダー、-30〜30px）。
+  const [systemRowGapPx, setSystemRowGapPx] = useState<number>(() => {
+    const raw = localStorage.getItem(SYSTEM_ROW_GAP_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n) ? Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, n)) : 0;
+  });
+  // 「レイアウトをリセット」: ページ余白・段の間隔の3設定をまとめて既定値へ戻す。
+  const handleResetPageLayout = useCallback(() => {
+    setPageMarginSideMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
+    setPageMarginVerticalMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
+    setSystemRowGapPx(0);
+    localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(DEFAULT_PAGE_SIDE_MARGIN_MM));
+    localStorage.setItem(PAGE_MARGIN_VERTICAL_KEY, String(DEFAULT_PAGE_SIDE_MARGIN_MM));
+    localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(0));
+  }, []);
+
+  const totalSystems = 12;
+  const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
+  // 1ページ（A4 実寸 297mm ≒ 1123px）に収まる段数。
+  // 「音符の大きさ」スライダーで音符・五線が拡大されると1段あたりの高さも
+  // ほぼ比例して増えるため、段数上限は notationSizeMultiplier と連動する動的計算にする
+  // （固定値のままだと、大きいサイズで段数/ページを変えずにいると印刷時に段が
+  // ページの境目で切断されてしまう）。SCORE_AREA_BUDGET_PX（予算）を
+  // BASE_SYSTEM_HEIGHT_PX（楽譜種別ごとの基準段高）× notationSizeMultiplier で割り、
+  // floor で切り捨てることで「絶対にあふれない」最大段数を安全側に求める。
+  const maxSystemsPerPage = useMemo(() => {
+    const baseHeight = scoreType === 'ensemble'
+      ? (instrumentation.parts.length > 10 ? BASE_SYSTEM_HEIGHT_PX.ensembleLarge : BASE_SYSTEM_HEIGHT_PX.ensembleSmall)
+      : scoreType === 'quartet'
+        ? BASE_SYSTEM_HEIGHT_PX.quartet
+        : scoreType === 'piano'
+          ? BASE_SYSTEM_HEIGHT_PX.piano
+          : BASE_SYSTEM_HEIGHT_PX.single;
+    // SCORE_AREA_BUDGET_PX は「上14mm/下12mm」（=上下合計26mm）の実測値。
+    // 「ページ余白（上下）」スライダーで上下合計が変わった分だけ、px換算で budget を増減する
+    // （上げれば譜面領域が狭くなり、段数上限が下がる）。
+    const verticalMarginTotalMm = pageMarginVerticalMm + Math.max(0, pageMarginVerticalMm - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM);
+    const defaultVerticalMarginTotalMm = DEFAULT_PAGE_SIDE_MARGIN_MM + (DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM);
+    const verticalMarginDeltaPx = (verticalMarginTotalMm - defaultVerticalMarginTotalMm) * MM_TO_PX;
+    const effectiveBudgetPx = Math.max(1, SCORE_AREA_BUDGET_PX - verticalMarginDeltaPx);
+    // 「段の間隔」スライダー（systemRowGapPx）ぶんの隙間も、段の高さに上乗せしたのと
+    // 同じ扱いで安全側に見積もる（N段なら本来 (N-1)×gap だが、ここでは 1段あたり
+    // baseHeight*倍率 + gap を占有すると仮定して floor する方が計算が単純で、
+    // 常に「あふれない」方向に丸まるため安全側になる）。
+    // 最低でも1段は入れられることにする（0段になると編集自体ができなくなるため）。
+    return Math.max(1, Math.floor(effectiveBudgetPx / (baseHeight * notationSizeMultiplier + systemRowGapPx)));
+  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier, pageMarginVerticalMm, systemRowGapPx]);
+  // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段が既定。市販譜のような
+  // 行間を確保するため、上限いっぱいの5段ではなく1段減らした4段を初期値にしている。
+  // 音符を大きくして上限が4段を下回った場合は、上限自体を推奨値として使う。
+  const recommendedSystemsPerPage = scoreType === 'piano' ? Math.min(4, maxSystemsPerPage) : maxSystemsPerPage;
+  // ユーザー設定（その他タブの「段数/ページ」）。null = 未設定（推奨値を使う）。
+  // 楽譜種別を切り替えても安全なように、表示時に必ず 1〜上限へクランプする
+  const [systemsPerPageSetting, setSystemsPerPageSetting] = useState<number | null>(() => {
+    const raw = localStorage.getItem(SYSTEMS_PER_PAGE_KEY);
+    const n = raw == null ? NaN : parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 1 ? n : null;
+  });
+  const systemsPerPage = Math.max(1, Math.min(maxSystemsPerPage, systemsPerPageSetting ?? recommendedSystemsPerPage));
+
+  // ユーザー設定（その他タブの「小節幅の均等さ」スライダー、0〜1）。
+  // 初期値はコード側の既定値 MEASURE_WIDTH_EVENNESS（0.5）。楽譜データには保存せず、
+  // 「段数/ページ」と同じくブラウザの画面設定（localStorage）として永続化する。
+  const [measureWidthEvenness, setMeasureWidthEvenness] = useState<number>(() => {
+    const raw = localStorage.getItem(MEASURE_WIDTH_EVENNESS_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0〜1 へクランプする
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : MEASURE_WIDTH_EVENNESS;
+  });
+
+  // 画面専用の「＋小節を追加」ボタンで、内容のある最後の段より後ろに
+  // 追加でいくつ編集用の空き段を表示するか（クリック1回につき1段ぶん）。
+  // 楽譜データそのものは変えず、表示する段数だけを一時的に増やす画面状態のため、
+  // Undo履歴には積まない（ボタン操作自体は setState のみで pushHistorySnapshot を呼ばない）。
+  // 新規作成・読込・サンプル読込など楽譜データを丸ごと差し替える操作では 0 へ戻す。
+  const [extraEditingSystems, setExtraEditingSystems] = useState(0);
+
+  // 印刷用: 内容のある最後の小節までを段数に換算する。
+  // これ以降の「空の段」「空のページ」は印刷から除外する（画面では編集用に表示し続ける）。
+  // 途中の空小節は内容として残したいので、末尾の空小節だけを取り除いて数える。
+  const contentMeasureCount = useMemo(() => {
+    const activeParts: MeasureData[][] = scoreType === 'piano'
+      ? [rightHandData ?? [], leftHandData ?? []]
+      : scoreType === 'quartet'
+        ? quartetParts
+        : scoreType === 'ensemble'
+          ? ensembleParts
+          : [rightHandData ?? []];
+    return activeParts.reduce((max, part) => Math.max(max, trimTrailingEmptyMeasures(part).length), 0);
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts]);
+  const layoutParts = useMemo((): MeasureLayoutPartContext[] => {
+    if (scoreType === 'piano') {
+      const keySignatureMeasures = rightHandData ?? [];
+      return [
+        { measures: rightHandData ?? [], keySignatureMeasures, clef: 'treble' },
+        { measures: leftHandData ?? [], keySignatureMeasures, clef: 'bass' },
+      ];
+    }
+    if (scoreType === 'quartet') {
+      const keySignatureMeasures = quartetParts[0] ?? [];
+      return QUARTET_PART_CONFIGS.map((part, index) => ({
+        measures: quartetParts[index] ?? [], keySignatureMeasures, clef: part.clef,
+      }));
+    }
+    if (scoreType === 'ensemble') {
+      const keySignatureMeasures = ensembleParts[0] ?? [];
+      return instrumentation.parts.map((part, index) => ({
+        measures: ensembleParts[index] ?? [], keySignatureMeasures, clef: part.clef,
+      }));
+    }
+    return [{ measures: rightHandData ?? [], clef: 'treble' }];
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, instrumentation.parts]);
+  const incomingArcIndex = useMemo(
+    () => buildIncomingArcIndex(layoutParts.map((part) => part.measures)),
+    [layoutParts],
+  );
+  // 記譜音表示ではアーク端点の音高も表示用に移調される。
+  // ページや段ごとに全パートを走査し直さず、ScorePage で一度だけ表示空間の索引を作る。
+  const ensembleDisplayIncomingArcIndex = useMemo(() => {
+    if (scoreType !== 'ensemble' || notationMode !== 'written') return incomingArcIndex;
+    return buildIncomingArcIndex(instrumentation.parts.map((part, index) => {
+      const semitones = TRANSPOSITION_WRITTEN_OFFSET_SEMITONES[part.transposition] ?? 0;
+      const measures = ensembleParts[index] ?? [];
+      return transposeMeasuresForDisplay(measures, semitones);
+    }));
+  }, [scoreType, notationMode, incomingArcIndex, instrumentation.parts, ensembleParts]);
+  const partExtractionIncomingArcIndex = useMemo(() => {
+    if (!isPartExtractionActive || !partExtractionSelection) return incomingArcIndex;
+    const measures = scoreType === 'ensemble'
+      ? ensembleParts[partExtractionSelection.index] ?? []
+      : scoreType === 'quartet'
+        ? quartetParts[partExtractionSelection.index] ?? []
+        : [];
+    // 抽出譜のCanvasはパート配列を要素0として描くため、索引も選択パートだけで作り直す。
+    // 編成譜の記譜音表示では、通常譜と同じ表示空間（移調後）の端点を索引化する。
+    const semitones = scoreType === 'ensemble' && notationMode === 'written'
+      ? TRANSPOSITION_WRITTEN_OFFSET_SEMITONES[instrumentation.parts[partExtractionSelection.index]?.transposition] ?? 0
+      : 0;
+    return buildIncomingArcIndex([transposeMeasuresForDisplay(measures, semitones)]);
+  }, [isPartExtractionActive, partExtractionSelection, scoreType, notationMode, ensembleParts, quartetParts, instrumentation.parts, incomingArcIndex]);
+  const effectiveMeasurePlan = useMemo(() => planEffectiveMeasuresPerSystem(
+    layoutParts,
+    scoreTimeSignature,
+    normalizeKeySignature(keySignature),
+    measuresPerSystem,
+    worstCaseSystemContentBudget(pageMarginSideMm),
+    effectiveRenderScale,
+    // Ensemble の記譜音表示だけ、移調後に臨時記号が増える最悪ケースの安全マージンを見込む。
+    // ピアノ・四重奏はここで盛ると実際に表示されない臨時記号ぶんまで幅を確保してしまい、
+    // 1段に入る小節数が不当に減る（読込直後にほぼ全小節が1小節/段へ膨張する不具合の一因）。
+    { includeTranspositionAccidentalWorstCase: scoreType === 'ensemble' },
+  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType, effectiveRenderScale, pageMarginSideMm]);
+  const plannerMinimumWidths = useMemo(() => {
+    // 末尾の空小節は「入力を続けられるように」数小節ぶんの余白段だけ残す。
+    // 以前は totalSystems(12) × measuresPerSystem を固定の編集枠としていたが、
+    // 段あたりの実小節数（effectiveMeasuresPerSystem）を無視して常に48スロットぶんを
+    // 計画してしまい、末尾の空小節からも余分な段が大量に生まれる原因になっていた。
+    // 画面では既定で内容段の直後の空き段は表示しない（下の visibleTotalSystems 参照）ため、
+    // ここでの「2段ぶん」は常に描画される量ではなく、あくまで「＋小節を追加」で
+    // すぐ表示できる予備の計画データ（幅計算済みの空き枠）。ユーザーが追加した段数
+    // （extraEditingSystems）ぶんは必ず用意しつつ、その先にも常に1段分の予備を残す。
+    const editingBufferMeasures = Math.max(effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem) * (extraEditingSystems + 2);
+    const length = Math.max(contentMeasureCount + editingBufferMeasures, effectiveMeasurePlan.minimumWidths.length);
+    return Array.from({ length }, (_, index) => (
+      effectiveMeasurePlan.minimumWidths[index] ?? MIN_MEASURE_CONTENT_WIDTH
+    ));
+  }, [contentMeasureCount, effectiveMeasurePlan.minimumWidths, effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem, extraEditingSystems]);
+  const plannedRanges = useMemo(() => planSystemMeasureRanges(
+    // plannerMinimumWidths は（Canvas 描画にそのまま渡せるよう）VexFlow の論理単位のまま。
+    // 一方 worstCaseSystemContentBudget() は物理ページ幅（SCORE_LAYOUT_RENDER_SCALE 倍後）
+    // なので、そのまま比較すると単位が食い違い常に「1小節でも予算超過」と誤判定してしまう
+    // （読込直後にほぼ全小節が1小節/段へ膨張する不具合の一因）。budget 側を論理単位へ
+    // 逆変換して揃える。
+    plannerMinimumWidths,
+    measuresPerSystem,
+    worstCaseSystemContentBudget(pageMarginSideMm) / effectiveRenderScale,
+    // 内容小節（終止線が付く最後の小節を含む段）と、それ以降の編集用の空きバッファ小節を
+    // 同じ段に混ぜない。こうしないと最終小節の終止線が段の右端まで届かず余白が残ってしまう
+    // （空の楽譜 contentMeasureCount===0 のときは強制しない＝undefined で従来どおり）。
+    contentMeasureCount > 0 ? contentMeasureCount : undefined,
+    // 段ごとの小節数のユーザー上書き。上書きのある段はその小節数を使い、無い段は
+    // 従来どおりの自動計画のまま続く（上書き段より後ろの小節位置から再計算される）。
+    systemMeasureOverrides,
+  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm]);
+  const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
+
+  // 段ごとの小節数の手動上書きを1段ぶんだけ増減する。
+  // 「小節 range.start から始まる段は count 小節」という上書きを配列に upsert するだけで、
+  // それより後ろの段は次の描画で自動的に続きから再計算される（planSystemMeasureRanges の
+  // 貪欲法が、上書きの無い start にだけ従来ロジックを適用するため）。
+  const adjustSystemMeasureOverride = useCallback((range: SystemMeasureRange, delta: number) => {
+    const nextCount = range.count + delta;
+    if (nextCount < 1) return;
+    // 引き込めるのは「内容のある小節」まで。編集用の空きバッファ小節まで引き込むと、
+    // 「最後の音符がある小節が譜面の最後の小節」という楽譜の作法（終止線の位置）が壊れるため。
+    if (delta > 0 && range.start + nextCount > contentMeasureCount) return;
+    pushHistory();
+    setSystemMeasureOverrides((prev) => {
+      const next = prev.filter((o) => o.startMeasure !== range.start);
+      next.push({ startMeasure: range.start, count: nextCount });
+      return next;
     });
-  }, [totalSystems, systemsPerPage]);
+  }, [contentMeasureCount, pushHistory]);
+
+  // その他タブの「段割りをリセット」ボタン用: 手動上書きをすべて解除し、自動計画へ戻す。
+  const handleResetSystemMeasureOverrides = useCallback(() => {
+    if (systemMeasureOverrides.length === 0) return;
+    pushHistory();
+    setSystemMeasureOverrides([]);
+  }, [systemMeasureOverrides.length, pushHistory]);
+  // 終止線を描く「内容のある最後の小節」の絶対インデックス。
+  // 内容が1小節も無い（空の楽譜）ときは undefined にして、どの Canvas でも終止線を描かせない。
+  const finalMeasureIndex = contentMeasureCount > 0 ? contentMeasureCount - 1 : undefined;
+  // 完全に空の楽譜でも最低1段は印刷する（白紙が出るより五線だけの1段が自然なため）
+  const printContentSystems = Math.max(1, plannedRanges.filter((range) => range.start < contentMeasureCount).length);
+
+  // 以前は市販譜の作法にならい、タイトル・作曲者名が入っているページ（＝1ページ目）だけ
+  // 譜面の段数を他ページより1段減らしていた。しかし物理印刷して確認したところ
+  // タイトル下の余白が大きくなりすぎ紙面が無駄になったため、紙面効率を優先し
+  // 「全ページ、常に同じ段数（systemsPerPage）を入れる」方式へ変更した。
+  // タイトルページはヘッダーの実高さぶんだけ譜面領域（.score-area）が狭くなるが、
+  // その中で段を均等配置するだけでよく、行位置が中間ページと揃わなくなる点は許容する
+  // （詳細は .claude/specs/final-barline/design.md を参照）。
+  // ページ段割りの本体は src/utils/pageSystemLayoutUtils.ts の純粋関数に集約し、
+  // ここでは現在の設定（systemsPerPage）を束ねた薄いラッパーだけを持つ。
+  // こうすることで、段割りロジック自体はコンポーネントを経由せずに単体テストできる。
+  const pageSystemLayoutOptions = useMemo(() => ({ systemsPerPage }), [systemsPerPage]);
+  // ページ index → そのページに入る段数（キャパシティ）を返すヘルパー。
+  const getPageSystemsCapacity = useCallback((pageIndex: number): number => (
+    getPageSystemsCapacityPure(pageIndex, pageSystemLayoutOptions)
+  ), [pageSystemLayoutOptions]);
+  // pageIndex 番目のページより前に何段ぶん段が置かれているか（＝そのページの開始オフセット）。
+  // 1ページ目だけ段数が違う可能性があるため、単純な pageIndex * systemsPerPage は使えず、
+  // 必ずこの累積計算を経由する。
+  const getPageSystemOffset = useCallback((pageIndex: number): number => (
+    getPageSystemOffsetPure(pageIndex, pageSystemLayoutOptions)
+  ), [pageSystemLayoutOptions]);
+
+  // 画面に表示する段数（楽譜の作法として「最後の音符がある小節が譜面の最後」になるよう、
+  // 内容のない末尾の空き段はデフォルトで表示しない。印刷の printContentSystems と同じ基準に、
+  // 「＋小節を追加」ボタンでユーザーが明示的に増やした段数（extraEditingSystems）だけを足す。
+  // plannerMinimumWidths 側で常に extraEditingSystems+1 段ぶんの予備を計画しているため、
+  // plannedRanges の範囲を超えることはない）。
+  const visibleTotalSystems = Math.max(1, Math.min(plannedRanges.length, printContentSystems + extraEditingSystems));
+  const visiblePlannedRanges = plannedRanges.slice(0, visibleTotalSystems);
+  // 表示する段数は visiblePlannedRanges（内容＋ユーザーが増やした編集用余白）にそのまま従う。
+  // 以前は plannedRanges 全体（内容＋常時2段ぶんの空き段）をそのまま画面にも出していたが、
+  // それだと「最後の音符がある小節が譜面の最後になる」という楽譜の作法に反するため、
+  // 画面用は visiblePlannedRanges に絞った。
+  const effectiveTotalSystems = Math.max(1, visiblePlannedRanges.length);
+  // 印刷時、内容のある最後のページだけ最後の段をページ下端へ寄せる（App.css の
+  // .print-final-page .system-stack 参照）。printContentSystems は「内容のある段の総数」
+  // （最低1）なので、それが何ページ目に収まるかを逆算する。
+  // ページごとの段数が可変（1ページ目だけ少ない）ため、単純な割り算ではなく
+  // 累積オフセットを1ページずつ進めながら「その段が何ページ目に収まるか」を探す。
+  const finalContentPageIndex = useMemo(
+    () => findPageIndexForSystem(printContentSystems - 1, pageSystemLayoutOptions),
+    [printContentSystems, pageSystemLayoutOptions]
+  );
+  // 最終内容ページに表示される「内容のある段数」。これが1段だけだと space-between は
+  // 子が1つしかないため上端に寄ってしまい、終止線がページ下端に届かない
+  // （App.css の .print-final-page-single 参照）。
+  const finalContentPageVisibleSystems = Math.max(0, Math.min(
+    getPageSystemsCapacity(finalContentPageIndex),
+    printContentSystems - getPageSystemOffset(finalContentPageIndex)
+  ));
+  const pages: PageSpec[] = useMemo(() => {
+    const result: PageSpec[] = [];
+    let offset = 0;
+    let pageIndex = 0;
+    // 段が1段も無くても、最低1ページは常に用意する
+    while (offset < effectiveTotalSystems || result.length === 0) {
+      const capacity = getPageSystemsCapacity(pageIndex);
+      const systemRanges = visiblePlannedRanges.slice(offset, offset + capacity);
+      result.push({ systems: systemRanges.length || capacity, systemRanges });
+      offset += capacity;
+      pageIndex += 1;
+    }
+    return result;
+  }, [effectiveTotalSystems, getPageSystemsCapacity, visiblePlannedRanges]);
 
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
   // totalSystems と measuresPerSystem の宣言より後に置く必要がある
@@ -2109,10 +2449,8 @@ export default function ScorePage() {
           setLeftHandData(leftPart?.measures);
           setEnsembleParts([]);
         }
-        // MusicXML には段数（totalSystems）の概念が無いため、
-        // 読み込んだ小節数が既定段数に収まるかどうかから逆算する
-        // （収まらない場合に末尾の小節が表示されなくなるのを防ぐ）。
-        setTotalSystems(computeMinTotalSystems(loaded.parts.map(p => p.measures), measuresPerSystem));
+        // MusicXML には段割り上書きの概念が無いため、前の譜面ぶんを引き継がずリセットする
+        setSystemMeasureOverrides([]);
       } catch (err) {
         alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
       }
@@ -2123,13 +2461,11 @@ export default function ScorePage() {
   }, [setTimeSignature, measuresPerSystem]);
 
   const [hasCustomPianoSample, setHasCustomPianoSample] = useState<boolean>(() => hasCustomPianoDemoScore());
-  const visiblePages = useMemo(() => {
-    const pagePixelWidth = 210 * 3.78 * scale;
-    // pages は scoreType によって 9段/ページや 2段/ページへ変わる。
-    // これを useState に保存すると、編成譜から単旋律へ戻した瞬間に
-    // 古い「2段ページ」が一瞬残ることがあるため、毎回ここで同期計算する。
-    return pagePixelWidth * 2 > viewportWidth ? pages.slice(0, 1) : pages;
-  }, [pages, scale, viewportWidth]);
+  // 以前は「2ページ分の幅がない画面では1ページ目だけ描画する」間引きをしていたが、
+  // - 狭いウィンドウでは2ページ目以降がアプリ上で一切見られない
+  // - 印刷も画面の DOM をそのまま刷るため、2ページ目以降が印刷されない
+  // という問題があったため廃止した。狭い画面では columns=1（縦1列）で全ページ並ぶ。
+  const visiblePages = pages;
 
   const [sharedPageHeight, setSharedPageHeight] = useState<number | null>(null);
 
@@ -2153,7 +2489,7 @@ export default function ScorePage() {
     resizeObserver.observe(spread);
     spread.querySelectorAll<HTMLElement>('.print-page').forEach(page => resizeObserver.observe(page));
     return () => resizeObserver.disconnect();
-  }, [spreadRef, visiblePages.length, scoreType, instrumentation.parts.length, scale]);
+  }, [spreadRef, visiblePages.length, scoreType, instrumentation.parts.length, effectiveScale]);
 
   useEffect(() => {
     return () => {
@@ -2645,28 +2981,184 @@ export default function ScorePage() {
                   style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
                 />
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }} title="曲の長さ（総段数）。段の追加・削除ボタンでも変更できます">
-                段数
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`1ページに並べる段数。A4に収まる上限（この楽譜の種類では${maxSystemsPerPage}段）までで設定できます`}
+              >
+                段数/ページ
                 <input
                   type="number"
-                  min={MIN_TOTAL_SYSTEMS}
-                  max={MAX_TOTAL_SYSTEMS}
-                  value={totalSystems}
+                  min={1}
+                  max={maxSystemsPerPage}
+                  value={systemsPerPage}
                   onChange={e => {
-                    const v = Math.max(MIN_TOTAL_SYSTEMS, Math.min(MAX_TOTAL_SYSTEMS, Number(e.target.value)));
-                    if (!isNaN(v) && v !== totalSystems) {
-                      pushHistory();
-                      setTotalSystems(v);
+                    const v = Math.max(1, Math.min(maxSystemsPerPage, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setSystemsPerPageSetting(v);
+                      localStorage.setItem(SYSTEMS_PER_PAGE_KEY, String(v));
                     }
                   }}
-                  style={{ width: 52, fontSize: 13, padding: '2px 4px' }}
+                  style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
                 />
               </label>
-              <button className="ghost" onClick={handleAddSystem} disabled={totalSystems >= MAX_TOTAL_SYSTEMS} title="末尾に段を1つ追加します">
-                段を追加
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="密な小節と疎な小節の幅の差を調節します。0% = 音符量どおりの幅（差が大きい）、100% = 全小節を等幅に。密な小節は詰まります"
+              >
+                小節幅の均等さ
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(measureWidthEvenness * 100)}
+                  onChange={e => {
+                    // スライダーは 0〜100(%) で扱い、内部では 0〜1 に変換して保持する
+                    const v = Math.max(0, Math.min(1, Number(e.target.value) / 100));
+                    if (!isNaN(v)) {
+                      setMeasureWidthEvenness(v);
+                      localStorage.setItem(MEASURE_WIDTH_EVENNESS_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 90 }}
+                />
+                {/* 現在値（%）。スライダーだけだと今いくつか分からないため小さく添える */}
+                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(measureWidthEvenness * 100)}%</span>
+              </label>
+              <button
+                type="button"
+                onClick={handleResetSystemMeasureOverrides}
+                disabled={systemMeasureOverrides.length === 0}
+                style={{ fontSize: 13, padding: '3px 8px' }}
+                title="各段の◀▶ボタンで個別調整した小節数の上書きをすべて解除し、自動計画へ戻します"
+              >
+                段割りをリセット
               </button>
-              <button className="ghost" onClick={handleRemoveLastSystem} disabled={totalSystems <= MIN_TOTAL_SYSTEMS} title="末尾の段を1つ削除します（音符が入っている場合は確認します）">
-                末尾の段を削除
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="画面表示の拡大縮小です。印刷結果には影響しません。100% が既定の自動縮尺です"
+              >
+                画面表示のズーム
+                <input
+                  type="range"
+                  min={50}
+                  max={150}
+                  step={5}
+                  value={Math.round(viewZoom * 100)}
+                  onChange={e => {
+                    // スライダーは 50〜150(%) で扱い、内部では 0.5〜1.5 の倍率として保持する
+                    const v = Math.max(0.5, Math.min(1.5, Number(e.target.value) / 100));
+                    if (!isNaN(v)) {
+                      setViewZoom(v);
+                      localStorage.setItem(VIEW_ZOOM_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 90 }}
+                />
+                {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
+                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(viewZoom * 100)}%</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="音符・記号そのものの大きさです。画面表示だけでなく印刷結果にも反映されます（『画面表示のズーム』とは異なり印刷にも影響します）。100% が既定の大きさです"
+              >
+                音符の大きさ
+                <input
+                  type="range"
+                  min={80}
+                  max={200}
+                  step={5}
+                  value={Math.round(notationSizeMultiplier * 100)}
+                  onChange={e => {
+                    // スライダーは 80〜200(%) で扱い、内部では 0.8〜2.0 の倍率として保持する
+                    const v = Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, Number(e.target.value) / 100));
+                    if (!isNaN(v)) {
+                      setNotationSizeMultiplier(v);
+                      localStorage.setItem(NOTATION_SIZE_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 90 }}
+                />
+                {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
+                <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
+              </label>
+              {/* ページレイアウト系スライダー（余白・段間隔）は1行にまとめて、その他タブが
+                  横に長くなりすぎないようにしている。挙動は他のスライダーと同じ
+                  （localStorage 保存・画面と印刷の両方に反映・既定値は従来と同一）。 */}
+              <span className="toolbar-group-label">レイアウト</span>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`ページの左右余白です。本文幅（小節を並べる幅）もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
+              >
+                余白(左右)
+                <input
+                  type="range"
+                  min={PAGE_MARGIN_SIDE_MIN_MM}
+                  max={PAGE_MARGIN_SIDE_MAX_MM}
+                  step={1}
+                  value={pageMarginSideMm}
+                  onChange={e => {
+                    const v = Math.max(PAGE_MARGIN_SIDE_MIN_MM, Math.min(PAGE_MARGIN_SIDE_MAX_MM, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setPageMarginSideMm(v);
+                      localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginSideMm}mm</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`ページの上下余白です。1ページに入る段数の上限もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
+              >
+                余白(上下)
+                <input
+                  type="range"
+                  min={PAGE_MARGIN_VERTICAL_MIN_MM}
+                  max={PAGE_MARGIN_VERTICAL_MAX_MM}
+                  step={1}
+                  value={pageMarginVerticalMm}
+                  onChange={e => {
+                    const v = Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setPageMarginVerticalMm(v);
+                      localStorage.setItem(PAGE_MARGIN_VERTICAL_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginVerticalMm}mm</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="段と段の間隔です。プラスで広げ、マイナスで狭められます。広げると1ページに入る段数の上限が自動で下がり、狭めると自動で増えます。既定は0px（間隔なし）です"
+              >
+                段の間隔
+                <input
+                  type="range"
+                  min={SYSTEM_ROW_GAP_MIN_PX}
+                  max={SYSTEM_ROW_GAP_MAX_PX}
+                  step={1}
+                  value={systemRowGapPx}
+                  onChange={e => {
+                    const v = Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setSystemRowGapPx(v);
+                      localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{systemRowGapPx}px</span>
+              </label>
+              <button
+                type="button"
+                onClick={handleResetPageLayout}
+                style={{ fontSize: 13, padding: '3px 8px' }}
+                title="ページ余白（左右・上下）と段の間隔を既定値へ戻します"
+              >
+                レイアウトをリセット
               </button>
               <button className="ghost" onClick={handleExportMusicXml}>MusicXML書出</button>
               <button className="ghost" onClick={handleExportMidi}>MIDI書出</button>
@@ -2881,11 +3373,25 @@ export default function ScorePage() {
         <div
           className="spread"
           ref={spreadRef}
-          style={{ '--scale': String(scale), '--columns': String(columns) } as React.CSSProperties}
+          style={{ '--scale': String(effectiveScale), '--columns': String(columns) } as React.CSSProperties}
         >
           {visiblePages.map((p, i) => (
-            <ScaledPageWrapper key={i} scale={scale} pageHeight={sharedPageHeight}>
-              <section className="print-page">
+            <ScaledPageWrapper key={i} scale={effectiveScale} pageHeight={sharedPageHeight}>
+              {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
+              {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
+              {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}
+              <section
+                className={`print-page${printContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}`}
+                style={{
+                  // ページ余白（左右・上下）。正本はこの3値のみで、App.css 側は
+                  // var(--page-margin-*) を padding へそのまま渡すだけにしてある
+                  // （CSSとJSでの二重定義を避けるため）。下 padding は「上 − 2mm」を保ち、
+                  // 既定値（14mm）のときに従来の 14mm/14mm/12mm と完全に一致させる。
+                  '--page-margin-side': `${pageMarginSideMm}mm`,
+                  '--page-margin-top': `${pageMarginVerticalMm}mm`,
+                  '--page-margin-bottom': `${Math.max(0, pageMarginVerticalMm - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM)}mm`,
+                } as React.CSSProperties}
+              >
                 <header className="page-head" style={{ position: 'relative' }}>
                   {i === 0 ? (
                     <>
@@ -2924,10 +3430,24 @@ export default function ScorePage() {
                   )}
                 </header>
 
-                <div className="score-area" style={{
+                <div className={`score-area${systemRowGapPx < 0 ? ' score-area--tight-rows' : ''}`} style={{
                   '--score-stroke-width': displayWeight === 'thin' ? '0.8' : displayWeight === 'thick' ? '1.8' : '1.2',
                   '--score-text-weight': displayWeight === 'thin' ? '300' : displayWeight === 'thick' ? '700' : '400',
+                  // 行グリッド: 全ページで「1段ぶんの高さ」を揃えるための比率。
+                  // --page-capacity はこのページの段数（キャパシティ）で、.system-stack の
+                  // flex-grow に使う（App.css 参照）。CSS カスタムプロパティは子孫へ継承されるため、
+                  // .system-stack 自体は EnsembleStaff などの子コンポーネントが描画していても
+                  // ここで指定した値をそのまま参照できる。
+                  '--page-capacity': String(getPageSystemsCapacity(i)),
+                  // 段の間隔（その他タブの「段の間隔」スライダー）。CSS カスタムプロパティは
+                  // 子孫（.system-stack）へ継承されるため、ここで指定すれば十分。
+                  '--system-row-gap': `${systemRowGapPx}px`,
                 } as React.CSSProperties}>
+                  {effectiveMeasurePlan.hasUnavoidableOverflow && (
+                    <p role="alert" className="layout-overflow-alert">
+                      この小節は最小の1小節/段でも紙幅を超えます。音符を減らすか、用紙設定を広げてください。
+                    </p>
+                  )}
                   {isPartExtractionActive && scoreType === 'ensemble' ? (
                     // パート譜表示（編成譜）: instrumentationParts/partsData/onPartChange を
                     // 選択中パート1件だけに絞って EnsembleStaff へ渡す。
@@ -2936,13 +3456,20 @@ export default function ScorePage() {
                     // 調号シフトなどのロジックもそのまま流用できる）。
                     <EnsembleStaff
                       systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={partExtractionIncomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
+                      finalMeasureIndex={finalMeasureIndex}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={scale}
+                      scale={effectiveRenderScale}
                       instrumentationParts={[instrumentation.parts[partExtractionSelection!.index]]}
                       partsData={[ensembleParts[partExtractionSelection!.index] ?? []]}
                       onPartChange={[() => {}]}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -2958,12 +3485,18 @@ export default function ScorePage() {
                     // 単一パート用の PartExtractionStaff（PianoSystemCanvas を直接1段だけ呼ぶ）を使う。
                     <PartExtractionStaff
                       systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={partExtractionIncomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
+                      finalMeasureIndex={finalMeasureIndex}
                       measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={scale}
+                      scale={effectiveRenderScale}
                       partConfig={QUARTET_PART_CONFIGS[partExtractionSelection!.index]}
                       data={quartetParts[partExtractionSelection!.index] ?? []}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
@@ -2975,13 +3508,20 @@ export default function ScorePage() {
                   ) : scoreType === 'ensemble' ? (
                     <EnsembleStaff
                       systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={ensembleDisplayIncomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
+                      finalMeasureIndex={finalMeasureIndex}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={scale}
+                      scale={effectiveRenderScale}
                       instrumentationParts={instrumentation.parts}
                       partsData={ensembleParts}
                       onPartChange={instrumentation.parts.map((_, pi) => handleEnsemblePartChange(pi))}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -2996,12 +3536,19 @@ export default function ScorePage() {
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
                       systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={incomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
+                      finalMeasureIndex={finalMeasureIndex}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={scale}
+                      scale={effectiveRenderScale}
                       partsData={quartetParts}
                       onPartChange={[0, 1, 2, 3].map(pi => handleQuartetPartChange(pi))}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -3015,15 +3562,22 @@ export default function ScorePage() {
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
                       systems={p.systems}
+                      systemRanges={p.systemRanges}
+                      incomingArcIndex={incomingArcIndex}
+                      measureWidthEvenness={measureWidthEvenness}
+                      pageMarginSideMm={pageMarginSideMm}
+                      finalMeasureIndex={finalMeasureIndex}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
                       gap={110}
                       measuresPerSystem={measuresPerSystem}
+                      plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
-                      scale={scale}
+                      scale={effectiveRenderScale}
                       rightHandData={rightHandData}
                       leftHandData={leftHandData}
                       onRightHandChange={handleRightHandChange}
                       onLeftHandChange={handleLeftHandChange}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
+                      startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
@@ -3038,28 +3592,96 @@ export default function ScorePage() {
                       activeVoiceIndex={activeVoice}
                     />
                   ) : (
-                    <StaffCanvas
-                      systems={p.systems}
-                      gap={110}
-                      measuresPerSystem={measuresPerSystem}
-                      tool={tool}
-                      scale={scale}
-                      clef="treble"
-                      initialScoreData={rightHandData}
-                      onScoreDataChange={handleScoreDataChange}
-                      startMeasureIndex={i * systemsPerPage * measuresPerSystem}
-                      disabled={isEditingDisabled}
-                      yOffset={yOffset}
-                      currentInstrument={currentInstrument}
-                      onPreviewNoteEvent={handleInputNotePreview}
-                      previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
-                      keySignature={keySignature}
-                      timeSignature={scoreTimeSignature}
-                      onKeySignatureChange={handleKeySignatureChange}
-                      selectedMeasures={selectedMeasures ?? undefined}
-                      onMeasureSelect={handleMeasureSelect}
-                      customSymbolDefs={customSymbolDefs}
-                    />
+                    <div className="system-stack">
+                      {p.systemRanges.map((range) => (
+                        // 行グリッド（App.css の .score-area .system-stack > * 参照）のため、
+                        // 他の楽器編成（EnsembleStaff など）と同じく1段=1 div でラップする。
+                        <div key={range.start}>
+                        <StaffCanvas
+                          systems={1}
+                          gap={110}
+                          measuresPerSystem={range.count}
+                          rangeLocked
+                          incomingArcIndex={incomingArcIndex}
+                          tool={tool}
+                          scale={effectiveRenderScale}
+                          clef="treble"
+                          initialScoreData={rightHandData}
+                          onScoreDataChange={handleScoreDataChange}
+                          startMeasureIndex={range.start}
+                          disabled={isEditingDisabled}
+                          yOffset={yOffset}
+                          currentInstrument={currentInstrument}
+                          onPreviewNoteEvent={handleInputNotePreview}
+                          previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
+                          keySignature={keySignature}
+                          timeSignature={scoreTimeSignature}
+                          onKeySignatureChange={handleKeySignatureChange}
+                          selectedMeasures={selectedMeasures ?? undefined}
+                          onMeasureSelect={handleMeasureSelect}
+                          customSymbolDefs={customSymbolDefs}
+                          finalMeasureIndex={finalMeasureIndex}
+                          pageMarginSideMm={pageMarginSideMm}
+                        />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* 段ごとの小節数を個別に調整するコントロール。段の自動計画（幅ベース）だけでは
+                      「この段だけ1小節増やしたい／減らしたい」という要望に応えられないため、
+                      ページ内の各段の直後に「◀ N小節 ▶」を1本ずつ並べる。▶ で次段の先頭小節を
+                      この段へ引き込み（+1）、◀ でこの段の末尾小節を次段へ送る（-1）。
+                      編集モードのときだけ表示し、印刷には出さない（App.css の @media print 参照）。 */}
+                  {!isPartExtractionActive && !isEditingDisabled && (
+                    <div className="system-measure-override-controls">
+                      {p.systemRanges.map((range, rangeIndex) => {
+                        const canDecrease = range.count > 1;
+                        // 引き込める「内容のある小節」が次に残っている段だけ ▶ を押せる。
+                        // 空きバッファ小節まで引き込むと終止線の作法が壊れるため上限は contentMeasureCount
+                        const canIncrease = range.start + range.count < contentMeasureCount;
+                        return (
+                          <div className="system-measure-override-row" key={range.start}>
+                            <span className="system-measure-override-label">段{getPageSystemOffset(i) + rangeIndex + 1}</span>
+                            <button
+                              type="button"
+                              className="system-measure-override-button"
+                              disabled={!canDecrease}
+                              onClick={() => adjustSystemMeasureOverride(range, -1)}
+                              title="この段の末尾の小節を次の段へ送る"
+                            >
+                              ◀
+                            </button>
+                            <span className="system-measure-override-count">{range.count}小節</span>
+                            <button
+                              type="button"
+                              className="system-measure-override-button"
+                              disabled={!canIncrease}
+                              onClick={() => adjustSystemMeasureOverride(range, 1)}
+                              title="次の段の先頭の小節をこの段へ引き込む"
+                            >
+                              ▶
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* ＋小節を追加: 最後の音符がある小節が譜面の最後になるよう、既定では
+                      内容のない末尾の空き段を画面にも表示しない（楽譜の作法）。それでも
+                      曲の続きを入力できるよう、最後に表示しているページの末尾にだけ
+                      控えめなボタンを置き、押すたびに空の段を1段ずつ表示する。
+                      印刷には出さない（App.css の @media print で非表示）。
+                      パート譜表示・空の楽譜での初期起動時は編集不可なので出さない。 */}
+                  {i === visiblePages.length - 1 && !isPartExtractionActive && (
+                    <button
+                      type="button"
+                      className="add-measures-ghost-button"
+                      onClick={() => setExtraEditingSystems((prev) => prev + 1)}
+                    >
+                      ＋ 小節を追加
+                    </button>
                   )}
 
                   <PlaybackHighlight

@@ -96,3 +96,98 @@ export interface NoteEvent {
 - `src/components/ScorePage.tsx` — 再生時の長さ・音量へ反映
 - `src/audio/PlaybackEngine.ts` — `PlaybackMeasureEvent.durationScale` 追加
 - `src/audio/SoundFontEngine.ts` / `SimpleAudioEngine.ts` — 発音長へ `durationScale` を適用
+
+## 追記（バグ修正）: PianoSystemCanvas でフェルマータ・途中テンポ変更（tempoMarking）が描画されていなかった
+
+上の「描画とクリック付与」の節は StaffCanvas/PianoSystemCanvas 両方に描画があると書いていたが、
+実際には **`PianoSystemCanvas.tsx`（ピアノ2段譜・弦楽四重奏などの複数段編成）には
+`articulations` / `tempoMarking` を描く経路が一切無かった**。クリックで `articulations` 配列自体は
+保存データへ正しく付与されるが、画面に何も表示されないまま気付きにくいサイレント欠落になっていた
+（複雑テスト楽譜の低音部 `c/2,g/2,c/3`・`fermata` 付き全音符などで再現）。
+
+### 原因
+
+- `PianoSystemCanvas.tsx` のローカル `NoteEvent` 型（ファイル冒頭）に `articulations` / `tempoMarking`
+  フィールドが定義されておらず、`dynamics` や `fingering` と違って描画情報を集める配列
+  （`dynamicTextEntries` 相当）自体が存在しなかった。
+- なお VexFlow の `StaveNote` 自体は正しく全音符の符頭（3和音なら3個）を構築・描画しており、
+  「符頭が欠ける」という現象は本調査では再現しなかった（一時的なレイアウト再計算前の
+  古い DOM を見ていた可能性が高い）。
+
+### 修正
+
+`StaffCanvas.tsx` の実装（VexFlow の `Articulation` モディファイアではなく、**素の SVG 要素を
+音符の位置情報から計算して自前描画する方式**）をそのまま `PianoSystemCanvas.tsx` へ移植した。
+
+- `NoteEvent` 型に `articulations?: ArticulationMarking[]` と `tempoMarking?: string` を追加
+- `articulationEntries` / `tempoMarkingEntries` 収集配列を追加し、アクティブ声部・非アクティブ声部の
+  両方のイベント走査ループで push する（`fingeringEntries` と同じ位置・同じ方針）
+- 全音符描画後に一括で SVG を組み立てる描画ループを追加（フェルマータ＝弧＋点、
+  スタッカート＝符頭上の小さい丸、アクセント＝楔形、テヌート＝水平線。`marcato` は
+  StaffCanvas 側も未実装のため今回も未対応のまま）
+- `tempoMarking` はコード記号と同じ位置（五線上端より24px上）にイタリック体で表示
+
+### 検証
+
+- `docker compose run --rm app npx tsc --noEmit` / `npx vitest run`（925件）とも green（既存の
+  回帰テストのみ。新規の描画ロジックは SVG 要素の手組み立てで、既存の `fingeringEntries` 等と
+  同型のためユニットテストは追加していない）
+- ブラウザ DOM 実測: 複雑テスト楽譜 measure index 23（左手 `c/2,g/2,c/3` + フェルマータ、右手
+  `c/5,e/5,g/5,c/6` + フェルマータ + `tempoMarking:"Fine"`）で、修正前は `svg.querySelector('[class*=fermata]')`
+  が無く `text` 要素にも `"Fine"` が見つからなかったが、修正後は両方の五線に半円弧＋点のフェルマータが
+  描画され、`svg` 内の `text` 一覧に `"Fine"` が含まれることを確認した。符頭数は修正前後とも
+  左手3個・右手4個で変化なし（符頭欠けは本修正の対象ではなかった）。
+
+## 追記（機能追加）: アーティキュレーションを⤢/✥の記号調整ツールの対象に追加、marcato描画も実装
+
+上の「原因」節で触れた通り、articulations の描画は VexFlow の `Articulation` モディファイアではなく
+StaffCanvas.tsx / PianoSystemCanvas.tsx 両方で手組みの SVG（円・パス・線）に統一されていた。
+それにも関わらず `extended-notation-features/design.md` 時点の `symbolAdjustUtils.ts` は
+articulations を「VexFlowのグリフ構造上、安全な描画反映を作り込めなかった」という理由で
+⤢/✥ツールの対象から除外したままだった。手組みSVGなら他の標準記号（運指・強弱記号など）と
+全く同じ「座標にoffsetXY・図形サイズにscaleを掛ける」方式で反映できるため、この除外を解消した。
+
+### きっかけ
+
+複雑テスト楽譜の小節24で、右手の全音符和音の真上にフェルマータと `tempoMarking`（"Fine"）が
+重なって窮屈だった。フェルマータを位置調整できるようにしたいというユーザーの要望。
+
+### 修正内容
+
+- `src/utils/symbolAdjustUtils.ts`: `listPresentAdjustableSymbolKinds` に
+  `if (event.articulations && event.articulations.length > 0) kinds.push('articulations');` を追加
+  （休符は従来どおり除外）。除外コメントを ornament のみに限定する内容へ書き換え。
+- `src/components/StaffCanvas.tsx` / `PianoSystemCanvas.tsx`: `articulationEntries` に
+  `adjust: getSymbolAdjust(event, 'articulations')` を追加し、描画ループで
+  `ax = anchorX + adjust.offsetX` / `s = adjust.scale` を使って各図形（フェルマータの弧・点、
+  スタッカートの点、アクセント・マルカートの山形、テヌートの線）の座標・半径・線幅・積み上げ間隔を
+  スケーリングするよう変更。1音符に複数のアーティキュレーションが付いていても、まとめて同じ
+  `adjust` 値を適用する（個別記号ごとの調整はできない）。
+- **marcato の描画漏れも合わせて解消**: 上の「追記（バグ修正）」節に記載の通り、PianoSystemCanvas
+  移植時点では marcato が StaffCanvas 側も含めて未実装（クリックで付与はできるが画面に何も
+  出ない）だった。今回、塗りつぶした山形（アクセントのストロークのみの山形と区別するため）を
+  両ファイルに追加し、StaffCanvas/PianoSystemCanvas とも `staccato`/`accent`/`tenuto`/`fermata`/
+  `marcato` の5種類すべてが描画されるようにした。
+- `src/utils/storage.ts` の `ADJUSTABLE_SYMBOL_KINDS` は元々 `'articulations'` を含んでいたため、
+  保存データのバリデーション側の変更は不要だった。
+- ornament（装飾記号）は VexFlow の `Ornament` モディファイアのままなので、今回も対象外のまま
+  とした（無理に対応させない）。
+
+### 検証
+
+- `docker compose run --rm app npx tsc --noEmit` green。
+- `docker compose run --rm app npx vitest run` 927件 green
+  （`symbolAdjustUtils.test.ts` に「アーティキュレーションは手組みSVG描画のため列挙する」
+  「休符に付いたアーティキュレーションは列挙しない」の2件を追加）。
+- ブラウザ実測（複雑テスト楽譜 小節24、右手 `ff` 全音符和音 + フェルマータ + `tempoMarking:"Fine"`）:
+  ✥ツールで音符をクリックすると「テスト記号／強弱記号／アーティキュレーション／テンポ表記」の
+  選択リストが出ることを確認（articulations が選択肢に追加されたことの実証）。
+  「アーティキュレーション」を選び offsetX=25/offsetY=-30 を設定すると、フェルマータの弧の
+  `path` の `d` 属性が `M 76.36 40.53 ...` → `M 101.36 10.53 ...`（+25/-30が正確に反映）へ変化。
+  保存 → リロード → 読込しても同じオフセットが復元されることを確認。⤢ツールでも
+  scale=180% にすると弧の半径が `11`→`19.8`（×1.8）、`stroke-width` が `1.6`→`2.88`（×1.8）へ
+  変化することを確認。元に戻す（Undo）でスケール・オフセットとも元の値に戻ることを確認。
+  最終的にオフセットを横+38pxのみに調整し、"Fine" とフェルマータの重なりが解消された見た目を確認。
+  コンソールエラーなし。StaffCanvas 側は PianoSystemCanvas と全く同じロジックのコード変更を
+  行っており、コードレビューで同等の反映を確認した（複雑テスト楽譜はピアノ譜のため、単旋律譜
+  （StaffCanvas）でのブラウザ実機確認はできていない）。

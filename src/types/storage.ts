@@ -369,6 +369,19 @@ export interface SavedScoreData {
   measuresPerSystem: number;
   /** ユーザー定義カスタム記号ライブラリ。旧データ互換のため省略可 */
   customSymbolDefs?: CustomSymbolDef[];
+  /**
+   * 段ごとの小節数のユーザー上書き。「絶対小節インデックス startMeasure から始まる段は
+   * count 小節」という意味で保持する。小節の挿入・削除で多少ずれても意味を保ちやすいよう、
+   * 段の並び順ではなく開始小節番号をキーにしている。旧データ互換のため省略可（省略時は
+   * 自動計画のみ）。
+   */
+  systemMeasureOverrides?: SystemMeasureOverride[];
+}
+
+/** 「小節 startMeasure から始まる段は count 小節」という段ごとの手動上書き。 */
+export interface SystemMeasureOverride {
+  startMeasure: number;
+  count: number;
 }
 
 export interface StorageMetadata {
