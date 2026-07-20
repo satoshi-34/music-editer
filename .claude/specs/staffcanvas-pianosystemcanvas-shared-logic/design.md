@@ -98,3 +98,42 @@
   `lyricsEntries` の収集（アクティブ声部・非アクティブ声部の両方）と描画呼び出しを追加。
 - ブラウザ確認: ピアノ大譜表・単旋律譜のそれぞれで歌詞ツールから音符クリック→入力→確定
   すると、音符の下に歌詞が表示されることを確認。コンソールエラーなし。
+
+## 追記2: PianoSystemCanvas での歌詞表示位置を「五線の上」へ変更
+
+上記の対応では `PianoSystemCanvas` の歌詞も `StaffCanvas` と同じ「五線の下」（`botY + 54`）に
+描画していたが、多段譜では音符の下だと隣の段（次のパート）の五線と近接・重なりやすく、
+どのパートの歌詞かが視覚的に分かりにくいという仕様上の問題があった。ユーザー判断により、
+`PianoSystemCanvas` では歌詞をその音符が属する段の**五線の上**に表示する仕様へ変更した。
+`StaffCanvas`（単旋律譜）は従来どおり五線の下のまま変更していない。
+
+### 修正設計
+
+- `src/utils/lyricsRenderUtils.ts` の `LyricsRenderEntry` に `placement?: 'above' | 'below'`
+  （省略時 `'below'`）と、上側配置用の `staveTopY?: number` を追加。`drawLyricsEntry` は
+  `placement === 'above'` のとき `staveTopY - 26 + adjust.offsetY` を Y 座標として使う。
+  `-26` は、同じく五線上端基準の統一高さで描く運指番号（`staveTopY - 12` が基準）・
+  カスタム記号（`getCustomSymbolAnchorY` = `staveTopY - 10`）と重ならないよう、
+  文字の高さぶんの余白（約14px）を確保して決めた。
+- `StaffCanvas.tsx` の呼び出し側は変更なし（`placement` を渡さないので既定値 `'below'` のまま、
+  従来どおり `botY`（五線下端）基準）。
+- `PianoSystemCanvas.tsx` の `lyricsEntries`（アクティブ声部・非アクティブ声部の両方の収集箇所）は
+  収集する値を `botY: stave.getYForLine(4)` から `staveTopY: stave.getYForLine(0)` に変更し、
+  描画呼び出し側で `drawLyricsEntry(svgRoot, { ...entry, placement: 'above' })` として
+  上側配置を明示的に指定する。
+- テスト（`lyricsRenderUtils.test.ts`）に `placement: 'above'` のケース（`staveTopY - 26` になること、
+  `offsetX/offsetY/scale` の反映）を追加し、`placement` 省略時・`'below'` 明示時が
+  従来どおり `botY + 54` になることも回帰確認として残した。
+
+### 影響範囲
+
+- `src/utils/lyricsRenderUtils.ts`: `LyricsRenderEntry` に `placement`/`staveTopY` を追加、
+  `drawLyricsEntry` の座標計算を配置に応じて分岐。
+- `src/utils/lyricsRenderUtils.test.ts`: `above`/`below` 双方のケースを追加。
+- `src/components/PianoSystemCanvas.tsx`: `lyricsEntries` の型と収集値（`botY` →
+  `staveTopY`）、描画呼び出し（`placement: 'above'` を付与）を変更。`StaffCanvas.tsx` は変更なし。
+- ブラウザ確認: ピアノ大譜表で右手（ト音）の音符に歌詞を付けると右手譜表の上に、
+  左手（ヘ音）の音符に付けると左手譜表の上に表示されることを確認。同じ音符に運指番号と
+  歌詞を両方付けても重ならず、運指が下・歌詞が上に並んで表示されることを確認。
+  単旋律譜（`StaffCanvas`）は従来どおり五線の下に歌詞が表示されることを確認（回帰なし）。
+  いずれもコンソールエラーなし。

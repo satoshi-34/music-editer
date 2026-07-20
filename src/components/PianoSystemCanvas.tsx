@@ -1136,7 +1136,7 @@ export default function PianoSystemCanvas({
     const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // 歌詞の描画情報を収集する（データ駆動: 歌詞を持つイベントが属する段の五線下端を基準にする）
     // StaffCanvas と同じ座標計算・見た目を drawLyricsEntry（lyricsRenderUtils.ts）で共有する
-    const lyricsEntries: Array<{ anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    const lyricsEntries: Array<{ anchorX: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     const ottavaEntries: Array<{
       kind: '8va' | '8vb';
@@ -2848,7 +2848,7 @@ export default function PianoSystemCanvas({
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.lyrics) {
               lyricsEntries.push({
                 anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                botY: stave.getYForLine(4),
+                staveTopY: stave.getYForLine(0),
                 text: activeEvs[j].lyrics!,
                 adjust: getSymbolAdjust(activeEvs[j], 'lyrics'),
               });
@@ -2944,7 +2944,7 @@ export default function PianoSystemCanvas({
                 if (ev.lyrics) {
                   lyricsEntries.push({
                     anchorX: cx,
-                    botY: stave.getYForLine(4),
+                    staveTopY: stave.getYForLine(0),
                     text: ev.lyrics,
                     adjust: getSymbolAdjust(ev, 'lyrics'),
                   });
@@ -3043,9 +3043,10 @@ export default function PianoSystemCanvas({
       svgRoot.appendChild(el);
     });
 
-    // 歌詞: 音符が属する段の五線下端のさらに下（botY + 54）に通常体で表示する。
-    // 多パート譜では歌詞データを持つイベントの段の下に描かれる（データ駆動）。
-    lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, entry));
+    // 歌詞: 音符が属する段の五線上端のさらに上（staveTopY - 26）に通常体で表示する。
+    // ピアノ大譜表なら右手に付けた歌詞は右手譜表の上、左手なら左手譜表の上に出る。
+    // 多パート譜では歌詞データを持つイベントの段の上に描かれる（データ駆動）。
+    lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, { ...entry, placement: 'above' }));
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
     // Ped と ✱ が時系列でペアになる区間は、間を破線でつないで「踏み続けている範囲」を示す

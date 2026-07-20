@@ -24,10 +24,14 @@
    歌詞テキストを描画していたが、`PianoSystemCanvas.tsx` には `lyrics` への参照が
    一切無く、多段譜に切り替えると歌詞が表示されない状態だった。
    座標計算・描画ロジックを `drawLyricsEntry`（`src/utils/lyricsRenderUtils.ts`）へ
-   共通化した上で `PianoSystemCanvas.tsx` にも歌詞データの収集・描画を実装し、
-   単旋律譜・多段譜（ピアノ大譜表/弦楽四重奏/編成譜）のどちらでも同じ見た目で
-   表示されるようになった。歌詞を持つイベントが属する段（パート）の下に描かれる
-   データ駆動の実装のため、特定パート固定にはならない。テキスト編集オーバーレイを
+   共通化した上で `PianoSystemCanvas.tsx` にも歌詞データの収集・描画を実装した。
+   ただし表示位置は単旋律譜・多段譜で異なる仕様になっている。単旋律譜
+   （`StaffCanvas`）は従来どおり五線の下（`botY + 54`）に表示するのに対し、
+   多段譜（`PianoSystemCanvas`）は仕様変更により歌詞を持つ音符が属する段の
+   **五線の上**（`staveTopY - 26` の統一高さ、`placement: 'above'`）に表示される。
+   ピアノ大譜表なら右手に付けた歌詞は右手譜表の上、左手に付けた歌詞は左手譜表の上に
+   出る。いずれもデータ駆動の実装で、歌詞を持つイベントが属する段に描かれるため
+   特定パート固定にはならない。テキスト編集オーバーレイを
    開くクリック判定・`symbolAdjust`（サイズ・位置調整）は既存の汎用実装
    （`textElementMode` / `listPresentAdjustableSymbolKinds`）がそのまま対応しており、
    追加の分岐は不要だった。詳細は `.claude/specs/staffcanvas-pianosystemcanvas-shared-logic/design.md`
