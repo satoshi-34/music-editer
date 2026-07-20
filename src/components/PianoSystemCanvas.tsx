@@ -1312,6 +1312,10 @@ export default function PianoSystemCanvas({
     const customSymbolEntries: CustomSymbolRenderEntry[] = [];
     // リハーサルマーク（練習番号）の描画情報を収集する。最上段（pi===0）の上にだけ表示する。
     const rehearsalMarkEntries: Array<{ x: number; topY: number; mark: string }> = [];
+    // 途中テンポ変更（MeasureData.bpm）の描画情報を収集する。最上段（pi===0）の上にだけ ♩=XXX と表示する。
+    // リハーサルマークと同じ「最上段基準」の方針だが、StaffCanvas の既存レイアウトに合わせ
+    // リハーサルマークより下（五線上端の36px上）に置くことで重ならないようにする。
+    const bpmMarkingEntries: Array<{ x: number; topY: number; bpm: number }> = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     // stave も持たせておくのは、down→up の破線ブリッジが段またぎになるかどうかを
     // 松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため。
@@ -1692,6 +1696,14 @@ export default function PianoSystemCanvas({
             x: x / s,
             topY: stave.getYForLine(0),
             mark: sharedMeasure.rehearsalMark,
+          });
+        }
+        // 途中テンポ変更（♩=XXX）も最上段（pi===0）の上にだけ表示する
+        if (pi === 0 && sharedMeasure?.bpm) {
+          bpmMarkingEntries.push({
+            x: x / s,
+            topY: stave.getYForLine(0),
+            bpm: sharedMeasure.bpm,
           });
         }
       });
@@ -3411,7 +3423,26 @@ export default function PianoSystemCanvas({
       appendSymbolHitRegion([g], entry.partIndex, entry.measureAbsoluteIndex, entry.eventIndex, entry.event, symbolId, true);
     });
 
+    // ── 途中テンポ変更マーキングを一括描画（StaffCanvas と同じ表示） ──
+    // 各小節の左端上方に「♩=XXX」と琥珀色のテキストで表示する。
+    // 五線上端より 36px 上に配置して、コード記号・テンポ表記テキストと重ならないようにする。
+    bpmMarkingEntries.forEach(({ x, topY, bpm }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = `♩=${bpm}`;
+      el.setAttribute('x', String(x + 2));
+      el.setAttribute('y', String(topY - 36));
+      el.setAttribute('fill', '#b45309');  // 琥珀色で他の記号と区別しやすくする
+      el.setAttribute('font-family', '"Times New Roman", serif');
+      el.setAttribute('font-size', '12');
+      el.setAttribute('font-weight', 'bold');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
     // ── リハーサルマーク（練習番号）を一括描画（StaffCanvas と同じ四角枠+太字） ──
+    // 途中テンポ変更（♩=XXX）よりさらに上に置くことで、同じ小節に両方が
+    // 付いても重ならないようにする（テンポは五線上端の36px上、
+    // リハーサルマークはそれよりさらに20px上＝56px上）。
     rehearsalMarkEntries.forEach(({ x, topY, mark }) => {
       const boxWidth = Math.max(16, mark.length * 8 + 8);
       const boxHeight = 16;
