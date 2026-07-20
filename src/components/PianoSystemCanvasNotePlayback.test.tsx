@@ -124,4 +124,52 @@ describe('PianoSystemCanvas 音符クリック再生機能', () => {
       );
     }).not.toThrow();
   });
+
+  // 旧 StaffCanvasNotePlayback.test.tsx にあった「アンマウント時に NotePlayer.dispose が
+  // 呼ばれる」「音符クリック用のヒット領域（rect.vf-note-hit）が生成される」検証を、
+  // StaffCanvas 退役に伴い PianoSystemCanvas 側へ移植する。
+  it('アンマウント時に NotePlayer.dispose を呼ぶ', async () => {
+    const { unmount } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={1}
+        tool={{ duration: '4', isRest: false }}
+        scale={1}
+        trebleData={[{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }]}
+        bassData={[{ events: [{ dur: '4', isRest: false, keys: ['c/3'] }] }]}
+      />
+    );
+
+    await waitFor(() => {
+      expect(NotePlayer).toHaveBeenCalledTimes(1);
+    });
+
+    unmount();
+
+    const mockInstance = (NotePlayer as any).mock.results[0].value;
+    expect(mockInstance.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('音符クリック用のヒット領域（rect.vf-note-hit）を生成する', () => {
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={1}
+        tool={{ duration: '4', isRest: false }}
+        scale={1}
+        trebleData={[{
+          events: [
+            { dur: '4', isRest: false, keys: ['c/4'] },
+            { dur: '4', isRest: false, keys: ['d/4'] },
+            { dur: '4', isRest: true, keys: ['b/4'] },
+          ]
+        }]}
+        bassData={[{ events: [{ dur: '4', isRest: false, keys: ['c/3'] }] }]}
+      />
+    );
+
+    const svg = container.querySelector('svg');
+    expect(svg).toBeTruthy();
+
+    const noteHitRects = svg?.querySelectorAll('rect.vf-note-hit');
+    expect(noteHitRects?.length).toBeGreaterThan(0);
+  });
 });
