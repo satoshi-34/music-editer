@@ -1,3 +1,15 @@
+## 退役完了（2026-07-20）
+
+手順3（`StaffCanvas.tsx` 削除）まで完了した。`src/components/StaffCanvas.tsx` /
+`StaffCanvas.test.tsx` / `StaffCanvasNotePlayback.test.tsx` を削除し、最後まで
+直接 import していた `RestOverlapIntegration.test.tsx` は `SingleStaff` 経由の
+テストへ書き換えた。`StaffCanvasNotePlayback.test.tsx` がカバーしていた
+「アンマウント時に NotePlayer.dispose を呼ぶ」「音符クリック用ヒット領域
+（`rect.vf-note-hit`）を生成する」の2件は `PianoSystemCanvasNotePlayback.test.tsx`
+へ移植済み。歌詞描画（`src/utils/lyricsRenderUtils.ts`）は StaffCanvas 向けの
+`'below'` 配置が不要になったため `'above'` 固定へ簡素化した。詳細は
+`.claude/specs/staffcanvas-pianosystemcanvas-shared-logic/design.md` を参照。
+
 ## 進捗（実装）
 
 > **手順2は印刷ブランチのマージで一時巻き戻された後、再適用済み（2026-07-20）**:
@@ -244,10 +256,11 @@ v1（歌詞まわりの調査）はこの文書に統合済み。v2 では残っ
    - **テスト戦略**: 既存の保存データ（`rightHandData` 形式）を読み込んで
      見た目が崩れないか確認。MusicXML 読込・サンプル読込・段数可変
      （段の追加削除・自動拡張）が単旋律譜でも動くことをブラウザで確認。
-3. **十分な実運用確認の後、`StaffCanvas.tsx` を削除**。
+3. **十分な実運用確認の後、`StaffCanvas.tsx` を削除**。（完了、2026-07-20）
    `StaffCanvas.test.tsx` 等の専用テストは `SingleStaff`/`PianoSystemCanvas`
    向けに移行するか削除する。
    - **リスク**: 低（この時点で他に呼び出し元が無いことを再度 grep で確認する）。
+   - 実施内容は本ファイル冒頭「退役完了（2026-07-20）」を参照。
 
 ## 「やらない」判断もあり得る条件
 
