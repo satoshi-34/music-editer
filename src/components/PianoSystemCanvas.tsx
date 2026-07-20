@@ -75,6 +75,7 @@ import {
   type ResolvedSymbolAdjust,
 } from '../utils/symbolAdjustUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
+import { drawLyricsEntry } from '../utils/lyricsRenderUtils';
 import { getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
@@ -84,7 +85,7 @@ import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[] };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; lyrics?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[] };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
@@ -1133,6 +1134,9 @@ export default function PianoSystemCanvas({
     const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }> = [];
     // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
     const fingeringEntries: Array<{ anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
+    // 歌詞の描画情報を収集する（データ駆動: 歌詞を持つイベントが属する段の五線下端を基準にする）
+    // StaffCanvas と同じ座標計算・見た目を drawLyricsEntry（lyricsRenderUtils.ts）で共有する
+    const lyricsEntries: Array<{ anchorX: number; botY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
     const ottavaEntries: Array<{
       kind: '8va' | '8vb';
@@ -2841,6 +2845,14 @@ export default function PianoSystemCanvas({
                 adjust: getSymbolAdjust(activeEvs[j], 'fingering'),
               });
             }
+            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.lyrics) {
+              lyricsEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                botY: stave.getYForLine(4),
+                text: activeEvs[j].lyrics!,
+                adjust: getSymbolAdjust(activeEvs[j], 'lyrics'),
+              });
+            }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.ottava) {
               const cx = noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2);
               const topY = stave.getYForLine(0);
@@ -2927,6 +2939,14 @@ export default function PianoSystemCanvas({
                     staveTopY: stave.getYForLine(0),
                     text: ev.fingering,
                     adjust: getSymbolAdjust(ev, 'fingering'),
+                  });
+                }
+                if (ev.lyrics) {
+                  lyricsEntries.push({
+                    anchorX: cx,
+                    botY: stave.getYForLine(4),
+                    text: ev.lyrics,
+                    adjust: getSymbolAdjust(ev, 'lyrics'),
                   });
                 }
                 if (ev.ottava) {
@@ -3022,6 +3042,10 @@ export default function PianoSystemCanvas({
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });
+
+    // 歌詞: 音符が属する段の五線下端のさらに下（botY + 54）に通常体で表示する。
+    // 多パート譜では歌詞データを持つイベントの段の下に描かれる（データ駆動）。
+    lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, entry));
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
     // Ped と ✱ が時系列でペアになる区間は、間を破線でつないで「踏み続けている範囲」を示す
