@@ -3608,7 +3608,7 @@ export default function PianoSystemCanvas({
     // 歌詞: 音符が属する段の五線上端のさらに上（staveTopY - 26）に通常体で表示する。
     // ピアノ大譜表なら右手に付けた歌詞は右手譜表の上、左手なら左手譜表の上に出る。
     // 多パート譜では歌詞データを持つイベントの段の上に描かれる（データ駆動）。
-    lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, { ...entry, placement: 'above' }));
+    lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, entry));
 
     // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
     // Ped と ✱ が時系列でペアになる区間は、間を破線でつないで「踏み続けている範囲」を示す
