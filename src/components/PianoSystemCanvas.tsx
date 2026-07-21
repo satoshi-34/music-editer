@@ -134,11 +134,22 @@ export type PartConfig = {
 /* ===== レイアウト定数（SVGビューポートpx） ===== */
 const PAGE_LEFT = SYSTEM_PAGE_SIDE_PADDING, PAGE_RIGHT = SYSTEM_PAGE_SIDE_PADDING;
 const FIRST_STAVE_Y = 20;
-const STAVE_SPACING = 80; // 段と段の間隔（Y方向）
-function computeLayout(n: number): { staveYs: number[]; sysH: number } {
-  const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * STAVE_SPACING);
-  const sysH = FIRST_STAVE_Y + (n - 1) * STAVE_SPACING + 60 + 20;
-  return { staveYs, sysH };
+// 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏（4パート以下）は見た目を変えないよう
+// 従来値の80を維持する。編成譜（5パート以上）は市販オーケストラスコア並みの紙面効率にするため、
+// 詰めた値を使う（Issue #29）。VexFlow の五線は line0〜line4 の4間隔＝40ネイティブ単位の高さなので、
+// 60 にすると隣接パートとの間の余白が20単位（加線2本ぶん）残り、音符と衝突しない。
+const STAVE_SPACING = 80; // 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏用
+const STAVE_SPACING_ENSEMBLE = 60; // 5パート以上の編成譜用（密な既定値）
+const ENSEMBLE_DENSE_SPACING_MIN_PARTS = 5;
+// テスト（PianoSystemCanvasPartSpacing.test.tsx）から直接検証できるよう export する。
+export function staveSpacingForPartCount(n: number): number {
+  return n >= ENSEMBLE_DENSE_SPACING_MIN_PARTS ? STAVE_SPACING_ENSEMBLE : STAVE_SPACING;
+}
+export function computeLayout(n: number): { staveYs: number[]; sysH: number; staveSpacing: number } {
+  const staveSpacing = staveSpacingForPartCount(n);
+  const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * staveSpacing);
+  const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20;
+  return { staveYs, sysH, staveSpacing };
 }
 
 /* ===== 幅計算 ===== */
@@ -1318,7 +1329,7 @@ export default function PianoSystemCanvas({
     ref.current.innerHTML='';
     ref.current.style.overflow='visible';
 
-    const { staveYs, sysH } = computeLayout(parts.length);
+    const { staveYs, sysH, staveSpacing } = computeLayout(parts.length);
     const W=ref.current.parentElement?.clientWidth??ref.current.clientWidth??700;
     const renderer=new Renderer(ref.current,Renderer.Backends.SVG);
     renderer.resize(W,sysH);
@@ -2488,7 +2499,7 @@ export default function PianoSystemCanvas({
         // line0 同士の中間で分割すると、上パートの下側加線域がほとんど残らず、
         // 低音を置こうとしたクリックが下パートの超高音に化ける逆方向の誤配置が起きるため、
         // 五線の端からの距離が上下対称になるこの取り方にする。
-        const partGapY = STAVE_SPACING / s;
+        const partGapY = staveSpacing / s;
         const staveLine0 = stave.getYForLine(0);
         const staveLine4 = stave.getYForLine(4);
         // 五線の下端と次パートの上端の間の余白を上下のパートで半分ずつ分け合う
