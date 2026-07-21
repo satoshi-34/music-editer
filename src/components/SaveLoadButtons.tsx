@@ -100,14 +100,41 @@ export default function SaveLoadButtons({
         </button>
       )}
 
-      {autoSaveStatus === 'saving' && (
-        <span style={{ fontSize: 12, color: '#888' }}>自動保存中…</span>
-      )}
-      {autoSaveStatus === 'saved' && (
-        <span style={{ fontSize: 12, color: '#4caf50' }}>✓ 自動保存済み</span>
-      )}
+      {/* 自動保存ステータスは常に同じ幅のスロットに表示する。
+          条件付きで span 自体を出し入れすると、表示のたびに後ろのボタンが
+          左右にずれてクリックミスの原因になるため、空のときも幅を確保しておく。 */}
+      <span
+        style={{
+          fontSize: 12,
+          color: autoSaveStatus === 'saved' ? '#4caf50' : '#888',
+          display: 'inline-block',
+          minWidth: '7.5em',
+          textAlign: 'left',
+        }}
+        role="status"
+      >
+        {autoSaveStatus === 'saving' ? '自動保存中…' : autoSaveStatus === 'saved' ? '✓ 自動保存済み' : ''}
+      </span>
+      {/* 復元通知は長文になるため、ツールバーのレイアウトに影響しない
+          固定位置のトーストとして表示する(3秒で自動的に消える) */}
       {restoreNotice && (
-        <span style={{ fontSize: 12, color: '#4caf50' }} role="status">{restoreNotice}</span>
+        <span
+          style={{
+            position: 'fixed',
+            top: 8,
+            right: 12,
+            zIndex: 1000,
+            fontSize: 12,
+            color: '#fff',
+            background: '#4caf50',
+            borderRadius: 6,
+            padding: '4px 10px',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+          }}
+          role="status"
+        >
+          {restoreNotice}
+        </span>
       )}
 
       {onLoadSample && (
