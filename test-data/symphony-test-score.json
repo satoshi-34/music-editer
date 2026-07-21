@@ -1,0 +1,4987 @@
+{
+  "version": "3.5.0",
+  "timestamp": 1784648842158,
+  "metadata": {
+    "title": "交響曲 ニ短調 (QAテスト用)",
+    "subtitle": "第1楽章 冒頭16小節",
+    "lyricist": "",
+    "composer": "QA Test",
+    "arranger": ""
+  },
+  "scoreType": "ensemble",
+  "keySignature": "F",
+  "timeSignature": [
+    4,
+    4
+  ],
+  "instrumentation": {
+    "presetId": "romantic-orchestra",
+    "name": "大編成オーケストラ",
+    "parts": [
+      {
+        "id": "piccolo",
+        "name": "Piccolo",
+        "abbreviation": "Picc.",
+        "family": "woodwind",
+        "clef": "treble",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "woodwinds",
+        "playbackInstrument": "piccolo",
+        "order": 0
+      },
+      {
+        "id": "english-horn",
+        "name": "English Horn",
+        "abbreviation": "E.H.",
+        "family": "woodwind",
+        "clef": "treble",
+        "staffCount": 1,
+        "transposition": "F",
+        "bracketGroup": "woodwinds",
+        "playbackInstrument": "english-horn",
+        "order": 1
+      },
+      {
+        "id": "flute-1-2",
+        "name": "Flute 1-2",
+        "abbreviation": "Fl.",
+        "family": "woodwind",
+        "clef": "treble",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "woodwinds",
+        "playbackInstrument": "flute",
+        "order": 2
+      },
+      {
+        "id": "oboe-1-2",
+        "name": "Oboe 1-2",
+        "abbreviation": "Ob.",
+        "family": "woodwind",
+        "clef": "treble",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "woodwinds",
+        "playbackInstrument": "oboe",
+        "order": 3
+      },
+      {
+        "id": "clarinet-1-2",
+        "name": "Clarinet 1-2 in Bb",
+        "abbreviation": "Cl.",
+        "family": "woodwind",
+        "clef": "treble",
+        "staffCount": 1,
+        "transposition": "Bb",
+        "bracketGroup": "woodwinds",
+        "playbackInstrument": "clarinet",
+        "order": 4
+      },
+      {
+        "id": "bassoon-1-2",
+        "name": "Bassoon 1-2",
+        "abbreviation": "Bsn.",
+        "family": "woodwind",
+        "clef": "bass",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "woodwinds",
+        "playbackInstrument": "bassoon",
+        "order": 5
+      },
+      {
+        "id": "horn-1-2",
+        "name": "Horn 1-2 in F",
+        "abbreviation": "Hn.",
+        "family": "brass",
+        "clef": "treble",
+        "staffCount": 1,
+        "transposition": "F",
+        "bracketGroup": "brass",
+        "playbackInstrument": "horn",
+        "order": 6
+      },
+      {
+        "id": "trumpet-1-2",
+        "name": "Trumpet 1-2 in Bb",
+        "abbreviation": "Tpt.",
+        "family": "brass",
+        "clef": "treble",
+        "staffCount": 1,
+        "transposition": "Bb",
+        "bracketGroup": "brass",
+        "playbackInstrument": "trumpet",
+        "order": 7
+      },
+      {
+        "id": "trombone-1-2",
+        "name": "Trombone 1-2",
+        "abbreviation": "Tbn.",
+        "family": "brass",
+        "clef": "bass",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "brass",
+        "playbackInstrument": "trombone",
+        "order": 8
+      },
+      {
+        "id": "tuba",
+        "name": "Tuba",
+        "abbreviation": "Tba.",
+        "family": "brass",
+        "clef": "bass",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "brass",
+        "playbackInstrument": "tuba",
+        "order": 9
+      },
+      {
+        "id": "timpani",
+        "name": "Timpani",
+        "abbreviation": "Timp.",
+        "family": "percussion",
+        "clef": "bass",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "percussion",
+        "playbackInstrument": "timpani",
+        "order": 10
+      },
+      {
+        "id": "percussion",
+        "name": "Percussion",
+        "abbreviation": "Perc.",
+        "family": "percussion",
+        "clef": "treble",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "percussion",
+        "playbackInstrument": "percussion",
+        "order": 11
+      },
+      {
+        "id": "violin-1",
+        "name": "Violin I",
+        "abbreviation": "Vln. I",
+        "family": "strings",
+        "clef": "treble",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "strings",
+        "subBracketGroup": "violins",
+        "playbackInstrument": "violin",
+        "order": 12
+      },
+      {
+        "id": "violin-2",
+        "name": "Violin II",
+        "abbreviation": "Vln. II",
+        "family": "strings",
+        "clef": "treble",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "strings",
+        "subBracketGroup": "violins",
+        "playbackInstrument": "violin",
+        "order": 13
+      },
+      {
+        "id": "viola",
+        "name": "Viola",
+        "abbreviation": "Vla.",
+        "family": "strings",
+        "clef": "alto",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "strings",
+        "playbackInstrument": "viola",
+        "order": 14
+      },
+      {
+        "id": "cello",
+        "name": "Cello",
+        "abbreviation": "Vc.",
+        "family": "strings",
+        "clef": "bass",
+        "staffCount": 1,
+        "transposition": "C",
+        "bracketGroup": "strings",
+        "subBracketGroup": "low-strings",
+        "playbackInstrument": "cello",
+        "order": 15
+      },
+      {
+        "id": "contrabass",
+        "name": "Contrabass",
+        "abbreviation": "Cb.",
+        "family": "strings",
+        "clef": "bass",
+        "staffCount": 1,
+        "transposition": "octave-down",
+        "bracketGroup": "strings",
+        "subBracketGroup": "low-strings",
+        "playbackInstrument": "contrabass",
+        "order": 16
+      }
+    ]
+  },
+  "notationMode": "concert",
+  "parts": [
+    {
+      "partId": "piccolo",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "d/6"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "d/6"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "english-horn",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "flute-1-2",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "d/6"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "d/6"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "d/6"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "d/6"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "oboe-1-2",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "4",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "4",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "4",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "4",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "clarinet-1-2",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "bassoon-1-2",
+      "clef": "bass",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [
+                "d/3"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/3"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/3"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/3"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "horn-1-2",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "trumpet-1-2",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "2",
+              "isRest": true
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "timpani",
+      "clef": "bass",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "trombone-1-2",
+      "clef": "bass",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "tuba",
+      "clef": "bass",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "percussion",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [],
+              "dur": "1",
+              "isRest": true
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "c/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "c/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "c/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "c/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "violin-1",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "f/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "e/5"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "c#/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false,
+              "dots": 1
+            },
+            {
+              "keys": [
+                "g/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "e/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "f/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "e/5"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "c#/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false,
+              "dots": 1
+            },
+            {
+              "keys": [
+                "g/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "e/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "f/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "e/5"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "c#/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false,
+              "dots": 1
+            },
+            {
+              "keys": [
+                "g/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "e/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "f/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "e/5"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "c#/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/5"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "4",
+              "isRest": false,
+              "dots": 1
+            },
+            {
+              "keys": [
+                "g/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "e/4"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "violin-2",
+      "clef": "treble",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/4"
+              ],
+              "dur": "8",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/4"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "viola",
+      "clef": "alto",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/3"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "f/3"
+              ],
+              "dur": "2",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "cello",
+      "clef": "bass",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "bb/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "g/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "2",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            },
+            {
+              "keys": [
+                "a/2"
+              ],
+              "dur": "4",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "partId": "contrabass",
+      "clef": "bass",
+      "measures": [
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "d/2"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "bb/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "g/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        },
+        {
+          "events": [
+            {
+              "keys": [
+                "a/1"
+              ],
+              "dur": "1",
+              "isRest": false
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "systems": 4,
+  "measuresPerSystem": 4
+}
