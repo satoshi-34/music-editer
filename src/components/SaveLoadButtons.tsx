@@ -19,6 +19,8 @@ export interface SaveLoadButtonsProps {
   canSaveCurrentAsSample?: boolean;
   hasCustomPianoSample?: boolean;
   autoSaveStatus?: 'idle' | 'saving' | 'saved';
+  /** 起動時のサイレント復元など、自動保存に関する短い通知文。あれば数秒だけ表示する */
+  restoreNotice?: string | null;
   error?: string | null;
 }
 
@@ -36,6 +38,7 @@ export default function SaveLoadButtons({
   canSaveCurrentAsSample = false,
   hasCustomPianoSample = false,
   autoSaveStatus = 'idle',
+  restoreNotice,
   error
 }: SaveLoadButtonsProps) {
   // Only show error if it's a non-empty string (trim whitespace)
@@ -102,6 +105,9 @@ export default function SaveLoadButtons({
       )}
       {autoSaveStatus === 'saved' && (
         <span style={{ fontSize: 12, color: '#4caf50' }}>✓ 自動保存済み</span>
+      )}
+      {restoreNotice && (
+        <span style={{ fontSize: 12, color: '#4caf50' }} role="status">{restoreNotice}</span>
       )}
 
       {onLoadSample && (

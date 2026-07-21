@@ -26,7 +26,7 @@ import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioO
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
-import { createSavedScoreData } from '../utils/storage';
+import { createSavedScoreData, isEmptyScoreData, migrateLegacyDataToAutosave } from '../utils/storage';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXml } from '../utils/musicXmlImport';
 import { downloadMidi } from '../utils/midiExport';
@@ -344,10 +344,21 @@ export default function ScorePage() {
   const [composer, setComposer] = useState('作曲者');
   const [arranger, setArranger] = useState('編曲者');
 
-  const { saveScore, loadScore, hasStoredData, clearStoredData, error, isLoading, isSaving } = useScoreStorage();
+  const {
+    saveScore, loadScore, hasStoredData,
+    saveAutosave, loadAutosave, clearAutosaveData,
+    error, isLoading, isSaving
+  } = useScoreStorage();
   // localStorage 自体は React の state ではないため、保存しても自動では再描画されない。
   // 「保存後すぐ読込ボタンを押せるか」は画面状態として持ち、保存/読込の節目で更新する。
   const [storedDataAvailable, setStoredDataAvailable] = useState(() => hasStoredData());
+  // 起動時のサイレント復元（自動保存データがあれば続きから編集できるようにする）が
+  // 完了するまでは自動保存を始めない。ここが false のうちに自動保存が走ると、
+  // 復元前の空楽譜で前回の自動保存データを上書きしてしまう事故につながる。
+  const [autosaveRestoreReady, setAutosaveRestoreReady] = useState(false);
+  // 起動時復元の結果を短く画面に伝えるための通知文（3秒ほどで自動的に消す）
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
+  const restoreNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
 
@@ -1551,12 +1562,14 @@ export default function ScorePage() {
   };
 
   const handleNewScore = useCallback(async () => {
-    const shouldReset = window.confirm('現在の画面を空の新規譜面に戻します。保存済みデータも消去しますか？');
+    // 「新規作成」は自動保存スロットだけを消す。手動「保存」で保存したデータは
+    // 別スロットのため影響を受けない（読込ボタンから引き続き呼び戻せる）。
+    const shouldReset = window.confirm('現在の画面を空の新規譜面に戻します。自動保存データも消去します（手動保存したデータは残ります）。よろしいですか？');
     if (!shouldReset) {
       return;
     }
 
-    const cleared = await clearStoredData();
+    const cleared = await clearAutosaveData();
     if (!cleared) {
       return;
     }
@@ -1586,7 +1599,9 @@ export default function ScorePage() {
     setLeftHandData(undefined);
     setQuartetParts(Array.from({ length: 4 }, () => []));
     setEnsembleParts([]);
-    setStoredDataAvailable(false);
+    // 新規作成では手動保存スロットには触れないため、hasStoredData（手動保存の有無）は
+    // 現在の実際の状態を読み直す（消していないので通常は変化しない）。
+    setStoredDataAvailable(hasStoredData());
     fileHandleRef.current = null;
     // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
     setExtraEditingMeasures(0);
@@ -1595,9 +1610,10 @@ export default function ScorePage() {
     // 前の譜面用の段の間隔手動上書きも引き継がない
     setSystemRowGapOverrides([]);
   }, [
+    clearAutosaveData,
     clearPlaybackTimer,
-    clearStoredData,
     getAudioEngine,
+    hasStoredData,
     resetPlaybackClock,
     setTimeSignature,
   ]);
@@ -1671,21 +1687,96 @@ export default function ScorePage() {
     }
   };
 
+  // 起動時のサイレント復元: 自動保存データがあれば読み込んで続きから編集できるようにする。
+  // マウント直後の1回だけ実行し、復元の有無に関わらず「復元処理は完了した」ことを
+  // autosaveRestoreReady で示す（これが true になるまで下の自動保存 useEffect は書き込みをしない）。
+  const restoreAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (restoreAttemptedRef.current) return;
+    restoreAttemptedRef.current = true;
+
+    (async () => {
+      // 自動保存/手動保存のキーがまだ分かれていない旧バージョンのデータが残っていれば、
+      // 消さずに新しい自動保存スロットへ複製する（初回起動時のみ・後方互換）。
+      migrateLegacyDataToAutosave();
+
+      const restored = await loadAutosave();
+      if (restored) {
+        setTitle(restored.metadata.title);
+        setSubtitle(restored.metadata.subtitle);
+        setLyricist(restored.metadata.lyricist);
+        setComposer(restored.metadata.composer);
+        setArranger(restored.metadata.arranger);
+
+        const restoredType = restored.scoreType ?? 'single';
+        setKeySignature(normalizeKeySignature(restored.keySignature));
+        await setTimeSignature(...normalizeTimeSignature(restored.timeSignature));
+        setScoreType(restoredType);
+        setInstrumentation(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType));
+        setNotationMode(restored.notationMode ?? 'concert');
+        setCustomSymbolDefs(restored.customSymbolDefs ?? []);
+        if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
+          setMeasuresPerSystem(restored.measuresPerSystem);
+        }
+
+        if (restoredType === 'quartet') {
+          const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
+          setQuartetParts(QUARTET_IDS.map(id =>
+            restored.parts.find(p => p.partId === id)?.measures ?? []
+          ));
+          setEnsembleParts([]);
+        } else if (restoredType === 'ensemble') {
+          const restoredInstrumentation = restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType);
+          setEnsembleParts(restoredInstrumentation.parts.map(part =>
+            restored.parts.find(p => p.partId === part.id)?.measures ?? []
+          ));
+        } else {
+          const rightPart = restored.parts.find(p => p.clef === 'treble') ?? restored.parts[0];
+          const leftPart  = restored.parts.find(p => p.clef === 'bass');
+          setRightHandData(rightPart?.measures ?? []);
+          setLeftHandData(leftPart?.measures);
+          setEnsembleParts([]);
+        }
+        setSystemMeasureOverrides(restored.systemMeasureOverrides ?? []);
+        setSystemRowGapOverrides(restored.systemRowGapOverrides ?? []);
+
+        setRestoreNotice('自動保存データから復元しました');
+        console.info('[ScorePage] 起動時に自動保存データから復元しました');
+        if (restoreNoticeTimerRef.current) clearTimeout(restoreNoticeTimerRef.current);
+        restoreNoticeTimerRef.current = setTimeout(() => setRestoreNotice(null), 3000);
+      } else {
+        // 自動保存データが無いときは、単旋律譜の空編集状態から始められるようにする
+        // （rightHandData が undefined のままだと画面側が「初期ロード前」と区別できないため）。
+        setRightHandData(prev => prev ?? []);
+      }
+
+      setAutosaveRestoreReady(true);
+    })();
+  }, [loadAutosave, setTimeSignature]);
+
   // 自動保存（編集から 1.5 秒後に localStorage へ保存）
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSaveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    // 起動時のサイレント復元が終わるまでは自動保存しない。
+    // ここで書いてしまうと、復元前の空楽譜が既存の自動保存データを上書きしてしまう。
+    if (!autosaveRestoreReady) return;
     // rightHandData が undefined のうちは初期ロード前なので保存しない
     if (rightHandData === undefined && scoreType !== 'quartet' && scoreType !== 'ensemble') return;
 
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(async () => {
-      setAutoSaveStatus('saving');
       const { metadata, parts } = buildScoreData();
-      const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
+      // 内容が空（全パート・全小節が空）のときは自動保存で既存の自動保存データを
+      // 上書きしない。「新規作成」で明示的に空にしたい場合は handleNewScore 側で
+      // 自動保存スロットを直接クリアしている。
+      if (isEmptyScoreData(parts)) {
+        return;
+      }
+      setAutoSaveStatus('saving');
+      const saved = await saveAutosave(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
       if (saved) {
-        setStoredDataAvailable(true);
         setAutoSaveStatus('saved');
         if (autoSaveStatusTimerRef.current) clearTimeout(autoSaveStatusTimerRef.current);
         // 3 秒後に「保存済み」表示を消す
@@ -1701,7 +1792,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない。
   // 値はタイマー発火時（レンダー後）に読まれるので TDZ の問題はない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
@@ -3294,6 +3385,7 @@ export default function ScorePage() {
                 canSaveCurrentAsSample={scoreType === 'piano'}
                 hasCustomPianoSample={hasCustomPianoSample}
                 autoSaveStatus={autoSaveStatus}
+                restoreNotice={restoreNotice}
                 error={error}
               />
               <input
