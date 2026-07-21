@@ -40,10 +40,22 @@ import {
 } from './customSymbolUtils';
 
 // Storage keys
+//
+// 「手動保存」（PRIMARY/BACKUP/METADATA）と「自動保存」（AUTOSAVE 系）は
+// 別々のキーに分離している。以前は自動保存も手動保存も同じ PRIMARY キーへ
+// 書いていたため、起動直後の空楽譜の自動保存が手動保存データを上書きして
+// 消してしまう事故があった（詳細は .claude/specs/save-load-redesign/design.md）。
 export const STORAGE_KEYS = {
+  // 手動「保存」ボタン用スロット（従来からのキー名を維持し、後方互換を保つ）
   PRIMARY: 'music-score-app-data',
   BACKUP: 'music-score-app-backup',
-  METADATA: 'music-score-app-meta'
+  METADATA: 'music-score-app-meta',
+  // 自動保存専用スロット（編集のたびに裏で書き込まれる）
+  AUTOSAVE: 'music-score-app-autosave',
+  AUTOSAVE_BACKUP: 'music-score-app-autosave-backup',
+  AUTOSAVE_METADATA: 'music-score-app-autosave-meta',
+  // 旧キー→新キーの移行を1回だけ行うためのマーカー
+  MIGRATED_MARKER: 'music-score-app-autosave-migrated'
 } as const;
 
 // Current version for data migration
@@ -662,11 +674,11 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   };
 }
 
-function restorePrimaryFromBackup(backupRaw: string): void {
+function restorePrimaryFromBackup(backupRaw: string, primaryKey: string): void {
   try {
     // バックアップからの復旧に成功したら、主データも同じ内容に戻しておく。
     // そうしないと次回読み込みでも毎回壊れた主データを先に読みに行ってしまう。
-    localStorage.setItem(STORAGE_KEYS.PRIMARY, backupRaw);
+    localStorage.setItem(primaryKey, backupRaw);
   } catch {
     // 復旧読み込み自体は成功しているため、主データの書き戻し失敗は致命扱いにしない。
   }
@@ -722,10 +734,31 @@ export function isStorageAvailable(): boolean {
   }
 }
 
+/** 保存先スロット1組ぶんのキー名 */
+interface StorageSlotKeys {
+  primary: string;
+  backup: string;
+  metadata: string;
+}
+
+const MANUAL_SLOT_KEYS: StorageSlotKeys = {
+  primary: STORAGE_KEYS.PRIMARY,
+  backup: STORAGE_KEYS.BACKUP,
+  metadata: STORAGE_KEYS.METADATA
+};
+
+const AUTOSAVE_SLOT_KEYS: StorageSlotKeys = {
+  primary: STORAGE_KEYS.AUTOSAVE,
+  backup: STORAGE_KEYS.AUTOSAVE_BACKUP,
+  metadata: STORAGE_KEYS.AUTOSAVE_METADATA
+};
+
 /**
- * Saves score data to localStorage with error handling
+ * 指定したスロット（手動保存 or 自動保存）へ localStorage に保存する共通処理。
+ * 直前の内容は 1 世代だけ backup キーへ退避してから上書きする
+ * （上書き前の内容を丸ごと失わないための世代バックアップ）。
  */
-export function saveScoreData(data: SavedScoreData): StorageResult<boolean> {
+function saveScoreDataToSlot(data: SavedScoreData, keys: StorageSlotKeys): StorageResult<boolean> {
   try {
     if (!isStorageAvailable()) {
       return {
@@ -764,16 +797,21 @@ export function saveScoreData(data: SavedScoreData): StorageResult<boolean> {
     }
 
     const serializedData = JSON.stringify(normalizedData);
-    
-    // Try to save to primary key
-    localStorage.setItem(STORAGE_KEYS.PRIMARY, serializedData);
-    
-    // Save backup copy
+
+    // 上書きする前に、直前世代の内容を backup へ退避する。
+    // ここを「新しいデータを書いた後」に取ると、常に新旧が同じ内容になってしまい
+    // 世代バックアップの意味が無くなるため、必ず上書き前に読んでおく。
     try {
-      localStorage.setItem(STORAGE_KEYS.BACKUP, serializedData);
+      const previousRaw = localStorage.getItem(keys.primary);
+      if (previousRaw !== null) {
+        localStorage.setItem(keys.backup, previousRaw);
+      }
     } catch {
       // Backup save failure is not critical
     }
+
+    // Write to primary key
+    localStorage.setItem(keys.primary, serializedData);
 
     // Save metadata with checksum
     try {
@@ -783,7 +821,7 @@ export function saveScoreData(data: SavedScoreData): StorageResult<boolean> {
         version: normalizedData.version,
         dataChecksum: checksum
       };
-      localStorage.setItem(STORAGE_KEYS.METADATA, JSON.stringify(metadata));
+      localStorage.setItem(keys.metadata, JSON.stringify(metadata));
     } catch {
       // Metadata save failure is not critical
     }
@@ -802,9 +840,25 @@ export function saveScoreData(data: SavedScoreData): StorageResult<boolean> {
 }
 
 /**
- * Loads score data from localStorage with validation
+ * Saves score data to localStorage with error handling
+ * （手動「保存」ボタン用スロット）
  */
-export function loadScoreData(): StorageResult<SavedScoreData | null> {
+export function saveScoreData(data: SavedScoreData): StorageResult<boolean> {
+  return saveScoreDataToSlot(data, MANUAL_SLOT_KEYS);
+}
+
+/**
+ * 自動保存用スロットへ保存する。手動保存（saveScoreData）とは別のキーに書くため、
+ * 自動保存が走っても手動保存済みデータには一切影響しない。
+ */
+export function saveAutosaveData(data: SavedScoreData): StorageResult<boolean> {
+  return saveScoreDataToSlot(data, AUTOSAVE_SLOT_KEYS);
+}
+
+/**
+ * 指定したスロット（手動保存 or 自動保存）から localStorage を読み込む共通処理。
+ */
+function loadScoreDataFromSlot(keys: StorageSlotKeys): StorageResult<SavedScoreData | null> {
   try {
     if (!isStorageAvailable()) {
       return {
@@ -818,8 +872,8 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
     }
 
     // Try to load from primary key first
-    const primaryRaw = localStorage.getItem(STORAGE_KEYS.PRIMARY);
-    const backupRaw = localStorage.getItem(STORAGE_KEYS.BACKUP);
+    const primaryRaw = localStorage.getItem(keys.primary);
+    const backupRaw = localStorage.getItem(keys.backup);
 
     // No data found
     if (!primaryRaw && !backupRaw) {
@@ -838,7 +892,7 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
       if (primaryRaw && backupRaw && backupRaw !== primaryRaw) {
         const backupResult = parseAndNormalizeStoredScore(backupRaw);
         if (backupResult.success) {
-          restorePrimaryFromBackup(backupRaw);
+          restorePrimaryFromBackup(backupRaw, keys.primary);
           rawData = backupRaw;
           parsedResult = backupResult;
         }
@@ -852,7 +906,7 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
 
     // Verify checksum if available
     try {
-      const metadataRaw = localStorage.getItem(STORAGE_KEYS.METADATA);
+      const metadataRaw = localStorage.getItem(keys.metadata);
       if (metadataRaw) {
         const metadata: import('../types/storage').StorageMetadata = JSON.parse(metadataRaw);
         if (metadata.dataChecksum) {
@@ -866,7 +920,7 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
                   backupResult.success &&
                   generateChecksum(backupRaw) === metadata.dataChecksum
                 ) {
-                  restorePrimaryFromBackup(backupRaw);
+                  restorePrimaryFromBackup(backupRaw, keys.primary);
                   // Backup is valid - use it
                   return {
                     success: true,
@@ -906,17 +960,29 @@ export function loadScoreData(): StorageResult<SavedScoreData | null> {
 }
 
 /**
- * Checks if stored data exists
+ * Loads score data from localStorage with validation
+ * （手動「読込」ボタン用スロット）
  */
-export function hasStoredData(): boolean {
+export function loadScoreData(): StorageResult<SavedScoreData | null> {
+  return loadScoreDataFromSlot(MANUAL_SLOT_KEYS);
+}
+
+/**
+ * 自動保存スロットから読み込む（起動時のサイレント復元・「自動保存から復元」用）
+ */
+export function loadAutosaveData(): StorageResult<SavedScoreData | null> {
+  return loadScoreDataFromSlot(AUTOSAVE_SLOT_KEYS);
+}
+
+function hasStoredDataInSlot(keys: StorageSlotKeys): boolean {
   try {
     if (!isStorageAvailable()) {
       return false;
     }
-    
-    const primaryData = localStorage.getItem(STORAGE_KEYS.PRIMARY);
-    const backupData = localStorage.getItem(STORAGE_KEYS.BACKUP);
-    
+
+    const primaryData = localStorage.getItem(keys.primary);
+    const backupData = localStorage.getItem(keys.backup);
+
     return !!(primaryData || backupData);
   } catch {
     return false;
@@ -924,9 +990,21 @@ export function hasStoredData(): boolean {
 }
 
 /**
- * Clears all stored score data
+ * Checks if stored data exists
+ * （手動保存スロット）
  */
-export function clearStoredData(): StorageResult<boolean> {
+export function hasStoredData(): boolean {
+  return hasStoredDataInSlot(MANUAL_SLOT_KEYS);
+}
+
+/**
+ * 自動保存データが存在するかどうか（起動時のサイレント復元の判定に使う）
+ */
+export function hasAutosaveData(): boolean {
+  return hasStoredDataInSlot(AUTOSAVE_SLOT_KEYS);
+}
+
+function clearStoredDataInSlot(keys: StorageSlotKeys): StorageResult<boolean> {
   try {
     if (!isStorageAvailable()) {
       return {
@@ -939,9 +1017,9 @@ export function clearStoredData(): StorageResult<boolean> {
       };
     }
 
-    localStorage.removeItem(STORAGE_KEYS.PRIMARY);
-    localStorage.removeItem(STORAGE_KEYS.BACKUP);
-    localStorage.removeItem(STORAGE_KEYS.METADATA);
+    localStorage.removeItem(keys.primary);
+    localStorage.removeItem(keys.backup);
+    localStorage.removeItem(keys.metadata);
 
     return {
       success: true,
@@ -953,6 +1031,73 @@ export function clearStoredData(): StorageResult<boolean> {
       success: false,
       error: createStorageError(error)
     };
+  }
+}
+
+/**
+ * Clears all stored score data
+ * （手動保存スロット。ファイルの中身は変えず、保存先を消すだけ）
+ */
+export function clearStoredData(): StorageResult<boolean> {
+  return clearStoredDataInSlot(MANUAL_SLOT_KEYS);
+}
+
+/**
+ * 自動保存スロットのみを消去する。「新規作成」で使う想定で、
+ * 手動保存済みデータ（PRIMARY/BACKUP/METADATA）には触れない。
+ */
+export function clearAutosaveData(): StorageResult<boolean> {
+  return clearStoredDataInSlot(AUTOSAVE_SLOT_KEYS);
+}
+
+/**
+ * 楽譜データが「空」かどうかを判定する。
+ * 起動直後の空楽譜を自動保存してしまい、既存の自動保存データを
+ * 上書きしてしまう事故を防ぐために使う（全パート・全小節にイベントが無ければ空とみなす）。
+ */
+export function isEmptyScoreData(parts: PartData[]): boolean {
+  return parts.every((part) =>
+    part.measures.every((measure) => {
+      const hasPrimaryEvents = measure.events.length > 0;
+      const hasVoiceEvents = (measure.voices ?? []).some((voice) => voice.events.length > 0);
+      return !hasPrimaryEvents && !hasVoiceEvents;
+    })
+  );
+}
+
+/**
+ * 旧バージョン（自動保存/手動保存が同じキーを共有していた頃）のデータを、
+ * 新しい自動保存スロットへ 1 回だけ移行する。
+ * 手動保存スロット（PRIMARY/BACKUP/METADATA）はキー名を変えていないため、
+ * ここでは複製のみ行い、旧データを消したり書き換えたりはしない
+ * （「消さずに読み替える」方針。移行後も手動保存スロットとして引き続き使える）。
+ */
+export function migrateLegacyDataToAutosave(): void {
+  try {
+    if (!isStorageAvailable()) return;
+    if (localStorage.getItem(STORAGE_KEYS.MIGRATED_MARKER)) return;
+
+    // 移行対象がある場合だけコピーする（自動保存スロットにまだ何も無いときのみ）。
+    const alreadyHasAutosave = hasStoredDataInSlot(AUTOSAVE_SLOT_KEYS);
+    if (!alreadyHasAutosave) {
+      const legacyPrimary = localStorage.getItem(STORAGE_KEYS.PRIMARY);
+      const legacyBackup = localStorage.getItem(STORAGE_KEYS.BACKUP);
+      const legacyMetadata = localStorage.getItem(STORAGE_KEYS.METADATA);
+
+      if (legacyPrimary !== null) {
+        localStorage.setItem(STORAGE_KEYS.AUTOSAVE, legacyPrimary);
+      }
+      if (legacyBackup !== null) {
+        localStorage.setItem(STORAGE_KEYS.AUTOSAVE_BACKUP, legacyBackup);
+      }
+      if (legacyMetadata !== null) {
+        localStorage.setItem(STORAGE_KEYS.AUTOSAVE_METADATA, legacyMetadata);
+      }
+    }
+
+    localStorage.setItem(STORAGE_KEYS.MIGRATED_MARKER, '1');
+  } catch {
+    // 移行の失敗は致命的ではない（次回起動時に再度試みる）
   }
 }
 

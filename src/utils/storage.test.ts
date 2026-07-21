@@ -9,6 +9,12 @@ import {
   loadScoreData,
   hasStoredData,
   clearStoredData,
+  saveAutosaveData,
+  loadAutosaveData,
+  hasAutosaveData,
+  clearAutosaveData,
+  isEmptyScoreData,
+  migrateLegacyDataToAutosave,
   createSavedScoreData,
   CURRENT_VERSION,
   STORAGE_KEYS
@@ -583,6 +589,9 @@ describe('Storage Foundation Tests', () => {
         4
       );
 
+      // 世代バックアップは「直前の1世代」を保持する仕様のため、backup に同じ内容を
+      // 持たせるには同じデータで2回保存する（1回目: backup未設定→2回目で前世代=1回目の内容がbackupへ）。
+      expect(saveScoreData(scoreData).success).toBe(true);
       expect(saveScoreData(scoreData).success).toBe(true);
       localStorageMock.setItem(STORAGE_KEYS.PRIMARY, '{broken-json');
 
@@ -2291,6 +2300,127 @@ describe('Storage Foundation Tests', () => {
 
       const result = saveScoreData(data);
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe('自動保存スロットの分離・世代バックアップ・移行', () => {
+    const metadata = { title: 'Autosave', subtitle: '', lyricist: '', composer: '', arranger: '' };
+    const parts = [{
+      partId: 'melody',
+      clef: 'treble' as const,
+      measures: [{ events: [{ dur: '4' as const, isRest: false, keys: ['c/4'] }] }],
+    }];
+    const emptyParts = [{
+      partId: 'melody',
+      clef: 'treble' as const,
+      measures: [{ events: [] }],
+    }];
+
+    it('自動保存は手動保存スロットに影響しない（キーが分離されている）', () => {
+      const manualData = createSavedScoreData(
+        { ...metadata, title: 'Manual' }, parts, 1, 4
+      );
+      const autoData = createSavedScoreData(
+        { ...metadata, title: 'Auto' }, parts, 1, 4
+      );
+
+      expect(saveScoreData(manualData).success).toBe(true);
+      expect(saveAutosaveData(autoData).success).toBe(true);
+
+      expect(loadScoreData().data?.metadata.title).toBe('Manual');
+      expect(loadAutosaveData().data?.metadata.title).toBe('Auto');
+      expect(hasStoredData()).toBe(true);
+      expect(hasAutosaveData()).toBe(true);
+    });
+
+    it('自動保存は上書き前の直前世代を backup キーに残す', () => {
+      const first = createSavedScoreData({ ...metadata, title: 'Gen1' }, parts, 1, 4);
+      const second = createSavedScoreData({ ...metadata, title: 'Gen2' }, parts, 1, 4);
+
+      expect(saveAutosaveData(first).success).toBe(true);
+      // 1回目は直前世代が無いので backup は書かれない
+      expect(localStorageMock.getItem(STORAGE_KEYS.AUTOSAVE_BACKUP)).toBeNull();
+
+      expect(saveAutosaveData(second).success).toBe(true);
+      // 2回目以降は「上書きされる直前」の内容が backup に残る
+      const backupRaw = localStorageMock.getItem(STORAGE_KEYS.AUTOSAVE_BACKUP);
+      expect(backupRaw && JSON.parse(backupRaw).metadata.title).toBe('Gen1');
+      expect(loadAutosaveData().data?.metadata.title).toBe('Gen2');
+    });
+
+    it('手動保存も上書き前の直前世代を backup キーに残す', () => {
+      const first = createSavedScoreData({ ...metadata, title: 'ManualGen1' }, parts, 1, 4);
+      const second = createSavedScoreData({ ...metadata, title: 'ManualGen2' }, parts, 1, 4);
+
+      expect(saveScoreData(first).success).toBe(true);
+      expect(saveScoreData(second).success).toBe(true);
+
+      const backupRaw = localStorageMock.getItem(STORAGE_KEYS.BACKUP);
+      expect(backupRaw && JSON.parse(backupRaw).metadata.title).toBe('ManualGen1');
+    });
+
+    it('clearAutosaveData は自動保存スロットだけを消し、手動保存スロットは残す', () => {
+      const manualData = createSavedScoreData({ ...metadata, title: 'Manual' }, parts, 1, 4);
+      const autoData = createSavedScoreData({ ...metadata, title: 'Auto' }, parts, 1, 4);
+      expect(saveScoreData(manualData).success).toBe(true);
+      expect(saveAutosaveData(autoData).success).toBe(true);
+
+      expect(clearAutosaveData().success).toBe(true);
+
+      expect(hasAutosaveData()).toBe(false);
+      expect(hasStoredData()).toBe(true);
+      expect(loadScoreData().data?.metadata.title).toBe('Manual');
+    });
+
+    it('isEmptyScoreData は全パート・全小節が空のときだけ true を返す', () => {
+      expect(isEmptyScoreData(emptyParts)).toBe(true);
+      expect(isEmptyScoreData(parts)).toBe(false);
+    });
+
+    it('isEmptyScoreData は voices 側にイベントがあれば空とみなさない', () => {
+      const partsWithVoiceOnly = [{
+        partId: 'right-hand',
+        clef: 'treble' as const,
+        measures: [{
+          events: [],
+          voices: [{ id: 'v1', events: [{ dur: '4' as const, isRest: false, keys: ['e/4'] }] }],
+        }],
+      }];
+      expect(isEmptyScoreData(partsWithVoiceOnly)).toBe(false);
+    });
+
+    it('migrateLegacyDataToAutosave は旧キーのデータを消さずに自動保存スロットへコピーする', () => {
+      const legacyData = createSavedScoreData({ ...metadata, title: 'Legacy' }, parts, 1, 4);
+      expect(saveScoreData(legacyData).success).toBe(true);
+      // 移行前は自動保存スロットは空
+      expect(hasAutosaveData()).toBe(false);
+
+      migrateLegacyDataToAutosave();
+
+      expect(hasAutosaveData()).toBe(true);
+      expect(loadAutosaveData().data?.metadata.title).toBe('Legacy');
+      // 旧キー（手動保存スロット）のデータは消えずに残っている
+      expect(loadScoreData().data?.metadata.title).toBe('Legacy');
+    });
+
+    it('migrateLegacyDataToAutosave は1回しか移行しない（2回目以降は自動保存の新しい内容を上書きしない）', () => {
+      const legacyData = createSavedScoreData({ ...metadata, title: 'Legacy' }, parts, 1, 4);
+      expect(saveScoreData(legacyData).success).toBe(true);
+      migrateLegacyDataToAutosave();
+
+      // 移行後にユーザーが自動保存を更新したとする
+      const updated = createSavedScoreData({ ...metadata, title: 'UpdatedAfterMigration' }, parts, 1, 4);
+      expect(saveAutosaveData(updated).success).toBe(true);
+
+      // 再度移行処理を呼んでも、更新済みの自動保存データを巻き戻さない
+      migrateLegacyDataToAutosave();
+      expect(loadAutosaveData().data?.metadata.title).toBe('UpdatedAfterMigration');
+    });
+
+    it('migrateLegacyDataToAutosave は旧データが無ければ何もしない', () => {
+      migrateLegacyDataToAutosave();
+      expect(hasAutosaveData()).toBe(false);
+      expect(hasStoredData()).toBe(false);
     });
   });
 });
