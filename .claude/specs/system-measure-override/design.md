@@ -257,3 +257,58 @@ export interface SavedScoreData {
 コンソールエラーなし。単旋律譜・ピアノ大譜表・弦楽四重奏はすべて同じ
 `PianoSystemCanvas.tsx` のコードパスを共有しているため、個別に確認しなくても
 同じ修正が効く。
+
+### 追補（2026-07-21 その2）: 編成譜（縮小スケール）で個別音選択の当たり判定が効かないバグ
+
+**問題**: 編成譜（オーケストラスコアのように多パートを1ページに収める譜面）では、
+符頭のすぐ近くをクリックしても「選択」にならず「音符追加」になってしまい、
+単旋律譜では起きない現象としてユーザーテストで見つかった。
+
+**原因**: 上記 `KEY_SELECT_X_PAD`（符頭からの当たり判定パディング）は
+SVG内部座標（raw単位、VexFlowが実際に描画に使う座標系）の固定値 12 として
+実装されていた。しかし PianoSystemCanvas は多パートを1ページに収めるため
+`scale` prop（`requestedScale`、内部変数 `s`）でVexFlowの描画スケールを
+`SCORE_LAYOUT_RENDER_SCALE` 相当まで縮小している。VexFlow の
+`SVGContext.scale(s,s)` は各要素の座標そのものを書き換えるのではなく、
+SVGの `viewBox` 幅を `width/s` に変更するだけ（`node_modules/vexflow/.../svgcontext.js`
+の `scale()` 参照）。そのため「raw単位1」が画面上で占める大きさは概ね `s` px にしかならず、
+`s` が小さい編成譜では固定12raw単位が画面上わずか数px相当まで縮んでしまい、
+符頭のすぐ隣をクリックしても選択の当たり判定に入らなかった
+（`clientToGroup` は画面クリック座標を `viewBox幅 / 実表示幅`（≒ `1/s`）倍して
+raw座標に変換するため、raw単位の固定パディングは画面px換算で `s` に比例して縮む）。
+
+**修正設計**:
+- `KEY_SELECT_X_PAD`（raw単位の固定値）を廃止し、`KEY_SELECT_X_PAD_SCREEN_PX = 12`
+  （画面px基準の定数）と、それを現在の描画スケール `s` で raw 単位に変換する
+  ヘルパー `keySelectXPad(s) = KEY_SELECT_X_PAD_SCREEN_PX / s` を追加した。
+- click ハンドラ（`nearNoteX`）とホバーフィードバック（`nearNoteXForHover`、
+  上記追補のホバー機能と判定式を一致させる原則を継続）の両方で
+  `keySelectXPad(s)` を使うよう変更した。
+- 個別音選択のY方向判定（`findKeyIndexAtLine` / `snapLine`）はもともと
+  「クリックYに最も近い五線ライン」を常に選ぶ実装で、しきい値による棄却が
+  ないため screen-px 化の必要はなかった（単一音の音符では常に一致し、
+  X方向のゲート `nearNoteX` だけが選択/追加を分けていた）。
+- `s=1` 付近（既存の単旋律譜テストが使う scale）では `keySelectXPad(1)=12` と
+  従来の raw 12 と一致するため、既存のEmptyBeatClick/HoverFeedbackテストは
+  無改修で通る。
+
+**影響範囲**:
+- `src/components/PianoSystemCanvas.tsx`: `KEY_SELECT_X_PAD` → `KEY_SELECT_X_PAD_SCREEN_PX`
+  + `keySelectXPad(s)` ヘルパーに置き換え、click/hover 両方の使用箇所を更新
+- `src/components/PianoSystemCanvasSmallScaleSelect.test.tsx`（新規）: `scale=0.3`
+  （編成譜相当の縮小スケール）で、符頭の少し外側（旧実装なら当たり判定を外れる位置）
+  をクリックすると選択になること、符頭から十分離れた空き拍クリックは従来どおり
+  音符追加になることを検証する再現・回帰テスト
+
+**検証**:
+- `docker compose run --rm app npm test`（453ファイル5730テスト全緑。
+  無関係な `SaveLoadButtons.test.tsx` のプロパティテストが1回だけ偶発的に
+  失敗したが、修正前のコードでも再現し、単体では再実行で常に通るためこの修正と無関係な
+  既存のflaky testと判断した）
+- `docker compose run --rm app npm run build`（クリーン）
+- ブラウザ確認（dev-5178、実際に7パートの譜面が読み込まれる `印刷テスト用小品` サンプルで、
+  実測スケール比 `viewBox幅/表示幅 ≈ 2.27`（`s ≈ 0.44`、多パート譜に相当する縮小率）の
+  パートに対して、符頭の描画右端から画面px換算で約8px外側（旧実装の実効パディング
+  ≈5.3pxは超え、新実装の実効パディング12pxの範囲内）をクリックし、選択（青枠表示）に
+  なることを確認。ArrowUpで音高が動き、Deleteで削除できることも確認。空き拍領域の
+  クリックでは従来どおり音符が追加されることも回帰確認。コンソールエラーなし。

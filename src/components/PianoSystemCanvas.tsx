@@ -177,12 +177,33 @@ let selectionOwnerSeq = 0;
 // 和音内の個別音選択は、クリックYを五線の線/間へ丸めて keys[] と照合します。
 // 通常は 0.001 のままでOK。判定を甘くしたい場合だけ大きくしてください。
 const KEY_SELECT_LINE_EPS = 0.001;
-// 個別音選択を有効にする、符頭の描画X範囲からの左右パディング（px）。
+// 個別音選択を有効にする、符頭の描画X範囲からの左右パディング。
 // 音符のヒット領域（.vf-note-hit）は隣の音符との中間点〜小節端まで広がるため、
 // Y（音高ライン）の一致だけで選択にすると、小節末尾の空き拍を同じ高さで
 // クリックしたときに「音符追加」ではなく「最後の音符の選択」に吸われてしまう。
 // そこで選択はこのX範囲内に限定し、範囲外の同じ高さのクリックは挿入へ回す。
-const KEY_SELECT_X_PAD = 12;
+//
+// この値は「画面上の見た目の px」で決め、実際に判定へ使う際は keySelectXPad(s) で
+// 現在の描画スケール s（PianoSystemCanvas の requestedScale。編成譜では12パートを
+// 1ページに収めるため 1 よりかなり小さくなる）で割って SVG 内部座標（raw 単位）に
+// 変換する。
+// 背景: VexFlow の SVGContext.scale(s,s) は viewBox 幅を width/s にするだけで、
+// 各要素の座標そのものは書き換えない。そのため getBoundingClientRect 等から求めた
+// クリック位置の raw 座標 1 単位は、画面上では s px 分の大きさにしかならない
+// （raw 単位 → 画面 px は概ね「raw × s」）。
+// 以前はこの値（12）自体を raw 単位の定数として直接比較しており、s が小さい
+// 編成譜では「画面上わずか数px」まで許容範囲が縮んでしまい、符頭のすぐ近くを
+// クリックしても選択にならず音符追加になるバグの原因になっていた
+// （.claude/specs/system-measure-override/design.md 参照）。
+const KEY_SELECT_X_PAD_SCREEN_PX = 12;
+
+// KEY_SELECT_X_PAD_SCREEN_PX（画面px基準）を、現在の描画スケール s のもとでの
+// raw 座標（SVG内部座標）のパディング量に変換する。
+// s が 0 または未定義になることはない想定だが、念のため下限を設けてゼロ割りを防ぐ。
+function keySelectXPad(renderScale: number): number {
+  const s = renderScale > 0.01 ? renderScale : 0.01;
+  return KEY_SELECT_X_PAD_SCREEN_PX / s;
+}
 // 青い選択枠はクリック不可の見た目です。見た目だけ調整したい場合はここを変更。
 const SELECTED_KEY_PAD_X = 3;
 const SELECTED_KEY_HALF_HEIGHT = 7;
@@ -2775,7 +2796,7 @@ export default function PianoSystemCanvas({
             hit.setAttribute('class','vf-note-hit');
             hit.setAttribute('data-measure', String(absI));
             hit.setAttribute('data-note', String(j));
-            // 符頭の実描画X範囲。個別音選択は KEY_SELECT_X_PAD でこの範囲近傍に限定されるため、
+            // 符頭の実描画X範囲。個別音選択は keySelectXPad(s) でこの範囲近傍に限定されるため、
             // テストが「確実に選択になる位置」を計算できるよう属性として公開しておく（表示には影響しない）
             hit.setAttribute('data-note-left', String(noteVisualLeft));
             hit.setAttribute('data-note-right', String(noteVisualRight));
@@ -2792,8 +2813,9 @@ export default function PianoSystemCanvas({
               // 見分けられるよう、click ハンドラの nearNoteX / findKeyIndexAtLine と
               // 同じ判定式でここでも「押したら個別音選択になるか」を求める。
               // クリック時と判定がずれるとホバー表示だけ信用できなくなるため、
-              // 定数（KEY_SELECT_X_PAD）も含めて完全に同じ式にしている。
-              const nearNoteXForHover = lx>=noteVisualLeft-KEY_SELECT_X_PAD && lx<=noteVisualRight+KEY_SELECT_X_PAD;
+              // パディング量（keySelectXPad(s)）も含めて完全に同じ式にしている。
+              const hoverXPad = keySelectXPad(s);
+              const nearNoteXForHover = lx>=noteVisualLeft-hoverXPad && lx<=noteVisualRight+hoverXPad;
               const snappedLineForHover = snapLine(stave, ly);
               const wouldSelectKey = !activeEvs[j]?.isRest && nearNoteXForHover
                 && findKeyIndexAtLine(activeEvs[j].keys, snappedLineForHover, k2l) >= 0;
@@ -3166,10 +3188,14 @@ export default function PianoSystemCanvas({
                 // Delete/矢印/臨時記号がその1音だけに効くようにする。
                 // isOnNote より先に判定するため、符頭Xから少し外れても
                 // 同じ高さの既存音をクリックした扱いになります。
-                // ただし X 方向は符頭±KEY_SELECT_X_PAD に限定する。
+                // ただし X 方向は符頭±keySelectXPad(s) に限定する。
                 // ヒット領域全体（最後の音符では小節右端まで）で選択にすると、
                 // 空き拍の領域を同じ高さでクリックしたとき音符を追加できなくなるため。
-                const nearNoteX = lx>=noteVisualLeft-KEY_SELECT_X_PAD && lx<=noteVisualRight+KEY_SELECT_X_PAD;
+                // パディングは「画面px基準」で決め、描画スケール s で割って raw 座標に
+                // 変換する（編成譜のように s が小さいと、raw 単位のままでは画面上わずか
+                // 数pxまで許容範囲が縮んでしまい、符頭のすぐ近くをクリックしても選択に
+                // ならず音符追加になってしまうため）。
+                const nearNoteX = lx>=noteVisualLeft-keySelectXPad(s) && lx<=noteVisualRight+keySelectXPad(s);
                 const clickedKeyIndex = nearNoteX ? findKeyIndexAtLine(currentEv.keys, snappedLine, k2l) : -1;
                 if(clickedKeyIndex>=0){
                   setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex});
