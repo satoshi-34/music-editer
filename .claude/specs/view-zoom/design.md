@@ -88,3 +88,99 @@
   - コンソールエラーなし。200% では既存の「小節が紙幅を超える」横方向の警告（`allocateCombinedMeasureWidths` 由来、本修正の対象外）が別途表示されたが、これは段数上限とは独立した既存機構であり正常動作。
   - 四重奏・編成譜は楽譜切り替えに `window.confirm` が伴うため切り替えは行わず、`BASE_SYSTEM_HEIGHT_PX` の値が100%時に旧ハードコード値と一致することの算数確認とコードレビューで整合性を確認した。
   - 最終的にスライダーを音符の大きさ100%・段数/ページ5・楽譜は「複雑テスト楽譜」読込状態のまま、上書き保存はせずに終了した。
+
+## 追補: 大編成（17パート）で下5パートが消えるバグの修正（2026-07-22）
+
+### 問題
+- 上記の `BASE_SYSTEM_HEIGHT_PX.ensembleLarge = 800px`（10パート超は一律この値）は、
+  「旧実装のしきい値と100%時に一致させる」ことだけを目的に決めた値で、**実際の段の高さとは
+  ほぼ無関係**だった。`romantic-orchestra`（17パート）プリセットの実測は1段1384pxで、
+  想定800pxの約1.7倍という大きな乖離があった。
+- `maxSystemsPerPage` の見積もりが甘くなった結果、実際にはページに収まらない段を
+  配置してしまい、`.print-page`（`height: 297mm; overflow: hidden`）で
+  はみ出した下側（Vln I・Vln II・Vla・Vc・Cb の5パート）が画面・印刷の両方から
+  丸ごと消える不具合が発生した（詳細な発見経緯は `docs/qa/full-orchestra-test-findings.md`
+  フェーズB「発見事項1」、修正の経緯はフェーズCを参照）。
+
+### 修正設計
+1. **段高さのパート数比例計算式**（`measureLayoutUtils.ts`）
+   - `BASE_SYSTEM_HEIGHT_PX` から `ensembleSmall`/`ensembleLarge` の二値を削除し、
+     `estimateEnsembleSystemHeightPx(partCount)` を新設。
+     `= ENSEMBLE_PART_HEIGHT_PX(81) * partCount + ENSEMBLE_SYSTEM_OVERHEAD_PX(16)`。
+   - 係数は「四重奏の実測基準340px（4パート）」と「romantic-orchestra の実測1384px
+     （17パート）」の2点から求めた一次関数。4パートでちょうど340pxと一致し、
+     17パートでは1393px（実測よりわずかに大きい安全側）になる。
+2. **1段がページに収まらない編成だけの自動縮小**（`measureLayoutUtils.ts` / `ScorePage.tsx`）
+   - `computeEnsembleAutoFitMultiplier(partCount, pageBudgetPx)` が
+     「1段がちょうど収まる倍率（1.0が上限）」を返す。収まる編成（例:
+     classical-orchestra 12パート、chamber-orchestra 8パート）では 1.0 のまま。
+   - 判定に使う `pageBudgetPx` は、`maxSystemsPerPage` 用のタイトルページ基準の
+     厳しい予算（`SCORE_AREA_BUDGET_PX`=938px）ではなく、本文ページ相当の
+     より現実的な予算（`ENSEMBLE_AUTO_FIT_BUDGET_PX` ≒ A4高1123px − 既定の
+     上下余白26mm分 ≒ 1024px）を使う。厳しい方の予算を流用すると、
+     classical-orchestra のような「本文ページでは実際は収まる」標準編成まで
+     不必要に縮小してしまうため。
+   - `ensembleAutoFitMultiplier` は `effectiveRenderScale`
+     （`= SCORE_LAYOUT_RENDER_SCALE * notationSizeMultiplier * ensembleAutoFitMultiplier`）と
+     `maxSystemsPerPage` の両方に反映する。ユーザー設定の音符の大きさを「これ以上は
+     超えさせない上限」として掛け合わせる形なので、標準編成では実質的な変化はない。
+   - 自動縮小が働いたときは「音符の大きさ」スライダーの横に
+     「（大編成のため実際は◯◯%で表示）」という注記を表示し、ユーザーが
+     気づけるようにした。
+3. **`.print-page` の `height: 297mm` は変更しない**（採用しなかった案(a)）
+   - `min-height` へ変更して大編成ではページを縦に伸ばす案も検討したが、
+     実紙への物理印刷でブラウザの印刷エンジンが297mmを超えた部分を
+     次の物理用紙へ強制的に送る可能性があり、ページ番号・小節継続などの
+     整合性が崩れるリスクがあるため不採用とした（未検証のリスクを本番機能に
+     持ち込みたくなかったため）。上記1・2の「ページに収まるところまで
+     自動的に縮小する」方式の方が、`height: 297mm` を一切変えずに済み、
+     出版譜でも大編成は小さめの浄書で組むのが通例であることとも合致する。
+4. **PianoSystemCanvas.tsx の実サイズ反映バグ（自動縮小が効かない別バグ）**
+   - 上記2を実装してブラウザ実機検証したところ、「音符の大きさ」表示は
+     縮小されていても `.print-page` のクリッピングが解消されなかった。
+   - 原因: `computeLayout()` が返す `sysH`（段の高さ）は `STAVE_SPACING=80px` 等の
+     「`ctx.scale(s,s)` 適用前の論理座標」で計算しているが、
+     `renderer.resize(W, sysH)` にはこの `sysH` をそのまま（`s` を掛けずに）
+     渡していた。`ctx.scale(s,s)` は以降の描画内容だけを `s` 倍するため、
+     音符・五線は縮小されて表示されても、SVG要素自体の実ピクセルサイズ
+     （`.system-stack` / `.print-page` が高さ判定に使う実際のボックスサイズ）は
+     常に scale=1相当のまま変わらなかった。
+   - 修正: `renderer.resize(W, sysH * resizeScale)` として、SVGの実サイズにも
+     `scale` を反映させた（`resizeScale = scale ?? SCORE_LAYOUT_RENDER_SCALE`）。
+     `PianoSystemCanvas` は single/piano/quartet/ensemble すべての譜面種別で
+     共有されているため、この1箇所の修正で全種別に効く。
+
+### 影響範囲
+- `src/utils/measureLayoutUtils.ts`: `estimateEnsembleSystemHeightPx` /
+  `computeEnsembleAutoFitMultiplier` / `ENSEMBLE_PART_HEIGHT_PX` /
+  `ENSEMBLE_SYSTEM_OVERHEAD_PX` を追加。
+- `src/components/ScorePage.tsx`: `BASE_SYSTEM_HEIGHT_PX` から `ensembleSmall`/
+  `ensembleLarge` を削除し編成譜だけ上記の計算式を使うよう分岐変更。
+  `ensembleAutoFitMultiplier`（`useMemo`）を追加し `effectiveRenderScale` /
+  `maxSystemsPerPage` に反映。「音符の大きさ」スライダー横に自動縮小の注記を追加。
+- `src/components/PianoSystemCanvas.tsx`: `renderer.resize` の高さ引数に
+  `resizeScale` を掛けるよう変更（1箇所）。
+- `src/utils/ensembleSystemHeight.test.ts`（新規）: 段高さ計算式・自動縮小の
+  発動条件のユニットテスト。
+
+### 検証（dev-5178, docker compose, `test-data/symphony-test-score.json`）
+- `docker compose run --rm app npm test`: 456ファイル/5747件 全通過。
+- `docker compose run --rm app npm run build`: クリーン。
+- ブラウザ実機（romantic-orchestra 17パート、`music-score-app-data` に直接読込）:
+  - 修正前: `.print-page` の `scrollHeight=1528px` > `offsetHeight=1123px`
+    （405pxクリップ、下5パート＝弦楽器が非表示）。
+  - 修正後: 全7ページで `scrollHeight <= offsetHeight`（クリップなし）。
+    アクセシビリティツリー上に Picc.〜Cb. の全17パートラベルが存在することを確認。
+    「音符の大きさ」スライダーは「100%（大編成のため実際は74%で表示）」と表示。
+  - 印刷プレビューON時も同様にクリップなしを確認。
+  - 全プリセット回帰（single/piano/string-quartet/string-orchestra/
+    chamber-orchestra/classical-orchestra/wind-band）: いずれも「音符の大きさ
+    100%」のまま自動縮小されず（romantic-orchestraだけが縮小）、クリップなし。
+  - フルオケでの段調整UI（`data-testid="system-measure-decrease-0"` /
+    `system-gap-increase-0"` 等）が実際に段の小節数・間隔を変更できることを確認
+    （2小節→1小節、間隔+0px→+4px）。
+  - 音符クリックによる新規追加・選択・↑↓・Deleteの自動操作検証は、本フェーズでも
+    座標ベースのクリックがヒットテストに届かず（`elementFromPoint` が常に
+    `.print-page` を返す）、引き続き自動化ツールの制約により確定できず。
+    段調整UI等のボタン操作は問題なく動作しているため、アプリ側の欠陥という
+    証拠はない。人間による手動スモークテストを推奨。
