@@ -100,21 +100,29 @@ export default function SaveLoadButtons({
         </button>
       )}
 
-      {/* 自動保存ステータスは常に同じ幅のスロットに表示する。
-          条件付きで span 自体を出し入れすると、表示のたびに後ろのボタンが
-          左右にずれてクリックミスの原因になるため、空のときも幅を確保しておく。 */}
-      <span
-        style={{
-          fontSize: 12,
-          color: autoSaveStatus === 'saved' ? '#4caf50' : '#888',
-          display: 'inline-block',
-          minWidth: '7.5em',
-          textAlign: 'left',
-        }}
-        role="status"
-      >
-        {autoSaveStatus === 'saving' ? '自動保存中…' : autoSaveStatus === 'saved' ? '✓ 自動保存済み' : ''}
-      </span>
+      {/* 自動保存ステータスはツールバーの流れから外し、画面右下に小さく固定表示する。
+          ボタン列の中にあると視線とレイアウトの邪魔になるため、
+          「気にしなければ目に入らない」控えめなインジケータにしている。 */}
+      {autoSaveStatus !== 'idle' && (
+        <span
+          style={{
+            position: 'fixed',
+            bottom: 8,
+            right: 12,
+            zIndex: 1000,
+            fontSize: 11,
+            color: autoSaveStatus === 'saved' ? '#4caf50' : '#999',
+            background: 'rgba(255,255,255,0.85)',
+            borderRadius: 4,
+            padding: '2px 8px',
+            opacity: 0.75,
+            pointerEvents: 'none',
+          }}
+          role="status"
+        >
+          {autoSaveStatus === 'saving' ? '自動保存中…' : '✓ 自動保存済み'}
+        </span>
+      )}
       {/* 復元通知は長文になるため、ツールバーのレイアウトに影響しない
           固定位置のトーストとして表示する(3秒で自動的に消える) */}
       {restoreNotice && (
