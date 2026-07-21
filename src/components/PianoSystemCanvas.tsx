@@ -183,26 +183,34 @@ const KEY_SELECT_LINE_EPS = 0.001;
 // クリックしたときに「音符追加」ではなく「最後の音符の選択」に吸われてしまう。
 // そこで選択はこのX範囲内に限定し、範囲外の同じ高さのクリックは挿入へ回す。
 //
-// この値は「画面上の見た目の px」で決め、実際に判定へ使う際は keySelectXPad(s) で
-// 現在の描画スケール s（PianoSystemCanvas の requestedScale。編成譜では12パートを
-// 1ページに収めるため 1 よりかなり小さくなる）で割って SVG 内部座標（raw 単位）に
-// 変換する。
+// この値は「画面上の見た目の px」で決め、実際に判定へ使う際は keySelectXPad(svg) で
+// SVG要素から実測した「画面px ⇄ raw単位」の実効スケールを使って SVG 内部座標
+// （raw 単位）に変換する。
 // 背景: VexFlow の SVGContext.scale(s,s) は viewBox 幅を width/s にするだけで、
 // 各要素の座標そのものは書き換えない。そのため getBoundingClientRect 等から求めた
-// クリック位置の raw 座標 1 単位は、画面上では s px 分の大きさにしかならない
-// （raw 単位 → 画面 px は概ね「raw × s」）。
+// クリック位置の raw 座標 1 単位は、画面上では概ね「requestedScale s」px 分の
+// 大きさにしかならない。
 // 以前はこの値（12）自体を raw 単位の定数として直接比較しており、s が小さい
 // 編成譜では「画面上わずか数px」まで許容範囲が縮んでしまい、符頭のすぐ近くを
 // クリックしても選択にならず音符追加になるバグの原因になっていた
 // （.claude/specs/system-measure-override/design.md 参照）。
+//
+// その後 keySelectXPad(s) として requestedScale だけで raw 単位へ変換する形に
+// 修正されたが、s には「画面表示のズーム」スライダー（.page-wrapper の --scale、
+// CSSズーム）の分が含まれていなかった。CSSズームは requestedScale とは別に
+// 画面上の見た目サイズをさらに拡大縮小するため、s だけを基準にすると
+// 画面px換算の許容幅が実際のズーム倍率だけズレてしまう。
+// そこで getSvgVisualMetrics（getBoundingClientRect の実測値）から求めた
+// 「実効スケール（requestedScale × CSSズームを両方含む）」を使うことで、
+// 画面表示のズームを変えても常に「画面上で狙った px 分」の許容幅になるようにする。
 const KEY_SELECT_X_PAD_SCREEN_PX = 12;
 
-// KEY_SELECT_X_PAD_SCREEN_PX（画面px基準）を、現在の描画スケール s のもとでの
+// KEY_SELECT_X_PAD_SCREEN_PX（画面px基準）を、svg から実測した実効スケールのもとでの
 // raw 座標（SVG内部座標）のパディング量に変換する。
-// s が 0 または未定義になることはない想定だが、念のため下限を設けてゼロ割りを防ぐ。
-function keySelectXPad(renderScale: number): number {
-  const s = renderScale > 0.01 ? renderScale : 0.01;
-  return KEY_SELECT_X_PAD_SCREEN_PX / s;
+// getRawPerScreenPx は「画面1pxが何raw単位に相当するか」を返すので、
+// そのまま画面px基準の値に掛けるだけでよい（割り算ではない点に注意）。
+function keySelectXPad(svg: SVGSVGElement): number {
+  return KEY_SELECT_X_PAD_SCREEN_PX * getRawPerScreenPx(svg);
 }
 // 青い選択枠はクリック不可の見た目です。見た目だけ調整したい場合はここを変更。
 const SELECTED_KEY_PAD_X = 3;
@@ -471,10 +479,20 @@ function findKeyIndexAtLine(
   return keys.findIndex((key) => Math.abs(keyToLineFn(key) - snappedLine) < KEY_SELECT_LINE_EPS);
 }
 
-function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: number): { x: number; y: number } {
+// clientToGroup と keySelectXPad の両方が必要とする「画面px ⇄ SVG内部座標(raw単位)」の
+// 実効スケールをここでまとめて計算する。
+// 以前は個別音選択の許容幅（keySelectXPad）だけ VexFlow の requestedScale（s）を直接使っており、
+// 画面表示のズーム（.page-wrapper の --scale、CSSズーム）が含まれていなかった。
+// s のみだと、CSSズームで画面上の音符が拡大されても許容幅（raw単位）は変わらないため、
+// 画面px換算の許容幅が実際のズーム倍率だけズレてしまう
+// （.claude/specs/system-measure-override/design.md 参照）。
+// getBoundingClientRect は CSS transform（ズーム）を含めた実際の見た目サイズを返すため、
+// 「viewBox 幅 ÷ 実際の見た目の幅」を実効スケールとして使えば、VexFlowのrequestedScaleや
+// CSSズームがどんな値でも（Safariのフォールバック分岐も含めて）常に正しい変換になる。
+function getSvgVisualMetrics(svg: SVGSVGElement): {
+  vbW: number; vbH: number; visualW: number; visualH: number; originLeft: number; originTop: number;
+} {
   const svgRect = svg.getBoundingClientRect();
-  if (!svgRect.width || !svgRect.height) return { x: 0, y: 0 };
-
   const viewBox = svg.viewBox?.baseVal;
   const vbW = (viewBox && viewBox.width > 0) ? viewBox.width : svg.width.baseVal.value;
   const vbH = (viewBox && viewBox.height > 0) ? viewBox.height : svg.height.baseVal.value;
@@ -497,6 +515,25 @@ function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: 
       originTop  = cr.top  + (svgRect.top  - cr.top)  * cssZoom;
     }
   }
+
+  return { vbW, vbH, visualW, visualH, originLeft, originTop };
+}
+
+// 画面px 1px あたりの raw 単位（SVG内部座標）の大きさ。
+// keySelectXPad など「画面px基準のパディングを raw 単位に変換したい」箇所で使う。
+// VexFlow の requestedScale（s）だけでなく、.page-wrapper の CSSズームも含めた
+// 実測ベースの値なので、ズーム倍率に関わらず常に「画面上で狙った px 分」の判定になる。
+function getRawPerScreenPx(svg: SVGSVGElement): number {
+  const { vbW, visualW } = getSvgVisualMetrics(svg);
+  if (!visualW || !isFinite(vbW / visualW)) return 1;
+  return vbW / visualW;
+}
+
+function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: number): { x: number; y: number } {
+  const svgRect = svg.getBoundingClientRect();
+  if (!svgRect.width || !svgRect.height) return { x: 0, y: 0 };
+
+  const { vbW, vbH, visualW, visualH, originLeft, originTop } = getSvgVisualMetrics(svg);
 
   const x = (cx - originLeft) * (vbW / visualW);
   const y = (cy - originTop)  * (vbH / visualH);
@@ -2796,7 +2833,7 @@ export default function PianoSystemCanvas({
             hit.setAttribute('class','vf-note-hit');
             hit.setAttribute('data-measure', String(absI));
             hit.setAttribute('data-note', String(j));
-            // 符頭の実描画X範囲。個別音選択は keySelectXPad(s) でこの範囲近傍に限定されるため、
+            // 符頭の実描画X範囲。個別音選択は keySelectXPad(svg) でこの範囲近傍に限定されるため、
             // テストが「確実に選択になる位置」を計算できるよう属性として公開しておく（表示には影響しない）
             hit.setAttribute('data-note-left', String(noteVisualLeft));
             hit.setAttribute('data-note-right', String(noteVisualRight));
@@ -2813,8 +2850,8 @@ export default function PianoSystemCanvas({
               // 見分けられるよう、click ハンドラの nearNoteX / findKeyIndexAtLine と
               // 同じ判定式でここでも「押したら個別音選択になるか」を求める。
               // クリック時と判定がずれるとホバー表示だけ信用できなくなるため、
-              // パディング量（keySelectXPad(s)）も含めて完全に同じ式にしている。
-              const hoverXPad = keySelectXPad(s);
+              // パディング量（keySelectXPad(svg)）も含めて完全に同じ式にしている。
+              const hoverXPad = keySelectXPad(svg);
               const nearNoteXForHover = lx>=noteVisualLeft-hoverXPad && lx<=noteVisualRight+hoverXPad;
               const snappedLineForHover = snapLine(stave, ly);
               const wouldSelectKey = !activeEvs[j]?.isRest && nearNoteXForHover
@@ -3188,14 +3225,14 @@ export default function PianoSystemCanvas({
                 // Delete/矢印/臨時記号がその1音だけに効くようにする。
                 // isOnNote より先に判定するため、符頭Xから少し外れても
                 // 同じ高さの既存音をクリックした扱いになります。
-                // ただし X 方向は符頭±keySelectXPad(s) に限定する。
+                // ただし X 方向は符頭±keySelectXPad(svg) に限定する。
                 // ヒット領域全体（最後の音符では小節右端まで）で選択にすると、
                 // 空き拍の領域を同じ高さでクリックしたとき音符を追加できなくなるため。
                 // パディングは「画面px基準」で決め、描画スケール s で割って raw 座標に
                 // 変換する（編成譜のように s が小さいと、raw 単位のままでは画面上わずか
                 // 数pxまで許容範囲が縮んでしまい、符頭のすぐ近くをクリックしても選択に
                 // ならず音符追加になってしまうため）。
-                const nearNoteX = lx>=noteVisualLeft-keySelectXPad(s) && lx<=noteVisualRight+keySelectXPad(s);
+                const nearNoteX = lx>=noteVisualLeft-keySelectXPad(svg) && lx<=noteVisualRight+keySelectXPad(svg);
                 const clickedKeyIndex = nearNoteX ? findKeyIndexAtLine(currentEv.keys, snappedLine, k2l) : -1;
                 if(clickedKeyIndex>=0){
                   setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex});

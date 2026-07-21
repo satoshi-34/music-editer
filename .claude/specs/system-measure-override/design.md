@@ -312,3 +312,71 @@ raw座標に変換するため、raw単位の固定パディングは画面px換
   ≈5.3pxは超え、新実装の実効パディング12pxの範囲内）をクリックし、選択（青枠表示）に
   なることを確認。ArrowUpで音高が動き、Deleteで削除できることも確認。空き拍領域の
   クリックでは従来どおり音符が追加されることも回帰確認。コンソールエラーなし。
+
+## 追補: 画面表示のズームを上げると個別音選択の許容幅がズレる問題の修正（2026-07-22）
+
+**問題**:
+上記の `keySelectXPad(s)` は VexFlow の `requestedScale`（`s`）だけを使って
+画面px基準のパディングを raw 単位に変換していたが、`s` には ScorePage の
+「その他」タブ（実装上は『楽譜設定』タブ）にある「画面表示のズーム」スライダー
+（0.5〜1.5、`.page-wrapper` の CSS変数 `--scale` として `.print-page` に
+`transform: scale()` で適用される）の倍率が含まれていなかった。
+`clientToGroup` は `svg.getBoundingClientRect()`（CSSズームを含む実際の見た目サイズ）
+から画面px⇄raw座標を変換しているため、実際にクリック座標の変換に使われる
+「実効スケール」は `s × 画面表示のズーム` になる。`keySelectXPad(s)` はズーム分を
+無視していたため、画面px換算の許容幅が `12 × 画面表示のズーム` px になってしまい、
+ズーム倍率によって実効パディングが変動していた
+（150%ズームでは画面上約18px相当まで許容範囲が広がる一方、ズームを下げると
+本来の12pxより狭くなる）。個別音選択とは別に、和音追加ゾーンの判定 `isOnNote` は
+この影響を受けない固定raw値 `CHORD_HIT_PAD` を使っているため、ズームで許容幅が
+本来の12pxからズレると「選択」と「和音追加／挿入」の境界が意図した位置からずれ、
+狙った操作にならないことがあった。
+
+**修正設計**:
+- `clientToGroup` 内にあった「`svg.getBoundingClientRect()` と `viewBox` から
+  画面px⇄raw単位の実効スケールを求める」ロジックを `getSvgVisualMetrics(svg)` として
+  切り出し、`clientToGroup` はこの共通関数を呼ぶだけにした（Safari向けの
+  フォールバック分岐 `bcrReflectsZoom` も含めてそのまま共通化）。
+- `getSvgVisualMetrics` を使って「画面1px が何raw単位に相当するか」を返す
+  `getRawPerScreenPx(svg)` を追加した。
+- `keySelectXPad(renderScale: number)` を `keySelectXPad(svg: SVGSVGElement)` に変更し、
+  `KEY_SELECT_X_PAD_SCREEN_PX * getRawPerScreenPx(svg)` で raw 単位のパディングを
+  求めるようにした。`getRawPerScreenPx` は VexFlow の `requestedScale` と
+  CSSズームの両方を含む実測値なので、画面表示のズームをどの値に変えても
+  画面px換算の許容幅は常に `KEY_SELECT_X_PAD_SCREEN_PX`（12px）で一定になる。
+- 呼び出し側（クリックハンドラの `nearNoteX`、ホバーフィードバックの
+  `nearNoteXForHover`）はどちらも `svg`（クロージャ内で参照可能な `SVGSVGElement`）を
+  渡すだけで済むよう更新した。
+
+**影響範囲**:
+- `src/components/PianoSystemCanvas.tsx`:
+  - `clientToGroup` から `getSvgVisualMetrics(svg)` を切り出し
+  - `getRawPerScreenPx(svg)` を追加
+  - `keySelectXPad(renderScale)` → `keySelectXPad(svg)` に変更し、呼び出し箇所
+    （個別音選択の `nearNoteX`、ホバーの `nearNoteXForHover`）を更新
+- `src/components/PianoSystemCanvasZoomSelect.test.tsx`（新規）: `scale=0.3`
+  （編成譜相当）かつ `.page-wrapper` の `--scale=1.5`（画面表示のズーム150%相当）で、
+  符頭から画面px換算10px（新旧どちらの許容幅にも収まる）は選択になり、14px
+  （修正後の許容幅12pxの外だが、ズーム分を無視していた旧実装の許容幅18pxの内側）
+  は選択にならず音符追加になることを検証する再現・回帰テスト。
+  修正前のコードでこのテストを実行すると14pxのケースが失敗する（誤って選択になる）
+  ことを確認済み。
+
+**検証**:
+- `docker compose run --rm app npm test`（454ファイル5732テスト全緑）
+- `docker compose run --rm app npm run build`（クリーン）
+- ブラウザ確認（dev-5178、`印刷テスト用小品` サンプル。手順・結果は本追補の
+  親コミットのやりとりに詳細を残す。要点のみ記載）:
+  - 画面表示のズーム100%: Cl.パートの和音内の1音をクリックして個別音選択（青枠）
+    になることを確認（回帰なし）
+  - 画面表示のズーム150%（スライダーの上限）: 同じ和音の複数の音それぞれを
+    クリックし、いずれも対応する音だけが個別選択されることを確認
+    （実際のブラウザクリック・DOM経由での合成クリック双方で確認）
+  - コンソールエラーなし
+  - 画面表示のズームスライダーの上限は150%（実装上 `viewZoom` は0.5〜1.5に
+    クランプされる）のため、200%ズームでの確認はスライダー仕様上できない
+    （200%相当の検証は上記の自動テスト（`--scale=1.5` かつ `scale=0.3` の
+    組み合わせで実効スケールを更に小さくする形）でカバーした）
+  - 空き拍への音符追加・和音追加の直接的なブラウザ回帰確認は本セッションでは
+    未実施（ロジック自体は今回変更しておらず、`PianoSystemCanvasEmptyBeatClick.test.tsx`
+    等の既存自動テストが全緑であることで代替した）
