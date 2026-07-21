@@ -77,6 +77,8 @@ import {
   worstCaseSystemContentBudget,
   DEFAULT_PAGE_SIDE_MARGIN_MM,
   planSystemMeasureRanges,
+  estimateEnsembleSystemHeightPx,
+  computeEnsembleAutoFitMultiplier,
   type SystemMeasureRange,
   type MeasureLayoutPartContext,
 } from '../utils/measureLayoutUtils';
@@ -174,16 +176,23 @@ const SCORE_AREA_BUDGET_PX = 938;
 // 音符の大きさスライダーの倍率をここに掛けて SCORE_AREA_BUDGET_PX を割ることで、
 // あふれずに収まる最大段数（maxSystemsPerPage）を求める（floor で切り捨て、安全側）。
 // 値は実測（単旋律 ≒114px / ピアノ大譜表 ≒180px / 四重奏 ≒340px）に基づく。
-// 編成譜（ensemble）はパート数で段の高さが大きく変わるため、パート数 10 を境に
-// 二段階の目安値（≒400px / ≒800px）を使う。以前のハードコード
-// （10パート超で1段、以下で2段）と 100% 時に一致するよう調整した値。
-const BASE_SYSTEM_HEIGHT_PX: Record<'single' | 'piano' | 'quartet' | 'ensembleSmall' | 'ensembleLarge', number> = {
+// 編成譜（ensemble）だけはパート数によって段の高さが大きく変わる（弦5パートを含む
+// 17パート編成で下5パートが画面・印刷の両方から消える不具合の原因になった）ため、
+// 固定値ではなく measureLayoutUtils.estimateEnsembleSystemHeightPx() で
+// パート数に比例した計算式を使う（詳細は同関数のコメント・
+// docs/qa/full-orchestra-test-findings.md フェーズC参照）。
+const BASE_SYSTEM_HEIGHT_PX: Record<'single' | 'piano' | 'quartet', number> = {
   single: 114,
   piano: 180,
   quartet: 340,
-  ensembleSmall: 400,
-  ensembleLarge: 800,
 };
+// 「1段の実際の高さがページに収まらない編成」で自動的に音符サイズを縮小するための
+// ページ高さ予算（px）。maxSystemsPerPage 用の SCORE_AREA_BUDGET_PX（938px）は
+// タイトルページ基準でわざと厳しめに取った値だが、自動縮小の判定にそのまま使うと
+// 通常編成（classical-orchestra の12パート等）でも本文ページでは実際は収まるのに
+// 不必要に縮小してしまう。ここではタイトル欄の無い本文ページを想定した、より現実的な
+// 予算（A4高297mm ≒1123px − 既定の上下余白26mm分）を使う。
+const ENSEMBLE_AUTO_FIT_BUDGET_PX = 297 * (96 / 25.4) - (DEFAULT_PAGE_MARGIN_TOP_MM + DEFAULT_PAGE_MARGIN_BOTTOM_MM) * MM_TO_PX;
 
 // 無音検知（issue #14）のタイミング設定。
 // 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
@@ -2182,12 +2191,26 @@ export default function ScorePage() {
     const n = raw == null ? NaN : parseFloat(raw);
     return Number.isFinite(n) ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n)) : 1;
   });
+  // 大編成の編成譜（ensemble）では、ユーザーが「音符の大きさ」を100%のままにしていても
+  // 1段の実際の高さがページの印字可能領域を超えてしまうケースがある
+  // （romantic-orchestra=17パートで下5パート＝弦楽器が画面・印刷の両方から消える不具合の原因、
+  // docs/qa/full-orchestra-test-findings.md フェーズC参照）。出版譜でも大編成は小さめの
+  // 浄書で組むのが通例なため、「1段がページに収まらない編成だけ」自動的に縮小する
+  // フォールバックを設ける（収まる編成では 1.0 のままなので、標準的な編成のサイズは
+  // 従来どおり変わらない）。
+  const ensembleAutoFitMultiplier = useMemo(() => (
+    scoreType === 'ensemble'
+      ? computeEnsembleAutoFitMultiplier(instrumentation.parts.length, ENSEMBLE_AUTO_FIT_BUDGET_PX)
+      : 1
+  ), [scoreType, instrumentation.parts.length]);
   // SCORE_LAYOUT_RENDER_SCALE（既定0.44）に音符の大きさ倍率を掛けた、実際の
   // レイアウト計算・描画に使う実効スケール。段組み計画（planEffectiveMeasuresPerSystem /
   // planSystemMeasureRanges）と各 Canvas への scale prop の両方に必ずこの値を使い、
   // SCORE_LAYOUT_RENDER_SCALE を直接使う箇所を残さない（単位の食い違いによる
-  // レイアウト崩れを防ぐため）。
-  const effectiveRenderScale = SCORE_LAYOUT_RENDER_SCALE * notationSizeMultiplier;
+  // レイアウト崩れを防ぐため）。ensembleAutoFitMultiplier は「ユーザー設定の
+  // notationSizeMultiplier をこれ以上は超えさせない上限」として掛け合わせる
+  // （標準編成では 1.0 なので実質的な変化はない）。
+  const effectiveRenderScale = SCORE_LAYOUT_RENDER_SCALE * notationSizeMultiplier * ensembleAutoFitMultiplier;
 
   // ユーザー設定（その他タブの「ページ余白（左右）」スライダー、8〜25mm）。
   // 壊れた保存値でも安全なよう必ずクランプする。既定値は measureLayoutUtils の
@@ -2263,8 +2286,12 @@ export default function ScorePage() {
   // BASE_SYSTEM_HEIGHT_PX（楽譜種別ごとの基準段高）× notationSizeMultiplier で割り、
   // floor で切り捨てることで「絶対にあふれない」最大段数を安全側に求める。
   const maxSystemsPerPage = useMemo(() => {
+    // 編成譜（ensemble）はパート数に比例した計算式（estimateEnsembleSystemHeightPx）を使う。
+    // 固定の二値（以前は10パート超で800px固定）だと大編成で実際の高さと大きく乖離し、
+    // 1段がページからあふれてもそれに気づかず段数を多く割り当ててしまう
+    // （docs/qa/full-orchestra-test-findings.md フェーズC参照）。
     const baseHeight = scoreType === 'ensemble'
-      ? (instrumentation.parts.length > 10 ? BASE_SYSTEM_HEIGHT_PX.ensembleLarge : BASE_SYSTEM_HEIGHT_PX.ensembleSmall)
+      ? estimateEnsembleSystemHeightPx(instrumentation.parts.length)
       : scoreType === 'quartet'
         ? BASE_SYSTEM_HEIGHT_PX.quartet
         : scoreType === 'piano'
@@ -2281,9 +2308,12 @@ export default function ScorePage() {
     // 同じ扱いで安全側に見積もる（N段なら本来 (N-1)×gap だが、ここでは 1段あたり
     // baseHeight*倍率 + gap を占有すると仮定して floor する方が計算が単純で、
     // 常に「あふれない」方向に丸まるため安全側になる）。
+    // notationSizeMultiplier には ensembleAutoFitMultiplier（1段がページに収まらない
+    // 大編成だけ自動的に縮小する倍率、標準編成では1.0）も掛けて実際に描画されるサイズと
+    // 一致させる。
     // 最低でも1段は入れられることにする（0段になると編集自体ができなくなるため）。
-    return Math.max(1, Math.floor(effectiveBudgetPx / (baseHeight * notationSizeMultiplier + systemRowGapPx)));
-  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier, pageMarginTopMm, pageMarginBottomMm, systemRowGapPx]);
+    return Math.max(1, Math.floor(effectiveBudgetPx / (baseHeight * notationSizeMultiplier * ensembleAutoFitMultiplier + systemRowGapPx)));
+  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier, ensembleAutoFitMultiplier, pageMarginTopMm, pageMarginBottomMm, systemRowGapPx]);
   // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段が既定。市販譜のような
   // 行間を確保するため、上限いっぱいの5段ではなく1段減らした4段を初期値にしている。
   // 音符を大きくして上限が4段を下回った場合は、上限自体を推奨値として使う。
@@ -3199,6 +3229,17 @@ export default function ScorePage() {
                 />
                 {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
                 <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
+                {/* 大編成（1段がページに収まらない編成）で自動縮小が働いているときだけ、
+                    実際に描画されているサイズ（ユーザー設定 × 自動縮小倍率）を表示する。
+                    ユーザーが「なぜスライダーの表示より小さく見えるのか」に気づけるようにするため。 */}
+                {ensembleAutoFitMultiplier < 1 && (
+                  <span
+                    style={{ fontSize: 11, color: '#b45309' }}
+                    title="この編成は1段がページに収まらないため、実際の描画サイズを自動的に縮小しています"
+                  >
+                    （大編成のため実際は{Math.round(notationSizeMultiplier * ensembleAutoFitMultiplier * 100)}%で表示）
+                  </span>
+                )}
               </label>
               {/* ページレイアウト系スライダー（余白・段間隔）は1行にまとめて、楽譜設定タブが
                   横に長くなりすぎないようにしている。挙動は他のスライダーと同じ

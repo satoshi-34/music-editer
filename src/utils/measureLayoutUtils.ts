@@ -67,6 +67,54 @@ export function printScoreAreaWidthPx(sideMarginMm: number = DEFAULT_PAGE_SIDE_M
 // 後方互換用の定数（既定余白14mm時の値）。新規コードは printScoreAreaWidthPx() を使うこと。
 export const PRINT_SCORE_AREA_WIDTH_PX = printScoreAreaWidthPx();
 
+// 編成譜（scoreType === 'ensemble'）の「1段あたりの実測高さ（px）」をパート数から
+// 見積もる係数。以前は「10パート超は800px固定／以下は400px固定」という二値の
+// ハードコードだったが、17パート編成（romantic-orchestra）で実測1384pxに対し
+// 想定800pxと大きく乖離し、.print-page の overflow:hidden で下5パート（弦楽器）が
+// まるごと消えるバグの原因になった（docs/qa/full-orchestra-test-findings.md
+// フェーズB「発見事項1」参照）。
+//
+// 係数は「弦楽四重奏（4パート）の実測基準値 340px」と「romantic-orchestra
+// （17パート）の実測値 1384px」の2点から求めた一次関数（1パートあたりの譜表高さ
+// ENSEMBLE_PART_HEIGHT_PX ＋ 段全体の固定マージン ENSEMBLE_SYSTEM_OVERHEAD_PX）。
+// 実測よりわずかに大きめに丸めており（4パートでちょうど340px、17パートで1393px
+// ≒実測1384pxよりやや安全側）、maxSystemsPerPage 側の見積もりが「あふれない」
+// 安全側になるようにしている。
+export const ENSEMBLE_PART_HEIGHT_PX = 81;
+export const ENSEMBLE_SYSTEM_OVERHEAD_PX = 16;
+
+/**
+ * 編成譜の「音符の大きさ100%」時・1段あたりの想定高さ（px）をパート数から計算する。
+ * ScorePage.tsx の maxSystemsPerPage 計算・自動縮小判定の両方から参照する正本。
+ */
+export function estimateEnsembleSystemHeightPx(partCount: number): number {
+  const safeCount = Math.max(1, Math.floor(partCount));
+  return ENSEMBLE_PART_HEIGHT_PX * safeCount + ENSEMBLE_SYSTEM_OVERHEAD_PX;
+}
+
+/**
+ * 「1段の実際の高さが常にページ内に収まる」ことを保証するための自動縮小倍率を求める。
+ *
+ * 大編成（例: romantic-orchestra 17パート）では、音符の大きさ100%のままだと1段の
+ * 高さがページの印字可能領域を超えてしまい、.print-page の overflow:hidden で
+ * はみ出した下側のパートが画面・印刷の両方から消えてしまう（下5パートの弦楽器が
+ * 消失するバグ）。出版譜でも大編成は小さめの浄書で組むのが通例なため、
+ * 「1段がページに収まらない編成では自動的に縮小する」フォールバックを設ける。
+ *
+ * - 収まる場合（標準的な編成）は 1.0 未満にならない＝縮小しない
+ *   （small/piano/quartet 等の従来サイズに影響しない）。
+ * - 収まらない場合だけ、ちょうど収まる倍率まで自動的に縮める（ユーザー設定の
+ *   notationSizeMultiplier をこれ以上は超えさせない上限として使う）。
+ */
+export function computeEnsembleAutoFitMultiplier(
+  partCount: number,
+  pageBudgetPx: number
+): number {
+  const systemHeightAt100Percent = estimateEnsembleSystemHeightPx(partCount);
+  if (systemHeightAt100Percent <= 0 || pageBudgetPx <= 0) return 1;
+  return Math.min(1, pageBudgetPx / systemHeightAt100Percent);
+}
+
 /** 楽器名がある最悪ケースでも、Canvas の alloc と一致する小節本文の物理幅。 */
 export function worstCaseSystemContentBudget(sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM): number {
   const innerWidth = printScoreAreaWidthPx(sideMarginMm) - SYSTEM_PAGE_SIDE_PADDING * 2 - SYSTEM_MAX_LABEL_WIDTH;
