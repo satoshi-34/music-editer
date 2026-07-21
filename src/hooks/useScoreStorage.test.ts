@@ -326,4 +326,66 @@ describe('useScoreStorage Hook Tests', () => {
       expect(result.current.hasStoredData()).toBe(true);
     });
   });
+
+  describe('自動保存スロット（saveAutosave/loadAutosave）', () => {
+    const testMetadata = {
+      title: 'AutosaveTest',
+      subtitle: '',
+      lyricist: '',
+      composer: '',
+      arranger: ''
+    };
+    const testParts: PartData[] = [{
+      partId: 'melody',
+      clef: 'treble',
+      measures: [{ events: [{ dur: '4' as DurKey, isRest: false, keys: ['c/4'] }] }]
+    }];
+
+    it('saveAutosave は手動保存スロットに影響しない', async () => {
+      const { result } = renderHook(() => useScoreStorage());
+
+      await act(async () => {
+        await result.current.saveAutosave(testMetadata, testParts, 1, 1);
+      });
+
+      expect(result.current.hasAutosaveData()).toBe(true);
+      expect(result.current.hasStoredData()).toBe(false);
+      expect(localStorageMock.getItem(STORAGE_KEYS.PRIMARY)).toBeNull();
+      expect(localStorageMock.getItem(STORAGE_KEYS.AUTOSAVE)).not.toBeNull();
+    });
+
+    it('loadAutosave は saveAutosave で保存した内容を取得できる', async () => {
+      const { result } = renderHook(() => useScoreStorage());
+
+      await act(async () => {
+        await result.current.saveAutosave(testMetadata, testParts, 2, 3);
+      });
+
+      let loaded: any;
+      await act(async () => {
+        loaded = await result.current.loadAutosave();
+      });
+
+      expect(loaded).not.toBeNull();
+      expect(loaded.metadata.title).toBe('AutosaveTest');
+      expect(loaded.systems).toBe(2);
+      expect(loaded.measuresPerSystem).toBe(3);
+    });
+
+    it('clearAutosaveData は自動保存スロットだけを消し、手動保存スロットは残す', async () => {
+      const { result } = renderHook(() => useScoreStorage());
+
+      await act(async () => {
+        await result.current.saveScore(testMetadata, testParts, 1, 1);
+        await result.current.saveAutosave(testMetadata, testParts, 1, 1);
+      });
+
+      await act(async () => {
+        await result.current.clearAutosaveData();
+      });
+
+      expect(result.current.hasAutosaveData()).toBe(false);
+      expect(result.current.hasStoredData()).toBe(true);
+    });
+  });
 });
