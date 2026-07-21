@@ -1321,7 +1321,16 @@ export default function PianoSystemCanvas({
     const { staveYs, sysH } = computeLayout(parts.length);
     const W=ref.current.parentElement?.clientWidth??ref.current.clientWidth??700;
     const renderer=new Renderer(ref.current,Renderer.Backends.SVG);
-    renderer.resize(W,sysH);
+    // sysH は FIRST_STAVE_Y / STAVE_SPACING という「論理座標（ctx.scale適用前）」で
+    // 計算した高さ。実際の描画は下の ctx.scale(s,s) で s 倍されるため、SVGの実ピクセル
+    // サイズ（renderer.resize に渡す高さ）も s 倍しておかないと、音符・五線は
+    // 縮小されているのに SVG の外枠（＝.system-stack や .print-page が
+    // 高さを判定するときの実際のボックスサイズ）だけが常に scale=1 相当のまま
+    // 変わらず、大編成で「音符の大きさ」を自動縮小しても段の高さが縮まらず
+    // ページからはみ出す不具合の原因になっていた
+    // （docs/qa/full-orchestra-test-findings.md フェーズC参照）。
+    const resizeScale = scale ?? SCORE_LAYOUT_RENDER_SCALE;
+    renderer.resize(W, sysH * resizeScale);
     const ctx=renderer.getContext();
 
     const svg=ref.current.querySelector('svg') as SVGSVGElement|null;
