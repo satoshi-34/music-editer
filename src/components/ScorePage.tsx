@@ -3148,6 +3148,7 @@ export default function ScorePage() {
                 disabled={systemMeasureOverrides.length === 0}
                 style={{ fontSize: 13, padding: '3px 8px' }}
                 title="各段の◀▶ボタンで個別調整した小節数の上書きをすべて解除し、自動計画へ戻します"
+                data-testid="system-measure-reset"
               >
                 段割りをリセット
               </button>
@@ -3926,7 +3927,14 @@ export default function ScorePage() {
                         const canDecreaseGap = rowGapPx > SYSTEM_ROW_GAP_MIN_PX;
                         const canIncreaseGap = rowGapPx < SYSTEM_ROW_GAP_MAX_PX;
                         return (
-                          <div className="system-measure-override-row" key={range.start}>
+                          // data-testid は「どの段」を対象にした行かを外部（テストコード）から判定できるように、
+                          // 譜面全体で一意な開始小節番号（range.start）をキーとして付与する。
+                          // （夜間QAフェーズBでのテスト容易性改善。.claude/specs/page-layout-controls/design.md 参照）
+                          <div
+                            className="system-measure-override-row"
+                            key={range.start}
+                            data-testid={`system-measure-row-${range.start}`}
+                          >
                             <span className="system-measure-override-label">段{getPageSystemOffset(i) + rangeIndex + 1}</span>
                             <button
                               type="button"
@@ -3934,16 +3942,18 @@ export default function ScorePage() {
                               disabled={!canDecrease}
                               onClick={() => adjustSystemMeasureOverride(range, -1)}
                               title="この段の末尾の小節を次の段へ送る"
+                              data-testid={`system-measure-decrease-${range.start}`}
                             >
                               ◀
                             </button>
-                            <span className="system-measure-override-count">{range.count}小節</span>
+                            <span className="system-measure-override-count" data-testid={`system-measure-count-${range.start}`}>{range.count}小節</span>
                             <button
                               type="button"
                               className="system-measure-override-button"
                               disabled={!canIncrease}
                               onClick={() => adjustSystemMeasureOverride(range, 1)}
                               title="次の段の先頭の小節をこの段へ引き込む"
+                              data-testid={`system-measure-increase-${range.start}`}
                             >
                               ▶
                             </button>
@@ -3954,16 +3964,18 @@ export default function ScorePage() {
                               disabled={!canDecreaseGap}
                               onClick={() => adjustSystemRowGapOverride(range.start, -SYSTEM_ROW_GAP_OVERRIDE_STEP_PX)}
                               title="この段の間隔（上の段との距離）を詰める"
+                              data-testid={`system-gap-decrease-${range.start}`}
                             >
                               －
                             </button>
-                            <span className="system-measure-override-count">{rowGapPx >= 0 ? `+${rowGapPx}` : rowGapPx}px</span>
+                            <span className="system-measure-override-count" data-testid={`system-gap-value-${range.start}`}>{rowGapPx >= 0 ? `+${rowGapPx}` : rowGapPx}px</span>
                             <button
                               type="button"
                               className="system-measure-override-button"
                               disabled={!canIncreaseGap}
                               onClick={() => adjustSystemRowGapOverride(range.start, SYSTEM_ROW_GAP_OVERRIDE_STEP_PX)}
                               title="この段の間隔（上の段との距離）を広げる"
+                              data-testid={`system-gap-increase-${range.start}`}
                             >
                               ＋
                             </button>
