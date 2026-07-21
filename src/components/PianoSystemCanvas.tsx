@@ -134,11 +134,22 @@ export type PartConfig = {
 /* ===== レイアウト定数（SVGビューポートpx） ===== */
 const PAGE_LEFT = SYSTEM_PAGE_SIDE_PADDING, PAGE_RIGHT = SYSTEM_PAGE_SIDE_PADDING;
 const FIRST_STAVE_Y = 20;
-const STAVE_SPACING = 80; // 段と段の間隔（Y方向）
-function computeLayout(n: number): { staveYs: number[]; sysH: number } {
-  const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * STAVE_SPACING);
-  const sysH = FIRST_STAVE_Y + (n - 1) * STAVE_SPACING + 60 + 20;
-  return { staveYs, sysH };
+// 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏（4パート以下）は見た目を変えないよう
+// 従来値の80を維持する。編成譜（5パート以上）は市販オーケストラスコア並みの紙面効率にするため、
+// 詰めた値を使う（Issue #29）。VexFlow の五線は line0〜line4 の4間隔＝40ネイティブ単位の高さなので、
+// 60 にすると隣接パートとの間の余白が20単位（加線2本ぶん）残り、音符と衝突しない。
+const STAVE_SPACING = 80; // 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏用
+const STAVE_SPACING_ENSEMBLE = 60; // 5パート以上の編成譜用（密な既定値）
+const ENSEMBLE_DENSE_SPACING_MIN_PARTS = 5;
+// テスト（PianoSystemCanvasPartSpacing.test.tsx）から直接検証できるよう export する。
+export function staveSpacingForPartCount(n: number): number {
+  return n >= ENSEMBLE_DENSE_SPACING_MIN_PARTS ? STAVE_SPACING_ENSEMBLE : STAVE_SPACING;
+}
+export function computeLayout(n: number): { staveYs: number[]; sysH: number; staveSpacing: number } {
+  const staveSpacing = staveSpacingForPartCount(n);
+  const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * staveSpacing);
+  const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20;
+  return { staveYs, sysH, staveSpacing };
 }
 
 /* ===== 幅計算 ===== */
@@ -1318,7 +1329,7 @@ export default function PianoSystemCanvas({
     ref.current.innerHTML='';
     ref.current.style.overflow='visible';
 
-    const { staveYs, sysH } = computeLayout(parts.length);
+    const { staveYs, sysH, staveSpacing } = computeLayout(parts.length);
     const W=ref.current.parentElement?.clientWidth??ref.current.clientWidth??700;
     const renderer=new Renderer(ref.current,Renderer.Backends.SVG);
     // sysH は FIRST_STAVE_Y / STAVE_SPACING という「論理座標（ctx.scale適用前）」で
@@ -1732,6 +1743,25 @@ export default function PianoSystemCanvas({
     /* -- 五線を描画 -- */
     // staveSets[pi][mi] = 段pi・小節mi の Stave
     const staveSets: Stave[][] = parts.map(() => []);
+
+    // 楽器グループ（bracketGroup）の連続区間を求める。値が無い/`solo` のパートは単独扱いにする。
+    // 左端の括弧（後段）と、小節線をグループ単位で接続する処理（下の StaveConnector）の
+    // 両方で同じ区間定義を使うことで、「括弧が出るまとまり = 小節線が繋がるまとまり」を保証する。
+    const bracketGroupRanges: Array<{ start: number; end: number; key: string }> = [];
+    for (let i = 0; i < parts.length; i++) {
+      const key = parts[i].bracketGroup;
+      if (!key || key === 'solo') continue;
+      const last = bracketGroupRanges[bracketGroupRanges.length - 1];
+      if (last && last.key === key && last.end === i - 1) {
+        last.end = i;
+      } else {
+        bracketGroupRanges.push({ start: i, end: i, key });
+      }
+    }
+    // グループ定義が1つも無い場合（後方互換のピアノ2段譜など、bracketGroup未指定）は
+    // 従来通り全段をひとまとまりとして扱うためのフラグ。
+    const hasAnyBracketGroup = bracketGroupRanges.some(g => g.end > g.start);
+
     for(let i=0;i<measuresPerSystem;i++){
       const w=realWs[i];
       // 段の右端縦線（StaveConnector）は、この列が終止線を描く列かどうかで
@@ -1862,13 +1892,25 @@ export default function PianoSystemCanvas({
         }
       }
 
-      // 各小節の右端縦線：第1段 ↔ 最終段 をまたぐ
+      // 各小節の右端縦線：浄書慣習では「楽器グループ内だけを縦に接続し、グループ間は切る」。
       // 終止線の列だけは、段をまたぐ側も対応する太い二重線（BOLD_DOUBLE_RIGHT）にして、
       // 各パートの stave が個別に描く終止線と見た目をそろえる。
       if(parts.length > 1){
-        new StaveConnector(staveSets[0][i], staveSets[parts.length-1][i])
-          .setType(isFinalBarlineColumn ? StaveConnector.type.BOLD_DOUBLE_RIGHT : StaveConnector.type.SINGLE_RIGHT)
-          .setContext(ctx).draw();
+        const barlineConnectorType = isFinalBarlineColumn ? StaveConnector.type.BOLD_DOUBLE_RIGHT : StaveConnector.type.SINGLE_RIGHT;
+        if (hasAnyBracketGroup) {
+          // グループごとに接続する。1段だけのグループ（solo扱いや単独楽器）は、
+          // 各段の stave が自分の右端に既に小節線を描いているため、ここでは何もしない
+          // （＝隣のグループとの間の空白には線を引かない）。
+          bracketGroupRanges.forEach(group => {
+            if (group.end === group.start) return;
+            new StaveConnector(staveSets[group.start][i], staveSets[group.end][i])
+              .setType(barlineConnectorType).setContext(ctx).draw();
+          });
+        } else {
+          // グループ定義が無い場合（ピアノ2段譜など後方互換）は従来通り全段を接続する。
+          new StaveConnector(staveSets[0][i], staveSets[parts.length-1][i])
+            .setType(barlineConnectorType).setContext(ctx).draw();
+        }
       }
       x+=w;
     }
@@ -1879,21 +1921,10 @@ export default function PianoSystemCanvas({
     // ここではパートに渡された bracketGroup を見て、
     // 連続する同じグループのまとまりごとに括弧を描く。
     if(parts.length > 1){
-      // 連続する同じ bracketGroup のまとまり（[開始, 終了]）を求める。
-      // bracketGroup が無いパートや `solo` のパートは単独扱いにして括弧を描かない。
-      // `solo` は「ひとまとまり」ではなく「このパートだけ独立」という意味なので、
-      // 連続していてもグループ括弧にしない。
-      const groups: Array<{ start: number; end: number; key: string }> = [];
-      for (let i = 0; i < parts.length; i++) {
-        const key = parts[i].bracketGroup;
-        if (!key || key === 'solo') continue;
-        const last = groups[groups.length - 1];
-        if (last && last.key === key && last.end === i - 1) {
-          last.end = i;
-        } else {
-          groups.push({ start: i, end: i, key });
-        }
-      }
+      // 連続する同じ bracketGroup のまとまり（[開始, 終了]）は、上の小節線接続と
+      // 同じ bracketGroupRanges を使う。`solo` は「ひとまとまり」ではなく
+      // 「このパートだけ独立」という意味なので、連続していてもグループ括弧にしない。
+      const groups = bracketGroupRanges;
 
       // 鍵盤（ピアノ大譜表）だけはブレース、ほかは角括弧で描く。
       // これは伝統的なオーケストラ記譜の慣習に合わせている。
@@ -1915,7 +1946,7 @@ export default function PianoSystemCanvas({
       // グループ括弧がひとつも描かれなかった場合は、従来通り全体を 1 つの括弧でまとめる。
       // ただし全パートが `solo` 指定なら、ユーザーが明示的に「括弧なし」を選んでいるため
       // フォールバック括弧も描かない。
-      const hasAnyDrawnGroupBracket = groups.some(g => g.end > g.start);
+      const hasAnyDrawnGroupBracket = hasAnyBracketGroup;
       const allPartsAreSolo = parts.every(part => part.bracketGroup === 'solo');
       if (!hasAnyDrawnGroupBracket && !allPartsAreSolo) {
         const fallbackType = parts.length === 2
@@ -2477,7 +2508,7 @@ export default function PianoSystemCanvas({
         // line0 同士の中間で分割すると、上パートの下側加線域がほとんど残らず、
         // 低音を置こうとしたクリックが下パートの超高音に化ける逆方向の誤配置が起きるため、
         // 五線の端からの距離が上下対称になるこの取り方にする。
-        const partGapY = STAVE_SPACING / s;
+        const partGapY = staveSpacing / s;
         const staveLine0 = stave.getYForLine(0);
         const staveLine4 = stave.getYForLine(4);
         // 五線の下端と次パートの上端の間の余白を上下のパートで半分ずつ分け合う
