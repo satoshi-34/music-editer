@@ -25,3 +25,6 @@ dist-ssr
 node_modules/
 .env
 .vercel
+
+# 定時実行AIエージェントの作業用worktree置き場
+.night-worktrees/
