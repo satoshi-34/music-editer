@@ -3758,6 +3758,10 @@ export default function ScorePage() {
                   // .system-stack 自体は EnsembleStaff などの子コンポーネントが描画していても
                   // ここで指定した値をそのまま参照できる。
                   '--page-capacity': String(getPageSystemsCapacity(i)),
+                  // --page-slot-ratio は 1/段数。段スロットの高さ（flex-basis）の計算で
+                  // 「ページ高 ÷ 段数」をCSSに書きたいが、calc() の var() による除算は
+                  // ブラウザ対応が不安定なため、逆数をここで計算して乗算だけで済ませる。
+                  '--page-slot-ratio': String(1 / Math.max(1, getPageSystemsCapacity(i))),
                   // 段の間隔（その他タブの「段の間隔」スライダー）。CSS カスタムプロパティは
                   // 子孫（.system-stack）へ継承されるため、ここで指定すれば十分。
                   '--system-row-gap': `${systemRowGapPx}px`,
