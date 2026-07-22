@@ -149,12 +149,13 @@ const PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM = 2;
 const DEFAULT_PAGE_MARGIN_TOP_MM = DEFAULT_PAGE_SIDE_MARGIN_MM;
 const DEFAULT_PAGE_MARGIN_BOTTOM_MM = DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM;
 // 「段の間隔」のユーザー設定（その他タブのスライダー、px単位）。
-// 0以上のときは行グリッド（.score-area .system-stack の gap）へそのまま渡す上乗せ間隔で、
-// 段は flex:1 1 0% で完全に等分されたまま、その等分の取り分から gap ぶんが差し引かれる
-// （＝段が少し縮み、間隔が広がる）。
-// 負値のときは CSS の gap プロパティが負値を受け付けないため、equal-fill（flex:1 1 0%）を
-// やめて段を内容の実サイズ（flex:0 0 auto）で詰め、段の間に負のマージンを入れて
-// 間隔そのものを狭める方式に切り替える（.score-area--tight-rows、App.css 参照）。
+// 正負を問わず単一の連続な方式で反映する: 段スロット高（ページの譜面領域÷段数）を
+// 基準に、この値をスロット高への加減として適用し（App.css の
+// `.score-area .system-stack > *` の flex-basis 計算式）、段の間には
+// margin-top（CSS の gap と異なり負値を受け付ける）でそのまま間隔を入れる。
+// そのため 0 をまたいでも別方式へ切り替わらず、段のY座標は値に対して単調・連続に変化する
+// （旧仕様は正負でレイアウト方式ごと切り替わっていた。詳細は
+// .claude/specs/page-layout-controls/design.md の追補参照）。
 // 段を上から詰めて並べるぶん、あまった高さはページ下部に残る（市販譜で行間を詰めると
 // 下が余るのと同じ考え方）。既定値 0 は従来どおり間隔なし。
 const SYSTEM_ROW_GAP_KEY = 'score-system-row-gap';
@@ -3749,7 +3750,7 @@ export default function ScorePage() {
                   )}
                 </header>
 
-                <div className={`score-area${systemRowGapPx < 0 ? ' score-area--tight-rows' : ''}`} style={{
+                <div className="score-area" style={{
                   '--score-stroke-width': displayWeight === 'thin' ? '0.8' : displayWeight === 'thick' ? '1.8' : '1.2',
                   '--score-text-weight': displayWeight === 'thin' ? '300' : displayWeight === 'thick' ? '700' : '400',
                   // 行グリッド: 全ページで「1段ぶんの高さ」を揃えるための比率。

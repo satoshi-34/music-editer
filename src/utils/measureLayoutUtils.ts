@@ -115,6 +115,39 @@ export function computeEnsembleAutoFitMultiplier(
   return Math.min(1, pageBudgetPx / systemHeightAt100Percent);
 }
 
+/**
+ * 段スロットの高さ(px)。App.css の `.score-area .system-stack > *` の
+ * flex-basis 計算式（`calc((100% - (page-capacity - 1) * system-row-gap) * page-slot-ratio)`）
+ * と同じ式（CSS 側を変更するときはこの関数も揃えること）。
+ *
+ * gapPx は「段の間隔」スライダーの値（-30〜30px）で、正負を問わず同じ式をそのまま使う。
+ * gapPx が大きいほどスロットは線形に縮み、0 前後で式が切り替わることはない。
+ */
+export function systemRowSlotHeightPx(
+  budgetPx: number,
+  systemsPerPage: number,
+  gapPx: number
+): number {
+  const n = Math.max(1, systemsPerPage);
+  return (budgetPx - (n - 1) * gapPx) / n;
+}
+
+/**
+ * 各段の上端Y座標(px)（.system-stack の上端を0とする）。
+ * 段は固定スロット高で並び、2段目以降は margin-top として gapPx を1つずつ積む
+ * （CSS の `.score-area .system-stack > * + * { margin-top: var(--system-row-gap) }` と対応）。
+ * margin は負値を許容するため、gapPx が負でも別方式に切り替わらず連続に詰まる。
+ */
+export function systemRowTopOffsetsPx(
+  budgetPx: number,
+  systemsPerPage: number,
+  gapPx: number
+): number[] {
+  const n = Math.max(1, systemsPerPage);
+  const slotHeight = systemRowSlotHeightPx(budgetPx, n, gapPx);
+  return Array.from({ length: n }, (_, i) => i * (slotHeight + gapPx));
+}
+
 /** 楽器名がある最悪ケースでも、Canvas の alloc と一致する小節本文の物理幅。 */
 export function worstCaseSystemContentBudget(sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM): number {
   const innerWidth = printScoreAreaWidthPx(sideMarginMm) - SYSTEM_PAGE_SIDE_PADDING * 2 - SYSTEM_MAX_LABEL_WIDTH;
