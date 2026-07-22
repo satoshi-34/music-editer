@@ -11,6 +11,8 @@ import {
   worstCaseSystemContentBudget,
   PRINT_SCORE_AREA_WIDTH_PX,
   DEFAULT_PAGE_SIDE_MARGIN_MM,
+  systemRowSlotHeightPx,
+  systemRowTopOffsetsPx,
 } from './measureLayoutUtils';
 
 describe('printScoreAreaWidthPx / worstCaseSystemContentBudget（ページ余白と本文幅の連動）', () => {
@@ -416,6 +418,52 @@ describe('measureMinimumContentWidth', () => {
       const withUndefined = planSystemMeasureRanges(Array.from({ length: 8 }, () => 52), 4, 550);
       const withEmpty = planSystemMeasureRanges(Array.from({ length: 8 }, () => 52), 4, 550, undefined, []);
       expect(withEmpty).toEqual(withUndefined);
+    });
+  });
+});
+
+describe('systemRowSlotHeightPx / systemRowTopOffsetsPx（段の間隔を単一の連続方式に統一）', () => {
+  const BUDGET_PX = 938;
+  const SYSTEMS_PER_PAGE = 5;
+  // Issue #37 の受入条件どおり、-30/-1/0/+1/+30 の代表値で検証する。
+  const GAPS = [-30, -1, 0, 1, 30];
+
+  it('既定値0のスロット高は「予算 ÷ 段数」の均等割で、旧仕様（flex:1 1 0%等分）と一致する', () => {
+    expect(systemRowSlotHeightPx(BUDGET_PX, SYSTEMS_PER_PAGE, 0)).toBeCloseTo(BUDGET_PX / SYSTEMS_PER_PAGE, 6);
+  });
+
+  it('スロット高は gap に対して単調減少・連続に変化し、0の前後で式が切り替わらない', () => {
+    const heights = GAPS.map((gap) => systemRowSlotHeightPx(BUDGET_PX, SYSTEMS_PER_PAGE, gap));
+    for (let i = 1; i < heights.length; i++) {
+      expect(heights[i]).toBeLessThan(heights[i - 1]);
+    }
+    // 線形式 (budget - (n-1)*gap)/n であることを直接確認し、0近傍で特別扱いがないことを検証する。
+    GAPS.forEach((gap) => {
+      const expected = (BUDGET_PX - (SYSTEMS_PER_PAGE - 1) * gap) / SYSTEMS_PER_PAGE;
+      expect(systemRowSlotHeightPx(BUDGET_PX, SYSTEMS_PER_PAGE, gap)).toBeCloseTo(expected, 6);
+    });
+  });
+
+  it('各段のY座標はgapに対して単調増加・連続に変化する（0前後で段配置が跳ばない）', () => {
+    const offsetsByGap = GAPS.map((gap) => systemRowTopOffsetsPx(BUDGET_PX, SYSTEMS_PER_PAGE, gap));
+
+    // 先頭の段（1段目）は常にページ上端（Y=0）で、gapの値に関わらず変わらない。
+    offsetsByGap.forEach((offsets) => expect(offsets[0]).toBe(0));
+
+    // 2段目以降の各段について、gapを増やすほどY座標も単調に増加する（連続・非負の傾き）。
+    for (let rowIndex = 1; rowIndex < SYSTEMS_PER_PAGE; rowIndex++) {
+      for (let i = 1; i < offsetsByGap.length; i++) {
+        expect(offsetsByGap[i][rowIndex]).toBeGreaterThan(offsetsByGap[i - 1][rowIndex]);
+      }
+    }
+  });
+
+  it('最終段の下端は常にページ予算いっぱいに一致する（gapの正負に関わらず段が予算を超えない）', () => {
+    GAPS.forEach((gap) => {
+      const offsets = systemRowTopOffsetsPx(BUDGET_PX, SYSTEMS_PER_PAGE, gap);
+      const slotHeight = systemRowSlotHeightPx(BUDGET_PX, SYSTEMS_PER_PAGE, gap);
+      const lastRowBottom = offsets[offsets.length - 1] + slotHeight;
+      expect(lastRowBottom).toBeCloseTo(BUDGET_PX, 6);
     });
   });
 });

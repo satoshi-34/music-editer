@@ -127,6 +127,36 @@ CSS の `gap` プロパティは負値を受け付けない（無効な宣言と
   - コンソールエラーなし。
   - 検証中に動かした値は、検証後にユーザーのテスト環境設定値（左右14mm・上9mm・下8mm・段の間隔−20px・音符115%・ズーム150%）へ戻した。
 
+## 追補: 「段の間隔をマイナス方向にも調整できるようにする」を単一の連続方式へ統一（廃止と置き換え、2026-07-23）
+
+**上の「追補: 段の間隔をマイナス方向にも調整できるようにする」（`.score-area--tight-rows` による二方式切り替え）は本追補により廃止する。** 以下がこの機能の現行の正本設計であり、旧追補の記述（`score-area--tight-rows` クラス・別方式への切り替え）はもはや実装に存在しない。
+
+### 問題（Issue #37）
+
+第一原則「まず自動で良い配置、微調整はユーザー」に反し、「段の間隔」スライダーは正値では「行グリッド等分＋gap」、負値では「実サイズ＋負マージン（`.score-area--tight-rows`）」という全く別のレイアウト方式に切り替わっていた。0をまたぐ瞬間に段配置が跳び、ユーザーは「ちょうどいい間隔」を連続的に作れなかった。
+
+### 修正設計
+
+- 正のときに使っていた「段スロット高＝ページの譜面領域 ÷ 段数（`--page-capacity`）」という考え方をそのまま正負共通の基準にする。`.score-area .system-stack > *` の flex-basis は常に `calc((100% - (page-capacity - 1) * system-row-gap) * page-slot-ratio)` とし、`max(0px, ...)` によるクランプを廃止して `system-row-gap` を符号そのまま使う。
+  - この式は「段の高さ×段数＋間隔×(段数-1) ＝ 予算」を常に満たすよう作られているため（等分の取り分から `(N-1)*gap` ぶんを差し引く）、gapが負でも代数的には破綻しない。破綻していたのは、間隔そのものを実現する手段としてCSSの `gap` プロパティ（負値を受け付けない）を使っていた点だけだった。
+- 間隔の実現方法を `gap` プロパティから `margin-top`（`.score-area .system-stack > * + * { margin-top: var(--system-row-gap, 0px); }`）に変更した。`margin` は負値を許容するため、スロット高の計算式とあわせて正負とも同じCSS・同じ方式で連続に動作する。`.score-area--tight-rows` クラスの付与（`ScorePage.tsx`）と、それに紐づく3つのCSSルール（`gap:0` / `flex:0 0 auto` / `margin-top`）はすべて削除した。
+- `measureLayoutUtils.ts` に、上記CSS式のJS版として `systemRowSlotHeightPx(budgetPx, systemsPerPage, gapPx)` と `systemRowTopOffsetsPx(budgetPx, systemsPerPage, gapPx)` を追加した。jsdom はflexboxレイアウトを実際には計算しないため、DOM実測でのユニットテストが行えない代わりに、CSSの計算式と同じ式をJSで再実装し、gapの単調性・連続性を数式レベルで検証できるようにした（CSS側の式を変更する際は、この関数もあわせて更新すること。両者は関数のdocコメントで相互参照している）。
+- 最終ページ（`.print-final-page` / `.print-final-page-single`）は元々 `flex: 0 0 auto !important` + `justify-content: space-between/flex-start` で「実サイズ＋詰め配置」を強制しており、`gap` と `margin-top` はどちらも flexbox の主軸方向に同じように追加スペースとして働くため、`gap` から `margin-top` への切り替えは最終ページの見た目に影響しない（正値のときの間隔の見え方は従来と変わらない）。
+
+### 検証結果
+
+- `docker exec -w <worktree> music-editer-dev npx vitest --run src`: 88ファイル1036テスト全緑（`measureLayoutUtils.test.ts` に段スロット高・段Y座標の単調性・連続性を検証するテストを4件追加。既存テストは変更なしで全緑）。
+- `docker exec -w <worktree> music-editer-dev npm run lint`: 355件のエラー（プロジェクト既存分、今回変更したファイルに起因するものなし。lintのエラー総数はこの変更前のベースラインと完全に一致することを確認）。
+- `docker exec -w <worktree> music-editer-dev npm run build`: `tsc -b && vite build` エラーなし。
+- **ブラウザ実測は今回未実施**（夜間無人実行のため、共有 devcontainer 上で既に別セッションが使用中の dev サーバー・ポートに干渉しないことを優先した判断）。上記のユニットテストによる数式レベルの検証（段スロット高・Y座標がgapの値に対して線形かつ単調に変化し、0前後で式が切り替わらないこと、最終段の下端が常にページ予算に一致すること）と、CSSの代数的な整合性の確認により正しさを担保しているが、実際のブラウザでの見た目確認は次回人間によるレビュー時に行うことを推奨する。
+
+### 影響範囲（追補）
+
+- `src/App.css`: `.score-area .system-stack > *` の flex-basis から `max(0px, ...)` クランプを除去、`.score-area .system-stack > * + * { margin-top: ... }` を追加、`.score-area--tight-rows` 配下の3ルールを削除。
+- `src/components/ScorePage.tsx`: `.score-area` への `score-area--tight-rows` クラス付与を削除（常に `"score-area"` 固定）。
+- `src/utils/measureLayoutUtils.ts`: `systemRowSlotHeightPx` / `systemRowTopOffsetsPx` を追加。
+- `src/utils/measureLayoutUtils.test.ts`: 上記2関数の単調性・連続性・予算充足を検証するテストを追加。
+
 ## 追補: 段ごとに個別の間隔（上の段との距離）を調整できるようにする（2026-07-21）
 
 ### 問題

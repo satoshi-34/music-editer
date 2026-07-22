@@ -972,37 +972,24 @@ button.ghost.active:hover:not(:disabled) {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* その他タブの「段の間隔」スライダー（-30〜30px）。既定 0px は従来どおり間隔なし。
-     0以上のときだけこの gap を使う。flex:1 1 0% の等分配置はそのままに、
-     gap ぶんだけ各段の取り分が減る形で間隔が生まれる
-     （ScorePage.tsx 側で maxSystemsPerPage もこの値と連動して増減する）。
-     負値のときは CSS の gap が負値を受け付けないため、下の
-     .score-area--tight-rows 側のルールで別方式（flex:0 0 auto + 負のマージン）に切り替える。 */
-  gap: max(0px, var(--system-row-gap, 0px));
 }
 .score-area .system-stack > * {
-  /* 段スロットの高さは「ページの譜面領域 ÷ 段数上限（--page-capacity）」に固定する。
+  /* 段スロットの高さは「ページの譜面領域 ÷ 段数上限（--page-capacity）」を基準に、
+     その他タブの「段の間隔」スライダー（-30〜30px、既定0）を連続的な加減として適用する。
      以前は flex:1 1 0%（残り高さの均等割）だったため、内容のある段がページの段数上限より
      少ない最終ページ等で、少ない段がページ全体へ間延びして散らばっていた
      （単旋律で3段が1ページに大きな間隔で広がる・編成譜の下に巨大な余白が残る症状）。
      スロット高を固定すれば、満杯のページは従来と同じ均等配置のまま、
      足りないページは市販譜の最終ページのように上から詰まり、余りは下の余白になる。
-     正のgap（段の間隔スライダー）は (段数-1) 箇所に入るぶんを差し引いて等分する。 */
-  flex: 0 0 calc((100% - (var(--page-capacity, 1) - 1) * max(0px, var(--system-row-gap, 0px))) * var(--page-slot-ratio, 1));
+     gap は (段数-1) 箇所に入るぶんを差し引いて等分する。CSS の gap プロパティは
+     負値を受け付けないため、間隔そのものは下の margin-top（* + * セレクタ）で入れる。
+     これにより正負を問わず同じ式・同じレイアウト方式（flex:0 0 <固定スロット高> +
+     margin-top）で連続に変化し、0をまたいでも段配置が跳ばない
+     （詳細は .claude/specs/page-layout-controls/design.md の追補参照）。 */
+  flex: 0 0 calc((100% - (var(--page-capacity, 1) - 1) * var(--system-row-gap, 0px)) * var(--page-slot-ratio, 1));
   min-height: 0;
 }
-/* 「段の間隔」スライダーが負値のとき（.score-area--tight-rows）は CSS の gap プロパティが
-   負値を受け付けられないため、equal-fill（flex:1 1 0% で残り高さを均等配分）をやめて、
-   段を内容の実サイズ（flex:0 0 auto）のまま上から詰めて並べ、段の間には負のマージンで
-   間隔そのものを狭める。段を伸縮させないぶん、あまった高さは system-stack の下部に
-   自動的に残る（市販譜で行間を詰めると下側が余るのと同じ考え方）。 */
-.score-area--tight-rows .system-stack {
-  gap: 0;
-}
-.score-area--tight-rows .system-stack > * {
-  flex: 0 0 auto;
-}
-.score-area--tight-rows .system-stack > * + * {
+.score-area .system-stack > * + * {
   margin-top: var(--system-row-gap, 0px);
 }
 
