@@ -1458,6 +1458,9 @@ export default function PianoSystemCanvas({
     // リハーサルマークと同じ「最上段基準」の方針だが、StaffCanvas の既存レイアウトに合わせ
     // リハーサルマークより下（五線上端の36px上）に置くことで重ならないようにする。
     const bpmMarkingEntries: Array<{ x: number; topY: number; bpm: number }> = [];
+    // 小節番号（通し番号）の描画情報を収集する。段の先頭小節・最上段（pi===0）の左上にだけ表示する。
+    // 曲頭の小節（絶対インデックス0）には出さない浄書慣習のため、push 側で startMeasureIndex!==0 を条件にする。
+    const measureNumberEntries: Array<{ x: number; topY: number; number: number }> = [];
     // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
     // stave も持たせておくのは、down→up の破線ブリッジが段またぎになるかどうかを
     // 松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため。
@@ -1865,6 +1868,15 @@ export default function PianoSystemCanvas({
             x: x / s,
             topY: stave.getYForLine(0),
             bpm: sharedMeasure.bpm,
+          });
+        }
+        // 小節番号: 段の先頭小節（i===0）・最上段（pi===0）にだけ、絶対小節番号を表示する。
+        // 曲頭（絶対インデックス0）は慣習として番号を出さない。
+        if (pi === 0 && i === 0 && startMeasureIndex !== 0) {
+          measureNumberEntries.push({
+            x: x / s,
+            topY: stave.getYForLine(0),
+            number: startMeasureIndex + 1,
           });
         }
       });
@@ -3673,6 +3685,21 @@ export default function PianoSystemCanvas({
       el.setAttribute('font-family', 'sans-serif');
       el.setAttribute('font-size', '12');
       el.setAttribute('font-weight', 'bold');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+    });
+
+    // ── 小節番号（通し番号）を一括描画。段の先頭小節・最上段の五線左上に小さく表示する ──
+    // 略称パート名（showInstrumentLabels のテキスト）と同程度のフォントサイズ・黒色にする。
+    measureNumberEntries.forEach(({ x, topY, number }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = String(number);
+      el.setAttribute('x', String(x));
+      el.setAttribute('y', String(topY - 6));
+      el.setAttribute('text-anchor', 'start');
+      el.setAttribute('fill', '#111827');
+      el.setAttribute('font-family', 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif');
+      el.setAttribute('font-size', '11');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });
