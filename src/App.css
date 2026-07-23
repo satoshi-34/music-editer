@@ -1377,15 +1377,19 @@ button.ghost.active:hover:not(:disabled) {
 /* ページの境界がひと目で分かるよう、ページ同士の間隔を広げてはっきり区切る */
 .print-preview .spread { gap: 32px 40px; }
 
-/* 画面表示でも、最終ページの可視段が1段だけのときは上揃えにする。
+/* 画面表示でも、最終ページに「実際に表示される段」が1段だけのときは上揃えにする。
    通常ページのグリッド配置（flex-grow 等分）だと1段だけのページでは段が
    縦中央へ浮いてしまい、楽譜として不自然なため（印刷側の上記ルールと同じ考え方）。
-   行グリッドを無効化し、段の実サイズ＋ justify-content で上揃えにする。 */
-.print-final-page-single .system-stack {
+   行グリッドを無効化し、段の実サイズ＋ justify-content で上揃えにする。
+   注意: セレクタは印刷用の .print-final-page-single（「内容のある段」が1段。
+   空の譜面では表示段が複数あっても1になる）ではなく、画面表示の段数で判定する
+   .screen-final-page-single（ScorePage.tsx）を使う。印刷用クラスを画面にも
+   使っていたときは、空の譜面で全段が上詰めになり段間隔が潰れるバグがあった。 */
+.screen-final-page-single .system-stack {
   flex: 1 1 0% !important;
   justify-content: flex-start;
 }
-.print-final-page-single .system-stack > * {
+.screen-final-page-single .system-stack > * {
   flex: 0 0 auto !important;
 }
 

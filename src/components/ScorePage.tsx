@@ -2725,6 +2725,20 @@ export default function ScorePage() {
     getPageSystemsCapacity(finalContentPageIndex),
     printContentSystems - getPageSystemOffset(finalContentPageIndex)
   ));
+  // 画面表示用の「最終ページ・1段だけ」判定。印刷用（上のfinalContentPageVisibleSystems）は
+  // 「内容のある段」だけを数えるため、空の譜面や「＋小節を追加」で出した空段が
+  // 画面に複数表示されていても1になってしまい、画面の全段が1段用の上詰めレイアウト
+  // （.screen-final-page-single）に落ちて段間隔が潰れるバグがあった。
+  // 画面側は「そのページに実際に表示される段数」（バッファの空段を含む
+  // effectiveTotalSystems 基準）で判定する。
+  const screenFinalPageIndex = useMemo(
+    () => findPageIndexForSystem(effectiveTotalSystems - 1, pageSystemLayoutOptions),
+    [effectiveTotalSystems, pageSystemLayoutOptions]
+  );
+  const screenFinalPageVisibleSystems = Math.max(0, Math.min(
+    getPageSystemsCapacity(screenFinalPageIndex),
+    effectiveTotalSystems - getPageSystemOffset(screenFinalPageIndex)
+  ));
   const pages: PageSpec[] = useMemo(() => {
     const result: PageSpec[] = [];
     let offset = 0;
@@ -3880,7 +3894,7 @@ export default function ScorePage() {
               {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
               {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}
               <section
-                className={`print-page${printContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}`}
+                className={`print-page${printContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}${i === screenFinalPageIndex && screenFinalPageVisibleSystems === 1 ? ' screen-final-page-single' : ''}`}
                 style={{
                   // ページ余白（左右・上・下）。正本はこの3値のみで、App.css 側は
                   // var(--page-margin-*) を padding へそのまま渡すだけにしてある
