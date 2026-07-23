@@ -907,6 +907,43 @@ synth.triggerAttackRelease(toneKeys, duration, time, velocity);
 - 休符選択後の `↑/↓` 移動が見た目とずれないこと
 - 2 voice で `alignRests` による重なり回避が崩れないこと
 
+## 追記: 単声部の休符の既定位置を標準浄書位置へ戻す修正（Issue #51）
+
+### 問題
+
+- 上記「既定休符位置を五線の第二線へそろえる修正」で導入した「下から2本目の線」は、
+  実際には標準の浄書ルールと異なっていた（運用者の実機報告）
+- 標準では、全休符は第4線（上から2本目の線）からぶら下げ、
+  2分休符以下は五線中央に置くのが正しく、全休符とそれ以外で基準線が異なる
+- 従来の `defaultRestDisplayKey(clef)` は音価を区別せず、単声部のすべての休符に
+  同じ既定位置（五線中央 line 2）を使っていたため、全休符だけ標準位置からずれていた
+
+### 修正
+
+- `src/components/clefUtils.ts` に `wholeRestDisplayKey(clef)`（第4線 = line 1）と、
+  音価で振り分ける `defaultRestDisplayKeyForDuration(clef, duration)` を追加した
+  （`duration === '1'` のときだけ `wholeRestDisplayKey`、それ以外は従来の `defaultRestDisplayKey`）
+- 単声部の休符を生成しているすべての箇所（新規配置・自動休符補完
+  `fillPriorMeasureRests`/`buildRestEventsForBeats`・表示用パディング休符
+  `computeVoiceDisplayPadding`/`buildTrailingRestEventsForBeats`・空小節の見た目休符
+  プレースホルダー・デモ譜面 `demoScores.ts`）を `defaultRestDisplayKeyForDuration` 経由に変更した
+- `computeVoiceDisplayPadding`/`buildTrailingRestEventsForBeats`（`voiceMeasureUtils.ts`）は、
+  固定の休符キー文字列ではなく `(duration) => string` のコールバックを受け取る形に変更し、
+  貪欲分割で生成される休符ごとに音価に応じたキーを選べるようにした
+- `PianoSystemCanvas.tsx` の `makeVFNote` では、保存データの休符キーが
+  「音価によらない旧既定位置（五線中央）」のままであれば、描画時に音価に応じた
+  標準位置へ自動的に引き上げる自己修復ロジックにした。ユーザーが実際に位置を
+  カスタマイズした休符（旧既定位置と一致しないキー）はそのまま尊重する
+- 2声部共存小節の休符の上下振り分け（`restKeyForVoice` / `restDisplayLineForVoice`）は
+  今回のスコープ外とし、変更していない
+
+### 確認ポイント
+
+- 単旋律・ピアノ・弦楽四重奏・編成譜の単声部小節で、全休符/2分休符/4分休符が標準位置に表示されること
+- 2声部共存小節の休符の上下振り分けが従来どおりであること
+- 旧既定位置（五線中央）で保存済みの全休符が、再読込・再描画時に自動で正しい位置へ上がること
+- `npx vitest --run src` / lint / build が成功すること
+
 ## 追記: 保存後に読込ボタンが有効化されない問題
 
 ### 問題

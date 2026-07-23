@@ -227,7 +227,10 @@ const GREEDY_REST_DURATIONS: Array<{ dur: NoteEvent['dur']; beats: number }> = [
  * 例: 1.5拍 → 付点は使わず「4分休符 + 8分休符」のように大きい音価から埋める
  * （付点休符への分割は複雑になるため、今回はシンプルな貪欲分割にとどめる）。
  */
-export function buildTrailingRestEventsForBeats(beats: number, restKey: string): NoteEvent[] {
+export function buildTrailingRestEventsForBeats(
+  beats: number,
+  restKeyForDuration: (duration: NoteEvent['dur']) => string
+): NoteEvent[] {
   const rests: NoteEvent[] = [];
   let remaining = beats;
   // 無限ループ防止（理論上は64分音符まで使えば十分収束する）。
@@ -236,7 +239,7 @@ export function buildTrailingRestEventsForBeats(beats: number, restKey: string):
     guard += 1;
     const candidate = GREEDY_REST_DURATIONS.find((d) => d.beats <= remaining + 0.0001);
     if (!candidate) break;
-    rests.push({ dur: candidate.dur, isRest: true, keys: [restKey] });
+    rests.push({ dur: candidate.dur, isRest: true, keys: [restKeyForDuration(candidate.dur)] });
     remaining -= candidate.beats;
   }
   return rests;
@@ -255,14 +258,14 @@ export function buildTrailingRestEventsForBeats(beats: number, restKey: string):
 export function computeVoiceDisplayPadding(
   events: NoteEvent[],
   totalBeats: number,
-  restKey: string,
+  restKeyForDuration: (duration: NoteEvent['dur']) => string,
 ): NoteEvent[] {
   const occupiedBeats = events.reduce((sum, event) => sum + getEventDurationBeats(event), 0);
   const remainingBeats = totalBeats - occupiedBeats;
   if (remainingBeats <= 0.0001) {
     return [];
   }
-  return buildTrailingRestEventsForBeats(remainingBeats, restKey);
+  return buildTrailingRestEventsForBeats(remainingBeats, restKeyForDuration);
 }
 
 export function getMeasureDurationBeats(measure: MeasureData): number {

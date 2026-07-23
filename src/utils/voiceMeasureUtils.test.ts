@@ -305,9 +305,14 @@ describe('voiceMeasureUtils', () => {
   });
 
   describe('computeVoiceDisplayPadding（多声小節で拍が余った声部への表示用休符補完）', () => {
+    // このスイート全体では「どの音価にも同じキーを返す」固定コールバックを使い、
+    // 貪欲分割そのもののロジックを検証する。音価ごとのキー選択の検証は
+    // defaultRestDisplayKeyForDuration との組み合わせテスト（下記）で行う。
+    const fixedRestKey = () => 'b/4';
+
     it('4/4で下声が2拍しか埋まっていないとき、残り2拍ぶんの休符を補完する', () => {
       const events = [{ dur: '2' as const, isRest: false, keys: ['c/4'] }];
-      const padding = computeVoiceDisplayPadding(events, 4, 'b/4');
+      const padding = computeVoiceDisplayPadding(events, 4, fixedRestKey);
       expect(padding).toEqual([{ dur: '2', isRest: true, keys: ['b/4'] }]);
     });
 
@@ -316,22 +321,22 @@ describe('voiceMeasureUtils', () => {
         { dur: '2' as const, isRest: false, keys: ['c/4'] },
         { dur: '2' as const, isRest: false, keys: ['e/4'] },
       ];
-      expect(computeVoiceDisplayPadding(events, 4, 'b/4')).toEqual([]);
+      expect(computeVoiceDisplayPadding(events, 4, fixedRestKey)).toEqual([]);
     });
 
     it('声部が拍子をオーバーしているときも補完しない（マイナスの休符を作らない）', () => {
       const events = [{ dur: '1' as const, isRest: false, keys: ['c/4'] }];
-      expect(computeVoiceDisplayPadding(events, 3, 'b/4')).toEqual([]);
+      expect(computeVoiceDisplayPadding(events, 3, fixedRestKey)).toEqual([]);
     });
 
     it('声部がまったく空のとき、拍子ぶん全部を休符で埋める（大きい音価から貪欲に分割）', () => {
-      const padding = computeVoiceDisplayPadding([], 4, 'd/5');
+      const padding = computeVoiceDisplayPadding([], 4, () => 'd/5');
       expect(padding).toEqual([{ dur: '1', isRest: true, keys: ['d/5'] }]);
     });
 
     it('半端な拍数（1.5拍）は大きい音価から貪欲に分割する（4分休符+8分休符）', () => {
       const events = [{ dur: '2' as const, isRest: false, keys: ['c/4'], dots: 1 as const }]; // 3拍
-      const padding = computeVoiceDisplayPadding(events, 4.5, 'b/4');
+      const padding = computeVoiceDisplayPadding(events, 4.5, fixedRestKey);
       expect(padding).toEqual([
         { dur: '4', isRest: true, keys: ['b/4'] },
         { dur: '8', isRest: true, keys: ['b/4'] },
@@ -340,7 +345,7 @@ describe('voiceMeasureUtils', () => {
 
     it('付点で埋まった声部（3拍）に残り1拍を4分休符で補完する', () => {
       const events = [{ dur: '2' as const, isRest: false, keys: ['c/4'], dots: 1 as const }]; // 3拍
-      const padding = computeVoiceDisplayPadding(events, 4, 'b/4');
+      const padding = computeVoiceDisplayPadding(events, 4, fixedRestKey);
       expect(padding).toEqual([{ dur: '4', isRest: true, keys: ['b/4'] }]);
     });
 
@@ -351,11 +356,26 @@ describe('voiceMeasureUtils', () => {
         { dur: '8' as const, isRest: false, keys: ['d/4'], tuplet: { numNotes: 3, notesOccupied: 2 } },
         { dur: '8' as const, isRest: false, keys: ['e/4'], tuplet: { numNotes: 3, notesOccupied: 2 } },
       ];
-      const padding = computeVoiceDisplayPadding(events, 4, 'b/4');
+      const padding = computeVoiceDisplayPadding(events, 4, fixedRestKey);
       expect(padding).toEqual([
         { dur: '2', isRest: true, keys: ['b/4'] },
         { dur: '4', isRest: true, keys: ['b/4'] },
       ]);
+    });
+
+    it('音価ごとに異なるキーを返すコールバックを渡すと、休符ごとに個別のキーが使われる（全休符だけ標準位置が異なる実運用を想定）', () => {
+      // 実運用では defaultRestDisplayKeyForDuration(clef, duration) を渡し、
+      // 全休符だけ 'd/5'（第4線）、それ以外は 'b/4'（五線中央）になる。
+      const restKeyForDuration = (duration: string) => (duration === '1' ? 'd/5' : 'b/4');
+      const padding = computeVoiceDisplayPadding([], 4, restKeyForDuration);
+      expect(padding).toEqual([{ dur: '1', isRest: true, keys: ['d/5'] }]);
+
+      const partialPadding = computeVoiceDisplayPadding(
+        [{ dur: '2' as const, isRest: false, keys: ['c/4'] }],
+        4,
+        restKeyForDuration
+      );
+      expect(partialPadding).toEqual([{ dur: '2', isRest: true, keys: ['b/4'] }]);
     });
   });
 });

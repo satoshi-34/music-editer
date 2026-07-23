@@ -107,6 +107,22 @@ export function defaultRestDisplayKey(clef: ClefType): string {
   return lineToKey(clef, DEFAULT_REST_DISPLAY_LINE);
 }
 
+// 全休符は標準の浄書では「第4線からぶら下げる」位置になり、2分休符以下の
+// 「五線中央に置く」位置とは異なる（SMuFLの休符グリフはこの前提で設計されている）。
+const WHOLE_REST_DISPLAY_LINE = 1;
+
+export function wholeRestDisplayKey(clef: ClefType): string {
+  return lineToKey(clef, WHOLE_REST_DISPLAY_LINE);
+}
+
+/**
+ * duration に応じた単声部の既定休符位置を返す。
+ * 全休符（duration === '1'）だけ標準位置が異なるため、ここで振り分ける。
+ */
+export function defaultRestDisplayKeyForDuration(clef: ClefType, duration: string): string {
+  return duration === '1' ? wholeRestDisplayKey(clef) : defaultRestDisplayKey(clef);
+}
+
 // 2声部が共存する小節では、休符も声部1(上声)/声部2(下声)で重なってしまうため、
 // それぞれ五線の中央（DEFAULT_REST_DISPLAY_LINE）から上下にずらして避ける。
 // line は数値が小さいほど五線の上（高い位置）になる（lineToKeyTreble 等の実装を参照）。
