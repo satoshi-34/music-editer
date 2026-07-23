@@ -1118,3 +1118,41 @@ SingleStaff / PianoStaff などは「1段 = 1つの PianoSystemCanvas」を並�
 - 単旋律譜で段をまたいで音符を選択し直しても、選択マーカーが常に1つだけ表示されること
 - 最後に選択した音符が ArrowUp/ArrowDown で正しく動き、他の段の音符が勝手に動かないこと
 - ピアノ大譜表・四重奏・編成譜（同じ構造）でも同様に選択が一意になること
+
+## 選択・ホバー系の矩形が条件により黒塗りになる問題（2026-07-24, Issue #50）
+
+### 問題
+
+ピアノ譜で音符付近に、青枠＋黒塗りの大きな矩形が表示されることがある（音符にカーソルを合わせる/外すの操作に伴い発生）。過去にも一度発生し、その後の変更で解消したように見えたが再発した。
+
+### 原因
+
+`PianoSystemCanvas.tsx` が `document.createElementNS` で動的生成する rect のうち、以下の3つは**fill/stroke属性を持たずCSSクラスに依存**していた。
+
+- `sr`（`.vf-note-selected`。音符選択時の青枠。今回の黒塗りバグの実体）
+- `guideChordRect`（`.vf-guide-chord`。和音追加ゾーンの縦ストライプ）
+- `keySignatureDebugRect`（`.vf-key-signature-debug`。調号クリック領域の確認用表示）
+
+SVGのfill既定値は黒のため、CSSが適用されない・他ルール（印刷インク統一の `.print-page svg rect:not([fill="none"])` 系など）に負ける・クラス名の変更漏れ等、どれか一つでも起きると黒い矩形として現れる。発生条件が環境依存で再現が不安定なのはこのため。
+
+同種の当たり判定rect（`ir`=`.vf-hit`、`hit`=`.vf-note-hit`、演奏記号の `symbol-hit-region`、リハーサルマーク枠）は既に明示fill/strokeを持っており対象外。
+
+### 修正設計
+
+上記3つのrectに、CSSの値と同じ値を属性としても明示する（CSSは残したまま、属性だけでも正しい見た目になることを保証する）。
+
+- `sr`: `fill="none"` `stroke="#1d4ed8"` `stroke-width="2"`
+- `guideChordRect`: `fill="rgba(99, 153, 255, 0.18)"` `stroke="rgba(70, 130, 220, 0.55)"` `stroke-width="1.5"`
+- `keySignatureDebugRect`: `fill="rgba(245, 158, 11, 0.16)"` `stroke="rgba(180, 83, 9, 0.55)"` `stroke-width="1.2"` `rx="3"` `ry="3"`
+
+印刷インク統一CSS（`.print-page svg rect:not([fill="none"])` 系）は class 名（`.vf-hit` / `.vf-note-hit` / `.vf-note-selected` / `.vf-key-signature-debug`）で除外しており、fill属性の値そのものでは判定していないため、属性を追加しても印刷時の除外ロジックには影響しない。`vf-guide-chord` はこの除外リストに元々含まれていないが、`display:none` が既定でJS操作時のみ一時的に表示される要素であり、静的な印刷スナップショットには現れないため影響なし。
+
+### 影響範囲
+
+- `src/components/PianoSystemCanvas.tsx`（3箇所のrect生成に明示fill/stroke属性を追加）
+
+### 確認ポイント
+
+- `createElementNS(...,'rect')` の全7箇所（`hit`=symbol-hit-region、`guideChordRect`、`ir`=vf-hit、`keySignatureDebugRect`、`hit`=vf-note-hit、`sr`=vf-note-selected、リハーサルマーク枠）のうち、修正前からfill未設定だったのはこの3箇所のみであることをgrepで確認済み
+- ブラウザで音符を選択し、DOM上で `rect.vf-note-selected` の `fill` 属性が `none`、`stroke` が `#1d4ed8` になっていること（computed styleも一致）を確認
+- 印刷プレビューで黒塗りの矩形が出ないこと（新規譜面に音符を1つ配置した状態で確認。表示された黒塗りrectは全て正当なもの＝小節線・符幹・符頭で、想定外の大きな黒矩形は無し）

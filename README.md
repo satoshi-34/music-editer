@@ -455,6 +455,10 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 - 以前は段を移って選択しても他の段の選択が残り、矢印キー1回に複数インスタンスが同時反応して、それぞれが「自分のコピー」を `onChange` で親へ送るため、最後に通知したインスタンス以外の変更（＝いまクリックした音符の音高変更）が上書きで消える不具合があった（単旋律譜で「選択はできるのに矢印が効かない」症状）。
 - 対策として、選択（音符・スラー/タイ・松葉）を作ったインスタンスが `pianosystemcanvas-selection-claimed` という window CustomEvent を発行し、他のインスタンスは自分の選択を解除する。これで keydown に反応するインスタンスは常に1つになる（回帰テスト: `SingleStaffArrowKeyEdit.test.tsx`）。
 
+### 3.6 動的生成rectの明示fill（黒塗りバグの根絶、Issue #50）
+- `PianoSystemCanvas.tsx` が `createElementNS` で動的生成する rect（選択枠 `.vf-note-selected`、和音追加ゾーン `.vf-guide-chord`、調号クリック確認用 `.vf-key-signature-debug` など）は、以前は一部がCSSクラスの `fill`/`stroke` だけに依存していた。SVGの `fill` 既定値は黒のため、CSSが未適用・他ルールに負ける等が起きると青枠のはずの選択枠が黒塗りの矩形として表示される不具合があった（環境依存で再現が不安定）。
+- 対策として、該当rectにCSSと同じ値を属性としても明示するようにした（CSSは残したまま、属性だけでも正しい見た目を保証する）。印刷インク統一CSS（`.print-page svg rect:not([fill="none"])` 系）はクラス名で対象を除外しているため、属性追加による印刷時の見た目への影響はない。詳細は `.claude/specs/bug-fixes/design.md` 参照。
+
 ### 4. 小節幅の自動割り付け
 - `measureMinimumContentWidth` で小節ごとの最低幅を計算し、全・二分を含む小節は下限幅を広めに確保。
 - 16 分や 32 分が並ぶ小節は最低幅の合計で先に改段判定するため、符頭やビームが重なりにくい。
