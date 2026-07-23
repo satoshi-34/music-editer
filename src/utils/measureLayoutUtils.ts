@@ -86,11 +86,62 @@ export const ENSEMBLE_SYSTEM_OVERHEAD_PX = 16;
 /**
  * 編成譜の「音符の大きさ100%」時・1段あたりの想定高さ（px）をパート数から計算する。
  * ScorePage.tsx の maxSystemsPerPage 計算・自動縮小判定の両方から参照する正本。
+ *
+ * この見積もり式は「段あたり81px」という一次関数で、旧パート間隔（80）を基準に
+ * 校正されたもの。PianoSystemCanvas.tsx 側の実際のパート間隔（staveSpacingForPartCount）が
+ * 変わっても自動では追従しないため、maxSystemsPerPage（何段まで許すかの上限）には
+ * 使わない。用途は recommendedSystemsPerPage（初期表示の推奨段数）の見積もりに限定し、
+ * 実際にページへ収まるかどうかの正確な判定は measuredSystemHeightPx()（実際の描画
+ * レイアウト計算 computeLayout() を経由した実測値）で行う
+ * （.claude/specs/page-layout-controls/design.md M-2 追補参照）。
  */
 export function estimateEnsembleSystemHeightPx(partCount: number): number {
   const safeCount = Math.max(1, Math.floor(partCount));
   return ENSEMBLE_PART_HEIGHT_PX * safeCount + ENSEMBLE_SYSTEM_OVERHEAD_PX;
 }
+
+// ===== ここから段のレイアウト計算（元 PianoSystemCanvas.tsx から移設） =====
+// 1システム（段）のY方向レイアウトは、以前は PianoSystemCanvas.tsx に閉じていたが、
+// ScorePage.tsx 側の maxSystemsPerPage（段数/ページの上限）が「実測」を正とするには
+// 同じ計算式を共有する必要があるため、ここ（レイアウト計算の正本を集約する
+// measureLayoutUtils.ts）に移設した。PianoSystemCanvas.tsx はここから import し直し、
+// 既存のテスト（PianoSystemCanvasPartSpacing.test.tsx）が壊れないよう同名で re-export する。
+const FIRST_STAVE_Y = 20;
+// 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏（4パート以下）は見た目を変えないよう
+// 従来値の80を維持する。編成譜（5パート以上）は市販オーケストラスコア並みの紙面効率にするため、
+// 詰めた値を使う（Issue #29）。VexFlow の五線は line0〜line4 の4間隔＝40ネイティブ単位の高さなので、
+// 60 にすると隣接パートとの間の余白が20単位（加線2本ぶん）残り、音符と衝突しない。
+const STAVE_SPACING = 80; // 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏用
+const STAVE_SPACING_ENSEMBLE = 60; // 5パート以上の編成譜用（密な既定値）
+const ENSEMBLE_DENSE_SPACING_MIN_PARTS = 5;
+// テスト（PianoSystemCanvasPartSpacing.test.tsx）から直接検証できるよう export する。
+export function staveSpacingForPartCount(n: number): number {
+  return n >= ENSEMBLE_DENSE_SPACING_MIN_PARTS ? STAVE_SPACING_ENSEMBLE : STAVE_SPACING;
+}
+export function computeLayout(n: number): { staveYs: number[]; sysH: number; staveSpacing: number } {
+  const staveSpacing = staveSpacingForPartCount(n);
+  const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * staveSpacing);
+  const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20;
+  return { staveYs, sysH, staveSpacing };
+}
+
+/**
+ * 1段の実際の高さ（px）を、PianoSystemCanvas.tsx が実際に描画へ使う寸法計算
+ * （computeLayout の sysH）から正確に換算する。「音符の大きさ100%」時の値を返す
+ * （notationSizeMultiplier・ensembleAutoFitMultiplier は呼び出し側で乗じること）。
+ *
+ * sysH は VexFlow の論理座標（ctx.scale 適用前）での高さで、実際の描画は
+ * PianoSystemCanvas.tsx が `renderer.resize(W, sysH * scale)` で SCORE_LAYOUT_RENDER_SCALE
+ * 倍してから使う（PianoSystemCanvas.tsx の該当コメント参照）。maxSystemsPerPage 側でも
+ * 同じ倍率を掛けることで、実際に画面・印刷に描かれるSVGの高さと一致した見積もりになる
+ * （旧 estimateEnsembleSystemHeightPx はパート間隔の変更に追従しない固定係数だったため、
+ * 段数/ページの上限が実際より厳しく頭打ちされる不具合の原因になっていた。Issue #38）。
+ */
+export function measuredSystemHeightPx(partCount: number): number {
+  const safeCount = Math.max(1, Math.floor(partCount));
+  return computeLayout(safeCount).sysH * SCORE_LAYOUT_RENDER_SCALE;
+}
+// ===== ここまで段のレイアウト計算 =====
 
 /**
  * 「1段の実際の高さが常にページ内に収まる」ことを保証するための自動縮小倍率を求める。

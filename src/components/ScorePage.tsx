@@ -79,6 +79,7 @@ import {
   planSystemMeasureRanges,
   estimateEnsembleSystemHeightPx,
   computeEnsembleAutoFitMultiplier,
+  measuredSystemHeightPx,
   type SystemMeasureRange,
   type MeasureLayoutPartContext,
 } from '../utils/measureLayoutUtils';
@@ -2279,18 +2280,31 @@ export default function ScorePage() {
 
   const totalSystems = 12;
   const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
-  // 1ページ（A4 実寸 297mm ≒ 1123px）に収まる段数。
-  // 「音符の大きさ」スライダーで音符・五線が拡大されると1段あたりの高さも
-  // ほぼ比例して増えるため、段数上限は notationSizeMultiplier と連動する動的計算にする
-  // （固定値のままだと、大きいサイズで段数/ページを変えずにいると印刷時に段が
-  // ページの境目で切断されてしまう）。SCORE_AREA_BUDGET_PX（予算）を
-  // BASE_SYSTEM_HEIGHT_PX（楽譜種別ごとの基準段高）× notationSizeMultiplier で割り、
-  // floor で切り捨てることで「絶対にあふれない」最大段数を安全側に求める。
-  const maxSystemsPerPage = useMemo(() => {
-    // 編成譜（ensemble）はパート数に比例した計算式（estimateEnsembleSystemHeightPx）を使う。
-    // 固定の二値（以前は10パート超で800px固定）だと大編成で実際の高さと大きく乖離し、
-    // 1段がページからあふれてもそれに気づかず段数を多く割り当ててしまう
-    // （docs/qa/full-orchestra-test-findings.md フェーズC参照）。
+  // 段の高さ見積もりに使う縦予算(px)。SCORE_AREA_BUDGET_PX は「上14mm/下12mm」
+  // （=上下合計26mm）の実測値。「ページ余白（上）」「ページ余白（下）」スライダーで
+  // 上下合計が変わった分だけ、px換算で増減する（合計を上げれば譜面領域が狭くなり、
+  // 段数上限が下がる）。
+  const systemHeightBudgetPx = useMemo(() => {
+    const verticalMarginTotalMm = pageMarginTopMm + pageMarginBottomMm;
+    const defaultVerticalMarginTotalMm = DEFAULT_PAGE_MARGIN_TOP_MM + DEFAULT_PAGE_MARGIN_BOTTOM_MM;
+    const verticalMarginDeltaPx = (verticalMarginTotalMm - defaultVerticalMarginTotalMm) * MM_TO_PX;
+    return Math.max(1, SCORE_AREA_BUDGET_PX - verticalMarginDeltaPx);
+  }, [pageMarginTopMm, pageMarginBottomMm]);
+  // 現在の楽譜種別で実際に描画される段（五線）の数。PianoSystemCanvas.tsx の
+  // computeLayout() に渡す引数（parts.length）と一致させる必要がある
+  // （single=1段、piano=右手/左手の2段、quartet=4段、ensemble=編成のパート数）。
+  const partCountForSystemLayout = scoreType === 'ensemble'
+    ? instrumentation.parts.length
+    : scoreType === 'quartet'
+      ? QUARTET_PART_CONFIGS.length
+      : scoreType === 'piano'
+        ? 2
+        : 1;
+  // 「段数/ページ」の初期表示（推奨値）だけに使う、従来どおりの見積もり。
+  // BASE_SYSTEM_HEIGHT_PX / estimateEnsembleSystemHeightPx はパート間隔の変更
+  // （Issue #29等）に自動追従しない固定係数のため、実際にページへ収まるかどうかの
+  // 判定（下の maxSystemsPerPage）には使わず、用途を初回見積もりに限定する（Issue #38）。
+  const legacyRecommendedMaxSystemsPerPage = useMemo(() => {
     const baseHeight = scoreType === 'ensemble'
       ? estimateEnsembleSystemHeightPx(instrumentation.parts.length)
       : scoreType === 'quartet'
@@ -2298,35 +2312,39 @@ export default function ScorePage() {
         : scoreType === 'piano'
           ? BASE_SYSTEM_HEIGHT_PX.piano
           : BASE_SYSTEM_HEIGHT_PX.single;
-    // SCORE_AREA_BUDGET_PX は「上14mm/下12mm」（=上下合計26mm）の実測値。
-    // 「ページ余白（上）」「ページ余白（下）」スライダーで上下合計が変わった分だけ、
-    // px換算で budget を増減する（合計を上げれば譜面領域が狭くなり、段数上限が下がる）。
-    const verticalMarginTotalMm = pageMarginTopMm + pageMarginBottomMm;
-    const defaultVerticalMarginTotalMm = DEFAULT_PAGE_MARGIN_TOP_MM + DEFAULT_PAGE_MARGIN_BOTTOM_MM;
-    const verticalMarginDeltaPx = (verticalMarginTotalMm - defaultVerticalMarginTotalMm) * MM_TO_PX;
-    const effectiveBudgetPx = Math.max(1, SCORE_AREA_BUDGET_PX - verticalMarginDeltaPx);
-    // 「段の間隔」スライダー（systemRowGapPx）ぶんの隙間も、段の高さに上乗せしたのと
-    // 同じ扱いで安全側に見積もる（N段なら本来 (N-1)×gap だが、ここでは 1段あたり
-    // baseHeight*倍率 + gap を占有すると仮定して floor する方が計算が単純で、
-    // 常に「あふれない」方向に丸まるため安全側になる）。
-    // notationSizeMultiplier には ensembleAutoFitMultiplier（1段がページに収まらない
-    // 大編成だけ自動的に縮小する倍率、標準編成では1.0）も掛けて実際に描画されるサイズと
-    // 一致させる。
-    // 最低でも1段は入れられることにする（0段になると編集自体ができなくなるため）。
-    return Math.max(1, Math.floor(effectiveBudgetPx / (baseHeight * notationSizeMultiplier * ensembleAutoFitMultiplier + systemRowGapPx)));
-  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier, ensembleAutoFitMultiplier, pageMarginTopMm, pageMarginBottomMm, systemRowGapPx]);
+    return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * notationSizeMultiplier * ensembleAutoFitMultiplier + systemRowGapPx)));
+  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier, ensembleAutoFitMultiplier, systemHeightBudgetPx, systemRowGapPx]);
+  // 段数/ページの実際の上限（実測ベース）。これを超えると段がページからあふれる。
+  // PianoSystemCanvas.tsx が実際の描画に使う寸法計算（computeLayout の sysH）を正とし、
+  // 実際の描画倍率（SCORE_LAYOUT_RENDER_SCALE）を掛けた measuredSystemHeightPx() で
+  // 判定する。旧来の固定係数（BASE_SYSTEM_HEIGHT_PX 等、上の
+  // legacyRecommendedMaxSystemsPerPage）は間隔の変更に追従せず、実際は入る段数より
+  // 厳しく頭打ちにしていた（Issue #38 / .claude/specs/page-layout-controls/design.md）。
+  // ユーザーがこの上限を手動で超えて指定した場合はクランプせず受け付け、
+  // 画面にあふれ警告を表示したうえで指定どおり描画する（isSystemsPerPageOverflowing）。
+  const maxSystemsPerPage = useMemo(() => {
+    const baseHeight = measuredSystemHeightPx(partCountForSystemLayout);
+    return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * notationSizeMultiplier * ensembleAutoFitMultiplier + systemRowGapPx)));
+  }, [partCountForSystemLayout, notationSizeMultiplier, ensembleAutoFitMultiplier, systemHeightBudgetPx, systemRowGapPx]);
   // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段が既定。市販譜のような
   // 行間を確保するため、上限いっぱいの5段ではなく1段減らした4段を初期値にしている。
-  // 音符を大きくして上限が4段を下回った場合は、上限自体を推奨値として使う。
-  const recommendedSystemsPerPage = scoreType === 'piano' ? Math.min(4, maxSystemsPerPage) : maxSystemsPerPage;
+  // legacyRecommendedMaxSystemsPerPage を基準にしつつ、万一それが実測の上限
+  // （maxSystemsPerPage）を超える場合にあふれないよう、実測の上限でも必ずクランプする。
+  const recommendedSystemsPerPage = Math.min(
+    scoreType === 'piano' ? Math.min(4, legacyRecommendedMaxSystemsPerPage) : legacyRecommendedMaxSystemsPerPage,
+    maxSystemsPerPage
+  );
   // ユーザー設定（その他タブの「段数/ページ」）。null = 未設定（推奨値を使う）。
-  // 楽譜種別を切り替えても安全なように、表示時に必ず 1〜上限へクランプする
   const [systemsPerPageSetting, setSystemsPerPageSetting] = useState<number | null>(() => {
     const raw = localStorage.getItem(SYSTEMS_PER_PAGE_KEY);
     const n = raw == null ? NaN : parseInt(raw, 10);
     return Number.isFinite(n) && n >= 1 ? n : null;
   });
-  const systemsPerPage = Math.max(1, Math.min(maxSystemsPerPage, systemsPerPageSetting ?? recommendedSystemsPerPage));
+  // 実際に描画へ使う段数/ページ。手動設定はページからあふれても（maxSystemsPerPage
+  // 超過でも）クランプしない。1未満（編集不能）になることだけは避ける。
+  const systemsPerPage = Math.max(1, systemsPerPageSetting ?? recommendedSystemsPerPage);
+  // 手動設定が実測の上限を超えていて、指定どおり描画するとページからあふれる状態か。
+  const isSystemsPerPageOverflowing = systemsPerPage > maxSystemsPerPage;
 
   // ユーザー設定（その他タブの「小節幅の均等さ」スライダー、0〜1）。
   // 初期値はコード側の既定値 MEASURE_WIDTH_EVENNESS（0.5）。楽譜データには保存せず、
@@ -3131,16 +3149,17 @@ export default function ScorePage() {
               </label>
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title={`1ページに並べる段数。A4に収まる上限（この楽譜の種類では${maxSystemsPerPage}段）までで設定できます`}
+                title={`1ページに並べる段数。この楽譜の種類でページに収まる目安は${maxSystemsPerPage}段です。それより多く指定するとページからあふれます`}
               >
                 段数/ページ
                 <input
                   type="number"
                   min={1}
-                  max={maxSystemsPerPage}
                   value={systemsPerPage}
                   onChange={e => {
-                    const v = Math.max(1, Math.min(maxSystemsPerPage, Number(e.target.value)));
+                    // ページに収まる上限（maxSystemsPerPage）を超える指定もクランプせず
+                    // 受け付ける。あふれる場合は下の警告表示で伝える（Issue #38）。
+                    const v = Math.max(1, Math.round(Number(e.target.value)));
                     if (!isNaN(v)) {
                       setSystemsPerPageSetting(v);
                       localStorage.setItem(SYSTEMS_PER_PAGE_KEY, String(v));
@@ -3148,6 +3167,15 @@ export default function ScorePage() {
                   }}
                   style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
                 />
+                {isSystemsPerPageOverflowing && (
+                  <span
+                    role="alert"
+                    style={{ fontSize: 12, color: '#b91c1c' }}
+                    title={`この段数ではページからあふれます（目安は${maxSystemsPerPage}段まで）`}
+                  >
+                    ⚠ あふれます
+                  </span>
+                )}
               </label>
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
