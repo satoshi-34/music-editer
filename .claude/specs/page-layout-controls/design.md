@@ -228,3 +228,7 @@ CSS の `gap` プロパティは負値を受け付けない（無効な宣言と
 - `src/components/ScorePage.tsx`: `maxSystemsPerPage` を実測ベースの計算へ変更し、旧計算は `legacyRecommendedMaxSystemsPerPage`（推奨値専用）にリネーム。`recommendedSystemsPerPage` を両者の `Math.min` に変更。`systemsPerPage` の上限クランプを撤廃し `isSystemsPerPageOverflowing` を追加。「段数/ページ」入力欄からクランプを外し、あふれ警告表示を追加。
 - `src/utils/measuredSystemHeight.test.ts`: 新規。`measuredSystemHeightPx` の単体テスト。
 - `src/components/ScorePageSystemsPerPage.test.tsx`: 新規。`ScorePage` レンダリングでの初期表示・あふれ警告の統合テスト。
+
+## 追補: 音符の大きさの工場出荷既定値変更に伴う推奨段数の変化（Issue #49、2026-07-24）
+
+上記の「単旋律8段・ピアノ4段という初期表示自体は変わらない」は、当時の音符の大きさの工場出荷既定値（全楽譜種別100%）を前提にした記述だった。Issue #49 で単旋律・ピアノの既定値が150%に変わったことに伴い、`recommendedSystemsPerPage` の計算に使う `notationSizeMultiplier` の初期値も変わるため、**新規ユーザー状態での初期表示（推奨段数）は単旋律8段→5段、ピアノ4段→3段に変わった**（ピアノはさらに段の間隔の既定値も0px→30pxになったため、その分も上限計算に効いている）。これは意図した変更であり、`recommendedSystemsPerPage` / `maxSystemsPerPage` の計算式そのもの（本ドキュメント本文の設計）は変更していない。実測ベースの上限（`maxSystemsPerPage`）の範囲内に収まっているため、あふれ警告は出ない。詳細（既定値の解決関数・検証結果）は `.claude/specs/settings-profile/design.md` の同日付の追補を参照。`src/components/ScorePageSystemsPerPage.test.tsx` のアサーションもこの新しい値に更新した。

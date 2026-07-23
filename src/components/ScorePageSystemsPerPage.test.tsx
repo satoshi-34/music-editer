@@ -1,9 +1,11 @@
 // src/components/ScorePageSystemsPerPage.test.tsx
 // Issue #38: 段数/ページの上限（maxSystemsPerPage）を実測ベースの計算に変えても、
-// 単旋律・ピアノの「段数/ページ」の初期表示（推奨値）は従来と同じ見た目を保つこと、
-// および上限を超える手動指定はクランプせず、あふれ警告を出したうえで指定どおり
+// 上限を超える手動指定はクランプせず、あふれ警告を出したうえで指定どおり
 // 受け付けることを確認する（実測ベースの最大段数そのものは
 // src/utils/measuredSystemHeight.test.ts で検証済み）。
+// 単旋律・ピアノの「段数/ページ」の初期表示（推奨値）は、Issue #49 で音符の大きさの
+// 工場出荷既定値が150%へ変わったことに伴い、1段の実測高さが増え、1ページに収まる
+// 段数の推奨値も従来（単旋律8段・ピアノ4段）より少なくなっている（単旋律5段・ピアノ3段）。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import ScorePage from './ScorePage';
@@ -50,12 +52,11 @@ describe('段数/ページ（実測ベースの上限と、単旋律・ピアノ
     cleanup();
   });
 
-  it('単旋律（既定の楽譜種別）の初期表示は従来どおり8段（見た目が変わらない）', () => {
+  it('単旋律（既定の楽譜種別）の初期表示は音符150%の既定値（Issue #49）に追従して5段になる', () => {
     renderOnScoreTab();
     const input = screen.getByLabelText('段数/ページ') as HTMLInputElement;
-    expect(input.value).toBe('8');
-    // 実測ベースの上限は従来より広くなっているはずだが、初期表示（推奨値）自体は
-    // 変わらないため、あふれ警告は出ない
+    expect(input.value).toBe('5');
+    // 推奨値は実測ベースの上限内に収まっているため、あふれ警告は出ない
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -80,12 +81,12 @@ describe('段数/ページ（実測ベースの上限と、単旋律・ピアノ
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('ピアノ大譜表に切り替えても初期表示は従来どおり4段（見た目が変わらない）', () => {
+  it('ピアノ大譜表に切り替えると、音符150%・段間隔30pxの既定値（Issue #49）に追従して3段になる', () => {
     renderOnScoreTab();
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
 
     const input = screen.getByLabelText('段数/ページ') as HTMLInputElement;
-    expect(input.value).toBe('4');
+    expect(input.value).toBe('3');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });

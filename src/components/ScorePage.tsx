@@ -91,6 +91,7 @@ import {
   estimateEnsembleSystemHeightPx,
   computeEnsembleAutoFitMultiplier,
   measuredSystemHeightPx,
+  resolveDefaultLayoutForScoreType,
   type SystemMeasureRange,
   type MeasureLayoutPartContext,
 } from '../utils/measureLayoutUtils';
@@ -138,7 +139,8 @@ const VIEW_ZOOM_KEY = 'score-view-zoom';
 // SCORE_LAYOUT_RENDER_SCALE（VexFlow の論理座標→物理SVG座標の倍率）に掛け合わせ、
 // 実際に描画・レイアウト計算へ使う「実効スケール」を作る。VIEW_ZOOM と違い、
 // これは画面表示だけでなく印刷結果や段組み（1段に入る小節数）にも影響する。
-// 1.0 = 既定（従来どおりの 0.44 のまま）。
+// 未保存時の既定値は楽譜種別により異なる（Issue #49、resolveDefaultLayoutForScoreType参照）:
+// 単旋律・ピアノ=1.5、弦楽四重奏・編成譜=1（従来どおり）。
 const NOTATION_SIZE_KEY = 'score-notation-size';
 // 音符の大きさスライダーが取りうる倍率の範囲（0.8〜2.0）。
 // スライダーの min/max、state 初期化時のクランプ、maxSystemsPerPage の動的計算で
@@ -697,6 +699,16 @@ export default function ScorePage() {
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
     const nextInstrumentation = getDefaultInstrumentationForScoreType(newType);
     setScoreType(newType);
+    // 楽譜種別ごとの「音符の大きさ」「段の間隔」既定値（Issue #49）。
+    // ユーザーがまだ該当スライダーを触っていない（localStorage未保存の）場合だけ
+    // 切り替え先の既定値を適用し、既に明示的に設定済みの値は上書きしない。
+    const defaultLayout = resolveDefaultLayoutForScoreType(newType);
+    if (localStorage.getItem(NOTATION_SIZE_KEY) == null) {
+      setNotationSizeMultiplier(defaultLayout.notationSizeMultiplier);
+    }
+    if (localStorage.getItem(SYSTEM_ROW_GAP_KEY) == null) {
+      setSystemRowGapPx(defaultLayout.systemRowGapPx);
+    }
     // 楽譜種別が変わるとパートの並び・IDが変わるため、パート譜表示は総譜表示へ戻す
     setPartExtractionId(null);
     setInstrumentation(nextInstrumentation);
@@ -722,6 +734,15 @@ export default function ScorePage() {
     const previousParts = instrumentation.parts;
     setInstrumentation(nextInstrumentation);
     setScoreType(nextScoreType);
+    // 楽譜種別ごとの「音符の大きさ」「段の間隔」既定値（Issue #49）。
+    // handleScoreTypeChange と同じく、ユーザーが未設定のときだけ適用する。
+    const defaultLayout = resolveDefaultLayoutForScoreType(nextScoreType);
+    if (localStorage.getItem(NOTATION_SIZE_KEY) == null) {
+      setNotationSizeMultiplier(defaultLayout.notationSizeMultiplier);
+    }
+    if (localStorage.getItem(SYSTEM_ROW_GAP_KEY) == null) {
+      setSystemRowGapPx(defaultLayout.systemRowGapPx);
+    }
     // 編成テンプレートを切り替えるとパート ID が変わるため、パート譜表示は総譜表示へ戻す
     setPartExtractionId(null);
     if (nextScoreType === 'quartet') {
@@ -2224,7 +2245,9 @@ export default function ScorePage() {
   const [notationSizeMultiplier, setNotationSizeMultiplier] = useState<number>(() => {
     const raw = localStorage.getItem(NOTATION_SIZE_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
-    return Number.isFinite(n) ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n)) : 1;
+    return Number.isFinite(n)
+      ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n))
+      : resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier;
   });
   // 大編成の編成譜（ensemble）では、ユーザーが「音符の大きさ」を100%のままにしていても
   // 1段の実際の高さがページの印字可能領域を超えてしまうケースがある
@@ -2291,25 +2314,30 @@ export default function ScorePage() {
   const [systemRowGapPx, setSystemRowGapPx] = useState<number>(() => {
     const raw = localStorage.getItem(SYSTEM_ROW_GAP_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
-    return Number.isFinite(n) ? Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, n)) : 0;
+    return Number.isFinite(n)
+      ? Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, n))
+      : resolveDefaultLayoutForScoreType(scoreType).systemRowGapPx;
   });
   // 「レイアウトをリセット」: ページ余白・段の間隔（全体・段ごと）の設定をまとめて既定値へ戻す。
+  // 段の間隔の既定値は楽譜種別により異なる（ピアノは30px、それ以外は0px。Issue #49）ため、
+  // 現在の scoreType から解決する（ページ余白は種別に依らない固定既定値のまま）。
   const handleResetPageLayout = useCallback(() => {
+    const defaultSystemRowGapPx = resolveDefaultLayoutForScoreType(scoreType).systemRowGapPx;
     setPageMarginSideMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
     setPageMarginTopMm(DEFAULT_PAGE_MARGIN_TOP_MM);
     setPageMarginBottomMm(DEFAULT_PAGE_MARGIN_BOTTOM_MM);
-    setSystemRowGapPx(0);
+    setSystemRowGapPx(defaultSystemRowGapPx);
     localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(DEFAULT_PAGE_SIDE_MARGIN_MM));
     localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(DEFAULT_PAGE_MARGIN_TOP_MM));
     localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(DEFAULT_PAGE_MARGIN_BOTTOM_MM));
-    localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(0));
+    localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(defaultSystemRowGapPx));
     // 段ごとの間隔の個別上書きは楽譜データ側（保存データ）の状態なので、Undo できるよう
     // pushHistory してからクリアする（他の3設定は画面専用の localStorage 設定のため対象外）。
     if (systemRowGapOverrides.length > 0) {
       pushHistory();
       setSystemRowGapOverrides([]);
     }
-  }, [systemRowGapOverrides.length, pushHistory]);
+  }, [systemRowGapOverrides.length, pushHistory, scoreType]);
 
   const totalSystems = 12;
   const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
@@ -3418,7 +3446,7 @@ export default function ScorePage() {
               </label>
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title="音符・記号そのものの大きさです。画面表示だけでなく印刷結果にも反映されます（『画面表示のズーム』とは異なり印刷にも影響します）。100% が既定の大きさです"
+                title="音符・記号そのものの大きさです。画面表示だけでなく印刷結果にも反映されます（『画面表示のズーム』とは異なり印刷にも影響します）。既定は楽譜の種類により異なります（単旋律・ピアノは150%、弦楽四重奏・編成譜は100%）"
               >
                 音符の大きさ
                 <input
@@ -3437,7 +3465,7 @@ export default function ScorePage() {
                   }}
                   style={{ width: 90 }}
                 />
-                {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
+                {/* 現在値（%）。既定は楽譜種別により異なる（単旋律・ピアノ=150%、弦楽四重奏・編成譜=100%。Issue #49） */}
                 <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
                 {/* 大編成（1段がページに収まらない編成）で自動縮小が働いているときだけ、
                     実際に描画されているサイズ（ユーザー設定 × 自動縮小倍率）を表示する。
@@ -3523,7 +3551,7 @@ export default function ScorePage() {
               </label>
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title="段と段の間隔です。プラスで広げ、マイナスで狭められます。広げると1ページに入る段数の上限が自動で下がり、狭めると自動で増えます。既定は0px（間隔なし）です"
+                title="段と段の間隔です。プラスで広げ、マイナスで狭められます。広げると1ページに入る段数の上限が自動で下がり、狭めると自動で増えます。既定は楽譜の種類により異なります（ピアノは30px、それ以外は0px）"
               >
                 段の間隔
                 <input

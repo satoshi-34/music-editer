@@ -13,6 +13,7 @@ import {
   DEFAULT_PAGE_SIDE_MARGIN_MM,
   systemRowSlotHeightPx,
   systemRowTopOffsetsPx,
+  resolveDefaultLayoutForScoreType,
 } from './measureLayoutUtils';
 
 describe('printScoreAreaWidthPx / worstCaseSystemContentBudget（ページ余白と本文幅の連動）', () => {
@@ -464,6 +465,36 @@ describe('systemRowSlotHeightPx / systemRowTopOffsetsPx（段の間隔を単一�
       const slotHeight = systemRowSlotHeightPx(BUDGET_PX, SYSTEMS_PER_PAGE, gap);
       const lastRowBottom = offsets[offsets.length - 1] + slotHeight;
       expect(lastRowBottom).toBeCloseTo(BUDGET_PX, 6);
+    });
+  });
+});
+
+describe('resolveDefaultLayoutForScoreType（楽譜種別ごとの音符サイズ・段間隔の既定値、Issue #49）', () => {
+  it('単旋律: 音符150%・段間隔0px', () => {
+    expect(resolveDefaultLayoutForScoreType('single')).toEqual({
+      notationSizeMultiplier: 1.5,
+      systemRowGapPx: 0,
+    });
+  });
+
+  it('ピアノ: 音符150%・段間隔30px', () => {
+    expect(resolveDefaultLayoutForScoreType('piano')).toEqual({
+      notationSizeMultiplier: 1.5,
+      systemRowGapPx: 30,
+    });
+  });
+
+  it('弦楽四重奏: 音符100%・段間隔0px（従来どおり変えない）', () => {
+    expect(resolveDefaultLayoutForScoreType('quartet')).toEqual({
+      notationSizeMultiplier: 1,
+      systemRowGapPx: 0,
+    });
+  });
+
+  it('編成譜: 音符100%・段間隔0px（従来どおり変えない）', () => {
+    expect(resolveDefaultLayoutForScoreType('ensemble')).toEqual({
+      notationSizeMultiplier: 1,
+      systemRowGapPx: 0,
     });
   });
 });
