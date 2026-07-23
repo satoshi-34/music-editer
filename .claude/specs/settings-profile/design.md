@@ -56,3 +56,35 @@
 
 - `src/utils/measureLayoutUtils.ts`: レイアウト系の範囲定数（`NOTATION_SIZE_MULTIPLIER_MIN/MAX` 等）を `ScorePage.tsx` から移設。値そのものは変更していないため、既存の見た目・挙動に影響はない。
 - ブラウザでの実機確認は実施していない（夜間無人実行のため、共有 devcontainer 上で他セッションが使用中の可能性がある dev サーバーへ干渉しないことを優先した。詳細は PR 本文を参照）。代わりに `npx tsc -b --noEmit` によるコンパイル確認と、`ScorePage` を実マウントする統合テストで UI の配線（ボタンのクリック・state 反映）を確認している。
+
+## 追補: 音符の大きさ・段の間隔の既定値を楽譜種別ごとに変える（Issue #49、2026-07-24）
+
+### 問題
+
+工場出荷既定値（`getFactoryDefaultSettingsProfile()`）は「音符の大きさ100%・段の間隔0px」で全楽譜種別共通だった。運用者からの明示的な指定として、単旋律・ピアノは見やすさのため150%を、ピアノの大譜表はさらに段間隔+30pxを既定にしたい、というリクエストがあった（弦楽四重奏・編成譜は現状維持）。
+
+### 修正設計
+
+- **既定値の解決を純関数へ切り出す**: `measureLayoutUtils.ts` に `resolveDefaultLayoutForScoreType(scoreType): { notationSizeMultiplier, systemRowGapPx }` を新設した。単旋律・ピアノは `notationSizeMultiplier = 1.5`、それ以外（弦楽四重奏・編成譜）は `1`。`systemRowGapPx` はピアノだけ `30`、それ以外は `0`。この関数は `measureLayoutUtils.ts` 側に置くことで、`settingsProfile.ts`（工場出荷プロファイル）と `ScorePage.tsx`（画面のスライダー state）の両方から同じ値を参照でき、値の二重管理を避けている。
+- **`getFactoryDefaultSettingsProfile()`**: 従来ハードコードしていた `notationSizeMultiplier: 1` / `systemRowGapPx: 0` を、`resolveDefaultLayoutForScoreType('single')` の解決結果（1.5 / 0）に置き換えた。このプロファイルの `scoreType` は常に `'single'` なので、単旋律の既定値がそのまま反映される。
+- **`ScorePage.tsx` の該当2つの `useState` 初期化**（`notationSizeMultiplier` / `systemRowGapPx`）: localStorage未保存時のフォールバックを、ハードコードの `1` / `0` から `resolveDefaultLayoutForScoreType(scoreType)`（マウント時点の `scoreType`、既定 `'single'`）に変更した。
+- **楽譜種別の切り替え時にも既定値へ追従させる**: 「楽譜の種類」ボタン（`handleScoreTypeChange`）と編成テンプレートの切り替え（`handleInstrumentationPresetChange`）で、切り替え先の `resolveDefaultLayoutForScoreType(nextType)` を計算し、**`score-notation-size` / `score-system-row-gap` がまだ localStorage に保存されていない場合だけ** `setNotationSizeMultiplier` / `setSystemRowGapPx` で反映する。ユーザーが一度でもスライダーを動かして値が保存されている場合は、種別を切り替えてもその値のまま変えない（この issue のノート「ユーザーが保存した設定・初期値プリセットが存在する場合はそちらを尊重し、上書きしない」を、個別スライダーの保存有無で判定する形で実装した）。
+- **「レイアウトをリセット」ボタン**（`handleResetPageLayout`）: 段の間隔のリセット先も `resolveDefaultLayoutForScoreType(scoreType).systemRowGapPx` に変更した（従来はページ余白と同様ハードコード0へ戻していたが、「既定値へ戻す」という表示ラベルと矛盾しないよう、種別ごとの既定値に揃えた）。ページ余白3つは種別に依らない固定既定値のままなので変更していない。
+- **段数/ページの推奨値への波及**: `recommendedSystemsPerPage` / `maxSystemsPerPage` は既存どおり `notationSizeMultiplier` / `systemRowGapPx` に連動する計算式のままのため、単旋律・ピアノの初期表示（推奨段数）が新しい既定サイズに自動で追従する（単旋律8段→5段、ピアノ4段→3段。詳細は `.claude/specs/page-layout-controls/design.md` の追補を参照）。
+
+### 検証結果
+
+- `docker exec -w <worktree> music-editer-dev npx vitest --run src`: 95ファイル1085テスト全緑（新規: `resolveDefaultLayoutForScoreType` の単体テスト4件、`ScorePageDefaultLayout.test.tsx` の統合テスト5件。既存の `ScorePageSystemsPerPage.test.tsx` は新しい既定値（単旋律5段・ピアノ3段）に合わせてアサーションを更新した）。
+- `docker exec -w <worktree> music-editer-dev npm run build`（`tsc -b && vite build`）: エラーなし。
+- `docker exec -w <worktree> music-editer-dev npx eslint <変更ファイル>`: 変更ファイルに絞って実行し、新規のエラー・警告は0件（既存の `any` 型エラー等はすべて今回変更していない行）。プロジェクト全体では既存の技術的負債として353件のlintエラーがあり、`npm run lint`（全体）は本変更以前から通らない状態のため、変更ファイル限定の実行で代替確認した（main チェックアウト側でも同数のエラーがあることを確認済み）。
+- **ブラウザ実測**: 夜間無人実行のため、共有 devcontainer で他セッションが使用中の dev サーバー（port 5173, `/app` 直下の main チェックアウトを配信）には干渉せず、同じ Docker イメージ（`music-editer-app`）から worktree 用の一時コンテナ（`music-editer-preview-issue49`、host port 5174、`music-editer-dev` コンテナとは別プロセス）を立てて確認した。新規ユーザー状態（localStorage空）で単旋律を開くと音符150%・段間隔0px、ピアノへ切り替えると音符150%・段間隔30px・段数/ページの推奨値が自動で3段になること、弦楽四重奏・編成譜は100%・0pxのまま変わらないことをスクリーンショットで確認し、コンソールエラーが無いことも確認した。確認後、一時コンテナは停止・削除した。
+
+### 影響範囲（追補）
+
+- `src/utils/measureLayoutUtils.ts`: `resolveDefaultLayoutForScoreType` と関連定数（`NOTATION_SIZE_MULTIPLIER_LARGE_DEFAULT` 等）を追加。
+- `src/utils/settingsProfile.ts`: `getFactoryDefaultSettingsProfile()` の `notationSizeMultiplier` / `systemRowGapPx` を `resolveDefaultLayoutForScoreType('single')` 経由に変更。
+- `src/components/ScorePage.tsx`: `notationSizeMultiplier` / `systemRowGapPx` の `useState` 初期化、`handleScoreTypeChange` / `handleInstrumentationPresetChange` / `handleResetPageLayout` を変更。UIツールチップ・コード内コメントも新しい既定値に合わせて更新。
+- `src/utils/measureLayoutUtils.test.ts` / `src/utils/settingsProfile.test.ts`: `resolveDefaultLayoutForScoreType` と工場出荷既定値の単体テストを追加。
+- `src/components/ScorePageDefaultLayout.test.tsx`: 新規。新規ユーザー状態での楽譜種別ごとの既定値、種別切り替え時の追従、ユーザー保存値の非上書き、「レイアウトをリセット」の既定値追従を確認する統合テスト。
+- `src/components/ScorePageSystemsPerPage.test.tsx`: 既定サイズ変更に伴う推奨段数の変化（単旋律8段→5段、ピアノ4段→3段）に合わせてアサーションとテスト名を更新。
+- `README.md`: 「音符の大きさ調整」「ページ余白・段の間隔の調整」「譜面設定の初期値プリセット」の各節に、楽譜種別ごとの既定値と、それに伴う段数/ページ推奨値の変化を追記。

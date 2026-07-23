@@ -24,6 +24,7 @@ import {
   PAGE_MARGIN_VERTICAL_MAX_MM,
   SYSTEM_ROW_GAP_MIN_PX,
   SYSTEM_ROW_GAP_MAX_PX,
+  resolveDefaultLayoutForScoreType,
 } from './measureLayoutUtils';
 
 /** 「段あたり小節数」の入力欄が取りうる範囲（ScorePage.tsx の number input と同じ範囲） */
@@ -89,9 +90,11 @@ export const SETTINGS_PROFILE_STORAGE_KEY = 'music-score-app-settings-profile';
  * 見た目・挙動とも従来どおりになる。
  */
 export function getFactoryDefaultSettingsProfile(): ScoreSettingsProfile {
+  const scoreType: ScoreType = 'single';
+  const defaultLayout = resolveDefaultLayoutForScoreType(scoreType);
   return {
     version: SETTINGS_PROFILE_VERSION,
-    scoreType: 'single',
+    scoreType,
     instrumentationPresetId: 'chamber-orchestra',
     timeSignature: [...DEFAULT_TIME_SIGNATURE],
     keySignature: 'C',
@@ -99,11 +102,11 @@ export function getFactoryDefaultSettingsProfile(): ScoreSettingsProfile {
     systemsPerPageSetting: null,
     displayWeight: 'normal',
     measureWidthEvenness: MEASURE_WIDTH_EVENNESS,
-    notationSizeMultiplier: 1,
+    notationSizeMultiplier: defaultLayout.notationSizeMultiplier,
     pageMarginSideMm: DEFAULT_PAGE_SIDE_MARGIN_MM,
     pageMarginTopMm: DEFAULT_PAGE_MARGIN_TOP_MM,
     pageMarginBottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
-    systemRowGapPx: 0,
+    systemRowGapPx: defaultLayout.systemRowGapPx,
   };
 }
 

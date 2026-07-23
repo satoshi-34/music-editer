@@ -1,4 +1,4 @@
-import type { MeasureData, NoteEvent } from '../types/storage';
+import type { MeasureData, NoteEvent, ScoreType } from '../types/storage';
 import { Accidental, Dot, Formatter, GraceNote, GraceNoteGroup, StaveNote, Voice } from 'vexflow';
 import { createVexFlowTuplets, vexFlowDotCount } from './vexFlowTimingUtils';
 import {
@@ -77,6 +77,34 @@ export const DEFAULT_PAGE_MARGIN_TOP_MM = DEFAULT_PAGE_SIDE_MARGIN_MM;
 export const DEFAULT_PAGE_MARGIN_BOTTOM_MM = DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM;
 export const SYSTEM_ROW_GAP_MIN_PX = -30;
 export const SYSTEM_ROW_GAP_MAX_PX = 30;
+
+// 「音符の大きさ」「段の間隔」の楽譜種別ごとの工場出荷既定値（Issue #49）。
+// 単旋律・ピアノは大きめの表示（150%）を既定にし、見やすさを優先する。
+// ピアノ大譜表はさらに段（システム）間の間隔を+30pxにして、右手/左手の対と
+// 次の段の対を見分けやすくする。弦楽四重奏・編成譜は従来どおり100%・0pxのまま変えない
+// （大編成は ensembleAutoFitMultiplier による自動縮小フォールバックと合成されるため、
+// 既定を上げると縮小との相互作用が読みにくくなる）。
+export const NOTATION_SIZE_MULTIPLIER_DEFAULT = 1;
+export const NOTATION_SIZE_MULTIPLIER_LARGE_DEFAULT = 1.5;
+export const SYSTEM_ROW_GAP_DEFAULT_PX = 0;
+export const SYSTEM_ROW_GAP_PIANO_DEFAULT_PX = 30;
+
+/**
+ * 楽譜種別ごとの「音符の大きさ」「段の間隔」の工場出荷既定値を返す純関数。
+ * ユーザーが該当のスライダーを一度も操作していない（localStorageに未保存の）ときだけ
+ * 呼び出し側でこの値を適用する想定（ユーザーが明示的に保存した値は上書きしない）。
+ */
+export function resolveDefaultLayoutForScoreType(scoreType: ScoreType): {
+  notationSizeMultiplier: number;
+  systemRowGapPx: number;
+} {
+  const notationSizeMultiplier =
+    scoreType === 'single' || scoreType === 'piano'
+      ? NOTATION_SIZE_MULTIPLIER_LARGE_DEFAULT
+      : NOTATION_SIZE_MULTIPLIER_DEFAULT;
+  const systemRowGapPx = scoreType === 'piano' ? SYSTEM_ROW_GAP_PIANO_DEFAULT_PX : SYSTEM_ROW_GAP_DEFAULT_PX;
+  return { notationSizeMultiplier, systemRowGapPx };
+}
 
 export function printScoreAreaWidthPx(sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM): number {
   return (210 - sideMarginMm * 2) * (96 / 25.4);

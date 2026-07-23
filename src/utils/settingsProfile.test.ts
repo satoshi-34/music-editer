@@ -64,6 +64,15 @@ describe('settingsProfile', () => {
     localStorageMock.clear();
   });
 
+  describe('getFactoryDefaultSettingsProfile（Issue #49: 単旋律の既定は音符150%・段間隔0px）', () => {
+    it('工場出荷既定値の scoreType は single で、音符サイズ150%・段間隔0pxになっている', () => {
+      const fallback = getFactoryDefaultSettingsProfile();
+      expect(fallback.scoreType).toBe('single');
+      expect(fallback.notationSizeMultiplier).toBe(1.5);
+      expect(fallback.systemRowGapPx).toBe(0);
+    });
+  });
+
   describe('parseSettingsProfile（純関数・フォールバック）', () => {
     it('正常: 妥当なプロファイルはそのまま復元される', () => {
       const parsed = parseSettingsProfile(JSON.stringify(VALID_PROFILE));
