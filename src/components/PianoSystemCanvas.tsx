@@ -2171,6 +2171,10 @@ export default function PianoSystemCanvas({
       const guideChordRect=document.createElementNS('http://www.w3.org/2000/svg','rect');
       guideChordRect.setAttribute('class','vf-guide-chord');guideChordRect.style.display='none';
       guideChordRect.setAttribute('pointer-events','none');guideChordRect.setAttribute('rx','3');
+      // CSS未適用時にSVG既定のfill=黒で塗りつぶされないよう、CSSと同じ値を属性でも明示する
+      guideChordRect.setAttribute('fill','rgba(99, 153, 255, 0.18)');
+      guideChordRect.setAttribute('stroke','rgba(70, 130, 220, 0.55)');
+      guideChordRect.setAttribute('stroke-width','1.5');
       svgRoot.appendChild(guideLine);svgRoot.appendChild(guideDot);
       guideLedgerLines.forEach((ledgerLine)=>svgRoot.appendChild(ledgerLine));
       svgRoot.appendChild(guideChordRect);
@@ -2833,6 +2837,12 @@ export default function PianoSystemCanvas({
           keySignatureDebugRect.setAttribute('width',String(firstStaveKeySignatureHitBounds.right - firstStaveKeySignatureHitBounds.left));
           keySignatureDebugRect.setAttribute('height',String(staveBot - staveTop));
           keySignatureDebugRect.setAttribute('pointer-events','none');
+          // CSS未適用時にSVG既定のfill=黒で塗りつぶされないよう、CSSと同じ値を属性でも明示する
+          keySignatureDebugRect.setAttribute('fill','rgba(245, 158, 11, 0.16)');
+          keySignatureDebugRect.setAttribute('stroke','rgba(180, 83, 9, 0.55)');
+          keySignatureDebugRect.setAttribute('stroke-width','1.2');
+          keySignatureDebugRect.setAttribute('rx','3');
+          keySignatureDebugRect.setAttribute('ry','3');
           svgRoot.appendChild(keySignatureDebugRect);
         }
 
@@ -3498,6 +3508,11 @@ export default function PianoSystemCanvas({
               sr.setAttribute('width',String(selectedKey?(noteVisualRight-noteVisualLeft+SELECTED_KEY_PAD_X*2):(eventBoxW+SELECTED_EVENT_PAD*2)));
               sr.setAttribute('height',String(selectedKey?SELECTED_KEY_HALF_HEIGHT*2:(eventBoxH+SELECTED_EVENT_PAD*2)));
               sr.setAttribute('rx','4');sr.setAttribute('ry','4');
+              // CSS未適用時にSVG既定のfill=黒で塗りつぶされないよう、CSSと同じ値を属性でも明示する
+              // （選択枠が黒塗りの矩形として表示されてしまう不具合の根本対策）
+              sr.setAttribute('fill','none');
+              sr.setAttribute('stroke','#1d4ed8');
+              sr.setAttribute('stroke-width','2');
               svgRoot.appendChild(sr);
             }
           });
