@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint'
 import { globalIgnores } from 'eslint/config'
 
 export default tseslint.config([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', '.claude/**', '.night-worktrees/**']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
