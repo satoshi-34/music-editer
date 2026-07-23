@@ -196,3 +196,35 @@ CSS の `gap` プロパティは負値を受け付けない（無効な宣言と
 - `src/components/SingleStaff.tsx` / `PianoStaff.tsx` / `QuartetStaff.tsx` / `EnsembleStaff.tsx`: `systemGapOverridesPx` prop を追加し、段ラッパー `<div>` へ `marginTop` として適用。
 - `src/App.css`: `.system-row-gap-override-label` を追加（既存の `.system-measure-override-label` と対になる小さなラベルスタイル）。
 - `src/utils/storage.test.ts`: `systemRowGapOverrides` の保存互換・バリデーションのテストを追加。
+
+## 追補: 段数/ページの上限を実測ベースの自動決定にし、手動上書きの上限クランプを警告方式へ変える（M-2、2026-07-23）
+
+### 問題（Issue #38）
+
+`maxSystemsPerPage`（段数/ページの上限）は楽譜種別ごとの固定係数（`BASE_SYSTEM_HEIGHT_PX` / `estimateEnsembleSystemHeightPx`）で見積もっていたが、これらは「三重の安全側」（厳しめ予算938px ÷ 大きめの段高さ推定）で頭打ちされており、実際は入るのに段数を増やせなかった。特に編成譜の `estimateEnsembleSystemHeightPx`（段あたり81px、旧パート間隔80で校正）は、Issue #29（PR相当）でパート間隔が5パート以上のとき60へ詰まった現在では実際より高さを大きく見積もり、乖離が大きい。また、ユーザーが上限を超える段数を指定する手段もなかった。
+
+### 修正設計
+
+- **段の高さの正本を実測（`computeLayout` 経由）に一本化**: `PianoSystemCanvas.tsx` が実際の描画に使う寸法計算 `computeLayout(partCount)`（`sysH`・`staveSpacingForPartCount` 等）を `measureLayoutUtils.ts` へ移設した（`PianoSystemCanvas.tsx` はそこから import し、既存テスト（`PianoSystemCanvasPartSpacing.test.tsx`）が壊れないよう同名で re-export）。`ScorePage.tsx` の段数上限計算がこれと同じ計算式を共有できるようにするための移設で、パート間隔が将来また変わっても両者が自動的に追従する。
+- **新関数 `measuredSystemHeightPx(partCount)`**（`measureLayoutUtils.ts`）: `computeLayout(partCount).sysH * SCORE_LAYOUT_RENDER_SCALE`。PianoSystemCanvas.tsx が実際に `renderer.resize(W, sysH * scale)` で使う値と同じ換算式（「音符の大きさ100%」時）。
+- **`ScorePage.tsx` の `maxSystemsPerPage`**（段数/ページの実際の上限）は `measuredSystemHeightPx(partCountForSystemLayout)` を正として計算し直した（`partCountForSystemLayout` は single=1・piano=2・quartet=4・ensemble=`instrumentation.parts.length`、`computeLayout` へ渡す実際の段数と一致させている）。旧来の固定係数（`BASE_SYSTEM_HEIGHT_PX` / `estimateEnsembleSystemHeightPx`）は削除せず、**用途を「初回見積もり（推奨段数）」に限定**する（`legacyRecommendedMaxSystemsPerPage` にリネーム）。理由: 固定係数をそのまま初期表示の推奨段数に使い続けることで、単旋律・ピアノの初期表示（従来8段・4段）を変えないため（後述の「推奨値と上限の分離」）。`computeEnsembleAutoFitMultiplier`（1段がページに収まらない大編成の自動縮小判定）も `estimateEnsembleSystemHeightPx` を使い続けている（本Issueのスコープ外、別の目的のため据え置き）。
+- **推奨値（初期表示）と上限（クランプ判定）を分離**: `recommendedSystemsPerPage = Math.min(scoreType==='piano' ? Math.min(4, legacyRecommendedMaxSystemsPerPage) : legacyRecommendedMaxSystemsPerPage, maxSystemsPerPage)`。実測ベースの `maxSystemsPerPage` は旧係数よりほぼ常に大きい（安全側だった旧係数が縮むため）ため、通常はこの `Math.min` は効かず、初期表示は従来と数値まで完全に同じになる（単旋律8段・ピアノ4段。ScorePageSystemsPerPage.test.tsx で確認）。
+- **手動上書きのクランプ撤廃・あふれ警告**: `systemsPerPage = Math.max(1, systemsPerPageSetting ?? recommendedSystemsPerPage)`（上限へのクランプを削除。1未満だけ防ぐ）。「段数/ページ」入力欄の `max` 属性・`onChange` 内の `Math.min(maxSystemsPerPage, …)` も削除し、指定どおりの値をそのまま `localStorage` へ保存・描画に使う。`isSystemsPerPageOverflowing = systemsPerPage > maxSystemsPerPage` を新設し、true のとき入力欄の隣に `role="alert"` の「⚠ あふれます」を表示する（クランプせず受け付け、あふれる場合は警告を出したうえで指定どおり描画、という要件どおり）。
+
+### 検証結果
+
+- `docker exec -w <worktree> music-editer-dev npx tsc -b --noEmit`: エラーなし。
+- `docker exec -w <worktree> music-editer-dev npx vitest --run src`: 90ファイル1044テスト全緑。新規追加:
+  - `src/utils/measuredSystemHeight.test.ts`: `measuredSystemHeightPx` が `computeLayout(n).sysH * SCORE_LAYOUT_RENDER_SCALE` と一致すること、パート数に対して単調非減少であること、二管編成（12パート）で旧推定式（`estimateEnsembleSystemHeightPx`）より段の高さを小さく見積もること、`SCORE_AREA_BUDGET_PX`（938px）相当の予算で段数上限が旧推定式より増えることを確認。
+  - `src/components/ScorePageSystemsPerPage.test.tsx`: `ScorePage` を実際にレンダリングし、単旋律の初期表示が従来どおり8段・ピアノが従来どおり4段のまま変わらないこと、あふれ警告（`role="alert"`）が上限超過時のみ表示されること、999段のような極端な手動指定でもクランプされず指定どおりの値が保持されることを確認。
+- `docker exec -w <worktree> music-editer-dev npm run lint`: 変更したファイル（`measureLayoutUtils.ts` / `PianoSystemCanvas.tsx` / `ScorePage.tsx` および新規テスト2件）に絞って実行し、エラーは全てこの変更前から存在する既存分（`any` 型・`jsx-a11y/no-autofocus` 未定義ルール等）であることを行番号レベルで確認した（`PianoSystemCanvas.tsx` の `react-refresh/only-export-components` は `computeLayout`/`staveSpacingForPartCount` の定義位置が移設に伴い変わっただけで、件数は移設前後で2件のまま変化なし）。プロジェクト全体では2000件超の既存lintエラーがあり（本変更と無関係、リポジトリの既存技術的負債）、`npm run lint`（プロジェクト全体）自体は従来から通らない状態のため、本変更が新たなエラーを増やしていないことの確認をもって代替した。
+- `docker exec -w <worktree> music-editer-dev npm run build`: `tsc -b && vite build` エラーなし。
+- **ブラウザ実測は今回未実施**（夜間無人実行のため、共有devcontainer上で既に別セッション（他ブランチ）が使用中のdevサーバー・ポート5173に干渉しないことを優先した判断。前回のM-1追補と同じ理由・同じ判断）。代わりに、実装前の調査として **main ブランチの実際のdevサーバー（port 5173）をブラウザで開き、単旋律の空譜面が実際に `svg[height]=44px`（`computeLayout(1).sysH=100 × SCORE_LAYOUT_RENDER_SCALE=0.44` と一致）で描画されていることをDOM実測で確認**し、`measuredSystemHeightPx` の換算式が実際の描画寸法と一致することの根拠にした。また、SVGの `getBBox()` はVexFlowが音楽記号を `<text>` グリフとして描く際のフォントメトリクス起因で実際のインク幅より大幅に大きい値を返す（実測で確認: 空の単旋律1段でインク幅181px、うち`<text>`要素だけで161px相当のBBox）ため、DOM実測（`getBBox`）を段の高さの正本にするのは信頼できないと判断し、Issue本文が代替として明示的に許可している「`computeLayout` の `sysH`×スケールの正確な換算」を採用した。実際の見た目確認（単旋律・ピアノ・弦楽四重奏・大編成それぞれでの段の重なりの有無、あふれ警告の表示）は次回人間によるレビュー時に行うことを推奨する。
+
+### 影響範囲（追補）
+
+- `src/utils/measureLayoutUtils.ts`: `computeLayout` / `staveSpacingForPartCount`（`PianoSystemCanvas.tsx` から移設）、新関数 `measuredSystemHeightPx` を追加。`estimateEnsembleSystemHeightPx` の doc コメントを更新（用途を初回見積もりに限定する旨を明記）。
+- `src/components/PianoSystemCanvas.tsx`: `computeLayout` / `staveSpacingForPartCount` のローカル定義を削除し、`measureLayoutUtils.ts` から import・re-export する形に変更（既存テストとの互換のため）。
+- `src/components/ScorePage.tsx`: `maxSystemsPerPage` を実測ベースの計算へ変更し、旧計算は `legacyRecommendedMaxSystemsPerPage`（推奨値専用）にリネーム。`recommendedSystemsPerPage` を両者の `Math.min` に変更。`systemsPerPage` の上限クランプを撤廃し `isSystemsPerPageOverflowing` を追加。「段数/ページ」入力欄からクランプを外し、あふれ警告表示を追加。
+- `src/utils/measuredSystemHeight.test.ts`: 新規。`measuredSystemHeightPx` の単体テスト。
+- `src/components/ScorePageSystemsPerPage.test.tsx`: 新規。`ScorePage` レンダリングでの初期表示・あふれ警告の統合テスト。

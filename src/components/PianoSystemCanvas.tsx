@@ -83,14 +83,21 @@ import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
   allocateCombinedMeasureWidths,
   combinedMeasureMinimumContentWidth,
+  computeLayout,
   MEASURE_WIDTH_EVENNESS,
   measurePlannerSafetyPadding,
   SCORE_LAYOUT_RENDER_SCALE,
+  staveSpacingForPartCount,
   SYSTEM_FIRST_CLEF_PADDING,
   SYSTEM_PAGE_SIDE_PADDING,
   SYSTEM_TARGET_FILL,
   vexFlowCombinedMeasureMinimumContentWidth,
 } from '../utils/measureLayoutUtils';
+// computeLayout/staveSpacingForPartCount の正本は measureLayoutUtils.ts へ移設した
+// （ScorePage.tsx の maxSystemsPerPage が同じ計算式を「実測」として共有するため。
+// Issue #38）。既存のテスト（PianoSystemCanvasPartSpacing.test.tsx）はこのファイルからの
+// named import を使っているため、後方互換として re-export する。
+export { computeLayout, staveSpacingForPartCount };
 import { createVexFlowTuplets, vexFlowDotCount } from '../utils/vexFlowTimingUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
@@ -133,24 +140,6 @@ export type PartConfig = {
 
 /* ===== レイアウト定数（SVGビューポートpx） ===== */
 const PAGE_LEFT = SYSTEM_PAGE_SIDE_PADDING, PAGE_RIGHT = SYSTEM_PAGE_SIDE_PADDING;
-const FIRST_STAVE_Y = 20;
-// 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏（4パート以下）は見た目を変えないよう
-// 従来値の80を維持する。編成譜（5パート以上）は市販オーケストラスコア並みの紙面効率にするため、
-// 詰めた値を使う（Issue #29）。VexFlow の五線は line0〜line4 の4間隔＝40ネイティブ単位の高さなので、
-// 60 にすると隣接パートとの間の余白が20単位（加線2本ぶん）残り、音符と衝突しない。
-const STAVE_SPACING = 80; // 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏用
-const STAVE_SPACING_ENSEMBLE = 60; // 5パート以上の編成譜用（密な既定値）
-const ENSEMBLE_DENSE_SPACING_MIN_PARTS = 5;
-// テスト（PianoSystemCanvasPartSpacing.test.tsx）から直接検証できるよう export する。
-export function staveSpacingForPartCount(n: number): number {
-  return n >= ENSEMBLE_DENSE_SPACING_MIN_PARTS ? STAVE_SPACING_ENSEMBLE : STAVE_SPACING;
-}
-export function computeLayout(n: number): { staveYs: number[]; sysH: number; staveSpacing: number } {
-  const staveSpacing = staveSpacingForPartCount(n);
-  const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * staveSpacing);
-  const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20;
-  return { staveYs, sysH, staveSpacing };
-}
 
 /* ===== 幅計算 ===== */
 const TARGET_FILL = SYSTEM_TARGET_FILL;
