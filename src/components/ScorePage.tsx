@@ -2574,15 +2574,23 @@ export default function ScorePage() {
     // 段あたりの実小節数（effectiveMeasuresPerSystem）を無視して常に48スロットぶんを
     // 計画してしまい、末尾の空小節からも余分な段が大量に生まれる原因になっていた。
     // 画面では既定で内容段の直後の空き段は表示しない（下の visibleTotalSystems 参照）ため、
-    // ここでの「2段ぶん」は常に描画される量ではなく、あくまで「＋小節を追加」で
-    // すぐ表示できる予備の計画データ（幅計算済みの空き枠）。ユーザーが追加した小節数
-    // （extraEditingMeasures）ぶんは必ず用意しつつ、その先にも常に2段分の予備を残す。
-    const editingBufferMeasures = Math.max(effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem) * 2 + extraEditingMeasures;
+    // ここでの「Nページ分」は常に描画される量ではなく、あくまで「＋小節を追加」や
+    // 空の段（Issue #41、下の lastPageEmptyFillerRanges 参照）ですぐ表示できる
+    // 予備の計画データ（幅計算済みの空き枠）。ユーザーが追加した小節数
+    // （extraEditingMeasures）ぶんは必ず用意しつつ、その先にも最低2段・最大で
+    // ページ1枚分の予備を残す（空の段をページのキャパシティぶん表示できるよう、
+    // 固定の2段ではなくページの段数上限を基準にする）。
+    // ただし系統数の基準は maxSystemsPerPage（実測の上限）でクランプする。
+    // systemsPerPage はユーザーが maxSystemsPerPage を超えて手動指定できる値のため
+    // （あふれ警告つきで許可している）、そのまま使うと極端な指定（例: 999段/ページ）で
+    // 数千小節分の幅計画・空の段プレースホルダーを組もうとして固まってしまう。
+    const editingBufferSystems = Math.max(2, Math.min(systemsPerPage, maxSystemsPerPage));
+    const editingBufferMeasures = Math.max(effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem) * editingBufferSystems + extraEditingMeasures;
     const length = Math.max(contentMeasureCount + editingBufferMeasures, effectiveMeasurePlan.minimumWidths.length);
     return Array.from({ length }, (_, index) => (
       effectiveMeasurePlan.minimumWidths[index] ?? MIN_MEASURE_CONTENT_WIDTH
     ));
-  }, [contentMeasureCount, effectiveMeasurePlan.minimumWidths, effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem, extraEditingMeasures]);
+  }, [contentMeasureCount, effectiveMeasurePlan.minimumWidths, effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem, extraEditingMeasures, systemsPerPage, maxSystemsPerPage]);
   const plannedRanges = useMemo(() => planSystemMeasureRanges(
     // plannerMinimumWidths は（Canvas 描画にそのまま渡せるよう）VexFlow の論理単位のまま。
     // 一方 worstCaseSystemContentBudget() は物理ページ幅（SCORE_LAYOUT_RENDER_SCALE 倍後）
@@ -2866,6 +2874,39 @@ export default function ScorePage() {
   // - 印刷も画面の DOM をそのまま刷るため、2ページ目以降が印刷されない
   // という問題があったため廃止した。狭い画面では columns=1（縦1列）で全ページ並ぶ。
   const visiblePages = pages;
+
+  // 「空の段でページを満たす」(Issue #41): 新規譜面など、末尾のページに余裕があるときだけ、
+  // クリックで書き始められる薄いグレーの空の段（五線紙のような見た目）を追加で表示する。
+  // plannedRanges の続き（内容・＋小節を追加バッファの先）をそのまま使うことで、
+  // クリックして実体化したときの小節幅・小節数が変わらないようにする。
+  // あくまで画面表示だけの演出で、クリックするまでは楽譜データに一切書き込まない
+  // （下の EmptyStaveFiller 側は disabled かつローカルの空データを渡すだけの
+  // PianoSystemCanvas 呼び出しで、onChange は no-op のため親の state を更新しない）。
+  const lastVisiblePageIndex = visiblePages.length - 1;
+  const lastPageEmptyFillerRanges = useMemo(() => {
+    if (isPartExtractionActive || isEditingDisabled) return [];
+    // systemsPerPage が実測の上限（maxSystemsPerPage）を超えて手動指定されている
+    // （あふれ警告つきで許可している）場合、そのページ容量ぶんの空の段を描こうとすると
+    // 極端な指定（例: 999段/ページ）で数百〜数千個のプレースホルダー段を描画しようとして
+    // 固まってしまう。空の段はあくまで「実測で自然に収まる範囲」を埋める演出なので、
+    // 上限は必ず maxSystemsPerPage でクランプする。
+    const capacity = Math.min(getPageSystemsCapacity(lastVisiblePageIndex), maxSystemsPerPage);
+    const used = effectiveTotalSystems - getPageSystemOffset(lastVisiblePageIndex);
+    const count = Math.max(0, capacity - used);
+    if (count === 0) return [];
+    return plannedRanges.slice(effectiveTotalSystems, effectiveTotalSystems + count);
+  }, [isPartExtractionActive, isEditingDisabled, lastVisiblePageIndex, getPageSystemsCapacity, maxSystemsPerPage, effectiveTotalSystems, getPageSystemOffset, plannedRanges]);
+
+  // 空の段（lastPageEmptyFillerRanges）を index 番目までクリックで実体化する。
+  // 「＋小節を追加」ボタンと同じ extraEditingMeasures を使うため、実際の描画は
+  // 既存の bufferRanges の仕組みへそのまま合流し、次の描画から通常の入力可能な段になる
+  // （手前の空き段は自動休符補完の既存仕様に従う）。
+  // 楽譜データそのものは変えず、Undo履歴にも積まない（＋小節を追加ボタンと同じ方針）。
+  const handleEmptyFillerClick = useCallback((index: number) => {
+    setExtraEditingMeasures((prev) => (
+      prev + lastPageEmptyFillerRanges.slice(0, index + 1).reduce((sum, range) => sum + range.count, 0)
+    ));
+  }, [lastPageEmptyFillerRanges]);
 
   const [sharedPageHeight, setSharedPageHeight] = useState<number | null>(null);
 
@@ -4052,6 +4093,8 @@ export default function ScorePage() {
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
+                      emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
+                      onEmptyFillerClick={handleEmptyFillerClick}
                     />
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
@@ -4080,6 +4123,8 @@ export default function ScorePage() {
                       onKeySignatureChange={handleKeySignatureChange}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
+                      emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
+                      onEmptyFillerClick={handleEmptyFillerClick}
                     />
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
@@ -4114,6 +4159,8 @@ export default function ScorePage() {
                       customSymbolDefs={customSymbolDefs}
                       activeVoiceIndex={activeVoice}
                       symbolsClickable={activeToolbarTab === 'symbols'}
+                      emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
+                      onEmptyFillerClick={handleEmptyFillerClick}
                     />
                   ) : (
                     <SingleStaff
@@ -4144,6 +4191,8 @@ export default function ScorePage() {
                       onMeasureSelect={handleMeasureSelect}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
+                      emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
+                      onEmptyFillerClick={handleEmptyFillerClick}
                     />
                   )}
 

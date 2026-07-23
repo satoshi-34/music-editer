@@ -12,6 +12,7 @@ import {
 import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
+import { createEmptyMeasures } from '../utils/voiceMeasureUtils';
 
 type Props = {
   tool: Tool;
@@ -61,6 +62,11 @@ type Props = {
    * 各段の直前に marginTop として乗せる（詳細は SingleStaff.tsx 側のコメント参照）。
    */
   systemGapOverridesPx?: number[];
+  /**
+   * 「空の段でページを満たす」(Issue #41)。SingleStaff.tsx 側のコメント参照。
+   */
+  emptyFillerRanges?: SystemMeasureRange[];
+  onEmptyFillerClick?: (index: number) => void;
 };
 
 export default function EnsembleStaff({
@@ -88,6 +94,8 @@ export default function EnsembleStaff({
   finalMeasureIndex,
   symbolsClickable,
   systemGapOverridesPx,
+  emptyFillerRanges,
+  onEmptyFillerClick,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -182,6 +190,49 @@ export default function EnsembleStaff({
           </div>
         );
       })}
+      {emptyFillerRanges?.map((range, i) => (
+        // empty-stave-filler: 五線紙のような「空の段」プレースホルダー（Issue #41）。
+        // SingleStaff.tsx 側のコメント参照。編成譜も楽器グループの括弧が付いた見た目で
+        // プレースホルダーを描けるよう、実際のパート定義（clef/bracketGroup 等）を使い、
+        // データだけをローカルの空小節に差し替える。
+        <div
+          key={`empty-filler-${i}`}
+          className="empty-stave-filler"
+          role="button"
+          tabIndex={0}
+          onClick={() => onEmptyFillerClick?.(i)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onEmptyFillerClick?.(i);
+            }
+          }}
+        >
+          <PianoSystemCanvas
+            measuresPerSystem={range.count}
+            tool={tool}
+            scale={scale}
+            partsConfig={instrumentationParts.map((part) => ({
+              clef: part.clef,
+              label: part.abbreviation || part.name,
+              playbackInstrument: part.playbackInstrument,
+              bracketGroup: part.bracketGroup,
+              subBracketGroup: part.subBracketGroup,
+              data: createEmptyMeasures(range.count),
+              onChange: () => {},
+            }))}
+            showInstrumentLabels={false}
+            startMeasureIndex={0}
+            disabled
+            currentInstrument={currentInstrument}
+            keySignature={keySignature}
+            timeSignature={timeSignature}
+            plannedMeasureWidths={range.minimumWidths}
+            measureWidthEvenness={measureWidthEvenness}
+            pageMarginSideMm={pageMarginSideMm}
+          />
+        </div>
+      ))}
     </div>
   );
 }

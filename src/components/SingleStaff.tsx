@@ -18,6 +18,7 @@ import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
 import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
+import { createEmptyMeasures } from '../utils/voiceMeasureUtils';
 
 type Props = {
   tool: Tool;
@@ -65,6 +66,14 @@ type Props = {
    * .claude/specs/page-layout-controls/design.md 参照）。省略時・値が0のときは従来どおり。
    */
   systemGapOverridesPx?: number[];
+  /**
+   * 「空の段でページを満たす」(Issue #41)。段の続き（内容・編集バッファの先）ぶんの
+   * 幅計画だけを流用した、表示専用の空の段。クリックすると onEmptyFillerClick が呼ばれ、
+   * 呼び出し元（ScorePage）が実体化する。渡された範囲の情報だけを見た目に使い、
+   * この段自体はローカルの空データを描くだけで保存データには一切触れない。
+   */
+  emptyFillerRanges?: SystemMeasureRange[];
+  onEmptyFillerClick?: (index: number) => void;
 };
 
 export default function SingleStaff({
@@ -92,6 +101,8 @@ export default function SingleStaff({
   finalMeasureIndex,
   symbolsClickable,
   systemGapOverridesPx,
+  emptyFillerRanges,
+  onEmptyFillerClick,
 }: Props) {
   const scoreData = data ?? [];
   const handleChange = onChange ?? (() => {});
@@ -144,6 +155,41 @@ export default function SingleStaff({
           </div>
         );
       })}
+      {emptyFillerRanges?.map((range, i) => (
+        // empty-stave-filler: 五線紙のような「空の段」プレースホルダー（Issue #41）。
+        // クリックで onEmptyFillerClick を呼び、ScorePage 側が実体化する。
+        // 表示専用のローカル空データを渡すだけの PianoSystemCanvas 呼び出しで、
+        // onChange は no-op のため保存データには一切書き込まれない。
+        <div
+          key={`empty-filler-${i}`}
+          className="empty-stave-filler"
+          role="button"
+          tabIndex={0}
+          onClick={() => onEmptyFillerClick?.(i)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onEmptyFillerClick?.(i);
+            }
+          }}
+        >
+          <PianoSystemCanvas
+            measuresPerSystem={range.count}
+            tool={tool}
+            scale={scale}
+            partsConfig={[{ clef: 'treble', data: createEmptyMeasures(range.count), onChange: () => {} }]}
+            showInstrumentLabels={false}
+            startMeasureIndex={0}
+            disabled
+            currentInstrument={currentInstrument}
+            keySignature={keySignature}
+            timeSignature={timeSignature}
+            plannedMeasureWidths={range.minimumWidths}
+            measureWidthEvenness={measureWidthEvenness}
+            pageMarginSideMm={pageMarginSideMm}
+          />
+        </div>
+      ))}
     </div>
   );
 }

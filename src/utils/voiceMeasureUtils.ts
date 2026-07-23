@@ -52,6 +52,14 @@ export function createEmptyMeasure(): MeasureData {
   return { events: [] };
 }
 
+// 表示専用の空の段（Issue #41「空の段でページを満たす」）用に、count個ぶんの
+// 空小節をまとめて作る。呼び出し元でローカルにだけ保持し、保存データには
+// 一切書き込まない前提（PianoSystemCanvas に渡す data を毎回この関数で
+// 新規生成することで、実データ配列と参照が混ざらないようにする）。
+export function createEmptyMeasures(count: number): MeasureData[] {
+  return Array.from({ length: count }, () => createEmptyMeasure());
+}
+
 /**
  * 既存実装では measure.events が編集の正本なので、
  * voices[0] がある小節でも primary voice は measure.events を優先して扱う。
