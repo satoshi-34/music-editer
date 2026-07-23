@@ -76,6 +76,17 @@ import {
   MIN_MEASURE_CONTENT_WIDTH,
   worstCaseSystemContentBudget,
   DEFAULT_PAGE_SIDE_MARGIN_MM,
+  NOTATION_SIZE_MULTIPLIER_MIN,
+  NOTATION_SIZE_MULTIPLIER_MAX,
+  PAGE_MARGIN_SIDE_MIN_MM,
+  PAGE_MARGIN_SIDE_MAX_MM,
+  PAGE_MARGIN_VERTICAL_MIN_MM,
+  PAGE_MARGIN_VERTICAL_MAX_MM,
+  PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM,
+  DEFAULT_PAGE_MARGIN_TOP_MM,
+  DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+  SYSTEM_ROW_GAP_MIN_PX,
+  SYSTEM_ROW_GAP_MAX_PX,
   planSystemMeasureRanges,
   estimateEnsembleSystemHeightPx,
   computeEnsembleAutoFitMultiplier,
@@ -83,6 +94,13 @@ import {
   type SystemMeasureRange,
   type MeasureLayoutPartContext,
 } from '../utils/measureLayoutUtils';
+import {
+  type ScoreSettingsProfile,
+  loadSettingsProfile,
+  saveSettingsProfile,
+  resetSettingsProfile,
+  hasSettingsProfile,
+} from '../utils/settingsProfile';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
   sanitizePlaybackRuntimeSettings,
@@ -94,7 +112,7 @@ import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamic
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId } from '../utils/instrumentationPartUtils';
 import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
-import { DEFAULT_TIME_SIGNATURE, formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
@@ -123,17 +141,14 @@ const VIEW_ZOOM_KEY = 'score-view-zoom';
 const NOTATION_SIZE_KEY = 'score-notation-size';
 // 音符の大きさスライダーが取りうる倍率の範囲（0.8〜2.0）。
 // スライダーの min/max、state 初期化時のクランプ、maxSystemsPerPage の動的計算で
-// 同じ範囲を使うため、値のズレが起きないよう定数化しておく。
-const NOTATION_SIZE_MULTIPLIER_MIN = 0.8;
-const NOTATION_SIZE_MULTIPLIER_MAX = 2.0;
+// 同じ範囲を使うため、値のズレが起きないよう定数化しておく（NOTATION_SIZE_MULTIPLIER_MIN/MAX は
+// settingsProfile.ts とも共有するため measureLayoutUtils.ts 側で定義している）。
 // 「ページ余白（左右）」のユーザー設定（その他タブのスライダー、mm単位）。
 // 正本は measureLayoutUtils.ts の printScoreAreaWidthPx()/worstCaseSystemContentBudget() に集約し、
 // CSS 側（.print-page の padding）へはここで作る値を CSS カスタムプロパティとして渡す
 // （CSSとJSでの二重定義を避ける）。既定値 14mm は従来の固定 padding と同じにし、
 // スライダーを一度も触らなければ見た目が変わらないようにする。
 const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
-const PAGE_MARGIN_SIDE_MIN_MM = 8;
-const PAGE_MARGIN_SIDE_MAX_MM = 25;
 // 「ページ余白（上）」「ページ余白（下）」のユーザー設定（その他タブのスライダー、各8〜25mm）。
 // 以前は「余白(上下)」1本のスライダーで、上 padding の値をそのまま使い、下 padding は
 // 常に「上 − 2mm」を保つ仕様だった（従来の固定値が 上14mm/下12mm だったため）。
@@ -144,11 +159,6 @@ const PAGE_MARGIN_SIDE_MAX_MM = 25;
 const PAGE_MARGIN_VERTICAL_LEGACY_KEY = 'score-page-margin-vertical';
 const PAGE_MARGIN_TOP_KEY = 'score-page-margin-top';
 const PAGE_MARGIN_BOTTOM_KEY = 'score-page-margin-bottom';
-const PAGE_MARGIN_VERTICAL_MIN_MM = 8;
-const PAGE_MARGIN_VERTICAL_MAX_MM = 25;
-const PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM = 2;
-const DEFAULT_PAGE_MARGIN_TOP_MM = DEFAULT_PAGE_SIDE_MARGIN_MM;
-const DEFAULT_PAGE_MARGIN_BOTTOM_MM = DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM;
 // 「段の間隔」のユーザー設定（その他タブのスライダー、px単位）。
 // 正負を問わず単一の連続な方式で反映する: 段スロット高（ページの譜面領域÷段数）を
 // 基準に、この値をスロット高への加減として適用し（App.css の
@@ -160,8 +170,6 @@ const DEFAULT_PAGE_MARGIN_BOTTOM_MM = DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_
 // 段を上から詰めて並べるぶん、あまった高さはページ下部に残る（市販譜で行間を詰めると
 // 下が余るのと同じ考え方）。既定値 0 は従来どおり間隔なし。
 const SYSTEM_ROW_GAP_KEY = 'score-system-row-gap';
-const SYSTEM_ROW_GAP_MIN_PX = -30;
-const SYSTEM_ROW_GAP_MAX_PX = 30;
 // 段ごとの間隔（上の段との距離）を「－／＋」ボタン1回で増減するステップ幅(px)。
 // 全体の「段の間隔」スライダーと同じ範囲（-30〜30px）を、この刻みで細かく調整できるようにする。
 const SYSTEM_ROW_GAP_OVERRIDE_STEP_PX = 4;
@@ -1600,12 +1608,10 @@ export default function ScorePage() {
     setComposer('作曲者');
     setArranger('編曲者');
     setTool({ duration: '4', isRest: false });
-    setScoreType('single');
-    setInstrumentation(getDefaultInstrumentationForScoreType('single'));
     setNotationMode('concert');
-    setKeySignature('C');
-    await setTimeSignature(...DEFAULT_TIME_SIGNATURE);
-    setMeasuresPerSystem(4);
+    // 楽譜の種類・拍子・調号・段組み・余白などは、保存済みの初期値プリセット（issue #39）が
+    // あればその値、無ければ従来どおりのコード上の既定値（工場出荷値）を適用する。
+    await applySettingsProfileToState(loadSettingsProfile());
     setRightHandData([]);
     setLeftHandData(undefined);
     setQuartetParts(Array.from({ length: 4 }, () => []));
@@ -1620,6 +1626,11 @@ export default function ScorePage() {
     setSystemMeasureOverrides([]);
     // 前の譜面用の段の間隔手動上書きも引き継がない
     setSystemRowGapOverrides([]);
+  // applySettingsProfileToState はレンダーごとに作り直される素の関数（安定な setter・
+  // インポート済みの純関数だけを参照するため、依存に加えても再生成のたびに
+  // handleNewScore 自体を再構築するだけで挙動は変わらない）。他の setter 群と同様、
+  // 依存配列には含めない。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     clearAutosaveData,
     clearPlaybackTimer,
@@ -1759,10 +1770,19 @@ export default function ScorePage() {
         // 自動保存データが無いときは、単旋律譜の空編集状態から始められるようにする
         // （rightHandData が undefined のままだと画面側が「初期ロード前」と区別できないため）。
         setRightHandData(prev => prev ?? []);
+        // 保存済みの初期値プリセット（issue #39）が明示的にある場合だけ適用する。
+        // 未保存のユーザーには何もしない（個別スライダーは自分の localStorage キーから
+        // 既に初期化済みのため、ここで何もしなければ従来どおりの挙動のまま変わらない）。
+        if (hasSettingsProfile()) {
+          await applySettingsProfileToState(loadSettingsProfile());
+        }
       }
 
       setAutosaveRestoreReady(true);
     })();
+  // applySettingsProfileToState はレンダーごとに作り直される素の関数のため、
+  // handleNewScore と同じ理由で依存配列には含めない。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadAutosave, setTimeSignature]);
 
   // 自動保存（編集から 1.5 秒後に localStorage へ保存）
@@ -2355,6 +2375,99 @@ export default function ScorePage() {
     // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0〜1 へクランプする
     return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : MEASURE_WIDTH_EVENNESS;
   });
+
+  // 「譜面設定の初期値プリセット」（issue #39）まわりの状態・処理。
+  // 「既定として保存」ボタンを押した直後・「工場出荷時に戻す」ボタンを押した直後に
+  // 短く表示するお知らせ（他の autoSaveStatus / restoreNotice と同じ「数秒で消える」パターン）。
+  const [settingsProfileNotice, setSettingsProfileNotice] = useState<string | null>(null);
+  const settingsProfileNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showSettingsProfileNotice = useCallback((message: string) => {
+    setSettingsProfileNotice(message);
+    if (settingsProfileNoticeTimerRef.current) clearTimeout(settingsProfileNoticeTimerRef.current);
+    settingsProfileNoticeTimerRef.current = setTimeout(() => setSettingsProfileNotice(null), 3000);
+  }, []);
+
+  // 保存済みプロファイル（無ければ工場出荷既定値）を画面へ適用する。
+  // 「新規譜面の作成時」「保存済み譜面が無い状態での起動時」の2箇所からのみ呼ぶ
+  // （読込・自動保存復元では呼ばず、読み込んだ譜面側の値を上書きしない）。
+  // measuresPerSystem 等、後方で宣言される setter を参照するが、実際に呼ばれるのは
+  // レンダー完了後（ユーザー操作・起動時 useEffect）なので TDZ の問題はない
+  // （handleExportFile などこのファイルの既存コードと同じ考え方）。
+  const applySettingsProfileToState = async (profile: ScoreSettingsProfile) => {
+    setScoreType(profile.scoreType);
+    setInstrumentation(
+      profile.scoreType === 'ensemble'
+        ? getInstrumentationPreset(profile.instrumentationPresetId)
+        : getDefaultInstrumentationForScoreType(profile.scoreType)
+    );
+    setKeySignature(profile.keySignature);
+    await setTimeSignature(...profile.timeSignature);
+    setMeasuresPerSystem(profile.measuresPerSystem);
+    setDisplayWeight(profile.displayWeight);
+    setMeasureWidthEvenness(profile.measureWidthEvenness);
+    localStorage.setItem(MEASURE_WIDTH_EVENNESS_KEY, String(profile.measureWidthEvenness));
+    setNotationSizeMultiplier(profile.notationSizeMultiplier);
+    localStorage.setItem(NOTATION_SIZE_KEY, String(profile.notationSizeMultiplier));
+    setPageMarginSideMm(profile.pageMarginSideMm);
+    localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(profile.pageMarginSideMm));
+    setPageMarginTopMm(profile.pageMarginTopMm);
+    localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(profile.pageMarginTopMm));
+    setPageMarginBottomMm(profile.pageMarginBottomMm);
+    localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(profile.pageMarginBottomMm));
+    setSystemRowGapPx(profile.systemRowGapPx);
+    localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(profile.systemRowGapPx));
+    setSystemsPerPageSetting(profile.systemsPerPageSetting);
+    if (profile.systemsPerPageSetting == null) {
+      localStorage.removeItem(SYSTEMS_PER_PAGE_KEY);
+    } else {
+      localStorage.setItem(SYSTEMS_PER_PAGE_KEY, String(profile.systemsPerPageSetting));
+    }
+  };
+
+  // 「既定として保存」: 現在の画面設定をまるごとプロファイルとして保存する。
+  const handleSaveSettingsProfile = useCallback(() => {
+    const profile: Omit<ScoreSettingsProfile, 'version'> = {
+      scoreType,
+      instrumentationPresetId: instrumentation.presetId,
+      timeSignature: scoreTimeSignature,
+      keySignature,
+      measuresPerSystem,
+      systemsPerPageSetting,
+      displayWeight,
+      measureWidthEvenness,
+      notationSizeMultiplier,
+      pageMarginSideMm,
+      pageMarginTopMm,
+      pageMarginBottomMm,
+      systemRowGapPx,
+    };
+    saveSettingsProfile(profile);
+    showSettingsProfileNotice('現在の設定を既定として保存しました');
+  }, [
+    scoreType,
+    instrumentation.presetId,
+    scoreTimeSignature,
+    keySignature,
+    measuresPerSystem,
+    systemsPerPageSetting,
+    displayWeight,
+    measureWidthEvenness,
+    notationSizeMultiplier,
+    pageMarginSideMm,
+    pageMarginTopMm,
+    pageMarginBottomMm,
+    systemRowGapPx,
+    showSettingsProfileNotice,
+  ]);
+
+  // 「工場出荷時に戻す」: 保存済みプロファイルを削除するだけで、今開いている譜面の
+  // 設定はその場では変えない（次回の新規作成・起動時からコード上の既定値に戻る）。
+  // 現在編集中の譜面をこのボタン1つで強制的に書き換えるのは影響が大きすぎるため、
+  // 「設定変更→保存→リロード→新規譜面で復元確認」という受入条件の確認手順とも合わせている。
+  const handleResetSettingsProfile = useCallback(() => {
+    resetSettingsProfile();
+    showSettingsProfileNotice('保存済みの初期値プリセットを削除しました（次回の新規譜面・起動時からコード上の既定値になります）');
+  }, [showSettingsProfileNotice]);
 
   // 画面専用の「＋小節を追加」ボタンで、内容のある最後の小節より後ろに
   // 追加でいくつ編集用の空き小節を表示するか（クリック1回につき1小節ぶん）。
@@ -3370,6 +3483,31 @@ export default function ScorePage() {
               >
                 レイアウトをリセット
               </button>
+              {/* 譜面設定の初期値プリセット（issue #39）。楽譜の種類・編成・拍子・調号・段組み・
+                  余白などをまとめて保存し、新規譜面の作成時と次回起動時（保存済み譜面が
+                  無い場合のみ）の初期値として使う。譜面データ（音符）は保存しない。 */}
+              <span className="toolbar-group-label">初期値プリセット</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={handleSaveSettingsProfile}
+                  style={{ fontSize: 13, padding: '3px 8px' }}
+                  title="現在の楽譜の種類・編成・拍子・調号・段組み・余白などを、新規譜面作成時と次回起動時の初期値として保存します（音符データは含みません）"
+                >
+                  既定として保存
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetSettingsProfile}
+                  style={{ fontSize: 13, padding: '3px 8px' }}
+                  title="保存した初期値プリセットを削除し、次回の新規譜面作成・起動時からコード上の工場出荷時の既定値に戻します（今の画面はそのままです）"
+                >
+                  工場出荷時に戻す
+                </button>
+                {settingsProfileNotice && (
+                  <span style={{ fontSize: 12, color: '#555' }} role="status">{settingsProfileNotice}</span>
+                )}
+              </div>
               <div className="coord-correction-wrap">
                 <button
                   type="button"

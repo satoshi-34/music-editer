@@ -60,6 +60,24 @@ export const SYSTEM_MAX_LABEL_WIDTH = 74;
 // 従来どおり全く同じ値（PRINT_SCORE_AREA_WIDTH_PX 相当）が返る。
 export const DEFAULT_PAGE_SIDE_MARGIN_MM = 14;
 
+// 「その他/楽譜設定」タブのレイアウト系スライダーが取りうる範囲。ScorePage.tsx と
+// settingsProfile.ts（初期値プリセット、issue #39）の両方から同じ値を参照する必要があるため、
+// スライダー実装側（元は ScorePage.tsx にローカル定義していた）からこちらへ集約し、
+// 値の食い違い（二重管理）が起きないようにしている。
+export const NOTATION_SIZE_MULTIPLIER_MIN = 0.8;
+export const NOTATION_SIZE_MULTIPLIER_MAX = 2.0;
+export const PAGE_MARGIN_SIDE_MIN_MM = 8;
+export const PAGE_MARGIN_SIDE_MAX_MM = 25;
+export const PAGE_MARGIN_VERTICAL_MIN_MM = 8;
+export const PAGE_MARGIN_VERTICAL_MAX_MM = 25;
+// 「余白(上)」「余白(下)」を分離する前は1本のスライダーで、下余白は常に「上余白－2mm」
+// だった。既定値はその名残（上14mm/下12mm）を保つ。
+export const PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM = 2;
+export const DEFAULT_PAGE_MARGIN_TOP_MM = DEFAULT_PAGE_SIDE_MARGIN_MM;
+export const DEFAULT_PAGE_MARGIN_BOTTOM_MM = DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM;
+export const SYSTEM_ROW_GAP_MIN_PX = -30;
+export const SYSTEM_ROW_GAP_MAX_PX = 30;
+
 export function printScoreAreaWidthPx(sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM): number {
   return (210 - sideMarginMm * 2) * (96 / 25.4);
 }
