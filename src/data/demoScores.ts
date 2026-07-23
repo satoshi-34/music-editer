@@ -1,6 +1,6 @@
 import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, NoteEvent, ScoreMetadata, ScoreType, TimeSignature } from '../types/storage';
-import { defaultRestDisplayKey, type ClefType } from '../components/clefUtils';
+import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/clefUtils';
 import type { KeySignature } from '../utils/noteKeyUtils';
 
 export interface DemoScore {
@@ -52,7 +52,7 @@ function rest(dur: NoteEvent['dur'], clef: ClefType = 'treble'): NoteEvent {
     isRest: true,
     // デモ譜面も編集直後の見た目とそろえておくと、
     // サンプルを開いた瞬間の休符位置が実入力時と一致して分かりやすい。
-    keys: [defaultRestDisplayKey(clef)]
+    keys: [defaultRestDisplayKeyForDuration(clef, dur)]
   };
 }
 

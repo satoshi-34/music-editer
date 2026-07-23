@@ -13,6 +13,7 @@ import { applyOrnamentToEvent, ornamentToVexCode } from '../utils/ornamentUtils'
 import type { ClefType } from './clefUtils';
 import {
   defaultRestDisplayKey,
+  defaultRestDisplayKeyForDuration,
   restKey as restFormatterKey,
   restKeyForVoice,
   lineToKey as lineToKeyForClef,
@@ -292,16 +293,16 @@ function buildRestEditReplacement(
   return noteAfterRest ? [restPart, notePart] : [notePart, restPart];
 }
 
-function buildRestEventsForBeats(beats: number, restKey: string): NoteEvent[] {
+function buildRestEventsForBeats(beats: number, clef: ClefType): NoteEvent[] {
   // 指定拍数を休符イベントの配列へ変換する。
   // 大きい音価から順に使うため、見た目もデータも自然な分割になる。
-  // restKey は実音の高さではなく「休符をどの高さに描くか」の指定。
+  // 休符の描画位置は音価ごとの標準浄書位置（全休符だけ異なる）を使う。
   const rests: NoteEvent[] = [];
   let remaining = beats;
   for (const duration of DURATION_TOOL_VALUES) {
     const durationBeats = beatsFromVF(toVFDur(duration));
     while (remaining + 0.0001 >= durationBeats) {
-      rests.push({ dur: duration, isRest: true, keys: [restKey] });
+      rests.push({ dur: duration, isRest: true, keys: [defaultRestDisplayKeyForDuration(clef, duration)] });
       remaining -= durationBeats;
     }
   }
@@ -312,7 +313,7 @@ function fillPriorMeasureRests(
   measures: MeasureData[],
   targetMeasureIndex: number,
   beatsPerMeasure: number,
-  restKey: string
+  clef: ClefType
 ): void {
   // 複数段譜用の自動休符補完。
   // あるパートで targetMeasureIndex の小節に入力し始めたら、
@@ -329,7 +330,7 @@ function fillPriorMeasureRests(
     const currentBeats = measure.events.reduce((sum, event) => sum + eventOccupiedBeats(event), 0);
     const remainingBeats = beatsPerMeasure - currentBeats;
     if (remainingBeats > 0.0001) {
-      measure.events.push(...buildRestEventsForBeats(remainingBeats, restKey));
+      measure.events.push(...buildRestEventsForBeats(remainingBeats, clef));
     }
   }
 }
@@ -549,7 +550,7 @@ function makeVFNote(
   renderAsGhostRest = false,
   prevMeasureState?: MeasureAccidentalState,
   // 2声部が共存する小節で、休符を声部1=やや上/声部2=やや下にずらすための
-  // 描画専用キー。undefined のときは従来通り restKeyForClef(clef) を使う
+  // 描画専用キー。undefined のときは従来通り音価に応じた既定位置を使う
   // （単声部小節でのリグレッション防止）。
   restKeyOverride?: string
 ) {
@@ -567,9 +568,13 @@ function makeVFNote(
     if (renderAsGhostRest) {
       return new GhostNote({ duration: vd, dots: vexFlowDotCount(ev.dots) });
     }
-    const eventRestKey = ev.keys[0] || defaultRestKeyForClef(clef);
-    const renderRestKey = eventRestKey === defaultRestKeyForClef(clef)
-      ? (restKeyOverride ?? restKeyForClef(clef))
+    // 保存データが「音価によらない旧既定位置」のままなら、
+    // 音価に応じた標準浄書位置（全休符だけ異なる）へ自動的に引き上げる。
+    // ユーザーが実際に位置をカスタマイズした休符（旧既定位置と一致しないキー）はそのまま尊重する。
+    const legacyDefaultRestKey = defaultRestKeyForClef(clef);
+    const eventRestKey = ev.keys[0] || legacyDefaultRestKey;
+    const renderRestKey = eventRestKey === legacyDefaultRestKey
+      ? (restKeyOverride ?? defaultRestDisplayKeyForDuration(clef, ev.dur))
       : eventRestKey;
     return attachDots(new StaveNote({clef,keys:[renderRestKey],duration:vd+'r',dots:vexFlowDotCount(ev.dots)}));
   }
@@ -578,7 +583,7 @@ function makeVFNote(
     if (renderAsGhostRest) {
       return new GhostNote({ duration: vd, dots: vexFlowDotCount(ev.dots) });
     }
-    return attachDots(new StaveNote({clef,keys:[restKeyOverride ?? restKeyForClef(clef)],duration:vd+'r',dots:vexFlowDotCount(ev.dots)}));
+    return attachDots(new StaveNote({clef,keys:[restKeyOverride ?? defaultRestDisplayKeyForDuration(clef, ev.dur)],duration:vd+'r',dots:vexFlowDotCount(ev.dots)}));
   }
   const n=new StaveNote({clef,keys:ev.keys,duration:vd,dots:vexFlowDotCount(ev.dots)});
   if (stemDirection) {
@@ -645,10 +650,8 @@ function makeVFNote(
 }
 
 function sanitizeRenderEvent(ev: any, clef: ClefType): RenderNoteEvent {
-  const defaultRestKey = defaultRestKeyForClef(clef);
-
   if (!ev || !ev.dur) {
-    return { dur: '4' as DurKey, isRest: true, keys: [defaultRestKey] };
+    return { dur: '4' as DurKey, isRest: true, keys: [defaultRestDisplayKeyForDuration(clef, '4')] };
   }
 
   const rawKeys: unknown[] = Array.isArray(ev.keys) ? ev.keys : [];
@@ -658,7 +661,7 @@ function sanitizeRenderEvent(ev: any, clef: ClefType): RenderNoteEvent {
     // どの経路から来ても VexFlow へ不正な休符位置を渡さないよう、描画直前で丸める。
     const restKey = typeof rawKeys[0] === 'string' && isValidNoteKeyString(rawKeys[0])
       ? rawKeys[0]
-      : defaultRestKey;
+      : defaultRestDisplayKeyForDuration(clef, ev.dur);
     return { ...ev, dur: ev.dur as DurKey, isRest: true, keys: [restKey] };
   }
 
@@ -667,7 +670,7 @@ function sanitizeRenderEvent(ev: any, clef: ClefType): RenderNoteEvent {
   ));
 
   if (validKeys.length === 0) {
-    return { ...ev, dur: ev.dur as DurKey, isRest: true, keys: [defaultRestKey] };
+    return { ...ev, dur: ev.dur as DurKey, isRest: true, keys: [defaultRestDisplayKeyForDuration(clef, ev.dur)] };
   }
 
   return { ...ev, dur: ev.dur as DurKey, isRest: false, keys: validKeys };
@@ -2243,7 +2246,7 @@ export default function PianoSystemCanvas({
         const clefHere=resolveMeasureClef(score, absI, part.clef);
 
         const data=absI<score.length?score[absI]:undefined;
-        const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestKeyForClef(clefHere)],__isPlaceholder:true}])
+        const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestDisplayKeyForDuration(clefHere, '1')],__isPlaceholder:true}])
           .map(ev=>sanitizeRenderEvent(ev, clefHere));
         // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
         // 移調楽器の記譜音表示などでパート固有の調号がある場合は、
@@ -2283,8 +2286,12 @@ export default function PianoSystemCanvas({
             // 全休符の小節（safeEvs が __isPlaceholder のプレースホルダー1件だけ）は
             // すでに1小節ぶんの休符が入っているため、computeVoiceDisplayPadding が
             // 追加分0件を返し、何も変わらない（リグレッション防止）。
-            const restKeyForPadding = restKeyForVoice(clefHere, voiceIndex, measureVoices.length);
-            const paddingRests: RenderNoteEvent[] = computeVoiceDisplayPadding(rawSourceEvents, beatsPerMeasure, restKeyForPadding)
+            // 2声部共存時は従来通り声部ごとの上下振り分け位置を使い、
+            // 単声部小節だけ音価に応じた標準浄書位置（全休符/2分休符以下）を使う。
+            const restKeyForPaddingDuration = (duration: NoteEvent['dur']) => isMultiVoiceMeasure
+              ? restKeyForVoice(clefHere, voiceIndex, measureVoices.length)
+              : defaultRestDisplayKeyForDuration(clefHere, duration);
+            const paddingRests: RenderNoteEvent[] = computeVoiceDisplayPadding(rawSourceEvents, beatsPerMeasure, restKeyForPaddingDuration)
               .map(rest => ({ ...sanitizeRenderEvent(rest, clefHere), __isPlaceholder: true }));
             let sourceEvents: RenderNoteEvent[] = rawSourceEvents;
             if (paddingRests.length > 0) {
@@ -2296,7 +2303,7 @@ export default function PianoSystemCanvas({
             }
 
             // 2声部共存時のみ、休符の描画位置を声部1=やや上/声部2=やや下にずらす。
-            // 単声部小節では undefined を渡し、従来の restKeyForClef(clef) を使う。
+            // 単声部小節では undefined を渡し、音価に応じた既定位置（makeVFNote 内）を使う。
             const restKeyOverride = isMultiVoiceMeasure
               ? restKeyForVoice(clefHere, voiceIndex, measureVoices.length)
               : undefined;
@@ -2643,7 +2650,7 @@ export default function PianoSystemCanvas({
             setScore(prev=>{
               const next=prev.map(cloneMeasureData);
               while(absI>=next.length)next.push(createEmptyMeasure());
-              fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(clefHere));
+              fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
               const m=next[absI];
               m.events.splice(Math.max(0,Math.min(at,m.events.length)),0,...groupEvents);
               return next;
@@ -2660,14 +2667,14 @@ export default function PianoSystemCanvas({
           const insertedEvent:NoteEvent={
             dur:addDuration,
             isRest:!!(tool as any)?.isRest,
-            keys:[(tool as any)?.isRest ? defaultRestKeyForClef(clefHere) : key],
+            keys:[(tool as any)?.isRest ? defaultRestDisplayKeyForDuration(clefHere, addDuration) : key],
             dots: addDots,
           };
 
           setScore(prev=>{
             const next=prev.map(cloneMeasureData);
             while(absI>=next.length)next.push(createEmptyMeasure());
-            fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(clefHere));
+            fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
             next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
               const copy=[...events];
               copy.splice(Math.max(0,Math.min(at,copy.length)),0,insertedEvent);
@@ -3354,7 +3361,7 @@ export default function PianoSystemCanvas({
                   setScore(prev=>{
                     const next=prev.map(cloneMeasureData);
                     // 声部1側の休符補完は従来どおり必要（声部2の拍位置合わせのため）。
-                    fillPriorMeasureRests(next, absI, beatsPerMeasure, defaultRestKeyForClef(clefHere));
+                    fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
                     const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
                     if(!targetEv?.isRest)return prev;
                     const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest);
