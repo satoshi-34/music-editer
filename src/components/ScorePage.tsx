@@ -100,6 +100,7 @@ import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHis
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
+import { computeFitZoom, VIEW_ZOOM_MIN } from '../utils/viewZoomUtils';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
@@ -2178,8 +2179,20 @@ export default function ScorePage() {
     const raw = localStorage.getItem(VIEW_ZOOM_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
     // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.5〜1.5 へクランプする
-    return Number.isFinite(n) ? Math.max(0.5, Math.min(1.5, n)) : 1;
+    return Number.isFinite(n) ? Math.max(VIEW_ZOOM_MIN, Math.min(1.5, n)) : 1;
   });
+  // 初期ズームの「幅フィット」適用（issue #40）。ズーム未保存（初回起動・新規譜面時）の
+  // ときだけ、実際の表示領域（.paper-rail）の幅からフィット倍率を計算し初期値へ反映する。
+  // 保存済みのユーザー設定は上書きしない。ウィンドウリサイズへの追従は行わない
+  // （初期値決定のみ。設計判断は .claude/specs/view-zoom/design.md 追補を参照）。
+  useEffect(() => {
+    if (localStorage.getItem(VIEW_ZOOM_KEY) != null) return;
+    const rail = spreadRef.current?.parentElement;
+    if (!rail) return;
+    setViewZoom(computeFitZoom(rail.clientWidth));
+    // 初回マウント時に一度だけ適用する
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // 自動縮尺にユーザーのズーム倍率を掛けた、実際に画面へ適用する縮尺。
   // クリック等の座標系は --scale から読むため、ここで一本化しておけば
   // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
@@ -3196,7 +3209,7 @@ export default function ScorePage() {
                   value={Math.round(viewZoom * 100)}
                   onChange={e => {
                     // スライダーは 50〜150(%) で扱い、内部では 0.5〜1.5 の倍率として保持する
-                    const v = Math.max(0.5, Math.min(1.5, Number(e.target.value) / 100));
+                    const v = Math.max(VIEW_ZOOM_MIN, Math.min(1.5, Number(e.target.value) / 100));
                     if (!isNaN(v)) {
                       setViewZoom(v);
                       localStorage.setItem(VIEW_ZOOM_KEY, String(v));

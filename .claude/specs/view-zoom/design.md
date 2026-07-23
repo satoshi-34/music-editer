@@ -184,3 +184,79 @@
     `.print-page` を返す）、引き続き自動化ツールの制約により確定できず。
     段調整UI等のボタン操作は問題なく動作しているため、アプリ側の欠陥という
     証拠はない。人間による手動スモークテストを推奨。
+
+---
+
+# 初期ズームの幅フィット（issue #40, 2026-07-23）
+
+## 背景・問題
+- 「画面表示のズーム」（`viewZoom`）の未保存時デフォルトは常に 100% 固定だった。
+  一方 `useAutoPageScale` が計算する自動縮尺（`scale`）は「画面幅いっぱいに収まる
+  最大サイズ（最大100%、それ以上は拡大しない）」に設計上とどまる。加えて自動縮尺の
+  計算（`useAutoPageScale.ts` の `need = pageWidthPx * columns + gap`）は現在の
+  レイアウト列数（`columns`。1200px幅未満で1列・以上で2列の見開き想定）を前提に
+  必要幅を見積もるため、**新規譜面など可視ページが1枚しかない場面でも2列分の
+  必要幅で計算される**。結果として起動直後・新規譜面でページが画面左（1列目）に
+  小さく寄り、右側（本来2枚目の見開き用に確保された領域）が大きく空いて見える、
+  という第一印象の問題があった。
+
+## 修正設計
+- **役割を変えない後付けの初期値調整**: `useAutoPageScale`（自動縮尺の計算式・列数の
+  扱い）や CSS グリッド（`.paper-rail` / `.spread` の列レイアウト）自体には一切
+  手を入れない。「ズームスライダーの初期値をどう決めるか」だけを変える、独立した
+  後付けのロジックとして実装した（既存の `effectiveScale = scale * viewZoom` の
+  合成方式・座標系・印刷への非干渉はすべてそのまま）。
+- **純関数として切り出し**: `src/utils/viewZoomUtils.ts` に `computeFitZoom(availableWidthPx, pageWidthPx = A4_PAGE_WIDTH_PX)` を追加。
+  「表示領域幅 ÷ ページ幅」の比率を、`VIEW_ZOOM_MIN`（50%。ズームスライダーの下限と
+  共有する定数）〜100%（1.0）でクランプして返す。表示領域が広い場合は100%で頭打ちに
+  し、それ以上は拡大しない（既存の「自動縮尺は最大100%」という設計方針を初期値にも
+  踏襲した）。幅が測れない（0以下・NaN）場合は安全側として既定の100%を返す。
+- **適用は初回マウント時の一度きり**: `ScorePage.tsx` に `useEffect(() => { ... }, [])`
+  を追加し、`localStorage`（`VIEW_ZOOM_KEY = 'score-view-zoom'`）に保存値が無い場合
+  だけ、`spreadRef.current.parentElement`（`.paper-rail`、`useAutoPageScale` が
+  `rail` として参照しているのと同じ要素）の `clientWidth` を実測して `computeFitZoom`
+  へ渡し、結果を `setViewZoom` する。保存値がある場合は何もしない（既存ユーザーの
+  表示は変わらない）。依存配列を空にして初回のみ実行し、ウィンドウリサイズへの
+  追従は行わない（issue の受入条件どおり、初期値決定のみに限定したスコープ判断）。
+- **スライダー下限の一本化**: 従来 `viewZoom` の state 初期化・onChange クランプに
+  直書きされていた下限値 `0.5` を `VIEW_ZOOM_MIN` へ置き換え、`computeFitZoom` の
+  既定下限と値がズレないようにした（上限 1.5 はスライダー自体の可動域であり、
+  フィット計算の頭打ち 1.0 とは意味が異なるため据え置き）。
+
+## 影響範囲
+- `src/utils/viewZoomUtils.ts`（新規）: `VIEW_ZOOM_MIN` / `A4_PAGE_WIDTH_PX` 定数、
+  `computeFitZoom` 純関数。
+- `src/components/ScorePage.tsx`: `viewZoom` state のクランプ下限を `VIEW_ZOOM_MIN`
+  参照に変更、初回マウント時の幅フィット適用 `useEffect` を追加、スライダー
+  `onChange` のクランプ下限も `VIEW_ZOOM_MIN` に統一。
+- `src/components/useAutoPageScale.ts` / `src/App.css`: 変更なし（既存の自動縮尺・
+  グリッド列レイアウトはそのまま）。
+
+## 検証
+- `docker exec music-editer-dev npx vitest --run src`: 90ファイル・1045テスト全緑
+  （新規: `viewZoomUtils.test.ts` 6テスト、`ScorePageInitialZoomFit.test.tsx` 3テスト）。
+- `docker exec music-editer-dev npx tsc -b --noEmit`: エラーなし。
+- `docker exec music-editer-dev npm run build`: エラーなし。
+- `docker exec music-editer-dev npx eslint`: 変更ファイル（`viewZoomUtils.ts` /
+  `viewZoomUtils.test.ts` / `ScorePageInitialZoomFit.test.tsx`）は警告・エラー
+  ゼロ。`ScorePage.tsx` に残る3件の `react-hooks/exhaustive-deps` 警告は、
+  変更前の `origin/main` でも同一行数・同一内容で存在することを stash して
+  確認済みの既存債務（本変更の対象外）。
+
+## 自信の無い点・スコープ判断
+- **ブラウザでの実機確認は未実施**。夜間無人実行のため、共有devcontainer上の
+  dev サーバー（port 5173、他セッションが応答していることを確認済み）に干渉
+  しないことを優先し、`.paper-rail` の `clientWidth` を差し替える統合テスト
+  （`ScorePageInitialZoomFit.test.tsx`）で「未保存かつ狭い→縮小」「未保存かつ
+  広い→100%」「保存済み→変化なし」の3パターンをDOM計測ベースで確認する形に
+  代えた。実際の見た目（新規譜面で右側の空きがどの程度減るか）は次回人間による
+  レビュー時にご確認いただくことを推奨する。
+- **「表示領域幅」の取り方**: `computeFitZoom` へ渡す実測幅は `.paper-rail`
+  （2列レイアウト時は2ページ分を想定した列全体の幅）をそのまま使っており、
+  実際にその列内で1ページに割り当てられるグリッドセル幅（1列なら全幅、2列なら
+  約半分）までは分解していない。2列レイアウトかつ新規譜面（可視ページ1枚）の
+  組み合わせでは、フィット計算後も実際のページはグリッドの1列目に収まる分
+  までしか大きくならない可能性があり、背景で述べた「空所」を完全には解消
+  しない場合がある。グリッド列構成（`--columns`）まで踏み込んだフィット計算は
+  「画面表示のズームの初期値」というスコープを超え、`useAutoPageScale` /
+  CSS グリッド設計への変更が必要になるため、本Issueでは見送った。

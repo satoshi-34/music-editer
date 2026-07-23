@@ -174,6 +174,7 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - **既存の自動縮尺との関係**: このアプリはもともと `useAutoPageScale`（`src/components/useAutoPageScale.ts`）が画面幅に合わせて自動で縮尺（`--scale`）を計算し、`ScaledPageWrapper`（`src/components/ScaledPageWrapper.tsx`）が `transform: scale(var(--scale))` で画面表示だけを縮小している（issue #13: CSS `zoom` は Safari で `getBoundingClientRect` に反映されず音符のクリック座標がずれるため、全ブラウザで座標に反映される `transform` を採用）。ズームスライダーはこの自動縮尺に**倍率として掛け合わせる**だけで（`ScorePage.tsx` の `effectiveScale = scale * viewZoom`）、既存の縮尺計算・座標変換の仕組みはそのまま利用する。100% がスライダー未操作時の従来どおりの表示（自動縮尺そのまま）
 - **印刷への影響**: 印刷は `@media print` で `.page-wrapper { transform: none !important; width: auto !important; height: auto !important; }` により画面用の縮小・ズームを丸ごと解除する既存設計（`src/App.css`）に従うため、ズームの値に関わらず印刷結果は変わらない
 - **座標系への影響**: 音符クリックなどのヒットテストは `.page-wrapper` の `--scale`（Safari 対策で `closest('.page-wrapper')` から読む実装、`StaffCanvas.tsx` / `PianoSystemCanvas.tsx`）を経由するため、ズームで `--scale` の値が変わっても座標変換は自動的に追従する
+- **初期ズームの幅フィット（issue #40）**: ズーム未保存（初回起動・新規譜面時）のときだけ、初期値を「ページ幅が表示領域（`.paper-rail`）の幅に収まる倍率」で自動計算する。表示領域が広い場合は100%で頭打ちにし、狭い場合のみ縮小する（下限は上記スライダーの下限50%と共通の `VIEW_ZOOM_MIN`）。計算は `src/utils/viewZoomUtils.ts` の純関数 `computeFitZoom` が担い、`ScorePage.tsx` の初回マウント時の `useEffect` から一度だけ適用する。ウィンドウリサイズへの追従はしない。ズーム保存済みのユーザーの表示は変わらない
 
 ### 音符の大きさ調整（印刷にも反映）
 - **どこで変えるか**: **楽譜設定タブの「音符の大きさ」スライダー**（80〜200%、5%刻み）で音符・五線・記号そのものの物理サイズを調節できる。設定はブラウザ（localStorage キー `score-notation-size`）に保存され、リロード後も維持される
