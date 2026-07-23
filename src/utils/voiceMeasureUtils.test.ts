@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { MeasureData } from '../types/storage';
 import {
   computeVoiceDisplayPadding,
+  createEmptyMeasures,
   flattenMeasureForPlayback,
   getDurationBeats,
   getEventDurationBeats,
@@ -15,6 +16,24 @@ import {
 } from './voiceMeasureUtils';
 
 describe('voiceMeasureUtils', () => {
+  describe('createEmptyMeasures（空の段プレースホルダー用）', () => {
+    it('指定した数ぶんの空小節（events: []）を作る', () => {
+      const measures = createEmptyMeasures(3);
+      expect(measures).toHaveLength(3);
+      expect(measures.every((m) => m.events.length === 0)).toBe(true);
+    });
+
+    it('0個を指定すると空配列になる', () => {
+      expect(createEmptyMeasures(0)).toEqual([]);
+    });
+
+    it('各要素は別々の配列参照を持つ（1つを書き換えても他へ影響しない）', () => {
+      const measures = createEmptyMeasures(2);
+      measures[0].events.push({ dur: '4', isRest: false, keys: ['c/4'] });
+      expect(measures[1].events).toHaveLength(0);
+    });
+  });
+
   describe('付点による拍数計算', () => {
     it('付点1個(dots:1)は音価の1.5倍になる', () => {
       expect(getDurationBeats('4', 1)).toBeCloseTo(1.5);

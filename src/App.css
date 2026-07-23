@@ -1015,6 +1015,24 @@ button.ghost.active:hover:not(:disabled) {
   background: #f9fafb;
 }
 
+/* 空の段（Issue #41）: 五線紙のように、内容の直後からページの残り容量ぶんだけ
+   薄いグレーで敷く「書き始めを待つ」プレースホルダーの段。クリック（Enter/Space も可）で
+   実体化し、次の描画から通常どおり入力できる段へ置き換わる。画面専用の演出で、
+   印刷・印刷プレビューには出さない（下と App.css の .print-preview 側を参照）。 */
+.empty-stave-filler {
+  opacity: 0.38;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.empty-stave-filler:hover,
+.empty-stave-filler:focus-visible {
+  opacity: 0.6;
+}
+.empty-stave-filler:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+
 /* 段ごとの小節数を個別調整するコントロール（◀ N小節 ▶）。
    ページ内の各段につき1行、score-area の下に控えめに並べる。画面専用で印刷には出さない
    （@media print 側で display:none にする）。 */
@@ -1182,6 +1200,8 @@ button.ghost.active:hover:not(:disabled) {
   .layout-overflow-alert { display: none !important; }
   /* 画面専用の「＋小節を追加」ボタンは編集用UIなので印刷には出さない。 */
   .add-measures-ghost-button { display: none !important; }
+  /* 空の段（Issue #41）は画面専用の書き始めの誘いであり、演奏用の印刷譜には出さない。 */
+  .empty-stave-filler { display: none !important; }
   /* 段ごとの小節数調整コントロール（◀ N小節 ▶）も編集用UIなので印刷には出さない。 */
   .system-measure-override-controls { display: none !important; }
   /* 拍が埋まっていない小節の残り拍に「入力先が分かるよう」表示するパディング休符
@@ -1329,6 +1349,7 @@ button.ghost.active:hover:not(:disabled) {
    - 段ごとの間隔調整、ページ余白・段の間隔・音符サイズのスライダー類（ツールバー内） */
 .print-preview .layout-overflow-alert { display: none !important; }
 .print-preview .add-measures-ghost-button { display: none !important; }
+.print-preview .empty-stave-filler { display: none !important; }
 .print-preview .vf-padding-rest { display: none !important; }
 /* システム調整コントロールは隠さず、紙面の邪魔をしにくい半透明フローティング行として見せる */
 .print-preview .system-measure-override-controls {

@@ -10,6 +10,7 @@ import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
 import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
+import { createEmptyMeasures } from '../utils/voiceMeasureUtils';
 
 type Props = {
   tool: Tool;
@@ -59,6 +60,11 @@ type Props = {
    * 各段の直前に marginTop として乗せる（詳細は SingleStaff.tsx 側のコメント参照）。
    */
   systemGapOverridesPx?: number[];
+  /**
+   * 「空の段でページを満たす」(Issue #41)。SingleStaff.tsx 側のコメント参照。
+   */
+  emptyFillerRanges?: SystemMeasureRange[];
+  onEmptyFillerClick?: (index: number) => void;
 };
 
 export default function PianoStaff({
@@ -89,6 +95,8 @@ export default function PianoStaff({
   finalMeasureIndex,
   symbolsClickable,
   systemGapOverridesPx,
+  emptyFillerRanges,
+  onEmptyFillerClick,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
@@ -128,6 +136,41 @@ export default function PianoStaff({
           finalMeasureIndex={finalMeasureIndex}
           symbolsClickable={symbolsClickable}
         />
+        </div>
+      ))}
+      {emptyFillerRanges?.map((range, i) => (
+        // empty-stave-filler: 五線紙のような「空の段」プレースホルダー（Issue #41）。
+        // SingleStaff.tsx 側のコメント参照。
+        <div
+          key={`empty-filler-${i}`}
+          className="empty-stave-filler"
+          role="button"
+          tabIndex={0}
+          onClick={() => onEmptyFillerClick?.(i)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onEmptyFillerClick?.(i);
+            }
+          }}
+        >
+          <PianoSystemCanvas
+            measuresPerSystem={range.count}
+            tool={tool}
+            scale={scale}
+            trebleData={createEmptyMeasures(range.count)}
+            bassData={createEmptyMeasures(range.count)}
+            onTrebleChange={() => {}}
+            onBassChange={() => {}}
+            startMeasureIndex={0}
+            disabled
+            currentInstrument={currentInstrument}
+            keySignature={keySignature}
+            timeSignature={timeSignature}
+            plannedMeasureWidths={range.minimumWidths}
+            measureWidthEvenness={measureWidthEvenness}
+            pageMarginSideMm={pageMarginSideMm}
+          />
         </div>
       ))}
     </div>
