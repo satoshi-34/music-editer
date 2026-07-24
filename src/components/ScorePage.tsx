@@ -111,7 +111,7 @@ import {
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
-import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId } from '../utils/instrumentationPartUtils';
+import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
@@ -399,6 +399,9 @@ export default function ScorePage() {
     () => Array.from({ length: 4 }, () => [])
   );
   const [ensembleParts, setEnsembleParts] = useState<MeasureData[][]>(() => []);
+  // staffCount:2（大譜表）パートの2段目（低音部）データ。ensembleParts と同じ添字で対応し、
+  // staffCount:1 のパート位置は使われない（常に [] のまま）。
+  const [ensembleSecondStaffParts, setEnsembleSecondStaffParts] = useState<MeasureData[][]>(() => []);
   // 段ごとの小節数のユーザー上書き（「小節 X から始まる段は Y 小節」の一覧）。
   // 自動計画（planSystemMeasureRanges）ではなく、ユーザーが個別に段の▶◀ボタンで調整した段だけを保持する。
   const [systemMeasureOverrides, setSystemMeasureOverrides] = useState<SystemMeasureOverride[]>([]);
@@ -436,6 +439,7 @@ export default function ScorePage() {
     leftHandData:  MeasureData[] | undefined;
     quartetParts:  MeasureData[][];
     ensembleParts: MeasureData[][];
+    ensembleSecondStaffParts: MeasureData[][];
     // 段割りの手動上書きも Undo/Redo の対象にする（+1/-1 操作やリセットを元に戻せるように）。
     systemMeasureOverrides: SystemMeasureOverride[];
     // 段ごとの間隔の手動上書きも Undo/Redo の対象にする（+/- 操作やリセットを元に戻せるように）。
@@ -446,7 +450,7 @@ export default function ScorePage() {
   const futureStack  = useRef<ScoreSnapshot[]>([]);
   // 常に最新のスコア状態を ref として持つ（ハンドラ内で「変更前の値」を取得するため）
   const currentScoreRef = useRef<ScoreSnapshot>({
-    rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides, systemRowGapOverrides,
+    rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides,
   });
 
   // useRef(createPlaybackEngine(...)) と引数に直接書くと、useRef は初回しか値を使わないのに
@@ -723,8 +727,10 @@ export default function ScorePage() {
     }
     if (newType !== 'ensemble') {
       setEnsembleParts([]);
+      setEnsembleSecondStaffParts([]);
     } else {
       setEnsembleParts(prev => nextInstrumentation.parts.map((_, index) => prev[index] ?? []));
+      setEnsembleSecondStaffParts(prev => nextInstrumentation.parts.map((_, index) => prev[index] ?? []));
     }
   }, [leftHandData]);
 
@@ -753,8 +759,10 @@ export default function ScorePage() {
     }
     if (nextScoreType === 'ensemble') {
       setEnsembleParts(prev => alignMeasuresToInstrumentationParts(previousParts, prev, nextInstrumentation.parts));
+      setEnsembleSecondStaffParts(prev => alignMeasuresToInstrumentationParts(previousParts, prev, nextInstrumentation.parts));
     } else {
       setEnsembleParts([]);
+      setEnsembleSecondStaffParts([]);
     }
   }, [instrumentation.parts]);
 
@@ -776,6 +784,7 @@ export default function ScorePage() {
       // ただし位置だけでそろえると中間パート削除や並び替えで譜面が別パートへ移るので、
       // 必ずパート ID で対応づける。
       setEnsembleParts(current => alignMeasuresToInstrumentationParts(prev.parts, current, next.parts));
+      setEnsembleSecondStaffParts(current => alignMeasuresToInstrumentationParts(prev.parts, current, next.parts));
       return next;
     });
   }, [markInstrumentationCustom]);
@@ -837,6 +846,14 @@ export default function ScorePage() {
             : value,
       };
     }));
+  }, [updateInstrumentationParts]);
+
+  // 段数（1段 or 2段=大譜表）の変更。他フィールドと違い数値のため、
+  // handleInstrumentationPartFieldChange の文字列フィールド共通処理とは別に用意する。
+  const handleInstrumentationPartStaffCountChange = useCallback((partIndex: number, staffCount: 1 | 2) => {
+    updateInstrumentationParts(parts => parts.map((part, index) => (
+      index === partIndex ? { ...part, staffCount } : part
+    )));
   }, [updateInstrumentationParts]);
 
   const handleMoveInstrumentationPart = useCallback((partIndex: number, direction: -1 | 1) => {
@@ -965,7 +982,7 @@ export default function ScorePage() {
       }
       .instrumentation-part-row {
         display: grid;
-        grid-template-columns: 28px 28px minmax(92px, 140px) minmax(52px, 72px) 74px 70px 82px 96px minmax(72px, 90px) 120px 48px;
+        grid-template-columns: 28px 28px minmax(92px, 140px) minmax(52px, 72px) 74px 70px minmax(64px, 100px) 82px 96px minmax(72px, 90px) 120px 48px;
         gap: 4px;
         align-items: center;
         width: max-content;
@@ -1042,11 +1059,22 @@ export default function ScorePage() {
           if (isPartExtractionActive && partExtractionSelection?.index !== partIndex) {
             return;
           }
+          const instrumentPart = instrumentation.parts[partIndex];
           if (part && part.length > 0) {
             parts.push({
               measures: part,
-              instrument: instrumentation.parts[partIndex]?.playbackInstrument,
+              instrument: instrumentPart?.playbackInstrument,
             });
+          }
+          // 大譜表（staffCount:2）パートの2段目（低音部）も同じ音色で再生対象に含める。
+          if (instrumentPart?.staffCount === 2) {
+            const secondPart = ensembleSecondStaffParts[partIndex];
+            if (secondPart && secondPart.length > 0) {
+              parts.push({
+                measures: secondPart,
+                instrument: instrumentPart.playbackInstrument,
+              });
+            }
           }
         });
       } else if (scoreType === 'piano') {
@@ -1156,7 +1184,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -1360,8 +1388,8 @@ export default function ScorePage() {
 
   // スコアデータが変わるたびに currentScoreRef を最新に保つ
   useEffect(() => {
-    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides, systemRowGapOverrides };
-  }, [rightHandData, leftHandData, quartetParts, ensembleParts, systemMeasureOverrides, systemRowGapOverrides]);
+    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides };
+  }, [rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides]);
 
   // ツールバーの「元に戻す/やり直す」ボタンの活性・非活性を切り替えるためのカウンタ。
   // historyStack/futureStack は ref のため、その中身が変わっただけでは再レンダーされない。
@@ -1410,6 +1438,18 @@ export default function ScorePage() {
           apply: (next) => setEnsembleParts(prev => prev.map((p, idx) => (idx === i ? next : p))),
         });
       });
+      instrumentation.parts.forEach((instrumentPart, i) => {
+        if (instrumentPart.staffCount !== 2) return;
+        const secondPart = ensembleSecondStaffParts[i] ?? [];
+        parts.push({
+          measures: secondPart,
+          apply: (next) => setEnsembleSecondStaffParts(prev => {
+            const copy = [...prev];
+            copy[i] = next;
+            return copy;
+          }),
+        });
+      });
     } else {
       if (rightHandData) parts.push({ measures: rightHandData, apply: setRightHandData });
     }
@@ -1440,7 +1480,7 @@ export default function ScorePage() {
     });
     setTransposeError(null);
     setShowTransposePanel(false);
-  }, [selectedMeasures, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, keySignature, pushHistory]);
+  }, [selectedMeasures, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, keySignature, pushHistory]);
 
   // スナップショットを state に適用する（undo/redo 共通）
   const applySnapshot = useCallback((snap: ScoreSnapshot) => {
@@ -1463,6 +1503,7 @@ export default function ScorePage() {
     setLeftHandData(restored.leftHandData);
     setQuartetParts(restored.quartetParts);
     setEnsembleParts(restored.ensembleParts);
+    setEnsembleSecondStaffParts(restored.ensembleSecondStaffParts ?? []);
     setSystemMeasureOverrides(restored.systemMeasureOverrides);
     setSystemRowGapOverrides(restored.systemRowGapOverrides);
   }, []);
@@ -1565,6 +1606,21 @@ export default function ScorePage() {
     });
   }, [isEditingDisabled, pushHistory]);
 
+  // staffCount:2（大譜表）パートの2段目（低音部）用。handleEnsemblePartChange と同じ形。
+  const handleEnsembleSecondStaffChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
+    if (isEditingDisabled) return;
+    const paddingOnly = isSameScoreIgnoringPadding(currentScoreRef.current.ensembleSecondStaffParts[partIndex], data);
+    if (!paddingOnly) pushHistory();
+    const nextParts = [...currentScoreRef.current.ensembleSecondStaffParts];
+    nextParts[partIndex] = data;
+    currentScoreRef.current = { ...currentScoreRef.current, ensembleSecondStaffParts: nextParts };
+    setEnsembleSecondStaffParts(prev => {
+      const next = [...prev];
+      next[partIndex] = data;
+      return next;
+    });
+  }, [isEditingDisabled, pushHistory]);
+
   // 現在の全 state から保存用データ（parts + metadata）を組み立てるヘルパー。
   // handleSave / 自動保存 / ファイル書き出しで共通利用する。
   const buildScoreData = useCallback(() => {
@@ -1578,11 +1634,20 @@ export default function ScorePage() {
           measures: quartetParts[i] ?? [{ events: [] }],
         }))
       : scoreType === 'ensemble'
-        ? instrumentation.parts.map((part, i) => ({
-            partId: part.id,
-            clef: part.clef,
-            measures: ensembleParts[i] ?? [{ events: [] }],
-          }))
+        ? instrumentation.parts.flatMap((part, i) => {
+            const primary: PartData = {
+              partId: part.id,
+              clef: part.clef,
+              measures: ensembleParts[i] ?? [{ events: [] }],
+            };
+            if (part.staffCount !== 2) return [primary];
+            const second: PartData = {
+              partId: ensembleSecondStaffPartId(part.id),
+              clef: 'bass',
+              measures: ensembleSecondStaffParts[i] ?? [{ events: [] }],
+            };
+            return [primary, second];
+          })
       : scoreType === 'piano'
         ? [
             { partId: 'right-hand', clef: 'treble' as const, measures: rightHandData ?? [{ events: [] }] },
@@ -1592,7 +1657,7 @@ export default function ScorePage() {
             { partId: 'melody', clef: 'treble' as const, measures: rightHandData ?? [{ events: [] }] },
           ];
     return { metadata, parts };
-  }, [title, subtitle, lyricist, composer, arranger, scoreType, instrumentation, quartetParts, ensembleParts, rightHandData, leftHandData]);
+  }, [title, subtitle, lyricist, composer, arranger, scoreType, instrumentation, quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData]);
 
   const handleSave = async () => {
     const { metadata, parts } = buildScoreData();
@@ -1638,6 +1703,7 @@ export default function ScorePage() {
     setLeftHandData(undefined);
     setQuartetParts(Array.from({ length: 4 }, () => []));
     setEnsembleParts([]);
+    setEnsembleSecondStaffParts([]);
     // 新規作成では手動保存スロットには触れないため、hasStoredData（手動保存の有無）は
     // 現在の実際の状態を読み直す（消していないので通常は変化しない）。
     setStoredDataAvailable(hasStoredData());
@@ -1708,10 +1774,14 @@ export default function ScorePage() {
           data.parts.find(p => p.partId === id)?.measures ?? []
         ));
         setEnsembleParts([]);
+        setEnsembleSecondStaffParts([]);
       } else if (loadedType === 'ensemble') {
         const loadedInstrumentation = data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType);
         setEnsembleParts(loadedInstrumentation.parts.map(part =>
           data.parts.find(p => p.partId === part.id)?.measures ?? []
+        ));
+        setEnsembleSecondStaffParts(loadedInstrumentation.parts.map(part =>
+          part.staffCount === 2 ? data.parts.find(p => p.partId === ensembleSecondStaffPartId(part.id))?.measures ?? [] : []
         ));
       } else {
         const rightPart = data.parts.find(p => p.clef === 'treble') ?? data.parts[0];
@@ -1719,6 +1789,7 @@ export default function ScorePage() {
         setRightHandData(rightPart?.measures ?? []);
         setLeftHandData(leftPart?.measures);
         setEnsembleParts([]);
+        setEnsembleSecondStaffParts([]);
       }
       // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
       setExtraEditingMeasures(0);
@@ -1769,10 +1840,14 @@ export default function ScorePage() {
             restored.parts.find(p => p.partId === id)?.measures ?? []
           ));
           setEnsembleParts([]);
+          setEnsembleSecondStaffParts([]);
         } else if (restoredType === 'ensemble') {
           const restoredInstrumentation = restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType);
           setEnsembleParts(restoredInstrumentation.parts.map(part =>
             restored.parts.find(p => p.partId === part.id)?.measures ?? []
+          ));
+          setEnsembleSecondStaffParts(restoredInstrumentation.parts.map(part =>
+            part.staffCount === 2 ? restored.parts.find(p => p.partId === ensembleSecondStaffPartId(part.id))?.measures ?? [] : []
           ));
         } else {
           const rightPart = restored.parts.find(p => p.clef === 'treble') ?? restored.parts[0];
@@ -1780,6 +1855,7 @@ export default function ScorePage() {
           setRightHandData(rightPart?.measures ?? []);
           setLeftHandData(leftPart?.measures);
           setEnsembleParts([]);
+          setEnsembleSecondStaffParts([]);
         }
         setSystemMeasureOverrides(restored.systemMeasureOverrides ?? []);
         setSystemRowGapOverrides(restored.systemRowGapOverrides ?? []);
@@ -1876,10 +1952,14 @@ export default function ScorePage() {
           loadedData.parts.find(p => p.partId === id)?.measures ?? []
         ));
         setEnsembleParts([]);
+        setEnsembleSecondStaffParts([]);
       } else if (loadedType === 'ensemble') {
         const loadedInstrumentation = loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType);
         setEnsembleParts(loadedInstrumentation.parts.map(part =>
           loadedData.parts.find(p => p.partId === part.id)?.measures ?? []
+        ));
+        setEnsembleSecondStaffParts(loadedInstrumentation.parts.map(part =>
+          part.staffCount === 2 ? loadedData.parts.find(p => p.partId === ensembleSecondStaffPartId(part.id))?.measures ?? [] : []
         ));
       } else {
         const rightPart = loadedData.parts.find(p => p.clef === 'treble') ?? loadedData.parts[0];
@@ -1887,6 +1967,7 @@ export default function ScorePage() {
         setRightHandData(rightPart?.measures ?? []);
         setLeftHandData(leftPart?.measures);
         setEnsembleParts([]);
+        setEnsembleSecondStaffParts([]);
       }
       // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
       setExtraEditingMeasures(0);
@@ -1915,6 +1996,7 @@ export default function ScorePage() {
     setLeftHandData(sampleScore.leftHand);
     setQuartetParts(Array.from({ length: 4 }, () => []));
     setEnsembleParts([]);
+    setEnsembleSecondStaffParts([]);
     // サンプルごとに「まずこの楽器で聴くと違いが分かりやすい」を設定しておく。
     setCurrentInstrument(sampleScore.recommendedInstrument);
     getAudioEngine().setInstrument(sampleScore.recommendedInstrument);
@@ -2132,10 +2214,18 @@ export default function ScorePage() {
             measures: slice(part),
           })));
         } else if (scoreType === 'ensemble') {
-          setClipboard(ensembleParts.map((part, i) => ({
-            partId: `ensemble-${i}`,
-            measures: slice(part),
-          })));
+          setClipboard([
+            ...ensembleParts.map((part, i) => ({
+              partId: `ensemble-${i}`,
+              measures: slice(part),
+            })),
+            // 大譜表（staffCount:2）パートの2段目も一緒にコピーする。
+            ...instrumentation.parts.flatMap((instrumentPart, i) => (
+              instrumentPart.staffCount === 2
+                ? [{ partId: `ensemble-${i}::2`, measures: slice(ensembleSecondStaffParts[i]) }]
+                : []
+            )),
+          ]);
         } else {
           // single
           setClipboard([{ partId: 'single', measures: slice(rightHandData) }]);
@@ -2167,6 +2257,7 @@ export default function ScorePage() {
           setQuartetParts(prev => prev.map(part => clearRange(part)));
         } else if (scoreType === 'ensemble') {
           setEnsembleParts(prev => prev.map(part => clearRange(part)));
+          setEnsembleSecondStaffParts(prev => prev.map(part => clearRange(part)));
         } else {
           setRightHandData(clearRange(rightHandData));
         }
@@ -2198,6 +2289,10 @@ export default function ScorePage() {
             const src = clipboard.find(c => c.partId === `ensemble-${i}`);
             return src ? paste(part, src.measures) : part;
           }));
+          setEnsembleSecondStaffParts(prev => prev.map((part, i) => {
+            const src = clipboard.find(c => c.partId === `ensemble-${i}::2`);
+            return src ? paste(part, src.measures) : part;
+          }));
         } else {
           const src = clipboard.find(c => c.partId === 'single');
           if (src) setRightHandData(paste(rightHandData, src.measures));
@@ -2211,7 +2306,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は useEffect より後に宣言されるため deps に入れられない。
   // 代わりに ref で最新値を追跡する（arrow key ハンドラ内で参照）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMeasures, clipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, pushHistory, handleTranspose]);
+  }, [selectedMeasures, clipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, pushHistory, handleTranspose]);
 
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
   // ユーザー設定（その他タブの「画面表示のズーム」スライダー、0.5〜1.5）。
@@ -2258,9 +2353,9 @@ export default function ScorePage() {
   // 従来どおり変わらない）。
   const ensembleAutoFitMultiplier = useMemo(() => (
     scoreType === 'ensemble'
-      ? computeEnsembleAutoFitMultiplier(instrumentation.parts.length, ENSEMBLE_AUTO_FIT_BUDGET_PX)
+      ? computeEnsembleAutoFitMultiplier(totalEnsembleStaffCount(instrumentation.parts), ENSEMBLE_AUTO_FIT_BUDGET_PX)
       : 1
-  ), [scoreType, instrumentation.parts.length]);
+  ), [scoreType, instrumentation.parts]);
   // SCORE_LAYOUT_RENDER_SCALE（既定0.44）に音符の大きさ倍率を掛けた、実際の
   // レイアウト計算・描画に使う実効スケール。段組み計画（planEffectiveMeasuresPerSystem /
   // planSystemMeasureRanges）と各 Canvas への scale prop の両方に必ずこの値を使い、
@@ -2353,9 +2448,10 @@ export default function ScorePage() {
   }, [pageMarginTopMm, pageMarginBottomMm]);
   // 現在の楽譜種別で実際に描画される段（五線）の数。PianoSystemCanvas.tsx の
   // computeLayout() に渡す引数（parts.length）と一致させる必要がある
-  // （single=1段、piano=右手/左手の2段、quartet=4段、ensemble=編成のパート数）。
+  // （single=1段、piano=右手/左手の2段、quartet=4段、ensemble=編成の総段数。
+  // staffCount:2（大譜表）パートは2段ぶんとして数える＝totalEnsembleStaffCount）。
   const partCountForSystemLayout = scoreType === 'ensemble'
-    ? instrumentation.parts.length
+    ? totalEnsembleStaffCount(instrumentation.parts)
     : scoreType === 'quartet'
       ? QUARTET_PART_CONFIGS.length
       : scoreType === 'piano'
@@ -2367,14 +2463,14 @@ export default function ScorePage() {
   // 判定（下の maxSystemsPerPage）には使わず、用途を初回見積もりに限定する（Issue #38）。
   const legacyRecommendedMaxSystemsPerPage = useMemo(() => {
     const baseHeight = scoreType === 'ensemble'
-      ? estimateEnsembleSystemHeightPx(instrumentation.parts.length)
+      ? estimateEnsembleSystemHeightPx(totalEnsembleStaffCount(instrumentation.parts))
       : scoreType === 'quartet'
         ? BASE_SYSTEM_HEIGHT_PX.quartet
         : scoreType === 'piano'
           ? BASE_SYSTEM_HEIGHT_PX.piano
           : BASE_SYSTEM_HEIGHT_PX.single;
     return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * notationSizeMultiplier * ensembleAutoFitMultiplier + systemRowGapPx)));
-  }, [scoreType, instrumentation.parts.length, notationSizeMultiplier, ensembleAutoFitMultiplier, systemHeightBudgetPx, systemRowGapPx]);
+  }, [scoreType, instrumentation.parts, notationSizeMultiplier, ensembleAutoFitMultiplier, systemHeightBudgetPx, systemRowGapPx]);
   // 段数/ページの実際の上限（実測ベース）。これを超えると段がページからあふれる。
   // PianoSystemCanvas.tsx が実際の描画に使う寸法計算（computeLayout の sysH）を正とし、
   // 実際の描画倍率（SCORE_LAYOUT_RENDER_SCALE）を掛けた measuredSystemHeightPx() で
@@ -2530,10 +2626,10 @@ export default function ScorePage() {
       : scoreType === 'quartet'
         ? quartetParts
         : scoreType === 'ensemble'
-          ? ensembleParts
+          ? [...ensembleParts, ...ensembleSecondStaffParts]
           : [rightHandData ?? []];
     return activeParts.reduce((max, part) => Math.max(max, trimTrailingEmptyMeasures(part).length), 0);
-  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts]);
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts]);
   const layoutParts = useMemo((): MeasureLayoutPartContext[] => {
     if (scoreType === 'piano') {
       const keySignatureMeasures = rightHandData ?? [];
@@ -2550,12 +2646,21 @@ export default function ScorePage() {
     }
     if (scoreType === 'ensemble') {
       const keySignatureMeasures = ensembleParts[0] ?? [];
-      return instrumentation.parts.map((part, index) => ({
-        measures: ensembleParts[index] ?? [], keySignatureMeasures, clef: part.clef,
-      }));
+      // staffCount:2（大譜表）パートは2段ぶんの MeasureLayoutPartContext を生成する。
+      // EnsembleStaff.tsx の partsConfig 展開と段の並び順を必ず一致させる必要がある。
+      return instrumentation.parts.flatMap((part, index) => {
+        const primary: MeasureLayoutPartContext = {
+          measures: ensembleParts[index] ?? [], keySignatureMeasures, clef: part.clef,
+        };
+        if (part.staffCount !== 2) return [primary];
+        const second: MeasureLayoutPartContext = {
+          measures: ensembleSecondStaffParts[index] ?? [], keySignatureMeasures, clef: 'bass',
+        };
+        return [primary, second];
+      });
     }
     return [{ measures: rightHandData ?? [], clef: 'treble' }];
-  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, instrumentation.parts]);
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts]);
   const incomingArcIndex = useMemo(
     () => buildIncomingArcIndex(layoutParts.map((part) => part.measures)),
     [layoutParts],
@@ -2564,12 +2669,17 @@ export default function ScorePage() {
   // ページや段ごとに全パートを走査し直さず、ScorePage で一度だけ表示空間の索引を作る。
   const ensembleDisplayIncomingArcIndex = useMemo(() => {
     if (scoreType !== 'ensemble' || notationMode !== 'written') return incomingArcIndex;
-    return buildIncomingArcIndex(instrumentation.parts.map((part, index) => {
+    // layoutParts/EnsembleStaff の partsConfig と同じ並び順（staffCount:2 パートは2段展開）
+    // にそろえないと、書かれた調のアーク端点が誤った段に対応づいてしまう。
+    return buildIncomingArcIndex(instrumentation.parts.flatMap((part, index) => {
       const semitones = TRANSPOSITION_WRITTEN_OFFSET_SEMITONES[part.transposition] ?? 0;
       const measures = ensembleParts[index] ?? [];
-      return transposeMeasuresForDisplay(measures, semitones);
+      const primary = transposeMeasuresForDisplay(measures, semitones);
+      if (part.staffCount !== 2) return [primary];
+      const secondMeasures = ensembleSecondStaffParts[index] ?? [];
+      return [primary, transposeMeasuresForDisplay(secondMeasures, semitones)];
     }));
-  }, [scoreType, notationMode, incomingArcIndex, instrumentation.parts, ensembleParts]);
+  }, [scoreType, notationMode, incomingArcIndex, instrumentation.parts, ensembleParts, ensembleSecondStaffParts]);
   const partExtractionIncomingArcIndex = useMemo(() => {
     if (!isPartExtractionActive || !partExtractionSelection) return incomingArcIndex;
     const measures = scoreType === 'ensemble'
@@ -2577,13 +2687,20 @@ export default function ScorePage() {
       : scoreType === 'quartet'
         ? quartetParts[partExtractionSelection.index] ?? []
         : [];
-    // 抽出譜のCanvasはパート配列を要素0として描くため、索引も選択パートだけで作り直す。
-    // 編成譜の記譜音表示では、通常譜と同じ表示空間（移調後）の端点を索引化する。
+    // 抽出譜のCanvasはパート配列を要素0（大譜表パートなら要素0/1の2段）として描くため、
+    // 索引も選択パートだけで作り直す。編成譜の記譜音表示では、通常譜と同じ表示空間
+    // （移調後）の端点を索引化する。
     const semitones = scoreType === 'ensemble' && notationMode === 'written'
       ? TRANSPOSITION_WRITTEN_OFFSET_SEMITONES[instrumentation.parts[partExtractionSelection.index]?.transposition] ?? 0
       : 0;
-    return buildIncomingArcIndex([transposeMeasuresForDisplay(measures, semitones)]);
-  }, [isPartExtractionActive, partExtractionSelection, scoreType, notationMode, ensembleParts, quartetParts, instrumentation.parts, incomingArcIndex]);
+    const displayMeasures = transposeMeasuresForDisplay(measures, semitones);
+    const extractedPart = scoreType === 'ensemble' ? instrumentation.parts[partExtractionSelection.index] : undefined;
+    if (extractedPart?.staffCount !== 2) {
+      return buildIncomingArcIndex([displayMeasures]);
+    }
+    const secondMeasures = ensembleSecondStaffParts[partExtractionSelection.index] ?? [];
+    return buildIncomingArcIndex([displayMeasures, transposeMeasuresForDisplay(secondMeasures, semitones)]);
+  }, [isPartExtractionActive, partExtractionSelection, scoreType, notationMode, ensembleParts, ensembleSecondStaffParts, quartetParts, instrumentation.parts, incomingArcIndex]);
   const effectiveMeasurePlan = useMemo(() => planEffectiveMeasuresPerSystem(
     layoutParts,
     scoreTimeSignature,
@@ -2803,11 +2920,20 @@ export default function ScorePage() {
           measures: quartetParts[i] ?? [{ events: [] }],
         }))
       : scoreType === 'ensemble'
-        ? instrumentation.parts.map((part, i) => ({
-            partId: part.id,
-            clef: part.clef,
-            measures: ensembleParts[i] ?? [{ events: [] }],
-          }))
+        ? instrumentation.parts.flatMap((part, i) => {
+            const primary: import('../types/storage').PartData = {
+              partId: part.id,
+              clef: part.clef,
+              measures: ensembleParts[i] ?? [{ events: [] }],
+            };
+            if (part.staffCount !== 2) return [primary];
+            const second: import('../types/storage').PartData = {
+              partId: ensembleSecondStaffPartId(part.id),
+              clef: 'bass',
+              measures: ensembleSecondStaffParts[i] ?? [{ events: [] }],
+            };
+            return [primary, second];
+          })
       : scoreType === 'piano'
         ? [
             { partId: 'right-hand', clef: 'treble' as const, measures: rightHandData ?? [{ events: [] }] },
@@ -2831,7 +2957,7 @@ export default function ScorePage() {
   }, [
     title, subtitle, lyricist, composer, arranger,
     scoreType, keySignature, scoreTimeSignature,
-    quartetParts, ensembleParts, rightHandData, leftHandData,
+    quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData,
     instrumentation, totalSystems, measuresPerSystem,
   ]);
 
@@ -2874,14 +3000,20 @@ export default function ScorePage() {
             loaded.parts.find(p => p.partId === id)?.measures ?? []
           ));
           setEnsembleParts([]);
+          setEnsembleSecondStaffParts([]);
         } else if (loadedType === 'ensemble') {
+          // MusicXML には staffCount（大譜表）の概念が無く、位置合わせでのみ復元できる。
+          // 大譜表パートの2段目は現状 MusicXML 側で表現できないため、常に空のまま
+          // （既存の位置ベース復元と同様、この経路の大譜表対応は本PRの対象外）。
           setEnsembleParts(loaded.parts.map(p => p.measures));
+          setEnsembleSecondStaffParts([]);
         } else {
           const rightPart = loaded.parts.find(p => p.clef === 'treble') ?? loaded.parts[0];
           const leftPart  = loaded.parts.find(p => p.clef === 'bass');
           setRightHandData(rightPart?.measures ?? []);
           setLeftHandData(leftPart?.measures);
           setEnsembleParts([]);
+          setEnsembleSecondStaffParts([]);
         }
         // MusicXML には段割り上書きの概念が無いため、前の譜面ぶんを引き継がずリセットする
         setSystemMeasureOverrides([]);
@@ -3891,6 +4023,15 @@ export default function ScorePage() {
                   <option value="bass">ヘ音</option>
                 </select>
                 <select
+                  value={part.staffCount}
+                  onChange={(event) => handleInstrumentationPartStaffCountChange(partIndex, event.target.value === '2' ? 2 : 1)}
+                  aria-label={`${part.name}の段数`}
+                  title="段数（2段=ピアノのような大譜表。上のブレースで結んだ2段になります）"
+                >
+                  <option value={1}>1段</option>
+                  <option value={2}>2段（大譜表）</option>
+                </select>
+                <select
                   value={part.transposition}
                   onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'transposition', event.target.value)}
                   aria-label={`${part.name}の移調`}
@@ -4055,6 +4196,8 @@ export default function ScorePage() {
                       instrumentationParts={[instrumentation.parts[partExtractionSelection!.index]]}
                       partsData={[ensembleParts[partExtractionSelection!.index] ?? []]}
                       onPartChange={[() => {}]}
+                      secondStaffPartsData={[ensembleSecondStaffParts[partExtractionSelection!.index] ?? []]}
+                      onSecondStaffPartChange={[() => {}]}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled
                       yOffset={yOffset}
@@ -4109,6 +4252,8 @@ export default function ScorePage() {
                       instrumentationParts={instrumentation.parts}
                       partsData={ensembleParts}
                       onPartChange={instrumentation.parts.map((_, pi) => handleEnsemblePartChange(pi))}
+                      secondStaffPartsData={ensembleSecondStaffParts}
+                      onSecondStaffPartChange={instrumentation.parts.map((_, pi) => handleEnsembleSecondStaffChange(pi))}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isEditingDisabled}
                       yOffset={yOffset}
