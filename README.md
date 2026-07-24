@@ -160,7 +160,6 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 - **計画ロジック**: `planSystemMeasureRanges`（`src/utils/measureLayoutUtils.ts`）が、貪欲法で段の開始位置を進める際に上書き一覧を参照する。開始位置が上書きの `startMeasure` と一致する段はその小節数をそのまま使い（使用可能幅を超えても許容し、`overflow: true` を返すだけで縮めない＝はみ出しはユーザー判断）、一致しない段は従来どおりの自動計画が続く。そのため上書きした段より後ろは自動的に続きから再計画される
 - **描画時の右端揃え**: 上書きで最低幅の合計が使用可能幅を超えた段は、`allocateCombinedMeasureWidths`（同ファイル）が小節の割り当て幅だけを比例圧縮し、他の段と同じ右端（SVG幅）に揃えて描画する。フォント・五線の縦サイズ（`renderScale`）は変えないため、「音符の大きさ」スライダーの値に関わらず全段の SVG 幅が一致する。圧縮後は必ず使用可能幅に収まるため `svg[data-layout-overflow]` は `false` になる（詰め込みすぎて符頭同士が近づく見た目上の詰まりは許容する設計）。自動計画のみの段（上書きなし）は元々収まる幅しか選ばれないため、圧縮は発動しない
 - **Undo/Redo・保存/読込との整合**: 上書き一覧は `ScorePage.tsx` の Undo/Redo スナップショット（`ScoreSnapshot.systemMeasureOverrides`）に含め、＋1/−1・リセットの操作も他の編集と同様に元に戻せる。保存（`saveScoreData`/`createSavedScoreData`）・読込（`loadScoreData`）・ファイル書出/読込（`fileStorage.ts`）でも他のフィールドと同様に往復する。`storage.ts` の `validateSystemMeasureOverrides` が `startMeasure` の重複・負数・`count<1` を弾く
-- **自動計画された段の安定性（Issue #58）**: 音符を1つ入力するたびに `planSystemMeasureRanges` を全段ぶん貪欲法で再計算すると、入力対象より前の段まで境界がずれて小節が別の段へ移動してしまう不具合があった。`planSystemMeasureRanges` は第6引数 `previousRanges`（前回の段割りの `{startMeasure, count}` 一覧）を受け取り、各段の開始位置で「前回と同じ小節数のまま今の幅でも段に収まるか」を先に確認する。収まる限り境界を変えず、段が溢れた（または新しい段が必要になった）ときだけその段から自動計画をやり直す。`ScorePage.tsx` は直前にコミットした段割りを `previousSystemRangesRef` に保持してこの引数へ渡し、「段あたり小節数」の設定変更・「段割りをリセット」時だけ明示的に破棄する（ユーザー上書きは従来どおりこの安定化より優先）
 - 詳細は `.claude/specs/system-measure-override/design.md` を参照
 
 ### 段ごとの間隔（上の段との距離）の個別調整
