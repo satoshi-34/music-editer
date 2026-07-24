@@ -2619,6 +2619,25 @@ export default function ScorePage() {
       effectiveMeasurePlan.minimumWidths[index] ?? MIN_MEASURE_CONTENT_WIDTH
     ));
   }, [contentMeasureCount, effectiveMeasurePlan.minimumWidths, effectiveMeasurePlan.effectiveMeasuresPerSystem, measuresPerSystem, extraEditingMeasures, systemsPerPage, maxSystemsPerPage]);
+  // Issue #58: 音符を1つ入力するたびに全小節の最低幅から段割りを再計算すると、
+  // 入力対象の小節より前の段まで境界がずれてしまい、入力を続けるたびに小節が
+  // 別の段へ移動して落ち着かなかった。前回コミットした段割り（start/count）を
+  // ここで保持し、下の planSystemMeasureRanges へ「安定化のヒント」として渡す
+  // （収まる限りそのまま再利用し、溢れた段だけ再配置される。詳細は
+  // measureLayoutUtils.ts の planSystemMeasureRanges 側のコメント参照）。
+  // measuresPerSystem（段あたり小節数の設定変更）・systemMeasureOverrides
+  // （段割りの個別調整・「段割りをリセット」）は、古い段割りを基準にする意味が
+  // 無くなる明示的な操作のため、その回だけ破棄して自動計画をやり直す。
+  const previousSystemRangesRef = useRef<SystemMeasureOverride[] | undefined>(undefined);
+  const layoutStabilityKeyRef = useRef<{ measuresPerSystem: number; overrides: SystemMeasureOverride[] } | null>(null);
+  if (
+    layoutStabilityKeyRef.current === null
+    || layoutStabilityKeyRef.current.measuresPerSystem !== measuresPerSystem
+    || layoutStabilityKeyRef.current.overrides !== systemMeasureOverrides
+  ) {
+    previousSystemRangesRef.current = undefined;
+    layoutStabilityKeyRef.current = { measuresPerSystem, overrides: systemMeasureOverrides };
+  }
   const plannedRanges = useMemo(() => planSystemMeasureRanges(
     // plannerMinimumWidths は（Canvas 描画にそのまま渡せるよう）VexFlow の論理単位のまま。
     // 一方 worstCaseSystemContentBudget() は物理ページ幅（SCORE_LAYOUT_RENDER_SCALE 倍後）
@@ -2635,7 +2654,12 @@ export default function ScorePage() {
     // 段ごとの小節数のユーザー上書き。上書きのある段はその小節数を使い、無い段は
     // 従来どおりの自動計画のまま続く（上書き段より後ろの小節位置から再計算される）。
     systemMeasureOverrides,
+    // 直前の段割り（安定化のヒント）。上のコメント参照。
+    previousSystemRangesRef.current,
   ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm]);
+  useEffect(() => {
+    previousSystemRangesRef.current = plannedRanges.map((range) => ({ startMeasure: range.start, count: range.count }));
+  }, [plannedRanges]);
   const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
 
   // 段ごとの小節数の手動上書きを1段ぶんだけ増減する。
