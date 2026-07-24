@@ -421,6 +421,102 @@ describe('measureMinimumContentWidth', () => {
       expect(withEmpty).toEqual(withUndefined);
     });
   });
+
+  describe('previousRanges / lastEditedMeasureIndex（Issue #67: 編集位置より前の段だけ安定化する）', () => {
+    it('lastEditedMeasureIndex が未指定なら previousRanges は無視され、常に貪欲法で計画される', () => {
+      // 8小節・4小節/段の自動計画なら [0-3][4-7] の2段。
+      const previous = [{ startMeasure: 0, count: 4 }, { startMeasure: 4, count: 4 }];
+      // 2小節目(index 1)の幅が増え、段0(0-3)の合計が使用可能幅を超えた想定。
+      const widened = [52, 420, 52, 52, 52, 52, 52, 52];
+      const ranges = planSystemMeasureRanges(widened, 4, 550, undefined, undefined, previous);
+      // previousRanges を渡していても lastEditedMeasureIndex が無いので安定化されず、
+      // 通常の貪欲法どおり段0は3小節に縮む。
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 3 },
+        { start: 3, count: 4 },
+        { start: 7, count: 1 },
+      ]);
+    });
+
+    it('編集位置より前で完結する段は、幅が変わっても previousRanges の count のまま再利用される', () => {
+      const previous = [{ startMeasure: 0, count: 4 }, { startMeasure: 4, count: 4 }];
+      // 段0(0-3)の幅は変わっていない前提。段1(4-7)の中の小節6(index 6)を編集した想定。
+      const widened = [52, 52, 52, 52, 52, 52, 420, 52];
+      // lastEditedMeasureIndex=6 は段0(0-3, end=4<=6)の外なので段0は安定化対象。
+      const ranges = planSystemMeasureRanges(widened, 4, 550, undefined, undefined, previous, 6);
+      expect(ranges[0]).toEqual({ start: 0, count: 4, minimumWidths: [52, 52, 52, 52], totalWidth: 208, overflow: false });
+    });
+
+    it('編集位置を含む段以降は previousRanges を無視し、詰まる／溢れたら次の段へ送られる（最後の段に入力し続けるケース）', () => {
+      const previous = [{ startMeasure: 0, count: 4 }, { startMeasure: 4, count: 4 }];
+      // 最後の段(4-7)の1小節目(index 4)へ音符を入力し続けて幅が増え、
+      // 4小節がもう段に収まらなくなった想定。
+      const overflowing = [52, 52, 52, 52, 420, 52, 52, 52];
+      // lastEditedMeasureIndex=4 は段1(4-7, start=4)を含むため、段1以降は previousRanges を無視し、
+      // 貪欲法で詰まるだけ詰め、溢れた分は次の段へ送る。
+      const ranges = planSystemMeasureRanges(overflowing, 4, 550, undefined, undefined, previous, 4);
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 4 },
+        { start: 4, count: 3 },
+        { start: 7, count: 1 },
+      ]);
+    });
+
+    it('編集位置を含む段は、内容が減って空きができれば previousRanges に縛られず requested まで詰め直す', () => {
+      const previous = [{ startMeasure: 0, count: 2 }, { startMeasure: 2, count: 4 }];
+      // 段0(0-1)は以前は密で2小節しか入らなかったが、編集で幅が縮み4小節入るようになった想定。
+      const shrunk = [52, 52, 52, 52, 52, 52];
+      // lastEditedMeasureIndex=0 は段0(0-1, start=0)を含むため、段0は previousRanges の count(2) に
+      // 縛られず、貪欲法で requested(4) まで詰め直される。
+      const ranges = planSystemMeasureRanges(shrunk, 4, 550, undefined, undefined, previous, 0);
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 4 },
+        { start: 4, count: 2 },
+      ]);
+    });
+
+    it('overrides は previousRanges / lastEditedMeasureIndex より常に優先される', () => {
+      const previous = [{ startMeasure: 0, count: 4 }];
+      const ranges = planSystemMeasureRanges(
+        Array.from({ length: 8 }, () => 52),
+        4,
+        550,
+        undefined,
+        [{ startMeasure: 0, count: 2 }],
+        previous,
+        6,
+      );
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 2 },
+        { start: 2, count: 4 },
+        { start: 6, count: 2 },
+      ]);
+    });
+
+    it('breakAt をまたぐ previousRanges の段は再利用されず、その段から貪欲法へフォールバックする', () => {
+      const previous = [{ startMeasure: 0, count: 4 }];
+      // 以前は8小節の内容だったが、末尾を削除して breakAt=3（内容は0-2の3小節）になった想定。
+      const ranges = planSystemMeasureRanges(
+        Array.from({ length: 8 }, () => 52),
+        4,
+        550,
+        3,
+        undefined,
+        previous,
+        10,
+      );
+      const finalContentRange = ranges.find((r) => r.start === 0);
+      expect(finalContentRange?.count).toBe(3);
+    });
+
+    it('previousRanges / lastEditedMeasureIndex が未指定でも従来どおりの結果を返す（後方互換）', () => {
+      const withoutPrevious = planSystemMeasureRanges(Array.from({ length: 8 }, () => 52), 4, 550);
+      const withUndefinedPrevious = planSystemMeasureRanges(
+        Array.from({ length: 8 }, () => 52), 4, 550, undefined, undefined, undefined, undefined,
+      );
+      expect(withUndefinedPrevious).toEqual(withoutPrevious);
+    });
+  });
 });
 
 describe('systemRowSlotHeightPx / systemRowTopOffsetsPx（段の間隔を単一の連続方式に統一）', () => {

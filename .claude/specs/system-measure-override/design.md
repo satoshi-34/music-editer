@@ -380,3 +380,76 @@ raw座標に変換するため、raw単位の固定パディングは画面px換
   - 空き拍への音符追加・和音追加の直接的なブラウザ回帰確認は本セッションでは
     未実施（ロジック自体は今回変更しておらず、`PianoSystemCanvasEmptyBeatClick.test.tsx`
     等の既存自動テストが全緑であることで代替した）
+
+## 追補: 編集位置より前の段だけを安定化し、詰めていく挙動を取り戻す（Issue #67、2026-07-25）
+
+**前提**: 「入力のたびに段割り全体が再計画される」不具合の対策（Issue #58、PR #63）は
+`previousRanges`（前回の段割り）を「収まる限り常に再利用」する設計だった。これが
+強すぎる安定化になり、「段が埋まるにつれて小節が詰まっていき、溢れたら次の段へ送られる」
+という組版の基本挙動まで止めてしまう新たなリグレッションを招いたため、PR #70 で
+PR #63 の変更（`previousRanges` 引数・`ScorePage.tsx` 側の呼び出し・関連テスト）を
+mainからrevertした（Issue #67）。本追補は revert 後の main を起点に、
+「編集位置より前の段だけ安定化し、編集位置を含む段から後ろは常に貪欲法で計画し直す」
+設計を新規に実装したものである。
+
+**修正設計**:
+- `planSystemMeasureRanges`（`src/utils/measureLayoutUtils.ts`）に
+  `previousRanges?: SystemMeasureOverrideInput[]` と `lastEditedMeasureIndex?: number`
+  の2引数を追加した。各段の開始位置 `start` について、`previousRanges` に同じ `start`
+  のエントリがあり、かつ **その段が丸ごと `lastEditedMeasureIndex` より前で完結する**
+  （`start + count <= lastEditedMeasureIndex`）場合だけ、前回の `count` をそのまま
+  再利用する（breakAt をまたぐ場合や、再利用後に availableWidth を超える場合は
+  下の貪欲法へフォールバックする）。`lastEditedMeasureIndex` が未指定、または該当の段が
+  編集位置を含む／編集位置より後ろの場合は、前回の `count` を一切参照せず常に通常の
+  貪欲法で計画し直す。PR #63 との違いはここで、「収まる限り再利用」ではなく
+  「編集位置より前だけ再利用」にすることで、いま入力している段は常に貪欲法の恩恵
+  （詰める／溢れたら次の段へ送る）を受けつつ、触れていない前の段の境界だけが
+  安定する。
+- `ScorePage.tsx` に `lastEditedMeasureIndex`（state）と `previousSystemRangesRef`（ref）
+  を追加した。`previousSystemRangesRef` は `plannedRanges` を計算し終えたレンダーの
+  直後（`useEffect`）に `{start, count}` の一覧として保持し、次回の `plannedRanges`
+  計算へ渡す。`lastEditedMeasureIndex` は「音符追加/削除/小節追加のたびに更新」する
+  ため、右手・左手・四重奏・編成譜の各 `on*Change` ハンドラで、変更前後のデータを
+  `findFirstDifferingMeasureIndex`（`src/utils/scoreDataEquality.ts` に新規追加、
+  末尾パディングを除いて先頭から比較し最初に異なる小節indexを返す純関数）で比較し、
+  最初に異なった小節indexをセットする。範囲削除・貼り付け・移調（選択範囲の先頭を使う）
+  でも同様にセットする。
+- 「段割りをリセット」「段あたり小節数変更」「新規作成・読込・Undo/Redo」などの
+  全体再計画を期待する操作では `lastEditedMeasureIndex` を `null` に戻し、安定化を
+  一時的に外して貪欲法だけで組み直す（段ごとの個別上書き `systemMeasureOverrides` は
+  従来どおり `previousRanges` より常に優先されるため、この一覧には影響しない）。
+
+**影響範囲**:
+- `src/utils/measureLayoutUtils.ts`: `planSystemMeasureRanges` に2引数追加
+  （既存呼び出しは省略時 = 従来どおりの貪欲法のみで後方互換）
+- `src/utils/scoreDataEquality.ts`: `findFirstDifferingMeasureIndex` を新規追加
+- `src/components/ScorePage.tsx`: `lastEditedMeasureIndex` state・
+  `previousSystemRangesRef` ref・`markMeasureEdited` ヘルパーを追加。
+  各データ変更ハンドラ・削除／貼り付け／移調・各種リセット箇所を更新
+
+**検証**:
+- `docker exec music-editer-dev npx vitest --run src`
+  （`measureLayoutUtils.test.ts`・`scoreDataEquality.test.ts` に本追補のテストを追加。
+  既存の `ScorePageEmptyStaveFiller.test.tsx` の4件は revert 前のmainでも同じ内容・
+  同じ件数で失敗することを確認済みの、本修正と無関係な既存の失敗（Issue化未実施）。
+  それ以外は全緑）
+- `docker exec music-editer-dev npm run lint`（353エラー・6警告はrevert前のmainと
+  完全に同数・同内容で、本修正による新規エラーはゼロ。Issue #73 でラチェット化予定の
+  既知の状態）
+- `docker exec music-editer-dev npm run build`（クリーン）
+- ブラウザ確認（新規譜面・単旋律、`docker run` で本worktreeを直接マウントした
+  一時devサーバーで確認）:
+  - 最後の段（当初は空の1段のみ）に音符を1つ入力すると、内容小節と編集バッファの
+    混在を避ける既存の `breakAt` ロジックにより段が1小節ぶんへ強制的に区切られる
+    （既存挙動、回帰なし）ことを確認
+  - 続けて次の小節にも音符を入力すると、その段が2小節へ「詰まる」ことを確認
+    （段の小節数表示が `1小節` → `2小節` に変化。Issue #67 が目的とした
+    「段が埋まるにつれて詰まっていく」挙動の実地確認）
+  - Undo で直前の入力（2小節目の音符）だけが取り消され、段の小節数表示も
+    `2小節` → `1小節` に正しく戻ることを確認（`pushHistory`/`currentScoreRef` 同期の
+    回帰なし）
+  - コンソールエラーなし
+  - 「編集位置より前の段の境界が動かない」ことの実地確認（多段にまたがる編集での
+    安定化）は、本セッションでは自動テスト（`measureLayoutUtils.test.ts` の
+    `previousRanges / lastEditedMeasureIndex` テスト群）でのみ確認し、ブラウザでの
+    多段シナリオの手動確認は未実施

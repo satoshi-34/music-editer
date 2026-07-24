@@ -48,3 +48,27 @@ export function isSameScoreIgnoringPadding(
   const trimmedB = trimTrailingEmptyMeasures(b ?? []);
   return JSON.stringify(trimmedA) === JSON.stringify(trimmedB);
 }
+
+/**
+ * 2つの楽譜データ（末尾パディングを除く）を先頭から比べ、最初に内容が変わった
+ * 小節の絶対インデックスを返す。完全に同じなら null。
+ *
+ * 段割りの安定化（Issue #67）で「最後に編集した小節」を求めるために使う。
+ * 音符追加・削除・小節追加はどれも、その変更が最初に現れる小節より前を変えないため、
+ * 「最初に異なる小節」＝「その編集より前は動かしてよい／後ろは再計画してよい」の
+ * 境界としてそのまま使える。
+ */
+export function findFirstDifferingMeasureIndex(
+  a: MeasureData[] | undefined,
+  b: MeasureData[] | undefined
+): number | null {
+  const trimmedA = trimTrailingEmptyMeasures(a ?? []);
+  const trimmedB = trimTrailingEmptyMeasures(b ?? []);
+  const maxLength = Math.max(trimmedA.length, trimmedB.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    if (JSON.stringify(trimmedA[index]) !== JSON.stringify(trimmedB[index])) {
+      return index;
+    }
+  }
+  return null;
+}

@@ -93,6 +93,7 @@ import {
   measuredSystemHeightPx,
   resolveDefaultLayoutForScoreType,
   type SystemMeasureRange,
+  type SystemMeasureOverrideInput,
   type MeasureLayoutPartContext,
 } from '../utils/measureLayoutUtils';
 import {
@@ -117,7 +118,7 @@ import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '..
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
-import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures } from '../utils/scoreDataEquality';
+import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
 import { computeFitZoom, VIEW_ZOOM_MIN } from '../utils/viewZoomUtils';
@@ -1478,6 +1479,9 @@ export default function ScorePage() {
         part.apply(result.measures);
       }
     });
+    // 移調で臨時記号が変わり小節幅が変化することがあるため、対象範囲の先頭を
+    // 「最後に編集した小節」として記録する（Issue #67）。
+    setLastEditedMeasureIndex(start);
     setTransposeError(null);
     setShowTransposePanel(false);
   }, [selectedMeasures, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, keySignature, pushHistory]);
@@ -1506,6 +1510,9 @@ export default function ScorePage() {
     setEnsembleSecondStaffParts(restored.ensembleSecondStaffParts ?? []);
     setSystemMeasureOverrides(restored.systemMeasureOverrides);
     setSystemRowGapOverrides(restored.systemRowGapOverrides);
+    // Undo/Redo は編集位置とは無関係にデータ全体を丸ごと差し替えるため、
+    // 段割りの安定化ヒントも古い編集位置を引きずらないようリセットする（Issue #67）。
+    setLastEditedMeasureIndex(null);
   }, []);
 
   // Undo: 履歴から1つ前の状態を取り出して適用する（キーボードショートカットとボタンの共通処理）
@@ -1539,12 +1546,21 @@ export default function ScorePage() {
   const canUndo = historyVersion >= 0 && historyStack.current.length > 0;
   const canRedo = historyVersion >= 0 && futureStack.current.length > 0;
 
+  // 変更前後のデータを比べ、最初に内容が変わった小節の位置を「最後に編集した小節」として
+  // 記録する。plannedRanges（planSystemMeasureRanges）がこの位置より前の段だけを
+  // 安定化させるための入力になる（Issue #67）。
+  const markMeasureEdited = useCallback((previousData: MeasureData[] | undefined, nextData: MeasureData[]) => {
+    const index = findFirstDifferingMeasureIndex(previousData, nextData);
+    if (index != null) setLastEditedMeasureIndex(index);
+  }, []);
+
   const handleRightHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
+    const previousData = currentScoreRef.current.rightHandData;
     // 実質的な変更がない場合はスキップする。
     // キャンバスはページ範囲まで末尾に空小節を補って通知してくるため、
     // 「パディングの長さが違うだけ」を変更扱いにすると無意味な Undo 履歴が積まれてしまう。
-    if (isSameScoreIgnoringPadding(currentScoreRef.current.rightHandData, data)) {
+    if (isSameScoreIgnoringPadding(previousData, data)) {
       // データ内容は同じでも配列長（パディング）は違うことがあるので、
       // 以後の比較のために ref と state は最新の形に揃えておく（履歴には積まない）
       currentScoreRef.current = { ...currentScoreRef.current, rightHandData: data };
@@ -1558,11 +1574,13 @@ export default function ScorePage() {
     // （undefined や1つ前の状態）が履歴に積まれ、Undo しても画面が戻らなくなるため。
     currentScoreRef.current = { ...currentScoreRef.current, rightHandData: data };
     setRightHandData(data);
-  }, [isEditingDisabled, pushHistory]);
+    markMeasureEdited(previousData, data);
+  }, [isEditingDisabled, pushHistory, markMeasureEdited]);
 
   const handleLeftHandChange = useCallback((data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    if (isSameScoreIgnoringPadding(currentScoreRef.current.leftHandData, data)) {
+    const previousData = currentScoreRef.current.leftHandData;
+    if (isSameScoreIgnoringPadding(previousData, data)) {
       currentScoreRef.current = { ...currentScoreRef.current, leftHandData: data };
       setLeftHandData(data);
       return;
@@ -1570,7 +1588,8 @@ export default function ScorePage() {
     pushHistory();
     currentScoreRef.current = { ...currentScoreRef.current, leftHandData: data };
     setLeftHandData(data);
-  }, [isEditingDisabled, pushHistory]);
+    markMeasureEdited(previousData, data);
+  }, [isEditingDisabled, pushHistory, markMeasureEdited]);
 
   // 単旋律モード用（後方互換）
   const handleScoreDataChange = useCallback((data: MeasureData[]) => {
@@ -1579,8 +1598,9 @@ export default function ScorePage() {
 
   const handleQuartetPartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
     if (isEditingDisabled) return;
+    const previousData = currentScoreRef.current.quartetParts[partIndex];
     // 右手・左手と同じく、パディング差だけの通知は履歴に積まず ref と state だけ揃える
-    const paddingOnly = isSameScoreIgnoringPadding(currentScoreRef.current.quartetParts[partIndex], data);
+    const paddingOnly = isSameScoreIgnoringPadding(previousData, data);
     if (!paddingOnly) pushHistory();
     const nextParts = [...currentScoreRef.current.quartetParts];
     nextParts[partIndex] = data;
@@ -1590,11 +1610,13 @@ export default function ScorePage() {
       next[partIndex] = data;
       return next;
     });
-  }, [isEditingDisabled, pushHistory]);
+    if (!paddingOnly) markMeasureEdited(previousData, data);
+  }, [isEditingDisabled, pushHistory, markMeasureEdited]);
 
   const handleEnsemblePartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    const paddingOnly = isSameScoreIgnoringPadding(currentScoreRef.current.ensembleParts[partIndex], data);
+    const previousData = currentScoreRef.current.ensembleParts[partIndex];
+    const paddingOnly = isSameScoreIgnoringPadding(previousData, data);
     if (!paddingOnly) pushHistory();
     const nextParts = [...currentScoreRef.current.ensembleParts];
     nextParts[partIndex] = data;
@@ -1604,12 +1626,14 @@ export default function ScorePage() {
       next[partIndex] = data;
       return next;
     });
-  }, [isEditingDisabled, pushHistory]);
+    if (!paddingOnly) markMeasureEdited(previousData, data);
+  }, [isEditingDisabled, pushHistory, markMeasureEdited]);
 
   // staffCount:2（大譜表）パートの2段目（低音部）用。handleEnsemblePartChange と同じ形。
   const handleEnsembleSecondStaffChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
     if (isEditingDisabled) return;
-    const paddingOnly = isSameScoreIgnoringPadding(currentScoreRef.current.ensembleSecondStaffParts[partIndex], data);
+    const previousData = currentScoreRef.current.ensembleSecondStaffParts[partIndex];
+    const paddingOnly = isSameScoreIgnoringPadding(previousData, data);
     if (!paddingOnly) pushHistory();
     const nextParts = [...currentScoreRef.current.ensembleSecondStaffParts];
     nextParts[partIndex] = data;
@@ -1619,7 +1643,8 @@ export default function ScorePage() {
       next[partIndex] = data;
       return next;
     });
-  }, [isEditingDisabled, pushHistory]);
+    if (!paddingOnly) markMeasureEdited(previousData, data);
+  }, [isEditingDisabled, pushHistory, markMeasureEdited]);
 
   // 現在の全 state から保存用データ（parts + metadata）を組み立てるヘルパー。
   // handleSave / 自動保存 / ファイル書き出しで共通利用する。
@@ -1712,6 +1737,8 @@ export default function ScorePage() {
     setExtraEditingMeasures(0);
     // 前の譜面用の段割り手動上書きも引き継がない
     setSystemMeasureOverrides([]);
+    // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
+    setLastEditedMeasureIndex(null);
     // 前の譜面用の段の間隔手動上書きも引き継がない
     setSystemRowGapOverrides([]);
   // applySettingsProfileToState はレンダーごとに作り直される素の関数（安定な setter・
@@ -1795,6 +1822,8 @@ export default function ScorePage() {
       setExtraEditingMeasures(0);
       // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
       setSystemMeasureOverrides(data.systemMeasureOverrides ?? []);
+      // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
+      setLastEditedMeasureIndex(null);
       // 段の間隔の手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
       setSystemRowGapOverrides(data.systemRowGapOverrides ?? []);
     } catch (err) {
@@ -1859,6 +1888,8 @@ export default function ScorePage() {
         }
         setSystemMeasureOverrides(restored.systemMeasureOverrides ?? []);
         setSystemRowGapOverrides(restored.systemRowGapOverrides ?? []);
+        // 起動時の復元は編集位置とは無関係なので、段割りの安定化ヒントもリセットする（Issue #67）
+        setLastEditedMeasureIndex(null);
 
         setRestoreNotice('自動保存データから復元しました');
         console.info('[ScorePage] 起動時に自動保存データから復元しました');
@@ -1973,6 +2004,8 @@ export default function ScorePage() {
       setExtraEditingMeasures(0);
       // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
       setSystemMeasureOverrides(loadedData.systemMeasureOverrides ?? []);
+      // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
+      setLastEditedMeasureIndex(null);
       // 段の間隔の手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
       setSystemRowGapOverrides(loadedData.systemRowGapOverrides ?? []);
     }
@@ -2009,6 +2042,8 @@ export default function ScorePage() {
     setExtraEditingMeasures(0);
     // 前の譜面用の段割り手動上書きも引き継がない
     setSystemMeasureOverrides([]);
+    // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
+    setLastEditedMeasureIndex(null);
     // 前の譜面用の段の間隔手動上書きも引き継がない
     setSystemRowGapOverrides([]);
   }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock, setTimeSignature]);
@@ -2261,6 +2296,8 @@ export default function ScorePage() {
         } else {
           setRightHandData(clearRange(rightHandData));
         }
+        // 削除した範囲の先頭を「最後に編集した小節」として記録する（Issue #67）。
+        setLastEditedMeasureIndex(start);
         e.preventDefault();
         return;
       }
@@ -2297,6 +2334,8 @@ export default function ScorePage() {
           const src = clipboard.find(c => c.partId === 'single');
           if (src) setRightHandData(paste(rightHandData, src.measures));
         }
+        // 貼り付け先の先頭を「最後に編集した小節」として記録する（Issue #67）。
+        setLastEditedMeasureIndex(dest);
         e.preventDefault();
         return;
       }
@@ -2436,6 +2475,13 @@ export default function ScorePage() {
 
   const totalSystems = 12;
   const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
+  // 「最後に編集した小節」の絶対インデックス。音符追加/削除/小節追加のたびに更新し、
+  // planSystemMeasureRanges がこの位置より前の段だけを安定化できるようにする（Issue #67）。
+  // null のとき（新規読込直後・全体リセット直後など）は安定化を行わず常に貪欲法のみになる。
+  const [lastEditedMeasureIndex, setLastEditedMeasureIndex] = useState<number | null>(null);
+  // 直前に描画した段割り（{start, count}）を保持する ref。plannedRanges の useMemo 内では
+  // 自分自身の前回の結果を読めないため、下の useEffect でレンダー後に更新する。
+  const previousSystemRangesRef = useRef<SystemMeasureOverrideInput[]>([]);
   // 段の高さ見積もりに使う縦予算(px)。SCORE_AREA_BUDGET_PX は「上14mm/下12mm」
   // （=上下合計26mm）の実測値。「ページ余白（上）」「ページ余白（下）」スライダーで
   // 上下合計が変わった分だけ、px換算で増減する（合計を上げれば譜面領域が狭くなり、
@@ -2752,8 +2798,19 @@ export default function ScorePage() {
     // 段ごとの小節数のユーザー上書き。上書きのある段はその小節数を使い、無い段は
     // 従来どおりの自動計画のまま続く（上書き段より後ろの小節位置から再計算される）。
     systemMeasureOverrides,
-  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm]);
+    // 直前に描画した段割り（安定化のヒント）と、最後に編集した小節の位置。
+    // lastEditedMeasureIndex より前で完結する段だけを安定化し、それ以降は常に貪欲法で
+    // 再計画する（Issue #67。詳細は planSystemMeasureRanges 側のコメント参照）。
+    previousSystemRangesRef.current,
+    lastEditedMeasureIndex ?? undefined,
+  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm, lastEditedMeasureIndex]);
   const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
+
+  // plannedRanges を計算し終えたレンダーの直後に、次回の安定化ヒントとして保持する。
+  // useMemo 内で自分自身の前回値を読むと循環参照になるため、副作用として ref に退避する。
+  useEffect(() => {
+    previousSystemRangesRef.current = plannedRanges.map((range) => ({ startMeasure: range.start, count: range.count }));
+  }, [plannedRanges]);
 
   // 段ごとの小節数の手動上書きを1段ぶんだけ増減する。
   // 「小節 range.start から始まる段は count 小節」という上書きを配列に upsert するだけで、
@@ -2778,6 +2835,9 @@ export default function ScorePage() {
     if (systemMeasureOverrides.length === 0) return;
     pushHistory();
     setSystemMeasureOverrides([]);
+    // 「段割りをリセット」は全体再計画を期待する操作なので、編集位置による安定化も
+    // 一時的に外し、貪欲法だけで組み直す（Issue #67）。
+    setLastEditedMeasureIndex(null);
   }, [systemMeasureOverrides.length, pushHistory]);
 
   // 段ごとの間隔（上の段との距離）の手動上書きを1クリックぶんだけ増減する。
@@ -3017,6 +3077,8 @@ export default function ScorePage() {
         }
         // MusicXML には段割り上書きの概念が無いため、前の譜面ぶんを引き継がずリセットする
         setSystemMeasureOverrides([]);
+        // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
+        setLastEditedMeasureIndex(null);
         // 段の間隔の手動上書きも同様に引き継がずリセットする
         setSystemRowGapOverrides([]);
       } catch (err) {
@@ -3483,7 +3545,12 @@ export default function ScorePage() {
                   value={measuresPerSystem}
                   onChange={e => {
                     const v = Math.max(1, Math.min(8, Number(e.target.value)));
-                    if (!isNaN(v)) setMeasuresPerSystem(v);
+                    if (!isNaN(v)) {
+                      setMeasuresPerSystem(v);
+                      // 段あたり小節数の変更は全体再計画を期待する操作なので、編集位置による
+                      // 安定化も一時的に外し、貪欲法だけで組み直す（Issue #67）。
+                      setLastEditedMeasureIndex(null);
+                    }
                   }}
                   style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
                 />
