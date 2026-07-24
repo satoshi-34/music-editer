@@ -35,6 +35,11 @@
 - 依存追加の補助スクリプトは `scripts/safe-add-package-in-docker.sh` を使う
 - 依存追加後は、なぜそのライブラリが必要かを README または設計書に残す
 
+## worktree の後片付け
+
+- 夜間エージェント等が作った `.claude/worktrees/*` `.night-worktrees/*` は、不要になったら `git worktree remove --force <パス>` で削除する
+- 削除し忘れて参照だけ残った場合は `git worktree prune` で掃除する（vitest/eslint はこれらのディレクトリを除外設定済みだが、放置するとディスクを消費し続ける）
+
 ## コミットメッセージ
 
 - **日本語**で書く
