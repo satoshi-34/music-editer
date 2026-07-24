@@ -9,6 +9,7 @@ import {
   isEmptyMeasure,
   trimTrailingEmptyMeasures,
   isSameScoreIgnoringPadding,
+  findFirstDifferingMeasureIndex,
 } from './scoreDataEquality';
 import type { MeasureData } from '../types/storage';
 
@@ -68,5 +69,34 @@ describe('isSameScoreIgnoringPadding', () => {
 
   it('音符の違いは等しくない', () => {
     expect(isSameScoreIgnoringPadding([withNote()], [empty()])).toBe(false);
+  });
+});
+
+describe('findFirstDifferingMeasureIndex（Issue #67: 段割り安定化用の編集位置検出）', () => {
+  it('完全に同じなら null', () => {
+    const score = [withNote(), empty(), withNote()];
+    expect(findFirstDifferingMeasureIndex(score, score)).toBeNull();
+  });
+
+  it('パディング長が違うだけなら null（末尾パディングは無視）', () => {
+    const short = [withNote(), empty()];
+    const long = [withNote(), empty(), empty(), empty()];
+    expect(findFirstDifferingMeasureIndex(short, long)).toBeNull();
+  });
+
+  it('途中の小節を編集すると、その小節のインデックスを返す', () => {
+    const before = [withNote(), empty(), empty()];
+    const after = [withNote(), withNote(), empty()];
+    expect(findFirstDifferingMeasureIndex(before, after)).toBe(1);
+  });
+
+  it('末尾に小節を追加（内容あり）すると、追加された最初のインデックスを返す', () => {
+    const before = [withNote(), withNote()];
+    const after = [withNote(), withNote(), withNote()];
+    expect(findFirstDifferingMeasureIndex(before, after)).toBe(2);
+  });
+
+  it('undefined と実質空データの比較は null', () => {
+    expect(findFirstDifferingMeasureIndex(undefined, [empty(), empty()])).toBeNull();
   });
 });

@@ -661,6 +661,22 @@ export function planSystemMeasureRanges(
    * 複数の上書きが同じ start を指す場合は配列の最後を優先する。
    */
   overrides?: SystemMeasureOverrideInput[],
+  /**
+   * 直前に計算された段割り（安定化のヒント。Issue #67）。
+   *
+   * lastEditedMeasureIndex より前で完結する段（start + count <= lastEditedMeasureIndex）
+   * だけ、幅が変わっていても前回の count をそのまま再利用する。編集位置を含む段より後ろは
+   * 前回の count を一切参照せず、常に通常の貪欲法で計画し直す。
+   *
+   * こうする理由: 「収まる限り常に再利用」という単純な安定化（旧 Issue #58 対応）は、
+   * いま入力している段の小節数まで固定してしまい、「段が埋まるにつれて小節が詰まっていき、
+   * 溢れたら次の段へ送られる」という組版の基本挙動を止めてしまう不具合を招いた（Issue #67）。
+   * 編集位置より前の段だけを安定化対象にすることで、入力中の段は常に貪欲法の恩恵を受けつつ、
+   * 触れていない前の段の境界は動かないようにする。
+   */
+  previousRanges?: SystemMeasureOverrideInput[],
+  /** 最後に編集した小節の絶対インデックス（省略時は安定化を行わず常に貪欲法のみ）。 */
+  lastEditedMeasureIndex?: number,
 ): SystemMeasureRange[] {
   const requested = Math.max(1, Math.floor(requestedMeasuresPerSystem));
   const overrideByStart = new Map<number, number>();
@@ -669,6 +685,15 @@ export function planSystemMeasureRanges(
       overrideByStart.set(startMeasure, count);
     }
   });
+  const previousCountByStart = new Map<number, number>();
+  previousRanges?.forEach(({ startMeasure, count }) => {
+    if (Number.isInteger(startMeasure) && startMeasure >= 0 && Number.isInteger(count) && count >= 1) {
+      previousCountByStart.set(startMeasure, count);
+    }
+  });
+  const stabilizeBeforeMeasure = Number.isInteger(lastEditedMeasureIndex) && (lastEditedMeasureIndex as number) >= 0
+    ? (lastEditedMeasureIndex as number)
+    : undefined;
   const ranges: SystemMeasureRange[] = [];
   for (let start = 0; start < minimumWidths.length;) {
     const overrideCount = overrideByStart.get(start);
@@ -681,6 +706,29 @@ export function planSystemMeasureRanges(
       ranges.push({ start, count, minimumWidths: widths, totalWidth, overflow: totalWidth > availableWidth });
       start += count;
       continue;
+    }
+    const previousCount = previousCountByStart.get(start);
+    if (
+      previousCount != null
+      && stabilizeBeforeMeasure != null
+      && start + previousCount <= stabilizeBeforeMeasure
+      // breakAt をまたぐ場合は前回の count をそのまま使えない（内容小節数が変わった＝
+      // 新しい段が必要になったケースなので、下の貪欲法へフォールバックさせる）。
+      && !(breakAt != null && breakAt > start && breakAt < start + previousCount)
+    ) {
+      const count = Math.min(previousCount, minimumWidths.length - start);
+      if (count === previousCount) {
+        const widths = minimumWidths.slice(start, start + count);
+        const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+        // 編集位置より前なので通常は幅が変わっておらず必ず収まるはずだが、
+        // ページ余白や音符サイズ全体の設定変更で availableWidth 側が変わることもあるため、
+        // 念のため収まることを確認してから再利用する（収まらなければ下の貪欲法へ委ねる）。
+        if (totalWidth <= availableWidth) {
+          ranges.push({ start, count, minimumWidths: widths, totalWidth, overflow: false });
+          start += count;
+          continue;
+        }
+      }
     }
     let maxCount = Math.min(requested, minimumWidths.length - start);
     if (breakAt != null && breakAt > start && breakAt < start + maxCount) {
