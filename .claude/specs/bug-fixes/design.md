@@ -1156,3 +1156,41 @@ SVGのfill既定値は黒のため、CSSが適用されない・他ルール（�
 - `createElementNS(...,'rect')` の全7箇所（`hit`=symbol-hit-region、`guideChordRect`、`ir`=vf-hit、`keySignatureDebugRect`、`hit`=vf-note-hit、`sr`=vf-note-selected、リハーサルマーク枠）のうち、修正前からfill未設定だったのはこの3箇所のみであることをgrepで確認済み
 - ブラウザで音符を選択し、DOM上で `rect.vf-note-selected` の `fill` 属性が `none`、`stroke` が `#1d4ed8` になっていること（computed styleも一致）を確認
 - 印刷プレビューで黒塗りの矩形が出ないこと（新規譜面に音符を1つ配置した状態で確認。表示された黒塗りrectは全て正当なもの＝小節線・符幹・符頭で、想定外の大きな黒矩形は無し）
+
+## 保存済み譜面の旧世代既定位置の休符が自己修復されない問題（2026-07-24, Issue #56）
+
+### 問題
+
+Issue #51 / PR #54（上記「単声部の休符の既定位置」の節）の自己修復ロジックは、保存データの休符キーが「PR #54直前の既定位置（五線中央 = line 2）」と厳密に一致する場合だけ、音価に応じた標準位置へ引き上げる実装だった。Issue #56 では、これより古い世代の既定値で保存された休符（PR #15/#16 時代、あるいはそれ以前）も同様に自己修復してほしいという要望があった。
+
+### git 履歴を確認した結果
+
+`clefUtils.ts` の全履歴（初出の `e7f171d` ピアノ大譜表追加コミットまで遡り、`restKey`/`defaultRestDisplayKey`/`makeRest` のハードコード値をすべて確認）と `StaffCanvas.tsx`/`PianoSystemCanvas.tsx` の休符生成コードを調査した結果、以下が判明した。
+
+- 単声部の新規休符・保存データの既定値としてハードコードされていた値は、`e7f171d`（bass既定値 `'d/3'` の初出）から PR #54 直前まで一貫して「五線中央（line 2）」のみだった。PR #15（`1f02fd3`/`4ca0a65`）のコミットメッセージ「休符の下端が五線の第二線に重なるよう修正」は、保存キーのline値自体の変更ではなく、VexFlow側の centerAlignment/Formatter 設定を調整した見た目上の変更である。
+- `897cb79`（NoteEvent.keys[] 化・和音対応、2026-04-29）〜 `1f02fd3`（PR #15、2026-05-04）の約5日間だけ、新規休符の挿入がクリックした高さをそのまま保存する実装になっていた（`doInsertAt` が `isRest` を区別せず `keys:[key]` を使っていた）。この期間に保存された休符のキーはユーザーの実クリック位置に依存する不定値であり、「既定値」として一意に特定できる固定キーが存在しない。
+
+つまり、単声部の休符について実際にハードコードされていた既定値は「五線中央（line 2）」の1種類のみで、これは PR #54 で既に自己修復対象になっている。クリック時代（897cb79〜1f02fd3）のデータだけは、固定キーの集合として自動判定する根拠がない。
+
+### 修正設計
+
+- `clefUtils.ts` に、自己修復の判定ロジックを集約する `isLegacyDefaultRestKey(clef, key)` と `resolveLegacyRestDisplayKey(clef, duration, storedKey)` を追加した。現時点で判定対象になる「歴代既定位置」は `LEGACY_DEFAULT_REST_DISPLAY_LINES = [line 2]` の1件のみ（上記の調査結果通り）。今後さらに古い固定既定値が見つかった場合は、この配列に line 値を追加するだけで対応できる形にしてある。
+- `PianoSystemCanvas.tsx` の `makeVFNote` は、この2関数を呼ぶだけの薄い実装に置き換えた（判定ロジック自体はもう `PianoSystemCanvas.tsx` に無い）。単旋律・ピアノ大譜表・弦楽四重奏・編成譜・パート譜抽出は全て `PianoSystemCanvas` 一本を経由する構成になっている（`StaffCanvas.tsx` は既に削除済みで、`EnsembleStaff`/`QuartetStaff`/`PianoStaff`/`SingleStaff`/`PartExtractionStaff` は全て `PianoSystemCanvas` のラッパー）ため、描画経路の一本化は追加対応不要だった。
+- クリック時代のデータのように自動判定できない「手動調整済みとみなされる」休符のために、休符選択中に **`0` キーで標準位置へリセットする**操作を追加した（`PianoSystemCanvas.tsx` の keydown ハンドラ）。この操作は既存の ArrowUp/ArrowDown・Delete と同じ場所に実装し、`applyPitchChangeToMeasures`（`pitchShiftUtils.ts`）を再利用して保存データの `keys` を書き換える。2声部共存小節の声部2（`sel.voiceIndex` が設定されている場合）は、既存の Delete-only 制限にならい今回もリセット操作の対象外にした（`restKeyForVoice` による上下振り分けを変更しない制約を守るため）。
+
+### 影響範囲
+
+- `src/components/clefUtils.ts`（`isLegacyDefaultRestKey`/`resolveLegacyRestDisplayKey` を追加）
+- `src/components/clefUtils.test.ts`（歴代既定キー判定・リセット解決の純関数テストを追加）
+- `src/components/PianoSystemCanvas.tsx`（`makeVFNote` を新関数呼び出しに置き換え、`0`キーでの手動リセット操作を追加）
+
+### 確認ポイント
+
+- クレフ（treble/bass/alto/tenor）×既定キー（line2既定値/全休符の標準位置line1/手動調整とみなせる位置）の組み合わせで `resolveLegacyRestDisplayKey` が期待通りの値を返すこと（純関数テストで確認、`npx vitest --run src` 全緑）
+- 2声部共存小節の上下振り分け（`restKeyForVoice`）は変更していないこと（既存テストがそのまま通ることで確認）
+- `npx vitest --run src` / lint（対象2ファイルの問題数が変更前と同数=58件、新規0件）/ `npm run build` が成功すること
+
+### 自信の無い点
+
+- 「PR #15/#16 時代の下から2本目の線」という Issue 記載の既定値は、git履歴を精査した限りでは保存キーのline値としては見つからなかった（見つかったのはPR #15での見た目調整のみ）。実際の運用データ（本Issueの起票根拠になった実機の保存済み譜面）にその値が存在する可能性は否定できないため、断定はせず「歴代既定値は line2 のみ」という調査結果に基づいて実装した。もし実データに別の固定既定値が見つかった場合は `LEGACY_DEFAULT_REST_DISPLAY_LINES` に追加するだけで対応できる。
+- 手動リセット操作（`0`キー）は、休符選択中の操作としてブラウザで実際にクリック→選択→キー入力の一連の流れを検証できていない。夜間無人実行のため一時プレビューコンテナを起動したが、クリック→選択が安定して再現できず（既存の `SingleStaffArrowKeyEdit.test.tsx` のような自動テストでの再現も試みたが、休符のバウンディングボックス幅がjsdomの制約で0になるなど、コード側の不具合ではなく検証環境側の要因で断念した）、コンソールエラーが出ないことと `applyPitchChangeToMeasures`（既存の十分にテストされたユーティリティ）を再利用している設計であることまでは確認した。実際のブラウザでの手動確認を推奨する。

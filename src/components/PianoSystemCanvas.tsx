@@ -14,6 +14,7 @@ import type { ClefType } from './clefUtils';
 import {
   defaultRestDisplayKey,
   defaultRestDisplayKeyForDuration,
+  isLegacyDefaultRestKey,
   restKey as restFormatterKey,
   restKeyForVoice,
   lineToKey as lineToKeyForClef,
@@ -568,14 +569,13 @@ function makeVFNote(
     if (renderAsGhostRest) {
       return new GhostNote({ duration: vd, dots: vexFlowDotCount(ev.dots) });
     }
-    // 保存データが「音価によらない旧既定位置」のままなら、
+    // 保存データが「歴代の既定位置（音価によらない一律の位置）」のままなら、
     // 音価に応じた標準浄書位置（全休符だけ異なる）へ自動的に引き上げる。
-    // ユーザーが実際に位置をカスタマイズした休符（旧既定位置と一致しないキー）はそのまま尊重する。
-    const legacyDefaultRestKey = defaultRestKeyForClef(clef);
-    const eventRestKey = ev.keys[0] || legacyDefaultRestKey;
-    const renderRestKey = eventRestKey === legacyDefaultRestKey
+    // 判定は clefUtils.isLegacyDefaultRestKey に集約している（Issue #56）。
+    // ユーザーが実際に位置をカスタマイズした休符（既定位置と一致しないキー）はそのまま尊重する。
+    const renderRestKey = isLegacyDefaultRestKey(clef, ev.keys[0])
       ? (restKeyOverride ?? defaultRestDisplayKeyForDuration(clef, ev.dur))
-      : eventRestKey;
+      : ev.keys[0];
     return attachDots(new StaveNote({clef,keys:[renderRestKey],duration:vd+'r',dots:vexFlowDotCount(ev.dots)}));
   }
   // keys が空の場合は全休符にフォールバック
@@ -1306,6 +1306,21 @@ export default function PianoSystemCanvas({
             { lineToKey: l2k, keyToLine: k2l, keySignature: keySignatureRef.current, defaultRestKey: defaultRestKeyForClef(clef) }
           );
           return applyPitchChangeToMeasures(prev, measure, index, keyIndex, newKeys);
+        });
+        e.preventDefault();return;
+      }
+      if(e.key==='0'){
+        // 休符選択中に 0 キーで標準位置へリセットする（Issue #56）。
+        // 自己修復の対象外（=手動でカスタマイズされたとみなされる）休符を、
+        // ユーザーの意思で標準位置へ戻すための唯一の手段。
+        // ここだけは保存データそのものを書き換えてよい（受入条件参照）。
+        setS(prev=>{
+          if(measure>=prev.length)return prev;
+          const ev=prev[measure].events[index];
+          if(!ev||!ev.isRest)return prev;
+          const standardKey=defaultRestDisplayKeyForDuration(clef, ev.dur);
+          if(ev.keys[0]===standardKey)return prev;
+          return applyPitchChangeToMeasures(prev, measure, index, keyIndex, [standardKey]);
         });
         e.preventDefault();return;
       }

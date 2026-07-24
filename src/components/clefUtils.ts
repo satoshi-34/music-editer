@@ -123,6 +123,54 @@ export function defaultRestDisplayKeyForDuration(clef: ClefType, duration: strin
   return duration === '1' ? wholeRestDisplayKey(clef) : defaultRestDisplayKey(clef);
 }
 
+// ===== 保存済み休符データの自己修復（Issue #56） =====
+//
+// 「音価によらない旧既定位置」で保存された休符は、再読込時に音価に応じた
+// 標準位置へ引き上げたい（ユーザーが手動でカスタマイズした休符は温存する）。
+// この判定に使う「歴代の既定位置」の集合は、git 履歴を実際に確認して決めている
+// （PR #15 / #16 / #54 および初出の e7f171d コミットまで遡って確認済み）。
+//
+// 確認できた事実:
+// ・単声部の新規休符・保存データの既定値として実際にハードコードされていたのは
+//   「五線中央（line 2）」だけで、この値は e7f171d（ピアノ大譜表追加時に bass 記号の
+//   既定値 'd/3' が最初に登場）から PR #54（8137c46）で音価別振り分けが入る直前まで
+//   一貫していた。PR #15/#16 の変更は「保存キーの line 値」自体を動かしたものではなく、
+//   VexFlow 側の centerAlignment/Formatter 設定を調整して見た目（グリフの下端位置）を
+//   変えたもの（コミットログ「休符の下端が五線の第二線に重なるよう修正」参照）。
+// ・897cb79（NoteEvent.keys[] 化・和音対応）～ 1f02fd3（PR #15）の間だけ、新規休符の
+//   挿入がクリックした高さをそのまま保存する実装になっていた。この期間のキーは
+//   ユーザーの実際のクリック位置に依存する不定値であり、「既定値」として一意に
+//   特定できる固定キーが存在しない。したがって自動判定の対象には含めていない
+//   （この期間の休符は、下記の手動リセット操作でのみ標準位置へ戻せる）。
+const LEGACY_DEFAULT_REST_DISPLAY_LINES: readonly number[] = [DEFAULT_REST_DISPLAY_LINE];
+
+/**
+ * 保存された休符キーが「歴代の既定位置」のいずれかと一致するかを判定する。
+ * キーが無い（undefined/空文字）場合も、既定値扱いとして true を返す
+ * （makeVFNote 側の従来のフォールバック挙動を踏襲）。
+ */
+export function isLegacyDefaultRestKey(clef: ClefType, key: string | undefined): boolean {
+  if (!key) return true;
+  const line = keyToLine(clef, key);
+  return LEGACY_DEFAULT_REST_DISPLAY_LINES.some((legacyLine) => Math.abs(line - legacyLine) < 1e-6);
+}
+
+/**
+ * 保存された休符キーを描画用に解決する。
+ * 歴代の既定位置（isLegacyDefaultRestKey）に一致するキーだけ、音価に応じた
+ * 標準位置（全休符=第4線、2分休符以下=五線中央）へ引き上げる。
+ * 一致しないキー（ユーザーが手動でカスタマイズした休符）はそのまま返す。
+ */
+export function resolveLegacyRestDisplayKey(
+  clef: ClefType,
+  duration: string,
+  storedKey: string | undefined
+): string {
+  return isLegacyDefaultRestKey(clef, storedKey)
+    ? defaultRestDisplayKeyForDuration(clef, duration)
+    : (storedKey as string);
+}
+
 // 2声部が共存する小節では、休符も声部1(上声)/声部2(下声)で重なってしまうため、
 // それぞれ五線の中央（DEFAULT_REST_DISPLAY_LINE）から上下にずらして避ける。
 // line は数値が小さいほど五線の上（高い位置）になる（lineToKeyTreble 等の実装を参照）。
