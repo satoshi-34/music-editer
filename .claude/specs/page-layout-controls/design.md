@@ -232,3 +232,30 @@ CSS の `gap` プロパティは負値を受け付けない（無効な宣言と
 ## 追補: 音符の大きさの工場出荷既定値変更に伴う推奨段数の変化（Issue #49、2026-07-24）
 
 上記の「単旋律8段・ピアノ4段という初期表示自体は変わらない」は、当時の音符の大きさの工場出荷既定値（全楽譜種別100%）を前提にした記述だった。Issue #49 で単旋律・ピアノの既定値が150%に変わったことに伴い、`recommendedSystemsPerPage` の計算に使う `notationSizeMultiplier` の初期値も変わるため、**新規ユーザー状態での初期表示（推奨段数）は単旋律8段→5段、ピアノ4段→3段に変わった**（ピアノはさらに段の間隔の既定値も0px→30pxになったため、その分も上限計算に効いている）。これは意図した変更であり、`recommendedSystemsPerPage` / `maxSystemsPerPage` の計算式そのもの（本ドキュメント本文の設計）は変更していない。実測ベースの上限（`maxSystemsPerPage`）の範囲内に収まっているため、あふれ警告は出ない。詳細（既定値の解決関数・検証結果）は `.claude/specs/settings-profile/design.md` の同日付の追補を参照。`src/components/ScorePageSystemsPerPage.test.tsx` のアサーションもこの新しい値に更新した。
+
+## 追補: 最終ページが「実段1つ＋空の段」のとき、他ページと違う小さいレイアウトへ潰れていた不具合を修正（Issue #68、2026-07-25）
+
+### 問題
+
+複数ページの譜面で、最終ページの実段（内容のある段・編集バッファ段）が1段だけになると、実段は正しくても**その直後に続く空の段（`.empty-stave-filler`、Issue #41）まで含めてページ全体が不自然に小さく、上詰めで表示され、ページ下半分が大きく空く**症状が起きていた。他のページ（先頭ページなど）は本ドキュメント本文の固定スロット式（`--page-capacity` ベースの `flex: 0 0 calc(...)`）でページ全体へ均等に配置されるため、同じ譜面の中でページごとに段の詰まり方がまったく異なって見えた。
+
+原因は `App.css` の `.screen-final-page-single`（本ドキュメント上部の「画面表示でも、最終ページに『実際に表示される段』が1段だけのときは上揃えにする」を参照）にあった。このクラスは `ScorePage.tsx` の `screenFinalPageVisibleSystems`（`effectiveTotalSystems` ベース＝実段・編集バッファ段のみを数え、**空の段は数えない**）が1のときに付与され、`.system-stack` を固定スロット式から「実サイズ＋ `justify-content: flex-start`」の縮小レイアウトへ切り替える。このクラスが追加された当時（Issue #38以前）はまだ空の段（Issue #41）が存在せず、「実段1つ＝そのページの子要素は1つだけ」という前提が常に成り立っていた。しかしIssue #41で空の段が同じ `.system-stack` へ実段の直後の兄弟要素として追加されるようになった後も、判定条件（`screenFinalPageVisibleSystems === 1`）は空の段を数えないまま据え置かれていたため、「実段1つ＋空の段が複数」という状態でもこのクラスが付与され続けていた。結果、実段だけでなく空の段まで縮小レイアウトに巻き込まれ、五線紙のようにページを均等に埋めるはずの空の段（Issue #41の意図）が小さく上詰めになってしまっていた。
+
+### 修正設計
+
+- `ScorePage.tsx` に `screenFinalPageTotalSystems`（`screenFinalPageVisibleSystems` + そのページが最終可視ページ（`lastVisiblePageIndex`）と一致する場合の `lastPageEmptyFillerRanges.length`）を追加し、`.screen-final-page-single` クラスの付与条件を `screenFinalPageVisibleSystems === 1` から `screenFinalPageTotalSystems === 1` に変更した。空の段が1つでも存在すれば、その最終ページの実質的な表示段数は2以上になるため、このクラスは付与されず、他ページと同じ固定スロット式（本ドキュメント本文）が使われる。
+- パート譜抽出中（`isPartExtractionActive`）や編集不可時（`isEditingDisabled`）は `lastPageEmptyFillerRanges` が常に空配列（`ScorePage.tsx` 側で明示的にガード済み）のため、`screenFinalPageTotalSystems` は従来どおり `screenFinalPageVisibleSystems` と一致する。これらのビューには空の段の演出が無いため、「実段1つだけ」なら引き続き `.screen-final-page-single`（実サイズ・上揃え）が適用され、以前からの見た目（段がページ中央へ間延びして浮かない）を維持する。
+- `.print-final-page-single`（印刷・印刷プレビュー専用）は変更していない。印刷では空の段自体を表示しないため（`@media print` / `.print-preview` で非表示）、「内容のある段が1段だけの最終ページは上揃え」という判定・挙動は従来のままで正しい。
+
+### 検証結果
+
+- ブラウザ実測（本worktreeを一時ポートで直接マウントしたdevサーバー、`test-data/print-test-score.json` を「段数/ページ」5に設定して3ページ化し、最終ページを実段1つ＋空の段4つの状態にして確認）: 修正前は最終ページの `.print-page` に `screen-final-page-single` が付与され、5段すべて（実段1つ＋空の段4つ）が自然サイズ（約119px/段）で上詰めになり、ページ高さ932pxのうち約595pxしか埋まらなかった。修正後はこのクラスが付与されなくなり、5段すべてが他ページと同じ `flex-basis`（`--page-capacity` ベース、約163〜174px/段）で計算され、ページのほぼ全高（約870px）が均等に埋まることを、`getComputedStyle` による `flex-basis` の一致（全ページとも `20%`・`flex-grow: 5`）で確認した。
+- `docker exec -w <worktree> music-editer-dev npx vitest --run src`: 98ファイル1146テスト中、失敗4件はすべて `ScorePageEmptyStaveFiller.test.tsx` の既存テストで、**未修正の main でも同じ4件・同じ内容で失敗することを確認済み**（jsdomに `HTMLCanvasElement.getContext` が無いことに起因する空の段の個数見積もりのずれで、本修正・Issue #68とは無関係の既存の環境依存の問題）。新規追加した回帰テスト（`実段1つ＋空の段が複数あるページには、1段専用の特別レイアウト（screen-final-page-single）を適用しない`）は成功。
+- `docker exec -w <worktree> music-editer-dev npm run lint`: 353エラー・6警告で、未修正のmainと完全に同数（新規エラーなし）。
+- `docker exec -w <worktree> music-editer-dev npm run build`: `tsc -b && vite build` エラーなし。
+
+### 影響範囲
+
+- `src/components/ScorePage.tsx`: `screenFinalPageTotalSystems` を追加し、`.screen-final-page-single` の付与条件をこれに変更。
+- `src/components/ScorePageEmptyStaveFiller.test.tsx`: 回帰テストを追加（実段1つ＋空の段が複数あるとき `.screen-final-page-single` が付与されないこと）。
+- `App.css` 側のCSSルール自体（`.screen-final-page-single` の中身）は変更していない。

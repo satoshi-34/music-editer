@@ -61,6 +61,17 @@ describe('空の段でページを満たす（Issue #41）', () => {
     expect(fillers.length).toBe(7);
   });
 
+  it('実段1つ＋空の段が複数あるページには、1段専用の特別レイアウト（screen-final-page-single）を適用しない（Issue #68: フィラーがある場合は他ページと同じ固定スロット配置で統一する）', () => {
+    const { container } = render(<ScorePage />);
+    // 新規譜面（実段1つ＋空の段が複数、上のテストと同じ状態）は「表示段が実質1段だけ」の
+    // 特別レイアウトの対象ではない。このクラスが付くと空の段まで自然サイズ・上詰めの
+    // 小さいレイアウトへ潰れ、ページ下半分が不自然に空くリグレッションになる。
+    // 空の段の正確な個数は上のテスト（既知の環境依存の差異あり）の対象なので、
+    // ここでは「複数の空の段が実段と同じ .system-stack に存在する」ことだけを確認する。
+    expect(container.querySelector('.print-page.screen-final-page-single')).toBeNull();
+    expect(container.querySelectorAll('.empty-stave-filler').length).toBeGreaterThan(1);
+  });
+
   it('ピアノ大譜表に切り替えても、既定4段/ページに対して実段1つ＋空の段3つになる', () => {
     const { container } = renderOnScoreTab();
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
