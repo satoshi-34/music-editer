@@ -1,6 +1,9 @@
 services:
   app:
     build: .
+    # 夜間ルーチン（SKILL）が docker exec で参照する固定名。compose 既定の
+    # <dir>-app-1 だとマシンごとに名前がずれ、サブ機で参照が壊れるため明示する。
+    container_name: music-editer-dev
     ports:
       # ホスト側は 127.0.0.1 に限定する。
       # "5173:5173" だと 0.0.0.0 にバインドされ、同じ LAN 上の他端末から
