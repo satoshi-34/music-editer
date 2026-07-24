@@ -421,6 +421,72 @@ describe('measureMinimumContentWidth', () => {
       expect(withEmpty).toEqual(withUndefined);
     });
   });
+
+  describe('previousRanges（Issue #58: 入力のたびに段割りがガタつく不具合の対策）', () => {
+    it('前回の段割りが収まる限り、幅が変わっても境界を変えない', () => {
+      // 8小節・4小節/段の自動計画なら [0-3][4-7] の2段。
+      const previous = planSystemMeasureRanges(Array.from({ length: 8 }, () => 52), 4, 550)
+        .map((r) => ({ startMeasure: r.start, count: r.count }));
+      expect(previous).toEqual([{ startMeasure: 0, count: 4 }, { startMeasure: 4, count: 4 }]);
+
+      // 2小節目（index 1）に音符を追加して幅が増えた想定。貪欲法だけなら段1は
+      // [0-2] の3小節に縮む可能性があるが、previousRanges を渡すと収まる限り再利用される。
+      const widened = [52, 52, 200, 52, 52, 52, 52, 52];
+      const ranges = planSystemMeasureRanges(widened, 4, 550, undefined, undefined, previous);
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 4 },
+        { start: 4, count: 4 },
+      ]);
+    });
+
+    it('前回の段が幅超過で収まらなくなったら、その段だけ自動計画へフォールバックする', () => {
+      const previous = [{ startMeasure: 0, count: 4 }, { startMeasure: 4, count: 4 }];
+      // 段1（0-3）の合計が使用可能幅(550)を超えるほど1小節が巨大化した。
+      const overflowing = [52, 52, 420, 52, 52, 52, 52, 52];
+      const ranges = planSystemMeasureRanges(overflowing, 4, 550, undefined, undefined, previous);
+      // 段1は貪欲法で入るだけ(3小節)に縮み、残りは通常の貪欲法で計画される。
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 3 },
+        { start: 3, count: 4 },
+        { start: 7, count: 1 },
+      ]);
+    });
+
+    it('前回より小節が増えて新しい段が必要になった分は、通常の貪欲法で追加される', () => {
+      const previous = [{ startMeasure: 0, count: 4 }];
+      // 前回は4小節だけだったが、追加入力で12小節に増えた。
+      const grown = Array.from({ length: 12 }, () => 52);
+      const ranges = planSystemMeasureRanges(grown, 4, 550, undefined, undefined, previous);
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 4 },
+        { start: 4, count: 4 },
+        { start: 8, count: 4 },
+      ]);
+    });
+
+    it('overrides は previousRanges より常に優先される', () => {
+      const previous = [{ startMeasure: 0, count: 4 }];
+      const ranges = planSystemMeasureRanges(
+        Array.from({ length: 8 }, () => 52),
+        4,
+        550,
+        undefined,
+        [{ startMeasure: 0, count: 2 }],
+        previous,
+      );
+      expect(ranges.map((r) => ({ start: r.start, count: r.count }))).toEqual([
+        { start: 0, count: 2 },
+        { start: 2, count: 4 },
+        { start: 6, count: 2 },
+      ]);
+    });
+
+    it('previousRanges が未指定なら従来どおりの貪欲法のみで計画する（後方互換）', () => {
+      const withoutPrevious = planSystemMeasureRanges(Array.from({ length: 8 }, () => 52), 4, 550);
+      const withUndefinedPrevious = planSystemMeasureRanges(Array.from({ length: 8 }, () => 52), 4, 550, undefined, undefined, undefined);
+      expect(withUndefinedPrevious).toEqual(withoutPrevious);
+    });
+  });
 });
 
 describe('systemRowSlotHeightPx / systemRowTopOffsetsPx（段の間隔を単一の連続方式に統一）', () => {
