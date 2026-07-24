@@ -2492,8 +2492,9 @@ export default function PianoSystemCanvas({
         renderedVoiceEntries.forEach((entry) => {
           try{entry.voice.draw(ctx,stave);}catch{}
           // 表示専用のパディング休符（データには保存されていない）に
-          // クラスを付けておき、印刷（PDF書出）時は App.css の @media print で
-          // 非表示にする。「未完成の小節」がそのまま印刷物に残らないようにするため。
+          // クラスを付けておく。App.css の「svg path/line を印刷インク色に戻す」
+          // ルールがこのクラスの要素にも効くので、画面では薄いグレーのまま、
+          // 印刷・PDF書出では通常の休符と同じ黒で出力される（Issue #59）。
           entry.sourceEvents.forEach((ev, idx) => {
             if (!(ev as RenderNoteEvent).__isPlaceholder) return;
             try {

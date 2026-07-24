@@ -24,7 +24,9 @@
 - `.toolbar` はそのまま表示・操作可能（トグル自体もここにあるため隠すと操作できなくなる）。「その他」タブのページ余白・段の間隔・音符の大きさスライダー、段ごとの「◀ N小節 ▶」「間隔 −/＋」ボタンは通常モードと同じ input を共有しており、プレビュー中の変更もそのまま同じ state（`pageMarginSideMm` 等）を書き換える。Undo/Redo も既存の `pushHistorySnapshot` 経路にそのまま乗る。
 - `.system-measure-override-controls` は非表示にせず、`opacity: 0.55`（hover/focus 時 1）の半透明フローティング行として残し、紙面の見た目を大きく邪魔しない程度に弱める。
 
-一方、`.layout-overflow-alert` / `.add-measures-ghost-button` / `.vf-padding-rest`（編集専用の視覚補助で、印刷にも出ない要素）は `@media print` と同様に `.print-preview` でも非表示にする。
+一方、`.layout-overflow-alert` / `.add-measures-ghost-button`（編集専用の視覚補助で、印刷にも出ない要素）は `@media print` と同様に `.print-preview` でも非表示にする。
+
+`.vf-padding-rest`（拍が埋まっていない小節の残り拍を示す表示専用のパディング休符）は、**以前はここでも非表示にしていたが、Issue #59 でその挙動自体がバグと判明したため方針を変更した**。詳細は次節を参照。
 
 ### ページ枠・改ページの可視化
 
@@ -33,6 +35,14 @@
 ### 全モード対応
 
 `.print-preview` のルールはクラスセレクタのみで楽譜種別に依存しないため、単旋律・ピアノ・四重奏・編成譜のいずれでも同じ CSS がそのまま効く（`.print-page` / `.score-area` の DOM 構造は全モード共通のため）。ブラウザ確認では単旋律・ピアノの2種別で動作確認済み（四重奏・編成譜は CSS 適用ロジックが DOM 構造非依存のため未実機確認）。
+
+### パディング休符（.vf-padding-rest）は隠さず黒で出す（Issue #59）
+
+パディング休符（`PianoSystemCanvas` が拍の足りない小節・声部の残りへ表示専用で補う休符。詳細は README「拍が足りない小節・声部への表示用休符補完」節）には、当初 `@media print` / `.print-preview` の両方に `.vf-padding-rest { display: none !important; }` を置いていた。「未完成の小節をそのまま印刷物に残すと紙面が汚くなる」という想定だったが、実際には**小節の後半がただの空白として印刷される**という利用者側の不具合報告につながった。市販譜では埋まっていない拍にも休符を明示するのが作法であり、画面編集中に見えているグレーの休符がそのまま黒く出力される方が正しい挙動である。
+
+そのため両ブロックから `display: none` の指定を削除した。色については新しいルールを追加する必要はなく、既存の「`svg path`/`line`/`g` 等の色を印刷インク色（既定 `#000`）へ強制する」ルール群（`@media print` 側は `!important` 付き、`.print-preview` 側は非 `!important`）がそのまま効く。理由: `PianoSystemCanvas` がパディング休符に設定する薄いグレー（`INACTIVE_VOICE_COLOR` = `#9ca3af`）は VexFlow の `SVGContext` が `fill`/`stroke` を**プレゼンテーション属性**として要素へ直接書き込む実装であり、`style` 属性ではない。CSS のカスケードではプレゼンテーション属性は最も優先度が低いため、`!important` の有無にかかわらずクラスセレクタによる `fill`/`stroke` 指定が上書きできる。よって `display:none` さえ外せば、既存の色統一ルールが自動的にパディング休符も黒くしてくれる（新規の色ルールを足す必要がない）。
+
+画面（`.print-preview` が付いていない通常編集時）は従来通りグレーのまま変わらない。回帰確認は `src/AppCssPaddingRestPrint.test.ts`（CSS に `display:none` が残っていないことの静的チェック）と、ブラウザでの実地確認（`.print-preview` トグルON/OFFで `.vf-padding-rest` の `getComputedStyle(...).fill` が `rgb(156,163,175)` ⇄ `rgb(0,0,0)` に切り替わることを確認）で行った。
 
 ### 既知の未対応事項
 
