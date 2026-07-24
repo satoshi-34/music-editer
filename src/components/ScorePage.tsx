@@ -3057,6 +3057,16 @@ export default function ScorePage() {
     return plannedRanges.slice(effectiveTotalSystems, effectiveTotalSystems + count);
   }, [isPartExtractionActive, isEditingDisabled, lastVisiblePageIndex, getPageSystemsCapacity, maxSystemsPerPage, effectiveTotalSystems, getPageSystemOffset, plannedRanges]);
 
+  // 画面側の「最終ページが実質1段だけ」判定（screen-final-page-single）は、空の段
+  // （lastPageEmptyFillerRanges、Issue #41）も含めた実際の表示段数で行う必要がある。
+  // 空の段は screenFinalPageVisibleSystems の算出後に同じ .system-stack へ追加で
+  // 描画されるため、これを含めずに「1段だけ」と判定すると、実段1つ＋空の段が
+  // 複数ある状態でも1段用の特別レイアウト（自然サイズ・上詰め、他ページと違う
+  // 固定スロット高を使わない）が適用され、空の段まで小さく上に押し込まれて
+  // ページ下半分が不自然に空くリグレッションになる（Issue #68）。
+  const screenFinalPageTotalSystems = screenFinalPageVisibleSystems
+    + (screenFinalPageIndex === lastVisiblePageIndex ? lastPageEmptyFillerRanges.length : 0);
+
   // 空の段（lastPageEmptyFillerRanges）を index 番目までクリックで実体化する。
   // 「＋小節を追加」ボタンと同じ extraEditingMeasures を使うため、実際の描画は
   // 既存の bufferRanges の仕組みへそのまま合流し、次の描画から通常の入力可能な段になる
@@ -4103,8 +4113,9 @@ export default function ScorePage() {
               {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
               {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
               {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}
+              {/* screen-final-page-single: 空の段（フィラー）を含めても表示段が実質1段だけのときに限る（Issue #68。フィラーがある場合は他ページと同じ固定スロット配置で統一する） */}
               <section
-                className={`print-page${printContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}${i === screenFinalPageIndex && screenFinalPageVisibleSystems === 1 ? ' screen-final-page-single' : ''}`}
+                className={`print-page${printContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}${i === screenFinalPageIndex && screenFinalPageTotalSystems === 1 ? ' screen-final-page-single' : ''}`}
                 style={{
                   // ページ余白（左右・上・下）。正本はこの3値のみで、App.css 側は
                   // var(--page-margin-*) を padding へそのまま渡すだけにしてある
