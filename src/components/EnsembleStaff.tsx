@@ -22,6 +22,12 @@ type Props = {
   instrumentationParts: InstrumentPartDefinition[];
   partsData: MeasureData[][];
   onPartChange: ((data: MeasureData[]) => void)[];
+  /**
+   * staffCount: 2（大譜表）パートの2段目（低音部）の小節データ。
+   * instrumentationParts と同じ添字で対応する。staffCount: 1 のパートの位置は無視される。
+   */
+  secondStaffPartsData?: MeasureData[][];
+  onSecondStaffPartChange?: ((data: MeasureData[]) => void)[];
   startMeasureIndex?: number;
   disabled?: boolean;
   yOffset?: number;
@@ -77,6 +83,8 @@ export default function EnsembleStaff({
   instrumentationParts,
   partsData,
   onPartChange,
+  secondStaffPartsData,
+  onSecondStaffPartChange,
   startMeasureIndex = 0,
   disabled = false,
   yOffset = 0,
@@ -101,6 +109,15 @@ export default function EnsembleStaff({
   // 入力された音符は逆方向にシフトして実音として保存することで、
   // 保存データの正本は常に実音という整合性を保つ。
   const isWrittenMode = notationMode === 'written';
+  // partsConfig は staffCount:2 パートを2段へ展開するため、段（スロット）の並び順と
+  // instrumentationParts の並び順がずれる。onKeySignatureChange 等で「どの段がどの
+  // パート定義に対応するか」を引けるよう、展開後スロット index → 元の part index の
+  // 対応表を作っておく。
+  const slotToPartIndex: number[] = [];
+  instrumentationParts.forEach((part, partIndex) => {
+    slotToPartIndex.push(partIndex);
+    if (part.staffCount === 2) slotToPartIndex.push(partIndex);
+  });
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
     <div className="system-stack">
@@ -108,7 +125,7 @@ export default function EnsembleStaff({
         // ScorePage が持つ「編成のパート定義」を、描画コンポーネントが理解できる
         // `PartConfig` へ変換する。ここで変換をまとめると、将来パート名表示や
         // 音部記号の扱いを変えるときも EnsembleStaff だけを見ればよくなる。
-        const partsConfig: PartConfig[] = instrumentationParts.map((part, partIndex) => {
+        const partsConfig: PartConfig[] = instrumentationParts.flatMap((part, partIndex) => {
           const rawData = partsData[partIndex] ?? [];
           // 記譜音表示モードのときだけ、パートの transposition に応じて
           // 表示用に半音シフトしたデータを作る。実音モードでは元データのまま。
@@ -130,19 +147,45 @@ export default function EnsembleStaff({
           const wrappedChange = semitones === 0
             ? upstreamChange
             : (newDisplayed: MeasureData[]) => upstreamChange(transposeMeasuresForDisplay(newDisplayed, -semitones));
-          return {
+          const isGrandStaff = part.staffCount === 2;
+          const primaryEntry: PartConfig = {
             clef: part.clef,
             label: part.abbreviation || part.name,
             playbackInstrument: part.playbackInstrument,
             // 木管・金管・弦などの楽器グループ識別子。
             // PianoSystemCanvas はこの値が連続するパートをひとまとめにし、
             // 1 本の括弧で囲って描画する（オーケストラ譜の慣習）。
-            bracketGroup: part.bracketGroup,
-            subBracketGroup: part.subBracketGroup,
+            // 大譜表（2段）パートは、自分の2段を必ずブレースで束ねるため
+            // bracketGroup を 'keyboard' に固定する（隣のパートとの見た目上の
+            // グループ分けには使わない。ピアノ専用譜面の既定と同じ扱い）。
+            bracketGroup: isGrandStaff ? 'keyboard' : part.bracketGroup,
+            subBracketGroup: isGrandStaff ? undefined : part.subBracketGroup,
             keySignature: partKey,
             data: displayData,
             onChange: wrappedChange,
           };
+          if (!isGrandStaff) {
+            return [primaryEntry];
+          }
+
+          // 大譜表の2段目（低音部）。移調・調号は1段目と同じパート定義に従う。
+          const rawSecondData = secondStaffPartsData?.[partIndex] ?? [];
+          const displaySecondData = semitones === 0 ? rawSecondData : transposeMeasuresForDisplay(rawSecondData, semitones);
+          const upstreamSecondChange = onSecondStaffPartChange?.[partIndex] ?? (() => {});
+          const wrappedSecondChange = semitones === 0
+            ? upstreamSecondChange
+            : (newDisplayed: MeasureData[]) => upstreamSecondChange(transposeMeasuresForDisplay(newDisplayed, -semitones));
+          const secondEntry: PartConfig = {
+            clef: 'bass',
+            label: undefined,
+            playbackInstrument: part.playbackInstrument,
+            bracketGroup: 'keyboard',
+            subBracketGroup: undefined,
+            keySignature: partKey,
+            data: displaySecondData,
+            onChange: wrappedSecondChange,
+          };
+          return [primaryEntry, secondEntry];
         });
 
         const gapOverride = systemGapOverridesPx?.[systemIndex] ?? 0;
@@ -172,7 +215,9 @@ export default function EnsembleStaff({
               // 記譜音モードでは canvas から「クリックされた段の記譜音側の新しい調号」が返ってくる。
               // 実音側の調号に逆変換してから上に渡すことで、保存される調号は常に実音で一貫する。
               // 実音モードや、移調なしのパートのときは、そのまま渡せばよい。
-              const targetPart = partIndex !== undefined ? instrumentationParts[partIndex] : undefined;
+              // partIndex は展開後の段（スロット）index のため、slotToPartIndex で
+              // 元の instrumentationParts index へ変換してから引く。
+              const targetPart = partIndex !== undefined ? instrumentationParts[slotToPartIndex[partIndex]] : undefined;
               const fifths = isWrittenMode && targetPart
                 ? TRANSPOSITION_WRITTEN_OFFSET_FIFTHS[targetPart.transposition] ?? 0
                 : 0;
@@ -212,15 +257,30 @@ export default function EnsembleStaff({
             measuresPerSystem={range.count}
             tool={tool}
             scale={scale}
-            partsConfig={instrumentationParts.map((part) => ({
-              clef: part.clef,
-              label: part.abbreviation || part.name,
-              playbackInstrument: part.playbackInstrument,
-              bracketGroup: part.bracketGroup,
-              subBracketGroup: part.subBracketGroup,
-              data: createEmptyMeasures(range.count),
-              onChange: () => {},
-            }))}
+            partsConfig={instrumentationParts.flatMap((part) => {
+              const isGrandStaff = part.staffCount === 2;
+              const primaryEntry: PartConfig = {
+                clef: part.clef,
+                label: part.abbreviation || part.name,
+                playbackInstrument: part.playbackInstrument,
+                bracketGroup: isGrandStaff ? 'keyboard' : part.bracketGroup,
+                subBracketGroup: isGrandStaff ? undefined : part.subBracketGroup,
+                data: createEmptyMeasures(range.count),
+                onChange: () => {},
+              };
+              if (!isGrandStaff) return [primaryEntry];
+              // 実データと同じ段数の見た目にそろえる（大譜表パートぶんの空の低音部）。
+              const secondEntry: PartConfig = {
+                clef: 'bass',
+                label: undefined,
+                playbackInstrument: part.playbackInstrument,
+                bracketGroup: 'keyboard',
+                subBracketGroup: undefined,
+                data: createEmptyMeasures(range.count),
+                onChange: () => {},
+              };
+              return [primaryEntry, secondEntry];
+            })}
             showInstrumentLabels={false}
             startMeasureIndex={0}
             disabled

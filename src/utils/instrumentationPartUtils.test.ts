@@ -2,16 +2,21 @@ import { describe, expect, it } from 'vitest';
 
 import { InstrumentType } from '../audio/SoundSource';
 import type { InstrumentPartDefinition, MeasureData } from '../types/storage';
-import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId } from './instrumentationPartUtils';
+import {
+  alignMeasuresToInstrumentationParts,
+  createUniqueInstrumentationPartId,
+  ensembleSecondStaffPartId,
+  totalEnsembleStaffCount,
+} from './instrumentationPartUtils';
 
-function part(id: string): InstrumentPartDefinition {
+function part(id: string, staffCount: 1 | 2 = 1): InstrumentPartDefinition {
   return {
     id,
     name: id,
     abbreviation: id,
     family: 'other',
     clef: 'treble',
-    staffCount: 1,
+    staffCount,
     transposition: 'C',
     bracketGroup: 'solo',
     playbackInstrument: InstrumentType.PIANO,
@@ -82,5 +87,28 @@ describe('createUniqueInstrumentationPartId', () => {
     const existingParts = [part('extra-2'), part('extra-3')];
 
     expect(createUniqueInstrumentationPartId(existingParts, 'extra')).toBe('extra-1');
+  });
+});
+
+describe('ensembleSecondStaffPartId', () => {
+  it('元のpartIdに一意なサフィックスを付ける（1段目のIDとは衝突しない）', () => {
+    expect(ensembleSecondStaffPartId('piano')).toBe('piano::2');
+    expect(ensembleSecondStaffPartId('piano')).not.toBe('piano');
+  });
+});
+
+describe('totalEnsembleStaffCount', () => {
+  it('全パートstaffCount:1のときはパート数と同じ（旧データ互換）', () => {
+    const parts = [part('flute'), part('oboe'), part('horn')];
+    expect(totalEnsembleStaffCount(parts)).toBe(3);
+  });
+
+  it('staffCount:2（大譜表）のパートは2段ぶんとして数える', () => {
+    const parts = [part('voice'), part('piano', 2)];
+    expect(totalEnsembleStaffCount(parts)).toBe(3);
+  });
+
+  it('パートが無ければ0', () => {
+    expect(totalEnsembleStaffCount([])).toBe(0);
   });
 });

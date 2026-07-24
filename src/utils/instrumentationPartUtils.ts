@@ -36,3 +36,20 @@ export function alignMeasuresToInstrumentationParts(
 
   return nextParts.map(part => measuresByPartId.get(part.id) ?? []);
 }
+
+/**
+ * staffCount:2（大譜表）パートの2段目を保存するときの partId。
+ * 1段目は従来どおり part.id をそのまま使うため、旧データ（全パート staffCount:1）は
+ * この partId が存在せず、2段目は常に未定義（undefined）として読み込まれる＝後方互換。
+ */
+export function ensembleSecondStaffPartId(partId: string): string {
+  return `${partId}::2`;
+}
+
+/**
+ * 編成譜のレイアウト・高さ計算に使う「実際に描画される譜表（段）の総数」。
+ * staffCount:2 のパート（大譜表）は2段ぶんとして数える。
+ */
+export function totalEnsembleStaffCount(parts: InstrumentPartDefinition[]): number {
+  return parts.reduce((sum, part) => sum + (part.staffCount === 2 ? 2 : 1), 0);
+}
