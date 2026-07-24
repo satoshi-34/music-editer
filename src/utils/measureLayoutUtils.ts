@@ -661,34 +661,12 @@ export function planSystemMeasureRanges(
    * 複数の上書きが同じ start を指す場合は配列の最後を優先する。
    */
   overrides?: SystemMeasureOverrideInput[],
-  /**
-   * 直前に計算された段割り（安定化のヒント。Issue #58）。
-   *
-   * 音符を1つ入力するたびに小節の最低幅が変わり、それをそのまま貪欲法へ再度通すと、
-   * 入力した小節より前の段まで巻き込んで境界がずれ、入力対象の小節が別の段へ
-   * 移動してしまう不具合があった。この引数を渡すと、start が一致する段については
-   * まず「前回と同じ count のまま、今の幅で availableWidth に収まるか」だけを確認し、
-   * 収まるならその段の境界を変えずに再利用する。収まらなくなった（＝段が溢れた）
-   * 場合や、そもそも該当する前回の段が無い（＝新しい段が必要になった）場合だけ、
-   * その start から通常の貪欲法にフォールバックする。フォールバック後の start は
-   * 前回の段境界とはもうずれているため、以降の段は自然に（キー一致しない限り）
-   * 貪欲法で再計画される＝「溢れた段より後ろだけが再配置される」形になる。
-   *
-   * overrides（ユーザー上書き）は常にこの安定化より優先する。
-   */
-  previousRanges?: SystemMeasureOverrideInput[],
 ): SystemMeasureRange[] {
   const requested = Math.max(1, Math.floor(requestedMeasuresPerSystem));
   const overrideByStart = new Map<number, number>();
   overrides?.forEach(({ startMeasure, count }) => {
     if (Number.isInteger(startMeasure) && startMeasure >= 0 && Number.isInteger(count) && count >= 1) {
       overrideByStart.set(startMeasure, count);
-    }
-  });
-  const previousCountByStart = new Map<number, number>();
-  previousRanges?.forEach(({ startMeasure, count }) => {
-    if (Number.isInteger(startMeasure) && startMeasure >= 0 && Number.isInteger(count) && count >= 1) {
-      previousCountByStart.set(startMeasure, count);
     }
   });
   const ranges: SystemMeasureRange[] = [];
@@ -703,25 +681,6 @@ export function planSystemMeasureRanges(
       ranges.push({ start, count, minimumWidths: widths, totalWidth, overflow: totalWidth > availableWidth });
       start += count;
       continue;
-    }
-    const previousCount = previousCountByStart.get(start);
-    if (previousCount != null) {
-      // breakAt をまたぐ場合は前回の count をそのまま使えない（内容小節数が変わった＝
-      // 新しい段が必要になったケースなので、下の貪欲法へフォールバックさせる）。
-      const clampedByBreak = breakAt != null && breakAt > start && breakAt < start + previousCount
-        ? breakAt - start
-        : previousCount;
-      if (clampedByBreak === previousCount) {
-        const count = Math.min(previousCount, minimumWidths.length - start);
-        const widths = minimumWidths.slice(start, start + count);
-        const totalWidth = widths.reduce((sum, width) => sum + width, 0);
-        // 前回と同じ小節数のまま、今の幅でも段に収まるなら境界を変えずに再利用する。
-        if (count === previousCount && totalWidth <= availableWidth) {
-          ranges.push({ start, count, minimumWidths: widths, totalWidth, overflow: false });
-          start += count;
-          continue;
-        }
-      }
     }
     let maxCount = Math.min(requested, minimumWidths.length - start);
     if (breakAt != null && breakAt > start && breakAt < start + maxCount) {
