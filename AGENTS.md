@@ -61,3 +61,17 @@ const wrapper = el.closest('.page-wrapper');
 // 0.5 行刻みで正確に丸める（toFixed(1) は 0.1 刻みなので不適切）
 bestLine = Math.round(line * 2) / 2;
 ```
+
+## リリースフロー（2026-07-25 導入）
+
+本番（Vercel Production）は `release` ブランチからデプロイされる。`main` はテスト・検証用で、マージしても本番には反映されない。
+
+- 夜間エージェント・PR のマージ先は従来どおり `main`（このルールに変更なし。`release` へは push しない）
+- 運用者が朝レビューと実機スモーク確認（新規作成4譜種の見た目 → デモ譜面読込 → 音符入力 → 印刷プレビュー）を通過させた後、`release` を `main` の位置へ fast-forward して本番反映する:
+  ```sh
+  git switch release
+  git merge --ff-only main
+  git push origin release
+  git switch main
+  ```
+- 本番で不具合が出た場合は、`release` を前の位置へ戻すのではなく、`main` 側で revert → 検証 → 通常の昇格手順で反映する（履歴を一方向に保つ）
