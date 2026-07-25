@@ -144,6 +144,18 @@ export const INSTRUMENTATION_PRESETS: ScoreInstrumentation[] = [
     simplePart('tuba', 'Tuba', 'Tba.', 'brass', 'brass', 'bass', InstrumentType.TUBA),
     simplePart('percussion', 'Percussion', 'Perc.', 'percussion', 'percussion', 'treble', InstrumentType.PERCUSSION),
   ]),
+  // 歌もの伴奏編成（Issue #57・スタックPR 2/2）。歌パートには再生用の専用音色が
+  // 無いため、単旋律プリセット（melody）と同じく PIANO を playbackInstrument に使う。
+  buildInstrumentation('vocal-piano', '歌＋ピアノ', [
+    simplePart('voice', 'Voice', 'Vo.', 'vocal', 'voices', 'treble', InstrumentType.PIANO),
+    ...PIANO_PARTS,
+  ]),
+  buildInstrumentation('recorder-vocal', 'リコーダー＋歌', [
+    // 2パートとも独立した旋律なので、家族が異なる（木管/声楽）ことも踏まえ
+    // bracketGroup は 'solo' にして誤ってグループ括弧でまとめない。
+    simplePart('recorder', 'Recorder', 'Rec.', 'woodwind', 'solo', 'treble', InstrumentType.FLUTE),
+    simplePart('voice', 'Voice', 'Vo.', 'vocal', 'solo', 'treble', InstrumentType.PIANO),
+  ]),
 ];
 
 export function cloneInstrumentation(instrumentation: ScoreInstrumentation): ScoreInstrumentation {

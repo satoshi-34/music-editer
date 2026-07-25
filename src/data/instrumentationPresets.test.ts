@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { InstrumentType } from '../audio/SoundSource';
 import type { InstrumentationPresetId, ScoreType } from '../types/storage';
+import { totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import {
   getDefaultInstrumentationForScoreType,
   getInstrumentationPreset,
@@ -21,6 +22,8 @@ describe('instrumentationPresets', () => {
       'classical-orchestra',
       'romantic-orchestra',
       'wind-band',
+      'vocal-piano',
+      'recorder-vocal',
     ];
 
     expect(new Set(presetIds).size).toBe(presetIds.length);
@@ -90,10 +93,30 @@ describe('instrumentationPresets', () => {
       'classical-orchestra',
       'romantic-orchestra',
       'wind-band',
+      'vocal-piano',
+      'recorder-vocal',
       'custom',
     ];
     ensemblePresetIds.forEach(presetId => {
       expect(getScoreTypeForInstrumentation(presetId)).toBe('ensemble');
     });
+  });
+
+  it('歌＋ピアノプリセットはピアノパートが大譜表（staffCount:2）で歌パートと合わせて3段になる', () => {
+    const preset = getInstrumentationPreset('vocal-piano');
+    const voicePart = preset.parts.find(part => part.id === 'voice');
+    const pianoPart = preset.parts.find(part => part.id === 'piano');
+
+    expect(voicePart?.staffCount).toBe(1);
+    expect(pianoPart?.staffCount).toBe(2);
+    expect(totalEnsembleStaffCount(preset.parts)).toBe(3);
+  });
+
+  it('リコーダー＋歌プリセットは2つの独立した1段パートで構成される', () => {
+    const preset = getInstrumentationPreset('recorder-vocal');
+
+    expect(preset.parts).toHaveLength(2);
+    expect(preset.parts.every(part => part.staffCount === 1)).toBe(true);
+    expect(totalEnsembleStaffCount(preset.parts)).toBe(2);
   });
 });

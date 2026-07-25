@@ -330,6 +330,8 @@ export type InstrumentationPresetId =
   | 'classical-orchestra'
   | 'romantic-orchestra'
   | 'wind-band'
+  | 'vocal-piano'
+  | 'recorder-vocal'
   | 'custom';
 
 /**
