@@ -48,3 +48,32 @@
 
 - 編集UI（音符クリックでの選択・追加編集）自体はプレビュー中も無効化していない。要件では「無効化してよい」という許容表現だったため、実装コストとのバランスから今回は見送った。プレビュー中に誤って音符を編集できてしまう点は、次の改善候補として残る。
 - CSS は共通クラス化ではなく重複定義のため、将来 `@media print` 側だけを修正して `.print-preview` 側の更新を忘れるとプレビューと実際の印刷がずれる可能性がある。修正時は両方のブロックを必ず一緒に見直すこと（本ファイルにその旨を明記）。
+
+## 追補: 末尾の空段・空ページを隠すルールがプレビューに複製されていなかった不具合の修正（Issue #80）
+
+### 問題
+
+- 上記「既知の未対応事項」で警告していたとおりの不具合が実際に発生していた。`.claude/specs/final-barline/design.md`（終止線の自動表示）で導入された `print-hidden-system` / `print-hidden-page`（内容のない末尾の段・ページを印刷から除外する）と、最終ページの段配置（`print-final-page` / `print-final-page-single`）のクラスは、`@media print` 側にしか `display:none` / `justify-content` のルールが無く、`.print-preview` 側に複製されていなかった。
+- そのため、`extraEditingMeasures`（「＋小節を追加」で画面にだけ表示する編集用の余り小節）が実際の印刷では正しく除外されているにもかかわらず、印刷プレビューをONにすると隠されずそのまま表示され、余り小節の量によっては丸ごと1ページぶん余計に出力されて見えるという不具合として報告された（Issue #80「印刷・印刷プレビューで、最終音符より後の全休符だけの小節が出力される」）。
+
+### 修正
+
+- `App.css` の `.print-preview` ブロックに、`@media print` 側と対応する以下のルールを追加した（本設計書が定めた「重複定義」方針どおり）。
+  - `.print-preview .print-hidden-system { display: none !important; }`
+  - `.print-preview .print-hidden-page { display: none !important; }`
+  - `.print-preview .print-final-page(-single) .system-stack` の `flex` / `justify-content`（下端寄せ・上揃え）
+- あわせて `src/utils/scoreDataEquality.ts` に `isPrintTrimmableMeasure` / `trimTrailingPrintableMeasures` を追加し、`ScorePage.tsx` の印刷可視範囲（`printVisibleContentSystems` とその派生値）の算出を、末尾に連続する「全休符だけの小節」（自動補完・誤操作などで実データに残った編集用の余り小節）も除外するよう拡張した。画面表示の内容境界（`contentMeasureCount` / `contentRanges` / `finalMeasureIndex`）は変更しておらず、印刷・印刷プレビューの可視範囲だけに影響する（詳細は `.claude/specs/final-barline/design.md` および README「印刷対応・PDFエクスポート」節を参照）。
+
+### 影響範囲
+
+- `src/App.css`: `.print-preview` ブロックへ `print-hidden-system` / `print-hidden-page` / `print-final-page(-single)` の複製ルールを追加。
+- `src/utils/scoreDataEquality.ts` / `scoreDataEquality.test.ts`: `isPrintTrimmableMeasure` / `trimTrailingPrintableMeasures` の追加とテスト。
+- `src/components/ScorePage.tsx`: `printContentMeasureCount` / `printVisibleContentSystems` を追加し、`print-hidden-page` の判定・`finalContentPageIndex` / `finalContentPageVisibleSystems` の算出・各 Staff への `printVisibleSystems` prop をこれらの値ベースに変更（`contentRanges` の基準である既存の `printContentSystems` はそのまま維持し、画面表示への影響を避けた）。
+- `src/AppCssPrintPreviewHiddenSystems.test.ts`（新規）: `.print-preview` 側の複製ルールが存在することの静的チェック。
+
+### 検証
+
+- `docker exec -w <worktree> music-editer-dev npx vitest --run src`: 99 Test Files / 1169 Tests 中、失敗は `ScorePageEmptyStaveFiller.test.tsx` と `ScorePageSettingsProfile.test.tsx` の計2ファイル5件で、いずれも本修正を `git stash` で外した状態（origin/main 相当）でも同一内容で失敗する既知の環境依存タイムアウト・実測値flaky（共有Dockerコンテナの負荷でjsdomのcanvas計測がぶれる）であることを確認済み。新規追加テスト（`scoreDataEquality.test.ts` の追加分・`AppCssPrintPreviewHiddenSystems.test.ts`）はすべて成功。
+- `npm run lint`: 353エラー・6警告（着手前と完全に同数、新規エラーなし）。
+- `npm run build`: `tsc -b && vite build` エラーなし。
+- ブラウザでの実地確認は未実施（共有Dockerコンテナの5173番ポートが既に別プロセスに使われており、本worktree用のポート公開手段が無かったため。PR #84/#85 と同じ既知の制約）。朝のレビューで、「＋小節を追加」で余り小節を数個表示 → 印刷プレビューON → 実際の印刷/PDF書出と同じページ数になることを実機確認していただきたい。

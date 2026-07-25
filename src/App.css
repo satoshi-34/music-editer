@@ -1403,6 +1403,28 @@ button.ghost.active:hover:not(:disabled) {
 /* ページの境界がひと目で分かるよう、ページ同士の間隔を広げてはっきり区切る */
 .print-preview .spread { gap: 32px 40px; }
 
+/* 内容のない末尾の段・ページ（＋末尾の全休符だけの余り小節。Issue #80）は
+   プレビューでも隠す。@media print 側の .print-hidden-system / .print-hidden-page
+   （このファイル上部）と同じクラスだが、@media print はブラウザの印刷時にしか
+   適用されないため、プレビュー中に効かせるにはここにも複製する必要がある
+   （以前はここが無く、印刷では出ない末尾の余り小節がプレビューにだけ丸ごと
+   1ページとして出てしまっていた）。 */
+.print-preview .print-hidden-system { display: none !important; }
+.print-preview .print-hidden-page { display: none !important; }
+/* 内容のある最後のページだけ最後の段をページ下端へ寄せる（@media print 側と同じ理由。
+   上の .print-hidden-system でページ内の末尾の段が消えると、space-evenly のままでは
+   最後の段の下に余白だけ残ってしまうため） */
+.print-preview .print-final-page .system-stack,
+.print-preview .print-final-page-single .system-stack {
+  flex: 1 1 0%;
+}
+.print-preview .print-final-page .system-stack > *,
+.print-preview .print-final-page-single .system-stack > * {
+  flex: 0 0 auto;
+}
+.print-preview .print-final-page .system-stack { justify-content: space-between; }
+.print-preview .print-final-page-single .system-stack { justify-content: flex-start; }
+
 /* 画面表示でも、最終ページに「実際に表示される段」が1段だけのときは上揃えにする。
    通常ページのグリッド配置（flex-grow 等分）だと1段だけのページでは段が
    縦中央へ浮いてしまい、楽譜として不自然なため（印刷側の上記ルールと同じ考え方）。
