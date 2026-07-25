@@ -175,7 +175,7 @@ describe('PianoSystemCanvas 画面表示のズーム(150%)での個別音選択'
   it('符頭から画面px換算14px（修正後の許容幅12pxの外）は選択にならない', async () => {
     setup();
     try {
-      const { svg, onChange, container } = renderZoomedScore();
+      const { svg, onChange } = renderZoomedScore();
 
       const midHit = svg.querySelector('rect.vf-note-hit[data-measure="0"][data-note="1"]') as SVGRectElement;
       expect(midHit).toBeTruthy();

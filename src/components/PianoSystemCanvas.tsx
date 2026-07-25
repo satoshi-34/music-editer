@@ -2485,12 +2485,18 @@ export default function PianoSystemCanvas({
               if(Math.abs(offset)>1&&typeof (vfNotes[j] as any).setXShift==='function'){
                 (vfNotes[j] as any).setXShift(offset);
               }
-            }catch{}
+            }catch{
+              // VexFlow の内部状態によっては符頭の座標をまだ取得できないことがある。
+              // その場合はこの音符の横位置調整（見た目の微調整）を諦めるだけでよい。
+            }
           }
         }
 
         renderedVoiceEntries.forEach((entry) => {
-          try{entry.voice.draw(ctx,stave);}catch{}
+          try{entry.voice.draw(ctx,stave);}catch{
+            // 1つの声部の描画に失敗しても、残りの声部と他の段の描画は続けたい。
+            // ここで例外を投げると譜面全体が真っ白になってしまうため握りつぶす。
+          }
           // 表示専用のパディング休符（データには保存されていない）に
           // クラスを付けておく。App.css の「svg path/line を印刷インク色に戻す」
           // ルールがこのクラスの要素にも効くので、画面では薄いグレーのまま、
@@ -4175,7 +4181,6 @@ export default function PianoSystemCanvas({
         }else{fi++;}
       }
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   // measureWidthEvenness を deps に含め、スライダー操作で即座に再描画されるようにする
   // pageMarginSideMm: 値自体は使わないが、ResizeObserver の発火漏れ対策として
   // 呼び出し元（ScorePage）の余白変更を確実にこの effect へ伝える依存トリガー。

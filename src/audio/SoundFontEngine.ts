@@ -411,7 +411,7 @@ export class SoundFontEngine implements PlaybackEngine {
       return note;
     }
 
-    const vexflowMatch = note.match(/^([a-g])([#b]?)[\/\s](\d+)$/);
+    const vexflowMatch = note.match(/^([a-g])([#b]?)[/\s](\d+)$/);
     if (vexflowMatch) {
       const letter = vexflowMatch[1].toUpperCase();
       const accidental = vexflowMatch[2] || '';

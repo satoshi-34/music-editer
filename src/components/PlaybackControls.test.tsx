@@ -203,8 +203,8 @@ describe('PlaybackControls', () => {
     it('音色選択に利用可能な楽器が表示される', () => {
       render(<PlaybackControls {...defaultProps} />);
       
-      const instrumentSelect = screen.getByLabelText('楽器選択');
-      
+      expect(screen.getByLabelText('楽器選択')).toBeInTheDocument();
+
       // オプションが正しく表示されることを確認
       expect(screen.getByRole('option', { name: 'ピアノ' })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: 'オルガン' })).toBeInTheDocument();
