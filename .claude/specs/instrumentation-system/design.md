@@ -478,6 +478,38 @@ Issue #57 の残り「歌＋ピアノ」「リコーダー＋歌」プリセッ�
 パート編集UIの実地確認はできず、「歌＋ピアノ」「リコーダー＋歌」を選択した
 直後の総譜描画・音符入力・再生に新規コンソールエラーが無いことを確認した。
 
+### 19. パート編集を window.open からページ内フローティングパネルへ移行する（Issue #66）
+
+「パート編集」は当初 `window.open` で別ウィンドウを開き、その `document.body` へ
+React Portal で中身を差し込む実装だった。ポップアップがブロックされる環境
+（ブラウザの既定設定・自動テスト・夜間無人実行のサンドボックス）では
+`window.open` が `null` を返し、ボタンを押しても**何も起きず・何のエラーも出ない**
+という問題があった（16章の動作確認メモにも同じ制約が記録されている）。
+
+**方針**: 別ウィンドウをやめ、`createPortal(..., document.body)` で
+同じ `document` 内のフローティングパネルとして表示する（Issue本文の推奨案1）。
+
+- 別ウィンドウの生成・スタイル注入（別 `document` へ `<style>` タグを流し込む処理）を
+  丸ごと削除した。`.instrumentation-editor-window` 系のクラスは実は既に
+  `App.css` に定義済みだった（`position: fixed` で右上に浮かせるデザイン。
+  おそらく `window.open` 導入以前の実装の名残）ため、そのまま使い回せた。
+  ただし `.instrumentation-part-row` の `grid-template-columns` が
+  段数（`staffCount`）セレクタ追加前の11列のままだったため、
+  ポップアップ側の `<style>` にあった12列定義（追加ぶんの
+  `minmax(64px, 100px)` を含む）に合わせて更新した。
+- `showInstrumentationEditor`（開閉フラグ）だけを残し、`instrumentationEditorWindow`
+  という `Window` 参照の state・ref は削除した。開閉ハンドラは
+  `setShowInstrumentationEditor` の呼び出しだけになり、`window.close()` や
+  `beforeunload` リスナー、アンマウント時のウィンドウ後始末なども不要になった。
+- `.instrumentation-editor-window` の `top: calc(var(--toolbar-h, 180px) + 12px)`
+  は `.app-root` に設定した CSS カスタムプロパティ（ツールバー実測高さ）を前提にしている。
+  `document.body` 直下へポータルすると `.app-root` の子孫ではなくなり継承が切れるため、
+  ポータル先の `<section>` 自身にも同じ値をインライン `style` として持たせている。
+- 動作確認: `window.open` をモックしたテスト
+  （`ScorePageInstrumentationEditor.test.tsx`）で、パート編集の開閉・パート名変更・
+  再オープン後の変更反映を確認。`window.open` が一度も呼ばれないことも
+  アサートしており、ポップアップブロック環境でも機能することの回帰テストになっている。
+
 ## 今後の課題
 
 - 異名同音の楽典的綴り選択（D♭ vs C# など）を保ったままの移調
