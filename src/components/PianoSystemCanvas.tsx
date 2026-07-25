@@ -2262,6 +2262,11 @@ export default function PianoSystemCanvas({
         vfNotes: StaveNote[];
       } | null> = [];
       const allVoicesForFormatting: Voice[] = [];
+      // alignRests を掛ける対象（2声部が共存する小節の Voice だけ）を別に集める。
+      // Issue #79: alignRests を全 Voice に一律適用すると、単声部の休符
+      // （defaultRestDisplayKeyForDuration で中央/第4線ぶら下げに固定したもの）まで
+      // VexFlow が隣接音符の高さへ引き寄せてしまい、休符が中央からずれる原因になっていた。
+      const restAlignVoices: Voice[] = [];
 
       parts.forEach((part, pi) => {
         const stave=staveSets[pi][i];
@@ -2431,7 +2436,12 @@ export default function PianoSystemCanvas({
           clefHere, data, safeEvs, partKeyForAccidental,
           isMultiVoiceMeasure, renderedVoiceEntries, primaryRenderedVoice, vfNotes,
         };
-        renderedVoiceEntries.forEach((entry) => allVoicesForFormatting.push(entry.voice));
+        renderedVoiceEntries.forEach((entry) => {
+          allVoicesForFormatting.push(entry.voice);
+          if (isMultiVoiceMeasure) {
+            restAlignVoices.push(entry.voice);
+          }
+        });
       });
 
       // Pass 2: 全パート・全声部の Voice を1回の Formatter でまとめて整形する。
@@ -2448,13 +2458,19 @@ export default function PianoSystemCanvas({
         // これをしないと左手の低音が最上段（ト音記号）基準で幅計算され、
         // 小節内の間隔配分が左右非対称に歪む。
         allVoicesForFormatting.forEach((v) => v.preFormat());
+        // 2 voice では、上下声部の休符が自動調整されないと
+        // 互いにめり込んで「なんか変」な見た目になりやすい。
+        // ただし alignRests は「休符を隣接する音符の高さへ引き寄せる」処理のため、
+        // 単声部の Voice にまで適用すると、defaultRestDisplayKeyForDuration で
+        // 固定したはずの中央位置が隣接音符の音高しだいで動いてしまう（Issue #79）。
+        // そのため 2 声部が共存する小節の Voice だけに限定して事前に適用し、
+        // Formatter.formatToStave 自体は alignRests を使わない
+        // （VexFlow 内部でも alignRests は preFormat/幅計算より前に休符の
+        //   縦位置(line)だけを書き換える処理で、x座標の計算には影響しない）。
+        restAlignVoices.forEach((v) => Formatter.AlignRestsToNotes(v.getTickables(), true));
         new Formatter()
           .joinVoices(allVoicesForFormatting)
-          // 2 voice では、上下声部の休符が自動調整されないと
-          // 互いにめり込んで「なんか変」な見た目になりやすい。
-          // alignRests を明示して、近い音符や別声部に合わせて
-          // 休符の縦位置をVexFlow側で補正してもらう。
-          .formatToStave(allVoicesForFormatting, staveSets[0][i], { alignRests: true });
+          .formatToStave(allVoicesForFormatting, staveSets[0][i]);
       }
 
       // Pass 3: フォーマット済みの Voice を使って実際の描画・イベントハンドラ設定を行う。
