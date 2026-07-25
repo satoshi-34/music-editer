@@ -8,7 +8,7 @@ import { AudioEngine } from './AudioEngine';
 
 // Tone.jsのモック
 vi.mock('tone', () => ({
-  Context: vi.fn().mockImplementation(function(this: any, options?: any) {
+  Context: vi.fn().mockImplementation(function(this: any) {
     return {
       state: 'suspended',
       resume: vi.fn().mockResolvedValue(undefined),
@@ -27,17 +27,8 @@ vi.mock('tone', () => ({
 
 describe('AudioEngine', () => {
   let audioEngine: AudioEngine;
-  let mockContext: any;
 
   beforeEach(() => {
-    // モックコンテキストを作成
-    mockContext = {
-      state: 'suspended',
-      resume: vi.fn().mockResolvedValue(undefined),
-      suspend: vi.fn().mockResolvedValue(undefined),
-      dispose: vi.fn()
-    };
-
     // Tone.Contextのモックを設定（既にvi.mockで設定済み）
     audioEngine = new AudioEngine();
   });

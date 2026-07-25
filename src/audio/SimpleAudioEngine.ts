@@ -272,7 +272,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
     }
     
     // Vexflow形式（c/4, f#/3など）をMIDI形式に変換
-    const vexflowMatch = note.match(/^([a-g])([#b]?)[\/\s](\d+)$/);
+    const vexflowMatch = note.match(/^([a-g])([#b]?)[/\s](\d+)$/);
     if (vexflowMatch) {
       const letter = vexflowMatch[1].toUpperCase(); // 大文字に変換
       const accidental = vexflowMatch[2] || '';     // 臨時記号

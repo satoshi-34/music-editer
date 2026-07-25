@@ -1,0 +1,4 @@
+{
+  "comment": "npm run lint:ratchet が参照する lint エラー件数の上限。減ったときは自動で更新される（scripts/lint-ratchet.mjs）。手で増やさないこと。",
+  "maxErrors": 326
+}

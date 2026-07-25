@@ -709,7 +709,12 @@ export class SoundSource {
         // 読み込み完了後に作成されたsynthを破棄
         const synth = this.synthMap.get(type);
         if (synth) {
-          try { synth.dispose(); } catch {}
+          try {
+            synth.dispose();
+          } catch {
+            // 既に破棄済みの synth を再度 dispose すると Tone.js が例外を投げることがある。
+            // ここでの目的は「確実に解放されている状態にする」ことなので、失敗しても無視してよい。
+          }
           this.synthMap.delete(type);
           console.log(`[SoundSource] 遅延作成された楽器 ${type} を解放しました`);
         }

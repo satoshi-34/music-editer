@@ -320,5 +320,5 @@ export function flattenMeasureForPlayback(measure: MeasureData): PlaybackMeasure
     return left.voiceIndex - right.voiceIndex;
   });
 
-  return flattened.map(({ voiceIndex: _voiceIndex, ...event }) => event);
+  return flattened.map(({ voiceIndex, ...event }) => event);
 }

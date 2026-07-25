@@ -434,9 +434,7 @@ describe('Storage Foundation Tests', () => {
           localStorageMock.removeItem = originalRemoveItem;
           
           // Mock localStorage to pass availability check but fail on actual save
-          let callCount = 0;
           localStorageMock.setItem = (key: string, value: string) => {
-            callCount++;
             // First call is the availability check with '__storage_test__'
             if (key === '__storage_test__') {
               originalSetItem(key, value);

@@ -3,10 +3,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fc from 'fast-check';
-import * as Tone from 'tone';
 import { NotePlayer, InstrumentType, type NoteEvent, type DurKey } from './NotePlayer';
-import { SoundSource } from './SoundSource';
-import { AudioEngine } from './AudioEngine';
 
 // Tone.jsのモック
 vi.mock('tone', () => ({

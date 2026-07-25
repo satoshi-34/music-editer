@@ -2,7 +2,7 @@
 // 統合テスト: 完全な保存・読込ワークフローの検証
 // Feature: score-save-load, Task 11: 統合テストと最終検証
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { saveScoreData, loadScoreData, clearStoredData, CURRENT_VERSION, STORAGE_KEYS } from '../utils/storage';
@@ -240,9 +240,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const originalSetItem = localStorageMock.setItem.bind(localStorageMock);
 
       // setItemをモックして容量超過エラーをシミュレート
-      let callCount = 0;
       localStorageMock.setItem = (key: string, value: string) => {
-        callCount++;
         // 最初の呼び出し（可用性チェック）は成功させる
         if (key === '__storage_test__') {
           originalSetItem(key, value);
@@ -366,7 +364,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const { result } = renderHook(() => useScoreStorage());
 
       // 大量の小節データを生成（24小節）
-      const measures: MeasureData[] = Array.from({ length: 24 }, (_, i) => ({
+      const measures: MeasureData[] = Array.from({ length: 24 }, () => ({
         events: [
           { dur: '4' as DurKey, isRest: false, keys: ['c/4'] },
           { dur: '4' as DurKey, isRest: false, keys: ['d/4'] },

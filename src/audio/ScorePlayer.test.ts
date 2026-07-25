@@ -3,11 +3,11 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import * as Tone from 'tone';
-import { ScorePlayer, PlaybackPosition, type PlaybackState, PLAYBACK_STATE, ScorePlaybackOptions } from './ScorePlayer';
+import { ScorePlayer, PlaybackPosition, PLAYBACK_STATE } from './ScorePlayer';
 import { AudioEngine } from './AudioEngine';
 import { TempoManager } from './TempoManager';
 import { SoundSource, InstrumentType } from './SoundSource';
-import type { MeasureData, NoteEvent } from '../types/storage';
+import type { MeasureData } from '../types/storage';
 
 // Tone.jsのモック
 vi.mock('tone', () => ({

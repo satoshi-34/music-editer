@@ -106,7 +106,6 @@ function buildNoteTrack(
   channel: number,
   program: number, // GM 音色番号 0-127
   globalBpm: number,
-  _globalTimeSig: [number, number],
 ): number[] {
   const events: MidiEvent[] = [];
 
@@ -205,7 +204,6 @@ export function scoreToMidi(data: SavedScoreData): Uint8Array {
       pi % 15, // チャンネル 0-14（ch10=ドラムを避けるため 16個中15個を使う）
       program,
       bpm,
-      timeSig,
     );
   });
 

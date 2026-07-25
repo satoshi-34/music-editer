@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { TempoManager, type TempoSettings, type TempoChangeCallback } from './TempoManager';
+import { TempoManager } from './TempoManager';
 
 describe('TempoManager', () => {
   let tempoManager: TempoManager;

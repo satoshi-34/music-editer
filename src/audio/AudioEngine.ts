@@ -279,7 +279,7 @@ export class AudioEngine {
       if (this.context.state === 'suspended' || this.context.state === 'interrupted') {
         await this.context.resume();
       }
-    } catch (error) {
+    } catch {
       throw new Error('オーディオコンテキストの復旧に失敗しました。ページを再読み込みしてください。');
     }
   }

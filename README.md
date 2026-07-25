@@ -298,6 +298,21 @@ npm run dev
 起動後、ブラウザで以下のURLにアクセスします。 
 http://localhost:5173
 
+### テストと lint
+
+```bash
+npx vitest --run src   # ユニットテスト（src 配下のみ。worktree を巻き込まないため npm test ではなくこちら）
+npm run lint           # lint の内容を確認する
+npm run lint:ratchet   # lint エラー件数が増えていないかを確認する
+```
+
+`lint:ratchet` は「ラチェット（逆戻り防止の爪車）」方式のチェックです。このプロジェクトには長年の蓄積で数百件の lint エラーがあり、「ゼロになるまで通さない」運用が現実的ではありません。そこで `scripts/lint-baseline.json` に現在の件数を基準値として記録しておき、
+
+- 基準値より**増えていたら失敗**（終了コード 1）してルール別の内訳を表示する
+- 基準値より**減っていたら基準値を自動で締め直す**（減った状態が新しい上限になる）
+
+という形で、「少しずつしか減らない代わりに、絶対に増えない」ことを保証します。エラーを減らしたときは `scripts/lint-baseline.json` の差分も一緒にコミットしてください。CI など基準値を書き換えたくない場面では `npm run lint:ratchet -- --check` を使います。
+
 ## 使い方
 
 Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめています。

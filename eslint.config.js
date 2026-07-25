@@ -19,5 +19,11 @@ export default tseslint.config([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // `const { voiceIndex, ...event } = x` のように「あるキーだけ取り除いた残り」を
+      // 作る書き方では、取り除く側の変数（voiceIndex）は使わないのが当たり前なので
+      // 未使用として報告しない。ESLint 本体の no-unused-vars では既定で有効な設定。
+      '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
+    },
   },
 ])
