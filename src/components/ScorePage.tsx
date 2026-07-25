@@ -88,9 +88,9 @@ import {
   SYSTEM_ROW_GAP_MIN_PX,
   SYSTEM_ROW_GAP_MAX_PX,
   planSystemMeasureRanges,
-  estimateEnsembleSystemHeightPx,
   computeEnsembleAutoFitMultiplier,
   measuredSystemHeightPx,
+  recommendedSystemHeightPx,
   resolveDefaultLayoutForScoreType,
   type SystemMeasureRange,
   type SystemMeasureOverrideInput,
@@ -186,20 +186,6 @@ const MM_TO_PX = 96 / 25.4;
 // タイトルページ基準の狭い方の予算（実測 約938px。A4高 - 上下余白 - タイトル欄 - ページ番号）
 // を安全側の値として全ページ共通で使う。
 const SCORE_AREA_BUDGET_PX = 938;
-// 楽譜種別ごとの「音符の大きさ100%」時の1段あたり実測高さ（px）。
-// 音符の大きさスライダーの倍率をここに掛けて SCORE_AREA_BUDGET_PX を割ることで、
-// あふれずに収まる最大段数（maxSystemsPerPage）を求める（floor で切り捨て、安全側）。
-// 値は実測（単旋律 ≒114px / ピアノ大譜表 ≒180px / 四重奏 ≒340px）に基づく。
-// 編成譜（ensemble）だけはパート数によって段の高さが大きく変わる（弦5パートを含む
-// 17パート編成で下5パートが画面・印刷の両方から消える不具合の原因になった）ため、
-// 固定値ではなく measureLayoutUtils.estimateEnsembleSystemHeightPx() で
-// パート数に比例した計算式を使う（詳細は同関数のコメント・
-// docs/qa/full-orchestra-test-findings.md フェーズC参照）。
-const BASE_SYSTEM_HEIGHT_PX: Record<'single' | 'piano' | 'quartet', number> = {
-  single: 114,
-  piano: 180,
-  quartet: 340,
-};
 // 「1段の実際の高さがページに収まらない編成」で自動的に音符サイズを縮小するための
 // ページ高さ予算（px）。maxSystemsPerPage 用の SCORE_AREA_BUDGET_PX（938px）は
 // タイトルページ基準でわざと厳しめに取った値だが、自動縮小の判定にそのまま使うと
@@ -2503,20 +2489,16 @@ export default function ScorePage() {
       : scoreType === 'piano'
         ? 2
         : 1;
-  // 「段数/ページ」の初期表示（推奨値）だけに使う、従来どおりの見積もり。
-  // BASE_SYSTEM_HEIGHT_PX / estimateEnsembleSystemHeightPx はパート間隔の変更
-  // （Issue #29等）に自動追従しない固定係数のため、実際にページへ収まるかどうかの
-  // 判定（下の maxSystemsPerPage）には使わず、用途を初回見積もりに限定する（Issue #38）。
-  const legacyRecommendedMaxSystemsPerPage = useMemo(() => {
-    const baseHeight = scoreType === 'ensemble'
-      ? estimateEnsembleSystemHeightPx(totalEnsembleStaffCount(instrumentation.parts))
-      : scoreType === 'quartet'
-        ? BASE_SYSTEM_HEIGHT_PX.quartet
-        : scoreType === 'piano'
-          ? BASE_SYSTEM_HEIGHT_PX.piano
-          : BASE_SYSTEM_HEIGHT_PX.single;
+  // 「段数/ページ」の初期表示（推奨値）に使う見積もり。1段が実際に描かれる高さ
+  // （measuredSystemHeightPx）に、浄書として自然な段間の余白（SYSTEM_BREATHING_ROOM_PX）を
+  // 足した高さで予算を割る。以前は楽譜種別ごとの固定係数（BASE_SYSTEM_HEIGHT_PX /
+  // estimateEnsembleSystemHeightPx）を使っていたが、種別ごとに含む余白の量がばらばらで、
+  // パート数の多い弦楽四重奏・編成譜ほど推奨段数が過剰に少なくなり（四重奏2段・
+  // 室内オーケストラ1段）、新規作成直後にページの下半分が空白になっていた（Issue #71）。
+  const recommendedMaxSystemsPerPage = useMemo(() => {
+    const baseHeight = recommendedSystemHeightPx(partCountForSystemLayout);
     return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * notationSizeMultiplier * ensembleAutoFitMultiplier + systemRowGapPx)));
-  }, [scoreType, instrumentation.parts, notationSizeMultiplier, ensembleAutoFitMultiplier, systemHeightBudgetPx, systemRowGapPx]);
+  }, [partCountForSystemLayout, notationSizeMultiplier, ensembleAutoFitMultiplier, systemHeightBudgetPx, systemRowGapPx]);
   // 段数/ページの実際の上限（実測ベース）。これを超えると段がページからあふれる。
   // PianoSystemCanvas.tsx が実際の描画に使う寸法計算（computeLayout の sysH）を正とし、
   // 実際の描画倍率（SCORE_LAYOUT_RENDER_SCALE）を掛けた measuredSystemHeightPx() で
@@ -2529,12 +2511,13 @@ export default function ScorePage() {
     const baseHeight = measuredSystemHeightPx(partCountForSystemLayout);
     return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * notationSizeMultiplier * ensembleAutoFitMultiplier + systemRowGapPx)));
   }, [partCountForSystemLayout, notationSizeMultiplier, ensembleAutoFitMultiplier, systemHeightBudgetPx, systemRowGapPx]);
-  // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段が既定。市販譜のような
-  // 行間を確保するため、上限いっぱいの5段ではなく1段減らした4段を初期値にしている。
-  // legacyRecommendedMaxSystemsPerPage を基準にしつつ、万一それが実測の上限
+  // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段までを既定とする。大譜表は
+  // 右手・左手で1段が縦に長く、段間の余白を一律に見込むだけでは詰まって見えるため、
+  // 音符を小さくしたときでも4段を超えないようにしている。
+  // recommendedMaxSystemsPerPage を基準にしつつ、万一それが実測の上限
   // （maxSystemsPerPage）を超える場合にあふれないよう、実測の上限でも必ずクランプする。
   const recommendedSystemsPerPage = Math.min(
-    scoreType === 'piano' ? Math.min(4, legacyRecommendedMaxSystemsPerPage) : legacyRecommendedMaxSystemsPerPage,
+    scoreType === 'piano' ? Math.min(4, recommendedMaxSystemsPerPage) : recommendedMaxSystemsPerPage,
     maxSystemsPerPage
   );
   // ユーザー設定（その他タブの「段数/ページ」）。null = 未設定（推奨値を使う）。

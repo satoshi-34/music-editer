@@ -1785,7 +1785,15 @@ export default function PianoSystemCanvas({
         // 反復記号と終止括弧は多段譜で段ごとに食い違うと読みにくいので、
         // 見た目の基準は最上段の小節データへ寄せる。
         const sharedMeasure = (partsScore[0] ?? parts[0]?.data ?? [])[startMeasureIndex + i];
-        const stave=new Stave(x/s, staveYs[pi]/s, w/s);
+        // Y だけは x/w と違い「/s しない」。x/w は「ページ幅いっぱいに広げる」ため
+        // 実ピクセル値を ctx.scale(s,s) で割り戻して渡すが、Y も同じようにすると
+        // パート間の間隔だけが音符の大きさに追従せず常に staveSpacing ピクセルのまま残り、
+        // 五線は小さいのに間隔だけ広い（＝1段が異常に縦長な）段になる。
+        // その結果、SVGの箱の高さ（renderer.resize の sysH * s）に中身が収まらず、
+        // 下のパートが隣の段へはみ出して重なっていた（Issue #71）。
+        // staveYs をそのまま渡せば ctx.scale で間隔も五線も同じ s 倍になり、
+        // 段の実際の高さが sysH * s（= measuredSystemHeightPx）と一致する。
+        const stave=new Stave(x/s, staveYs[pi], w/s);
         // パート固有の移調シフト（fifths）。part.keySignature はグローバル調号を移調楽器用に
         // シフトした固定値として渡ってくるので、その差分だけ「この小節時点の有効調号」にも適用する。
         const partFifthsShift = part.keySignature
@@ -2536,7 +2544,9 @@ export default function PianoSystemCanvas({
         // line0 同士の中間で分割すると、上パートの下側加線域がほとんど残らず、
         // 低音を置こうとしたクリックが下パートの超高音に化ける逆方向の誤配置が起きるため、
         // 五線の端からの距離が上下対称になるこの取り方にする。
-        const partGapY = staveSpacing / s;
+        // 上の Stave 生成が staveYs をそのまま（/s せず）使うようになったため、
+        // パート間の間隔もそのままの値が「描画座標系での間隔」になる。
+        const partGapY = staveSpacing;
         const staveLine0 = stave.getYForLine(0);
         const staveLine4 = stave.getYForLine(4);
         // 五線の下端と次パートの上端の間の余白を上下のパートで半分ずつ分け合う
