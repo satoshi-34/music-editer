@@ -118,7 +118,7 @@ import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '..
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
-import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
+import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrintableMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
 import { computeFitZoom, VIEW_ZOOM_MIN } from '../utils/viewZoomUtils';
@@ -2659,6 +2659,21 @@ export default function ScorePage() {
           : [rightHandData ?? []];
     return activeParts.reduce((max, part) => Math.max(max, trimTrailingEmptyMeasures(part).length), 0);
   }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts]);
+  // 印刷専用: 「最後に音符（または明示的な記号）がある小節」までを数える（Issue #80）。
+  // contentMeasureCount（events が完全に空の小節だけを末尾から除外）より厳しく、末尾の
+  // 全休符だけの小節（自動補完・誤操作などで実データに残った編集用の余り小節）も除外する。
+  // 印刷の可視範囲だけに使い、画面表示（contentRanges／visiblePlannedRanges）・
+  // finalMeasureIndex（終止線の位置）には使わない（画面表示・編集への影響を避けるため）。
+  const printContentMeasureCount = useMemo(() => {
+    const activeParts: MeasureData[][] = scoreType === 'piano'
+      ? [rightHandData ?? [], leftHandData ?? []]
+      : scoreType === 'quartet'
+        ? quartetParts
+        : scoreType === 'ensemble'
+          ? [...ensembleParts, ...ensembleSecondStaffParts]
+          : [rightHandData ?? []];
+    return activeParts.reduce((max, part) => Math.max(max, trimTrailingPrintableMeasures(part).length), 0);
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts]);
   const layoutParts = useMemo((): MeasureLayoutPartContext[] => {
     if (scoreType === 'piano') {
       const keySignatureMeasures = rightHandData ?? [];
@@ -2853,6 +2868,11 @@ export default function ScorePage() {
   const finalMeasureIndex = contentMeasureCount > 0 ? contentMeasureCount - 1 : undefined;
   // 完全に空の楽譜でも最低1段は印刷する（白紙が出るより五線だけの1段が自然なため）
   const printContentSystems = Math.max(1, plannedRanges.filter((range) => range.start < contentMeasureCount).length);
+  // 実際に印刷・印刷プレビューで表示する段数（Issue #80）。printContentSystems は画面の
+  // contentRanges（下の visiblePlannedRanges 参照）と基準を共有しているため変更できない。
+  // 印刷の可視範囲（print-hidden-page・print-final-page・printVisibleSystems）だけを
+  // この専用の値でさらに絞り込み、末尾の全休符だけの小節を印刷から除外する。
+  const printVisibleContentSystems = Math.max(1, plannedRanges.filter((range) => range.start < printContentMeasureCount).length);
 
   // 以前は市販譜の作法にならい、タイトル・作曲者名が入っているページ（＝1ページ目）だけ
   // 譜面の段数を他ページより1段減らしていた。しかし物理印刷して確認したところ
@@ -2906,20 +2926,20 @@ export default function ScorePage() {
   const visiblePlannedRanges = [...contentRanges, ...bufferRanges];
   const effectiveTotalSystems = Math.max(1, visiblePlannedRanges.length);
   // 印刷時、内容のある最後のページだけ最後の段をページ下端へ寄せる（App.css の
-  // .print-final-page .system-stack 参照）。printContentSystems は「内容のある段の総数」
-  // （最低1）なので、それが何ページ目に収まるかを逆算する。
+  // .print-final-page .system-stack 参照）。printVisibleContentSystems は「印刷で実際に
+  // 出す段の総数」（最低1）なので、それが何ページ目に収まるかを逆算する。
   // ページごとの段数が可変（1ページ目だけ少ない）ため、単純な割り算ではなく
   // 累積オフセットを1ページずつ進めながら「その段が何ページ目に収まるか」を探す。
   const finalContentPageIndex = useMemo(
-    () => findPageIndexForSystem(printContentSystems - 1, pageSystemLayoutOptions),
-    [printContentSystems, pageSystemLayoutOptions]
+    () => findPageIndexForSystem(printVisibleContentSystems - 1, pageSystemLayoutOptions),
+    [printVisibleContentSystems, pageSystemLayoutOptions]
   );
   // 最終内容ページに表示される「内容のある段数」。これが1段だけだと space-between は
   // 子が1つしかないため上端に寄ってしまい、終止線がページ下端に届かない
   // （App.css の .print-final-page-single 参照）。
   const finalContentPageVisibleSystems = Math.max(0, Math.min(
     getPageSystemsCapacity(finalContentPageIndex),
-    printContentSystems - getPageSystemOffset(finalContentPageIndex)
+    printVisibleContentSystems - getPageSystemOffset(finalContentPageIndex)
   ));
   // 画面表示用の「最終ページ・1段だけ」判定。印刷用（上のfinalContentPageVisibleSystems）は
   // 「内容のある段」だけを数えるため、空の譜面や「＋小節を追加」で出した空段が
@@ -4165,7 +4185,7 @@ export default function ScorePage() {
               {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}
               {/* screen-final-page-single: 空の段（フィラー）を含めても表示段が実質1段だけのときに限る（Issue #68。フィラーがある場合は他ページと同じ固定スロット配置で統一する） */}
               <section
-                className={`print-page${printContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}${i === screenFinalPageIndex && screenFinalPageTotalSystems === 1 ? ' screen-final-page-single' : ''}`}
+                className={`print-page${printVisibleContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}${i === screenFinalPageIndex && screenFinalPageTotalSystems === 1 ? ' screen-final-page-single' : ''}`}
                 style={{
                   // ページ余白（左右・上・下）。正本はこの3値のみで、App.css 側は
                   // var(--page-margin-*) を padding へそのまま渡すだけにしてある
@@ -4249,7 +4269,7 @@ export default function ScorePage() {
                       measureWidthEvenness={measureWidthEvenness}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
-                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printVisibleContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
@@ -4305,7 +4325,7 @@ export default function ScorePage() {
                       measureWidthEvenness={measureWidthEvenness}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
-                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printVisibleContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
@@ -4339,7 +4359,7 @@ export default function ScorePage() {
                       measureWidthEvenness={measureWidthEvenness}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
-                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printVisibleContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}
@@ -4369,7 +4389,7 @@ export default function ScorePage() {
                       measureWidthEvenness={measureWidthEvenness}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
-                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printVisibleContentSystems - getPageSystemOffset(i)))}
                       gap={110}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
@@ -4405,7 +4425,7 @@ export default function ScorePage() {
                       measureWidthEvenness={measureWidthEvenness}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
-                      printVisibleSystems={Math.max(0, Math.min(p.systems, printContentSystems - getPageSystemOffset(i)))}
+                      printVisibleSystems={Math.max(0, Math.min(p.systems, printVisibleContentSystems - getPageSystemOffset(i)))}
                       measuresPerSystem={measuresPerSystem}
                       plannedMeasureWidths={effectiveMeasurePlan.minimumWidths.slice(getPageSystemOffset(i) * effectiveMeasuresPerSystem, getPageSystemOffset(i + 1) * effectiveMeasuresPerSystem)}
                       tool={tool}

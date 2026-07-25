@@ -37,6 +37,39 @@ export function trimTrailingEmptyMeasures(measures: MeasureData[]): MeasureData[
 }
 
 /**
+ * 小節が「印刷上、実質的に無内容」かどうかを判定する（Issue #80）。
+ * isEmptyMeasure（events が完全に空）より広く、全イベントが休符（isRest）だけで
+ * 構成されている小節も無内容とみなす。曲が終わった後に自動補完・誤操作などで
+ * 実データに残ってしまう「全休符だけの末尾の余り小節」を印刷から除外するための判定で、
+ * bpm・拍子・リピートなど小節プロパティが1つでも付いていれば（明示的な記号として）
+ * 無内容とはみなさない（isEmptyMeasure と同じ考え方）。
+ */
+export function isPrintTrimmableMeasure(measure: MeasureData | undefined): boolean {
+  if (!measure) return true;
+  const keys = Object.keys(measure).filter((k) => {
+    const value = (measure as unknown as Record<string, unknown>)[k];
+    return value !== undefined;
+  });
+  if (keys.some((k) => k !== 'events')) return false;
+  return measure.events.every((event) => event.isRest);
+}
+
+/**
+ * 印刷専用: 末尾に連続する「無内容」小節（isPrintTrimmableMeasure）を取り除いた配列を返す。
+ * trimTrailingEmptyMeasures と違い休符のみの小節も対象にするが、末尾から順に確認するだけ
+ * なので曲中（間奏など、後ろに音符がある場合）の全休符小節はそのまま残る。
+ * 画面表示の内容境界（contentMeasureCount／finalMeasureIndex）には使わず、印刷でどこまで
+ * 出力するかの判定にだけ使う（画面表示・終止線の位置への影響を避けるため）。
+ */
+export function trimTrailingPrintableMeasures(measures: MeasureData[]): MeasureData[] {
+  let end = measures.length;
+  while (end > 0 && isPrintTrimmableMeasure(measures[end - 1])) {
+    end--;
+  }
+  return measures.slice(0, end);
+}
+
+/**
  * 2つの楽譜データが「末尾の空小節パディングを除いて」等しいかを判定する。
  * a が undefined の場合は「まだデータなし」として、b の実質内容が空なら等しい扱いにする。
  */

@@ -8,6 +8,8 @@ import { describe, it, expect } from 'vitest';
 import {
   isEmptyMeasure,
   trimTrailingEmptyMeasures,
+  isPrintTrimmableMeasure,
+  trimTrailingPrintableMeasures,
   isSameScoreIgnoringPadding,
   findFirstDifferingMeasureIndex,
 } from './scoreDataEquality';
@@ -17,6 +19,10 @@ const empty = (): MeasureData => ({ events: [] });
 const withNote = (): MeasureData => ({
   events: [{ type: 'note', duration: 'q', keys: ['c/4'] } as unknown as MeasureData['events'][number]],
 });
+// isRest: false の実イベント形（NoteEvent）。withNote() は他テストとの互換のため
+// 旧形のまま残し、Issue #80 の新規テストは実際の NoteEvent 形（dur/isRest/keys）を使う。
+const note = (): MeasureData => ({ events: [{ dur: 'q', isRest: false, keys: ['c/4'] }] });
+const wholeRest = (): MeasureData => ({ events: [{ dur: 'w', isRest: true, keys: ['b/4'] }] });
 
 describe('isEmptyMeasure', () => {
   it('events が空でプロパティなしなら空', () => {
@@ -47,6 +53,56 @@ describe('trimTrailingEmptyMeasures', () => {
 
   it('全部空なら空配列になる', () => {
     expect(trimTrailingEmptyMeasures([empty(), empty()])).toHaveLength(0);
+  });
+});
+
+// Issue #80: 印刷・印刷プレビューで、最終音符より後の全休符だけの末尾の余り小節が
+// 出力されてしまう不具合の修正用。isEmptyMeasure より広く、全イベントが休符だけの
+// 小節も「印刷上は無内容」として扱う。
+describe('isPrintTrimmableMeasure', () => {
+  it('events が空なら無内容', () => {
+    expect(isPrintTrimmableMeasure(empty())).toBe(true);
+    expect(isPrintTrimmableMeasure(undefined)).toBe(true);
+  });
+
+  it('全イベントが休符だけの小節は無内容', () => {
+    expect(isPrintTrimmableMeasure(wholeRest())).toBe(true);
+    expect(isPrintTrimmableMeasure({
+      events: [{ dur: 'q', isRest: true, keys: ['b/4'] }, { dur: 'q', isRest: true, keys: ['b/4'] }],
+    })).toBe(true);
+  });
+
+  it('音符が1つでも混ざっていれば無内容ではない', () => {
+    expect(isPrintTrimmableMeasure({
+      events: [{ dur: 'q', isRest: true, keys: ['b/4'] }, { dur: 'q', isRest: false, keys: ['c/4'] }],
+    })).toBe(false);
+    expect(isPrintTrimmableMeasure(note())).toBe(false);
+  });
+
+  it('bpm など小節プロパティが付いていれば、休符だけでも無内容ではない（明示的な記号として扱う）', () => {
+    expect(isPrintTrimmableMeasure({ events: [{ dur: 'w', isRest: true, keys: ['b/4'] }], bpm: 120 })).toBe(false);
+  });
+});
+
+describe('trimTrailingPrintableMeasures', () => {
+  it('末尾の全休符だけの小節を取り除く（末尾のみ削られる）', () => {
+    const score = [note(), wholeRest(), wholeRest()];
+    expect(trimTrailingPrintableMeasures(score)).toHaveLength(1);
+  });
+
+  it('曲中の全休符小節（後ろに音符がある間奏など）は残す', () => {
+    const score = [note(), wholeRest(), note(), wholeRest()];
+    // 末尾（index 3）だけ取り除かれ、間奏の休符（index 1）はそのまま残る
+    expect(trimTrailingPrintableMeasures(score)).toHaveLength(3);
+  });
+
+  it('末尾が空小節でも休符小節でも同じ扱いで取り除かれる', () => {
+    const score = [note(), wholeRest(), empty()];
+    expect(trimTrailingPrintableMeasures(score)).toHaveLength(1);
+  });
+
+  it('全小節が休符・空なら空配列になる（呼び出し側で最低1段に丸める前提）', () => {
+    expect(trimTrailingPrintableMeasures([wholeRest(), empty(), wholeRest()])).toHaveLength(0);
   });
 });
 
