@@ -9,6 +9,9 @@ import { describe, expect, it } from 'vitest';
 import {
   estimateEnsembleSystemHeightPx,
   computeEnsembleAutoFitMultiplier,
+  resolveEffectiveNotationSizeMultiplier,
+  isNotationSizeStillOverflowing,
+  MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER,
   ENSEMBLE_PART_HEIGHT_PX,
   ENSEMBLE_SYSTEM_OVERHEAD_PX,
 } from './measureLayoutUtils';
@@ -67,5 +70,79 @@ describe('computeEnsembleAutoFitMultiplier（1段がページに収まらない�
   it('ページ予算が0以下など不正値では安全側の1.0を返す', () => {
     expect(computeEnsembleAutoFitMultiplier(17, 0)).toBe(1);
     expect(computeEnsembleAutoFitMultiplier(0, PAGE_BUDGET_PX)).toBe(1);
+  });
+});
+
+// Issue #81: 固定74%縮小をfit計算の自動縮尺に置き換える。
+// 「音符の大きさ」希望倍率（desiredMultiplier）を考慮せずに倍率を決めていたため、
+// 大編成で希望倍率を100%から165%等へ上げても自動縮小が追従せず紙からはみ出していた。
+describe('computeEnsembleAutoFitMultiplier の desiredMultiplier 対応（Issue #81）', () => {
+  const PAGE_BUDGET_PX = 1024;
+
+  it('希望倍率を考慮した実効サイズが min(希望値, 収まる最大値) になる（17パート）', () => {
+    // 17パート・100%のときにちょうど収まる倍率（従来の「固定74%」に見えていた値）
+    const fitAt100 = computeEnsembleAutoFitMultiplier(17, PAGE_BUDGET_PX, 1);
+    const naturalHeight = estimateEnsembleSystemHeightPx(17);
+    expect(naturalHeight * fitAt100).toBeCloseTo(PAGE_BUDGET_PX, 6);
+
+    // 希望倍率を100%/150%/200%と変えても、実効サイズ（desiredMultiplier×戻り値）は
+    // 常に「収まる最大値」でキャップされ、紙からはみ出さない
+    for (const desired of [1, 1.5, 2.0]) {
+      const fit = computeEnsembleAutoFitMultiplier(17, PAGE_BUDGET_PX, desired);
+      const effectiveSize = desired * fit;
+      expect(naturalHeight * effectiveSize).toBeLessThanOrEqual(PAGE_BUDGET_PX + 1e-6);
+      // 希望値と「収まる最大値」の小さい方になっている
+      expect(effectiveSize).toBeCloseTo(Math.min(desired, PAGE_BUDGET_PX / naturalHeight), 6);
+    }
+  });
+
+  it('desiredMultiplier を省略すると従来どおり1.0扱い（後方互換）', () => {
+    expect(computeEnsembleAutoFitMultiplier(8, PAGE_BUDGET_PX)).toBe(
+      computeEnsembleAutoFitMultiplier(8, PAGE_BUDGET_PX, 1)
+    );
+  });
+
+  it('単旋律・ピアノ・弦楽四重奏相当のパート数では、希望倍率200%でも縮小しない（従来の見た目が変わらない回帰テスト）', () => {
+    // single=1, piano=2, quartet=4 相当
+    for (const partCount of [1, 2, 4]) {
+      expect(computeEnsembleAutoFitMultiplier(partCount, PAGE_BUDGET_PX, 2.0)).toBe(1);
+    }
+  });
+});
+
+describe('resolveEffectiveNotationSizeMultiplier / isNotationSizeStillOverflowing（Issue #81 の下限・警告）', () => {
+  const PAGE_BUDGET_PX = 1024;
+
+  it('自動縮小が働かない場合は希望倍率がそのまま実効倍率になる', () => {
+    expect(resolveEffectiveNotationSizeMultiplier(1.5, 1)).toBe(1.5);
+  });
+
+  it('下限（MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER）を下回らない', () => {
+    // 40パートの極端な大編成では fit 倍率がかなり小さくなる
+    const fit = computeEnsembleAutoFitMultiplier(40, PAGE_BUDGET_PX, 1);
+    const effective = resolveEffectiveNotationSizeMultiplier(1, fit);
+    expect(effective).toBeGreaterThanOrEqual(MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER);
+  });
+
+  it('下限でも収まらない極端な編成では isNotationSizeStillOverflowing が true になる', () => {
+    const partCount = 40;
+    const naturalHeight = estimateEnsembleSystemHeightPx(partCount);
+    const fit = computeEnsembleAutoFitMultiplier(partCount, PAGE_BUDGET_PX, 1);
+    const effective = resolveEffectiveNotationSizeMultiplier(1, fit);
+    expect(isNotationSizeStillOverflowing(naturalHeight, effective, PAGE_BUDGET_PX)).toBe(true);
+  });
+
+  it('17パートは下限に達する前に収まるため isNotationSizeStillOverflowing は false', () => {
+    const partCount = 17;
+    const naturalHeight = estimateEnsembleSystemHeightPx(partCount);
+    const fit = computeEnsembleAutoFitMultiplier(partCount, PAGE_BUDGET_PX, 1.65);
+    const effective = resolveEffectiveNotationSizeMultiplier(1.65, fit);
+    expect(effective).toBeGreaterThanOrEqual(MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER);
+    expect(isNotationSizeStillOverflowing(naturalHeight, effective, PAGE_BUDGET_PX)).toBe(false);
+  });
+
+  it('小編成（余裕がある場合）は不正値でも false を返す（安全側）', () => {
+    expect(isNotationSizeStillOverflowing(0, 1, PAGE_BUDGET_PX)).toBe(false);
+    expect(isNotationSizeStillOverflowing(100, 1, 0)).toBe(false);
   });
 });
