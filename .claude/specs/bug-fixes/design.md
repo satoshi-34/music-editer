@@ -1194,3 +1194,53 @@ Issue #51 / PR #54（上記「単声部の休符の既定位置」の節）の�
 
 - 「PR #15/#16 時代の下から2本目の線」という Issue 記載の既定値は、git履歴を精査した限りでは保存キーのline値としては見つからなかった（見つかったのはPR #15での見た目調整のみ）。実際の運用データ（本Issueの起票根拠になった実機の保存済み譜面）にその値が存在する可能性は否定できないため、断定はせず「歴代既定値は line2 のみ」という調査結果に基づいて実装した。もし実データに別の固定既定値が見つかった場合は `LEGACY_DEFAULT_REST_DISPLAY_LINES` に追加するだけで対応できる。
 - 手動リセット操作（`0`キー）は、休符選択中の操作としてブラウザで実際にクリック→選択→キー入力の一連の流れを検証できていない。夜間無人実行のため一時プレビューコンテナを起動したが、クリック→選択が安定して再現できず（既存の `SingleStaffArrowKeyEdit.test.tsx` のような自動テストでの再現も試みたが、休符のバウンディングボックス幅がjsdomの制約で0になるなど、コード側の不具合ではなく検証環境側の要因で断念した）、コンソールエラーが出ないことと `applyPitchChangeToMeasures`（既存の十分にテストされたユーティリティ）を再利用している設計であることまでは確認した。実際のブラウザでの手動確認を推奨する。
+
+## 単声部の休符の縦位置が中央からずれ、生成経路によって高さが不一致になる問題（2026-07-25, Issue #79）
+
+### 問題
+
+新規の単旋律譜で音符を入力していくと、自動補完される黒い休符（`fillPriorMeasureRests`）と表示用パディングの灰色休符（`computeVoiceDisplayPadding`）の縦位置が五線中央に見えず、しかも黒と灰で高さが揃っていなかった（運用者の実機報告）。
+
+### 原因
+
+休符の保存キー自体は生成経路によらずすべて `defaultRestDisplayKeyForDuration`（2分音符以下=五線中央 line2、全休符=第4線ぶら下げ line1）を通っており、保存データは正しかった。原因は描画側（`PianoSystemCanvas.tsx` の Pass 2）にあった。
+
+```ts
+new Formatter()
+  .joinVoices(allVoicesForFormatting)
+  .formatToStave(allVoicesForFormatting, staveSets[0][i], { alignRests: true });
+```
+
+`alignRests: true` は「2声部が共存する小節で、休符を近い音符の高さへ引き寄せて衝突を避ける」ために導入されたオプション（Issue #29/#68関連）だが、Pass 2 は小節内の全パート・全声部（1声部の小節も含む）をまとめて1回の `Formatter` に渡すため、**単声部の小節にまで一律で適用されていた**。
+
+VexFlow の `Formatter.AlignRestsToNotes` は、休符の VexFlow 内部行番号（`getLineForRest()`）が `3`（＝ちょうど五線中央。treble で `b/4` が該当）のときだけ、隣接する音符（同じ Voice 内の前後のタイックアブル）の行番号へ休符を引き寄せる実装になっている。中央位置に置いた休符は原理上すべてこの条件に一致するため、単声部でも「直前・直後の音符の音高」によって休符が中央から動いてしまい、しかも動く先が音符ごとに違うため黒（自動補完）と灰（パディング）で高さがバラバラになっていた。実際に vexflow のソース（`node_modules/vexflow/build/esm/src/formatter.js` の `AlignRestsToNotes`/`getRestLineForNextNoteGroup`）と、Node上での再現スクリプトで確認した：
+
+```
+e4(四分音符) → 四分休符(b/4) → g5(四分音符) → 四分休符(b/4)
+```
+という並びで `alignRests:true` を通すと、1つ目の休符は line 3.5、2つ目は line 5.5 になり（本来は両方 line 3 のまま）、DOM上のy座標も 75 / 55 とバラバラになることを確認した（本来の中央は 80）。全休符（line 1）はこの条件に一致しないため影響を受けず、報告どおり「全休符は問題ないが2分音符以下の休符だけずれる」という症状と一致した。
+
+### 修正設計
+
+- Pass 1 で各パートの `renderedVoiceEntries` を `allVoicesForFormatting` へ積む際、**2声部が共存する小節（`isMultiVoiceMeasure`）の Voice だけ**を並行して `restAlignVoices` にも積むようにした。
+- Pass 2 では `Formatter.formatToStave` に `alignRests` オプションを渡さず（=false）、代わりに `restAlignVoices` に対してだけ事前に `Formatter.AlignRestsToNotes(voice.getTickables(), true)` を明示的に呼ぶ。VexFlow 内部の `format()` も本来 `alignRests()` → `createTickContexts()` → `preFormat()` の順で実行しており、`AlignRestsToNotes` は休符の行番号（縦位置）だけを書き換えて幅計算には影響しないため、呼び出し順序を保ったまま対象を絞り込むだけで済んだ（x座標の整形結果は変わらないことをテストで確認済み）。
+- 2声部小節の休符の衝突回避（Issue #29/#68 が意図した挙動）はそのまま維持される。単声部の小節だけ、`defaultRestDisplayKeyForDuration` で設定した位置が最終的な描画位置になる。
+
+### 影響範囲
+
+- `src/components/PianoSystemCanvas.tsx`（Pass 2 の Formatter 呼び出しを変更。`restAlignVoices` を追加）
+- `src/components/PianoSystemCanvasRestVerticalPosition.test.tsx`（新規追加。DOM の y 座標を検証する結合テスト）
+
+### 確認ポイント
+
+- 単声部で、新規配置・自動補完（`fillPriorMeasureRests`、実際にクリックで後続小節へ入力して発火させて確認）・表示用パディング（`computeVoiceDisplayPadding`）・空小節プレースホルダーの4経路すべてで、2分音符以下の休符が同じ高さ（実音符 `b/4` と同じ y 座標）に描画されること。隣接音符を e4/g5/c4/a5 など離れた音高にしても崩れないこと（`PianoSystemCanvasRestVerticalPosition.test.tsx`）
+- 全休符（空小節プレースホルダー含む）は上記の中央位置とは異なる高さ（第4線ぶら下げ）になること
+- 2声部が共存する小節の休符位置（`restKeyForVoice` による上下振り分け）は変更していないこと（既存の `PianoSystemCanvasPaddingRest.test.tsx` 等がそのまま通ることで確認）
+- `npx vitest --run src`: 1163テスト中、失敗は `ScorePageEmptyStaveFiller.test.tsx` の既存4件のみ（Issue #71 のPR #84で修正中の既知の事前失敗。本PR着手前の状態でも同一4件が同一内容で失敗することを確認済み、無関係）
+- `npm run lint`: 353エラー・6警告（着手前と完全に同数、新規エラーなし）。新規テストファイルは `as any` を避けて0件に抑えた
+- `npm run build`: `tsc -b && vite build` エラーなし
+
+### 自信の無い点
+
+- 修正前後で `alignRests` を呼ぶタイミングを「Formatter.formatToStave 内部」から「その直前の明示呼び出し」に変えたが、VexFlow側のx座標整形（`createTickContexts`/`preFormat`）が休符の行番号を参照して幅を変える実装になっていないかまでは、ソースコードを読んで確認したのみで、全パターンを網羅的に実測してはいない。休符の行番号によってグリフ幅が変わるケース（付点休符の位置調整など）がもしあった場合、影響範囲は今回変更していない2声部側にとどまるはずだが、朝のレビューで2声部の楽譜（ピアノ2声部モード）の見た目に変化がないことを確認いただけると安心。
+- 夜間無人実行のため、Docker共有コンテナの5173番ポートが別プロセス（常時起動中の既存devサーバーと思われる）に既に使われており、本worktree用の一時devサーバーを別ポートで公開する手段がなかった（コンテナのポート公開設定はコンテナ起動時固定で、追加公開には再作成が必要なため見送った）。そのため実ブラウザでのスクリーンショット確認はできておらず、jsdomでの実際のSVG y座標を検証する結合テスト（本PRの新規テスト）と、修正前コードで同テストが失敗すること（回帰再現）の確認までで代替した。朝のレビューで実ブラウザ確認をお願いしたい。
