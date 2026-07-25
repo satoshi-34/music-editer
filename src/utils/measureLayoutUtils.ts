@@ -224,18 +224,75 @@ export function recommendedSystemHeightPx(partCount: number): number {
  * 消失するバグ）。出版譜でも大編成は小さめの浄書で組むのが通例なため、
  * 「1段がページに収まらない編成では自動的に縮小する」フォールバックを設ける。
  *
- * - 収まる場合（標準的な編成）は 1.0 未満にならない＝縮小しない
- *   （small/piano/quartet 等の従来サイズに影響しない）。
+ * desiredMultiplier（ユーザーが「音符の大きさ」スライダーで選んだ希望倍率、既定1）を
+ * 計算に含めるのが Issue #81 の要点: 以前は desiredMultiplier を考慮せず
+ * `budget / systemHeightAt100Percent` だけで倍率を決めていたため、100%のときに
+ * ちょうど収まるよう縮小した倍率が、希望倍率を165%等に上げても同じ縮小率のまま
+ * 掛け算されるだけで、結果的に「100%×自動倍率」より大きなサイズになり
+ * 紙からはみ出していた（希望サイズを上げるほど自動縮小の効果が薄れ、収まらなくなる
+ * バグ）。desiredMultiplier で割ってから収まる倍率を出すことで、
+ * `desiredMultiplier × 戻り値` の最終結果が常に「希望サイズ」と「収まる最大サイズ」の
+ * 小さい方（= min(希望値, budget/自然高)）になるよう補正している。
+ *
+ * - 収まる場合（標準的な編成、または希望サイズが十分小さい場合）は 1.0 未満に
+ *   ならない＝縮小しない（small/piano/quartet 等の従来サイズに影響しない）。
  * - 収まらない場合だけ、ちょうど収まる倍率まで自動的に縮める（ユーザー設定の
  *   notationSizeMultiplier をこれ以上は超えさせない上限として使う）。
+ *
+ * 大編成専用ではなく全譜種共通のロジックとして使う想定（呼び出し側で
+ * `scoreType === 'ensemble'` 分岐を残さない）。単旋律・ピアノ・弦楽四重奏は
+ * 1段の自然高がページ予算に対して十分小さいため、この関数を通しても常に 1.0 が
+ * 返り、従来の見た目は変わらない。
  */
 export function computeEnsembleAutoFitMultiplier(
   partCount: number,
-  pageBudgetPx: number
+  pageBudgetPx: number,
+  desiredMultiplier: number = 1
 ): number {
   const systemHeightAt100Percent = estimateEnsembleSystemHeightPx(partCount);
-  if (systemHeightAt100Percent <= 0 || pageBudgetPx <= 0) return 1;
-  return Math.min(1, pageBudgetPx / systemHeightAt100Percent);
+  if (systemHeightAt100Percent <= 0 || pageBudgetPx <= 0 || desiredMultiplier <= 0) return 1;
+  return Math.min(1, pageBudgetPx / (systemHeightAt100Percent * desiredMultiplier));
+}
+
+// 自動縮小がどれだけ働いても、記号が判読できないほど小さく（"豆粒"に）はしない
+// ための絶対下限（Issue #81）。0.8（NOTATION_SIZE_MULTIPLIER_MIN、スライダーの最小値）
+// より意図的に小さい値にしてある。理由: 大編成では「スライダーの最小値」より
+// さらに縮めないとページに収まらないケースが普通にあり（例: 17パートは
+// 自動縮小だけで約74%まで縮む＝スライダーの最小80%より小さい）、下限をスライダー
+// 最小値と同じにすると「今まで収まっていた編成」まで収まらなくなってしまう。
+export const MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER = 0.5;
+
+/**
+ * ユーザー希望倍率と自動縮小倍率（computeEnsembleAutoFitMultiplier の戻り値）を
+ * 合成した、実際に描画へ使う「音符の大きさ」の実効倍率。
+ * MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER を下回らないようクランプする
+ * （下限でも収まらない場合は isNotationSizeStillOverflowing で警告する）。
+ */
+export function resolveEffectiveNotationSizeMultiplier(
+  desiredMultiplier: number,
+  autoFitMultiplier: number
+): number {
+  return Math.max(MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER, desiredMultiplier * autoFitMultiplier);
+}
+
+// fit計算で「ちょうど収まる」よう求めた倍率は budget / natural の割り算由来のため、
+// 掛け戻すと浮動小数点の丸め誤差で budget をごくわずかに超える／下回ることがある
+// （例: 17パートは実際には収まる境界ちょうどの編成なのに、丸め誤差で
+// 「収まらない」と誤判定され警告が誤表示されていた）。実用上無視できる誤差は
+// 「収まらない」と判定しないよう、比較にわずかな許容値を設ける。
+const NOTATION_SIZE_OVERFLOW_EPSILON_PX = 1e-6;
+
+/**
+ * 実効倍率（下限クランプ後）でもなお1段の高さがページ予算を超えるかどうか。
+ * 超える場合は「黙って豆粒にする」のではなく、呼び出し側で警告を表示する想定。
+ */
+export function isNotationSizeStillOverflowing(
+  naturalHeightAt100PercentPx: number,
+  effectiveNotationSizeMultiplier: number,
+  pageBudgetPx: number
+): boolean {
+  if (naturalHeightAt100PercentPx <= 0 || pageBudgetPx <= 0) return false;
+  return naturalHeightAt100PercentPx * effectiveNotationSizeMultiplier > pageBudgetPx + NOTATION_SIZE_OVERFLOW_EPSILON_PX;
 }
 
 /**

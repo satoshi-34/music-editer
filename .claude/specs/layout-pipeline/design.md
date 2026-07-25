@@ -209,3 +209,19 @@ A・B・C・Eはリスクが低く（既存コードと機能的に独立、ま�
 - 本ドキュメントはコードを一切変更していないため、上記の型定義・数式が実装時に細部で調整される可能性がある（特にフェーズ3のインラインstyle注入方式は、`ResizeObserver` や `pageMarginSideMm` 依存の再描画トリガー（`page-layout-controls/design.md` 参照）との相互作用を実装時に再確認すること）。
 - 5章の不変条件I7（印刷とプレビューの座標一致）は、フェーズ6（Issue G）が完了するまでは検査対象を用意できない（現状はCSS重複のため、LayoutTree以前の問題として先に統合が必要）。フェーズ2時点ではI7のテストは「pending」として書いておき、Issue G完了時に有効化する運用を推奨する。
 - 本ドキュメントの受入条件にある「過去のレイアウト系Issue最低8件」は #29 #37 #44 #51 #56 #58 #67 #68 の8件を対応表（5章）でカバーした。
+
+## 10. Issue #81 実装記録（8章6の先行実装）
+
+8章「最終目標モデル（第一原理）」の6番目の項目（fit自動縮尺）を、フェーズA〜H本体に先立って先行実装した（`src/utils/measureLayoutUtils.ts` / `src/components/ScorePage.tsx`）。
+
+**問題**: `computeEnsembleAutoFitMultiplier(partCount, pageBudgetPx)` が「音符の大きさ」希望倍率（`notationSizeMultiplier`）を計算に含めておらず、常に「希望倍率100%のときにちょうど収まる倍率」を返していた。呼び出し側で `notationSizeMultiplier * ensembleAutoFitMultiplier` として掛け合わせるため、希望倍率を100%から165%等へ上げても自動縮小側は追従せず、`希望倍率 × (100%のときの収まる倍率)` が紙の高さを超えてしまっていた（romantic-orchestra=17パートで100%時は約74%まで自動縮小され収まっていたが、165%にすると約122%相当になりはみ出す）。加えて、この自動縮小は `scoreType === 'ensemble'` のときだけ動く分岐になっていた。
+
+**修正設計**:
+1. `computeEnsembleAutoFitMultiplier` に第3引数 `desiredMultiplier`（既定1、後方互換）を追加し、`pageBudgetPx / (systemHeightAt100Percent * desiredMultiplier)` で計算するようにした。これにより `desiredMultiplier × 戻り値` が常に `min(希望値, budget/自然高)`（8章6の式）になる。
+2. `MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER`（0.5）と、それを下限にクランプする `resolveEffectiveNotationSizeMultiplier()`、下限でも収まらない場合を検出する `isNotationSizeStillOverflowing()` を新設。下限は「スライダーの最小値（0.8）」より意図的に低くしてある。理由: 17パートは自動縮小だけで約74%まで縮む必要があり、スライダー最小値と同じ下限にすると今まで収まっていた編成が収まらなくなってしまうため。
+3. `ScorePage.tsx` 側で `scoreType === 'ensemble'` 分岐を撤廃し、全譜種で同じ fit 計算を通すようにした（`partCountForSystemLayout` を共通の入力にする）。単旋律・ピアノ・弦楽四重奏は1段の自然高がページ予算に対して十分小さいため、この関数を通しても常に倍率1.0が返り、既存の見た目は変わらない（回帰テストで確認）。
+4. 「音符の大きさ」スライダー脇の注記を「(大編成のため実際はXX%で表示)」→「(紙面に収めるため実際はXX%で表示)」に変更し、下限でも収まらない場合は別途「⚠ 最小サイズでも1段が紙に収まりません」の警告を表示するようにした。
+
+**影響範囲**: `computeEnsembleAutoFitMultiplier` の第3引数は省略可能（既定1）で、既存の呼び出し・テストは変更なしで動く。`ScorePage.tsx` では `ensembleAutoFitMultiplier * notationSizeMultiplier` という直接乗算をしていた箇所（`effectiveRenderScale` / `legacyRecommendedMaxSystemsPerPage` / `maxSystemsPerPage`）を、新設の `effectiveNotationSizeMultiplier`（下限クランプ込み）経由に統一した。
+
+**フェーズHとの関係**: 8章6の式そのものは本Issueで実装済みだが、8章1〜5（段数/ページを結果として求めるトップダウン配置）はまだ未着手（フェーズHの範囲）。フェーズH実装時は、本Issueで追加した `computeEnsembleAutoFitMultiplier` / `resolveEffectiveNotationSizeMultiplier` の呼び出し元が `ScorePage.tsx` の `partCountForSystemLayout` ベースの見積もりから `LayoutTree` ベースの実測へ置き換わる想定（関数のシグネチャ自体は変更不要）。

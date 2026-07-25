@@ -88,7 +88,10 @@ import {
   SYSTEM_ROW_GAP_MIN_PX,
   SYSTEM_ROW_GAP_MAX_PX,
   planSystemMeasureRanges,
+  estimateEnsembleSystemHeightPx,
   computeEnsembleAutoFitMultiplier,
+  resolveEffectiveNotationSizeMultiplier,
+  isNotationSizeStillOverflowing,
   measuredSystemHeightPx,
   recommendedSystemHeightPx,
   resolveDefaultLayoutForScoreType,
@@ -2369,26 +2372,50 @@ export default function ScorePage() {
       ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n))
       : resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier;
   });
-  // 大編成の編成譜（ensemble）では、ユーザーが「音符の大きさ」を100%のままにしていても
-  // 1段の実際の高さがページの印字可能領域を超えてしまうケースがある
-  // （romantic-orchestra=17パートで下5パート＝弦楽器が画面・印刷の両方から消える不具合の原因、
-  // docs/qa/full-orchestra-test-findings.md フェーズC参照）。出版譜でも大編成は小さめの
-  // 浄書で組むのが通例なため、「1段がページに収まらない編成だけ」自動的に縮小する
-  // フォールバックを設ける（収まる編成では 1.0 のままなので、標準的な編成のサイズは
-  // 従来どおり変わらない）。
+  // 現在の楽譜種別で実際に描画される段（五線）の数。PianoSystemCanvas.tsx の
+  // computeLayout() に渡す引数（parts.length）と一致させる必要がある
+  // （single=1段、piano=右手/左手の2段、quartet=4段、ensemble=編成の総段数。
+  // staffCount:2（大譜表）パートは2段ぶんとして数える＝totalEnsembleStaffCount）。
+  // fit自動縮尺（下の ensembleAutoFitMultiplier）でも使うため、その前に定義する。
+  const partCountForSystemLayout = scoreType === 'ensemble'
+    ? totalEnsembleStaffCount(instrumentation.parts)
+    : scoreType === 'quartet'
+      ? QUARTET_PART_CONFIGS.length
+      : scoreType === 'piano'
+        ? 2
+        : 1;
+  // 「1段の実際の高さがページの印字可能領域を超える」編成では自動的に縮小する
+  // fit計算（Issue #81）。以前は scoreType === 'ensemble' のときだけ、かつ
+  // 「音符の大きさ」希望倍率を考慮せずに倍率を決めていたため、大編成で希望倍率を
+  // 100%から165%等へ上げても自動縮小が追従せず紙からはみ出す不具合があった
+  // （固定74%縮小に見えていたのは、100%のときにちょうど収まるよう決めた倍率が
+  // 希望倍率を上げても変わらず掛かり続けていたため）。
+  // 全譜種共通のロジックにする（scoreType による分岐を残さない）。単旋律・ピアノ・
+  // 弦楽四重奏は1段の自然高がページ予算に対して十分小さいため、常に1.0が返り
+  // 従来の見た目は変わらない。
   const ensembleAutoFitMultiplier = useMemo(() => (
-    scoreType === 'ensemble'
-      ? computeEnsembleAutoFitMultiplier(totalEnsembleStaffCount(instrumentation.parts), ENSEMBLE_AUTO_FIT_BUDGET_PX)
-      : 1
-  ), [scoreType, instrumentation.parts]);
-  // SCORE_LAYOUT_RENDER_SCALE（既定0.44）に音符の大きさ倍率を掛けた、実際の
+    computeEnsembleAutoFitMultiplier(partCountForSystemLayout, ENSEMBLE_AUTO_FIT_BUDGET_PX, notationSizeMultiplier)
+  ), [partCountForSystemLayout, notationSizeMultiplier]);
+  // 「音符の大きさ」希望倍率と自動縮小倍率を合成した、実際に描画へ使う実効倍率。
+  // 記号が判読できないほど小さくなる編成では下限（MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER）
+  // でクランプし、それでも収まらない場合は isNotationSizeOverflowingPageBudget で
+  // 警告表示に使う（黙って豆粒にしない）。
+  const effectiveNotationSizeMultiplier = useMemo(() => (
+    resolveEffectiveNotationSizeMultiplier(notationSizeMultiplier, ensembleAutoFitMultiplier)
+  ), [notationSizeMultiplier, ensembleAutoFitMultiplier]);
+  const isNotationSizeOverflowingPageBudget = useMemo(() => (
+    isNotationSizeStillOverflowing(
+      estimateEnsembleSystemHeightPx(partCountForSystemLayout),
+      effectiveNotationSizeMultiplier,
+      ENSEMBLE_AUTO_FIT_BUDGET_PX
+    )
+  ), [partCountForSystemLayout, effectiveNotationSizeMultiplier]);
+  // SCORE_LAYOUT_RENDER_SCALE（既定0.44）に音符の大きさ実効倍率を掛けた、実際の
   // レイアウト計算・描画に使う実効スケール。段組み計画（planEffectiveMeasuresPerSystem /
   // planSystemMeasureRanges）と各 Canvas への scale prop の両方に必ずこの値を使い、
   // SCORE_LAYOUT_RENDER_SCALE を直接使う箇所を残さない（単位の食い違いによる
-  // レイアウト崩れを防ぐため）。ensembleAutoFitMultiplier は「ユーザー設定の
-  // notationSizeMultiplier をこれ以上は超えさせない上限」として掛け合わせる
-  // （標準編成では 1.0 なので実質的な変化はない）。
-  const effectiveRenderScale = SCORE_LAYOUT_RENDER_SCALE * notationSizeMultiplier * ensembleAutoFitMultiplier;
+  // レイアウト崩れを防ぐため）。
+  const effectiveRenderScale = SCORE_LAYOUT_RENDER_SCALE * effectiveNotationSizeMultiplier;
 
   // ユーザー設定（その他タブの「ページ余白（左右）」スライダー、8〜25mm）。
   // 壊れた保存値でも安全なよう必ずクランプする。既定値は measureLayoutUtils の
@@ -2478,17 +2505,6 @@ export default function ScorePage() {
     const verticalMarginDeltaPx = (verticalMarginTotalMm - defaultVerticalMarginTotalMm) * MM_TO_PX;
     return Math.max(1, SCORE_AREA_BUDGET_PX - verticalMarginDeltaPx);
   }, [pageMarginTopMm, pageMarginBottomMm]);
-  // 現在の楽譜種別で実際に描画される段（五線）の数。PianoSystemCanvas.tsx の
-  // computeLayout() に渡す引数（parts.length）と一致させる必要がある
-  // （single=1段、piano=右手/左手の2段、quartet=4段、ensemble=編成の総段数。
-  // staffCount:2（大譜表）パートは2段ぶんとして数える＝totalEnsembleStaffCount）。
-  const partCountForSystemLayout = scoreType === 'ensemble'
-    ? totalEnsembleStaffCount(instrumentation.parts)
-    : scoreType === 'quartet'
-      ? QUARTET_PART_CONFIGS.length
-      : scoreType === 'piano'
-        ? 2
-        : 1;
   // 「段数/ページ」の初期表示（推奨値）に使う見積もり。1段が実際に描かれる高さ
   // （measuredSystemHeightPx）に、浄書として自然な段間の余白（SYSTEM_BREATHING_ROOM_PX）を
   // 足した高さで予算を割る。以前は楽譜種別ごとの固定係数（BASE_SYSTEM_HEIGHT_PX /
@@ -2497,8 +2513,8 @@ export default function ScorePage() {
   // 室内オーケストラ1段）、新規作成直後にページの下半分が空白になっていた（Issue #71）。
   const recommendedMaxSystemsPerPage = useMemo(() => {
     const baseHeight = recommendedSystemHeightPx(partCountForSystemLayout);
-    return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * notationSizeMultiplier * ensembleAutoFitMultiplier + systemRowGapPx)));
-  }, [partCountForSystemLayout, notationSizeMultiplier, ensembleAutoFitMultiplier, systemHeightBudgetPx, systemRowGapPx]);
+    return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * effectiveNotationSizeMultiplier + systemRowGapPx)));
+  }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx]);
   // 段数/ページの実際の上限（実測ベース）。これを超えると段がページからあふれる。
   // PianoSystemCanvas.tsx が実際の描画に使う寸法計算（computeLayout の sysH）を正とし、
   // 実際の描画倍率（SCORE_LAYOUT_RENDER_SCALE）を掛けた measuredSystemHeightPx() で
@@ -2509,8 +2525,8 @@ export default function ScorePage() {
   // 画面にあふれ警告を表示したうえで指定どおり描画する（isSystemsPerPageOverflowing）。
   const maxSystemsPerPage = useMemo(() => {
     const baseHeight = measuredSystemHeightPx(partCountForSystemLayout);
-    return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * notationSizeMultiplier * ensembleAutoFitMultiplier + systemRowGapPx)));
-  }, [partCountForSystemLayout, notationSizeMultiplier, ensembleAutoFitMultiplier, systemHeightBudgetPx, systemRowGapPx]);
+    return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * effectiveNotationSizeMultiplier + systemRowGapPx)));
+  }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx]);
   // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段までを既定とする。大譜表は
   // 右手・左手で1段が縦に長く、段間の余白を一律に見込むだけでは詰まって見えるため、
   // 音符を小さくしたときでも4段を超えないようにしている。
@@ -3679,15 +3695,27 @@ export default function ScorePage() {
                 />
                 {/* 現在値（%）。既定は楽譜種別により異なる（単旋律・ピアノ=150%、弦楽四重奏・編成譜=100%。Issue #49） */}
                 <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
-                {/* 大編成（1段がページに収まらない編成）で自動縮小が働いているときだけ、
-                    実際に描画されているサイズ（ユーザー設定 × 自動縮小倍率）を表示する。
-                    ユーザーが「なぜスライダーの表示より小さく見えるのか」に気づけるようにするため。 */}
+                {/* 1段がページに収まらない編成（大編成に限らない、全譜種共通のfit計算）で
+                    自動縮小が働いているときだけ、実際に描画されているサイズ（実効倍率）を
+                    表示する。ユーザーが「なぜスライダーの表示より小さく見えるのか」に
+                    気づけるようにするため。 */}
                 {ensembleAutoFitMultiplier < 1 && (
                   <span
                     style={{ fontSize: 11, color: '#b45309' }}
                     title="この編成は1段がページに収まらないため、実際の描画サイズを自動的に縮小しています"
                   >
-                    （大編成のため実際は{Math.round(notationSizeMultiplier * ensembleAutoFitMultiplier * 100)}%で表示）
+                    （紙面に収めるため実際は{Math.round(effectiveNotationSizeMultiplier * 100)}%で表示）
+                  </span>
+                )}
+                {/* 下限まで縮小してもなお1段がページに収まらない編成への警告（Issue #81）。
+                    黙って読めないサイズにするのではなく、対処（パートを減らす・余白を狭める等）を
+                    促す。 */}
+                {isNotationSizeOverflowingPageBudget && (
+                  <span
+                    style={{ fontSize: 11, color: '#b91c1c', fontWeight: 'bold' }}
+                    title="音符の大きさを最小限まで縮小しても、この編成の1段はページに収まりません。パート数を減らすか、余白・段の間隔を調整してください"
+                  >
+                    ⚠ 最小サイズでも1段が紙に収まりません
                   </span>
                 )}
               </label>
