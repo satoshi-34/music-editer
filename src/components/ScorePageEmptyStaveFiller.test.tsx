@@ -53,12 +53,14 @@ describe('空の段でページを満たす（Issue #41）', () => {
     cleanup();
   });
 
-  it('新規譜面（単旋律・既定8段/ページ）では、実段1つ＋残り容量ぶんの空の段が表示される', () => {
-    const { container } = render(<ScorePage />);
+  it('新規譜面（単旋律）では、実段1つ＋残り容量ぶんの空の段でページが満たされる', () => {
+    const { container } = renderOnScoreTab();
+    // 既定の「段数/ページ」は音符の大きさなどの既定値しだいで変わる（Issue #49・#71）ため、
+    // 数値を直書きせず、実際の設定値から期待値を導く（設定を変えるたびに腐らないようにする）。
+    const systemsPerPage = Number((screen.getByLabelText('段数/ページ') as HTMLInputElement).value);
     const fillers = container.querySelectorAll('.empty-stave-filler');
-    // 既定の「段数/ページ」は8（ScorePageSystemsPerPage.test.tsx と同じ前提）。
-    // 内容が無い新規譜面は実段が最低1つ描かれるため、空の段は 8-1=7 になる。
-    expect(fillers.length).toBe(7);
+    // 内容が無い新規譜面は実段が最低1つ描かれるため、空の段は「段数/ページ - 1」になる。
+    expect(fillers.length).toBe(systemsPerPage - 1);
   });
 
   it('実段1つ＋空の段が複数あるページには、1段専用の特別レイアウト（screen-final-page-single）を適用しない（Issue #68: フィラーがある場合は他ページと同じ固定スロット配置で統一する）', () => {
@@ -72,25 +74,27 @@ describe('空の段でページを満たす（Issue #41）', () => {
     expect(container.querySelectorAll('.empty-stave-filler').length).toBeGreaterThan(1);
   });
 
-  it('ピアノ大譜表に切り替えても、既定4段/ページに対して実段1つ＋空の段3つになる', () => {
+  it('ピアノ大譜表に切り替えても、既定の段数/ページに対して実段1つ＋残りが空の段になる', () => {
     const { container } = renderOnScoreTab();
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
 
+    const systemsPerPage = Number((screen.getByLabelText('段数/ページ') as HTMLInputElement).value);
     const fillers = container.querySelectorAll('.empty-stave-filler');
-    expect(fillers.length).toBe(3);
+    expect(fillers.length).toBe(systemsPerPage - 1);
   });
 
   it('空の段を1つクリックすると、その1つだけが実体化して空の段の総数が1減る', () => {
-    const { container } = render(<ScorePage />);
+    const { container } = renderOnScoreTab();
+    const systemsPerPage = Number((screen.getByLabelText('段数/ページ') as HTMLInputElement).value);
     const before = container.querySelectorAll('.empty-stave-filler');
-    expect(before.length).toBe(7);
+    expect(before.length).toBe(systemsPerPage - 1);
 
     fireEvent.click(before[0]);
 
     const after = container.querySelectorAll('.empty-stave-filler');
-    expect(after.length).toBe(6);
+    expect(after.length).toBe(systemsPerPage - 2);
     // system-stack 全体の段数（実段+空の段）は変わらない（空の段が実段に置き換わっただけ）
-    expect(container.querySelector('.system-stack')?.children.length).toBe(8);
+    expect(container.querySelector('.system-stack')?.children.length).toBe(systemsPerPage);
   });
 
   it('空の段をクリックしても「元に戻す」は有効化されない（Undo履歴を汚さない、＋小節を追加ボタンと同じ方針）', () => {
@@ -107,7 +111,7 @@ describe('空の段でページを満たす（Issue #41）', () => {
 
   it('印刷プレビュー中は空の段が表示されない', async () => {
     const { container } = render(<ScorePage />);
-    expect(container.querySelectorAll('.empty-stave-filler').length).toBe(7);
+    expect(container.querySelectorAll('.empty-stave-filler').length).toBeGreaterThan(0);
 
     const otherTab = screen.getByRole('tab', { name: 'その他' });
     fireEvent.click(otherTab);

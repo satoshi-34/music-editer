@@ -187,6 +187,32 @@ export function measuredSystemHeightPx(partCount: number): number {
   const safeCount = Math.max(1, Math.floor(partCount));
   return computeLayout(safeCount).sysH * SCORE_LAYOUT_RENDER_SCALE;
 }
+
+/**
+ * 段と段の間に「浄書として自然」な余白（px）としてあらかじめ見込む値。「音符の大きさ100%」時。
+ *
+ * measuredSystemHeightPx() は五線が実際に描かれる高さ（SVGの高さ）そのもので、段どうしの
+ * 余白を含まない。これだけを予算で割ると「物理的に詰め込める最大段数」になり、市販譜のような
+ * 行間が失われる。そこで初期表示の推奨段数（段数/ページの既定値）では、1段ぶんの高さに
+ * この余白を足してから予算で割る。
+ *
+ * 値70pxは、単旋律の従来の見積もり定数114px（＝実測44px＋余白70px）に一致する。
+ * かつて楽譜種別ごとに別々の固定値（単旋律114・ピアノ180・四重奏340・編成譜81×パート数+16）を
+ * 使っていたが、これらは種別ごとに含む余白の量がばらばらで（四重奏は実測149.6pxに対し
+ * 190pxもの余白、8パートの編成譜は実測228.8pxに対し435pxもの余白）、パート数が多い譜種ほど
+ * 推奨段数が過剰に少なくなり、新規作成直後にページの下半分が空白になっていた（Issue #71）。
+ * 「余白は段の中身の多さではなく音符の大きさで決まる」という浄書の原則にそろえ、
+ * 全譜種で共通のこの1つの値に統一した（呼び出し側で notationSizeMultiplier を乗じる）。
+ */
+export const SYSTEM_BREATHING_ROOM_PX = 70;
+
+/**
+ * 初期表示の推奨段数を求めるときに使う「1段ぶんが占める高さ」（px、音符の大きさ100%時）。
+ * 実際に描かれる高さ（measuredSystemHeightPx）＋段間の余白（SYSTEM_BREATHING_ROOM_PX）。
+ */
+export function recommendedSystemHeightPx(partCount: number): number {
+  return measuredSystemHeightPx(partCount) + SYSTEM_BREATHING_ROOM_PX;
+}
 // ===== ここまで段のレイアウト計算 =====
 
 /**

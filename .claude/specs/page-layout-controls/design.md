@@ -259,3 +259,78 @@ CSS の `gap` プロパティは負値を受け付けない（無効な宣言と
 - `src/components/ScorePage.tsx`: `screenFinalPageTotalSystems` を追加し、`.screen-final-page-single` の付与条件をこれに変更。
 - `src/components/ScorePageEmptyStaveFiller.test.tsx`: 回帰テストを追加（実段1つ＋空の段が複数あるとき `.screen-final-page-single` が付与されないこと）。
 - `App.css` 側のCSSルール自体（`.screen-final-page-single` の中身）は変更していない。
+
+## 追補: 新規作成直後の初期表示を全譜種で「五線紙品質」にする（Issue #71、2026-07-25）
+
+### 問題
+
+新規作成直後（データが空）の画面が、弦楽四重奏・編成譜で大きく崩れていた。運用者の実機報告では「ユーザーは3秒で使うのをやめる」レベルの第一印象の問題として挙がっていた。
+
+ブラウザ実測（本worktreeを一時ポート5199で起動し、工場出荷状態＝localStorage空で確認）で、次の2つが独立した原因であることを特定した。
+
+**原因1: 推奨段数（段数/ページの初期値）の見積もりが、譜種ごとにばらばらの余白を含んでいた**
+
+`recommendedSystemsPerPage` の基準高さは楽譜種別ごとの固定係数（単旋律114px / ピアノ180px / 四重奏340px / 編成譜は `estimateEnsembleSystemHeightPx` = 81×パート数+16）だった。これらを実測の段の高さ（`measuredSystemHeightPx`）と比べると、含んでいる「段間の余白」の量が種別ごとに全く違う:
+
+| 譜種 | 実測の段の高さ | 旧固定係数 | 差＝含んでいた余白 |
+| --- | --- | --- | --- |
+| 単旋律（1段） | 44px | 114px | 70px |
+| ピアノ（2段） | 79.2px | 180px | 100.8px |
+| 弦楽四重奏（4段） | 149.6px | 340px | 190.4px |
+| 室内オーケストラ（8段） | 228.8px | 664px | 435.2px |
+
+パート数が多い譜種ほど余白を過大に見込むため、推奨段数が過剰に少なくなり、**弦楽四重奏は2段/ページ・室内オーケストラは1段/ページ**になっていた。1段しか入らないページでは空の段（Issue #41）も0個になるため、「1段だけ表示されて残りが空白」という報告そのものの状態になる。
+
+**原因2: 譜表の位置だけが「音符の大きさ」に追従せず、段の中身が段の箱からはみ出していた**
+
+`PianoSystemCanvas.tsx` は Stave を `new Stave(x/s, staveYs[pi]/s, w/s)` として置いていた（`s` は描画倍率）。x/w を `/s` するのは「ページ幅いっぱいに広げる」ためで正しいが、Y まで `/s` すると、`ctx.scale(s,s)` で戻したときに**パート間隔だけが常に `staveSpacing` ピクセルのまま**残る。五線そのものは `s` 倍で縮むため、間隔だけが相対的に広い、間延びした段になっていた。
+
+ブラウザ実測（室内オーケストラ8パート）:
+
+- 音符の大きさ100%: 五線の高さ18px に対しパート間隔60px（3.3倍）
+- 音符の大きさ150%: 五線の高さ27.1px に対しパート間隔**60px のまま**（＝間隔が音符サイズに追従しない証拠）
+
+さらに深刻なのは、SVGの箱の高さが `renderer.resize(W, sysH * s)` で決まる（＝間隔も `s` 倍される前提の値）のに、中身は上記のとおり `s` 倍されない座標に置かれる点。両者が食い違うため中身が箱をはみ出す。実測では viewBox 高さ520単位に対し中身の下端が1081単位（2.08倍）で、**次の段（空の段を含む）へ重なって描画**されていた。原因1で段数が1に潰れていたためこれまで表面化しにくかったが、段数を正すと即座に重なりとして現れる。
+
+### 修正設計
+
+**原因2（描画座標系の統一）** — `PianoSystemCanvas.tsx`
+
+- `new Stave(x/s, staveYs[pi], w/s)` へ変更（Y だけ `/s` しない）。`ctx.scale(s,s)` により譜表間隔も五線も同じ `s` 倍になり、段の実際の高さが `sysH * s`（＝`measuredSystemHeightPx`）と一致する。**既存の高さ見積もり（`measuredSystemHeightPx` / `maxSystemsPerPage`）を変更したのではなく、それらが正しくなるように描画側を合わせた**点が重要。
+- クリック判定のパート境界 `partGapY = staveSpacing / s` も、同じ座標系になるよう `staveSpacing` へ変更した。クリック→音高の判定はすべて `stave.getYForLine()` と `clientToGroup()`（viewBox↔クライアント座標の対応）から導かれているため、Stave の位置を動かせば判定も自動的に追従する（後述のブラウザ実測で確認済み）。
+
+**原因1（推奨段数の基準の統一）** — `measureLayoutUtils.ts` / `ScorePage.tsx`
+
+- `SYSTEM_BREATHING_ROOM_PX = 70` と `recommendedSystemHeightPx(partCount) = measuredSystemHeightPx(partCount) + SYSTEM_BREATHING_ROOM_PX` を追加。「段間の余白は、段に含まれる譜表の数ではなく音符の大きさで決まる」という浄書の原則にそろえ、全譜種で共通の1つの値にした（呼び出し側で `notationSizeMultiplier` を乗じる）。
+- 値70pxは、単旋律の旧固定係数114px（＝実測44px＋余白70px）と一致する値を選んだ。これにより**単旋律5段・ピアノ3段という既存の初期表示（Issue #49 で決めた値）が変わらない**ことを保証している。
+- `ScorePage.tsx` の `legacyRecommendedMaxSystemsPerPage` を `recommendedMaxSystemsPerPage` に置き換え、基準高さを `recommendedSystemHeightPx(partCountForSystemLayout)` にした。用途を失った `BASE_SYSTEM_HEIGHT_PX` は削除。`estimateEnsembleSystemHeightPx` は `computeEnsembleAutoFitMultiplier`（大編成の自動縮小判定、Issue #81 のスコープ）が引き続き使うため残している。
+- ピアノの「4段まで」の上限（`Math.min(4, ...)`）は維持した。大譜表は1段が縦に長く、一律の余白だけでは音符を小さくしたときに詰まって見えるため。
+
+### 結果（工場出荷状態でのブラウザ実測）
+
+| 譜種 | 段数/ページ 修正前→後 | 段の中身が箱に収まるか | 譜表間隔 / 五線の高さ |
+| --- | --- | --- | --- |
+| 単旋律 | 5 → 5（変化なし） | ○ | －（1段） |
+| ピアノ | 3 → 3（変化なし） | ○ | 52.8px / 27.1px |
+| 弦楽四重奏 | 2 → **4** | ○ | 35.2px / 18px |
+| 室内オーケストラ | 1 → **3** | ○ | 26.4px / 18px |
+
+- 4譜種すべてで「実段1つ＋空の段」がページを均等に満たし、隣接する段の描画が重ならないことを、各段の実際の描画範囲（五線の上端・下端）の比較で確認した（重なりペア数0）。
+- SVGの viewBox 高さ520単位に対し中身の下端が521単位（修正前は1081単位）となり、中身が箱にちょうど収まるようになった。
+- ピアノの右手・左手の間隔は52.8pxで、Issue #71 の受入基準「最低30px・過大にしない」を満たす。
+- コンソールエラーなし。既定ズームでページ幅が画面に収まることも確認。
+
+### クリック精度の回帰確認（REGRESSION.md セクションA相当）
+
+描画座標系を変えたため、クリック→音高の対応がずれないことを、未修正の main（一時ポート5198で並行起動）と本ブランチ（5199）で同一手順を実行して比較した。
+
+- 単旋律・五線のB4の線をクリック → 符頭の中心が目標のY座標から**0.3px以内**（main も同じく0.3px以内で、精度は同等）。
+- ピアノ大譜表・**左手（下段）**のB相当の線をクリック → 符頭が左手の段に置かれ（右手に吸われない）、目標Yから0.3px以内。`partGapY` を変更したパート境界の判定が正しく働いていることの確認。
+
+### 影響範囲
+
+- `src/components/PianoSystemCanvas.tsx`: Stave のY座標を `staveYs[pi]/s` → `staveYs[pi]` に変更。クリック判定の `partGapY` を `staveSpacing / s` → `staveSpacing` に変更。
+- `src/utils/measureLayoutUtils.ts`: `SYSTEM_BREATHING_ROOM_PX` と `recommendedSystemHeightPx()` を追加。
+- `src/components/ScorePage.tsx`: `legacyRecommendedMaxSystemsPerPage` を `recommendedMaxSystemsPerPage`（実測＋共通余白ベース）へ置き換え、`BASE_SYSTEM_HEIGHT_PX` と `estimateEnsembleSystemHeightPx` の import を削除。
+- `src/components/ScoreInitialViewQuality.test.tsx`: 新規。譜種横断の初期表示の不変条件（段の中身が箱に収まる／譜表間隔が極端に広くない／推奨段数の基準が全譜種共通／4譜種とも空の段でページが満たされあふれ警告が出ない）を固定。
+- `src/components/ScorePageEmptyStaveFiller.test.tsx`: 空の段の個数を直書き（7個・3個。Issue #49 以前の既定8段/ページ時代の値で、main でも失敗していた）から「実際の段数/ページ設定 − 1」を期待値とする形に修正し、既定値が変わっても腐らないようにした。
