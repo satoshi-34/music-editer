@@ -246,6 +246,30 @@ MuseScore 風の **小節幅の自動割り付け** と、**クリック位置�
 
 ## セットアップと起動
 
+### 🖥️ 新しいマシンでのセットアップ（要点・ここだけ読めば動く）
+
+このプロジェクトは、**ホストに Node.js をインストールしなくても** 開発・動作確認を始められます。必要なのは [Docker Desktop](https://www.docker.com/products/docker-desktop/) だけです（DB や `.env` などの追加設定はありません）。
+
+```bash
+git clone https://github.com/satoshi-34/music-editer.git
+cd music-editer
+docker compose up -d
+```
+
+- 初回は `Dockerfile` のビルド（`npm ci --ignore-scripts`）が走ります。ビルド時にイメージ内へ入った `node_modules` は、`docker-compose.yml` の名前付きボリューム `node_modules` が空の状態で初めてマウントされるときに Docker が自動でコピーするため、`docker compose up` だけで依存インストールまで完了します（手動で `npm ci` を打つ必要はありません。実機で再現確認済み）
+- コンテナ名は `docker-compose.yml` で `music-editer-dev` に固定しています。夜間の自動開発ルーチンが `docker exec` でこの名前を直接参照するため、勝手な名前に変えないでください（理由は `docker-compose.yml` のコメントを参照）
+- 起動確認: ブラウザで http://localhost:5173 を開く
+
+ホストに Node.js が無い場合、テスト・lint・build はコンテナ経由で実行します。
+
+```bash
+docker exec music-editer-dev npx vitest --run src   # ユニットテスト（src配下のみ）
+docker exec music-editer-dev npm run lint:ratchet    # lint（基準値を超えていないか）
+docker exec music-editer-dev npm run build           # 型チェック + 本番ビルド
+```
+
+`docker compose up`（フォアグラウンド）で起動していてコンテナ名を直接使いたくない場合は、`docker compose exec app <コマンド>` でも同じです（`app` は `docker-compose.yml` のサービス名）。
+
 ### 🐳 Docker（推奨）
 ```bash
 git clone https://github.com/satoshi-34/music-editer.git
@@ -310,6 +334,8 @@ npx vitest --run src   # ユニットテスト（src 配下のみ。worktree を
 npm run lint           # lint の内容を確認する
 npm run lint:ratchet   # lint エラー件数が増えていないかを確認する
 ```
+
+ホストに Node.js が無い（Docker のみの）マシンでは、上記コマンドの頭に `docker exec music-editer-dev` を付けて実行します。例は「新しいマシンでのセットアップ」を参照してください。
 
 `lint:ratchet` は「ラチェット（逆戻り防止の爪車）」方式のチェックです。このプロジェクトには長年の蓄積で数百件の lint エラーがあり、「ゼロになるまで通さない」運用が現実的ではありません。そこで `scripts/lint-baseline.json` に現在の件数を基準値として記録しておき、
 
