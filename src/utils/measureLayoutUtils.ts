@@ -75,12 +75,32 @@ export const PAGE_MARGIN_VERTICAL_MAX_MM = 25;
 export const PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM = 2;
 export const DEFAULT_PAGE_MARGIN_TOP_MM = DEFAULT_PAGE_SIDE_MARGIN_MM;
 export const DEFAULT_PAGE_MARGIN_BOTTOM_MM = DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM;
+// 「段の間隔」（段と段の間の縦間隔）スライダーの可動範囲。
+// ★調整するならここが正本★ — この2定数を変えるだけで、
+//   1) 楽譜設定タブのスライダーの min/max 属性（ScorePage.tsx）
+//   2) 段ごとの「間隔 −/＋」オーバーライドのクランプ（ScorePage.tsx、同じ範囲を共有）
+//   3) 初期値プリセットの読み込み時の妥当性チェック（settingsProfile.ts の範囲検査）
+// のすべてが追従する。個別のファイルに数値を直書きしないこと（二重管理の禁止）。
+// 上限は 30→50 に拡大済み（2026-07-27、運用者要望）。下限 −30 は「詰めすぎると段が
+// 物理的に重なる」ため据え置き。上限を大きくしすぎると1ページに入る段数の上限
+// （maxSystemsPerPage、README「段数/ページ上限との連動」参照）が減っていき、
+// 極端な値では1ページ1段になる点に注意（計算式は自動追従するため壊れはしない）。
 export const SYSTEM_ROW_GAP_MIN_PX = -30;
-export const SYSTEM_ROW_GAP_MAX_PX = 30;
+export const SYSTEM_ROW_GAP_MAX_PX = 50;
 // 「パート間隔」（段内の譜表間の縦間隔、Issue #90）のユーザー調整幅。自動計算値
-// （staveSpacingForPartCount）への加算補正として使う。既定0は「自動計算のまま」を意味する。
+// （staveSpacingForPartCount: 単旋律/ピアノ/四重奏=80、5パート以上=60、ネイティブ単位）
+// への加算補正として使う。既定0は「自動計算のまま」を意味する。
+// ★調整するならここが正本★ — この3定数を変えるだけで、
+//   1) その他タブ「パート間隔」スライダーの min/max（ScorePage.tsx）
+//   2) 初期値プリセット読み込み時の範囲検査（settingsProfile.ts）
+//   3) 実描画・段高見積もりのクランプ（computeLayout → MIN_STAVE_SPACING_PX 下限）
+// が追従する。上限は 30→50 に拡大済み（2026-07-27、運用者要望）。
+// 下限 −20 は「補正後も MIN_STAVE_SPACING_PX(=30) を下回らない」クランプと併せて、
+// ピアノの右手/左手が音符ごと衝突しない安全圏に収めるための値なので据え置き。
+// 上限を広げるとパート間隔ぶん段が高くなり、段数/ページ上限・編成譜の自動縮小fit
+// （ensembleAutoFitMultiplier）も自動で追従する（README「パート間隔」の節を参照）。
 export const PART_SPACING_OFFSET_MIN_PX = -20;
-export const PART_SPACING_OFFSET_MAX_PX = 30;
+export const PART_SPACING_OFFSET_MAX_PX = 50;
 export const PART_SPACING_OFFSET_DEFAULT_PX = 0;
 
 // 「音符の大きさ」「段の間隔」の楽譜種別ごとの工場出荷既定値（Issue #49）。
