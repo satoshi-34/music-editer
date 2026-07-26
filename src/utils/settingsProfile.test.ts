@@ -57,6 +57,7 @@ const VALID_PROFILE: ScoreSettingsProfile = {
   pageMarginTopMm: 20,
   pageMarginBottomMm: 16,
   systemRowGapPx: 10,
+  partSpacingOffsetPx: 12,
 };
 
 describe('settingsProfile', () => {
@@ -155,6 +156,17 @@ describe('settingsProfile', () => {
     it('measuresPerSystem が範囲外（0や9）なら既定値の4へ戻る', () => {
       expect(parseSettingsProfile(JSON.stringify({ ...VALID_PROFILE, measuresPerSystem: 0 })).measuresPerSystem).toBe(4);
       expect(parseSettingsProfile(JSON.stringify({ ...VALID_PROFILE, measuresPerSystem: 9 })).measuresPerSystem).toBe(4);
+    });
+
+    it('partSpacingOffsetPx（Issue #90）: 範囲内の値はそのまま保持され、範囲外・欠損は既定値0へ戻る', () => {
+      expect(parseSettingsProfile(JSON.stringify(VALID_PROFILE)).partSpacingOffsetPx).toBe(12);
+
+      const outOfRange = { ...VALID_PROFILE, partSpacingOffsetPx: 999 };
+      expect(parseSettingsProfile(JSON.stringify(outOfRange)).partSpacingOffsetPx).toBe(0);
+
+      const { partSpacingOffsetPx, ...withoutField } = VALID_PROFILE;
+      void partSpacingOffsetPx;
+      expect(parseSettingsProfile(JSON.stringify(withoutField)).partSpacingOffsetPx).toBe(0);
     });
   });
 

@@ -77,6 +77,11 @@ export const DEFAULT_PAGE_MARGIN_TOP_MM = DEFAULT_PAGE_SIDE_MARGIN_MM;
 export const DEFAULT_PAGE_MARGIN_BOTTOM_MM = DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM;
 export const SYSTEM_ROW_GAP_MIN_PX = -30;
 export const SYSTEM_ROW_GAP_MAX_PX = 30;
+// 「パート間隔」（段内の譜表間の縦間隔、Issue #90）のユーザー調整幅。自動計算値
+// （staveSpacingForPartCount）への加算補正として使う。既定0は「自動計算のまま」を意味する。
+export const PART_SPACING_OFFSET_MIN_PX = -20;
+export const PART_SPACING_OFFSET_MAX_PX = 30;
+export const PART_SPACING_OFFSET_DEFAULT_PX = 0;
 
 // 「音符の大きさ」「段の間隔」の楽譜種別ごとの工場出荷既定値（Issue #49）。
 // 単旋律・ピアノは大きめの表示（150%）を既定にし、見やすさを優先する。
@@ -160,12 +165,25 @@ const FIRST_STAVE_Y = 20;
 const STAVE_SPACING = 80; // 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏用
 const STAVE_SPACING_ENSEMBLE = 60; // 5パート以上の編成譜用（密な既定値）
 const ENSEMBLE_DENSE_SPACING_MIN_PARTS = 5;
+// パート間隔スライダー（Issue #90）で自動値をどこまで詰めても、ピアノ大譜表の
+// 右手/左手のような隣接パートが窮屈にならないための下限（ネイティブ単位）。
+export const MIN_STAVE_SPACING_PX = 30;
 // テスト（PianoSystemCanvasPartSpacing.test.tsx）から直接検証できるよう export する。
 export function staveSpacingForPartCount(n: number): number {
   return n >= ENSEMBLE_DENSE_SPACING_MIN_PARTS ? STAVE_SPACING_ENSEMBLE : STAVE_SPACING;
 }
-export function computeLayout(n: number): { staveYs: number[]; sysH: number; staveSpacing: number } {
-  const staveSpacing = staveSpacingForPartCount(n);
+/**
+ * partSpacingOffsetPx は「パート間隔」スライダー（その他タブ、Issue #90）の値。
+ * 自動計算した staveSpacingForPartCount への加算補正として、段内の全パート境界へ
+ * 一律に適用する（layout-pipeline/design.md 不変条件I3「パート間隔が均一」を
+ * 保つため、境界ごとの個別調整はしない）。MIN_STAVE_SPACING_PX を下回らないよう
+ * クランプする。
+ */
+export function computeLayout(
+  n: number,
+  partSpacingOffsetPx: number = 0
+): { staveYs: number[]; sysH: number; staveSpacing: number } {
+  const staveSpacing = Math.max(MIN_STAVE_SPACING_PX, staveSpacingForPartCount(n) + partSpacingOffsetPx);
   const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * staveSpacing);
   const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20;
   return { staveYs, sysH, staveSpacing };
@@ -183,9 +201,9 @@ export function computeLayout(n: number): { staveYs: number[]; sysH: number; sta
  * （旧 estimateEnsembleSystemHeightPx はパート間隔の変更に追従しない固定係数だったため、
  * 段数/ページの上限が実際より厳しく頭打ちされる不具合の原因になっていた。Issue #38）。
  */
-export function measuredSystemHeightPx(partCount: number): number {
+export function measuredSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0): number {
   const safeCount = Math.max(1, Math.floor(partCount));
-  return computeLayout(safeCount).sysH * SCORE_LAYOUT_RENDER_SCALE;
+  return computeLayout(safeCount, partSpacingOffsetPx).sysH * SCORE_LAYOUT_RENDER_SCALE;
 }
 
 /**
@@ -210,8 +228,8 @@ export const SYSTEM_BREATHING_ROOM_PX = 70;
  * 初期表示の推奨段数を求めるときに使う「1段ぶんが占める高さ」（px、音符の大きさ100%時）。
  * 実際に描かれる高さ（measuredSystemHeightPx）＋段間の余白（SYSTEM_BREATHING_ROOM_PX）。
  */
-export function recommendedSystemHeightPx(partCount: number): number {
-  return measuredSystemHeightPx(partCount) + SYSTEM_BREATHING_ROOM_PX;
+export function recommendedSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0): number {
+  return measuredSystemHeightPx(partCount, partSpacingOffsetPx) + SYSTEM_BREATHING_ROOM_PX;
 }
 // ===== ここまで段のレイアウト計算 =====
 

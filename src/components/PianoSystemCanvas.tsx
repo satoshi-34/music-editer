@@ -802,6 +802,12 @@ type Props = {
    * ハンドラ個別ではなく、SVGコンテナのcaptureフェーズで一括遮断する。
    */
   isPrintPreview?: boolean;
+  /**
+   * 段内の隣接パート間隔への加算補正(px、ネイティブ単位)。「その他」タブの
+   * 「パート間隔」スライダー（Issue #90）から渡される。省略時・0のときは
+   * 従来どおり staveSpacingForPartCount の自動値のまま。
+   */
+  partSpacingOffsetPx?: number;
 };
 
 export default function PianoSystemCanvas({
@@ -821,6 +827,7 @@ export default function PianoSystemCanvas({
   pageMarginSideMm,
   symbolsClickable = false,
   isPrintPreview = false,
+  partSpacingOffsetPx = 0,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -1364,7 +1371,7 @@ export default function PianoSystemCanvas({
     ref.current.innerHTML='';
     ref.current.style.overflow='visible';
 
-    const { staveYs, sysH, staveSpacing } = computeLayout(parts.length);
+    const { staveYs, sysH, staveSpacing } = computeLayout(parts.length, partSpacingOffsetPx);
     const W=ref.current.parentElement?.clientWidth??ref.current.clientWidth??700;
     const renderer=new Renderer(ref.current,Renderer.Backends.SVG);
     // sysH は FIRST_STAVE_Y / STAVE_SPACING という「論理座標（ctx.scale適用前）」で
@@ -4238,7 +4245,7 @@ export default function PianoSystemCanvas({
   // measureWidthEvenness を deps に含め、スライダー操作で即座に再描画されるようにする
   // pageMarginSideMm: 値自体は使わないが、ResizeObserver の発火漏れ対策として
   // 呼び出し元（ScorePage）の余白変更を確実にこの effect へ伝える依存トリガー。
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable]);
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で

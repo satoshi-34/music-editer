@@ -107,6 +107,7 @@ function resolve<T>(auto: T, override: T | undefined): Resolved<T> {
 |---|---|---|---|
 | 段の小節数 | `planSystemMeasureRanges` の貪欲法 | `systemMeasureOverrides[].count` | 絶対小節番号 `startMeasure`（段番号ではない） |
 | 段の間隔 | `systemRowGapPx`（全体設定） | `systemRowGapOverrides[].gapPx`（段ごとの追加分） | 絶対小節番号 `startMeasure` |
+| パート間隔（段内の譜表間） | `staveSpacingForPartCount(partCount)` | `partSpacingOffsetPx`（全体設定、-20〜30px、Issue #90） | localStorageキー（設定全体で1つ。段ごと・パート境界ごとの個別上書きは今回スコープ外） |
 | 休符の位置 | `defaultRestKeyForClef`（音価・クレフごとの標準位置） | 手動で動かした休符のキー（ただし「歴代の既定値集合に含まれない」ことで間接的に判定） | 判定方式が上記2つと異なる（下記参照） |
 | ページ余白・音符の大きさ・段の間隔（全体） | コード上の既定値 `resolveDefaultLayoutForScoreType` | localStorage 保存値 | localStorageキー（設定全体で1つ、要素単位ではない） |
 
@@ -225,3 +226,15 @@ A・B・C・Eはリスクが低く（既存コードと機能的に独立、ま�
 **影響範囲**: `computeEnsembleAutoFitMultiplier` の第3引数は省略可能（既定1）で、既存の呼び出し・テストは変更なしで動く。`ScorePage.tsx` では `ensembleAutoFitMultiplier * notationSizeMultiplier` という直接乗算をしていた箇所（`effectiveRenderScale` / `legacyRecommendedMaxSystemsPerPage` / `maxSystemsPerPage`）を、新設の `effectiveNotationSizeMultiplier`（下限クランプ込み）経由に統一した。
 
 **フェーズHとの関係**: 8章6の式そのものは本Issueで実装済みだが、8章1〜5（段数/ページを結果として求めるトップダウン配置）はまだ未着手（フェーズHの範囲）。フェーズH実装時は、本Issueで追加した `computeEnsembleAutoFitMultiplier` / `resolveEffectiveNotationSizeMultiplier` の呼び出し元が `ScorePage.tsx` の `partCountForSystemLayout` ベースの見積もりから `LayoutTree` ベースの実測へ置き換わる想定（関数のシグネチャ自体は変更不要）。
+
+## 11. Issue #90 実装記録（パート間隔スライダー、4章の上書きカスケードの追加項目）
+
+段内の隣接パート間隔（ピアノの右手/左手・四重奏の4段・編成譜のパート間）を、4章の上書きカスケード「実際に使う値 = ユーザー上書き ?? 自動値」の一項目として追加した。自動値は既存の `staveSpacingForPartCount(partCount)`（単旋律/ピアノ/四重奏=80、5パート以上の編成譜=60）のまま変更せず、その他タブの「パート間隔」スライダー（`partSpacingOffsetPx`、-20〜30px、既定0）を自動値への加算補正として全パート境界へ一律に適用する。フェーズA（`measureLayoutUtils.ts` の `src/utils/layout/` への分割移設）は本Issue着手時点で未着手だったため、既存の `measureLayoutUtils.ts` にそのまま実装した（`computeLayout`/`staveSpacingForPartCount` は今後フェーズAで `partSpacing.ts` へ移設される想定だが、シグネチャ自体は変更不要）。
+
+**実装**:
+1. `measureLayoutUtils.ts`: `computeLayout(n, partSpacingOffsetPx = 0)` が `staveSpacingForPartCount(n) + partSpacingOffsetPx` を `MIN_STAVE_SPACING_PX`（30）でクランプした値を実際の段内間隔として使うようにした。`measuredSystemHeightPx` / `recommendedSystemHeightPx` も同じ第2引数を追加して透過的に伝播させ、`maxSystemsPerPage`（段数/ページの実測上限）がパート間隔の変更へ正しく追従するようにした（不変条件I8の維持）。
+2. 段内の全パート境界へ同じオフセットを一律適用するため、`computeLayout` は境界ごとの個別値を持たず単一の `partSpacingOffsetPx` だけを受け取る。これにより不変条件I3（パート間隔が均一）は実装上自動的に満たされる（境界ごとの上書きは今回スコープ外、4章の表に「今回スコープ外」と明記）。
+3. `PianoSystemCanvas.tsx` に `partSpacingOffsetPx` prop を追加し、`SingleStaff`/`PianoStaff`/`QuartetStaff`/`EnsembleStaff`/`PartExtractionStaff` の各 Staff ラッパーを経由して `ScorePage.tsx` から中継する（`measureWidthEvenness` prop と同じ配線パターン）。
+4. 編成譜の自動縮小fit計算（Issue #81、`computeEnsembleAutoFitMultiplier`/`isNotationSizeStillOverflowing`）は、パート間隔に追従しない固定係数 `estimateEnsembleSystemHeightPx` を内部で使い続けているため、そのままではパート間隔を広げた大編成で自動縮小が効かずページからあふれる恐れがあった。`estimateEnsembleSystemHeightPx` 自体・`computeEnsembleAutoFitMultiplier` の内部実装は変更せず、`ScorePage.tsx` 側で「実測ベースの高さ比（`measuredSystemHeightPx`、offset有無の比。offset=0のときは常に1）」を `desiredMultiplier` へ乗算する形で補正した。offset=0のとき比は必ず1になるため、既存の計算結果と数式的に完全に一致する（受入条件「スライダー0のとき表示が変更前と完全一致」を壊さない）。
+
+**影響範囲**: `computeLayout`/`measuredSystemHeightPx`/`recommendedSystemHeightPx` の新引数はすべて省略可能（既定0）で、既存の呼び出し・テストは変更なしで動く。ピアノの手間程度の最低間隔（`MIN_STAVE_SPACING_PX`=30）は、既存の間隔（80/60）に許容オフセット範囲（-20〜30）を適用しても実際には下限に到達しない値だが、将来オフセット範囲を広げた場合の安全弁として実装している。

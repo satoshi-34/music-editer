@@ -89,8 +89,48 @@ describe('staveSpacingForPartCount / computeLayout（純粋関数）', () => {
   });
 });
 
+describe('computeLayout の partSpacingOffsetPx（Issue #90: パート間隔スライダー）', () => {
+  it('省略時・0のときは従来どおり staveSpacingForPartCount のまま変化しない', () => {
+    expect(computeLayout(4).staveSpacing).toBe(80);
+    expect(computeLayout(4, 0).staveSpacing).toBe(80);
+    expect(computeLayout(12, 0).staveSpacing).toBe(60);
+  });
+
+  it('正のオフセットは自動値へ加算され、負のオフセットは減算される', () => {
+    expect(computeLayout(4, 30).staveSpacing).toBe(110);
+    expect(computeLayout(4, -20).staveSpacing).toBe(60);
+    expect(computeLayout(12, 30).staveSpacing).toBe(90);
+    expect(computeLayout(12, -20).staveSpacing).toBe(40);
+  });
+
+  it('下限（MIN_STAVE_SPACING_PX=30）を下回らないようクランプする', () => {
+    // 単旋律・ピアノ・四重奏（自動値80）に最大のマイナス補正（-20）をかけても60で下限には届かない。
+    expect(computeLayout(2, -20).staveSpacing).toBe(60);
+    // 編成譜（5パート以上、自動値60）に最大のマイナス補正（-20）をかけると40で、これも下限より上。
+    expect(computeLayout(5, -20).staveSpacing).toBe(40);
+  });
+
+  it('任意のパート数・オフセットで、隣接する段のY座標差はすべて等しい（不変条件I3）', () => {
+    for (const n of [1, 2, 4, 5, 8, 12]) {
+      for (const offset of [-20, -10, 0, 15, 30]) {
+        const { staveYs } = computeLayout(n, offset);
+        const diffs = staveYs.slice(1).map((y, i) => y - staveYs[i]);
+        diffs.forEach((d) => expect(d).toBeCloseTo(diffs[0], 6));
+      }
+    }
+  });
+
+  it('オフセットに応じてシステム全体の高さ（sysH）が連続的に変化する', () => {
+    const base = computeLayout(4, 0).sysH;
+    const plus = computeLayout(4, 10).sysH;
+    const minus = computeLayout(4, -10).sysH;
+    expect(plus).toBeGreaterThan(base);
+    expect(minus).toBeLessThan(base);
+  });
+});
+
 describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
-  function renderWithParts(n: number) {
+  function renderWithParts(n: number, partSpacingOffsetPx?: number) {
     const partsConfig = Array.from({ length: n }, () => makePart());
     const utils = render(
       <PianoSystemCanvas
@@ -100,6 +140,7 @@ describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
         partsConfig={partsConfig}
         showInstrumentLabels={false}
         timeSignature={[4, 4]}
+        partSpacingOffsetPx={partSpacingOffsetPx}
       />
     );
     const svg = utils.container.querySelector('svg') as SVGSVGElement;
@@ -130,6 +171,30 @@ describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
     const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
     const diffs = ys.slice(1).map((y, i) => y - ys[i]);
     diffs.forEach((d) => expect(d).toBeCloseTo(diffs[0], 3));
+    expect(Math.abs(diffs[0])).toBeCloseTo(80, 1);
+  });
+
+  it('partSpacingOffsetPx（Issue #90）を指定すると、実際の描画のパート間隔もその分だけ均一に広がる', () => {
+    const svg = renderWithParts(4, 20);
+    const hits = Array.from(
+      svg.querySelectorAll('rect.vf-note-hit[data-measure="0"][data-note="0"]')
+    ) as SVGRectElement[];
+    expect(hits.length).toBe(4);
+
+    const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
+    const diffs = ys.slice(1).map((y, i) => y - ys[i]);
+    diffs.forEach((d) => expect(d).toBeCloseTo(diffs[0], 3));
+    // 従来の80 + オフセット20 = 100
+    expect(Math.abs(diffs[0])).toBeCloseTo(100, 1);
+  });
+
+  it('partSpacingOffsetPx を省略・0にすると、従来どおりの間隔のまま変化しない（回帰防止）', () => {
+    const svg = renderWithParts(4, 0);
+    const hits = Array.from(
+      svg.querySelectorAll('rect.vf-note-hit[data-measure="0"][data-note="0"]')
+    ) as SVGRectElement[];
+    const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
+    const diffs = ys.slice(1).map((y, i) => y - ys[i]);
     expect(Math.abs(diffs[0])).toBeCloseTo(80, 1);
   });
 
