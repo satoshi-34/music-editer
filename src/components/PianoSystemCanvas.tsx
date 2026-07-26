@@ -795,6 +795,13 @@ type Props = {
    * 従来の音符クリック（音符入力・和音追加・選択）を一切妨げない。StaffCanvas.tsx と同じ役割。
    */
   symbolsClickable?: boolean;
+  /**
+   * 印刷プレビュー中（ScorePage の isPrintPreview）は true。
+   * 譜面SVGへのクリック・キーボード編集を丸ごと無効化するために使う
+   * （Issue #88: プレビュー中の編集で段数が変動しレイアウトが崩れる不具合の対策）。
+   * ハンドラ個別ではなく、SVGコンテナのcaptureフェーズで一括遮断する。
+   */
+  isPrintPreview?: boolean;
 };
 
 export default function PianoSystemCanvas({
@@ -813,6 +820,7 @@ export default function PianoSystemCanvas({
   measureWidthEvenness = MEASURE_WIDTH_EVENNESS,
   pageMarginSideMm,
   symbolsClickable = false,
+  isPrintPreview = false,
 }: Props) {
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
@@ -875,6 +883,8 @@ export default function PianoSystemCanvas({
   const [selected, setSelected] = useState<Sel>(null);
   const selRef = useRef<Sel>(null);
   const disRef = useRef(disabled);
+  // 印刷プレビュー中かどうかをrefでも保持する（capture リスナー内で最新値を参照するため）
+  const previewRef = useRef(isPrintPreview);
   const yOffRef = useRef(yOffset);
   const keySignatureRef = useRef<KeySignature>(normalizedKeySignature);
   const notePlayerRef = useRef<NotePlayer | null>(null);
@@ -1039,6 +1049,24 @@ export default function PianoSystemCanvas({
   }, []);
 
   useEffect(()=>{disRef.current=disabled;},[disabled]);
+  useEffect(()=>{previewRef.current=isPrintPreview;},[isPrintPreview]);
+  // 印刷プレビュー中は譜面SVGへのクリック編集を一括で遮断する。
+  // 個々のヒット要素（40箇所超）へ isPrintPreview チェックを足すのではなく、
+  // SVGの親コンテナで capture フェーズのうちに stopPropagation することで、
+  // 描画 useEffect が svg を作り直しても（ref.current 自体は不変なので）効き続ける。
+  useEffect(() => {
+    const container = ref.current;
+    if (!container) return;
+    const blockEditingPointerEvent = (e: Event) => {
+      if (!previewRef.current) return;
+      e.stopPropagation();
+    };
+    const eventNames: (keyof HTMLElementEventMap)[] = ['click', 'mousedown', 'mouseup', 'dblclick'];
+    eventNames.forEach(name => container.addEventListener(name, blockEditingPointerEvent, true));
+    return () => {
+      eventNames.forEach(name => container.removeEventListener(name, blockEditingPointerEvent, true));
+    };
+  }, []);
   useEffect(()=>{yOffRef.current=yOffset;},[yOffset]);
   useEffect(()=>{keySignatureRef.current=normalizedKeySignature;},[normalizedKeySignature]);
   // partsの変更（基本的にない）に追従

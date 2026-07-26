@@ -46,8 +46,31 @@
 
 ### 既知の未対応事項
 
-- 編集UI（音符クリックでの選択・追加編集）自体はプレビュー中も無効化していない。要件では「無効化してよい」という許容表現だったため、実装コストとのバランスから今回は見送った。プレビュー中に誤って音符を編集できてしまう点は、次の改善候補として残る。
 - CSS は共通クラス化ではなく重複定義のため、将来 `@media print` 側だけを修正して `.print-preview` 側の更新を忘れるとプレビューと実際の印刷がずれる可能性がある。修正時は両方のブロックを必ず一緒に見直すこと（本ファイルにその旨を明記）。
+
+## 追補: プレビュー中の譜面編集ロック（Issue #88）
+
+### 問題
+
+印刷プレビューON中に譜面へ音符を追加すると、表示される段数が減り、残った段の間隔が紙面いっぱいに異常に開く不具合が実機で報告された（単旋律・ピアノで再現）。原因は、プレビュー中は print-hidden-system / print-hidden-page が「内容のない末尾の段・ページ」を隠すため、編集で内容境界が動くたびに表示段数が変動し、最終ページ配置ルール（`print-final-page` の `space-between` / `flex-end`）が残った段を引き伸ばす相互作用だった。上の「既知の未対応事項」に記していたとおり、当初はプレビュー中の編集を意図的に無効化していなかったための不具合。
+
+### 修正設計
+
+要件どおり「プレビューは確認モードと割り切り、譜面本体の編集をロックする」方針で対応した。40箇所超あるヒット要素へ個別に `isPrintPreview` チェックを足すのではなく、共通の入口でまとめて遮断する:
+
+- **クリック**: `PianoSystemCanvas.tsx` の SVG コンテナ（`ref` div）に `isPrintPreview` が true のときだけ有効化する capture フェーズの `click`/`mousedown`/`mouseup`/`dblclick` リスナーを1つ追加し、`stopPropagation()` で内部のヒット要素（40箇所超の `addEventListener`）へイベントが一切到達しないようにした。描画 useEffect が SVG を作り直しても `ref.current`（div自体）は不変なので効き続ける。`isPrintPreview` prop は ScorePage → SingleStaff/PianoStaff/QuartetStaff/EnsembleStaff → PianoSystemCanvas と中継する。
+- **キーボード**: ScorePage.tsx にある3つの `window` keydown ハンドラ（音価/休符/声部切り替えショートカット、Cmd+Z/Redo、Cmd+C/V・Delete・Escape・矢印選択・移調）それぞれの入口で `if (isPrintPreview) return;` の早期returnを追加した。Undo/Redoは `handleUndo`/`handleRedo`（キーボードショートカットとツールバーボタンの共通処理）自体に早期returnを入れたため、ボタンからの実行も一箇所で防げる。
+- **データ変更経路の二重化**: Canvasのクリック遮断だけに頼らず、`handleRightHandChange` 等5つの onChange ハンドラと4つの Staff コンポーネントへ渡す `disabled` prop を、既存の `isEditingDisabled`（再生中ロック）とは別の `isScoreEditingLocked = isEditingDisabled || isPrintPreview` で統一した。`isEditingDisabled` 自体は「段ごとの調整コントロール」の表示条件にも使われており、そちらはプレビュー中も操作可能にしたいため変更していない。
+- **「空の段」プレースホルダー**: `emptyFillerRanges`（Issue #41）は既存どおり `isEditingDisabled` ベースで計算されたままにし、プレビュー中もDOM要素自体は残す（既存テスト `ScorePageEmptyStaveFiller.test.tsx` が「クラスは残るがCSSで隠す」前提のため）。クリックによる実体化（`handleEmptyFillerClick`）だけを `isPrintPreview` で早期returnして止めている。
+- **UIフィードバック**: `.print-preview .print-page svg *` へ `cursor: default !important` を当てて編集用カーソルを消し、ツールバー直下に `.print-preview-lock-banner`（「印刷プレビュー中は譜面の編集はできません（余白・間隔などの設定変更は可能です）」）を表示する。印刷（`@media print`）では非表示にする。
+
+### 影響範囲
+
+- `PianoSystemCanvas.tsx`（新規 `isPrintPreview` prop・capture リスナー）
+- `SingleStaff.tsx` / `PianoStaff.tsx` / `QuartetStaff.tsx` / `EnsembleStaff.tsx`（`isPrintPreview` prop の中継）
+- `ScorePage.tsx`（`isScoreEditingLocked` の導入、3つの keydown ハンドラと handleUndo/handleRedo/handleEmptyFillerClick への早期return、ロック帯の表示）
+- `App.css`（カーソル上書き・ロック帯のスタイル）
+- 設定スライダー・段ごとの調整・PDF書出は `isEditingDisabled`（従来の再生中ロック）のみに従うため、プレビュー中も従来どおり動作する（変更なし）。
 
 ## 追補: 末尾の空段・空ページを隠すルールがプレビューに複製されていなかった不具合の修正（Issue #80）
 

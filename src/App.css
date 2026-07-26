@@ -1196,6 +1196,8 @@ button.ghost.active:hover:not(:disabled) {
      ページ末尾の段が次の紙へ押し出されてしまう */
   body { background: #fff !important; margin: 0 !important; }
   .toolbar { display: none !important; }
+  /* プレビュー中の編集ロック帯（Issue #88）も画面専用の案内なので印刷には出さない。 */
+  .print-preview-lock-banner { display: none !important; }
   /* 入力を直すための画面上の警告であり、演奏用の印刷譜には出さない。 */
   .layout-overflow-alert { display: none !important; }
   /* 画面専用の「＋小節を追加」ボタンは編集用UIなので印刷には出さない。 */
@@ -1353,6 +1355,23 @@ button.ghost.active:hover:not(:disabled) {
 .print-preview .layout-overflow-alert { display: none !important; }
 .print-preview .add-measures-ghost-button { display: none !important; }
 .print-preview .empty-stave-filler { display: none !important; }
+/* プレビュー中は譜面編集ができない（Issue #88）ことが見た目でも分かるよう、
+   五線まわりのカーソルを通常の矢印に戻す（編集中はクリック/ドラッグ用のカーソルが出る）。
+   .print-page の外（ツールバー・段調整コントロール）は対象外なので、そちらは従来どおり操作できる。 */
+.print-preview .print-page svg,
+.print-preview .print-page svg * {
+  cursor: default !important;
+}
+/* プレビュー中は編集できないことを知らせる帯（.print-preview-lock-banner。ScorePage.tsx参照） */
+.print-preview-lock-banner {
+  margin: 0;
+  padding: 4px 16px;
+  font-size: 12px;
+  color: #78350f;
+  background: #fef3c7;
+  border-bottom: 1px solid #fde68a;
+  text-align: center;
+}
 /* パディング休符（.vf-padding-rest）は @media print 側と同じ理由（Issue #59）で
    ここでは隠さない。下の「svg path/line を印刷インク色に戻す」ルールが他の
    音符と同様に効いて、画面の薄いグレーとは異なり黒で表示される。 */
