@@ -340,14 +340,14 @@ export default function ScorePage() {
   // レイアウト調整用のコントロール（段の間隔・小節数・ページ余白など）は
   // ツールバー側にあるため、プレビュー中でもそのまま操作できる（要件どおり）。
   const [isPrintPreview, setIsPrintPreview] = useState(false);
+  // パート編集はポップアップブロックの影響を受けないよう、別ウィンドウではなく
+  // ページ内のフローティングパネル（createPortal で document.body 直下へ）として表示する（Issue #66）。
   const [showInstrumentationEditor, setShowInstrumentationEditor] = useState(false);
   // ユーザーが作成したカスタム記号のライブラリと、エディタモーダルの開閉状態
   const [customSymbolDefs, setCustomSymbolDefs] = useState<CustomSymbolDef[]>([]);
   const [showSymbolEditor, setShowSymbolEditor] = useState(false);
-  const [instrumentationEditorWindow, setInstrumentationEditorWindow] = useState<Window | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(180);
   const toolbarRef = useRef<HTMLElement | null>(null);
-  const instrumentationEditorWindowRef = useRef<Window | null>(null);
   const musicXmlInputRef = useRef<HTMLInputElement | null>(null);
 
   const [title, setTitle] = useState('タイトル');
@@ -859,149 +859,12 @@ export default function ScorePage() {
     });
   }, [updateInstrumentationParts]);
 
-  const closeInstrumentationEditorWindow = useCallback(() => {
-    // パート編集は React の画面内に置くのではなく、window.open した別ウィンドウへ
-    // React Portal で中身だけ差し込んでいる。閉じるときはブラウザの Window と
-    // React 側の state/ref の両方を片付けないと、次回開くときに古い Window を参照してしまう。
-    const editorWindow = instrumentationEditorWindowRef.current;
-    instrumentationEditorWindowRef.current = null;
-    setInstrumentationEditorWindow(null);
+  const closeInstrumentationEditor = useCallback(() => {
     setShowInstrumentationEditor(false);
-    if (editorWindow && !editorWindow.closed) {
-      editorWindow.close();
-    }
   }, []);
 
-  const openInstrumentationEditorWindow = useCallback(() => {
-    // 既にパート編集ウィンドウが開いていれば、新規作成せず前面に出す。
-    // 毎回 window.open すると同じ編集UIが複数できて、どちらが本物か分かりづらくなるため。
-    const existingWindow = instrumentationEditorWindowRef.current;
-    if (existingWindow && !existingWindow.closed) {
-      existingWindow.focus();
-      setShowInstrumentationEditor(true);
-      setInstrumentationEditorWindow(existingWindow);
-      return;
-    }
-
-    // 空の別ウィンドウを作り、その body に React Portal 用の root div を置く。
-    // 別ウィンドウは親画面の CSS を自動では共有しないので、
-    // 最低限必要なスタイルをこのあと style タグとして流し込む。
-    const nextWindow = window.open('', 'my-music-app-instrumentation-editor', 'width=1200,height=680,left=80,top=80');
-    if (!nextWindow) {
-      // ブラウザ設定でポップアップがブロックされた場合。
-      // 例外にせず、ボタンを押しても何も壊れない状態にしておく。
-      return;
-    }
-
-    nextWindow.document.title = 'パート編集';
-    nextWindow.document.body.innerHTML = '<div id="instrumentation-editor-root"></div>';
-    nextWindow.document.body.style.margin = '0';
-    nextWindow.document.body.style.background = '#f8fafc';
-    nextWindow.document.body.style.fontFamily = window.getComputedStyle(document.body).fontFamily;
-
-    // Portal 先のウィンドウは CSS Modules や親 document の stylesheet を持たない。
-    // そのため、パート編集UIで実際に使うクラスだけを小さくコピーしている。
-    // 将来デザインを変えるときは、親画面の CSS とここを両方確認すること。
-    const style = nextWindow.document.createElement('style');
-    style.textContent = `
-      * { box-sizing: border-box; }
-      body { color: #3f3f46; font-size: 12px; }
-      button, input, select { font: inherit; }
-      button.ghost {
-        background: #fff;
-        border: 1px solid #cbd5e1;
-        color: #1f2937;
-        cursor: pointer;
-      }
-      button.ghost:disabled {
-        opacity: .45;
-        cursor: not-allowed;
-      }
-      .compact-button {
-        padding: 4px 7px;
-        border-radius: 6px;
-        font-size: 12px;
-        line-height: 1.2;
-      }
-      .icon-button {
-        width: 28px;
-        padding-inline: 0;
-      }
-      .instrumentation-editor-window {
-        min-height: 100vh;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        background: #fff;
-        padding: 12px;
-      }
-      .instrumentation-editor-titlebar {
-        position: sticky;
-        top: 0;
-        z-index: 2;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        background: #fff;
-        border-bottom: 1px solid #e5e7eb;
-        padding-bottom: 8px;
-      }
-      .instrumentation-editor-title {
-        font-size: 14px;
-        font-weight: 700;
-        color: #111827;
-      }
-      .instrumentation-editor-meta {
-        margin-top: 2px;
-        font-size: 11px;
-        color: #6b7280;
-      }
-      .instrumentation-editor-actions {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        flex: 0 0 auto;
-      }
-      .instrumentation-part-list {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        overflow: auto;
-        padding-right: 4px;
-      }
-      .instrumentation-part-row {
-        display: grid;
-        grid-template-columns: 28px 28px minmax(92px, 140px) minmax(52px, 72px) 74px 70px minmax(64px, 100px) 82px 96px minmax(72px, 90px) 120px 48px;
-        gap: 4px;
-        align-items: center;
-        width: max-content;
-        min-width: min(100%, 1060px);
-        border: 1px solid #d4d4d8;
-        border-radius: 6px;
-        background: #fff;
-        padding: 4px;
-      }
-      .instrumentation-part-row input,
-      .instrumentation-part-row select {
-        min-width: 0;
-        border: 1px solid #d4d4d8;
-        border-radius: 5px;
-        padding: 4px 5px;
-        font-size: 12px;
-        background: #fff;
-      }
-    `;
-    nextWindow.document.head.appendChild(style);
-    nextWindow.addEventListener('beforeunload', () => {
-      instrumentationEditorWindowRef.current = null;
-      setInstrumentationEditorWindow(null);
-      setShowInstrumentationEditor(false);
-    });
-    instrumentationEditorWindowRef.current = nextWindow;
-    setInstrumentationEditorWindow(nextWindow);
+  const openInstrumentationEditor = useCallback(() => {
     setShowInstrumentationEditor(true);
-    nextWindow.focus();
   }, []);
 
   const handlePlay = useCallback(async () => {
@@ -3261,9 +3124,9 @@ export default function ScorePage() {
 
   useEffect(() => {
     if (scoreType !== 'ensemble') {
-      closeInstrumentationEditorWindow();
+      closeInstrumentationEditor();
     }
-  }, [closeInstrumentationEditorWindow, scoreType]);
+  }, [closeInstrumentationEditor, scoreType]);
 
   // 「音符・休符」タブにいる間だけ、選択中ツールを lastNotesToolRef に記録しておく。
   // タブを切り替えて戻ってきたときにこの値を復元する（上の handleToolbarTabChange 参照）。
@@ -3272,13 +3135,6 @@ export default function ScorePage() {
       lastNotesToolRef.current = tool;
     }
   }, [activeToolbarTab, tool]);
-
-  useEffect(() => () => {
-    const editorWindow = instrumentationEditorWindowRef.current;
-    if (editorWindow && !editorWindow.closed) {
-      editorWindow.close();
-    }
-  }, []);
 
   // タブを切り替えるときのハンドラ。
   // 「演奏記号」タブなどで「途中テンポ変更」のような編集オーバーレイ系ツールを選んだまま
@@ -3551,9 +3407,9 @@ export default function ScorePage() {
                   className={`ghost compact-button${showInstrumentationEditor ? ' active' : ''}`}
                   onClick={() => {
                     if (showInstrumentationEditor) {
-                      closeInstrumentationEditorWindow();
+                      closeInstrumentationEditor();
                     } else {
-                      openInstrumentationEditorWindow();
+                      openInstrumentationEditor();
                     }
                   }}
                   aria-expanded={showInstrumentationEditor}
@@ -4049,12 +3905,16 @@ export default function ScorePage() {
         />
       )}
 
-      {scoreType === 'ensemble' && showInstrumentationEditor && instrumentationEditorWindow && !instrumentationEditorWindow.closed && createPortal(
+      {scoreType === 'ensemble' && showInstrumentationEditor && createPortal(
         <section
           id="instrumentation-editor-window"
           className="instrumentation-editor-window"
           role="dialog"
           aria-label="編成パート編集"
+          // document.body 直下へ createPortal するため、.app-root の
+          // --toolbar-h（ページ拡縮の transform コンテキストの外）を継承できない。
+          // 自分自身に同じ値を持たせて、fixed 位置がツールバー高さに追従するようにする。
+          style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
         >
           <div className="instrumentation-editor-titlebar">
             <div>
@@ -4070,7 +3930,7 @@ export default function ScorePage() {
               <button
                 type="button"
                 className="ghost compact-button icon-button"
-                onClick={closeInstrumentationEditorWindow}
+                onClick={closeInstrumentationEditor}
                 aria-label="パート編集を閉じる"
                 title="閉じる"
               >
@@ -4197,7 +4057,7 @@ export default function ScorePage() {
             ))}
           </div>
         </section>,
-        instrumentationEditorWindow.document.getElementById('instrumentation-editor-root') ?? instrumentationEditorWindow.document.body
+        document.body
       )}
 
       <div className="paper-rail">
