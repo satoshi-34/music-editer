@@ -74,6 +74,8 @@ type Props = {
    */
   emptyFillerRanges?: SystemMeasureRange[];
   onEmptyFillerClick?: (index: number) => void;
+  // 印刷プレビュー中は true。PianoSystemCanvas 側のコメント参照（Issue #88）。
+  isPrintPreview?: boolean;
 };
 
 export default function SingleStaff({
@@ -103,6 +105,7 @@ export default function SingleStaff({
   systemGapOverridesPx,
   emptyFillerRanges,
   onEmptyFillerClick,
+  isPrintPreview = false,
 }: Props) {
   const scoreData = data ?? [];
   const handleChange = onChange ?? (() => {});
@@ -151,6 +154,7 @@ export default function SingleStaff({
               pageMarginSideMm={pageMarginSideMm}
               finalMeasureIndex={finalMeasureIndex}
               symbolsClickable={symbolsClickable}
+              isPrintPreview={isPrintPreview}
             />
           </div>
         );

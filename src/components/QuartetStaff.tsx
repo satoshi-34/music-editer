@@ -65,6 +65,8 @@ type Props = {
    */
   emptyFillerRanges?: SystemMeasureRange[];
   onEmptyFillerClick?: (index: number) => void;
+  // 印刷プレビュー中は true。PianoSystemCanvas 側のコメント参照（Issue #88）。
+  isPrintPreview?: boolean;
 };
 
 export default function QuartetStaff({
@@ -92,6 +94,7 @@ export default function QuartetStaff({
   systemGapOverridesPx,
   emptyFillerRanges,
   onEmptyFillerClick,
+  isPrintPreview = false,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
@@ -132,6 +135,7 @@ export default function QuartetStaff({
             pageMarginSideMm={pageMarginSideMm}
             finalMeasureIndex={finalMeasureIndex}
             symbolsClickable={symbolsClickable}
+            isPrintPreview={isPrintPreview}
           />
           </div>
         );

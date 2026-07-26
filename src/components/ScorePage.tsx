@@ -1238,6 +1238,12 @@ export default function ScorePage() {
   }, []);
 
   const isEditingDisabled = playbackState === 'playing';
+  // 印刷プレビュー中も譜面編集を止める（Issue #88）。isEditingDisabled は「段ごとの
+  // 調整コントロール」の表示条件（4349行目付近）にも使われており、そちらは
+  // プレビュー中も操作可能にしたいので isEditingDisabled 自体は変えず、
+  // 譜面データの変更経路（onChange系ハンドラ・Canvasへのdisabled prop）だけを
+  // 追加でロックする専用フラグを分けて持つ。
+  const isScoreEditingLocked = isEditingDisabled || isPrintPreview;
 
   // スコアデータが変わるたびに currentScoreRef を最新に保つ
   useEffect(() => {
@@ -1369,6 +1375,9 @@ export default function ScorePage() {
 
   // Undo: 履歴から1つ前の状態を取り出して適用する（キーボードショートカットとボタンの共通処理）
   const handleUndo = useCallback(() => {
+    // プレビュー中は譜面を変えたくないので、Undoも止める（Issue #88）。
+    // キーボードショートカットとツールバーのボタンの両方がここを通るので、ここ1箇所でよい。
+    if (isPrintPreview) return;
     const { history, future, snapshot } = undoHistory(
       historyStack.current,
       futureStack.current,
@@ -1379,10 +1388,12 @@ export default function ScorePage() {
     futureStack.current = future;
     applySnapshot(snapshot);
     setHistoryVersion(v => v + 1);
-  }, [applySnapshot]);
+  }, [applySnapshot, isPrintPreview]);
 
   // Redo: 未来スタックから1つ取り出して適用する（キーボードショートカットとボタンの共通処理）
   const handleRedo = useCallback(() => {
+    // Undoと同じ理由でプレビュー中は止める（Issue #88）。
+    if (isPrintPreview) return;
     const { history, future, snapshot } = redoHistory(
       historyStack.current,
       futureStack.current,
@@ -1393,7 +1404,7 @@ export default function ScorePage() {
     futureStack.current = future;
     applySnapshot(snapshot);
     setHistoryVersion(v => v + 1);
-  }, [applySnapshot]);
+  }, [applySnapshot, isPrintPreview]);
 
   const canUndo = historyVersion >= 0 && historyStack.current.length > 0;
   const canRedo = historyVersion >= 0 && futureStack.current.length > 0;
@@ -1407,7 +1418,7 @@ export default function ScorePage() {
   }, []);
 
   const handleRightHandChange = useCallback((data: MeasureData[]) => {
-    if (isEditingDisabled) return;
+    if (isScoreEditingLocked) return;
     const previousData = currentScoreRef.current.rightHandData;
     // 実質的な変更がない場合はスキップする。
     // キャンバスはページ範囲まで末尾に空小節を補って通知してくるため、
@@ -1427,10 +1438,10 @@ export default function ScorePage() {
     currentScoreRef.current = { ...currentScoreRef.current, rightHandData: data };
     setRightHandData(data);
     markMeasureEdited(previousData, data);
-  }, [isEditingDisabled, pushHistory, markMeasureEdited]);
+  }, [isScoreEditingLocked, pushHistory, markMeasureEdited]);
 
   const handleLeftHandChange = useCallback((data: MeasureData[]) => {
-    if (isEditingDisabled) return;
+    if (isScoreEditingLocked) return;
     const previousData = currentScoreRef.current.leftHandData;
     if (isSameScoreIgnoringPadding(previousData, data)) {
       currentScoreRef.current = { ...currentScoreRef.current, leftHandData: data };
@@ -1441,7 +1452,7 @@ export default function ScorePage() {
     currentScoreRef.current = { ...currentScoreRef.current, leftHandData: data };
     setLeftHandData(data);
     markMeasureEdited(previousData, data);
-  }, [isEditingDisabled, pushHistory, markMeasureEdited]);
+  }, [isScoreEditingLocked, pushHistory, markMeasureEdited]);
 
   // 単旋律モード用（後方互換）
   const handleScoreDataChange = useCallback((data: MeasureData[]) => {
@@ -1449,7 +1460,7 @@ export default function ScorePage() {
   }, [handleRightHandChange]);
 
   const handleQuartetPartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
-    if (isEditingDisabled) return;
+    if (isScoreEditingLocked) return;
     const previousData = currentScoreRef.current.quartetParts[partIndex];
     // 右手・左手と同じく、パディング差だけの通知は履歴に積まず ref と state だけ揃える
     const paddingOnly = isSameScoreIgnoringPadding(previousData, data);
@@ -1463,10 +1474,10 @@ export default function ScorePage() {
       return next;
     });
     if (!paddingOnly) markMeasureEdited(previousData, data);
-  }, [isEditingDisabled, pushHistory, markMeasureEdited]);
+  }, [isScoreEditingLocked, pushHistory, markMeasureEdited]);
 
   const handleEnsemblePartChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
-    if (isEditingDisabled) return;
+    if (isScoreEditingLocked) return;
     const previousData = currentScoreRef.current.ensembleParts[partIndex];
     const paddingOnly = isSameScoreIgnoringPadding(previousData, data);
     if (!paddingOnly) pushHistory();
@@ -1479,11 +1490,11 @@ export default function ScorePage() {
       return next;
     });
     if (!paddingOnly) markMeasureEdited(previousData, data);
-  }, [isEditingDisabled, pushHistory, markMeasureEdited]);
+  }, [isScoreEditingLocked, pushHistory, markMeasureEdited]);
 
   // staffCount:2（大譜表）パートの2段目（低音部）用。handleEnsemblePartChange と同じ形。
   const handleEnsembleSecondStaffChange = useCallback((partIndex: number) => (data: MeasureData[]) => {
-    if (isEditingDisabled) return;
+    if (isScoreEditingLocked) return;
     const previousData = currentScoreRef.current.ensembleSecondStaffParts[partIndex];
     const paddingOnly = isSameScoreIgnoringPadding(previousData, data);
     if (!paddingOnly) pushHistory();
@@ -1496,7 +1507,7 @@ export default function ScorePage() {
       return next;
     });
     if (!paddingOnly) markMeasureEdited(previousData, data);
-  }, [isEditingDisabled, pushHistory, markMeasureEdited]);
+  }, [isScoreEditingLocked, pushHistory, markMeasureEdited]);
 
   // 現在の全 state から保存用データ（parts + metadata）を組み立てるヘルパー。
   // handleSave / 自動保存 / ファイル書き出しで共通利用する。
@@ -1968,6 +1979,9 @@ export default function ScorePage() {
       '7': { duration: '1',  isRest: false },
     };
     const handler = (e: KeyboardEvent) => {
+      // 印刷プレビュー中は音価/休符/声部切り替えなどの入力ショートカットも
+      // まとめて無効化する（Issue #88: 入口で早期returnする方式）。
+      if (isPrintPreview) return;
       // 入力欄にフォーカスがある場合はショートカットを発動させない
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) return;
@@ -2004,7 +2018,7 @@ export default function ScorePage() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [isPrintPreview]);
 
   // 小節選択コールバック（StaffCanvas / PianoSystemCanvas から呼ばれる）
   // Shift+クリックのとき: 既存の start を維持して end だけ更新し範囲選択する
@@ -2044,6 +2058,9 @@ export default function ScorePage() {
   // Cmd+C/V とEscape による選択解除ハンドラ
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // 印刷プレビュー中はコピー・ペースト・削除・移調・選択操作もまとめて無効化する
+      // （Issue #88: 入口で早期returnする方式）。
+      if (isPrintPreview) return;
       // Escape で選択解除
       if (e.key === 'Escape') {
         setSelectedMeasures(null);
@@ -2197,7 +2214,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は useEffect より後に宣言されるため deps に入れられない。
   // 代わりに ref で最新値を追跡する（arrow key ハンドラ内で参照）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMeasures, clipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, pushHistory, handleTranspose]);
+  }, [selectedMeasures, clipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, pushHistory, handleTranspose, isPrintPreview]);
 
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
   // ユーザー設定（その他タブの「画面表示のズーム」スライダー、0.5〜1.5）。
@@ -3017,10 +3034,14 @@ export default function ScorePage() {
   // （手前の空き段は自動休符補完の既存仕様に従う）。
   // 楽譜データそのものは変えず、Undo履歴にも積まない（＋小節を追加ボタンと同じ方針）。
   const handleEmptyFillerClick = useCallback((index: number) => {
+    // 印刷プレビュー中は空の段のクリックでも小節を実体化させない（Issue #88）。
+    // 空の段自体はCSS（.print-preview .empty-stave-filler）で非表示にするだけで
+    // DOMからは消さない方針（Issue #41のテスト参照）なので、ここでも念のため止める。
+    if (isPrintPreview) return;
     setExtraEditingMeasures((prev) => (
       prev + lastPageEmptyFillerRanges.slice(0, index + 1).reduce((sum, range) => sum + range.count, 0)
     ));
-  }, [lastPageEmptyFillerRanges]);
+  }, [lastPageEmptyFillerRanges, isPrintPreview]);
 
   const [sharedPageHeight, setSharedPageHeight] = useState<number | null>(null);
 
@@ -3890,6 +3911,14 @@ export default function ScorePage() {
         </div>
       </header>
 
+      {isPrintPreview && (
+        // プレビュー中は譜面編集ができないことを知らせる小さな帯（Issue #88）。
+        // 「設定変更は引き続き可能」と分かるよう文言に補足を添える。
+        <p className="print-preview-lock-banner" role="status">
+          印刷プレビュー中は譜面の編集はできません（余白・間隔などの設定変更は可能です）
+        </p>
+      )}
+
       {showSymbolEditor && (
         <SymbolEditor
           existingDefs={customSymbolDefs}
@@ -4178,6 +4207,7 @@ export default function ScorePage() {
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
+                      isPrintPreview={isPrintPreview}
                     />
                   ) : isPartExtractionActive && scoreType === 'quartet' ? (
                     // パート譜表示（弦楽四重奏）: QuartetStaff は4段固定のレイアウトのため、
@@ -4224,7 +4254,7 @@ export default function ScorePage() {
                       secondStaffPartsData={ensembleSecondStaffParts}
                       onSecondStaffPartChange={instrumentation.parts.map((_, pi) => handleEnsembleSecondStaffChange(pi))}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
-                      disabled={isEditingDisabled}
+                      disabled={isScoreEditingLocked}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
@@ -4235,6 +4265,7 @@ export default function ScorePage() {
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
+                      isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
                     />
@@ -4255,7 +4286,7 @@ export default function ScorePage() {
                       partsData={quartetParts}
                       onPartChange={[0, 1, 2, 3].map(pi => handleQuartetPartChange(pi))}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
-                      disabled={isEditingDisabled}
+                      disabled={isScoreEditingLocked}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
@@ -4265,6 +4296,7 @@ export default function ScorePage() {
                       onKeySignatureChange={handleKeySignatureChange}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
+                      isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
                     />
@@ -4288,7 +4320,7 @@ export default function ScorePage() {
                       onRightHandChange={handleRightHandChange}
                       onLeftHandChange={handleLeftHandChange}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
-                      disabled={isEditingDisabled}
+                      disabled={isScoreEditingLocked}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
@@ -4301,6 +4333,7 @@ export default function ScorePage() {
                       customSymbolDefs={customSymbolDefs}
                       activeVoiceIndex={activeVoice}
                       symbolsClickable={activeToolbarTab === 'symbols'}
+                      isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
                     />
@@ -4321,7 +4354,7 @@ export default function ScorePage() {
                       data={rightHandData}
                       onChange={handleScoreDataChange}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
-                      disabled={isEditingDisabled}
+                      disabled={isScoreEditingLocked}
                       yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
@@ -4333,6 +4366,7 @@ export default function ScorePage() {
                       onMeasureSelect={handleMeasureSelect}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
+                      isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
                     />

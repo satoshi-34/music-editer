@@ -73,6 +73,8 @@ type Props = {
    */
   emptyFillerRanges?: SystemMeasureRange[];
   onEmptyFillerClick?: (index: number) => void;
+  // 印刷プレビュー中は true。PianoSystemCanvas 側のコメント参照（Issue #88）。
+  isPrintPreview?: boolean;
 };
 
 export default function EnsembleStaff({
@@ -104,6 +106,7 @@ export default function EnsembleStaff({
   systemGapOverridesPx,
   emptyFillerRanges,
   onEmptyFillerClick,
+  isPrintPreview = false,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -231,6 +234,7 @@ export default function EnsembleStaff({
             pageMarginSideMm={pageMarginSideMm}
             finalMeasureIndex={finalMeasureIndex}
             symbolsClickable={symbolsClickable}
+            isPrintPreview={isPrintPreview}
           />
           </div>
         );
