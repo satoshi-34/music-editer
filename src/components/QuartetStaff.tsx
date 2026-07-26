@@ -55,6 +55,9 @@ type Props = {
   finalMeasureIndex?: number;
   // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
   symbolsClickable?: boolean;
+  // 段内の隣接パート間隔への加算補正(px)。「その他」タブの「パート間隔」スライダー
+  // （Issue #90）から中継する。省略時・0のときは従来どおり自動値のまま。
+  partSpacingOffsetPx?: number;
   /**
    * 段ごとの間隔（上の段との距離）の追加オフセット(px)。systemRanges と同じ並び順の配列で、
    * 各段の直前に marginTop として乗せる（詳細は SingleStaff.tsx 側のコメント参照）。
@@ -91,6 +94,7 @@ export default function QuartetStaff({
   pageMarginSideMm,
   finalMeasureIndex,
   symbolsClickable,
+  partSpacingOffsetPx,
   systemGapOverridesPx,
   emptyFillerRanges,
   onEmptyFillerClick,
@@ -136,6 +140,7 @@ export default function QuartetStaff({
             finalMeasureIndex={finalMeasureIndex}
             symbolsClickable={symbolsClickable}
             isPrintPreview={isPrintPreview}
+            partSpacingOffsetPx={partSpacingOffsetPx}
           />
           </div>
         );
@@ -174,6 +179,7 @@ export default function QuartetStaff({
             plannedMeasureWidths={range.minimumWidths}
             measureWidthEvenness={measureWidthEvenness}
             pageMarginSideMm={pageMarginSideMm}
+            partSpacingOffsetPx={partSpacingOffsetPx}
           />
         </div>
       ))}

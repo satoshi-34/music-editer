@@ -24,6 +24,9 @@ import {
   PAGE_MARGIN_VERTICAL_MAX_MM,
   SYSTEM_ROW_GAP_MIN_PX,
   SYSTEM_ROW_GAP_MAX_PX,
+  PART_SPACING_OFFSET_MIN_PX,
+  PART_SPACING_OFFSET_MAX_PX,
+  PART_SPACING_OFFSET_DEFAULT_PX,
   resolveDefaultLayoutForScoreType,
 } from './measureLayoutUtils';
 
@@ -76,6 +79,8 @@ export interface ScoreSettingsProfile {
   pageMarginTopMm: number;
   pageMarginBottomMm: number;
   systemRowGapPx: number;
+  /** 段内の隣接パート間隔への加算補正(px)。「パート間隔」スライダー（Issue #90）。 */
+  partSpacingOffsetPx: number;
 }
 
 /** プロファイルのスキーマバージョン。フィールド構成を変えるときは値を上げる。 */
@@ -107,6 +112,7 @@ export function getFactoryDefaultSettingsProfile(): ScoreSettingsProfile {
     pageMarginTopMm: DEFAULT_PAGE_MARGIN_TOP_MM,
     pageMarginBottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
     systemRowGapPx: defaultLayout.systemRowGapPx,
+    partSpacingOffsetPx: PART_SPACING_OFFSET_DEFAULT_PX,
   };
 }
 
@@ -225,6 +231,13 @@ export function parseSettingsProfile(raw: string | null): ScoreSettingsProfile {
     systemRowGapPx: isFiniteNumberInRange(parsed.systemRowGapPx, SYSTEM_ROW_GAP_MIN_PX, SYSTEM_ROW_GAP_MAX_PX)
       ? parsed.systemRowGapPx
       : fallback.systemRowGapPx,
+    partSpacingOffsetPx: isFiniteNumberInRange(
+      parsed.partSpacingOffsetPx,
+      PART_SPACING_OFFSET_MIN_PX,
+      PART_SPACING_OFFSET_MAX_PX
+    )
+      ? parsed.partSpacingOffsetPx
+      : fallback.partSpacingOffsetPx,
   };
 }
 

@@ -87,6 +87,9 @@ import {
   DEFAULT_PAGE_MARGIN_BOTTOM_MM,
   SYSTEM_ROW_GAP_MIN_PX,
   SYSTEM_ROW_GAP_MAX_PX,
+  PART_SPACING_OFFSET_MIN_PX,
+  PART_SPACING_OFFSET_MAX_PX,
+  PART_SPACING_OFFSET_DEFAULT_PX,
   planSystemMeasureRanges,
   estimateEnsembleSystemHeightPx,
   computeEnsembleAutoFitMultiplier,
@@ -180,6 +183,13 @@ const SYSTEM_ROW_GAP_KEY = 'score-system-row-gap';
 // 段ごとの間隔（上の段との距離）を「－／＋」ボタン1回で増減するステップ幅(px)。
 // 全体の「段の間隔」スライダーと同じ範囲（-30〜30px）を、この刻みで細かく調整できるようにする。
 const SYSTEM_ROW_GAP_OVERRIDE_STEP_PX = 4;
+// 「パート間隔」のユーザー設定（その他タブのスライダー、px単位、Issue #90）。
+// 段内の隣接パート（右手/左手・四重奏の4段・編成譜のパート間）の間隔を、
+// 自動計算値（staveSpacingForPartCount）への加算補正として調整する。
+// 「段の間隔」（段と段の間）とは別軸の設定で、段内の全パート境界へ一律に適用する
+// （layout-pipeline/design.md 不変条件I3「パート間隔が均一」参照）。既定値0は
+// 自動計算のまま（従来どおりの見た目）。
+const PART_SPACING_OFFSET_KEY = 'score-part-spacing-offset';
 // mm → px 換算（1mm ≒ 3.7795px、96dpi基準）。CSS の mm 単位と同じ換算率を使う。
 const MM_TO_PX = 96 / 25.4;
 // 段数/ページの上限（maxSystemsPerPage）を動的計算する際に使う、
@@ -2252,6 +2262,16 @@ export default function ScorePage() {
       ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n))
       : resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier;
   });
+  // ユーザー設定（その他タブの「パート間隔」スライダー、-20〜30px、Issue #90）。
+  // 段の間隔と異なり楽譜種別による既定値の違いはなく、常に0（自動計算のまま）が既定。
+  // 下の partCountForSystemLayout・ensembleAutoFitMultiplier から参照するため先に定義する。
+  const [partSpacingOffsetPx, setPartSpacingOffsetPx] = useState<number>(() => {
+    const raw = localStorage.getItem(PART_SPACING_OFFSET_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n)
+      ? Math.max(PART_SPACING_OFFSET_MIN_PX, Math.min(PART_SPACING_OFFSET_MAX_PX, n))
+      : PART_SPACING_OFFSET_DEFAULT_PX;
+  });
   // 現在の楽譜種別で実際に描画される段（五線）の数。PianoSystemCanvas.tsx の
   // computeLayout() に渡す引数（parts.length）と一致させる必要がある
   // （single=1段、piano=右手/左手の2段、quartet=4段、ensemble=編成の総段数。
@@ -2273,9 +2293,27 @@ export default function ScorePage() {
   // 全譜種共通のロジックにする（scoreType による分岐を残さない）。単旋律・ピアノ・
   // 弦楽四重奏は1段の自然高がページ予算に対して十分小さいため、常に1.0が返り
   // 従来の見た目は変わらない。
+  //
+  // estimateEnsembleSystemHeightPx は「パート間隔」スライダー（Issue #90）の
+  // partSpacingOffsetPx を考慮しない固定係数（段あたり81px、旧間隔80で校正）のため、
+  // このままでは間隔を広げた大編成で自動縮小が効かずページからあふれる恐れがある。
+  // estimateEnsembleSystemHeightPx 自体（および computeEnsembleAutoFitMultiplier の
+  // 内部実装）は変更せず、実測ベースの高さ比（measuredSystemHeightPx、offset有無の比）を
+  // desiredMultiplier へ乗算する形で補正する。offset=0 のときは比が常に1になるため、
+  // 既存の計算結果と完全に一致する（既定値での見た目を変えない、というIssue #90の
+  // 受入条件を、この補正でも壊さないようにするため）。
+  const partSpacingHeightRatio = useMemo(() => {
+    const baseHeight = measuredSystemHeightPx(partCountForSystemLayout, 0);
+    if (baseHeight <= 0) return 1;
+    return measuredSystemHeightPx(partCountForSystemLayout, partSpacingOffsetPx) / baseHeight;
+  }, [partCountForSystemLayout, partSpacingOffsetPx]);
   const ensembleAutoFitMultiplier = useMemo(() => (
-    computeEnsembleAutoFitMultiplier(partCountForSystemLayout, ENSEMBLE_AUTO_FIT_BUDGET_PX, notationSizeMultiplier)
-  ), [partCountForSystemLayout, notationSizeMultiplier]);
+    computeEnsembleAutoFitMultiplier(
+      partCountForSystemLayout,
+      ENSEMBLE_AUTO_FIT_BUDGET_PX,
+      notationSizeMultiplier * partSpacingHeightRatio
+    )
+  ), [partCountForSystemLayout, notationSizeMultiplier, partSpacingHeightRatio]);
   // 「音符の大きさ」希望倍率と自動縮小倍率を合成した、実際に描画へ使う実効倍率。
   // 記号が判読できないほど小さくなる編成では下限（MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER）
   // でクランプし、それでも収まらない場合は isNotationSizeOverflowingPageBudget で
@@ -2285,11 +2323,11 @@ export default function ScorePage() {
   ), [notationSizeMultiplier, ensembleAutoFitMultiplier]);
   const isNotationSizeOverflowingPageBudget = useMemo(() => (
     isNotationSizeStillOverflowing(
-      estimateEnsembleSystemHeightPx(partCountForSystemLayout),
+      estimateEnsembleSystemHeightPx(partCountForSystemLayout) * partSpacingHeightRatio,
       effectiveNotationSizeMultiplier,
       ENSEMBLE_AUTO_FIT_BUDGET_PX
     )
-  ), [partCountForSystemLayout, effectiveNotationSizeMultiplier]);
+  ), [partCountForSystemLayout, effectiveNotationSizeMultiplier, partSpacingHeightRatio]);
   // SCORE_LAYOUT_RENDER_SCALE（既定0.44）に音符の大きさ実効倍率を掛けた、実際の
   // レイアウト計算・描画に使う実効スケール。段組み計画（planEffectiveMeasuresPerSystem /
   // planSystemMeasureRanges）と各 Canvas への scale prop の両方に必ずこの値を使い、
@@ -2345,19 +2383,21 @@ export default function ScorePage() {
       ? Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, n))
       : resolveDefaultLayoutForScoreType(scoreType).systemRowGapPx;
   });
-  // 「レイアウトをリセット」: ページ余白・段の間隔（全体・段ごと）の設定をまとめて既定値へ戻す。
+  // 「レイアウトをリセット」: ページ余白・段の間隔（全体・段ごと）・パート間隔の設定をまとめて既定値へ戻す。
   // 段の間隔の既定値は楽譜種別により異なる（ピアノは30px、それ以外は0px。Issue #49）ため、
-  // 現在の scoreType から解決する（ページ余白は種別に依らない固定既定値のまま）。
+  // 現在の scoreType から解決する（ページ余白・パート間隔は種別に依らない固定既定値のまま）。
   const handleResetPageLayout = useCallback(() => {
     const defaultSystemRowGapPx = resolveDefaultLayoutForScoreType(scoreType).systemRowGapPx;
     setPageMarginSideMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
     setPageMarginTopMm(DEFAULT_PAGE_MARGIN_TOP_MM);
     setPageMarginBottomMm(DEFAULT_PAGE_MARGIN_BOTTOM_MM);
     setSystemRowGapPx(defaultSystemRowGapPx);
+    setPartSpacingOffsetPx(PART_SPACING_OFFSET_DEFAULT_PX);
     localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(DEFAULT_PAGE_SIDE_MARGIN_MM));
     localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(DEFAULT_PAGE_MARGIN_TOP_MM));
     localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(DEFAULT_PAGE_MARGIN_BOTTOM_MM));
     localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(defaultSystemRowGapPx));
+    localStorage.setItem(PART_SPACING_OFFSET_KEY, String(PART_SPACING_OFFSET_DEFAULT_PX));
     // 段ごとの間隔の個別上書きは楽譜データ側（保存データ）の状態なので、Undo できるよう
     // pushHistory してからクリアする（他の3設定は画面専用の localStorage 設定のため対象外）。
     if (systemRowGapOverrides.length > 0) {
@@ -2392,9 +2432,9 @@ export default function ScorePage() {
   // パート数の多い弦楽四重奏・編成譜ほど推奨段数が過剰に少なくなり（四重奏2段・
   // 室内オーケストラ1段）、新規作成直後にページの下半分が空白になっていた（Issue #71）。
   const recommendedMaxSystemsPerPage = useMemo(() => {
-    const baseHeight = recommendedSystemHeightPx(partCountForSystemLayout);
+    const baseHeight = recommendedSystemHeightPx(partCountForSystemLayout, partSpacingOffsetPx);
     return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * effectiveNotationSizeMultiplier + systemRowGapPx)));
-  }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx]);
+  }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx, partSpacingOffsetPx]);
   // 段数/ページの実際の上限（実測ベース）。これを超えると段がページからあふれる。
   // PianoSystemCanvas.tsx が実際の描画に使う寸法計算（computeLayout の sysH）を正とし、
   // 実際の描画倍率（SCORE_LAYOUT_RENDER_SCALE）を掛けた measuredSystemHeightPx() で
@@ -2404,9 +2444,9 @@ export default function ScorePage() {
   // ユーザーがこの上限を手動で超えて指定した場合はクランプせず受け付け、
   // 画面にあふれ警告を表示したうえで指定どおり描画する（isSystemsPerPageOverflowing）。
   const maxSystemsPerPage = useMemo(() => {
-    const baseHeight = measuredSystemHeightPx(partCountForSystemLayout);
+    const baseHeight = measuredSystemHeightPx(partCountForSystemLayout, partSpacingOffsetPx);
     return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * effectiveNotationSizeMultiplier + systemRowGapPx)));
-  }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx]);
+  }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx, partSpacingOffsetPx]);
   // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段までを既定とする。大譜表は
   // 右手・左手で1段が縦に長く、段間の余白を一律に見込むだけでは詰まって見えるため、
   // 音符を小さくしたときでも4段を超えないようにしている。
@@ -2478,6 +2518,8 @@ export default function ScorePage() {
     localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(profile.pageMarginBottomMm));
     setSystemRowGapPx(profile.systemRowGapPx);
     localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(profile.systemRowGapPx));
+    setPartSpacingOffsetPx(profile.partSpacingOffsetPx);
+    localStorage.setItem(PART_SPACING_OFFSET_KEY, String(profile.partSpacingOffsetPx));
     setSystemsPerPageSetting(profile.systemsPerPageSetting);
     if (profile.systemsPerPageSetting == null) {
       localStorage.removeItem(SYSTEMS_PER_PAGE_KEY);
@@ -2502,6 +2544,7 @@ export default function ScorePage() {
       pageMarginTopMm,
       pageMarginBottomMm,
       systemRowGapPx,
+      partSpacingOffsetPx,
     };
     saveSettingsProfile(profile);
     showSettingsProfileNotice('現在の設定を既定として保存しました');
@@ -2519,6 +2562,7 @@ export default function ScorePage() {
     pageMarginTopMm,
     pageMarginBottomMm,
     systemRowGapPx,
+    partSpacingOffsetPx,
     showSettingsProfileNotice,
   ]);
 
@@ -3688,11 +3732,33 @@ export default function ScorePage() {
                 />
                 <span style={{ fontSize: 12, color: '#555', width: 30 }}>{systemRowGapPx}px</span>
               </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title="段の中の譜表どうしの間隔です（ピアノの右手/左手、四重奏の4段、編成譜のパート間など）。プラスで広げ、マイナスで詰められます。自動で決まる間隔への補正値で、既定は0（自動計算のまま）です"
+              >
+                パート間隔
+                <input
+                  type="range"
+                  min={PART_SPACING_OFFSET_MIN_PX}
+                  max={PART_SPACING_OFFSET_MAX_PX}
+                  step={1}
+                  value={partSpacingOffsetPx}
+                  onChange={e => {
+                    const v = Math.max(PART_SPACING_OFFSET_MIN_PX, Math.min(PART_SPACING_OFFSET_MAX_PX, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setPartSpacingOffsetPx(v);
+                      localStorage.setItem(PART_SPACING_OFFSET_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{partSpacingOffsetPx}px</span>
+              </label>
               <button
                 type="button"
                 onClick={handleResetPageLayout}
                 style={{ fontSize: 13, padding: '3px 8px' }}
-                title="ページ余白（左右・上下）と段の間隔を既定値へ戻します"
+                title="ページ余白（左右・上下）・段の間隔・パート間隔を既定値へ戻します"
               >
                 レイアウトをリセット
               </button>
@@ -4184,6 +4250,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={partExtractionIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      partSpacingOffsetPx={partSpacingOffsetPx}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printVisibleContentSystems - getPageSystemOffset(i)))}
@@ -4217,6 +4284,7 @@ export default function ScorePage() {
                       systemRanges={p.systemRanges}
                       incomingArcIndex={partExtractionIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      partSpacingOffsetPx={partSpacingOffsetPx}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       measuresPerSystem={measuresPerSystem}
@@ -4241,6 +4309,7 @@ export default function ScorePage() {
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
                       incomingArcIndex={ensembleDisplayIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      partSpacingOffsetPx={partSpacingOffsetPx}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printVisibleContentSystems - getPageSystemOffset(i)))}
@@ -4276,6 +4345,7 @@ export default function ScorePage() {
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      partSpacingOffsetPx={partSpacingOffsetPx}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printVisibleContentSystems - getPageSystemOffset(i)))}
@@ -4307,6 +4377,7 @@ export default function ScorePage() {
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      partSpacingOffsetPx={partSpacingOffsetPx}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printVisibleContentSystems - getPageSystemOffset(i)))}
@@ -4344,6 +4415,7 @@ export default function ScorePage() {
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
+                      partSpacingOffsetPx={partSpacingOffsetPx}
                       pageMarginSideMm={pageMarginSideMm}
                       finalMeasureIndex={finalMeasureIndex}
                       printVisibleSystems={Math.max(0, Math.min(p.systems, printVisibleContentSystems - getPageSystemOffset(i)))}
