@@ -346,6 +346,11 @@ export default function ScorePage() {
   // ユーザーが作成したカスタム記号のライブラリと、エディタモーダルの開閉状態
   const [customSymbolDefs, setCustomSymbolDefs] = useState<CustomSymbolDef[]>([]);
   const [showSymbolEditor, setShowSymbolEditor] = useState(false);
+  // フィードバックボタン（Issue #91）の結果通知。成功は数秒で消えるが、
+  // クリップボード書き込み失敗・ポップアップブロックは見落とされると再試行されないため
+  // 自動では消さず、ユーザーが気づけるまで表示し続ける。
+  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; isError: boolean } | null>(null);
+  const feedbackNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(180);
   const toolbarRef = useRef<HTMLElement | null>(null);
   const musicXmlInputRef = useRef<HTMLInputElement | null>(null);
@@ -1681,6 +1686,70 @@ export default function ScorePage() {
     } catch (err) {
       alert(err instanceof Error ? err.message : 'ファイルの読み込みに失敗しました');
     }
+  };
+
+  // フィードバックボタン（Issue #91）: 現在の譜面データ・楽譜設定・表示状態・アプリの
+  // バージョン（ビルド時に埋めた git sha）をひとつのJSONへまとめてクリップボードへコピーし、
+  // GitHub の新規Issue画面を別タブで開く。
+  //
+  // JSON の中身は handleExportFile（.score.json 書き出し）が使うのと同じ
+  // createSavedScoreData() の結果をそのまま土台にし、そこへ表示状態などの追加情報を
+  // 上乗せするだけにしてある。validateSavedScoreData（src/utils/storage.ts）は既知の
+  // フィールドしか見ないため、余分なフィールド（appVersion・viewState）があっても
+  // 無視されるだけで済み、「フィードバックボタンで作ったJSONをそのまま『ファイルを開く』で
+  // 読み込める」という受入条件を追加の変換なしに満たせる。
+  //
+  // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない
+  // （handleExportFile と同じ理由で通常関数として定義。TDZ 回避）。
+  const handleFeedback = async () => {
+    const { metadata, parts } = buildScoreData();
+    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
+    const feedbackState = {
+      ...scoreData,
+      appVersion: __APP_GIT_SHA__,
+      // 譜面データそのものではなく「今どう見えているか」の表示状態。再現性のヒントとして
+      // 添えるだけで、この情報は「ファイルを開く」では読まれない（読込は既存のScoreData
+      // フィールドだけを見るため）。
+      viewState: {
+        viewZoom,
+        notationSizeMultiplier,
+        measureWidthEvenness,
+        pageMarginSideMm,
+        pageMarginTopMm,
+        pageMarginBottomMm,
+        systemRowGapPx,
+        displayWeight,
+        isPrintPreview,
+      },
+    };
+    const json = JSON.stringify(feedbackState, null, 2);
+
+    if (feedbackNoticeTimerRef.current) clearTimeout(feedbackNoticeTimerRef.current);
+
+    let clipboardOk = true;
+    try {
+      await navigator.clipboard.writeText(json);
+    } catch {
+      clipboardOk = false;
+    }
+
+    // noopener を付けると window.open の戻り値が常に null になりブロック検知ができなくなるため、
+    // 付けずに開いたうえで opener を明示的に切る（リバースタブナビング対策とブロック検知の両立）。
+    const popup = window.open('https://github.com/satoshi-34/music-editer/issues/new?template=feedback.md', '_blank');
+    if (popup) popup.opener = null;
+
+    if (!clipboardOk) {
+      // window.open がブロックされる環境でのURL案内フォールバック（#66と同じ配慮）と同様、
+      // 失敗を無言にせず、次に何をすればいいかまで伝える
+      setFeedbackNotice({ message: '状態JSONのクリップボードへのコピーに失敗しました。ブラウザのクリップボード権限をご確認のうえ、開いたIssue画面へ内容を手動でご記入ください。', isError: true });
+      return;
+    }
+    if (!popup) {
+      setFeedbackNotice({ message: 'ポップアップがブロックされました。次のURLを手動で開いてIssueを作成してください: https://github.com/satoshi-34/music-editer/issues/new?template=feedback.md', isError: true });
+      return;
+    }
+    setFeedbackNotice({ message: '状態一式をクリップボードにコピーしました。開いたIssue画面の「状態JSON」欄に貼り付けてください。', isError: false });
+    feedbackNoticeTimerRef.current = setTimeout(() => setFeedbackNotice(null), 5000);
   };
 
   // 起動時のサイレント復元: 自動保存データがあれば読み込んで続きから編集できるようにする。
@@ -3797,6 +3866,21 @@ export default function ScorePage() {
                 onChange={handleImportFile}
               />
               <button className="ghost" onClick={handleExportPdf} title="ブラウザの印刷ダイアログを開き、「PDFとして保存」を選ぶと楽譜をPDF書出できます">PDF書出 / 印刷</button>
+              <button
+                className="ghost"
+                onClick={handleFeedback}
+                title="現在の譜面データ・設定・表示状態をJSONとしてクリップボードにコピーし、GitHubのIssue下書きを開きます。曲名・歌詞など譜面の内容が含まれ、公開リポジトリへ投稿される点にご注意ください"
+              >
+                フィードバック
+              </button>
+              {feedbackNotice && (
+                <span
+                  role="status"
+                  style={{ fontSize: 12, color: feedbackNotice.isError ? 'crimson' : '#555' }}
+                >
+                  {feedbackNotice.message}
+                </span>
+              )}
               <button
                 type="button"
                 className={`ghost${isPrintPreview ? ' active' : ''}`}
