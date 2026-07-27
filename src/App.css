@@ -83,6 +83,7 @@
   max-width: 100%;
 }
 .toolbar-score-controls,
+.toolbar-layout-controls,
 .toolbar-other-controls {
   display: flex;
   flex-wrap: wrap;
@@ -572,6 +573,7 @@ button.ghost.active:hover:not(:disabled) {
 
   .toolbar-tabs,
   .toolbar-score-controls,
+  .toolbar-layout-controls,
   .toolbar-other-controls {
     width: 100%;
   }

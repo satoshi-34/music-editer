@@ -36,6 +36,11 @@ function openScoreTab() {
   fireEvent.click(scoreTab);
 }
 
+function openLayoutTab() {
+  const layoutTab = screen.getByRole('tab', { name: 'レイアウト' });
+  fireEvent.click(layoutTab);
+}
+
 function getNotationSizeSlider() {
   return screen.getByRole('slider', { name: /音符の大きさ/ }) as HTMLInputElement;
 }
@@ -57,7 +62,7 @@ describe('音符の大きさ・段の間隔の楽譜種別ごとの既定値（I
 
   it('新規ユーザー状態: 単旋律（起動時の既定）は音符150%・段間隔0px', () => {
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     expect(getNotationSizeSlider().value).toBe('150');
     expect(getSystemRowGapSlider().value).toBe('0');
@@ -66,9 +71,9 @@ describe('音符の大きさ・段の間隔の楽譜種別ごとの既定値（I
   it('新規ユーザー状態: ピアノへ切り替えると音符150%・段間隔30pxになる', () => {
     render(<ScorePage />);
     openScoreTab();
-
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
 
+    openLayoutTab();
     expect(getNotationSizeSlider().value).toBe('150');
     expect(getSystemRowGapSlider().value).toBe('30');
   });
@@ -76,19 +81,23 @@ describe('音符の大きさ・段の間隔の楽譜種別ごとの既定値（I
   it('新規ユーザー状態: 弦楽四重奏・編成譜は従来どおり音符100%・段間隔0px', () => {
     render(<ScorePage />);
     openScoreTab();
-
     fireEvent.click(screen.getByRole('button', { name: '弦楽四重奏' }));
+
+    openLayoutTab();
     expect(getNotationSizeSlider().value).toBe('100');
     expect(getSystemRowGapSlider().value).toBe('0');
 
+    openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: '編成譜' }));
+
+    openLayoutTab();
     expect(getNotationSizeSlider().value).toBe('100');
     expect(getSystemRowGapSlider().value).toBe('0');
   });
 
   it('ユーザーが明示的に音符の大きさ・段の間隔を設定した後は、楽譜種別を切り替えても上書きされない', () => {
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     // ユーザーが手動でスライダーを動かす（明示的な設定）
     fireEvent.change(getNotationSizeSlider(), { target: { value: '120' } });
@@ -97,7 +106,10 @@ describe('音符の大きさ・段の間隔の楽譜種別ごとの既定値（I
     expect(getSystemRowGapSlider().value).toBe('10');
 
     // ピアノに切り替えても、ユーザーが設定した値のまま（150%/30pxへは戻らない）
+    openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
+
+    openLayoutTab();
     expect(getNotationSizeSlider().value).toBe('120');
     expect(getSystemRowGapSlider().value).toBe('10');
   });
@@ -105,8 +117,9 @@ describe('音符の大きさ・段の間隔の楽譜種別ごとの既定値（I
   it('「レイアウトをリセット」の段の間隔は楽譜種別ごとの既定値（ピアノは30px）に戻る', () => {
     render(<ScorePage />);
     openScoreTab();
-
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
+
+    openLayoutTab();
     expect(getSystemRowGapSlider().value).toBe('30');
 
     // 段の間隔を手動でずらしてから「レイアウトをリセット」を押す
