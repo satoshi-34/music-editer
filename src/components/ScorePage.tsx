@@ -1894,8 +1894,14 @@ export default function ScorePage() {
     };
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない。
   // 値はタイマー発火時（レンダー後）に読まれるので TDZ の問題はない。
+  //
+  // ここに列挙し漏れた state は「保存対象なのに変更しても自動保存が起動しない」＝
+  // 編集内容の消失になる（Issue #107: ensembleSecondStaffParts の欠落で、編成譜の
+  // 大譜表の下段だけを編集して閉じると復元されなかった）。buildScoreData が読む
+  // state はすべてここに含める必要があり、その不変条件は
+  // ScorePageAutosaveDeps.test.tsx が検証している。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
