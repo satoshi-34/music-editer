@@ -742,7 +742,11 @@ button.ghost.active:hover:not(:disabled) {
 
 .dropdown-overlay {
   position: fixed;
-  top: 0;
+  /* top: 0 だとヘッダー（.toolbar, z-index: 20）より上にこの透明レイヤーが
+     重なり、クリックを奪ってタブ操作ができなくなる（＝ヘッダーが隠れたように
+     見える不具合の原因）。ヘッダー分だけ開始位置を下げて、ヘッダーは
+     常にクリック・視認できるようにする */
+  top: var(--toolbar-h, 110px);
   left: 0;
   right: 0;
   bottom: 0;
@@ -1480,6 +1484,18 @@ svg { animation: none; transition: none; }
   padding: 12px 14px;
   min-width: 220px;
   white-space: nowrap;
+}
+
+.coord-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.coord-panel-header .coord-panel-note {
+  margin: 0;
 }
 
 .coord-panel-note {

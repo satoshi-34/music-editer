@@ -3876,7 +3876,18 @@ export default function ScorePage() {
                   <>
                     <div className="dropdown-overlay" onClick={() => setShowOffsetPanel(false)} />
                     <div className="coord-panel">
-                      <p className="coord-panel-note">高音方向はマイナス、低音方向はプラス</p>
+                      <div className="coord-panel-header">
+                        <p className="coord-panel-note">高音方向はマイナス、低音方向はプラス</p>
+                        <button
+                          type="button"
+                          className="ghost compact-button icon-button"
+                          onClick={() => setShowOffsetPanel(false)}
+                          aria-label="Y補正パネルを閉じる"
+                          title="閉じる"
+                        >
+                          x
+                        </button>
+                      </div>
                       <div className="coord-panel-row">
                         <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>↑</button>
                         <input
