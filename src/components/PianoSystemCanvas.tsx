@@ -2514,7 +2514,7 @@ export default function PianoSystemCanvas({
         if (!cache) return;
         const {
           clefHere, safeEvs, partKeyForAccidental,
-          isMultiVoiceMeasure, renderedVoiceEntries, primaryRenderedVoice, vfNotes,
+          isMultiVoiceMeasure, renderedVoiceEntries, vfNotes,
         } = cache;
         const stave=staveSets[pi][i];
         const score=partsScore[pi]??[];
@@ -2618,16 +2618,24 @@ export default function PianoSystemCanvas({
         }
 
         // クリック判定はすべて「アクティブ声部」の描画済み音符から作る。
-        // 声部1（voiceIndex 0）のときは従来通り primaryRenderedVoice（= vfNotes/safeEvs）が
-        // そのままアクティブ声部になるので、既存の見た目・挙動を壊さない。
-        // 声部2 がアクティブなときは、その声部の vfNotes/sourceEvents に差し替えることで、
-        // 声部1と同じ操作体系（クリック位置への挿入・和音追加・臨時記号・強弱・Delete等）を
-        // 声部2の音符に対しても使えるようにする（vf-hit-voice2 の専用当たり判定・
-        // handleVoice2Click の「選択 or 末尾追記」の簡易実装はここで置き換えて廃止する）。
-        const activeRenderedEntry = renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex)
-          ?? primaryRenderedVoice;
-        const activeVfNotes = activeRenderedEntry.vfNotes;
-        const activeEvs = activeRenderedEntry.sourceEvents;
+        // 声部1（voiceIndex 0）がアクティブなときは renderedVoiceEntries[0] がそのまま
+        // 見つかるので、既存の見た目・挙動を壊さない。声部2 がアクティブなときは、
+        // その声部の vfNotes/sourceEvents に差し替えることで、声部1と同じ操作体系
+        // （クリック位置への挿入・和音追加・臨時記号・強弱・Delete等）を声部2の音符に
+        // 対しても使えるようにする（vf-hit-voice2 の専用当たり判定・handleVoice2Click の
+        // 「選択 or 末尾追記」の簡易実装はここで置き換えて廃止する）。
+        //
+        // Issue #105: アクティブ声部がこの小節にまだ存在しない場合（例: 下声モードで、
+        // まだ下声の音符を1つも入力していない小節）は renderedVoiceEntries に該当
+        // voiceIndex のエントリが無い。以前はここで primaryRenderedVoice（＝声部1）へ
+        // フォールバックしていたため、下声モードのまま声部1の音符をクリックすると
+        // 声部1の編集（選択・和音追加など）になってしまっていた。声部が存在しない
+        // ときは空の声部として扱い、ヒット領域を一切作らない（＝クリックは常に
+        // 背景クリックとして扱われ、この小節にアクティブ声部の音符を新規挿入する）
+        // ことで、声部1側を誤って編集しないようにする。
+        const activeRenderedEntry = renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex);
+        const activeVfNotes = activeRenderedEntry?.vfNotes ?? [];
+        const activeEvs = activeRenderedEntry?.sourceEvents ?? [];
 
         // アクティブ声部の j 番目のイベントを書き換える共通ヘルパー。
         // voiceIndex 0 のときは withVoiceEventsUpdated が measure.events を直接更新するので、

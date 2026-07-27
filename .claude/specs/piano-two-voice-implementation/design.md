@@ -461,3 +461,73 @@ interface MeasureData {
 - テスト: `src/components/PianoSystemCanvasPaddingRest.test.tsx`
   （3拍入力時に `.vf-padding-rest` が1個描画される／編集ヒット領域を持たない／
   4拍ぴったり埋まっている小節には出ない、の3点を確認）
+
+## 追記: 声部が未入力の小節でクリックが声部1へ誤爆する不具合の修正（Issue #105, 2026-07-28）
+
+### 問題
+
+「下声（声部2）を選択した状態で上声（声部1）の音符をクリックすると、声部1側が
+編集されてしまう」という報告があった。上の「アクティブ声部編集への一般化」節で、
+クリックのヒット判定（`.vf-note-hit`）は `activeRenderedEntry.vfNotes` /
+`activeRenderedEntry.sourceEvents`（＝アクティブ声部の描画済み音符）からしか
+作られないよう既に一般化されていたはずで、一見矛盾する報告だった。
+
+原因は `PianoSystemCanvas.tsx` の以下の行にあった:
+
+```ts
+const activeRenderedEntry = renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex)
+  ?? primaryRenderedVoice;
+```
+
+`renderedVoiceEntries` は `getMeasureVoices(data)`（`voiceMeasureUtils.ts`）の結果で、
+この関数は **`measure.voices` が存在しない（＝その小節で声部2をまだ一度も
+入力していない）ときは声部1のエントリ1件だけを返す**（`getMeasureVoices` 冒頭の
+`if (!measure.voices || measure.voices.length === 0) return [{ id: 'voice-1', ... }]`）。
+そのため、アプリ全体としては「下声（声部2）モード」がアクティブでも、まだ声部2の
+データを持たない個々の小節では `renderedVoiceEntries` に `voiceIndex === 1` の
+エントリが存在せず、`.find(...)` が `undefined` を返す。このとき
+`?? primaryRenderedVoice` のフォールバックが効き、**声部1のレンダリング結果
+（`vfNotes`/`sourceEvents`）がそのまま `activeVfNotes`/`activeEvs` になっていた**。
+
+結果として、そうした小節では（下声モードのつもりでも）クリック用のヒット領域
+（`.vf-note-hit`）が声部1の音符から作られ、そこをクリックすると声部1の個別音選択・
+和音追加・臨時記号付与などがそのまま実行されてしまっていた。ピアノ譜は大半の小節が
+「声部2をまだ使っていない」状態から始まるため、実運用ではかなりの頻度で踏む
+バグだった。
+
+### 修正設計
+
+フォールバック先を声部1に固定するのをやめ、**アクティブ声部がこの小節にまだ
+存在しないときは「空の声部」として扱う**ようにした。
+
+```ts
+const activeRenderedEntry = renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex);
+const activeVfNotes = activeRenderedEntry?.vfNotes ?? [];
+const activeEvs = activeRenderedEntry?.sourceEvents ?? [];
+```
+
+- `activeVfNotes` が空配列になることで、個別音符のヒット領域（`.vf-note-hit`）を
+  作る `if (activeVfNotes.length > 0) { ... }` ブロックがまるごとスキップされ、
+  声部1の音符に対するヒット領域は一切作られない。
+- クリックは常に小節背景（`.vf-hit` の `ir`）で受け止められ、`doInsert` が呼ばれる。
+  `doInsert` は `activeEvs.length`（＝0）を初期値に使うため、この小節の
+  アクティブ声部（声部2）へ「小節の先頭に新規音符を追加」という、意図どおりの
+  動作になる。
+- 声部1（`activeVoiceIndex === 0`）は `getMeasureVoices` が単声部小節でも常に
+  声部1のエントリを返す（`voices` が無い小節は `[{id:'voice-1', events: measure.events ?? []}]`
+  を返す）ため、この変更による影響を受けない（従来どおり自分自身のエントリが
+  そのまま見つかる）。
+- `primaryRenderedVoice` はこのクリック判定の文脈では未使用になったため、
+  Pass 3 の分割代入から削除した（Pass 1 側の型定義・null チェックでは引き続き使用）。
+
+### テスト
+
+`src/components/PianoSystemCanvasVoiceClickScope.test.tsx`（新規）:
+- 声部2アクティブ・かつ声部2未入力の小節で、声部1の音符に対する `.vf-note-hit` が
+  1件も作られないこと
+- その状態で小節背景をクリックすると、声部1の `events` は一切変化せず、
+  声部2（`voices[1]`）に新規音符が1件追加されること
+
+修正前のコード（`primaryRenderedVoice` へのフォールバックあり）に対してこの
+テストを実行すると1件目が失敗する（`.vf-note-hit` が声部1の音符から2件作られて
+しまう）ことを確認済み。
