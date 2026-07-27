@@ -181,7 +181,8 @@ const PAGE_MARGIN_BOTTOM_KEY = 'score-page-margin-bottom';
 // 下が余るのと同じ考え方）。既定値 0 は従来どおり間隔なし。
 const SYSTEM_ROW_GAP_KEY = 'score-system-row-gap';
 // 段ごとの間隔（上の段との距離）を「－／＋」ボタン1回で増減するステップ幅(px)。
-// 全体の「段の間隔」スライダーと同じ範囲（-30〜30px）を、この刻みで細かく調整できるようにする。
+// 全体の「段の間隔」スライダーと同じ範囲（SYSTEM_ROW_GAP_MIN_PX〜SYSTEM_ROW_GAP_MAX_PX、
+// 現在 −30〜50px。範囲の正本は measureLayoutUtils.ts）を、この刻みで細かく調整できるようにする。
 const SYSTEM_ROW_GAP_OVERRIDE_STEP_PX = 4;
 // 「パート間隔」のユーザー設定（その他タブのスライダー、px単位、Issue #90）。
 // 段内の隣接パート（右手/左手・四重奏の4段・編成譜のパート間）の間隔を、

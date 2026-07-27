@@ -75,12 +75,12 @@ describe('パート間隔スライダー（Issue #90）', () => {
     expect(localStorageMock.getItem('score-part-spacing-offset')).toBe('15');
   });
 
-  it('範囲（-20〜30px）が正しく設定されている', () => {
+  it('範囲（-20〜50px）が正しく設定されている', () => {
     render(<ScorePage />);
     openScoreTab();
     const slider = getPartSpacingSlider();
     expect(slider.min).toBe('-20');
-    expect(slider.max).toBe('30');
+    expect(slider.max).toBe('50');
   });
 
   it('保存済みの値はリロード（再マウント）後も復元される', () => {
