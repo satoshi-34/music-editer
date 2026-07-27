@@ -37,8 +37,8 @@ window.ResizeObserver = ResizeObserverMock;
 let mockClientWidth = 0;
 const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
 
-function openScoreTab() {
-  fireEvent.click(screen.getByRole('tab', { name: '楽譜設定' }));
+function openLayoutTab() {
+  fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
 }
 
 function getViewZoomSlider(): HTMLInputElement {
@@ -68,7 +68,7 @@ describe('初期ズームの幅フィット', () => {
     mockClientWidth = A4_PAGE_WIDTH_PX * 0.6;
 
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     const slider = getViewZoomSlider();
     await waitFor(() => {
@@ -81,7 +81,7 @@ describe('初期ズームの幅フィット', () => {
     mockClientWidth = A4_PAGE_WIDTH_PX * 3;
 
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     const slider = getViewZoomSlider();
     await waitFor(() => {
@@ -95,7 +95,7 @@ describe('初期ズームの幅フィット', () => {
     mockClientWidth = A4_PAGE_WIDTH_PX * 0.5;
 
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     const slider = getViewZoomSlider();
     // 保存値（120%）がそのまま初期表示され、フィット計算で上書きされないことを確認

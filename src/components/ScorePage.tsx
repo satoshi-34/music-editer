@@ -130,7 +130,7 @@ import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure,
 import { computeFitZoom, VIEW_ZOOM_MIN } from '../utils/viewZoomUtils';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
-type ToolbarTab = 'notes' | 'symbols' | 'score' | 'playback' | 'other';
+type ToolbarTab = 'notes' | 'symbols' | 'score' | 'layout' | 'playback' | 'other';
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 // 「段数/ページ」のユーザー設定（その他タブ）。楽譜データではなく画面設定として保存する
@@ -3284,7 +3284,7 @@ export default function ScorePage() {
     if (tabId === 'notes') {
       setTool(lastNotesToolRef.current);
     } else {
-      // 演奏記号・楽譜設定・再生・音色・その他タブでは、無害な既定ツール（4分音符）に戻す。
+      // 演奏記号・楽譜設定・レイアウト・再生・音色・その他タブでは、無害な既定ツール（4分音符）に戻す。
       // これらのタブではPaletteの音符ボタン自体は表示されないが、tool state は
       // 譜面クリック時の挙動に影響するため、編集オーバーレイを開くようなモードを残さない。
       setTool({ duration: '4', isRest: false });
@@ -3295,6 +3295,7 @@ export default function ScorePage() {
     { id: 'notes', label: '音符・休符' },
     { id: 'symbols', label: '演奏記号' },
     { id: 'score', label: '楽譜設定' },
+    { id: 'layout', label: 'レイアウト' },
     { id: 'playback', label: '再生・音色' },
     { id: 'other', label: 'その他' },
   ];
@@ -3554,8 +3555,6 @@ export default function ScorePage() {
                 </button>
               )}
 
-              {/* ここから下はレイアウト系設定（「その他」タブから移動）。
-                  段組み・幅・拡大縮小・余白など、譜面の見た目に関する設定をまとめている。 */}
               <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
                 段あたり小節数
                 <input
@@ -3605,6 +3604,11 @@ export default function ScorePage() {
                   </span>
                 )}
               </label>
+            </div>
+          )}
+
+          {activeToolbarTab === 'layout' && (
+            <div className="toolbar-section toolbar-layout-controls">
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
                 title="密な小節と疎な小節の幅の差を調節します。0% = 音符量どおりの幅（差が大きい）、100% = 全小節を等幅に。密な小節は詰まります"
@@ -3710,8 +3714,7 @@ export default function ScorePage() {
                   </span>
                 )}
               </label>
-              {/* ページレイアウト系スライダー（余白・段間隔）は1行にまとめて、楽譜設定タブが
-                  横に長くなりすぎないようにしている。挙動は他のスライダーと同じ
+              {/* ページレイアウト系スライダー（余白・段間隔）。挙動は他のスライダーと同じ
                   （localStorage 保存・画面と印刷の両方に反映・既定値は従来と同一）。 */}
               <span className="toolbar-group-label">レイアウト</span>
               <label

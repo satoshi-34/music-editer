@@ -1,6 +1,6 @@
 // src/components/ScorePageSettingsProfile.test.tsx
 // 「譜面設定の初期値プリセット」（issue #39）の統合テスト。
-// 楽譜設定タブの「既定として保存」「工場出荷時に戻す」ボタンと、
+// レイアウトタブの「既定として保存」「工場出荷時に戻す」ボタン（issue #100で楽譜設定タブから移動）と、
 // 新規譜面の作成・起動時（保存済み譜面が無い場合）への反映を確認する。
 // レンダー手法は PrintPreview.test.tsx と同じ ScorePage の直接マウントを使う。
 
@@ -37,6 +37,11 @@ function openScoreTab() {
   fireEvent.click(scoreTab);
 }
 
+function openLayoutTab() {
+  const layoutTab = screen.getByRole('tab', { name: 'レイアウト' });
+  fireEvent.click(layoutTab);
+}
+
 // 「新規作成」ボタンは「その他」タブ（SaveLoadButtons）にあるため、そちらへ切り替えてから押す
 function clickNewScore() {
   fireEvent.click(screen.getByRole('tab', { name: 'その他' }));
@@ -63,6 +68,7 @@ describe('譜面設定の初期値プリセット', () => {
     fireEvent.change(measuresInput, { target: { value: '6' } });
     expect(measuresInput.value).toBe('6');
 
+    openLayoutTab();
     const saveButton = screen.getByRole('button', { name: '既定として保存' });
     fireEvent.click(saveButton);
 
@@ -79,11 +85,14 @@ describe('譜面設定の初期値プリセット', () => {
     render(<ScorePage />);
     openScoreTab();
 
-    const measuresInput = screen.getByRole('spinbutton', { name: '段あたり小節数' }) as HTMLInputElement;
-    fireEvent.change(measuresInput, { target: { value: '7' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: '段あたり小節数' }), { target: { value: '7' } });
+
+    openLayoutTab();
     fireEvent.click(screen.getByRole('button', { name: '既定として保存' }));
 
     // 保存後、別の値に変更しておく（新規作成で保存値に戻ることを確認するため）
+    openScoreTab();
+    const measuresInput = screen.getByRole('spinbutton', { name: '段あたり小節数' }) as HTMLInputElement;
     fireEvent.change(measuresInput, { target: { value: '2' } });
     expect(measuresInput.value).toBe('2');
 
@@ -102,8 +111,9 @@ describe('譜面設定の初期値プリセット', () => {
     const { unmount } = render(<ScorePage />);
     openScoreTab();
 
-    const measuresInput = screen.getByRole('spinbutton', { name: '段あたり小節数' }) as HTMLInputElement;
-    fireEvent.change(measuresInput, { target: { value: '5' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: '段あたり小節数' }), { target: { value: '5' } });
+
+    openLayoutTab();
     fireEvent.click(screen.getByRole('button', { name: '既定として保存' }));
 
     unmount();
@@ -124,8 +134,9 @@ describe('譜面設定の初期値プリセット', () => {
     render(<ScorePage />);
     openScoreTab();
 
-    const measuresInput = screen.getByRole('spinbutton', { name: '段あたり小節数' }) as HTMLInputElement;
-    fireEvent.change(measuresInput, { target: { value: '6' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: '段あたり小節数' }), { target: { value: '6' } });
+
+    openLayoutTab();
     fireEvent.click(screen.getByRole('button', { name: '既定として保存' }));
     expect(window.localStorage.getItem(SETTINGS_PROFILE_STORAGE_KEY)).not.toBeNull();
 
@@ -134,7 +145,8 @@ describe('譜面設定の初期値プリセット', () => {
     expect(await screen.findByText(/初期値プリセットを削除しました/)).toBeInTheDocument();
 
     // リセットボタン自体は「今の画面」を書き換えないため、値はまだ6のまま
-    expect(measuresInput.value).toBe('6');
+    openScoreTab();
+    expect(screen.getByRole('spinbutton', { name: '段あたり小節数' })).toHaveValue(6);
 
     clickNewScore();
 
