@@ -11,6 +11,11 @@
 /* ヘッダーの想定高さ（＝上余白）。実際の値は ScorePage 側で測定して上書きする。 */
 :root { --toolbar-h: 110px; }
 
+/* ツールバー内の主要コントロール（ボタン・トグル・数値入力・セレクト）の共通高さ。
+   既存の .toolbar-chip-button / セレクトの高さ（28px）に他を合わせる（Issue #104）。
+   ここを変えると .toolbar-panel 配下の対象コントロールが一括で変わる。 */
+:root { --toolbar-control-height: 28px; }
+
 /* 画面全体の基本設定（ツールバー高さぶんの余白を最初から確保） */
 .app-root {
   min-height: 100dvh;
@@ -103,7 +108,7 @@
 }
 /* ghost ボタンよりコンパクトなサイズに上書き */
 .toolbar-chip-button {
-  height: 28px;
+  height: var(--toolbar-control-height);
   padding: 0 8px;
   font-size: 12px;
   border-radius: 6px;
@@ -131,7 +136,27 @@
   padding: 2px 6px;
   font-size: 12px;
   background: #fff;
-  height: 28px;
+  height: var(--toolbar-control-height);
+}
+
+/* ツールバー各タブ内のボタン・トグル・数値入力・セレクトの高さを統一する（Issue #104）。
+   個々の要素に高さを書き足す代わりに、ここ1箇所で共通化する。
+   Palette（「音符・休符」「演奏記号」タブの記号ボタン）はアイコン主体で
+   独自の固定サイズ（幅36×高さ30px、隙間なく並べる設計）を持ち、統一すると
+   グリフが窮屈になり崩れるため対象外とする（下の .palette-panel button で除外）。 */
+.toolbar-panel button,
+.toolbar-panel select,
+.toolbar-panel input[type="number"],
+.toolbar-panel input[type="text"] {
+  height: var(--toolbar-control-height);
+  box-sizing: border-box;
+}
+
+/* Palette 内のボタンは inline style で width/height を直接指定しているため
+   上のルールの height 自体は効かないが、box-sizing だけは外側から効いてしまい
+   border 分だけ実際の見た目のサイズが変わってしまう。content-box に戻して防ぐ。 */
+.palette-panel button {
+  box-sizing: content-box;
 }
 .instrumentation-summary {
   display: flex;

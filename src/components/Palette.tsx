@@ -224,7 +224,7 @@ export default function Palette({
 
   if (section === 'notes') {
     return (
-      <div style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div className="palette-panel" style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
         {/* 音符行：選択 + 7音価 + タイ + 臨時記号3 */}
         <div style={ROW_STYLE}>
           {/* 選択ツール */}
@@ -408,7 +408,7 @@ export default function Palette({
 
   // section === 'symbols'
   return (
-    <div style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div className="palette-panel" style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
       {/* 強弱・速度・拍子行 */}
       <div style={ROW_STYLE}>
         {/* テンポ変更 */}
