@@ -30,9 +30,14 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-function openScoreTab() {
-  const scoreTab = screen.getByRole('tab', { name: '楽譜設定' });
-  fireEvent.click(scoreTab);
+// Y補正ボタンは Issue #100（レイアウトタブの新設）で「楽譜設定」から「レイアウト」タブへ
+// 移動した。このテスト（Issue #102）とタブ再編（Issue #100）は別ブランチで並行して進み、
+// どちらも単独では緑だったが、合流後に「楽譜設定タブを開いてもY補正ボタンが無い」
+// という形で main が赤くなった（意味的なコンフリクト。テキストの衝突が無いため
+// マージ時には検出されない）。
+function openLayoutTab() {
+  const layoutTab = screen.getByRole('tab', { name: 'レイアウト' });
+  fireEvent.click(layoutTab);
 }
 
 describe('Y補正ダイアログ（Issue #102）', () => {
@@ -48,7 +53,7 @@ describe('Y補正ダイアログ（Issue #102）', () => {
 
   it('Y補正パネルを開いてもタブ列（編集タブ）が操作可能なまま残る', () => {
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     fireEvent.click(screen.getByRole('button', { name: /Y補正/ }));
     expect(screen.getByLabelText('座標補正値（↓で低音方向）')).toBeInTheDocument();
@@ -62,7 +67,7 @@ describe('Y補正ダイアログ（Issue #102）', () => {
 
   it('「閉じる」ボタンでY補正パネルを閉じられる', () => {
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     fireEvent.click(screen.getByRole('button', { name: /Y補正/ }));
     expect(screen.getByLabelText('座標補正値（↓で低音方向）')).toBeInTheDocument();
@@ -73,7 +78,7 @@ describe('Y補正ダイアログ（Issue #102）', () => {
 
   it('「閉じる」ボタンを押しても座標補正値は保持される', () => {
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     fireEvent.click(screen.getByRole('button', { name: /Y補正/ }));
     fireEvent.change(screen.getByLabelText('座標補正値（↓で低音方向）'), { target: { value: '5' } });
