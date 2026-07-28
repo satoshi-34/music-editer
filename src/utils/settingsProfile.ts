@@ -16,12 +16,18 @@ import {
   DEFAULT_PAGE_SIDE_MARGIN_MM,
   DEFAULT_PAGE_MARGIN_TOP_MM,
   DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+  DEFAULT_TITLE_MARGIN_TOP_MM,
+  DEFAULT_TITLE_MARGIN_BOTTOM_MM,
   NOTATION_SIZE_MULTIPLIER_MIN,
   NOTATION_SIZE_MULTIPLIER_MAX,
   PAGE_MARGIN_SIDE_MIN_MM,
   PAGE_MARGIN_SIDE_MAX_MM,
   PAGE_MARGIN_VERTICAL_MIN_MM,
   PAGE_MARGIN_VERTICAL_MAX_MM,
+  TITLE_MARGIN_TOP_MIN_MM,
+  TITLE_MARGIN_TOP_MAX_MM,
+  TITLE_MARGIN_BOTTOM_MIN_MM,
+  TITLE_MARGIN_BOTTOM_MAX_MM,
   SYSTEM_ROW_GAP_MIN_PX,
   SYSTEM_ROW_GAP_MAX_PX,
   PART_SPACING_OFFSET_MIN_PX,
@@ -78,6 +84,9 @@ export interface ScoreSettingsProfile {
   pageMarginSideMm: number;
   pageMarginTopMm: number;
   pageMarginBottomMm: number;
+  /** タイトルページ（1ページ目）専用の追加余白（Issue #103）。上＝タイトル文字列の前、下＝タイトルブロックと1段目の間。 */
+  titleMarginTopMm: number;
+  titleMarginBottomMm: number;
   systemRowGapPx: number;
   /** 段内の隣接パート間隔への加算補正(px)。「パート間隔」スライダー（Issue #90）。 */
   partSpacingOffsetPx: number;
@@ -111,6 +120,8 @@ export function getFactoryDefaultSettingsProfile(): ScoreSettingsProfile {
     pageMarginSideMm: DEFAULT_PAGE_SIDE_MARGIN_MM,
     pageMarginTopMm: DEFAULT_PAGE_MARGIN_TOP_MM,
     pageMarginBottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+    titleMarginTopMm: DEFAULT_TITLE_MARGIN_TOP_MM,
+    titleMarginBottomMm: DEFAULT_TITLE_MARGIN_BOTTOM_MM,
     systemRowGapPx: defaultLayout.systemRowGapPx,
     partSpacingOffsetPx: PART_SPACING_OFFSET_DEFAULT_PX,
   };
@@ -228,6 +239,16 @@ export function parseSettingsProfile(raw: string | null): ScoreSettingsProfile {
     )
       ? parsed.pageMarginBottomMm
       : fallback.pageMarginBottomMm,
+    titleMarginTopMm: isFiniteNumberInRange(parsed.titleMarginTopMm, TITLE_MARGIN_TOP_MIN_MM, TITLE_MARGIN_TOP_MAX_MM)
+      ? parsed.titleMarginTopMm
+      : fallback.titleMarginTopMm,
+    titleMarginBottomMm: isFiniteNumberInRange(
+      parsed.titleMarginBottomMm,
+      TITLE_MARGIN_BOTTOM_MIN_MM,
+      TITLE_MARGIN_BOTTOM_MAX_MM
+    )
+      ? parsed.titleMarginBottomMm
+      : fallback.titleMarginBottomMm,
     systemRowGapPx: isFiniteNumberInRange(parsed.systemRowGapPx, SYSTEM_ROW_GAP_MIN_PX, SYSTEM_ROW_GAP_MAX_PX)
       ? parsed.systemRowGapPx
       : fallback.systemRowGapPx,

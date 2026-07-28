@@ -334,3 +334,28 @@ CSS の `gap` プロパティは負値を受け付けない（無効な宣言と
 - `src/components/ScorePage.tsx`: `legacyRecommendedMaxSystemsPerPage` を `recommendedMaxSystemsPerPage`（実測＋共通余白ベース）へ置き換え、`BASE_SYSTEM_HEIGHT_PX` と `estimateEnsembleSystemHeightPx` の import を削除。
 - `src/components/ScoreInitialViewQuality.test.tsx`: 新規。譜種横断の初期表示の不変条件（段の中身が箱に収まる／譜表間隔が極端に広くない／推奨段数の基準が全譜種共通／4譜種とも空の段でページが満たされあふれ警告が出ない）を固定。
 - `src/components/ScorePageEmptyStaveFiller.test.tsx`: 空の段の個数を直書き（7個・3個。Issue #49 以前の既定8段/ページ時代の値で、main でも失敗していた）から「実際の段数/ページ設定 − 1」を期待値とする形に修正し、既定値が変わっても腐らないようにした。
+
+## 追補: 「タイトル余白(上)」「タイトル余白(下)」を追加（Issue #103、2026-07-28）
+
+### 問題
+
+タイトルページ（1ページ目）の「タイトル文字列の前の余白」と「タイトルブロックと1段目の間の余白」は、`App.css` の `.page-head { min-height: 18mm; margin-bottom: 6mm; }` に固定値として埋め込まれており、ユーザーが調整する手段が無かった。特に `min-height: 18mm` は「タイトル・サブタイトルの実際の高さに関わらず、1ページ目のヘッダー領域を一定の高さに保つ」ための仕組みで、タイトルが短いときは残りの空白が `.page-head` の下側（＝タイトルの下）に生まれる一方、タイトルの上には常に0の余白しか無いため、上下のバランスをユーザー側で揃えられなかった（Issue本文の「タイトル上下の余白の幅が合わない」はこれを指している）。
+
+### 修正設計
+
+トリアージコメントの指示（#100 のレイアウトタブ新設マージ後に着手、既存の余白スライダー群と同じ作法で実装）に従い、既存の「余白(上)」「余白(下)」（`.claude/specs/page-layout-controls/design.md` 本文および前の追補を参照）と全く同じパターンで実装した。
+
+- **正本の定数**（`src/utils/measureLayoutUtils.ts`）: `TITLE_MARGIN_TOP_MIN_MM` / `TITLE_MARGIN_TOP_MAX_MM` / `TITLE_MARGIN_BOTTOM_MIN_MM` / `TITLE_MARGIN_BOTTOM_MAX_MM`（各0〜30mm）、`DEFAULT_TITLE_MARGIN_TOP_MM`（0）/ `DEFAULT_TITLE_MARGIN_BOTTOM_MM`（6）。既定値は変更前の固定CSS（`padding-top: 0` 相当・`margin-bottom: 6mm`）と一致させ、スライダーを一度も触らなければ見た目が変わらないようにした。
+- **state・永続化**（`ScorePage.tsx`）: `titleMarginTopMm` / `titleMarginBottomMm` を `useState` で持ち、localStorage キー `score-title-margin-top` / `score-title-margin-bottom` へ保存する。既存の「余白(上)/(下)」と異なり、この機能自体が新規追加のため引き継ぐべき旧キーは無い。
+- **タイトルページだけに適用**: `ScorePage.tsx` の `visiblePages.map((p, i) => ...)` ループ内、`<header className="page-head">` に対して `i === 0` のときだけ `page-head--title` 修飾クラスを付与し、`--title-margin-top` / `--title-margin-bottom` の2つのCSSカスタムプロパティをインラインスタイルとして注入する（`i !== 0` の見出し専用ページでは何も注入しない）。既存の「タイトルか、`page-title` か」を切り替える `i === 0` の三項演算子と同じ判定を再利用しており、新しいpropや別のページ判定機構は導入していない。
+- **CSS**（`App.css`）: `.page-head--title { padding-top: var(--title-margin-top, 0mm); margin-bottom: var(--title-margin-bottom, 6mm); }` を追加した。`.page-head--title` は `.page-head` とクラスを重ねて付与するため、2ページ目以降が使う基底の `.page-head { min-height: 18mm; margin-bottom: 6mm; }` は変更していない。フォールバック値（0mm/6mm）も固定CSSと同じにしてあるため、CSS変数が未注入の場合（＝理論上あり得ないが、2ページ目以降にこのクラスが付いた場合も含め）安全に既定値へ倒れる。
+- **「レイアウトをリセット」・初期値プリセットへの統合**: `handleResetPageLayout` に2行追加（他のページ余白と同じ `setXxx` + `localStorage.setItem` のペア）。`settingsProfile.ts` の `ScoreSettingsProfile` インターフェース・`getFactoryDefaultSettingsProfile()`・`parseSettingsProfile()` の範囲検証にも、`pageMarginTopMm`/`pageMarginBottomMm` と全く同じパターンで `titleMarginTopMm`/`titleMarginBottomMm` を追加した（ページ余白と同じく楽譜種別に依らない固定既定値のため、`resolveDefaultLayoutForScoreType` には追加していない）。`ScorePage.tsx` 側の `applySettingsProfileToState` / `handleSaveSettingsProfile`（および依存配列）にも配線した。
+- **UI**: レイアウトタブの「レイアウト」欄、既存の「余白(下)」の直後（「段の間隔」の前）に「タイトル余白(上)」「タイトル余白(下)」の2スライダーを追加した。ラベル・スライダー・数値表示のJSX構造は既存の余白スライダーと完全に同一のパターン。
+
+### 検証結果
+
+- `docker exec -w <worktree> music-editer-dev npx tsc -b --noEmit`: エラーなし。
+- `docker exec -w <worktree> music-editer-dev npx vitest --run src`: `settingsProfile.test.ts`（新規3アサーション追加分含め21件）・`measureLayoutUtils.test.ts`（45件）は全緑。フルスイート実行では11ファイル・約32件が失敗したが、変更前の `origin/main`（別途 detached worktree で同一コマンドを実行）でも同じ11ファイル・ほぼ同数（31〜33件、実行毎に多少変動）が同じ内容で失敗することを確認済みで、共有Dockerコンテナのリソース競合によるタイムアウト（デフォルト `testTimeout=5000ms`）が原因の環境依存の既存問題であり、本変更とは無関係と判断した。
+- `docker exec -w <worktree> music-editer-dev npm run lint:ratchet`: エラー326件・警告5件（基準値326件と完全一致、新規エラーなし）。
+- `docker exec -w <worktree> music-editer-dev npm run build`: `tsc -b && vite build` エラーなし。
+- **ブラウザ実測は今回未実施**。共有devcontainerの唯一のホスト公開ポート（5173）が、`/app`（本体checkout）で常時起動している別のdevサーバーに占有されており、`--strictPort` での起動を試みたところ正しくbindに失敗して終了した（余分なプロセスは残っていないことを確認済み）。このポートを奪う・共有サーバーへ干渉することは夜間無人実行の制約上避けるべきと判断し、過去の追補（M-2、Issue #71〜）と同じ判断でブラウザ確認を見送った。タイトル余白の実際の見た目（既定値での変化なし・スライダー操作時の上下独立動作・2ページ目以降への非影響・印刷プレビューでの反映）は次回人間によるレビュー時に確認することを推奨する。

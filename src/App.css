@@ -948,6 +948,15 @@ button.ghost.active:hover:not(:disabled) {
   box-sizing: border-box;
   margin-bottom: 6mm;
 }
+/* タイトル余白（上下、Issue #103）: タイトルページ（1ページ目）だけに付与されるクラス
+   （ScorePage.tsx 参照）。--title-margin-top はタイトル文字列の前の余白（padding-top）、
+   --title-margin-bottom はタイトルブロックと1段目の間の余白（margin-bottom、上の
+   .page-head の固定値を上書き）。未設定時のフォールバック（0mm/6mm）は変更前の
+   固定値と同じにしてあり、スライダーを一度も触らなければ見た目は変わらない。 */
+.page-head--title {
+  padding-top: var(--title-margin-top, 0mm);
+  margin-bottom: var(--title-margin-bottom, 6mm);
+}
 .score-title { margin: 0; font-size: 28px; text-align: center; letter-spacing: .08em; }
 .score-subtitle { margin: 4px 0 0; font-size: 14px; text-align: center; color: #555; }
 .page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; }
