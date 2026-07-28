@@ -235,3 +235,80 @@ localStorage キーは一切変更せず、JSX の移動とタブ定義の追加
 - ブラウザでの確認は夜間無人実行のため未実施（人間によるレビュー時に、
   「楽譜設定」「レイアウト」両タブの表示・スライダー操作・値の保持を
   実機で確認してほしい）。
+
+## 追補: ツールバー内コントロールの高さを共通化（Issue #104・2026-07-28）
+
+### 問題
+
+各タブ内のボタン・セレクト・数値入力は、要素ごとに個別の `padding`/`font-size`
+（`.toolbar-chip-button` は高さ28px固定、`.toolbar-select-label select` も28px、
+一方で素の `button.ghost` は `line-height: 1.5` 由来で約26px、`.compact-button`
+は `line-height: 1.2` で約24px、インラインstyleだけの数値入力・素の `<button>`
+（「段割りをリセット」「レイアウトをリセット」等）はさらにバラバラ）で高さが
+決まっており、同じ行に並ぶと縦位置・高さがわずかに揃わず見た目が雑然としていた。
+
+### 修正方針
+
+トリアージコメントの仕様どおり、個々の要素に高さを書き足すのではなく、
+CSSカスタムプロパティ1つ（`--toolbar-control-height`、既定値28px。既存の
+`.toolbar-chip-button` / セレクトの高さに合わせた）を `:root` に定義し、
+`.toolbar-panel` 配下の `button` / `select` / `input[type="number"]` /
+`input[type="text"]` へ一括で `height: var(--toolbar-control-height);
+box-sizing: border-box;` を適用する1つのCSSルールを追加した。
+
+- **対象**: 「楽譜設定」「レイアウト」「再生・音色」「その他」タブの
+  ボタン（`.ghost` / `.compact-button` / 無クラスの `<button>` 含む）・
+  チップボタン・セレクト・数値入力。既存の `.toolbar-chip-button` /
+  `.toolbar-select-label select` のハードコードされた `height: 28px` も
+  同じ変数を参照するよう書き換え、値の出どころを1箇所に統一した。
+- **対象外（Palette）**: 「音符・休符」「演奏記号」タブの記号パレット
+  （`Palette.tsx`）は幅36×高さ30pxのアイコンボタンを隙間なく並べる設計
+  （`btnStyle()` がinline `style` で `width`/`height` を直接指定）で、
+  グリフの視認性を優先しアイコンサイズを変えたくないため対象外とした。
+  inline `style` の `height` は外側のCSSルールの `height` に対して常に
+  優先されるため実害はないが、`box-sizing: border-box` だけは inline側で
+  指定していないため外側のルールがそのまま効いてしまい、`padding: 0` の
+  Paletteボタンで border 分（1〜2px）だけ見た目のサイズが縮む副作用が
+  あった。これを防ぐため、Palette側のルート `<div>` 2箇所（`section ===
+  'notes'` / `'symbols'`）に `className="palette-panel"` を追加し、
+  `.palette-panel button { box-sizing: content-box; }` で打ち消した。
+- **対象外（レンジスライダー・チェックボックス）**: `input[type="range"]`
+  と `input[type="checkbox"]` は今回の高さ統一の対象外とした。チェック
+  ボックスは `height` を指定するとチェックマーク自体のサイズが変わって
+  しまうため。レンジスライダーはトリアージ仕様（「ボタン・トグル・数値
+  入力・セレクト」）に明記されておらず、`.tempo-slider` など一部は
+  `-webkit-appearance: none` で独自の細いトラック（4px）を持つカスタム
+  見た目のため、一括で高さを揃えると trackの太さ自体が変わる可能性があり
+  見送った。
+- 機能・ロジックの変更は一切なし（CSSのみ、Paletteへの `className` 追加は
+  スタイルフック目的でロジックに影響しない）。
+
+### 影響範囲
+
+- `src/App.css`: `--toolbar-control-height` の追加、`.toolbar-chip-button`
+  / `.toolbar-select-label select` の `height: 28px` を変数参照へ書き換え、
+  `.toolbar-panel button/select/input[number]/input[text]` への一括ルール
+  追加、`.palette-panel button` の `box-sizing` 打ち消しルール追加。
+- `src/components/Palette.tsx`: ルート `<div>` 2箇所へ `className=
+  "palette-panel"` を追加（スタイルフックのみ、他の挙動に影響なし）。
+- `README.md`: タブ式ツールバーの説明に高さ統一とPalette除外の注記を追記。
+
+### 検証
+
+- `docker exec -w /app/.night-worktrees/issue-104 music-editer-dev npx
+  vitest --run src`: 1218 Tests中 33 Tests失敗（11ファイル）。失敗内容は
+  すべて `Test timed out in Nms` またはタブ移動ヘルパー不一致
+  （`ScorePageYOffsetPanel.test.tsx` が `openScoreTab()` のまま Issue #100
+  のタブ移動に追従していない既存の不整合）で、いずれも本変更のCSS/
+  className追加とは無関係。同じ内容で origin/main（本変更なし）の別
+  worktreeでも実行し、失敗するテストファイルの集合が完全に一致すること
+  （11ファイル・31〜33件で変動する環境依存のタイムアウト）を確認し、
+  既存のベースライン失敗であると確認済み。
+- `npm run lint:ratchet`: エラー326件/警告5件で基準値ちょうど（変化なし）。
+- `npm run build`: `tsc -b && vite build` がエラーなく完走。
+- ブラウザでの確認は夜間無人実行のため未実施。人間によるレビュー時に、
+  「楽譜設定」「レイアウト」「再生・音色」「その他」タブの各コントロール
+  の高さが揃っていること、「音符・休符」「演奏記号」タブの記号パレットの
+  見た目・当たり判定が変わっていないこと、Y補正・移調のポップアップ内の
+  ボタン・数値入力も含めて崩れがないことをスクリーンショットで確認して
+  ほしい。
