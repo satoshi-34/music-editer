@@ -85,6 +85,12 @@ import {
   PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM,
   DEFAULT_PAGE_MARGIN_TOP_MM,
   DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+  TITLE_MARGIN_TOP_MIN_MM,
+  TITLE_MARGIN_TOP_MAX_MM,
+  TITLE_MARGIN_BOTTOM_MIN_MM,
+  TITLE_MARGIN_BOTTOM_MAX_MM,
+  DEFAULT_TITLE_MARGIN_TOP_MM,
+  DEFAULT_TITLE_MARGIN_BOTTOM_MM,
   SYSTEM_ROW_GAP_MIN_PX,
   SYSTEM_ROW_GAP_MAX_PX,
   PART_SPACING_OFFSET_MIN_PX,
@@ -169,6 +175,12 @@ const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
 const PAGE_MARGIN_VERTICAL_LEGACY_KEY = 'score-page-margin-vertical';
 const PAGE_MARGIN_TOP_KEY = 'score-page-margin-top';
 const PAGE_MARGIN_BOTTOM_KEY = 'score-page-margin-bottom';
+// 「タイトル余白（上）」「タイトル余白（下）」のユーザー設定（レイアウトタブのスライダー、
+// 各0〜30mm、Issue #103）。タイトルページ（1ページ目）だけに効く追加余白で、上記の
+// 「ページ余白（上/下）」（全ページ共通のページ全体の余白）とは別軸の設定。
+// 後方互換の旧キーは無い（この機能自体が新規追加のため）。
+const TITLE_MARGIN_TOP_KEY = 'score-title-margin-top';
+const TITLE_MARGIN_BOTTOM_KEY = 'score-title-margin-bottom';
 // 「段の間隔」のユーザー設定（その他タブのスライダー、px単位）。
 // 正負を問わず単一の連続な方式で反映する: 段スロット高（ページの譜面領域÷段数）を
 // 基準に、この値をスロット高への加減として適用し（App.css の
@@ -1739,6 +1751,8 @@ export default function ScorePage() {
         pageMarginSideMm,
         pageMarginTopMm,
         pageMarginBottomMm,
+        titleMarginTopMm,
+        titleMarginBottomMm,
         systemRowGapPx,
         displayWeight,
         isPrintPreview,
@@ -2451,6 +2465,23 @@ export default function ScorePage() {
     }
     return DEFAULT_PAGE_MARGIN_BOTTOM_MM;
   });
+  // ユーザー設定（レイアウトタブの「タイトル余白（上）」スライダー、0〜30mm、Issue #103）。
+  // タイトルページ（1ページ目）だけに効く。旧キーは無いため、単純に新キーを読むだけでよい。
+  const [titleMarginTopMm, setTitleMarginTopMm] = useState<number>(() => {
+    const raw = localStorage.getItem(TITLE_MARGIN_TOP_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n)
+      ? Math.max(TITLE_MARGIN_TOP_MIN_MM, Math.min(TITLE_MARGIN_TOP_MAX_MM, n))
+      : DEFAULT_TITLE_MARGIN_TOP_MM;
+  });
+  // ユーザー設定（レイアウトタブの「タイトル余白（下）」スライダー、0〜30mm、Issue #103）。
+  const [titleMarginBottomMm, setTitleMarginBottomMm] = useState<number>(() => {
+    const raw = localStorage.getItem(TITLE_MARGIN_BOTTOM_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n)
+      ? Math.max(TITLE_MARGIN_BOTTOM_MIN_MM, Math.min(TITLE_MARGIN_BOTTOM_MAX_MM, n))
+      : DEFAULT_TITLE_MARGIN_BOTTOM_MM;
+  });
   // ユーザー設定（その他タブの「段の間隔」スライダー、-30〜30px）。
   const [systemRowGapPx, setSystemRowGapPx] = useState<number>(() => {
     const raw = localStorage.getItem(SYSTEM_ROW_GAP_KEY);
@@ -2467,11 +2498,15 @@ export default function ScorePage() {
     setPageMarginSideMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
     setPageMarginTopMm(DEFAULT_PAGE_MARGIN_TOP_MM);
     setPageMarginBottomMm(DEFAULT_PAGE_MARGIN_BOTTOM_MM);
+    setTitleMarginTopMm(DEFAULT_TITLE_MARGIN_TOP_MM);
+    setTitleMarginBottomMm(DEFAULT_TITLE_MARGIN_BOTTOM_MM);
     setSystemRowGapPx(defaultSystemRowGapPx);
     setPartSpacingOffsetPx(PART_SPACING_OFFSET_DEFAULT_PX);
     localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(DEFAULT_PAGE_SIDE_MARGIN_MM));
     localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(DEFAULT_PAGE_MARGIN_TOP_MM));
     localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(DEFAULT_PAGE_MARGIN_BOTTOM_MM));
+    localStorage.setItem(TITLE_MARGIN_TOP_KEY, String(DEFAULT_TITLE_MARGIN_TOP_MM));
+    localStorage.setItem(TITLE_MARGIN_BOTTOM_KEY, String(DEFAULT_TITLE_MARGIN_BOTTOM_MM));
     localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(defaultSystemRowGapPx));
     localStorage.setItem(PART_SPACING_OFFSET_KEY, String(PART_SPACING_OFFSET_DEFAULT_PX));
     // 段ごとの間隔の個別上書きは楽譜データ側（保存データ）の状態なので、Undo できるよう
@@ -2592,6 +2627,10 @@ export default function ScorePage() {
     localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(profile.pageMarginTopMm));
     setPageMarginBottomMm(profile.pageMarginBottomMm);
     localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(profile.pageMarginBottomMm));
+    setTitleMarginTopMm(profile.titleMarginTopMm);
+    localStorage.setItem(TITLE_MARGIN_TOP_KEY, String(profile.titleMarginTopMm));
+    setTitleMarginBottomMm(profile.titleMarginBottomMm);
+    localStorage.setItem(TITLE_MARGIN_BOTTOM_KEY, String(profile.titleMarginBottomMm));
     setSystemRowGapPx(profile.systemRowGapPx);
     localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(profile.systemRowGapPx));
     setPartSpacingOffsetPx(profile.partSpacingOffsetPx);
@@ -2619,6 +2658,8 @@ export default function ScorePage() {
       pageMarginSideMm,
       pageMarginTopMm,
       pageMarginBottomMm,
+      titleMarginTopMm,
+      titleMarginBottomMm,
       systemRowGapPx,
       partSpacingOffsetPx,
     };
@@ -2637,6 +2678,8 @@ export default function ScorePage() {
     pageMarginSideMm,
     pageMarginTopMm,
     pageMarginBottomMm,
+    titleMarginTopMm,
+    titleMarginBottomMm,
     systemRowGapPx,
     partSpacingOffsetPx,
     showSettingsProfileNotice,
@@ -3791,6 +3834,50 @@ export default function ScorePage() {
               </label>
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`タイトル文字列の前に追加する余白です（1ページ目のみ）。既定は${DEFAULT_TITLE_MARGIN_TOP_MM}mmです`}
+              >
+                タイトル余白(上)
+                <input
+                  type="range"
+                  min={TITLE_MARGIN_TOP_MIN_MM}
+                  max={TITLE_MARGIN_TOP_MAX_MM}
+                  step={1}
+                  value={titleMarginTopMm}
+                  onChange={e => {
+                    const v = Math.max(TITLE_MARGIN_TOP_MIN_MM, Math.min(TITLE_MARGIN_TOP_MAX_MM, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setTitleMarginTopMm(v);
+                      localStorage.setItem(TITLE_MARGIN_TOP_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{titleMarginTopMm}mm</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                title={`タイトルブロックと1段目の間の余白です（1ページ目のみ）。既定は${DEFAULT_TITLE_MARGIN_BOTTOM_MM}mmです`}
+              >
+                タイトル余白(下)
+                <input
+                  type="range"
+                  min={TITLE_MARGIN_BOTTOM_MIN_MM}
+                  max={TITLE_MARGIN_BOTTOM_MAX_MM}
+                  step={1}
+                  value={titleMarginBottomMm}
+                  onChange={e => {
+                    const v = Math.max(TITLE_MARGIN_BOTTOM_MIN_MM, Math.min(TITLE_MARGIN_BOTTOM_MAX_MM, Number(e.target.value)));
+                    if (!isNaN(v)) {
+                      setTitleMarginBottomMm(v);
+                      localStorage.setItem(TITLE_MARGIN_BOTTOM_KEY, String(v));
+                    }
+                  }}
+                  style={{ width: 70 }}
+                />
+                <span style={{ fontSize: 12, color: '#555', width: 30 }}>{titleMarginBottomMm}mm</span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
                 title="段と段の間隔です。プラスで広げ、マイナスで狭められます。広げると1ページに入る段数の上限が自動で下がり、狭めると自動で増えます。既定は楽譜の種類により異なります（ピアノは30px、それ以外は0px）"
               >
                 段の間隔
@@ -3837,7 +3924,7 @@ export default function ScorePage() {
                 type="button"
                 onClick={handleResetPageLayout}
                 style={{ fontSize: 13, padding: '3px 8px' }}
-                title="ページ余白（左右・上下）・段の間隔・パート間隔を既定値へ戻します"
+                title="ページ余白（左右・上下）・タイトル余白（上下）・段の間隔・パート間隔を既定値へ戻します"
               >
                 レイアウトをリセット
               </button>
@@ -4284,7 +4371,17 @@ export default function ScorePage() {
                   '--page-margin-bottom': `${pageMarginBottomMm}mm`,
                 } as React.CSSProperties}
               >
-                <header className="page-head" style={{ position: 'relative' }}>
+                <header
+                  className={`page-head${i === 0 ? ' page-head--title' : ''}`}
+                  style={i === 0 ? {
+                    // タイトル余白（上下）はタイトルページ（1ページ目）だけに効く。
+                    // App.css の .page-head--title がこの2変数を padding-top / margin-bottom へ
+                    // 適用する（フォールバックは変数未注入時＝2ページ目以降と同じ0mm/6mm）。
+                    position: 'relative',
+                    '--title-margin-top': `${titleMarginTopMm}mm`,
+                    '--title-margin-bottom': `${titleMarginBottomMm}mm`,
+                  } as React.CSSProperties : { position: 'relative' }}
+                >
                   {i === 0 ? (
                     <>
                       <h1

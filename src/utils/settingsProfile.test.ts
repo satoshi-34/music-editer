@@ -56,6 +56,8 @@ const VALID_PROFILE: ScoreSettingsProfile = {
   pageMarginSideMm: 18,
   pageMarginTopMm: 20,
   pageMarginBottomMm: 16,
+  titleMarginTopMm: 10,
+  titleMarginBottomMm: 8,
   systemRowGapPx: 10,
   partSpacingOffsetPx: 12,
 };
@@ -167,6 +169,24 @@ describe('settingsProfile', () => {
       const { partSpacingOffsetPx, ...withoutField } = VALID_PROFILE;
       void partSpacingOffsetPx;
       expect(parseSettingsProfile(JSON.stringify(withoutField)).partSpacingOffsetPx).toBe(0);
+    });
+
+    it('titleMarginTopMm / titleMarginBottomMm（Issue #103）: 範囲内の値はそのまま保持され、範囲外・欠損は既定値へ戻る', () => {
+      expect(parseSettingsProfile(JSON.stringify(VALID_PROFILE)).titleMarginTopMm).toBe(10);
+      expect(parseSettingsProfile(JSON.stringify(VALID_PROFILE)).titleMarginBottomMm).toBe(8);
+
+      const fallback = getFactoryDefaultSettingsProfile();
+      const outOfRange = { ...VALID_PROFILE, titleMarginTopMm: 999, titleMarginBottomMm: -999 };
+      const parsedOutOfRange = parseSettingsProfile(JSON.stringify(outOfRange));
+      expect(parsedOutOfRange.titleMarginTopMm).toBe(fallback.titleMarginTopMm);
+      expect(parsedOutOfRange.titleMarginBottomMm).toBe(fallback.titleMarginBottomMm);
+
+      const { titleMarginTopMm, titleMarginBottomMm, ...withoutField } = VALID_PROFILE;
+      void titleMarginTopMm;
+      void titleMarginBottomMm;
+      const parsedMissing = parseSettingsProfile(JSON.stringify(withoutField));
+      expect(parsedMissing.titleMarginTopMm).toBe(fallback.titleMarginTopMm);
+      expect(parsedMissing.titleMarginBottomMm).toBe(fallback.titleMarginBottomMm);
     });
   });
 

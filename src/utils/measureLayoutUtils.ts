@@ -75,6 +75,19 @@ export const PAGE_MARGIN_VERTICAL_MAX_MM = 25;
 export const PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM = 2;
 export const DEFAULT_PAGE_MARGIN_TOP_MM = DEFAULT_PAGE_SIDE_MARGIN_MM;
 export const DEFAULT_PAGE_MARGIN_BOTTOM_MM = DEFAULT_PAGE_SIDE_MARGIN_MM - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM;
+// 「タイトル余白(上)」「タイトル余白(下)」（Issue #103）の可動範囲・既定値。
+// ★調整するならここが正本★ — タイトルページ（1ページ目）だけに効く追加余白で、
+// 上＝タイトル文字列の前の余白（.page-head の padding-top）、下＝タイトルブロック
+// （タイトル・サブタイトル・作詞者欄等）と1段目の間の余白（.page-head の margin-bottom）。
+// 2ページ目以降の見出し（page-title）には適用しない（App.css の .page-head--title 参照）。
+// 既定値は変更前の固定CSS（padding-top:0・margin-bottom:6mm）と一致させ、
+// スライダーを一度も触らなければ見た目が変わらないようにしている。
+export const TITLE_MARGIN_TOP_MIN_MM = 0;
+export const TITLE_MARGIN_TOP_MAX_MM = 30;
+export const TITLE_MARGIN_BOTTOM_MIN_MM = 0;
+export const TITLE_MARGIN_BOTTOM_MAX_MM = 30;
+export const DEFAULT_TITLE_MARGIN_TOP_MM = 0;
+export const DEFAULT_TITLE_MARGIN_BOTTOM_MM = 6;
 // 「段の間隔」（段と段の間の縦間隔）スライダーの可動範囲。
 // ★調整するならここが正本★ — この2定数を変えるだけで、
 //   1) 楽譜設定タブのスライダーの min/max 属性（ScorePage.tsx）
