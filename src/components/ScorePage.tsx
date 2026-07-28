@@ -2326,15 +2326,17 @@ export default function ScorePage() {
     // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.5〜1.5 へクランプする
     return Number.isFinite(n) ? Math.max(VIEW_ZOOM_MIN, Math.min(1.5, n)) : 1;
   });
-  // 初期ズームの「幅フィット」適用（issue #40）。ズーム未保存（初回起動・新規譜面時）の
-  // ときだけ、実際の表示領域（.paper-rail）の幅からフィット倍率を計算し初期値へ反映する。
+  // 初期ズームの「ページフィット」適用（issue #40, issue #124）。ズーム未保存（初回起動・
+  // 新規譜面時）のときだけ、実際の表示領域（.paper-rail）の幅・高さからフィット倍率を計算し
+  // 初期値へ反映する。幅だけで決めると横に広く縦が短い画面（例: 1280×720のノートPC）で
+  // ページ下半分が画面に収まらず「縦長に見える」ため、高さも制約として見る。
   // 保存済みのユーザー設定は上書きしない。ウィンドウリサイズへの追従は行わない
   // （初期値決定のみ。設計判断は .claude/specs/view-zoom/design.md 追補を参照）。
   useEffect(() => {
     if (localStorage.getItem(VIEW_ZOOM_KEY) != null) return;
     const rail = spreadRef.current?.parentElement;
     if (!rail) return;
-    setViewZoom(computeFitZoom(rail.clientWidth));
+    setViewZoom(computeFitZoom(rail.clientWidth, { availableHeightPx: rail.clientHeight }));
     // 初回マウント時に一度だけ適用する
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -260,3 +260,34 @@
   しない場合がある。グリッド列構成（`--columns`）まで踏み込んだフィット計算は
   「画面表示のズームの初期値」というスコープを超え、`useAutoPageScale` /
   CSS グリッド設計への変更が必要になるため、本Issueでは見送った。
+
+---
+
+# 初期ズームのページフィット化（幅だけでなく高さも見る）（issue #124, 2026-07-29）
+
+## 背景・問題
+- issue #40 の「初期ズームの幅フィット」は表示領域の**幅**だけを見てフィット倍率を決めていた（高さは考慮しない）。
+- ユーザー報告（issue #124「譜面がa4より縦長に見える」）を受けてオーナーが実機調査したところ、`.print-page` の縦横比は 1.4143（A4の理論値 297/210 と小数第4位まで一致）で紙面寸法自体は正確だった。
+- 原因は表示側: ビューポートが 1280×720 のような「横に広く縦が短い」ノートPC画面では、幅は `computeFitZoom` の頭打ち条件（100%）を満たすため縮小されない一方、ページの高さ（1123px相当）が画面に収まらず、常にページの一部（実測48%）しか一度に見えない。人は全体を見て初めて縦横比を判断できるため、縦長の帯だけが見え続けると寸法に関わらず「縦長」と知覚される、という**表示上の知覚問題**だった（紙面の寸法・縦横比そのものは変更しない）。
+
+## 修正設計
+- **`computeFitZoom` を「幅フィット」から「ページ全体フィット」へ拡張**: `src/utils/viewZoomUtils.ts` に `A4_PAGE_HEIGHT_PX`（297mm、既存 `A4_PAGE_WIDTH_PX` と同じ `MM_TO_PX` 換算係数）を追加。`computeFitZoom(availableWidthPx, options)` の第2引数を `pageWidthPx` 単体から `{ availableHeightPx?, pageWidthPx?, pageHeightPx? }` のオプションオブジェクトへ変更した（呼び出し側が増えても引数の意味が位置引数だけでは分かりにくくなるため）。`availableHeightPx` が測れる場合だけ `ratio = min(幅の比, 高さの比)` とし、測れない場合は従来どおり幅の比のみを使う（フォールバック）。いずれも上限1・下限 `VIEW_ZOOM_MIN` でクランプする方針は変更なし。
+- **表示領域の高さの取得元**: `ScorePage.tsx` の初回マウント `useEffect` で、既存の `rail`（`spreadRef.current.parentElement` = `.paper-rail`、ツールバーを含まないスコア表示領域）の `clientWidth` に加えて `clientHeight` も実測し、`computeFitZoom(rail.clientWidth, { availableHeightPx: rail.clientHeight })` として渡す。`.paper-rail` はツールバーの外側にあるため、追加の要素参照や DOM 変更は不要だった。
+- **ユーザー設定・座標系・印刷への非干渉は維持**: 本修正は「初期値の決定式」のみを変更し、`viewZoom` state・`effectiveScale = scale * viewZoom` の合成方式・保存済みユーザー設定を上書きしない条件・印刷時の `@media print` による解除・座標変換（`--scale` 経由）にはいずれも触れていない。issue #40 の設計判断（初回マウント時のみ適用・リサイズ追従なし）もそのまま踏襲した。
+
+## 影響範囲
+- `src/utils/viewZoomUtils.ts`: `A4_PAGE_HEIGHT_PX` 定数を追加。`computeFitZoom` のシグネチャを `(availableWidthPx, pageWidthPx?)` から `(availableWidthPx, options?: { availableHeightPx?, pageWidthPx?, pageHeightPx? })` へ変更（幅のみ呼び出しは省略可能な第2引数のため後方互換）。
+- `src/components/ScorePage.tsx`: 初期ズーム適用の `useEffect` 内で `computeFitZoom` へ `availableHeightPx: rail.clientHeight` を渡すよう変更。コメントを幅フィット→ページフィットの説明へ更新。
+- `src/utils/viewZoomUtils.test.ts`: 高さが制約になるケース・幅が制約になるケース・両方十分なケース・高さが測れない場合のフォールバックのテストを追加。既存の `pageWidthPx` 明示テストは新しいオプションオブジェクト形式へ更新。
+- `src/components/ScorePageInitialZoomFit.test.tsx`: `clientHeight` のモックを追加（既定値は0=測れない扱いとし、既存3テストの前提を変えない）。issue #124 の実測環境（1280×720）を再現した統合テストと、幅・高さとも十分な場合のテストを追加。
+
+## 検証
+- `docker exec music-editer-dev npx vitest --run src/utils/viewZoomUtils.test.ts src/components/ScorePageInitialZoomFit.test.tsx`（issue-124 worktree内）: 2ファイル・15テスト全緑。
+- `docker exec music-editer-dev npx vitest --run src`（同worktree、`--testTimeout=30000 --maxWorkers=2`）: 108ファイル・1225テスト中1224件通過。唯一の失敗は `ScorePageInstrumentationEditor.test.tsx` の1件で、テスト内コメントに「編成譜の初期描画は重く、共有Docker環境のCPU負荷次第でまれにタイムアウトする既知の傾向」と明記された既存の既知フレーキーテスト（本変更と無関係、`git stash` 相当の検証はしていないが原因コメントが変更前から存在することをファイル内で確認済み）。既定タイムアウト・並列度のままだと共有Docker環境の負荷次第で無関係な複数ファイルがタイムアウトするが、タイムアウト延長・並列度低減で収束することを複数回の実行で確認した。
+- `docker exec music-editer-dev npx tsc -b --noEmit`: エラーなし。
+- `docker exec music-editer-dev npm run lint:ratchet`: エラー326件/警告5件で基準値ちょうど（新規のlintエラーなし）。
+- `docker exec music-editer-dev npm run build`: エラーなくビルド成功。
+
+## 自信の無い点・スコープ判断
+- **ブラウザでの実機確認は未実施**。夜間無人実行のため、共有devcontainer上の他セッションに干渉しないことを優先し、issue #40 のときと同じ方針で `ScorePageInitialZoomFit.test.tsx` の統合テスト（`clientWidth`/`clientHeight` を実測相当にモックしたDOM計測ベースの検証）で「1280×720相当で高さフィットまで縮小される」「幅・高さとも広ければ100%のまま」ことを確認する形に代えた。実際の見た目（ノートPC画面で1ページ全体が視認できるようになったか）は次回人間によるレビュー時にご確認いただくことを推奨する。
+- **2列レイアウト（見開き）時の挙動**: issue #40 の「未解決点」で述べた `.paper-rail` の幅が2ページ分想定である点は本修正でも未解決のまま。高さについても同様に、`.paper-rail` の高さがツールバー等を除いたスコア表示領域全体の高さであることは確認したが、2列レイアウト特有の高さの取り方の違いは検討していない（1列・2列とも高さの制約は列数に依存しないため、影響は小さいと考えている）。
