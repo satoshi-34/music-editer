@@ -78,6 +78,10 @@ type Props = {
   onEmptyFillerClick?: (index: number) => void;
   // 印刷プレビュー中は true。PianoSystemCanvas 側のコメント参照（Issue #88）。
   isPrintPreview?: boolean;
+  // 小節選択（Issue #110の挿入・削除等で使う）。PianoStaff/SingleStaffと同じ仕組みを
+  // 編成譜でも使えるよう中継する（絶対小節インデックスは startMeasureIndex 起点で共通）。
+  selectedMeasures?: { start: number; end: number };
+  onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
 };
 
 export default function EnsembleStaff({
@@ -111,6 +115,8 @@ export default function EnsembleStaff({
   emptyFillerRanges,
   onEmptyFillerClick,
   isPrintPreview = false,
+  selectedMeasures,
+  onMeasureSelect,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -240,6 +246,8 @@ export default function EnsembleStaff({
             symbolsClickable={symbolsClickable}
             isPrintPreview={isPrintPreview}
             partSpacingOffsetPx={partSpacingOffsetPx}
+            selectedMeasures={selectedMeasures}
+            onMeasureSelect={onMeasureSelect}
           />
           </div>
         );

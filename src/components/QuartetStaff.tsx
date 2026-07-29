@@ -70,6 +70,10 @@ type Props = {
   onEmptyFillerClick?: (index: number) => void;
   // 印刷プレビュー中は true。PianoSystemCanvas 側のコメント参照（Issue #88）。
   isPrintPreview?: boolean;
+  // 小節選択（Issue #110の挿入・削除等で使う）。PianoStaff/SingleStaffと同じ仕組みを
+  // 弦楽四重奏でも使えるよう中継する（絶対小節インデックスは startMeasureIndex 起点で共通）。
+  selectedMeasures?: { start: number; end: number };
+  onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
 };
 
 export default function QuartetStaff({
@@ -99,6 +103,8 @@ export default function QuartetStaff({
   emptyFillerRanges,
   onEmptyFillerClick,
   isPrintPreview = false,
+  selectedMeasures,
+  onMeasureSelect,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
@@ -141,6 +147,8 @@ export default function QuartetStaff({
             symbolsClickable={symbolsClickable}
             isPrintPreview={isPrintPreview}
             partSpacingOffsetPx={partSpacingOffsetPx}
+            selectedMeasures={selectedMeasures}
+            onMeasureSelect={onMeasureSelect}
           />
           </div>
         );

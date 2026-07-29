@@ -66,6 +66,7 @@ import {
   type KeySignature
 } from '../utils/noteKeyUtils';
 import { transposeMeasureRange } from '../utils/transposeUtils';
+import { insertEmptyMeasureBefore, deleteMeasureAt, shiftOverridesStartMeasure } from '../utils/measureInsertDeleteUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { buildIncomingArcIndex } from '../utils/incomingArcUtils';
 import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
@@ -1296,16 +1297,13 @@ export default function ScorePage() {
     setHistoryVersion(v => v + 1);
   }, []);
 
-  // 選択中の小節範囲を半音単位で移調する。
-  // Cmd+C/V のコピペと同じく「選択範囲 × 全パート」を対象にする
-  // （小節選択の意味を「その小節位置にある全パートのデータ」として扱う既存の挙動に合わせる）。
-  // 1音でも対応音域（オクターブ0〜9）を外れる場合は、どのパートにも一切反映せず中止する
-  // （途中まで移調されたパートと元のままのパートが混在する事故を防ぐため）。
-  const handleTranspose = useCallback((semitones: number) => {
-    if (!selectedMeasures || semitones === 0) return;
-    const { start, end } = selectedMeasures;
-
-    type PartEntry = { measures: MeasureData[]; apply: (next: MeasureData[]) => void };
+  // 「選択中の小節位置にある全パートのデータ」を集める共通ヘルパー。
+  // 移調・小節挿入・小節削除はどれも「対象パートを列挙する→各パートに同じ変換をかけて
+  // 適用する」という同じ形をしているため、パートの列挙部分だけを共通化する
+  // （Cmd+C/V・Deleteのキーボードハンドラは選択範囲へのスライス/上書きという別の形のため
+  // 対象外のまま。あちらは既存の scoreType 分岐踏襲でそろえてある）。
+  type PartEntry = { measures: MeasureData[]; apply: (next: MeasureData[]) => void };
+  const getEditablePartEntries = useCallback((): PartEntry[] => {
     const parts: PartEntry[] = [];
 
     if (scoreType === 'piano') {
@@ -1341,6 +1339,19 @@ export default function ScorePage() {
       if (rightHandData) parts.push({ measures: rightHandData, apply: setRightHandData });
     }
 
+    return parts;
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts]);
+
+  // 選択中の小節範囲を半音単位で移調する。
+  // Cmd+C/V のコピペと同じく「選択範囲 × 全パート」を対象にする
+  // （小節選択の意味を「その小節位置にある全パートのデータ」として扱う既存の挙動に合わせる）。
+  // 1音でも対応音域（オクターブ0〜9）を外れる場合は、どのパートにも一切反映せず中止する
+  // （途中まで移調されたパートと元のままのパートが混在する事故を防ぐため）。
+  const handleTranspose = useCallback((semitones: number) => {
+    if (!selectedMeasures || semitones === 0) return;
+    const { start, end } = selectedMeasures;
+    const parts = getEditablePartEntries();
+
     // 先にすべてのパートで移調結果を計算してから反映する（部分適用を防ぐための2段階処理）。
     const results = parts.map(({ measures }) =>
       transposeMeasureRange(
@@ -1370,7 +1381,41 @@ export default function ScorePage() {
     setLastEditedMeasureIndex(start);
     setTransposeError(null);
     setShowTransposePanel(false);
-  }, [selectedMeasures, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, keySignature, pushHistory]);
+  }, [selectedMeasures, getEditablePartEntries, keySignature, pushHistory]);
+
+  // 選択中の小節の直前に、全パート同時に空の小節を1つ挿入する（Issue #110）。
+  // 複数小節をまとめて挿入する機能は範囲外のため、単一小節選択のときのみ動作する。
+  const handleInsertMeasure = useCallback(() => {
+    if (!selectedMeasures || selectedMeasures.start !== selectedMeasures.end) return;
+    const at = selectedMeasures.start;
+    const parts = getEditablePartEntries();
+    if (parts.length === 0) return;
+
+    pushHistory();
+    parts.forEach(({ measures, apply }) => apply(insertEmptyMeasureBefore(measures, at)));
+    setSystemMeasureOverrides(prev => shiftOverridesStartMeasure(prev, at, 1));
+    setSystemRowGapOverrides(prev => shiftOverridesStartMeasure(prev, at, 1));
+    // 挿入した空小節をそのまま選択状態にし、続けて音符を入力しやすくする。
+    setSelectedMeasures({ start: at, end: at });
+    setLastEditedMeasureIndex(at);
+  }, [selectedMeasures, getEditablePartEntries, pushHistory]);
+
+  // 選択中の小節を、全パート同時に削除する（Issue #110）。
+  // 複数小節をまとめて削除する機能は範囲外のため、単一小節選択のときのみ動作する。
+  const handleDeleteMeasure = useCallback(() => {
+    if (!selectedMeasures || selectedMeasures.start !== selectedMeasures.end) return;
+    const at = selectedMeasures.start;
+    const parts = getEditablePartEntries();
+    if (parts.length === 0) return;
+
+    pushHistory();
+    parts.forEach(({ measures, apply }) => apply(deleteMeasureAt(measures, at)));
+    setSystemMeasureOverrides(prev => shiftOverridesStartMeasure(prev, at, -1));
+    setSystemRowGapOverrides(prev => shiftOverridesStartMeasure(prev, at, -1));
+    // 削除位置には次の小節が繰り上がってくるので、同じ位置を選択したままにする。
+    setSelectedMeasures({ start: at, end: at });
+    setLastEditedMeasureIndex(at);
+  }, [selectedMeasures, getEditablePartEntries, pushHistory]);
 
   // スナップショットを state に適用する（undo/redo 共通）
   const applySnapshot = useCallback((snap: ScoreSnapshot) => {
@@ -3436,6 +3481,35 @@ export default function ScorePage() {
                   </button>
                 </div>
               )}
+              {selectedMeasures && (
+                // 小節の挿入・削除（Issue #110）。選択ツールで小節をクリックしたときだけ出す。
+                // 複数小節をまとめて挿入・削除する機能は範囲外のため、単一小節を選択しているときのみ有効にする。
+                <div className="toolbar-chip-group" role="group" aria-label="小節の挿入・削除">
+                  <span className="toolbar-group-label">小節</span>
+                  <button
+                    type="button"
+                    className="ghost toolbar-chip-button"
+                    onClick={handleInsertMeasure}
+                    disabled={selectedMeasures.start !== selectedMeasures.end}
+                    title={selectedMeasures.start !== selectedMeasures.end
+                      ? '複数小節を選択中は挿入できません。1小節だけ選択してください'
+                      : '選択中の小節の直前に、全パート同時に空の小節を1つ挿入します'}
+                  >
+                    小節を挿入
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost toolbar-chip-button"
+                    onClick={handleDeleteMeasure}
+                    disabled={selectedMeasures.start !== selectedMeasures.end}
+                    title={selectedMeasures.start !== selectedMeasures.end
+                      ? '複数小節を選択中は削除できません。1小節だけ選択してください'
+                      : '選択中の小節を、全パート同時に削除します'}
+                  >
+                    小節を削除
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -4539,6 +4613,8 @@ export default function ScorePage() {
                       isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
+                      selectedMeasures={selectedMeasures ?? undefined}
+                      onMeasureSelect={handleMeasureSelect}
                     />
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
@@ -4571,6 +4647,8 @@ export default function ScorePage() {
                       isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
+                      selectedMeasures={selectedMeasures ?? undefined}
+                      onMeasureSelect={handleMeasureSelect}
                     />
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
