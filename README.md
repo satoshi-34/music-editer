@@ -576,6 +576,7 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
   - **空楽譜での上書き防止**: 自動保存は、全パート・全小節が空（`isEmptyScoreData`）のときは書き込みをスキップする。「新規作成」で明示的に空へ戻したいときは、自動保存スロットを直接クリアする（`clearAutosaveData`）
   - **世代バックアップ**: 手動・自動どちらのスロットも、上書き直前の内容を1世代だけ `*-backup` キーへ退避してから書き込む
   - **旧データの移行**: 自動保存/手動保存が同じキーを共有していた頃のデータは、初回起動時に `migrateLegacyDataToAutosave()` が自動保存スロットへ1回だけ複製する（手動保存スロット側のキー名は変えていないため、複製のみで消去はしない＝既存ユーザーの手動保存データもそのまま読める）
+  - **保存対象 state の deps 漏れに注意（Issue #107・#117）**: 自動保存 `useEffect` の依存配列は `saveAutosave` へ渡す state をすべて網羅する必要があり、1つでも漏れるとその state だけを変更して閉じたときに変更が失われる。過去に `ensembleSecondStaffParts`（Issue #107）・`measuresPerSystem`（段あたり小節数、Issue #117）が「後方宣言のため deps に入れられない」という理由で漏れていたことがある。`measuresPerSystem` は該当 `useState` を自動保存 `useEffect` より前へ移動して解消した。この不変条件は `ScorePageAutosaveDeps.test.tsx` が静的検査で守っている
   - 関連実装: `src/utils/storage.ts`（`saveAutosaveData` / `loadAutosaveData` / `hasAutosaveData` / `clearAutosaveData` / `isEmptyScoreData` / `migrateLegacyDataToAutosave`）、`src/hooks/useScoreStorage.ts`、`src/components/ScorePage.tsx`（起動時復元 `useEffect` と自動保存 `useEffect`）。設計の詳細は `.claude/specs/save-load-redesign/design.md` を参照
 - **1番括弧 / 2番括弧の再生分岐**: `MeasureData.ending` をもとに、1周目は 1番括弧、2周目は 2番括弧だけを鳴らす基本分岐へ対応
 - **サンプル譜での記号体験**: ピアノ用デモフレーズにはリピート、1番括弧 / 2番括弧、強弱記号を実際に入れてあり、見た目と再生の両方で確認できる

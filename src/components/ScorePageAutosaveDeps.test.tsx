@@ -63,4 +63,18 @@ describe('自動保存の依存配列は保存対象の state を網羅する（
         'この state だけを編集して閉じると変更が失われる（Issue #107 と同じ不具合）',
     ).toEqual([]);
   });
+
+  it('measuresPerSystem は自動保存の依存配列に含まれる（Issue #117）', () => {
+    // measuresPerSystem は buildScoreData の外（saveAutosave 呼び出し時）で組み立てられる
+    // 保存対象のため、上の buildScoreData ベースの不変条件チェックでは検出できない。
+    // 個別に依存配列への同梱を検証する。
+    const autosaveIndex = source.indexOf(AUTOSAVE_EFFECT_MARKER);
+    expect(autosaveIndex, '自動保存 useEffect の目印コメントが見つからない').toBeGreaterThan(-1);
+    const autosaveDeps = readDepsAfter(source, autosaveIndex);
+
+    expect(
+      autosaveDeps,
+      '「段あたり小節数」（measuresPerSystem）だけを変更して閉じても自動保存されない（Issue #117 と同じ不具合）',
+    ).toContain('measuresPerSystem');
+  });
 });
