@@ -27,5 +27,9 @@ export default defineConfig({
     // 残ることがあり、既定の除外設定だけでは拾ってしまうため明示的に除外する
     // （ESLint 側は #48 で同様の対応済み）
     exclude: [...configDefaults.exclude, '.claude/**', '.night-worktrees/**'],
+    // jsdom + VexFlow の描画を伴うテストが重く、GitHub Actions のランナーでは
+    // vitest 既定の 5000ms を超えることがある（#133）。ローカル・CIで同じ値が
+    // 効くようここで一括指定する
+    testTimeout: 20000,
   },
 })

@@ -351,6 +351,19 @@ npm run lint:ratchet   # lint エラー件数が増えていないかを確認�
 
 という形で、「少しずつしか減らない代わりに、絶対に増えない」ことを保証します。エラーを減らしたときは `scripts/lint-baseline.json` の差分も一緒にコミットしてください。CI など基準値を書き換えたくない場面では `npm run lint:ratchet -- --check` を使います。
 
+### CI（GitHub Actions）
+
+`.github/workflows/ci.yml` で、`pull_request` と `main`・`release` への `push` のたびに以下を自動実行します。
+
+```bash
+npm ci
+npm test                        # vitest --run
+npm run lint:ratchet -- --check # --check を付けて基準値を書き換えない
+npm run build                   # tsc -b && vite build
+```
+
+結果は PR 画面の Checks で確認できます。ブラウザでの4譜種確認・スクリーンショット比較は含めていません（実行時間と不安定さの見極めが別途必要なため、対象は issue #115 のスコープ外）。手元の Docker での確認フローはこれまでどおり必要です（CI は置き換えではなく追加のセーフティネットです）。
+
 ## 使い方
 
 Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめています。
