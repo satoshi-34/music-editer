@@ -133,6 +133,23 @@ export interface NoteEvent {
   microtone 付きで書き出した MusicXML を読み込んでも microtone 情報は復元されない
   （既知の制限として README に明記）。
 
+## 追記: MusicXML 読み込み対応（Issue #113, 2026-07-29）
+
+上記でスコープ外としていた読み込み側を実装した。
+
+- `musicXmlImport.ts` に `readMicrotoneType(noteEl, alterEl)` を追加。
+  `<note>` の `<accidental>quarter-sharp|quarter-flat</accidental>` を優先して判定し、
+  無ければ `<alter>` が `0.5`/`-0.5` かどうかで判定する（書出側は両方を出力しているため、
+  どちらからでも復元できるようにしておくことで、将来 accidental を省略する書出実装に
+  変えても壊れにくくした）。
+- `pitchToKey` は変更していない（keys 文字列は自然音の綴りのまま。書出側と同じ方針）。
+  microtone 種別は `NoteEvent.microtones` へ、和音の場合は `keyIndex`（`isChord` 判定時の
+  `chordBuffer.keys.length` を使って算出）とセットで格納する。
+- テスト: `musicXmlMicrotone.test.ts` に往復（export→import）テストを追加。
+  単音・和音の一部の音だけ・microtones無しの3パターンを確認した。
+- 外部ソフト（Finale/Sibelius/MuseScore）が出力した MusicXML の四分音記法との互換は
+  今回も検証していない（自分の書出↔読込が閉じることを優先する方針は変えていない）。
+
 ## 影響範囲
 
 - `src/types/storage.ts`, `src/utils/storage.ts`, `src/utils/noteKeyUtils.ts`

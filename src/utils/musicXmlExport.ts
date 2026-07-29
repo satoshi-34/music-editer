@@ -5,6 +5,7 @@ import type { SavedScoreData, NoteEvent, MeasureData } from '../types/storage';
 import type { KeySignature } from './noteKeyUtils';
 import type { ClefType } from '../components/clefUtils';
 import { resolveMeasureClef } from './clefMeasureUtils';
+import { getMeasureVoices } from './voiceMeasureUtils';
 
 // 分割数（division）: 四分音符 = 16分割。全音符〜64分音符を整数で表せる最小値
 const DIVISIONS = 16;
@@ -151,6 +152,19 @@ function dotsXml(ev: NoteEvent): string {
   return '<dot/>'.repeat(count);
 }
 
+/**
+ * NoteEvent 1つぶんの MusicXML duration（DIVISIONS 基準の整数）を計算する。
+ * <backup> で声部2の開始位置へ戻すときの合計にも使うため、noteToXml と共通化しておく。
+ */
+function eventDurationTicks(ev: NoteEvent): number {
+  // 付点1個で1.5倍、複付点(2個)で1.75倍。四捨五入するのは、
+  // DIVISIONS(16)を基準にすると 64分音符の複付点などで割り切れないことがあるため。
+  const dotMultiplier = ev.dots === 1 ? 1.5 : ev.dots === 2 ? 1.75 : 1;
+  // 連符（tuplet）は notesOccupied/numNotes 倍だけ実時間が短くなる（例: 3連符は 2/3 倍）
+  const tupletMultiplier = ev.tuplet && ev.tuplet.numNotes ? ev.tuplet.notesOccupied / ev.tuplet.numNotes : 1;
+  return Math.round((DUR_TO_DIV[ev.dur] ?? 16) * dotMultiplier * tupletMultiplier);
+}
+
 /** NoteEvent 1つを MusicXML <note> 要素に変換する */
 function noteToXml(
   ev: NoteEvent,
@@ -158,12 +172,7 @@ function noteToXml(
   staff: number,
   tupletPos?: { isFirst: boolean; isLast: boolean }
 ): string {
-  // 付点1個で1.5倍、複付点(2個)で1.75倍。四捨五入するのは、
-  // DIVISIONS(16)を基準にすると 64分音符の複付点などで割り切れないことがあるため。
-  const dotMultiplier = ev.dots === 1 ? 1.5 : ev.dots === 2 ? 1.75 : 1;
-  // 連符（tuplet）は notesOccupied/numNotes 倍だけ実時間が短くなる（例: 3連符は 2/3 倍）
-  const tupletMultiplier = ev.tuplet && ev.tuplet.numNotes ? ev.tuplet.notesOccupied / ev.tuplet.numNotes : 1;
-  const dur = Math.round((DUR_TO_DIV[ev.dur] ?? 16) * dotMultiplier * tupletMultiplier);
+  const dur = eventDurationTicks(ev);
   const type = DUR_TO_TYPE[ev.dur] ?? 'quarter';
   const dotXml = dotsXml(ev);
   const voiceXml = `<voice>${voice}</voice>`;
@@ -286,6 +295,19 @@ function measureToXml(
     for (let k = 0; k < stopCount; k++) {
       lines.push(`<direction placement="below"><direction-type><wedge type="stop"/></direction-type><staff>${options.staff}</staff></direction>`);
     }
+  }
+
+  // 声部2（ピアノ譜の下声など）: 入力されている小節だけ <backup> で時間を巻き戻してから出力する。
+  // 声部2は現状、連符・強弱・松葉（ヘアピン）の入力UIが無いため、noteToXml をそのまま使い回しても
+  // 通常はそれらの要素は付かない（データ上に付いていた場合でも noteToXml が対応済みなので害はない）。
+  const voicesForXml = getMeasureVoices(measure);
+  const voice2Events = voicesForXml.length > 1 ? voicesForXml[1].events : [];
+  if (voice2Events.length > 0) {
+    const voice1Ticks = events.reduce((sum, ev) => sum + eventDurationTicks(ev), 0);
+    lines.push(`<backup><duration>${voice1Ticks}</duration></backup>`);
+    voice2Events.forEach((ev) => {
+      lines.push(noteToXml(ev, 2, options.staff));
+    });
   }
 
   // リピート終了

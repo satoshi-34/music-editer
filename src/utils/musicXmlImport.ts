@@ -2,7 +2,7 @@
 // MusicXML ファイルを SavedScoreData 形式にパースする。
 // score-partwise 形式（Finale / Sibelius / MuseScore 等が出力する標準形式）に対応。
 
-import type { SavedScoreData, MeasureData, NoteEvent, PartData } from '../types/storage';
+import type { SavedScoreData, MeasureData, NoteEvent, PartData, HairpinMark } from '../types/storage';
 import type { ClefType } from '../components/clefUtils';
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
@@ -24,8 +24,26 @@ function pitchToKey(stepEl: Element | null, alterEl: Element | null, octaveEl: E
   const alter = parseFloat(alterEl?.textContent ?? '0') || 0;
   const octave = parseInt(octaveEl?.textContent ?? '4', 10);
   const base = step.toLowerCase();
+  // 微分音（alter = ±0.5）は keys 文字列には反映しない（自然音の綴りのまま）。
+  // これは書出側（musicXmlExport.ts の keyToPitchXml）と同じ方針: keys は変更せず、
+  // 微分音の情報は NoteEvent.microtones に独立して持たせる。
   const acc = alter === 1 ? '#' : alter === -1 ? 'b' : alter === 2 ? '##' : alter === -2 ? 'bb' : '';
   return `${base}${acc}/${octave}`;
+}
+
+/**
+ * MusicXML の <note> から微分音（四分音）種別を読み取る。
+ * 書出側（musicXmlExport.ts）は alter に 0.5/-0.5 と <accidental>quarter-sharp|quarter-flat</accidental>
+ * の両方を出力しているため、どちらからでも判定できるようにしておく。
+ */
+function readMicrotoneType(noteEl: Element, alterEl: Element | null): 'quarterSharp' | 'quarterFlat' | undefined {
+  const accidentalText = noteEl.querySelector('accidental')?.textContent?.trim();
+  if (accidentalText === 'quarter-sharp') return 'quarterSharp';
+  if (accidentalText === 'quarter-flat') return 'quarterFlat';
+  const alter = parseFloat(alterEl?.textContent ?? '0') || 0;
+  if (alter === 0.5) return 'quarterSharp';
+  if (alter === -0.5) return 'quarterFlat';
+  return undefined;
 }
 
 /** MusicXML の type 要素から当アプリの音価 DurKey に変換する */
@@ -95,10 +113,15 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
     const alter = noteEl.querySelector('alter');
     const octave = noteEl.querySelector('octave');
     const key = pitchToKey(step, alter, octave);
+    const microtoneType = readMicrotoneType(noteEl, alter);
 
     if (isChord && chordBuffer) {
       // 和音: 前の音符に音高を追加する
+      const keyIndex = chordBuffer.keys.length;
       chordBuffer.keys.push(key);
+      if (microtoneType) {
+        chordBuffer.microtones = [...(chordBuffer.microtones ?? []), { keyIndex, type: microtoneType }];
+      }
       // この音にも運指番号があれば、既存の運指リストにカンマ区切りで追加する
       // （和音の音の順番と運指番号の順番を対応させるため）
       const chordFingerEl = noteEl.querySelector('technical fingering');
@@ -110,6 +133,9 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
     } else {
       if (chordBuffer) events.push(chordBuffer);
       chordBuffer = { dur: dur as any, isRest: false, keys: [key], dots, tuplet };
+      if (microtoneType) {
+        chordBuffer.microtones = [{ keyIndex: 0, type: microtoneType }];
+      }
 
       // アーティキュレーションを読み込む
       const articulations: string[] = [];
@@ -137,6 +163,61 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
   }
   if (chordBuffer) events.push(chordBuffer);
   return events;
+}
+
+/**
+ * 松葉（ヘアピン）を声部1の NoteEvent へ復元する。
+ * 書出側（musicXmlExport.ts）は
+ * 「開始音符の直前に <direction><wedge type="crescendo|diminuendo"/></direction>」
+ * 「終了音符の直後に <direction><wedge type="stop"/></direction>」
+ * という並びで出力しているため、<measure> の直下の子要素（note と direction）を
+ * 出現順に読み、直前/直後の note との対応を追いながら組み立てる。
+ *
+ * @param children 声部1に属する <measure> 直下の子要素（<backup> より前の部分）
+ * @param events parseNotes(voice1のnoteEls) の結果。ここへ hairpins を直接書き込む
+ * @param measureIndex この小節の絶対インデックス（HairpinMark.endMeasure に使う）
+ * @param openRefs まだ <wedge type="stop"/> に出会っていない HairpinMark の待ち行列。
+ *   パート全体で1つを使い回すことで、小節をまたぐ松葉にも対応する（FIFO想定）。
+ */
+function attachHairpinsToVoice1Events(
+  children: Element[],
+  events: NoteEvent[],
+  measureIndex: number,
+  openRefs: HairpinMark[],
+): void {
+  let eventIndex = -1;
+  let pendingTypes: Array<'cresc' | 'dim'> = [];
+
+  for (const child of children) {
+    if (child.tagName === 'direction') {
+      const wedgeType = child.querySelector('wedge')?.getAttribute('type');
+      if (wedgeType === 'crescendo') pendingTypes.push('cresc');
+      else if (wedgeType === 'diminuendo') pendingTypes.push('dim');
+      else if (wedgeType === 'stop') {
+        const ref = openRefs.shift();
+        if (ref && eventIndex >= 0) {
+          ref.endMeasure = measureIndex;
+          ref.endEvent = eventIndex;
+        }
+      }
+      continue;
+    }
+    if (child.tagName !== 'note') continue;
+    // parseNotes と同じ判定（前打音はスキップ、和音の2音目以降は新しい event を作らない）
+    if (child.querySelector('grace')) continue;
+    const isChordNote = child.querySelector('chord') !== null;
+    if (isChordNote) continue;
+    eventIndex += 1;
+    if (pendingTypes.length === 0) continue;
+    const ev = events[eventIndex];
+    if (!ev) continue;
+    for (const type of pendingTypes) {
+      const mark: HairpinMark = { type, endMeasure: measureIndex, endEvent: eventIndex };
+      ev.hairpins = [...(ev.hairpins ?? []), mark];
+      openRefs.push(mark);
+    }
+    pendingTypes = [];
+  }
 }
 
 /**
@@ -201,9 +282,22 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     }
 
     const measureEls = Array.from(partEl.querySelectorAll('measure'));
+    // 松葉（ヘアピン）は小節をまたぐ場合があるため、パート全体で1つの待ち行列を使い回す
+    const openHairpinRefs: HairpinMark[] = [];
     const measures: MeasureData[] = measureEls.map((measureEl, mi) => {
-      const noteEls = Array.from(measureEl.querySelectorAll('note'));
-      const events = parseNotes(noteEls);
+      // 声部2（下声など）は書出側が <backup> で区切って出力しているため、
+      // <backup> より前を声部1、後を声部2として分ける。
+      const allChildren = Array.from(measureEl.children);
+      const backupIndex = allChildren.findIndex((el) => el.tagName === 'backup');
+      const voice1Children = backupIndex === -1 ? allChildren : allChildren.slice(0, backupIndex);
+      const voice2Children = backupIndex === -1 ? [] : allChildren.slice(backupIndex + 1);
+
+      const voice1NoteEls = voice1Children.filter((el) => el.tagName === 'note');
+      const events = parseNotes(voice1NoteEls);
+      attachHairpinsToVoice1Events(voice1Children, events, mi, openHairpinRefs);
+
+      const voice2NoteEls = voice2Children.filter((el) => el.tagName === 'note');
+      const voice2Events = voice2NoteEls.length > 0 ? parseNotes(voice2NoteEls) : [];
 
       // リピート
       const leftBarline = measureEl.querySelector('barline[location="left"] repeat');
@@ -246,6 +340,11 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
 
       return {
         events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }],
+        // 声部2（下声）: 入力があった小節だけ voices を持たせる。
+        // voiceMeasureUtils の withVoiceEventsUpdated と同じ形（声部2は既定で符幹下向き）に揃える。
+        voices: voice2Events.length > 0
+          ? [{ id: 'voice-1', events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }] }, { id: 'voice-2', events: voice2Events, stemDirection: 'down' }]
+          : undefined,
         repeatStart: leftBarline?.getAttribute('direction') === 'forward' ? true : undefined,
         repeatEnd: rightBarline?.getAttribute('direction') === 'backward' ? true : undefined,
         bpm: bpm && !isNaN(bpm) ? bpm : undefined,
