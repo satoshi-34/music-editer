@@ -531,3 +531,54 @@ const activeEvs = activeRenderedEntry?.sourceEvents ?? [];
 修正前のコード（`primaryRenderedVoice` へのフォールバックあり）に対してこの
 テストを実行すると1件目が失敗する（`.vf-note-hit` が声部1の音符から2件作られて
 しまう）ことを確認済み。
+
+## 追記: MusicXML 声部2 書き出し・読み込み対応（Issue #113, 2026-07-29）
+
+上記「今回のスコープ外（既知の制限）」で保留していた MusicXML の声部2対応を実装した。
+
+### 背景
+
+Issue #113 のトリアージコメントは「声部（`<voice>`）の書出は対応済み」という前提で
+読込側だけを実装対象としていたが、実装前にコードを確認したところ、この前提は誤りだった。
+`musicXmlExport.ts` は常に `noteToXml(ev, 1, ...)` で `<voice>1</voice>` を固定出力しており、
+`measure.voices[1]`（声部2）を参照する処理が export 側に一切無く、声部2のデータは
+書出の時点で既に失われていた（この設計書の「今回のスコープ外」の記載通りの状態のまま）。
+Issue の受入条件にある往復テスト（声部2を含む譜面を書き出し→読み込み→元データと一致）を
+満たすには読込側だけでは不十分なため、書出側の対応もこの対応の一部として実装した
+（設計書のこの節が最初から予告していた「次回以降」の実装であり、設計方針と矛盾しない）。
+
+### 修正設計
+
+1. **書出（`musicXmlExport.ts`）**
+   - `eventDurationTicks(ev)` を `noteToXml` から切り出し、`<backup>` の巻き戻し量計算と共有した。
+   - `measureToXml` で `getMeasureVoices(measure)` を呼び、`voices[1].events` が1件以上あれば、
+     声部1の全イベントの合計 duration ぶん `<backup><duration>N</duration></backup>` を出力してから
+     `noteToXml(ev, 2, staff)` で声部2の音符を続けて出力する。
+   - 声部2が無い小節（`voices` が無い、または `voices[1]` が空）は従来通り `<backup>` を出力しない
+     （既存の単声部エクスポートと完全に同じ出力のまま。リグレッション防止）。
+   - 声部2は強弱記号・松葉の入力UIが無いため、`buildHairpinPositionMaps`（声部1の `measure.events`
+     のみを走査）や `dynamicsDirectionXml` の呼び出し対象には含めていない。
+
+2. **読込（`musicXmlImport.ts`）**
+   - `<measure>` の直接の子要素を `<backup>` の位置で分割し、`<backup>` より前を声部1、
+     後を声部2として扱う（音符ごとの `<voice>` テキストではなく `<backup>` で区切る方式にしたのは、
+     自分の書出フォーマットが常にこの並びで出力するため、実装がシンプルになるから）。
+   - 声部2側に音符があれば `MeasureData.voices` を
+     `[{id:'voice-1', events: 声部1のevents}, {id:'voice-2', events: 声部2のevents, stemDirection:'down'}]`
+     の形で組み立てる。`stemDirection: 'down'` は `voiceMeasureUtils.withVoiceEventsUpdated` が
+     声部2を新規作成するときの既定値と揃えている。
+   - 声部2が無い小節は `voices` フィールド自体を付けない（既存の単声部インポートと同じ形のまま）。
+
+### テスト
+
+`musicXmlVoice2.test.ts`（新規）: 書出のみ（`<backup>`/`<voice>2</voice>` の出力確認、声部2無し時に
+出力されないこと）と、往復（声部1・声部2の音価・音高・休符が復元されること、声部2無し時は
+`voices` が付与されないこと）を確認した。
+
+### 今回のスコープ外（既知の制限、変更なし）
+
+- 声部2の強弱記号・松葉（ヘアピン）は入力UI自体が無いため、書出・読込とも対象外のまま。
+- 3声部以上（`voices[2]` 以降）は今回も対象外（アプリの入力UI自体が声部1・2の2つまでのため）。
+- 外部ソフト（Finale/Sibelius/MuseScore）が出力した、`<backup>` を使わず音符ごとの `<voice>` 番号
+  だけで多声を表現する MusicXML ファイルの読込互換は検証していない（自分の書出↔読込が
+  閉じることを優先する方針。詳細は Issue #113 のトリアージコメント参照）。

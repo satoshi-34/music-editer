@@ -409,12 +409,16 @@ export interface HairpinMark {
 ### MusicXML
 
 - 書出（`src/utils/musicXmlExport.ts`）: 開始音符の直前に `<direction><direction-type><wedge type="crescendo|diminuendo"/></direction-type></direction>`、終了音符の直後に `<wedge type="stop"/>`。パート全体の開始/終了位置マップを `buildHairpinPositionMaps()` で事前計算
-- **読込は未対応（除外）**: `<wedge>` の start/stop を開始音符参照方式へ逆変換する対応は工数の都合で見送り（既知の制限）
+- **読込に対応（Issue #113, 2026-07-29 追記）**: `musicXmlImport.ts` の `attachHairpinsToVoice1Events()` が
+  `<measure>` の直接の子要素（`<note>` と `<direction>`）を出現順に読み、`<wedge type="crescendo|diminuendo"/>`
+  の直後に来る音符を開始音符、`<wedge type="stop"/>` の直前に処理した音符を終了音符とみなして
+  `NoteEvent.hairpins`（`endMeasure`/`endEvent` 付き）を復元する。開始〜終了の待ち行列（FIFO）は
+  パート全体で1つを使い回すため、小節をまたぐ松葉にも対応する（自分の書出フォーマットが
+  ネストしない前提。外部ソフトの複雑な重なりまでは検証していない）
 
 ### 既知の制限
 
 - 2声部（ピアノ譜の声部2）への松葉入力は未対応（タイ/スラーと同じく声部1のみ）
-- MusicXML 読込は未対応（上記）
 - offsetY を編集するUIは未提供（データ型・バリデーション・描画は対応済み）
 
 ## 影響範囲
