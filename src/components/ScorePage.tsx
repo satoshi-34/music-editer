@@ -129,6 +129,7 @@ import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId,
 import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
+import { buildPlaybackPositionTimeline, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrintableMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
@@ -520,6 +521,13 @@ export default function ScorePage() {
   const playbackStartedAtRef = useRef<number | null>(null);
   // 一時停止時点で「あと何ミリ秒残っているか」を覚えておく。
   const remainingPlaybackMsRef = useRef<number>(0);
+  // 実音のスケジューリング（Web Audio の先読み予約）は途中経過を後から問い合わせられない。
+  // そのため、実音と同じ開始時刻・同じ小節展開ロジックで「見た目の位置タイムライン」を
+  // 別に進めることで、表示（PlaybackHighlight 含む）を実音の位置に追従させる。
+  const positionTimelineRef = useRef<PlaybackTimelineItem[]>([]);
+  const positionTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // 一時停止からの再開時、タイムラインのどこまで進んでいたかを求めるために使う。
+  const totalPlaybackMsRef = useRef<number>(0);
   useEffect(() => {
     console.log('[ScorePage] 再生エンジンが準備されました');
   }, []);
@@ -628,6 +636,28 @@ export default function ScorePage() {
     getAudioEngine().setSwingEnabled(soundRuntimeSettings.swingEnabled);
   }, [getAudioEngine, soundRuntimeSettings]);
 
+  const clearPositionTimers = useCallback(() => {
+    // 位置更新の setTimeout は小節・音符の数だけ大量に予約されるため、
+    // 停止・一時停止・再生し直しのたびに必ず全部消す。
+    // 消し忘れると、次の再生中に前回分が発火して表示位置が飛ぶ。
+    positionTimeoutsRef.current.forEach(timeoutId => clearTimeout(timeoutId));
+    positionTimeoutsRef.current = [];
+  }, []);
+
+  const schedulePositionTimeline = useCallback((fromElapsedMs: number) => {
+    // fromElapsedMs より前の項目は「すでに通過済み」なのでスケジュールしない。
+    // 一時停止からの再開時はここに経過ミリ秒を渡し、残りだけ予約し直す。
+    positionTimelineRef.current.forEach(item => {
+      if (item.atMs < fromElapsedMs) {
+        return;
+      }
+      const timeoutId = setTimeout(() => {
+        setCurrentPosition(item.position);
+      }, item.atMs - fromElapsedMs);
+      positionTimeoutsRef.current.push(timeoutId);
+    });
+  }, []);
+
   const clearPlaybackTimer = useCallback(() => {
     if (playbackTimerRef.current !== null) {
       // 再生終了予約は「最後に 1 つだけ」が正しい。
@@ -636,13 +666,17 @@ export default function ScorePage() {
       clearTimeout(playbackTimerRef.current);
       playbackTimerRef.current = null;
     }
-  }, []);
+    // 位置表示の予約も、再生終了予約と同じタイミングで必ず片付ける。
+    clearPositionTimers();
+  }, [clearPositionTimers]);
 
   const resetPlaybackClock = useCallback(() => {
-    // 2 つの ref は「いつ始まったか」と「あと何ミリ秒あるか」のセット。
-    // 片方だけ残すと pause/resume 後の計算が狂うため、初期化は同時に行う。
+    // 3 つの ref は「いつ始まったか」「あと何ミリ秒あるか」「全体で何ミリ秒か」のセット。
+    // 一部だけ残すと pause/resume 後の位置計算が狂うため、初期化は同時に行う。
     playbackStartedAtRef.current = null;
     remainingPlaybackMsRef.current = 0;
+    totalPlaybackMsRef.current = 0;
+    positionTimelineRef.current = [];
   }, []);
 
   useEffect(() => {
@@ -911,6 +945,9 @@ export default function ScorePage() {
           setPlaybackState('stopped');
           setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
         }, remainingMs);
+        // 一時停止で消えた分の予約を、経過ミリ秒（全体 - 残り）から先だけ組み直す。
+        const elapsedMs = Math.max(0, totalPlaybackMsRef.current - remainingMs);
+        schedulePositionTimeline(elapsedMs);
         return;
       }
 
@@ -1025,7 +1062,17 @@ export default function ScorePage() {
           setPlaybackState('playing');
           clearPlaybackTimer();
           remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
+          totalPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
           playbackStartedAtRef.current = Date.now();
+          // 位置表示（PlaybackHighlight含む）は先頭パート（referenceMeasures）の展開順を基準に進める。
+          // 他パートの反復順もこれに合わせているため、表示の基準としてズレが出にくい。
+          positionTimelineRef.current = buildPlaybackPositionTimeline(
+            referenceMeasures,
+            tempoSettings.bpm,
+            scoreTimeSignature,
+            soundRuntimeSettings.swingEnabled
+          );
+          schedulePositionTimeline(0);
           playbackTimerRef.current = setTimeout(() => {
             setPlaybackState('stopped');
             setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
@@ -1040,6 +1087,10 @@ export default function ScorePage() {
           setPlaybackState('playing');
           clearPlaybackTimer();
           remainingPlaybackMsRef.current = Math.max(0, duration * 1000);
+          totalPlaybackMsRef.current = Math.max(0, duration * 1000);
+          // 代表音のみの再生には小節位置が無いため、位置タイムラインは空にしておく
+          // （前回の再生分が残っていると、一時停止→再開時に誤って予約されるため）。
+          positionTimelineRef.current = [];
           playbackStartedAtRef.current = Date.now();
           playbackTimerRef.current = setTimeout(() => {
             setPlaybackState('stopped');
@@ -1066,7 +1117,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
