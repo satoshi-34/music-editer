@@ -580,6 +580,7 @@ Git の作業ルールは [GIT_RULES.md](/app/GIT_RULES.md) にまとめてい�
 - **1番括弧 / 2番括弧の再生分岐**: `MeasureData.ending` をもとに、1周目は 1番括弧、2周目は 2番括弧だけを鳴らす基本分岐へ対応
 - **サンプル譜での記号体験**: ピアノ用デモフレーズにはリピート、1番括弧 / 2番括弧、強弱記号を実際に入れてあり、見た目と再生の両方で確認できる
 - **再生位置の視覚化**: 再生ボタンの進行に合わせて現在の音符を青くハイライトし、スクロール外に出たときは自動追従する
+- **再生位置の表示と実音の同期**（issue #128）: 画面上部の「N小節目 M音符目」表示は、以前は再生開始時にほぼ先頭のままで実際の再生位置に追従しなかった。実音のスケジューリング（Web Audio の先読み予約）は途中経過を後から問い合わせられないため、`buildPlaybackPositionTimeline()`（`src/utils/playbackPositionUtils.ts`）で「実音と同じ展開順・同じ開始時刻」の見た目専用タイムラインを作り、`ScorePage.tsx` の `schedulePositionTimeline()` が `setTimeout` でハイライト用の `currentPosition` state を進める。一時停止時はその時点の位置で止め、再開時は経過ミリ秒（`totalPlaybackMsRef - remainingPlaybackMsRef`）から残りだけ再予約するため、停止→再開をまたいでも位置がズレない。停止・サンプル切替・音声復旧・背景復帰など既存の `clearPlaybackTimer()` 呼び出し箇所すべてで、この位置タイマーも一緒に必ずクリアされる。**既知の制限**: シーク操作（`handleSeek`/`onSeek`）は現時点でどの UI からも呼ばれておらず、呼ばれても表示 state を更新するだけで実音の再生位置は移動しない（従来どおり）。クリックでの途中再生・シークは issue #108 側の別issueで扱う予定で、その実装時に実音側のジャンプも合わせて対応する想定
 - **拍子の保存と復元**: localStorage には score ごとの `timeSignature` も保存し、読み込み時は無効値を安全な 4/4 へ戻す
 - **拍子ごとの入力上限**: `StaffCanvas / PianoSystemCanvas` は `3/8` なら 1.5 拍まで、`6/8` なら 3 拍まで、という形で小節長を判定する
 - **途中拍子変更の描画**: `effectiveTimeSig` 変数を段ループの外で追跡し、`MeasureData.timeSignature` が設定されている小節では更新する。Voice 作成時にその値を使うことで、VexFlow の拍数バリデーションが正しく通る。VexFlow Voice は SOFT モードにして、拍子が変わった小節でも強制終了しないようにする
