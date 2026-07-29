@@ -139,3 +139,37 @@ backup にも書く」というミラー方式だったため、backup が世代
 - 「自動保存から復元」を独立ボタンとして読込ボタンの隣に置く案は今回は見送った
   （起動時の自動復元で大半のケースをカバーできるため）。将来的に「起動時には
   自動復元しない設定」などが必要になった場合は、このボタンの追加を検討する。
+
+## 追記（2026-07-30, Issue #117）: measuresPerSystem が自動保存 deps から漏れていた
+
+### 問題
+
+Issue #107（`ensembleSecondStaffParts` 欠落）と同じ形の取りこぼしが `measuresPerSystem`
+（段あたり小節数）にもあった。自動保存 `useEffect` は `saveAutosave` の引数として
+`measuresPerSystem` を渡す（＝保存対象）が、`measuresPerSystem` の `useState` 宣言が
+自動保存 `useEffect` より**後方**にあったため、依存配列に入れられず
+（`// 後方宣言のため deps に入れられない` というコメント付きで意図的に除外されていた）、
+「段あたり小節数」だけを変更して閉じると自動保存が走らなかった。
+
+なお、同じコメントで除外されていた `totalSystems` はコードを確認した結果
+`const totalSystems = 12` の**定数**であり、変更されることが無いため元々 deps 不要
+（バグではない）。トリアージにより本Issueは `measuresPerSystem` のみが対象で、
+Issue本文にあった「段数/ページ」（`systemsPerPageSetting`）は画面設定として別に
+localStorage 保存されており自動保存の対象外のため、範囲外と判断された。
+
+### 修正設計
+
+- `measuresPerSystem` の `useState` 宣言を自動保存 `useEffect` より前
+  （`autoSaveStatus` の宣言の直前）へ移動し、依存配列に追加した。
+  宣言を移動しても初期値は固定値 `4` で他状態に依存しないため、TDZ・宣言順の問題は
+  発生しない。
+- 自動保存 `useEffect` 直前のコメントを実態に合わせて更新（`totalSystems` は定数、
+  `measuresPerSystem` は前方宣言化済みで deps に含む旨）。
+
+### 影響範囲
+
+- `src/components/ScorePage.tsx`: `measuresPerSystem` の `useState` 宣言位置の変更、
+  自動保存 `useEffect` の依存配列とコメントの更新（`totalSystems` の宣言・他の関数
+  （`handleExportFile` 等）は変更なし）。
+- `src/components/ScorePageAutosaveDeps.test.tsx`: `measuresPerSystem` が自動保存の
+  依存配列に含まれることを検証するテストを追加。

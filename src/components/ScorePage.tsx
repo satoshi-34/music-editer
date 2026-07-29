@@ -1916,6 +1916,11 @@ export default function ScorePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadAutosave, setTimeSignature]);
 
+  // 段あたり小節数。自動保存 useEffect の依存配列に含めるため、useEffect より前で宣言する
+  // （以前はここより後方で宣言されており、後方宣言のため deps に入れられなかった。
+  // Issue #117: このため「段あたり小節数」だけを変更して閉じると自動保存されなかった）。
+  const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
+
   // 自動保存（編集から 1.5 秒後に localStorage へ保存）
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1951,7 +1956,10 @@ export default function ScorePage() {
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
-  // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない。
+  // totalSystems は `const totalSystems = 12` の定数で変更されないため deps に不要。
+  // measuresPerSystem は useEffect より前で宣言されるようになったため deps に含める
+  // （Issue #117: 以前は後方宣言のため deps に入れられず、「段あたり小節数」だけを
+  // 変更して閉じると自動保存されなかった）。
   // 値はタイマー発火時（レンダー後）に読まれるので TDZ の問題はない。
   //
   // ここに列挙し漏れた state は「保存対象なのに変更しても自動保存が起動しない」＝
@@ -1960,7 +1968,7 @@ export default function ScorePage() {
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
@@ -2563,7 +2571,6 @@ export default function ScorePage() {
   }, [systemRowGapOverrides.length, pushHistory, scoreType]);
 
   const totalSystems = 12;
-  const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
   // 「最後に編集した小節」の絶対インデックス。音符追加/削除/小節追加のたびに更新し、
   // planSystemMeasureRanges がこの位置より前の段だけを安定化できるようにする（Issue #67）。
   // null のとき（新規読込直後・全体リセット直後など）は安定化を行わず常に貪欲法のみになる。
