@@ -41,10 +41,58 @@
   border-bottom: 1px solid #ddd;
   box-shadow: 0 4px 16px #877f7f14;
 }
+/* タブ行（Issue #142）。左にタブ、右端にフィードバックを置く。
+   タブが折り返して増えてもフィードバックが行の先頭側へ回り込まないよう、
+   フィードバック側だけ縮まない（flex-shrink: 0）ようにしている。 */
+.toolbar-tab-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
 .toolbar-tabs {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+.toolbar-feedback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  /* 通知（コピー成功・失敗）が長いときにタブ行を極端に押し広げないための上限 */
+  max-width: 45%;
+}
+/* フィードバックは「パネルを持つタブ」ではなく「押すと送信フローが始まるアクション」。
+   タブと同じ四角い ghost ボタンにすると7個目のタブに見えてしまうため、
+   ピル型（角丸999px）・琥珀色の枠と背景・先頭のアイコンで明確に区別する。 */
+.toolbar-feedback-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--toolbar-control-height);
+  box-sizing: border-box;
+  padding: 0 12px;
+  font-size: 12px;
+  border: 1px solid #f59e0b;
+  border-radius: 999px;
+  background: #fffbeb;
+  color: #92400e;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  /* 通知が出ているときに押し縮められてラベルが2行に折れないようにする
+     （縮むのは通知側だけにしたい） */
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.toolbar-feedback-button:hover {
+  background: #fef3c7;
+  border-color: #d97706;
+}
+.toolbar-feedback-notice {
+  font-size: 12px;
+  /* flex の既定（min-width: auto）だと長い文章が縮まず行を押し広げてしまうため */
+  min-width: 0;
 }
 
 /* ツールバー内のすべての ghost ボタンをコンパクトに統一（タブボタンは除く） */
@@ -70,12 +118,13 @@
 }
 
 /* ツールバーの折り畳み（Issue #125）。
-   .collapsed のときはタブ・Undo/Redo・パネルを隠し、折り畳みトグルの行だけを残す。
+   .collapsed のときはタブ行（フィードバック含む）・Undo/Redo・パネルを隠し、
+   折り畳みトグルの行だけを残す。
    display:none で隠すのは、React 側でアンマウントすると再生・音色などの
    内部状態まで作り直されてしまうため（ScorePage.tsx のトグル処理のコメント参照）。
    ヘッダーの高さは ScorePage 側の ResizeObserver が実測して --toolbar-h へ反映するので、
    ここで高さを直接書かなくても本文（.app-root の padding-top）が自動で詰まる。 */
-.toolbar.collapsed .toolbar-tabs,
+.toolbar.collapsed .toolbar-tab-row,
 .toolbar.collapsed .toolbar-history-controls,
 .toolbar.collapsed .toolbar-panel {
   display: none;
@@ -628,11 +677,18 @@ button.ghost.active:hover:not(:disabled) {
     margin-left: 0;
   }
 
-  .toolbar-tabs,
   .toolbar-score-controls,
   .toolbar-layout-controls,
   .toolbar-other-controls {
     width: 100%;
+  }
+
+  /* 狭い画面ではタブ側だけを縮めて折り返させ、右端のフィードバックは
+     同じ行に残す（幅100%を与えるとフィードバックが次の行へ押し出されてしまう）。
+     min-width: 0 は、flex の既定（min-width: auto）だと中身の幅より縮まないため。 */
+  .toolbar-tabs {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 }
 
