@@ -29,7 +29,6 @@ type Props = {
   partConfig: Omit<PartConfig, 'data' | 'onChange'>;
   data: MeasureData[];
   startMeasureIndex?: number;
-  yOffset?: number;
   currentInstrument?: InstrumentType;
   onPreviewNoteEvent?: (noteEvent: NoteEvent, instrument?: InstrumentType) => Promise<void>;
   previewAccidentalOnApply?: boolean;
@@ -68,7 +67,6 @@ export default function PartExtractionStaff({
   partConfig,
   data,
   startMeasureIndex = 0,
-  yOffset = 0,
   currentInstrument = InstrumentType.PIANO,
   onPreviewNoteEvent,
   previewAccidentalOnApply = true,
@@ -101,7 +99,6 @@ export default function PartExtractionStaff({
             startMeasureIndex={systemRanges?.[i]?.start ?? startMeasureIndex + i * measuresPerSystem}
             // パート譜表示は常に編集無効（閲覧・印刷専用）
             disabled
-            yOffset={yOffset}
             currentInstrument={currentInstrument}
             onPreviewNoteEvent={onPreviewNoteEvent}
             previewAccidentalOnApply={previewAccidentalOnApply}

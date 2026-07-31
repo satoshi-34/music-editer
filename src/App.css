@@ -1535,7 +1535,7 @@ button.ghost.active:hover:not(:disabled) {
 /* SVGのアニメ残り防止 */
 svg { animation: none; transition: none; }
 
-/* 座標補正ボタン＋ポップアップ */
+/* ツールバーのボタン＋ポップアップ（移調パネルなどで使う） */
 .coord-correction-wrap {
   position: relative;
 }
@@ -1552,18 +1552,6 @@ svg { animation: none; transition: none; }
   padding: 12px 14px;
   min-width: 220px;
   white-space: nowrap;
-}
-
-.coord-panel-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.coord-panel-header .coord-panel-note {
-  margin: 0;
 }
 
 .coord-panel-note {
@@ -1586,15 +1574,4 @@ svg { animation: none; transition: none; }
   padding: 3px 6px;
   border: 1px solid #ced4da;
   border-radius: 4px;
-}
-
-.y-offset-btn {
-  padding: 3px 9px;
-  font-size: 14px;
-  line-height: 1;
-}
-
-.y-offset-reset {
-  padding: 3px 8px;
-  font-size: 11px;
 }
