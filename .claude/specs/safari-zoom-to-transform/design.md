@@ -105,3 +105,59 @@ zoom 時代にY補正を設定した利用者全員が「修正したのにズ�
 - `.page-wrapper` / `.print-page` に CSS `zoom` を再導入しない
 - `ScaledPageWrapper` を外して素の `<div className="page-wrapper">` に戻さない
   （ページ間の余白が崩れる）
+
+## フォローアップ2: 手動Y補正（yOffset）の撤去（Issue #134）
+
+### 問題
+
+手動Y補正は、zoom 時代に「カーソル位置と描画位置がズレる」不具合を直しきれなかった
+時期の**対症療法UI**（利用者が自分でズレ量を打ち消すためのスライダー）だった。
+上記の根本対策（`transform: scale` 化）と旧補正値の自動リセットで当該バグは再現
+しなくなり、残しておくと「何のための数値なのか分からないスライダー」として
+むしろ混乱源になる（レイアウトタブの整理 #114 でも指摘）。
+
+### 撤去前の確認（2026-08-01）
+
+worktree のビルドを共有 dev サーバー経由でブラウザに読み込み、`localStorage` に
+旧値 `yOffset = 24` をわざと残した状態で、4譜種すべての「カーソルの高さ」と
+「アプリが描くガイドライン（＝音符が置かれる高さ）」の差を実測した:
+
+| 譜種 | 測定点数 | ズレの最大値 |
+| --- | --- | --- |
+| ピアノ大譜表 | 24 | 0.5px |
+| 単旋律譜 | 18 | 1.5px |
+| 弦楽四重奏 | 24 | 1.7px |
+| 編成譜 | 30 | 1.7px |
+
+いずれも0.5行スナップ（半行 ≒ 5px相当）の範囲内で、旧バグの再現（`24 × scale ≒ 18px`
+規模のズレ）は無し。よって撤去してよいと判断した。
+
+### 修正設計
+
+- **UI撤去**: レイアウトタブの「Y補正」ボタンとポップアップ（`ScorePageYOffsetPanel`
+  相当の JSX）、`showOffsetPanel` / `yOffset` state、`handleYOffsetChange` を削除。
+  ポップアップ専用だった CSS（`.y-offset-btn` / `.y-offset-reset` /
+  `.coord-panel-header`）も削除する。`.coord-panel` 系は移調パネルが使うので残す
+- **描画パスの単純化**: `PianoSystemCanvas` の `yOffset` prop・`yOffRef` と、
+  クリック座標へ足していた `clientY + yOffRef.current` を削除し、値0として畳み込む。
+  各 Staff コンポーネント（Single/Piano/Quartet/Ensemble/PartExtraction）と
+  `ScorePage` からの受け渡しも削除する
+- **保存データ**: `yOffset` は譜面データではなく `localStorage` の独立キーだったので、
+  **読み捨て**（読まない・書かない）だけにし、マイグレーションでの削除はしない。
+  古い値が残っていても実害が無く、削除処理を足すほうがコードの寿命が長くなるため
+- **移行モジュールの削除**: `src/utils/yOffsetMigration.ts` とそのテストは役目を終えた
+  ので削除。代わりに「旧 `yOffset` が残っていても起動でき、書き込みもしない」ことを
+  `src/components/ScorePageLegacyYOffset.test.tsx` で検証する
+
+### 影響範囲
+
+- `src/components/ScorePage.tsx`（state・ハンドラ・JSX・prop受け渡し）
+- `src/components/{SingleStaff,PianoStaff,QuartetStaff,EnsembleStaff,PartExtractionStaff}.tsx`
+- `src/components/PianoSystemCanvas.tsx`（クリック座標変換）
+- `src/App.css`、`README.md`、`docs/DEVELOPMENT.md`、`docs/REGRESSION.md`
+- 削除: `src/utils/yOffsetMigration.ts(.test.ts)`、`src/components/ScorePageYOffsetPanel.test.tsx`
+
+### 以後の指針
+
+座標ズレが再発しても、利用者に手で打ち消させるUIは復活させない。
+`transform: scale` と BCR ベースの座標変換（本設計書の本文）側の退行を疑うこと。

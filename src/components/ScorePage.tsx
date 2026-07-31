@@ -21,7 +21,6 @@ import PlaybackControls, {
 } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
-import { readInitialYOffset, Y_OFFSET_KEY } from '../utils/yOffsetMigration';
 import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
@@ -363,7 +362,6 @@ export default function ScorePage() {
   // 保存データには含めない一時的なビューなので、リロードすると総譜表示に戻る
   // （詳細は .claude/specs/part-extraction/design.md を参照）。
   const [partExtractionId, setPartExtractionId] = useState<string | null>(null);
-  const [showOffsetPanel, setShowOffsetPanel] = useState(false);
   // 印刷プレビューモード。ON のとき、@media print と同じ見た目（A4紙面・余白・
   // 段区切り）を画面上でも再現する（.print-preview クラスを app-root に付与し、
   // App.css 側の .print-preview 系ルールで見た目を切り替える）。
@@ -414,14 +412,6 @@ export default function ScorePage() {
   const restoreNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
-
-  // zoom 時代の古い手動Y補正は transform ビルド初回起動時に自動リセットされる
-  // （詳細は src/utils/yOffsetMigration.ts のコメントを参照）
-  const [yOffset, setYOffset] = useState<number>(() => readInitialYOffset());
-  const handleYOffsetChange = (v: number) => {
-    setYOffset(v);
-    localStorage.setItem(Y_OFFSET_KEY, String(v));
-  };
 
   // パートごとのデータ
   const [rightHandData, setRightHandData] = useState<MeasureData[] | undefined>(undefined);
@@ -3421,7 +3411,7 @@ export default function ScorePage() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateToolbarHeight);
     };
-  }, [activeToolbarTab, showOffsetPanel, scoreType, isToolbarCollapsed]);
+  }, [activeToolbarTab, scoreType, isToolbarCollapsed]);
 
   useEffect(() => {
     if (scoreType !== 'ensemble') {
@@ -4143,54 +4133,6 @@ export default function ScorePage() {
                   <span style={{ fontSize: 12, color: '#555' }} role="status">{settingsProfileNotice}</span>
                 )}
               </div>
-              <div className="coord-correction-wrap">
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => setShowOffsetPanel(v => !v)}
-                  title="音符配置位置の座標補正"
-                >
-                  Y補正{yOffset !== 0 ? ` (${yOffset})` : ''}
-                </button>
-                {showOffsetPanel && (
-                  <>
-                    <div className="dropdown-overlay" onClick={() => setShowOffsetPanel(false)} />
-                    <div className="coord-panel">
-                      <div className="coord-panel-header">
-                        <p className="coord-panel-note">高音方向はマイナス、低音方向はプラス</p>
-                        <button
-                          type="button"
-                          className="ghost compact-button icon-button"
-                          onClick={() => setShowOffsetPanel(false)}
-                          aria-label="Y補正パネルを閉じる"
-                          title="閉じる"
-                        >
-                          x
-                        </button>
-                      </div>
-                      <div className="coord-panel-row">
-                        <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>↑</button>
-                        <input
-                          id="y-offset-input"
-                          type="number"
-                          value={yOffset}
-                          onChange={e => handleYOffsetChange(Number(e.target.value))}
-                          aria-label="座標補正値（↓で低音方向）"
-                          onKeyDown={e => {
-                            if (e.key === 'ArrowDown') { e.preventDefault(); handleYOffsetChange(yOffset + 1); }
-                            if (e.key === 'ArrowUp')   { e.preventDefault(); handleYOffsetChange(yOffset - 1); }
-                          }}
-                          autoFocus
-                        />
-                        <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>↓</button>
-                        {yOffset !== 0 && (
-                          <button type="button" className="ghost y-offset-reset" onClick={() => handleYOffsetChange(0)}>リセット</button>
-                        )}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
             </div>
           )}
 
@@ -4659,7 +4601,6 @@ export default function ScorePage() {
                       onSecondStaffPartChange={[() => {}]}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4688,7 +4629,6 @@ export default function ScorePage() {
                       partConfig={QUARTET_PART_CONFIGS[partExtractionSelection!.index]}
                       data={quartetParts[partExtractionSelection!.index] ?? []}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4718,7 +4658,6 @@ export default function ScorePage() {
                       onSecondStaffPartChange={instrumentation.parts.map((_, pi) => handleEnsembleSecondStaffChange(pi))}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isScoreEditingLocked}
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4753,7 +4692,6 @@ export default function ScorePage() {
                       onPartChange={[0, 1, 2, 3].map(pi => handleQuartetPartChange(pi))}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isScoreEditingLocked}
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4790,7 +4728,6 @@ export default function ScorePage() {
                       onLeftHandChange={handleLeftHandChange}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isScoreEditingLocked}
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4825,7 +4762,6 @@ export default function ScorePage() {
                       onChange={handleScoreDataChange}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isScoreEditingLocked}
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}

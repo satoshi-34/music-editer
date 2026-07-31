@@ -739,7 +739,6 @@ type Props = {
   showInstrumentLabels?: boolean;
   startMeasureIndex?: number;
   disabled?: boolean;
-  yOffset?: number;
   currentInstrument?: InstrumentType;
   onPreviewNoteEvent?: (noteEvent: NoteEvent, instrument?: InstrumentType) => Promise<void>;
   previewAccidentalOnApply?: boolean;
@@ -815,7 +814,7 @@ export default function PianoSystemCanvas({
   trebleData, bassData, onTrebleChange, onBassChange,
   partsConfig,
   showInstrumentLabels = false,
-  startMeasureIndex=0, disabled=false, yOffset=0, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
+  startMeasureIndex=0, disabled=false, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   finalMeasureIndex,
   timeSignature = [4, 4],
   onKeySignatureChange,
@@ -892,7 +891,6 @@ export default function PianoSystemCanvas({
   const disRef = useRef(disabled);
   // 印刷プレビュー中かどうかをrefでも保持する（capture リスナー内で最新値を参照するため）
   const previewRef = useRef(isPrintPreview);
-  const yOffRef = useRef(yOffset);
   const keySignatureRef = useRef<KeySignature>(normalizedKeySignature);
   const notePlayerRef = useRef<NotePlayer | null>(null);
   const soundSourceRef = useRef<SoundSource | null>(null);
@@ -1074,7 +1072,6 @@ export default function PianoSystemCanvas({
       eventNames.forEach(name => container.removeEventListener(name, blockEditingPointerEvent, true));
     };
   }, []);
-  useEffect(()=>{yOffRef.current=yOffset;},[yOffset]);
   useEffect(()=>{keySignatureRef.current=normalizedKeySignature;},[normalizedKeySignature]);
   // partsの変更（基本的にない）に追従
   partsClefRef.current = parts.map(p => p.clef);
@@ -1566,7 +1563,7 @@ export default function PianoSystemCanvas({
       // 始点・終点ハンドルのドラッグ（cpDrag より優先）
       if(epDragRef.current){
         const drag=epDragRef.current;
-        const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
+        const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
         const newDx=drag.originalDx+(svgX-drag.startSvgX);
         const newDy=drag.originalDy+(svgY-drag.startSvgY);
         const key=drag.baseArcKey+drag.segment;
@@ -1592,7 +1589,7 @@ export default function PianoSystemCanvas({
       // 描画済み弧のドラッグ調節（カーソルが音符クラスタを超えると方向を自動反転）
       if(cpDragRef.current){
         const drag=cpDragRef.current;
-        const{y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
+        const{y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
         const FLIP_THRESHOLD=20;
 
         const primaryGeom=arcGeomMap.get(drag.baseArcKey)??arcGeomMap.get(drag.baseArcKey+'-1');
@@ -1633,7 +1630,7 @@ export default function PianoSystemCanvas({
       }
       // タイ／松葉 新規ドラッグのプレビュー
       if(!tieStartRef.current||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
-      const{x:mx,y:my}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
+      const{x:mx,y:my}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
       const{noteX:sx,noteY:sy,stemDir}=tieStartRef.current;
       const upward=stemDir!==1;
       // 段またぎドラッグでは mx < sx（右→左）になるため Math.abs で判定する
@@ -1652,7 +1649,7 @@ export default function PianoSystemCanvas({
       // 始点・終点ドラッグの確定
       if(epDragRef.current){
         const drag=epDragRef.current;
-        const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
+        const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
         const newDx=drag.originalDx+(svgX-drag.startSvgX);
         const newDy=drag.originalDy+(svgY-drag.startSvgY);
         setPartsScore(prev=>{
@@ -1680,7 +1677,7 @@ export default function PianoSystemCanvas({
       // 描画済み弧のドラッグ確定
       if(cpDragRef.current){
         const drag=cpDragRef.current;
-        const{y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY+yOffRef.current);
+        const{y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
         const newOffset=drag.originalOffset+(svgY-drag.startSvgY);
         setPartsScore(prev=>{
           const next=[...prev];
@@ -2120,7 +2117,7 @@ export default function PianoSystemCanvas({
         const[pi,fm,fe,ai]=parts2;
         setSelectedArc({partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
         setSelected(null);
-        const{y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
+        const{y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
         const seg=arcKey.endsWith('-1')?'-1':arcKey.endsWith('-2')?'-2':'' as ''|'-1'|'-2';
         cpDragRef.current={partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg};
       });
@@ -2153,7 +2150,7 @@ export default function PianoSystemCanvas({
             e.preventDefault();e.stopPropagation();
             const pts=baseKey.split('-').map(Number);
             const[pi2,fm2,fe2,ai2]=pts;
-            const{x:sx,y:sy}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
+            const{x:sx,y:sy}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
             epDragRef.current={partIndex:pi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,segment:seg,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy};
           });
           h.addEventListener('click',e=>e.stopPropagation());
@@ -2796,7 +2793,7 @@ export default function PianoSystemCanvas({
         ir.setAttribute('pointer-events','all');
         (ir.style as any).cursor = ('mode' in tool && tool.mode === 'select') ? 'pointer' : 'crosshair';
         ir.addEventListener('mousemove',e=>{
-          const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
+          const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
           hideChordGuide();
           if(lx>=measLeft&&lx<=measRight&&ly>=staveTop&&ly<=staveBot)showGuide(lx,ly,stave);
           else hideGuide();
@@ -2898,7 +2895,7 @@ export default function PianoSystemCanvas({
             });
             return;
           }
-          const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
+          const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
           if('mode' in tool&&tool.mode==='accidental'){
             if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
               // 臨時記号ツール中の背景クリックは、調号領域なら調号変更へ回す。
@@ -2991,7 +2988,7 @@ export default function PianoSystemCanvas({
             hit.setAttribute('fill','transparent');hit.setAttribute('stroke','none');
             hit.setAttribute('pointer-events','all');(hit.style as any).cursor='pointer';
             hit.addEventListener('mousemove',e=>{
-              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
+              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
               if(lx<measLeft||lx>measRight){hideGuide();hideChordGuide();setNoteHoverHighlight(n,false);return;}
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音ゾーン
               const inChordZone=!activeEvs[j]?.isRest&&lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
@@ -3029,7 +3026,7 @@ export default function PianoSystemCanvas({
               const stemDir=avgLine<2?-1:1;
               const noteY=stemDir===1?bbY+bbH+2:bbY-2;
               // クリックしたY座標に最も近い符頭 key を特定する
-              const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
+              const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
               const startKey=findNearestKey(evKeys,ly,stave,k2l);
               tieStartRef.current={partIndex:pi,absoluteIndex:absI,noteIndex:j,startKey,noteX,noteY,stemDir};
             });
@@ -3050,7 +3047,7 @@ export default function PianoSystemCanvas({
                 return;
               }
               // 終点符頭を特定し、開始符頭と同じ key ならタイ、異なればスラー
-              const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
+              const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
               const endKey=findNearestKey(activeEvs[j].keys,ly,stave,k2l);
               const kind=start.startKey===endKey?'tie':'slur';
               applyArc(start.absoluteIndex,start.noteIndex,start.startKey,absI,j,endKey,kind);
@@ -3146,7 +3143,7 @@ export default function PianoSystemCanvas({
               const pedalMode = 'mode' in tool && tool.mode === 'pedal' ? (tool as any).pedalType as 'down' | 'up' : null;
               const ottavaMode = 'mode' in tool && tool.mode === 'ottava' ? (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd' : null;
               const me=e as MouseEvent;
-              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY+yOffRef.current);
+              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY);
               // この hit rect は既にアクティブ声部（activeVfNotes/activeEvs）から生成されているので、
               // 以下の判定はそのままアクティブ声部の j 番目のイベントに対して行われる。
               // 声部1・声部2どちらがアクティブでも同じコードパスで
