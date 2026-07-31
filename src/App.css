@@ -69,6 +69,38 @@
   max-width: 100%;
 }
 
+/* ツールバーの折り畳み（Issue #125）。
+   .collapsed のときはタブ・Undo/Redo・パネルを隠し、折り畳みトグルの行だけを残す。
+   display:none で隠すのは、React 側でアンマウントすると再生・音色などの
+   内部状態まで作り直されてしまうため（ScorePage.tsx のトグル処理のコメント参照）。
+   ヘッダーの高さは ScorePage 側の ResizeObserver が実測して --toolbar-h へ反映するので、
+   ここで高さを直接書かなくても本文（.app-root の padding-top）が自動で詰まる。 */
+.toolbar.collapsed .toolbar-tabs,
+.toolbar.collapsed .toolbar-history-controls,
+.toolbar.collapsed .toolbar-panel {
+  display: none;
+}
+/* 折り畳み中は帯を細くしたいので、展開時の上下パディングより控えめにする */
+.toolbar.collapsed {
+  padding: 2px 10px;
+  gap: 0;
+}
+.toolbar-collapse-row {
+  display: flex;
+  justify-content: flex-end;
+}
+/* `.toolbar` を前置きしているのは詳細度の都合。素の `.toolbar-collapse-button` だと
+   後述の `button.ghost`（要素名を含むぶん詳細度が高い）の padding: 8px 12px に負けて、
+   ボタンだけ他のツールバー操作より背が高くなってしまう。
+   高さは Issue #104 で導入した共通変数に合わせ、他のコントロールと見た目をそろえる。 */
+.toolbar .toolbar-collapse-button {
+  height: var(--toolbar-control-height);
+  box-sizing: border-box;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+
 /* Undo/Redo ボタン。タブに関係なく常時操作できるよう toolbar-tabs の隣に置く */
 .toolbar-history-controls {
   display: flex;
