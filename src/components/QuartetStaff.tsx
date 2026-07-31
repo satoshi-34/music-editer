@@ -74,6 +74,8 @@ type Props = {
   // 弦楽四重奏でも使えるよう中継する（絶対小節インデックスは startMeasureIndex 起点で共通）。
   selectedMeasures?: { start: number; end: number };
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
+  // ドラッグ範囲選択（PianoSystemCanvas から呼ばれる）をそのまま親へ渡す
+  onMeasureRangeSelect?: (startIndex: number, endIndex: number) => void;
 };
 
 export default function QuartetStaff({
@@ -105,6 +107,7 @@ export default function QuartetStaff({
   isPrintPreview = false,
   selectedMeasures,
   onMeasureSelect,
+  onMeasureRangeSelect,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
@@ -149,6 +152,7 @@ export default function QuartetStaff({
             partSpacingOffsetPx={partSpacingOffsetPx}
             selectedMeasures={selectedMeasures}
             onMeasureSelect={onMeasureSelect}
+            onMeasureRangeSelect={onMeasureRangeSelect}
           />
           </div>
         );

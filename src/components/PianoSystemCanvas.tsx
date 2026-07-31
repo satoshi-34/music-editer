@@ -752,6 +752,11 @@ type Props = {
   // コピー＆ペースト用: 選択中の小節範囲（絶対インデックス）と選択コールバック
   selectedMeasures?: { start: number; end: number };
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
+  // 小節をまたぐドラッグ範囲選択で呼ばれる。start/end は「ドラッグ開始位置と現在位置」を
+  // 小さい順に並べた絶対インデックス。onMeasureSelect と違い、押しっぱなしのまま
+  // 何度も呼ばれるので、呼び出し側は同じ範囲なら state を更新しないようにすること
+  // （更新すると再描画 →要素の作り直し → mouseenter 再発火、の往復になるため）。
+  onMeasureRangeSelect?: (startIndex: number, endIndex: number) => void;
   // カスタム記号定義（記号エディタで作成した奏法記号）。省略時は何も描画しない。
   customSymbolDefs?: CustomSymbolDef[];
   // 声部切り替えトグル: 0 = 声部1（上声・従来通り measure.events）、1 = 声部2（下声）。
@@ -821,6 +826,7 @@ export default function PianoSystemCanvas({
   onKeySignatureChange,
   selectedMeasures,
   onMeasureSelect,
+  onMeasureRangeSelect,
   customSymbolDefs = [],
   activeVoiceIndex = 0,
   measureWidthEvenness = MEASURE_WIDTH_EVENNESS,
@@ -1028,6 +1034,20 @@ export default function PianoSystemCanvas({
     startKey: string; // ドラッグを開始した符頭の key
     noteX: number; noteY: number; stemDir: number;
   } | null>(null);
+
+  // 小節のドラッグ範囲選択（Issue #145）の途中経過。
+  // 選択が変わるたびに描画 useEffect が SVG を作り直す（＝mousedown を受けた rect は
+  // 途中で消える）ので、ドラッグ中の情報は要素側ではなく ref に持つ。
+  //   measureDragAnchorRef … ドラッグを開始した小節。null ならドラッグ中ではない
+  //   measureDragMovedRef  … ドラッグで範囲を変えたか。直後に来る click を読み飛ばす判定に使う
+  const measureDragAnchorRef = useRef<number | null>(null);
+  const measureDragMovedRef = useRef(false);
+  useEffect(() => {
+    // ドラッグの終了は譜面の外で指を離した場合も拾う必要があるため window で受ける。
+    const endMeasureDrag = () => { measureDragAnchorRef.current = null; };
+    window.addEventListener('mouseup', endMeasureDrag);
+    return () => window.removeEventListener('mouseup', endMeasureDrag);
+  }, []);
 
   useEffect(()=>{selRef.current=selected;},[selected]);
 
@@ -2786,15 +2806,48 @@ export default function PianoSystemCanvas({
         const isMeasureSelected = selectedMeasures != null &&
           absI >= selectedMeasures.start &&
           absI <= selectedMeasures.end;
+        const isSelectTool = 'mode' in tool && tool.mode === 'select';
+
+        // 小節選択の入力（クリック・ドラッグ範囲選択）をこの小節の当たり判定へ付ける。
+        // 小節の背景（.vf-hit）だけでなく音符の当たり判定（.vf-note-hit）にも同じものを
+        // 付ける: 音符の上を通ってドラッグしても範囲選択が途切れないようにするため。
+        const attachMeasureSelectDrag = (el: SVGElement) => {
+          el.addEventListener('mousedown', ev => {
+            if (disabled) return;
+            const me = ev as MouseEvent;
+            if (me.button !== 0) return;
+            // ここから新しい操作が始まるので、前のドラッグの痕跡は必ず捨てる。
+            // ドラッグの終わりに click が飛んでこないケース（押した rect が
+            // 再描画で作り直され、click の発火先が親要素になる）があり、
+            // 消し忘れると次の1クリックを読み飛ばしてしまうため、
+            // 下の早期 return より前で必ずリセットする。
+            measureDragMovedRef.current = false;
+            // ドラッグ範囲選択は小節選択ツール中のみ。
+            // Shift+クリック（範囲拡張）は従来どおり click 側で処理するのでここでは始めない。
+            if (!isSelectTool || me.shiftKey) return;
+            measureDragAnchorRef.current = absI;
+          });
+          el.addEventListener('mouseenter', () => {
+            const anchor = measureDragAnchorRef.current;
+            if (anchor == null) return;
+            // 開始小節から今カーソルがある小節までを範囲にする（右→左のドラッグでも同じ）。
+            measureDragMovedRef.current = true;
+            onMeasureRangeSelect?.(Math.min(anchor, absI), Math.max(anchor, absI));
+          });
+        };
+
         const ir=document.createElementNS('http://www.w3.org/2000/svg','rect');
-        ir.setAttribute('class','vf-hit');
+        // 選択中は専用クラスを足す。App.css の `.vf-hit` は当たり判定を透明にする
+        // `!important` 付きの指定なので、色を出すには詳細度の高い別クラスが要る。
+        ir.setAttribute('class', isMeasureSelected ? 'vf-hit vf-measure-selected' : 'vf-hit');
         ir.setAttribute('x',String(measLeft));ir.setAttribute('y',String(staveTop));
         ir.setAttribute('width',String(measRight-measLeft));ir.setAttribute('height',String(staveBot-staveTop));
-        ir.setAttribute('fill', isMeasureSelected ? 'rgba(59,130,246,0.15)' : 'transparent');
-        ir.setAttribute('stroke', isMeasureSelected ? '#3b82f6' : 'none');
-        ir.setAttribute('stroke-width', '1.5');
+        ir.setAttribute('fill', isMeasureSelected ? 'rgba(37,99,235,0.18)' : 'transparent');
+        ir.setAttribute('stroke', isMeasureSelected ? '#1d4ed8' : 'none');
+        ir.setAttribute('stroke-width', isMeasureSelected ? '3' : '1.5');
         ir.setAttribute('pointer-events','all');
-        (ir.style as any).cursor = ('mode' in tool && tool.mode === 'select') ? 'pointer' : 'crosshair';
+        (ir.style as any).cursor = isSelectTool ? 'pointer' : 'crosshair';
+        attachMeasureSelectDrag(ir);
         ir.addEventListener('mousemove',e=>{
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
           hideChordGuide();
@@ -2804,8 +2857,16 @@ export default function PianoSystemCanvas({
         ir.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
         ir.addEventListener('click',e=>{
           if(disabled)return;
-          // 選択ツールの場合は小節を選択してリターン
-          if ('mode' in tool && tool.mode === 'select') {
+          // 小節選択ツール中、または（ツールを問わず）Shift+クリックのときは小節選択にする。
+          // Shift+クリックを他ツールでも受けるのは、コピー＆ペーストのためだけに
+          // ツールを持ち替えなくて済むようにするため（Issue #145）。
+          if (isSelectTool || (e as MouseEvent).shiftKey) {
+            if (measureDragMovedRef.current) {
+              // 直前のドラッグで範囲を決めたときは、そのあとに来る click で
+              // 単一小節へ戻してしまわないよう1回だけ読み飛ばす。
+              measureDragMovedRef.current = false;
+              return;
+            }
             onMeasureSelect?.(absI, (e as MouseEvent).shiftKey);
             return;
           }
@@ -2990,6 +3051,9 @@ export default function PianoSystemCanvas({
             hit.setAttribute('width',String(wHit));hit.setAttribute('height',String(hHit));
             hit.setAttribute('fill','transparent');hit.setAttribute('stroke','none');
             hit.setAttribute('pointer-events','all');(hit.style as any).cursor='pointer';
+            // 音符の当たり判定は小節の背景より手前にあるため、ここにも小節選択の
+            // ドラッグ処理を付けないと、音符の上を通った瞬間に範囲選択が止まってしまう。
+            attachMeasureSelectDrag(hit);
             hit.addEventListener('mousemove',e=>{
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY+yOffRef.current);
               if(lx<measLeft||lx>measRight){hideGuide();hideChordGuide();setNoteHoverHighlight(n,false);return;}
@@ -3059,6 +3123,17 @@ export default function PianoSystemCanvas({
             hit.addEventListener('click',e=>{
               if(disabled)return;
               e.stopPropagation();
+              // 音符の上でも、小節選択ツール中と Shift+クリックは「小節の選択」として扱う
+              // （音符の選択・配置はしない）。小節の背景クリックと同じ扱いに揃えることで、
+              // 音符が詰まった小節でも選択操作が空振りしないようにする（Issue #145）。
+              if (isSelectTool || (e as MouseEvent).shiftKey) {
+                if (measureDragMovedRef.current) {
+                  measureDragMovedRef.current = false;
+                  return;
+                }
+                onMeasureSelect?.(absI, (e as MouseEvent).shiftKey);
+                return;
+              }
               setSelectedArc(null);
               setSelectedHairpin(null);
               if('mode' in tool&&(tool.mode==='tie'||tool.mode==='hairpin'))return;

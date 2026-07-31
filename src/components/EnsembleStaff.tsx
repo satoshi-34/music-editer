@@ -82,6 +82,8 @@ type Props = {
   // 編成譜でも使えるよう中継する（絶対小節インデックスは startMeasureIndex 起点で共通）。
   selectedMeasures?: { start: number; end: number };
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
+  // ドラッグ範囲選択（PianoSystemCanvas から呼ばれる）をそのまま親へ渡す
+  onMeasureRangeSelect?: (startIndex: number, endIndex: number) => void;
 };
 
 export default function EnsembleStaff({
@@ -117,6 +119,7 @@ export default function EnsembleStaff({
   isPrintPreview = false,
   selectedMeasures,
   onMeasureSelect,
+  onMeasureRangeSelect,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -248,6 +251,7 @@ export default function EnsembleStaff({
             partSpacingOffsetPx={partSpacingOffsetPx}
             selectedMeasures={selectedMeasures}
             onMeasureSelect={onMeasureSelect}
+            onMeasureRangeSelect={onMeasureRangeSelect}
           />
           </div>
         );
