@@ -293,7 +293,7 @@ export function saveSettingsProfile(profile: Omit<ScoreSettingsProfile, 'version
   }
 }
 
-/** 保存済みプロファイルを削除する（「工場出荷時に戻す」ボタン用） */
+/** 保存済みプロファイルを削除する（「初期設定に戻す」ボタン用。旧称「工場出荷時に戻す」） */
 export function resetSettingsProfile(): void {
   if (!isStorageAvailable()) return;
   try {

@@ -126,6 +126,8 @@ describe('音符の大きさ・段の間隔の楽譜種別ごとの既定値（I
     fireEvent.change(getSystemRowGapSlider(), { target: { value: '-5' } });
     expect(getSystemRowGapSlider().value).toBe('-5');
 
+    // リセット系4種は Issue #143 で1つのメニューへ集約されたため、押す前にメニューを開く
+    fireEvent.click(screen.getByTestId('layout-reset-menu-toggle'));
     fireEvent.click(screen.getByRole('button', { name: 'レイアウトをリセット' }));
     expect(getSystemRowGapSlider().value).toBe('30');
   });

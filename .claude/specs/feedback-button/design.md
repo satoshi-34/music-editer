@@ -63,6 +63,90 @@
 - `src/components/ScorePageFeedback.test.tsx`: 新規追加。クリップボードコピー・Issue下書き画面オープン・`validateSavedScoreData` による往復互換・ポップアップブロック時のフォールバック・クリップボード失敗時のフォールバックを検証
 - 依存ライブラリの追加はなし
 
+## 3.5 追補: ヘッダーのタブ行右端へ常設（Issue #142・2026-08-01）
+
+### 問題
+
+上の 2.3 で「その他」タブ内（PDF書出/印刷の隣）に置いたが、これは分類ミスだった。
+
+- フィードバックは譜面操作ではなく**アプリへのメタ操作**であり、ファイル入出力の並びに埋もれている
+- 何より、この機能は**押した時点の表示状態（`viewState`）をJSONへ写して送る**仕様のため、
+  「困った画面から『その他』タブへ移動してから押す」と、移動によってツール選択などの表示状態が
+  変わってしまい、報告に添える再現情報が劣化する（タブ切替は `handleToolbarTabChange` で
+  `tool` state をリセットする）
+
+### 修正設計
+
+Issue #114 の 2026-07-29 コメント「フィードバックボタンの配置」の仕様どおり、ヘッダーの
+タブ行の右端へ移した。
+
+- `.toolbar-tabs`（`role="tablist"`）を新しい `.toolbar-tab-row` でくるみ、その右端に
+  フィードバックボタンと結果通知（`role="status"`）を置いた。JSXの移動のみで、
+  `handleFeedback()` の処理・状態JSONの中身は一切変更していない
+- **タブとは見た目を分ける**（7個目のタブに見せない）。`role="tab"` を付けない
+  （`tablist` の外に出す）ことに加え、専用クラス `.toolbar-feedback-button` で
+  ピル型（`border-radius: 999px`）・琥珀色の枠と背景・先頭に 💬 アイコン、という
+  タブボタン（四角い白ベースの `.toolbar-tab-button`）と明確に異なる見た目にした。
+  アイコンは `aria-hidden` にし、`aria-label="フィードバック"` で読み上げ名は元のまま保つ
+- 折り畳み（Issue #125）中はタブ行ごと隠れる。CSS の
+  `.toolbar.collapsed .toolbar-tabs` を `.toolbar-tab-row` へ差し替えただけで、
+  折り畳み仕様自体は変えていない
+- 狭い画面（`max-width: 768px`）では、従来 `.toolbar-tabs` に付けていた `width: 100%` を外し、
+  代わりに `flex: 1 1 auto; min-width: 0;` にした。100% のままだとフィードバックが
+  次の行へ押し出され、「タブ行の右端」でなくなるため
+
+### 影響範囲
+
+- `src/components/ScorePage.tsx`: タブ行を `.toolbar-tab-row` でくるみ、フィードバック
+  ボタンと通知を「その他」タブから移設
+- `src/App.css`: `.toolbar-tab-row` / `.toolbar-feedback` / `.toolbar-feedback-button` /
+  `.toolbar-feedback-notice` を追加。折り畳み時に隠す対象とレスポンシブ指定を更新
+- `src/components/ScorePageFeedback.test.tsx`: 「その他」タブを開くヘルパーを削除し、
+  「6タブすべてでボタンが見える・押せる」「`role="tab"` を持たずタブ数は6のまま」の
+  2テストを追加
+- `README.md` / `docs/DEVELOPMENT.md`: 置き場所の説明を更新
+
+### ブラウザ確認で見つけて直した点
+
+夜間worktreeでも共有dev サーバー（5173）に一時エントリHTMLを置く方法でブラウザ確認した
+（`.claude/specs` 外の運用メモ。確認後にHTMLは削除済み）。そこで2点直している。
+
+1. 通知が出るとフィードバックボタンが押し縮められ、ラベルが「フィードバ／ック」と
+   2行に折れていた → ボタン側に `flex-shrink: 0; white-space: nowrap;`、通知側に
+   `min-width: 0` を付け、縮むのは通知だけにした
+2. 通知をボタンの後ろ（右）に置くと、通知が出るたびにボタンが左へずれて
+   「タブ行の右端」から動いてしまっていた → JSXの順序を通知→ボタンに変え、
+   ボタンの位置を固定した
+
+なお、この一時エントリHTML経由では vite の `define`（`__APP_GIT_SHA__`）が適用されず、
+ボタンを押すと `__APP_GIT_SHA__ is not defined` で `handleFeedback()` が途中終了する。
+これはプレビュー方法側の制約（本来の `index.html` 経由では置換される）なので、確認時は
+`globalThis.__APP_GIT_SHA__` を手で定義してから操作した。
+
+### 検証
+
+- `docker exec -w /app/.night-worktrees/issue-142 music-editer-dev npx vitest --run src`:
+  1257 Tests中 1253 成功 / 4 失敗。失敗4件はすべて `Test timed out`（`ScorePageDefaultLayout` /
+  `ScorePageInstrumentationEditor` / `ScorePagePartSpacing` / `ScorePageSettingsProfile`）で、
+  変更前から `origin/main` で同じ4件がタイムアウトする既知のベースライン失敗（Issue #125 の
+  追補に記録済みのものと同一）。新規テスト2件は単体・全体実行とも成功
+- `npm run lint:ratchet`: エラー326件/警告5件で基準値ちょうど（変化なし）
+- `npm run build`: `tsc -b && vite build` がエラーなく完走
+- ブラウザ確認（1280×720 / 390×800・ピアノデモ譜）: 6タブすべてでボタンが右端に見えること、
+  「その他」タブからボタンが消えていること、押すと状態JSON（22KB・`viewState` 11項目）が
+  コピーされ Issue下書きURLが開くこと、成功通知が出て5秒で消えること、折り畳み中は
+  タブ行ごと隠れること、390px幅でもタブだけが折り返してボタンは同じ行の右端に残ることを確認。
+  コンソールエラーなし
+
+### 受入条件のうち解釈を補足した項目
+
+受入条件に「状態JSONに折り畳み等の表示状態が従来どおり含まれる」があるが、`viewState` に
+折り畳み状態（`isToolbarCollapsed`）は**もともと含まれていない**。同じIssueに
+「機能自体（状態JSONコピー→Issue画面を開く）は変更しない」と明記されているため、
+この条件は「移設によって `viewState` の中身が欠けないこと」の意と解釈し、フィールドの
+追加は行っていない（既存テストで `viewState` の存在を検証済み）。折り畳み状態を
+JSONへ含めたい場合は別Issueで扱う。
+
 ## 4. 既知の制限・今後の課題
 
 - `viewState` の内容（ズーム・音符の大きさ等）は「ファイルを開く」では復元されない。診断用の付加情報として人間が読むことのみを想定している。将来的に表示状態まで往復させたい場合は、`handleImportFile` 側に `viewState` を読んで各 setter へ反映する処理を追加する必要がある

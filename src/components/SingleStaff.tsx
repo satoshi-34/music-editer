@@ -29,7 +29,6 @@ type Props = {
   onChange?: (data: MeasureData[]) => void;
   startMeasureIndex?: number;
   disabled?: boolean;
-  yOffset?: number;
   currentInstrument?: InstrumentType;
   onPreviewNoteEvent?: (noteEvent: NoteEvent, instrument?: InstrumentType) => Promise<void>;
   previewAccidentalOnApply?: boolean;
@@ -92,7 +91,6 @@ export default function SingleStaff({
   onChange,
   startMeasureIndex = 0,
   disabled = false,
-  yOffset = 0,
   currentInstrument = InstrumentType.PIANO,
   onPreviewNoteEvent,
   previewAccidentalOnApply = true,
@@ -145,7 +143,6 @@ export default function SingleStaff({
               showInstrumentLabels={false}
               startMeasureIndex={systemRanges?.[i]?.start ?? startMeasureIndex + i * measuresPerSystem}
               disabled={disabled}
-              yOffset={yOffset}
               currentInstrument={currentInstrument}
               onPreviewNoteEvent={onPreviewNoteEvent}
               previewAccidentalOnApply={previewAccidentalOnApply}

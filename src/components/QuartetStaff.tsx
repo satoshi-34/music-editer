@@ -28,7 +28,6 @@ type Props = {
   onPartChange: ((data: MeasureData[]) => void)[];
   startMeasureIndex?: number;
   disabled?: boolean;
-  yOffset?: number;
   currentInstrument?: InstrumentType;
   onPreviewNoteEvent?: (noteEvent: NoteEvent, instrument?: InstrumentType) => Promise<void>;
   previewAccidentalOnApply?: boolean;
@@ -87,7 +86,6 @@ export default function QuartetStaff({
   onPartChange,
   startMeasureIndex = 0,
   disabled = false,
-  yOffset = 0,
   currentInstrument = InstrumentType.PIANO,
   onPreviewNoteEvent,
   previewAccidentalOnApply = true,
@@ -134,7 +132,6 @@ export default function QuartetStaff({
             showInstrumentLabels={i === 0}
             startMeasureIndex={systemRanges?.[i]?.start ?? startMeasureIndex + i * measuresPerSystem}
             disabled={disabled}
-            yOffset={yOffset}
             currentInstrument={currentInstrument}
             onPreviewNoteEvent={onPreviewNoteEvent}
             previewAccidentalOnApply={previewAccidentalOnApply}
