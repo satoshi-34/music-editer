@@ -41,6 +41,11 @@ function openScoreTab() {
   fireEvent.click(scoreTab);
 }
 
+// リセット系4種は Issue #143 で1つのメニューへ集約されたため、押す前にメニューを開く
+function openResetMenu() {
+  fireEvent.click(screen.getByTestId('layout-reset-menu-toggle'));
+}
+
 function getPartSpacingSlider() {
   return screen.getByRole('slider', { name: /パート間隔/ }) as HTMLInputElement;
 }
@@ -113,16 +118,18 @@ describe('パート間隔スライダー（Issue #90）', () => {
     fireEvent.change(getPartSpacingSlider(), { target: { value: '20' } });
     expect(getPartSpacingSlider().value).toBe('20');
 
+    openResetMenu();
     fireEvent.click(screen.getByRole('button', { name: 'レイアウトをリセット' }));
     expect(getPartSpacingSlider().value).toBe('0');
     expect(localStorageMock.getItem('score-part-spacing-offset')).toBe('0');
   });
 
-  it('「既定として保存」→「工場出荷時に戻す」でも既定値0を保つ（値を明示的に扱う経路の確認）', () => {
+  it('「既定として保存」→「初期設定に戻す」でも既定値0を保つ（値を明示的に扱う経路の確認）', () => {
     render(<ScorePage />);
     openLayoutTab();
 
     fireEvent.change(getPartSpacingSlider(), { target: { value: '8' } });
+    openResetMenu();
     fireEvent.click(screen.getByRole('button', { name: '既定として保存' }));
 
     const raw = localStorageMock.getItem('music-score-app-settings-profile');
