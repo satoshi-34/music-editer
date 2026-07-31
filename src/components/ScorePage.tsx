@@ -141,6 +141,11 @@ type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'layout' | 'playback' | 'other';
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
+// ツールバー（ヘッダー）の折り畳み状態（Issue #125）。譜面データではなく画面設定なので
+// 他のUI設定と同じく localStorage へ保存し、リロード後も同じ状態で開けるようにする。
+// 真偽値の保存形式は '1'（折り畳み中）/ '0'（展開中）。JSON.parse を挟まないぶん、
+// 保存値が壊れていても「'1' 以外はすべて展開」と解釈できて安全側に倒れる。
+const TOOLBAR_COLLAPSED_KEY = 'score-toolbar-collapsed';
 // 「段数/ページ」のユーザー設定（その他タブ）。楽譜データではなく画面設定として保存する
 const SYSTEMS_PER_PAGE_KEY = 'score-systems-per-page';
 // 「小節幅の均等さ」のユーザー設定（その他タブのスライダー、0〜1）。
@@ -378,6 +383,12 @@ export default function ScorePage() {
   const feedbackNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(180);
   const toolbarRef = useRef<HTMLElement | null>(null);
+  // ツールバーの折り畳み状態（Issue #125）。true のときタブ・Undo/Redo・パネルを隠し、
+  // 「ツールバーを表示」ボタンだけを残した細い帯にして、譜面の見える範囲を広げる。
+  // 復帰用ボタンは折り畳み中も必ず画面に残す（隠したら戻せない、を避けるのが最優先要件）。
+  const [isToolbarCollapsed, setIsToolbarCollapsed] = useState<boolean>(
+    () => localStorage.getItem(TOOLBAR_COLLAPSED_KEY) === '1'
+  );
   const musicXmlInputRef = useRef<HTMLInputElement | null>(null);
 
   const [title, setTitle] = useState('タイトル');
@@ -3392,7 +3403,10 @@ export default function ScorePage() {
       // fixed ヘッダーの実測が何かの拍子に暴走すると、
       // 本文全体の padding-top まで極端に大きくなって楽譜が見えなくなる。
       // ここでは「タブ付きヘッダーとして妥当な範囲」へ丸めて、崩れを防ぐ。
-      const clampedHeight = Math.min(280, Math.max(60, measuredHeight));
+      // 折り畳み中は「復帰ボタン1個ぶんの帯」しか残らないため、展開時の下限（60px）で
+      // 丸めると隠したぶんの余白が返ってこない。折り畳み中だけ下限を下げる（Issue #125）。
+      const minHeight = isToolbarCollapsed ? 24 : 60;
+      const clampedHeight = Math.min(280, Math.max(minHeight, measuredHeight));
       setToolbarHeight(clampedHeight);
     };
 
@@ -3407,7 +3421,7 @@ export default function ScorePage() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateToolbarHeight);
     };
-  }, [activeToolbarTab, showOffsetPanel, scoreType]);
+  }, [activeToolbarTab, showOffsetPanel, scoreType, isToolbarCollapsed]);
 
   useEffect(() => {
     if (scoreType !== 'ensemble') {
@@ -3443,6 +3457,18 @@ export default function ScorePage() {
     }
   };
 
+  // ツールバーの折り畳み／展開を切り替える（Issue #125）。
+  // 中身は display:none で隠すだけにして React 側のアンマウントはしない。
+  // 音色プレビューや再生コントロールの内部状態まで作り直されると、
+  // 折り畳んだだけで設定が初期化されたように見えてしまうため。
+  const handleToggleToolbarCollapsed = () => {
+    setIsToolbarCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem(TOOLBAR_COLLAPSED_KEY, next ? '1' : '0');
+      return next;
+    });
+  };
+
   const toolbarTabButtons: Array<{ id: ToolbarTab; label: string }> = [
     { id: 'notes', label: '音符・休符' },
     { id: 'symbols', label: '演奏記号' },
@@ -3472,7 +3498,7 @@ export default function ScorePage() {
       className={`app-root${isPrintPreview ? ' print-preview' : ''}`}
       style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
     >
-      <header className="toolbar" ref={toolbarRef}>
+      <header className={`toolbar${isToolbarCollapsed ? ' collapsed' : ''}`} ref={toolbarRef}>
         <div className="toolbar-tabs" role="tablist" aria-label="編集タブ">
           {toolbarTabButtons.map((tab) => (
             <button
@@ -3512,7 +3538,7 @@ export default function ScorePage() {
           </button>
         </div>
 
-        <div className="toolbar-panel">
+        <div className="toolbar-panel" id="toolbar-panel">
           {activeToolbarTab === 'notes' && (
             <div className="toolbar-section">
               <Palette value={tool} onChange={setTool} section="notes" />
@@ -4298,6 +4324,21 @@ export default function ScorePage() {
               />
             </div>
           )}
+        </div>
+
+        {/* 折り畳みトグル（Issue #125）。ツールバー右下に置き、折り畳み中も
+            この行だけは必ず残るようにして「隠したら戻せない」状態を作らない。 */}
+        <div className="toolbar-collapse-row">
+          <button
+            type="button"
+            className="ghost toolbar-collapse-button"
+            onClick={handleToggleToolbarCollapsed}
+            aria-expanded={!isToolbarCollapsed}
+            aria-controls="toolbar-panel"
+            title={isToolbarCollapsed ? 'ツールバーを表示して編集操作に戻る' : 'ツールバーを隠して譜面を広く見る'}
+          >
+            {isToolbarCollapsed ? '▼ ツールバーを表示' : '▲ ツールバーを隠す'}
+          </button>
         </div>
       </header>
 
