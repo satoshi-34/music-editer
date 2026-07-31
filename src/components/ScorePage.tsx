@@ -2248,6 +2248,18 @@ export default function ScorePage() {
     });
   }, []);
 
+  // ドラッグ範囲選択（小節Aで押して小節Bまで引く）で呼ばれる。
+  // ドラッグ中は同じ範囲のまま何度も呼ばれるため、範囲が変わらないときは
+  // 前の state をそのまま返す（新しいオブジェクトを返すと再描画 → SVG 作り直し →
+  // mouseenter 再発火、と往復し続けてしまうため）。
+  const handleMeasureRangeSelect = useCallback((startIndex: number, endIndex: number) => {
+    setSelectedMeasures(prev => (
+      prev && prev.start === startIndex && prev.end === endIndex
+        ? prev
+        : { start: startIndex, end: endIndex }
+    ));
+  }, []);
+
   // Cmd+Z / Cmd+Shift+Z: Undo / Redo
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -4771,6 +4783,7 @@ export default function ScorePage() {
                       onEmptyFillerClick={handleEmptyFillerClick}
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
+                      onMeasureRangeSelect={handleMeasureRangeSelect}
                     />
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
@@ -4804,6 +4817,7 @@ export default function ScorePage() {
                       onEmptyFillerClick={handleEmptyFillerClick}
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
+                      onMeasureRangeSelect={handleMeasureRangeSelect}
                     />
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
@@ -4835,6 +4849,7 @@ export default function ScorePage() {
                       onKeySignatureChange={handleKeySignatureChange}
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
+                      onMeasureRangeSelect={handleMeasureRangeSelect}
                       customSymbolDefs={customSymbolDefs}
                       activeVoiceIndex={activeVoice}
                       symbolsClickable={activeToolbarTab === 'symbols'}
@@ -4869,6 +4884,7 @@ export default function ScorePage() {
                       onKeySignatureChange={handleKeySignatureChange}
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
+                      onMeasureRangeSelect={handleMeasureRangeSelect}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}

@@ -231,9 +231,9 @@ export default function Palette({
           <button
             type="button"
             onClick={() => onChange(selectActive ? ROW1[2] : { mode: 'select' })}
-            title="小節選択（クリックで選択 → Cmd+C でコピー → Cmd+V でペースト）"
+            title="小節選択（クリックで選択・ドラッグで範囲選択 → Cmd+C でコピー → Cmd+V でペースト／他のツール中でも Shift+クリックで選択できます）"
 
-            aria-label="小節選択（クリックで選択 → Cmd+C でコピー → Cmd+V でペースト）"
+            aria-label="小節選択（クリックで選択・ドラッグで範囲選択 → Cmd+C でコピー → Cmd+V でペースト／他のツール中でも Shift+クリックで選択できます）"
             style={btnStyle(selectActive, { fontSize: 15 })}
           >
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">

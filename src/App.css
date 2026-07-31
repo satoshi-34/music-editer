@@ -1321,6 +1321,19 @@ button.ghost.active:hover:not(:disabled) {
   pointer-events: all;
 }
 
+/* 選択中の小節のハイライト（Issue #145）
+   上の `.vf-hit` は当たり判定を必ず透明にする `!important` 付きの指定なので、
+   SVG 側で fill/stroke を書いても色が出ない（＝選択しても見た目が変わらない）。
+   クラスを2つ重ねたこのセレクタは詳細度が上なので、選択中の小節だけ色を出せる。
+   枠を太め（3px）にして、譜面の線に紛れないようにしている。
+   印刷・PDF書出では @media print / .print-preview 側の
+   `.print-page svg rect.vf-hit`（さらに詳細度が高い）が透明へ戻すので出ない。 */
+.vf-hit.vf-measure-selected {
+  fill: rgba(37, 99, 235, 0.18) !important;
+  stroke: #1d4ed8 !important;
+  stroke-width: 3;
+}
+
 /* 各音符用の当たり判定（透明）
    StaffCanvas / PianoSystemCanvas が SVG 上に作る実クリック領域。
    見た目には出ませんが、音符/休符の選択・和音追加・休符置換はここが受けています。 */
