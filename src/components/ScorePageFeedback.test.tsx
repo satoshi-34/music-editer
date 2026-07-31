@@ -1,7 +1,8 @@
 // src/components/ScorePageFeedback.test.tsx
 // フィードバックボタン（Issue #91）の統合テスト。
-// 「その他」タブの「フィードバック」ボタンを押すと、状態一式のJSONがクリップボードへ
-// コピーされ、GitHubのIssue下書き画面が新しいタブで開くことを確認する。
+// ヘッダーのタブ行右端に常設された「フィードバック」ボタン（Issue #142 で「その他」タブから移動）を
+// 押すと、状態一式のJSONがクリップボードへコピーされ、GitHubのIssue下書き画面が
+// 新しいタブで開くことを確認する。
 // レンダー手法は ScorePageSettingsProfile.test.tsx と同じ ScorePage の直接マウントを使う。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -32,9 +33,7 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-function openOtherTab() {
-  fireEvent.click(screen.getByRole('tab', { name: 'その他' }));
-}
+const TOOLBAR_TABS = ['音符・休符', '演奏記号', '楽譜設定', 'レイアウト', '再生・音色', 'その他'];
 
 describe('フィードバックボタン', () => {
   beforeEach(() => {
@@ -56,7 +55,6 @@ describe('フィードバックボタン', () => {
     const openSpy = vi.spyOn(window, 'open').mockReturnValue(fakePopup);
 
     render(<ScorePage />);
-    openOtherTab();
 
     fireEvent.click(screen.getByRole('button', { name: 'フィードバック' }));
 
@@ -91,7 +89,6 @@ describe('フィードバックボタン', () => {
     vi.spyOn(window, 'open').mockReturnValue(null);
 
     render(<ScorePage />);
-    openOtherTab();
 
     fireEvent.click(screen.getByRole('button', { name: 'フィードバック' }));
 
@@ -106,10 +103,37 @@ describe('フィードバックボタン', () => {
     vi.spyOn(window, 'open').mockReturnValue({ opener: {} } as unknown as Window);
 
     render(<ScorePage />);
-    openOtherTab();
 
     fireEvent.click(screen.getByRole('button', { name: 'フィードバック' }));
 
     expect(await screen.findByText(/クリップボードへのコピーに失敗しました/)).toBeInTheDocument();
+  });
+
+  // Issue #142: ヘッダーのタブ行右端へ常設したので、どのタブを開いていても押せる。
+  // 6タブ分の再レンダーを1テストで回すぶん重く、全体実行時は既定の20秒を超えることが
+  // あるため、ScorePageInstrumentationEditor.test.tsx と同じくタイムアウトを延長している。
+  it('どのタブを開いていてもフィードバックボタンが表示され、押せる', () => {
+    render(<ScorePage />);
+
+    for (const tabLabel of TOOLBAR_TABS) {
+      fireEvent.click(screen.getByRole('tab', { name: tabLabel }));
+      const button = screen.getByRole('button', { name: 'フィードバック' });
+      expect(button).toBeInTheDocument();
+      expect(button).not.toBeDisabled();
+    }
+  }, 60000);
+
+  // Issue #142: タブ（パネルを開く）ではなくアクションなので、タブ一覧には含めない。
+  // role="tab" を持たない＝支援技術からも7個目のタブには見えないことを確認する。
+  it('タブとしては扱われず、タブ一覧はタブ6個のままである', () => {
+    render(<ScorePage />);
+
+    expect(screen.queryByRole('tab', { name: 'フィードバック' })).toBeNull();
+    expect(screen.getAllByRole('tab')).toHaveLength(TOOLBAR_TABS.length);
+    // 見た目の区別: タブボタン用のクラスではなく専用クラスが付いている
+    expect(screen.getByRole('button', { name: 'フィードバック' }).className)
+      .toContain('toolbar-feedback-button');
+    expect(screen.getByRole('button', { name: 'フィードバック' }).className)
+      .not.toContain('toolbar-tab-button');
   });
 });

@@ -21,7 +21,6 @@ import PlaybackControls, {
 } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
-import { readInitialYOffset, Y_OFFSET_KEY } from '../utils/yOffsetMigration';
 import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
@@ -363,7 +362,6 @@ export default function ScorePage() {
   // 保存データには含めない一時的なビューなので、リロードすると総譜表示に戻る
   // （詳細は .claude/specs/part-extraction/design.md を参照）。
   const [partExtractionId, setPartExtractionId] = useState<string | null>(null);
-  const [showOffsetPanel, setShowOffsetPanel] = useState(false);
   // リセット系メニュー（レイアウトタブ）の開閉。段割り・レイアウト・初期値プリセットの
   // 4操作は影響範囲がそれぞれ違うのに横一列のボタンでは押す前に区別できなかったため、
   // 1つのメニューへまとめて説明文と一緒に見せる（Issue #143）。
@@ -424,14 +422,6 @@ export default function ScorePage() {
   const restoreNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
-
-  // zoom 時代の古い手動Y補正は transform ビルド初回起動時に自動リセットされる
-  // （詳細は src/utils/yOffsetMigration.ts のコメントを参照）
-  const [yOffset, setYOffset] = useState<number>(() => readInitialYOffset());
-  const handleYOffsetChange = (v: number) => {
-    setYOffset(v);
-    localStorage.setItem(Y_OFFSET_KEY, String(v));
-  };
 
   // パートごとのデータ
   const [rightHandData, setRightHandData] = useState<MeasureData[] | undefined>(undefined);
@@ -3432,7 +3422,7 @@ export default function ScorePage() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateToolbarHeight);
     };
-  }, [activeToolbarTab, showOffsetPanel, showResetMenu, scoreType, isToolbarCollapsed]);
+  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed]);
 
   // リセットメニュー（Issue #143）の表示位置をボタンの実測位置から決める。
   // 画面の右端からはみ出さないよう、左位置は「画面幅 − メニュー幅 − 余白」までで止める。
@@ -3536,19 +3526,51 @@ export default function ScorePage() {
       style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
     >
       <header className={`toolbar${isToolbarCollapsed ? ' collapsed' : ''}`} ref={toolbarRef}>
-        <div className="toolbar-tabs" role="tablist" aria-label="編集タブ">
-          {toolbarTabButtons.map((tab) => (
+        {/* タブ行（Issue #142）。右端にフィードバックを常設し、どのタブを開いていても
+            押せるようにする。フィードバックは「押した時点の表示状態」をJSONに写して送る
+            仕組みなので、報告のために別タブへ移動させると再現情報が変わってしまう。 */}
+        <div className="toolbar-tab-row">
+          <div className="toolbar-tabs" role="tablist" aria-label="編集タブ">
+            {toolbarTabButtons.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={`ghost toolbar-tab-button${activeToolbarTab === tab.id ? ' active' : ''}`}
+                onClick={() => handleToolbarTabChange(tab.id)}
+                role="tab"
+                aria-selected={activeToolbarTab === tab.id}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* フィードバックはパネルを開くタブではなく、押すと送信フローが始まるアクション。
+              そのため role="tab" を付けず（tablist の外に置く）、アイコン付き・角丸ピル型の
+              専用スタイルで7個目のタブに見えないようにしている。
+              aria-label を付けているのは、先頭のアイコンが読み上げ名に混ざらないようにするため。 */}
+          <div className="toolbar-feedback">
+            {/* 通知はボタンの手前（左）に出す。あとに置くとボタンが通知の幅ぶん
+                左へずれて「タブ行の右端」から動いてしまうため。 */}
+            {feedbackNotice && (
+              <span
+                role="status"
+                className="toolbar-feedback-notice"
+                style={{ color: feedbackNotice.isError ? 'crimson' : '#555' }}
+              >
+                {feedbackNotice.message}
+              </span>
+            )}
             <button
-              key={tab.id}
               type="button"
-              className={`ghost toolbar-tab-button${activeToolbarTab === tab.id ? ' active' : ''}`}
-              onClick={() => handleToolbarTabChange(tab.id)}
-              role="tab"
-              aria-selected={activeToolbarTab === tab.id}
+              className="toolbar-feedback-button"
+              onClick={handleFeedback}
+              aria-label="フィードバック"
+              title="現在の譜面データ・設定・表示状態をJSONとしてクリップボードにコピーし、GitHubのIssue下書きを開きます。曲名・歌詞など譜面の内容が含まれ、公開リポジトリへ投稿される点にご注意ください"
             >
-              {tab.label}
+              <span aria-hidden="true">💬</span> フィードバック
             </button>
-          ))}
+          </div>
         </div>
 
         {/* Undo/Redo はタブに関係なく常時操作できるようにする */}
@@ -4182,54 +4204,6 @@ export default function ScorePage() {
               {settingsProfileNotice && (
                 <span style={{ fontSize: 12, color: '#555' }} role="status">{settingsProfileNotice}</span>
               )}
-              <div className="coord-correction-wrap">
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => setShowOffsetPanel(v => !v)}
-                  title="音符配置位置の座標補正"
-                >
-                  Y補正{yOffset !== 0 ? ` (${yOffset})` : ''}
-                </button>
-                {showOffsetPanel && (
-                  <>
-                    <div className="dropdown-overlay" onClick={() => setShowOffsetPanel(false)} />
-                    <div className="coord-panel">
-                      <div className="coord-panel-header">
-                        <p className="coord-panel-note">高音方向はマイナス、低音方向はプラス</p>
-                        <button
-                          type="button"
-                          className="ghost compact-button icon-button"
-                          onClick={() => setShowOffsetPanel(false)}
-                          aria-label="Y補正パネルを閉じる"
-                          title="閉じる"
-                        >
-                          x
-                        </button>
-                      </div>
-                      <div className="coord-panel-row">
-                        <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset - 1)}>↑</button>
-                        <input
-                          id="y-offset-input"
-                          type="number"
-                          value={yOffset}
-                          onChange={e => handleYOffsetChange(Number(e.target.value))}
-                          aria-label="座標補正値（↓で低音方向）"
-                          onKeyDown={e => {
-                            if (e.key === 'ArrowDown') { e.preventDefault(); handleYOffsetChange(yOffset + 1); }
-                            if (e.key === 'ArrowUp')   { e.preventDefault(); handleYOffsetChange(yOffset - 1); }
-                          }}
-                          autoFocus
-                        />
-                        <button type="button" className="ghost y-offset-btn" onClick={() => handleYOffsetChange(yOffset + 1)}>↓</button>
-                        {yOffset !== 0 && (
-                          <button type="button" className="ghost y-offset-reset" onClick={() => handleYOffsetChange(0)}>リセット</button>
-                        )}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
             </div>
           )}
 
@@ -4290,21 +4264,8 @@ export default function ScorePage() {
                 onChange={handleImportFile}
               />
               <button className="ghost" onClick={handleExportPdf} title="ブラウザの印刷ダイアログを開き、「PDFとして保存」を選ぶと楽譜をPDF書出できます">PDF書出 / 印刷</button>
-              <button
-                className="ghost"
-                onClick={handleFeedback}
-                title="現在の譜面データ・設定・表示状態をJSONとしてクリップボードにコピーし、GitHubのIssue下書きを開きます。曲名・歌詞など譜面の内容が含まれ、公開リポジトリへ投稿される点にご注意ください"
-              >
-                フィードバック
-              </button>
-              {feedbackNotice && (
-                <span
-                  role="status"
-                  style={{ fontSize: 12, color: feedbackNotice.isError ? 'crimson' : '#555' }}
-                >
-                  {feedbackNotice.message}
-                </span>
-              )}
+              {/* フィードバックボタンはヘッダーのタブ行右端へ移動した（Issue #142）。
+                  譜面操作ではなくアプリへのメタ操作であり、どのタブからでも押せる必要があるため。 */}
               <button
                 type="button"
                 className={`ghost${isPrintPreview ? ' active' : ''}`}
@@ -4739,7 +4700,6 @@ export default function ScorePage() {
                       onSecondStaffPartChange={[() => {}]}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4768,7 +4728,6 @@ export default function ScorePage() {
                       partConfig={QUARTET_PART_CONFIGS[partExtractionSelection!.index]}
                       data={quartetParts[partExtractionSelection!.index] ?? []}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4798,7 +4757,6 @@ export default function ScorePage() {
                       onSecondStaffPartChange={instrumentation.parts.map((_, pi) => handleEnsembleSecondStaffChange(pi))}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isScoreEditingLocked}
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4833,7 +4791,6 @@ export default function ScorePage() {
                       onPartChange={[0, 1, 2, 3].map(pi => handleQuartetPartChange(pi))}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isScoreEditingLocked}
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4870,7 +4827,6 @@ export default function ScorePage() {
                       onLeftHandChange={handleLeftHandChange}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isScoreEditingLocked}
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4905,7 +4861,6 @@ export default function ScorePage() {
                       onChange={handleScoreDataChange}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       disabled={isScoreEditingLocked}
-                      yOffset={yOffset}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
