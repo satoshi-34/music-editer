@@ -1,6 +1,7 @@
 // src/components/ScorePageSettingsProfile.test.tsx
 // 「譜面設定の初期値プリセット」（issue #39）の統合テスト。
-// レイアウトタブの「既定として保存」「工場出荷時に戻す」ボタン（issue #100で楽譜設定タブから移動）と、
+// レイアウトタブの「既定として保存」「初期設定に戻す」ボタン（issue #100で楽譜設定タブから移動、
+// issue #143 で「リセット」メニューの中へ集約・「工場出荷時に戻す」から改名）と、
 // 新規譜面の作成・起動時（保存済み譜面が無い場合）への反映を確認する。
 // レンダー手法は PrintPreview.test.tsx と同じ ScorePage の直接マウントを使う。
 
@@ -42,6 +43,12 @@ function openLayoutTab() {
   fireEvent.click(layoutTab);
 }
 
+// リセット系4種は Issue #143 で1つのメニューへ集約されたため、押す前にメニューを開く。
+// メニューは項目を押すと閉じるので、続けて別の項目を押すときは開き直す。
+function openResetMenu() {
+  fireEvent.click(screen.getByTestId('layout-reset-menu-toggle'));
+}
+
 // 「新規作成」ボタンは「その他」タブ（SaveLoadButtons）にあるため、そちらへ切り替えてから押す
 function clickNewScore() {
   fireEvent.click(screen.getByRole('tab', { name: 'その他' }));
@@ -69,6 +76,7 @@ describe('譜面設定の初期値プリセット', () => {
     expect(measuresInput.value).toBe('6');
 
     openLayoutTab();
+    openResetMenu();
     const saveButton = screen.getByRole('button', { name: '既定として保存' });
     fireEvent.click(saveButton);
 
@@ -88,6 +96,7 @@ describe('譜面設定の初期値プリセット', () => {
     fireEvent.change(screen.getByRole('spinbutton', { name: '段あたり小節数' }), { target: { value: '7' } });
 
     openLayoutTab();
+    openResetMenu();
     fireEvent.click(screen.getByRole('button', { name: '既定として保存' }));
 
     // 保存後、別の値に変更しておく（新規作成で保存値に戻ることを確認するため）
@@ -114,6 +123,7 @@ describe('譜面設定の初期値プリセット', () => {
     fireEvent.change(screen.getByRole('spinbutton', { name: '段あたり小節数' }), { target: { value: '5' } });
 
     openLayoutTab();
+    openResetMenu();
     fireEvent.click(screen.getByRole('button', { name: '既定として保存' }));
 
     unmount();
@@ -130,17 +140,19 @@ describe('譜面設定の初期値プリセット', () => {
     });
   });
 
-  it('「工場出荷時に戻す」を押すと、以後の新規作成でコード上の既定値（4）が使われる', async () => {
+  it('「初期設定に戻す」を押すと、以後の新規作成でコード上の既定値（4）が使われる', async () => {
     render(<ScorePage />);
     openScoreTab();
 
     fireEvent.change(screen.getByRole('spinbutton', { name: '段あたり小節数' }), { target: { value: '6' } });
 
     openLayoutTab();
+    openResetMenu();
     fireEvent.click(screen.getByRole('button', { name: '既定として保存' }));
     expect(window.localStorage.getItem(SETTINGS_PROFILE_STORAGE_KEY)).not.toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: '工場出荷時に戻す' }));
+    openResetMenu();
+    fireEvent.click(screen.getByRole('button', { name: '初期設定に戻す' }));
     expect(window.localStorage.getItem(SETTINGS_PROFILE_STORAGE_KEY)).toBeNull();
     expect(await screen.findByText(/初期値プリセットを削除しました/)).toBeInTheDocument();
 

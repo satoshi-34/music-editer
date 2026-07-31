@@ -134,9 +134,22 @@
   padding: 2px 10px;
   gap: 0;
 }
+/* 折り畳みトグルの行。左端に「画面表示のズーム」（常設、Issue #143）、右端に
+   折り畳みトグルを置くため space-between で両端に寄せる。折り畳み中もこの行は
+   残るので、ツールバーを隠したままでもズームだけは操作できる。 */
 .toolbar-collapse-row {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.toolbar-view-zoom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #444;
 }
 /* `.toolbar` を前置きしているのは詳細度の都合。素の `.toolbar-collapse-button` だと
    後述の `button.ghost`（要素名を含むぶん詳細度が高い）の padding: 8px 12px に負けて、
@@ -186,6 +199,69 @@
   font-size: 11px;
   font-weight: 600;
   color: #495057;
+}
+/* レイアウトタブのスライダーを見出し付きの3グループ（用紙と余白／譜面の密度／タイトル）
+   に分ける枠（Issue #143）。薄い枠と背景で「ここからここまでが1グループ」を示す。
+   中身は従来どおり横に並べ、幅が足りなければ折り返す。 */
+.toolbar-layout-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fcfcfd;
+}
+/* グループ見出しは他のラベルより少し濃くし、区切りの縦線で本体と分ける */
+.toolbar-layout-group > .toolbar-group-label {
+  color: #343a40;
+  border-right: 1px solid #e5e7eb;
+  padding-right: 8px;
+}
+
+/* リセット系4種をまとめたメニュー（Issue #143）。ボタン直下に出す小さなポップアップで、
+   各項目に「影響範囲」の説明文を添える。位置決めのため wrap 側を relative にする。 */
+.toolbar-reset-menu-wrap {
+  position: relative;
+}
+/* 位置は ScorePage 側がボタンを実測して style で入れる（既定値は保険）。
+   `position: absolute` にすると、親の `.toolbar-panel`（`overflow-x: auto` のため
+   縦のはみ出しも切られる）にメニューの下半分が隠されてしまうので fixed で描く。 */
+.toolbar-reset-menu {
+  position: fixed;
+  top: 120px;
+  left: 10px;
+  z-index: 1001;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #ced4da;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: 12px 14px;
+  /* 説明文が読める幅を確保しつつ、狭い画面でははみ出さないようにする */
+  width: min(360px, calc(100vw - 32px));
+}
+.toolbar-reset-menu-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+/* ボタンは説明文の幅いっぱいに広げず、文字ぶんの幅で左寄せにする */
+.toolbar-reset-menu-item > button {
+  align-self: flex-start;
+  font-size: 13px;
+  padding: 3px 8px;
+}
+.toolbar-reset-menu-desc {
+  font-size: 11px;
+  color: #666;
+  line-height: 1.5;
+  /* ポップアップ内は白背景なので、説明文は折り返して全文読めるようにする */
+  white-space: normal;
 }
 /* ghost ボタンよりコンパクトなサイズに上書き */
 .toolbar-chip-button {
