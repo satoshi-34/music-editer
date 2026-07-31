@@ -3499,19 +3499,51 @@ export default function ScorePage() {
       style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
     >
       <header className={`toolbar${isToolbarCollapsed ? ' collapsed' : ''}`} ref={toolbarRef}>
-        <div className="toolbar-tabs" role="tablist" aria-label="編集タブ">
-          {toolbarTabButtons.map((tab) => (
+        {/* タブ行（Issue #142）。右端にフィードバックを常設し、どのタブを開いていても
+            押せるようにする。フィードバックは「押した時点の表示状態」をJSONに写して送る
+            仕組みなので、報告のために別タブへ移動させると再現情報が変わってしまう。 */}
+        <div className="toolbar-tab-row">
+          <div className="toolbar-tabs" role="tablist" aria-label="編集タブ">
+            {toolbarTabButtons.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={`ghost toolbar-tab-button${activeToolbarTab === tab.id ? ' active' : ''}`}
+                onClick={() => handleToolbarTabChange(tab.id)}
+                role="tab"
+                aria-selected={activeToolbarTab === tab.id}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* フィードバックはパネルを開くタブではなく、押すと送信フローが始まるアクション。
+              そのため role="tab" を付けず（tablist の外に置く）、アイコン付き・角丸ピル型の
+              専用スタイルで7個目のタブに見えないようにしている。
+              aria-label を付けているのは、先頭のアイコンが読み上げ名に混ざらないようにするため。 */}
+          <div className="toolbar-feedback">
+            {/* 通知はボタンの手前（左）に出す。あとに置くとボタンが通知の幅ぶん
+                左へずれて「タブ行の右端」から動いてしまうため。 */}
+            {feedbackNotice && (
+              <span
+                role="status"
+                className="toolbar-feedback-notice"
+                style={{ color: feedbackNotice.isError ? 'crimson' : '#555' }}
+              >
+                {feedbackNotice.message}
+              </span>
+            )}
             <button
-              key={tab.id}
               type="button"
-              className={`ghost toolbar-tab-button${activeToolbarTab === tab.id ? ' active' : ''}`}
-              onClick={() => handleToolbarTabChange(tab.id)}
-              role="tab"
-              aria-selected={activeToolbarTab === tab.id}
+              className="toolbar-feedback-button"
+              onClick={handleFeedback}
+              aria-label="フィードバック"
+              title="現在の譜面データ・設定・表示状態をJSONとしてクリップボードにコピーし、GitHubのIssue下書きを開きます。曲名・歌詞など譜面の内容が含まれ、公開リポジトリへ投稿される点にご注意ください"
             >
-              {tab.label}
+              <span aria-hidden="true">💬</span> フィードバック
             </button>
-          ))}
+          </div>
         </div>
 
         {/* Undo/Redo はタブに関係なく常時操作できるようにする */}
@@ -4219,21 +4251,8 @@ export default function ScorePage() {
                 onChange={handleImportFile}
               />
               <button className="ghost" onClick={handleExportPdf} title="ブラウザの印刷ダイアログを開き、「PDFとして保存」を選ぶと楽譜をPDF書出できます">PDF書出 / 印刷</button>
-              <button
-                className="ghost"
-                onClick={handleFeedback}
-                title="現在の譜面データ・設定・表示状態をJSONとしてクリップボードにコピーし、GitHubのIssue下書きを開きます。曲名・歌詞など譜面の内容が含まれ、公開リポジトリへ投稿される点にご注意ください"
-              >
-                フィードバック
-              </button>
-              {feedbackNotice && (
-                <span
-                  role="status"
-                  style={{ fontSize: 12, color: feedbackNotice.isError ? 'crimson' : '#555' }}
-                >
-                  {feedbackNotice.message}
-                </span>
-              )}
+              {/* フィードバックボタンはヘッダーのタブ行右端へ移動した（Issue #142）。
+                  譜面操作ではなくアプリへのメタ操作であり、どのタブからでも押せる必要があるため。 */}
               <button
                 type="button"
                 className={`ghost${isPrintPreview ? ' active' : ''}`}
