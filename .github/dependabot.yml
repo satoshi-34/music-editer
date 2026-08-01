@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:00"
+      timezone: Asia/Tokyo
+    # まとめて上げると壊れたときの切り分けができないので、
+    # セキュリティ以外の更新は本数を絞る
+    open-pull-requests-limit: 3
+    groups:
+      # パッチ更新はまとめてよい（壊れる可能性が低く、PR が増えすぎるため）
+      patch-updates:
+        update-types: ["patch"]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
