@@ -379,9 +379,19 @@ export function systemRowTopOffsetsPx(
   return Array.from({ length: n }, (_, i) => i * (slotHeight + gapPx));
 }
 
-/** 楽器名がある最悪ケースでも、Canvas の alloc と一致する小節本文の物理幅。 */
-export function worstCaseSystemContentBudget(sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM): number {
-  const innerWidth = printScoreAreaWidthPx(sideMarginMm) - SYSTEM_PAGE_SIDE_PADDING * 2 - SYSTEM_MAX_LABEL_WIDTH;
+/**
+ * 楽器名がある最悪ケースでも、Canvas の alloc と一致する小節本文の物理幅。
+ *
+ * labelAreaWidth は「この譜面でパート名に取られる最大の左余白」。総譜1段目のフル名
+ * （Issue #60）が長いと既定値（SYSTEM_MAX_LABEL_WIDTH）より広い余白が必要になるため、
+ * 呼び出し側が実測値（instrumentLabelAreaWidthForScore）を渡せるようにしている。
+ * ここと Canvas 側の labelW が食い違うと、計画より本文幅が狭くなって小節が右へはみ出す。
+ */
+export function worstCaseSystemContentBudget(
+  sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM,
+  labelAreaWidth: number = SYSTEM_MAX_LABEL_WIDTH
+): number {
+  const innerWidth = printScoreAreaWidthPx(sideMarginMm) - SYSTEM_PAGE_SIDE_PADDING * 2 - labelAreaWidth;
   return Math.max(1, innerWidth * SYSTEM_TARGET_FILL - SYSTEM_FIRST_CLEF_PADDING);
 }
 

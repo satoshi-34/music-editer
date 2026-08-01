@@ -69,12 +69,14 @@ import { insertEmptyMeasureBefore, deleteMeasureAt, shiftOverridesStartMeasure }
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { buildIncomingArcIndex } from '../utils/incomingArcUtils';
 import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
+import { instrumentLabelAreaWidthForScore } from '../utils/instrumentLabelUtils';
 import {
   planEffectiveMeasuresPerSystem,
   MEASURE_WIDTH_EVENNESS,
   SCORE_LAYOUT_RENDER_SCALE,
   MIN_MEASURE_CONTENT_WIDTH,
   worstCaseSystemContentBudget,
+  SYSTEM_MAX_LABEL_WIDTH,
   DEFAULT_PAGE_SIDE_MARGIN_MM,
   NOTATION_SIZE_MULTIPLIER_MIN,
   NOTATION_SIZE_MULTIPLIER_MAX,
@@ -2891,6 +2893,29 @@ export default function ScorePage() {
     }
     return [{ measures: rightHandData ?? [], clef: 'treble' }];
   }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts]);
+  // 五線の左に取るパート名用の余白（Issue #60）。1段目はフル名・2段目以降は略称なので、
+  // 両方を候補に入れて「この譜面で最大どれだけ必要か」で段割りを計画する。
+  // 計画（ここ）と描画（PianoSystemCanvas の labelW）で違う値を使うと、本文幅が食い違って
+  // 小節が段の右端からはみ出すため、同じ計算関数を共有している。
+  const instrumentLabelAreaWidth = useMemo(() => {
+    if (scoreType === 'quartet') {
+      const labels = QUARTET_PART_CONFIGS.flatMap((part) => [part.label, part.fullLabel]);
+      return instrumentLabelAreaWidthForScore(
+        labels.filter((label): label is string => !!label),
+        QUARTET_PART_CONFIGS.length,
+      );
+    }
+    if (scoreType === 'ensemble') {
+      const labels = instrumentation.parts.flatMap((part) => [part.abbreviation, part.name]);
+      return instrumentLabelAreaWidthForScore(
+        labels.filter((label): label is string => !!label),
+        totalEnsembleStaffCount(instrumentation.parts),
+      );
+    }
+    // 単旋律・ピアノはパート名を出さないが、従来どおり既定の余白ぶんを見込んだまま
+    // 計画する（ここを 0 にすると既存譜面の段割り・ページ数が変わってしまう）。
+    return SYSTEM_MAX_LABEL_WIDTH;
+  }, [scoreType, instrumentation.parts]);
   const incomingArcIndex = useMemo(
     () => buildIncomingArcIndex(layoutParts.map((part) => part.measures)),
     [layoutParts],
@@ -2936,13 +2961,13 @@ export default function ScorePage() {
     scoreTimeSignature,
     normalizeKeySignature(keySignature),
     measuresPerSystem,
-    worstCaseSystemContentBudget(pageMarginSideMm),
+    worstCaseSystemContentBudget(pageMarginSideMm, instrumentLabelAreaWidth),
     effectiveRenderScale,
     // Ensemble の記譜音表示だけ、移調後に臨時記号が増える最悪ケースの安全マージンを見込む。
     // ピアノ・四重奏はここで盛ると実際に表示されない臨時記号ぶんまで幅を確保してしまい、
     // 1段に入る小節数が不当に減る（読込直後にほぼ全小節が1小節/段へ膨張する不具合の一因）。
     { includeTranspositionAccidentalWorstCase: scoreType === 'ensemble' },
-  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType, effectiveRenderScale, pageMarginSideMm]);
+  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType, effectiveRenderScale, pageMarginSideMm, instrumentLabelAreaWidth]);
   const plannerMinimumWidths = useMemo(() => {
     // 末尾の空小節は「入力を続けられるように」数小節ぶんの余白段だけ残す。
     // 以前は totalSystems(12) × measuresPerSystem を固定の編集枠としていたが、
@@ -2974,7 +2999,7 @@ export default function ScorePage() {
     // 逆変換して揃える。
     plannerMinimumWidths,
     measuresPerSystem,
-    worstCaseSystemContentBudget(pageMarginSideMm) / effectiveRenderScale,
+    worstCaseSystemContentBudget(pageMarginSideMm, instrumentLabelAreaWidth) / effectiveRenderScale,
     // 内容小節（終止線が付く最後の小節を含む段）と、それ以降の編集用の空きバッファ小節を
     // 同じ段に混ぜない。こうしないと最終小節の終止線が段の右端まで届かず余白が残ってしまう
     // （空の楽譜 contentMeasureCount===0 のときは強制しない＝undefined で従来どおり）。
@@ -2987,7 +3012,7 @@ export default function ScorePage() {
     // 再計画する（Issue #67。詳細は planSystemMeasureRanges 側のコメント参照）。
     previousSystemRangesRef.current,
     lastEditedMeasureIndex ?? undefined,
-  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm, lastEditedMeasureIndex]);
+  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm, lastEditedMeasureIndex, instrumentLabelAreaWidth]);
   const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
 
   // plannedRanges を計算し終えたレンダーの直後に、次回の安定化ヒントとして保持する。
@@ -4756,6 +4781,8 @@ export default function ScorePage() {
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
+                      // 1ページ目の1段目だけパート名をフル名で出す（Issue #60）
+                      isFirstPage={i === 0}
                     />
                   ) : isPartExtractionActive && scoreType === 'quartet' ? (
                     // パート譜表示（弦楽四重奏）: QuartetStaff は4段固定のレイアウトのため、
@@ -4819,6 +4846,8 @@ export default function ScorePage() {
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
                       onMeasureRangeSelect={handleMeasureRangeSelect}
+                      // 1ページ目の1段目だけパート名をフル名で出す（Issue #60）
+                      isFirstPage={i === 0}
                     />
                   ) : scoreType === 'quartet' ? (
                     <QuartetStaff
@@ -4853,6 +4882,8 @@ export default function ScorePage() {
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
                       onMeasureRangeSelect={handleMeasureRangeSelect}
+                      // 1ページ目の1段目だけパート名をフル名で出す（Issue #60）
+                      isFirstPage={i === 0}
                     />
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
