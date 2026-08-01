@@ -2,6 +2,7 @@
 // 「譜面設定の初期値プリセット」（issue #39）の統合テスト。
 // レイアウトタブの「既定として保存」「初期設定に戻す」ボタン（issue #100で楽譜設定タブから移動、
 // issue #143 で「リセット」メニューの中へ集約・「工場出荷時に戻す」から改名）と、
+// 同じくレイアウトタブへ移った「段あたり小節数」（issue #144）の値を使って、
 // 新規譜面の作成・起動時（保存済み譜面が無い場合）への反映を確認する。
 // レンダー手法は PrintPreview.test.tsx と同じ ScorePage の直接マウントを使う。
 
@@ -33,11 +34,8 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-function openScoreTab() {
-  const scoreTab = screen.getByRole('tab', { name: '楽譜設定' });
-  fireEvent.click(scoreTab);
-}
-
+// Issue #144 で「段あたり小節数」も「レイアウト」タブ（譜面の密度＞段組）へ移ったため、
+// 値の変更・確認もリセットメニューも同じレイアウトタブで完結する。
 function openLayoutTab() {
   const layoutTab = screen.getByRole('tab', { name: 'レイアウト' });
   fireEvent.click(layoutTab);
@@ -69,7 +67,7 @@ describe('譜面設定の初期値プリセット', () => {
 
   it('現在の設定を「既定として保存」すると、単一のlocalStorageキーへ保存される', async () => {
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     const measuresInput = screen.getByRole('spinbutton', { name: '段あたり小節数' }) as HTMLInputElement;
     fireEvent.change(measuresInput, { target: { value: '6' } });
@@ -91,7 +89,7 @@ describe('譜面設定の初期値プリセット', () => {
 
   it('保存済みプリセットは「新規作成」で反映される', async () => {
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     fireEvent.change(screen.getByRole('spinbutton', { name: '段あたり小節数' }), { target: { value: '7' } });
 
@@ -100,14 +98,14 @@ describe('譜面設定の初期値プリセット', () => {
     fireEvent.click(screen.getByRole('button', { name: '既定として保存' }));
 
     // 保存後、別の値に変更しておく（新規作成で保存値に戻ることを確認するため）
-    openScoreTab();
+    openLayoutTab();
     const measuresInput = screen.getByRole('spinbutton', { name: '段あたり小節数' }) as HTMLInputElement;
     fireEvent.change(measuresInput, { target: { value: '2' } });
     expect(measuresInput.value).toBe('2');
 
     clickNewScore();
 
-    openScoreTab();
+    openLayoutTab();
     // 「新規作成」は clearAutosaveData 等の非同期処理を経てから初期値プリセットを適用するため、
     // 反映が1レンダーぶん遅れることがある。findByRole は要素の「存在」しか待たない
     // （value の一致までは待ってくれない）ため、waitFor で値そのものが変わるまで再試行する。
@@ -118,7 +116,7 @@ describe('譜面設定の初期値プリセット', () => {
 
   it('保存済みプリセットは、保存済み譜面が無い状態での次回起動（再マウント）でも反映される', async () => {
     const { unmount } = render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     fireEvent.change(screen.getByRole('spinbutton', { name: '段あたり小節数' }), { target: { value: '5' } });
 
@@ -133,7 +131,7 @@ describe('譜面設定の初期値プリセット', () => {
     // このテスト内では一度も自動保存を発生させていない）ので、
     // 起動時のサイレント復元は「保存済み譜面が無い」分岐に入るはず。
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     await waitFor(() => {
       expect(screen.getByRole('spinbutton', { name: '段あたり小節数' })).toHaveValue(5);
@@ -142,7 +140,7 @@ describe('譜面設定の初期値プリセット', () => {
 
   it('「初期設定に戻す」を押すと、以後の新規作成でコード上の既定値（4）が使われる', async () => {
     render(<ScorePage />);
-    openScoreTab();
+    openLayoutTab();
 
     fireEvent.change(screen.getByRole('spinbutton', { name: '段あたり小節数' }), { target: { value: '6' } });
 
@@ -157,12 +155,12 @@ describe('譜面設定の初期値プリセット', () => {
     expect(await screen.findByText(/初期値プリセットを削除しました/)).toBeInTheDocument();
 
     // リセットボタン自体は「今の画面」を書き換えないため、値はまだ6のまま
-    openScoreTab();
+    openLayoutTab();
     expect(screen.getByRole('spinbutton', { name: '段あたり小節数' })).toHaveValue(6);
 
     clickNewScore();
 
-    openScoreTab();
+    openLayoutTab();
     await waitFor(() => {
       expect(screen.getByRole('spinbutton', { name: '段あたり小節数' })).toHaveValue(4);
     });

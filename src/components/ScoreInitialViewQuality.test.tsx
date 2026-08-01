@@ -133,6 +133,9 @@ describe('新規作成直後の初期表示（Issue #71）: 全譜種で五線�
       const { container } = renderOnScoreTab();
       fireEvent.click(screen.getByRole('button', { name: label }));
 
+      // 段数/ページは Issue #144 で「レイアウト」タブへ移動したため、
+      // 楽譜種別を切り替えたあとタブを移してから値を読む。
+      fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
       const systemsPerPage = Number((screen.getByLabelText('段数/ページ') as HTMLInputElement).value);
 
       // I1: ページに2段以上入る想定なら、実段1つの残りは必ず空の段で埋まる。
