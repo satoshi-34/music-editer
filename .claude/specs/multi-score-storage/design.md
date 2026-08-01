@@ -211,6 +211,86 @@ Issue の受入条件「既存ユーザーの保存データが失われない�
 - `src/components/SaveLoadButtons.tsx` および新規コンポーネント（作品一覧・復元履歴のUI）
 - `README.md` / 本設計書: 各段の実装後に追記（プロジェクトのドキュメント更新ルールに従う）
 
+## 第1段の実装記録（Issue #156・2026-08-02）
+
+第1段（`storage.ts` レイヤー）を実装した。**UI・起動時の復元フローは一切変更していない**
+（Issue #156 の指示どおり。作品カタログを実際に起動時復元へ結線するのは第2段以降）。
+そのため、この段階ではユーザーから見える動きは何も変わらない（README も更新していない）。
+
+### 追加した型（`src/types/storage.ts`）
+
+- `WorkSummary`（`id` / `title` / `updatedAt` / `createdAt`）
+- `WorkIndex`（`version` / `works` / `lastOpenedWorkId`）
+
+設計どおり `SavedScoreData` 自体は変更していない。
+
+### 追加したキー（`src/utils/storage.ts` の `STORAGE_KEYS`）
+
+| キー | 用途 |
+| --- | --- |
+| `music-score-app-work-index` | 作品カタログ（`WorkIndex`）1件 |
+| `music-score-app-work-migrated` | 単一作品データ→カタログ移行を1回だけ行うためのマーカー |
+| `music-score-app-work-{id}-autosave` ほか | 作品ごとの自動保存スロット（`getWorkStorageKeys()` が生成） |
+
+作品ごとのスロットは `-autosave` / `-autosave-backup` / `-autosave-meta` の3点セットにした。
+これは既存の `saveScoreDataToSlot` / `loadScoreDataFromSlot`（`StorageSlotKeys`）を
+そのまま流用でき、**1作品の中での保存挙動が従来の自動保存とまったく同じになる**ため。
+本書が計画している複数世代の `-history` キーは第3段で導入し、そのとき `-backup` の
+役割を引き継ぐ。第1段では `getWorkStorageKeys()` に `history` のキー名だけ定義しておき、
+作品削除時に消し忘れないようにしてある。
+
+### 追加した関数
+
+- カタログ: `loadWorkIndex()` / `saveWorkIndex()` / `listWorks()`（更新の新しい順） /
+  `getWorkSummary()` / `createWork()` / `deleteWork()` /
+  `getLastOpenedWorkId()` / `setLastOpenedWorkId()`
+- 作品別スロット: `saveWorkAutosaveData()` / `loadWorkAutosaveData()` /
+  `hasWorkAutosaveData()` / `clearWorkAutosaveData()` / `getWorkStorageKeys()`
+- 移行: `migrateLegacyDataToWorks()`
+
+### 実装時に決めたこと（本書の計画に対する補足）
+
+- **作品IDは `[A-Za-z0-9_-]{1,64}` に制限する**。作品IDはそのまま localStorage の
+  キー名へ埋め込まれるため、壊れたカタログや手編集データに `../music-score-app-data` の
+  ような文字列が入っていても、既存スロットを読み書きしてしまわないようにする。
+  範囲外のIDは読み書き・削除とも失敗を返す。
+- **壊れたカタログは「要素単位」で落とす**。譜面データ（`validateSavedScoreData`）は
+  「1つでも壊れていたら全体を捨てる」方針だが、カタログで同じことをすると、実データが
+  残っているのに一覧から消える作品（孤児データ）が大量に生まれる。カタログの各要素は
+  互いに独立しているので、壊れた要素と重複IDだけを落として残りを保つ。
+  カタログのJSON自体が壊れている場合のみ空カタログとして扱う。
+- **`lastOpenedWorkId` は実在確認つき**。カタログに無い作品IDは `setLastOpenedWorkId()` で
+  受け付けず、読み込み時に実在しないIDを指していたら `null` に落とす（次回起動で
+  「開けない作品」を指したままになるのを防ぐ）。
+- **`saveWorkAutosaveData()` は未登録IDを自己修復登録する**。実データはあるのに一覧に
+  出ない孤児データを作らないため。カタログ更新に失敗しても、譜面データ自体は書けている
+  ので保存は成功扱いにする（失敗を返すと呼び出し側が二重保存を試みるため）。
+- **`deleteWork()` はカタログ更新 → 実データ削除の順を必ず守る**（本書の方針どおり）。
+  逆順だと、実データだけ消えて一覧に残る「開くと空の幽霊エントリ」が生まれる。
+  この順序なら、途中で失敗しても最悪「一覧に出ないゴミキー」が残るだけで済む。
+- **移行は旧キーを消さない**。`migrateLegacyDataToWorks()` は旧自動保存スロットの生の
+  文字列をそのまま新スロットへコピーするだけで、削除も正規化もしない。万一移行に
+  バグがあっても、旧キーを読む従来の起動時復元がそのまま動き続けるため、譜面を失わない。
+  すでにカタログがある場合（初回ではない場合）は移行せずマーカーだけ立てる。
+  手動保存スロットは本書どおり取り込まない（第4段で扱う）。
+
+### 検証
+
+- `src/utils/storage.test.ts` に 21 件のテストを追加（合計 99 件が通過）。
+  受入条件の回帰テスト「旧データ→新カタログ形式で内容が失われない」は
+  「単一作品データ → 作品カタログ への移行」の describe にある。
+- 既存の保存・読込・自動保存のテストは変更なしで全通過（挙動不変）。
+- ブラウザ（アプリ内ブラウザ・共有dev サーバー）でも、実データ（Piano Demo・音符108件）が
+  入った localStorage に対して移行→読み出し→作成→保存→削除を実行し、内容が一致すること・
+  旧キーが無傷であること・`crypto.randomUUID()` 経路でIDが発行されることを確認した。
+  確認で作ったキーは後片付け済み。起動時のサイレント復元の見た目・コンソールエラー無しも確認。
+
+### 第2段への申し送り
+
+- 起動時復元を `WorkIndex` 経由へ切り替えるときは、`migrateLegacyDataToWorks()` を
+  `migrateLegacyDataToAutosave()` の後に呼ぶ（旧→自動保存→カタログ の順で移行が繋がる）。
+- 容量実測（第5段）はまだ行っていない。
+
 ## 未決定事項（実装時に判断・PRに記録すること）
 
 - 作品タイトルが空（無題）の作品が複数あるときの一覧表示の区別方法

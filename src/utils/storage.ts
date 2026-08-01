@@ -6,6 +6,8 @@ import type {
   StorageError,
   StorageResult,
   ScoreMetadata,
+  WorkIndex,
+  WorkSummary,
   MeasureData,
   PartData,
   ScoreType,
@@ -55,11 +57,18 @@ export const STORAGE_KEYS = {
   AUTOSAVE_BACKUP: 'music-score-app-autosave-backup',
   AUTOSAVE_METADATA: 'music-score-app-autosave-meta',
   // 旧キー→新キーの移行を1回だけ行うためのマーカー
-  MIGRATED_MARKER: 'music-score-app-autosave-migrated'
+  MIGRATED_MARKER: 'music-score-app-autosave-migrated',
+  // 作品カタログ（複数作品保存の第1段。詳細は .claude/specs/multi-score-storage/design.md）
+  WORK_INDEX: 'music-score-app-work-index',
+  // 単一作品時代のデータ →作品カタログ への移行を1回だけ行うためのマーカー
+  WORK_MIGRATED_MARKER: 'music-score-app-work-migrated'
 } as const;
 
 // Current version for data migration
 export const CURRENT_VERSION = '3.5.0';
+
+/** 作品カタログ（WorkIndex）自体のバージョン。カタログの構造を変えたときに上げる */
+export const WORK_INDEX_VERSION = '1.0.0';
 
 /**
  * Generates a simple checksum for data integrity verification
@@ -1098,6 +1107,422 @@ export function migrateLegacyDataToAutosave(): void {
     localStorage.setItem(STORAGE_KEYS.MIGRATED_MARKER, '1');
   } catch {
     // 移行の失敗は致命的ではない（次回起動時に再度試みる）
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 作品カタログ（WorkIndex）と作品別スロット
+//
+// これまでは「手動保存1本・自動保存1本」の固定キーしか無く、複数の作品を
+// 同時に持てなかった。ここから下は、作品ごとに別々の保存先（スロット）を持ち、
+// どんな作品が存在するかを1件のカタログ（WorkIndex）で管理するための層。
+// 設計の正本: .claude/specs/multi-score-storage/design.md（第1段）
+// ---------------------------------------------------------------------------
+
+/** 作品別スロットのキー名に使う共通の接頭辞 */
+const WORK_KEY_PREFIX = 'music-score-app-work-';
+
+/**
+ * 作品IDとして許可する文字（英数字・ハイフン・アンダースコアのみ、64文字以内）。
+ * 作品IDはそのまま localStorage のキー名に埋め込まれるため、壊れたカタログや
+ * 手編集されたデータに変な文字列が入っていても、想定外のキーを読み書きしないよう制限する。
+ */
+const WORK_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** 一覧表示用タイトルの保存上限（極端に長い文字列でカタログが肥大化するのを防ぐ） */
+const MAX_WORK_TITLE_LENGTH = 200;
+
+function isValidWorkId(value: unknown): value is string {
+  return typeof value === 'string' && WORK_ID_PATTERN.test(value);
+}
+
+function createInvalidWorkIdError(): StorageError {
+  return {
+    type: StorageErrorType.CORRUPTED_DATA,
+    message: 'Invalid work id',
+    recoverable: false
+  };
+}
+
+function createStorageDisabledError(): StorageError {
+  return {
+    type: StorageErrorType.STORAGE_DISABLED,
+    message: 'localStorage is not available',
+    recoverable: false
+  };
+}
+
+/**
+ * 作品1件ぶんの保存キーをまとめて返す。
+ * primary/backup/metadata は既存の2スロット（手動・自動保存）と同じ3点セットなので、
+ * 既存の saveScoreDataToSlot / loadScoreDataFromSlot をそのまま流用できる。
+ * history は「復元履歴（数世代）」用のキーで、実装は第3段。ここでは削除時に
+ * 消し忘れないよう、キー名だけ先に定義しておく。
+ */
+export function getWorkStorageKeys(workId: string): {
+  primary: string;
+  backup: string;
+  metadata: string;
+  history: string;
+} {
+  return {
+    primary: `${WORK_KEY_PREFIX}${workId}-autosave`,
+    backup: `${WORK_KEY_PREFIX}${workId}-autosave-backup`,
+    metadata: `${WORK_KEY_PREFIX}${workId}-autosave-meta`,
+    history: `${WORK_KEY_PREFIX}${workId}-history`
+  };
+}
+
+function getWorkSlotKeys(workId: string): StorageSlotKeys {
+  const keys = getWorkStorageKeys(workId);
+  return { primary: keys.primary, backup: keys.backup, metadata: keys.metadata };
+}
+
+/** 新しい作品IDを発行する。crypto.randomUUID が使えない環境では時刻＋乱数で代用する */
+function generateWorkId(): string {
+  const cryptoObj = globalThis.crypto as Crypto | undefined;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `w-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createEmptyWorkIndex(): WorkIndex {
+  return { version: WORK_INDEX_VERSION, works: [], lastOpenedWorkId: null };
+}
+
+function validateWorkSummary(value: unknown): value is WorkSummary {
+  return (
+    isRecord(value) &&
+    isValidWorkId(value.id) &&
+    typeof value.title === 'string' &&
+    isFiniteNumber(value.updatedAt) &&
+    isFiniteNumber(value.createdAt)
+  );
+}
+
+function normalizeWorkTitle(title: string): string {
+  return title.slice(0, MAX_WORK_TITLE_LENGTH);
+}
+
+/**
+ * 作品カタログを読み込む。カタログが無い・壊れている場合は空のカタログを返す
+ * （読み込み側で毎回 null チェックをしなくて済むようにするため）。
+ *
+ * 壊れた要素の扱いは、譜面データ（validateSavedScoreData）の「1つでも壊れていたら
+ * 全体を捨てる」方針とあえて変えている。カタログの各要素は互いに独立しており、
+ * 1件の壊れたエントリのために全部捨てると、実データが残っているのに一覧から
+ * 消える作品（孤児データ）が大量に生まれてしまうため、壊れた要素だけを落とす。
+ */
+export function loadWorkIndex(): WorkIndex {
+  try {
+    if (!isStorageAvailable()) return createEmptyWorkIndex();
+
+    const raw = localStorage.getItem(STORAGE_KEYS.WORK_INDEX);
+    if (!raw) return createEmptyWorkIndex();
+
+    const parsed = JSON.parse(raw);
+    if (!isRecord(parsed) || !Array.isArray(parsed.works)) {
+      return createEmptyWorkIndex();
+    }
+
+    const works: WorkSummary[] = [];
+    const seenIds = new Set<string>();
+    for (const work of parsed.works) {
+      if (!validateWorkSummary(work)) continue;
+      // 同じ作品IDが2回出てくると一覧に重複行が出るので、先に出てきた方だけ採用する
+      if (seenIds.has(work.id)) continue;
+      seenIds.add(work.id);
+      works.push({
+        id: work.id,
+        title: normalizeWorkTitle(work.title),
+        updatedAt: work.updatedAt,
+        createdAt: work.createdAt
+      });
+    }
+
+    // 実在しない作品を指したままの lastOpenedWorkId は「前回の続き」を復元できないので null に落とす
+    const lastOpenedWorkId =
+      isValidWorkId(parsed.lastOpenedWorkId) && seenIds.has(parsed.lastOpenedWorkId)
+        ? parsed.lastOpenedWorkId
+        : null;
+
+    return {
+      version: typeof parsed.version === 'string' ? parsed.version : WORK_INDEX_VERSION,
+      works,
+      lastOpenedWorkId
+    };
+  } catch {
+    return createEmptyWorkIndex();
+  }
+}
+
+/** 作品カタログを丸ごと保存する（カタログを更新する処理はすべてここを通す） */
+export function saveWorkIndex(index: WorkIndex): StorageResult<boolean> {
+  try {
+    if (!isStorageAvailable()) {
+      return { success: false, error: createStorageDisabledError() };
+    }
+
+    localStorage.setItem(STORAGE_KEYS.WORK_INDEX, JSON.stringify(index));
+    return { success: true, data: true };
+  } catch (error) {
+    return { success: false, error: createStorageError(error) };
+  }
+}
+
+/** 作品一覧を「最近更新した順」で返す（一覧UIの既定の並び順） */
+export function listWorks(): WorkSummary[] {
+  return [...loadWorkIndex().works].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** 作品IDから要約情報を引く。存在しなければ null */
+export function getWorkSummary(workId: string): WorkSummary | null {
+  if (!isValidWorkId(workId)) return null;
+  return loadWorkIndex().works.find((work) => work.id === workId) ?? null;
+}
+
+/**
+ * 新しい作品をカタログに登録する（譜面データはまだ書き込まない）。
+ * 返り値の WorkSummary.id を使って saveWorkAutosaveData で中身を保存する。
+ */
+export function createWork(title: string = ''): StorageResult<WorkSummary> {
+  try {
+    if (!isStorageAvailable()) {
+      return { success: false, error: createStorageDisabledError() };
+    }
+
+    const index = loadWorkIndex();
+    const existingIds = new Set(index.works.map((work) => work.id));
+
+    // crypto.randomUUID が無い環境のフォールバックは時刻＋乱数なので、
+    // ごく稀に重複しうる。既存IDと衝突したら振り直す（数回で必ず抜ける）。
+    let id = generateWorkId();
+    for (let i = 0; i < 5 && existingIds.has(id); i++) {
+      id = generateWorkId();
+    }
+    if (existingIds.has(id)) {
+      return {
+        success: false,
+        error: {
+          type: StorageErrorType.UNKNOWN_ERROR,
+          message: 'Failed to generate a unique work id',
+          recoverable: true
+        }
+      };
+    }
+
+    const now = Date.now();
+    const summary: WorkSummary = {
+      id,
+      title: normalizeWorkTitle(title),
+      updatedAt: now,
+      createdAt: now
+    };
+
+    const saveResult = saveWorkIndex({ ...index, works: [...index.works, summary] });
+    if (!saveResult.success) {
+      return { success: false, error: saveResult.error };
+    }
+
+    return { success: true, data: summary };
+  } catch (error) {
+    return { success: false, error: createStorageError(error) };
+  }
+}
+
+/**
+ * 指定した作品の自動保存スロットへ保存する。
+ * 保存が成功したときだけカタログ側の title / updatedAt も更新するので、
+ * 「一覧の表示内容」と「実データ」がずれない。
+ * カタログに未登録の作品IDへ保存された場合は、その場でカタログへ登録し直す
+ * （実データはあるのに一覧に出ない孤児データを作らないための保険）。
+ */
+export function saveWorkAutosaveData(workId: string, data: SavedScoreData): StorageResult<boolean> {
+  if (!isValidWorkId(workId)) {
+    return { success: false, error: createInvalidWorkIdError() };
+  }
+
+  const result = saveScoreDataToSlot(data, getWorkSlotKeys(workId));
+  if (!result.success) {
+    return result;
+  }
+
+  const index = loadWorkIndex();
+  const title = normalizeWorkTitle(data.metadata?.title ?? '');
+  const updatedAt = isFiniteNumber(data.timestamp) ? data.timestamp : Date.now();
+  const existing = index.works.find((work) => work.id === workId);
+
+  const works = existing
+    ? index.works.map((work) => (work.id === workId ? { ...work, title, updatedAt } : work))
+    : [...index.works, { id: workId, title, updatedAt, createdAt: updatedAt }];
+
+  // カタログの更新に失敗しても、譜面データ自体は書けているので保存そのものは成功扱いにする
+  // （ここで失敗を返すと、呼び出し側が「保存できていない」と誤解して二重保存を試みてしまう）。
+  saveWorkIndex({ ...index, works });
+
+  return result;
+}
+
+/** 指定した作品の自動保存スロットから読み込む */
+export function loadWorkAutosaveData(workId: string): StorageResult<SavedScoreData | null> {
+  if (!isValidWorkId(workId)) {
+    return { success: false, error: createInvalidWorkIdError() };
+  }
+  return loadScoreDataFromSlot(getWorkSlotKeys(workId));
+}
+
+/** 指定した作品に自動保存データが存在するか */
+export function hasWorkAutosaveData(workId: string): boolean {
+  if (!isValidWorkId(workId)) return false;
+  return hasStoredDataInSlot(getWorkSlotKeys(workId));
+}
+
+/** 指定した作品の自動保存スロットだけを空にする（カタログの登録は残す） */
+export function clearWorkAutosaveData(workId: string): StorageResult<boolean> {
+  if (!isValidWorkId(workId)) {
+    return { success: false, error: createInvalidWorkIdError() };
+  }
+  return clearStoredDataInSlot(getWorkSlotKeys(workId));
+}
+
+/**
+ * 作品を削除する（カタログの登録と実データの両方）。
+ * 「カタログを先に更新し、成功したときだけ実データを消す」順序を必ず守る。
+ * 逆順にすると、実データだけ消えてカタログに残った作品（開くと空になる幽霊エントリ）が
+ * 生まれるため。この順序なら、途中で失敗しても最悪「一覧に出ないゴミキー」が残るだけで、
+ * ユーザーから見た一覧の整合性は保たれる。
+ */
+export function deleteWork(workId: string): StorageResult<boolean> {
+  if (!isValidWorkId(workId)) {
+    return { success: false, error: createInvalidWorkIdError() };
+  }
+
+  try {
+    if (!isStorageAvailable()) {
+      return { success: false, error: createStorageDisabledError() };
+    }
+
+    const index = loadWorkIndex();
+    const nextIndex: WorkIndex = {
+      ...index,
+      works: index.works.filter((work) => work.id !== workId),
+      lastOpenedWorkId: index.lastOpenedWorkId === workId ? null : index.lastOpenedWorkId
+    };
+
+    const saveResult = saveWorkIndex(nextIndex);
+    if (!saveResult.success) {
+      return { success: false, error: saveResult.error };
+    }
+
+    const keys = getWorkStorageKeys(workId);
+    localStorage.removeItem(keys.primary);
+    localStorage.removeItem(keys.backup);
+    localStorage.removeItem(keys.metadata);
+    localStorage.removeItem(keys.history);
+
+    return { success: true, data: true };
+  } catch (error) {
+    return { success: false, error: createStorageError(error) };
+  }
+}
+
+/** 起動時に開く作品ID（前回の続き）。未設定・実在しない場合は null */
+export function getLastOpenedWorkId(): string | null {
+  return loadWorkIndex().lastOpenedWorkId;
+}
+
+/**
+ * 「前回の続き」として開く作品IDを記録する。
+ * カタログに存在しない作品IDは受け付けない（存在しない作品を指したまま次回起動して
+ * 何も復元できない、という状態を作らないため）。
+ */
+export function setLastOpenedWorkId(workId: string | null): StorageResult<boolean> {
+  const index = loadWorkIndex();
+
+  if (workId !== null) {
+    if (!isValidWorkId(workId)) {
+      return { success: false, error: createInvalidWorkIdError() };
+    }
+    if (!index.works.some((work) => work.id === workId)) {
+      return {
+        success: false,
+        error: {
+          type: StorageErrorType.CORRUPTED_DATA,
+          message: 'Work id is not registered in the work index',
+          recoverable: true
+        }
+      };
+    }
+  }
+
+  return saveWorkIndex({ ...index, lastOpenedWorkId: workId });
+}
+
+/**
+ * 単一作品時代の自動保存データ（music-score-app-autosave 系）を、
+ * 作品カタログ配下の「最初の1作品」として1回だけ移行する。
+ *
+ * 方針は既存の migrateLegacyDataToAutosave と同じ「消さずに読み替える」:
+ * 旧キーの中身はコピーするだけで、削除も書き換えもしない。こうしておくと、
+ * 万一この移行にバグがあっても、旧キーを読む従来の経路（起動時のサイレント復元）が
+ * そのまま動き続けるため、ユーザーの譜面が失われる事故にならない。
+ *
+ * 手動保存スロット（music-score-app-data 系）は、自動保存と中身が違う可能性が
+ * あるため、ここでは統合しない（設計書どおり第4段で別途扱う）。
+ */
+export function migrateLegacyDataToWorks(): void {
+  try {
+    if (!isStorageAvailable()) return;
+    // 2回目以降は何もしない（移行後にユーザーが編集した内容を巻き戻さないため）
+    if (localStorage.getItem(STORAGE_KEYS.WORK_MIGRATED_MARKER)) return;
+
+    // すでにカタログがある＝初回ではないので、移行は行わずマーカーだけ立てる
+    if (localStorage.getItem(STORAGE_KEYS.WORK_INDEX)) {
+      localStorage.setItem(STORAGE_KEYS.WORK_MIGRATED_MARKER, '1');
+      return;
+    }
+
+    if (hasStoredDataInSlot(AUTOSAVE_SLOT_KEYS)) {
+      const workId = generateWorkId();
+      const workKeys = getWorkStorageKeys(workId);
+
+      // 検証や整形を挟まず、生の文字列をそのままコピーする。
+      // 途中で正規化すると「移行で中身が変わった」可能性が入り込むため、
+      // 旧データと1バイトも違わない状態で新しいスロットへ移す。
+      const legacyPrimary = localStorage.getItem(STORAGE_KEYS.AUTOSAVE);
+      const legacyBackup = localStorage.getItem(STORAGE_KEYS.AUTOSAVE_BACKUP);
+      const legacyMetadata = localStorage.getItem(STORAGE_KEYS.AUTOSAVE_METADATA);
+
+      if (legacyPrimary !== null) localStorage.setItem(workKeys.primary, legacyPrimary);
+      if (legacyBackup !== null) localStorage.setItem(workKeys.backup, legacyBackup);
+      if (legacyMetadata !== null) localStorage.setItem(workKeys.metadata, legacyMetadata);
+
+      // タイトルと更新時刻は、コピー後の新スロットを通常の読み込み経路で読んで取得する。
+      // こうすると「主データが壊れていてバックアップから復旧する」ケースでも、
+      // 一覧に出るタイトルが実際に開かれる中身と一致する。
+      const loaded = loadWorkAutosaveData(workId);
+      const restored = loaded.success ? loaded.data ?? null : null;
+      const restoredTimestamp = restored && isFiniteNumber(restored.timestamp)
+        ? restored.timestamp
+        : Date.now();
+      const summary: WorkSummary = {
+        id: workId,
+        title: normalizeWorkTitle(restored?.metadata?.title ?? ''),
+        updatedAt: restoredTimestamp,
+        createdAt: restoredTimestamp
+      };
+
+      saveWorkIndex({
+        version: WORK_INDEX_VERSION,
+        works: [summary],
+        lastOpenedWorkId: workId
+      });
+    }
+
+    localStorage.setItem(STORAGE_KEYS.WORK_MIGRATED_MARKER, '1');
+  } catch {
+    // 移行の失敗は致命的ではない（旧キーは無傷のまま残っているので、次回起動時に再度試みる）
   }
 }
 

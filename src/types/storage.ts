@@ -410,6 +410,34 @@ export interface StorageMetadata {
   dataChecksum?: string;
 }
 
+/**
+ * 作品カタログ1件ぶんの要約情報（作品一覧の表示に使う軽い情報だけを持つ）。
+ * 譜面データ本体（SavedScoreData）はサイズが大きいので、ここには入れず
+ * 作品IDから引ける別のキー（スロット）に保存する。
+ */
+export interface WorkSummary {
+  /** 作品ID。localStorage のキー名の一部にもなるため、英数字とハイフンのみ許可する */
+  id: string;
+  /** 一覧表示用のタイトル。SavedScoreData.metadata.title のコピー（空文字なら画面側で「無題」と表示する） */
+  title: string;
+  /** 最終更新時刻（ミリ秒）。一覧の並び替えに使う */
+  updatedAt: number;
+  /** 作成時刻（ミリ秒） */
+  createdAt: number;
+}
+
+/**
+ * 作品カタログ本体。localStorage には「実在する作品IDの一覧」を列挙する API が無いため、
+ * このカタログが「どの作品が存在するか」の正本（唯一の正しい情報源）になる。
+ */
+export interface WorkIndex {
+  /** カタログ自体のバージョン（将来カタログの構造を変えるときの移行判定に使う） */
+  version: string;
+  works: WorkSummary[];
+  /** 起動時に「前回の続き」として開く作品ID（未設定なら null） */
+  lastOpenedWorkId: string | null;
+}
+
 export const StorageErrorType = {
   QUOTA_EXCEEDED: 'quota_exceeded',
   STORAGE_DISABLED: 'storage_disabled',
