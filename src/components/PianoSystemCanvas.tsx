@@ -95,6 +95,12 @@ import {
   SYSTEM_TARGET_FILL,
   vexFlowCombinedMeasureMinimumContentWidth,
 } from '../utils/measureLayoutUtils';
+import {
+  instrumentLabelBaseFontSize,
+  resolveInstrumentLabelLayout,
+  INSTRUMENT_LABEL_PAGE_MARGIN,
+  INSTRUMENT_LABEL_STAVE_GAP,
+} from '../utils/instrumentLabelUtils';
 // computeLayout/staveSpacingForPartCount の正本は measureLayoutUtils.ts へ移設した
 // （ScorePage.tsx の maxSystemsPerPage が同じ計算式を「実測」として共有するため。
 // Issue #38）。既存のテスト（PianoSystemCanvasPartSpacing.test.tsx）はこのファイルからの
@@ -128,6 +134,10 @@ export type PartConfig = {
   data: MeasureData[];
   onChange: (data: MeasureData[]) => void;
   label?: string;
+  // 総譜1段目に出すフル名（例: 'Flute'）。label（略称）と対で持ち、
+  // showFullInstrumentLabels が true の段でだけこちらを描く（Issue #60）。
+  // 省略時は label をそのまま使う。
+  fullLabel?: string;
   playbackInstrument?: InstrumentType;
   // 段に属するグループ識別子。連続する同じ値のパートを
   // 1 本の括弧でくくり、オーケストラ譜らしい見た目にするために使う。
@@ -737,6 +747,9 @@ type Props = {
   // N段汎用
   partsConfig?: PartConfig[];
   showInstrumentLabels?: boolean;
+  // 総譜の1段目だけ true にする。パート名を略称ではなくフル名で描く（Issue #60）。
+  // showInstrumentLabels が false の段では意味を持たない。
+  showFullInstrumentLabels?: boolean;
   startMeasureIndex?: number;
   disabled?: boolean;
   currentInstrument?: InstrumentType;
@@ -819,6 +832,7 @@ export default function PianoSystemCanvas({
   trebleData, bassData, onTrebleChange, onBassChange,
   partsConfig,
   showInstrumentLabels = false,
+  showFullInstrumentLabels = false,
   startMeasureIndex=0, disabled=false, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   finalMeasureIndex,
   timeSignature = [4, 4],
@@ -866,6 +880,9 @@ export default function PianoSystemCanvas({
   const partsLayoutSignature = JSON.stringify(parts.map(part => ({
     clef: part.clef,
     label: part.label,
+    // フル名もここに含める。カスタム編成でパート名を編集したとき、
+    // 1段目のフル名表示だけ古いまま残らないようにするため（Issue #60）。
+    fullLabel: part.fullLabel,
     bracketGroup: part.bracketGroup,
     subBracketGroup: part.subBracketGroup,
     keySignature: part.keySignature,
@@ -1732,9 +1749,17 @@ export default function PianoSystemCanvas({
     const requestedScale=scale ?? SCORE_LAYOUT_RENDER_SCALE;
 
     /* -- 幅計算 -- */
-    // パート名を表示するシステムでは、五線の左側に略称用の余白を作る。
+    // パート名を表示するシステムでは、五線の左側にパート名用の余白を作る。
     // 余白を作らずに text だけ置くと、画面端で Fl. や Vln. が切れてしまう。
-    const labelW = showInstrumentLabels ? 74 : 0;
+    // 1段目はフル名（Flute）、2段目以降は略称（Fl.）を描くため（Issue #60）、
+    // 実際に描く文字列から必要な余白幅とフォントサイズを求める。
+    const labelTexts = showInstrumentLabels
+      ? parts
+        .map(part => (showFullInstrumentLabels ? part.fullLabel ?? part.label : part.label))
+        .filter((label): label is string => !!label)
+      : [];
+    const labelLayout = resolveInstrumentLabelLayout(labelTexts, instrumentLabelBaseFontSize(parts.length));
+    const labelW = showInstrumentLabels ? labelLayout.areaWidth : 0;
     const innerW=W-PAGE_LEFT-PAGE_RIGHT-labelW;
     // 途中調号は最上段の小節データが正本。幅計測でも本描画と同じ正本を参照する。
     const topPartMeasuresForKey = partsScore[0] ?? parts[0]?.data ?? [];
@@ -2075,20 +2100,24 @@ export default function PianoSystemCanvas({
 
     if (showInstrumentLabels) {
       parts.forEach((part, pi) => {
-        const label = part.label;
+        // 総譜の1段目だけフル名（Flute）、2段目以降は略称（Fl.）にする（Issue #60）。
+        // フル名が未設定のパートは従来どおり略称のまま描く。
+        const label = showFullInstrumentLabels ? part.fullLabel ?? part.label : part.label;
         if (!label) {
           return;
         }
 
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         text.textContent = label;
-        text.setAttribute('x', String(Math.max(4, staveSets[pi][0].getX() - 10)));
+        text.setAttribute('x', String(Math.max(INSTRUMENT_LABEL_PAGE_MARGIN, staveSets[pi][0].getX() - INSTRUMENT_LABEL_STAVE_GAP)));
         text.setAttribute('y', String(staveSets[pi][0].getYForLine(2)));
         text.setAttribute('text-anchor', 'end');
         text.setAttribute('dominant-baseline', 'middle');
         text.setAttribute('fill', '#111827');
         text.setAttribute('font-family', 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif');
-        text.setAttribute('font-size', parts.length > 10 ? '9' : '11');
+        // 長いフル名（Tenor Saxophone in Bb など）は、余白を上限まで広げても入りきらない
+        // ことがある。その場合だけ labelLayout がフォントを縮めて返すので、はみ出さない。
+        text.setAttribute('font-size', String(labelLayout.fontSize));
         text.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(text);
       });
@@ -4325,7 +4354,7 @@ export default function PianoSystemCanvas({
   // measureWidthEvenness を deps に含め、スライダー操作で即座に再描画されるようにする
   // pageMarginSideMm: 値自体は使わないが、ResizeObserver の発火漏れ対策として
   // 呼び出し元（ScorePage）の余白変更を確実にこの effect へ伝える依存トリガー。
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx]);
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で

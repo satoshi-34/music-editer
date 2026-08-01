@@ -510,6 +510,79 @@ React Portal で中身を差し込む実装だった。ポップアップがブ�
   再オープン後の変更反映を確認。`window.open` が一度も呼ばれないことも
   アサートしており、ポップアップブロック環境でも機能することの回帰テストになっている。
 
+## 総譜1段目のパート名をフル名にする（Issue #60）
+
+### 問題
+
+浄書（楽譜の組版）の慣習では、総譜のいちばん最初の段はフル名（Piccolo / Flute / Oboe …）、
+2 段目以降は略称（Picc. / Fl. / Ob. …）でパート名を書く。
+`InstrumentPartDefinition` は `name`（フル名）と `abbreviation`（略称）を両方持っているのに、
+描画側（`EnsembleStaff` / `QuartetStaff`）は常に略称だけを `PartConfig.label` へ渡していたため、
+最初の段から略称で表示されていた。
+
+### 修正設計
+
+1. `PartConfig` に `fullLabel`（フル名）を追加し、`label`（略称）と対で持たせる。
+   `EnsembleStaff` は `part.name`、`QuartetStaff` は `QUARTET_PART_CONFIGS` の
+   `fullLabel`（Violin I / Violin II / Viola / Cello）を入れる。
+   フル名が空のパート（カスタム編成で名前を消した場合など）は略称で代用する。
+2. `PianoSystemCanvas` に `showFullInstrumentLabels` を追加し、true の段だけ
+   `fullLabel` を描く。**どの段にパート名を出すか（`showInstrumentLabels`）の
+   従来ルールは変えない**（各ページの先頭段のみ）。
+3. 「譜面のいちばん最初の段」はページ番号と段番号の両方を見ないと判定できない。
+   `EnsembleStaff` / `QuartetStaff` はページごとに1インスタンス描画されるため、
+   `ScorePage` から `isFirstPage`（`visiblePages` の index === 0）を渡し、
+   ラッパー側で `isFirstPage && systemIndex === 0` のときだけフル名にする。
+   結果として 2 ページ目以降の先頭段は従来どおり略称になる。
+
+### 左余白の自動確保（`utils/instrumentLabelUtils.ts`）
+
+フル名は略称より長く、従来の固定余白（`SYSTEM_MAX_LABEL_WIDTH` = 74）では
+五線にかぶるか紙の左端で切れる。新しい `instrumentLabelUtils.ts` に計算を集約し、
+次の2段構えで「はみ出さない」ことを保証する。
+
+1. 実際に描くラベル文字列から必要幅を見積もり、余白を
+   `INSTRUMENT_LABEL_MAX_AREA_WIDTH`（110）まで自動で広げる
+2. 上限まで広げても入らない長い名前（例: `Tenor Saxophone in Bb`）は
+   フォントサイズを縮めて収める（下限 7）
+
+幅の見積もりは文字ごとの em 比率による近似。canvas の `measureText` は jsdom で使えず、
+SVG の `getComputedTextLength()` は描画後にしか測れないため、幅計算より前に決められる
+純関数にした（テストも書きやすい）。安全側にやや大きめの比率を採っている。
+
+**重要**: ラベル余白は「段の本文に使える幅」を削るため、段割り（1段あたりの小節数）に
+直結する。計画側（`ScorePage` → `worstCaseSystemContentBudget`）と描画側
+（`PianoSystemCanvas` の `labelW`）で違う値を使うと、計画より本文が狭くなって
+小節が段の右端からはみ出す。そこで `worstCaseSystemContentBudget()` に
+`labelAreaWidth` 引数を足し、`ScorePage` が `instrumentLabelAreaWidthForScore()`
+（フル名と略称の両方を候補にした最大値）を渡して両者をそろえている。
+下限を従来の 74 に固定しているため、略称も短いフル名も余白は変わらず、
+既存譜面の段割り・ページ数は動かない（吹奏楽のように長いフル名を含む編成だけ
+最大 36px ぶん本文が狭くなる）。
+
+### 影響範囲
+
+- `src/utils/instrumentLabelUtils.ts`（新規）＋ `instrumentLabelUtils.test.ts`
+- `src/utils/measureLayoutUtils.ts`: `worstCaseSystemContentBudget()` に
+  `labelAreaWidth` 引数を追加（既定値は従来の `SYSTEM_MAX_LABEL_WIDTH` で後方互換）
+- `src/components/PianoSystemCanvas.tsx`: `PartConfig.fullLabel`・
+  `showFullInstrumentLabels`・ラベル幅とフォントの動的計算。
+  `partsLayoutSignature` にも `fullLabel` を含め、カスタム編成でパート名を変えたときに
+  1段目の表示が古いまま残らないようにした
+- `src/components/EnsembleStaff.tsx` / `QuartetStaff.tsx`: `isFirstPage` prop の追加
+- `src/components/ScorePage.tsx`: `isFirstPage` の受け渡しと、
+  段割り計画へ渡すラベル余白（`instrumentLabelAreaWidth`）の算出
+- パート譜表示（編成譜）も同じ `EnsembleStaff` を通るため、同じルールが適用される
+
+### 動作確認
+
+- `EnsembleFullPartName.test.tsx`: 1ページ目の先頭段＝フル名、それ以外＝略称、
+  フル名が空のパートは略称のままになること
+- ブラウザ: 室内オーケストラ・吹奏楽・弦楽四重奏・パート譜表示で、
+  1ページ目の先頭段がフル名、2ページ目以降が略称になること、
+  長いフル名（`Tenor Saxophone in Bb`）でも紙の左端からはみ出さず、
+  どの段でも `data-layout-overflow` が `true` にならないことを確認した
+
 ## 今後の課題
 
 - 異名同音の楽典的綴り選択（D♭ vs C# など）を保ったままの移調

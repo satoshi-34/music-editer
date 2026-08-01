@@ -83,6 +83,13 @@ type Props = {
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
   // ドラッグ範囲選択（PianoSystemCanvas から呼ばれる）をそのまま親へ渡す
   onMeasureRangeSelect?: (startIndex: number, endIndex: number) => void;
+  /**
+   * このコンポーネントが譜面の1ページ目を描いているときだけ true（Issue #60）。
+   * 浄書の慣習では、総譜の「いちばん最初の段」だけパート名をフル名（Flute）で書き、
+   * 以降の段は略称（Fl.）にする。EnsembleStaff はページごとに1つ描画されるため、
+   * 「最初の段」かどうかはページ番号と段番号の両方を見ないと判定できない。
+   */
+  isFirstPage?: boolean;
 };
 
 export default function EnsembleStaff({
@@ -118,6 +125,7 @@ export default function EnsembleStaff({
   selectedMeasures,
   onMeasureSelect,
   onMeasureRangeSelect,
+  isFirstPage = false,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -165,6 +173,8 @@ export default function EnsembleStaff({
           const primaryEntry: PartConfig = {
             clef: part.clef,
             label: part.abbreviation || part.name,
+            // 総譜1段目に出すフル名。略称しか登録されていないパートは略称で代用する。
+            fullLabel: part.name || part.abbreviation,
             playbackInstrument: part.playbackInstrument,
             // 木管・金管・弦などの楽器グループ識別子。
             // PianoSystemCanvas はこの値が連続するパートをひとまとめにし、
@@ -216,6 +226,8 @@ export default function EnsembleStaff({
             scale={scale}
             partsConfig={partsConfig}
             showInstrumentLabels={systemIndex === 0}
+            // 譜面全体でいちばん最初の段（1ページ目の1段目）だけフル名にする（Issue #60）
+            showFullInstrumentLabels={isFirstPage && systemIndex === 0}
             startMeasureIndex={systemRanges?.[systemIndex]?.start ?? startMeasureIndex + systemIndex * measuresPerSystem}
             disabled={disabled}
             currentInstrument={currentInstrument}

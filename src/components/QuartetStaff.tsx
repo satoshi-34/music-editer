@@ -12,11 +12,12 @@ import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { createEmptyMeasures } from '../utils/voiceMeasureUtils';
 
 // パート譜表示（PartExtractionStaff）からも同じ clef/楽器定義を使うため export する
+// fullLabel は総譜1段目に出すフル名（Issue #60）。2段目以降は label（略称）を使う。
 export const QUARTET_PART_CONFIGS: Omit<PartConfig, 'data' | 'onChange'>[] = [
-  { clef: 'treble', label: 'Vn. I',  playbackInstrument: InstrumentType.VIOLIN },
-  { clef: 'treble', label: 'Vn. II', playbackInstrument: InstrumentType.VIOLIN },
-  { clef: 'alto',   label: 'Va.',    playbackInstrument: InstrumentType.VIOLA },
-  { clef: 'bass',   label: 'Vc.',    playbackInstrument: InstrumentType.CELLO },
+  { clef: 'treble', label: 'Vn. I',  fullLabel: 'Violin I',  playbackInstrument: InstrumentType.VIOLIN },
+  { clef: 'treble', label: 'Vn. II', fullLabel: 'Violin II', playbackInstrument: InstrumentType.VIOLIN },
+  { clef: 'alto',   label: 'Va.',    fullLabel: 'Viola',     playbackInstrument: InstrumentType.VIOLA },
+  { clef: 'bass',   label: 'Vc.',    fullLabel: 'Cello',     playbackInstrument: InstrumentType.CELLO },
 ];
 
 type Props = {
@@ -75,6 +76,11 @@ type Props = {
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
   // ドラッグ範囲選択（PianoSystemCanvas から呼ばれる）をそのまま親へ渡す
   onMeasureRangeSelect?: (startIndex: number, endIndex: number) => void;
+  /**
+   * このコンポーネントが譜面の1ページ目を描いているときだけ true（Issue #60）。
+   * 総譜のいちばん最初の段だけパート名をフル名（Violin I）にし、以降は略称（Vn. I）にする。
+   */
+  isFirstPage?: boolean;
 };
 
 export default function QuartetStaff({
@@ -106,6 +112,7 @@ export default function QuartetStaff({
   selectedMeasures,
   onMeasureSelect,
   onMeasureRangeSelect,
+  isFirstPage = false,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
@@ -130,6 +137,8 @@ export default function QuartetStaff({
             scale={scale}
             partsConfig={partsConfig}
             showInstrumentLabels={i === 0}
+            // 譜面全体でいちばん最初の段（1ページ目の1段目）だけフル名にする（Issue #60）
+            showFullInstrumentLabels={isFirstPage && i === 0}
             startMeasureIndex={systemRanges?.[i]?.start ?? startMeasureIndex + i * measuresPerSystem}
             disabled={disabled}
             currentInstrument={currentInstrument}
