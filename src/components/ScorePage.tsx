@@ -3532,6 +3532,40 @@ export default function ScorePage() {
     [instrumentation.parts]
   );
 
+  // フィードバックの通知＋ボタン一式（Issue #142 で作ったものを Issue #150 で共通化）。
+  // 置き場所だけが折り畳み状態で変わる（展開中＝タブ行の右端／折り畳み中＝折り畳み行）ので、
+  // 中身をここに1つだけ定義して両方から使い回す。
+  // ボタンを2か所に同時に描かないのは、同じボタンが2個見えると混乱するのに加えて、
+  // 結果通知（role="status"）が2つ存在すると支援技術に二重で読み上げられてしまうため。
+  const feedbackControls = (
+    <div className="toolbar-feedback">
+      {/* 通知はボタンの手前（左）に出す。あとに置くとボタンが通知の幅ぶん
+          左へずれて「行の右端」から動いてしまうため。 */}
+      {feedbackNotice && (
+        <span
+          role="status"
+          className="toolbar-feedback-notice"
+          style={{ color: feedbackNotice.isError ? 'crimson' : '#555' }}
+        >
+          {feedbackNotice.message}
+        </span>
+      )}
+      <button
+        type="button"
+        className="toolbar-feedback-button"
+        onClick={handleFeedback}
+        aria-label="フィードバック"
+        title="現在の譜面データ・設定・表示状態をJSONとしてクリップボードにコピーし、GitHubのIssue下書きを開きます。曲名・歌詞など譜面の内容が含まれ、公開リポジトリへ投稿される点にご注意ください"
+      >
+        {/* ラベルを span で包んでいるのは、折り畳み帯が横に3つ並ぶ狭い画面で
+            文字だけを隠してアイコン（💬）だけにするため（CSS 側で制御。Issue #150）。
+            読み上げ名は button の aria-label で保たれるので、隠しても意味は失われない。 */}
+        <span aria-hidden="true">💬</span>{' '}
+        <span className="toolbar-feedback-label">フィードバック</span>
+      </button>
+    </div>
+  );
+
   return (
     <div
       className={`app-root${isPrintPreview ? ' print-preview' : ''}`}
@@ -3560,29 +3594,9 @@ export default function ScorePage() {
           {/* フィードバックはパネルを開くタブではなく、押すと送信フローが始まるアクション。
               そのため role="tab" を付けず（tablist の外に置く）、アイコン付き・角丸ピル型の
               専用スタイルで7個目のタブに見えないようにしている。
-              aria-label を付けているのは、先頭のアイコンが読み上げ名に混ざらないようにするため。 */}
-          <div className="toolbar-feedback">
-            {/* 通知はボタンの手前（左）に出す。あとに置くとボタンが通知の幅ぶん
-                左へずれて「タブ行の右端」から動いてしまうため。 */}
-            {feedbackNotice && (
-              <span
-                role="status"
-                className="toolbar-feedback-notice"
-                style={{ color: feedbackNotice.isError ? 'crimson' : '#555' }}
-              >
-                {feedbackNotice.message}
-              </span>
-            )}
-            <button
-              type="button"
-              className="toolbar-feedback-button"
-              onClick={handleFeedback}
-              aria-label="フィードバック"
-              title="現在の譜面データ・設定・表示状態をJSONとしてクリップボードにコピーし、GitHubのIssue下書きを開きます。曲名・歌詞など譜面の内容が含まれ、公開リポジトリへ投稿される点にご注意ください"
-            >
-              <span aria-hidden="true">💬</span> フィードバック
-            </button>
-          </div>
+              aria-label を付けているのは、先頭のアイコンが読み上げ名に混ざらないようにするため。
+              折り畳み中はこの行ごと隠れてしまうので、そのときだけ折り畳み行へ出す（Issue #150）。 */}
+          {!isToolbarCollapsed && feedbackControls}
         </div>
 
         {/* Undo/Redo はタブに関係なく常時操作できるようにする */}
@@ -4381,9 +4395,13 @@ export default function ScorePage() {
             className="toolbar-view-zoom"
             title="画面表示の拡大縮小です。印刷結果には影響しません。100% が既定の自動縮尺です"
           >
-            画面表示のズーム
+            {/* ラベル文字を span で包み、狭い画面の折り畳み帯でだけ隠せるようにした（Issue #150）。
+                隠すと label のテキストが読み上げ名として使えなくなるので、
+                input 側に aria-label を明示して名前が消えないようにしている。 */}
+            <span className="toolbar-view-zoom-label">画面表示のズーム</span>
             <input
               type="range"
+              aria-label="画面表示のズーム"
               min={50}
               max={150}
               step={5}
@@ -4401,6 +4419,12 @@ export default function ScorePage() {
             {/* 現在値（%）。100% が既定（リセット時の目安）になる */}
             <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(viewZoom * 100)}%</span>
           </label>
+          {/* 折り畳み中だけフィードバックをこの行に出す（Issue #150）。
+              表示の不具合に気づくのは譜面を見ているときなので、報告のために
+              折り畳みを解除させると、報告に添える表示状態（viewState）まで変わってしまう。
+              折り畳みトグルは押す位置を覚えられている操作なので、フィードバックは
+              トグルの手前に置き、トグル自体は右端のまま動かさない。 */}
+          {isToolbarCollapsed && feedbackControls}
           <button
             type="button"
             className="ghost toolbar-collapse-button"

@@ -151,6 +151,33 @@
   font-size: 12px;
   color: #444;
 }
+/* 折り畳み中にこの行へ出るフィードバック（Issue #150）。
+   space-between の3つ目の要素として置くと真ん中に来てしまうので、
+   margin-left: auto で右へ寄せ、折り畳みトグルのすぐ隣（＝右端はトグルのまま）にする。
+   帯の高さ（実測33px）を増やさないよう、ボタンの高さは他のコントロールと同じ
+   --toolbar-control-height（28px）のまま使う。 */
+.toolbar-collapse-row .toolbar-feedback {
+  margin-left: auto;
+}
+/* 折り畳み中の結果通知だけは、帯の中ではなく帯の「下」へ重ねて出す（Issue #150）。
+   帯の中に流し込むと、長い文（特にポップアップブロック時のURL案内）が2行に折り返して
+   帯が 33px → 41px に伸びてしまい、「折り畳み帯の高さを増やさない」という要件を破る。
+   省略記号で切る案は、エラー文（自動では消えない＝読んで対処してほしい文）の
+   肝心のURLが読めなくなるため採らなかった。
+   位置の基準は `position: fixed` の `.toolbar` 自身なので、top: 100% で帯のすぐ下に出る。 */
+.toolbar.collapsed .toolbar-feedback-notice {
+  position: absolute;
+  top: 100%;
+  right: 10px;
+  /* 画面幅が狭いときも画面外へはみ出さない上限 */
+  max-width: min(92vw, 620px);
+  padding: 4px 10px;
+  border: 1px solid #f59e0b;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background: #fffbeb;
+  box-shadow: 0 4px 12px #877f7f26;
+}
 /* `.toolbar` を前置きしているのは詳細度の都合。素の `.toolbar-collapse-button` だと
    後述の `button.ghost`（要素名を含むぶん詳細度が高い）の padding: 8px 12px に負けて、
    ボタンだけ他のツールバー操作より背が高くなってしまう。
@@ -765,6 +792,28 @@ button.ghost.active:hover:not(:disabled) {
   .toolbar-tabs {
     flex: 1 1 auto;
     min-width: 0;
+  }
+
+  /* 折り畳み帯は「ズーム・フィードバック・折り畳みトグル」の3つが1行に並ぶ（Issue #150）。
+     狭い画面ではこの3つが収まらず折り返して帯が2行（33px→69px）になってしまうため、
+     折り畳み中のフィードバックだけ文字を隠してアイコン（💬）だけにする。
+     読み上げ名は button の aria-label="フィードバック" のままなので、
+     支援技術から見た情報は減らない。 */
+  .toolbar.collapsed .toolbar-feedback-label {
+    display: none;
+  }
+  .toolbar.collapsed .toolbar-feedback-button {
+    padding: 0 10px;
+  }
+}
+
+/* スマートフォン幅では、アイコンだけにしてもまだ3つが1行に収まらないため、
+   折り畳み帯のズームは「見出し文字を省いてスライダーと％だけ」にする（Issue #150）。
+   操作そのもの（スライダー）は残すので、#143 の「畳んだままでも拡大縮小できる」は保たれる。
+   読み上げ名は input の aria-label で保持している。 */
+@media (max-width: 480px) {
+  .toolbar.collapsed .toolbar-view-zoom-label {
+    display: none;
   }
 }
 
