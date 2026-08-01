@@ -36,10 +36,11 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-function renderOnScoreTab() {
+// 「段数/ページ」は Issue #144 で「楽譜設定」タブから「レイアウト」タブ（譜面の密度＞段組）へ
+// 移動したため、開くタブもレイアウトへ合わせる。
+function renderOnLayoutTab() {
   const utils = render(<ScorePage />);
-  const scoreTab = screen.getByRole('tab', { name: '楽譜設定' });
-  fireEvent.click(scoreTab);
+  fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
   return utils;
 }
 
@@ -53,7 +54,7 @@ describe('段数/ページ（実測ベースの上限と、単旋律・ピアノ
   });
 
   it('単旋律（既定の楽譜種別）の初期表示は音符150%の既定値（Issue #49）に追従して5段になる', () => {
-    renderOnScoreTab();
+    renderOnLayoutTab();
     const input = screen.getByLabelText('段数/ページ') as HTMLInputElement;
     expect(input.value).toBe('5');
     // 推奨値は実測ベースの上限内に収まっているため、あふれ警告は出ない
@@ -61,7 +62,7 @@ describe('段数/ページ（実測ベースの上限と、単旋律・ピアノ
   });
 
   it('上限を超える段数を手動指定してもクランプされず、指定どおりの値が保持され、あふれ警告が表示される', () => {
-    renderOnScoreTab();
+    renderOnLayoutTab();
     const input = screen.getByLabelText('段数/ページ') as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: '999' } });
@@ -72,7 +73,7 @@ describe('段数/ページ（実測ベースの上限と、単旋律・ピアノ
   });
 
   it('上限内の段数を手動指定した場合はあふれ警告が表示されない', () => {
-    renderOnScoreTab();
+    renderOnLayoutTab();
     const input = screen.getByLabelText('段数/ページ') as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: '3' } });
@@ -82,8 +83,12 @@ describe('段数/ページ（実測ベースの上限と、単旋律・ピアノ
   });
 
   it('ピアノ大譜表に切り替えると、音符150%・段間隔30pxの既定値（Issue #49）に追従して3段になる', () => {
-    renderOnScoreTab();
+    render(<ScorePage />);
+    // 楽譜の種類（ピアノ）は「楽譜設定」タブ、段数/ページは「レイアウト」タブと
+    // 別々のタブになったため、切り替えてから確認する（Issue #144）。
+    fireEvent.click(screen.getByRole('tab', { name: '楽譜設定' }));
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
 
     const input = screen.getByLabelText('段数/ページ') as HTMLInputElement;
     expect(input.value).toBe('3');

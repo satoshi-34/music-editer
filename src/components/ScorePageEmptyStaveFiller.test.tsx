@@ -37,10 +37,11 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-function renderOnScoreTab() {
+// 「段数/ページ」は Issue #144 で「楽譜設定」タブから「レイアウト」タブ（譜面の密度＞段組）へ
+// 移動したため、開くタブもレイアウトへ合わせる。
+function renderOnLayoutTab() {
   const utils = render(<ScorePage />);
-  const scoreTab = screen.getByRole('tab', { name: '楽譜設定' });
-  fireEvent.click(scoreTab);
+  fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
   return utils;
 }
 
@@ -54,7 +55,7 @@ describe('空の段でページを満たす（Issue #41）', () => {
   });
 
   it('新規譜面（単旋律）では、実段1つ＋残り容量ぶんの空の段でページが満たされる', () => {
-    const { container } = renderOnScoreTab();
+    const { container } = renderOnLayoutTab();
     // 既定の「段数/ページ」は音符の大きさなどの既定値しだいで変わる（Issue #49・#71）ため、
     // 数値を直書きせず、実際の設定値から期待値を導く（設定を変えるたびに腐らないようにする）。
     const systemsPerPage = Number((screen.getByLabelText('段数/ページ') as HTMLInputElement).value);
@@ -75,8 +76,12 @@ describe('空の段でページを満たす（Issue #41）', () => {
   });
 
   it('ピアノ大譜表に切り替えても、既定の段数/ページに対して実段1つ＋残りが空の段になる', () => {
-    const { container } = renderOnScoreTab();
+    const { container } = render(<ScorePage />);
+    // 楽譜の種類（ピアノ）は「楽譜設定」タブ、段数/ページは「レイアウト」タブと
+    // 別々のタブになったため、切り替えてから確認する（Issue #144）。
+    fireEvent.click(screen.getByRole('tab', { name: '楽譜設定' }));
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
 
     const systemsPerPage = Number((screen.getByLabelText('段数/ページ') as HTMLInputElement).value);
     const fillers = container.querySelectorAll('.empty-stave-filler');
@@ -84,7 +89,7 @@ describe('空の段でページを満たす（Issue #41）', () => {
   });
 
   it('空の段を1つクリックすると、その1つだけが実体化して空の段の総数が1減る', () => {
-    const { container } = renderOnScoreTab();
+    const { container } = renderOnLayoutTab();
     const systemsPerPage = Number((screen.getByLabelText('段数/ページ') as HTMLInputElement).value);
     const before = container.querySelectorAll('.empty-stave-filler');
     expect(before.length).toBe(systemsPerPage - 1);
@@ -129,7 +134,7 @@ describe('空の段でページを満たす（Issue #41）', () => {
   });
 
   it('段数/ページを実測の上限より大きく手動指定しても、空の段の数は暴走せず少数に留まる（999段/ページのハング再発防止）', () => {
-    const { container } = renderOnScoreTab();
+    const { container } = renderOnLayoutTab();
     const input = screen.getByLabelText('段数/ページ') as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: '999' } });
