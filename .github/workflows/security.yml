@@ -26,7 +26,7 @@ jobs:
     name: シークレット検出（gitleaks）
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # 過去のコミットに紛れた鍵も検出したいので全履歴を取る
           fetch-depth: 0
@@ -41,7 +41,7 @@ jobs:
     name: 依存の既知脆弱性（npm audit）
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -60,7 +60,7 @@ jobs:
     name: 静的解析（semgrep OSS）
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: semgrep
         # ルールセットは明示的に固定する（--config=auto はクラウド側の
         # ルール変更で結果が変わり、決定的でなくなるため使わない）。
@@ -78,7 +78,7 @@ jobs:
     name: CodeQL（このリポジトリは public のため無料で使える）
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
