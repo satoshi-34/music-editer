@@ -36,6 +36,13 @@
 - 依存追加の補助スクリプトは `scripts/safe-add-package-in-docker.sh` を使う
 - 依存追加後は、なぜそのライブラリが必要かを README または設計書に残す
 
+## worktree の設計判断（変えないこと）
+
+- 夜間エージェントの worktree は**リポジトリ内**（`.night-worktrees/`）に置く。外に出す案は 2026-08-01 に検討して見送った。理由:
+  - Docker コンテナはリポジトリ本体だけをマウントしており、外に出すとコンテナからテストを実行できなくなる
+  - worktree はリポジトリ内にあることで親の `node_modules` を解決できており、外に出すと毎回 `npm ci` が必要になる
+- その代償として、**新しいツール（ビルド・lint・監視系）を導入するときは `.night-worktrees/` と `.claude/worktrees/` の除外設定を必ず足す**こと（前例: vitest の `test.exclude`、ESLint #48、vite の `server.watch.ignored` #153。忘れると dev サーバーの CPU 暴走 2026-08-01 のような事故になる）
+
 ## worktree の後片付け
 
 - 夜間エージェント等が作った `.claude/worktrees/*` `.night-worktrees/*` は、不要になったら `git worktree remove --force <パス>` で削除する

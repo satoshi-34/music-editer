@@ -246,6 +246,23 @@
   border-right: 1px solid #e5e7eb;
   padding-right: 8px;
 }
+/* 「譜面の密度」グループの中へ入れ子で置く小グループ（Issue #144 の「段組」）。
+   親と同じ実線の枠を重ねると二重線に見えて境目が読みにくいため、
+   点線＋白背景にして「グループの中の小さなまとまり」であることを示す。 */
+.toolbar-layout-subgroup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border: 1px dashed #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+}
+.toolbar-layout-subgroup > .toolbar-group-label {
+  border-right: 1px solid #e5e7eb;
+  padding-right: 6px;
+}
 
 /* リセット系4種をまとめたメニュー（Issue #143）。ボタン直下に出す小さなポップアップで、
    各項目に「影響範囲」の説明文を添える。位置決めのため wrap 側を relative にする。 */

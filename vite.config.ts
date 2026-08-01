@@ -16,6 +16,15 @@ function resolveGitSha(): string {
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: {
+    watch: {
+      // .night-worktrees には夜間ルーチンの git worktree（リポジトリの完全なコピー）が
+      // 作られる。dev サーバーがその配下の変更まで監視すると、夜間作業のたびに
+      // 大量の reload と tsconfig 再検出が走り、CPU を浪費する（2026-08-01 に
+      // Air で実発生）。vitest/ESLint 側の除外（下の test.exclude / #48）と同趣旨。
+      ignored: ['**/.night-worktrees/**', '**/.claude/worktrees/**'],
+    },
+  },
   define: {
     __APP_GIT_SHA__: JSON.stringify(resolveGitSha()),
   },

@@ -3696,19 +3696,9 @@ export default function ScorePage() {
 
           {activeToolbarTab === 'score' && (
             <div className="toolbar-section toolbar-score-controls">
-              <div className="toolbar-chip-group">
-                <span className="toolbar-group-label">表示ウェイト</span>
-                {(['thin', 'normal', 'thick'] as const).map((w) => (
-                  <button
-                    key={w}
-                    className={`ghost toolbar-chip-button${displayWeight === w ? ' active' : ''}`}
-                    onClick={() => setDisplayWeight(w)}
-                  >
-                    {w === 'thin' ? '細い' : w === 'normal' ? '普通' : '太い'}
-                  </button>
-                ))}
-              </div>
-
+              {/* このタブは「楽譜の種類・編成・拍子・調号・パート表示」＝曲の骨格を決める項目だけに
+                  絞ってある（Issue #144）。紙面の見た目を決める項目（表示ウェイト・段組）は
+                  「レイアウト」タブへ移した。 */}
               <div className="toolbar-chip-group">
                 <span className="toolbar-group-label">楽譜の種類</span>
                 <button
@@ -3846,56 +3836,6 @@ export default function ScorePage() {
                   パート編集
                 </button>
               )}
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
-                段あたり小節数
-                <input
-                  type="number"
-                  min={1}
-                  max={8}
-                  value={measuresPerSystem}
-                  onChange={e => {
-                    const v = Math.max(1, Math.min(8, Number(e.target.value)));
-                    if (!isNaN(v)) {
-                      setMeasuresPerSystem(v);
-                      // 段あたり小節数の変更は全体再計画を期待する操作なので、編集位置による
-                      // 安定化も一時的に外し、貪欲法だけで組み直す（Issue #67）。
-                      setLastEditedMeasureIndex(null);
-                    }
-                  }}
-                  style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
-                />
-              </label>
-              <label
-                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                title={`1ページに並べる段数。この楽譜の種類でページに収まる目安は${maxSystemsPerPage}段です。それより多く指定するとページからあふれます`}
-              >
-                段数/ページ
-                <input
-                  type="number"
-                  min={1}
-                  value={systemsPerPage}
-                  onChange={e => {
-                    // ページに収まる上限（maxSystemsPerPage）を超える指定もクランプせず
-                    // 受け付ける。あふれる場合は下の警告表示で伝える（Issue #38）。
-                    const v = Math.max(1, Math.round(Number(e.target.value)));
-                    if (!isNaN(v)) {
-                      setSystemsPerPageSetting(v);
-                      localStorage.setItem(SYSTEMS_PER_PAGE_KEY, String(v));
-                    }
-                  }}
-                  style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
-                />
-                {isSystemsPerPageOverflowing && (
-                  <span
-                    role="alert"
-                    style={{ fontSize: 12, color: '#b91c1c' }}
-                    title={`この段数ではページからあふれます（目安は${maxSystemsPerPage}段まで）`}
-                  >
-                    ⚠ あふれます
-                  </span>
-                )}
-              </label>
             </div>
           )}
 
@@ -3906,6 +3846,21 @@ export default function ScorePage() {
                   どれが詰め具合に効くのかが読み取れなかった。グループの箱と見出しを付けて、
                   探す前に「どのグループを見ればよいか」が分かるようにしている。
                   各スライダーの値・保存先・既定値は従来どおりで、変えているのは並べ方だけ。 */}
+              {/* 表示ウェイト（五線・テキストの線の太さ）は「楽譜設定」タブから移動してきた（Issue #144）。
+                  音楽の内容ではなく線の見た目を決める設定のため。3グループ（用紙と余白／譜面の密度／
+                  タイトル）はスライダー用の分類なので、チップ型のこの項目はグループの外に置いている。 */}
+              <div className="toolbar-chip-group">
+                <span className="toolbar-group-label">表示ウェイト</span>
+                {(['thin', 'normal', 'thick'] as const).map((w) => (
+                  <button
+                    key={w}
+                    className={`ghost toolbar-chip-button${displayWeight === w ? ' active' : ''}`}
+                    onClick={() => setDisplayWeight(w)}
+                  >
+                    {w === 'thin' ? '細い' : w === 'normal' ? '普通' : '太い'}
+                  </button>
+                ))}
+              </div>
               <div className="toolbar-layout-group" role="group" aria-label="用紙と余白">
                 <span className="toolbar-group-label">用紙と余白</span>
                 <label
@@ -4094,6 +4049,62 @@ export default function ScorePage() {
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{partSpacingOffsetPx}px</span>
                 </label>
+                {/* 「段組」= 1段に何小節入れるか／1ページに何段並べるかの2項目。「楽譜設定」タブから
+                    移動してきた（Issue #144）。音楽そのものは変えず紙面の詰め方だけを決める設定なので
+                    「譜面の密度」グループの中に置き、スライダー群とは入れ子の小グループで分けている。
+                    保存先は移動前と変えていない（段あたり小節数＝譜面データ側、段数/ページ＝localStorage）。 */}
+                <div className="toolbar-layout-subgroup" role="group" aria-label="段組">
+                  <span className="toolbar-group-label">段組</span>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                    段あたり小節数
+                    <input
+                      type="number"
+                      min={1}
+                      max={8}
+                      value={measuresPerSystem}
+                      onChange={e => {
+                        const v = Math.max(1, Math.min(8, Number(e.target.value)));
+                        if (!isNaN(v)) {
+                          setMeasuresPerSystem(v);
+                          // 段あたり小節数の変更は全体再計画を期待する操作なので、編集位置による
+                          // 安定化も一時的に外し、貪欲法だけで組み直す（Issue #67）。
+                          setLastEditedMeasureIndex(null);
+                        }
+                      }}
+                      style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
+                    />
+                  </label>
+                  <label
+                    style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
+                    title={`1ページに並べる段数。この楽譜の種類でページに収まる目安は${maxSystemsPerPage}段です。それより多く指定するとページからあふれます`}
+                  >
+                    段数/ページ
+                    <input
+                      type="number"
+                      min={1}
+                      value={systemsPerPage}
+                      onChange={e => {
+                        // ページに収まる上限（maxSystemsPerPage）を超える指定もクランプせず
+                        // 受け付ける。あふれる場合は下の警告表示で伝える（Issue #38）。
+                        const v = Math.max(1, Math.round(Number(e.target.value)));
+                        if (!isNaN(v)) {
+                          setSystemsPerPageSetting(v);
+                          localStorage.setItem(SYSTEMS_PER_PAGE_KEY, String(v));
+                        }
+                      }}
+                      style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
+                    />
+                    {isSystemsPerPageOverflowing && (
+                      <span
+                        role="alert"
+                        style={{ fontSize: 12, color: '#b91c1c' }}
+                        title={`この段数ではページからあふれます（目安は${maxSystemsPerPage}段まで）`}
+                      >
+                        ⚠ あふれます
+                      </span>
+                    )}
+                  </label>
+                </div>
               </div>
               {/* タイトル周りの余白だけを独立したグループにする。1ページ目にしか効かない
                   設定なので、ページ全体の余白（用紙と余白グループ）と混ぜない。 */}
