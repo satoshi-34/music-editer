@@ -4219,7 +4219,7 @@ export default function ScorePage() {
                           段割りをリセット
                         </button>
                         <span className="toolbar-reset-menu-desc">
-                          影響範囲: 各段の◀▶で上書きした小節数だけ。余白・間隔や保存済みの初期値は変わりません
+                          影響範囲: 各段の◀▶で上書きした小節数だけ。譜面（音符・記号）や余白・間隔、保存済みの初期値は変わりません
                         </span>
                       </div>
                       <div className="toolbar-reset-menu-item">
@@ -4231,7 +4231,7 @@ export default function ScorePage() {
                           レイアウトをリセット
                         </button>
                         <span className="toolbar-reset-menu-desc">
-                          影響範囲: このタブの余白・タイトル余白・段の間隔・パート間隔をまとめて既定値へ。音符データは変わりません
+                          影響範囲: このタブの余白・タイトル余白・段の間隔・パート間隔をまとめて既定値へ。譜面（音符・記号）は変わりません
                         </span>
                       </div>
                       <div className="toolbar-reset-menu-item">
@@ -4243,7 +4243,7 @@ export default function ScorePage() {
                           既定として保存
                         </button>
                         <span className="toolbar-reset-menu-desc">
-                          影響範囲: 今の設定を「次の新規作成・次回起動の初期値」として保存します。今開いている譜面は変わりません
+                          影響範囲: 今の設定を「次の新規作成・次回起動の初期値」として保存します。今開いている譜面（音符・記号）は変わりません
                         </span>
                       </div>
                       <div className="toolbar-reset-menu-item">
@@ -4255,7 +4255,7 @@ export default function ScorePage() {
                           初期設定に戻す
                         </button>
                         <span className="toolbar-reset-menu-desc">
-                          影響範囲: 上で保存した初期値を削除します。今の画面はそのままで、次の新規作成・次回起動からアプリ既定の設定になります
+                          影響範囲: 上で保存した初期値を削除します。今の画面の譜面（音符・記号）はそのままで、次の新規作成・次回起動からアプリ既定の設定になります
                         </span>
                       </div>
                     </div>
