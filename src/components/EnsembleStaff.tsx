@@ -11,7 +11,7 @@ import {
 } from '../utils/noteKeyUtils';
 import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
-import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
+import { createDisplayTransposeBridge } from '../utils/displayTransposeUtils';
 import { createEmptyMeasures } from '../utils/voiceMeasureUtils';
 
 type Props = {
@@ -154,7 +154,10 @@ export default function EnsembleStaff({
           const semitones = isWrittenMode
             ? TRANSPOSITION_WRITTEN_OFFSET_SEMITONES[part.transposition] ?? 0
             : 0;
-          const displayData = semitones === 0 ? rawData : transposeMeasuresForDisplay(rawData, semitones);
+          // 表示用データ（実音→記譜音）と保存用 onChange（記譜音→実音）は必ず対で必要なので、
+          // 共通の createDisplayTransposeBridge でまとめて作る（パート譜側も同じ関数を使う）。
+          const { displayMeasures: displayData, handleDisplayChange: wrappedChange } =
+            createDisplayTransposeBridge(rawData, onPartChange[partIndex] ?? (() => {}), semitones);
           // 記譜音表示では、音符だけでなく調号もパートごとにずらす。
           // 例: 実音 C メジャー（♭♯なし）→ B♭管は記譜 D メジャー（♯2）。
           // こうしないと、奏者が読む譜面と臨時記号の見え方が食い違う。
@@ -162,13 +165,6 @@ export default function EnsembleStaff({
             ? TRANSPOSITION_WRITTEN_OFFSET_FIFTHS[part.transposition] ?? 0
             : 0;
           const partKey = fifthsShift === 0 ? undefined : shiftKeySignatureByFifths(keySignature, fifthsShift);
-          const upstreamChange = onPartChange[partIndex] ?? (() => {});
-          // 記譜音モードでは画面上の音符は記譜音側でやり取りされるため、
-          // 保存する前に逆方向（-semitones）にシフトして実音へ戻す。
-          // これにより、表示モードを切り替えても保存データは常に実音で一貫する。
-          const wrappedChange = semitones === 0
-            ? upstreamChange
-            : (newDisplayed: MeasureData[]) => upstreamChange(transposeMeasuresForDisplay(newDisplayed, -semitones));
           const isGrandStaff = part.staffCount === 2;
           const primaryEntry: PartConfig = {
             clef: part.clef,
@@ -194,11 +190,8 @@ export default function EnsembleStaff({
 
           // 大譜表の2段目（低音部）。移調・調号は1段目と同じパート定義に従う。
           const rawSecondData = secondStaffPartsData?.[partIndex] ?? [];
-          const displaySecondData = semitones === 0 ? rawSecondData : transposeMeasuresForDisplay(rawSecondData, semitones);
-          const upstreamSecondChange = onSecondStaffPartChange?.[partIndex] ?? (() => {});
-          const wrappedSecondChange = semitones === 0
-            ? upstreamSecondChange
-            : (newDisplayed: MeasureData[]) => upstreamSecondChange(transposeMeasuresForDisplay(newDisplayed, -semitones));
+          const { displayMeasures: displaySecondData, handleDisplayChange: wrappedSecondChange } =
+            createDisplayTransposeBridge(rawSecondData, onSecondStaffPartChange?.[partIndex] ?? (() => {}), semitones);
           const secondEntry: PartConfig = {
             clef: 'bass',
             label: undefined,

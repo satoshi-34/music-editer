@@ -73,7 +73,10 @@ README ロードマップ「パート譜の抽出」に対応する。編成譜�
 薄いラッパーで、`partsConfig` を要素数1で渡す。`QuartetStaff.tsx` の `QUARTET_PART_CONFIGS`
 （clef・ラベル・再生楽器の定義）を `export` して共有し、定義の重複を避けた。
 
-## 編集可否: 閲覧・印刷専用（編集は無効）
+## 編集可否（初版）: 閲覧・印刷専用（編集は無効）
+
+> **注**: この節は初版の設計判断の記録。Issue #111（下記「パート譜表示中の直接編集」）で、
+> 音符の入力・削除にかぎり編集を許す方向へ変更した。
 
 パート譜表示中は **常に編集不可**にした（`disabled` を強制的に `true` にし、`onPartChange` /
 `onChange` は no-op）。
@@ -117,8 +120,89 @@ UI 上も分かるようにしている。
 - `src/components/ScorePage.tsx`: 表示モードの state・選択肢計算・ツールバーのセレクト・
   ヘッダーのパート名表示・描画分岐・再生時のパート絞り込みを追加
 
+## パート譜表示中の直接編集（Issue #111・第1段階）
+
+### 問題
+
+パート譜表示中は音符を編集できず、総譜へ戻らないと直せなかった。パート譜を確認しながらの
+修正ができず、「見ながら直す」という自然な作業ができない。
+
+### 決着した設計判断
+
+初版で「実装前に決める必要がある」としていた3点は、調査の結果それぞれ次のように決まった。
+
+| 論点 | 決定 |
+| --- | --- |
+| 編集結果の書き戻し先 | 総譜と同じデータを共有する（パート譜は総譜の派生ビューで、別データを持たない） |
+| 移調楽器の扱い | **記譜音→実音の逆変換は既に実装済み**だったため、それを共通関数へ切り出して両方から呼ぶ。新規実装はしない |
+| 大譜表パート（`staffCount: 2`） | 第1段階では対象外（従来どおり閲覧専用）。上下どちらの段を編集しているかを上位へ伝える経路が別途必要で、Issue #107 と同じ「片方の段の保存が漏れる」事故を踏みやすい |
+
+### 修正設計
+
+**1. 保存前の変換を共通関数へ切り出した**
+
+`EnsembleStaff.tsx` の中でその場で組み立てられていた `wrappedChange` を、
+`src/utils/displayTransposeUtils.ts` の `createDisplayTransposeBridge()` として切り出した。
+
+```ts
+const { displayMeasures, handleDisplayChange } =
+  createDisplayTransposeBridge(rawMeasures, upstreamChange, semitones);
+```
+
+表示（実音 → 記譜音・`+semitones`）と保存（記譜音 → 実音・`-semitones`）は必ず対で必要なので、
+**2方向をひとつの関数で同時に作る**形にしている。片方だけ書き換えて対を崩す事故を、
+関数の形そのもので防ぐのが狙い。`semitones === 0` のときは配列も関数も作り直さず、
+渡されたものをそのまま返す（React の再描画を無駄に増やさないため）。
+
+呼び出し元は次の3か所で、同じロジックはどこにも重複していない。
+
+- `EnsembleStaff`: 各パートの1段目
+- `EnsembleStaff`: 大譜表パートの2段目
+- `PartExtractionStaff`: パート譜（弦楽四重奏。移調楽器を含まないため実際の半音差は常に 0 だが、経路は共通化してある）
+
+**2. `PartExtractionStaff` の `onChange` を繋いだ**
+
+`NOOP_ON_CHANGE` 固定をやめ、`onChange` / `disabled` / `transpositionSemitones` を props で受け取る。
+`onChange` を渡さなければ従来どおり閲覧・印刷専用として振る舞う（後方互換）。
+
+**3. 編集を許すパートの線引きは純粋関数に切り出した**
+
+`partExtractionUtils.ts` の `isPartExtractionEditable(scoreType, part)` が判定する
+（弦楽四重奏=可、編成譜は `staffCount !== 2` のときだけ可、パート定義が引けないときは安全側の不可）。
+`ScorePage` はこの結果を `disabled` と `onChange` の両方へ渡し、ヘッダーの
+「（閲覧・印刷専用）」表示も同じ判定に従わせている（UI と実際の可否が食い違わないようにするため）。
+
+再生中・印刷プレビュー中の禁止は従来どおり `isScoreEditingLocked` が担う
+（`disabled={!編集可 || isScoreEditingLocked}`）。書き戻し先の
+`handleEnsemblePartChange` / `handleQuartetPartChange` 自身も冒頭で
+`isScoreEditingLocked` を見ているため、二重に守られている。
+
+### 影響範囲
+
+- `src/utils/displayTransposeUtils.ts`: `createDisplayTransposeBridge()` を追加
+- `src/utils/partExtractionUtils.ts`: `isPartExtractionEditable()` を追加
+- `src/components/EnsembleStaff.tsx`: 内製の `wrappedChange` を共通関数へ置き換え（挙動は同一）
+- `src/components/PartExtractionStaff.tsx`: `onChange` / `disabled` / `transpositionSemitones` を追加
+- `src/components/ScorePage.tsx`: パート譜描画へ実際の変更ハンドラを渡す・ヘッダー表示の条件化
+- テスト: `displayTransposeUtils.test.ts`（往復）・`partExtractionUtils.test.ts`（線引き）・
+  `PartScoreEditing.test.tsx`（クリックして入力するところまでの結合テスト）
+
+### なぜ往復テストを必須にしたか
+
+移調の変換は**壊れても画面上は正しく見え、再生か印刷まで気づけない**。
+そのため「B♭管のパート譜に記譜音で音符を置いたら、保存される実音は長2度下になる」ことを
+テストで機械的に固定している。異名同音（`bb/3` と `a#/3`）で綴りが変わりうるので、
+比較は文字列ではなく `keyToMidi()` の値で行う。
+
+### 第2段階以降（未実装）
+
+- 記号・アーティキュレーションの編集
+- パート譜固有のレイアウト（改行位置など）
+- 大譜表パート（`staffCount: 2`）の編集
+
 ## 既知の制限
 
 - 単旋律譜・ピアノ大譜表ではパート譜表示は選択できない（対象外）
-- パート譜表示中は編集不可（閲覧・印刷専用）
+- パート譜表示中に編集できるのは音符の入力・削除のみ（記号・レイアウトは第2・第3段階）
+- 大譜表パート（`staffCount: 2`）のパート譜は閲覧・印刷専用のまま
 - パート譜表示は保存されない（一時的なビュー）

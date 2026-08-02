@@ -39,3 +39,39 @@ export function transposeMeasuresForDisplay(
       : measure.events,
   }));
 }
+
+/** 小節データの変更を上位へ通知するハンドラ（PartConfig.onChange と同じ形） */
+export type MeasuresChangeHandler = (measures: MeasureData[]) => void;
+
+/**
+ * 記譜音表示（移調楽器の見た目だけを半音シフトするモード）のための
+ * 「表示用データ」と「保存用 onChange」をひとまとめに作る。
+ *
+ * 保存データの正本は常に実音（コンサートピッチ）で、画面上のやり取りだけが
+ * 記譜音になる。そのため次の2方向の変換が必ず対で必要になる。
+ *
+ * - 表示: 実音 → 記譜音（`+semitones`）
+ * - 保存: 記譜音 → 実音（`-semitones`）
+ *
+ * この対を別々の場所に書くと、片方だけ直して片方を忘れる事故が起きる。
+ * 移調のずれは画面上は正しく見えたまま再生・印刷まで気づけないため、
+ * 総譜（EnsembleStaff）とパート譜（PartExtractionStaff）の両方から
+ * この関数を呼ぶ形に統一している（Issue #111）。
+ *
+ * `semitones` が 0（移調なし）のときは新しい配列も関数も作らず、
+ * 渡されたものをそのまま返す（React の再描画を無駄に増やさないため）。
+ */
+export function createDisplayTransposeBridge(
+  rawMeasures: MeasureData[],
+  upstreamChange: MeasuresChangeHandler,
+  semitones: number,
+): { displayMeasures: MeasureData[]; handleDisplayChange: MeasuresChangeHandler } {
+  if (semitones === 0) {
+    return { displayMeasures: rawMeasures, handleDisplayChange: upstreamChange };
+  }
+  return {
+    displayMeasures: transposeMeasuresForDisplay(rawMeasures, semitones),
+    handleDisplayChange: (newDisplayed: MeasureData[]) =>
+      upstreamChange(transposeMeasuresForDisplay(newDisplayed, -semitones)),
+  };
+}

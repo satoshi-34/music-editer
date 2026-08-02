@@ -134,7 +134,7 @@ import { buildPlaybackPositionTimeline, type PlaybackTimelineItem } from '../uti
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrintableMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
-import { getPartExtractionOptions, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
+import { getPartExtractionOptions, isPartExtractionEditable, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
 import { computeFitZoom, VIEW_ZOOM_MIN } from '../utils/viewZoomUtils';
 
@@ -455,6 +455,13 @@ export default function ScorePage() {
     [partExtractionOptions, partExtractionId]
   );
   const isPartExtractionActive = partExtractionSelection !== null;
+  // パート譜表示中に音符の入力・削除を許すか（Issue #111 の第1段階）。
+  // 大譜表パートなど対象外のパートでは false のまま＝従来どおり閲覧・印刷専用。
+  const isPartExtractionEditingAllowed = useMemo(
+    () => partExtractionSelection !== null
+      && isPartExtractionEditable(scoreType, instrumentation.parts[partExtractionSelection.index]),
+    [partExtractionSelection, scoreType, instrumentation.parts]
+  );
 
   // 選択中の小節範囲（絶対インデックス）。null のとき未選択
   const [selectedMeasures, setSelectedMeasures] = useState<{ start: number; end: number } | null>(null);
@@ -4390,7 +4397,7 @@ export default function ScorePage() {
                 </div>
               )}
               {partExtractionOptions.length > 0 && (
-                <label className="toolbar-select-label" title="合奏練習用に、選んだ1パートだけの譜面を表示・印刷します（閲覧・印刷専用）">
+                <label className="toolbar-select-label" title="合奏練習用に、選んだ1パートだけの譜面を表示・印刷します（音符の入力・削除はそのまま総譜へ反映されます。大譜表パートは閲覧・印刷専用）">
                   <span>パート譜表示</span>
                   <select
                     value={partExtractionSelection?.id ?? ''}
@@ -4704,10 +4711,11 @@ export default function ScorePage() {
                         {subtitle}
                       </p>
                       {isPartExtractionActive && (
-                        // パート譜表示中は、どのパートを見ているか・編集できないことが
-                        // 一目で分かるようにタイトル欄の下へ小さく表示する。
+                        // パート譜表示中は、どのパートを見ているかをタイトル欄の下へ小さく表示する。
+                        // 編集できないパート（大譜表など）のときだけ「閲覧・印刷専用」と補足する。
                         <p className="score-part-extraction-label" style={{ fontSize: 13, color: '#555', margin: '2px 0 0' }}>
-                          パート譜: {partExtractionSelection?.label}（閲覧・印刷専用）
+                          パート譜: {partExtractionSelection?.label}
+                          {!isPartExtractionEditingAllowed && '（閲覧・印刷専用）'}
                         </p>
                       )}
                       <div style={{ position: 'absolute', top: 0, right: 0, textAlign: 'right', fontSize: 14, color: '#555' }}>
@@ -4767,11 +4775,14 @@ export default function ScorePage() {
                       scale={effectiveRenderScale}
                       instrumentationParts={[instrumentation.parts[partExtractionSelection!.index]]}
                       partsData={[ensembleParts[partExtractionSelection!.index] ?? []]}
-                      onPartChange={[() => {}]}
+                      // パート譜での編集は総譜と同じハンドラへ流す（パート譜は総譜の派生ビューで、
+                      // 別データを持たない）。記譜音→実音の変換は EnsembleStaff 内部で行われる。
+                      onPartChange={[isPartExtractionEditingAllowed ? handleEnsemblePartChange(partExtractionSelection!.index) : () => {}]}
                       secondStaffPartsData={[ensembleSecondStaffParts[partExtractionSelection!.index] ?? []]}
+                      // 大譜表パートは第1段階では編集対象外（上下どちらの段かを判別する経路が無い）
                       onSecondStaffPartChange={[() => {}]}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
-                      disabled
+                      disabled={!isPartExtractionEditingAllowed || isScoreEditingLocked}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
@@ -4801,6 +4812,10 @@ export default function ScorePage() {
                       scale={effectiveRenderScale}
                       partConfig={QUARTET_PART_CONFIGS[partExtractionSelection!.index]}
                       data={quartetParts[partExtractionSelection!.index] ?? []}
+                      // 弦楽四重奏は移調楽器を含まないため半音シフトは常に 0。
+                      // それでも共通の変換経路（createDisplayTransposeBridge）を通す。
+                      onChange={isPartExtractionEditingAllowed ? handleQuartetPartChange(partExtractionSelection!.index) : undefined}
+                      disabled={!isPartExtractionEditingAllowed || isScoreEditingLocked}
                       startMeasureIndex={p.systemRanges[0]?.start ?? getPageSystemOffset(i) * measuresPerSystem}
                       currentInstrument={currentInstrument}
                       onPreviewNoteEvent={handleInputNotePreview}
