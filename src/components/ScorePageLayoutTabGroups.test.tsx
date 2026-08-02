@@ -133,7 +133,14 @@ describe('レイアウトタブの3グループ化とリセットメニュー（
     expect(within(menu).getByRole('button', { name: '初期設定に戻す' })).toBeTruthy();
 
     // 4項目それぞれに「影響範囲: 〜」の説明が添えられている
-    expect(within(menu).getAllByText(/影響範囲:/)).toHaveLength(4);
+    const descs = within(menu).getAllByText(/影響範囲:/);
+    expect(descs).toHaveLength(4);
+
+    // リセット4種はどれもレイアウト設定だけを戻すので、押す前の不安を消すために
+    // 「譜面（音符・記号）には影響しない」ことが4項目すべてに書かれている（Issue #155）
+    for (const desc of descs) {
+      expect(desc.textContent).toMatch(/譜面（音符・記号）/);
+    }
 
     // 内輪用語だった「工場出荷時に戻す」は残っていない
     expect(screen.queryByRole('button', { name: '工場出荷時に戻す' })).toBeNull();
