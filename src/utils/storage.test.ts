@@ -17,7 +17,21 @@ import {
   migrateLegacyDataToAutosave,
   createSavedScoreData,
   CURRENT_VERSION,
-  STORAGE_KEYS
+  STORAGE_KEYS,
+  WORK_INDEX_VERSION,
+  createWork,
+  deleteWork,
+  getLastOpenedWorkId,
+  getWorkStorageKeys,
+  getWorkSummary,
+  hasWorkAutosaveData,
+  listWorks,
+  loadWorkAutosaveData,
+  loadWorkIndex,
+  migrateLegacyDataToWorks,
+  saveWorkAutosaveData,
+  saveWorkIndex,
+  setLastOpenedWorkId
 } from './storage';
 import type {
   SavedScoreData,
@@ -2419,6 +2433,248 @@ describe('Storage Foundation Tests', () => {
       migrateLegacyDataToAutosave();
       expect(hasAutosaveData()).toBe(false);
       expect(hasStoredData()).toBe(false);
+    });
+  });
+
+  // 複数作品保存の第1段（Issue #156 / 設計書 .claude/specs/multi-score-storage/design.md）
+  describe('作品カタログ（WorkIndex）と作品別スロット', () => {
+    const metadata = { title: 'Work', subtitle: '', lyricist: '', composer: '', arranger: '' };
+    const parts = [{
+      partId: 'melody',
+      clef: 'treble' as const,
+      measures: [{ events: [{ dur: '4' as const, isRest: false, keys: ['c/4'] }] }],
+    }];
+
+    it('カタログが無い状態では空のカタログを返す', () => {
+      const index = loadWorkIndex();
+      expect(index.works).toEqual([]);
+      expect(index.lastOpenedWorkId).toBeNull();
+      expect(index.version).toBe(WORK_INDEX_VERSION);
+    });
+
+    it('createWork で作品を登録すると一覧に現れる', () => {
+      const created = createWork('新しい作品');
+      expect(created.success).toBe(true);
+      const summary = created.data!;
+
+      expect(listWorks().map(work => work.id)).toEqual([summary.id]);
+      expect(getWorkSummary(summary.id)?.title).toBe('新しい作品');
+    });
+
+    it('createWork は毎回別の作品IDを発行する', () => {
+      const first = createWork('A').data!;
+      const second = createWork('B').data!;
+
+      expect(first.id).not.toBe(second.id);
+      expect(listWorks()).toHaveLength(2);
+    });
+
+    it('作品ごとに保存内容が独立している（別作品を上書きしない）', () => {
+      const workA = createWork().data!;
+      const workB = createWork().data!;
+
+      expect(saveWorkAutosaveData(workA.id, createSavedScoreData({ ...metadata, title: 'A' }, parts, 1, 4)).success).toBe(true);
+      expect(saveWorkAutosaveData(workB.id, createSavedScoreData({ ...metadata, title: 'B' }, parts, 1, 4)).success).toBe(true);
+
+      expect(loadWorkAutosaveData(workA.id).data?.metadata.title).toBe('A');
+      expect(loadWorkAutosaveData(workB.id).data?.metadata.title).toBe('B');
+    });
+
+    it('作品への保存は従来の自動保存スロット・手動保存スロットに影響しない', () => {
+      const work = createWork().data!;
+      expect(saveScoreData(createSavedScoreData({ ...metadata, title: 'Manual' }, parts, 1, 4)).success).toBe(true);
+      expect(saveAutosaveData(createSavedScoreData({ ...metadata, title: 'Auto' }, parts, 1, 4)).success).toBe(true);
+
+      expect(saveWorkAutosaveData(work.id, createSavedScoreData({ ...metadata, title: 'InWork' }, parts, 1, 4)).success).toBe(true);
+
+      expect(loadScoreData().data?.metadata.title).toBe('Manual');
+      expect(loadAutosaveData().data?.metadata.title).toBe('Auto');
+      expect(loadWorkAutosaveData(work.id).data?.metadata.title).toBe('InWork');
+    });
+
+    it('保存するとカタログのタイトル・更新時刻が実データに追従する', () => {
+      const work = createWork('保存前').data!;
+      const data = createSavedScoreData({ ...metadata, title: '保存後' }, parts, 1, 4);
+
+      expect(saveWorkAutosaveData(work.id, data).success).toBe(true);
+
+      const summary = getWorkSummary(work.id)!;
+      expect(summary.title).toBe('保存後');
+      expect(summary.updatedAt).toBe(data.timestamp);
+      // 作成時刻は保存で書き換えない（一覧を作成順に並べたいときのため）
+      expect(summary.createdAt).toBe(work.createdAt);
+    });
+
+    it('カタログ未登録の作品IDへ保存すると、その場でカタログへ登録される（孤児データを作らない）', () => {
+      const orphanId = 'orphan-work-id';
+      expect(saveWorkAutosaveData(orphanId, createSavedScoreData({ ...metadata, title: 'Orphan' }, parts, 1, 4)).success).toBe(true);
+
+      expect(getWorkSummary(orphanId)?.title).toBe('Orphan');
+      expect(loadWorkAutosaveData(orphanId).data?.metadata.title).toBe('Orphan');
+    });
+
+    it('deleteWork はカタログの登録と実データの両方を消す', () => {
+      const work = createWork('消す作品').data!;
+      expect(saveWorkAutosaveData(work.id, createSavedScoreData(metadata, parts, 1, 4)).success).toBe(true);
+      expect(setLastOpenedWorkId(work.id).success).toBe(true);
+
+      expect(deleteWork(work.id).success).toBe(true);
+
+      expect(listWorks()).toHaveLength(0);
+      expect(hasWorkAutosaveData(work.id)).toBe(false);
+      // 削除された作品を指したままにしないこと（次回起動で開けない作品を指すのを防ぐ）
+      expect(getLastOpenedWorkId()).toBeNull();
+
+      const keys = getWorkStorageKeys(work.id);
+      expect(localStorageMock.getItem(keys.primary)).toBeNull();
+      expect(localStorageMock.getItem(keys.backup)).toBeNull();
+      expect(localStorageMock.getItem(keys.metadata)).toBeNull();
+    });
+
+    it('deleteWork は他の作品のデータを消さない', () => {
+      const kept = createWork('残す').data!;
+      const removed = createWork('消す').data!;
+      expect(saveWorkAutosaveData(kept.id, createSavedScoreData({ ...metadata, title: 'Kept' }, parts, 1, 4)).success).toBe(true);
+      expect(saveWorkAutosaveData(removed.id, createSavedScoreData({ ...metadata, title: 'Removed' }, parts, 1, 4)).success).toBe(true);
+
+      expect(deleteWork(removed.id).success).toBe(true);
+
+      expect(listWorks().map(work => work.id)).toEqual([kept.id]);
+      expect(loadWorkAutosaveData(kept.id).data?.metadata.title).toBe('Kept');
+    });
+
+    it('setLastOpenedWorkId はカタログに無い作品IDを受け付けない', () => {
+      const result = setLastOpenedWorkId('not-registered');
+      expect(result.success).toBe(false);
+      expect(getLastOpenedWorkId()).toBeNull();
+    });
+
+    it('不正な作品ID（キー名を壊しうる文字列）は読み書きとも拒否する', () => {
+      const evilId = '../music-score-app-data';
+      expect(saveWorkAutosaveData(evilId, createSavedScoreData(metadata, parts, 1, 4)).success).toBe(false);
+      expect(loadWorkAutosaveData(evilId).success).toBe(false);
+      expect(deleteWork(evilId).success).toBe(false);
+      expect(hasWorkAutosaveData(evilId)).toBe(false);
+    });
+
+    it('壊れたカタログエントリだけを落とし、正常なエントリは残す', () => {
+      const valid = { id: 'valid-work', title: 'Valid', updatedAt: 1000, createdAt: 1000 };
+      localStorageMock.setItem(STORAGE_KEYS.WORK_INDEX, JSON.stringify({
+        version: WORK_INDEX_VERSION,
+        works: [
+          valid,
+          { id: 123, title: 'IDが数値', updatedAt: 1, createdAt: 1 },
+          { id: 'no-title', updatedAt: 1, createdAt: 1 },
+          valid, // 同じIDの重複は1件だけ残す
+        ],
+        lastOpenedWorkId: 'valid-work',
+      }));
+
+      const index = loadWorkIndex();
+      expect(index.works.map(work => work.id)).toEqual(['valid-work']);
+      expect(index.lastOpenedWorkId).toBe('valid-work');
+    });
+
+    it('カタログのJSONが壊れていても空のカタログとして扱う（例外を投げない）', () => {
+      localStorageMock.setItem(STORAGE_KEYS.WORK_INDEX, '{壊れたJSON');
+      expect(loadWorkIndex().works).toEqual([]);
+    });
+
+    it('実在しない作品を指す lastOpenedWorkId は null に落とす', () => {
+      expect(saveWorkIndex({
+        version: WORK_INDEX_VERSION,
+        works: [],
+        lastOpenedWorkId: 'ghost-work',
+      }).success).toBe(true);
+
+      expect(getLastOpenedWorkId()).toBeNull();
+    });
+
+    it('一覧は最近更新した順に並ぶ', () => {
+      const older = createWork('古い').data!;
+      const newer = createWork('新しい').data!;
+      expect(saveWorkAutosaveData(older.id, { ...createSavedScoreData(metadata, parts, 1, 4), timestamp: 1000 }).success).toBe(true);
+      expect(saveWorkAutosaveData(newer.id, { ...createSavedScoreData(metadata, parts, 1, 4), timestamp: 2000 }).success).toBe(true);
+
+      expect(listWorks().map(work => work.id)).toEqual([newer.id, older.id]);
+    });
+  });
+
+  // 受入条件の回帰テスト:「旧データ→新カタログ形式で内容が失われない」
+  describe('単一作品データ → 作品カタログ への移行（migrateLegacyDataToWorks）', () => {
+    const metadata = { title: '移行前の作品', subtitle: '', lyricist: '', composer: '', arranger: '' };
+    const parts = [{
+      partId: 'melody',
+      clef: 'treble' as const,
+      measures: [{ events: [{ dur: '4' as const, isRest: false, keys: ['c/4', 'e/4'] }] }],
+    }];
+
+    it('旧自動保存データが作品1件として一覧に現れ、開くと同じ内容が復元される', () => {
+      const legacy = createSavedScoreData(metadata, parts, 2, 4);
+      expect(saveAutosaveData(legacy).success).toBe(true);
+
+      migrateLegacyDataToWorks();
+
+      const works = listWorks();
+      expect(works).toHaveLength(1);
+      expect(works[0].title).toBe('移行前の作品');
+
+      const restored = loadWorkAutosaveData(works[0].id);
+      expect(restored.success).toBe(true);
+      expect(restored.data?.metadata.title).toBe('移行前の作品');
+      expect(restored.data?.parts[0].measures[0].events[0].keys).toEqual(['c/4', 'e/4']);
+      expect(restored.data?.systems).toBe(2);
+      expect(restored.data?.measuresPerSystem).toBe(4);
+      // 移行した作品が「前回の続き」として開かれるようになっている
+      expect(getLastOpenedWorkId()).toBe(works[0].id);
+    });
+
+    it('移行しても旧キーのデータは消さない（従来の起動時復元がそのまま動く）', () => {
+      const legacy = createSavedScoreData(metadata, parts, 1, 4);
+      expect(saveAutosaveData(legacy).success).toBe(true);
+
+      migrateLegacyDataToWorks();
+
+      expect(hasAutosaveData()).toBe(true);
+      expect(loadAutosaveData().data?.metadata.title).toBe('移行前の作品');
+    });
+
+    it('手動保存スロットは作品として取り込まない（自動保存と中身が違いうるため第4段で扱う）', () => {
+      expect(saveScoreData(createSavedScoreData({ ...metadata, title: 'Manual' }, parts, 1, 4)).success).toBe(true);
+
+      migrateLegacyDataToWorks();
+
+      expect(listWorks()).toHaveLength(0);
+      // 手動保存データ自体は無傷で残る
+      expect(loadScoreData().data?.metadata.title).toBe('Manual');
+    });
+
+    it('移行は1回だけ実行され、移行後の編集内容を巻き戻さない', () => {
+      expect(saveAutosaveData(createSavedScoreData(metadata, parts, 1, 4)).success).toBe(true);
+      migrateLegacyDataToWorks();
+
+      const workId = listWorks()[0].id;
+      expect(saveWorkAutosaveData(workId, createSavedScoreData({ ...metadata, title: '移行後に編集' }, parts, 1, 4)).success).toBe(true);
+
+      migrateLegacyDataToWorks();
+
+      expect(listWorks()).toHaveLength(1);
+      expect(loadWorkAutosaveData(workId).data?.metadata.title).toBe('移行後に編集');
+    });
+
+    it('旧自動保存データが無ければ作品を作らない', () => {
+      migrateLegacyDataToWorks();
+      expect(listWorks()).toEqual([]);
+      expect(getLastOpenedWorkId()).toBeNull();
+    });
+
+    it('すでにカタログがある場合は移行せず、既存のカタログをそのまま使う', () => {
+      const existing = createWork('既存作品').data!;
+      expect(saveAutosaveData(createSavedScoreData(metadata, parts, 1, 4)).success).toBe(true);
+
+      migrateLegacyDataToWorks();
+
+      expect(listWorks().map(work => work.id)).toEqual([existing.id]);
     });
   });
 });
