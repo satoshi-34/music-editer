@@ -7,9 +7,10 @@
 // このコンポーネントは partsConfig を要素数1で PianoSystemCanvas に渡すことで、
 // 括弧なし・単一五線のパート譜を作る（描画自体は編成譜と同じ PianoSystemCanvas を流用）。
 //
-// 編集は View/Print 専用（onChange は常に no-op）にしている。パート譜表示中に
-// 元データへ書き戻す経路まで作ると、総譜へ戻したときの整合性検証が増えて
-// リスクが高いため、閲覧・印刷用途に絞った（詳細は
+// Issue #111 で音符の入力・削除だけ編集できるようになった。onChange を受け取ると
+// そのまま上位（ScorePage）の総譜データへ書き戻す（パート譜は総譜の派生ビューで、
+// 別データを持たない）。onChange を渡さない・disabled のときは従来どおり
+// 閲覧・印刷専用として振る舞う（詳細は
 // .claude/specs/part-extraction/design.md を参照）。
 // ─────────────────────────────────────────────────────────────
 
@@ -20,6 +21,7 @@ import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
 import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
+import { createDisplayTransposeBridge } from '../utils/displayTransposeUtils';
 
 type Props = {
   tool: Tool;
@@ -28,6 +30,19 @@ type Props = {
   measuresPerSystem?: number;
   partConfig: Omit<PartConfig, 'data' | 'onChange'>;
   data: MeasureData[];
+  /**
+   * 音符の入力・削除を上位（総譜データ）へ書き戻すハンドラ（Issue #111）。
+   * 省略すると従来どおり閲覧・印刷専用になる。
+   */
+  onChange?: (measures: MeasureData[]) => void;
+  /** true の間は編集不可（再生中・印刷プレビュー中・編集対象外のパートなど） */
+  disabled?: boolean;
+  /**
+   * 記譜音表示のための半音シフト量（実音 → 記譜音 の向き）。
+   * 0 なら実音のまま。0 以外なら表示を +semitones、保存を -semitones して
+   * 「保存データの正本は常に実音」を保つ（EnsembleStaff と同じ共通関数を使う）。
+   */
+  transpositionSemitones?: number;
   startMeasureIndex?: number;
   currentInstrument?: InstrumentType;
   onPreviewNoteEvent?: (noteEvent: NoteEvent, instrument?: InstrumentType) => Promise<void>;
@@ -55,8 +70,7 @@ type Props = {
   partSpacingOffsetPx?: number;
 };
 
-// 何も起きない onChange。パート譜表示は閲覧・印刷専用のため、
-// 音符クリックなどで内部 state が変わっても元データへは反映しない。
+// 何も起きない onChange。onChange を渡さない（閲覧・印刷専用の）呼び出し元のための既定値。
 const NOOP_ON_CHANGE = () => {};
 
 export default function PartExtractionStaff({
@@ -66,6 +80,9 @@ export default function PartExtractionStaff({
   measuresPerSystem = 4,
   partConfig,
   data,
+  onChange,
+  disabled = false,
+  transpositionSemitones = 0,
   startMeasureIndex = 0,
   currentInstrument = InstrumentType.PIANO,
   onPreviewNoteEvent,
@@ -78,14 +95,22 @@ export default function PartExtractionStaff({
   finalMeasureIndex,
   partSpacingOffsetPx,
 }: Props) {
+  // 表示用データ（実音→記譜音）と保存用 onChange（記譜音→実音）を対で作る。
+  // 総譜側（EnsembleStaff）とまったく同じ共通関数を通すことで、移調の向きが
+  // 総譜とパート譜で食い違う事故を防ぐ（Issue #111）。
+  const { displayMeasures, handleDisplayChange } = createDisplayTransposeBridge(
+    data,
+    onChange ?? NOOP_ON_CHANGE,
+    transpositionSemitones,
+  );
   return (
     <div>
       {Array.from({ length: systemRanges?.length ?? systems }, (_, i) => {
         const partsConfig: PartConfig[] = [
           {
             ...partConfig,
-            data,
-            onChange: NOOP_ON_CHANGE,
+            data: displayMeasures,
+            onChange: handleDisplayChange,
           },
         ];
         return (
@@ -97,8 +122,7 @@ export default function PartExtractionStaff({
             partsConfig={partsConfig}
             showInstrumentLabels={false}
             startMeasureIndex={systemRanges?.[i]?.start ?? startMeasureIndex + i * measuresPerSystem}
-            // パート譜表示は常に編集無効（閲覧・印刷専用）
-            disabled
+            disabled={disabled}
             currentInstrument={currentInstrument}
             onPreviewNoteEvent={onPreviewNoteEvent}
             previewAccidentalOnApply={previewAccidentalOnApply}

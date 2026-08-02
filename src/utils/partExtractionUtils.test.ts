@@ -1,6 +1,6 @@
 // src/utils/partExtractionUtils.test.ts
 import { describe, expect, it } from 'vitest';
-import { getPartExtractionOptions, resolvePartExtractionSelection } from './partExtractionUtils';
+import { getPartExtractionOptions, isPartExtractionEditable, resolvePartExtractionSelection } from './partExtractionUtils';
 import type { InstrumentPartDefinition } from '../types/storage';
 
 function makePart(overrides: Partial<InstrumentPartDefinition>): InstrumentPartDefinition {
@@ -56,5 +56,29 @@ describe('resolvePartExtractionSelection', () => {
 
   it('楽譜種別切り替えなどで ID が見つからないときも null を返す', () => {
     expect(resolvePartExtractionSelection(options, 'unknown-id')).toBeNull();
+  });
+});
+
+// Issue #111: パート譜の直接編集（第1段階）で、編集を許すパートの線引き
+describe('isPartExtractionEditable', () => {
+  it('弦楽四重奏のパートは編集できる', () => {
+    expect(isPartExtractionEditable('quartet', undefined)).toBe(true);
+  });
+
+  it('編成譜の1段パートは編集できる', () => {
+    expect(isPartExtractionEditable('ensemble', makePart({ staffCount: 1 }))).toBe(true);
+  });
+
+  it('編成譜の大譜表パート（staffCount:2）は第1段階では編集できない', () => {
+    expect(isPartExtractionEditable('ensemble', makePart({ staffCount: 2 }))).toBe(false);
+  });
+
+  it('パート定義が見つからないときは安全側に倒して編集不可', () => {
+    expect(isPartExtractionEditable('ensemble', undefined)).toBe(false);
+  });
+
+  it('パート譜表示の対象外（単旋律譜・ピアノ大譜表）は編集不可', () => {
+    expect(isPartExtractionEditable('single', undefined)).toBe(false);
+    expect(isPartExtractionEditable('piano', undefined)).toBe(false);
   });
 });

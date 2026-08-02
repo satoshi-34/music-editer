@@ -72,3 +72,30 @@ export function resolvePartExtractionSelection(
   }
   return options.find(option => option.id === selectedId) ?? null;
 }
+
+/**
+ * パート譜表示中に、そのパートを編集してよいかを判定する（Issue #111 の第1段階）。
+ *
+ * 音符の入力・削除だけを解禁する段階のため、次のパートは従来どおり閲覧専用に残す。
+ *
+ * - 大譜表パート（`staffCount: 2`）: パート譜表示では上下2段を同時に出しており、
+ *   「いま編集しているのが上段か下段か」を上位へ伝える経路がまだ無い。
+ *   ここを誤ると2段目の変更が保存から漏れる（Issue #107 と同じ事故）ため対象外にする
+ * - 単旋律譜・ピアノ大譜表: そもそもパート譜表示の対象外（選択肢が出ない）
+ *
+ * @param scoreType 現在の楽譜種別
+ * @param part 編成譜のときの、選択中パートの定義（弦楽四重奏では不要なので undefined でよい）
+ */
+export function isPartExtractionEditable(
+  scoreType: ScoreType,
+  part: InstrumentPartDefinition | undefined
+): boolean {
+  if (scoreType === 'quartet') {
+    return true;
+  }
+  if (scoreType === 'ensemble') {
+    // パート定義が見つからない（選択中 ID が消えた等）ときは安全側に倒して編集不可
+    return part !== undefined && part.staffCount !== 2;
+  }
+  return false;
+}
