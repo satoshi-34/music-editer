@@ -7,6 +7,14 @@
 // このファイルの下限クランプで同じ値を共有し、値がズレないようにする。
 export const VIEW_ZOOM_MIN = 0.5;
 
+// スライダーの上限（300%）。VIEW_ZOOM_MIN と同じく、ScorePage.tsx の viewZoom クランプ
+// （state 初期化時・スライダー操作時）とスライダーの max 属性で共有し、値がズレないようにする。
+// 当初は 150% だったが、編成譜（10パート以上の総譜）では1段に全パートを積むため
+// 150% でも1五線あたりが小さく、クリック操作がしづらいという実機フィードバックを受けて
+// 300% へ引き上げた（Issue #176）。画面表示（transform: scale）だけの倍率なので、
+// 上げても印刷結果・譜面データには影響しない。
+export const VIEW_ZOOM_MAX = 3;
+
 // A4（210mm）をpxへ変換する係数。useAutoPageScale.ts の pageWidthPx 算出と同じ値を使う
 // （実際の自動縮尺の正本は useAutoPageScale.ts。ここは初期ズームの見積もり専用の概算）。
 const MM_TO_PX = 3.78;
@@ -26,5 +34,7 @@ export function computeFitZoom(
   if (!Number.isFinite(availableWidthPx) || availableWidthPx <= 0) return 1;
   if (!Number.isFinite(pageWidthPx) || pageWidthPx <= 0) return 1;
   const ratio = availableWidthPx / pageWidthPx;
+  // 上限は VIEW_ZOOM_MAX ではなく 1.0（100%）。ここは「初期値をどう決めるか」の計算で、
+  // スライダーの可動域とは意味が違う（自然サイズを超える初期ズームにはしない）
   return Math.min(1, Math.max(VIEW_ZOOM_MIN, ratio));
 }
