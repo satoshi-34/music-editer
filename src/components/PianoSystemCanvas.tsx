@@ -79,7 +79,7 @@ import {
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { drawLyricsEntry } from '../utils/lyricsRenderUtils';
 import { computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
-import { buildTupletGroupPlan, buildTupletRestReplacement } from '../utils/tupletUtils';
+import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
@@ -1353,9 +1353,24 @@ export default function PianoSystemCanvas({
             const n = prev.map(cloneMeasureData);
             const voiceEvents = n[measure].voices?.[sel.voiceIndex!]?.events;
             if (!voiceEvents || index >= voiceEvents.length) return prev;
+            // 連符（3連符など）の中の1つを消すときは、グループ全体を同じ長さの
+            // 通常の休符へ置き換える（声部1・単旋律譜と同じ仕様）。
+            // 1つだけ消すと残りのイベントが tuplet.id を持ったまま半端な音価で残り、
+            // 描画（VexFlow の Tuplet）と再生の拍計算が崩れてしまうため。
+            const tupletDeletion = voiceEvents[index].tuplet
+              ? planTupletGroupDeletion(voiceEvents, index, defaultRestKeyForClef(clef))
+              : null;
             n[measure] = withVoiceEventsUpdated(n[measure], sel.voiceIndex!, (events) => {
               const copy = [...events];
-              copy.splice(index, 1);
+              if (tupletDeletion) {
+                copy.splice(
+                  tupletDeletion.groupStart,
+                  tupletDeletion.groupEnd - tupletDeletion.groupStart + 1,
+                  ...tupletDeletion.replacement
+                );
+              } else {
+                copy.splice(index, 1);
+              }
               return copy;
             });
             return n;
@@ -2794,9 +2809,12 @@ export default function PianoSystemCanvas({
 
           // 3連符モード: StaffCanvas と共通のロジック（utils/tupletUtils.ts）で
           // 「音符1＋連符内休符2」のグループを一度に配置する。空きが足りなければ何もしない。
-          // 連符の描画（Tuplet でくくる処理）は声部1（safeEvs/vfNotes）前提のままなので、
-          // 3連符モードは声部1がアクティブなときだけ有効にする（声部2は既知の制限として除外。design.md 参照）。
-          if((tool as any)?.tuplet && activeVoiceIndex === 0){
+          // 連符の描画（Tuplet でくくる処理）は声部ごとの描画エントリで行われる
+          // （createVexFlowTuplets を声部ごとの map の中で呼び、entry.tuplets として描く）ため、
+          // 声部2でも同じようにグループを配置できる（Issue #168）。
+          // 空き拍の判定に使う currentBeats はアクティブ声部の events から求めているので、
+          // 声部2の占有拍だけを見て「入るかどうか」を決められる。
+          if((tool as any)?.tuplet){
             const { groupEvents, groupBeats } = buildTupletGroupPlan(
               addDuration,
               addDots,
@@ -2811,8 +2829,13 @@ export default function PianoSystemCanvas({
               const next=prev.map(cloneMeasureData);
               while(absI>=next.length)next.push(createEmptyMeasure());
               fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
-              const m=next[absI];
-              m.events.splice(Math.max(0,Math.min(at,m.events.length)),0,...groupEvents);
+              // 通常音符の挿入と同じ経路（withVoiceEventsUpdated）へそろえる。
+              // 直接 m.events を触ると、声部2がアクティブでも声部1へ書き込んでしまう。
+              next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
+                const copy=[...events];
+                copy.splice(Math.max(0,Math.min(at,copy.length)),0,...groupEvents);
+                return copy;
+              });
               return next;
             });
             playNoteEvent(groupEvents[0], part.playbackInstrument);
