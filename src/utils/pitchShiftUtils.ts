@@ -11,6 +11,7 @@ import type { MeasureData, NoteEvent } from '../types/storage';
 import type { KeySignature } from './noteKeyUtils';
 import { applyKeySignatureToNaturalKey } from './noteKeyUtils';
 import { keyToMidi, midiToKey } from './noteMidiUtils';
+import { getVoiceEvents, withVoiceEventsUpdated } from './voiceMeasureUtils';
 
 export type PitchShiftModifiers = {
   /** true=ArrowUp（上へ）, false=ArrowDown（下へ） */
@@ -90,21 +91,28 @@ export function computeShiftedKeys(
  * @param index 対象イベントのインデックス
  * @param keyIndex 和音中の対象キーのインデックス（省略時はイベント全体）
  * @param newKeys computeShiftedKeys の戻り値
+ * @param voiceIndex 対象の声部（省略時は 0 ＝ measure.events。ピアノ譜の声部2は 1）。
+ *   省略できるようにしてあるのは、単声部前提の StaffCanvas 側の既存呼び出しを
+ *   一切変えずに済ませるため（Issue #112）。
  */
 export function applyPitchChangeToMeasures(
   measures: MeasureData[],
   measure: number,
   index: number,
   keyIndex: number | undefined,
-  newKeys: string[]
+  newKeys: string[],
+  voiceIndex = 0
 ): MeasureData[] {
-  const ev = measures[measure]?.events[index];
+  const targetMeasure = measures[measure];
+  if (!targetMeasure) return measures;
+  const ev = getVoiceEvents(targetMeasure, voiceIndex)[index];
   if (!ev) return measures;
 
   if (ev.isRest) {
     return measures.map((m, mi) =>
       mi === measure
-        ? { ...m, events: m.events.map((e2, ei) => (ei === index ? { ...e2, keys: newKeys } : e2)) }
+        ? withVoiceEventsUpdated(m, voiceIndex, (events) =>
+            events.map((e2, ei) => (ei === index ? { ...e2, keys: newKeys } : e2)))
         : m
     );
   }
@@ -114,11 +122,8 @@ export function applyPitchChangeToMeasures(
     ? new Map([[ev.keys[keyIndex!], newKeys[keyIndex!]]])
     : new Map(ev.keys.map((k, i) => [k, newKeys[i]]));
 
-  // 注意: 元のStaffCanvas/PianoSystemCanvas実装がそうだったため、ここでは
-  // MeasureData の events 以外のフィールド（repeatStart等）を明示的にスプレッドしていない。
-  // これは既存挙動をそのまま踏襲するためで、抽出時の仕様変更ではない。
-  return measures.map((m, mi) => ({
-    events: m.events.map((e2, ei): NoteEvent => {
+  const patchEvents = (events: NoteEvent[], mi: number): NoteEvent[] =>
+    events.map((e2, ei): NoteEvent => {
       if (mi === measure && ei === index) {
         // 移動する音符自体: keys と発する arcs の fromKey を更新
         return { ...e2, keys: newKeys, arcs: e2.arcs?.map((a) => ({ ...a, fromKey: keyMap.get(a.fromKey) ?? a.fromKey })) };
@@ -129,6 +134,19 @@ export function applyPitchChangeToMeasures(
         a.toMeasureIndex === measure && a.toEventIndex === index ? { ...a, toKey: keyMap.get(a.toKey) ?? a.toKey } : a
       );
       return patched.every((a, pi) => a === e2.arcs![pi]) ? e2 : { ...e2, arcs: patched };
-    }),
-  }));
+    });
+
+  // 中身が本当に変わった小節だけ差し替える（変化が無ければ元の MeasureData の参照をそのまま返す）。
+  // こうしている理由は2つある。
+  // 1. 声部2を対象にしたとき、無条件に withVoiceEventsUpdated を通すと、声部2を
+  //    まだ使っていない小節にまで空の voices[1] が作られてしまう。voices が2本ある小節は
+  //    「多声小節」と判定され、符幹の向き固定・休符の上下避けが働くため、見た目が勝手に変わる。
+  // 2. events 以外のフィールド（repeatStart・拍子変更など）を落とさずに保てる。
+  return measures.map((m, mi) => {
+    const events = getVoiceEvents(m, voiceIndex);
+    const patched = patchEvents(events, mi);
+    const changed = patched.some((e2, ei) => e2 !== events[ei]);
+    if (!changed) return m;
+    return withVoiceEventsUpdated(m, voiceIndex, () => patched);
+  });
 }

@@ -958,11 +958,15 @@ export default function PianoSystemCanvas({
     overlayY: number;
   } | null>(null);
 
+  // eventIndex は「voiceIndex で指定した声部の events 配列の中での位置」を表す。
+  // 声部2（voiceIndex 1）の音符にも歌詞・運指などを付けられるようにするため、
+  // どの声部を編集しているかをオーバーレイの状態にも持たせている（Issue #112）。
   const [textEditState, setTextEditState] = useState<{
     kind: TextElementKind;
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
+    voiceIndex: number;
     currentValue: string;
     overlayX: number;
     overlayY: number;
@@ -980,6 +984,7 @@ export default function PianoSystemCanvas({
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
+    voiceIndex: number;
     target: AdjustTarget;
     currentValue: string;
     overlayX: number;
@@ -991,6 +996,7 @@ export default function PianoSystemCanvas({
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
+    voiceIndex: number;
     target: AdjustTarget;
     currentX: string;
     currentY: string;
@@ -1005,6 +1011,7 @@ export default function PianoSystemCanvas({
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
+    voiceIndex: number;
     kind: 'resize' | 'offset';
     options: AdjustTarget[];
     overlayX: number;
@@ -1263,9 +1270,11 @@ export default function PianoSystemCanvas({
     // 対象イベントを指したままオーバーレイが画面に残り続けてしまう不具合の修正。
     // setState の updater 形式（prev => ...）を使うことで、useEffect の外側で作った
     // 古いクロージャでも常に最新の state を見て判定できるようにしている。
-    const closeEventEditOverlaysFor=(partIndex:number,measure:number,index:number)=>{
-      const matches=(s:{partIndex:number;measureAbsoluteIndex:number;eventIndex:number}|null)=>
-        !!s && s.partIndex===partIndex && s.measureAbsoluteIndex===measure && s.eventIndex===index;
+    // 音符を削除したとき、その音符に紐づいて開いていた編集オーバーレイ（歌詞入力・
+    // 記号のサイズ/位置調整）を閉じる。声部が違えば別の音符なので、voiceIndex も一致条件に含める。
+    const closeEventEditOverlaysFor=(partIndex:number,measure:number,index:number,voiceIndex:number)=>{
+      const matches=(s:{partIndex:number;measureAbsoluteIndex:number;eventIndex:number;voiceIndex:number}|null)=>
+        !!s && s.partIndex===partIndex && s.measureAbsoluteIndex===measure && s.eventIndex===index && s.voiceIndex===voiceIndex;
       setTextEditState(prev=>matches(prev)?null:prev);
       setSymbolResizeEditState(prev=>matches(prev)?null:prev);
       setSymbolOffsetEditState(prev=>matches(prev)?null:prev);
@@ -1329,10 +1338,14 @@ export default function PianoSystemCanvas({
         });
       };
 
-      // 声部2（下声）の音符を選んでいるときは、MVP として Delete キーによる削除のみ対応する。
-      // 以下の音高変更・アーティキュレーション付与などは声部1（measure.events）の
-      // インデックス前提で書かれているため、そのまま流すと声部1側を誤って書き換えてしまう。
-      // それを防ぐため、Delete 以外はここで打ち切る。
+      // 選択中の音符がどの声部のものか（未指定＝声部1）。
+      // 以降のキー操作はこの値を使って読み書きの対象声部をそろえる。
+      const voiceIndex = sel.voiceIndex ?? 0;
+
+      // 声部2（下声）の音符を選んでいるときは、削除（Delete/Backspace）・選択解除（Escape）に加えて
+      // 音高移動（↑↓）と休符の位置リセット（0）まで対応する（Issue #112）。
+      // それ以外のキー操作は、まだ声部1（measure.events）のインデックス前提で書かれた処理へ
+      // 流れてしまう恐れがあるため、ここで打ち切る。
       if (sel.voiceIndex) {
         if (e.key === 'Delete' || e.key === 'Backspace') {
           setS(prev => {
@@ -1347,24 +1360,27 @@ export default function PianoSystemCanvas({
             });
             return n;
           });
-          closeEventEditOverlaysFor(partIndex, measure, index);
+          closeEventEditOverlaysFor(partIndex, measure, index, voiceIndex);
           setSelected(null); e.preventDefault(); return;
         }
         if (e.key === 'Escape') { setSelected(null); e.preventDefault(); return; }
-        return;
+        // ↑↓（音高移動）と 0（休符を標準位置へ戻す）は、下の共通処理が voiceIndex を
+        // 見て声部2側だけを書き換えるようになったので、そのまま通す。
+        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== '0') return;
       }
 
       if(e.key==='Delete'||e.key==='Backspace'){
         // StaffCanvas と完全一致していた削除ロジックは utils/noteDeletionUtils.ts に共通化した。
         setS(prev=>deleteEventFromMeasures(prev, measure, index, keyIndex, defaultRestKeyForClef(clef)));
-        closeEventEditOverlaysFor(partIndex, measure, index);
+        closeEventEditOverlaysFor(partIndex, measure, index, voiceIndex);
         setSelected(null);e.preventDefault();return;
       }
       if(e.key==='ArrowUp'||e.key==='ArrowDown'){
         const up=e.key==='ArrowUp';
         setS(prev=>{
           if(measure>=prev.length)return prev;
-          const ev=prev[measure].events[index];
+          // 読みも書きも「選択中の声部」に合わせる（声部2のときは voices[1].events を見る）。
+          const ev=getVoiceEvents(prev[measure], voiceIndex)[index];
           if(!ev)return prev;
           // StaffCanvas/PianoSystemCanvas で完全一致していた音高シフトのロジックは
           // utils/pitchShiftUtils.ts に共通化した。
@@ -1374,7 +1390,7 @@ export default function PianoSystemCanvas({
             { up, shiftKey: e.shiftKey, altKey: e.altKey },
             { lineToKey: l2k, keyToLine: k2l, keySignature: keySignatureRef.current, defaultRestKey: defaultRestKeyForClef(clef) }
           );
-          return applyPitchChangeToMeasures(prev, measure, index, keyIndex, newKeys);
+          return applyPitchChangeToMeasures(prev, measure, index, keyIndex, newKeys, voiceIndex);
         });
         e.preventDefault();return;
       }
@@ -1385,11 +1401,11 @@ export default function PianoSystemCanvas({
         // ここだけは保存データそのものを書き換えてよい（受入条件参照）。
         setS(prev=>{
           if(measure>=prev.length)return prev;
-          const ev=prev[measure].events[index];
+          const ev=getVoiceEvents(prev[measure], voiceIndex)[index];
           if(!ev||!ev.isRest)return prev;
           const standardKey=defaultRestDisplayKeyForDuration(clef, ev.dur);
           if(ev.keys[0]===standardKey)return prev;
-          return applyPitchChangeToMeasures(prev, measure, index, keyIndex, [standardKey]);
+          return applyPitchChangeToMeasures(prev, measure, index, keyIndex, [standardKey], voiceIndex);
         });
         e.preventDefault();return;
       }
@@ -1507,7 +1523,10 @@ export default function PianoSystemCanvas({
           const containerRect = containerRef.current?.getBoundingClientRect();
           const overlayX = (domEvent as MouseEvent).clientX - (containerRect?.left ?? 0);
           const overlayY = (domEvent as MouseEvent).clientY - (containerRect?.top ?? 0);
-          openSymbolAdjustEditor('offset', partIndex, measureAbsoluteIndex, eventIndex, target, event, overlayX, overlayY);
+          // ここで渡す eventIndex は、記号の描画エントリを積んだときのアクティブ声部の
+          // events 内の位置なので、声部も activeVoiceIndex を渡してそろえる
+          // （声部2の音符に付いた記号をクリックしたとき、声部1側を書き換えないため）。
+          openSymbolAdjustEditor('offset', partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex, target, event, overlayX, overlayY);
         });
       }
       svgRoot.appendChild(hit);
@@ -3107,6 +3126,13 @@ export default function PianoSystemCanvas({
             // タイ／松葉ドラッグ開始
             hit.addEventListener('mousedown',e=>{
               if(disabled||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
+              // 声部2（下声）がアクティブなときは、タイ／松葉のドラッグを最初から受け付けない。
+              // 当たり判定はアクティブ声部（activeEvs/activeVfNotes）から作られるのに、
+              // 確定処理（applyArc / applyHairpin）の書き込み先は声部1（measure.events）の
+              // ままなので、そのまま通すと「声部2をドラッグしたのに声部1のデータへ
+              // arcs/hairpins が追記される」という無言のデータ破壊が起きる（Issue #112）。
+              // 声部2のタイ／スラー本対応は #169 で扱うため、ここでは何もしないのが安全。
+              if(activeVoiceIndex!==0)return;
               if(activeEvs[j]?.isRest)return;
               e.preventDefault();
               const n=activeVfNotes[j] as unknown as Record<string,(...a:unknown[])=>unknown>;
@@ -3127,6 +3153,10 @@ export default function PianoSystemCanvas({
             // タイ／松葉ドラッグ確定
             hit.addEventListener('mouseup',e=>{
               if(disabled||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
+              // 開始側（mousedown）と同じ理由で、声部2アクティブ時は確定処理へ進ませない。
+              // 開始が記録されていない以上ここへ来ても何も起きないはずだが、
+              // 「書き込み経路の入口すべてで塞ぐ」ほうが将来の改修に対して安全なため両方に置く。
+              if(activeVoiceIndex!==0)return;
               const start=tieStartRef.current;
               tiePreviewPath.style.display='none';
               tieStartRef.current=null;
@@ -3326,15 +3356,6 @@ export default function PianoSystemCanvas({
                 playNoteEvent(nextEv, part.playbackInstrument);
                 return;
               }
-              // カスタム記号のサイズ変更・位置調整・テキスト要素は、確定処理（handleSymbolResizeConfirm 等）が
-              // partData[...].events[eventIndex] を直接書き換える前提で実装されており、
-              // まだ声部（voiceIndex）を持っていない。声部2の音符へ適用すると声部1側を誤って
-              // 書き換えてしまうため、これらのツールは当面「声部1のみ対応」の既知の制限とする
-              // （design.md 参照）。
-              if (customSymbolResizeMode && activeVoiceIndex !== 0) return;
-              if (customSymbolOffsetMode && activeVoiceIndex !== 0) return;
-              if ((symbolAdjustResizeMode || symbolAdjustOffsetMode) && activeVoiceIndex !== 0) return;
-              if (textElementMode && activeVoiceIndex !== 0) return;
               if (customSymbolResizeMode && !activeEvs[j]?.isRest) {
                 // サイズ変更は「その音符に対象記号が既に付いている場合」のみオーバーレイを開く
                 // （StaffCanvas と同じ考え方。付いていない記号を新規に生やす事故を防ぐ）。
@@ -3346,6 +3367,8 @@ export default function PianoSystemCanvas({
                   partIndex: pi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
+                  // j はアクティブ声部の events 内の位置なので、どの声部かも一緒に覚えておく
+                  voiceIndex: activeVoiceIndex,
                   target: { type: 'custom', symbolId: customSymbolResizeMode, name: customSymbolResizeMode },
                   currentValue: String(currentPercent),
                   overlayX: me.clientX - (containerRect?.left ?? 0),
@@ -3362,6 +3385,7 @@ export default function PianoSystemCanvas({
                   partIndex: pi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
+                  voiceIndex: activeVoiceIndex,
                   target: { type: 'custom', symbolId: customSymbolOffsetMode, name: customSymbolOffsetMode },
                   currentX: String(existing.offsetX ?? 0),
                   currentY: String(existing.offsetY ?? 0),
@@ -3384,12 +3408,13 @@ export default function PianoSystemCanvas({
                 const overlayY = me.clientY - (containerRect?.top ?? 0);
                 const kindKey = symbolAdjustResizeMode ? 'resize' : 'offset';
                 if (targets.length === 1) {
-                  openSymbolAdjustEditor(kindKey, pi, absI, j, targets[0], currentEv, overlayX, overlayY);
+                  openSymbolAdjustEditor(kindKey, pi, absI, j, activeVoiceIndex, targets[0], currentEv, overlayX, overlayY);
                 } else {
                   setSymbolAdjustPickerState({
                     partIndex: pi,
                     measureAbsoluteIndex: absI,
                     eventIndex: j,
+                    voiceIndex: activeVoiceIndex,
                     kind: kindKey,
                     options: targets,
                     overlayX,
@@ -3457,6 +3482,7 @@ export default function PianoSystemCanvas({
                   partIndex: pi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
+                  voiceIndex: activeVoiceIndex,
                   currentValue: currentText,
                   overlayX: me.clientX - (containerRect?.left ?? 0),
                   overlayY: me.clientY - (containerRect?.top ?? 0),
@@ -4354,7 +4380,11 @@ export default function PianoSystemCanvas({
   // measureWidthEvenness を deps に含め、スライダー操作で即座に再描画されるようにする
   // pageMarginSideMm: 値自体は使わないが、ResizeObserver の発火漏れ対策として
   // 呼び出し元（ScorePage）の余白変更を確実にこの effect へ伝える依存トリガー。
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx]);
+  // activeVoiceIndex: この effect が作る当たり判定（.vf-note-hit）とクリックハンドラは
+  // 「描画した時点のアクティブ声部」を閉じ込めている。deps に入れ忘れると、声部トグルを
+  // 切り替えても五線が描き直されず、古い声部向けのハンドラが残ったままになる
+  // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
+  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
@@ -4458,15 +4488,19 @@ export default function PianoSystemCanvas({
 
   function handleTextConfirm(text: string) {
     if (!textEditState) return;
-    const { kind, partIndex, measureAbsoluteIndex, eventIndex } = textEditState;
-    // テキスト要素はパート・小節・イベントを特定して更新する
+    const { kind, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex } = textEditState;
+    // テキスト要素はパート・小節・声部・イベントを特定して更新する
     setPartsScore(prev => {
       const next = [...prev];
       const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
       if (measureAbsoluteIndex >= partData.length) return prev;
-      const targetEv = partData[measureAbsoluteIndex].events[eventIndex];
+      const targetEv = getVoiceEvents(partData[measureAbsoluteIndex], voiceIndex)[eventIndex];
       if (!targetEv) return prev;
-      partData[measureAbsoluteIndex].events[eventIndex] = applyTextElementToEvent(targetEv, kind, text);
+      partData[measureAbsoluteIndex] = withVoiceEventsUpdated(partData[measureAbsoluteIndex], voiceIndex, (events) => {
+        const copy = [...events];
+        copy[eventIndex] = applyTextElementToEvent(targetEv, kind, text);
+        return copy;
+      });
       next[partIndex] = partData;
       return next;
     });
@@ -4479,7 +4513,7 @@ export default function PianoSystemCanvas({
    */
   function handleSymbolResizeConfirm(rawText: string) {
     if (!symbolResizeEditState) return;
-    const { partIndex, measureAbsoluteIndex, eventIndex, target, currentValue } = symbolResizeEditState;
+    const { partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target, currentValue } = symbolResizeEditState;
     const scale = parseSymbolScaleInput(rawText);
     // 値を変えずに blur だけで閉じたケース（no-op）では setPartsScore を呼ばない（Undo 履歴を汚さないため）。
     if (String(Math.round(scale * 100)) === currentValue) {
@@ -4490,11 +4524,15 @@ export default function PianoSystemCanvas({
       const next = [...prev];
       const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
       if (measureAbsoluteIndex >= partData.length) return prev;
-      const targetEv = partData[measureAbsoluteIndex].events[eventIndex];
+      const targetEv = getVoiceEvents(partData[measureAbsoluteIndex], voiceIndex)[eventIndex];
       if (!targetEv) return prev;
-      partData[measureAbsoluteIndex].events[eventIndex] = target.type === 'custom'
-        ? setCustomSymbolScale(targetEv, target.symbolId, scale)
-        : setSymbolAdjustScale(targetEv, target.kind, scale);
+      partData[measureAbsoluteIndex] = withVoiceEventsUpdated(partData[measureAbsoluteIndex], voiceIndex, (events) => {
+        const copy = [...events];
+        copy[eventIndex] = target.type === 'custom'
+          ? setCustomSymbolScale(targetEv, target.symbolId, scale)
+          : setSymbolAdjustScale(targetEv, target.kind, scale);
+        return copy;
+      });
       next[partIndex] = partData;
       return next;
     });
@@ -4507,7 +4545,7 @@ export default function PianoSystemCanvas({
    */
   function handleSymbolOffsetConfirm(rawX: string, rawY: string) {
     if (!symbolOffsetEditState) return;
-    const { partIndex, measureAbsoluteIndex, eventIndex, target, currentX, currentY } = symbolOffsetEditState;
+    const { partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target, currentX, currentY } = symbolOffsetEditState;
     const offsetX = parseSymbolOffsetInput(rawX);
     const offsetY = parseSymbolOffsetInput(rawY);
     // 値を変えずに blur だけで閉じたケース（no-op）では setPartsScore を呼ばない（Undo 履歴を汚さないため）。
@@ -4519,11 +4557,15 @@ export default function PianoSystemCanvas({
       const next = [...prev];
       const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
       if (measureAbsoluteIndex >= partData.length) return prev;
-      const targetEv = partData[measureAbsoluteIndex].events[eventIndex];
+      const targetEv = getVoiceEvents(partData[measureAbsoluteIndex], voiceIndex)[eventIndex];
       if (!targetEv) return prev;
-      partData[measureAbsoluteIndex].events[eventIndex] = target.type === 'custom'
-        ? setCustomSymbolOffset(targetEv, target.symbolId, offsetX, offsetY)
-        : setSymbolAdjustOffset(targetEv, target.kind, offsetX, offsetY);
+      partData[measureAbsoluteIndex] = withVoiceEventsUpdated(partData[measureAbsoluteIndex], voiceIndex, (events) => {
+        const copy = [...events];
+        copy[eventIndex] = target.type === 'custom'
+          ? setCustomSymbolOffset(targetEv, target.symbolId, offsetX, offsetY)
+          : setSymbolAdjustOffset(targetEv, target.kind, offsetX, offsetY);
+        return copy;
+      });
       next[partIndex] = partData;
       return next;
     });
@@ -4543,6 +4585,8 @@ export default function PianoSystemCanvas({
     partIndex: number,
     measureAbsoluteIndex: number,
     eventIndex: number,
+    // eventIndex がどの声部の events を指しているか。ピアノ譜の声部2なら 1。
+    voiceIndex: number,
     target: AdjustTarget,
     event: NoteEvent,
     overlayX: number,
@@ -4553,13 +4597,13 @@ export default function PianoSystemCanvas({
       if (!existing) return;
       if (kind === 'resize') {
         setSymbolResizeEditState({
-          partIndex, measureAbsoluteIndex, eventIndex, target,
+          partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target,
           currentValue: String(Math.round((existing.scale ?? 1) * 100)),
           overlayX, overlayY,
         });
       } else {
         setSymbolOffsetEditState({
-          partIndex, measureAbsoluteIndex, eventIndex, target,
+          partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target,
           currentX: String(existing.offsetX ?? 0),
           currentY: String(existing.offsetY ?? 0),
           overlayX, overlayY,
@@ -4569,13 +4613,13 @@ export default function PianoSystemCanvas({
       const adjust = getSymbolAdjust(event, target.kind);
       if (kind === 'resize') {
         setSymbolResizeEditState({
-          partIndex, measureAbsoluteIndex, eventIndex, target,
+          partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target,
           currentValue: String(Math.round(adjust.scale * 100)),
           overlayX, overlayY,
         });
       } else {
         setSymbolOffsetEditState({
-          partIndex, measureAbsoluteIndex, eventIndex, target,
+          partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target,
           currentX: String(adjust.offsetX),
           currentY: String(adjust.offsetY),
           overlayX, overlayY,
@@ -5105,11 +5149,12 @@ export default function PianoSystemCanvas({
                   borderRadius: 4,
                 }}
                 onClick={() => {
-                  const { partIndex, measureAbsoluteIndex, eventIndex, kind } = symbolAdjustPickerState;
-                  const targetEv = partsScore[partIndex]?.[measureAbsoluteIndex]?.events[eventIndex];
+                  const { partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, kind } = symbolAdjustPickerState;
+                  const targetMeasure = partsScore[partIndex]?.[measureAbsoluteIndex];
+                  const targetEv = targetMeasure ? getVoiceEvents(targetMeasure, voiceIndex)[eventIndex] : undefined;
                   if (!targetEv) { setSymbolAdjustPickerState(null); return; }
                   openSymbolAdjustEditor(
-                    kind, partIndex, measureAbsoluteIndex, eventIndex, opt, targetEv,
+                    kind, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, opt, targetEv,
                     symbolAdjustPickerState.overlayX, symbolAdjustPickerState.overlayY,
                   );
                 }}

@@ -118,4 +118,56 @@ describe('applyPitchChangeToMeasures', () => {
     const ms = measures([ev()]);
     expect(applyPitchChangeToMeasures(ms, 5, 0, undefined, ['c/4'])).toBe(ms);
   });
+
+  it('events 以外のフィールド（拍子・反復記号など）を落とさない', () => {
+    const ms: MeasureData[] = [{ events: [ev({ keys: ['c/4'] })], timeSignature: [3, 4], repeatStart: true }];
+    const next = applyPitchChangeToMeasures(ms, 0, 0, undefined, ['d/4']);
+    expect(next[0].timeSignature).toEqual([3, 4]);
+    expect(next[0].repeatStart).toBe(true);
+  });
+
+  // ここから voiceIndex 対応（Issue #112）。声部2の音符を動かしても声部1へ書き込まないことを固定する。
+  it('voiceIndex=1 を指定すると声部2の keys だけが変わる', () => {
+    const ms: MeasureData[] = [{
+      events: [ev({ keys: ['c/5'] })],
+      voices: [
+        { id: 'voice-1', events: [ev({ keys: ['c/5'] })] },
+        { id: 'voice-2', stemDirection: 'down', events: [ev({ keys: ['e/4'] })] },
+      ],
+    }];
+    const next = applyPitchChangeToMeasures(ms, 0, 0, undefined, ['f/4'], 1);
+    expect(next[0].voices?.[1].events[0].keys).toEqual(['f/4']);
+    expect(next[0].events).toEqual(ms[0].events);
+  });
+
+  it('voiceIndex=1 でも、声部2を持たない小節に空の声部を作らない', () => {
+    const ms: MeasureData[] = [
+      {
+        events: [ev({ keys: ['c/5'] })],
+        voices: [
+          { id: 'voice-1', events: [ev({ keys: ['c/5'] })] },
+          { id: 'voice-2', stemDirection: 'down', events: [ev({ keys: ['e/4'] })] },
+        ],
+      },
+      // 声部2をまだ使っていない小節。ここに voices が生えると「多声小節」と判定され、
+      // 符幹の向き固定・休符の上下避けが働いて見た目が勝手に変わってしまう。
+      { events: [ev({ keys: ['g/4'] })] },
+    ];
+    const next = applyPitchChangeToMeasures(ms, 0, 0, undefined, ['f/4'], 1);
+    expect(next[1].voices).toBeUndefined();
+    expect(next[1]).toBe(ms[1]);
+  });
+
+  it('voiceIndex=1 の休符も声部2側だけ差し替わる', () => {
+    const ms: MeasureData[] = [{
+      events: [ev({ isRest: true, keys: ['b/4'] })],
+      voices: [
+        { id: 'voice-1', events: [ev({ isRest: true, keys: ['b/4'] })] },
+        { id: 'voice-2', stemDirection: 'down', events: [ev({ isRest: true, keys: ['d/5'] })] },
+      ],
+    }];
+    const next = applyPitchChangeToMeasures(ms, 0, 0, undefined, ['b/4'], 1);
+    expect(next[0].voices?.[1].events[0].keys).toEqual(['b/4']);
+    expect(next[0].events[0].keys).toEqual(['b/4']);
+  });
 });
