@@ -124,6 +124,9 @@ type RenderedVoiceEntry = {
   beams: Beam[];
   tuplets: Tuplet[];
   voice: Voice;
+  // 2声部小節で、この声部が「今編集していない側」かどうか。
+  // 音符本体だけでなくビーム・連符も淡色にするために、描画パスへ持ち越す（Issue #175）。
+  isInactiveVoiceEntry: boolean;
 };
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
@@ -2514,6 +2517,12 @@ export default function PianoSystemCanvas({
             // formatToStave が最上段で上書きするのを防げる。
             voice.setStave(stave);
 
+            // ビーム（連桁）・連符の括弧も音符本体と同じ淡色にするため、
+            // 「この声部が非アクティブかどうか」を描画パス（Pass 3）へ持ち越す。
+            // 音符ごとの判定（上の isInactiveVoice）と同じ条件だが、
+            // ビーム・連符は声部単位で1つなので声部側に持たせる。
+            const isInactiveVoiceEntry = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+
             return {
               voiceIndex,
               sourceEvents,
@@ -2521,6 +2530,7 @@ export default function PianoSystemCanvas({
               beams,
               tuplets,
               voice,
+              isInactiveVoiceEntry,
             };
           })
           .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
@@ -2634,11 +2644,31 @@ export default function PianoSystemCanvas({
               /* SVG未対応環境などでは無視 */
             }
           });
-          entry.beams.forEach(b=>b.setContext(ctx).draw());
+          // 非アクティブ声部は、音符本体（符頭・符幹）だけでなくビーム（連桁）と
+          // 連符の括弧・数字も淡色にする（Issue #175）。
+          // VexFlow の Beam.draw()/Tuplet.draw() は setStyle() したスタイルを
+          // 自分では適用しない（Element.applyStyle を呼ばない）ため、setStyle だけでは
+          // 黒いまま残ってしまう。代わりに drawWithStyle() を使うと、VexFlow 側が
+          // 「ctx.save() → applyStyle() → draw() → ctx.restore()」を行ってくれる。
+          const inactiveVoiceStyle = {fillStyle:INACTIVE_VOICE_COLOR,strokeStyle:INACTIVE_VOICE_COLOR};
+          entry.beams.forEach(b=>{
+            b.setContext(ctx);
+            if(entry.isInactiveVoiceEntry){
+              b.setStyle(inactiveVoiceStyle);
+              b.drawWithStyle();
+            }else{
+              b.draw();
+            }
+          });
           entry.tuplets.forEach(tuplet => {
             try {
               (tuplet as any).setContext?.(ctx);
-              tuplet.draw();
+              if (entry.isInactiveVoiceEntry) {
+                tuplet.setStyle(inactiveVoiceStyle);
+                tuplet.drawWithStyle();
+              } else {
+                tuplet.draw();
+              }
             } catch (tupletError) {
               console.error('連符の描画でエラーが発生しました:', tupletError);
             }
