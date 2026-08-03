@@ -136,7 +136,7 @@ import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHis
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrintableMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, isPartExtractionEditable, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
-import { computeFitZoom, VIEW_ZOOM_MIN } from '../utils/viewZoomUtils';
+import { computeFitZoom, VIEW_ZOOM_MIN, VIEW_ZOOM_MAX } from '../utils/viewZoomUtils';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'layout' | 'playback' | 'other';
@@ -152,7 +152,7 @@ const SYSTEMS_PER_PAGE_KEY = 'score-systems-per-page';
 // 「小節幅の均等さ」のユーザー設定（その他タブのスライダー、0〜1）。
 // SavedScoreData には含めず、SYSTEMS_PER_PAGE_KEY と同じく画面設定として保存する
 const MEASURE_WIDTH_EVENNESS_KEY = 'score-measure-width-evenness';
-// 「画面表示のズーム」のユーザー設定（その他タブのスライダー、0.5〜1.5）。
+// 「画面表示のズーム」のユーザー設定（常設エリアのスライダー、0.5〜3.0）。
 // useAutoPageScale が算出する自動縮尺（--scale）に掛け合わせる倍率として使う。
 // 1.0 = 自動縮尺そのまま（従来どおりの表示）。印刷には影響させない（App.css の @media print 側で解除される）
 const VIEW_ZOOM_KEY = 'score-view-zoom';
@@ -2453,14 +2453,14 @@ export default function ScorePage() {
   }, [selectedMeasures, clipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, pushHistory, handleTranspose, isPrintPreview]);
 
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
-  // ユーザー設定（その他タブの「画面表示のズーム」スライダー、0.5〜1.5）。
+  // ユーザー設定（常設エリアの「画面表示のズーム」スライダー、0.5〜3.0）。
   // 自動縮尺（useAutoPageScale の scale）に掛け合わせて画面上の表示サイズだけを変える。
   // 印刷は @media print で transform: none !important により解除されるため影響しない。
   const [viewZoom, setViewZoom] = useState<number>(() => {
     const raw = localStorage.getItem(VIEW_ZOOM_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
-    // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.5〜1.5 へクランプする
-    return Number.isFinite(n) ? Math.max(VIEW_ZOOM_MIN, Math.min(1.5, n)) : 1;
+    // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず VIEW_ZOOM_MIN〜VIEW_ZOOM_MAX へクランプする
+    return Number.isFinite(n) ? Math.max(VIEW_ZOOM_MIN, Math.min(VIEW_ZOOM_MAX, n)) : 1;
   });
   // 初期ズームの「幅フィット」適用（issue #40）。ズーム未保存（初回起動・新規譜面時）の
   // ときだけ、実際の表示領域（.paper-rail）の幅からフィット倍率を計算し初期値へ反映する。
@@ -4436,7 +4436,7 @@ export default function ScorePage() {
         <div className="toolbar-collapse-row">
           <label
             className="toolbar-view-zoom"
-            title="画面表示の拡大縮小です。印刷結果には影響しません。100% が既定の自動縮尺です"
+            title="画面表示の拡大縮小です。印刷結果には影響しません。100% が既定の自動縮尺で、パート数の多い総譜を細かく見たいときは最大300%まで上げられます"
           >
             {/* ラベル文字を span で包み、狭い画面の折り畳み帯でだけ隠せるようにした（Issue #150）。
                 隠すと label のテキストが読み上げ名として使えなくなるので、
@@ -4445,13 +4445,13 @@ export default function ScorePage() {
             <input
               type="range"
               aria-label="画面表示のズーム"
-              min={50}
-              max={150}
+              min={Math.round(VIEW_ZOOM_MIN * 100)}
+              max={Math.round(VIEW_ZOOM_MAX * 100)}
               step={5}
               value={Math.round(viewZoom * 100)}
               onChange={e => {
-                // スライダーは 50〜150(%) で扱い、内部では 0.5〜1.5 の倍率として保持する
-                const v = Math.max(VIEW_ZOOM_MIN, Math.min(1.5, Number(e.target.value) / 100));
+                // スライダーは 50〜300(%) で扱い、内部では 0.5〜3.0 の倍率として保持する
+                const v = Math.max(VIEW_ZOOM_MIN, Math.min(VIEW_ZOOM_MAX, Number(e.target.value) / 100));
                 if (!isNaN(v)) {
                   setViewZoom(v);
                   localStorage.setItem(VIEW_ZOOM_KEY, String(v));
