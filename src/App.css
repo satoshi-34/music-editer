@@ -307,6 +307,107 @@
   /* ポップアップ内は白背景なので、説明文は折り返して全文読めるようにする */
   white-space: normal;
 }
+/* 作品一覧のポップアップ（Issue #181）。位置決めのため wrap 側を relative にし、
+   リセットメニューと同じ理由（親の overflow で切られるのを避ける）で fixed で描く。 */
+.work-list-panel-wrap {
+  position: relative;
+}
+.work-list-panel {
+  position: fixed;
+  top: 120px;
+  left: 10px;
+  z-index: 1001;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid #ced4da;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: 12px 14px;
+  width: min(380px, calc(100vw - 32px));
+  /* 作品が増えても画面からはみ出さないよう、一覧部分だけスクロールさせる */
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+}
+.work-list-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.work-list-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.work-list-empty {
+  margin: 0;
+  font-size: 12px;
+  color: #666;
+  line-height: 1.5;
+  white-space: normal;
+}
+.work-list-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.work-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+.work-list-item.current {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+/* 作品名と日時は縦2行。行全体を押して切り替えられるよう、ボタンを横いっぱいに広げる */
+.work-list-item-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  text-align: left;
+}
+/* ツールバー内のボタンは `.toolbar-panel button` で高さ28pxに統一されており、
+   そのままだと2行（作品名＋日時）が入りきらず日時が切れてしまう。
+   同じ詳細度では後から書かれている統一ルールが勝つため、`.toolbar-panel` を
+   前置きして詳細度を上げ、この行だけ高さを内容なりに戻す。 */
+.toolbar-panel .work-list-item-open {
+  height: auto;
+}
+.work-list-item-open:disabled {
+  cursor: default;
+}
+.work-list-item-title {
+  font-size: 13px;
+}
+.work-list-item-time {
+  font-size: 11px;
+  color: #666;
+}
+.work-list-item-badge {
+  font-size: 11px;
+  color: #1d4ed8;
+  white-space: nowrap;
+}
+.work-list-item-delete {
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
 /* ghost ボタンよりコンパクトなサイズに上書き */
 .toolbar-chip-button {
   height: var(--toolbar-control-height);
