@@ -124,6 +124,9 @@ type RenderedVoiceEntry = {
   beams: Beam[];
   tuplets: Tuplet[];
   voice: Voice;
+  // 2声部小節で、この声部が「今編集していない側」かどうか。
+  // 音符本体だけでなくビーム・連符も淡色にするために、描画パスへ持ち越す（Issue #175）。
+  isInactiveVoiceEntry: boolean;
 };
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
@@ -710,6 +713,17 @@ function shouldRenderGhostRest(
 
   const event = events[eventIndex];
   if (!event?.isRest) {
+    return false;
+  }
+
+  // 連符（3連符など）を構成する休符は、声部の末尾にあっても必ず見える休符として描く（Issue #180）。
+  // 理由は2つある:
+  //  1. 浄書上、連符は「音符1つ＋休符2つ」でもひとかたまりの単位なので、構成休符を隠すと
+  //     括弧と数字だけが宙に浮いて連符の意味が読めなくなる
+  //  2. VexFlow の Tuplet は括弧の縦位置を決めるときに構成音符の符幹（stem＝符の棒）の向きを見るが、
+  //     GhostNote は符幹を持たないため NoStem 例外で連符の描画ごと落ちてしまう
+  //     （3連符ツールで置いた直後の追加声部は「音符1つ＋連符内休符2つ」なので必ず踏む）
+  if (event.tuplet) {
     return false;
   }
 
@@ -2529,6 +2543,12 @@ export default function PianoSystemCanvas({
             // formatToStave が最上段で上書きするのを防げる。
             voice.setStave(stave);
 
+            // ビーム（連桁）・連符の括弧も音符本体と同じ淡色にするため、
+            // 「この声部が非アクティブかどうか」を描画パス（Pass 3）へ持ち越す。
+            // 音符ごとの判定（上の isInactiveVoice）と同じ条件だが、
+            // ビーム・連符は声部単位で1つなので声部側に持たせる。
+            const isInactiveVoiceEntry = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+
             return {
               voiceIndex,
               sourceEvents,
@@ -2536,6 +2556,7 @@ export default function PianoSystemCanvas({
               beams,
               tuplets,
               voice,
+              isInactiveVoiceEntry,
             };
           })
           .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
@@ -2649,11 +2670,31 @@ export default function PianoSystemCanvas({
               /* SVG未対応環境などでは無視 */
             }
           });
-          entry.beams.forEach(b=>b.setContext(ctx).draw());
+          // 非アクティブ声部は、音符本体（符頭・符幹）だけでなくビーム（連桁）と
+          // 連符の括弧・数字も淡色にする（Issue #175）。
+          // VexFlow の Beam.draw()/Tuplet.draw() は setStyle() したスタイルを
+          // 自分では適用しない（Element.applyStyle を呼ばない）ため、setStyle だけでは
+          // 黒いまま残ってしまう。代わりに drawWithStyle() を使うと、VexFlow 側が
+          // 「ctx.save() → applyStyle() → draw() → ctx.restore()」を行ってくれる。
+          const inactiveVoiceStyle = {fillStyle:INACTIVE_VOICE_COLOR,strokeStyle:INACTIVE_VOICE_COLOR};
+          entry.beams.forEach(b=>{
+            b.setContext(ctx);
+            if(entry.isInactiveVoiceEntry){
+              b.setStyle(inactiveVoiceStyle);
+              b.drawWithStyle();
+            }else{
+              b.draw();
+            }
+          });
           entry.tuplets.forEach(tuplet => {
             try {
               (tuplet as any).setContext?.(ctx);
-              tuplet.draw();
+              if (entry.isInactiveVoiceEntry) {
+                tuplet.setStyle(inactiveVoiceStyle);
+                tuplet.drawWithStyle();
+              } else {
+                tuplet.draw();
+              }
             } catch (tupletError) {
               console.error('連符の描画でエラーが発生しました:', tupletError);
             }

@@ -780,3 +780,183 @@ Issue の受入条件にある往復テスト（声部2を含む譜面を書き�
 - 外部ソフト（Finale/Sibelius/MuseScore）が出力した、`<backup>` を使わず音符ごとの `<voice>` 番号
   だけで多声を表現する MusicXML ファイルの読込互換は検証していない（自分の書出↔読込が
   閉じることを優先する方針。詳細は Issue #113 のトリアージコメント参照）。
+
+## 追記: 非アクティブ声部の淡色表示をビーム・連符にも効かせる修正（Issue #175, 2026-08-04）
+
+### 問題
+
+ピアノ譜で声部を切り替えたとき、非アクティブ側の声部の音符（符頭・符幹）は
+薄いグレー（`INACTIVE_VOICE_COLOR = '#9ca3af'`）になるが、**8分音符などを繋ぐ
+ビーム（連桁）だけが黒いまま残っていた**ため、どちらの声部を編集中か一目で分からなかった。
+運用者の実機確認（2026-08-03）で報告され、レビュアーの調査で「連符（3連符など）の
+括弧・数字も同様の可能性が高い」と指摘されていた。確認したところ連符も同じく黒のままだった。
+
+### 原因
+
+淡色化は `PianoSystemCanvas.tsx` の Pass 1 で音符1つずつに
+`n.setStyle({fillStyle:INACTIVE_VOICE_COLOR, strokeStyle:INACTIVE_VOICE_COLOR})` を
+掛けることで行っている（`StaveNote.setStyle` は内部で `setGroupStyle` を呼ぶので、
+符頭だけでなく符幹などの子要素にも伝播する）。
+
+一方ビームと連符は Pass 3 で
+`entry.beams.forEach(b => b.setContext(ctx).draw())` /
+`entry.tuplets.forEach(t => t.draw())` とスタイル無指定のまま描いていた。
+
+ここで重要なのは **VexFlow 5 の `Beam.draw()` / `Tuplet.draw()` は
+`setStyle()` したスタイルを自分では適用しない**（`Element.applyStyle` を呼ばない）こと。
+そのため「`setStyle()` を足すだけ」では直らない。スタイルを反映させたい場合は
+`Element.drawWithStyle()`（内部で `ctx.save()` → `applyStyle()` → `draw()` →
+`ctx.restore()` を行う）を使う必要がある。
+
+### 修正設計
+
+1. `RenderedVoiceEntry` に `isInactiveVoiceEntry: boolean` を追加した。
+   音符ごとの判定（Pass 1 の `isInactiveVoice`）と同じ
+   `isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex` だが、
+   ビーム・連符は声部単位で存在するため、声部エントリ側に持たせて Pass 3 へ渡す。
+2. Pass 3 のビーム描画を、非アクティブ声部のときだけ
+   `b.setStyle(inactiveVoiceStyle); b.drawWithStyle();` に切り替えた。
+   アクティブ声部・単声部小節は従来どおり `b.draw()` のままにして、
+   スタイル指定を一切増やさない（リグレッション防止）。
+3. 連符も同じ分岐にした。既存の try/catch（1つの連符の描画失敗で譜面全体を
+   真っ白にしないための握りつぶし）はそのまま維持している。
+
+`drawWithStyle()` の結果、VexFlow が `ctx.openGroup('beam'|'tuplet', ...)` を呼ぶ時点の
+コンテキスト属性がグループ要素へ書き出されるので、SVG 上は
+`<g class="vf-beam" fill="#9ca3af" stroke="#9ca3af">` の形になる。
+ビーム本体の `<path>` 自体には色が付かず、この `<g>` から継承する。
+
+### 印刷・PDF での扱い
+
+App.css の印刷ルールには
+`.print-page svg g[fill]:not([fill="none"]) { fill: var(--print-ink) !important; }`
+（`g[stroke]` 側も同様）が既にあるため、`<g>` の属性で淡色化していれば
+印刷・PDF書出では自動的に黒へ戻る。**インラインの `style` 属性ではなく属性で色を付ける**
+ことがこの前提であり、テストでもその形を固定している。
+実機の印刷プレビューでも、両声部のビーム・連符の `getComputedStyle().fill` が
+`rgb(0, 0, 0)` になることを確認済み。
+
+### 影響範囲
+
+- `src/components/PianoSystemCanvas.tsx`
+  - `RenderedVoiceEntry` 型に `isInactiveVoiceEntry` を追加
+  - Pass 1 の声部エントリ生成に `isInactiveVoiceEntry` を追加
+  - Pass 3 のビーム・連符描画に淡色分岐を追加
+- 単声部の小節（`isMultiVoiceMeasure === false`）と、声部トグルの無い譜種では
+  `isInactiveVoiceEntry` が常に false になるため、描画経路は従来と完全に同じ。
+
+### テスト
+
+`src/components/PianoSystemCanvasInactiveVoiceBeam.test.tsx`（新規・6件）
+
+1. 声部2アクティブ時に声部1のビームだけがグレーになる
+2. 声部1アクティブ時に声部2のビームだけがグレーになる（逆方向）
+3. 単声部の小節（`activeVoiceIndex` を渡さない場合も含む）ではビームに色指定が付かない
+4. 非アクティブ声部の連符（括弧・数字）もグレーになる
+5. アクティブ声部の連符は色指定なしのまま
+6. 淡色化が `<g>` の `fill` / `stroke` **属性**で行われている（＝印刷CSSが黒へ戻せる形）
+
+修正前のコードに対してこのテストを流すと 1・2・4・6 が失敗することを確認した
+（テストが実際にこの不具合を捕まえていることの確認）。
+
+### ブラウザ確認（共有 dev サーバー / ピアノ譜・4/4・ハ長調）
+
+`localhost:5173`（人間の自動保存データと別オリジン）で、
+1小節目＝声部1に8分×2＋4分×3／声部2に4分＋8分×2＋4分×2、
+2小節目＝声部1に8分3連符＋4分×3／声部2に4分×4、という譜例を読み込んで確認した。
+
+- 声部1アクティブ時: 声部2のビームがグレー、声部1のビーム・連符は黒
+- 声部2アクティブ時: 声部1のビーム2本と連符の括弧・数字がグレー、声部2のビームは黒
+- 印刷プレビュー ON: すべてのビーム・連符の `getComputedStyle().fill` が `rgb(0,0,0)`
+- コンソールエラーなし
+
+### スコープ外（今回変更していないこと）
+
+- 声部2の連符に ghost 休符（末尾の非表示休符）が含まれる場合に
+  `Tuplet.getYPosition()` が `NoStem` 例外で落ちる既知の問題（Issue #168 の調査コメント参照）。
+  今回の修正は描画色だけを扱っており、この例外の発生条件は変えていない
+  （例外時の握りつぶしも従来どおり）。
+  → **Issue #180 で解消済み**（次節）。
+
+## 連符内の休符は ghost 化しない（Issue #180）
+
+### 問題
+
+追加声部（voiceIndex >= 1）で、3連符ツールで置いた直後の既定形
+`[音符, 連符内休符, 連符内休符]` の連符が描画されず、再描画のたびにコンソールへ
+例外が出ていた。
+
+```
+連符の描画でエラーが発生しました: [RuntimeError] NoStem: No stem attached to this note.
+  at GhostNote.getStemDirection → _Tuplet.getYPosition → _Tuplet.draw
+```
+
+- 連符のブラケットと数字（「3」）だけが描かれず、音符・休符そのものと拍位置は正しい
+- 声部1側の連符には影響しない
+- 例外は `PianoSystemCanvas` の `entry.tuplets.forEach` の try/catch で握りつぶされるため、
+  「エラーは出るが譜面は表示される」という気づきにくい壊れ方だった
+
+### 原因
+
+追加声部では「最後の発音イベントより後ろの休符」を非表示の `GhostNote` として描く
+既存仕様（`shouldRenderGhostRest`）がある。置いた直後の声部2は「音符1つ＋休符2つ」なので、
+**連符を構成する休符2つがまるごと ghost 化**されていた。
+
+VexFlow の `Tuplet` はブラケットの縦位置を決めるときに構成音符の符幹（stem）の向きを見るが、
+`GhostNote` は符幹を持たないため `getStemDirection()` が `NoStem` 例外を投げ、
+連符の描画ごと失敗していた。
+
+これは origin/main 時点から存在した既存バグで、声部2に連符を作る手段が MusicXML 読込しか
+無かったため踏まれていなかっただけである（Issue #168 で声部2の連符入力を開けると、
+通常操作で必ず踏む位置に来る）。
+
+### 修正設計
+
+`shouldRenderGhostRest` の先頭近く（`isRest` 判定の直後）に、
+**`event.tuplet` を持つ休符は ghost 化しない（＝必ず見える休符として描く）** 分岐を追加した。
+
+判断の根拠は2つある。
+
+1. **浄書上の妥当性**: 連符は「音符1つ＋休符2つ」でもひとかたまりの単位であり、
+   構成休符を隠すとブラケットと数字だけが宙に浮いて連符の意味が読めなくなる。
+   連符内休符は常に可視が正しい
+2. **ghost 休符の目的を損なわない**: ghost 休符の本来の目的は「追加声部の末尾を埋めるだけの
+   ダミー休符を隠す」ことなので、連符**外**の休符に限定しても目的は達成される
+
+`shouldRenderGhostRest` 以外（`createVexFlowTuplets`、`entry.tuplets` の draw、
+`computeVoiceDisplayPadding`）は変更していない。
+
+### 影響範囲
+
+- `src/components/PianoSystemCanvas.tsx`（`shouldRenderGhostRest` に `tuplet` 分岐を追加。1関数のみ）
+- 声部1（voiceIndex === 0）と単声部の小節は関数の先頭で `false` を返すため、見た目は一切変わらない
+- 連符を含まない末尾のダミー休符は従来どおり ghost（非表示）のまま
+
+### テスト
+
+`src/components/PianoSystemCanvasTupletGhostRest.test.tsx`（新規・5件）
+
+1. 声部2に連符を置いた直後の形で `g.vf-tuplet` が1つ描かれ、連符描画のエラーが出ない
+2. 連符内の休符2つが見える休符として描かれる（`g.vf-stavenote` の個数で判定。
+   `GhostNote` は `draw()` で何も描かないため、この g 要素を作らないことを利用している）
+3. 連符に含まれない末尾のダミー休符は従来どおり ghost のまま（リグレッション）
+4. 声部1の連符内休符は従来どおり見えるまま
+5. 単声部の連符内休符も従来どおり
+
+修正前のコードに対してこのテストを流すと 1・2 が失敗する
+（`g.vf-tuplet` が0個、`g.vf-stavenote` が休符2つぶん少ない）ことを確認した。
+
+### ブラウザ確認（共有 dev サーバー / ピアノ譜・嬰ハ短調4♯・4/4）
+
+`localhost:5173`（人間の自動保存データと別オリジン）で、
+1小節目＝声部1に4分×4／声部2に「置いた直後の形」の3連符、
+2小節目＝声部1に4分×4／声部2に3連符4グループ（全て音符）、という譜例で確認した。
+
+| | 修正前（main のエントリ） | 修正後（worktree のエントリ） |
+| --- | --- | --- |
+| `g.vf-tuplet` の総数 | 4 | **5** |
+| `g.vf-stavenote` の総数 | 51 | **53**（連符内休符2つぶん増える） |
+| コンソール | `NoStem` 例外 | エラーなし（声部トグルで3回再描画しても0件） |
+
+声部1アクティブ時は連符のブラケット・数字がグレー、声部2アクティブ時は黒になる
+（Issue #175 の淡色表示）ことも同じ譜例で確認した。
