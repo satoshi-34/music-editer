@@ -14,6 +14,7 @@ import PartExtractionStaff from './PartExtractionStaff';
 import { QUARTET_PART_CONFIGS } from './QuartetStaff';
 import SymbolEditor from './SymbolEditor';
 import SaveLoadButtons from './SaveLoadButtons';
+import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
   INSTRUMENT_LABELS,
@@ -24,8 +25,9 @@ import ScaledPageWrapper from './ScaledPageWrapper';
 import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useScoreStorage } from '../hooks/useScoreStorage';
+import { useWorkLibrary } from '../hooks/useWorkLibrary';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
-import { createSavedScoreData, isEmptyScoreData, migrateLegacyDataToAutosave } from '../utils/storage';
+import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXml } from '../utils/musicXmlImport';
 import { downloadMidi } from '../utils/midiExport';
@@ -40,6 +42,7 @@ import type {
   InstrumentPartDefinition,
   MeasureData,
   PartData,
+  SavedScoreData,
   ScoreType,
   SystemMeasureOverride,
   SystemRowGapOverride
@@ -409,9 +412,36 @@ export default function ScorePage() {
 
   const {
     saveScore, loadScore, hasStoredData,
-    saveAutosave, loadAutosave, clearAutosaveData,
     error, isLoading, isSaving
   } = useScoreStorage();
+  // 複数作品の保存（Issue #181・第2段）。「いまどの作品を編集しているか」と
+  // 作品一覧の操作（切替・新規作成・削除）はこのフックが受け持つ。
+  const {
+    works, currentWorkId, workError,
+    refreshWorks, initializeWorks, saveCurrentWork, switchWork, startNewWork, deleteWorkById
+  } = useWorkLibrary();
+  const [showWorkList, setShowWorkList] = useState(false);
+  const [workListPos, setWorkListPos] = useState<{ top: number; left: number } | null>(null);
+  const workListButtonRef = useRef<HTMLButtonElement | null>(null);
+  // いま画面にある譜面を「保存できる形」に組み立てる関数。作品の切替・新規作成の直前に
+  // 呼んで現在の内容を保存するために使う。段あたり小節数などの state はこの位置より
+  // 後ろで宣言されており useCallback の依存配列に入れられないため、レンダーのたびに
+  // 最新版を入れ直す ref（latest ref）として持つ。
+  const buildCurrentWorkDataRef = useRef<() => SavedScoreData | null>(() => null);
+  // 自動保存のデバウンス用タイマー（実際の保存処理は下の自動保存 useEffect にある）。
+  // 作品を切り替える前に止める必要があるため、切替処理より前でここに宣言している。
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * 保存待ちの自動保存タイマーを取り消す。
+   * 作品を切り替える直前に呼ぶ。止めずに切り替えると、1つ前の作品の内容が
+   * 切替後の作品へ書き込まれてしまう（作品Aの編集が作品Bを壊す事故）。
+   */
+  const cancelPendingAutosave = useCallback(() => {
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+  }, []);
   // localStorage 自体は React の state ではないため、保存しても自動では再描画されない。
   // 「保存後すぐ読込ボタンを押せるか」は画面状態として持ち、保存/読込の節目で更新する。
   const [storedDataAvailable, setStoredDataAvailable] = useState(() => hasStoredData());
@@ -1699,19 +1729,12 @@ export default function ScorePage() {
     }
   };
 
-  const handleNewScore = useCallback(async () => {
-    // 「新規作成」は自動保存スロットだけを消す。手動「保存」で保存したデータは
-    // 別スロットのため影響を受けない（読込ボタンから引き続き呼び戻せる）。
-    const shouldReset = window.confirm('現在の画面を空の新規譜面に戻します。自動保存データも消去します（手動保存したデータは残ります）。よろしいですか？');
-    if (!shouldReset) {
-      return;
-    }
-
-    const cleared = await clearAutosaveData();
-    if (!cleared) {
-      return;
-    }
-
+  /**
+   * 画面を空の新規譜面へ戻す（保存データには触れない）。
+   * 「新規作成」だけでなく、作品の切替先が空だったとき・編集中の作品を削除したときにも
+   * 同じ状態へ戻す必要があるため、リセット処理だけを切り出してある。
+   */
+  const resetScoreStateToEmpty = useCallback(async () => {
     clearPlaybackTimer();
     resetPlaybackClock();
     getAudioEngine().stopAll();
@@ -1750,17 +1773,36 @@ export default function ScorePage() {
     setSystemRowGapOverrides([]);
   // applySettingsProfileToState はレンダーごとに作り直される素の関数（安定な setter・
   // インポート済みの純関数だけを参照するため、依存に加えても再生成のたびに
-  // handleNewScore 自体を再構築するだけで挙動は変わらない）。他の setter 群と同様、
+  // resetScoreStateToEmpty 自体を再構築するだけで挙動は変わらない）。他の setter 群と同様、
   // 依存配列には含めない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    clearAutosaveData,
     clearPlaybackTimer,
     getAudioEngine,
     hasStoredData,
     resetPlaybackClock,
     setTimeSignature,
   ]);
+
+  const handleNewScore = useCallback(async () => {
+    // 「新規作成」は、いまの作品を保存したうえで新しい作品として書き始める（Issue #181）。
+    // 以前は自動保存スロットを消していたが、作品ごとに保存先が分かれたため、
+    // これまでの内容は作品一覧に残り、いつでも開き直せる。
+    const shouldReset = window.confirm('いまの内容を保存して、新しい作品として空の譜面を開きます。これまでの作品は「作品一覧」に残ります。よろしいですか？');
+    if (!shouldReset) {
+      return;
+    }
+
+    // 保存待ち（1.5秒のデバウンス）が残っていると、切り替えた後に前の内容が
+    // 新しい作品へ書き込まれてしまうため、先にタイマーを止める。
+    cancelPendingAutosave();
+    const created = startNewWork(buildCurrentWorkDataRef.current());
+    if (!created) {
+      return;
+    }
+
+    await resetScoreStateToEmpty();
+  }, [cancelPendingAutosave, resetScoreStateToEmpty, startNewWork]);
 
   // 保存先ファイルハンドル（File System Access API）。
   // 取得後は同じファイルへ上書きできるよう ref で保持する。
@@ -1904,7 +1946,59 @@ export default function ScorePage() {
     feedbackNoticeTimerRef.current = setTimeout(() => setFeedbackNotice(null), 5000);
   };
 
-  // 起動時のサイレント復元: 自動保存データがあれば読み込んで続きから編集できるようにする。
+  /**
+   * 読み込んだ譜面データを画面の state へ反映する。
+   * 起動時の復元と、作品一覧からの切替の両方で同じ手順を通す
+   * （片方だけ更新し忘れると「切り替えたのに前の譜面の設定が残る」不具合になるため）。
+   */
+  const applyLoadedScoreData = useCallback(async (restored: SavedScoreData) => {
+    setTitle(restored.metadata.title);
+    setSubtitle(restored.metadata.subtitle);
+    setLyricist(restored.metadata.lyricist);
+    setComposer(restored.metadata.composer);
+    setArranger(restored.metadata.arranger);
+
+    const restoredType = restored.scoreType ?? 'single';
+    setKeySignature(normalizeKeySignature(restored.keySignature));
+    await setTimeSignature(...normalizeTimeSignature(restored.timeSignature));
+    setScoreType(restoredType);
+    setInstrumentation(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType));
+    setNotationMode(restored.notationMode ?? 'concert');
+    setCustomSymbolDefs(restored.customSymbolDefs ?? []);
+    if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
+      setMeasuresPerSystem(restored.measuresPerSystem);
+    }
+
+    if (restoredType === 'quartet') {
+      const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
+      setQuartetParts(QUARTET_IDS.map(id =>
+        restored.parts.find(p => p.partId === id)?.measures ?? []
+      ));
+      setEnsembleParts([]);
+      setEnsembleSecondStaffParts([]);
+    } else if (restoredType === 'ensemble') {
+      const restoredInstrumentation = restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType);
+      setEnsembleParts(restoredInstrumentation.parts.map(part =>
+        restored.parts.find(p => p.partId === part.id)?.measures ?? []
+      ));
+      setEnsembleSecondStaffParts(restoredInstrumentation.parts.map(part =>
+        part.staffCount === 2 ? restored.parts.find(p => p.partId === ensembleSecondStaffPartId(part.id))?.measures ?? [] : []
+      ));
+    } else {
+      const rightPart = restored.parts.find(p => p.clef === 'treble') ?? restored.parts[0];
+      const leftPart  = restored.parts.find(p => p.clef === 'bass');
+      setRightHandData(rightPart?.measures ?? []);
+      setLeftHandData(leftPart?.measures);
+      setEnsembleParts([]);
+      setEnsembleSecondStaffParts([]);
+    }
+    setSystemMeasureOverrides(restored.systemMeasureOverrides ?? []);
+    setSystemRowGapOverrides(restored.systemRowGapOverrides ?? []);
+    // 開き直した譜面は編集位置とは無関係なので、段割りの安定化ヒントもリセットする（Issue #67）
+    setLastEditedMeasureIndex(null);
+  }, [setTimeSignature]);
+
+  // 起動時のサイレント復元: 前回開いていた作品があれば読み込んで続きから編集できるようにする。
   // マウント直後の1回だけ実行し、復元の有無に関わらず「復元処理は完了した」ことを
   // autosaveRestoreReady で示す（これが true になるまで下の自動保存 useEffect は書き込みをしない）。
   const restoreAttemptedRef = useRef(false);
@@ -1913,56 +2007,12 @@ export default function ScorePage() {
     restoreAttemptedRef.current = true;
 
     (async () => {
-      // 自動保存/手動保存のキーがまだ分かれていない旧バージョンのデータが残っていれば、
-      // 消さずに新しい自動保存スロットへ複製する（初回起動時のみ・後方互換）。
-      migrateLegacyDataToAutosave();
-
-      const restored = await loadAutosave();
+      // 旧バージョンのデータ（手動保存と自動保存のキーが分かれていない形／作品カタログが
+      // 無い形）を、消さずに新しい保存先へ複製してから読み込む（初回起動時のみ・後方互換）。
+      // 前回開いていた作品を開くので、「前回の続きから始まる」体験は従来のまま変わらない。
+      const restored = initializeWorks();
       if (restored) {
-        setTitle(restored.metadata.title);
-        setSubtitle(restored.metadata.subtitle);
-        setLyricist(restored.metadata.lyricist);
-        setComposer(restored.metadata.composer);
-        setArranger(restored.metadata.arranger);
-
-        const restoredType = restored.scoreType ?? 'single';
-        setKeySignature(normalizeKeySignature(restored.keySignature));
-        await setTimeSignature(...normalizeTimeSignature(restored.timeSignature));
-        setScoreType(restoredType);
-        setInstrumentation(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType));
-        setNotationMode(restored.notationMode ?? 'concert');
-        setCustomSymbolDefs(restored.customSymbolDefs ?? []);
-        if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
-          setMeasuresPerSystem(restored.measuresPerSystem);
-        }
-
-        if (restoredType === 'quartet') {
-          const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
-          setQuartetParts(QUARTET_IDS.map(id =>
-            restored.parts.find(p => p.partId === id)?.measures ?? []
-          ));
-          setEnsembleParts([]);
-          setEnsembleSecondStaffParts([]);
-        } else if (restoredType === 'ensemble') {
-          const restoredInstrumentation = restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType);
-          setEnsembleParts(restoredInstrumentation.parts.map(part =>
-            restored.parts.find(p => p.partId === part.id)?.measures ?? []
-          ));
-          setEnsembleSecondStaffParts(restoredInstrumentation.parts.map(part =>
-            part.staffCount === 2 ? restored.parts.find(p => p.partId === ensembleSecondStaffPartId(part.id))?.measures ?? [] : []
-          ));
-        } else {
-          const rightPart = restored.parts.find(p => p.clef === 'treble') ?? restored.parts[0];
-          const leftPart  = restored.parts.find(p => p.clef === 'bass');
-          setRightHandData(rightPart?.measures ?? []);
-          setLeftHandData(leftPart?.measures);
-          setEnsembleParts([]);
-          setEnsembleSecondStaffParts([]);
-        }
-        setSystemMeasureOverrides(restored.systemMeasureOverrides ?? []);
-        setSystemRowGapOverrides(restored.systemRowGapOverrides ?? []);
-        // 起動時の復元は編集位置とは無関係なので、段割りの安定化ヒントもリセットする（Issue #67）
-        setLastEditedMeasureIndex(null);
+        await applyLoadedScoreData(restored);
 
         setRestoreNotice('自動保存データから復元しました');
         console.info('[ScorePage] 起動時に自動保存データから復元しました');
@@ -1985,16 +2035,27 @@ export default function ScorePage() {
   // applySettingsProfileToState はレンダーごとに作り直される素の関数のため、
   // handleNewScore と同じ理由で依存配列には含めない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadAutosave, setTimeSignature]);
+  }, [applyLoadedScoreData, initializeWorks, setTimeSignature]);
 
   // 段あたり小節数。自動保存 useEffect の依存配列に含めるため、useEffect より前で宣言する
   // （以前はここより後方で宣言されており、後方宣言のため deps に入れられなかった。
   // Issue #117: このため「段あたり小節数」だけを変更して閉じると自動保存されなかった）。
   const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
 
+  // 作品の切替・新規作成の直前に「いまの内容」を保存するための組み立て関数を最新に保つ。
+  // 段あたり小節数のように、この位置より後ろで宣言される値も読む必要があるため、
+  // レンダー後に ref へ入れ直す（useCallback の依存配列には入れられない）。
+  useEffect(() => {
+    buildCurrentWorkDataRef.current = () => {
+      const { metadata, parts } = buildScoreData();
+      // 空の譜面は保存しない（自動保存と同じ判断。空で上書きして中身を失わないため）
+      if (isEmptyScoreData(parts)) return null;
+      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
+    };
+  });
+
   // 自動保存（編集から 1.5 秒後に localStorage へ保存）
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
-  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSaveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     // 起動時のサイレント復元が終わるまでは自動保存しない。
@@ -2006,14 +2067,17 @@ export default function ScorePage() {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(async () => {
       const { metadata, parts } = buildScoreData();
-      // 内容が空（全パート・全小節が空）のときは自動保存で既存の自動保存データを
-      // 上書きしない。「新規作成」で明示的に空にしたい場合は handleNewScore 側で
-      // 自動保存スロットを直接クリアしている。
+      // 内容が空（全パート・全小節が空）のときは自動保存で既存の内容を上書きしない。
+      // 「新規作成」では別の作品IDへ切り替えるので、前の作品はそのまま一覧に残る。
       if (isEmptyScoreData(parts)) {
         return;
       }
       setAutoSaveStatus('saving');
-      const saved = await saveAutosave(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
+      // 保存先は「いま開いている作品」の自動保存スロット。まだ作品IDが無い
+      // （＝一度も保存していない新規状態）ときは、この保存で新しい作品が作られる。
+      const saved = saveCurrentWork(
+        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides)
+      );
       if (saved) {
         setAutoSaveStatus('saved');
         if (autoSaveStatusTimerRef.current) clearTimeout(autoSaveStatusTimerRef.current);
@@ -2040,6 +2104,68 @@ export default function ScorePage() {
   // ScorePageAutosaveDeps.test.tsx が検証している。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
+
+  // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
+  // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
+  const updateWorkListPosition = useCallback(() => {
+    const rect = workListButtonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    // パネル幅は CSS の width: min(380px, 100vw - 32px) と同じ計算にそろえる
+    const panelWidth = Math.min(380, window.innerWidth - 32);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - panelWidth - 8));
+    setWorkListPos({ top: rect.bottom + 6, left });
+  }, []);
+
+  const handleToggleWorkList = useCallback(() => {
+    setShowWorkList(prev => {
+      if (!prev) {
+        updateWorkListPosition();
+        // 開くたびにカタログを読み直す。編集中はタイトル・更新日時が変わり続けるため、
+        // 一覧の再取得は「開いたとき」だけにして、編集中の再描画を増やさない。
+        refreshWorks();
+      }
+      return !prev;
+    });
+  }, [refreshWorks, updateWorkListPosition]);
+
+  // 開いている間にウィンドウ幅が変わったら位置を測り直す（ボタン自体が折り返しで動くため）
+  useEffect(() => {
+    if (!showWorkList) return;
+    const onResize = () => updateWorkListPosition();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [showWorkList, updateWorkListPosition]);
+
+  /** 作品一覧から別の作品を選んだとき。切替前に現在の内容を保存する */
+  const handleSelectWork = useCallback(async (workId: string) => {
+    cancelPendingAutosave();
+    const loaded = switchWork(workId, buildCurrentWorkDataRef.current());
+    if (loaded) {
+      await applyLoadedScoreData(loaded);
+    } else {
+      // まだ中身の無い作品（新規作成した直後など）へ切り替えた場合は空の譜面から始める
+      await resetScoreStateToEmpty();
+    }
+    setShowWorkList(false);
+  }, [applyLoadedScoreData, cancelPendingAutosave, resetScoreStateToEmpty, switchWork]);
+
+  /** 作品一覧の「新規作成」。ツールバーの新規作成ボタンと同じ動きにそろえる */
+  const handleCreateWorkFromList = useCallback(async () => {
+    setShowWorkList(false);
+    await handleNewScore();
+  }, [handleNewScore]);
+
+  /** 作品の削除。確認ダイアログは WorkListPanel 側で必ず通している */
+  const handleDeleteWork = useCallback(async (workId: string) => {
+    const { success, deletedCurrent } = deleteWorkById(workId);
+    if (!success) return;
+    if (deletedCurrent) {
+      // 編集中の作品を消したので、画面も空に戻す。保存待ちのタイマーが残っていると
+      // 消したはずの内容が新しい作品として復活するため、先に止める。
+      cancelPendingAutosave();
+      await resetScoreStateToEmpty();
+    }
+  }, [cancelPendingAutosave, deleteWorkById, resetScoreStateToEmpty]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
@@ -4323,8 +4449,35 @@ export default function ScorePage() {
                 hasCustomPianoSample={hasCustomPianoSample}
                 autoSaveStatus={autoSaveStatus}
                 restoreNotice={restoreNotice}
-                error={error}
+                error={workError ?? error}
               />
+              {/* 作品一覧（Issue #181）。保存・読込の並びの直後に置き、
+                  「ブラウザに保存されている作品を選ぶ」入口だと分かるようにする */}
+              <div className="work-list-panel-wrap">
+                <button
+                  type="button"
+                  className="ghost"
+                  ref={workListButtonRef}
+                  onClick={handleToggleWorkList}
+                  aria-expanded={showWorkList}
+                  aria-haspopup="dialog"
+                  title="ブラウザに保存されている作品の一覧を開きます（切替・新規作成・削除）"
+                  data-testid="work-list-toggle"
+                >
+                  作品一覧 ▾
+                </button>
+                {showWorkList && (
+                  <WorkListPanel
+                    works={works}
+                    currentWorkId={currentWorkId}
+                    onSelect={handleSelectWork}
+                    onCreate={handleCreateWorkFromList}
+                    onDelete={handleDeleteWork}
+                    onClose={() => setShowWorkList(false)}
+                    style={workListPos ? { top: workListPos.top, left: workListPos.left } : undefined}
+                  />
+                )}
+              </div>
               <input
                 ref={fileImportRef}
                 type="file"
