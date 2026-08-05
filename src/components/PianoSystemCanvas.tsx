@@ -120,6 +120,11 @@ type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 type RenderedVoiceEntry = {
   voiceIndex: number;
   sourceEvents: RenderNoteEvent[];
+  // sourceEvents のうち「保存データに実在するイベント」の件数。
+  // sourceEvents は末尾に表示専用のパディング休符が足されることがあるので、
+  // 弧・松葉の位置マップのように保存データと対応づけたい処理はこの件数までを見る
+  // （パディング休符は常に末尾に足される、という不変条件に依存している）。
+  realEventCount: number;
   vfNotes: StaveNote[];
   beams: Beam[];
   tuplets: Tuplet[];
@@ -2177,14 +2182,33 @@ export default function PianoSystemCanvas({
     type TieNoteP={note:StaveNote;keys:string[];tiedToNext:boolean;isRest:boolean;stave:Stave};
     const carryTies: Array<{ note: StaveNote; keys: string[]; stave: Stave } | null> = parts.map(() => null);
     const partLineNotes: TieNoteP[][] = parts.map(() => []);
-    // arcs[] ベースの描画用: 全音符の位置マップ（キー: `${partIndex}-${measureIndex}-${eventIndex}`）
-    // keys を含めることでスラーの方向計算に範囲内の全音符ラインを使える
-    type PendingArcP={partIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
-    const notePositionMapP=new Map<string,{note:StaveNote;stave:Stave;keys:string[]}>();
+    // arcs[] ベースの描画用: 全音符の位置マップ。
+    // keys を含めることでスラーの方向計算に範囲内の全音符ラインを使える。
+    //
+    // Issue #186: 声部2の弧も描けるようにするため、キーに声部（voiceIndex）を足した。
+    // ただし以前はこのキーを `split('-')` で読み直している箇所があり、桁を増やすと
+    // 解析側が静かにずれて壊れる。そこで「キーは同定専用の不透明な文字列」と決め、
+    // 必要な情報（パート・小節・声部・イベント）はすべて値側に持たせる方式へ変えた。
+    const notePosKeyP=(partIndex:number,measureIndex:number,voiceIndex:number,eventIndex:number)=>
+      `p${partIndex}v${voiceIndex}m${measureIndex}e${eventIndex}`;
+    type NotePositionP={note:StaveNote;stave:Stave;keys:string[];partIndex:number;measureIndex:number;voiceIndex:number;eventIndex:number};
+    type PendingArcP={partIndex:number;voiceIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
+    const notePositionMapP=new Map<string,NotePositionP>();
     const pendingArcsP:PendingArcP[]=[];
     // 松葉（ヘアピン）の描画待ちリスト。arcs と同じく全パート・全小節のレンダリング後にまとめて描く
-    type PendingHairpinP={partIndex:number;hairpin:HairpinMark;hairpinIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
+    type PendingHairpinP={partIndex:number;voiceIndex:number;hairpin:HairpinMark;hairpinIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
     const pendingHairpinsP:PendingHairpinP[]=[];
+
+    // 弧の同定情報（どのパート・声部・イベントの何本目の弧か）を arcKey から引くための台帳。
+    // 以前は arcKey の文字列を `split('-')` して復元していたが、声部を足すと桁がずれるため、
+    // 「描くときに登録し、掴むときに引く」形にして文字列解析そのものを廃止した。
+    type ArcIdentityP={partIndex:number;voiceIndex:number;fromMeasure:number;fromEvent:number;arcIndex:number};
+    const arcIdentityMap=new Map<string,ArcIdentityP>();
+    const arcKeyP=(identity:ArcIdentityP)=>{
+      const key=`p${identity.partIndex}v${identity.voiceIndex}m${identity.fromMeasure}e${identity.fromEvent}a${identity.arcIndex}`;
+      arcIdentityMap.set(key,identity);
+      return key;
+    };
 
     // tiedToNext レガシー用: 和音から代表符頭キーを選ぶ（upward なら最高音、downward なら最低音）
     const tieRepKeyP=(clef:ClefType,keys:string[])=>{
@@ -2195,31 +2219,40 @@ export default function PianoSystemCanvas({
     };
 
     // 座標を直接受け取って弧パスを描く低レベルヘルパー
-    // arcKey: "${partIndex}-${fromMeasure}-${fromEvent}-${arcIndex}"（段またぎ時は suffix "-1"/"-2"）
+    // arcKey: arcKeyP() が発行する同定用の文字列（段またぎ時は suffix "-1"/"-2"）。
+    // 中身の意味は arcIdentityMap から引く（文字列を解析してはいけない）。
     const drawArcPathP=(x1:number,y1:number,x2:number,y2:number,upward:boolean,kind:'tie'|'slur',stemDir:number,obstacleY:number|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,minNoteY?:number,maxNoteY?:number,startDx=0,startDy=0,endDx=0,endDy=0)=>{
       const{dAttr}=computeArcGeometry(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset);
       arcGeomMap.set(arcKey,{x1,y1,x2,y2,upward,kind,stemDir,obstacleY,minNoteY,maxNoteY,startDx,startDy,endDx,endDy,cpDyOffset});
 
-      const hitPath=document.createElementNS('http://www.w3.org/2000/svg','path');
-      hitPath.setAttribute('d',dAttr);
-      hitPath.setAttribute('stroke','transparent');hitPath.setAttribute('stroke-width','10');
-      hitPath.setAttribute('fill','none');hitPath.setAttribute('pointer-events','stroke');
-      // 印刷時に svg path を黒で強制するCSSがあるため、透明な当たり判定パスだと分かるよう目印を付けて印刷から除外する
-      hitPath.setAttribute('class','vf-arc-hit');
-      hitPath.setAttribute('data-arc-key-hit',arcKey);hitPath.style.cursor='grab';
-      hitPath.addEventListener('mousedown',(e)=>{
-        e.preventDefault();e.stopPropagation();
-        const baseKey=arcKey.replace(/-[12]$/,'');
-        const parts2=baseKey.split('-').map(Number);
-        const[pi,fm,fe,ai]=parts2;
-        setSelectedArc({partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
-        setSelected(null);
-        const{y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-        const seg=arcKey.endsWith('-1')?'-1':arcKey.endsWith('-2')?'-2':'' as ''|'-1'|'-2';
-        cpDragRef.current={partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg};
-      });
-      hitPath.addEventListener('click',(e)=>{e.stopPropagation();});
-      svgRoot.appendChild(hitPath);
+      const baseKey=arcKey.replace(/-[12]$/,'');
+      const seg=arcKey.endsWith('-1')?'-1':arcKey.endsWith('-2')?'-2':'' as ''|'-1'|'-2';
+      const arcIdentity=arcIdentityMap.get(baseKey);
+      // Issue #186（段1）は「声部2の弧を描けるようにする」ところまでで、
+      // 選択・ドラッグ編集の解禁は段3で行う。声部2の弧に当たり判定を付けてしまうと、
+      // 掴んだ瞬間に声部1の同じ位置のイベントへ書き込んでしまう（保存先の配線は段3で行うため）。
+      // identity が引けない弧は tiedToNext 方式のレガシー弧で、これも従来から編集対象ではない。
+      const isEditableArc=arcIdentity!==undefined&&arcIdentity.voiceIndex===0;
+
+      if(isEditableArc){
+        const hitPath=document.createElementNS('http://www.w3.org/2000/svg','path');
+        hitPath.setAttribute('d',dAttr);
+        hitPath.setAttribute('stroke','transparent');hitPath.setAttribute('stroke-width','10');
+        hitPath.setAttribute('fill','none');hitPath.setAttribute('pointer-events','stroke');
+        // 印刷時に svg path を黒で強制するCSSがあるため、透明な当たり判定パスだと分かるよう目印を付けて印刷から除外する
+        hitPath.setAttribute('class','vf-arc-hit');
+        hitPath.setAttribute('data-arc-key-hit',arcKey);hitPath.style.cursor='grab';
+        hitPath.addEventListener('mousedown',(e)=>{
+          e.preventDefault();e.stopPropagation();
+          const{partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai}=arcIdentity!;
+          setSelectedArc({partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
+          setSelected(null);
+          const{y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
+          cpDragRef.current={partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg};
+        });
+        hitPath.addEventListener('click',(e)=>{e.stopPropagation();});
+        svgRoot.appendChild(hitPath);
+      }
 
       const visPath=document.createElementNS('http://www.w3.org/2000/svg','path');
       visPath.setAttribute('d',dAttr);
@@ -2230,9 +2263,7 @@ export default function PianoSystemCanvas({
       svgRoot.appendChild(visPath);
 
       // 選択中: 始点・終点に丸いハンドルを表示（段またぎ -2 には始点不要、-1 には終点不要）
-      if(isSelected){
-        const baseKey=arcKey.replace(/-[12]$/,'');
-        const seg=arcKey.endsWith('-1')?'-1':arcKey.endsWith('-2')?'-2':'' as ''|'-1'|'-2';
+      if(isSelected&&isEditableArc){
         const showStart=true;
         const showEnd  =true;
         const makeHandle=(cx:number,cy:number,epAttr:string,origDx:number,origDy:number,ep:'start'|'end')=>{
@@ -2245,8 +2276,7 @@ export default function PianoSystemCanvas({
           h.setAttribute(epAttr,arcKey);
           h.addEventListener('mousedown',(e)=>{
             e.preventDefault();e.stopPropagation();
-            const pts=baseKey.split('-').map(Number);
-            const[pi2,fm2,fe2,ai2]=pts;
+            const{partIndex:pi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2}=arcIdentity!;
             const{x:sx,y:sy}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
             epDragRef.current={partIndex:pi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,segment:seg,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy};
           });
@@ -2552,6 +2582,7 @@ export default function PianoSystemCanvas({
             return {
               voiceIndex,
               sourceEvents,
+              realEventCount: rawSourceEvents.length,
               vfNotes,
               beams,
               tuplets,
@@ -2701,14 +2732,29 @@ export default function PianoSystemCanvas({
           });
         });
 
-        // タイ描画用に音符データを収集（小節ループ後にパートごとまとめて処理）
+        // レガシー（tiedToNext 方式）のタイ描画用データ収集。
+        // こちらは声部1（measure.events）専用のまま残す。arcs[] 方式より前の旧データ互換の
+        // 経路であり、声部2は arcs[] 方式より後に生まれた機能なので旧データが存在しないため。
         safeEvs.forEach((ev,j)=>{
           partLineNotes[pi].push({note:vfNotes[j],keys:ev.keys,tiedToNext:ev.tiedToNext??false,isRest:ev.isRest,stave});
-          // arcs[] 方式: 全音符の位置を記録し、arc を持つ音符は pendingArcsP に追加
-          notePositionMapP.set(`${pi}-${absI}-${j}`,{note:vfNotes[j],stave,keys:ev.keys});
-          ev.arcs?.forEach((arc,arcIndex)=>pendingArcsP.push({partIndex:pi,arc,arcIndex,startNote:vfNotes[j],startStave:stave,startMeasureIdx:absI,startEventIdx:j}));
-          // 松葉（ヘアピン）も同じ方式で開始音符から収集する
-          ev.hairpins?.forEach((hairpin,hairpinIndex)=>pendingHairpinsP.push({partIndex:pi,hairpin,hairpinIndex,startNote:vfNotes[j],startStave:stave,startMeasureIdx:absI,startEventIdx:j}));
+        });
+
+        // arcs[]／hairpins[] 方式: 全声部ぶんの音符位置を記録し、弧・松葉を描画待ちリストへ積む。
+        // 声部を持たない小節では renderedVoiceEntries が声部1の1件だけになるので、
+        // 単旋律譜・四重奏・編成譜など声部トグルの無い譜種では走査結果が従来と完全に同じになる。
+        renderedVoiceEntries.forEach((entry)=>{
+          const vi=entry.voiceIndex;
+          entry.sourceEvents.forEach((ev,j)=>{
+            // 末尾の表示専用パディング休符は保存データに無いので位置マップへ入れない。
+            // 入れてしまうと、スラーが避ける障害物（allNoteYs）に見た目だけの休符が混ざり、
+            // 弧のふくらみ方が変わってしまう（＝声部1だけの譜面の見た目が変わる）。
+            if(j>=entry.realEventCount)return;
+            const note=entry.vfNotes[j];
+            if(!note)return;
+            notePositionMapP.set(notePosKeyP(pi,absI,vi,j),{note,stave,keys:ev.keys,partIndex:pi,measureIndex:absI,voiceIndex:vi,eventIndex:j});
+            ev.arcs?.forEach((arc,arcIndex)=>pendingArcsP.push({partIndex:pi,voiceIndex:vi,arc,arcIndex,startNote:note,startStave:stave,startMeasureIdx:absI,startEventIdx:j}));
+            ev.hairpins?.forEach((hairpin,hairpinIndex)=>pendingHairpinsP.push({partIndex:pi,voiceIndex:vi,hairpin,hairpinIndex,startNote:note,startStave:stave,startMeasureIdx:absI,startEventIdx:j}));
+          });
         });
 
         // EXTRA_TOP/EXTRA_BOTTOM は五線の外側までクリックしやすくするための余白だが、
@@ -4245,16 +4291,21 @@ export default function PianoSystemCanvas({
     });
 
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
-    pendingArcsP.forEach(({partIndex,arc,arcIndex,startNote,startStave,startMeasureIdx,startEventIdx})=>{
-      const dest=notePositionMapP.get(`${partIndex}-${arc.toMeasureIndex}-${arc.toEventIndex}`);
+    pendingArcsP.forEach(({partIndex,voiceIndex,arc,arcIndex,startNote,startStave,startMeasureIdx,startEventIdx})=>{
+      // 弧の終点は「同じ声部の events 配列の位置」を指す（設計メモの案A）。
+      // そのため終点の逆引きも必ず同じ声部のキーで行う。
+      const dest=notePositionMapP.get(notePosKeyP(partIndex,arc.toMeasureIndex,voiceIndex,arc.toEventIndex));
       const clef=parts[partIndex]?.clef??'treble';
       const kl=(k:string)=>keyToLineForClef(clef,k);
 
-      const arcKey=`${partIndex}-${startMeasureIdx}-${startEventIdx}-${arcIndex}`;
+      const arcKey=arcKeyP({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,arcIndex});
       const cpDyOffset=arc.cpDyOffset??0;
       const startDx=arc.startDx??0,startDy=arc.startDy??0;
       const endDx=arc.endDx??0,endDy=arc.endDy??0;
-      const isSelected=selectedArc!==null&&
+      // selectedArc はまだ声部を持たない（段3で追加予定）ので、
+      // 声部2の弧が声部1の選択に巻き込まれて青くならないよう声部1に限定する。
+      const isSelected=voiceIndex===0&&
+        selectedArc!==null&&
         selectedArc.partIndex===partIndex&&
         selectedArc.fromMeasure===startMeasureIdx&&
         selectedArc.fromEvent===startEventIdx&&
@@ -4283,10 +4334,12 @@ export default function PianoSystemCanvas({
       let allNoteYs:number[]|undefined;
       if(arc.kind==='slur'){
         allLines=[];allNoteYs=[];
-        for(const[key,{keys,stave}] of notePositionMapP){
-          const parts2=key.split('-');
-          const pi2=parseInt(parts2[0]),m=parseInt(parts2[1]),e=parseInt(parts2[2]);
-          if(pi2!==partIndex)continue;
+        // 位置マップの「値」に持たせた情報だけを見る（キー文字列は解析しない）。
+        // 声部で絞るのは、従来（声部1しか位置マップに載っていなかった頃）の
+        // 障害物の集まり方をそのまま保つため。声部をまたいで避けるかどうかの
+        // 最終判断は段4（設計メモ §6）で行う。
+        for(const{keys,stave,partIndex:pi2,voiceIndex:vi2,measureIndex:m,eventIndex:e} of notePositionMapP.values()){
+          if(pi2!==partIndex||vi2!==voiceIndex)continue;
           const afterStart=m>startMeasureIdx||(m===startMeasureIdx&&e>=startEventIdx);
           const beforeEnd =m<arc.toMeasureIndex||(m===arc.toMeasureIndex&&e<=arc.toEventIndex);
           if(afterStart&&beforeEnd){
@@ -4353,11 +4406,12 @@ export default function PianoSystemCanvas({
     // 終点へ向かう第2segmentを描く。start/count が可変でも絶対小節番号で照合する。
     Array.from({ length: measuresPerSystem }, (_, offset) => startMeasureIndex + offset)
       .flatMap((targetMeasure) => incomingArcIndex?.get(targetMeasure) ?? [])
-      .forEach(({ partIndex, fromMeasure, fromEvent, arcIndex, arc }) => {
-          const targetKey=`${partIndex}-${arc.toMeasureIndex}-${arc.toEventIndex}`;
+      .forEach(({ partIndex, voiceIndex, fromMeasure, fromEvent, arcIndex, arc }) => {
+          // 終点も開始音符も、弧が載っている声部の中で数えたインデックスを指す（案A）。
+          const targetKey=notePosKeyP(partIndex,arc.toMeasureIndex,voiceIndex,arc.toEventIndex);
           const dest=notePositionMapP.get(targetKey);
           // 開始音符がこのCanvas内なら既存のpendingArcsPが両segmentを描くので重複しない。
-          if(!dest || notePositionMapP.has(`${partIndex}-${fromMeasure}-${fromEvent}`)) return;
+          if(!dest || notePositionMapP.has(notePosKeyP(partIndex,fromMeasure,voiceIndex,fromEvent))) return;
           try{
             const clef=parts[partIndex]?.clef??'treble';
             // 段またぎの上下方向は終点音ではなく、開始側の fromKey で一度だけ決める。
@@ -4373,30 +4427,37 @@ export default function PianoSystemCanvas({
             // 方向は開始音のまま保つ一方、終点座標は実際の toKey の五線位置を使う。
             const y=dest.stave.getYForLine(toLine)+(upward?-3:3)+(arc.endDy??0);
             const edgeX=dest.stave.getX();
-            const baseKey=`${partIndex}-${fromMeasure}-${fromEvent}-${arcIndex}`;
-            const selectedHere=selectedArc!==null&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
+            const baseKey=arcKeyP({partIndex,voiceIndex,fromMeasure,fromEvent,arcIndex});
+            const selectedHere=voiceIndex===0&&selectedArc!==null&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
             drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0);
           }catch{/* 壊れた旧arcでも他の譜面描画を止めない */}
       });
 
     // ── 松葉（ヘアピン）を一括描画（全パート・全小節レンダリング後に実行） ─────
     // 五線の下（強弱記号と同じ高さ帯）に、開始音符から終了音符まで開く/閉じる2本線を描く
-    pendingHairpinsP.forEach(({partIndex,hairpin,hairpinIndex,startNote,startStave,startMeasureIdx,startEventIdx})=>{
-      const dest=notePositionMapP.get(`${partIndex}-${hairpin.endMeasure}-${hairpin.endEvent}`);
+    pendingHairpinsP.forEach(({partIndex,voiceIndex,hairpin,hairpinIndex,startNote,startStave,startMeasureIdx,startEventIdx})=>{
+      // 松葉の終点（endEvent）も弧と同じく「同じ声部の events 配列の位置」を指す。
+      const dest=notePositionMapP.get(notePosKeyP(partIndex,hairpin.endMeasure,voiceIndex,hairpin.endEvent));
       if(!dest)return; // このキャンバスの描画範囲外なら無視
       type R=Record<string,(...a:unknown[])=>unknown>;
       const x1=((startNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
       const x2=((dest.note as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
-      const isSelected=selectedHairpin!==null&&
+      // selectedHairpin も声部を持たないため、選択の巻き込みを避けて声部1に限定する（段3で配線予定）。
+      const isSelected=voiceIndex===0&&
+        selectedHairpin!==null&&
         selectedHairpin.partIndex===partIndex&&
         selectedHairpin.fromMeasure===startMeasureIdx&&
         selectedHairpin.fromEvent===startEventIdx&&
         selectedHairpin.hairpinIndex===hairpinIndex;
       const offsetY=hairpin.offsetY??0;
-      const onClick=()=>{
-        setSelectedArc(null);
-        setSelectedHairpin({partIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
-      };
+      // 段1では声部2の松葉は「描くだけ」。クリックできるようにすると、
+      // 選択→Delete で声部1側の松葉を消してしまう（保存先の配線は段3）。
+      const onClick=voiceIndex===0
+        ? ()=>{
+            setSelectedArc(null);
+            setSelectedHairpin({partIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
+          }
+        : undefined;
       // 段またぎ判定はタイ/スラーと同じ基準（五線Y差 > 30px、または終点が始点より左）
       const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30||x2<x1;
       if(!crossSystem){
