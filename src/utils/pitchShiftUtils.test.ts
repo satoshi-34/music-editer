@@ -158,6 +158,38 @@ describe('applyPitchChangeToMeasures', () => {
     expect(next[1]).toBe(ms[1]);
   });
 
+  // Issue #188（段2）の固定テスト。声部2の音高移動で arcs が同じ声部の中だけ追従することを固定する
+  // （この関数は既に voiceIndex 対応済みで、段2でも変更していない）。
+  it('voiceIndex=1 の音高移動で、声部2の arcs だけが fromKey/toKey を追従する', () => {
+    const ms: MeasureData[] = [{
+      events: [
+        ev({ keys: ['c/5'], arcs: [{ fromKey: 'c/5', toKey: 'd/5', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' }] }),
+        ev({ keys: ['d/5'] }),
+      ],
+      voices: [
+        { id: 'voice-1', events: [ev({ keys: ['c/5'] }), ev({ keys: ['d/5'] })] },
+        {
+          id: 'voice-2',
+          stemDirection: 'down',
+          events: [
+            ev({ keys: ['c/3'], arcs: [{ fromKey: 'c/3', toKey: 'd/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' }] }),
+            ev({ keys: ['d/3'] }),
+          ],
+        },
+      ],
+    }];
+    // 声部2の1件目を e/3 へ動かす → 自分が発する arc の fromKey が追従する
+    const shiftedFrom = applyPitchChangeToMeasures(ms, 0, 0, undefined, ['e/3'], 1);
+    expect(shiftedFrom[0].voices?.[1].events[0].arcs?.[0].fromKey).toBe('e/3');
+    // 声部1の arc は同じ索引を指していても変わらない
+    expect(shiftedFrom[0].events[0].arcs).toEqual(ms[0].events[0].arcs);
+
+    // 声部2の2件目（弧の終点）を動かす → 終点を指す arc の toKey が追従する
+    const shiftedTo = applyPitchChangeToMeasures(ms, 0, 1, undefined, ['f/3'], 1);
+    expect(shiftedTo[0].voices?.[1].events[0].arcs?.[0].toKey).toBe('f/3');
+    expect(shiftedTo[0].events[0].arcs?.[0].toKey).toBe('d/5');
+  });
+
   it('voiceIndex=1 の休符も声部2側だけ差し替わる', () => {
     const ms: MeasureData[] = [{
       events: [ev({ isRest: true, keys: ['b/4'] })],

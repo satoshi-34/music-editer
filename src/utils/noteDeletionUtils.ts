@@ -6,10 +6,12 @@
 // planTupletGroupDeletion を内部で呼び出す（グループごと通常の休符に置き換える仕様）。
 //
 // なお PianoSystemCanvas の「声部2（下声）を選択しているときの Delete」は
-// Piano 固有の voices 構造を扱うため、この共通関数の対象外（コンポーネント側に残す）。
+// Piano 固有の voices 構造を扱うため、この共通関数とは別に
+// deleteVoiceEventFromMeasures（このファイルの後半）で扱う。
 
-import type { MeasureData, NoteEvent } from '../types/storage';
+import type { HairpinMark, MeasureData, NoteEvent, TieArc } from '../types/storage';
 import { planTupletGroupDeletion } from './tupletUtils';
+import { getVoiceEvents } from './voiceMeasureUtils';
 
 /**
  * MeasureData 配列を複製する（各小節・各イベント配列を新しい参照にする）。
@@ -86,6 +88,13 @@ export function deleteEventFromMeasures(
   }
 
   // 3. イベント自体を削除する
+  //
+  // ここで走査するのは m.events（＝声部1）だけでよい。
+  // 声部2以降の arcs / hairpins が持つ toEventIndex / endEvent は
+  // 「その声部の events 配列の中の位置」を意味する（`.claude/specs/voice2-arc-support/design.md` §2 案A）ため、
+  // 声部1の events が増減しても指す先は動かない。逆に、ここで voices まで書き換えると
+  // 声部2の弧が無関係にずれてしまう（＝直してはいけない）。声部2側の削除は
+  // deleteVoiceEventFromMeasures が担当する。
   next[measure].events.splice(index, 1);
   next.forEach((m) => {
     m.events = m.events.map((ev): NoteEvent => {
@@ -108,6 +117,130 @@ export function deleteEventFromMeasures(
       }
       return patched2;
     });
+  });
+  return next;
+}
+
+/**
+ * 1つの声部の events から「削除された区間」を、その声部の arcs / hairpins へ反映する。
+ *
+ * 弧（タイ/スラー）と松葉は「始点イベントに載り、終点を toEventIndex / endEvent で指す」形なので、
+ * events を splice すると指す先が黙ってずれる。ここでその後始末をする。
+ *
+ * - 消えた区間そのものを指していた参照 → その弧・松葉ごと除去する（宙に浮かせない）
+ * - 消えた区間より後ろを指していた参照 → shift ぶん繰り上げて同じ音符を指し続けるようにする
+ *
+ * @param events 付け替え対象の声部の events（この配列自体は書き換えない）
+ * @param measure 削除が起きた小節のインデックス（他の小節から張られた弧も対象にするため必要）
+ * @param removeStart 削除された区間の先頭インデックス
+ * @param removeEnd 削除された区間の末尾インデックス（この位置も含む）
+ * @param shift 後続を繰り上げる量（削除件数 − 置き換えで挿入した件数）
+ * @returns 変化が無ければ引数の events をそのまま返す（呼び出し側が「変わっていない」を参照比較で判定できる）
+ */
+function remapVoiceEventRefsAfterRemoval(
+  events: NoteEvent[],
+  measure: number,
+  removeStart: number,
+  removeEnd: number,
+  shift: number
+): NoteEvent[] {
+  let changed = false;
+  const nextEvents = events.map((ev): NoteEvent => {
+    let patched = ev;
+    if (ev.arcs?.length) {
+      const nextArcs = ev.arcs
+        .filter((a) => !(a.toMeasureIndex === measure && a.toEventIndex >= removeStart && a.toEventIndex <= removeEnd))
+        .map((a): TieArc =>
+          a.toMeasureIndex === measure && a.toEventIndex > removeEnd ? { ...a, toEventIndex: a.toEventIndex - shift } : a
+        );
+      if (nextArcs.length !== ev.arcs.length || nextArcs.some((a, i) => a !== ev.arcs![i])) {
+        patched = { ...patched, arcs: nextArcs.length ? nextArcs : undefined };
+      }
+    }
+    if (ev.hairpins?.length) {
+      const nextHairpins = ev.hairpins
+        .filter((h) => !(h.endMeasure === measure && h.endEvent >= removeStart && h.endEvent <= removeEnd))
+        .map((h): HairpinMark =>
+          h.endMeasure === measure && h.endEvent > removeEnd ? { ...h, endEvent: h.endEvent - shift } : h
+        );
+      if (nextHairpins.length !== ev.hairpins.length || nextHairpins.some((h, i) => h !== ev.hairpins![i])) {
+        patched = { ...patched, hairpins: nextHairpins.length ? nextHairpins : undefined };
+      }
+    }
+    if (patched !== ev) changed = true;
+    return patched;
+  });
+  return changed ? nextEvents : events;
+}
+
+/**
+ * 声部2以降（voices[voiceIndex]）の音符を1つ削除する。
+ *
+ * 声部1向けの deleteEventFromMeasures と同じ「連符グループごと休符へ置き換える」「弧・松葉の終点を
+ * 付け替える」仕様を、声部ローカルなインデックス解釈（`.claude/specs/voice2-arc-support/design.md` §2 案A）
+ * のまま実現する。走査するのは**同じ声部の events だけ**で、声部1（measure.events）には一切触れない。
+ *
+ * 空の voices[1] を作らないための注意（#112 の教訓）:
+ * withVoiceEventsUpdated は voices を必要な数まで生やしてしまうため、ここでは使わず、
+ * **実際に中身が変わった小節だけ**を差し替える。声部2を持たない小節はオブジェクトごと元の参照を返す。
+ *
+ * @param measures 対象パートの MeasureData 配列
+ * @param voiceIndex 削除対象の声部（1以上を想定。0 は deleteEventFromMeasures の担当）
+ * @param measure 削除対象イベントの小節インデックス
+ * @param index 削除対象イベントのインデックス（その声部の events 内での位置）
+ * @param defaultRestKey 連符グループ削除時、休符の描画位置が決まらない場合に使う既定キー
+ * @returns 変更後の MeasureData 配列。範囲外指定などで変更が無い場合は引数の measures をそのまま返す。
+ */
+export function deleteVoiceEventFromMeasures(
+  measures: MeasureData[],
+  voiceIndex: number,
+  measure: number,
+  index: number,
+  defaultRestKey: string
+): MeasureData[] {
+  if (voiceIndex <= 0) {
+    return deleteEventFromMeasures(measures, measure, index, undefined, defaultRestKey);
+  }
+  if (measure < 0 || measure >= measures.length) return measures;
+  const voiceEvents = measures[measure].voices?.[voiceIndex]?.events;
+  if (!voiceEvents || index < 0 || index >= voiceEvents.length) return measures;
+
+  // 連符（3連符など）の中の1つを消すときは、グループ全体を同じ長さの通常の休符へ置き換える
+  // （声部1・単旋律譜と同じ仕様）。1つだけ消すと残りが tuplet.id を持ったまま半端な音価で残り、
+  // 描画（VexFlow の Tuplet）と再生の拍計算が崩れてしまうため。
+  const tupletDeletion = voiceEvents[index].tuplet
+    ? planTupletGroupDeletion(voiceEvents, index, defaultRestKey)
+    : null;
+  const removeStart = tupletDeletion ? tupletDeletion.groupStart : index;
+  const removeEnd = tupletDeletion ? tupletDeletion.groupEnd : index;
+  const insertCount = tupletDeletion ? tupletDeletion.replacement.length : 0;
+  // 後続を繰り上げる量は「消した件数 − 置き換えで挿入した件数」。
+  // 連符グループ削除は同じ拍数の休符を挿し込むので、グループ件数そのものではない
+  // （例: 8分3連符3個 → 4分休符1個 なら 3-1=2 ぶん繰り上げる）。
+  const shift = (removeEnd - removeStart + 1) - insertCount;
+
+  const next = measures.map((m, mi) => {
+    // 声部2を持たない小節はここで打ち切る。触ると空の voices[1] が生えて「多声小節」と判定され、
+    // 符幹の向きや休符の縦位置が勝手に変わってしまう（#112 の事故）。
+    if (!m.voices?.[voiceIndex]) return m;
+
+    const events = getVoiceEvents(m, voiceIndex);
+    const remapped = remapVoiceEventRefsAfterRemoval(events, measure, removeStart, removeEnd, shift);
+    const isTargetMeasure = mi === measure;
+    if (remapped === events && !isTargetMeasure) return m;
+
+    const nextEvents = [...remapped];
+    if (isTargetMeasure) {
+      if (tupletDeletion) {
+        nextEvents.splice(removeStart, removeEnd - removeStart + 1, ...tupletDeletion.replacement);
+      } else {
+        nextEvents.splice(index, 1);
+      }
+    }
+    return {
+      ...m,
+      voices: m.voices.map((voice, vi) => (vi === voiceIndex ? { ...voice, events: nextEvents } : voice)),
+    };
   });
   return next;
 }

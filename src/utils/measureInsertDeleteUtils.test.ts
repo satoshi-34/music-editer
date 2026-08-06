@@ -165,6 +165,54 @@ describe('deleteMeasureAt', () => {
     expect(next[1].events[0].hairpins).toEqual([{ type: 'dim', endMeasure: 0, endEvent: 0 }]);
   });
 
+  // 声部2の toMeasureIndex / endMeasure も付け替わることの固定テスト（Issue #188 受入条件5）。
+  // remapMeasureRefs は既に voices を走査済みなので実装は変更していない。ここで固定して、
+  // 将来この走査が落ちたら気づけるようにする。
+  it('multi-voice小節のvoices内イベントのarcs/hairpinsも-1する', () => {
+    const ms: MeasureData[] = [
+      {
+        events: [ev()],
+        voices: [
+          { id: 'voice-1', events: [ev()] },
+          {
+            id: 'voice-2',
+            stemDirection: 'down',
+            events: [ev({
+              arcs: [{ fromKey: 'c/3', toKey: 'c/3', toMeasureIndex: 2, toEventIndex: 0, kind: 'tie' }],
+              hairpins: [{ type: 'cresc', endMeasure: 2, endEvent: 0 }],
+            })],
+          },
+        ],
+      },
+      { events: [ev()] },
+      { events: [ev()] },
+    ];
+    const next = deleteMeasureAt(ms, 1);
+    expect(next[0].voices?.[1].events[0].arcs).toEqual([
+      { fromKey: 'c/3', toKey: 'c/3', toMeasureIndex: 1, toEventIndex: 0, kind: 'tie' },
+    ]);
+    expect(next[0].voices?.[1].events[0].hairpins).toEqual([{ type: 'cresc', endMeasure: 1, endEvent: 0 }]);
+  });
+
+  it('削除した小節を終点とする声部2のarcも除去する', () => {
+    const ms: MeasureData[] = [
+      {
+        events: [ev()],
+        voices: [
+          { id: 'voice-1', events: [ev()] },
+          {
+            id: 'voice-2',
+            stemDirection: 'down',
+            events: [ev({ arcs: [{ fromKey: 'c/3', toKey: 'c/3', toMeasureIndex: 1, toEventIndex: 0, kind: 'tie' }] })],
+          },
+        ],
+      },
+      { events: [ev()] },
+    ];
+    const next = deleteMeasureAt(ms, 1);
+    expect(next[0].voices?.[1].events[0].arcs).toBeUndefined();
+  });
+
   it('元の配列を書き換えない（イミュータブル）', () => {
     const ms: MeasureData[] = [{ events: [ev()] }, { events: [ev()] }];
     const before = JSON.stringify(ms);
