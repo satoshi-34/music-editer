@@ -23,7 +23,7 @@ import {
 import { computeArcGeometry } from './arcUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
-import { deleteEventFromMeasures } from '../utils/noteDeletionUtils';
+import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
 import { computeShiftedKeys, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
   parseTimeSignatureInput,
@@ -79,7 +79,7 @@ import {
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { drawLyricsEntry } from '../utils/lyricsRenderUtils';
 import { computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
-import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletGroupDeletion } from '../utils/tupletUtils';
+import { buildTupletGroupPlan, buildTupletRestReplacement } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
@@ -1367,33 +1367,9 @@ export default function PianoSystemCanvas({
       // 流れてしまう恐れがあるため、ここで打ち切る。
       if (sel.voiceIndex) {
         if (e.key === 'Delete' || e.key === 'Backspace') {
-          setS(prev => {
-            if (measure >= prev.length) return prev;
-            const n = prev.map(cloneMeasureData);
-            const voiceEvents = n[measure].voices?.[sel.voiceIndex!]?.events;
-            if (!voiceEvents || index >= voiceEvents.length) return prev;
-            // 連符（3連符など）の中の1つを消すときは、グループ全体を同じ長さの
-            // 通常の休符へ置き換える（声部1・単旋律譜と同じ仕様）。
-            // 1つだけ消すと残りのイベントが tuplet.id を持ったまま半端な音価で残り、
-            // 描画（VexFlow の Tuplet）と再生の拍計算が崩れてしまうため。
-            const tupletDeletion = voiceEvents[index].tuplet
-              ? planTupletGroupDeletion(voiceEvents, index, defaultRestKeyForClef(clef))
-              : null;
-            n[measure] = withVoiceEventsUpdated(n[measure], sel.voiceIndex!, (events) => {
-              const copy = [...events];
-              if (tupletDeletion) {
-                copy.splice(
-                  tupletDeletion.groupStart,
-                  tupletDeletion.groupEnd - tupletDeletion.groupStart + 1,
-                  ...tupletDeletion.replacement
-                );
-              } else {
-                copy.splice(index, 1);
-              }
-              return copy;
-            });
-            return n;
-          });
+          // 声部2の削除は「素の splice」ではなく、弧（タイ/スラー）・松葉の終点まで
+          // 面倒を見る共通関数へ通す（Issue #188）。連符グループの置き換えもこの中で行う。
+          setS(prev => deleteVoiceEventFromMeasures(prev, sel.voiceIndex!, measure, index, defaultRestKeyForClef(clef)));
           closeEventEditOverlaysFor(partIndex, measure, index, voiceIndex);
           setSelected(null); e.preventDefault(); return;
         }

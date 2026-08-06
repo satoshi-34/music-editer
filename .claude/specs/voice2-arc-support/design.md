@@ -530,3 +530,72 @@ Issue の「注意」で指摘された難所を、コードを読んだうえ�
   淡色化の対象に加えるかは浄書上の好みが絡むため、段3（選択・編集の解禁）または段4で扱うのが自然。
 - `selectedArc` / `selectedHairpin` / `cpDragRef` / `epDragRef` への `voiceIndex` 追加は段3のまま。
   段1で入れた `arcIdentityMap` から `voiceIndex` を取れるので、配線の起点はそろっている。
+
+---
+
+## 16. 実装記録: 段2（Issue #188・2026-08-06）
+
+段2「編集整合性ユーティリティの声部対応」を実装した。**入力・選択・ドラッグ編集は解禁していない**（段3のまま）。
+ユーザーから見た変化は「声部2の音符を Delete したとき、その声部の弧・松葉が正しく追従するようになった」ことだけで、
+弧を新しく張る手段は依然として無い。
+
+### 16-1. 実装した内容
+
+| 対象 | 変更 |
+| --- | --- |
+| `noteDeletionUtils.ts` | `deleteVoiceEventFromMeasures(measures, voiceIndex, measure, index, defaultRestKey)` を新設。声部2以降の削除で、同じ声部の `arcs` / `hairpins` の終点除去・後続の繰り上げ・連符グループ範囲の繰り上げまで面倒を見る。`voiceIndex <= 0` のときは既存の `deleteEventFromMeasures` へ委譲する |
+| 同 | 索引付け替えの純関数 `remapVoiceEventRefsAfterRemoval` を内部に切り出した。変化が無ければ**引数の配列をそのまま返す**ので、呼び出し側は参照比較で「変わっていない」を判定できる |
+| 同 `deleteEventFromMeasures` | ロジックは変更なし。「なぜ `m.events` だけ見ればよいのか（案Aでは声部2の索引は声部1の増減と無関係）」をコメントで残した |
+| `PianoSystemCanvas.tsx` 声部2の Delete | 素の `splice` ＋ `withVoiceEventsUpdated` の直書き（旧 `:1363-1394`）を `deleteVoiceEventFromMeasures` の呼び出し1行に置き換えた |
+
+### 16-2. 実装時に決めたこと（設計メモの記述との差分）
+
+1. **連符グループ削除の繰り上げ量は「削除件数 − 置き換えで挿入した件数」にした。**
+   §8 の表には「`groupEnd - groupStart + 1` 件ぶんずらす」と書いてあるが、`planTupletGroupDeletion` は
+   グループを削除するだけでなく**同じ拍数の通常休符へ置き換える**ため、配列長の変化はグループ件数ではない。
+   例: 8分3連符3個（計1拍）→ 4分休符1個 なので繰り上げ量は 3 ではなく **2**。
+   §8 の値をそのまま実装すると、後続を指す弧が1つ手前の音符を指す壊れ方になる。
+   設計判断の変更ではなく算術上の書き損じと判断して正しい式を採り、着手前に Issue #188 へ申し送った。
+2. **`withVoiceEventsUpdated` は使わない。** この関数は `voices` を `voiceIndex` の数まで生やすため、
+   全小節をなめる用途では声部2を持たない小節に空の `voices[1]` を作ってしまう（#112 の事故）。
+   `deleteVoiceEventFromMeasures` は `m.voices?.[voiceIndex]` が無い小節を**オブジェクトごと元の参照で返す**。
+   `pitchShiftUtils` が同じ理由で採っている形にそろえてある。
+3. **声部1のデータには一切触れない。** 変更が起きた小節でも `measure.events` と `voices[0]` は参照ごと据え置く
+   （テストで `toBe` により固定した）。案A（声部ローカル索引）では、これが「正しい」であって「手抜き」ではない。
+
+### 16-3. テスト
+
+- `src/utils/noteDeletionUtils.test.ts` に `deleteVoiceEventFromMeasures` の 11 件を追加
+  - 受入1: 弧の終点を消すと弧も消える／声部1は参照ごと不変
+  - 受入2: 終点より前を消すと `toEventIndex` が繰り上がり、繰り上げ後も同じ音符（`keys`）を指す
+  - 受入3: 連符グループ削除の繰り上げ量が「削除件数 − 挿入件数」（3連符なら 2）
+  - 連符グループ自体を終点とする弧はグループ削除で除去される
+  - 受入4: 声部2を持たない小節に空の `voices[1]` を作らない（`toBe` で参照も固定）
+  - 別の小節から張られた弧も終点小節の削除に追従する／松葉の `endEvent` も同様
+  - 声部1の弧は同じ索引を指していても書き換えない（誤爆防止）
+  - 範囲外は no-op・`voiceIndex=0` は委譲・イミュータブル
+  - あわせて `deleteEventFromMeasures`（声部1）側にも「声部2の弧を巻き込まない」1件を追加
+- `src/utils/measureInsertDeleteUtils.test.ts` に受入5の固定テスト2件（`deleteMeasureAt` で声部2の
+  `toMeasureIndex` / `endMeasure` が -1 される／削除した小節を終点とする声部2の弧が除去される）
+- `src/utils/pitchShiftUtils.test.ts` に「声部2の音高移動で `fromKey`/`toKey` が同じ声部の中だけ追従する」1件
+- `measureInsertDeleteUtils` / `pitchShiftUtils` の**実装は変更していない**（テストで固定しただけ）
+
+### 16-4. ブラウザ確認（2026-08-06・共有 dev サーバー）
+
+段1で使った検証譜面（声部2にタイ・スラー・段またぎタイ）に、連符グループを含む小節を足して確認した。
+
+- 声部2アクティブで**タイの終点の音符**を選んで Delete → タイが消え、同じ小節の**スラーは残り**、
+  繰り上がった索引（`toEventIndex` 3→2）で引き続き同じ音符を指した。声部1の events と弧は不変
+- 声部2の**8分3連符グループ**の1つを選んで Delete → グループが4分休符1個に置き換わり、
+  後続のスラーが `fromEvent` 3→1・`toEventIndex` 4→2 へ繰り上がって同じ2音を結び続けた
+- 声部2を持たない小節（3小節目以降）に `voices` が生えていないことを保存データで確認
+- コンソールエラー 0 件
+
+### 16-5. 段3以降への申し送り
+
+- **`deleteEventFromMeasures`（声部1・単旋律譜）は、連符グループ削除のとき arcs / hairpins の付け替えを
+  一切していない**（`tuplet` 分岐で早期 return する）。声部1でも「連符グループを消すと後続を指す弧がずれる」
+  既存バグだが、本Issueのスコープ（声部2）外のため直していない。別Issue化の判断を運用者へ依頼済み。
+- 弧・松葉の **Delete キーによる削除**（`selectedArc` / `selectedHairpin` 経由・`PianoSystemCanvas.tsx:1309`,
+  `:1329`）は依然として `partData[m].events[e]` 直書きのまま。段1で声部2の弧に当たり判定を作っていないので
+  現状は到達しないが、段3でガードを外すときに必ず声部対応が要る。
