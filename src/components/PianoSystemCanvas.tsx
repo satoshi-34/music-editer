@@ -8,7 +8,10 @@ import {
   GraceNote, GraceNoteGroup, Ornament,
 } from 'vexflow';
 import type { Tool } from './Palette';
-import type { MeasureData, TieArc, HairpinMark, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind, ArticulationMarking } from '../types/storage';
+// NoteEvent はこのファイル内で編集頻度の高いプロパティだけを抜粋した同名の型を独自定義している。
+// 保存データそのものを扱うヘルパー（声部をまたぐ書き込み先の解決など）では、
+// ストレージ側の完全な型が要るので StoredNoteEvent という別名で読み込む。
+import type { MeasureData, NoteEvent as StoredNoteEvent, TieArc, HairpinMark, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind, ArticulationMarking } from '../types/storage';
 import { applyOrnamentToEvent, ornamentToVexCode } from '../utils/ornamentUtils';
 import type { ClefType } from './clefUtils';
 import {
@@ -136,6 +139,41 @@ type RenderedVoiceEntry = {
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
 type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number; voiceIndex?: number } | null;
+
+/**
+ * 弧（タイ／スラー）・松葉が載っているイベントを「その弧が属する声部の中で」書き換える（Issue #190）。
+ *
+ * 弧の終点（toEventIndex / endEvent）は、始点と同じ声部の events 配列の位置を指す
+ * （設計メモ `.claude/specs/voice2-arc-support/design.md` の案A）。
+ * したがって保存先も必ず同じ声部にそろえないと、声部2をドラッグしたのに
+ * 声部1の同じ位置のイベントを書き換える「無言のデータ破壊」が起きる（#112 のタイ誤爆と同じ形）。
+ *
+ * - 対象のイベントが実在しないとき、または compute が null を返したときは null を返す。
+ *   呼び出し側は「何もしない（prev をそのまま返す）」を選べる
+ * - withVoiceEventsUpdated は voices を voiceIndex の数まで生やすが、ここは
+ *   「対象イベントが実在する小節」しか通らないため、空の voices[1] は作られない（#112 の教訓）
+ */
+function updateVoiceEventInMeasures(
+  measures: MeasureData[],
+  voiceIndex: number,
+  measureIndex: number,
+  eventIndex: number,
+  compute: (event: StoredNoteEvent) => StoredNoteEvent | null,
+): MeasureData[] | null {
+  const target = measures[measureIndex];
+  if (!target) return null;
+  const current = getVoiceEvents(target, voiceIndex)[eventIndex];
+  if (!current) return null;
+  const nextEvent = compute(current);
+  if (!nextEvent) return null;
+  const next = measures.map(cloneMeasureData);
+  next[measureIndex] = withVoiceEventsUpdated(next[measureIndex], voiceIndex, (events) => {
+    const copy = [...events];
+    copy[eventIndex] = nextEvent;
+    return copy;
+  });
+  return next;
+}
 
 export type PartConfig = {
   clef: ClefType;
@@ -1037,22 +1075,24 @@ export default function PianoSystemCanvas({
     overlayY: number;
   } | null>(null);
 
+  // 選択中の弧。voiceIndex は「その弧が載っている声部」（Issue #190）。
+  // これが無いと、声部2の弧を選んだのに声部1の同じ位置の弧を消してしまう。
   const [selectedArc, setSelectedArc] = useState<{
-    partIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
+    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
   } | null>(null);
-  const selectedArcRef = useRef<{ partIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null>(null);
+  const selectedArcRef = useRef<{ partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null>(null);
   useEffect(() => { selectedArcRef.current = selectedArc; }, [selectedArc]);
 
   // 選択中の松葉（ヘアピン）。弧の選択と同じ「クリックで選択→Deleteで削除」方式
   const [selectedHairpin, setSelectedHairpin] = useState<{
-    partIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number;
+    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number;
   } | null>(null);
-  const selectedHairpinRef = useRef<{ partIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null>(null);
+  const selectedHairpinRef = useRef<{ partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null>(null);
   useEffect(() => { selectedHairpinRef.current = selectedHairpin; }, [selectedHairpin]);
 
   // 弧の直接ドラッグ状態（cpDyOffset をリアルタイム調節 / 反転検知）
   const cpDragRef = useRef<{
-    partIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
+    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
     startSvgY: number; originalOffset: number;
     baseArcKey: string;   // arcGeomMap 検索用ベースキー（suffix なし）
     flipApplied: boolean; // ドラッグ中に方向反転が起きたか
@@ -1061,7 +1101,7 @@ export default function PianoSystemCanvas({
 
   // 始点・終点ハンドルのドラッグ状態
   const epDragRef = useRef<{
-    partIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
+    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
     endpoint: 'start' | 'end';
     segment: '' | '-1' | '-2';
     baseArcKey: string;
@@ -1069,9 +1109,11 @@ export default function PianoSystemCanvas({
     originalDx: number; originalDy: number;
   } | null>(null);
 
-  // タイドラッグの開始情報（再レンダリングを発生させないためref管理）
+  // タイドラッグの開始情報（再レンダリングを発生させないためref管理）。
+  // voiceIndex は「ドラッグを開始した時点のアクティブ声部」。確定（mouseup）時に
+  // 終点側の声部と一致するかを確かめ、違えば何もしない（声部またぎの弧は許可しない・設計メモ §4）。
   const tieStartRef = useRef<{
-    partIndex: number; absoluteIndex: number; noteIndex: number;
+    partIndex: number; voiceIndex: number; absoluteIndex: number; noteIndex: number;
     startKey: string; // ドラッグを開始した符頭の key
     noteX: number; noteY: number; stemDir: number;
   } | null>(null);
@@ -1091,6 +1133,14 @@ export default function PianoSystemCanvas({
   }, []);
 
   useEffect(()=>{selRef.current=selected;},[selected]);
+
+  // 声部を切り替えたら、いま選んでいる弧・松葉が別の声部のものになった場合は選択を解除する（Issue #190）。
+  // 弧を掴めるのはアクティブ声部のものだけなので、選択だけが残ると
+  // 「青いまま掴めない」「見えていない声部の弧が Delete で消える」というちぐはぐな状態になる。
+  useEffect(()=>{
+    setSelectedArc(prev=>(prev&&prev.voiceIndex!==activeVoiceIndex?null:prev));
+    setSelectedHairpin(prev=>(prev&&prev.voiceIndex!==activeVoiceIndex?null:prev));
+  },[activeVoiceIndex]);
 
   // 選択の一意化（SELECTION_CLAIMED_EVENT のコメント参照）。
   // このインスタンスで何かが選択されたら、他のインスタンスへ「選択を手放して」と通知する。
@@ -1308,12 +1358,18 @@ export default function PianoSystemCanvas({
       if(arcSel){
         if(e.key==='Delete'||e.key==='Backspace'){
           setPartsScore(prev=>{
+            // 弧が載っている声部の中だけを書き換える（Issue #190）。
+            // 声部1（voiceIndex 0）のときは measure.events を触るので従来と同じ挙動になる。
+            const partData=updateVoiceEventInMeasures(
+              prev[arcSel.partIndex]??[], arcSel.voiceIndex, arcSel.fromMeasure, arcSel.fromEvent,
+              (ev)=>{
+                if(!ev.arcs)return null;
+                const newArcs=ev.arcs.filter((_,i)=>i!==arcSel.arcIndex);
+                return {...ev,arcs:newArcs.length?newArcs:undefined};
+              },
+            );
+            if(!partData)return prev;
             const next=[...prev];
-            const partData=(prev[arcSel.partIndex]??[]).map(cloneMeasureData);
-            const ev=partData[arcSel.fromMeasure]?.events[arcSel.fromEvent];
-            if(!ev?.arcs)return prev;
-            const newArcs=ev.arcs.filter((_,i)=>i!==arcSel.arcIndex);
-            partData[arcSel.fromMeasure].events[arcSel.fromEvent]={...ev,arcs:newArcs.length?newArcs:undefined};
             next[arcSel.partIndex]=partData;
             return next;
           });
@@ -1328,12 +1384,17 @@ export default function PianoSystemCanvas({
       if(hpSel){
         if(e.key==='Delete'||e.key==='Backspace'){
           setPartsScore(prev=>{
+            // 弧と同じく、松葉も「載っている声部」の中だけを書き換える（Issue #190）。
+            const partData=updateVoiceEventInMeasures(
+              prev[hpSel.partIndex]??[], hpSel.voiceIndex, hpSel.fromMeasure, hpSel.fromEvent,
+              (ev)=>{
+                if(!ev.hairpins)return null;
+                const newHairpins=ev.hairpins.filter((_,i)=>i!==hpSel.hairpinIndex);
+                return {...ev,hairpins:newHairpins.length?newHairpins:undefined};
+              },
+            );
+            if(!partData)return prev;
             const next=[...prev];
-            const partData=(prev[hpSel.partIndex]??[]).map(cloneMeasureData);
-            const ev=partData[hpSel.fromMeasure]?.events[hpSel.fromEvent];
-            if(!ev?.hairpins)return prev;
-            const newHairpins=ev.hairpins.filter((_,i)=>i!==hpSel.hairpinIndex);
-            partData[hpSel.fromMeasure].events[hpSel.fromEvent]={...ev,hairpins:newHairpins.length?newHairpins:undefined};
             next[hpSel.partIndex]=partData;
             return next;
           });
@@ -1719,21 +1780,26 @@ export default function PianoSystemCanvas({
         const newDx=drag.originalDx+(svgX-drag.startSvgX);
         const newDy=drag.originalDy+(svgY-drag.startSvgY);
         setPartsScore(prev=>{
+          // 端点ドラッグの保存先も、弧が載っている声部にそろえる（Issue #190）。
+          const partData=updateVoiceEventInMeasures(
+            prev[drag.partIndex]??[], drag.voiceIndex, drag.fromMeasure, drag.fromEvent,
+            (ev2)=>{
+              if(!ev2.arcs?.[drag.arcIndex])return null;
+              const patchedArcs=[...ev2.arcs];
+              const current=patchedArcs[drag.arcIndex];
+              patchedArcs[drag.arcIndex]=
+                drag.segment==='-1'&&drag.endpoint==='end'
+                  ?{...current,breakEndDx:newDx,breakEndDy:newDy}
+                  :drag.segment==='-2'&&drag.endpoint==='start'
+                    ?{...current,breakStartDx:newDx,breakStartDy:newDy}
+                    :drag.endpoint==='start'
+                      ?{...current,startDx:newDx,startDy:newDy}
+                      :{...current,endDx:newDx,endDy:newDy};
+              return {...ev2,arcs:patchedArcs};
+            },
+          );
+          if(!partData)return prev;
           const next=[...prev];
-          const partData=(prev[drag.partIndex]??[]).map(cloneMeasureData);
-          const ev2=partData[drag.fromMeasure]?.events[drag.fromEvent];
-          if(!ev2?.arcs?.[drag.arcIndex])return prev;
-          const patchedArcs=[...ev2.arcs];
-          const current=patchedArcs[drag.arcIndex];
-          patchedArcs[drag.arcIndex]=
-            drag.segment==='-1'&&drag.endpoint==='end'
-              ?{...current,breakEndDx:newDx,breakEndDy:newDy}
-              :drag.segment==='-2'&&drag.endpoint==='start'
-                ?{...current,breakStartDx:newDx,breakStartDy:newDy}
-                :drag.endpoint==='start'
-                  ?{...current,startDx:newDx,startDy:newDy}
-                  :{...current,endDx:newDx,endDy:newDy};
-          partData[drag.fromMeasure].events[drag.fromEvent]={...ev2,arcs:patchedArcs};
           next[drag.partIndex]=partData;
           return next;
         });
@@ -1746,20 +1812,25 @@ export default function PianoSystemCanvas({
         const{y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
         const newOffset=drag.originalOffset+(svgY-drag.startSvgY);
         setPartsScore(prev=>{
+          // 曲率ドラッグ（向き反転を含む）の保存先も声部にそろえる（Issue #190）。
+          const partData=updateVoiceEventInMeasures(
+            prev[drag.partIndex]??[], drag.voiceIndex, drag.fromMeasure, drag.fromEvent,
+            (ev2)=>{
+              if(!ev2.arcs?.[drag.arcIndex])return null;
+              const patchedArcs=[...ev2.arcs];
+              const current=patchedArcs[drag.arcIndex];
+              // 段またぎ第2セグメントをドラッグした場合は cpDyOffset2 に保存（第1セグメントとは独立）
+              const offsetPatch=drag.segment==='-2'?{cpDyOffset2:newOffset}:{cpDyOffset:newOffset};
+              patchedArcs[drag.arcIndex]={
+                ...current,
+                ...offsetPatch,
+                ...(drag.flipApplied?{flipDirection:!current.flipDirection}:{}),
+              };
+              return {...ev2,arcs:patchedArcs};
+            },
+          );
+          if(!partData)return prev;
           const next=[...prev];
-          const partData=(prev[drag.partIndex]??[]).map(cloneMeasureData);
-          const ev2=partData[drag.fromMeasure]?.events[drag.fromEvent];
-          if(!ev2?.arcs?.[drag.arcIndex])return prev;
-          const patchedArcs=[...ev2.arcs];
-          const current=patchedArcs[drag.arcIndex];
-          // 段またぎ第2セグメントをドラッグした場合は cpDyOffset2 に保存（第1セグメントとは独立）
-          const offsetPatch=drag.segment==='-2'?{cpDyOffset2:newOffset}:{cpDyOffset:newOffset};
-          patchedArcs[drag.arcIndex]={
-            ...current,
-            ...offsetPatch,
-            ...(drag.flipApplied?{flipDirection:!current.flipDirection}:{}),
-          };
-          partData[drag.fromMeasure].events[drag.fromEvent]={...ev2,arcs:patchedArcs};
           next[drag.partIndex]=partData;
           return next;
         });
@@ -2204,11 +2275,13 @@ export default function PianoSystemCanvas({
       const baseKey=arcKey.replace(/-[12]$/,'');
       const seg=arcKey.endsWith('-1')?'-1':arcKey.endsWith('-2')?'-2':'' as ''|'-1'|'-2';
       const arcIdentity=arcIdentityMap.get(baseKey);
-      // Issue #186（段1）は「声部2の弧を描けるようにする」ところまでで、
-      // 選択・ドラッグ編集の解禁は段3で行う。声部2の弧に当たり判定を付けてしまうと、
-      // 掴んだ瞬間に声部1の同じ位置のイベントへ書き込んでしまう（保存先の配線は段3で行うため）。
-      // identity が引けない弧は tiedToNext 方式のレガシー弧で、これも従来から編集対象ではない。
-      const isEditableArc=arcIdentity!==undefined&&arcIdentity.voiceIndex===0;
+      // Issue #190（段3）で声部2の弧も掴めるようにした。保存先は arcIdentity.voiceIndex に
+      // そろえてあるので、声部1のデータを壊す心配はもう無い。
+      // ただし掴めるのは「いま編集中の声部」の弧だけにする。音符の当たり判定（.vf-note-hit）が
+      // アクティブ声部にしか作られない既存の考え方（Issue #105）とそろえるためで、
+      // 2声部が重なって描かれる小節で、淡色の裏声部の弧を誤って掴む事故も防げる。
+      // identity が引けない弧は tiedToNext 方式のレガシー弧で、これは従来から編集対象ではない。
+      const isEditableArc=arcIdentity!==undefined&&arcIdentity.voiceIndex===activeVoiceIndex;
 
       if(isEditableArc){
         const hitPath=document.createElementNS('http://www.w3.org/2000/svg','path');
@@ -2220,11 +2293,11 @@ export default function PianoSystemCanvas({
         hitPath.setAttribute('data-arc-key-hit',arcKey);hitPath.style.cursor='grab';
         hitPath.addEventListener('mousedown',(e)=>{
           e.preventDefault();e.stopPropagation();
-          const{partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai}=arcIdentity!;
-          setSelectedArc({partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
+          const{partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai}=arcIdentity!;
+          setSelectedArc({partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
           setSelected(null);
           const{y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-          cpDragRef.current={partIndex:pi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg};
+          cpDragRef.current={partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg};
         });
         hitPath.addEventListener('click',(e)=>{e.stopPropagation();});
         svgRoot.appendChild(hitPath);
@@ -2252,9 +2325,9 @@ export default function PianoSystemCanvas({
           h.setAttribute(epAttr,arcKey);
           h.addEventListener('mousedown',(e)=>{
             e.preventDefault();e.stopPropagation();
-            const{partIndex:pi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2}=arcIdentity!;
+            const{partIndex:pi2,voiceIndex:vi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2}=arcIdentity!;
             const{x:sx,y:sy}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-            epDragRef.current={partIndex:pi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,segment:seg,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy};
+            epDragRef.current={partIndex:pi2,voiceIndex:vi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,segment:seg,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy};
           });
           h.addEventListener('click',e=>e.stopPropagation());
           svgRoot.appendChild(h);
@@ -2809,32 +2882,39 @@ export default function PianoSystemCanvas({
           });
         };
 
-        // タイ／スラーを arcs[] に保存する（始点の NoteEvent に TieArc を追加）
-        const applyArc=(m1:number,n1:number,fromKey:string,m2:number,n2:number,toKey:string,kind:'tie'|'slur')=>{
+        // タイ／スラーを arcs[] に保存する（始点の NoteEvent に TieArc を追加）。
+        // fromVoice / toVoice はドラッグの始点・終点それぞれの声部（Issue #190）。
+        // 声部をまたぐ弧は許可しないので、一致しないときは何もしない（設計メモ §4 の確定裁定）。
+        // 呼び出し側（mouseup）でも同じ確認をしているが、「入口と確定の両方で塞ぐ」方針に合わせて
+        // ここでも塞ぐ（#112 で採ったのと同じ考え方）。
+        const applyArc=(fromVoice:number,toVoice:number,m1:number,n1:number,fromKey:string,m2:number,n2:number,toKey:string,kind:'tie'|'slur')=>{
+          if(fromVoice!==toVoice)return;
           if(m1>m2||(m1===m2&&n1>n2)){[m1,n1,m2,n2]=[m2,n2,m1,n1];[fromKey,toKey]=[toKey,fromKey];}
           if(m1===m2&&n1===n2)return;
           setScore(prev=>{
-            const next=prev.map(cloneMeasureData);
-            const startEv=next[m1]?.events[n1];
-            if(!startEv||startEv.isRest)return prev;
-            const arc:TieArc={fromKey,toKey,toMeasureIndex:m2,toEventIndex:n2,kind};
-            next[m1].events[n1]={...startEv,arcs:[...(startEv.arcs??[]),arc]};
-            return next;
+            // 弧は「始点が載っている声部の events」へ書き、終点も同じ声部の位置として数える（案A）。
+            const updated=updateVoiceEventInMeasures(prev,fromVoice,m1,n1,(startEv)=>{
+              if(startEv.isRest)return null;
+              const arc:TieArc={fromKey,toKey,toMeasureIndex:m2,toEventIndex:n2,kind};
+              return {...startEv,arcs:[...(startEv.arcs??[]),arc]};
+            });
+            return updated??prev;
           });
         };
 
         // 松葉（ヘアピン）を hairpins[] に保存する（始点の NoteEvent に追加）
-        const applyHairpin=(m1:number,n1:number,m2:number,n2:number,type:'cresc'|'dim')=>{
+        const applyHairpin=(fromVoice:number,toVoice:number,m1:number,n1:number,m2:number,n2:number,type:'cresc'|'dim')=>{
+          if(fromVoice!==toVoice)return;
           // 逆ドラッグ対応（始点 > 終点なら入れ替え）。音高キーは持たないので位置だけ入れ替える
           if(m1>m2||(m1===m2&&n1>n2)){[m1,n1,m2,n2]=[m2,n2,m1,n1];}
           if(m1===m2&&n1===n2)return;
           setScore(prev=>{
-            const next=prev.map(cloneMeasureData);
-            const startEv=next[m1]?.events[n1];
-            if(!startEv||startEv.isRest)return prev;
-            const hairpin:HairpinMark={type,endMeasure:m2,endEvent:n2};
-            next[m1].events[n1]={...startEv,hairpins:[...(startEv.hairpins??[]),hairpin]};
-            return next;
+            const updated=updateVoiceEventInMeasures(prev,fromVoice,m1,n1,(startEv)=>{
+              if(startEv.isRest)return null;
+              const hairpin:HairpinMark={type,endMeasure:m2,endEvent:n2};
+              return {...startEv,hairpins:[...(startEv.hairpins??[]),hairpin]};
+            });
+            return updated??prev;
           });
         };
 
@@ -3212,13 +3292,9 @@ export default function PianoSystemCanvas({
             // タイ／松葉ドラッグ開始
             hit.addEventListener('mousedown',e=>{
               if(disabled||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
-              // 声部2（下声）がアクティブなときは、タイ／松葉のドラッグを最初から受け付けない。
-              // 当たり判定はアクティブ声部（activeEvs/activeVfNotes）から作られるのに、
-              // 確定処理（applyArc / applyHairpin）の書き込み先は声部1（measure.events）の
-              // ままなので、そのまま通すと「声部2をドラッグしたのに声部1のデータへ
-              // arcs/hairpins が追記される」という無言のデータ破壊が起きる（Issue #112）。
-              // 声部2のタイ／スラー本対応は #169 で扱うため、ここでは何もしないのが安全。
-              if(activeVoiceIndex!==0)return;
+              // Issue #112 で入れていた「声部2ではタイ／松葉ドラッグを受け付けない」ガードは、
+              // 確定処理（applyArc / applyHairpin）の書き込み先を声部にそろえた Issue #190 で外した。
+              // 声部の記録は tieStartRef が持ち、確定時に終点の声部と一致するかを確かめる。
               if(activeEvs[j]?.isRest)return;
               e.preventDefault();
               const n=activeVfNotes[j] as unknown as Record<string,(...a:unknown[])=>unknown>;
@@ -3233,33 +3309,33 @@ export default function PianoSystemCanvas({
               // クリックしたY座標に最も近い符頭 key を特定する
               const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
               const startKey=findNearestKey(evKeys,ly,stave,k2l);
-              tieStartRef.current={partIndex:pi,absoluteIndex:absI,noteIndex:j,startKey,noteX,noteY,stemDir};
+              tieStartRef.current={partIndex:pi,voiceIndex:activeVoiceIndex,absoluteIndex:absI,noteIndex:j,startKey,noteX,noteY,stemDir};
             });
 
             // タイ／松葉ドラッグ確定
             hit.addEventListener('mouseup',e=>{
               if(disabled||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
-              // 開始側（mousedown）と同じ理由で、声部2アクティブ時は確定処理へ進ませない。
-              // 開始が記録されていない以上ここへ来ても何も起きないはずだが、
-              // 「書き込み経路の入口すべてで塞ぐ」ほうが将来の改修に対して安全なため両方に置く。
-              if(activeVoiceIndex!==0)return;
               const start=tieStartRef.current;
               tiePreviewPath.style.display='none';
               tieStartRef.current=null;
               if(!start||start.partIndex!==pi)return;
+              // 声部をまたぐ弧は許可しない（設計メモ §4 の確定裁定・Issue #190）。
+              // 終点側の当たり判定は常にアクティブ声部から作られるので、
+              // ドラッグ中に声部を切り替えたときだけここで弾かれる。
+              if(start.voiceIndex!==activeVoiceIndex)return;
               if(activeEvs[j]?.isRest)return;
               if(start.absoluteIndex===absI&&start.noteIndex===j)return;
               (e as MouseEvent).stopPropagation();
               if(tool.mode==='hairpin'){
                 // 松葉: 開始音符から終了音符までの区間を hairpins[] に保存する
-                applyHairpin(start.absoluteIndex,start.noteIndex,absI,j,tool.hairpinType);
+                applyHairpin(start.voiceIndex,activeVoiceIndex,start.absoluteIndex,start.noteIndex,absI,j,tool.hairpinType);
                 return;
               }
               // 終点符頭を特定し、開始符頭と同じ key ならタイ、異なればスラー
               const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
               const endKey=findNearestKey(activeEvs[j].keys,ly,stave,k2l);
               const kind=start.startKey===endKey?'tie':'slur';
-              applyArc(start.absoluteIndex,start.noteIndex,start.startKey,absI,j,endKey,kind);
+              applyArc(start.voiceIndex,activeVoiceIndex,start.absoluteIndex,start.noteIndex,start.startKey,absI,j,endKey,kind);
             });
 
             hit.addEventListener('click',e=>{
@@ -4278,10 +4354,10 @@ export default function PianoSystemCanvas({
       const cpDyOffset=arc.cpDyOffset??0;
       const startDx=arc.startDx??0,startDy=arc.startDy??0;
       const endDx=arc.endDx??0,endDy=arc.endDy??0;
-      // selectedArc はまだ声部を持たない（段3で追加予定）ので、
-      // 声部2の弧が声部1の選択に巻き込まれて青くならないよう声部1に限定する。
-      const isSelected=voiceIndex===0&&
+      // selectedArc は声部も持つ（Issue #190）。声部が違えば別の弧なので一致条件に含める。
+      const isSelected=
         selectedArc!==null&&
+        selectedArc.voiceIndex===voiceIndex&&
         selectedArc.partIndex===partIndex&&
         selectedArc.fromMeasure===startMeasureIdx&&
         selectedArc.fromEvent===startEventIdx&&
@@ -4404,7 +4480,7 @@ export default function PianoSystemCanvas({
             const y=dest.stave.getYForLine(toLine)+(upward?-3:3)+(arc.endDy??0);
             const edgeX=dest.stave.getX();
             const baseKey=arcKeyP({partIndex,voiceIndex,fromMeasure,fromEvent,arcIndex});
-            const selectedHere=voiceIndex===0&&selectedArc!==null&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
+            const selectedHere=selectedArc!==null&&selectedArc.voiceIndex===voiceIndex&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
             drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0);
           }catch{/* 壊れた旧arcでも他の譜面描画を止めない */}
       });
@@ -4418,20 +4494,21 @@ export default function PianoSystemCanvas({
       type R=Record<string,(...a:unknown[])=>unknown>;
       const x1=((startNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
       const x2=((dest.note as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
-      // selectedHairpin も声部を持たないため、選択の巻き込みを避けて声部1に限定する（段3で配線予定）。
-      const isSelected=voiceIndex===0&&
+      // selectedHairpin も声部を持つ（Issue #190）。
+      const isSelected=
         selectedHairpin!==null&&
+        selectedHairpin.voiceIndex===voiceIndex&&
         selectedHairpin.partIndex===partIndex&&
         selectedHairpin.fromMeasure===startMeasureIdx&&
         selectedHairpin.fromEvent===startEventIdx&&
         selectedHairpin.hairpinIndex===hairpinIndex;
       const offsetY=hairpin.offsetY??0;
-      // 段1では声部2の松葉は「描くだけ」。クリックできるようにすると、
-      // 選択→Delete で声部1側の松葉を消してしまう（保存先の配線は段3）。
-      const onClick=voiceIndex===0
+      // 松葉も弧と同じく、掴めるのはアクティブ声部のものだけにする（drawArcPathP のコメント参照）。
+      // onClick を渡さないと当たり判定パス自体が作られない（drawHairpinSegment の既存仕様）。
+      const onClick=voiceIndex===activeVoiceIndex
         ? ()=>{
             setSelectedArc(null);
-            setSelectedHairpin({partIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
+            setSelectedHairpin({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
           }
         : undefined;
       // 段またぎ判定はタイ/スラーと同じ基準（五線Y差 > 30px、または終点が始点より左）

@@ -8,7 +8,9 @@
 //   1. 声部2の events に持たせた弧が描画される（声部1の弧と取り違えない）
 //   2. 段をまたぐ声部2の弧が、開始側の段と終点側の段の両方にセグメントを描く
 //   3. 声部1だけの譜面の描画・当たり判定が従来のまま（リグレッション）
-//   4. 声部2の弧はまだ掴めない（当たり判定を作らない）＝ 段1は読み取り専用
+//   4. 編集していない声部の弧は掴めない（当たり判定を作らない）
+//      ※ 段1では「声部2は常に掴めない」だったが、段3（Issue #190）で
+//        「アクティブでない声部の弧は掴めない」へ意味が変わっている
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render } from '@testing-library/react';
 
@@ -143,11 +145,14 @@ describe('PianoSystemCanvas 声部2の弧の描画収集（Issue #186 段1）', 
     expect(svg.querySelectorAll('path[data-arc-key]')).toHaveLength(1);
   });
 
-  it('段1では声部2の弧を掴めない（当たり判定を作らない）＝ 読み取り専用', () => {
+  it('非アクティブ声部（ここでは声部2）の弧は掴めない（当たり判定を作らない）', () => {
+    // ここは activeVoiceIndex=0（声部1を編集中）で描画している。
+    // 段1では「保存先が声部1直書きだから掴ませない」という理由だったが、
+    // 保存先を声部にそろえた段3（Issue #190）以降は「編集していない声部の弧は掴ませない」
+    // （音符の当たり判定をアクティブ声部にしか作らない既存方針と同じ）という理由に変わった。
+    // 声部2をアクティブにすれば掴めることは PianoSystemCanvasVoice2ArcEditing.test.tsx で固定する。
     const { svg } = renderScore([twoVoiceMeasureWithVoice2Tie()]);
 
-    // 描画はされているが、ドラッグ用の透明な当たり判定パスは作らない。
-    // 掴めてしまうと、確定処理がまだ声部1直書きのため声部1のデータを壊す（配線は段3）。
     expect(svg.querySelector('path[data-arc-key-hit]')).toBeNull();
   });
 

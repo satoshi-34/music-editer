@@ -278,16 +278,26 @@ describe('PianoSystemCanvas 声部2の編集（Issue #112）', () => {
     expect(updated[0].events[0].symbolAdjust).toBeUndefined();
   });
 
-  it('声部2アクティブ中にタイをドラッグしても、どちらの声部のデータも変化しない', () => {
-    const { svg, onChange } = renderTwoVoiceScore({ mode: 'tie' }, 1);
+  it('声部2アクティブ中のタイのドラッグは、声部2側だけに保存される（Issue #190 で解禁）', async () => {
+    const { svg, onChange, data } = renderTwoVoiceScore({ mode: 'tie' }, 1);
 
     const from = noteHit(svg, 0);
     const to = noteHit(svg, 2);
     fireEvent.mouseDown(from, { clientX: centerXOf(from), clientY: yForLine(from, 4) });
     fireEvent.mouseUp(to, { clientX: centerXOf(to), clientY: yForLine(to, 4) });
 
-    // 声部2のタイは #169 で扱う。ここでは「声部1へ誤って書き込まない」ことだけを保証する。
-    expect(onChange).not.toHaveBeenCalled();
+    // #112 の時点では「声部1へ誤って書き込まない」ために何も起きない挙動が正しかったが、
+    // 保存先を声部にそろえた #190 からは、声部2の events へタイが入るのが正しい挙動になった。
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+    const updated = onChange.mock.calls.at(-1)![0] as MeasureData[];
+
+    expect(updated[0].voices?.[1]?.events[0].arcs?.length).toBe(1);
+    expect(updated[0].voices?.[1]?.events[0].arcs?.[0].toEventIndex).toBe(2);
+    // 声部1のイベントには何も追記されていない（無言のデータ破壊が起きていない）。
+    expect(updated[0].events).toEqual(data[0].events);
+    expect(updated[0].events[0].arcs).toBeUndefined();
   });
 
   it('（対照実験）声部1アクティブなら同じドラッグでタイが張られる', async () => {
