@@ -13,6 +13,7 @@
 // （＝段割り・ページ数）まで動いてしまうため。上限を決めておけばレイアウトへの影響を
 // 見積もれる範囲に抑えられる。
 import { SYSTEM_MAX_LABEL_WIDTH } from './measureLayoutUtils';
+import { ENGRAVING_TEXT_UNITS } from './engravingDefaults';
 
 /** ラベルの右端と五線の左端のあいだに空ける隙間（描画側の x 計算と同じ値を使う）。 */
 export const INSTRUMENT_LABEL_STAVE_GAP = 10;
@@ -32,9 +33,20 @@ export const INSTRUMENT_LABEL_MIN_FONT_SIZE = 7;
 /**
  * 段数（パート数）から基準フォントサイズを返す。段が多い総譜ほど1段の高さが低く、
  * 大きい文字だと隣の段のラベルとぶつかるため小さめにする（従来の描画と同じ判定）。
+ *
+ * Issue #202: 候補A の採用で 11 u → 17 u（1.7 sp）へ引き上げた。#195 の調査で
+ * 「パート名が 3.6〜5.4 pt しかなく、総譜で初見の第一印象を直撃する」と
+ * 最優先の乖離に挙がっていた項目。パート数が多いときの縮小（従来 9 u）も
+ * 同じ比率を保って 13.9 u にしてある。
+ *
+ * なお、この値を上げると `resolveInstrumentLabelLayout` が返す余白（areaWidth）も
+ * 広がりうる。上限 INSTRUMENT_LABEL_MAX_AREA_WIDTH までは自動で広げ、
+ * それでも入らない長いフル名はフォントを縮めて収める仕組みは変えていない。
  */
 export function instrumentLabelBaseFontSize(partCount: number): number {
-  return partCount > 10 ? 9 : 11;
+  return partCount > 10
+    ? ENGRAVING_TEXT_UNITS.instrumentLabelDense
+    : ENGRAVING_TEXT_UNITS.instrumentLabel;
 }
 
 // 文字ごとの「フォントサイズに対する幅の比率（em）」のおおよその値。

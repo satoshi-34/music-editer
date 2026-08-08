@@ -15,6 +15,7 @@ import {
   INSTRUMENT_LABEL_STAVE_GAP,
 } from './instrumentLabelUtils';
 import { SYSTEM_MAX_LABEL_WIDTH } from './measureLayoutUtils';
+import { ENGRAVING_TEXT_UNITS } from './engravingDefaults';
 
 describe('estimateInstrumentLabelWidth（ラベル幅の見積もり）', () => {
   it('文字数が増えるほど幅が広がる', () => {
@@ -74,17 +75,25 @@ describe('resolveInstrumentLabelLayout（余白幅とフォントサイズ）', 
 });
 
 describe('instrumentLabelBaseFontSize / instrumentLabelAreaWidthForScore', () => {
-  it('段数が10を超える大編成では基準フォントを小さくする', () => {
-    expect(instrumentLabelBaseFontSize(4)).toBe(11);
-    expect(instrumentLabelBaseFontSize(11)).toBe(9);
+  it('基準フォントは浄書の既定値（候補A）を使い、段数が10を超える大編成では小さくする', () => {
+    expect(instrumentLabelBaseFontSize(4)).toBe(ENGRAVING_TEXT_UNITS.instrumentLabel);
+    expect(instrumentLabelBaseFontSize(11)).toBe(ENGRAVING_TEXT_UNITS.instrumentLabelDense);
+    // 大編成のほうが小さいという関係は保つ
+    expect(instrumentLabelBaseFontSize(11)).toBeLessThan(instrumentLabelBaseFontSize(4));
   });
 
-  it('弦楽四重奏のフル名・略称では従来の余白から変わらない（段割りを動かさない）', () => {
+  it('弦楽四重奏のフル名・略称では余白がほとんど変わらない（段割りを動かさない）', () => {
+    // Issue #202 でパート名を 1.1 sp → 1.7 sp に拡大したため、余白は
+    // 従来の固定値（74）ぴったりではなくなった。ただし増えるのは 3 u 程度で、
+    // 増えたぶんは小節の幅が吸収する（実測で段数/ページは変わらないことを確認済み）。
+    // 上限（110）に張り付くほど広がると段割りが動きうるので、そこは見張る。
     const width = instrumentLabelAreaWidthForScore(
       ['Vn. I', 'Violin I', 'Vn. II', 'Violin II', 'Va.', 'Viola', 'Vc.', 'Cello'],
       4
     );
-    expect(width).toBe(SYSTEM_MAX_LABEL_WIDTH);
+    expect(width).toBeGreaterThanOrEqual(SYSTEM_MAX_LABEL_WIDTH);
+    expect(width).toBeLessThanOrEqual(SYSTEM_MAX_LABEL_WIDTH + 4);
+    expect(width).toBeLessThan(INSTRUMENT_LABEL_MAX_AREA_WIDTH);
   });
 
   it('ラベルが空の譜種（単旋律・ピアノ）は既定の余白を返す', () => {

@@ -15,6 +15,7 @@
 - [セットアップと起動](#セットアップと起動)（Docker / npm / テスト・lint / CI）
 - [主要機能](#-主要機能)（機能ごとの実装メモ）
 - [レイアウトの実装](#ページレイアウトの実装ポイント)（改段・小節幅・ズーム・余白・Safari）
+- [浄書の既定値を変えるとき](#浄書の既定値線の太さ文字の大きさ書体を変えるとき)（線の太さ・文字の大きさ・書体）
 - [実装のポイント（要点）](#実装のポイント要点)
 - [フォルダ構成（抜粋）](#フォルダ構成抜粋)
 - [最小チェック](#最小チェック)（手動の回帰確認手順）
@@ -369,6 +370,14 @@ npm run build                   # tsc -b && vite build
 - `ScorePage` が表示中の `.print-page` の高さを測り、最大値を `ScaledPageWrapper` へ渡す
 - `ScaledPageWrapper` は共通高さを紙面と外側ラッパーへ反映するため、タイトル欄の有無でページサイズが分かれない
 - A4を超える大編成譜では、必要な高さを保ったまま全ページを同じ高さへそろえる
+
+### 浄書の既定値（線の太さ・文字の大きさ・書体）を変えるとき
+- 値の正本は **`src/utils/engravingDefaults.ts`**。太さは sp（五線間隔比。1 sp = 10 SVG論理単位）で持ち、`spToUnits()` で換算する
+- 指定する場所は2系統に分かれる。**五線・符幹・加線・サブ括弧は App.css**（要素ごとの `stroke-width`）、**SVG に描く文字と小節線は描画コード**（`PianoSystemCanvas` / `lyricsRenderUtils` / `hairpinRenderUtils`）
+- App.css 側は `calc(1.3px * var(--score-stroke-scale))` の形で書く。この倍率が表示ウェイト（細/普通/太）と印刷時の細線化を効かせているので、固定値で書くと設定が無効になる
+- 小節線は VexFlow が「幅 1 の塗り矩形」で描くため CSS では変えられない。描画後に `widenThinBarlineRect()` で幅を書き換えている
+- **SVG の `text` 全部に CSS で書体を当てないこと**。音楽記号は Bravura のグリフを `<text>` で描いており、総譜の括弧の上下端は `g.vf-*` の外に出るため、豆腐（□）になる（`.claude/specs/engraving-defaults/design.md` §12）
+- `src/utils/engravingDefaults.test.ts` が、定数・App.css の数値・A/B スニペットの値の一致を見張っている
 
 ### レイアウトパイプラインの設計（Issue #69、設計のみ・未実装）
 休符位置・パート間隔・段の間隔・段数/ページ上限・縦配分・段割りの安定化と、レイアウトに起因する不具合が繰り返し発生してきた背景から、決定を単一のパイプライン（データ→段階的な純関数→座標木 `LayoutTree`→描画）へ再編する設計を `.claude/specs/layout-pipeline/design.md` にまとめた。現状は設計書のみで、実装は同ドキュメント7章の段階的なIssue分割（フェーズ1〜6）に沿って別Issueで行う。
