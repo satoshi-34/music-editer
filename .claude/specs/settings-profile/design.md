@@ -105,3 +105,14 @@ Issue #114 の「レイアウトタブの整理」方針に従い、ボタンの
   なった運用者の実体験による）。
 - `ScorePageSettingsProfile.test.tsx` の該当テストも新しいラベルへ更新した（テストの
   観点は変えていない）。
+
+## 追補: `resolveDefaultLayoutForScoreType` にパート間隔を追加し、ピアノの既定値を差し替え（Issue #199、2026-08-09）
+
+上の節で「`{ notationSizeMultiplier, systemRowGapPx }` を返す」としていた `resolveDefaultLayoutForScoreType(scoreType)` は、**`partSpacingOffsetPx` を加えた3項目**を返すようになった。
+
+- **なぜ増やしたか**: パート間隔（Issue #90）はこれまで「楽譜種別に依らず常に0」だったため固定定数 `PART_SPACING_OFFSET_DEFAULT_PX` を直接参照していたが、Issue #199 でピアノだけ +38px を既定値に持つことになった。種別ごとの既定値を解決する場所が2つに割れるのを避けるため、既に同じ役割を持つこの関数へ寄せた。ピアノ以外は従来どおり 0 を返す。
+- **ピアノの値の変更**: `systemRowGapPx` はピアノだけ `30` → **`-30`**、`partSpacingOffsetPx` はピアノだけ **`38`**（それ以外は0）。運用者がプライベートウィンドウで素の既定値を見ながら選定した実測値で、「段どうしは詰め、大譜表の内側に空気を入れる」という浄書慣行に沿った組み合わせ。
+- **適用経路は既存のまま**: 上の節が列挙した4箇所（`useState` 初期化・`handleScoreTypeChange`・`handleInstrumentationPresetChange`・`handleResetPageLayout`）に、`systemRowGapPx` と完全に同じ形で `partSpacingOffsetPx` の分岐を1つずつ足しただけで、判定ロジック（**localStorage キー未保存のときだけ適用する**）は変えていない。`getFactoryDefaultSettingsProfile()` も `resolveDefaultLayoutForScoreType('single').partSpacingOffsetPx` 経由に変えたが、'single' の値は 0 なので工場出荷プロファイルの内容は変わらない。
+- **テストの更新**: `ScorePageSystemsPerPage.test.tsx` のピアノの推奨段数は **3段 → 4段**（段の間隔が60px詰まった効果がパート間隔+38pxぶんの段高増を上回るため）。`ScorePageDefaultLayout.test.tsx` / `ScorePagePartSpacing.test.tsx` / `measureLayoutUtils.test.ts` のピアノ既定値のアサーションも新しい値へ更新した。
+
+設計の詳細・ブラウザ実測の結果は `.claude/specs/page-layout-controls/design.md` の Issue #199 の追補を参照。

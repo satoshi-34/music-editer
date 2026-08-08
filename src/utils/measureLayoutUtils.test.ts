@@ -14,6 +14,7 @@ import {
   systemRowSlotHeightPx,
   systemRowTopOffsetsPx,
   resolveDefaultLayoutForScoreType,
+  SYSTEM_ROW_GAP_MIN_PX,
 } from './measureLayoutUtils';
 
 describe('printScoreAreaWidthPx / worstCaseSystemContentBudget（ページ余白と本文幅の連動）', () => {
@@ -565,32 +566,46 @@ describe('systemRowSlotHeightPx / systemRowTopOffsetsPx（段の間隔を単一�
   });
 });
 
-describe('resolveDefaultLayoutForScoreType（楽譜種別ごとの音符サイズ・段間隔の既定値、Issue #49）', () => {
-  it('単旋律: 音符150%・段間隔0px', () => {
+describe('resolveDefaultLayoutForScoreType（楽譜種別ごとの音符サイズ・段間隔・パート間隔の既定値、Issue #49・#199）', () => {
+  it('単旋律: 音符150%・段間隔0px・パート間隔0px', () => {
     expect(resolveDefaultLayoutForScoreType('single')).toEqual({
       notationSizeMultiplier: 1.5,
       systemRowGapPx: 0,
+      partSpacingOffsetPx: 0,
     });
   });
 
-  it('ピアノ: 音符150%・段間隔30px', () => {
+  // ピアノだけは運用者の実測選定値（Issue #199）。段どうしは詰めて（-30px）、
+  // 大譜表の内側（右手と左手の間）に空気を入れる（+38px）という組み合わせ。
+  it('ピアノ: 音符150%・段間隔-30px・パート間隔38px', () => {
     expect(resolveDefaultLayoutForScoreType('piano')).toEqual({
       notationSizeMultiplier: 1.5,
-      systemRowGapPx: 30,
+      systemRowGapPx: -30,
+      partSpacingOffsetPx: 38,
     });
   });
 
-  it('弦楽四重奏: 音符100%・段間隔0px（従来どおり変えない）', () => {
+  it('弦楽四重奏: 音符100%・段間隔0px・パート間隔0px（従来どおり変えない）', () => {
     expect(resolveDefaultLayoutForScoreType('quartet')).toEqual({
       notationSizeMultiplier: 1,
       systemRowGapPx: 0,
+      partSpacingOffsetPx: 0,
     });
   });
 
-  it('編成譜: 音符100%・段間隔0px（従来どおり変えない）', () => {
+  it('編成譜: 音符100%・段間隔0px・パート間隔0px（従来どおり変えない）', () => {
     expect(resolveDefaultLayoutForScoreType('ensemble')).toEqual({
       notationSizeMultiplier: 1,
       systemRowGapPx: 0,
+      partSpacingOffsetPx: 0,
     });
+  });
+
+  // Issue #199: ピアノの既定値 -30px は旧スライダー下限そのものだったため、
+  // そこからさらに詰めたい運用者が調整できるよう下限を -60px へ拡張した。
+  // 「既定値が下限に張り付いていない」ことをテストで守る（下限を戻すと落ちる）。
+  it('段の間隔スライダーの下限は、ピアノの既定値よりさらに低い（下限に張り付かない）', () => {
+    expect(SYSTEM_ROW_GAP_MIN_PX).toBe(-60);
+    expect(SYSTEM_ROW_GAP_MIN_PX).toBeLessThan(resolveDefaultLayoutForScoreType('piano').systemRowGapPx);
   });
 });

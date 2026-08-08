@@ -100,7 +100,6 @@ import {
   SYSTEM_ROW_GAP_MAX_PX,
   PART_SPACING_OFFSET_MIN_PX,
   PART_SPACING_OFFSET_MAX_PX,
-  PART_SPACING_OFFSET_DEFAULT_PX,
   planSystemMeasureRanges,
   estimateEnsembleSystemHeightPx,
   computeEnsembleAutoFitMultiplier,
@@ -211,8 +210,9 @@ const SYSTEM_ROW_GAP_OVERRIDE_STEP_PX = 4;
 // 段内の隣接パート（右手/左手・四重奏の4段・編成譜のパート間）の間隔を、
 // 自動計算値（staveSpacingForPartCount）への加算補正として調整する。
 // 「段の間隔」（段と段の間）とは別軸の設定で、段内の全パート境界へ一律に適用する
-// （layout-pipeline/design.md 不変条件I3「パート間隔が均一」参照）。既定値0は
-// 自動計算のまま（従来どおりの見た目）。
+// （layout-pipeline/design.md 不変条件I3「パート間隔が均一」参照）。値0は
+// 自動計算のまま（ピアノ以外の既定値）。ピアノだけは大譜表の内側に空気を入れる
+// ため既定値が +38px（Issue #199）。
 const PART_SPACING_OFFSET_KEY = 'score-part-spacing-offset';
 // mm → px 換算（1mm ≒ 3.7795px、96dpi基準）。CSS の mm 単位と同じ換算率を使う。
 const MM_TO_PX = 96 / 25.4;
@@ -806,7 +806,7 @@ export default function ScorePage() {
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
     const nextInstrumentation = getDefaultInstrumentationForScoreType(newType);
     setScoreType(newType);
-    // 楽譜種別ごとの「音符の大きさ」「段の間隔」既定値（Issue #49）。
+    // 楽譜種別ごとの「音符の大きさ」「段の間隔」「パート間隔」既定値（Issue #49・#199）。
     // ユーザーがまだ該当スライダーを触っていない（localStorage未保存の）場合だけ
     // 切り替え先の既定値を適用し、既に明示的に設定済みの値は上書きしない。
     const defaultLayout = resolveDefaultLayoutForScoreType(newType);
@@ -815,6 +815,9 @@ export default function ScorePage() {
     }
     if (localStorage.getItem(SYSTEM_ROW_GAP_KEY) == null) {
       setSystemRowGapPx(defaultLayout.systemRowGapPx);
+    }
+    if (localStorage.getItem(PART_SPACING_OFFSET_KEY) == null) {
+      setPartSpacingOffsetPx(defaultLayout.partSpacingOffsetPx);
     }
     // 楽譜種別が変わるとパートの並び・IDが変わるため、パート譜表示は総譜表示へ戻す
     setPartExtractionId(null);
@@ -843,7 +846,7 @@ export default function ScorePage() {
     const previousParts = instrumentation.parts;
     setInstrumentation(nextInstrumentation);
     setScoreType(nextScoreType);
-    // 楽譜種別ごとの「音符の大きさ」「段の間隔」既定値（Issue #49）。
+    // 楽譜種別ごとの「音符の大きさ」「段の間隔」「パート間隔」既定値（Issue #49・#199）。
     // handleScoreTypeChange と同じく、ユーザーが未設定のときだけ適用する。
     const defaultLayout = resolveDefaultLayoutForScoreType(nextScoreType);
     if (localStorage.getItem(NOTATION_SIZE_KEY) == null) {
@@ -851,6 +854,9 @@ export default function ScorePage() {
     }
     if (localStorage.getItem(SYSTEM_ROW_GAP_KEY) == null) {
       setSystemRowGapPx(defaultLayout.systemRowGapPx);
+    }
+    if (localStorage.getItem(PART_SPACING_OFFSET_KEY) == null) {
+      setPartSpacingOffsetPx(defaultLayout.partSpacingOffsetPx);
     }
     // 編成テンプレートを切り替えるとパート ID が変わるため、パート譜表示は総譜表示へ戻す
     setPartExtractionId(null);
@@ -2614,15 +2620,16 @@ export default function ScorePage() {
       ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n))
       : resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier;
   });
-  // ユーザー設定（その他タブの「パート間隔」スライダー、-20〜30px、Issue #90）。
-  // 段の間隔と異なり楽譜種別による既定値の違いはなく、常に0（自動計算のまま）が既定。
+  // ユーザー設定（その他タブの「パート間隔」スライダー、-20〜50px、Issue #90）。
+  // 「段の間隔」と同じく楽譜種別ごとの既定値を持つ（ピアノは+38px、それ以外は0＝
+  // 自動計算のまま。Issue #199）。
   // 下の partCountForSystemLayout・ensembleAutoFitMultiplier から参照するため先に定義する。
   const [partSpacingOffsetPx, setPartSpacingOffsetPx] = useState<number>(() => {
     const raw = localStorage.getItem(PART_SPACING_OFFSET_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
     return Number.isFinite(n)
       ? Math.max(PART_SPACING_OFFSET_MIN_PX, Math.min(PART_SPACING_OFFSET_MAX_PX, n))
-      : PART_SPACING_OFFSET_DEFAULT_PX;
+      : resolveDefaultLayoutForScoreType(scoreType).partSpacingOffsetPx;
   });
   // 現在の楽譜種別で実際に描画される段（五線）の数。PianoSystemCanvas.tsx の
   // computeLayout() に渡す引数（parts.length）と一致させる必要がある
@@ -2753,24 +2760,27 @@ export default function ScorePage() {
       : resolveDefaultLayoutForScoreType(scoreType).systemRowGapPx;
   });
   // 「レイアウトをリセット」: ページ余白・段の間隔（全体・段ごと）・パート間隔の設定をまとめて既定値へ戻す。
-  // 段の間隔の既定値は楽譜種別により異なる（ピアノは30px、それ以外は0px。Issue #49）ため、
-  // 現在の scoreType から解決する（ページ余白・パート間隔は種別に依らない固定既定値のまま）。
+  // 段の間隔・パート間隔の既定値は楽譜種別により異なる（ピアノは −30px / +38px、
+  // それ以外は 0px / 0px。Issue #49・#199）ため、現在の scoreType から解決する
+  // （ページ余白・タイトル余白は種別に依らない固定既定値のまま）。
   const handleResetPageLayout = useCallback(() => {
-    const defaultSystemRowGapPx = resolveDefaultLayoutForScoreType(scoreType).systemRowGapPx;
+    const defaultLayout = resolveDefaultLayoutForScoreType(scoreType);
+    const defaultSystemRowGapPx = defaultLayout.systemRowGapPx;
+    const defaultPartSpacingOffsetPx = defaultLayout.partSpacingOffsetPx;
     setPageMarginSideMm(DEFAULT_PAGE_SIDE_MARGIN_MM);
     setPageMarginTopMm(DEFAULT_PAGE_MARGIN_TOP_MM);
     setPageMarginBottomMm(DEFAULT_PAGE_MARGIN_BOTTOM_MM);
     setTitleMarginTopMm(DEFAULT_TITLE_MARGIN_TOP_MM);
     setTitleMarginBottomMm(DEFAULT_TITLE_MARGIN_BOTTOM_MM);
     setSystemRowGapPx(defaultSystemRowGapPx);
-    setPartSpacingOffsetPx(PART_SPACING_OFFSET_DEFAULT_PX);
+    setPartSpacingOffsetPx(defaultPartSpacingOffsetPx);
     localStorage.setItem(PAGE_MARGIN_SIDE_KEY, String(DEFAULT_PAGE_SIDE_MARGIN_MM));
     localStorage.setItem(PAGE_MARGIN_TOP_KEY, String(DEFAULT_PAGE_MARGIN_TOP_MM));
     localStorage.setItem(PAGE_MARGIN_BOTTOM_KEY, String(DEFAULT_PAGE_MARGIN_BOTTOM_MM));
     localStorage.setItem(TITLE_MARGIN_TOP_KEY, String(DEFAULT_TITLE_MARGIN_TOP_MM));
     localStorage.setItem(TITLE_MARGIN_BOTTOM_KEY, String(DEFAULT_TITLE_MARGIN_BOTTOM_MM));
     localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(defaultSystemRowGapPx));
-    localStorage.setItem(PART_SPACING_OFFSET_KEY, String(PART_SPACING_OFFSET_DEFAULT_PX));
+    localStorage.setItem(PART_SPACING_OFFSET_KEY, String(defaultPartSpacingOffsetPx));
     // 段ごとの間隔の個別上書きは楽譜データ側（保存データ）の状態なので、Undo できるよう
     // pushHistory してからクリアする（他の3設定は画面専用の localStorage 設定のため対象外）。
     if (systemRowGapOverrides.length > 0) {
@@ -4165,7 +4175,7 @@ export default function ScorePage() {
                 </label>
                 <label
                   style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                  title="段と段の間隔です。プラスで広げ、マイナスで狭められます。広げると1ページに入る段数の上限が自動で下がり、狭めると自動で増えます。既定は楽譜の種類により異なります（ピアノは30px、それ以外は0px）"
+                  title="段と段の間隔です。プラスで広げ、マイナスで狭められます。広げると1ページに入る段数の上限が自動で下がり、狭めると自動で増えます。既定は楽譜の種類により異なります（ピアノは-30px、それ以外は0px）。大きくマイナスへ振ると段どうしが重なることがあります"
                 >
                   段の間隔
                   <input
@@ -4187,7 +4197,7 @@ export default function ScorePage() {
                 </label>
                 <label
                   style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
-                  title="段の中の譜表どうしの間隔です（ピアノの右手/左手、四重奏の4段、編成譜のパート間など）。プラスで広げ、マイナスで詰められます。自動で決まる間隔への補正値で、既定は0（自動計算のまま）です"
+                  title="段の中の譜表どうしの間隔です（ピアノの右手/左手、四重奏の4段、編成譜のパート間など）。プラスで広げ、マイナスで詰められます。自動で決まる間隔への補正値で、既定は楽譜の種類により異なります（ピアノは38px、それ以外は0＝自動計算のまま）"
                 >
                   パート間隔
                   <input

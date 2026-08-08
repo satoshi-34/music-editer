@@ -359,3 +359,41 @@ CSS の `gap` プロパティは負値を受け付けない（無効な宣言と
 - `docker exec -w <worktree> music-editer-dev npm run lint:ratchet`: エラー326件・警告5件（基準値326件と完全一致、新規エラーなし）。
 - `docker exec -w <worktree> music-editer-dev npm run build`: `tsc -b && vite build` エラーなし。
 - **ブラウザ実測は今回未実施**。共有devcontainerの唯一のホスト公開ポート（5173）が、`/app`（本体checkout）で常時起動している別のdevサーバーに占有されており、`--strictPort` での起動を試みたところ正しくbindに失敗して終了した（余分なプロセスは残っていないことを確認済み）。このポートを奪う・共有サーバーへ干渉することは夜間無人実行の制約上避けるべきと判断し、過去の追補（M-2、Issue #71〜）と同じ判断でブラウザ確認を見送った。タイトル余白の実際の見た目（既定値での変化なし・スライダー操作時の上下独立動作・2ページ目以降への非影響・印刷プレビューでの反映）は次回人間によるレビュー時に確認することを推奨する。
+
+## 追補: ピアノ譜の既定値を運用者の実測値へ変更し、段の間隔の下限を拡張（Issue #199、2026-08-09）
+
+### 問題
+
+Issue #195（浄書の既定値の棚卸し）を受けて、運用者がプライベートウィンドウ（＝localStorage空、素の工場出荷既定値）でピアノ譜の初期表示を確認し、ツールバーで詰めながら「こちらの方が自然」と判定した値がある。
+
+- Issue #49 が入れたピアノの既定値は「段の間隔 **+30px**・パート間隔 0px」で、大譜表の右手/左手ペアと次の段のペアの見分けを**段どうしを離す**ことで付けていた
+- 運用者の判定は逆で、**大譜表の内側（右手と左手の間）に空気を入れ、段どうしはむしろ詰める**方が自然だった。これは浄書慣行（1つの大譜表の中は広く、段の間は詰める）とも整合する
+- さらに、選定された段の間隔 **-30px はスライダーの下限そのもの**であり、本当の最適値がさらに下にある可能性を確かめられない状態だった
+
+### 修正設計
+
+正本の定数（`src/utils/measureLayoutUtils.ts`）だけを変え、既存の解決経路（`resolveDefaultLayoutForScoreType`）に乗せる方針で、新しい仕組みは足していない。
+
+1. **`SYSTEM_ROW_GAP_PIANO_DEFAULT_PX`: 30 → -30**、**`PART_SPACING_OFFSET_PIANO_DEFAULT_PX`（新設）= 38**。
+2. **`resolveDefaultLayoutForScoreType(scoreType)` の戻り値に `partSpacingOffsetPx` を追加**した。パート間隔はこれまで「楽譜種別に依らない固定既定値（`PART_SPACING_OFFSET_DEFAULT_PX` = 0）」だったが、ピアノだけ別値を持つことになったため、既に同じ事情を持つ「音符の大きさ」「段の間隔」と同じ関数へ寄せた（種別ごとの既定値を解決する場所を1つに保つ）。ピアノ以外は従来どおり `PART_SPACING_OFFSET_DEFAULT_PX`（0）を返すため、単旋律・弦楽四重奏・編成譜の初期表示は変わらない。
+3. **`SYSTEM_ROW_GAP_MIN_PX`: -30 → -60**（上限50・step1は変更なし）。この定数は正本として、スライダーの `min` 属性・段ごとの「間隔 −/＋」オーバーライドのクランプ・初期値プリセット読込時の範囲検査の3箇所が自動追従する（本ドキュメント本文の「★調整するならここが正本★」の設計をそのまま利用）。マイナス側を深くすると段どうしが物理的に重なりうるが、**ユーザー操作の結果として許容する**（既定値は -30px なので初期表示は安全）というのが Issue #199 での運用者判断。
+4. **適用経路**（`ScorePage.tsx`）: `partSpacingOffsetPx` の `useState` 初期化・`handleScoreTypeChange`・`handleInstrumentationPresetChange`・`handleResetPageLayout` の4箇所を、既に `systemRowGapPx` がやっているのと同じ形（**localStorage キーが未保存のときだけ**種別の既定値を適用／リセット時は現在の `scoreType` から解決）へそろえた。`settingsProfile.ts` の `getFactoryDefaultSettingsProfile()` も `defaultLayout.partSpacingOffsetPx` 経由に変えた（工場出荷プロファイルの `scoreType` は 'single' なので値は 0 のまま＝挙動変化なし）。
+
+**既存データへの影響が無い理由**: 既定値は「localStorage にそのキーが無いとき」にしか使われない。保存済み作品・ユーザーが一度でも動かしたスライダーの値は従来どおり localStorage / 保存データ側が優先される（受入条件2）。範囲を広げた側の変更（下限 -60）も、既存の保存値（-30〜50）はすべて新しい範囲に含まれるため、読み直し時のクランプで値が動くことはない。
+
+### 検証結果
+
+- `npx vitest --run src`（worktree内）: 変更した4ファイル（`measureLayoutUtils.test.ts` / `settingsProfile.test.ts` / `ScorePageDefaultLayout.test.tsx` / `ScorePagePartSpacing.test.tsx` / `ScorePageSystemsPerPage.test.tsx`）は全緑。フルスイートで残る失敗はすべて `Test timed out`（共有Dockerのリソース競合による既知の環境依存）と、時間計測系1件（`toBeLessThan(1000)` に対し1066ms）。
+- `npm run lint:ratchet`: エラー326件（基準値ちょうど）。`npm run build`: 成功。
+- **ブラウザ実測（今回は実施した）**: worktree だけを載せた使い捨てコンテナで dev サーバーを立て、`localhost:5174`（本体checkoutの5173とは別オリジン＝別 localStorage）を localStorage 全消去してから確認した。
+  - ピアノへ切り替えた初期表示で、レイアウトタブの表示が **段の間隔 -30px・パート間隔 38px**。同時に、Issue 本文が「運用者の画面で見えていた」と書いていた他の値（音符の大きさ150%・小節幅の均等さ50%・余白14/14/12mm・タイトル余白0/6mm・段あたり小節数4・**段数/ページ4**）が**すべて現行既定値と一致**した。つまり実際の変更は表の2項目だけで足りた
+  - 段の間隔スライダーの `min` が `-60` になり、-60 まで下げられること・localStorage へ `-60` が保存されること・リロード後もクランプされず `-60` のまま復元されることを確認
+  - 単旋律・弦楽四重奏・編成譜は 0px / 0px のまま（音符の大きさも150%/100%/100%のまま）で変化なし
+  - ユーザーが明示的に 10px / 5px を設定してからピアノへ切り替えても上書きされないこと、「レイアウトをリセット」でピアノの -30px / 38px へ戻ることを確認
+  - コンソールエラーなし
+
+### 影響範囲
+
+- **推奨段数が変わる**: ピアノの新規ユーザー状態での「段数/ページ」初期値が **3段 → 4段**になった。段の間隔が60px詰まったぶんが、パート間隔+38pxによる1段の高さ増（`computeLayout` の `staveSpacing` 80→118、実測換算で約19px）を上回るため。実測ベースの上限（`maxSystemsPerPage`）内に収まっており、あふれ警告は出ない（`ScorePageSystemsPerPage.test.tsx` のアサーションを 3→4 に更新）。上の「追補: 音符の大きさの工場出荷既定値変更に伴う推奨段数の変化（Issue #49）」が記録した「ピアノ4段→3段」は、本追補で 4段へ戻ったことになる。
+- **計算式は一切変えていない**: `recommendedSystemsPerPage` / `maxSystemsPerPage` / `systemRowSlotHeightPx` / `computeLayout` はいずれも未変更で、入力値（既定値）だけが変わっている。
+- **単旋律・弦楽四重奏・編成譜は不変**（受入条件3）。Issue #195 の A/B 確認が未了の編成譜と、運用者が「現状で良い」と確定した単旋律には手を付けていない。

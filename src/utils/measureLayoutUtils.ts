@@ -94,15 +94,19 @@ export const DEFAULT_TITLE_MARGIN_BOTTOM_MM = 6;
 //   2) 段ごとの「間隔 −/＋」オーバーライドのクランプ（ScorePage.tsx、同じ範囲を共有）
 //   3) 初期値プリセットの読み込み時の妥当性チェック（settingsProfile.ts の範囲検査）
 // のすべてが追従する。個別のファイルに数値を直書きしないこと（二重管理の禁止）。
-// 上限は 30→50 に拡大済み（2026-07-27、運用者要望）。下限 −30 は「詰めすぎると段が
-// 物理的に重なる」ため据え置き。上限を大きくしすぎると1ページに入る段数の上限
-// （maxSystemsPerPage、README「段数/ページ上限との連動」参照）が減っていき、
+// 上限は 30→50 に拡大済み（2026-07-27、運用者要望）。上限を大きくしすぎると1ページに
+// 入る段数の上限（maxSystemsPerPage、README「段数/ページ上限との連動」参照）が減っていき、
 // 極端な値では1ページ1段になる点に注意（計算式は自動追従するため壊れはしない）。
-export const SYSTEM_ROW_GAP_MIN_PX = -30;
+// 下限は −30→−60 に拡大済み（2026-08-09、Issue #199）。ピアノ譜の新しい既定値 −30 が
+// 旧下限そのものだったため、そこからさらに詰めたい運用者が調整できなくなっていた。
+// マイナス側を深くすると段どうしが物理的に重なることがあるが、これは
+// 「ユーザーが自分で詰めた結果」として許容する（既定値は −30 なので初期表示は安全）。
+export const SYSTEM_ROW_GAP_MIN_PX = -60;
 export const SYSTEM_ROW_GAP_MAX_PX = 50;
 // 「パート間隔」（段内の譜表間の縦間隔、Issue #90）のユーザー調整幅。自動計算値
 // （staveSpacingForPartCount: 単旋律/ピアノ/四重奏=80、5パート以上=60、ネイティブ単位）
-// への加算補正として使う。既定0は「自動計算のまま」を意味する。
+// への加算補正として使う。0は「自動計算のまま」を意味する（ピアノ以外の既定値）。
+// ピアノだけは既定値が +38（PART_SPACING_OFFSET_PIANO_DEFAULT_PX、Issue #199）。
 // ★調整するならここが正本★ — この3定数を変えるだけで、
 //   1) その他タブ「パート間隔」スライダーの min/max（ScorePage.tsx）
 //   2) 初期値プリセット読み込み時の範囲検査（settingsProfile.ts）
@@ -116,32 +120,42 @@ export const PART_SPACING_OFFSET_MIN_PX = -20;
 export const PART_SPACING_OFFSET_MAX_PX = 50;
 export const PART_SPACING_OFFSET_DEFAULT_PX = 0;
 
-// 「音符の大きさ」「段の間隔」の楽譜種別ごとの工場出荷既定値（Issue #49）。
+// 「音符の大きさ」「段の間隔」「パート間隔」の楽譜種別ごとの工場出荷既定値（Issue #49・#199）。
 // 単旋律・ピアノは大きめの表示（150%）を既定にし、見やすさを優先する。
-// ピアノ大譜表はさらに段（システム）間の間隔を+30pxにして、右手/左手の対と
-// 次の段の対を見分けやすくする。弦楽四重奏・編成譜は従来どおり100%・0pxのまま変えない
+// 弦楽四重奏・編成譜は従来どおり100%・0px・0pxのまま変えない
 // （大編成は ensembleAutoFitMultiplier による自動縮小フォールバックと合成されるため、
 // 既定を上げると縮小との相互作用が読みにくくなる）。
+//
+// ピアノ大譜表の2値は、運用者が素の既定値の画面を見ながらスライダーで詰めて選定した
+// 実測値（Issue #199、2026-08-09）。当初（Issue #49）は「右手/左手の対と次の段の対を
+// 見分けやすくする」ため段の間隔を +30px にしていたが、同じ見分けやすさを
+// 「大譜表の内側（右手と左手の間＝パート間隔）を広げ、段どうしはむしろ詰める」形で
+// 出したほうが自然に見える、という判断で −30px / +38px へ置き換えた
+// （浄書慣行でも「1つの大譜表の中は広く、段の間は詰める」が普通）。
 export const NOTATION_SIZE_MULTIPLIER_DEFAULT = 1;
 export const NOTATION_SIZE_MULTIPLIER_LARGE_DEFAULT = 1.5;
 export const SYSTEM_ROW_GAP_DEFAULT_PX = 0;
-export const SYSTEM_ROW_GAP_PIANO_DEFAULT_PX = 30;
+export const SYSTEM_ROW_GAP_PIANO_DEFAULT_PX = -30;
+export const PART_SPACING_OFFSET_PIANO_DEFAULT_PX = 38;
 
 /**
- * 楽譜種別ごとの「音符の大きさ」「段の間隔」の工場出荷既定値を返す純関数。
+ * 楽譜種別ごとの「音符の大きさ」「段の間隔」「パート間隔」の工場出荷既定値を返す純関数。
  * ユーザーが該当のスライダーを一度も操作していない（localStorageに未保存の）ときだけ
  * 呼び出し側でこの値を適用する想定（ユーザーが明示的に保存した値は上書きしない）。
  */
 export function resolveDefaultLayoutForScoreType(scoreType: ScoreType): {
   notationSizeMultiplier: number;
   systemRowGapPx: number;
+  partSpacingOffsetPx: number;
 } {
   const notationSizeMultiplier =
     scoreType === 'single' || scoreType === 'piano'
       ? NOTATION_SIZE_MULTIPLIER_LARGE_DEFAULT
       : NOTATION_SIZE_MULTIPLIER_DEFAULT;
   const systemRowGapPx = scoreType === 'piano' ? SYSTEM_ROW_GAP_PIANO_DEFAULT_PX : SYSTEM_ROW_GAP_DEFAULT_PX;
-  return { notationSizeMultiplier, systemRowGapPx };
+  const partSpacingOffsetPx =
+    scoreType === 'piano' ? PART_SPACING_OFFSET_PIANO_DEFAULT_PX : PART_SPACING_OFFSET_DEFAULT_PX;
+  return { notationSizeMultiplier, systemRowGapPx, partSpacingOffsetPx };
 }
 
 export function printScoreAreaWidthPx(sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM): number {

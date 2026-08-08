@@ -82,7 +82,11 @@ describe('段数/ページ（実測ベースの上限と、単旋律・ピアノ
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('ピアノ大譜表に切り替えると、音符150%・段間隔30pxの既定値（Issue #49）に追従して3段になる', () => {
+  // Issue #199 でピアノの既定値が「段間隔 +30px・パート間隔 0px」から
+  // 「段間隔 -30px・パート間隔 +38px」へ変わった。段どうしを詰めたぶん1ページに入る
+  // 推奨段数が3→4段に増える（大譜表の内側を広げたぶんは1段が高くなる方向に効くが、
+  // 段間を60px詰めた効果のほうが大きい）。運用者が実測選定時に見ていた画面も4段だった。
+  it('ピアノ大譜表に切り替えると、音符150%・段間隔-30px・パート間隔38pxの既定値（Issue #49・#199）に追従して4段になる', () => {
     render(<ScorePage />);
     // 楽譜の種類（ピアノ）は「楽譜設定」タブ、段数/ページは「レイアウト」タブと
     // 別々のタブになったため、切り替えてから確認する（Issue #144）。
@@ -91,7 +95,7 @@ describe('段数/ページ（実測ベースの上限と、単旋律・ピアノ
     fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
 
     const input = screen.getByLabelText('段数/ページ') as HTMLInputElement;
-    expect(input.value).toBe('3');
+    expect(input.value).toBe('4');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
