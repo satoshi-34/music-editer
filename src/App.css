@@ -1523,6 +1523,19 @@ button.ghost.active:hover:not(:disabled) {
   cursor: pointer;
 }
 
+/* 記号（強弱・運指・リハーサルマークなど）の位置調整用の当たり判定（Issue #203）
+   PianoSystemCanvas の appendSymbolHitRegion が作る rect。VexFlow は SVG ルートへ
+   stroke="black" を付けるため、stroke を打ち消さないと透明なはずの当たり判定が
+   黒い長方形の枠として見えてしまう（.vf-hit / .vf-note-hit と同じ原因・同じ対処）。
+   fill はここで固定しないこと: マウスを乗せたときの薄い青（rgba(37,99,235,0.16)）を
+   JS が fill 属性の付け替えで出しているため、CSS で !important を当てると
+   ホバーの手応えが消える。属性の既定値は透明（アルファ 0）なので画面には出ない。
+   pointer-events も JS が inline style で出し入れしている（記号のクリックを
+   受け付けない設定のときは none）ため、ここでは指定しない。 */
+.symbol-hit-region {
+  stroke: none !important;
+}
+
 /* 選択中の音符の見た目（青い枠）
    これはクリック判定ではなく、現在 selected に入っている対象を見せるだけ。
    pointer-events:none なので、枠がクリックを奪って操作不能になることはありません。 */
@@ -1666,16 +1679,19 @@ button.ghost.active:hover:not(:disabled) {
      塗りつぶさない。リハーサルマークの囲み枠 rect はここで文字が見えるようになる */
   .print-page svg circle[stroke]:not([stroke="none"]) { stroke: var(--print-ink) !important; }
   .print-page svg circle:not([fill="none"]) { fill: var(--print-ink) !important; }
-  .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+  .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region) {
     stroke: var(--print-ink) !important;
   }
-  .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+  /* .symbol-hit-region は fill="rgba(37,99,235,0)"（アルファ 0 の透明色）なので
+     fill="none" の除外条件に引っかからず、このルールで黒く塗り潰されていた（Issue #203） */
+  .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region) {
     fill: var(--print-ink) !important;
   }
   .print-page svg rect.vf-hit,
   .print-page svg rect.vf-note-hit,
   .print-page svg rect.vf-note-selected,
-  .print-page svg rect.vf-key-signature-debug {
+  .print-page svg rect.vf-key-signature-debug,
+  .print-page svg rect.symbol-hit-region {
     stroke: none !important; fill: transparent !important;
   }
   /* 強弱記号・運指番号・リハーサルマーク・ペダル・オッターバなどのテキストは
@@ -1787,16 +1803,18 @@ button.ghost.active:hover:not(:disabled) {
 }
 .print-preview .print-page svg circle[stroke]:not([stroke="none"]) { stroke: var(--print-ink, #000); }
 .print-preview .print-page svg circle:not([fill="none"]) { fill: var(--print-ink, #000); }
-.print-preview .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+.print-preview .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region) {
   stroke: var(--print-ink, #000);
 }
-.print-preview .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug) {
+/* @media print 側と同じ理由で .symbol-hit-region を除外する（Issue #203） */
+.print-preview .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region) {
   fill: var(--print-ink, #000);
 }
 .print-preview .print-page svg rect.vf-hit,
 .print-preview .print-page svg rect.vf-note-hit,
 .print-preview .print-page svg rect.vf-note-selected,
-.print-preview .print-page svg rect.vf-key-signature-debug {
+.print-preview .print-page svg rect.vf-key-signature-debug,
+.print-preview .print-page svg rect.symbol-hit-region {
   stroke: none; fill: transparent;
 }
 .print-preview .print-page svg text { fill: var(--print-ink, #000); }
