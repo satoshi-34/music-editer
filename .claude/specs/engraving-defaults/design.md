@@ -236,6 +236,33 @@ Bravura のメタデータには、そのフォントで組むときの推奨太
   `fill: rgb(0,0,0)` を返すことを確認済み
 - 影響: 強弱記号を入れた譜面を印刷すると記号が黒い箱になる可能性が高い。**浄書品質以前の不具合**
 
+#### 修正（Issue #203, 2026-08-09）
+
+対処は既存の当たり判定（`.vf-hit` / `.vf-note-hit` / `.vf-hit-voice2`）と同じ **`App.css` 側**へそろえた。
+当たり判定を透明にする方法を「CSS」と「rect 生成時の属性」の2系統に分けないための判断
+（トリアージコメントの指示）。変更は3か所。
+
+1. **画面**: `.symbol-hit-region { stroke: none !important; }` を追加。
+   `fill` はここで固定していない。マウスを乗せたときの薄い青（`rgba(37,99,235,0.16)`）を
+   `appendSymbolHitRegion` が **fill 属性の付け替え**で出しているため、CSS で `!important` を当てると
+   ホバーの手応えが消えるからである（`.vf-note-hit` が `fill: transparent !important` を持てるのは、
+   あちらが色を出さない当たり判定だからで、事情が違う）。`pointer-events` も
+   `symbolsClickable` に応じて inline style で出し入れされるので CSS では触らない
+2. **印刷（`@media print`）**: インク色を強制する rect のルール2本へ `:not(.symbol-hit-region)` を追加し、
+   透明へ戻すルール（`rect.vf-hit, …`）の並びに `rect.symbol-hit-region` を加えた。
+   当たり判定の `fill` は `rgba(37,99,235,0)`（アルファ 0 の透明色）であって `none` ではないため、
+   既存の `:not([fill="none"])` では除外できていなかったのが塗り潰しの原因
+3. **印刷プレビュー（`.print-preview`）**: 上と同じ内容（`@media print` の複製定義なので同時に直す必要がある）
+
+回帰テストは `src/AppCssSymbolHitRegionPrint.test.ts`。jsdom は外部 CSS を読まないため、
+App.css を文字列として読み「透明化のルールが消えていないこと」「インク色ルールが当たり判定を除外していること」
+「生成側のクラス名 `symbol-hit-region` が変わっていないこと」を静的に見張る。
+
+**影響範囲**: 変更したセレクタはすべて `.symbol-hit-region` を対象に加除しただけで、
+`.vf-hit`（小節選択のハイライト。REGRESSION.md G節）・`.vf-note-hit`・`.vf-note-selected` の
+扱いは1文字も変えていない。ブラウザ実測では、修正後もクリックで位置調整エディタが開き、
+ホバーの薄い青（`fill: rgba(37,99,235,0.16)`）も従来どおり出る。
+
 ### 6-4. 段の途中のパート名が出ない（要確認）
 
 - 症状: 1ページに2段ある吹奏楽の譜面で、**そのページの2段目にはパート名（略称）が描かれない**。
