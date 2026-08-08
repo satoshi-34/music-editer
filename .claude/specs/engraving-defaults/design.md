@@ -329,3 +329,199 @@ Bravura のメタデータには、そのフォントで組むときの推奨太
 - `.claude/specs/final-barline/design.md` — 終止線の実装（本文書 §3-2 の太さはこの実装の実測値）
 - `docs/REGRESSION.md` — 手動QAチェックリスト。既定値を変える段2では、B節（小節幅の自動割付）と
   G節（小節選択のハイライトが見えるか）を必ず通すこと
+
+---
+
+# 段2: 候補Aを既定値として適用（Issue #202・2026-08-09）
+
+> #195 の A/B 比較（PR #198 の画像）を見た選定者（#89 のインタビュー対象者）が **候補A**
+> （Bravura の engravingDefaults 準拠）を選んだため、アプリの既定値をその値へ変更した。
+> 決定日 **2026-08-09**、選定の経緯は #89 のインタビュー。
+
+## 10. 適用した値と、それをどこに書いたか
+
+「値の正本」を1か所に集めるため、**`src/utils/engravingDefaults.ts`** を新設した。
+太さは sp（五線間隔比）のまま持ち、`spToUnits()`（1 sp = 10 u）で SVG 論理単位へ換算する。
+`src/utils/engravingDefaults.test.ts` が、この定数と
+`docs/qa/engraving-defaults/ab-preview.js` の `PRESETS.a`・App.css の数値の一致を見張る。
+
+| 対象 | 現状 | 変更後 | 実装した場所 |
+| --- | --- | --- | --- |
+| 五線 (staffLine) | 0.12 | **0.13** | App.css `.score-area svg g.vf-stave > path` |
+| 符幹 (stem) | 0.12 | 0.12（変更なし） | App.css `g.vf-stem > path`（明示指定が必要。下記参照） |
+| 加線 (ledger) | 0.12・色 #444 | **0.16・黒** | App.css `g.vf-stavenote > path[stroke]` |
+| 細い小節線 (thinBarline) | 0.10 | **0.16** | `widenThinBarlineRect()` で描画後に rect の幅を書き換え |
+| ヘアピン (hairpin) | 0.12 | **0.16** | `hairpinRenderUtils.ts`（インライン style） |
+| サブ括弧 (subBracket) | 0.12 | **0.16** | App.css `path.vf-sub-bracket` |
+| テキスト囲み枠 (textEnclosure) | 0.14 | **0.16** | `PianoSystemCanvas.tsx` のリハーサルマーク枠 |
+| パート名 | 1.1 sp | **1.7 sp** | `instrumentLabelUtils.ts` の `instrumentLabelBaseFontSize` |
+| 小節番号 | 1.1 | **1.4** | `PianoSystemCanvas.tsx` の `measureNumberEntries` |
+| 歌詞 | 1.1 | **1.5** | `lyricsRenderUtils.ts` |
+| 強弱記号 | 1.6 | **2.0** | `PianoSystemCanvas.tsx` の `dynamicTextEntries` |
+| cresc./dim.・テンポ表記 | 1.2 | **1.5** | 同上・`tempoMarkingEntries`（下記の判断参照） |
+| タイトル | 28px / 字間 0.08em | **26px / 0.02em** | App.css `.score-title` |
+| サブタイトル | 14px | 14px（変更なし） | — |
+| 作者欄 (credit) | 14px | **13px** | App.css `.score-credit`（新設。インライン style から移設） |
+| 譜面上のテキスト書体 | sans と Times の混在 | **セリフ体**（下記） | `SCORE_TEXT_FONT_FAMILY` と App.css `--score-text-font` |
+
+書体は `"Century Schoolbook", Georgia, "Times New Roman", serif`。
+音楽記号（Bravura / Academico）は対象外のまま。
+
+## 11. 実装で判断したこと（トリアージ表の解釈と、あえて変えなかったもの）
+
+### 11-1. 一律 `stroke-width: 1.2` は「フォールバック」として残した
+
+§5 の指摘どおり、`.score-area svg path, .score-area svg line` の一律指定が要素ごとの
+太さを潰していた。これを**対象ごとの個別指定へ分解**したが、**一律指定自体は残してある**。
+
+理由は「A/B 比較で承認された見た目に合わせる」ため。`ab-preview.js` は一律指定の**上に**
+`!important` で候補値をかぶせる作りなので、比較画像では一律指定が生きたままだった。
+いま一律指定を撤去すると、スラー・タイの弧（1.6〜2.2 u）、終止括弧、連符の括弧、
+ペダル線、オッターバ線などが**いっせいに元の属性値へ戻る**。これらは比較画像に写っておらず、
+選定者が見て選んだ状態でもないため、この段では触らない。
+
+**残っている作業（段3以降の候補）**: 上に挙げた要素を個別指定へ移し、一律指定を撤去する。
+移すときは Bravura の `slurEndpointThickness` 0.10 / `slurMidpointThickness` 0.22、
+`tupletBracketThickness` 0.16、`pedalLineThickness` 0.16、`octaveLineThickness` 0.16、
+`repeatEndingLineThickness` 0.16 が参照値になる。
+
+なお、一律指定を残したことで**符幹には明示指定が必要**になった。符幹の SVG 属性は 1.5 u で、
+一律指定を上書きしないと 0.12 sp（=1.2 u・据え置きのはず）から太ってしまうため、
+`g.vf-stem > path` に 1.2 u を明示している。
+
+### 11-2. 表示ウェイト設定（細/標準/太）は「倍率」として生かした
+
+§8 の未決定事項3。個別指定にしたので、太さを固定値で書くと 細/標準/太 の設定と
+印刷時の細線化（0.8）が効かなくなる。そこで `.score-area` に
+
+```css
+--score-stroke-scale: calc(var(--score-stroke-width, 1.2) / 1.2);
+```
+
+を定義し、個別指定を `calc(1.3px * var(--score-stroke-scale))` の形で書いた。
+**標準（1.2）のとき倍率 1.0 = 候補Aの値そのまま**になり、細 0.667 倍 / 太 1.5 倍 /
+印刷 0.667 倍が比例して効く。実測: 細 0.867px / 標準 1.3px / 太 1.95px。
+
+ただし**小節線（rect）はこの倍率の対象外**で、常に 0.16 sp のまま。
+rect の幅は CSS で変えられず、変更前も一律指定の影響を受けていなかった（常に 1.0 u だった）ため、
+「変更前と同じく、ウェイト設定に連動しない」という挙動を保っている。
+
+### 11-3. トリアージ表の「ブラケット 0.12 → 0.16」は**サブ括弧**に適用した
+
+調査の結果、総譜左端の**太いメイン括弧**は VexFlow の `StaveConnector`（BRACKET）が
+**幅 3 u の塗り矩形（= 0.30 sp）** で描いていることが分かった。§3-2 の表で
+「グループ括弧 0.12 sp」と記録していたのは `PianoSystemCanvas.tsx` が SVG で直接描く
+**サブ括弧**（Vln.I / Vln.II をまとめる細い括弧）のほうで、現状 0.12 sp はこれと一致する。
+
+したがって 0.16 はサブ括弧へ適用した。Bravura の `subBracketThickness` も 0.16 で整合する。
+メイン括弧を 0.16 にすると **0.30 → 0.16 と細くなり**、「総譜の楽器グループが読み取りにくい」
+（§5 の乖離5）を悪化させるため、意図に反する。
+
+**未決定として残す**: メイン括弧を Bravura 推奨の `bracketThickness` 0.50 sp へ太らせるか
+（現状 0.30 sp）。太らせる場合は VexFlow の rect 幅を書き換える実装になる。
+
+### 11-4. cresc./dim.・テンポ表記も強弱記号と同じ倍率で拡大した
+
+トリアージ表が名前を挙げているのは「強弱記号 1.6 → 2.0」だけだが、
+`ab-preview.js` の `classifyText()` は **Times New Roman のイタリック全部**を `dynamics` と
+判定して 1.25 倍していた。つまり比較画像では cresc./dim.（1.2 sp）とテンポ表記（1.2 sp）も
+1.5 sp に拡大された状態で、選定者はそれを見て候補Aを選んでいる。
+
+受入条件1が「`engravingAB('a')` を当てた表示と同等」であることを優先し、
+同じ 1.25 倍を適用して 1.5 sp にした（`ENGRAVING_TEXT_SP.expressiveText`）。
+強弱記号より一段小さい文字という関係も保たれる。
+
+### 11-5. 書体は「CSS で SVG の text 全部」ではなく描画側で指定した
+
+`ab-preview.js` は `.score-area svg text { font-family: <セリフ体> }` を当て、
+音楽記号は `g[class^="vf-"] text` で Bravura に戻していた。**この作りが、トリアージが警告した
+「ブラケットの枠状のアーティファクト」の正体だった**（§11-6）。
+
+そのため本実装では CSS で一括指定せず、**アプリが自分で描く `<text>` にだけ**
+`SCORE_TEXT_FONT_FAMILY` を渡している（パート名・小節番号・歌詞・強弱・cresc./dim.・
+テンポ表記・♩=BPM・リハーサルマーク・運指・ペダル・オッターバ）。
+VexFlow が描く文字には一切触らない。
+
+ページ側の文字（タイトル・サブタイトル・作者欄）は HTML なので、
+`.print-page` に `--score-text-font` を1回だけ定義して継承させている
+（タイトル欄 `.page-head` と `.score-area` の共通の先祖がこの要素）。
+
+## 12. トリアージが警告した「ブラケットのアーティファクト」の原因と結論
+
+トリアージの既知の注意:
+
+> A/B ライブ確認時に**ブラケットの stroke 描画に副作用（枠状のアーティファクト）**が出た。
+
+**原因を特定した。アプリ側の不具合ではなく、A/B スニペット固有の副作用が2つ重なったもの。**
+
+1. **括弧の上下端グリフが豆腐（□）になる**
+   `StaveConnector` は BRACKET の上下端を Bravura のグリフ **U+E003 / U+E004**
+   （SMuFL の `bracketTop` / `bracketBottom`）を `<text>` で描く。
+   この2つは `g.vf-*` の**外**（SVG 直下）に出るため、`ab-preview.js` の
+   `g[class^="vf-"] text` による Bravura 復帰が効かない。結果セリフ体で描かれ、
+   セリフ体に U+E003 のグリフは無いので**空の四角（豆腐）**になる。
+   実測: 実装では字幅 19px（正しい Bravura グリフ）、`engravingAB('a')` 適用時は 40px（豆腐）。
+2. **メイン括弧の縦棒が細くなり左へずれる**
+   `applyAttributes()` の rect 書き換えは「幅 3 以下」を対象にするため、
+   幅 3 のメイン括弧まで 1.6 へ縮め、x も 0.7 左へずらしていた。
+
+証拠画像:
+
+- `docs/qa/engraving-defaults/images/preview-a-bracket-artifact.png`
+  — main + `engravingAB('a')`。括弧の上下に**空の四角**が出て、縦棒が細い（=警告された症状）
+- `docs/qa/engraving-defaults/images/adopted-a-bracket.png`
+  — 本実装。Bravura の括弧の上下端が正しく描かれ、縦棒の太さは変更前のまま
+
+**結論: 本実装ではアーティファクトは発生しない**（§11-5 のとおり CSS で書体を一括指定せず、
+§11-3 のとおりメイン括弧の rect を触らないため）。受入条件4は満たしている。
+
+## 13. 影響範囲と、確認したこと
+
+### 13-1. パート名の拡大がレイアウトへ与える影響
+
+パート名を 1.1 → 1.7 sp にすると `resolveInstrumentLabelLayout()` が返す
+**ラベル余白（areaWidth）も広がりうる**（余白ぶんだけ小節の幅が減る）。実測:
+
+| 譜種 | areaWidth（変更前 → 後） | 描かれるフォントサイズ | 段数/ページ |
+| --- | --- | --- | --- |
+| 弦楽四重奏 | 74 → **76.9**（+2.9 u） | 17 u | 4 段・1ページ（変化なし） |
+| 吹奏楽（10パート・フル名） | 110 → 110（上限で変化なし） | **8.90 u（変化なし）** | 2 段・1ページ（変化なし） |
+| 室内オーケストラ（8パート） | 74 → 76.9 相当 | 17 u | 3 段・1ページ（変化なし） |
+| 単旋律・ピアノ | ラベル無しのため変化なし | — | 5 段 / 4 段（変化なし） |
+
+吹奏楽でフォントサイズが変わらないのは、余白の上限（110）に収まらない長いフル名は
+`fontSize = usableWidth / ratioSum` へ縮められ、この式が**基準サイズに依存しない**ため。
+つまり**フル名が長い総譜のパート名は拡大されない**（略称を使う2段目以降は 1.7 sp になる）。
+これは #195 の乖離2（パート名が小さい）が総譜で残ることを意味するので、
+別途「余白の上限 110 を見直すか」を検討する余地がある（本Issueのスコープ外）。
+
+段数/ページ・ページ数は4譜種すべてで**変化なし**（初期表示・localStorage 空で実測）。
+
+### 13-2. ブラウザで確認したこと（dev サーバー・localStorage 空）
+
+- 4譜種（単旋律・ピアノ・弦楽四重奏・編成譜）＋吹奏楽・室内オーケストラの初期表示で、
+  五線 1.3px / 小節線 1.6 / 段の左右の縦線 1.6 / メイン括弧 3（変更なし）を実測
+- 音符を置いて **符幹 1.2px**（属性 1.5 を上書き）・**加線 1.6px かつ黒**（属性 2 / #444 を上書き）を実測
+- 強弱記号 `f` を付けて **font-size 20・Century Schoolbook italic** を実測
+- 表示ウェイト 細/普通/太 のボタンで 0.867 / 1.3 / 1.95px と比例することを実測
+- REGRESSION.md **G 節**（小節選択のハイライト）: 4パートの小節1を選択して
+  青枠 3px ＋ 薄青の塗りが見えることを確認（個別指定の追加で `.vf-hit` を壊していない）
+- コンソールエラーなし
+
+### 13-3. 変更前から残っている（本Issueで直していない）こと
+
+- **印刷プレビューでは線が細くならない**: `.print-preview .print-page` の
+  `--score-stroke-width: 0.8` は、`.score-area` のインライン style（1.2）に負ける。
+  実印刷（`@media print`）は `.print-page .score-area` に `!important` で当たるので効く。
+  main でも同じ挙動であることを実測で確認済み（本実装による退行ではない）
+- §6-2（長いタイトルと作者欄の重なり・#204）、§6-3（強弱記号の判定枠・#203）は別Issue
+- 終止線の太線 0.30 sp（Bravura 推奨 0.50）はトリアージの対象外のため据え置き
+
+## 14. 参考画像（本実装の初期表示）
+
+- `docs/qa/engraving-defaults/images/adopted-a-single.png` — 単旋律
+- `docs/qa/engraving-defaults/images/adopted-a-piano.png` — ピアノ
+- `docs/qa/engraving-defaults/images/adopted-a-quartet.png` — 弦楽四重奏
+- `docs/qa/engraving-defaults/images/adopted-a-windband.png` — 吹奏楽（編成譜）
+- `docs/qa/engraving-defaults/images/adopted-a-bracket.png` — ブラケット拡大（アーティファクト無し）
+- `docs/qa/engraving-defaults/images/preview-a-bracket-artifact.png` — 比較用（A/Bスニペットの副作用）

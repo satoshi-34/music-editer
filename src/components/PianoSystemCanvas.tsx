@@ -81,6 +81,12 @@ import {
 } from '../utils/symbolAdjustUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { drawLyricsEntry } from '../utils/lyricsRenderUtils';
+import {
+  ENGRAVING_TEXT_UNITS,
+  ENGRAVING_THICKNESS_UNITS,
+  SCORE_TEXT_FONT_FAMILY,
+  widenThinBarlineRect,
+} from '../utils/engravingDefaults';
 import { computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
 import { buildTupletGroupPlan, buildTupletRestReplacement } from '../utils/tupletUtils';
@@ -1515,6 +1521,28 @@ export default function PianoSystemCanvas({
     const allG=svg.querySelectorAll('g');
     const svgRoot=(allG.length?allG[allG.length-1]:svg) as SVGGElement;
 
+    /**
+     * StaveConnector（段の左右の縦線・グループ括弧）を描き、そのとき増えた
+     * 「幅 1 の rect」だけを候補Aの小節線の太さへ広げる（Issue #202）。
+     *
+     * VexFlow は細い縦線を `fillRect(x, y, 1, h)` の塗り矩形で描くため、
+     * CSS の stroke-width では太さを変えられない。かといって描画後に
+     * SVG 全体から「幅 1 の rect」を拾うと、終止括弧（1., 2.）や連符の括弧の
+     * 縦のカギも巻き込んでしまい、横棒だけ細いままの不揃いな括弧になる。
+     * そこで「この描画で増えた要素」に限って書き換える。
+     *
+     * 太い括弧（BRACKET）の縦棒は幅 3 の rect なので、この関数では対象外になる
+     * （＝メイン括弧の太さは変わらない）。ブレース（BRACE）は path なので同様に無関係。
+     */
+    const drawConnectorWithEngravingWidths = (connector: StaveConnector) => {
+      const before = svgRoot.childElementCount;
+      connector.setContext(ctx).draw();
+      for (let ci = before; ci < svgRoot.childElementCount; ci++) {
+        const el = svgRoot.children[ci];
+        if (el.tagName === 'rect') widenThinBarlineRect(el);
+      }
+    };
+
     // タイドラッグのプレビュー弧
     const tiePreviewPath=document.createElementNS('http://www.w3.org/2000/svg','path');
     tiePreviewPath.setAttribute('fill','none');
@@ -2108,13 +2136,17 @@ export default function PianoSystemCanvas({
           // （＝隣のグループとの間の空白には線を引かない）。
           bracketGroupRanges.forEach(group => {
             if (group.end === group.start) return;
-            new StaveConnector(staveSets[group.start][i], staveSets[group.end][i])
-              .setType(barlineConnectorType).setContext(ctx).draw();
+            drawConnectorWithEngravingWidths(
+              new StaveConnector(staveSets[group.start][i], staveSets[group.end][i])
+                .setType(barlineConnectorType)
+            );
           });
         } else {
           // グループ定義が無い場合（ピアノ2段譜など後方互換）は従来通り全段を接続する。
-          new StaveConnector(staveSets[0][i], staveSets[parts.length-1][i])
-            .setType(barlineConnectorType).setContext(ctx).draw();
+          drawConnectorWithEngravingWidths(
+            new StaveConnector(staveSets[0][i], staveSets[parts.length-1][i])
+              .setType(barlineConnectorType)
+          );
         }
       }
       x+=w;
@@ -2138,15 +2170,18 @@ export default function PianoSystemCanvas({
         const connType = group.key === 'keyboard'
           ? StaveConnector.type.BRACE
           : StaveConnector.type.BRACKET;
-        new StaveConnector(staveSets[group.start][0], staveSets[group.end][0])
-          .setType(connType).setContext(ctx).draw();
+        drawConnectorWithEngravingWidths(
+          new StaveConnector(staveSets[group.start][0], staveSets[group.end][0]).setType(connType)
+        );
       });
 
       // システム全体の左端を貫く 1 本の縦線。
       // これがないと、グループ括弧だけでは「ここまでが 1 システム」が
       // 視覚的に伝わりにくいので、最上段から最下段までを縦線で結ぶ。
-      new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0])
-        .setType(StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
+      drawConnectorWithEngravingWidths(
+        new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0])
+          .setType(StaveConnector.type.SINGLE_LEFT)
+      );
 
       // グループ括弧がひとつも描かれなかった場合は、従来通り全体を 1 つの括弧でまとめる。
       // ただし全パートが `solo` 指定なら、ユーザーが明示的に「括弧なし」を選んでいるため
@@ -2157,8 +2192,9 @@ export default function PianoSystemCanvas({
         const fallbackType = parts.length === 2
           ? StaveConnector.type.BRACE
           : StaveConnector.type.BRACKET;
-        new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0])
-          .setType(fallbackType).setContext(ctx).draw();
+        drawConnectorWithEngravingWidths(
+          new StaveConnector(staveSets[0][0], staveSets[parts.length-1][0]).setType(fallbackType)
+        );
       }
 
       // セクション内のサブグループ（Vln I/Vln II など）に細い括弧を描く。
@@ -2193,11 +2229,21 @@ export default function PianoSystemCanvas({
         );
         path.setAttribute('fill', 'none');
         path.setAttribute('stroke', '#111827');
-        path.setAttribute('stroke-width', '1');
+        // 太さは App.css の .vf-sub-bracket 側で指定する（Issue #202・候補A の
+        // subBracket 0.16sp）。ここで stroke-width 属性を書いても
+        // `.score-area svg path` の一律指定に負けて効かないため、クラスで当てる。
+        path.setAttribute('class', 'vf-sub-bracket');
         path.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(path);
       });
     }
+
+    // 小節線の太さを候補Aへ（Issue #202）。
+    // VexFlow は小節線を「幅 1 の塗り矩形」で描くので CSS では変えられず、
+    // 描き終わったあとに幅を広げる。`g.vf-stavebarline` の直下だけを対象にするので、
+    // 終止括弧や連符の括弧の縦のカギ（同じく幅 1 の rect）は巻き込まない。
+    // 終止線の太線（幅 3）は対象外なので、細線だけが太くなって主従が正しくなる。
+    svgRoot.querySelectorAll('g.vf-stavebarline > rect').forEach(widenThinBarlineRect);
 
     if (showInstrumentLabels) {
       parts.forEach((part, pi) => {
@@ -2215,7 +2261,7 @@ export default function PianoSystemCanvas({
         text.setAttribute('text-anchor', 'end');
         text.setAttribute('dominant-baseline', 'middle');
         text.setAttribute('fill', '#111827');
-        text.setAttribute('font-family', 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif');
+        text.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
         // 長いフル名（Tenor Saxophone in Bb など）は、余白を上限まで広げても入りきらない
         // ことがある。その場合だけ labelLayout がフォントを縮めて返すので、はみ出さない。
         text.setAttribute('font-size', String(labelLayout.fontSize));
@@ -4020,8 +4066,12 @@ export default function PianoSystemCanvas({
         text.setAttribute('y',String(baseY + index * 14 + adjust.offsetY));
         text.setAttribute('text-anchor','middle');
         text.setAttribute('fill','#1f2937');
-        text.setAttribute('font-family','"Times New Roman", serif');
-        const baseFontSize = marking.value === 'cresc' || marking.value === 'dim' ? 12 : 16;
+        text.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+        // 強弱記号は 1.6 sp → 2.0 sp（Issue #202・候補A）。
+        // cresc./dim. は強弱記号より一段小さい文字という関係を保ったまま同じ倍率で拡大する。
+        const baseFontSize = marking.value === 'cresc' || marking.value === 'dim'
+          ? ENGRAVING_TEXT_UNITS.expressiveText
+          : ENGRAVING_TEXT_UNITS.dynamics;
         text.setAttribute('font-size', String(baseFontSize * adjust.scale));
         text.setAttribute('font-style','italic');
         text.setAttribute('pointer-events','none');
@@ -4050,7 +4100,7 @@ export default function PianoSystemCanvas({
       el.setAttribute('x', String(x + 2));
       el.setAttribute('y', String(topY - 36));
       el.setAttribute('fill', '#b45309');  // 琥珀色で他の記号と区別しやすくする
-      el.setAttribute('font-family', '"Times New Roman", serif');
+      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
       el.setAttribute('font-size', '12');
       el.setAttribute('font-weight', 'bold');
       el.setAttribute('pointer-events', 'none');
@@ -4073,7 +4123,8 @@ export default function PianoSystemCanvas({
       rect.setAttribute('height', String(boxHeight));
       rect.setAttribute('fill', 'none');
       rect.setAttribute('stroke', '#111827');
-      rect.setAttribute('stroke-width', '1.4');
+      // 文字を囲む枠線は 0.14 sp → 0.16 sp（Bravura: textEnclosureThickness、Issue #202）
+      rect.setAttribute('stroke-width', String(ENGRAVING_THICKNESS_UNITS.textEnclosure));
       rect.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(rect);
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -4082,7 +4133,7 @@ export default function PianoSystemCanvas({
       el.setAttribute('y', String(boxY + boxHeight - 4));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#111827');
-      el.setAttribute('font-family', 'sans-serif');
+      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
       el.setAttribute('font-size', '12');
       el.setAttribute('font-weight', 'bold');
       el.setAttribute('pointer-events', 'none');
@@ -4098,8 +4149,9 @@ export default function PianoSystemCanvas({
       el.setAttribute('y', String(topY - 6));
       el.setAttribute('text-anchor', 'start');
       el.setAttribute('fill', '#111827');
-      el.setAttribute('font-family', 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif');
-      el.setAttribute('font-size', '11');
+      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+      // 小節番号は 1.1 sp → 1.4 sp（Issue #202・候補A）
+      el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.measureNumber));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
     });
@@ -4114,7 +4166,7 @@ export default function PianoSystemCanvas({
       el.setAttribute('y', String(Math.min(staveTopY - 12, noteTopY - 10) + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
-      el.setAttribute('font-family', 'sans-serif');
+      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
       el.setAttribute('font-size', String(10 * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
@@ -4227,8 +4279,10 @@ export default function PianoSystemCanvas({
       el.setAttribute('y', String(topY - 24 + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
-      el.setAttribute('font-family', '"Times New Roman", serif');
-      el.setAttribute('font-size', String(12 * adjust.scale));
+      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+      // テンポ表記（Allegro 等）は cresc./dim. と同じ「イタリックの標語」の仲間なので、
+      // 強弱記号と同じ倍率で 1.2 sp → 1.5 sp へそろえる（Issue #202・候補A）
+      el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.expressiveText * adjust.scale));
       el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
@@ -4256,7 +4310,7 @@ export default function PianoSystemCanvas({
       el.setAttribute('y', String(pedalTextY(botY)));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1e293b');
-      el.setAttribute('font-family', 'serif');
+      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
       el.setAttribute('font-size', mark === 'down' ? '13' : '14');
       if (mark === 'down') el.setAttribute('font-style', 'italic');
       el.setAttribute('pointer-events', 'none');
@@ -4315,7 +4369,7 @@ export default function PianoSystemCanvas({
       label.setAttribute('y', String(ay));
       label.setAttribute('text-anchor', 'start');
       label.setAttribute('fill', '#374151');
-      label.setAttribute('font-family', 'serif');
+      label.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
       label.setAttribute('font-style', 'italic');
       label.setAttribute('font-size', String(fontSize));
       label.setAttribute('pointer-events', 'none');

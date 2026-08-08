@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { drawLyricsEntry } from './lyricsRenderUtils';
+import { ENGRAVING_TEXT_UNITS, SCORE_TEXT_FONT_FAMILY } from './engravingDefaults';
 import { DEFAULT_SYMBOL_ADJUST } from './symbolAdjustUtils';
 
 function createSvgRoot(): SVGGElement {
@@ -39,6 +40,21 @@ describe('drawLyricsEntry', () => {
     const text = svgRoot.querySelector('text')!;
     expect(text.getAttribute('x')).toBe('55');
     expect(text.getAttribute('y')).toBe('71');
-    expect(text.getAttribute('font-size')).toBe('22');
+    // 歌詞の基準サイズは 1.5 sp = 15 u（Issue #202・候補A）。scale 2 なので倍の 30
+    expect(text.getAttribute('font-size')).toBe('30');
+  });
+
+  it('歌詞の基準サイズ・書体が浄書の既定値（候補A）と一致する', () => {
+    const svgRoot = createSvgRoot();
+    drawLyricsEntry(svgRoot, {
+      anchorX: 0,
+      staveTopY: 0,
+      text: 'あ',
+      adjust: DEFAULT_SYMBOL_ADJUST,
+    });
+
+    const text = svgRoot.querySelector('text')!;
+    expect(text.getAttribute('font-size')).toBe(String(ENGRAVING_TEXT_UNITS.lyrics));
+    expect(text.getAttribute('font-family')).toBe(SCORE_TEXT_FONT_FAMILY);
   });
 });

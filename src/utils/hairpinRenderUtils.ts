@@ -2,6 +2,8 @@
 // 松葉（ヘアピン、クレッシェンド＜／ディミヌエンド＞）の SVG 描画ユーティリティ。
 // StaffCanvas と PianoSystemCanvas の両方から使うため、描画ロジックを共通化する。
 
+import { ENGRAVING_THICKNESS_UNITS, SELECTED_LINE_EMPHASIS_RATIO } from './engravingDefaults';
+
 /** 松葉の最大開き幅（px）。五線下の強弱記号帯に収まる控えめなサイズにする */
 export const HAIRPIN_HEIGHT = 11;
 
@@ -70,7 +72,11 @@ export function drawHairpinSegment(params: HairpinSegmentParams): void {
   path.setAttribute('d', d);
   path.setAttribute('fill', 'none');
   path.setAttribute('stroke', color);
-  path.style.strokeWidth = isSelected ? '1.8' : '1.2';
+  // 松葉の太さは 0.12 sp → 0.16 sp（Bravura: hairpinThickness）へ（Issue #202・候補A）。
+  // 選択中は従来と同じ 1.5 倍にして「いま選んでいる松葉」を目立たせる。
+  path.style.strokeWidth = String(
+    ENGRAVING_THICKNESS_UNITS.hairpin * (isSelected ? SELECTED_LINE_EMPHASIS_RATIO : 1)
+  );
   path.setAttribute('pointer-events', 'none');
   svgRoot.appendChild(path);
 }

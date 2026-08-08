@@ -12,6 +12,7 @@
 // 'above' 固定で使われなくなったので削除した。
 
 import type { ResolvedSymbolAdjust } from './symbolAdjustUtils';
+import { ENGRAVING_TEXT_UNITS, SCORE_TEXT_FONT_FAMILY } from './engravingDefaults';
 
 /** 歌詞1件ぶんの描画情報（座標はすでに SVG のワールド座標に変換済み） */
 export interface LyricsRenderEntry {
@@ -40,8 +41,9 @@ export function drawLyricsEntry(svgRoot: SVGGElement, entry: LyricsRenderEntry):
   el.setAttribute('y', String(y));
   el.setAttribute('text-anchor', 'middle');
   el.setAttribute('fill', '#374151');
-  el.setAttribute('font-family', 'sans-serif');
-  el.setAttribute('font-size', String(11 * adjust.scale));
+  // 歌詞は 1.1 sp → 1.5 sp へ拡大し、書体もセリフ体へそろえる（Issue #202・候補A）
+  el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+  el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.lyrics * adjust.scale));
   el.setAttribute('pointer-events', 'none');
   svgRoot.appendChild(el);
   // 呼び出し側が「記号を直接クリックして調整する」ためのヒット領域を重ねられるよう、

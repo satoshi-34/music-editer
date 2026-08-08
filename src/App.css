@@ -1273,6 +1273,12 @@ button.ghost.active:hover:not(:disabled) {
 
 .print-page {
   position: relative;
+  /* 譜面まわりのテキスト書体（Issue #202・候補A）。Bravura のメタデータが推奨する
+     セリフ体にそろえる。タイトル欄（.page-head）と譜面（.score-area）の共通の
+     先祖がこの要素なので、ここで1回だけ定義して両方へ継承させる。
+     値は src/utils/engravingDefaults.ts の SCORE_TEXT_FONT_FAMILY と同一にすること
+     （engravingDefaults.test.ts が一致を見張っている）。 */
+  --score-text-font: "Century Schoolbook", Georgia, "Times New Roman", serif;
   width: 210mm;
   /* 画面の1ページを常に A4 実寸（297mm）に固定する。
      こうすると編集画面のページ割りと印刷のページ割りが一致し、
@@ -1313,8 +1319,26 @@ button.ghost.active:hover:not(:disabled) {
   padding-top: var(--title-margin-top, 0mm);
   margin-bottom: var(--title-margin-bottom, 6mm);
 }
-.score-title { margin: 0; font-size: 28px; text-align: center; letter-spacing: .08em; }
-.score-subtitle { margin: 4px 0 0; font-size: 14px; text-align: center; color: #555; }
+/* タイトル・サブタイトル・作者欄（Issue #202・候補A）
+   28px → 26px、字間 .08em → .02em。字間を詰めたのは、日本語のタイトルで
+   .08em だと間延びして見え、かつ折り返しやすくなるため（#195 の調査 §3-4）。
+   書体は Bravura が推奨するセリフ体（.print-page で定義した --score-text-font）にそろえる。 */
+.score-title {
+  margin: 0; font-size: 26px; text-align: center; letter-spacing: .02em;
+  font-family: var(--score-text-font);
+}
+.score-subtitle {
+  margin: 4px 0 0; font-size: 14px; text-align: center; color: #555;
+  font-family: var(--score-text-font);
+}
+/* 作詞者・作曲者・編曲者（右上）。以前は ScorePage.tsx のインライン style に
+   直書きされていて A/B 比較でしか値を変えられなかったので、クラスへ切り出した。
+   position: absolute のままなので、長いタイトルとの重なり（#204）はここでは直さない。 */
+.score-credit {
+  position: absolute; top: 0; right: 0; text-align: right;
+  font-size: 13px; color: #555;
+  font-family: var(--score-text-font);
+}
 .page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; }
 /* pointer-events: none — ページ番号は absolute 配置のため、上下余白を狭くしたり
    段の間隔をマイナスにすると、ページ最下段の「◀ N小節 ▶」コントロールに重なって
@@ -1475,9 +1499,51 @@ button.ghost.active:hover:not(:disabled) {
 /* 表示ウェイト設定: --score-stroke-width / --score-text-weight を .score-area に注入して反映。
    SVG プレゼンテーション属性より CSS の方が詳細度が高いため上書きできる。
    選択ハイライト（rect.vf-hit など）は rect 要素なので path セレクタの影響を受けない。 */
+
+/* 浄書の既定値（Issue #202・候補A = Bravura engravingDefaults 準拠）
+   ------------------------------------------------------------------
+   下の `.score-area svg path` の一律指定は、要素ごとの太さ（符幹 1.5・加線 2 など）を
+   まとめて塗りつぶしてしまうため、「五線 < 小節線 ≦ 加線 < 連桁」という浄書の太さの
+   階層が消えていた（#195 の調査 §5）。そこで**対象ごとの個別指定**を下に足して、
+   五線・符幹・加線だけは自分の太さを持つようにする。
+
+   一律指定は「まだ個別指定を決めていない線」のフォールバックとして残す。
+   撤去してしまうと、スラー・タイの弧、終止括弧、連符の括弧、ペダル線などが
+   いっせいに元の属性値（1.5〜2.2 u）へ戻ってしまい、A/B比較で見ていない箇所まで
+   太さが変わる。どこまで個別指定へ移すかは段3以降の判断（設計書 §11-1 参照）。
+
+   太さの数値は `src/utils/engravingDefaults.ts` の ENGRAVING_THICKNESS_SP と同じ値。
+   片方だけ変えるとズレるので、`engravingDefaults.test.ts` が一致を見張っている。 */
+.score-area {
+  /* 表示ウェイト設定（細 0.8 / 標準 1.2 / 太 1.8）と印刷（0.8 固定）を、
+     個別指定にも効かせるための倍率。標準の 1.2 を基準にするので、
+     標準では 1.0 倍＝候補Aの値そのままになる。 */
+  --score-stroke-scale: calc(var(--score-stroke-width, 1.2) / 1.2);
+}
 .score-area svg path,
 .score-area svg line {
   stroke-width: var(--score-stroke-width, 1.2);
+}
+/* 五線の5本線（Bravura: staffLineThickness 0.13sp） */
+.score-area svg g.vf-stave > path {
+  stroke-width: calc(1.3px * var(--score-stroke-scale, 1));
+}
+/* 符幹（Bravura: stemThickness 0.12sp）。値は変更前と同じだが、
+   一律指定と同じ太さを明示しておかないと属性の 1.5 u に戻ってしまう */
+.score-area svg g.vf-stem > path {
+  stroke-width: calc(1.2px * var(--score-stroke-scale, 1));
+}
+/* 加線（Bravura: legerLineThickness 0.16sp）。
+   VexFlow は既定で薄いグレー（#444）で描くが、浄書では五線と同じ黒にする */
+.score-area svg g.vf-stavenote > path[stroke] {
+  stroke-width: calc(1.6px * var(--score-stroke-scale, 1));
+  stroke: #000;
+}
+/* セクション内の細いサブ括弧（Vln.I / Vln.II をまとめる等）。
+   Bravura: subBracketThickness 0.16sp。総譜左端の太いメイン括弧は
+   VexFlow が幅 3 u の塗り矩形で描いており、これとは別物（太さは変えていない） */
+.score-area svg path.vf-sub-bracket {
+  stroke-width: calc(1.6px * var(--score-stroke-scale, 1));
 }
 .score-area svg text {
   font-weight: var(--score-text-weight, 400);

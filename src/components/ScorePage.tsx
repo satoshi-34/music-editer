@@ -4881,7 +4881,11 @@ export default function ScorePage() {
                           {!isPartExtractionEditingAllowed && '（閲覧・印刷専用）'}
                         </p>
                       )}
-                      <div style={{ position: 'absolute', top: 0, right: 0, textAlign: 'right', fontSize: 14, color: '#555' }}>
+                      {/* 作詞者・作曲者・編曲者。見た目（位置・文字サイズ・書体）は
+                          App.css の .score-credit へ移した（Issue #202）。
+                          インライン style に直書きだと A/B 比較でしか値を変えられず、
+                          浄書の既定値の正本がコードの奥に埋もれてしまうため。 */}
+                      <div className="score-credit">
                         <div contentEditable suppressContentEditableWarning onBlur={(e) => setLyricist(e.currentTarget.innerText)}>{lyricist}</div>
                         <div contentEditable suppressContentEditableWarning onBlur={(e) => setComposer(e.currentTarget.innerText)}>{composer}</div>
                         <div contentEditable suppressContentEditableWarning onBlur={(e) => setArranger(e.currentTarget.innerText)}>{arranger}</div>
