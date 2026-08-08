@@ -1,7 +1,8 @@
 // PianoSystemCanvas.tsx
 // 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
   Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType, Dot, Tuplet,
@@ -37,6 +38,13 @@ import {
   parseSymbolScaleInput,
   parseSymbolOffsetInput,
 } from '../utils/measureMetaInputUtils';
+import {
+  applySymbolOffsetNudge,
+  resolveSymbolOffsetNudge,
+  SYMBOL_OFFSET_NUDGE_STEP,
+  SYMBOL_OFFSET_NUDGE_STEP_LARGE,
+  type SymbolOffsetNudge,
+} from '../utils/symbolOffsetNudgeUtils';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
@@ -1050,6 +1058,10 @@ export default function PianoSystemCanvas({
   } | null>(null);
 
   // カスタム記号位置調整オーバーレイの状態（symbolResizeEditState と同じパターン。横・縦の2入力のみ違う）
+  //
+  // currentX / currentY は「オーバーレイを開いた時点の保存済みの値」で、最後まで書き換えない。
+  // Esc で開いた時点へ戻すときの戻り先であり、blur だけで閉じたときの no-op 判定の基準でもあるため。
+  // draftX / draftY は矢印キーで動かしている最中の値（まだ保存していない下書き。Issue #205）。
   const [symbolOffsetEditState, setSymbolOffsetEditState] = useState<{
     partIndex: number;
     measureAbsoluteIndex: number;
@@ -1058,6 +1070,8 @@ export default function PianoSystemCanvas({
     target: AdjustTarget;
     currentX: string;
     currentY: string;
+    draftX: number;
+    draftY: number;
     overlayX: number;
     overlayY: number;
   } | null>(null);
@@ -1075,6 +1089,94 @@ export default function PianoSystemCanvas({
     overlayX: number;
     overlayY: number;
   } | null>(null);
+
+  // 位置調整オーバーレイで矢印キーを押している最中の「まだ保存していない差分」（Issue #205）。
+  // 保存済みの値と同じ間は null になるので、オーバーレイを開いただけでは描き直しが起きない。
+  const symbolOffsetDraft = useMemo(() => {
+    if (!symbolOffsetEditState) return null;
+    const { currentX, currentY, draftX, draftY, ...rest } = symbolOffsetEditState;
+    if (draftX === parseSymbolOffsetInput(currentX) && draftY === parseSymbolOffsetInput(currentY)) return null;
+    return { ...rest, draftX, draftY };
+  }, [symbolOffsetEditState]);
+
+  // 上の下書きを「描き直しが要るかどうか」の判定に使える1本の文字列へ畳んだもの。
+  // 描画 effect の依存配列にはこちらを入れる（オブジェクトを入れると毎レンダー別物と見なされ、
+  // 関係のない再レンダーのたびに譜面全体を描き直してしまうため）。
+  const symbolOffsetDraftKey = symbolOffsetDraft
+    ? [
+        symbolOffsetDraft.partIndex, symbolOffsetDraft.measureAbsoluteIndex,
+        symbolOffsetDraft.eventIndex, symbolOffsetDraft.voiceIndex,
+        symbolOffsetDraft.target.type === 'custom' ? symbolOffsetDraft.target.symbolId : symbolOffsetDraft.target.kind,
+        symbolOffsetDraft.draftX, symbolOffsetDraft.draftY,
+      ].join('|')
+    : '';
+
+  /**
+   * 描画に使う譜面データ。矢印キーで位置を動かしている最中だけ、対象の記号のオフセットを
+   * 差し替えたコピーを返す（＝画面では動いて見えるが、保存データ partsScore は変えない）。
+   *
+   * なぜこうするか: partsScore を書き換えると親へ通知が飛び、1押しごとに Undo 履歴が1件積まれる。
+   * 10回動かしたら Undo が10回必要になってしまうため、確定（Enter/外クリック）のときに
+   * 1回だけ本物のデータへ書き込む形にしている（Issue #205）。
+   */
+  const partsScoreForRender = useMemo(() => {
+    if (!symbolOffsetDraft) return partsScore;
+    const { partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target, draftX, draftY } = symbolOffsetDraft;
+    const partData = partsScore[partIndex];
+    if (!partData || measureAbsoluteIndex >= partData.length) return partsScore;
+    const measure = partData[measureAbsoluteIndex];
+    const targetEv = getVoiceEvents(measure, voiceIndex)[eventIndex];
+    if (!targetEv) return partsScore;
+    const nextPart = [...partData];
+    nextPart[measureAbsoluteIndex] = withVoiceEventsUpdated(measure, voiceIndex, (events) => {
+      const copy = [...events];
+      copy[eventIndex] = target.type === 'custom'
+        ? setCustomSymbolOffset(targetEv, target.symbolId, draftX, draftY)
+        : setSymbolAdjustOffset(targetEv, target.kind, draftX, draftY);
+      return copy;
+    });
+    const next = [...partsScore];
+    next[partIndex] = nextPart;
+    return next;
+  }, [partsScore, symbolOffsetDraft]);
+
+  /**
+   * 矢印キー1押しぶんの移動を下書きへ反映する。
+   * 入力欄は非制御（defaultValue + ref）なので、DOM の value を直接書き換えて数値表示も追従させる。
+   * 「入力欄に打ち込んだ値 → そこから矢印キー」も自然につながるよう、
+   * 基準値は state ではなく入力欄の現在値から読む。
+   */
+  const nudgeSymbolOffset = (nudge: SymbolOffsetNudge) => {
+    if (!symbolOffsetEditState) return;
+    // 入力欄の value（DOM）を基準にするのがポイント。キーを押しっぱなしにすると
+    // 再レンダーを待たずに何度も keydown が来るが、DOM の値はその場で書き換わっているので
+    // 「古い state を基準にして同じ位置へ戻ってしまう」ことがない。
+    const rawX = symbolOffsetXInputRef.current?.value ?? String(symbolOffsetEditState.draftX);
+    const rawY = symbolOffsetYInputRef.current?.value ?? String(symbolOffsetEditState.draftY);
+    const { x, y } = applySymbolOffsetNudge(rawX, rawY, nudge);
+    // DOM の書き換えは setState の更新関数の外で行う。
+    // 更新関数は React が2回呼ぶことがある（開発時の StrictMode）ため、
+    // 中で副作用を起こすと移動量が2倍になってしまう。
+    if (symbolOffsetXInputRef.current) symbolOffsetXInputRef.current.value = String(x);
+    if (symbolOffsetYInputRef.current) symbolOffsetYInputRef.current.value = String(y);
+    setSymbolOffsetEditState(prev => (
+      prev && (prev.draftX !== x || prev.draftY !== y) ? { ...prev, draftX: x, draftY: y } : prev
+    ));
+  };
+
+  /**
+   * 位置調整オーバーレイの入力欄で押されたキーの処理。横・縦の両方の入力欄で共通に使う。
+   * 矢印キーは number 入力の既定動作（スピンボタン・カーソル移動）を preventDefault で止めてから
+   * 自前の移動へ振り替える。理由は .claude/specs/custom-symbol-editor/design.md に記録。
+   * 矢印キーでなければ false を返し、呼び出し側の Enter/Esc の処理へ進ませる。
+   */
+  const handleSymbolOffsetArrowKey = (e: ReactKeyboardEvent<HTMLInputElement>): boolean => {
+    const nudge = resolveSymbolOffsetNudge(e.key, e.shiftKey);
+    if (!nudge) return false;
+    e.preventDefault();
+    nudgeSymbolOffset(nudge);
+    return true;
+  };
 
   // 選択中の弧。voiceIndex は「その弧が載っている声部」（Issue #190）。
   // これが無いと、声部2の弧を選んだのに声部1の同じ位置の弧を消してしまう。
@@ -2487,7 +2589,9 @@ export default function PianoSystemCanvas({
 
       parts.forEach((part, pi) => {
         const stave=staveSets[pi][i];
-        const score=partsScore[pi]??[];
+        // 描画に使うのは partsScoreForRender（矢印キーで動かしている最中の下書きを反映したコピー）。
+        // 保存データ側の partsScore を直接使うと、確定するまで画面に反映されない（Issue #205）。
+        const score=partsScoreForRender[pi]??[];
         // この小節時点で有効なクレフ（途中クレフ変更対応）。パートごとの小節データ（part.data）から解決する。
         // クリックハンドラなど後から呼ばれる処理でも、absI は forEach 反復ごとに固定された const のため
         // ここで解決した clefHere をそのまま安全に参照できる。
@@ -3560,6 +3664,9 @@ export default function PianoSystemCanvas({
                   target: { type: 'custom', symbolId: customSymbolOffsetMode, name: customSymbolOffsetMode },
                   currentX: String(existing.offsetX ?? 0),
                   currentY: String(existing.offsetY ?? 0),
+                  // 下書きは「開いた時点の値」から始める（矢印キーを押すまでは保存値と同じ）
+                  draftX: existing.offsetX ?? 0,
+                  draftY: existing.offsetY ?? 0,
                   overlayX: me.clientX - (containerRect?.left ?? 0),
                   overlayY: me.clientY - (containerRect?.top ?? 0),
                 });
@@ -4578,7 +4685,9 @@ export default function PianoSystemCanvas({
   // 「描画した時点のアクティブ声部」を閉じ込めている。deps に入れ忘れると、声部トグルを
   // 切り替えても五線が描き直されず、古い声部向けのハンドラが残ったままになる
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
-  },[partsScore,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex]);
+  // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
+  // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
@@ -4800,6 +4909,8 @@ export default function PianoSystemCanvas({
           partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target,
           currentX: String(existing.offsetX ?? 0),
           currentY: String(existing.offsetY ?? 0),
+          draftX: existing.offsetX ?? 0,
+          draftY: existing.offsetY ?? 0,
           overlayX, overlayY,
         });
       }
@@ -4816,6 +4927,8 @@ export default function PianoSystemCanvas({
           partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target,
           currentX: String(adjust.offsetX),
           currentY: String(adjust.offsetY),
+          draftX: adjust.offsetX,
+          draftY: adjust.offsetY,
           overlayX, overlayY,
         });
       }
@@ -5223,6 +5336,9 @@ export default function PianoSystemCanvas({
           <span style={{ fontSize: 10, color: '#0891b2', fontFamily: 'sans-serif' }}>
             記号位置調整（横・縦は{MIN_SYMBOL_OFFSET}〜{MAX_SYMBOL_OFFSET}px、縦は＋で下・−で上、空欄で0）
           </span>
+          <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'sans-serif' }}>
+            矢印キーで{SYMBOL_OFFSET_NUDGE_STEP}pxずつ移動（Shiftで{SYMBOL_OFFSET_NUDGE_STEP_LARGE}px）・Enterで確定・Escで元へ戻す
+          </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
               <span style={{ fontSize: 12, fontFamily: 'sans-serif' }}>横</span>
@@ -5244,12 +5360,19 @@ export default function PianoSystemCanvas({
                   padding: 2,
                 }}
                 onKeyDown={(e) => {
+                  // 矢印キーは位置移動へ振り替える（true が返ったら Enter/Esc の判定は不要）
+                  if (handleSymbolOffsetArrowKey(e)) {
+                    e.stopPropagation();
+                    return;
+                  }
                   if (e.key === 'Enter') {
                     handleSymbolOffsetConfirm(
                       (e.target as HTMLInputElement).value,
                       symbolOffsetYInputRef.current?.value ?? symbolOffsetEditState.currentY
                     );
                   } else if (e.key === 'Escape') {
+                    // 下書きごと捨てるだけで、開いた時点の位置へ戻る
+                    // （保存データ partsScore は矢印キーでは一度も書き換えていないため）
                     setSymbolOffsetEditState(null);
                   }
                   e.stopPropagation();
@@ -5281,6 +5404,11 @@ export default function PianoSystemCanvas({
                   padding: 2,
                 }}
                 onKeyDown={(e) => {
+                  // 横の入力欄と同じ扱い。どちらにフォーカスがあっても十字キーの向き＝記号の動く向き
+                  if (handleSymbolOffsetArrowKey(e)) {
+                    e.stopPropagation();
+                    return;
+                  }
                   if (e.key === 'Enter') {
                     handleSymbolOffsetConfirm(
                       symbolOffsetXInputRef.current?.value ?? symbolOffsetEditState.currentX,
