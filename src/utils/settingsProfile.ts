@@ -32,7 +32,6 @@ import {
   SYSTEM_ROW_GAP_MAX_PX,
   PART_SPACING_OFFSET_MIN_PX,
   PART_SPACING_OFFSET_MAX_PX,
-  PART_SPACING_OFFSET_DEFAULT_PX,
   resolveDefaultLayoutForScoreType,
 } from './measureLayoutUtils';
 
@@ -123,7 +122,7 @@ export function getFactoryDefaultSettingsProfile(): ScoreSettingsProfile {
     titleMarginTopMm: DEFAULT_TITLE_MARGIN_TOP_MM,
     titleMarginBottomMm: DEFAULT_TITLE_MARGIN_BOTTOM_MM,
     systemRowGapPx: defaultLayout.systemRowGapPx,
-    partSpacingOffsetPx: PART_SPACING_OFFSET_DEFAULT_PX,
+    partSpacingOffsetPx: defaultLayout.partSpacingOffsetPx,
   };
 }
 
