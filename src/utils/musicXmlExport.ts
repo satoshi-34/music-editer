@@ -5,7 +5,7 @@ import type { SavedScoreData, NoteEvent, MeasureData } from '../types/storage';
 import type { KeySignature } from './noteKeyUtils';
 import type { ClefType } from '../components/clefUtils';
 import { resolveMeasureClef } from './clefMeasureUtils';
-import { getMeasureVoices } from './voiceMeasureUtils';
+import { getMeasureVoices, getVoiceEvents } from './voiceMeasureUtils';
 
 // 分割数（division）: 四分音符 = 16分割。全音符〜64分音符を整数で表せる最小値
 const DIVISIONS = 16;
@@ -119,20 +119,40 @@ function dynamicsDirectionXml(ev: NoteEvent, staff: number): string {
 }
 
 /**
- * 松葉（ヘアピン）の開始/終了位置マップをパート単位で作る。
+ * 松葉（ヘアピン）の開始/終了位置マップ。
+ * キーはどちらも `${小節の絶対インデックス}-${イベントのインデックス}`。
+ * starts は「その位置から始まる松葉の種類の一覧」、stops は「その位置で終わる松葉の本数」。
+ */
+type HairpinPositionMaps = {
+  starts: Map<string, Array<'crescendo' | 'diminuendo'>>;
+  stops: Map<string, number>;
+};
+
+/** 松葉（ヘアピン）1つぶんの <direction> 要素を作る（開始・終了で同じ形なので共通化） */
+function wedgeDirectionXml(wedgeType: 'crescendo' | 'diminuendo' | 'stop', staff: number): string {
+  return `<direction placement="below"><direction-type><wedge type="${wedgeType}"/></direction-type><staff>${staff}</staff></direction>`;
+}
+
+/**
+ * 松葉（ヘアピン）の開始/終了位置マップを「パート内の1つの声部」ぶんだけ作る。
  * MusicXML の <wedge> は「開始位置に type="crescendo|diminuendo"、
  * 終了位置に type="stop"」を direction として置く方式のため、
  * 開始音符に保持しているデータ（endMeasure / endEvent）を
  * 「この小節・このイベントの直前/直後に direction を出す」形へ変換しておく。
+ *
+ * 声部ごとに別々のマップを作るのは、松葉の始点と終点が必ず同じ声部の中で閉じる
+ * （設計メモ `.claude/specs/voice2-arc-support/design.md` §2 の案A）ため。
+ * こうしておくと、声部1と声部2の同じ位置（例: どちらも 0 小節目の 0 番目）に
+ * 松葉があってもキーが衝突しない。
+ *
+ * @param voiceIndex 0 = 声部1（measure.events）、1 = 声部2（measure.voices[1]）。
+ *   既定を 0 にしてあるので、声部1だけを扱っていた既存の呼び出しはそのまま動く。
  */
-export function buildHairpinPositionMaps(measures: MeasureData[]): {
-  starts: Map<string, Array<'crescendo' | 'diminuendo'>>;
-  stops: Map<string, number>;
-} {
+export function buildHairpinPositionMaps(measures: MeasureData[], voiceIndex = 0): HairpinPositionMaps {
   const starts = new Map<string, Array<'crescendo' | 'diminuendo'>>();
   const stops = new Map<string, number>();
   measures.forEach((measure, mi) => {
-    measure.events.forEach((ev, ei) => {
+    getVoiceEvents(measure, voiceIndex).forEach((ev, ei) => {
       ev.hairpins?.forEach((h) => {
         const startKey = `${mi}-${ei}`;
         const list = starts.get(startKey) ?? [];
@@ -225,8 +245,10 @@ function measureToXml(
     prevTimeSig?: [number, number];
     prevKeyFifths?: number;
     effectiveKeyFifths: number;
-    /** 松葉（ヘアピン）の開始/終了位置マップ（パート全体で事前計算したもの） */
-    hairpins?: { starts: Map<string, Array<'crescendo' | 'diminuendo'>>; stops: Map<string, number> };
+    /** 声部1の松葉（ヘアピン）の開始/終了位置マップ（パート全体で事前計算したもの） */
+    hairpins?: HairpinPositionMaps;
+    /** 声部2の松葉（ヘアピン）の開始/終了位置マップ（同上・声部ごとに別マップ） */
+    hairpinsVoice2?: HairpinPositionMaps;
     /** この小節の絶対インデックス（hairpins のキー照合に使う） */
     measureIndex?: number;
   }
@@ -281,7 +303,7 @@ function measureToXml(
     // 松葉（ヘアピン）開始: この音符の直前に <wedge type="crescendo|diminuendo"/> を置く
     const hpKey = `${options.measureIndex ?? 0}-${i}`;
     options.hairpins?.starts.get(hpKey)?.forEach((wedgeType) => {
-      lines.push(`<direction placement="below"><direction-type><wedge type="${wedgeType}"/></direction-type><staff>${options.staff}</staff></direction>`);
+      lines.push(wedgeDirectionXml(wedgeType, options.staff));
     });
     let tupletPos: { isFirst: boolean; isLast: boolean } | undefined;
     if (ev.tuplet) {
@@ -293,20 +315,30 @@ function measureToXml(
     // 松葉（ヘアピン）終了: 終了音符の直後に <wedge type="stop"/> を置く
     const stopCount = options.hairpins?.stops.get(hpKey) ?? 0;
     for (let k = 0; k < stopCount; k++) {
-      lines.push(`<direction placement="below"><direction-type><wedge type="stop"/></direction-type><staff>${options.staff}</staff></direction>`);
+      lines.push(wedgeDirectionXml('stop', options.staff));
     }
   }
 
   // 声部2（ピアノ譜の下声など）: 入力されている小節だけ <backup> で時間を巻き戻してから出力する。
-  // 声部2は現状、連符・強弱・松葉（ヘアピン）の入力UIが無いため、noteToXml をそのまま使い回しても
-  // 通常はそれらの要素は付かない（データ上に付いていた場合でも noteToXml が対応済みなので害はない）。
+  // <backup> は「今の書き出し位置を duration ぶん巻き戻す」指示なので、これ以降に並べた
+  // 音符・direction はすべて声部2の側に属する（読込側も <backup> を境に声部を分けている）。
   const voicesForXml = getMeasureVoices(measure);
   const voice2Events = voicesForXml.length > 1 ? voicesForXml[1].events : [];
   if (voice2Events.length > 0) {
     const voice1Ticks = events.reduce((sum, ev) => sum + eventDurationTicks(ev), 0);
     lines.push(`<backup><duration>${voice1Ticks}</duration></backup>`);
-    voice2Events.forEach((ev) => {
+    voice2Events.forEach((ev, i) => {
+      // 声部2の松葉（ヘアピン）も声部1と同じ並び（開始音符の直前・終了音符の直後）で出す。
+      // 位置マップは声部2ぶんを別に受け取っているので、声部1の松葉と混ざることはない。
+      const hpKey = `${options.measureIndex ?? 0}-${i}`;
+      options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
+        lines.push(wedgeDirectionXml(wedgeType, options.staff));
+      });
       lines.push(noteToXml(ev, 2, options.staff));
+      const stopCount = options.hairpinsVoice2?.stops.get(hpKey) ?? 0;
+      for (let k = 0; k < stopCount; k++) {
+        lines.push(wedgeDirectionXml('stop', options.staff));
+      }
     });
   }
 
@@ -339,8 +371,9 @@ export function scoreToMusicXml(data: SavedScoreData): string {
     let effectiveKeyFifths = globalKeyFifths;
     let prevKeyFifths: number | undefined;
     let prevClef: ClefType | undefined;
-    // 松葉（ヘアピン）の開始/終了位置をパート全体で事前計算しておく
-    const hairpins = buildHairpinPositionMaps(p.measures);
+    // 松葉（ヘアピン）の開始/終了位置をパート全体で事前計算しておく（声部ごとに別マップ）
+    const hairpins = buildHairpinPositionMaps(p.measures, 0);
+    const hairpinsVoice2 = buildHairpinPositionMaps(p.measures, 1);
     const measuresXml = p.measures.map((m, mi) => {
       // 途中調号変更: この小節に keySignature があれば、それ以降有効な調号として更新する
       if (m.keySignature) {
@@ -359,6 +392,7 @@ export function scoreToMusicXml(data: SavedScoreData): string {
         prevKeyFifths,
         effectiveKeyFifths,
         hairpins,
+        hairpinsVoice2,
         measureIndex: mi,
       });
       prevClef = effectiveClef;

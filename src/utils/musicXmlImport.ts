@@ -166,20 +166,25 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
 }
 
 /**
- * 松葉（ヘアピン）を声部1の NoteEvent へ復元する。
+ * 松葉（ヘアピン）を1つの声部の NoteEvent へ復元する。
  * 書出側（musicXmlExport.ts）は
  * 「開始音符の直前に <direction><wedge type="crescendo|diminuendo"/></direction>」
  * 「終了音符の直後に <direction><wedge type="stop"/></direction>」
  * という並びで出力しているため、<measure> の直下の子要素（note と direction）を
  * 出現順に読み、直前/直後の note との対応を追いながら組み立てる。
  *
- * @param children 声部1に属する <measure> 直下の子要素（<backup> より前の部分）
- * @param events parseNotes(voice1のnoteEls) の結果。ここへ hairpins を直接書き込む
+ * 声部1（<backup> より前）と声部2（<backup> より後）で同じ処理が使えるので、
+ * 呼び出し側が「その声部ぶんの子要素・イベント配列・待ち行列」を渡す形にしてある。
+ *
+ * @param children その声部に属する <measure> 直下の子要素（声部1なら <backup> より前、声部2なら後）
+ * @param events parseNotes(その声部のnoteEls) の結果。ここへ hairpins を直接書き込む
  * @param measureIndex この小節の絶対インデックス（HairpinMark.endMeasure に使う）
  * @param openRefs まだ <wedge type="stop"/> に出会っていない HairpinMark の待ち行列。
  *   パート全体で1つを使い回すことで、小節をまたぐ松葉にも対応する（FIFO想定）。
+ *   声部をまたぐ松葉は作らない設計なので、待ち行列も声部ごとに分ける
+ *   （混ぜると声部1の stop が声部2の松葉を閉じてしまう）。
  */
-function attachHairpinsToVoice1Events(
+function attachHairpinsToVoiceEvents(
   children: Element[],
   events: NoteEvent[],
   measureIndex: number,
@@ -282,8 +287,10 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     }
 
     const measureEls = Array.from(partEl.querySelectorAll('measure'));
-    // 松葉（ヘアピン）は小節をまたぐ場合があるため、パート全体で1つの待ち行列を使い回す
+    // 松葉（ヘアピン）は小節をまたぐ場合があるため、パート全体で1つの待ち行列を使い回す。
+    // 声部1と声部2で別々に持つのは、<backup> を挟んで別々の松葉が同時に開くことがあるため。
     const openHairpinRefs: HairpinMark[] = [];
+    const openHairpinRefsVoice2: HairpinMark[] = [];
     const measures: MeasureData[] = measureEls.map((measureEl, mi) => {
       // 声部2（下声など）は書出側が <backup> で区切って出力しているため、
       // <backup> より前を声部1、後を声部2として分ける。
@@ -294,10 +301,12 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
 
       const voice1NoteEls = voice1Children.filter((el) => el.tagName === 'note');
       const events = parseNotes(voice1NoteEls);
-      attachHairpinsToVoice1Events(voice1Children, events, mi, openHairpinRefs);
+      attachHairpinsToVoiceEvents(voice1Children, events, mi, openHairpinRefs);
 
       const voice2NoteEls = voice2Children.filter((el) => el.tagName === 'note');
       const voice2Events = voice2NoteEls.length > 0 ? parseNotes(voice2NoteEls) : [];
+      // 声部2の松葉も同じ方式で復元する（voice2Events の要素を直接書き換える）
+      attachHairpinsToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2);
 
       // リピート
       const leftBarline = measureEl.querySelector('barline[location="left"] repeat');
