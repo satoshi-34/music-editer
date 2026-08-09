@@ -4,7 +4,9 @@
 // - 3項目がレイアウトタブにあり、楽譜設定タブには残っていないこと
 // - 「段あたり小節数」「段数/ページ」が「譜面の密度」グループ内の入れ子グループ「段組」にあること
 // - 楽譜設定タブが「楽譜の種類・編成・拍子・調号・パート表示」だけになっていること
-// - **保存先が変わっていないこと**（段数/ページ＝localStorage、段あたり小節数＝画面設定キーを作らない）
+// - **保存先**（段数/ページ＝localStorage、段あたり小節数＝譜面データ側）
+//   ※ Issue #211 で、どちらも「楽譜種別ごとの値」を覚えるキーが1つ増えた。旧単一キー
+//     score-systems-per-page への書き込みは後方互換のため継続している。
 // レンダー手法は ScorePageLayoutTabGroups.test.tsx と同じ ScorePage の直接マウントを使う。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -113,7 +115,12 @@ describe('楽譜設定タブ→レイアウトタブへの項目移動（Issue #
     expect(localStorageMock.getItem('score-systems-per-page')).toBe('3');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('「段あたり小節数」は画面設定の localStorage キーを作らない（譜面データ側の保存のまま）', () => {
+  // Issue #144 の時点では「段あたり小節数は画面設定の localStorage キーを一切作らない」
+  // ことを固定していたが、Issue #211 で「楽譜種別ごとに最後に使った値を覚える」ようになり、
+  // 段組専用の1キー（score-system-layout-by-score-type）だけは増えるようになった。
+  // 譜面データ側の保存が正であること（自動保存の依存配列は ScorePageAutosaveDeps.test.tsx が
+  // 担保）は変わらないので、ここでは「増えるのはその1キーだけ」を固定する。
+  it('「段あたり小節数」が増やす画面設定キーは種別ごとの段組キーだけ（譜面データ側の保存は従来どおり）', () => {
     render(<ScorePage />);
     openLayoutTab();
 
@@ -125,12 +132,10 @@ describe('楽譜設定タブ→レイアウトタブへの項目移動（Issue #
     fireEvent.change(input, { target: { value: '6' } });
     expect(input.value).toBe('6');
 
-    // 画面設定（localStorage）側には新しいキーが増えない。measuresPerSystem は
-    // 譜面データとして保存される（自動保存の依存配列は ScorePageAutosaveDeps.test.tsx が担保）。
     const addedKeys = Array.from(
       { length: localStorageMock.length },
       (_, i) => localStorageMock.key(i) as string
     ).filter((key) => !keysBefore.has(key));
-    expect(addedKeys.filter((key) => key.includes('measures-per-system'))).toEqual([]);
+    expect(addedKeys).toEqual(['score-system-layout-by-score-type']);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

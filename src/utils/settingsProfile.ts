@@ -34,6 +34,9 @@ import {
   PART_SPACING_OFFSET_MAX_PX,
   resolveDefaultLayoutForScoreType,
 } from './measureLayoutUtils';
+// 「段あたり小節数」の既定値は、楽譜種別ごとの段組保存（Issue #211）と同じ定数を使う。
+// 2箇所に 4 を書くと片方だけ変えたときに食い違うため、正本を1つにしている。
+import { DEFAULT_MEASURES_PER_SYSTEM } from './systemLayoutPrefs';
 
 /** 「段あたり小節数」の入力欄が取りうる範囲（ScorePage.tsx の number input と同じ範囲） */
 const MEASURES_PER_SYSTEM_MIN = 1;
@@ -111,7 +114,7 @@ export function getFactoryDefaultSettingsProfile(): ScoreSettingsProfile {
     instrumentationPresetId: 'chamber-orchestra',
     timeSignature: [...DEFAULT_TIME_SIGNATURE],
     keySignature: 'C',
-    measuresPerSystem: 4,
+    measuresPerSystem: DEFAULT_MEASURES_PER_SYSTEM,
     systemsPerPageSetting: null,
     displayWeight: 'normal',
     measureWidthEvenness: MEASURE_WIDTH_EVENNESS,
