@@ -24,6 +24,8 @@ import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
 import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
+import { useDevicePixelRatio } from './useDevicePixelRatio';
+import { computeScreenStrokeFloorMultiplier } from '../utils/engravingDefaults';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useWorkLibrary } from '../hooks/useWorkLibrary';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
@@ -2694,6 +2696,25 @@ export default function ScorePage() {
   // レイアウト崩れを防ぐため）。
   const effectiveRenderScale = SCORE_LAYOUT_RENDER_SCALE * effectiveNotationSizeMultiplier;
 
+  // 表示ウェイト設定（細/標準/太）を CSS へ渡す値。フロアの計算でも同じ値を使うため、
+  // 描画側（.score-area の style）と2か所に書かずここで1回だけ決める。
+  const scoreStrokeWidthVar = displayWeight === 'thin' ? 0.8 : displayWeight === 'thick' ? 1.8 : 1.2;
+  const devicePixelRatio = useDevicePixelRatio();
+  // 画面表示で線が細くなりすぎないようにする下限（フロア）の倍率（Issue #210）。
+  // SVG論理単位1つが画面上で何 px になるかは、VexFlow の描画倍率（effectiveRenderScale）と
+  // ページ全体に掛かる CSS の transform: scale（effectiveScale）の積で決まる。
+  // 印刷プレビューは「紙に出たときの見た目」を見るための表示なので、フロアは掛けない
+  // （実際の印刷も App.css の @media print 側で 1 に戻している）。
+  const screenStrokeFloorMultiplier = useMemo(() => (
+    isPrintPreview
+      ? 1
+      : computeScreenStrokeFloorMultiplier({
+        totalDisplayScale: effectiveRenderScale * effectiveScale,
+        strokeWeightScale: scoreStrokeWidthVar / 1.2,
+        devicePixelRatio,
+      })
+  ), [isPrintPreview, effectiveRenderScale, effectiveScale, scoreStrokeWidthVar, devicePixelRatio]);
+
   // ユーザー設定（その他タブの「ページ余白（左右）」スライダー、8〜25mm）。
   // 壊れた保存値でも安全なよう必ずクランプする。既定値は measureLayoutUtils の
   // DEFAULT_PAGE_SIDE_MARGIN_MM（14mm）と一致させ、未設定時は従来と同じ幅になるようにする。
@@ -4920,8 +4941,11 @@ export default function ScorePage() {
                 </header>
 
                 <div className="score-area" style={{
-                  '--score-stroke-width': displayWeight === 'thin' ? '0.8' : displayWeight === 'thick' ? '1.8' : '1.2',
+                  '--score-stroke-width': String(scoreStrokeWidthVar),
                   '--score-text-weight': displayWeight === 'thin' ? '300' : displayWeight === 'thick' ? '700' : '400',
+                  // 画面表示で線が細くなりすぎないようにする下限の倍率（Issue #210）。
+                  // 発動しないときは 1 なので、App.css 側の計算は候補Aの値そのままになる。
+                  '--score-stroke-floor': String(screenStrokeFloorMultiplier),
                   // 行グリッド: 全ページで「1段ぶんの高さ」を揃えるための比率。
                   // --page-capacity はこのページの段数（キャパシティ）で、.system-stack の
                   // flex-grow に使う（App.css 参照）。CSS カスタムプロパティは子孫へ継承されるため、
