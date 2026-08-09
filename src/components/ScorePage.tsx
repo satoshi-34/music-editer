@@ -4852,44 +4852,64 @@ export default function ScorePage() {
                     // タイトル余白（上下）はタイトルページ（1ページ目）だけに効く。
                     // App.css の .page-head--title がこの2変数を padding-top / margin-bottom へ
                     // 適用する（フォールバックは変数未注入時＝2ページ目以降と同じ0mm/6mm）。
-                    position: 'relative',
+                    // position: relative はインライン指定をやめ App.css の .page-head へ移した（#204）。
                     '--title-margin-top': `${titleMarginTopMm}mm`,
                     '--title-margin-bottom': `${titleMarginBottomMm}mm`,
-                  } as React.CSSProperties : { position: 'relative' }}
+                  } as React.CSSProperties : undefined}
                 >
                   {i === 0 ? (
                     <>
-                      <h1
-                        className="score-title"
-                        contentEditable suppressContentEditableWarning
-                        onBlur={(e) => setTitle(e.currentTarget.innerText)}
-                      >
-                        {title}
-                      </h1>
-                      <p
-                        className="score-subtitle"
-                        contentEditable suppressContentEditableWarning
-                        onBlur={(e) => setSubtitle(e.currentTarget.innerText)}
-                      >
-                        {subtitle}
-                      </p>
+                      {/* タイトル欄は「左の見えない控え / タイトル・サブタイトル / 作者欄」の
+                          3列グリッド（Issue #204）。以前は作者欄だけを右上へ絶対配置していたため、
+                          タイトルが折り返す長さになると重なっていた。
+                          左端に作者欄と同じ内容の「控え」を visibility: hidden で置いているのは、
+                          左右の列幅をそろえてタイトルをページ中央に保つため（右だけ場所を空けると
+                          タイトルが左へずれてしまう）。見た目の指定は App.css の .score-head-grid 側。 */}
+                      {/* 作者欄が3つとも空のときは、タイトルが紙面の全幅を使えるように
+                          列の隙間も詰める（--empty-credit）。空欄でもタイトルが狭いままだと
+                          「作者を書かない譜面」で従来より窮屈になってしまうため。 */}
+                      <div className={`score-head-grid${(lyricist || composer || arranger) ? '' : ' score-head-grid--empty-credit'}`}>
+                        {/* 幅をそろえるためだけの控え。読み上げにも重複して出ないよう aria-hidden にする */}
+                        <div className="score-credit score-credit-spacer" aria-hidden="true">
+                          <div>{lyricist}</div>
+                          <div>{composer}</div>
+                          <div>{arranger}</div>
+                        </div>
+                        <div className="score-head-center">
+                          <h1
+                            className="score-title"
+                            contentEditable suppressContentEditableWarning
+                            onBlur={(e) => setTitle(e.currentTarget.innerText)}
+                          >
+                            {title}
+                          </h1>
+                          <p
+                            className="score-subtitle"
+                            contentEditable suppressContentEditableWarning
+                            onBlur={(e) => setSubtitle(e.currentTarget.innerText)}
+                          >
+                            {subtitle}
+                          </p>
+                        </div>
+                        {/* 作詞者・作曲者・編曲者。見た目（位置・文字サイズ・書体）は
+                            App.css の .score-credit へ移した（Issue #202）。
+                            インライン style に直書きだと A/B 比較でしか値を変えられず、
+                            浄書の既定値の正本がコードの奥に埋もれてしまうため。 */}
+                        <div className="score-credit">
+                          <div contentEditable suppressContentEditableWarning onBlur={(e) => setLyricist(e.currentTarget.innerText)}>{lyricist}</div>
+                          <div contentEditable suppressContentEditableWarning onBlur={(e) => setComposer(e.currentTarget.innerText)}>{composer}</div>
+                          <div contentEditable suppressContentEditableWarning onBlur={(e) => setArranger(e.currentTarget.innerText)}>{arranger}</div>
+                        </div>
+                      </div>
                       {isPartExtractionActive && (
                         // パート譜表示中は、どのパートを見ているかをタイトル欄の下へ小さく表示する。
                         // 編集できないパート（大譜表など）のときだけ「閲覧・印刷専用」と補足する。
+                        // グリッドの外（下）に置くのは、従来どおりタイトル欄の全幅を使わせるため。
                         <p className="score-part-extraction-label" style={{ fontSize: 13, color: '#555', margin: '2px 0 0' }}>
                           パート譜: {partExtractionSelection?.label}
                           {!isPartExtractionEditingAllowed && '（閲覧・印刷専用）'}
                         </p>
                       )}
-                      {/* 作詞者・作曲者・編曲者。見た目（位置・文字サイズ・書体）は
-                          App.css の .score-credit へ移した（Issue #202）。
-                          インライン style に直書きだと A/B 比較でしか値を変えられず、
-                          浄書の既定値の正本がコードの奥に埋もれてしまうため。 */}
-                      <div className="score-credit">
-                        <div contentEditable suppressContentEditableWarning onBlur={(e) => setLyricist(e.currentTarget.innerText)}>{lyricist}</div>
-                        <div contentEditable suppressContentEditableWarning onBlur={(e) => setComposer(e.currentTarget.innerText)}>{composer}</div>
-                        <div contentEditable suppressContentEditableWarning onBlur={(e) => setArranger(e.currentTarget.innerText)}>{arranger}</div>
-                      </div>
                     </>
                   ) : (
                     <p className="page-title">
