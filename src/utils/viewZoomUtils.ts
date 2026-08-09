@@ -21,6 +21,27 @@ const MM_TO_PX = 3.78;
 export const A4_PAGE_WIDTH_PX = 210 * MM_TO_PX;
 
 /**
+ * 「ページを並べられる幅」(px) を読む。
+ *
+ * 以前は表示領域そのもの（`.paper-rail`）の `clientWidth` を測っていたが、Issue #212 で
+ * `.paper-rail` に `min-width: min-content` を入れた（横スクロール時に背景を右端まで塗るため）
+ * ことにより、**拡大表示ではレール自身が中身の幅まで広がる**ようになった。
+ * そのままレールを測ると「広がった → もっと拡大してよい → さらに広がる」と
+ * 自分の出した結果を測り直す形（循環参照）になり、ズームの意味が変わってしまう。
+ *
+ * `body` は中身がはみ出しても広がらないブロック要素なので、「ウィンドウの幅」の代表として
+ * 安定している。`.app-root` / `#root` に左右の余白は無いため、はみ出しが無いときの値は
+ * 従来の `.paper-rail` の `clientWidth` と一致する（＝従来の表示は変わらない）。
+ *
+ * @param el 測定の起点になる要素（所属する document を辿るためだけに使う）
+ */
+export function readPageAreaAvailableWidth(el: Element | null | undefined): number {
+  const body = el?.ownerDocument?.body;
+  if (!body) return 0;
+  return body.clientWidth;
+}
+
+/**
  * 表示領域の幅(px)から、ページ1枚の幅がちょうど収まる「幅フィット」倍率を計算する。
  * - 表示領域がページより広い場合は 100%（1.0）で頭打ちにする（自然サイズを超えて拡大はしない）
  * - 表示領域がページより狭い場合はページ幅に収まるよう縮小する

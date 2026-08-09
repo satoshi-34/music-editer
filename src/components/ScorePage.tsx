@@ -138,7 +138,7 @@ import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHis
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrintableMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, isPartExtractionEditable, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
-import { computeFitZoom, VIEW_ZOOM_MIN, VIEW_ZOOM_MAX } from '../utils/viewZoomUtils';
+import { computeFitZoom, readPageAreaAvailableWidth, VIEW_ZOOM_MIN, VIEW_ZOOM_MAX } from '../utils/viewZoomUtils';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type ToolbarTab = 'notes' | 'symbols' | 'score' | 'layout' | 'playback' | 'other';
@@ -2595,14 +2595,16 @@ export default function ScorePage() {
     return Number.isFinite(n) ? Math.max(VIEW_ZOOM_MIN, Math.min(VIEW_ZOOM_MAX, n)) : 1;
   });
   // 初期ズームの「幅フィット」適用（issue #40）。ズーム未保存（初回起動・新規譜面時）の
-  // ときだけ、実際の表示領域（.paper-rail）の幅からフィット倍率を計算し初期値へ反映する。
+  // ときだけ、ページを並べられる幅からフィット倍率を計算し初期値へ反映する。
   // 保存済みのユーザー設定は上書きしない。ウィンドウリサイズへの追従は行わない
   // （初期値決定のみ。設計判断は .claude/specs/view-zoom/design.md 追補を参照）。
+  // 幅の測り先は .paper-rail ではない（Issue #212。レールは横スクロール時に
+  // 中身の幅まで広がるため、狭いウィンドウでも「広い」と誤って読めてしまう）。
   useEffect(() => {
     if (localStorage.getItem(VIEW_ZOOM_KEY) != null) return;
     const rail = spreadRef.current?.parentElement;
     if (!rail) return;
-    setViewZoom(computeFitZoom(rail.clientWidth));
+    setViewZoom(computeFitZoom(readPageAreaAvailableWidth(rail)));
     // 初回マウント時に一度だけ適用する
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
