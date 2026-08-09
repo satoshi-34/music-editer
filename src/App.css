@@ -1305,6 +1305,9 @@ button.ghost.active:hover:not(:disabled) {
 
 /* ===== タイトル・フッター ===== */
 .page-head {
+  /* 以前は ScorePage.tsx のインライン style で指定していた（#204 でこちらへ移動）。
+     いまタイトル欄に絶対配置の子は無いが、ページ番号など将来の絶対配置の基準として残す。 */
+  position: relative;
   /* 1ページ目だけタイトル・作者欄があるため、五線の開始位置を全ページでそろえる。 */
   min-height: 18mm;
   box-sizing: border-box;
@@ -1319,6 +1322,24 @@ button.ghost.active:hover:not(:disabled) {
   padding-top: var(--title-margin-top, 0mm);
   margin-bottom: var(--title-margin-bottom, 6mm);
 }
+/* タイトル欄の3列レイアウト（Issue #204）: [左の見えない控え][タイトル][作者欄]。
+   以前は作者欄だけ position: absolute で右上へ浮かせていたので幅が予約されず、
+   タイトルが折り返す長さになると作者欄と重なっていた。
+   同じ行に並べて場所を取り合わせることで重なりを無くしている。
+   左右の列（.score-credit と .score-credit-spacer）は中身も指定も同じなので幅が等しくなり、
+   タイトルは「作者欄の幅を避けつつページ中央」に留まる（右だけ空けると中央がずれる）。
+   auto にしているのは、作者名が短ければそのぶんタイトルが広く使えるようにするため。 */
+.score-head-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  /* タイトルと作者欄が上端でそろうように（既定の stretch だと列の高さが伸びるだけ） */
+  align-items: start;
+  /* タイトルの文字と作者名がくっついて見えないための最小の隙間 */
+  column-gap: 4mm;
+}
+/* 作詞者・作曲者・編曲者がすべて空のとき（ScorePage.tsx が付ける）。
+   左右の列は幅0になるので、隙間も消してタイトルへ紙面の全幅を返す。 */
+.score-head-grid--empty-credit { column-gap: 0; }
 /* タイトル・サブタイトル・作者欄（Issue #202・候補A）
    28px → 26px、字間 .08em → .02em。字間を詰めたのは、日本語のタイトルで
    .08em だと間延びして見え、かつ折り返しやすくなるため（#195 の調査 §3-4）。
@@ -1332,12 +1353,25 @@ button.ghost.active:hover:not(:disabled) {
   font-family: var(--score-text-font);
 }
 /* 作詞者・作曲者・編曲者（右上）。以前は ScorePage.tsx のインライン style に
-   直書きされていて A/B 比較でしか値を変えられなかったので、クラスへ切り出した。
-   position: absolute のままなので、長いタイトルとの重なり（#204）はここでは直さない。 */
+   直書きされていて A/B 比較でしか値を変えられなかったので、クラスへ切り出した（#202）。
+   #204 で position: absolute をやめ、.score-head-grid の右列として通常フローに戻した。
+   max-width は、作者名がとても長いときにタイトルの幅が潰れないようにする上限。
+   40mm（紙幅 182mm のおよそ 2割）にしてあるのは、長い作者名で上限を外すと
+   左右で 2 倍の幅を取られてタイトルが極端に細くなるため。上限を超えたぶんは
+   作者欄が折り返す（タイトルが潰れるより作者名が2行になるほうが読める）。 */
 .score-credit {
-  position: absolute; top: 0; right: 0; text-align: right;
+  text-align: right;
+  max-width: 40mm;
   font-size: 13px; color: #555;
   font-family: var(--score-text-font);
+}
+/* 左端の「控え」: 右の作者欄と同じ幅を取るためだけの複製。
+   visibility: hidden は場所を取ったまま描画だけ消すので、画面にも印刷にも出ない
+   （display: none にすると幅が 0 になり、タイトルの中央がずれてしまう）。 */
+.score-credit-spacer {
+  visibility: hidden;
+  user-select: none;
+  pointer-events: none;
 }
 .page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; }
 /* pointer-events: none — ページ番号は absolute 配置のため、上下余白を狭くしたり
