@@ -2,7 +2,13 @@
 // 初期ズームの「幅フィット」倍率計算（issue #40）のユニットテスト。
 
 import { describe, it, expect } from 'vitest';
-import { computeFitZoom, VIEW_ZOOM_MIN, VIEW_ZOOM_MAX, A4_PAGE_WIDTH_PX } from './viewZoomUtils';
+import {
+  computeFitZoom,
+  readPageAreaAvailableWidth,
+  VIEW_ZOOM_MIN,
+  VIEW_ZOOM_MAX,
+  A4_PAGE_WIDTH_PX,
+} from './viewZoomUtils';
 
 describe('computeFitZoom', () => {
   it('表示領域がページよりかなり広い場合は100%（1.0）で頭打ちになる', () => {
@@ -46,5 +52,37 @@ describe('ズームスライダーの可動域（Issue #176）', () => {
   it('上限は300%、下限は50%', () => {
     expect(VIEW_ZOOM_MAX).toBe(3);
     expect(VIEW_ZOOM_MIN).toBe(0.5);
+  });
+});
+
+describe('readPageAreaAvailableWidth（Issue #212）', () => {
+  // 「ページを並べられる幅」は body から読む。
+  // .paper-rail は横スクロール時に中身の幅まで広がる（背景を右端まで塗るため）ので、
+  // そこを測ると自分の出した結果を測り直す循環参照になってしまう。
+  function makeRailInsideBody(bodyWidth: number, railWidth: number) {
+    const body = document.body;
+    Object.defineProperty(body, 'clientWidth', { configurable: true, get: () => bodyWidth });
+    const rail = document.createElement('div');
+    Object.defineProperty(rail, 'clientWidth', { configurable: true, get: () => railWidth });
+    body.appendChild(rail);
+    return rail;
+  }
+
+  it('レールがはみ出して広がっていても、body の幅（＝ウィンドウ幅）を返す', () => {
+    const rail = makeRailInsideBody(1265, 2449);
+    expect(readPageAreaAvailableWidth(rail)).toBe(1265);
+    rail.remove();
+  });
+
+  it('はみ出しが無いときは従来どおりレールと同じ値になる（既存の表示が変わらないことの担保）', () => {
+    const rail = makeRailInsideBody(1265, 1265);
+    expect(readPageAreaAvailableWidth(rail)).toBe(1265);
+    rail.remove();
+  });
+
+  it('要素が無い場合は0を返す（computeFitZoom 側が既定の100%へ倒す）', () => {
+    expect(readPageAreaAvailableWidth(null)).toBe(0);
+    expect(readPageAreaAvailableWidth(undefined)).toBe(0);
+    expect(computeFitZoom(readPageAreaAvailableWidth(null))).toBe(1);
   });
 });

@@ -23,6 +23,13 @@
      実際に表示されていたフォールバック色（深緑）の単色指定に整理した */
   background: #0b2a1a;
   padding-top: var(--toolbar-h); /* ← 重なり解消の肝 */
+  /* 横スクロールが出たとき、はみ出した右側まで背景を塗り切るための下限（Issue #212）。
+     この要素は既定では「ウィンドウの幅」しか無く、ズーム拡大などでページが
+     ウィンドウより広くなると、背景の無い（＝白いままの）領域が右側に露出していた。
+     min-content は「中身がどうしても必要とする幅」で、はみ出しが無いときは
+     中身のほうが狭いため何も起きない（＝横スクロールが無い表示は1pxも変わらない）。
+     max-content ではなく min-content を使う理由は .spread のコメントを参照。 */
+  min-width: min-content;
 }
 
 /* ヘッダー（ツールバー） */
@@ -1231,6 +1238,13 @@ button.ghost.active:hover:not(:disabled) {
   justify-content: center;
   background: #b4b4b4;
   padding: 16px 0; /* 広すぎるなら 8px に */
+  /* .app-root と同じ理由（Issue #212）。ここのグレーがウィンドウ幅で切れていたため、
+     右へスクロールすると紙の上下に白い帯が見えていた。
+     ※この指定で「はみ出しているときだけ」レールが中身の幅まで広がるので、
+       レールの clientWidth を「ウィンドウの幅」の代わりに測ってはいけなくなった。
+       表示倍率の計算は body の幅を見るよう変更してある
+       （src/utils/viewZoomUtils.ts の readPageAreaAvailableWidth）。 */
+  min-width: min-content;
 }
 
 /* ページ群の外枠（spread） */
@@ -1238,6 +1252,13 @@ button.ghost.active:hover:not(:disabled) {
   padding: 16px 24px;
   width: 100%;
   max-width: 1500px;
+  /* 上の max-width より min-width が優先される（CSS は min-width を最後に適用する）。
+     ページ自体が 1500px より広くなる拡大表示では、箱のほうを中身に合わせないと
+     親（.paper-rail）が中身の幅を知れず、背景を塗る範囲も決められないため意図的にこうしている。
+     max-content ではなく min-content なのは、2列グリッドでページが1枚しか無いとき、
+     max-content だと「空の2列目も1ページぶんの幅がある」と数えて幅が約2倍になるため
+     （実測: 4202px。min-content なら実際の中身どおり 2135px）。 */
+  min-width: min-content;
   box-sizing: border-box;
   display: grid;
   gap: 20px;

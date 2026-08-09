@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { readPageAreaAvailableWidth } from '../utils/viewZoomUtils';
 
 export function useAutoPageScale(columns: number, gapPx: number = 20) {
   const spreadRef = useRef<HTMLDivElement | null>(null);
@@ -27,7 +28,10 @@ export function useAutoPageScale(columns: number, gapPx: number = 20) {
     const totalGap = (cols - 1) * gapPx;
 
     const need = pageWidthPx * cols + totalGap;
-    const avail = rail.clientWidth;
+    // ここで rail.clientWidth を読んではいけない（Issue #212）。
+    // レールは横スクロール時に中身の幅まで広がるので、測ると自分の結果を測り直す形になる。
+    // 詳しい理由は readPageAreaAvailableWidth のコメントを参照。
+    const avail = readPageAreaAvailableWidth(rail);
 
     const next = Math.min(1, Math.max(0.1, (avail * 0.98) / need));
 
