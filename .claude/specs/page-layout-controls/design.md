@@ -397,3 +397,61 @@ Issue #195（浄書の既定値の棚卸し）を受けて、運用者がプラ�
 - **推奨段数が変わる**: ピアノの新規ユーザー状態での「段数/ページ」初期値が **3段 → 4段**になった。段の間隔が60px詰まったぶんが、パート間隔+38pxによる1段の高さ増（`computeLayout` の `staveSpacing` 80→118、実測換算で約19px）を上回るため。実測ベースの上限（`maxSystemsPerPage`）内に収まっており、あふれ警告は出ない（`ScorePageSystemsPerPage.test.tsx` のアサーションを 3→4 に更新）。上の「追補: 音符の大きさの工場出荷既定値変更に伴う推奨段数の変化（Issue #49）」が記録した「ピアノ4段→3段」は、本追補で 4段へ戻ったことになる。
 - **計算式は一切変えていない**: `recommendedSystemsPerPage` / `maxSystemsPerPage` / `systemRowSlotHeightPx` / `computeLayout` はいずれも未変更で、入力値（既定値）だけが変わっている。
 - **単旋律・弦楽四重奏・編成譜は不変**（受入条件3）。Issue #195 の A/B 確認が未了の編成譜と、運用者が「現状で良い」と確定した単旋律には手を付けていない。
+
+## 追補: 「段あたり小節数」「段数/ページ」を楽譜種別ごとに保持する（Issue #211、2026-08-09）
+
+### 問題
+
+「段組」の2項目（レイアウトタブ ＞ 譜面の密度 ＞ 段組）が、楽譜種別（単旋律 / ピアノ / 弦楽四重奏 / 編成譜）をまたいで共有されていた。
+
+- **段数/ページ**: localStorage の単一キー `score-systems-per-page` に1つだけ保存していた
+- **段あたり小節数**: localStorage には無く、`ScorePage.tsx` の state（＋譜面データ）だけで持っていた。種別を切り替えても state はそのまま残るため、結果として同じく「またいで共有」される挙動だった
+
+そのため、単旋律で 8小節/段 にした設定が編成譜にも効いてしまい実用に合わない（編成譜は 4小節・1〜2段が普通）。
+
+### 修正設計
+
+**`resolveDefaultLayoutForScoreType()` の系には寄せていない**（トリアージの指示どおり）。あちらは「ユーザーがまだ触っていないときの既定値」を種別ごとに決める仕組みで、今回は「ユーザーが実際に使った値そのものを種別ごとに覚える」話であり、層が違うため。
+
+1. **保存層を新設**（`src/utils/systemLayoutPrefs.ts`）。新しい localStorage キー `score-system-layout-by-score-type` に、**1キー＝種別→値のマップ**として持つ。
+
+   ```json
+   { "piano": { "measuresPerSystem": 2, "systemsPerPage": 4 }, "ensemble": { "measuresPerSystem": 4 } }
+   ```
+
+   種別ごとに4本のキーへ分ける案もあったが、(1) 読み書きが1回で済み「片方だけ書けた」状態が起きない (2) 旧キーをそのまま別に残せる の2点からマップ方式にした。値の検証（範囲外・型違いを項目単位で落とす）は `settingsProfile.ts` と同じ方針。
+
+2. **移行**: 新キーがまだ無いときだけ、旧単一キー `score-systems-per-page` の値を**全種別の初期値としてコピー**して新キーへ書き戻す（`migrateLegacySystemsPerPage`）。移行は一度きりで、以降は新キーが正。**旧キーは消さず、変更のたび書き続ける**（`saveLegacySystemsPerPage`）ため、古いバージョンのアプリで同じ localStorage を開いても従来どおり動く。
+
+3. **「段数/ページ」は state を廃止して導出値にした**。
+
+   ```ts
+   const systemsPerPageSetting = getSystemsPerPageFor(systemLayoutPrefs, scoreType);
+   ```
+
+   楽譜種別が変わる経路は多い（種別ボタン・編成テンプレート・読込・自動保存の復元・サンプル譜・初期値プリセット）。state にして各経路へ「切り替え処理」を足すと必ず1つ忘れるため、`scoreType` から導出する形にして**どの経路からでも自動的に追従する**ようにした。
+
+4. **「段あたり小節数」は state のまま**。譜面データ（`SavedScoreData.measuresPerSystem`）が正であり、保存済み譜面を読み込んだときはその譜面の値が優先されるべきなので、導出にはできない。代わりに次の2点を配線した。
+   - 入力欄で変えたとき: `withMeasuresPerSystem(prefs, scoreType, v)` で現在の種別の値として記録する
+   - 楽譜種別が**実際に変わった**とき（`handleScoreTypeChange` / `handleInstrumentationPresetChange`）: `getMeasuresPerSystemFor(prefs, newType)` で切り替え先の値へ戻す。同じ種別のボタンを押し直したときや、編成譜どうしのテンプレート入れ替えでは触らない（読み込んだ譜面が持つ値を保存値で上書きしてしまわないため）
+
+5. **未設定の種別の既定値は `DEFAULT_MEASURES_PER_SYSTEM`（4）**。直前の種別の値は引き継がない（引き継ぐと「単旋律の8が編成譜に効く」という本Issueの症状がそのまま残るため）。この定数は `settingsProfile.ts` の工場出荷既定値からも参照しており、4 の記述は1箇所だけにしてある。
+
+6. **初期値プリセット**（`applySettingsProfileToState`）は、プロファイルが持つ楽譜種別のぶんだけ段組を更新する。プロファイルは「ある1つの種別についての standard 設定」なので、他の種別に覚えさせてある値を巻き込まない。
+
+### 「レイアウトをリセット」との関係（受入条件4）
+
+`handleResetPageLayout` は**変更していない**。このボタンが戻すのはページ余白・タイトル余白・段の間隔（全体・段ごと）・パート間隔であり、段組の2項目はもともと対象外のため、種別ごとの保存値（現在の種別のぶんも他の種別のぶんも）には一切触れない。受入条件4「現在の種別の値だけを既定へ戻す」は、**他の種別の段組設定を巻き添えにしない**という意味で満たしている（`ScorePagePerScoreTypeSystemLayout.test.tsx` で固定）。段の間隔・パート間隔は従来どおり種別をまたぐ単一キーのままで、本Issueのスコープ外（トリアージ「スコープはこの2項目のみ」）。
+
+### 影響範囲
+
+- `src/utils/systemLayoutPrefs.ts`（新規）: 保存層。純関数（parse / migrate / get / with）と localStorage の薄いラッパー
+- `src/utils/settingsProfile.ts`: 工場出荷既定値の `measuresPerSystem: 4` を `DEFAULT_MEASURES_PER_SYSTEM` 参照へ。値は同じ
+- `src/components/ScorePage.tsx`: `systemLayoutPrefs` state の新設、`systemsPerPageSetting` の state → 導出値への変更、種別切り替え2経路・段組の入力欄2つ・初期値プリセット適用の配線
+- **保存済み譜面のデータ形式は変えていない**。`SavedScoreData.measuresPerSystem` は従来どおりで、読込・自動保存・MusicXML には影響しない
+- **旧単一キーだけを持つ既存ユーザーの見た目は変わらない**（移行で全種別へコピーするため、切り替えても同じ段数から始まる）
+
+### 未対応（意図的に見送った点）
+
+- **保存済み譜面を「読込」しても、その譜面の段あたり小節数は種別ごとの保存値へ記録されない**。読込は `scoreType` と `measuresPerSystem` を同時に譜面データから設定するため画面表示は正しいが、その後いったん別種別へ行って戻ると、記録済みの（＝最後に入力欄で指定した）値のほうが表示される。入力欄で1度でも触れば一致するので実害は小さいと判断した
+- 「段あたり小節数」には旧 localStorage キーが存在しないため、移行でコピーできる旧値が無い。現在開いている譜面の値は譜面データ側から復元されるので、**現在の種別については見た目が変わらない**（他の種別は既定値 4 から始まる）

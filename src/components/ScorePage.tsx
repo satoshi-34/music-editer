@@ -122,6 +122,16 @@ import {
   hasSettingsProfile,
 } from '../utils/settingsProfile';
 import {
+  type SystemLayoutPrefs,
+  loadSystemLayoutPrefs,
+  saveSystemLayoutPrefs,
+  saveLegacySystemsPerPage,
+  getMeasuresPerSystemFor,
+  getSystemsPerPageFor,
+  withMeasuresPerSystem,
+  withSystemsPerPage,
+} from '../utils/systemLayoutPrefs';
+import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
   sanitizePlaybackRuntimeSettings,
   type PlaybackSoundRuntimeSettings,
@@ -151,10 +161,12 @@ const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 // 真偽値の保存形式は '1'（折り畳み中）/ '0'（展開中）。JSON.parse を挟まないぶん、
 // 保存値が壊れていても「'1' 以外はすべて展開」と解釈できて安全側に倒れる。
 const TOOLBAR_COLLAPSED_KEY = 'score-toolbar-collapsed';
-// 「段数/ページ」のユーザー設定（その他タブ）。楽譜データではなく画面設定として保存する
-const SYSTEMS_PER_PAGE_KEY = 'score-systems-per-page';
+// 「段組」（段あたり小節数・段数/ページ）のユーザー設定は、楽譜種別ごとに別々の値で
+// 保存する（Issue #211）。キー名・移行・既定値の正本は utils/systemLayoutPrefs.ts。
+// 旧「段数/ページ」の単一キー（score-systems-per-page）も、古いバージョンで開いたとき
+// のために書き続けている（読み取りには使わない）。
 // 「小節幅の均等さ」のユーザー設定（その他タブのスライダー、0〜1）。
-// SavedScoreData には含めず、SYSTEMS_PER_PAGE_KEY と同じく画面設定として保存する
+// SavedScoreData には含めず、段数/ページと同じく画面設定として保存する
 const MEASURE_WIDTH_EVENNESS_KEY = 'score-measure-width-evenness';
 // 「画面表示のズーム」のユーザー設定（常設エリアのスライダー、0.5〜3.0）。
 // useAutoPageScale が算出する自動縮尺（--scale）に掛け合わせる倍率として使う。
@@ -357,6 +369,21 @@ export default function ScorePage() {
   // 選んでいた音価などが失われて毎回4分音符に戻ってしまうと不自然なので復元する。
   const lastNotesToolRef = useRef<Tool>({ duration: '4', isRest: false });
   const [scoreType, setScoreType] = useState<ScoreType>('single');
+  // 「段組」（段あたり小節数・段数/ページ）の楽譜種別ごとの保存値（Issue #211）。
+  // 種別を切り替えると、その種別で最後に使った値へ戻る。旧単一キーからの移行は
+  // loadSystemLayoutPrefs() の中で一度だけ行われる。
+  // scoreType を参照する処理（handleScoreTypeChange など）より前に宣言しておく必要がある
+  // ため、他の画面設定より前のここに置いている。
+  const [systemLayoutPrefs, setSystemLayoutPrefs] = useState<SystemLayoutPrefs>(() => loadSystemLayoutPrefs());
+  // 種別ごとの段組設定を1か所で更新する（state と localStorage を必ず一緒に動かすため、
+  // 呼び出し側で書き忘れが起きないようにここへまとめている）。
+  // （setState の更新関数の中で保存すると React の StrictMode で2回呼ばれるため、
+  //   次の値を先に作ってから state と localStorage の両方へ渡している）
+  const updateSystemLayoutPrefs = useCallback((updater: (prev: SystemLayoutPrefs) => SystemLayoutPrefs) => {
+    const next = updater(systemLayoutPrefs);
+    setSystemLayoutPrefs(next);
+    saveSystemLayoutPrefs(next);
+  }, [systemLayoutPrefs]);
   // 楽譜の表示ウェイト（五線・テキストの太さ）
   const [displayWeight, setDisplayWeight] = useState<'thin' | 'normal' | 'thick'>('normal');
   const [instrumentation, setInstrumentation] = useState<ScoreInstrumentation>(() => getDefaultInstrumentationForScoreType('single'));
@@ -821,6 +848,17 @@ export default function ScorePage() {
     if (localStorage.getItem(PART_SPACING_OFFSET_KEY) == null) {
       setPartSpacingOffsetPx(defaultLayout.partSpacingOffsetPx);
     }
+    // 「段あたり小節数」は切り替え先の種別で最後に使った値へ戻す（Issue #211）。
+    // 「段数/ページ」は systemLayoutPrefs から導出しているので、ここでは何もしなくても
+    // scoreType が変わった時点で自動的にその種別の値になる。
+    // 種別が実際に変わったときだけ動かす（同じ種別のボタンをもう一度押したときに、
+    // 読み込んだ譜面が持っていた値を保存値で上書きしてしまわないようにするため）。
+    if (newType !== scoreType) {
+      setMeasuresPerSystem(getMeasuresPerSystemFor(systemLayoutPrefs, newType));
+      // 段あたり小節数が変わると段割りを全体から組み直すので、編集位置による安定化も外す
+      // （入力欄から変えたときと同じ扱い。Issue #67）
+      setLastEditedMeasureIndex(null);
+    }
     // 楽譜種別が変わるとパートの並び・IDが変わるため、パート譜表示は総譜表示へ戻す
     setPartExtractionId(null);
     setInstrumentation(nextInstrumentation);
@@ -840,7 +878,7 @@ export default function ScorePage() {
       setEnsembleParts(prev => nextInstrumentation.parts.map((_, index) => prev[index] ?? []));
       setEnsembleSecondStaffParts(prev => nextInstrumentation.parts.map((_, index) => prev[index] ?? []));
     }
-  }, [leftHandData]);
+  }, [leftHandData, scoreType, systemLayoutPrefs]);
 
   const handleInstrumentationPresetChange = useCallback((presetId: InstrumentationPresetId) => {
     const nextInstrumentation = getInstrumentationPreset(presetId);
@@ -860,6 +898,13 @@ export default function ScorePage() {
     if (localStorage.getItem(PART_SPACING_OFFSET_KEY) == null) {
       setPartSpacingOffsetPx(defaultLayout.partSpacingOffsetPx);
     }
+    // 楽譜種別が変わる編成テンプレート（例: 弦楽四重奏 ⇄ 吹奏楽）を選んだときだけ、
+    // 「段あたり小節数」を切り替え先の種別の保存値へ戻す（Issue #211）。
+    // 編成譜どうしの入れ替え（室内オケ→吹奏楽など）では種別が変わらないので触らない。
+    if (nextScoreType !== scoreType) {
+      setMeasuresPerSystem(getMeasuresPerSystemFor(systemLayoutPrefs, nextScoreType));
+      setLastEditedMeasureIndex(null);
+    }
     // 編成テンプレートを切り替えるとパート ID が変わるため、パート譜表示は総譜表示へ戻す
     setPartExtractionId(null);
     if (nextScoreType === 'quartet') {
@@ -875,7 +920,7 @@ export default function ScorePage() {
       setEnsembleParts([]);
       setEnsembleSecondStaffParts([]);
     }
-  }, [instrumentation.parts]);
+  }, [instrumentation.parts, scoreType, systemLayoutPrefs]);
 
   const markInstrumentationCustom = useCallback((parts: InstrumentPartDefinition[]): ScoreInstrumentation => ({
     presetId: 'custom',
@@ -2048,7 +2093,12 @@ export default function ScorePage() {
   // 段あたり小節数。自動保存 useEffect の依存配列に含めるため、useEffect より前で宣言する
   // （以前はここより後方で宣言されており、後方宣言のため deps に入れられなかった。
   // Issue #117: このため「段あたり小節数」だけを変更して閉じると自動保存されなかった）。
-  const [measuresPerSystem, setMeasuresPerSystem] = useState(4);
+  // 起動時は「そのとき開く楽譜種別（初期は単旋律）で最後に使った値」から始める。
+  // 保存済み譜面・自動保存を読み込んだ場合は、その譜面が持つ値で上書きされる
+  // （譜面データ側の値のほうが優先。Issue #211）。
+  const [measuresPerSystem, setMeasuresPerSystem] = useState(
+    () => getMeasuresPerSystemFor(systemLayoutPrefs, scoreType)
+  );
 
   // 作品の切替・新規作成の直前に「いまの内容」を保存するための組み立て関数を最新に保つ。
   // 段あたり小節数のように、この位置より後ろで宣言される値も読む必要があるため、
@@ -2859,12 +2909,13 @@ export default function ScorePage() {
     scoreType === 'piano' ? Math.min(4, recommendedMaxSystemsPerPage) : recommendedMaxSystemsPerPage,
     maxSystemsPerPage
   );
-  // ユーザー設定（その他タブの「段数/ページ」）。null = 未設定（推奨値を使う）。
-  const [systemsPerPageSetting, setSystemsPerPageSetting] = useState<number | null>(() => {
-    const raw = localStorage.getItem(SYSTEMS_PER_PAGE_KEY);
-    const n = raw == null ? NaN : parseInt(raw, 10);
-    return Number.isFinite(n) && n >= 1 ? n : null;
-  });
+  // ユーザー設定（レイアウトタブの「段数/ページ」）。null = 未設定（推奨値を使う）。
+  // 楽譜種別ごとの保存（systemLayoutPrefs）から**その都度導出**する。state に持たず
+  // 導出にしているのは、楽譜種別を変える経路が多い（種別ボタン・編成テンプレート・
+  // 読込・自動保存の復元・サンプル譜・初期値プリセット）ため。導出にしておけば
+  // scoreType を変えるだけでどの経路からでも自動的にその種別の値へ切り替わり、
+  // 「この経路だけ切り替え忘れ」という漏れが構造的に起きない。
+  const systemsPerPageSetting = getSystemsPerPageFor(systemLayoutPrefs, scoreType);
   // 実際に描画へ使う段数/ページ。手動設定はページからあふれても（maxSystemsPerPage
   // 超過でも）クランプしない。1未満（編集不能）になることだけは避ける。
   const systemsPerPage = Math.max(1, systemsPerPageSetting ?? recommendedSystemsPerPage);
@@ -2927,12 +2978,15 @@ export default function ScorePage() {
     localStorage.setItem(SYSTEM_ROW_GAP_KEY, String(profile.systemRowGapPx));
     setPartSpacingOffsetPx(profile.partSpacingOffsetPx);
     localStorage.setItem(PART_SPACING_OFFSET_KEY, String(profile.partSpacingOffsetPx));
-    setSystemsPerPageSetting(profile.systemsPerPageSetting);
-    if (profile.systemsPerPageSetting == null) {
-      localStorage.removeItem(SYSTEMS_PER_PAGE_KEY);
-    } else {
-      localStorage.setItem(SYSTEMS_PER_PAGE_KEY, String(profile.systemsPerPageSetting));
-    }
+    // 段組（段あたり小節数・段数/ページ）は、プロファイルが持つ楽譜種別のぶんだけ更新する。
+    // プロファイルは「自分の standard な譜面設定」＝ある1つの種別についての設定なので、
+    // 他の種別に覚えさせてある値まで巻き込んで書き換えない（Issue #211）。
+    updateSystemLayoutPrefs(prev => withSystemsPerPage(
+      withMeasuresPerSystem(prev, profile.scoreType, profile.measuresPerSystem),
+      profile.scoreType,
+      profile.systemsPerPageSetting
+    ));
+    saveLegacySystemsPerPage(profile.systemsPerPageSetting);
   };
 
   // 「既定として保存」: 現在の画面設定をまるごとプロファイルとして保存する。
@@ -4255,6 +4309,9 @@ export default function ScorePage() {
                         const v = Math.max(1, Math.min(8, Number(e.target.value)));
                         if (!isNaN(v)) {
                           setMeasuresPerSystem(v);
+                          // 今の楽譜種別の値として覚えておき、種別を行き来しても戻ってくるようにする
+                          // （Issue #211）。譜面データ側への保存は従来どおり自動保存が行う。
+                          updateSystemLayoutPrefs(prev => withMeasuresPerSystem(prev, scoreType, v));
                           // 段あたり小節数の変更は全体再計画を期待する操作なので、編集位置による
                           // 安定化も一時的に外し、貪欲法だけで組み直す（Issue #67）。
                           setLastEditedMeasureIndex(null);
@@ -4277,8 +4334,10 @@ export default function ScorePage() {
                         // 受け付ける。あふれる場合は下の警告表示で伝える（Issue #38）。
                         const v = Math.max(1, Math.round(Number(e.target.value)));
                         if (!isNaN(v)) {
-                          setSystemsPerPageSetting(v);
-                          localStorage.setItem(SYSTEMS_PER_PAGE_KEY, String(v));
+                          // 今の楽譜種別の値として保存する（Issue #211）。旧単一キーへも
+                          // 同じ値を書き続け、古いバージョンで開いても従来どおり動くようにする。
+                          updateSystemLayoutPrefs(prev => withSystemsPerPage(prev, scoreType, v));
+                          saveLegacySystemsPerPage(v);
                         }
                       }}
                       style={{ width: 44, fontSize: 13, padding: '2px 4px' }}

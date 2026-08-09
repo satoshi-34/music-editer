@@ -603,6 +603,13 @@ JSX を移動しただけである。
 - 段数/ページ（`systemsPerPageSetting`）: 画面設定として localStorage（`score-systems-per-page`）
 - 表示ウェイト（`displayWeight`）: 従来どおり永続化なし（初期値プリセットには含まれる）
 
+> **追記（Issue #211、2026-08-09）**: 段組の2項目（段あたり小節数・段数/ページ）の保存先は、
+> その後**楽譜種別ごとの値を持つ形へ変わった**（新キー `score-system-layout-by-score-type`）。
+> 旧単一キー `score-systems-per-page` への書き込みは後方互換のため継続しており、段あたり小節数の
+> 正本が譜面データ側であることも変わらない。設計の詳細は
+> `.claude/specs/page-layout-controls/design.md` の「追補: 「段あたり小節数」「段数/ページ」を
+> 楽譜種別ごとに保持する（Issue #211）」を参照。上の一覧は Issue #144 時点の記録として残す。
+
 ### 影響範囲
 
 - `src/components/ScorePage.tsx`: 「楽譜設定」タブの JSX から表示ウェイトのチップ群と
