@@ -94,6 +94,7 @@ import {
   ENGRAVING_THICKNESS_UNITS,
   SCORE_TEXT_FONT_FAMILY,
   widenThinBarlineRect,
+  markThickBarlineRect,
 } from '../utils/engravingDefaults';
 import { computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
@@ -1633,15 +1634,18 @@ export default function PianoSystemCanvas({
      * 縦のカギも巻き込んでしまい、横棒だけ細いままの不揃いな括弧になる。
      * そこで「この描画で増えた要素」に限って書き換える。
      *
-     * 太い括弧（BRACKET）の縦棒は幅 3 の rect なので、この関数では対象外になる
-     * （＝メイン括弧の太さは変わらない）。ブレース（BRACE）は path なので同様に無関係。
+     * 太い括弧（BRACKET）の縦棒は幅 3 の rect なので、太さは変わらない。
+     * ただし画面表示のフロア（Issue #210）は細線と同じ倍率で掛ける必要があるため、
+     * markThickBarlineRect で目印のクラスだけ付ける（太らせるのは App.css 側）。
+     * ブレース（BRACE）は path なので、CSS の一律指定がそのまま効く。
      */
     const drawConnectorWithEngravingWidths = (connector: StaveConnector) => {
       const before = svgRoot.childElementCount;
       connector.setContext(ctx).draw();
       for (let ci = before; ci < svgRoot.childElementCount; ci++) {
         const el = svgRoot.children[ci];
-        if (el.tagName === 'rect') widenThinBarlineRect(el);
+        if (el.tagName !== 'rect') continue;
+        if (!widenThinBarlineRect(el)) markThickBarlineRect(el);
       }
     };
 
@@ -2345,7 +2349,10 @@ export default function PianoSystemCanvas({
     // 描き終わったあとに幅を広げる。`g.vf-stavebarline` の直下だけを対象にするので、
     // 終止括弧や連符の括弧の縦のカギ（同じく幅 1 の rect）は巻き込まない。
     // 終止線の太線（幅 3）は対象外なので、細線だけが太くなって主従が正しくなる。
-    svgRoot.querySelectorAll('g.vf-stavebarline > rect').forEach(widenThinBarlineRect);
+    // 太線には目印のクラスだけ付ける（画面表示のフロアを同じ倍率で掛けるため。Issue #210）。
+    svgRoot.querySelectorAll('g.vf-stavebarline > rect').forEach((rect) => {
+      if (!widenThinBarlineRect(rect)) markThickBarlineRect(rect);
+    });
 
     if (showInstrumentLabels) {
       parts.forEach((part, pi) => {

@@ -1514,15 +1514,27 @@ button.ghost.active:hover:not(:disabled) {
 
    太さの数値は `src/utils/engravingDefaults.ts` の ENGRAVING_THICKNESS_SP と同じ値。
    片方だけ変えるとズレるので、`engravingDefaults.test.ts` が一致を見張っている。 */
+/* 画面表示での線の細さの下限（フロア・Issue #210）
+   ------------------------------------------------------------------
+   編成譜は紙に収めるための自動縮小が強く掛かるため、五線の実効太さが
+   1デバイスピクセルを割ってモニタ上でかすれる（室内オーケストラ・ズーム50%で
+   実測 0.248 CSS px = 0.50 デバイスピクセル）。そこで「下限を割った比率のぶんだけ
+   全部の線を太らせる」倍率を ScorePage が `--score-stroke-floor` として注入し、
+   下の各指定はそれを掛けるだけにしてある。線種ごとに別々に丸めず**全線へ同じ倍率**を
+   掛けるので、候補Aの相対比（五線 1.3 : 小節線 1.6 : 加線 1.6 …）はそのまま保たれる。
+
+   発動しないとき（＝ふつうの表示）は 1 が入るので、値は候補Aそのままになる。
+   計算の正本は `src/utils/engravingDefaults.ts` の computeScreenStrokeFloorMultiplier。 */
 .score-area {
   /* 表示ウェイト設定（細 0.8 / 標準 1.2 / 太 1.8）と印刷（0.8 固定）を、
      個別指定にも効かせるための倍率。標準の 1.2 を基準にするので、
-     標準では 1.0 倍＝候補Aの値そのままになる。 */
-  --score-stroke-scale: calc(var(--score-stroke-width, 1.2) / 1.2);
+     標準では 1.0 倍＝候補Aの値そのままになる。
+     画面表示のフロア（--score-stroke-floor）もここで合流させる。 */
+  --score-stroke-scale: calc(var(--score-stroke-width, 1.2) / 1.2 * var(--score-stroke-floor, 1));
 }
 .score-area svg path,
 .score-area svg line {
-  stroke-width: var(--score-stroke-width, 1.2);
+  stroke-width: calc(var(--score-stroke-width, 1.2) * var(--score-stroke-floor, 1));
 }
 /* 五線の5本線（Bravura: staffLineThickness 0.13sp） */
 .score-area svg g.vf-stave > path {
@@ -1544,6 +1556,28 @@ button.ghost.active:hover:not(:disabled) {
    VexFlow が幅 3 u の塗り矩形で描いており、これとは別物（太さは変えていない） */
 .score-area svg path.vf-sub-bracket {
   stroke-width: calc(1.6px * var(--score-stroke-scale, 1));
+}
+/* VexFlow が「塗りの矩形」で描く縦線（小節線・終止線の太線・総譜のメイン括弧）にも
+   同じフロアを掛ける（Issue #210）。
+   これらは stroke ではなく fill なので stroke-width が効かない。代わりに
+   **width を CSS のジオメトリプロパティとして上書き**し、広がったぶんの半分だけ
+   translateX で左へ戻して線の中心を保つ。
+   - フロアが 1（＝ふつうの表示・印刷）のときは、width は属性値と同じ 1.6px / 3px、
+     translateX は 0 になるので、見た目は1pxも変わらない
+   - 属性ではなく CSS で掛けているので、`@media print` でフロアを 1 に戻すだけで
+     印刷結果を従来どおりに保てる（属性に焼き込むと印刷に持ち込まれてしまう）
+   - 万一ジオメトリプロパティ未対応のブラウザでも、属性の 1.6 / 3 がそのまま使われる
+     （＝Issue #202 時点の見た目に戻るだけで、崩れはしない）
+   クラスは src/utils/engravingDefaults.ts の VF_THIN_LINE_RECT_CLASS /
+   VF_THICK_LINE_RECT_CLASS が付ける。数値も同ファイルの太さと一致させること
+   （engravingDefaults.test.ts が一致を見張っている）。 */
+.score-area svg rect.vf-engraving-thin-line {
+  width: calc(1.6px * var(--score-stroke-floor, 1));
+  transform: translateX(calc(-0.8px * (var(--score-stroke-floor, 1) - 1)));
+}
+.score-area svg rect.vf-engraving-thick-line {
+  width: calc(3px * var(--score-stroke-floor, 1));
+  transform: translateX(calc(-1.5px * (var(--score-stroke-floor, 1) - 1)));
 }
 .score-area svg text {
   font-weight: var(--score-text-weight, 400);
@@ -1719,6 +1753,11 @@ button.ghost.active:hover:not(:disabled) {
      （svg は画面幅で描画済みなので、CSS縮小では余白が増えるだけで紙面を活かせない） */
   .print-page .score-area {
     --score-stroke-width: 0.8 !important;
+    /* 画面表示の細さ対策（Issue #210）は紙に持ち込まない。
+       印刷は原寸・高解像度なのでかすれず、フロアを効かせると逆に太くなってしまう。
+       ScorePage がこの変数をインライン style で書いているため、
+       打ち消すには !important が要る（!important 付きの宣言はインライン style より強い）。 */
+    --score-stroke-floor: 1 !important;
   }
 
   /* 薄い色（グレー系）の線・塗りを印刷では黒に寄せる。

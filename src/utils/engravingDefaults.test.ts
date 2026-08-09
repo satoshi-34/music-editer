@@ -109,8 +109,21 @@ describe('App.css と TypeScript 側の定数がずれていない', () => {
   });
 
   it('表示ウェイト設定を個別指定へ渡す倍率が定義されている', () => {
-    // 標準（1.2）のとき 1.0 倍＝候補Aの値そのまま、細/太/印刷では比例して変わる
-    expect(/--score-stroke-scale:\s*calc\(var\(--score-stroke-width,\s*1\.2\)\s*\/\s*1\.2\)/.test(appCss)).toBe(true);
+    // 標準（1.2）のとき 1.0 倍＝候補Aの値そのまま、細/太/印刷では比例して変わる。
+    // Issue #210 で画面表示のフロア（--score-stroke-floor）も同じ倍率へ合流させた。
+    expect(
+      /--score-stroke-scale:\s*calc\(var\(--score-stroke-width,\s*1\.2\)\s*\/\s*1\.2\s*\*\s*var\(--score-stroke-floor,\s*1\)\)/.test(
+        appCss
+      )
+    ).toBe(true);
+  });
+
+  it('一律指定（フォールバック）にも画面表示のフロアが掛かっている', () => {
+    expect(
+      /\.score-area svg path,\s*\.score-area svg line \{\s*stroke-width:\s*calc\(var\(--score-stroke-width,\s*1\.2\)\s*\*\s*var\(--score-stroke-floor,\s*1\)\)/.test(
+        appCss
+      )
+    ).toBe(true);
   });
 });
 
