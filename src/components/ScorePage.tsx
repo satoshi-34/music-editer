@@ -13,6 +13,7 @@ import EnsembleStaff from './EnsembleStaff';
 import PartExtractionStaff from './PartExtractionStaff';
 import { QUARTET_PART_CONFIGS } from './QuartetStaff';
 import SymbolEditor from './SymbolEditor';
+import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons from './SaveLoadButtons';
 import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
@@ -205,6 +206,10 @@ const PAGE_MARGIN_BOTTOM_KEY = 'score-page-margin-bottom';
 // 後方互換の旧キーは無い（この機能自体が新規追加のため）。
 const TITLE_MARGIN_TOP_KEY = 'score-title-margin-top';
 const TITLE_MARGIN_BOTTOM_KEY = 'score-title-margin-bottom';
+// 「新規作成」の確認文（Issue #221 でアプリ内ダイアログへ移したが、文言は
+// window.confirm 時代から変えていない）。テストからも参照できるよう定数にしている。
+export const NEW_SCORE_CONFIRM_MESSAGE =
+  'いまの内容を保存して、新しい作品として空の譜面を開きます。これまでの作品は「作品一覧」に残ります。よろしいですか？';
 // 「段の間隔」のユーザー設定（その他タブのスライダー、px単位）。
 // 正負を問わず単一の連続な方式で反映する: 段スロット高（ページの譜面領域÷段数）を
 // 基準に、この値をスロット高への加減として適用し（App.css の
@@ -422,6 +427,14 @@ export default function ScorePage() {
   // ユーザーが作成したカスタム記号のライブラリと、エディタモーダルの開閉状態
   const [customSymbolDefs, setCustomSymbolDefs] = useState<CustomSymbolDef[]>([]);
   const [showSymbolEditor, setShowSymbolEditor] = useState(false);
+  // アプリ内の確認ダイアログ（Issue #221）。window.confirm は埋め込みブラウザで
+  // 表示されず常に false が返るため、確認が必要な操作はここへ内容を積んで
+  // ConfirmDialog に描かせる。null のときはダイアログを出さない。
+  const [confirmDialog, setConfirmDialog] = useState<{
+    message: string;
+    /** OK が押されたときに実行する処理（非同期でもよい） */
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
   // フィードバックボタン（Issue #91）の結果通知。成功は数秒で消えるが、
   // クリップボード書き込み失敗・ポップアップブロックは見落とされると再試行されないため
   // 自動では消さず、ユーザーが気づけるまで表示し続ける。
@@ -1841,14 +1854,11 @@ export default function ScorePage() {
     setTimeSignature,
   ]);
 
-  const handleNewScore = useCallback(async () => {
+  /** 「新規作成」の確認で OK を選んだあとの本体処理 */
+  const performNewScore = useCallback(async () => {
     // 「新規作成」は、いまの作品を保存したうえで新しい作品として書き始める（Issue #181）。
     // 以前は自動保存スロットを消していたが、作品ごとに保存先が分かれたため、
     // これまでの内容は作品一覧に残り、いつでも開き直せる。
-    const shouldReset = window.confirm('いまの内容を保存して、新しい作品として空の譜面を開きます。これまでの作品は「作品一覧」に残ります。よろしいですか？');
-    if (!shouldReset) {
-      return;
-    }
 
     // 保存待ち（1.5秒のデバウンス）が残っていると、切り替えた後に前の内容が
     // 新しい作品へ書き込まれてしまうため、先にタイマーを止める。
@@ -1860,6 +1870,16 @@ export default function ScorePage() {
 
     await resetScoreStateToEmpty();
   }, [cancelPendingAutosave, resetScoreStateToEmpty, startNewWork]);
+
+  const handleNewScore = useCallback(() => {
+    // 確認は window.confirm ではなくアプリ内ダイアログで行う（Issue #221）。
+    // 埋め込みブラウザ（CDP 制御下・一部の WebView・キオスク環境）では
+    // confirm が表示されず常に false が返るため、ボタンが無反応に見えていた。
+    setConfirmDialog({
+      message: NEW_SCORE_CONFIRM_MESSAGE,
+      onConfirm: performNewScore,
+    });
+  }, [performNewScore]);
 
   // 保存先ファイルハンドル（File System Access API）。
   // 取得後は同じファイルへ上書きできるよう ref で保持する。
@@ -2212,9 +2232,11 @@ export default function ScorePage() {
   }, [applyLoadedScoreData, cancelPendingAutosave, resetScoreStateToEmpty, switchWork]);
 
   /** 作品一覧の「新規作成」。ツールバーの新規作成ボタンと同じ動きにそろえる */
-  const handleCreateWorkFromList = useCallback(async () => {
+  const handleCreateWorkFromList = useCallback(() => {
+    // 一覧を先に閉じてから確認ダイアログを出す（一覧の背景クリック用の
+    // 透明レイヤーが残っているとダイアログのボタンを押せなくなるため）。
     setShowWorkList(false);
-    await handleNewScore();
+    handleNewScore();
   }, [handleNewScore]);
 
   /** 作品の削除。確認ダイアログは WorkListPanel 側で必ず通している */
@@ -4736,6 +4758,21 @@ export default function ScorePage() {
         <p className="print-preview-lock-banner" role="status">
           印刷プレビュー中は譜面の編集はできません（余白・間隔などの設定変更は可能です）
         </p>
+      )}
+
+      {confirmDialog && (
+        <ConfirmDialog
+          message={confirmDialog.message}
+          onConfirm={() => {
+            // 先にダイアログを閉じてから本体を走らせる。本体（新規作成）は
+            // 画面全体を作り直す重い処理なので、確認画面が残ったままだと
+            // 「押したのに閉じない」ように見えてしまう。
+            const run = confirmDialog.onConfirm;
+            setConfirmDialog(null);
+            void run();
+          }}
+          onCancel={() => setConfirmDialog(null)}
+        />
       )}
 
       {showSymbolEditor && (
