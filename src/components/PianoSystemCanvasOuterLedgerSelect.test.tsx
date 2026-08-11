@@ -214,16 +214,29 @@ describe('PianoSystemCanvas 五線から遠い音符の選択（Issue #218）', 
     expect(y + h).toBeCloseTo(yForLine(hit, 7), 5);
   });
 
-  it('広げた当たり判定は隣のパートへはみ出さない（クリックの奪い合いを起こさない）', () => {
-    // 上パート（ト音記号）の極低音でヒット領域を下へ広げても、
-    // 下パート（ヘ音記号）との中間線を越えないこと。越えると背景ヒットで
-    // 避けているのと同じ「上のパートが下パートのクリックを奪う」誤配置になる。
-    const { svg } = renderGrandStaff(['c/3'], ['c/4']);
-    const trebleHit = noteHit(svg, 0, 0);
+  it('当たり判定を広げるのは符頭のぶん（0.5ライン）だけ', () => {
+    // 大譜表ではパート間が詰まっていて、広げたぶんは隣のパートの領域と重なる。
+    // だから広げ幅は「符頭が実際に描かれている範囲」ちょうどに抑える。
+    // ここが 1 ライン・2 ラインと大きくなると、隣の段のクリックを奪う範囲が広がる。
+    const { svg } = renderGrandStaff(['c/5'], ['g#/4']);
     const bassHit = noteHit(svg, 1, 0);
 
-    const trebleBottom = parseFloat(trebleHit.getAttribute('y')!) + parseFloat(trebleHit.getAttribute('height')!);
-    // 下パートの五線上端（line 0）より下には決して伸びていない
-    expect(trebleBottom).toBeLessThan(yForLine(bassHit, 0));
+    // g#/4 は line -3。固定範囲の上端（line -3）から 0.5 ライン分だけ上へ伸びる。
+    expect(parseFloat(bassHit.getAttribute('y')!)).toBeCloseTo(yForLine(bassHit, -3.5), 5);
+  });
+
+  it('広げた領域のクリックは音符を増やさない（隣の段を押した扱いにならない）', async () => {
+    // 広げた領域は隣のパートの領域と重なりうるので、選択にならないクリックは
+    // 挿入へ回さず「何もしない」。ここで挿入してしまうと、隣の段を押したつもりが
+    // こちらの段に音符が増える誤配置になる。
+    const { svg, onBassChange } = renderGrandStaff(['c/5'], ['g#/4']);
+    const hit = noteHit(svg, 1, 0);
+
+    // 符頭中心（line -3）より 0.4 ライン上＝広げた領域の中で、選択にはならない位置。
+    fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, -3.4) });
+
+    // 何も起きない（保存データが変わらない）
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(onBassChange).not.toHaveBeenCalled();
   });
 });

@@ -3434,9 +3434,12 @@ export default function PianoSystemCanvas({
             // 休符は五線内に描かれるので従来どおり固定範囲のまま扱い、
             // 音符だけ符頭の位置に応じて範囲を広げる。
             const keyLines=activeEvs[j]?.isRest?null:noteKeyLineExtent(activeEvs[j]?.keys??[],k2l);
-            // ヒット領域は符頭の上下に1ライン分の余裕を持たせる（符頭の高さは約1ライン分）。
-            const hitTopLine=Math.min(CHORD_LEDGER_TOP,keyLines?keyLines.minLine-1:CHORD_LEDGER_TOP);
-            const hitBotLine=Math.max(CHORD_LEDGER_BOT,keyLines?keyLines.maxLine+1:CHORD_LEDGER_BOT);
+            // 広げ幅は符頭1個分の半分（0.5ライン）だけ。符頭の高さがちょうど1ライン分なので、
+            // これで符頭の描画範囲を過不足なく覆える（選択が成立するのは符頭中心±0.25ライン
+            // なので、その帯も丸ごと入る）。必要最小限にするのは、広げたぶんが隣のパートの
+            // 領域へ重なるため（下記 NOTE_HIT_EXTENSION の説明を参照）。
+            const hitTopLine=Math.min(CHORD_LEDGER_TOP,keyLines?keyLines.minLine-0.5:CHORD_LEDGER_TOP);
+            const hitBotLine=Math.max(CHORD_LEDGER_BOT,keyLines?keyLines.maxLine+0.5:CHORD_LEDGER_BOT);
             // 符頭の実際の描画X範囲。getAbsoluteX()はtickの左端でnotehead自体より左になるため
             // getBoundingBox() で実際に描画された領域を取得する
             const bb=n.getBoundingBox?.();
@@ -3449,14 +3452,16 @@ export default function PianoSystemCanvas({
             //   x/yHit/w/hHit = このイベントにクリックを届ける透明領域
             //   noteVisualLeft/Right ± CHORD_HIT_PAD = 和音操作として扱うX領域
             //   .vf-note-selected = 選択状態の表示だけ。クリック判定には使わない
-            // 広げたぶんが隣のパート（ピアノの右手／左手など）へはみ出すと、
-            // 背景ヒットで避けているのと同じ「上のパートがクリックを奪う」誤配置が
-            // 起きてしまう。そのため拡張ぶんだけをパート間の中間線でクリップする
-            // （Math.min/max で挟むことで、固定範囲より狭くなることは無い）。
-            const neighborTopLimitY = pi>0 ? staveLine0-halfPartMarginY : -Infinity;
-            const neighborBotLimitY = pi<parts.length-1 ? staveLine4+halfPartMarginY : Infinity;
-            const yHit=Math.min(chordTopY,Math.max(stave.getYForLine(hitTopLine),neighborTopLimitY));
-            const hHit=Math.max(chordBotY,Math.min(stave.getYForLine(hitBotLine),neighborBotLimitY))-yHit;
+            // NOTE_HIT_EXTENSION: 広げたぶん（固定範囲の外側 0.5ライン）は、大譜表のように
+            // パート間が詰まっていると隣のパートの領域へ食い込む。実測（ピアノ大譜表・既定設定）
+            // では上下のパートの固定範囲がちょうど接しており、パート間の中間線でクリップすると
+            // 「符頭の中心ちょうどしか押せない」（1px 上へずれると外れる）状態にしかならず、
+            // 症状が半分しか直らなかった。そのためクリップはせず、代わりに
+            //   - 広げるのは符頭が実際に描かれている範囲だけ（0.5ライン・符頭のX範囲のみ）
+            //   - 広げた領域のクリックは「選択」しかしない（下の click 参照。挿入はしない）
+            // の2点で、隣のパートから奪う影響を「その符頭の上でだけ・音符を増やさない」形に抑える。
+            const yHit=Math.min(chordTopY,stave.getYForLine(hitTopLine));
+            const hHit=Math.max(chordBotY,stave.getYForLine(hitBotLine))-yHit;
             // 既存の符頭を選択できるかの判定（findKeyIndexAtLine）で使う丸め。
             // 丸め先の候補を「新規入力できる範囲」だけに限ると、そこより外にいる音符の
             // 線には決して一致せず選択不能のままになるため、その音符の線まで候補を広げる。
@@ -3915,11 +3920,12 @@ export default function PianoSystemCanvas({
                   return;
                 }
                 if(!isOnNote){
-                  // 五線から遠い音符のためにヒット領域を広げたぶん（Issue #218）、
-                  // 「音符を置ける範囲（五線 ± EXTRA_TOP/EXTRA_BOTTOM）」の外まで
-                  // クリックが届くようになった。そこまで挿入扱いにすると、丸め先が
-                  // 範囲端に張り付いて意図しない音高の音符が増えるため何もしない。
-                  if(ly<stave.getYForLine(-EXTRA_TOP)||ly>stave.getYForLine(4+EXTRA_BOTTOM))return;
+                  // 五線から遠い音符のためにヒット領域を広げた領域（固定範囲の外側）は、
+                  // 選択にならなかったら何もしない（Issue #218 / 上の NOTE_HIT_EXTENSION）。
+                  // ここは隣のパートの領域と重なっている可能性があるので、
+                  // 挿入まで引き受けると「隣の段を押したのにこちらへ音符が増える」誤配置になる。
+                  // 固定範囲の中（＝従来からクリックが届いていた範囲）の挙動は変えない。
+                  if(ly<chordTopY||ly>chordBotY)return;
                   doInsert(lx,ly);
                   return;
                 }
