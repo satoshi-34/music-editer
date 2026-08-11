@@ -3413,8 +3413,31 @@ export default function PianoSystemCanvas({
             //   x/yHit/w/hHit = このイベントにクリックを届ける透明領域
             //   noteVisualLeft/Right ± CHORD_HIT_PAD = 和音操作として扱うX領域
             //   .vf-note-selected = 選択状態の表示だけ。クリック判定には使わない
-            const hHit=chordBotY-chordTopY;
-            const yHit=chordTopY;
+            //
+            // Issue #219: この rect は「五線±3加線」の固定範囲だったため、
+            // 隣のパートの守備範囲（staveTop/staveBot = パート間の中間線。上の
+            // 「.vf-hit のクリップ」参照）へ最大3加線ぶん食い込んでいた。
+            // SVG は後から追加した要素が手前に来るので、下のパート（＝あとで描かれる）の
+            // この rect が上のパートの領域を常に奪ってしまう。その結果、大譜表で
+            // 上段（ト音）の低音を置こうとして段の間をクリックすると、下段（ヘ音）の
+            // 極端な上加線（線 -3 = ト音のすぐ下あたり）として挿入されていた。
+            // 背景（.vf-hit）と同じ中間線でクリップして、段間のクリックが必ず
+            // 「近い方の五線」へ届くようにする。
+            //
+            // ただし符頭そのものが中間線の外に描かれている場合だけは、その符頭のぶんを
+            // 残す（0.5ライン＝符頭の高さの半分）。見えている音符をクリックできなくする
+            // ほうが実害が大きいため。残すのは符頭が実際に描かれている高さだけなので、
+            // 「音符が何も無い空白を隣のパートから奪う」ことはもう起きない。
+            const eventKeyLines=(activeEvs[j]?.keys??[]).map(k2l);
+            const headTopY=eventKeyLines.length
+              ? stave.getYForLine(Math.min(...eventKeyLines)-0.5)
+              : chordBotY;
+            const headBotY=eventKeyLines.length
+              ? stave.getYForLine(Math.max(...eventKeyLines)+0.5)
+              : chordTopY;
+            const yHit=Math.max(chordTopY,Math.min(staveTop,headTopY));
+            const yHitBottom=Math.min(chordBotY,Math.max(staveBot,headBotY));
+            const hHit=Math.max(0,yHitBottom-yHit);
 
             const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
             hit.setAttribute('class','vf-note-hit');
@@ -3424,6 +3447,12 @@ export default function PianoSystemCanvas({
             // テストが「確実に選択になる位置」を計算できるよう属性として公開しておく（表示には影響しない）
             hit.setAttribute('data-note-left', String(noteVisualLeft));
             hit.setAttribute('data-note-right', String(noteVisualRight));
+            // このパートの五線の基準位置（line0 のY）。ヒット領域の上端は隣パートとの
+            // 中間線でクリップされる（Issue #219）ため、rect の y からパート間隔を
+            // 逆算することはできない。パート間隔の均一性を検証するテストが安定して
+            // 参照できるよう、クリップの影響を受けない値を属性として公開しておく
+            // （表示には影響しない）。
+            hit.setAttribute('data-line0-y', String(staveLine0));
             hit.setAttribute('x',String(xl));hit.setAttribute('y',String(yHit));
             hit.setAttribute('width',String(wHit));hit.setAttribute('height',String(hHit));
             hit.setAttribute('fill','transparent');hit.setAttribute('stroke','none');

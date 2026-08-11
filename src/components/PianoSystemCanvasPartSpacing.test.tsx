@@ -3,9 +3,11 @@
 //
 // - staveSpacingForPartCount / computeLayout（純粋関数）で、パート数に応じた
 //   間隔の切り替えとレイアウト寸法を検証する。
-// - 実際に PianoSystemCanvas を描画し、各パートのヒット領域（.vf-note-hit）の
-//   Y座標から「隣接パートの間隔がすべて等しい」ことを確認する
-//   （computeLayout の値と実際の描画がずれていないかの回帰防止も兼ねる）。
+// - 実際に PianoSystemCanvas を描画し、各パートのヒット領域（.vf-note-hit）が持つ
+//   `data-line0-y`（そのパートの五線の基準位置）から「隣接パートの間隔がすべて等しい」
+//   ことを確認する（computeLayout の値と実際の描画がずれていないかの回帰防止も兼ねる）。
+//   rect の `y` そのものは Issue #219 で隣パートとの中間線までクリップされるようになり、
+//   パート間隔の代用にはできなくなったため、クリップの影響を受けない属性を見る。
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 
@@ -154,7 +156,7 @@ describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
     ) as SVGRectElement[];
     expect(hits.length).toBe(12);
 
-    const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
+    const ys = hits.map((h) => parseFloat(h.getAttribute('data-line0-y')!));
     const diffs = ys.slice(1).map((y, i) => y - ys[i]);
     diffs.forEach((d) => expect(d).toBeCloseTo(diffs[0], 3));
     // 12パートでは詰めた間隔（60ネイティブ単位、scale=1なのでそのまま60）が使われているはず。
@@ -168,7 +170,7 @@ describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
     ) as SVGRectElement[];
     expect(hits.length).toBe(4);
 
-    const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
+    const ys = hits.map((h) => parseFloat(h.getAttribute('data-line0-y')!));
     const diffs = ys.slice(1).map((y, i) => y - ys[i]);
     diffs.forEach((d) => expect(d).toBeCloseTo(diffs[0], 3));
     expect(Math.abs(diffs[0])).toBeCloseTo(80, 1);
@@ -181,7 +183,7 @@ describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
     ) as SVGRectElement[];
     expect(hits.length).toBe(4);
 
-    const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
+    const ys = hits.map((h) => parseFloat(h.getAttribute('data-line0-y')!));
     const diffs = ys.slice(1).map((y, i) => y - ys[i]);
     diffs.forEach((d) => expect(d).toBeCloseTo(diffs[0], 3));
     // 従来の80 + オフセット20 = 100
@@ -193,7 +195,7 @@ describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
     const hits = Array.from(
       svg.querySelectorAll('rect.vf-note-hit[data-measure="0"][data-note="0"]')
     ) as SVGRectElement[];
-    const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
+    const ys = hits.map((h) => parseFloat(h.getAttribute('data-line0-y')!));
     const diffs = ys.slice(1).map((y, i) => y - ys[i]);
     expect(Math.abs(diffs[0])).toBeCloseTo(80, 1);
   });
