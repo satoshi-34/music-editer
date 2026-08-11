@@ -242,7 +242,7 @@ const MM_TO_PX = 96 / 25.4;
 // 旧値 938 はこの旧実測（931.55px）に対応していたので、同じ余裕幅を保つよう 62px 引いた。
 const SCORE_AREA_BUDGET_PX = 876;
 // 「1段の実際の高さがページに収まらない編成」で自動的に音符サイズを縮小するための
-// ページ高さ予算（px）。maxSystemsPerPage 用の SCORE_AREA_BUDGET_PX（938px）は
+// ページ高さ予算（px）。maxSystemsPerPage 用の SCORE_AREA_BUDGET_PX（876px）は
 // タイトルページ基準でわざと厳しめに取った値だが、自動縮小の判定にそのまま使うと
 // 通常編成（classical-orchestra の12パート等）でも本文ページでは実際は収まるのに
 // 不必要に縮小してしまう。ここではタイトル欄の無い本文ページを想定した、より現実的な
