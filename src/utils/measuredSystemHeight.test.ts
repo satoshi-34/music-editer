@@ -17,10 +17,11 @@ import {
   SCORE_LAYOUT_RENDER_SCALE,
 } from './measureLayoutUtils';
 
-// ScorePage.tsx の SCORE_AREA_BUDGET_PX と同じ値（A4のタイトルページ基準・実測約938px）。
+// ScorePage.tsx の SCORE_AREA_BUDGET_PX と同じ値（A4のタイトルページ基準・実測約876px。
+// Issue #216 で見出しを縦積みにして 62px 高くなった分を引いた値）。
 // ScorePage.tsx 側は private 定数のため、maxSystemsPerPage と同じ計算式をここでも
 // 再現して検証する。
-const SCORE_AREA_BUDGET_PX = 938;
+const SCORE_AREA_BUDGET_PX = 876;
 
 function maxSystemsPerPageFor(baseHeightPx: number): number {
   return Math.max(1, Math.floor(SCORE_AREA_BUDGET_PX / baseHeightPx));
