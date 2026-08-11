@@ -20,7 +20,8 @@
 
 ### 段数/ページ上限（maxSystemsPerPage）との連動
 
-- `SCORE_AREA_BUDGET_PX = 938px` は「上14mm/下12mm（合計26mm）」時の実測値。上下余白スライダーで合計が変わった分だけ mm→px 換算（96/25.4）で budget を増減する。
+- `SCORE_AREA_BUDGET_PX` は「上14mm/下12mm（合計26mm）」時のタイトルページの `.score-area` の実測値。上下余白スライダーで合計が変わった分だけ mm→px 換算（96/25.4）で budget を増減する。
+  - 当初は **938px**。Issue #216 で見出しを縦積み（タイトルの下の行に作者欄）へ変えて既定の見出しが 62px 高くなったため、**876px** へ追従した（実測と影響範囲は `.claude/specs/engraving-defaults/design.md` §6-2）。見出しの構造を変えるときは、この定数も一緒に見直すこと。
 - 段の間隔（`systemRowGapPx`）は、1段あたりの高さ見積もり（`baseHeight * notationSizeMultiplier`）に加算してから budget で割ることで、間隔を広げるほど自動的に段数上限が下がるようにした（安全側の近似: 本来は `(N-1)*gap` だが `N*gap` 相当で見積もっている）。
 
 ### 小節幅配分の実際の再描画（バグ修正込み）

@@ -1,17 +1,17 @@
 // src/components/ScoreHeadCreditLayout.test.tsx
-// Issue #204: 長いタイトルが右上の作者欄（作詞者・作曲者・編曲者）と重なる不具合の再発防止。
+// Issue #216: 見出しを市販譜の慣例どおり「縦積み」（タイトルが行を専有し、作者は下の行に右寄せ）にする。
 //
-// 原因は「作者欄だけが position: absolute で浮いていて、幅を予約していなかった」こと。
-// 直し方は「タイトルと作者欄を同じ行（3列グリッド）に並べて場所を取り合わせる」で、
-// そのとき左端に作者欄と同じ幅の見えない控えを置くことで、タイトルは
-// 「作者欄の幅を避けつつページ中央」に留まる。
+// もともとは Issue #204「長いタイトルが右上の作者欄と重なる」の再発防止テストだった。
+// #204 の直し方は「タイトルと作者欄を同じ行（3列グリッド）に並べて場所を取り合わせる」で、
+// 横並びという前提の上での対症だった。#216 で前提ごと変えて縦積みにしたため、
+// 重なりは構造的に起こらなくなり、3列グリッドと「見えない控え」は撤去した。
 //
 // jsdom は実レイアウト（折り返し・重なり）を計算しないため、ここで固定するのは
 // 重なりが起きない構造そのもの（DOM の並びと CSS の指定）である。
-// 実際に重ならないことはブラウザ実測で確認する（PR に実測値とスクリーンショットを添付）。
+// 実際の配置はブラウザ実測で確認する（PR に実測値とスクリーンショットを添付）。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, act } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ScorePage from './ScorePage';
@@ -41,7 +41,7 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-/** .score-head-grid の宣言ブロックだけを切り出す（他のセレクタと混ざらないように） */
+/** 指定セレクタの宣言ブロックだけを切り出す（他のセレクタと混ざらないように） */
 function cssBlock(selector: string): string {
   const re = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`);
   const m = re.exec(appCss);
@@ -49,28 +49,31 @@ function cssBlock(selector: string): string {
   return m![1];
 }
 
-describe('App.css: タイトルと作者欄が同じレイアウトフローで場所を取り合う', () => {
-  it('作者欄は絶対配置ではない（幅を予約しないと長いタイトルと重なる）', () => {
+describe('App.css: 見出しはタイトルと作者欄が別の行に積まれる', () => {
+  it('作者欄は絶対配置ではない（浮かせると幅を予約せず、長いタイトルと重なる）', () => {
     const credit = cssBlock('.score-credit');
     expect(credit).not.toMatch(/position:\s*absolute/);
   });
 
-  it('タイトル欄は3列グリッドで、中央の列だけが伸び縮みする', () => {
-    const grid = cssBlock('.score-head-grid');
-    expect(grid).toMatch(/display:\s*grid/);
-    // [控え(auto)][タイトル(1fr)][作者欄(auto)]。中央が minmax(0, 1fr) なのは、
-    // 長いタイトルが列をはみ出さずに折り返せるようにするため
-    expect(grid).toMatch(/grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)\s+auto/);
+  it('作者行は右寄せで、自分の行を丸ごと使う（横幅の上限を持たない）', () => {
+    const credit = cssBlock('.score-credit');
+    expect(credit).toMatch(/text-align:\s*right/);
+    // max-width は #204 の横並び（タイトルと幅を取り合う）ためだけに必要だった上限。
+    // 縦積みでは作者名が長くても誰の幅も奪わないので、付け直さない
+    expect(credit).not.toMatch(/max-width/);
   });
 
-  it('作者欄が空のときは列の隙間も消してタイトルへ全幅を返す', () => {
-    expect(cssBlock('.score-head-grid--empty-credit')).toMatch(/column-gap:\s*0/);
+  it('タイトル・サブタイトルは中央寄せのまま（紙面の中央に置く）', () => {
+    expect(cssBlock('.score-title')).toMatch(/text-align:\s*center/);
+    expect(cssBlock('.score-subtitle')).toMatch(/text-align:\s*center/);
   });
 
-  it('左の控えは幅を保ったまま描画だけ消す（display: none にすると中央がずれる）', () => {
-    const spacer = cssBlock('.score-credit-spacer');
-    expect(spacer).toMatch(/visibility:\s*hidden/);
-    expect(spacer).not.toMatch(/display:\s*none/);
+  it('横並び前提の3列グリッドと「見えない控え」は撤去されている', () => {
+    // 復活させると、タイトルの使える幅が作者欄のぶん狭まる問題（#216 の動機）が戻る。
+    // 見張るのは「セレクタとして使われていないこと」だけ。撤去の経緯を説明する
+    // コメントの中にクラス名が出てくるのは問題ないので、直後が { か , のものだけを見る
+    expect(appCss).not.toMatch(/\.score-head-grid\s*[,{]/);
+    expect(appCss).not.toMatch(/\.score-credit-spacer\s*[,{]/);
   });
 });
 
@@ -89,30 +92,55 @@ describe('タイトルページの見出しの DOM 構造', () => {
     vi.restoreAllMocks();
   });
 
-  it('タイトルと作者欄が同じグリッドに並び、左の控えが作者欄を写している', () => {
+  /**
+   * contentEditable の欄を空にして確定する（blur）。
+   * 2点だけ jsdom / React 固有の事情がある:
+   * - jsdom には innerText が無く、ScorePage の onBlur が読む値が undefined になるので、
+   *   その要素にだけ innerText を生やしてから送る
+   * - React の onBlur は実際には focusout（バブルする方）を見ているため、両方送る
+   */
+  function clearEditable(el: Element) {
+    Object.defineProperty(el, 'innerText', { value: '', configurable: true });
+    act(() => {
+      el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+      el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    });
+  }
+
+  it('タイトル → サブタイトル → 作者行 の順に縦へ並ぶ', () => {
     const { container } = render(<ScorePage />);
 
-    const grid = container.querySelector('.score-head-grid');
-    expect(grid, 'タイトルページに .score-head-grid があること').toBeTruthy();
+    const head = container.querySelector('.page-head--title');
+    expect(head, 'タイトルページに .page-head--title があること').toBeTruthy();
 
-    // 並び順は [控え][タイトル・サブタイトル][作者欄] の3列
-    const columns = Array.from(grid!.children);
-    expect(columns).toHaveLength(3);
-    expect(columns[0].classList.contains('score-credit-spacer')).toBe(true);
-    expect(columns[1].classList.contains('score-head-center')).toBe(true);
-    expect(columns[2].classList.contains('score-credit')).toBe(true);
-    expect(columns[2].classList.contains('score-credit-spacer')).toBe(false);
+    // 見出しの子は上から [タイトル][サブタイトル][作者行]。
+    // 3列グリッドのラッパーを挟まない（挟むと横並びの前提が戻る）
+    const children = Array.from(head!.children);
+    expect(children[0].tagName).toBe('H1');
+    expect(children[0].classList.contains('score-title')).toBe(true);
+    expect(children[1].classList.contains('score-subtitle')).toBe(true);
+    expect(children[2].classList.contains('score-credit')).toBe(true);
 
-    // タイトルとサブタイトルは中央の列の中（＝作者欄と場所を取り合う側）にある
-    expect(columns[1].querySelector('h1.score-title')).toBeTruthy();
-    expect(columns[1].querySelector('p.score-subtitle')).toBeTruthy();
+    // 作者行は 作詞者・作曲者・編曲者 の3つを縦に並べ、すべて編集できる
+    expect(children[2].querySelectorAll('[contenteditable]')).toHaveLength(3);
+    // 幅をそろえるための「見えない控え」（#204）はもう無い
+    expect(head!.querySelector('[aria-hidden="true"]')).toBeNull();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 
-    // 控えは作者欄と同じ文字列でなければ幅がそろわない
-    expect(columns[0].textContent).toBe(columns[2].textContent);
-    // 読み上げ・コピーで作者名が二重に出ないようにする
-    expect(columns[0].getAttribute('aria-hidden')).toBe('true');
-    // 控えは編集させない（編集できる本体は右列だけ）
-    expect(columns[0].querySelector('[contenteditable]')).toBeNull();
-    expect(columns[2].querySelectorAll('[contenteditable]')).toHaveLength(3);
+  it('作者欄を3つとも空にすると作者行そのものが消え、タイトルとサブタイトルだけが残る', () => {
+    const { container } = render(<ScorePage />);
+
+    // 空欄になった行から順に消えるため、そのつど残っている先頭の欄を空にする
+    for (let i = 0; i < 3; i++) {
+      const editable = container.querySelector('.score-credit [contenteditable]');
+      expect(editable, `${i + 1}回目: まだ作者欄が残っていること`).toBeTruthy();
+      clearEditable(editable!);
+    }
+
+    // 空の contentEditable もブラウザでは1行ぶんの高さを取るため、
+    // 「中身が空の div を置いたまま」ではなく行ごと消す必要がある
+    expect(container.querySelector('.score-credit')).toBeNull();
+    const head = container.querySelector('.page-head--title');
+    expect(Array.from(head!.children).map((e) => e.className)).toEqual(['score-title', 'score-subtitle']);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
