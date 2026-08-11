@@ -125,7 +125,7 @@ import {
 // Issue #38）。既存のテスト（PianoSystemCanvasPartSpacing.test.tsx）はこのファイルからの
 // named import を使っているため、後方互換として re-export する。
 export { computeLayout, staveSpacingForPartCount };
-import { createVexFlowTuplets, vexFlowDotCount } from '../utils/vexFlowTimingUtils';
+import { createVexFlowTuplets, syncTupletBracketsWithBeams, vexFlowDotCount } from '../utils/vexFlowTimingUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 
@@ -2763,15 +2763,27 @@ export default function PianoSystemCanvas({
             const beamStemDirection = isMultiVoiceMeasure
               ? (measureVoice.stemDirection === 'down' ? -1 : 1)
               : undefined;
+            // Tuplet の生成時に tick 倍率を音符へ反映する。合同 Formatter より後に
+            // 作ると、3連符などを通常音符の拍位置で整列してしまう。
+            //
+            // ビーム生成より「先」に作るのが必須（Issue #217）。
+            // Beam.generateBeams は音符の tick を足し上げて拍の区切りを決めるが、
+            // 連符の 2/3 倍率を掛けるのはこの Tuplet 生成なので、順序が逆だと
+            // 8分3連が「素の8分音符」として数えられ、連符単位（3+3）ではなく
+            // 拍単位（2+2+2）で束ねられてしまう。
+            const tuplets=createVexFlowTuplets(sourceEvents, vfNotes);
             const beams=Beam.generateBeams(vfNotes,{
               beamRests:false,
               ...(beamStemDirection !== undefined
                 ? { stemDirection: beamStemDirection, maintainStemDirections: true }
                 : {}),
             });
-            // Tuplet の生成時に tick 倍率を音符へ反映する。合同 Formatter より後に
-            // 作ると、3連符などを通常音符の拍位置で整列してしまう。
-            const tuplets=createVexFlowTuplets(sourceEvents, vfNotes);
+            // Tuplet は「括弧を描くかどうか」をコンストラクタの時点で
+            // 「ビームの付いていない音符が1つでもあるか」で決めてしまう。
+            // 上の順序変更でビームがまだ無い状態で作ることになったため、
+            // ビーム確定後にもう一度判定し直す（連桁でつながった連符は
+            // 数字だけ・括弧なしで書くのが浄書の慣行）。
+            syncTupletBracketsWithBeams(tuplets);
             const voice=new Voice({
               time:{
                 num_beats: timeSignatureNumerator,

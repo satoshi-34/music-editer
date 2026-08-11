@@ -18,6 +18,10 @@ export function vexFlowDotCount(dots?: 1 | 2): number {
  * Tuplet の生成時点で各音符の tick に倍率が掛かる。Formatter より後に生成すると
  * 見た目だけが連符になり、拍の縦揃えに使う開始位置が通常音符のまま残ってしまうため、
  * Voice へ addTickables する前にこの関数を呼ぶ。
+ *
+ * さらに `Beam.generateBeams` よりも「先」に呼ぶ必要がある（Issue #217）。
+ * ビーム生成は音符の tick を足し上げて拍の区切りを決めるため、倍率が未反映だと
+ * 8分3連が素の8分音符として2個ずつ束ねられてしまう。
  */
 export function createVexFlowTuplets(
   events: readonly TupletEvent[],
@@ -68,4 +72,23 @@ export function createVexFlowTuplets(
   }
 
   return tuplets;
+}
+
+/**
+ * 連符の括弧を出すかどうかを、ビーム確定後の状態で決め直す。
+ *
+ * VexFlow の Tuplet は「ビームの付いていない音符が1つでもあれば括弧を描く」を
+ * コンストラクタの時点で確定させる。Issue #217 でビームより先に Tuplet を作る
+ * 順序へ変えたため、その時点ではまだどの音符にもビームが無く、常に括弧付きに
+ * なってしまう。ビームを作り終えたあとにこの関数を呼んで判定をやり直す。
+ *
+ * 連桁（ビーム）でつながった連符は数字だけを書き、括弧は描かないのが
+ * 浄書の慣行。ビームが無い連符（4分音符の3連符や、休符を含むグループ）は
+ * どこからどこまでが連符か分からなくなるので括弧を描く。
+ */
+export function syncTupletBracketsWithBeams(tuplets: readonly Tuplet[]): void {
+  tuplets.forEach((tuplet) => {
+    const hasUnbeamedNote = tuplet.getNotes().some((note) => !note.hasBeam());
+    tuplet.setBracketed(hasUnbeamedNote);
+  });
 }

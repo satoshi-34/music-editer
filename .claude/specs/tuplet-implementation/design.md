@@ -231,7 +231,7 @@ epsilon 比較パターンをそのまま踏襲した（`StaffCanvas.tsx` に `E
 かえってバグを埋め込みやすい。カスタム記号対応（`customSymbolRenderUtils.ts`）で
 採った「純粋なデータ変換ロジックだけを共通化する」という前例をそのまま踏襲した。
 
-### テスト・確認結果
+### テスト・確認結果（描画順序については後述の「追記3」も参照）
 
 - 単体テスト: `src/utils/tupletUtils.test.ts`（新規）。
   - `generateTupletId` の連続200回呼び出しでの一意性
@@ -344,3 +344,84 @@ epsilon 比較パターンをそのまま踏襲した（`StaffCanvas.tsx` に `E
   置いた直後の「音符1＋末尾休符2」ではブラケットが描かれない。詳細と再現条件は
   `.claude/specs/piano-two-voice-implementation/design.md` の
   「声部2の連符入力への対応（Issue #168, 2026-08-04）」節を参照。
+
+## 追記3: 連符のビームが拍単位に割れる不具合の修正（Issue #217, 2026-08-11）
+
+### 問題
+
+4/4・ピアノ譜で8分音符の三連符を2組続けて入力すると、ビーム（連桁＝8分音符などを
+つなぐ横棒）が **2+2+2 の3組**で描かれた。正しくは連符ごとの **3+3 の2組**である。
+単旋律で三連符を1組だけ置いた場合も 2+1 に割れ、余った3個目は単独になるため
+束から外れて見えた（VexFlow は音符1個だけのグループをビームにしない）。
+
+保存データ自体は正しく、6イベントすべてが `dur:'8'`・
+`tuplet:{numNotes:3, notesOccupied:2}` を持ち、グループIDも2つに正しく分かれていた。
+**描画だけの不具合**である。
+
+### 原因
+
+`PianoSystemCanvas.tsx` の声部ごとの描画で、ビーム生成が連符生成より**先**にあった。
+
+```ts
+const beams = Beam.generateBeams(vfNotes, { beamRests: false, ... });  // ← 先だった
+const tuplets = createVexFlowTuplets(sourceEvents, vfNotes);           // ← 後だった
+```
+
+VexFlow の `Beam.generateBeams` は、音符の tick（拍の内部単位）を先頭から
+足し上げて「1拍ぶん貯まったら束を閉じる」という方法で拍の区切りを決める
+（`beam.js` の `createGroups`。既定の区切りは `Fraction(2, 8)` ＝ 4分音符1個ぶん）。
+一方、連符の 2/3 倍率を各音符の tick へ掛けるのは `new Tuplet(...)` の
+コンストラクタ（内部で `note.setTuplet()` → `applyTickMultiplier()` が走る）である。
+
+したがって順序が逆だと、ビーム生成の時点では8分三連が**素の8分音符**として
+数えられ、2個で1拍に達したと判断されて束が閉じてしまう。
+倍率が掛かった後なら3個で 1/4（＝1拍）にちょうど達するため、連符単位で閉じる。
+
+なお `generateBeams` には「ビームを持てない音価（4分音符以下）の連符では
+区切り幅を2倍にする」という分岐（`unbeamable && note.getTuplet()`）もあり、
+これも `getTuplet()` が既にセットされていること、すなわち連符生成が先であることを
+前提にしている。
+
+### 修正（最小修正・Issue の第1手段を採用）
+
+`createVexFlowTuplets` の呼び出しを `Beam.generateBeams` より前へ移した。
+Issue で第2手段として挙げられていた `generateBeams` の `groups` オプションによる
+境界の明示は**採用していない**（順序を直せば VexFlow 側の tick 計算が
+そのまま正しく働き、5/6/7連符や拍をまたぐケースまで自動で正しくなるため。
+`groups` を使うと連符の種類ごとに区切り幅を計算して渡す必要があり、
+かえって壊れやすい）。
+
+**合同 Formatter との順序は保たれている。** 元コードのコメントが警告していた
+「Tuplet を合同 Formatter より後に作ると整列が崩れる」という制約は、
+Formatter（`Pass 2` の `new Formatter().joinVoices(...).formatToStave(...)`）が
+声部ごとの描画エントリを作り終えた**後**に一括で走るため、今回の入れ替えでも
+`Tuplet 生成 → Formatter` の前後関係は変わらない。むしろ連符生成がより早くなる
+方向なので、この制約に抵触する余地はない。
+
+### あわせて必要だった対応: 連符の括弧
+
+VexFlow の `Tuplet` は「括弧を描くか」をコンストラクタの時点で
+**「ビームの付いていない音符が1つでもあるか」**（`notes.some(n => !n.hasBeam())`）
+で確定させる。連符をビームより先に作るようにすると、その時点ではまだどの音符にも
+ビームが無いため、**すべての連符が括弧付き**になってしまう
+（連桁でつながった連符は数字だけを書き、括弧は描かないのが浄書の慣行）。
+
+そこで `src/utils/vexFlowTimingUtils.ts` に `syncTupletBracketsWithBeams()` を新設し、
+ビームを作り終えた直後に同じ判定をやり直して `setBracketed()` で上書きする。
+ビームの無い連符（4分音符の三連符や、休符を含むグループ）は従来どおり括弧付きのまま。
+
+### 影響範囲
+
+- `src/components/PianoSystemCanvas.tsx` — 連符生成をビーム生成の前へ移動し、
+  直後に `syncTupletBracketsWithBeams()` を呼ぶ（全譜種・全声部が通る唯一の描画経路）
+- `src/utils/vexFlowTimingUtils.ts` — `syncTupletBracketsWithBeams()` を追加、
+  `createVexFlowTuplets` のコメントに「ビーム生成より先に呼ぶ」制約を明記
+- `src/utils/vexFlowTimingUtils.test.ts` — 描画側と同じ順序でビームを組み、
+  束ごとの音符数（3+3 / 3 / 5 / 2+2+2）と括弧の有無を固定
+- `src/components/PianoSystemCanvasTupletBeamGrouping.test.tsx`（新規） —
+  実際に描画された SVG の `<g class="vf-beam">` に入る符幹（`g.vf-stem`）の数で
+  束の中身を数える回帰テスト。声部2の三連符・5連符・連符なしの拍単位ビームも含む
+
+`StaffCanvas.tsx` は既に廃止されており、`Beam.generateBeams` の呼び出しは
+リポジトリ全体で `PianoSystemCanvas.tsx` の1か所だけなので、単旋律譜・ピアノ譜・
+四重奏・編成譜のすべてがこの1か所の修正で直る。
