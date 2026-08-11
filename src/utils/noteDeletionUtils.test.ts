@@ -101,6 +101,80 @@ describe('deleteEventFromMeasures', () => {
     expect(next[0].events.every((e) => e.isRest)).toBe(true);
   });
 
+  // ここから Issue #223: 連符内の和音で1音だけ削除する。
+  // 「和音1音削除」の判定が「連符グループごと休符化」より先に評価されることを固定する
+  // （順序が逆だと keyIndex が無視され、グループ全体が休符になってしまう）。
+  it('受入1: 連符内の和音の片方を削除すると、その1音だけが消えて連符グループは維持される', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    const ms = measures([
+      ev({ dur: '8', keys: ['f#/3', 'g#/3'], tuplet }),
+      ev({ dur: '8', isRest: true, keys: ['b/4'], tuplet }),
+      ev({ dur: '8', isRest: true, keys: ['b/4'], tuplet }),
+    ]);
+    const next = deleteEventFromMeasures(ms, 0, 0, 1, 'b/4');
+    // グループは3イベントのまま。休符1個（4分休符）に潰れていないこと
+    expect(next[0].events).toHaveLength(3);
+    expect(next[0].events[0].keys).toEqual(['f#/3']);
+    expect(next[0].events[0].isRest).toBeFalsy();
+    // tuplet 情報が残っていないと、描画（VexFlow の Tuplet）と再生の拍計算が崩れる
+    expect(next[0].events.every((e) => e.tuplet?.id === 't1')).toBe(true);
+    expect(next[0].events[0].dur).toBe('8');
+  });
+
+  it('受入1: 連符内の和音で消した音を指す弧も、和音1音削除と同じ後始末を受ける', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    const ms = measures([
+      ev({
+        dur: '8',
+        keys: ['f#/3', 'g#/3'],
+        tuplet,
+        arcs: [
+          { fromKey: 'g#/3', toKey: 'g#/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' },
+          { fromKey: 'f#/3', toKey: 'f#/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' },
+        ],
+      }),
+      ev({ dur: '8', keys: ['f#/3', 'g#/3'], tuplet }),
+      ev({ dur: '8', isRest: true, keys: ['b/4'], tuplet }),
+    ]);
+    const next = deleteEventFromMeasures(ms, 0, 0, 1, 'b/4');
+    expect(next[0].events[0].arcs).toEqual([
+      { fromKey: 'f#/3', toKey: 'f#/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' },
+    ]);
+  });
+
+  it('受入2: 連符内の単音（和音の最後の1音）は keyIndex 付きでもグループごと休符になる', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    const ms = measures([
+      ev({ dur: '8', keys: ['c/4'], tuplet }),
+      ev({ dur: '8', isRest: true, keys: ['c/4'], tuplet }),
+      ev({ dur: '8', isRest: true, keys: ['c/4'], tuplet }),
+    ]);
+    // 単音の符頭を選ぶと keyIndex=0 が渡る。従来どおりグループごと1拍の休符になること
+    const next = deleteEventFromMeasures(ms, 0, 0, 0, 'b/4');
+    expect(next[0].events).toEqual([{ dur: '4', isRest: true, keys: ['c/4'] }]);
+  });
+
+  it('受入2: 連符内の休符を削除する経路は従来どおりグループごと休符になる', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    const ms = measures([
+      ev({ dur: '8', keys: ['c/4'], tuplet }),
+      ev({ dur: '8', isRest: true, keys: ['c/4'], tuplet }),
+      ev({ dur: '8', isRest: true, keys: ['c/4'], tuplet }),
+    ]);
+    // 休符は keys.length===1 かつ isRest なので、和音分岐には入らない
+    const next = deleteEventFromMeasures(ms, 0, 1, 0, 'b/4');
+    expect(next[0].events.every((e) => !e.tuplet)).toBe(true);
+    expect(next[0].events.every((e) => e.isRest)).toBe(true);
+  });
+
+  it('受入3: 連符外の和音の1音削除は従来どおり（順序変更の巻き添えが無い）', () => {
+    const ms = measures([ev({ keys: ['c/4', 'e/4', 'g/4'] }), ev({ keys: ['d/4'] })]);
+    const next = deleteEventFromMeasures(ms, 0, 0, 1, 'b/4');
+    expect(next[0].events).toHaveLength(2);
+    expect(next[0].events[0].keys).toEqual(['c/4', 'g/4']);
+    expect(next[0].events[0].tuplet).toBeUndefined();
+  });
+
   it('範囲外の measure は no-op で元の参照を返す', () => {
     const ms = measures([ev()]);
     expect(deleteEventFromMeasures(ms, 5, 0, undefined, 'b/4')).toBe(ms);
