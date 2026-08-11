@@ -1343,24 +1343,14 @@ button.ghost.active:hover:not(:disabled) {
   padding-top: var(--title-margin-top, 0mm);
   margin-bottom: var(--title-margin-bottom, 6mm);
 }
-/* タイトル欄の3列レイアウト（Issue #204）: [左の見えない控え][タイトル][作者欄]。
-   以前は作者欄だけ position: absolute で右上へ浮かせていたので幅が予約されず、
-   タイトルが折り返す長さになると作者欄と重なっていた。
-   同じ行に並べて場所を取り合わせることで重なりを無くしている。
-   左右の列（.score-credit と .score-credit-spacer）は中身も指定も同じなので幅が等しくなり、
-   タイトルは「作者欄の幅を避けつつページ中央」に留まる（右だけ空けると中央がずれる）。
-   auto にしているのは、作者名が短ければそのぶんタイトルが広く使えるようにするため。 */
-.score-head-grid {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  /* タイトルと作者欄が上端でそろうように（既定の stretch だと列の高さが伸びるだけ） */
-  align-items: start;
-  /* タイトルの文字と作者名がくっついて見えないための最小の隙間 */
-  column-gap: 4mm;
-}
-/* 作詞者・作曲者・編曲者がすべて空のとき（ScorePage.tsx が付ける）。
-   左右の列は幅0になるので、隙間も消してタイトルへ紙面の全幅を返す。 */
-.score-head-grid--empty-credit { column-gap: 0; }
+/* 見出しの縦積み（Issue #216）: 市販譜の慣例にならい、タイトル欄の中身を
+   上から [タイトル(中央・行を専有)] [サブタイトル(中央)] [作者行(右寄せ)] と縦に並べる。
+   横に並べないので、タイトルが何行に折り返しても作者欄と重なりようがない。
+   #204 の3列グリッド（.score-head-grid と、タイトルを中央に保つための
+   .score-credit-spacer）は「横並び」という前提ごと不要になったため撤去した
+   （経緯は .claude/specs/engraving-defaults/design.md §6-2）。
+   ここに専用のラッパー要素は置いていない。親の .page-head--title がそのまま
+   タイトルブロックであり、タイトル余白（上/下）スライダーの効き方も変わらない。 */
 /* タイトル・サブタイトル・作者欄（Issue #202・候補A）
    28px → 26px、字間 .08em → .02em。字間を詰めたのは、日本語のタイトルで
    .08em だと間延びして見え、かつ折り返しやすくなるため（#195 の調査 §3-4）。
@@ -1373,26 +1363,19 @@ button.ghost.active:hover:not(:disabled) {
   margin: 4px 0 0; font-size: 14px; text-align: center; color: #555;
   font-family: var(--score-text-font);
 }
-/* 作詞者・作曲者・編曲者（右上）。以前は ScorePage.tsx のインライン style に
+/* 作詞者・作曲者・編曲者。以前は ScorePage.tsx のインライン style に
    直書きされていて A/B 比較でしか値を変えられなかったので、クラスへ切り出した（#202）。
-   #204 で position: absolute をやめ、.score-head-grid の右列として通常フローに戻した。
-   max-width は、作者名がとても長いときにタイトルの幅が潰れないようにする上限。
-   40mm（紙幅 182mm のおよそ 2割）にしてあるのは、長い作者名で上限を外すと
-   左右で 2 倍の幅を取られてタイトルが極端に細くなるため。上限を超えたぶんは
-   作者欄が折り返す（タイトルが潰れるより作者名が2行になるほうが読める）。 */
+   #204 で position: absolute をやめて通常フローへ戻し、#216 でタイトルの下の
+   独立した行になった（市販譜の慣例：タイトルの次の行に右寄せで作曲者）。
+   自分の行を丸ごと使えるので、#204 で必要だった max-width（タイトルの幅が
+   潰れないようにする上限）は不要になり、長い作者名も折り返さずに収まる。
+   複数の作者（作詞者/作曲者/編曲者）は div が縦に積まれ、右端でそろう。
+   margin-top はサブタイトルとの間の最小限の空き（市販譜の見出しの詰まり方に合わせる）。 */
 .score-credit {
   text-align: right;
-  max-width: 40mm;
+  margin-top: 2mm;
   font-size: 13px; color: #555;
   font-family: var(--score-text-font);
-}
-/* 左端の「控え」: 右の作者欄と同じ幅を取るためだけの複製。
-   visibility: hidden は場所を取ったまま描画だけ消すので、画面にも印刷にも出ない
-   （display: none にすると幅が 0 になり、タイトルの中央がずれてしまう）。 */
-.score-credit-spacer {
-  visibility: hidden;
-  user-select: none;
-  pointer-events: none;
 }
 .page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; }
 /* pointer-events: none — ページ番号は absolute 配置のため、上下余白を狭くしたり

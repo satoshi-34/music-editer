@@ -4941,48 +4941,42 @@ export default function ScorePage() {
                 >
                   {i === 0 ? (
                     <>
-                      {/* タイトル欄は「左の見えない控え / タイトル・サブタイトル / 作者欄」の
-                          3列グリッド（Issue #204）。以前は作者欄だけを右上へ絶対配置していたため、
-                          タイトルが折り返す長さになると重なっていた。
-                          左端に作者欄と同じ内容の「控え」を visibility: hidden で置いているのは、
-                          左右の列幅をそろえてタイトルをページ中央に保つため（右だけ場所を空けると
-                          タイトルが左へずれてしまう）。見た目の指定は App.css の .score-head-grid 側。 */}
-                      {/* 作者欄が3つとも空のときは、タイトルが紙面の全幅を使えるように
-                          列の隙間も詰める（--empty-credit）。空欄でもタイトルが狭いままだと
-                          「作者を書かない譜面」で従来より窮屈になってしまうため。 */}
-                      <div className={`score-head-grid${(lyricist || composer || arranger) ? '' : ' score-head-grid--empty-credit'}`}>
-                        {/* 幅をそろえるためだけの控え。読み上げにも重複して出ないよう aria-hidden にする */}
-                        <div className="score-credit score-credit-spacer" aria-hidden="true">
-                          <div>{lyricist}</div>
-                          <div>{composer}</div>
-                          <div>{arranger}</div>
-                        </div>
-                        <div className="score-head-center">
-                          <h1
-                            className="score-title"
-                            contentEditable suppressContentEditableWarning
-                            onBlur={(e) => setTitle(e.currentTarget.innerText)}
-                          >
-                            {title}
-                          </h1>
-                          <p
-                            className="score-subtitle"
-                            contentEditable suppressContentEditableWarning
-                            onBlur={(e) => setSubtitle(e.currentTarget.innerText)}
-                          >
-                            {subtitle}
-                          </p>
-                        </div>
-                        {/* 作詞者・作曲者・編曲者。見た目（位置・文字サイズ・書体）は
-                            App.css の .score-credit へ移した（Issue #202）。
-                            インライン style に直書きだと A/B 比較でしか値を変えられず、
-                            浄書の既定値の正本がコードの奥に埋もれてしまうため。 */}
+                      {/* 見出しは市販譜の慣例にならった「縦積み」（Issue #216）。
+                          上から タイトル（中央・行を専有）→ サブタイトル（中央）→ 作者行（右寄せ）で、
+                          タイトルと作者欄が同じ行に並ばないため、タイトルが何行に折り返しても
+                          構造的に重なりようがない。
+                          #204 で入れた3列グリッド（左に見えない控えを置いてタイトルを中央に保つ細工）は、
+                          「横並び」という前提そのものが無くなったので撤去した。
+                          見た目の指定は App.css の .score-title / .score-subtitle / .score-credit 側。 */}
+                      <h1
+                        className="score-title"
+                        contentEditable suppressContentEditableWarning
+                        onBlur={(e) => setTitle(e.currentTarget.innerText)}
+                      >
+                        {title}
+                      </h1>
+                      <p
+                        className="score-subtitle"
+                        contentEditable suppressContentEditableWarning
+                        onBlur={(e) => setSubtitle(e.currentTarget.innerText)}
+                      >
+                        {subtitle}
+                      </p>
+                      {/* 作詞者・作曲者・編曲者。見た目（位置・文字サイズ・書体）は
+                          App.css の .score-credit へ移した（Issue #202）。
+                          インライン style に直書きだと A/B 比較でしか値を変えられず、
+                          浄書の既定値の正本がコードの奥に埋もれてしまうため。
+                          空の欄は行ごと描かない（Issue #216）。中身が空の contentEditable も
+                          ブラウザは1行ぶんの高さ（約15px）を確保するため、そのまま置くと
+                          「作曲者だけの譜面」で上下に空行ができ、市販譜の配置からずれてしまう。
+                          3つとも空なら作者行そのものが消える（高さを取らない）。 */}
+                      {(lyricist || composer || arranger) ? (
                         <div className="score-credit">
-                          <div contentEditable suppressContentEditableWarning onBlur={(e) => setLyricist(e.currentTarget.innerText)}>{lyricist}</div>
-                          <div contentEditable suppressContentEditableWarning onBlur={(e) => setComposer(e.currentTarget.innerText)}>{composer}</div>
-                          <div contentEditable suppressContentEditableWarning onBlur={(e) => setArranger(e.currentTarget.innerText)}>{arranger}</div>
+                          {lyricist ? <div contentEditable suppressContentEditableWarning onBlur={(e) => setLyricist(e.currentTarget.innerText)}>{lyricist}</div> : null}
+                          {composer ? <div contentEditable suppressContentEditableWarning onBlur={(e) => setComposer(e.currentTarget.innerText)}>{composer}</div> : null}
+                          {arranger ? <div contentEditable suppressContentEditableWarning onBlur={(e) => setArranger(e.currentTarget.innerText)}>{arranger}</div> : null}
                         </div>
-                      </div>
+                      ) : null}
                       {isPartExtractionActive && (
                         // パート譜表示中は、どのパートを見ているかをタイトル欄の下へ小さく表示する。
                         // 編集できないパート（大譜表など）のときだけ「閲覧・印刷専用」と補足する。
