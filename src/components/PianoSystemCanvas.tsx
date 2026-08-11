@@ -98,7 +98,7 @@ import {
 } from '../utils/engravingDefaults';
 import { computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
-import { buildTupletGroupPlan, buildTupletRestReplacement } from '../utils/tupletUtils';
+import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletReplacementForRest, type TupletKind } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
@@ -321,7 +321,8 @@ function buildRestEditReplacement(
   restEvent: NoteEvent,
   key: string,
   tool: Tool,
-  noteAfterRest: boolean
+  noteAfterRest: boolean,
+  clef: ClefType
 ): NoteEvent[] | null {
   const durationTool = getDurationTool(tool);
   if (!durationTool || durationTool.isRest || !restEvent.isRest) {
@@ -334,6 +335,28 @@ function buildRestEditReplacement(
   const tupletReplacement = buildTupletRestReplacement(restEvent, key, durationTool);
   if (tupletReplacement !== undefined) {
     return tupletReplacement;
+  }
+
+  // 連符ツール（3/5/6/7連符）が選ばれているときは、普通の休符を連符グループで置き換える。
+  // 連符グループを削除すると同じ長さの休符に戻るため、これが無いと満杯の小節では
+  // 連符を入れ直す手段が Undo しか無くなってしまう（Issue #224）。
+  const tupletKind = (tool as { tuplet?: TupletKind }).tuplet;
+  if (tupletKind) {
+    const plan = planTupletReplacementForRest(
+      restEvent,
+      [key],
+      durationTool,
+      defaultRestKeyForClef(clef),
+      tupletKind
+    );
+    if (!plan) {
+      // 休符のほうが短くてグループが入らない場合は何もしない（分割はしない）。
+      return null;
+    }
+    // 余った拍は通常の休符としてグループの後ろに残す。
+    // 「クリックした側へ音符を寄せる」分割（noteAfterRest）は連符では行わない:
+    // グループの途中に休符を割り込ませると連符の内訳が読みにくくなるため。
+    return [...plan.groupEvents, ...buildRestEventsForBeats(plan.remainingBeats, clef)];
   }
 
   // 付点音符は「その場に少なくとも付点分の長さの空きがあるか」だけで判定する保守的な仕様。
@@ -3530,6 +3553,20 @@ export default function PianoSystemCanvas({
               // カーソル形状: 選択になる位置は 'pointer'、それ以外（新規挿入・和音追加・
               // 休符の置換分割）は「ここに置く」感を出す 'copy' にする。
               (hit.style as any).cursor = wouldSelectKey ? 'pointer' : 'copy';
+              // 連符ツールのときだけは、休符の本体に乗った時点で「この休符を連符に
+              // 置き換えられるか」をカーソルで先に見せる（Issue #224）。
+              // 置けない休符（グループより短い）に 'copy' を出したままだと、
+              // クリックしても何も起きない理由が分からないため。
+              // 判定はクリック時とまったく同じ buildRestEditReplacement を通す
+              // （別の式で近似するとホバー表示だけ嘘になる）。
+              if((tool as { tuplet?: TupletKind }).tuplet && activeEvs[j]?.isRest){
+                const isOnRestForHover=Math.abs(lx-anchors[j])<=REST_BODY_HIT_HALF_WIDTH&&ly>=chordTopY&&ly<=chordBotY;
+                if(isOnRestForHover){
+                  const hoverKey=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
+                  const canPlace=!!buildRestEditReplacement(activeEvs[j],hoverKey,tool,false,clefHere);
+                  hit.style.cursor = canPlace ? 'copy' : 'not-allowed';
+                }
+              }
               if(inChordZone){hideGuide();showChordGuide(xl,wHit,stave);}
               else{hideChordGuide();showGuide(lx,ly,stave);}
             });
@@ -3997,7 +4034,7 @@ export default function PianoSystemCanvas({
                 // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
                 const noteVisualCenter=restBodyCenterX;
                 const noteAfterRest=lx>=noteVisualCenter;
-                const restReplacement=buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest);
+                const restReplacement=buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest,clefHere);
                 const isSameRestSelected =
                   selRef.current?.partIndex===pi &&
                   selRef.current?.measure===absI &&
@@ -4014,7 +4051,7 @@ export default function PianoSystemCanvas({
                     fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
                     const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
                     if(!targetEv?.isRest)return prev;
-                    const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest);
+                    const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest,clefHere);
                     if(!latestReplacement)return prev;
                     next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
                       const copy=[...events];
