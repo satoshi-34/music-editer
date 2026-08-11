@@ -473,15 +473,43 @@ function getKeySignatureHitBounds(
   return clampBounds(timeX + timeWidth, fallbackRight);
 }
 
-function snapLine(stave: Stave, y: number): number {
+// クリックYを五線の「線／間」（0.5ライン刻み）へ丸める。
+// minLine / maxLine は丸め先の候補範囲。省略時は音符を新しく置ける範囲
+// （五線 ± EXTRA_TOP / EXTRA_BOTTOM）で、これが従来からの挙動。
+// 既存の符頭を選択できるかの判定だけは、その音符が実際にいる線まで候補を
+// 広げて呼ぶ（Issue #218。詳しくは noteHitLineRange のコメント参照）。
+function snapLine(stave: Stave, y: number, minLine: number = -EXTRA_TOP, maxLine: number = 4+EXTRA_BOTTOM): number {
   const topY=stave.getYForLine(0);
   const sp=(stave.getSpacingBetweenLines?.() as number)||((stave.getYForLine(4)-topY)/4);
-  let best=0, minD=Infinity;
-  for(let l=-EXTRA_TOP;l<=4+EXTRA_BOTTOM;l+=0.5){
+  let best=minLine, minD=Infinity;
+  for(let l=minLine;l<=maxLine;l+=0.5){
     const d=Math.abs(y-(topY+l*sp));
     if(d<minD){minD=d;best=Math.round(l*2)/2;}
   }
   return best;
+}
+
+// この音符イベントの符頭が「五線の何ライン目から何ライン目までにいるか」を返す。
+// 和音なら一番上の音と一番下の音の線。keys が空・不正なときは null。
+//
+// 従来、当たり判定と選択判定はどちらも「五線 ± 3加線」（CHORD_LEDGER_TOP / BOT）の
+// 固定範囲だけを見ていたため、そこより外にいる音符（ヘ音記号の g/4＝line -3 や、
+// ト音記号の下の極低音など）は符頭の中心を正確にクリックしても選択できず、
+// Delete も矢印キーでの音高修正もできなかった（Issue #218。符頭の半分が判定範囲の
+// 外にはみ出すため）。この値を使って、そういう音符のときだけ範囲を広げる。
+function noteKeyLineExtent(
+  keys: string[],
+  keyToLineFn: (k: string) => number
+): { minLine: number; maxLine: number } | null {
+  let minLine = Infinity;
+  let maxLine = -Infinity;
+  for (const key of keys) {
+    const line = keyToLineFn(key);
+    if (!Number.isFinite(line)) continue;
+    if (line < minLine) minLine = line;
+    if (line > maxLine) maxLine = line;
+  }
+  return Number.isFinite(minLine) ? { minLine, maxLine } : null;
 }
 
 function getPreviewLedgerLines(snappedLine: number): number[] {
@@ -3402,19 +3430,49 @@ export default function PianoSystemCanvas({
             // 和音判定Y範囲：五線 ± 3加線の固定範囲（音符の位置に依存しない）
             const chordTopY=stave.getYForLine(CHORD_LEDGER_TOP);
             const chordBotY=stave.getYForLine(CHORD_LEDGER_BOT);
+            // 選択・ヒット領域のY範囲（Issue #218）。
+            // 休符は五線内に描かれるので従来どおり固定範囲のまま扱い、
+            // 音符だけ符頭の位置に応じて範囲を広げる。
+            const keyLines=activeEvs[j]?.isRest?null:noteKeyLineExtent(activeEvs[j]?.keys??[],k2l);
+            // ヒット領域は符頭の上下に1ライン分の余裕を持たせる（符頭の高さは約1ライン分）。
+            const hitTopLine=Math.min(CHORD_LEDGER_TOP,keyLines?keyLines.minLine-1:CHORD_LEDGER_TOP);
+            const hitBotLine=Math.max(CHORD_LEDGER_BOT,keyLines?keyLines.maxLine+1:CHORD_LEDGER_BOT);
             // 符頭の実際の描画X範囲。getAbsoluteX()はtickの左端でnotehead自体より左になるため
             // getBoundingBox() で実際に描画された領域を取得する
             const bb=n.getBoundingBox?.();
             const noteVisualLeft=bb?.getX?.()??anchors[j];
             const noteVisualRight=bb?((bb.getX?.()??anchors[j])+(bb.getW?.()??12)):anchors[j]+12;
-            // ヒット rect は和音ゾーン全体（五線±3加線）をカバーする。
+            // ヒット rect は和音ゾーン全体（五線±3加線）に加えて、
+            // その音符が五線から離れている場合はその符頭までをカバーする（hitLines）。
             // 音符のY中心だけをカバーすると加線域へのクリックが insertRect に落ちて和音追加できない。
             // 実際に「和音追加/個別音選択」として扱うかは click 内の isOnNote で再判定します。
             //   x/yHit/w/hHit = このイベントにクリックを届ける透明領域
             //   noteVisualLeft/Right ± CHORD_HIT_PAD = 和音操作として扱うX領域
             //   .vf-note-selected = 選択状態の表示だけ。クリック判定には使わない
-            const hHit=chordBotY-chordTopY;
-            const yHit=chordTopY;
+            // 広げたぶんが隣のパート（ピアノの右手／左手など）へはみ出すと、
+            // 背景ヒットで避けているのと同じ「上のパートがクリックを奪う」誤配置が
+            // 起きてしまう。そのため拡張ぶんだけをパート間の中間線でクリップする
+            // （Math.min/max で挟むことで、固定範囲より狭くなることは無い）。
+            const neighborTopLimitY = pi>0 ? staveLine0-halfPartMarginY : -Infinity;
+            const neighborBotLimitY = pi<parts.length-1 ? staveLine4+halfPartMarginY : Infinity;
+            const yHit=Math.min(chordTopY,Math.max(stave.getYForLine(hitTopLine),neighborTopLimitY));
+            const hHit=Math.max(chordBotY,Math.min(stave.getYForLine(hitBotLine),neighborBotLimitY))-yHit;
+            // 既存の符頭を選択できるかの判定（findKeyIndexAtLine）で使う丸め。
+            // 丸め先の候補を「新規入力できる範囲」だけに限ると、そこより外にいる音符の
+            // 線には決して一致せず選択不能のままになるため、その音符の線まで候補を広げる。
+            //
+            // 広げるのは「符頭の線ちょうど」まで（ヒット領域のような ±1 はしない）。
+            // snapLine は範囲の外のクリックを範囲の端へ丸める＝端にいる音符へ吸い寄せる
+            // 性質があり、この吸い寄せは従来からの挙動なので壊さない
+            // （符頭より外側にもう1本候補を足すと、そちらが最寄りになって選択できなくなる）。
+            //
+            // click と mousemove（ホバーのカーソル形状）で必ず同じ式を使うため、
+            // ここで1つの関数にまとめておく（判定がずれるとホバー表示が信用できなくなる）。
+            const snapLineForKeySelect=(y:number)=>snapLine(
+              stave,y,
+              Math.min(-EXTRA_TOP,keyLines?keyLines.minLine:-EXTRA_TOP),
+              Math.max(4+EXTRA_BOTTOM,keyLines?keyLines.maxLine:4+EXTRA_BOTTOM)
+            );
 
             const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
             hit.setAttribute('class','vf-note-hit');
@@ -3424,6 +3482,11 @@ export default function PianoSystemCanvas({
             // テストが「確実に選択になる位置」を計算できるよう属性として公開しておく（表示には影響しない）
             hit.setAttribute('data-note-left', String(noteVisualLeft));
             hit.setAttribute('data-note-right', String(noteVisualRight));
+            // 五線の基準座標。ヒット領域の高さは音符の位置によって変わるようになった
+            // （Issue #218）ため、rect の高さからライン間隔を逆算する方法が使えない。
+            // テストが「line n のY座標」を素直に求められるよう公開しておく（表示には影響しない）。
+            hit.setAttribute('data-line0-y', String(stave.getYForLine(0)));
+            hit.setAttribute('data-line-spacing', String(stave.getYForLine(1)-stave.getYForLine(0)));
             hit.setAttribute('x',String(xl));hit.setAttribute('y',String(yHit));
             hit.setAttribute('width',String(wHit));hit.setAttribute('height',String(hHit));
             hit.setAttribute('fill','transparent');hit.setAttribute('stroke','none');
@@ -3443,7 +3506,7 @@ export default function PianoSystemCanvas({
               // パディング量（keySelectXPad(svg)）も含めて完全に同じ式にしている。
               const hoverXPad = keySelectXPad(svg);
               const nearNoteXForHover = lx>=noteVisualLeft-hoverXPad && lx<=noteVisualRight+hoverXPad;
-              const snappedLineForHover = snapLine(stave, ly);
+              const snappedLineForHover = snapLineForKeySelect(ly);
               const wouldSelectKey = !activeEvs[j]?.isRest && nearNoteXForHover
                 && findKeyIndexAtLine(activeEvs[j].keys, snappedLineForHover, k2l) >= 0;
               setNoteHoverHighlight(n, wouldSelectKey);
@@ -3617,7 +3680,9 @@ export default function PianoSystemCanvas({
                 // 臨時記号は音符セル内クリックなら適用できるようにする。
                 // 符頭の狭い当たり判定だけにすると「置けない」と感じやすいため、
                 // 和音追加より先にこちらを処理する。
-                const snappedLine = snapLine(stave,ly);
+                // ここでの snappedLine は「どの符頭に付けるか」を決めるためだけに使うので、
+                // 五線から遠い音符にも効くよう選択用の丸め（Issue #218）を使う。
+                const snappedLine = snapLineForKeySelect(ly);
                 const clickedKeyIndex = findKeyIndexAtLine(activeEvs[j].keys, snappedLine, k2l);
                 const nextEv = applyAccidentalToEvent(
                   activeEvs[j],
@@ -3643,7 +3708,7 @@ export default function PianoSystemCanvas({
               }
               if (microtoneMode && !activeEvs[j]?.isRest) {
                 // 微分音（四分音）も、通常の臨時記号と同じ「音符セルクリックで適用」操作にする。
-                const snappedLine = snapLine(stave,ly);
+                const snappedLine = snapLineForKeySelect(ly);
                 const clickedKeyIndex = findKeyIndexAtLine(activeEvs[j].keys, snappedLine, k2l);
                 const nextEv = applyMicrotoneToEvent(
                   activeEvs[j],
@@ -3840,13 +3905,21 @@ export default function PianoSystemCanvas({
                 // 数pxまで許容範囲が縮んでしまい、符頭のすぐ近くをクリックしても選択に
                 // ならず音符追加になってしまうため）。
                 const nearNoteX = lx>=noteVisualLeft-keySelectXPad(svg) && lx<=noteVisualRight+keySelectXPad(svg);
-                const clickedKeyIndex = nearNoteX ? findKeyIndexAtLine(currentEv.keys, snappedLine, k2l) : -1;
+                // 選択の一致判定だけは、五線から遠い音符の線まで丸め先を広げた
+                // snapLineForKeySelect を使う（Issue #218）。新規音の音高（newKey）は
+                // 従来どおり snappedLine から作るので、置ける範囲は変わらない。
+                const clickedKeyIndex = nearNoteX ? findKeyIndexAtLine(currentEv.keys, snapLineForKeySelect(ly), k2l) : -1;
                 if(clickedKeyIndex>=0){
                   setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex});
                   playNoteEvent({...currentEv,keys:[currentEv.keys[clickedKeyIndex]]}, part.playbackInstrument);
                   return;
                 }
                 if(!isOnNote){
+                  // 五線から遠い音符のためにヒット領域を広げたぶん（Issue #218）、
+                  // 「音符を置ける範囲（五線 ± EXTRA_TOP/EXTRA_BOTTOM）」の外まで
+                  // クリックが届くようになった。そこまで挿入扱いにすると、丸め先が
+                  // 範囲端に張り付いて意図しない音高の音符が増えるため何もしない。
+                  if(ly<stave.getYForLine(-EXTRA_TOP)||ly>stave.getYForLine(4+EXTRA_BOTTOM))return;
                   doInsert(lx,ly);
                   return;
                 }

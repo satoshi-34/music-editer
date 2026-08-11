@@ -78,6 +78,18 @@
 
 `selected.keyIndex` があると、Delete や矢印キー、臨時記号は和音全体ではなくその 1 音だけに効きます。
 
+### 五線から遠い音符（複数段譜, Issue #218）
+
+`CHORD_LEDGER_TOP` / `CHORD_LEDGER_BOT`（五線 ± 3 加線）の外にいる音符は、
+この固定範囲のままだと符頭の中心をクリックしても選択できません（ヘ音記号の `g/4` など）。
+
+そのため `PianoSystemCanvas.tsx` では、当てはまる音符に限って判定範囲を
+「その音符が持つ key の線 ± 1 ライン」まで広げます（`noteKeyLineExtent()`）。
+
+- 広がるのはヒット領域と「既存の符頭への一致判定」だけです
+- 和音追加ゾーンと、新しく置ける音域は従来のままです
+- 広げたぶんは隣のパートとの中間線でクリップします（上のパートがクリックを奪わないため）
+
 ```ts
 type SelectedNote = {
   measure: number;
@@ -175,6 +187,7 @@ React 的には別アプリを起動しているわけではなく、`createPort
 1. クリックしづらい場合: `CELL_PAD` / `HIT_MIN_W`
 2. 和音追加になりにくい場合: `CHORD_HIT_PAD`
 3. 五線外の和音操作範囲を変えたい場合: `CHORD_LEDGER_TOP` / `CHORD_LEDGER_BOT`
+   （複数段譜では、遠い音符の選択だけ `noteHitLineRange()` がここから自動で広げます）
 4. 青枠の見た目だけ変えたい場合: `SELECTED_KEY_*` / `SELECTED_EVENT_PAD`
 5. 和音内の個別選択が厳しすぎる場合: `KEY_SELECT_LINE_EPS`
 
