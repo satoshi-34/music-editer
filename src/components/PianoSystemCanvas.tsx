@@ -4381,6 +4381,16 @@ export default function PianoSystemCanvas({
       x+=w;
     }
 
+    // 音符の当たり判定（.vf-note-hit）を、小節背景（.vf-hit）と弧の当たり判定より前面へ出す。
+    // 小節背景は段間クリック帰属（Issue #219）のため隣段側の帯まで覆っており、
+    // 描画順のまま（後に描いたパートが上）だと、上段の声部2のような段間へ深く
+    // はみ出した符頭へのクリックを下段の背景が先に受けてしまい、
+    // 「右手の下声を押したのに左手へ入る」誤帰属になる（2026-08-12 実機テストで発覚）。
+    // どれも透明な当たり判定要素の並べ替えなので、見た目は一切変わらない。
+    // なお、この後に描く記号類の当たり判定（symbol-hit-region など）は
+    // このさらに前面に積まれるため、記号のクリックは従来どおり優先される。
+    svgRoot.querySelectorAll('.vf-note-hit').forEach(el=>svgRoot.appendChild(el));
+
     dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
       const orderedMarkings = [...markings].sort((left, right) => {
         const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
