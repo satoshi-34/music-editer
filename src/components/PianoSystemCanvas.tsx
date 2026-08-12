@@ -21,6 +21,7 @@ import {
   isLegacyDefaultRestKey,
   restKey as restFormatterKey,
   restKeyForVoice,
+  standardRestDisplayKey,
   lineToKey as lineToKeyForClef,
   keyToLine as keyToLineForClef,
 } from './clefUtils';
@@ -1705,7 +1706,11 @@ export default function PianoSystemCanvas({
           if(measure>=prev.length)return prev;
           const ev=getVoiceEvents(prev[measure], voiceIndex)[index];
           if(!ev||!ev.isRest)return prev;
-          const standardKey=defaultRestDisplayKeyForDuration(clef, ev.dur);
+          // 戻し先は「その小節が何声部か」で変わる（Issue #227）。
+          // 2声部共存なら声部1=やや上/声部2=やや下、単声部なら音価に応じた中央/第4線。
+          // 判断は standardRestDisplayKey に集約してあり、拍を埋める詰め物休符と同じ高さになる。
+          const voiceCount=getMeasureVoices(prev[measure]).length;
+          const standardKey=standardRestDisplayKey(clef, ev.dur, voiceIndex, voiceCount);
           if(ev.keys[0]===standardKey)return prev;
           return applyPitchChangeToMeasures(prev, measure, index, keyIndex, [standardKey], voiceIndex);
         });
@@ -2824,9 +2829,8 @@ export default function PianoSystemCanvas({
             // 追加分0件を返し、何も変わらない（リグレッション防止）。
             // 2声部共存時は従来通り声部ごとの上下振り分け位置を使い、
             // 単声部小節だけ音価に応じた標準浄書位置（全休符/2分休符以下）を使う。
-            const restKeyForPaddingDuration = (duration: NoteEvent['dur']) => isMultiVoiceMeasure
-              ? restKeyForVoice(clefHere, voiceIndex, measureVoices.length)
-              : defaultRestDisplayKeyForDuration(clefHere, duration);
+            const restKeyForPaddingDuration = (duration: NoteEvent['dur']) =>
+              standardRestDisplayKey(clefHere, duration, voiceIndex, measureVoices.length);
             const paddingRests: RenderNoteEvent[] = computeVoiceDisplayPadding(rawSourceEvents, beatsPerMeasure, restKeyForPaddingDuration)
               .map(rest => ({ ...sanitizeRenderEvent(rest, clefHere), __isPlaceholder: true }));
             let sourceEvents: RenderNoteEvent[] = rawSourceEvents;
@@ -3302,10 +3306,22 @@ export default function PianoSystemCanvas({
             return;
           }
 
+          // 新しく置く休符の高さも、拍を埋める詰め物休符・0キーのリセット先と同じ
+          // standardRestDisplayKey で決める（Issue #227）。
+          // 声部数は「この挿入が終わったあとの声部数」で数える必要がある。
+          // 声部2への初回入力では voices[1] がまだ無く、現在の小節だけを見ると
+          // 「単声部」と数えてしまい、全休符が声部1と同じ高さ（第4線ぶら下げ）に
+          // 置かれて重なるため。
+          const voiceCountAfterInsert = Math.max(
+            getMeasureVoices(currentMeasure).length,
+            activeVoiceIndex + 1
+          );
           const insertedEvent:NoteEvent={
             dur:addDuration,
             isRest:!!(tool as any)?.isRest,
-            keys:[(tool as any)?.isRest ? defaultRestDisplayKeyForDuration(clefHere, addDuration) : key],
+            keys:[(tool as any)?.isRest
+              ? standardRestDisplayKey(clefHere, addDuration, activeVoiceIndex, voiceCountAfterInsert)
+              : key],
             dots: addDots,
           };
 

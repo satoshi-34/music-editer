@@ -198,3 +198,25 @@ export function restDisplayLineForVoice(voiceIndex: number, voiceCount: number):
 export function restKeyForVoice(clef: ClefType, voiceIndex: number, voiceCount: number): string {
   return lineToKey(clef, restDisplayLineForVoice(voiceIndex, voiceCount));
 }
+
+/**
+ * 「この休符が本来置かれるべき標準位置」を1か所で決める関数（Issue #227）。
+ *
+ * 休符の標準位置は次の2系統に分かれる:
+ * ・2声部が共存する小節 … 声部1=やや上/声部2=やや下（重なりを避けるため。音価は見ない）
+ * ・単声部の小節 … 音価に応じた浄書位置（全休符だけ第4線ぶら下げ、それ以外は五線中央）
+ *
+ * 以前はこの振り分けが「拍を埋める詰め物休符」と「0キーによる位置リセット」で
+ * 別々に書かれており、0キー側だけ声部を見ていなかった（＝声部2の休符を 0 で戻すと
+ * 声部1の高さへ行ってしまう）。同じ判断を二重に持たないよう、両方からこの関数を呼ぶ。
+ */
+export function standardRestDisplayKey(
+  clef: ClefType,
+  duration: string,
+  voiceIndex: number,
+  voiceCount: number
+): string {
+  return voiceCount > 1
+    ? restKeyForVoice(clef, voiceIndex, voiceCount)
+    : defaultRestDisplayKeyForDuration(clef, duration);
+}

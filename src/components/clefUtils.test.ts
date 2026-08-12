@@ -9,6 +9,7 @@ import {
   restDisplayLineForVoice,
   restKey,
   restKeyForVoice,
+  standardRestDisplayKey,
   wholeRestDisplayKey,
   type ClefType,
 } from './clefUtils';
@@ -118,5 +119,37 @@ describe('clefUtils の2声部での休符位置（上下避け）', () => {
     expect(restDisplayLineForVoice(1, 2)).toBe(3);
     expect(keyToLine(clef, restKeyForVoice(clef, 0, 2))).toBe(1);
     expect(keyToLine(clef, restKeyForVoice(clef, 1, 2))).toBe(3);
+  });
+});
+
+describe('clefUtils の standardRestDisplayKey（休符の標準位置の一本化・Issue #227）', () => {
+  const clefs: ClefType[] = ['treble', 'bass', 'alto', 'tenor'];
+
+  it.each(clefs)('%s: 単声部の小節では音価に応じた標準位置（従来と同じ）を返す', (clef) => {
+    // 声部数 1 のときは全休符だけ第4線、それ以外は五線中央。
+    // ここが変わると単声部譜（単旋律・四重奏など）のリグレッションになる。
+    expect(standardRestDisplayKey(clef, '1', 0, 1)).toBe(wholeRestDisplayKey(clef));
+    expect(standardRestDisplayKey(clef, '2', 0, 1)).toBe(defaultRestDisplayKey(clef));
+    expect(standardRestDisplayKey(clef, '4', 0, 1)).toBe(defaultRestDisplayKey(clef));
+  });
+
+  it.each(clefs)('%s: 2声部共存の小節では声部別の上下振り分け位置を返す', (clef) => {
+    expect(keyToLine(clef, standardRestDisplayKey(clef, '4', 0, 2))).toBe(1);
+    expect(keyToLine(clef, standardRestDisplayKey(clef, '4', 1, 2))).toBe(3);
+  });
+
+  it.each(clefs)('%s: 2声部共存なら全休符でも声部別の位置になる（詰め物休符と同じ高さ）', (clef) => {
+    // 全休符の「第4線ぶら下げ」は line 1 で、これは声部1の標準位置とちょうど同じ。
+    // 音価で分岐したままだと、声部2の全休符が声部1の高さへ行って重なる。
+    expect(standardRestDisplayKey(clef, '1', 1, 2)).toBe(restKeyForVoice(clef, 1, 2));
+    expect(keyToLine(clef, standardRestDisplayKey(clef, '1', 1, 2))).toBe(3);
+  });
+
+  it.each(clefs)('%s: 詰め物休符と 0 キーのリセット先が必ず一致する', (clef) => {
+    // 「定義を2系統にしない」ことをテストで固定する（Issue #227 のトリアージ指示）。
+    (['1', '2', '4', '8', '16'] as const).forEach((dur) => {
+      expect(standardRestDisplayKey(clef, dur, 1, 2)).toBe(restKeyForVoice(clef, 1, 2));
+      expect(standardRestDisplayKey(clef, dur, 0, 2)).toBe(restKeyForVoice(clef, 0, 2));
+    });
   });
 });
