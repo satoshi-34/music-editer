@@ -45,6 +45,7 @@ import {
   SYMBOL_OFFSET_NUDGE_STEP_LARGE,
   type SymbolOffsetNudge,
 } from '../utils/symbolOffsetNudgeUtils';
+import { isToolPaletteElement, resolveToolIdentityKey } from '../utils/toolChangeUtils';
 import { NotePlayer } from '../audio/NotePlayer';
 import { SoundSource, InstrumentType } from '../audio/SoundSource';
 import { defaultAudioEngine } from '../audio/AudioEngine';
@@ -1147,6 +1148,41 @@ export default function PianoSystemCanvas({
     overlayX: number;
     overlayY: number;
   } | null>(null);
+
+  /**
+   * ツールを切り替えたら、開いたままの調整系オーバーレイ（サイズ・位置・調整対象の選択リスト）を
+   * キャンセル扱いで閉じる（Issue #231）。
+   *
+   * なぜ必要か: ✥（位置調整）のオーバーレイを開いたまま ⤢（サイズ変更）を押すと、
+   * ツールだけが切り替わって前のオーバーレイが残り、「サイズを押したのに位置調整が出ている」
+   * 状態になっていた。しかもフォーカスが入力欄に残るため、次の音符クリックが
+   * その入力欄を閉じるだけに消費されて1回無反応になる。
+   *
+   * キャンセル扱い＝state を捨てるだけ。矢印キーの移動ぶんは下書き（draftX/draftY）にしか
+   * 入っておらず保存データには触れていないので、捨てれば開いた時点の位置へ戻る（Esc と同じ経路）。
+   *
+   * 依存配列にはツールの内容を文字列にしたものを入れる。Tool はオブジェクトなので、
+   * 同じツールでも setTool のたびに参照が変わり、そのままでは無関係な再設定でも
+   * 「切り替わった」と誤判定してしまうため。
+   */
+  const toolIdentityKey = resolveToolIdentityKey(tool);
+  useEffect(() => {
+    setSymbolResizeEditState(null);
+    setSymbolOffsetEditState(null);
+    setSymbolAdjustPickerState(null);
+  }, [toolIdentityKey]);
+
+  /**
+   * 調整オーバーレイの入力欄からフォーカスが外れたときに「確定（=保存）」してよいかの判定。
+   *
+   * 譜面の別の場所をクリックしたときは従来どおり確定するが、ツールパレットのボタンへ
+   * フォーカスが移ったときだけはキャンセルにする（Issue #231 の受入条件3）。
+   * Chrome などボタンのクリックでフォーカスが移るブラウザでは、上の useEffect が
+   * 走るより先に blur の確定処理が動いてしまい、切り替えたのに未確定の下書きが
+   * 保存されて Undo 履歴が1件増えてしまうため。
+   */
+  const shouldCancelOverlayOnBlur = (relatedTarget: EventTarget | null): boolean =>
+    isToolPaletteElement(relatedTarget);
 
   // 位置調整オーバーレイで矢印キーを押している最中の「まだ保存していない差分」（Issue #205）。
   // 保存済みの値と同じ間は null になるので、オーバーレイを開いただけでは描き直しが起きない。
@@ -5519,6 +5555,11 @@ export default function PianoSystemCanvas({
                 e.stopPropagation();
               }}
               onBlur={(e) => {
+                // ツールパレットのボタンを押したときは確定せずに閉じる（Issue #231）
+                if (shouldCancelOverlayOnBlur(e.relatedTarget)) {
+                  setSymbolResizeEditState(null);
+                  return;
+                }
                 handleSymbolResizeConfirm(e.target.value);
               }}
             />
@@ -5591,6 +5632,11 @@ export default function PianoSystemCanvas({
                 }}
                 onBlur={(e) => {
                   if (e.relatedTarget === symbolOffsetYInputRef.current) return;
+                  // ツールパレットのボタンを押したときは確定せずに閉じる（Issue #231）
+                  if (shouldCancelOverlayOnBlur(e.relatedTarget)) {
+                    setSymbolOffsetEditState(null);
+                    return;
+                  }
                   handleSymbolOffsetConfirm(
                     e.target.value,
                     symbolOffsetYInputRef.current?.value ?? symbolOffsetEditState.currentY
@@ -5633,6 +5679,11 @@ export default function PianoSystemCanvas({
                 }}
                 onBlur={(e) => {
                   if (e.relatedTarget === symbolOffsetXInputRef.current) return;
+                  // ツールパレットのボタンを押したときは確定せずに閉じる（Issue #231）
+                  if (shouldCancelOverlayOnBlur(e.relatedTarget)) {
+                    setSymbolOffsetEditState(null);
+                    return;
+                  }
                   handleSymbolOffsetConfirm(
                     symbolOffsetXInputRef.current?.value ?? symbolOffsetEditState.currentX,
                     e.target.value
