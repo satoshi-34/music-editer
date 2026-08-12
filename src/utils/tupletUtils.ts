@@ -1,4 +1,6 @@
 import type { DurKey, NoteEvent } from '../types/storage';
+import { defaultRestDisplayKeyForDuration, keyToLine, type ClefType } from '../components/clefUtils';
+import { isValidNoteKeyString } from './noteKeyUtils';
 import { getDurationBeats } from './voiceMeasureUtils';
 
 // StaffCanvas / PianoSystemCanvas の音価ツール一覧と同じ並び（大きい音価から順）。
@@ -122,6 +124,32 @@ export function buildTupletRestReplacement(
   return [{ dur: durationTool.duration, isRest: false, keys: [key], dots: durationTool.dots, tuplet: restEvent.tuplet }];
 }
 
+// 連符グループを消したあとの休符が「引き継いだ音高のせいで五線から遠く離れた位置」に
+// 生まれるのを防ぐための範囲（Issue #226）。
+// line は五線の最上線が 0、1つ下の線が 1 …（五線の最下線が 4）という数え方で、
+// 加線1本ぶんが 1。上方向2加線 = -2、下方向2加線 = 6 までを「そのまま使ってよい範囲」とする。
+//
+// なぜ ±2 か: 音符の当たり判定・選択判定は「五線 ± 3加線」（PianoSystemCanvas の
+// CHORD_LEDGER_TOP / BOT）なので、その内側に収めておけば、生まれた休符は必ず
+// クリックで選択でき、0キーの標準位置リセットでも救出できる。
+const REST_KEY_INHERIT_LINE_TOP = -2;
+const REST_KEY_INHERIT_LINE_BOTTOM = 6;
+
+/**
+ * 消した音符の音高を、そのまま休符の表示位置として引き継いでよいかを判定する。
+ * 五線から極端に離れた音（例: ト音記号の c#/2）を引き継ぐと、休符が別の五線の上に
+ * 描かれたように見え、しかも選択できず修復もできない状態になる（Issue #226）。
+ */
+export function canInheritRestDisplayKey(clef: ClefType, key: string | undefined): key is string {
+  // keyToLine は解釈できないキーに対して 2（五線中央）を返すため、
+  // 先に文字列として妥当かを確かめないと「壊れたキーは範囲内」と誤判定してしまう。
+  if (!isValidNoteKeyString(key)) {
+    return false;
+  }
+  const line = keyToLine(clef, key);
+  return line >= REST_KEY_INHERIT_LINE_TOP && line <= REST_KEY_INHERIT_LINE_BOTTOM;
+}
+
 export type TupletGroupDeletion = {
   groupStart: number;
   groupEnd: number;
@@ -134,14 +162,18 @@ export type TupletGroupDeletion = {
  * 部分削除だと連符の音価バランスが崩れて描画・再生が破綻するため、
  * 「グループごと削除」というシンプルな仕様を StaffCanvas と揃えている。
  *
+ * 置き換え休符の描画位置は「消したグループの先頭の音の音高」を引き継ぐ。
+ * ただし五線から極端に離れた音高（Issue #226）はそのまま使うと異常位置の休符になるため、
+ * canInheritRestDisplayKey の範囲外なら音価ごとの標準位置へフォールバックする。
+ *
  * @param events 対象小節のイベント配列
  * @param index 削除しようとしているイベントのインデックス（events[index].tuplet が存在すること）
- * @param defaultRestKey グループの先頭イベントに keys が無い場合に使う休符描画位置
+ * @param clef そのパートの音部記号（引き継ぎ可否の範囲判定と、標準位置の算出に使う）
  */
 export function planTupletGroupDeletion(
   events: NoteEvent[],
   index: number,
-  defaultRestKey: string
+  clef: ClefType
 ): TupletGroupDeletion | null {
   const targetEv = events[index];
   const tupletId = targetEv?.tuplet?.id;
@@ -157,8 +189,14 @@ export function planTupletGroupDeletion(
     (sum, ev) => sum + getDurationBeats(ev.dur, ev.dots) * (ev.tuplet ? ev.tuplet.notesOccupied / ev.tuplet.numNotes : 1),
     0
   );
-  const restKeyForGroup = groupEvents[0]?.keys[0] || defaultRestKey;
-  const replacement = buildRestEventsForBeatsShared(totalBeats, restKeyForGroup);
+  const inheritedKey = groupEvents[0]?.keys[0];
+  // 引き継げる音高なら全ての置き換え休符で同じ位置を使う（従来どおりの見た目）。
+  // 引き継げない場合だけ、休符の音価ごとの標準位置へ落とす
+  // （全休符は第4線ぶら下げ・2分休符以下は五線中央、と標準位置が音価で違うため関数で渡す）。
+  const resolveRestKey = canInheritRestDisplayKey(clef, inheritedKey)
+    ? () => inheritedKey
+    : (duration: DurKey) => defaultRestDisplayKeyForDuration(clef, duration);
+  const replacement = buildRestEventsForBeatsShared(totalBeats, resolveRestKey);
   return { groupStart, groupEnd, replacement };
 }
 
@@ -166,14 +204,16 @@ export function planTupletGroupDeletion(
  * 指定拍数を、できるだけ大きい休符から順に分解する。
  * StaffCanvas/PianoSystemCanvas 双方の buildRestEventsForBeats と同じロジック
  * （連符グループ削除後の休符再構成にのみ使う共通版）。
+ *
+ * @param resolveRestKey 休符1個ぶんの描画位置を返す関数（音価によって標準位置が変わるため関数で受け取る）
  */
-function buildRestEventsForBeatsShared(beats: number, restKey: string): NoteEvent[] {
+function buildRestEventsForBeatsShared(beats: number, resolveRestKey: (duration: DurKey) => string): NoteEvent[] {
   const rests: NoteEvent[] = [];
   let remaining = beats;
   for (const duration of DURATION_TOOL_VALUES) {
     const durationBeats = getDurationBeats(duration);
     while (remaining + 0.0001 >= durationBeats) {
-      rests.push({ dur: duration, isRest: true, keys: [restKey] });
+      rests.push({ dur: duration, isRest: true, keys: [resolveRestKey(duration)] });
       remaining -= durationBeats;
     }
   }
