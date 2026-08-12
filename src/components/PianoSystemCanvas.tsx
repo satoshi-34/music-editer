@@ -3576,13 +3576,16 @@ export default function PianoSystemCanvas({
               // カーソル形状: 選択になる位置は 'pointer'、それ以外（新規挿入・和音追加・
               // 休符の置換分割）は「ここに置く」感を出す 'copy' にする。
               (hit.style as any).cursor = wouldSelectKey ? 'pointer' : 'copy';
-              // 連符ツールのときだけは、休符の本体に乗った時点で「この休符を連符に
-              // 置き換えられるか」をカーソルで先に見せる（Issue #224）。
-              // 置けない休符（グループより短い）に 'copy' を出したままだと、
-              // クリックしても何も起きない理由が分からないため。
+              // 音価ツール（音符側）で休符の本体に乗ったときは、「この休符を置き換え
+              // られるか」をカーソルで先に見せる（Issue #224 で連符ツール限定で導入し、
+              // Issue #233 で音価ツール全体へ広げた）。休符クリックが1クリックで確定する
+              // ようになったぶん、押す前に結果が分かることの重要性が上がっているため。
+              // 置けない休符（連符内で音価が違う／ツールの音符のほうが長い等）に 'copy' を
+              // 出したままだと、クリックしても置換されない理由が分からない。
               // 判定はクリック時とまったく同じ buildRestEditReplacement を通す
               // （別の式で近似するとホバー表示だけ嘘になる）。
-              if((tool as { tuplet?: TupletKind }).tuplet && activeEvs[j]?.isRest){
+              const hoverDurationTool = getDurationTool(tool);
+              if(hoverDurationTool && !hoverDurationTool.isRest && activeEvs[j]?.isRest){
                 const isOnRestForHover=Math.abs(lx-anchors[j])<=REST_BODY_HIT_HALF_WIDTH&&ly>=chordTopY&&ly<=chordBotY;
                 if(isOnRestForHover){
                   const hoverKey=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
@@ -4058,16 +4061,15 @@ export default function PianoSystemCanvas({
                 const noteVisualCenter=restBodyCenterX;
                 const noteAfterRest=lx>=noteVisualCenter;
                 const restReplacement=buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest,clefHere);
-                const isSameRestSelected =
-                  selRef.current?.partIndex===pi &&
-                  selRef.current?.measure===absI &&
-                  selRef.current?.index===j &&
-                  (selRef.current?.voiceIndex??0)===activeVoiceIndex;
-                if(restReplacement&&isSameRestSelected){
+                if(restReplacement){
                   // 休符クリックでは、同音価なら置換、より短い音価なら分割して差し込む。
-                  // 1回目のクリックでは休符を選択し、
-                  // 同じ休符をもう一度クリックしたときだけ置換・分割を実行する。
-                  // これで Delete や ↑/↓ の対象にもできる。
+                  // 音価ツール（音符側）を選んでいるあいだは 1 クリックで置換する（Issue #233）。
+                  // 以前は「1回目で選択・2回目で置換」の2段階だったが、三連符が主体の曲では
+                  // 音符の 2/3 がこの2クリック操作になり入力テンポを大きく削いでいた。
+                  // 誤クリックは Undo（1操作＝1履歴）で戻せる。
+                  // 休符を選択したい場合は休符ツール・調整ツール（音符を置かないツール）を使う。
+                  // それらのツールでは buildRestEditReplacement が null を返すため、
+                  // 下の setSelected（従来どおりの選択）へ落ちる。
                   setScore(prev=>{
                     const next=prev.map(cloneMeasureData);
                     // 声部1側の休符補完は従来どおり必要（声部2の拍位置合わせのため）。
@@ -4091,12 +4093,17 @@ export default function PianoSystemCanvas({
                   }
                   return;
                 }
+                // ここへ来るのは置換できないクリック（休符ツール・調整ツールを選んでいる、
+                // または音価ツールだが連符内で音価が違う・ツールの音符のほうが長い、など）。
+                // **休符本体のクリックは選択だけで終える**（Issue #233）。
+                // 以前はここから doInsert() へ流していたが、休符の位置に音符・休符が
+                // 割り込むため、連符グループの中の休符を選ぼうとするとグループが壊れて
+                // ブラケットごと消えていた（実機で確認）。休符クリックの1クリック化で
+                // 「休符を選びたいときは休符ツール」の重要性が上がったので、
+                // 選択の入口が壊れないことを優先する。
+                // 休符の隣へ置きたいときは、休符本体の外側をクリックすれば
+                // 従来どおり doInsert() へ流れる（上の !isOnRest 分岐）。
                 setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-                if(restReplacement){
-                  return;
-                }
-                // 分割できない休符では、2回クリックではなく従来どおり近い位置へ音符を挿入する。
-                doInsert(lx,ly);
               }else{
                 if (dynamicMode) return;
                 if (accidentalMode) return;

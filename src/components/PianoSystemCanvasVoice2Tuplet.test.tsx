@@ -302,21 +302,15 @@ describe('PianoSystemCanvas 声部2の3連符入力（Issue #168）', () => {
         },
       ],
     }];
-    const { container, svg, onChange } = renderScore(
+    const { svg, onChange } = renderScore(
       data,
       { duration: '8', isRest: false, tuplet: TRIPLET },
       1
     );
 
-    // 連符内の2つ目（休符）を1回クリックして選択 → もう一度クリックで置換、という既存の2段階操作。
+    // 連符内の2つ目（休符）を1クリックで音符へ置換する（Issue #233 で2段階操作を廃止）。
     const hit = noteHit(svg, 1);
-    fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 2) });
-    await waitFor(() => {
-      expect(container.querySelector('rect.vf-note-selected')).toBeTruthy();
-    });
-
-    const hit2 = noteHit(svg, 1);
-    fireEvent.click(hit2, { clientX: centerXOf(hit2), clientY: yForLine(hit2, 4) });
+    fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 4) });
 
     await waitFor(() => {
       expect(onChange).toHaveBeenCalled();

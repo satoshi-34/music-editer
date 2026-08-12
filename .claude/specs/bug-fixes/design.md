@@ -982,6 +982,8 @@ synth.triggerAttackRelease(toneKeys, duration, time, velocity);
 - VexFlow の休符 bounding box は横に広く返る場合があるため、休符判定には音符用の `noteVisualLeft/Right` を流用しない
 - 休符本体から外れたクリックは、休符の選択・置換ではなく通常の挿入処理へ流す
 - 休符本体をクリックした場合は従来どおり、1回目は選択、同じ休符の2回目クリックで置換/分割する
+  （**この2段階は Issue #233 で廃止済み**。音価ツールでは1クリックで置換する。
+  `.claude/specs/tuplet-implementation/design.md` の追記6 を参照）
 
 ### 影響範囲
 
@@ -993,6 +995,7 @@ synth.triggerAttackRelease(toneKeys, duration, time, velocity);
 - 8分休符の右側クリックで8分音符が追加され、休符が消えないこと
 - 休符本体クリックでは休符を選択できること
 - 同じ休符本体をもう一度クリックしたときの置換/分割挙動が残っていること
+  （Issue #233 以降は「音価ツールなら1クリック目で置換/分割される」ことを確認する）
 
 ## 追記: 実在しない背景画像 paper-bg.png への参照を削除
 
