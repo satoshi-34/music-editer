@@ -1499,20 +1499,59 @@ export default function PianoSystemCanvas({
 
   /* ----- 選択の整合性 ----- */
   // Undo/Redo などでデータが丸ごと差し替わると、選択（selected）が指す音符が
-  // 消えていたり和音の構成音が減っていたりすることがある。解決できない選択を
-  // 残したまま描画すると存在しない音符に触れて落ちるため、ここで掃除する。
-  // 音符ごと消えていれば選択解除、keyIndex だけ範囲外なら音符全体の選択へ降格する。
+  // 消えていたり、中間イベントの削除で index が詰まって「別の音符」を指していたり
+  // することがある。index の存在チェックだけでは後者を見逃し、次の Delete が
+  // ユーザーが選んでいない音符を消すデータ破壊になる（Codex レビュー指摘）。
+  // そこで直前のデータのスナップショットと突き合わせ、「選択していた実体」を追跡する:
+  //   - イベント配列の長さが変わったときは、選択していたイベントを内容（JSON）で探し直す。
+  //     見つかれば index を追随、消えていれば選択解除
+  //   - 和音の構成音数が変わったときは、選択していた key を値で探し直す。
+  //     消えていれば選択解除（音符全体へ降格すると Delete がイベントごと消して危険なため）
+  //   - 長さが変わらない在位置編集（矢印キーの音高変更など）は従来どおり選択を保つ
+  const prevPartsScoreForSelRef = useRef<MeasureData[][] | null>(null);
   useEffect(()=>{
+    const prevScore = prevPartsScoreForSelRef.current;
+    prevPartsScoreForSelRef.current = partsScore;
     setSelected(prev=>{
       if(!prev) return prev;
+      const vi = prev.voiceIndex??0;
       const measure=partsScore[prev.partIndex]?.[prev.measure];
       if(!measure) return null;
-      const ev=getVoiceEvents(measure, prev.voiceIndex??0)[prev.index];
-      if(!ev) return null;
-      if(prev.keyIndex!==undefined&&(ev.isRest||prev.keyIndex>=(ev.keys?.length??0))){
-        return {...prev, keyIndex: undefined};
+      const evs=getVoiceEvents(measure, vi);
+      const prevMeasure=prevScore?.[prev.partIndex]?.[prev.measure];
+      const oldEvs=prevMeasure?getVoiceEvents(prevMeasure, vi):null;
+      const oldEv=oldEvs?.[prev.index];
+
+      let idx=prev.index;
+      // 長さが変わった＝挿入/削除で index がずれた可能性。内容で探し直す。
+      if(oldEv&&oldEvs&&evs.length!==oldEvs.length){
+        const oldJson=JSON.stringify(oldEv);
+        const matches:number[]=[];
+        evs.forEach((e,i)=>{if(JSON.stringify(e)===oldJson)matches.push(i);});
+        if(matches.length===0) return null; // 選択していたイベント自体が消えた
+        // 同一内容が複数あるときは元の位置に最も近いものへ（連続同音などでは実害がない）
+        idx=matches.reduce((best,i)=>Math.abs(i-prev.index)<Math.abs(best-prev.index)?i:best,matches[0]);
       }
-      return prev;
+      const ev=evs[idx];
+      if(!ev) return null;
+
+      let keyIndex=prev.keyIndex;
+      if(keyIndex!==undefined){
+        if(ev.isRest) return null; // 選択していた音が休符に置き換わった
+        const oldKey=oldEv&&!oldEv.isRest?oldEv.keys?.[prev.keyIndex!]:undefined;
+        if(oldKey&&oldEv&&(ev.keys?.length??0)!==(oldEv.keys?.length??0)){
+          // 構成音数が変わった＝和音内で index がずれた可能性。値で探し直す。
+          const found=(ev.keys??[]).indexOf(oldKey);
+          if(found<0) return null; // 選択していた構成音自体が消えた
+          keyIndex=found;
+        }else if(keyIndex>=(ev.keys?.length??0)){
+          // スナップショットが無い経路（初回など）の最終防衛: 範囲外なら音符全体へ降格
+          keyIndex=undefined;
+        }
+      }
+
+      if(idx===prev.index&&keyIndex===prev.keyIndex) return prev;
+      return {...prev, index: idx, keyIndex};
     });
   },[partsScore]);
 

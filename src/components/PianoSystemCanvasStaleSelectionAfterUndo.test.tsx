@@ -144,7 +144,7 @@ describe('PianoSystemCanvas 外部データ差し替え後の残存選択', () =
     );
   }
 
-  it('和音の2音目を選択中に構成音が1音へ減っても落ちず、音符全体の選択へ降格する', async () => {
+  it('和音の2音目を選択中に構成音が1音へ減っても落ちず、選択が解除される', async () => {
     // c/4=line 5, e/4=line 4（ト音記号）。e/4 側（keyIndex=1）を選択しておく。
     const chordData: MeasureData[] = [{
       events: [
@@ -171,10 +171,129 @@ describe('PianoSystemCanvas 外部データ差し替え後の残存選択', () =
     }];
     expect(() => rerenderScore(view as ReturnType<typeof render>, undoneData, onChange)).not.toThrow();
 
-    // 選択は解除ではなく「音符全体の選択」へ降格して残る（青枠は表示されたまま）。
+    // 選択していた構成音（e/4）自体が消えたので、選択は解除される。
+    // 音符全体の選択へ降格する案は、直後の Delete がイベントごと消してしまい
+    // 「選んでいない音を消す」データ破壊になり得るため採らない（Codex レビューでの整理）。
+    await waitFor(() => {
+      expect((view as { container: HTMLElement }).container.querySelector('rect.vf-note-selected')).toBeNull();
+    });
+    // 念のため: Delete しても何も消えない
+    onChange.mockClear();
+    fireEvent.keyDown(window, { key: 'Delete' });
+    await new Promise(r => setTimeout(r, 50));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('中間イベントの削除で index が詰まっても、選択が隣の音符へ乗り移らない（Codex 指摘）', async () => {
+    // [C, E, G] の E（index=1）を選択 → 親データが [C, G] へ差し替わると、
+    // index=1 には別の音符 G が来る。存在チェックだけだと選択が G に乗り移り、
+    // 次の Delete がユーザーの選んでいない G を消すデータ破壊になる。
+    const threeNotes: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: false, keys: ['c/5'] },
+        { dur: '4', isRest: false, keys: ['e/5'] },
+        { dur: '4', isRest: false, keys: ['g/5'] },
+        { dur: '4', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    const { svg, onChange, ...view } = renderScore(threeNotes);
+    const hit = noteHit(svg, 1);
+
+    // e/5 = line 0.5 を選択
+    fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 0.5) });
     await waitFor(() => {
       expect((view as { container: HTMLElement }).container.querySelector('rect.vf-note-selected')).toBeTruthy();
     });
+
+    // Undo 相当: 中間の E だけが消えたデータへ差し替え
+    const undoneData: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: false, keys: ['c/5'] },
+        { dur: '4', isRest: false, keys: ['g/5'] },
+        { dur: '4', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    rerenderScore(view as ReturnType<typeof render>, undoneData, onChange);
+
+    // 選択していた E は消えたので選択は解除され、Delete は何も消さない
+    onChange.mockClear();
+    fireEvent.keyDown(window, { key: 'Delete' });
+    await new Promise(r => setTimeout(r, 50));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('中間イベントの削除後も、選択していた音符自身が残っていれば選択が追随する', async () => {
+    // C（index=0）を選択したまま E が消えるケース。C は残っているので
+    // 選択は C に付いたままになり、Delete は C を消す（G ではなく）。
+    const threeNotes: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: false, keys: ['c/5'] },
+        { dur: '4', isRest: false, keys: ['e/5'] },
+        { dur: '4', isRest: false, keys: ['g/5'] },
+        { dur: '4', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    const { svg, onChange, ...view } = renderScore(threeNotes);
+    const hit = noteHit(svg, 0);
+
+    // c/5 = line 1.5 を選択
+    fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 1.5) });
+    await waitFor(() => {
+      expect((view as { container: HTMLElement }).container.querySelector('rect.vf-note-selected')).toBeTruthy();
+    });
+
+    const undoneData: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: false, keys: ['c/5'] },
+        { dur: '4', isRest: false, keys: ['g/5'] },
+        { dur: '4', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    rerenderScore(view as ReturnType<typeof render>, undoneData, onChange);
+
+    onChange.mockClear();
+    fireEvent.keyDown(window, { key: 'Delete' });
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+    // 消えた（休符化した）のは C であり、G は無傷であること
+    const nextData = onChange.mock.calls[onChange.mock.calls.length - 1][0] as MeasureData[];
+    const keysFlat = nextData[0].events.filter(e => !e.isRest).flatMap(e => e.keys);
+    expect(keysFlat).toContain('g/5');
+    expect(keysFlat).not.toContain('c/5');
+  });
+
+  it('和音の構成音の中間削除でも、選択が隣の構成音へ乗り移らない', async () => {
+    // 和音 [c/4, e/4, g/4] の e/4（keyIndex=1）を選択 → 構成音が [c/4, g/4] に減ると、
+    // keyIndex=1 には g/4 が来る。範囲チェックだけだと選択が g/4 に乗り移り、
+    // Delete が g/4 を消してしまう。
+    const chordData: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: false, keys: ['c/4', 'e/4', 'g/4'] },
+        { dur: '4', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    const { svg, onChange, ...view } = renderScore(chordData);
+    const hit = noteHit(svg, 0);
+
+    // e/4 = line 4 を選択
+    fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 4) });
+    await waitFor(() => {
+      expect((view as { container: HTMLElement }).container.querySelector('rect.vf-note-selected')).toBeTruthy();
+    });
+
+    const undoneData: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: false, keys: ['c/4', 'g/4'] },
+        { dur: '4', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    rerenderScore(view as ReturnType<typeof render>, undoneData, onChange);
+
+    onChange.mockClear();
+    fireEvent.keyDown(window, { key: 'Delete' });
+    await new Promise(r => setTimeout(r, 50));
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('選択中のイベント自体が消えたら選択が解除され、Delete が何にも届かない', async () => {
