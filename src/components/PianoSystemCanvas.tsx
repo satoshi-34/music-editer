@@ -98,7 +98,7 @@ import {
 } from '../utils/engravingDefaults';
 import { computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
-import { buildTupletGroupPlan, buildTupletRestReplacement } from '../utils/tupletUtils';
+import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletReplacementForRest, type TupletKind } from '../utils/tupletUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
@@ -321,7 +321,8 @@ function buildRestEditReplacement(
   restEvent: NoteEvent,
   key: string,
   tool: Tool,
-  noteAfterRest: boolean
+  noteAfterRest: boolean,
+  clef: ClefType
 ): NoteEvent[] | null {
   const durationTool = getDurationTool(tool);
   if (!durationTool || durationTool.isRest || !restEvent.isRest) {
@@ -334,6 +335,28 @@ function buildRestEditReplacement(
   const tupletReplacement = buildTupletRestReplacement(restEvent, key, durationTool);
   if (tupletReplacement !== undefined) {
     return tupletReplacement;
+  }
+
+  // 連符ツール（3/5/6/7連符）が選ばれているときは、普通の休符を連符グループで置き換える。
+  // 連符グループを削除すると同じ長さの休符に戻るため、これが無いと満杯の小節では
+  // 連符を入れ直す手段が Undo しか無くなってしまう（Issue #224）。
+  const tupletKind = (tool as { tuplet?: TupletKind }).tuplet;
+  if (tupletKind) {
+    const plan = planTupletReplacementForRest(
+      restEvent,
+      [key],
+      durationTool,
+      defaultRestKeyForClef(clef),
+      tupletKind
+    );
+    if (!plan) {
+      // 休符のほうが短くてグループが入らない場合は何もしない（分割はしない）。
+      return null;
+    }
+    // 余った拍は通常の休符としてグループの後ろに残す。
+    // 「クリックした側へ音符を寄せる」分割（noteAfterRest）は連符では行わない:
+    // グループの途中に休符を割り込ませると連符の内訳が読みにくくなるため。
+    return [...plan.groupEvents, ...buildRestEventsForBeats(plan.remainingBeats, clef)];
   }
 
   // 付点音符は「その場に少なくとも付点分の長さの空きがあるか」だけで判定する保守的な仕様。
@@ -2633,9 +2656,11 @@ export default function PianoSystemCanvas({
         guideLine.style.display='none';guideDot.style.display='none';
         guideLedgerLines.forEach((ledgerLine)=>{ledgerLine.style.display='none';});
       };
-      const showChordGuide=(x:number,w:number,stave:Stave)=>{
-        // 五線 ± 3加線の固定範囲で縦ストライプを表示
-        const topY=stave.getYForLine(CHORD_LEDGER_TOP), botY=stave.getYForLine(CHORD_LEDGER_BOT);
+      // 和音ゾーン（そこを押すと和音として追加される帯）を縦ストライプで示すガイド。
+      // 帯の上下は呼び出し側から渡す。多段譜では和音ゾーンが隣パートとの中間線で
+      // クリップされる（Issue #219）ため、ここで五線から計算し直すと
+      // 「ストライプは出ているのに和音にならない」帯ができてしまう。
+      const showChordGuide=(x:number,w:number,topY:number,botY:number)=>{
         guideChordRect.setAttribute('x',String(x));
         guideChordRect.setAttribute('y',String(topY));
         guideChordRect.setAttribute('width',String(w));
@@ -3439,9 +3464,23 @@ export default function PianoSystemCanvas({
             let xl=Math.max(measLeft+1,rl-CELL_PAD), xr=Math.min(measRight-1,rr+CELL_PAD);
             if(xr-xl<HIT_MIN_W){const h=(HIT_MIN_W-(xr-xl))/2;xl=Math.max(measLeft+1,xl-h);xr=Math.min(measRight-1,xr+h);}
             const wHit=Math.max(HIT_MIN_W,xr-xl);
-            // 和音判定Y範囲：五線 ± 3加線の固定範囲（音符の位置に依存しない）
-            const chordTopY=stave.getYForLine(CHORD_LEDGER_TOP);
-            const chordBotY=stave.getYForLine(CHORD_LEDGER_BOT);
+            // 和音判定Y範囲：五線 ± 3加線の固定範囲（音符の位置に依存しない）。
+            //
+            // Issue #219: 多段譜（大譜表・四重奏・編成譜）では、この固定範囲だけを
+            // 隣のパートとの中間線（staveTop / staveBot。小節の背景 .vf-hit と同じ境界）で
+            // クリップする。パート間隔が 100 より狭い譜面（四重奏の既定 80・編成譜の 60）では
+            // 上下のパートの固定範囲が縦に重なっており、SVG は「後から描いた要素が手前」なので
+            // 下のパートの当たり判定が上のパートの守備範囲を奪う。その結果、上の段へ低い音を
+            // 置こうとしたクリックが下の段に渡り、極端な上加線の音として入っていた。
+            // クリップすると「近い方の五線」へ必ず帰属する（境界＝両五線のちょうど中間）。
+            //
+            // クリップするのはこの固定範囲だけで、下の符頭ぶんの拡張（NOTE_HIT_EXTENSION）は
+            // クリップしない。拡張ごとクリップすると、五線から遠い音符の符頭が
+            // 「中心ちょうどしか押せない」状態になり Issue #218 を作り直してしまうため。
+            const fixedTopY=stave.getYForLine(CHORD_LEDGER_TOP);
+            const fixedBotY=stave.getYForLine(CHORD_LEDGER_BOT);
+            const chordTopY=Math.max(fixedTopY,staveTop);
+            const chordBotY=Math.min(fixedBotY,staveBot);
             // 選択・ヒット領域のY範囲（Issue #218）。
             // 休符は五線内に描かれるので従来どおり固定範囲のまま扱い、
             // 音符だけ符頭の位置に応じて範囲を広げる。
@@ -3450,8 +3489,10 @@ export default function PianoSystemCanvas({
             // これで符頭の描画範囲を過不足なく覆える（選択が成立するのは符頭中心±0.25ライン
             // なので、その帯も丸ごと入る）。必要最小限にするのは、広げたぶんが隣のパートの
             // 領域へ重なるため（下記 NOTE_HIT_EXTENSION の説明を参照）。
-            const hitTopLine=Math.min(CHORD_LEDGER_TOP,keyLines?keyLines.minLine-0.5:CHORD_LEDGER_TOP);
-            const hitBotLine=Math.max(CHORD_LEDGER_BOT,keyLines?keyLines.maxLine+0.5:CHORD_LEDGER_BOT);
+            // 符頭が固定範囲の内側にいる普通の音符では、下の Math.min / Math.max によって
+            // この値は使われない（＝ヒット領域はクリップ後の固定範囲そのものになる）。
+            const noteHeadTopY=keyLines?stave.getYForLine(keyLines.minLine-0.5):chordTopY;
+            const noteHeadBotY=keyLines?stave.getYForLine(keyLines.maxLine+0.5):chordBotY;
             // 符頭の実際の描画X範囲。getAbsoluteX()はtickの左端でnotehead自体より左になるため
             // getBoundingBox() で実際に描画された領域を取得する
             const bb=n.getBoundingBox?.();
@@ -3472,8 +3513,13 @@ export default function PianoSystemCanvas({
             //   - 広げるのは符頭が実際に描かれている範囲だけ（0.5ライン・符頭のX範囲のみ）
             //   - 広げた領域のクリックは「選択」しかしない（下の click 参照。挿入はしない）
             // の2点で、隣のパートから奪う影響を「その符頭の上でだけ・音符を増やさない」形に抑える。
-            const yHit=Math.min(chordTopY,stave.getYForLine(hitTopLine));
-            const hHit=Math.max(chordBotY,stave.getYForLine(hitBotLine))-yHit;
+            //
+            // rect は1枚の長方形なので、符頭が中間線の外にある音符では
+            // 「中間線から符頭まで」も結果的に rect に含まれる（穴は空けられない）。
+            // その帯を押しても挿入は起きない（click の chordTopY/chordBotY 判定は
+            // 上のクリップ後の値を見るため）ので、誤配置にはつながらない。
+            const yHit=Math.min(chordTopY,noteHeadTopY);
+            const hHit=Math.max(chordBotY,noteHeadBotY)-yHit;
             // 既存の符頭を選択できるかの判定（findKeyIndexAtLine）で使う丸め。
             // 丸め先の候補を「新規入力できる範囲」だけに限ると、そこより外にいる音符の
             // 線には決して一致せず選択不能のままになるため、その音符の線まで候補を広げる。
@@ -3530,7 +3576,21 @@ export default function PianoSystemCanvas({
               // カーソル形状: 選択になる位置は 'pointer'、それ以外（新規挿入・和音追加・
               // 休符の置換分割）は「ここに置く」感を出す 'copy' にする。
               (hit.style as any).cursor = wouldSelectKey ? 'pointer' : 'copy';
-              if(inChordZone){hideGuide();showChordGuide(xl,wHit,stave);}
+              // 連符ツールのときだけは、休符の本体に乗った時点で「この休符を連符に
+              // 置き換えられるか」をカーソルで先に見せる（Issue #224）。
+              // 置けない休符（グループより短い）に 'copy' を出したままだと、
+              // クリックしても何も起きない理由が分からないため。
+              // 判定はクリック時とまったく同じ buildRestEditReplacement を通す
+              // （別の式で近似するとホバー表示だけ嘘になる）。
+              if((tool as { tuplet?: TupletKind }).tuplet && activeEvs[j]?.isRest){
+                const isOnRestForHover=Math.abs(lx-anchors[j])<=REST_BODY_HIT_HALF_WIDTH&&ly>=chordTopY&&ly<=chordBotY;
+                if(isOnRestForHover){
+                  const hoverKey=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
+                  const canPlace=!!buildRestEditReplacement(activeEvs[j],hoverKey,tool,false,clefHere);
+                  hit.style.cursor = canPlace ? 'copy' : 'not-allowed';
+                }
+              }
+              if(inChordZone){hideGuide();showChordGuide(xl,wHit,chordTopY,chordBotY);}
               else{hideChordGuide();showGuide(lx,ly,stave);}
             });
             hit.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();setNoteHoverHighlight(n,false);});
@@ -3997,7 +4057,7 @@ export default function PianoSystemCanvas({
                 // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
                 const noteVisualCenter=restBodyCenterX;
                 const noteAfterRest=lx>=noteVisualCenter;
-                const restReplacement=buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest);
+                const restReplacement=buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest,clefHere);
                 const isSameRestSelected =
                   selRef.current?.partIndex===pi &&
                   selRef.current?.measure===absI &&
@@ -4014,7 +4074,7 @@ export default function PianoSystemCanvas({
                     fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
                     const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
                     if(!targetEv?.isRest)return prev;
-                    const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest);
+                    const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest,clefHere);
                     if(!latestReplacement)return prev;
                     next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
                       const copy=[...events];

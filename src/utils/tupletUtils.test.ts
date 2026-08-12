@@ -7,6 +7,7 @@ import {
   canInheritRestDisplayKey,
   generateTupletId,
   planTupletGroupDeletion,
+  planTupletReplacementForRest,
 } from './tupletUtils';
 
 describe('tupletUtils', () => {
@@ -96,6 +97,70 @@ describe('tupletUtils', () => {
     it('音価が一致しない連符内休符は null（分割せず何もしない）', () => {
       const rest: NoteEvent = { dur: '8', isRest: true, keys: ['b/4'], tuplet: tupletInfo };
       expect(buildTupletRestReplacement(rest, 'c/4', { duration: '16' })).toBeNull();
+    });
+  });
+
+  describe('planTupletReplacementForRest（Issue #224: 休符を連符グループで置き換える）', () => {
+    const TRIPLET = { numNotes: 3, notesOccupied: 2 };
+
+    it('4分休符を8分3連（1拍）で置き換えると、余りが出ずグループだけになる', () => {
+      const rest: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(rest, ['c/4'], { duration: '8' }, 'b/4', TRIPLET);
+      expect(plan).not.toBeNull();
+      expect(plan!.groupEvents).toHaveLength(3);
+      expect(plan!.groupEvents[0].isRest).toBe(false);
+      expect(plan!.groupEvents[0].keys).toEqual(['c/4']);
+      expect(plan!.groupEvents.slice(1).every((ev) => ev.isRest)).toBe(true);
+      // 3つとも同じ連符グループに属する
+      expect(new Set(plan!.groupEvents.map((ev) => ev.tuplet?.id)).size).toBe(1);
+      expect(plan!.remainingBeats).toBe(0);
+    });
+
+    it('2分休符（2拍）なら8分3連（1拍）を置いて1拍ぶんが余る', () => {
+      const rest: NoteEvent = { dur: '2', isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(rest, ['c/4'], { duration: '8' }, 'b/4', TRIPLET);
+      expect(plan!.remainingBeats).toBeCloseTo(1, 6);
+    });
+
+    it('付点4分休符（1.5拍）でも置ける（余りは0.5拍）', () => {
+      const rest: NoteEvent = { dur: '4', dots: 1, isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(rest, ['c/4'], { duration: '8' }, 'b/4', TRIPLET);
+      expect(plan!.remainingBeats).toBeCloseTo(0.5, 6);
+    });
+
+    it('休符がグループより短いときは null（何もしない）', () => {
+      // 8分休符=0.5拍に、8分3連グループ=1拍は入らない
+      const rest: NoteEvent = { dur: '8', isRest: true, keys: ['b/4'] };
+      expect(planTupletReplacementForRest(rest, ['c/4'], { duration: '8' }, 'b/4', TRIPLET)).toBeNull();
+    });
+
+    it('連符内の休符は対象外（null）。従来の buildTupletRestReplacement に任せる', () => {
+      const rest: NoteEvent = {
+        dur: '8', isRest: true, keys: ['b/4'],
+        tuplet: { id: 'tuplet-existing', ...TRIPLET },
+      };
+      expect(planTupletReplacementForRest(rest, ['c/4'], { duration: '8' }, 'b/4', TRIPLET)).toBeNull();
+    });
+
+    it('休符ではないイベント（音符）は対象外（null）', () => {
+      const note: NoteEvent = { dur: '4', isRest: false, keys: ['c/4'] };
+      expect(planTupletReplacementForRest(note, ['c/4'], { duration: '8' }, 'b/4', TRIPLET)).toBeNull();
+    });
+
+    it('5連符（16分×5＝1拍）でも4分休符を置き換えられる', () => {
+      const rest: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(
+        rest, ['c/4'], { duration: '16' }, 'b/4', { numNotes: 5, notesOccupied: 4 }
+      );
+      expect(plan!.groupEvents).toHaveLength(5);
+      expect(plan!.remainingBeats).toBe(0);
+    });
+
+    it('16分3連（0.5拍）は8分休符（0.5拍）へちょうど収まる（誤差で弾かれない）', () => {
+      const rest: NoteEvent = { dur: '8', isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(rest, ['c/4'], { duration: '16' }, 'b/4', TRIPLET);
+      expect(plan).not.toBeNull();
+      expect(plan!.remainingBeats).toBeCloseTo(0, 6);
     });
   });
 
