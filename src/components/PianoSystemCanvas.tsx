@@ -88,6 +88,8 @@ import {
   ADJUSTABLE_SYMBOL_KIND_LABELS,
   type ResolvedSymbolAdjust,
 } from '../utils/symbolAdjustUtils';
+import SymbolAdjustOverlay from './SymbolAdjustOverlay';
+import type { OverlayRectLike } from '../utils/symbolOverlayPlacementUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
 import { drawLyricsEntry } from '../utils/lyricsRenderUtils';
 import {
@@ -1127,8 +1129,70 @@ export default function PianoSystemCanvas({
     | { type: 'custom'; symbolId: string; name: string }
     | { type: 'standard'; kind: AdjustableSymbolKind };
 
+  /** 記号のクリック判定 rect（.symbol-hit-region）へ付ける「どの記号か」の目印を1本の文字列にする */
+  const symbolHitRegionKey = (target: AdjustTarget): string =>
+    target.type === 'custom' ? `custom:${target.symbolId}` : `standard:${target.kind}`;
+
+  /**
+   * 画面座標（getBoundingClientRect の結果）を、オーバーレイと同じ座標系
+   * ＝コンテナ左上を原点とし、ページの縮小率を戻した座標へ直す（Issue #230）。
+   *
+   * ページ（.print-page）は transform: scale で縮小表示されるが、
+   * `position: absolute` の left/top は縮小前の値で解釈される。
+   * 実測値をそのまま使うと、縮小表示中だけオーバーレイが記号からずれた場所に出てしまう。
+   * offsetWidth は transform の影響を受けないので、実測幅との比が縮小率になる。
+   */
+  const toContainerRect = (clientRect: { left: number; top: number; width: number; height: number }): OverlayRectLike => {
+    const container = containerRef.current;
+    const containerRect = container?.getBoundingClientRect();
+    const layoutWidth = container?.offsetWidth ?? 0;
+    const scale = containerRect?.width && layoutWidth ? containerRect.width / layoutWidth : 1;
+    return {
+      left: (clientRect.left - (containerRect?.left ?? 0)) / scale,
+      top: (clientRect.top - (containerRect?.top ?? 0)) / scale,
+      width: clientRect.width / scale,
+      height: clientRect.height / scale,
+    };
+  };
+
+  /** 記号の実描画範囲が分からないときの逃げ道: クリックした点そのものを「大きさ0の対象」として扱う */
+  const anchorFromClientPoint = (clientX: number, clientY: number): OverlayRectLike =>
+    toContainerRect({ left: clientX, top: clientY, width: 0, height: 0 });
+
+  /**
+   * 対象記号の実描画範囲を、描画時に置いたクリック判定 rect（.symbol-hit-region）から探す。
+   * 記号そのものではなく音符を押してオーバーレイを開く経路（サイズ・位置調整ツール）でも、
+   * 「記号に重ねない」位置を決めるには記号がどこに描かれているかが要るため。
+   * 見つからない・計測できない（jsdom など）ときは null を返し、呼び出し側がクリック点へ落とす。
+   */
+  const findSymbolAnchorRect = (
+    partIndex: number,
+    measureAbsoluteIndex: number,
+    eventIndex: number,
+    target: AdjustTarget,
+  ): OverlayRectLike | null => {
+    const container = containerRef.current;
+    if (!container) return null;
+    const key = symbolHitRegionKey(target);
+    // 属性セレクタへ symbolId を埋め込むと引用符を含む id で壊れるため、絞り込みは JS 側で行う
+    const found = Array.from(container.querySelectorAll('.symbol-hit-region')).find(el => (
+      el.getAttribute('data-symbol-part') === String(partIndex)
+      && el.getAttribute('data-symbol-measure') === String(measureAbsoluteIndex)
+      && el.getAttribute('data-symbol-event') === String(eventIndex)
+      && el.getAttribute('data-symbol-target') === key
+    ));
+    if (!found) return null;
+    const rect = found.getBoundingClientRect();
+    if (!rect.width && !rect.height) return null;
+    return toContainerRect(rect);
+  };
+
   // カスタム記号サイズ変更オーバーレイの状態（StaffCanvas の symbolResizeEditState と同じパターン）。
   // 標準記号（運指・強弱）のサイズ変更にも同じ state を使う（target で対象を区別する）。
+  //
+  // anchor は「調整対象の記号が実際に描かれている範囲」（Issue #230）。
+  // オーバーレイをここに重ねないよう SymbolAdjustOverlay が表示位置を決める。
+  // 開いた時点の値のまま差し替えない（調整中にオーバーレイが逃げないようにするため）。
   const [symbolResizeEditState, setSymbolResizeEditState] = useState<{
     partIndex: number;
     measureAbsoluteIndex: number;
@@ -1136,8 +1200,7 @@ export default function PianoSystemCanvas({
     voiceIndex: number;
     target: AdjustTarget;
     currentValue: string;
-    overlayX: number;
-    overlayY: number;
+    anchor: OverlayRectLike;
   } | null>(null);
 
   // カスタム記号位置調整オーバーレイの状態（symbolResizeEditState と同じパターン。横・縦の2入力のみ違う）
@@ -1155,8 +1218,8 @@ export default function PianoSystemCanvas({
     currentY: string;
     draftX: number;
     draftY: number;
-    overlayX: number;
-    overlayY: number;
+    // 調整対象の記号の実描画範囲（Issue #230。symbolResizeEditState の anchor と同じ意味）
+    anchor: OverlayRectLike;
   } | null>(null);
   const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
   const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
@@ -1845,6 +1908,12 @@ export default function PianoSystemCanvas({
       hit.setAttribute('height', String(maxY - minY + SYMBOL_HIT_PAD * 2));
       hit.setAttribute('fill', 'rgba(37, 99, 235, 0)');
       hit.setAttribute('class', 'symbol-hit-region');
+      // 「どの音符のどの記号か」を DOM 側にも残しておく。音符クリックでオーバーレイを開く経路が
+      // ここから記号の実描画範囲を引き当て、オーバーレイを記号に重ねないようにするため（Issue #230）。
+      hit.setAttribute('data-symbol-part', String(partIndex));
+      hit.setAttribute('data-symbol-measure', String(measureAbsoluteIndex));
+      hit.setAttribute('data-symbol-event', String(eventIndex));
+      hit.setAttribute('data-symbol-target', symbolHitRegionKey(target));
       hit.style.pointerEvents = symbolsClickable ? 'auto' : 'none';
       if (symbolsClickable) {
         hit.style.cursor = 'pointer';
@@ -1852,13 +1921,16 @@ export default function PianoSystemCanvas({
         hit.addEventListener('mouseleave', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0)'));
         hit.addEventListener('click', (domEvent) => {
           domEvent.stopPropagation();
-          const containerRect = containerRef.current?.getBoundingClientRect();
-          const overlayX = (domEvent as MouseEvent).clientX - (containerRect?.left ?? 0);
-          const overlayY = (domEvent as MouseEvent).clientY - (containerRect?.top ?? 0);
+          // 押した記号そのものの範囲をオーバーレイの回避対象にする。
+          // 計測できない環境ではクリック点（大きさ0）で代用する。
+          const hitRect = hit.getBoundingClientRect();
+          const anchor = (hitRect.width || hitRect.height)
+            ? toContainerRect(hitRect)
+            : anchorFromClientPoint((domEvent as MouseEvent).clientX, (domEvent as MouseEvent).clientY);
           // ここで渡す eventIndex は、記号の描画エントリを積んだときのアクティブ声部の
           // events 内の位置なので、声部も activeVoiceIndex を渡してそろえる
           // （声部2の音符に付いた記号をクリックしたとき、声部1側を書き換えないため）。
-          openSymbolAdjustEditor('offset', partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex, target, event, overlayX, overlayY);
+          openSymbolAdjustEditor('offset', partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex, target, event, anchor);
         });
       }
       svgRoot.appendChild(hit);
@@ -3932,18 +4004,18 @@ export default function PianoSystemCanvas({
                 // （StaffCanvas と同じ考え方。付いていない記号を新規に生やす事故を防ぐ）。
                 const existing = activeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolResizeMode);
                 if (!existing) return;
-                const containerRect = containerRef.current?.getBoundingClientRect();
                 const currentPercent = Math.round((existing.scale ?? 1) * 100);
+                const resizeTarget: AdjustTarget = { type: 'custom', symbolId: customSymbolResizeMode, name: customSymbolResizeMode };
                 setSymbolResizeEditState({
                   partIndex: pi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
                   // j はアクティブ声部の events 内の位置なので、どの声部かも一緒に覚えておく
                   voiceIndex: activeVoiceIndex,
-                  target: { type: 'custom', symbolId: customSymbolResizeMode, name: customSymbolResizeMode },
+                  target: resizeTarget,
                   currentValue: String(currentPercent),
-                  overlayX: me.clientX - (containerRect?.left ?? 0),
-                  overlayY: me.clientY - (containerRect?.top ?? 0),
+                  // 押したのは音符なので、対象記号の描画位置は DOM から引き当てる（Issue #230）
+                  anchor: findSymbolAnchorRect(pi, absI, j, resizeTarget) ?? anchorFromClientPoint(me.clientX, me.clientY),
                 });
                 return;
               }
@@ -3951,20 +4023,20 @@ export default function PianoSystemCanvas({
                 // 位置調整も同様に、対象記号が既に付いている場合のみオーバーレイを開く。
                 const existing = activeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolOffsetMode);
                 if (!existing) return;
-                const containerRect = containerRef.current?.getBoundingClientRect();
+                const offsetTarget: AdjustTarget = { type: 'custom', symbolId: customSymbolOffsetMode, name: customSymbolOffsetMode };
                 setSymbolOffsetEditState({
                   partIndex: pi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
                   voiceIndex: activeVoiceIndex,
-                  target: { type: 'custom', symbolId: customSymbolOffsetMode, name: customSymbolOffsetMode },
+                  target: offsetTarget,
                   currentX: String(existing.offsetX ?? 0),
                   currentY: String(existing.offsetY ?? 0),
                   // 下書きは「開いた時点の値」から始める（矢印キーを押すまでは保存値と同じ）
                   draftX: existing.offsetX ?? 0,
                   draftY: existing.offsetY ?? 0,
-                  overlayX: me.clientX - (containerRect?.left ?? 0),
-                  overlayY: me.clientY - (containerRect?.top ?? 0),
+                  // 押したのは音符なので、対象記号の描画位置は DOM から引き当てる（Issue #230）
+                  anchor: findSymbolAnchorRect(pi, absI, j, offsetTarget) ?? anchorFromClientPoint(me.clientX, me.clientY),
                 });
                 return;
               }
@@ -3982,7 +4054,11 @@ export default function PianoSystemCanvas({
                 const overlayY = me.clientY - (containerRect?.top ?? 0);
                 const kindKey = symbolAdjustResizeMode ? 'resize' : 'offset';
                 if (targets.length === 1) {
-                  openSymbolAdjustEditor(kindKey, pi, absI, j, activeVoiceIndex, targets[0], currentEv, overlayX, overlayY);
+                  // 対象が1つなら選択リストを挟まずに開く。記号に重ならない位置にするため、
+                  // その記号の実描画範囲を DOM から引き当てる（見つからなければクリック点・Issue #230）
+                  const anchor = findSymbolAnchorRect(pi, absI, j, targets[0])
+                    ?? anchorFromClientPoint(me.clientX, me.clientY);
+                  openSymbolAdjustEditor(kindKey, pi, absI, j, activeVoiceIndex, targets[0], currentEv, anchor);
                 } else {
                   setSymbolAdjustPickerState({
                     partIndex: pi,
@@ -5222,8 +5298,8 @@ export default function PianoSystemCanvas({
     voiceIndex: number,
     target: AdjustTarget,
     event: NoteEvent,
-    overlayX: number,
-    overlayY: number,
+    // 調整対象の記号の実描画範囲。オーバーレイはここに重ならない場所へ出す（Issue #230）
+    anchor: OverlayRectLike,
   ) {
     if (target.type === 'custom') {
       const existing = event.customSymbols?.find(s => s.symbolId === target.symbolId);
@@ -5232,7 +5308,7 @@ export default function PianoSystemCanvas({
         setSymbolResizeEditState({
           partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target,
           currentValue: String(Math.round((existing.scale ?? 1) * 100)),
-          overlayX, overlayY,
+          anchor,
         });
       } else {
         setSymbolOffsetEditState({
@@ -5241,7 +5317,7 @@ export default function PianoSystemCanvas({
           currentY: String(existing.offsetY ?? 0),
           draftX: existing.offsetX ?? 0,
           draftY: existing.offsetY ?? 0,
-          overlayX, overlayY,
+          anchor,
         });
       }
     } else {
@@ -5250,7 +5326,7 @@ export default function PianoSystemCanvas({
         setSymbolResizeEditState({
           partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target,
           currentValue: String(Math.round(adjust.scale * 100)),
-          overlayX, overlayY,
+          anchor,
         });
       } else {
         setSymbolOffsetEditState({
@@ -5259,7 +5335,7 @@ export default function PianoSystemCanvas({
           currentY: String(adjust.offsetY),
           draftX: adjust.offsetX,
           draftY: adjust.offsetY,
-          overlayX, overlayY,
+          anchor,
         });
       }
     }
@@ -5589,24 +5665,13 @@ export default function PianoSystemCanvas({
           />
         </div>
       )}
-      {/* カスタム記号サイズ変更オーバーレイ（StaffCanvas と同じ見た目・操作） */}
+      {/* カスタム記号サイズ変更オーバーレイ（StaffCanvas と同じ見た目・操作）。
+          表示位置は SymbolAdjustOverlay が「対象記号に重ならない場所」へ決める（Issue #230） */}
       {symbolResizeEditState && (
-        <div
-          style={{
-            position: 'absolute',
-            left: symbolResizeEditState.overlayX,
-            top: symbolResizeEditState.overlayY - 10,
-            zIndex: 200,
-            background: '#fff',
-            border: '1.5px solid #0891b2',
-            borderRadius: 6,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
-            padding: '4px 6px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2,
-            minWidth: 140,
-          }}
+        <SymbolAdjustOverlay
+          anchor={symbolResizeEditState.anchor}
+          containerRef={containerRef}
+          minWidth={140}
         >
           <span style={{ fontSize: 10, color: '#0891b2', fontFamily: 'sans-serif' }}>
             記号サイズ変更（25〜400%、空欄で等倍）
@@ -5642,26 +5707,15 @@ export default function PianoSystemCanvas({
             />
             <span style={{ fontSize: 13, fontFamily: 'sans-serif' }}>%</span>
           </div>
-        </div>
+        </SymbolAdjustOverlay>
       )}
-      {/* カスタム記号位置調整オーバーレイ（StaffCanvas と同じ見た目・操作） */}
+      {/* カスタム記号位置調整オーバーレイ（StaffCanvas と同じ見た目・操作）。
+          サイズ変更と同じ配置ロジック（対象記号に重ねない）を共有する（Issue #230） */}
       {symbolOffsetEditState && (
-        <div
-          style={{
-            position: 'absolute',
-            left: symbolOffsetEditState.overlayX,
-            top: symbolOffsetEditState.overlayY - 10,
-            zIndex: 200,
-            background: '#fff',
-            border: '1.5px solid #0891b2',
-            borderRadius: 6,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
-            padding: '4px 6px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2,
-            minWidth: 160,
-          }}
+        <SymbolAdjustOverlay
+          anchor={symbolOffsetEditState.anchor}
+          containerRef={containerRef}
+          minWidth={160}
         >
           <span style={{ fontSize: 10, color: '#0891b2', fontFamily: 'sans-serif' }}>
             記号位置調整（横・縦は{MIN_SYMBOL_OFFSET}〜{MAX_SYMBOL_OFFSET}px、縦は＋で下・−で上、空欄で0）
@@ -5759,7 +5813,7 @@ export default function PianoSystemCanvas({
               />
             </label>
           </div>
-        </div>
+        </SymbolAdjustOverlay>
       )}
       {/* 汎用サイズ・位置調整の選択リスト（StaffCanvas と同じUI）:
           対象の音符に調整可能な記号が複数付いているとき、どれを調整するか先に選ばせる */}
@@ -5805,9 +5859,12 @@ export default function PianoSystemCanvas({
                   const targetMeasure = partsScore[partIndex]?.[measureAbsoluteIndex];
                   const targetEv = targetMeasure ? getVoiceEvents(targetMeasure, voiceIndex)[eventIndex] : undefined;
                   if (!targetEv) { setSymbolAdjustPickerState(null); return; }
+                  // 選んだ記号の実描画範囲を引き当ててから開く。引き当てられないときは
+                  // 選択リストを開いた位置（＝クリック点）で代用する（Issue #230）
+                  const anchor = findSymbolAnchorRect(partIndex, measureAbsoluteIndex, eventIndex, opt)
+                    ?? { left: symbolAdjustPickerState.overlayX, top: symbolAdjustPickerState.overlayY, width: 0, height: 0 };
                   openSymbolAdjustEditor(
-                    kind, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, opt, targetEv,
-                    symbolAdjustPickerState.overlayX, symbolAdjustPickerState.overlayY,
+                    kind, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, opt, targetEv, anchor,
                   );
                 }}
               >
