@@ -24,7 +24,7 @@ import {
   lineToKey as lineToKeyForClef,
   keyToLine as keyToLineForClef,
 } from './clefUtils';
-import { computeArcGeometry } from './arcUtils';
+import { computeArcGeometry, computeArcHitGeometry } from './arcUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
@@ -571,6 +571,30 @@ function findNearestKey(
     if (dist < bestDist) { bestDist = dist; bestKey = key; }
   }
   return bestKey;
+}
+
+// findNearestKey の index 版。localY から maxLines（ライン単位）以内にある
+// 最寄りの構成音の index を返す。範囲内に無ければ -1。
+//
+// 用途: 固定範囲（五線±3加線）の外にいる音符の選択判定。あの帯は挿入も和音追加も
+// しない（隣のパートと重なりうるため）ので、従来の「線ちょうど（±0.25ライン
+// ＝100%ズームで約2.5px）だけ選択」だと実質クリック不能だった（実機テストで
+// 「スラーの下の低音が選択できない」として発覚）。何も起きない帯に限って
+// 吸い寄せを効かせるので、音符の追加位置がずれる副作用はない。
+const OUTER_KEY_SELECT_MAX_LINES = 1.0;
+function findNearestKeyIndexWithinLines(
+  keys: string[], localY: number, stave: Stave,
+  keyToLineFn: (k: string) => number, maxLines: number
+): number {
+  const topY = stave.getYForLine(0);
+  const sp = (stave.getSpacingBetweenLines?.() as number) || ((stave.getYForLine(4) - topY) / 4);
+  let bestIdx = -1;
+  let bestDist = Infinity;
+  keys.forEach((key, idx) => {
+    const dist = Math.abs(localY - stave.getYForLine(keyToLineFn(key)));
+    if (dist < bestDist) { bestDist = dist; bestIdx = idx; }
+  });
+  return bestDist <= maxLines * sp ? bestIdx : -1;
 }
 
 // 「クリックしたら選択になるか、追加になるか」がホバーだけでは分からず、
@@ -1905,14 +1929,16 @@ export default function PianoSystemCanvas({
           const nx1=geom.x1-geom.startDx+newDx,ny1=geom.y1-geom.startDy+newDy;
           const{dAttr}=computeArcGeometry(nx1,ny1,geom.x2,geom.y2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset);
           (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
-          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',dAttr);
+          // 当たり判定パスは中央部限定の形状（computeArcHitGeometry）で追従させる
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',computeArcHitGeometry(nx1,ny1,geom.x2,geom.y2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset).dAttr);
           const h=(svgRoot as SVGGElement).querySelector(`[data-arc-ep-start="${key}"]`);
           if(h){h.setAttribute('cx',String(nx1));h.setAttribute('cy',String(ny1));}
         }else{
           const nx2=geom.x2-geom.endDx+newDx,ny2=geom.y2-geom.endDy+newDy;
           const{dAttr}=computeArcGeometry(geom.x1,geom.y1,nx2,ny2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset);
           (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
-          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',dAttr);
+          // 当たり判定パスは中央部限定の形状（computeArcHitGeometry）で追従させる
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',computeArcHitGeometry(geom.x1,geom.y1,nx2,ny2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset).dAttr);
           const h=(svgRoot as SVGGElement).querySelector(`[data-arc-ep-end="${key}"]`);
           if(h){h.setAttribute('cx',String(nx2));h.setAttribute('cy',String(ny2));}
         }
@@ -1947,7 +1973,8 @@ export default function PianoSystemCanvas({
           const upward=drag.flipApplied?!geom.upward:geom.upward;
           const{dAttr}=computeArcGeometry(geom.x1,geom.y1,geom.x2,geom.y2,upward,geom.kind,geom.stemDir,geom.obstacleY,offset);
           (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
-          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',dAttr);
+          // 当たり判定パスは中央部限定の形状（computeArcHitGeometry）で追従させる
+          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',computeArcHitGeometry(geom.x1,geom.y1,geom.x2,geom.y2,upward,geom.kind,geom.stemDir,geom.obstacleY,offset).dAttr);
         };
         if(drag.segment){
           // 段またぎ: ドラッグ対象セグメントのみ effectiveOffset、もう一方は現状維持
@@ -2516,8 +2543,12 @@ export default function PianoSystemCanvas({
       const isEditableArc=arcIdentity!==undefined&&arcIdentity.voiceIndex===activeVoiceIndex;
 
       if(isEditableArc){
+        // 当たり判定は弧の中央部（頂点まわり）だけにする。表示パス全体を太らせると
+        // 端点付近の帯が符頭に重なり、音符のクリックを吸ってしまう（Finale 等と同じ方針。
+        // 詳細は computeArcHitGeometry のコメント参照）。
+        const{dAttr:hitDAttr}=computeArcHitGeometry(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset);
         const hitPath=document.createElementNS('http://www.w3.org/2000/svg','path');
-        hitPath.setAttribute('d',dAttr);
+        hitPath.setAttribute('d',hitDAttr);
         hitPath.setAttribute('stroke','transparent');hitPath.setAttribute('stroke-width','10');
         hitPath.setAttribute('fill','none');hitPath.setAttribute('pointer-events','stroke');
         // 印刷時に svg path を黒で強制するCSSがあるため、透明な当たり判定パスだと分かるよう目印を付けて印刷から除外する
@@ -3593,8 +3624,12 @@ export default function PianoSystemCanvas({
               const hoverXPad = keySelectXPad(svg);
               const nearNoteXForHover = lx>=noteVisualLeft-hoverXPad && lx<=noteVisualRight+hoverXPad;
               const snappedLineForHover = snapLineForKeySelect(ly);
+              // 固定範囲の外の吸い寄せ（クリック側の findNearestKeyIndexWithinLines）も
+              // 含めて、クリック時と完全に同じ式で「押したら選択になるか」を求める。
               const wouldSelectKey = !activeEvs[j]?.isRest && nearNoteXForHover
-                && findKeyIndexAtLine(activeEvs[j].keys, snappedLineForHover, k2l) >= 0;
+                && (findKeyIndexAtLine(activeEvs[j].keys, snappedLineForHover, k2l) >= 0
+                  || ((ly<chordTopY||ly>chordBotY)
+                    && findNearestKeyIndexWithinLines(activeEvs[j].keys, ly, stave, k2l, OUTER_KEY_SELECT_MAX_LINES) >= 0));
               setNoteHoverHighlight(n, wouldSelectKey);
               // カーソル形状: 選択になる位置は 'pointer'、それ以外（新規挿入・和音追加・
               // 休符の置換分割）は「ここに置く」感を出す 'copy' にする。
@@ -4008,7 +4043,14 @@ export default function PianoSystemCanvas({
                 // 選択の一致判定だけは、五線から遠い音符の線まで丸め先を広げた
                 // snapLineForKeySelect を使う（Issue #218）。新規音の音高（newKey）は
                 // 従来どおり snappedLine から作るので、置ける範囲は変わらない。
-                const clickedKeyIndex = nearNoteX ? findKeyIndexAtLine(currentEv.keys, snapLineForKeySelect(ly), k2l) : -1;
+                let clickedKeyIndex = nearNoteX ? findKeyIndexAtLine(currentEv.keys, snapLineForKeySelect(ly), k2l) : -1;
+                // 固定範囲の外（挿入も和音追加も起きない帯）では、線ちょうどを外した
+                // クリックを最寄りの構成音へ吸い寄せる。従来はこの帯での有効な選択位置が
+                // ±0.25ライン（100%ズームで約2.5px）しかなく、実質クリック不能だった。
+                // ホバー側（mousemove の wouldSelectKey）と必ず同じ式にすること。
+                if(clickedKeyIndex<0 && nearNoteX && (ly<chordTopY||ly>chordBotY)){
+                  clickedKeyIndex = findNearestKeyIndexWithinLines(currentEv.keys, ly, stave, k2l, OUTER_KEY_SELECT_MAX_LINES);
+                }
                 if(clickedKeyIndex>=0){
                   setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex});
                   playNoteEvent({...currentEv,keys:[currentEv.keys[clickedKeyIndex]]}, part.playbackInstrument);
