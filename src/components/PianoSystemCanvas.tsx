@@ -4432,7 +4432,10 @@ export default function PianoSystemCanvas({
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
       el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      el.setAttribute('font-size', String(10 * adjust.scale));
+      // 既定サイズは engravingDefaults の1か所で持つ（Issue #232 で 10 u → 18 u）。
+      // adjust.scale は「既定に対する倍率」なので、既定を変えると個別調整済みの運指の
+      // 実効サイズも一緒に変わる（保存データの自動変換はしない方針）。
+      el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.fingering * adjust.scale));
       el.setAttribute('pointer-events', 'none');
       svgRoot.appendChild(el);
       // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
