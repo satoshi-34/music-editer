@@ -222,21 +222,22 @@ describe('PianoSystemCanvas 外部データ差し替え後の残存選択', () =
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('中間イベントの削除後も、選択していた音符自身が残っていれば選択が追随する', async () => {
-    // C（index=0）を選択したまま E が消えるケース。C は残っているので
-    // 選択は C に付いたままになり、Delete は C を消す（G ではなく）。
-    const threeNotes: MeasureData[] = [{
+  it('同一内容の音符が並ぶ小節（[C,C,G]）でも、選択が残りの同音へ乗り移らない', async () => {
+    // [C, C, G] の先頭 C を選択 → [C, G] へ差し替え。内容（JSON）での探し直しは
+    // 残った同音の C を「選択していた音符」と誤認する（Codex 指摘・2巡目）。
+    // 同音でも時間位置の異なる別イベントであり、データから同定する術はないので、
+    // 選択中の小節が変わったら安全に選択解除する（Delete は何も消さない）。
+    const data: MeasureData[] = [{
       events: [
         { dur: '4', isRest: false, keys: ['c/5'] },
-        { dur: '4', isRest: false, keys: ['e/5'] },
+        { dur: '4', isRest: false, keys: ['c/5'] },
         { dur: '4', isRest: false, keys: ['g/5'] },
         { dur: '4', isRest: true, keys: ['b/4'] },
       ],
     }];
-    const { svg, onChange, ...view } = renderScore(threeNotes);
+    const { svg, onChange, ...view } = renderScore(data);
     const hit = noteHit(svg, 0);
 
-    // c/5 = line 1.5 を選択
     fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 1.5) });
     await waitFor(() => {
       expect((view as { container: HTMLElement }).container.querySelector('rect.vf-note-selected')).toBeTruthy();
@@ -253,14 +254,87 @@ describe('PianoSystemCanvas 外部データ差し替え後の残存選択', () =
 
     onChange.mockClear();
     fireEvent.keyDown(window, { key: 'Delete' });
+    await new Promise(r => setTimeout(r, 50));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('選択と無関係の小節だけが差し替わった場合は、選択が保たれる', async () => {
+    // 常に選択解除では「他の小節を Undo しただけで選択が飛ぶ」ため、
+    // 選択中の小節・声部のイベント列が変わっていなければ保つことを固定する。
+    const data: MeasureData[] = [
+      {
+        events: [
+          { dur: '4', isRest: false, keys: ['c/5'] },
+          { dur: '2', isRest: true, keys: ['b/4'] },
+          { dur: '4', isRest: true, keys: ['b/4'] },
+        ],
+      },
+    ];
+    const { svg, onChange, ...view } = renderScore(data);
+    const hit = noteHit(svg, 0);
+
+    fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 1.5) });
+    await waitFor(() => {
+      expect((view as { container: HTMLElement }).container.querySelector('rect.vf-note-selected')).toBeTruthy();
+    });
+
+    // 選択中の小節（0）は変えず、末尾に小節を足した形の差し替え（他小節の Undo 相当）
+    const replaced: MeasureData[] = [
+      data[0],
+      { events: [{ dur: '4', isRest: false, keys: ['d/5'] }] },
+    ];
+    rerenderScore(view as ReturnType<typeof render>, replaced, onChange);
+
+    await waitFor(() => {
+      expect((view as { container: HTMLElement }).container.querySelector('rect.vf-note-selected')).toBeTruthy();
+    });
+  });
+
+  it('休符分割（内部編集）の直後、新規音符の選択が別の音符へ移らない', async () => {
+    // [4分休符, A] を 8分音符ツールでクリックして [8分音符, 8分休符, A] へ分割すると、
+    // イベント列の長さが変わる。旧 index からの内容追跡は、この「内部編集が同じ
+    // レンダーで設定した新しい選択」を古い選択の続きと誤解し、A へ移してしまう
+    // （Codex 指摘・2巡目）。内部編集では整合処理が選択に触らないことを、
+    // 「分割直後に Delete しても A が無傷」で固定する。
+    const data: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: true, keys: ['b/4'] },
+        { dur: '4', isRest: false, keys: ['a/4'] },
+        { dur: '2', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    const onChange = vi.fn();
+    const view = render(
+      <PianoSystemCanvas
+        measuresPerSystem={1}
+        tool={{ duration: '8', isRest: false } as never}
+        scale={1}
+        partsConfig={[{ clef: 'treble', data, onChange }]}
+        showInstrumentLabels={false}
+        timeSignature={[4, 4]}
+      />
+    );
+    const svg = view.container.querySelector('svg') as SVGSVGElement;
+    mockSvgLayout(svg);
+
+    // 休符は「1回目で選択・2回目で置換」（既存の操作体系）
+    const first = noteHit(svg, 0);
+    fireEvent.click(first, { clientX: centerXOf(first), clientY: yForLine(first, 2) });
+    await waitFor(() => {
+      expect(view.container.querySelector('rect.vf-note-selected')).toBeTruthy();
+    });
+    const second = noteHit(svg, 0);
+    fireEvent.click(second, { clientX: centerXOf(second), clientY: yForLine(second, 2) });
     await waitFor(() => {
       expect(onChange).toHaveBeenCalled();
     });
-    // 消えた（休符化した）のは C であり、G は無傷であること
-    const nextData = onChange.mock.calls[onChange.mock.calls.length - 1][0] as MeasureData[];
-    const keysFlat = nextData[0].events.filter(e => !e.isRest).flatMap(e => e.keys);
-    expect(keysFlat).toContain('g/5');
-    expect(keysFlat).not.toContain('c/5');
+
+    // 分割直後に Delete。選択がどこを指していようと、A が消えてはならない。
+    fireEvent.keyDown(window, { key: 'Delete' });
+    await new Promise(r => setTimeout(r, 80));
+    const lastData = onChange.mock.calls[onChange.mock.calls.length - 1][0] as MeasureData[];
+    const keysFlat = lastData[0].events.filter(e => !e.isRest).flatMap(e => e.keys);
+    expect(keysFlat).toContain('a/4');
   });
 
   it('和音の構成音の中間削除でも、選択が隣の構成音へ乗り移らない', async () => {

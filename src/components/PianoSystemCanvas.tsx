@@ -1477,6 +1477,9 @@ export default function PianoSystemCanvas({
   };
 
   /* ----- 親データ同期 ----- */
+  // 下の「選択の整合性」が、外から差し替わった変更（Undo/Redo 等）と
+  // キャンバス内部の編集を見分けるためのフラグ。ここ（親→子の同期）だけが立てる。
+  const externalReplaceRef = useRef(false);
   const partsDataJson = JSON.stringify(parts.map(p => p.data));
   useEffect(()=>{
     setPartsScore(prev => {
@@ -1492,26 +1495,34 @@ export default function PianoSystemCanvas({
         next[i]=newScore;
         changed=true;
       });
+      // ref への true 設定は冪等なので、StrictMode の updater 二重実行でも安全
+      if(changed) externalReplaceRef.current = true;
       return changed?next:prev;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[partsDataJson]);
 
   /* ----- 選択の整合性 ----- */
-  // Undo/Redo などでデータが丸ごと差し替わると、選択（selected）が指す音符が
+  // Undo/Redo などで親がデータを丸ごと差し替えると、選択（selected）が指す音符が
   // 消えていたり、中間イベントの削除で index が詰まって「別の音符」を指していたり
-  // することがある。index の存在チェックだけでは後者を見逃し、次の Delete が
-  // ユーザーが選んでいない音符を消すデータ破壊になる（Codex レビュー指摘）。
-  // そこで直前のデータのスナップショットと突き合わせ、「選択していた実体」を追跡する:
-  //   - イベント配列の長さが変わったときは、選択していたイベントを内容（JSON）で探し直す。
-  //     見つかれば index を追随、消えていれば選択解除
-  //   - 和音の構成音数が変わったときは、選択していた key を値で探し直す。
-  //     消えていれば選択解除（音符全体へ降格すると Delete がイベントごと消して危険なため）
-  //   - 長さが変わらない在位置編集（矢印キーの音高変更など）は従来どおり選択を保つ
+  // する。index の存在チェックや内容（JSON）での探し直しでは、
+  //   - 同一内容の音符（[C,C,G] の C など）を区別できない
+  //   - 内部編集（休符分割等）が同じレンダーで設定した「新しい選択」を、
+  //     旧 index からの追跡だと誤解して別の音符へ移してしまう
+  // という2つのデータ破壊経路が残る（Codex レビュー指摘・2巡目）。
+  // そのため曖昧な追跡はせず、次の決定的な規則だけにする:
+  //   - 判定するのは「外部差し替え」（externalReplaceRef が立った同期）のときだけ。
+  //     内部編集は各ハンドラが選択を正しく管理しているので、ここでは一切触らない
+  //   - 外部差し替えで、選択中の小節・声部のイベント列が1つでも変わっていたら選択解除。
+  //     どの音符が「同じ」かをデータから同定する術はないため、安全側に倒す
+  //   - イベント列が変わっていなければ（他の小節だけの Undo 等）選択を保つ
   const prevPartsScoreForSelRef = useRef<MeasureData[][] | null>(null);
   useEffect(()=>{
     const prevScore = prevPartsScoreForSelRef.current;
     prevPartsScoreForSelRef.current = partsScore;
+    const isExternal = externalReplaceRef.current;
+    externalReplaceRef.current = false;
+    if(!isExternal) return;
     setSelected(prev=>{
       if(!prev) return prev;
       const vi = prev.voiceIndex??0;
@@ -1520,38 +1531,15 @@ export default function PianoSystemCanvas({
       const evs=getVoiceEvents(measure, vi);
       const prevMeasure=prevScore?.[prev.partIndex]?.[prev.measure];
       const oldEvs=prevMeasure?getVoiceEvents(prevMeasure, vi):null;
-      const oldEv=oldEvs?.[prev.index];
-
-      let idx=prev.index;
-      // 長さが変わった＝挿入/削除で index がずれた可能性。内容で探し直す。
-      if(oldEv&&oldEvs&&evs.length!==oldEvs.length){
-        const oldJson=JSON.stringify(oldEv);
-        const matches:number[]=[];
-        evs.forEach((e,i)=>{if(JSON.stringify(e)===oldJson)matches.push(i);});
-        if(matches.length===0) return null; // 選択していたイベント自体が消えた
-        // 同一内容が複数あるときは元の位置に最も近いものへ（連続同音などでは実害がない）
-        idx=matches.reduce((best,i)=>Math.abs(i-prev.index)<Math.abs(best-prev.index)?i:best,matches[0]);
+      // 選択中の小節・声部の内容が変わっていない（他の小節だけの差し替え）なら保つ。
+      // 比較できない（初回等でスナップショットが無い）場合も、範囲だけ検証して保つ。
+      if(!oldEvs||JSON.stringify(evs)===JSON.stringify(oldEvs)){
+        const ev=evs[prev.index];
+        if(!ev) return null;
+        if(prev.keyIndex!==undefined&&(ev.isRest||prev.keyIndex>=(ev.keys?.length??0))) return null;
+        return prev;
       }
-      const ev=evs[idx];
-      if(!ev) return null;
-
-      let keyIndex=prev.keyIndex;
-      if(keyIndex!==undefined){
-        if(ev.isRest) return null; // 選択していた音が休符に置き換わった
-        const oldKey=oldEv&&!oldEv.isRest?oldEv.keys?.[prev.keyIndex!]:undefined;
-        if(oldKey&&oldEv&&(ev.keys?.length??0)!==(oldEv.keys?.length??0)){
-          // 構成音数が変わった＝和音内で index がずれた可能性。値で探し直す。
-          const found=(ev.keys??[]).indexOf(oldKey);
-          if(found<0) return null; // 選択していた構成音自体が消えた
-          keyIndex=found;
-        }else if(keyIndex>=(ev.keys?.length??0)){
-          // スナップショットが無い経路（初回など）の最終防衛: 範囲外なら音符全体へ降格
-          keyIndex=undefined;
-        }
-      }
-
-      if(idx===prev.index&&keyIndex===prev.keyIndex) return prev;
-      return {...prev, index: idx, keyIndex};
+      return null;
     });
   },[partsScore]);
 
