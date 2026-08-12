@@ -21,6 +21,12 @@ export interface SaveLoadButtonsProps {
   autoSaveStatus?: 'idle' | 'saving' | 'saved';
   /** 起動時のサイレント復元など、自動保存に関する短い通知文。あれば数秒だけ表示する */
   restoreNotice?: string | null;
+  /**
+   * 「ファイル保存が期待どおりに終わらなかった」ことを伝える警告文（Issue #229）。
+   * 操作は完了しているのでボタンは止めず、restoreNotice と同じトースト形式で知らせる。
+   * 見落とすと実害（0バイトのファイルを本物と誤認する）につながるため、色を分けている
+   */
+  warningNotice?: string | null;
   error?: string | null;
 }
 
@@ -39,6 +45,7 @@ export default function SaveLoadButtons({
   hasCustomPianoSample = false,
   autoSaveStatus = 'idle',
   restoreNotice,
+  warningNotice,
   error
 }: SaveLoadButtonsProps) {
   // Only show error if it's a non-empty string (trim whitespace)
@@ -142,6 +149,30 @@ export default function SaveLoadButtons({
           role="status"
         >
           {restoreNotice}
+        </span>
+      )}
+      {/* 警告トースト（Issue #229）。復元通知と同時に出ることはまず無いが、
+          重なって読めなくなるのを避けるため、出ているときは一段下へずらす。
+          文言が長くなるので幅の上限を決め、折り返して表示する */}
+      {warningNotice && (
+        <span
+          style={{
+            position: 'fixed',
+            top: restoreNotice ? 40 : 8,
+            right: 12,
+            zIndex: 1000,
+            maxWidth: 360,
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: '#fff',
+            background: '#d9822b',
+            borderRadius: 6,
+            padding: '6px 10px',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+          }}
+          role="alert"
+        >
+          {warningNotice}
         </span>
       )}
 
