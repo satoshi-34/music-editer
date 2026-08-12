@@ -1661,7 +1661,7 @@ export default function PianoSystemCanvas({
         if (e.key === 'Delete' || e.key === 'Backspace') {
           // 声部2の削除は「素の splice」ではなく、弧（タイ/スラー）・松葉の終点まで
           // 面倒を見る共通関数へ通す（Issue #188）。連符グループの置き換えもこの中で行う。
-          setS(prev => deleteVoiceEventFromMeasures(prev, sel.voiceIndex!, measure, index, defaultRestKeyForClef(clef)));
+          setS(prev => deleteVoiceEventFromMeasures(prev, sel.voiceIndex!, measure, index, clef));
           closeEventEditOverlaysFor(partIndex, measure, index, voiceIndex);
           setSelected(null); e.preventDefault(); return;
         }
@@ -1673,7 +1673,7 @@ export default function PianoSystemCanvas({
 
       if(e.key==='Delete'||e.key==='Backspace'){
         // StaffCanvas と完全一致していた削除ロジックは utils/noteDeletionUtils.ts に共通化した。
-        setS(prev=>deleteEventFromMeasures(prev, measure, index, keyIndex, defaultRestKeyForClef(clef)));
+        setS(prev=>deleteEventFromMeasures(prev, measure, index, keyIndex, clef));
         closeEventEditOverlaysFor(partIndex, measure, index, voiceIndex);
         setSelected(null);e.preventDefault();return;
       }
