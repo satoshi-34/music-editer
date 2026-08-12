@@ -1473,6 +1473,25 @@ export default function PianoSystemCanvas({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[partsDataJson]);
 
+  /* ----- 選択の整合性 ----- */
+  // Undo/Redo などでデータが丸ごと差し替わると、選択（selected）が指す音符が
+  // 消えていたり和音の構成音が減っていたりすることがある。解決できない選択を
+  // 残したまま描画すると存在しない音符に触れて落ちるため、ここで掃除する。
+  // 音符ごと消えていれば選択解除、keyIndex だけ範囲外なら音符全体の選択へ降格する。
+  useEffect(()=>{
+    setSelected(prev=>{
+      if(!prev) return prev;
+      const measure=partsScore[prev.partIndex]?.[prev.measure];
+      if(!measure) return null;
+      const ev=getVoiceEvents(measure, prev.voiceIndex??0)[prev.index];
+      if(!ev) return null;
+      if(prev.keyIndex!==undefined&&(ev.isRest||prev.keyIndex>=(ev.keys?.length??0))){
+        return {...prev, keyIndex: undefined};
+      }
+      return prev;
+    });
+  },[partsScore]);
+
   /* ----- 親への通知 ----- */
   const prevPartsScore = useRef<MeasureData[][]>([]);
   const firstRender = useRef(true);
@@ -2793,7 +2812,11 @@ export default function PianoSystemCanvas({
               // データに保存されていない表示専用のものなので、薄いグレーにして
               // 「ここは実際にはまだ空いている」ことが一目で分かるようにする。
               const isPaddingRest = !!ev.__isPlaceholder && ev.isRest;
-              if(isSel&&selected.keyIndex!==undefined&&!ev.isRest&&n.setKeyStyle){
+              // keyIndex の範囲チェックは必須。Undo などでイベント配列が外から差し替わった直後は
+              // selected が1世代前の和音構成を指していることがあり、範囲外の keyIndex を
+              // VexFlow の setKeyStyle に渡すと noteHeads[keyIndex] が undefined で例外になる
+              // （描画 effect 内なので画面全体が落ちる）。範囲外なら音符全体の選択表示に降格する。
+              if(isSel&&selected.keyIndex!==undefined&&!ev.isRest&&n.setKeyStyle&&selected.keyIndex<ev.keys.length){
                 n.setKeyStyle(selected.keyIndex,{fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
               }else if(isSel&&n.setStyle){
                 n.setStyle({fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});

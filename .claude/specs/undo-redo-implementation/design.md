@@ -174,3 +174,44 @@ dev サーバー（`npm run dev`）で以下を目視確認した。
 3. まっさらな譜面への最初の編集（音符配置）も Undo で表示・データとも戻る。
 4. 起動直後のパディング通知では「元に戻す」が有効化されない。
 5. コンソールエラーなし。`docker compose run --rm app npx vitest run` 全件パス。
+
+## Undo 後の残存選択で描画がクラッシュする問題の修正（2026-08-12）
+
+### 問題
+
+音符を追加 → Cmd+Z → 譜面をクリック、の手順で画面全体が真っ黒になり操作不能になった
+（実機テスト中に発見。React の描画 useEffect 内の未捕捉例外なのでアプリ全体が落ちる）。
+
+原因は、キャンバス内部の選択状態（`PianoSystemCanvas` の `selected`）が
+Undo によるデータ差し替えに追随しないこと。2つの経路で実害になる:
+
+1. `selected.keyIndex` が差し替え後の和音の構成音数より大きいまま描画に渡ると、
+   VexFlow の `setKeyStyle(keyIndex)` が `noteHeads[keyIndex]`（undefined）を触って
+   `TypeError: Cannot read properties of undefined (reading 'setStyle')` になる。
+2. 選択が指すイベント自体が消えても選択が残り、次の Delete が存在しない
+   （あるいは別の）音符へ届く（#238 と同根の「残存選択」）。
+
+### 修正設計
+
+二段構え（どちらか片方では不十分。1 は最後の防波堤、2 が本質的な整合性の回復）:
+
+- **描画ガード**（`PianoSystemCanvas.tsx` 音符スタイル適用部）:
+  `setKeyStyle` を呼ぶ条件に `selected.keyIndex < ev.keys.length` を追加。
+  範囲外のときは音符全体の選択表示（`setStyle`）へ降格し、どんな経路でも落ちない。
+- **選択の整合性 effect**（`PianoSystemCanvas.tsx` 親データ同期の直後）:
+  `partsScore` が変わるたびに選択を検証する。
+  - 選択が指す小節・イベントが解決できなければ選択解除（`setSelected(null)`）
+  - イベントは存在するが `keyIndex` が範囲外（または休符化）なら、
+    `keyIndex` を外して音符全体の選択へ降格（選択自体は保つ）
+
+### 影響範囲
+
+- `src/components/PianoSystemCanvas.tsx`（上記2箇所）
+- `src/components/PianoSystemCanvasStaleSelectionAfterUndo.test.tsx`（新規・回帰テスト2本。
+  修正前はテスト1が本番と同一の TypeError で失敗することを確認済み）
+
+### 動作確認（ブラウザ）
+
+1. 音符を追加 → Cmd+Z → 譜面クリック → 落ちない・普通に選択できる。
+2. 和音の2音目を選択したまま Undo で1音に戻す → 音符全体の選択に降格して表示が残る。
+3. コンソールエラーなし。`docker compose run --rm app npx vitest run` 全 1558 件パス。
