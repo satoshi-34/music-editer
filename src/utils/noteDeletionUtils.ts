@@ -10,6 +10,7 @@
 // deleteVoiceEventFromMeasures（このファイルの後半）で扱う。
 
 import type { HairpinMark, MeasureData, NoteEvent, TieArc } from '../types/storage';
+import type { ClefType } from '../components/clefUtils';
 import { planTupletGroupDeletion } from './tupletUtils';
 import { getVoiceEvents } from './voiceMeasureUtils';
 
@@ -40,7 +41,8 @@ function cloneMeasures(measures: MeasureData[]): MeasureData[] {
  * @param measure 削除対象イベントの小節インデックス
  * @param index 削除対象イベントのインデックス
  * @param keyIndex 和音中の対象キーのインデックス（省略時はイベント全体を削除）
- * @param defaultRestKey 連符グループ削除時、休符の描画位置が決まらない場合に使う既定キー
+ * @param clef そのパートの音部記号。連符グループ削除で生まれる休符の描画位置を決めるのに使う
+ *   （消した音の音高を引き継ぐか、標準位置へ落とすかの判定。Issue #226）
  * @returns 変更後の MeasureData 配列。範囲外指定などで変更が無い場合は引数の measures をそのまま返す。
  */
 export function deleteEventFromMeasures(
@@ -48,7 +50,7 @@ export function deleteEventFromMeasures(
   measure: number,
   index: number,
   keyIndex: number | undefined,
-  defaultRestKey: string
+  clef: ClefType
 ): MeasureData[] {
   if (measure < 0 || measure >= measures.length) return measures;
   const targetMeasureEvents = measures[measure].events;
@@ -92,7 +94,7 @@ export function deleteEventFromMeasures(
   // 2. 連符内イベントの削除はグループごと通常の休符へ置き換える
   //    （部分的に消すと連符の音価バランスが崩れ、描画と再生の拍計算が破綻するため）
   if (targetEv.tuplet) {
-    const plan = planTupletGroupDeletion(next[measure].events, index, defaultRestKey);
+    const plan = planTupletGroupDeletion(next[measure].events, index, clef);
     if (plan) {
       next[measure].events.splice(plan.groupStart, plan.groupEnd - plan.groupStart + 1, ...plan.replacement);
     }
@@ -200,7 +202,7 @@ function remapVoiceEventRefsAfterRemoval(
  * @param voiceIndex 削除対象の声部（1以上を想定。0 は deleteEventFromMeasures の担当）
  * @param measure 削除対象イベントの小節インデックス
  * @param index 削除対象イベントのインデックス（その声部の events 内での位置）
- * @param defaultRestKey 連符グループ削除時、休符の描画位置が決まらない場合に使う既定キー
+ * @param clef そのパートの音部記号。連符グループ削除で生まれる休符の描画位置を決めるのに使う（Issue #226）
  * @returns 変更後の MeasureData 配列。範囲外指定などで変更が無い場合は引数の measures をそのまま返す。
  */
 export function deleteVoiceEventFromMeasures(
@@ -208,10 +210,10 @@ export function deleteVoiceEventFromMeasures(
   voiceIndex: number,
   measure: number,
   index: number,
-  defaultRestKey: string
+  clef: ClefType
 ): MeasureData[] {
   if (voiceIndex <= 0) {
-    return deleteEventFromMeasures(measures, measure, index, undefined, defaultRestKey);
+    return deleteEventFromMeasures(measures, measure, index, undefined, clef);
   }
   if (measure < 0 || measure >= measures.length) return measures;
   const voiceEvents = measures[measure].voices?.[voiceIndex]?.events;
@@ -221,7 +223,7 @@ export function deleteVoiceEventFromMeasures(
   // （声部1・単旋律譜と同じ仕様）。1つだけ消すと残りが tuplet.id を持ったまま半端な音価で残り、
   // 描画（VexFlow の Tuplet）と再生の拍計算が崩れてしまうため。
   const tupletDeletion = voiceEvents[index].tuplet
-    ? planTupletGroupDeletion(voiceEvents, index, defaultRestKey)
+    ? planTupletGroupDeletion(voiceEvents, index, clef)
     : null;
   const removeStart = tupletDeletion ? tupletDeletion.groupStart : index;
   const removeEnd = tupletDeletion ? tupletDeletion.groupEnd : index;
