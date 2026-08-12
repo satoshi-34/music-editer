@@ -114,7 +114,9 @@ describe('PianoSystemCanvas 五線から遠い音符の選択（Issue #218）', 
   });
 
   // ピアノの大譜表（上=ト音記号 / 下=ヘ音記号）。実機の再現手順と同じ形にする。
-  function renderGrandStaff(trebleKeys: string[], bassKeys: string[]) {
+  // partSpacingOffsetPx を渡すとパート間隔を変えられる（Issue #219 のクリップは
+  // パート間隔が狭い譜面でだけ効くため、テストごとに使い分ける）。
+  function renderGrandStaff(trebleKeys: string[], bassKeys: string[], partSpacingOffsetPx?: number) {
     const trebleData = measureWith(trebleKeys);
     const bassData = measureWith(bassKeys);
     const onTrebleChange = vi.fn();
@@ -130,6 +132,7 @@ describe('PianoSystemCanvas 五線から遠い音符の選択（Issue #218）', 
         ]}
         showInstrumentLabels={false}
         timeSignature={[4, 4]}
+        partSpacingOffsetPx={partSpacingOffsetPx}
       />
     );
     const svg = container.querySelector('svg') as SVGSVGElement;
@@ -205,7 +208,13 @@ describe('PianoSystemCanvas 五線から遠い音符の選択（Issue #218）', 
   it('五線内に収まる音符の当たり判定は従来どおり（line -3〜7 の固定範囲のまま）', () => {
     // 判定窓が広がるのは「五線から遠い音符を持つイベント」だけで、
     // 普通の音符のヒット領域は 1px も変わらないことを固定する。
-    const { svg } = renderGrandStaff(['c/5'], ['d/3']);
+    //
+    // パート間隔はピアノ譜の既定値（自動値80 + オフセット38 = 118）にする。
+    // Issue #219 で固定範囲を隣パートとの中間線でクリップするようにしたが、
+    // 118 では中間線が固定範囲より外にあるためクリップは起きない（＝従来どおり）。
+    // クリップが効く狭いパート間隔での挙動は
+    // PianoSystemCanvasSystemClickAttribution.test.tsx が受け持つ。
+    const { svg } = renderGrandStaff(['c/5'], ['d/3'], 38);
     const hit = noteHit(svg, 0, 0);
 
     const y = parseFloat(hit.getAttribute('y')!);
