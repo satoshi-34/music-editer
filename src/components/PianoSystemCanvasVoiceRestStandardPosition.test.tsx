@@ -174,7 +174,9 @@ describe('PianoSystemCanvas 休符の標準位置と声部（Issue #227）', () 
 
   it('2声部共存小節で声部1の休符に 0 を押すと、上寄りの標準位置（line1 = d/5）へ戻る', async () => {
     const data = makeTwoVoiceMeasure();
-    const { container, svg, onChange } = renderScore(data, { duration: '4', isRest: false }, 0);
+    // 音価ツール（音符側）だと休符クリックは1クリック置換になる（Issue #233）ため、
+    // 休符の「選択」は休符ツールで行う（新しい操作体系）。
+    const { container, svg, onChange } = renderScore(data, { duration: '4', isRest: true }, 0);
 
     // 声部1の2つ目（休符 e/4 = line 4）を選択する。
     const hit = noteHit(svg, 1);
@@ -206,7 +208,8 @@ describe('PianoSystemCanvas 休符の標準位置と声部（Issue #227）', () 
         { dur: '2', isRest: false, keys: ['d/5'] },
       ],
     }];
-    const { container, svg, onChange } = renderScore(data, { duration: '4', isRest: false }, 0);
+    // 休符の選択は休符ツールで行う（Issue #233 の1クリック置換化に伴う操作体系）
+    const { container, svg, onChange } = renderScore(data, { duration: '4', isRest: true }, 0);
 
     const hit = noteHit(svg, 1);
     fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 4) });
