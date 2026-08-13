@@ -71,6 +71,7 @@ import {
   type KeySignature
 } from '../utils/noteKeyUtils';
 import { transposeMeasureRange } from '../utils/transposeUtils';
+import { getTupletClipboardGroup, setTupletClipboardGroup, subscribeTupletClipboard } from '../utils/tupletClipboard';
 import { insertEmptyMeasureBefore, deleteMeasureAt, shiftOverridesStartMeasure } from '../utils/measureInsertDeleteUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { buildIncomingArcIndex } from '../utils/incomingArcUtils';
@@ -572,6 +573,12 @@ export default function ScorePage() {
   const [selectedMeasures, setSelectedMeasures] = useState<{ start: number; end: number } | null>(null);
   // コピーした小節データ。各パートごとのスナップショット
   const [clipboard, setClipboard] = useState<{ partId: string; measures: MeasureData[] }[] | null>(null);
+  // 連符グループがコピーされたら、小節のコピーは捨てる（Issue #234 の「後勝ち」）。
+  // グループのコピーは譜面キャンバス側で起きるため、モジュール側の
+  // クリップボード（utils/tupletClipboard.ts）の変化を購読して受け取る。
+  useEffect(() => subscribeTupletClipboard(() => {
+    if (getTupletClipboardGroup()) setClipboard(null);
+  }), []);
 
   // 選択範囲の移調（トランスポーズ）用の UI 状態
   const [showTransposePanel, setShowTransposePanel] = useState(false);
@@ -1844,6 +1851,9 @@ export default function ScorePage() {
     futureStack.current = [];
     setSelectedMeasures(null);
     setClipboard(null);
+    // 連符グループのクリップボード（Issue #234）も一緒に空にする。
+    // 残っていると、新規譜面で休符をクリックしただけで前の譜面の連符が現れてしまう。
+    setTupletClipboardGroup(null);
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     setPlaybackState('stopped');
     setTitle('タイトル');
@@ -2596,6 +2606,10 @@ export default function ScorePage() {
       // Cmd+C: 選択中の小節をコピー
       if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
         if (!selectedMeasures) return;
+        // クリップボードは「最後にコピーしたもの」だけを持つ後勝ちにする（Issue #234）。
+        // 連符グループのコピーが残ったままだと、休符クリックがそちらの貼り付けに
+        // 化けたままになるため、小節をコピーした時点で捨てる。
+        setTupletClipboardGroup(null);
         const { start, end } = selectedMeasures;
         const slice = (arr: MeasureData[] | undefined) =>
           (arr ?? []).slice(start, end + 1);
