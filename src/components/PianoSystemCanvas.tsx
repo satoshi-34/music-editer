@@ -29,6 +29,13 @@ import { computeArcGeometry, computeArcHitGeometry } from './arcUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
+import {
+  SCORE_SELECTION_CLEAR_EVENT,
+  describeDeletedArc,
+  describeDeletedHairpin,
+  describeDeletedNoteEvent,
+  notifyScoreEdit,
+} from '../utils/scoreEditorNotices';
 import { computeShiftedKeys, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
   parseTimeSignatureInput,
@@ -1419,6 +1426,13 @@ export default function PianoSystemCanvas({
 
   useEffect(()=>{selRef.current=selected;},[selected]);
 
+  // キーボードハンドラは deps [] で1回だけ登録するため、そのままでは初回レンダー時の
+  // partsScore しか見えない（＝古い譜面を読んでしまう）。削除の通知文（何を消したか）を
+  // 組み立てるのに「いま画面にある譜面」が要るので、selRef と同じやり方で鏡を持つ。
+  // 読み取り専用の用途に限る（書き換えは従来どおり setPartsScore の updater で行う）。
+  const partsScoreRef = useRef<MeasureData[][]>(partsScore);
+  useEffect(()=>{partsScoreRef.current=partsScore;},[partsScore]);
+
   // 声部を切り替えたら、いま選んでいる弧・松葉が別の声部のものになった場合は選択を解除する（Issue #190）。
   // 弧を掴めるのはアクティブ声部のものだけなので、選択だけが残ると
   // 「青いまま掴めない」「見えていない声部の弧が Delete で消える」というちぐはぐな状態になる。
@@ -1449,6 +1463,22 @@ export default function PianoSystemCanvas({
     };
     window.addEventListener(SELECTION_CLAIMED_EVENT, onClaim);
     return () => window.removeEventListener(SELECTION_CLAIMED_EVENT, onClaim);
+  }, []);
+
+  // モードが変わったら選択を手放す（Issue #238）。
+  // タブ切り替え・ツール変更・再生開始で ScorePage から要求が飛んでくる。
+  // 選択（青枠）が残ったままだと、そのあとユーザーが「入力欄を消すつもり」で押した
+  // Delete / Backspace が譜面へ届き、音符が無言で消えてしまうため。
+  // 音符だけでなくスラー/タイ・松葉の選択も同時に解除する（どれも Delete の対象になるので、
+  // 1つだけ残すと同じ事故が形を変えて起きる）。
+  useEffect(() => {
+    const onClearRequest = () => {
+      setSelected(null);
+      setSelectedArc(null);
+      setSelectedHairpin(null);
+    };
+    window.addEventListener(SCORE_SELECTION_CLEAR_EVENT, onClearRequest);
+    return () => window.removeEventListener(SCORE_SELECTION_CLEAR_EVENT, onClearRequest);
   }, []);
 
   useEffect(()=>{disRef.current=disabled;},[disabled]);
@@ -1688,6 +1718,13 @@ export default function PianoSystemCanvas({
       const arcSel=selectedArcRef.current;
       if(arcSel){
         if(e.key==='Delete'||e.key==='Backspace'){
+          // 通知文は「消す前の譜面」からしか作れないので、state を書き換える前に組み立てる。
+          // setPartsScore の updater の中で通知すると、React が updater を2回呼ぶ場面
+          // （開発時の StrictMode など）で通知も二重に出てしまう。
+          const arcMeasure=partsScoreRef.current[arcSel.partIndex]?.[arcSel.fromMeasure];
+          const arcKind=arcMeasure
+            ? getVoiceEvents(arcMeasure, arcSel.voiceIndex)[arcSel.fromEvent]?.arcs?.[arcSel.arcIndex]?.kind
+            : undefined;
           setPartsScore(prev=>{
             // 弧が載っている声部の中だけを書き換える（Issue #190）。
             // 声部1（voiceIndex 0）のときは measure.events を触るので従来と同じ挙動になる。
@@ -1705,7 +1742,9 @@ export default function PianoSystemCanvas({
             return next;
           });
           clearArcInteraction();
-          setSelectedArc(null);e.preventDefault();return;
+          setSelectedArc(null);
+          if(arcKind)notifyScoreEdit(describeDeletedArc(arcKind));
+          e.preventDefault();return;
         }
         if(e.key==='Escape'){clearArcInteraction();setSelectedArc(null);e.preventDefault();return;}
       }
@@ -1714,6 +1753,11 @@ export default function PianoSystemCanvas({
       const hpSel=selectedHairpinRef.current;
       if(hpSel){
         if(e.key==='Delete'||e.key==='Backspace'){
+          // 弧と同じく、消す前の譜面から通知文を作っておく（Issue #238）
+          const hpMeasure=partsScoreRef.current[hpSel.partIndex]?.[hpSel.fromMeasure];
+          const hpType=hpMeasure
+            ? getVoiceEvents(hpMeasure, hpSel.voiceIndex)[hpSel.fromEvent]?.hairpins?.[hpSel.hairpinIndex]?.type
+            : undefined;
           setPartsScore(prev=>{
             // 弧と同じく、松葉も「載っている声部」の中だけを書き換える（Issue #190）。
             const partData=updateVoiceEventInMeasures(
@@ -1729,7 +1773,9 @@ export default function PianoSystemCanvas({
             next[hpSel.partIndex]=partData;
             return next;
           });
-          setSelectedHairpin(null);e.preventDefault();return;
+          setSelectedHairpin(null);
+          if(hpType)notifyScoreEdit(describeDeletedHairpin(hpType));
+          e.preventDefault();return;
         }
         if(e.key==='Escape'){setSelectedHairpin(null);e.preventDefault();return;}
       }
@@ -1759,11 +1805,17 @@ export default function PianoSystemCanvas({
       // 流れてしまう恐れがあるため、ここで打ち切る。
       if (sel.voiceIndex) {
         if (e.key === 'Delete' || e.key === 'Backspace') {
+          // 何を消したかの通知文は、書き換える前の譜面から作る（Issue #238）。
+          // 声部2の削除はイベント丸ごとが対象なので keyIndex は渡さない。
+          const targetMeasure = partsScoreRef.current[partIndex]?.[measure];
+          const targetEvent = targetMeasure ? getVoiceEvents(targetMeasure, voiceIndex)[index] : undefined;
           // 声部2の削除は「素の splice」ではなく、弧（タイ/スラー）・松葉の終点まで
           // 面倒を見る共通関数へ通す（Issue #188）。連符グループの置き換えもこの中で行う。
           setS(prev => deleteVoiceEventFromMeasures(prev, sel.voiceIndex!, measure, index, clef));
           closeEventEditOverlaysFor(partIndex, measure, index, voiceIndex);
-          setSelected(null); e.preventDefault(); return;
+          setSelected(null);
+          if (targetEvent) notifyScoreEdit(describeDeletedNoteEvent(targetEvent));
+          e.preventDefault(); return;
         }
         if (e.key === 'Escape') { setSelected(null); e.preventDefault(); return; }
         // ↑↓（音高移動）と 0（休符を標準位置へ戻す）は、下の共通処理が voiceIndex を
@@ -1772,10 +1824,14 @@ export default function PianoSystemCanvas({
       }
 
       if(e.key==='Delete'||e.key==='Backspace'){
+        // 何を消したかの通知文は、書き換える前の譜面から作る（Issue #238）
+        const targetEvent=partsScoreRef.current[partIndex]?.[measure]?.events[index];
         // StaffCanvas と完全一致していた削除ロジックは utils/noteDeletionUtils.ts に共通化した。
         setS(prev=>deleteEventFromMeasures(prev, measure, index, keyIndex, clef));
         closeEventEditOverlaysFor(partIndex, measure, index, voiceIndex);
-        setSelected(null);e.preventDefault();return;
+        setSelected(null);
+        if(targetEvent)notifyScoreEdit(describeDeletedNoteEvent(targetEvent, keyIndex));
+        e.preventDefault();return;
       }
       if(e.key==='ArrowUp'||e.key==='ArrowDown'){
         const up=e.key==='ArrowUp';

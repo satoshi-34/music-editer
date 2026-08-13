@@ -1789,6 +1789,9 @@ button.ghost.active:hover:not(:disabled) {
   .toolbar { display: none !important; }
   /* プレビュー中の編集ロック帯（Issue #88）も画面専用の案内なので印刷には出さない。 */
   .print-preview-lock-banner { display: none !important; }
+  /* 削除の通知（Issue #238）は「いま何が起きたか」を伝える画面専用の一時表示。
+     印刷が始まる瞬間にまだ消えていなくても、紙には出さない。 */
+  .edit-notice { display: none !important; }
   /* 入力を直すための画面上の警告であり、演奏用の印刷譜には出さない。 */
   .layout-overflow-alert { display: none !important; }
   /* 画面専用の「＋小節を追加」ボタンは編集用UIなので印刷には出さない。 */

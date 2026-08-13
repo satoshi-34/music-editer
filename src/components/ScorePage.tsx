@@ -148,6 +148,13 @@ import { isCompoundTimeSignature } from '../utils/swingUtils';
 import { buildPlaybackPositionTimeline, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
+import {
+  SCORE_EDIT_NOTICE_EVENT,
+  describeClearedMeasures,
+  notifyScoreEdit,
+  requestScoreSelectionClear,
+  type ScoreEditNoticeDetail,
+} from '../utils/scoreEditorNotices';
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrintableMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, isPartExtractionEditable, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
@@ -259,6 +266,10 @@ const ENSEMBLE_AUTO_FIT_BUDGET_PX = 297 * (96 / 25.4) - (DEFAULT_PAGE_MARGIN_TOP
 const SILENT_FAILURE_CHECK_DELAY_MS = 600;
 // 自動復旧（エンジン再作成）の連発防止。これより短い間隔で再検知したら手動復旧へ誘導する。
 const SILENT_RECOVERY_COOLDOWN_MS = 30_000;
+// 削除通知（Issue #238）を出しておく時間。
+// 「入力のテンポを削がない」のが方針なので、目に入るだけの短さにとどめる。
+// 保存通知（3秒）より少し長いのは、消えたものを探して譜面へ目を戻す時間を見込んでいるため。
+const EDIT_NOTICE_DURATION_MS = 4000;
 const DEFAULT_CUSTOM_PART: Omit<InstrumentPartDefinition, 'id' | 'order'> = {
   name: 'New Part',
   abbreviation: 'Part',
@@ -440,6 +451,11 @@ export default function ScorePage() {
   // 自動では消さず、ユーザーが気づけるまで表示し続ける。
   const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; isError: boolean } | null>(null);
   const feedbackNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 削除など「譜面が変わった」ことを数秒だけ知らせる控えめな通知（Issue #238）。
+  // 確認ダイアログは出さない方針なので（入力のテンポを削がない）、
+  // 起きたことを後から気づける形にするのがこの表示の役割。
+  const [editNotice, setEditNotice] = useState<string | null>(null);
+  const editNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(180);
   const toolbarRef = useRef<HTMLElement | null>(null);
   // ツールバーの折り畳み状態（Issue #125）。true のときタブ・Undo/Redo・パネルを隠し、
@@ -1065,6 +1081,10 @@ export default function ScorePage() {
   }, []);
 
   const handlePlay = useCallback(async () => {
+    // 再生は「編集の手を止めて聴く」モードへの切り替えなので、譜面の選択も手放す（Issue #238）。
+    // 再生中は音を聴きながらキーを触りがちで、選択が残っていると Delete が譜面へ届いてしまう。
+    // 一時停止からの再開もモードの切り替わりなので、分岐の手前でまとめて解除する。
+    requestScoreSelectionClear();
     try {
       if (playbackState === 'paused') {
         // paused からの再生は「最初から」ではなく AudioContext の resume。
@@ -2641,6 +2661,9 @@ export default function ScorePage() {
         }
         // 削除した範囲の先頭を「最後に編集した小節」として記録する（Issue #67）。
         setLastEditedMeasureIndex(start);
+        // 小節まるごとの削除も「何を消したか」を知らせる（Issue #238）。
+        // 選択した小節の音符が全パートぶん消えるので、音符1つの削除より影響が大きい。
+        notifyScoreEdit(describeClearedMeasures(start, end));
         e.preventDefault();
         return;
       }
@@ -3775,6 +3798,28 @@ export default function ScorePage() {
     }
   }, [activeToolbarTab, tool]);
 
+  // 譜面側（PianoSystemCanvas）から届く「何を消したか」の通知を受け取り、数秒だけ表示する（Issue #238）。
+  // 譜面は段ごとに別インスタンスなので、通知は window の CustomEvent 経由で1本にまとめている
+  // （詳しい理由は utils/scoreEditorNotices.ts の冒頭コメント参照）。
+  useEffect(() => {
+    const onNotice = (e: Event) => {
+      const message = (e as CustomEvent<ScoreEditNoticeDetail>).detail?.message;
+      if (!message) return;
+      setEditNotice(message);
+      // 連続で削除したときに前のタイマーで早く消えないよう、毎回貼り直す
+      if (editNoticeTimerRef.current) clearTimeout(editNoticeTimerRef.current);
+      editNoticeTimerRef.current = setTimeout(() => {
+        editNoticeTimerRef.current = null;
+        setEditNotice(null);
+      }, EDIT_NOTICE_DURATION_MS);
+    };
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    return () => {
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+      if (editNoticeTimerRef.current) clearTimeout(editNoticeTimerRef.current);
+    };
+  }, []);
+
   // タブを切り替えるときのハンドラ。
   // 「演奏記号」タブなどで「途中テンポ変更」のような編集オーバーレイ系ツールを選んだまま
   // タブを切り替えると、選択中ツールがそのまま残ってしまい、次に譜面をクリックしたときに
@@ -3784,6 +3829,10 @@ export default function ScorePage() {
   // （毎回4分音符に戻ると不自然なため）。
   const handleToolbarTabChange = (tabId: ToolbarTab) => {
     if (tabId === activeToolbarTab) return;
+    // タブを変えたら譜面の選択も手放す（Issue #238）。
+    // 選択（青枠）が残ったままだと、別タブの入力欄を触っているつもりで押した
+    // Delete / Backspace が譜面へ届き、音符が無言で消えてしまう。
+    requestScoreSelectionClear();
     setActiveToolbarTab(tabId);
     if (tabId === 'notes') {
       setTool(lastNotesToolRef.current);
@@ -3794,6 +3843,15 @@ export default function ScorePage() {
       setTool({ duration: '4', isRest: false });
     }
   };
+
+  // パレットでツールを選び直したときのハンドラ（Issue #238）。
+  // ツールを変えるのは「次に何をするか」を決めた合図なので、直前に選んでいた音符は手放す。
+  // ここで解除しておかないと、たとえば休符ツールへ持ち替えたあとの Delete が
+  // 選択されたままの音符に届いてしまう。
+  const handleToolChange = useCallback((next: Tool) => {
+    requestScoreSelectionClear();
+    setTool(next);
+  }, []);
 
   // ツールバーの折り畳み／展開を切り替える（Issue #125）。
   // 中身は display:none で隠すだけにして React 側のアンマウントはしない。
@@ -3925,7 +3983,7 @@ export default function ScorePage() {
         <div className="toolbar-panel" id="toolbar-panel">
           {activeToolbarTab === 'notes' && (
             <div className="toolbar-section">
-              <Palette value={tool} onChange={setTool} section="notes" />
+              <Palette value={tool} onChange={handleToolChange} section="notes" />
               {scoreType === 'piano' && (
                 // ピアノ譜だけ声部切り替えトグルを出す。単旋律譜・弦楽四重奏などは
                 // 声部2の入力先（下声パート）という概念自体がないため出さない。
@@ -3985,7 +4043,7 @@ export default function ScorePage() {
             <div className="toolbar-section">
               <Palette
                 value={tool}
-                onChange={setTool}
+                onChange={handleToolChange}
                 section="symbols"
                 customSymbolDefs={customSymbolDefs}
                 onOpenSymbolEditor={() => setShowSymbolEditor(true)}
@@ -4787,6 +4845,34 @@ export default function ScorePage() {
         <p className="print-preview-lock-banner" role="status">
           印刷プレビュー中は譜面の編集はできません（余白・間隔などの設定変更は可能です）
         </p>
+      )}
+
+      {editNotice && (
+        // 削除の通知（Issue #238）。確認ダイアログは出さずに「起きたこと」だけ知らせる。
+        // 保存の状態表示は画面右下にあるので、重ならないよう下端の中央に出す。
+        // pointerEvents: 'none' で譜面のクリックを一切邪魔しない。
+        <div
+          className="edit-notice"
+          data-testid="edit-notice"
+          role="status"
+          style={{
+            position: 'fixed',
+            bottom: 8,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 1000,
+            fontSize: 12,
+            color: '#333',
+            background: 'rgba(255,255,255,0.92)',
+            border: '1px solid #d0d0d0',
+            borderRadius: 4,
+            padding: '4px 12px',
+            pointerEvents: 'none',
+            maxWidth: '90vw',
+          }}
+        >
+          {editNotice}
+        </div>
       )}
 
       {confirmDialog && (
