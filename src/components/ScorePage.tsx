@@ -508,9 +508,24 @@ export default function ScorePage() {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
     fileSaveWarningTimerRef.current = setTimeout(() => setFileSaveWarning(null), 10000);
   }, []);
+  // 「保存」ボタン（手動保存）の結果表示（Issue #229 のファイル保存とは別経路・Issue #236）。
+  // 自動保存インジケータと同じ場所・同じ体裁で数秒だけ出すため、状態だけをここで持つ。
+  const [manualSaveStatus, setManualSaveStatus] = useState<'idle' | 'saved' | 'failed'>('idle');
+  const manualSaveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showManualSaveStatus = useCallback((status: 'saved' | 'failed') => {
+    setManualSaveStatus(status);
+    if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
+    // 成功は自動保存の通知と同じ 3 秒。失敗は「なぜ保存できなかったか」の詳細
+    // （赤いエラー表示）まで目を移してもらう必要があるため、長めに 10 秒残す。
+    manualSaveStatusTimerRef.current = setTimeout(
+      () => setManualSaveStatus('idle'),
+      status === 'saved' ? 3000 : 10000
+    );
+  }, []);
   // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける
   useEffect(() => () => {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
+    if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
   }, []);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
@@ -1811,6 +1826,9 @@ export default function ScorePage() {
     if (saved) {
       setStoredDataAvailable(true);
     }
+    // 成否のどちらでも画面に結果を出す（Issue #236）。以前は保存できても画面が
+    // まったく変わらず、押した本人に「保存されたのか」が分からなかった。
+    showManualSaveStatus(saved ? 'saved' : 'failed');
   };
 
   /**
@@ -4594,6 +4612,7 @@ export default function ScorePage() {
                 canSaveCurrentAsSample={scoreType === 'piano'}
                 hasCustomPianoSample={hasCustomPianoSample}
                 autoSaveStatus={autoSaveStatus}
+                manualSaveStatus={manualSaveStatus}
                 restoreNotice={restoreNotice}
                 warningNotice={fileSaveWarning}
                 error={workError ?? error}
