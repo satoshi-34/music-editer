@@ -47,16 +47,20 @@ function openResetMenu() {
   fireEvent.click(screen.getByTestId('layout-reset-menu-toggle'));
 }
 
-// 「新規作成」ボタンは「その他」タブ（SaveLoadButtons）にあるため、そちらへ切り替えてから押す
+// 「新規作成」ボタンは「その他」タブ（SaveLoadButtons）にあるため、そちらへ切り替えてから押す。
+// Issue #221 で確認が window.confirm からアプリ内ダイアログへ変わったので、
+// 続けてダイアログの OK まで押して初めて新規作成が走る。
 function clickNewScore() {
   fireEvent.click(screen.getByRole('tab', { name: 'その他' }));
   fireEvent.click(screen.getByRole('button', { name: '新規作成' }));
+  fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
 }
 
 describe('譜面設定の初期値プリセット', () => {
   beforeEach(() => {
     localStorageMock.clear();
-    // 新規作成の確認ダイアログは常に「はい」を選んだことにする
+    // jsdom の window.confirm は未実装で呼ぶと例外になるため、念のため差し替えておく
+    // （新規作成の確認は Issue #221 でアプリ内ダイアログへ移行し、confirm には依存しない）
     vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
 

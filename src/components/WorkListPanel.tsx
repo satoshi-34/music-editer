@@ -31,7 +31,10 @@ export default function WorkListPanel({
 }: WorkListPanelProps) {
   const handleDelete = (work: WorkSummary) => {
     // 削除は取り消せないので必ず確認を挟む（Issue #109 / #181 の受入条件）。
-    // 「新規作成」と同じ window.confirm を使い、確認の見た目をアプリ内でそろえる。
+    // ここはまだ window.confirm のまま。「新規作成」は Issue #221 でアプリ内の
+    // ConfirmDialog へ置き換えたが、同 Issue の対象は新規作成のみだった。
+    // 埋め込みブラウザでは confirm が表示されず削除できない（＝安全側に倒れる）ため、
+    // 置き換えの残件として .claude/specs/score-new-document/design.md に記録している。
     const ok = window.confirm(
       `作品「${formatWorkTitle(work.title)}」を削除します。この操作は取り消せません。よろしいですか？`
     );

@@ -1105,6 +1105,61 @@ button.ghost.active:hover:not(:disabled) {
   margin-left: auto;
 }
 
+/* アプリ内の確認ダイアログ（Issue #221）。window.confirm が表示されない
+   埋め込みブラウザでも確認できるよう、自前で描く。document.body 直下へ
+   portal されるため、ツールバーの overflow やページ拡縮の transform の
+   影響を受けない。カスタム記号エディタ（SymbolEditor）と同じ見た目にそろえている。 */
+.confirm-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  /* SymbolEditor（2000）より上に出す。確認中は他の操作をさせないため */
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+}
+.confirm-dialog {
+  box-sizing: border-box;
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.35);
+  padding: 20px;
+}
+.confirm-dialog-message {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: #111827;
+  /* 長い確認文でも読めるよう、折り返しを明示する（ツールバー側の
+     white-space: nowrap を継承しないため） */
+  white-space: normal;
+}
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.confirm-dialog-actions button {
+  height: 32px;
+  padding: 0 16px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.confirm-dialog-ok {
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+.confirm-dialog-ok:hover {
+  background: #1d4ed8;
+}
+
 .dropdown-overlay {
   position: fixed;
   /* top: 0 だとヘッダー（.toolbar, z-index: 20）より上にこの透明レイヤーが
