@@ -4,6 +4,7 @@ import type { NoteEvent } from '../types/storage';
 import {
   buildTupletGroupPlan,
   buildTupletRestReplacement,
+  canInheritRestDisplayKey,
   generateTupletId,
   planTupletGroupDeletion,
   planTupletReplacementForRest,
@@ -167,7 +168,7 @@ describe('tupletUtils', () => {
     it('連符内イベントを削除しようとするとグループ全体を実長と同じ通常休符に置き換える', () => {
       const plan = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4');
       const events: NoteEvent[] = [...plan.groupEvents];
-      const deletion = planTupletGroupDeletion(events, 1, 'b/4');
+      const deletion = planTupletGroupDeletion(events, 1, 'treble');
       expect(deletion).not.toBeNull();
       expect(deletion!.groupStart).toBe(0);
       expect(deletion!.groupEnd).toBe(2);
@@ -178,16 +179,83 @@ describe('tupletUtils', () => {
 
     it('連符ではないイベントには null を返す', () => {
       const events: NoteEvent[] = [{ dur: '4', isRest: false, keys: ['c/4'] }];
-      expect(planTupletGroupDeletion(events, 0, 'b/4')).toBeNull();
+      expect(planTupletGroupDeletion(events, 0, 'treble')).toBeNull();
     });
 
     it('他の連符グループが前後に隣接していても自グループだけを対象にする', () => {
       const planA = buildTupletGroupPlan('16', undefined, ['c/4'], 'b/4');
       const planB = buildTupletGroupPlan('8', undefined, ['e/4'], 'b/4');
       const events: NoteEvent[] = [...planA.groupEvents, ...planB.groupEvents];
-      const deletion = planTupletGroupDeletion(events, 3, 'b/4');
+      const deletion = planTupletGroupDeletion(events, 3, 'treble');
       expect(deletion!.groupStart).toBe(3);
       expect(deletion!.groupEnd).toBe(5);
+    });
+
+    // ===== Issue #226: 消した音の音高をそのまま休符位置にすると異常位置の休符が生まれる =====
+
+    it('五線から極端に離れた音高（ト音の c#/2）のグループを消すと、休符は音価ごとの標準位置になる', () => {
+      const plan = buildTupletGroupPlan('8', undefined, ['c#/2'], 'b/4');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'treble');
+      // 引き継がず、4分休符の標準位置（ト音の五線中央 = b/4）へフォールバックする
+      expect(deletion!.replacement).toEqual([{ dur: '4', isRest: true, keys: ['b/4'] }]);
+    });
+
+    it('五線に近い音高（下方1加線の c/4）はそのまま引き継ぐ', () => {
+      const plan = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'treble');
+      expect(deletion!.replacement).toEqual([{ dur: '4', isRest: true, keys: ['c/4'] }]);
+    });
+
+    it('範囲判定は音部記号ごとに行う（ヘ音記号なら c/2 は範囲内でそのまま引き継ぐ）', () => {
+      const plan = buildTupletGroupPlan('8', undefined, ['c/2'], 'd/3');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'bass');
+      expect(deletion!.replacement).toEqual([{ dur: '4', isRest: true, keys: ['c/2'] }]);
+    });
+
+    it('範囲外へのフォールバックでは、全休符だけ第4線ぶら下げの標準位置になる', () => {
+      // 4分音符の3連符 = 実長2分音符ぶん…ではなく、ここでは全休符が出る長さを作るために
+      // 全音符3つの3連符（実長 = 全音符2つぶん = 8拍）を消す。
+      // 4/4 の1小節を超える長さだが、planTupletGroupDeletion は拍数の分解だけを行う純関数なので成立する。
+      const plan = buildTupletGroupPlan('1', undefined, ['c#/2'], 'b/4');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'treble');
+      expect(deletion!.replacement).toEqual([
+        { dur: '1', isRest: true, keys: ['d/5'] },
+        { dur: '1', isRest: true, keys: ['d/5'] },
+      ]);
+    });
+
+    it('キーが壊れている（解釈できない文字列）ときも標準位置へフォールバックする', () => {
+      // keyToLine は解釈できないキーに 2（五線中央）を返すため、
+      // 妥当性チェックを飛ばすと「壊れたキーは範囲内」と誤判定してそのまま保存してしまう。
+      const plan = buildTupletGroupPlan('8', undefined, ['zz'], 'b/4');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'treble');
+      expect(deletion!.replacement).toEqual([{ dur: '4', isRest: true, keys: ['b/4'] }]);
+    });
+
+    it('グループ先頭に keys が無いときも標準位置へフォールバックする', () => {
+      const plan = buildTupletGroupPlan('8', undefined, [], 'b/4');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'treble');
+      expect(deletion!.replacement).toEqual([{ dur: '4', isRest: true, keys: ['b/4'] }]);
+    });
+  });
+
+  describe('canInheritRestDisplayKey', () => {
+    it('五線 ±2加線の内側は引き継ぎ可（ト音: 上方2加線 c/6 〜 下方2加線 a/3）', () => {
+      expect(canInheritRestDisplayKey('treble', 'b/4')).toBe(true); // 五線中央
+      expect(canInheritRestDisplayKey('treble', 'c/6')).toBe(true); // 上方2加線ちょうど
+      expect(canInheritRestDisplayKey('treble', 'a/3')).toBe(true); // 下方2加線ちょうど
+    });
+
+    it('五線 ±2加線より外は引き継ぎ不可', () => {
+      expect(canInheritRestDisplayKey('treble', 'e/6')).toBe(false); // 上方3加線
+      expect(canInheritRestDisplayKey('treble', 'f/3')).toBe(false); // 下方3加線
+      expect(canInheritRestDisplayKey('treble', 'c#/2')).toBe(false); // Issue #226 の実測ケース
+    });
+
+    it('未定義・空文字・壊れたキーは引き継ぎ不可', () => {
+      expect(canInheritRestDisplayKey('treble', undefined)).toBe(false);
+      expect(canInheritRestDisplayKey('treble', '')).toBe(false);
+      expect(canInheritRestDisplayKey('treble', 'h/4')).toBe(false);
     });
   });
 });

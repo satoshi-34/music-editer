@@ -13,14 +13,14 @@ function measures(...evs: NoteEvent[][]): MeasureData[] {
 describe('deleteEventFromMeasures', () => {
   it('通常削除: 単音イベントを1件削除する', () => {
     const ms = measures([ev({ keys: ['c/4'] }), ev({ keys: ['d/4'] })]);
-    const next = deleteEventFromMeasures(ms, 0, 0, undefined, 'b/4');
+    const next = deleteEventFromMeasures(ms, 0, 0, undefined, 'treble');
     expect(next[0].events).toHaveLength(1);
     expect(next[0].events[0].keys).toEqual(['d/4']);
   });
 
   it('和音1音削除: keyIndex指定でその音だけ除去する', () => {
     const ms = measures([ev({ keys: ['c/4', 'e/4', 'g/4'] })]);
-    const next = deleteEventFromMeasures(ms, 0, 0, 1, 'b/4');
+    const next = deleteEventFromMeasures(ms, 0, 0, 1, 'treble');
     expect(next[0].events[0].keys).toEqual(['c/4', 'g/4']);
     expect(next[0].events).toHaveLength(1); // イベント自体は消えない
   });
@@ -36,7 +36,7 @@ describe('deleteEventFromMeasures', () => {
       }),
       ev({ keys: ['c/4', 'e/4'] }),
     ]);
-    const next = deleteEventFromMeasures(ms, 0, 0, 1, 'b/4');
+    const next = deleteEventFromMeasures(ms, 0, 0, 1, 'treble');
     expect(next[0].events[0].arcs).toEqual([
       { fromKey: 'c/4', toKey: 'c/4', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' },
     ]);
@@ -50,7 +50,7 @@ describe('deleteEventFromMeasures', () => {
       }),
       ev({ keys: ['c/4', 'e/4'] }),
     ]);
-    const next = deleteEventFromMeasures(ms, 0, 1, 1, 'b/4');
+    const next = deleteEventFromMeasures(ms, 0, 1, 1, 'treble');
     expect(next[0].events[0].arcs).toBeUndefined();
   });
 
@@ -66,7 +66,7 @@ describe('deleteEventFromMeasures', () => {
       ev({ keys: ['d/4'] }),
       ev({ keys: ['g/4'] }),
     ]);
-    const next = deleteEventFromMeasures(ms, 0, 1, undefined, 'b/4');
+    const next = deleteEventFromMeasures(ms, 0, 1, undefined, 'treble');
     expect(next[0].events).toHaveLength(2);
     expect(next[0].events[0].arcs).toEqual([
       { fromKey: 'c/4', toKey: 'g/4', toMeasureIndex: 0, toEventIndex: 1, kind: 'slur' },
@@ -85,7 +85,7 @@ describe('deleteEventFromMeasures', () => {
       ev({ keys: ['d/4'] }),
       ev({ keys: ['g/4'] }),
     ]);
-    const next = deleteEventFromMeasures(ms, 0, 1, undefined, 'b/4');
+    const next = deleteEventFromMeasures(ms, 0, 1, undefined, 'treble');
     expect(next[0].events[0].hairpins).toEqual([{ type: 'dim', endMeasure: 0, endEvent: 1 }]);
   });
 
@@ -96,7 +96,7 @@ describe('deleteEventFromMeasures', () => {
       ev({ dur: '8', isRest: true, keys: ['c/4'], tuplet }),
       ev({ dur: '8', isRest: true, keys: ['c/4'], tuplet }),
     ]);
-    const next = deleteEventFromMeasures(ms, 0, 1, undefined, 'b/4');
+    const next = deleteEventFromMeasures(ms, 0, 1, undefined, 'treble');
     expect(next[0].events.every((e) => !e.tuplet)).toBe(true);
     expect(next[0].events.every((e) => e.isRest)).toBe(true);
   });
@@ -177,12 +177,12 @@ describe('deleteEventFromMeasures', () => {
 
   it('範囲外の measure は no-op で元の参照を返す', () => {
     const ms = measures([ev()]);
-    expect(deleteEventFromMeasures(ms, 5, 0, undefined, 'b/4')).toBe(ms);
+    expect(deleteEventFromMeasures(ms, 5, 0, undefined, 'treble')).toBe(ms);
   });
 
   it('範囲外の index は no-op で元の参照を返す', () => {
     const ms = measures([ev()]);
-    expect(deleteEventFromMeasures(ms, 0, 5, undefined, 'b/4')).toBe(ms);
+    expect(deleteEventFromMeasures(ms, 0, 5, undefined, 'treble')).toBe(ms);
   });
 
   it('声部2の arcs は声部1の削除で書き換えない（声部ローカルの索引・案A）', () => {
@@ -202,7 +202,7 @@ describe('deleteEventFromMeasures', () => {
         },
       ],
     }];
-    const next = deleteEventFromMeasures(ms, 0, 0, undefined, 'b/4');
+    const next = deleteEventFromMeasures(ms, 0, 0, undefined, 'treble');
     expect(next[0].voices?.[1].events[0].arcs).toEqual([
       { fromKey: 'c/3', toKey: 'e/3', toMeasureIndex: 0, toEventIndex: 2, kind: 'tie' },
     ]);
@@ -233,7 +233,7 @@ describe('deleteVoiceEventFromMeasures', () => {
         ev({ keys: ['d/3'] }),
       ],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'b/4');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
     expect(next[0].voices?.[1].events).toHaveLength(1);
     expect(next[0].voices?.[1].events[0].arcs).toBeUndefined();
     // 声部1（measure.events / voices[0]）は参照ごと据え置き
@@ -250,7 +250,7 @@ describe('deleteVoiceEventFromMeasures', () => {
         ev({ keys: ['e/3'] }),
       ],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'b/4');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
     const voice2 = next[0].voices![1].events;
     expect(voice2).toHaveLength(2);
     expect(voice2[0].arcs).toEqual([
@@ -273,7 +273,7 @@ describe('deleteVoiceEventFromMeasures', () => {
         ev({ keys: ['g/3'] }),
       ],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'b/4');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
     const voice2 = next[0].voices![1].events;
     expect(voice2).toHaveLength(3); // 休符1 + f/3 + g/3
     expect(voice2[0].isRest).toBe(true);
@@ -295,7 +295,7 @@ describe('deleteVoiceEventFromMeasures', () => {
         ev({ dur: '8', keys: ['e/3'], tuplet }),
       ],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 2, 'b/4');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 2, 'treble');
     expect(next[0].voices?.[1].events[0].arcs).toBeUndefined();
   });
 
@@ -304,7 +304,7 @@ describe('deleteVoiceEventFromMeasures', () => {
       twoVoiceMeasure([ev({ keys: ['c/5'] })], [ev({ keys: ['c/3'] }), ev({ keys: ['d/3'] })]),
       { events: [ev({ keys: ['g/4'] })] },
     ];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, 'b/4');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, 'treble');
     expect(next[1].voices).toBeUndefined();
     expect(next[1]).toBe(ms[1]); // 触っていない小節は参照ごと据え置き
   });
@@ -317,7 +317,7 @@ describe('deleteVoiceEventFromMeasures', () => {
       ),
       twoVoiceMeasure([ev({ keys: ['d/5'] })], [ev({ keys: ['d/3'] }), ev({ keys: ['e/3'] })]),
     ];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 1, 0, 'b/4');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 1, 0, 'treble');
     expect(next[0].voices?.[1].events[0].arcs).toEqual([
       { fromKey: 'c/3', toKey: 'e/3', toMeasureIndex: 1, toEventIndex: 0, kind: 'tie' },
     ]);
@@ -338,7 +338,7 @@ describe('deleteVoiceEventFromMeasures', () => {
         ev({ keys: ['e/3'] }),
       ],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'b/4');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
     expect(next[0].voices?.[1].events[0].hairpins).toEqual([{ type: 'dim', endMeasure: 0, endEvent: 1 }]);
   });
 
@@ -351,7 +351,7 @@ describe('deleteVoiceEventFromMeasures', () => {
       ],
       [ev({ keys: ['c/3'] }), ev({ keys: ['d/3'] }), ev({ keys: ['e/3'] })],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'b/4');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
     expect(next[0].events[0].arcs).toEqual([
       { fromKey: 'c/5', toKey: 'e/5', toMeasureIndex: 0, toEventIndex: 2, kind: 'slur' },
     ]);
@@ -360,14 +360,14 @@ describe('deleteVoiceEventFromMeasures', () => {
 
   it('範囲外（小節・索引・声部なし）は no-op で元の参照を返す', () => {
     const ms: MeasureData[] = [twoVoiceMeasure([ev()], [ev()])];
-    expect(deleteVoiceEventFromMeasures(ms, 1, 5, 0, 'b/4')).toBe(ms);
-    expect(deleteVoiceEventFromMeasures(ms, 1, 0, 5, 'b/4')).toBe(ms);
-    expect(deleteVoiceEventFromMeasures([{ events: [ev()] }], 1, 0, 0, 'b/4')).toHaveLength(1);
+    expect(deleteVoiceEventFromMeasures(ms, 1, 5, 0, 'treble')).toBe(ms);
+    expect(deleteVoiceEventFromMeasures(ms, 1, 0, 5, 'treble')).toBe(ms);
+    expect(deleteVoiceEventFromMeasures([{ events: [ev()] }], 1, 0, 0, 'treble')).toHaveLength(1);
   });
 
   it('voiceIndex=0 を渡したときは声部1向けの削除に委譲する', () => {
     const ms = measures([ev({ keys: ['c/4'] }), ev({ keys: ['d/4'] })]);
-    const next = deleteVoiceEventFromMeasures(ms, 0, 0, 0, 'b/4');
+    const next = deleteVoiceEventFromMeasures(ms, 0, 0, 0, 'treble');
     expect(next[0].events).toHaveLength(1);
     expect(next[0].events[0].keys).toEqual(['d/4']);
   });
@@ -381,7 +381,7 @@ describe('deleteVoiceEventFromMeasures', () => {
       ],
     )];
     const before = JSON.stringify(ms);
-    deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'b/4');
+    deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
     expect(JSON.stringify(ms)).toBe(before);
   });
 });

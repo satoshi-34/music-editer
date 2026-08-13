@@ -79,6 +79,14 @@ export const ENGRAVING_TEXT_SP = {
   dynamics: 2.0,
   /** cresc. / dim. とテンポ表記（Allegro 等）。強弱記号と同じ 1.25 倍を掛けた値 */
   expressiveText: 1.5,
+  /**
+   * 運指（指番号）。Issue #232: 運用者が実機（月光の入力）で見比べて
+   * **従来の 180%**（1.0 sp = 10 u → 1.8 sp = 18 u）を選定した実測値。
+   *
+   * 候補A（Bravura の engravingDefaults 準拠）由来ではなく運用者の選定値なので、
+   * `ab-preview.js` の `PRESETS.a` との一致チェックの対象ではない。
+   */
+  fingering: 1.8,
 } as const;
 
 /** 線の太さ（SVG論理単位）。描画側はこちらを使う。 */
@@ -100,6 +108,7 @@ export const ENGRAVING_TEXT_UNITS = {
   lyrics: spToUnits(ENGRAVING_TEXT_SP.lyrics),
   dynamics: spToUnits(ENGRAVING_TEXT_SP.dynamics),
   expressiveText: spToUnits(ENGRAVING_TEXT_SP.expressiveText),
+  fingering: spToUnits(ENGRAVING_TEXT_SP.fingering),
 } as const;
 
 /**

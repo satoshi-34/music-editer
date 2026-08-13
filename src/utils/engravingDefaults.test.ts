@@ -71,6 +71,13 @@ describe('浄書の既定値が候補A（ab-preview.js の PRESETS.a）と一致
     );
   });
 
+  it('運指は運用者が実機で選定した「従来の180%」（Issue #232）', () => {
+    // 変更前は 10 u（= 1.0 sp）のハードコード。180% なので 18 u（= 1.8 sp）。
+    // 候補A由来ではないので PRESETS.a との一致チェックには含めない。
+    expect(ENGRAVING_TEXT_SP.fingering).toBeCloseTo(1.0 * 1.8, 10);
+    expect(ENGRAVING_TEXT_UNITS.fingering).toBeCloseTo(18, 10);
+  });
+
   it('sp → SVG論理単位の換算が 1 sp = 10 u', () => {
     expect(UNITS_PER_STAFF_SPACE).toBe(10);
     expect(spToUnits(0.13)).toBeCloseTo(1.3, 10);

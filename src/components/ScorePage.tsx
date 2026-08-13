@@ -485,6 +485,20 @@ export default function ScorePage() {
   // 起動時復元の結果を短く画面に伝えるための通知文（3秒ほどで自動的に消す）
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
   const restoreNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ファイル保存で「選んだ場所へ書き込めずダウンロードで代替した」ことを知らせる警告文（Issue #229）。
+  // 復元通知（緑）と違い、ユーザーに後始末（空ファイルの削除）をお願いすることがあるため、
+  // 読む時間を確保できるよう表示時間を長めにしている。
+  const [fileSaveWarning, setFileSaveWarning] = useState<string | null>(null);
+  const fileSaveWarningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showFileSaveWarning = useCallback((message: string) => {
+    setFileSaveWarning(message);
+    if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
+    fileSaveWarningTimerRef.current = setTimeout(() => setFileSaveWarning(null), 10000);
+  }, []);
+  // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける
+  useEffect(() => () => {
+    if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
+  }, []);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
 
@@ -1871,8 +1885,22 @@ export default function ScorePage() {
     const { metadata, parts } = buildScoreData();
     const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
-    const handle = await exportScoreToFile(data, title, fileHandleRef.current);
-    if (handle) fileHandleRef.current = handle;
+    const result = await exportScoreToFile(data, title, fileHandleRef.current);
+    if (result.status === 'saved') {
+      fileHandleRef.current = result.handle;
+      return;
+    }
+    // 保存先は選べたのに書き込めなかったときだけ知らせる（Issue #229）。
+    // 何も知らせないと、選択先に残った 0 バイトのファイルを
+    // 「保存できた本物」と誤認してしまう（実際に運用者の実機テストで起きた）。
+    // 非対応ブラウザでの通常のダウンロード（downloaded）とキャンセルは従来どおり無言。
+    if (result.status === 'fallback-download') {
+      showFileSaveWarning(
+        result.leftoverEmptyFile
+          ? '選択した場所へ書き込めなかったため、ダウンロードに保存しました。選択先にできた空のファイルは削除してください'
+          : '選択した場所へ書き込めなかったため、ダウンロードに保存しました'
+      );
+    }
   };
 
   // ファイルから読み込む（.score.json）
@@ -4545,6 +4573,7 @@ export default function ScorePage() {
                 hasCustomPianoSample={hasCustomPianoSample}
                 autoSaveStatus={autoSaveStatus}
                 restoreNotice={restoreNotice}
+                warningNotice={fileSaveWarning}
                 error={workError ?? error}
               />
               {/* 作品一覧（Issue #181）。保存・読込の並びの直後に置き、
