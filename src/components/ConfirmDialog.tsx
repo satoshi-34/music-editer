@@ -48,9 +48,12 @@ export default function ConfirmDialog({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    // どのキーもここで止める。Escape/Enter だけ止める形だと、モーダル表示中の
+    // Delete や矢印キーが window の譜面操作へ伝播し、ダイアログの裏で選択中の
+    // 音符が無言で消える（#238 と同型の回帰。レビュー指摘）。
+    // stopPropagation は Tab のフォーカス移動などブラウザ標準の挙動は妨げない。
+    e.stopPropagation();
     if (e.key === 'Escape') {
-      // 譜面側のキー操作（Delete での削除など）へ伝わらないよう、ここで止める
-      e.stopPropagation();
       settle(onCancel);
       return;
     }
@@ -60,7 +63,6 @@ export default function ConfirmDialog({
       // 標準の押下が起きないことがあるため。preventDefault で標準の押下を止め、
       // それでもクリックが飛んだ場合は settle が二重実行を防ぐ。
       e.preventDefault();
-      e.stopPropagation();
       settle(onConfirm);
     }
   };

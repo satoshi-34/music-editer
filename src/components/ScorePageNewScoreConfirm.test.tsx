@@ -122,6 +122,30 @@ describe('新規作成の確認ダイアログ（Issue #221）', () => {
     expect(screen.getByRole('spinbutton', { name: '段あたり小節数' })).toHaveValue(2);
   });
 
+  it('ダイアログ表示中の Delete・矢印キーは譜面（window）へ伝播しない', () => {
+    // Escape/Enter だけ stopPropagation する形だと、モーダル表示中の Delete や矢印が
+    // window の譜面キー操作へ届き、ダイアログの裏で選択中の音符が無言で消える
+    // （#238 と同型の回帰。レビュー指摘）。全キーがダイアログで止まることを固定する。
+    render(<ScorePage />);
+    clickNewScoreButton();
+
+    const leaked: string[] = [];
+    const listener = (e: KeyboardEvent) => { leaked.push(e.key); };
+    window.addEventListener('keydown', listener);
+    try {
+      const dialog = screen.getByTestId('confirm-dialog');
+      for (const key of ['Delete', 'Backspace', 'ArrowUp', 'ArrowDown', '0']) {
+        fireEvent.keyDown(dialog, { key });
+      }
+    } finally {
+      window.removeEventListener('keydown', listener);
+    }
+
+    expect(leaked).toEqual([]);
+    // ダイアログは開いたまま（Delete 等で閉じたりしない）
+    expect(screen.getByTestId('confirm-dialog')).toBeInTheDocument();
+  });
+
   it('Enter で実行できる', async () => {
     render(<ScorePage />);
     setMeasuresPerSystem('2');
