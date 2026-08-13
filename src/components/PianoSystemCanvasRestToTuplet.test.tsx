@@ -134,22 +134,13 @@ describe('PianoSystemCanvas 休符を連符グループで置き換える（Issu
   }
 
   /**
-   * 休符は「1回目のクリックで選択・2回目で置換」という既存の操作体系なので、
-   * ここでも2回クリックする（Issue #233 でこの2段階そのものが見直される予定）。
+   * 音価ツール（音符側）を選んでいるあいだ、休符の置換は1クリックで確定する（Issue #233）。
+   * 以前は「1回目で選択・2回目で置換」の2段階だったが、三連符主体の曲で入力テンポを
+   * 大きく削いでいたため1クリック化した。
    */
-  async function clickRestTwice(
-    container: HTMLElement,
-    svg: SVGSVGElement,
-    noteIndex: number,
-    line: number
-  ) {
-    const first = noteHit(svg, noteIndex);
-    fireEvent.click(first, { clientX: centerXOf(first), clientY: yForLine(first, line) });
-    await waitFor(() => {
-      expect(container.querySelector('rect.vf-note-selected')).toBeTruthy();
-    });
-    const second = noteHit(svg, noteIndex);
-    fireEvent.click(second, { clientX: centerXOf(second), clientY: yForLine(second, line) });
+  function clickRest(svg: SVGSVGElement, noteIndex: number, line: number) {
+    const hit = noteHit(svg, noteIndex);
+    fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, line) });
   }
 
   it('受入1: 満杯の小節に残った4分休符を3連符ツールでクリックすると連符グループへ置き換わる', async () => {
@@ -161,9 +152,9 @@ describe('PianoSystemCanvas 休符を連符グループで置き換える（Issu
         { dur: '4', isRest: true, keys: ['b/4'] },
       ],
     }];
-    const { container, svg, onChange } = renderScore(data, { duration: '8', isRest: false, tuplet: TRIPLET });
+    const { svg, onChange } = renderScore(data, { duration: '8', isRest: false, tuplet: TRIPLET });
 
-    await clickRestTwice(container, svg, 3, 2);
+    clickRest(svg, 3, 2);
 
     await waitFor(() => {
       expect(onChange).toHaveBeenCalled();
@@ -193,9 +184,9 @@ describe('PianoSystemCanvas 休符を連符グループで置き換える（Issu
         { dur: '2', isRest: true, keys: ['b/4'] },
       ],
     }];
-    const { container, svg, onChange } = renderScore(data, { duration: '8', isRest: false, tuplet: TRIPLET });
+    const { svg, onChange } = renderScore(data, { duration: '8', isRest: false, tuplet: TRIPLET });
 
-    await clickRestTwice(container, svg, 2, 2);
+    clickRest(svg, 2, 2);
 
     await waitFor(() => {
       expect(onChange).toHaveBeenCalled();
@@ -223,11 +214,9 @@ describe('PianoSystemCanvas 休符を連符グループで置き換える（Issu
     }];
     const { svg, onChange } = renderScore(data, { duration: '8', isRest: false, tuplet: TRIPLET });
 
-    // 選択だけは従来どおりできるので、2回クリックしても譜面データは変わらない。
-    const hit = noteHit(svg, 3);
-    fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 2) });
-    const again = noteHit(svg, 3);
-    fireEvent.click(again, { clientX: centerXOf(again), clientY: yForLine(again, 2) });
+    // 置けない休符は、1クリック化（Issue #233）後も何度押しても譜面データが変わらない。
+    clickRest(svg, 3, 2);
+    clickRest(svg, 3, 2);
 
     expect(onChange).not.toHaveBeenCalled();
   });
@@ -240,9 +229,9 @@ describe('PianoSystemCanvas 休符を連符グループで置き換える（Issu
       ],
     }];
     // 8分音符ツール（連符トグル無し）で4分休符をクリック → 8分音符＋8分休符に分割される。
-    const { container, svg, onChange } = renderScore(data, { duration: '8', isRest: false });
+    const { svg, onChange } = renderScore(data, { duration: '8', isRest: false });
 
-    await clickRestTwice(container, svg, 3, 2);
+    clickRest(svg, 3, 2);
 
     await waitFor(() => {
       expect(onChange).toHaveBeenCalled();
@@ -272,9 +261,9 @@ describe('PianoSystemCanvas 休符を連符グループで置き換える（Issu
         quarter('d/5'), quarter('e/5'), quarter('f/5'),
       ],
     }];
-    const { container, svg, onChange } = renderScore(data, { duration: '8', isRest: false, tuplet: TRIPLET });
+    const { svg, onChange } = renderScore(data, { duration: '8', isRest: false, tuplet: TRIPLET });
 
-    await clickRestTwice(container, svg, 1, 4);
+    clickRest(svg, 1, 4);
 
     await waitFor(() => {
       expect(onChange).toHaveBeenCalled();
@@ -294,12 +283,12 @@ describe('PianoSystemCanvas 休符を連符グループで置き換える（Issu
         { dur: '4', isRest: true, keys: ['b/4'] },
       ],
     }];
-    const { container, svg, onChange } = renderScore(data, { duration: '8', isRest: false, tuplet: TRIPLET });
+    const { svg, onChange } = renderScore(data, { duration: '8', isRest: false, tuplet: TRIPLET });
 
     // 置き換え前は連符が1つも無い。
     expect(svg.querySelectorAll('g.vf-tuplet').length).toBe(0);
 
-    await clickRestTwice(container, svg, 3, 2);
+    clickRest(svg, 3, 2);
     await waitFor(() => {
       expect(onChange).toHaveBeenCalled();
     });

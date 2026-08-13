@@ -190,10 +190,13 @@ describe('PianoSystemCanvas 声部2の編集（Issue #112）', () => {
   });
 
   it('声部2の休符を選択して0を押すと、声部2の休符だけが標準位置へ戻る', async () => {
-    const { container, svg, onChange, data } = renderTwoVoiceScore({ duration: '4', isRest: false }, 1);
+    // 休符ツール（音符を置かないツール）を選ぶ。音価ツール（音符側）では
+    // 休符クリックが1クリックで音符へ置き換わってしまい、選択にならないため
+    // （Issue #233 で2段階操作を廃止した）。休符の位置調整・0キーリセットの入口は
+    // 休符ツール側に残してある。
+    const { container, svg, onChange, data } = renderTwoVoiceScore({ duration: '4', isRest: true }, 1);
 
     // 声部2の2つ目（休符）本体をクリックして選択する。
-    // 休符は1回目のクリックで選択、2回目で置換・分割という挙動なので、ここでは1回だけ押す。
     const hit = noteHit(svg, 1);
     fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 2) });
 
