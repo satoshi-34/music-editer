@@ -102,7 +102,17 @@ import {
 } from '../utils/engravingDefaults';
 import { computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
-import { buildTupletGroupPlan, buildTupletRestReplacement, planTupletReplacementForRest, type TupletKind } from '../utils/tupletUtils';
+import {
+  buildTupletGroupPlan,
+  buildTupletRestReplacement,
+  copyTupletGroupForClipboard,
+  instantiateTupletGroup,
+  planTupletGroupPasteIntoRest,
+  planTupletReplacementForRest,
+  tupletGroupBeats,
+  type TupletKind,
+} from '../utils/tupletUtils';
+import { getTupletClipboardGroup, setTupletClipboardGroup } from '../utils/tupletClipboard';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
@@ -1075,6 +1085,11 @@ export default function PianoSystemCanvas({
   };
   const [selected, setSelected] = useState<Sel>(null);
   const selRef = useRef<Sel>(null);
+  // 連符グループのコピー＆ペースト用（Issue #234）。値の更新は下の useEffect でまとめて行う。
+  const activeVoiceIndexRef = useRef<0 | 1>(activeVoiceIndex);
+  const partsScoreRef = useRef<MeasureData[][]>([]);
+  const beatsPerMeasureRef = useRef(beatsPerMeasure);
+  const selectedMeasuresRef = useRef<{ start: number; end: number } | null>(selectedMeasures ?? null);
   const disRef = useRef(disabled);
   // 印刷プレビュー中かどうかをrefでも保持する（capture リスナー内で最新値を参照するため）
   const previewRef = useRef(isPrintPreview);
@@ -1703,6 +1718,12 @@ export default function PianoSystemCanvas({
 
   useEffect(()=>{disRef.current=disabled;},[disabled]);
   useEffect(()=>{previewRef.current=isPrintPreview;},[isPrintPreview]);
+  // 連符グループのコピー＆ペースト（Issue #234）はキーボードハンドラ（deps が空の useEffect）から
+  // 使うため、props/派生値を ref に写しておく。ここを props 直参照にすると、
+  // ハンドラが最初のレンダー時の古い値を握ったままになる。
+  useEffect(()=>{activeVoiceIndexRef.current=activeVoiceIndex;},[activeVoiceIndex]);
+  useEffect(()=>{beatsPerMeasureRef.current=beatsPerMeasure;},[beatsPerMeasure]);
+  useEffect(()=>{selectedMeasuresRef.current=selectedMeasures??null;},[selectedMeasures]);
   // 印刷プレビュー中は譜面SVGへのクリック編集を一括で遮断する。
   // 個々のヒット要素（40箇所超）へ isPrintPreview チェックを足すのではなく、
   // SVGの親コンテナで capture フェーズのうちに stopPropagation することで、
@@ -1723,6 +1744,10 @@ export default function PianoSystemCanvas({
   useEffect(()=>{keySignatureRef.current=normalizedKeySignature;},[normalizedKeySignature]);
   // partsの変更（基本的にない）に追従
   partsClefRef.current = parts.map(p => p.clef);
+  // キーボードハンドラから「いまの譜面データ」を読むための ref（Issue #234 のコピー）。
+  // setPartsScore の updater 内で副作用を起こすと React の二重実行で複製されるため、
+  // 読み取り専用の用途はこちらを使う。
+  partsScoreRef.current = partsScore;
 
   // ピアノ譜 / 四重奏譜でも単旋律譜と同じ経路で音を鳴らす。
   // ここが無いと、画面種別によって「クリックしても鳴る / 鳴らない」が分かれてしまう。
@@ -1989,6 +2014,20 @@ export default function PianoSystemCanvas({
         if(e.key==='Escape'){setSelectedHairpin(null);e.preventDefault();return;}
       }
 
+      // 歌詞・記号調整などの入力欄にフォーカスがあるときは、文字列のコピー＆ペーストを
+      // 邪魔しないよう譜面側のショートカットを一切受け付けない。
+      const eventTarget = e.target as HTMLElement | null;
+      const targetTag = eventTarget?.tagName?.toLowerCase();
+      const isTextInputTarget = targetTag === 'input' || targetTag === 'textarea' || !!eventTarget?.isContentEditable;
+
+      // 優先1.7: Escape で連符グループのコピー状態を解除する（Issue #234）。
+      // グループをコピーしているあいだは休符クリックの意味が「貼り付け」に変わるため、
+      // 音符選択の有無にかかわらず、いつでも通常の入力へ戻れる出口を用意しておく。
+      if(e.key==='Escape'&&!isTextInputTarget&&getTupletClipboardGroup()){
+        setTupletClipboardGroup(null);
+        // 選択の解除（下の処理）も従来どおり続けたいので return しない。
+      }
+
       // 優先2: 音符が選択中 → 音符操作
       const sel=selRef.current;
       if(!sel)return;
@@ -2007,6 +2046,46 @@ export default function PianoSystemCanvas({
       // 選択中の音符がどの声部のものか（未指定＝声部1）。
       // 以降のキー操作はこの値を使って読み書きの対象声部をそろえる。
       const voiceIndex = sel.voiceIndex ?? 0;
+
+      // Cmd/Ctrl+C: 連符グループのコピー（Issue #234）。
+      // 音符を選んだ状態で押すと、その音符が属する連符グループ全体をクリップボードへ入れる。
+      // 小節が選択されているときは従来どおり「小節のコピー」（ScorePage 側のハンドラ）を優先する
+      // ため、ここでは何もしない（両方が同じクリップボードを奪い合わないようにするための線引き）。
+      if((e.metaKey||e.ctrlKey)&&e.key==='c'&&!isTextInputTarget&&!selectedMeasuresRef.current){
+        const events=getVoiceEvents(partsScoreRef.current[partIndex]?.[measure]??{events:[]},voiceIndex);
+        const group=copyTupletGroupForClipboard(events,index);
+        // 連符の外の音符ではコピーするものが無いので、従来どおり何も起きない。
+        if(!group)return;
+        setTupletClipboardGroup(group);
+        e.preventDefault();return;
+      }
+
+      // Cmd/Ctrl+V: コピー済み連符グループを「選択中の音符がある小節の末尾」へ追加する（Issue #234）。
+      // 休符クリックでの貼り付け（下の描画処理側）と違い、小節の空きへ足す経路。
+      // クリップボードが小節コピーのものなら何もしない（ScorePage 側の小節ペーストに任せる）。
+      if((e.metaKey||e.ctrlKey)&&e.key==='v'&&!isTextInputTarget){
+        const group=getTupletClipboardGroup();
+        if(!group)return;
+        // 貼り付け先の声部は「いま編集中の声部」（コピー元の声部は問わない）。
+        const targetVoiceIndex=activeVoiceIndexRef.current;
+        const beatsLimit=beatsPerMeasureRef.current;
+        setS(prev=>{
+          const targetMeasure=prev[measure];
+          if(!targetMeasure)return prev;
+          const events=getVoiceEvents(targetMeasure,targetVoiceIndex);
+          const usedBeats=events.reduce((sum,ev)=>sum+eventOccupiedBeats(ev),0);
+          // 空き拍が足りなければ何もしない（音符の追加と同じ容量チェック）。
+          if(usedBeats+tupletGroupBeats(group)>beatsLimit+0.000001)return prev;
+          const next=[...prev];
+          next[measure]=withVoiceEventsUpdated(targetMeasure,targetVoiceIndex,(evs)=>[
+            ...evs,
+            // 貼り付けるたびにグループ id を新しく振る（元グループと id を共有しない）。
+            ...instantiateTupletGroup(group),
+          ]);
+          return next;
+        });
+        e.preventDefault();return;
+      }
 
       // 声部2（下声）の音符を選んでいるときは、削除（Delete/Backspace）・選択解除（Escape）に加えて
       // 音高移動（↑↓）と休符の位置リセット（0）まで対応する（Issue #112）。
@@ -3935,6 +4014,17 @@ export default function PianoSystemCanvas({
                   hit.style.cursor = canPlace ? 'copy' : 'not-allowed';
                 }
               }
+              // 連符グループをコピー中は、休符クリックの意味が「貼り付け」に変わる（Issue #234）。
+              // 押す前に結果が分かるよう、クリック時とまったく同じ判定
+              // （planTupletGroupPasteIntoRest）でカーソルの形を決める。
+              // クリップボードはモジュール変数なので、ここで毎回読めば常に最新の状態を見られる。
+              const hoverClipboardGroup=getTupletClipboardGroup();
+              if(hoverClipboardGroup && hoverDurationTool && activeEvs[j]?.isRest){
+                const isOnRestForHover=Math.abs(lx-anchors[j])<=REST_BODY_HIT_HALF_WIDTH&&ly>=chordTopY&&ly<=chordBotY;
+                if(isOnRestForHover){
+                  hit.style.cursor = planTupletGroupPasteIntoRest(activeEvs[j],hoverClipboardGroup) ? 'copy' : 'not-allowed';
+                }
+              }
               if(inChordZone){hideGuide();showChordGuide(xl,wHit,chordTopY,chordBotY);}
               else{hideChordGuide();showGuide(lx,ly,stave);}
             });
@@ -4408,6 +4498,40 @@ export default function PianoSystemCanvas({
                   doInsert(lx,ly);
                   return;
                 }
+                // コピー済みの連符グループがあるときは、休符本体のクリック1回でそれを貼り付ける（Issue #234）。
+                // 対象は音価ツール（音符側・休符側どちらでも）を選んでいるときだけにして、
+                // タイ・臨時記号などの記号ツールの挙動は変えない。
+                // クリップボードが空のときはこの分岐に入らないので、従来の休符編集はそのまま。
+                const clipboardGroup=getTupletClipboardGroup();
+                if(clipboardGroup&&getDurationTool(tool)){
+                  const paste=planTupletGroupPasteIntoRest(activeEvs[j],clipboardGroup);
+                  if(paste){
+                    setScore(prev=>{
+                      const next=prev.map(cloneMeasureData);
+                      fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+                      const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
+                      if(!targetEv?.isRest)return prev;
+                      // 最新データで計画を作り直す（クリック時点の描画データは古い可能性があるため）。
+                      const latestPaste=planTupletGroupPasteIntoRest(targetEv,clipboardGroup);
+                      if(!latestPaste)return prev;
+                      next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
+                        const copy=[...events];
+                        // 余った拍は Issue #224 と同じ規則で通常の休符としてグループの後ろに残す。
+                        copy.splice(j,1,...latestPaste.groupEvents,...buildRestEventsForBeats(latestPaste.remainingBeats, clefHere));
+                        return copy;
+                      });
+                      return next;
+                    });
+                    setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
+                    const pastedNote=paste.groupEvents.find((event)=>!event.isRest);
+                    if(pastedNote)playNoteEvent(pastedNote, part.playbackInstrument);
+                  }
+                  // 入らない休符（グループより短い・連符内の休符）では何もしない。
+                  // 音符を置く動作へ流さないのは、貼り付けるつもりのクリックで
+                  // 別の音符が増えるほうが分かりにくいため（ホバー時のカーソルで事前に判別できる）。
+                  return;
+                }
+
                 // 休符の視覚的中心（符頭バウンディングボックスの中央）を基準にする。
                 // ヒット矩形は小節全体を覆うため、その中点（クレフを含む左端の半分）を使うと
                 // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
