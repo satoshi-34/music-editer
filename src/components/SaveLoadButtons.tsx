@@ -19,6 +19,12 @@ export interface SaveLoadButtonsProps {
   canSaveCurrentAsSample?: boolean;
   hasCustomPianoSample?: boolean;
   autoSaveStatus?: 'idle' | 'saving' | 'saved';
+  /**
+   * 「保存」ボタン（手動保存）の結果（Issue #236）。
+   * 押しても画面が何も変わらないと保存できたのか分からないため、
+   * 自動保存ステータスと同じ場所・同じ体裁で数秒だけ結果を出す。
+   */
+  manualSaveStatus?: 'idle' | 'saved' | 'failed';
   /** 起動時のサイレント復元など、自動保存に関する短い通知文。あれば数秒だけ表示する */
   restoreNotice?: string | null;
   /**
@@ -44,6 +50,7 @@ export default function SaveLoadButtons({
   canSaveCurrentAsSample = false,
   hasCustomPianoSample = false,
   autoSaveStatus = 'idle',
+  manualSaveStatus = 'idle',
   restoreNotice,
   warningNotice,
   error
@@ -53,7 +60,23 @@ export default function SaveLoadButtons({
   // サンプルは 1 つのボタンにまとめつつ、
   // どの用途で試したいかだけはユーザーが選べるようにしている。
   const [selectedSampleId, setSelectedSampleId] = useState<DemoScoreId>('fur-elise');
-  
+
+  // 画面右下の小さな保存インジケータに出す内容。自動保存（勝手に走る）と
+  // 手動保存（ユーザーが「保存」を押した）で表示系を分けると、同じ意味の表示が
+  // 画面の2箇所に増えてしまうため、同じ枠を共用している（Issue #236）。
+  // 自分で押した手動保存の結果のほうが知りたい情報なので、そちらを優先して出す。
+  const saveIndicator: { text: string; color: string; role: 'status' | 'alert' } | null =
+    manualSaveStatus === 'saved'
+      ? { text: '✓ 保存しました', color: '#4caf50', role: 'status' }
+      : manualSaveStatus === 'failed'
+        // 失敗は読み上げでも割り込ませたいので role="alert"（成功の status とは区別する）
+        ? { text: '⚠ 保存できませんでした', color: '#d32f2f', role: 'alert' }
+        : autoSaveStatus === 'saving'
+          ? { text: '自動保存中…', color: '#999', role: 'status' }
+          : autoSaveStatus === 'saved'
+            ? { text: '✓ 自動保存済み', color: '#4caf50', role: 'status' }
+            : null;
+
   return (
     <div className="save-load-buttons">
       {onNewScore && (
@@ -107,27 +130,30 @@ export default function SaveLoadButtons({
         </button>
       )}
 
-      {/* 自動保存ステータスはツールバーの流れから外し、画面右下に小さく固定表示する。
+      {/* 保存ステータスはツールバーの流れから外し、画面右下に小さく固定表示する。
           ボタン列の中にあると視線とレイアウトの邪魔になるため、
           「気にしなければ目に入らない」控えめなインジケータにしている。 */}
-      {autoSaveStatus !== 'idle' && (
+      {saveIndicator && (
         <span
+          data-testid="save-status-indicator"
           style={{
             position: 'fixed',
             bottom: 8,
             right: 12,
             zIndex: 1000,
             fontSize: 11,
-            color: autoSaveStatus === 'saved' ? '#4caf50' : '#999',
+            color: saveIndicator.color,
             background: 'rgba(255,255,255,0.85)',
             borderRadius: 4,
             padding: '2px 8px',
-            opacity: 0.75,
+            // 自動保存は裏で勝手に走るので薄く出す。手動保存はユーザーが結果を待って
+            // 見ている表示なので、同じ枠のまま濃さだけ上げて読み落とされないようにする
+            opacity: manualSaveStatus === 'idle' ? 0.75 : 1,
             pointerEvents: 'none',
           }}
-          role="status"
+          role={saveIndicator.role}
         >
-          {autoSaveStatus === 'saving' ? '自動保存中…' : '✓ 自動保存済み'}
+          {saveIndicator.text}
         </span>
       )}
       {/* 復元通知は長文になるため、ツールバーのレイアウトに影響しない
