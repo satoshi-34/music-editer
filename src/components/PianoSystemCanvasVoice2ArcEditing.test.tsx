@@ -70,6 +70,16 @@ function mockSvgLayout(svg: SVGSVGElement) {
   Object.defineProperty(svg, 'height', { value: { baseVal: { value: height } }, configurable: true });
 }
 
+// いま描かれている譜面 SVG を取り直して測り直す。
+// 弧を掴むと選択状態が変わって SVG がまるごと作り直されるため、
+// 掴んだあとの mousemove / mouseup はこちらの SVG に対して投げる。
+function remockCurrentSvg(container: HTMLElement): SVGSVGElement {
+  const svg = container.querySelector('svg') as SVGSVGElement;
+  expect(svg).toBeTruthy();
+  mockSvgLayout(svg);
+  return svg;
+}
+
 // 音符のヒット領域は五線の上3加線〜下3加線の固定範囲なので、
 // rect の高さを10等分すれば任意の line のY座標を逆算できる。
 function yForLine(hit: SVGRectElement, line: number): number {
@@ -256,14 +266,17 @@ describe('PianoSystemCanvas 声部2の弧・松葉の入力と編集（Issue #19
 
     it('声部2の弧を掴んで縦にドラッグすると、cpDyOffset が声部2側にだけ保存される', async () => {
       const original = twoVoiceMeasureWithVoice2Slur();
-      const { svg, onChange } = renderScore([twoVoiceMeasureWithVoice2Slur()], { mode: 'tie' }, 1);
+      const { container, svg, onChange } = renderScore([twoVoiceMeasureWithVoice2Slur()], { mode: 'tie' }, 1);
 
       const hit = svg.querySelector(`path[data-arc-key-hit="${arcKey(0, 1, 0, 0, 0)}"]`) as SVGPathElement;
       expect(hit).toBeTruthy();
       // 掴む → 少しだけ下へ動かす（20px 未満なので向きの自動反転はしない）→ 離す。
+      // 掴んだ時点で選択状態が変わり譜面 SVG が作り直されるので、測り直してから動かす
+      // （Issue #235 でドラッグ中の座標変換を「いま描かれている SVG」基準にそろえたため）。
       fireEvent.mouseDown(hit, { clientX: 200, clientY: 100 });
-      fireEvent.mouseMove(svg, { clientX: 200, clientY: 108 });
-      fireEvent.mouseUp(svg, { clientX: 200, clientY: 108 });
+      const svgAfterGrab = remockCurrentSvg(container);
+      fireEvent.mouseMove(svgAfterGrab, { clientX: 200, clientY: 108 });
+      fireEvent.mouseUp(svgAfterGrab, { clientX: 200, clientY: 108 });
 
       const updated = await latestScore(onChange);
       const arc = updated[0].voices?.[1]?.events[0].arcs?.[0];
@@ -274,14 +287,15 @@ describe('PianoSystemCanvas 声部2の弧・松葉の入力と編集（Issue #19
 
     it('声部2の弧を大きくドラッグすると、向きの反転（flipDirection）も声部2側に保存される', async () => {
       const original = twoVoiceMeasureWithVoice2Slur();
-      const { svg, onChange } = renderScore([twoVoiceMeasureWithVoice2Slur()], { mode: 'tie' }, 1);
+      const { container, svg, onChange } = renderScore([twoVoiceMeasureWithVoice2Slur()], { mode: 'tie' }, 1);
 
       const hit = svg.querySelector(`path[data-arc-key-hit="${arcKey(0, 1, 0, 0, 0)}"]`) as SVGPathElement;
       // 音符クラスタを大きく超えて動かすと弧の向きが反転する（既存仕様）。
       // 声部2は下声なので弧は下向きに描かれる。上へ大きく動かして上向きへ反転させる。
       fireEvent.mouseDown(hit, { clientX: 200, clientY: 100 });
-      fireEvent.mouseMove(svg, { clientX: 200, clientY: -400 });
-      fireEvent.mouseUp(svg, { clientX: 200, clientY: -400 });
+      const svgAfterGrab = remockCurrentSvg(container);
+      fireEvent.mouseMove(svgAfterGrab, { clientX: 200, clientY: -400 });
+      fireEvent.mouseUp(svgAfterGrab, { clientX: 200, clientY: -400 });
 
       const updated = await latestScore(onChange);
       const arc = updated[0].voices?.[1]?.events[0].arcs?.[0];

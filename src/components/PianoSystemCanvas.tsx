@@ -1,7 +1,7 @@
 // PianoSystemCanvas.tsx
 // 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
@@ -681,6 +681,18 @@ function getRawPerScreenPx(svg: SVGSVGElement): number {
   if (!visualW || !isFinite(vbW / visualW)) return 1;
   return vbW / visualW;
 }
+
+/**
+ * 弧（タイ／スラー）1本ぶんの形状パラメータ。
+ * 描画時に arcGeomMap へ積んでおき、ドラッグ中の再計算（computeArcGeometry の引数）に使う。
+ */
+type ArcGeom = {
+  x1: number; y1: number; x2: number; y2: number;
+  upward: boolean; kind: 'tie' | 'slur'; stemDir: number; obstacleY?: number;
+  minNoteY?: number; maxNoteY?: number;
+  startDx: number; startDy: number; endDx: number; endDy: number;
+  cpDyOffset: number;
+};
 
 function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: number): { x: number; y: number } {
   const svgRect = svg.getBoundingClientRect();
@@ -1376,12 +1388,17 @@ export default function PianoSystemCanvas({
   useEffect(() => { selectedHairpinRef.current = selectedHairpin; }, [selectedHairpin]);
 
   // 弧の直接ドラッグ状態（cpDyOffset をリアルタイム調節 / 反転検知）
+  // origin は「ドラッグを始めた瞬間の値」。Esc で中止したときに開始時点の形へ戻すために使う
+  // （startSvgY / originalOffset / flipApplied は向き反転のたびに書き換わるので、
+  //   これらを戻し先に使うと Esc で元の形に戻せない）。
   const cpDragRef = useRef<{
     partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
     startSvgY: number; originalOffset: number;
     baseArcKey: string;   // arcGeomMap 検索用ベースキー（suffix なし）
     flipApplied: boolean; // ドラッグ中に方向反転が起きたか
     segment: '' | '-1' | '-2'; // ドラッグ対象セグメント（'' = 非段またぎ）
+    origin: { svgY: number; offset: number };
+    moved: boolean;       // 実際に形が変わったか（クリックしただけなら false）
   } | null>(null);
 
   // 始点・終点ハンドルのドラッグ状態
@@ -1392,7 +1409,240 @@ export default function PianoSystemCanvas({
     baseArcKey: string;
     startSvgX: number; startSvgY: number;
     originalDx: number; originalDy: number;
+    moved: boolean;       // 実際に動かしたか（クリックしただけなら false）
   } | null>(null);
+
+  // 弧のドラッグ中に「いまの SVG と弧の形状台帳」を参照するための口。
+  // ドラッグ中の更新は window の mousemove で受けるため（後述の理由）、
+  // 描画 useEffect の中だけにあるローカル変数へは触れない。描画のたびにここを差し替える。
+  const arcDragContextRef = useRef<{
+    svg: SVGSVGElement;
+    svgRoot: SVGGElement;
+    arcGeomMap: Map<string, ArcGeom>;
+  } | null>(null);
+
+  // 直前のドラッグで弧の形を変えたか。ドラッグの終わりに必ず来る click で
+  // 選択を解除してしまわないよう、1回だけ読み飛ばすために使う。
+  const arcDragMovedRef = useRef(false);
+
+  /**
+   * 弧（タイ／スラー）のドラッグ中プレビュー。SVG の d 属性を直接書き換えるだけで、
+   * 譜面データ（partsScore）には触らない＝再描画も段のレイアウト計算も起きない。
+   * 「ドラッグ中は下書き、離した瞬間に1回だけ確定」（Issue #208 の原則）を守るための要。
+   *
+   * 引数は SVG 内部座標（clientToGroup 済み）。Esc の中止処理からも「開始時点の座標」を
+   * そのまま渡して呼べるようにするため、画面座標ではなく内部座標を受け取る。
+   */
+  const updateArcDragPreview = useCallback((svgXIn: number, svgYIn: number) => {
+    const ctx = arcDragContextRef.current;
+    if (!ctx) return;
+    const { svgRoot, arcGeomMap } = ctx;
+    const setSegPath = (key: string, dAttr: string, hitDAttr: string) => {
+      svgRoot.querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d', dAttr);
+      // 当たり判定パスは中央部限定の形状（computeArcHitGeometry）で追従させる
+      svgRoot.querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d', hitDAttr);
+    };
+
+    // 始点・終点ハンドルのドラッグ（cpDrag より優先）
+    const epDrag = epDragRef.current;
+    if (epDrag) {
+      const newDx = epDrag.originalDx + (svgXIn - epDrag.startSvgX);
+      const newDy = epDrag.originalDy + (svgYIn - epDrag.startSvgY);
+      const key = epDrag.baseArcKey + epDrag.segment;
+      const geom = arcGeomMap.get(key);
+      if (!geom) return;
+      if (epDrag.endpoint === 'start') {
+        const nx1 = geom.x1 - geom.startDx + newDx, ny1 = geom.y1 - geom.startDy + newDy;
+        setSegPath(
+          key,
+          computeArcGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset).dAttr,
+          computeArcHitGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset).dAttr,
+        );
+        const h = svgRoot.querySelector(`[data-arc-ep-start="${key}"]`);
+        if (h) { h.setAttribute('cx', String(nx1)); h.setAttribute('cy', String(ny1)); }
+      } else {
+        const nx2 = geom.x2 - geom.endDx + newDx, ny2 = geom.y2 - geom.endDy + newDy;
+        setSegPath(
+          key,
+          computeArcGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset).dAttr,
+          computeArcHitGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset).dAttr,
+        );
+        const h = svgRoot.querySelector(`[data-arc-ep-end="${key}"]`);
+        if (h) { h.setAttribute('cx', String(nx2)); h.setAttribute('cy', String(ny2)); }
+      }
+      return;
+    }
+
+    // 描画済み弧のドラッグ調節（カーソルが音符クラスタを超えると方向を自動反転）
+    const cpDrag = cpDragRef.current;
+    if (!cpDrag) return;
+    const svgY = svgYIn;
+    const FLIP_THRESHOLD = 20;
+
+    const primaryGeom = arcGeomMap.get(cpDrag.baseArcKey) ?? arcGeomMap.get(cpDrag.baseArcKey + '-1');
+    if (primaryGeom) {
+      const currentlyUpward = cpDrag.flipApplied ? !primaryGeom.upward : primaryGeom.upward;
+      const noteRef = currentlyUpward
+        ? (primaryGeom.maxNoteY ?? ((primaryGeom.y1 + primaryGeom.y2) / 2 + 5))
+        : (primaryGeom.minNoteY ?? ((primaryGeom.y1 + primaryGeom.y2) / 2 - 5));
+      const shouldFlip = currentlyUpward ? svgY > noteRef + FLIP_THRESHOLD : svgY < noteRef - FLIP_THRESHOLD;
+      if (shouldFlip) {
+        cpDrag.flipApplied = !cpDrag.flipApplied;
+        cpDrag.originalOffset = 0;
+        cpDrag.startSvgY = svgY;
+      }
+    }
+
+    const effectiveOffset = cpDrag.originalOffset + (svgY - cpDrag.startSvgY);
+    // 段またぎセグメントを独立してドラッグ更新する（segment が指定されている場合はそのセグメントのみ更新）
+    const updateSeg = (suffix: string, offset: number) => {
+      const key = `${cpDrag.baseArcKey}${suffix}`;
+      const geom = arcGeomMap.get(key);
+      if (!geom) return;
+      const upward = cpDrag.flipApplied ? !geom.upward : geom.upward;
+      setSegPath(
+        key,
+        computeArcGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset).dAttr,
+        computeArcHitGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset).dAttr,
+      );
+    };
+    if (cpDrag.segment) {
+      // 段またぎ: ドラッグ対象セグメントのみ effectiveOffset、もう一方は現状維持
+      updateSeg(cpDrag.segment, effectiveOffset);
+      const otherSeg = cpDrag.segment === '-1' ? '-2' : '-1';
+      const otherGeom = arcGeomMap.get(cpDrag.baseArcKey + otherSeg);
+      if (otherGeom) updateSeg(otherSeg, otherGeom.cpDyOffset);
+    } else {
+      ['', '-1', '-2'].forEach(suffix => updateSeg(suffix, effectiveOffset));
+    }
+  }, []);
+
+  /**
+   * Esc で弧のドラッグを中止する。開始時点の形へプレビューを戻し、保存はしない。
+   * 曲率ドラッグは向き反転のたびに startSvgY / originalOffset を書き換えるため、
+   * origin（開始時の値）へ戻してから「移動量ゼロ」でプレビューを描き直す。
+   */
+  const cancelArcDrag = useCallback((): boolean => {
+    const epDrag = epDragRef.current;
+    const cpDrag = cpDragRef.current;
+    if (!epDrag && !cpDrag) return false;
+    if (cpDrag) {
+      cpDrag.flipApplied = false;
+      cpDrag.originalOffset = cpDrag.origin.offset;
+      cpDrag.startSvgY = cpDrag.origin.svgY;
+    }
+    // 「カーソルが開始位置へ戻った」ことにして描き直す＝移動量ゼロのプレビュー＝開始時点の形
+    if (epDrag) updateArcDragPreview(epDrag.startSvgX, epDrag.startSvgY);
+    else if (cpDrag) updateArcDragPreview(0, cpDrag.origin.svgY);
+    epDragRef.current = null;
+    cpDragRef.current = null;
+    arcDragMovedRef.current = false;
+    return true;
+  }, [updateArcDragPreview]);
+
+  /**
+   * 弧のドラッグ中の mousemove / mouseup を window で受ける。
+   *
+   * 以前は描画した <svg> 要素に付けていたが、SVG の高さは五線ぶんしか無く（実測で
+   * 端点ハンドルから下端まで数px）、少し引っぱるだけでカーソルが SVG の外へ出てしまう。
+   * すると mousemove が届かなくなって端点がカーソルから置き去りになり、さらに
+   * SVG の外で指を離すと mouseup も届かないためドラッグ状態が残り、そのあとボタンを
+   * 押していないのに弧がカーソルを追い続ける（Issue #235）。window で受ければ
+   * どこまで引っぱっても・どこで離しても1回だけ確定できる。
+   */
+  useEffect(() => {
+    const onMove = (ev: MouseEvent) => {
+      const drag = epDragRef.current ?? cpDragRef.current;
+      const ctx = arcDragContextRef.current;
+      if (!drag || !ctx) return;
+      drag.moved = true;
+      arcDragMovedRef.current = true;
+      const { x, y } = clientToGroup(ctx.svg, ctx.svgRoot, ev.clientX, ev.clientY);
+      updateArcDragPreview(x, y);
+    };
+
+    const onUp = (ev: MouseEvent) => {
+      const epDrag = epDragRef.current;
+      const cpDrag = cpDragRef.current;
+      const ctx = arcDragContextRef.current;
+      if (!epDrag && !cpDrag) return;
+      epDragRef.current = null;
+      cpDragRef.current = null;
+      // ドラッグ直後の click（選択解除の読み飛ばし用）が済んだら必ず下ろす。
+      // SVG の外で離すと click 自体が来ないので、タイマーで確実に戻す
+      // （click は mouseup と同じタスクで来るため、0ms のタイマーの方が必ず後になる）。
+      window.setTimeout(() => { arcDragMovedRef.current = false; }, 0);
+      // 掴んだだけ（＝選択のためのクリック）なら保存もしない。
+      // 何もしていないのに Undo 履歴が1件増えるのを防ぐ。
+      if (!ctx || !(epDrag?.moved || cpDrag?.moved)) return;
+      const { svg, svgRoot } = ctx;
+      const { x: svgX, y: svgY } = clientToGroup(svg, svgRoot, ev.clientX, ev.clientY);
+
+      if (epDrag) {
+        const newDx = epDrag.originalDx + (svgX - epDrag.startSvgX);
+        const newDy = epDrag.originalDy + (svgY - epDrag.startSvgY);
+        setPartsScore(prev => {
+          // 端点ドラッグの保存先も、弧が載っている声部にそろえる（Issue #190）。
+          const partData = updateVoiceEventInMeasures(
+            prev[epDrag.partIndex] ?? [], epDrag.voiceIndex, epDrag.fromMeasure, epDrag.fromEvent,
+            (ev2) => {
+              if (!ev2.arcs?.[epDrag.arcIndex]) return null;
+              const patchedArcs = [...ev2.arcs];
+              const current = patchedArcs[epDrag.arcIndex];
+              patchedArcs[epDrag.arcIndex] =
+                epDrag.segment === '-1' && epDrag.endpoint === 'end'
+                  ? { ...current, breakEndDx: newDx, breakEndDy: newDy }
+                  : epDrag.segment === '-2' && epDrag.endpoint === 'start'
+                    ? { ...current, breakStartDx: newDx, breakStartDy: newDy }
+                    : epDrag.endpoint === 'start'
+                      ? { ...current, startDx: newDx, startDy: newDy }
+                      : { ...current, endDx: newDx, endDy: newDy };
+              return { ...ev2, arcs: patchedArcs };
+            },
+          );
+          if (!partData) return prev;
+          const next = [...prev];
+          next[epDrag.partIndex] = partData;
+          return next;
+        });
+        return;
+      }
+
+      if (cpDrag) {
+        const newOffset = cpDrag.originalOffset + (svgY - cpDrag.startSvgY);
+        setPartsScore(prev => {
+          // 曲率ドラッグ（向き反転を含む）の保存先も声部にそろえる（Issue #190）。
+          const partData = updateVoiceEventInMeasures(
+            prev[cpDrag.partIndex] ?? [], cpDrag.voiceIndex, cpDrag.fromMeasure, cpDrag.fromEvent,
+            (ev2) => {
+              if (!ev2.arcs?.[cpDrag.arcIndex]) return null;
+              const patchedArcs = [...ev2.arcs];
+              const current = patchedArcs[cpDrag.arcIndex];
+              // 段またぎ第2セグメントをドラッグした場合は cpDyOffset2 に保存（第1セグメントとは独立）
+              const offsetPatch = cpDrag.segment === '-2' ? { cpDyOffset2: newOffset } : { cpDyOffset: newOffset };
+              patchedArcs[cpDrag.arcIndex] = {
+                ...current,
+                ...offsetPatch,
+                ...(cpDrag.flipApplied ? { flipDirection: !current.flipDirection } : {}),
+              };
+              return { ...ev2, arcs: patchedArcs };
+            },
+          );
+          if (!partData) return prev;
+          const next = [...prev];
+          next[cpDrag.partIndex] = partData;
+          return next;
+        });
+      }
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [updateArcDragPreview]);
 
   // タイドラッグの開始情報（再レンダリングを発生させないためref管理）。
   // voiceIndex は「ドラッグを開始した時点のアクティブ声部」。確定（mouseup）時に
@@ -1684,6 +1934,11 @@ export default function PianoSystemCanvas({
     const onKey=(e:KeyboardEvent)=>{
       if(disRef.current)return;
 
+      // 優先0: 弧をドラッグしている最中の Esc は「ドラッグの中止」だけを行う。
+      // 開始時点の形へ戻し、保存もしない・選択も残す（もう一度掴み直せる）。
+      // 選択の解除まで一緒にやってしまうと、やり直したいだけなのに選び直しが要る。
+      if(e.key==='Escape'&&cancelArcDrag()){e.preventDefault();return;}
+
       // 優先1: スラー/タイが選択中 → スラー操作（Delete/Escape/f）
       const arcSel=selectedArcRef.current;
       if(arcSel){
@@ -1819,7 +2074,8 @@ export default function PianoSystemCanvas({
     };
     window.addEventListener('keydown',onKey);
     return()=>window.removeEventListener('keydown',onKey);
-  },[]);
+    // cancelArcDrag は useCallback で同一性が保たれるため、これで貼り直しは起きない
+  },[cancelArcDrag]);
 
   /* ----- 描画 ----- */
   useEffect(()=>{
@@ -1973,7 +2229,11 @@ export default function PianoSystemCanvas({
     }
 
     // 弧ドラッグ時に再計算できるよう、各弧の形状パラメータをキーで保持する
-    const arcGeomMap=new Map<string,{x1:number;y1:number;x2:number;y2:number;upward:boolean;kind:'tie'|'slur';stemDir:number;obstacleY?:number;minNoteY?:number;maxNoteY?:number;startDx:number;startDy:number;endDx:number;endDy:number;cpDyOffset:number}>();
+    const arcGeomMap=new Map<string,ArcGeom>();
+    // ドラッグ中の更新（window の mousemove）から今回の描画結果を参照できるようにしておく。
+    // 描画のたびに SVG は作り直される（innerHTML='' → 新しい <svg>）ので、
+    // 古い SVG を掴んだままにならないよう毎回ここで差し替える。
+    arcDragContextRef.current={svg,svgRoot,arcGeomMap};
     const dynamicTextEntries: Array<{
       anchorX: number;
       baseY: number;
@@ -2045,88 +2305,22 @@ export default function PianoSystemCanvas({
       partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
     } | null = null;
 
-    // SVG 背景クリック → 弧の選択とドラッグ状態を解除
+    // SVG 背景クリック → 弧の選択を解除
+    // ドラッグ直後のクリック（ドラッグの終わりに必ず1回来る）では解除しない。
+    // 解除してしまうと1回ドラッグするたびにハンドルが消え、続けて微調整できないため
+    // （小節のドラッグ範囲選択が measureDragMovedRef で同じことをしているのと同じ考え方）。
     svg.addEventListener('click',()=>{
-      cpDragRef.current=null;
-      epDragRef.current=null;
       tieStartRef.current=null;
       tiePreviewPath.style.display='none';
+      if(arcDragMovedRef.current){arcDragMovedRef.current=false;return;}
       setSelectedArc(null);
       setSelectedHairpin(null);
     });
 
     svg.addEventListener('mousemove',(ev)=>{
-      // 始点・終点ハンドルのドラッグ（cpDrag より優先）
-      if(epDragRef.current){
-        const drag=epDragRef.current;
-        const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
-        const newDx=drag.originalDx+(svgX-drag.startSvgX);
-        const newDy=drag.originalDy+(svgY-drag.startSvgY);
-        const key=drag.baseArcKey+drag.segment;
-        const geom=arcGeomMap.get(key);
-        if(!geom)return;
-        if(drag.endpoint==='start'){
-          const nx1=geom.x1-geom.startDx+newDx,ny1=geom.y1-geom.startDy+newDy;
-          const{dAttr}=computeArcGeometry(nx1,ny1,geom.x2,geom.y2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset);
-          (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
-          // 当たり判定パスは中央部限定の形状（computeArcHitGeometry）で追従させる
-          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',computeArcHitGeometry(nx1,ny1,geom.x2,geom.y2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset).dAttr);
-          const h=(svgRoot as SVGGElement).querySelector(`[data-arc-ep-start="${key}"]`);
-          if(h){h.setAttribute('cx',String(nx1));h.setAttribute('cy',String(ny1));}
-        }else{
-          const nx2=geom.x2-geom.endDx+newDx,ny2=geom.y2-geom.endDy+newDy;
-          const{dAttr}=computeArcGeometry(geom.x1,geom.y1,nx2,ny2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset);
-          (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
-          // 当たり判定パスは中央部限定の形状（computeArcHitGeometry）で追従させる
-          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',computeArcHitGeometry(geom.x1,geom.y1,nx2,ny2,geom.upward,geom.kind,geom.stemDir,geom.obstacleY,geom.cpDyOffset).dAttr);
-          const h=(svgRoot as SVGGElement).querySelector(`[data-arc-ep-end="${key}"]`);
-          if(h){h.setAttribute('cx',String(nx2));h.setAttribute('cy',String(ny2));}
-        }
-        return;
-      }
-      // 描画済み弧のドラッグ調節（カーソルが音符クラスタを超えると方向を自動反転）
-      if(cpDragRef.current){
-        const drag=cpDragRef.current;
-        const{y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
-        const FLIP_THRESHOLD=20;
-
-        const primaryGeom=arcGeomMap.get(drag.baseArcKey)??arcGeomMap.get(drag.baseArcKey+'-1');
-        if(primaryGeom){
-          const currentlyUpward=drag.flipApplied?!primaryGeom.upward:primaryGeom.upward;
-          const noteRef=currentlyUpward
-            ?(primaryGeom.maxNoteY??((primaryGeom.y1+primaryGeom.y2)/2+5))
-            :(primaryGeom.minNoteY??((primaryGeom.y1+primaryGeom.y2)/2-5));
-          const shouldFlip=currentlyUpward?svgY>noteRef+FLIP_THRESHOLD:svgY<noteRef-FLIP_THRESHOLD;
-          if(shouldFlip){
-            drag.flipApplied=!drag.flipApplied;
-            drag.originalOffset=0;
-            drag.startSvgY=svgY;
-          }
-        }
-
-        const effectiveOffset=drag.originalOffset+(svgY-drag.startSvgY);
-        // 段またぎセグメントを独立してドラッグ更新する（segment が指定されている場合はそのセグメントのみ更新）
-        const updateSeg=(suffix:string,offset:number)=>{
-          const key=`${drag.baseArcKey}${suffix}`;
-          const geom=arcGeomMap.get(key);
-          if(!geom)return;
-          const upward=drag.flipApplied?!geom.upward:geom.upward;
-          const{dAttr}=computeArcGeometry(geom.x1,geom.y1,geom.x2,geom.y2,upward,geom.kind,geom.stemDir,geom.obstacleY,offset);
-          (svgRoot as SVGGElement).querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d',dAttr);
-          // 当たり判定パスは中央部限定の形状（computeArcHitGeometry）で追従させる
-          (svgRoot as SVGGElement).querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d',computeArcHitGeometry(geom.x1,geom.y1,geom.x2,geom.y2,upward,geom.kind,geom.stemDir,geom.obstacleY,offset).dAttr);
-        };
-        if(drag.segment){
-          // 段またぎ: ドラッグ対象セグメントのみ effectiveOffset、もう一方は現状維持
-          updateSeg(drag.segment,effectiveOffset);
-          const otherSeg=drag.segment==='-1'?'-2':'-1';
-          const otherGeom=arcGeomMap.get(drag.baseArcKey+otherSeg);
-          if(otherGeom)updateSeg(otherSeg,otherGeom.cpDyOffset);
-        }else{
-          ['','-1','-2'].forEach(suffix=>updateSeg(suffix,effectiveOffset));
-        }
-        return;
-      }
+      // 弧のドラッグ中（端点・曲率）は window 側のハンドラが処理するので、ここでは何もしない。
+      // 両方で処理すると同じ mousemove を2回適用してしまい、弧がカーソルの倍の速さで動く。
+      if(epDragRef.current||cpDragRef.current)return;
       // タイ／松葉 新規ドラッグのプレビュー
       if(!tieStartRef.current||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
       const{x:mx,y:my}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
@@ -2144,71 +2338,10 @@ export default function PianoSystemCanvas({
       }
       tiePreviewPath.style.display=hasMoved?'block':'none';
     });
-    svg.addEventListener('mouseup',(ev)=>{
-      // 始点・終点ドラッグの確定
-      if(epDragRef.current){
-        const drag=epDragRef.current;
-        const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
-        const newDx=drag.originalDx+(svgX-drag.startSvgX);
-        const newDy=drag.originalDy+(svgY-drag.startSvgY);
-        setPartsScore(prev=>{
-          // 端点ドラッグの保存先も、弧が載っている声部にそろえる（Issue #190）。
-          const partData=updateVoiceEventInMeasures(
-            prev[drag.partIndex]??[], drag.voiceIndex, drag.fromMeasure, drag.fromEvent,
-            (ev2)=>{
-              if(!ev2.arcs?.[drag.arcIndex])return null;
-              const patchedArcs=[...ev2.arcs];
-              const current=patchedArcs[drag.arcIndex];
-              patchedArcs[drag.arcIndex]=
-                drag.segment==='-1'&&drag.endpoint==='end'
-                  ?{...current,breakEndDx:newDx,breakEndDy:newDy}
-                  :drag.segment==='-2'&&drag.endpoint==='start'
-                    ?{...current,breakStartDx:newDx,breakStartDy:newDy}
-                    :drag.endpoint==='start'
-                      ?{...current,startDx:newDx,startDy:newDy}
-                      :{...current,endDx:newDx,endDy:newDy};
-              return {...ev2,arcs:patchedArcs};
-            },
-          );
-          if(!partData)return prev;
-          const next=[...prev];
-          next[drag.partIndex]=partData;
-          return next;
-        });
-        epDragRef.current=null;
-        return;
-      }
-      // 描画済み弧のドラッグ確定
-      if(cpDragRef.current){
-        const drag=cpDragRef.current;
-        const{y:svgY}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
-        const newOffset=drag.originalOffset+(svgY-drag.startSvgY);
-        setPartsScore(prev=>{
-          // 曲率ドラッグ（向き反転を含む）の保存先も声部にそろえる（Issue #190）。
-          const partData=updateVoiceEventInMeasures(
-            prev[drag.partIndex]??[], drag.voiceIndex, drag.fromMeasure, drag.fromEvent,
-            (ev2)=>{
-              if(!ev2.arcs?.[drag.arcIndex])return null;
-              const patchedArcs=[...ev2.arcs];
-              const current=patchedArcs[drag.arcIndex];
-              // 段またぎ第2セグメントをドラッグした場合は cpDyOffset2 に保存（第1セグメントとは独立）
-              const offsetPatch=drag.segment==='-2'?{cpDyOffset2:newOffset}:{cpDyOffset:newOffset};
-              patchedArcs[drag.arcIndex]={
-                ...current,
-                ...offsetPatch,
-                ...(drag.flipApplied?{flipDirection:!current.flipDirection}:{}),
-              };
-              return {...ev2,arcs:patchedArcs};
-            },
-          );
-          if(!partData)return prev;
-          const next=[...prev];
-          next[drag.partIndex]=partData;
-          return next;
-        });
-        cpDragRef.current=null;
-        return;
-      }
+    svg.addEventListener('mouseup',()=>{
+      // 弧のドラッグの確定は window 側（arcDrag セッション）が受け持つ。
+      // ここで受けると、SVG の外で指を離したときだけ確定されない不公平が生まれる。
+      if(epDragRef.current||cpDragRef.current)return;
       tieStartRef.current=null;
       tiePreviewPath.style.display='none';
     });
@@ -2700,7 +2833,7 @@ export default function PianoSystemCanvas({
           setSelectedArc({partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
           setSelected(null);
           const{y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-          cpDragRef.current={partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg};
+          cpDragRef.current={partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,origin:{svgY,offset:cpDyOffset},moved:false};
         });
         hitPath.addEventListener('click',(e)=>{e.stopPropagation();});
         svgRoot.appendChild(hitPath);
@@ -2730,7 +2863,7 @@ export default function PianoSystemCanvas({
             e.preventDefault();e.stopPropagation();
             const{partIndex:pi2,voiceIndex:vi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2}=arcIdentity!;
             const{x:sx,y:sy}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-            epDragRef.current={partIndex:pi2,voiceIndex:vi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,segment:seg,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy};
+            epDragRef.current={partIndex:pi2,voiceIndex:vi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,segment:seg,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy,moved:false};
           });
           h.addEventListener('click',e=>e.stopPropagation());
           svgRoot.appendChild(h);
