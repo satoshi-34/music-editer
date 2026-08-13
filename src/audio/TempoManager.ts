@@ -3,6 +3,8 @@
  * BPM設定、拍子設定、設定変更の通知機能を提供
  */
 
+import { MIN_BPM, MAX_BPM } from './tempoRange';
+
 /**
  * テンポ設定のインターフェース
  */
@@ -42,9 +44,9 @@ export class TempoManager {
   /** 設定変更リスナーのセット */
   private listeners: Set<TempoChangeCallback> = new Set();
 
-  /** BPMの有効範囲 */
-  private static readonly MIN_BPM = 60;
-  private static readonly MAX_BPM = 200;
+  /** BPMの有効範囲（正本は tempoRange.ts。UI 側の入力欄・スライダーと同じ値を使う） */
+  private static readonly MIN_BPM = MIN_BPM;
+  private static readonly MAX_BPM = MAX_BPM;
 
   /** ストレージキー */
   private static readonly STORAGE_KEY = 'music-app-tempo-settings';
@@ -62,7 +64,7 @@ export class TempoManager {
 
   /**
    * BPMを設定する
-   * @param bpm 設定するBPM値（60-200の範囲）
+   * @param bpm 設定するBPM値（tempoRange.ts の MIN_BPM〜MAX_BPM の範囲）
    * @throws Error BPMが有効範囲外の場合
    */
   setBPM(bpm: number): void {

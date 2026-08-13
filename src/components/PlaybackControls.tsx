@@ -2,8 +2,9 @@
 // 再生制御UIコンポーネント
 // 再生/一時停止/停止ボタン、テンポ設定UI、音色選択UIを提供
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { InstrumentType } from '../audio/SoundSource';
+import { MIN_BPM, MAX_BPM, clampBpm, TEMPO_RANGE_MESSAGE } from '../audio/tempoRange';
 import type { PlaybackPosition } from '../audio/ScorePlayer';
 import type { PlaybackSoundRuntimeSettings, SoundEngineMode } from '../audio/playbackSettings';
 
@@ -174,6 +175,9 @@ export default function PlaybackControls({
   const [tempoInput, setTempoInput] = useState(currentTempo.toString());
   const [isTempoInputFocused, setIsTempoInputFocused] = useState(false);
   const [isSoundDetailOpen, setIsSoundDetailOpen] = useState(false);
+  // 範囲外のテンポを入れたときの案内文。null なら非表示（Issue #240）
+  const [tempoNotice, setTempoNotice] = useState<string | null>(null);
+  const tempoNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const displayedSoundEngineMode = activeSoundEngineMode ?? soundRuntimeSettings?.engineMode ?? 'built-in';
 
   // 外部からのテンポ変更を反映
@@ -182,6 +186,31 @@ export default function PlaybackControls({
       setTempoInput(currentTempo.toString());
     }
   }, [currentTempo, isTempoInputFocused]);
+
+  // 案内文の自動消去タイマーは、コンポーネントが消えるときに必ず止める
+  // （止めないと、消えたあとの setState で React の警告が出る）
+  useEffect(() => {
+    return () => {
+      if (tempoNoticeTimerRef.current !== null) {
+        clearTimeout(tempoNoticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  /**
+   * テンポの案内文を一定時間だけ表示する。
+   * 続けて範囲外の値を入れたときに前のタイマーが残らないよう、毎回張り直す。
+   */
+  const showTempoNotice = useCallback((message: string) => {
+    if (tempoNoticeTimerRef.current !== null) {
+      clearTimeout(tempoNoticeTimerRef.current);
+    }
+    setTempoNotice(message);
+    tempoNoticeTimerRef.current = setTimeout(() => {
+      setTempoNotice(null);
+      tempoNoticeTimerRef.current = null;
+    }, 4000);
+  }, []);
 
   /**
    * 再生/一時停止ボタンのクリックハンドラ
@@ -213,15 +242,27 @@ export default function PlaybackControls({
    */
   const handleTempoInputBlur = useCallback(() => {
     setIsTempoInputFocused(false);
-    
+
     const newTempo = parseInt(tempoInput, 10);
-    if (!isNaN(newTempo) && newTempo >= 60 && newTempo <= 200) {
-      onTempoChange(newTempo);
-    } else {
-      // 無効な値の場合は元の値に戻す
+
+    // 数字として読めない（空欄・記号だけ など）ときだけ元の値へ戻す。
+    // 以前はここで範囲外もまとめて巻き戻していたため、♩=56 を入れても
+    // 何の説明もなく元の値に戻る＝入力が壊れているように見えていた（Issue #240）。
+    if (isNaN(newTempo)) {
       setTempoInput(currentTempo.toString());
+      showTempoNotice(TEMPO_RANGE_MESSAGE);
+      return;
     }
-  }, [tempoInput, currentTempo, onTempoChange]);
+
+    // 範囲外は巻き戻さず端の値へ寄せる（29 → 30）。
+    // 寄せたことが分かるように、そのときだけ案内文を出す。
+    const clamped = clampBpm(newTempo, currentTempo);
+    if (clamped !== newTempo) {
+      showTempoNotice(`${TEMPO_RANGE_MESSAGE}（${clamped} に合わせました）`);
+    }
+    setTempoInput(clamped.toString());
+    onTempoChange(clamped);
+  }, [tempoInput, currentTempo, onTempoChange, showTempoNotice]);
 
   /**
    * テンポ入力のキーダウンハンドラ（Enterキーで確定）
@@ -361,8 +402,8 @@ export default function PlaybackControls({
             onFocus={handleTempoInputFocus}
             onBlur={handleTempoInputBlur}
             onKeyDown={handleTempoInputKeyDown}
-            min="60"
-            max="200"
+            min={MIN_BPM}
+            max={MAX_BPM}
             step="1"
             aria-label="テンポ（BPM）"
           />
@@ -374,11 +415,23 @@ export default function PlaybackControls({
           className="tempo-slider"
           value={currentTempo}
           onChange={handleTempoSliderChange}
-          min="60"
-          max="200"
+          min={MIN_BPM}
+          max={MAX_BPM}
           step="1"
           aria-label="テンポスライダー"
         />
+
+        {/* 範囲外の値を入れたときだけ出る案内。role="status" にして
+            画面を見ていない利用者にも読み上げで伝わるようにする。 */}
+        {tempoNotice && (
+          <div
+            className="tempo-notice"
+            role="status"
+            style={{ fontSize: 12, color: '#92400e', lineHeight: 1.6 }}
+          >
+            {tempoNotice}
+          </div>
+        )}
       </div>
 
       {/* 音色選択 */}

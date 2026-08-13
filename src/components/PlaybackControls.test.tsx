@@ -161,18 +161,114 @@ describe('PlaybackControls', () => {
       });
     });
 
-    it('無効なテンポ値では元の値に戻る', async () => {
-      render(<PlaybackControls {...defaultProps} currentTempo={120} />);
-      
+    // Issue #240: 下限が 60 だったため、月光（♩=50台）のような遅い曲が設定できず、
+    // しかも範囲外の入力が何の説明もなく巻き戻っていた。
+    it('♩=56（旧下限の60未満）を入力すると保持され、onTempoChange に渡る', async () => {
+      const onTempoChange = vi.fn();
+      render(<PlaybackControls {...defaultProps} currentTempo={99} onTempoChange={onTempoChange} />);
+
       const tempoInput = screen.getByLabelText('テンポ（BPM）') as HTMLInputElement;
-      
-      // 無効な値を入力
+
+      fireEvent.change(tempoInput, { target: { value: '56' } });
+      fireEvent.blur(tempoInput);
+
+      await waitFor(() => {
+        expect(onTempoChange).toHaveBeenCalledWith(56);
+      });
+      expect(tempoInput.value).toBe('56');
+    });
+
+    it('新しい範囲の両端（30 / 240）をそのまま設定できる', async () => {
+      const onTempoChange = vi.fn();
+      render(<PlaybackControls {...defaultProps} onTempoChange={onTempoChange} />);
+
+      const tempoInput = screen.getByLabelText('テンポ（BPM）') as HTMLInputElement;
+
+      fireEvent.change(tempoInput, { target: { value: '30' } });
+      fireEvent.blur(tempoInput);
+      await waitFor(() => {
+        expect(onTempoChange).toHaveBeenCalledWith(30);
+      });
+
+      fireEvent.change(tempoInput, { target: { value: '240' } });
+      fireEvent.blur(tempoInput);
+      await waitFor(() => {
+        expect(onTempoChange).toHaveBeenCalledWith(240);
+      });
+    });
+
+    it('範囲を下回る値は下限へクランプされ、案内が表示される', async () => {
+      const onTempoChange = vi.fn();
+      render(<PlaybackControls {...defaultProps} currentTempo={120} onTempoChange={onTempoChange} />);
+
+      const tempoInput = screen.getByLabelText('テンポ（BPM）') as HTMLInputElement;
+
+      fireEvent.change(tempoInput, { target: { value: '10' } });
+      fireEvent.blur(tempoInput);
+
+      await waitFor(() => {
+        expect(tempoInput.value).toBe('30');
+      });
+      expect(onTempoChange).toHaveBeenCalledWith(30);
+      expect(screen.getByRole('status')).toHaveTextContent('テンポは30〜240の範囲で設定してください（30 に合わせました）');
+    });
+
+    it('範囲を上回る値は上限へクランプされ、案内が表示される', async () => {
+      const onTempoChange = vi.fn();
+      render(<PlaybackControls {...defaultProps} currentTempo={120} onTempoChange={onTempoChange} />);
+
+      const tempoInput = screen.getByLabelText('テンポ（BPM）') as HTMLInputElement;
+
       fireEvent.change(tempoInput, { target: { value: '300' } });
       fireEvent.blur(tempoInput);
-      
+
+      await waitFor(() => {
+        expect(tempoInput.value).toBe('240');
+      });
+      expect(onTempoChange).toHaveBeenCalledWith(240);
+      expect(screen.getByRole('status')).toHaveTextContent('テンポは30〜240の範囲で設定してください（240 に合わせました）');
+    });
+
+    it('数字として読めない入力は元の値に戻り、案内が表示される', async () => {
+      const onTempoChange = vi.fn();
+      render(<PlaybackControls {...defaultProps} currentTempo={120} onTempoChange={onTempoChange} />);
+
+      const tempoInput = screen.getByLabelText('テンポ（BPM）') as HTMLInputElement;
+
+      fireEvent.change(tempoInput, { target: { value: '' } });
+      fireEvent.blur(tempoInput);
+
       await waitFor(() => {
         expect(tempoInput.value).toBe('120');
       });
+      expect(onTempoChange).not.toHaveBeenCalled();
+      expect(screen.getByRole('status')).toHaveTextContent('テンポは30〜240の範囲で設定してください');
+    });
+
+    it('範囲内の値では案内が出ない', async () => {
+      render(<PlaybackControls {...defaultProps} currentTempo={120} />);
+
+      const tempoInput = screen.getByLabelText('テンポ（BPM）') as HTMLInputElement;
+
+      fireEvent.change(tempoInput, { target: { value: '56' } });
+      fireEvent.blur(tempoInput);
+
+      await waitFor(() => {
+        expect(tempoInput.value).toBe('56');
+      });
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it('入力欄とスライダーの許容範囲が一致する', () => {
+      render(<PlaybackControls {...defaultProps} />);
+
+      const tempoInput = screen.getByLabelText('テンポ（BPM）') as HTMLInputElement;
+      const tempoSlider = screen.getByLabelText('テンポスライダー') as HTMLInputElement;
+
+      expect(tempoInput.min).toBe('30');
+      expect(tempoInput.max).toBe('240');
+      expect(tempoSlider.min).toBe(tempoInput.min);
+      expect(tempoSlider.max).toBe(tempoInput.max);
     });
 
     it('Enterキーでテンポ入力が確定される', () => {
