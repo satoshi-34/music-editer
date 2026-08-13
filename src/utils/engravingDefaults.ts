@@ -80,6 +80,17 @@ export const ENGRAVING_TEXT_SP = {
   /** cresc. / dim. とテンポ表記（Allegro 等）。強弱記号と同じ 1.25 倍を掛けた値 */
   expressiveText: 1.5,
   /**
+   * 発想標語（espressivo, Si deve suonare... 等）。Issue #237。
+   *
+   * 浄書慣例では「速度標語（テンポ表記）＞発想標語」の階層があり、
+   * 発想標語はテンポ表記より一回り小さいイタリック体で書く。
+   * Bravura の engravingDefaults には文字サイズの推奨値が無いため、
+   * テンポ表記（1.5 sp）に対して **約 87%** にあたる 1.3 sp を採用した
+   * （月光冒頭の実譜例と見比べて決めた値。詳細は
+   * `.claude/specs/extended-notation-features/design.md` の発想標語の節）。
+   */
+  expressionMarking: 1.3,
+  /**
    * 運指（指番号）。Issue #232: 運用者が実機（月光の入力）で見比べて
    * **従来の 180%**（1.0 sp = 10 u → 1.8 sp = 18 u）を選定した実測値。
    *
@@ -108,8 +119,20 @@ export const ENGRAVING_TEXT_UNITS = {
   lyrics: spToUnits(ENGRAVING_TEXT_SP.lyrics),
   dynamics: spToUnits(ENGRAVING_TEXT_SP.dynamics),
   expressiveText: spToUnits(ENGRAVING_TEXT_SP.expressiveText),
+  expressionMarking: spToUnits(ENGRAVING_TEXT_SP.expressionMarking),
   fingering: spToUnits(ENGRAVING_TEXT_SP.fingering),
 } as const;
+
+/**
+ * テンポ表記と発想標語を同じ音符に重ねたときの、行間（SVG論理単位）。Issue #237。
+ *
+ * 浄書慣例では上から「テンポ表記 → 発想標語 → 五線」の順に積む。
+ * 五線に近い側（発想標語）を従来のテンポ表記と同じ高さに置き、
+ * テンポ表記だけをこのぶん上へ持ち上げる（下から積み上げる）。
+ * 値は発想標語の文字サイズ（13 u）に、文字同士がくっつかない程度の
+ * 余白（約 40%）を足したもの。
+ */
+export const TEXT_STACK_LINE_GAP_UNITS = 18;
 
 /**
  * 選択中の松葉を太く見せるときの倍率。
