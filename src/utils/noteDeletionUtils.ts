@@ -10,6 +10,7 @@
 // deleteVoiceEventFromMeasures（このファイルの後半）で扱う。
 
 import type { HairpinMark, MeasureData, NoteEvent, TieArc } from '../types/storage';
+import type { ClefType } from '../components/clefUtils';
 import { planTupletGroupDeletion } from './tupletUtils';
 import { getVoiceEvents } from './voiceMeasureUtils';
 
@@ -25,12 +26,13 @@ function cloneMeasures(measures: MeasureData[]): MeasureData[] {
 /**
  * 指定した音符（measure小節目・index番目のイベント）を削除する。
  *
- * 仕様（StaffCanvas/PianoSystemCanvas で完全一致していたもの）:
- * 1. 連符内のイベントなら、グループ全体を同じ長さの通常の休符に置き換える
- *    （connectedTuplet の音価バランスが崩れるのを防ぐため）
- * 2. 和音（keys.length > 1）で keyIndex が指定されているときは、その1音だけを取り除く。
+ * 仕様（StaffCanvas/PianoSystemCanvas で完全一致していたもの。判定の**順序も仕様のうち**）:
+ * 1. 和音（keys.length > 1）で keyIndex が指定されているときは、その1音だけを取り除く。
+ *    連符内の和音でもこの分岐が優先され、tuplet は維持されたまま1音だけ消える（Issue #223）
  *    - 取り除いた音を fromKey とする arc（タイ/スラー）は削除する
  *    - 他のイベントから、削除イベントを toKey=取り除いた音 で指す arc も削除する
+ * 2. 連符内のイベントなら、グループ全体を同じ長さの通常の休符に置き換える
+ *    （connectedTuplet の音価バランスが崩れるのを防ぐため）
  * 3. それ以外（単音 or keyIndex未指定）はイベント自体を削除し、
  *    - 削除イベントを終点(to)とする arc は削除、同小節で後続を指す toEventIndex は繰り上げる
  *    - hairpin（松葉）も同様に endEvent が削除対象なら削除、後続なら繰り上げる
@@ -39,7 +41,8 @@ function cloneMeasures(measures: MeasureData[]): MeasureData[] {
  * @param measure 削除対象イベントの小節インデックス
  * @param index 削除対象イベントのインデックス
  * @param keyIndex 和音中の対象キーのインデックス（省略時はイベント全体を削除）
- * @param defaultRestKey 連符グループ削除時、休符の描画位置が決まらない場合に使う既定キー
+ * @param clef そのパートの音部記号。連符グループ削除で生まれる休符の描画位置を決めるのに使う
+ *   （消した音の音高を引き継ぐか、標準位置へ落とすかの判定。Issue #226）
  * @returns 変更後の MeasureData 配列。範囲外指定などで変更が無い場合は引数の measures をそのまま返す。
  */
 export function deleteEventFromMeasures(
@@ -47,7 +50,7 @@ export function deleteEventFromMeasures(
   measure: number,
   index: number,
   keyIndex: number | undefined,
-  defaultRestKey: string
+  clef: ClefType
 ): MeasureData[] {
   if (measure < 0 || measure >= measures.length) return measures;
   const targetMeasureEvents = measures[measure].events;
@@ -56,16 +59,17 @@ export function deleteEventFromMeasures(
   const next = cloneMeasures(measures);
   const targetEv = next[measure].events[index];
 
-  // 1. 連符内イベントの削除はグループごと通常の休符へ置き換える
-  if (targetEv.tuplet) {
-    const plan = planTupletGroupDeletion(next[measure].events, index, defaultRestKey);
-    if (plan) {
-      next[measure].events.splice(plan.groupStart, plan.groupEnd - plan.groupStart + 1, ...plan.replacement);
-    }
-    return next;
-  }
-
-  // 2. 和音中の1音だけを削除する
+  // 1. 和音中の1音だけを削除する
+  //
+  // この判定は「連符グループごと休符化」より**必ず先**に置くこと（Issue #223）。
+  // 連符の中に作った和音は「tuplet を持つ」「keys が2つ以上ある」の両方に当てはまるため、
+  // 順序が逆だと keyIndex（どの符頭を選んだか）が無視され、1音消したいだけなのに
+  // 連符グループ全体が休符に置き換わってしまう。
+  // ここで作り直すイベントは ...targetEv を土台にしているので tuplet 情報はそのまま残り、
+  // グループの音価バランス（＝描画と再生の前提）は崩れない。
+  //
+  // なお和音の**最後の1音**（keys.length === 1）に対する削除はこの分岐に入らず、
+  // 下の連符分岐へ落ちる。音符そのものが消える以上、連符グループごと休符へ置き換えるのが正しい。
   if (!targetEv.isRest && keyIndex !== undefined && keyIndex >= 0 && keyIndex < targetEv.keys.length && targetEv.keys.length > 1) {
     const removedKey = targetEv.keys[keyIndex];
     const nextKeys = targetEv.keys.filter((_, keyIdx) => keyIdx !== keyIndex);
@@ -84,6 +88,16 @@ export function deleteEventFromMeasures(
         return patched.length === ev.arcs.length ? ev : { ...ev, arcs: patched.length ? patched : undefined };
       });
     });
+    return next;
+  }
+
+  // 2. 連符内イベントの削除はグループごと通常の休符へ置き換える
+  //    （部分的に消すと連符の音価バランスが崩れ、描画と再生の拍計算が破綻するため）
+  if (targetEv.tuplet) {
+    const plan = planTupletGroupDeletion(next[measure].events, index, clef);
+    if (plan) {
+      next[measure].events.splice(plan.groupStart, plan.groupEnd - plan.groupStart + 1, ...plan.replacement);
+    }
     return next;
   }
 
@@ -188,7 +202,7 @@ function remapVoiceEventRefsAfterRemoval(
  * @param voiceIndex 削除対象の声部（1以上を想定。0 は deleteEventFromMeasures の担当）
  * @param measure 削除対象イベントの小節インデックス
  * @param index 削除対象イベントのインデックス（その声部の events 内での位置）
- * @param defaultRestKey 連符グループ削除時、休符の描画位置が決まらない場合に使う既定キー
+ * @param clef そのパートの音部記号。連符グループ削除で生まれる休符の描画位置を決めるのに使う（Issue #226）
  * @returns 変更後の MeasureData 配列。範囲外指定などで変更が無い場合は引数の measures をそのまま返す。
  */
 export function deleteVoiceEventFromMeasures(
@@ -196,10 +210,10 @@ export function deleteVoiceEventFromMeasures(
   voiceIndex: number,
   measure: number,
   index: number,
-  defaultRestKey: string
+  clef: ClefType
 ): MeasureData[] {
   if (voiceIndex <= 0) {
-    return deleteEventFromMeasures(measures, measure, index, undefined, defaultRestKey);
+    return deleteEventFromMeasures(measures, measure, index, undefined, clef);
   }
   if (measure < 0 || measure >= measures.length) return measures;
   const voiceEvents = measures[measure].voices?.[voiceIndex]?.events;
@@ -209,7 +223,7 @@ export function deleteVoiceEventFromMeasures(
   // （声部1・単旋律譜と同じ仕様）。1つだけ消すと残りが tuplet.id を持ったまま半端な音価で残り、
   // 描画（VexFlow の Tuplet）と再生の拍計算が崩れてしまうため。
   const tupletDeletion = voiceEvents[index].tuplet
-    ? planTupletGroupDeletion(voiceEvents, index, defaultRestKey)
+    ? planTupletGroupDeletion(voiceEvents, index, clef)
     : null;
   const removeStart = tupletDeletion ? tupletDeletion.groupStart : index;
   const removeEnd = tupletDeletion ? tupletDeletion.groupEnd : index;

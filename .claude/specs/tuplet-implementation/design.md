@@ -425,3 +425,210 @@ VexFlow の `Tuplet` は「括弧を描くか」をコンストラクタの時�
 `StaffCanvas.tsx` は既に廃止されており、`Beam.generateBeams` の呼び出しは
 リポジトリ全体で `PianoSystemCanvas.tsx` の1か所だけなので、単旋律譜・ピアノ譜・
 四重奏・編成譜のすべてがこの1か所の修正で直る。
+
+## 追記4: 休符を連符グループで置き換えられるようにする（Issue #224, 2026-08-12）
+
+### 問題
+
+満杯の小節で連符グループを削除すると、上記「削除セマンティクス」のとおり
+同じ長さの通常休符に戻る（例: 8分3連 → 4分休符1個）。ところがその休符を
+**連符ツールでクリックしても連符に戻せなかった**ため、「連符 → 休符」が
+一方通行になり、入れ直す手段が Undo しか無かった（運用者の実機テスト・月光4小節目）。
+
+原因は入力経路が2つしか無く、どちらも満杯の小節では機能しなかったことである。
+
+1. `doInsert()` の連符分岐は「小節の空き拍へグループを追加する」経路なので、
+   満杯の小節では `currentBeats + groupBeats > beatsPerMeasure` のガードで何もしない
+2. 休符クリックの置換 `buildRestEditReplacement()` は音価ツールぶんの分岐しか持たず、
+   連符ツールが選ばれていても**普通の8分音符として**休符を置換・分割していた
+   （休符本体から外れた位置のクリックは 1 の `doInsert()` へ回るため、
+   満杯の小節では「何をしても無反応」に見えていた）
+
+### 修正設計
+
+**「休符が持っている拍を、そのまま連符グループへ両替する」**という考え方にした。
+小節全体の空き拍は増減しないので、満杯の小節でも成立する。
+
+- `src/utils/tupletUtils.ts` に `planTupletReplacementForRest()` を新設
+  - 対象は**連符ではない普通の休符**だけ。連符内の休符は従来どおり
+    `buildTupletRestReplacement()`（同音価のときだけ音符へ置換する保守的な仕様）に任せる。
+    ここで新しいグループを作ると連符が入れ子になって壊れるため、判定の順序も仕様のうち
+  - 休符の拍数 ≧ グループの拍数 のときだけ計画を返す。足りなければ `null`（＝何もしない）
+  - 余りは**拍数だけ**を返し、どの音価の休符へ割るかは呼び出し側に任せる
+    （余りの休符の描画位置は音部記号ごとの標準位置が要り、その知識は
+    `PianoSystemCanvas` 側の `buildRestEventsForBeats()` にあるため）
+- `PianoSystemCanvas.buildRestEditReplacement()` に連符ツールの分岐を追加し、
+  余りの休符を組み立てるために引数 `clef` を追加した
+- 置き換え後の並びは **「連符グループ → 余りの休符」の順**で固定した。
+  通常の分割はクリック位置で音符を前後どちらへ寄せるか決める（`noteAfterRest`）が、
+  連符では採用していない: グループの途中に休符が割り込むと連符の内訳が読みにくく、
+  ブラケットの範囲も直感に反するため
+- ホバー中のカーソルは、連符ツールで休符本体に乗ったときだけ
+  「置ける＝`copy` / 置けない＝`not-allowed`」に分けた。判定には**クリック時と同じ
+  `buildRestEditReplacement()` をそのまま通している**（別の式で近似するとホバー表示だけ嘘になる）
+
+### 仕様として残した点
+
+- **置換は従来どおり「1回目のクリックで選択 → 2回目で置換」の2段階**。休符編集全体の
+  操作体系なので、ここだけ1クリックにはしていない（この2段階そのものの見直しは Issue #233）
+- 休符が短くて置けないときは何もしない。休符本体から外れたクリックは従来どおり
+  `doInsert()` へ回るので、空きがある小節では末尾へグループが追加される（既存挙動）
+
+### 影響範囲
+
+- `src/utils/tupletUtils.ts` — `planTupletReplacementForRest()` と拍数比較用の `BEATS_EPS` を追加
+- `src/components/PianoSystemCanvas.tsx` — `buildRestEditReplacement()` に連符分岐と `clef` 引数、
+  ホバーカーソルの分岐（全譜種・全声部が通る唯一の経路。`StaffCanvas.tsx` は廃止済み）
+- `src/utils/tupletUtils.test.ts` — `planTupletReplacementForRest` の単体テスト8件
+- `src/components/PianoSystemCanvasRestToTuplet.test.tsx`（新規） — 実際に休符をクリックして
+  データと描画（`g.vf-tuplet`）まで確かめる回帰テスト6件
+## 追記5: 連符内の和音で1音だけ削除するとグループごと消える不具合の修正（Issue #223, 2026-08-12）
+
+### 問題
+
+三連符の中の音符に和音（例: `f#/3` + `g#/3`）を作ったあと、片方の符頭を選んで
+Delete すると、**その1音だけでなく三連符グループ全体が4分休符に置き換わる**。
+
+選択そのものは符頭単位で正しく成立していた（`selected.keyIndex` に押した符頭の
+位置が入っている）。壊れていたのは削除側の判定順序だった。
+
+### 原因: 判定の順序（「削除セマンティクス」との衝突）
+
+`src/utils/noteDeletionUtils.ts` の `deleteEventFromMeasures` は3つの分岐を
+上から順に評価するが、その順番が
+
+1. 連符内イベント → グループごと休符化（`if (targetEv.tuplet)` で即 return）
+2. 和音中の1音削除（`keyIndex` 指定時）
+3. イベント自体の削除
+
+になっていた。**連符の中の和音は 1 と 2 の両方に当てはまる**ため、必ず先に来る 1 に
+飲み込まれ、`keyIndex`（どの符頭を選んだか）が読まれないまま return していた。
+
+つまり「連符は部分削除しない」という上の『削除セマンティクス（設計判断）』の節の
+仕様が、**本来その対象ではない「和音の構成音を1つ減らす」操作にまで効いていた**、
+というのが本件の正体である。和音から1音減らしても連符グループの
+イベント数・音価・`notesOccupied/numNotes` 比率はどれも変わらないので、
+この操作に「グループごと休符化」を適用する理由は無い。
+
+### 修正: 和音1音削除を連符判定より先に評価する
+
+分岐の順序を **和音1音削除 → 連符グループ削除 → イベント削除** に入れ替えた
+（判定式そのものは1文字も変えていない）。
+
+- 和音1音削除の条件はもともと `keys.length > 1` を含むので、**連符内の単音**は
+  この分岐に入らず、従来どおり分岐2（グループごと休符化）へ落ちる
+- 新しいイベントは `{ ...targetEv, keys, arcs }` の形で作るため `tuplet` は
+  そのまま引き継がれる。グループの構成イベント数も音価も変わらない
+- 和音の**最後の1音**を消す場合（`keys.length === 1`）も分岐2へ落ちる。音符そのものが
+  消える以上、グループごと休符に置き換えるのが正しい
+- 連符内の休符は `isRest` かつ `keys.length === 1` なので、これも従来どおり分岐2
+
+判定順序そのものが仕様なので、`deleteEventFromMeasures` の JSDoc に
+「順序も仕様のうち」と明記し、コード側にも理由をコメントで残した。
+
+### 影響範囲
+
+- `src/utils/noteDeletionUtils.ts` — `deleteEventFromMeasures` の分岐順序と JSDoc・コメント
+- `src/utils/noteDeletionUtils.test.ts` — 連符内和音の1音削除／連符内単音・休符の
+  グループ削除維持／連符外の和音1音削除、の単体テストを追加（受入条件4）
+
+`deleteEventFromMeasures` の呼び出し元は `PianoSystemCanvas.tsx` の Delete/Backspace
+ハンドラ1か所だけ（`StaffCanvas.tsx` は廃止済み）なので、単旋律譜・ピアノ譜・四重奏・
+編成譜のすべてがこの1か所で直る。
+
+### 声部2（voices[1]）は今回のスコープ外
+
+声部2の削除を担当する `deleteVoiceEventFromMeasures` は **`keyIndex` を引数に持たず**、
+呼び出し側（`PianoSystemCanvas.tsx` の `sel.voiceIndex` 分岐）も渡していない。
+つまり声部2では和音の1音削除がそもそも実装されておらず、和音を選んで Delete すると
+イベントごと（連符ならグループごと）消える。これは本 Issue の症状とは別の未実装事項
+なので、順序の入れ替えでは直らないし、今回は触っていない。
+
+
+## 追記6: 連符グループ削除で生まれる休符が異常位置に置かれる不具合の修正（Issue #226, 2026-08-12）
+
+### 問題
+
+連符グループを削除すると同じ実長の通常休符に置き換わるが、その休符の表示位置が
+`c#/2`（ト音記号の五線のはるか下＝ヘ音記号の五線の上あたり）になるケースを
+運用者の実機テスト（月光 第4小節）で確認した。ユーザーには
+「右手の休符が消えて、左手に謎の休符が出た」ように見える。
+
+さらに悪いことに、この休符は当たり判定・選択判定の固定Y窓（五線 ± 3加線、
+`CHORD_LEDGER_TOP` / `CHORD_LEDGER_BOT`）の外にいるため **クリックで選択できず、
+`0` キーの標準位置リセットも届かない**。アプリ内で修復する手段が無い状態になる
+（Issue #218 で選択窓が広がれば救出はできるが、そもそも異常位置に生まれないように
+するのが本Issueの主旨）。
+
+### 原因
+
+`src/utils/tupletUtils.ts` の `planTupletGroupDeletion`:
+
+```ts
+const restKeyForGroup = groupEvents[0]?.keys[0] || defaultRestKey;
+```
+
+置き換え休符の表示位置に **消したグループの先頭の音の音高をそのまま使っていた**。
+音が五線の近くにあれば「休符が元の音の高さに残る」ので自然だが、極端な音高
+（Issue #219 の誤帰属で入り込んだ音など）だと、その異常な高さがそのまま休符に
+引き継がれてしまう。
+
+### 修正設計
+
+**「引き継いでよい範囲」を決めて、範囲外なら音価ごとの標準位置へフォールバックする。**
+
+- 判定は新設の純関数 `canInheritRestDisplayKey(clef, key)`（`tupletUtils.ts`）
+  - 範囲は **五線 ± 2加線**（line で `-2`〜`6`。line は五線最上線が 0、加線1本ぶんが 1）
+  - なぜ ±2 か: 選択・当たり判定の固定Y窓が **五線 ± 3加線** なので、その内側に
+    収めておけば、生まれた休符は必ずクリックで選択でき `0` キーでも救出できる。
+    「直せない休符を作らない」ことを範囲の根拠にしている
+  - `keyToLine` は解釈できないキーに対して `2`（五線中央）を返すため、
+    先に `isValidNoteKeyString` で妥当性を確かめる。これを省くと
+    「壊れたキー＝範囲内」と誤判定してそのまま保存してしまう
+- フォールバック先は `defaultRestDisplayKeyForDuration(clef, duration)`。
+  全休符だけ標準位置が違う（第4線ぶら下げ）ため、休符1個ごとに音価を見て決める。
+  そのため `buildRestEventsForBeatsShared` は固定キーではなく
+  **キーを返す関数**（`(duration) => string`）を受け取る形に変えた
+- clef はそのパートのものを使う。同じ `c/2` でもヘ音記号なら下方2加線（範囲内）、
+  ト音記号なら遥か下（範囲外）で、判定は音部記号なしには決まらないため
+
+### 呼び出し規約の変更（clef の受け渡し）
+
+`planTupletGroupDeletion` / `deleteEventFromMeasures` / `deleteVoiceEventFromMeasures`
+の最後の引数を **`defaultRestKey: string` から `clef: ClefType` へ変更**した。
+
+- 呼び出し元（`PianoSystemCanvas.tsx` の2か所）は元々 `defaultRestKeyForClef(clef)` を
+  渡していたので、渡す情報が「clef から作った1つのキー」から「clef そのもの」に戻っただけ
+- 省略可能な追加引数にはしなかった。範囲判定に clef が要る以上、渡し忘れた呼び出しは
+  黙って旧挙動（クランプなし）に戻ってしまい、同じ不具合が再発するため
+- 副次的な改善として、グループ先頭に `keys` が無い場合のフォールバックも
+  音価ごとの標準位置になった（従来は音価によらず五線中央）
+
+### 通常音符（連符以外）の削除に同じ継承があるかの確認結果
+
+Issue の指示により、休符が他イベントの音高を引き継ぐ経路を全て洗い出した。
+
+| 経路 | 継承の有無 | 対応 |
+| --- | --- | --- |
+| `planTupletGroupDeletion`（連符グループ削除） | **あり**（消した音の音高） | 本修正でクランプ |
+| `deleteEventFromMeasures` の通常削除（手順3） | なし（イベントを `splice` するだけで休符を作らない） | 対応不要 |
+| `deleteEventFromMeasures` の和音1音削除（手順2） | なし（`keys` から1つ除くだけ） | 対応不要 |
+| `buildRestEventsForBeats`（`PianoSystemCanvas.tsx`・小節の自動補完） | なし（`defaultRestDisplayKeyForDuration`） | 対応不要 |
+| `buildRestEditReplacement` の休符分割（`PianoSystemCanvas.tsx:360` 付近） | **休符の**キーを引き継ぐ（音符のキーではない） | 対応不要。引き継ぎ元は休符自身なので、異常位置の休符が存在しなければ異常位置は生まれない。本修正で「異常位置の休符を作らない」側を塞いだ |
+| `sanitizeRenderEvent`（描画直前の丸め） | 文字列として妥当かだけを見る（`c#/2` は妥当なので通る） | 対応不要。ここは描画の防波堤であり、位置の妥当性はデータを作る側で担保する方針 |
+
+### 影響範囲
+
+- `src/utils/tupletUtils.ts` — `canInheritRestDisplayKey` を新設、
+  `planTupletGroupDeletion` の第3引数を clef 化、`buildRestEventsForBeatsShared` を
+  キー解決関数受け取りに変更
+- `src/utils/noteDeletionUtils.ts` — `deleteEventFromMeasures` /
+  `deleteVoiceEventFromMeasures` の最終引数を clef 化（内部で `planTupletGroupDeletion` へ渡すだけ）
+- `src/components/PianoSystemCanvas.tsx` — Delete/Backspace の2か所（声部1・声部2）が
+  `defaultRestKeyForClef(clef)` ではなく `clef` を渡す
+- `src/utils/tupletUtils.test.ts` — 範囲内継承・範囲外フォールバック・壊れたキー・
+  `keys` 無し・全休符のフォールバック位置・音部記号ごとの範囲差を固定
+- `src/utils/noteDeletionUtils.test.ts` — 新しい引数（clef）に追従
+
+単旋律譜・ピアノ譜・四重奏・編成譜のすべての削除がこの2関数を通るため、
+譜種ごとの分岐は増やしていない。

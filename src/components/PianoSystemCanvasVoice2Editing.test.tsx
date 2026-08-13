@@ -208,8 +208,10 @@ describe('PianoSystemCanvas 声部2の編集（Issue #112）', () => {
     });
     const updated = onChange.mock.calls.at(-1)![0] as MeasureData[];
 
-    // 4分休符の標準位置は五線中央（ト音記号では b/4）。
-    expect(updated[0].voices?.[1]?.events[1].keys).toEqual(['b/4']);
+    // 2声部が共存する小節なので、戻し先は五線中央（b/4）ではなく
+    // 声部2のやや下寄りの標準位置（line 3 = ト音記号の g/4）になる（Issue #227）。
+    // ここが中央のままだと、声部1の音符と同じ高さに戻ってしまい衝突する。
+    expect(updated[0].voices?.[1]?.events[1].keys).toEqual(['g/4']);
     expect(updated[0].voices?.[1]?.events[1].isRest).toBe(true);
     expect(updated[0].events).toEqual(data[0].events);
   });

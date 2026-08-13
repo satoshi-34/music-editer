@@ -4,8 +4,10 @@ import type { NoteEvent } from '../types/storage';
 import {
   buildTupletGroupPlan,
   buildTupletRestReplacement,
+  canInheritRestDisplayKey,
   generateTupletId,
   planTupletGroupDeletion,
+  planTupletReplacementForRest,
 } from './tupletUtils';
 
 describe('tupletUtils', () => {
@@ -98,11 +100,75 @@ describe('tupletUtils', () => {
     });
   });
 
+  describe('planTupletReplacementForRest（Issue #224: 休符を連符グループで置き換える）', () => {
+    const TRIPLET = { numNotes: 3, notesOccupied: 2 };
+
+    it('4分休符を8分3連（1拍）で置き換えると、余りが出ずグループだけになる', () => {
+      const rest: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(rest, ['c/4'], { duration: '8' }, 'b/4', TRIPLET);
+      expect(plan).not.toBeNull();
+      expect(plan!.groupEvents).toHaveLength(3);
+      expect(plan!.groupEvents[0].isRest).toBe(false);
+      expect(plan!.groupEvents[0].keys).toEqual(['c/4']);
+      expect(plan!.groupEvents.slice(1).every((ev) => ev.isRest)).toBe(true);
+      // 3つとも同じ連符グループに属する
+      expect(new Set(plan!.groupEvents.map((ev) => ev.tuplet?.id)).size).toBe(1);
+      expect(plan!.remainingBeats).toBe(0);
+    });
+
+    it('2分休符（2拍）なら8分3連（1拍）を置いて1拍ぶんが余る', () => {
+      const rest: NoteEvent = { dur: '2', isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(rest, ['c/4'], { duration: '8' }, 'b/4', TRIPLET);
+      expect(plan!.remainingBeats).toBeCloseTo(1, 6);
+    });
+
+    it('付点4分休符（1.5拍）でも置ける（余りは0.5拍）', () => {
+      const rest: NoteEvent = { dur: '4', dots: 1, isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(rest, ['c/4'], { duration: '8' }, 'b/4', TRIPLET);
+      expect(plan!.remainingBeats).toBeCloseTo(0.5, 6);
+    });
+
+    it('休符がグループより短いときは null（何もしない）', () => {
+      // 8分休符=0.5拍に、8分3連グループ=1拍は入らない
+      const rest: NoteEvent = { dur: '8', isRest: true, keys: ['b/4'] };
+      expect(planTupletReplacementForRest(rest, ['c/4'], { duration: '8' }, 'b/4', TRIPLET)).toBeNull();
+    });
+
+    it('連符内の休符は対象外（null）。従来の buildTupletRestReplacement に任せる', () => {
+      const rest: NoteEvent = {
+        dur: '8', isRest: true, keys: ['b/4'],
+        tuplet: { id: 'tuplet-existing', ...TRIPLET },
+      };
+      expect(planTupletReplacementForRest(rest, ['c/4'], { duration: '8' }, 'b/4', TRIPLET)).toBeNull();
+    });
+
+    it('休符ではないイベント（音符）は対象外（null）', () => {
+      const note: NoteEvent = { dur: '4', isRest: false, keys: ['c/4'] };
+      expect(planTupletReplacementForRest(note, ['c/4'], { duration: '8' }, 'b/4', TRIPLET)).toBeNull();
+    });
+
+    it('5連符（16分×5＝1拍）でも4分休符を置き換えられる', () => {
+      const rest: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(
+        rest, ['c/4'], { duration: '16' }, 'b/4', { numNotes: 5, notesOccupied: 4 }
+      );
+      expect(plan!.groupEvents).toHaveLength(5);
+      expect(plan!.remainingBeats).toBe(0);
+    });
+
+    it('16分3連（0.5拍）は8分休符（0.5拍）へちょうど収まる（誤差で弾かれない）', () => {
+      const rest: NoteEvent = { dur: '8', isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(rest, ['c/4'], { duration: '16' }, 'b/4', TRIPLET);
+      expect(plan).not.toBeNull();
+      expect(plan!.remainingBeats).toBeCloseTo(0, 6);
+    });
+  });
+
   describe('planTupletGroupDeletion', () => {
     it('連符内イベントを削除しようとするとグループ全体を実長と同じ通常休符に置き換える', () => {
       const plan = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4');
       const events: NoteEvent[] = [...plan.groupEvents];
-      const deletion = planTupletGroupDeletion(events, 1, 'b/4');
+      const deletion = planTupletGroupDeletion(events, 1, 'treble');
       expect(deletion).not.toBeNull();
       expect(deletion!.groupStart).toBe(0);
       expect(deletion!.groupEnd).toBe(2);
@@ -113,16 +179,83 @@ describe('tupletUtils', () => {
 
     it('連符ではないイベントには null を返す', () => {
       const events: NoteEvent[] = [{ dur: '4', isRest: false, keys: ['c/4'] }];
-      expect(planTupletGroupDeletion(events, 0, 'b/4')).toBeNull();
+      expect(planTupletGroupDeletion(events, 0, 'treble')).toBeNull();
     });
 
     it('他の連符グループが前後に隣接していても自グループだけを対象にする', () => {
       const planA = buildTupletGroupPlan('16', undefined, ['c/4'], 'b/4');
       const planB = buildTupletGroupPlan('8', undefined, ['e/4'], 'b/4');
       const events: NoteEvent[] = [...planA.groupEvents, ...planB.groupEvents];
-      const deletion = planTupletGroupDeletion(events, 3, 'b/4');
+      const deletion = planTupletGroupDeletion(events, 3, 'treble');
       expect(deletion!.groupStart).toBe(3);
       expect(deletion!.groupEnd).toBe(5);
+    });
+
+    // ===== Issue #226: 消した音の音高をそのまま休符位置にすると異常位置の休符が生まれる =====
+
+    it('五線から極端に離れた音高（ト音の c#/2）のグループを消すと、休符は音価ごとの標準位置になる', () => {
+      const plan = buildTupletGroupPlan('8', undefined, ['c#/2'], 'b/4');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'treble');
+      // 引き継がず、4分休符の標準位置（ト音の五線中央 = b/4）へフォールバックする
+      expect(deletion!.replacement).toEqual([{ dur: '4', isRest: true, keys: ['b/4'] }]);
+    });
+
+    it('五線に近い音高（下方1加線の c/4）はそのまま引き継ぐ', () => {
+      const plan = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'treble');
+      expect(deletion!.replacement).toEqual([{ dur: '4', isRest: true, keys: ['c/4'] }]);
+    });
+
+    it('範囲判定は音部記号ごとに行う（ヘ音記号なら c/2 は範囲内でそのまま引き継ぐ）', () => {
+      const plan = buildTupletGroupPlan('8', undefined, ['c/2'], 'd/3');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'bass');
+      expect(deletion!.replacement).toEqual([{ dur: '4', isRest: true, keys: ['c/2'] }]);
+    });
+
+    it('範囲外へのフォールバックでは、全休符だけ第4線ぶら下げの標準位置になる', () => {
+      // 4分音符の3連符 = 実長2分音符ぶん…ではなく、ここでは全休符が出る長さを作るために
+      // 全音符3つの3連符（実長 = 全音符2つぶん = 8拍）を消す。
+      // 4/4 の1小節を超える長さだが、planTupletGroupDeletion は拍数の分解だけを行う純関数なので成立する。
+      const plan = buildTupletGroupPlan('1', undefined, ['c#/2'], 'b/4');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'treble');
+      expect(deletion!.replacement).toEqual([
+        { dur: '1', isRest: true, keys: ['d/5'] },
+        { dur: '1', isRest: true, keys: ['d/5'] },
+      ]);
+    });
+
+    it('キーが壊れている（解釈できない文字列）ときも標準位置へフォールバックする', () => {
+      // keyToLine は解釈できないキーに 2（五線中央）を返すため、
+      // 妥当性チェックを飛ばすと「壊れたキーは範囲内」と誤判定してそのまま保存してしまう。
+      const plan = buildTupletGroupPlan('8', undefined, ['zz'], 'b/4');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'treble');
+      expect(deletion!.replacement).toEqual([{ dur: '4', isRest: true, keys: ['b/4'] }]);
+    });
+
+    it('グループ先頭に keys が無いときも標準位置へフォールバックする', () => {
+      const plan = buildTupletGroupPlan('8', undefined, [], 'b/4');
+      const deletion = planTupletGroupDeletion([...plan.groupEvents], 0, 'treble');
+      expect(deletion!.replacement).toEqual([{ dur: '4', isRest: true, keys: ['b/4'] }]);
+    });
+  });
+
+  describe('canInheritRestDisplayKey', () => {
+    it('五線 ±2加線の内側は引き継ぎ可（ト音: 上方2加線 c/6 〜 下方2加線 a/3）', () => {
+      expect(canInheritRestDisplayKey('treble', 'b/4')).toBe(true); // 五線中央
+      expect(canInheritRestDisplayKey('treble', 'c/6')).toBe(true); // 上方2加線ちょうど
+      expect(canInheritRestDisplayKey('treble', 'a/3')).toBe(true); // 下方2加線ちょうど
+    });
+
+    it('五線 ±2加線より外は引き継ぎ不可', () => {
+      expect(canInheritRestDisplayKey('treble', 'e/6')).toBe(false); // 上方3加線
+      expect(canInheritRestDisplayKey('treble', 'f/3')).toBe(false); // 下方3加線
+      expect(canInheritRestDisplayKey('treble', 'c#/2')).toBe(false); // Issue #226 の実測ケース
+    });
+
+    it('未定義・空文字・壊れたキーは引き継ぎ不可', () => {
+      expect(canInheritRestDisplayKey('treble', undefined)).toBe(false);
+      expect(canInheritRestDisplayKey('treble', '')).toBe(false);
+      expect(canInheritRestDisplayKey('treble', 'h/4')).toBe(false);
     });
   });
 });

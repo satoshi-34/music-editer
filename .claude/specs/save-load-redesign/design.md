@@ -173,3 +173,96 @@ localStorage 保存されており自動保存の対象外のため、範囲外�
   （`handleExportFile` 等）は変更なし）。
 - `src/components/ScorePageAutosaveDeps.test.tsx`: `measuresPerSystem` が自動保存の
   依存配列に含まれることを検証するテストを追加。
+
+## 追記（2026-08-12, Issue #229）: ファイル保存の失敗が無言で、0バイトの抜け殻が残っていた
+
+### 問題
+
+`showSaveFilePicker`（File System Access API）は、ユーザーが保存先を決めてダイアログを
+閉じた時点で **0 バイトのファイルを作る**。中身を書くのはそのあとの
+`createWritable()` → `write()` → `close()` である。
+
+埋め込みブラウザ・一部の WebView では、ファイル作成までは成功するのに直後の
+`createWritable()` が `NotAllowedError` で弾かれることがある。旧実装はこのとき
+`console.warn` だけを出して blob ダウンロードへ切り替えていたため、次の2つの実害があった
+（運用者の実機テストで実際に誤認が発生した）。
+
+1. **選んだ場所に 0 バイトのファイルが残る。** 見た目はファイル名も日時も正しいので、
+   ユーザーはそれを保存できた本物だと思ってしまう（開くと空で、譜面は失われたように見える）
+2. **ダウンロードへ切り替わったことが画面に出ない。** ユーザーは何が起きたか分からない
+
+### 修正設計
+
+#### 1. 戻り値を「保存できたか」ではなく「どの経路で終わったか」にする
+
+`exportScoreToFile` の戻り値を `FileSystemFileHandle | null` から `ExportScoreResult`
+（判別可能ユニオン）へ変えた。`null` のままでは「キャンセル」「非対応ブラウザの通常
+ダウンロード」「書き込み失敗のフォールバック」の3つが区別できず、画面側が通知の要否を
+判断できないため。
+
+| status | 意味 | 通知 |
+| --- | --- | --- |
+| `saved` | 選んだ場所へ書き込めた（`handle` は次回の上書き用） | 出さない |
+| `cancelled` | 保存先ダイアログを閉じた（何も起きていない） | 出さない |
+| `downloaded` | File System Access API 非対応（Safari/Firefox）の通常経路 | **出さない**（正常系のため） |
+| `fallback-download` | 保存先は選べたのに書き込みに失敗し、ダウンロードで代替した | **出す**（`leftoverEmptyFile` で文面が変わる） |
+
+`downloaded` と `fallback-download` を分けたのが要点で、Safari/Firefox では
+ダウンロードこそが正しい保存経路なので、そこに警告を出すと毎回の保存が
+「失敗したように見える」ノイズになる。
+
+#### 2. 抜け殻ファイルの後始末（`tryRemoveCreatedFile`）
+
+書き込みに失敗したら `handle.remove()` で空ファイルの削除を試みる。`remove()` は
+Chromium 系にしかない新しめの API なので、**存在しない場合と例外を投げた場合の両方**を
+「消せなかった」として扱い、`leftoverEmptyFile: true` を返して画面側から削除をお願いする。
+
+**削除してよいのは「今回このダイアログで作ったハンドル」だけ**である。上書き用に
+渡された既存ファイルのハンドル（`fileHandle` 引数）は消してはならない。既存ファイルの
+中身はユーザーの財産であり、`createWritable` の失敗時には無傷のまま残っているためで、
+ここを取り違えると「保存に失敗したらファイルが消えた」という、元の不具合より重い
+データ喪失になる。実装では `createdHandle` という別変数でこの2つを区別している。
+
+#### 3. ファイル作成後の `AbortError` はキャンセル扱いにしない
+
+旧実装は `AbortError` を一律「ユーザーがキャンセルした」とみなしていたが、
+ファイルを作ったあとに中断された場合は抜け殻が残る。そこで
+**「まだファイルを作っていないとき（`createdHandle === null`）の `AbortError` だけ」**を
+`cancelled` とし、それ以外はフォールバック経路（削除の試行＋通知）へ流す。
+
+#### 4. 通知の出し方
+
+`SaveLoadButtons` に `warningNotice` props を追加した。位置と形は既存の `restoreNotice`
+トーストに合わせつつ、色を橙、`role` を `alert`（読み上げ時に割り込む）にして、
+成功通知（緑・`role="status"`）と区別している。表示時間は 10 秒で、`restoreNotice` の
+3 秒より長い。ユーザーに後始末（空ファイルの削除）をお願いすることがあり、読む前に
+消えてしまうと通知の意味が無くなるため。
+
+文面は削除の成否で変える。
+
+- 削除できた: 「選択した場所へ書き込めなかったため、ダウンロードに保存しました」
+- 削除できなかった: 上に「選択先にできた空のファイルは削除してください」を足す
+
+### 影響範囲
+
+- `src/utils/fileStorage.ts`: `ExportScoreResult` 型と `tryRemoveCreatedFile` /
+  `downloadJson` を追加。`exportScoreToFile` の戻り値の型が変わった（呼び出し元は
+  `ScorePage.handleExportFile` の1箇所のみ）。読み込み側 `importScoreFromFile` は変更なし。
+- `src/components/ScorePage.tsx`: `fileSaveWarning` state とタイマー、`showFileSaveWarning` を追加。
+  `handleExportFile` が `status` を見て通知を出す形になった。
+- `src/components/SaveLoadButtons.tsx`: `warningNotice` props と橙のトーストを追加。
+- `src/utils/fileStorage.test.ts`（新規）: 成功／キャンセル／`NotAllowedError` の3経路に加え、
+  `remove()` 非対応・`remove()` が失敗・**上書き経路では削除しない**・ファイル作成後の
+  `AbortError`・非対応ブラウザの `downloaded`・ファイル名の除去を固定。
+- `src/components/ScorePageFileSaveFallback.test.tsx`（新規）: 画面まで通して通知が出ること、
+  文面が削除の成否で変わること、成功・キャンセルでは通知が出ないことを固定。
+- `README.md`: 「困ったとき」に、この通知が出たときの対処（ダウンロードに入っている／
+  空ファイルを消す）を追記。
+
+### 今後の課題
+
+- 上書き用のハンドルで書き込みに失敗した場合、そのハンドルは `fileHandleRef` に
+  残したままにしている（保存先を忘れる＝次回またダイアログが出て、壊れた環境では
+  再び空ファイルが作られるため）。同じ場所への保存が続けて失敗する環境では、
+  毎回ダウンロードへ切り替わる形になる。
+- `WorkListPanel` の作品削除など、他の失敗経路の通知は今回の対象外。

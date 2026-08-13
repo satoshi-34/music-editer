@@ -3,9 +3,15 @@
 //
 // - staveSpacingForPartCount / computeLayout（純粋関数）で、パート数に応じた
 //   間隔の切り替えとレイアウト寸法を検証する。
-// - 実際に PianoSystemCanvas を描画し、各パートのヒット領域（.vf-note-hit）の
-//   Y座標から「隣接パートの間隔がすべて等しい」ことを確認する
+// - 実際に PianoSystemCanvas を描画し、各パートのヒット領域（.vf-note-hit）が公開する
+//   五線の基準座標から「隣接パートの間隔がすべて等しい」ことを確認する
 //   （computeLayout の値と実際の描画がずれていないかの回帰防止も兼ねる）。
+//
+// 参照するのは rect の `y` ではなく `data-line0-y`（五線の line0 のY座標）である点に注意。
+// rect の `y` は Issue #218（五線から遠い音符ぶんの拡張）と Issue #219（隣パートとの
+// 中間線でのクリップ）で音符の位置やパートの並び順によって変わるようになったため、
+// 「パート間隔」を測る物差しには使えない。data-line0-y は五線そのものの座標なので、
+// 当たり判定の都合に影響されない。
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 
@@ -147,14 +153,18 @@ describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
     return svg;
   }
 
-  it('二管編成相当（12パート）で、各パートのヒット領域のY座標差がすべて等しい', () => {
-    const svg = renderWithParts(12);
+  // 各パートの五線の基準座標（line0 のY）を上のパートから順に返す。
+  function line0YsOfEachPart(svg: SVGSVGElement, expectedCount: number): number[] {
     const hits = Array.from(
       svg.querySelectorAll('rect.vf-note-hit[data-measure="0"][data-note="0"]')
     ) as SVGRectElement[];
-    expect(hits.length).toBe(12);
+    expect(hits.length).toBe(expectedCount);
+    return hits.map((h) => parseFloat(h.getAttribute('data-line0-y')!));
+  }
 
-    const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
+  it('二管編成相当（12パート）で、各パートの五線のY座標差がすべて等しい', () => {
+    const svg = renderWithParts(12);
+    const ys = line0YsOfEachPart(svg, 12);
     const diffs = ys.slice(1).map((y, i) => y - ys[i]);
     diffs.forEach((d) => expect(d).toBeCloseTo(diffs[0], 3));
     // 12パートでは詰めた間隔（60ネイティブ単位、scale=1なのでそのまま60）が使われているはず。
@@ -163,12 +173,7 @@ describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
 
   it('弦楽四重奏相当（4パート）は、従来の間隔（80ネイティブ単位）のまま変化しない', () => {
     const svg = renderWithParts(4);
-    const hits = Array.from(
-      svg.querySelectorAll('rect.vf-note-hit[data-measure="0"][data-note="0"]')
-    ) as SVGRectElement[];
-    expect(hits.length).toBe(4);
-
-    const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
+    const ys = line0YsOfEachPart(svg, 4);
     const diffs = ys.slice(1).map((y, i) => y - ys[i]);
     diffs.forEach((d) => expect(d).toBeCloseTo(diffs[0], 3));
     expect(Math.abs(diffs[0])).toBeCloseTo(80, 1);
@@ -176,12 +181,7 @@ describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
 
   it('partSpacingOffsetPx（Issue #90）を指定すると、実際の描画のパート間隔もその分だけ均一に広がる', () => {
     const svg = renderWithParts(4, 20);
-    const hits = Array.from(
-      svg.querySelectorAll('rect.vf-note-hit[data-measure="0"][data-note="0"]')
-    ) as SVGRectElement[];
-    expect(hits.length).toBe(4);
-
-    const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
+    const ys = line0YsOfEachPart(svg, 4);
     const diffs = ys.slice(1).map((y, i) => y - ys[i]);
     diffs.forEach((d) => expect(d).toBeCloseTo(diffs[0], 3));
     // 従来の80 + オフセット20 = 100
@@ -190,10 +190,7 @@ describe('PianoSystemCanvas の実描画: パート間隔の均一性', () => {
 
   it('partSpacingOffsetPx を省略・0にすると、従来どおりの間隔のまま変化しない（回帰防止）', () => {
     const svg = renderWithParts(4, 0);
-    const hits = Array.from(
-      svg.querySelectorAll('rect.vf-note-hit[data-measure="0"][data-note="0"]')
-    ) as SVGRectElement[];
-    const ys = hits.map((h) => parseFloat(h.getAttribute('y')!));
+    const ys = line0YsOfEachPart(svg, 4);
     const diffs = ys.slice(1).map((y, i) => y - ys[i]);
     expect(Math.abs(diffs[0])).toBeCloseTo(80, 1);
   });
