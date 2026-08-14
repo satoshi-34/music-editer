@@ -46,7 +46,7 @@ describe('useTempoStorage', () => {
       });
 
       expect(success!).toBe(false);
-      expect(result.current.error).toContain('BPMは60-200の範囲で設定してください');
+      expect(result.current.error).toContain('BPMは30-240の範囲で設定してください');
       expect(result.current.tempoSettings.bpm).toBe(120); // 変更されない
       expect(result.current.isUpdating).toBe(false);
     });

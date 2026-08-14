@@ -48,4 +48,21 @@ describe('buildPlaybackPositionTimeline', () => {
 
     expect(timeline.map(item => item.position.measureIndex)).toEqual([0, 1, 0, 2]);
   });
+
+  // Issue #240 でテンポの有効範囲を 30〜240 へ広げたため、
+  // 両端でもハイライトの予約時刻が BPM に正しく反比例することを固定する。
+  it('新しい範囲の両端（30 / 240 BPM）でも予約時刻が破綻しない', () => {
+    const measures: MeasureData[] = [
+      {
+        events: [
+          { dur: '4', isRest: false, keys: ['c/4'] },
+          { dur: '4', isRest: false, keys: ['d/4'] },
+        ],
+      },
+    ];
+
+    // 30 BPM なら1拍 = 2000ms、240 BPM なら1拍 = 250ms
+    expect(buildPlaybackPositionTimeline(measures, 30, [4, 4]).map(item => item.atMs)).toEqual([0, 2000]);
+    expect(buildPlaybackPositionTimeline(measures, 240, [4, 4]).map(item => item.atMs)).toEqual([0, 250]);
+  });
 });

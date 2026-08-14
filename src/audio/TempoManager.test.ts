@@ -32,32 +32,41 @@ describe('TempoManager', () => {
       expect(tempoManager.getBPM()).toBe(100);
     });
 
-    it('最小BPM（60）を設定できる', () => {
-      tempoManager.setBPM(60);
-      expect(tempoManager.getBPM()).toBe(60);
+    it('最小BPM（30）を設定できる', () => {
+      tempoManager.setBPM(30);
+      expect(tempoManager.getBPM()).toBe(30);
     });
 
-    it('最大BPM（200）を設定できる', () => {
-      tempoManager.setBPM(200);
-      expect(tempoManager.getBPM()).toBe(200);
+    it('最大BPM（240）を設定できる', () => {
+      tempoManager.setBPM(240);
+      expect(tempoManager.getBPM()).toBe(240);
     });
 
-    it('範囲外のBPM（59）でエラーが発生する', () => {
-      expect(() => tempoManager.setBPM(59)).toThrow('BPMは60-200の範囲で設定してください。入力値: 59');
+    // Issue #240: 旧下限の 60 未満（月光 ♩=56、Largo ♩=40台）が設定できることを固定する
+    it('旧下限を下回るBPM（56 / 40）も設定できる', () => {
+      tempoManager.setBPM(56);
+      expect(tempoManager.getBPM()).toBe(56);
+
+      tempoManager.setBPM(40);
+      expect(tempoManager.getBPM()).toBe(40);
+    });
+
+    it('範囲外のBPM（29）でエラーが発生する', () => {
+      expect(() => tempoManager.setBPM(29)).toThrow('BPMは30-240の範囲で設定してください。入力値: 29');
       expect(tempoManager.getBPM()).toBe(120); // デフォルト値が保持される
     });
 
-    it('範囲外のBPM（201）でエラーが発生する', () => {
-      expect(() => tempoManager.setBPM(201)).toThrow('BPMは60-200の範囲で設定してください。入力値: 201');
+    it('範囲外のBPM（241）でエラーが発生する', () => {
+      expect(() => tempoManager.setBPM(241)).toThrow('BPMは30-240の範囲で設定してください。入力値: 241');
       expect(tempoManager.getBPM()).toBe(120); // デフォルト値が保持される
     });
 
     it('無効な値（NaN）でエラーが発生する', () => {
-      expect(() => tempoManager.setBPM(NaN)).toThrow('BPMは60-200の範囲で設定してください。入力値: NaN');
+      expect(() => tempoManager.setBPM(NaN)).toThrow('BPMは30-240の範囲で設定してください。入力値: NaN');
     });
 
     it('無効な値（Infinity）でエラーが発生する', () => {
-      expect(() => tempoManager.setBPM(Infinity)).toThrow('BPMは60-200の範囲で設定してください。入力値: Infinity');
+      expect(() => tempoManager.setBPM(Infinity)).toThrow('BPMは30-240の範囲で設定してください。入力値: Infinity');
     });
   });
 
@@ -228,8 +237,8 @@ describe('TempoManager', () => {
   describe('静的メソッド', () => {
     it('getBPMRange()でBPMの有効範囲を取得できる', () => {
       const [min, max] = TempoManager.getBPMRange();
-      expect(min).toBe(60);
-      expect(max).toBe(200);
+      expect(min).toBe(30);
+      expect(max).toBe(240);
     });
   });
 
