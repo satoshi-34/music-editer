@@ -24,6 +24,84 @@ function cloneMeasures(measures: MeasureData[]): MeasureData[] {
 }
 
 /**
+ * 1つの声部の events から「削除された区間」を、その声部の arcs / hairpins へ反映する。
+ *
+ * 弧（タイ/スラー）と松葉は「始点イベントに載り、終点を toEventIndex / endEvent で指す」形なので、
+ * events を splice すると指す先が黙ってずれる。ここでその後始末をする。
+ *
+ * - 消えた区間そのものを指していた参照 → その弧・松葉ごと除去する（宙に浮かせない）
+ * - 消えた区間より後ろを指していた参照 → shift ぶん繰り上げて同じ音符を指し続けるようにする
+ *
+ * 単音削除（区間の長さ1・shift=1）でも連符グループ削除（区間の長さ3・shift=2 など）でも
+ * 必要な後始末はまったく同じなので、声部1・声部2の両方でこの1本を使う（Issue #245）。
+ *
+ * @param events 付け替え対象の声部の events（この配列自体は書き換えない）
+ * @param measure 削除が起きた小節のインデックス（他の小節から張られた弧も対象にするため必要）
+ * @param removeStart 削除された区間の先頭インデックス
+ * @param removeEnd 削除された区間の末尾インデックス（この位置も含む）
+ * @param shift 後続を繰り上げる量（削除件数 − 置き換えで挿入した件数）
+ * @returns 変化が無ければ引数の events をそのまま返す（呼び出し側が「変わっていない」を参照比較で判定できる）
+ */
+function remapEventRefsAfterRemoval(
+  events: NoteEvent[],
+  measure: number,
+  removeStart: number,
+  removeEnd: number,
+  shift: number
+): NoteEvent[] {
+  let changed = false;
+  const nextEvents = events.map((ev): NoteEvent => {
+    let patched = ev;
+    if (ev.arcs?.length) {
+      const nextArcs = ev.arcs
+        .filter((a) => !(a.toMeasureIndex === measure && a.toEventIndex >= removeStart && a.toEventIndex <= removeEnd))
+        .map((a): TieArc =>
+          a.toMeasureIndex === measure && a.toEventIndex > removeEnd ? { ...a, toEventIndex: a.toEventIndex - shift } : a
+        );
+      if (nextArcs.length !== ev.arcs.length || nextArcs.some((a, i) => a !== ev.arcs![i])) {
+        patched = { ...patched, arcs: nextArcs.length ? nextArcs : undefined };
+      }
+    }
+    if (ev.hairpins?.length) {
+      const nextHairpins = ev.hairpins
+        .filter((h) => !(h.endMeasure === measure && h.endEvent >= removeStart && h.endEvent <= removeEnd))
+        .map((h): HairpinMark =>
+          h.endMeasure === measure && h.endEvent > removeEnd ? { ...h, endEvent: h.endEvent - shift } : h
+        );
+      if (nextHairpins.length !== ev.hairpins.length || nextHairpins.some((h, i) => h !== ev.hairpins![i])) {
+        patched = { ...patched, hairpins: nextHairpins.length ? nextHairpins : undefined };
+      }
+    }
+    if (patched !== ev) changed = true;
+    return patched;
+  });
+  return changed ? nextEvents : events;
+}
+
+/**
+ * 声部1（measure.events）向けに、上の後始末を**全小節ぶん**適用する。
+ *
+ * 弧・松葉は「別の小節の音符から張られている」ことがあるため、削除が起きた小節だけ直しても足りない。
+ * 引数の measures は cloneMeasures 済みの複製である前提で、その events を直接差し替える。
+ *
+ * 走査するのは m.events（＝声部1）だけでよい。声部2以降の arcs / hairpins が持つ
+ * toEventIndex / endEvent は「その声部の events 配列の中の位置」を意味する
+ * （`.claude/specs/voice2-arc-support/design.md` §2 案A）ため、声部1の events が増減しても指す先は動かない。
+ * 逆に、ここで voices まで書き換えると声部2の弧が無関係にずれてしまう（＝直してはいけない）。
+ */
+function remapAllMeasuresAfterRemoval(
+  measures: MeasureData[],
+  measure: number,
+  removeStart: number,
+  removeEnd: number,
+  shift: number
+): void {
+  measures.forEach((m) => {
+    m.events = remapEventRefsAfterRemoval(m.events, measure, removeStart, removeEnd, shift);
+  });
+}
+
+/**
  * 指定した音符（measure小節目・index番目のイベント）を削除する。
  *
  * 仕様（StaffCanvas/PianoSystemCanvas で完全一致していたもの。判定の**順序も仕様のうち**）:
@@ -33,6 +111,7 @@ function cloneMeasures(measures: MeasureData[]): MeasureData[] {
  *    - 他のイベントから、削除イベントを toKey=取り除いた音 で指す arc も削除する
  * 2. 連符内のイベントなら、グループ全体を同じ長さの通常の休符に置き換える
  *    （connectedTuplet の音価バランスが崩れるのを防ぐため）
+ *    - グループぶん並びが縮むので、3 と同じ arc / hairpin の後始末を行う（Issue #245）
  * 3. それ以外（単音 or keyIndex未指定）はイベント自体を削除し、
  *    - 削除イベントを終点(to)とする arc は削除、同小節で後続を指す toEventIndex は繰り上げる
  *    - hairpin（松葉）も同様に endEvent が削除対象なら削除、後続なら繰り上げる
@@ -95,96 +174,27 @@ export function deleteEventFromMeasures(
   //    （部分的に消すと連符の音価バランスが崩れ、描画と再生の拍計算が破綻するため）
   if (targetEv.tuplet) {
     const plan = planTupletGroupDeletion(next[measure].events, index, clef);
-    if (plan) {
-      next[measure].events.splice(plan.groupStart, plan.groupEnd - plan.groupStart + 1, ...plan.replacement);
-    }
+    // グループ範囲を特定できなかったときは何も変えない。
+    // ここで next（複製）を返してしまうと「変更が無ければ引数の measures をそのまま返す」という
+    // この関数の約束が破れ、呼び出し側が参照比較で「変わっていない」を判定できなくなる（Issue #245）。
+    if (!plan) return measures;
+
+    // 後続を繰り上げる量は「消した件数 − 置き換えで挿入した件数」。
+    // 連符グループ削除は同じ拍数の休符を挿し込むので、グループ件数そのものではない
+    // （例: 8分3連符3個 → 4分休符1個 なら 3-1=2 ぶん繰り上げる）。
+    const removeCount = plan.groupEnd - plan.groupStart + 1;
+    const shift = removeCount - plan.replacement.length;
+    // 弧・松葉の付け替えは splice の**前**に行う。arcs が持つ索引は削除前の並びを指しているため。
+    remapAllMeasuresAfterRemoval(next, measure, plan.groupStart, plan.groupEnd, shift);
+    next[measure].events.splice(plan.groupStart, removeCount, ...plan.replacement);
     return next;
   }
 
   // 3. イベント自体を削除する
-  //
-  // ここで走査するのは m.events（＝声部1）だけでよい。
-  // 声部2以降の arcs / hairpins が持つ toEventIndex / endEvent は
-  // 「その声部の events 配列の中の位置」を意味する（`.claude/specs/voice2-arc-support/design.md` §2 案A）ため、
-  // 声部1の events が増減しても指す先は動かない。逆に、ここで voices まで書き換えると
-  // 声部2の弧が無関係にずれてしまう（＝直してはいけない）。声部2側の削除は
-  // deleteVoiceEventFromMeasures が担当する。
+  //    削除する区間は自分1件だけなので、繰り上げ量も1になる。
+  remapAllMeasuresAfterRemoval(next, measure, index, index, 1);
   next[measure].events.splice(index, 1);
-  next.forEach((m) => {
-    m.events = m.events.map((ev): NoteEvent => {
-      let patched2 = ev;
-      if (ev.arcs?.length) {
-        const patched = ev.arcs
-          .filter((a) => !(a.toMeasureIndex === measure && a.toEventIndex === index))
-          .map((a) => (a.toMeasureIndex === measure && a.toEventIndex > index ? { ...a, toEventIndex: a.toEventIndex - 1 } : a));
-        if (patched.length !== ev.arcs.length || patched.some((a, i) => a !== ev.arcs![i])) {
-          patched2 = { ...patched2, arcs: patched.length ? patched : undefined };
-        }
-      }
-      if (ev.hairpins?.length) {
-        const patchedHp = ev.hairpins
-          .filter((h) => !(h.endMeasure === measure && h.endEvent === index))
-          .map((h) => (h.endMeasure === measure && h.endEvent > index ? { ...h, endEvent: h.endEvent - 1 } : h));
-        if (patchedHp.length !== ev.hairpins.length || patchedHp.some((h, i) => h !== ev.hairpins![i])) {
-          patched2 = { ...patched2, hairpins: patchedHp.length ? patchedHp : undefined };
-        }
-      }
-      return patched2;
-    });
-  });
   return next;
-}
-
-/**
- * 1つの声部の events から「削除された区間」を、その声部の arcs / hairpins へ反映する。
- *
- * 弧（タイ/スラー）と松葉は「始点イベントに載り、終点を toEventIndex / endEvent で指す」形なので、
- * events を splice すると指す先が黙ってずれる。ここでその後始末をする。
- *
- * - 消えた区間そのものを指していた参照 → その弧・松葉ごと除去する（宙に浮かせない）
- * - 消えた区間より後ろを指していた参照 → shift ぶん繰り上げて同じ音符を指し続けるようにする
- *
- * @param events 付け替え対象の声部の events（この配列自体は書き換えない）
- * @param measure 削除が起きた小節のインデックス（他の小節から張られた弧も対象にするため必要）
- * @param removeStart 削除された区間の先頭インデックス
- * @param removeEnd 削除された区間の末尾インデックス（この位置も含む）
- * @param shift 後続を繰り上げる量（削除件数 − 置き換えで挿入した件数）
- * @returns 変化が無ければ引数の events をそのまま返す（呼び出し側が「変わっていない」を参照比較で判定できる）
- */
-function remapVoiceEventRefsAfterRemoval(
-  events: NoteEvent[],
-  measure: number,
-  removeStart: number,
-  removeEnd: number,
-  shift: number
-): NoteEvent[] {
-  let changed = false;
-  const nextEvents = events.map((ev): NoteEvent => {
-    let patched = ev;
-    if (ev.arcs?.length) {
-      const nextArcs = ev.arcs
-        .filter((a) => !(a.toMeasureIndex === measure && a.toEventIndex >= removeStart && a.toEventIndex <= removeEnd))
-        .map((a): TieArc =>
-          a.toMeasureIndex === measure && a.toEventIndex > removeEnd ? { ...a, toEventIndex: a.toEventIndex - shift } : a
-        );
-      if (nextArcs.length !== ev.arcs.length || nextArcs.some((a, i) => a !== ev.arcs![i])) {
-        patched = { ...patched, arcs: nextArcs.length ? nextArcs : undefined };
-      }
-    }
-    if (ev.hairpins?.length) {
-      const nextHairpins = ev.hairpins
-        .filter((h) => !(h.endMeasure === measure && h.endEvent >= removeStart && h.endEvent <= removeEnd))
-        .map((h): HairpinMark =>
-          h.endMeasure === measure && h.endEvent > removeEnd ? { ...h, endEvent: h.endEvent - shift } : h
-        );
-      if (nextHairpins.length !== ev.hairpins.length || nextHairpins.some((h, i) => h !== ev.hairpins![i])) {
-        patched = { ...patched, hairpins: nextHairpins.length ? nextHairpins : undefined };
-      }
-    }
-    if (patched !== ev) changed = true;
-    return patched;
-  });
-  return changed ? nextEvents : events;
 }
 
 /**
@@ -239,7 +249,7 @@ export function deleteVoiceEventFromMeasures(
     if (!m.voices?.[voiceIndex]) return m;
 
     const events = getVoiceEvents(m, voiceIndex);
-    const remapped = remapVoiceEventRefsAfterRemoval(events, measure, removeStart, removeEnd, shift);
+    const remapped = remapEventRefsAfterRemoval(events, measure, removeStart, removeEnd, shift);
     const isTargetMeasure = mi === measure;
     if (remapped === events && !isTargetMeasure) return m;
 

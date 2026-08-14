@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from './noteDeletionUtils';
 import type { MeasureData, NoteEvent } from '../types/storage';
 
@@ -173,6 +175,138 @@ describe('deleteEventFromMeasures', () => {
     expect(next[0].events).toHaveLength(2);
     expect(next[0].events[0].keys).toEqual(['c/4', 'g/4']);
     expect(next[0].events[0].tuplet).toBeUndefined();
+  });
+
+  // ここから Issue #245: 連符グループ削除でも、弧（タイ/スラー）・松葉の終点を付け替える。
+  // グループ（例: 3イベント）が休符1個に縮むと後続の索引が2つずれるため、
+  // 補正しないと同小節の後続を指すスラーが「2つ手前の別の音」に張り替わってしまう。
+  it('受入1: 連符グループ削除で、後続を指す弧の toEventIndex が縮んだぶん繰り上がる', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    const ms = measures([
+      // グループ外（先頭より前）から、グループより後ろの音を指すスラー
+      ev({
+        keys: ['c/4'],
+        arcs: [{ fromKey: 'c/4', toKey: 'g/4', toMeasureIndex: 0, toEventIndex: 4, kind: 'slur' }],
+      }),
+      ev({ dur: '8', keys: ['a/3'], tuplet }),
+      ev({ dur: '8', keys: ['c#/4'], tuplet }),
+      ev({ dur: '8', keys: ['e/4'], tuplet }),
+      ev({ keys: ['g/4'] }),
+    ]);
+    const next = deleteEventFromMeasures(ms, 0, 2, undefined, 'treble');
+    // 8分3連符3個（合計1拍）→ 4分休符1個なので 3-1=2 ぶん縮む
+    expect(next[0].events).toHaveLength(3);
+    expect(next[0].events[1]).toEqual({ dur: '4', isRest: true, keys: ['a/3'] });
+    // 終点は g/4 のまま。索引は 4 → 2 へ
+    expect(next[0].events[0].arcs).toEqual([
+      { fromKey: 'c/4', toKey: 'g/4', toMeasureIndex: 0, toEventIndex: 2, kind: 'slur' },
+    ]);
+    expect(next[0].events[next[0].events[0].arcs![0].toEventIndex].keys).toEqual(['g/4']);
+  });
+
+  it('受入2: グループ内の音を終点とする弧はグループ削除で除去される（ダングリングにしない）', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    const ms = measures([
+      ev({
+        keys: ['c/4'],
+        arcs: [
+          // 終点がグループの真ん中 → 音符ごと消えるので弧も消す
+          { fromKey: 'c/4', toKey: 'c#/4', toMeasureIndex: 0, toEventIndex: 2, kind: 'slur' },
+          // 終点がグループより後ろ → 繰り上げて残す
+          { fromKey: 'c/4', toKey: 'g/4', toMeasureIndex: 0, toEventIndex: 4, kind: 'slur' },
+        ],
+      }),
+      ev({ dur: '8', keys: ['a/3'], tuplet }),
+      ev({ dur: '8', keys: ['c#/4'], tuplet }),
+      ev({ dur: '8', keys: ['e/4'], tuplet }),
+      ev({ keys: ['g/4'] }),
+    ]);
+    const next = deleteEventFromMeasures(ms, 0, 1, undefined, 'treble');
+    expect(next[0].events[0].arcs).toEqual([
+      { fromKey: 'c/4', toKey: 'g/4', toMeasureIndex: 0, toEventIndex: 2, kind: 'slur' },
+    ]);
+  });
+
+  it('受入3: 松葉（hairpin）もグループ削除に追従する（除去・繰り上げ）', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    const ms = measures([
+      ev({
+        keys: ['c/4'],
+        hairpins: [
+          { type: 'cresc', endMeasure: 0, endEvent: 3 }, // 終点がグループ内 → 消える
+          { type: 'dim', endMeasure: 0, endEvent: 4 }, // 終点が後ろ → 繰り上がる
+        ],
+      }),
+      ev({ dur: '8', keys: ['a/3'], tuplet }),
+      ev({ dur: '8', keys: ['c#/4'], tuplet }),
+      ev({ dur: '8', keys: ['e/4'], tuplet }),
+      ev({ keys: ['g/4'] }),
+    ]);
+    const next = deleteEventFromMeasures(ms, 0, 3, undefined, 'treble');
+    expect(next[0].events[0].hairpins).toEqual([{ type: 'dim', endMeasure: 0, endEvent: 2 }]);
+  });
+
+  it('連符グループ削除: 別の小節から張られた弧も追従する', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    const ms = measures(
+      [
+        ev({
+          keys: ['c/4'],
+          arcs: [{ fromKey: 'c/4', toKey: 'g/4', toMeasureIndex: 1, toEventIndex: 3, kind: 'slur' }],
+        }),
+      ],
+      [
+        ev({ dur: '8', keys: ['a/3'], tuplet }),
+        ev({ dur: '8', keys: ['c#/4'], tuplet }),
+        ev({ dur: '8', keys: ['e/4'], tuplet }),
+        ev({ keys: ['g/4'] }),
+      ]
+    );
+    const next = deleteEventFromMeasures(ms, 1, 0, undefined, 'treble');
+    expect(next[0].events[0].arcs).toEqual([
+      { fromKey: 'c/4', toKey: 'g/4', toMeasureIndex: 1, toEventIndex: 1, kind: 'slur' },
+    ]);
+  });
+
+  it('受入4: 連符グループの範囲を特定できないときは引数の参照をそのまま返す', () => {
+    // tuplet.id が空＝グループを辿れない壊れたデータ。planTupletGroupDeletion が null を返す経路。
+    // ここで複製を返すと「変更が無ければ引数をそのまま返す」という約束が破れる。
+    const ms = measures([ev({ dur: '8', keys: ['c/4'], tuplet: { id: '', numNotes: 3, notesOccupied: 2 } })]);
+    expect(deleteEventFromMeasures(ms, 0, 0, undefined, 'treble')).toBe(ms);
+  });
+
+  it('連符グループ削除: 声部2の arcs は書き換えない（声部ローカルの索引・案A）', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    const ms: MeasureData[] = [
+      {
+        events: [
+          ev({ dur: '8', keys: ['a/3'], tuplet }),
+          ev({ dur: '8', keys: ['c#/4'], tuplet }),
+          ev({ dur: '8', keys: ['e/4'], tuplet }),
+          ev({ keys: ['g/4'] }),
+        ],
+        voices: [
+          { id: 'voice-1', events: [ev({ keys: ['c/5'] })] },
+          {
+            id: 'voice-2',
+            stemDirection: 'down',
+            events: [
+              ev({
+                keys: ['c/3'],
+                arcs: [{ fromKey: 'c/3', toKey: 'e/3', toMeasureIndex: 0, toEventIndex: 3, kind: 'slur' }],
+              }),
+              ev({ keys: ['d/3'] }),
+              ev({ keys: ['e/3'] }),
+              ev({ keys: ['e/3'] }),
+            ],
+          },
+        ],
+      },
+    ];
+    const next = deleteEventFromMeasures(ms, 0, 0, undefined, 'treble');
+    expect(next[0].voices![1].events[0].arcs).toEqual([
+      { fromKey: 'c/3', toKey: 'e/3', toMeasureIndex: 0, toEventIndex: 3, kind: 'slur' },
+    ]);
   });
 
   it('範囲外の measure は no-op で元の参照を返す', () => {
@@ -382,6 +516,56 @@ describe('deleteVoiceEventFromMeasures', () => {
     )];
     const before = JSON.stringify(ms);
     deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
+    expect(JSON.stringify(ms)).toBe(before);
+  });
+});
+
+// Issue #245 の再現データそのもの（トリアージコメント指定）。
+// 実機で入力された月光1〜9小節の3小節目は「8分3連符×4グループ、スラーの終点が連符内」という
+// 実曲そのままの並びで、単体テスト用に手で作った並びより実態に近い。
+describe('deleteEventFromMeasures: 月光fixtureの3小節目で連符グループを削除する', () => {
+  const FIXTURE_PATH = resolve(__dirname, '../../docs/qa/regression/moonlight-bars1-9.score.json');
+
+  /** fixture の右手パート（part 0）の小節配列を、テストごとに読み直して独立させる。 */
+  function loadRightHandMeasures(): MeasureData[] {
+    const saved = JSON.parse(readFileSync(FIXTURE_PATH, 'utf-8')) as { parts: { measures: MeasureData[] }[] };
+    return saved.parts[0].measures;
+  }
+
+  it('先頭の連符グループを削除しても、残るスラーが同じ音を指し続ける', () => {
+    const ms = loadRightHandMeasures();
+    const before = ms[2].events;
+    // 前提の確認: 12イベント・7番目(索引6)のスラーが索引11の e/4 を指している
+    expect(before).toHaveLength(12);
+    expect(before[6].arcs?.[0]).toMatchObject({ toEventIndex: 11, kind: 'slur' });
+    expect(before[11].keys).toEqual(['e/4']);
+
+    // 先頭グループ（索引0〜2の8分3連符）を削除 → 4分休符1個に縮む（3-1=2 ぶんずれる）
+    const next = deleteEventFromMeasures(ms, 2, 0, undefined, 'treble');
+    const after = next[2].events;
+    expect(after).toHaveLength(10);
+    expect(after[0]).toEqual({ dur: '4', isRest: true, keys: ['a/3'] });
+
+    // スラーの始点は索引6 → 4 へ移動。その終点は 11 → 9 へ繰り上がり、指す音は e/4 のまま
+    const movedArc = after[4].arcs?.[0];
+    expect(movedArc).toMatchObject({ fromKey: 'a/3', toKey: 'e/4', toMeasureIndex: 2, toEventIndex: 9 });
+    expect(after[9].keys).toEqual(['e/4']);
+  });
+
+  it('終点が連符グループ内にあるスラーは、そのグループの削除で消える', () => {
+    const ms = loadRightHandMeasures();
+    // 索引0のスラーは索引5（2つ目のグループの最後）を指している
+    expect(ms[2].events[0].arcs?.[0]).toMatchObject({ toEventIndex: 5, kind: 'slur' });
+
+    // 2つ目のグループ（索引3〜5）を削除すると、終点の音符ごと消えるのでスラーも残らない
+    const next = deleteEventFromMeasures(ms, 2, 4, undefined, 'treble');
+    expect(next[2].events[0].arcs).toBeUndefined();
+  });
+
+  it('元の fixture 由来データを書き換えない（イミュータブル）', () => {
+    const ms = loadRightHandMeasures();
+    const before = JSON.stringify(ms);
+    deleteEventFromMeasures(ms, 2, 0, undefined, 'treble');
     expect(JSON.stringify(ms)).toBe(before);
   });
 });
