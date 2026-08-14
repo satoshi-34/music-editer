@@ -201,6 +201,115 @@ export function planTupletReplacementForRest(
   return { groupEvents, remainingBeats: Math.max(restBeats - groupBeats, 0) };
 }
 
+/**
+ * events[index] が属する連符グループの範囲（同じ tuplet.id が連続する区間）を返す。
+ * グループの削除・コピーで同じ数え方を使うため関数として切り出してある。
+ *
+ * @returns 連符でない（tuplet.id を持たない）ときは null
+ */
+export function findTupletGroupRange(
+  events: NoteEvent[],
+  index: number
+): { start: number; end: number } | null {
+  const tupletId = events[index]?.tuplet?.id;
+  if (!tupletId) {
+    return null;
+  }
+  let start = index;
+  let end = index;
+  while (start > 0 && events[start - 1]?.tuplet?.id === tupletId) start -= 1;
+  while (end < events.length - 1 && events[end + 1]?.tuplet?.id === tupletId) end += 1;
+  return { start, end };
+}
+
+/** イベント1つが実際に占める拍数（付点と連符の圧縮率の両方を反映する）。 */
+function occupiedBeats(ev: NoteEvent): number {
+  return getDurationBeats(ev.dur, ev.dots) * (ev.tuplet ? ev.tuplet.notesOccupied / ev.tuplet.numNotes : 1);
+}
+
+/** 連符グループ（イベント配列）が占める合計拍数。 */
+export function tupletGroupBeats(groupEvents: NoteEvent[]): number {
+  return groupEvents.reduce((sum, ev) => sum + occupiedBeats(ev), 0);
+}
+
+/**
+ * 連符グループをクリップボードへ入れられる形で取り出す（Issue #234）。
+ *
+ * 弧（タイ／スラー）・松葉・レガシーの tiedToNext は「同じ声部の別イベントを
+ * インデックスで指す」情報なので、コピーすると貼り付け先で別の音符を指してしまう。
+ * そのため、この3つだけは落としてから複製する（音符自体に付く記号は残す）。
+ *
+ * @returns 連符グループでない位置を指していたら null
+ */
+export function copyTupletGroupForClipboard(events: NoteEvent[], index: number): NoteEvent[] | null {
+  const range = findTupletGroupRange(events, index);
+  if (!range) {
+    return null;
+  }
+  return events.slice(range.start, range.end + 1).map((ev) => {
+    // 保存データは JSON で表せる素のオブジェクトなので、入れ子ごと安全に複製できる
+    // （コピー後に元の音符を編集しても貼り付け内容が変わらないようにするため）。
+    const cloned: NoteEvent = JSON.parse(JSON.stringify(ev));
+    delete cloned.arcs;
+    delete cloned.hairpins;
+    delete cloned.tiedToNext;
+    return cloned;
+  });
+}
+
+/**
+ * クリップボードの連符グループから「これから貼り付ける実体」を作る。
+ * グループ id は必ず新しく発番する（元のグループと id を共有すると、
+ * 離れた場所の連符同士が1つのグループとみなされて描画・削除が壊れるため）。
+ */
+export function instantiateTupletGroup(groupEvents: NoteEvent[]): NoteEvent[] {
+  const newId = generateTupletId();
+  return groupEvents.map((ev) => {
+    const cloned: NoteEvent = JSON.parse(JSON.stringify(ev));
+    if (cloned.tuplet) {
+      cloned.tuplet = { ...cloned.tuplet, id: newId };
+    }
+    return cloned;
+  });
+}
+
+export type TupletGroupPaste = {
+  /** 休符の位置へ差し込む連符グループ（新しいグループ id 付き） */
+  groupEvents: NoteEvent[];
+  /** グループを差し込んだあと、休符として後ろに残る拍数（ちょうど収まるときは 0） */
+  remainingBeats: number;
+};
+
+/**
+ * コピー済みの連符グループを「連符ではない普通の休符」へ貼り付ける計画を立てる（Issue #234）。
+ *
+ * 分割規則は Issue #224（連符ツールで休符をクリック）と同じで、
+ * 休符のほうが長ければ余りを拍数で返し、休符イベントの組み立ては呼び出し側に任せる
+ * （余りをどの音価の休符に割るかは音部記号ごとの標準位置が要るため）。
+ *
+ * @returns 貼り付けられないとき（休符でない／連符内の休符／拍が足りない）は null
+ */
+export function planTupletGroupPasteIntoRest(
+  restEvent: NoteEvent,
+  clipboardGroup: NoteEvent[]
+): TupletGroupPaste | null {
+  // 連符内の休符へ貼ると連符が入れ子になって壊れるため、対象は「普通の休符」だけにする
+  // （Issue #224 の buildTupletRestReplacement と同じ保守的な考え方）。
+  if (!restEvent.isRest || restEvent.tuplet || clipboardGroup.length === 0) {
+    return null;
+  }
+  const restBeats = getDurationBeats(restEvent.dur, restEvent.dots);
+  const groupBeats = tupletGroupBeats(clipboardGroup);
+  // 浮動小数点の誤差で「ちょうど収まる」ケースを弾かないよう、比較には余裕を持たせる。
+  if (groupBeats > restBeats + BEATS_EPS) {
+    return null;
+  }
+  return {
+    groupEvents: instantiateTupletGroup(clipboardGroup),
+    remainingBeats: Math.max(restBeats - groupBeats, 0),
+  };
+}
+
 export type TupletGroupDeletion = {
   groupStart: number;
   groupEnd: number;
@@ -226,20 +335,13 @@ export function planTupletGroupDeletion(
   index: number,
   clef: ClefType
 ): TupletGroupDeletion | null {
-  const targetEv = events[index];
-  const tupletId = targetEv?.tuplet?.id;
-  if (!tupletId) {
+  const range = findTupletGroupRange(events, index);
+  if (!range) {
     return null;
   }
-  let groupStart = index;
-  let groupEnd = index;
-  while (groupStart > 0 && events[groupStart - 1]?.tuplet?.id === tupletId) groupStart -= 1;
-  while (groupEnd < events.length - 1 && events[groupEnd + 1]?.tuplet?.id === tupletId) groupEnd += 1;
+  const { start: groupStart, end: groupEnd } = range;
   const groupEvents = events.slice(groupStart, groupEnd + 1);
-  const totalBeats = groupEvents.reduce(
-    (sum, ev) => sum + getDurationBeats(ev.dur, ev.dots) * (ev.tuplet ? ev.tuplet.notesOccupied / ev.tuplet.numNotes : 1),
-    0
-  );
+  const totalBeats = tupletGroupBeats(groupEvents);
   const inheritedKey = groupEvents[0]?.keys[0];
   // 引き継げる音高なら全ての置き換え休符で同じ位置を使う（従来どおりの見た目）。
   // 引き継げない場合だけ、休符の音価ごとの標準位置へ落とす
