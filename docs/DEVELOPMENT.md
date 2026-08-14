@@ -131,6 +131,16 @@ npm run lint:ratchet   # lint エラー件数が増えていないかを確認�
 
 ホストに Node.js が無い（Docker のみの）マシンでは、上記コマンドの頭に `docker exec music-editer-dev` を付けて実行します。例は「新しいマシンでのセットアップ」を参照してください。
 
+#### 実曲での回帰チェック（月光1〜9小節）
+
+単機能のテストが全部緑でも、実曲を1曲通すと壊れている、という見逃し（#237 の発想標語の描画漏れなど）を防ぐため、運用者が実機で入力した譜面（`docs/qa/regression/moonlight-bars1-9.score.json`）を毎回のテストで読込・描画・再生スケジュールの3経路へ流しています。
+
+```bash
+npx vitest --run src/utils/moonlightRegressionLoad.test.ts src/components/MoonlightRegressionRender.test.tsx src/utils/moonlightRegressionPlayback.test.ts
+```
+
+`src` 配下にあるので通常の `npx vitest --run src` にも含まれます。**この fixture は書き換えないでください**（README 記載の「既知の傷」ごと固定するのが目的で、SHA-256 をテストで照合しています）。意図的に更新する場合の手順は `.claude/specs/moonlight-regression/design.md` を参照してください。
+
 `lint:ratchet` は「ラチェット（逆戻り防止の爪車）」方式のチェックです。このプロジェクトには長年の蓄積で数百件の lint エラーがあり、「ゼロになるまで通さない」運用が現実的ではありません。そこで `scripts/lint-baseline.json` に現在の件数を基準値として記録しておき、
 
 - 基準値より**増えていたら失敗**（終了コード 1）してルール別の内訳を表示する

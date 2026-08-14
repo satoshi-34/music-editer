@@ -28,4 +28,8 @@
 ### 使い方
 
 - 手動: アプリの「その他 → ファイルを開く」で読み込む
-- 自動化: Issue #242 参照（夜間検証への組み込み）
+- 自動化: 毎回のテスト（`npx vitest --run src`）で読込・描画・再生スケジュールの3経路を検証している（Issue #243）
+  - `src/utils/moonlightRegressionLoad.test.ts`（読込）
+  - `src/components/MoonlightRegressionRender.test.tsx`（描画）
+  - `src/utils/moonlightRegressionPlayback.test.ts`（再生スケジュール）
+  - 上の SHA-256 はテストで照合しているため、**このファイルを1バイトでも変えるとテストが落ちる**。意図的に更新する場合は README の SHA-256 とテスト内の `EXPECTED_FIXTURE_SHA256` を同時に直すこと（詳細は `.claude/specs/moonlight-regression/design.md`）
