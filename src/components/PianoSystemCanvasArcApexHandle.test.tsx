@@ -160,10 +160,17 @@ describe('PianoSystemCanvas 弧の頂点ハンドル（Issue #260）', () => {
     return path.getAttribute('d')!;
   }
 
-  // 表示パス "M x1 y1 C ... x2 y2" の端点X（＝弧のスパンを測るのに使う）
+  // 表示パスから弧の端点X（＝弧のスパンを測るのに使う）を取り出す。
+  //
+  // Issue #261 で表示パスが「中央が太いテーパー」の**閉じた輪郭**になった。
+  //   スラー: M p0 C o1 o2 p3 C i2 i1 p0 Z （7点ぶんの数値）
+  //   タイ  : M p0 Q o  p3 Q i  p0 Z       （5点ぶんの数値）
+  // 最後の点は始点へ戻ってくる座標なので、終点は「外側の曲線の終点」から読む
+  // （末尾から読むと x2 が x1 と同じ値になり、スパンが 0 になってしまう）。
   function arcEndpointsX(container: HTMLElement): { x1: number; x2: number } {
-    const n = (arcPathD(container).match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
-    return { x1: n[0], x2: n[n.length - 2] };
+    const d = arcPathD(container);
+    const n = (d.match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
+    return { x1: n[0], x2: d.includes('Q') ? n[4] : n[6] };
   }
 
   /** 弧をクリックして選択し、頂点ハンドルを取り出す（選択で SVG が作り直されるため取り直す）。 */

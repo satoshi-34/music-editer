@@ -1650,6 +1650,18 @@ button.ghost.active:hover:not(:disabled) {
 .score-area svg path.vf-sub-bracket {
   stroke-width: calc(1.6px * var(--score-stroke-scale, 1));
 }
+/* スラー・タイの弧（Issue #261）。
+   浄書慣例の「中央が太く端が細い」形は、閉じた輪郭を塗りつぶして作っている
+   （中心線の計算は src/components/arcUtils.ts の computeArcTaperGeometry）。
+   そのため、ここで指定する stroke が受け持つのは**端の厚み**だけ
+   （Bravura: slurEndpointThickness 0.10 sp = 1 u）。塗りと同じ色を重ねているので、
+   この値を変えても弧が消えたり縁取りが浮いたりはしない。
+   一律指定（1.2 u）のままだと端が中央並みに太って台形に見えるため、個別指定が要る。
+   数値は src/utils/engravingDefaults.ts の slurEndpoint と一致させること
+   （engravingDefaults.test.ts が一致を見張っている）。 */
+.score-area svg path.vf-arc {
+  stroke-width: calc(1px * var(--score-stroke-scale, 1));
+}
 /* VexFlow が「塗りの矩形」で描く縦線（小節線・終止線の太線・総譜のメイン括弧）にも
    同じフロアを掛ける（Issue #210）。
    これらは stroke ではなく fill なので stroke-width が効かない。代わりに

@@ -25,7 +25,7 @@ import {
   lineToKey as lineToKeyForClef,
   keyToLine as keyToLineForClef,
 } from './clefUtils';
-import { computeArcGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
+import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
@@ -1520,7 +1520,7 @@ export default function PianoSystemCanvas({
         const nx1 = geom.x1 - geom.startDx + newDx, ny1 = geom.y1 - geom.startDy + newDy;
         setSegPath(
           key,
-          computeArcGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio).dAttr,
+          computeArcTaperGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio).dAttr,
           computeArcHitGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio, minHitLen).dAttr,
         );
         const h = svgRoot.querySelector(`[data-arc-ep-start="${key}"]`);
@@ -1531,7 +1531,7 @@ export default function PianoSystemCanvas({
         const nx2 = geom.x2 - geom.endDx + newDx, ny2 = geom.y2 - geom.endDy + newDy;
         setSegPath(
           key,
-          computeArcGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio).dAttr,
+          computeArcTaperGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio).dAttr,
           computeArcHitGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio, minHitLen).dAttr,
         );
         const h = svgRoot.querySelector(`[data-arc-ep-end="${key}"]`);
@@ -1580,7 +1580,7 @@ export default function PianoSystemCanvas({
       const ratio = resolveRatio(key, geom);
       setSegPath(
         key,
-        computeArcGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset, ratio).dAttr,
+        computeArcTaperGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset, ratio).dAttr,
         computeArcHitGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset, ratio, minHitLen).dAttr,
       );
       moveApexHandle(key, computeArcApexPoint(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset, ratio));
@@ -3023,7 +3023,9 @@ export default function PianoSystemCanvas({
     const drawArcPathP=(x1:number,y1:number,x2:number,y2:number,upward:boolean,kind:'tie'|'slur',stemDir:number,obstacleY:number|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,minNoteY?:number,maxNoteY?:number,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatioRaw=0)=>{
       // 保存値は壊れたデータもあり得るのでここで一度だけ丸め、以降は同じ値を使い回す
       const apexXRatio=clampApexXRatio(apexXRatioRaw);
-      const{dAttr}=computeArcGeometry(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset,apexXRatio);
+      // 表示は「中央が太く端が細い」テーパー形状（Issue #261）。中心線は
+      // computeArcGeometry と同じなので、当たり判定・頂点ハンドルとはズレない。
+      const{dAttr}=computeArcTaperGeometry(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset,apexXRatio);
       arcGeomMap.set(arcKey,{x1,y1,x2,y2,upward,kind,stemDir,obstacleY,minNoteY,maxNoteY,startDx,startDy,endDx,endDy,cpDyOffset,apexXRatio});
 
       const baseKey=arcKey.replace(/-[12]$/,'');
@@ -3074,9 +3076,19 @@ export default function PianoSystemCanvas({
 
       const visPath=document.createElementNS('http://www.w3.org/2000/svg','path');
       visPath.setAttribute('d',dAttr);
-      visPath.setAttribute('stroke',isSelected?'#3b82f6':'#000');
-      visPath.setAttribute('stroke-width','1.5');visPath.setAttribute('fill','none');
+      // テーパー形状は「閉じた輪郭を塗る」形なので、線ではなく塗りで色を出す。
+      // 同じ色の細い stroke を重ねているのは端に厚みを残すため（arcUtils の解説を参照）。
+      // 太さは App.css の `path.vf-arc` で指定する（表示ウェイト・印刷・フロアを効かせるため）。
+      const arcColor=isSelected?'#3b82f6':'#000';
+      visPath.setAttribute('fill',arcColor);
+      visPath.setAttribute('stroke',arcColor);
+      // 属性値は CSS が効かない場面（印刷プレビューの外など）のための保険。
+      // 端の太さ 0.10 sp = 1 u をそのまま既定値にしておく。
+      visPath.setAttribute('stroke-width',String(ENGRAVING_THICKNESS_UNITS.slurEndpoint));
+      visPath.setAttribute('stroke-linejoin','round');
+      visPath.setAttribute('stroke-linecap','round');
       visPath.setAttribute('pointer-events','none');
+      visPath.setAttribute('class','vf-arc');
       visPath.setAttribute('data-arc-key',arcKey);
       svgRoot.appendChild(visPath);
 
