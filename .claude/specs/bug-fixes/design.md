@@ -1665,6 +1665,7 @@ worktree だけを載せた使い捨て dev サーバーで、同一ロード・
 
 - #246（拡張帯のX方向が音符セル全幅のまま）は未対応。実機でも下段の全幅帯が
   上段の弧頂点クリックを一部吸う現象を確認しており、#246 の修正で解消される想定。
+  → **2026-08-14 に対応済み**（本ファイル末尾の「拡張ヒット帯・符頭例外帯のX方向を符頭の幅に絞る」節）。
 
 ## 上段の声部2の深い符頭が下段（左手）へ誤帰属する問題の修正（2026-08-12）
 
@@ -1698,3 +1699,128 @@ worktree だけを載せた使い捨て dev サーバーで、同一ロード・
 1. 声部2アクティブで、上段の段間へはみ出した符頭をクリック → 上段の音符が選択される
    （従来は下段へ帰属していた）。
 2. コンソールエラーなし。全 1566 件パス。
+
+## 拡張ヒット帯・符頭例外帯のX方向を符頭の幅に絞る（2026-08-14, Issue #246）
+
+### 問題
+
+#225（五線から遠い音符へヒット領域を伸ばす）と #228（中間線クリップの符頭例外）は、
+どちらも**Y方向だけ**を符頭基準にしていて、**X方向はセル全幅（`xl` / `wHit`）のまま**だった。
+そのため合流後も「符頭の高さ 0.5ライン × セル全幅」の帯が隣のパート側に残り、
+**その帯では、選択にならないクリックが無反応で飲み込まれる**（`.vf-note-hit` が最前面にあり、
+かつ拡張帯のクリックは「選択にならなければ何もしない」設計のため）。
+
+誤って音符が増えることは無いので実害は薄いが、#219 の思想「音符が無い空白を隣から奪わない」に
+反する残滓であり、#219 の設計書でも「拡張帯のX方向を符頭の幅に絞る話は別Issue #246」として
+持ち越されていた。出所は Codex レビュー試験運用の指摘（2026-08-11・2件目）。
+
+### 修正設計
+
+**ヒット領域の rect を、役割ごとに2種類へ分ける。**（長方形に穴は空けられないので、
+1枚のままではX方向を絞ると固定範囲まで狭くなってしまう）
+
+| rect | Y範囲 | X範囲 | 役割 |
+| --- | --- | --- | --- |
+| `data-hit-part="fixed"` | クリップ後の固定範囲（`chordTopY`〜`chordBotY`） | セル全幅（`xl`〜`xl+wHit`）**＝従来どおり** | 通常の挿入・和音追加・選択 |
+| `data-hit-part="extension"` | 固定範囲の外側〜符頭の端（`noteHeadTopY` / `noteHeadBotY`） | 符頭の実描画範囲 ± `keySelectXPad(svg)` | 遠い符頭の選択だけ |
+
+- 拡張部は上下それぞれ独立に作る（必要な側だけ。両側必要な音符は2枚）
+- 拡張部のX範囲はセル（`xl`〜`xl+wHit`）でクランプする（隣のセルへは絶対に出さない）
+- 休符は `keyLines` が `null` で `noteHeadTopY/BotY` が固定範囲と一致するため、拡張部は作られない
+  （＝従来と rect が1枚のまま）
+- **ハンドラ（mousemove / mouseleave / mousedown / mouseup / click / 小節選択ドラッグ）は
+  全 rect にまったく同じものを付ける**。判定式は1本のままで、変わるのは
+  「クリックがこの音符へ届くX範囲」だけ。`noteHitRects.forEach(hit => { ... })` で囲うことで、
+  固定範囲用と拡張部用の判定が食い違う余地を作らない
+
+```typescript
+// src/components/PianoSystemCanvas.tsx
+createNoteHitRect(xl, chordTopY, wHit, Math.max(0, chordBotY - chordTopY), 'fixed');
+const extensionXPad = keySelectXPad(svg);
+const extensionLeft  = Math.max(xl,        noteVisualLeft  - extensionXPad);
+const extensionRight = Math.min(xl + wHit, noteVisualRight + extensionXPad);
+if (extensionRight > extensionLeft) {
+  if (noteHeadTopY < chordTopY) createNoteHitRect(extensionLeft, noteHeadTopY, /* … */ 'extension');
+  if (noteHeadBotY > chordBotY) createNoteHitRect(extensionLeft, chordBotY,    /* … */ 'extension');
+}
+```
+
+`keySelectXPad(svg)` を選んだ理由は、拡張帯で起こりうる操作が
+**個別音選択だけ**（挿入も和音追加もしない）であり、その成立条件が
+`nearNoteX = 符頭 ± keySelectXPad(svg)` そのものだから。ここを `CHORD_HIT_PAD` にすると、
+選択が成立しないのに反応だけする帯がまた残る。
+
+### 描画時に実測値を読むことへの対処
+
+`keySelectXPad` は「画面px ⇄ raw単位」を `getBoundingClientRect` から実測する。
+これを**描画時**に呼ぶと、レイアウト前（テストの jsdom や描画途中）では
+`svg.width.baseVal` が読めず **例外で描画ごと落ちる**。そこで `getSvgVisualMetrics` を
+`svg.width?.baseVal?.value ?? 0` に変え、読めないときは呼び出し側のガード
+（`getRawPerScreenPx` の `return 1` / `clientToGroup` の早期 return）へ落ちるようにした。
+
+**既知の制約**: 画面表示のズーム（`.page-wrapper` の `--scale`）は再描画を伴わないため、
+描画後にズームだけを変えると拡張部のX幅は描画時のズーム基準のまま残る
+（判定式のほうは従来どおりイベント時に実測するのでズレない）。
+符頭そのものの範囲は必ず含まれるので「符頭を押せば選択できる」点は変わらず、
+ズレるのは±12px のパディングぶんだけ。譜面を編集すれば再描画で解消する。
+
+### 影響範囲
+
+- `src/components/PianoSystemCanvas.tsx`
+  - ヒット rect の生成を `createNoteHitRect` に集約し、固定範囲＋拡張部の複数枚に
+  - 全 rect へ同じハンドラを付けるため `noteHitRects.forEach(hit => { ... })` で既存ハンドラを囲む
+  - `getSvgVisualMetrics` を描画時に呼んでも落ちないようにする（上記）
+  - `hHit` は不要になり削除（`yHit` は選択枠のフォールバックで引き続き使用）
+- `src/components/PianoSystemCanvasOuterHitBandWidth.test.tsx`（新規5本・#246 の受入）
+- `src/components/PianoSystemCanvasOuterLedgerSelect.test.tsx` /
+  `PianoSystemCanvasSystemClickAttribution.test.tsx`
+  （rect が複数枚になったため、パート順で数える箇所を `[data-hit-part="fixed"]` に限定。
+  拡張帯の上端・下端の検証は拡張部の rect を見るよう更新。アサーションの意味は変えていない）
+
+### テストから見分けるための属性
+
+`data-hit-part`（`fixed` / `extension`）を rect に付けた。表示には影響しない。
+`data-measure` / `data-note` / `data-note-left` / `data-note-right` / `data-line0-y` /
+`data-line-spacing` は**全 rect が同じ値を持つ**（#225 が公開した属性の意味は変えていない）。
+
+### 動作確認
+
+- 単体テスト: 新規5本（拡張帯のX幅・離れた位置が下段のヒット領域から外れて上段へ届くこと・
+  遠い符頭のクリックが従来どおり選択になること・五線内の音符は rect 1枚のまま・休符に拡張部なし）
+- ブラウザ: `document.elementFromPoint` で「符頭の上」と「同じ高さで符頭から離れた位置」の
+  ヒット要素を実測（下記「実測」節）
+
+### 実測（ブラウザ・弦楽四重奏＝パート間隔80・ズーム100%・実効倍率 0.3819）
+
+worktree だけを載せた使い捨て dev サーバーで、**同一セッション・同一譜面・同一座標**のまま
+`src/components/PianoSystemCanvas.tsx` だけを修正前（origin/main）↔ 修正後へ入れ替えて測った
+（HMR が効くので実効倍率もロード条件も揃う）。
+
+譜例は第2ヴァイオリン（上から2段目）の line -2 の音符1つ。この符頭は中間線（SVG y=120）より
+上、つまり**第1ヴァイオリンの陣地**に描かれている。測点はすべて SVG 内部座標 y=117.5
+（＝中間線より上、拡張帯の中）。
+
+| 測点（符頭からの距離） | 修正前 `elementFromPoint` | 修正後 `elementFromPoint` |
+| --- | --- | --- |
+| x=275（符頭の中心） | `rect.vf-note-hit`（下段の音符） | `rect.vf-note-hit[extension]`（下段の音符・**維持**） |
+| x=400（符頭から右へ119） | `rect.vf-note-hit`（下段） | `rect.vf-hit`（**上段の小節背景**） |
+| x=210（符頭から左へ59） | `rect.vf-note-hit`（下段） | `rect.vf-hit`（**上段の小節背景**） |
+
+同じ点（x=400, y=117.5）を実際にクリックしたときの結果:
+
+| | 修正前 | 修正後 |
+| --- | --- | --- |
+| 符頭の数 | 6 → **6**（何も起きない＝無反応帯） | 6 → **8**（上段に音符が入る） |
+| 増えたヒット領域 | なし | `fixed@data-line0-y=60` ＝**第1ヴァイオリン**側 |
+
+rect の寸法（修正前 → 修正後）:
+
+| | 修正前（1枚） | 修正後（2枚） |
+| --- | --- | --- |
+| 固定範囲 | x=191.69 w=249.30 / y=115 h=85（拡張ぶんを含む） | x=191.69 w=249.30 / y=120 h=80（**クリップ後の固定範囲ちょうど**） |
+| 拡張部 | （同じ rect に含まれる・幅249.30） | x=238.04 **w=74.63** / y=115 h=5（符頭 269.45〜281.25 ± 18.6） |
+
+- 遠い符頭のクリックで選択できることも実測（単旋律譜の line -3 の音符で
+  `pointerdown`→`mousedown`→`pointerup`→`mouseup`→`click`。`rect.vf-note-selected` が 1、
+  符頭の数は増えないので和音追加になっていない）
+- コンソールエラー 0 件

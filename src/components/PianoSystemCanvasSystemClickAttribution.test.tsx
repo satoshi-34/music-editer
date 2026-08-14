@@ -83,9 +83,18 @@ function contains(box: Box, x: number, y: number): boolean {
 }
 
 // パートごとの「measure 0 / noteIndex 番目の音符」の当たり判定。出現順＝上から下のパート順。
+// Issue #246 でヒット領域は「固定範囲（セル全幅）」と「拡張部（符頭幅）」の複数 rect に
+// 分かれたため、パート順で数えられるよう固定範囲だけを取り出す。
 function noteHits(svg: SVGSVGElement, noteIndex: number): SVGRectElement[] {
   return Array.from(
-    svg.querySelectorAll(`rect.vf-note-hit[data-measure="0"][data-note="${noteIndex}"]`)
+    svg.querySelectorAll(`rect.vf-note-hit[data-hit-part="fixed"][data-measure="0"][data-note="${noteIndex}"]`)
+  ) as SVGRectElement[];
+}
+
+// 拡張部（固定範囲の外側へ伸びる帯）の rect。五線内に収まる音符には作られない。
+function noteHitExtensions(svg: SVGSVGElement, noteIndex: number): SVGRectElement[] {
+  return Array.from(
+    svg.querySelectorAll(`rect.vf-note-hit[data-hit-part="extension"][data-measure="0"][data-note="${noteIndex}"]`)
   ) as SVGRectElement[];
 }
 
@@ -244,8 +253,15 @@ describe('PianoSystemCanvas 段間クリックの帰属（Issue #219）', () => 
 
     // 符頭の中心（line -3）が中間線より上にある＝この譜面が検証条件を満たしている
     expect(yForLine(bassHit, -3)).toBeLessThan(mid);
-    // ヒット領域は符頭の上端（line -3.5）まで伸びている
-    expect(boxOf(bassHit).top).toBeCloseTo(yForLine(bassHit, -3.5), 5);
+    // ヒット領域は符頭の上端（line -3.5）まで伸びている。
+    // Issue #246 でこの拡張ぶんは別 rect（符頭幅）に分かれたので、そちらの上端を見る。
+    const [bassExtension] = noteHitExtensions(svg, 0).filter(
+      (rect) => parseFloat(rect.getAttribute('data-line0-y')!) === parseFloat(bassHit.getAttribute('data-line0-y')!)
+    );
+    expect(bassExtension).toBeTruthy();
+    expect(boxOf(bassExtension).top).toBeCloseTo(yForLine(bassHit, -3.5), 5);
+    // 固定範囲側の上端は中間線（クリップ後の値）のまま＝#219 のクリップは崩していない
+    expect(boxOf(bassHit).top).toBeCloseTo(mid, 5);
   });
 
   it('中間線の向こう側にある符頭も、クリックすれば選択できる', async () => {
