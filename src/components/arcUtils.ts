@@ -1,25 +1,63 @@
+type Pt = { x: number; y: number };
+
 /**
- * タイ・スラーの弧パスを計算する純粋関数。
- * StaffCanvas / PianoSystemCanvas の両方から使うためファイルを分離している。
- * @param cpDyOffset ユーザーがドラッグで調節した制御点の縦オフセット（SVG px、正 = 下方向）
+ * 弧の「頂点の左右位置」（apexXRatio）の可動範囲。
+ * 値の意味は「頂点が中央からどれだけ横へずれるか ÷ 弧のスパン」で、正 = 右。
+ *
+ * 上限を 0.15（スパンの 15%）に抑えているのは、これ以上ずらすと制御点が
+ * 終点の外側へ出てしまい、弧の端が引っかかったような不自然な形（フック）に
+ * なるため。浄書で必要なのは「少し左右に寄せる」程度の微調整なので、
+ * 形が壊れない範囲だけを許す。
  */
-export function computeArcGeometry(
+export const APEX_X_RATIO_MAX = 0.15;
+
+/** 保存値（壊れたデータや古いデータを含む）を安全な範囲に丸める */
+export function clampApexXRatio(apexXRatio: number | undefined): number {
+  if (apexXRatio === undefined || !Number.isFinite(apexXRatio)) return 0;
+  return Math.max(-APEX_X_RATIO_MAX, Math.min(APEX_X_RATIO_MAX, apexXRatio));
+}
+
+/**
+ * apexXRatio（頂点が動く量の比率）を「制御点をずらす量の比率」へ換算する。
+ *
+ * ベジェ曲線の頂点（t=0.5 の点）は制御点そのものではなく、制御点の位置を
+ * 一定の割合で混ぜた場所に来る。
+ * - 二次（タイ）: 頂点X = 中点 + 0.5 × 制御点のずれ  → 換算は ÷0.5 ＝ ×2
+ * - 三次（スラー）: 頂点X = 中点 + 0.75 × 制御点のずれ → 換算は ÷0.75
+ * この換算をしておくと、保存値をそのまま「頂点が動く量」として扱えるので、
+ * ハンドルをカーソルへ素直に追従させられる。
+ */
+function apexRatioToCpRatio(kind: 'tie' | 'slur', apexXRatio: number): number {
+  return kind === 'tie' ? apexXRatio * 2 : apexXRatio / 0.75;
+}
+
+/**
+ * 弧の制御点を1か所で計算する。表示パス・当たり判定パス・頂点ハンドルの位置は
+ * すべてここから作るので、式が食い違って「見た目とズレた当たり判定」になることがない。
+ * @param cpDyOffset ユーザーがドラッグで調節した制御点の縦オフセット（SVG px、正 = 下方向）
+ * @param apexXRatio ユーザーがドラッグで調節した頂点の左右位置（スパンに対する比率、正 = 右）
+ */
+function computeArcControlPoints(
   x1: number, y1: number, x2: number, y2: number,
   upward: boolean, kind: 'tie' | 'slur', stemDir: number,
   obstacleY: number | undefined,
-  cpDyOffset: number
-): { dAttr: string } {
+  cpDyOffset: number,
+  apexXRatio: number
+): { p0: Pt; c1: Pt; c2: Pt | null; p3: Pt } {
   const span = Math.abs(x2 - x1);
   // 符幹との衝突: 弧の向きと符幹が同じ側のときカーブ量を増やす
   const conflict = (upward && stemDir > 0) || (!upward && stemDir < 0);
+  // 左右のずらし量。(x2 - x1) を掛けるので、終点が始点より左にある弧でも
+  // 「画面の右へずらす」向きが保たれる。
+  const cpDx = (x2 - x1) * apexRatioToCpRatio(kind, clampApexXRatio(apexXRatio));
 
   if (kind === 'tie') {
     const baseCurve = Math.max(8, Math.min(14, span * 0.12));
     const curve = conflict ? baseCurve + 12 : baseCurve;
-    const cpX = (x1 + x2) / 2;
+    const cpX = (x1 + x2) / 2 + cpDx;
     // cpDyOffset を直接加算: 正 = 下向きシフト（上向き弧なら高さが減り、下向き弧なら高さが増える）
     const cpY = (y1 + y2) / 2 + (upward ? -curve : curve) + cpDyOffset;
-    return { dAttr: `M ${x1} ${y1} Q ${cpX} ${cpY} ${x2} ${y2}` };
+    return { p0: { x: x1, y: y1 }, c1: { x: cpX, y: cpY }, c2: null, p3: { x: x2, y: y2 } };
   }
 
   // スラー: 常に三次ベジェ C（両端から緩やかに立ち上がる自然な形）
@@ -36,8 +74,51 @@ export function computeArcGeometry(
   if (upward  && cpY > refY - 6) cpY = refY - 6;
   if (!upward && cpY < refY + 6) cpY = refY + 6;
 
-  const dAttr = `M ${x1} ${y1} C ${x1 + span * 0.25} ${cpY} ${x2 - span * 0.25} ${cpY} ${x2} ${y2}`;
-  return { dAttr };
+  return {
+    p0: { x: x1, y: y1 },
+    c1: { x: x1 + span * 0.25 + cpDx, y: cpY },
+    c2: { x: x2 - span * 0.25 + cpDx, y: cpY },
+    p3: { x: x2, y: y2 },
+  };
+}
+
+/**
+ * タイ・スラーの弧パスを計算する純粋関数。
+ * StaffCanvas / PianoSystemCanvas の両方から使うためファイルを分離している。
+ * @param cpDyOffset ユーザーがドラッグで調節した制御点の縦オフセット（SVG px、正 = 下方向）
+ * @param apexXRatio ユーザーがドラッグで調節した頂点の左右位置（スパンに対する比率、正 = 右）
+ */
+export function computeArcGeometry(
+  x1: number, y1: number, x2: number, y2: number,
+  upward: boolean, kind: 'tie' | 'slur', stemDir: number,
+  obstacleY: number | undefined,
+  cpDyOffset: number,
+  apexXRatio = 0
+): { dAttr: string } {
+  const { p0, c1, c2, p3 } = computeArcControlPoints(x1, y1, x2, y2, upward, kind, stemDir, obstacleY, cpDyOffset, apexXRatio);
+  if (!c2) return { dAttr: `M ${p0.x} ${p0.y} Q ${c1.x} ${c1.y} ${p3.x} ${p3.y}` };
+  return { dAttr: `M ${p0.x} ${p0.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${p3.x} ${p3.y}` };
+}
+
+/**
+ * 弧の頂点（曲線の真ん中 = t 0.5 の点）の座標を返す。
+ * 頂点ハンドルをどこに置くかの計算に使う。表示パスと同じ制御点から求めるので、
+ * ハンドルが弧から浮くことはない。
+ */
+export function computeArcApexPoint(
+  x1: number, y1: number, x2: number, y2: number,
+  upward: boolean, kind: 'tie' | 'slur', stemDir: number,
+  obstacleY: number | undefined,
+  cpDyOffset: number,
+  apexXRatio = 0
+): Pt {
+  const { p0, c1, c2, p3 } = computeArcControlPoints(x1, y1, x2, y2, upward, kind, stemDir, obstacleY, cpDyOffset, apexXRatio);
+  // t=0.5 のベジェ点。二次は (p0 + 2c + p1)/4、三次は (p0 + 3c1 + 3c2 + p1)/8。
+  if (!c2) return { x: (p0.x + 2 * c1.x + p3.x) / 4, y: (p0.y + 2 * c1.y + p3.y) / 4 };
+  return {
+    x: (p0.x + 3 * c1.x + 3 * c2.x + p3.x) / 8,
+    y: (p0.y + 3 * c1.y + 3 * c2.y + p3.y) / 8,
+  };
 }
 
 // 弧の「掴める範囲」用のサブパスを計算する。
@@ -47,13 +128,30 @@ export function computeArcGeometry(
 // 選択できない」事故が実機テストで起きた。Finale などの浄書ソフトはスラーを
 // 頂点（弧の真ん中）付近でだけ掴ませ、端点付近は音符に譲る。ここでも同じにする。
 //
-// 実装はベジェ曲線の t∈[HIT_T_START, HIT_T_END] 区間を de Casteljau 分割
+// 実装はベジェ曲線の t∈[0.5-half, 0.5+half] 区間を de Casteljau 分割
 // （ベジェ曲線を任意の位置で2つのベジェ曲線に分ける標準的な方法）で切り出す。
 // 端点のドラッグ調節は、選択後に表示される丸ハンドルが担うので困らない。
-const HIT_T_START = 0.25;
-const HIT_T_END = 0.75;
+const HIT_T_HALF_DEFAULT = 0.25;
+// 短い弧で掴み代を広げるときの上限。ここまでなら広げても端点（＝符頭のすぐ隣）には
+// 届かないので、音符のクリックを吸ってしまう事故には戻らない。
+const HIT_T_HALF_MAX = 0.4;
 
-type Pt = { x: number; y: number };
+/**
+ * 掴める区間の t 範囲を決める。
+ * 既定は中央 50%（t∈[0.25,0.75]）だが、それだと短いタイ（全長 15〜20px）では
+ * 掴み代が 7〜10px しか無く、実質つまめない。minHitLen（掴み代の下限、SVG 内部座標）
+ * を渡すと、その長さを確保できるところまで区間を広げる。
+ */
+function resolveHitTRange(x1: number, y1: number, x2: number, y2: number, minHitLen: number): [number, number] {
+  const chord = Math.hypot(x2 - x1, y2 - y1);
+  let half = HIT_T_HALF_DEFAULT;
+  if (minHitLen > 0 && chord > 0) {
+    // 弧の実長は弦（chord）よりわずかに長いので、弦で割るのは安全側（少し広めに出る）
+    half = Math.max(half, Math.min(HIT_T_HALF_MAX, (minHitLen / 2) / chord));
+  }
+  return [0.5 - half, 0.5 + half];
+}
+
 const lerp = (a: Pt, b: Pt, t: number): Pt => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
 
 // 三次ベジェ [p0,p1,p2,p3] の t0〜t1 区間を新しい三次ベジェとして返す
@@ -93,43 +191,25 @@ function quadSegment(p0: Pt, p1: Pt, p2: Pt, t0: number, t1: number): [Pt, Pt, P
 
 /**
  * computeArcGeometry と同じ引数から、当たり判定用（弧の中央部だけ）のパスを返す。
- * 表示用パスと同じ制御点計算を内部で再現するため、見た目とズレない。
+ * 制御点の計算を computeArcControlPoints で共有しているため、見た目とズレない。
+ * @param minHitLen 掴み代の下限（SVG 内部座標）。0 なら従来どおり中央 50% のみ
  */
 export function computeArcHitGeometry(
   x1: number, y1: number, x2: number, y2: number,
   upward: boolean, kind: 'tie' | 'slur', stemDir: number,
   obstacleY: number | undefined,
-  cpDyOffset: number
+  cpDyOffset: number,
+  apexXRatio = 0,
+  minHitLen = 0
 ): { dAttr: string } {
-  const span = Math.abs(x2 - x1);
-  const conflict = (upward && stemDir > 0) || (!upward && stemDir < 0);
+  const { p0, c1, c2, p3 } = computeArcControlPoints(x1, y1, x2, y2, upward, kind, stemDir, obstacleY, cpDyOffset, apexXRatio);
+  const [t0, t1] = resolveHitTRange(x1, y1, x2, y2, minHitLen);
 
-  if (kind === 'tie') {
-    // computeArcGeometry のタイ分岐と同じ制御点計算（変えるときは両方そろえること）
-    const baseCurve = Math.max(8, Math.min(14, span * 0.12));
-    const curve = conflict ? baseCurve + 12 : baseCurve;
-    const cp: Pt = { x: (x1 + x2) / 2, y: (y1 + y2) / 2 + (upward ? -curve : curve) + cpDyOffset };
-    const [q0, q1, q2] = quadSegment({ x: x1, y: y1 }, cp, { x: x2, y: y2 }, HIT_T_START, HIT_T_END);
+  if (!c2) {
+    const [q0, q1, q2] = quadSegment(p0, c1, p3, t0, t1);
     return { dAttr: `M ${q0.x} ${q0.y} Q ${q1.x} ${q1.y} ${q2.x} ${q2.y}` };
   }
 
-  // computeArcGeometry のスラー分岐と同じ制御点計算（変えるときは両方そろえること）
-  const clearance = Math.max(10, Math.min(24, span * 0.15));
-  const refY = obstacleY !== undefined
-    ? obstacleY
-    : (upward ? Math.min(y1, y2) : Math.max(y1, y2));
-  let cpY = upward
-    ? refY - (clearance + (conflict ? 8 : 0)) + cpDyOffset
-    : refY + (clearance + (conflict ? 8 : 0)) + cpDyOffset;
-  if (upward && cpY > refY - 6) cpY = refY - 6;
-  if (!upward && cpY < refY + 6) cpY = refY + 6;
-
-  const [c0, c1, c2, c3] = cubicSegment(
-    { x: x1, y: y1 },
-    { x: x1 + span * 0.25, y: cpY },
-    { x: x2 - span * 0.25, y: cpY },
-    { x: x2, y: y2 },
-    HIT_T_START, HIT_T_END
-  );
-  return { dAttr: `M ${c0.x} ${c0.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${c3.x} ${c3.y}` };
+  const [b0, b1, b2, b3] = cubicSegment(p0, c1, c2, p3, t0, t1);
+  return { dAttr: `M ${b0.x} ${b0.y} C ${b1.x} ${b1.y} ${b2.x} ${b2.y} ${b3.x} ${b3.y}` };
 }
