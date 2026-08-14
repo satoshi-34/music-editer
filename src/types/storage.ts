@@ -89,6 +89,16 @@ export interface TieArc {
   cpDyOffset?: number;
   /** 段またぎ第2セグメント（下段側）の曲率オフセット。省略時は 0 */
   cpDyOffset2?: number;
+  /**
+   * ユーザーがドラッグで調節した頂点（弧の一番高いところ）の左右位置。
+   * 「頂点が中央からずれる量 ÷ 弧のスパン」の比率で、正 = 右。省略時は 0。
+   * SVG px ではなく比率にしているのは、段割りが変わって弧の幅が伸び縮みしても
+   * 見た目の寄せ具合が保たれるようにするため。可動範囲は APEX_X_RATIO_MAX。
+   * 膨らみ（cpDyOffset）とは独立に保存する。
+   */
+  apexXRatio?: number;
+  /** 段またぎ第2セグメント（下段側）の頂点の左右位置。省略時は 0 */
+  apexXRatio2?: number;
   /** 向き手動反転フラグ。true のとき自動算出の upward を反転する */
   flipDirection?: boolean;
   /** 始点X/Y調節量（SVG px）。省略時は 0 */

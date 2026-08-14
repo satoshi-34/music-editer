@@ -25,7 +25,7 @@ import {
   lineToKey as lineToKeyForClef,
   keyToLine as keyToLineForClef,
 } from './clefUtils';
-import { computeArcGeometry, computeArcHitGeometry } from './arcUtils';
+import { computeArcGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
@@ -308,6 +308,18 @@ const KEY_SELECT_X_PAD_SCREEN_PX = 12;
 function keySelectXPad(svg: SVGSVGElement): number {
   return KEY_SELECT_X_PAD_SCREEN_PX * getRawPerScreenPx(svg);
 }
+// 弧（タイ／スラー）の当たり判定まわりの寸法。どちらも「画面上の見た目の px」で決め、
+// 実際に使うときは getRawPerScreenPx(svg) で SVG 内部座標（raw 単位）へ変換する。
+// raw 単位の定数のままだと、画面表示のズームを変えたときに「画面上の掴みやすさ」が
+// 倍率ぶんズレてしまう（音符側の keySelectXPad と同じ理由・同じ流儀）。
+const ARC_HIT_STROKE_SCREEN_PX = 10;
+// 掴み代の下限。中央 50% だけを当たり判定にすると、全長 15〜20px の短いタイでは
+// 掴める長さが 7〜10px しか残らず、実質つまめなくなるため下限を設ける。
+const ARC_HIT_MIN_LEN_SCREEN_PX = 28;
+// 頂点ハンドル（正方形）の一辺。端点ハンドル（r=5 の丸）と同じく raw 単位なので、
+// 譜面の拡大縮小に合わせて大きさが変わる。
+const ARC_APEX_HANDLE_SIZE = 9;
+
 // 青い選択枠はクリック不可の見た目です。見た目だけ調整したい場合はここを変更。
 const SELECTED_KEY_PAD_X = 3;
 const SELECTED_KEY_HALF_HEIGHT = 7;
@@ -704,6 +716,17 @@ function getRawPerScreenPx(svg: SVGSVGElement): number {
   return vbW / visualW;
 }
 
+// 描画の途中（レイアウト確定前）や、SVG の寸法プロパティを持たない環境（jsdom）でも
+// 描画そのものを止めないための入口。読めなければ「1px = 1raw」として扱う。
+// クリック時に呼ぶぶんには getRawPerScreenPx を直接使ってよい（要素は必ず配置済みのため）。
+function getRawPerScreenPxSafe(svg: SVGSVGElement): number {
+  try {
+    return getRawPerScreenPx(svg);
+  } catch {
+    return 1;
+  }
+}
+
 /**
  * 弧（タイ／スラー）1本ぶんの形状パラメータ。
  * 描画時に arcGeomMap へ積んでおき、ドラッグ中の再計算（computeArcGeometry の引数）に使う。
@@ -714,6 +737,8 @@ type ArcGeom = {
   minNoteY?: number; maxNoteY?: number;
   startDx: number; startDy: number; endDx: number; endDy: number;
   cpDyOffset: number;
+  // 頂点の左右位置（スパンに対する比率、正 = 右）。ドラッグ中の再計算で使う
+  apexXRatio: number;
 };
 
 function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: number): { x: number; y: number } {
@@ -1418,13 +1443,17 @@ export default function PianoSystemCanvas({
   // origin は「ドラッグを始めた瞬間の値」。Esc で中止したときに開始時点の形へ戻すために使う
   // （startSvgY / originalOffset / flipApplied は向き反転のたびに書き換わるので、
   //   これらを戻し先に使うと Esc で元の形に戻せない）。
+  // apex が true のときは頂点ハンドルからのドラッグ。上下＝膨らみ（従来どおり）に加えて
+  // 左右で頂点の位置（apexXRatio）も動かす（Issue #260）。
   const cpDragRef = useRef<{
     partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
     startSvgY: number; originalOffset: number;
     baseArcKey: string;   // arcGeomMap 検索用ベースキー（suffix なし）
     flipApplied: boolean; // ドラッグ中に方向反転が起きたか
     segment: '' | '-1' | '-2'; // ドラッグ対象セグメント（'' = 非段またぎ）
-    origin: { svgY: number; offset: number };
+    apex: boolean;        // 頂点ハンドルからのドラッグか
+    startSvgX: number; originalRatio: number;
+    origin: { svgY: number; offset: number; svgX: number; ratio: number };
     moved: boolean;       // 実際に形が変わったか（クリックしただけなら false）
   } | null>(null);
 
@@ -1463,11 +1492,20 @@ export default function PianoSystemCanvas({
   const updateArcDragPreview = useCallback((svgXIn: number, svgYIn: number) => {
     const ctx = arcDragContextRef.current;
     if (!ctx) return;
-    const { svgRoot, arcGeomMap } = ctx;
+    const { svg, svgRoot, arcGeomMap } = ctx;
+    // 掴み代の下限は描画時と同じ値を使う（ドラッグ後に当たり判定だけ細るのを防ぐ）
+    const minHitLen = ARC_HIT_MIN_LEN_SCREEN_PX * getRawPerScreenPxSafe(svg);
     const setSegPath = (key: string, dAttr: string, hitDAttr: string) => {
       svgRoot.querySelector(`[data-arc-key="${key}"]`)?.setAttribute('d', dAttr);
       // 当たり判定パスは中央部限定の形状（computeArcHitGeometry）で追従させる
       svgRoot.querySelector(`[data-arc-key-hit="${key}"]`)?.setAttribute('d', hitDAttr);
+    };
+    // 頂点ハンドル（正方形）は中心座標ではなく左上座標を持つので、置き直しはここに集約する
+    const moveApexHandle = (key: string, apex: { x: number; y: number }) => {
+      const el = svgRoot.querySelector(`[data-arc-apex="${key}"]`);
+      if (!el) return;
+      el.setAttribute('x', String(apex.x - ARC_APEX_HANDLE_SIZE / 2));
+      el.setAttribute('y', String(apex.y - ARC_APEX_HANDLE_SIZE / 2));
     };
 
     // 始点・終点ハンドルのドラッグ（cpDrag より優先）
@@ -1482,20 +1520,23 @@ export default function PianoSystemCanvas({
         const nx1 = geom.x1 - geom.startDx + newDx, ny1 = geom.y1 - geom.startDy + newDy;
         setSegPath(
           key,
-          computeArcGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset).dAttr,
-          computeArcHitGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset).dAttr,
+          computeArcGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio).dAttr,
+          computeArcHitGeometry(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio, minHitLen).dAttr,
         );
         const h = svgRoot.querySelector(`[data-arc-ep-start="${key}"]`);
         if (h) { h.setAttribute('cx', String(nx1)); h.setAttribute('cy', String(ny1)); }
+        // 端点が動けば頂点も動く。ハンドルだけ弧から取り残されないよう一緒に置き直す
+        moveApexHandle(key, computeArcApexPoint(nx1, ny1, geom.x2, geom.y2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio));
       } else {
         const nx2 = geom.x2 - geom.endDx + newDx, ny2 = geom.y2 - geom.endDy + newDy;
         setSegPath(
           key,
-          computeArcGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset).dAttr,
-          computeArcHitGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset).dAttr,
+          computeArcGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio).dAttr,
+          computeArcHitGeometry(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio, minHitLen).dAttr,
         );
         const h = svgRoot.querySelector(`[data-arc-ep-end="${key}"]`);
         if (h) { h.setAttribute('cx', String(nx2)); h.setAttribute('cy', String(ny2)); }
+        moveApexHandle(key, computeArcApexPoint(geom.x1, geom.y1, nx2, ny2, geom.upward, geom.kind, geom.stemDir, geom.obstacleY, geom.cpDyOffset, geom.apexXRatio));
       }
       return;
     }
@@ -1521,17 +1562,28 @@ export default function PianoSystemCanvas({
     }
 
     const effectiveOffset = cpDrag.originalOffset + (svgY - cpDrag.startSvgY);
+    // 頂点ハンドルを掴んでいるセグメントだけ、左右の移動量を頂点位置へ反映する。
+    // それ以外のセグメント（段またぎの反対側）は保存済みの値のまま動かさない。
+    const draggedKey = `${cpDrag.baseArcKey}${cpDrag.segment}`;
+    const resolveRatio = (key: string, geom: ArcGeom): number => {
+      if (!cpDrag.apex || key !== draggedKey) return geom.apexXRatio;
+      // 「頂点がカーソルと同じだけ動く」ように、移動量をスパンで割って比率にする
+      const span = Math.abs(geom.x2 - geom.x1) || 1;
+      return clampApexXRatio(cpDrag.originalRatio + (svgXIn - cpDrag.startSvgX) / span);
+    };
     // 段またぎセグメントを独立してドラッグ更新する（segment が指定されている場合はそのセグメントのみ更新）
     const updateSeg = (suffix: string, offset: number) => {
       const key = `${cpDrag.baseArcKey}${suffix}`;
       const geom = arcGeomMap.get(key);
       if (!geom) return;
       const upward = cpDrag.flipApplied ? !geom.upward : geom.upward;
+      const ratio = resolveRatio(key, geom);
       setSegPath(
         key,
-        computeArcGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset).dAttr,
-        computeArcHitGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset).dAttr,
+        computeArcGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset, ratio).dAttr,
+        computeArcHitGeometry(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset, ratio, minHitLen).dAttr,
       );
+      moveApexHandle(key, computeArcApexPoint(geom.x1, geom.y1, geom.x2, geom.y2, upward, geom.kind, geom.stemDir, geom.obstacleY, offset, ratio));
     };
     if (cpDrag.segment) {
       // 段またぎ: ドラッグ対象セグメントのみ effectiveOffset、もう一方は現状維持
@@ -1557,10 +1609,13 @@ export default function PianoSystemCanvas({
       cpDrag.flipApplied = false;
       cpDrag.originalOffset = cpDrag.origin.offset;
       cpDrag.startSvgY = cpDrag.origin.svgY;
+      // 頂点ハンドルのドラッグも同じ考え方で開始時点へ戻す（左右ぶん）
+      cpDrag.originalRatio = cpDrag.origin.ratio;
+      cpDrag.startSvgX = cpDrag.origin.svgX;
     }
     // 「カーソルが開始位置へ戻った」ことにして描き直す＝移動量ゼロのプレビュー＝開始時点の形
     if (epDrag) updateArcDragPreview(epDrag.startSvgX, epDrag.startSvgY);
-    else if (cpDrag) updateArcDragPreview(0, cpDrag.origin.svgY);
+    else if (cpDrag) updateArcDragPreview(cpDrag.origin.svgX, cpDrag.origin.svgY);
     epDragRef.current = null;
     cpDragRef.current = null;
     arcDragMovedRef.current = false;
@@ -1637,6 +1692,15 @@ export default function PianoSystemCanvas({
 
       if (cpDrag) {
         const newOffset = cpDrag.originalOffset + (svgY - cpDrag.startSvgY);
+        // 頂点ハンドル以外のドラッグでは左右位置に触らない（undefined なら保存しない）。
+        // ドラッグ対象セグメントの形状台帳からスパンを引いて比率へ直す。
+        const draggedGeom = ctx.arcGeomMap.get(`${cpDrag.baseArcKey}${cpDrag.segment}`);
+        const newRatio = cpDrag.apex
+          ? clampApexXRatio(
+              cpDrag.originalRatio
+              + (svgX - cpDrag.startSvgX) / (draggedGeom ? (Math.abs(draggedGeom.x2 - draggedGeom.x1) || 1) : 1)
+            )
+          : undefined;
         setPartsScore(prev => {
           // 曲率ドラッグ（向き反転を含む）の保存先も声部にそろえる（Issue #190）。
           const partData = updateVoiceEventInMeasures(
@@ -1647,9 +1711,14 @@ export default function PianoSystemCanvas({
               const current = patchedArcs[cpDrag.arcIndex];
               // 段またぎ第2セグメントをドラッグした場合は cpDyOffset2 に保存（第1セグメントとは独立）
               const offsetPatch = cpDrag.segment === '-2' ? { cpDyOffset2: newOffset } : { cpDyOffset: newOffset };
+              // 頂点の左右位置は膨らみとは別のキーに、同じ「セグメントごとに独立」の考え方で保存する
+              const apexPatch = newRatio === undefined
+                ? {}
+                : cpDrag.segment === '-2' ? { apexXRatio2: newRatio } : { apexXRatio: newRatio };
               patchedArcs[cpDrag.arcIndex] = {
                 ...current,
                 ...offsetPatch,
+                ...apexPatch,
                 ...(cpDrag.flipApplied ? { flipDirection: !current.flipDirection } : {}),
               };
               return { ...ev2, arcs: patchedArcs };
@@ -2951,9 +3020,11 @@ export default function PianoSystemCanvas({
     // 座標を直接受け取って弧パスを描く低レベルヘルパー
     // arcKey: arcKeyP() が発行する同定用の文字列（段またぎ時は suffix "-1"/"-2"）。
     // 中身の意味は arcIdentityMap から引く（文字列を解析してはいけない）。
-    const drawArcPathP=(x1:number,y1:number,x2:number,y2:number,upward:boolean,kind:'tie'|'slur',stemDir:number,obstacleY:number|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,minNoteY?:number,maxNoteY?:number,startDx=0,startDy=0,endDx=0,endDy=0)=>{
-      const{dAttr}=computeArcGeometry(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset);
-      arcGeomMap.set(arcKey,{x1,y1,x2,y2,upward,kind,stemDir,obstacleY,minNoteY,maxNoteY,startDx,startDy,endDx,endDy,cpDyOffset});
+    const drawArcPathP=(x1:number,y1:number,x2:number,y2:number,upward:boolean,kind:'tie'|'slur',stemDir:number,obstacleY:number|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,minNoteY?:number,maxNoteY?:number,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatioRaw=0)=>{
+      // 保存値は壊れたデータもあり得るのでここで一度だけ丸め、以降は同じ値を使い回す
+      const apexXRatio=clampApexXRatio(apexXRatioRaw);
+      const{dAttr}=computeArcGeometry(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset,apexXRatio);
+      arcGeomMap.set(arcKey,{x1,y1,x2,y2,upward,kind,stemDir,obstacleY,minNoteY,maxNoteY,startDx,startDy,endDx,endDy,cpDyOffset,apexXRatio});
 
       const baseKey=arcKey.replace(/-[12]$/,'');
       const seg=arcKey.endsWith('-1')?'-1':arcKey.endsWith('-2')?'-2':'' as ''|'-1'|'-2';
@@ -2966,14 +3037,24 @@ export default function PianoSystemCanvas({
       // identity が引けない弧は tiedToNext 方式のレガシー弧で、これは従来から編集対象ではない。
       const isEditableArc=arcIdentity!==undefined&&arcIdentity.voiceIndex===activeVoiceIndex;
 
+      let hitPath:SVGPathElement|null=null;
       if(isEditableArc){
         // 当たり判定は弧の中央部（頂点まわり）だけにする。表示パス全体を太らせると
         // 端点付近の帯が符頭に重なり、音符のクリックを吸ってしまう（Finale 等と同じ方針。
         // 詳細は computeArcHitGeometry のコメント参照）。
-        const{dAttr:hitDAttr}=computeArcHitGeometry(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset);
-        const hitPath=document.createElementNS('http://www.w3.org/2000/svg','path');
+        // 太さ・掴み代の下限は「画面px基準」で決め、実効スケールで raw 単位へ直す。
+        // 判定に使うのは属性（stroke-width）なので、クリックのたびに測り直すことはできず、
+        // 描画した時点の倍率で焼き込まれる。「画面表示のズーム」は CSS の transform だけを
+        // 変える＝再描画を伴わないため、ズームしてから何も編集せずにクリックすると、
+        // 帯の幅は描画時の倍率のまま（画面px換算ではズーム倍率ぶんズレる）。
+        // ただしこれは raw 単位の定数だった従来と同じズレ方で、基準が「その時点で画面 10px」に
+        // なるぶん必ず従来以上に正確になる。次の再描画（音符の編集・段組みの変更・弧の選択など）で
+        // 正しい値へ戻る。同じ割り切りは符頭側の拡張帯（#246）でも採っている。
+        const rawPerPx=getRawPerScreenPxSafe(svg);
+        const{dAttr:hitDAttr}=computeArcHitGeometry(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset,apexXRatio,ARC_HIT_MIN_LEN_SCREEN_PX*rawPerPx);
+        hitPath=document.createElementNS('http://www.w3.org/2000/svg','path');
         hitPath.setAttribute('d',hitDAttr);
-        hitPath.setAttribute('stroke','transparent');hitPath.setAttribute('stroke-width','10');
+        hitPath.setAttribute('stroke','transparent');hitPath.setAttribute('stroke-width',String(ARC_HIT_STROKE_SCREEN_PX*rawPerPx));
         hitPath.setAttribute('fill','none');hitPath.setAttribute('pointer-events','stroke');
         // 印刷時に svg path を黒で強制するCSSがあるため、透明な当たり判定パスだと分かるよう目印を付けて印刷から除外する
         hitPath.setAttribute('class','vf-arc-hit');
@@ -2983,8 +3064,9 @@ export default function PianoSystemCanvas({
           const{partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai}=arcIdentity!;
           setSelectedArc({partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
           setSelected(null);
-          const{y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-          cpDragRef.current={partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,origin:{svgY,offset:cpDyOffset},moved:false};
+          const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
+          // 弧の本体を掴んだときは従来どおり膨らみ（上下）だけ。左右は動かさない
+          cpDragRef.current={partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,apex:false,startSvgX:svgX,originalRatio:apexXRatio,origin:{svgY,offset:cpDyOffset,svgX,ratio:apexXRatio},moved:false};
         });
         hitPath.addEventListener('click',(e)=>{e.stopPropagation();});
         svgRoot.appendChild(hitPath);
@@ -2997,6 +3079,14 @@ export default function PianoSystemCanvas({
       visPath.setAttribute('pointer-events','none');
       visPath.setAttribute('data-arc-key',arcKey);
       svgRoot.appendChild(visPath);
+
+      // 掴める場所（中央部）に入ったことを薄く見せる。掴み代が中央だけになった今、
+      // 手がかりが無いと「どこを触れば動くのか」が分からないため
+      //（音符側 setNoteHoverHighlight と同じく opacity で表現し、選択中の青と衝突させない）。
+      if(hitPath){
+        hitPath.addEventListener('mouseenter',()=>{visPath.style.opacity='0.55';});
+        hitPath.addEventListener('mouseleave',()=>{visPath.style.opacity='';});
+      }
 
       // 選択中: 始点・終点に丸いハンドルを表示（段またぎ -2 には始点不要、-1 には終点不要）
       if(isSelected&&isEditableArc){
@@ -3021,11 +3111,33 @@ export default function PianoSystemCanvas({
         };
         if(showStart)makeHandle(x1,y1,'data-arc-ep-start',startDx,startDy,'start');
         if(showEnd)  makeHandle(x2,y2,'data-arc-ep-end',  endDx,  endDy,  'end');
+
+        // 頂点ハンドル（Issue #260）: 上下＝膨らみ、左右＝頂点の左右位置。
+        // 端点の丸ハンドルと区別できるよう白い四角にしている（掴むと両方向へ動くので
+        // カーソルも 'move'）。位置は表示パスと同じ制御点から求めた頂点そのもの。
+        const apex=computeArcApexPoint(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset,apexXRatio);
+        const apexHandle=document.createElementNS('http://www.w3.org/2000/svg','rect');
+        apexHandle.setAttribute('x',String(apex.x-ARC_APEX_HANDLE_SIZE/2));
+        apexHandle.setAttribute('y',String(apex.y-ARC_APEX_HANDLE_SIZE/2));
+        apexHandle.setAttribute('width',String(ARC_APEX_HANDLE_SIZE));
+        apexHandle.setAttribute('height',String(ARC_APEX_HANDLE_SIZE));
+        apexHandle.setAttribute('fill','white');apexHandle.setAttribute('stroke','#3b82f6');
+        apexHandle.setAttribute('stroke-width','1.5');
+        apexHandle.setAttribute('pointer-events','all');apexHandle.style.cursor='move';
+        apexHandle.setAttribute('data-arc-apex',arcKey);
+        apexHandle.addEventListener('mousedown',(e)=>{
+          e.preventDefault();e.stopPropagation();
+          const{partIndex:pi3,voiceIndex:vi3,fromMeasure:fm3,fromEvent:fe3,arcIndex:ai3}=arcIdentity!;
+          const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
+          cpDragRef.current={partIndex:pi3,voiceIndex:vi3,fromMeasure:fm3,fromEvent:fe3,arcIndex:ai3,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,apex:true,startSvgX:svgX,originalRatio:apexXRatio,origin:{svgY,offset:cpDyOffset,svgX,ratio:apexXRatio},moved:false};
+        });
+        apexHandle.addEventListener('click',e=>e.stopPropagation());
+        svgRoot.appendChild(apexHandle);
       }
     };
 
     // fromKey / toKey の音高から個別符頭の正確な Y 座標を求めて弧を描く
-    const drawTieArcP=(clef:ClefType,firstNote:StaveNote,fromKey:string,fromStave:Stave,lastNote:StaveNote,toKey:string,toStave:Stave,kind:'tie'|'slur',arcVoiceIndex:number,isMultiVoiceMeasure:boolean,allLines:number[]|undefined,allNoteYs:number[]|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,flipDirection?:boolean,startDx=0,startDy=0,endDx=0,endDy=0)=>{
+    const drawTieArcP=(clef:ClefType,firstNote:StaveNote,fromKey:string,fromStave:Stave,lastNote:StaveNote,toKey:string,toStave:Stave,kind:'tie'|'slur',arcVoiceIndex:number,isMultiVoiceMeasure:boolean,allLines:number[]|undefined,allNoteYs:number[]|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,flipDirection?:boolean,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatio=0)=>{
       type R=Record<string,(...a:unknown[])=>unknown>;
       const bb1=(firstNote as unknown as R)['getBoundingBox']?.() as {getX:()=>number;getW:()=>number}|undefined;
       const bb2=(lastNote  as unknown as R)['getBoundingBox']?.() as {getX:()=>number;getW:()=>number}|undefined;
@@ -3055,7 +3167,7 @@ export default function PianoSystemCanvas({
       if(kind==='slur'&&allNoteYs&&allNoteYs.length>0){
         obstacleY=upward?minNoteY:maxNoteY;
       }
-      drawArcPathP(x1+startDx,y1+startDy,x2+endDx,y2+endDy,upward,kind,stemDir,obstacleY,cpDyOffset,arcKey,isSelected,minNoteY,maxNoteY,startDx,startDy,endDx,endDy);
+      drawArcPathP(x1+startDx,y1+startDy,x2+endDx,y2+endDy,upward,kind,stemDir,obstacleY,cpDyOffset,arcKey,isSelected,minNoteY,maxNoteY,startDx,startDy,endDx,endDy,apexXRatio);
     };
 
     // パートごとの前小節臨時記号状態。小節線を越えた courtesy accidental 判定に使う。
@@ -5351,6 +5463,8 @@ export default function PianoSystemCanvas({
 
       const arcKey=arcKeyP({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,arcIndex});
       const cpDyOffset=arc.cpDyOffset??0;
+      // 頂点の左右位置。膨らみ（cpDyOffset）と同じく、段またぎでは第2セグメントを独立に持つ
+      const apexXRatio=arc.apexXRatio??0;
       const startDx=arc.startDx??0,startDy=arc.startDy??0;
       const endDx=arc.endDx??0,endDy=arc.endDy??0;
       // selectedArc は声部も持つ（Issue #190）。声部が違えば別の弧なので一致条件に含める。
@@ -5375,7 +5489,7 @@ export default function PianoSystemCanvas({
           const y=startStave.getYForLine(fromLine)+(upward?-3:3)+startDy;
           const stemDir=((startNote as unknown as R)['getStemDirection']?.() as number|undefined)??0;
           const edgeX=startStave.getX()+startStave.getWidth();
-          drawArcPathP(x1+startDx,y,edgeX+(arc.breakEndDx??0),y+(arc.breakEndDy??0),upward,arc.kind,stemDir,y,cpDyOffset,arcKey+'-1',isSelected,undefined,undefined,startDx,startDy,arc.breakEndDx??0,arc.breakEndDy??0);
+          drawArcPathP(x1+startDx,y,edgeX+(arc.breakEndDx??0),y+(arc.breakEndDy??0),upward,arc.kind,stemDir,y,cpDyOffset,arcKey+'-1',isSelected,undefined,undefined,startDx,startDy,arc.breakEndDx??0,arc.breakEndDy??0,apexXRatio);
         }catch{/* 段境界でも本文描画を止めない */}
         return;
       }
@@ -5410,7 +5524,7 @@ export default function PianoSystemCanvas({
       const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30
                      ||roughAbsX2P<roughAbsX1P;
       if(!crossSystem){
-        try{drawTieArcP(clef,startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy);}catch{/* 保険 */}
+        try{drawTieArcP(clef,startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio);}catch{/* 保険 */}
       }else{
         try{
           const bb1=(startNote as unknown as R)['getBoundingBox']?.() as{getX:()=>number;getW:()=>number}|undefined;
@@ -5451,8 +5565,8 @@ export default function PianoSystemCanvas({
           const segmentObstacleY2P=effY2P;
           // 段またぎの片側セグメントは、境界点の高さを各段の音符高さに揃える。
           // ふくらみは制御点で作ることで、不自然な斜め線を避ける。
-          drawArcPathP(x1+startDx,effY1P,edgeX1+breakEndDx,effY1P+breakEndDy,upward,arc.kind,stemDir,segmentObstacleY1P,cpDyOffset,arcKey+'-1',isSelected,crossMinNoteY,crossMaxNoteY,startDx,startDy,breakEndDx,breakEndDy);
-          drawArcPathP(edgeX2+breakStartDx,effY2P+breakStartDy,x2+endDx,effY2P,upward,arc.kind,0,segmentObstacleY2P,cpDy2,arcKey+'-2',isSelected,crossMinNoteY,crossMaxNoteY,breakStartDx,breakStartDy,endDx,endDy);
+          drawArcPathP(x1+startDx,effY1P,edgeX1+breakEndDx,effY1P+breakEndDy,upward,arc.kind,stemDir,segmentObstacleY1P,cpDyOffset,arcKey+'-1',isSelected,crossMinNoteY,crossMaxNoteY,startDx,startDy,breakEndDx,breakEndDy,apexXRatio);
+          drawArcPathP(edgeX2+breakStartDx,effY2P+breakStartDy,x2+endDx,effY2P,upward,arc.kind,0,segmentObstacleY2P,cpDy2,arcKey+'-2',isSelected,crossMinNoteY,crossMaxNoteY,breakStartDx,breakStartDy,endDx,endDy,arc.apexXRatio2??0);
         }catch{/* 保険 */}
       }
     });
@@ -5485,7 +5599,7 @@ export default function PianoSystemCanvas({
             const edgeX=dest.stave.getX();
             const baseKey=arcKeyP({partIndex,voiceIndex,fromMeasure,fromEvent,arcIndex});
             const selectedHere=selectedArc!==null&&selectedArc.voiceIndex===voiceIndex&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
-            drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0);
+            drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0,arc.apexXRatio2??0);
           }catch{/* 壊れた旧arcでも他の譜面描画を止めない */}
       });
 
