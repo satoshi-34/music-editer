@@ -97,6 +97,7 @@ import {
   ENGRAVING_TEXT_UNITS,
   ENGRAVING_THICKNESS_UNITS,
   SCORE_TEXT_FONT_FAMILY,
+  TEXT_STACK_LINE_GAP_UNITS,
   widenThinBarlineRect,
   markThickBarlineRect,
 } from '../utils/engravingDefaults';
@@ -145,7 +146,7 @@ import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; lyrics?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[]; articulations?: ArticulationMarking[]; tempoMarking?: string };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; lyrics?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[]; articulations?: ArticulationMarking[]; tempoMarking?: string; expressionMarking?: string };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 // 1声部ぶんの VexFlow 描画データ（音符・ビーム・タイミング管理オブジェクト）。
 // 右手/左手など複数パートの Formatter を1回にまとめるためのキャッシュ型として使う
@@ -2363,9 +2364,21 @@ export default function PianoSystemCanvas({
       eventIndex?: number;
       event?: NoteEvent;
     }> = [];
-    // 途中テンポ変更の文字表記（"Fine" など）の描画情報を収集する（五線上端より上に表示）
+    // 途中テンポ変更の文字表記（"Fine" など）の描画情報を収集する（五線上端より上に表示）。
+    // stackedWithExpression は「同じ音符に発想標語も付いているか」。
+    // 付いていれば、発想標語を五線寄りに置いてテンポ表記だけを1行ぶん上へ持ち上げる（Issue #237）
     const tempoMarkingEntries: Array<{
       anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
+      stackedWithExpression?: boolean;
+      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+    }> = [];
+    // 発想標語（espressivo, Si deve suonare... など）の描画情報を収集する（Issue #237）。
+    // テンポ表記と同じ「五線上端より上のテキスト」の仲間だが、浄書慣例に合わせて
+    // 一回り小さいイタリック体で、テンポ表記より下（五線寄り）に描く
+    const expressionMarkingEntries: Array<{
+      anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
+      /** 左へはみ出しすぎて紙面の外で切れないようにするための、その小節の五線の左端X */
+      staveLeftX: number;
       partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
     }> = [];
     // オッターバ（8va/8vb）括弧の描画情報を収集する
@@ -4648,6 +4661,17 @@ export default function PianoSystemCanvas({
                 topY: stave.getYForLine(0),
                 text: activeEvs[j].tempoMarking!,
                 adjust: getSymbolAdjust(activeEvs[j], 'tempoMarking'),
+                stackedWithExpression: !!activeEvs[j]?.expressionMarking,
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
+              });
+            }
+            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.expressionMarking) {
+              expressionMarkingEntries.push({
+                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
+                topY: stave.getYForLine(0),
+                text: activeEvs[j].expressionMarking!,
+                adjust: getSymbolAdjust(activeEvs[j], 'expressionMarking'),
+                staveLeftX: stave.getX(),
                 partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
               });
             }
@@ -4775,6 +4799,16 @@ export default function PianoSystemCanvas({
                     topY: stave.getYForLine(0),
                     text: ev.tempoMarking,
                     adjust: getSymbolAdjust(ev, 'tempoMarking'),
+                    stackedWithExpression: !!ev.expressionMarking,
+                  });
+                }
+                if (ev.expressionMarking) {
+                  expressionMarkingEntries.push({
+                    anchorX: cx,
+                    topY: stave.getYForLine(0),
+                    text: ev.expressionMarking,
+                    adjust: getSymbolAdjust(ev, 'expressionMarking'),
+                    staveLeftX: stave.getX(),
                   });
                 }
                 if (ev.ottava) {
@@ -5034,11 +5068,13 @@ export default function PianoSystemCanvas({
 
     // テンポ表記（"Fine" 等）: 五線上端より24px上、イタリック体で表示する
     // （StaffCanvas の tempoMarkingEntries と同じ描き方）
-    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust, stackedWithExpression, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       el.textContent = text;
       el.setAttribute('x', String(anchorX + adjust.offsetX));
-      el.setAttribute('y', String(topY - 24 + adjust.offsetY));
+      // 同じ音符に発想標語も付いているときは、五線に近い側を発想標語に譲って
+      // テンポ表記を1行ぶん上へ持ち上げる（上から「テンポ → 発想標語 → 五線」の順・Issue #237）
+      el.setAttribute('y', String(topY - 24 - (stackedWithExpression ? TEXT_STACK_LINE_GAP_UNITS : 0) + adjust.offsetY));
       el.setAttribute('text-anchor', 'middle');
       el.setAttribute('fill', '#1f2937');
       el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
@@ -5051,6 +5087,47 @@ export default function PianoSystemCanvas({
       // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
       if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
         appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'tempoMarking');
+      }
+    });
+
+    // 発想標語（espressivo, dolce, Si deve suonare... 等）: テンポ表記と同じ高さの段に、
+    // 一回り小さいイタリック体で表示する（Issue #237）。
+    // テンポ表記と同じ音符に付いている場合はテンポ表記の側が上へ逃げるので、
+    // ここは常に「五線上端より24u上」の定位置に置けばよい。
+    //
+    // 長い標語（月光の "Si deve suonare..." は約60字）が小節幅を超える場合は、
+    // 折り返さず**はみ出しを許容**する（第1段の決定）。
+    // 中央揃えのまま折り返すと段の縦位置計算にも影響するため、まずは
+    // 位置調整ツール（✥）で逃がせる形にとどめている（`.claude/specs/extended-notation-features/design.md` 参照）。
+    // ただし**左だけは五線の左端で止める**。左は紙面の端が近く、はみ出すと
+    // 文字が切れて読めなくなってしまうため（右へのはみ出しは許容する）
+    expressionMarkingEntries.forEach(({ anchorX, topY, text, adjust, staveLeftX, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.textContent = text;
+      el.setAttribute('x', String(anchorX + adjust.offsetX));
+      el.setAttribute('y', String(topY - 24 + adjust.offsetY));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('fill', '#1f2937');
+      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+      el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.expressionMarking * adjust.scale));
+      el.setAttribute('font-style', 'italic');
+      el.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(el);
+      // 実際の文字幅は DOM に入れてからでないと測れない（getComputedTextLength）。
+      // 中央揃えなので左端は「アンカー − 文字幅の半分」。それが五線の左端より左なら、
+      // 左端にそろう位置まで右へずらす。
+      // ・手動で位置調整（✥）した場合（offsetX ≠ 0）は利用者の指定を優先して何もしない
+      // ・jsdom には文字幅の実測が無く 0 を返すので、その場合も何もしない（テスト環境では従来どおり）
+      if (adjust.offsetX === 0 && typeof el.getComputedTextLength === 'function') {
+        const width = el.getComputedTextLength();
+        const minAnchorX = staveLeftX + (width / 2);
+        if (width > 0 && anchorX < minAnchorX) {
+          el.setAttribute('x', String(minAnchorX));
+        }
+      }
+      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+        appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'expressionMarking');
       }
     });
 
@@ -5935,6 +6012,14 @@ export default function PianoSystemCanvas({
             {textElementLabel(textEditState.kind)}
           </span>
           <input
+            // 編集対象（種別・パート・小節・声部・音符）が変わったら別の入力欄として作り直す。
+            // defaultValue は「最初に表示したとき」しか反映されない（非制御コンポーネント）ため、
+            // key を変えずに対象だけ差し替えると、前に開いていた文字が残ったままになる。
+            // 実際、Safari ではパレットのボタンを押しても入力欄からフォーカスが外れず
+            // （＝ onBlur で閉じない）、テンポ表記の入力欄が開いたまま発想標語ツールに
+            // 切り替えて同じ音符をクリックすると、発想標語の初期値にテンポ表記の文字列が
+            // 残って見えていた（Issue #237。Chrome ではボタンにフォーカスが移るので再現しない）
+            key={`${textEditState.kind}-${textEditState.partIndex}-${textEditState.measureAbsoluteIndex}-${textEditState.voiceIndex}-${textEditState.eventIndex}`}
             // eslint-disable-next-line jsx-a11y/no-autofocus
             autoFocus
             defaultValue={textEditState.currentValue}

@@ -496,3 +496,62 @@ export interface HairpinMark {
 - `src/utils/customSymbolRenderUtils.ts`: `CustomSymbolRenderEntry` に `measureAbsoluteIndex`/`eventIndex`/`event`/`partIndex?` 追加、`buildCustomSymbolEntry()` に index 引数追加（既定値付きで後方互換）、`drawCustomSymbolEntries()` に `onSymbolDrawn` コールバック追加
 - `src/utils/customSymbolRenderUtils.test.ts`: 新フィールド追加に伴うテスト期待値の更新
 - `src/components/ScorePage.tsx`: 各描画コンポーネントへ `symbolsClickable={activeToolbarTab === 'symbols'}` を渡す
+
+## 発想標語（espressivo / Si deve suonare...）の描画と、編集欄の初期値混線の修正（Issue #237）
+
+### 問題
+
+運用者の実機テスト（2026-08-11・月光第1楽章の入力）で見つかった2件。
+
+1. **保存されるだけで描画されない**: 発想標語ツール（espr.）で入力・確定すると `NoteEvent.expressionMarking` には保存されるのに、譜面のどこにも出ない。原因は「PianoSystemCanvas に描画処理がそもそも無い」こと。上の第2弾の節に *「PianoSystemCanvas は元々コード記号・発想標語・歌詞を描画していない（StaffCanvas のみ対応）」* と書いてあるとおりで、その後 StaffCanvas が廃止されて描画が PianoSystemCanvas へ集約された際、歌詞（`lyricsEntries`）は移植されたが**発想標語とコード記号は移植されないまま残っていた**。
+2. **編集欄の初期値にテンポ表記が混ざる**: 同じ音符にテンポ表記がある状態で発想標語の編集欄を開くと、初期値にテンポ表記の文字列が入っている。
+
+2 の原因は Issue のトリアージが推定した「読み出し先の混線」ではなかった。読み出しは `(activeEvs[j] as any)[textElementMode]` で種別ごとに正しく引けている（テストで確認済み）。真因は**入力欄が非制御コンポーネント（`<input defaultValue>`）で、`key` を持っていなかったこと**:
+
+- `defaultValue` は入力欄が**最初に表示されたときにしか**反映されない。`textEditState` の中身だけを差し替えても、同じ位置の `<input>` が使い回されるため、前に開いていたときの文字が DOM に残り続ける
+- 通常は「別のツールのボタンを押す → 入力欄から**フォーカスが外れて** `onBlur` → `setTextEditState(null)` → 入力欄が消える」ので再生成される。ところが **macOS の Safari はボタンをクリックしてもフォーカスが移らない**ため入力欄が開いたままになり、その状態で発想標語ツールに切り替えて同じ音符をクリックすると、種別だけが変わって入力欄は生き残る（同じ理由の Safari 差異は Issue #231 でも踏んでいる）
+
+### 修正設計
+
+#### 1. 描画（`src/components/PianoSystemCanvas.tsx`）
+
+- `expressionMarkingEntries` を新設し、テンポ表記（`tempoMarkingEntries`）と同じ2箇所——アクティブ声部の描画ループと、非アクティブ声部の「見た目だけ」描画ループ——で収集する。非アクティブ声部側は index 情報を渡さない（＝クリック判定を作らない）ところまで既存の慣習どおり
+- 体裁は**イタリック体**・書体は `SCORE_TEXT_FONT_FAMILY`。文字サイズは新設した `ENGRAVING_TEXT_UNITS.expressionMarking`
+- 描画後に `appendSymbolHitRegion([el], ..., 'expressionMarking')` を呼ぶので、演奏記号タブからサイズ（⤢）・位置（✥）の調整ができる（`listPresentAdjustableSymbolKinds` は以前から `expressionMarking` を列挙しており、調整データ側の対応は済んでいた）
+
+#### 2. 文字サイズ（`src/utils/engravingDefaults.ts`）
+
+- `ENGRAVING_TEXT_SP.expressionMarking = 1.3`（= 13 u）を追加。浄書慣例では「速度標語 ＞ 発想標語」の階層があるので、テンポ表記（`expressiveText` = 1.5 sp）の **約 87%** にあたる値を選んだ。Bravura の `engravingDefaults` には文字サイズの推奨値が無いため、月光冒頭の実譜例と見比べて決めた値である（候補A由来ではないので `ab-preview.js` の `PRESETS.a` との一致チェックの対象外。運指 1.8 sp と同じ扱い）
+
+#### 3. テンポ表記と共存するときの縦の積み順
+
+- 浄書慣例どおり、上から **テンポ表記 → 発想標語 → 五線** の順に積む
+- 実装は「**五線に近い側を定位置にして、上へ伸ばす**」方式にした。発想標語は常に従来のテンポ表記と同じ `五線上端 - 24 u` に置き、**同じ音符にテンポ表記もある場合だけ**テンポ表記を `TEXT_STACK_LINE_GAP_UNITS`（18 u）ぶん持ち上げる
+  - 逆（テンポ表記を固定して発想標語を下げる）にしなかったのは、下げると発想標語が五線上端から 11 u しか離れず、加線や高い音符とぶつかるため
+  - 判定は「同じ `NoteEvent` に両方あるか」だけで行う（`tempoMarkingEntries` の `stackedWithExpression`）。別々の音符に付いている場合は互いに影響しない。横方向に離れていれば重ならないので、これで足りる
+
+#### 4. 長い標語のはみ出し方針（第1段の決定）
+
+- **折り返さない。はみ出しは許容するが、左だけは五線の左端で止める。** 月光の "Si deve suonare tutto questo pezzo delicatissimamente e senza sordino"（約60字）は小節幅を大きく超えるが、第1段では自動折り返しを実装しない
+  - 折り返さない理由: 折り返すと段の上に必要な高さが変わり、レイアウトパイプライン（`.claude/specs/layout-pipeline/design.md` の「上から順に配置」）の縦配分に影響が及ぶ
+  - **左クランプを入れた理由（ブラウザ確認で判明）**: 中央揃えのまま素直に描くと、1小節目の音符に付けた長い標語は左半分が**紙面の外に出て切れてしまい**、読めなくなる（右へのはみ出しは紙面が広いぶん問題になりにくい）。「はみ出し容認」は「文字が消えてよい」という意味ではないので、左端だけ止める
+  - 実装: `<text>` を DOM へ追加したあとに `getComputedTextLength()` で実測し、左端（アンカー − 幅/2）が五線の左端より左なら、左端にそろう位置まで右へずらす。**手動で位置調整（✥）した場合（`offsetX ≠ 0`）は利用者の指定を優先してクランプしない**
+  - jsdom は `getComputedTextLength` を持たない（あっても 0 を返す）ため、テスト環境ではクランプが働かない。**この挙動の回帰テストは書けない**ので、ブラウザ実測（PR に記録）で担保する
+  - 逃げ道: 位置調整ツール（✥）で `symbolAdjust.expressionMarking.offsetX/offsetY` を与えれば手動で逃がせる（上記1でヒット領域を作ってあるので、実装済みの機能でそのまま操作できる）
+  - 将来案（未実装）: 小節幅を超える場合だけアンカーを左揃えへ切り替える／改行文字での明示的な複数行対応／右端のクランプ
+
+#### 5. 編集欄の作り直し（`src/components/PianoSystemCanvas.tsx`）
+
+- テキスト編集オーバーレイの `<input>` に `key={kind-partIndex-measureAbsoluteIndex-voiceIndex-eventIndex}` を付け、**編集対象が変わったら別の入力欄として作り直す**ようにした。`defaultValue` の非制御入力を維持したまま最小の変更で直せる
+- 対象を切り替えた時点で、確定していなかった文字は破棄される。これは「入力欄を開いたまま別のツールを押すと Esc と同じ扱いになる」という既存の取り決め（`docs/REGRESSION.md` C 節・Issue #231）と同じ挙動である
+
+### 影響範囲
+
+- `src/components/PianoSystemCanvas.tsx`: ローカル `NoteEvent` 型に `expressionMarking?: string` を追加、`expressionMarkingEntries` の収集（2箇所）と描画、テンポ表記の y 計算に `stackedWithExpression` を追加、テキスト編集入力欄の `key`
+- `src/utils/engravingDefaults.ts`: `ENGRAVING_TEXT_SP.expressionMarking` / `ENGRAVING_TEXT_UNITS.expressionMarking` / `TEXT_STACK_LINE_GAP_UNITS` を追加
+- `src/components/PianoSystemCanvasExpressionMarking.test.tsx`: 新規（描画・積み順・3パターン・編集欄の初期値）
+
+### 残っている課題（このIssueの範囲外）
+
+- **コード記号（`chordSymbol`）も同じ理由で描画されないまま**である。データには保存され、`listPresentAdjustableSymbolKinds` にも載っているが、PianoSystemCanvas に描画処理が無い（StaffCanvas 廃止時に移植されなかったもう1件）。発想標語と同じ形で実装できるはずだが、体裁（コードネームは正体・符頭の上）と縦の積み順は別途決める必要がある
+- テキスト編集以外のオーバーレイ（テンポ BPM・拍子・調号・音部記号・リハーサルマーク・記号サイズ/位置）の入力欄にも同じ `key` の無い非制御入力があり、Safari で対象を切り替えると前の値が残る可能性がある。今回は Issue の範囲に絞って修正していない
