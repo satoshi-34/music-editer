@@ -26,6 +26,7 @@ import {
   keyToLine as keyToLineForClef,
 } from './clefUtils';
 import { computeArcGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
+import { armClickCycle, planClickCycle, type ClickCycleState } from './clickCycleUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
@@ -319,6 +320,19 @@ const ARC_HIT_MIN_LEN_SCREEN_PX = 28;
 // 頂点ハンドル（正方形）の一辺。端点ハンドル（r=5 の丸）と同じく raw 単位なので、
 // 譜面の拡大縮小に合わせて大きさが変わる。
 const ARC_APEX_HANDLE_SIZE = 9;
+
+// 再クリック巡回（Issue #264）の候補1件ぶん。描画時に当たり判定要素へ紐づけて台帳に積む。
+type ClickCycleTarget = {
+  /**
+   * 再描画をまたいでも同じ値になる論理ID。
+   * 例: 音符 `note:p0:m3:v0:e2` / 弧 `arc:p0v0m3e2a0` / 松葉 `hairpin:p0v0m3e2h0`
+   */
+  id: string;
+  /** その座標で本当に選択対象になるか（符頭から外れた位置では音符は候補にしない） */
+  canActivate: (clientX: number, clientY: number) => boolean;
+  /** 巡回で選ばれたときに実行する「選択だけ」の処理（音符を増やす等の編集はしない） */
+  activate: (clientX: number, clientY: number) => void;
+};
 
 // 青い選択枠はクリック不可の見た目です。見た目だけ調整したい場合はここを変更。
 const SELECTED_KEY_PAD_X = 3;
@@ -1481,6 +1495,23 @@ export default function PianoSystemCanvas({
   // 選択を解除してしまわないよう、1回だけ読み飛ばすために使う。
   const arcDragMovedRef = useRef(false);
 
+  // ── 再クリック巡回（Issue #264）─────────────────────────────────────
+  // 当たり判定が重なる場所では一番手前の要素しかクリックを受け取れないため、
+  // 「同じ場所をもう一度クリックしたら次の候補へ」送って編集対象を切り替えられるようにする。
+  //
+  // 進み具合（どこまで巡回したか）。座標が変わると捨てられる。
+  const clickCycleStateRef = useRef<ClickCycleState | null>(null);
+  // その座標にどんな候補があるかの台帳。描画のたびに作り直す
+  // （SVG は選択が変わるたびに丸ごと作り直されるので、古い要素を握ったままにしない）。
+  const clickCycleTargetsRef = useRef<Map<Element, ClickCycleTarget>>(new Map());
+  // 弧だけは「押した時点」では巡回を実行せず、計画だけここへ預けて mouseup まで待つ。
+  // 弧はドラッグの開始も mousedown なので、押した瞬間に次の候補へ移すと
+  // 「選んだあと同じ場所を掴んで曲率を変える」ができなくなるため
+  // （動かさずに離したとき＝ただのクリックのときだけ巡回する）。
+  const clickCyclePendingRef = useRef<{
+    clientX: number; clientY: number; consumed: string[]; activate: () => void;
+  } | null>(null);
+
   /**
    * 弧（タイ／スラー）のドラッグ中プレビュー。SVG の d 属性を直接書き換えるだけで、
    * 譜面データ（partsScore）には触らない＝再描画も段のレイアウト計算も起きない。
@@ -1644,6 +1675,10 @@ export default function PianoSystemCanvas({
     };
 
     const onUp = (ev: MouseEvent) => {
+      // 弧の当たり判定へ預けた巡回の計画は、その要素の mouseup（この window ハンドラより先に走る）で
+      // 実行・破棄される。ここまで残っているのは「SVG の外で離した」等の取りこぼしなので、
+      // 後の無関係なクリックで古い計画が発火しないよう必ず捨てる（Issue #264）。
+      clickCyclePendingRef.current = null;
       const epDrag = epDragRef.current;
       const cpDrag = cpDragRef.current;
       const ctx = arcDragContextRef.current;
@@ -2312,6 +2347,75 @@ export default function PianoSystemCanvas({
 
     const allG=svg.querySelectorAll('g');
     const svgRoot=(allG.length?allG[allG.length-1]:svg) as SVGGElement;
+
+    // ── 再クリック巡回（Issue #264）の台帳と入口 ───────────────────────
+    // 描画のたびに要素は作り直されるので、台帳も毎回まっさらにする。
+    clickCycleTargetsRef.current=new Map();
+    /** 当たり判定要素を「同じ場所の再クリックで選べる候補」として登録する */
+    const registerClickCycleTarget=(el:Element,target:ClickCycleTarget)=>{
+      // どの候補なのかを DOM からも見えるようにしておく（テスト・デバッグ用。表示には影響しない）
+      el.setAttribute('data-cycle-id',target.id);
+      clickCycleTargetsRef.current.set(el,target);
+    };
+    /**
+     * その画面座標にある候補を、手前（前面）から奥の順に集める。
+     * SVG に z-index は無く、ブラウザだけが正確な重なり順を知っているので
+     * elementsFromPoint に聞く（要素の矩形を自前で総当たりすると、
+     * 曲線の当たり判定＝スラーの帯を正しく判定できない）。
+     */
+    const collectClickCycleCandidates=(clientX:number,clientY:number):ClickCycleTarget[]=>{
+      const doc=svg.ownerDocument;
+      // jsdom など elementsFromPoint を持たない環境では巡回を諦める（従来どおりの1回目の挙動）
+      if(typeof doc?.elementsFromPoint!=='function')return [];
+      const found:ClickCycleTarget[]=[];
+      doc.elementsFromPoint(clientX,clientY).forEach(el=>{
+        const target=clickCycleTargetsRef.current.get(el);
+        if(!target)return;
+        // 同じ対象が複数の要素に分かれている場合（音符の固定範囲＋拡張部、段またぎの弧）は1件に畳む
+        if(found.some(f=>f.id===target.id))return;
+        if(!target.canActivate(clientX,clientY))return;
+        found.push(target);
+      });
+      return found;
+    };
+    /**
+     * 巡回すべきかを判定し、するなら「次に選ぶ対象」を返す（まだ実行はしない）。
+     * null のときは呼び出し側が従来どおりの処理を続ける（進み具合はここで捨てる）。
+     */
+    const prepareClickCycle=(selfId:string,clientX:number,clientY:number)=>{
+      const candidates=collectClickCycleCandidates(clientX,clientY);
+      const plan=planClickCycle(clickCycleStateRef.current,clientX,clientY,candidates.map(c=>c.id),selfId);
+      if(!plan){
+        // 一巡して先頭へ戻った場合もここに来る。進み具合を捨てないと2周目が回らない
+        clickCycleStateRef.current=null;
+        return null;
+      }
+      const next=candidates.find(c=>c.id===plan.nextId);
+      if(!next){clickCycleStateRef.current=null;return null;}
+      return {
+        clientX,clientY,consumed:plan.consumed,
+        activate:()=>next.activate(clientX,clientY),
+      };
+    };
+    /** 預けてあった巡回の計画をいま実行する */
+    const commitClickCycle=(pending:{clientX:number;clientY:number;consumed:string[];activate:()=>void})=>{
+      clickCycleStateRef.current={clientX:pending.clientX,clientY:pending.clientY,consumed:pending.consumed};
+      pending.activate();
+    };
+    /**
+     * 巡回すべきなら即座に次の候補を選び直して true を返す（クリックで確定する対象向け）。
+     * false のときは呼び出し側が従来どおりの処理を続ける。
+     */
+    const tryClickCycle=(selfId:string,clientX:number,clientY:number):boolean=>{
+      const pending=prepareClickCycle(selfId,clientX,clientY);
+      if(!pending)return false;
+      commitClickCycle(pending);
+      return true;
+    };
+    /** 「この対象を選んだ」ことを覚えて、次の同じ場所のクリックに備える */
+    const armClickCycleFor=(selfId:string,clientX:number,clientY:number)=>{
+      clickCycleStateRef.current=armClickCycle(clickCycleStateRef.current,clientX,clientY,selfId);
+    };
 
     /**
      * StaveConnector（段の左右の縦線・グループ括弧）を描き、そのとき増えた
@@ -3059,14 +3163,40 @@ export default function PianoSystemCanvas({
         // 印刷時に svg path を黒で強制するCSSがあるため、透明な当たり判定パスだと分かるよう目印を付けて印刷から除外する
         hitPath.setAttribute('class','vf-arc-hit');
         hitPath.setAttribute('data-arc-key-hit',arcKey);hitPath.style.cursor='grab';
+        // 再クリック巡回の候補として登録する（Issue #264）。
+        // 段またぎで2本に分かれていても論理的には1つの弧なので、ID は baseKey（segment 抜き）にする。
+        const arcCycleId=`arc:${baseKey}`;
+        const selectThisArc=()=>{
+          const{partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai}=arcIdentity!;
+          setSelectedHairpin(null);
+          setSelected(null);
+          setSelectedArc({partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
+        };
+        registerClickCycleTarget(hitPath,{id:arcCycleId,canActivate:()=>true,activate:selectThisArc});
         hitPath.addEventListener('mousedown',(e)=>{
           e.preventDefault();e.stopPropagation();
+          const me=e as MouseEvent;
+          // 同じ場所の2回目以降のクリックなら、奥に隠れている対象（符頭・別の弧・松葉）へ譲る。
+          // ただし弧はドラッグの開始も mousedown なので、ここでは**計画を預けるだけ**にして、
+          // 実際の切り替えは「動かさずに離した（＝ただのクリックだった）」と分かる mouseup まで待つ。
+          // こうしないと、選択した弧を同じ場所で掴み直して曲率を変えることができなくなる。
+          clickCyclePendingRef.current=prepareClickCycle(arcCycleId,me.clientX,me.clientY);
+          if(!clickCyclePendingRef.current)armClickCycleFor(arcCycleId,me.clientX,me.clientY);
           const{partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai}=arcIdentity!;
           setSelectedArc({partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
           setSelected(null);
           const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
           // 弧の本体を掴んだときは従来どおり膨らみ（上下）だけ。左右は動かさない
           cpDragRef.current={partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,apex:false,startSvgX:svgX,originalRatio:apexXRatio,origin:{svgY,offset:cpDyOffset,svgX,ratio:apexXRatio},moved:false};
+        });
+        // 押した場所で動かさずに離したときだけ、預けてあった巡回を実行する（Issue #264）。
+        // 再描画で当たり判定パスが作り直されていても、計画は ref に預けてあるので拾える。
+        hitPath.addEventListener('mouseup',()=>{
+          const pending=clickCyclePendingRef.current;
+          clickCyclePendingRef.current=null;
+          // ドラッグで形を変えたのなら、それは巡回ではなく編集操作
+          if(!pending||arcDragMovedRef.current)return;
+          commitClickCycle(pending);
         });
         hitPath.addEventListener('click',(e)=>{e.stopPropagation();});
         svgRoot.appendChild(hitPath);
@@ -4143,6 +4273,39 @@ export default function PianoSystemCanvas({
               Math.max(4+EXTRA_BOTTOM,keyLines?keyLines.maxLine:4+EXTRA_BOTTOM)
             );
 
+            // ── 再クリック巡回（Issue #264）でこの音符を選ぶための道具立て ──
+            // 巡回で選ばれたときにやるのは「選択」だけ。音符を増やす・置き換える等の
+            // 編集は絶対にしない（奥に隠れた対象を選びたいだけのクリックなので）。
+            const noteCycleId=`note:p${pi}:m${absI}:v${activeVoiceIndex}:e${j}`;
+            /**
+             * その画面座標が「この音符のどの符頭を選ぶクリックか」を返す（-1 なら選択にならない）。
+             * 下の click ハンドラの判定式（nearNoteX → findKeyIndexAtLine → 固定範囲外の吸い寄せ）と
+             * 完全に同じものをここへ切り出している。ずれると
+             * 「巡回では選べるのに普通に押すと選べない」という食い違いが出る。
+             */
+            const resolveSelectableKeyIndex=(clientX:number,clientY:number):number=>{
+              const ev=activeEvs[j];
+              if(!ev||ev.isRest)return -1;
+              const{x:lx,y:ly}=clientToGroup(svg,svgRoot,clientX,clientY);
+              const pad=keySelectXPad(svg);
+              if(lx<noteVisualLeft-pad||lx>noteVisualRight+pad)return -1;
+              const atLine=findKeyIndexAtLine(ev.keys,snapLineForKeySelect(ly),k2l);
+              if(atLine>=0)return atLine;
+              if(ly<chordTopY||ly>chordBotY){
+                return findNearestKeyIndexWithinLines(ev.keys,ly,stave,k2l,OUTER_KEY_SELECT_MAX_LINES);
+              }
+              return -1;
+            };
+            const selectKeyAtPoint=(clientX:number,clientY:number)=>{
+              const keyIndex=resolveSelectableKeyIndex(clientX,clientY);
+              if(keyIndex<0)return;
+              setSelectedArc(null);
+              setSelectedHairpin(null);
+              setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex});
+              const ev=activeEvs[j];
+              playNoteEvent({...ev,keys:[ev.keys[keyIndex]]}, part.playbackInstrument);
+            };
+
             // ヒット rect を1枚作る。属性は全枚数で同じにする（テストや CSS が
             // どの枚数を掴んでも同じ意味になるようにするため）。
             // part: 'fixed' = 固定範囲（セル全幅）／'extension' = 固定範囲の外側（符頭幅）
@@ -4192,6 +4355,12 @@ export default function PianoSystemCanvas({
             }
             // 以下のハンドラは全 rect に同じものを付ける（固定範囲と拡張部で判定が食い違わないようにする）
             noteHitRects.forEach(hit=>{
+            // 固定範囲・拡張部のどちらを押しても同じ1つの音符なので、同じIDで登録する（Issue #264）
+            registerClickCycleTarget(hit,{
+              id:noteCycleId,
+              canActivate:(cx,cy)=>resolveSelectableKeyIndex(cx,cy)>=0,
+              activate:selectKeyAtPoint,
+            });
             // 音符の当たり判定は小節の背景より手前にあるため、ここにも小節選択の
             // ドラッグ処理を付けないと、音符の上を通った瞬間に範囲選択が止まってしまう。
             attachMeasureSelectDrag(hit);
@@ -4313,6 +4482,13 @@ export default function PianoSystemCanvas({
                 }
                 onMeasureSelect?.(absI, (e as MouseEvent).shiftKey);
                 return;
+              }
+              // 同じ場所の再クリックなら、この符頭の奥に隠れている対象（スラー・松葉・別の弧）へ譲る。
+              // 小節選択・Shift+クリックより後に置いているのは、それらの既存の意味を巡回で
+              // 上書きしないため（Issue #264 の裁定。設計書 §4 参照）。
+              {
+                const cycleEvent=e as MouseEvent;
+                if(tryClickCycle(noteCycleId,cycleEvent.clientX,cycleEvent.clientY))return;
               }
               setSelectedArc(null);
               setSelectedHairpin(null);
@@ -4654,6 +4830,10 @@ export default function PianoSystemCanvas({
                   clickedKeyIndex = findNearestKeyIndexWithinLines(currentEv.keys, ly, stave, k2l, OUTER_KEY_SELECT_MAX_LINES);
                 }
                 if(clickedKeyIndex>=0){
+                  // 符頭を選んだ = 巡回の起点。次に同じ場所を押したら奥の候補へ進む（Issue #264）。
+                  // 「選択で終わったクリック」だけを起点にすることで、休符の1クリック置換（#233）や
+                  // 奏法記号のトグルのように再クリックへ既存の意味がある操作を巻き込まない。
+                  armClickCycleFor(noteCycleId,me.clientX,me.clientY);
                   setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex});
                   playNoteEvent({...currentEv,keys:[currentEv.keys[clickedKeyIndex]]}, part.playbackInstrument);
                   return;
@@ -4916,6 +5096,10 @@ export default function PianoSystemCanvas({
               const selectedY = selectedKey ? stave.getYForLine(k2l(selectedKey)) : undefined;
               const sr=document.createElementNS('http://www.w3.org/2000/svg','rect');
               sr.setAttribute('class','vf-note-selected');
+              // どの音符を選んでいるかをテストから見分けられるようにする（表示には影響しない）。
+              // 当たり判定 rect（.vf-note-hit）と同じ命名にそろえてある。
+              sr.setAttribute('data-measure',String(absI));
+              sr.setAttribute('data-note',String(j));
               // 青枠は表示専用です。CSS で pointer-events:none にしているため、
               // 枠の大きさを変えてもクリック可能範囲は変わりません。
               // 実際の当たり判定は上の xl/wHit/createNoteHitRect と CHORD_HIT_PAD / CHORD_LEDGER_* を調整してください。
@@ -5623,16 +5807,29 @@ export default function PianoSystemCanvas({
       const offsetY=hairpin.offsetY??0;
       // 松葉も弧と同じく、掴めるのはアクティブ声部のものだけにする（drawArcPathP のコメント参照）。
       // onClick を渡さないと当たり判定パス自体が作られない（drawHairpinSegment の既存仕様）。
+      const hairpinCycleId=`hairpin:p${partIndex}v${voiceIndex}m${startMeasureIdx}e${startEventIdx}h${hairpinIndex}`;
+      const selectThisHairpin=()=>{
+        setSelected(null);
+        setSelectedArc(null);
+        setSelectedHairpin({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
+      };
       const onClick=voiceIndex===activeVoiceIndex
-        ? ()=>{
+        ? (ev:MouseEvent)=>{
+            // 同じ場所の再クリックなら、奥に隠れている対象（符頭・弧）へ譲る（Issue #264）
+            if(tryClickCycle(hairpinCycleId,ev.clientX,ev.clientY))return;
+            armClickCycleFor(hairpinCycleId,ev.clientX,ev.clientY);
             setSelectedArc(null);
             setSelectedHairpin({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
           }
         : undefined;
+      // 段またぎで2本に分かれても論理的には1つの松葉なので、同じIDで登録する
+      const onHitPathCreated=onClick
+        ? (hit:SVGPathElement)=>registerClickCycleTarget(hit,{id:hairpinCycleId,canActivate:()=>true,activate:selectThisHairpin})
+        : undefined;
       // 段またぎ判定はタイ/スラーと同じ基準（五線Y差 > 30px、または終点が始点より左）
       const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30||x2<x1;
       if(!crossSystem){
-        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1,x2,y:startStave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:0,fracEnd:1,isSelected,onClick});
+        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1,x2,y:startStave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:0,fracEnd:1,isSelected,onClick,onHitPathCreated});
       }else{
         // 段またぎ: 上段（開始音符→段の右端）と下段（次段の左端→終了音符）に分割し、
         // 開き幅（frac）を横幅の比率でつなげて自然に見せる
@@ -5641,8 +5838,8 @@ export default function PianoSystemCanvas({
         const span1=Math.max(edgeX1-x1,1);
         const span2=Math.max(x2-edgeX2,1);
         const breakFrac=span1/(span1+span2);
-        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1,x2:edgeX1,y:startStave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:0,fracEnd:breakFrac,isSelected,onClick});
-        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1:edgeX2,x2,y:dest.stave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:breakFrac,fracEnd:1,isSelected,onClick});
+        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1,x2:edgeX1,y:startStave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:0,fracEnd:breakFrac,isSelected,onClick,onHitPathCreated});
+        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1:edgeX2,x2,y:dest.stave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:breakFrac,fracEnd:1,isSelected,onClick,onHitPathCreated});
       }
     });
 

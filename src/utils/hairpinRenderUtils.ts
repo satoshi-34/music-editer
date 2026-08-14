@@ -30,6 +30,11 @@ export interface HairpinSegmentParams {
   isSelected: boolean;
   /** クリック時コールバック（選択用）。省略時はクリック不可（pointer-events: none） */
   onClick?: (ev: MouseEvent) => void;
+  /**
+   * 作成した当たり判定パスを呼び出し側へ渡す（onClick を指定したときだけ呼ばれる）。
+   * 再クリック巡回（Issue #264）で「この座標にある候補」の台帳へ登録するために使う。
+   */
+  onHitPathCreated?: (hit: SVGPathElement) => void;
 }
 
 /**
@@ -38,7 +43,7 @@ export interface HairpinSegmentParams {
  * fracStart / fracEnd で開き具合の範囲を指定できるため、段またぎの分割描画にも使える。
  */
 export function drawHairpinSegment(params: HairpinSegmentParams): void {
-  const { svgRoot, x1, x2, y, type, fracStart, fracEnd, isSelected, onClick } = params;
+  const { svgRoot, x1, x2, y, type, fracStart, fracEnd, isSelected, onClick, onHitPathCreated } = params;
   const ns = 'http://www.w3.org/2000/svg';
 
   // 開き幅: cresc は進むほど開く（frac に比例）、dim は進むほど閉じる（1 - frac に比例）
@@ -66,6 +71,7 @@ export function drawHairpinSegment(params: HairpinSegmentParams): void {
     hit.style.cursor = 'pointer';
     hit.addEventListener('click', (ev) => { ev.stopPropagation(); onClick(ev as MouseEvent); });
     svgRoot.appendChild(hit);
+    onHitPathCreated?.(hit);
   }
 
   const path = document.createElementNS(ns, 'path');
