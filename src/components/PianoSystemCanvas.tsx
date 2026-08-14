@@ -1694,10 +1694,9 @@ export default function PianoSystemCanvas({
 
   // キーボードハンドラは deps [] で1回だけ登録するため、そのままでは初回レンダー時の
   // partsScore しか見えない（＝古い譜面を読んでしまう）。削除の通知文（何を消したか）を
-  // 組み立てるのに「いま画面にある譜面」が要るので、selRef と同じやり方で鏡を持つ。
+  // 組み立てるのに「いま画面にある譜面」が要る。#234（連符コピペ）が同じ目的で導入した
+  // partsScoreRef（上で宣言・毎レンダーで最新へ同期）を共用する。
   // 読み取り専用の用途に限る（書き換えは従来どおり setPartsScore の updater で行う）。
-  const partsScoreRef = useRef<MeasureData[][]>(partsScore);
-  useEffect(()=>{partsScoreRef.current=partsScore;},[partsScore]);
 
   // 声部を切り替えたら、いま選んでいる弧・松葉が別の声部のものになった場合は選択を解除する（Issue #190）。
   // 弧を掴めるのはアクティブ声部のものだけなので、選択だけが残ると
