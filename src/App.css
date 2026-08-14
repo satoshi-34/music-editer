@@ -1209,15 +1209,25 @@ button.ghost.active:hover:not(:disabled) {
   }
 }
 
-/* Playback Highlight */
+/* Playback Highlight（再生中の位置を示す縦帯・Issue #268）
+   帯は PlaybackHighlight.tsx が段の SVG の先頭に差し込む rect で、
+   色（琥珀色）は同ファイルの DEFAULT_HIGHLIGHT_STYLE が属性で付ける。
+   ここでは「クリックを奪わない」ことと明滅だけを担当する。 */
+.vf-playback-band {
+  /* 帯が音符の当たり判定を隠すと、再生中に譜面を編集できなくなる */
+  pointer-events: none;
+}
+
 .playback-highlight {
-  filter: drop-shadow(0 0 4px rgba(0, 123, 255, 0.5));
-  animation: pulse 1s ease-in-out infinite alternate;
+  /* 影は付けない: 淡い塗りの帯なので、影を足すと五線の細線と干渉して汚くなる。
+     選択枠（青）との見分けは色そのもので付ける */
+  animation: pulse 1.2s ease-in-out infinite alternate;
 }
 
 @keyframes pulse {
+  /* 明滅の下限を下げすぎると、淡い塗りが紙の色に沈んで見えなくなる */
   from {
-    opacity: 0.8;
+    opacity: 0.75;
   }
   to {
     opacity: 1;
@@ -1880,12 +1890,13 @@ button.ghost.active:hover:not(:disabled) {
      塗りつぶさない。リハーサルマークの囲み枠 rect はここで文字が見えるようになる */
   .print-page svg circle[stroke]:not([stroke="none"]) { stroke: var(--print-ink) !important; }
   .print-page svg circle:not([fill="none"]) { fill: var(--print-ink) !important; }
-  .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region) {
+  .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band) {
     stroke: var(--print-ink) !important;
   }
   /* .symbol-hit-region は fill="rgba(37,99,235,0)"（アルファ 0 の透明色）なので
-     fill="none" の除外条件に引っかからず、このルールで黒く塗り潰されていた（Issue #203） */
-  .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region) {
+     fill="none" の除外条件に引っかからず、このルールで黒く塗り潰されていた（Issue #203）。
+     再生中の帯（.vf-playback-band）も半透明の塗りを持つので同じ穴に落ちる（Issue #268） */
+  .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band) {
     fill: var(--print-ink) !important;
   }
   .print-page svg rect.vf-hit,
@@ -1895,6 +1906,8 @@ button.ghost.active:hover:not(:disabled) {
   .print-page svg rect.symbol-hit-region {
     stroke: none !important; fill: transparent !important;
   }
+  /* 再生中の帯は画面だけのもの。印刷には出さない */
+  .print-page svg rect.vf-playback-band { display: none !important; }
   /* 強弱記号・運指番号・リハーサルマーク・ペダル・オッターバなどのテキストは
      ダークグレー系（#1f2937 等）で描かれているため、印刷では純粋な黒に統一する */
   .print-page svg text { fill: var(--print-ink) !important; }
@@ -2004,11 +2017,12 @@ button.ghost.active:hover:not(:disabled) {
 }
 .print-preview .print-page svg circle[stroke]:not([stroke="none"]) { stroke: var(--print-ink, #000); }
 .print-preview .print-page svg circle:not([fill="none"]) { fill: var(--print-ink, #000); }
-.print-preview .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region) {
+.print-preview .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band) {
   stroke: var(--print-ink, #000);
 }
-/* @media print 側と同じ理由で .symbol-hit-region を除外する（Issue #203） */
-.print-preview .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region) {
+/* @media print 側と同じ理由で .symbol-hit-region（Issue #203）と
+   再生中の帯 .vf-playback-band（Issue #268）を除外する */
+.print-preview .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band) {
   fill: var(--print-ink, #000);
 }
 .print-preview .print-page svg rect.vf-hit,
@@ -2018,6 +2032,8 @@ button.ghost.active:hover:not(:disabled) {
 .print-preview .print-page svg rect.symbol-hit-region {
   stroke: none; fill: transparent;
 }
+/* 印刷プレビューでも帯は出さない（画面での再生位置表示のためだけの要素） */
+.print-preview .print-page svg rect.vf-playback-band { display: none; }
 .print-preview .print-page svg text { fill: var(--print-ink, #000); }
 .print-preview .print-page svg g[stroke]:not([stroke="none"]) { stroke: var(--print-ink, #000); }
 .print-preview .print-page svg g[fill]:not([fill="none"]) { fill: var(--print-ink, #000); }
