@@ -79,13 +79,21 @@ function centerXOf(hit: SVGRectElement): number {
 
 // partIndex 番目のパートの、measure 0・noteIndex 番目の音符のヒット領域。
 // 複数パートを描くと同じ data 属性の rect が並ぶので、出現順（＝パートの並び順）で選ぶ。
-function noteHit(svg: SVGSVGElement, partIndex: number, noteIndex: number): SVGRectElement {
+// Issue #246 でヒット領域は「固定範囲（セル全幅）」と「拡張部（符頭幅）」の複数 rect に
+// 分かれたため、part で指定して1音につき1枚になるようにする。
+function noteHitOf(
+  svg: SVGSVGElement, partIndex: number, noteIndex: number, part: 'fixed' | 'extension'
+): SVGRectElement {
   const hits = Array.from(
-    svg.querySelectorAll(`rect.vf-note-hit[data-measure="0"][data-note="${noteIndex}"]`)
+    svg.querySelectorAll(`rect.vf-note-hit[data-hit-part="${part}"][data-measure="0"][data-note="${noteIndex}"]`)
   ) as SVGRectElement[];
   const hit = hits[partIndex];
   expect(hit).toBeTruthy();
   return hit;
+}
+
+function noteHit(svg: SVGSVGElement, partIndex: number, noteIndex: number): SVGRectElement {
+  return noteHitOf(svg, partIndex, noteIndex, 'fixed');
 }
 
 function measureWith(keys: string[]): MeasureData[] {
@@ -229,9 +237,22 @@ describe('PianoSystemCanvas 五線から遠い音符の選択（Issue #218）', 
     // ここが 1 ライン・2 ラインと大きくなると、隣の段のクリックを奪う範囲が広がる。
     const { svg } = renderGrandStaff(['c/5'], ['g#/4']);
     const bassHit = noteHit(svg, 1, 0);
+    // 拡張部は「五線から遠い符頭を持つ音符」にだけ作られる。
+    // ここでは g#/4（ヘ音記号の line -3）だけが該当するので、拡張部の rect は1枚。
+    // 上の五線内に収まる c/5 には作られない（＝ここが2枚になったら広げすぎ）。
+    const extensions = Array.from(
+      svg.querySelectorAll('rect.vf-note-hit[data-hit-part="extension"][data-measure="0"][data-note="0"]')
+    ) as SVGRectElement[];
+    expect(extensions.length).toBe(1);
 
     // g#/4 は line -3。固定範囲の上端（line -3）から 0.5 ライン分だけ上へ伸びる。
-    expect(parseFloat(bassHit.getAttribute('y')!)).toBeCloseTo(yForLine(bassHit, -3.5), 5);
+    expect(parseFloat(extensions[0].getAttribute('y')!)).toBeCloseTo(yForLine(bassHit, -3.5), 5);
+    // 拡張部の下端は固定範囲の上端とちょうど接する（隙間も重なりも作らない）。
+    // このパート間隔（自動値80）では固定範囲が中間線でクリップされているため、
+    // 固定範囲の上端は line -3 ではなく中間線の位置になる（Issue #219）。
+    expect(
+      parseFloat(extensions[0].getAttribute('y')!) + parseFloat(extensions[0].getAttribute('height')!)
+    ).toBeCloseTo(parseFloat(bassHit.getAttribute('y')!), 5);
   });
 
   it('広げた領域のクリックは音符を増やさない（隣の段を押した扱いにならない）', async () => {

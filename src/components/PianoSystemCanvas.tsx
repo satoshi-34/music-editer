@@ -665,10 +665,14 @@ function getSvgVisualMetrics(svg: SVGSVGElement): {
 } {
   const svgRect = svg.getBoundingClientRect();
   const viewBox = svg.viewBox?.baseVal;
-  const vbW = (viewBox && viewBox.width > 0) ? viewBox.width : svg.width.baseVal.value;
-  const vbH = (viewBox && viewBox.height > 0) ? viewBox.height : svg.height.baseVal.value;
-  const logW = svg.width.baseVal.value;
-  const logH = svg.height.baseVal.value;
+  // width/height の baseVal は「SVG がまだレイアウトされていない」状況では読めないことがある
+  // （テスト環境の jsdom、および描画中に自分で呼ぶ場合）。読めないときは 0 を返し、
+  // 下の visualW/H が 0 になる → 呼び出し側（getRawPerScreenPx / clientToGroup）の
+  // ガードで安全な既定値へ落ちるようにする（例外で描画ごと止めない）。
+  const logW = svg.width?.baseVal?.value ?? 0;
+  const logH = svg.height?.baseVal?.value ?? 0;
+  const vbW = (viewBox && viewBox.width > 0) ? viewBox.width : logW;
+  const vbH = (viewBox && viewBox.height > 0) ? viewBox.height : logH;
 
   const cssZoom = getAccumulatedCSSZoom(svg);
   const expectedVisualW = logW * cssZoom;
@@ -3987,7 +3991,7 @@ export default function PianoSystemCanvas({
             // その音符が五線から離れている場合はその符頭までをカバーする（hitLines）。
             // 音符のY中心だけをカバーすると加線域へのクリックが insertRect に落ちて和音追加できない。
             // 実際に「和音追加/個別音選択」として扱うかは click 内の isOnNote で再判定します。
-            //   x/yHit/w/hHit = このイベントにクリックを届ける透明領域
+            //   createNoteHitRect で作る rect 群 = このイベントにクリックを届ける透明領域
             //   noteVisualLeft/Right ± CHORD_HIT_PAD = 和音操作として扱うX領域
             //   .vf-note-selected = 選択状態の表示だけ。クリック判定には使わない
             // NOTE_HIT_EXTENSION: 広げたぶん（固定範囲の外側 0.5ライン）は、大譜表のように
@@ -3999,12 +4003,17 @@ export default function PianoSystemCanvas({
             //   - 広げた領域のクリックは「選択」しかしない（下の click 参照。挿入はしない）
             // の2点で、隣のパートから奪う影響を「その符頭の上でだけ・音符を増やさない」形に抑える。
             //
-            // rect は1枚の長方形なので、符頭が中間線の外にある音符では
-            // 「中間線から符頭まで」も結果的に rect に含まれる（穴は空けられない）。
-            // その帯を押しても挿入は起きない（click の chordTopY/chordBotY 判定は
-            // 上のクリップ後の値を見るため）ので、誤配置にはつながらない。
+            // Issue #246: 以前はこの領域を1枚の rect で作っていたため、拡張したぶんの帯が
+            // 「符頭の高さ 0.5ライン × セル全幅」になり、符頭から横に離れた位置でも
+            // 隣のパート／小節背景へクリックが届かない（押しても何も起きない）帯が残っていた。
+            // そこで rect を2種類に分ける:
+            //   固定範囲（クリップ後の五線±3加線）= セル全幅。従来どおりで1pxも変えない
+            //   拡張部（固定範囲の外側）           = 符頭の実描画X範囲 ± keySelectXPad(svg) だけ
+            // ハンドラは全 rect に同じものを付けるので、判定式（選択になるか・挿入になるか）は
+            // 1本のままで、変わるのは「クリックがこの音符へ届くX範囲」だけ。
+            // yHit は2枚を合わせた外接範囲の上端。rect の座標には使わなくなったが、
+            // 下の選択枠（eventBoxY のフォールバック）が引き続き使う。
             const yHit=Math.min(chordTopY,noteHeadTopY);
-            const hHit=Math.max(chordBotY,noteHeadBotY)-yHit;
             // 既存の符頭を選択できるかの判定（findKeyIndexAtLine）で使う丸め。
             // 丸め先の候補を「新規入力できる範囲」だけに限ると、そこより外にいる音符の
             // 線には決して一致せず選択不能のままになるため、その音符の線まで候補を広げる。
@@ -4022,23 +4031,55 @@ export default function PianoSystemCanvas({
               Math.max(4+EXTRA_BOTTOM,keyLines?keyLines.maxLine:4+EXTRA_BOTTOM)
             );
 
-            const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
-            hit.setAttribute('class','vf-note-hit');
-            hit.setAttribute('data-measure', String(absI));
-            hit.setAttribute('data-note', String(j));
-            // 符頭の実描画X範囲。個別音選択は keySelectXPad(svg) でこの範囲近傍に限定されるため、
-            // テストが「確実に選択になる位置」を計算できるよう属性として公開しておく（表示には影響しない）
-            hit.setAttribute('data-note-left', String(noteVisualLeft));
-            hit.setAttribute('data-note-right', String(noteVisualRight));
-            // 五線の基準座標。ヒット領域の高さは音符の位置によって変わるようになった
-            // （Issue #218）ため、rect の高さからライン間隔を逆算する方法が使えない。
-            // テストが「line n のY座標」を素直に求められるよう公開しておく（表示には影響しない）。
-            hit.setAttribute('data-line0-y', String(stave.getYForLine(0)));
-            hit.setAttribute('data-line-spacing', String(stave.getYForLine(1)-stave.getYForLine(0)));
-            hit.setAttribute('x',String(xl));hit.setAttribute('y',String(yHit));
-            hit.setAttribute('width',String(wHit));hit.setAttribute('height',String(hHit));
-            hit.setAttribute('fill','transparent');hit.setAttribute('stroke','none');
-            hit.setAttribute('pointer-events','all');(hit.style as any).cursor='pointer';
+            // ヒット rect を1枚作る。属性は全枚数で同じにする（テストや CSS が
+            // どの枚数を掴んでも同じ意味になるようにするため）。
+            // part: 'fixed' = 固定範囲（セル全幅）／'extension' = 固定範囲の外側（符頭幅）
+            const noteHitRects:SVGRectElement[]=[];
+            const createNoteHitRect=(x:number,y:number,w:number,h:number,part:'fixed'|'extension')=>{
+              const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');
+              rect.setAttribute('class','vf-note-hit');
+              rect.setAttribute('data-measure', String(absI));
+              rect.setAttribute('data-note', String(j));
+              // 2枚に分かれた rect のどちらなのかをテストから見分けられるようにする（表示には影響しない）
+              rect.setAttribute('data-hit-part', part);
+              // 符頭の実描画X範囲。個別音選択は keySelectXPad(svg) でこの範囲近傍に限定されるため、
+              // テストが「確実に選択になる位置」を計算できるよう属性として公開しておく（表示には影響しない）
+              rect.setAttribute('data-note-left', String(noteVisualLeft));
+              rect.setAttribute('data-note-right', String(noteVisualRight));
+              // 五線の基準座標。ヒット領域の高さは音符の位置によって変わるようになった
+              // （Issue #218）ため、rect の高さからライン間隔を逆算する方法が使えない。
+              // テストが「line n のY座標」を素直に求められるよう公開しておく（表示には影響しない）。
+              rect.setAttribute('data-line0-y', String(stave.getYForLine(0)));
+              rect.setAttribute('data-line-spacing', String(stave.getYForLine(1)-stave.getYForLine(0)));
+              rect.setAttribute('x',String(x));rect.setAttribute('y',String(y));
+              rect.setAttribute('width',String(w));rect.setAttribute('height',String(h));
+              rect.setAttribute('fill','transparent');rect.setAttribute('stroke','none');
+              rect.setAttribute('pointer-events','all');(rect.style as any).cursor='pointer';
+              noteHitRects.push(rect);
+            };
+            // 1枚目: 固定範囲（クリップ後の五線±3加線）。従来と同じセル全幅。
+            createNoteHitRect(xl,chordTopY,wHit,Math.max(0,chordBotY-chordTopY),'fixed');
+            // 2枚目以降: 五線から離れた符頭のための拡張部。X方向は符頭の実描画範囲
+            // ± keySelectXPad(svg)（＝個別音選択が成立するX範囲）だけに絞る（Issue #246）。
+            // セルの外へはみ出さないよう、固定範囲のX範囲でクランプする。
+            //
+            // keySelectXPad は「画面px ⇄ raw単位」の実測値なので、描画後に画面表示のズームだけを
+            // 変えると（再描画が走らないため）このX幅は描画時のズーム基準のまま残る。
+            // ただし符頭そのものの範囲は必ず含まれるので、符頭を押せば選択できる点は変わらない。
+            const extensionXPad=keySelectXPad(svg);
+            const extensionLeft=Math.max(xl,noteVisualLeft-extensionXPad);
+            const extensionRight=Math.min(xl+wHit,noteVisualRight+extensionXPad);
+            if(extensionRight>extensionLeft){
+              const extensionWidth=extensionRight-extensionLeft;
+              if(noteHeadTopY<chordTopY){
+                createNoteHitRect(extensionLeft,noteHeadTopY,extensionWidth,chordTopY-noteHeadTopY,'extension');
+              }
+              if(noteHeadBotY>chordBotY){
+                createNoteHitRect(extensionLeft,chordBotY,extensionWidth,noteHeadBotY-chordBotY,'extension');
+              }
+            }
+            // 以下のハンドラは全 rect に同じものを付ける（固定範囲と拡張部で判定が食い違わないようにする）
+            noteHitRects.forEach(hit=>{
             // 音符の当たり判定は小節の背景より手前にあるため、ここにも小節選択の
             // ドラッグ処理を付けないと、音符の上を通った瞬間に範囲選択が止まってしまう。
             attachMeasureSelectDrag(hit);
@@ -4659,6 +4700,7 @@ export default function PianoSystemCanvas({
               }
             });
             svgRoot.appendChild(hit);
+            });
 
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.dynamics?.length) {
               dynamicTextEntries.push({
@@ -4764,9 +4806,9 @@ export default function PianoSystemCanvas({
               sr.setAttribute('class','vf-note-selected');
               // 青枠は表示専用です。CSS で pointer-events:none にしているため、
               // 枠の大きさを変えてもクリック可能範囲は変わりません。
-              // 実際の当たり判定は上の xl/wHit/hHit と CHORD_HIT_PAD / CHORD_LEDGER_* を調整してください。
+              // 実際の当たり判定は上の xl/wHit/createNoteHitRect と CHORD_HIT_PAD / CHORD_LEDGER_* を調整してください。
               //
-              // イベント全体選択時に xl/wHit/yHit/hHit を使うと、透明ヒット領域の広さが
+              // イベント全体選択時に xl/wHit/yHit を使うと、透明ヒット領域の広さが
               // そのまま青枠に出て「小節全体を選択している」見た目になる。
               // ここでは VexFlow の実描画 bbox を使い、音符/休符そのものだけを囲む。
               const eventBoxX=bb?.getX?.()??noteVisualLeft;
