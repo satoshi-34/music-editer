@@ -222,6 +222,43 @@ export function findTupletGroupRange(
   return { start, end };
 }
 
+/**
+ * 連符グループの「数字を隠す」設定を切り替えた events を返す（Issue #269）。
+ *
+ * 同じ連符が続く曲では、連符数字（3 等）は最初のグループにだけ書き、以降は省略するのが
+ * 浄書の慣行（Gould, Behind Bars）。その省略をグループ単位で手動指定できるようにする。
+ *
+ * hideNumber はグループ内の**全イベント**に付ける。描画は先頭イベントの tuplet 情報しか
+ * 見ないが、先頭を削除しても設定が残るようにするためと、MusicXML 書出で
+ * 「どのイベントが先頭か」に依存せず判定できるようにするため。
+ *
+ * 表示に戻すときは false を入れずにプロパティごと削除する。保存データに
+ * `hideNumber: false` が残らないので、旧データ（省略時=表示）と同じ形に揃う。
+ *
+ * @returns 連符ではない位置を指していたら null（呼び出し側は何もしない）
+ */
+export function toggleTupletNumberVisibility(events: NoteEvent[], index: number): NoteEvent[] | null {
+  const range = findTupletGroupRange(events, index);
+  if (!range) {
+    return null;
+  }
+  // 先頭イベントの現在値を基準に反転する（グループ内で値がばらついた壊れたデータでも、
+  // 1回の操作でグループ全体が同じ値に揃う）。
+  const nextHidden = !events[range.start]?.tuplet?.hideNumber;
+  return events.map((ev, i) => {
+    if (i < range.start || i > range.end || !ev.tuplet) {
+      return ev;
+    }
+    const nextTuplet = { ...ev.tuplet };
+    if (nextHidden) {
+      nextTuplet.hideNumber = true;
+    } else {
+      delete nextTuplet.hideNumber;
+    }
+    return { ...ev, tuplet: nextTuplet };
+  });
+}
+
 /** イベント1つが実際に占める拍数（付点と連符の圧縮率の両方を反映する）。 */
 function occupiedBeats(ev: NoteEvent): number {
   return getDurationBeats(ev.dur, ev.dots) * (ev.tuplet ? ev.tuplet.notesOccupied / ev.tuplet.numNotes : 1);

@@ -226,8 +226,13 @@ export interface NoteEvent {
    * 連符情報。同じ id を持つ連続イベントが1つの連符グループを構成する。
    * numNotes 個ぶんの音符を notesOccupied 拍分の時間に詰め込む（例: 3連符なら numNotes=3, notesOccupied=2）。
    * 旧セーブデータとの互換のため省略可能にする。
+   *
+   * hideNumber: このグループの連符数字（3 等）を表示しないかどうか（Issue #269）。
+   * 同じ連符が続く曲では最初のグループにだけ数字を書くのが浄書の慣行なので、
+   * グループ単位で手動オフにできるようにしている。省略時（undefined）は従来どおり表示するため、
+   * 既存の保存データの見た目は変わらない。
    */
-  tuplet?: { id: string; numNotes: number; notesOccupied: number };
+  tuplet?: { id: string; numNotes: number; notesOccupied: number; hideNumber?: boolean };
   /**
    * 微分音（四分音）の臨時記号。和音の各音（keys配列のインデックス=keyIndex）ごとに1つ持つ。
    * 'quarterSharp': 半音の半分（+50セント）上げる、'quarterFlat': 半音の半分（-50セント）下げる。

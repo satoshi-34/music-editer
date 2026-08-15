@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
-  Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType, Dot, Tuplet,
+  Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType, Dot,
   GraceNote, GraceNoteGroup, Ornament,
 } from 'vexflow';
 import type { Tool } from './Palette';
@@ -118,6 +118,7 @@ import {
   instantiateTupletGroup,
   planTupletGroupPasteIntoRest,
   planTupletReplacementForRest,
+  toggleTupletNumberVisibility,
   tupletGroupBeats,
   type TupletKind,
 } from '../utils/tupletUtils';
@@ -148,13 +149,13 @@ import {
 // Issue #38）。既存のテスト（PianoSystemCanvasPartSpacing.test.tsx）はこのファイルからの
 // named import を使っているため、後方互換として re-export する。
 export { computeLayout, staveSpacingForPartCount };
-import { createVexFlowTuplets, syncTupletBracketsWithBeams, vexFlowDotCount } from '../utils/vexFlowTimingUtils';
+import { createVexFlowTuplets, syncTupletBracketsWithBeams, vexFlowDotCount, type RenderedTuplet } from '../utils/vexFlowTimingUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; lyrics?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[]; articulations?: ArticulationMarking[]; tempoMarking?: string; expressionMarking?: string };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number; hideNumber?: boolean }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; lyrics?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[]; articulations?: ArticulationMarking[]; tempoMarking?: string; expressionMarking?: string };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 // 1声部ぶんの VexFlow 描画データ（音符・ビーム・タイミング管理オブジェクト）。
 // 右手/左手など複数パートの Formatter を1回にまとめるためのキャッシュ型として使う
@@ -169,7 +170,7 @@ type RenderedVoiceEntry = {
   realEventCount: number;
   vfNotes: StaveNote[];
   beams: Beam[];
-  tuplets: Tuplet[];
+  tuplets: RenderedTuplet[];
   voice: Voice;
   // 2声部小節で、この声部が「今編集していない側」かどうか。
   // 音符本体だけでなくビーム・連符も淡色にするために、描画パスへ持ち越す（Issue #175）。
@@ -3754,7 +3755,16 @@ export default function PianoSystemCanvas({
               b.draw();
             }
           });
-          entry.tuplets.forEach(tuplet => {
+          entry.tuplets.forEach(({ tuplet, hideNumber }) => {
+            // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
+            // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
+            // 数字を省略する連符は括弧も省くのが浄書の慣行（Gould, Behind Bars）なので、
+            // 表示一式を描かないことで慣行どおりの見た目になる。
+            // 音符の拍（tick）への倍率は Tuplet の生成時点で既に掛かっているため、
+            // 描かなくても小節の拍数・ビームの束ね方は変わらない。
+            if (hideNumber) {
+              return;
+            }
             try {
               (tuplet as any).setContext?.(ctx);
               if (entry.isInactiveVoiceEntry) {
@@ -4098,6 +4108,10 @@ export default function PianoSystemCanvas({
           }
           if('mode' in tool&&(tool.mode==='symbolAdjustResize'||tool.mode==='symbolAdjustOffset')){
             // 汎用サイズ・位置調整も既存の音符にのみ行う。
+            return;
+          }
+          if('mode' in tool&&tool.mode==='tupletNumberToggle'){
+            // 連符数字の表示切替も既存の連符にのみ行う（背景クリックで音符を置かない）。
             return;
           }
           if('mode' in tool&&tool.mode==='textElement'){
@@ -4609,6 +4623,7 @@ export default function PianoSystemCanvas({
               const customSymbolOffsetMode = 'mode' in tool && tool.mode === 'customSymbolOffset' ? tool.symbolId : null;
               const symbolAdjustResizeMode = 'mode' in tool && tool.mode === 'symbolAdjustResize';
               const symbolAdjustOffsetMode = 'mode' in tool && tool.mode === 'symbolAdjustOffset';
+              const tupletNumberToggleMode = 'mode' in tool && tool.mode === 'tupletNumberToggle';
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
               const ornamentMode = 'mode' in tool && tool.mode === 'ornament' ? (tool as any).ornamentType as OrnamentType : null;
@@ -4622,6 +4637,25 @@ export default function PianoSystemCanvas({
               // 和音追加・臨時記号・強弱・削除などの操作ができる。
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
+              if (tupletNumberToggleMode) {
+                // 連符数字（3 等）の表示/非表示をグループ単位で切り替える（Issue #269）。
+                // 連符内休符をクリックしても同じグループが切り替わるよう、休符も対象に含める
+                // （グループの中に休符が残ったままの譜面でも「数字の近く」を押せば効く）。
+                setScore(prev=>{
+                  const next=prev.map(cloneMeasureData);
+                  if(absI>=next.length)return prev;
+                  const currentEvents=getVoiceEvents(next[absI], activeVoiceIndex);
+                  const toggled=toggleTupletNumberVisibility(currentEvents, j);
+                  // 連符ではない位置なら score を書き換えない。
+                  // ここで withVoiceEventsUpdated を呼ぶと、声部2モードのときに
+                  // 中身の無い voices[1] が生まれてしまう（#112 の教訓）。
+                  if(!toggled)return prev;
+                  next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, ()=>toggled);
+                  return next;
+                });
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
+                return;
+              }
               if (accidentalMode && !activeEvs[j]?.isRest) {
                 // 多段譜でも単旋律譜と同じ感覚で使えるよう、
                 // 臨時記号は音符セル内クリックなら適用できるようにする。

@@ -122,7 +122,33 @@ describe('連符とビームの組み合わせ', () => {
     const beamedResult = buildBeams(beamed, tupletEvents('beamed', 3, 3, 2));
     const unbeamedResult = buildBeams(unbeamed, tupletEvents('unbeamed', 3, 3, 2));
 
-    expect(isBracketed(beamedResult.tuplets[0])).toBe(false);
-    expect(isBracketed(unbeamedResult.tuplets[0])).toBe(true);
+    expect(isBracketed(beamedResult.tuplets[0].tuplet)).toBe(false);
+    expect(isBracketed(unbeamedResult.tuplets[0].tuplet)).toBe(true);
+  });
+});
+
+// Issue #269: 連符数字をグループ単位で隠せるようにした。
+// 「隠す」場合も Tuplet オブジェクト自体は作る（作らないと tick 倍率が掛からず拍が壊れる）。
+describe('連符数字の非表示指定', () => {
+  it('hideNumber:true でも tick は 2/3 倍になり、描画スキップの目印だけが立つ', () => {
+    const notes = Array.from({ length: 3 }, () => new StaveNote({ keys: ['c/4'], duration: '8' }));
+    const normalTicks = notes[0].getTicks().value();
+    const events = Array.from({ length: 3 }, () => ({
+      tuplet: { id: 'hidden-triplet', numNotes: 3, notesOccupied: 2, hideNumber: true },
+    }));
+
+    const tuplets = createVexFlowTuplets(events, notes);
+
+    expect(tuplets).toHaveLength(1);
+    expect(tuplets[0].hideNumber).toBe(true);
+    expect(notes[0].getTicks().value()).toBe(normalTicks * (2 / 3));
+  });
+
+  it('hideNumber が無い旧データは従来どおり表示扱いになる', () => {
+    const notes = Array.from({ length: 3 }, () => new StaveNote({ keys: ['c/4'], duration: '8' }));
+
+    const tuplets = createVexFlowTuplets(tupletEvents('legacy', 3, 3, 2), notes);
+
+    expect(tuplets[0].hideNumber).toBe(false);
   });
 });
