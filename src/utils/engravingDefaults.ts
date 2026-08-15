@@ -57,6 +57,20 @@ export const ENGRAVING_THICKNESS_SP = {
   subBracket: 0.16,
   /** リハーサルマークなど、文字を囲む枠線。Bravura: textEnclosureThickness */
   textEnclosure: 0.16,
+  /**
+   * スラー／タイの弧の「端」の太さ。Bravura: slurEndpointThickness / tieEndpointThickness
+   * （どちらも 0.10 で同値なので、タイとスラーで値を分けていない）。
+   *
+   * 浄書では弧は「中央が太く端が細い」テーパー形状で描く（Issue #261）。
+   * 端はゼロ幅の尖った点ではなく、わずかに厚みを残すのが慣行。
+   *
+   * 注意: この2つは #195 の A/B 比較（ab-preview.js の PRESETS.a）に含まれていない。
+   * 比較画像には弧が写っていなかったためで、値は Bravura の推奨値をそのまま採っている
+   * （運指 `fingering` と同じく PRESETS.a との一致チェックの対象外）。
+   */
+  slurEndpoint: 0.1,
+  /** スラー／タイの弧の「中央」の太さ。Bravura: slurMidpointThickness / tieMidpointThickness */
+  slurMidpoint: 0.22,
 } as const;
 
 /**
@@ -109,6 +123,8 @@ export const ENGRAVING_THICKNESS_UNITS = {
   hairpin: spToUnits(ENGRAVING_THICKNESS_SP.hairpin),
   subBracket: spToUnits(ENGRAVING_THICKNESS_SP.subBracket),
   textEnclosure: spToUnits(ENGRAVING_THICKNESS_SP.textEnclosure),
+  slurEndpoint: spToUnits(ENGRAVING_THICKNESS_SP.slurEndpoint),
+  slurMidpoint: spToUnits(ENGRAVING_THICKNESS_SP.slurMidpoint),
 } as const;
 
 /** 文字の大きさ（SVG論理単位）。描画側はこちらを使う。 */
