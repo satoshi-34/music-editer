@@ -105,6 +105,18 @@ export const ENGRAVING_TEXT_SP = {
    */
   expressionMarking: 1.3,
   /**
+   * コード記号（C, Am7 等）。Issue #279。
+   *
+   * 浄書慣例では、コード記号は「その拍で何の和音か」を示す実用的な表示なので
+   * 歌詞と同じくらいの大きさで、五線に近い位置に正体（ローマン体＝イタリックでない字）で書く。
+   * ここでは既存の階層を崩さないよう **テンポ表記（1.5 sp）と同じ 1.5 sp** にした
+   * （StaffCanvas 時代もコード記号とテンポ表記はどちらも 12px で同じ大きさだったので、
+   * その比率をそのまま引き継いだことになる）。結果として
+   * 「テンポ表記 = コード記号（1.5 sp）＞ 発想標語（1.3 sp）」という階層になる。
+   * 大きさが同じでもイタリック（テンポ表記・発想標語）と正体（コード記号）で見分けられる。
+   */
+  chordSymbol: 1.5,
+  /**
    * 運指（指番号）。Issue #232: 運用者が実機（月光の入力）で見比べて
    * **従来の 180%**（1.0 sp = 10 u → 1.8 sp = 18 u）を選定した実測値。
    *
@@ -136,17 +148,20 @@ export const ENGRAVING_TEXT_UNITS = {
   dynamics: spToUnits(ENGRAVING_TEXT_SP.dynamics),
   expressiveText: spToUnits(ENGRAVING_TEXT_SP.expressiveText),
   expressionMarking: spToUnits(ENGRAVING_TEXT_SP.expressionMarking),
+  chordSymbol: spToUnits(ENGRAVING_TEXT_SP.chordSymbol),
   fingering: spToUnits(ENGRAVING_TEXT_SP.fingering),
 } as const;
 
 /**
- * テンポ表記と発想標語を同じ音符に重ねたときの、行間（SVG論理単位）。Issue #237。
+ * 五線の上に置く文字（テンポ表記・発想標語・コード記号）を
+ * 同じ音符に重ねたときの、行間（SVG論理単位）。Issue #237・#279。
  *
- * 浄書慣例では上から「テンポ表記 → 発想標語 → 五線」の順に積む。
- * 五線に近い側（発想標語）を従来のテンポ表記と同じ高さに置き、
- * テンポ表記だけをこのぶん上へ持ち上げる（下から積み上げる）。
+ * 浄書慣例では上から「テンポ表記 → 発想標語 → コード記号 → 五線」の順に積む。
+ * **いちばん五線に近い1行だけを定位置（五線上端の24u上）に置き、
+ * その上に載る行をこのぶんずつ持ち上げる**（下から積み上げる）方式にしている。
  * 値は発想標語の文字サイズ（13 u）に、文字同士がくっつかない程度の
- * 余白（約 40%）を足したもの。
+ * 余白（約 40%）を足したもの。いちばん大きい文字（1.5 sp = 15 u）で積んでも、
+ * 上の行の下端と下の行の上端は 3〜4 u ほど空くので重ならない。
  */
 export const TEXT_STACK_LINE_GAP_UNITS = 18;
 
