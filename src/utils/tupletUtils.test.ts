@@ -8,6 +8,7 @@ import {
   generateTupletId,
   planTupletGroupDeletion,
   planTupletReplacementForRest,
+  toggleTupletNumberVisibility,
 } from './tupletUtils';
 
 describe('tupletUtils', () => {
@@ -256,6 +257,53 @@ describe('tupletUtils', () => {
       expect(canInheritRestDisplayKey('treble', undefined)).toBe(false);
       expect(canInheritRestDisplayKey('treble', '')).toBe(false);
       expect(canInheritRestDisplayKey('treble', 'h/4')).toBe(false);
+    });
+  });
+  describe('toggleTupletNumberVisibility（Issue #269）', () => {
+    it('連符グループの全イベントに hideNumber:true が付く', () => {
+      const events = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4').groupEvents;
+
+      const toggled = toggleTupletNumberVisibility(events, 0);
+
+      expect(toggled).not.toBeNull();
+      expect(toggled!.every((ev) => ev.tuplet?.hideNumber === true)).toBe(true);
+      // 元の配列は書き換えない（Undo 用の履歴が壊れないこと）
+      expect(events.every((ev) => ev.tuplet?.hideNumber === undefined)).toBe(true);
+    });
+
+    it('もう一度切り替えると hideNumber がプロパティごと消える（旧データと同じ形に戻る）', () => {
+      const events = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4').groupEvents;
+
+      const hidden = toggleTupletNumberVisibility(events, 0)!;
+      const shown = toggleTupletNumberVisibility(hidden, 2)!;
+
+      expect(shown.every((ev) => ev.tuplet && !('hideNumber' in ev.tuplet))).toBe(true);
+    });
+
+    it('連符内休符をクリックしてもグループ全体が切り替わる', () => {
+      const events = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4').groupEvents;
+
+      // index 1 と 2 は連符内休符
+      const toggled = toggleTupletNumberVisibility(events, 1)!;
+
+      expect(toggled.every((ev) => ev.tuplet?.hideNumber === true)).toBe(true);
+    });
+
+    it('隣接する別グループには影響しない', () => {
+      const first = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4').groupEvents;
+      const second = buildTupletGroupPlan('8', undefined, ['d/4'], 'b/4').groupEvents;
+      const events = [...first, ...second];
+
+      const toggled = toggleTupletNumberVisibility(events, 0)!;
+
+      expect(toggled.slice(0, 3).every((ev) => ev.tuplet?.hideNumber === true)).toBe(true);
+      expect(toggled.slice(3).every((ev) => ev.tuplet?.hideNumber === undefined)).toBe(true);
+    });
+
+    it('連符ではないイベントを指したときは null を返す（呼び出し側は何もしない）', () => {
+      const events: NoteEvent[] = [{ dur: '4', isRest: false, keys: ['c/4'] }];
+
+      expect(toggleTupletNumberVisibility(events, 0)).toBeNull();
     });
   });
 });

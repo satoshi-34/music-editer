@@ -356,3 +356,81 @@ Chromium 系にしかない新しめの API なので、**存在しない場合�
 （ブラウザ実測: 何も操作していなくても右下の「✓ 自動保存済み」が約8秒周期で点滅し続ける）。
 本Issueの表示とは独立した既存の挙動なので触っていないが、`useMemo` で配列を安定させれば
 止まる見込み。
+
+## 追記（2026-08-15, Issue #278）: MusicXML書出・MIDI書出が成功も失敗も無言だった
+
+### 問題
+
+「その他」タブの **MusicXML書出 / MIDI書出** は、`downloadMusicXml()` / `downloadMidi()` を
+呼ぶだけで、**成功しても失敗しても画面に何も出なかった**（Issue #236 で作った
+「無言のボタンの棚卸し」の最有力候補）。
+
+- 成功時: ダウンロードが始まれば気づけるが、ブラウザの設定によっては保存先ダイアログも
+  出ないため「押したのに何も起きない」ように見える
+- 失敗時: **完全に無言**。`handleExportMusicXml` / `handleExportMidi` に `try/catch` が無く、
+  例外は誰も捕まえずコンソールに流れるだけだった（利用者はコンソールを開かない）
+
+書出処理は `scoreToMusicXml()` / `scoreToMidi()`（変換）と `URL.createObjectURL()`＋
+`<a>.click()`（ダウンロード）からできており、どちらの段でも例外は起こりうる。
+
+### 修正設計
+
+#### 1. 表示は #236 の右下インジケータを共用する（新しい表示を増やさない）
+
+Issue #236 と同じ考え方で、**枠は1つのまま**にする。書出ボタンは `SaveLoadButtons` の外
+（「その他」タブの並びの後ろ）にあるが、結果の表示だけを `SaveLoadButtons` へ集約した
+（`exportStatus` props を新設）。固定表示を2つ出すと画面右下で重なって読めなくなり、
+`role="status"` が2つになって支援技術に二重で読み上げられてしまうため。
+
+出す内容は次の優先順で決める（`saveIndicator`）。書出を先頭に足しただけで、既存の
+手動保存・自動保存の順序は変えていない。
+
+| 条件 | 文言 | 色 | `role` |
+| --- | --- | --- | --- |
+| `exportStatus.kind === 'success'` | ✓ MusicXMLを書き出しました / ✓ MIDIを書き出しました | 緑 `#4caf50` | `status` |
+| `exportStatus.kind === 'error'` | ⚠ MusicXMLを書き出せませんでした: 〈理由〉 | 赤 `#d32f2f` | `alert` |
+| `manualSaveStatus === 'saved'` | ✓ 保存しました | 緑 | `status` |
+| （以下 #236 のまま） | | | |
+
+#### 2. 新しい操作の結果を出すときは、古いほうの表示を消す
+
+同じ枠を共用しているため、**先に出ていた表示が残っていると新しい操作の結果が隠れる**
+（例: 書出の失敗は10秒残るので、その間に「保存」を押しても結果が見えない）。
+`ScorePage` 側の `showExportStatus` / `showManualSaveStatus` を対称に作り、
+どちらも「相手のタイマーを止めて idle に戻してから自分を出す」ようにした。
+表示の優先順（`SaveLoadButtons`）だけで解こうとすると、この「あとから押した操作」の
+向きを表現できない。
+
+#### 3. 表示時間は成功3秒・失敗10秒（#236 とそろえる）
+
+失敗は理由まで読む時間が要るので長め。タイマーはアンマウント時に片付ける
+（`fileSaveWarningTimerRef` / `manualSaveStatusTimerRef` と同じ `useEffect` にまとめた）。
+
+#### 4. 失敗の理由は文面に含める
+
+手動保存の失敗（#236）は理由を `.error-message`（`useScoreStorage` の `error`）が担うが、
+書出は `useScoreStorage` を通らないので、理由の受け皿がどこにも無い。そのため
+`⚠ MusicXMLを書き出せませんでした: 〈理由〉` と1文に含める形にした。
+`describeExportError()` は `Error` 以外（文字列など）が throw されたときも
+`String()` で文字にして出す（`[object Object]` になっても、無言よりはましなため）。
+理由の文が長くなることがあるので、インジケータの `<span>` に `maxWidth: 360` を付けた
+（右端固定のまま左へ伸びて画面外へ出てしまうのを防ぐ）。
+
+### 影響範囲
+
+- `src/components/ScorePage.tsx`: `exportStatus` state・`showExportStatus` を追加し、
+  `handleExportMusicXml` / `handleExportMidi` を `try/catch` で包んだ。
+  `showManualSaveStatus` に「書出の表示を消す」処理を追加。
+  **書き出すファイルの中身（`scoreToMusicXml` / `scoreToMidi`）は一切変更していない。**
+- `src/components/SaveLoadButtons.tsx`: `ExportStatus` 型と `exportStatus` props を追加し、
+  `saveIndicator` の先頭に置いた。`<span>` に `maxWidth` / `lineHeight` を追加。
+- `src/components/ScorePageExportFeedback.test.tsx`（新規）: 成功・失敗の表示、
+  失敗時の `role="alert"` と色、失敗のあと押し直すと成功表示に変わることを固定。
+- PDF書出（`window.print()`）は対象外。ブラウザの印刷ダイアログが開くこと自体が
+  フィードバックになっているため（Issue 本文の指定どおり）。
+
+### 残った「無言のボタン」
+
+#236 の棚卸し表のうち、**MusicXML書出 / MIDI書出は本Issueで解消**した。
+残るのは **サンプル保存**（DEV ビルド限定のため優先度低）と、
+**ファイル保存の成功・キャンセル**（OS のダイアログとダウンロードが実質のフィードバック）。

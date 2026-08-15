@@ -205,7 +205,11 @@ function noteToXml(
   let tupletNotationXml = '';
   if (ev.tuplet) {
     timeModXml = `<time-modification><actual-notes>${ev.tuplet.numNotes}</actual-notes><normal-notes>${ev.tuplet.notesOccupied}</normal-notes></time-modification>`;
-    const startTag = tupletPos?.isFirst ? '<tuplet type="start" number="1"/>' : '';
+    // 連符数字を隠すグループ（Issue #269）は、他ソフトでも同じ見た目になるよう
+    // show-number="none"（数字を出さない）と bracket="no"（括弧も出さない）を付ける。
+    // アプリ側も「数字を消したら括弧も消す」挙動なので、書出と表示が一致する。
+    const hideAttrs = ev.tuplet.hideNumber ? ' bracket="no" show-number="none"' : '';
+    const startTag = tupletPos?.isFirst ? `<tuplet type="start" number="1"${hideAttrs}/>` : '';
     const stopTag = tupletPos?.isLast ? '<tuplet type="stop" number="1"/>' : '';
     if (startTag || stopTag) {
       tupletNotationXml = `<notations>${startTag}${stopTag}</notations>`;

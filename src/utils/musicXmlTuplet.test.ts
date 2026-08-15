@@ -111,4 +111,52 @@ describe('MusicXML の連符（tuplet）対応', () => {
     expect(xml).not.toContain('time-modification');
     expect(xml).not.toContain('<tuplet');
   });
+  it('数字を隠した連符（Issue #269）は show-number="none" と bracket="no" 付きで出力される', () => {
+    const tuplet = { id: 'g1', numNotes: 3, notesOccupied: 2, hideNumber: true };
+    const data = createSavedScoreData(
+      { title: 'Tuplet Hide Number', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{
+        partId: 'melody',
+        clef: 'treble',
+        measures: [{
+          events: [
+            { dur: '8', isRest: false, keys: ['c/4'], tuplet },
+            { dur: '8', isRest: true, keys: [], tuplet },
+            { dur: '8', isRest: true, keys: [], tuplet },
+          ]
+        }]
+      }],
+      1,
+      1
+    );
+
+    const xml = scoreToMusicXml(data);
+    expect(xml).toContain('<tuplet type="start" number="1" bracket="no" show-number="none"/>');
+    // 終了タグ側には付けない（MusicXML では開始タグの属性でグループ全体の表示が決まる）
+    expect(xml).toContain('<tuplet type="stop" number="1"/>');
+  });
+
+  it('hideNumber を指定しない連符の出力は従来どおり（属性が増えない）', () => {
+    const tuplet = { id: 'g1', numNotes: 3, notesOccupied: 2 };
+    const data = createSavedScoreData(
+      { title: 'Tuplet Default', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{
+        partId: 'melody',
+        clef: 'treble',
+        measures: [{
+          events: [
+            { dur: '8', isRest: false, keys: ['c/4'], tuplet },
+            { dur: '8', isRest: true, keys: [], tuplet },
+            { dur: '8', isRest: true, keys: [], tuplet },
+          ]
+        }]
+      }],
+      1,
+      1
+    );
+
+    const xml = scoreToMusicXml(data);
+    expect(xml).toContain('<tuplet type="start" number="1"/>');
+    expect(xml).not.toContain('show-number');
+  });
 });
