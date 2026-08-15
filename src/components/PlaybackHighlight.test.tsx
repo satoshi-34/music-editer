@@ -6,14 +6,23 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import PlaybackHighlight, { PlaybackPositionIndicator } from './PlaybackHighlight';
 import type { PlaybackPosition } from '../audio/ScorePlayer';
 
-// モックのSVG要素を作成
-const createMockSVGElement = (measureIndex: number, noteIndex: number): SVGElement => {
-  const element = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-  element.classList.add('vf-stavenote');
+// 音符の当たり判定 rect のモック。
+// Issue #268 でハイライトが「符頭の色を変える」から「段の SVG へ帯を差し込む」に変わったため、
+// PianoSystemCanvas が実際に作るのと同じ形（.vf-note-hit rect が <svg> の中に居る）で用意する。
+const createMockHitRect = (measureIndex: number, noteIndex: number): SVGRectElement => {
+  const element = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  element.classList.add('vf-note-hit');
   element.setAttribute('data-measure', measureIndex.toString());
   element.setAttribute('data-note', noteIndex.toString());
-  
-  // getBoundingClientRectをモック
+  // 帯の計算は属性から行うので、実際の描画と同じように座標を持たせる
+  element.setAttribute('x', String(100 + noteIndex * 40));
+  element.setAttribute('y', '30');
+  element.setAttribute('width', '40');
+  element.setAttribute('height', '60');
+  element.setAttribute('data-note-left', String(110 + noteIndex * 40));
+  element.setAttribute('data-note-right', String(122 + noteIndex * 40));
+
+  // getBoundingClientRectをモック（自動スクロールの判定で使われる）
   element.getBoundingClientRect = vi.fn(() => ({
     top: 0,
     bottom: 50,
@@ -25,23 +34,24 @@ const createMockSVGElement = (measureIndex: number, noteIndex: number): SVGEleme
     y: 100,
     toJSON: () => ({})
   }));
-  
+
   return element;
 };
 
-// テスト用のコンテナを作成
+// テスト用のコンテナを作成（1ページ = .score-area、その中に段ごとの <svg>）
 const createTestContainer = () => {
   const container = document.createElement('div');
   container.className = 'score-area';
-  
+
   // 複数の小節と音符を含むSVG構造を作成
   for (let measureIndex = 0; measureIndex < 3; measureIndex++) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     for (let noteIndex = 0; noteIndex < 4; noteIndex++) {
-      const noteElement = createMockSVGElement(measureIndex, noteIndex);
-      container.appendChild(noteElement);
+      svg.appendChild(createMockHitRect(measureIndex, noteIndex));
     }
+    container.appendChild(svg);
   }
-  
+
   document.body.appendChild(container);
   return container;
 };
@@ -186,8 +196,9 @@ describe('PlaybackHighlight', () => {
       // カスタムコンテナを作成
       const customContainer = document.createElement('div');
       customContainer.className = 'custom-score-area';
-      const noteElement = createMockSVGElement(0, 0);
-      customContainer.appendChild(noteElement);
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.appendChild(createMockHitRect(0, 0));
+      customContainer.appendChild(svg);
       document.body.appendChild(customContainer);
 
       const position: PlaybackPosition = { measureIndex: 0, beatPosition: 0, noteIndex: 0 };
