@@ -1,3 +1,5 @@
+import { ENGRAVING_THICKNESS_UNITS } from '../utils/engravingDefaults';
+
 type Pt = { x: number; y: number };
 
 /**
@@ -98,6 +100,86 @@ export function computeArcGeometry(
   const { p0, c1, c2, p3 } = computeArcControlPoints(x1, y1, x2, y2, upward, kind, stemDir, obstacleY, cpDyOffset, apexXRatio);
   if (!c2) return { dAttr: `M ${p0.x} ${p0.y} Q ${c1.x} ${c1.y} ${p3.x} ${p3.y}` };
   return { dAttr: `M ${p0.x} ${p0.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${p3.x} ${p3.y}` };
+}
+
+// ───────────────────────────────────────────────────────────────
+// テーパー（中央が太く端が細い）形状の弧（Issue #261）
+// ───────────────────────────────────────────────────────────────
+//
+// 【なぜ均一な線ではいけないか】
+// 浄書のスラー・タイは「中央がいちばん太く、端に向かって細くなる」形で描くのが慣行で、
+// Bravura（このアプリが使う楽譜フォント）も端 0.10 sp / 中央 0.22 sp を推奨している。
+// 均一な太さ（従来の stroke-width 1.5）だと、譜面が「手描きの下書き」のように見える。
+//
+// 【どう描くか】
+// SVG の stroke は太さを途中で変えられないので、弧を**閉じた輪郭 + 塗り（fill）**で描く。
+// 中心線（computeArcControlPoints が返す制御点）を挟んで、外側・内側へ制御点だけを
+// ずらした2本の曲線をつなぎ、始点・終点で閉じる。端では2本が同じ点に集まるので
+// 幅がゼロになり、自然に「端が細い」形になる。
+//
+// 【端の厚みは stroke が受け持つ】
+// 端がゼロ幅だと針のように尖ってしまうため、輪郭に「端の太さ（0.10 sp）」ぶんの
+// stroke を丸い継ぎ目（stroke-linejoin: round）で掛けて、わずかな厚みを残す。
+// stroke の太さは App.css の `path.vf-arc` で指定しているので、表示ウェイト設定
+// （細/標準/太）や印刷時の細線化、画面表示のフロア（Issue #210）が従来どおり効く。
+// そのぶん、塗りの形が担当するのは「中央の太さ − 端の太さ」の差分だけになる。
+
+/** 塗りの形が担当する膨らみ（中央の太さ − 端の太さ）。単位は SVG 論理単位。 */
+export const ARC_TAPER_BULGE_UNITS =
+  ENGRAVING_THICKNESS_UNITS.slurMidpoint - ENGRAVING_THICKNESS_UNITS.slurEndpoint;
+
+/** d 属性が長い小数で膨らまないよう丸める（0.001 u = 0.0001 sp なので見た目は変わらない） */
+const fmt = (v: number): number => Number(v.toFixed(3));
+
+/**
+ * computeArcGeometry と同じ引数から、テーパー形状の「塗りつぶす輪郭」パスを返す。
+ *
+ * 中心線は computeArcGeometry と完全に同じなので、当たり判定（computeArcHitGeometry）や
+ * 頂点ハンドル（computeArcApexPoint）とズレることはない。
+ *
+ * @param bulge 中央でどれだけ膨らませるか（SVG 論理単位）。既定は Bravura 準拠の差分
+ */
+export function computeArcTaperGeometry(
+  x1: number, y1: number, x2: number, y2: number,
+  upward: boolean, kind: 'tie' | 'slur', stemDir: number,
+  obstacleY: number | undefined,
+  cpDyOffset: number,
+  apexXRatio = 0,
+  bulge = ARC_TAPER_BULGE_UNITS
+): { dAttr: string } {
+  const { p0, c1, c2, p3 } = computeArcControlPoints(x1, y1, x2, y2, upward, kind, stemDir, obstacleY, cpDyOffset, apexXRatio);
+
+  // 弦（始点→終点）に垂直な単位ベクトル。縦にずらすのではなく法線方向へずらすことで、
+  // 斜めに架かる弧（音高が違う音を結ぶタイなど）でも太さが弧に対して垂直に測られる。
+  const dx = p3.x - p0.x, dy = p3.y - p0.y;
+  const len = Math.hypot(dx, dy);
+  // 始点と終点が重なった弧（壊れたデータ）は法線が決まらないので、膨らませずに中心線を返す
+  if (len === 0 || !Number.isFinite(len)) {
+    return computeArcGeometry(x1, y1, x2, y2, upward, kind, stemDir, obstacleY, cpDyOffset, apexXRatio);
+  }
+  const nx = -dy / len, ny = dx / len;
+
+  // 制御点をどれだけずらせば「中央で bulge ぶんの幅」になるかは、ベジェの次数で決まる。
+  // 中央（t=0.5）の点は制御点のずれを一定割合しか反映しないため、その割合で割り戻す。
+  // - 二次（タイ）: 中央の幅 = ずらし量 × 1.0
+  // - 三次（スラー）: 中央の幅 = ずらし量 × 1.5
+  const h = kind === 'tie' ? bulge : bulge / 1.5;
+  const out = (p: Pt): Pt => ({ x: p.x + nx * h, y: p.y + ny * h });
+  const inn = (p: Pt): Pt => ({ x: p.x - nx * h, y: p.y - ny * h });
+
+  if (!c2) {
+    const o = out(c1), i = inn(c1);
+    return {
+      dAttr: `M ${fmt(p0.x)} ${fmt(p0.y)} Q ${fmt(o.x)} ${fmt(o.y)} ${fmt(p3.x)} ${fmt(p3.y)} Q ${fmt(i.x)} ${fmt(i.y)} ${fmt(p0.x)} ${fmt(p0.y)} Z`,
+    };
+  }
+
+  const o1 = out(c1), o2 = out(c2), i1 = inn(c1), i2 = inn(c2);
+  return {
+    dAttr:
+      `M ${fmt(p0.x)} ${fmt(p0.y)} C ${fmt(o1.x)} ${fmt(o1.y)} ${fmt(o2.x)} ${fmt(o2.y)} ${fmt(p3.x)} ${fmt(p3.y)} ` +
+      `C ${fmt(i2.x)} ${fmt(i2.y)} ${fmt(i1.x)} ${fmt(i1.y)} ${fmt(p0.x)} ${fmt(p0.y)} Z`,
+  };
 }
 
 /**

@@ -78,6 +78,15 @@ describe('浄書の既定値が候補A（ab-preview.js の PRESETS.a）と一致
     expect(ENGRAVING_TEXT_UNITS.fingering).toBeCloseTo(18, 10);
   });
 
+  it('スラー・タイの弧の太さが Bravura の推奨値（端 0.10 / 中央 0.22 sp）', () => {
+    // Issue #261。#195 の A/B 比較の画像には弧が写っていなかったため、運指と同じく
+    // PRESETS.a との一致チェックの対象ではなく、Bravura の推奨値そのものを固定する。
+    expect(ENGRAVING_THICKNESS_SP.slurEndpoint).toBe(0.1);
+    expect(ENGRAVING_THICKNESS_SP.slurMidpoint).toBe(0.22);
+    expect(ENGRAVING_THICKNESS_UNITS.slurEndpoint).toBeCloseTo(1, 10);
+    expect(ENGRAVING_THICKNESS_UNITS.slurMidpoint).toBeCloseTo(2.2, 10);
+  });
+
   it('sp → SVG論理単位の換算が 1 sp = 10 u', () => {
     expect(UNITS_PER_STAFF_SPACE).toBe(10);
     expect(spToUnits(0.13)).toBeCloseTo(1.3, 10);
@@ -101,6 +110,9 @@ describe('App.css と TypeScript 側の定数がずれていない', () => {
     expectRule('g.vf-stem > path', ENGRAVING_THICKNESS_UNITS.stem);
     expectRule('g.vf-stavenote > path[stroke]', ENGRAVING_THICKNESS_UNITS.ledger);
     expectRule('path.vf-sub-bracket', ENGRAVING_THICKNESS_UNITS.subBracket);
+    // スラー・タイの弧（Issue #261）。この stroke が受け持つのは「端の厚み」だけで、
+    // 中央の膨らみは塗りの形（computeArcTaperGeometry）が作る
+    expectRule('path.vf-arc', ENGRAVING_THICKNESS_UNITS.slurEndpoint);
   });
 
   it('譜面まわりのテキスト書体が CSS の --score-text-font と同じ並び', () => {

@@ -5522,13 +5522,6 @@ export default function ScorePage() {
                       ＋ 小節を追加
                     </button>
                   )}
-
-                  <PlaybackHighlight
-                    currentPosition={currentPosition}
-                    isPlaying={playbackState === 'playing'}
-                    containerSelector=".score-area"
-                    enablePageScroll={true}
-                  />
                 </div>
 
                 <footer className="page-foot">
@@ -5539,6 +5532,18 @@ export default function ScorePage() {
           ))}
         </div>
       </div>
+
+      {/* 再生中の位置を譜面上に縦帯で示す（Issue #268）。
+          自分では何も描画しない（return null）コンポーネントで、`.score-area` を
+          document 全体から探して帯を差し込むため、ページの繰り返しの**外**に1つだけ置く。
+          ページごとに置くと同じ帯を人数ぶん出し入れすることになり、
+          複数ページの譜面で帯が消え残る。 */}
+      <PlaybackHighlight
+        currentPosition={currentPosition}
+        isPlaying={playbackState === 'playing'}
+        containerSelector=".score-area"
+        enablePageScroll={true}
+      />
     </div>
   );
 }
