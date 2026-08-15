@@ -5,6 +5,13 @@ import { useState } from 'react';
 
 import type { DemoScoreId } from '../data/demoScores';
 
+/**
+ * 書出（MusicXML / MIDI）の結果表示の状態（Issue #278）。
+ * `null` は「いま知らせることが無い」状態。`kind` は色と読み上げ方（status / alert）を、
+ * `message` は画面にそのまま出す文言（失敗時は理由を含む）を決める。
+ */
+export type ExportStatus = { kind: 'success' | 'error'; message: string } | null;
+
 export interface SaveLoadButtonsProps {
   onNewScore?: () => void;
   onSave: () => void;
@@ -25,6 +32,12 @@ export interface SaveLoadButtonsProps {
    * 自動保存ステータスと同じ場所・同じ体裁で数秒だけ結果を出す。
    */
   manualSaveStatus?: 'idle' | 'saved' | 'failed';
+  /**
+   * MusicXML書出 / MIDI書出の結果（Issue #278）。書出ボタンはこのコンポーネントの外
+   * （「その他」タブの並びの後ろ）にあるが、結果を出す右下のインジケータは1つだけにしたいので、
+   * 表示だけをここへ集約している（2つ出すと重なって読めなくなり、読み上げも二重になる）。
+   */
+  exportStatus?: ExportStatus;
   /** 起動時のサイレント復元など、自動保存に関する短い通知文。あれば数秒だけ表示する */
   restoreNotice?: string | null;
   /**
@@ -51,6 +64,7 @@ export default function SaveLoadButtons({
   hasCustomPianoSample = false,
   autoSaveStatus = 'idle',
   manualSaveStatus = 'idle',
+  exportStatus = null,
   restoreNotice,
   warningNotice,
   error
@@ -65,17 +79,26 @@ export default function SaveLoadButtons({
   // 手動保存（ユーザーが「保存」を押した）で表示系を分けると、同じ意味の表示が
   // 画面の2箇所に増えてしまうため、同じ枠を共用している（Issue #236）。
   // 自分で押した手動保存の結果のほうが知りたい情報なので、そちらを優先して出す。
+  // 書出（Issue #278）も同じ枠を使う。書出は「押した直後に結果を待っている」操作なので、
+  // 自動保存より前に出す。手動保存とどちらを優先するかは実際には問題にならない
+  // （ScorePage 側で、新しい操作の結果を出すときに古いほうを消している）。
   const saveIndicator: { text: string; color: string; role: 'status' | 'alert' } | null =
-    manualSaveStatus === 'saved'
-      ? { text: '✓ 保存しました', color: '#4caf50', role: 'status' }
-      : manualSaveStatus === 'failed'
-        // 失敗は読み上げでも割り込ませたいので role="alert"（成功の status とは区別する）
-        ? { text: '⚠ 保存できませんでした', color: '#d32f2f', role: 'alert' }
-        : autoSaveStatus === 'saving'
-          ? { text: '自動保存中…', color: '#999', role: 'status' }
-          : autoSaveStatus === 'saved'
-            ? { text: '✓ 自動保存済み', color: '#4caf50', role: 'status' }
-            : null;
+    exportStatus
+      ? {
+          text: exportStatus.message,
+          color: exportStatus.kind === 'success' ? '#4caf50' : '#d32f2f',
+          role: exportStatus.kind === 'success' ? 'status' : 'alert',
+        }
+      : manualSaveStatus === 'saved'
+        ? { text: '✓ 保存しました', color: '#4caf50', role: 'status' }
+        : manualSaveStatus === 'failed'
+          // 失敗は読み上げでも割り込ませたいので role="alert"（成功の status とは区別する）
+          ? { text: '⚠ 保存できませんでした', color: '#d32f2f', role: 'alert' }
+          : autoSaveStatus === 'saving'
+            ? { text: '自動保存中…', color: '#999', role: 'status' }
+            : autoSaveStatus === 'saved'
+              ? { text: '✓ 自動保存済み', color: '#4caf50', role: 'status' }
+              : null;
 
   return (
     <div className="save-load-buttons">
@@ -146,9 +169,13 @@ export default function SaveLoadButtons({
             background: 'rgba(255,255,255,0.85)',
             borderRadius: 4,
             padding: '2px 8px',
-            // 自動保存は裏で勝手に走るので薄く出す。手動保存はユーザーが結果を待って
+            // 書出の失敗理由は長くなることがある。幅の上限を決めて折り返さないと、
+            // 右端固定のまま左へ伸びて画面外にはみ出す（Issue #278）
+            maxWidth: 360,
+            lineHeight: 1.5,
+            // 自動保存は裏で勝手に走るので薄く出す。手動保存・書出はユーザーが結果を待って
             // 見ている表示なので、同じ枠のまま濃さだけ上げて読み落とされないようにする
-            opacity: manualSaveStatus === 'idle' ? 0.75 : 1,
+            opacity: manualSaveStatus === 'idle' && !exportStatus ? 0.75 : 1,
             pointerEvents: 'none',
           }}
           role={saveIndicator.role}

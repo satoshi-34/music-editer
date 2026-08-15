@@ -14,7 +14,7 @@ import PartExtractionStaff from './PartExtractionStaff';
 import { QUARTET_PART_CONFIGS } from './QuartetStaff';
 import SymbolEditor from './SymbolEditor';
 import ConfirmDialog from './ConfirmDialog';
-import SaveLoadButtons from './SaveLoadButtons';
+import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
 import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
@@ -378,6 +378,15 @@ function getPreviewDurationSeconds(dur: NoteEvent['dur']): number {
   return quarterSeconds * (ratios[dur] ?? 1);
 }
 
+/**
+ * 書出（MusicXML / MIDI）で投げられたものを、画面に出せる短い理由の文にする（Issue #278）。
+ * JavaScript では Error 以外（文字列など）も throw できてしまうので、
+ * Error でないときは String() で文字列にしてから出す（`[object Object]` になっても無言よりはましなため）。
+ */
+function describeExportError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default function ScorePage() {
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
   // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
@@ -529,9 +538,18 @@ export default function ScorePage() {
   // 自動保存インジケータと同じ場所・同じ体裁で数秒だけ出すため、状態だけをここで持つ。
   const [manualSaveStatus, setManualSaveStatus] = useState<'idle' | 'saved' | 'failed'>('idle');
   const manualSaveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 書出（MusicXML / MIDI）の結果表示（Issue #278）。押しても成功・失敗のどちらも画面に出ず、
+  // 例外は誰も捕まえずコンソールに流れるだけだったため、手動保存と同じ右下のインジケータで知らせる。
+  // 「どちらの書出か」「なぜ失敗したか」で文言が変わるので、状態名だけでなく文字列で持つ。
+  const [exportStatus, setExportStatus] = useState<ExportStatus>(null);
+  const exportStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showManualSaveStatus = useCallback((status: 'saved' | 'failed') => {
     setManualSaveStatus(status);
     if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
+    // 直前の書出の結果が右下に残っていると、あとから押した「保存」の結果がそれに隠れてしまう
+    // （同じインジケータを共用しているため）。新しい操作の結果を出す前に古い表示を消しておく。
+    if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
+    setExportStatus(null);
     // 成功は自動保存の通知と同じ 3 秒。失敗は「なぜ保存できなかったか」の詳細
     // （赤いエラー表示）まで目を移してもらう必要があるため、長めに 10 秒残す。
     manualSaveStatusTimerRef.current = setTimeout(
@@ -539,10 +557,23 @@ export default function ScorePage() {
       status === 'saved' ? 3000 : 10000
     );
   }, []);
+  const showExportStatus = useCallback((kind: 'success' | 'error', message: string) => {
+    setExportStatus({ kind, message });
+    if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
+    // 上の showManualSaveStatus と対称。古い保存結果に新しい書出結果が隠れないようにする
+    if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
+    setManualSaveStatus('idle');
+    // 表示時間は手動保存とそろえる（成功3秒・失敗10秒）。失敗は理由まで読む時間が要る
+    exportStatusTimerRef.current = setTimeout(
+      () => setExportStatus(null),
+      kind === 'success' ? 3000 : 10000
+    );
+  }, []);
   // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける
   useEffect(() => () => {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
     if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
+    if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
   }, []);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
@@ -3564,13 +3595,26 @@ export default function ScorePage() {
     instrumentation, totalSystems, measuresPerSystem,
   ]);
 
+  // 書出は成功しても失敗しても画面に何も出ず、例外はコンソールに流れるだけだった（Issue #278）。
+  // ダウンロードが始まれば成功には気づけるが、失敗すると完全に無言で「押しても何も起きない」
+  // ように見えるため、成否のどちらでも右下のインジケータに結果を出す。
   const handleExportMusicXml = useCallback(() => {
-    downloadMusicXml(buildCurrentScoreData());
-  }, [buildCurrentScoreData]);
+    try {
+      downloadMusicXml(buildCurrentScoreData());
+      showExportStatus('success', '✓ MusicXMLを書き出しました');
+    } catch (error) {
+      showExportStatus('error', `⚠ MusicXMLを書き出せませんでした: ${describeExportError(error)}`);
+    }
+  }, [buildCurrentScoreData, showExportStatus]);
 
   const handleExportMidi = useCallback(() => {
-    downloadMidi(buildCurrentScoreData());
-  }, [buildCurrentScoreData]);
+    try {
+      downloadMidi(buildCurrentScoreData());
+      showExportStatus('success', '✓ MIDIを書き出しました');
+    } catch (error) {
+      showExportStatus('error', `⚠ MIDIを書き出せませんでした: ${describeExportError(error)}`);
+    }
+  }, [buildCurrentScoreData, showExportStatus]);
 
   // PDF書出: 自前でPDFを生成せず、ブラウザの印刷ダイアログを開く方式にする。
   // App.css の @media print が既に A4 整形済みの印刷スタイルを用意しているため、
@@ -4685,6 +4729,7 @@ export default function ScorePage() {
                 hasCustomPianoSample={hasCustomPianoSample}
                 autoSaveStatus={autoSaveStatus}
                 manualSaveStatus={manualSaveStatus}
+                exportStatus={exportStatus}
                 restoreNotice={restoreNotice}
                 warningNotice={fileSaveWarning}
                 error={workError ?? error}
