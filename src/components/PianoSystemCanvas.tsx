@@ -2019,6 +2019,32 @@ export default function PianoSystemCanvas({
       }
       return null;
     });
+
+    // 弧（スラー/タイ）と松葉の選択も、音符とまったく同じ規則で掃除する（Issue #265）。
+    // これらも {fromMeasure, fromEvent, arcIndex} という「何番目か」だけの参照なので、
+    // 外部差し替えで弧が1本増減すると、選んでいないほうの弧を指したままになり、
+    // 次の Delete がユーザーの選んでいない弧を消すデータ破壊になる（#238 と同根）。
+    //
+    // 判定は「弧が載っている小節・声部のイベント列が変わったか」だけを見る。
+    // 弧の実体は始点イベント（fromEvent）の中に入っているので、その列が1バイトも
+    // 変わっていなければ、同じ index には必ず同じ弧が居る＝選択を保って安全。
+    const voiceEventsUnchanged=(partIndex:number,measureIndex:number,voiceIndex:number)=>{
+      const measure=partsScore[partIndex]?.[measureIndex];
+      const prevMeasure=prevScore?.[partIndex]?.[measureIndex];
+      // 小節ごと消えた場合と、比べる相手（前回のスナップショット）が無い場合は
+      // 「変わっていない」と言い切れないので、安全側＝選択解除に倒す。
+      // 音符の選択と違って弧は再クリックが軽い操作なので、ここは厳しめでよい（トリアージの裁定）。
+      if(!measure||!prevMeasure) return false;
+      return JSON.stringify(getVoiceEvents(measure,voiceIndex))===JSON.stringify(getVoiceEvents(prevMeasure,voiceIndex));
+    };
+    setSelectedArc(prev=>{
+      if(!prev) return prev;
+      return voiceEventsUnchanged(prev.partIndex,prev.fromMeasure,prev.voiceIndex)?prev:null;
+    });
+    setSelectedHairpin(prev=>{
+      if(!prev) return prev;
+      return voiceEventsUnchanged(prev.partIndex,prev.fromMeasure,prev.voiceIndex)?prev:null;
+    });
   },[partsScore]);
 
   /* ----- 親への通知 ----- */
