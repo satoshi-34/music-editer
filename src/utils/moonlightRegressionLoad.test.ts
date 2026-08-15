@@ -191,7 +191,7 @@ describe('月光1〜9小節 回帰チェック: 読込（Issue #243）', () => {
     expect(events.filter((ev) => ev.expressionMarking)).toHaveLength(1);
   });
 
-  it('README 記載の「既知の入力上の傷」3件が、直されずそのまま残っている', async () => {
+  it('README 記載の「既知の入力上の傷」のうち、音高の傷2件は直されずそのまま残っている', async () => {
     const data = await loadViaImport();
     const rightHand = data.parts[0].measures as MeasureData[];
 
@@ -203,12 +203,35 @@ describe('月光1〜9小節 回帰チェック: 読込（Issue #243）', () => {
     // 傷2: 8小節目（index 7）右手声部2に b/3 の3重ユニゾン和音（誤クリックの実物）。
     const bar8Voice2 = voiceEventLists(rightHand[7])[1];
     expect(bar8Voice2[1].keys).toEqual(['b/3', 'b/3', 'b/3']);
+  });
 
-    // 傷3: 9小節目（index 8）右手声部2の連符IDが入れ子に交錯している
-    // （4番目のグループの最後の1音が、末尾に取り残されている）。
-    const bar9TupletIds = voiceEventLists(rightHand[8])[1].map((ev) => ev.tuplet?.id);
+  // 傷3（9小節目の連符ID交錯）は Issue #282 で「読込時に直す」対象になった。
+  // fixture そのものは1バイトも変えず、読み込んだあとの姿だけが変わる。
+  it('傷3（9小節目の連符ID交錯）は、生データには残ったまま読込時に正規化される', async () => {
+    // 生データ側: 4番目のグループの最後の1音が末尾に取り残されたまま（fixture は無改変）。
+    const raw = JSON.parse(readFixtureText()) as SavedScoreData;
+    const rawBar9Ids = (raw.parts[0].measures[8].voices![1].events as NoteEvent[])
+      .map((ev) => ev.tuplet?.id);
+    expect(new Set(rawBar9Ids).size).toBe(4);
+    expect(rawBar9Ids[6]).toBe(rawBar9Ids[11]);
+    expect(rawBar9Ids[8]).not.toBe(rawBar9Ids[11]);
+
+    // 読込後: 3音ずつ4グループに区切り直され、同じ id が離れて並ぶ箇所が無くなる。
+    const data = await loadViaImport();
+    const rightHand = data.parts[0].measures as MeasureData[];
+    const bar9 = voiceEventLists(rightHand[8])[1];
+    const bar9TupletIds = bar9.map((ev) => ev.tuplet?.id);
     expect(new Set(bar9TupletIds).size).toBe(4);
-    expect(bar9TupletIds[6]).toBe(bar9TupletIds[11]);
-    expect(bar9TupletIds[8]).not.toBe(bar9TupletIds[11]);
+    for (let group = 0; group < 4; group += 1) {
+      const ids = bar9TupletIds.slice(group * 3, group * 3 + 3);
+      expect(new Set(ids).size).toBe(1);
+    }
+    // 音の並び自体は正規化で変わらない（書き換わるのは tuplet.id だけ）。
+    expect(bar9.map((ev) => ev.keys[0])).toEqual([
+      'g#/3', 'b/3', 'e/4',
+      'g#/3', 'b/3', 'e/4',
+      'g#/3', 'b/3', 'e/4',
+      'g#/3', 'b/3', 'e/4',
+    ]);
   });
 });

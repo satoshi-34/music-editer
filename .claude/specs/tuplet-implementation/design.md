@@ -891,3 +891,122 @@ WeakSet などの隠し状態ではなく戻り値の型で持たせたのは、
 - `src/utils/storage.ts` — 読込時の型検証
 - テスト: `tupletUtils.test.ts`(5) / `vexFlowTimingUtils.test.ts`(2) / `musicXmlTuplet.test.ts`(2) /
   `PianoSystemCanvasTupletHideNumber.test.tsx`(5・新規)
+
+---
+
+## 追記9: 連符グループidが非連続に並ぶデータの発生経路と防御（Issue #282, 2026-08-16）
+
+### 問題
+
+運用者の保存データ（月光1〜9小節・`docs/qa/regression/moonlight-bars1-9.score.json`）の
+9小節目・右手声部2で、連符グループの id が**非連続に並んでいる**状態が見つかった。
+
+```
+索引: 0  1  2 | 3  4  5 | 6  7 | 8  9 10 | 11
+id  : A  A  A | B  B  B | C  C | D  D  D | C     ← グループ C が D に分断されている
+音高: g#3 b3 e4  g#3 b3 e4  g#3 b3  e4 g#3 b3  e4
+```
+
+このアプリは連符グループを「**同じ tuplet.id が連続する区間**」として扱う
+（描画の `createVexFlowTuplets`、削除・コピーの `findTupletGroupRange` がどちらもこの数え方）。
+分断されると次のように壊れる。
+
+- **描画**: 断片の長さが `numNotes`（3）に足りないため、連符の囲み（「3」と括弧）が描かれない。
+  月光 fixture では36グループ中35個しか描かれていなかった
+- **グループ操作**: 削除・コピー・連符数字トグルが断片しか掴めない。
+  コピーすれば「2音しかない3連符」が貼り付けられ、壊れたデータが増殖する
+
+音高の並び自体（g#3 b3 e4 の4回繰り返し）は正しく、**グループの境目だけが1音ずれていた**。
+
+### 発生経路（特定済み・テストで再現）
+
+`PianoSystemCanvas.tsx` の `doInsert()` が、挿入位置 `at` を
+「クリック位置がどの描画済み音符に近いか」だけで決めていたことが原因。
+連符の2音目・3音目の手前が選ばれると、そこへ差し込んだぶんだけグループが前後に割れる。
+
+月光9小節目で起きたことは次のとおり。
+
+1. 3連符グループを3つ入力した状態（索引 0〜8）
+2. 4つ目のグループを置こうとして、3つ目のグループの3音目（索引8）の**手前**をクリック
+3. `at = 8` と判定され、新しいグループ3件がそこへ `splice` される
+4. 3つ目のグループの3音目が索引11へ押し出され、`C C [D D D] C` という並びになった
+
+`PianoSystemCanvasTupletInsertGuard.test.tsx` で、この経路を実際のクリックで再現している
+（修正を外すとこの2件が落ちることを確認済み）。**通常の音符入力でも同じことが起きる**ため、
+連符ツールのときだけでなく `at` を決めた直後に一括で対処した。
+
+### 修正設計: 3層で守る
+
+| 層 | 何をするか | 置き場所 |
+| --- | --- | --- |
+| 予防 | 挿入位置がグループの内側に来たら、手前か直後の近いほうへ寄せる | `snapInsertIndexOutOfTupletGroup`（`tupletGroupIntegrity.ts`）→ `doInsert` |
+| 修復 | 読込時に、分断されたグループを区切り直す | `normalizeTupletGroupsInParts` → `storage.ts` / `fileStorage.ts` |
+| 検知 | 保存前に分断が残っていたら開発ビルドで警告する | `collectTupletContinuityIssues` → `saveScoreDataToSlot` |
+
+新設した `src/utils/tupletGroupIntegrity.ts` は**型以外に依存を持たない**。
+描画系のモジュールを保存・読込経路へ持ち込まないためで、逆に `tupletUtils.findTupletGroupRange` は
+このファイルの `findTupletRunRange` へ委譲させて、「グループ＝連続する同一 id」という
+数え方が2系統に増えないようにした。
+
+#### 修復（正規化）の中身
+
+`normalizeTupletGroupContinuity(events)` は2段構え。
+
+1. **区切り直し**: 同じ連符の種類（3連符なら 3:2）が連続している区間の中に分断された id が
+   あれば、その区間を先頭から `numNotes` 個ずつに割り直して id を振り直す。
+   月光9小節目のように「境目だけがずれている」データは、これで元の4グループへ戻る
+2. **id の重複はがし**: それでも同じ id が離れた場所に残っていたら（連符でない音符を挟んで
+   分断されている場合など）、2回目以降の断片へ別の id を振って切り離す
+   （＝ Issue 本文の「断片ごとに別グループへ分離する」）
+
+守っている約束:
+
+- **音符の並び・音価・拍数は一切変えない。書き換えるのは `tuplet.id` だけ。**
+  拍の圧縮率は `numNotes`/`notesOccupied` から決まるので、鳴り方は正規化の前後で同じ。
+  変わるのは「どの音を1つの連符として括るか」＝見た目のグループ分けだけ
+- **区切り直した結果が元のグループとぴったり同じ区間は、元の id を据え置く**（差分の最小化）
+- **種類の違う連符（3連符と5連符）はまたいで区切り直さない**。混ぜると拍が合わなくなる
+- **`numNotes` が壊れている（0・小数）データは区切り幅が決まらないので触らない**（段2だけ効く）
+- **分断が無い events は引数の配列をそのまま返す**（正常なデータには一切触れない・再描画も起こさない）
+- **新しい id は乱数・時刻ではなく元の id から機械的に作る**（`<元のid>--fix<連番>`）。
+  保存データは `measure.events` と `voices[0].events` が同じ内容を二重に持っており、
+  別々に正規化しても同じ結果にならないと声部1の中身が食い違ってしまうため
+
+### 意図的に変えた期待値（月光回帰テスト）
+
+`docs/qa/regression/moonlight-bars1-9.score.json` は**1バイトも変更していない**（SHA-256 の照合も無改修で緑）。
+変わったのは「読み込んだあとの姿」だけ。
+
+| テスト | 変更前 | 変更後 | 理由 |
+| --- | --- | --- | --- |
+| `MoonlightRegressionRender.test.tsx` 3段目の連符 | 11 | 12 | 傷3が読込時に区切り直され、描けなかった1グループの囲みが出るようになった |
+| 同・3段合計の連符 | 35 | 36 | 同上（全36グループぶんの囲みが揃う） |
+| `moonlightRegressionLoad.test.ts` 傷3のテスト | 「交錯したまま残る」 | 「生データには残り、読込後は正規化される」 | 傷3だけ扱いが変わったので、傷1・傷2（音高の傷。今も直さない）とテストを分けた |
+
+`MoonlightRegressionRender.test.tsx` の `loadFixture()` には正規化を1行足した。
+実際のアプリは localStorage からもファイルからも正規化を通したデータしか画面へ渡さないので、
+描画テストも同じ姿を描くのが正しい（生の JSON をそのまま描いていると、
+実機では起こり得ない状態を固定してしまう）。
+
+連符**グループ数**（`moonlightRegressionLoad.test.ts` の全小節4グループ）は変わらない。
+9小節目は「4グループの境目がずれていた」のであって、グループの数は元から4だったため。
+
+### 影響範囲
+
+- `src/utils/tupletGroupIntegrity.ts` — 新設（検出・修復・予防の3つ）
+- `src/utils/tupletUtils.ts` — `findTupletGroupRange` を `findTupletRunRange` への委譲に変更（挙動は同じ）
+- `src/utils/storage.ts` — 読込時の正規化、保存前の警告（開発ビルドのみ）
+- `src/utils/fileStorage.ts` — `importScoreFromFile` の戻り値を正規化してから返す
+- `src/components/PianoSystemCanvas.tsx` — `doInsert` の `at` を確定した直後に寄せる1行
+- テスト: `tupletGroupIntegrity.test.ts`（新規23）/ `PianoSystemCanvasTupletInsertGuard.test.tsx`（新規2）/
+  `storage.test.ts`（+2）/ `moonlightRegressionLoad.test.ts`（傷3のテストを分割）/
+  `MoonlightRegressionRender.test.tsx`（期待値と読込方法）
+- `docs/qa/regression/README.md` — 傷3の扱いを追記
+
+### 今回やらなかったこと
+
+- **MusicXML 読込（`musicXmlImport.ts`）への正規化の適用**。読込側は `<time-modification>` の
+  連続からグループを組み立てるので、この経路では分断が起こらない。Issue の受入条件も
+  「読込時の正規化」としか書かれていないため、必要になったら1行足せば通せる形にしてある
+- **並べ替えによる修復**。「分断された音を元のグループの隣へ動かす」修復も考えられるが、
+  音の鳴る順番を黙って変えることになるので採らなかった。今回の方式は id しか書き換えない

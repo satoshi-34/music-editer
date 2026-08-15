@@ -3,6 +3,7 @@
 
 import type { SavedScoreData } from '../types/storage';
 import { validateSavedScoreData } from './storage';
+import { normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 
 // ファイル名に使えない文字を除去するヘルパー
 function safeFileName(title: string): string {
@@ -159,7 +160,10 @@ export async function importScoreFromFile(file: File): Promise<SavedScoreData> {
         reject(new Error('有効な譜面ファイルではありません（データ形式が不正です）'));
         return;
       }
-      resolve(data);
+      // localStorage 読込と同じく、連符グループの分断（Issue #282）はここで直してから返す。
+      // ファイルは他人の環境で作られたものや手編集されたものが来るので、
+      // 「読み込んだデータは連符グループが連続している」ことをこの1か所で保証する。
+      resolve({ ...data, parts: normalizeTupletGroupsInParts(data.parts) });
     };
     reader.onerror = () => reject(new Error('ファイルの読み込みに失敗しました'));
     reader.readAsText(file);
