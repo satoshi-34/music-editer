@@ -630,6 +630,24 @@ function findNearestKey(
 // 「スラーの下の低音が選択できない」として発覚）。何も起きない帯に限って
 // 吸い寄せを効かせるので、音符の追加位置がずれる副作用はない。
 const OUTER_KEY_SELECT_MAX_LINES = 1.0;
+// 五線の中（＝和音追加が起きる帯）で、既存の構成音へ吸い寄せる許容幅（ライン単位）。
+//
+// 用途: 2度でぶつかる和音（例 [e/4, f#/4]）の上の音は符幹の右へずらして描かれ、
+// 実機テスト（Issue #271・月光2小節目）で「狙っても選択できない」と報告された。
+// 従来、五線内で個別選択が成立するのはクリックYを 0.5 ライン刻みへ丸めた結果が
+// その音の線と一致したときだけ＝実質「線ちょうど ±0.25 ライン」（100%ズームで
+// 約2.4px）で、そこを外すと和音追加（調号適用で G→G# など）になり、
+// 何が起きたのか分かりにくかった。
+//
+// 運用者裁定（案A・選択優先）: 和音追加は「離れた所に置いて矢印キーで近づける」
+// 回避手段があるが、選択できない場合の回避手段が無い。そこで符頭のX範囲内に限り
+// 選択を優先する。値をライン単位で持つのは、五線が拡大縮小しても「見た目に対する
+// 許容幅」が一定に保たれるため（raw 単位の定数にすると編成譜や画面ズームで
+// 画面px換算の幅がズレる。keySelectXPad と同じ考え方）。
+//
+// 0.5 未満にしてあるのは、隣の線／間（＝0.5 ライン離れた位置）を狙ったクリックが
+// 吸い寄せられて和音追加できなくならないようにするため。
+const INNER_KEY_SELECT_MAX_LINES = 0.3;
 function findNearestKeyIndexWithinLines(
   keys: string[], localY: number, stave: Stave,
   keyToLineFn: (k: string) => number, maxLines: number
@@ -4316,23 +4334,40 @@ export default function PianoSystemCanvas({
             // 編集は絶対にしない（奥に隠れた対象を選びたいだけのクリックなので）。
             const noteCycleId=`note:p${pi}:m${absI}:v${activeVoiceIndex}:e${j}`;
             /**
-             * その画面座標が「この音符のどの符頭を選ぶクリックか」を返す（-1 なら選択にならない）。
-             * 下の click ハンドラの判定式（nearNoteX → findKeyIndexAtLine → 固定範囲外の吸い寄せ）と
-             * 完全に同じものをここへ切り出している。ずれると
-             * 「巡回では選べるのに普通に押すと選べない」という食い違いが出る。
+             * SVG内部座標（raw 単位）で「この音符のどの符頭を選ぶクリックか」を返す（-1 なら選択にならない）。
+             *
+             * 選択になるかどうかを判定する式は**この関数だけ**にする。
+             * click（実際の選択）・mousemove（カーソル形状とホバー演出）・
+             * 再クリック巡回（Issue #264）の3箇所が同じ関数を呼ぶことで、
+             * 「ホバーでは選択に見えるのに押すと和音追加になる」「巡回では選べるのに
+             * 普通に押すと選べない」といった食い違いが構造的に起きないようにしている。
              */
-            const resolveSelectableKeyIndex=(clientX:number,clientY:number):number=>{
+            const resolveSelectableKeyIndexAt=(lx:number,ly:number):number=>{
               const ev=activeEvs[j];
               if(!ev||ev.isRest)return -1;
-              const{x:lx,y:ly}=clientToGroup(svg,svgRoot,clientX,clientY);
               const pad=keySelectXPad(svg);
               if(lx<noteVisualLeft-pad||lx>noteVisualRight+pad)return -1;
               const atLine=findKeyIndexAtLine(ev.keys,snapLineForKeySelect(ly),k2l);
               if(atLine>=0)return atLine;
               if(ly<chordTopY||ly>chordBotY){
+                // 固定範囲（五線±3加線）の外は挿入も和音追加も起きない帯なので、
+                // 広め（±1ライン）に吸い寄せても副作用が無い（Issue #255）。
                 return findNearestKeyIndexWithinLines(ev.keys,ly,stave,k2l,OUTER_KEY_SELECT_MAX_LINES);
               }
+              // 五線の中（和音追加ゾーン）でも、符頭のX範囲に入っているクリックは
+              // 和音追加より個別選択を優先する（Issue #271・案A）。X範囲を下の
+              // isOnNote（和音追加ゾーン）とまったく同じ式にしてあるのが要点で、
+              // 「和音追加になり得る場所でだけ選択が先に立つ」＝符頭から横に離れた
+              // 位置での挿入・和音追加の挙動は1pxも変えない。
+              if(lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD){
+                return findNearestKeyIndexWithinLines(ev.keys,ly,stave,k2l,INNER_KEY_SELECT_MAX_LINES);
+              }
               return -1;
+            };
+            /** 画面座標版（再クリック巡回はブラウザのイベント座標で呼ばれるため） */
+            const resolveSelectableKeyIndex=(clientX:number,clientY:number):number=>{
+              const{x:lx,y:ly}=clientToGroup(svg,svgRoot,clientX,clientY);
+              return resolveSelectableKeyIndexAt(lx,ly);
             };
             const selectKeyAtPoint=(clientX:number,clientY:number)=>{
               const keyIndex=resolveSelectableKeyIndex(clientX,clientY);
@@ -4408,19 +4443,10 @@ export default function PianoSystemCanvas({
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音ゾーン
               const inChordZone=!activeEvs[j]?.isRest&&lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
               // 「選択」と「追加（新規挿入／和音追加）」のどちらになるかをクリック前に
-              // 見分けられるよう、click ハンドラの nearNoteX / findKeyIndexAtLine と
-              // 同じ判定式でここでも「押したら個別音選択になるか」を求める。
-              // クリック時と判定がずれるとホバー表示だけ信用できなくなるため、
-              // パディング量（keySelectXPad(svg)）も含めて完全に同じ式にしている。
-              const hoverXPad = keySelectXPad(svg);
-              const nearNoteXForHover = lx>=noteVisualLeft-hoverXPad && lx<=noteVisualRight+hoverXPad;
-              const snappedLineForHover = snapLineForKeySelect(ly);
-              // 固定範囲の外の吸い寄せ（クリック側の findNearestKeyIndexWithinLines）も
-              // 含めて、クリック時と完全に同じ式で「押したら選択になるか」を求める。
-              const wouldSelectKey = !activeEvs[j]?.isRest && nearNoteXForHover
-                && (findKeyIndexAtLine(activeEvs[j].keys, snappedLineForHover, k2l) >= 0
-                  || ((ly<chordTopY||ly>chordBotY)
-                    && findNearestKeyIndexWithinLines(activeEvs[j].keys, ly, stave, k2l, OUTER_KEY_SELECT_MAX_LINES) >= 0));
+              // 見分けられるよう、「押したら個別音選択になるか」をここでも求める。
+              // 判定は click ハンドラとまったく同じ関数を呼ぶ（別の式で近似すると
+              // ホバー表示だけ嘘になる。過去に何度も踏んでいる轍）。
+              const wouldSelectKey = resolveSelectableKeyIndexAt(lx, ly) >= 0;
               setNoteHoverHighlight(n, wouldSelectKey);
               // カーソル形状: 選択になる位置は 'pointer'、それ以外（新規挿入・和音追加・
               // 休符の置換分割）は「ここに置く」感を出す 'copy' にする。
@@ -4844,29 +4870,15 @@ export default function PianoSystemCanvas({
                 const newKey=applyKeySignatureToNaturalKey(l2k(snappedLine), partKeyForAccidental);
                 const currentEv=activeEvs[j];
                 // 和音内の既存音を個別選択する入口。
-                // snappedLine が currentEv.keys[] のどれかと一致したら keyIndex を保存し、
+                // クリック位置が既存の構成音を指していたら keyIndex を保存し、
                 // Delete/矢印/臨時記号がその1音だけに効くようにする。
-                // isOnNote より先に判定するため、符頭Xから少し外れても
-                // 同じ高さの既存音をクリックした扱いになります。
-                // ただし X 方向は符頭±keySelectXPad(svg) に限定する。
-                // ヒット領域全体（最後の音符では小節右端まで）で選択にすると、
-                // 空き拍の領域を同じ高さでクリックしたとき音符を追加できなくなるため。
-                // パディングは「画面px基準」で決め、描画スケール s で割って raw 座標に
-                // 変換する（編成譜のように s が小さいと、raw 単位のままでは画面上わずか
-                // 数pxまで許容範囲が縮んでしまい、符頭のすぐ近くをクリックしても選択に
-                // ならず音符追加になってしまうため）。
-                const nearNoteX = lx>=noteVisualLeft-keySelectXPad(svg) && lx<=noteVisualRight+keySelectXPad(svg);
-                // 選択の一致判定だけは、五線から遠い音符の線まで丸め先を広げた
-                // snapLineForKeySelect を使う（Issue #218）。新規音の音高（newKey）は
-                // 従来どおり snappedLine から作るので、置ける範囲は変わらない。
-                let clickedKeyIndex = nearNoteX ? findKeyIndexAtLine(currentEv.keys, snapLineForKeySelect(ly), k2l) : -1;
-                // 固定範囲の外（挿入も和音追加も起きない帯）では、線ちょうどを外した
-                // クリックを最寄りの構成音へ吸い寄せる。従来はこの帯での有効な選択位置が
-                // ±0.25ライン（100%ズームで約2.5px）しかなく、実質クリック不能だった。
-                // ホバー側（mousemove の wouldSelectKey）と必ず同じ式にすること。
-                if(clickedKeyIndex<0 && nearNoteX && (ly<chordTopY||ly>chordBotY)){
-                  clickedKeyIndex = findNearestKeyIndexWithinLines(currentEv.keys, ly, stave, k2l, OUTER_KEY_SELECT_MAX_LINES);
-                }
+                // isOnNote（和音追加）より先に判定するので、符頭のX範囲内では
+                // 選択が和音追加より優先される（Issue #271・案A）。
+                //
+                // 判定式は resolveSelectableKeyIndexAt に集約してある。ホバーの
+                // カーソル形状（pointer/copy）と再クリック巡回（Issue #264）も
+                // 同じ関数を呼ぶので、3者の食い違いが起きない。
+                const clickedKeyIndex = resolveSelectableKeyIndexAt(lx, ly);
                 if(clickedKeyIndex>=0){
                   // 符頭を選んだ = 巡回の起点。次に同じ場所を押したら奥の候補へ進む（Issue #264）。
                   // 「選択で終わったクリック」だけを起点にすることで、休符の1クリック置換（#233）や
