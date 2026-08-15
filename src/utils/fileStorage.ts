@@ -2,6 +2,7 @@
 // 譜面データのファイル書き出し・読み込みユーティリティ
 
 import type { SavedScoreData } from '../types/storage';
+import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { validateSavedScoreData } from './storage';
 
 // ファイル名に使えない文字を除去するヘルパー
@@ -159,7 +160,11 @@ export async function importScoreFromFile(file: File): Promise<SavedScoreData> {
         reject(new Error('有効な譜面ファイルではありません（データ形式が不正です）'));
         return;
       }
-      resolve(data);
+      // localStorage 読込と同じく、和音の中の同音重複を1音へ畳んでから返す（Issue #281）。
+      // 重複した符頭は完全に重なって1つに見えるので、読み込んだ時点で消しておかないと
+      // 「削除しても見た目が変わらない」という気づけない不具合として残り続ける。
+      const normalizedParts = normalizeDuplicateChordKeys(data.parts);
+      resolve(normalizedParts === data.parts ? data : { ...data, parts: normalizedParts });
     };
     reader.onerror = () => reject(new Error('ファイルの読み込みに失敗しました'));
     reader.readAsText(file);

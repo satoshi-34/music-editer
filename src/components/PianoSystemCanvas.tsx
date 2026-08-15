@@ -32,12 +32,13 @@ import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
 import {
   SCORE_SELECTION_CLEAR_EVENT,
+  describeAbsorbedChordKey,
   describeDeletedArc,
   describeDeletedHairpin,
   describeDeletedNoteEvent,
   notifyScoreEdit,
 } from '../utils/scoreEditorNotices';
-import { computeShiftedKeys, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
+import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
   parseTimeSignatureInput,
   parseBpmInput,
@@ -2322,21 +2323,30 @@ export default function PianoSystemCanvas({
       }
       if(e.key==='ArrowUp'||e.key==='ArrowDown'){
         const up=e.key==='ArrowUp';
+        // 移動結果は setS の外で先に求める。同音吸収（Issue #281）が起きると和音の音が
+        // 1つ減るので、譜面の書き換えと同時に「どの符頭を選んでいるか」も付け替える必要があり、
+        // 状態更新関数（prev=>next）の中で別の state を触らずに済ませたいため。
+        const targetMeasure=partsScoreRef.current[partIndex]?.[measure];
+        const ev=targetMeasure?getVoiceEvents(targetMeasure, voiceIndex)[index]:undefined;
+        if(!ev){e.preventDefault();return;}
+        // StaffCanvas/PianoSystemCanvas で完全一致していた音高シフトのロジックは
+        // utils/pitchShiftUtils.ts に共通化した。
+        const shift=computeShiftedKeysWithSelection(
+          ev,
+          keyIndex,
+          { up, shiftKey: e.shiftKey, altKey: e.altKey },
+          { lineToKey: l2k, keyToLine: k2l, keySignature: keySignatureRef.current, defaultRestKey: defaultRestKeyForClef(clef) }
+        );
         setS(prev=>{
           if(measure>=prev.length)return prev;
-          // 読みも書きも「選択中の声部」に合わせる（声部2のときは voices[1].events を見る）。
-          const ev=getVoiceEvents(prev[measure], voiceIndex)[index];
-          if(!ev)return prev;
-          // StaffCanvas/PianoSystemCanvas で完全一致していた音高シフトのロジックは
-          // utils/pitchShiftUtils.ts に共通化した。
-          const newKeys=computeShiftedKeys(
-            ev,
-            keyIndex,
-            { up, shiftKey: e.shiftKey, altKey: e.altKey },
-            { lineToKey: l2k, keyToLine: k2l, keySignature: keySignatureRef.current, defaultRestKey: defaultRestKeyForClef(clef) }
-          );
-          return applyPitchChangeToMeasures(prev, measure, index, keyIndex, newKeys, voiceIndex);
+          return applyPitchChangeToMeasures(prev, measure, index, keyIndex, shift.keys, voiceIndex, shift);
         });
+        // 吸収で和音が縮んだときだけ選択を付け替える（吸収先の音を選んだままにして、
+        // そのまま矢印キーで動かし続けられるようにする）。
+        if(shift.absorbedKeyIndex!==undefined){
+          setSelected(prev=>prev?{...prev,keyIndex:shift.keyIndex}:prev);
+          notifyScoreEdit(describeAbsorbedChordKey());
+        }
         e.preventDefault();return;
       }
       if(e.key==='0'){
