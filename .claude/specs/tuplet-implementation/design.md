@@ -810,3 +810,84 @@ remapEventRefsAfterRemoval(events, measure, removeStart, removeEnd, shift)
   （うち fixture 由来3件。**7件とも修正前だと失敗することを逆検証済み**）
 - 既存の削除仕様（規則1の和音1音削除・規則3の通常削除・声部2の削除）は**挙動不変**。
   既存テスト28件がそのまま緑であることで固定されている
+
+---
+
+## 追記8: 連符数字をグループ単位で非表示にできるようにする（Issue #269 段1, 2026-08-15）
+
+### 問題
+
+同じ連符が続く曲では、連符数字（3 等）は最初のグループ（または最初の1〜2小節）にだけ書き、
+以降は省略するのが浄書の標準（Gould, *Behind Bars*）。月光第1楽章の市販譜も1個目だけに "3" が付く。
+アプリは全グループに数字を出すため、三連符が主体の曲では紙面が数字だらけになる。
+
+### データモデル
+
+`NoteEvent['tuplet']` に `hideNumber?: boolean` を足した（`src/types/storage.ts`）。
+
+- **省略時（undefined）は従来どおり表示**。既存の保存データ・サンプル譜面の見た目は1ドットも変わらない
+- 表示へ戻すときは `false` を書かず**プロパティごと削除**する。保存データが旧データと同じ形に戻り、
+  「`hideNumber: false` と undefined のどちらが正か」を後続の実装が考えなくて済む
+- 値はグループ内の**全イベント**に付ける。描画が見るのは先頭イベントの情報だけだが、
+  先頭を消しても設定が残り、MusicXML 書出でも「どれが先頭か」に依存せず判定できる
+- `storage.ts` の検証にも「boolean か undefined」を追加した（壊れた値を読み込ませない）
+
+### 「数字を隠す」は括弧も隠す（設計判断）
+
+VexFlow 5 の `Tuplet` には**数字だけを消すオプションが無い**。`Tuplet.draw()` は
+`textElement.renderText(...)` を必ず呼ぶため、`setBracketed(false)` を使っても数字は残る。
+`textElement` を空にすると、括弧が中央で10px 途切れた「穴あき括弧」になる。
+
+そこで **hideNumber のグループは `draw()` そのものを呼ばない**（`PianoSystemCanvas.tsx` の描画ループ）。
+これは実装の都合だけでなく浄書慣行にも合う。連続する連符で数字を省略するときは、括弧も省くのが標準
+（Issue 本文の「数字なし・ブラケットなしのビーム連符」＝月光の形）である。ビームでつながった連符は
+そもそも括弧を描かない（`syncTupletBracketsWithBeams`）ため、月光のケースでは数字が消えるだけになる。
+
+**Tuplet オブジェクト自体は隠すときも必ず作る。** 音符の tick に連符の倍率（3連符なら 2/3）を掛けるのは
+`Tuplet` のコンストラクタ（`attach()` → `note.setTuplet()`）だからで、作るのをやめると
+拍が合わなくなり、ビームも連符単位（3+3）ではなく拍単位（2+2+2）に割れる（Issue #217 と同じ壊れ方）。
+「作るが描かない」を守ること。
+
+`createVexFlowTuplets` の戻り値は `Tuplet[]` から `RenderedTuplet[]`（`{ tuplet, hideNumber }`）へ変えた。
+WeakSet などの隠し状態ではなく戻り値の型で持たせたのは、描画側が「なぜ draw を飛ばすのか」を
+型から追えるようにするため。`measureLayoutUtils.ts` は戻り値を使っていないので影響しない。
+
+### UI（記号調整系と同じ流儀）
+
+パレットに `{ mode: 'tupletNumberToggle' }` を足した。ボタン（取り消し線付きの「3」）を押してから
+連符の音符をクリックすると、そのグループの `hideNumber` が反転する。臨時記号・強弱と同じ
+「モードを選ぶ → 対象をクリック」の操作体系に揃えてある。
+
+- **連符内休符をクリックしても効く**。グループの途中が休符のままの譜面でも押せる位置を広く取るため
+- 連符でない音符・背景をクリックしたときは `setScore` を呼ばない。
+  ここで `withVoiceEventsUpdated` を通すと、声部2モードのとき中身の無い `voices[1]` が生まれる（#112 の教訓）
+- 声部2でもそのまま使える（`getVoiceEvents` / `withVoiceEventsUpdated` 経由のため）
+- 取り消しは既存の Undo（`Cmd/Ctrl+Z`）に乗る（`setScore` を1回呼ぶだけなので特別扱い不要）
+
+### MusicXML 書出
+
+`<tuplet type="start" number="1" bracket="no" show-number="none"/>` を出す（`musicXmlExport.ts`）。
+アプリ側が「数字を消したら括弧も消す」挙動なので、`show-number="none"` だけでなく `bracket="no"` も付けて
+他ソフトでも同じ見た目になるようにした。停止タグ（`type="stop"`）には付けない（開始タグの属性で
+グループ全体の表示が決まるため）。`hideNumber` が無いときの出力は1バイトも変わらない。
+
+### 今回やらなかったこと
+
+- **MusicXML 読込は未対応**（`show-number` を読んで `hideNumber` を復元しない）。
+  読込側はもともと `<notations><tuplet>` を見ておらず `<time-modification>` の連続でグループを判定しているため、
+  対応するとパーサの構造に手が入る。トリアージの範囲（書出）に絞った。**往復すると非表示指定は失われる**
+- **段2（同一音価の連符が連続するときの自動省略）は別Issue**（Issue #269 本文の段2）。
+  今回のトグルは完全に手動で、既存譜面が無断で変わることはない
+
+### 影響範囲
+
+- `src/types/storage.ts` — `tuplet.hideNumber?: boolean`
+- `src/utils/tupletUtils.ts` — `toggleTupletNumberVisibility`（グループ全体を反転する純関数）
+- `src/utils/vexFlowTimingUtils.ts` — 戻り値を `RenderedTuplet[]` へ、`syncTupletBracketsWithBeams` の引数型
+- `src/components/PianoSystemCanvas.tsx` — `RenderedTuplet` 型の受け取り、hideNumber なら描画スキップ、
+  `tupletNumberToggle` モードのクリック処理と背景クリックのガード
+- `src/components/Palette.tsx` — ツール型とトグルボタン
+- `src/utils/musicXmlExport.ts` — `show-number` / `bracket` 属性
+- `src/utils/storage.ts` — 読込時の型検証
+- テスト: `tupletUtils.test.ts`(5) / `vexFlowTimingUtils.test.ts`(2) / `musicXmlTuplet.test.ts`(2) /
+  `PianoSystemCanvasTupletHideNumber.test.tsx`(5・新規)

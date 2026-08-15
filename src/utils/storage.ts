@@ -168,7 +168,10 @@ function validateNoteEvent(event: any): event is NoteEvent {
         typeof event.tuplet.id === 'string' &&
         event.tuplet.id.length > 0 &&
         Number.isInteger(event.tuplet.numNotes) && event.tuplet.numNotes > 0 &&
-        Number.isInteger(event.tuplet.notesOccupied) && event.tuplet.notesOccupied > 0
+        Number.isInteger(event.tuplet.notesOccupied) && event.tuplet.notesOccupied > 0 &&
+        // hideNumber は連符数字を隠すかどうか（Issue #269）。
+        // 省略時は「表示する」なので、undefined も正常なデータとして通す（旧データ互換）。
+        (event.tuplet.hideNumber === undefined || typeof event.tuplet.hideNumber === 'boolean')
       )
     ) &&
     (

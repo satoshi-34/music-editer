@@ -13,6 +13,20 @@ export function vexFlowDotCount(dots?: 1 | 2): number {
 }
 
 /**
+ * 描画側へ渡す連符1グループぶんの情報。
+ *
+ * VexFlow の Tuplet には「数字だけを隠す」オプションが無い（draw() が必ず数字を描く）。
+ * そこで「隠すかどうか」はこの入れ物で持ち回り、描画側が draw() を呼ぶかどうかで表現する。
+ * Tuplet オブジェクト自体は隠すときも必ず作る。音符の tick に連符の倍率を掛けるのは
+ * Tuplet の生成処理だからで、作らないと拍が合わずに小節が壊れる。
+ */
+export type RenderedTuplet = {
+  tuplet: Tuplet;
+  /** true なら連符の表示（数字＋括弧）を描かない（Issue #269） */
+  hideNumber: boolean;
+};
+
+/**
  * 同じ id の連続イベントを VexFlow の Tuplet に変換する。
  *
  * Tuplet の生成時点で各音符の tick に倍率が掛かる。Formatter より後に生成すると
@@ -26,8 +40,8 @@ export function vexFlowDotCount(dots?: 1 | 2): number {
 export function createVexFlowTuplets(
   events: readonly TupletEvent[],
   notes: readonly StaveNote[],
-): Tuplet[] {
-  const tuplets: Tuplet[] = [];
+): RenderedTuplet[] {
+  const tuplets: RenderedTuplet[] = [];
   let start = 0;
 
   while (start < events.length) {
@@ -63,10 +77,14 @@ export function createVexFlowTuplets(
       && info.numNotes > 0
       && info.notesOccupied > 0
     ) {
-      tuplets.push(new Tuplet(groupNotes as StaveNote[], {
-        numNotes: info.numNotes,
-        notesOccupied: info.notesOccupied,
-      }));
+      tuplets.push({
+        tuplet: new Tuplet(groupNotes as StaveNote[], {
+          numNotes: info.numNotes,
+          notesOccupied: info.notesOccupied,
+        }),
+        // 旧データには hideNumber が無いので、省略時は「表示する」に倒す（後方互換）
+        hideNumber: info.hideNumber === true,
+      });
     }
     start = end;
   }
@@ -86,8 +104,8 @@ export function createVexFlowTuplets(
  * 浄書の慣行。ビームが無い連符（4分音符の3連符や、休符を含むグループ）は
  * どこからどこまでが連符か分からなくなるので括弧を描く。
  */
-export function syncTupletBracketsWithBeams(tuplets: readonly Tuplet[]): void {
-  tuplets.forEach((tuplet) => {
+export function syncTupletBracketsWithBeams(tuplets: readonly RenderedTuplet[]): void {
+  tuplets.forEach(({ tuplet }) => {
     const hasUnbeamedNote = tuplet.getNotes().some((note) => !note.hasBeam());
     tuplet.setBracketed(hasUnbeamedNote);
   });

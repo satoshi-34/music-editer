@@ -53,6 +53,7 @@ export type Tool =
   | { mode: 'customSymbol'; symbolId: string }               // カスタム記号を付けるモード
   | { mode: 'customSymbolResize'; symbolId: string }         // カスタム記号のサイズを変更するモード（対象の音符をクリック）
   | { mode: 'customSymbolOffset'; symbolId: string }         // カスタム記号の位置を調整するモード（対象の音符をクリック）
+  | { mode: 'tupletNumberToggle' }                          // 連符数字（3 等）のグループ単位の表示/非表示を切り替えるモード（対象の連符の音符をクリック）
   | { mode: 'symbolAdjustResize' }                          // 標準記号（運指・強弱など）も含めた汎用サイズ調整モード（対象の音符をクリック→調整対象を選ぶ）
   | { mode: 'symbolAdjustOffset' }                           // 標準記号も含めた汎用位置調整モード（対象の音符をクリック→調整対象を選ぶ）
   | { mode: 'textElement'; textKind: TextElementKind }      // テキスト要素（歌詞・コード・テンポ・発想標語）を付けるモード
@@ -193,6 +194,7 @@ export default function Palette({
   const dotActive = 'duration' in value && !!value.dots;
   // 現在選ばれている連符の numNotes（3/5/6/7）。どれも選ばれていなければ null。
   const activeTupletNumNotes = 'duration' in value && value.tuplet ? value.tuplet.numNotes : null;
+  const tupletNumberToggleActive = 'mode' in value && value.mode === 'tupletNumberToggle';
   const selectedAccidental = 'mode' in value && value.mode === 'accidental' ? value.accidental : null;
   const selectedMicrotone = 'mode' in value && value.mode === 'microtone' ? value.type : null;
   const selectedRepeat = 'mode' in value && value.mode === 'repeat' ? value.repeat : null;
@@ -300,6 +302,20 @@ export default function Palette({
               </button>
             );
           })}
+          {/* 連符数字の表示/非表示トグル（Issue #269）:
+              このボタンを押してから連符の音符をクリックすると、そのグループの数字が消える
+              （もう一度クリックすると戻る）。同じ連符が続く曲では最初のグループにだけ
+              数字を書くのが浄書の慣行なので、2小節目以降を手動で消す用途に使う。 */}
+          <button
+            type="button"
+            onClick={() => onChange(tupletNumberToggleActive ? ROW1[2] : { mode: 'tupletNumberToggle' })}
+            title="連符数字の表示/非表示（選択して連符の音符をクリック。グループ単位で切り替わる）"
+            aria-label="連符数字の表示/非表示（選択して連符の音符をクリック。グループ単位で切り替わる）"
+            style={btnStyle(tupletNumberToggleActive, { fontSize: 11, fontWeight: 'bold', whiteSpace: 'nowrap' })}
+          >
+            {/* 「3」に取り消し線 = 連符数字を消す、と一目で分かる表示にする */}
+            <span style={{ textDecoration: 'line-through' }}>3</span>
+          </button>
           {/* タイ */}
           <button
             type="button"
