@@ -42,9 +42,55 @@ describe('describeDeletedNoteEvent', () => {
     expect(describeDeletedNoteEvent(chord)).toBe(`和音を削除しました${UNDO_HINT}`);
   });
 
-  it('連符の中の音符はグループごと消えるので「N連符グループ」と伝える', () => {
+  it('前後関係を渡さないときは、連符は従来どおり「N連符グループ」と伝える', () => {
     const tripletNote = note({ dur: '8', tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 } });
     expect(describeDeletedNoteEvent(tripletNote)).toBe(`3連符グループを削除しました${UNDO_HINT}`);
+  });
+
+  // Issue #283: 連符内の単音削除は「その位置が休符になる」だけでグループは残る。
+  // 実際の結果と文言がずれないよう、削除側と同じ判定（canReplaceTupletNoteWithRest）を通す。
+  describe('連符内の単音削除（Issue #283）', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+
+    it('グループに音符が残るなら「連符内の音符を休符にしました」', () => {
+      const events = [
+        note({ dur: '8', tuplet }),
+        note({ dur: '8', keys: ['d/4'], tuplet }),
+        note({ dur: '8', keys: ['e/4'], tuplet }),
+      ];
+      expect(describeDeletedNoteEvent(events[1], undefined, { events, index: 1 }))
+        .toBe(`連符内の音符を休符にしました${UNDO_HINT}`);
+    });
+
+    it('グループ最後の音符なら従来どおり「N連符グループを削除しました」', () => {
+      const events = [
+        note({ dur: '8', isRest: true, keys: ['b/4'], tuplet }),
+        note({ dur: '8', keys: ['d/4'], tuplet }),
+        note({ dur: '8', isRest: true, keys: ['b/4'], tuplet }),
+      ];
+      expect(describeDeletedNoteEvent(events[1], undefined, { events, index: 1 }))
+        .toBe(`3連符グループを削除しました${UNDO_HINT}`);
+    });
+
+    it('連符内の休符を消すときも「N連符グループを削除しました」（グループごと畳まれるため）', () => {
+      const events = [
+        note({ dur: '8', tuplet }),
+        note({ dur: '8', isRest: true, keys: ['b/4'], tuplet }),
+        note({ dur: '8', keys: ['e/4'], tuplet }),
+      ];
+      expect(describeDeletedNoteEvent(events[1], undefined, { events, index: 1 }))
+        .toBe(`3連符グループを削除しました${UNDO_HINT}`);
+    });
+
+    it('連符内の和音で符頭を選んでいるときは、前後関係を渡しても「和音の1音」が優先される', () => {
+      const events = [
+        note({ dur: '8', keys: ['c/4', 'e/4'], tuplet }),
+        note({ dur: '8', keys: ['d/4'], tuplet }),
+        note({ dur: '8', keys: ['e/4'], tuplet }),
+      ];
+      expect(describeDeletedNoteEvent(events[0], 0, { events, index: 0 }))
+        .toBe(`和音の1音を削除しました${UNDO_HINT}`);
+    });
   });
 
   it('連符の中の和音で符頭を選んでいるときは、連符より「和音の1音」が優先される', () => {

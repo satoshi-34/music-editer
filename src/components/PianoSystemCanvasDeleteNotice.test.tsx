@@ -155,13 +155,46 @@ describe('PianoSystemCanvas の削除通知と選択の自動解除（Issue #238
     expect(notices[0]).toContain('Cmd/Ctrl+Z');
   });
 
-  it('連符の中の音符を消すと「3連符グループを削除しました」と伝える', async () => {
-    // 実機で起きた事故そのもの: 1小節目の三連符が気づかぬうちに丸ごと消えていた。
+  it('連符の中の音符を消すと「連符内の音符を休符にしました」と伝える（Issue #283）', async () => {
+    // 仕様変更前はここでグループごと消えていた（文言も「3連符グループを削除しました」だった）。
+    // 今は「♪♪♪ → ♪休♪」のようにグループが残るので、文言もそれに合わせる。
     const data: MeasureData[] = [{
       events: [
         { dur: '8', isRest: false, keys: ['c/5'], tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 } },
         { dur: '8', isRest: false, keys: ['d/5'], tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 } },
         { dur: '8', isRest: false, keys: ['e/5'], tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 } },
+        { dur: '2', isRest: true, keys: ['b/4'] },
+        { dur: '4', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    const { svg, onChange, container } = renderScore(data);
+    const hit = noteHit(svg, 1);
+    fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, 1) });
+    await waitFor(() => {
+      expect(container.querySelector('rect.vf-note-selected')).toBeTruthy();
+    });
+
+    fireEvent.keyDown(window, { key: 'Delete' });
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+
+    // 実際の結果（真ん中だけが連符内の休符になり、グループは3イベントのまま）
+    const updated = onChange.mock.calls.at(-1)![0] as MeasureData[];
+    expect(updated[0].events).toHaveLength(5);
+    expect(updated[0].events[1].isRest).toBe(true);
+    expect(updated[0].events[1].tuplet?.id).toBe('t1');
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('連符内の音符を休符にしました');
+  });
+
+  it('グループに残る最後の音符を消したときは「3連符グループを削除しました」と伝える', async () => {
+    // 実機で起きた事故（三連符が気づかぬうちに丸ごと消える）の文言は、
+    // 実際にグループごと消えるこの経路で引き続き出す。
+    const data: MeasureData[] = [{
+      events: [
+        { dur: '8', isRest: true, keys: ['b/4'], tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 } },
+        { dur: '8', isRest: false, keys: ['d/5'], tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 } },
+        { dur: '8', isRest: true, keys: ['b/4'], tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 } },
         { dur: '2', isRest: true, keys: ['b/4'] },
         { dur: '4', isRest: true, keys: ['b/4'] },
       ],

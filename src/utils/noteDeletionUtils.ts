@@ -2,8 +2,10 @@
 // 単一パートの MeasureData[] に対する変換としては完全に一致していた。
 // このファイルはその共通ロジックを抽出したもの。
 //
-// 連符（tuplet）内のイベント削除は、既に共有化されている utils/tupletUtils.ts の
-// planTupletGroupDeletion を内部で呼び出す（グループごと通常の休符に置き換える仕様）。
+// 連符（tuplet）内のイベント削除は、既に共有化されている utils/tupletUtils.ts へ委ねている。
+// 単音なら canReplaceTupletNoteWithRest / buildTupletInnerRest でその位置だけを連符内の休符にし、
+// グループに音符が残らなくなったときだけ planTupletGroupDeletion でグループごと
+// 通常の休符に置き換える（Issue #283 の仕様変更）。
 //
 // なお PianoSystemCanvas の「声部2（下声）を選択しているときの Delete」は
 // Piano 固有の voices 構造を扱うため、この共通関数とは別に
@@ -11,7 +13,7 @@
 
 import type { HairpinMark, MeasureData, NoteEvent, TieArc } from '../types/storage';
 import type { ClefType } from '../components/clefUtils';
-import { planTupletGroupDeletion } from './tupletUtils';
+import { buildTupletInnerRest, canReplaceTupletNoteWithRest, planTupletGroupDeletion } from './tupletUtils';
 import { getVoiceEvents } from './voiceMeasureUtils';
 
 /**
@@ -149,9 +151,11 @@ type EventDeletionPlan =
  * 判定の**順序も仕様のうち**（Issue #223）:
  * 1. 和音（keys.length > 1）で keyIndex が指定されているときは、その1音だけを取り除く。
  *    連符内の和音でもこの分岐が優先され、tuplet は維持されたまま1音だけ消える
- * 2. 連符内のイベントなら、グループ全体を同じ長さの通常の休符に置き換える
- *    （connectedTuplet の音価バランスが崩れるのを防ぐため）
- * 3. それ以外（単音 or keyIndex未指定）はイベント自体を削除する
+ * 2. 連符内のイベントなら、
+ *    2-a. 単音（音符）はその位置だけを同じ音価の連符内休符へ置き換える（グループは残る・Issue #283）
+ *    2-b. グループに音符が残らなくなる場合・休符・和音丸ごとの場合は、
+ *         グループ全体を同じ長さの通常の休符に置き換える（音価バランスが崩れるのを防ぐため）
+ * 3. それ以外（連符外の単音 or keyIndex未指定）はイベント自体を削除する
  *
  * @param events 対象の声部のイベント列（書き換えない）
  * @param index 削除対象のイベントのインデックス
@@ -194,9 +198,29 @@ function planEventDeletion(
     };
   }
 
-  // 2. 連符内イベントの削除はグループごと通常の休符へ置き換える
-  //    （部分的に消すと連符の音価バランスが崩れ、描画と再生の拍計算が破綻するため）
+  // 2. 連符内イベントの削除
   if (targetEv.tuplet) {
+    // 2-a. 連符内の**単音**は、グループを残してその位置だけ連符内の休符にする（Issue #283）。
+    //
+    // 「♪♪♪ → ♪休♪」は浄書では普通に出てくる形なので、こちらを既定の結果にする。
+    // 置き換えは splice プランの特別な場合（同じ位置に1件だけ入れ替える＝ shift 0）として表せるため、
+    // 声部1・声部2の書き込み側は1行も変えずに済む（弧・松葉の後始末もそのまま効く）。
+    //
+    // shift が 0 なので後続の索引は動かないが、remapEventRefsAfterRemoval には必ず通すこと。
+    // 音符が休符になった以上、そこを終点として指していた弧・松葉は残せない（宙に浮く）ため、
+    // 「削除された区間 = [index, index]」として掃除させる必要がある。
+    if (canReplaceTupletNoteWithRest(events, index)) {
+      return {
+        kind: 'splice',
+        removeStart: index,
+        removeEnd: index,
+        replacement: [buildTupletInnerRest(targetEv, clef)],
+        shift: 0,
+      };
+    }
+
+    // 2-b. それ以外（休符・和音を丸ごと・グループ最後の1音）はグループごと通常の休符へ置き換える。
+    //      部分的に消すと連符の音価バランスが崩れ、描画と再生の拍計算が破綻するため。
     const plan = planTupletGroupDeletion(events, index, clef);
     // グループ範囲を特定できなかったときは何も変えない（呼び出し側は引数の参照をそのまま返す・Issue #245）。
     if (!plan) return null;
@@ -225,9 +249,13 @@ function planEventDeletion(
  *    連符内の和音でもこの分岐が優先され、tuplet は維持されたまま1音だけ消える（Issue #223）
  *    - 取り除いた音を fromKey とする arc（タイ/スラー）は削除する
  *    - 他のイベントから、削除イベントを toKey=取り除いた音 で指す arc も削除する
- * 2. 連符内のイベントなら、グループ全体を同じ長さの通常の休符に置き換える
- *    （connectedTuplet の音価バランスが崩れるのを防ぐため）
- *    - グループぶん並びが縮むので、3 と同じ arc / hairpin の後始末を行う（Issue #245）
+ * 2. 連符内のイベントなら、
+ *    - 単音（音符）はその位置だけを同じ音価の連符内休符へ置き換える。グループ・ビーム・
+ *      連符数字は残り、並びも縮まない（Issue #283）。休符になった位置を指していた
+ *      arc / hairpin は 3 と同じ後始末で取り除く
+ *    - グループに音符が残らなくなるとき（最後の1音）・休符・和音丸ごとの場合は、
+ *      グループ全体を同じ長さの通常の休符に置き換える（音価バランスが崩れるのを防ぐため）。
+ *      グループぶん並びが縮むので、3 と同じ arc / hairpin の後始末を行う（Issue #245）
  * 3. それ以外（単音 or keyIndex未指定）はイベント自体を削除し、
  *    - 削除イベントを終点(to)とする arc は削除、同小節で後続を指す toEventIndex は繰り上げる
  *    - hairpin（松葉）も同様に endEvent が削除対象なら削除、後続なら繰り上げる

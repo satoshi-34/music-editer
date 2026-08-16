@@ -2297,7 +2297,8 @@ export default function PianoSystemCanvas({
         if (e.key === 'Delete' || e.key === 'Backspace') {
           // 何を消したかの通知文は、書き換える前の譜面から作る（Issue #238）。
           const targetMeasure = partsScoreRef.current[partIndex]?.[measure];
-          const targetEvent = targetMeasure ? getVoiceEvents(targetMeasure, voiceIndex)[index] : undefined;
+          const targetEvents = targetMeasure ? getVoiceEvents(targetMeasure, voiceIndex) : undefined;
+          const targetEvent = targetEvents?.[index];
           // 声部2の削除は「素の splice」ではなく、弧（タイ/スラー）・松葉の終点まで
           // 面倒を見る共通関数へ通す（Issue #188）。連符グループの置き換えもこの中で行う。
           // keyIndex（クリックで選ばれた符頭）も渡すこと。渡さないと和音の1音を選んでいても
@@ -2305,7 +2306,11 @@ export default function PianoSystemCanvas({
           setS(prev => deleteVoiceEventFromMeasures(prev, sel.voiceIndex!, measure, index, keyIndex, clef));
           closeEventEditOverlaysFor(partIndex, measure, index, voiceIndex);
           setSelected(null);
-          if (targetEvent) notifyScoreEdit(describeDeletedNoteEvent(targetEvent, keyIndex));
+          // 連符内の単音は「グループごと削除」ではなく「その位置だけ休符化」になるため、
+          // 文言を決めるには前後のイベント列も要る（Issue #283）。
+          if (targetEvent) {
+            notifyScoreEdit(describeDeletedNoteEvent(targetEvent, keyIndex, targetEvents ? { events: targetEvents, index } : undefined));
+          }
           e.preventDefault(); return;
         }
         if (e.key === 'Escape') { setSelected(null); e.preventDefault(); return; }
@@ -2316,12 +2321,14 @@ export default function PianoSystemCanvas({
 
       if(e.key==='Delete'||e.key==='Backspace'){
         // 何を消したかの通知文は、書き換える前の譜面から作る（Issue #238）
-        const targetEvent=partsScoreRef.current[partIndex]?.[measure]?.events[index];
+        const targetEvents=partsScoreRef.current[partIndex]?.[measure]?.events;
+        const targetEvent=targetEvents?.[index];
         // StaffCanvas と完全一致していた削除ロジックは utils/noteDeletionUtils.ts に共通化した。
         setS(prev=>deleteEventFromMeasures(prev, measure, index, keyIndex, clef));
         closeEventEditOverlaysFor(partIndex, measure, index, voiceIndex);
         setSelected(null);
-        if(targetEvent)notifyScoreEdit(describeDeletedNoteEvent(targetEvent, keyIndex));
+        // 連符内の単音は「その位置だけ休符化」になるので、文言の判定に前後のイベント列を渡す（Issue #283）。
+        if(targetEvent)notifyScoreEdit(describeDeletedNoteEvent(targetEvent, keyIndex, targetEvents?{events:targetEvents,index}:undefined));
         e.preventDefault();return;
       }
       if(e.key==='ArrowUp'||e.key==='ArrowDown'){

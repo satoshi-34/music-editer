@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { NoteEvent } from '../types/storage';
 import {
   buildTupletGroupPlan,
+  buildTupletInnerRest,
   buildTupletRestReplacement,
   canInheritRestDisplayKey,
+  canReplaceTupletNoteWithRest,
   generateTupletId,
   planTupletGroupDeletion,
   planTupletReplacementForRest,
@@ -162,6 +164,87 @@ describe('tupletUtils', () => {
       const plan = planTupletReplacementForRest(rest, ['c/4'], { duration: '16' }, 'b/4', TRIPLET);
       expect(plan).not.toBeNull();
       expect(plan!.remainingBeats).toBeCloseTo(0, 6);
+    });
+  });
+
+  // Issue #283: 連符内の単音削除を「グループ削除」ではなく「連符内休符への置換」にする。
+  // 削除側（noteDeletionUtils）と通知側（scoreEditorNotices）が同じ判断を使うための唯一の判定元。
+  describe('canReplaceTupletNoteWithRest', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    /** 音符3つの3連符グループ。 */
+    const notes: NoteEvent[] = [
+      { dur: '8', isRest: false, keys: ['c/4'], tuplet },
+      { dur: '8', isRest: false, keys: ['d/4'], tuplet },
+      { dur: '8', isRest: false, keys: ['e/4'], tuplet },
+    ];
+
+    it('連符内の単音（他に音符が残る）なら true', () => {
+      expect(canReplaceTupletNoteWithRest(notes, 1)).toBe(true);
+    });
+
+    it('グループに残る最後の音符なら false（グループごと畳む側へ渡す）', () => {
+      const events: NoteEvent[] = [
+        { dur: '8', isRest: true, keys: ['b/4'], tuplet },
+        { dur: '8', isRest: false, keys: ['d/4'], tuplet },
+        { dur: '8', isRest: true, keys: ['b/4'], tuplet },
+      ];
+      expect(canReplaceTupletNoteWithRest(events, 1)).toBe(false);
+    });
+
+    it('休符・和音・連符でないイベント・範囲外は false', () => {
+      expect(canReplaceTupletNoteWithRest([{ dur: '8', isRest: true, keys: ['b/4'], tuplet }, ...notes], 0)).toBe(false);
+      expect(canReplaceTupletNoteWithRest([{ dur: '8', isRest: false, keys: ['c/4', 'e/4'], tuplet }, ...notes.slice(1)], 0)).toBe(false);
+      expect(canReplaceTupletNoteWithRest([{ dur: '4', isRest: false, keys: ['c/4'] }], 0)).toBe(false);
+      expect(canReplaceTupletNoteWithRest(notes, 9)).toBe(false);
+    });
+
+    it('グループを辿れない壊れたデータ（tuplet.id が空）は false', () => {
+      const broken: NoteEvent[] = [{ dur: '8', isRest: false, keys: ['c/4'], tuplet: { id: '', numNotes: 3, notesOccupied: 2 } }];
+      expect(canReplaceTupletNoteWithRest(broken, 0)).toBe(false);
+    });
+
+    it('隣のグループの音符は数に入れない（自グループだけを見る）', () => {
+      const other = { id: 't2', numNotes: 3, notesOccupied: 2 };
+      const events: NoteEvent[] = [
+        { dur: '8', isRest: true, keys: ['b/4'], tuplet },
+        { dur: '8', isRest: false, keys: ['d/4'], tuplet },
+        { dur: '8', isRest: true, keys: ['b/4'], tuplet },
+        { dur: '8', isRest: false, keys: ['e/4'], tuplet: other },
+      ];
+      // 隣（索引3）に音符があってもグループ t1 の最後の1音なので false
+      expect(canReplaceTupletNoteWithRest(events, 1)).toBe(false);
+    });
+  });
+
+  describe('buildTupletInnerRest', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+
+    it('音価・付点・tuplet を引き継ぎ、表示位置は音価ごとの標準位置にする', () => {
+      const rest = buildTupletInnerRest({ dur: '8', dots: 1, isRest: false, keys: ['c#/2'], tuplet }, 'treble');
+      // 消した音（c#/2）の音高は引き継がない＝五線から遠い休符が生まれない（Issue #226 と同じ問題を作らない）
+      expect(rest).toEqual({ dur: '8', dots: 1, isRest: true, keys: ['b/4'], tuplet });
+    });
+
+    it('連符ツールが作る連符内休符とまったく同じ形になる', () => {
+      const plan = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4');
+      const rest = buildTupletInnerRest(plan.groupEvents[0], 'treble');
+      expect(rest).toEqual(plan.groupEvents[1]);
+    });
+
+    it('音符に付いていた弧・アーティキュレーションは引き継がない', () => {
+      const rest = buildTupletInnerRest(
+        {
+          dur: '8',
+          isRest: false,
+          keys: ['c/4'],
+          tuplet,
+          arcs: [{ fromKey: 'c/4', toKey: 'e/4', toMeasureIndex: 0, toEventIndex: 2, kind: 'slur' }],
+          articulations: ['staccato'],
+        },
+        'treble'
+      );
+      expect(rest.arcs).toBeUndefined();
+      expect(rest.articulations).toBeUndefined();
     });
   });
 

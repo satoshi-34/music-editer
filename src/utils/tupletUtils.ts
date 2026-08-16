@@ -350,6 +350,63 @@ export type TupletGroupDeletion = {
 };
 
 /**
+ * 連符内の単音の Delete を「グループごと削除」ではなく
+ * 「その位置だけを連符内の休符へ置き換える」にできるかを判定する（Issue #283）。
+ *
+ * 浄書では「♪♪♪ → ♪休♪」のようにグループを残して1つだけ休符にする形が普通に出てくる
+ * （月光のような曲では連符内休符が頻出する）ため、単音の削除はこちらを既定にする。
+ *
+ * ここが**削除側と通知側の唯一の判断元**になる。同じ条件式を2か所に書くと、
+ * 片方だけ直したときに「文言と実際の結果が食い違う」事故になる（#280 で実際に起きた形）。
+ *
+ * false を返す＝従来どおりグループ全体を通常の休符へ畳む、という意味になる:
+ * - 連符ではない／グループの範囲を辿れない（壊れたデータ）
+ * - 対象が休符（すでに休符なので置き換える意味が無い。グループごと削除の入口として従来どおり残す）
+ * - 対象が和音（keys が2つ以上。和音は「1音だけ削除」が先に効くべきで、
+ *   keyIndex 無しで丸ごと消す経路は従来の挙動を変えない）
+ * - グループに残る音符がこれ1つだけ（全部休符になるなら、そこで初めて通常の休符へ畳む）
+ */
+export function canReplaceTupletNoteWithRest(events: NoteEvent[], index: number): boolean {
+  const target = events[index];
+  if (!target?.tuplet || target.isRest || target.keys.length !== 1) {
+    return false;
+  }
+  const range = findTupletGroupRange(events, index);
+  if (!range) {
+    return false;
+  }
+  // 自分以外に音符が1つでも残るならグループを維持する。
+  // 残らない（＝自分が最後の1音）なら、グループ全体を1つの通常休符へ畳む従来の経路へ落とす。
+  return events
+    .slice(range.start, range.end + 1)
+    .some((event, offset) => range.start + offset !== index && !event.isRest);
+}
+
+/**
+ * 連符内の音符を置き換える「連符内の休符」を作る（Issue #283）。
+ *
+ * 音価（dur / dots）と tuplet 情報をそのまま引き継ぐので、グループの音価バランスは変わらず、
+ * 連符の囲み・数字・ビームもそのまま残る。
+ *
+ * 表示位置は**音価ごとの標準位置**にする。連符ツールが作る連符内休符
+ * （buildTupletGroupPlan の restPart）とまったく同じ形にそろえるためで、
+ * 消した音の音高を引き継がないぶん、五線から遠い音を消したときも
+ * 休符が変な高さに残らない（Issue #226 と同じ問題を作らない）。
+ *
+ * 音符に付いていた弧・松葉・アーティキュレーション等は引き継がない。休符に付いたままだと
+ * 「音が無いのに記号だけ残る」ことになるうえ、連符内の休符には弧を貼れない（Issue #234）ため。
+ */
+export function buildTupletInnerRest(event: NoteEvent, clef: ClefType): NoteEvent {
+  return {
+    dur: event.dur,
+    isRest: true,
+    keys: [defaultRestDisplayKeyForDuration(clef, event.dur)],
+    dots: event.dots,
+    tuplet: event.tuplet,
+  };
+}
+
+/**
  * 連符内の1イベント（index）を削除するとき、同じ tuplet.id を持つ
  * 前後のイベントも含めたグループ全体を、同じ実長の「連符ではない」通常の休符に置き換える。
  * 部分削除だと連符の音価バランスが崩れて描画・再生が破綻するため、
