@@ -14,6 +14,7 @@
 // （SELECTION_CLAIMED_EVENT）の前例があるため、同じ作法にそろえた。
 
 import type { NoteEvent } from '../types/storage';
+import { canReplaceTupletNoteWithRest } from './tupletUtils';
 
 /** 削除など「編集で何が起きたか」を画面へ出すための通知イベント名 */
 export const SCORE_EDIT_NOTICE_EVENT = 'music-editer-score-edit-notice';
@@ -58,10 +59,20 @@ export function requestScoreSelectionClear(): void {
  * 分岐は utils/noteDeletionUtils.ts の deleteEventFromMeasures と**同じ順序**にしてある。
  * 実際に消えるものと文言がずれると、かえって混乱させてしまうため。
  *
+ * 連符の中は「その位置だけ休符になる」のか「グループごと消える」のかで結果がまるで違うので、
+ * 判定は自前で書かずに削除側と同じ canReplaceTupletNoteWithRest（Issue #283）へ通す。
+ * 同じ条件式を2か所へ書くと、片方だけ直したときに文言と結果が食い違う（#280 の再発防止）。
+ *
  * @param event 削除対象のイベント（削除前の状態を渡すこと）
  * @param keyIndex 和音のうちクリックで選ばれていた符頭の位置。未指定ならイベント全体が対象
+ * @param tupletContext 連符の判定に必要な前後関係（その声部の events と、対象の位置）。
+ *   省略すると連符はすべて「グループ削除」の文言になるため、削除を実行する画面からは必ず渡すこと
  */
-export function describeDeletedNoteEvent(event: NoteEvent, keyIndex?: number): string {
+export function describeDeletedNoteEvent(
+  event: NoteEvent,
+  keyIndex?: number,
+  tupletContext?: { events: NoteEvent[]; index: number }
+): string {
   // 1. 和音の1音だけを取り除くケース（連符の中の和音でもこちらが優先される）
   if (
     !event.isRest &&
@@ -72,8 +83,13 @@ export function describeDeletedNoteEvent(event: NoteEvent, keyIndex?: number): s
   ) {
     return `和音の1音を削除しました${UNDO_HINT}`;
   }
-  // 2. 連符の中のイベントは、グループ全体が同じ長さの休符へ置き換わる
+  // 2. 連符の中のイベント
   if (event.tuplet) {
+    // 2-a. 単音はその位置だけが連符内の休符になる（グループは残る）
+    if (tupletContext && canReplaceTupletNoteWithRest(tupletContext.events, tupletContext.index)) {
+      return `連符内の音符を休符にしました${UNDO_HINT}`;
+    }
+    // 2-b. それ以外はグループ全体が同じ長さの休符へ置き換わる
     return `${event.tuplet.numNotes}連符グループを削除しました${UNDO_HINT}`;
   }
   // 3. それ以外はイベントそのものが消える
