@@ -65,7 +65,12 @@ const noteEventArbitrary: fc.Arbitrary<NoteEvent> = fc.record({
   isRest: fc.boolean(),
   // この property は「有効な保存データ」の復元を確認するテストなので、
   // VexFlow と保存バリデーションの両方で扱える音名だけを生成する。
-  keys: fc.array(noteKeyArbitrary, { minLength: 1, maxLength: 3 })
+  //
+  // 同じ音高を重複させないのは Issue #281 以降の約束。読込時に同音の重複は1音へ畳まれる
+  // ようになったため、["c/3","c/3"] のような和音はもう保存データの正しい姿ではなく、
+  // 「読み込んだら書いたとおりに戻る」という、ここで確かめたい性質の対象外になった
+  // （畳まれること自体は chordKeyUtils.test.ts と moonlightRegressionLoad.test.ts が固定している）。
+  keys: fc.uniqueArray(noteKeyArbitrary, { minLength: 1, maxLength: 3 })
 });
 
 const measureDataArbitrary: fc.Arbitrary<MeasureData> = fc.record({
