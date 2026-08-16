@@ -33,10 +33,12 @@ import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/
 import {
   SCORE_SELECTION_CLEAR_EVENT,
   describeAbsorbedChordKey,
+  describeActiveVoiceSwitched,
   describeDeletedArc,
   describeDeletedHairpin,
   describeDeletedNoteEvent,
   notifyScoreEdit,
+  requestActiveVoiceChange,
 } from '../utils/scoreEditorNotices';
 import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
@@ -3935,6 +3937,131 @@ export default function PianoSystemCanvas({
         const activeVfNotes = activeRenderedEntry?.vfNotes ?? [];
         const activeEvs = activeRenderedEntry?.sourceEvents ?? [];
 
+        // VexFlow の音符オブジェクトから、当たり判定に必要な最小限のメソッドだけを見る型。
+        // 実体は StaveNote だが、描画結果に依存する部分（getBoundingBox）は環境によって
+        // 返らないことがあるため、すべて省略可能として扱う。
+        type VfNoteLike = {
+          getAbsoluteX?: () => number;
+          getBoundingBox?: () => { getX?: () => number; getW?: () => number; getY?: () => number; getH?: () => number } | undefined;
+        };
+
+        /**
+         * 音符1つぶんの「当たり判定の幾何」と「その位置は符頭を選ぶクリックか」の判定式を作る。
+         *
+         * Issue #258 で、アクティブ声部の当たり判定を作るコードから関数として切り出した。
+         * 非アクティブ声部の符頭も（選択専用の当たり判定として）同じ式で判定するためで、
+         * 声部ごとに似た判定式を2つ持つと、片方だけ直したときに食い違う
+         * （#280 で実際に起きた「同じロジックの2枚目」の事故）。
+         *
+         * 渡すのは声部ごとの配列（evs / vfNotes と、その声部の音符X座標 anchors / 中間点 mids）で、
+         * 声部そのものは知らない純粋な幾何計算にしてある。
+         */
+        const buildNoteHitGeometry = (
+          evs: RenderNoteEvent[],
+          vfNotes: StaveNote[],
+          j: number,
+          anchors: number[],
+          mids: number[],
+        ) => {
+          const n = vfNotes[j] as unknown as VfNoteLike;
+          const rl=j===0?measLeft:mids[j-1], rr=j===vfNotes.length-1?measRight:mids[j];
+          // この音符イベントへクリックを届けるための透明 rect 範囲。
+          // 左右は隣の音符との中間点で分割し、CELL_PAD だけ広げています。
+          // 選択の青枠はここから独立した「表示」なので、クリック範囲調整はここを見る。
+          let xl=Math.max(measLeft+1,rl-CELL_PAD), xr=Math.min(measRight-1,rr+CELL_PAD);
+          if(xr-xl<HIT_MIN_W){const h=(HIT_MIN_W-(xr-xl))/2;xl=Math.max(measLeft+1,xl-h);xr=Math.min(measRight-1,xr+h);}
+          const wHit=Math.max(HIT_MIN_W,xr-xl);
+          // 和音判定Y範囲：五線 ± 3加線の固定範囲（音符の位置に依存しない）。
+          //
+          // Issue #219: 多段譜（大譜表・四重奏・編成譜）では、この固定範囲だけを
+          // 隣のパートとの中間線（staveTop / staveBot。小節の背景 .vf-hit と同じ境界）で
+          // クリップする。パート間隔が 100 より狭い譜面（四重奏の既定 80・編成譜の 60）では
+          // 上下のパートの固定範囲が縦に重なっており、SVG は「後から描いた要素が手前」なので
+          // 下のパートの当たり判定が上のパートの守備範囲を奪う。その結果、上の段へ低い音を
+          // 置こうとしたクリックが下の段に渡り、極端な上加線の音として入っていた。
+          // クリップすると「近い方の五線」へ必ず帰属する（境界＝両五線のちょうど中間）。
+          //
+          // クリップするのはこの固定範囲だけで、下の符頭ぶんの拡張（NOTE_HIT_EXTENSION）は
+          // クリップしない。拡張ごとクリップすると、五線から遠い音符の符頭が
+          // 「中心ちょうどしか押せない」状態になり Issue #218 を作り直してしまうため。
+          const fixedTopY=stave.getYForLine(CHORD_LEDGER_TOP);
+          const fixedBotY=stave.getYForLine(CHORD_LEDGER_BOT);
+          const chordTopY=Math.max(fixedTopY,staveTop);
+          const chordBotY=Math.min(fixedBotY,staveBot);
+          // 選択・ヒット領域のY範囲（Issue #218）。
+          // 休符は五線内に描かれるので従来どおり固定範囲のまま扱い、
+          // 音符だけ符頭の位置に応じて範囲を広げる。
+          const keyLines=evs[j]?.isRest?null:noteKeyLineExtent(evs[j]?.keys??[],k2l);
+          // 広げ幅は符頭1個分の半分（0.5ライン）だけ。符頭の高さがちょうど1ライン分なので、
+          // これで符頭の描画範囲を過不足なく覆える（選択が成立するのは符頭中心±0.25ライン
+          // なので、その帯も丸ごと入る）。必要最小限にするのは、広げたぶんが隣のパートの
+          // 領域へ重なるため（下記 NOTE_HIT_EXTENSION の説明を参照）。
+          // 符頭が固定範囲の内側にいる普通の音符では、下の Math.min / Math.max によって
+          // この値は使われない（＝ヒット領域はクリップ後の固定範囲そのものになる）。
+          const noteHeadTopY=keyLines?stave.getYForLine(keyLines.minLine-0.5):chordTopY;
+          const noteHeadBotY=keyLines?stave.getYForLine(keyLines.maxLine+0.5):chordBotY;
+          // 符頭の実際の描画X範囲。getAbsoluteX()はtickの左端でnotehead自体より左になるため
+          // getBoundingBox() で実際に描画された領域を取得する
+          const bb=n?.getBoundingBox?.();
+          const noteVisualLeft=bb?.getX?.()??anchors[j];
+          const noteVisualRight=bb?((bb.getX?.()??anchors[j])+(bb.getW?.()??12)):anchors[j]+12;
+          // yHit は2枚に分かれたヒット rect を合わせた外接範囲の上端。
+          // rect の座標には使わなくなったが、選択枠（eventBoxY のフォールバック）が引き続き使う。
+          const yHit=Math.min(chordTopY,noteHeadTopY);
+          // 既存の符頭を選択できるかの判定（findKeyIndexAtLine）で使う丸め。
+          // 丸め先の候補を「新規入力できる範囲」だけに限ると、そこより外にいる音符の
+          // 線には決して一致せず選択不能のままになるため、その音符の線まで候補を広げる。
+          //
+          // 広げるのは「符頭の線ちょうど」まで（ヒット領域のような ±1 はしない）。
+          // snapLine は範囲の外のクリックを範囲の端へ丸める＝端にいる音符へ吸い寄せる
+          // 性質があり、この吸い寄せは従来からの挙動なので壊さない
+          // （符頭より外側にもう1本候補を足すと、そちらが最寄りになって選択できなくなる）。
+          //
+          // click と mousemove（ホバーのカーソル形状）で必ず同じ式を使うため、
+          // ここで1つの関数にまとめておく（判定がずれるとホバー表示が信用できなくなる）。
+          const snapLineForKeySelect=(y:number)=>snapLine(
+            stave,y,
+            Math.min(-EXTRA_TOP,keyLines?keyLines.minLine:-EXTRA_TOP),
+            Math.max(4+EXTRA_BOTTOM,keyLines?keyLines.maxLine:4+EXTRA_BOTTOM)
+          );
+          /**
+           * SVG内部座標（raw 単位）で「この音符のどの符頭を選ぶクリックか」を返す（-1 なら選択にならない）。
+           *
+           * 選択になるかどうかを判定する式は**この関数だけ**にする。
+           * click（実際の選択）・mousemove（カーソル形状とホバー演出）・
+           * 再クリック巡回（Issue #264）・非アクティブ声部の選択（Issue #258）が
+           * 同じ関数を呼ぶことで、「ホバーでは選択に見えるのに押すと和音追加になる」
+           * 「巡回では選べるのに普通に押すと選べない」といった食い違いが構造的に起きないようにしている。
+           */
+          const resolveSelectableKeyIndexAt=(lx:number,ly:number):number=>{
+            const ev=evs[j];
+            if(!ev||ev.isRest)return -1;
+            const pad=keySelectXPad(svg);
+            if(lx<noteVisualLeft-pad||lx>noteVisualRight+pad)return -1;
+            const atLine=findKeyIndexAtLine(ev.keys,snapLineForKeySelect(ly),k2l);
+            if(atLine>=0)return atLine;
+            if(ly<chordTopY||ly>chordBotY){
+              // 固定範囲（五線±3加線）の外は挿入も和音追加も起きない帯なので、
+              // 広め（±1ライン）に吸い寄せても副作用が無い（Issue #255）。
+              return findNearestKeyIndexWithinLines(ev.keys,ly,stave,k2l,OUTER_KEY_SELECT_MAX_LINES);
+            }
+            // 五線の中（和音追加ゾーン）でも、符頭のX範囲に入っているクリックは
+            // 和音追加より個別選択を優先する（Issue #271・案A）。X範囲を下の
+            // isOnNote（和音追加ゾーン）とまったく同じ式にしてあるのが要点で、
+            // 「和音追加になり得る場所でだけ選択が先に立つ」＝符頭から横に離れた
+            // 位置での挿入・和音追加の挙動は1pxも変えない。
+            if(lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD){
+              return findNearestKeyIndexWithinLines(ev.keys,ly,stave,k2l,INNER_KEY_SELECT_MAX_LINES);
+            }
+            return -1;
+          };
+          return {
+            xl,wHit,chordTopY,chordBotY,keyLines,noteHeadTopY,noteHeadBotY,
+            bb,noteVisualLeft,noteVisualRight,yHit,
+            snapLineForKeySelect,resolveSelectableKeyIndexAt,
+          };
+        };
+
         // アクティブ声部の j 番目のイベントを書き換える共通ヘルパー。
         // voiceIndex 0 のときは withVoiceEventsUpdated が measure.events を直接更新するので、
         // 従来通りの保存形（events 直接更新）と完全に同じ挙動になる（リグレッション防止）。
@@ -4319,6 +4446,120 @@ export default function PianoSystemCanvas({
           svgRoot.appendChild(keySignatureDebugRect);
         }
 
+        // ── 非アクティブ声部の符頭を「選ぶだけ」の当たり判定（Issue #258）──
+        //
+        // #105 で「当たり判定はアクティブ声部にしか作らない」設計にしたところ、
+        // 非アクティブ声部の音符をクリックしても**無言で何も起きない**状態になっていた
+        // （実機テストで「右手の下声が触れない」として報告された）。運用者裁定により、
+        // 「選択のクリックは全声部・編集の入力はアクティブ声部だけ」へ仕様を変更する。
+        // #105 が防ぎたかった「気づかない誤編集」は、切り替えを必ず通知することで引き継ぐ。
+        //
+        // ここで守っていること:
+        //  - 作る rect は符頭1つぶんの大きさだけにする（アクティブ声部のようなセル全幅にしない）。
+        //    広い rect にすると符頭から離れた場所のクリックまで飲み込んでしまい、
+        //    アクティブ声部への新規入力（挿入ゾーン・小節背景）が効かない帯ができてしまう
+        //  - この rect を作るのはアクティブ声部の rect を作る**前**。SVG は後から追加した要素が
+        //    手前になるので、重なった場所では必ずアクティブ声部が優先される
+        //    （＝同じ声部内・単声部譜面のクリックの挙動は1pxも変わらない）
+        //  - ハンドラがするのは「声部の切り替え・選択・通知・試聴」だけで、
+        //    音符を増やす/置き換える編集は一切しない
+        renderedVoiceEntries.forEach((entry)=>{
+          if(entry.voiceIndex===activeVoiceIndex)return;
+          const otherVfNotes=entry.vfNotes;
+          const otherEvs=entry.sourceEvents;
+          if(otherVfNotes.length===0)return;
+          // 切り替え先の声部。声部トグルは 0/1 の2つだけなので、型もその2値へそろえる。
+          const targetVoiceIndex:0|1=entry.voiceIndex===1?1:0;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const anchors=otherVfNotes.map((n:any,j)=>n.getAbsoluteX?n.getAbsoluteX():measLeft+(j+1)*(measRight-measLeft)/(otherVfNotes.length+1));
+          const mids=anchors.slice(0,-1).map((a,j)=>(a+anchors[j+1])/2);
+          otherVfNotes.forEach((_n,j)=>{
+            const ev=otherEvs[j];
+            // 休符は選択の対象にしない（符頭が無いので「掴んだ」と言える場所が無い）。
+            // 表示専用のパディング休符（realEventCount より後ろ）も保存データに無いので対象外。
+            if(!ev||ev.isRest||j>=entry.realEventCount)return;
+            const {noteVisualLeft,noteVisualRight,resolveSelectableKeyIndexAt}=
+              buildNoteHitGeometry(otherEvs,otherVfNotes,j,anchors,mids);
+            const cycleId=`note:p${pi}:m${absI}:v${entry.voiceIndex}:e${j}`;
+            /** その画面座標が、この音符のどの符頭を掴むクリックかを返す（-1 なら掴んでいない） */
+            const resolveKeyIndexAtClient=(clientX:number,clientY:number):number=>{
+              const {x:lx,y:ly}=clientToGroup(svg,svgRoot,clientX,clientY);
+              return resolveSelectableKeyIndexAt(lx,ly);
+            };
+            /** 声部を切り替えてこの符頭を選ぶ。編集は一切しない */
+            const switchVoiceAndSelect=(clientX:number,clientY:number)=>{
+              const keyIndex=resolveKeyIndexAtClient(clientX,clientY);
+              if(keyIndex<0)return;
+              setSelectedArc(null);
+              setSelectedHairpin(null);
+              setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:entry.voiceIndex,keyIndex});
+              requestActiveVoiceChange(targetVoiceIndex);
+              // 「勝手にモードが変わった」と感じさせないため、切り替えは必ず画面に出す（Issue #238 の通知）
+              notifyScoreEdit(describeActiveVoiceSwitched(targetVoiceIndex));
+              playNoteEvent({...ev,keys:[ev.keys[keyIndex]]}, part.playbackInstrument);
+            };
+            // 符頭ごとに1枚ずつ rect を作る。和音は符頭が縦に離れて並ぶので、
+            // 上端〜下端を1枚で覆うと符頭と符頭のあいだ（何も無い場所）まで飲み込んでしまう。
+            const xPad=keySelectXPad(svg);
+            const rectLeft=noteVisualLeft-xPad;
+            const rectWidth=Math.max(0,(noteVisualRight+xPad)-rectLeft);
+            ev.keys.forEach((key)=>{
+              const line=k2l(key);
+              // 符頭の高さはちょうど1ライン分なので、その線の ±0.5 ラインが符頭の描画範囲になる
+              const top=stave.getYForLine(line-0.5);
+              const bot=stave.getYForLine(line+0.5);
+              const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');
+              // クラス名はアクティブ声部の .vf-note-hit と分ける。
+              // .vf-note-hit は「アクティブ声部の編集用ヒット領域」を指す名前として
+              // CSS・テストが参照しているので、意味の違うものへ同じ名前を付けない。
+              rect.setAttribute('class','vf-inactive-voice-note-hit');
+              rect.setAttribute('data-measure',String(absI));
+              rect.setAttribute('data-note',String(j));
+              rect.setAttribute('data-voice',String(entry.voiceIndex));
+              rect.setAttribute('x',String(rectLeft));
+              rect.setAttribute('y',String(top));
+              rect.setAttribute('width',String(rectWidth));
+              rect.setAttribute('height',String(Math.max(0,bot-top)));
+              rect.setAttribute('fill','transparent');
+              rect.setAttribute('stroke','none');
+              rect.setAttribute('pointer-events','all');
+              rect.style.cursor='pointer';
+              // 重なった場所の再クリック巡回（Issue #264）にも他声部の符頭を載せる。
+              // cycleId には声部が入っているので、同じ位置の声部違いを行き来できる。
+              registerClickCycleTarget(rect,{
+                id:cycleId,
+                canActivate:(cx,cy)=>resolveKeyIndexAtClient(cx,cy)>=0,
+                activate:switchVoiceAndSelect,
+              });
+              // 小節の範囲選択ドラッグが符頭の上で止まらないようにする（アクティブ声部の rect と同じ理由）
+              attachMeasureSelectDrag(rect);
+              // 挿入位置のガイド（縦線・和音ゾーンのストライプ）は、この符頭の上では意味が無いので消す。
+              // 出したままだと「ここに音符が入る」と誤解させてしまう。
+              rect.addEventListener('mousemove',()=>{hideGuide();hideChordGuide();});
+              rect.addEventListener('click',e=>{
+                if(disabled)return;
+                e.stopPropagation();
+                const me=e as MouseEvent;
+                // 小節選択ツール中と Shift+クリックは、アクティブ声部の符頭と同じく小節選択のまま
+                if(isSelectTool||me.shiftKey){
+                  if(measureDragMovedRef.current){
+                    measureDragMovedRef.current=false;
+                    return;
+                  }
+                  onMeasureSelect?.(absI,me.shiftKey);
+                  return;
+                }
+                // 同じ場所の再クリックなら、奥に隠れている対象（別の声部の符頭・スラー等）へ譲る
+                if(tryClickCycle(cycleId,me.clientX,me.clientY))return;
+                switchVoiceAndSelect(me.clientX,me.clientY);
+                // 次に同じ場所を押したら奥の候補へ進めるよう、選んだことを覚えておく
+                armClickCycleFor(cycleId,me.clientX,me.clientY);
+              });
+              svgRoot.appendChild(rect);
+            });
+          });
+        });
+
         if(activeVfNotes.length>0){
           const anchors=activeVfNotes.map((n:any,j)=>n.getAbsoluteX?n.getAbsoluteX():measLeft+(j+1)*(measRight-measLeft)/(activeVfNotes.length+1));
           const mids=anchors.slice(0,-1).map((a,j)=>(a+anchors[j+1])/2);
@@ -4329,47 +4570,17 @@ export default function PianoSystemCanvas({
               // 背景クリックを優先して、調号変更や新規入力をしやすくする。
               return;
             }
-            const rl=j===0?measLeft:mids[j-1], rr=j===activeVfNotes.length-1?measRight:mids[j];
-            // この音符イベントへクリックを届けるための透明 rect 範囲。
-            // 左右は隣の音符との中間点で分割し、CELL_PAD だけ広げています。
-            // 選択の青枠はここから独立した「表示」なので、クリック範囲調整はここを見る。
-            let xl=Math.max(measLeft+1,rl-CELL_PAD), xr=Math.min(measRight-1,rr+CELL_PAD);
-            if(xr-xl<HIT_MIN_W){const h=(HIT_MIN_W-(xr-xl))/2;xl=Math.max(measLeft+1,xl-h);xr=Math.min(measRight-1,xr+h);}
-            const wHit=Math.max(HIT_MIN_W,xr-xl);
-            // 和音判定Y範囲：五線 ± 3加線の固定範囲（音符の位置に依存しない）。
+            // ヒット領域の幾何と「符頭を選ぶクリックか」の判定式は、声部をまたいで
+            // 共用するために buildNoteHitGeometry へ切り出してある（Issue #258）。
+            // 以降のコードから見た値・名前は切り出す前とまったく同じ。
+            const {
+              xl,wHit,chordTopY,chordBotY,noteHeadTopY,noteHeadBotY,
+              bb,noteVisualLeft,noteVisualRight,yHit,
+              snapLineForKeySelect,resolveSelectableKeyIndexAt,
+            } = buildNoteHitGeometry(activeEvs,activeVfNotes,j,anchors,mids);
+            // 各値の意味と、そう決めた理由（Issue #218 / #219 / #255 / #271）は
+            // buildNoteHitGeometry の中にまとめてある。
             //
-            // Issue #219: 多段譜（大譜表・四重奏・編成譜）では、この固定範囲だけを
-            // 隣のパートとの中間線（staveTop / staveBot。小節の背景 .vf-hit と同じ境界）で
-            // クリップする。パート間隔が 100 より狭い譜面（四重奏の既定 80・編成譜の 60）では
-            // 上下のパートの固定範囲が縦に重なっており、SVG は「後から描いた要素が手前」なので
-            // 下のパートの当たり判定が上のパートの守備範囲を奪う。その結果、上の段へ低い音を
-            // 置こうとしたクリックが下の段に渡り、極端な上加線の音として入っていた。
-            // クリップすると「近い方の五線」へ必ず帰属する（境界＝両五線のちょうど中間）。
-            //
-            // クリップするのはこの固定範囲だけで、下の符頭ぶんの拡張（NOTE_HIT_EXTENSION）は
-            // クリップしない。拡張ごとクリップすると、五線から遠い音符の符頭が
-            // 「中心ちょうどしか押せない」状態になり Issue #218 を作り直してしまうため。
-            const fixedTopY=stave.getYForLine(CHORD_LEDGER_TOP);
-            const fixedBotY=stave.getYForLine(CHORD_LEDGER_BOT);
-            const chordTopY=Math.max(fixedTopY,staveTop);
-            const chordBotY=Math.min(fixedBotY,staveBot);
-            // 選択・ヒット領域のY範囲（Issue #218）。
-            // 休符は五線内に描かれるので従来どおり固定範囲のまま扱い、
-            // 音符だけ符頭の位置に応じて範囲を広げる。
-            const keyLines=activeEvs[j]?.isRest?null:noteKeyLineExtent(activeEvs[j]?.keys??[],k2l);
-            // 広げ幅は符頭1個分の半分（0.5ライン）だけ。符頭の高さがちょうど1ライン分なので、
-            // これで符頭の描画範囲を過不足なく覆える（選択が成立するのは符頭中心±0.25ライン
-            // なので、その帯も丸ごと入る）。必要最小限にするのは、広げたぶんが隣のパートの
-            // 領域へ重なるため（下記 NOTE_HIT_EXTENSION の説明を参照）。
-            // 符頭が固定範囲の内側にいる普通の音符では、下の Math.min / Math.max によって
-            // この値は使われない（＝ヒット領域はクリップ後の固定範囲そのものになる）。
-            const noteHeadTopY=keyLines?stave.getYForLine(keyLines.minLine-0.5):chordTopY;
-            const noteHeadBotY=keyLines?stave.getYForLine(keyLines.maxLine+0.5):chordBotY;
-            // 符頭の実際の描画X範囲。getAbsoluteX()はtickの左端でnotehead自体より左になるため
-            // getBoundingBox() で実際に描画された領域を取得する
-            const bb=n.getBoundingBox?.();
-            const noteVisualLeft=bb?.getX?.()??anchors[j];
-            const noteVisualRight=bb?((bb.getX?.()??anchors[j])+(bb.getW?.()??12)):anchors[j]+12;
             // ヒット rect は和音ゾーン全体（五線±3加線）に加えて、
             // その音符が五線から離れている場合はその符頭までをカバーする（hitLines）。
             // 音符のY中心だけをカバーすると加線域へのクリックが insertRect に落ちて和音追加できない。
@@ -4394,61 +4605,10 @@ export default function PianoSystemCanvas({
             //   拡張部（固定範囲の外側）           = 符頭の実描画X範囲 ± keySelectXPad(svg) だけ
             // ハンドラは全 rect に同じものを付けるので、判定式（選択になるか・挿入になるか）は
             // 1本のままで、変わるのは「クリックがこの音符へ届くX範囲」だけ。
-            // yHit は2枚を合わせた外接範囲の上端。rect の座標には使わなくなったが、
-            // 下の選択枠（eventBoxY のフォールバック）が引き続き使う。
-            const yHit=Math.min(chordTopY,noteHeadTopY);
-            // 既存の符頭を選択できるかの判定（findKeyIndexAtLine）で使う丸め。
-            // 丸め先の候補を「新規入力できる範囲」だけに限ると、そこより外にいる音符の
-            // 線には決して一致せず選択不能のままになるため、その音符の線まで候補を広げる。
-            //
-            // 広げるのは「符頭の線ちょうど」まで（ヒット領域のような ±1 はしない）。
-            // snapLine は範囲の外のクリックを範囲の端へ丸める＝端にいる音符へ吸い寄せる
-            // 性質があり、この吸い寄せは従来からの挙動なので壊さない
-            // （符頭より外側にもう1本候補を足すと、そちらが最寄りになって選択できなくなる）。
-            //
-            // click と mousemove（ホバーのカーソル形状）で必ず同じ式を使うため、
-            // ここで1つの関数にまとめておく（判定がずれるとホバー表示が信用できなくなる）。
-            const snapLineForKeySelect=(y:number)=>snapLine(
-              stave,y,
-              Math.min(-EXTRA_TOP,keyLines?keyLines.minLine:-EXTRA_TOP),
-              Math.max(4+EXTRA_BOTTOM,keyLines?keyLines.maxLine:4+EXTRA_BOTTOM)
-            );
-
             // ── 再クリック巡回（Issue #264）でこの音符を選ぶための道具立て ──
             // 巡回で選ばれたときにやるのは「選択」だけ。音符を増やす・置き換える等の
             // 編集は絶対にしない（奥に隠れた対象を選びたいだけのクリックなので）。
             const noteCycleId=`note:p${pi}:m${absI}:v${activeVoiceIndex}:e${j}`;
-            /**
-             * SVG内部座標（raw 単位）で「この音符のどの符頭を選ぶクリックか」を返す（-1 なら選択にならない）。
-             *
-             * 選択になるかどうかを判定する式は**この関数だけ**にする。
-             * click（実際の選択）・mousemove（カーソル形状とホバー演出）・
-             * 再クリック巡回（Issue #264）の3箇所が同じ関数を呼ぶことで、
-             * 「ホバーでは選択に見えるのに押すと和音追加になる」「巡回では選べるのに
-             * 普通に押すと選べない」といった食い違いが構造的に起きないようにしている。
-             */
-            const resolveSelectableKeyIndexAt=(lx:number,ly:number):number=>{
-              const ev=activeEvs[j];
-              if(!ev||ev.isRest)return -1;
-              const pad=keySelectXPad(svg);
-              if(lx<noteVisualLeft-pad||lx>noteVisualRight+pad)return -1;
-              const atLine=findKeyIndexAtLine(ev.keys,snapLineForKeySelect(ly),k2l);
-              if(atLine>=0)return atLine;
-              if(ly<chordTopY||ly>chordBotY){
-                // 固定範囲（五線±3加線）の外は挿入も和音追加も起きない帯なので、
-                // 広め（±1ライン）に吸い寄せても副作用が無い（Issue #255）。
-                return findNearestKeyIndexWithinLines(ev.keys,ly,stave,k2l,OUTER_KEY_SELECT_MAX_LINES);
-              }
-              // 五線の中（和音追加ゾーン）でも、符頭のX範囲に入っているクリックは
-              // 和音追加より個別選択を優先する（Issue #271・案A）。X範囲を下の
-              // isOnNote（和音追加ゾーン）とまったく同じ式にしてあるのが要点で、
-              // 「和音追加になり得る場所でだけ選択が先に立つ」＝符頭から横に離れた
-              // 位置での挿入・和音追加の挙動は1pxも変えない。
-              if(lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD){
-                return findNearestKeyIndexWithinLines(ev.keys,ly,stave,k2l,INNER_KEY_SELECT_MAX_LINES);
-              }
-              return -1;
-            };
             /** 画面座標版（再クリック巡回はブラウザのイベント座標で呼ばれるため） */
             const resolveSelectableKeyIndex=(clientX:number,clientY:number):number=>{
               const{x:lx,y:ly}=clientToGroup(svg,svgRoot,clientX,clientY);
