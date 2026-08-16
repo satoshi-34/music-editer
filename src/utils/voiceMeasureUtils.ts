@@ -1,4 +1,4 @@
-import type { MeasureData, NoteEvent, VoiceData } from '../types/storage';
+import type { MeasureData, NoteEvent, PartData, VoiceData } from '../types/storage';
 
 export type PlaybackMeasureEventWithStart = NoteEvent & {
   /**
@@ -152,6 +152,67 @@ export function withVoiceEventsUpdated(
     events: updater(existingVoices[voiceIndex].events),
   };
   return { ...measure, voices: existingVoices };
+}
+
+/**
+ * 中身が空になった末尾の声部を畳んで、単声部の小節へ戻す（Issue #305）。
+ *
+ * なぜ必要か: 多声かどうかの判定は `getMeasureVoices(measure).length > 1` なので、
+ * **中身が空でも器（voices[1]）が残っていれば多声小節**と数えられてしまう。
+ * その状態では声部1の符幹が上向きに固定され、スラーも符幹先端側へアンカーされたままになり、
+ * 「下声を全部消したのに2声部の残骸が残る」という見た目になる。
+ * #112 の教訓「クリックで空の `voices[1]` を作らない」の対称形＝「消し切ったら残さない」がこれ。
+ *
+ * 畳み方の規則:
+ * - 対象は**末尾から**連続する「イベント0件の声部」だけ。間に挟まった空の声部は畳まない。
+ *   途中を抜くと後ろの声部の番号がずれ、その声部の弧が指す先（声部ローカルの索引）まで
+ *   意味が変わってしまうため（`.claude/specs/voice2-arc-support/design.md` §2 案A）
+ * - 声部1しか残らなくなったら `voices` キーごと削除して、最初から単声部で書いた小節と
+ *   まったく同じ保存形式へ戻す（#294 の「戻すときはプロパティごと削除」と同じ考え方）
+ * - 「声部2以降」という数え方にしてあるので、将来3声になっても同じ規則で畳める（#244）
+ * - 声部1が空で声部2に中身がある小節は畳まない（末尾が空でないので自然にそうなる）。
+ *   下声だけ先に書いている途中の小節を壊さないため
+ *
+ * 休符も「中身」として数える。ユーザーが明示的に置いた休符は消えていないので、
+ * まだその声部を使っている＝多声のままが正しい（表示用の詰め物休符は保存データに入らない）。
+ *
+ * @returns 畳む必要が無ければ**引数の measure をそのまま返す**（呼び出し側が参照比較で
+ *   「変わっていない」を判定できる・Issue #245 の約束）
+ */
+export function collapseEmptyTrailingVoices(measure: MeasureData): MeasureData {
+  const voices = measure.voices;
+  if (!voices || voices.length <= 1) return measure;
+
+  let voiceCount = voices.length;
+  while (voiceCount > 1 && (voices[voiceCount - 1].events?.length ?? 0) === 0) {
+    voiceCount -= 1;
+  }
+  if (voiceCount === voices.length) return measure;
+
+  if (voiceCount === 1) {
+    // 単声部形式（measure.events だけ）へ戻す。events の正本は measure.events 側なので
+    // （getMeasureVoices が voices[0] より優先して読む）、そちらを残す。
+    const { voices: _removed, ...withoutVoices } = measure;
+    return { ...withoutVoices, events: measure.events ?? voices[0].events ?? [] };
+  }
+  return { ...measure, voices: voices.slice(0, voiceCount) };
+}
+
+/**
+ * 保存データ（全パート）から、中身の無い末尾の声部を畳む。読込時の正規化として使う。
+ *
+ * 空の声部を残したまま保存された既存データ（Issue #305 の修正より前に下声を消した譜面）は、
+ * 開くたびに多声小節として描かれてしまう。読込の2経路（localStorage / ファイル）で
+ * 同じ正規化を通し、「読み込んだデータに空の声部は無い」ことを保証する（#281・#282 と同じ2層構え）。
+ *
+ * @returns 変化が無ければ引数の配列をそのまま返す。
+ */
+export function normalizeEmptyVoicesInParts(parts: PartData[]): PartData[] {
+  const next = parts.map((part) => {
+    const measures = part.measures.map(collapseEmptyTrailingVoices);
+    return measures.some((m, i) => m !== part.measures[i]) ? { ...part, measures } : part;
+  });
+  return next.some((part, i) => part !== parts[i]) ? next : parts;
 }
 
 /**

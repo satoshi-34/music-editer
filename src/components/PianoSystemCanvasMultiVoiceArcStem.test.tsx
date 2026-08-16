@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
+import { deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
 import type { MeasureData, SavedScoreData } from '../types/storage';
 
 vi.mock('../audio/NotePlayer', () => ({
@@ -235,9 +236,11 @@ describe('多声部の弧が自声部の符幹・ビームを貫通しない（I
     }
   });
 
-  function renderMoonlightSystem1(options?: { addLowerVoice?: boolean }) {
+  function renderMoonlightSystem1(options?: { addLowerVoice?: boolean; measuresOverride?: MeasureData[] }) {
     const data = loadFixture();
     const rightHand = data.parts[0].measures as MeasureData[];
+    const upperPartMeasures = options?.measuresOverride
+      ?? (options?.addLowerVoice ? withLowerVoiceInMeasure2(rightHand) : rightHand);
     const onChange = vi.fn();
     const { container } = render(
       <PianoSystemCanvas
@@ -246,7 +249,7 @@ describe('多声部の弧が自声部の符幹・ビームを貫通しない（I
         tool={{ duration: '4', isRest: false } as never}
         scale={1}
         partsConfig={[
-          { clef: data.parts[0].clef, data: options?.addLowerVoice ? withLowerVoiceInMeasure2(rightHand) : rightHand, onChange },
+          { clef: data.parts[0].clef, data: upperPartMeasures, onChange },
           { clef: data.parts[1].clef, data: data.parts[1].measures as MeasureData[], onChange },
         ]}
         showInstrumentLabels={false}
@@ -298,5 +301,51 @@ describe('多声部の弧が自声部の符幹・ビームを貫通しない（I
   it('受入2: 単声部のままなら、弧のパスが1文字も変わらない', () => {
     const { arcD } = renderMoonlightSystem1();
     expect(arcD).toBe(SINGLE_VOICE_ARC_D);
+  });
+
+  // Issue #305: 下声を消し切ったのに空の器（voices[1]）が残ると、この小節は多声のまま扱われ、
+  // 弧が符幹先端へアンカーされたまま・声部1の符幹が上向き固定のままになる。
+  // 「削除経路を通したら単声部の描画へ戻る」ことを、#296 と同じ比較方法（弧のパス文字列）で固定する。
+  describe('下声を全部削除したら単声部の描画へ戻る（Issue #305）', () => {
+    /** 実際の削除経路（Delete キーが呼ぶ関数）で、声部2の音符を1つずつ消す。 */
+    function deleteWholeLowerVoice(measures: MeasureData[]): MeasureData[] {
+      let next = measures;
+      // 声部2が空になるまで先頭から消す（実機の「全部選んで Delete」と同じ結果になる）。
+      while ((next[2].voices?.[1]?.events.length ?? 0) > 0) {
+        next = deleteVoiceEventFromMeasures(next, 1, 2, 0, undefined, 'treble');
+      }
+      return next;
+    }
+
+    it('受入: 弧が符頭アンカー・音高ベースの向きへ戻り、単声部と1文字も変わらない', () => {
+      const data = loadFixture();
+      const rightHand = data.parts[0].measures as MeasureData[];
+      const withLower = withLowerVoiceInMeasure2(rightHand);
+      const afterDelete = deleteWholeLowerVoice(withLower);
+
+      // 前提: 削除経路が voices ごと畳んでいる（＝多声判定 voices.length > 1 が成立しない）
+      expect(afterDelete[2].voices).toBeUndefined();
+
+      const { arcD } = renderMoonlightSystem1({ measuresOverride: afterDelete });
+      expect(arcD).toBe(SINGLE_VOICE_ARC_D);
+    });
+
+    it('裏取り: 畳まずに空の voices[1] を残したままだと、弧のパスは単声部と一致しない', () => {
+      // この対照実験が「単声部と一致しない」まま失敗しなくなったら、
+      // 多声かどうかの判定そのものが変わったということ（このテストの前提が崩れている）。
+      const data = loadFixture();
+      const rightHand = data.parts[0].measures as MeasureData[];
+      const withEmptyLower = withLowerVoiceInMeasure2(rightHand).slice();
+      withEmptyLower[2] = {
+        ...withEmptyLower[2],
+        voices: [
+          { id: 'voice-1', events: withEmptyLower[2].events },
+          { id: 'voice-2', stemDirection: 'down', events: [] },
+        ],
+      };
+
+      const { arcD } = renderMoonlightSystem1({ measuresOverride: withEmptyLower });
+      expect(arcD).not.toBe(SINGLE_VOICE_ARC_D);
+    });
   });
 });

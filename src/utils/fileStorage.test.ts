@@ -4,7 +4,7 @@
 // 0 バイトの抜け殻ファイルが残ったまま無言でダウンロードへ切り替わっていた問題の再発防止。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { exportScoreToFile } from './fileStorage';
+import { exportScoreToFile, importScoreFromFile } from './fileStorage';
 import type { SavedScoreData } from '../types/storage';
 
 // 検証に必要な最小限の譜面データ（中身は JSON 化できれば何でもよい）
@@ -183,5 +183,46 @@ describe('exportScoreToFile', () => {
     await exportScoreToFile(SCORE, 'a/b:c*?"<>|d');
 
     expect(downloadName).toBe('abcd.score.json');
+  });
+});
+
+// Issue #305: 「ファイルを開く」経路にも、localStorage 読込と同じ
+// 「空のまま残った声部を畳む」正規化が入っていること。
+// 譜面ファイルは他人の環境や、この修正より前のアプリで作られたものが来るため、
+// 片方の経路にだけ入れると同じ譜面が開き方で違う見た目になってしまう。
+describe('importScoreFromFile: 空のまま残った声部の正規化（Issue #305）', () => {
+  const note = (key: string) => ({ dur: '4', isRest: false, keys: [key] });
+
+  function scoreFileWith(measures: unknown[]): File {
+    const data = {
+      ...SCORE,
+      parts: [{ partId: 'right-hand', clef: 'treble', measures }],
+    };
+    return new File([JSON.stringify(data)], 'empty-voice.score.json', { type: 'application/json' });
+  }
+
+  it('空の voices[1] を含むファイルを開くと、単声部の小節へ畳まれる', async () => {
+    const loaded = await importScoreFromFile(scoreFileWith([{
+      events: [note('c/5')],
+      voices: [
+        { id: 'voice-1', events: [note('c/5')] },
+        { id: 'voice-2', stemDirection: 'down', events: [] },
+      ],
+    }]));
+
+    expect(loaded.parts[0].measures[0].voices).toBeUndefined();
+    expect(loaded.parts[0].measures[0].events.map((ev) => ev.keys[0])).toEqual(['c/5']);
+  });
+
+  it('中身のある声部2はそのまま残る', async () => {
+    const loaded = await importScoreFromFile(scoreFileWith([{
+      events: [note('c/5')],
+      voices: [
+        { id: 'voice-1', events: [note('c/5')] },
+        { id: 'voice-2', stemDirection: 'down', events: [note('c/3')] },
+      ],
+    }]));
+
+    expect(loaded.parts[0].measures[0].voices).toHaveLength(2);
   });
 });

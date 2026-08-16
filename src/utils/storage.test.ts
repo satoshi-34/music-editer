@@ -1285,6 +1285,56 @@ describe('Storage Foundation Tests', () => {
     });
   });
 
+  describe('空のまま残った声部の正規化（Issue #305）', () => {
+    const note = (key: string) => ({ dur: '4' as const, isRest: false, keys: [key] });
+
+    /** 声部2が空のまま保存された小節（この修正より前に下声を消した譜面の形）。 */
+    function measureWithEmptyVoice2() {
+      return {
+        events: [note('c/5')],
+        voices: [
+          { id: 'voice-1', events: [note('c/5')] },
+          { id: 'voice-2', stemDirection: 'down' as const, events: [] },
+        ],
+      };
+    }
+
+    function saveAndLoad(measures: MeasureData[]) {
+      const data = createSavedScoreData(
+        { title: 'Empty Voice', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{ partId: 'right-hand', clef: 'treble', measures }],
+        1,
+        2,
+        'single'
+      );
+      expect(saveScoreData(data).success).toBe(true);
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      return loadResult.data!.parts[0].measures;
+    }
+
+    it('空の voices[1] を含む保存データを読むと、単声部の小節へ畳まれて返る', () => {
+      const [loaded] = saveAndLoad([measureWithEmptyVoice2()]);
+
+      expect(loaded.voices).toBeUndefined();
+      // 声部1の中身は畳んでも変わらない
+      expect(loaded.events.map((ev) => ev.keys[0])).toEqual(['c/5']);
+    });
+
+    it('中身のある声部2はそのまま残る', () => {
+      const [loaded] = saveAndLoad([{
+        events: [note('c/5')],
+        voices: [
+          { id: 'voice-1', events: [note('c/5')] },
+          { id: 'voice-2', stemDirection: 'down', events: [note('c/3')] },
+        ],
+      }]);
+
+      expect(loaded.voices).toHaveLength(2);
+      expect(loaded.voices?.[1].events.map((ev) => ev.keys[0])).toEqual(['c/3']);
+    });
+  });
+
   describe('途中調号変更（小節単位 keySignature）の保存互換とバリデーション', () => {
     it('小節の keySignature を保存して読み戻せる', () => {
       const data = createSavedScoreData(

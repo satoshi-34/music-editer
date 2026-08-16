@@ -24,7 +24,7 @@ import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 import { isArticulationMarkingValue } from './articulationMarkingUtils';
-import { syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { normalizeEmptyVoicesInParts, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
@@ -690,6 +690,11 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   // 「削除しても音が鳴り続ける」といった、原因の分かりにくい症状になる。
   // 検証を通したあとに実行するのは、ここから先は型が保証されていて安全に走査できるため。
   parsedData.parts = normalizeDuplicateChordKeys(parsedData.parts);
+
+  // 中身が空のまま残った声部（Issue #305）を畳んで単声部へ戻す。
+  // 空の器が残っていると多声小節と判定され、符幹の向き固定やスラーの符幹アンカーが
+  // 効いたままの「2声部の残骸」として描かれてしまう。
+  parsedData.parts = normalizeEmptyVoicesInParts(parsedData.parts);
 
   return {
     success: true,

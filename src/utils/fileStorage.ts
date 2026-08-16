@@ -5,6 +5,7 @@ import type { SavedScoreData } from '../types/storage';
 import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { validateSavedScoreData } from './storage';
 import { normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
+import { normalizeEmptyVoicesInParts } from './voiceMeasureUtils';
 
 // ファイル名に使えない文字を除去するヘルパー
 function safeFileName(title: string): string {
@@ -161,15 +162,18 @@ export async function importScoreFromFile(file: File): Promise<SavedScoreData> {
         reject(new Error('有効な譜面ファイルではありません（データ形式が不正です）'));
         return;
       }
-      // localStorage 読込と同じ後始末を2つ、この1か所で保証してから返す。
+      // localStorage 読込と同じ後始末を3つ、この1か所で保証してから返す。
       // ① 和音の中の同音重複を1音へ畳む（Issue #281）。重複した符頭は完全に重なって
       //    1つに見えるので、読み込んだ時点で消しておかないと「削除しても見た目が
       //    変わらない」という気づけない不具合として残り続ける。
       // ② 連符グループの分断を区切り直す（Issue #282）。ファイルは他人の環境で
       //    作られたものや手編集されたものが来るので、「読み込んだデータは
       //    連符グループが連続している」ことを保証する。
+      // ③ 中身が空のまま残った声部を畳む（Issue #305）。空の器が残っていると多声小節と
+      //    判定され、符幹の向き固定・スラーの符幹アンカーが効いたままの見た目になる。
       const dedupedParts = normalizeDuplicateChordKeys(data.parts);
-      const normalizedParts = normalizeTupletGroupsInParts(dedupedParts);
+      const tupletNormalizedParts = normalizeTupletGroupsInParts(dedupedParts);
+      const normalizedParts = normalizeEmptyVoicesInParts(tupletNormalizedParts);
       resolve(normalizedParts === data.parts ? data : { ...data, parts: normalizedParts });
     };
     reader.onerror = () => reject(new Error('ファイルの読み込みに失敗しました'));
