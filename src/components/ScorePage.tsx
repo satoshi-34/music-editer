@@ -150,10 +150,12 @@ import { buildPlaybackPositionTimeline, type PlaybackTimelineItem } from '../uti
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
+  SCORE_ACTIVE_VOICE_CHANGE_EVENT,
   SCORE_EDIT_NOTICE_EVENT,
   describeClearedMeasures,
   notifyScoreEdit,
   requestScoreSelectionClear,
+  type ScoreActiveVoiceChangeDetail,
   type ScoreEditNoticeDetail,
 } from '../utils/scoreEditorNotices';
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrintableMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
@@ -3894,6 +3896,19 @@ export default function ScorePage() {
       window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
       if (editNoticeTimerRef.current) clearTimeout(editNoticeTimerRef.current);
     };
+  }, []);
+
+  // 非アクティブ声部の音符をクリックしたときに、譜面側から届く「声部を切り替えて」の要求（Issue #258）。
+  // 声部の状態（activeVoice）はこの画面が持っているので、ここで受けて切り替える。
+  // 通知そのものは譜面側が notifyScoreEdit で出すため、ここでは声部を変えるだけでよい。
+  useEffect(() => {
+    const onActiveVoiceChange = (e: Event) => {
+      const voiceIndex = (e as CustomEvent<ScoreActiveVoiceChangeDetail>).detail?.voiceIndex;
+      if (voiceIndex !== 0 && voiceIndex !== 1) return;
+      setActiveVoice(voiceIndex);
+    };
+    window.addEventListener(SCORE_ACTIVE_VOICE_CHANGE_EVENT, onActiveVoiceChange);
+    return () => window.removeEventListener(SCORE_ACTIVE_VOICE_CHANGE_EVENT, onActiveVoiceChange);
   }, []);
 
   // タブを切り替えるときのハンドラ。
