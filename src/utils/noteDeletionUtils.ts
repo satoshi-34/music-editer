@@ -102,6 +102,122 @@ function remapAllMeasuresAfterRemoval(
 }
 
 /**
+ * 「(measure, index) のイベントの removedKey という符頭」を終点として指している弧を取り除く。
+ *
+ * 和音から1音だけ消したとき、その符頭を toKey で指していた弧（タイ/スラー）は行き先を失う。
+ * 放っておくと「消えたはずの音へ繋がる弧」が描かれ続けるので、ここで掃除する。
+ *
+ * @returns 変化が無ければ引数の events をそのまま返す（呼び出し側が参照比較で「変わっていない」を判定できる）
+ */
+function purgeArcsToRemovedKey(
+  events: NoteEvent[],
+  measure: number,
+  index: number,
+  removedKey: string
+): NoteEvent[] {
+  let changed = false;
+  const nextEvents = events.map((ev): NoteEvent => {
+    if (!ev.arcs?.length) return ev;
+    const nextArcs = ev.arcs.filter(
+      (a) => !(a.toMeasureIndex === measure && a.toEventIndex === index && a.toKey === removedKey)
+    );
+    if (nextArcs.length === ev.arcs.length) return ev;
+    changed = true;
+    return { ...ev, arcs: nextArcs.length ? nextArcs : undefined };
+  });
+  return changed ? nextEvents : events;
+}
+
+/**
+ * 削除で「イベント列をどう変えるか」だけを決めた計画。実際の書き換えは呼び出し側が行う。
+ *
+ * こう分けている理由（Issue #280）: 削除の**判定順序そのものが仕様**なのに、声部1（measure.events）と
+ * 声部2（voices[n].events）で読み書きする配列が違うせいで、以前はロジックが丸ごと2本コピーされていた。
+ * その結果 #223（和音1音削除を連符判定より先に）の修正が声部1のコピーにしか届かず、
+ * 声部2では和音の1音を選んで Delete するとイベントごと消えるバグが残っていた。
+ * 「判定は1本」「書き込みだけ容器ごと」に分ければ、同じ取りこぼしが構造的に起きなくなる。
+ */
+type EventDeletionPlan =
+  /** 和音から1音だけ取り除く（イベント自体は残る。連符グループも維持される） */
+  | { kind: 'chordKey'; removedKey: string; nextEvent: NoteEvent }
+  /** 区間 [removeStart, removeEnd] を replacement で置き換える（replacement が空ならただの削除） */
+  | { kind: 'splice'; removeStart: number; removeEnd: number; replacement: NoteEvent[]; shift: number };
+
+/**
+ * 1つのイベント列に対する削除の計画を立てる（純関数。配列は読むだけ）。
+ *
+ * 判定の**順序も仕様のうち**（Issue #223）:
+ * 1. 和音（keys.length > 1）で keyIndex が指定されているときは、その1音だけを取り除く。
+ *    連符内の和音でもこの分岐が優先され、tuplet は維持されたまま1音だけ消える
+ * 2. 連符内のイベントなら、グループ全体を同じ長さの通常の休符に置き換える
+ *    （connectedTuplet の音価バランスが崩れるのを防ぐため）
+ * 3. それ以外（単音 or keyIndex未指定）はイベント自体を削除する
+ *
+ * @param events 対象の声部のイベント列（書き換えない）
+ * @param index 削除対象のイベントのインデックス
+ * @param keyIndex 和音中の対象キーのインデックス（省略時はイベント全体が対象）
+ * @param clef そのパートの音部記号。連符グループ削除で生まれる休符の描画位置を決めるのに使う（Issue #226）
+ * @returns 計画。範囲外や連符グループを特定できない場合は null（＝呼び出し側は何も変えない）
+ */
+function planEventDeletion(
+  events: NoteEvent[],
+  index: number,
+  keyIndex: number | undefined,
+  clef: ClefType
+): EventDeletionPlan | null {
+  if (index < 0 || index >= events.length) return null;
+  const targetEv = events[index];
+
+  // 1. 和音中の1音だけを削除する
+  //
+  // この判定は「連符グループごと休符化」より**必ず先**に置くこと（Issue #223）。
+  // 連符の中に作った和音は「tuplet を持つ」「keys が2つ以上ある」の両方に当てはまるため、
+  // 順序が逆だと keyIndex（どの符頭を選んだか）が無視され、1音消したいだけなのに
+  // 連符グループ全体が休符に置き換わってしまう。
+  // ここで作り直すイベントは ...targetEv を土台にしているので tuplet 情報はそのまま残り、
+  // グループの音価バランス（＝描画と再生の前提）は崩れない。
+  //
+  // なお和音の**最後の1音**（keys.length === 1）に対する削除はこの分岐に入らず、
+  // 下の連符分岐へ落ちる。音符そのものが消える以上、連符グループごと休符へ置き換えるのが正しい。
+  if (!targetEv.isRest && keyIndex !== undefined && keyIndex >= 0 && keyIndex < targetEv.keys.length && targetEv.keys.length > 1) {
+    const removedKey = targetEv.keys[keyIndex];
+    // 取り除いた音を始点（fromKey）とする弧は、始点そのものが消えるので一緒に落とす。
+    const nextArcs = targetEv.arcs?.filter((arc) => arc.fromKey !== removedKey);
+    return {
+      kind: 'chordKey',
+      removedKey,
+      nextEvent: {
+        ...targetEv,
+        keys: targetEv.keys.filter((_, keyIdx) => keyIdx !== keyIndex),
+        arcs: nextArcs?.length ? nextArcs : undefined,
+      },
+    };
+  }
+
+  // 2. 連符内イベントの削除はグループごと通常の休符へ置き換える
+  //    （部分的に消すと連符の音価バランスが崩れ、描画と再生の拍計算が破綻するため）
+  if (targetEv.tuplet) {
+    const plan = planTupletGroupDeletion(events, index, clef);
+    // グループ範囲を特定できなかったときは何も変えない（呼び出し側は引数の参照をそのまま返す・Issue #245）。
+    if (!plan) return null;
+    // 後続を繰り上げる量は「消した件数 − 置き換えで挿入した件数」。
+    // 連符グループ削除は同じ拍数の休符を挿し込むので、グループ件数そのものではない
+    // （例: 8分3連符3個 → 4分休符1個 なら 3-1=2 ぶん繰り上げる）。
+    const removeCount = plan.groupEnd - plan.groupStart + 1;
+    return {
+      kind: 'splice',
+      removeStart: plan.groupStart,
+      removeEnd: plan.groupEnd,
+      replacement: plan.replacement,
+      shift: removeCount - plan.replacement.length,
+    };
+  }
+
+  // 3. イベント自体を削除する（削除する区間は自分1件だけなので、繰り上げ量も1になる）
+  return { kind: 'splice', removeStart: index, removeEnd: index, replacement: [], shift: 1 };
+}
+
+/**
  * 指定した音符（measure小節目・index番目のイベント）を削除する。
  *
  * 仕様（StaffCanvas/PianoSystemCanvas で完全一致していたもの。判定の**順序も仕様のうち**）:
@@ -132,77 +248,37 @@ export function deleteEventFromMeasures(
   clef: ClefType
 ): MeasureData[] {
   if (measure < 0 || measure >= measures.length) return measures;
-  const targetMeasureEvents = measures[measure].events;
-  if (index < 0 || index >= targetMeasureEvents.length) return measures;
+  // 判定（何をどう変えるか）は声部2と共通の planEventDeletion に任せ、ここは書き込みだけを担当する。
+  // 計画が立たない＝範囲外・連符グループを特定できない場合は何も変えない。
+  // ここで複製を返してしまうと「変更が無ければ引数の measures をそのまま返す」という
+  // この関数の約束が破れ、呼び出し側が参照比較で「変わっていない」を判定できなくなる（Issue #245）。
+  const plan = planEventDeletion(measures[measure].events, index, keyIndex, clef);
+  if (!plan) return measures;
 
   const next = cloneMeasures(measures);
-  const targetEv = next[measure].events[index];
 
-  // 1. 和音中の1音だけを削除する
-  //
-  // この判定は「連符グループごと休符化」より**必ず先**に置くこと（Issue #223）。
-  // 連符の中に作った和音は「tuplet を持つ」「keys が2つ以上ある」の両方に当てはまるため、
-  // 順序が逆だと keyIndex（どの符頭を選んだか）が無視され、1音消したいだけなのに
-  // 連符グループ全体が休符に置き換わってしまう。
-  // ここで作り直すイベントは ...targetEv を土台にしているので tuplet 情報はそのまま残り、
-  // グループの音価バランス（＝描画と再生の前提）は崩れない。
-  //
-  // なお和音の**最後の1音**（keys.length === 1）に対する削除はこの分岐に入らず、
-  // 下の連符分岐へ落ちる。音符そのものが消える以上、連符グループごと休符へ置き換えるのが正しい。
-  if (!targetEv.isRest && keyIndex !== undefined && keyIndex >= 0 && keyIndex < targetEv.keys.length && targetEv.keys.length > 1) {
-    const removedKey = targetEv.keys[keyIndex];
-    const nextKeys = targetEv.keys.filter((_, keyIdx) => keyIdx !== keyIndex);
-    const nextArcs = targetEv.arcs?.filter((arc) => arc.fromKey !== removedKey);
-    next[measure].events[index] = {
-      ...targetEv,
-      keys: nextKeys,
-      arcs: nextArcs?.length ? nextArcs : undefined,
-    };
+  if (plan.kind === 'chordKey') {
+    next[measure].events[index] = plan.nextEvent;
+    // 消えた符頭を終点として指していた弧は、別の小節から張られていることもあるので全小節を掃除する。
     next.forEach((m) => {
-      m.events = m.events.map((ev) => {
-        if (!ev.arcs?.length) return ev;
-        const patched = ev.arcs.filter(
-          (a) => !(a.toMeasureIndex === measure && a.toEventIndex === index && a.toKey === removedKey)
-        );
-        return patched.length === ev.arcs.length ? ev : { ...ev, arcs: patched.length ? patched : undefined };
-      });
+      m.events = purgeArcsToRemovedKey(m.events, measure, index, plan.removedKey);
     });
     return next;
   }
 
-  // 2. 連符内イベントの削除はグループごと通常の休符へ置き換える
-  //    （部分的に消すと連符の音価バランスが崩れ、描画と再生の拍計算が破綻するため）
-  if (targetEv.tuplet) {
-    const plan = planTupletGroupDeletion(next[measure].events, index, clef);
-    // グループ範囲を特定できなかったときは何も変えない。
-    // ここで next（複製）を返してしまうと「変更が無ければ引数の measures をそのまま返す」という
-    // この関数の約束が破れ、呼び出し側が参照比較で「変わっていない」を判定できなくなる（Issue #245）。
-    if (!plan) return measures;
-
-    // 後続を繰り上げる量は「消した件数 − 置き換えで挿入した件数」。
-    // 連符グループ削除は同じ拍数の休符を挿し込むので、グループ件数そのものではない
-    // （例: 8分3連符3個 → 4分休符1個 なら 3-1=2 ぶん繰り上げる）。
-    const removeCount = plan.groupEnd - plan.groupStart + 1;
-    const shift = removeCount - plan.replacement.length;
-    // 弧・松葉の付け替えは splice の**前**に行う。arcs が持つ索引は削除前の並びを指しているため。
-    remapAllMeasuresAfterRemoval(next, measure, plan.groupStart, plan.groupEnd, shift);
-    next[measure].events.splice(plan.groupStart, removeCount, ...plan.replacement);
-    return next;
-  }
-
-  // 3. イベント自体を削除する
-  //    削除する区間は自分1件だけなので、繰り上げ量も1になる。
-  remapAllMeasuresAfterRemoval(next, measure, index, index, 1);
-  next[measure].events.splice(index, 1);
+  // 弧・松葉の付け替えは splice の**前**に行う。arcs が持つ索引は削除前の並びを指しているため。
+  remapAllMeasuresAfterRemoval(next, measure, plan.removeStart, plan.removeEnd, plan.shift);
+  next[measure].events.splice(plan.removeStart, plan.removeEnd - plan.removeStart + 1, ...plan.replacement);
   return next;
 }
 
 /**
  * 声部2以降（voices[voiceIndex]）の音符を1つ削除する。
  *
- * 声部1向けの deleteEventFromMeasures と同じ「連符グループごと休符へ置き換える」「弧・松葉の終点を
- * 付け替える」仕様を、声部ローカルなインデックス解釈（`.claude/specs/voice2-arc-support/design.md` §2 案A）
- * のまま実現する。走査するのは**同じ声部の events だけ**で、声部1（measure.events）には一切触れない。
+ * 声部1向けの deleteEventFromMeasures と**まったく同じ判定**（和音1音削除 → 連符グループ削除 →
+ * イベント削除の順。planEventDeletion に共通化してある）を、声部ローカルなインデックス解釈
+ * （`.claude/specs/voice2-arc-support/design.md` §2 案A）のまま適用する。
+ * 走査するのは**同じ声部の events だけ**で、声部1（measure.events）には一切触れない。
  *
  * 空の voices[1] を作らないための注意（#112 の教訓）:
  * withVoiceEventsUpdated は voices を必要な数まで生やしてしまうため、ここでは使わず、
@@ -212,6 +288,7 @@ export function deleteEventFromMeasures(
  * @param voiceIndex 削除対象の声部（1以上を想定。0 は deleteEventFromMeasures の担当）
  * @param measure 削除対象イベントの小節インデックス
  * @param index 削除対象イベントのインデックス（その声部の events 内での位置）
+ * @param keyIndex 和音中の対象キーのインデックス（省略時はイベント全体を削除。Issue #280）
  * @param clef そのパートの音部記号。連符グループ削除で生まれる休符の描画位置を決めるのに使う（Issue #226）
  * @returns 変更後の MeasureData 配列。範囲外指定などで変更が無い場合は引数の measures をそのまま返す。
  */
@@ -220,51 +297,51 @@ export function deleteVoiceEventFromMeasures(
   voiceIndex: number,
   measure: number,
   index: number,
+  keyIndex: number | undefined,
   clef: ClefType
 ): MeasureData[] {
   if (voiceIndex <= 0) {
-    return deleteEventFromMeasures(measures, measure, index, undefined, clef);
+    return deleteEventFromMeasures(measures, measure, index, keyIndex, clef);
   }
   if (measure < 0 || measure >= measures.length) return measures;
   const voiceEvents = measures[measure].voices?.[voiceIndex]?.events;
-  if (!voiceEvents || index < 0 || index >= voiceEvents.length) return measures;
+  if (!voiceEvents) return measures;
 
-  // 連符（3連符など）の中の1つを消すときは、グループ全体を同じ長さの通常の休符へ置き換える
-  // （声部1・単旋律譜と同じ仕様）。1つだけ消すと残りが tuplet.id を持ったまま半端な音価で残り、
-  // 描画（VexFlow の Tuplet）と再生の拍計算が崩れてしまうため。
-  const tupletDeletion = voiceEvents[index].tuplet
-    ? planTupletGroupDeletion(voiceEvents, index, clef)
-    : null;
-  const removeStart = tupletDeletion ? tupletDeletion.groupStart : index;
-  const removeEnd = tupletDeletion ? tupletDeletion.groupEnd : index;
-  const insertCount = tupletDeletion ? tupletDeletion.replacement.length : 0;
-  // 後続を繰り上げる量は「消した件数 − 置き換えで挿入した件数」。
-  // 連符グループ削除は同じ拍数の休符を挿し込むので、グループ件数そのものではない
-  // （例: 8分3連符3個 → 4分休符1個 なら 3-1=2 ぶん繰り上げる）。
-  const shift = (removeEnd - removeStart + 1) - insertCount;
+  const plan = planEventDeletion(voiceEvents, index, keyIndex, clef);
+  if (!plan) return measures;
 
-  const next = measures.map((m, mi) => {
+  return measures.map((m, mi) => {
     // 声部2を持たない小節はここで打ち切る。触ると空の voices[1] が生えて「多声小節」と判定され、
     // 符幹の向きや休符の縦位置が勝手に変わってしまう（#112 の事故）。
     if (!m.voices?.[voiceIndex]) return m;
 
     const events = getVoiceEvents(m, voiceIndex);
-    const remapped = remapEventRefsAfterRemoval(events, measure, removeStart, removeEnd, shift);
     const isTargetMeasure = mi === measure;
-    if (remapped === events && !isTargetMeasure) return m;
+    let nextEvents: NoteEvent[];
 
-    const nextEvents = [...remapped];
-    if (isTargetMeasure) {
-      if (tupletDeletion) {
-        nextEvents.splice(removeStart, removeEnd - removeStart + 1, ...tupletDeletion.replacement);
+    if (plan.kind === 'chordKey') {
+      // 和音から1音減らすだけなのでイベントの並びは動かない。差し替えたうえで、
+      // 消えた符頭を終点に指していた弧を掃除する（掃除は他の小節からの弧もあるので全小節ぶん行う）。
+      const replaced = isTargetMeasure
+        ? events.map((ev, i) => (i === index ? plan.nextEvent : ev))
+        : events;
+      nextEvents = purgeArcsToRemovedKey(replaced, measure, index, plan.removedKey);
+    } else {
+      // 弧・松葉の付け替えは splice の**前**に行う。arcs が持つ索引は削除前の並びを指しているため。
+      const remapped = remapEventRefsAfterRemoval(events, measure, plan.removeStart, plan.removeEnd, plan.shift);
+      if (isTargetMeasure) {
+        nextEvents = [...remapped];
+        nextEvents.splice(plan.removeStart, plan.removeEnd - plan.removeStart + 1, ...plan.replacement);
       } else {
-        nextEvents.splice(index, 1);
+        nextEvents = remapped;
       }
     }
+
+    // 中身が変わらなかった小節は、オブジェクトごと元の参照を返す（無駄な再描画を増やさない）。
+    if (nextEvents === events) return m;
     return {
       ...m,
       voices: m.voices.map((voice, vi) => (vi === voiceIndex ? { ...voice, events: nextEvents } : voice)),
     };
   });
-  return next;
 }
