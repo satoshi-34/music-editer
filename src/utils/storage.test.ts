@@ -1226,6 +1226,65 @@ describe('Storage Foundation Tests', () => {
     });
   });
 
+  describe('連符グループの分断の正規化（Issue #282）', () => {
+    const triplet = (id: string, key: string) => ({
+      dur: '8' as const,
+      isRest: false,
+      keys: [key],
+      tuplet: { id, numNotes: 3, notesOccupied: 2 },
+    });
+
+    it('分断された連符グループを含む保存データを読むと、区切り直された状態で返る', () => {
+      // 月光9小節目と同じ壊れ方: A A A | B B [C C C] B ← グループ B が C に分断されている
+      const brokenEvents = [
+        triplet('A', 'g#/3'), triplet('A', 'b/3'), triplet('A', 'e/4'),
+        triplet('B', 'g#/3'), triplet('B', 'b/3'),
+        triplet('C', 'e/4'), triplet('C', 'g#/3'), triplet('C', 'b/3'),
+        triplet('B', 'e/4'),
+      ];
+      const data = createSavedScoreData(
+        { title: 'Tuplet Continuity', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{ partId: 'right-hand', clef: 'treble', measures: [{ events: brokenEvents }] }],
+        1,
+        2,
+        'single'
+      );
+      expect(saveScoreData(data).success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      const loaded = loadResult.data!.parts[0].measures[0].events;
+
+      // 3音ずつ3グループへ区切り直され、同じ id が離れて並ぶ箇所が無くなる。
+      const ids = loaded.map((ev) => ev.tuplet?.id);
+      expect(new Set(ids).size).toBe(3);
+      for (let group = 0; group < 3; group += 1) {
+        expect(new Set(ids.slice(group * 3, group * 3 + 3)).size).toBe(1);
+      }
+      // 音の並び・音価は正規化で変わらない（書き換わるのは tuplet.id だけ）。
+      expect(loaded.map((ev) => ev.keys[0])).toEqual(brokenEvents.map((ev) => ev.keys[0]));
+      expect(loaded.every((ev) => ev.dur === '8')).toBe(true);
+    });
+
+    it('正常な連符グループの id は読み込んでも変わらない', () => {
+      const data = createSavedScoreData(
+        { title: 'Tuplet Intact', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{
+          partId: 'right-hand',
+          clef: 'treble',
+          measures: [{ events: [triplet('A', 'g#/3'), triplet('A', 'b/3'), triplet('A', 'e/4')] }],
+        }],
+        1,
+        2,
+        'single'
+      );
+      expect(saveScoreData(data).success).toBe(true);
+
+      const loaded = loadScoreData().data!.parts[0].measures[0].events;
+      expect(loaded.map((ev) => ev.tuplet?.id)).toEqual(['A', 'A', 'A']);
+    });
+  });
+
   describe('途中調号変更（小節単位 keySignature）の保存互換とバリデーション', () => {
     it('小節の keySignature を保存して読み戻せる', () => {
       const data = createSavedScoreData(

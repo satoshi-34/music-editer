@@ -25,6 +25,7 @@ import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type 
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 import { isArticulationMarkingValue } from './articulationMarkingUtils';
 import { syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
 import type { ClefType } from '../components/clefUtils';
@@ -664,6 +665,9 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   // v2 → v3 マイグレーション: NoteEvent.key（文字列）を keys（配列）に変換
   if (Array.isArray(parsedData.parts)) {
     parsedData.parts = migrateKeyToKeys(parsedData.parts);
+    // 連符グループが分断された保存データ（Issue #282）は、ここで区切り直してから画面へ渡す。
+    // 分断されたままだと連符の囲みが描かれず、グループ削除・コピーも断片しか掴めない。
+    parsedData.parts = normalizeTupletGroupsInParts(parsedData.parts);
   }
   parsedData.keySignature = normalizeKeySignature(parsedData.keySignature);
   parsedData.timeSignature = normalizeTimeSignature(parsedData.timeSignature);
@@ -802,6 +806,16 @@ function saveScoreDataToSlot(data: SavedScoreData, keys: StorageSlotKeys): Stora
           }))
         : (data as any).parts,
     };
+
+    // 保存前の検証（Issue #282）。連符グループが分断されたデータを書き出そうとしていたら、
+    // それを作った編集操作にバグがあるということなので、開発中に気づけるよう警告を出す。
+    // 本番のコンソールを汚さないよう開発ビルドだけに限定している（読込時には自動で直る）。
+    if (import.meta.env?.DEV && Array.isArray(normalizedData.parts)) {
+      const issues = collectTupletContinuityIssues(normalizedData.parts);
+      if (issues.length > 0) {
+        console.warn('[storage] 連符グループが分断されたまま保存されようとしています（Issue #282）:', issues);
+      }
+    }
 
     // Validate data before saving
     if (!validateSavedScoreData(normalizedData)) {

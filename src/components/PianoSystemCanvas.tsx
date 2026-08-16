@@ -123,6 +123,7 @@ import {
   tupletGroupBeats,
   type TupletKind,
 } from '../utils/tupletUtils';
+import { snapInsertIndexOutOfTupletGroup } from '../utils/tupletGroupIntegrity';
 import { getTupletClipboardGroup, setTupletClipboardGroup } from '../utils/tupletClipboard';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
@@ -3980,6 +3981,11 @@ export default function PianoSystemCanvas({
               if(lx>rx2&&lx-rx2<minD){minD=lx-rx2;at=j+1;}
             }
           }
+          // 挿入位置は「クリックがどの音符に近いか」だけで決まるので、連符グループの
+          // 2音目・3音目の手前が選ばれることがある。そのまま差し込むとグループが前後に
+          // 割れ、同じ tuplet.id が離れて並ぶ壊れたデータになる（Issue #282 の発生経路）。
+          // グループの手前か直後の、近いほうへ寄せてから使う。
+          at=snapInsertIndexOutOfTupletGroup(activeEvs,at);
 
           const currentMeasure = score[absI] ?? createEmptyMeasure();
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey;
