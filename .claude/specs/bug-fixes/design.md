@@ -1918,3 +1918,122 @@ rect の寸法（修正前 → 修正後）:
 | ホバーのカーソル（単音・line 3 の音符） | 3.30 まで `pointer` / 3.32 から `copy` ＝ 許容幅どおりに切り替わる |
 
 コンソールエラー 0 件。
+
+## 矢印キーの音高移動が同音衝突を検知せず、重複 keys の和音ができる（2026-08-16, Issue #281）
+
+### 問題（運用者の状態JSONで実在確認・2026-08-14）
+
+矢印キーで和音の1音を動かしたとき、**移動先に同じ音高が既にあっても検知せず、同音重複の和音ができていた**。
+実データに2例（`["a/3","a/3"]` / `["c#/4","c#/4","c#/4"]`）。回帰用 fixture
+（`docs/qa/regression/moonlight-bars1-9.score.json`）にも同じ形が2件入っている。
+
+なぜ実害が大きいか:
+
+- 同じ高さの符頭は**完全に重なって1つに見える**ため、利用者は重複の存在に気づけない
+- 1音消しても片方が残って「見た目が変わらない」ので、消えていないと誤認して操作を重ねる
+  （2026-08-14 の「三連符が消えた」報告の一因）
+- クリックでの和音追加には昔から同音ガード（`!currentEv.keys.includes(newKey)`）があったのに、
+  **矢印キー移動（`computeShiftedKeys` の `editSingleKey` 経路）にだけ無かった**
+
+### 修正設計
+
+#### 1. 入口（矢印キー移動）: 重複を作らず「既存の音へ吸収する」
+
+`src/utils/chordKeyUtils.ts` を新設し、「同じ音か」の判定と「1音抜いたときの後始末」を集約した。
+
+- `findDuplicateKeyIndex(keys, microtones, index)` — 同じ音が他にあるか。
+  **音高の文字列だけでなく四分音（微分音）の有無まで含めて比べる**のが要点で、
+  同じ `a/3` でも片方に `quarterSharp` が付いていれば鳴る高さが違う別の音になる。
+  ここを音高だけで見ると、四分音付きの音を素の音へ黙って吸収して消してしまう
+- `remapMicrotonesAfterKeyRemoval(microtones, removedIndex)` — `microtones` は
+  「`keys` 配列の何番目か」で音を指しているため、要素を抜くと後ろの臨時記号が1つ隣の音へずれる。
+  抜いた音のぶんを捨て、後ろを繰り上げる
+
+`pitchShiftUtils.computeShiftedKeysWithSelection` を新設し、`keys` だけでなく
+「移動後に選んでおくべき `keyIndex`」「動かした音の移動後の音高（`movedToKey`）」
+「吸収で取り除かれた元の位置（`absorbedKeyIndex`）」まで返すようにした。
+従来の `computeShiftedKeys` はその `keys` だけを返す薄いラッパとして残してある（既存の呼び出しは無改修）。
+
+挙動は**「移動できない（無反応）」ではなく「既存の音へ吸収する（結果として1音減る）」**を選んだ。
+利用者から見て操作が無反応になるより、音が1つ減ったほうが画面の変化として分かるためで、
+クリックでの和音追加が同音のとき「追加せず、その音を選択する」のと同じ考え方に揃えている。
+
+対象は**和音の1音だけを動かす経路（`keyIndex` 指定・ライン移動と半音シフトの両方）**に限った。
+和音全体の移動（`keyIndex` 未指定）はすべての音が同じだけ動くので重複は生まれず、挙動を変えていない。
+
+#### 2. 後始末: 弧・四分音・選択
+
+- **弧（タイ/スラー）**: `applyPitchChangeToMeasures` に第7引数 `absorption` を足した。
+  吸収では動かした音が `newKeys` から消えているため、付け替え先を `newKeys[keyIndex]` から
+  復元できない（`undefined` になる）。`movedToKey` を受け取って `fromKey` / `toKey` を吸収先の音高へ付け替える
+- 付け替えの結果**完全に同じ内容になった弧は1本に畳む**。重なって描かれるだけなら見た目は同じだが、
+  片方を消しても弧が残る（＝また「見た目が変わらない」）事故のもとになる
+- **四分音**: 吸収で `keys` が1つ縮むので `remapMicrotonesAfterKeyRemoval` で付き先を詰め直す
+- **選択**: `PianoSystemCanvas` の ArrowUp/ArrowDown ハンドラで、吸収が起きたときだけ
+  `selected.keyIndex` を吸収先へ付け替える。付け替えないと `keyIndex` が範囲外になり、
+  次の矢印キーが「和音全体の移動」に化ける（回帰テストで固定済み）
+- **通知**: 音数が黙って変わらないよう、`describeAbsorbedChordKey()` の文言を
+  Issue #238 の通知の仕組み（`notifyScoreEdit`）へ流す
+
+なお移動結果は `setState` の updater の中ではなく**外側で先に求める**形にした。
+譜面の書き換えと選択の付け替えを同じイベントで行う必要があり、
+状態更新関数の中から別の state を触らずに済ませるため（読み出しは `partsScoreRef.current`。
+同じハンドラの Delete 分岐と同じ作法）。
+
+#### 3. 既存データ: 読込時に正規化する
+
+`normalizeDuplicateChordKeys(parts)` を**2つの読込経路の両方**に入れた。
+
+| 経路 | 入れた場所 |
+| --- | --- |
+| localStorage（自動保存・作品カタログ） | `storage.ts` の `parseAndNormalizeStoredScore`（検証を通した直後） |
+| ファイルを開く（JSON） | `fileStorage.ts` の `importScoreFromFile`（`validateSavedScoreData` の直後） |
+
+- 声部2以降（`voices[]`）も同じ規則で畳む
+- 弧は `fromKey` / `toKey` という**音高の文字列**で符頭を指しているので、
+  `["a/3","a/3"] → ["a/3"]` のように畳んでも参照先の音高は残り、リンクは切れない
+- 変化が無ければ引数の参照をそのまま返す（無駄な再描画を起こさないため）
+- 休符は対象外。休符の `keys` は音の高さではなく画面上の置き場所を表しているだけで、畳む意味が無い
+
+### 影響範囲
+
+- `src/utils/chordKeyUtils.ts`（新規）／`src/utils/chordKeyUtils.test.ts`（新規17本）
+- `src/utils/pitchShiftUtils.ts`（`computeShiftedKeysWithSelection` 追加・`applyPitchChangeToMeasures` に第7引数）
+- `src/utils/scoreEditorNotices.ts`（`describeAbsorbedChordKey` 追加）
+- `src/utils/storage.ts` / `src/utils/fileStorage.ts`（読込時の正規化）
+- `src/components/PianoSystemCanvas.tsx`（ArrowUp/ArrowDown ハンドラ）
+- `src/components/PianoSystemCanvasUnisonGuard.test.tsx`（新規3本）
+
+### 期待値を意図的に更新したテスト（Issue #281 のトリアージ指示）
+
+fixture（`moonlight-bars1-9.score.json`）は**1バイトも変えていない**。変わったのは読み込んだあとの姿だけ。
+
+- `moonlightRegressionLoad.test.ts`
+  - 和音（2音以上）の件数 **11 → 9**（重複だけで和音になっていた2件が単音になったため。イベント数 140 は不変）
+  - 「既知の入力上の傷」のテストを2本に分割。ユニゾン重複は**正規化される**ことを固定し、
+    生データ側にはそのまま残っていることも同じテストで押さえた。音高の誤り（傷1）と
+    連符IDの交錯（傷3）は従来どおり「直されず残る」ことを固定
+- `ScorePage.test.tsx` の property test — 生成する `keys` を `fc.uniqueArray` にした。
+  重複入りの和音はもう保存データの正しい姿ではなく、「書いたとおりに戻る」という
+  この property が確かめたい性質の対象外になったため
+
+### 変えていないこと
+
+- 和音全体の移動（`keyIndex` 未指定）・休符・単音の挙動
+- MusicXML 読込（`musicXmlImport.ts`）。和音は `<chord>` 付きの `<note>` から組み立てるので、
+  同じ経路の重複は本対応のスコープ外（必要になったら同じ関数を通せばよい）
+- fixture そのもの（読み取り専用の約束どおり）
+
+### 動作確認
+
+ブラウザ（worktree だけを載せた使い捨て dev サーバー :5174・Chromium）:
+
+| 操作 | 結果 |
+| --- | --- |
+| 和音 `[g/4(line3), a/4(line2.5)]` の下の音を選んで ↑ | 符頭が **line 2.5 の1個だけ**になり、選択（青）はその音に残る |
+| 続けて ↑ | 残った音だけが line 2 へ動く（＝選択の付け替えが効いている） |
+| 同上の直後 | 画面下端に「移動先に同じ高さの音があるため、和音の1音にまとめました（Cmd/Ctrl+Z で元に戻せます）」 |
+| `元に戻す` | 符頭が2個（line 2 と 1.5）に戻る |
+| 月光 fixture を「ファイルを開く」で読込 → `ファイル保存` の中身を検証 | `3小節目 events[9]` が `["a/3"]`、`8小節目 voices[1].events[1]` が `["b/3"]`。重複 **0件**。調号 E・パート構成は不変 |
+
+コンソールエラー 0 件。

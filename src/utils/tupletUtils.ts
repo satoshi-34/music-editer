@@ -1,6 +1,7 @@
 import type { DurKey, NoteEvent } from '../types/storage';
 import { defaultRestDisplayKeyForDuration, keyToLine, type ClefType } from '../components/clefUtils';
 import { isValidNoteKeyString } from './noteKeyUtils';
+import { findTupletRunRange } from './tupletGroupIntegrity';
 import { getDurationBeats } from './voiceMeasureUtils';
 
 // StaffCanvas / PianoSystemCanvas の音価ツール一覧と同じ並び（大きい音価から順）。
@@ -205,21 +206,16 @@ export function planTupletReplacementForRest(
  * events[index] が属する連符グループの範囲（同じ tuplet.id が連続する区間）を返す。
  * グループの削除・コピーで同じ数え方を使うため関数として切り出してある。
  *
+ * 実体は tupletGroupIntegrity の findTupletRunRange。「グループ＝同じ id が連続する区間」
+ * という数え方を2系統に増やさないため、正規化（Issue #282）と同じ関数を共有している。
+ *
  * @returns 連符でない（tuplet.id を持たない）ときは null
  */
 export function findTupletGroupRange(
   events: NoteEvent[],
   index: number
 ): { start: number; end: number } | null {
-  const tupletId = events[index]?.tuplet?.id;
-  if (!tupletId) {
-    return null;
-  }
-  let start = index;
-  let end = index;
-  while (start > 0 && events[start - 1]?.tuplet?.id === tupletId) start -= 1;
-  while (end < events.length - 1 && events[end + 1]?.tuplet?.id === tupletId) end += 1;
-  return { start, end };
+  return findTupletRunRange(events, index);
 }
 
 /**

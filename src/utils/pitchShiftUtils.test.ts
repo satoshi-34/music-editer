@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeShiftedKeys, applyPitchChangeToMeasures } from './pitchShiftUtils';
+import { computeShiftedKeys, computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from './pitchShiftUtils';
 import { lineToKey as lineToKeyForClef, keyToLine as keyToLineForClef } from '../components/clefUtils';
 import type { MeasureData, NoteEvent } from '../types/storage';
 
@@ -56,6 +56,78 @@ describe('computeShiftedKeys', () => {
     const keys = computeShiftedKeys(noteEv, 1, { up: true, shiftKey: false, altKey: true }, trebleCtx);
     expect(keys[0]).toBe('c/4');
     expect(keys[1]).not.toBe('e/4');
+  });
+
+  // Issue #281: 移動先に同じ音が既にあるとき、重複した和音を作らずに1音へまとめる。
+  // 同じ高さの符頭は完全に重なって1つに見えるため、重複が残ると利用者は気づけない。
+  describe('同音の吸収（Issue #281）', () => {
+    it('和音: 移動先に同じ音があるとき重複を作らず1音になる', () => {
+      const noteEv = ev({ keys: ['g#/3', 'a/3'] });
+      const result = computeShiftedKeysWithSelection(noteEv, 0, { up: true, shiftKey: false, altKey: false }, trebleCtx);
+      expect(result.keys).toEqual(['a/3']);
+      // 選択は吸収先（残ったほうの a/3）へ移り、そのまま動かし続けられる
+      expect(result.keyIndex).toBe(0);
+      expect(result.movedToKey).toBe('a/3');
+      expect(result.absorbedKeyIndex).toBe(0);
+    });
+
+    it('和音: 下向きの移動でも同じように吸収する（吸収先が前にある場合）', () => {
+      const noteEv = ev({ keys: ['g/4', 'a/4'] });
+      const result = computeShiftedKeysWithSelection(noteEv, 1, { up: false, shiftKey: false, altKey: false }, trebleCtx);
+      expect(result.keys).toEqual(['g/4']);
+      expect(result.keyIndex).toBe(0);
+      expect(result.absorbedKeyIndex).toBe(1);
+    });
+
+    it('半音シフト（Alt）でも吸収する', () => {
+      const noteEv = ev({ keys: ['c/4', 'c#/4'] });
+      const result = computeShiftedKeysWithSelection(noteEv, 0, { up: true, shiftKey: false, altKey: true }, trebleCtx);
+      expect(result.keys).toEqual(['c#/4']);
+      expect(result.keyIndex).toBe(0);
+      expect(result.absorbedKeyIndex).toBe(0);
+    });
+
+    it('3音の和音では、動かした音だけが吸収されて2音になる', () => {
+      const noteEv = ev({ keys: ['c/4', 'e/4', 'f/4'] });
+      // e/4 を1ライン上げると f/4 と重なる
+      const result = computeShiftedKeysWithSelection(noteEv, 1, { up: true, shiftKey: false, altKey: false }, trebleCtx);
+      expect(result.keys).toEqual(['c/4', 'f/4']);
+      expect(result.keyIndex).toBe(1);
+    });
+
+    it('重ならなければ従来どおり音数は変わらない（吸収の情報も付かない）', () => {
+      const noteEv = ev({ keys: ['c/4', 'e/4'] });
+      const result = computeShiftedKeysWithSelection(noteEv, 0, { up: true, shiftKey: false, altKey: false }, trebleCtx);
+      expect(result.keys).toEqual(['d/4', 'e/4']);
+      expect(result.keyIndex).toBe(0);
+      expect(result.absorbedKeyIndex).toBeUndefined();
+    });
+
+    it('四分音（微分音）が付いた音は、音高が同じでも別の音として扱い吸収しない', () => {
+      // "a/3" と「quarterSharp 付きの a/3」は鳴る高さが違うため、まとめてはいけない
+      const noteEv = ev({ keys: ['g#/3', 'a/3'], microtones: [{ keyIndex: 1, type: 'quarterSharp' }] });
+      const result = computeShiftedKeysWithSelection(noteEv, 0, { up: true, shiftKey: false, altKey: false }, trebleCtx);
+      expect(result.keys).toEqual(['a/3', 'a/3']);
+      expect(result.absorbedKeyIndex).toBeUndefined();
+    });
+
+    it('休符と、和音全体の移動（keyIndex未指定）は従来どおり', () => {
+      const restEv = ev({ isRest: true, keys: ['b/4'] });
+      const rest = computeShiftedKeysWithSelection(restEv, undefined, { up: true, shiftKey: false, altKey: false }, trebleCtx);
+      expect(rest.keys).toHaveLength(1);
+      expect(rest.absorbedKeyIndex).toBeUndefined();
+      expect(rest.movedToKey).toBeUndefined();
+
+      const chordEv = ev({ keys: ['c/4', 'd/4'] });
+      const whole = computeShiftedKeysWithSelection(chordEv, undefined, { up: true, shiftKey: false, altKey: false }, trebleCtx);
+      expect(whole.keys).toEqual(['d/4', 'e/4']);
+      expect(whole.absorbedKeyIndex).toBeUndefined();
+    });
+
+    it('computeShiftedKeys（keys だけを返す薄いラッパ）も同じ結果になる', () => {
+      const noteEv = ev({ keys: ['g#/3', 'a/3'] });
+      expect(computeShiftedKeys(noteEv, 0, { up: true, shiftKey: false, altKey: false }, trebleCtx)).toEqual(['a/3']);
+    });
   });
 
   it('クレフ違い(bass)でも動作する', () => {
@@ -188,6 +260,95 @@ describe('applyPitchChangeToMeasures', () => {
     const shiftedTo = applyPitchChangeToMeasures(ms, 0, 1, undefined, ['f/3'], 1);
     expect(shiftedTo[0].voices?.[1].events[0].arcs?.[0].toKey).toBe('f/3');
     expect(shiftedTo[0].events[0].arcs?.[0].toKey).toBe('d/5');
+  });
+
+  // Issue #281: 同音吸収で和音が1音減るときの後始末。
+  describe('同音の吸収を適用する（Issue #281）', () => {
+    it('吸収で消えた音を fromKey とする arc が、吸収先の音高へ付け替わる', () => {
+      const ms = measures([
+        ev({
+          keys: ['g#/3', 'a/3'],
+          arcs: [{ fromKey: 'g#/3', toKey: 'g#/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' }],
+        }),
+        ev({ keys: ['g#/3'] }),
+      ]);
+      const next = applyPitchChangeToMeasures(ms, 0, 0, 0, ['a/3'], 0, {
+        movedToKey: 'a/3',
+        absorbedKeyIndex: 0,
+      });
+      expect(next[0].events[0].keys).toEqual(['a/3']);
+      // newKeys[keyIndex] は存在しないので、movedToKey を渡さないと undefined になってしまう箇所
+      expect(next[0].events[0].arcs?.[0].fromKey).toBe('a/3');
+    });
+
+    it('別イベントから、動かした音を終点として指す arc も吸収先へ付け替わる', () => {
+      const ms = measures([
+        ev({ keys: ['c/4'], arcs: [{ fromKey: 'c/4', toKey: 'g#/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'slur' }] }),
+        ev({ keys: ['g#/3', 'a/3'] }),
+      ]);
+      const next = applyPitchChangeToMeasures(ms, 0, 1, 0, ['a/3'], 0, {
+        movedToKey: 'a/3',
+        absorbedKeyIndex: 0,
+      });
+      expect(next[0].events[0].arcs?.[0].toKey).toBe('a/3');
+    });
+
+    it('付け替えの結果まったく同じになった弧は1本に畳む', () => {
+      const ms = measures([
+        ev({
+          keys: ['g#/3', 'a/3'],
+          arcs: [
+            { fromKey: 'g#/3', toKey: 'a/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' },
+            { fromKey: 'a/3', toKey: 'a/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' },
+          ],
+        }),
+        ev({ keys: ['a/3'] }),
+      ]);
+      const next = applyPitchChangeToMeasures(ms, 0, 0, 0, ['a/3'], 0, {
+        movedToKey: 'a/3',
+        absorbedKeyIndex: 0,
+      });
+      expect(next[0].events[0].arcs).toHaveLength(1);
+    });
+
+    it('四分音（微分音）の付き先が、詰まった keys の並びに合わせて繰り上がる', () => {
+      const ms = measures([
+        ev({ keys: ['g#/3', 'a/3', 'c/4'], microtones: [{ keyIndex: 2, type: 'quarterFlat' }] }),
+      ]);
+      const next = applyPitchChangeToMeasures(ms, 0, 0, 0, ['a/3', 'c/4'], 0, {
+        movedToKey: 'a/3',
+        absorbedKeyIndex: 0,
+      });
+      // c/4 は 2番目 → 1番目に詰まったので、四分音の keyIndex も 2 → 1 になる
+      expect(next[0].events[0].microtones).toEqual([{ keyIndex: 1, type: 'quarterFlat' }]);
+    });
+
+    it('吸収で消えた音に付いていた四分音は一緒に取り除かれる', () => {
+      const ms = measures([
+        ev({ keys: ['g#/3', 'a/3'], microtones: [{ keyIndex: 0, type: 'quarterSharp' }] }),
+      ]);
+      const next = applyPitchChangeToMeasures(ms, 0, 0, 0, ['a/3'], 0, {
+        movedToKey: 'a/3',
+        absorbedKeyIndex: 0,
+      });
+      expect(next[0].events[0].microtones).toBeUndefined();
+    });
+
+    it('声部2でも同じように吸収が適用され、声部1は変わらない', () => {
+      const ms: MeasureData[] = [{
+        events: [ev({ keys: ['g#/3', 'a/3'] })],
+        voices: [
+          { id: 'voice-1', events: [ev({ keys: ['g#/3', 'a/3'] })] },
+          { id: 'voice-2', stemDirection: 'down', events: [ev({ keys: ['g#/3', 'a/3'] })] },
+        ],
+      }];
+      const next = applyPitchChangeToMeasures(ms, 0, 0, 0, ['a/3'], 1, {
+        movedToKey: 'a/3',
+        absorbedKeyIndex: 0,
+      });
+      expect(next[0].voices?.[1].events[0].keys).toEqual(['a/3']);
+      expect(next[0].events[0].keys).toEqual(['g#/3', 'a/3']);
+    });
   });
 
   it('voiceIndex=1 の休符も声部2側だけ差し替わる', () => {

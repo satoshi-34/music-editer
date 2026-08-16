@@ -182,7 +182,11 @@ describe('月光1〜9小節 回帰チェック: 読込（Issue #243）', () => {
     );
     expect(events).toHaveLength(140);
     expect(events.filter((ev) => ev.isRest)).toHaveLength(3);
-    expect(events.filter((ev) => !ev.isRest && ev.keys.length > 1)).toHaveLength(11);
+    // 和音（2音以上）の数は 11 → 9 に減った（Issue #281）。fixture 側は1バイトも変えていない。
+    // 読込時に同音の重複を1音へ畳むようになったため、fixture が持っていた
+    // 「["a/3","a/3"]（3小節目・右手）」「["b/3","b/3","b/3"]（8小節目・声部2）」の2件が
+    // 単音になり、和音として数えられなくなった。イベント数（140）は変わらない。
+    expect(events.filter((ev) => !ev.isRest && ev.keys.length > 1)).toHaveLength(9);
     expect(events.filter((ev) => ev.dots)).toHaveLength(3);
     expect(events.filter((ev) => ev.fingering)).toHaveLength(2);
     expect(events.filter((ev) => ev.dynamics)).toHaveLength(1);
@@ -191,7 +195,28 @@ describe('月光1〜9小節 回帰チェック: 読込（Issue #243）', () => {
     expect(events.filter((ev) => ev.expressionMarking)).toHaveLength(1);
   });
 
-  it('README 記載の「既知の入力上の傷」3件が、直されずそのまま残っている', async () => {
+  it('README 記載の「既知の入力上の傷」のうち、ユニゾン重複だけが読込時に正規化される（Issue #281）', async () => {
+    // fixture の中身は変えていない（ユニゾン重複は生データにそのまま残っている）。
+    // 変わったのは「読み込んだあとの姿」だけであることを、生データ側からも押さえておく。
+    const raw = JSON.parse(readFixtureText());
+    expect(raw.parts[0].measures[7].voices[1].events[1].keys).toEqual(['b/3', 'b/3', 'b/3']);
+    expect(raw.parts[0].measures[2].events[9].keys).toEqual(['a/3', 'a/3']);
+
+    const data = await loadViaImport();
+    const rightHand = data.parts[0].measures as MeasureData[];
+
+    // 8小節目（index 7）右手声部2の b/3 3重ユニゾン和音（誤クリックの実物）は、
+    // 読込時の正規化で1音へ畳まれる。同じ高さの符頭は完全に重なって1つに見えるため、
+    // 残しておくと「削除しても見た目が変わらない」という気づけない不具合になる。
+    const bar8Voice2 = voiceEventLists(rightHand[7])[1];
+    expect(bar8Voice2[1].keys).toEqual(['b/3']);
+    // 3小節目（index 2）右手の ["a/3","a/3"] も同じく1音になる。
+    expect(voiceEventLists(rightHand[2])[0][9].keys).toEqual(['a/3']);
+    // 畳むのは keys だけで、イベント自体は消さない（音価・並びは変わらない）。
+    expect(allEvents(rightHand[7])).toHaveLength(15);
+  });
+
+  it('README 記載の「既知の入力上の傷」のうち、音高の誤りだけは直されずそのまま残っている', async () => {
     const data = await loadViaImport();
     const rightHand = data.parts[0].measures as MeasureData[];
 
@@ -199,16 +224,36 @@ describe('月光1〜9小節 回帰チェック: 読込（Issue #243）', () => {
     // #219 の誤帰属で入った実物で、#218 修正後に「救出できる」ことの検証データを兼ねる。
     const bar5Voice2 = voiceEventLists(rightHand[4])[1];
     expect(bar5Voice2.slice(0, 3).map((ev) => ev.keys)).toEqual([['b/1'], ['d#/2'], ['g#/2']]);
+  });
 
-    // 傷2: 8小節目（index 7）右手声部2に b/3 の3重ユニゾン和音（誤クリックの実物）。
-    const bar8Voice2 = voiceEventLists(rightHand[7])[1];
-    expect(bar8Voice2[1].keys).toEqual(['b/3', 'b/3', 'b/3']);
+  // 傷3（9小節目の連符ID交錯）は Issue #282 で「読込時に直す」対象になった。
+  // fixture そのものは1バイトも変えず、読み込んだあとの姿だけが変わる。
+  // （傷2＝ユニゾン重複も #281 で同様に読込時対象になったため、上のテストへ移っている）
+  it('傷3（9小節目の連符ID交錯）は、生データには残ったまま読込時に正規化される', async () => {
+    // 生データ側: 4番目のグループの最後の1音が末尾に取り残されたまま（fixture は無改変）。
+    const raw = JSON.parse(readFixtureText()) as SavedScoreData;
+    const rawBar9Ids = (raw.parts[0].measures[8].voices![1].events as NoteEvent[])
+      .map((ev) => ev.tuplet?.id);
+    expect(new Set(rawBar9Ids).size).toBe(4);
+    expect(rawBar9Ids[6]).toBe(rawBar9Ids[11]);
+    expect(rawBar9Ids[8]).not.toBe(rawBar9Ids[11]);
 
-    // 傷3: 9小節目（index 8）右手声部2の連符IDが入れ子に交錯している
-    // （4番目のグループの最後の1音が、末尾に取り残されている）。
-    const bar9TupletIds = voiceEventLists(rightHand[8])[1].map((ev) => ev.tuplet?.id);
+    // 読込後: 3音ずつ4グループに区切り直され、同じ id が離れて並ぶ箇所が無くなる。
+    const data = await loadViaImport();
+    const rightHand = data.parts[0].measures as MeasureData[];
+    const bar9 = voiceEventLists(rightHand[8])[1];
+    const bar9TupletIds = bar9.map((ev) => ev.tuplet?.id);
     expect(new Set(bar9TupletIds).size).toBe(4);
-    expect(bar9TupletIds[6]).toBe(bar9TupletIds[11]);
-    expect(bar9TupletIds[8]).not.toBe(bar9TupletIds[11]);
+    for (let group = 0; group < 4; group += 1) {
+      const ids = bar9TupletIds.slice(group * 3, group * 3 + 3);
+      expect(new Set(ids).size).toBe(1);
+    }
+    // 音の並び自体は正規化で変わらない（書き換わるのは tuplet.id だけ）。
+    expect(bar9.map((ev) => ev.keys[0])).toEqual([
+      'g#/3', 'b/3', 'e/4',
+      'g#/3', 'b/3', 'e/4',
+      'g#/3', 'b/3', 'e/4',
+      'g#/3', 'b/3', 'e/4',
+    ]);
   });
 });

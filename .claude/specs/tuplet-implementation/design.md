@@ -544,6 +544,10 @@ Delete すると、**その1音だけでなく三連符グループ全体が4分
 イベントごと（連符ならグループごと）消える。これは本 Issue の症状とは別の未実装事項
 なので、順序の入れ替えでは直らないし、今回は触っていない。
 
+> **解消済み（Issue #280, 2026-08-16）**: この未実装事項は下の「追記9」で解消した。
+> 判定の分岐そのものを純関数 `planEventDeletion` へ共通化し、声部1・声部2の両方が
+> 同じ1本を通るようにしてある（コピーが2本あったことが本件の再発原因だったため）。
+
 
 ## 追記6: 連符グループ削除で生まれる休符が異常位置に置かれる不具合の修正（Issue #226, 2026-08-12）
 
@@ -891,3 +895,204 @@ WeakSet などの隠し状態ではなく戻り値の型で持たせたのは、
 - `src/utils/storage.ts` — 読込時の型検証
 - テスト: `tupletUtils.test.ts`(5) / `vexFlowTimingUtils.test.ts`(2) / `musicXmlTuplet.test.ts`(2) /
   `PianoSystemCanvasTupletHideNumber.test.tsx`(5・新規)
+
+---
+
+## 追記9: 声部2で和音の1音だけを削除できない不具合の修正（Issue #280, 2026-08-16）
+
+### 問題
+
+ピアノ譜の**声部2**で和音の1つの符頭を選んで Delete すると、その1音ではなく
+**イベントごと**（連符の中の和音なら**グループごと休符化**）消える。音高を変えて
+同音でない和音にしても同じで、追記5（Issue #223）で直したはずの
+「和音1音削除はグループ維持」が声部2ではまったく効いていなかった。
+
+連符の中に限った話ではない。**連符でない普通の和音**でも声部2では1音削除ができず、
+和音全体が消えていた。
+
+| | 声部1 | 声部2（本Issue以前） |
+| --- | --- | --- |
+| 普通の和音の1音削除 | ✅ 当初から | ❌ 和音ごと消える |
+| 連符内の和音の1音削除 | ✅ 追記5（#223） | ❌ グループごと休符化 |
+
+### 原因: 同じ仕様のコピーが2本あった
+
+削除の判定順序（**和音1音 → 連符グループ → イベント全体**）そのものが仕様なのに、
+`noteDeletionUtils.ts` にはその判定が2本存在していた。
+
+- `deleteEventFromMeasures`（声部1・`measure.events` を読み書き）
+- `deleteVoiceEventFromMeasures`（声部2・`voices[n].events` を読み書き。#188 で導入）
+
+後者は前者から連符グループ削除だけを写した実装で、**和音1音削除の分岐がそもそも無く**、
+`keyIndex`（どの符頭を選んだか）を受け取る引数すら持っていなかった。
+呼び出し側（`PianoSystemCanvas.tsx` の `sel.voiceIndex` 分岐）にも
+「声部2の削除はイベント丸ごとが対象なので keyIndex は渡さない」というコメント付きで
+割り切りが残っていた。追記5 の修正が声部1のコピーにしか届かなかったのは、この構造が原因である。
+
+### 修正: 判定を1本にし、書き込みだけ容器ごとに分ける
+
+トリアージ（2026-08-14）が示した「望ましい形」に従い、**コピーへ分岐を足すのではなく中核を共通化**した。
+
+```
+planEventDeletion(events, index, keyIndex, clef) → EventDeletionPlan | null
+  | { kind: 'chordKey'; removedKey; nextEvent }
+  | { kind: 'splice'; removeStart; removeEnd; replacement; shift }
+```
+
+- **判定（何をどう変えるか）は純関数1本**。イベント列を読むだけで、どの容器のものかを知らない
+- **書き込みだけを各関数が担当する**。声部1は `cloneMeasures` した `m.events` を、
+  声部2は `voices[voiceIndex].events` を、それぞれ計画どおりに書き換える
+- 和音1音削除で必要な「消えた符頭を `toKey` で指す弧の掃除」も
+  `purgeArcsToRemovedKey`（変化が無ければ引数の配列をそのまま返す）へ抽出し、両方から呼ぶ
+- 副産物として、声部1の分岐2（連符グループ）と分岐3（イベント削除）が
+  `splice` プラン1つに畳まれた（分岐3は `removeStart===removeEnd`・`replacement=[]`・`shift=1` の特別な場合）
+
+`deleteVoiceEventFromMeasures` の引数に `keyIndex` を追加し（声部1側と同じく `clef` の手前）、
+`PianoSystemCanvas.tsx` の声部2分岐から `sel.keyIndex` を渡すようにした。
+削除通知（#238）の `describeDeletedNoteEvent` にも同じ `keyIndex` を渡しているので、
+文言が「3連符グループを削除しました」から「和音の1音を削除しました」へ正しく変わる。
+
+### 声部2側の挙動が1点だけ変わった（意図的）
+
+修正前の `deleteVoiceEventFromMeasures` は、連符イベントに対して
+`planTupletGroupDeletion` が `null`（グループ範囲を特定できない壊れたデータ）を返したとき、
+**そのイベント1件だけを splice して**いた。共通化により、この場合は声部1と同じく
+**引数の `measures` をそのまま返す**（＝何もしない）ようになった。
+「変更が無ければ引数の参照をそのまま返す」という約束（追記7 / Issue #245）が
+声部2にも揃ったことになる。テストで固定してある。
+
+### 変えていない点
+
+- **和音の最後の1音**（`keys.length === 1`）の Delete は従来どおりグループごと休符化する。
+  音符そのものが消える以上、連符の音価バランスを保つには置き換えが正しい（追記5 と同じ理由）
+- 声部ローカルな索引解釈（`.claude/specs/voice2-arc-support/design.md` §2 案A）。
+  声部2の削除は同じ声部の `events` しか走査せず、声部1の `arcs` / `hairpins` には触れない
+- 声部2を持たない小節はオブジェクトごと元の参照を返す（空の `voices[1]` を作らない・#112 の教訓）
+
+### 影響範囲
+
+- `src/utils/noteDeletionUtils.ts` — `planEventDeletion` / `purgeArcsToRemovedKey` の抽出、
+  両削除関数を「計画 → 適用」の形へ、`deleteVoiceEventFromMeasures` に `keyIndex` 引数を追加
+- `src/components/PianoSystemCanvas.tsx` — 声部2の Delete で `keyIndex` を削除処理と通知の両方へ渡す
+- `src/utils/noteDeletionUtils.test.ts` — 既存の呼び出しへ `undefined` を補い、
+  Issue #280 の回帰テスト9件を追加（連符内和音／連符でない和音／弧の掃除2種／最後の1音／
+  声部1の不変／空 voices[1] を作らない／休符に keyIndex／グループ特定不可）
+- `README.md` — 声部2で使える操作の一覧に和音の1音削除を追記
+- `docs/REGRESSION.md` — I 節へ声部2の和音1音削除のチェックを追加
+
+## 追記10: 連符グループidが非連続に並ぶデータの発生経路と防御（Issue #282, 2026-08-16）
+
+### 問題
+
+運用者の保存データ（月光1〜9小節・`docs/qa/regression/moonlight-bars1-9.score.json`）の
+9小節目・右手声部2で、連符グループの id が**非連続に並んでいる**状態が見つかった。
+
+```
+索引: 0  1  2 | 3  4  5 | 6  7 | 8  9 10 | 11
+id  : A  A  A | B  B  B | C  C | D  D  D | C     ← グループ C が D に分断されている
+音高: g#3 b3 e4  g#3 b3 e4  g#3 b3  e4 g#3 b3  e4
+```
+
+このアプリは連符グループを「**同じ tuplet.id が連続する区間**」として扱う
+（描画の `createVexFlowTuplets`、削除・コピーの `findTupletGroupRange` がどちらもこの数え方）。
+分断されると次のように壊れる。
+
+- **描画**: 断片の長さが `numNotes`（3）に足りないため、連符の囲み（「3」と括弧）が描かれない。
+  月光 fixture では36グループ中35個しか描かれていなかった
+- **グループ操作**: 削除・コピー・連符数字トグルが断片しか掴めない。
+  コピーすれば「2音しかない3連符」が貼り付けられ、壊れたデータが増殖する
+
+音高の並び自体（g#3 b3 e4 の4回繰り返し）は正しく、**グループの境目だけが1音ずれていた**。
+
+### 発生経路（特定済み・テストで再現）
+
+`PianoSystemCanvas.tsx` の `doInsert()` が、挿入位置 `at` を
+「クリック位置がどの描画済み音符に近いか」だけで決めていたことが原因。
+連符の2音目・3音目の手前が選ばれると、そこへ差し込んだぶんだけグループが前後に割れる。
+
+月光9小節目で起きたことは次のとおり。
+
+1. 3連符グループを3つ入力した状態（索引 0〜8）
+2. 4つ目のグループを置こうとして、3つ目のグループの3音目（索引8）の**手前**をクリック
+3. `at = 8` と判定され、新しいグループ3件がそこへ `splice` される
+4. 3つ目のグループの3音目が索引11へ押し出され、`C C [D D D] C` という並びになった
+
+`PianoSystemCanvasTupletInsertGuard.test.tsx` で、この経路を実際のクリックで再現している
+（修正を外すとこの2件が落ちることを確認済み）。**通常の音符入力でも同じことが起きる**ため、
+連符ツールのときだけでなく `at` を決めた直後に一括で対処した。
+
+### 修正設計: 3層で守る
+
+| 層 | 何をするか | 置き場所 |
+| --- | --- | --- |
+| 予防 | 挿入位置がグループの内側に来たら、手前か直後の近いほうへ寄せる | `snapInsertIndexOutOfTupletGroup`（`tupletGroupIntegrity.ts`）→ `doInsert` |
+| 修復 | 読込時に、分断されたグループを区切り直す | `normalizeTupletGroupsInParts` → `storage.ts` / `fileStorage.ts` |
+| 検知 | 保存前に分断が残っていたら開発ビルドで警告する | `collectTupletContinuityIssues` → `saveScoreDataToSlot` |
+
+新設した `src/utils/tupletGroupIntegrity.ts` は**型以外に依存を持たない**。
+描画系のモジュールを保存・読込経路へ持ち込まないためで、逆に `tupletUtils.findTupletGroupRange` は
+このファイルの `findTupletRunRange` へ委譲させて、「グループ＝連続する同一 id」という
+数え方が2系統に増えないようにした。
+
+#### 修復（正規化）の中身
+
+`normalizeTupletGroupContinuity(events)` は2段構え。
+
+1. **区切り直し**: 同じ連符の種類（3連符なら 3:2）が連続している区間の中に分断された id が
+   あれば、その区間を先頭から `numNotes` 個ずつに割り直して id を振り直す。
+   月光9小節目のように「境目だけがずれている」データは、これで元の4グループへ戻る
+2. **id の重複はがし**: それでも同じ id が離れた場所に残っていたら（連符でない音符を挟んで
+   分断されている場合など）、2回目以降の断片へ別の id を振って切り離す
+   （＝ Issue 本文の「断片ごとに別グループへ分離する」）
+
+守っている約束:
+
+- **音符の並び・音価・拍数は一切変えない。書き換えるのは `tuplet.id` だけ。**
+  拍の圧縮率は `numNotes`/`notesOccupied` から決まるので、鳴り方は正規化の前後で同じ。
+  変わるのは「どの音を1つの連符として括るか」＝見た目のグループ分けだけ
+- **区切り直した結果が元のグループとぴったり同じ区間は、元の id を据え置く**（差分の最小化）
+- **種類の違う連符（3連符と5連符）はまたいで区切り直さない**。混ぜると拍が合わなくなる
+- **`numNotes` が壊れている（0・小数）データは区切り幅が決まらないので触らない**（段2だけ効く）
+- **分断が無い events は引数の配列をそのまま返す**（正常なデータには一切触れない・再描画も起こさない）
+- **新しい id は乱数・時刻ではなく元の id から機械的に作る**（`<元のid>--fix<連番>`）。
+  保存データは `measure.events` と `voices[0].events` が同じ内容を二重に持っており、
+  別々に正規化しても同じ結果にならないと声部1の中身が食い違ってしまうため
+
+### 意図的に変えた期待値（月光回帰テスト）
+
+`docs/qa/regression/moonlight-bars1-9.score.json` は**1バイトも変更していない**（SHA-256 の照合も無改修で緑）。
+変わったのは「読み込んだあとの姿」だけ。
+
+| テスト | 変更前 | 変更後 | 理由 |
+| --- | --- | --- | --- |
+| `MoonlightRegressionRender.test.tsx` 3段目の連符 | 11 | 12 | 傷3が読込時に区切り直され、描けなかった1グループの囲みが出るようになった |
+| 同・3段合計の連符 | 35 | 36 | 同上（全36グループぶんの囲みが揃う） |
+| `moonlightRegressionLoad.test.ts` 傷3のテスト | 「交錯したまま残る」 | 「生データには残り、読込後は正規化される」 | 傷3だけ扱いが変わったので、傷1・傷2（音高の傷。今も直さない）とテストを分けた |
+
+`MoonlightRegressionRender.test.tsx` の `loadFixture()` には正規化を1行足した。
+実際のアプリは localStorage からもファイルからも正規化を通したデータしか画面へ渡さないので、
+描画テストも同じ姿を描くのが正しい（生の JSON をそのまま描いていると、
+実機では起こり得ない状態を固定してしまう）。
+
+連符**グループ数**（`moonlightRegressionLoad.test.ts` の全小節4グループ）は変わらない。
+9小節目は「4グループの境目がずれていた」のであって、グループの数は元から4だったため。
+
+### 影響範囲
+
+- `src/utils/tupletGroupIntegrity.ts` — 新設（検出・修復・予防の3つ）
+- `src/utils/tupletUtils.ts` — `findTupletGroupRange` を `findTupletRunRange` への委譲に変更（挙動は同じ）
+- `src/utils/storage.ts` — 読込時の正規化、保存前の警告（開発ビルドのみ）
+- `src/utils/fileStorage.ts` — `importScoreFromFile` の戻り値を正規化してから返す
+- `src/components/PianoSystemCanvas.tsx` — `doInsert` の `at` を確定した直後に寄せる1行
+- テスト: `tupletGroupIntegrity.test.ts`（新規23）/ `PianoSystemCanvasTupletInsertGuard.test.tsx`（新規2）/
+  `storage.test.ts`（+2）/ `moonlightRegressionLoad.test.ts`（傷3のテストを分割）/
+  `MoonlightRegressionRender.test.tsx`（期待値と読込方法）
+- `docs/qa/regression/README.md` — 傷3の扱いを追記
+
+### 今回やらなかったこと
+
+- **MusicXML 読込（`musicXmlImport.ts`）への正規化の適用**。読込側は `<time-modification>` の
+  連続からグループを組み立てるので、この経路では分断が起こらない。Issue の受入条件も
+  「読込時の正規化」としか書かれていないため、必要になったら1行足せば通せる形にしてある
+- **並べ替えによる修復**。「分断された音を元のグループの隣へ動かす」修復も考えられるが、
+  音の鳴る順番を黙って変えることになるので採らなかった。今回の方式は id しか書き換えない

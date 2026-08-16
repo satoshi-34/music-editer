@@ -82,6 +82,17 @@ export function describeDeletedNoteEvent(event: NoteEvent, keyIndex?: number): s
   return `音符を削除しました${UNDO_HINT}`;
 }
 
+/**
+ * 矢印キーの音高移動で、移動先に同じ音が既にあって1音にまとまったときの文言（Issue #281）。
+ *
+ * 同じ高さの符頭は完全に重なって1つに見えるため、重複を作らせない代わりに
+ * 「音が1つ減った」ことは必ず知らせる。黙って音数が変わるのが #238 で問題になった形なので、
+ * 削除と同じ通知の仕組みに乗せている。
+ */
+export function describeAbsorbedChordKey(): string {
+  return `移動先に同じ高さの音があるため、和音の1音にまとめました${UNDO_HINT}`;
+}
+
 /** スラー/タイの削除に出す文言 */
 export function describeDeletedArc(kind: 'tie' | 'slur'): string {
   return `${kind === 'tie' ? 'タイ' : 'スラー'}を削除しました${UNDO_HINT}`;

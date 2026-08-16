@@ -15,6 +15,7 @@ import { resolve } from 'node:path';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData, SavedScoreData } from '../types/storage';
+import { normalizeTupletGroupsInParts } from '../utils/tupletGroupIntegrity';
 
 // 音源系は描画テストに不要なうえ、実体を読み込むと AudioContext を触りに行くのでモックする。
 vi.mock('../audio/NotePlayer', () => ({
@@ -65,7 +66,10 @@ const MEASURES_PER_SYSTEM = 3;
 const EXPECTED_PER_SYSTEM = [
   { stavenote: 42, padding: 0, tuplet: 12, arc: 2 },
   { stavenote: 50, padding: 0, tuplet: 12, arc: 0 },
-  { stavenote: 50, padding: 2, tuplet: 11, arc: 1 },
+  // 3段目の連符が 11 → 12 に増えたのは Issue #282 の修正によるもの。
+  // 9小節目の連符IDの交錯（既知の傷3）が読込時に区切り直されるようになり、
+  // 囲みが描けなかった1グループが描かれるようになった（fixture 自体は無改変）。
+  { stavenote: 50, padding: 2, tuplet: 12, arc: 1 },
 ];
 
 /**
@@ -75,7 +79,11 @@ const EXPECTED_PER_SYSTEM = [
 const EXPECTED_EVENTS_PER_SYSTEM = [42, 50, 48];
 
 function loadFixture(): SavedScoreData {
-  return JSON.parse(readFileSync(FIXTURE_PATH, 'utf-8')) as SavedScoreData;
+  const data = JSON.parse(readFileSync(FIXTURE_PATH, 'utf-8')) as SavedScoreData;
+  // 実際のアプリは localStorage からもファイルからも「正規化を通したデータ」しか画面へ渡さない。
+  // このテストも同じ姿を描くために、読込経路と同じ正規化（Issue #282）を通してから使う。
+  // fixture のファイル自体は書き換えない（読み込んだあとの姿だけが変わる）。
+  return { ...data, parts: normalizeTupletGroupsInParts(data.parts) };
 }
 
 describe('月光1〜9小節 回帰チェック: 描画（Issue #243）', () => {
@@ -155,13 +163,13 @@ describe('月光1〜9小節 回帰チェック: 描画（Issue #243）', () => {
     );
     expect(totalArcs).toBe(3);
 
-    // 連符は全36グループのうち35個ぶんが囲みとして描かれる。
-    // 足りない1個は README 記載の既知の傷3（9小節目の連符IDが入れ子に交錯している）によるもので、
-    // fixture 側は直さない約束なのでこの数を正としてそのまま固定する。
+    // 連符は全36グループぶんの囲みが描かれる。
+    // Issue #282 以前は「9小節目の連符IDが入れ子に交錯している」（既知の傷3）せいで
+    // 1グループぶんの囲みが描けず 35 だった。読込時に区切り直すようにしたので 36 で揃う。
     const totalTuplets = svgs.reduce(
       (sum, svg) => sum + svg.querySelectorAll('g.vf-tuplet').length,
       0
     );
-    expect(totalTuplets).toBe(35);
+    expect(totalTuplets).toBe(36);
   });
 });
