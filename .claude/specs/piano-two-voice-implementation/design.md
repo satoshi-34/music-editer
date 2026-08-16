@@ -1319,3 +1319,62 @@ Issue #105（上記の追記）で「当たり判定はアクティブ声部に�
   `onChange` が一度も呼ばれない（＝譜面データを変えない）こと
 - 逆方向（声部1アクティブで声部2の符頭をクリック）も同様
 - 単声部の譜面では選択専用領域が1枚も作られないこと（受入条件4の担保）
+
+## 追記: 声部を消し切ったら多声の器を残さない（Issue #305, 2026-08-17）
+
+### 問題
+
+下声（声部2）の音符をすべて削除しても、その小節が**多声小節のまま残る**。実機テストでの症状は3つ。
+
+- 上声のスラーが符幹先端側（上）へアンカーされたまま（#296/#303 の多声用挙動が効き続ける）
+- 声部1の符幹が上向きに固定されたまま
+- 単声部に戻したつもりの譜面が「2声部の残骸」を引きずる
+
+原因は、多声かどうかの判定が `getMeasureVoices(measure).length > 1`（`PianoSystemCanvas.tsx` の
+`isMultiVoiceMeasure` ほか）である一方、削除経路 `deleteVoiceEventFromMeasures` が最後の1件を
+消しても `voices` 構造を畳まないこと。**中身が空でも器（`voices[1]`）が残っていれば多声**と数えられる。
+
+#112 の教訓は「クリックで空の `voices[1]` を**作らない**」だったが、その対称形
+「消し切ったら**残さない**」が未整備だった。
+
+### 修正設計（#281 / #282 と同じ「予防＋修復」の2層）
+
+1. **予防（削除時）**: `deleteVoiceEventFromMeasures` が声部の events を書き換えたあと、
+   新設の `collapseEmptyTrailingVoices`（`src/utils/voiceMeasureUtils.ts`）へ通す。
+   削除と畳みが同じ1回の状態更新に入るので、**Undo は従来どおり1手**で2声部の状態へ戻る。
+2. **修復（読込時）**: `normalizeEmptyVoicesInParts` を読込の2経路
+   （`storage.ts` の `parseAndNormalizeStoredScore` / `fileStorage.ts` の `importScoreFromFile`）へ追加。
+   この修正より前に下声を消して保存された譜面も、開いた時点で畳まれる。
+
+`collapseEmptyTrailingVoices` の規則:
+
+| 入力 | 結果 | 理由 |
+| --- | --- | --- |
+| `voices[1]` が0件（末尾） | `voices` キーごと削除 | 最初から単声部で書いた小節と保存形式まで同一にする（#294 の「戻すときはプロパティごと削除」と同じ） |
+| 声部3まであり末尾1つだけ空 | `voices` を2つへ切り詰め | 「最後の1声部になったら畳む」という数え方（#244「2を焼き込まない」） |
+| 声部2に休符が1件でも残る | 畳まない | ユーザーが明示的に置いた休符は「中身」。表示用の詰め物休符は保存データに入らないので誤判定しない |
+| 声部1が空・声部2に中身 | 畳まない | 下声だけ先に書いている途中の小節を壊さない |
+| 間に挟まった空の声部（`[v1, 空, v3]`） | 畳まない | 途中を抜くと後ろの声部の番号がずれ、その声部の弧が指す先（声部ローカルの索引・`voice2-arc-support/design.md` §2 案A）の意味まで変わるため |
+| 畳む必要が無い | **引数の参照をそのまま返す** | #245 の約束（呼び出し側が参照比較で「変わっていない」を判定できる） |
+
+畳むとき `events` は `measure.events` を残す（`getMeasureVoices` が `voices[0]` より優先して読む正本のため）。
+
+### 影響範囲
+
+- `src/utils/voiceMeasureUtils.ts`: `collapseEmptyTrailingVoices` / `normalizeEmptyVoicesInParts` を追加
+- `src/utils/noteDeletionUtils.ts`: `deleteVoiceEventFromMeasures` の書き込み後に畳みを1行追加
+- `src/utils/storage.ts` / `src/utils/fileStorage.ts`: 読込時の正規化を1行追加
+- 描画側（`PianoSystemCanvas.tsx`）は**無改修**。`getMeasureVoices` が単声部を返すようになるだけで、
+  符幹の向き固定・スラーの符幹アンカー・休符の上下振り分けがまとめて解ける
+
+### テスト
+
+- `src/utils/voiceMeasureUtils.test.ts`: 上の表の各行（畳む／畳まない／参照据え置き）
+- `src/utils/noteDeletionUtils.test.ts`: 声部2の最後の1件を消すと `voices` が消える、
+  途中では畳まない、連符グループ削除で休符が残る場合は畳まない、`repeatStart` などの
+  他フィールドが残る
+- `src/utils/storage.test.ts` / `src/utils/fileStorage.test.ts`: 読込2経路の正規化
+- `src/components/PianoSystemCanvasMultiVoiceArcStem.test.tsx`: **受入条件そのもの**。
+  実際の削除経路で下声を消し切ったあと、弧のパス文字列が単声部の実測値（`SINGLE_VOICE_ARC_D`）と
+  1文字も変わらないことを固定した（#296 の受入2と同じ比較方法）。
+  対照実験として「空の `voices[1]` を残したままなら一致しない」も置いてある

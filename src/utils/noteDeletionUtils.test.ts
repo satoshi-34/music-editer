@@ -830,6 +830,66 @@ describe('deleteVoiceEventFromMeasures', () => {
       expect(deleteVoiceEventFromMeasures(ms, 1, 0, 0, undefined, 'treble')).toBe(ms);
     });
   });
+
+  // Issue #305: 消し切ったら器（voices）を残さない。
+  // 空の voices[1] が残ると「中身は無いのに多声小節」と判定され、
+  // 符幹の上向き固定・スラーの符幹アンカーが解けないまま残る。
+  describe('声部を空にしたら単声部へ畳む（Issue #305）', () => {
+    it('受入: 声部2の最後の1件を消すと voices キーごと消え、単声部の小節と同じ形になる', () => {
+      const ms: MeasureData[] = [twoVoiceMeasure([ev({ keys: ['c/5'] })], [ev({ keys: ['c/3'] })])];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, undefined, 'treble');
+
+      expect('voices' in next[0]).toBe(false);
+      // 声部1のイベントは1件も変わらない（畳みは器を外すだけ）
+      expect(next[0].events).toBe(ms[0].events);
+    });
+
+    it('声部2にまだ音符が残っているうちは畳まない', () => {
+      const ms: MeasureData[] = [twoVoiceMeasure(
+        [ev({ keys: ['c/5'] })],
+        [ev({ keys: ['c/3'] }), ev({ keys: ['d/3'] })],
+      )];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, undefined, 'treble');
+
+      expect(next[0].voices).toHaveLength(2);
+      expect(next[0].voices?.[1].events).toHaveLength(1);
+    });
+
+    it('連符グループ削除で休符が残る場合は畳まない（明示的な休符は「中身」）', () => {
+      const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+      const ms: MeasureData[] = [twoVoiceMeasure(
+        [ev({ keys: ['c/5'] })],
+        [
+          ev({ dur: '8', keys: ['c/3'], tuplet }),
+          ev({ dur: '8', isRest: true, keys: ['d/4'], tuplet }),
+          ev({ dur: '8', isRest: true, keys: ['d/4'], tuplet }),
+        ],
+      )];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, undefined, 'treble');
+
+      expect(next[0].voices?.[1].events).toHaveLength(1);
+      expect(next[0].voices?.[1].events[0].isRest).toBe(true);
+    });
+
+    it('声部1が空で声部2の最後の1件を消した場合も、単声部（空の小節）へ畳む', () => {
+      const ms: MeasureData[] = [twoVoiceMeasure([], [ev({ keys: ['c/3'] })])];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, undefined, 'treble');
+
+      expect('voices' in next[0]).toBe(false);
+      expect(next[0].events).toEqual([]);
+    });
+
+    it('畳んでも、他の小節の声部2と repeatStart などのフィールドは残る', () => {
+      const ms: MeasureData[] = [
+        { ...twoVoiceMeasure([ev({ keys: ['c/5'] })], [ev({ keys: ['c/3'] })]), repeatStart: true },
+        twoVoiceMeasure([ev({ keys: ['d/5'] })], [ev({ keys: ['d/3'] })]),
+      ];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, undefined, 'treble');
+
+      expect(next[0].repeatStart).toBe(true);
+      expect(next[1]).toBe(ms[1]);
+    });
+  });
 });
 
 // Issue #245 の再現データそのもの（トリアージコメント指定）。

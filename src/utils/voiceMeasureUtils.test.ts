@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import type { MeasureData } from '../types/storage';
+import type { MeasureData, NoteEvent, PartData } from '../types/storage';
 import {
+  collapseEmptyTrailingVoices,
   computeVoiceDisplayPadding,
   createEmptyMeasures,
   flattenMeasureForPlayback,
@@ -10,6 +11,7 @@ import {
   getMeasureDurationBeats,
   getMeasureVoices,
   getVoiceEvents,
+  normalizeEmptyVoicesInParts,
   resolveVoiceStemDirections,
   syncPrimaryVoiceFromEvents,
   withVoiceEventsUpdated,
@@ -395,6 +397,91 @@ describe('voiceMeasureUtils', () => {
         restKeyForDuration
       );
       expect(partialPadding).toEqual([{ dur: '2', isRest: true, keys: ['b/4'] }]);
+    });
+  });
+
+  // Issue #305: 声部2を空にしても「器」が残ると多声小節と判定され、
+  // 符幹の向き固定・スラーの符幹アンカーが解けないまま残る。
+  describe('空になった末尾の声部の畳み込み（Issue #305）', () => {
+    const note = (key: string): NoteEvent => ({ dur: '4', isRest: false, keys: [key] });
+
+    /** 声部1・声部2（＋必要なら声部3）を持つ小節を組み立てる。 */
+    function multiVoiceMeasure(...voiceEvents: NoteEvent[][]): MeasureData {
+      return {
+        events: voiceEvents[0],
+        voices: voiceEvents.map((events, index) => ({
+          id: `voice-${index + 1}`,
+          ...(index > 0 ? { stemDirection: 'down' as const } : {}),
+          events,
+        })),
+      };
+    }
+
+    it('声部2が空になった小節は voices キーごと消え、単声部で書いた小節と同じ形になる', () => {
+      const measure = multiVoiceMeasure([note('c/5')], []);
+      const collapsed = collapseEmptyTrailingVoices(measure);
+
+      expect('voices' in collapsed).toBe(false);
+      expect(collapsed.events).toBe(measure.events);
+      // getMeasureVoices から見ても単声部（＝多声判定 voices.length > 1 が false）になる
+      expect(getMeasureVoices(collapsed)).toHaveLength(1);
+    });
+
+    it('声部2に休符が1件でも残っていれば畳まない（明示的に置いた休符は「中身」）', () => {
+      const measure = multiVoiceMeasure([note('c/5')], [{ dur: '4', isRest: true, keys: ['d/3'] }]);
+      expect(collapseEmptyTrailingVoices(measure)).toBe(measure);
+    });
+
+    it('声部1が空で声部2に中身がある小節は畳まない（下声だけ書いている途中を壊さない）', () => {
+      const measure = multiVoiceMeasure([], [note('c/3')]);
+      expect(collapseEmptyTrailingVoices(measure)).toBe(measure);
+    });
+
+    it('voices を持たない小節・声部1しか無い小節は引数の参照をそのまま返す', () => {
+      const single: MeasureData = { events: [note('c/5')] };
+      expect(collapseEmptyTrailingVoices(single)).toBe(single);
+
+      const onlyPrimary = multiVoiceMeasure([note('c/5')]);
+      expect(collapseEmptyTrailingVoices(onlyPrimary)).toBe(onlyPrimary);
+    });
+
+    it('3声部で末尾の1つだけ空なら、その1つだけを落として2声部で残す（#244「2を焼き込まない」）', () => {
+      const measure = multiVoiceMeasure([note('c/5')], [note('c/3')], []);
+      const collapsed = collapseEmptyTrailingVoices(measure);
+
+      expect(collapsed.voices).toHaveLength(2);
+      expect(collapsed.voices?.[1].events).toEqual([note('c/3')]);
+    });
+
+    it('3声部で末尾2つとも空なら、最後の1声部になるので voices ごと落ちる', () => {
+      const collapsed = collapseEmptyTrailingVoices(multiVoiceMeasure([note('c/5')], [], []));
+      expect('voices' in collapsed).toBe(false);
+    });
+
+    it('間に挟まった空の声部は畳まない（後ろの声部の番号がずれ、その声部の弧の指す先が変わるため）', () => {
+      const measure = multiVoiceMeasure([note('c/5')], [], [note('c/3')]);
+      expect(collapseEmptyTrailingVoices(measure)).toBe(measure);
+    });
+
+    it('normalizeEmptyVoicesInParts: 空の声部を含む小節だけが畳まれ、他は参照ごと据え置き', () => {
+      const intact = multiVoiceMeasure([note('c/5')], [note('c/3')]);
+      const parts: PartData[] = [
+        { partId: 'right-hand', clef: 'treble', measures: [multiVoiceMeasure([note('c/5')], []), intact] },
+        { partId: 'left-hand', clef: 'bass', measures: [{ events: [note('c/3')] }] },
+      ];
+      const next = normalizeEmptyVoicesInParts(parts);
+
+      expect('voices' in next[0].measures[0]).toBe(false);
+      expect(next[0].measures[1]).toBe(intact);
+      // 触る必要が無かったパートは参照ごと据え置き
+      expect(next[1]).toBe(parts[1]);
+    });
+
+    it('normalizeEmptyVoicesInParts: 畳む対象が無ければ引数の配列をそのまま返す', () => {
+      const parts: PartData[] = [
+        { partId: 'right-hand', clef: 'treble', measures: [multiVoiceMeasure([note('c/5')], [note('c/3')])] },
+      ];
+      expect(normalizeEmptyVoicesInParts(parts)).toBe(parts);
     });
   });
 });

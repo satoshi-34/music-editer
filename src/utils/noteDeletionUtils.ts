@@ -14,7 +14,7 @@
 import type { HairpinMark, MeasureData, NoteEvent, TieArc } from '../types/storage';
 import type { ClefType } from '../components/clefUtils';
 import { buildTupletInnerRest, canReplaceTupletNoteWithRest, planTupletGroupDeletion } from './tupletUtils';
-import { getVoiceEvents } from './voiceMeasureUtils';
+import { collapseEmptyTrailingVoices, getVoiceEvents } from './voiceMeasureUtils';
 
 /**
  * MeasureData 配列を複製する（各小節・各イベント配列を新しい参照にする）。
@@ -367,9 +367,14 @@ export function deleteVoiceEventFromMeasures(
 
     // 中身が変わらなかった小節は、オブジェクトごと元の参照を返す（無駄な再描画を増やさない）。
     if (nextEvents === events) return m;
-    return {
+    const updated = {
       ...m,
       voices: m.voices.map((voice, vi) => (vi === voiceIndex ? { ...voice, events: nextEvents } : voice)),
     };
+    // 最後の1件を消して声部が空になったら、器（voices）ごと畳んで単声部へ戻す（Issue #305）。
+    // 空の器が残ると「中身は無いのに多声小節」と判定され、符幹の上向き固定・
+    // スラーの符幹アンカーが効いたままになる。削除と畳みを同じ1回の更新で行うので、
+    // Undo は従来どおり1手で2声部の状態へ戻る。
+    return collapseEmptyTrailingVoices(updated);
   });
 }
