@@ -22,6 +22,14 @@ export const SCORE_EDIT_NOTICE_EVENT = 'music-editer-score-edit-notice';
 /** 譜面側（PianoSystemCanvas）の選択を解除させるための要求イベント名 */
 export const SCORE_SELECTION_CLEAR_EVENT = 'music-editer-score-selection-clear';
 
+/** 譜面のクリックから「アクティブ声部を切り替えてほしい」と伝えるイベント名（Issue #258） */
+export const SCORE_ACTIVE_VOICE_CHANGE_EVENT = 'music-editer-score-active-voice-change';
+
+export interface ScoreActiveVoiceChangeDetail {
+  /** 切り替え先の声部（0 = 上声/声部1、1 = 下声/声部2） */
+  voiceIndex: 0 | 1;
+}
+
 export interface ScoreEditNoticeDetail {
   /** 画面に出す本文。「〜しました」までを含む完成した文にすること */
   message: string;
@@ -51,6 +59,32 @@ export function notifyScoreEdit(message: string): void {
 export function requestScoreSelectionClear(): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new Event(SCORE_SELECTION_CLEAR_EVENT));
+}
+
+/**
+ * アクティブ声部の切り替えを要求する（Issue #258）。
+ *
+ * 非アクティブ声部の音符をクリックしたときに譜面側から呼ぶ。声部の状態を持っているのは
+ * ScorePage で、あいだに5つのラッパーが挟まっている事情は通知（notifyScoreEdit）と同じなので、
+ * 同じ window の CustomEvent 方式にそろえている。
+ */
+export function requestActiveVoiceChange(voiceIndex: 0 | 1): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(
+    new CustomEvent<ScoreActiveVoiceChangeDetail>(SCORE_ACTIVE_VOICE_CHANGE_EVENT, { detail: { voiceIndex } })
+  );
+}
+
+/**
+ * 声部が自動で切り替わったことを知らせる文言（Issue #258）。
+ *
+ * #105 は「非アクティブ声部を気づかずに編集してしまう」ことを防ぐために、
+ * アクティブ声部にしか当たり判定を作らない設計にした。本Issueでその制限を
+ * 「選択のクリックは全声部・編集の入力はアクティブ声部だけ」へ意図的に変更したので、
+ * 誤編集の防止は「切り替わったことが必ず画面に出る」この通知が引き継ぐ。
+ */
+export function describeActiveVoiceSwitched(voiceIndex: 0 | 1): string {
+  return `声部${voiceIndex + 1}に切り替えました`;
 }
 
 /**
