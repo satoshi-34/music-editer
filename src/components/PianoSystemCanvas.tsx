@@ -111,6 +111,7 @@ import {
 } from '../utils/engravingDefaults';
 import { computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
+import { resolveArcEndpointY, resolveSlurObstacleY, shouldAnchorArcToStemSide } from '../utils/arcStemAnchorUtils';
 import {
   buildTupletGroupPlan,
   buildTupletRestReplacement,
@@ -3334,8 +3335,30 @@ export default function PianoSystemCanvas({
       }
     };
 
+    // VexFlow の StaveNote から符幹先端（符頭と反対側の端）のYを取り出す（Issue #296）。
+    //
+    // getStemExtents() は `topY` / `baseY` を返すが、どちらが画面の上かは符幹の向きで
+    // 入れ替わるので、名前ではなく実際の座標の大小で選ぶ。上向きの弧なら「いちばん上」＝ min。
+    // 全音符や休符のように符幹を持たない音符では undefined を返し、呼び出し側が符頭に戻す。
+    const stemTipYOfP=(note:StaveNote|undefined,upward:boolean):number|undefined=>{
+      if(!note)return undefined;
+      try{
+        type R=Record<string,(...a:unknown[])=>unknown>;
+        const hasStem=(note as unknown as R)['hasStem']?.() as boolean|undefined;
+        if(hasStem===false)return undefined;
+        const ext=(note as unknown as R)['getStemExtents']?.() as {topY?:number;baseY?:number}|undefined;
+        if(!ext)return undefined;
+        const ys=[ext.topY,ext.baseY].filter((v):v is number=>typeof v==='number'&&Number.isFinite(v));
+        if(ys.length===0)return undefined;
+        return upward?Math.min(...ys):Math.max(...ys);
+      }catch{
+        // 描画前の音符など、符幹の情報がまだ無い状態でも譜面全体の描画は止めない
+        return undefined;
+      }
+    };
+
     // fromKey / toKey の音高から個別符頭の正確な Y 座標を求めて弧を描く
-    const drawTieArcP=(clef:ClefType,firstNote:StaveNote,fromKey:string,fromStave:Stave,lastNote:StaveNote,toKey:string,toStave:Stave,kind:'tie'|'slur',arcVoiceIndex:number,isMultiVoiceMeasure:boolean,allLines:number[]|undefined,allNoteYs:number[]|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,flipDirection?:boolean,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatio=0)=>{
+    const drawTieArcP=(clef:ClefType,firstNote:StaveNote,fromKey:string,fromStave:Stave,lastNote:StaveNote,toKey:string,toStave:Stave,kind:'tie'|'slur',arcVoiceIndex:number,isMultiVoiceMeasure:boolean,allLines:number[]|undefined,allNoteYs:number[]|undefined,allObstacleNotes:StaveNote[]|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,flipDirection?:boolean,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatio=0)=>{
       type R=Record<string,(...a:unknown[])=>unknown>;
       const bb1=(firstNote as unknown as R)['getBoundingBox']?.() as {getX:()=>number;getW:()=>number}|undefined;
       const bb2=(lastNote  as unknown as R)['getBoundingBox']?.() as {getX:()=>number;getW:()=>number}|undefined;
@@ -3357,13 +3380,26 @@ export default function PianoSystemCanvas({
         pitchBasedUpward=lines.reduce((s,l)=>s+l,0)/lines.length<2;
       }
       const upward=resolveArcUpward({isMultiVoiceMeasure,voiceIndex:arcVoiceIndex,pitchBasedUpward,flipDirection});
-      const y1=fromStave.getYForLine(fromLine)+(upward?-3:3);
-      const y2=toStave.getYForLine(toLine)    +(upward?-3:3);
+      // 多声部小節で弧が符幹と同じ側を通るときは、端点を符頭ではなく符幹先端側へ付ける
+      // （Issue #296）。符頭に付けたままだと、弧の両端が符幹・ビームの中を通ってしまう。
+      const anchorStart=shouldAnchorArcToStemSide({isMultiVoiceMeasure,upward,stemDirection:stemDir});
+      const lastStemDir=((lastNote as unknown as R)['getStemDirection']?.() as number|undefined)??stemDir;
+      const anchorEnd=shouldAnchorArcToStemSide({isMultiVoiceMeasure,upward,stemDirection:lastStemDir});
+      const y1=resolveArcEndpointY({noteheadY:fromStave.getYForLine(fromLine),stemTipY:stemTipYOfP(firstNote,upward),upward,anchorToStem:anchorStart});
+      const y2=resolveArcEndpointY({noteheadY:toStave.getYForLine(toLine),stemTipY:stemTipYOfP(lastNote,upward),upward,anchorToStem:anchorEnd});
       let obstacleY:number|undefined;
+      // minNoteY / maxNoteY は曲率ドラッグの「反転する境目」の基準に使う値なので、
+      // 従来どおり符頭だけから求める（符幹先端を混ぜると反転のしきい値が変わってしまう）。
       const minNoteY=allNoteYs&&allNoteYs.length>0?Math.min(...allNoteYs):undefined;
       const maxNoteY=allNoteYs&&allNoteYs.length>0?Math.max(...allNoteYs):undefined;
       if(kind==='slur'&&allNoteYs&&allNoteYs.length>0){
-        obstacleY=upward?minNoteY:maxNoteY;
+        // 符幹側を通る弧では、途中の音符の「符幹先端」も避ける対象に入れる（Issue #296）。
+        // 符頭だけを見ていると、符頭の上にある符幹とビームを弧が貫通してしまう。
+        // 符頭側を通る弧（単声部・手動反転した弧）では従来どおり符頭だけを見る。
+        const stemTipYs=anchorStart&&allObstacleNotes
+          ? allObstacleNotes.map(n=>stemTipYOfP(n,upward)).filter((v):v is number=>v!==undefined)
+          : undefined;
+        obstacleY=resolveSlurObstacleY({upward,noteheadYs:allNoteYs,stemTipYs});
       }
       drawArcPathP(x1+startDx,y1+startDy,x2+endDx,y2+endDy,upward,kind,stemDir,obstacleY,cpDyOffset,arcKey,isSelected,minNoteY,maxNoteY,startDx,startDy,endDx,endDy,apexXRatio);
     };
@@ -5817,8 +5853,14 @@ export default function PianoSystemCanvas({
           const x1=bb?bb.getX()+bb.getW():absX+4;
           const fromLine=kl(arc.fromKey);
           const upward=resolveArcUpward({isMultiVoiceMeasure:startIsMultiVoice,voiceIndex,pitchBasedUpward:fromLine<2,flipDirection:arc.flipDirection});
-          const y=startStave.getYForLine(fromLine)+(upward?-3:3)+startDy;
           const stemDir=((startNote as unknown as R)['getStemDirection']?.() as number|undefined)??0;
+          // 段の右端で切れるセグメントも、始点の付き方は通常の弧とそろえる（Issue #296）
+          const y=resolveArcEndpointY({
+            noteheadY:startStave.getYForLine(fromLine),
+            stemTipY:stemTipYOfP(startNote,upward),
+            upward,
+            anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:stemDir}),
+          })+startDy;
           const edgeX=startStave.getX()+startStave.getWidth();
           drawArcPathP(x1+startDx,y,edgeX+(arc.breakEndDx??0),y+(arc.breakEndDy??0),upward,arc.kind,stemDir,y,cpDyOffset,arcKey+'-1',isSelected,undefined,undefined,startDx,startDy,arc.breakEndDx??0,arc.breakEndDy??0,apexXRatio);
         }catch{/* 段境界でも本文描画を止めない */}
@@ -5827,18 +5869,22 @@ export default function PianoSystemCanvas({
 
       let allLines:number[]|undefined;
       let allNoteYs:number[]|undefined;
+      // 符幹先端まで避けるかどうかは向き（upward）が決まってからでないと選べないので、
+      // ここでは音符そのものを集めておき、判定は drawTieArcP に任せる（Issue #296）。
+      let allObstacleNotes:StaveNote[]|undefined;
       if(arc.kind==='slur'){
-        allLines=[];allNoteYs=[];
+        allLines=[];allNoteYs=[];allObstacleNotes=[];
         // 位置マップの「値」に持たせた情報だけを見る（キー文字列は解析しない）。
         // 避ける対象を「自声部の音符だけ」に絞るのは Issue #192（設計メモ §6）で
         // 確定した正式仕様。他声部の音符まで避けると弧が不自然に膨らむため
         // （判定理由は isSlurObstacleNote のコメントを参照）。
-        for(const{keys,stave,partIndex:pi2,voiceIndex:vi2,measureIndex:m,eventIndex:e} of notePositionMapP.values()){
+        for(const{note,keys,stave,partIndex:pi2,voiceIndex:vi2,measureIndex:m,eventIndex:e} of notePositionMapP.values()){
           if(pi2!==partIndex)continue;
           if(!isSlurObstacleNote({arcVoiceIndex:voiceIndex,noteVoiceIndex:vi2}))continue;
           const afterStart=m>startMeasureIdx||(m===startMeasureIdx&&e>=startEventIdx);
           const beforeEnd =m<arc.toMeasureIndex||(m===arc.toMeasureIndex&&e<=arc.toEventIndex);
           if(afterStart&&beforeEnd){
+            allObstacleNotes!.push(note);
             keys.forEach(k=>{
               const line=kl(k);
               allLines!.push(line);
@@ -5855,7 +5901,7 @@ export default function PianoSystemCanvas({
       const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30
                      ||roughAbsX2P<roughAbsX1P;
       if(!crossSystem){
-        try{drawTieArcP(clef,startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio);}catch{/* 保険 */}
+        try{drawTieArcP(clef,startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,allObstacleNotes,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio);}catch{/* 保険 */}
       }else{
         try{
           const bb1=(startNote as unknown as R)['getBoundingBox']?.() as{getX:()=>number;getW:()=>number}|undefined;
@@ -5872,9 +5918,22 @@ export default function PianoSystemCanvas({
             pitchBasedUpward:avgLines.reduce((s,l)=>s+l,0)/avgLines.length<2,
             flipDirection:arc.flipDirection,
           });
-          const y1=startStave.getYForLine(fromLine)+(upward?-3:3);
-          const y2=dest.stave.getYForLine(toLine)  +(upward?-3:3);
           const stemDir=((startNote as unknown as R)['getStemDirection']?.() as number|undefined)??0;
+          const destStemDir=((dest.note as unknown as R)['getStemDirection']?.() as number|undefined)??stemDir;
+          // 段またぎの2セグメントも、端点の付き方を通常の弧とそろえる（Issue #296）。
+          // ここがずれると、同じ弧なのに段の変わり目で高さが飛んで見える。
+          const y1=resolveArcEndpointY({
+            noteheadY:startStave.getYForLine(fromLine),
+            stemTipY:stemTipYOfP(startNote,upward),
+            upward,
+            anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:stemDir}),
+          });
+          const y2=resolveArcEndpointY({
+            noteheadY:dest.stave.getYForLine(toLine),
+            stemTipY:stemTipYOfP(dest.note,upward),
+            upward,
+            anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:destStemDir}),
+          });
           const crossMinNoteY=allNoteYs&&allNoteYs.length>0?Math.min(...allNoteYs):undefined;
           const crossMaxNoteY=allNoteYs&&allNoteYs.length>0?Math.max(...allNoteYs):undefined;
           // 上段の右端: 開始音符が属するスタヴ自身の右端（右縦線）を使う
@@ -5926,7 +5985,14 @@ export default function PianoSystemCanvas({
             const absX=((dest.note as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
             const x2=bb?bb.getX():absX-4;
             // 方向は開始音のまま保つ一方、終点座標は実際の toKey の五線位置を使う。
-            const y=dest.stave.getYForLine(toLine)+(upward?-3:3)+(arc.endDy??0);
+            // 端点の付き方（符頭側／符幹側）も第1セグメントとそろえる（Issue #296）。
+            const destStemDir=((dest.note as unknown as R)['getStemDirection']?.() as number|undefined)??0;
+            const y=resolveArcEndpointY({
+              noteheadY:dest.stave.getYForLine(toLine),
+              stemTipY:stemTipYOfP(dest.note,upward),
+              upward,
+              anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure,upward,stemDirection:destStemDir}),
+            })+(arc.endDy??0);
             const edgeX=dest.stave.getX();
             const baseKey=arcKeyP({partIndex,voiceIndex,fromMeasure,fromEvent,arcIndex});
             const selectedHere=selectedArc!==null&&selectedArc.voiceIndex===voiceIndex&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
@@ -6000,7 +6066,7 @@ export default function PianoSystemCanvas({
           const c=carryTies[pi]!, e=ln[fi];
           // レガシーのタイは声部1（measure.events）専用なので voiceIndex は常に 0。
           // 向きの既定値は始点の音符がある小節の声部数で決める（Issue #192）。
-          try{drawTieArcP(part.clef,c.note,tieRepKeyP(part.clef,c.keys),c.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,c.isMultiVoice,undefined,undefined,0,'legacy',false);}catch{/* 保険 */}
+          try{drawTieArcP(part.clef,c.note,tieRepKeyP(part.clef,c.keys),c.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,c.isMultiVoice,undefined,undefined,undefined,0,'legacy',false);}catch{/* 保険 */}
           fi++;
         }
         carryTies[pi]=null;
@@ -6011,7 +6077,7 @@ export default function PianoSystemCanvas({
           while(fi<ln.length&&ln[fi].tiedToNext&&!ln[fi].isRest)fi++;
           if(fi<ln.length){
             const s=ln[start], e=ln[fi];
-            try{drawTieArcP(part.clef,s.note,tieRepKeyP(part.clef,s.keys),s.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,s.isMultiVoice,undefined,undefined,0,'legacy',false);}catch{/* 保険 */}
+            try{drawTieArcP(part.clef,s.note,tieRepKeyP(part.clef,s.keys),s.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,s.isMultiVoice,undefined,undefined,undefined,0,'legacy',false);}catch{/* 保険 */}
             fi++;
           }else{
             carryTies[pi]={note:ln[start].note,keys:ln[start].keys,stave:ln[start].stave,isMultiVoice:ln[start].isMultiVoice};
