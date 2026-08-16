@@ -367,7 +367,7 @@ describe('deleteVoiceEventFromMeasures', () => {
         ev({ keys: ['d/3'] }),
       ],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, undefined, 'treble');
     expect(next[0].voices?.[1].events).toHaveLength(1);
     expect(next[0].voices?.[1].events[0].arcs).toBeUndefined();
     // 声部1（measure.events / voices[0]）は参照ごと据え置き
@@ -384,7 +384,7 @@ describe('deleteVoiceEventFromMeasures', () => {
         ev({ keys: ['e/3'] }),
       ],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, undefined, 'treble');
     const voice2 = next[0].voices![1].events;
     expect(voice2).toHaveLength(2);
     expect(voice2[0].arcs).toEqual([
@@ -407,7 +407,7 @@ describe('deleteVoiceEventFromMeasures', () => {
         ev({ keys: ['g/3'] }),
       ],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, undefined, 'treble');
     const voice2 = next[0].voices![1].events;
     expect(voice2).toHaveLength(3); // 休符1 + f/3 + g/3
     expect(voice2[0].isRest).toBe(true);
@@ -429,7 +429,7 @@ describe('deleteVoiceEventFromMeasures', () => {
         ev({ dur: '8', keys: ['e/3'], tuplet }),
       ],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 2, 'treble');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 2, undefined, 'treble');
     expect(next[0].voices?.[1].events[0].arcs).toBeUndefined();
   });
 
@@ -438,7 +438,7 @@ describe('deleteVoiceEventFromMeasures', () => {
       twoVoiceMeasure([ev({ keys: ['c/5'] })], [ev({ keys: ['c/3'] }), ev({ keys: ['d/3'] })]),
       { events: [ev({ keys: ['g/4'] })] },
     ];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, 'treble');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, undefined, 'treble');
     expect(next[1].voices).toBeUndefined();
     expect(next[1]).toBe(ms[1]); // 触っていない小節は参照ごと据え置き
   });
@@ -451,7 +451,7 @@ describe('deleteVoiceEventFromMeasures', () => {
       ),
       twoVoiceMeasure([ev({ keys: ['d/5'] })], [ev({ keys: ['d/3'] }), ev({ keys: ['e/3'] })]),
     ];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 1, 0, 'treble');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 1, 0, undefined, 'treble');
     expect(next[0].voices?.[1].events[0].arcs).toEqual([
       { fromKey: 'c/3', toKey: 'e/3', toMeasureIndex: 1, toEventIndex: 0, kind: 'tie' },
     ]);
@@ -472,7 +472,7 @@ describe('deleteVoiceEventFromMeasures', () => {
         ev({ keys: ['e/3'] }),
       ],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, undefined, 'treble');
     expect(next[0].voices?.[1].events[0].hairpins).toEqual([{ type: 'dim', endMeasure: 0, endEvent: 1 }]);
   });
 
@@ -485,7 +485,7 @@ describe('deleteVoiceEventFromMeasures', () => {
       ],
       [ev({ keys: ['c/3'] }), ev({ keys: ['d/3'] }), ev({ keys: ['e/3'] })],
     )];
-    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
+    const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, undefined, 'treble');
     expect(next[0].events[0].arcs).toEqual([
       { fromKey: 'c/5', toKey: 'e/5', toMeasureIndex: 0, toEventIndex: 2, kind: 'slur' },
     ]);
@@ -494,14 +494,14 @@ describe('deleteVoiceEventFromMeasures', () => {
 
   it('範囲外（小節・索引・声部なし）は no-op で元の参照を返す', () => {
     const ms: MeasureData[] = [twoVoiceMeasure([ev()], [ev()])];
-    expect(deleteVoiceEventFromMeasures(ms, 1, 5, 0, 'treble')).toBe(ms);
-    expect(deleteVoiceEventFromMeasures(ms, 1, 0, 5, 'treble')).toBe(ms);
-    expect(deleteVoiceEventFromMeasures([{ events: [ev()] }], 1, 0, 0, 'treble')).toHaveLength(1);
+    expect(deleteVoiceEventFromMeasures(ms, 1, 5, 0, undefined, 'treble')).toBe(ms);
+    expect(deleteVoiceEventFromMeasures(ms, 1, 0, 5, undefined, 'treble')).toBe(ms);
+    expect(deleteVoiceEventFromMeasures([{ events: [ev()] }], 1, 0, 0, undefined, 'treble')).toHaveLength(1);
   });
 
   it('voiceIndex=0 を渡したときは声部1向けの削除に委譲する', () => {
     const ms = measures([ev({ keys: ['c/4'] }), ev({ keys: ['d/4'] })]);
-    const next = deleteVoiceEventFromMeasures(ms, 0, 0, 0, 'treble');
+    const next = deleteVoiceEventFromMeasures(ms, 0, 0, 0, undefined, 'treble');
     expect(next[0].events).toHaveLength(1);
     expect(next[0].events[0].keys).toEqual(['d/4']);
   });
@@ -515,8 +515,133 @@ describe('deleteVoiceEventFromMeasures', () => {
       ],
     )];
     const before = JSON.stringify(ms);
-    deleteVoiceEventFromMeasures(ms, 1, 0, 1, 'treble');
+    deleteVoiceEventFromMeasures(ms, 1, 0, 1, undefined, 'treble');
     expect(JSON.stringify(ms)).toBe(before);
+  });
+
+  // Issue #280: 声部2でも「和音の1音だけ削除」が効くようにした回帰テスト群。
+  // 以前は keyIndex を受け取る引数すら無く、和音の1音を選んでも
+  // イベントごと（連符ならグループごと）消えていた。
+  describe('和音の1音削除（Issue #280）', () => {
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+
+    /** 声部2の2番目が和音（e/3 + g/3）になっている3連符グループ。 */
+    function tupletChordMeasure(): MeasureData {
+      return twoVoiceMeasure(
+        [ev({ keys: ['c/5'] })],
+        [
+          ev({ dur: '8', keys: ['c/3'], tuplet }),
+          ev({ dur: '8', keys: ['e/3', 'g/3'], tuplet }),
+          ev({ dur: '8', keys: ['a/3'], tuplet }),
+        ],
+      );
+    }
+
+    it('受入1: 連符内の和音の1音を消しても、その1音だけが消えて連符グループが維持される', () => {
+      const ms: MeasureData[] = [tupletChordMeasure()];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 0, 'treble');
+      const voice2 = next[0].voices![1].events;
+      // グループごと休符化されていない＝3イベントのまま、全員が tuplet を保っている
+      expect(voice2).toHaveLength(3);
+      expect(voice2.every((e) => e.tuplet?.id === 't1')).toBe(true);
+      expect(voice2.every((e) => !e.isRest)).toBe(true);
+      expect(voice2[1].keys).toEqual(['g/3']);
+      expect(voice2[1].dur).toBe('8');
+    });
+
+    it('受入（補足コメント）: 連符でない和音でも1音だけが消える', () => {
+      const ms: MeasureData[] = [twoVoiceMeasure(
+        [ev({ keys: ['c/5'] })],
+        [ev({ keys: ['c/3', 'e/3', 'g/3'] }), ev({ keys: ['d/3'] })],
+      )];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, 0, 'treble');
+      const voice2 = next[0].voices![1].events;
+      expect(voice2).toHaveLength(2); // イベント自体は消えない
+      expect(voice2[0].keys).toEqual(['e/3', 'g/3']);
+    });
+
+    it('消した符頭を始点（fromKey）とする弧も一緒に消える', () => {
+      const ms: MeasureData[] = [twoVoiceMeasure(
+        [ev({ keys: ['c/5'] })],
+        [
+          ev({
+            keys: ['c/3', 'e/3'],
+            arcs: [
+              { fromKey: 'e/3', toKey: 'e/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' },
+              { fromKey: 'c/3', toKey: 'c/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' },
+            ],
+          }),
+          ev({ keys: ['c/3', 'e/3'] }),
+        ],
+      )];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, 1, 'treble');
+      expect(next[0].voices![1].events[0].keys).toEqual(['c/3']);
+      expect(next[0].voices![1].events[0].arcs).toEqual([
+        { fromKey: 'c/3', toKey: 'c/3', toMeasureIndex: 0, toEventIndex: 1, kind: 'tie' },
+      ]);
+    });
+
+    it('消した符頭を終点（toKey）で指す弧は、別の小節から張られていても消える', () => {
+      const ms: MeasureData[] = [
+        twoVoiceMeasure(
+          [ev({ keys: ['c/5'] })],
+          [ev({ keys: ['c/3'], arcs: [{ fromKey: 'c/3', toKey: 'e/3', toMeasureIndex: 1, toEventIndex: 0, kind: 'tie' }] })],
+        ),
+        twoVoiceMeasure([ev({ keys: ['d/5'] })], [ev({ keys: ['e/3', 'g/3'] })]),
+      ];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 1, 0, 0, 'treble');
+      expect(next[1].voices![1].events[0].keys).toEqual(['g/3']);
+      expect(next[0].voices![1].events[0].arcs).toBeUndefined();
+    });
+
+    it('和音の最後の1音（keys.length === 1）は従来どおりグループごと休符になる', () => {
+      const ms: MeasureData[] = [twoVoiceMeasure(
+        [ev({ keys: ['c/5'] })],
+        [
+          ev({ dur: '8', keys: ['c/3'], tuplet }),
+          ev({ dur: '8', keys: ['e/3'], tuplet }),
+          ev({ dur: '8', keys: ['a/3'], tuplet }),
+        ],
+      )];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 0, 'treble');
+      const voice2 = next[0].voices![1].events;
+      expect(voice2).toHaveLength(1);
+      expect(voice2[0].isRest).toBe(true);
+      expect(voice2[0].tuplet).toBeUndefined();
+    });
+
+    it('声部1（measure.events / voices[0]）は参照ごと据え置き', () => {
+      const ms: MeasureData[] = [tupletChordMeasure()];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 0, 'treble');
+      expect(next[0].events).toBe(ms[0].events);
+      expect(next[0].voices![0]).toBe(ms[0].voices![0]);
+    });
+
+    it('声部2を持たない小節に空の voices[1] を作らない', () => {
+      const ms: MeasureData[] = [tupletChordMeasure(), { events: [ev({ keys: ['g/4'] })] }];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 1, 0, 'treble');
+      expect(next[1].voices).toBeUndefined();
+      expect(next[1]).toBe(ms[1]); // 触っていない小節は参照ごと据え置き
+    });
+
+    it('休符に keyIndex が付いていてもイベント削除へ落ちる（和音扱いしない）', () => {
+      const ms: MeasureData[] = [twoVoiceMeasure(
+        [ev({ keys: ['c/5'] })],
+        [ev({ isRest: true, keys: ['b/3'] }), ev({ keys: ['d/3'] })],
+      )];
+      const next = deleteVoiceEventFromMeasures(ms, 1, 0, 0, 0, 'treble');
+      expect(next[0].voices![1].events).toHaveLength(1);
+      expect(next[0].voices![1].events[0].keys).toEqual(['d/3']);
+    });
+
+    it('連符グループの範囲を特定できないときは引数の参照をそのまま返す（声部1と同じ約束）', () => {
+      // tuplet.id が空＝グループを辿れない壊れたデータ。planTupletGroupDeletion が null を返す経路。
+      const ms: MeasureData[] = [twoVoiceMeasure(
+        [ev({ keys: ['c/5'] })],
+        [ev({ dur: '8', keys: ['c/3'], tuplet: { id: '', numNotes: 3, notesOccupied: 2 } })],
+      )];
+      expect(deleteVoiceEventFromMeasures(ms, 1, 0, 0, undefined, 'treble')).toBe(ms);
+    });
   });
 });
 

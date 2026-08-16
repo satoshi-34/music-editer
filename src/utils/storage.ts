@@ -20,6 +20,7 @@ import type {
   ShapePrimitive
 } from '../types/storage';
 import { StorageErrorType } from '../types/storage';
+import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 import { isArticulationMarkingValue } from './articulationMarkingUtils';
@@ -683,6 +684,12 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
       }
     };
   }
+
+  // 同じ音高が和音の中に重複している古いデータを1音へ畳む（Issue #281）。
+  // 重複した符頭は完全に重なって1つに見えるため、放置すると「消したのに見た目が変わらない」
+  // 「削除しても音が鳴り続ける」といった、原因の分かりにくい症状になる。
+  // 検証を通したあとに実行するのは、ここから先は型が保証されていて安全に走査できるため。
+  parsedData.parts = normalizeDuplicateChordKeys(parsedData.parts);
 
   return {
     success: true,
