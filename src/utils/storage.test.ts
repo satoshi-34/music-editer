@@ -1090,6 +1090,67 @@ describe('Storage Foundation Tests', () => {
       expect(events[2].dots).toBe(2);
     });
 
+    it('段またぎ記譜（renderStaff）は保存・読込で保持され、未指定なら増えない（Issue #309）', () => {
+      const testData = createSavedScoreData(
+        {
+          title: 'Cross Staff Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [
+              { dur: '8', isRest: false, keys: ['g#/3'], renderStaff: 'below' },
+              { dur: '8', isRest: false, keys: ['c#/4'], renderStaff: 'above' },
+              { dur: '4', isRest: false, keys: ['e/4'] },
+            ]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const saveResult = saveScoreData(testData);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      const events = loadResult.data?.parts[0].measures[0].events ?? [];
+      expect(events[0].renderStaff).toBe('below');
+      expect(events[1].renderStaff).toBe('above');
+      // 指定していない音符にプロパティが生えない（旧データと同じ形のまま）
+      expect('renderStaff' in events[2]).toBe(false);
+    });
+
+    it('renderStaff に不正な値を含むデータは保存時に拒否する（Issue #309）', () => {
+      const invalidData = createSavedScoreData(
+        {
+          title: 'Invalid Cross Staff',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [{ dur: '4', isRest: false, keys: ['c/4'], renderStaff: 'under' as unknown as 'below' }]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const saveResult = saveScoreData(invalidData);
+      expect(saveResult.success).toBe(false);
+      expect(saveResult.error?.type).toBe('corrupted_data');
+    });
+
     it('dots に不正な値（3や文字列）を含むデータは保存時に拒否する', () => {
       const invalidData = createSavedScoreData(
         {

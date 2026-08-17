@@ -82,6 +82,7 @@ import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accident
 import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
+import { resolveRenderPartIndexes, hasCrossStaffRender, groupIndexesByRenderTarget } from '../utils/crossStaffUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import {
@@ -160,7 +161,7 @@ import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number; hideNumber?: boolean }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; lyrics?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[]; articulations?: ArticulationMarking[]; tempoMarking?: string; expressionMarking?: string; chordSymbol?: string };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number; hideNumber?: boolean }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; lyrics?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[]; renderStaff?: 'below' | 'above'; articulations?: ArticulationMarking[]; tempoMarking?: string; expressionMarking?: string; chordSymbol?: string };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 // 1声部ぶんの VexFlow 描画データ（音符・ビーム・タイミング管理オブジェクト）。
 // 右手/左手など複数パートの Formatter を1回にまとめるためのキャッシュ型として使う
@@ -180,6 +181,10 @@ type RenderedVoiceEntry = {
   // 2声部小節で、この声部が「今編集していない側」かどうか。
   // 音符本体だけでなくビーム・連符も淡色にするために、描画パスへ持ち越す（Issue #175）。
   isInactiveVoiceEntry: boolean;
+  // 段またぎ記譜（Issue #309）で、この声部に「隣の五線へ載せる音符」が1つでもあるか。
+  // 描画パス（Pass 3）は、これが true の声部だけ専用の描き方に切り替える
+  // （段またぎを使っていない譜面は従来とまったく同じ経路を通す＝1pxも変えない）。
+  hasCrossStaffNote: boolean;
 };
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
@@ -3601,6 +3606,21 @@ export default function PianoSystemCanvas({
               return null;
             }
 
+            // 段またぎ記譜（Issue #309）: 音符ごとに「実際に載せる五線（＝パート）」を決める。
+            // 相手の五線が無いとき（端のパートで無効な向き・単段編成・パート譜表示）は
+            // resolveRenderPartIndexes が自分のパート番号を返すため、ここから先は
+            // 「行き先が必ず存在する」前提で書ける（例外を出さない・保存データも触らない）。
+            const renderPartIndexes = resolveRenderPartIndexes(sourceEvents, pi, parts.length);
+            const hasCrossStaffNote = hasCrossStaffRender(renderPartIndexes, pi);
+            // 段またぎの音符は「載せる先の五線のクレフ」で音高→線を換算しないと、
+            // ヘ音記号の五線にト音記号基準の高さで描かれてしまう。
+            // クレフは小節ごとに変わりうる（途中クレフ変更）ので、その小節の値を解決する。
+            const clefForRenderPart = (targetPi: number): ClefType => (
+              targetPi === pi
+                ? clefHere
+                : resolveMeasureClef(partsScoreForRender[targetPi] ?? [], absI, parts[targetPi].clef)
+            );
+
             // 2声部共存時のみ、休符の描画位置を声部1=やや上/声部2=やや下にずらす。
             // 単声部小節では undefined を渡し、音価に応じた既定位置（makeVFNote 内）を使う。
             const restKeyOverride = isMultiVoiceMeasure
@@ -3609,11 +3629,15 @@ export default function PianoSystemCanvas({
 
             const vfNotes = sourceEvents.map((ev, idx) => {
               const renderAsGhostRest = shouldRenderGhostRest(sourceEvents, idx, voiceIndex);
+              // 段またぎの音符だけ、クレフと符幹の扱いを「載せる先の五線」基準に切り替える。
+              const isCrossStaffNote = renderPartIndexes[idx] !== pi;
               const n=makeVFNote(
                 ev,
                 accidentalState,
-                clefHere,
-                measureVoice.stemDirection,
+                isCrossStaffNote ? clefForRenderPart(renderPartIndexes[idx]) : clefHere,
+                // 多声部小節の「声部1=上向き固定」は自分の五線にいる音符のための規則なので、
+                // 隣の五線へ載せた音符には当てず VexFlow の自動判定に任せる（設計メモ §4-1）。
+                isCrossStaffNote ? undefined : measureVoice.stemDirection,
                 renderAsGhostRest,
                 // courtesy accidental は主旋律（voice 0）だけに適用する。
                 // 追加声部は拍合わせ用の音符が多く、courtesy が邪魔になりやすい。
@@ -3646,6 +3670,20 @@ export default function PianoSystemCanvas({
               }
               return n as StaveNote;
             });
+            // 段またぎの音符には、合同整形（Pass 2）より前に「載せる先の五線」を割り当てておく。
+            // VexFlow は preFormat のとき「まだ五線が設定されていない音符にだけ」五線を伝播する
+            // 仕様なので、先に設定しておけば後続の voice.setStave / preFormat で上書きされない
+            // （この保護規則は Pass 1 の voice.setStave と同じ仕組み）。
+            if (hasCrossStaffNote) {
+              vfNotes.forEach((n, idx) => {
+                const targetPi = renderPartIndexes[idx];
+                if (targetPi === pi) return;
+                const targetStave = staveSets[targetPi]?.[i];
+                if (targetStave) {
+                  n.setStave(targetStave);
+                }
+              });
+            }
             // voice 0 の描画が終わり accidentalState がこの小節の最終状態になった。
             // 次の小節の courtesy accidental 判定に使うためスナップショットを保存する。
             // 追加声部（voiceIndex > 0）は accidentalState を共有しているが、
@@ -3669,12 +3707,19 @@ export default function PianoSystemCanvas({
             // 8分3連が「素の8分音符」として数えられ、連符単位（3+3）ではなく
             // 拍単位（2+2+2）で束ねられてしまう。
             const tuplets=createVexFlowTuplets(sourceEvents, vfNotes);
-            const beams=Beam.generateBeams(vfNotes,{
+            const beamOptions = {
               beamRests:false,
               ...(beamStemDirection !== undefined
                 ? { stemDirection: beamStemDirection, maintainStemDirections: true }
                 : {}),
-            });
+            };
+            // 段またぎがある声部は、載る五線が変わる位置で連桁（ビーム）を切る（設計メモ §4-2）。
+            // 1本のビームを五線の間に斜めに渡す書き方（段またぎ連桁）は段2の課題なので、
+            // ここでは「同じ五線に連続して載る音符」だけをまとめて Beam.generateBeams に渡す。
+            const beams = hasCrossStaffNote
+              ? groupIndexesByRenderTarget(renderPartIndexes)
+                  .flatMap(group => Beam.generateBeams(group.map(idx => vfNotes[idx]), beamOptions))
+              : Beam.generateBeams(vfNotes, beamOptions);
             // Tuplet は「括弧を描くかどうか」をコンストラクタの時点で
             // 「ビームの付いていない音符が1つでもあるか」で決めてしまう。
             // 上の順序変更でビームがまだ無い状態で作ることになったため、
@@ -3712,6 +3757,7 @@ export default function PianoSystemCanvas({
               tuplets,
               voice,
               isInactiveVoiceEntry,
+              hasCrossStaffNote,
             };
           })
           .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
@@ -3808,7 +3854,21 @@ export default function PianoSystemCanvas({
         }
 
         renderedVoiceEntries.forEach((entry) => {
-          try{entry.voice.draw(ctx,stave);}catch{
+          try{
+            if (entry.hasCrossStaffNote) {
+              // VexFlow の Voice.draw(ctx, stave) は、描画の直前に**全音符の五線を
+              // 引数の五線で上書き**する。段またぎの音符はここで自分のパートの五線へ
+              // 引き戻されてしまうので、この声部だけは音符を1つずつ描く
+              // （Voice.draw が音符に対して行っているのと同じ手順）。
+              entry.voice.setRendered();
+              entry.voice.getTickables().forEach((tickable) => {
+                tickable.setContext(ctx);
+                tickable.drawWithStyle();
+              });
+            } else {
+              entry.voice.draw(ctx,stave);
+            }
+          }catch{
             // 1つの声部の描画に失敗しても、残りの声部と他の段の描画は続けたい。
             // ここで例外を投げると譜面全体が真っ白になってしまうため握りつぶす。
           }
