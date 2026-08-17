@@ -82,7 +82,7 @@ import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accident
 import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
-import { resolveRenderPartIndexes, hasCrossStaffRender, groupIndexesByRenderTarget } from '../utils/crossStaffUtils';
+import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, groupIndexesByRenderTarget, availableRenderStaffDirection, toggleRenderStaffAt } from '../utils/crossStaffUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import {
@@ -3173,12 +3173,15 @@ export default function PianoSystemCanvas({
     // 必要な情報（パート・小節・声部・イベント）はすべて値側に持たせる方式へ変えた。
     const notePosKeyP=(partIndex:number,measureIndex:number,voiceIndex:number,eventIndex:number)=>
       `p${partIndex}v${voiceIndex}m${measureIndex}e${eventIndex}`;
-    type NotePositionP={note:StaveNote;stave:Stave;keys:string[];partIndex:number;measureIndex:number;voiceIndex:number;eventIndex:number};
+    // clef: 「その音符を実際に描いた五線のクレフ」（Issue #310）。段またぎの音符は
+    // 隣の五線に載るので、音名→線の換算を自分のパートのクレフで行うと、弧の端点だけが
+    // 五線5本ぶんずれた高さに付いてしまう。五線とクレフは必ず対で持ち回る。
+    type NotePositionP={note:StaveNote;stave:Stave;clef:ClefType;keys:string[];partIndex:number;measureIndex:number;voiceIndex:number;eventIndex:number};
     // startIsMultiVoice: 弧の「始点がある小節」が2声部かどうか（Issue #192）。
     // 弧の向きの既定値をここで決めるため、描画待ちリストへ積むときに一緒に控えておく。
     // 複数小節にまたがる弧でも始点の小節だけで判定するので、途中で声部数が変わっても
     // 段またぎの2セグメントが食い違わない。
-    type PendingArcP={partIndex:number;voiceIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number;startIsMultiVoice:boolean};
+    type PendingArcP={partIndex:number;voiceIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startClef:ClefType;startMeasureIdx:number;startEventIdx:number;startIsMultiVoice:boolean};
     const notePositionMapP=new Map<string,NotePositionP>();
     const pendingArcsP:PendingArcP[]=[];
     // 松葉（ヘアピン）の描画待ちリスト。arcs と同じく全パート・全小節のレンダリング後にまとめて描く
@@ -3383,8 +3386,10 @@ export default function PianoSystemCanvas({
       }
     };
 
-    // fromKey / toKey の音高から個別符頭の正確な Y 座標を求めて弧を描く
-    const drawTieArcP=(clef:ClefType,firstNote:StaveNote,fromKey:string,fromStave:Stave,lastNote:StaveNote,toKey:string,toStave:Stave,kind:'tie'|'slur',arcVoiceIndex:number,isMultiVoiceMeasure:boolean,allLines:number[]|undefined,allNoteYs:number[]|undefined,allObstacleNotes:StaveNote[]|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,flipDirection?:boolean,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatio=0)=>{
+    // fromKey / toKey の音高から個別符頭の正確な Y 座標を求めて弧を描く。
+    // クレフは始点・終点それぞれの「実際に載っている五線」のものを受け取る（Issue #310）。
+    // 段またぎの音符は隣の五線に描かれるため、五線とクレフが食い違うと端点だけがずれる。
+    const drawTieArcP=(clefs:{from:ClefType;to:ClefType},firstNote:StaveNote,fromKey:string,fromStave:Stave,lastNote:StaveNote,toKey:string,toStave:Stave,kind:'tie'|'slur',arcVoiceIndex:number,isMultiVoiceMeasure:boolean,allLines:number[]|undefined,allNoteYs:number[]|undefined,allObstacleNotes:StaveNote[]|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,flipDirection?:boolean,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatio=0)=>{
       type R=Record<string,(...a:unknown[])=>unknown>;
       const bb1=(firstNote as unknown as R)['getBoundingBox']?.() as {getX:()=>number;getW:()=>number}|undefined;
       const bb2=(lastNote  as unknown as R)['getBoundingBox']?.() as {getX:()=>number;getW:()=>number}|undefined;
@@ -3392,9 +3397,8 @@ export default function PianoSystemCanvas({
       const absX2=((lastNote  as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
       const x1=bb1?bb1.getX()+bb1.getW():absX1+4;
       const x2=bb2?bb2.getX():absX2-4;
-      const kl=(k:string)=>keyToLineForClef(clef,k);
-      const fromLine=kl(fromKey);
-      const toLine=kl(toKey);
+      const fromLine=keyToLineForClef(clefs.from,fromKey);
+      const toLine=keyToLineForClef(clefs.to,toKey);
       const stemDir=((firstNote as unknown as R)['getStemDirection']?.() as number|undefined)??0;
       // 音高から決まる従来の向き（タイは始点の五線位置、スラーは区間内の音符の平均）。
       // 2声部小節ではこれを使わず「声部1＝上・声部2＝下」に固定する（Issue #192）。
@@ -3830,6 +3834,30 @@ export default function PianoSystemCanvas({
         const l2k=(l:number)=>lineToKeyForClef(clefHere,l);
         const k2l=(k:string)=>keyToLineForClef(clefHere,k);
 
+        // ── 段またぎ記譜（Issue #310・設計メモ §4-3）: 座標の取り所を1本化する ──
+        // 「その音符が実際に載っている五線」を決めるのはこの3つの関数だけにする。
+        // 当たり判定 rect・個別音選択の線換算・弧の端点がすべてここを通ることで、
+        // 「見た目は下の五線なのに判定は上の五線」という食い違いが構造的に起きなくなる
+        // （散らばった参照を1本化するのは #297・#288 と同じ型の対処）。
+        /** そのイベントを実際に描くパート番号（またぎでなければ自分のパート） */
+        const resolveRenderPartIndexFor=(ev?:{renderStaff?:'below'|'above'})=>
+          resolveRenderPartIndex(pi, ev?.renderStaff, parts.length);
+        /** そのイベントが実際に載っている五線（相手が無ければ自分の五線） */
+        const resolveRenderStave=(ev?:{renderStaff?:'below'|'above'}):Stave=>
+          staveSets[resolveRenderPartIndexFor(ev)]?.[i] ?? stave;
+        /** そのイベントの高さを読むクレフ（またぎ先の五線のその小節のクレフ） */
+        const resolveRenderClef=(ev?:{renderStaff?:'below'|'above'}):ClefType=>{
+          const targetPi=resolveRenderPartIndexFor(ev);
+          return targetPi===pi
+            ? clefHere
+            : resolveMeasureClef(partsScoreForRender[targetPi] ?? [], absI, parts[targetPi].clef);
+        };
+        /** そのイベント基準の「音名→五線の線番号」。またぎ音符は載る先のクレフで読む */
+        const resolveK2lFor=(ev?:{renderStaff?:'below'|'above'})=>{
+          const clefForEv=resolveRenderClef(ev);
+          return clefForEv===clefHere ? k2l : (key:string)=>keyToLineForClef(clefForEv,key);
+        };
+
         applyDefaultRestDisplayLine(vfNotes, safeEvs, clefHere);
 
         const hasClef=(i===0);
@@ -3929,7 +3957,9 @@ export default function PianoSystemCanvas({
         // こちらは声部1（measure.events）専用のまま残す。arcs[] 方式より前の旧データ互換の
         // 経路であり、声部2は arcs[] 方式より後に生まれた機能なので旧データが存在しないため。
         safeEvs.forEach((ev,j)=>{
-          partLineNotes[pi].push({note:vfNotes[j],keys:ev.keys,tiedToNext:ev.tiedToNext??false,isRest:ev.isRest,stave,isMultiVoice:isMultiVoiceMeasure});
+          // 五線は「その音符が実際に載っている五線」を渡す（Issue #310・設計メモ §4-3）。
+          // 段またぎでない音符では resolveRenderStave が自分の五線を返すので従来と同じ。
+          partLineNotes[pi].push({note:vfNotes[j],keys:ev.keys,tiedToNext:ev.tiedToNext??false,isRest:ev.isRest,stave:resolveRenderStave(ev),isMultiVoice:isMultiVoiceMeasure});
         });
 
         // arcs[]／hairpins[] 方式: 全声部ぶんの音符位置を記録し、弧・松葉を描画待ちリストへ積む。
@@ -3944,9 +3974,14 @@ export default function PianoSystemCanvas({
             if(j>=entry.realEventCount)return;
             const note=entry.vfNotes[j];
             if(!note)return;
-            notePositionMapP.set(notePosKeyP(pi,absI,vi,j),{note,stave,keys:ev.keys,partIndex:pi,measureIndex:absI,voiceIndex:vi,eventIndex:j});
-            ev.arcs?.forEach((arc,arcIndex)=>pendingArcsP.push({partIndex:pi,voiceIndex:vi,arc,arcIndex,startNote:note,startStave:stave,startMeasureIdx:absI,startEventIdx:j,startIsMultiVoice:isMultiVoiceMeasure}));
-            ev.hairpins?.forEach((hairpin,hairpinIndex)=>pendingHairpinsP.push({partIndex:pi,voiceIndex:vi,hairpin,hairpinIndex,startNote:note,startStave:stave,startMeasureIdx:absI,startEventIdx:j}));
+            // 弧（タイ・スラー）と松葉の端点は、音符の描画位置から生やす必要がある。
+            // 段またぎ（Issue #310）の音符は隣の五線に描かれているので、位置台帳へ入れる
+            // 五線も「実際に載っている五線」にする（設計メモ §4-3 の1本化）。
+            const noteStaveForPos=resolveRenderStave(ev);
+            const noteClefForPos=resolveRenderClef(ev);
+            notePositionMapP.set(notePosKeyP(pi,absI,vi,j),{note,stave:noteStaveForPos,clef:noteClefForPos,keys:ev.keys,partIndex:pi,measureIndex:absI,voiceIndex:vi,eventIndex:j});
+            ev.arcs?.forEach((arc,arcIndex)=>pendingArcsP.push({partIndex:pi,voiceIndex:vi,arc,arcIndex,startNote:note,startStave:noteStaveForPos,startClef:noteClefForPos,startMeasureIdx:absI,startEventIdx:j,startIsMultiVoice:isMultiVoiceMeasure}));
+            ev.hairpins?.forEach((hairpin,hairpinIndex)=>pendingHairpinsP.push({partIndex:pi,voiceIndex:vi,hairpin,hairpinIndex,startNote:note,startStave:noteStaveForPos,startMeasureIdx:absI,startEventIdx:j}));
           });
         });
 
@@ -3964,18 +3999,26 @@ export default function PianoSystemCanvas({
         // 上の Stave 生成が staveYs をそのまま（/s せず）使うようになったため、
         // パート間の間隔もそのままの値が「描画座標系での間隔」になる。
         const partGapY = staveSpacing;
-        const staveLine0 = stave.getYForLine(0);
-        const staveLine4 = stave.getYForLine(4);
-        // 五線の下端と次パートの上端の間の余白を上下のパートで半分ずつ分け合う
-        const halfPartMarginY = (partGapY - (staveLine4 - staveLine0)) / 2;
-        let staveTop=stave.getYForLine(-EXTRA_TOP);
-        let staveBot=stave.getYForLine(4+EXTRA_BOTTOM);
-        if (pi > 0) {
-          staveTop = Math.max(staveTop, staveLine0 - halfPartMarginY);
-        }
-        if (pi < parts.length - 1) {
-          staveBot = Math.min(staveBot, staveLine4 + halfPartMarginY);
-        }
+        // 段またぎ（#310）の音符は隣のパートの五線に載るので、この帯も「載っている
+        // 五線」のものを使う必要がある。パート番号を受け取る関数にして、自分のパートの
+        // 値（従来の staveTop / staveBot）も同じ式から作る（同じ計算を2か所に書かない）。
+        const computeStaveBand=(targetPi:number)=>{
+          const targetStave=staveSets[targetPi]?.[i] ?? stave;
+          const line0=targetStave.getYForLine(0);
+          const line4=targetStave.getYForLine(4);
+          // 五線の下端と次パートの上端の間の余白を上下のパートで半分ずつ分け合う
+          const halfMarginY=(partGapY-(line4-line0))/2;
+          let top=targetStave.getYForLine(-EXTRA_TOP);
+          let bot=targetStave.getYForLine(4+EXTRA_BOTTOM);
+          if (targetPi > 0) {
+            top = Math.max(top, line0 - halfMarginY);
+          }
+          if (targetPi < parts.length - 1) {
+            bot = Math.min(bot, line4 + halfMarginY);
+          }
+          return {top,bot};
+        };
+        const {top:staveTop,bot:staveBot}=computeStaveBand(pi);
 
         // クリック判定はすべて「アクティブ声部」の描画済み音符から作る。
         // 声部1（voiceIndex 0）がアクティブなときは renderedVoiceEntries[0] がそのまま
@@ -4024,6 +4067,16 @@ export default function PianoSystemCanvas({
           mids: number[],
         ) => {
           const n = vfNotes[j] as unknown as VfNoteLike;
+          // 段またぎ記譜（Issue #310）: 座標の基準は「自分のパートの五線」ではなく
+          // 「この音符が実際に載っている五線」から取る。またぎでない音符では
+          // noteStave===stave / noteK2l===k2l / noteBand===自パートの帯 になるので、
+          // 従来の譜面の当たり判定は 1px も変わらない（不変条件1を分岐の構造で守る）。
+          const evForStave = evs[j];
+          const noteStave = resolveRenderStave(evForStave);
+          const noteK2l = resolveK2lFor(evForStave);
+          const noteBand = noteStave === stave
+            ? {top:staveTop,bot:staveBot}
+            : computeStaveBand(resolveRenderPartIndexFor(evForStave));
           const rl=j===0?measLeft:mids[j-1], rr=j===vfNotes.length-1?measRight:mids[j];
           // この音符イベントへクリックを届けるための透明 rect 範囲。
           // 左右は隣の音符との中間点で分割し、CELL_PAD だけ広げています。
@@ -4044,22 +4097,22 @@ export default function PianoSystemCanvas({
           // クリップするのはこの固定範囲だけで、下の符頭ぶんの拡張（NOTE_HIT_EXTENSION）は
           // クリップしない。拡張ごとクリップすると、五線から遠い音符の符頭が
           // 「中心ちょうどしか押せない」状態になり Issue #218 を作り直してしまうため。
-          const fixedTopY=stave.getYForLine(CHORD_LEDGER_TOP);
-          const fixedBotY=stave.getYForLine(CHORD_LEDGER_BOT);
-          const chordTopY=Math.max(fixedTopY,staveTop);
-          const chordBotY=Math.min(fixedBotY,staveBot);
+          const fixedTopY=noteStave.getYForLine(CHORD_LEDGER_TOP);
+          const fixedBotY=noteStave.getYForLine(CHORD_LEDGER_BOT);
+          const chordTopY=Math.max(fixedTopY,noteBand.top);
+          const chordBotY=Math.min(fixedBotY,noteBand.bot);
           // 選択・ヒット領域のY範囲（Issue #218）。
           // 休符は五線内に描かれるので従来どおり固定範囲のまま扱い、
           // 音符だけ符頭の位置に応じて範囲を広げる。
-          const keyLines=evs[j]?.isRest?null:noteKeyLineExtent(evs[j]?.keys??[],k2l);
+          const keyLines=evs[j]?.isRest?null:noteKeyLineExtent(evs[j]?.keys??[],noteK2l);
           // 広げ幅は符頭1個分の半分（0.5ライン）だけ。符頭の高さがちょうど1ライン分なので、
           // これで符頭の描画範囲を過不足なく覆える（選択が成立するのは符頭中心±0.25ライン
           // なので、その帯も丸ごと入る）。必要最小限にするのは、広げたぶんが隣のパートの
           // 領域へ重なるため（下記 NOTE_HIT_EXTENSION の説明を参照）。
           // 符頭が固定範囲の内側にいる普通の音符では、下の Math.min / Math.max によって
           // この値は使われない（＝ヒット領域はクリップ後の固定範囲そのものになる）。
-          const noteHeadTopY=keyLines?stave.getYForLine(keyLines.minLine-0.5):chordTopY;
-          const noteHeadBotY=keyLines?stave.getYForLine(keyLines.maxLine+0.5):chordBotY;
+          const noteHeadTopY=keyLines?noteStave.getYForLine(keyLines.minLine-0.5):chordTopY;
+          const noteHeadBotY=keyLines?noteStave.getYForLine(keyLines.maxLine+0.5):chordBotY;
           // 符頭の実際の描画X範囲。getAbsoluteX()はtickの左端でnotehead自体より左になるため
           // getBoundingBox() で実際に描画された領域を取得する
           const bb=n?.getBoundingBox?.();
@@ -4080,7 +4133,7 @@ export default function PianoSystemCanvas({
           // click と mousemove（ホバーのカーソル形状）で必ず同じ式を使うため、
           // ここで1つの関数にまとめておく（判定がずれるとホバー表示が信用できなくなる）。
           const snapLineForKeySelect=(y:number)=>snapLine(
-            stave,y,
+            noteStave,y,
             Math.min(-EXTRA_TOP,keyLines?keyLines.minLine:-EXTRA_TOP),
             Math.max(4+EXTRA_BOTTOM,keyLines?keyLines.maxLine:4+EXTRA_BOTTOM)
           );
@@ -4098,12 +4151,12 @@ export default function PianoSystemCanvas({
             if(!ev||ev.isRest)return -1;
             const pad=keySelectXPad(svg);
             if(lx<noteVisualLeft-pad||lx>noteVisualRight+pad)return -1;
-            const atLine=findKeyIndexAtLine(ev.keys,snapLineForKeySelect(ly),k2l);
+            const atLine=findKeyIndexAtLine(ev.keys,snapLineForKeySelect(ly),noteK2l);
             if(atLine>=0)return atLine;
             if(ly<chordTopY||ly>chordBotY){
               // 固定範囲（五線±3加線）の外は挿入も和音追加も起きない帯なので、
               // 広め（±1ライン）に吸い寄せても副作用が無い（Issue #255）。
-              return findNearestKeyIndexWithinLines(ev.keys,ly,stave,k2l,OUTER_KEY_SELECT_MAX_LINES);
+              return findNearestKeyIndexWithinLines(ev.keys,ly,noteStave,noteK2l,OUTER_KEY_SELECT_MAX_LINES);
             }
             // 五線の中（和音追加ゾーン）でも、符頭のX範囲に入っているクリックは
             // 和音追加より個別選択を優先する（Issue #271・案A）。X範囲を下の
@@ -4111,13 +4164,17 @@ export default function PianoSystemCanvas({
             // 「和音追加になり得る場所でだけ選択が先に立つ」＝符頭から横に離れた
             // 位置での挿入・和音追加の挙動は1pxも変えない。
             if(lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD){
-              return findNearestKeyIndexWithinLines(ev.keys,ly,stave,k2l,INNER_KEY_SELECT_MAX_LINES);
+              return findNearestKeyIndexWithinLines(ev.keys,ly,noteStave,noteK2l,INNER_KEY_SELECT_MAX_LINES);
             }
             return -1;
           };
           return {
             xl,wHit,chordTopY,chordBotY,keyLines,noteHeadTopY,noteHeadBotY,
             bb,noteVisualLeft,noteVisualRight,yHit,
+            // 段またぎ（#310）で「実際に載っている五線」を呼び出し側にも渡す。
+            // rect の data-line0-y や、非アクティブ声部の符頭 rect の高さ計算が
+            // この幾何と同じ五線を使うようにするため（別々に解決すると食い違う）。
+            noteStave,noteK2l,
             snapLineForKeySelect,resolveSelectableKeyIndexAt,
           };
         };
@@ -4390,6 +4447,11 @@ export default function PianoSystemCanvas({
             // 連符数字の表示切替も既存の連符にのみ行う（背景クリックで音符を置かない）。
             return;
           }
+          if('mode' in tool&&tool.mode==='crossStaffToggle'){
+            // 段またぎ表示の切替（Issue #310）も既存の音符にのみ行う。
+            // 背景クリックで音符を置くと「モードを選んだだけで譜面が変わった」ことになる。
+            return;
+          }
           if('mode' in tool&&tool.mode==='textElement'){
             // テキスト要素も既存の音符へ付ける情報なので、背景クリックでは何もしない。
             return;
@@ -4538,7 +4600,7 @@ export default function PianoSystemCanvas({
             // 休符は選択の対象にしない（符頭が無いので「掴んだ」と言える場所が無い）。
             // 表示専用のパディング休符（realEventCount より後ろ）も保存データに無いので対象外。
             if(!ev||ev.isRest||j>=entry.realEventCount)return;
-            const {noteVisualLeft,noteVisualRight,resolveSelectableKeyIndexAt}=
+            const {noteVisualLeft,noteVisualRight,resolveSelectableKeyIndexAt,noteStave,noteK2l}=
               buildNoteHitGeometry(otherEvs,otherVfNotes,j,anchors,mids);
             const cycleId=`note:p${pi}:m${absI}:v${entry.voiceIndex}:e${j}`;
             /** その画面座標が、この音符のどの符頭を掴むクリックかを返す（-1 なら掴んでいない） */
@@ -4564,10 +4626,12 @@ export default function PianoSystemCanvas({
             const rectLeft=noteVisualLeft-xPad;
             const rectWidth=Math.max(0,(noteVisualRight+xPad)-rectLeft);
             ev.keys.forEach((key)=>{
-              const line=k2l(key);
+              // 線番号も y も「この音符が実際に載っている五線」基準で求める（Issue #310）。
+              // 段またぎでない音符では noteK2l===k2l / noteStave===stave なので従来と同じ値になる。
+              const line=noteK2l(key);
               // 符頭の高さはちょうど1ライン分なので、その線の ±0.5 ラインが符頭の描画範囲になる
-              const top=stave.getYForLine(line-0.5);
-              const bot=stave.getYForLine(line+0.5);
+              const top=noteStave.getYForLine(line-0.5);
+              const bot=noteStave.getYForLine(line+0.5);
               const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');
               // クラス名はアクティブ声部の .vf-note-hit と分ける。
               // .vf-note-hit は「アクティブ声部の編集用ヒット領域」を指す名前として
@@ -4635,7 +4699,7 @@ export default function PianoSystemCanvas({
             // 以降のコードから見た値・名前は切り出す前とまったく同じ。
             const {
               xl,wHit,chordTopY,chordBotY,noteHeadTopY,noteHeadBotY,
-              bb,noteVisualLeft,noteVisualRight,yHit,
+              bb,noteVisualLeft,noteVisualRight,yHit,noteStave,noteK2l,
               snapLineForKeySelect,resolveSelectableKeyIndexAt,
             } = buildNoteHitGeometry(activeEvs,activeVfNotes,j,anchors,mids);
             // 各値の意味と、そう決めた理由（Issue #218 / #219 / #255 / #271）は
@@ -4702,8 +4766,11 @@ export default function PianoSystemCanvas({
               // 五線の基準座標。ヒット領域の高さは音符の位置によって変わるようになった
               // （Issue #218）ため、rect の高さからライン間隔を逆算する方法が使えない。
               // テストが「line n のY座標」を素直に求められるよう公開しておく（表示には影響しない）。
-              rect.setAttribute('data-line0-y', String(stave.getYForLine(0)));
-              rect.setAttribute('data-line-spacing', String(stave.getYForLine(1)-stave.getYForLine(0)));
+              // 段またぎ（Issue #310）の音符では、ここも「実際に載っている五線」の値になる。
+              // ヒット領域の y 範囲と同じ五線から取らないと、テストや外側の計算が
+              // 「見た目は下の五線・基準は上の五線」という食い違った座標を読むことになる。
+              rect.setAttribute('data-line0-y', String(noteStave.getYForLine(0)));
+              rect.setAttribute('data-line-spacing', String(noteStave.getYForLine(1)-noteStave.getYForLine(0)));
               rect.setAttribute('x',String(x));rect.setAttribute('y',String(y));
               rect.setAttribute('width',String(w));rect.setAttribute('height',String(h));
               rect.setAttribute('fill','transparent');rect.setAttribute('stroke','none');
@@ -4941,6 +5008,7 @@ export default function PianoSystemCanvas({
               const symbolAdjustResizeMode = 'mode' in tool && tool.mode === 'symbolAdjustResize';
               const symbolAdjustOffsetMode = 'mode' in tool && tool.mode === 'symbolAdjustOffset';
               const tupletNumberToggleMode = 'mode' in tool && tool.mode === 'tupletNumberToggle';
+              const crossStaffToggleMode = 'mode' in tool && tool.mode === 'crossStaffToggle';
               const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
               const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
               const ornamentMode = 'mode' in tool && tool.mode === 'ornament' ? (tool as any).ornamentType as OrnamentType : null;
@@ -4971,6 +5039,28 @@ export default function PianoSystemCanvas({
                   return next;
                 });
                 setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
+                return;
+              }
+              if (crossStaffToggleMode) {
+                // 段またぎ表示（Issue #310）: クリックした音符の描き先を self ↔ 隣の五線で切り替える。
+                // 向きはパートで決まる（右手＝下へ、左手＝上へ）ので、ユーザーは
+                // 「モードを選んで音符を押す」だけでよい（#294 の連符数字トグルと同じ操作感）。
+                const direction = availableRenderStaffDirection(pi, parts.length);
+                setScore(prev=>{
+                  const next=prev.map(cloneMeasureData);
+                  if(absI>=next.length)return prev;
+                  const currentEvents=getVoiceEvents(next[absI], activeVoiceIndex);
+                  const toggled=toggleRenderStaffAt(currentEvents, j, direction);
+                  // 対象外（休符・単段編成・範囲外）のときは score を書き換えない。
+                  // ここで withVoiceEventsUpdated を呼ぶと、声部2モードのときに
+                  // 中身の無い voices[1] が生まれてしまう（#112 の教訓）。
+                  if(!toggled)return prev;
+                  next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, ()=>toggled);
+                  return next;
+                });
+                if(direction&&!activeEvs[j]?.isRest){
+                  setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
+                }
                 return;
               }
               if (accidentalMode && !activeEvs[j]?.isRest) {
@@ -5479,7 +5569,10 @@ export default function PianoSystemCanvas({
             const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===j&&(selected.voiceIndex??0)===activeVoiceIndex;
             if(isSel){
               const selectedKey = selected.keyIndex!==undefined ? activeEvs[j]?.keys[selected.keyIndex] : undefined;
-              const selectedY = selectedKey ? stave.getYForLine(k2l(selectedKey)) : undefined;
+              // 青枠の高さも「その音符が実際に載っている五線」から求める（Issue #310）。
+              // 当たり判定（buildNoteHitGeometry）と同じ noteStave / noteK2l を使うので、
+              // 段またぎの音符でも「押せる場所」と「枠が出る場所」が必ず一致する。
+              const selectedY = selectedKey ? noteStave.getYForLine(noteK2l(selectedKey)) : undefined;
               const sr=document.createElementNS('http://www.w3.org/2000/svg','rect');
               sr.setAttribute('class','vf-note-selected');
               // どの音符を選んでいるかをテストから見分けられるようにする（表示には影響しない）。
@@ -6065,12 +6158,14 @@ export default function PianoSystemCanvas({
     });
 
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
-    pendingArcsP.forEach(({partIndex,voiceIndex,arc,arcIndex,startNote,startStave,startMeasureIdx,startEventIdx,startIsMultiVoice})=>{
+    pendingArcsP.forEach(({partIndex,voiceIndex,arc,arcIndex,startNote,startStave,startClef,startMeasureIdx,startEventIdx,startIsMultiVoice})=>{
       // 弧の終点は「同じ声部の events 配列の位置」を指す（設計メモの案A）。
       // そのため終点の逆引きも必ず同じ声部のキーで行う。
       const dest=notePositionMapP.get(notePosKeyP(partIndex,arc.toMeasureIndex,voiceIndex,arc.toEventIndex));
-      const clef=parts[partIndex]?.clef??'treble';
-      const kl=(k:string)=>keyToLineForClef(clef,k);
+      // 端点の高さは、その音符が実際に載っている五線のクレフで読む（Issue #310）。
+      // 段またぎでない音符では自分のパートのクレフが入っているので従来と同じ値になる。
+      const destClef=dest?.clef??parts[partIndex]?.clef??'treble';
+      const kl=(k:string)=>keyToLineForClef(startClef,k);
 
       const arcKey=arcKeyP({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,arcIndex});
       const cpDyOffset=arc.cpDyOffset??0;
@@ -6122,7 +6217,7 @@ export default function PianoSystemCanvas({
         // 避ける対象を「自声部の音符だけ」に絞るのは Issue #192（設計メモ §6）で
         // 確定した正式仕様。他声部の音符まで避けると弧が不自然に膨らむため
         // （判定理由は isSlurObstacleNote のコメントを参照）。
-        for(const{note,keys,stave,partIndex:pi2,voiceIndex:vi2,measureIndex:m,eventIndex:e} of notePositionMapP.values()){
+        for(const{note,keys,stave,clef:noteClef,partIndex:pi2,voiceIndex:vi2,measureIndex:m,eventIndex:e} of notePositionMapP.values()){
           if(pi2!==partIndex)continue;
           if(!isSlurObstacleNote({arcVoiceIndex:voiceIndex,noteVoiceIndex:vi2}))continue;
           const afterStart=m>startMeasureIdx||(m===startMeasureIdx&&e>=startEventIdx);
@@ -6130,7 +6225,8 @@ export default function PianoSystemCanvas({
           if(afterStart&&beforeEnd){
             allObstacleNotes!.push(note);
             keys.forEach(k=>{
-              const line=kl(k);
+              // 障害物（避ける対象）の高さも、その音符が載っている五線とクレフの対で求める
+              const line=keyToLineForClef(noteClef,k);
               allLines!.push(line);
               allNoteYs!.push(stave.getYForLine(line));
             });
@@ -6145,7 +6241,7 @@ export default function PianoSystemCanvas({
       const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30
                      ||roughAbsX2P<roughAbsX1P;
       if(!crossSystem){
-        try{drawTieArcP(clef,startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,allObstacleNotes,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio);}catch{/* 保険 */}
+        try{drawTieArcP({from:startClef,to:destClef},startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,allObstacleNotes,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio);}catch{/* 保険 */}
       }else{
         try{
           const bb1=(startNote as unknown as R)['getBoundingBox']?.() as{getX:()=>number;getW:()=>number}|undefined;
@@ -6310,7 +6406,7 @@ export default function PianoSystemCanvas({
           const c=carryTies[pi]!, e=ln[fi];
           // レガシーのタイは声部1（measure.events）専用なので voiceIndex は常に 0。
           // 向きの既定値は始点の音符がある小節の声部数で決める（Issue #192）。
-          try{drawTieArcP(part.clef,c.note,tieRepKeyP(part.clef,c.keys),c.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,c.isMultiVoice,undefined,undefined,undefined,0,'legacy',false);}catch{/* 保険 */}
+          try{drawTieArcP({from:part.clef,to:part.clef},c.note,tieRepKeyP(part.clef,c.keys),c.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,c.isMultiVoice,undefined,undefined,undefined,0,'legacy',false);}catch{/* 保険 */}
           fi++;
         }
         carryTies[pi]=null;
@@ -6321,7 +6417,7 @@ export default function PianoSystemCanvas({
           while(fi<ln.length&&ln[fi].tiedToNext&&!ln[fi].isRest)fi++;
           if(fi<ln.length){
             const s=ln[start], e=ln[fi];
-            try{drawTieArcP(part.clef,s.note,tieRepKeyP(part.clef,s.keys),s.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,s.isMultiVoice,undefined,undefined,undefined,0,'legacy',false);}catch{/* 保険 */}
+            try{drawTieArcP({from:part.clef,to:part.clef},s.note,tieRepKeyP(part.clef,s.keys),s.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,s.isMultiVoice,undefined,undefined,undefined,0,'legacy',false);}catch{/* 保険 */}
             fi++;
           }else{
             carryTies[pi]={note:ln[start].note,keys:ln[start].keys,stave:ln[start].stave,isMultiVoice:ln[start].isMultiVoice};
