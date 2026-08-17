@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { RenderStaffDirection } from './crossStaffUtils';
 import {
+  availableRenderStaffDirection,
+  toggleRenderStaffAt,
   isRenderStaffDirection,
   resolveRenderPartIndex,
   resolveRenderPartIndexes,
@@ -73,5 +75,41 @@ describe('連桁を切る位置のグループ分け（Issue #309）', () => {
 
   it('空配列でも落ちない', () => {
     expect(groupIndexesByRenderTarget([])).toEqual([]);
+  });
+});
+
+describe('段またぎ表示の切り替え（Issue #310・UI から呼ぶ純粋ロジック）', () => {
+  it('使える向きはパートで決まる（右手＝下へ／左手＝上へ／単段は使えない）', () => {
+    // ピアノ譜（2段）: 上の段は下へ、下の段は上へ
+    expect(availableRenderStaffDirection(0, 2)).toBe('below');
+    expect(availableRenderStaffDirection(1, 2)).toBe('above');
+    // 単段の譜面は載せ替える相手が無い
+    expect(availableRenderStaffDirection(0, 1)).toBeNull();
+    // 3段以上でも「下があるなら下へ」で一貫する（最下段だけ above）
+    expect(availableRenderStaffDirection(1, 3)).toBe('below');
+    expect(availableRenderStaffDirection(2, 3)).toBe('above');
+  });
+
+  it('self → below → self とトグルでき、戻すとプロパティごと消える', () => {
+    const events = [
+      { dur: '4' as const, isRest: false, keys: ['g#/3'] },
+      { dur: '4' as const, isRest: false, keys: ['e/4'] },
+    ];
+    const on = toggleRenderStaffAt(events, 0, 'below');
+    expect(on?.[0].renderStaff).toBe('below');
+    // 触っていない音符と元の配列は変わらない（保存データを壊さない）
+    expect(on?.[1].renderStaff).toBeUndefined();
+    expect(events[0].renderStaff).toBeUndefined();
+
+    const off = toggleRenderStaffAt(on!, 0, 'below');
+    expect(off).not.toBeNull();
+    expect('renderStaff' in off![0]).toBe(false);
+  });
+
+  it('休符・範囲外・向きが無い編成では null を返す（保存処理そのものを行わせない）', () => {
+    const events = [{ dur: '4' as const, isRest: true, keys: ['b/4'] }];
+    expect(toggleRenderStaffAt(events, 0, 'below')).toBeNull();
+    expect(toggleRenderStaffAt(events, 5, 'below')).toBeNull();
+    expect(toggleRenderStaffAt([{ dur: '4' as const, isRest: false, keys: ['e/4'] }], 0, null)).toBeNull();
   });
 });

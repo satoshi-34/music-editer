@@ -4138,6 +4138,9 @@ export default function ScorePage() {
                 section="symbols"
                 customSymbolDefs={customSymbolDefs}
                 onOpenSymbolEditor={() => setShowSymbolEditor(true)}
+                // 段またぎ表示（Issue #310）はピアノ譜（右手・左手の2段）でのみ使える。
+                // パート譜表示中は相手の五線が画面に無いため、同じく無効にする。
+                crossStaffAvailable={scoreType === 'piano' && !isPartExtractionActive}
               />
             </div>
           )}

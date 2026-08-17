@@ -54,7 +54,8 @@ export type Tool =
   | { mode: 'customSymbolResize'; symbolId: string }         // カスタム記号のサイズを変更するモード（対象の音符をクリック）
   | { mode: 'customSymbolOffset'; symbolId: string }         // カスタム記号の位置を調整するモード（対象の音符をクリック）
   | { mode: 'tupletNumberToggle' }                          // 連符数字（3 等）のグループ単位の表示/非表示を切り替えるモード（対象の連符の音符をクリック）
-  | { mode: 'symbolAdjustResize' }                          // 標準記号（運指・強弱など）も含めた汎用サイズ調整モード（対象の音符をクリック→調整対象を選ぶ）
+  | { mode: 'crossStaffToggle' }                            // 段またぎ表示（音符の描き先を隣の五線へ移す）を切り替えるモード（対象の音符をクリック・Issue #310）
+  | { mode: 'symbolAdjustResize' }                         // 標準記号（運指・強弱など）も含めた汎用サイズ調整モード（対象の音符をクリック→調整対象を選ぶ）
   | { mode: 'symbolAdjustOffset' }                           // 標準記号も含めた汎用位置調整モード（対象の音符をクリック→調整対象を選ぶ）
   | { mode: 'textElement'; textKind: TextElementKind }      // テキスト要素（歌詞・コード・テンポ・発想標語）を付けるモード
   | { mode: 'measureTempo' }                                // 小節単位のテンポ変更モード
@@ -180,6 +181,7 @@ export default function Palette({
   section = 'notes',
   customSymbolDefs = [],
   onOpenSymbolEditor,
+  crossStaffAvailable = false,
 }: {
   value: Tool;
   onChange: (t: Tool) => void;
@@ -187,6 +189,12 @@ export default function Palette({
   section?: 'notes' | 'symbols';
   customSymbolDefs?: CustomSymbolDef[];
   onOpenSymbolEditor?: () => void;
+  /**
+   * 段またぎ表示（Issue #310）が使える譜面かどうか。
+   * 五線が2段以上ある編成（ピアノ譜など）でのみ true。単段の譜面では
+   * 載せ替える相手の五線が無いので、ボタンをグレーアウトして理由を出す。
+   */
+  crossStaffAvailable?: boolean;
 }) {
   // 現在の選択状態を判定
   const selectActive = 'mode' in value && value.mode === 'select';
@@ -204,6 +212,7 @@ export default function Palette({
   const selectedCustomSymbolId = 'mode' in value && value.mode === 'customSymbol' ? value.symbolId : null;
   const selectedCustomSymbolResizeId = 'mode' in value && value.mode === 'customSymbolResize' ? value.symbolId : null;
   const selectedCustomSymbolOffsetId = 'mode' in value && value.mode === 'customSymbolOffset' ? value.symbolId : null;
+  const crossStaffToggleActive = 'mode' in value && value.mode === 'crossStaffToggle';
   const symbolAdjustResizeActive = 'mode' in value && value.mode === 'symbolAdjustResize';
   const symbolAdjustOffsetActive = 'mode' in value && value.mode === 'symbolAdjustOffset';
   const selectedTextKind = 'mode' in value && value.mode === 'textElement' ? value.textKind : null;
@@ -738,6 +747,28 @@ export default function Palette({
             style={btnStyle(symbolAdjustOffsetActive, { width: 22, fontSize: 12, color: '#374151' })}
           >
             ✥
+          </button>
+          {/* 段またぎ表示（Issue #310）: このボタンを押してから音符をクリックすると、
+              その音符だけを隣の五線へ描き移す（もう一度押すと元に戻る）。
+              右手（上の段）は下の五線へ、左手（下の段）は上の五線へ移る。
+              ピアノ譜のように五線が2段以上ある譜面でしか使えないので、
+              単段の譜面では無効化して理由をツールチップで示す。 */}
+          <button
+            type="button"
+            disabled={!crossStaffAvailable}
+            onClick={() => onChange(crossStaffToggleActive ? ROW1[2] : { mode: 'crossStaffToggle' })}
+            title={crossStaffAvailable
+              ? '段またぎ表示（選択して音符をクリック。その音符だけを隣の五線へ描き移す／もう一度で戻る）'
+              : '段またぎ表示は五線が2段以上ある譜面（ピアノ譜など）でのみ使えます'}
+            aria-label="段またぎ表示（選択して音符をクリック。その音符だけを隣の五線へ描き移す）"
+            style={btnStyle(crossStaffToggleActive, {
+              width: 22, fontSize: 12,
+              color: crossStaffAvailable ? '#374151' : '#9ca3af',
+              cursor: crossStaffAvailable ? 'pointer' : 'not-allowed',
+            })}
+          >
+            {/* 下向きの矢印＝「下の五線へ移す」ことを一目で示す */}
+            ⇵
           </button>
         </div>
         {/* カスタム記号を新規作成 */}

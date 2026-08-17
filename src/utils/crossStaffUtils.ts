@@ -60,6 +60,53 @@ export function hasCrossStaffRender(renderPartIndexes: number[], partIndex: numb
 }
 
 /**
+ * そのパートで使える段またぎの向き（Issue #310・UI 用）。
+ *
+ * ピアノ譜では右手（上の段）は下へ、左手（下の段）は上へ載せ替えるのが慣行なので、
+ * 「下に五線があるなら below、無ければ above」と決めれば両方をこの1行で表せる。
+ * 相手の五線がまったく無い編成（単段譜・パート譜表示）では null を返し、
+ * 呼び出し側はボタンを無効化する／何もしないで終わる。
+ */
+export function availableRenderStaffDirection(
+  partIndex: number,
+  partCount: number
+): RenderStaffDirection | null {
+  if (partIndex < partCount - 1) return 'below';
+  if (partIndex > 0) return 'above';
+  return null;
+}
+
+/**
+ * 音符1つの段またぎ表示を self ↔ direction で切り替えたイベント列を返す（Issue #310）。
+ *
+ * 切り替えの対象にならない場合（範囲外・休符・向きが使えない編成）は **null** を返す。
+ * 呼び出し側はそのとき保存処理そのものを行わない（対象外のクリックで setScore を呼ぶと、
+ * 中身の無い声部が生まれる・Undo に空の1手が積まれる。#112 の教訓）。
+ *
+ * 戻すときは `renderStaff` プロパティごと削除して、旧データとまったく同じ形に揃える
+ * （#294 の hideNumber と同じ方針）。
+ */
+export function toggleRenderStaffAt<T extends Pick<NoteEvent, 'renderStaff' | 'isRest'>>(
+  events: T[],
+  index: number,
+  direction: RenderStaffDirection | null
+): T[] | null {
+  if (direction === null) return null;
+  const target = events[index];
+  // 休符は段またぎの対象にしない（符頭が無く「どちらの五線の音か」が見た目で伝わらないため）
+  if (!target || target.isRest) return null;
+  const next = [...events];
+  if (target.renderStaff === direction) {
+    const cleared = { ...target };
+    delete cleared.renderStaff;
+    next[index] = cleared;
+  } else {
+    next[index] = { ...target, renderStaff: direction };
+  }
+  return next;
+}
+
+/**
  * 連桁（ビーム）を切る位置を決めるためのグループ分け。
  *
  * 隣り合う音符の「実際に載る五線」が変わる位置でグループを切り、
