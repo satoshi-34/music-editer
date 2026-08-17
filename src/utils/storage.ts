@@ -24,6 +24,7 @@ import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 import { isArticulationMarkingValue } from './articulationMarkingUtils';
+import { isRenderStaffDirection } from './crossStaffUtils';
 import { normalizeEmptyVoicesInParts, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
@@ -232,6 +233,11 @@ function validateNoteEvent(event: any): event is NoteEvent {
           (m.type === 'quarterSharp' || m.type === 'quarterFlat')
         ))
       )
+    ) &&
+    (
+      // 段またぎ記譜（Issue #309）: 描く五線の向きは 'below' / 'above' のみ許可する。
+      // 省略時（undefined）は従来どおり自分の五線なので、旧データもそのまま通る。
+      event.renderStaff === undefined || isRenderStaffDirection(event.renderStaff)
     )
   );
 }
