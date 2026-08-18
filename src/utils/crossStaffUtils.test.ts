@@ -14,7 +14,7 @@ import {
   resolveRenderPartIndex,
   resolveRenderPartIndexes,
   hasCrossStaffRender,
-  groupIndexesByRenderTarget,
+  splitIndexesByRenderTarget,
 } from './crossStaffUtils';
 
 describe('段またぎ記譜の五線解決（Issue #309）', () => {
@@ -66,15 +66,23 @@ describe('段またぎ記譜の五線解決（Issue #309）', () => {
 
 describe('連桁を切る位置のグループ分け（Issue #309）', () => {
   it('載る五線が変わる位置でグループが分かれる', () => {
-    expect(groupIndexesByRenderTarget([0, 0, 1, 1, 0])).toEqual([[0, 1], [2, 3], [4]]);
+    expect(splitIndexesByRenderTarget([0, 1, 2, 3, 4], [0, 0, 1, 1, 0]))
+      .toEqual([[0, 1], [2, 3], [4]]);
   });
 
   it('全部同じ五線なら1グループのまま（従来のビームと同じ束ね方になる）', () => {
-    expect(groupIndexesByRenderTarget([0, 0, 0])).toEqual([[0, 1, 2]]);
+    expect(splitIndexesByRenderTarget([0, 1, 2], [0, 0, 0])).toEqual([[0, 1, 2]]);
   });
 
   it('空配列でも落ちない', () => {
-    expect(groupIndexesByRenderTarget([])).toEqual([]);
+    expect(splitIndexesByRenderTarget([], [])).toEqual([]);
+  });
+
+  // Issue #313: 拍の区切り（ビーム1本ぶん）を先に決めてから、その断片だけを渡す使い方。
+  it('小節の途中の断片を渡しても、その中のまたぎ位置で切れる', () => {
+    // 音符6つのうち 2・3番目が下の五線。3〜5番目だけを渡した場合。
+    expect(splitIndexesByRenderTarget([2, 3, 4], [0, 1, 1, 0, 0, 0]))
+      .toEqual([[2], [3, 4]]);
   });
 });
 

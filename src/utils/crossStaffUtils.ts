@@ -109,18 +109,26 @@ export function toggleRenderStaffAt<T extends Pick<NoteEvent, 'renderStaff' | 'i
 /**
  * 連桁（ビーム）を切る位置を決めるためのグループ分け。
  *
- * 隣り合う音符の「実際に載る五線」が変わる位置でグループを切り、
- * 連続する同じ五線の音符のインデックス列（元配列での位置）を返す。
+ * 渡されたインデックス列を順に見て、「実際に載る五線」が変わる位置で切り分ける。
  * 段1a では段またぎ連桁（1本のビームが五線間を斜めに渡る書き方）は扱わないため、
  * またぎ位置ではビームを分ける（設計メモ §4-2 / §8）。
  *
- * 例: [0,0,1,1,0] → [[0,1],[2,3],[4]]
+ * 引数がインデックス列なのは、**拍の区切りを先に決めたあとの断片**にも
+ * 同じ判定を使うため（Issue #313）。小節全体を渡せば従来どおり全音符列の
+ * グループ分けになる。
+ *
+ * 例: indexes=[0,1,2,3,4] / renderPartIndexes=[0,0,1,1,0] → [[0,1],[2,3],[4]]
  */
-export function groupIndexesByRenderTarget(renderPartIndexes: number[]): number[][] {
+export function splitIndexesByRenderTarget(
+  indexes: readonly number[],
+  renderPartIndexes: readonly number[]
+): number[][] {
   const groups: number[][] = [];
-  renderPartIndexes.forEach((target, index) => {
+  indexes.forEach(index => {
     const current = groups[groups.length - 1];
-    if (current !== undefined && renderPartIndexes[current[current.length - 1]] === target) {
+    const previousIndex = current?.[current.length - 1];
+    if (current !== undefined && previousIndex !== undefined
+      && renderPartIndexes[previousIndex] === renderPartIndexes[index]) {
       current.push(index);
     } else {
       groups.push([index]);
