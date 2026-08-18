@@ -82,7 +82,8 @@ import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accident
 import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
-import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, groupIndexesByRenderTarget, availableRenderStaffDirection, toggleRenderStaffAt } from '../utils/crossStaffUtils';
+import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt } from '../utils/crossStaffUtils';
+import { generateCrossStaffBeams } from '../utils/crossStaffBeamUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import {
@@ -3718,11 +3719,11 @@ export default function PianoSystemCanvas({
                 : {}),
             };
             // 段またぎがある声部は、載る五線が変わる位置で連桁（ビーム）を切る（設計メモ §4-2）。
-            // 1本のビームを五線の間に斜めに渡す書き方（段またぎ連桁）は段2の課題なので、
-            // ここでは「同じ五線に連続して載る音符」だけをまとめて Beam.generateBeams に渡す。
+            // 1本のビームを五線の間に斜めに渡す書き方（段またぎ連桁）は段2の課題。
+            // 「拍の区切りは全音符列で決め、またぎ位置では切るだけ」にしないと、
+            // またぎで抜けた音符の tick が数えられず残りの拍がずれる（Issue #313）。
             const beams = hasCrossStaffNote
-              ? groupIndexesByRenderTarget(renderPartIndexes)
-                  .flatMap(group => Beam.generateBeams(group.map(idx => vfNotes[idx]), beamOptions))
+              ? generateCrossStaffBeams(vfNotes, renderPartIndexes, beamOptions)
               : Beam.generateBeams(vfNotes, beamOptions);
             // Tuplet は「括弧を描くかどうか」をコンストラクタの時点で
             // 「ビームの付いていない音符が1つでもあるか」で決めてしまう。

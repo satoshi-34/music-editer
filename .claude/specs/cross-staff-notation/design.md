@@ -301,3 +301,71 @@ Pass 3 の先頭に「イベント → 実際に載っている五線・クレ�
 - またぎを含む連符の括弧・数字の扱い（10-4 の宿題）は変えていない。運用者が月光を
   清書したうえで「既定で数字を出さない」を入れるか判断する
 - MusicXML 書出は引き続き未対応（既知の制限）
+
+---
+
+## 12. 残りの音符のビームが連符境界を無視して再グループされる不具合の修正（Issue #313 / 2026-08-19）
+
+### 12-1. 問題
+
+8分3連×4組（12音）の**頭2音**を ⇵ で下の五線へ出すと、上の五線に残った10音のビームが
+`[e4(T1), g#3(T2), c#4(T2)]` `[e4(T2), g#3(T3), c#4(T3)]` … と**1音ずつずれたグループ**で
+束ねられ、連符の境界（および「3」の位置）と食い違って小節全体が崩れて見えた。
+音高・またぎ先の描画位置そのものは正常で、壊れるのはビームのグループ分けだけ。
+
+運用者が月光5小節目（声部2・三連符4組・頭2音またぎ）の清書で踏んだ。
+
+### 12-2. 原因
+
+段1a（10-4）の実装は「同じ五線に連続して載る音符**だけ**」を `Beam.generateBeams` へ渡していた。
+
+```ts
+groupIndexesByRenderTarget(renderPartIndexes)
+  .flatMap(group => Beam.generateBeams(group.map(idx => vfNotes[idx]), beamOptions))
+```
+
+`Beam.generateBeams` は渡された音符の tick（拍の内部単位）を**先頭から足し上げて**拍の区切りを
+決める（Issue #217 の経緯と同じ性質）。またぎで抜けた2音ぶんの tick が数えられないため、
+残り10音の拍グリッドが 2/3 拍ぶんずれ、連符の切れ目と一致しないグループになっていた。
+
+### 12-3. 修正設計
+
+「**拍の区切りは全音符列で決め、またぎ位置では切るだけ**」の2段構えにした
+（`src/utils/crossStaffBeamUtils.ts` の `generateCrossStaffBeams`）。
+
+1. まず**全音符列**で `Beam.generateBeams` を1回呼び、またぎが無いときとまったく同じ区切りを得る。
+   ここで作られる Beam は区切りを知るためだけのもので、描画には使わず捨てる
+2. 各区切りを `splitIndexesByRenderTarget` で**またぎ位置（載る五線が変わる位置）でさらに分割**する
+3. 断片ごとに `Beam.generateBeams` を呼び直して、描画に使う Beam を作る
+
+手順3で1音だけの断片も `generateBeams` に通しているのは、**符幹の向きをその断片の音符だけで
+決め直させる**ため。VexFlow は渡されたグループ単位で向きをそろえるので、まとめて渡すと
+「別の五線へ行った音符の高さ」に引きずられて、上の五線に残った音符の向きが変わってしまう。
+断片ごとに通せば段1a と同じ向きになる（＝またぎ以外の見た目は変わらない）。
+
+**捨てるビームの後始末が必須**（見落とすと別のバグになる）: VexFlow の `Beam` は
+コンストラクタで `note.setBeam(this)` を呼ぶため、手順1で捨てたビームの参照が音符に残ると、
+その音符は「ビームがある」と判断されて**旗（flag）を描かなくなる**。ビーム本体は描かれないので
+符尾だけの裸の音符になる。手順3の前に全音符の参照を外している
+（VexFlow の型は `setBeam(beam: Beam)` しか公開していないので、undefined 代入だけ型を広げて呼ぶ）。
+
+### 12-4. 影響範囲
+
+| 対象 | 変更内容 |
+| --- | --- |
+| `src/utils/crossStaffBeamUtils.ts` | 新規。上記の2段構えを実装（`generateCrossStaffBeams`） |
+| `src/utils/crossStaffUtils.ts` | `groupIndexesByRenderTarget`（全列専用）を `splitIndexesByRenderTarget`（インデックス列を受け取る一般形）へ置き換え。断片にも同じ判定を使うため。同じ判定を2か所に書かない方針は段1a のまま |
+| `src/components/PianoSystemCanvas.tsx` | ビーム生成を `generateCrossStaffBeams` の呼び出し1行に置き換え |
+
+**またぎを使っていない譜面は従来どおり** `Beam.generateBeams(vfNotes, beamOptions)` を直接通る
+（`hasCrossStaffNote` の分岐は段1a のまま。不変条件1「使っていない譜面は1pxも変わらない」）。
+
+連符の括弧・数字（10-4 の宿題）はこの Issue でも変えていない。`syncTupletBracketsWithBeams` は
+ビーム確定後の再判定なので、修正後の Beam をそのまま見て従来どおり動く。
+
+### 12-5. 受入テスト
+
+| ファイル | 何を固定したか |
+| --- | --- |
+| `src/utils/crossStaffBeamUtils.test.ts` | 3連符4組の頭2音またぎで `[2,3,3,3]`（＝またぎペア + 連符ごと）になり、2組目のビームが連符の頭から始まること／頭1音だけのまたぎ／またぎ無しなら `Beam.generateBeams` 単体と同一／連符でない8分音符でも拍が 2+2+2 のままずれないこと／単独になった音符にビーム参照が残らないこと |
+| `src/utils/crossStaffUtils.test.ts` | `splitIndexesByRenderTarget` に小節の途中の断片を渡しても、その中のまたぎ位置で切れること |
