@@ -11,7 +11,7 @@
 import { Beam, StaveNote } from 'vexflow';
 import { describe, expect, it } from 'vitest';
 
-import { generateCrossStaffBeams } from './crossStaffBeamUtils';
+import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from './crossStaffBeamUtils';
 import { createVexFlowTuplets } from './vexFlowTimingUtils';
 
 /** 描画側と同じ beamOptions（単声部の小節で使われる形） */
@@ -97,5 +97,38 @@ describe('段またぎがあるときのビームの束ね方（Issue #313）', 
     expect(notes[1].hasBeam()).toBe(false);
     expect(notes[2].hasBeam()).toBe(true);
     expect(notes[3].hasBeam()).toBe(true);
+  });
+});
+
+describe('整形後のビーム参照の復元（Issue #319）', () => {
+  it('setStemDirection で消えたビーム参照と符幹の向きを復元する', () => {
+    const notes = eighthNotes(12);
+    const renderPartIndexes = [1, 1, ...Array.from({ length: 10 }, () => 0)];
+    const beams = buildBeams(notes, tripletEvents(4), renderPartIndexes);
+
+    // 合同整形中の衝突解決（ModifierContext.preFormat → StaveNote.format）を再現:
+    // setStemDirection は内部で beam プロパティへ undefined を直接代入するため、
+    // ビーム済みの音符から参照だけが静かに消える（これが #319 の余分な旗の原因）。
+    const pairDirection = beams[0].getStemDirection();
+    notes[0].setStemDirection(pairDirection === 1 ? -1 : 1);
+    expect(notes[0].hasBeam()).toBe(false);
+
+    restoreCrossStaffBeamAssignments(beams);
+
+    // 参照が戻り、向きもビームのグループの向きへそろう
+    expect(notes[0].hasBeam()).toBe(true);
+    expect(notes[0].getBeam()).toBe(beams[0]);
+    expect(notes[0].getStemDirection()).toBe(pairDirection);
+  });
+
+  it('ビームに属さない音符（旗の音符）には何もしない', () => {
+    const notes = eighthNotes(12);
+    const renderPartIndexes = [1, 1, ...Array.from({ length: 10 }, () => 0)];
+    const beams = buildBeams(notes, tripletEvents(4), renderPartIndexes);
+
+    // 3音目（連符T1の残り）は単独＝旗のまま
+    expect(notes[2].hasBeam()).toBe(false);
+    restoreCrossStaffBeamAssignments(beams);
+    expect(notes[2].hasBeam()).toBe(false);
   });
 });
