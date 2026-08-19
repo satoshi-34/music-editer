@@ -4088,7 +4088,8 @@ export default function PianoSystemCanvas({
           // 選択の青枠はここから独立した「表示」なので、クリック範囲調整はここを見る。
           let xl=Math.max(measLeft+1,rl-CELL_PAD), xr=Math.min(measRight-1,rr+CELL_PAD);
           if(xr-xl<HIT_MIN_W){const h=(HIT_MIN_W-(xr-xl))/2;xl=Math.max(measLeft+1,xl-h);xr=Math.min(measRight-1,xr+h);}
-          const wHit=Math.max(HIT_MIN_W,xr-xl);
+          // またぎ音符（Issue #315）では下でX範囲を符頭幅へ狭めるので let にしてある。
+          let wHit=Math.max(HIT_MIN_W,xr-xl);
           // 和音判定Y範囲：五線 ± 3加線の固定範囲（音符の位置に依存しない）。
           //
           // Issue #219: 多段譜（大譜表・四重奏・編成譜）では、この固定範囲だけを
@@ -4104,8 +4105,8 @@ export default function PianoSystemCanvas({
           // 「中心ちょうどしか押せない」状態になり Issue #218 を作り直してしまうため。
           const fixedTopY=noteStave.getYForLine(CHORD_LEDGER_TOP);
           const fixedBotY=noteStave.getYForLine(CHORD_LEDGER_BOT);
-          const chordTopY=Math.max(fixedTopY,noteBand.top);
-          const chordBotY=Math.min(fixedBotY,noteBand.bot);
+          const clippedTopY=Math.max(fixedTopY,noteBand.top);
+          const clippedBotY=Math.min(fixedBotY,noteBand.bot);
           // 選択・ヒット領域のY範囲（Issue #218）。
           // 休符は五線内に描かれるので従来どおり固定範囲のまま扱い、
           // 音符だけ符頭の位置に応じて範囲を広げる。
@@ -4116,13 +4117,41 @@ export default function PianoSystemCanvas({
           // 領域へ重なるため（下記 NOTE_HIT_EXTENSION の説明を参照）。
           // 符頭が固定範囲の内側にいる普通の音符では、下の Math.min / Math.max によって
           // この値は使われない（＝ヒット領域はクリップ後の固定範囲そのものになる）。
-          const noteHeadTopY=keyLines?noteStave.getYForLine(keyLines.minLine-0.5):chordTopY;
-          const noteHeadBotY=keyLines?noteStave.getYForLine(keyLines.maxLine+0.5):chordBotY;
+          const noteHeadTopY=keyLines?noteStave.getYForLine(keyLines.minLine-0.5):clippedTopY;
+          const noteHeadBotY=keyLines?noteStave.getYForLine(keyLines.maxLine+0.5):clippedBotY;
           // 符頭の実際の描画X範囲。getAbsoluteX()はtickの左端でnotehead自体より左になるため
           // getBoundingBox() で実際に描画された領域を取得する
           const bb=n?.getBoundingBox?.();
           const noteVisualLeft=bb?.getX?.()??anchors[j];
           const noteVisualRight=bb?((bb.getX?.()??anchors[j])+(bb.getW?.()??12)):anchors[j]+12;
+          // ── 段またぎ音符の当たり判定は「符頭サイズ」まで縮める（Issue #315）──
+          //
+          // 上の固定範囲（五線±3加線）を帯でクリップする方式（#219）は、
+          // 「自分の帯からはみ出した固定範囲が隣の帯を奪う」事故を防ぐためのもの。
+          // ところが段またぎ音符（#310）は列そのものが隣パートの帯の中にあるため、
+          // クリップが逆に「隣の帯を縦いっぱいに覆う列を作る」方向に働き、
+          // またぎ音符がある小節では**左手側に音符を置けなくなっていた**（#315 の症状）。
+          //
+          // そこで、またぎ音符に限って判定を符頭の描画範囲だけに絞る:
+          //   Y = 符頭の上端〜下端（keyLines ±0.5ライン。固定範囲は使わない）
+          //   X = 符頭の実描画範囲 ± keySelectXPad（＝個別音選択が成立するX範囲と同じ）
+          // 符頭を押せば選択・⇵解除ができ、それ以外は帯の持ち主（隣パート）の挿入に返る。
+          // 非アクティブ声部の符頭を符頭サイズで判定する #306 と同じ発想。
+          //
+          // 引き換えに、またぎ音符への「上下クリックで和音の音を追加」は符頭近傍でしか
+          // 効かなくなる（またぎは記譜の仕上げ段階で使う機能なので許容という裁定）。
+          // またぎでない音符（renderStaff 無し）は下の条件が false なので 1px も変わらない。
+          const isCrossStaffHit=resolveRenderPartIndexFor(evForStave)!==pi&&!!keyLines;
+          const chordTopY=isCrossStaffHit?noteHeadTopY:clippedTopY;
+          const chordBotY=isCrossStaffHit?noteHeadBotY:clippedBotY;
+          if(isCrossStaffHit){
+            const crossXPad=keySelectXPad(svg);
+            const crossLeft=Math.max(xl,noteVisualLeft-crossXPad);
+            const crossRight=Math.min(xl+wHit,noteVisualRight+crossXPad);
+            // 万一 getBoundingBox が使えず符頭幅が取れない環境でも、幅が 0 以下になったら
+            // 従来のセル幅のままにしておく（クリックがどこにも当たらない状態を作らない）
+            if(crossRight>crossLeft){xl=crossLeft;wHit=crossRight-crossLeft;}
+          }
           // yHit は2枚に分かれたヒット rect を合わせた外接範囲の上端。
           // rect の座標には使わなくなったが、選択枠（eventBoxY のフォールバック）が引き続き使う。
           const yHit=Math.min(chordTopY,noteHeadTopY);
