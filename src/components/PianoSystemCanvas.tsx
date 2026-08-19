@@ -83,7 +83,7 @@ import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayou
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
 import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt } from '../utils/crossStaffUtils';
-import { generateCrossStaffBeams } from '../utils/crossStaffBeamUtils';
+import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../utils/crossStaffBeamUtils';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import {
@@ -3885,6 +3885,10 @@ export default function PianoSystemCanvas({
         renderedVoiceEntries.forEach((entry) => {
           try{
             if (entry.hasCrossStaffNote) {
+              // 合同整形中の衝突解決（同一拍の音符の符幹反転）でビームの参照が
+              // 消えていることがあるので、描画の直前に復元する（Issue #319）。
+              // またぎの無い声部では起きない事象なので、この分岐の中だけで行う。
+              restoreCrossStaffBeamAssignments(entry.beams);
               // VexFlow の Voice.draw(ctx, stave) は、描画の直前に**全音符の五線を
               // 引数の五線で上書き**する。段またぎの音符はここで自分のパートの五線へ
               // 引き戻されてしまうので、この声部だけは音符を1つずつ描く

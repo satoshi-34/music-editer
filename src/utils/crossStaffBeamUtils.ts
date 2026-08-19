@@ -74,3 +74,33 @@ export function generateCrossStaffBeams(
     Beam.generateBeams(fragment.map(index => notes[index]) as StemmableNote[], beamOptions)
   );
 }
+
+/**
+ * 合同整形のあとで、ビームの「参照」と「符幹の向き」をビーム自身の記録から復元する（Issue #319）。
+ *
+ * なぜ必要か: 同じ拍に複数の音符が重なると、整形中に VexFlow の衝突解決
+ * （`ModifierContext.preFormat` → `StaveNote.format`）がどれかの符幹の向きを
+ * 反転させることがある。`setStemDirection` は内部で `this.beam = undefined` を
+ * **直接代入**するため（setBeam を経由しない）、ビーム済みの音符から参照だけが
+ * 静かに消え、描画時に「ビーム無し」と誤判定されて余分な旗が描かれる。
+ *
+ * 段またぎの音符は、移した先の五線で相手パートの音符と同じ拍・同じ五線に載るため、
+ * この衝突解決の対象に初めてなった（またぎが無い譜面では同一 tick の音符は
+ * ModifierContext 上で五線が分かれており、ビーム済み音符の向きが反転される
+ * 組み合わせが生じない）。そのため復元は段またぎのある声部だけに適用すればよい。
+ *
+ * 向きも一緒に戻すのは、ビームで繋がったグループの符幹は同方向が浄書の前提で、
+ * 片方だけ反転したままだとビームの形が壊れるため。`setStemDirection` は再び
+ * 参照を消すので、必ず「向き → 参照」の順で復元する。
+ */
+export function restoreCrossStaffBeamAssignments(beams: readonly Beam[]): void {
+  beams.forEach(beam => {
+    const direction = beam.getStemDirection();
+    beam.getNotes().forEach(note => {
+      if (note.getStemDirection() !== direction) {
+        note.setStemDirection(direction);
+      }
+      note.setBeam(beam);
+    });
+  });
+}
