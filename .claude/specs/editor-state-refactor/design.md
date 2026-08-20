@@ -31,14 +31,19 @@ src/editor/
 src/utils/voiceMeasureUtils.ts … scoreModel（voices[] 統一の正規経路）を拡充
 ```
 
-### 2-1. editorState（reducer）
+### 2-1. editorState（reducer）と所有境界（Codexレビュー指摘3への回答）
 
-1つの reducer に載せる状態と、union へ畳む対象:
+**reducer は Canvas 1インスタンスにつき1つ（システム段ローカル）**。ページ全体で1つにはしない。
 
-- `tool`（ScorePage から移すのではなく、**参照を一元化**する。所有は当面 ScorePage のまま）
-- `selection`: `{kind:'note'|'arc'|'hairpin'|'measures'|'none', ...}` の**判別 union 1つ**へ（現在は4つの独立 state。#333 の `'beatRange'` の席をここに予約する）
-- `overlay`: 9種を `{kind:'timeSig'|'keySig'|'clef'|'bpm'|'rehearsal'|'text'|'symbolResize'|'symbolOffset'|'symbolPicker', ...} | null` の**1つの union**へ
-- `drag`: 弧CP/端点・小節範囲・タイ/松葉の3セッションを union 1つへ
+| 所有者 | 状態 | 理由 |
+| --- | --- | --- |
+| ScorePage（現状のまま） | `tool` / `activeVoiceIndex` / `selectedMeasures` | 既に親所有の controlled state で、小節コピペ・挿入削除・移調が親の機能。**段1〜4 では所有を動かさない** |
+| Canvas ローカル reducer | `selection`（note/arc/hairpin）/ `overlay` / `drag` | オーバーレイ座標・ドラッグセッションは各段の SVG/コンテナ座標系に閉じており、段をまたがない |
+
+- `selection` union は `{kind:'note'|'arc'|'hairpin'|'none'}` とする。**`measures` は reducer に入れない**（親所有のまま。表示・分岐で両方を見る場所には `resolveSelectionView(local, selectedMeasuresProp)` の読み取りヘルパーを置く）。#333 の `beatRange` も小節選択と同じく**親所有側**に置く想定（全パート縦スライスのため）
+- 段間の排他（`SELECTION_CLAIMED_EVENT`）は**段1〜4 では現行のまま維持**する。ページ所有へ引き上げてバックチャネル自体を消す案は、段5 以降の任意課題として別途裁定（reducer をページへ移すと overlay/drag に Canvas 識別子を持たせる再設計になり、機械的移動の範囲を超える）
+- `overlay`: 段1では**9個の nullable を1つの record**（`{timeSig: ... | null, keySig: ... | null, ...}`）へ機械的に集約するだけ。**排他 union 化は段2**（指摘1参照）
+- `drag`: 弧CP/端点・小節範囲・タイ/松葉の3セッションを1 record へ（同じく段1は機械移動のみ）
 
 ### 2-2. 遷移関数と掃除の一元化（#231/#238 の恒久化）
 
@@ -56,9 +61,11 @@ src/utils/voiceMeasureUtils.ts … scoreModel（voices[] 統一の正規経路�
 
 ### 2-3. hitResolution（純関数 + 分岐テーブル）
 
-- `resolveHit(click) → {partIndex, voiceIndex, measure, eventIndex?, keyIndex?, beat?, zone}` を純関数に。#219 の帯域クリップ・#320 の符頭縮小・#327 の拍台帳をここへ集約
-- モード分岐を**テーブル駆動**へ: `(tool.mode, 対象種別[小節背景|音符|休符|placeholder|非アクティブ]) → アクション` の表を1枚にし、現在の「二重実装8モード」「無言 return 27箇所」を表の網羅性チェックで機械的に検出できる形にする（#318 の原則をレビュー可能な構造で担保）
-- **#316（レイヤー明示選択）はこのテーブルの「対象の解決規則」を差し替えるだけ**で載る形に切る。#333（拍範囲スライス）は `resolveHit` の拍解決（#327 台帳）をそのまま使う
+- `resolveHit(click, policy) → {partIndex, voiceIndex, measure, eventIndex?, keyIndex?, beat?, zone}` を純関数に。#219 の帯域クリップ・#320 の符頭縮小・#327 の拍台帳をここへ集約
+- **resolver の入力に「解決ポリシー」を明示する**（Codexレビュー指摘への対応）: `policy = {attribution: 'band' | 'explicitLayer', activeLayer?: {partIndex, voiceIndex}}`。現行は `'band'`（帯域推測+アクティブ声部）固定。**#316 はこの policy に `'explicitLayer'` を実装して差し替える**（未決の空白クリック方針=#316 論点②は、その実装時に policy の分岐として裁定を受ける。「差し替えるだけ」で済むのは入力をここまで明示した場合に限る）
+- モード分岐を**テーブル駆動**へ: `(tool.mode, 対象種別[小節背景|音符|休符|placeholder|非アクティブ]) → 結果` の表を1枚に。結果は生のコールバックではなく
+  `handled(action) | rejected(reason, guidance) | passThrough` の**3値の判別 union** とする（Codexレビュー提案の採用）。`rejected` は #318 の通知（理由+次の一手）へ機械的に接続され、**「無言 no-op」は型の上で書けなくなる**。意図的に黙る場合だけ `passThrough(コメント必須)` を使う
+- #333（拍範囲スライス）は `resolveHit` の拍解決（#327 台帳）をそのまま使う
 
 ### 2-4. renderPipeline（描画ビルダー）
 
@@ -70,20 +77,23 @@ src/utils/voiceMeasureUtils.ts … scoreModel（voices[] 統一の正規経路�
 ### 2-5. voices[] 統一（データモデル。運用者承認済みの検討項目）
 
 - 方向: `measure.events` を「voices[0] のミラー」から**読み取り専用のレガシー窓**へ格下げし、最終的に廃止。読み書きは `getVoiceEvents` / `withVoiceEventsUpdated` に一本化
+- **順序は write → 不変条件 → read → 保存形式**（Codexレビュー指摘2で当初案の read 先行から反転。現在の正本は `measure.events` — `getVoiceEvents(...,0)` は events を返し、`withVoiceEventsUpdated(...,0)` は events のみ更新、voices[0] は保存時同期（storage.ts:813-816）— であり、read を先に voices[0] へ向けると**旧 write 経路の編集後にレイアウト・再生・出力が古い voices[0] を読む回帰**が起きるため）:
+  1. **write の正規化**: 全書き込みを正規 API へ寄せ、正規 API を **dual-write**（events と voices[0] を常に同時更新）へ。破壊的書き込み（`fillPriorMeasureRests` PSC:497-500・`noteDeletionUtils.ts:102,289,299`）もここで根絶
+  2. **不変条件の確立**: 「編集後は常に events ≡ voices[0]」を assert するテストで固定（往復含む）
+  3. **read の切り替え**（この中の順は実害順: 空判定/内容判定 ScorePage:332,358 → レイアウト幅計算 → 再生/再生位置 → MIDI/MusicXML出力。**声部2が MIDI に出ていない**のは既知バグとして別Issue化してよい）
+  4. **保存形式**: 読込互換は維持（旧形式→正規化は #305 系の既存直列に追加）。保存の新形式化は最後
 - **「2」を焼き込まない**: `activeVoiceIndex: 0|1` の型は当面残すが、scoreModel の関数群は `voiceIndex: number` で切る（3声対応時に UI 追加だけで済む形）
-- 破壊的書き込みの根絶: `fillPriorMeasureRests`（PSC:497-500）・`noteDeletionUtils.ts:102,289,299` をイミュータブル正規経路へ
-- 読み側の声部1固定（実害順）: ①空判定/内容判定（ScorePage:332,358 — 声部2しか無い小節を空扱いしうる）②レイアウト幅計算 ③再生/再生位置 ④MIDI/MusicXML出力（**声部2が MIDI に出ていない**のは既知バグとして別Issue化してよい）
-- 保存形式: 読込互換は維持（旧形式→正規化は #305 系の既存直列に追加）。保存の新形式化は最終段
 
 ## 3. 段割り（1段 = 1PR。各段とも「挙動ゼロ差」または「差分を明記」）
 
 | 段 | 内容 | 挙動差 | 主な検証 |
 | --- | --- | --- | --- |
-| 段1 | 散在 state の機械的移動: ミラー ref 9本→最新値 ref 1本、selection 4 state→union、overlay 9 state→union、drag 3 ref→union。reducer 導入（遷移は現行と同一） | ゼロ | 全テスト・月光回帰・実機スモーク（選択/オーバーレイ/ドラッグ/コピペ） |
-| 段2 | 遷移関数化と掃除の一元化（§2-2 の表を実装）。オーバーレイ9種のライフサイクル統一 | **あり（明記）**: 小節メタ系オーバーレイもツール切替で閉じるようになる等。差分は表で列挙し運用者承認 | 掃除タイミングのテーブルテスト |
-| 段3 | hitResolution 純関数化 + モード分岐テーブル化（二重実装8モードの一本化・無言 return の表化） | ゼロ（#318 通知は既存のまま移設） | クリック系テスト全部・#320/#327 の回帰 |
+| 段0.5 | **characterization テスト**を先に張る（Codexレビュー提案の採用）: 複数オーバーレイの同時開き・複数Canvas間の選択移譲（SELECTION_CLAIMED）・外部 score 差し替え時の整合・SVG外 mouseup のドラッグ残留・再生開始時の掃除、の現行挙動を「仕様としてではなく現状として」固定 | ゼロ（テスト追加のみ） | 追加テスト自体が緑 |
+| 段1 | 散在 state の機械的移動: ミラー ref 9本→最新値 ref 1本、selection 3 state→union（note/arc/hairpin。measures は親所有のまま）、**overlay 9 state→1つの nullable record（排他 union にはしない）**、drag 3 ref→1 record。reducer 導入（遷移は現行と同一） | ゼロ（record 化なら同時開き等の現行挙動も保存される。**union 排他化は段2へ**） | 全テスト+段0.5・月光回帰・実機スモーク（選択/オーバーレイ/ドラッグ/コピペ） |
+| 段2 | 遷移関数化と掃除の一元化（§2-2 の表を実装）。**overlay の排他 union 化**とライフサイクル統一はここ | **あり（明記）**: 小節メタ系オーバーレイもツール切替で閉じる・別オーバーレイを開くと前のは閉じる等。差分は表で列挙し運用者承認 | 掃除タイミングのテーブルテスト・段0.5 の期待値更新（変更点=差分表と一致することを確認） |
+| 段3 | hitResolution 純関数化 + モード分岐テーブル化（二重実装8モードの一本化・`handled/rejected/passThrough` の3値型で無言 no-op を型から排除） | ゼロ（#318 通知は既存のまま移設） | クリック系テスト全部・#320/#327 の回帰 |
 | 段4 | renderPipeline ビルダー化 + cleanup + 状態源統一 | ほぼゼロ（状態源統一のみ差分明記） | 月光回帰レンダー・段またぎ回帰・目視 |
-| 段5 | voices[] 統一（read 側→write 側→保存形式の3サブ段。§2-5 の順） | サブ段ごとに明記（声部2の再生/出力はバグ修正として差分が出る） | 往復（保存→読込）等価テスト・再生/出力の声部2テスト |
+| 段5 | voices[] 統一（**§2-5 の順: write 正規化+dual-write → 不変条件 → read 切替 → 保存形式**の4サブ段） | サブ段ごとに明記（声部2の再生/出力はバグ修正として差分が出る） | events≡voices[0] 不変条件テスト・往復（保存→読込）等価テスト・再生/出力の声部2テスト |
 
 順序の根拠: 段1-2 が「状態」、段3 が「入力」、段4 が「出力」、段5 が「データ」。#316/#333 は段3 の後、cross-staff 段2 は段4 の後に着手可能になる。
 
