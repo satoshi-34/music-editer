@@ -10,6 +10,7 @@ import {
   generateTupletId,
   planTupletGroupDeletion,
   planTupletReplacementForRest,
+  toggleAllTupletNumbersInMeasure,
   toggleTupletNumberVisibility,
 } from './tupletUtils';
 
@@ -387,6 +388,85 @@ describe('tupletUtils', () => {
       const events: NoteEvent[] = [{ dur: '4', isRest: false, keys: ['c/4'] }];
 
       expect(toggleTupletNumberVisibility(events, 0)).toBeNull();
+    });
+  });
+
+  describe('toggleAllTupletNumbersInMeasure（Issue #324）', () => {
+    /** 8分3連を count 組ぶん並べた events（グループごとに別の id を振る）。 */
+    function tripletGroups(count: number): NoteEvent[] {
+      return Array.from({ length: count }).flatMap((_, i) => {
+        const group = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4').groupEvents;
+        return group.map((ev) => ({ ...ev, tuplet: { ...ev.tuplet!, id: `g${i + 1}` } }));
+      });
+    }
+
+    it('小節内の全グループがまとめて非表示になり、グループ数を返す', () => {
+      const events = tripletGroups(4);
+
+      const result = toggleAllTupletNumbersInMeasure(events)!;
+
+      expect(result.groupCount).toBe(4);
+      expect(result.hidden).toBe(true);
+      expect(result.events.every((ev) => ev.tuplet?.hideNumber === true)).toBe(true);
+      // 元の配列は書き換えない（Undo 用の履歴が壊れないこと）
+      expect(events.every((ev) => ev.tuplet?.hideNumber === undefined)).toBe(true);
+    });
+
+    it('全部隠れている状態から押すと全部表示へ戻る（プロパティごと消える）', () => {
+      const hidden = toggleAllTupletNumbersInMeasure(tripletGroups(3))!.events;
+
+      const result = toggleAllTupletNumbersInMeasure(hidden)!;
+
+      expect(result.hidden).toBe(false);
+      expect(result.events.every((ev) => ev.tuplet && !('hideNumber' in ev.tuplet))).toBe(true);
+    });
+
+    it('混在（1グループだけ非表示）は隠す方向へそろう', () => {
+      const events = toggleTupletNumberVisibility(tripletGroups(3), 0)!;
+
+      const result = toggleAllTupletNumbersInMeasure(events)!;
+
+      expect(result.hidden).toBe(true);
+      expect(result.groupCount).toBe(3);
+      expect(result.events.every((ev) => ev.tuplet?.hideNumber === true)).toBe(true);
+    });
+
+    it('連符以外のイベント（休符・通常音符）は触らない', () => {
+      const events: NoteEvent[] = [
+        { dur: '4', isRest: true, keys: ['b/4'] },
+        ...tripletGroups(1),
+        { dur: '4', isRest: false, keys: ['c/4'] },
+      ];
+
+      const result = toggleAllTupletNumbersInMeasure(events)!;
+
+      expect(result.groupCount).toBe(1);
+      expect(result.events[0]).toBe(events[0]);
+      expect(result.events.at(-1)).toBe(events.at(-1));
+    });
+
+    it('段またぎ（renderStaff 付き）の連符もグループとして数えて切り替わる', () => {
+      // またぎは「どの五線に描くか」の指定でしかなく、グループの数え方（連続する同一 id）は変わらない
+      const events = tripletGroups(2).map((ev, i) =>
+        i < 2 ? { ...ev, renderStaff: 'below' as const } : ev
+      );
+
+      const result = toggleAllTupletNumbersInMeasure(events)!;
+
+      expect(result.groupCount).toBe(2);
+      expect(result.events.every((ev) => ev.tuplet?.hideNumber === true)).toBe(true);
+      // またぎの指定そのものは保たれる
+      expect(result.events.slice(0, 2).every((ev) => ev.renderStaff === 'below')).toBe(true);
+    });
+
+    it('連符が1つも無い小節では null を返す（呼び出し側は譜面を変えない）', () => {
+      const events: NoteEvent[] = [
+        { dur: '4', isRest: true, keys: ['b/4'] },
+        { dur: '4', isRest: false, keys: ['c/4'] },
+      ];
+
+      expect(toggleAllTupletNumbersInMeasure(events)).toBeNull();
+      expect(toggleAllTupletNumbersInMeasure([])).toBeNull();
     });
   });
 });

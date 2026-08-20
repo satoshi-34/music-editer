@@ -77,6 +77,19 @@ function centerXOf(hit: SVGRectElement): number {
   return (left + right) / 2;
 }
 
+/**
+ * 小節の背景（.vf-hit）をクリックする（Issue #324 の小節一括トグル用）。
+ * 背景の当たり判定は小節ごとに1つ、描画順（左から右）に並ぶ。
+ */
+function clickMeasureBackground(svg: SVGSVGElement, measureIndex: number) {
+  const hits = Array.from(svg.querySelectorAll('rect.vf-hit')) as SVGRectElement[];
+  const hit = hits[measureIndex];
+  expect(hit).toBeTruthy();
+  const x = parseFloat(hit.getAttribute('x')!) + parseFloat(hit.getAttribute('width')!) / 2;
+  const y = parseFloat(hit.getAttribute('y')!) + parseFloat(hit.getAttribute('height')!) / 2;
+  fireEvent.click(hit, { clientX: x, clientY: y });
+}
+
 /** 音符・休符の本体をクリックする（line は五線基準の高さ。b/4 は line 2）。 */
 function clickAt(svg: SVGSVGElement, measureIndex: number, noteIndex: number, line: number) {
   const hit = svg.querySelector(
@@ -205,5 +218,108 @@ describe('PianoSystemCanvas 連符数字の非表示（Issue #269）', () => {
     // 反映は setScore 経由なので、待ってから「呼ばれていない」ことを確かめる
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // ── Issue #324: 小節の背景クリックで小節内の全グループを一括トグルする ──
+  describe('小節一括トグル（Issue #324）', () => {
+    /** 8分3連×4組（実長4拍）＝ 4/4 の1小節ぶん。月光のように連符が並ぶ形。 */
+    function fourTripletGroups(hidden: boolean[] = [false, false, false, false]): NoteEvent[] {
+      return hidden.flatMap((h, i) => tripletNotes(`g${i + 1}`, h || undefined));
+    }
+
+    /** 通知（画面下端に出る文言）を受け取るためのリスナーを張る。 */
+    function captureNotices(): { messages: string[]; stop: () => void } {
+      const messages: string[] = [];
+      const listener = (e: Event) => {
+        messages.push((e as CustomEvent<{ message: string }>).detail.message);
+      };
+      window.addEventListener('music-editer-score-edit-notice', listener);
+      return { messages, stop: () => window.removeEventListener('music-editer-score-edit-notice', listener) };
+    }
+
+    it('受入1: 背景クリック1回で小節内の4グループすべての数字が消え、もう一度で全部出る', async () => {
+      const data: MeasureData[] = [{ events: fourTripletGroups() }];
+      const { svg, onChange } = renderScore(data, { mode: 'tupletNumberToggle' });
+
+      clickMeasureBackground(svg, 0);
+
+      await waitFor(() => expect(onChange).toHaveBeenCalled());
+      const hiddenAll = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events;
+      expect(hiddenAll).toHaveLength(12);
+      expect(hiddenAll.every((ev) => ev.tuplet?.hideNumber === true)).toBe(true);
+
+      // 全部隠れている状態から押すと、今度は全部表示へ戻る（プロパティごと消える）
+      const shownAgain = renderScore([{ events: hiddenAll }], { mode: 'tupletNumberToggle' });
+      clickMeasureBackground(shownAgain.svg, 0);
+      await waitFor(() => expect(shownAgain.onChange).toHaveBeenCalled());
+      const restored = (shownAgain.onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events;
+      expect(restored.every((ev) => ev.tuplet && !('hideNumber' in ev.tuplet))).toBe(true);
+    });
+
+    it('受入2: 混在状態（2グループだけ非表示）から押すと、隠す方向へそろう', async () => {
+      const data: MeasureData[] = [{ events: fourTripletGroups([true, false, true, false]) }];
+      const { svg, onChange } = renderScore(data, { mode: 'tupletNumberToggle' });
+
+      clickMeasureBackground(svg, 0);
+
+      await waitFor(() => expect(onChange).toHaveBeenCalled());
+      const updated = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events;
+      expect(updated.every((ev) => ev.tuplet?.hideNumber === true)).toBe(true);
+    });
+
+    it('受入3: 一括トグルのあともグループ単位のトグルは効く（個別調整が残る）', async () => {
+      const data: MeasureData[] = [{ events: fourTripletGroups([true, true, true, true]) }];
+      const { svg, onChange } = renderScore(data, { mode: 'tupletNumberToggle' });
+
+      // 2組目の先頭（index 3）だけを音符クリックで表示へ戻す
+      clickAt(svg, 0, 3, 2);
+
+      await waitFor(() => expect(onChange).toHaveBeenCalled());
+      const updated = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events;
+      expect(updated.slice(3, 6).every((ev) => ev.tuplet && !('hideNumber' in ev.tuplet))).toBe(true);
+      expect(updated.slice(0, 3).every((ev) => ev.tuplet?.hideNumber === true)).toBe(true);
+      expect(updated.slice(6).every((ev) => ev.tuplet?.hideNumber === true)).toBe(true);
+    });
+
+    it('受入4: 何グループ変えたかが通知に出る', async () => {
+      const data: MeasureData[] = [{ events: fourTripletGroups() }];
+      const notices = captureNotices();
+      const { svg, onChange } = renderScore(data, { mode: 'tupletNumberToggle' });
+
+      clickMeasureBackground(svg, 0);
+
+      await waitFor(() => expect(onChange).toHaveBeenCalled());
+      expect(notices.messages.some((m) => m.includes('連符数字を4グループ隠しました'))).toBe(true);
+      notices.stop();
+    });
+
+    it('受入5: 連符の無い小節では譜面を変えず、理由を通知する（無言の行き止まりにしない）', async () => {
+      const data: MeasureData[] = [{
+        events: [quarterRest(), quarterRest(), quarterRest(), quarterRest()],
+      }];
+      const notices = captureNotices();
+      const { svg, onChange } = renderScore(data, { mode: 'tupletNumberToggle' });
+
+      clickMeasureBackground(svg, 0);
+
+      await waitFor(() => expect(notices.messages.length).toBeGreaterThan(0));
+      expect(notices.messages.some((m) => m.includes('連符がない'))).toBe(true);
+      expect(onChange).not.toHaveBeenCalled();
+      notices.stop();
+    });
+
+    it('受入6: 音符ツール中の背景クリックは従来どおり音符が置ける（一括トグルが割り込まない）', async () => {
+      const data: MeasureData[] = [{ events: fourTripletGroups() }];
+      const { svg, onChange } = renderScore(data, { duration: '4', isRest: false });
+
+      clickMeasureBackground(svg, 0);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (onChange.mock.calls.length > 0) {
+        const updated = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events;
+        // 音符ツールでは hideNumber が付かない（連符数字の一括トグルが誤発火していない）
+        expect(updated.every((ev) => !ev.tuplet?.hideNumber)).toBe(true);
+      }
+    });
   });
 });
