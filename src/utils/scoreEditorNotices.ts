@@ -206,6 +206,28 @@ export function describeDeletedHairpin(type: 'cresc' | 'dim'): string {
   return `${type === 'cresc' ? 'クレッシェンド' : 'デクレッシェンド'}（松葉）を削除しました${UNDO_HINT}`;
 }
 
+/**
+ * クリックした拍まで手前を休符で埋めて音符を置いたときの文言（Issue #322）。
+ *
+ * 「置いたつもりの拍」と「実際に入った拍」がずれていないかは、譜面を見ただけでは
+ * 気づきにくい（空の声部では特にそうで、1拍目に入っても不自然に見えない）。
+ * 音符が増えるだけでなく休符も一緒に増える操作なので、何が起きたかを必ず知らせる。
+ *
+ * @param startBeat 置いた音符の開始拍（0 起点。表示は 1 起点へ直す）
+ * @param voiceIndex アクティブ声部。多声の小節でだけ声部名を添える
+ * @param isMultiVoice 声部が2つ以上ある小節か
+ */
+export function describeLeadingRestFill(
+  startBeat: number,
+  voiceIndex: number,
+  isMultiVoice: boolean
+): string {
+  // 3.5拍目のような半端な位置もあるので、割り切れないときだけ小数を残す
+  const beatLabel = Number((startBeat + 1).toFixed(2)).toString();
+  const voiceLabel = isMultiVoice ? `声部${voiceIndex + 1}の` : '';
+  return `${voiceLabel}${beatLabel}拍目に置き、手前の空いた拍を休符で埋めました${UNDO_HINT}`;
+}
+
 /** 選択した小節範囲をまとめて空にしたときの文言 */
 export function describeClearedMeasures(start: number, end: number): string {
   const count = end - start + 1;

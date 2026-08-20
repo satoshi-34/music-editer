@@ -258,8 +258,13 @@ describe('PianoSystemCanvas 声部クリックのスコープ（Issue #105 → #
     // 声部1（events）はクリック前とまったく同じまま（誤って編集されていない）。
     expect(updated[0].events).toEqual(data[0].events);
 
-    // 声部2（voices[1]）が新規作成され、1件だけ音符が追加されている。
-    expect(updated[0].voices?.[1]?.events).toHaveLength(1);
+    // 声部2（voices[1]）が新規作成され、音符が追加されている。
+    // Issue #322 以降、小節の途中をクリックするとその拍まで手前が休符で埋まるので、
+    // 件数ではなく「音符はちょうど1つで、それが末尾」「手前は休符だけ」で固定する。
+    const voice2 = updated[0].voices?.[1]?.events ?? [];
+    expect(voice2.length).toBeGreaterThanOrEqual(1);
+    expect(voice2.filter((ev) => !ev.isRest)).toHaveLength(1);
+    expect(voice2.at(-1)!.isRest).toBe(false);
   });
 
   it('声部2アクティブのまま声部1の符頭をクリックすると、声部1へ切り替えて選択し、通知が出る（データは変えない）', async () => {
