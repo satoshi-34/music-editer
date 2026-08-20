@@ -42,11 +42,13 @@ import {
   describeLeadingRestFill,
   describeMeasureFull,
   describeNoTupletInMeasure,
+  describeSymbolToolUnavailable,
   describeTupletGroupPasteUnavailable,
   describeTupletNumberToggleUnavailable,
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   requestActiveVoiceChange,
+  type SymbolTool,
 } from '../utils/scoreEditorNotices';
 import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
@@ -5148,6 +5150,22 @@ export default function PianoSystemCanvas({
               const ornamentMode = 'mode' in tool && tool.mode === 'ornament' ? (tool as any).ornamentType as OrnamentType : null;
               const pedalMode = 'mode' in tool && tool.mode === 'pedal' ? (tool as any).pedalType as 'down' | 'up' : null;
               const ottavaMode = 'mode' in tool && tool.mode === 'ottava' ? (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd' : null;
+              // カスタム記号の日本語名（ユーザーが記号に付けた名前）を id から引く。
+              // 通知の文言と調整オーバーレイで同じ名前を使うため、解決はここ1か所にまとめる。
+              const customSymbolNameOf = (symbolId: string) =>
+                customSymbolDefs.find(d => d.id === symbolId)?.name ?? symbolId;
+              // 記号系ツール（強弱・カスタム記号・サイズ/位置調整）のうち、いま選ばれているもの。
+              // 休符クリックの通知（Issue #330）で「どのツールが効かなかったのか」を伝えるために使う。
+              const activeSymbolTool: SymbolTool | null =
+                dynamicMode ? { type: 'dynamic' }
+                : customSymbolMode ? { type: 'customSymbol', symbolName: customSymbolNameOf(customSymbolMode) }
+                : customSymbolResizeMode
+                  ? { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(customSymbolResizeMode), adjust: 'resize' }
+                : customSymbolOffsetMode
+                  ? { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(customSymbolOffsetMode), adjust: 'offset' }
+                : symbolAdjustResizeMode ? { type: 'symbolAdjust', adjust: 'resize' }
+                : symbolAdjustOffsetMode ? { type: 'symbolAdjust', adjust: 'offset' }
+                : null;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY);
               // この hit rect は既にアクティブ声部（activeVfNotes/activeEvs）から生成されているので、
@@ -5299,7 +5317,15 @@ export default function PianoSystemCanvas({
                 // サイズ変更は「その音符に対象記号が既に付いている場合」のみオーバーレイを開く
                 // （StaffCanvas と同じ考え方。付いていない記号を新規に生やす事故を防ぐ）。
                 const existing = activeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolResizeMode);
-                if (!existing) return;
+                if (!existing) {
+                  // 付いていない記号のサイズ調整を押しても何も起きないので、
+                  // 「まだ付いていない」ことと先に付ける手順を伝える（Issue #330）
+                  notifyScoreEdit(describeSymbolToolUnavailable(
+                    { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(customSymbolResizeMode), adjust: 'resize' },
+                    'symbolNotAttached',
+                  ));
+                  return;
+                }
                 const currentPercent = Math.round((existing.scale ?? 1) * 100);
                 const resizeTarget: AdjustTarget = { type: 'custom', symbolId: customSymbolResizeMode, name: customSymbolResizeMode };
                 setSymbolResizeEditState({
@@ -5318,7 +5344,14 @@ export default function PianoSystemCanvas({
               if (customSymbolOffsetMode && !activeEvs[j]?.isRest) {
                 // 位置調整も同様に、対象記号が既に付いている場合のみオーバーレイを開く。
                 const existing = activeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolOffsetMode);
-                if (!existing) return;
+                if (!existing) {
+                  // サイズ調整と同じ理由（Issue #330）。付いていない記号は位置も動かせない
+                  notifyScoreEdit(describeSymbolToolUnavailable(
+                    { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(customSymbolOffsetMode), adjust: 'offset' },
+                    'symbolNotAttached',
+                  ));
+                  return;
+                }
                 const offsetTarget: AdjustTarget = { type: 'custom', symbolId: customSymbolOffsetMode, name: customSymbolOffsetMode };
                 setSymbolOffsetEditState({
                   partIndex: pi,
@@ -5344,7 +5377,15 @@ export default function PianoSystemCanvas({
                   ...(currentEv.customSymbols?.map((s): AdjustTarget => ({ type: 'custom', symbolId: s.symbolId, name: customSymbolDefs.find(d => d.id === s.symbolId)?.name ?? s.symbolId })) ?? []),
                   ...listPresentAdjustableSymbolKinds(currentEv).map((kind): AdjustTarget => ({ type: 'standard', kind })),
                 ];
-                if (targets.length === 0) return;
+                if (targets.length === 0) {
+                  // 調整できる記号が1つも無い音符では選択リストすら開けない。
+                  // ボタンが押せる＝どの音符でも使える、と受け取られるため理由を言う（Issue #330）
+                  notifyScoreEdit(describeSymbolToolUnavailable(
+                    { type: 'symbolAdjust', adjust: symbolAdjustResizeMode ? 'resize' : 'offset' },
+                    'noAdjustableSymbol',
+                  ));
+                  return;
+                }
                 const containerRect = containerRef.current?.getBoundingClientRect();
                 const overlayX = me.clientX - (containerRect?.left ?? 0);
                 const overlayY = me.clientY - (containerRect?.top ?? 0);
@@ -5483,12 +5524,15 @@ export default function PianoSystemCanvas({
                 setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:selectedKeyIndex});
                 playNoteEvent(playEvent, part.playbackInstrument);
               }else if(activeEvs[j]?.isRest){
-                if (dynamicMode) return;
-                if (customSymbolMode) return;
-                if (customSymbolResizeMode) return;
-                if (customSymbolOffsetMode) return;
-                if (symbolAdjustResizeMode) return;
-                if (symbolAdjustOffsetMode) return;
+                // 記号系ツール（強弱・カスタム記号・サイズ/位置調整）はすべて音符専用で、
+                // 休符を押しても何も起きなかった。どのツールが効かなかったのかと
+                // 次の一手（音符をクリックする）を伝える（Issue #330 / #318「行き止まりは喋る」）。
+                // 拒否の条件そのものは変えていない（activeSymbolTool が立つのは、
+                // 従来ここで1行ずつ return していた6ツールとまったく同じ場合）。
+                if (activeSymbolTool) {
+                  notifyScoreEdit(describeSymbolToolUnavailable(activeSymbolTool, 'rest'));
+                  return;
+                }
                 if (accidentalMode) {
                   const isKeySignatureZone = i===0 &&
                     lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
