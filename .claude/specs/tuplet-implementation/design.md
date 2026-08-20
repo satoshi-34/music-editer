@@ -1216,3 +1216,63 @@ planEventDeletion 分岐2（連符内）
 - **和音を `keyIndex` 無しで消す**経路は従来どおりグループごと畳む。Issue の対象が
   「単音（`keys.length === 1`）」だったため広げていない。和音も休符へ置き換える方が
   一貫するという見方もあるが、挙動を変える範囲を Issue の指定どおりに留めた
+
+---
+
+## 追記12: 連符数字の小節一括トグル（Issue #324, 2026-08-20）
+
+### 問題
+
+追記8（#269/#294）で入れた連符数字のトグルは**グループ単位**で、対象の音符を1つずつクリックする。
+月光第1楽章のように三連符が曲全体に続く譜面（30グループ超）では、
+「2小節目以降は数字を省く」という浄書の慣行どおりに直すだけで30回以上のクリックが要る。
+実際に清書へ使った運用者から「クリックが多すぎる」という実需が上がった（#285）。
+
+### 修正設計
+
+**小節の背景（`.vf-hit`）クリック**に、その小節・アクティブ声部の全連符グループの一括トグルを割り当てた。
+背景クリックはこれまで `tupletNumberToggle` モードでは**何もせず return** していた場所で、
+「背景クリックで音符を置かない」という既存の約束（追記8）はそのまま守られる。
+
+トグルの向きは **「1つでも表示中があれば全部隠す／全部隠れていれば全部出す」**。
+混在状態から押したときに一部だけ反転すると、押すたびにばらけて収拾がつかなくなるため、
+「押せば小節全体の見た目がそろう」動きに寄せた。
+
+### グループの数え方は増やさない
+
+小節内のグループ列挙は `tupletGroupIntegrity.ts` へ `collectTupletRunRanges`（新規）として置き、
+既存の `findNonContiguousTupletGroupIds` もこの関数を使う形へ寄せた。
+「グループ＝同じ `tuplet.id` が連続する区間」という数え方は #282 以来この1か所に集約する方針で、
+小節一括の処理が独自に run を数え直すと、片方だけ直る事故（#223 → #280 と同じ型）の温床になる。
+
+`hideNumber` の書き換え規則（隠すときは `true`・戻すときは**プロパティごと削除**）も
+`withTupletHideNumber` として切り出し、グループ単位（`toggleTupletNumberVisibility`）と
+小節一括（`toggleAllTupletNumbersInMeasure`）で共有している。保存データの形が2系統に割れないようにするため。
+
+### 通知（#318「行き止まりは喋る」）
+
+一度に何グループも変わる操作なので、`notifyScoreEdit` で
+「この小節の連符数字を4グループ隠しました（Cmd/Ctrl+Z で元に戻せます）」を出す。
+連符が段の外まで続く譜面では、変わった範囲が視界に収まらないことがあるため。
+
+**連符が1つも無い小節**を押したときは、譜面を書き換えずに
+「この小節には連符がないため、連符数字の一括切り替えはできません」とだけ出す。
+何も起きないままだと「壊れている」のか「対象が無い」のか利用者に区別できない。
+なお、ここで `withVoiceEventsUpdated` を通さないのは追記8と同じ理由で、
+声部2モードのときに中身の無い `voices[1]` が生まれるのを避けるため（#112 の教訓）。
+
+### 影響範囲
+
+- `src/utils/tupletGroupIntegrity.ts` — `collectTupletRunRanges`（新規）、`findNonContiguousTupletGroupIds` を同関数へ寄せた
+- `src/utils/tupletUtils.ts` — `toggleAllTupletNumbersInMeasure`（新規）・`withTupletHideNumber`（内部共有）
+- `src/utils/scoreEditorNotices.ts` — `describeTupletNumbersToggledInMeasure` / `describeNoTupletInMeasure`
+- `src/components/PianoSystemCanvas.tsx` — 背景クリックの `tupletNumberToggle` 分岐を一括トグルへ
+- テスト: `tupletUtils.test.ts`（+6）/ `PianoSystemCanvasTupletHideNumber.test.tsx`（+6）
+- `README.md` — 連符数字の使い方に小節一括の1文を追記
+
+### やらなかったこと
+
+- **複数小節の一括**（範囲選択して曲全体へ）は入れていない。Issue の受入条件が小節単位で、
+  小節選択ツールとの操作の競合（Shift+クリックが小節選択に取られる）を設計し直す必要があるため
+- **自動省略**（同一音価の連符が続いたら2つ目以降を自動で隠す）は #269 本文の段2のまま未着手。
+  今回の操作も完全に手動で、既存譜面が無断で変わることはない

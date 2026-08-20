@@ -207,6 +207,27 @@ export function describeDeletedHairpin(type: 'cresc' | 'dim'): string {
 }
 
 /**
+ * 小節の背景クリックで連符数字をまとめて切り替えたときの文言（Issue #324）。
+ *
+ * 一度に何グループも変わる操作なので、「何が・いくつ変わったか」を必ず知らせる。
+ * 画面を見れば数字の有無は分かるが、連符が段の外まで続く譜面では
+ * 変わった範囲が視界に収まらないことがあるため。
+ */
+export function describeTupletNumbersToggledInMeasure(groupCount: number, hidden: boolean): string {
+  return `この小節の連符数字を${groupCount}グループ${hidden ? '隠しました' : '表示しました'}${UNDO_HINT}`;
+}
+
+/**
+ * 連符数字トグル中に、連符の無い小節の背景を押したときの文言（Issue #324・#318 の「行き止まりは喋る」）。
+ *
+ * 何も起きないだけだと「壊れている」のか「対象が無い」のかが利用者に分からないため、
+ * 譜面を変えない代わりに理由を出す。
+ */
+export function describeNoTupletInMeasure(): string {
+  return 'この小節には連符がないため、連符数字の一括切り替えはできません';
+}
+
+/**
  * クリックした拍まで手前を休符で埋めて音符を置いたときの文言（Issue #322）。
  *
  * 「置いたつもりの拍」と「実際に入った拍」がずれていないかは、譜面を見ただけでは
