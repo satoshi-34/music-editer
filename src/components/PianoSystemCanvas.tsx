@@ -2288,19 +2288,39 @@ export default function PianoSystemCanvas({
       // クリップボードが小節コピーのものなら何もしない（ScorePage 側の小節ペーストに任せる）。
       if((e.metaKey||e.ctrlKey)&&e.key==='v'&&!isTextInputTarget){
         const group=getTupletClipboardGroup();
-        if(!group)return;
+        if(!group){
+          // 小節を選んでいるときの Cmd/Ctrl+V は「小節の貼り付け」（ScorePage 側）が受け持つ。
+          // そこで喋ると、ちゃんと効いている操作へ的外れな通知をかぶせてしまうので黙って譲る。
+          if(!selectedMeasuresRef.current){
+            // 何もコピーしていないまま貼り付けを押した行き止まり。次の一手（Cmd/Ctrl+C）まで伝える
+            // （Issue #318「行き止まりは喋る」。文言は休符クリック側と同じビルダーを共用する）
+            notifyScoreEdit(describeTupletGroupPasteUnavailable('emptyClipboard'));
+          }
+          return;
+        }
         // 貼り付け先の声部は「いま編集中の声部」（コピー元の声部は問わない）。
         const targetVoiceIndex=activeVoiceIndexRef.current;
         const beatsLimit=beatsPerMeasureRef.current;
+        // 空き拍の判定は setPartsScore の updater の**外**で行う（Issue #331）。
+        // updater の中で通知すると、React が updater を2回呼ぶ場面（StrictMode など）で
+        // 同じ通知が二重に出てしまうため（.claude/specs/dead-end-speaks/design.md の約束）。
+        const targetMeasure=partsScoreRef.current[partIndex]?.[measure];
+        // 小節そのものが無いのはデータが壊れている場合だけなので、従来どおり黙って諦める。
+        if(!targetMeasure)return;
+        const targetEvents=getVoiceEvents(targetMeasure,targetVoiceIndex);
+        const usedBeats=targetEvents.reduce((sum,ev)=>sum+eventOccupiedBeats(ev),0);
+        // 判定式は updater の中にあったときと同じ（音符の追加と同じ容量チェック）。
+        if(usedBeats+tupletGroupBeats(group)>beatsLimit+0.000001){
+          // 満杯で置けないという理由は音符・連符の追加とまったく同じなので、文言も同じものを使う
+          // （同じ意味の文言を2つ作らない。#280 と同じ「文言だけずれる」壊れ方を避ける）
+          notifyScoreEdit(describeMeasureFull());
+          e.preventDefault();return;
+        }
         setS(prev=>{
-          const targetMeasure=prev[measure];
-          if(!targetMeasure)return prev;
-          const events=getVoiceEvents(targetMeasure,targetVoiceIndex);
-          const usedBeats=events.reduce((sum,ev)=>sum+eventOccupiedBeats(ev),0);
-          // 空き拍が足りなければ何もしない（音符の追加と同じ容量チェック）。
-          if(usedBeats+tupletGroupBeats(group)>beatsLimit+0.000001)return prev;
+          const prevMeasure=prev[measure];
+          if(!prevMeasure)return prev;
           const next=[...prev];
-          next[measure]=withVoiceEventsUpdated(targetMeasure,targetVoiceIndex,(evs)=>[
+          next[measure]=withVoiceEventsUpdated(prevMeasure,targetVoiceIndex,(evs)=>[
             ...evs,
             // 貼り付けるたびにグループ id を新しく振る（元グループと id を共有しない）。
             ...instantiateTupletGroup(group),
