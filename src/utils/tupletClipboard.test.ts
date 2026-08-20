@@ -6,11 +6,13 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import type { NoteEvent } from '../types/storage';
 import {
   copyTupletGroupForClipboard,
+  findTupletGroupPasteBlockReason,
   findTupletGroupRange,
   instantiateTupletGroup,
   planTupletGroupPasteIntoRest,
   tupletGroupBeats,
 } from './tupletUtils';
+import { describeTupletGroupPasteUnavailable } from './scoreEditorNotices';
 import {
   getTupletClipboardGroup,
   setTupletClipboardGroup,
@@ -116,6 +118,41 @@ describe('連符グループの貼り付け計画（planTupletGroupPasteIntoRest
     expect(planTupletGroupPasteIntoRest({ dur: '4', isRest: false, keys: ['c/5'] }, tripletGroup('g1'))).toBeNull();
     const insideTuplet: NoteEvent = { dur: '8', isRest: true, keys: ['b/4'], tuplet: tupletOf('other') };
     expect(planTupletGroupPasteIntoRest(insideTuplet, tripletGroup('g1'))).toBeNull();
+  });
+});
+
+// Issue #325: 貼れないときに理由を通知するため、可否の判断元を1か所（この関数）へ寄せた。
+describe('連符グループを貼れない理由（findTupletGroupPasteBlockReason）', () => {
+  const insideTuplet: NoteEvent = { dur: '8', isRest: true, keys: ['b/4'], tuplet: tupletOf('other') };
+
+  it('貼れる休符では null（＝行き止まりではない）', () => {
+    expect(findTupletGroupPasteBlockReason(quarterRest(), tripletGroup('g1'))).toBeNull();
+  });
+
+  it('理由を区別して返す', () => {
+    expect(findTupletGroupPasteBlockReason(eighthRest(), tripletGroup('g1'))).toBe('tooShort');
+    expect(findTupletGroupPasteBlockReason(insideTuplet, tripletGroup('g1'))).toBe('insideTuplet');
+    expect(findTupletGroupPasteBlockReason({ dur: '4', isRest: false, keys: ['c/5'] }, tripletGroup('g1'))).toBe('notRest');
+    expect(findTupletGroupPasteBlockReason(quarterRest(), [])).toBe('emptyClipboard');
+  });
+
+  it('計画関数と結論が一致する（同じ判断元を使っているので食い違わない）', () => {
+    const cases: NoteEvent[] = [
+      quarterRest(),
+      eighthRest(),
+      insideTuplet,
+      { dur: '4', isRest: false, keys: ['c/5'] },
+    ];
+    cases.forEach((ev) => {
+      const blocked = findTupletGroupPasteBlockReason(ev, tripletGroup('g1')) !== null;
+      expect(planTupletGroupPasteIntoRest(ev, tripletGroup('g1')) === null).toBe(blocked);
+    });
+  });
+
+  it('理由ごとに、次にどうすればよいかを含む文言を出す', () => {
+    expect(describeTupletGroupPasteUnavailable('tooShort')).toContain('拍が足りない');
+    expect(describeTupletGroupPasteUnavailable('tooShort')).toContain('Escape');
+    expect(describeTupletGroupPasteUnavailable('insideTuplet')).toContain('連符の中の休符');
   });
 });
 

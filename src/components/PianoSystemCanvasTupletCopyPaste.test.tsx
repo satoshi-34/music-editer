@@ -15,6 +15,7 @@ import { render, fireEvent, waitFor } from '@testing-library/react';
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData, NoteEvent } from '../types/storage';
 import { getTupletClipboardGroup, setTupletClipboardGroup } from '../utils/tupletClipboard';
+import { SCORE_EDIT_NOTICE_EVENT } from '../utils/scoreEditorNotices';
 
 vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function() {
@@ -92,6 +93,28 @@ function noteHit(svg: SVGSVGElement, measureIndex: number, noteIndex: number): S
 function clickAt(svg: SVGSVGElement, measureIndex: number, noteIndex: number, line: number) {
   const hit = noteHit(svg, measureIndex, noteIndex);
   fireEvent.click(hit, { clientX: centerXOf(hit), clientY: yForLine(hit, line) });
+}
+
+/**
+ * 休符の「時間枠（列）」の端をクリックする（Issue #325）。
+ * where: 'left' = 列の左端寄り、'right' = 列の右端寄り。
+ * 記号の描画中心 ±18 の帯からは確実に外れる位置を選ぶ（4分休符の列は幅240前後）。
+ */
+function clickAtColumnEdge(
+  svg: SVGSVGElement,
+  measureIndex: number,
+  noteIndex: number,
+  line: number,
+  where: 'left' | 'right'
+) {
+  const hit = noteHit(svg, measureIndex, noteIndex);
+  const x = parseFloat(hit.getAttribute('x')!);
+  const width = parseFloat(hit.getAttribute('width')!);
+  // 端そのものだと丸めで隣のセルへ落ちうるので、2単位だけ内側を押す
+  const clientX = where === 'left' ? x + 2 : x + width - 2;
+  // 記号帯（±18）の外であることをテスト自身でも確かめておく（列が細い譜面では前提が崩れるため）
+  expect(Math.abs(clientX - centerXOf(hit))).toBeGreaterThan(18);
+  fireEvent.click(hit, { clientX, clientY: yForLine(hit, line) });
 }
 
 const TRIPLET = { numNotes: 3, notesOccupied: 2 };
@@ -346,6 +369,89 @@ describe('PianoSystemCanvas 連符グループのコピー＆ペースト（Issu
     expect(updated).toHaveLength(4);
     expect(updated[1].isRest).toBe(false);
     expect(updated[1].tuplet).toBeUndefined();
+  });
+
+  // ── Issue #325: コピー中は休符の列全体を当たり判定にする ──
+  //
+  // 症状: 貼り付けが成立するのは休符の記号の描画中心±18 の帯だけで、列（4分休符で幅240前後）の
+  // 残り9割をクリックすると隣接挿入へ流れ、満杯の小節では無言で何も起きなかった。
+  it('受入1c: コピー中は、休符の列の左端をクリックしても貼れる（記号帯の外）', async () => {
+    const data: MeasureData[] = [{
+      events: [...tripletGroup(SOURCE_GROUP_ID), quarterRest(), quarterRest(), quarterRest()],
+    }];
+    const { svg, onChange } = renderScore(data);
+
+    copyGroupFromFirstNote(svg);
+    clickAtColumnEdge(svg, 0, 3, 2, 'left');
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const updated = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events;
+    // 元グループ3 + 貼り付けたグループ3 + 残りの4分休符2（記号帯クリックと同じ結果）
+    expect(updated).toHaveLength(8);
+    expect(updated.slice(3, 6).every((ev) => !!ev.tuplet)).toBe(true);
+    expect(updated[3].tuplet?.id).not.toBe(SOURCE_GROUP_ID);
+  });
+
+  it('受入1d: コピー中は、休符の列の右端をクリックしても貼れる（隣接挿入にならない）', async () => {
+    const data: MeasureData[] = [{
+      events: [...tripletGroup(SOURCE_GROUP_ID), quarterRest(), quarterRest(), quarterRest()],
+    }];
+    const { svg, onChange } = renderScore(data);
+
+    copyGroupFromFirstNote(svg);
+    clickAtColumnEdge(svg, 0, 3, 2, 'right');
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const updated = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events;
+    expect(updated).toHaveLength(8);
+    // 「4分音符が1つ増える」隣接挿入だったころの結果（7イベント・連符なし）になっていないこと
+    expect(updated.slice(3, 6).every((ev) => !!ev.tuplet)).toBe(true);
+  });
+
+  it('コピー中でなければ、列の端のクリックは従来どおり隣接挿入のまま（回帰なし）', async () => {
+    // 8分音符を1つ足せる空き（3拍ぶんのイベント）を残しておく。
+    // 満杯の小節では挿入そのものが容量チェックで止まるため、判定の違いを見られない。
+    const data: MeasureData[] = [{
+      events: [quarterNote('c/5'), quarterRest(), quarterRest()],
+    }];
+    const { svg, onChange } = renderScore(data, { duration: '8', isRest: false });
+
+    // クリップボードは空（beforeEach で null）。列の右端は休符の置換ではなく挿入になる
+    clickAtColumnEdge(svg, 0, 1, 2, 'right');
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const updated = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events;
+    // 休符はそのまま残り、8分音符が1つ増える（＝置換ではなく挿入）
+    expect(updated.length).toBeGreaterThan(3);
+    expect(updated.some((ev) => !ev.isRest && ev.dur === '8')).toBe(true);
+    expect(updated[1].isRest).toBe(true);
+    expect(updated[1].dur).toBe('4');
+  });
+
+  it('貼れない休符では、列のどこを押しても譜面が変わらず、理由が通知される（#318 の行き止まりは喋る）', async () => {
+    const data: MeasureData[] = [{
+      events: [
+        ...tripletGroup(SOURCE_GROUP_ID),
+        { dur: '8', isRest: true, keys: ['b/4'] },
+        { dur: '8', isRest: true, keys: ['b/4'] },
+        quarterRest(), quarterRest(),
+      ],
+    }];
+    const notices: string[] = [];
+    const onNotice = (e: Event) => notices.push((e as CustomEvent<{ message: string }>).detail.message);
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    try {
+      const { svg, onChange } = renderScore(data);
+
+      copyGroupFromFirstNote(svg);
+      // 8分休符（1/2拍）には1拍のグループが入らない。記号帯の外でも「無言で挿入」にはしない
+      clickAtColumnEdge(svg, 0, 3, 2, 'right');
+
+      expect(onChange).not.toHaveBeenCalled();
+      expect(notices.some((m) => m.includes('拍が足りない'))).toBe(true);
+    } finally {
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    }
   });
 
   it('Escape でコピー状態を解除すると、休符クリックは通常の音符入力へ戻る', async () => {
