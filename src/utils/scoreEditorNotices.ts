@@ -219,6 +219,77 @@ export function describeTupletNumberToggleUnavailable(): string {
   return '連符ではないため数字の表示は切り替えられません（連符グループの音符か休符をクリックしてください）';
 }
 
+/**
+ * 記号系ツール（強弱・カスタム記号・サイズ/位置調整）の種類（Issue #330）。
+ *
+ * 通知の文言へ「どのツールが効かなかったのか」を差し込むために使う。
+ * ツールごとに文言を書き分けると同じ意味の文が5つ以上散らばり、
+ * 片方だけ直したときに食い違う（#280 と同じ壊れ方）ので、1つのビルダーに集約している。
+ */
+export type SymbolTool =
+  /** 強弱記号（p, f など）を付けるツール */
+  | { type: 'dynamic' }
+  /** カスタム記号を付け外しするツール。symbolName はユーザーが付けた記号の名前 */
+  | { type: 'customSymbol'; symbolName: string }
+  /** 特定のカスタム記号のサイズ・位置を調整するツール */
+  | { type: 'customSymbolAdjust'; symbolName: string; adjust: 'resize' | 'offset' }
+  /** 汎用のサイズ・位置調整ツール（⤢ / ✥）。音符に付いている記号から対象を選ぶ */
+  | { type: 'symbolAdjust'; adjust: 'resize' | 'offset' };
+
+/** サイズ調整・位置調整のどちらなのかを表す短い名前 */
+function describeAdjustKind(adjust: 'resize' | 'offset'): string {
+  return adjust === 'resize' ? 'サイズ調整' : '位置調整';
+}
+
+/** 通知の文中で「どのツールを使ったのか」を指す言い方を組み立てる */
+function describeSymbolToolName(tool: SymbolTool): string {
+  switch (tool.type) {
+    case 'dynamic':
+      return '強弱記号';
+    case 'customSymbol':
+      return `カスタム記号「${tool.symbolName}」`;
+    case 'customSymbolAdjust':
+      return `「${tool.symbolName}」の${describeAdjustKind(tool.adjust)}`;
+    case 'symbolAdjust':
+      // パレット上のボタン記号（⤢ / ✥）も添える。どのボタンの話かを一目で分かるようにするため
+      return `記号の${describeAdjustKind(tool.adjust)}（${tool.adjust === 'resize' ? '⤢' : '✥'}）`;
+  }
+}
+
+/**
+ * 記号系ツールを対象外の音符・休符へ使ったときの文言（Issue #330・#318 の「行き止まりは喋る」）。
+ *
+ * これらのツールは「押しても何も起きない」場面が3種類あり、どれも無言で終わっていた。
+ * 拒否の条件そのものは変えず（記号は音符に付くもの・調整は付いている記号にだけ効く）、
+ * 理由と次の一手だけを添える。
+ *
+ * @param tool 使おうとしたツール。文中に名前を差し込む
+ * @param reason なぜ効かなかったのか
+ *   - `rest`: 休符をクリックした（記号系ツールはすべて音符専用）
+ *   - `symbolNotAttached`: 調整しようとした記号が、その音符に付いていない
+ *   - `noAdjustableSymbol`: 調整できる記号が1つも付いていない音符を押した
+ */
+export function describeSymbolToolUnavailable(
+  tool: SymbolTool,
+  reason: 'rest' | 'symbolNotAttached' | 'noAdjustableSymbol'
+): string {
+  switch (reason) {
+    case 'rest': {
+      // 「付ける」ツールと「調整する」ツールで自然な動詞が違うので、そこだけ出し分ける
+      const verb = tool.type === 'dynamic' || tool.type === 'customSymbol' ? '付けられません' : '使えません';
+      return `休符には${describeSymbolToolName(tool)}を${verb}（音符をクリックしてください）`;
+    }
+    case 'symbolNotAttached': {
+      // ここで主語になるのはツール名ではなく「付いていない記号」そのもの
+      const symbolLabel = 'symbolName' in tool ? `「${tool.symbolName}」` : 'この記号';
+      const adjustLabel = 'adjust' in tool ? describeAdjustKind(tool.adjust) : '調整';
+      return `この音符には${symbolLabel}が付いていません（先に記号を付けてから${adjustLabel}を使ってください）`;
+    }
+    case 'noAdjustableSymbol':
+      return 'この音符には調整できる記号がありません（記号を付けてから ⤢ / ✥ を使ってください）';
+  }
+}
+
 /** スラー/タイの削除に出す文言 */
 export function describeDeletedArc(kind: 'tie' | 'slur'): string {
   return `${kind === 'tie' ? 'タイ' : 'スラー'}を削除しました${UNDO_HINT}`;
