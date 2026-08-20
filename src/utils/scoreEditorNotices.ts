@@ -14,7 +14,7 @@
 // （SELECTION_CLAIMED_EVENT）の前例があるため、同じ作法にそろえた。
 
 import type { NoteEvent } from '../types/storage';
-import { canReplaceTupletNoteWithRest } from './tupletUtils';
+import { canReplaceTupletNoteWithRest, type TupletGroupPasteBlockReason } from './tupletUtils';
 
 /** 削除など「編集で何が起きたか」を画面へ出すための通知イベント名 */
 export const SCORE_EDIT_NOTICE_EVENT = 'music-editer-score-edit-notice';
@@ -141,6 +141,29 @@ export function describeDeletedNoteEvent(
  */
 export function describeAbsorbedChordKey(): string {
   return `移動先に同じ高さの音があるため、和音の1音にまとめました${UNDO_HINT}`;
+}
+
+/**
+ * コピー中の連符グループを休符へ貼れなかったときの文言（Issue #325・#318 の「行き止まりは喋る」）。
+ *
+ * 当たり判定を休符の列全体へ広げたことで、「押しても何も起きない」場面は
+ * 「そもそも貼れない休符を押したとき」だけになった。その1本だけ残った行き止まりで、
+ * 理由と次にどうすればよいかを必ず伝える。
+ *
+ * 理由の判定は貼り付け側とまったく同じ findTupletGroupPasteBlockReason（tupletUtils）を通す
+ * ため、ここで条件を書き直さない（文言と結果がずれた #280 の再発防止）。
+ */
+export function describeTupletGroupPasteUnavailable(reason: TupletGroupPasteBlockReason): string {
+  switch (reason) {
+    case 'tooShort':
+      return '拍が足りないため、この休符には連符グループを貼り付けできません（もっと長い休符をクリックするか、Escape でコピーを解除してください）';
+    case 'insideTuplet':
+      return '連符の中の休符には貼り付けできません（連符の外の休符をクリックするか、Escape でコピーを解除してください）';
+    case 'emptyClipboard':
+      return '貼り付けられる連符グループがありません（連符の音符を選んで Cmd/Ctrl+C でコピーしてください）';
+    case 'notRest':
+      return '音符の上には貼り付けできません（休符をクリックするか、Escape でコピーを解除してください）';
+  }
 }
 
 /**

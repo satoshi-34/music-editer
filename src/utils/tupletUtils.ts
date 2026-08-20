@@ -370,6 +370,39 @@ export type TupletGroupPaste = {
 };
 
 /**
+ * 連符グループを休符へ貼り付けられない理由（Issue #325 で通知の文言を出すために追加）。
+ *
+ * - `notRest` … 対象が音符（休符ではない）
+ * - `insideTuplet` … 対象が連符の中の休符（貼ると連符が入れ子になって壊れる）
+ * - `emptyClipboard` … コピー中のグループが空
+ * - `tooShort` … 休符の拍数がグループより短い
+ */
+export type TupletGroupPasteBlockReason = 'notRest' | 'insideTuplet' | 'emptyClipboard' | 'tooShort';
+
+/**
+ * 連符グループを休符へ貼り付けられない理由を返す（貼り付けられるなら null）。
+ *
+ * planTupletGroupPasteIntoRest はこの関数の結果だけで可否を決める。**可否の判断元をここ1か所に
+ * まとめておく**ことで、「貼れなかった理由の通知（Issue #325）」と実際の結果が食い違わない
+ * （同じ条件式を2か所に書いて片方だけ直し、文言と結果がずれた #280 の再発防止）。
+ */
+export function findTupletGroupPasteBlockReason(
+  restEvent: NoteEvent,
+  clipboardGroup: NoteEvent[]
+): TupletGroupPasteBlockReason | null {
+  if (clipboardGroup.length === 0) return 'emptyClipboard';
+  if (!restEvent.isRest) return 'notRest';
+  // 連符内の休符へ貼ると連符が入れ子になって壊れるため、対象は「普通の休符」だけにする
+  // （Issue #224 の buildTupletRestReplacement と同じ保守的な考え方）。
+  if (restEvent.tuplet) return 'insideTuplet';
+  const restBeats = getDurationBeats(restEvent.dur, restEvent.dots);
+  const groupBeats = tupletGroupBeats(clipboardGroup);
+  // 浮動小数点の誤差で「ちょうど収まる」ケースを弾かないよう、比較には余裕を持たせる。
+  if (groupBeats > restBeats + BEATS_EPS) return 'tooShort';
+  return null;
+}
+
+/**
  * コピー済みの連符グループを「連符ではない普通の休符」へ貼り付ける計画を立てる（Issue #234）。
  *
  * 分割規則は Issue #224（連符ツールで休符をクリック）と同じで、
@@ -382,17 +415,11 @@ export function planTupletGroupPasteIntoRest(
   restEvent: NoteEvent,
   clipboardGroup: NoteEvent[]
 ): TupletGroupPaste | null {
-  // 連符内の休符へ貼ると連符が入れ子になって壊れるため、対象は「普通の休符」だけにする
-  // （Issue #224 の buildTupletRestReplacement と同じ保守的な考え方）。
-  if (!restEvent.isRest || restEvent.tuplet || clipboardGroup.length === 0) {
+  if (findTupletGroupPasteBlockReason(restEvent, clipboardGroup)) {
     return null;
   }
   const restBeats = getDurationBeats(restEvent.dur, restEvent.dots);
   const groupBeats = tupletGroupBeats(clipboardGroup);
-  // 浮動小数点の誤差で「ちょうど収まる」ケースを弾かないよう、比較には余裕を持たせる。
-  if (groupBeats > restBeats + BEATS_EPS) {
-    return null;
-  }
   return {
     groupEvents: instantiateTupletGroup(clipboardGroup),
     remainingBeats: Math.max(restBeats - groupBeats, 0),

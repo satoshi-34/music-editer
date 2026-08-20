@@ -42,6 +42,7 @@ import {
   describeLeadingRestFill,
   describeMeasureFull,
   describeNoTupletInMeasure,
+  describeTupletGroupPasteUnavailable,
   describeTupletNumberToggleUnavailable,
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
@@ -129,6 +130,7 @@ import {
   buildTupletGroupPlan,
   buildTupletRestReplacement,
   copyTupletGroupForClipboard,
+  findTupletGroupPasteBlockReason,
   instantiateTupletGroup,
   planTupletGroupPasteIntoRest,
   planTupletReplacementForRest,
@@ -4973,9 +4975,12 @@ export default function PianoSystemCanvas({
               // 押す前に結果が分かるよう、クリック時とまったく同じ判定
               // （planTupletGroupPasteIntoRest）でカーソルの形を決める。
               // クリップボードはモジュール変数なので、ここで毎回読めば常に最新の状態を見られる。
+              // Issue #325: コピー中はクリックの当たり判定が休符の列全体になるので、
+              // ホバーのカーソルも同じ範囲で出す（帯の外でカーソルが変わらないままだと、
+              // 「そこが押せる／押せない」がユーザーに伝わらない）。
               const hoverClipboardGroup=getTupletClipboardGroup();
               if(hoverClipboardGroup && hoverDurationTool && activeEvs[j]?.isRest){
-                const isOnRestForHover=Math.abs(lx-anchors[j])<=REST_BODY_HIT_HALF_WIDTH&&ly>=chordTopY&&ly<=chordBotY;
+                const isOnRestForHover=ly>=chordTopY&&ly<=chordBotY;
                 if(isOnRestForHover){
                   hit.style.cursor = planTupletGroupPasteIntoRest(activeEvs[j],hoverClipboardGroup) ? 'copy' : 'not-allowed';
                 }
@@ -5509,20 +5514,23 @@ export default function PianoSystemCanvas({
                 // 休符の bounding box は横に広く返る場合があるため、
                 // 休符だけは描画アンカー中心の固定幅で「本体クリック」を判定する。
                 const restBodyCenterX=anchors[j];
-                const isOnRest=Math.abs(lx-restBodyCenterX)<=REST_BODY_HIT_HALF_WIDTH&&ly>=chordTopY&&ly<=chordBotY;
-                if(!isOnRest){
-                  // 休符の透明 hit rect は、隣接挿入しやすいよう時間枠全体を覆っている。
-                  // 休符本体から外れたクリックまで置換扱いにすると、
-                  // 「8分休符の次に8分音符」が休符置換になってしまうため挿入へ回す。
-                  doInsert(lx,ly);
-                  return;
-                }
-                // コピー済みの連符グループがあるときは、休符本体のクリック1回でそれを貼り付ける（Issue #234）。
+                // 五線±3加線のY範囲（＝固定ヒット領域の内側）。休符まわりの判定はすべてこの中でだけ行う。
+                const isInRestRowY=ly>=chordTopY&&ly<=chordBotY;
+                const isOnRest=Math.abs(lx-restBodyCenterX)<=REST_BODY_HIT_HALF_WIDTH&&isInRestRowY;
+                // コピー済みの連符グループがあるときは、休符のクリック1回でそれを貼り付ける（Issue #234）。
                 // 対象は音価ツール（音符側・休符側どちらでも）を選んでいるときだけにして、
                 // タイ・臨時記号などの記号ツールの挙動は変えない。
                 // クリップボードが空のときはこの分岐に入らないので、従来の休符編集はそのまま。
+                //
+                // Issue #325: コピー中だけは当たり判定を「休符の記号の±18」ではなく
+                // **休符の時間枠（列）全体**にする。記号の帯は4分休符の列（幅240前後）の1割ほどしかなく、
+                // 列の残り9割をクリックすると隣接挿入（満杯の小節では無言 return）へ流れていて、
+                // 「クリックしても何も起きない」体験になっていた。
+                // 既存実装自身が「貼り付けるつもりのクリックで別の音符が増えるほうが分かりにくい」として
+                // 記号帯の中では挿入へ流さない設計にしているので、列全体をその考え方にそろえる。
+                // コピー中でないときの±18の線引き（本体＝置換／外＝隣接挿入）は一切変えない。
                 const clipboardGroup=getTupletClipboardGroup();
-                if(clipboardGroup&&getDurationTool(tool)){
+                if(clipboardGroup&&getDurationTool(tool)&&isInRestRowY){
                   const paste=planTupletGroupPasteIntoRest(activeEvs[j],clipboardGroup);
                   if(paste){
                     setScore(prev=>{
@@ -5545,9 +5553,21 @@ export default function PianoSystemCanvas({
                     const pastedNote=paste.groupEvents.find((event)=>!event.isRest);
                     if(pastedNote)playNoteEvent(pastedNote, part.playbackInstrument);
                   }
-                  // 入らない休符（グループより短い・連符内の休符）では何もしない。
-                  // 音符を置く動作へ流さないのは、貼り付けるつもりのクリックで
-                  // 別の音符が増えるほうが分かりにくいため（ホバー時のカーソルで事前に判別できる）。
+                  else{
+                    // 入らない休符（グループより短い・連符内の休符）では譜面を変えない。
+                    // 音符を置く動作へ流さないのは、貼り付けるつもりのクリックで
+                    // 別の音符が増えるほうが分かりにくいため（ホバー時のカーソルで事前に判別できる）。
+                    // ただし無言で終わらせない（Issue #318 の「行き止まりは喋る」・Issue #325）。
+                    const blockReason=findTupletGroupPasteBlockReason(activeEvs[j],clipboardGroup);
+                    if(blockReason)notifyScoreEdit(describeTupletGroupPasteUnavailable(blockReason));
+                  }
+                  return;
+                }
+                if(!isOnRest){
+                  // 休符の透明 hit rect は、隣接挿入しやすいよう時間枠全体を覆っている。
+                  // 休符本体から外れたクリックまで置換扱いにすると、
+                  // 「8分休符の次に8分音符」が休符置換になってしまうため挿入へ回す。
+                  doInsert(lx,ly);
                   return;
                 }
 
