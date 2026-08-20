@@ -145,7 +145,14 @@ describe('Backward Compatibility Tests', () => {
               }
 
               // Verify buttons are interactive (not disabled by save/load features)
+              //
+              // 例外: 「段またぎ表示（⇵）」は五線が2段以上ある譜面でのみ使えるボタンで、
+              // ここでは crossStaffAvailable を渡していない（=単段扱い）ため、仕様どおり
+              // 無効になっている。保存・読込機能による無効化ではないので対象から除く
+              // （Issue #317 でこのボタンが演奏記号タブから音符・休符タブへ移ったため、
+              //  この一覧に入ってくるようになった）。
               buttons.forEach(button => {
+                if (button.getAttribute('aria-label')?.startsWith('段またぎ表示')) return;
                 expect(button.disabled).toBe(false);
               });
 
