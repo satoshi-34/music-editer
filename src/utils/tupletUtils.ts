@@ -1,7 +1,7 @@
 import type { DurKey, NoteEvent } from '../types/storage';
 import { defaultRestDisplayKeyForDuration, keyToLine, type ClefType } from '../components/clefUtils';
 import { isValidNoteKeyString } from './noteKeyUtils';
-import { findTupletRunRange } from './tupletGroupIntegrity';
+import { collectTupletRunRanges, findTupletRunRange } from './tupletGroupIntegrity';
 import { getDurationBeats } from './voiceMeasureUtils';
 
 // StaffCanvas / PianoSystemCanvas の音価ツール一覧と同じ並び（大きい音価から順）。
@@ -241,18 +241,74 @@ export function toggleTupletNumberVisibility(events: NoteEvent[], index: number)
   // 先頭イベントの現在値を基準に反転する（グループ内で値がばらついた壊れたデータでも、
   // 1回の操作でグループ全体が同じ値に揃う）。
   const nextHidden = !events[range.start]?.tuplet?.hideNumber;
-  return events.map((ev, i) => {
-    if (i < range.start || i > range.end || !ev.tuplet) {
-      return ev;
+  return events.map((ev, i) =>
+    i < range.start || i > range.end ? ev : withTupletHideNumber(ev, nextHidden)
+  );
+}
+
+/**
+ * イベント1つの `tuplet.hideNumber` を書き換えた新しいイベントを返す（連符でなければそのまま）。
+ *
+ * 表示へ戻すときに `false` を入れずプロパティごと削除するのがこの関数の肝で、
+ * グループ単位のトグルと小節一括のトグルで**同じ書き方**を使うために切り出してある
+ * （同じ規則を2か所に書くと、片方だけ直したときに保存データの形がずれる）。
+ */
+function withTupletHideNumber(event: NoteEvent, hidden: boolean): NoteEvent {
+  if (!event.tuplet) {
+    return event;
+  }
+  const nextTuplet = { ...event.tuplet };
+  if (hidden) {
+    nextTuplet.hideNumber = true;
+  } else {
+    delete nextTuplet.hideNumber;
+  }
+  return { ...event, tuplet: nextTuplet };
+}
+
+/** 小節一括の連符数字トグルの結果（通知の文言を組み立てるために件数と向きも返す）。 */
+export interface MeasureTupletNumberToggleResult {
+  /** 適用後のイベント列 */
+  events: NoteEvent[];
+  /** 切り替えた連符グループの数 */
+  groupCount: number;
+  /** 適用後に「数字を隠す」側になったなら true */
+  hidden: boolean;
+}
+
+/**
+ * 小節内の**すべての**連符グループの数字表示をまとめて切り替える（Issue #324）。
+ *
+ * 月光第1楽章のように三連符が曲全体に続く譜面では、グループ単位のトグル（#294）だと
+ * 30回以上クリックすることになる。小節の背景クリック1回で小節ぶんをまとめて切り替える。
+ *
+ * 向きは「1つでも表示中のグループがあれば全部隠す／全部隠れていれば全部出す」。
+ * 混在した状態から押したときに一部だけ反転して余計にばらけるのを避け、
+ * 「押すたびに小節全体の見た目がそろう」動きにするため。
+ *
+ * @returns 小節に連符が1つも無ければ null（呼び出し側は譜面を書き換えないこと）
+ */
+export function toggleAllTupletNumbersInMeasure(
+  events: NoteEvent[]
+): MeasureTupletNumberToggleResult | null {
+  const ranges = collectTupletRunRanges(events);
+  if (ranges.length === 0) {
+    return null;
+  }
+  // 1つでも「表示中（hideNumber が無い）」のグループがあれば、隠す方向へそろえる。
+  const nextHidden = ranges.some((range) => !events[range.start]?.tuplet?.hideNumber);
+  // どの位置が連符グループに含まれるかを先に印を付けておく（毎回 range を線形探索しない）。
+  const inGroup = new Array<boolean>(events.length).fill(false);
+  for (const range of ranges) {
+    for (let i = range.start; i <= range.end; i += 1) {
+      inGroup[i] = true;
     }
-    const nextTuplet = { ...ev.tuplet };
-    if (nextHidden) {
-      nextTuplet.hideNumber = true;
-    } else {
-      delete nextTuplet.hideNumber;
-    }
-    return { ...ev, tuplet: nextTuplet };
-  });
+  }
+  return {
+    events: events.map((ev, i) => (inGroup[i] ? withTupletHideNumber(ev, nextHidden) : ev)),
+    groupCount: ranges.length,
+    hidden: nextHidden,
+  };
 }
 
 /** イベント1つが実際に占める拍数（付点と連符の圧縮率の両方を反映する）。 */

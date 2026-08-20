@@ -62,14 +62,17 @@ export function findTupletRunRange(events: readonly NoteEvent[], index: number):
 }
 
 /**
- * 「同じ id が2か所以上に分かれて現れている」連符グループの id を返す（重複なし・出現順）。
+ * events に含まれる連符グループの区間を、先頭から順にすべて返す（Issue #324）。
  *
- * 保存前の検証や、fixture が壊れていないかの確認に使える純関数。
- * 正常なデータでは常に空配列を返す。
+ * 「グループ＝同じ id が連続する区間（run）」という数え方は findTupletRunRange と同じもので、
+ * こちらは「1つの位置から探す」のではなく「小節まるごと数え上げる」用途に使う。
+ * 小節一括の操作（連符数字の一括トグルなど）が独自に run を数え直すと、
+ * 数え方が2系統に増えて片方だけ直る事故のもとになるため、ここへ寄せている。
+ *
+ * @returns 連符が1つも無ければ空配列
  */
-export function findNonContiguousTupletGroupIds(events: readonly NoteEvent[]): string[] {
-  const finishedIds = new Set<string>();
-  const brokenIds: string[] = [];
+export function collectTupletRunRanges(events: readonly NoteEvent[]): TupletRunRange[] {
+  const ranges: TupletRunRange[] = [];
   let i = 0;
   while (i < events.length) {
     const id = events[i]?.tuplet?.id;
@@ -80,12 +83,31 @@ export function findNonContiguousTupletGroupIds(events: readonly NoteEvent[]): s
     // ここから同じ id が続くあいだが1つの「区間（run）」。
     let end = i;
     while (end + 1 < events.length && events[end + 1]?.tuplet?.id === id) end += 1;
+    ranges.push({ start: i, end });
+    i = end + 1;
+  }
+  return ranges;
+}
+
+/**
+ * 「同じ id が2か所以上に分かれて現れている」連符グループの id を返す（重複なし・出現順）。
+ *
+ * 保存前の検証や、fixture が壊れていないかの確認に使える純関数。
+ * 正常なデータでは常に空配列を返す。
+ */
+export function findNonContiguousTupletGroupIds(events: readonly NoteEvent[]): string[] {
+  const finishedIds = new Set<string>();
+  const brokenIds: string[] = [];
+  // 区間の数え上げは collectTupletRunRanges に任せる（同じ数え方を2か所に書かない）。
+  for (const range of collectTupletRunRanges(events)) {
+    // collectTupletRunRanges は id を持つ位置しか区間の先頭にしないので、ここでは必ず値がある。
+    const id = events[range.start]?.tuplet?.id;
+    if (!id) continue;
     if (finishedIds.has(id) && !brokenIds.includes(id)) {
       // 一度終わったはずの id がまた出てきた ＝ 途中で別のグループに分断されている。
       brokenIds.push(id);
     }
     finishedIds.add(id);
-    i = end + 1;
   }
   return brokenIds;
 }

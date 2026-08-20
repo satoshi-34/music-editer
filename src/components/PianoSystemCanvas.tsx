@@ -37,6 +37,8 @@ import {
   describeDeletedArc,
   describeDeletedHairpin,
   describeDeletedNoteEvent,
+  describeNoTupletInMeasure,
+  describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   requestActiveVoiceChange,
 } from '../utils/scoreEditorNotices';
@@ -124,6 +126,7 @@ import {
   instantiateTupletGroup,
   planTupletGroupPasteIntoRest,
   planTupletReplacementForRest,
+  toggleAllTupletNumbersInMeasure,
   toggleTupletNumberVisibility,
   tupletGroupBeats,
   type TupletKind,
@@ -4478,7 +4481,28 @@ export default function PianoSystemCanvas({
             return;
           }
           if('mode' in tool&&tool.mode==='tupletNumberToggle'){
-            // 連符数字の表示切替も既存の連符にのみ行う（背景クリックで音符を置かない）。
+            // 小節の背景クリックは、その小節・アクティブ声部の全連符グループを一括で切り替える（Issue #324）。
+            // 三連符が続く曲（月光など）ではグループ単位（#294）だとクリック回数が多すぎるため。
+            // 背景クリックでも音符は置かない点は従来どおり。
+            const measureNow=score[absI];
+            const preview=measureNow?toggleAllTupletNumbersInMeasure(getVoiceEvents(measureNow, activeVoiceIndex)):null;
+            if(!preview){
+              // 連符が無い小節では譜面を書き換えず、理由だけ伝える（#318「行き止まりは喋る」）。
+              // ここで withVoiceEventsUpdated を通すと、声部2モードのときに
+              // 中身の無い voices[1] が生まれてしまう（#112 の教訓）。
+              notifyScoreEdit(describeNoTupletInMeasure());
+              return;
+            }
+            setScore(prev=>{
+              const next=prev.map(cloneMeasureData);
+              if(absI>=next.length)return prev;
+              const currentEvents=getVoiceEvents(next[absI], activeVoiceIndex);
+              const toggled=toggleAllTupletNumbersInMeasure(currentEvents);
+              if(!toggled)return prev;
+              next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, ()=>toggled.events);
+              return next;
+            });
+            notifyScoreEdit(describeTupletNumbersToggledInMeasure(preview.groupCount, preview.hidden));
             return;
           }
           if('mode' in tool&&tool.mode==='crossStaffToggle'){
