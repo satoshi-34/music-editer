@@ -24,7 +24,7 @@
 
 ```
 src/editor/
-  editorState.ts      … 編集状態の reducer（tool/selection/overlay/drag を1か所に）
+  editorState.ts      … 編集状態の reducer（selection/overlay/drag を1か所に。tool は ScorePage 所有のまま参照のみ）
   editorActions.ts    … 遷移関数（アクション）と掃除規則
   hitResolution.ts    … クリック→(パート, 声部, 拍, 対象)の純関数解決 + モード分岐テーブル
   renderPipeline.ts   … Pass 1/2/3 と台帳を関数化した描画ビルダー
@@ -56,6 +56,7 @@ src/utils/voiceMeasureUtils.ts … scoreModel（voices[] 統一の正規経路�
 | `EVENT_DELETED` | 対象を指す overlay・selection |
 | `SELECTION_CLAIMED`（他段が選択） | 自段の selection |
 | `PLAYBACK_STARTED` | selection・overlay・drag |
+| `GLOBAL_POINTER_UP` / `POINTER_CANCEL`（window レベル） | drag 全種（**既知の「SVG外 mouseup で tieStartRef が残る」残留はこの行の実装＝段2で直す**。段0.5 では現状の残留挙動を characterization として固定しておき、段2 で期待値を差分表つきで更新する） |
 
 これにより「オーバーレイ9種のライフサイクル不揃い」は**表の1行を足すだけ**の問題になる。
 
@@ -81,7 +82,9 @@ src/utils/voiceMeasureUtils.ts … scoreModel（voices[] 統一の正規経路�
   1. **write の正規化**: 全書き込みを正規 API へ寄せ、正規 API を **dual-write**（events と voices[0] を常に同時更新）へ。破壊的書き込み（`fillPriorMeasureRests` PSC:497-500・`noteDeletionUtils.ts:102,289,299`）もここで根絶
   2. **不変条件の確立**: 「編集後は常に events ≡ voices[0]」を assert するテストで固定（往復含む）
   3. **read の切り替え**（この中の順は実害順: 空判定/内容判定 ScorePage:332,358 → レイアウト幅計算 → 再生/再生位置 → MIDI/MusicXML出力。**声部2が MIDI に出ていない**のは既知バグとして別Issue化してよい）
-  4. **保存形式**: 読込互換は維持（旧形式→正規化は #305 系の既存直列に追加）。保存の新形式化は最後
+     - **移行境界（Codex再レビュー指摘への対応）**: 現行では**単声部小節は `voices` を持たないのが正規状態**であり（`getMeasureVoices` が events から仮想 voice1 を合成: voiceMeasureUtils.ts:69-73、保存時同期も voices が無ければ追加しない: 同:89-92）、dual-write が voices[0] を作るのは**編集された小節だけ**。そのため read 切替は「voices[0] を直接読む」形にせず、**移行期間中の正規 read API を `voices[0]?.events ?? events` のフォールバック付き**で実装する（events-only の未編集小節から音符が消える回帰を構造的に防ぐ。全流入境界の正規化を狩り集める方式より、アクセサ1か所のフォールバックのほうが漏れが出ない）。フォールバックの除去は 4. の保存形式移行（全小節が voices を持つことが保証されて）以後
+     - このサブ段のテストは **events-only / voices あり / 両形式が混在 / 一部小節だけ編集済み** の4形を必ず含める
+  4. **保存形式**: 読込互換は維持（旧形式→正規化は #305 系の既存直列に追加し、**読込時に全小節へ voices を実体化**する）。保存の新形式化とフォールバック除去は最後
 - **「2」を焼き込まない**: `activeVoiceIndex: 0|1` の型は当面残すが、scoreModel の関数群は `voiceIndex: number` で切る（3声対応時に UI 追加だけで済む形）
 
 ## 3. 段割り（1段 = 1PR。各段とも「挙動ゼロ差」または「差分を明記」）
