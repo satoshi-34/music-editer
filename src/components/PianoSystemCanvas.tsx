@@ -34,10 +34,14 @@ import {
   SCORE_SELECTION_CLEAR_EVENT,
   describeAbsorbedChordKey,
   describeActiveVoiceSwitched,
+  describeCrossStaffToggled,
+  describeCrossStaffUnavailable,
   describeDeletedArc,
   describeDeletedHairpin,
   describeDeletedNoteEvent,
   describeLeadingRestFill,
+  describeMeasureFull,
+  describeTupletNumberToggleUnavailable,
   notifyScoreEdit,
   requestActiveVoiceChange,
 } from '../utils/scoreEditorNotices';
@@ -4398,6 +4402,9 @@ export default function PianoSystemCanvas({
               (tool as any).tuplet
             );
             if(currentBeats + groupBeats > beatsPerMeasure + 0.000001){
+              // 黙って諦めると「クリック位置が悪いのか、アプリが壊れたのか」が分からない。
+              // 拒否は正しい挙動なので、理由と次の一手だけを伝える（Issue #318「行き止まりは喋る」）
+              notifyScoreEdit(describeMeasureFull());
               return;
             }
             // 連符グループでも、クリックした拍まで手前を休符で埋める（Issue #322 の受入条件）。
@@ -4422,6 +4429,8 @@ export default function PianoSystemCanvas({
 
           const addBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
           if(currentBeats + addBeats > beatsPerMeasure){
+            // 連符グループと同じく、入らない理由と代替手順を伝える（Issue #318）
+            notifyScoreEdit(describeMeasureFull());
             return;
           }
 
@@ -5119,6 +5128,13 @@ export default function PianoSystemCanvas({
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
               if (tupletNumberToggleMode) {
+                // 連符ではない音符を押しても何も起きないため、理由と代替手順を伝える
+                // （Issue #318「行き止まりは喋る」）。判定を setScore の updater の外で
+                // 行うのは、updater が2回呼ばれる場面（StrictMode など）で通知が
+                // 二重に出るのを避けるため（#238 の設計メモと同じ理由）。
+                if (!toggleTupletNumberVisibility(activeEvs, j)) {
+                  notifyScoreEdit(describeTupletNumberToggleUnavailable());
+                }
                 // 連符数字（3 等）の表示/非表示をグループ単位で切り替える（Issue #269）。
                 // 連符内休符をクリックしても同じグループが切り替わるよう、休符も対象に含める
                 // （グループの中に休符が残ったままの譜面でも「数字の近く」を押せば効く）。
@@ -5142,6 +5158,21 @@ export default function PianoSystemCanvas({
                 // 向きはパートで決まる（右手＝下へ、左手＝上へ）ので、ユーザーは
                 // 「モードを選んで音符を押す」だけでよい（#294 の連符数字トグルと同じ操作感）。
                 const direction = availableRenderStaffDirection(pi, parts.length);
+                const clickedEv = activeEvs[j];
+                // 対象外のクリックを黙って捨てない（Issue #318。発端は #315 で、
+                // 回避手順を口頭で伝えないと使えない行き止まりになっていた）。
+                // 判定を setScore の updater の外に置くのは、updater が2回呼ばれる場面で
+                // 通知が二重に出るのを避けるため（#238 の設計メモと同じ理由）。
+                if (direction === null) {
+                  notifyScoreEdit(describeCrossStaffUnavailable('singleStaff'));
+                  return;
+                }
+                if (!clickedEv || clickedEv.isRest) {
+                  notifyScoreEdit(describeCrossStaffUnavailable('rest'));
+                  return;
+                }
+                // 「どちらへ移すのか」は書き換える前の値から決める（切替後の値では逆になる）
+                const turnedOn = clickedEv.renderStaff !== direction;
                 setScore(prev=>{
                   const next=prev.map(cloneMeasureData);
                   if(absI>=next.length)return prev;
@@ -5154,9 +5185,11 @@ export default function PianoSystemCanvas({
                   next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, ()=>toggled);
                   return next;
                 });
-                if(direction&&!activeEvs[j]?.isRest){
-                  setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-                }
+                // 表示先の五線と「所属（どのパート・声部の音か）」は別物である。
+                // 取り違えたまま声部2が空だと思い込むと #322 の症状を踏むため、
+                // 移したことと「所属は変わらない」ことを必ず伝える（運用者の追加提案2）。
+                notifyScoreEdit(describeCrossStaffToggled(direction, turnedOn, activeVoiceIndex));
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 return;
               }
               if (accidentalMode && !activeEvs[j]?.isRest) {
