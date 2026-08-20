@@ -170,17 +170,22 @@ describe('PianoSystemCanvas 声部2の3連符入力（Issue #168）', () => {
     });
     const updated = onChange.mock.calls.at(-1)![0] as MeasureData[];
 
-    const voice2 = updated[0].voices?.[1]?.events;
-    expect(voice2).toHaveLength(3);
+    const voice2 = updated[0].voices?.[1]?.events ?? [];
+    // Issue #322 以降、小節の途中をクリックしたときはその拍まで手前が休符で埋まるため、
+    // 連符グループの前に連符ではない休符が付くことがある（グループ自体の中身は変わらない）。
+    const leadingRests = voice2.slice(0, voice2.length - 3);
+    const group = voice2.slice(-3);
+    expect(leadingRests.every((ev) => ev.isRest && !ev.tuplet)).toBe(true);
+    expect(group).toHaveLength(3);
     // 先頭が音符、残り2つが連符内の休符。
-    expect(voice2![0].isRest).toBe(false);
-    expect(voice2![1].isRest).toBe(true);
-    expect(voice2![2].isRest).toBe(true);
+    expect(group[0].isRest).toBe(false);
+    expect(group[1].isRest).toBe(true);
+    expect(group[2].isRest).toBe(true);
     // 3つとも同じ連符グループ（同じ id・同じ比率）に属している。
-    const ids = voice2!.map((ev) => ev.tuplet?.id);
+    const ids = group.map((ev) => ev.tuplet?.id);
     expect(ids[0]).toBeTruthy();
     expect(new Set(ids).size).toBe(1);
-    voice2!.forEach((ev) => {
+    group.forEach((ev) => {
       expect(ev.tuplet?.numNotes).toBe(3);
       expect(ev.tuplet?.notesOccupied).toBe(2);
       expect(ev.dur).toBe('8');

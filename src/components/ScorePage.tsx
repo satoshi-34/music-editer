@@ -4074,7 +4074,14 @@ export default function ScorePage() {
         <div className="toolbar-panel" id="toolbar-panel">
           {activeToolbarTab === 'notes' && (
             <div className="toolbar-section">
-              <Palette value={tool} onChange={handleToolChange} section="notes" />
+              <Palette
+                value={tool}
+                onChange={handleToolChange}
+                section="notes"
+                // 段またぎ表示（Issue #310・#317 でこのタブへ移動）はピアノ譜（右手・左手の2段）でのみ使える。
+                // パート譜表示中は相手の五線が画面に無いため、同じく無効にする。
+                crossStaffAvailable={scoreType === 'piano' && !isPartExtractionActive}
+              />
               {scoreType === 'piano' && (
                 // ピアノ譜だけ声部切り替えトグルを出す。単旋律譜・弦楽四重奏などは
                 // 声部2の入力先（下声パート）という概念自体がないため出さない。
@@ -4138,9 +4145,6 @@ export default function ScorePage() {
                 section="symbols"
                 customSymbolDefs={customSymbolDefs}
                 onOpenSymbolEditor={() => setShowSymbolEditor(true)}
-                // 段またぎ表示（Issue #310）はピアノ譜（右手・左手の2段）でのみ使える。
-                // パート譜表示中は相手の五線が画面に無いため、同じく無効にする。
-                crossStaffAvailable={scoreType === 'piano' && !isPartExtractionActive}
               />
             </div>
           )}

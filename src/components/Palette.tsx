@@ -325,6 +325,32 @@ export default function Palette({
             {/* 「3」に取り消し線 = 連符数字を消す、と一目で分かる表示にする */}
             <span style={{ textDecoration: 'line-through' }}>3</span>
           </button>
+          {/* 段またぎ表示（Issue #310）: このボタンを押してから音符をクリックすると、
+              その音符だけを隣の五線へ描き移す（もう一度押すと元に戻る）。
+              右手（上の段）は下の五線へ、左手（下の段）は上の五線へ移る。
+              ピアノ譜のように五線が2段以上ある譜面でしか使えないので、
+              単段の譜面では無効化して理由をツールチップで示す。
+
+              Issue #317 で演奏記号タブからこの「音符・休符」タブへ移した。
+              「低い音を入力 → すぐ段またぎへ」という使い方が実際の動線で、
+              演奏記号タブに置くとタブを往復させることになるため。 */}
+          <button
+            type="button"
+            disabled={!crossStaffAvailable}
+            onClick={() => onChange(crossStaffToggleActive ? ROW1[2] : { mode: 'crossStaffToggle' })}
+            title={crossStaffAvailable
+              ? '段またぎ表示（選択して音符をクリック。その音符だけを隣の五線へ描き移す／もう一度で戻る）'
+              : '段またぎ表示は五線が2段以上ある譜面（ピアノ譜など）でのみ使えます'}
+            aria-label="段またぎ表示（選択して音符をクリック。その音符だけを隣の五線へ描き移す）"
+            style={btnStyle(crossStaffToggleActive, {
+              width: 22, fontSize: 12,
+              color: crossStaffAvailable ? '#374151' : '#9ca3af',
+              cursor: crossStaffAvailable ? 'pointer' : 'not-allowed',
+            })}
+          >
+            {/* 下向きの矢印＝「下の五線へ移す」ことを一目で示す */}
+            ⇵
+          </button>
           {/* タイ */}
           <button
             type="button"
@@ -748,28 +774,8 @@ export default function Palette({
           >
             ✥
           </button>
-          {/* 段またぎ表示（Issue #310）: このボタンを押してから音符をクリックすると、
-              その音符だけを隣の五線へ描き移す（もう一度押すと元に戻る）。
-              右手（上の段）は下の五線へ、左手（下の段）は上の五線へ移る。
-              ピアノ譜のように五線が2段以上ある譜面でしか使えないので、
-              単段の譜面では無効化して理由をツールチップで示す。 */}
-          <button
-            type="button"
-            disabled={!crossStaffAvailable}
-            onClick={() => onChange(crossStaffToggleActive ? ROW1[2] : { mode: 'crossStaffToggle' })}
-            title={crossStaffAvailable
-              ? '段またぎ表示（選択して音符をクリック。その音符だけを隣の五線へ描き移す／もう一度で戻る）'
-              : '段またぎ表示は五線が2段以上ある譜面（ピアノ譜など）でのみ使えます'}
-            aria-label="段またぎ表示（選択して音符をクリック。その音符だけを隣の五線へ描き移す）"
-            style={btnStyle(crossStaffToggleActive, {
-              width: 22, fontSize: 12,
-              color: crossStaffAvailable ? '#374151' : '#9ca3af',
-              cursor: crossStaffAvailable ? 'pointer' : 'not-allowed',
-            })}
-          >
-            {/* 下向きの矢印＝「下の五線へ移す」ことを一目で示す */}
-            ⇵
-          </button>
+          {/* 段またぎ表示（⇵）ボタンは Issue #317 で「音符・休符」タブへ移した
+              （音符を置いている最中に使う機能のため。複製はしない） */}
         </div>
         {/* カスタム記号を新規作成 */}
         <button

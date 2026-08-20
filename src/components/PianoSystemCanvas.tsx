@@ -34,10 +34,15 @@ import {
   SCORE_SELECTION_CLEAR_EVENT,
   describeAbsorbedChordKey,
   describeActiveVoiceSwitched,
+  describeCrossStaffToggled,
+  describeCrossStaffUnavailable,
   describeDeletedArc,
   describeDeletedHairpin,
   describeDeletedNoteEvent,
+  describeLeadingRestFill,
+  describeMeasureFull,
   describeNoTupletInMeasure,
+  describeTupletNumberToggleUnavailable,
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   requestActiveVoiceChange,
@@ -116,7 +121,8 @@ import {
   widenThinBarlineRect,
   markThickBarlineRect,
 } from '../utils/engravingDefaults';
-import { computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { buildBeatColumns, planLeadingRestFillBeats, type BeatColumn } from '../utils/beatColumnUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
 import { resolveArcEndpointY, resolveSlurObstacleY, shouldAnchorArcToStemSide } from '../utils/arcStemAnchorUtils';
 import {
@@ -3187,6 +3193,11 @@ export default function PianoSystemCanvas({
     // 段またぎの2セグメントが食い違わない。
     type PendingArcP={partIndex:number;voiceIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startClef:ClefType;startMeasureIdx:number;startEventIdx:number;startIsMultiVoice:boolean};
     const notePositionMapP=new Map<string,NotePositionP>();
+    // Issue #322: 「クリックしたXは、この小節の何拍目か」を逆引きするための台帳（小節番号→列一覧）。
+    // 複数パート・複数声部を1回の Formatter でまとめて整形している（合同フォーマット）ので、
+    // 同じ開始拍の音符はパート・声部をまたいで同じ X に並ぶ。その並びをそのまま物差しにする。
+    // 描画のたびに作り直し、クリック時（＝描画が終わったあと）に全パートぶんが揃った状態で読む。
+    const beatColumnsByMeasureP=new Map<number,BeatColumn[]>();
     const pendingArcsP:PendingArcP[]=[];
     // 松葉（ヘアピン）の描画待ちリスト。arcs と同じく全パート・全小節のレンダリング後にまとめて描く
     type PendingHairpinP={partIndex:number;voiceIndex:number;hairpin:HairpinMark;hairpinIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
@@ -3973,6 +3984,21 @@ export default function PianoSystemCanvas({
         // arcs[]／hairpins[] 方式: 全声部ぶんの音符位置を記録し、弧・松葉を描画待ちリストへ積む。
         // 声部を持たない小節では renderedVoiceEntries が声部1の1件だけになるので、
         // 単旋律譜・四重奏・編成譜など声部トグルの無い譜種では走査結果が従来と完全に同じになる。
+        // Issue #322: 拍の物差し（開始拍→X）を小節ごとに積む。
+        // 表示専用のパディング休符（realEventCount より後ろ）もあえて含める:
+        // 利用者が「3拍目」と思ってクリックするのは画面に見えているその休符の位置であり、
+        // 実データの音符しか基準にしないと、途中まで書いた声部で狙いより手前に寄ってしまう。
+        renderedVoiceEntries.forEach((entry)=>{
+          const columns=buildBeatColumns(entry.sourceEvents,(eventIndex)=>{
+            const vfNote=entry.vfNotes[eventIndex] as unknown as {getAbsoluteX?:()=>number}|undefined;
+            return vfNote?.getAbsoluteX?.();
+          });
+          if(columns.length===0)return;
+          const existing=beatColumnsByMeasureP.get(absI);
+          if(existing)existing.push(...columns);
+          else beatColumnsByMeasureP.set(absI,columns);
+        });
+
         renderedVoiceEntries.forEach((entry)=>{
           const vi=entry.voiceIndex;
           entry.sourceEvents.forEach((ev,j)=>{
@@ -4318,6 +4344,51 @@ export default function PianoSystemCanvas({
           const currentVoiceEvents = getVoiceEvents(currentMeasure, activeVoiceIndex);
           const currentBeats = currentVoiceEvents.reduce((sum,event)=>sum+eventOccupiedBeats(event),0);
 
+          /**
+           * Issue #322: クリック位置の拍まで、手前を埋める休符を作る。
+           * 埋めないときは空配列（＝従来どおり、アクティブ声部の続きへそのまま置く）。
+           *
+           * at は「アクティブ声部の既存音符のどれに近いか」だけで決まるため、音符がまだ無い声部では
+           * 常に先頭になり、2拍目を狙ったクリックが1拍目に入ってしまっていた（本Issueの症状）。
+           * そこで beatColumnsByMeasureP（同じ小節の全パート・全声部の「開始拍→X」）を物差しにして
+           * クリックXの拍を逆引きし、足りない拍を休符で埋めてから置く。
+           *
+           * 働くのは挿入位置がアクティブ声部の末尾のとき（＝クリックが既存の最後の音符より右）だけ。
+           * 既存音符の近くをクリックしたときの挿入位置は1pxも変えない（回帰面を最小にする）。
+           */
+          const buildLeadingRests=(addBeats:number, voiceCountForRest:number):{rests:NoteEvent[];startBeat:number}=>{
+            if(at < currentVoiceEvents.length)return {rests:[],startBeat:currentBeats};
+            const fillBeats=planLeadingRestFillBeats({
+              columns:beatColumnsByMeasureP.get(absI)??[],
+              clickX:lx,
+              currentBeats,
+              addBeats,
+              beatsPerMeasure,
+            });
+            if(fillBeats<=0)return {rests:[],startBeat:currentBeats};
+            // 埋める休符の高さは、画面に見えている補完休符（computeVoiceDisplayPadding）と
+            // まったく同じ規約で決める（Issue #227・声部ごとの上下振り分けを含む）。
+            // ここがずれると「見えていた休符が、実データになった途端に別の高さへ動く」ことになる。
+            const rests=buildTrailingRestEventsForBeats(fillBeats,(duration)=>
+              standardRestDisplayKey(clefHere, duration, activeVoiceIndex, voiceCountForRest));
+            return {rests,startBeat:currentBeats+fillBeats};
+          };
+          /** 拍を埋めたときだけ、どこへ置いたかを通知する（無言で休符が増えないようにする） */
+          const notifyLeadingRestFill=(leading:{rests:NoteEvent[];startBeat:number}, voiceCountForRest:number)=>{
+            if(leading.rests.length===0)return;
+            notifyScoreEdit(describeLeadingRestFill(leading.startBeat, activeVoiceIndex, voiceCountForRest>1));
+          };
+
+          // 新しく置く休符・詰め物休符の高さは、standardRestDisplayKey で決める（Issue #227）。
+          // 声部数は「この挿入が終わったあとの声部数」で数える必要がある。
+          // 声部2への初回入力では voices[1] がまだ無く、現在の小節だけを見ると
+          // 「単声部」と数えてしまい、全休符が声部1と同じ高さ（第4線ぶら下げ）に
+          // 置かれて重なるため。
+          const voiceCountAfterInsert = Math.max(
+            getMeasureVoices(currentMeasure).length,
+            activeVoiceIndex + 1
+          );
+
           // 3連符モード: StaffCanvas と共通のロジック（utils/tupletUtils.ts）で
           // 「音符1＋連符内休符2」のグループを一度に配置する。空きが足りなければ何もしない。
           // 連符の描画（Tuplet でくくる処理）は声部ごとの描画エントリで行われる
@@ -4334,8 +4405,13 @@ export default function PianoSystemCanvas({
               (tool as any).tuplet
             );
             if(currentBeats + groupBeats > beatsPerMeasure + 0.000001){
+              // 黙って諦めると「クリック位置が悪いのか、アプリが壊れたのか」が分からない。
+              // 拒否は正しい挙動なので、理由と次の一手だけを伝える（Issue #318「行き止まりは喋る」）
+              notifyScoreEdit(describeMeasureFull());
               return;
             }
+            // 連符グループでも、クリックした拍まで手前を休符で埋める（Issue #322 の受入条件）。
+            const leading=buildLeadingRests(groupBeats, voiceCountAfterInsert);
             setScore(prev=>{
               const next=prev.map(cloneMeasureData);
               while(absI>=next.length)next.push(createEmptyMeasure());
@@ -4344,30 +4420,23 @@ export default function PianoSystemCanvas({
               // 直接 m.events を触ると、声部2がアクティブでも声部1へ書き込んでしまう。
               next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
                 const copy=[...events];
-                copy.splice(Math.max(0,Math.min(at,copy.length)),0,...groupEvents);
+                copy.splice(Math.max(0,Math.min(at,copy.length)),0,...leading.rests,...groupEvents);
                 return copy;
               });
               return next;
             });
+            notifyLeadingRestFill(leading, voiceCountAfterInsert);
             playNoteEvent(groupEvents[0], part.playbackInstrument);
             return;
           }
 
           const addBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
           if(currentBeats + addBeats > beatsPerMeasure){
+            // 連符グループと同じく、入らない理由と代替手順を伝える（Issue #318）
+            notifyScoreEdit(describeMeasureFull());
             return;
           }
 
-          // 新しく置く休符の高さも、拍を埋める詰め物休符・0キーのリセット先と同じ
-          // standardRestDisplayKey で決める（Issue #227）。
-          // 声部数は「この挿入が終わったあとの声部数」で数える必要がある。
-          // 声部2への初回入力では voices[1] がまだ無く、現在の小節だけを見ると
-          // 「単声部」と数えてしまい、全休符が声部1と同じ高さ（第4線ぶら下げ）に
-          // 置かれて重なるため。
-          const voiceCountAfterInsert = Math.max(
-            getMeasureVoices(currentMeasure).length,
-            activeVoiceIndex + 1
-          );
           const insertedEvent:NoteEvent={
             dur:addDuration,
             isRest:!!(tool as any)?.isRest,
@@ -4377,17 +4446,19 @@ export default function PianoSystemCanvas({
             dots: addDots,
           };
 
+          const leading=buildLeadingRests(addBeats, voiceCountAfterInsert);
           setScore(prev=>{
             const next=prev.map(cloneMeasureData);
             while(absI>=next.length)next.push(createEmptyMeasure());
             fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
             next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
               const copy=[...events];
-              copy.splice(Math.max(0,Math.min(at,copy.length)),0,insertedEvent);
+              copy.splice(Math.max(0,Math.min(at,copy.length)),0,...leading.rests,insertedEvent);
               return copy;
             });
             return next;
           });
+          notifyLeadingRestFill(leading, voiceCountAfterInsert);
           if(!insertedEvent.isRest){
             // 置いた直後の確認音があると、右手左手どちらでも音高チェックがしやすい。
             playNoteEvent(insertedEvent, part.playbackInstrument);
@@ -5081,6 +5152,13 @@ export default function PianoSystemCanvas({
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
               if (tupletNumberToggleMode) {
+                // 連符ではない音符を押しても何も起きないため、理由と代替手順を伝える
+                // （Issue #318「行き止まりは喋る」）。判定を setScore の updater の外で
+                // 行うのは、updater が2回呼ばれる場面（StrictMode など）で通知が
+                // 二重に出るのを避けるため（#238 の設計メモと同じ理由）。
+                if (!toggleTupletNumberVisibility(activeEvs, j)) {
+                  notifyScoreEdit(describeTupletNumberToggleUnavailable());
+                }
                 // 連符数字（3 等）の表示/非表示をグループ単位で切り替える（Issue #269）。
                 // 連符内休符をクリックしても同じグループが切り替わるよう、休符も対象に含める
                 // （グループの中に休符が残ったままの譜面でも「数字の近く」を押せば効く）。
@@ -5104,6 +5182,21 @@ export default function PianoSystemCanvas({
                 // 向きはパートで決まる（右手＝下へ、左手＝上へ）ので、ユーザーは
                 // 「モードを選んで音符を押す」だけでよい（#294 の連符数字トグルと同じ操作感）。
                 const direction = availableRenderStaffDirection(pi, parts.length);
+                const clickedEv = activeEvs[j];
+                // 対象外のクリックを黙って捨てない（Issue #318。発端は #315 で、
+                // 回避手順を口頭で伝えないと使えない行き止まりになっていた）。
+                // 判定を setScore の updater の外に置くのは、updater が2回呼ばれる場面で
+                // 通知が二重に出るのを避けるため（#238 の設計メモと同じ理由）。
+                if (direction === null) {
+                  notifyScoreEdit(describeCrossStaffUnavailable('singleStaff'));
+                  return;
+                }
+                if (!clickedEv || clickedEv.isRest) {
+                  notifyScoreEdit(describeCrossStaffUnavailable('rest'));
+                  return;
+                }
+                // 「どちらへ移すのか」は書き換える前の値から決める（切替後の値では逆になる）
+                const turnedOn = clickedEv.renderStaff !== direction;
                 setScore(prev=>{
                   const next=prev.map(cloneMeasureData);
                   if(absI>=next.length)return prev;
@@ -5116,9 +5209,11 @@ export default function PianoSystemCanvas({
                   next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, ()=>toggled);
                   return next;
                 });
-                if(direction&&!activeEvs[j]?.isRest){
-                  setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-                }
+                // 表示先の五線と「所属（どのパート・声部の音か）」は別物である。
+                // 取り違えたまま声部2が空だと思い込むと #322 の症状を踏むため、
+                // 移したことと「所属は変わらない」ことを必ず伝える（運用者の追加提案2）。
+                notifyScoreEdit(describeCrossStaffToggled(direction, turnedOn, activeVoiceIndex));
+                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
                 return;
               }
               if (accidentalMode && !activeEvs[j]?.isRest) {

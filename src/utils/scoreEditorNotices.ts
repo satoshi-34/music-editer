@@ -143,6 +143,59 @@ export function describeAbsorbedChordKey(): string {
   return `移動先に同じ高さの音があるため、和音の1音にまとめました${UNDO_HINT}`;
 }
 
+/**
+ * 小節の拍が埋まっていて音符・連符グループを置けなかったときの文言（Issue #318）。
+ *
+ * 「行き止まりは喋る」原則の適用。クリックしても何も起きない状態が続くと、
+ * ユーザーには「アプリが壊れた」「クリック位置が悪い」としか見えず、
+ * 正しい次の一手（次の小節へ置く／既存の音符を消す）へたどり着けない。
+ * 拒否そのものは正しい挙動なので、理由と代替手順だけを添える。
+ */
+export function describeMeasureFull(): string {
+  return 'この小節は拍がいっぱいで置けません（次の小節へ置くか、この小節の音符を減らしてください）';
+}
+
+/**
+ * 段またぎ表示（⇵）の対象にならないものをクリックしたときの文言（Issue #318 / 発端は #315）。
+ *
+ * ボタンが押せる＝どの音符でも使える、と受け取られるため、
+ * 「なぜこの音符では効かないのか」を必ず言う。
+ */
+export function describeCrossStaffUnavailable(reason: 'rest' | 'singleStaff'): string {
+  if (reason === 'rest') {
+    return '休符は段またぎ表示にできません（移したい音符の符頭をクリックしてください）';
+  }
+  // 無効化ツールチップ（Palette の ⇵ ボタン）と同じ言い回しにそろえる
+  return '段またぎ表示は五線が2段以上ある譜面でのみ使えます';
+}
+
+/**
+ * 段またぎ表示を切り替えたときの文言（Issue #318・運用者の追加提案2）。
+ *
+ * **表示先の五線と、その音符の所属（パート・声部）は別物**である。
+ * 運用者が「下の五線へ移した音符は下声の所属になった」と誤解し、
+ * 声部2が空である前提が崩れて #322 の症状を踏んだ実害があるため、
+ * 移動を伝えるときは必ず「所属は変わらない」ことまで言い切る。
+ */
+export function describeCrossStaffToggled(
+  direction: 'above' | 'below',
+  turnedOn: boolean,
+  voiceIndex: number
+): string {
+  if (!turnedOn) {
+    return `元の五線の表示に戻しました（所属は声部${voiceIndex + 1}のまま変わりません）`;
+  }
+  const where = direction === 'below' ? '下' : '上';
+  return `${where}の五線へ表示を移しました（所属は声部${voiceIndex + 1}のまま変わりません）`;
+}
+
+/**
+ * 連符数字の表示切替（Issue #269）を、連符ではない音符へ試したときの文言（Issue #318）。
+ */
+export function describeTupletNumberToggleUnavailable(): string {
+  return '連符ではないため数字の表示は切り替えられません（連符グループの音符か休符をクリックしてください）';
+}
+
 /** スラー/タイの削除に出す文言 */
 export function describeDeletedArc(kind: 'tie' | 'slur'): string {
   return `${kind === 'tie' ? 'タイ' : 'スラー'}を削除しました${UNDO_HINT}`;
@@ -172,6 +225,28 @@ export function describeTupletNumbersToggledInMeasure(groupCount: number, hidden
  */
 export function describeNoTupletInMeasure(): string {
   return 'この小節には連符がないため、連符数字の一括切り替えはできません';
+}
+
+/**
+ * クリックした拍まで手前を休符で埋めて音符を置いたときの文言（Issue #322）。
+ *
+ * 「置いたつもりの拍」と「実際に入った拍」がずれていないかは、譜面を見ただけでは
+ * 気づきにくい（空の声部では特にそうで、1拍目に入っても不自然に見えない）。
+ * 音符が増えるだけでなく休符も一緒に増える操作なので、何が起きたかを必ず知らせる。
+ *
+ * @param startBeat 置いた音符の開始拍（0 起点。表示は 1 起点へ直す）
+ * @param voiceIndex アクティブ声部。多声の小節でだけ声部名を添える
+ * @param isMultiVoice 声部が2つ以上ある小節か
+ */
+export function describeLeadingRestFill(
+  startBeat: number,
+  voiceIndex: number,
+  isMultiVoice: boolean
+): string {
+  // 3.5拍目のような半端な位置もあるので、割り切れないときだけ小数を残す
+  const beatLabel = Number((startBeat + 1).toFixed(2)).toString();
+  const voiceLabel = isMultiVoice ? `声部${voiceIndex + 1}の` : '';
+  return `${voiceLabel}${beatLabel}拍目に置き、手前の空いた拍を休符で埋めました${UNDO_HINT}`;
 }
 
 /** 選択した小節範囲をまとめて空にしたときの文言 */
