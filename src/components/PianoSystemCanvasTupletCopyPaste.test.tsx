@@ -133,6 +133,20 @@ function tripletGroup(id: string, noteKey = 'b/4'): NoteEvent[] {
 const quarterRest = (): NoteEvent => ({ dur: '4', isRest: true, keys: ['b/4'] });
 const quarterNote = (key: string): NoteEvent => ({ dur: '4', isRest: false, keys: [key] });
 
+/**
+ * 画面下端に出る通知（SCORE_EDIT_NOTICE_EVENT）を溜めて読めるようにする。
+ * イベントリスナーの後始末を忘れると、次のテストの通知まで拾ってしまうので stop() を必ず呼ぶ。
+ */
+function captureNotices() {
+  const messages: string[] = [];
+  const onNotice = (e: Event) => messages.push((e as CustomEvent<{ message: string }>).detail.message);
+  window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+  return {
+    messages,
+    stop: () => window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice),
+  };
+}
+
 describe('PianoSystemCanvas 連符グループのコピー＆ペースト（Issue #234）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
@@ -331,6 +345,123 @@ describe('PianoSystemCanvas 連符グループのコピー＆ペースト（Issu
     expect(updated).toHaveLength(5);
     expect(updated.slice(2).every((ev) => !!ev.tuplet)).toBe(true);
     expect(updated[2].tuplet?.id).not.toBe(SOURCE_GROUP_ID);
+  });
+
+  // ── Issue #331: Cmd/Ctrl+V の無言行き止まりを喋らせる（#318 棚卸し B-2 / B-3）──
+  //
+  // 容量判定が setPartsScore の updater の中にあったため通知を足せなかった（二重発火する）のを、
+  // 判定を updater の外へ出して解消した。判定式そのものは以前と同じなので、
+  // 「貼れる／貼れない」の線引きは変わらず、黙って終わらなくなるだけである。
+
+  it('受入B-3: 満杯の小節へ Cmd+V すると、譜面は変わらず理由が通知される', () => {
+    const data: MeasureData[] = [{
+      events: [quarterNote('b/4'), quarterNote('d/5'), quarterNote('e/5'), quarterNote('f/5')],
+    }];
+    setTupletClipboardGroup(tripletGroup(SOURCE_GROUP_ID));
+    const notices = captureNotices();
+    try {
+      const { svg, onChange } = renderScore(data);
+
+      clickAt(svg, 0, 0, 2);
+      fireEvent.keyDown(window, { key: 'v', metaKey: true });
+
+      expect(onChange).not.toHaveBeenCalled();
+      expect(notices.messages.some((m) => m.includes('拍がいっぱい'))).toBe(true);
+      // 何も起きていないので「元に戻せます」は付けない（dead-end-speaks 設計の線引き）
+      expect(notices.messages.every((m) => !m.includes('元に戻せます'))).toBe(true);
+    } finally {
+      notices.stop();
+    }
+  });
+
+  it('受入B-3: 満杯の小節でも通知は1回だけ（updater の外で判定するため二重発火しない）', () => {
+    const data: MeasureData[] = [{
+      events: [quarterNote('b/4'), quarterNote('d/5'), quarterNote('e/5'), quarterNote('f/5')],
+    }];
+    setTupletClipboardGroup(tripletGroup(SOURCE_GROUP_ID));
+    const notices = captureNotices();
+    try {
+      const { svg } = renderScore(data);
+
+      clickAt(svg, 0, 0, 2);
+      fireEvent.keyDown(window, { key: 'v', metaKey: true });
+
+      expect(notices.messages.filter((m) => m.includes('拍がいっぱい'))).toHaveLength(1);
+    } finally {
+      notices.stop();
+    }
+  });
+
+  it('受入B-2: 何もコピーしていない状態の Cmd+V は、コピー方法を通知する', () => {
+    const data: MeasureData[] = [{ events: [quarterNote('b/4'), quarterNote('d/5')] }];
+    // クリップボードは空のまま（beforeEach で null）
+    const notices = captureNotices();
+    try {
+      const { svg, onChange } = renderScore(data);
+
+      clickAt(svg, 0, 0, 2);
+      fireEvent.keyDown(window, { key: 'v', metaKey: true });
+
+      expect(onChange).not.toHaveBeenCalled();
+      expect(notices.messages.some((m) => m.includes('貼り付けられる連符グループがありません'))).toBe(true);
+      expect(notices.messages.some((m) => m.includes('Cmd/Ctrl+C'))).toBe(true);
+    } finally {
+      notices.stop();
+    }
+  });
+
+  // 下の2件は対になっている。前者が「小節選択中でも Cmd+V のハンドラは動いている」ことを示すので、
+  // 後者の「通知が出ない」は“そもそも何も動いていないから”ではない、と言い切れる。
+  it('小節を選んでいるときでも、コピー済みグループの Cmd+V は従来どおり貼り付けられる', async () => {
+    const data: MeasureData[] = [{ events: [quarterNote('b/4'), quarterNote('d/5')] }];
+    setTupletClipboardGroup(tripletGroup(SOURCE_GROUP_ID));
+    const { svg, onChange } = renderScore(
+      data,
+      { duration: '4', isRest: false },
+      { selectedMeasures: { start: 0, end: 0 } }
+    );
+
+    clickAt(svg, 0, 0, 2);
+    fireEvent.keyDown(window, { key: 'v', metaKey: true });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+  });
+
+  it('小節を選んでいるときの Cmd+V（＝小節の貼り付け）には、連符側の通知をかぶせない', () => {
+    const data: MeasureData[] = [{ events: [quarterNote('b/4'), quarterNote('d/5')] }];
+    // クリップボードは空（beforeEach で null）。この Cmd+V は ScorePage 側の小節ペーストのもの
+    const notices = captureNotices();
+    try {
+      const { svg } = renderScore(
+        data,
+        { duration: '4', isRest: false },
+        { selectedMeasures: { start: 0, end: 0 } }
+      );
+
+      clickAt(svg, 0, 0, 2);
+      fireEvent.keyDown(window, { key: 'v', metaKey: true });
+
+      expect(notices.messages).toHaveLength(0);
+    } finally {
+      notices.stop();
+    }
+  });
+
+  it('貼り付けが成功したときは通知を出さない（成功時の挙動は変わらない）', async () => {
+    const data: MeasureData[] = [{ events: [quarterNote('b/4'), quarterNote('d/5')] }];
+    setTupletClipboardGroup(tripletGroup(SOURCE_GROUP_ID));
+    const notices = captureNotices();
+    try {
+      const { svg, onChange } = renderScore(data);
+
+      clickAt(svg, 0, 0, 2);
+      fireEvent.keyDown(window, { key: 'v', metaKey: true });
+
+      await waitFor(() => expect(onChange).toHaveBeenCalled());
+      expect(notices.messages).toHaveLength(0);
+    } finally {
+      notices.stop();
+    }
   });
 
   it('受入3: 小節が選択されているあいだは、Cmd+C がグループのコピーにならない（小節コピー優先）', () => {
