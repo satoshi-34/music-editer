@@ -1211,57 +1211,6 @@ export default function PianoSystemCanvas({
   // キーボードハンドラが各パートのclefを参照できるようにrefで保持
   const partsClefRef = useRef(parts.map(p => p.clef));
   // 選択中のスラー/タイ（null = 未選択）
-  const [timeSigEditState, setTimeSigEditState] = useState<{
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
-  // 小節調号変更オーバーレイの状態（null のとき非表示）。StaffCanvas と同じパターン。
-  const [keySigEditState, setKeySigEditState] = useState<{
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
-  // 小節クレフ（音部記号）変更オーバーレイの状態（null のとき非表示）。
-  // 調号と違い、クレフはパートごと（クリックした段）にしか変わらないため partIndex を持つ。
-  const [clefEditState, setClefEditState] = useState<{
-    measureAbsoluteIndex: number;
-    partIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
-
-  const [bpmEditState, setBpmEditState] = useState<{
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
-
-  // リハーサルマーク入力オーバーレイの状態。調号と同じく最上段（partsScore[0]）にのみ保存する。
-  const [rehearsalEditState, setRehearsalEditState] = useState<{
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
-
-  // eventIndex は「voiceIndex で指定した声部の events 配列の中での位置」を表す。
-  // 声部2（voiceIndex 1）の音符にも歌詞・運指などを付けられるようにするため、
-  // どの声部を編集しているかをオーバーレイの状態にも持たせている（Issue #112）。
-  const [textEditState, setTextEditState] = useState<{
-    kind: TextElementKind;
-    partIndex: number;
-    measureAbsoluteIndex: number;
-    eventIndex: number;
-    voiceIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
 
   // サイズ・位置調整の対象1件。カスタム記号（symbolId で識別）と
   // 標準記号（kind で識別。fingering/dynamics など）の両方を同じ形で扱えるようにする（StaffCanvas と同じ考え方）。
@@ -1327,13 +1276,54 @@ export default function PianoSystemCanvas({
     return toContainerRect(rect);
   };
 
-  // カスタム記号サイズ変更オーバーレイの状態（StaffCanvas の symbolResizeEditState と同じパターン）。
-  // 標準記号（運指・強弱）のサイズ変更にも同じ state を使う（target で対象を区別する）。
-  //
-  // anchor は「調整対象の記号が実際に描かれている範囲」（Issue #230）。
-  // オーバーレイをここに重ねないよう SymbolAdjustOverlay が表示位置を決める。
-  // 開いた時点の値のまま差し替えない（調整中にオーバーレイが逃げないようにするため）。
-  const [symbolResizeEditState, setSymbolResizeEditState] = useState<{
+  // ── オーバーレイ状態の集約（#244 段1b）──
+  // 9個の独立 useState を1つの record へ機械的に集約した。**排他化はしない**（union 化と
+  // ライフサイクル統一は段2）。既存の呼び出し箇所を書き換えないため、従来と同名の
+  // setter ラッパー（updater 形式も可）と読み取り用の別名を置く。各フィールドの遷移は
+  // 従来の個別 setState と同一なので挙動はゼロ差。
+  type OverlayStates = {
+    timeSig: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    keySig: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    clef: {
+    measureAbsoluteIndex: number;
+    partIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    bpm: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    rehearsal: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    text: {
+    kind: TextElementKind;
+    partIndex: number;
+    measureAbsoluteIndex: number;
+    eventIndex: number;
+    voiceIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    symbolResize: {
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
@@ -1341,14 +1331,8 @@ export default function PianoSystemCanvas({
     target: AdjustTarget;
     currentValue: string;
     anchor: OverlayRectLike;
-  } | null>(null);
-
-  // カスタム記号位置調整オーバーレイの状態（symbolResizeEditState と同じパターン。横・縦の2入力のみ違う）
-  //
-  // currentX / currentY は「オーバーレイを開いた時点の保存済みの値」で、最後まで書き換えない。
-  // Esc で開いた時点へ戻すときの戻り先であり、blur だけで閉じたときの no-op 判定の基準でもあるため。
-  // draftX / draftY は矢印キーで動かしている最中の値（まだ保存していない下書き。Issue #205）。
-  const [symbolOffsetEditState, setSymbolOffsetEditState] = useState<{
+    } | null;
+    symbolOffset: {
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
@@ -1360,12 +1344,8 @@ export default function PianoSystemCanvas({
     draftY: number;
     // 調整対象の記号の実描画範囲（Issue #230。symbolResizeEditState の anchor と同じ意味）
     anchor: OverlayRectLike;
-  } | null>(null);
-  const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
-  const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
-
-  // 汎用サイズ・位置調整ツールで、対象の音符に複数の調整可能記号が付いている場合に出す選択リストの状態
-  const [symbolAdjustPickerState, setSymbolAdjustPickerState] = useState<{
+    } | null;
+    symbolPicker: {
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
@@ -1374,7 +1354,56 @@ export default function PianoSystemCanvas({
     options: AdjustTarget[];
     overlayX: number;
     overlayY: number;
-  } | null>(null);
+    } | null;
+  };
+  const [overlayStates, setOverlayStates] = useState<OverlayStates>({
+    timeSig: null, keySig: null, clef: null, bpm: null, rehearsal: null,
+    text: null, symbolResize: null, symbolOffset: null, symbolPicker: null,
+  });
+  // setter ラッパーは1回だけ作る（従来の setState と同じく参照が安定するように）
+  const overlaySetters = useMemo(() => {
+    const make = <K extends keyof OverlayStates>(key: K) =>
+      (value: React.SetStateAction<OverlayStates[K]>) =>
+        setOverlayStates(prev => {
+          const next = typeof value === 'function'
+            ? (value as (p: OverlayStates[K]) => OverlayStates[K])(prev[key])
+            : value;
+          // 素の useState は「同じ値の set」で再レンダーしない（Object.is で bailout）。
+          // record 化してもその性質を保たないと、マウント時の「null を null にする」掃除
+          // effect が毎回新しい record を作って余計な再描画を起こす（実際にテストが割れた）。
+          if (next === prev[key]) return prev;
+          return { ...prev, [key]: next };
+        });
+    return {
+      timeSig: make('timeSig'), keySig: make('keySig'), clef: make('clef'),
+      bpm: make('bpm'), rehearsal: make('rehearsal'), text: make('text'),
+      symbolResize: make('symbolResize'), symbolOffset: make('symbolOffset'),
+      symbolPicker: make('symbolPicker'),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const timeSigEditState = overlayStates.timeSig;
+  const setTimeSigEditState = overlaySetters.timeSig;
+  const keySigEditState = overlayStates.keySig;
+  const setKeySigEditState = overlaySetters.keySig;
+  const clefEditState = overlayStates.clef;
+  const setClefEditState = overlaySetters.clef;
+  const bpmEditState = overlayStates.bpm;
+  const setBpmEditState = overlaySetters.bpm;
+  const rehearsalEditState = overlayStates.rehearsal;
+  const setRehearsalEditState = overlaySetters.rehearsal;
+  const textEditState = overlayStates.text;
+  const setTextEditState = overlaySetters.text;
+  const symbolResizeEditState = overlayStates.symbolResize;
+  const setSymbolResizeEditState = overlaySetters.symbolResize;
+  const symbolOffsetEditState = overlayStates.symbolOffset;
+  const setSymbolOffsetEditState = overlaySetters.symbolOffset;
+  const symbolAdjustPickerState = overlayStates.symbolPicker;
+  const setSymbolAdjustPickerState = overlaySetters.symbolPicker;
+
+  const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
+  const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
+
 
   /**
    * ツールを切り替えたら、開いたままの調整系オーバーレイ（サイズ・位置・調整対象の選択リスト）を
