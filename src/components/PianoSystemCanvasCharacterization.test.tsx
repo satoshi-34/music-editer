@@ -7,11 +7,11 @@
 // 確認しながら」更新する。リファクタ（段1）で意図せず変わればここが割れる。
 //
 // 固定する5点:
-//   1. オーバーレイはツール切替では閉じない（調整系3種との非対称）。別種を開くと
-//      先のものは閉じる（ただし明示の排他ロジックではなく、フォーカス移動の blur 確定による）
+//   1. オーバーレイはツール切替で**9種すべて閉じる**（段2で統一・差分表#1）。別種を開くと
+//      先のものは閉じる（blur 確定＋段2からは union の構造的排他）
 //   2. 複数の段（Canvas インスタンス）間で、選択は SELECTION_CLAIMED_EVENT により常に1つ
 //   3. 外部からの譜面差し替え時の選択の整合
-//   4. タイのドラッグを SVG の外で離すと開始点が残留する（段2の GLOBAL_POINTER_UP で修正予定）
+//   4. タイのドラッグを SVG の外で離すと開始点は掃除される（段2で修正済み・差分表#3）
 //   5. SCORE_SELECTION_CLEAR_EVENT（再生開始・タブ切替の掃除）で選択が消える
 //
 // レンダー手法・座標のモックは PianoSystemCanvasDeadEndNotice.test.tsx と同じ。
@@ -177,24 +177,25 @@ describe('PianoSystemCanvas characterization（Issue #244 段0.5・仕様では�
     fireEvent.click(bg, { clientX: x, clientY: y });
   }
 
-  it('1. オーバーレイはツール切替では閉じず、別種を開くと先のものは blur 確定で閉じる（設計メモ§2-2）', async () => {
+  it('1. オーバーレイはツール切替で9種すべて閉じ、別種を開くと先のものは閉じる（段2・差分表#1/#2）', async () => {
     const { container, rerenderWith } = renderOne({ mode: 'measureTempo' });
     clickMeasureBg(currentSvg(container));
     await waitFor(() => expect(screen.queryByText(/途中テンポ変更/)).toBeTruthy());
 
-    // ツールを替えても BPM オーバーレイは**閉じない**（現状の非対称:
-    // symbolResize/Offset/AdjustPicker の調整系3種だけが toolIdentityKey effect で閉じる。
-    // 段2でこの非対称を「掃除の一元化」で解消する予定＝ここは期待値が変わる見込み）
+    // 段2の変更点（差分表#1・運用者承認 2026-08-21）: ツールを替えると小節メタ系も含む
+    // 9種すべてがキャンセル扱いで閉じる。段1以前は調整系3種しか閉じず、残った入力欄が
+    // 次のクリックを1回食う無反応の原因だった（#231 の恒久化）。
     rerenderWith({ mode: 'measureTimeSig' });
-    expect(screen.queryByText(/途中テンポ変更/)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/途中テンポ変更/)).toBeNull());
 
-    // 別種のオーバーレイを開くと、先のものは閉じる。ただしこれは reducer 等の
-    // 明示の排他ロジックではなく、新しいオーバーレイの autoFocus が先の入力から
-    // フォーカスを奪い、blur の確定処理が走る**副作用としての排他**である。
-    // 段2はこの偶発的な排他を明示の遷移（union）へ置き換える（見た目の挙動は同じ）。
+    // 別種のオーバーレイを開くと先のものは閉じる（blur 確定＋段2からは union の構造的排他）
     clickMeasureBg(currentSvg(container));
     await waitFor(() => expect(screen.queryByText(/途中拍子変更/)).toBeTruthy());
-    expect(screen.queryByText(/途中テンポ変更/)).toBeNull();
+    rerenderWith({ mode: 'measureTempo' });
+    await waitFor(() => expect(screen.queryByText(/途中拍子変更/)).toBeNull());
+    clickMeasureBg(currentSvg(container));
+    await waitFor(() => expect(screen.queryByText(/途中テンポ変更/)).toBeTruthy());
+    expect(screen.queryByText(/途中拍子変更/)).toBeNull();
   });
 
   it('2. 複数の段のあいだで選択は常に1つ（SELECTION_CLAIMED_EVENT）', async () => {
@@ -259,19 +260,28 @@ describe('PianoSystemCanvas characterization（Issue #244 段0.5・仕様では�
     expect(selectionFrames(currentSvg(container))).toBe(0);
   });
 
-  it('4. タイのドラッグを SVG の外で離すと開始点が残留する（既知の残留・段2の GLOBAL_POINTER_UP で修正予定）', async () => {
+  it('4. タイのドラッグを SVG の外で離すと開始点が掃除される（段2で修正・差分表#3）', async () => {
     const { container, onChange } = renderOne({ mode: 'tie' });
     const svg = currentSvg(container);
     const start = noteHitIn(svg, 0);
     fireEvent.mouseDown(start, { clientX: centerXOf(start), clientY: yForLine(start, 2) });
 
-    // SVG の外（document.body）で離す → 現状はここで開始点が掃除されない
+    // SVG の外（document.body）で離す → 段2からは window の mouseup 掃除で開始点が消える。
+    // 段1以前は残留し、「mousedown なしの mouseup だけでタイが確定する」バグだった
+    //（このテストの旧期待値が実証していた。修正は #244 差分表#3・運用者承認 2026-08-21）。
     fireEvent.mouseUp(document.body);
 
-    // その後、別の音符の上で mouseup しただけで（新しい mousedown なしに）
-    // 残留した開始点からのタイが確定してしまう。これが「残留」の観測点
+    // 残留していない証明: 別の音符の上で mouseup しても、もうタイは確定しない
     const target = noteHitIn(svg, 1);
     fireEvent.mouseUp(target, { clientX: centerXOf(target), clientY: yForLine(target, 2) });
+    await new Promise(r => setTimeout(r, 300));
+    expect(onChange).not.toHaveBeenCalled();
+
+    // 正規の操作（mousedown → 対象の上で mouseup）は従来どおりタイが確定する
+    const start2 = noteHitIn(currentSvg(container), 0);
+    fireEvent.mouseDown(start2, { clientX: centerXOf(start2), clientY: yForLine(start2, 2) });
+    const target2 = noteHitIn(currentSvg(container), 1);
+    fireEvent.mouseUp(target2, { clientX: centerXOf(target2), clientY: yForLine(target2, 2) });
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const updated = onChange.mock.calls.at(-1)?.[0] as MeasureData[];
     expect(updated[0].events[0].arcs?.length ?? 0).toBeGreaterThan(0);

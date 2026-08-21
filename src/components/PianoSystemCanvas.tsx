@@ -1,7 +1,7 @@
 // PianoSystemCanvas.tsx
 // 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
@@ -1180,39 +1180,6 @@ export default function PianoSystemCanvas({
     // 多段譜では全パートへ同じ ending 番号を一度に付ける。
     setPartsScore(prev => prev.map(partScore => toggleMeasureEnding(partScore ?? [], measureIndex, ending)));
   };
-  // ── 選択状態の集約（#244 段1c）──
-  // note（音符）/ arc（弧）/ hairpin（松葉）の3つの独立 useState を1つの record へ機械的に
-  // 集約した。**排他 union にはしない**: 現行コードは「クリックハンドラが明示的に他方を
-  // null にする」ことで排他を実現しており、union 化はその明示クリアを暗黙化する挙動変更に
-  // なるため段2 で扱う（オーバーレイと同じ判断。設計メモ§2-1）。
-  // setter ラッパーは従来と同名・同シグネチャ・同値 bailout つき（段1b と同じ作法）。
-  type SelectionStates = {
-    note: Sel;
-    arc: SelectedArcSel;
-    hairpin: SelectedHairpinSel;
-  };
-  const [selectionStates, setSelectionStates] = useState<SelectionStates>({
-    note: null, arc: null, hairpin: null,
-  });
-  const selectionSetters = useMemo(() => {
-    const make = <K extends keyof SelectionStates>(key: K) =>
-      (value: React.SetStateAction<SelectionStates[K]>) =>
-        setSelectionStates(prev => {
-          const next = typeof value === 'function'
-            ? (value as (p: SelectionStates[K]) => SelectionStates[K])(prev[key])
-            : value;
-          if (next === prev[key]) return prev;
-          return { ...prev, [key]: next };
-        });
-    return { note: make('note'), arc: make('arc'), hairpin: make('hairpin') };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const selected = selectionStates.note;
-  const setSelected = selectionSetters.note;
-  const selectedArc = selectionStates.arc;
-  const setSelectedArc = selectionSetters.arc;
-  const selectedHairpin = selectionStates.hairpin;
-  const setSelectedHairpin = selectionSetters.hairpin;
   const partsScoreRef = useRef<MeasureData[][]>([]);
   // 最新値ミラー（#244 段1）。宣言時点では selectedArc/selectedHairpin の state が
   // まだ無いため null で初期化する（state の初期値と同じ。初回レンダー後の一括同期
@@ -1388,50 +1355,124 @@ export default function PianoSystemCanvas({
     overlayY: number;
     } | null;
   };
-  const [overlayStates, setOverlayStates] = useState<OverlayStates>({
-    timeSig: null, keySig: null, clef: null, bpm: null, rehearsal: null,
-    text: null, symbolResize: null, symbolOffset: null, symbolPicker: null,
-  });
-  // setter ラッパーは1回だけ作る（従来の setState と同じく参照が安定するように）
-  const overlaySetters = useMemo(() => {
-    const make = <K extends keyof OverlayStates>(key: K) =>
+  // ── 編集ローカル状態の reducer（#244 段2a）──
+  // 段1で record に集約した「選択」と「オーバーレイ」を、1つの reducer + 排他 union へ
+  // 置き換える（運用者承認済みの差分表 #2/#5）。
+  //
+  // - union なので「同時に2つ開く/選ぶ」状態は**型の上で存在しない**。既知の経路では
+  //   排他は従来もハンドラの明示クリア（選択）と blur 確定（オーバーレイ）で成立していた
+  //   ため、観測できる挙動差はない。明示クリアが漏れた未知の経路があれば、それは
+  //   この構造が排他へ矯正する（差分表 #5 で承認済み）
+  // - オーバーレイの「開いたまま別種を開く」は、実際には新オーバーレイの autoFocus が
+  //   先の入力を blur させ**確定処理が先に走ってから**開く（段0.5 の観測）。union の
+  //   置き換えはその後の安全網であり、確定をスキップさせるものではない
+  // - setter ラッパーは従来と同名・同シグネチャ。null set は「その種類が開いて/選ばれて
+  //   いるときだけ閉じる」（別種が開いているときの null set は従来どおり no-op）。
+  //   同値 bailout（段1の教訓）は reducer が prev を返すことで維持する
+  type OverlayKind = keyof OverlayStates;
+  type OverlayUnion = { [K in OverlayKind]: { kind: K; payload: NonNullable<OverlayStates[K]> } }[OverlayKind];
+  type SelectionSlot = 'note' | 'arc' | 'hairpin';
+  type SelectionPayloads = {
+    note: NonNullable<Sel>;
+    arc: NonNullable<SelectedArcSel>;
+    hairpin: NonNullable<SelectedHairpinSel>;
+  };
+  type SelectionUnion = { [K in SelectionSlot]: { kind: K; payload: SelectionPayloads[K] } }[SelectionSlot];
+  type EditorLocalState = { selection: SelectionUnion | null; overlay: OverlayUnion | null };
+  // value は各 slot/kind ごとに型が違うため action 上は unknown で運び、
+  // 型安全は同名ラッパー（従来の setter と同じシグネチャ）で担保する
+  type EditorLocalAction =
+    | { type: 'SELECTION_SET'; slot: SelectionSlot; value: unknown }
+    | { type: 'OVERLAY_SET'; kind: OverlayKind; value: unknown }
+    // ツール切替: オーバーレイを全種キャンセル（差分表#1）。選択は #238 の既存仕様
+    //（ScorePage からの CLEAR 要求）に任せるためここでは触らない
+    | { type: 'TOOL_CHANGED' }
+    // タブ切替・ツール変更・再生開始の掃除要求（SCORE_SELECTION_CLEAR_EVENT）:
+    // 従来の選択解除に加えてオーバーレイも閉じる（差分表#4）
+    | { type: 'CLEAR_ALL' }
+    // 他の段が選択を取った（SELECTION_CLAIMED_EVENT）: 自段の選択だけ手放す
+    | { type: 'SELECTION_CLAIMED_BY_OTHER' };
+  const editorLocalReducer = (state: EditorLocalState, action: EditorLocalAction): EditorLocalState => {
+    switch (action.type) {
+      case 'SELECTION_SET': {
+        const current = state.selection?.kind === action.slot ? state.selection.payload : null;
+        const next = typeof action.value === 'function'
+          ? (action.value as (p: unknown) => unknown)(current)
+          : action.value;
+        if (next === current) return state;
+        if (next == null) {
+          if (state.selection?.kind !== action.slot) return state;
+          return { ...state, selection: null };
+        }
+        return { ...state, selection: { kind: action.slot, payload: next } as SelectionUnion };
+      }
+      case 'OVERLAY_SET': {
+        const current = state.overlay?.kind === action.kind ? state.overlay.payload : null;
+        const next = typeof action.value === 'function'
+          ? (action.value as (p: unknown) => unknown)(current)
+          : action.value;
+        if (next === current) return state;
+        if (next == null) {
+          if (state.overlay?.kind !== action.kind) return state;
+          return { ...state, overlay: null };
+        }
+        return { ...state, overlay: { kind: action.kind, payload: next } as OverlayUnion };
+      }
+      case 'TOOL_CHANGED': {
+        if (state.overlay == null) return state;
+        return { ...state, overlay: null };
+      }
+      case 'CLEAR_ALL': {
+        if (state.overlay == null && state.selection == null) return state;
+        return { selection: null, overlay: null };
+      }
+      case 'SELECTION_CLAIMED_BY_OTHER': {
+        if (state.selection == null) return state;
+        return { ...state, selection: null };
+      }
+    }
+  };
+  const [editorLocal, dispatchEditorLocal] = useReducer(editorLocalReducer, { selection: null, overlay: null });
+  const editorLocalSetters = useMemo(() => {
+    const selectionSetter = <K extends SelectionSlot>(slot: K) =>
+      (value: React.SetStateAction<SelectionPayloads[K] | null>) =>
+        dispatchEditorLocal({ type: 'SELECTION_SET', slot, value });
+    const overlaySetter = <K extends OverlayKind>(kind: K) =>
       (value: React.SetStateAction<OverlayStates[K]>) =>
-        setOverlayStates(prev => {
-          const next = typeof value === 'function'
-            ? (value as (p: OverlayStates[K]) => OverlayStates[K])(prev[key])
-            : value;
-          // 素の useState は「同じ値の set」で再レンダーしない（Object.is で bailout）。
-          // record 化してもその性質を保たないと、マウント時の「null を null にする」掃除
-          // effect が毎回新しい record を作って余計な再描画を起こす（実際にテストが割れた）。
-          if (next === prev[key]) return prev;
-          return { ...prev, [key]: next };
-        });
+        dispatchEditorLocal({ type: 'OVERLAY_SET', kind, value });
     return {
-      timeSig: make('timeSig'), keySig: make('keySig'), clef: make('clef'),
-      bpm: make('bpm'), rehearsal: make('rehearsal'), text: make('text'),
-      symbolResize: make('symbolResize'), symbolOffset: make('symbolOffset'),
-      symbolPicker: make('symbolPicker'),
+      note: selectionSetter('note'), arc: selectionSetter('arc'), hairpin: selectionSetter('hairpin'),
+      timeSig: overlaySetter('timeSig'), keySig: overlaySetter('keySig'), clef: overlaySetter('clef'),
+      bpm: overlaySetter('bpm'), rehearsal: overlaySetter('rehearsal'), text: overlaySetter('text'),
+      symbolResize: overlaySetter('symbolResize'), symbolOffset: overlaySetter('symbolOffset'),
+      symbolPicker: overlaySetter('symbolPicker'),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const timeSigEditState = overlayStates.timeSig;
-  const setTimeSigEditState = overlaySetters.timeSig;
-  const keySigEditState = overlayStates.keySig;
-  const setKeySigEditState = overlaySetters.keySig;
-  const clefEditState = overlayStates.clef;
-  const setClefEditState = overlaySetters.clef;
-  const bpmEditState = overlayStates.bpm;
-  const setBpmEditState = overlaySetters.bpm;
-  const rehearsalEditState = overlayStates.rehearsal;
-  const setRehearsalEditState = overlaySetters.rehearsal;
-  const textEditState = overlayStates.text;
-  const setTextEditState = overlaySetters.text;
-  const symbolResizeEditState = overlayStates.symbolResize;
-  const setSymbolResizeEditState = overlaySetters.symbolResize;
-  const symbolOffsetEditState = overlayStates.symbolOffset;
-  const setSymbolOffsetEditState = overlaySetters.symbolOffset;
-  const symbolAdjustPickerState = overlayStates.symbolPicker;
-  const setSymbolAdjustPickerState = overlaySetters.symbolPicker;
+  const selected: Sel = editorLocal.selection?.kind === 'note' ? editorLocal.selection.payload : null;
+  const setSelected = editorLocalSetters.note;
+  const selectedArc: SelectedArcSel = editorLocal.selection?.kind === 'arc' ? editorLocal.selection.payload : null;
+  const setSelectedArc = editorLocalSetters.arc;
+  const selectedHairpin: SelectedHairpinSel = editorLocal.selection?.kind === 'hairpin' ? editorLocal.selection.payload : null;
+  const setSelectedHairpin = editorLocalSetters.hairpin;
+  const timeSigEditState = editorLocal.overlay?.kind === 'timeSig' ? editorLocal.overlay.payload : null;
+  const setTimeSigEditState = editorLocalSetters.timeSig;
+  const keySigEditState = editorLocal.overlay?.kind === 'keySig' ? editorLocal.overlay.payload : null;
+  const setKeySigEditState = editorLocalSetters.keySig;
+  const clefEditState = editorLocal.overlay?.kind === 'clef' ? editorLocal.overlay.payload : null;
+  const setClefEditState = editorLocalSetters.clef;
+  const bpmEditState = editorLocal.overlay?.kind === 'bpm' ? editorLocal.overlay.payload : null;
+  const setBpmEditState = editorLocalSetters.bpm;
+  const rehearsalEditState = editorLocal.overlay?.kind === 'rehearsal' ? editorLocal.overlay.payload : null;
+  const setRehearsalEditState = editorLocalSetters.rehearsal;
+  const textEditState = editorLocal.overlay?.kind === 'text' ? editorLocal.overlay.payload : null;
+  const setTextEditState = editorLocalSetters.text;
+  const symbolResizeEditState = editorLocal.overlay?.kind === 'symbolResize' ? editorLocal.overlay.payload : null;
+  const setSymbolResizeEditState = editorLocalSetters.symbolResize;
+  const symbolOffsetEditState = editorLocal.overlay?.kind === 'symbolOffset' ? editorLocal.overlay.payload : null;
+  const setSymbolOffsetEditState = editorLocalSetters.symbolOffset;
+  const symbolAdjustPickerState = editorLocal.overlay?.kind === 'symbolPicker' ? editorLocal.overlay.payload : null;
+  const setSymbolAdjustPickerState = editorLocalSetters.symbolPicker;
 
   const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
   const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
@@ -1455,9 +1496,12 @@ export default function PianoSystemCanvas({
    */
   const toolIdentityKey = resolveToolIdentityKey(tool);
   useEffect(() => {
-    setSymbolResizeEditState(null);
-    setSymbolOffsetEditState(null);
-    setSymbolAdjustPickerState(null);
+    // 従来は調整系3種だけを閉じていたが、小節メタ系（拍子/調号/クレフ/テンポ/
+    // リハーサル/テキスト）が開いたまま残る非対称が「次のクリックが欄を閉じるだけに
+    // 消費される」プチ無反応を生んでいた。段2で9種すべてキャンセルへ統一
+    //（#244 差分表#1・運用者承認 2026-08-21）。キャンセル扱い＝下書き破棄は
+    // 従来の調整系と同じ意味論（Esc と同じ経路）。
+    dispatchEditorLocal({ type: 'TOOL_CHANGED' });
   }, [toolIdentityKey]);
 
   /**
@@ -1610,6 +1654,10 @@ export default function PianoSystemCanvas({
     arcCp: null, arcEp: null, arcMoved: false, tieStart: null,
     measureAnchor: null, measureMoved: false,
   });
+  // タイ/松葉ドラッグの破線プレビュー要素。実体は描画 effect が SVG ごとに作り直すため、
+  // コンポーネント階層の掃除処理（ツール切替・pointercancel・SVG外 mouseup）から
+  // 非表示にできるよう ref で持ち回る（arcDragContextRef と同じ理由・#244 段2 Codexレビュー対応）
+  const tiePreviewPathRef = useRef<SVGPathElement | null>(null);
 
   // 弧のドラッグ中に「いまの SVG と弧の形状台帳」を参照するための口。
   // ドラッグ中の更新は window の mousemove で受けるため（後述の理由）、
@@ -1780,6 +1828,85 @@ export default function PianoSystemCanvas({
     dragSessionsRef.current.arcMoved = false;
     return true;
   }, [updateArcDragPreview]);
+
+  /**
+   * 進行中のドラッグを全てキャンセルする（#244 段2・Codexレビュー3点対応）。
+   *
+   * - 弧（曲率/頂点/端点）: cancelArcDrag と同じ「開始形へ復元してから参照クリア」。
+   *   **確定はしない**（ツール切替や pointercancel は利用者の確定意図ではないため）
+   * - タイ/松葉: 開始点と破線プレビューの両方を消す（参照だけ消すと破線が画面に残る）
+   * - 小節範囲選択: アンカーをクリア
+   * - arcMoved（「直後の click を1回読み飛ばす」フラグ）を立てるかどうかは呼び出し元が決める。
+   *   マウスを押したままの中断（ツール切替・CLEAR）は指を離すときに mouseup → click が
+   *   続くので立てる。pointercancel は**そのポインタ列の mouseup も click も来ない**ため
+   *   立てない（立てると解除役が居らず、中断後の最初の普通のクリックが無言で捨てられる）
+   *
+   * 呼び出し元: ①ツール切替（数字キー・R キーは ScorePage の window keydown から
+   * setTool を呼ぶため**マウス押下中でも発生する**） ②SCORE_SELECTION_CLEAR 要求
+   * ③pointercancel（OS がポインタを取り上げた。suppressNextClick: false で呼ぶ）。
+   */
+  const cancelActiveDragSessions = useCallback((options?: { suppressNextClick?: boolean }) => {
+    // 既定は true（従来の呼び出し元＝ツール切替・CLEAR の挙動を変えない）
+    const suppressNextClick = options?.suppressNextClick !== false;
+    const hadActiveArcDrag =
+      dragSessionsRef.current.arcCp != null || dragSessionsRef.current.arcEp != null;
+    cancelArcDrag();
+    // cancelArcDrag は Esc 用に arcMoved を false へ戻すが、ツール切替・CLEAR で
+    // キャンセルした場合は（マウスはまだ押されているので）mouseup 直後に click が続きうる。
+    // その click を1回読み飛ばすために立て直す（Codex レビュー指摘: 戻さないと
+    // ドラッグのつもりだった操作の直後 click が新ツールの編集・選択変更として走る）。
+    // click が来なかった場合の解除は window mouseup 側の setTimeout(0) が行う。
+    if (suppressNextClick) {
+      if (hadActiveArcDrag) dragSessionsRef.current.arcMoved = true;
+    } else {
+      // pointercancel 経路。cancelArcDrag が下ろした false をそのまま維持し、
+      // ドラッグが無かった場合の取りこぼしも含めて確実に下ろしておく
+      dragSessionsRef.current.arcMoved = false;
+    }
+    dragSessionsRef.current.tieStart = null;
+    dragSessionsRef.current.measureAnchor = null;
+    if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
+  }, [cancelArcDrag]);
+
+  // SVG の外でマウスを離した／OS がポインタを取り上げたときの掃除（差分表#3）。
+  // mouseup: タイ/松葉だけを中止する（弧は #235 の window mouseup ハンドラが
+  // 「SVG 外で離しても1回だけ確定」を担当しているので、ここで触ると確定を壊す）。
+  // pointercancel: mouseup が来ない経路なので、弧・小節範囲も含めて全部キャンセルする
+  //（弧を確定しないのは、OS 都合の中断を保存とみなさないため）。
+  useEffect(() => {
+    const onWindowMouseUp = () => {
+      dragSessionsRef.current.tieStart = null;
+      if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
+      // キャンセル起因で立てた「click 1回読み飛ばし」フラグの安全弁: click は mouseup の
+      // 直後・setTimeout(0) より先に配送されるので（確定パスの既存前提と同じ）、
+      // click が来なければタイマーが解除し、来ていれば消費済みの false を false にするだけ
+      if (
+        dragSessionsRef.current.arcCp == null &&
+        dragSessionsRef.current.arcEp == null &&
+        dragSessionsRef.current.arcMoved
+      ) {
+        setTimeout(() => { dragSessionsRef.current.arcMoved = false; }, 0);
+      }
+    };
+    // pointercancel には mouseup も click も続かないので、click の読み飛ばしは立てない
+    //（立てると解除役の mouseup が来ず、中断後の最初のクリックが1回捨てられる）
+    const onPointerCancel = () => { cancelActiveDragSessions({ suppressNextClick: false }); };
+    window.addEventListener('mouseup', onWindowMouseUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    return () => {
+      window.removeEventListener('mouseup', onWindowMouseUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+    };
+  }, [cancelActiveDragSessions]);
+
+  // ツール切替の掃除（差分表#1 の続き）: reducer 側のオーバーレイ掃除（TOOL_CHANGED）に
+  // 加えて、進行中ドラッグもキャンセルする。数字キー・R キーのショートカットは
+  // マウス押下中でもツールを替えられるため、「切替時にドラッグは存在しない」とは言えない
+  //（Codex レビューの再現経路: 弧ハンドルを押したままキーで切替 → 旧実装では
+  // ドラッグが新ツールの下でも継続・確定していた）。
+  useEffect(() => {
+    cancelActiveDragSessions();
+  }, [toolIdentityKey, cancelActiveDragSessions]);
 
   /**
    * 弧のドラッグ中の mousemove / mouseup を window で受ける。
@@ -1968,29 +2095,28 @@ export default function PianoSystemCanvas({
       if (owner === selectionOwnerIdRef.current) return;
       // 選択解除は state 経由で行う（selected は描画 useEffect の deps に入っているので、
       // クリアすれば青い選択枠も再描画で消える）。
-      setSelected(null);
-      setSelectedArc(null);
-      setSelectedHairpin(null);
+      dispatchEditorLocal({ type: 'SELECTION_CLAIMED_BY_OTHER' });
     };
     window.addEventListener(SELECTION_CLAIMED_EVENT, onClaim);
     return () => window.removeEventListener(SELECTION_CLAIMED_EVENT, onClaim);
   }, []);
 
-  // モードが変わったら選択を手放す（Issue #238）。
+  // モードが変わったら選択とオーバーレイを手放す（Issue #238 / #244 差分表#4）。
   // タブ切り替え・ツール変更・再生開始で ScorePage から要求が飛んでくる。
   // 選択（青枠）が残ったままだと、そのあとユーザーが「入力欄を消すつもり」で押した
   // Delete / Backspace が譜面へ届き、音符が無言で消えてしまうため。
-  // 音符だけでなくスラー/タイ・松葉の選択も同時に解除する（どれも Delete の対象になるので、
-  // 1つだけ残すと同じ事故が形を変えて起きる）。
+  // 段2からはオーバーレイと進行中ドラッグも一緒に掃除する: 再生中は編集がロックされる
+  // のに入力欄だけ残るちぐはぐの解消（運用者承認 2026-08-21）に加え、この要求は
+  // キーボードショートカット由来でマウス押下中にも来うる（Codex レビュー指摘）ため、
+  // ドラッグのキャンセルも必要。
   useEffect(() => {
     const onClearRequest = () => {
-      setSelected(null);
-      setSelectedArc(null);
-      setSelectedHairpin(null);
+      dispatchEditorLocal({ type: 'CLEAR_ALL' });
+      cancelActiveDragSessions();
     };
     window.addEventListener(SCORE_SELECTION_CLEAR_EVENT, onClearRequest);
     return () => window.removeEventListener(SCORE_SELECTION_CLEAR_EVENT, onClearRequest);
-  }, []);
+  }, [cancelActiveDragSessions]);
 
   // 連符グループのコピー＆ペースト（Issue #234）はキーボードハンドラ（deps が空の useEffect）から
   // 使うため、props/派生値を ref に写しておく。ここを props 直参照にすると、
@@ -2639,6 +2765,7 @@ export default function PianoSystemCanvas({
 
     // タイドラッグのプレビュー弧
     const tiePreviewPath=document.createElementNS('http://www.w3.org/2000/svg','path');
+    tiePreviewPath.setAttribute('class','vf-tie-preview');
     tiePreviewPath.setAttribute('fill','none');
     tiePreviewPath.setAttribute('stroke','#3b82f6');
     tiePreviewPath.setAttribute('stroke-width','1.5');
@@ -2647,6 +2774,8 @@ export default function PianoSystemCanvas({
     tiePreviewPath.setAttribute('pointer-events','none');
     tiePreviewPath.style.display='none';
     svgRoot.appendChild(tiePreviewPath);
+    // コンポーネント階層の掃除処理から非表示にできるよう ref を最新へ差し替える
+    tiePreviewPathRef.current = tiePreviewPath;
 
     /**
      * 演奏記号のクリック判定を作る（StaffCanvas.tsx の同名関数と同じ役割）。
@@ -2835,14 +2964,30 @@ export default function PianoSystemCanvas({
       partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
     } | null = null;
 
+    // ドラッグの確定/キャンセル直後に必ず1回来る click は、**capture フェーズで1回だけ消費**する
+    //（#244 段2・Codexレビュー4巡目）。個別ハンドラ先頭のガード方式には2つの穴があった:
+    //   (a) ガードは伝播を止めないため、同じ click が SVG 背景ハンドラまで進んで
+    //       選択中の弧を解除してしまう
+    //   (b) 記号・松葉のヒット領域は自前で stopPropagation するためガードに届かず素通り
+    // capture はどの要素ハンドラよりも先に走るので、ここで消費して遮断すれば
+    // 到達先がどこであっても1回で確実に読み飛ばせる。消費の実装はこの1箇所だけにする。
+    // 仕様の dispatch 上は stopPropagation でも足りる（capture 側で stop propagation
+    // フラグが立てば、同一要素の bubble 側 invoke も開始時に打ち切られる。jsdom で実証済み）。
+    // それでも **stopImmediatePropagation** を使うのは防御のため: 将来この svg の
+    // capture フェーズ（＝同一フェーズ）にリスナーが追加されても、消費済み click を
+    // 確実に遮断できる（同一フェーズの後続リスナーは stopPropagation では止まらない）。
+    svg.addEventListener('click',(e)=>{
+      if(dragSessionsRef.current.arcMoved){
+        dragSessionsRef.current.arcMoved=false;
+        e.stopImmediatePropagation();
+      }
+    },true);
+
     // SVG 背景クリック → 弧の選択を解除
-    // ドラッグ直後のクリック（ドラッグの終わりに必ず1回来る）では解除しない。
-    // 解除してしまうと1回ドラッグするたびにハンドルが消え、続けて微調整できないため
-    // （小節のドラッグ範囲選択が dragSessionsRef.current.measureMoved で同じことをしているのと同じ考え方）。
+    //（ドラッグ直後の click は上の capture 消費が先に遮断するため、ここには届かない）
     svg.addEventListener('click',()=>{
       dragSessionsRef.current.tieStart=null;
       tiePreviewPath.style.display='none';
-      if(dragSessionsRef.current.arcMoved){dragSessionsRef.current.arcMoved=false;return;}
       setSelectedArc(null);
       setSelectedHairpin(null);
     });
