@@ -203,6 +203,9 @@ type RenderedVoiceEntry = {
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
 type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number; voiceIndex?: number } | null;
+// 選択中の弧・松葉の型（#244 段1: latestRef と useState で共用するため alias 化）
+type SelectedArcSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null;
+type SelectedHairpinSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null;
 
 /**
  * 弧（タイ／スラー）・松葉が載っているイベントを「その弧が属する声部の中で」書き換える（Issue #190）。
@@ -1178,16 +1181,31 @@ export default function PianoSystemCanvas({
     setPartsScore(prev => prev.map(partScore => toggleMeasureEnding(partScore ?? [], measureIndex, ending)));
   };
   const [selected, setSelected] = useState<Sel>(null);
-  const selRef = useRef<Sel>(null);
-  // 連符グループのコピー＆ペースト用（Issue #234）。値の更新は下の useEffect でまとめて行う。
-  const activeVoiceIndexRef = useRef<0 | 1>(activeVoiceIndex);
   const partsScoreRef = useRef<MeasureData[][]>([]);
-  const beatsPerMeasureRef = useRef(beatsPerMeasure);
-  const selectedMeasuresRef = useRef<{ start: number; end: number } | null>(selectedMeasures ?? null);
-  const disRef = useRef(disabled);
-  // 印刷プレビュー中かどうかをrefでも保持する（capture リスナー内で最新値を参照するため）
-  const previewRef = useRef(isPrintPreview);
-  const keySignatureRef = useRef<KeySignature>(normalizedKeySignature);
+  // 最新値ミラー（#244 段1）。宣言時点では selectedArc/selectedHairpin の state が
+  // まだ無いため null で初期化する（state の初期値と同じ。初回レンダー後の一括同期
+  // effect が毎回全フィールドを最新へそろえる）。
+  const latestRef = useRef<{
+    selected: Sel;
+    selectedArc: SelectedArcSel;
+    selectedHairpin: SelectedHairpinSel;
+    activeVoiceIndex: 0 | 1;
+    beatsPerMeasure: number;
+    selectedMeasures: { start: number; end: number } | null;
+    disabled: boolean;
+    isPrintPreview: boolean;
+    keySignature: KeySignature;
+  }>({
+    selected: null,
+    selectedArc: null,
+    selectedHairpin: null,
+    activeVoiceIndex,
+    beatsPerMeasure,
+    selectedMeasures: selectedMeasures ?? null,
+    disabled,
+    isPrintPreview,
+    keySignature: normalizedKeySignature,
+  });
   const notePlayerRef = useRef<NotePlayer | null>(null);
   const soundSourceRef = useRef<SoundSource | null>(null);
   // キーボードハンドラが各パートのclefを参照できるようにrefで保持
@@ -1486,15 +1504,11 @@ export default function PianoSystemCanvas({
   const [selectedArc, setSelectedArc] = useState<{
     partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
   } | null>(null);
-  const selectedArcRef = useRef<{ partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null>(null);
-  useEffect(() => { selectedArcRef.current = selectedArc; }, [selectedArc]);
 
   // 選択中の松葉（ヘアピン）。弧の選択と同じ「クリックで選択→Deleteで削除」方式
   const [selectedHairpin, setSelectedHairpin] = useState<{
     partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number;
   } | null>(null);
-  const selectedHairpinRef = useRef<{ partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null>(null);
-  useEffect(() => { selectedHairpinRef.current = selectedHairpin; }, [selectedHairpin]);
 
   // 弧の直接ドラッグ状態（cpDyOffset をリアルタイム調節 / 反転検知）
   // origin は「ドラッグを始めた瞬間の値」。Esc で中止したときに開始時点の形へ戻すために使う
@@ -1841,7 +1855,24 @@ export default function PianoSystemCanvas({
     return () => window.removeEventListener('mouseup', endMeasureDrag);
   }, []);
 
-  useEffect(()=>{selRef.current=selected;},[selected]);
+  // 「最新値ミラー」（#244 段1）: deps 空の useEffect（キーボード・window リスナー）から
+  // 最新の props/state を読むための ref。従来は9本の個別 ref + 同期 effect 9個だったものを
+  // この1本に集約した。deps 無しの effect は毎レンダー後に走るが、書く値はそのレンダーの
+  // 最新値そのものなので、個別 deps のときと観測できる差はない（同値の再代入は無害）。
+  // 書き込みはこの effect だけが行い、読み手は読み取り専用で使う。
+  useEffect(() => {
+    latestRef.current = {
+      selected,
+      selectedArc,
+      selectedHairpin,
+      activeVoiceIndex,
+      beatsPerMeasure,
+      selectedMeasures: selectedMeasures ?? null,
+      disabled,
+      isPrintPreview,
+      keySignature: normalizedKeySignature,
+    };
+  });
 
   // キーボードハンドラは deps [] で1回だけ登録するため、そのままでは初回レンダー時の
   // partsScore しか見えない（＝古い譜面を読んでしまう）。削除の通知文（何を消したか）を
@@ -1897,14 +1928,9 @@ export default function PianoSystemCanvas({
     return () => window.removeEventListener(SCORE_SELECTION_CLEAR_EVENT, onClearRequest);
   }, []);
 
-  useEffect(()=>{disRef.current=disabled;},[disabled]);
-  useEffect(()=>{previewRef.current=isPrintPreview;},[isPrintPreview]);
   // 連符グループのコピー＆ペースト（Issue #234）はキーボードハンドラ（deps が空の useEffect）から
   // 使うため、props/派生値を ref に写しておく。ここを props 直参照にすると、
   // ハンドラが最初のレンダー時の古い値を握ったままになる。
-  useEffect(()=>{activeVoiceIndexRef.current=activeVoiceIndex;},[activeVoiceIndex]);
-  useEffect(()=>{beatsPerMeasureRef.current=beatsPerMeasure;},[beatsPerMeasure]);
-  useEffect(()=>{selectedMeasuresRef.current=selectedMeasures??null;},[selectedMeasures]);
   // 印刷プレビュー中は譜面SVGへのクリック編集を一括で遮断する。
   // 個々のヒット要素（40箇所超）へ isPrintPreview チェックを足すのではなく、
   // SVGの親コンテナで capture フェーズのうちに stopPropagation することで、
@@ -1913,7 +1939,7 @@ export default function PianoSystemCanvas({
     const container = ref.current;
     if (!container) return;
     const blockEditingPointerEvent = (e: Event) => {
-      if (!previewRef.current) return;
+      if (!latestRef.current.isPrintPreview) return;
       e.stopPropagation();
     };
     const eventNames: (keyof HTMLElementEventMap)[] = ['click', 'mousedown', 'mouseup', 'dblclick'];
@@ -1922,7 +1948,6 @@ export default function PianoSystemCanvas({
       eventNames.forEach(name => container.removeEventListener(name, blockEditingPointerEvent, true));
     };
   }, []);
-  useEffect(()=>{keySignatureRef.current=normalizedKeySignature;},[normalizedKeySignature]);
   // partsの変更（基本的にない）に追従
   partsClefRef.current = parts.map(p => p.clef);
   // キーボードハンドラから「いまの譜面データ」を読むための ref（Issue #234 のコピー）。
@@ -2164,7 +2189,7 @@ export default function PianoSystemCanvas({
     };
 
     const onKey=(e:KeyboardEvent)=>{
-      if(disRef.current)return;
+      if(latestRef.current.disabled)return;
 
       // 優先0: 弧をドラッグしている最中の Esc は「ドラッグの中止」だけを行う。
       // 開始時点の形へ戻し、保存もしない・選択も残す（もう一度掴み直せる）。
@@ -2172,7 +2197,7 @@ export default function PianoSystemCanvas({
       if(e.key==='Escape'&&cancelArcDrag()){e.preventDefault();return;}
 
       // 優先1: スラー/タイが選択中 → スラー操作（Delete/Escape/f）
-      const arcSel=selectedArcRef.current;
+      const arcSel=latestRef.current.selectedArc;
       if(arcSel){
         if(e.key==='Delete'||e.key==='Backspace'){
           // 通知文は「消す前の譜面」からしか作れないので、state を書き換える前に組み立てる。
@@ -2207,7 +2232,7 @@ export default function PianoSystemCanvas({
       }
 
       // 優先1.5: 松葉（ヘアピン）が選択中 → Delete で削除 / Escape で選択解除
-      const hpSel=selectedHairpinRef.current;
+      const hpSel=latestRef.current.selectedHairpin;
       if(hpSel){
         if(e.key==='Delete'||e.key==='Backspace'){
           // 弧と同じく、消す前の譜面から通知文を作っておく（Issue #238）
@@ -2252,7 +2277,7 @@ export default function PianoSystemCanvas({
       }
 
       // 優先2: 音符が選択中 → 音符操作
-      const sel=selRef.current;
+      const sel=latestRef.current.selected;
       if(!sel)return;
       const {partIndex,measure,index,keyIndex}=sel;
       const clef=partsClefRef.current[partIndex]??'treble';
@@ -2274,7 +2299,7 @@ export default function PianoSystemCanvas({
       // 音符を選んだ状態で押すと、その音符が属する連符グループ全体をクリップボードへ入れる。
       // 小節が選択されているときは従来どおり「小節のコピー」（ScorePage 側のハンドラ）を優先する
       // ため、ここでは何もしない（両方が同じクリップボードを奪い合わないようにするための線引き）。
-      if((e.metaKey||e.ctrlKey)&&e.key==='c'&&!isTextInputTarget&&!selectedMeasuresRef.current){
+      if((e.metaKey||e.ctrlKey)&&e.key==='c'&&!isTextInputTarget&&!latestRef.current.selectedMeasures){
         const events=getVoiceEvents(partsScoreRef.current[partIndex]?.[measure]??{events:[]},voiceIndex);
         const group=copyTupletGroupForClipboard(events,index);
         // 連符の外の音符ではコピーするものが無いので、従来どおり何も起きない。
@@ -2291,7 +2316,7 @@ export default function PianoSystemCanvas({
         if(!group){
           // 小節を選んでいるときの Cmd/Ctrl+V は「小節の貼り付け」（ScorePage 側）が受け持つ。
           // そこで喋ると、ちゃんと効いている操作へ的外れな通知をかぶせてしまうので黙って譲る。
-          if(!selectedMeasuresRef.current){
+          if(!latestRef.current.selectedMeasures){
             // 何もコピーしていないまま貼り付けを押した行き止まり。次の一手（Cmd/Ctrl+C）まで伝える
             // （Issue #318「行き止まりは喋る」。文言は休符クリック側と同じビルダーを共用する）
             notifyScoreEdit(describeTupletGroupPasteUnavailable('emptyClipboard'));
@@ -2299,8 +2324,8 @@ export default function PianoSystemCanvas({
           return;
         }
         // 貼り付け先の声部は「いま編集中の声部」（コピー元の声部は問わない）。
-        const targetVoiceIndex=activeVoiceIndexRef.current;
-        const beatsLimit=beatsPerMeasureRef.current;
+        const targetVoiceIndex=latestRef.current.activeVoiceIndex;
+        const beatsLimit=latestRef.current.beatsPerMeasure;
         // 空き拍の判定は setPartsScore の updater の**外**で行う（Issue #331）。
         // updater の中で通知すると、React が updater を2回呼ぶ場面（StrictMode など）で
         // 同じ通知が二重に出てしまうため（.claude/specs/dead-end-speaks/design.md の約束）。
@@ -2386,7 +2411,7 @@ export default function PianoSystemCanvas({
           ev,
           keyIndex,
           { up, shiftKey: e.shiftKey, altKey: e.altKey },
-          { lineToKey: l2k, keyToLine: k2l, keySignature: keySignatureRef.current, defaultRestKey: defaultRestKeyForClef(clef) }
+          { lineToKey: l2k, keyToLine: k2l, keySignature: latestRef.current.keySignature, defaultRestKey: defaultRestKeyForClef(clef) }
         );
         setS(prev=>{
           if(measure>=prev.length)return prev;
