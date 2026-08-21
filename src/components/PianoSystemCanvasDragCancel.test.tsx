@@ -239,6 +239,30 @@ describe('PianoSystemCanvas 進行中ドラッグのキャンセル（Issue #244
     }
   });
 
+  it('1c. 読み飛ばしの click が音符ヒットに落ちても、選択中の弧は解除されない（capture消費）', async () => {
+    const { view, rerenderWith } = renderScore({ mode: 'tie' }, [measureWithSlur()]);
+    await startArcEndpointDrag(view.container);
+    fireEvent.mouseMove(window, { clientX: 140, clientY: 60 });
+    rerenderWith({ duration: '8' });
+    fireEvent.mouseUp(window, { clientX: 140, clientY: 60 });
+
+    // 合成 click が**小節背景（vf-hit）**へ落ちるケース（Codex 4巡目の再現経路: 空の
+    // 小節背景上で離す）。個別ガード方式では小節背景ハンドラは stopPropagation を
+    // しないため、消費後も同じ click が SVG 背景ハンドラまで進み、選択中の弧を
+    // 解除していた。capture 消費なら stopPropagation でどちらにも届かない
+    const svg = currentSvg(view.container);
+    const bg = svg.querySelector('rect.vf-hit') as SVGRectElement;
+    expect(bg).toBeTruthy();
+    const bx = parseFloat(bg.getAttribute('x')!) + parseFloat(bg.getAttribute('width')!) / 2;
+    const by = parseFloat(bg.getAttribute('y')!) + parseFloat(bg.getAttribute('height')!) / 2;
+    fireEvent.click(bg, { clientX: bx, clientY: by });
+    await new Promise(r => setTimeout(r, 200));
+
+    // ツールをタイへ戻すと、弧の選択が生きていれば端点ハンドルが再描画される
+    rerenderWith({ mode: 'tie' });
+    await waitFor(() => expect(view.container.querySelector('[data-arc-ep-start]')).toBeTruthy());
+  });
+
   it('2a. pointercancel で弧ドラッグが残留しない（後続の mousemove/mouseup で確定しない）', async () => {
     const { view, onChange } = renderScore({ mode: 'tie' }, [measureWithSlur()]);
     await startArcEndpointDrag(view.container);
