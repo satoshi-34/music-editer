@@ -203,6 +203,9 @@ type RenderedVoiceEntry = {
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
 type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number; voiceIndex?: number } | null;
+// 選択中の弧・松葉の型（#244 段1: latestRef と useState で共用するため alias 化）
+type SelectedArcSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null;
+type SelectedHairpinSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null;
 
 /**
  * 弧（タイ／スラー）・松葉が載っているイベントを「その弧が属する声部の中で」書き換える（Issue #190）。
@@ -1177,73 +1180,69 @@ export default function PianoSystemCanvas({
     // 多段譜では全パートへ同じ ending 番号を一度に付ける。
     setPartsScore(prev => prev.map(partScore => toggleMeasureEnding(partScore ?? [], measureIndex, ending)));
   };
-  const [selected, setSelected] = useState<Sel>(null);
-  const selRef = useRef<Sel>(null);
-  // 連符グループのコピー＆ペースト用（Issue #234）。値の更新は下の useEffect でまとめて行う。
-  const activeVoiceIndexRef = useRef<0 | 1>(activeVoiceIndex);
+  // ── 選択状態の集約（#244 段1c）──
+  // note（音符）/ arc（弧）/ hairpin（松葉）の3つの独立 useState を1つの record へ機械的に
+  // 集約した。**排他 union にはしない**: 現行コードは「クリックハンドラが明示的に他方を
+  // null にする」ことで排他を実現しており、union 化はその明示クリアを暗黙化する挙動変更に
+  // なるため段2 で扱う（オーバーレイと同じ判断。設計メモ§2-1）。
+  // setter ラッパーは従来と同名・同シグネチャ・同値 bailout つき（段1b と同じ作法）。
+  type SelectionStates = {
+    note: Sel;
+    arc: SelectedArcSel;
+    hairpin: SelectedHairpinSel;
+  };
+  const [selectionStates, setSelectionStates] = useState<SelectionStates>({
+    note: null, arc: null, hairpin: null,
+  });
+  const selectionSetters = useMemo(() => {
+    const make = <K extends keyof SelectionStates>(key: K) =>
+      (value: React.SetStateAction<SelectionStates[K]>) =>
+        setSelectionStates(prev => {
+          const next = typeof value === 'function'
+            ? (value as (p: SelectionStates[K]) => SelectionStates[K])(prev[key])
+            : value;
+          if (next === prev[key]) return prev;
+          return { ...prev, [key]: next };
+        });
+    return { note: make('note'), arc: make('arc'), hairpin: make('hairpin') };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const selected = selectionStates.note;
+  const setSelected = selectionSetters.note;
+  const selectedArc = selectionStates.arc;
+  const setSelectedArc = selectionSetters.arc;
+  const selectedHairpin = selectionStates.hairpin;
+  const setSelectedHairpin = selectionSetters.hairpin;
   const partsScoreRef = useRef<MeasureData[][]>([]);
-  const beatsPerMeasureRef = useRef(beatsPerMeasure);
-  const selectedMeasuresRef = useRef<{ start: number; end: number } | null>(selectedMeasures ?? null);
-  const disRef = useRef(disabled);
-  // 印刷プレビュー中かどうかをrefでも保持する（capture リスナー内で最新値を参照するため）
-  const previewRef = useRef(isPrintPreview);
-  const keySignatureRef = useRef<KeySignature>(normalizedKeySignature);
+  // 最新値ミラー（#244 段1）。宣言時点では selectedArc/selectedHairpin の state が
+  // まだ無いため null で初期化する（state の初期値と同じ。初回レンダー後の一括同期
+  // effect が毎回全フィールドを最新へそろえる）。
+  const latestRef = useRef<{
+    selected: Sel;
+    selectedArc: SelectedArcSel;
+    selectedHairpin: SelectedHairpinSel;
+    activeVoiceIndex: 0 | 1;
+    beatsPerMeasure: number;
+    selectedMeasures: { start: number; end: number } | null;
+    disabled: boolean;
+    isPrintPreview: boolean;
+    keySignature: KeySignature;
+  }>({
+    selected: null,
+    selectedArc: null,
+    selectedHairpin: null,
+    activeVoiceIndex,
+    beatsPerMeasure,
+    selectedMeasures: selectedMeasures ?? null,
+    disabled,
+    isPrintPreview,
+    keySignature: normalizedKeySignature,
+  });
   const notePlayerRef = useRef<NotePlayer | null>(null);
   const soundSourceRef = useRef<SoundSource | null>(null);
   // キーボードハンドラが各パートのclefを参照できるようにrefで保持
   const partsClefRef = useRef(parts.map(p => p.clef));
   // 選択中のスラー/タイ（null = 未選択）
-  const [timeSigEditState, setTimeSigEditState] = useState<{
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
-  // 小節調号変更オーバーレイの状態（null のとき非表示）。StaffCanvas と同じパターン。
-  const [keySigEditState, setKeySigEditState] = useState<{
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
-  // 小節クレフ（音部記号）変更オーバーレイの状態（null のとき非表示）。
-  // 調号と違い、クレフはパートごと（クリックした段）にしか変わらないため partIndex を持つ。
-  const [clefEditState, setClefEditState] = useState<{
-    measureAbsoluteIndex: number;
-    partIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
-
-  const [bpmEditState, setBpmEditState] = useState<{
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
-
-  // リハーサルマーク入力オーバーレイの状態。調号と同じく最上段（partsScore[0]）にのみ保存する。
-  const [rehearsalEditState, setRehearsalEditState] = useState<{
-    measureAbsoluteIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
-
-  // eventIndex は「voiceIndex で指定した声部の events 配列の中での位置」を表す。
-  // 声部2（voiceIndex 1）の音符にも歌詞・運指などを付けられるようにするため、
-  // どの声部を編集しているかをオーバーレイの状態にも持たせている（Issue #112）。
-  const [textEditState, setTextEditState] = useState<{
-    kind: TextElementKind;
-    partIndex: number;
-    measureAbsoluteIndex: number;
-    eventIndex: number;
-    voiceIndex: number;
-    currentValue: string;
-    overlayX: number;
-    overlayY: number;
-  } | null>(null);
 
   // サイズ・位置調整の対象1件。カスタム記号（symbolId で識別）と
   // 標準記号（kind で識別。fingering/dynamics など）の両方を同じ形で扱えるようにする（StaffCanvas と同じ考え方）。
@@ -1309,13 +1308,54 @@ export default function PianoSystemCanvas({
     return toContainerRect(rect);
   };
 
-  // カスタム記号サイズ変更オーバーレイの状態（StaffCanvas の symbolResizeEditState と同じパターン）。
-  // 標準記号（運指・強弱）のサイズ変更にも同じ state を使う（target で対象を区別する）。
-  //
-  // anchor は「調整対象の記号が実際に描かれている範囲」（Issue #230）。
-  // オーバーレイをここに重ねないよう SymbolAdjustOverlay が表示位置を決める。
-  // 開いた時点の値のまま差し替えない（調整中にオーバーレイが逃げないようにするため）。
-  const [symbolResizeEditState, setSymbolResizeEditState] = useState<{
+  // ── オーバーレイ状態の集約（#244 段1b）──
+  // 9個の独立 useState を1つの record へ機械的に集約した。**排他化はしない**（union 化と
+  // ライフサイクル統一は段2）。既存の呼び出し箇所を書き換えないため、従来と同名の
+  // setter ラッパー（updater 形式も可）と読み取り用の別名を置く。各フィールドの遷移は
+  // 従来の個別 setState と同一なので挙動はゼロ差。
+  type OverlayStates = {
+    timeSig: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    keySig: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    clef: {
+    measureAbsoluteIndex: number;
+    partIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    bpm: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    rehearsal: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    text: {
+    kind: TextElementKind;
+    partIndex: number;
+    measureAbsoluteIndex: number;
+    eventIndex: number;
+    voiceIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    symbolResize: {
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
@@ -1323,14 +1363,8 @@ export default function PianoSystemCanvas({
     target: AdjustTarget;
     currentValue: string;
     anchor: OverlayRectLike;
-  } | null>(null);
-
-  // カスタム記号位置調整オーバーレイの状態（symbolResizeEditState と同じパターン。横・縦の2入力のみ違う）
-  //
-  // currentX / currentY は「オーバーレイを開いた時点の保存済みの値」で、最後まで書き換えない。
-  // Esc で開いた時点へ戻すときの戻り先であり、blur だけで閉じたときの no-op 判定の基準でもあるため。
-  // draftX / draftY は矢印キーで動かしている最中の値（まだ保存していない下書き。Issue #205）。
-  const [symbolOffsetEditState, setSymbolOffsetEditState] = useState<{
+    } | null;
+    symbolOffset: {
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
@@ -1342,12 +1376,8 @@ export default function PianoSystemCanvas({
     draftY: number;
     // 調整対象の記号の実描画範囲（Issue #230。symbolResizeEditState の anchor と同じ意味）
     anchor: OverlayRectLike;
-  } | null>(null);
-  const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
-  const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
-
-  // 汎用サイズ・位置調整ツールで、対象の音符に複数の調整可能記号が付いている場合に出す選択リストの状態
-  const [symbolAdjustPickerState, setSymbolAdjustPickerState] = useState<{
+    } | null;
+    symbolPicker: {
     partIndex: number;
     measureAbsoluteIndex: number;
     eventIndex: number;
@@ -1356,7 +1386,56 @@ export default function PianoSystemCanvas({
     options: AdjustTarget[];
     overlayX: number;
     overlayY: number;
-  } | null>(null);
+    } | null;
+  };
+  const [overlayStates, setOverlayStates] = useState<OverlayStates>({
+    timeSig: null, keySig: null, clef: null, bpm: null, rehearsal: null,
+    text: null, symbolResize: null, symbolOffset: null, symbolPicker: null,
+  });
+  // setter ラッパーは1回だけ作る（従来の setState と同じく参照が安定するように）
+  const overlaySetters = useMemo(() => {
+    const make = <K extends keyof OverlayStates>(key: K) =>
+      (value: React.SetStateAction<OverlayStates[K]>) =>
+        setOverlayStates(prev => {
+          const next = typeof value === 'function'
+            ? (value as (p: OverlayStates[K]) => OverlayStates[K])(prev[key])
+            : value;
+          // 素の useState は「同じ値の set」で再レンダーしない（Object.is で bailout）。
+          // record 化してもその性質を保たないと、マウント時の「null を null にする」掃除
+          // effect が毎回新しい record を作って余計な再描画を起こす（実際にテストが割れた）。
+          if (next === prev[key]) return prev;
+          return { ...prev, [key]: next };
+        });
+    return {
+      timeSig: make('timeSig'), keySig: make('keySig'), clef: make('clef'),
+      bpm: make('bpm'), rehearsal: make('rehearsal'), text: make('text'),
+      symbolResize: make('symbolResize'), symbolOffset: make('symbolOffset'),
+      symbolPicker: make('symbolPicker'),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const timeSigEditState = overlayStates.timeSig;
+  const setTimeSigEditState = overlaySetters.timeSig;
+  const keySigEditState = overlayStates.keySig;
+  const setKeySigEditState = overlaySetters.keySig;
+  const clefEditState = overlayStates.clef;
+  const setClefEditState = overlaySetters.clef;
+  const bpmEditState = overlayStates.bpm;
+  const setBpmEditState = overlaySetters.bpm;
+  const rehearsalEditState = overlayStates.rehearsal;
+  const setRehearsalEditState = overlaySetters.rehearsal;
+  const textEditState = overlayStates.text;
+  const setTextEditState = overlaySetters.text;
+  const symbolResizeEditState = overlayStates.symbolResize;
+  const setSymbolResizeEditState = overlaySetters.symbolResize;
+  const symbolOffsetEditState = overlayStates.symbolOffset;
+  const setSymbolOffsetEditState = overlaySetters.symbolOffset;
+  const symbolAdjustPickerState = overlayStates.symbolPicker;
+  const setSymbolAdjustPickerState = overlaySetters.symbolPicker;
+
+  const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
+  const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
+
 
   /**
    * ツールを切り替えたら、開いたままの調整系オーバーレイ（サイズ・位置・調整対象の選択リスト）を
@@ -1483,18 +1562,8 @@ export default function PianoSystemCanvas({
 
   // 選択中の弧。voiceIndex は「その弧が載っている声部」（Issue #190）。
   // これが無いと、声部2の弧を選んだのに声部1の同じ位置の弧を消してしまう。
-  const [selectedArc, setSelectedArc] = useState<{
-    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
-  } | null>(null);
-  const selectedArcRef = useRef<{ partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null>(null);
-  useEffect(() => { selectedArcRef.current = selectedArc; }, [selectedArc]);
 
   // 選択中の松葉（ヘアピン）。弧の選択と同じ「クリックで選択→Deleteで削除」方式
-  const [selectedHairpin, setSelectedHairpin] = useState<{
-    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number;
-  } | null>(null);
-  const selectedHairpinRef = useRef<{ partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null>(null);
-  useEffect(() => { selectedHairpinRef.current = selectedHairpin; }, [selectedHairpin]);
 
   // 弧の直接ドラッグ状態（cpDyOffset をリアルタイム調節 / 反転検知）
   // origin は「ドラッグを始めた瞬間の値」。Esc で中止したときに開始時点の形へ戻すために使う
@@ -1502,7 +1571,13 @@ export default function PianoSystemCanvas({
   //   これらを戻し先に使うと Esc で元の形に戻せない）。
   // apex が true のときは頂点ハンドルからのドラッグ。上下＝膨らみ（従来どおり）に加えて
   // 左右で頂点の位置（apexXRatio）も動かす（Issue #260）。
-  const cpDragRef = useRef<{
+  // ── ドラッグセッションの集約（#244 段1d）──
+  // 弧の曲率/頂点（arcCp）・弧の端点（arcEp）・弧の移動フラグ（arcMoved）・
+  // タイ/松葉の開始点（tieStart）・小節範囲選択（measureAnchor / measureMoved）を
+  // 1つの ref record へ機械的に集約した。ref なので再レンダーは絡まず、
+  // フィールドの読み書きは従来の個別 ref とまったく同じタイミングで行われる。
+  type DragSessions = {
+    arcCp: {
     partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
     startSvgY: number; originalOffset: number;
     baseArcKey: string;   // arcGeomMap 検索用ベースキー（suffix なし）
@@ -1512,18 +1587,29 @@ export default function PianoSystemCanvas({
     startSvgX: number; originalRatio: number;
     origin: { svgY: number; offset: number; svgX: number; ratio: number };
     moved: boolean;       // 実際に形が変わったか（クリックしただけなら false）
-  } | null>(null);
-
-  // 始点・終点ハンドルのドラッグ状態
-  const epDragRef = useRef<{
-    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
-    endpoint: 'start' | 'end';
-    segment: '' | '-1' | '-2';
-    baseArcKey: string;
-    startSvgX: number; startSvgY: number;
-    originalDx: number; originalDy: number;
-    moved: boolean;       // 実際に動かしたか（クリックしただけなら false）
-  } | null>(null);
+    } | null;
+    arcEp: {
+      partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
+      endpoint: 'start' | 'end';
+      segment: '' | '-1' | '-2';
+      baseArcKey: string;
+      startSvgX: number; startSvgY: number;
+      originalDx: number; originalDy: number;
+      moved: boolean;       // 実際に動かしたか（クリックしただけなら false）
+    } | null;
+    arcMoved: boolean;
+    tieStart: {
+      partIndex: number; voiceIndex: number; absoluteIndex: number; noteIndex: number;
+      startKey: string; // ドラッグを開始した符頭の key
+      noteX: number; noteY: number; stemDir: number;
+    } | null;
+    measureAnchor: number | null;
+    measureMoved: boolean;
+  };
+  const dragSessionsRef = useRef<DragSessions>({
+    arcCp: null, arcEp: null, arcMoved: false, tieStart: null,
+    measureAnchor: null, measureMoved: false,
+  });
 
   // 弧のドラッグ中に「いまの SVG と弧の形状台帳」を参照するための口。
   // ドラッグ中の更新は window の mousemove で受けるため（後述の理由）、
@@ -1536,7 +1622,6 @@ export default function PianoSystemCanvas({
 
   // 直前のドラッグで弧の形を変えたか。ドラッグの終わりに必ず来る click で
   // 選択を解除してしまわないよう、1回だけ読み飛ばすために使う。
-  const arcDragMovedRef = useRef(false);
 
   // ── 再クリック巡回（Issue #264）─────────────────────────────────────
   // 当たり判定が重なる場所では一番手前の要素しかクリックを受け取れないため、
@@ -1583,7 +1668,7 @@ export default function PianoSystemCanvas({
     };
 
     // 始点・終点ハンドルのドラッグ（cpDrag より優先）
-    const epDrag = epDragRef.current;
+    const epDrag = dragSessionsRef.current.arcEp;
     if (epDrag) {
       const newDx = epDrag.originalDx + (svgXIn - epDrag.startSvgX);
       const newDy = epDrag.originalDy + (svgYIn - epDrag.startSvgY);
@@ -1616,7 +1701,7 @@ export default function PianoSystemCanvas({
     }
 
     // 描画済み弧のドラッグ調節（カーソルが音符クラスタを超えると方向を自動反転）
-    const cpDrag = cpDragRef.current;
+    const cpDrag = dragSessionsRef.current.arcCp;
     if (!cpDrag) return;
     const svgY = svgYIn;
     const FLIP_THRESHOLD = 20;
@@ -1676,8 +1761,8 @@ export default function PianoSystemCanvas({
    * origin（開始時の値）へ戻してから「移動量ゼロ」でプレビューを描き直す。
    */
   const cancelArcDrag = useCallback((): boolean => {
-    const epDrag = epDragRef.current;
-    const cpDrag = cpDragRef.current;
+    const epDrag = dragSessionsRef.current.arcEp;
+    const cpDrag = dragSessionsRef.current.arcCp;
     if (!epDrag && !cpDrag) return false;
     if (cpDrag) {
       cpDrag.flipApplied = false;
@@ -1690,9 +1775,9 @@ export default function PianoSystemCanvas({
     // 「カーソルが開始位置へ戻った」ことにして描き直す＝移動量ゼロのプレビュー＝開始時点の形
     if (epDrag) updateArcDragPreview(epDrag.startSvgX, epDrag.startSvgY);
     else if (cpDrag) updateArcDragPreview(cpDrag.origin.svgX, cpDrag.origin.svgY);
-    epDragRef.current = null;
-    cpDragRef.current = null;
-    arcDragMovedRef.current = false;
+    dragSessionsRef.current.arcEp = null;
+    dragSessionsRef.current.arcCp = null;
+    dragSessionsRef.current.arcMoved = false;
     return true;
   }, [updateArcDragPreview]);
 
@@ -1708,11 +1793,11 @@ export default function PianoSystemCanvas({
    */
   useEffect(() => {
     const onMove = (ev: MouseEvent) => {
-      const drag = epDragRef.current ?? cpDragRef.current;
+      const drag = dragSessionsRef.current.arcEp ?? dragSessionsRef.current.arcCp;
       const ctx = arcDragContextRef.current;
       if (!drag || !ctx) return;
       drag.moved = true;
-      arcDragMovedRef.current = true;
+      dragSessionsRef.current.arcMoved = true;
       const { x, y } = clientToGroup(ctx.svg, ctx.svgRoot, ev.clientX, ev.clientY);
       updateArcDragPreview(x, y);
     };
@@ -1722,16 +1807,16 @@ export default function PianoSystemCanvas({
       // 実行・破棄される。ここまで残っているのは「SVG の外で離した」等の取りこぼしなので、
       // 後の無関係なクリックで古い計画が発火しないよう必ず捨てる（Issue #264）。
       clickCyclePendingRef.current = null;
-      const epDrag = epDragRef.current;
-      const cpDrag = cpDragRef.current;
+      const epDrag = dragSessionsRef.current.arcEp;
+      const cpDrag = dragSessionsRef.current.arcCp;
       const ctx = arcDragContextRef.current;
       if (!epDrag && !cpDrag) return;
-      epDragRef.current = null;
-      cpDragRef.current = null;
+      dragSessionsRef.current.arcEp = null;
+      dragSessionsRef.current.arcCp = null;
       // ドラッグ直後の click（選択解除の読み飛ばし用）が済んだら必ず下ろす。
       // SVG の外で離すと click 自体が来ないので、タイマーで確実に戻す
       // （click は mouseup と同じタスクで来るため、0ms のタイマーの方が必ず後になる）。
-      window.setTimeout(() => { arcDragMovedRef.current = false; }, 0);
+      window.setTimeout(() => { dragSessionsRef.current.arcMoved = false; }, 0);
       // 掴んだだけ（＝選択のためのクリック）なら保存もしない。
       // 何もしていないのに Undo 履歴が1件増えるのを防ぐ。
       if (!ctx || !(epDrag?.moved || cpDrag?.moved)) return;
@@ -1821,27 +1906,37 @@ export default function PianoSystemCanvas({
   // タイドラッグの開始情報（再レンダリングを発生させないためref管理）。
   // voiceIndex は「ドラッグを開始した時点のアクティブ声部」。確定（mouseup）時に
   // 終点側の声部と一致するかを確かめ、違えば何もしない（声部またぎの弧は許可しない・設計メモ §4）。
-  const tieStartRef = useRef<{
-    partIndex: number; voiceIndex: number; absoluteIndex: number; noteIndex: number;
-    startKey: string; // ドラッグを開始した符頭の key
-    noteX: number; noteY: number; stemDir: number;
-  } | null>(null);
 
   // 小節のドラッグ範囲選択（Issue #145）の途中経過。
   // 選択が変わるたびに描画 useEffect が SVG を作り直す（＝mousedown を受けた rect は
   // 途中で消える）ので、ドラッグ中の情報は要素側ではなく ref に持つ。
-  //   measureDragAnchorRef … ドラッグを開始した小節。null ならドラッグ中ではない
-  //   measureDragMovedRef  … ドラッグで範囲を変えたか。直後に来る click を読み飛ばす判定に使う
-  const measureDragAnchorRef = useRef<number | null>(null);
-  const measureDragMovedRef = useRef(false);
+  //   dragSessionsRef.current.measureAnchor … ドラッグを開始した小節。null ならドラッグ中ではない
+  //   dragSessionsRef.current.measureMoved  … ドラッグで範囲を変えたか。直後に来る click を読み飛ばす判定に使う
   useEffect(() => {
     // ドラッグの終了は譜面の外で指を離した場合も拾う必要があるため window で受ける。
-    const endMeasureDrag = () => { measureDragAnchorRef.current = null; };
+    const endMeasureDrag = () => { dragSessionsRef.current.measureAnchor = null; };
     window.addEventListener('mouseup', endMeasureDrag);
     return () => window.removeEventListener('mouseup', endMeasureDrag);
   }, []);
 
-  useEffect(()=>{selRef.current=selected;},[selected]);
+  // 「最新値ミラー」（#244 段1）: deps 空の useEffect（キーボード・window リスナー）から
+  // 最新の props/state を読むための ref。従来は9本の個別 ref + 同期 effect 9個だったものを
+  // この1本に集約した。deps 無しの effect は毎レンダー後に走るが、書く値はそのレンダーの
+  // 最新値そのものなので、個別 deps のときと観測できる差はない（同値の再代入は無害）。
+  // 書き込みはこの effect だけが行い、読み手は読み取り専用で使う。
+  useEffect(() => {
+    latestRef.current = {
+      selected,
+      selectedArc,
+      selectedHairpin,
+      activeVoiceIndex,
+      beatsPerMeasure,
+      selectedMeasures: selectedMeasures ?? null,
+      disabled,
+      isPrintPreview,
+      keySignature: normalizedKeySignature,
+    };
+  });
 
   // キーボードハンドラは deps [] で1回だけ登録するため、そのままでは初回レンダー時の
   // partsScore しか見えない（＝古い譜面を読んでしまう）。削除の通知文（何を消したか）を
@@ -1897,14 +1992,9 @@ export default function PianoSystemCanvas({
     return () => window.removeEventListener(SCORE_SELECTION_CLEAR_EVENT, onClearRequest);
   }, []);
 
-  useEffect(()=>{disRef.current=disabled;},[disabled]);
-  useEffect(()=>{previewRef.current=isPrintPreview;},[isPrintPreview]);
   // 連符グループのコピー＆ペースト（Issue #234）はキーボードハンドラ（deps が空の useEffect）から
   // 使うため、props/派生値を ref に写しておく。ここを props 直参照にすると、
   // ハンドラが最初のレンダー時の古い値を握ったままになる。
-  useEffect(()=>{activeVoiceIndexRef.current=activeVoiceIndex;},[activeVoiceIndex]);
-  useEffect(()=>{beatsPerMeasureRef.current=beatsPerMeasure;},[beatsPerMeasure]);
-  useEffect(()=>{selectedMeasuresRef.current=selectedMeasures??null;},[selectedMeasures]);
   // 印刷プレビュー中は譜面SVGへのクリック編集を一括で遮断する。
   // 個々のヒット要素（40箇所超）へ isPrintPreview チェックを足すのではなく、
   // SVGの親コンテナで capture フェーズのうちに stopPropagation することで、
@@ -1913,7 +2003,7 @@ export default function PianoSystemCanvas({
     const container = ref.current;
     if (!container) return;
     const blockEditingPointerEvent = (e: Event) => {
-      if (!previewRef.current) return;
+      if (!latestRef.current.isPrintPreview) return;
       e.stopPropagation();
     };
     const eventNames: (keyof HTMLElementEventMap)[] = ['click', 'mousedown', 'mouseup', 'dblclick'];
@@ -1922,7 +2012,6 @@ export default function PianoSystemCanvas({
       eventNames.forEach(name => container.removeEventListener(name, blockEditingPointerEvent, true));
     };
   }, []);
-  useEffect(()=>{keySignatureRef.current=normalizedKeySignature;},[normalizedKeySignature]);
   // partsの変更（基本的にない）に追従
   partsClefRef.current = parts.map(p => p.clef);
   // キーボードハンドラから「いまの譜面データ」を読むための ref（Issue #234 のコピー）。
@@ -2142,9 +2231,9 @@ export default function PianoSystemCanvas({
   /* ----- キーボード ----- */
   useEffect(()=>{
     const clearArcInteraction=()=>{
-      cpDragRef.current=null;
-      epDragRef.current=null;
-      tieStartRef.current=null;
+      dragSessionsRef.current.arcCp=null;
+      dragSessionsRef.current.arcEp=null;
+      dragSessionsRef.current.tieStart=null;
     };
 
     // 削除された音符/休符（イベント）を参照している編集オーバーレイ（歌詞入力欄・
@@ -2164,7 +2253,7 @@ export default function PianoSystemCanvas({
     };
 
     const onKey=(e:KeyboardEvent)=>{
-      if(disRef.current)return;
+      if(latestRef.current.disabled)return;
 
       // 優先0: 弧をドラッグしている最中の Esc は「ドラッグの中止」だけを行う。
       // 開始時点の形へ戻し、保存もしない・選択も残す（もう一度掴み直せる）。
@@ -2172,7 +2261,7 @@ export default function PianoSystemCanvas({
       if(e.key==='Escape'&&cancelArcDrag()){e.preventDefault();return;}
 
       // 優先1: スラー/タイが選択中 → スラー操作（Delete/Escape/f）
-      const arcSel=selectedArcRef.current;
+      const arcSel=latestRef.current.selectedArc;
       if(arcSel){
         if(e.key==='Delete'||e.key==='Backspace'){
           // 通知文は「消す前の譜面」からしか作れないので、state を書き換える前に組み立てる。
@@ -2207,7 +2296,7 @@ export default function PianoSystemCanvas({
       }
 
       // 優先1.5: 松葉（ヘアピン）が選択中 → Delete で削除 / Escape で選択解除
-      const hpSel=selectedHairpinRef.current;
+      const hpSel=latestRef.current.selectedHairpin;
       if(hpSel){
         if(e.key==='Delete'||e.key==='Backspace'){
           // 弧と同じく、消す前の譜面から通知文を作っておく（Issue #238）
@@ -2252,7 +2341,7 @@ export default function PianoSystemCanvas({
       }
 
       // 優先2: 音符が選択中 → 音符操作
-      const sel=selRef.current;
+      const sel=latestRef.current.selected;
       if(!sel)return;
       const {partIndex,measure,index,keyIndex}=sel;
       const clef=partsClefRef.current[partIndex]??'treble';
@@ -2274,7 +2363,7 @@ export default function PianoSystemCanvas({
       // 音符を選んだ状態で押すと、その音符が属する連符グループ全体をクリップボードへ入れる。
       // 小節が選択されているときは従来どおり「小節のコピー」（ScorePage 側のハンドラ）を優先する
       // ため、ここでは何もしない（両方が同じクリップボードを奪い合わないようにするための線引き）。
-      if((e.metaKey||e.ctrlKey)&&e.key==='c'&&!isTextInputTarget&&!selectedMeasuresRef.current){
+      if((e.metaKey||e.ctrlKey)&&e.key==='c'&&!isTextInputTarget&&!latestRef.current.selectedMeasures){
         const events=getVoiceEvents(partsScoreRef.current[partIndex]?.[measure]??{events:[]},voiceIndex);
         const group=copyTupletGroupForClipboard(events,index);
         // 連符の外の音符ではコピーするものが無いので、従来どおり何も起きない。
@@ -2291,7 +2380,7 @@ export default function PianoSystemCanvas({
         if(!group){
           // 小節を選んでいるときの Cmd/Ctrl+V は「小節の貼り付け」（ScorePage 側）が受け持つ。
           // そこで喋ると、ちゃんと効いている操作へ的外れな通知をかぶせてしまうので黙って譲る。
-          if(!selectedMeasuresRef.current){
+          if(!latestRef.current.selectedMeasures){
             // 何もコピーしていないまま貼り付けを押した行き止まり。次の一手（Cmd/Ctrl+C）まで伝える
             // （Issue #318「行き止まりは喋る」。文言は休符クリック側と同じビルダーを共用する）
             notifyScoreEdit(describeTupletGroupPasteUnavailable('emptyClipboard'));
@@ -2299,8 +2388,8 @@ export default function PianoSystemCanvas({
           return;
         }
         // 貼り付け先の声部は「いま編集中の声部」（コピー元の声部は問わない）。
-        const targetVoiceIndex=activeVoiceIndexRef.current;
-        const beatsLimit=beatsPerMeasureRef.current;
+        const targetVoiceIndex=latestRef.current.activeVoiceIndex;
+        const beatsLimit=latestRef.current.beatsPerMeasure;
         // 空き拍の判定は setPartsScore の updater の**外**で行う（Issue #331）。
         // updater の中で通知すると、React が updater を2回呼ぶ場面（StrictMode など）で
         // 同じ通知が二重に出てしまうため（.claude/specs/dead-end-speaks/design.md の約束）。
@@ -2386,7 +2475,7 @@ export default function PianoSystemCanvas({
           ev,
           keyIndex,
           { up, shiftKey: e.shiftKey, altKey: e.altKey },
-          { lineToKey: l2k, keyToLine: k2l, keySignature: keySignatureRef.current, defaultRestKey: defaultRestKeyForClef(clef) }
+          { lineToKey: l2k, keyToLine: k2l, keySignature: latestRef.current.keySignature, defaultRestKey: defaultRestKeyForClef(clef) }
         );
         setS(prev=>{
           if(measure>=prev.length)return prev;
@@ -2749,11 +2838,11 @@ export default function PianoSystemCanvas({
     // SVG 背景クリック → 弧の選択を解除
     // ドラッグ直後のクリック（ドラッグの終わりに必ず1回来る）では解除しない。
     // 解除してしまうと1回ドラッグするたびにハンドルが消え、続けて微調整できないため
-    // （小節のドラッグ範囲選択が measureDragMovedRef で同じことをしているのと同じ考え方）。
+    // （小節のドラッグ範囲選択が dragSessionsRef.current.measureMoved で同じことをしているのと同じ考え方）。
     svg.addEventListener('click',()=>{
-      tieStartRef.current=null;
+      dragSessionsRef.current.tieStart=null;
       tiePreviewPath.style.display='none';
-      if(arcDragMovedRef.current){arcDragMovedRef.current=false;return;}
+      if(dragSessionsRef.current.arcMoved){dragSessionsRef.current.arcMoved=false;return;}
       setSelectedArc(null);
       setSelectedHairpin(null);
     });
@@ -2761,11 +2850,11 @@ export default function PianoSystemCanvas({
     svg.addEventListener('mousemove',(ev)=>{
       // 弧のドラッグ中（端点・曲率）は window 側のハンドラが処理するので、ここでは何もしない。
       // 両方で処理すると同じ mousemove を2回適用してしまい、弧がカーソルの倍の速さで動く。
-      if(epDragRef.current||cpDragRef.current)return;
+      if(dragSessionsRef.current.arcEp||dragSessionsRef.current.arcCp)return;
       // タイ／松葉 新規ドラッグのプレビュー
-      if(!tieStartRef.current||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
+      if(!dragSessionsRef.current.tieStart||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
       const{x:mx,y:my}=clientToGroup(svg,svgRoot,(ev as MouseEvent).clientX,(ev as MouseEvent).clientY);
-      const{noteX:sx,noteY:sy,stemDir}=tieStartRef.current;
+      const{noteX:sx,noteY:sy,stemDir}=dragSessionsRef.current.tieStart;
       const upward=stemDir!==1;
       // 段またぎドラッグでは mx < sx（右→左）になるため Math.abs で判定する
       const hasMoved=Math.abs(mx-sx)>4||Math.abs(my-sy)>4;
@@ -2782,8 +2871,8 @@ export default function PianoSystemCanvas({
     svg.addEventListener('mouseup',()=>{
       // 弧のドラッグの確定は window 側（arcDrag セッション）が受け持つ。
       // ここで受けると、SVG の外で指を離したときだけ確定されない不公平が生まれる。
-      if(epDragRef.current||cpDragRef.current)return;
-      tieStartRef.current=null;
+      if(dragSessionsRef.current.arcEp||dragSessionsRef.current.arcCp)return;
+      dragSessionsRef.current.tieStart=null;
       tiePreviewPath.style.display='none';
     });
 
@@ -3314,7 +3403,7 @@ export default function PianoSystemCanvas({
           setSelected(null);
           const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
           // 弧の本体を掴んだときは従来どおり膨らみ（上下）だけ。左右は動かさない
-          cpDragRef.current={partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,apex:false,startSvgX:svgX,originalRatio:apexXRatio,origin:{svgY,offset:cpDyOffset,svgX,ratio:apexXRatio},moved:false};
+          dragSessionsRef.current.arcCp={partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,apex:false,startSvgX:svgX,originalRatio:apexXRatio,origin:{svgY,offset:cpDyOffset,svgX,ratio:apexXRatio},moved:false};
         });
         // 押した場所で動かさずに離したときだけ、預けてあった巡回を実行する（Issue #264）。
         // 再描画で当たり判定パスが作り直されていても、計画は ref に預けてあるので拾える。
@@ -3322,7 +3411,7 @@ export default function PianoSystemCanvas({
           const pending=clickCyclePendingRef.current;
           clickCyclePendingRef.current=null;
           // ドラッグで形を変えたのなら、それは巡回ではなく編集操作
-          if(!pending||arcDragMovedRef.current)return;
+          if(!pending||dragSessionsRef.current.arcMoved)return;
           commitClickCycle(pending);
         });
         hitPath.addEventListener('click',(e)=>{e.stopPropagation();});
@@ -3371,7 +3460,7 @@ export default function PianoSystemCanvas({
             e.preventDefault();e.stopPropagation();
             const{partIndex:pi2,voiceIndex:vi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2}=arcIdentity!;
             const{x:sx,y:sy}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-            epDragRef.current={partIndex:pi2,voiceIndex:vi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,segment:seg,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy,moved:false};
+            dragSessionsRef.current.arcEp={partIndex:pi2,voiceIndex:vi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,segment:seg,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy,moved:false};
           });
           h.addEventListener('click',e=>e.stopPropagation());
           svgRoot.appendChild(h);
@@ -3396,7 +3485,7 @@ export default function PianoSystemCanvas({
           e.preventDefault();e.stopPropagation();
           const{partIndex:pi3,voiceIndex:vi3,fromMeasure:fm3,fromEvent:fe3,arcIndex:ai3}=arcIdentity!;
           const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-          cpDragRef.current={partIndex:pi3,voiceIndex:vi3,fromMeasure:fm3,fromEvent:fe3,arcIndex:ai3,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,apex:true,startSvgX:svgX,originalRatio:apexXRatio,origin:{svgY,offset:cpDyOffset,svgX,ratio:apexXRatio},moved:false};
+          dragSessionsRef.current.arcCp={partIndex:pi3,voiceIndex:vi3,fromMeasure:fm3,fromEvent:fe3,arcIndex:ai3,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,apex:true,startSvgX:svgX,originalRatio:apexXRatio,origin:{svgY,offset:cpDyOffset,svgX,ratio:apexXRatio},moved:false};
         });
         apexHandle.addEventListener('click',e=>e.stopPropagation());
         svgRoot.appendChild(apexHandle);
@@ -4507,17 +4596,17 @@ export default function PianoSystemCanvas({
             // 再描画で作り直され、click の発火先が親要素になる）があり、
             // 消し忘れると次の1クリックを読み飛ばしてしまうため、
             // 下の早期 return より前で必ずリセットする。
-            measureDragMovedRef.current = false;
+            dragSessionsRef.current.measureMoved = false;
             // ドラッグ範囲選択は小節選択ツール中のみ。
             // Shift+クリック（範囲拡張）は従来どおり click 側で処理するのでここでは始めない。
             if (!isSelectTool || me.shiftKey) return;
-            measureDragAnchorRef.current = absI;
+            dragSessionsRef.current.measureAnchor = absI;
           });
           el.addEventListener('mouseenter', () => {
-            const anchor = measureDragAnchorRef.current;
+            const anchor = dragSessionsRef.current.measureAnchor;
             if (anchor == null) return;
             // 開始小節から今カーソルがある小節までを範囲にする（右→左のドラッグでも同じ）。
-            measureDragMovedRef.current = true;
+            dragSessionsRef.current.measureMoved = true;
             onMeasureRangeSelect?.(Math.min(anchor, absI), Math.max(anchor, absI));
           });
         };
@@ -4547,10 +4636,10 @@ export default function PianoSystemCanvas({
           // Shift+クリックを他ツールでも受けるのは、コピー＆ペーストのためだけに
           // ツールを持ち替えなくて済むようにするため（Issue #145）。
           if (isSelectTool || (e as MouseEvent).shiftKey) {
-            if (measureDragMovedRef.current) {
+            if (dragSessionsRef.current.measureMoved) {
               // 直前のドラッグで範囲を決めたときは、そのあとに来る click で
               // 単一小節へ戻してしまわないよう1回だけ読み飛ばす。
-              measureDragMovedRef.current = false;
+              dragSessionsRef.current.measureMoved = false;
               return;
             }
             onMeasureSelect?.(absI, (e as MouseEvent).shiftKey);
@@ -4819,8 +4908,8 @@ export default function PianoSystemCanvas({
                 const me=e as MouseEvent;
                 // 小節選択ツール中と Shift+クリックは、アクティブ声部の符頭と同じく小節選択のまま
                 if(isSelectTool||me.shiftKey){
-                  if(measureDragMovedRef.current){
-                    measureDragMovedRef.current=false;
+                  if(dragSessionsRef.current.measureMoved){
+                    dragSessionsRef.current.measureMoved=false;
                     return;
                   }
                   onMeasureSelect?.(absI,me.shiftKey);
@@ -5017,7 +5106,7 @@ export default function PianoSystemCanvas({
               if(disabled||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
               // Issue #112 で入れていた「声部2ではタイ／松葉ドラッグを受け付けない」ガードは、
               // 確定処理（applyArc / applyHairpin）の書き込み先を声部にそろえた Issue #190 で外した。
-              // 声部の記録は tieStartRef が持ち、確定時に終点の声部と一致するかを確かめる。
+              // 声部の記録は dragSessionsRef.current.tieStart が持ち、確定時に終点の声部と一致するかを確かめる。
               if(activeEvs[j]?.isRest)return;
               e.preventDefault();
               const n=activeVfNotes[j] as unknown as Record<string,(...a:unknown[])=>unknown>;
@@ -5032,15 +5121,15 @@ export default function PianoSystemCanvas({
               // クリックしたY座標に最も近い符頭 key を特定する
               const {y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
               const startKey=findNearestKey(evKeys,ly,stave,k2l);
-              tieStartRef.current={partIndex:pi,voiceIndex:activeVoiceIndex,absoluteIndex:absI,noteIndex:j,startKey,noteX,noteY,stemDir};
+              dragSessionsRef.current.tieStart={partIndex:pi,voiceIndex:activeVoiceIndex,absoluteIndex:absI,noteIndex:j,startKey,noteX,noteY,stemDir};
             });
 
             // タイ／松葉ドラッグ確定
             hit.addEventListener('mouseup',e=>{
               if(disabled||!('mode' in tool)||(tool.mode!=='tie'&&tool.mode!=='hairpin'))return;
-              const start=tieStartRef.current;
+              const start=dragSessionsRef.current.tieStart;
               tiePreviewPath.style.display='none';
-              tieStartRef.current=null;
+              dragSessionsRef.current.tieStart=null;
               if(!start||start.partIndex!==pi)return;
               // 声部をまたぐ弧は許可しない（設計メモ §4 の確定裁定・Issue #190）。
               // 終点側の当たり判定は常にアクティブ声部から作られるので、
@@ -5068,8 +5157,8 @@ export default function PianoSystemCanvas({
               // （音符の選択・配置はしない）。小節の背景クリックと同じ扱いに揃えることで、
               // 音符が詰まった小節でも選択操作が空振りしないようにする（Issue #145）。
               if (isSelectTool || (e as MouseEvent).shiftKey) {
-                if (measureDragMovedRef.current) {
-                  measureDragMovedRef.current = false;
+                if (dragSessionsRef.current.measureMoved) {
+                  dragSessionsRef.current.measureMoved = false;
                   return;
                 }
                 onMeasureSelect?.(absI, (e as MouseEvent).shiftKey);
