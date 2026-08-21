@@ -136,3 +136,29 @@ src/utils/voiceMeasureUtils.ts … scoreModel（voices[] 統一の正規経路�
 
 - SVG は選択・編集のたびに `innerHTML=''` から作り直されるため、**参照を持ち回らず `currentSvg(container)` で毎回掴み直す**（既存 ClickCycle テストの作法）
 - 小節背景クリックは rect 自身の x/y 属性から座標を作る（TupletHideNumber テストの作法）
+
+## 7. 段2 の実装記録（2026-08-21）
+
+運用者承認済みの差分表（5行）どおりに実装した。PR は段2a（reducer+排他union・挙動差ゼロ）と段2b（承認済み挙動変更）の2コミット構成。
+
+### 実装
+
+- **reducer**: `editorLocalReducer`（selection union + overlay union の2フィールド）。アクションは
+  `SELECTION_SET` / `OVERLAY_SET`（従来 setter 相当・同値 bailout 維持）+ 掃除の3遷移
+  `TOOL_CHANGED`（オーバーレイ全種キャンセル）/ `CLEAR_ALL`（選択+オーバーレイ）/ `SELECTION_CLAIMED_BY_OTHER`
+- **§2-2 の表との対応**: TOOL_CHANGED=toolIdentityKey effect / CLEAR_ALL=SCORE_SELECTION_CLEAR_EVENT
+  リスナー（タブ切替・ツール変更・再生開始）/ SELECTION_CLAIMED=専用リスナー /
+  GLOBAL_POINTER_UP・POINTER_CANCEL=window リスナー（掃除対象は tieStart のみ。
+  arcCp/arcEp/measureAnchor は既存の window 掃除があり、arcMoved/measureMoved は
+  「直後の click を読み飛ばす」ため mouseup 後も意図的に生存させる）
+- **EVENT_DELETED / SCORE_REPLACED** の掃除は従来実装（2158-2161 / 整合 effect）をそのまま維持
+ （reducer 遷移への移設は必要になったときでよい。動いているものの置き換えは目的ではない）
+
+### 検証と観測
+
+- 段2b 適用時、**割れたテストは characterization の 1 と 4 だけ**＝変更は差分表の予告どおりで
+  他への波及なし（段0.5 の狙いがそのまま機能した）
+- テスト4 は「残留しない」+「正規のドラッグ確定は従来どおり」の両方を固定する形へ更新
+- 二クリック式のタイ（Aをクリック→Bをクリック）はもともと存在しない
+ （SVG 内 mouseup/click が従来から tieStart を掃除している）ため、window 掃除の追加で
+  失われた操作は無い

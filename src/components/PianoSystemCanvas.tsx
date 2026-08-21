@@ -1383,7 +1383,15 @@ export default function PianoSystemCanvas({
   // 型安全は同名ラッパー（従来の setter と同じシグネチャ）で担保する
   type EditorLocalAction =
     | { type: 'SELECTION_SET'; slot: SelectionSlot; value: unknown }
-    | { type: 'OVERLAY_SET'; kind: OverlayKind; value: unknown };
+    | { type: 'OVERLAY_SET'; kind: OverlayKind; value: unknown }
+    // ツール切替: オーバーレイを全種キャンセル（差分表#1）。選択は #238 の既存仕様
+    //（ScorePage からの CLEAR 要求）に任せるためここでは触らない
+    | { type: 'TOOL_CHANGED' }
+    // タブ切替・ツール変更・再生開始の掃除要求（SCORE_SELECTION_CLEAR_EVENT）:
+    // 従来の選択解除に加えてオーバーレイも閉じる（差分表#4）
+    | { type: 'CLEAR_ALL' }
+    // 他の段が選択を取った（SELECTION_CLAIMED_EVENT）: 自段の選択だけ手放す
+    | { type: 'SELECTION_CLAIMED_BY_OTHER' };
   const editorLocalReducer = (state: EditorLocalState, action: EditorLocalAction): EditorLocalState => {
     switch (action.type) {
       case 'SELECTION_SET': {
@@ -1409,6 +1417,18 @@ export default function PianoSystemCanvas({
           return { ...state, overlay: null };
         }
         return { ...state, overlay: { kind: action.kind, payload: next } as OverlayUnion };
+      }
+      case 'TOOL_CHANGED': {
+        if (state.overlay == null) return state;
+        return { ...state, overlay: null };
+      }
+      case 'CLEAR_ALL': {
+        if (state.overlay == null && state.selection == null) return state;
+        return { selection: null, overlay: null };
+      }
+      case 'SELECTION_CLAIMED_BY_OTHER': {
+        if (state.selection == null) return state;
+        return { ...state, selection: null };
       }
     }
   };
@@ -1476,9 +1496,12 @@ export default function PianoSystemCanvas({
    */
   const toolIdentityKey = resolveToolIdentityKey(tool);
   useEffect(() => {
-    setSymbolResizeEditState(null);
-    setSymbolOffsetEditState(null);
-    setSymbolAdjustPickerState(null);
+    // 従来は調整系3種だけを閉じていたが、小節メタ系（拍子/調号/クレフ/テンポ/
+    // リハーサル/テキスト）が開いたまま残る非対称が「次のクリックが欄を閉じるだけに
+    // 消費される」プチ無反応を生んでいた。段2で9種すべてキャンセルへ統一
+    //（#244 差分表#1・運用者承認 2026-08-21）。キャンセル扱い＝下書き破棄は
+    // 従来の調整系と同じ意味論（Esc と同じ経路）。
+    dispatchEditorLocal({ type: 'TOOL_CHANGED' });
   }, [toolIdentityKey]);
 
   /**
@@ -1631,6 +1654,27 @@ export default function PianoSystemCanvas({
     arcCp: null, arcEp: null, arcMoved: false, tieStart: null,
     measureAnchor: null, measureMoved: false,
   });
+  // SVG の外でマウスを離した／OSがポインタを取り上げた（pointercancel）ときの
+  // ドラッグ掃除（#244 段2・差分表#3）。従来はタイ/松葉の開始点（tieStart）だけが
+  // SVG 内の mouseup/click でしか掃除されず、SVG 外で離すと残留して
+  // 「mousedown なしの mouseup だけでタイが確定する」バグになっていた
+  //（段0.5 の characterization テストで実証済み）。
+  // 対象は tieStart のみ: arcCp/arcEp/measureAnchor は既存の window mouseup 掃除があり、
+  // arcMoved/measureMoved は「直後の click を1回読み飛ばす」ために mouseup 後も
+  // 意図的に生存させるフラグなのでここでは触らない。
+  // このリスナーは bubble の最後（window）で走るため、正規のタイ確定
+  //（音符ヒット要素の mouseup → 確定 → tieStart クリア）を妨げない。
+  useEffect(() => {
+    const clearTieStart = () => {
+      if (dragSessionsRef.current.tieStart) dragSessionsRef.current.tieStart = null;
+    };
+    window.addEventListener('mouseup', clearTieStart);
+    window.addEventListener('pointercancel', clearTieStart);
+    return () => {
+      window.removeEventListener('mouseup', clearTieStart);
+      window.removeEventListener('pointercancel', clearTieStart);
+    };
+  }, []);
 
   // 弧のドラッグ中に「いまの SVG と弧の形状台帳」を参照するための口。
   // ドラッグ中の更新は window の mousemove で受けるため（後述の理由）、
@@ -1989,25 +2033,23 @@ export default function PianoSystemCanvas({
       if (owner === selectionOwnerIdRef.current) return;
       // 選択解除は state 経由で行う（selected は描画 useEffect の deps に入っているので、
       // クリアすれば青い選択枠も再描画で消える）。
-      setSelected(null);
-      setSelectedArc(null);
-      setSelectedHairpin(null);
+      dispatchEditorLocal({ type: 'SELECTION_CLAIMED_BY_OTHER' });
     };
     window.addEventListener(SELECTION_CLAIMED_EVENT, onClaim);
     return () => window.removeEventListener(SELECTION_CLAIMED_EVENT, onClaim);
   }, []);
 
-  // モードが変わったら選択を手放す（Issue #238）。
+  // モードが変わったら選択とオーバーレイを手放す（Issue #238 / #244 差分表#4）。
   // タブ切り替え・ツール変更・再生開始で ScorePage から要求が飛んでくる。
   // 選択（青枠）が残ったままだと、そのあとユーザーが「入力欄を消すつもり」で押した
   // Delete / Backspace が譜面へ届き、音符が無言で消えてしまうため。
-  // 音符だけでなくスラー/タイ・松葉の選択も同時に解除する（どれも Delete の対象になるので、
-  // 1つだけ残すと同じ事故が形を変えて起きる）。
+  // 段2からはオーバーレイも一緒に閉じる: 再生中は編集がロックされるのに
+  // 入力欄だけ画面に残るちぐはぐを解消する（運用者承認 2026-08-21）。
+  // ドラッグセッションはマウス操作の途中でしか存在せず、この要求はタブ操作・
+  // 再生ボタン経由（＝マウスは既に離れている）でしか来ないため対象外。
   useEffect(() => {
     const onClearRequest = () => {
-      setSelected(null);
-      setSelectedArc(null);
-      setSelectedHairpin(null);
+      dispatchEditorLocal({ type: 'CLEAR_ALL' });
     };
     window.addEventListener(SCORE_SELECTION_CLEAR_EVENT, onClearRequest);
     return () => window.removeEventListener(SCORE_SELECTION_CLEAR_EVENT, onClearRequest);
