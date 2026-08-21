@@ -4756,6 +4756,92 @@ export default function PianoSystemCanvas({
           });
         };
 
+        /**
+         * 「小節を対象にするツール」の共通処理（#244 段3a）。
+         * 小節背景（.vf-hit）と音符（.vf-note-hit）のどちらをクリックしても、
+         * 小節単位のツールは同じ動きをするべきで、従来はほぼ同一のコードが2本あった
+         * （調査で挙がった二重実装8モード）。片方だけ直して食い違う事故（#280型）を
+         * 防ぐため、ここ1か所へ集約する。
+         * 戻り値 'handled' はこの関数が処理を終えたこと、'passThrough' は対象外の
+         * ツールで呼び出し側が続きを処理すべきことを表す（設計メモ§2-3の3値型の先行形。
+         * 拒否＝rejected に相当するものはこの集合には無い: tie/hairpin はドラッグ操作
+         * なので click では意図的に何もしない＝handled として扱う）。
+         */
+        const handleMeasureScopedTool = (e: Event): 'handled' | 'passThrough' => {
+          if (!('mode' in tool)) return 'passThrough';
+          const me = e as MouseEvent;
+          const overlayAt = () => {
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            return {
+              overlayX: me.clientX - (containerRect?.left ?? 0),
+              overlayY: me.clientY - (containerRect?.top ?? 0),
+            };
+          };
+          switch (tool.mode) {
+            case 'tie':
+            case 'hairpin':
+              // タイ/松葉はドラッグで作る。click では何もしない（従来どおり）
+              return 'handled';
+            case 'repeat':
+              toggleRepeatMarkerAcrossParts(absI, tool.repeat);
+              return 'handled';
+            case 'ending':
+              toggleEndingAcrossParts(absI, tool.ending);
+              return 'handled';
+            case 'measureTempo': {
+              const currentBpm = partsScore[0]?.[absI]?.bpm;
+              setBpmEditState({
+                measureAbsoluteIndex: absI,
+                currentValue: currentBpm != null ? String(currentBpm) : '',
+                ...overlayAt(),
+              });
+              return 'handled';
+            }
+            case 'measureTimeSig': {
+              const currentTS = partsScore[0]?.[absI]?.timeSignature;
+              setTimeSigEditState({
+                measureAbsoluteIndex: absI,
+                currentValue: currentTS ? `${currentTS[0]}/${currentTS[1]}` : '',
+                ...overlayAt(),
+              });
+              return 'handled';
+            }
+            case 'measureKeySig': {
+              // 調号は最上段（partsScore[0]）の小節データに保存する
+              const currentKS = partsScore[0]?.[absI]?.keySignature;
+              setKeySigEditState({
+                measureAbsoluteIndex: absI,
+                currentValue: currentKS ?? '',
+                ...overlayAt(),
+              });
+              return 'handled';
+            }
+            case 'measureClef': {
+              // クレフはクリックした段（パート）自身の小節データに保存する
+              const currentClef = partsScore[pi]?.[absI]?.clef;
+              setClefEditState({
+                measureAbsoluteIndex: absI,
+                partIndex: pi,
+                currentValue: currentClef ?? '',
+                ...overlayAt(),
+              });
+              return 'handled';
+            }
+            case 'measureRehearsal': {
+              // リハーサルマークも最上段（partsScore[0]）の小節データに保存する
+              const currentMark = partsScore[0]?.[absI]?.rehearsalMark;
+              setRehearsalEditState({
+                measureAbsoluteIndex: absI,
+                currentValue: currentMark ?? suggestNextRehearsalMark(partsScore[0] ?? []),
+                ...overlayAt(),
+              });
+              return 'handled';
+            }
+            default:
+              return 'passThrough';
+          }
+        };
+
         const ir=document.createElementNS('http://www.w3.org/2000/svg','rect');
         // 選択中は専用クラスを足す。App.css の `.vf-hit` は当たり判定を透明にする
         // `!important` 付きの指定なので、色を出すには詳細度の高い別クラスが要る。
@@ -4792,15 +4878,9 @@ export default function PianoSystemCanvas({
           }
           setSelectedArc(null);
           setSelectedHairpin(null);
-          if('mode' in tool&&(tool.mode==='tie'||tool.mode==='hairpin'))return;
-          if('mode' in tool&&tool.mode==='repeat'){
-            toggleRepeatMarkerAcrossParts(absI, tool.repeat);
-            return;
-          }
-          if('mode' in tool&&tool.mode==='ending'){
-            toggleEndingAcrossParts(absI, tool.ending);
-            return;
-          }
+          // 小節単位のツール（タイ/松葉スキップ・リピート・終止括弧・小節メタ5種）は
+          // 音符クリック側と共通のディスパッチャで処理する（#244 段3a）
+          if (handleMeasureScopedTool(e) === 'handled') return;
           if('mode' in tool&&tool.mode==='dynamic'){
             // 強弱記号は既存の音符へ付ける情報なので、背景クリックでは何もしない。
             return;
@@ -4841,72 +4921,6 @@ export default function PianoSystemCanvas({
           }
           if('mode' in tool&&tool.mode==='textElement'){
             // テキスト要素も既存の音符へ付ける情報なので、背景クリックでは何もしない。
-            return;
-          }
-          if('mode' in tool&&tool.mode==='measureTempo'){
-            // 小節テンポ変更: 小節クリックで BPM 入力欄を表示する
-            const containerRect = containerRef.current?.getBoundingClientRect();
-            const me = e as MouseEvent;
-            const currentBpm = partsScore[0]?.[absI]?.bpm;
-            setBpmEditState({
-              measureAbsoluteIndex: absI,
-              currentValue: currentBpm != null ? String(currentBpm) : '',
-              overlayX: me.clientX - (containerRect?.left ?? 0),
-              overlayY: me.clientY - (containerRect?.top ?? 0),
-            });
-            return;
-          }
-          if('mode' in tool&&tool.mode==='measureTimeSig'){
-            // 途中拍子変更: 小節クリックで拍子選択ドロップダウンを表示する
-            const containerRect = containerRef.current?.getBoundingClientRect();
-            const me = e as MouseEvent;
-            const currentTS = partsScore[0]?.[absI]?.timeSignature;
-            setTimeSigEditState({
-              measureAbsoluteIndex: absI,
-              currentValue: currentTS ? `${currentTS[0]}/${currentTS[1]}` : '',
-              overlayX: me.clientX - (containerRect?.left ?? 0),
-              overlayY: me.clientY - (containerRect?.top ?? 0),
-            });
-            return;
-          }
-          if('mode' in tool&&tool.mode==='measureKeySig'){
-            // 途中調号変更: 小節クリックで調号選択ドロップダウンを表示する（最上段の小節データに保存する）
-            const containerRect = containerRef.current?.getBoundingClientRect();
-            const me = e as MouseEvent;
-            const currentKS = partsScore[0]?.[absI]?.keySignature;
-            setKeySigEditState({
-              measureAbsoluteIndex: absI,
-              currentValue: currentKS ?? '',
-              overlayX: me.clientX - (containerRect?.left ?? 0),
-              overlayY: me.clientY - (containerRect?.top ?? 0),
-            });
-            return;
-          }
-          if('mode' in tool&&tool.mode==='measureClef'){
-            // 途中クレフ変更: クリックした段（パート）自身の小節データに保存する
-            const containerRect = containerRef.current?.getBoundingClientRect();
-            const me = e as MouseEvent;
-            const currentClef = partsScore[pi]?.[absI]?.clef;
-            setClefEditState({
-              measureAbsoluteIndex: absI,
-              partIndex: pi,
-              currentValue: currentClef ?? '',
-              overlayX: me.clientX - (containerRect?.left ?? 0),
-              overlayY: me.clientY - (containerRect?.top ?? 0),
-            });
-            return;
-          }
-          if('mode' in tool&&tool.mode==='measureRehearsal'){
-            // リハーサルマーク（練習番号）: 調号と同じく最上段（partsScore[0]）の小節データに保存する
-            const containerRect = containerRef.current?.getBoundingClientRect();
-            const me = e as MouseEvent;
-            const currentMark = partsScore[0]?.[absI]?.rehearsalMark;
-            setRehearsalEditState({
-              measureAbsoluteIndex: absI,
-              currentValue: currentMark ?? suggestNextRehearsalMark(partsScore[0] ?? []),
-              overlayX: me.clientX - (containerRect?.left ?? 0),
-              overlayY: me.clientY - (containerRect?.top ?? 0),
-            });
             return;
           }
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
@@ -5318,77 +5332,9 @@ export default function PianoSystemCanvas({
               }
               setSelectedArc(null);
               setSelectedHairpin(null);
-              if('mode' in tool&&(tool.mode==='tie'||tool.mode==='hairpin'))return;
-              if('mode' in tool&&tool.mode==='repeat'){
-                toggleRepeatMarkerAcrossParts(absI, tool.repeat);
-                return;
-              }
-              if('mode' in tool&&tool.mode==='ending'){
-                toggleEndingAcrossParts(absI, tool.ending);
-                return;
-              }
-              // 音符の上をクリックしても小節単位ツールが動くよう、hit でも処理する
-              if('mode' in tool&&tool.mode==='measureTempo'){
-                const containerRect=containerRef.current?.getBoundingClientRect();
-                const me=e as MouseEvent;
-                const currentBpm=partsScore[0]?.[absI]?.bpm;
-                setBpmEditState({
-                  measureAbsoluteIndex:absI,
-                  currentValue:currentBpm!=null?String(currentBpm):'',
-                  overlayX:me.clientX-(containerRect?.left??0),
-                  overlayY:me.clientY-(containerRect?.top??0),
-                });
-                return;
-              }
-              if('mode' in tool&&tool.mode==='measureTimeSig'){
-                const containerRect=containerRef.current?.getBoundingClientRect();
-                const me=e as MouseEvent;
-                const currentTS=partsScore[0]?.[absI]?.timeSignature;
-                setTimeSigEditState({
-                  measureAbsoluteIndex:absI,
-                  currentValue:currentTS?`${currentTS[0]}/${currentTS[1]}`:'',
-                  overlayX:me.clientX-(containerRect?.left??0),
-                  overlayY:me.clientY-(containerRect?.top??0),
-                });
-                return;
-              }
-              if('mode' in tool&&tool.mode==='measureClef'){
-                const containerRect=containerRef.current?.getBoundingClientRect();
-                const me=e as MouseEvent;
-                const currentClef=partsScore[pi]?.[absI]?.clef;
-                setClefEditState({
-                  measureAbsoluteIndex:absI,
-                  partIndex:pi,
-                  currentValue:currentClef??'',
-                  overlayX:me.clientX-(containerRect?.left??0),
-                  overlayY:me.clientY-(containerRect?.top??0),
-                });
-                return;
-              }
-              if('mode' in tool&&tool.mode==='measureKeySig'){
-                const containerRect=containerRef.current?.getBoundingClientRect();
-                const me=e as MouseEvent;
-                const currentKS=partsScore[0]?.[absI]?.keySignature;
-                setKeySigEditState({
-                  measureAbsoluteIndex:absI,
-                  currentValue:currentKS??'',
-                  overlayX:me.clientX-(containerRect?.left??0),
-                  overlayY:me.clientY-(containerRect?.top??0),
-                });
-                return;
-              }
-              if('mode' in tool&&tool.mode==='measureRehearsal'){
-                const containerRect=containerRef.current?.getBoundingClientRect();
-                const me=e as MouseEvent;
-                const currentMark=partsScore[0]?.[absI]?.rehearsalMark;
-                setRehearsalEditState({
-                  measureAbsoluteIndex:absI,
-                  currentValue:currentMark??suggestNextRehearsalMark(partsScore[0] ?? []),
-                  overlayX:me.clientX-(containerRect?.left??0),
-                  overlayY:me.clientY-(containerRect?.top??0),
-                });
-                return;
-              }
+              // 音符の上をクリックしても小節単位のツールが同じに動くよう、
+              // 小節背景側と共通のディスパッチャで処理する（#244 段3a）
+              if (handleMeasureScopedTool(e) === 'handled') return;
               const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
               const microtoneMode = 'mode' in tool && tool.mode === 'microtone' ? tool.type : null;
               const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
