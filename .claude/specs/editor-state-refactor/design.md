@@ -162,3 +162,47 @@ src/utils/voiceMeasureUtils.ts … scoreModel（voices[] 統一の正規経路�
 - 二クリック式のタイ（Aをクリック→Bをクリック）はもともと存在しない
  （SVG 内 mouseup/click が従来から tieStart を掃除している）ため、window 掃除の追加で
   失われた操作は無い
+
+## 8. 段2 レビュー指摘の反映記録（2026-08-21〜22・PR #339）
+
+段2 の差分表（§2-2）は「TOOL_CHANGED / CLEAR_ALL は掃除の遷移」と書いていたが、初回実装は
+reducer の中（selection / overlay）しか掃除しておらず、**進行中のドラッグ（`dragSessionsRef`）が
+残る**経路が残っていた。レビューで4点指摘され、順に反映した。
+
+### 問題（指摘された経路）
+
+1. **ツール切替 / CLEAR_ALL でドラッグが残る**: 数字キー・R キーのツール切替は ScorePage の
+   window keydown から `setTool` を直接呼ぶため、**弧のハンドルを押したまま**ツールを替えられる。
+   旧実装では `arcCp`/`arcEp` が残り、切替後の mousemove/mouseup が新ツールの下で弧編集を継続・確定していた
+2. **pointercancel の掃除が `tieStart` だけ**: 弧・小節アンカーが残留し、中断後の mousemove/mouseup で
+   古いドラッグが再開・確定しうる
+3. **SVG 外 mouseup で破線プレビューが残る**: プレビューは SVG 内 mousemove で `display:block` になるが、
+   body→window の mouseup では SVG 側の非表示処理も state 更新も走らないため画面に残る
+4. **キャンセル直後の click の扱い**: 弧を動かしてから中断した場合、指を離したときの click が
+   新ツールの編集・選択解除として走ってしまう（＝1回読み飛ばす必要がある）。
+   ただし **pointercancel はそのポインタ列の mouseup も click も発生させない**ため、
+   ここで読み飛ばしフラグを立てると解除役が居らず、**中断後の最初の普通のクリックが無言で捨てられる**
+
+### 修正設計
+
+- `cancelActiveDragSessions(options?)` を新設し、TOOL_CHANGED（`toolIdentityKey` effect）・
+  CLEAR 要求・pointercancel の3経路から呼ぶ。弧は **`cancelArcDrag` 経由で開始形へ復元してから**
+  参照をクリアする（**確定しない** — ツール切替も OS 中断も利用者の確定意図ではないため）
+- 破線プレビュー要素は `tiePreviewPathRef` で持ち回り、掃除側から `display:none` にできるようにした
+  （描画 effect が SVG ごとに作り直すため、ref で最新の要素を指す。テスト用に `vf-tie-preview` クラスも付与）
+- **click 読み飛ばし（`arcMoved`）の生存期間は経路ごとに分ける**（指摘4の結論）
+  - ツール切替・CLEAR: マウスはまだ押されている → 立てる（解除は window mouseup の `setTimeout(0)`）
+  - pointercancel: mouseup も click も来ない → **立てない**（`suppressNextClick: false`）
+- 読み飛ばしの消費先は SVG 背景 click だけでなく、**小節背景・音符・非アクティブ声部の click ハンドラ先頭**にも置く
+  （ハンドル要素はツール切替の再描画で消えるため、合成 click はこれらの要素へ届く）
+- §2-2 の表の「POINTER_CANCEL の掃除対象は tieStart のみ」という記述は、この修正で
+  **全 session（弧・tie・小節アンカー）へ拡大**された。一方 `GLOBAL_POINTER_UP`（mouseup）側が
+  tie のみなのは従来どおり（弧の「SVG 外で離しても1回だけ確定」= Issue #235 の window mouseup
+  ハンドラを壊さないため）
+
+### 影響範囲と検証
+
+- 影響は `PianoSystemCanvas` のドラッグ掃除経路のみ。譜面データの構造・レイアウト計算には触れていない
+- `PianoSystemCanvasDragCancel.test.tsx`（6件）で各経路を固定。いずれも**修正前のコードで落ちること**を
+  確認してから修正を適用した（1/1b＝ツール切替、2a/2b＝pointercancel の弧・小節、
+  2c＝pointercancel 後に mouseup が無くても次の click が1回目から処理される、3＝プレビュー非表示）

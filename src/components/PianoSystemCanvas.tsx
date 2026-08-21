@@ -1836,23 +1836,33 @@ export default function PianoSystemCanvas({
    *   **確定はしない**（ツール切替や pointercancel は利用者の確定意図ではないため）
    * - タイ/松葉: 開始点と破線プレビューの両方を消す（参照だけ消すと破線が画面に残る）
    * - 小節範囲選択: アンカーをクリア
-   * - arcMoved/measureMoved は触らない（「直後の click を1回読み飛ばす」ための
-   *   生存期間を持つフラグで、ここで消すとキャンセル直後のクリックが誤作動する）
+   * - arcMoved（「直後の click を1回読み飛ばす」フラグ）を立てるかどうかは呼び出し元が決める。
+   *   マウスを押したままの中断（ツール切替・CLEAR）は指を離すときに mouseup → click が
+   *   続くので立てる。pointercancel は**そのポインタ列の mouseup も click も来ない**ため
+   *   立てない（立てると解除役が居らず、中断後の最初の普通のクリックが無言で捨てられる）
    *
    * 呼び出し元: ①ツール切替（数字キー・R キーは ScorePage の window keydown から
    * setTool を呼ぶため**マウス押下中でも発生する**） ②SCORE_SELECTION_CLEAR 要求
-   * ③pointercancel（OS がポインタを取り上げた）。
+   * ③pointercancel（OS がポインタを取り上げた。suppressNextClick: false で呼ぶ）。
    */
-  const cancelActiveDragSessions = useCallback(() => {
+  const cancelActiveDragSessions = useCallback((options?: { suppressNextClick?: boolean }) => {
+    // 既定は true（従来の呼び出し元＝ツール切替・CLEAR の挙動を変えない）
+    const suppressNextClick = options?.suppressNextClick !== false;
     const hadActiveArcDrag =
       dragSessionsRef.current.arcCp != null || dragSessionsRef.current.arcEp != null;
     cancelArcDrag();
-    // cancelArcDrag は Esc 用に arcMoved を false へ戻すが、ここ（ツール切替・CLEAR・
-    // pointercancel）でキャンセルした場合は mouseup 直後に click が続きうる。
+    // cancelArcDrag は Esc 用に arcMoved を false へ戻すが、ツール切替・CLEAR で
+    // キャンセルした場合は（マウスはまだ押されているので）mouseup 直後に click が続きうる。
     // その click を1回読み飛ばすために立て直す（Codex レビュー指摘: 戻さないと
     // ドラッグのつもりだった操作の直後 click が新ツールの編集・選択変更として走る）。
     // click が来なかった場合の解除は window mouseup 側の setTimeout(0) が行う。
-    if (hadActiveArcDrag) dragSessionsRef.current.arcMoved = true;
+    if (suppressNextClick) {
+      if (hadActiveArcDrag) dragSessionsRef.current.arcMoved = true;
+    } else {
+      // pointercancel 経路。cancelArcDrag が下ろした false をそのまま維持し、
+      // ドラッグが無かった場合の取りこぼしも含めて確実に下ろしておく
+      dragSessionsRef.current.arcMoved = false;
+    }
     dragSessionsRef.current.tieStart = null;
     dragSessionsRef.current.measureAnchor = null;
     if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
@@ -1878,7 +1888,9 @@ export default function PianoSystemCanvas({
         setTimeout(() => { dragSessionsRef.current.arcMoved = false; }, 0);
       }
     };
-    const onPointerCancel = () => { cancelActiveDragSessions(); };
+    // pointercancel には mouseup も click も続かないので、click の読み飛ばしは立てない
+    //（立てると解除役の mouseup が来ず、中断後の最初のクリックが1回捨てられる）
+    const onPointerCancel = () => { cancelActiveDragSessions({ suppressNextClick: false }); };
     window.addEventListener('mouseup', onWindowMouseUp);
     window.addEventListener('pointercancel', onPointerCancel);
     return () => {

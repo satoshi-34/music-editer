@@ -272,6 +272,40 @@ describe('PianoSystemCanvas 進行中ドラッグのキャンセル（Issue #244
     expect(onMeasureRangeSelect).not.toHaveBeenCalled();
   });
 
+  it('2c. pointercancel の後は mouseup が来なくても、次の通常 click が1回目から処理される', async () => {
+    const { view, onChange, rerenderWith } = renderScore({ mode: 'tie' }, [measureWithSlur()]);
+    await startArcEndpointDrag(view.container);
+
+    // 動かしてから OS がポインタを取り上げる。pointercancel の後には
+    // そのポインタ列の mouseup も click も来ない（＝読み飛ばしフラグの解除役が居ない）
+    fireEvent.mouseMove(window, { clientX: 140, clientY: 60 });
+    fireEvent.pointerCancel(window);
+
+    // 中断後、利用者が改めてツールを選び直して普通にクリックする
+    rerenderWith({ duration: '8' });
+
+    const notices: string[] = [];
+    const listener = (e: Event) => {
+      const detail = (e as CustomEvent<ScoreEditNoticeDetail>).detail;
+      if (detail?.message) notices.push(detail.message);
+    };
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, listener);
+    try {
+      // 1b と同じ観測方法: この小節は 4/4 満杯なので、click が処理されれば
+      //「拍がいっぱい」の通知が出る（読み飛ばされれば無音）。
+      // pointercancel 経路でも click 抑止を立てていると、ここが無音のまま落ちる
+      const svg = currentSvg(view.container);
+      const hit = noteHit(svg, 3);
+      const right = parseFloat(hit.getAttribute('data-note-right')!);
+      fireEvent.click(hit, { clientX: right + 6, clientY: yForLine(hit, 2) });
+      await waitFor(() => expect(notices.length).toBeGreaterThan(0));
+      expect(notices[0]).toContain('拍がいっぱい');
+      expect(onChange).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, listener);
+    }
+  });
+
   it('3. タイの破線プレビューは SVG の外で mouseup したら画面から消える', async () => {
     const { view } = renderScore({ mode: 'tie' }, [measureWithSlur()]);
     const svg = currentSvg(view.container);
