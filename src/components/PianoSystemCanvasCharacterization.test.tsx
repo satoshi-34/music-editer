@@ -250,6 +250,13 @@ describe('PianoSystemCanvas characterization（Issue #244 段0.5・仕様では�
     const shorter: MeasureData[] = [{ events: [{ dur: '1', isRest: false, keys: ['c/5'] }] }];
     rerenderWith({ duration: '4', isRest: false }, shorter);
     await waitFor(() => expect(selectionFrames(currentSvg(container))).toBe(0));
+
+    // 枠が消えただけでは「解除された」と「対象が無くて描けないだけ（stale selection）」を
+    // 区別できない（Codex レビュー指摘）。元の4音へ戻しても枠が**復活しない**ことまで
+    // 確認して、内部の selected が本当に解除されていることを固定する
+    rerenderWith({ duration: '4', isRest: false }, [simpleMeasure()]);
+    await waitFor(() => expect(currentSvg(container).querySelector('rect.vf-note-hit[data-note="3"]')).toBeTruthy());
+    expect(selectionFrames(currentSvg(container))).toBe(0);
   });
 
   it('4. タイのドラッグを SVG の外で離すと開始点が残留する（既知の残留・段2の GLOBAL_POINTER_UP で修正予定）', async () => {
