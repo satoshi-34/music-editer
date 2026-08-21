@@ -1180,7 +1180,39 @@ export default function PianoSystemCanvas({
     // 多段譜では全パートへ同じ ending 番号を一度に付ける。
     setPartsScore(prev => prev.map(partScore => toggleMeasureEnding(partScore ?? [], measureIndex, ending)));
   };
-  const [selected, setSelected] = useState<Sel>(null);
+  // ── 選択状態の集約（#244 段1c）──
+  // note（音符）/ arc（弧）/ hairpin（松葉）の3つの独立 useState を1つの record へ機械的に
+  // 集約した。**排他 union にはしない**: 現行コードは「クリックハンドラが明示的に他方を
+  // null にする」ことで排他を実現しており、union 化はその明示クリアを暗黙化する挙動変更に
+  // なるため段2 で扱う（オーバーレイと同じ判断。設計メモ§2-1）。
+  // setter ラッパーは従来と同名・同シグネチャ・同値 bailout つき（段1b と同じ作法）。
+  type SelectionStates = {
+    note: Sel;
+    arc: SelectedArcSel;
+    hairpin: SelectedHairpinSel;
+  };
+  const [selectionStates, setSelectionStates] = useState<SelectionStates>({
+    note: null, arc: null, hairpin: null,
+  });
+  const selectionSetters = useMemo(() => {
+    const make = <K extends keyof SelectionStates>(key: K) =>
+      (value: React.SetStateAction<SelectionStates[K]>) =>
+        setSelectionStates(prev => {
+          const next = typeof value === 'function'
+            ? (value as (p: SelectionStates[K]) => SelectionStates[K])(prev[key])
+            : value;
+          if (next === prev[key]) return prev;
+          return { ...prev, [key]: next };
+        });
+    return { note: make('note'), arc: make('arc'), hairpin: make('hairpin') };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const selected = selectionStates.note;
+  const setSelected = selectionSetters.note;
+  const selectedArc = selectionStates.arc;
+  const setSelectedArc = selectionSetters.arc;
+  const selectedHairpin = selectionStates.hairpin;
+  const setSelectedHairpin = selectionSetters.hairpin;
   const partsScoreRef = useRef<MeasureData[][]>([]);
   // 最新値ミラー（#244 段1）。宣言時点では selectedArc/selectedHairpin の state が
   // まだ無いため null で初期化する（state の初期値と同じ。初回レンダー後の一括同期
@@ -1530,14 +1562,8 @@ export default function PianoSystemCanvas({
 
   // 選択中の弧。voiceIndex は「その弧が載っている声部」（Issue #190）。
   // これが無いと、声部2の弧を選んだのに声部1の同じ位置の弧を消してしまう。
-  const [selectedArc, setSelectedArc] = useState<{
-    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
-  } | null>(null);
 
   // 選択中の松葉（ヘアピン）。弧の選択と同じ「クリックで選択→Deleteで削除」方式
-  const [selectedHairpin, setSelectedHairpin] = useState<{
-    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number;
-  } | null>(null);
 
   // 弧の直接ドラッグ状態（cpDyOffset をリアルタイム調節 / 反転検知）
   // origin は「ドラッグを始めた瞬間の値」。Esc で中止したときに開始時点の形へ戻すために使う
