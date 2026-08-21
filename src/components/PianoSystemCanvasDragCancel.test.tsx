@@ -263,6 +263,24 @@ describe('PianoSystemCanvas 進行中ドラッグのキャンセル（Issue #244
     await waitFor(() => expect(view.container.querySelector('[data-arc-ep-start]')).toBeTruthy());
   });
 
+  it('1d. 読み飛ばしの click が SVG 自身（五線外の余白）に落ちても、選択中の弧は解除されない', async () => {
+    const { view, rerenderWith } = renderScore({ mode: 'tie' }, [measureWithSlur()]);
+    await startArcEndpointDrag(view.container);
+    fireEvent.mouseMove(window, { clientX: 140, clientY: 60 });
+    rerenderWith({ duration: '8' });
+    fireEvent.mouseUp(window, { clientX: 140, clientY: 60 });
+
+    // event.target === svg の経路: capture リスナーと背景 bubble リスナーは同じ SVG 要素に
+    // 付いており、stopPropagation では後者を止められない（stopImmediatePropagation が必要。
+    // Codex レビュー5巡目の再現経路）
+    const svg = currentSvg(view.container);
+    fireEvent.click(svg, { clientX: 5, clientY: 5 });
+    await new Promise(r => setTimeout(r, 200));
+
+    rerenderWith({ mode: 'tie' });
+    await waitFor(() => expect(view.container.querySelector('[data-arc-ep-start]')).toBeTruthy());
+  });
+
   it('2a. pointercancel で弧ドラッグが残留しない（後続の mousemove/mouseup で確定しない）', async () => {
     const { view, onChange } = renderScore({ mode: 'tie' }, [measureWithSlur()]);
     await startArcEndpointDrag(view.container);
