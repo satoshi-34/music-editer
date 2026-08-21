@@ -71,6 +71,13 @@ import {
   type KeySignature
 } from '../utils/noteKeyUtils';
 import { transposeMeasureRange } from '../utils/transposeUtils';
+import {
+  DEFAULT_TITLE_FONT_ID,
+  normalizeTitleFontId,
+  resolveTitleFontStack,
+  TITLE_FONT_OPTIONS,
+  type TitleFontId
+} from '../utils/titleFonts';
 import { getTupletClipboardGroup, setTupletClipboardGroup, subscribeTupletClipboard } from '../utils/tupletClipboard';
 import { insertEmptyMeasureBefore, deleteMeasureAt, shiftOverridesStartMeasure } from '../utils/measureInsertDeleteUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
@@ -483,6 +490,12 @@ export default function ScorePage() {
   const [lyricist, setLyricist] = useState('作詞者');
   const [composer, setComposer] = useState('作曲者');
   const [arranger, setArranger] = useState('編曲者');
+  // タイトルまわり（タイトル・サブタイトル・作者行）の書体（Issue #342）。
+  // 譜面ごとの持ち物なので localStorage の表示設定ではなく保存データ（metadata）側に置く。
+  const [titleFontId, setTitleFontId] = useState<TitleFontId>(DEFAULT_TITLE_FONT_ID);
+  // ID から実際の font-family（フォールバック付きのスタック）へ。
+  // ページの style へ渡す値なので、書体を変えたときだけ作り直せば十分。
+  const titleFontStack = useMemo(() => resolveTitleFontStack(titleFontId), [titleFontId]);
 
   const {
     saveScore, loadScore, hasStoredData,
@@ -1845,7 +1858,7 @@ export default function ScorePage() {
   // 現在の全 state から保存用データ（parts + metadata）を組み立てるヘルパー。
   // handleSave / 自動保存 / ファイル書き出しで共通利用する。
   const buildScoreData = useCallback(() => {
-    const metadata = { title, subtitle, lyricist, composer, arranger };
+    const metadata = { title, subtitle, lyricist, composer, arranger, titleFontId };
     const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'] as const;
     const QUARTET_CLEFS: PartData['clef'][] = ['treble', 'treble', 'alto', 'bass'];
     const parts: PartData[] = scoreType === 'quartet'
@@ -1878,7 +1891,7 @@ export default function ScorePage() {
             { partId: 'melody', clef: 'treble' as const, measures: rightHandData ?? [{ events: [] }] },
           ];
     return { metadata, parts };
-  }, [title, subtitle, lyricist, composer, arranger, scoreType, instrumentation, quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData]);
+  }, [title, subtitle, lyricist, composer, arranger, titleFontId, scoreType, instrumentation, quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData]);
 
   const handleSave = async () => {
     const { metadata, parts } = buildScoreData();
@@ -1914,6 +1927,7 @@ export default function ScorePage() {
     setLyricist('作詞者');
     setComposer('作曲者');
     setArranger('編曲者');
+    setTitleFontId(DEFAULT_TITLE_FONT_ID);
     setTool({ duration: '4', isRest: false });
     setNotationMode('concert');
     // 楽譜の種類・拍子・調号・段組み・余白などは、保存済みの初期値プリセット（issue #39）が
@@ -2019,6 +2033,9 @@ export default function ScorePage() {
       setLyricist(data.metadata.lyricist);
       setComposer(data.metadata.composer);
       setArranger(data.metadata.arranger);
+      // 書体は必ずホワイトリストを通す（Issue #342）。外部ファイル由来の文字列が
+      // そのまま CSS の font-family へ入らないようにするため
+      setTitleFontId(normalizeTitleFontId(data.metadata.titleFontId));
       const loadedType = data.scoreType ?? 'single';
       setKeySignature(normalizeKeySignature(data.keySignature));
       await setTimeSignature(...normalizeTimeSignature(data.timeSignature));
@@ -2143,6 +2160,7 @@ export default function ScorePage() {
     setLyricist(restored.metadata.lyricist);
     setComposer(restored.metadata.composer);
     setArranger(restored.metadata.arranger);
+    setTitleFontId(normalizeTitleFontId(restored.metadata.titleFontId));
 
     const restoredType = restored.scoreType ?? 'single';
     setKeySignature(normalizeKeySignature(restored.keySignature));
@@ -2294,7 +2312,7 @@ export default function ScorePage() {
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, titleFontId, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -2369,6 +2387,7 @@ export default function ScorePage() {
       setLyricist(loadedData.metadata.lyricist);
       setComposer(loadedData.metadata.composer);
       setArranger(loadedData.metadata.arranger);
+      setTitleFontId(normalizeTitleFontId(loadedData.metadata.titleFontId));
 
       const loadedType = loadedData.scoreType ?? 'single';
       setKeySignature(normalizeKeySignature(loadedData.keySignature));
@@ -2427,6 +2446,7 @@ export default function ScorePage() {
     setLyricist(sampleScore.metadata.lyricist);
     setComposer(sampleScore.metadata.composer);
     setArranger(sampleScore.metadata.arranger);
+    setTitleFontId(normalizeTitleFontId(sampleScore.metadata.titleFontId));
     setScoreType(sampleScore.scoreType);
     setInstrumentation(getDefaultInstrumentationForScoreType(sampleScore.scoreType));
     setKeySignature(normalizeKeySignature(sampleScore.keySignature));
@@ -2469,6 +2489,7 @@ export default function ScorePage() {
         lyricist,
         composer,
         arranger,
+        titleFontId,
       },
       scoreType: 'piano',
       keySignature: normalizeKeySignature(keySignature),
@@ -2493,6 +2514,7 @@ export default function ScorePage() {
     scoreType,
     subtitle,
     title,
+    titleFontId,
   ]);
 
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
@@ -3546,7 +3568,7 @@ export default function ScorePage() {
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
   // totalSystems と measuresPerSystem の宣言より後に置く必要がある
   const buildCurrentScoreData = useCallback((): import('../types/storage').SavedScoreData => {
-    const metadata = { title, subtitle, lyricist, composer, arranger };
+    const metadata = { title, subtitle, lyricist, composer, arranger, titleFontId };
     const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'] as const;
     const QUARTET_CLEFS: import('../types/storage').PartData['clef'][] = ['treble', 'treble', 'alto', 'bass'];
     const parts: import('../types/storage').PartData[] = scoreType === 'quartet'
@@ -3591,7 +3613,7 @@ export default function ScorePage() {
       measuresPerSystem,
     };
   }, [
-    title, subtitle, lyricist, composer, arranger,
+    title, subtitle, lyricist, composer, arranger, titleFontId,
     scoreType, keySignature, scoreTimeSignature,
     quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData,
     instrumentation, totalSystems, measuresPerSystem,
@@ -3639,6 +3661,7 @@ export default function ScorePage() {
         setLyricist(loaded.metadata.lyricist);
         setComposer(loaded.metadata.composer);
         setArranger(loaded.metadata.arranger);
+        setTitleFontId(normalizeTitleFontId(loaded.metadata.titleFontId));
         const loadedType = loaded.scoreType ?? 'single';
         setKeySignature(normalizeKeySignature(loaded.keySignature));
         await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
@@ -4232,6 +4255,26 @@ export default function ScorePage() {
                   >
                     {KEY_SIGNATURE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {/* タイトルまわりの書体（Issue #342）。対象はタイトル・サブタイトル・作者行だけで、
+                    音符や記号（Bravura）と譜面の中の文字は変わらない。
+                    レイアウトタブ（＝端末ごとの表示設定）ではなくこのタブに置いているのは、
+                    この値が譜面ごとに保存される持ち物だから。 */}
+                <label className="toolbar-select-label">
+                  <span>タイトルの書体</span>
+                  <select
+                    value={titleFontId}
+                    onChange={(event) => setTitleFontId(normalizeTitleFontId(event.target.value))}
+                    aria-label="タイトルの書体"
+                    title="タイトル・サブタイトル・作詞/作曲/編曲者の書体（音符や記号は変わりません）"
+                  >
+                    {TITLE_FONT_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id} title={option.description}>
                         {option.label}
                       </option>
                     ))}
@@ -5182,6 +5225,13 @@ export default function ScorePage() {
                   '--page-margin-side': `${pageMarginSideMm}mm`,
                   '--page-margin-top': `${pageMarginTopMm}mm`,
                   '--page-margin-bottom': `${pageMarginBottomMm}mm`,
+                  // タイトルまわりの書体（Issue #342）。App.css の .score-title /
+                  // .score-subtitle / .score-credit がこの変数を見る。ページに載せるのは、
+                  // 印刷（window.print）も画面と同じ DOM をそのまま刷るため、
+                  // ここへ入れておけば紙面にもそのまま出るから。
+                  // 既定を選んでいるときの値は従来の --score-text-font と同じ並びなので、
+                  // 設定を触らない譜面の見た目は変わらない。
+                  '--score-title-font': titleFontStack,
                 } as React.CSSProperties}
               >
                 <header

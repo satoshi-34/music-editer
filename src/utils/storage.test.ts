@@ -2848,3 +2848,73 @@ describe('Storage Foundation Tests', () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// Issue #342: タイトルまわりの書体（受入テスト 4〜6）
+// 設計: .claude/specs/title-font-selection/design.md
+// ─────────────────────────────────────────────────────────────
+describe('タイトルまわりの書体の保存互換（Issue #342）', () => {
+  const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }];
+
+  beforeEach(() => {
+    localStorageMock.clear();
+  });
+
+  afterEach(() => {
+    localStorageMock.clear();
+  });
+
+  it('選んだ書体は保存→読込で保たれる', () => {
+    const data = createSavedScoreData(
+      { title: '書体テスト', subtitle: '', lyricist: '', composer: '', arranger: '', titleFontId: 'mincho' },
+      parts,
+      1,
+      4
+    );
+    expect(saveScoreData(data).success).toBe(true);
+
+    const loaded = loadScoreData();
+    expect(loaded.success).toBe(true);
+    expect(loaded.data?.metadata.titleFontId).toBe('mincho');
+  });
+
+  it('書体を持たない旧データも今までどおり読める（未指定のまま）', () => {
+    // 既存譜面の互換: 項目そのものが無い保存データを弾いてはいけない
+    localStorageMock.setItem(STORAGE_KEYS.PRIMARY, JSON.stringify({
+      version: CURRENT_VERSION,
+      timestamp: Date.now(),
+      metadata: { title: 'Legacy', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      scoreType: 'single',
+      parts,
+      systems: 1,
+      measuresPerSystem: 1
+    }));
+
+    const loaded = loadScoreData();
+    expect(loaded.success).toBe(true);
+    expect(loaded.data?.metadata.titleFontId).toBeUndefined();
+  });
+
+  it('提供していない書体を書いたファイルは読み込みで弾く', () => {
+    // 外部ファイル由来の文字列をそのまま CSS の font-family へ渡さないための境界
+    localStorageMock.setItem(STORAGE_KEYS.PRIMARY, JSON.stringify({
+      version: CURRENT_VERSION,
+      timestamp: Date.now(),
+      metadata: {
+        title: '細工されたファイル',
+        subtitle: '',
+        lyricist: '',
+        composer: '',
+        arranger: '',
+        titleFontId: 'serif; background: url(https://example.com/x)'
+      },
+      scoreType: 'single',
+      parts,
+      systems: 1,
+      measuresPerSystem: 1
+    }));
+
+    const loaded = loadScoreData();
+    expect(loaded.success).toBe(false);
+  });
+});

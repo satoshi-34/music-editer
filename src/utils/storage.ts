@@ -28,6 +28,7 @@ import { isRenderStaffDirection } from './crossStaffUtils';
 import { normalizeEmptyVoicesInParts, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
+import { isTitleFontId } from './titleFonts';
 import type { InstrumentType } from '../audio/SoundSource';
 import type { ClefType } from '../components/clefUtils';
 import {
@@ -413,7 +414,11 @@ function validateScoreMetadata(metadata: any): metadata is ScoreMetadata {
     typeof metadata.subtitle === 'string' &&
     typeof metadata.lyricist === 'string' &&
     typeof metadata.composer === 'string' &&
-    typeof metadata.arranger === 'string'
+    typeof metadata.arranger === 'string' &&
+    // 書体（Issue #342）は旧データには無いので省略可。値がある場合は
+    // 提供中の ID のホワイトリストで照合する（外部ファイル由来の文字列を
+    // そのまま CSS の font-family へ渡さないため）
+    (metadata.titleFontId === undefined || isTitleFontId(metadata.titleFontId))
   );
 }
 

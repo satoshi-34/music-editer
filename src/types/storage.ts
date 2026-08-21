@@ -4,6 +4,7 @@
 import type { KeySignature } from '../utils/noteKeyUtils';
 import type { InstrumentType } from '../audio/SoundSource';
 import type { ClefType } from '../components/clefUtils';
+import type { TitleFontId } from '../utils/titleFonts';
 
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
 export type TimeSignature = [number, number];
@@ -320,6 +321,14 @@ export interface ScoreMetadata {
   lyricist: string;
   composer: string;
   arranger: string;
+  /**
+   * タイトルまわり（タイトル・サブタイトル・作詞/作曲/編曲者）の書体（Issue #342）。
+   * 選択肢の実体は `src/utils/titleFonts.ts` の TITLE_FONT_OPTIONS にあり、ここには
+   * その ID だけを保存する。旧データ互換のため省略可で、省略時は従来の書体
+   * （DEFAULT_TITLE_FONT_ID = 欧文セリフ）として扱う。
+   * 音符・記号の書体（Bravura 系）はこの設定の対象外。
+   */
+  titleFontId?: TitleFontId;
 }
 
 /** スコアの種類（単旋律 / ピアノ大譜表 / 弦楽四重奏 / 可変編成） */
