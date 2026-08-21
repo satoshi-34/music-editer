@@ -14,14 +14,15 @@ import type { Stave } from 'vexflow';
 
 /**
  * クリックの帰属ポリシー（設計メモ§2-3）。
- * - 'band': 現行の帯域推測（クリック位置の帯でパートを決め、声部はアクティブ声部）
- * - 'explicitLayer': #316 の編集レイヤー明示選択（未実装。実装時は activeLayer を必須にし、
- *   帯域ではなくレイヤーでパート・声部を確定する。空白クリックの帰属=#316論点②の裁定を
- *   この分岐の中で受ける）
+ *
+ * **現段階では 'band'（帯域推測）のみ**。'explicitLayer'（#316）の席をここで型に足すのは
+ * まだ早い — 帰属の実処理（どのパートか＝.vf-hit の帯、どの声部か＝activeVoiceIndex、
+ * 空白クリックの帰属）はこの純関数モジュールの外（クリックハンドラの入口）にあり、
+ * 幾何計算だけに policy を渡しても実装の差し込み口にならない（Codex レビュー指摘）。
+ * #316 を実装する段（段3c 以降）で、帰属解決の入口関数をこのモジュールに作り、
+ * そこで union を拡張する。
  */
-export type HitAttributionPolicy =
-  | { attribution: 'band' }
-  | { attribution: 'explicitLayer'; activeLayer: { partIndex: number; voiceIndex: number } };
+export type HitAttributionPolicy = { attribution: 'band' };
 
 /** 幾何計算が音符イベントから読む最小の形（ストレージ型に依存しないための構造的部分型） */
 export type HitEventLike = {
@@ -248,7 +249,11 @@ export interface NoteHitGeometryContext {
   measLeft: number;
   measRight: number;
   partIndex: number;
-  /** クリック帰属ポリシー。現行は 'band' のみ実装（#316 が 'explicitLayer' を追加する） */
+  /**
+   * クリック帰属ポリシー（現行 'band' のみ）。この関数自体は幾何計算であり policy で
+   * 分岐しないが、文脈として受け取り続けることで「帰属の前提が band である」ことを
+   * 呼び出し側の型に残す。#316 の本物の差し込み口は帰属解決の入口（段3c で新設）。
+   */
   policy: HitAttributionPolicy;
   /** 段またぎ（renderStaff）を解決した「実際に載る五線」（#310） */
   resolveRenderStave: (ev: HitEventLike | undefined) => Stave;

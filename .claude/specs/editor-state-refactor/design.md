@@ -219,8 +219,11 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
   - ヒット定数（CELL_PAD / CHORD_LEDGER_* / KEY_SELECT_* / EXTRA_* / OUTER・INNER_KEY_SELECT_MAX_LINES）
   - 選択判定の純関数（snapLine / noteKeyLineExtent / findKeyIndexAtLine / findNearestKeyIndexWithinLines / keySelectXPad）
   - **resolveNoteHitGeometry**（旧 buildNoteHitGeometry）: 閉包で握っていた文脈を
-    `NoteHitGeometryContext` として明示化。**`HitAttributionPolicy` 入力を導入**し、
-    現行 'band' のみ実装。#316 は 'explicitLayer' の実装追加でここに差し込む
+    `NoteHitGeometryContext` として明示化。`HitAttributionPolicy` は Codex レビューの指摘で
+    **'band' 限定の型に絞った** — 帰属の実処理（パート=帯 / 声部=activeVoiceIndex / 空白）は
+    この純関数の外にあり、幾何計算に policy を渡すだけでは #316 の差し込み口にならないため。
+    'explicitLayer' の union 拡張は、段3c 以降で**帰属解決の入口関数**をこのモジュールへ
+    作るときに行う（§2-3 の該当記述もこの理解で読み替える）
 - **段3c（次PR）**: 音符クリックの残りのモード分岐（フラグ15種+既定の音符/休符/placeholder 分岐）を
   `handled(action) | rejected(reason, guidance) | passThrough` の3値テーブルへ。
   rejected は #318 通知へ機械的に接続し、無言 no-op を型から排除する
