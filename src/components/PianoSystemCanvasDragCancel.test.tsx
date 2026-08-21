@@ -270,9 +270,9 @@ describe('PianoSystemCanvas 進行中ドラッグのキャンセル（Issue #244
     rerenderWith({ duration: '8' });
     fireEvent.mouseUp(window, { clientX: 140, clientY: 60 });
 
-    // event.target === svg の経路: capture リスナーと背景 bubble リスナーは同じ SVG 要素に
-    // 付いており、stopPropagation では後者を止められない（stopImmediatePropagation が必要。
-    // Codex レビュー5巡目の再現経路）
+    // event.target === svg の経路の回帰網。仕様の dispatch 上は capture 側の
+    // stopPropagation でも同一要素の bubble リスナーは走らないが、この経路が
+    // 消費の抜け穴にならないことをテストとして固定しておく
     const svg = currentSvg(view.container);
     fireEvent.click(svg, { clientX: 5, clientY: 5 });
     await new Promise(r => setTimeout(r, 200));

@@ -2971,10 +2971,11 @@ export default function PianoSystemCanvas({
     //   (b) 記号・松葉のヒット領域は自前で stopPropagation するためガードに届かず素通り
     // capture はどの要素ハンドラよりも先に走るので、ここで消費して遮断すれば
     // 到達先がどこであっても1回で確実に読み飛ばせる。消費の実装はこの1箇所だけにする。
-    // stopPropagation ではなく **stopImmediatePropagation** を使うのは、click が五線外の
-    // 余白などに落ちて event.target === svg になる経路のため: 背景の bubble リスナーは
-    // この capture リスナーと**同じ SVG 要素**に付いており、stopPropagation は
-    // 同一要素上の他リスナーを止めない（Codex レビュー5巡目）。
+    // 仕様の dispatch 上は stopPropagation でも足りる（capture 側で stop propagation
+    // フラグが立てば、同一要素の bubble 側 invoke も開始時に打ち切られる。jsdom で実証済み）。
+    // それでも **stopImmediatePropagation** を使うのは防御のため: 将来この svg の
+    // capture フェーズ（＝同一フェーズ）にリスナーが追加されても、消費済み click を
+    // 確実に遮断できる（同一フェーズの後続リスナーは stopPropagation では止まらない）。
     svg.addEventListener('click',(e)=>{
       if(dragSessionsRef.current.arcMoved){
         dragSessionsRef.current.arcMoved=false;
