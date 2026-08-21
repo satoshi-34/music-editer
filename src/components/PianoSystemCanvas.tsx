@@ -1654,27 +1654,10 @@ export default function PianoSystemCanvas({
     arcCp: null, arcEp: null, arcMoved: false, tieStart: null,
     measureAnchor: null, measureMoved: false,
   });
-  // SVG の外でマウスを離した／OSがポインタを取り上げた（pointercancel）ときの
-  // ドラッグ掃除（#244 段2・差分表#3）。従来はタイ/松葉の開始点（tieStart）だけが
-  // SVG 内の mouseup/click でしか掃除されず、SVG 外で離すと残留して
-  // 「mousedown なしの mouseup だけでタイが確定する」バグになっていた
-  //（段0.5 の characterization テストで実証済み）。
-  // 対象は tieStart のみ: arcCp/arcEp/measureAnchor は既存の window mouseup 掃除があり、
-  // arcMoved/measureMoved は「直後の click を1回読み飛ばす」ために mouseup 後も
-  // 意図的に生存させるフラグなのでここでは触らない。
-  // このリスナーは bubble の最後（window）で走るため、正規のタイ確定
-  //（音符ヒット要素の mouseup → 確定 → tieStart クリア）を妨げない。
-  useEffect(() => {
-    const clearTieStart = () => {
-      if (dragSessionsRef.current.tieStart) dragSessionsRef.current.tieStart = null;
-    };
-    window.addEventListener('mouseup', clearTieStart);
-    window.addEventListener('pointercancel', clearTieStart);
-    return () => {
-      window.removeEventListener('mouseup', clearTieStart);
-      window.removeEventListener('pointercancel', clearTieStart);
-    };
-  }, []);
+  // タイ/松葉ドラッグの破線プレビュー要素。実体は描画 effect が SVG ごとに作り直すため、
+  // コンポーネント階層の掃除処理（ツール切替・pointercancel・SVG外 mouseup）から
+  // 非表示にできるよう ref で持ち回る（arcDragContextRef と同じ理由・#244 段2 Codexレビュー対応）
+  const tiePreviewPathRef = useRef<SVGPathElement | null>(null);
 
   // 弧のドラッグ中に「いまの SVG と弧の形状台帳」を参照するための口。
   // ドラッグ中の更新は window の mousemove で受けるため（後述の理由）、
@@ -1845,6 +1828,55 @@ export default function PianoSystemCanvas({
     dragSessionsRef.current.arcMoved = false;
     return true;
   }, [updateArcDragPreview]);
+
+  /**
+   * 進行中のドラッグを全てキャンセルする（#244 段2・Codexレビュー3点対応）。
+   *
+   * - 弧（曲率/頂点/端点）: cancelArcDrag と同じ「開始形へ復元してから参照クリア」。
+   *   **確定はしない**（ツール切替や pointercancel は利用者の確定意図ではないため）
+   * - タイ/松葉: 開始点と破線プレビューの両方を消す（参照だけ消すと破線が画面に残る）
+   * - 小節範囲選択: アンカーをクリア
+   * - arcMoved/measureMoved は触らない（「直後の click を1回読み飛ばす」ための
+   *   生存期間を持つフラグで、ここで消すとキャンセル直後のクリックが誤作動する）
+   *
+   * 呼び出し元: ①ツール切替（数字キー・R キーは ScorePage の window keydown から
+   * setTool を呼ぶため**マウス押下中でも発生する**） ②SCORE_SELECTION_CLEAR 要求
+   * ③pointercancel（OS がポインタを取り上げた）。
+   */
+  const cancelActiveDragSessions = useCallback(() => {
+    cancelArcDrag();
+    dragSessionsRef.current.tieStart = null;
+    dragSessionsRef.current.measureAnchor = null;
+    if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
+  }, [cancelArcDrag]);
+
+  // SVG の外でマウスを離した／OS がポインタを取り上げたときの掃除（差分表#3）。
+  // mouseup: タイ/松葉だけを中止する（弧は #235 の window mouseup ハンドラが
+  // 「SVG 外で離しても1回だけ確定」を担当しているので、ここで触ると確定を壊す）。
+  // pointercancel: mouseup が来ない経路なので、弧・小節範囲も含めて全部キャンセルする
+  //（弧を確定しないのは、OS 都合の中断を保存とみなさないため）。
+  useEffect(() => {
+    const onWindowMouseUp = () => {
+      dragSessionsRef.current.tieStart = null;
+      if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
+    };
+    const onPointerCancel = () => { cancelActiveDragSessions(); };
+    window.addEventListener('mouseup', onWindowMouseUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    return () => {
+      window.removeEventListener('mouseup', onWindowMouseUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+    };
+  }, [cancelActiveDragSessions]);
+
+  // ツール切替の掃除（差分表#1 の続き）: reducer 側のオーバーレイ掃除（TOOL_CHANGED）に
+  // 加えて、進行中ドラッグもキャンセルする。数字キー・R キーのショートカットは
+  // マウス押下中でもツールを替えられるため、「切替時にドラッグは存在しない」とは言えない
+  //（Codex レビューの再現経路: 弧ハンドルを押したままキーで切替 → 旧実装では
+  // ドラッグが新ツールの下でも継続・確定していた）。
+  useEffect(() => {
+    cancelActiveDragSessions();
+  }, [toolIdentityKey, cancelActiveDragSessions]);
 
   /**
    * 弧のドラッグ中の mousemove / mouseup を window で受ける。
@@ -2043,17 +2075,18 @@ export default function PianoSystemCanvas({
   // タブ切り替え・ツール変更・再生開始で ScorePage から要求が飛んでくる。
   // 選択（青枠）が残ったままだと、そのあとユーザーが「入力欄を消すつもり」で押した
   // Delete / Backspace が譜面へ届き、音符が無言で消えてしまうため。
-  // 段2からはオーバーレイも一緒に閉じる: 再生中は編集がロックされるのに
-  // 入力欄だけ画面に残るちぐはぐを解消する（運用者承認 2026-08-21）。
-  // ドラッグセッションはマウス操作の途中でしか存在せず、この要求はタブ操作・
-  // 再生ボタン経由（＝マウスは既に離れている）でしか来ないため対象外。
+  // 段2からはオーバーレイと進行中ドラッグも一緒に掃除する: 再生中は編集がロックされる
+  // のに入力欄だけ残るちぐはぐの解消（運用者承認 2026-08-21）に加え、この要求は
+  // キーボードショートカット由来でマウス押下中にも来うる（Codex レビュー指摘）ため、
+  // ドラッグのキャンセルも必要。
   useEffect(() => {
     const onClearRequest = () => {
       dispatchEditorLocal({ type: 'CLEAR_ALL' });
+      cancelActiveDragSessions();
     };
     window.addEventListener(SCORE_SELECTION_CLEAR_EVENT, onClearRequest);
     return () => window.removeEventListener(SCORE_SELECTION_CLEAR_EVENT, onClearRequest);
-  }, []);
+  }, [cancelActiveDragSessions]);
 
   // 連符グループのコピー＆ペースト（Issue #234）はキーボードハンドラ（deps が空の useEffect）から
   // 使うため、props/派生値を ref に写しておく。ここを props 直参照にすると、
@@ -2702,6 +2735,7 @@ export default function PianoSystemCanvas({
 
     // タイドラッグのプレビュー弧
     const tiePreviewPath=document.createElementNS('http://www.w3.org/2000/svg','path');
+    tiePreviewPath.setAttribute('class','vf-tie-preview');
     tiePreviewPath.setAttribute('fill','none');
     tiePreviewPath.setAttribute('stroke','#3b82f6');
     tiePreviewPath.setAttribute('stroke-width','1.5');
@@ -2710,6 +2744,8 @@ export default function PianoSystemCanvas({
     tiePreviewPath.setAttribute('pointer-events','none');
     tiePreviewPath.style.display='none';
     svgRoot.appendChild(tiePreviewPath);
+    // コンポーネント階層の掃除処理から非表示にできるよう ref を最新へ差し替える
+    tiePreviewPathRef.current = tiePreviewPath;
 
     /**
      * 演奏記号のクリック判定を作る（StaffCanvas.tsx の同名関数と同じ役割）。

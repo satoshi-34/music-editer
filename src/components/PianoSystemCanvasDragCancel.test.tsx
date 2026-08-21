@@ -1,0 +1,247 @@
+// src/components/PianoSystemCanvasDragCancel.test.tsx
+// Issue #244 段2（Codex レビュー3点対応）: 進行中ドラッグのキャンセル。
+//
+//   1. ツール切替（数字キー・R キーはマウス押下中にも起きる）で弧ドラッグがキャンセルされ、
+//      その後の mousemove / mouseup で確定しない
+//   2. pointercancel で弧・小節範囲のセッションが残留しない
+//   3. タイの破線プレビューは、SVG の外で mouseup したら画面から消える
+//
+// レンダー手法は PianoSystemCanvasClickCycle.test.tsx（弧の選択）と
+// PianoSystemCanvasDeadEndNotice.test.tsx（座標モック）を踏襲。
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, fireEvent, waitFor, cleanup } from '@testing-library/react';
+
+import PianoSystemCanvas from './PianoSystemCanvas';
+import type { MeasureData } from '../types/storage';
+
+vi.mock('../audio/NotePlayer', () => ({
+  NotePlayer: vi.fn().mockImplementation(function () {
+    return {
+      playNoteEvent: vi.fn().mockResolvedValue(undefined),
+      setSoundSource: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn(),
+    };
+  }),
+}));
+
+vi.mock('../audio/AudioEngine', () => ({
+  defaultAudioEngine: {
+    isInitializedState: vi.fn().mockReturnValue(false),
+    initialize: vi.fn().mockResolvedValue(undefined),
+    start: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('../audio/SoundSource', () => ({
+  InstrumentType: { PIANO: 'piano', ORGAN: 'organ', GUITAR: 'guitar', STRINGS: 'strings' },
+  SoundSource: vi.fn().mockImplementation(function () {
+    return {
+      getCurrentInstrument: vi.fn().mockReturnValue('piano'),
+      setCurrentInstrument: vi.fn(),
+      loadInstrument: vi.fn().mockResolvedValue(undefined),
+      reconnectAllSynths: vi.fn(),
+      dispose: vi.fn(),
+    };
+  }),
+}));
+
+const TEST_CONTAINER_WIDTH = 700;
+
+function mockSvgLayout(svg: SVGSVGElement) {
+  const width = TEST_CONTAINER_WIDTH;
+  const height = parseFloat(svg.getAttribute('height') ?? '0') || 300;
+  svg.getBoundingClientRect = vi.fn((): DOMRect => ({
+    left: 0, top: 0, right: width, bottom: height,
+    width, height, x: 0, y: 0, toJSON: () => ({}),
+  }));
+  Object.defineProperty(svg, 'width', { value: { baseVal: { value: width } }, configurable: true });
+  Object.defineProperty(svg, 'height', { value: { baseVal: { value: height } }, configurable: true });
+}
+
+function yForLine(hit: SVGRectElement, line: number): number {
+  const line0Y = parseFloat(hit.getAttribute('data-line0-y')!);
+  const spacing = parseFloat(hit.getAttribute('data-line-spacing')!);
+  return line0Y + line * spacing;
+}
+
+function centerXOf(hit: SVGRectElement): number {
+  const left = parseFloat(hit.getAttribute('data-note-left')!);
+  const right = parseFloat(hit.getAttribute('data-note-right')!);
+  return (left + right) / 2;
+}
+
+function quarter(key: string) {
+  return { dur: '4' as const, isRest: false, keys: [key] };
+}
+
+function measureWithSlur(): MeasureData {
+  return {
+    events: [
+      { ...quarter('c/5'), arcs: [{ kind: 'slur', fromKey: 'c/5', toKey: 'e/5', toMeasureIndex: 0, toEventIndex: 2 }] },
+      quarter('d/5'),
+      quarter('e/5'),
+      quarter('f/5'),
+    ],
+  };
+}
+
+describe('PianoSystemCanvas 進行中ドラッグのキャンセル（Issue #244 段2）', () => {
+  let clientWidthSpy: PropertyDescriptor | undefined;
+  let originalElementsFromPoint: unknown;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      get: () => TEST_CONTAINER_WIDTH,
+      configurable: true,
+    });
+    originalElementsFromPoint = (document as unknown as Record<string, unknown>).elementsFromPoint;
+  });
+
+  afterEach(() => {
+    cleanup();
+    if (clientWidthSpy) {
+      Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidthSpy);
+    } else {
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
+    }
+    if (originalElementsFromPoint === undefined) {
+      delete (document as unknown as Record<string, unknown>).elementsFromPoint;
+    } else {
+      (document as unknown as Record<string, unknown>).elementsFromPoint = originalElementsFromPoint;
+    }
+  });
+
+  function renderScore(tool: Record<string, unknown>, data: MeasureData[]) {
+    const onChange = vi.fn();
+    const onMeasureSelect = vi.fn();
+    const onMeasureRangeSelect = vi.fn();
+    const view = render(
+      <PianoSystemCanvas
+        measuresPerSystem={data.length}
+        tool={tool as never}
+        scale={1}
+        partsConfig={[{ clef: 'treble', data, onChange }]}
+        showInstrumentLabels={false}
+        timeSignature={[4, 4]}
+        onMeasureSelect={onMeasureSelect}
+        onMeasureRangeSelect={onMeasureRangeSelect}
+      />
+    );
+    const rerenderWith = (nextTool: Record<string, unknown>) => {
+      view.rerender(
+        <PianoSystemCanvas
+          measuresPerSystem={data.length}
+          tool={nextTool as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data, onChange }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+          onMeasureSelect={onMeasureSelect}
+          onMeasureRangeSelect={onMeasureRangeSelect}
+        />
+      );
+    };
+    return { view, onChange, onMeasureSelect, onMeasureRangeSelect, rerenderWith };
+  }
+
+  function currentSvg(container: HTMLElement): SVGSVGElement {
+    const svg = container.querySelector('svg') as SVGSVGElement;
+    expect(svg).toBeTruthy();
+    mockSvgLayout(svg);
+    return svg;
+  }
+
+  function noteHit(svg: SVGSVGElement, noteIndex: number): SVGRectElement {
+    const hit = svg.querySelector(
+      `rect.vf-note-hit[data-measure="0"][data-note="${noteIndex}"][data-hit-part="fixed"]`
+    ) as SVGRectElement;
+    expect(hit).toBeTruthy();
+    return hit;
+  }
+
+  function arcHit(svg: SVGSVGElement): SVGPathElement {
+    const hit = svg.querySelector('path.vf-arc-hit') as SVGPathElement;
+    expect(hit).toBeTruthy();
+    return hit;
+  }
+
+  /** 弧を選択して端点ハンドルを出し、始点ハンドルの mousedown までを行う */
+  async function startArcEndpointDrag(container: HTMLElement) {
+    const svg = currentSvg(container);
+    const hit1 = noteHit(svg, 1);
+    const clientX = centerXOf(hit1);
+    const clientY = yForLine(hit1, 1);
+    (document as unknown as Record<string, unknown>).elementsFromPoint = () => [arcHit(svg), hit1];
+    fireEvent.mouseDown(arcHit(svg), { clientX, clientY });
+    fireEvent.mouseUp(arcHit(currentSvg(container)), { clientX, clientY });
+    await waitFor(() => expect(container.querySelector('[data-arc-ep-start]')).toBeTruthy());
+    const handle = container.querySelector('[data-arc-ep-start]') as SVGElement;
+    fireEvent.mouseDown(handle, { clientX: 100, clientY: 100 });
+  }
+
+  it('1. マウス押下中にツールが替わったら弧ドラッグはキャンセルされ、その後の操作で確定しない', async () => {
+    const { view, onChange, rerenderWith } = renderScore({ mode: 'tie' }, [measureWithSlur()]);
+    await startArcEndpointDrag(view.container);
+
+    // キーボードショートカット由来のツール切替（マウスは押したまま）を再現
+    rerenderWith({ duration: '8' });
+
+    // 切替後の mousemove / mouseup はもうドラッグとして扱われない
+    fireEvent.mouseMove(window, { clientX: 160, clientY: 40 });
+    fireEvent.mouseUp(window, { clientX: 160, clientY: 40 });
+    await new Promise(r => setTimeout(r, 200));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('2a. pointercancel で弧ドラッグが残留しない（後続の mousemove/mouseup で確定しない）', async () => {
+    const { view, onChange } = renderScore({ mode: 'tie' }, [measureWithSlur()]);
+    await startArcEndpointDrag(view.container);
+
+    fireEvent.pointerCancel(window);
+
+    fireEvent.mouseMove(window, { clientX: 160, clientY: 40 });
+    fireEvent.mouseUp(window, { clientX: 160, clientY: 40 });
+    await new Promise(r => setTimeout(r, 200));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('2b. pointercancel で小節範囲ドラッグのアンカーが残留しない', async () => {
+    const { view, onMeasureRangeSelect } = renderScore(
+      { mode: 'select' },
+      [measureWithSlur(), measureWithSlur()],
+    );
+    const svg = currentSvg(view.container);
+    const bgs = Array.from(svg.querySelectorAll('rect.vf-hit')) as SVGRectElement[];
+    expect(bgs.length).toBeGreaterThanOrEqual(2);
+    const bx = (bg: SVGRectElement) => parseFloat(bg.getAttribute('x')!) + parseFloat(bg.getAttribute('width')!) / 2;
+    const by = (bg: SVGRectElement) => parseFloat(bg.getAttribute('y')!) + parseFloat(bg.getAttribute('height')!) / 2;
+    fireEvent.mouseDown(bgs[0], { clientX: bx(bgs[0]), clientY: by(bgs[0]) });
+
+    fireEvent.pointerCancel(window);
+
+    // アンカーが消えていれば、別小節上の mouseenter/mousemove で範囲選択が伸びない
+    fireEvent.mouseEnter(bgs[1], { clientX: bx(bgs[1]), clientY: by(bgs[1]) });
+    fireEvent.mouseMove(bgs[1], { clientX: bx(bgs[1]), clientY: by(bgs[1]) });
+    await new Promise(r => setTimeout(r, 200));
+    expect(onMeasureRangeSelect).not.toHaveBeenCalled();
+  });
+
+  it('3. タイの破線プレビューは SVG の外で mouseup したら画面から消える', async () => {
+    const { view } = renderScore({ mode: 'tie' }, [measureWithSlur()]);
+    const svg = currentSvg(view.container);
+    const start = noteHit(svg, 1);
+    fireEvent.mouseDown(start, { clientX: centerXOf(start), clientY: yForLine(start, 1) });
+
+    // SVG 内で動かすとプレビューの破線が表示される
+    fireEvent.mouseMove(svg, { clientX: centerXOf(start) + 60, clientY: yForLine(start, 1) - 20 });
+    const preview = view.container.querySelector('path.vf-tie-preview') as SVGPathElement;
+    expect(preview).toBeTruthy();
+    expect(preview.style.display).toBe('block');
+
+    // SVG の外で離す → 内部状態だけでなくプレビューも消えること（Codex レビュー指摘3）
+    fireEvent.mouseUp(document.body);
+    expect(preview.style.display).toBe('none');
+  });
+});
