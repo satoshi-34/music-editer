@@ -1844,7 +1844,15 @@ export default function PianoSystemCanvas({
    * ③pointercancel（OS がポインタを取り上げた）。
    */
   const cancelActiveDragSessions = useCallback(() => {
+    const hadActiveArcDrag =
+      dragSessionsRef.current.arcCp != null || dragSessionsRef.current.arcEp != null;
     cancelArcDrag();
+    // cancelArcDrag は Esc 用に arcMoved を false へ戻すが、ここ（ツール切替・CLEAR・
+    // pointercancel）でキャンセルした場合は mouseup 直後に click が続きうる。
+    // その click を1回読み飛ばすために立て直す（Codex レビュー指摘: 戻さないと
+    // ドラッグのつもりだった操作の直後 click が新ツールの編集・選択変更として走る）。
+    // click が来なかった場合の解除は window mouseup 側の setTimeout(0) が行う。
+    if (hadActiveArcDrag) dragSessionsRef.current.arcMoved = true;
     dragSessionsRef.current.tieStart = null;
     dragSessionsRef.current.measureAnchor = null;
     if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
@@ -1859,6 +1867,16 @@ export default function PianoSystemCanvas({
     const onWindowMouseUp = () => {
       dragSessionsRef.current.tieStart = null;
       if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
+      // キャンセル起因で立てた「click 1回読み飛ばし」フラグの安全弁: click は mouseup の
+      // 直後・setTimeout(0) より先に配送されるので（確定パスの既存前提と同じ）、
+      // click が来なければタイマーが解除し、来ていれば消費済みの false を false にするだけ
+      if (
+        dragSessionsRef.current.arcCp == null &&
+        dragSessionsRef.current.arcEp == null &&
+        dragSessionsRef.current.arcMoved
+      ) {
+        setTimeout(() => { dragSessionsRef.current.arcMoved = false; }, 0);
+      }
     };
     const onPointerCancel = () => { cancelActiveDragSessions(); };
     window.addEventListener('mouseup', onWindowMouseUp);
@@ -4731,6 +4749,11 @@ export default function PianoSystemCanvas({
         ir.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});
         ir.addEventListener('click',e=>{
           if(disabled)return;
+          // ドラッグの確定/キャンセル直後に来る click は1回読み飛ばす（#244 段2）。
+          // SVG 背景 click の arcMoved 消費と同じ意味論で、ドラッグ途中にツールを
+          // 切り替えた場合はハンドル要素が消えて click がこの要素へ届くため、
+          // ここで消費しないと「ドラッグのつもりの操作」が新ツールの編集として走る。
+          if (dragSessionsRef.current.arcMoved) { dragSessionsRef.current.arcMoved = false; return; }
           // 小節選択ツール中、または（ツールを問わず）Shift+クリックのときは小節選択にする。
           // Shift+クリックを他ツールでも受けるのは、コピー＆ペーストのためだけに
           // ツールを持ち替えなくて済むようにするため（Issue #145）。
@@ -5004,6 +5027,8 @@ export default function PianoSystemCanvas({
               rect.addEventListener('click',e=>{
                 if(disabled)return;
                 e.stopPropagation();
+                // ドラッグの確定/キャンセル直後の click は1回読み飛ばす（#244 段2・他のヒット要素と同じ）
+                if (dragSessionsRef.current.arcMoved) { dragSessionsRef.current.arcMoved = false; return; }
                 const me=e as MouseEvent;
                 // 小節選択ツール中と Shift+クリックは、アクティブ声部の符頭と同じく小節選択のまま
                 if(isSelectTool||me.shiftKey){
@@ -5252,6 +5277,11 @@ export default function PianoSystemCanvas({
             hit.addEventListener('click',e=>{
               if(disabled)return;
               e.stopPropagation();
+              // ドラッグの確定/キャンセル直後に来る click は1回読み飛ばす（#244 段2）。
+              // SVG 背景 click の arcMoved 消費と同じ意味論で、ドラッグ途中にツールを
+              // 切り替えた場合はハンドル要素が消えて click がこの要素へ届くため、
+              // ここで消費しないと「ドラッグのつもりの操作」が新ツールの編集として走る。
+              if (dragSessionsRef.current.arcMoved) { dragSessionsRef.current.arcMoved = false; return; }
               // 音符の上でも、小節選択ツール中と Shift+クリックは「小節の選択」として扱う
               // （音符の選択・配置はしない）。小節の背景クリックと同じ扱いに揃えることで、
               // 音符が詰まった小節でも選択操作が空振りしないようにする（Issue #145）。

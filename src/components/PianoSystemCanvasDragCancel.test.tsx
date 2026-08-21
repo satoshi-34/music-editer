@@ -13,6 +13,7 @@ import { render, fireEvent, waitFor, cleanup } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData } from '../types/storage';
+import { SCORE_EDIT_NOTICE_EVENT, type ScoreEditNoticeDetail } from '../utils/scoreEditorNotices';
 
 vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function () {
@@ -193,6 +194,49 @@ describe('PianoSystemCanvas 進行中ドラッグのキャンセル（Issue #244
     fireEvent.mouseUp(window, { clientX: 160, clientY: 40 });
     await new Promise(r => setTimeout(r, 200));
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('1b. 移動を伴うドラッグ中にツールを切り替えて離した直後の click は、新ツールの編集として走らない', async () => {
+    const { view, onChange, rerenderWith } = renderScore({ mode: 'tie' }, [measureWithSlur()]);
+    await startArcEndpointDrag(view.container);
+
+    // ドラッグを「動かして」から（arcMoved が立つ）ツールを音価入力へ切り替える
+    fireEvent.mouseMove(window, { clientX: 140, clientY: 60 });
+    rerenderWith({ duration: '8' });
+    fireEvent.mouseUp(window, { clientX: 140, clientY: 60 });
+
+    // click が「新ツールの操作として処理されたか」は #318 の通知で観測する。
+    // この小節は 4/4 満杯なので、処理されると「拍がいっぱい」の通知が出る
+    //（読み飛ばされれば通知も onChange も出ない）。
+    const notices: string[] = [];
+    const listener = (e: Event) => {
+      const detail = (e as CustomEvent<ScoreEditNoticeDetail>).detail;
+      if (detail?.message) notices.push(detail.message);
+    };
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, listener);
+    try {
+      // ブラウザは mouseup の直後に click を必ず合成する。ハンドル要素はツール切替の
+      // 再描画で消えているため、click は下の音符ヒット領域へ届く（Codex レビューの再現経路）
+      const svg = currentSvg(view.container);
+      const hit = noteHit(svg, 3);
+      const right = parseFloat(hit.getAttribute('data-note-right')!);
+      fireEvent.click(hit, { clientX: right + 6, clientY: yForLine(hit, 2) });
+      await new Promise(r => setTimeout(r, 200));
+      expect(onChange).not.toHaveBeenCalled();
+      expect(notices).toHaveLength(0);
+
+      // 読み飛ばしは1回だけ: 次の click は通常どおり新ツールの処理へ届く
+      //（満杯の小節なので「拍がいっぱい」通知が出ることが「処理された」証拠）
+      const svg2 = currentSvg(view.container);
+      const hit2 = noteHit(svg2, 3);
+      const right2 = parseFloat(hit2.getAttribute('data-note-right')!);
+      fireEvent.click(hit2, { clientX: right2 + 6, clientY: yForLine(hit2, 2) });
+      await waitFor(() => expect(notices.length).toBeGreaterThan(0));
+      expect(notices[0]).toContain('拍がいっぱい');
+      expect(onChange).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, listener);
+    }
   });
 
   it('2a. pointercancel で弧ドラッグが残留しない（後続の mousemove/mouseup で確定しない）', async () => {
