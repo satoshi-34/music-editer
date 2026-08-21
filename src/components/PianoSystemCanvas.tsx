@@ -1,7 +1,7 @@
 // PianoSystemCanvas.tsx
 // 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
@@ -1180,39 +1180,6 @@ export default function PianoSystemCanvas({
     // 多段譜では全パートへ同じ ending 番号を一度に付ける。
     setPartsScore(prev => prev.map(partScore => toggleMeasureEnding(partScore ?? [], measureIndex, ending)));
   };
-  // ── 選択状態の集約（#244 段1c）──
-  // note（音符）/ arc（弧）/ hairpin（松葉）の3つの独立 useState を1つの record へ機械的に
-  // 集約した。**排他 union にはしない**: 現行コードは「クリックハンドラが明示的に他方を
-  // null にする」ことで排他を実現しており、union 化はその明示クリアを暗黙化する挙動変更に
-  // なるため段2 で扱う（オーバーレイと同じ判断。設計メモ§2-1）。
-  // setter ラッパーは従来と同名・同シグネチャ・同値 bailout つき（段1b と同じ作法）。
-  type SelectionStates = {
-    note: Sel;
-    arc: SelectedArcSel;
-    hairpin: SelectedHairpinSel;
-  };
-  const [selectionStates, setSelectionStates] = useState<SelectionStates>({
-    note: null, arc: null, hairpin: null,
-  });
-  const selectionSetters = useMemo(() => {
-    const make = <K extends keyof SelectionStates>(key: K) =>
-      (value: React.SetStateAction<SelectionStates[K]>) =>
-        setSelectionStates(prev => {
-          const next = typeof value === 'function'
-            ? (value as (p: SelectionStates[K]) => SelectionStates[K])(prev[key])
-            : value;
-          if (next === prev[key]) return prev;
-          return { ...prev, [key]: next };
-        });
-    return { note: make('note'), arc: make('arc'), hairpin: make('hairpin') };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const selected = selectionStates.note;
-  const setSelected = selectionSetters.note;
-  const selectedArc = selectionStates.arc;
-  const setSelectedArc = selectionSetters.arc;
-  const selectedHairpin = selectionStates.hairpin;
-  const setSelectedHairpin = selectionSetters.hairpin;
   const partsScoreRef = useRef<MeasureData[][]>([]);
   // 最新値ミラー（#244 段1）。宣言時点では selectedArc/selectedHairpin の state が
   // まだ無いため null で初期化する（state の初期値と同じ。初回レンダー後の一括同期
@@ -1388,50 +1355,104 @@ export default function PianoSystemCanvas({
     overlayY: number;
     } | null;
   };
-  const [overlayStates, setOverlayStates] = useState<OverlayStates>({
-    timeSig: null, keySig: null, clef: null, bpm: null, rehearsal: null,
-    text: null, symbolResize: null, symbolOffset: null, symbolPicker: null,
-  });
-  // setter ラッパーは1回だけ作る（従来の setState と同じく参照が安定するように）
-  const overlaySetters = useMemo(() => {
-    const make = <K extends keyof OverlayStates>(key: K) =>
+  // ── 編集ローカル状態の reducer（#244 段2a）──
+  // 段1で record に集約した「選択」と「オーバーレイ」を、1つの reducer + 排他 union へ
+  // 置き換える（運用者承認済みの差分表 #2/#5）。
+  //
+  // - union なので「同時に2つ開く/選ぶ」状態は**型の上で存在しない**。既知の経路では
+  //   排他は従来もハンドラの明示クリア（選択）と blur 確定（オーバーレイ）で成立していた
+  //   ため、観測できる挙動差はない。明示クリアが漏れた未知の経路があれば、それは
+  //   この構造が排他へ矯正する（差分表 #5 で承認済み）
+  // - オーバーレイの「開いたまま別種を開く」は、実際には新オーバーレイの autoFocus が
+  //   先の入力を blur させ**確定処理が先に走ってから**開く（段0.5 の観測）。union の
+  //   置き換えはその後の安全網であり、確定をスキップさせるものではない
+  // - setter ラッパーは従来と同名・同シグネチャ。null set は「その種類が開いて/選ばれて
+  //   いるときだけ閉じる」（別種が開いているときの null set は従来どおり no-op）。
+  //   同値 bailout（段1の教訓）は reducer が prev を返すことで維持する
+  type OverlayKind = keyof OverlayStates;
+  type OverlayUnion = { [K in OverlayKind]: { kind: K; payload: NonNullable<OverlayStates[K]> } }[OverlayKind];
+  type SelectionSlot = 'note' | 'arc' | 'hairpin';
+  type SelectionPayloads = {
+    note: NonNullable<Sel>;
+    arc: NonNullable<SelectedArcSel>;
+    hairpin: NonNullable<SelectedHairpinSel>;
+  };
+  type SelectionUnion = { [K in SelectionSlot]: { kind: K; payload: SelectionPayloads[K] } }[SelectionSlot];
+  type EditorLocalState = { selection: SelectionUnion | null; overlay: OverlayUnion | null };
+  // value は各 slot/kind ごとに型が違うため action 上は unknown で運び、
+  // 型安全は同名ラッパー（従来の setter と同じシグネチャ）で担保する
+  type EditorLocalAction =
+    | { type: 'SELECTION_SET'; slot: SelectionSlot; value: unknown }
+    | { type: 'OVERLAY_SET'; kind: OverlayKind; value: unknown };
+  const editorLocalReducer = (state: EditorLocalState, action: EditorLocalAction): EditorLocalState => {
+    switch (action.type) {
+      case 'SELECTION_SET': {
+        const current = state.selection?.kind === action.slot ? state.selection.payload : null;
+        const next = typeof action.value === 'function'
+          ? (action.value as (p: unknown) => unknown)(current)
+          : action.value;
+        if (next === current) return state;
+        if (next == null) {
+          if (state.selection?.kind !== action.slot) return state;
+          return { ...state, selection: null };
+        }
+        return { ...state, selection: { kind: action.slot, payload: next } as SelectionUnion };
+      }
+      case 'OVERLAY_SET': {
+        const current = state.overlay?.kind === action.kind ? state.overlay.payload : null;
+        const next = typeof action.value === 'function'
+          ? (action.value as (p: unknown) => unknown)(current)
+          : action.value;
+        if (next === current) return state;
+        if (next == null) {
+          if (state.overlay?.kind !== action.kind) return state;
+          return { ...state, overlay: null };
+        }
+        return { ...state, overlay: { kind: action.kind, payload: next } as OverlayUnion };
+      }
+    }
+  };
+  const [editorLocal, dispatchEditorLocal] = useReducer(editorLocalReducer, { selection: null, overlay: null });
+  const editorLocalSetters = useMemo(() => {
+    const selectionSetter = <K extends SelectionSlot>(slot: K) =>
+      (value: React.SetStateAction<SelectionPayloads[K] | null>) =>
+        dispatchEditorLocal({ type: 'SELECTION_SET', slot, value });
+    const overlaySetter = <K extends OverlayKind>(kind: K) =>
       (value: React.SetStateAction<OverlayStates[K]>) =>
-        setOverlayStates(prev => {
-          const next = typeof value === 'function'
-            ? (value as (p: OverlayStates[K]) => OverlayStates[K])(prev[key])
-            : value;
-          // 素の useState は「同じ値の set」で再レンダーしない（Object.is で bailout）。
-          // record 化してもその性質を保たないと、マウント時の「null を null にする」掃除
-          // effect が毎回新しい record を作って余計な再描画を起こす（実際にテストが割れた）。
-          if (next === prev[key]) return prev;
-          return { ...prev, [key]: next };
-        });
+        dispatchEditorLocal({ type: 'OVERLAY_SET', kind, value });
     return {
-      timeSig: make('timeSig'), keySig: make('keySig'), clef: make('clef'),
-      bpm: make('bpm'), rehearsal: make('rehearsal'), text: make('text'),
-      symbolResize: make('symbolResize'), symbolOffset: make('symbolOffset'),
-      symbolPicker: make('symbolPicker'),
+      note: selectionSetter('note'), arc: selectionSetter('arc'), hairpin: selectionSetter('hairpin'),
+      timeSig: overlaySetter('timeSig'), keySig: overlaySetter('keySig'), clef: overlaySetter('clef'),
+      bpm: overlaySetter('bpm'), rehearsal: overlaySetter('rehearsal'), text: overlaySetter('text'),
+      symbolResize: overlaySetter('symbolResize'), symbolOffset: overlaySetter('symbolOffset'),
+      symbolPicker: overlaySetter('symbolPicker'),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const timeSigEditState = overlayStates.timeSig;
-  const setTimeSigEditState = overlaySetters.timeSig;
-  const keySigEditState = overlayStates.keySig;
-  const setKeySigEditState = overlaySetters.keySig;
-  const clefEditState = overlayStates.clef;
-  const setClefEditState = overlaySetters.clef;
-  const bpmEditState = overlayStates.bpm;
-  const setBpmEditState = overlaySetters.bpm;
-  const rehearsalEditState = overlayStates.rehearsal;
-  const setRehearsalEditState = overlaySetters.rehearsal;
-  const textEditState = overlayStates.text;
-  const setTextEditState = overlaySetters.text;
-  const symbolResizeEditState = overlayStates.symbolResize;
-  const setSymbolResizeEditState = overlaySetters.symbolResize;
-  const symbolOffsetEditState = overlayStates.symbolOffset;
-  const setSymbolOffsetEditState = overlaySetters.symbolOffset;
-  const symbolAdjustPickerState = overlayStates.symbolPicker;
-  const setSymbolAdjustPickerState = overlaySetters.symbolPicker;
+  const selected: Sel = editorLocal.selection?.kind === 'note' ? editorLocal.selection.payload : null;
+  const setSelected = editorLocalSetters.note;
+  const selectedArc: SelectedArcSel = editorLocal.selection?.kind === 'arc' ? editorLocal.selection.payload : null;
+  const setSelectedArc = editorLocalSetters.arc;
+  const selectedHairpin: SelectedHairpinSel = editorLocal.selection?.kind === 'hairpin' ? editorLocal.selection.payload : null;
+  const setSelectedHairpin = editorLocalSetters.hairpin;
+  const timeSigEditState = editorLocal.overlay?.kind === 'timeSig' ? editorLocal.overlay.payload : null;
+  const setTimeSigEditState = editorLocalSetters.timeSig;
+  const keySigEditState = editorLocal.overlay?.kind === 'keySig' ? editorLocal.overlay.payload : null;
+  const setKeySigEditState = editorLocalSetters.keySig;
+  const clefEditState = editorLocal.overlay?.kind === 'clef' ? editorLocal.overlay.payload : null;
+  const setClefEditState = editorLocalSetters.clef;
+  const bpmEditState = editorLocal.overlay?.kind === 'bpm' ? editorLocal.overlay.payload : null;
+  const setBpmEditState = editorLocalSetters.bpm;
+  const rehearsalEditState = editorLocal.overlay?.kind === 'rehearsal' ? editorLocal.overlay.payload : null;
+  const setRehearsalEditState = editorLocalSetters.rehearsal;
+  const textEditState = editorLocal.overlay?.kind === 'text' ? editorLocal.overlay.payload : null;
+  const setTextEditState = editorLocalSetters.text;
+  const symbolResizeEditState = editorLocal.overlay?.kind === 'symbolResize' ? editorLocal.overlay.payload : null;
+  const setSymbolResizeEditState = editorLocalSetters.symbolResize;
+  const symbolOffsetEditState = editorLocal.overlay?.kind === 'symbolOffset' ? editorLocal.overlay.payload : null;
+  const setSymbolOffsetEditState = editorLocalSetters.symbolOffset;
+  const symbolAdjustPickerState = editorLocal.overlay?.kind === 'symbolPicker' ? editorLocal.overlay.payload : null;
+  const setSymbolAdjustPickerState = editorLocalSetters.symbolPicker;
 
   const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
   const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
