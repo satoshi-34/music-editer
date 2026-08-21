@@ -206,3 +206,21 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
 - `PianoSystemCanvasDragCancel.test.tsx`（6件）で各経路を固定。いずれも**修正前のコードで落ちること**を
   確認してから修正を適用した（1/1b＝ツール切替、2a/2b＝pointercancel の弧・小節、
   2c＝pointercancel 後に mouseup が無くても次の click が1回目から処理される、3＝プレビュー非表示）
+
+## 8. 段3 の実装記録（2026-08-22・前半 = 段3a+3b）
+
+段3 は差分を審査可能な大きさに保つため 3分割し、PR も分ける:
+
+- **段3a（本PR）**: 小節単位ツール8モード（tie/hairpin スキップ・repeat・ending・小節メタ5種）の
+  二重実装を `handleMeasureScopedTool` 1か所へ集約。'handled' | 'passThrough' の2値は §2-3 の
+  3値型の先行形（この集合に rejected は存在しない）。モードは排他のため評価順の入替に挙動差なし
+- **段3b（本PR）**: `src/editor/hitResolution.ts` を新設し、純粋層を物理移設:
+  - 座標変換（getAccumulatedCSSZoom / getSvgVisualMetrics / getRawPerScreenPx(+Safe) / clientToGroup）
+  - ヒット定数（CELL_PAD / CHORD_LEDGER_* / KEY_SELECT_* / EXTRA_* / OUTER・INNER_KEY_SELECT_MAX_LINES）
+  - 選択判定の純関数（snapLine / noteKeyLineExtent / findKeyIndexAtLine / findNearestKeyIndexWithinLines / keySelectXPad）
+  - **resolveNoteHitGeometry**（旧 buildNoteHitGeometry）: 閉包で握っていた文脈を
+    `NoteHitGeometryContext` として明示化。**`HitAttributionPolicy` 入力を導入**し、
+    現行 'band' のみ実装。#316 は 'explicitLayer' の実装追加でここに差し込む
+- **段3c（次PR）**: 音符クリックの残りのモード分岐（フラグ15種+既定の音符/休符/placeholder 分岐）を
+  `handled(action) | rejected(reason, guidance) | passThrough` の3値テーブルへ。
+  rejected は #318 通知へ機械的に接続し、無言 no-op を型から排除する

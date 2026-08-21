@@ -94,6 +94,12 @@ import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
 import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt } from '../utils/crossStaffUtils';
 import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../utils/crossStaffBeamUtils';
+import {
+  CHORD_HIT_PAD, EXTRA_TOP, EXTRA_BOTTOM, INACTIVE_VOICE_COLOR,
+  keySelectXPad, snapLine, findKeyIndexAtLine,
+  getRawPerScreenPxSafe, clientToGroup, resolveNoteHitGeometry,
+  type HitAttributionPolicy,
+} from '../editor/hitResolution';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import {
@@ -270,22 +276,10 @@ const PAGE_LEFT = SYSTEM_PAGE_SIDE_PADDING, PAGE_RIGHT = SYSTEM_PAGE_SIDE_PADDIN
 const TARGET_FILL = SYSTEM_TARGET_FILL;
 const CLEF_PAD_FIRST = SYSTEM_FIRST_CLEF_PADDING;
 
-/* ===== ヒット領域 ===== */
-const CELL_PAD = 6, HIT_MIN_W = 14;
-// 音符セルのクリック可能幅は、描画ループ内で
-//   前後の音符との中間点 + CELL_PAD
-// から作る透明な .vf-note-hit rect です。青い選択枠は表示専用なので、
-// クリックしづらい/隣に吸われる場合は CELL_PAD と HIT_MIN_W を調整してください。
-// 符頭の左端から左右に加えるパディング（px）。この範囲内のクリックが和音追加ゾーン。
-// 隣の音符を置きたいクリックが和音追加に吸われないよう、従来値 15px の 10% に抑える。
-const CHORD_HIT_PAD = 1.5;
-// 2声部小節で、非アクティブ声部の音符を淡色表示するときの色。
-// 印刷時は App.css 側の @media print で svg path/line を強制的に #000 に戻す（紙面では常に黒）。
-const INACTIVE_VOICE_COLOR = '#9ca3af';
-// 和音追加のY判定は「五線 ± 3加線」の固定範囲
-const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
-const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）
 const REST_BODY_HIT_HALF_WIDTH = 18;
+// クリック帰属ポリシー（#244 段3b）。現行は帯域推測のみ。
+// #316（編集レイヤー明示選択）はここを 'explicitLayer' に差し替える実装を追加する。
+const HIT_ATTRIBUTION_POLICY: HitAttributionPolicy = { attribution: 'band' };
 
 // 楽譜全体で「選択は常に1つだけ」を保証するための仕組み。
 // SingleStaff / PianoStaff などは「1段 = 1つの PianoSystemCanvas」を並べる構造で、
@@ -301,7 +295,6 @@ const SELECTION_CLAIMED_EVENT = 'pianosystemcanvas-selection-claimed';
 let selectionOwnerSeq = 0;
 // 和音内の個別音選択は、クリックYを五線の線/間へ丸めて keys[] と照合します。
 // 通常は 0.001 のままでOK。判定を甘くしたい場合だけ大きくしてください。
-const KEY_SELECT_LINE_EPS = 0.001;
 // 個別音選択を有効にする、符頭の描画X範囲からの左右パディング。
 // 音符のヒット領域（.vf-note-hit）は隣の音符との中間点〜小節端まで広がるため、
 // Y（音高ライン）の一致だけで選択にすると、小節末尾の空き拍を同じ高さで
@@ -327,16 +320,6 @@ const KEY_SELECT_LINE_EPS = 0.001;
 // 画面px換算の許容幅が実際のズーム倍率だけズレてしまう。
 // そこで getSvgVisualMetrics（getBoundingClientRect の実測値）から求めた
 // 「実効スケール（requestedScale × CSSズームを両方含む）」を使うことで、
-// 画面表示のズームを変えても常に「画面上で狙った px 分」の許容幅になるようにする。
-const KEY_SELECT_X_PAD_SCREEN_PX = 12;
-
-// KEY_SELECT_X_PAD_SCREEN_PX（画面px基準）を、svg から実測した実効スケールのもとでの
-// raw 座標（SVG内部座標）のパディング量に変換する。
-// getRawPerScreenPx は「画面1pxが何raw単位に相当するか」を返すので、
-// そのまま画面px基準の値に掛けるだけでよい（割り算ではない点に注意）。
-function keySelectXPad(svg: SVGSVGElement): number {
-  return KEY_SELECT_X_PAD_SCREEN_PX * getRawPerScreenPx(svg);
-}
 // 弧（タイ／スラー）の当たり判定まわりの寸法。どちらも「画面上の見た目の px」で決め、
 // 実際に使うときは getRawPerScreenPx(svg) で SVG 内部座標（raw 単位）へ変換する。
 // raw 単位の定数のままだと、画面表示のズームを変えたときに「画面上の掴みやすさ」が
@@ -366,7 +349,6 @@ type ClickCycleTarget = {
 const SELECTED_KEY_PAD_X = 3;
 const SELECTED_KEY_HALF_HEIGHT = 7;
 const SELECTED_EVENT_PAD = 3;
-const EXTRA_TOP = 4, EXTRA_BOTTOM = 6;
 const PREVIEW_LEDGER_WIDTH = 22;
 
 /* ===== duration変換 ===== */
@@ -572,44 +554,7 @@ function getKeySignatureHitBounds(
   return clampBounds(timeX + timeWidth, fallbackRight);
 }
 
-// クリックYを五線の「線／間」（0.5ライン刻み）へ丸める。
-// minLine / maxLine は丸め先の候補範囲。省略時は音符を新しく置ける範囲
-// （五線 ± EXTRA_TOP / EXTRA_BOTTOM）で、これが従来からの挙動。
-// 既存の符頭を選択できるかの判定だけは、その音符が実際にいる線まで候補を
-// 広げて呼ぶ（Issue #218。詳しくは noteHitLineRange のコメント参照）。
-function snapLine(stave: Stave, y: number, minLine: number = -EXTRA_TOP, maxLine: number = 4+EXTRA_BOTTOM): number {
-  const topY=stave.getYForLine(0);
-  const sp=(stave.getSpacingBetweenLines?.() as number)||((stave.getYForLine(4)-topY)/4);
-  let best=minLine, minD=Infinity;
-  for(let l=minLine;l<=maxLine;l+=0.5){
-    const d=Math.abs(y-(topY+l*sp));
-    if(d<minD){minD=d;best=Math.round(l*2)/2;}
-  }
-  return best;
-}
 
-// この音符イベントの符頭が「五線の何ライン目から何ライン目までにいるか」を返す。
-// 和音なら一番上の音と一番下の音の線。keys が空・不正なときは null。
-//
-// 従来、当たり判定と選択判定はどちらも「五線 ± 3加線」（CHORD_LEDGER_TOP / BOT）の
-// 固定範囲だけを見ていたため、そこより外にいる音符（ヘ音記号の g/4＝line -3 や、
-// ト音記号の下の極低音など）は符頭の中心を正確にクリックしても選択できず、
-// Delete も矢印キーでの音高修正もできなかった（Issue #218。符頭の半分が判定範囲の
-// 外にはみ出すため）。この値を使って、そういう音符のときだけ範囲を広げる。
-function noteKeyLineExtent(
-  keys: string[],
-  keyToLineFn: (k: string) => number
-): { minLine: number; maxLine: number } | null {
-  let minLine = Infinity;
-  let maxLine = -Infinity;
-  for (const key of keys) {
-    const line = keyToLineFn(key);
-    if (!Number.isFinite(line)) continue;
-    if (line < minLine) minLine = line;
-    if (line > maxLine) maxLine = line;
-  }
-  return Number.isFinite(minLine) ? { minLine, maxLine } : null;
-}
 
 function getPreviewLedgerLines(snappedLine: number): number[] {
   const lines: number[] = [];
@@ -625,15 +570,6 @@ function getPreviewLedgerLines(snappedLine: number): number[] {
   return lines;
 }
 
-/* ===== SVG座標変換（Safari対応） ===== */
-function getAccumulatedCSSZoom(el: Element): number {
-  const wrapper = el.closest('.page-wrapper');
-  if (wrapper) {
-    const v = parseFloat(window.getComputedStyle(wrapper).getPropertyValue('--scale').trim());
-    if (Number.isFinite(v) && v > 0) return v;
-  }
-  return 1;
-}
 
 // クリックしたY座標に最も近い和音内の key を返す（タイ開始符頭の特定に使う）
 function findNearestKey(
@@ -649,47 +585,6 @@ function findNearestKey(
   return bestKey;
 }
 
-// findNearestKey の index 版。localY から maxLines（ライン単位）以内にある
-// 最寄りの構成音の index を返す。範囲内に無ければ -1。
-//
-// 用途: 固定範囲（五線±3加線）の外にいる音符の選択判定。あの帯は挿入も和音追加も
-// しない（隣のパートと重なりうるため）ので、従来の「線ちょうど（±0.25ライン
-// ＝100%ズームで約2.5px）だけ選択」だと実質クリック不能だった（実機テストで
-// 「スラーの下の低音が選択できない」として発覚）。何も起きない帯に限って
-// 吸い寄せを効かせるので、音符の追加位置がずれる副作用はない。
-const OUTER_KEY_SELECT_MAX_LINES = 1.0;
-// 五線の中（＝和音追加が起きる帯）で、既存の構成音へ吸い寄せる許容幅（ライン単位）。
-//
-// 用途: 2度でぶつかる和音（例 [e/4, f#/4]）の上の音は符幹の右へずらして描かれ、
-// 実機テスト（Issue #271・月光2小節目）で「狙っても選択できない」と報告された。
-// 従来、五線内で個別選択が成立するのはクリックYを 0.5 ライン刻みへ丸めた結果が
-// その音の線と一致したときだけ＝実質「線ちょうど ±0.25 ライン」（100%ズームで
-// 約2.4px）で、そこを外すと和音追加（調号適用で G→G# など）になり、
-// 何が起きたのか分かりにくかった。
-//
-// 運用者裁定（案A・選択優先）: 和音追加は「離れた所に置いて矢印キーで近づける」
-// 回避手段があるが、選択できない場合の回避手段が無い。そこで符頭のX範囲内に限り
-// 選択を優先する。値をライン単位で持つのは、五線が拡大縮小しても「見た目に対する
-// 許容幅」が一定に保たれるため（raw 単位の定数にすると編成譜や画面ズームで
-// 画面px換算の幅がズレる。keySelectXPad と同じ考え方）。
-//
-// 0.5 未満にしてあるのは、隣の線／間（＝0.5 ライン離れた位置）を狙ったクリックが
-// 吸い寄せられて和音追加できなくならないようにするため。
-const INNER_KEY_SELECT_MAX_LINES = 0.3;
-function findNearestKeyIndexWithinLines(
-  keys: string[], localY: number, stave: Stave,
-  keyToLineFn: (k: string) => number, maxLines: number
-): number {
-  const topY = stave.getYForLine(0);
-  const sp = (stave.getSpacingBetweenLines?.() as number) || ((stave.getYForLine(4) - topY) / 4);
-  let bestIdx = -1;
-  let bestDist = Infinity;
-  keys.forEach((key, idx) => {
-    const dist = Math.abs(localY - stave.getYForLine(keyToLineFn(key)));
-    if (dist < bestDist) { bestDist = dist; bestIdx = idx; }
-  });
-  return bestDist <= maxLines * sp ? bestIdx : -1;
-}
 
 // 「クリックしたら選択になるか、追加になるか」がホバーだけでは分からず、
 // クリックしてみて初めて分かる（=事前に予測できない）というユーザーテストでの
@@ -711,16 +606,6 @@ function setNoteHoverHighlight(vfNote: unknown, active: boolean): void {
   }
 }
 
-function findKeyIndexAtLine(
-  keys: string[],
-  snappedLine: number,
-  keyToLineFn: (k: string) => number
-): number {
-  // 個別音選択の判定。クリックYを snapLine() で五線の「線/間」に丸め、
-  // そのライン番号と keys[] の音高ラインが一致するかを見ます。
-  // ここを甘くすると隣の音を誤選択しやすくなるので、基本は小さい値にしています。
-  return keys.findIndex((key) => Math.abs(keyToLineFn(key) - snappedLine) < KEY_SELECT_LINE_EPS);
-}
 
 // clientToGroup と keySelectXPad の両方が必要とする「画面px ⇄ SVG内部座標(raw単位)」の
 // 実効スケールをここでまとめて計算する。
@@ -732,60 +617,7 @@ function findKeyIndexAtLine(
 // getBoundingClientRect は CSS transform（ズーム）を含めた実際の見た目サイズを返すため、
 // 「viewBox 幅 ÷ 実際の見た目の幅」を実効スケールとして使えば、VexFlowのrequestedScaleや
 // CSSズームがどんな値でも（Safariのフォールバック分岐も含めて）常に正しい変換になる。
-function getSvgVisualMetrics(svg: SVGSVGElement): {
-  vbW: number; vbH: number; visualW: number; visualH: number; originLeft: number; originTop: number;
-} {
-  const svgRect = svg.getBoundingClientRect();
-  const viewBox = svg.viewBox?.baseVal;
-  // width/height の baseVal は「SVG がまだレイアウトされていない」状況では読めないことがある
-  // （テスト環境の jsdom、および描画中に自分で呼ぶ場合）。読めないときは 0 を返し、
-  // 下の visualW/H が 0 になる → 呼び出し側（getRawPerScreenPx / clientToGroup）の
-  // ガードで安全な既定値へ落ちるようにする（例外で描画ごと止めない）。
-  const logW = svg.width?.baseVal?.value ?? 0;
-  const logH = svg.height?.baseVal?.value ?? 0;
-  const vbW = (viewBox && viewBox.width > 0) ? viewBox.width : logW;
-  const vbH = (viewBox && viewBox.height > 0) ? viewBox.height : logH;
 
-  const cssZoom = getAccumulatedCSSZoom(svg);
-  const expectedVisualW = logW * cssZoom;
-  const bcrReflectsZoom = Math.abs(svgRect.width - expectedVisualW) < logW * 0.05;
-  const visualW = bcrReflectsZoom ? svgRect.width : expectedVisualW;
-  const visualH = bcrReflectsZoom ? svgRect.height : logH * cssZoom;
-
-  let originLeft = svgRect.left;
-  let originTop  = svgRect.top;
-  if (!bcrReflectsZoom) {
-    const zoomContainer = svg.closest('.page-wrapper');
-    if (zoomContainer) {
-      const cr = zoomContainer.getBoundingClientRect();
-      originLeft = cr.left + (svgRect.left - cr.left) * cssZoom;
-      originTop  = cr.top  + (svgRect.top  - cr.top)  * cssZoom;
-    }
-  }
-
-  return { vbW, vbH, visualW, visualH, originLeft, originTop };
-}
-
-// 画面px 1px あたりの raw 単位（SVG内部座標）の大きさ。
-// keySelectXPad など「画面px基準のパディングを raw 単位に変換したい」箇所で使う。
-// VexFlow の requestedScale（s）だけでなく、.page-wrapper の CSSズームも含めた
-// 実測ベースの値なので、ズーム倍率に関わらず常に「画面上で狙った px 分」の判定になる。
-function getRawPerScreenPx(svg: SVGSVGElement): number {
-  const { vbW, visualW } = getSvgVisualMetrics(svg);
-  if (!visualW || !isFinite(vbW / visualW)) return 1;
-  return vbW / visualW;
-}
-
-// 描画の途中（レイアウト確定前）や、SVG の寸法プロパティを持たない環境（jsdom）でも
-// 描画そのものを止めないための入口。読めなければ「1px = 1raw」として扱う。
-// クリック時に呼ぶぶんには getRawPerScreenPx を直接使ってよい（要素は必ず配置済みのため）。
-function getRawPerScreenPxSafe(svg: SVGSVGElement): number {
-  try {
-    return getRawPerScreenPx(svg);
-  } catch {
-    return 1;
-  }
-}
 
 /**
  * 弧（タイ／スラー）1本ぶんの形状パラメータ。
@@ -801,17 +633,6 @@ type ArcGeom = {
   apexXRatio: number;
 };
 
-function clientToGroup(svg: SVGSVGElement, _group: SVGGElement, cx: number, cy: number): { x: number; y: number } {
-  const svgRect = svg.getBoundingClientRect();
-  if (!svgRect.width || !svgRect.height) return { x: 0, y: 0 };
-
-  const { vbW, vbH, visualW, visualH, originLeft, originTop } = getSvgVisualMetrics(svg);
-
-  const x = (cx - originLeft) * (vbW / visualW);
-  const y = (cy - originTop)  * (vbH / visualH);
-  if (!isFinite(x) || !isFinite(y)) return { x: 0, y: 0 };
-  return { x, y };
-}
 
 function makeVFNote(
   ev: NoteEvent,
@@ -4332,14 +4153,6 @@ export default function PianoSystemCanvas({
         const activeVfNotes = activeRenderedEntry?.vfNotes ?? [];
         const activeEvs = activeRenderedEntry?.sourceEvents ?? [];
 
-        // VexFlow の音符オブジェクトから、当たり判定に必要な最小限のメソッドだけを見る型。
-        // 実体は StaveNote だが、描画結果に依存する部分（getBoundingBox）は環境によって
-        // 返らないことがあるため、すべて省略可能として扱う。
-        type VfNoteLike = {
-          getAbsoluteX?: () => number;
-          getBoundingBox?: () => { getX?: () => number; getW?: () => number; getY?: () => number; getH?: () => number } | undefined;
-        };
-
         /**
          * 音符1つぶんの「当たり判定の幾何」と「その位置は符頭を選ぶクリックか」の判定式を作る。
          *
@@ -4351,154 +4164,28 @@ export default function PianoSystemCanvas({
          * 渡すのは声部ごとの配列（evs / vfNotes と、その声部の音符X座標 anchors / 中間点 mids）で、
          * 声部そのものは知らない純粋な幾何計算にしてある。
          */
+        // ヒット幾何と選択判定の実体は editor/hitResolution の純関数（#244 段3b）。
+        // 閉包で握っていた文脈（五線・帯・小節端・またぎ解決・帰属ポリシー）を
+        // ctx として明示的に渡す。返り値の形・ロジックは移設前と同一（挙動ゼロ差）。
         const buildNoteHitGeometry = (
           evs: RenderNoteEvent[],
           vfNotes: StaveNote[],
           j: number,
           anchors: number[],
           mids: number[],
-        ) => {
-          const n = vfNotes[j] as unknown as VfNoteLike;
-          // 段またぎ記譜（Issue #310）: 座標の基準は「自分のパートの五線」ではなく
-          // 「この音符が実際に載っている五線」から取る。またぎでない音符では
-          // noteStave===stave / noteK2l===k2l / noteBand===自パートの帯 になるので、
-          // 従来の譜面の当たり判定は 1px も変わらない（不変条件1を分岐の構造で守る）。
-          const evForStave = evs[j];
-          const noteStave = resolveRenderStave(evForStave);
-          const noteK2l = resolveK2lFor(evForStave);
-          const noteBand = noteStave === stave
-            ? {top:staveTop,bot:staveBot}
-            : computeStaveBand(resolveRenderPartIndexFor(evForStave));
-          const rl=j===0?measLeft:mids[j-1], rr=j===vfNotes.length-1?measRight:mids[j];
-          // この音符イベントへクリックを届けるための透明 rect 範囲。
-          // 左右は隣の音符との中間点で分割し、CELL_PAD だけ広げています。
-          // 選択の青枠はここから独立した「表示」なので、クリック範囲調整はここを見る。
-          let xl=Math.max(measLeft+1,rl-CELL_PAD), xr=Math.min(measRight-1,rr+CELL_PAD);
-          if(xr-xl<HIT_MIN_W){const h=(HIT_MIN_W-(xr-xl))/2;xl=Math.max(measLeft+1,xl-h);xr=Math.min(measRight-1,xr+h);}
-          // またぎ音符（Issue #315）では下でX範囲を符頭幅へ狭めるので let にしてある。
-          let wHit=Math.max(HIT_MIN_W,xr-xl);
-          // 和音判定Y範囲：五線 ± 3加線の固定範囲（音符の位置に依存しない）。
-          //
-          // Issue #219: 多段譜（大譜表・四重奏・編成譜）では、この固定範囲だけを
-          // 隣のパートとの中間線（staveTop / staveBot。小節の背景 .vf-hit と同じ境界）で
-          // クリップする。パート間隔が 100 より狭い譜面（四重奏の既定 80・編成譜の 60）では
-          // 上下のパートの固定範囲が縦に重なっており、SVG は「後から描いた要素が手前」なので
-          // 下のパートの当たり判定が上のパートの守備範囲を奪う。その結果、上の段へ低い音を
-          // 置こうとしたクリックが下の段に渡り、極端な上加線の音として入っていた。
-          // クリップすると「近い方の五線」へ必ず帰属する（境界＝両五線のちょうど中間）。
-          //
-          // クリップするのはこの固定範囲だけで、下の符頭ぶんの拡張（NOTE_HIT_EXTENSION）は
-          // クリップしない。拡張ごとクリップすると、五線から遠い音符の符頭が
-          // 「中心ちょうどしか押せない」状態になり Issue #218 を作り直してしまうため。
-          const fixedTopY=noteStave.getYForLine(CHORD_LEDGER_TOP);
-          const fixedBotY=noteStave.getYForLine(CHORD_LEDGER_BOT);
-          const clippedTopY=Math.max(fixedTopY,noteBand.top);
-          const clippedBotY=Math.min(fixedBotY,noteBand.bot);
-          // 選択・ヒット領域のY範囲（Issue #218）。
-          // 休符は五線内に描かれるので従来どおり固定範囲のまま扱い、
-          // 音符だけ符頭の位置に応じて範囲を広げる。
-          const keyLines=evs[j]?.isRest?null:noteKeyLineExtent(evs[j]?.keys??[],noteK2l);
-          // 広げ幅は符頭1個分の半分（0.5ライン）だけ。符頭の高さがちょうど1ライン分なので、
-          // これで符頭の描画範囲を過不足なく覆える（選択が成立するのは符頭中心±0.25ライン
-          // なので、その帯も丸ごと入る）。必要最小限にするのは、広げたぶんが隣のパートの
-          // 領域へ重なるため（下記 NOTE_HIT_EXTENSION の説明を参照）。
-          // 符頭が固定範囲の内側にいる普通の音符では、下の Math.min / Math.max によって
-          // この値は使われない（＝ヒット領域はクリップ後の固定範囲そのものになる）。
-          const noteHeadTopY=keyLines?noteStave.getYForLine(keyLines.minLine-0.5):clippedTopY;
-          const noteHeadBotY=keyLines?noteStave.getYForLine(keyLines.maxLine+0.5):clippedBotY;
-          // 符頭の実際の描画X範囲。getAbsoluteX()はtickの左端でnotehead自体より左になるため
-          // getBoundingBox() で実際に描画された領域を取得する
-          const bb=n?.getBoundingBox?.();
-          const noteVisualLeft=bb?.getX?.()??anchors[j];
-          const noteVisualRight=bb?((bb.getX?.()??anchors[j])+(bb.getW?.()??12)):anchors[j]+12;
-          // ── 段またぎ音符の当たり判定は「符頭サイズ」まで縮める（Issue #315）──
-          //
-          // 上の固定範囲（五線±3加線）を帯でクリップする方式（#219）は、
-          // 「自分の帯からはみ出した固定範囲が隣の帯を奪う」事故を防ぐためのもの。
-          // ところが段またぎ音符（#310）は列そのものが隣パートの帯の中にあるため、
-          // クリップが逆に「隣の帯を縦いっぱいに覆う列を作る」方向に働き、
-          // またぎ音符がある小節では**左手側に音符を置けなくなっていた**（#315 の症状）。
-          //
-          // そこで、またぎ音符に限って判定を符頭の描画範囲だけに絞る:
-          //   Y = 符頭の上端〜下端（keyLines ±0.5ライン。固定範囲は使わない）
-          //   X = 符頭の実描画範囲 ± keySelectXPad（＝個別音選択が成立するX範囲と同じ）
-          // 符頭を押せば選択・⇵解除ができ、それ以外は帯の持ち主（隣パート）の挿入に返る。
-          // 非アクティブ声部の符頭を符頭サイズで判定する #306 と同じ発想。
-          //
-          // 引き換えに、またぎ音符への「上下クリックで和音の音を追加」は符頭近傍でしか
-          // 効かなくなる（またぎは記譜の仕上げ段階で使う機能なので許容という裁定）。
-          // またぎでない音符（renderStaff 無し）は下の条件が false なので 1px も変わらない。
-          const isCrossStaffHit=resolveRenderPartIndexFor(evForStave)!==pi&&!!keyLines;
-          const chordTopY=isCrossStaffHit?noteHeadTopY:clippedTopY;
-          const chordBotY=isCrossStaffHit?noteHeadBotY:clippedBotY;
-          if(isCrossStaffHit){
-            const crossXPad=keySelectXPad(svg);
-            const crossLeft=Math.max(xl,noteVisualLeft-crossXPad);
-            const crossRight=Math.min(xl+wHit,noteVisualRight+crossXPad);
-            // 万一 getBoundingBox が使えず符頭幅が取れない環境でも、幅が 0 以下になったら
-            // 従来のセル幅のままにしておく（クリックがどこにも当たらない状態を作らない）
-            if(crossRight>crossLeft){xl=crossLeft;wHit=crossRight-crossLeft;}
-          }
-          // yHit は2枚に分かれたヒット rect を合わせた外接範囲の上端。
-          // rect の座標には使わなくなったが、選択枠（eventBoxY のフォールバック）が引き続き使う。
-          const yHit=Math.min(chordTopY,noteHeadTopY);
-          // 既存の符頭を選択できるかの判定（findKeyIndexAtLine）で使う丸め。
-          // 丸め先の候補を「新規入力できる範囲」だけに限ると、そこより外にいる音符の
-          // 線には決して一致せず選択不能のままになるため、その音符の線まで候補を広げる。
-          //
-          // 広げるのは「符頭の線ちょうど」まで（ヒット領域のような ±1 はしない）。
-          // snapLine は範囲の外のクリックを範囲の端へ丸める＝端にいる音符へ吸い寄せる
-          // 性質があり、この吸い寄せは従来からの挙動なので壊さない
-          // （符頭より外側にもう1本候補を足すと、そちらが最寄りになって選択できなくなる）。
-          //
-          // click と mousemove（ホバーのカーソル形状）で必ず同じ式を使うため、
-          // ここで1つの関数にまとめておく（判定がずれるとホバー表示が信用できなくなる）。
-          const snapLineForKeySelect=(y:number)=>snapLine(
-            noteStave,y,
-            Math.min(-EXTRA_TOP,keyLines?keyLines.minLine:-EXTRA_TOP),
-            Math.max(4+EXTRA_BOTTOM,keyLines?keyLines.maxLine:4+EXTRA_BOTTOM)
-          );
-          /**
-           * SVG内部座標（raw 単位）で「この音符のどの符頭を選ぶクリックか」を返す（-1 なら選択にならない）。
-           *
-           * 選択になるかどうかを判定する式は**この関数だけ**にする。
-           * click（実際の選択）・mousemove（カーソル形状とホバー演出）・
-           * 再クリック巡回（Issue #264）・非アクティブ声部の選択（Issue #258）が
-           * 同じ関数を呼ぶことで、「ホバーでは選択に見えるのに押すと和音追加になる」
-           * 「巡回では選べるのに普通に押すと選べない」といった食い違いが構造的に起きないようにしている。
-           */
-          const resolveSelectableKeyIndexAt=(lx:number,ly:number):number=>{
-            const ev=evs[j];
-            if(!ev||ev.isRest)return -1;
-            const pad=keySelectXPad(svg);
-            if(lx<noteVisualLeft-pad||lx>noteVisualRight+pad)return -1;
-            const atLine=findKeyIndexAtLine(ev.keys,snapLineForKeySelect(ly),noteK2l);
-            if(atLine>=0)return atLine;
-            if(ly<chordTopY||ly>chordBotY){
-              // 固定範囲（五線±3加線）の外は挿入も和音追加も起きない帯なので、
-              // 広め（±1ライン）に吸い寄せても副作用が無い（Issue #255）。
-              return findNearestKeyIndexWithinLines(ev.keys,ly,noteStave,noteK2l,OUTER_KEY_SELECT_MAX_LINES);
-            }
-            // 五線の中（和音追加ゾーン）でも、符頭のX範囲に入っているクリックは
-            // 和音追加より個別選択を優先する（Issue #271・案A）。X範囲を下の
-            // isOnNote（和音追加ゾーン）とまったく同じ式にしてあるのが要点で、
-            // 「和音追加になり得る場所でだけ選択が先に立つ」＝符頭から横に離れた
-            // 位置での挿入・和音追加の挙動は1pxも変えない。
-            if(lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD){
-              return findNearestKeyIndexWithinLines(ev.keys,ly,noteStave,noteK2l,INNER_KEY_SELECT_MAX_LINES);
-            }
-            return -1;
-          };
-          return {
-            xl,wHit,chordTopY,chordBotY,keyLines,noteHeadTopY,noteHeadBotY,
-            bb,noteVisualLeft,noteVisualRight,yHit,
-            // 段またぎ（#310）で「実際に載っている五線」を呼び出し側にも渡す。
-            // rect の data-line0-y や、非アクティブ声部の符頭 rect の高さ計算が
-            // この幾何と同じ五線を使うようにするため（別々に解決すると食い違う）。
-            noteStave,noteK2l,
-            snapLineForKeySelect,resolveSelectableKeyIndexAt,
-          };
-        };
+        ) => resolveNoteHitGeometry({
+          svg,
+          stave,
+          band: { top: staveTop, bot: staveBot },
+          measLeft,
+          measRight,
+          partIndex: pi,
+          policy: HIT_ATTRIBUTION_POLICY,
+          resolveRenderStave,
+          resolveK2lFor,
+          resolveRenderPartIndexFor,
+          computeStaveBand,
+        }, evs, vfNotes, j, anchors, mids);
 
         // アクティブ声部の j 番目のイベントを書き換える共通ヘルパー。
         // voiceIndex 0 のときは withVoiceEventsUpdated が measure.events を直接更新するので、
