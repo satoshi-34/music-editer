@@ -443,5 +443,8 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
     終えるガードを追加（describeVoiceSwitchUnavailable・#318）
   - [P2] 描画の完了条件が未検証 → PianoSystemCanvasNVoiceRender.test.tsx（4声の描画で
     例外なし+符頭14個が DOM に出る+ヒット領域生成）を追加
+  - [2巡目 P1] 疎な声部（声部2空・声部3のみ）の往復で声部番号がずれる → 区間の順番ではなく
+    各 note の <voice> タグで声部を復元する形へ（<backup> は時間の巻き戻しであって声部番号では
+    ない。タグの無い XML は従来どおり区間順）。疎な往復テストを追加
 - これで §2-5 の完了条件4項目がすべて満たされ、**#244 の段0〜段5 が完了**。
   後続課題（別Issue化）: フォールバック（voices[0]?.events ?? events）の除去（焼き込み後）

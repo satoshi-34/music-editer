@@ -106,6 +106,26 @@ describe('N 声（声部3・4）のコア対応（#244 段5-5）', () => {
     expect(getVoiceEvents(measure, 3).map((e) => e.keys[0])).toEqual(['c/4', 'd/4']);
   });
 
+  it('疎な声部（声部2が空・声部3のみ）でも MusicXML 往復で声部番号が保たれる（Codex 2巡目 P1）', () => {
+    const primary = [note('c/5'), note('d/5'), note('e/5'), note('f/5')];
+    const sparse: MeasureData = {
+      events: primary,
+      voices: [
+        { id: 'voice-1', events: primary.map((ev) => ({ ...ev, keys: [...ev.keys] })) },
+        { id: 'voice-2', events: [], stemDirection: 'down' },
+        { id: 'voice-3', events: [note('e/4'), note('f/4'), note('g/4'), note('a/4')] },
+      ],
+    };
+    const xml = scoreToMusicXml(savedDataWith([sparse]));
+    expect(xml).toContain('<voice>3</voice>');
+    expect(xml).not.toContain('<voice>2</voice>');
+    const imported = parseMusicXml(xml);
+    const measure = imported.parts[0].measures[0];
+    // <backup> の順番ではなく <voice> タグで復元されるので、声部3は voices[2] のまま
+    expect(getVoiceEvents(measure, 1)).toHaveLength(0);
+    expect(getVoiceEvents(measure, 2).map((e) => e.keys[0])).toEqual(['e/4', 'f/4', 'g/4', 'a/4']);
+  });
+
   it('MIDI 書出に全声部の音が出る（声部2以降が出ないバグの修正・§2-5 予告分）', () => {
     const bytes = scoreToMidi(savedDataWith([fourVoiceMeasure()]));
     // Note-On (0x90 ch0) の数 = 4+4+4+2 = 14

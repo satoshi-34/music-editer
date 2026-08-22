@@ -293,21 +293,35 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     const openHairpinRefs: HairpinMark[] = [];
     const openHairpinRefsVoice2: HairpinMark[] = [];
     const measures: MeasureData[] = measureEls.map((measureEl, mi) => {
-      // 追加声部（下声など）は書出側が <backup> で区切って出力しているため、
-      // <backup> ごとに区切って「1つ目の区間=声部1、2つ目=声部2、…」として分ける。
+      // 追加声部（下声など）は書出側が <backup> で区切って出力している。
       // #244 段5-5: 旧実装は最初の <backup> だけで2分割しており、3声以上の自己往復で
-      // 声部3以降がすべて声部2へ連結される（4声→2声へ潰れる）データ破壊があった。
+      // 声部3以降が声部2へ連結される（4声→2声へ潰れる）データ破壊があった。
+      // さらに区間の順番だけで声部を決めると、空声部をスキップして書き出された疎なデータ
+      // （声部2なし・声部3あり）や外部ソフト由来の XML で番号がずれる（Codex 2巡目 P1）。
+      // <backup> は「時間の巻き戻し」であって声部番号ではないため、区間ごとの声部番号は
+      // 各 note の <voice> タグから決める（タグの無い XML は従来どおり区間順で数える）。
       const allChildren = Array.from(measureEl.children);
-      const voiceSections: Element[][] = [[]];
+      const rawSections: Element[][] = [[]];
       for (const el of allChildren) {
         if (el.tagName === 'backup') {
-          voiceSections.push([]);
+          rawSections.push([]);
         } else {
-          voiceSections[voiceSections.length - 1].push(el);
+          rawSections[rawSections.length - 1].push(el);
         }
       }
-      const voice1Children = voiceSections[0];
-      const voice2Children = voiceSections[1] ?? [];
+      const sectionVoiceNumber = (children: Element[], fallback: number): number => {
+        const firstNote = children.find((el) => el.tagName === 'note');
+        const v = parseInt(firstNote?.querySelector('voice')?.textContent ?? '', 10);
+        return !isNaN(v) && v >= 1 ? v : fallback;
+      };
+      const sectionsWithVoice = rawSections.map((children, si) => ({
+        children,
+        voiceNumber: sectionVoiceNumber(children, si + 1),
+      }));
+      const childrenForVoice = (n: number): Element[] =>
+        sectionsWithVoice.filter((s) => s.voiceNumber === n).flatMap((s) => s.children);
+      const voice1Children = childrenForVoice(1);
+      const voice2Children = childrenForVoice(2);
 
       const voice1NoteEls = voice1Children.filter((el) => el.tagName === 'note');
       const events = parseNotes(voice1NoteEls);
@@ -318,9 +332,16 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
       // 声部2の松葉も同じ方式で復元する（voice2Events の要素を直接書き換える）
       attachHairpinsToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2);
 
-      // 声部3以降（松葉の復元は現行 UI が2声までなので行わない。「壊れず全声部が戻る」水準）
-      const extraVoiceEvents: NoteEvent[][] = voiceSections.slice(2).map((children) =>
-        parseNotes(children.filter((el) => el.tagName === 'note')));
+      // 声部3以降（松葉の復元は現行 UI が2声までなので行わない。「壊れず全声部が戻る」水準）。
+      // 疎な番号（間の声部が空）は空の器で埋め、声部番号を保存データ上の位置と一致させる
+      const noteBearingVoiceNumbers = sectionsWithVoice
+        .filter((s) => s.children.some((el) => el.tagName === 'note'))
+        .map((s) => s.voiceNumber);
+      const maxVoiceNumber = noteBearingVoiceNumbers.length > 0 ? Math.max(...noteBearingVoiceNumbers) : 1;
+      const extraVoiceEvents: NoteEvent[][] = [];
+      for (let n = 3; n <= maxVoiceNumber; n++) {
+        extraVoiceEvents.push(parseNotes(childrenForVoice(n).filter((el) => el.tagName === 'note')));
+      }
 
       // リピート
       const leftBarline = measureEl.querySelector('barline[location="left"] repeat');
