@@ -151,7 +151,7 @@ import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { buildPlaybackPositionTimeline, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
+import { buildPlaybackPositionTimeline, findPlaybackStartExpandedIndex, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
@@ -159,6 +159,7 @@ import {
   SCORE_EDIT_NOTICE_EVENT,
   describeClearedBeatRange,
   describeClearedMeasures,
+  describePlaybackFromMeasure,
   describeSliceClearNoop,
   describeSliceCopied,
   describeSliceDeleteUnavailable,
@@ -1260,18 +1261,31 @@ export default function ScorePage() {
         if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: currentInstrument });
       }
 
+      // 途中再生（#108）: 小節を選択したまま再生すると、その小節から始める。
+      // リピートがある譜面では「その小節の最初の出現」から（findPlaybackStartExpandedIndex）。
+      const startMeasure = selectedMeasures?.start ?? 0;
+
       await runWithPlaybackFallback(async (audioEngine) => {
         if (parts.length > 0) {
           const referenceMeasures = parts[0]?.measures ?? [];
+          const referenceExpanded = expandMeasuresForPlayback(referenceMeasures);
+          const startExpandedIndex = startMeasure > 0
+            ? findPlaybackStartExpandedIndex(referenceExpanded, startMeasure)
+            : 0;
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
             // ここで「展開後の再生順」と「各音符のベロシティ」を一緒に作って渡す。
             // 多段譜では各段が別々に repeat 情報を持つと再生順が分かれやすいので、
             // 先頭パートの反復順を基準に他パートも同じ順番へそろえる。
-            const expandedMeasures = partIndex === 0
-              ? expandMeasuresForPlayback(partSource.measures)
+            const expandedMeasuresFull = partIndex === 0
+              ? referenceExpanded
               : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures);
+            // 途中再生では、展開後の再生順を開始位置で切ってからエンジンへ渡す。
+            // 全パートとも先頭パートの反復順にそろえてあるため、同じ位置で切れば拍が一致する。
+            // 既知の制限: 開始位置より前から始まる cresc./dim. の途中経過は反映されない
+            // （強弱の傾斜は切った後の並びで計算し直すため）
+            const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasures.map(item => item.measure));
 
             return {
@@ -1315,7 +1329,11 @@ export default function ScorePage() {
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
           // ここでは最大値を採用して全体の終了時刻を決める。
-          const totalDuration = Math.max(...parts.map(part => calculateScoreDuration(part.measures, tempoSettings.bpm, scoreTimeSignature)));
+          // 途中再生では、切った後の展開順（実際に鳴らす小節列）から残り時間を数える。
+          // 先頭からの再生は従来どおり生の小節列から数える（挙動を変えない）
+          const totalDuration = startExpandedIndex > 0
+            ? Math.max(...partObjs.map(partObj => calculateScoreDuration(partObj.measures, tempoSettings.bpm, scoreTimeSignature)))
+            : Math.max(...parts.map(part => calculateScoreDuration(part.measures, tempoSettings.bpm, scoreTimeSignature)));
           setPlaybackState('playing');
           clearPlaybackTimer();
           remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
@@ -1327,8 +1345,14 @@ export default function ScorePage() {
             referenceMeasures,
             tempoSettings.bpm,
             scoreTimeSignature,
-            soundRuntimeSettings.swingEnabled
+            soundRuntimeSettings.swingEnabled,
+            startExpandedIndex
           );
+          // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）
+          if (startExpandedIndex > 0) {
+            setCurrentPosition({ measureIndex: startMeasure, beatPosition: 0, noteIndex: 0 });
+            notifyScoreEdit(describePlaybackFromMeasure(startMeasure));
+          }
           schedulePositionTimeline(0);
           playbackTimerRef.current = setTimeout(() => {
             setPlaybackState('stopped');
@@ -1374,7 +1398,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {

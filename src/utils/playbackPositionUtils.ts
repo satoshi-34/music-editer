@@ -1,5 +1,5 @@
 import type { MeasureData, TimeSignature } from '../types/storage';
-import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
+import { expandMeasuresForPlayback, type ExpandedPlaybackMeasure } from '../audio/repeatPlaybackUtils';
 import { getMeasureBeats } from './timeSignatureUtils';
 import { getEventDurationBeats, getMeasureDurationBeats, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { applySwingToTiming, shouldApplySwing } from './swingUtils';
@@ -28,9 +28,12 @@ export function buildPlaybackPositionTimeline(
   measures: MeasureData[],
   bpm: number,
   timeSignature: TimeSignature,
-  swingEnabled: boolean = false
+  swingEnabled: boolean = false,
+  startExpandedIndex: number = 0
 ): PlaybackTimelineItem[] {
-  const expandedMeasures = expandMeasuresForPlayback(measures);
+  // 途中再生（#108）: 展開順の先頭 startExpandedIndex 個を丸ごと飛ばす。
+  // 実音側（playParts へ渡す小節列）も同じ位置で切るため、atMs は 0 起点のままで一致する
+  const expandedMeasures = expandMeasuresForPlayback(measures).slice(Math.max(0, startExpandedIndex));
   const msPerBeat = (60 / bpm) * 1000;
   const timeline: PlaybackTimelineItem[] = [];
 
@@ -81,4 +84,20 @@ export function buildPlaybackPositionTimeline(
   });
 
   return timeline;
+}
+
+/**
+ * 途中再生（#108）の開始位置: 指定の小節が「展開後の再生順」で最初に現れる位置を返す。
+ * リピートのある譜面では同じ小節が複数回鳴るため、「最初の出現から」を仕様とする
+ * （2周目のどこか、を選ぶ UI は持たない）。見つからない場合は、その小節以降で
+ * 最初に現れる小節（すべて手前なら 0 = 先頭）へ倒す。
+ */
+export function findPlaybackStartExpandedIndex(
+  expandedMeasures: ExpandedPlaybackMeasure[],
+  startMeasureIndex: number
+): number {
+  const exact = expandedMeasures.findIndex((item) => item.sourceMeasureIndex === startMeasureIndex);
+  if (exact >= 0) return exact;
+  const after = expandedMeasures.findIndex((item) => item.sourceMeasureIndex > startMeasureIndex);
+  return after >= 0 ? after : 0;
 }
