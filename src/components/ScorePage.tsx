@@ -3566,6 +3566,16 @@ export default function ScorePage() {
     }
     if (scoreType === 'quartet') {
       const keySignatureMeasures = quartetParts[0] ?? [];
+      // パート譜表示中は選択パート1つだけで段割りを計画する（Issue #174 段A）。
+      // 総譜は音符が密集するパートに合わせて改行するため、そのままではスカスカの
+      // パートも総譜と同じ位置で改行され、市販パート譜のように詰めて印刷できない。
+      if (partExtractionSelection) {
+        const index = partExtractionSelection.index;
+        return [{
+          measures: quartetParts[index] ?? [], keySignatureMeasures,
+          clef: QUARTET_PART_CONFIGS[index].clef,
+        }];
+      }
       return QUARTET_PART_CONFIGS.map((part, index) => ({
         measures: quartetParts[index] ?? [], keySignatureMeasures, clef: part.clef,
       }));
@@ -3574,7 +3584,7 @@ export default function ScorePage() {
       const keySignatureMeasures = ensembleParts[0] ?? [];
       // staffCount:2（大譜表）パートは2段ぶんの MeasureLayoutPartContext を生成する。
       // EnsembleStaff.tsx の partsConfig 展開と段の並び順を必ず一致させる必要がある。
-      return instrumentation.parts.flatMap((part, index) => {
+      const buildPartContexts = (part: InstrumentPartDefinition, index: number): MeasureLayoutPartContext[] => {
         const primary: MeasureLayoutPartContext = {
           measures: ensembleParts[index] ?? [], keySignatureMeasures, clef: part.clef,
         };
@@ -3583,15 +3593,38 @@ export default function ScorePage() {
           measures: ensembleSecondStaffParts[index] ?? [], keySignatureMeasures, clef: 'bass',
         };
         return [primary, second];
-      });
+      };
+      // パート譜表示中は選択パートだけ（大譜表パートは2段のまま）で計画する（Issue #174 段A）
+      if (partExtractionSelection) {
+        const index = partExtractionSelection.index;
+        const part = instrumentation.parts[index];
+        return part ? buildPartContexts(part, index) : [];
+      }
+      return instrumentation.parts.flatMap(buildPartContexts);
     }
     return [{ measures: rightHandData ?? [], clef: 'treble' }];
-  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts]);
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, partExtractionSelection]);
   // 五線の左に取るパート名用の余白（Issue #60）。1段目はフル名・2段目以降は略称なので、
   // 両方を候補に入れて「この譜面で最大どれだけ必要か」で段割りを計画する。
   // 計画（ここ）と描画（PianoSystemCanvas の labelW）で違う値を使うと、本文幅が食い違って
   // 小節が段の右端からはみ出すため、同じ計算関数を共有している。
   const instrumentLabelAreaWidth = useMemo(() => {
+    // パート譜表示中は描画側に合わせる（Issue #174 段A）。弦楽四重奏のパート譜
+    // （PartExtractionStaff）はパート名を五線の左に描かない（showInstrumentLabels=false）ため
+    // 余白 0。編成譜のパート譜（EnsembleStaff）は1段目にだけ選択パートの名前を描くので、
+    // 選択パートのラベルだけで幅を見積もる。計画が描画より広い余白を見込むと、
+    // その分だけ1段に入る小節数が不当に減る（計画≦描画の幅なら安全）。
+    if (partExtractionSelection) {
+      if (scoreType === 'quartet') return 0;
+      if (scoreType === 'ensemble') {
+        const part = instrumentation.parts[partExtractionSelection.index];
+        if (!part) return 0;
+        return instrumentLabelAreaWidthForScore(
+          [part.abbreviation, part.name].filter((label): label is string => !!label),
+          totalEnsembleStaffCount([part]),
+        );
+      }
+    }
     if (scoreType === 'quartet') {
       const labels = QUARTET_PART_CONFIGS.flatMap((part) => [part.label, part.fullLabel]);
       return instrumentLabelAreaWidthForScore(
@@ -3609,7 +3642,7 @@ export default function ScorePage() {
     // 単旋律・ピアノはパート名を出さないが、従来どおり既定の余白ぶんを見込んだまま
     // 計画する（ここを 0 にすると既存譜面の段割り・ページ数が変わってしまう）。
     return SYSTEM_MAX_LABEL_WIDTH;
-  }, [scoreType, instrumentation.parts]);
+  }, [scoreType, instrumentation.parts, partExtractionSelection]);
   const incomingArcIndex = useMemo(
     () => buildIncomingArcIndex(layoutParts.map((part) => part.measures)),
     [layoutParts],
@@ -3700,13 +3733,15 @@ export default function ScorePage() {
     contentMeasureCount > 0 ? contentMeasureCount : undefined,
     // 段ごとの小節数のユーザー上書き。上書きのある段はその小節数を使い、無い段は
     // 従来どおりの自動計画のまま続く（上書き段より後ろの小節位置から再計算される）。
-    systemMeasureOverrides,
+    // パート譜表示中は適用しない（Issue #174 段A）: 総譜の紙面向けの調整であり、
+    // パート単体の自動計画と混ぜると意図が食い違う（総譜へ戻れば従来どおり適用される）
+    isPartExtractionActive ? [] : systemMeasureOverrides,
     // 直前に描画した段割り（安定化のヒント）と、最後に編集した小節の位置。
     // lastEditedMeasureIndex より前で完結する段だけを安定化し、それ以降は常に貪欲法で
     // 再計画する（Issue #67。詳細は planSystemMeasureRanges 側のコメント参照）。
     previousSystemRangesRef.current,
     lastEditedMeasureIndex ?? undefined,
-  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm, lastEditedMeasureIndex, instrumentLabelAreaWidth]);
+  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm, lastEditedMeasureIndex, instrumentLabelAreaWidth, isPartExtractionActive]);
   const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
 
   // plannedRanges を計算し終えたレンダーの直後に、次回の安定化ヒントとして保持する。
@@ -3714,6 +3749,15 @@ export default function ScorePage() {
   useEffect(() => {
     previousSystemRangesRef.current = plannedRanges.map((range) => ({ startMeasure: range.start, count: range.count }));
   }, [plannedRanges]);
+
+  // パート譜表示の切替時は段割りの安定化ヒントを捨てる（Issue #174 段A）。
+  // 総譜⇄パート譜では段割りの前提（対象パート・上書きの適用有無）が変わるため、
+  // 直前ビューの段割りを Issue #67 の安定化で引き継ぐと古い改行位置が残ってしまう。
+  // 切替直後は常に貪欲法だけで計画し直す。
+  useEffect(() => {
+    previousSystemRangesRef.current = [];
+    setLastEditedMeasureIndex(null);
+  }, [partExtractionId]);
 
   // 段ごとの小節数の手動上書きを1段ぶんだけ増減する。
   // 「小節 range.start から始まる段は count 小節」という上書きを配列に upsert するだけで、
