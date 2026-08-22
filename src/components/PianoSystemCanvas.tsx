@@ -2,6 +2,7 @@
 // 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { resolveBelowSymbolShifts, estimateTextRect, type CollisionRect } from '../utils/symbolCollisionUtils';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
@@ -1237,12 +1238,20 @@ type RenderCollectors = {
     baseY: number;
     markings: NonNullable<NoteEvent['dynamics']>;
     adjust: ResolvedSymbolAdjust;
+    /** どのパート（段）の五線下に描くか。自動衝突回避（#340）で同じ段の音符だけを避けるために使う */
+    obstaclePartIndex: number;
     // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
     partIndex?: number;
     measureAbsoluteIndex?: number;
     eventIndex?: number;
     event?: NoteEvent;
   }>;
+  /**
+   * 描画済み音符の BoundingBox（符頭＋符幹を含む）。パート（段）ごとに集め、
+   * 五線下の記号（強弱・cresc/dim）の自動衝突回避（#340 段1）の障害物にする。
+   * VexFlow のモデル側から取れる値なので DOM 計測は不要（jsdom でも動く）
+   */
+  noteObstacles: Array<{ partIndex: number } & CollisionRect>;
   /** カスタム記号の描画情報（段ごとの五線上端基準の統一高さで描く） */
   customSymbolEntries: CustomSymbolRenderEntry[];
   /** リハーサルマーク（練習番号）。最上段（pi===0）の上にだけ表示する */
@@ -1355,6 +1364,7 @@ type RenderCollectors = {
 /** 収集器を空で作る。描画のたびに呼び、SVG と寿命を揃える */
 const createRenderCollectors = (): RenderCollectors => ({
   dynamicTextEntries: [],
+  noteObstacles: [],
   customSymbolEntries: [],
   rehearsalMarkEntries: [],
   bpmMarkingEntries: [],
@@ -1479,11 +1489,48 @@ function drawCollectedSymbolEntries(args: {
 }): void {
   const { svgRoot, customSymbolDefs, appendSymbolHitRegion } = args;
   const {
-    dynamicTextEntries, customSymbolEntries, bpmMarkingEntries, rehearsalMarkEntries,
+    dynamicTextEntries, noteObstacles, customSymbolEntries, bpmMarkingEntries, rehearsalMarkEntries,
     measureNumberEntries, fingeringEntries, articulationEntries, tempoMarkingEntries,
     expressionMarkingEntries, chordSymbolEntries, lyricsEntries, pedalMarkEntries, ottavaEntries,
   } = args.collectors;
-  dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+  // 自動衝突回避（Issue #340 段1）: 同じ段の音符（符頭＋符幹の BoundingBox）や
+  // 先に確定した強弱記号に重なる記号だけを下へ押し出す。手動調整（⤢/✥ の offset 非0）は
+  // 対象外（利用者の指定を優先し、他の記号からは占有域として避けられる）。
+  // 押し出し量は描画のたびに計算するだけで保存しない（保存データは不変）。
+  const dynamicCollisionShifts = new Array<number>(dynamicTextEntries.length).fill(0);
+  {
+    const entryIndicesByPart = new Map<number, number[]>();
+    dynamicTextEntries.forEach((entry, index) => {
+      const list = entryIndicesByPart.get(entry.obstaclePartIndex) ?? [];
+      list.push(index);
+      entryIndicesByPart.set(entry.obstaclePartIndex, list);
+    });
+    for (const [partIndex, indices] of entryIndicesByPart) {
+      const obstacles = noteObstacles.filter((obstacle) => obstacle.partIndex === partIndex);
+      const inputs = indices.map((index) => {
+        const entry = dynamicTextEntries[index];
+        // 文字幅は DOM に入れる前は実測できないため概算（cresc/dim は本来ひと回り
+        // 小さい文字だが、大きい方の強弱フォントで見積もる＝控えめ側に倒す）
+        const fontSize = ENGRAVING_TEXT_UNITS.dynamics * entry.adjust.scale;
+        const longestText = entry.markings.reduce((best, marking) => {
+          const text = formatDynamicMarking(marking);
+          return text.length > best.length ? text : best;
+        }, '');
+        const rect = estimateTextRect(
+          entry.anchorX + entry.adjust.offsetX,
+          entry.baseY + entry.adjust.offsetY,
+          longestText,
+          fontSize,
+        );
+        // 複数記号（pp と cresc など）は 14px 間隔で縦に並ぶぶん箱を伸ばす
+        rect.h += Math.max(0, entry.markings.length - 1) * 14;
+        return { rect, hasManualOffset: entry.adjust.offsetX !== 0 || entry.adjust.offsetY !== 0 };
+      });
+      const shifts = resolveBelowSymbolShifts(inputs, obstacles);
+      indices.forEach((index, k) => { dynamicCollisionShifts[index] = shifts[k]; });
+    }
+  }
+  dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }, dynamicEntryIndex) => {
     const orderedMarkings = [...markings].sort((left, right) => {
       const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
       const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
@@ -1495,7 +1542,7 @@ function drawCollectedSymbolEntries(args: {
       text.textContent=formatDynamicMarking(marking);
       // ⤢/✥ ツールで配置済みの調整値を、位置は座標へ加算・サイズはフォントサイズへの倍率として反映する
       text.setAttribute('x',String(anchorX + adjust.offsetX));
-      text.setAttribute('y',String(baseY + index * 14 + adjust.offsetY));
+      text.setAttribute('y',String(baseY + index * 14 + adjust.offsetY + dynamicCollisionShifts[dynamicEntryIndex]));
       text.setAttribute('text-anchor','middle');
       text.setAttribute('fill','#1f2937');
       text.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
@@ -3717,7 +3764,7 @@ export default function PianoSystemCanvas({
       dynamicTextEntries, customSymbolEntries, rehearsalMarkEntries, bpmMarkingEntries,
       measureNumberEntries, pedalMarkEntries, lyricsEntries, fingeringEntries,
       articulationEntries, tempoMarkingEntries, expressionMarkingEntries,
-      chordSymbolEntries, ottavaEntries,
+      chordSymbolEntries, ottavaEntries, noteObstacles,
       arcGeomMap, beatColumnsByMeasureP, notePositionMapP, arcIdentityMap,
     } = collectors;
     // ドラッグ中の更新（window の mousemove）から今回の描画結果を参照できるようにしておく。
@@ -5554,6 +5601,10 @@ export default function PianoSystemCanvas({
               bb,noteVisualLeft,noteVisualRight,yHit,noteStave,noteK2l,
               snapLineForKeySelect,resolveSelectableKeyIndexAt,
             } = buildNoteHitGeometry(activeEvs,activeVfNotes,j,anchors,mids);
+            // 自動衝突回避（#340 段1）の障害物: 符頭＋符幹を含む BoundingBox を段ごとに集める
+            if (bb?.getY && bb?.getH) {
+              noteObstacles.push({ partIndex: pi, x: bb.getX?.() ?? noteVisualLeft, y: bb.getY(), w: bb.getW?.() ?? (noteVisualRight - noteVisualLeft), h: bb.getH() });
+            }
             // 各値の意味と、そう決めた理由（Issue #218 / #219 / #255 / #271）は
             // buildNoteHitGeometry の中にまとめてある。
             //
@@ -6412,6 +6463,7 @@ export default function PianoSystemCanvas({
                 baseY: stave.getYForLine(4) + 26,
                 markings: activeEvs[j].dynamics,
                 adjust: getSymbolAdjust(activeEvs[j], 'dynamics'),
+                obstaclePartIndex: pi,
                 partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
               });
             }
@@ -6568,12 +6620,17 @@ export default function PianoSystemCanvas({
                 const noteVisualLeft = bb?.getX?.() ?? (n.getAbsoluteX?.() ?? measLeft);
                 const noteVisualRight = bb ? noteVisualLeft + (bb.getW?.() ?? 12) : noteVisualLeft + 12;
                 const cx = noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2);
+                // 非アクティブ声部の「見た目だけ」描画の音符も、衝突回避（#340）の障害物には含める
+                if (bb?.getY && bb?.getH) {
+                  noteObstacles.push({ partIndex: pi, x: noteVisualLeft, y: bb.getY(), w: noteVisualRight - noteVisualLeft, h: bb.getH() });
+                }
                 if (ev.dynamics?.length) {
                   dynamicTextEntries.push({
                     anchorX: cx,
                     baseY: stave.getYForLine(4) + 26,
                     markings: ev.dynamics,
                     adjust: getSymbolAdjust(ev, 'dynamics'),
+                    obstaclePartIndex: pi,
                   });
                 }
                 const symbolEntry = buildCustomSymbolEntry(ev, cx, stave.getYForLine(0));
