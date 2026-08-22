@@ -68,6 +68,14 @@ type Props = {
   // （Issue #90）から中継する。パート譜表示は常に1段のため見た目には影響しないが、
   // 他の Staff ラッパーと同じ props 形状にそろえるために受け取る。
   partSpacingOffsetPx?: number;
+  /**
+   * 記号のクリック調整（⤢/✥ や記号クリックでの位置調整）を有効にするか。
+   * 総譜（EnsembleStaff 経由）と同じく「演奏記号タブを開いているとき」に true を渡す
+   * （#173 第2段階。以前は渡っておらず、四重奏のパート譜だけ記号調整が効かなかった）
+   */
+  symbolsClickable?: boolean;
+  /** 印刷プレビュー中か（PSC 側の編集ロック・表示切替に使う。総譜側と同じ配線） */
+  isPrintPreview?: boolean;
 };
 
 // 何も起きない onChange。onChange を渡さない（閲覧・印刷専用の）呼び出し元のための既定値。
@@ -94,6 +102,8 @@ export default function PartExtractionStaff({
   pageMarginSideMm,
   finalMeasureIndex,
   partSpacingOffsetPx,
+  symbolsClickable,
+  isPrintPreview,
 }: Props) {
   // 表示用データ（実音→記譜音）と保存用 onChange（記譜音→実音）を対で作る。
   // 総譜側（EnsembleStaff）とまったく同じ共通関数を通すことで、移調の向きが
@@ -135,6 +145,8 @@ export default function PartExtractionStaff({
             pageMarginSideMm={pageMarginSideMm}
             finalMeasureIndex={finalMeasureIndex}
             partSpacingOffsetPx={partSpacingOffsetPx}
+            symbolsClickable={symbolsClickable}
+            isPrintPreview={isPrintPreview}
           />
         );
       })}
