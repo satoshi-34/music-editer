@@ -5,7 +5,7 @@ import type { SavedScoreData } from '../types/storage';
 import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { validateSavedScoreData } from './storage';
 import { normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
-import { normalizeEmptyVoicesInParts, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { ensureMeasuresPrimaryVoiceMaterialized, normalizeEmptyVoicesInParts, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 
 // ファイル名に使えない文字を除去するヘルパー
 function safeFileName(title: string): string {
@@ -178,7 +178,8 @@ export async function importScoreFromFile(file: File): Promise<SavedScoreData> {
       //    手編集のファイルで鏡が古い場合にここで events（正本）から同期する
       const mirrorSyncedParts = normalizedParts.map((part) => ({
         ...part,
-        measures: syncMeasuresPrimaryVoiceFromEvents(part.measures),
+        // ⑤ 全小節へ voices を実体化（#244 段5-4・保存形式の移行。読込互換の維持）
+        measures: ensureMeasuresPrimaryVoiceMaterialized(syncMeasuresPrimaryVoiceFromEvents(part.measures)),
       }));
       resolve({ ...data, parts: mirrorSyncedParts });
     };

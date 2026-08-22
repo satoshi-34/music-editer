@@ -25,7 +25,7 @@ import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type 
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 import { isArticulationMarkingValue } from './articulationMarkingUtils';
 import { isRenderStaffDirection } from './crossStaffUtils';
-import { normalizeEmptyVoicesInParts, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { ensureMeasuresPrimaryVoiceMaterialized, normalizeEmptyVoicesInParts, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
@@ -712,6 +712,13 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
     measures: syncMeasuresPrimaryVoiceFromEvents(part.measures),
   }));
 
+  // 保存形式の移行（#244 段5-4）: 読込時に全小節へ voices を実体化する。
+  // 旧形式（events-only）のファイルもここを通れば新形式と同じ形になる（読込互換の維持）。
+  parsedData.parts = parsedData.parts.map((part) => ({
+    ...part,
+    measures: ensureMeasuresPrimaryVoiceMaterialized(part.measures),
+  }));
+
   return {
     success: true,
     data: parsedData
@@ -823,7 +830,8 @@ function saveScoreDataToSlot(data: SavedScoreData, keys: StorageSlotKeys): Stora
             ...part,
             // 既存の編集ロジックは primary voice を measure.events だけ更新する箇所が多い。
             // 保存直前に voices[0] を同期して、複数声部データの食い違いを防ぐ。
-            measures: syncMeasuresPrimaryVoiceFromEvents(part.measures),
+            // さらに全小節へ voices を実体化する（#244 段5-4・保存の新形式化）。
+            measures: ensureMeasuresPrimaryVoiceMaterialized(syncMeasuresPrimaryVoiceFromEvents(part.measures)),
           }))
         : (data as any).parts,
     };

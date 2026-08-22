@@ -118,6 +118,28 @@ export function syncMeasuresPrimaryVoiceFromEvents(measures: MeasureData[]): Mea
 }
 
 /**
+ * 全小節に voices[0] を実体化する（#244 段5-4・保存形式の移行）。
+ * voices を持たない events-only の小節へ、正本（events）の鏡となる voice-1 を作る。
+ * すでに voices を持つ小節はそのまま（鏡の同期は syncMeasuresPrimaryVoiceFromEvents の仕事）。
+ * 読込・保存の両境界で呼ぶことで「永続化データの全小節は voices を持つ」を保証する。
+ * フォールバック（voices[0]?.events ?? events）の除去は、セッション内の小節生成
+ * （createEmptyMeasure・表示用プレースホルダー・声部2全削除後の畳み込み）も
+ * 実体化してからでないと安全にできないため、#244 の後続課題とする（設計メモ§14）。
+ */
+export function ensureMeasuresPrimaryVoiceMaterialized(measures: MeasureData[]): MeasureData[] {
+  let changed = false;
+  const next = measures.map((measure) => {
+    if (measure.voices && measure.voices.length > 0) return measure;
+    changed = true;
+    return {
+      ...measure,
+      voices: [{ id: 'voice-1', events: (measure.events ?? []).map(cloneNoteEvent) }],
+    };
+  });
+  return changed ? next : measures;
+}
+
+/**
  * 指定した声部（voiceIndex）の events 配列を取得する。
  * voiceIndex 0 は primary voice なので measure.events を正本として返す。
  * voiceIndex 1 以降は measure.voices[voiceIndex] が無ければ空配列を返す
@@ -149,16 +171,16 @@ export function withVoiceEventsUpdated(
 ): MeasureData {
   if (voiceIndex <= 0) {
     const nextEvents = updater(measure.events ?? []);
-    // dual-write（#244 段5-1）: 正本 events を書き換えたら、voices を持つ小節では
-    // その場で voices[0] も同期する。従来は保存時の syncMeasuresPrimaryVoiceFromEvents
-    // 頼みで、編集してから保存されるまでの間 voices[0] が古いままだった
-    // （read を voices[0] 優先へ切り替える段5-3 の前提を崩す）。
-    // voices を持たない小節にはあえて器を作らない — 単声部小節は voices を
-    // 持たないのが現行の正規状態（設計メモ§2-5 移行境界）で、ここで作ると
-    // 保存形式が段5-4（保存形式の移行）より前に変わってしまう。読み手は
-    // 「voices[0]?.events ?? events」のフォールバックで両形式を吸収する。
+    // dual-write（#244 段5-1）: 正本 events を書き換えたら voices[0] も同期する。
+    // 段5-4（保存形式の移行）からは、voices を持たない小節にも書き込み時に器を作る —
+    // 読込・保存の両境界で全小節に voices を実体化するようになったため、
+    // 編集経路だけ events-only を温存する理由が無くなった（設計メモ§14）。
     if (!measure.voices || measure.voices.length === 0) {
-      return { ...measure, events: nextEvents };
+      return {
+        ...measure,
+        events: nextEvents,
+        voices: [{ id: 'voice-1', events: nextEvents.map(cloneNoteEvent) }],
+      };
     }
     return {
       ...measure,

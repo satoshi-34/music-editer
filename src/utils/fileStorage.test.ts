@@ -201,7 +201,7 @@ describe('importScoreFromFile: 空のまま残った声部の正規化（Issue #
     return new File([JSON.stringify(data)], 'empty-voice.score.json', { type: 'application/json' });
   }
 
-  it('空の voices[1] を含むファイルを開くと、単声部の小節へ畳まれる', async () => {
+  it('空の voices[1] を含むファイルを開くと、単声部（voice-1 のみ）へ畳まれる', async () => {
     const loaded = await importScoreFromFile(scoreFileWith([{
       events: [note('c/5')],
       voices: [
@@ -210,7 +210,11 @@ describe('importScoreFromFile: 空のまま残った声部の正規化（Issue #
       ],
     }]));
 
-    expect(loaded.parts[0].measures[0].voices).toBeUndefined();
+    // #305 の目的は「空の声部2で多声小節と誤判定させない」こと。
+    // 段5-4（保存形式の移行）からは全小節が voices を持つため、
+    // 「畳まれた」ことは voices が voice-1 の1本だけ＝多声判定されない、で確認する
+    expect(loaded.parts[0].measures[0].voices).toHaveLength(1);
+    expect(loaded.parts[0].measures[0].voices?.[0].id).toBe('voice-1');
     expect(loaded.parts[0].measures[0].events.map((ev) => ev.keys[0])).toEqual(['c/5']);
   });
 

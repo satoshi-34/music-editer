@@ -245,7 +245,9 @@ describe('PianoSystemCanvas 声部2の弧・松葉の入力と編集（Issue #19
       const updated = await latestScore(onChange);
       expect(updated[0].voices?.[1]?.events[0].arcs).toHaveLength(1);
       // 触っていない2小節目に voices が生えていない（生えると多声小節と判定され見た目が変わる）。
-      expect(updated[1].voices).toBeUndefined();
+      // 段5-4 から: 声部1の書き込みでも鏡（voice-1）が実体化される。
+      // voice-1 1本だけなら多声小節とは判定されず、単声部の見た目・挙動は変わらない
+      expect((updated[1].voices ?? []).length).toBeLessThanOrEqual(1);
     });
   });
 
@@ -420,7 +422,8 @@ describe('PianoSystemCanvas 声部2の弧・松葉の入力と編集（Issue #19
       const updated = await latestScore(onChange);
       expect(updated[0].events[0].arcs).toBeUndefined();
       // voices を生やしていない（単声部の保存形のまま）。
-      expect(updated[0].voices).toBeUndefined();
+      // 段5-4 から: 声部1の書き込みでも鏡（voice-1）が実体化される（多声判定は変わらない）
+      expect((updated[0].voices ?? []).length).toBeLessThanOrEqual(1);
     });
   });
 
