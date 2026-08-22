@@ -918,6 +918,327 @@ type Props = {
   partSpacingOffsetPx?: number;
 };
 
+/* ===== Pass 1 の関数化（#244 段4c-1） =====
+ * 1パート×1小節ぶんの Voice（VexFlow のタイミング管理オブジェクト）・ビーム・連符を
+ * 構築する。入力は BuildPartVoicesInput に明示し、コンポーネントの閉包には依存しない。
+ * ビーム構築（Beam.generateBeams / generateCrossStaffBeams）はこの関数の中に閉じたので、
+ * cross-staff 段2（またぎ連桁）はこの関数だけを差し替えれば実装できる（設計メモ§2-4）。
+ * 本体のロジック・コメントは描画 effect からの物理移設で内容不変（挙動ゼロ差）。
+ */
+type PartVoiceCacheEntry = {
+  clefHere: ClefType;
+  data: MeasureData | undefined;
+  safeEvs: RenderNoteEvent[];
+  partKeyForAccidental: KeySignature;
+  isMultiVoiceMeasure: boolean;
+  renderedVoiceEntries: RenderedVoiceEntry[];
+  primaryRenderedVoice: RenderedVoiceEntry;
+  vfNotes: StaveNote[];
+};
+type BuildPartVoicesInput = {
+  pi: number;
+  /** システム内の何小節目か（stave の列選択に使う） */
+  systemColumnIndex: number;
+  absI: number;
+  staveSets: Stave[][];
+  parts: PartConfig[];
+  partsScoreForRender: MeasureData[][];
+  normalizedKeySignature: KeySignature;
+  /** この小節時点で有効な調号（途中調号変更を解決済みの値） */
+  effectiveKeySigForMeasure: KeySignature;
+  beatsPerMeasure: number;
+  timeSignatureNumerator: number;
+  timeSignatureDenominator: number;
+  selected: Sel;
+  activeVoiceIndex: number;
+  /** 前の小節の臨時記号最終状態（courtesy accidental 判定用） */
+  prevMeasureState: MeasureAccidentalState | undefined;
+};
+type BuildPartVoicesResult = {
+  /** 声部が1つも構築できなかったときは null（全休符プレースホルダーがあるため実際は稀） */
+  cacheEntry: PartVoiceCacheEntry | null;
+  /** この小節の臨時記号最終状態。呼び出し側が prevMeasureStatePerPart へ書き戻す */
+  nextPrevMeasureState: MeasureAccidentalState | undefined;
+};
+function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoicesResult {
+  const {
+    pi, systemColumnIndex, absI, staveSets, parts, partsScoreForRender,
+    normalizedKeySignature, effectiveKeySigForMeasure, beatsPerMeasure,
+    timeSignatureNumerator, timeSignatureDenominator, selected, activeVoiceIndex,
+    prevMeasureState,
+  } = input;
+  const part = parts[pi];
+    const stave=staveSets[pi][systemColumnIndex];
+    // 描画に使うのは partsScoreForRender（矢印キーで動かしている最中の下書きを反映したコピー）。
+    // 保存データ側の partsScore を直接使うと、確定するまで画面に反映されない（Issue #205）。
+    const score=partsScoreForRender[pi]??[];
+    // この小節時点で有効なクレフ（途中クレフ変更対応）。パートごとの小節データ（part.data）から解決する。
+    // クリックハンドラなど後から呼ばれる処理でも、absI は呼び出しごとに固定された入力のため
+    // ここで解決した clefHere をそのまま安全に参照できる。
+    // score は partsScoreForRender[pi]（内部 state の描画用コピー）を指すため、こちらから解決する（part.data は初期値のみ）
+    const clefHere=resolveMeasureClef(score, absI, part.clef);
+
+    const data=absI<score.length?score[absI]:undefined;
+    const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestDisplayKeyForDuration(clefHere, '1')],__isPlaceholder:true}])
+      .map(ev=>sanitizeRenderEvent(ev, clefHere));
+    // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
+    // 移調楽器の記譜音表示などでパート固有の調号がある場合は、
+    // そちらを基準に「調号で既に変化している音」を判定する。
+    // この小節時点で有効な調号（途中調号変更対応）に、パート固有の移調シフトを適用する。
+    const partFifthsShiftForAccidental = part.keySignature
+      ? getKeySignatureFifths(part.keySignature) - getKeySignatureFifths(normalizedKeySignature)
+      : 0;
+    const partKeyForAccidental = partFifthsShiftForAccidental !== 0
+      ? shiftKeySignatureByFifths(effectiveKeySigForMeasure, partFifthsShiftForAccidental)
+      : effectiveKeySigForMeasure;
+    const accidentalState = createMeasureAccidentalState(partKeyForAccidental);
+    // 前の小節の最終状態を courtesy accidental 判定のために取得し、
+    // この小節の描画後に更新する。
+    const thisPrevMeasState = prevMeasureState;
+    // voice 0 の描画で確定するこの小節の最終状態。呼び出し側が次の小節へ引き継ぐ
+    let nextPrevMeasureState = prevMeasureState;
+    const measureVoicesRaw = getMeasureVoices(data);
+    // 2声部が共存する小節だけ、符幹の向き（声部1=上向き/声部2=下向き）を強制する。
+    // 声部1しか無い小節は resolveVoiceStemDirections がそのまま返すので、
+    // 従来通り VexFlow の自動判定に任せられる（リグレッション防止）。
+    const measureVoices = resolveVoiceStemDirections(measureVoicesRaw);
+    const isMultiVoiceMeasure = measureVoices.length > 1;
+    const renderedVoiceEntries = measureVoices
+      .map((measureVoice, voiceIndex) => {
+        const rawSourceEvents: RenderNoteEvent[] = voiceIndex === 0
+          ? safeEvs
+          : (measureVoice.events.length > 0
+              ? measureVoice.events.map(ev => sanitizeRenderEvent(ev, clefHere))
+              : []);
+
+        // ある声部の音価合計が拍子ぶんに満たないときは、表示用に末尾へ休符を補完する
+        // （保存データ＝measure.events/voices は一切書き換えない、見た目だけの補完）。
+        // 市販譜では埋まっていない拍に休符を明示するのが作法なので、
+        // ここを何もしないと「拍が余った残りが単に空白になる」見た目になってしまう。
+        // 以前は多声（isMultiVoiceMeasure）小節限定だったが、単声部小節でも
+        // 「入力先が視覚的に分からない」というUX上の問題があったため、
+        // 声部数によらず常にこの補完を行うようにした。
+        // 全休符の小節（safeEvs が __isPlaceholder のプレースホルダー1件だけ）は
+        // すでに1小節ぶんの休符が入っているため、computeVoiceDisplayPadding が
+        // 追加分0件を返し、何も変わらない（リグレッション防止）。
+        // 2声部共存時は従来通り声部ごとの上下振り分け位置を使い、
+        // 単声部小節だけ音価に応じた標準浄書位置（全休符/2分休符以下）を使う。
+        const restKeyForPaddingDuration = (duration: NoteEvent['dur']) =>
+          standardRestDisplayKey(clefHere, duration, voiceIndex, measureVoices.length);
+        const paddingRests: RenderNoteEvent[] = computeVoiceDisplayPadding(rawSourceEvents, beatsPerMeasure, restKeyForPaddingDuration)
+          .map(rest => ({ ...sanitizeRenderEvent(rest, clefHere), __isPlaceholder: true }));
+        let sourceEvents: RenderNoteEvent[] = rawSourceEvents;
+        if (paddingRests.length > 0) {
+          sourceEvents = [...rawSourceEvents, ...paddingRests];
+        }
+
+        if (sourceEvents.length === 0) {
+          return null;
+        }
+
+        // 段またぎ記譜（Issue #309）: 音符ごとに「実際に載せる五線（＝パート）」を決める。
+        // 相手の五線が無いとき（端のパートで無効な向き・単段編成・パート譜表示）は
+        // resolveRenderPartIndexes が自分のパート番号を返すため、ここから先は
+        // 「行き先が必ず存在する」前提で書ける（例外を出さない・保存データも触らない）。
+        const renderPartIndexes = resolveRenderPartIndexes(sourceEvents, pi, parts.length);
+        const hasCrossStaffNote = hasCrossStaffRender(renderPartIndexes, pi);
+        // 段またぎの音符は「載せる先の五線のクレフ」で音高→線を換算しないと、
+        // ヘ音記号の五線にト音記号基準の高さで描かれてしまう。
+        // クレフは小節ごとに変わりうる（途中クレフ変更）ので、その小節の値を解決する。
+        const clefForRenderPart = (targetPi: number): ClefType => (
+          targetPi === pi
+            ? clefHere
+            : resolveMeasureClef(partsScoreForRender[targetPi] ?? [], absI, parts[targetPi].clef)
+        );
+
+        // 2声部共存時のみ、休符の描画位置を声部1=やや上/声部2=やや下にずらす。
+        // 単声部小節では undefined を渡し、音価に応じた既定位置（makeVFNote 内）を使う。
+        const restKeyOverride = isMultiVoiceMeasure
+          ? restKeyForVoice(clefHere, voiceIndex, measureVoices.length)
+          : undefined;
+
+        const vfNotes = sourceEvents.map((ev, idx) => {
+          const renderAsGhostRest = shouldRenderGhostRest(sourceEvents, idx, voiceIndex);
+          // 段またぎの音符だけ、クレフと符幹の扱いを「載せる先の五線」基準に切り替える。
+          const isCrossStaffNote = renderPartIndexes[idx] !== pi;
+          const n=makeVFNote(
+            ev,
+            accidentalState,
+            isCrossStaffNote ? clefForRenderPart(renderPartIndexes[idx]) : clefHere,
+            // 多声部小節の「声部1=上向き固定」は自分の五線にいる音符のための規則なので、
+            // 隣の五線へ載せた音符には当てず VexFlow の自動判定に任せる（設計メモ §4-1）。
+            isCrossStaffNote ? undefined : measureVoice.stemDirection,
+            renderAsGhostRest,
+            // courtesy accidental は主旋律（voice 0）だけに適用する。
+            // 追加声部は拍合わせ用の音符が多く、courtesy が邪魔になりやすい。
+            voiceIndex === 0 ? thisPrevMeasState : undefined,
+            restKeyOverride
+          ) as any;
+          // 選択中の声部（selected.voiceIndex、未指定時は 0 扱い）と一致する音符だけハイライトする。
+          // こうしないと声部2を選択したときに声部1の同じインデックスも一緒に青くなってしまう。
+          const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===idx&&(selected.voiceIndex??0)===voiceIndex;
+          // 2声部が共存する小節では、非アクティブ声部の音符を薄いグレーで描画する。
+          // 「今どの声部を編集しているか」を視覚的に分かりやすくするため。
+          // 声部1しか無い小節や、声部トグル自体が無い画面（単旋律譜など）では
+          // isMultiVoiceMeasure が false のままなので、従来通り常に黒で描画される
+          // （リグレッション防止）。
+          const isInactiveVoice = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+          // computeVoiceDisplayPadding が補完した「拍が足りない残りを埋めるだけの休符」は
+          // データに保存されていない表示専用のものなので、薄いグレーにして
+          // 「ここは実際にはまだ空いている」ことが一目で分かるようにする。
+          const isPaddingRest = !!ev.__isPlaceholder && ev.isRest;
+          // keyIndex の範囲チェックは必須。Undo などでイベント配列が外から差し替わった直後は
+          // selected が1世代前の和音構成を指していることがあり、範囲外の keyIndex を
+          // VexFlow の setKeyStyle に渡すと noteHeads[keyIndex] が undefined で例外になる
+          // （描画 effect 内なので画面全体が落ちる）。範囲外なら音符全体の選択表示に降格する。
+          if(isSel&&selected.keyIndex!==undefined&&!ev.isRest&&n.setKeyStyle&&selected.keyIndex<ev.keys.length){
+            n.setKeyStyle(selected.keyIndex,{fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
+          }else if(isSel&&n.setStyle){
+            n.setStyle({fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
+          }else if((isInactiveVoice||isPaddingRest)&&n.setStyle){
+            n.setStyle({fillStyle:INACTIVE_VOICE_COLOR,strokeStyle:INACTIVE_VOICE_COLOR});
+          }
+          return n as StaveNote;
+        });
+        // 段またぎの音符には、合同整形（Pass 2）より前に「載せる先の五線」を割り当てておく。
+        // VexFlow は preFormat のとき「まだ五線が設定されていない音符にだけ」五線を伝播する
+        // 仕様なので、先に設定しておけば後続の voice.setStave / preFormat で上書きされない
+        // （この保護規則は Pass 1 の voice.setStave と同じ仕組み）。
+        if (hasCrossStaffNote) {
+          vfNotes.forEach((n, idx) => {
+            const targetPi = renderPartIndexes[idx];
+            if (targetPi === pi) return;
+            const targetStave = staveSets[targetPi]?.[systemColumnIndex];
+            if (targetStave) {
+              n.setStave(targetStave);
+            }
+          });
+        }
+        // voice 0 の描画が終わり accidentalState がこの小節の最終状態になった。
+        // 次の小節の courtesy accidental 判定に使うためスナップショットを保存する。
+        // 追加声部（voiceIndex > 0）は accidentalState を共有しているが、
+        // スナップショットは voice 0 終了直後に取れば十分。
+        if (voiceIndex === 0) {
+          nextPrevMeasureState = snapshotAccidentalState(accidentalState);
+        }
+        // 2声部共存時は、ビームの符幹向きも声部の向き（上/下）にそろえる。
+        // stemDirection を明示すると、VexFlow はビーム内の各音符にもその向きを
+        // 適用してくれる（すでに makeVFNote 側で setStemDirection 済みだが、
+        // maintainStemDirections を付けないとビーム生成時に自動判定へ戻ってしまう）。
+        const beamStemDirection = isMultiVoiceMeasure
+          ? (measureVoice.stemDirection === 'down' ? -1 : 1)
+          : undefined;
+        // Tuplet の生成時に tick 倍率を音符へ反映する。合同 Formatter より後に
+        // 作ると、3連符などを通常音符の拍位置で整列してしまう。
+        //
+        // ビーム生成より「先」に作るのが必須（Issue #217）。
+        // Beam.generateBeams は音符の tick を足し上げて拍の区切りを決めるが、
+        // 連符の 2/3 倍率を掛けるのはこの Tuplet 生成なので、順序が逆だと
+        // 8分3連が「素の8分音符」として数えられ、連符単位（3+3）ではなく
+        // 拍単位（2+2+2）で束ねられてしまう。
+        const tuplets=createVexFlowTuplets(sourceEvents, vfNotes);
+        const beamOptions = {
+          beamRests:false,
+          ...(beamStemDirection !== undefined
+            ? { stemDirection: beamStemDirection, maintainStemDirections: true }
+            : {}),
+        };
+        // 段またぎがある声部は、載る五線が変わる位置で連桁（ビーム）を切る（設計メモ §4-2）。
+        // 1本のビームを五線の間に斜めに渡す書き方（段またぎ連桁）は段2の課題。
+        // 「拍の区切りは全音符列で決め、またぎ位置では切るだけ」にしないと、
+        // またぎで抜けた音符の tick が数えられず残りの拍がずれる（Issue #313）。
+        const beams = hasCrossStaffNote
+          ? generateCrossStaffBeams(vfNotes, renderPartIndexes, beamOptions)
+          : Beam.generateBeams(vfNotes, beamOptions);
+        // Tuplet は「括弧を描くかどうか」をコンストラクタの時点で
+        // 「ビームの付いていない音符が1つでもあるか」で決めてしまう。
+        // 上の順序変更でビームがまだ無い状態で作ることになったため、
+        // ビーム確定後にもう一度判定し直す（連桁でつながった連符は
+        // 数字だけ・括弧なしで書くのが浄書の慣行）。
+        syncTupletBracketsWithBeams(tuplets);
+        const voice=new Voice({
+          time:{
+            num_beats: timeSignatureNumerator,
+            beat_value: timeSignatureDenominator
+          }
+        } as any);
+        voice.setMode((Voice as any).Mode.SOFT??1);
+        voice.addTickables(vfNotes);
+        // この Voice を「自分のパートの五線」に載せる。
+        // 合同フォーマット（Pass 2）で全 Voice を最上段の五線へ載せてしまうと、
+        // 低音（左手 g3 など）が最上段基準で幅計算され、間隔配分が歪む。
+        // 先に自分の五線を設定して preFormat しておくと、VexFlow は
+        // 「stave 未設定の音符にだけ」stave を伝播する仕様のため、後続の
+        // formatToStave が最上段で上書きするのを防げる。
+        voice.setStave(stave);
+
+        // ビーム（連桁）・連符の括弧も音符本体と同じ淡色にするため、
+        // 「この声部が非アクティブかどうか」を描画パス（Pass 3）へ持ち越す。
+        // 音符ごとの判定（上の isInactiveVoice）と同じ条件だが、
+        // ビーム・連符は声部単位で1つなので声部側に持たせる。
+        const isInactiveVoiceEntry = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+
+        return {
+          voiceIndex,
+          sourceEvents,
+          realEventCount: rawSourceEvents.length,
+          vfNotes,
+          beams,
+          tuplets,
+          voice,
+          isInactiveVoiceEntry,
+          hasCrossStaffNote,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+    const primaryRenderedVoice = renderedVoiceEntries[0];
+    if (!primaryRenderedVoice) {
+      return { cacheEntry: null, nextPrevMeasureState };
+    }
+
+    const vfNotes = primaryRenderedVoice.vfNotes;
+
+    return {
+      cacheEntry: {
+        clefHere, data, safeEvs, partKeyForAccidental,
+        isMultiVoiceMeasure, renderedVoiceEntries, primaryRenderedVoice, vfNotes,
+      },
+      nextPrevMeasureState,
+    };
+}
+
+/* ===== Pass 2 の関数化（#244 段4c-1） =====
+ * 全パート・全声部の Voice を1回の Formatter でまとめて整形する。
+ * これにより、右手・左手など複数パートで同じ拍の音符が同じ x 座標に揃う
+ * （パートごとに別々の Formatter で整形すると、パートごとの音価密度の違いで
+ * 独立にジャスティファイされ、拍の位置がずれてしまうため）。
+ * 幅の計算には stave の noteStartX/noteEndX しか使われず、全パートの stave は
+ * 同じ小節幅で作られているため、代表五線（referenceStave）を1つ渡せば足りる。
+ */
+function formatSystemColumnVoices(allVoices: Voice[], restAlign: Voice[], referenceStave: Stave): void {
+  if (allVoices.length === 0) return;
+  // 各 Voice を「自分の五線」で先に preFormat し、音符に正しい五線を伝播させる。
+  // VexFlow は preFormat 済み（preFormatted=true）の Voice を再 preFormat しないため、
+  // この後の formatToStave が最上段の五線で音符を上書きするのを防げる。
+  // これをしないと左手の低音が最上段（ト音記号）基準で幅計算され、
+  // 小節内の間隔配分が左右非対称に歪む。
+  allVoices.forEach((v) => v.preFormat());
+  // 2 voice では、上下声部の休符が自動調整されないと
+  // 互いにめり込んで「なんか変」な見た目になりやすい。
+  // ただし alignRests は「休符を隣接する音符の高さへ引き寄せる」処理のため、
+  // 単声部の Voice にまで適用すると、defaultRestDisplayKeyForDuration で
+  // 固定したはずの中央位置が隣接音符の音高しだいで動いてしまう（Issue #79）。
+  // そのため 2 声部が共存する小節の Voice だけに限定して事前に適用し、
+  // Formatter.formatToStave 自体は alignRests を使わない
+  // （VexFlow 内部でも alignRests は preFormat/幅計算より前に休符の
+  //   縦位置(line)だけを書き換える処理で、x座標の計算には影響しない）。
+  restAlign.forEach((v) => Formatter.AlignRestsToNotes(v.getTickables(), true));
+  new Formatter()
+    .joinVoices(allVoices)
+    .formatToStave(allVoices, referenceStave);
+}
+
 /* ===== 描画1回ぶんの記号エントリと台帳の収集器（#244 段4b） =====
  * 描画 useEffect の中に散らばっていた記号エントリ配列13本と台帳 Map 4つを
  * 1つの「収集器」オブジェクトへ束ねる。Pass 3 が push で埋め、最終描画段が読む。
@@ -3680,16 +4001,7 @@ export default function PianoSystemCanvas({
       // 生成だけを済ませ、実際のフォーマットは全パート分そろってから1回だけ行う
       // （下の Pass 2）。結果は partVoiceCache に貯めて Pass 3（描画・イベント
       // ハンドラ設定）で使い回す。
-      const partVoiceCache: Array<{
-        clefHere: ClefType;
-        data: MeasureData | undefined;
-        safeEvs: RenderNoteEvent[];
-        partKeyForAccidental: KeySignature;
-        isMultiVoiceMeasure: boolean;
-        renderedVoiceEntries: RenderedVoiceEntry[];
-        primaryRenderedVoice: RenderedVoiceEntry;
-        vfNotes: StaveNote[];
-      } | null> = [];
+      const partVoiceCache: Array<PartVoiceCacheEntry | null> = [];
       const allVoicesForFormatting: Voice[] = [];
       // alignRests を掛ける対象（2声部が共存する小節の Voice だけ）を別に集める。
       // Issue #79: alignRests を全 Voice に一律適用すると、単声部の休符
@@ -3697,276 +4009,32 @@ export default function PianoSystemCanvas({
       // VexFlow が隣接音符の高さへ引き寄せてしまい、休符が中央からずれる原因になっていた。
       const restAlignVoices: Voice[] = [];
 
-      parts.forEach((part, pi) => {
-        const stave=staveSets[pi][i];
-        // 描画に使うのは partsScoreForRender（矢印キーで動かしている最中の下書きを反映したコピー）。
-        // 保存データ側の partsScore を直接使うと、確定するまで画面に反映されない（Issue #205）。
-        const score=partsScoreForRender[pi]??[];
-        // この小節時点で有効なクレフ（途中クレフ変更対応）。パートごとの小節データ（part.data）から解決する。
-        // クリックハンドラなど後から呼ばれる処理でも、absI は forEach 反復ごとに固定された const のため
-        // ここで解決した clefHere をそのまま安全に参照できる。
-        // score は partsScoreForRender[pi]（内部 state の描画用コピー）を指すため、こちらから解決する（part.data は初期値のみ）
-        const clefHere=resolveMeasureClef(score, absI, part.clef);
-
-        const data=absI<score.length?score[absI]:undefined;
-        const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestDisplayKeyForDuration(clefHere, '1')],__isPlaceholder:true}])
-          .map(ev=>sanitizeRenderEvent(ev, clefHere));
-        // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
-        // 移調楽器の記譜音表示などでパート固有の調号がある場合は、
-        // そちらを基準に「調号で既に変化している音」を判定する。
-        // この小節時点で有効な調号（途中調号変更対応）に、パート固有の移調シフトを適用する。
-        const partFifthsShiftForAccidental = part.keySignature
-          ? getKeySignatureFifths(part.keySignature) - getKeySignatureFifths(normalizedKeySignature)
-          : 0;
-        const partKeyForAccidental = partFifthsShiftForAccidental !== 0
-          ? shiftKeySignatureByFifths(effectiveKeySigPerMeasure[i], partFifthsShiftForAccidental)
-          : effectiveKeySigPerMeasure[i];
-        const accidentalState = createMeasureAccidentalState(partKeyForAccidental);
-        // 前の小節の最終状態を courtesy accidental 判定のために取得し、
-        // この小節の描画後に更新する。
-        const thisPrevMeasState = prevMeasureStatePerPart[pi];
-        const measureVoicesRaw = getMeasureVoices(data);
-        // 2声部が共存する小節だけ、符幹の向き（声部1=上向き/声部2=下向き）を強制する。
-        // 声部1しか無い小節は resolveVoiceStemDirections がそのまま返すので、
-        // 従来通り VexFlow の自動判定に任せられる（リグレッション防止）。
-        const measureVoices = resolveVoiceStemDirections(measureVoicesRaw);
-        const isMultiVoiceMeasure = measureVoices.length > 1;
-        const renderedVoiceEntries = measureVoices
-          .map((measureVoice, voiceIndex) => {
-            const rawSourceEvents: RenderNoteEvent[] = voiceIndex === 0
-              ? safeEvs
-              : (measureVoice.events.length > 0
-                  ? measureVoice.events.map(ev => sanitizeRenderEvent(ev, clefHere))
-                  : []);
-
-            // ある声部の音価合計が拍子ぶんに満たないときは、表示用に末尾へ休符を補完する
-            // （保存データ＝measure.events/voices は一切書き換えない、見た目だけの補完）。
-            // 市販譜では埋まっていない拍に休符を明示するのが作法なので、
-            // ここを何もしないと「拍が余った残りが単に空白になる」見た目になってしまう。
-            // 以前は多声（isMultiVoiceMeasure）小節限定だったが、単声部小節でも
-            // 「入力先が視覚的に分からない」というUX上の問題があったため、
-            // 声部数によらず常にこの補完を行うようにした。
-            // 全休符の小節（safeEvs が __isPlaceholder のプレースホルダー1件だけ）は
-            // すでに1小節ぶんの休符が入っているため、computeVoiceDisplayPadding が
-            // 追加分0件を返し、何も変わらない（リグレッション防止）。
-            // 2声部共存時は従来通り声部ごとの上下振り分け位置を使い、
-            // 単声部小節だけ音価に応じた標準浄書位置（全休符/2分休符以下）を使う。
-            const restKeyForPaddingDuration = (duration: NoteEvent['dur']) =>
-              standardRestDisplayKey(clefHere, duration, voiceIndex, measureVoices.length);
-            const paddingRests: RenderNoteEvent[] = computeVoiceDisplayPadding(rawSourceEvents, beatsPerMeasure, restKeyForPaddingDuration)
-              .map(rest => ({ ...sanitizeRenderEvent(rest, clefHere), __isPlaceholder: true }));
-            let sourceEvents: RenderNoteEvent[] = rawSourceEvents;
-            if (paddingRests.length > 0) {
-              sourceEvents = [...rawSourceEvents, ...paddingRests];
-            }
-
-            if (sourceEvents.length === 0) {
-              return null;
-            }
-
-            // 段またぎ記譜（Issue #309）: 音符ごとに「実際に載せる五線（＝パート）」を決める。
-            // 相手の五線が無いとき（端のパートで無効な向き・単段編成・パート譜表示）は
-            // resolveRenderPartIndexes が自分のパート番号を返すため、ここから先は
-            // 「行き先が必ず存在する」前提で書ける（例外を出さない・保存データも触らない）。
-            const renderPartIndexes = resolveRenderPartIndexes(sourceEvents, pi, parts.length);
-            const hasCrossStaffNote = hasCrossStaffRender(renderPartIndexes, pi);
-            // 段またぎの音符は「載せる先の五線のクレフ」で音高→線を換算しないと、
-            // ヘ音記号の五線にト音記号基準の高さで描かれてしまう。
-            // クレフは小節ごとに変わりうる（途中クレフ変更）ので、その小節の値を解決する。
-            const clefForRenderPart = (targetPi: number): ClefType => (
-              targetPi === pi
-                ? clefHere
-                : resolveMeasureClef(partsScoreForRender[targetPi] ?? [], absI, parts[targetPi].clef)
-            );
-
-            // 2声部共存時のみ、休符の描画位置を声部1=やや上/声部2=やや下にずらす。
-            // 単声部小節では undefined を渡し、音価に応じた既定位置（makeVFNote 内）を使う。
-            const restKeyOverride = isMultiVoiceMeasure
-              ? restKeyForVoice(clefHere, voiceIndex, measureVoices.length)
-              : undefined;
-
-            const vfNotes = sourceEvents.map((ev, idx) => {
-              const renderAsGhostRest = shouldRenderGhostRest(sourceEvents, idx, voiceIndex);
-              // 段またぎの音符だけ、クレフと符幹の扱いを「載せる先の五線」基準に切り替える。
-              const isCrossStaffNote = renderPartIndexes[idx] !== pi;
-              const n=makeVFNote(
-                ev,
-                accidentalState,
-                isCrossStaffNote ? clefForRenderPart(renderPartIndexes[idx]) : clefHere,
-                // 多声部小節の「声部1=上向き固定」は自分の五線にいる音符のための規則なので、
-                // 隣の五線へ載せた音符には当てず VexFlow の自動判定に任せる（設計メモ §4-1）。
-                isCrossStaffNote ? undefined : measureVoice.stemDirection,
-                renderAsGhostRest,
-                // courtesy accidental は主旋律（voice 0）だけに適用する。
-                // 追加声部は拍合わせ用の音符が多く、courtesy が邪魔になりやすい。
-                voiceIndex === 0 ? thisPrevMeasState : undefined,
-                restKeyOverride
-              ) as any;
-              // 選択中の声部（selected.voiceIndex、未指定時は 0 扱い）と一致する音符だけハイライトする。
-              // こうしないと声部2を選択したときに声部1の同じインデックスも一緒に青くなってしまう。
-              const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===idx&&(selected.voiceIndex??0)===voiceIndex;
-              // 2声部が共存する小節では、非アクティブ声部の音符を薄いグレーで描画する。
-              // 「今どの声部を編集しているか」を視覚的に分かりやすくするため。
-              // 声部1しか無い小節や、声部トグル自体が無い画面（単旋律譜など）では
-              // isMultiVoiceMeasure が false のままなので、従来通り常に黒で描画される
-              // （リグレッション防止）。
-              const isInactiveVoice = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
-              // computeVoiceDisplayPadding が補完した「拍が足りない残りを埋めるだけの休符」は
-              // データに保存されていない表示専用のものなので、薄いグレーにして
-              // 「ここは実際にはまだ空いている」ことが一目で分かるようにする。
-              const isPaddingRest = !!ev.__isPlaceholder && ev.isRest;
-              // keyIndex の範囲チェックは必須。Undo などでイベント配列が外から差し替わった直後は
-              // selected が1世代前の和音構成を指していることがあり、範囲外の keyIndex を
-              // VexFlow の setKeyStyle に渡すと noteHeads[keyIndex] が undefined で例外になる
-              // （描画 effect 内なので画面全体が落ちる）。範囲外なら音符全体の選択表示に降格する。
-              if(isSel&&selected.keyIndex!==undefined&&!ev.isRest&&n.setKeyStyle&&selected.keyIndex<ev.keys.length){
-                n.setKeyStyle(selected.keyIndex,{fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
-              }else if(isSel&&n.setStyle){
-                n.setStyle({fillStyle:'#1d4ed8',strokeStyle:'#1d4ed8'});
-              }else if((isInactiveVoice||isPaddingRest)&&n.setStyle){
-                n.setStyle({fillStyle:INACTIVE_VOICE_COLOR,strokeStyle:INACTIVE_VOICE_COLOR});
-              }
-              return n as StaveNote;
-            });
-            // 段またぎの音符には、合同整形（Pass 2）より前に「載せる先の五線」を割り当てておく。
-            // VexFlow は preFormat のとき「まだ五線が設定されていない音符にだけ」五線を伝播する
-            // 仕様なので、先に設定しておけば後続の voice.setStave / preFormat で上書きされない
-            // （この保護規則は Pass 1 の voice.setStave と同じ仕組み）。
-            if (hasCrossStaffNote) {
-              vfNotes.forEach((n, idx) => {
-                const targetPi = renderPartIndexes[idx];
-                if (targetPi === pi) return;
-                const targetStave = staveSets[targetPi]?.[i];
-                if (targetStave) {
-                  n.setStave(targetStave);
-                }
-              });
-            }
-            // voice 0 の描画が終わり accidentalState がこの小節の最終状態になった。
-            // 次の小節の courtesy accidental 判定に使うためスナップショットを保存する。
-            // 追加声部（voiceIndex > 0）は accidentalState を共有しているが、
-            // スナップショットは voice 0 終了直後に取れば十分。
-            if (voiceIndex === 0) {
-              prevMeasureStatePerPart[pi] = snapshotAccidentalState(accidentalState);
-            }
-            // 2声部共存時は、ビームの符幹向きも声部の向き（上/下）にそろえる。
-            // stemDirection を明示すると、VexFlow はビーム内の各音符にもその向きを
-            // 適用してくれる（すでに makeVFNote 側で setStemDirection 済みだが、
-            // maintainStemDirections を付けないとビーム生成時に自動判定へ戻ってしまう）。
-            const beamStemDirection = isMultiVoiceMeasure
-              ? (measureVoice.stemDirection === 'down' ? -1 : 1)
-              : undefined;
-            // Tuplet の生成時に tick 倍率を音符へ反映する。合同 Formatter より後に
-            // 作ると、3連符などを通常音符の拍位置で整列してしまう。
-            //
-            // ビーム生成より「先」に作るのが必須（Issue #217）。
-            // Beam.generateBeams は音符の tick を足し上げて拍の区切りを決めるが、
-            // 連符の 2/3 倍率を掛けるのはこの Tuplet 生成なので、順序が逆だと
-            // 8分3連が「素の8分音符」として数えられ、連符単位（3+3）ではなく
-            // 拍単位（2+2+2）で束ねられてしまう。
-            const tuplets=createVexFlowTuplets(sourceEvents, vfNotes);
-            const beamOptions = {
-              beamRests:false,
-              ...(beamStemDirection !== undefined
-                ? { stemDirection: beamStemDirection, maintainStemDirections: true }
-                : {}),
-            };
-            // 段またぎがある声部は、載る五線が変わる位置で連桁（ビーム）を切る（設計メモ §4-2）。
-            // 1本のビームを五線の間に斜めに渡す書き方（段またぎ連桁）は段2の課題。
-            // 「拍の区切りは全音符列で決め、またぎ位置では切るだけ」にしないと、
-            // またぎで抜けた音符の tick が数えられず残りの拍がずれる（Issue #313）。
-            const beams = hasCrossStaffNote
-              ? generateCrossStaffBeams(vfNotes, renderPartIndexes, beamOptions)
-              : Beam.generateBeams(vfNotes, beamOptions);
-            // Tuplet は「括弧を描くかどうか」をコンストラクタの時点で
-            // 「ビームの付いていない音符が1つでもあるか」で決めてしまう。
-            // 上の順序変更でビームがまだ無い状態で作ることになったため、
-            // ビーム確定後にもう一度判定し直す（連桁でつながった連符は
-            // 数字だけ・括弧なしで書くのが浄書の慣行）。
-            syncTupletBracketsWithBeams(tuplets);
-            const voice=new Voice({
-              time:{
-                num_beats: timeSignatureNumerator,
-                beat_value: timeSignatureDenominator
-              }
-            } as any);
-            voice.setMode((Voice as any).Mode.SOFT??1);
-            voice.addTickables(vfNotes);
-            // この Voice を「自分のパートの五線」に載せる。
-            // 合同フォーマット（Pass 2）で全 Voice を最上段の五線へ載せてしまうと、
-            // 低音（左手 g3 など）が最上段基準で幅計算され、間隔配分が歪む。
-            // 先に自分の五線を設定して preFormat しておくと、VexFlow は
-            // 「stave 未設定の音符にだけ」stave を伝播する仕様のため、後続の
-            // formatToStave が最上段で上書きするのを防げる。
-            voice.setStave(stave);
-
-            // ビーム（連桁）・連符の括弧も音符本体と同じ淡色にするため、
-            // 「この声部が非アクティブかどうか」を描画パス（Pass 3）へ持ち越す。
-            // 音符ごとの判定（上の isInactiveVoice）と同じ条件だが、
-            // ビーム・連符は声部単位で1つなので声部側に持たせる。
-            const isInactiveVoiceEntry = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
-
-            return {
-              voiceIndex,
-              sourceEvents,
-              realEventCount: rawSourceEvents.length,
-              vfNotes,
-              beams,
-              tuplets,
-              voice,
-              isInactiveVoiceEntry,
-              hasCrossStaffNote,
-            };
-          })
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-
-        const primaryRenderedVoice = renderedVoiceEntries[0];
-        if (!primaryRenderedVoice) {
-          return;
-        }
-
-        const vfNotes = primaryRenderedVoice.vfNotes;
-
-        partVoiceCache[pi] = {
-          clefHere, data, safeEvs, partKeyForAccidental,
-          isMultiVoiceMeasure, renderedVoiceEntries, primaryRenderedVoice, vfNotes,
-        };
-        renderedVoiceEntries.forEach((entry) => {
+      for (let pi = 0; pi < parts.length; pi++) {
+        // Pass 1 の実体は buildPartVoicesForMeasure（module スコープ・#244 段4c-1）。
+        // 入出力はここに全部並ぶ: 入力はレイアウト済みの五線と描画用データ、
+        // 出力は partVoiceCache のエントリと臨時記号状態の引き継ぎ。
+        const built = buildPartVoicesForMeasure({
+          pi, systemColumnIndex: i, absI, staveSets, parts,
+          partsScoreForRender, normalizedKeySignature,
+          effectiveKeySigForMeasure: effectiveKeySigPerMeasure[i],
+          beatsPerMeasure, timeSignatureNumerator, timeSignatureDenominator,
+          selected, activeVoiceIndex,
+          prevMeasureState: prevMeasureStatePerPart[pi],
+        });
+        prevMeasureStatePerPart[pi] = built.nextPrevMeasureState;
+        const cacheEntry = built.cacheEntry;
+        if (!cacheEntry) continue;
+        partVoiceCache[pi] = cacheEntry;
+        cacheEntry.renderedVoiceEntries.forEach((entry) => {
           allVoicesForFormatting.push(entry.voice);
-          if (isMultiVoiceMeasure) {
+          if (cacheEntry.isMultiVoiceMeasure) {
             restAlignVoices.push(entry.voice);
           }
         });
-      });
-
-      // Pass 2: 全パート・全声部の Voice を1回の Formatter でまとめて整形する。
-      // これにより、右手・左手など複数パートで同じ拍の音符が同じ x 座標に揃う
-      // （パートごとに別々の Formatter で整形すると、パートごとの音価密度の違いで
-      // 独立にジャスティファイされ、拍の位置がずれてしまうため）。
-      // 幅の計算には stave の noteStartX/noteEndX しか使われず、全パートの stave は
-      // 同じ小節幅（measLeft〜measRight）で作られているため、代表として最初の
-      // パートの stave を渡せば足りる。
-      if (allVoicesForFormatting.length > 0) {
-        // 各 Voice を「自分の五線」で先に preFormat し、音符に正しい五線を伝播させる。
-        // VexFlow は preFormat 済み（preFormatted=true）の Voice を再 preFormat しないため、
-        // この後の formatToStave が最上段の五線で音符を上書きするのを防げる。
-        // これをしないと左手の低音が最上段（ト音記号）基準で幅計算され、
-        // 小節内の間隔配分が左右非対称に歪む。
-        allVoicesForFormatting.forEach((v) => v.preFormat());
-        // 2 voice では、上下声部の休符が自動調整されないと
-        // 互いにめり込んで「なんか変」な見た目になりやすい。
-        // ただし alignRests は「休符を隣接する音符の高さへ引き寄せる」処理のため、
-        // 単声部の Voice にまで適用すると、defaultRestDisplayKeyForDuration で
-        // 固定したはずの中央位置が隣接音符の音高しだいで動いてしまう（Issue #79）。
-        // そのため 2 声部が共存する小節の Voice だけに限定して事前に適用し、
-        // Formatter.formatToStave 自体は alignRests を使わない
-        // （VexFlow 内部でも alignRests は preFormat/幅計算より前に休符の
-        //   縦位置(line)だけを書き換える処理で、x座標の計算には影響しない）。
-        restAlignVoices.forEach((v) => Formatter.AlignRestsToNotes(v.getTickables(), true));
-        new Formatter()
-          .joinVoices(allVoicesForFormatting)
-          .formatToStave(allVoicesForFormatting, staveSets[0][i]);
       }
+
+      // Pass 2: 合同フォーマット。実体は formatSystemColumnVoices（module スコープ・#244 段4c-1）
+      formatSystemColumnVoices(allVoicesForFormatting, restAlignVoices, staveSets[0][i]);
 
       // Pass 3: フォーマット済みの Voice を使って実際の描画・イベントハンドラ設定を行う。
       parts.forEach((part, pi) => {
