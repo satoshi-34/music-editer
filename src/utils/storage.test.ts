@@ -341,6 +341,31 @@ describe('Storage Foundation Tests', () => {
       expect(titles.filter((title) => title === 'current')).toHaveLength(1);
     });
 
+    it('空譜面の現在内容（全小節が空）も退避され、復元後に履歴から戻せる', () => {
+      // ScorePage は復元前に includeEmpty で空譜面も同期保存する（Codex round3 P1）。
+      // その保存データが世代として退避され、復元後も履歴に残ることをストレージ層で固定する
+      const created = createWork('空退避');
+      const workId = created.data!.id;
+      const emptyCurrent: SavedScoreData = {
+        ...createSavedScoreData(
+          { title: '空だがタイトルあり', subtitle: '', lyricist: '', composer: '', arranger: '' },
+          [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+          1,
+          4
+        ),
+        timestamp: 200,
+      };
+      pushWorkHistoryGeneration(workId, makeData('old', 50), { force: true });
+      const target = loadWorkHistory(workId)[0];
+      // 復元前の同期保存に相当（空譜面でも保存される）
+      expect(saveWorkAutosaveData(workId, emptyCurrent).success).toBe(true);
+      const result = restoreWorkHistoryGeneration(workId, target.timestamp);
+      expect(result.success).toBe(true);
+      // 空譜面（タイトルだけの状態）が「戻す前の内容」として履歴に残っている
+      const titles = loadWorkHistory(workId).map((item) => item.data.metadata.title);
+      expect(titles).toContain('空だがタイトルあり');
+    });
+
     it('現在の内容を履歴へ退避できないときは復元を中止する（上書きしない）', () => {
       const created = createWork('退避失敗');
       const workId = created.data!.id;
