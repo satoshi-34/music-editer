@@ -243,10 +243,12 @@ describe('PianoSystemCanvas 段またぎ記譜 段1a（Issue #309）', () => {
     // 音符の並びは「右手3音 → 右手の4分休符3つ → 左手4音」なので、左手の頭は7番目。
     const crossX = noteheadCenterX(notes[0]);
     const leftHandX = noteheadCenterX(notes[6]);
-    expect(Math.abs(crossX - leftHandX), `またぎ音符 ${crossX} と左手 ${leftHandX} の x 差`).toBeLessThan(2);
+    // 段2（#259）で符幹が五線間へ向くようになり、符幹反転ぶん（符頭は符幹の反対側に付く）
+    // だけ x が±2px 程度ずれるのは正当。拍のアラインそのものは合同整形が保証している
+    expect(Math.abs(crossX - leftHandX), `またぎ音符 ${crossX} と左手 ${leftHandX} の x 差`).toBeLessThanOrEqual(2.5);
   });
 
-  it('受入3c: またぎ位置で連桁（ビーム）が切れる', () => {
+  it('受入3c（段2で更新・#259）: またぎを含む拍が1本の段またぎ連桁で繋がる', () => {
     // 8分音符4つのうち2つ目だけを下の五線へ。またぎが無ければ2拍ぶんで2本のビームになる。
     const eighth = (key: string, renderStaff?: 'below'): NoteEvent => ({
       dur: '8', isRest: false, keys: [key], ...(renderStaff ? { renderStaff } : {}),
@@ -264,9 +266,18 @@ describe('PianoSystemCanvas 段またぎ記譜 段1a（Issue #309）', () => {
     ]);
 
     expect(beamsWithoutCross).toBe(2);
-    // 1音目・2音目は載る五線が違うので単独になり（8分1つではビームは付かない）、
-    // 同じ五線に連続する3・4音目だけが1本のビームで束ねられる。
-    expect(withCross.svg.querySelectorAll('g.vf-beam').length).toBe(1);
+    // 段1では「またぎ位置で切る」＝1本だけだったが、段2では市販譜どおり
+    // またぎを含む1拍目も1本のビームで五線間に渡される＝またぎ無しと同じ2本。
+    const beams = [...withCross.svg.querySelectorAll('g.vf-beam')];
+    expect(beams.length).toBe(2);
+    // またぎ連桁は「五線の間」に渡る: 2本のビームのうち y の広がりが大きい方＝
+    // またぎ連桁で、その y スパンが同一五線内の通常ビームでは起こらない大きさになる
+    const spansPerBeam = beams.map((b) => {
+      const d = b.querySelector('path')?.getAttribute('d') ?? '';
+      const ys = [...d.matchAll(/[ML]\s*[\d.]+\s+([\d.]+)/g)].map((m) => parseFloat(m[1]));
+      return ys.length ? Math.max(...ys) - Math.min(...ys) : 0;
+    });
+    expect(Math.max(...spansPerBeam)).toBeGreaterThan(20);
   });
 
   it('受入1: renderStaff を使っていない譜面は、符頭の座標が実測値のまま変わらない', () => {
