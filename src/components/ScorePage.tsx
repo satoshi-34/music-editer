@@ -1615,7 +1615,10 @@ export default function ScorePage() {
     } else if (scoreType === 'ensemble') {
       ensembleParts.forEach((part, i) => {
         parts.push({
-          partId: `ensemble-${i}`,
+          // 編成譜は添字ではなく編成パートの安定 id で照合する。編成変更時の譜面配列は
+          // alignMeasuresToInstrumentationParts が part.id で再配置するため、添字だと
+          // 並べ替え・削除後の貼り付けが別の楽器に一致してしまう（Codex round3 P1）
+          partId: instrumentation.parts[i]?.id ?? `ensemble-${i}`,
           measures: part,
           apply: (next) => setEnsembleParts(prev => prev.map((p, idx) => (idx === i ? next : p))),
           clef: instrumentation.parts[i]?.clef ?? 'treble',
@@ -1625,7 +1628,7 @@ export default function ScorePage() {
         if (instrumentPart.staffCount !== 2) return;
         const secondPart = ensembleSecondStaffParts[i] ?? [];
         parts.push({
-          partId: `ensemble-${i}::2`,
+          partId: ensembleSecondStaffPartId(instrumentPart.id),
           measures: secondPart,
           apply: (next) => setEnsembleSecondStaffParts(prev => {
             const copy = [...prev];
@@ -4419,7 +4422,7 @@ export default function ScorePage() {
                     disabled={selectedMeasures.start !== selectedMeasures.end
                       || selectedMeasures.startBeat != null || selectedMeasures.endBeat != null}
                     title={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null
-                      ? '拍の範囲を選択中は挿入できません。小節全体を選択し直してください'
+                      ? describeSliceMeasureOpUnavailable('insertRemove')
                       : selectedMeasures.start !== selectedMeasures.end
                       ? '複数小節を選択中は挿入できません。1小節だけ選択してください'
                       : '選択中の小節の直前に、全パート同時に空の小節を1つ挿入します'}
@@ -4433,7 +4436,7 @@ export default function ScorePage() {
                     disabled={selectedMeasures.start !== selectedMeasures.end
                       || selectedMeasures.startBeat != null || selectedMeasures.endBeat != null}
                     title={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null
-                      ? '拍の範囲を選択中は削除できません。小節全体を選択し直してください'
+                      ? describeSliceMeasureOpUnavailable('insertRemove')
                       : selectedMeasures.start !== selectedMeasures.end
                       ? '複数小節を選択中は削除できません。1小節だけ選択してください'
                       : '選択中の小節を、全パート同時に削除します'}
@@ -5118,7 +5121,7 @@ export default function ScorePage() {
                     onClick={() => { setTransposeError(null); setShowTransposePanel(v => !v); }}
                     disabled={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null}
                     title={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null
-                      ? '拍の範囲を選択中は移調できません。小節全体を選択し直してください'
+                      ? describeSliceMeasureOpUnavailable('transpose')
                       : '選択中の小節を半音/全音/オクターブ単位で移調します'}
                   >
                     移調

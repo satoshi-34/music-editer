@@ -278,3 +278,15 @@ PR #359 の Codex レビュー（P1×6・P2×5）を受けて、次を実装で�
 - **途中拍子変更（measure.timeSignature）は既知の制限として別Issue化（#361）**:
   スライスだけでなく音符入力の容量チェック・表示パディングもグローバル拍子で動いており、
   スライス経路だけ直すとエディタ内で挙動が割れる。エディタ全体の対応として #361 で扱う
+
+### 追記（Codex round3 対応・2026-08-22）
+
+- **編成譜の照合 id を安定 id 化**: スライスの partId は編成譜では添字（ensemble-i）ではなく
+  編成パートの安定 id（instrumentation.parts[i].id / ensembleSecondStaffPartId(id)）を使う。
+  編成変更時の譜面配列は alignMeasuresToInstrumentationParts が part.id で再配置するため、
+  添字照合では並べ替え・削除後の貼り付けが別の楽器に一致してしまう。
+  なお小節クリップボード（Cmd+C の丸ごとコピー）は従来から添字ベース（ensemble-i）のままで、
+  同種の並べ替え問題を持つ（既存挙動のためこのPRでは触らず、別Issueの候補）
+- ツールバーの無効化ツールチップの文言も scoreEditorNotices のビルダー
+  （describeSliceMeasureOpUnavailable）へ集約
+- README に「拍の範囲を選んでコピー・削除・貼り付け」の節を追加（操作・吸着規則・既知の制限）
