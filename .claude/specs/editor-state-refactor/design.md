@@ -407,3 +407,8 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
   読込可能な楽譜 JSON）も書き出し境界だった。正規化を normalizeMeasuresForPersistence
   （鏡同期+実体化）として共通関数化し、全境界（localStorage 保存/読込・ファイル書き出し/読込・
   フィードバック JSON・カスタムサンプル保存/読込）をこの1関数へ寄せた
+- **Codex 3巡目（P1）への対応**: 実体化された「空の primary mirror（voice-1 だけ・0件）」を、
+  isEmptyMeasure / isPrintTrimmableMeasure が「voices プロパティあり＝内容あり」と誤判定し、
+  末尾の空小節がトリムされず空の段・ページが残り、パディング差が Undo 対象になる回帰。
+  両判定で空の鏡だけの voices を無視するよう修正（声部2があれば空でも従来どおり内容あり
+  — 空の voices[1] は #305 の畳み込みの担当）。回帰テスト3件を追加

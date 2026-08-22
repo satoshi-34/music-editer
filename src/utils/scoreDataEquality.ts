@@ -10,6 +10,19 @@
 
 import type { MeasureData } from '../types/storage';
 
+
+/**
+ * voices が「空の primary mirror（voice-1 だけ・イベント0件）」かどうか（#244 段5-4）。
+ * 保存形式の移行で全小節に voices[0]（正本 events の鏡）が実体化されるようになったため、
+ * 空小節を保存→読込すると { events: [], voices: [{ id: 'voice-1', events: [] }] } の形になる。
+ * この voices は「内容」ではなく形式上の器なので、空小節・印刷トリムの判定では無視する。
+ * 声部2以降が存在する場合（空でも）は従来どおり内容ありとして扱う — 空の voices[1] は
+ * 読込正規化（#305）が畳む担当で、この判定が黙って捨ててよいものではないため。
+ */
+function isEmptyPrimaryMirrorOnly(voices: MeasureData['voices']): boolean {
+  return !!voices && voices.length === 1 && (voices[0].events?.length ?? 0) === 0;
+}
+
 /**
  * 小節が「完全に空」かどうかを判定する。
  * 音符・声部だけでなく、リピートや途中テンポ変更（bpm）などの
@@ -18,10 +31,13 @@ import type { MeasureData } from '../types/storage';
  */
 export function isEmptyMeasure(measure: MeasureData | undefined): boolean {
   if (!measure) return true;
-  // events 以外のプロパティ（bpm・timeSignature など）が何か付いていれば空ではない
+  // events 以外のプロパティ（bpm・timeSignature など）が何か付いていれば空ではない。
+  // ただし「空の primary mirror だけの voices」は形式上の器なので無視する（#244 段5-4）
   const keys = Object.keys(measure).filter((k) => {
     const value = (measure as unknown as Record<string, unknown>)[k];
-    return value !== undefined;
+    if (value === undefined) return false;
+    if (k === 'voices') return !isEmptyPrimaryMirrorOnly(measure.voices);
+    return true;
   });
   if (keys.some((k) => k !== 'events')) return false;
   return measure.events.length === 0;
@@ -48,7 +64,16 @@ export function isPrintTrimmableMeasure(measure: MeasureData | undefined): boole
   if (!measure) return true;
   const keys = Object.keys(measure).filter((k) => {
     const value = (measure as unknown as Record<string, unknown>)[k];
-    return value !== undefined;
+    if (value === undefined) return false;
+    // 空の primary mirror だけの voices は形式上の器（isEmptyMeasure と同じ扱い・#244 段5-4）。
+    // 印刷トリムは「全イベントが休符」まで広く見るので、鏡が休符のみの場合も無内容側に倒す
+    if (k === 'voices') {
+      const voices = measure.voices;
+      const mirrorOnlyAllRests = !!voices && voices.length === 1
+        && (voices[0].events ?? []).every((event) => event.isRest);
+      return !mirrorOnlyAllRests;
+    }
+    return true;
   });
   if (keys.some((k) => k !== 'events')) return false;
   return measure.events.every((event) => event.isRest);
