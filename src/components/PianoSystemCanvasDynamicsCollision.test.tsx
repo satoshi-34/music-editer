@@ -125,6 +125,35 @@ describe('強弱記号の自動衝突回避（Issue #340 段1）', () => {
     expect(ppTextY(low)).toBeGreaterThan(ppTextY(clear));
   });
 
+  it('段またぎ音符（renderStaff）は描画先パートの障害物になる', () => {
+    // 右手（part 0）の音符を renderStaff: below で左手（part 1）の五線へ描いたとき、
+    // その音符は左手の強弱記号の障害物にならなければいけない（Codex round2 P2:
+    // 元パート（part 0）へ帰属させると、左手の pp との衝突を検出できない）
+    const renderPiano = (withCrossStaff: boolean) => {
+      const rightEvents = withCrossStaff
+        ? [{ dur: '4' as const, isRest: false, keys: ['c/2'], renderStaff: 'below' as const }]
+        : [{ dur: '1' as const, isRest: false, keys: ['c/5'] }];
+      const { container } = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[
+            { clef: 'treble', data: [{ events: rightEvents }], onChange: vi.fn() },
+            { clef: 'bass', data: [{ events: [{ dur: '1', isRest: false, keys: ['d/3'], dynamics: [{ value: 'pp' }] }] }], onChange: vi.fn() },
+          ]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+        />
+      );
+      return container;
+    };
+    const withCross = renderPiano(true);
+    const withoutCross = renderPiano(false);
+    // 左手五線の下へ描かれた段またぎ音符を避けて、左手の pp が下がる
+    expect(ppTextY(withCross)).toBeGreaterThan(ppTextY(withoutCross));
+  });
+
   it('同じ音符の複数記号（pp と cresc）はまとまって一緒に押し出される', () => {
     const container = renderWithData([{
       events: [{

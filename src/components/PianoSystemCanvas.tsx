@@ -4723,9 +4723,16 @@ export default function PianoSystemCanvas({
         // 表示専用のパディング休符・空小節の見た目用全休符も描かれている以上は含めるが、
         // どちらも五線内の休符グリフなので五線下の記号判定には実質影響しない。
         renderedVoiceEntries.forEach((entry) => {
-          entry.vfNotes.forEach((n) => {
+          entry.vfNotes.forEach((n, j) => {
             const nbb = (n as unknown as { getBoundingBox?: () => { getX: () => number; getY: () => number; getW: () => number; getH: () => number } }).getBoundingBox?.();
-            if (nbb) noteObstacles.push({ partIndex: pi, x: nbb.getX(), y: nbb.getY(), w: nbb.getW(), h: nbb.getH() });
+            if (!nbb) return;
+            // 段またぎ音符（renderStaff）は実際に描かれた先のパートへ帰属させる
+            // （元パートに登録すると、描画先パートの強弱記号との衝突を検出できない。
+            // またぎでなければ resolveRenderPartIndexFor は pi をそのまま返す）
+            noteObstacles.push({
+              partIndex: resolveRenderPartIndexFor(entry.sourceEvents[j]),
+              x: nbb.getX(), y: nbb.getY(), w: nbb.getW(), h: nbb.getH(),
+            });
           });
         });
 
