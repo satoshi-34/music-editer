@@ -2466,8 +2466,10 @@ export default function ScorePage() {
     fileHandleRef.current = null;
     await applyLoadedScoreData(loadedData);
     // 取り込んだ内容を新作品へ同期保存してから完了を知らせる（Codex round3）。
-    // 自動保存（約1.5秒後）任せだと、その前にリロードすると新作品が空のまま残る
-    if (!saveCurrentWork(loadedData)) {
+    // 自動保存（約1.5秒後）任せだと、その前にリロードすると新作品が空のまま残る。
+    // timestamp は現在時刻へ更新する（旧手動保存の保存時刻のままだと updatedAt が古くなり、
+    // 取り込んだばかりの作品が更新順の作品一覧で埋もれる。Codex round4）
+    if (!saveCurrentWork({ ...loadedData, timestamp: Date.now() })) {
       notifyScoreEdit(describeLegacyImportResult('saveFailed'));
       return;
     }
