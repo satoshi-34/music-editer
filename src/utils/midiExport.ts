@@ -3,6 +3,7 @@
 // 参照: https://www.midi.org/specifications-old/item/the-midi-1-0-specification
 
 import type { SavedScoreData, NoteEvent } from '../types/storage';
+import { getPrimaryVoiceEvents, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 
 // 四分音符あたりのティック数（SMF 標準の 480 が一般的）
 const PPQ = 480;
@@ -128,7 +129,7 @@ function buildNoteTrack(
       });
     }
 
-    for (const ev of measure.events) {
+    for (const ev of getPrimaryVoiceEvents(measure)) {
       // 付点1個で1.5倍、複付点(2個)で1.75倍。四捨五入するのは、
       // 一部の音価×付点の組み合わせで割り切れない場合があるため。
       const dotMultiplier = ev.dots === 1 ? 1.5 : ev.dots === 2 ? 1.75 : 1;
@@ -174,6 +175,12 @@ function buildTrack(events: MidiEvent[]): number[] {
  * Type 1 MIDI: トラック 0 = テンポ/拍子、トラック 1〜 = 各パート。
  */
 export function scoreToMidi(data: SavedScoreData): Uint8Array {
+  // 書き出し境界の正規化（#244 段5-3・musicXmlExport と同じ理由）
+  const normalizedData: SavedScoreData = {
+    ...data,
+    parts: data.parts.map((p) => ({ ...p, measures: syncMeasuresPrimaryVoiceFromEvents(p.measures) })),
+  };
+  data = normalizedData;
   const bpm = 120; // デフォルト BPM（スコアにグローバル BPM がないため固定）
   const timeSig: [number, number] = data.timeSignature ?? [4, 4];
   const numTracks = data.parts.length + 1;

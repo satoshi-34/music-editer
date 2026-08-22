@@ -143,7 +143,7 @@ import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } fro
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
-import { flattenMeasureForPlayback, getMeasureDurationBeats } from '../utils/voiceMeasureUtils';
+import { flattenMeasureForPlayback, getMeasureDurationBeats, getPrimaryVoiceEvents } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import { buildPlaybackPositionTimeline, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
@@ -329,7 +329,7 @@ function calculateScoreDuration(scoreData: MeasureData[], bpm: number, timeSigna
   let lastUsedMeasureIndex = -1;
   for (let i = expandedScoreData.length - 1; i >= 0; i--) {
     const measure = expandedScoreData[i];
-    if (measure?.events && measure.events.length > 0) {
+    if (getPrimaryVoiceEvents(measure).length > 0) {
       lastUsedMeasureIndex = i;
       break;
     }
@@ -355,7 +355,7 @@ function calculateScoreDuration(scoreData: MeasureData[], bpm: number, timeSigna
       currentTimeSig = measure.timeSignature;
     }
     const emptyBeats = getMeasureBeats(currentTimeSig ?? timeSignature) || globalEmptyMeasureBeats;
-    if (!measure || !measure.events || measure.events.length === 0) {
+    if (getPrimaryVoiceEvents(measure).length === 0) {
       totalDuration += (60 / currentBpm) * emptyBeats;
     } else {
       // 複数声部小節では voice ごとの長さの最大値を使わないと、

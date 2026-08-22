@@ -1,4 +1,5 @@
 import type { MeasureData, NoteEvent, ScoreType } from '../types/storage';
+import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { Accidental, Dot, Formatter, GraceNote, GraceNoteGroup, StaveNote, Voice } from 'vexflow';
 import { createVexFlowTuplets, vexFlowDotCount } from './vexFlowTimingUtils';
 import {
@@ -432,16 +433,17 @@ function eventMinimumWidth(event: NoteEvent): number {
  * VexFlow が実際に必要とする幅より小さく見積もって重なるのを防ぐ。
  */
 export function measureMinimumContentWidth(measure?: MeasureData): number {
-  if (!measure?.events?.length) {
+  const primaryEvents = getPrimaryVoiceEvents(measure);
+  if (!primaryEvents.length) {
     return MIN_MEASURE_CONTENT_WIDTH;
   }
 
-  const contentWidth = measure.events.reduce(
+  const contentWidth = primaryEvents.reduce(
     (width, event) => width + eventMinimumWidth(event),
     MEASURE_SIDE_PADDING,
   );
-  const hasWhole = measure.events.some((event) => event.dur === '1');
-  const hasHalf = measure.events.some((event) => event.dur === '2');
+  const hasWhole = primaryEvents.some((event) => event.dur === '1');
+  const hasHalf = primaryEvents.some((event) => event.dur === '2');
 
   if (hasWhole) {
     return Math.max(contentWidth, LONG_WHOLE_MIN_WIDTH);
@@ -487,8 +489,8 @@ export function combinedMeasureMinimumContentWidth(measures: (MeasureData | unde
 
   for (const measure of measures) {
     if (!measure) continue;
-    // 主声部（events）＋追加声部（voices[1] 以降）。voices[0] は events の複製なので除外
-    const voiceEventLists: NoteEvent[][] = [Array.isArray(measure.events) ? measure.events : []];
+    // 主声部（正規 read）＋追加声部（voices[1] 以降）。voices[0] は主声部そのものなので除外
+    const voiceEventLists: NoteEvent[][] = [getPrimaryVoiceEvents(measure)];
     if (Array.isArray(measure.voices)) {
       measure.voices.slice(1).forEach((voice) => {
         if (Array.isArray(voice?.events)) voiceEventLists.push(voice.events);
@@ -637,7 +639,7 @@ function measurementPartState(
       return { clef: part?.clef ?? 'treble', accidentalState: createMeasureAccidentalState(effectiveKey), prevMeasureState: previous };
     }
     const state = createMeasureAccidentalState(effectiveKey);
-    const events = measures[index]?.events ?? [];
+    const events = getPrimaryVoiceEvents(measures[index]);
     events.forEach((event) => {
       if (!event.isRest && Array.isArray(event.keys)) {
         resolveDisplayAccidentalsForKeys(event.keys, state, index === measureIndex ? previous : undefined);
@@ -669,7 +671,7 @@ export function vexFlowCombinedMeasureMinimumContentWidth(
       if (!measure) return;
       const partState = options.runtimeParts?.[partIndex]
         ?? measurementPartState(options.parts?.[partIndex], measureIndex, fallbackKeySignature);
-      const eventLists: NoteEvent[][] = [Array.isArray(measure.events) ? measure.events : []];
+      const eventLists: NoteEvent[][] = [getPrimaryVoiceEvents(measure)];
       if (Array.isArray(measure.voices)) {
         measure.voices.slice(1).forEach((voice) => {
           if (Array.isArray(voice?.events)) eventLists.push(voice.events);
@@ -1003,7 +1005,7 @@ export function planEffectiveMeasuresPerSystem(
     });
     // 本描画と同じく主声部だけを次小節のcourtesy用snapshotへ引き継ぐ。
     runtimeParts.forEach((runtime, partIndex) => {
-      const events = parts[partIndex].measures[index]?.events ?? [];
+      const events = getPrimaryVoiceEvents(parts[partIndex].measures[index]);
       events.forEach((event) => {
         if (!event.isRest && Array.isArray(event.keys)) {
           resolveDisplayAccidentalsForKeys(event.keys, runtime.accidentalState);

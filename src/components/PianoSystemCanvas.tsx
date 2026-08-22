@@ -131,7 +131,7 @@ import {
   widenThinBarlineRect,
   markThickBarlineRect,
 } from '../utils/engravingDefaults';
-import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getMeasureVoices, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildBeatColumns, planLeadingRestFillBeats, type BeatColumn } from '../utils/beatColumnUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
 import { resolveArcEndpointY, resolveSlurObstacleY, shouldAnchorArcToStemSide } from '../utils/arcStemAnchorUtils';
@@ -940,7 +940,9 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
     const clefHere=resolveMeasureClef(score, absI, part.clef);
 
     const data=absI<score.length?score[absI]:undefined;
-    const safeEvs:RenderNoteEvent[]=(data?.events?.length?data.events:[{dur:'1',isRest:true,keys:[defaultRestDisplayKeyForDuration(clefHere, '1')],__isPlaceholder:true}])
+    // 主声部の読みは正規 read（#244 段5-3）。不変条件により従来の data.events と同値
+    const primaryEvents = getPrimaryVoiceEvents(data);
+    const safeEvs:RenderNoteEvent[]=(primaryEvents.length?primaryEvents:[{dur:'1',isRest:true,keys:[defaultRestDisplayKeyForDuration(clefHere, '1')],__isPlaceholder:true}])
       .map(ev=>sanitizeRenderEvent(ev, clefHere));
     // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
     // 移調楽器の記譜音表示などでパート固有の調号がある場合は、

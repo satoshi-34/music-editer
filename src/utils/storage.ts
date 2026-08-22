@@ -702,6 +702,16 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   // 効いたままの「2声部の残骸」として描かれてしまう。
   parsedData.parts = normalizeEmptyVoicesInParts(parsedData.parts);
 
+  // 読込境界で不変条件「voices を持つ小節では events ≡ voices[0]」を確立する（#244 段5-3）。
+  // 保存側は syncMeasuresPrimaryVoiceFromEvents 済みだが、旧バージョンの保存物や
+  // 手編集された JSON では鏡（voices[0]）が古いことがある。read が voices[0] を
+  // 優先するようになったため、ここで同期しないと古い鏡が表示・出力に出てしまう。
+  // 正本は現段階では events 側（設計メモ§2-5・§11）。
+  parsedData.parts = parsedData.parts.map((part) => ({
+    ...part,
+    measures: syncMeasuresPrimaryVoiceFromEvents(part.measures),
+  }));
+
   return {
     success: true,
     data: parsedData

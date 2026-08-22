@@ -60,6 +60,18 @@ export function createEmptyMeasures(count: number): MeasureData[] {
   return Array.from({ length: count }, () => createEmptyMeasure());
 }
 
+
+/**
+ * 移行期間中の正規 read（#244 段5-3）。
+ * voices[0]（鏡）を優先し、voices を持たない events-only の小節は events へフォールバックする。
+ * dual-write（段5-1）と保存/読込の同期により「voices[0] が存在するなら常に events と等しい」が
+ * 不変条件（段5-2 のテストで固定済み）なので、この切替は挙動を変えない。
+ * フォールバックの除去は段5-4（保存形式の移行＝全小節が voices を持つ）以後。
+ */
+export function getPrimaryVoiceEvents(measure?: MeasureData): NoteEvent[] {
+  return measure?.voices?.[0]?.events ?? measure?.events ?? [];
+}
+
 /**
  * 既存実装では measure.events が編集の正本なので、
  * voices[0] がある小節でも primary voice は measure.events を優先して扱う。
@@ -73,9 +85,10 @@ export function getMeasureVoices(measure?: MeasureData): VoiceData[] {
     return [{ id: 'voice-1', events: measure.events ?? [] }];
   }
 
+  // 読みは voices[0]（鏡）を優先する（#244 段5-3）。不変条件により events と同値
   return measure.voices.map((voice, index) => (
     index === 0
-      ? { ...voice, events: measure.events ?? voice.events }
+      ? { ...voice, events: getPrimaryVoiceEvents(measure) }
       : voice
   ));
 }
@@ -112,7 +125,8 @@ export function syncMeasuresPrimaryVoiceFromEvents(measures: MeasureData[]): Mea
  */
 export function getVoiceEvents(measure: MeasureData, voiceIndex: number): NoteEvent[] {
   if (voiceIndex <= 0) {
-    return measure.events ?? [];
+    // 読みは voices[0]（鏡）を優先する（#244 段5-3）。不変条件により events と同値
+    return getPrimaryVoiceEvents(measure);
   }
   return measure.voices?.[voiceIndex]?.events ?? [];
 }
@@ -360,7 +374,7 @@ export function computeVoiceDisplayPadding(
 export function getMeasureDurationBeats(measure: MeasureData): number {
   const voices = getMeasureVoices(measure);
   if (voices.length <= 1) {
-    return (measure.events ?? []).reduce((sum, event) => sum + getEventDurationBeats(event), 0);
+    return getPrimaryVoiceEvents(measure).reduce((sum, event) => sum + getEventDurationBeats(event), 0);
   }
 
   return voices.reduce((maxBeats, voice) => {
@@ -377,7 +391,7 @@ export function getMeasureDurationBeats(measure: MeasureData): number {
 export function flattenMeasureForPlayback(measure: MeasureData): PlaybackMeasureEventWithStart[] {
   const voices = getMeasureVoices(measure);
   if (voices.length <= 1) {
-    return (measure.events ?? []).map((event) => ({ ...cloneNoteEvent(event) }));
+    return getPrimaryVoiceEvents(measure).map((event) => ({ ...cloneNoteEvent(event) }));
   }
 
   const flattened: Array<PlaybackMeasureEventWithStart & { voiceIndex: number }> = [];
