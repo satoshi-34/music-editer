@@ -591,3 +591,19 @@ SVG の `getComputedTextLength()` は描画後にしか測れないため、幅�
 - パート譜表示と総譜表示の切り替え
 - MusicXML書き出しでの大譜表対応（現状ピアノ専用プリセット同様、2段が別パートとして書き出される）
 - 歌・リコーダー専用の再生音色（現状はピアノ・フルートで代用）
+
+## 修正記録: 2段譜パートを含む編成譜の保存検証エラー（Issue #171・2026-08-22）
+
+- **問題**: `validateSavedPartIds`（storage.ts）が `instrumentation.parts` の数と保存パート数を
+  単純比較しており、staffCount:2 のパート（歌+ピアノのピアノ等の大譜表）では保存側が持つ
+  第2譜表パート（`<id>::2`・`ensembleSecondStaffPartId`）が「余分」と判定されて、保存が常に
+  「Invalid data format provided for saving」で失敗していた。Issue の再現手順（テンプレート
+  切替後の編集で自動保存失敗）は「切替先に2段譜パートが含まれると、最初の自動保存
+  （=編集時）から失敗する」パターンで、切替そのものは無関係
+- **修正設計**: 期待 ID 列を `instrumentation.parts` から staffCount を考慮して構築
+  （staffCount:2 → `[id, ensembleSecondStaffPartId(id)]`）。欠落・余分・重複 ID を弾く
+  従来の保護は維持
+- **影響範囲**: 保存時検証のみ（保存・読込のデータ形は不変。読込側は元から `<id>::2` で
+  対応付けている）
+- **経緯**: PR（fix/issue-171-instrumentation-autosave）。再現テストで false→true を確認し、
+  リグレッションテスト3件（正常系・第2譜表欠落・余分パート）を追加

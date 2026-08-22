@@ -26,6 +26,7 @@ import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 import { isArticulationMarkingValue } from './articulationMarkingUtils';
 import { isRenderStaffDirection } from './crossStaffUtils';
 import { normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
+import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
@@ -579,13 +580,20 @@ function validateSavedPartIds(data: SavedScoreData): boolean {
   }
 
   const savedPartIdSet = new Set(savedPartIds);
-  const instrumentationPartIds = data.instrumentation.parts.map(part => part.id);
-
   // 編成譜では instrumentation.parts が「表示するパート」、parts が「その譜面データ」。
   // 片方だけに存在する ID を許すと、読み込み時に空パートや余った保存データが生まれる。
+  // 2段譜のパート（staffCount:2 の大譜表。歌+ピアノのピアノ等）は保存側が
+  // 第2譜表を「<id>::2」の別パートとして持つため、期待 ID 列にもそれを含める
+  // （Issue #171: ここを数え忘れていて、2段譜を含む編成の保存が常に
+  // 「Invalid data format」で失敗していた）。
+  const expectedPartIds = data.instrumentation.parts.flatMap(part => (
+    part.staffCount === 2
+      ? [part.id, ensembleSecondStaffPartId(part.id)]
+      : [part.id]
+  ));
   return (
-    instrumentationPartIds.length === savedPartIds.length &&
-    instrumentationPartIds.every(partId => savedPartIdSet.has(partId))
+    expectedPartIds.length === savedPartIds.length &&
+    expectedPartIds.every(partId => savedPartIdSet.has(partId))
   );
 }
 

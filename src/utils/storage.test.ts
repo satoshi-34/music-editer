@@ -32,6 +32,8 @@ import {
   saveWorkAutosaveData,
   saveWorkIndex,
   setLastOpenedWorkId
+,
+  validateSavedScoreData,
 } from './storage';
 import type {
   SavedScoreData,
@@ -1397,6 +1399,46 @@ describe('Storage Foundation Tests', () => {
 
       expect(loaded.voices).toHaveLength(2);
       expect(loaded.voices?.[1].events.map((ev) => ev.keys[0])).toEqual(['c/3']);
+    });
+  });
+
+  describe('2段譜パートを含む編成譜の保存検証（Issue #171）', () => {
+    const twoStaffEnsembleData = () => ({
+      version: '1.0',
+      timestamp: 1,
+      metadata: { title: 't', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      scoreType: 'ensemble' as const,
+      instrumentation: {
+        presetId: 'vocal-piano',
+        name: '歌とピアノ',
+        parts: [
+          { id: 'vocal', name: 'Vocal', abbreviation: 'Vo.', family: 'vocal', clef: 'treble', staffCount: 1, transposition: 'none', bracketGroup: 'voices', order: 0 },
+          { id: 'piano', name: 'Piano', abbreviation: 'Pf.', family: 'keyboard', clef: 'treble', staffCount: 2, transposition: 'none', bracketGroup: 'keyboard', order: 1 },
+        ],
+      },
+      parts: [
+        { partId: 'vocal', clef: 'treble', measures: [{ events: [] }] },
+        { partId: 'piano', clef: 'treble', measures: [{ events: [] }] },
+        { partId: 'piano::2', clef: 'bass', measures: [{ events: [] }] },
+      ],
+      systems: 1,
+      measuresPerSystem: 4,
+    });
+
+    it('第2譜表（<id>::2）を含む保存データが検証を通る（自動保存が失敗しない）', () => {
+      expect(validateSavedScoreData(twoStaffEnsembleData())).toBe(true);
+    });
+
+    it('第2譜表が欠けている場合は従来どおり不正と判定する', () => {
+      const data = twoStaffEnsembleData();
+      data.parts = data.parts.filter((p) => p.partId !== 'piano::2');
+      expect(validateSavedScoreData(data)).toBe(false);
+    });
+
+    it('instrumentation に無い余分なパートは従来どおり不正と判定する', () => {
+      const data = twoStaffEnsembleData();
+      data.parts.push({ partId: 'ghost', clef: 'treble', measures: [{ events: [] }] });
+      expect(validateSavedScoreData(data)).toBe(false);
     });
   });
 
