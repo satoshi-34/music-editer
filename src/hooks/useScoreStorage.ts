@@ -39,7 +39,8 @@ export interface UseScoreStorageReturn {
     notationMode?: 'concert' | 'written',
     customSymbolDefs?: CustomSymbolDef[],
     systemMeasureOverrides?: SystemMeasureOverride[],
-    systemRowGapOverrides?: SystemRowGapOverride[]
+    systemRowGapOverrides?: SystemRowGapOverride[],
+    titleFontId?: string
   ) => Promise<boolean>;
   loadScore: () => Promise<SavedScoreData | null>;
   hasStoredData: () => boolean;
@@ -60,7 +61,8 @@ export interface UseScoreStorageReturn {
     notationMode?: 'concert' | 'written',
     customSymbolDefs?: CustomSymbolDef[],
     systemMeasureOverrides?: SystemMeasureOverride[],
-    systemRowGapOverrides?: SystemRowGapOverride[]
+    systemRowGapOverrides?: SystemRowGapOverride[],
+    titleFontId?: string
   ) => Promise<boolean>;
   /** 自動保存スロットから読み込む（起動時のサイレント復元用） */
   loadAutosave: () => Promise<SavedScoreData | null>;
@@ -97,14 +99,15 @@ export function useScoreStorage(): UseScoreStorageReturn {
     notationMode?: 'concert' | 'written',
     customSymbolDefs?: CustomSymbolDef[],
     systemMeasureOverrides?: SystemMeasureOverride[],
-    systemRowGapOverrides?: SystemRowGapOverride[]
+    systemRowGapOverrides?: SystemRowGapOverride[],
+    titleFontId?: string
   ): Promise<boolean> => {
     setIsSaving(true);
     clearError();
 
     try {
       // Create the saved score data with current timestamp
-      const scoreData = createSavedScoreData(metadata, parts, systems, measuresPerSystem, scoreType, keySignature, timeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
+      const scoreData = createSavedScoreData(metadata, parts, systems, measuresPerSystem, scoreType, keySignature, timeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
       
       // Attempt to save
       const result = saveScoreData(scoreData);
@@ -185,13 +188,14 @@ export function useScoreStorage(): UseScoreStorageReturn {
     notationMode?: 'concert' | 'written',
     customSymbolDefs?: CustomSymbolDef[],
     systemMeasureOverrides?: SystemMeasureOverride[],
-    systemRowGapOverrides?: SystemRowGapOverride[]
+    systemRowGapOverrides?: SystemRowGapOverride[],
+    titleFontId?: string
   ): Promise<boolean> => {
     setIsSaving(true);
     clearError();
 
     try {
-      const scoreData = createSavedScoreData(metadata, parts, systems, measuresPerSystem, scoreType, keySignature, timeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
+      const scoreData = createSavedScoreData(metadata, parts, systems, measuresPerSystem, scoreType, keySignature, timeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
       const result = saveAutosaveData(scoreData);
 
       if (!result.success) {
