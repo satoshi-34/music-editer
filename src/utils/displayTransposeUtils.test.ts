@@ -100,6 +100,22 @@ describe('createDisplayTransposeBridge（記譜音表示の往復）', () => {
     expect(keyToMidi(roundTripped[0].voices![1].events[0].keys[0])).toBe(keyToMidi('e/3'));
   });
 
+  it('前打音（graceNotes）の keys も主音と一緒に往復変換される（#244 段5-1・Codex 2巡目 P2）', () => {
+    const semitones = 2;
+    const measures: MeasureData[] = [{
+      events: [{
+        dur: '4', isRest: false, keys: ['c/4'],
+        graceNotes: [{ keys: ['d/4'], slash: true }],
+      } as MeasureData['events'][number]],
+    }];
+    const displayed = transposeMeasuresForDisplay(measures, semitones);
+    const displayedGrace = (displayed[0].events[0] as { graceNotes?: { keys: string[] }[] }).graceNotes;
+    expect(keyToMidi(displayedGrace![0].keys[0])).toBe(keyToMidi('d/4') + semitones);
+    const roundTripped = transposeMeasuresForDisplay(displayed, -semitones);
+    const savedGrace = (roundTripped[0].events[0] as { graceNotes?: { keys: string[] }[] }).graceNotes;
+    expect(keyToMidi(savedGrace![0].keys[0])).toBe(keyToMidi('d/4'));
+  });
+
   it('voices を持たない小節では voices キーを勝手に作らない', () => {
     const measures: MeasureData[] = [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }];
     const displayed = transposeMeasuresForDisplay(measures, 2);

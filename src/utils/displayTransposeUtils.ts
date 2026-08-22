@@ -28,7 +28,17 @@ export function transposeMeasuresForDisplay(
       fromKey: transposeKeyBySemitones(arc.fromKey, semitones),
       toKey: transposeKeyBySemitones(arc.toKey, semitones),
     }));
-    return { ...event, keys: shiftedKeys, arcs: shiftedArcs };
+    // 前打音も主音と同じく移調する（#244 段5-1・Codex 2巡目 P2）。
+    // 従来は keys/arcs だけをシフトしており、記譜音モードでは前打音が
+    // 実音のまま描かれ、新規に付けた前打音は記譜音のまま保存されていた
+    // （主音との音程関係が崩れる）。対変換の対象へ含めて往復を対称にする。
+    const shiftedGraceNotes = event.graceNotes?.map(grace => ({
+      ...grace,
+      keys: Array.isArray(grace.keys)
+        ? grace.keys.map(key => transposeKeyBySemitones(key, semitones))
+        : grace.keys,
+    }));
+    return { ...event, keys: shiftedKeys, arcs: shiftedArcs, graceNotes: shiftedGraceNotes };
   };
   return measures.map(measure => {
     const next: MeasureData = {
