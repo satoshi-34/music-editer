@@ -1230,6 +1230,102 @@ export function getWorkStorageKeys(workId: string): {
   };
 }
 
+/* ===== 復元履歴（数世代）: multi-score-storage 設計 第3段（Issue #109） ===== */
+
+/** 復元履歴の1世代。data は保存データそのもの（検証済みのものだけを返す） */
+export interface WorkHistoryGeneration {
+  timestamp: number;
+  data: SavedScoreData;
+}
+
+/** 保持する世代数の上限。1作品 ≒ 数十KB × 5世代 = 高々数百KB（localStorage 全体 5MB 目安） */
+export const WORK_HISTORY_MAX_GENERATIONS = 5;
+/**
+ * 世代を積む最短間隔。自動保存は約1.5秒デバウンスで走るため、毎回積むと
+ * 「数秒違いの世代」で埋まって復元先として役に立たない。10分より近い保存は
+ * 世代化せず読み飛ばす（直前1世代の -backup は従来どおり毎回退避される）
+ */
+export const WORK_HISTORY_MIN_INTERVAL_MS = 10 * 60 * 1000;
+
+/** 作品の復元履歴を新しい順で返す。壊れた世代（検証に落ちるもの）は黙って除く */
+export function loadWorkHistory(workId: string): WorkHistoryGeneration[] {
+  if (!isValidWorkId(workId) || !isStorageAvailable()) return [];
+  try {
+    const raw = localStorage.getItem(getWorkStorageKeys(workId).history);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((generation): generation is WorkHistoryGeneration =>
+      generation && typeof generation === 'object'
+      && isFiniteNumber((generation as WorkHistoryGeneration).timestamp)
+      && validateSavedScoreData((generation as WorkHistoryGeneration).data));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 自動保存の内容を復元履歴へ1世代として積む。
+ * 最新世代から WORK_HISTORY_MIN_INTERVAL_MS 以内の保存は積まない（force で無視できる。
+ * 「この時点に戻す」の直前退避は force=true で必ず積む）。
+ * 容量あふれ（QuotaExceeded）のときは古い世代を1つ落として1回だけ再試行し、
+ * それでも書けなければ履歴だけ諦める（自動保存本体は既に成功している）。
+ */
+export function pushWorkHistoryGeneration(
+  workId: string,
+  data: SavedScoreData,
+  options?: { force?: boolean }
+): StorageResult<boolean> {
+  if (!isValidWorkId(workId)) {
+    return { success: false, error: createInvalidWorkIdError() };
+  }
+  if (!isStorageAvailable()) {
+    return { success: false, error: { type: StorageErrorType.STORAGE_DISABLED, message: 'ストレージが利用できません', recoverable: true } };
+  }
+  const history = loadWorkHistory(workId);
+  const now = Date.now();
+  if (!options?.force && history.length > 0 && now - history[0].timestamp < WORK_HISTORY_MIN_INTERVAL_MS) {
+    return { success: true, data: false };
+  }
+  let next: WorkHistoryGeneration[] = [{ timestamp: now, data }, ...history].slice(0, WORK_HISTORY_MAX_GENERATIONS);
+  const key = getWorkStorageKeys(workId).history;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      localStorage.setItem(key, JSON.stringify(next));
+      return { success: true, data: true };
+    } catch {
+      // 容量不足: 古い世代を落として1回だけ縮めて再試行する
+      if (next.length <= 1) break;
+      next = next.slice(0, next.length - 1);
+    }
+  }
+  return { success: false, error: { type: StorageErrorType.QUOTA_EXCEEDED, message: '復元履歴を保存する空き容量がありません', recoverable: true } };
+}
+
+/**
+ * 「この時点に戻す」。指定 timestamp の世代を自動保存スロットへ書き戻し、その内容を返す。
+ * 戻す前に、いまの自動保存内容を必ず1世代として積む（設計 §復元履歴: 「戻す」操作自体も
+ * 1世代になるため、誤って古い世代へ戻しても「戻す前」に再度戻せる）。
+ */
+export function restoreWorkHistoryGeneration(workId: string, timestamp: number): StorageResult<SavedScoreData> {
+  if (!isValidWorkId(workId)) {
+    return { success: false, error: createInvalidWorkIdError() };
+  }
+  const generation = loadWorkHistory(workId).find((item) => item.timestamp === timestamp);
+  if (!generation) {
+    return { success: false, error: { type: StorageErrorType.CORRUPTED_DATA, message: '選択した復元履歴が見つかりません', recoverable: true } };
+  }
+  const currentResult = loadWorkAutosaveData(workId);
+  if (currentResult.success && currentResult.data) {
+    pushWorkHistoryGeneration(workId, currentResult.data, { force: true });
+  }
+  const saved = saveWorkAutosaveData(workId, generation.data);
+  if (!saved.success) {
+    return { success: false, error: saved.error };
+  }
+  return { success: true, data: generation.data };
+}
+
 function getWorkSlotKeys(workId: string): StorageSlotKeys {
   const keys = getWorkStorageKeys(workId);
   return { primary: keys.primary, backup: keys.backup, metadata: keys.metadata };

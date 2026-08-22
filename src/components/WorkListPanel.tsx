@@ -3,8 +3,9 @@
 // ブラウザに保存されている作品を新しい順に並べ、切替・新規作成・削除を行う。
 // 設計の正本: .claude/specs/multi-score-storage/design.md
 
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import type { WorkSummary } from '../types/storage';
+import type { WorkHistoryGeneration } from '../utils/storage';
 import { formatWorkTitle, formatWorkUpdatedAt } from '../utils/workDisplay';
 
 export interface WorkListPanelProps {
@@ -15,6 +16,10 @@ export interface WorkListPanelProps {
   onSelect: (workId: string) => void;
   onCreate: () => void;
   onDelete: (workId: string) => void;
+  /** 復元履歴（第3段）: 作品の世代一覧を読む（パネルが「履歴」を開いたときに呼ぶ） */
+  onListHistory: (workId: string) => WorkHistoryGeneration[];
+  /** 復元履歴の1世代へ戻す（確認はパネル側で済ませてから呼ぶ） */
+  onRestoreHistory: (workId: string, timestamp: number) => void;
   onClose: () => void;
   /** ポップアップの表示位置（呼び出し側がボタン位置から実測して渡す） */
   style?: CSSProperties;
@@ -26,9 +31,35 @@ export default function WorkListPanel({
   onSelect,
   onCreate,
   onDelete,
+  onListHistory,
+  onRestoreHistory,
   onClose,
   style
 }: WorkListPanelProps) {
+  // 「履歴」を開いている作品ID（同時に開くのは1つだけ。開き直すたびに読み直す）
+  const [historyWorkId, setHistoryWorkId] = useState<string | null>(null);
+  const [historyGenerations, setHistoryGenerations] = useState<WorkHistoryGeneration[]>([]);
+
+  const toggleHistory = (workId: string) => {
+    if (historyWorkId === workId) {
+      setHistoryWorkId(null);
+      return;
+    }
+    setHistoryGenerations(onListHistory(workId));
+    setHistoryWorkId(workId);
+  };
+
+  const handleRestore = (work: WorkSummary, generation: WorkHistoryGeneration) => {
+    // 上書きに見える操作なので確認を挟む。実際には「いまの内容」も1世代として積まれるため、
+    // 戻したあとで「戻す前」へも復元できる（その旨を文言で伝える）
+    const ok = window.confirm(
+      `作品「${formatWorkTitle(work.title)}」を ${formatWorkUpdatedAt(generation.timestamp)} の内容に戻します。` +
+      'いまの内容も履歴に残るので、あとで戻せます。よろしいですか？'
+    );
+    if (!ok) return;
+    setHistoryWorkId(null);
+    onRestoreHistory(work.id, generation.timestamp);
+  };
   const handleDelete = (work: WorkSummary) => {
     // 削除は取り消せないので必ず確認を挟む（Issue #109 / #181 の受入条件）。
     // ここはまだ window.confirm のまま。「新規作成」は Issue #221 でアプリ内の
@@ -83,6 +114,16 @@ export default function WorkListPanel({
                   {isCurrent && <span className="work-list-item-badge">編集中</span>}
                   <button
                     type="button"
+                    className="ghost work-list-item-history"
+                    onClick={() => toggleHistory(work.id)}
+                    title="この作品の復元履歴（自動保存の数世代）を開きます"
+                    aria-label={`${formatWorkTitle(work.title)} の復元履歴`}
+                    aria-expanded={historyWorkId === work.id}
+                  >
+                    履歴
+                  </button>
+                  <button
+                    type="button"
                     className="ghost work-list-item-delete"
                     onClick={() => handleDelete(work)}
                     title="この作品をブラウザから削除します（取り消せません）"
@@ -90,6 +131,31 @@ export default function WorkListPanel({
                   >
                     削除
                   </button>
+                  {historyWorkId === work.id && (
+                    <div className="work-list-history" role="group" aria-label={`${formatWorkTitle(work.title)} の復元履歴`}>
+                      {historyGenerations.length === 0 ? (
+                        <p className="work-list-history-empty">
+                          復元できる世代はまだありません（編集を続けると、10分おきを目安に自動で世代が残ります）
+                        </p>
+                      ) : (
+                        <ul className="work-list-history-items">
+                          {historyGenerations.map((generation) => (
+                            <li key={generation.timestamp} className="work-list-history-item">
+                              <span className="work-list-history-time">{formatWorkUpdatedAt(generation.timestamp)}</span>
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => handleRestore(work, generation)}
+                                title="この時点の内容へ戻します（いまの内容も履歴に残ります）"
+                              >
+                                この時点に戻す
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
                 </li>
               );
             })}

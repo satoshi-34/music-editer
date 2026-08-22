@@ -23,6 +23,8 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof WorkListPane
     onSelect: vi.fn(),
     onCreate: vi.fn(),
     onDelete: vi.fn(),
+    onListHistory: vi.fn().mockReturnValue([]),
+    onRestoreHistory: vi.fn(),
     onClose: vi.fn(),
     ...overrides
   };
@@ -91,6 +93,40 @@ describe('作品一覧パネル（Issue #181）', () => {
       fireEvent.click(screen.getByRole('button', { name: '春の歌 を削除' }));
 
       expect(props.onDelete).toHaveBeenCalledWith('work-new');
+    });
+  });
+
+  describe('復元履歴（Issue #109 第3段）', () => {
+    const GENERATIONS = [
+      { timestamp: new Date(2026, 7, 4, 20, 0).getTime(), data: {} as never },
+      { timestamp: new Date(2026, 7, 4, 18, 30).getTime(), data: {} as never },
+    ];
+
+    it('「履歴」で世代一覧が開き、無ければ説明が出る', () => {
+      // 履歴があるのは work-new だけ、というモック（作品ごとに違う結果を返す）
+      const props = renderPanel({
+        onListHistory: vi.fn().mockImplementation((workId: string) => (workId === 'work-new' ? GENERATIONS : [])),
+      });
+      fireEvent.click(screen.getByLabelText('春の歌 の復元履歴'));
+      expect(props.onListHistory).toHaveBeenCalledWith('work-new');
+      expect(screen.getByText('2026/08/04 20:00')).toBeInTheDocument();
+      expect(screen.getByText('2026/08/04 18:30')).toBeInTheDocument();
+      // 世代が無い作品では説明文
+      fireEvent.click(screen.getByLabelText('無題 の復元履歴'));
+      expect(screen.getByText(/復元できる世代はまだありません/)).toBeInTheDocument();
+    });
+
+    it('「この時点に戻す」は確認でOKしたときだけ onRestoreHistory を呼ぶ', () => {
+      const props = renderPanel({ onListHistory: vi.fn().mockReturnValue(GENERATIONS) });
+      fireEvent.click(screen.getByLabelText('春の歌 の復元履歴'));
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      fireEvent.click(screen.getAllByText('この時点に戻す')[0]);
+      expect(props.onRestoreHistory).not.toHaveBeenCalled();
+      confirmSpy.mockReturnValue(true);
+      fireEvent.click(screen.getAllByText('この時点に戻す')[0]);
+      expect(props.onRestoreHistory).toHaveBeenCalledWith('work-new', GENERATIONS[0].timestamp);
+      // 確認文言は「いまの内容も履歴に残る」ことを伝える
+      expect(String(confirmSpy.mock.calls.at(-1)![0])).toContain('いまの内容も履歴に残る');
     });
   });
 

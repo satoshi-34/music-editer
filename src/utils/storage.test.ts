@@ -34,6 +34,10 @@ import {
   setLastOpenedWorkId
 ,
   validateSavedScoreData,
+  WORK_HISTORY_MAX_GENERATIONS,
+  loadWorkHistory,
+  pushWorkHistoryGeneration,
+  restoreWorkHistoryGeneration,
 } from './storage';
 import type {
   SavedScoreData,
@@ -238,6 +242,66 @@ describe('Storage Foundation Tests', () => {
       expect(validateSavedScoreData(scoreData)).toBe(true);
       // 文字列以外の titleFontId は弾く（手書き JSON の取り込み対策）
       expect(validateSavedScoreData({ ...scoreData, titleFontId: 42 })).toBe(false);
+    });
+  });
+
+  describe('復元履歴（Issue #109 第3段）', () => {
+    const makeData = (title: string, timestamp: number): SavedScoreData => ({
+      ...createSavedScoreData(
+        { title, subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        4
+      ),
+      timestamp,
+    });
+
+    it('一定間隔が空いた保存だけが世代として積まれ、上限で古い世代から消える', () => {
+      const created = createWork('履歴テスト');
+      expect(created.success).toBe(true);
+      const workId = created.data!.id;
+      // 1回目は積まれる
+      expect(pushWorkHistoryGeneration(workId, makeData('v1', 1)).data).toBe(true);
+      // 直後（10分未満）は積まれない
+      expect(pushWorkHistoryGeneration(workId, makeData('v2', 2)).data).toBe(false);
+      expect(loadWorkHistory(workId)).toHaveLength(1);
+      // force なら間隔に関係なく積まれる
+      expect(pushWorkHistoryGeneration(workId, makeData('v2', 2), { force: true }).data).toBe(true);
+      // 上限（WORK_HISTORY_MAX_GENERATIONS）を超えると古い世代から消える
+      for (let i = 0; i < WORK_HISTORY_MAX_GENERATIONS + 2; i++) {
+        pushWorkHistoryGeneration(workId, makeData(`vf${i}`, 10 + i), { force: true });
+      }
+      const history = loadWorkHistory(workId);
+      expect(history).toHaveLength(WORK_HISTORY_MAX_GENERATIONS);
+      // 新しい順に並ぶ
+      expect(history[0].data.metadata.title).toBe(`vf${WORK_HISTORY_MAX_GENERATIONS + 1}`);
+    });
+
+    it('「この時点に戻す」は指定世代を自動保存へ書き戻し、いまの内容も世代として残す', () => {
+      const created = createWork('復元テスト');
+      const workId = created.data!.id;
+      // いまの自動保存 = current、履歴に old が1世代
+      expect(saveWorkAutosaveData(workId, makeData('current', 100)).success).toBe(true);
+      pushWorkHistoryGeneration(workId, makeData('old', 50), { force: true });
+      const oldGeneration = loadWorkHistory(workId)[0];
+
+      const result = restoreWorkHistoryGeneration(workId, oldGeneration.timestamp);
+      expect(result.success).toBe(true);
+      expect(result.data?.metadata.title).toBe('old');
+      // 自動保存スロットが old になっている
+      expect(loadWorkAutosaveData(workId).data?.metadata.title).toBe('old');
+      // 戻す前の current が履歴の先頭に積まれている（誤復元しても戻れる）
+      expect(loadWorkHistory(workId)[0].data.metadata.title).toBe('current');
+    });
+
+    it('存在しない世代・壊れた履歴は安全に扱う', () => {
+      const created = createWork('異常系');
+      const workId = created.data!.id;
+      expect(restoreWorkHistoryGeneration(workId, 999).success).toBe(false);
+      localStorage.setItem(getWorkStorageKeys(workId).history, '{broken json');
+      expect(loadWorkHistory(workId)).toEqual([]);
+      localStorage.setItem(getWorkStorageKeys(workId).history, JSON.stringify([{ timestamp: 1, data: { bad: true } }]));
+      expect(loadWorkHistory(workId)).toEqual([]);
     });
   });
 

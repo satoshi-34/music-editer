@@ -160,6 +160,7 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
+  describeWorkHistoryRestored,
   describeSliceClearNoop,
   describeSliceCopied,
   describeSliceDeleteUnavailable,
@@ -477,7 +478,8 @@ export default function ScorePage() {
   // 作品一覧の操作（切替・新規作成・削除）はこのフックが受け持つ。
   const {
     works, currentWorkId, workError,
-    refreshWorks, initializeWorks, saveCurrentWork, switchWork, startNewWork, deleteWorkById
+    refreshWorks, initializeWorks, saveCurrentWork, switchWork, startNewWork, deleteWorkById,
+    listHistory, restoreFromHistory
   } = useWorkLibrary();
   const [showWorkList, setShowWorkList] = useState(false);
   const [workListPos, setWorkListPos] = useState<{ top: number; left: number } | null>(null);
@@ -2433,6 +2435,20 @@ export default function ScorePage() {
       await resetScoreStateToEmpty();
     }
   }, [cancelPendingAutosave, deleteWorkById, resetScoreStateToEmpty]);
+
+  /** 復元履歴から1世代へ戻す（multi-score-storage 第3段・Issue #109）。
+      いま開いている作品なら画面へも反映する。保存待ちのタイマーが残っていると
+      復元した内容が編集中の内容で上書きされて元の木阿弥になるため、先に止める */
+  const handleRestoreWorkHistory = useCallback(async (workId: string, timestamp: number) => {
+    cancelPendingAutosave();
+    const restored = restoreFromHistory(workId, timestamp);
+    if (!restored) return;
+    if (workId === currentWorkId) {
+      await applyLoadedScoreData(restored);
+    }
+    setShowWorkList(false);
+    notifyScoreEdit(describeWorkHistoryRestored(timestamp));
+  }, [applyLoadedScoreData, cancelPendingAutosave, currentWorkId, restoreFromHistory]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
@@ -5157,6 +5173,8 @@ export default function ScorePage() {
                     onSelect={handleSelectWork}
                     onCreate={handleCreateWorkFromList}
                     onDelete={handleDeleteWork}
+                    onListHistory={listHistory}
+                    onRestoreHistory={handleRestoreWorkHistory}
                     onClose={() => setShowWorkList(false)}
                     style={workListPos ? { top: workListPos.top, left: workListPos.left } : undefined}
                   />

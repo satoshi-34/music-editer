@@ -366,6 +366,8 @@
 .work-list-item {
   display: flex;
   align-items: center;
+  /* 復元履歴（flex-basis:100% の .work-list-history）を行の下へ折り返すため */
+  flex-wrap: wrap;
   gap: 6px;
   padding: 4px 6px;
   border: 1px solid #e5e7eb;
@@ -414,6 +416,20 @@
   font-size: 12px;
   padding: 2px 8px;
 }
+
+/* 復元履歴（Issue #109 第3段）: 作品行の下に世代リストを開く */
+.work-list-history {
+  flex-basis: 100%;
+  margin: 4px 0 2px;
+  padding: 6px 8px;
+  background: #f7f7f7;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.work-list-history-empty { margin: 0; color: #777; }
+.work-list-history-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.work-list-history-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.work-list-history-time { color: #444; }
 
 /* ghost ボタンよりコンパクトなサイズに上書き */
 .toolbar-chip-button {
