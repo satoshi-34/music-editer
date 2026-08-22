@@ -511,3 +511,13 @@ loadWorkAutosaveData(workId) → applyLoadedScoreData() で画面へ反映
   タブ一覧・現行UIを指す記述（パート譜表示/MusicXML/新規作成/PDF/印刷プレビュー/移調/回帰手順/
   ストレージ節）を新配置へ更新
 - 取り込みの通知文言をビルダー（describeLegacyImportResult）へ集約（P3）
+
+### 第4段 Codex round2 対応（2026-08-22）
+
+- **作品発行のロールバック**（P2）: saveCurrentWork がこの呼び出しで発行した作品IDは、
+  スロット保存の失敗時に deleteWork + currentWorkId=null へ巻き戻す（空作品を残さない）。
+  失敗系テストを「カタログと現在IDが不変」まで検証する形へ強化
+- **取り込みの読込失敗を区別**（P3）: loadScore が null のとき hasStoredData で
+  「データなし」と「あるのに読めない（破損）」を読み分け、readFailed 通知を追加
+- docs/DEVELOPMENT.md の残存旧仕様（新規作成の初期化範囲・clearAutosaveData・
+  MusicXML/MIDIボタン・回帰手順の手動保存/読込・その他タブ表記）を現行仕様へ更新（P2）

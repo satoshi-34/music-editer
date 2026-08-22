@@ -113,6 +113,9 @@ describe('useWorkLibrary（作品カタログの操作・Issue #181）', () => {
         // 失敗を無視して新規作品へ進むと、保存できなかった編集だけが失われる
         expect(started).toBe(false);
         expect(result.current.workError).not.toBeNull();
+        // 発行しかけた作品はロールバックされ、カタログも現在IDも不変（Codex round2）
+        expect(result.current.currentWorkId).toBeNull();
+        expect(listWorks()).toHaveLength(0);
       } finally {
         localStorageMock.setItem = original;
       }

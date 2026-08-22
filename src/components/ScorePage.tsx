@@ -2444,7 +2444,9 @@ export default function ScorePage() {
     const loadedData = await loadScore();
     setStoredDataAvailable(hasStoredData());
     if (!loadedData) {
-      notifyScoreEdit(describeLegacyImportResult('notFound'));
+      // データが無いのか、あるのに読めない（破損・チェックサム不一致）のかを区別する。
+      // loadScore は失敗時も null を返すため、旧スロットの有無で読み分ける（Codex round2 P3）
+      notifyScoreEdit(describeLegacyImportResult(hasStoredData() ? 'readFailed' : 'notFound'));
       return;
     }
     cancelPendingAutosave();
