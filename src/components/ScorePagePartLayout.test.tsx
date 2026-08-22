@@ -308,4 +308,43 @@ describe('パート譜表示中の段割り（Issue #174 段A）', () => {
       expect(firstSystemMeasures().size).toBe(MEASURE_COUNT);
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('パート譜表示中に同じパートIDを持つファイルを開くと総譜へ戻る（読込後は必ず総譜）', async () => {
+    // ファイル読込は applyLoadedScoreData と別の反映処理を持つため、
+    // パート譜表示のリセット漏れがあると「同じIDが有効なまま表示が継続」する
+    // （Codex round2 P2。四重奏→四重奏はパートIDが常に同じなので必ず再現する）
+    seedQuartetWork();
+    render(<ScorePage />);
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    await screen.findByLabelText('パート譜表示');
+    await selectPartView('violin-1');
+    await waitFor(() => {
+      expect(firstSystemMeasures().size).toBeGreaterThan(1);
+    });
+
+    // 別の四重奏 .score.json（同じパートID構成）を「開く」経路で読み込む
+    const clefs: PartData['clef'][] = ['treble', 'treble', 'alto', 'bass'];
+    const imported = createSavedScoreData(
+      { title: '読込テスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      (['violin-1', 'violin-2', 'viola', 'cello'] as const).map((partId, i) => ({
+        partId,
+        clef: clefs[i],
+        measures: Array.from({ length: MEASURE_COUNT }, sparseMeasure),
+      })),
+      1,
+      8,
+      'quartet'
+    );
+    const file = new File([JSON.stringify(imported)], 'imported.score.json', { type: 'application/json' });
+    const input = document.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    fireEvent.change(input, { target: { files: [file] } });
+
+    // 読み込んだ譜面は総譜（4パート）で表示される
+    await waitFor(() => {
+      const select = screen.getByLabelText('パート譜表示') as HTMLSelectElement;
+      expect(select.value).toBe('');
+    });
+    expect(document.body.textContent).toContain('読込テスト');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

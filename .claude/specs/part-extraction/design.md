@@ -267,9 +267,13 @@ ScorePage の3つの計算をパート譜表示対応にした（描画コンポ
    混ぜると意図が食い違う。上書きデータ自体は保持したままなので総譜へ戻れば復元される
 
 加えて、**表示切替時に段割りの安定化ヒントを捨てる** effect を追加した
-（`previousSystemRangesRef` と `lastEditedMeasureIndex` を partExtractionId の変化で
-リセット）。総譜⇄パート譜では段割りの前提が変わるため、Issue #67 の安定化で直前ビューの
-改行位置を引き継ぐと古いレイアウトが残ってしまう。
+（`previousSystemRangesRef` と `lastEditedMeasureIndex` をリセット）。
+総譜⇄パート譜では段割りの前提が変わるため、Issue #67 の安定化で直前ビューの
+改行位置を引き継ぐと古いレイアウトが残ってしまう。監視するのは生の
+`partExtractionId` ではなく**有効な表示モード**（`partExtractionSelection?.id ?? null`
+の解決結果）。表示中パートを編成編集で削除すると ID は変わらないまま選択だけが
+null（総譜へ復帰）になるため、生の ID だけではこの切替を検出できない
+（Codex round 1 の P2 指摘）。
 
 ### 影響範囲
 

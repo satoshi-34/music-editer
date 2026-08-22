@@ -1938,6 +1938,8 @@ export default function ScorePage() {
     clearPlaybackTimer();
     resetPlaybackClock();
     getAudioEngine().stopAll();
+    // パート譜表示は保存されない一時ビュー（「読込後は必ず総譜」）。空の譜面にも引き継がない
+    setPartExtractionId(null);
     historyStack.current = [];
     futureStack.current = [];
     setSelectedMeasures(null);
@@ -2056,6 +2058,8 @@ export default function ScorePage() {
     try {
       const data = await importScoreFromFile(file);
       // applyLoadedScoreData と同等のロジックで画面へ反映する
+      // （パート譜表示のリセットも同様。同じパートIDを持つ譜面を開くと表示が継続してしまう）
+      setPartExtractionId(null);
       setTitle(data.metadata.title);
       setSubtitle(data.metadata.subtitle);
       setLyricist(data.metadata.lyricist);
@@ -4027,6 +4031,8 @@ export default function ScorePage() {
         const xml = ev.target?.result as string;
         const loaded = parseMusicXml(xml);
         // applyLoadedScoreData と同等のロジックで画面に反映する
+        // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
+        setPartExtractionId(null);
         setTitle(loaded.metadata.title);
         setSubtitle(loaded.metadata.subtitle);
         setLyricist(loaded.metadata.lyricist);
