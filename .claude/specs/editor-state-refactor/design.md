@@ -318,3 +318,30 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
     声部2/前打音の保存音高が実音に正しく戻る、の2点がバグ修正としての挙動差
   - データ構造: 変更なし（MeasureData/NoteEvent の形はそのまま）
   - 経緯: PR #350 の Codex レビュー1〜2巡目。テスト: dual-write 4件 + 往復3件を追加
+
+## 12. 段5-2 の実装記録（2026-08-22・events ≡ voices[0] 不変条件テスト）
+
+- primaryVoiceMirrorInvariant.test.ts（11件）を追加。主張は「**voices を持つ小節では**、
+  編集後常に events ≡ voices[0].events」（§11 の移行境界どおりの限定。段5-4 で全小節が
+  voices を持つようになったら限定は外れる）
+- 固定した経路: 正規 API（声部1/声部2）・イベント削除（声部1・和音1音+弧掃除・声部2）・
+  音高変更（両声部）・小節挿入/削除・記譜音表示の往復（表示→編集→逆変換）・保存時同期の冪等・
+  連続編集・単声部小節の events-only 維持（vacuous 成立の確認）
+- テストのみの追加＝挙動ゼロ差。全11件が初回から緑で、段5-1 の dual-write と書き込み正規化が
+  不変条件を実際に満たしていることの検証になった
+- **Codex 1巡目（P2×3: カバレッジの穴）への対応**: 指摘どおり「初回全緑」は検出力の証明に
+  ならなかったため、次の3経路を追加（計15件）:
+  - 自動休符補完 `fillPriorMeasureRests` を voices を持つ拍不足の小節で実際に発火
+    （このために同関数と buildRestEventsForBeats を PSC から measureRestFillUtils.ts へ物理移設）
+  - 別小節から張られた弧の掃除（purgeArcsToRemovedKey）と索引繰り上げ
+    （remapEventRefsAfterRemoval）を実際に発火させ、**非対象小節の鏡**の更新を検証
+  - 選択範囲の移調 `transposeMeasureRange`（events と voices を別々に再構築する経路）
+- **レッドチェック実施**: fillPriorMeasureRests を破壊的 push へ・remap を events 直接代入へ
+  一時的に戻し、それぞれ対応するテストが 1 件だけ落ちることを確認（検出力の実証）
+- **Codex 2巡目（P2×2）への対応（計17件へ）**:
+  - 小節挿入/削除の弧参照（toMeasureIndex）が実際に繰り上がるフィクスチャを追加
+    （レッドチェック: voices 側の remap を外すと検出される）
+  - 実 API（saveScoreData/loadScoreData）を通した往復テストを追加。同期済み入力に加えて
+    **非同期入力（レガシー書き込み相当）**のケースも用意 — 同期済み入力だけでは保存時同期の
+    除去を検出できないことがレッドチェックで判明したため（dual-write が肩代わりする）。
+    非同期入力ケースは保存時同期を外すと検出される

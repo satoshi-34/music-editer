@@ -100,6 +100,8 @@ import {
   type HitAttributionPolicy, type NoteClickOutcome,
 } from '../editor/hitResolution';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
+// 自動休符補完は #244 段5-2 で utils へ物理移設（不変条件テストから直接呼ぶため）
+import { buildRestEventsForBeats, fillPriorMeasureRests } from '../utils/measureRestFillUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
 import {
   applyCustomSymbolToEvent,
@@ -446,53 +448,6 @@ function buildRestEditReplacement(
   return noteAfterRest ? [restPart, notePart] : [notePart, restPart];
 }
 
-function buildRestEventsForBeats(beats: number, clef: ClefType): NoteEvent[] {
-  // 指定拍数を休符イベントの配列へ変換する。
-  // 大きい音価から順に使うため、見た目もデータも自然な分割になる。
-  // 休符の描画位置は音価ごとの標準浄書位置（全休符だけ異なる）を使う。
-  const rests: NoteEvent[] = [];
-  let remaining = beats;
-  for (const duration of DURATION_TOOL_VALUES) {
-    const durationBeats = beatsFromVF(toVFDur(duration));
-    while (remaining + 0.0001 >= durationBeats) {
-      rests.push({ dur: duration, isRest: true, keys: [defaultRestDisplayKeyForDuration(clef, duration)] });
-      remaining -= durationBeats;
-    }
-  }
-  return rests;
-}
-
-function fillPriorMeasureRests(
-  measures: MeasureData[],
-  targetMeasureIndex: number,
-  beatsPerMeasure: number,
-  clef: ClefType
-): void {
-  // 複数段譜用の自動休符補完。
-  // あるパートで targetMeasureIndex の小節に入力し始めたら、
-  // 同じパート内の「それ以前の小節」だけを拍子ぶんの長さへ補完する。
-  //
-  // 重要: ほかのパートはここでは触らない。
-  // PianoSystemCanvas は N 段譜をまとめて描くが、各パートの小節データは独立している。
-  // そのため Flute を編集しただけで Oboe の休符が増える、という副作用を避けている。
-  for (let measureIndex = 0; measureIndex < targetMeasureIndex; measureIndex += 1) {
-    while (measureIndex >= measures.length) {
-      measures.push(createEmptyMeasure());
-    }
-    const measure = measures[measureIndex];
-    const currentBeats = measure.events.reduce((sum, event) => sum + eventOccupiedBeats(event), 0);
-    const remainingBeats = beatsPerMeasure - currentBeats;
-    if (remainingBeats > 0.0001) {
-      // 正規 API 経由で書く（#244 段5-1）。measure.events を直接 push すると
-      // voices[0] を持つ小節で dual-write が効かず、鏡が古いまま残る
-      // （設計メモ§2-5「破壊的書き込みの根絶」で名指しされていた1か所目）。
-      measures[measureIndex] = withVoiceEventsUpdated(measure, 0, (events) => [
-        ...events,
-        ...buildRestEventsForBeats(remainingBeats, clef),
-      ]);
-    }
-  }
-}
 /* ===== ライン ⇄ キー変換（treble / bass / alto / tenor） =====
    以前はここにローカル実装があったが、tenor クレフに対応していなかった
    （bass/alto/treble のいずれかとして誤変換されてしまっていた）。
