@@ -629,7 +629,7 @@ src/
 │  ├─ ScorePage.tsx          # ページレイアウト・スケール
 │  ├─ PlaybackControls.tsx   # 再生制御UI
 │  ├─ PlaybackHighlight.tsx  # 再生位置ハイライト
-│  └─ SaveLoadButtons.tsx    # 新規作成・保存・読み込みUI
+│  └─ SaveLoadButtons.tsx    # 新規作成・保存インジケータ・サンプル（開発用）UI（保存/読込ボタンは #109 第4段で廃止）
 ├─ audio/
 │  ├─ SimpleAudioEngine.ts   # Web Audio API音声エンジン
 │  ├─ NotePlayer.ts          # 個別音符再生
@@ -637,7 +637,7 @@ src/
 │  ├─ SoundSource.ts         # 音色管理
 │  └─ TempoManager.ts        # テンポ管理
 ├─ hooks/
-│  ├─ useScoreStorage.ts     # 譜面データ永続化
+│  ├─ useScoreStorage.ts     # 旧・手動保存スロットの読み取り（移行専用。自動保存の正本は useWorkLibrary）
 │  ├─ useTempoStorage.ts     # テンポ設定永続化
 │  └─ useSoundStorage.ts     # 音色設定永続化
 ├─ types/

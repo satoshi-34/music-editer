@@ -2499,7 +2499,7 @@ export default function ScorePage() {
     const sampleScore = createDemoScore(sampleId);
 
     // 保存データを消さずに、いま表示中の譜面だけ説明用サンプルへ切り替える。
-    // 「あとで自分の譜面に戻したい」場合は、既存の保存/読込ボタンで戻せる。
+    // 「あとで自分の譜面に戻したい」場合は、作品一覧から開き直せる（#109 第4段以降）。
     setTitle(sampleScore.metadata.title);
     setSubtitle(sampleScore.metadata.subtitle);
     setLyricist(sampleScore.metadata.lyricist);
