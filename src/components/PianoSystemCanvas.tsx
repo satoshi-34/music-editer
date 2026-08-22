@@ -918,6 +918,158 @@ type Props = {
   partSpacingOffsetPx?: number;
 };
 
+/* ===== 描画1回ぶんの記号エントリと台帳の収集器（#244 段4b） =====
+ * 描画 useEffect の中に散らばっていた記号エントリ配列13本と台帳 Map 4つを
+ * 1つの「収集器」オブジェクトへ束ねる。Pass 3 が push で埋め、最終描画段が読む。
+ * 段4c で Pass 1〜3 を関数化するとき、この収集器がビルダーの戻り値になる
+ * （設計メモ§2-4・§10）。各フィールドの型・既定値・ドキュメントは移設前と同一（挙動ゼロ差）。
+ */
+/** 音符の描画位置台帳: 弧・松葉の端点解決に使う（キーは pXvXmXeX 形式） */
+type NotePositionP={note:StaveNote;stave:Stave;clef:ClefType;keys:string[];partIndex:number;measureIndex:number;voiceIndex:number;eventIndex:number};
+/** 弧の同定情報（どのパート・声部・イベントの何本目の弧か）。arcKey 文字列の解析を廃止した台帳 */
+type ArcIdentityP={partIndex:number;voiceIndex:number;fromMeasure:number;fromEvent:number;arcIndex:number};
+type RenderCollectors = {
+  dynamicTextEntries: Array<{
+    anchorX: number;
+    baseY: number;
+    markings: NonNullable<NoteEvent['dynamics']>;
+    adjust: ResolvedSymbolAdjust;
+    // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
+    partIndex?: number;
+    measureAbsoluteIndex?: number;
+    eventIndex?: number;
+    event?: NoteEvent;
+  }>;
+  /** カスタム記号の描画情報（段ごとの五線上端基準の統一高さで描く） */
+  customSymbolEntries: CustomSymbolRenderEntry[];
+  /** リハーサルマーク（練習番号）。最上段（pi===0）の上にだけ表示する */
+  rehearsalMarkEntries: Array<{ x: number; topY: number; mark: string }>;
+  /**
+   * 途中テンポ変更（MeasureData.bpm）。最上段（pi===0）の上にだけ ♩=XXX と表示する。
+   * リハーサルマークと同じ「最上段基準」の方針だが、StaffCanvas の既存レイアウトに合わせ
+   * リハーサルマークより下（五線上端の36px上）に置くことで重ならないようにする
+   */
+  bpmMarkingEntries: Array<{ x: number; topY: number; bpm: number }>;
+  /**
+   * 小節番号（通し番号）。段の先頭小節・最上段（pi===0）の左上にだけ表示する。
+   * 曲頭の小節（絶対インデックス0）には出さない浄書慣習のため、push 側で startMeasureIndex!==0 を条件にする
+   */
+  measureNumberEntries: Array<{ x: number; topY: number; number: number }>;
+  /**
+   * ペダル記号（五線の最下行より下に表示）。stave も持たせておくのは、down→up の
+   * 破線ブリッジが段またぎになるかどうかを松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため
+   */
+  pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }>;
+  /**
+   * 歌詞（データ駆動: 歌詞を持つイベントが属する段の五線上端を基準にする）。
+   * StaffCanvas と同じ座標計算・見た目を drawLyricsEntry（lyricsRenderUtils.ts）で共有する
+   */
+  lyricsEntries: Array<{ anchorX: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }>;
+  /** 運指番号（五線上端基準の統一高さに表示） */
+  fingeringEntries: Array<{
+    anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust;
+    // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
+    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+  }>;
+  /**
+   * アーティキュレーション記号（フェルマータ・スタッカート等）。
+   * StaffCanvas と同じ方式で、全音符描画後にまとめて描く
+   */
+  articulationEntries: Array<{
+    anchorX: number;
+    // 音符の BoundingBox 上端Y（記号をここより上に配置する）
+    noteTopY: number;
+    // 五線の最上線Y（フェルマータの配置基準）
+    staveTopY: number;
+    markings: NonNullable<NoteEvent['articulations']>;
+    adjust: ResolvedSymbolAdjust;
+    partIndex?: number;
+    measureAbsoluteIndex?: number;
+    eventIndex?: number;
+    event?: NoteEvent;
+  }>;
+  /**
+   * 途中テンポ変更の文字表記（"Fine" など。五線上端より上に表示）。
+   * stackedWithExpression / stackedWithChord は「同じ音符に発想標語（コード記号）も付いているか」。
+   * 付いていれば、五線に近い側の行を定位置に置いてテンポ表記を1行ぶんずつ上へ持ち上げる
+   * （上から「テンポ表記 → 発想標語 → コード記号 → 五線」の順・Issue #237, #279）
+   */
+  tempoMarkingEntries: Array<{
+    anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
+    stackedWithExpression?: boolean;
+    stackedWithChord?: boolean;
+    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+  }>;
+  /**
+   * 発想標語（espressivo など・Issue #237）。テンポ表記と同じ「五線上端より上のテキスト」の
+   * 仲間だが、浄書慣例に合わせて一回り小さいイタリック体で、テンポ表記より下（五線寄り）に描く。
+   * 同じ音符にコード記号も付いているときは、五線寄りをコード記号に譲って1行ぶん上へ逃げる（Issue #279）
+   */
+  expressionMarkingEntries: Array<{
+    anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
+    /** 左へはみ出しすぎて紙面の外で切れないようにするための、その小節の五線の左端X */
+    staveLeftX: number;
+    stackedWithChord?: boolean;
+    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+  }>;
+  /**
+   * コード記号（C, Am7 など・Issue #279)。テンポ表記・発想標語と同じ「五線上端より上のテキスト」の
+   * 仲間で、浄書慣例どおり3つの中でいちばん五線に近い行（＝定位置）に正体（イタリックでない字）で描く
+   */
+  chordSymbolEntries: Array<{
+    anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
+    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+  }>;
+  /** オッターバ（8va/8vb）括弧 */
+  ottavaEntries: Array<{
+    kind: '8va' | '8vb';
+    startX: number; endX: number;
+    lineY: number;
+    adjust: ResolvedSymbolAdjust;
+    partIndex?: number;
+    measureAbsoluteIndex?: number;
+    eventIndex?: number;
+    event?: NoteEvent;
+  }>;
+  /** 弧ドラッグ時に再計算できるよう、各弧の形状パラメータをキーで保持する台帳 */
+  arcGeomMap: Map<string, ArcGeom>;
+  /**
+   * Issue #322: 「クリックしたXは、この小節の何拍目か」を逆引きするための台帳（小節番号→列一覧）。
+   * 複数パート・複数声部を1回の Formatter でまとめて整形している（合同フォーマット）ので、
+   * 同じ開始拍の音符はパート・声部をまたいで同じ X に並ぶ。その並びをそのまま物差しにする。
+   * 描画のたびに作り直し、クリック時（＝描画が終わったあと）に全パートぶんが揃った状態で読む
+   */
+  beatColumnsByMeasureP: Map<number, BeatColumn[]>;
+  /** 音符の描画位置台帳（弧・松葉の端点解決） */
+  notePositionMapP: Map<string, NotePositionP>;
+  /**
+   * 弧の同定情報を arcKey から引くための台帳。以前は arcKey の文字列を `split('-')` して
+   * 復元していたが、声部を足すと桁がずれるため、「描くときに登録し、掴むときに引く」形にして
+   * 文字列解析そのものを廃止した
+   */
+  arcIdentityMap: Map<string, ArcIdentityP>;
+};
+/** 収集器を空で作る。描画のたびに呼び、SVG と寿命を揃える */
+const createRenderCollectors = (): RenderCollectors => ({
+  dynamicTextEntries: [],
+  customSymbolEntries: [],
+  rehearsalMarkEntries: [],
+  bpmMarkingEntries: [],
+  measureNumberEntries: [],
+  pedalMarkEntries: [],
+  lyricsEntries: [],
+  fingeringEntries: [],
+  articulationEntries: [],
+  tempoMarkingEntries: [],
+  expressionMarkingEntries: [],
+  chordSymbolEntries: [],
+  ottavaEntries: [],
+  arcGeomMap: new Map(),
+  beatColumnsByMeasureP: new Map(),
+  notePositionMapP: new Map(),
+  arcIdentityMap: new Map(),
+});
+
 export default function PianoSystemCanvas({
   measuresPerSystem=4, tool, scale=0.86, plannedMeasureWidths, incomingArcIndex,
   trebleData, bassData, onTrebleChange, onBassChange,
@@ -2684,101 +2836,21 @@ export default function PianoSystemCanvas({
       svgRoot.appendChild(hit);
     }
 
-    // 弧ドラッグ時に再計算できるよう、各弧の形状パラメータをキーで保持する
-    const arcGeomMap=new Map<string,ArcGeom>();
+    // 記号エントリと台帳の収集器（#244 段4b）。宣言・型・ドキュメントは module スコープの
+    // RenderCollectors / createRenderCollectors に集約した。ローカル名は従来のまま維持する
+    // （push側・消費側の差分を出さないため。段4c で Pass 関数の入出力になる）。
+    const collectors = createRenderCollectors();
+    const {
+      dynamicTextEntries, customSymbolEntries, rehearsalMarkEntries, bpmMarkingEntries,
+      measureNumberEntries, pedalMarkEntries, lyricsEntries, fingeringEntries,
+      articulationEntries, tempoMarkingEntries, expressionMarkingEntries,
+      chordSymbolEntries, ottavaEntries,
+      arcGeomMap, beatColumnsByMeasureP, notePositionMapP, arcIdentityMap,
+    } = collectors;
     // ドラッグ中の更新（window の mousemove）から今回の描画結果を参照できるようにしておく。
     // 描画のたびに SVG は作り直される（innerHTML='' → 新しい <svg>）ので、
     // 古い SVG を掴んだままにならないよう毎回ここで差し替える。
     arcDragContextRef.current={svg,svgRoot,arcGeomMap};
-    const dynamicTextEntries: Array<{
-      anchorX: number;
-      baseY: number;
-      markings: NonNullable<NoteEvent['dynamics']>;
-      adjust: ResolvedSymbolAdjust;
-      // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
-      partIndex?: number;
-      measureAbsoluteIndex?: number;
-      eventIndex?: number;
-      event?: NoteEvent;
-    }> = [];
-    // カスタム記号の描画情報を収集する（段ごとの五線上端基準の統一高さで描く）
-    const customSymbolEntries: CustomSymbolRenderEntry[] = [];
-    // リハーサルマーク（練習番号）の描画情報を収集する。最上段（pi===0）の上にだけ表示する。
-    const rehearsalMarkEntries: Array<{ x: number; topY: number; mark: string }> = [];
-    // 途中テンポ変更（MeasureData.bpm）の描画情報を収集する。最上段（pi===0）の上にだけ ♩=XXX と表示する。
-    // リハーサルマークと同じ「最上段基準」の方針だが、StaffCanvas の既存レイアウトに合わせ
-    // リハーサルマークより下（五線上端の36px上）に置くことで重ならないようにする。
-    const bpmMarkingEntries: Array<{ x: number; topY: number; bpm: number }> = [];
-    // 小節番号（通し番号）の描画情報を収集する。段の先頭小節・最上段（pi===0）の左上にだけ表示する。
-    // 曲頭の小節（絶対インデックス0）には出さない浄書慣習のため、push 側で startMeasureIndex!==0 を条件にする。
-    const measureNumberEntries: Array<{ x: number; topY: number; number: number }> = [];
-    // ペダル記号の描画情報を収集する（五線の最下行より下に表示）
-    // stave も持たせておくのは、down→up の破線ブリッジが段またぎになるかどうかを
-    // 松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため。
-    const pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }> = [];
-    // 運指番号の描画情報を収集する（五線上端基準の統一高さに表示）
-    // 歌詞の描画情報を収集する（データ駆動: 歌詞を持つイベントが属する段の五線上端を基準にする）
-    // StaffCanvas と同じ座標計算・見た目を drawLyricsEntry（lyricsRenderUtils.ts）で共有する
-    const lyricsEntries: Array<{ anchorX: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }> = [];
-    const fingeringEntries: Array<{
-      anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust;
-      // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
-      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
-    }> = [];
-    // アーティキュレーション記号（フェルマータ・スタッカート等）の描画情報を収集する。
-    // StaffCanvas と同じ方式で、全音符描画後にまとめて描く。
-    const articulationEntries: Array<{
-      anchorX: number;
-      // 音符の BoundingBox 上端Y（記号をここより上に配置する）
-      noteTopY: number;
-      // 五線の最上線Y（フェルマータの配置基準）
-      staveTopY: number;
-      markings: NonNullable<NoteEvent['articulations']>;
-      adjust: ResolvedSymbolAdjust;
-      partIndex?: number;
-      measureAbsoluteIndex?: number;
-      eventIndex?: number;
-      event?: NoteEvent;
-    }> = [];
-    // 途中テンポ変更の文字表記（"Fine" など）の描画情報を収集する（五線上端より上に表示）。
-    // stackedWithExpression / stackedWithChord は「同じ音符に発想標語（コード記号）も付いているか」。
-    // 付いていれば、五線に近い側の行を定位置に置いてテンポ表記を1行ぶんずつ上へ持ち上げる
-    // （上から「テンポ表記 → 発想標語 → コード記号 → 五線」の順・Issue #237, #279）
-    const tempoMarkingEntries: Array<{
-      anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
-      stackedWithExpression?: boolean;
-      stackedWithChord?: boolean;
-      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
-    }> = [];
-    // 発想標語（espressivo, Si deve suonare... など）の描画情報を収集する（Issue #237）。
-    // テンポ表記と同じ「五線上端より上のテキスト」の仲間だが、浄書慣例に合わせて
-    // 一回り小さいイタリック体で、テンポ表記より下（五線寄り）に描く。
-    // 同じ音符にコード記号も付いているときは、五線寄りをコード記号に譲って1行ぶん上へ逃げる（Issue #279）
-    const expressionMarkingEntries: Array<{
-      anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
-      /** 左へはみ出しすぎて紙面の外で切れないようにするための、その小節の五線の左端X */
-      staveLeftX: number;
-      stackedWithChord?: boolean;
-      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
-    }> = [];
-    // コード記号（C, Am7 など）の描画情報を収集する（Issue #279）。
-    // テンポ表記・発想標語と同じ「五線上端より上のテキスト」の仲間で、
-    // 浄書慣例どおり3つの中でいちばん五線に近い行（＝定位置）に正体（イタリックでない字）で描く
-    const chordSymbolEntries: Array<{
-      anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
-      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
-    }> = [];
-    // オッターバ（8va/8vb）括弧の描画情報を収集する
-    const ottavaEntries: Array<{
-      kind: '8va' | '8vb';
-      startX: number; endX: number;
-      lineY: number;
-      adjust: ResolvedSymbolAdjust;
-      partIndex?: number;
-      measureAbsoluteIndex?: number;
-      eventIndex?: number;
-      event?: NoteEvent;
-    }> = [];
     let pendingOttava: {
       kind: '8va' | '8vb'; startX: number; lineY: number; adjust: ResolvedSymbolAdjust;
       partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
@@ -3265,28 +3337,16 @@ export default function PianoSystemCanvas({
     // clef: 「その音符を実際に描いた五線のクレフ」（Issue #310）。段またぎの音符は
     // 隣の五線に載るので、音名→線の換算を自分のパートのクレフで行うと、弧の端点だけが
     // 五線5本ぶんずれた高さに付いてしまう。五線とクレフは必ず対で持ち回る。
-    type NotePositionP={note:StaveNote;stave:Stave;clef:ClefType;keys:string[];partIndex:number;measureIndex:number;voiceIndex:number;eventIndex:number};
     // startIsMultiVoice: 弧の「始点がある小節」が2声部かどうか（Issue #192）。
     // 弧の向きの既定値をここで決めるため、描画待ちリストへ積むときに一緒に控えておく。
     // 複数小節にまたがる弧でも始点の小節だけで判定するので、途中で声部数が変わっても
     // 段またぎの2セグメントが食い違わない。
     type PendingArcP={partIndex:number;voiceIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startClef:ClefType;startMeasureIdx:number;startEventIdx:number;startIsMultiVoice:boolean};
-    const notePositionMapP=new Map<string,NotePositionP>();
-    // Issue #322: 「クリックしたXは、この小節の何拍目か」を逆引きするための台帳（小節番号→列一覧）。
-    // 複数パート・複数声部を1回の Formatter でまとめて整形している（合同フォーマット）ので、
-    // 同じ開始拍の音符はパート・声部をまたいで同じ X に並ぶ。その並びをそのまま物差しにする。
-    // 描画のたびに作り直し、クリック時（＝描画が終わったあと）に全パートぶんが揃った状態で読む。
-    const beatColumnsByMeasureP=new Map<number,BeatColumn[]>();
     const pendingArcsP:PendingArcP[]=[];
     // 松葉（ヘアピン）の描画待ちリスト。arcs と同じく全パート・全小節のレンダリング後にまとめて描く
     type PendingHairpinP={partIndex:number;voiceIndex:number;hairpin:HairpinMark;hairpinIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
     const pendingHairpinsP:PendingHairpinP[]=[];
 
-    // 弧の同定情報（どのパート・声部・イベントの何本目の弧か）を arcKey から引くための台帳。
-    // 以前は arcKey の文字列を `split('-')` して復元していたが、声部を足すと桁がずれるため、
-    // 「描くときに登録し、掴むときに引く」形にして文字列解析そのものを廃止した。
-    type ArcIdentityP={partIndex:number;voiceIndex:number;fromMeasure:number;fromEvent:number;arcIndex:number};
-    const arcIdentityMap=new Map<string,ArcIdentityP>();
     const arcKeyP=(identity:ArcIdentityP)=>{
       const key=`p${identity.partIndex}v${identity.voiceIndex}m${identity.fromMeasure}e${identity.fromEvent}a${identity.arcIndex}`;
       arcIdentityMap.set(key,identity);
