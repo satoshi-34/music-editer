@@ -3917,13 +3917,18 @@ export default function PianoSystemCanvas({
         } = cache;
         const stave=staveSets[pi][i];
         const score=partsScore[pi]??[];
-        const setScore=(updater:(prev:MeasureData[])=>MeasureData[])=>{
+        // score の書き込みは「どのパートへ書くか」を引数で受ける（#244 段3c・Codex 1巡目指摘）。
+        // クリックテーブルは resolveHitAttribution の解決結果（hitPi）でこの writer を選ぶので、
+        // #316 で帰属が 'band' 以外になっても書き込み先だけが取り残されることはない。
+        const setScoreFor=(targetPi:number)=>(updater:(prev:MeasureData[])=>MeasureData[])=>{
           setPartsScore(prev=>{
             const next=[...prev];
-            next[pi]=updater(prev[pi]??[]);
+            next[targetPi]=updater(prev[targetPi]??[]);
             return next;
           });
         };
+        // 従来名の setScore は「この帯のパート」への書き込み（挙動そのまま）
+        const setScore=setScoreFor(pi);
         const l2k=(l:number)=>lineToKeyForClef(clefHere,l);
         const k2l=(k:string)=>keyToLineForClef(clefHere,k);
 
@@ -4186,12 +4191,15 @@ export default function PianoSystemCanvas({
           computeStaveBand,
         }, evs, vfNotes, j, anchors, mids);
 
-        // アクティブ声部の j 番目のイベントを書き換える共通ヘルパー。
+        // 帰属先の j 番目のイベントを書き換える共通ヘルパー。
         // voiceIndex 0 のときは withVoiceEventsUpdated が measure.events を直接更新するので、
         // 従来通りの保存形（events 直接更新）と完全に同じ挙動になる（リグレッション防止）。
         // compute が null を返したときは何もしない（対象が休符などで無効な場合のガード用）。
-        // 書き込み先の声部は activeVoiceIndex 固定。#316（'explicitLayer'）実装時は、
-        // クリックテーブル側の resolveHitAttribution の結果（hitVoice）を受け取る形へ引数化する。
+        // 書き込み先は attribution 引数で受ける（#244 段3c・Codex 1巡目指摘の対応）。
+        // 既定値は「この帯のパート + アクティブ声部」＝従来挙動。クリックテーブルは
+        // resolveHitAttribution の解決結果（hitPi/hitVoice）を渡す。
+        // 注意: j は描画時のアクティブ声部のイベント列に対する位置。'explicitLayer'（#316）では
+        // 候補列そのものを選択レイヤー由来へ差し替えた上で j を作ること（入口関数の注記を参照）。
         const updateActiveEvent = (
           j: number,
           // NoteEvent はこのファイル内で臨時記号など編集頻度の高いプロパティだけを
@@ -4200,15 +4208,16 @@ export default function PianoSystemCanvas({
           // ここでは既存コードと同じ考え方（一部は any 経由で読み書き）に合わせて
           // any を許容し、呼び出し側の柔軟性を優先する。
           compute: (targetEv: any) => any,
+          attribution: { partIndex: number; voiceIndex: number } = { partIndex: pi, voiceIndex: activeVoiceIndex },
         ) => {
-          setScore(prev=>{
+          setScoreFor(attribution.partIndex)(prev=>{
             const next=prev.map(cloneMeasureData);
             if(absI>=next.length)return prev;
-            const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
+            const targetEv=getVoiceEvents(next[absI], attribution.voiceIndex)[j];
             if(!targetEv)return prev;
             const nextEv=compute(targetEv);
             if(!nextEv)return prev;
-            next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
+            next[absI]=withVoiceEventsUpdated(next[absI], attribution.voiceIndex, (events)=>{
               const copy=[...events];
               copy[j]=nextEv;
               return copy;
@@ -4253,6 +4262,12 @@ export default function PianoSystemCanvas({
           });
         };
 
+        // 新規挿入の計画+書き込み。挿入位置（at）・空き拍・詰め物休符・音高の全部を
+        // 描画時の束縛（この帯のパート pi・アクティブ声部の activeEvs/activeVfNotes・clefHere）から
+        // 導くため、あえて帰属引数を持たない（#244 段3c・Codex 1巡目指摘への裁定）。
+        // 書き込み先だけ hitPi へ向けても計画側が帯のままでは偽の継ぎ目になる（段3b の P1 と同型）。
+        // 'explicitLayer'（#316）では挿入コンテキスト（候補列・クレフ・拍台帳）ごと
+        // 選択レイヤー由来に再導出する — resolveHitAttribution の注記と設計メモ§9 参照。
         const doInsert=(lx:number,ly:number)=>{
           // パート固有の調号があれば、入力された自然音もそのパートの調号に揃える。
           // 例: 記譜音表示で D メジャー（♯2）になっている B♭管に F の線を置くと、
@@ -5037,6 +5052,12 @@ export default function PianoSystemCanvas({
               // 差し替えも必要（hitResolution.ts の resolveHitAttribution の注記を参照）。
               const { partIndex: hitPi, voiceIndex: hitVoice } =
                 resolveHitAttribution(HIT_ATTRIBUTION_POLICY, { partIndex: pi, voiceIndex: activeVoiceIndex });
+              // テーブル内の score 書き込みとイベント書き換えも、必ず解決済み帰属で行う
+              // （Codex 1巡目指摘: 選択だけ hitPi へ移して書き込みが帯のパートに残ると、
+              //  'explicitLayer' 実装時に「クリックした帯が書き換わる」食い違いになる）
+              const setHitScore = setScoreFor(hitPi);
+              const updateHitEvent = (targetJ: number, compute: Parameters<typeof updateActiveEvent>[1]) =>
+                updateActiveEvent(targetJ, compute, { partIndex: hitPi, voiceIndex: hitVoice });
               // カスタム記号の日本語名（ユーザーが記号に付けた名前）を id から引く。
               // 通知の文言と調整オーバーレイで同じ名前を使うため、解決はここ1か所にまとめる。
               const customSymbolNameOf = (symbolId: string) =>
@@ -5076,7 +5097,7 @@ export default function PianoSystemCanvas({
                 // 連符数字（3 等）の表示/非表示をグループ単位で切り替える（Issue #269）。
                 // 連符内休符をクリックしても同じグループが切り替わるよう、休符も対象に含める
                 // （グループの中に休符が残ったままの譜面でも「数字の近く」を押せば効く）。
-                setScore(prev=>{
+                setHitScore(prev=>{
                   const next=prev.map(cloneMeasureData);
                   if(absI>=next.length)return prev;
                   const currentEvents=getVoiceEvents(next[absI], hitVoice);
@@ -5109,7 +5130,7 @@ export default function PianoSystemCanvas({
                 }
                 // 「どちらへ移すのか」は書き換える前の値から決める（切替後の値では逆になる）
                 const turnedOn = clickedEv.renderStaff !== direction;
-                setScore(prev=>{
+                setHitScore(prev=>{
                   const next=prev.map(cloneMeasureData);
                   if(absI>=next.length)return prev;
                   const currentEvents=getVoiceEvents(next[absI], hitVoice);
@@ -5169,7 +5190,7 @@ export default function PianoSystemCanvas({
                   accidentalMode,
                   clickedKeyIndex>=0?clickedKeyIndex:undefined
                 );
-                updateActiveEvent(j, (targetEv) => {
+                updateHitEvent(j, (targetEv) => {
                   if(targetEv.isRest)return null;
                   const latestKeyIndex = clickedKeyIndex>=0
                     ? findKeyIndexAtLine(targetEv.keys, snappedLine, k2l)
@@ -5198,7 +5219,7 @@ export default function PianoSystemCanvas({
                   microtoneMode,
                   clickedKeyIndex>=0?clickedKeyIndex:undefined
                 );
-                updateActiveEvent(j, (targetEv) => {
+                updateHitEvent(j, (targetEv) => {
                   if(targetEv.isRest)return null;
                   const latestKeyIndex = clickedKeyIndex>=0
                     ? findKeyIndexAtLine(targetEv.keys, snappedLine, k2l)
@@ -5226,7 +5247,7 @@ export default function PianoSystemCanvas({
                 // 多段譜でも「この音符から強弱が始まる」と分かるよう、
                 // 音符セルクリックで直接 NoteEvent に強弱を付ける。
                 const nextEv = applyDynamicMarkingToEvent(activeEvs[j], dynamicMode);
-                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : applyDynamicMarkingToEvent(targetEv, dynamicMode));
+                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : applyDynamicMarkingToEvent(targetEv, dynamicMode));
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                 playNoteEvent(nextEv, part.playbackInstrument);
                 return { kind: 'handled' };
@@ -5239,7 +5260,7 @@ export default function PianoSystemCanvas({
                 const customSymbolMode = tool.symbolId;
                 // カスタム記号も既存音符にトグルで付け外しする（StaffCanvas と同じ挙動）。
                 const nextEv = applyCustomSymbolToEvent(activeEvs[j], customSymbolMode);
-                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : applyCustomSymbolToEvent(targetEv, customSymbolMode));
+                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : applyCustomSymbolToEvent(targetEv, customSymbolMode));
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                 playNoteEvent(nextEv, part.playbackInstrument);
                 return { kind: 'handled' };
@@ -5358,7 +5379,7 @@ export default function PianoSystemCanvas({
                 // 前打音×休符は旧実装どおり既定処理へ（休符の選択/挿入になる）
                 if (clickedIsRest) return { kind: 'passThrough' };
                 // 前打音をトグルで付け外しする
-                updateActiveEvent(j, (targetEv) => {
+                updateHitEvent(j, (targetEv) => {
                   if(targetEv.isRest)return null;
                   const hasGrace=(targetEv.graceNotes?.length??0)>0;
                   // 前打音のデフォルト音高は主音符の1音上（stepUp 関数は StaffCanvas と同じロジック）
@@ -5385,7 +5406,7 @@ export default function PianoSystemCanvas({
                 if (clickedIsRest) return { kind: 'passThrough' };
                 const ornamentMode = (tool as any).ornamentType as OrnamentType;
                 // 装飾記号（トリル・モルデント・プラルトリラー・ターン）をトグルで付け外しする
-                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : applyOrnamentToEvent(targetEv, ornamentMode));
+                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : applyOrnamentToEvent(targetEv, ornamentMode));
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                 return { kind: 'handled' };
               }
@@ -5394,7 +5415,7 @@ export default function PianoSystemCanvas({
                 if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
                 const pedalMode = (tool as any).pedalType as 'down' | 'up';
                 // ペダル記号をトグルで付け外しする
-                updateActiveEvent(j, (targetEv) => ({
+                updateHitEvent(j, (targetEv) => ({
                   ...targetEv,
                   pedalMark: targetEv.pedalMark===pedalMode?undefined:pedalMode,
                 }));
@@ -5406,7 +5427,7 @@ export default function PianoSystemCanvas({
                 if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
                 const ottavaMode = (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd';
                 // オッターバ記号をトグルで付け外しする
-                updateActiveEvent(j, (targetEv) => ({
+                updateHitEvent(j, (targetEv) => ({
                   ...targetEv,
                   ottava: targetEv.ottava===ottavaMode?undefined:ottavaMode,
                 }));
@@ -5485,7 +5506,7 @@ export default function PianoSystemCanvas({
                   const newKeys=[...currentEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
                   selectedKeyIndex = newKeys.indexOf(newKey);
                   playEvent = { ...currentEv, keys: newKeys };
-                  updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : {...targetEv,keys:newKeys});
+                  updateHitEvent(j, (targetEv) => targetEv.isRest ? null : {...targetEv,keys:newKeys});
                 }
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:selectedKeyIndex});
                 playNoteEvent(playEvent, part.playbackInstrument);
@@ -5521,7 +5542,7 @@ export default function PianoSystemCanvas({
                 if(clipboardGroup&&getDurationTool(tool)&&isInRestRowY){
                   const paste=planTupletGroupPasteIntoRest(activeEvs[j],clipboardGroup);
                   if(paste){
-                    setScore(prev=>{
+                    setHitScore(prev=>{
                       const next=prev.map(cloneMeasureData);
                       fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
                       const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
@@ -5575,7 +5596,7 @@ export default function PianoSystemCanvas({
                   // 休符を選択したい場合は休符ツール・調整ツール（音符を置かないツール）を使う。
                   // それらのツールでは buildRestEditReplacement が null を返すため、
                   // 下の setSelected（従来どおりの選択）へ落ちる。
-                  setScore(prev=>{
+                  setHitScore(prev=>{
                     const next=prev.map(cloneMeasureData);
                     // 声部1側の休符補完は従来どおり必要（声部2の拍位置合わせのため）。
                     fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);

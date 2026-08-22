@@ -255,3 +255,13 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
 - 検証: フルテスト 199ファイル/2132件 緑・lint:ratchet 326（基準値ちょうど）・build 成功・
   実機スモーク（連符数字×非連符=rejected 通知 / 段またぎ往復=handled+成功通知+原状復帰 /
   符頭クリック=選択）
+- **Codex 1巡目（P2: 帰属の単一入口が score 書き込み経路に未接続）への対応**:
+  - `setScoreFor(targetPi)` を導入し（従来の `setScore` は `setScoreFor(pi)` の別名）、
+    クリックテーブル内の score 書き込み4か所は `setHitScore = setScoreFor(hitPi)` 経由に
+  - `updateActiveEvent` に attribution 引数（既定 = 帯のパート+アクティブ声部）を追加し、
+    テーブル内の9呼び出しは `updateHitEvent`（hitPi/hitVoice 固定）経由に。'band' では既定値と
+    同値のため挙動ゼロ差
+  - **doInsert はあえて帰属引数を持たせない（裁定）**: 挿入は計画（at 位置・空き拍・詰め物・音高）
+    まで描画時の束縛（activeEvs/activeVfNotes/clefHere）から導かれ、書き込み先だけ hitPi へ
+    向けると計画と書き込みが食い違う偽の継ぎ目になる（段3b P1 と同型）。#316 では挿入
+    コンテキストごと選択レイヤー由来へ再導出する。この判断は doInsert 冒頭コメントにも明記
