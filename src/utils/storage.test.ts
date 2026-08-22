@@ -300,8 +300,36 @@ describe('Storage Foundation Tests', () => {
       expect(restoreWorkHistoryGeneration(workId, 999).success).toBe(false);
       localStorage.setItem(getWorkStorageKeys(workId).history, '{broken json');
       expect(loadWorkHistory(workId)).toEqual([]);
-      localStorage.setItem(getWorkStorageKeys(workId).history, JSON.stringify([{ timestamp: 1, data: { bad: true } }]));
+      localStorage.setItem(getWorkStorageKeys(workId).history, JSON.stringify([{ timestamp: 1, checksum: 'x', data: { bad: true } }]));
       expect(loadWorkHistory(workId)).toEqual([]);
+      // 構造は正しいが中身が書き換わった世代（チェックサム不一致）も除かれる
+      pushWorkHistoryGeneration(workId, makeData('valid', 1), { force: true });
+      const stored = JSON.parse(localStorage.getItem(getWorkStorageKeys(workId).history)!);
+      stored[0].data.metadata.title = 'tampered';
+      localStorage.setItem(getWorkStorageKeys(workId).history, JSON.stringify(stored));
+      expect(loadWorkHistory(workId)).toEqual([]);
+    });
+
+    it('現在の内容を履歴へ退避できないときは復元を中止する（上書きしない）', () => {
+      const created = createWork('退避失敗');
+      const workId = created.data!.id;
+      expect(saveWorkAutosaveData(workId, makeData('current', 100)).success).toBe(true);
+      pushWorkHistoryGeneration(workId, makeData('old', 50), { force: true });
+      const target = loadWorkHistory(workId)[0];
+      // setItem を失敗させて退避（push）を不能にする（jsdom の localStorage はインスタンスへ直接スパイする）
+      const original = localStorage.setItem.bind(localStorage);
+      const spy = vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
+        if (key.endsWith('-history')) throw new Error('quota');
+        return original(key, value);
+      });
+      try {
+        const result = restoreWorkHistoryGeneration(workId, target.timestamp);
+        expect(result.success).toBe(false);
+        // 自動保存スロットは上書きされていない
+        expect(loadWorkAutosaveData(workId).data?.metadata.title).toBe('current');
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 

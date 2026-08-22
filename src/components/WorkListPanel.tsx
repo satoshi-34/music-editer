@@ -7,6 +7,7 @@ import { useState, type CSSProperties } from 'react';
 import type { WorkSummary } from '../types/storage';
 import type { WorkHistoryGeneration } from '../utils/storage';
 import { formatWorkTitle, formatWorkUpdatedAt } from '../utils/workDisplay';
+import ConfirmDialog from './ConfirmDialog';
 
 export interface WorkListPanelProps {
   /** 表示する作品一覧（更新の新しい順で渡される想定） */
@@ -49,14 +50,15 @@ export default function WorkListPanel({
     setHistoryWorkId(workId);
   };
 
-  const handleRestore = (work: WorkSummary, generation: WorkHistoryGeneration) => {
-    // 上書きに見える操作なので確認を挟む。実際には「いまの内容」も1世代として積まれるため、
-    // 戻したあとで「戻す前」へも復元できる（その旨を文言で伝える）
-    const ok = window.confirm(
-      `作品「${formatWorkTitle(work.title)}」を ${formatWorkUpdatedAt(generation.timestamp)} の内容に戻します。` +
-      'いまの内容も履歴に残るので、あとで戻せます。よろしいですか？'
-    );
-    if (!ok) return;
+  // 復元の確認待ち（ConfirmDialog を出している間の対象）。
+  // window.confirm は埋め込みブラウザで表示されず常に false になる（＝無言で何も起きない）
+  // ため、新設の復元フローはアプリ内の ConfirmDialog を使う（Issue #221 と同じ理由）
+  const [pendingRestore, setPendingRestore] = useState<{ work: WorkSummary; generation: WorkHistoryGeneration } | null>(null);
+
+  const handleRestoreConfirmed = () => {
+    if (!pendingRestore) return;
+    const { work, generation } = pendingRestore;
+    setPendingRestore(null);
     setHistoryWorkId(null);
     onRestoreHistory(work.id, generation.timestamp);
   };
@@ -145,7 +147,7 @@ export default function WorkListPanel({
                               <button
                                 type="button"
                                 className="ghost"
-                                onClick={() => handleRestore(work, generation)}
+                                onClick={() => setPendingRestore({ work, generation })}
                                 title="この時点の内容へ戻します（いまの内容も履歴に残ります）"
                               >
                                 この時点に戻す
@@ -162,6 +164,16 @@ export default function WorkListPanel({
           </ul>
         )}
       </div>
+      {pendingRestore && (
+        <ConfirmDialog
+          message={`作品「${formatWorkTitle(pendingRestore.work.title)}」を ${formatWorkUpdatedAt(pendingRestore.generation.timestamp)} の内容に戻します。いまの内容も履歴に残るので、あとで戻せます。よろしいですか？`}
+          ariaLabel="復元の確認"
+          confirmLabel="この時点に戻す"
+          cancelLabel="やめる"
+          onConfirm={handleRestoreConfirmed}
+          onCancel={() => setPendingRestore(null)}
+        />
+      )}
     </>
   );
 }

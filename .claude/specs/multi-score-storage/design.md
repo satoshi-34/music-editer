@@ -428,3 +428,18 @@ loadWorkAutosaveData(workId) → applyLoadedScoreData() で画面へ反映
 - storage: 間隔スロットリング/force/上限/戻す往復（現在が積まれる）/異常系 3テスト
 - WorkListPanel: 世代一覧の開閉・空表示・確認ダイアログ経由の復元 2テスト
 - ブラウザ実機: 履歴を開く→「この時点に戻す」→通知+譜面反映まで確認
+
+### 第3段 Codex round1 対応（2026-08-22）
+
+- **復元前に画面の最新内容を同期保存**（P1）: デバウンス中（編集後1.5秒以内）の編集が
+  自動保存にも履歴にも残らないまま上書きされる穴。cancelPendingAutosave の直後に
+  buildCurrentWorkData → saveCurrentWork を通してから復元する
+- **復元確認は ConfirmDialog**（P1）: window.confirm は埋め込みブラウザで表示されず
+  常に false（無言で何も起きない）。既存 ConfirmDialog へ（削除の confirm は既存の残件のまま）
+- **退避失敗時は復元を中止**（P1）: 現在世代を force で積めなかったら上書きしない
+  （「いまの内容も履歴に残る」という確認文言の保証）
+- **満杯時の読み書き**（P2）: isStorageAvailable（テストキー書き込み判定）をやめ、
+  読み取りは try/catch、書き込みは実 setItem の成否で判定。満杯でも既存履歴は読め、
+  古い世代を落として縮めて書く再試行に到達できる
+- **世代チェックサム**（P2）: 設計正本どおり {timestamp, checksum, data}。
+  generateChecksum(JSON.stringify(data)) を保存し、読み取り時に不一致の世代を除く

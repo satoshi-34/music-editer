@@ -98,8 +98,8 @@ describe('作品一覧パネル（Issue #181）', () => {
 
   describe('復元履歴（Issue #109 第3段）', () => {
     const GENERATIONS = [
-      { timestamp: new Date(2026, 7, 4, 20, 0).getTime(), data: {} as never },
-      { timestamp: new Date(2026, 7, 4, 18, 30).getTime(), data: {} as never },
+      { timestamp: new Date(2026, 7, 4, 20, 0).getTime(), checksum: 'x', data: {} as never },
+      { timestamp: new Date(2026, 7, 4, 18, 30).getTime(), checksum: 'x', data: {} as never },
     ];
 
     it('「履歴」で世代一覧が開き、無ければ説明が出る', () => {
@@ -116,17 +116,22 @@ describe('作品一覧パネル（Issue #181）', () => {
       expect(screen.getByText(/復元できる世代はまだありません/)).toBeInTheDocument();
     });
 
-    it('「この時点に戻す」は確認でOKしたときだけ onRestoreHistory を呼ぶ', () => {
+    it('「この時点に戻す」はアプリ内の確認ダイアログで実行したときだけ onRestoreHistory を呼ぶ', () => {
+      // window.confirm は埋め込みブラウザで表示されないため使わない（ConfirmDialog 経由）
       const props = renderPanel({ onListHistory: vi.fn().mockReturnValue(GENERATIONS) });
       fireEvent.click(screen.getByLabelText('春の歌 の復元履歴'));
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
       fireEvent.click(screen.getAllByText('この時点に戻す')[0]);
+      // ダイアログが開き、文言は「いまの内容も履歴に残る」ことを伝える
+      const dialog = screen.getByRole('dialog', { name: '復元の確認' });
+      expect(dialog.textContent).toContain('いまの内容も履歴に残る');
+      // 「やめる」では呼ばれない
+      fireEvent.click(screen.getByText('やめる'));
       expect(props.onRestoreHistory).not.toHaveBeenCalled();
-      confirmSpy.mockReturnValue(true);
+      // もう一度開いて実行ボタンで確定すると呼ばれる
       fireEvent.click(screen.getAllByText('この時点に戻す')[0]);
+      const confirmButton = screen.getAllByRole('button', { name: 'この時点に戻す' }).at(-1)!;
+      fireEvent.click(confirmButton);
       expect(props.onRestoreHistory).toHaveBeenCalledWith('work-new', GENERATIONS[0].timestamp);
-      // 確認文言は「いまの内容も履歴に残る」ことを伝える
-      expect(String(confirmSpy.mock.calls.at(-1)![0])).toContain('いまの内容も履歴に残る');
     });
   });
 

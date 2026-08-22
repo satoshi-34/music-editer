@@ -2441,6 +2441,11 @@ export default function ScorePage() {
       復元した内容が編集中の内容で上書きされて元の木阿弥になるため、先に止める */
   const handleRestoreWorkHistory = useCallback(async (workId: string, timestamp: number) => {
     cancelPendingAutosave();
+    // 画面の最新内容を先に同期保存する（Codex round1 P1）。デバウンス中の編集が
+    // 自動保存にも履歴にも残らないまま復元で上書きされるのを防ぐ。
+    // 別作品の履歴を復元する場合も、編集中の作品の未保存分をここで確定させる
+    const currentData = buildCurrentWorkDataRef.current();
+    if (currentData) saveCurrentWork(currentData);
     const restored = restoreFromHistory(workId, timestamp);
     if (!restored) return;
     if (workId === currentWorkId) {
@@ -2448,7 +2453,7 @@ export default function ScorePage() {
     }
     setShowWorkList(false);
     notifyScoreEdit(describeWorkHistoryRestored(timestamp));
-  }, [applyLoadedScoreData, cancelPendingAutosave, currentWorkId, restoreFromHistory]);
+  }, [applyLoadedScoreData, cancelPendingAutosave, currentWorkId, restoreFromHistory, saveCurrentWork]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
