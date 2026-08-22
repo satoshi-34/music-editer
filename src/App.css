@@ -1448,6 +1448,14 @@ button.ghost.active:hover:not(:disabled) {
 /* ── アプリ内ヘルプ（Issue #341） ─────────────────────────────
    ヘッダー右端の「❓ ヘルプ」から開くモーダル。dropdown-overlay（既存）で背景を閉じ、
    本体は画面中央に固定して中身だけスクロールさせる */
+/* ヘルプ専用の全画面オーバーレイ。dropdown-overlay と違いツールバーごと覆う
+   （モーダル表示中に裏のタブ切替・Undo/Redo を押せないようにする） */
+.help-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .18);
+  z-index: 999;
+}
 .help-panel {
   position: fixed;
   top: 8vh;

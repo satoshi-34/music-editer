@@ -31,7 +31,7 @@ describe('HelpPanel', () => {
     const onClose = vi.fn();
     const { container } = render(<HelpPanel onClose={onClose} />);
     fireEvent.click(screen.getByLabelText('ヘルプを閉じる'));
-    fireEvent.click(container.querySelector('.dropdown-overlay')!);
+    fireEvent.click(container.querySelector('.help-overlay')!);
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 

@@ -76,7 +76,9 @@ export default function HelpPanel({ onClose }: Props) {
 
   return (
     <>
-      <div className="dropdown-overlay" onClick={onClose} />
+      {/* ツールバーも含む全画面を覆う専用オーバーレイ。dropdown-overlay はヘッダーの
+          下から始まるため、流用するとヘルプの裏でタブ切替や Undo が押せてしまう（Codex round2 P2） */}
+      <div className="help-overlay" onClick={onClose} />
       <div className="help-panel" role="dialog" aria-label="ヘルプ" aria-modal="true" onKeyDown={handleKeyDown}>
         <div className="help-panel-head">
           <strong>ヘルプ</strong>
