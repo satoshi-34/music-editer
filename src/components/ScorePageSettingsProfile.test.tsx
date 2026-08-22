@@ -47,11 +47,11 @@ function openResetMenu() {
   fireEvent.click(screen.getByTestId('layout-reset-menu-toggle'));
 }
 
-// 「新規作成」ボタンは「その他」タブ（SaveLoadButtons）にあるため、そちらへ切り替えてから押す。
+// 「新規作成」ボタンは「ファイル」タブ（旧・その他、#109 第4段で改名）にあるため、そちらへ切り替えてから押す。
 // Issue #221 で確認が window.confirm からアプリ内ダイアログへ変わったので、
 // 続けてダイアログの OK まで押して初めて新規作成が走る。
 function clickNewScore() {
-  fireEvent.click(screen.getByRole('tab', { name: 'その他' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
   fireEvent.click(screen.getByRole('button', { name: '新規作成' }));
   fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
 }

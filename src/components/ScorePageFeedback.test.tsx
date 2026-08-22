@@ -33,7 +33,7 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-const TOOLBAR_TABS = ['音符・休符', '演奏記号', '楽譜設定', 'レイアウト', '再生・音色', 'その他'];
+const TOOLBAR_TABS = ['音符・休符', '演奏記号', '楽譜設定', 'レイアウト', '再生・音色', 'ファイル'];
 
 describe('フィードバックボタン', () => {
   beforeEach(() => {

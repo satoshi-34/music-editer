@@ -1,178 +1,79 @@
 // src/components/SaveLoadButtons.test.tsx
-// Property-based tests for SaveLoadButtons UI component
-// Feature: score-save-load, Property 11: UIローディング状態
+// 「ファイル」タブの基本操作コンポーネントのテスト。
+// 手動「保存」「読込」ボタンとファイル保存/開くボタンは #109 第4段で廃止した
+// （ブラウザ内保存は作品単位の自動保存+復元履歴、ファイル入出力は「書き出し」「開く」
+// メニューへ統合）。ここに残るのは 新規作成・右下インジケータ・サンプル（開発用）だけ。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
-import * as fc from 'fast-check';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import SaveLoadButtons, { type SaveLoadButtonsProps } from './SaveLoadButtons';
 
-// Setup jest-dom matchers
 import '@testing-library/jest-dom';
 
+const baseProps: SaveLoadButtonsProps = {
+  isLoading: false,
+};
+
 describe('SaveLoadButtons Component Tests', () => {
-  beforeEach(() => {
+  beforeEach(() => cleanup());
+  afterEach(() => cleanup());
+
+  it('新規作成ボタンはハンドラがあるときだけ描画され、読込中は押せない', () => {
+    const onNewScore = vi.fn();
+    const { rerender } = render(<SaveLoadButtons {...baseProps} onNewScore={onNewScore} />);
+    const button = screen.getByTitle('新しい空の譜面を作成');
+    fireEvent.click(button);
+    expect(onNewScore).toHaveBeenCalledTimes(1);
+
+    rerender(<SaveLoadButtons {...baseProps} onNewScore={onNewScore} isLoading={true} />);
+    expect(screen.getByTitle('新しい空の譜面を作成')).toBeDisabled();
+
+    rerender(<SaveLoadButtons {...baseProps} />);
+    expect(screen.queryByTitle('新しい空の譜面を作成')).not.toBeInTheDocument();
+  });
+
+  it('廃止した手動「保存」「読込」「ファイル保存」「ファイルを開く」ボタンは描画されない', () => {
+    render(<SaveLoadButtons {...baseProps} onNewScore={vi.fn()} />);
+    expect(screen.queryByText('保存')).not.toBeInTheDocument();
+    expect(screen.queryByText('読込')).not.toBeInTheDocument();
+    expect(screen.queryByText('ファイル保存')).not.toBeInTheDocument();
+    expect(screen.queryByText('ファイルを開く')).not.toBeInTheDocument();
+  });
+
+  it('右下インジケータ: 自動保存の状態と、書き出し結果（成功=status/失敗=alert）を出し分ける', () => {
+    const { rerender } = render(<SaveLoadButtons {...baseProps} autoSaveStatus="saved" />);
+    expect(screen.getByTestId('save-status-indicator')).toHaveTextContent('✓ 自動保存済み');
+    expect(screen.getByTestId('save-status-indicator')).toHaveAttribute('role', 'status');
+
+    // 書き出しの結果は自動保存の表示より優先される
+    rerender(
+      <SaveLoadButtons
+        {...baseProps}
+        autoSaveStatus="saved"
+        exportStatus={{ kind: 'error', message: '⚠ MusicXMLを書き出せませんでした' }}
+      />
+    );
+    const indicator = screen.getByTestId('save-status-indicator');
+    expect(indicator).toHaveTextContent('書き出せませんでした');
+    // 失敗は読み上げに割り込ませる
+    expect(indicator).toHaveAttribute('role', 'alert');
+  });
+
+  it('サンプル操作（開発用）はハンドラがあるときだけ描画される', () => {
+    const onLoadSample = vi.fn();
+    render(
+      <SaveLoadButtons
+        {...baseProps}
+        onLoadSample={onLoadSample}
+        onSaveCurrentAsSample={vi.fn()}
+        canSaveCurrentAsSample={true}
+      />
+    );
+    fireEvent.click(screen.getByTitle('選択したサンプル譜面を読み込み'));
+    expect(onLoadSample).toHaveBeenCalledWith('fur-elise');
+
     cleanup();
-  });
-
-  afterEach(() => {
-    cleanup();
-  });
-
-  describe('Property 11: UIローディング状態', () => {
-    /**
-     * Feature: score-save-load, Property 11: UIローディング状態
-     * **Validates: Requirements 3.4**
-     * 
-     * For any save or load operation, the UI should display appropriate loading states during the operation
-     */
-    it('should display appropriate loading states for any save or load operation', { timeout: 30000 }, () => {
-      fc.assert(
-        fc.property(
-          fc.boolean(), // isSaving
-          fc.boolean(), // isLoading
-          fc.boolean(), // hasStoredData
-          fc.option(fc.string({ minLength: 1, maxLength: 100 }), { nil: null }), // error
-          (isSaving, isLoading, hasStoredData, error) => {
-            const mockOnSave = vi.fn();
-            const mockOnLoad = vi.fn();
-
-            const props: SaveLoadButtonsProps = {
-              onSave: mockOnSave,
-              onLoad: mockOnLoad,
-              isSaving,
-              isLoading,
-              hasStoredData,
-              error
-            };
-
-            const { unmount } = render(<SaveLoadButtons {...props} />);
-
-            try {
-              // Check save button loading state
-              const saveButton = screen.getByTitle('現在の譜面をブラウザに保存');
-              if (isSaving) {
-                // When saving, button should show "保存中..." and be disabled
-                expect(saveButton).toHaveTextContent('保存中...');
-                expect(saveButton).toBeDisabled();
-              } else {
-                // When not saving, button should show "保存" and be enabled (unless loading)
-                expect(saveButton).toHaveTextContent('保存');
-                if (isLoading) {
-                  expect(saveButton).toBeDisabled();
-                } else {
-                  expect(saveButton).not.toBeDisabled();
-                }
-              }
-
-              // Check load button loading state
-              const loadButton = hasStoredData 
-                ? screen.getByTitle('保存された譜面を読み込み')
-                : screen.getByTitle('保存されたデータがありません');
-              
-              if (isLoading) {
-                // When loading, button should show "読込中..." and be disabled
-                expect(loadButton).toHaveTextContent('読込中...');
-                expect(loadButton).toBeDisabled();
-              } else {
-                // When not loading, button should show "読込"
-                expect(loadButton).toHaveTextContent('読込');
-                // Load button should be disabled if saving, loading, or no stored data
-                if (isSaving || isLoading || !hasStoredData) {
-                  expect(loadButton).toBeDisabled();
-                } else {
-                  expect(loadButton).not.toBeDisabled();
-                }
-              }
-
-              // Check error display
-              if (error && error.trim().length > 0) {
-                const errorElement = screen.getByRole('alert');
-                expect(errorElement).toBeInTheDocument();
-                // toHaveTextContent は DOM 側のテキストの連続空白を 1 つに潰して比較するが、
-                // 期待値の文字列はそのまま使うため、エラー文言に連続空白が含まれると
-                // （例: "!  !"）一致しなくなる。期待値側も同じルールで正規化してから比較する
-                expect(errorElement).toHaveTextContent(error.trim().replace(/\s+/g, ' '));
-              } else {
-                expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-              }
-
-              // Check button states consistency
-              // Both buttons should be disabled when either operation is in progress
-              if (isSaving || isLoading) {
-                expect(saveButton).toBeDisabled();
-                expect(loadButton).toBeDisabled();
-              }
-
-              // Load button should be disabled when no stored data exists
-              if (!hasStoredData) {
-                expect(loadButton).toBeDisabled();
-              }
-            } finally {
-              unmount();
-              cleanup();
-            }
-          }
-        ),
-        { numRuns: 20 } // 50から20に削減
-      );
-    });
-  });
-
-  describe('UI Integration Tests', () => {
-    it('should render save and load buttons with correct labels', () => {
-      const props: SaveLoadButtonsProps = {
-        onSave: vi.fn(),
-        onLoad: vi.fn(),
-        isSaving: false,
-        isLoading: false,
-        hasStoredData: true
-      };
-
-      render(<SaveLoadButtons {...props} />);
-
-      expect(screen.getByTitle('現在の譜面をブラウザに保存')).toBeInTheDocument();
-      expect(screen.getByTitle('保存された譜面を読み込み')).toBeInTheDocument();
-    });
-
-    it('should show appropriate tooltips based on stored data availability', () => {
-      const propsWithData: SaveLoadButtonsProps = {
-        onSave: vi.fn(),
-        onLoad: vi.fn(),
-        isSaving: false,
-        isLoading: false,
-        hasStoredData: true
-      };
-
-      const { rerender } = render(<SaveLoadButtons {...propsWithData} />);
-      
-      const loadButton = screen.getByTitle('保存された譜面を読み込み');
-      expect(loadButton).toHaveAttribute('title', '保存された譜面を読み込み');
-
-      // Test without stored data
-      const propsWithoutData: SaveLoadButtonsProps = {
-        ...propsWithData,
-        hasStoredData: false
-      };
-
-      rerender(<SaveLoadButtons {...propsWithoutData} />);
-      const disabledLoadButton = screen.getByTitle('保存されたデータがありません');
-      expect(disabledLoadButton).toHaveAttribute('title', '保存されたデータがありません');
-    });
-
-    it('should render a new score button when handler is provided', () => {
-      const props: SaveLoadButtonsProps = {
-        onNewScore: vi.fn(),
-        onSave: vi.fn(),
-        onLoad: vi.fn(),
-        isSaving: false,
-        isLoading: false,
-        hasStoredData: true
-      };
-
-      render(<SaveLoadButtons {...props} />);
-
-      expect(screen.getByTitle('新しい空の譜面を作成')).toHaveTextContent('新規作成');
-    });
+    render(<SaveLoadButtons {...baseProps} />);
+    expect(screen.queryByTitle('選択したサンプル譜面を読み込み')).not.toBeInTheDocument();
   });
 });

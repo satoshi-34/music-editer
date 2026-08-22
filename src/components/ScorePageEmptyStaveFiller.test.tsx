@@ -118,7 +118,8 @@ describe('空の段でページを満たす（Issue #41）', () => {
     const { container } = render(<ScorePage />);
     expect(container.querySelectorAll('.empty-stave-filler').length).toBeGreaterThan(0);
 
-    const otherTab = screen.getByRole('tab', { name: 'その他' });
+    // 印刷プレビューは #109 第4段で「レイアウト」タブへ移動した
+    const otherTab = screen.getByRole('tab', { name: 'レイアウト' });
     fireEvent.click(otherTab);
     const toggleButton = await screen.findByRole('button', { name: /印刷プレビュー/ });
     fireEvent.click(toggleButton);

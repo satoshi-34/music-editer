@@ -472,8 +472,8 @@ export default function ScorePage() {
   }, [titleFontId]);
 
   const {
-    saveScore, loadScore, hasStoredData,
-    error, isLoading, isSaving
+    loadScore, hasStoredData,
+    error, isLoading
   } = useScoreStorage();
   // 複数作品の保存（Issue #181・第2段）。「いまどの作品を編集しているか」と
   // 作品一覧の操作（切替・新規作成・削除）はこのフックが受け持つ。
@@ -526,36 +526,16 @@ export default function ScorePage() {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
     fileSaveWarningTimerRef.current = setTimeout(() => setFileSaveWarning(null), 10000);
   }, []);
-  // 「保存」ボタン（手動保存）の結果表示（Issue #229 のファイル保存とは別経路・Issue #236）。
-  // 自動保存インジケータと同じ場所・同じ体裁で数秒だけ出すため、状態だけをここで持つ。
-  const [manualSaveStatus, setManualSaveStatus] = useState<'idle' | 'saved' | 'failed'>('idle');
-  const manualSaveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 書出（MusicXML / MIDI）の結果表示（Issue #278）。押しても成功・失敗のどちらも画面に出ず、
-  // 例外は誰も捕まえずコンソールに流れるだけだったため、手動保存と同じ右下のインジケータで知らせる。
-  // 「どちらの書出か」「なぜ失敗したか」で文言が変わるので、状態名だけでなく文字列で持つ。
+  // 書き出し（ファイル / MusicXML / MIDI）の結果表示（Issue #278）。押しても成功・失敗の
+  // どちらも画面に出ないと分からないため、右下のインジケータで知らせる。
+  // 「どの書き出しか」「なぜ失敗したか」で文言が変わるので、状態名ではなく文字列で持つ。
+  // ※手動「保存」の結果表示（Issue #236 の manualSaveStatus）は #109 第4段で保存ボタンごと廃止
   const [exportStatus, setExportStatus] = useState<ExportStatus>(null);
   const exportStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showManualSaveStatus = useCallback((status: 'saved' | 'failed') => {
-    setManualSaveStatus(status);
-    if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
-    // 直前の書出の結果が右下に残っていると、あとから押した「保存」の結果がそれに隠れてしまう
-    // （同じインジケータを共用しているため）。新しい操作の結果を出す前に古い表示を消しておく。
-    if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
-    setExportStatus(null);
-    // 成功は自動保存の通知と同じ 3 秒。失敗は「なぜ保存できなかったか」の詳細
-    // （赤いエラー表示）まで目を移してもらう必要があるため、長めに 10 秒残す。
-    manualSaveStatusTimerRef.current = setTimeout(
-      () => setManualSaveStatus('idle'),
-      status === 'saved' ? 3000 : 10000
-    );
-  }, []);
   const showExportStatus = useCallback((kind: 'success' | 'error', message: string) => {
     setExportStatus({ kind, message });
     if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
-    // 上の showManualSaveStatus と対称。古い保存結果に新しい書出結果が隠れないようにする
-    if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
-    setManualSaveStatus('idle');
-    // 表示時間は手動保存とそろえる（成功3秒・失敗10秒）。失敗は理由まで読む時間が要る
+    // 表示時間は成功3秒・失敗10秒。失敗は理由まで読む時間が要る
     exportStatusTimerRef.current = setTimeout(
       () => setExportStatus(null),
       kind === 'success' ? 3000 : 10000
@@ -564,7 +544,6 @@ export default function ScorePage() {
   // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける
   useEffect(() => () => {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
-    if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
     if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
   }, []);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
@@ -1947,17 +1926,6 @@ export default function ScorePage() {
     return { metadata, parts };
   }, [title, subtitle, lyricist, composer, arranger, scoreType, instrumentation, quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData]);
 
-  const handleSave = async () => {
-    const { metadata, parts } = buildScoreData();
-    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
-    if (saved) {
-      setStoredDataAvailable(true);
-    }
-    // 成否のどちらでも画面に結果を出す（Issue #236）。以前は保存できても画面が
-    // まったく変わらず、押した本人に「保存されたのか」が分からなかった。
-    showManualSaveStatus(saved ? 'saved' : 'failed');
-  };
-
   /**
    * 画面を空の新規譜面へ戻す（保存データには触れない）。
    * 「新規作成」だけでなく、作品の切替先が空だったとき・編集中の作品を削除したときにも
@@ -2466,62 +2434,41 @@ export default function ScorePage() {
     notifyScoreEdit(describeWorkHistoryRestored(timestamp));
   }, [applyLoadedScoreData, cancelPendingAutosave, currentWorkId, restoreFromHistory, saveCurrentWork]);
 
-  const handleLoad = async () => {
+  /**
+   * 廃止した手動保存スロット（旧「保存」ボタンの保存先）のデータを、新しい作品として
+   * 取り込む（#109 第4段の移行導線）。旧スロットのデータ自体は消さない（安全側。
+   * 取り込みに失敗しても元データが残るように）。いまの内容は先に保存してから切り替える
+   */
+  const handleImportLegacyManualSave = async () => {
     const loadedData = await loadScore();
     setStoredDataAvailable(hasStoredData());
-    if (loadedData) {
-      setTitle(loadedData.metadata.title);
-      setSubtitle(loadedData.metadata.subtitle);
-      setLyricist(loadedData.metadata.lyricist);
-      setComposer(loadedData.metadata.composer);
-      setArranger(loadedData.metadata.arranger);
-
-      const loadedType = loadedData.scoreType ?? 'single';
-      setKeySignature(normalizeKeySignature(loadedData.keySignature));
-      await setTimeSignature(...normalizeTimeSignature(loadedData.timeSignature));
-      setScoreType(loadedType);
-      setInstrumentation(loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
-      // 旧データには notationMode が無いので、未指定なら実音表示で開く。
-      setNotationMode(loadedData.notationMode ?? 'concert');
-      setTitleFontId(resolveTitleFontOption(loadedData.titleFontId).id);
-      // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
-      setCustomSymbolDefs(loadedData.customSymbolDefs ?? []);
-      if (loadedData.measuresPerSystem && loadedData.measuresPerSystem >= 1 && loadedData.measuresPerSystem <= 8) {
-        setMeasuresPerSystem(loadedData.measuresPerSystem);
-      }
-
-      if (loadedType === 'quartet') {
-        const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
-        setQuartetParts(QUARTET_IDS.map(id =>
-          loadedData.parts.find(p => p.partId === id)?.measures ?? []
-        ));
-        setEnsembleParts([]);
-        setEnsembleSecondStaffParts([]);
-      } else if (loadedType === 'ensemble') {
-        const loadedInstrumentation = loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType);
-        setEnsembleParts(loadedInstrumentation.parts.map(part =>
-          loadedData.parts.find(p => p.partId === part.id)?.measures ?? []
-        ));
-        setEnsembleSecondStaffParts(loadedInstrumentation.parts.map(part =>
-          part.staffCount === 2 ? loadedData.parts.find(p => p.partId === ensembleSecondStaffPartId(part.id))?.measures ?? [] : []
-        ));
-      } else {
-        const rightPart = loadedData.parts.find(p => p.clef === 'treble') ?? loadedData.parts[0];
-        const leftPart  = loadedData.parts.find(p => p.clef === 'bass');
-        setRightHandData(rightPart?.measures ?? []);
-        setLeftHandData(leftPart?.measures);
-        setEnsembleParts([]);
-        setEnsembleSecondStaffParts([]);
-      }
-      // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
-      setExtraEditingMeasures(0);
-      // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
-      setSystemMeasureOverrides(loadedData.systemMeasureOverrides ?? []);
-      // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
-      setLastEditedMeasureIndex(null);
-      // 段の間隔の手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
-      setSystemRowGapOverrides(loadedData.systemRowGapOverrides ?? []);
+    if (!loadedData) {
+      notifyScoreEdit('取り込める以前の手動保存データが見つかりませんでした');
+      return;
     }
+    cancelPendingAutosave();
+    startNewWork(buildCurrentWorkDataRef.current());
+    await applyLoadedScoreData(loadedData);
+    notifyScoreEdit('以前の手動保存を新しい作品として取り込みました（元のデータはそのまま残っています）');
+  };
+
+  /** 「書き出し」メニュー（#109 第4段）。選んだ形式の既存ハンドラへ振り分けて select は空へ戻す */
+  const handleExportMenu = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const kind = event.target.value;
+    event.target.value = '';
+    if (kind === 'file') handleExportFile();
+    else if (kind === 'musicxml') handleExportMusicXml();
+    else if (kind === 'midi') handleExportMidi();
+    else if (kind === 'pdf') void handleExportPdf();
+  };
+
+  /** 「開く」メニュー（#109 第4段） */
+  const handleOpenMenu = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const kind = event.target.value;
+    event.target.value = '';
+    if (kind === 'file') fileImportRef.current?.click();
+    else if (kind === 'musicxml') musicXmlInputRef.current?.click();
+    else if (kind === 'legacy') void handleImportLegacyManualSave();
   };
 
   const handleLoadSample = useCallback((sampleId: DemoScoreId) => {
@@ -4333,7 +4280,8 @@ export default function ScorePage() {
     { id: 'score', label: '楽譜設定' },
     { id: 'layout', label: 'レイアウト' },
     { id: 'playback', label: '再生・音色' },
-    { id: 'other', label: 'その他' },
+    // 第4段（#109）: ファイル操作だけが残ったため「その他」から改名（id は保存済み状態の互換のため据え置き）
+    { id: 'other', label: 'ファイル' },
   ];
   const instrumentationGroups = useMemo(() => {
     // `solo` は「括弧でまとめない」指定なので、画面上のグループ数にも含めない。
@@ -4530,6 +4478,63 @@ export default function ScorePage() {
                   </button>
                 </div>
               )}
+              {/* 移調は「ファイル」タブ（旧・その他）から移動（#109 第4段）。
+                  ファイル操作ではなく小節選択に対する編集操作なので、小節の挿入・削除の隣に置く */}
+              {selectedMeasures && (
+                <div className="coord-correction-wrap">
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => { setTransposeError(null); setShowTransposePanel(v => !v); }}
+                    disabled={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null}
+                    title={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null
+                      ? describeSliceMeasureOpUnavailable('transpose')
+                      : '選択中の小節を半音/全音/オクターブ単位で移調します'}
+                  >
+                    移調
+                  </button>
+                  {showTransposePanel && (
+                    <>
+                      <div className="dropdown-overlay" onClick={() => setShowTransposePanel(false)} />
+                      <div className="coord-panel">
+                        <p className="coord-panel-note">選択中の小節（全パート）を移調します</p>
+                        <div className="coord-panel-row" style={{ flexWrap: 'wrap', gap: 4 }}>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(1)}>半音上</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(-1)}>半音下</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(2)}>全音上</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(-2)}>全音下</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(12)}>オクターブ上</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(-12)}>オクターブ下</button>
+                        </div>
+                        <div className="coord-panel-row">
+                          <input
+                            type="number"
+                            min={-12}
+                            max={12}
+                            value={transposeSemitoneInput}
+                            onChange={e => setTransposeSemitoneInput(e.target.value)}
+                            aria-label="移調する半音数"
+                            style={{ width: 56 }}
+                          />
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => {
+                              const n = Math.max(-12, Math.min(12, Number(transposeSemitoneInput)));
+                              if (!Number.isNaN(n)) handleTranspose(n);
+                            }}
+                          >
+                            半音数指定で移調
+                          </button>
+                        </div>
+                        {transposeError && (
+                          <p className="coord-panel-note" style={{ color: 'crimson' }}>{transposeError}</p>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -4707,6 +4712,17 @@ export default function ScorePage() {
 
           {activeToolbarTab === 'layout' && (
             <div className="toolbar-section toolbar-layout-controls">
+              {/* 印刷プレビューは「ファイル」タブ（旧・その他）から移動（#109 第4段）。
+                  レイアウト調整のための表示なので、余白・段組みの操作と同じ場所に置く */}
+              <button
+                type="button"
+                className={`ghost${isPrintPreview ? ' active' : ''}`}
+                onClick={() => setIsPrintPreview(v => !v)}
+                aria-pressed={isPrintPreview}
+                title="実際に印刷される見た目（A4ページ・余白・段区切り）を画面上で確認しながら、ページ余白や段の間隔などのレイアウト調整ができます"
+              >
+                印刷プレビュー{isPrintPreview ? ' ON' : ''}
+              </button>
               {/* スライダーを「用紙と余白 / 譜面の密度 / タイトル」の3グループへ分ける（Issue #143）。
                   以前は10個近くが見出しなしで横一列に並び、どれが紙面の大きさに効いて
                   どれが詰め具合に効くのかが読み取れなかった。グループの箱と見出しを付けて、
@@ -5149,19 +5165,12 @@ export default function ScorePage() {
             <div className="toolbar-section toolbar-other-controls">
               <SaveLoadButtons
                 onNewScore={handleNewScore}
-                onSave={handleSave}
-                onLoad={handleLoad}
                 onLoadSample={import.meta.env.DEV ? handleLoadSample : undefined}
                 onSaveCurrentAsSample={import.meta.env.DEV ? handleSaveCurrentAsSample : undefined}
-                onExportFile={handleExportFile}
-                onImportFile={() => fileImportRef.current?.click()}
-                isSaving={isSaving}
                 isLoading={isLoading}
-                hasStoredData={storedDataAvailable}
                 canSaveCurrentAsSample={scoreType === 'piano'}
                 hasCustomPianoSample={hasCustomPianoSample}
                 autoSaveStatus={autoSaveStatus}
-                manualSaveStatus={manualSaveStatus}
                 exportStatus={exportStatus}
                 restoreNotice={restoreNotice}
                 warningNotice={fileSaveWarning}
@@ -5203,73 +5212,32 @@ export default function ScorePage() {
                 style={{ display: 'none' }}
                 onChange={handleImportFile}
               />
-              <button className="ghost" onClick={handleExportPdf} title="ブラウザの印刷ダイアログを開き、「PDFとして保存」を選ぶと楽譜をPDF書出できます">PDF書出 / 印刷</button>
+              {/* 書き出し・開くの2メニュー（#109 第4段）。個別ボタンの羅列をやめ、
+                  既存の編成選択と同じ select パターンで形式だけを選ぶ。
+                  value は常に空（実行のたびにプレースホルダーへ戻る） */}
+              <label className="toolbar-select-label" title="譜面をファイルや他形式で書き出します">
+                <span>書き出し</span>
+                <select value="" onChange={handleExportMenu} aria-label="書き出し">
+                  <option value="" disabled>形式を選ぶ…</option>
+                  <option value="file">ファイル (.score.json)</option>
+                  <option value="musicxml">MusicXML</option>
+                  <option value="midi">MIDI</option>
+                  <option value="pdf">PDF / 印刷</option>
+                </select>
+              </label>
+              <label className="toolbar-select-label" title="ファイルから譜面を開きます（ブラウザ内の作品切替は「作品一覧」から）">
+                <span>開く</span>
+                <select value="" onChange={handleOpenMenu} aria-label="開く">
+                  <option value="" disabled>開くものを選ぶ…</option>
+                  <option value="file">ファイル (.score.json)</option>
+                  <option value="musicxml">MusicXML読込</option>
+                  {storedDataAvailable && (
+                    <option value="legacy">以前の手動保存を取り込む</option>
+                  )}
+                </select>
+              </label>
               {/* フィードバックボタンはヘッダーのタブ行右端へ移動した（Issue #142）。
                   譜面操作ではなくアプリへのメタ操作であり、どのタブからでも押せる必要があるため。 */}
-              <button
-                type="button"
-                className={`ghost${isPrintPreview ? ' active' : ''}`}
-                onClick={() => setIsPrintPreview(v => !v)}
-                aria-pressed={isPrintPreview}
-                title="実際に印刷される見た目（A4ページ・余白・段区切り）を画面上で確認しながら、ページ余白や段の間隔などのレイアウト調整ができます"
-              >
-                印刷プレビュー{isPrintPreview ? ' ON' : ''}
-              </button>
-              {selectedMeasures && (
-                <div className="coord-correction-wrap">
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => { setTransposeError(null); setShowTransposePanel(v => !v); }}
-                    disabled={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null}
-                    title={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null
-                      ? describeSliceMeasureOpUnavailable('transpose')
-                      : '選択中の小節を半音/全音/オクターブ単位で移調します'}
-                  >
-                    移調
-                  </button>
-                  {showTransposePanel && (
-                    <>
-                      <div className="dropdown-overlay" onClick={() => setShowTransposePanel(false)} />
-                      <div className="coord-panel">
-                        <p className="coord-panel-note">選択中の小節（全パート）を移調します</p>
-                        <div className="coord-panel-row" style={{ flexWrap: 'wrap', gap: 4 }}>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(1)}>半音上</button>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(-1)}>半音下</button>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(2)}>全音上</button>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(-2)}>全音下</button>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(12)}>オクターブ上</button>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(-12)}>オクターブ下</button>
-                        </div>
-                        <div className="coord-panel-row">
-                          <input
-                            type="number"
-                            min={-12}
-                            max={12}
-                            value={transposeSemitoneInput}
-                            onChange={e => setTransposeSemitoneInput(e.target.value)}
-                            aria-label="移調する半音数"
-                            style={{ width: 56 }}
-                          />
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => {
-                              const n = Math.max(-12, Math.min(12, Number(transposeSemitoneInput)));
-                              if (!Number.isNaN(n)) handleTranspose(n);
-                            }}
-                          >
-                            半音数指定で移調
-                          </button>
-                        </div>
-                        {transposeError && (
-                          <p className="coord-panel-note" style={{ color: 'crimson' }}>{transposeError}</p>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
               {partExtractionOptions.length > 0 && (
                 <label className="toolbar-select-label" title="合奏練習用に、選んだ1パートだけの譜面を表示・印刷します（音符の入力・削除はそのまま総譜へ反映されます。大譜表パートは閲覧・印刷専用）">
                   <span>パート譜表示</span>
@@ -5287,9 +5255,6 @@ export default function ScorePage() {
                   </select>
                 </label>
               )}
-              <button className="ghost" onClick={handleExportMusicXml}>MusicXML書出</button>
-              <button className="ghost" onClick={handleExportMidi}>MIDI書出</button>
-              <button className="ghost" onClick={() => musicXmlInputRef.current?.click()}>MusicXML読込</button>
               <input
                 ref={musicXmlInputRef}
                 type="file"

@@ -32,9 +32,9 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-/** 「新規作成」ボタンは「その他」タブ（SaveLoadButtons）にあるため、そちらへ切り替えてから押す */
+/** 「新規作成」ボタンは「ファイル」タブ（旧・その他、#109 第4段で改名）にあるため、そちらへ切り替えてから押す */
 function clickNewScoreButton() {
-  fireEvent.click(screen.getByRole('tab', { name: 'その他' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
   fireEvent.click(screen.getByRole('button', { name: '新規作成' }));
 }
 
