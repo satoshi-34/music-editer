@@ -4334,6 +4334,23 @@ export default function ScorePage() {
   // どのタブを開いていても「やりたいこと」から操作を引けるようにする
   const [showHelp, setShowHelp] = useState(false);
 
+  // ? キーでヘルプを開く（Issue #114）。ボタンを探さなくても説明書へ届くようにする。
+  // 音価等のショートカット群とは別の effect にしているのは、あちらの
+  // 「印刷プレビュー中は無効」ゲートを共有しないため（ヘルプは閲覧なのでプレビュー中も開けてよい）
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== '?') return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      setShowHelp(true);
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
   const feedbackControls = (
     <div className="toolbar-feedback">
       {/* 通知はボタンの手前（左）に出す。あとに置くとボタンが通知の幅ぶん
@@ -4352,7 +4369,7 @@ export default function ScorePage() {
         className="toolbar-feedback-button"
         onClick={() => setShowHelp(true)}
         aria-label="ヘルプ"
-        title="操作の説明書を開きます。「タイを付けたい」のような目的からも、タブごとの説明からも探せます"
+        title="操作の説明書を開きます（? キーでも開けます）。「タイを付けたい」のような目的からも、タブごとの説明からも探せます"
       >
         <span aria-hidden="true">❓</span>{' '}
         <span className="toolbar-feedback-label">ヘルプ</span>
