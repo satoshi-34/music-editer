@@ -310,6 +310,37 @@ describe('Storage Foundation Tests', () => {
       expect(loadWorkHistory(workId)).toEqual([]);
     });
 
+    it('現在の内容を読み取れないときも復元を中止する（退避不要と混同しない）', () => {
+      const created = createWork('読取失敗');
+      const workId = created.data!.id;
+      expect(saveWorkAutosaveData(workId, makeData('current', 100)).success).toBe(true);
+      pushWorkHistoryGeneration(workId, makeData('old', 50), { force: true });
+      const target = loadWorkHistory(workId)[0];
+      // primary と backup を両方壊して読み取り失敗にする
+      const keys = getWorkStorageKeys(workId);
+      localStorage.setItem(keys.primary, '{broken');
+      localStorage.setItem(keys.backup, '{broken');
+      const result = restoreWorkHistoryGeneration(workId, target.timestamp);
+      expect(result.success).toBe(false);
+    });
+
+    it('同じ内容が直前に世代化済みなら、復元前の退避で二重に積まない', () => {
+      const created = createWork('重複排除');
+      const workId = created.data!.id;
+      const current = makeData('current', 100);
+      expect(saveWorkAutosaveData(workId, current).success).toBe(true);
+      pushWorkHistoryGeneration(workId, makeData('old', 50), { force: true });
+      // ScorePage の復元前同期保存に相当: current を世代化しておく
+      pushWorkHistoryGeneration(workId, current, { force: true });
+      const before = loadWorkHistory(workId);
+      const target = before.find((item) => item.data.metadata.title === 'old')!;
+      const result = restoreWorkHistoryGeneration(workId, target.timestamp);
+      expect(result.success).toBe(true);
+      // current の世代は1つだけ（force の二重積みで枠を消費しない）
+      const titles = loadWorkHistory(workId).map((item) => item.data.metadata.title);
+      expect(titles.filter((title) => title === 'current')).toHaveLength(1);
+    });
+
     it('現在の内容を履歴へ退避できないときは復元を中止する（上書きしない）', () => {
       const created = createWork('退避失敗');
       const workId = created.data!.id;

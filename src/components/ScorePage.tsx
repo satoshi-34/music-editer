@@ -160,6 +160,7 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
+  describeWorkHistoryRestoreBlocked,
   describeWorkHistoryRestored,
   describeSliceClearNoop,
   describeSliceCopied,
@@ -2445,7 +2446,12 @@ export default function ScorePage() {
     // 自動保存にも履歴にも残らないまま復元で上書きされるのを防ぐ。
     // 別作品の履歴を復元する場合も、編集中の作品の未保存分をここで確定させる
     const currentData = buildCurrentWorkDataRef.current();
-    if (currentData) saveCurrentWork(currentData);
+    if (currentData && !saveCurrentWork(currentData)) {
+      // 最新編集を保存できないまま復元すると、その編集だけが失われる（Codex round2 P1）。
+      // 保存に失敗した理由は useWorkLibrary の workError にも出るが、行き止まりは喋る（#318）
+      notifyScoreEdit(describeWorkHistoryRestoreBlocked());
+      return;
+    }
     const restored = restoreFromHistory(workId, timestamp);
     if (!restored) return;
     if (workId === currentWorkId) {

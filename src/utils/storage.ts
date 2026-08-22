@@ -1283,8 +1283,8 @@ export function loadWorkHistory(workId: string): WorkHistoryGeneration[] {
  * 自動保存の内容を復元履歴へ1世代として積む。
  * 最新世代から WORK_HISTORY_MIN_INTERVAL_MS 以内の保存は積まない（force で無視できる。
  * 「この時点に戻す」の直前退避は force=true で必ず積む）。
- * 容量あふれ（QuotaExceeded）のときは古い世代を1つ落として1回だけ再試行し、
- * それでも書けなければ履歴だけ諦める（自動保存本体は既に成功している）。
+ * 容量あふれのときは古い世代を1つずつ落としながら書けるまで縮めて再試行し
+ * （最後は新しい1世代だけでも残す）、それでも書けなければ失敗を返す。
  */
 export function pushWorkHistoryGeneration(
   workId: string,
@@ -1338,19 +1338,40 @@ export function restoreWorkHistoryGeneration(workId: string, timestamp: number):
     return { success: false, error: { type: StorageErrorType.CORRUPTED_DATA, message: '選択した復元履歴が見つかりません', recoverable: true } };
   }
   // 「いまの内容も履歴に残る」という確認文言の保証: 退避に失敗したら復元自体を中止する
-  // （Codex round1 P1。容量不足などで現在世代を積めないまま上書きすると、戻す前へ復帰できない）
+  // （Codex round1 P1。容量不足などで現在世代を積めないまま上書きすると、戻す前へ復帰できない）。
+  // 現在内容の読み取りに失敗した場合も同じ理由で中止する（round2 P1。チェックサム不一致等で
+  // 「退避すべきものがあるのに読めない」状態を、退避不要と混同しない）
   const currentResult = loadWorkAutosaveData(workId);
-  if (currentResult.success && currentResult.data) {
-    const stashed = pushWorkHistoryGeneration(workId, currentResult.data, { force: true });
-    if (!stashed.success) {
-      return {
-        success: false,
-        error: {
-          type: stashed.error?.type ?? StorageErrorType.QUOTA_EXCEEDED,
-          message: 'いまの内容を履歴へ退避できなかったため、復元を中止しました（ブラウザ保存の空き容量を確認してください）',
-          recoverable: true,
-        },
-      };
+  if (!currentResult.success) {
+    return {
+      success: false,
+      error: {
+        type: currentResult.error?.type ?? StorageErrorType.CORRUPTED_DATA,
+        message: 'いまの内容を読み取れなかったため、復元を中止しました',
+        recoverable: true,
+      },
+    };
+  }
+  if (currentResult.data) {
+    // 直前の同期保存（ScorePage 側）が同じ内容をすでに世代化していれば二重に積まない
+    // （round2 P2。同一内容で2枠消費して古い世代を余分に追い出さないための重複排除）。
+    // 照合キーはチェックサムではなく data.timestamp（保存データの作成時刻）を使う:
+    // 保存→読込のラウンドトリップで migrateData がキー順を変えるため、同一内容でも
+    // JSON 文字列（＝チェックサム）は一致しないことがある
+    const currentTimestamp = currentResult.data.timestamp;
+    const alreadyStashed = loadWorkHistory(workId).some((item) => item.data.timestamp === currentTimestamp);
+    if (!alreadyStashed) {
+      const stashed = pushWorkHistoryGeneration(workId, currentResult.data, { force: true });
+      if (!stashed.success) {
+        return {
+          success: false,
+          error: {
+            type: stashed.error?.type ?? StorageErrorType.QUOTA_EXCEEDED,
+            message: 'いまの内容を履歴へ退避できなかったため、復元を中止しました（ブラウザ保存の空き容量を確認してください）',
+            recoverable: true,
+          },
+        };
+      }
     }
   }
   const saved = saveWorkAutosaveData(workId, generation.data);
