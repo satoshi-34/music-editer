@@ -341,13 +341,25 @@ export function getEventDurationBeats(event: NoteEvent): number {
  * - 声部が2つ以上ある小節でだけ、voices[0] を 'up'、voices[1] 以降を 'down' に強制する。
  *   既存データに個別の stemDirection が保存されていても、2声部共存時はここで上書きする。
  */
+/**
+ * 声部ごとの符幹方向ポリシー（#244 段5-5・§2-5 完了条件）。
+ * 現行は「多声小節では voice0=上・それ以外=下」の固定規則。
+ * 3声・4声に対応するときは、この関数へ「中声の扱い」等の分岐を足すだけでよい
+ * （呼び出し側 resolveVoiceStemDirections は声部数によらず同じループのまま）。
+ * 単声小節（voiceCount<=1）は undefined = VexFlow の自動判定に任せる（従来どおり）。
+ */
+export function voiceStemDirectionFor(voiceIndex: number, voiceCount: number): 'up' | 'down' | undefined {
+  if (voiceCount <= 1) return undefined;
+  return voiceIndex === 0 ? 'up' : 'down';
+}
+
 export function resolveVoiceStemDirections(voices: VoiceData[]): VoiceData[] {
   if (voices.length <= 1) {
     return voices;
   }
   return voices.map((voice, index) => ({
     ...voice,
-    stemDirection: index === 0 ? 'up' : 'down',
+    stemDirection: voiceStemDirectionFor(index, voices.length),
   }));
 }
 

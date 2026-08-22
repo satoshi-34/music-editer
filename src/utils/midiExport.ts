@@ -3,7 +3,7 @@
 // 参照: https://www.midi.org/specifications-old/item/the-midi-1-0-specification
 
 import type { SavedScoreData, NoteEvent } from '../types/storage';
-import { getPrimaryVoiceEvents, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { getMeasureVoices, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 
 // 四分音符あたりのティック数（SMF 標準の 480 が一般的）
 const PPQ = 480;
@@ -117,42 +117,54 @@ function buildNoteTrack(
   // プログラムチェンジ（音色設定）
   events.push({ tick: 0, bytes: [0xc0 | (channel & 0x0f), program] });
 
-  let currentTick = 0;
+  let measureStartTick = 0;
 
   for (const measure of measures) {
     // 小節単位テンポ変更
     if (measure.bpm != null && measure.bpm !== globalBpm) {
       const us = Math.round(60_000_000 / measure.bpm);
       events.push({
-        tick: currentTick,
+        tick: measureStartTick,
         bytes: [0xff, 0x51, 0x03, (us >> 16) & 0xff, (us >> 8) & 0xff, us & 0xff],
       });
     }
 
-    for (const ev of getPrimaryVoiceEvents(measure)) {
-      // 付点1個で1.5倍、複付点(2個)で1.75倍。四捨五入するのは、
-      // 一部の音価×付点の組み合わせで割り切れない場合があるため。
-      const dotMultiplier = ev.dots === 1 ? 1.5 : ev.dots === 2 ? 1.75 : 1;
-      // 連符（tuplet）は notesOccupied/numNotes 倍だけ短くなる（例: 3連符は 2/3 倍）
-      const tupletMultiplier = ev.tuplet && ev.tuplet.numNotes ? ev.tuplet.notesOccupied / ev.tuplet.numNotes : 1;
-      const ticks = Math.round((DUR_TO_TICKS[ev.dur] ?? PPQ) * dotMultiplier * tupletMultiplier);
-      if (!ev.isRest && ev.keys.length > 0) {
-        const midiNotes = ev.keys.map(keyToMidi).filter((n): n is number => n !== null);
-        // Note-On
-        for (const midiNote of midiNotes) {
-          events.push({ tick: currentTick, bytes: [0x90 | (channel & 0x0f), midiNote, 80] });
+    // 全声部を同じ小節開始ティックから並行して書く（#244 段5-5）。
+    // 旧実装は主声部（getPrimaryVoiceEvents）だけを書いており、声部2以降が
+    // MIDI に出ないバグだった（§2-5 で予告済みの修正・挙動差として明記）。
+    // buildTrack が絶対ティックでソートするので、声部ごとに積めばよい。
+    // 小節の長さは最長声部に合わせる（単声部の譜面では従来と同一の進み方）。
+    const voicesForMidi = getMeasureVoices(measure as { events: NoteEvent[] });
+    let maxVoiceTicks = 0;
+    for (const voice of voicesForMidi) {
+      let currentTick = measureStartTick;
+      for (const ev of voice.events) {
+        // 付点1個で1.5倍、複付点(2個)で1.75倍。四捨五入するのは、
+        // 一部の音価×付点の組み合わせで割り切れない場合があるため。
+        const dotMultiplier = ev.dots === 1 ? 1.5 : ev.dots === 2 ? 1.75 : 1;
+        // 連符（tuplet）は notesOccupied/numNotes 倍だけ短くなる（例: 3連符は 2/3 倍）
+        const tupletMultiplier = ev.tuplet && ev.tuplet.numNotes ? ev.tuplet.notesOccupied / ev.tuplet.numNotes : 1;
+        const ticks = Math.round((DUR_TO_TICKS[ev.dur] ?? PPQ) * dotMultiplier * tupletMultiplier);
+        if (!ev.isRest && ev.keys.length > 0) {
+          const midiNotes = ev.keys.map(keyToMidi).filter((n): n is number => n !== null);
+          // Note-On
+          for (const midiNote of midiNotes) {
+            events.push({ tick: currentTick, bytes: [0x90 | (channel & 0x0f), midiNote, 80] });
+          }
+          // Note-Off（次のティックの始点）
+          for (const midiNote of midiNotes) {
+            events.push({ tick: currentTick + ticks - 1, bytes: [0x80 | (channel & 0x0f), midiNote, 0] });
+          }
         }
-        // Note-Off（次のティックの始点）
-        for (const midiNote of midiNotes) {
-          events.push({ tick: currentTick + ticks - 1, bytes: [0x80 | (channel & 0x0f), midiNote, 0] });
-        }
+        currentTick += ticks;
       }
-      currentTick += ticks;
+      maxVoiceTicks = Math.max(maxVoiceTicks, currentTick - measureStartTick);
     }
+    measureStartTick += maxVoiceTicks;
   }
 
   // End of Track
-  events.push({ tick: currentTick, bytes: [0xff, 0x2f, 0x00] });
+  events.push({ tick: measureStartTick, bytes: [0xff, 0x2f, 0x00] });
 
   return buildTrack(events);
 }

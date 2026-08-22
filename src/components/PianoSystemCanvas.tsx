@@ -34,6 +34,7 @@ import {
   SCORE_SELECTION_CLEAR_EVENT,
   describeAbsorbedChordKey,
   describeActiveVoiceSwitched,
+  describeVoiceSwitchUnavailable,
   describeCrossStaffToggled,
   describeCrossStaffUnavailable,
   describeDeletedArc,
@@ -823,9 +824,9 @@ type Props = {
   onMeasureRangeSelect?: (startIndex: number, endIndex: number) => void;
   // カスタム記号定義（記号エディタで作成した奏法記号）。省略時は何も描画しない。
   customSymbolDefs?: CustomSymbolDef[];
-  // 声部切り替えトグル: 0 = 声部1（上声・従来通り measure.events）、1 = 声部2（下声）。
-  // 省略時は 0（従来互換）として扱う。
-  activeVoiceIndex?: 0 | 1;
+  // 声部切り替えトグル: 0 = 声部1（上声）、1 = 声部2（下声）、…（N 声対応で number・#244 段5-5。
+  // 0|1 の制約は ScorePage / パレットの UI 境界にのみ残す）。省略時は 0（従来互換）。
+  activeVoiceIndex?: number;
   /** ScorePage の線形Plannerが計測済みの、現在システム内の小節幅。 */
   plannedMeasureWidths?: number[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
@@ -1986,7 +1987,7 @@ export default function PianoSystemCanvas({
     selected: Sel;
     selectedArc: SelectedArcSel;
     selectedHairpin: SelectedHairpinSel;
-    activeVoiceIndex: 0 | 1;
+    activeVoiceIndex: number;
     beatsPerMeasure: number;
     selectedMeasures: { start: number; end: number } | null;
     disabled: boolean;
@@ -5259,7 +5260,7 @@ export default function PianoSystemCanvas({
           const otherEvs=entry.sourceEvents;
           if(otherVfNotes.length===0)return;
           // 切り替え先の声部。声部トグルは 0/1 の2つだけなので、型もその2値へそろえる。
-          const targetVoiceIndex:0|1=entry.voiceIndex===1?1:0;
+          const targetVoiceIndex=entry.voiceIndex;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const anchors=otherVfNotes.map((n:any,j)=>n.getAbsoluteX?n.getAbsoluteX():measLeft+(j+1)*(measRight-measLeft)/(otherVfNotes.length+1));
           const mids=anchors.slice(0,-1).map((a,j)=>(a+anchors[j+1])/2);
@@ -5280,6 +5281,13 @@ export default function PianoSystemCanvas({
             const switchVoiceAndSelect=(clientX:number,clientY:number)=>{
               const keyIndex=resolveKeyIndexAtClient(clientX,clientY);
               if(keyIndex<0)return;
+              // 編集 UI（声部トグル）は2声まで。3声以降のデータは表示・再生・書き出しのみ
+              // 対応なので、切り替え要求を ScorePage が黙って無視して選択と実状態が
+              // 食い違う前に、ここで理由と対応範囲を伝えて終える（#318・#244 段5-5）
+              if (targetVoiceIndex > 1) {
+                notifyScoreEdit(describeVoiceSwitchUnavailable(targetVoiceIndex));
+                return;
+              }
               setSelectedArc(null);
               setSelectedHairpin(null);
               setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:entry.voiceIndex,keyIndex});

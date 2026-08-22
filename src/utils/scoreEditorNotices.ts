@@ -26,8 +26,8 @@ export const SCORE_SELECTION_CLEAR_EVENT = 'music-editer-score-selection-clear';
 export const SCORE_ACTIVE_VOICE_CHANGE_EVENT = 'music-editer-score-active-voice-change';
 
 export interface ScoreActiveVoiceChangeDetail {
-  /** 切り替え先の声部（0 = 上声/声部1、1 = 下声/声部2） */
-  voiceIndex: 0 | 1;
+  /** 切り替え先の声部（0 = 上声/声部1、1 = 下声/声部2、… N 声対応で number・#244 段5-5） */
+  voiceIndex: number;
 }
 
 export interface ScoreEditNoticeDetail {
@@ -68,7 +68,7 @@ export function requestScoreSelectionClear(): void {
  * ScorePage で、あいだに5つのラッパーが挟まっている事情は通知（notifyScoreEdit）と同じなので、
  * 同じ window の CustomEvent 方式にそろえている。
  */
-export function requestActiveVoiceChange(voiceIndex: 0 | 1): void {
+export function requestActiveVoiceChange(voiceIndex: number): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(
     new CustomEvent<ScoreActiveVoiceChangeDetail>(SCORE_ACTIVE_VOICE_CHANGE_EVENT, { detail: { voiceIndex } })
@@ -83,8 +83,17 @@ export function requestActiveVoiceChange(voiceIndex: 0 | 1): void {
  * 「選択のクリックは全声部・編集の入力はアクティブ声部だけ」へ意図的に変更したので、
  * 誤編集の防止は「切り替わったことが必ず画面に出る」この通知が引き継ぐ。
  */
-export function describeActiveVoiceSwitched(voiceIndex: 0 | 1): string {
+export function describeActiveVoiceSwitched(voiceIndex: number): string {
   return `声部${voiceIndex + 1}に切り替えました`;
+}
+
+/**
+ * UI が対応していない声部（3声以降）への切り替えを求められたときの案内（#244 段5-5）。
+ * データ・再生・書き出しは N 声対応だが、編集 UI（声部トグル）は2声まで。
+ * 黙って無視すると「クリックしたのに何も起きない」行き止まりになる（#318）。
+ */
+export function describeVoiceSwitchUnavailable(voiceIndex: number): string {
+  return `声部${voiceIndex + 1}の音符です（表示・再生・書き出しのみ対応）。編集ツールでの切り替えは声部1・2までです`;
 }
 
 /**

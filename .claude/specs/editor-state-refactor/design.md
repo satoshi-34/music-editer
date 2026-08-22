@@ -417,3 +417,34 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
   （remapAllMeasuresAfterRemoval 等）が未編集小節まで JSON 差分にし、
   findFirstDifferingMeasureIndex の段割り安定化（#67）が全再計画になる回帰を防ぐ。
   「変化が無ければ引数をそのまま返す」（#245）の約束の再確認。テスト1件追加
+
+## 15. 段5-5 の実装記録（2026-08-22・N 声観点の完了条件 = §2-5 末尾の4条件）
+
+- **コアの voices[1] 直接参照を根絶**: musicXmlExport の声部2ブロックを全声部ループへ一般化
+  （<backup> 連鎖・voice 番号 N。2声のときの出力は従来と同一。松葉マップは現行 UI が
+  2声までなので声部2にのみ適用）。残る voices[1] の文字列はコメントのみ
+- **声部2以降が MIDI に出ないバグを修正**（§2-5 予告分・挙動差として明記）:
+  buildNoteTrack を「全声部を同じ小節開始ティックから並行に書く」形へ。小節の進みは
+  最長声部に合わせる（単声部の譜面は従来と同一）
+- **activeVoiceIndex の number 化**: PSC の prop・latestRef・requestActiveVoiceChange・
+  describeActiveVoiceSwitched・ScoreActiveVoiceChangeDetail を number へ。0|1 の制約は
+  ScorePage のイベントリスナー（0/1 以外を無視するガード）とパレット UI にのみ残る
+- **符幹方向ポリシーの分離**: voiceStemDirectionFor(voiceIndex, voiceCount) を新設し、
+  resolveVoiceStemDirections は声部数によらないループに。3声の中声はポリシー追加で済む形
+- **声部3・4 テスト**（nVoiceSupport.test.ts・7件）: 正規 API 読み書き（器の自動生成）・
+  声部3削除の独立性・保存往復・再生フラット化（開始拍つき14イベント）・MusicXML 往復
+  （voice 3/4 タグ）・MIDI 全声部（Note-On 14個）・符幹ポリシー
+- **Codex 1巡目（P1+P2×2）への対応**:
+  - [P1] parseMusicXml が最初の <backup> だけで2分割しており、3声以上の自己往復で
+    声部3以降が声部2へ連結される（4声→2声へ潰れる）データ破壊 → <backup> ごとの
+    区切りで全声部を復元する形へ一般化。往復テストを「4声すべて音高まで一致」へ強化
+  - [P2] 声部3・4 の符頭クリック（切替要求）を ScorePage が黙って無視し、選択と実状態が
+    食い違う → PSC 側で「声部Nの音符です（表示・再生・書き出しのみ対応）」と通知して
+    終えるガードを追加（describeVoiceSwitchUnavailable・#318）
+  - [P2] 描画の完了条件が未検証 → PianoSystemCanvasNVoiceRender.test.tsx（4声の描画で
+    例外なし+符頭14個が DOM に出る+ヒット領域生成）を追加
+  - [2巡目 P1] 疎な声部（声部2空・声部3のみ）の往復で声部番号がずれる → 区間の順番ではなく
+    各 note の <voice> タグで声部を復元する形へ（<backup> は時間の巻き戻しであって声部番号では
+    ない。タグの無い XML は従来どおり区間順）。疎な往復テストを追加
+- これで §2-5 の完了条件4項目がすべて満たされ、**#244 の段0〜段5 が完了**。
+  後続課題（別Issue化）: フォールバック（voices[0]?.events ?? events）の除去（焼き込み後）
