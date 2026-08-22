@@ -2228,6 +2228,9 @@ export default function ScorePage() {
     }
     setSystemMeasureOverrides(restored.systemMeasureOverrides ?? []);
     setSystemRowGapOverrides(restored.systemRowGapOverrides ?? []);
+    // 前の譜面用に増やしていた画面専用の編集用空き段は引き継がない（Codex #109 第4段 round3。
+    // 旧 handleLoad にあったリセット。切替・復元・取り込みの全経路で効くようここへ置く）
+    setExtraEditingMeasures(0);
     // 開き直した譜面は編集位置とは無関係なので、段割りの安定化ヒントもリセットする（Issue #67）
     setLastEditedMeasureIndex(null);
   }, [setTimeSignature]);
@@ -2462,6 +2465,12 @@ export default function ScorePage() {
     // .score.json を上書きしてしまう（Codex round1 P1）
     fileHandleRef.current = null;
     await applyLoadedScoreData(loadedData);
+    // 取り込んだ内容を新作品へ同期保存してから完了を知らせる（Codex round3）。
+    // 自動保存（約1.5秒後）任せだと、その前にリロードすると新作品が空のまま残る
+    if (!saveCurrentWork(loadedData)) {
+      notifyScoreEdit(describeLegacyImportResult('saveFailed'));
+      return;
+    }
     notifyScoreEdit(describeLegacyImportResult('done'));
   };
 

@@ -418,7 +418,7 @@ export function describeSlicePasteUnavailable(reason: 'noSelection' | 'noFit' | 
 }
 
 /** 旧手動保存の取り込み（#109 第4段）の結果通知 */
-export function describeLegacyImportResult(result: 'done' | 'notFound' | 'readFailed' | 'blocked'): string {
+export function describeLegacyImportResult(result: 'done' | 'notFound' | 'readFailed' | 'blocked' | 'saveFailed'): string {
   switch (result) {
     case 'done':
       return '以前の手動保存を新しい作品として取り込みました（元のデータはそのまま残っています）';
@@ -428,6 +428,8 @@ export function describeLegacyImportResult(result: 'done' | 'notFound' | 'readFa
       return '以前の手動保存データを読み込めませんでした（データが壊れている可能性があります。元のデータには触れていません）';
     case 'blocked':
       return 'いまの内容を保存できなかったため、取り込みを中止しました（ブラウザ保存の空き容量を確認してください）';
+    case 'saveFailed':
+      return '取り込んだ内容を保存できませんでした（画面には表示されています。ブラウザ保存の空き容量を確認してください）';
   }
 }
 

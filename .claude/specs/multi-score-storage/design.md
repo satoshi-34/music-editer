@@ -521,3 +521,12 @@ loadWorkAutosaveData(workId) → applyLoadedScoreData() で画面へ反映
   「データなし」と「あるのに読めない（破損）」を読み分け、readFailed 通知を追加
 - docs/DEVELOPMENT.md の残存旧仕様（新規作成の初期化範囲・clearAutosaveData・
   MusicXML/MIDIボタン・回帰手順の手動保存/読込・その他タブ表記）を現行仕様へ更新（P2）
+
+### 第4段 Codex round3 対応（2026-08-22）
+
+- 取り込みは applyLoadedScoreData 後に**同期保存してから**完了通知（自動保存待ちの
+  1.5秒以内にリロードすると新作品が空のまま残るため）。保存失敗は saveFailed 通知
+- setExtraEditingMeasures(0) を applyLoadedScoreData 側へ移設（切替・復元・取り込みの
+  全経路で画面専用の空き段を引き継がない。旧 handleLoad にだけあったリセット）
+- docs/DEVELOPMENT.md の残存旧表記（カスタム記号の往復・フィードバックの読み込み形式・
+  段数UI・印刷プレビュー中の書き出し）を現行へ更新
