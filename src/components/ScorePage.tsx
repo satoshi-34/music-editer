@@ -146,7 +146,7 @@ import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId,
 import type { ClefType } from './clefUtils';
 import { extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
-import { flattenMeasureForPlayback, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import { buildPlaybackPositionTimeline, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
@@ -157,6 +157,7 @@ import {
   SCORE_EDIT_NOTICE_EVENT,
   describeClearedBeatRange,
   describeClearedMeasures,
+  describeSliceClearNoop,
   describeSliceCopied,
   describeSliceDeleteUnavailable,
   describeSliceMeasureOpUnavailable,
@@ -325,6 +326,15 @@ const TRANSPOSITION_OPTIONS: Array<{ value: InstrumentPartDefinition['transposit
   { value: 'octave-down', label: 'オク下' },
   { value: 'none', label: '移調なし' },
 ];
+
+/**
+ * スライス編集（#333 段2）が譜面を実際に変えるかどうか。
+ * 「何も消えず何も入らない」編集は書き込まない・履歴も積まない判定に使う
+ * （no-op の実体化は Issue #67 の段割り安定化を全再計画にしてしまう）。
+ */
+function isRealSliceEdit(edit: VoiceSliceEdit | null): edit is VoiceSliceEdit {
+  return edit != null && (edit.removeEndExclusive > edit.removeStart || edit.insertedCount > 0);
+}
 
 function calculateScoreDuration(scoreData: MeasureData[], bpm: number, timeSignature: TimeSignature): number {
   // 再生時間の見積もりも、実際に鳴らす順番と同じでないとずれる。
@@ -634,7 +644,9 @@ export default function ScorePage() {
    * 複数小節のスライスは「端は部分・中は全体」の順で並ぶ。後勝ち3すくみ
    * （小節 / 連符グループ / スライス）の一角（Issue #234 の規則を拡張）
    */
-  const [sliceClipboard, setSliceClipboard] = useState<Array<{ beats: number; parts: NoteEvent[][][] }> | null>(null);
+  // parts は位置ではなく partId（小節クリップボードと同じ命名）で照合する。
+  // コピー後に楽譜種別や編成が変わっても、別の楽器へ内容を上書きしない（Codex round2 P1）
+  const [sliceClipboard, setSliceClipboard] = useState<Array<{ beats: number; parts: Array<{ partId: string; voices: NoteEvent[][] }> }> | null>(null);
   // コピーした小節データ。各パートごとのスナップショット
   const [clipboard, setClipboard] = useState<{ partId: string; measures: MeasureData[] }[] | null>(null);
   // 連符グループがコピーされたら、小節のコピーは捨てる（Issue #234 の「後勝ち」）。
@@ -1582,16 +1594,19 @@ export default function ScorePage() {
   // 適用する」という同じ形をしているため、パートの列挙部分だけを共通化する
   // （Cmd+C/V・Deleteのキーボードハンドラは選択範囲へのスライス/上書きという別の形のため
   // 対象外のまま。あちらは既存の scoreType 分岐踏襲でそろえてある）。
-  type PartEntry = { measures: MeasureData[]; apply: (next: MeasureData[]) => void; clef: ClefType };
+  // partId は小節クリップボード（Cmd+C の setClipboard）と同じ命名規則。
+  // スライスのクリップボード（#333 段2）がパートを位置ではなく ID で照合するために使う
+  type PartEntry = { partId: string; measures: MeasureData[]; apply: (next: MeasureData[]) => void; clef: ClefType };
   const getEditablePartEntries = useCallback((): PartEntry[] => {
     const parts: PartEntry[] = [];
 
     if (scoreType === 'piano') {
-      if (rightHandData) parts.push({ measures: rightHandData, apply: setRightHandData, clef: 'treble' });
-      if (leftHandData) parts.push({ measures: leftHandData, apply: setLeftHandData, clef: 'bass' });
+      if (rightHandData) parts.push({ partId: 'right', measures: rightHandData, apply: setRightHandData, clef: 'treble' });
+      if (leftHandData) parts.push({ partId: 'left', measures: leftHandData, apply: setLeftHandData, clef: 'bass' });
     } else if (scoreType === 'quartet') {
       quartetParts.forEach((part, i) => {
         parts.push({
+          partId: `quartet-${i}`,
           measures: part,
           apply: (next) => setQuartetParts(prev => prev.map((p, idx) => (idx === i ? next : p))),
           clef: (['treble', 'treble', 'alto', 'bass'] as const)[i] ?? 'treble',
@@ -1600,6 +1615,7 @@ export default function ScorePage() {
     } else if (scoreType === 'ensemble') {
       ensembleParts.forEach((part, i) => {
         parts.push({
+          partId: `ensemble-${i}`,
           measures: part,
           apply: (next) => setEnsembleParts(prev => prev.map((p, idx) => (idx === i ? next : p))),
           clef: instrumentation.parts[i]?.clef ?? 'treble',
@@ -1609,6 +1625,7 @@ export default function ScorePage() {
         if (instrumentPart.staffCount !== 2) return;
         const secondPart = ensembleSecondStaffParts[i] ?? [];
         parts.push({
+          partId: `ensemble-${i}::2`,
           measures: secondPart,
           apply: (next) => setEnsembleSecondStaffParts(prev => {
             const copy = [...prev];
@@ -1619,7 +1636,7 @@ export default function ScorePage() {
         });
       });
     } else {
-      if (rightHandData) parts.push({ measures: rightHandData, apply: setRightHandData, clef: 'treble' });
+      if (rightHandData) parts.push({ partId: 'single', measures: rightHandData, apply: setRightHandData, clef: 'treble' });
     }
 
     return parts;
@@ -2742,13 +2759,15 @@ export default function ScorePage() {
           const beatsPerMeasureNow = getMeasureBeats(scoreTimeSignature);
           const { start, end } = selectedMeasures;
           const entries = getEditablePartEntries();
-          const segments: Array<{ beats: number; parts: NoteEvent[][][] }> = [];
+          const segments: Array<{ beats: number; parts: Array<{ partId: string; voices: NoteEvent[][] }> }> = [];
           for (let mi = start; mi <= end; mi++) {
             const segStart = mi === start ? (selectedMeasures.startBeat ?? 0) : 0;
             const segEnd = mi === end ? (selectedMeasures.endBeat ?? beatsPerMeasureNow) : beatsPerMeasureNow;
-            const partsSlices = entries.map((entry) =>
-              getMeasureVoices(entry.measures[mi]).map((voice) =>
-                extractVoiceSlice(voice.events, segStart, segEnd)));
+            const partsSlices = entries.map((entry) => ({
+              partId: entry.partId,
+              voices: getMeasureVoices(entry.measures[mi]).map((voice) =>
+                extractVoiceSlice(voice.events, segStart, segEnd)),
+            }));
             segments.push({ beats: segEnd - segStart, parts: partsSlices });
           }
           // 後勝ち3すくみ: スライスをコピーしたら小節・連符グループのコピーは捨てる
@@ -2843,26 +2862,37 @@ export default function ScorePage() {
               planned.push({ entryIndex: ei, measureIndex: mi, voiceEdits });
             }
           }
+          // 消すものが1つも無ければ、履歴も適用も走らせない（Codex round2 P2）。
+          // 黙って終わらず「消すものが無かった」ことは伝える（#318）
+          if (!planned.some((p) => p.voiceEdits.some(isRealSliceEdit))) {
+            notifyScoreEdit(describeSliceClearNoop());
+            e.preventDefault();
+            return;
+          }
           pushHistory();
           entries.forEach((entry, ei) => {
             let copy = [...entry.measures];
             const mine = planned.filter((p) => p.entryIndex === ei);
+            if (!mine.some((p) => p.voiceEdits.some(isRealSliceEdit))) return;
             mine.forEach((p) => {
+              // 何も消えず何も入らない no-op は書き込まない（未編集小節を JSON 差分にして
+              // 段割り安定化（Issue #67）を全再計画にしない・#244 段5-4 と同じ配慮）
+              if (!p.voiceEdits.some(isRealSliceEdit)) return;
               let measure = copy[p.measureIndex];
               p.voiceEdits.forEach((edit, vi) => {
-                // 何も消えず何も入らない no-op は書き込まない（未編集小節を JSON 差分にして
-                // 段割り安定化（Issue #67）を全再計画にしない・#244 段5-4 と同じ配慮）
-                if (edit && (edit.removeEndExclusive > edit.removeStart || edit.insertedCount > 0)) {
+                if (isRealSliceEdit(edit)) {
                   measure = withVoiceEventsUpdated(measure, vi, () => edit.events);
                 }
               });
-              copy[p.measureIndex] = measure;
+              // 削除で声部2以降が空になったら畳む（単音削除の noteDeletionUtils と同じ後始末。
+              // 空の voices[1] が残ると単声へ戻らず、符幹方向や弧の配置が多声扱いのままになる）
+              copy[p.measureIndex] = collapseEmptyTrailingVoices(measure);
             });
             // イベント数が変わった声部は、他の音符・他の小節から張られた弧・松葉の
             // 終点参照を全小節ぶん直す（消えた終点は除去、後ろの終点はずらす）
             mine.forEach((p) => {
               p.voiceEdits.forEach((edit, vi) => {
-                if (edit) copy = remapVoiceRefsAfterSliceEdit(copy, vi, p.measureIndex, edit);
+                if (isRealSliceEdit(edit)) copy = remapVoiceRefsAfterSliceEdit(copy, vi, p.measureIndex, edit);
               });
             });
             entry.apply(copy);
@@ -2932,7 +2962,11 @@ export default function ScorePage() {
             }
             for (let ei = 0; ei < entries.length; ei++) {
               const measure = entries[ei].measures[mi];
-              const srcVoices = segment.parts[ei] ?? [];
+              // パートは位置ではなく partId で照合する。コピー元に無いパートは丸ごと触らない
+              // （小節クリップボードの find(partId) と同じ規則。無音上書きとは区別する）
+              const srcPart = segment.parts.find((p) => p.partId === entries[ei].partId);
+              if (!srcPart) continue;
+              const srcVoices = srcPart.voices;
               const targetVoices = getMeasureVoices(measure);
               const voiceCount = Math.max(srcVoices.length, targetVoices.length);
               const voiceEdits: Array<VoiceSliceEdit | null> = [];
@@ -2958,24 +2992,34 @@ export default function ScorePage() {
               planned.push({ entryIndex: ei, measureIndex: mi, voiceEdits });
             }
           }
+          // 譜面が1箇所も変わらない貼り付けは、履歴も適用も小節の実体化も走らせない
+          // （Codex round2 P2。無音→無音や、対応パートの無い譜面への貼り付け）
+          if (!planned.some((p) => p.voiceEdits.some(isRealSliceEdit))) {
+            notifyScoreEdit(describeSlicePasteUnavailable('noEffect'));
+            e.preventDefault();
+            return;
+          }
           pushHistory();
           entries.forEach((entry, ei) => {
             let copy = [...entry.measures];
             const mine = planned.filter((p) => p.entryIndex === ei);
+            if (!mine.some((p) => p.voiceEdits.some(isRealSliceEdit))) return;
             mine.forEach((p) => {
+              // no-op の小節は実体化もしない（配列長を伸ばして譜面長を変えない・Issue #67）
+              if (!p.voiceEdits.some(isRealSliceEdit)) return;
               let measure = copy[p.measureIndex] ?? { events: [] };
               p.voiceEdits.forEach((edit, vi) => {
-                // 何も消えず何も入らない no-op は書き込まない（Issue #67 の段割り安定化への配慮）
-                if (edit && (edit.removeEndExclusive > edit.removeStart || edit.insertedCount > 0)) {
+                if (isRealSliceEdit(edit)) {
                   measure = withVoiceEventsUpdated(measure, vi, () => edit.events);
                 }
               });
-              copy[p.measureIndex] = measure;
+              // 無音貼り付けで声部2以降が空になったら畳む（削除と同じ後始末）
+              copy[p.measureIndex] = collapseEmptyTrailingVoices(measure);
             });
             // イベント数が変わった声部は、弧・松葉の終点参照を全小節ぶん直す（削除と同じ規則）
             mine.forEach((p) => {
               p.voiceEdits.forEach((edit, vi) => {
-                if (edit) copy = remapVoiceRefsAfterSliceEdit(copy, vi, p.measureIndex, edit);
+                if (isRealSliceEdit(edit)) copy = remapVoiceRefsAfterSliceEdit(copy, vi, p.measureIndex, edit);
               });
             });
             entry.apply(copy);

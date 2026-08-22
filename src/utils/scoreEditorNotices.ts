@@ -389,7 +389,7 @@ export function describeSliceCopied(totalBeats: number): string {
 }
 
 /** 拍範囲スライスの貼り付け不成立の通知（#318「行き止まりは喋る」） */
-export function describeSlicePasteUnavailable(reason: 'noSelection' | 'noFit' | 'boundary'): string {
+export function describeSlicePasteUnavailable(reason: 'noSelection' | 'noFit' | 'boundary' | 'noEffect'): string {
   switch (reason) {
     case 'noSelection':
       return '貼り先が選ばれていません。小節選択ツールで貼り付け先の位置を選んでください';
@@ -397,7 +397,14 @@ export function describeSlicePasteUnavailable(reason: 'noSelection' | 'noFit' | 
       return '貼り先の小節に収まらないため貼り付けませんでした（小節の拍数を超えます）';
     case 'boundary':
       return '貼り先の音符を途中で分断してしまうため貼り付けませんでした（音符の切れ目に合う位置を選んでください）';
+    case 'noEffect':
+      return '貼り付けても譜面が変わらないため、何もしませんでした（コピー内容も貼り先も無音か、対応するパートが無い譜面です）';
   }
+}
+
+/** 拍範囲スライスの削除で消すものが無かったときの通知（#318。履歴も積まない） */
+export function describeSliceClearNoop(): string {
+  return '選択範囲に音符が無いため、消すものがありませんでした';
 }
 
 /**
