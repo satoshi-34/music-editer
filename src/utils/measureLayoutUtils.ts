@@ -941,7 +941,7 @@ export function measurePlannerSafetyPadding(
   measures.forEach((measure) => {
     if (!measure) return;
     if (options.includeTranspositionAccidentalWorstCase) {
-      const voices = [measure.events ?? [], ...(measure.voices?.slice(1).map((voice) => voice.events ?? []) ?? [])];
+      const voices = [getPrimaryVoiceEvents(measure), ...(measure.voices?.slice(1).map((voice) => voice.events ?? []) ?? [])];
       voices.forEach((events) => events.forEach((event) => {
         if (!event.isRest) padding += (event.keys?.length ?? 0) * 10;
       }));

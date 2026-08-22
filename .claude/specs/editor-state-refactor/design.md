@@ -368,3 +368,8 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
   境界で保証されるようになった（従来は読み手ごとにまちまちだった）
 - 既知バグの別Issue化: **声部2が MIDI に出ていない**（§2-5 で予告済み）は本段では触らず、
   段5-4 完了後に起票する
+- **Codex 1巡目（P2×2: 読み残し）への対応**: measurePlannerSafetyPadding（記譜音表示用の
+  安全幅）・resolveDynamicVelocities（再生の強弱割り当て）・playbackPositionUtils（画面の
+  再生位置タイムライン）の3読みを正規アクセサへ追加切替。いずれも ScorePlayer 内部入口の
+  ように境界正規化を通らない純関数直呼びのため、鏡と正本の食い違いで別音符へ強弱が付く・
+  ハイライト時刻がずれる余地があった
