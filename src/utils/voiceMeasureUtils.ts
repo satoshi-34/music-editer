@@ -181,6 +181,14 @@ export function withVoiceEventsUpdated(
 ): MeasureData {
   if (voiceIndex <= 0) {
     const nextEvents = updater(measure.events ?? []);
+    // no-op（updater が同一参照を返した）なら元の measure をそのまま返す（#244 段5-4・
+    // Codex 4巡目対応）。ここで鏡を実体化すると、参照変更なしの全小節走査
+    // （remapAllMeasuresAfterRemoval 等）が未編集小節まで JSON 差分にしてしまい、
+    // findFirstDifferingMeasureIndex による段割り安定化（Issue #67）が全再計画になる。
+    // 「変化が無ければ引数をそのまま返す」は Issue #245 からの既存の約束でもある。
+    if (nextEvents === measure.events) {
+      return measure;
+    }
     // dual-write（#244 段5-1）: 正本 events を書き換えたら voices[0] も同期する。
     // 段5-4（保存形式の移行）からは、voices を持たない小節にも書き込み時に器を作る —
     // 読込・保存の両境界で全小節に voices を実体化するようになったため、

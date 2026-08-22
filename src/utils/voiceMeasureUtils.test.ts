@@ -351,6 +351,15 @@ describe('voiceMeasureUtils', () => {
       expect(next.voices?.[0].events).toEqual(next.events);
     });
 
+    it('no-op（updater が同一参照を返す）では鏡を実体化せず元の measure を返す（#244 段5-4）', () => {
+      const measure: MeasureData = { events: [note('c/4')] };
+      const next = withVoiceEventsUpdated(measure, 0, (events) => events);
+      // 参照そのまま＝JSON 差分ゼロ。全小節走査（remap 等）が未編集小節を
+      // 変えてしまわないための約束（Issue #245 / #67 の段割り安定化）
+      expect(next).toBe(measure);
+      expect(next.voices).toBeUndefined();
+    });
+
     it('声部2の書き換えは従来どおり（voices[0] は events のクローンで初期化される）', () => {
       const measure: MeasureData = { events: [note('c/4')] };
       const next = withVoiceEventsUpdated(measure, 1, () => [note('e/3')]);
