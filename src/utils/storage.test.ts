@@ -202,6 +202,45 @@ describe('Storage Foundation Tests', () => {
     });
   });
 
+  describe('タイトルの書体の保存互換（Issue #342）', () => {
+    it('titleFontId を保存して読み戻せる（保存往復）', () => {
+      const scoreData = createSavedScoreData(
+        { title: 'Font Test', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        4,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'mincho'
+      );
+      expect(scoreData.titleFontId).toBe('mincho');
+      const saveResult = saveScoreData(scoreData);
+      expect(saveResult.success).toBe(true);
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.titleFontId).toBe('mincho');
+    });
+
+    it('titleFontId 無しの旧データも従来どおり有効（既定値互換）', () => {
+      const scoreData = createSavedScoreData(
+        { title: 'Legacy', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        4
+      );
+      expect(scoreData.titleFontId).toBeUndefined();
+      expect(validateSavedScoreData(scoreData)).toBe(true);
+      // 文字列以外の titleFontId は弾く（手書き JSON の取り込み対策）
+      expect(validateSavedScoreData({ ...scoreData, titleFontId: 42 })).toBe(false);
+    });
+  });
+
   describe('編成テンプレートの保存互換', () => {
     it('should save and load instrumentation presets with score data', () => {
       const scoreData = createSavedScoreData(

@@ -1422,11 +1422,12 @@ button.ghost.active:hover:not(:disabled) {
    書体は Bravura が推奨するセリフ体（.print-page で定義した --score-text-font）にそろえる。 */
 .score-title {
   margin: 0; font-size: 26px; text-align: center; letter-spacing: .02em;
-  font-family: var(--score-text-font);
+  /* --title-font-override はタイトル書体の選択（Issue #342）。未指定なら従来どおり浄書セリフ体 */
+  font-family: var(--title-font-override, var(--score-text-font));
 }
 .score-subtitle {
   margin: 4px 0 0; font-size: 14px; text-align: center; color: #555;
-  font-family: var(--score-text-font);
+  font-family: var(--title-font-override, var(--score-text-font));
 }
 /* 作詞者・作曲者・編曲者。以前は ScorePage.tsx のインライン style に
    直書きされていて A/B 比較でしか値を変えられなかったので、クラスへ切り出した（#202）。
@@ -1440,9 +1441,10 @@ button.ghost.active:hover:not(:disabled) {
   text-align: right;
   margin-top: 2mm;
   font-size: 13px; color: #555;
-  font-family: var(--score-text-font);
+  font-family: var(--title-font-override, var(--score-text-font));
 }
-.page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; }
+/* 2ページ目以降の欄外タイトルにも同じ書体を効かせる（未指定なら従来どおり継承） */
+.page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; font-family: var(--title-font-override, inherit); }
 /* pointer-events: none — ページ番号は absolute 配置のため、上下余白を狭くしたり
    段の間隔をマイナスにすると、ページ最下段の「◀ N小節 ▶」コントロールに重なって
    クリックを吸ってしまう。フッターはクリック操作を受ける必要がないので素通しにする */

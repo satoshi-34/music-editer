@@ -31,6 +31,7 @@ import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useWorkLibrary } from '../hooks/useWorkLibrary';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
 import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
+import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, ensureTitleFontLoaded, resolveTitleFontOption, waitForTitleFontReady } from '../utils/titleFontOptions';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXml } from '../utils/musicXmlImport';
 import { downloadMidi } from '../utils/midiExport';
@@ -504,6 +505,14 @@ export default function ScorePage() {
   const [lyricist, setLyricist] = useState('作詞者');
   const [composer, setComposer] = useState('作曲者');
   const [arranger, setArranger] = useState('編曲者');
+  // タイトル・サブタイトル・作者欄のフォント（Issue #342）。id は utils/titleFontOptions.ts の一覧
+  const [titleFontId, setTitleFontId] = useState<string>(DEFAULT_TITLE_FONT_ID);
+  // 空文字 = 上書きなし（既定）。CSS 変数 --title-font-override を注入しない
+  const titleFontStack = resolveTitleFontOption(titleFontId).stack;
+  // Webフォント（Noto系）を選んだときだけ <link> を読み込む。読込・復元経路でも効くよう id を見張る
+  useEffect(() => {
+    ensureTitleFontLoaded(resolveTitleFontOption(titleFontId));
+  }, [titleFontId]);
 
   const {
     saveScore, loadScore, hasStoredData,
@@ -1948,7 +1957,7 @@ export default function ScorePage() {
 
   const handleSave = async () => {
     const { metadata, parts } = buildScoreData();
-    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
+    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
     if (saved) {
       setStoredDataAvailable(true);
     }
@@ -1985,6 +1994,7 @@ export default function ScorePage() {
     setArranger('編曲者');
     setTool({ duration: '4', isRest: false });
     setNotationMode('concert');
+    setTitleFontId(DEFAULT_TITLE_FONT_ID);
     // 楽譜の種類・拍子・調号・段組み・余白などは、保存済みの初期値プリセット（issue #39）が
     // あればその値、無ければ従来どおりのコード上の既定値（工場出荷値）を適用する。
     await applySettingsProfileToState(loadSettingsProfile());
@@ -2053,7 +2063,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const handleExportFile = async () => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
     const result = await exportScoreToFile(data, title, fileHandleRef.current);
     if (result.status === 'saved') {
@@ -2094,6 +2104,7 @@ export default function ScorePage() {
       setScoreType(loadedType);
       setInstrumentation(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
       setNotationMode(data.notationMode ?? 'concert');
+    setTitleFontId(resolveTitleFontOption(data.titleFontId).id);
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
       setCustomSymbolDefs(data.customSymbolDefs ?? []);
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
@@ -2150,7 +2161,7 @@ export default function ScorePage() {
   // （handleExportFile と同じ理由で通常関数として定義。TDZ 回避）。
   const handleFeedback = async () => {
     const { metadata, parts } = buildScoreData();
-    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
+    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
     const feedbackState = {
       ...scoreData,
       // フィードバック JSON は「ファイルを開く」で読み込める楽譜 JSON なので、
@@ -2225,6 +2236,7 @@ export default function ScorePage() {
     setScoreType(restoredType);
     setInstrumentation(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType));
     setNotationMode(restored.notationMode ?? 'concert');
+    setTitleFontId(resolveTitleFontOption(restored.titleFontId).id);
     setCustomSymbolDefs(restored.customSymbolDefs ?? []);
     if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
       setMeasuresPerSystem(restored.measuresPerSystem);
@@ -2316,7 +2328,7 @@ export default function ScorePage() {
       const { metadata, parts } = buildScoreData();
       // 空の譜面は保存しない（自動保存と同じ判断。空で上書きして中身を失わないため）
       if (isEmptyScoreData(parts)) return null;
-      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
+      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
     };
   });
 
@@ -2342,7 +2354,7 @@ export default function ScorePage() {
       // 保存先は「いま開いている作品」の自動保存スロット。まだ作品IDが無い
       // （＝一度も保存していない新規状態）ときは、この保存で新しい作品が作られる。
       const saved = saveCurrentWork(
-        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides)
+        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId)
       );
       if (saved) {
         setAutoSaveStatus('saved');
@@ -2369,7 +2381,7 @@ export default function ScorePage() {
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, titleFontId, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -2452,6 +2464,7 @@ export default function ScorePage() {
       setInstrumentation(loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
       // 旧データには notationMode が無いので、未指定なら実音表示で開く。
       setNotationMode(loadedData.notationMode ?? 'concert');
+      setTitleFontId(resolveTitleFontOption(loadedData.titleFontId).id);
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
       setCustomSymbolDefs(loadedData.customSymbolDefs ?? []);
       if (loadedData.measuresPerSystem && loadedData.measuresPerSystem >= 1 && loadedData.measuresPerSystem <= 8) {
@@ -3948,9 +3961,17 @@ export default function ScorePage() {
   // PDF書出: 自前でPDFを生成せず、ブラウザの印刷ダイアログを開く方式にする。
   // App.css の @media print が既に A4 整形済みの印刷スタイルを用意しているため、
   // ここでは window.print() を呼ぶだけで良い（ユーザーが印刷ダイアログで「PDFとして保存」を選ぶ）。
-  const handleExportPdf = useCallback(() => {
+  const handleExportPdf = useCallback(async () => {
+    // Webフォント（Noto系）選択時は読み込み完了を待ってから印刷する。
+    // 待たずに print すると読み込み前のフォールバック書体がPDFへ固定される（Codex round1 P1）。
+    // 実際に印刷されるタイトルまわりの文字列を渡す（unicode-range 分割配信対応・round2 P1）。
+    // タイムアウト付きなので、オフラインでも印刷が止まることはない
+    await waitForTitleFontReady(
+      resolveTitleFontOption(titleFontId),
+      [title, subtitle, lyricist, composer, arranger].join(''),
+    );
     window.print();
-  }, []);
+  }, [titleFontId, title, subtitle, lyricist, composer, arranger]);
 
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -4573,6 +4594,21 @@ export default function ScorePage() {
                   >
                     {KEY_SIGNATURE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="toolbar-select-label" title="タイトル・サブタイトル・作詞/作曲/編曲者の文字の書体を変えます（音符や記号の書体は変わりません）">
+                  <span>タイトルの書体</span>
+                  <select
+                    value={titleFontId}
+                    onChange={(event) => setTitleFontId(event.target.value)}
+                    aria-label="タイトルの書体"
+                  >
+                    {TITLE_FONT_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>
                         {option.label}
                       </option>
                     ))}
@@ -5530,14 +5566,19 @@ export default function ScorePage() {
               >
                 <header
                   className={`page-head${i === 0 ? ' page-head--title' : ''}`}
-                  style={i === 0 ? {
-                    // タイトル余白（上下）はタイトルページ（1ページ目）だけに効く。
-                    // App.css の .page-head--title がこの2変数を padding-top / margin-bottom へ
-                    // 適用する（フォールバックは変数未注入時＝2ページ目以降と同じ0mm/6mm）。
-                    // position: relative はインライン指定をやめ App.css の .page-head へ移した（#204）。
-                    '--title-margin-top': `${titleMarginTopMm}mm`,
-                    '--title-margin-bottom': `${titleMarginBottomMm}mm`,
-                  } as React.CSSProperties : undefined}
+                  style={{
+                    ...(i === 0 ? {
+                      // タイトル余白（上下）はタイトルページ（1ページ目）だけに効く。
+                      // App.css の .page-head--title がこの2変数を padding-top / margin-bottom へ
+                      // 適用する（フォールバックは変数未注入時＝2ページ目以降と同じ0mm/6mm）。
+                      // position: relative はインライン指定をやめ App.css の .page-head へ移した（#204）。
+                      '--title-margin-top': `${titleMarginTopMm}mm`,
+                      '--title-margin-bottom': `${titleMarginBottomMm}mm`,
+                    } : {}),
+                    // タイトルまわりのフォント（Issue #342）。既定（空文字）では注入しない＝
+                    // App.css の従来指定（--score-text-font）がそのまま効き、既存譜面の見た目は変わらない
+                    ...(titleFontStack ? { '--title-font-override': titleFontStack } : {}),
+                  } as React.CSSProperties}
                 >
                   {i === 0 ? (
                     <>

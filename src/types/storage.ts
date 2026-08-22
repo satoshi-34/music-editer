@@ -397,6 +397,12 @@ export interface SavedScoreData {
   instrumentation?: ScoreInstrumentation;
   /** 編成譜の表示モード（実音/記譜音）。旧データ互換のため省略可、省略時は実音表示 */
   notationMode?: ScoreNotationMode;
+  /**
+   * タイトル・サブタイトル・作者欄のフォント（Issue #342）。
+   * utils/titleFontOptions.ts の一覧の id。旧データ互換のため省略可で、
+   * 省略時・未知の id は既定（現行の浄書セリフ体のまま）として扱う。
+   */
+  titleFontId?: string;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;

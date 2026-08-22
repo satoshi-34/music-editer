@@ -613,6 +613,7 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     (data.timeSignature === undefined || isValidTimeSignature(data.timeSignature)) &&
     (data.instrumentation === undefined || validateScoreInstrumentation(data.instrumentation)) &&
     (data.notationMode === undefined || data.notationMode === 'concert' || data.notationMode === 'written') &&
+    (data.titleFontId === undefined || typeof data.titleFontId === 'string') &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -1597,7 +1598,8 @@ export function createSavedScoreData(
   notationMode?: 'concert' | 'written',
   customSymbolDefs?: CustomSymbolDef[],
   systemMeasureOverrides?: SavedScoreData['systemMeasureOverrides'],
-  systemRowGapOverrides?: SavedScoreData['systemRowGapOverrides']
+  systemRowGapOverrides?: SavedScoreData['systemRowGapOverrides'],
+  titleFontId?: string
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -1608,6 +1610,7 @@ export function createSavedScoreData(
     timeSignature: normalizeTimeSignature(timeSignature),
     instrumentation,
     notationMode,
+    titleFontId,
     parts,
     systems,
     measuresPerSystem,
