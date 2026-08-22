@@ -270,17 +270,8 @@ describe('PianoSystemCanvas 段またぎ記譜 段1a（Issue #309）', () => {
     // またぎを含む1拍目も1本のビームで五線間に渡される＝またぎ無しと同じ2本。
     const beams = [...withCross.svg.querySelectorAll('g.vf-beam')];
     expect(beams.length).toBe(2);
-    // またぎ連桁は「五線の間」に描かれる: ビームのパスの y 範囲が
-    // 上の五線の最下線より下・下の五線の最上線より上に収まっていることを確認する
-    const staveLineYs = [...withCross.svg.querySelectorAll('.vf-stave path, .vf-stave line')];
-    const beamYs = beams.flatMap((b) => {
-      const d = b.querySelector('path')?.getAttribute('d') ?? '';
-      return [...d.matchAll(/[ML]\s*[\d.]+\s+([\d.]+)/g)].map((m) => parseFloat(m[1]));
-    });
-    const spanningYs = beamYs.length ? beamYs : [];
-    expect(spanningYs.length).toBeGreaterThan(0);
-    // 2本のビームのうち、y の広がりが大きい方＝またぎ連桁。五線1段の高さ（40px）を
-    // 超えて渡っている（同一五線内の通常ビームでは起こらない）
+    // またぎ連桁は「五線の間」に渡る: 2本のビームのうち y の広がりが大きい方＝
+    // またぎ連桁で、その y スパンが同一五線内の通常ビームでは起こらない大きさになる
     const spansPerBeam = beams.map((b) => {
       const d = b.querySelector('path')?.getAttribute('d') ?? '';
       const ys = [...d.matchAll(/[ML]\s*[\d.]+\s+([\d.]+)/g)].map((m) => parseFloat(m[1]));
