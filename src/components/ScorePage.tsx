@@ -148,7 +148,7 @@ import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId,
 import type { ClefType } from './clefUtils';
 import { extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
-import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
@@ -339,53 +339,6 @@ function isRealSliceEdit(edit: VoiceSliceEdit | null): edit is VoiceSliceEdit {
   return edit != null && (edit.removeEndExclusive > edit.removeStart || edit.insertedCount > 0);
 }
 
-function calculateScoreDuration(scoreData: MeasureData[], bpm: number, timeSignature: TimeSignature): number {
-  // 再生時間の見積もりも、実際に鳴らす順番と同じでないとずれる。
-  // 例えば 2 小節ぶんを繰り返す譜面なのに元データの長さだけで測ると、
-  // UI が先に stopped へ戻ってしまうため、ここでも先に展開しておく。
-  const expandedScoreData = expandMeasuresForPlayback(scoreData).map(item => item.measure);
-
-  // 末尾の空小節は実際には再生対象がないため、終了タイマーには含めない。
-  // 途中の空小節は「全休符の小節」として長さを保持する。
-  let lastUsedMeasureIndex = -1;
-  for (let i = expandedScoreData.length - 1; i >= 0; i--) {
-    const measure = expandedScoreData[i];
-    if (getPrimaryVoiceEvents(measure).length > 0) {
-      lastUsedMeasureIndex = i;
-      break;
-    }
-  }
-
-  if (lastUsedMeasureIndex === -1) {
-    return 0;
-  }
-
-  let totalDuration = 0;
-  const globalEmptyMeasureBeats = getMeasureBeats(timeSignature);
-  // 小節単位のテンポ・拍子変更に対応するため「現在有効な値」を追跡する
-  let currentBpm = bpm;
-  let currentTimeSig = timeSignature;
-  for (let i = 0; i <= lastUsedMeasureIndex; i++) {
-    const measure = expandedScoreData[i];
-    // 小節に途中テンポが設定されていれば切り替える
-    if (measure?.bpm != null) {
-      currentBpm = measure.bpm;
-    }
-    // 小節に途中拍子が設定されていれば切り替える
-    if (measure?.timeSignature != null) {
-      currentTimeSig = measure.timeSignature;
-    }
-    const emptyBeats = getMeasureBeats(currentTimeSig ?? timeSignature) || globalEmptyMeasureBeats;
-    if (getPrimaryVoiceEvents(measure).length === 0) {
-      totalDuration += (60 / currentBpm) * emptyBeats;
-    } else {
-      // 複数声部小節では voice ごとの長さの最大値を使わないと、
-      // 上声と下声を同時に持つ小節の終わり時刻が短く見積もられてしまう。
-      totalDuration += getMeasureDurationBeats(measure) * (60 / currentBpm);
-    }
-  }
-  return totalDuration;
-}
 
 function getPreviewDurationSeconds(dur: NoteEvent['dur']): number {
   const quarterSeconds = 60 / 120;
@@ -1333,16 +1286,14 @@ export default function ScorePage() {
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
           // ここでは最大値を採用して全体の終了時刻を決める。
-          // 途中再生では、切った後の展開順（実際に鳴らす小節列）から残り時間を数える。
-          // calculateScoreDuration は内部でリピートを再展開するため展開済み列には使えない
-          // （repeatStart/repeatEnd が再解釈されて二重に伸びる）。専用の
-          // calculateExpandedPlaybackDurationMs（全声部で末尾判定・タイムラインと同じ前進規則）で数える。
-          // 先頭からの再生は従来どおり生の小節列から数える（挙動を変えない）
-          // 分岐は「選択起点かどうか」。1小節目の選択（startExpandedIndex === 0）でも
-          // 専用計算を通す（旧計算は声部2のみの譜面で 0 秒 → 即 stopped になる。Codex 2巡目 P1）
-          const totalDuration = startFromSelection
-            ? Math.max(...partObjs.map(partObj => calculateExpandedPlaybackDurationMs(partObj.measures, tempoSettings.bpm, scoreTimeSignature) / 1000))
-            : Math.max(...parts.map(part => calculateScoreDuration(part.measures, tempoSettings.bpm, scoreTimeSignature)));
+          // 終了タイマーは、実際にエンジンへ渡した展開済み小節列（partObjs.measures）から
+          // calculateExpandedPlaybackDurationMs で数える。選択の有無で分けない（Codex 3巡目）:
+          // 旧 calculateScoreDuration は未充足小節を実長だけで数える・末尾判定が主声部のみ、
+          // のため、拍子長を下限に進む実音・タイムラインより早く stopped になっていた
+          const totalDuration = Math.max(
+            ...partObjs.map(partObj =>
+              calculateExpandedPlaybackDurationMs(partObj.measures, tempoSettings.bpm, scoreTimeSignature) / 1000)
+          );
           setPlaybackState('playing');
           clearPlaybackTimer();
           remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
