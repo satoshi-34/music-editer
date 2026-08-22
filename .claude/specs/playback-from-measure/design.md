@@ -21,8 +21,9 @@
 - **表示**: buildPlaybackPositionTimeline に startExpandedIndex を追加し、
   先頭 N 個の展開小節を丸ごと飛ばす（atMs は 0 起点のまま実音と一致）。
   再生開始時に currentPosition を開始小節へ即時反映
-- **残り時間**: 途中再生時のみ、切った後の展開小節列から calculateScoreDuration で数える。
-  先頭からの再生は従来どおり生の小節列（挙動を変えない）
+- **残り時間（終了タイマー）**: 選択の有無にかかわらず、実際にエンジンへ渡す
+  展開済み小節列から calculateExpandedPlaybackDurationMs で数える
+  （旧 calculateScoreDuration は round3 で廃止。経緯は下の対応記録）
 
 ## 既知の制限（v1）
 

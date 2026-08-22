@@ -112,9 +112,10 @@ export function findPlaybackStartExpandedIndex(
 
 /**
  * すでに展開済み（リピートを再生順へ並べ替え済み）の小節列の再生時間（ms）を数える。
- * calculateScoreDuration（ScorePage）は内部で expandMeasuresForPlayback を呼ぶため、
- * 展開済みの列を渡すと repeatStart/repeatEnd が再解釈されて二重に伸びる（Codex round1 P2）。
- * 途中再生の残り時間はこの関数で数える。
+ * 再生ボタン経路の終了タイマーは、途中再生・先頭からの全再生とも、実際にエンジンへ渡す
+ * 展開済み列をこの関数で数える（展開を内包していた旧 calculateScoreDuration は、
+ * 展開済み列を渡すとリピートを二重解釈するうえ、未充足小節・声部2のみの譜面で
+ * 実音より早く停止するため廃止した。#108 Codex round1〜3）。
  *
  * 前進規則は buildPlaybackPositionTimeline と共通（measureAdvanceBeats =
  * max(全声部の実長, 拍子の長さ)。実音エンジンの「拍子長を下限に進む」挙動に一致）。
