@@ -23,7 +23,8 @@ export interface SaveLoadButtonsProps {
   hasCustomPianoSample?: boolean;
   autoSaveStatus?: 'idle' | 'saving' | 'saved';
   /**
-   * 書き出し（ファイル / MusicXML / MIDI）の結果（Issue #278）。書き出しメニューは
+   * 書き出し（MusicXML / MIDI）の結果（Issue #278。ファイル .score.json の結果は
+   * warningNotice 経由で別表示）。書き出しメニューは
    * このコンポーネントの外（「ファイル」タブの並び）にあるが、結果を出す右下の
    * インジケータは1つだけにしたいので、表示だけをここへ集約している。
    * ※手動「保存」「読込」ボタンとその結果表示（Issue #236）は #109 第4段で廃止した。

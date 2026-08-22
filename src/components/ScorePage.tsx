@@ -528,7 +528,8 @@ export default function ScorePage() {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
     fileSaveWarningTimerRef.current = setTimeout(() => setFileSaveWarning(null), 10000);
   }, []);
-  // 書き出し（ファイル / MusicXML / MIDI）の結果表示（Issue #278）。押しても成功・失敗の
+  // 書き出し（MusicXML / MIDI）の結果表示（Issue #278。ファイル .score.json の結果は
+  // fileSaveWarning 経由で別表示）。押しても成功・失敗の
   // どちらも画面に出ないと分からないため、右下のインジケータで知らせる。
   // 「どの書き出しか」「なぜ失敗したか」で文言が変わるので、状態名ではなく文字列で持つ。
   // ※手動「保存」の結果表示（Issue #236 の manualSaveStatus）は #109 第4段で保存ボタンごと廃止
