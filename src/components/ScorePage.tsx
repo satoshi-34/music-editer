@@ -191,14 +191,14 @@ const TOOLBAR_COLLAPSED_KEY = 'score-toolbar-collapsed';
 // 保存する（Issue #211）。キー名・移行・既定値の正本は utils/systemLayoutPrefs.ts。
 // 旧「段数/ページ」の単一キー（score-systems-per-page）も、古いバージョンで開いたとき
 // のために書き続けている（読み取りには使わない）。
-// 「小節幅の均等さ」のユーザー設定（その他タブのスライダー、0〜1）。
+// 「小節幅の均等さ」のユーザー設定（ファイルタブ（旧・その他）のスライダー、0〜1）。
 // SavedScoreData には含めず、段数/ページと同じく画面設定として保存する
 const MEASURE_WIDTH_EVENNESS_KEY = 'score-measure-width-evenness';
 // 「画面表示のズーム」のユーザー設定（常設エリアのスライダー、0.5〜3.0）。
 // useAutoPageScale が算出する自動縮尺（--scale）に掛け合わせる倍率として使う。
 // 1.0 = 自動縮尺そのまま（従来どおりの表示）。印刷には影響させない（App.css の @media print 側で解除される）
 const VIEW_ZOOM_KEY = 'score-view-zoom';
-// 「音符の大きさ」のユーザー設定（その他タブのスライダー、0.8〜2.0）。
+// 「音符の大きさ」のユーザー設定（ファイルタブ（旧・その他）のスライダー、0.8〜2.0）。
 // SCORE_LAYOUT_RENDER_SCALE（VexFlow の論理座標→物理SVG座標の倍率）に掛け合わせ、
 // 実際に描画・レイアウト計算へ使う「実効スケール」を作る。VIEW_ZOOM と違い、
 // これは画面表示だけでなく印刷結果や段組み（1段に入る小節数）にも影響する。
@@ -209,13 +209,13 @@ const NOTATION_SIZE_KEY = 'score-notation-size';
 // スライダーの min/max、state 初期化時のクランプ、maxSystemsPerPage の動的計算で
 // 同じ範囲を使うため、値のズレが起きないよう定数化しておく（NOTATION_SIZE_MULTIPLIER_MIN/MAX は
 // settingsProfile.ts とも共有するため measureLayoutUtils.ts 側で定義している）。
-// 「ページ余白（左右）」のユーザー設定（その他タブのスライダー、mm単位）。
+// 「ページ余白（左右）」のユーザー設定（ファイルタブ（旧・その他）のスライダー、mm単位）。
 // 正本は measureLayoutUtils.ts の printScoreAreaWidthPx()/worstCaseSystemContentBudget() に集約し、
 // CSS 側（.print-page の padding）へはここで作る値を CSS カスタムプロパティとして渡す
 // （CSSとJSでの二重定義を避ける）。既定値 14mm は従来の固定 padding と同じにし、
 // スライダーを一度も触らなければ見た目が変わらないようにする。
 const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
-// 「ページ余白（上）」「ページ余白（下）」のユーザー設定（その他タブのスライダー、各8〜25mm）。
+// 「ページ余白（上）」「ページ余白（下）」のユーザー設定（ファイルタブ（旧・その他）のスライダー、各8〜25mm）。
 // 以前は「余白(上下)」1本のスライダーで、上 padding の値をそのまま使い、下 padding は
 // 常に「上 − 2mm」を保つ仕様だった（従来の固定値が 上14mm/下12mm だったため）。
 // これを上下別々に調整できるよう2本のスライダーへ分離した。既定値は分離前と同じ
@@ -235,7 +235,7 @@ const TITLE_MARGIN_BOTTOM_KEY = 'score-title-margin-bottom';
 // window.confirm 時代から変えていない）。テストからも参照できるよう定数にしている。
 export const NEW_SCORE_CONFIRM_MESSAGE =
   'いまの内容を保存して、新しい作品として空の譜面を開きます。これまでの作品は「作品一覧」に残ります。よろしいですか？';
-// 「段の間隔」のユーザー設定（その他タブのスライダー、px単位）。
+// 「段の間隔」のユーザー設定（ファイルタブ（旧・その他）のスライダー、px単位）。
 // 正負を問わず単一の連続な方式で反映する: 段スロット高（ページの譜面領域÷段数）を
 // 基準に、この値をスロット高への加減として適用し（App.css の
 // `.score-area .system-stack > *` の flex-basis 計算式）、段の間には
@@ -250,7 +250,7 @@ const SYSTEM_ROW_GAP_KEY = 'score-system-row-gap';
 // 全体の「段の間隔」スライダーと同じ範囲（SYSTEM_ROW_GAP_MIN_PX〜SYSTEM_ROW_GAP_MAX_PX、
 // 現在 −30〜50px。範囲の正本は measureLayoutUtils.ts）を、この刻みで細かく調整できるようにする。
 const SYSTEM_ROW_GAP_OVERRIDE_STEP_PX = 4;
-// 「パート間隔」のユーザー設定（その他タブのスライダー、px単位、Issue #90）。
+// 「パート間隔」のユーザー設定（ファイルタブ（旧・その他）のスライダー、px単位、Issue #90）。
 // 段内の隣接パート（右手/左手・四重奏の4段・編成譜のパート間）の間隔を、
 // 自動計算値（staveSpacingForPartCount）への加算補正として調整する。
 // 「段の間隔」（段と段の間）とは別軸の設定で、段内の全パート境界へ一律に適用する
@@ -565,7 +565,7 @@ export default function ScorePage() {
   // 自動計画（planSystemMeasureRanges）ではなく、ユーザーが個別に段の▶◀ボタンで調整した段だけを保持する。
   const [systemMeasureOverrides, setSystemMeasureOverrides] = useState<SystemMeasureOverride[]>([]);
   // 段ごとの間隔（上の段との距離）のユーザー上書き（「小節 X から始まる段は、全体設定に
-  // Ypx を追加する」の一覧）。その他タブの「段の間隔」（全体設定）とは別に、段ごとの
+  // Ypx を追加する」の一覧）。ファイルタブ（旧・その他）の「段の間隔」（全体設定）とは別に、段ごとの
   // ◀▶コントロールの並びで個別に増減できる（.claude/specs/page-layout-controls/design.md 参照）。
   const [systemRowGapOverrides, setSystemRowGapOverrides] = useState<SystemRowGapOverride[]>([]);
 
@@ -2054,7 +2054,7 @@ export default function ScorePage() {
     e.target.value = '';
     try {
       const data = await importScoreFromFile(file);
-      // handleLoad と同じロジックで画面へ反映する
+      // applyLoadedScoreData と同等のロジックで画面へ反映する
       setTitle(data.metadata.title);
       setSubtitle(data.metadata.subtitle);
       setLyricist(data.metadata.lyricist);
@@ -3138,7 +3138,7 @@ export default function ScorePage() {
   // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
   const effectiveScale = scale * viewZoom;
 
-  // ユーザー設定（その他タブの「音符の大きさ」スライダー、0.8〜2.0）。
+  // ユーザー設定（ファイルタブ（旧・その他）の「音符の大きさ」スライダー、0.8〜2.0）。
   // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.8〜2.0 へクランプする
   const [notationSizeMultiplier, setNotationSizeMultiplier] = useState<number>(() => {
     const raw = localStorage.getItem(NOTATION_SIZE_KEY);
@@ -3147,7 +3147,7 @@ export default function ScorePage() {
       ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n))
       : resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier;
   });
-  // ユーザー設定（その他タブの「パート間隔」スライダー、-20〜50px、Issue #90）。
+  // ユーザー設定（ファイルタブ（旧・その他）の「パート間隔」スライダー、-20〜50px、Issue #90）。
   // 「段の間隔」と同じく楽譜種別ごとの既定値を持つ（ピアノは+38px、それ以外は0＝
   // 自動計算のまま。Issue #199）。
   // 下の partCountForSystemLayout・ensembleAutoFitMultiplier から参照するため先に定義する。
@@ -3240,7 +3240,7 @@ export default function ScorePage() {
       })
   ), [isPrintPreview, effectiveRenderScale, effectiveScale, scoreStrokeWidthVar, devicePixelRatio]);
 
-  // ユーザー設定（その他タブの「ページ余白（左右）」スライダー、8〜25mm）。
+  // ユーザー設定（ファイルタブ（旧・その他）の「ページ余白（左右）」スライダー、8〜25mm）。
   // 壊れた保存値でも安全なよう必ずクランプする。既定値は measureLayoutUtils の
   // DEFAULT_PAGE_SIDE_MARGIN_MM（14mm）と一致させ、未設定時は従来と同じ幅になるようにする。
   const [pageMarginSideMm, setPageMarginSideMm] = useState<number>(() => {
@@ -3248,7 +3248,7 @@ export default function ScorePage() {
     const n = raw == null ? NaN : parseFloat(raw);
     return Number.isFinite(n) ? Math.max(PAGE_MARGIN_SIDE_MIN_MM, Math.min(PAGE_MARGIN_SIDE_MAX_MM, n)) : DEFAULT_PAGE_SIDE_MARGIN_MM;
   });
-  // ユーザー設定（その他タブの「ページ余白（上）」スライダー、8〜25mm）。
+  // ユーザー設定（ファイルタブ（旧・その他）の「ページ余白（上）」スライダー、8〜25mm）。
   // 新キーが未保存で旧キー（上下共通スライダー時代の値）が残っている場合は、
   // 旧仕様と同じ値（旧値そのもの）を初期値として引き継ぐ。
   const [pageMarginTopMm, setPageMarginTopMm] = useState<number>(() => {
@@ -3264,7 +3264,7 @@ export default function ScorePage() {
     }
     return DEFAULT_PAGE_MARGIN_TOP_MM;
   });
-  // ユーザー設定（その他タブの「ページ余白（下）」スライダー、8〜25mm）。
+  // ユーザー設定（ファイルタブ（旧・その他）の「ページ余白（下）」スライダー、8〜25mm）。
   // 新キーが未保存で旧キーが残っている場合は、旧仕様と同じ値（旧値-2mm）を引き継ぐ。
   const [pageMarginBottomMm, setPageMarginBottomMm] = useState<number>(() => {
     const rawNew = localStorage.getItem(PAGE_MARGIN_BOTTOM_KEY);
@@ -3297,7 +3297,7 @@ export default function ScorePage() {
       ? Math.max(TITLE_MARGIN_BOTTOM_MIN_MM, Math.min(TITLE_MARGIN_BOTTOM_MAX_MM, n))
       : DEFAULT_TITLE_MARGIN_BOTTOM_MM;
   });
-  // ユーザー設定（その他タブの「段の間隔」スライダー、-30〜30px）。
+  // ユーザー設定（ファイルタブ（旧・その他）の「段の間隔」スライダー、-30〜30px）。
   const [systemRowGapPx, setSystemRowGapPx] = useState<number>(() => {
     const raw = localStorage.getItem(SYSTEM_ROW_GAP_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
@@ -3397,7 +3397,7 @@ export default function ScorePage() {
   // 手動設定が実測の上限を超えていて、指定どおり描画するとページからあふれる状態か。
   const isSystemsPerPageOverflowing = systemsPerPage > maxSystemsPerPage;
 
-  // ユーザー設定（その他タブの「小節幅の均等さ」スライダー、0〜1）。
+  // ユーザー設定（ファイルタブ（旧・その他）の「小節幅の均等さ」スライダー、0〜1）。
   // 初期値はコード側の既定値 MEASURE_WIDTH_EVENNESS（0.5）。楽譜データには保存せず、
   // 「段数/ページ」と同じくブラウザの画面設定（localStorage）として永続化する。
   const [measureWidthEvenness, setMeasureWidthEvenness] = useState<number>(() => {
@@ -3732,7 +3732,7 @@ export default function ScorePage() {
     });
   }, [contentMeasureCount, pushHistory]);
 
-  // その他タブの「段割りをリセット」ボタン用: 手動上書きをすべて解除し、自動計画へ戻す。
+  // ファイルタブ（旧・その他）の「段割りをリセット」ボタン用: 手動上書きをすべて解除し、自動計画へ戻す。
   const handleResetSystemMeasureOverrides = useCallback(() => {
     if (systemMeasureOverrides.length === 0) return;
     pushHistory();
@@ -3972,7 +3972,7 @@ export default function ScorePage() {
       try {
         const xml = ev.target?.result as string;
         const loaded = parseMusicXml(xml);
-        // handleLoad と同じロジックで画面に反映する
+        // applyLoadedScoreData と同等のロジックで画面に反映する
         setTitle(loaded.metadata.title);
         setSubtitle(loaded.metadata.subtitle);
         setLyricist(loaded.metadata.lyricist);
@@ -4271,7 +4271,7 @@ export default function ScorePage() {
     if (tabId === 'notes') {
       setTool(lastNotesToolRef.current);
     } else {
-      // 演奏記号・楽譜設定・レイアウト・再生・音色・その他タブでは、無害な既定ツール（4分音符）に戻す。
+      // 演奏記号・楽譜設定・レイアウト・再生・音色・ファイルタブ（旧・その他）では、無害な既定ツール（4分音符）に戻す。
       // これらのタブではPaletteの音符ボタン自体は表示されないが、tool state は
       // 譜面クリック時の挙動に影響するため、編集オーバーレイを開くようなモードを残さない。
       setTool({ duration: '4', isRest: false });
@@ -5678,7 +5678,7 @@ export default function ScorePage() {
                   // 「ページ高 ÷ 段数」をCSSに書きたいが、calc() の var() による除算は
                   // ブラウザ対応が不安定なため、逆数をここで計算して乗算だけで済ませる。
                   '--page-slot-ratio': String(1 / Math.max(1, getPageSystemsCapacity(i))),
-                  // 段の間隔（その他タブの「段の間隔」スライダー）。CSS カスタムプロパティは
+                  // 段の間隔（ファイルタブ（旧・その他）の「段の間隔」スライダー）。CSS カスタムプロパティは
                   // 子孫（.system-stack）へ継承されるため、ここで指定すれば十分。
                   '--system-row-gap': `${systemRowGapPx}px`,
                 } as React.CSSProperties}>
@@ -5916,7 +5916,7 @@ export default function ScorePage() {
                       「この段だけ1小節増やしたい／減らしたい」「この段の上だけ間隔を広げたい」
                       という要望に応えられないため、ページ内の各段の直後に「◀ N小節 ▶」と
                       「間隔 － Npx ＋」を1本ずつ並べる。▶ で次段の先頭小節をこの段へ引き込み
-                      （+1）、◀ でこの段の末尾小節を次段へ送る（-1）。間隔の－／＋は、その他
+                      （+1）、◀ でこの段の末尾小節を次段へ送る（-1）。間隔の－／＋は、レイアウト
                       タブの「段の間隔」（全体設定）に加えてこの段だけ追加で詰める/広げる
                       （.claude/specs/page-layout-controls/design.md 参照）。
                       編集モードのときだけ表示し、印刷には出さない（App.css の @media print 参照）。 */}
