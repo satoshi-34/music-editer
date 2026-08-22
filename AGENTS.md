@@ -25,7 +25,8 @@ open バッチで標準化。props 直接注入のテストは ScorePage 側の�
   （`createWork` → `saveWorkAutosaveData` → `setLastOpenedWorkId`）、
   `render(<ScorePage />)` → 復元を待ち、実際のタブ・セレクト・クリック操作で機能に到達する
 - 検証は DOM で行う（描画された svg の属性・pointer-events・テキストの座標など）。
-  jsdom に無い API（`getBBox`・`clientWidth`・`getBoundingClientRect` 等）は先行例と同じ
+  jsdom で未実装、または実レイアウト値を得られない API・プロパティ
+  （`getBBox`・`clientWidth`・`getBoundingClientRect` 等）は先行例と同じ
   モックで補う。ScorePage の全体マウントは重いので、タイムアウトは先行例と同じく個別に延長する
 - 単体テストが不要になるわけではない。ロジックの分岐網羅は単体テストで、
   「ScorePage からその機能に実際に届くこと」は統合テストで、と役割分担する
