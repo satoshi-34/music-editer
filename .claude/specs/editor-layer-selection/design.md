@@ -62,3 +62,16 @@
   適用するため、四重奏・編成譜のクリックで非表示の activeLayerPart を汚さないよう、
   activeLayerPartIndex 未指定時は requestActiveVoiceChange(voiceIndex) のみ
 - README の声部説明を4レイヤー選択へ更新（P3）
+
+## Codex round2 対応（2026-08-22）
+
+- **レイヤー外パートの空白クリック挿入位置**（P1）: 位置計算用の並び
+  （insertVfNotes/insertEvs）を編集セル用の activeRenderedEntry から分離。
+  編集セルはレイヤーで絞るが、挿入位置は帯域のパート自身のアクティブ声部の並びを
+  常に使う（絞ったままだと at=0 で先頭に割り込む）。テストを並び順の検証まで強化
+  （赤→緑確認済み: 位置計算を絞った版に戻すと失敗する）
+- **レイヤー切替の全経路で選択を手放す**（P2）: ①ツールバーのレイヤーボタン
+  ②V キーの声部切替 ③空白クリック挿入の自動切替（notifyLayerAutoSwitchOnInsert）で
+  requestScoreSelectionClear() を呼ぶ。符頭クリックの切替は選択が新レイヤーへ同時に
+  揃うため対象外。キーボードの音符編集ガードも (partIndex, voiceIndex) の
+  完全一致へ拡張（voiceIndex 未記録の旧経路選択は従来どおり通す）

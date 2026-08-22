@@ -164,7 +164,12 @@ describe('PianoSystemCanvas 編集レイヤー明示選択（#316）', () => {
       expect(onRightChange).not.toHaveBeenCalled();
       expect(onLeftChange).toHaveBeenCalled();
       const nextLeft = onLeftChange.mock.calls.at(-1)![0] as MeasureData[];
-      expect(nextLeft[0].events.filter((ev) => !ev.isRest).length).toBe(3);
+      // 挿入位置の検証（Codex round2 P1）: レイヤー外パートでも既存2音の並びは保たれ、
+      // 新しい音は後ろに入る（位置計算の並びが空だと at=0 になり先頭へ割り込む）
+      const nonRestKeys = nextLeft[0].events.filter((ev) => !ev.isRest).map((ev) => ev.keys[0]);
+      expect(nonRestKeys).toHaveLength(3);
+      expect(nonRestKeys[0]).toBe('c/3');
+      expect(nonRestKeys[1]).toBe('d/3');
       // 入れた先へレイヤー自動切替（パート付きの要求）+ 声部はセレクタ（0）のまま
       const switchEv = events.find((d) => d.partIndex === 1);
       expect(switchEv).toBeTruthy();

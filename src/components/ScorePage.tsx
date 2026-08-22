@@ -2556,6 +2556,9 @@ export default function ScorePage() {
       // ショートカット一発で切り替えられるようにしておくと、
       // 右手のメロディと下声を交互に入力するときにマウスへ戻らずに済む。
       if (e.key === 'v' || e.key === 'V') {
+        // 声部を変えたら譜面の選択も手放す（レイヤーボタンと同じ規則・Issue #238 の型）。
+        // 前の声部の音符が選択のまま残ると、Delete / 矢印キーが切替前の声部へ届いてしまう
+        requestScoreSelectionClear();
         setActiveVoice(prev => (prev === 0 ? 1 : 0));
         e.preventDefault();
       }

@@ -50,6 +50,7 @@ import {
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   requestActiveVoiceChange,
+  requestScoreSelectionClear,
 } from '../utils/scoreEditorNotices';
 import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
@@ -3293,6 +3294,9 @@ export default function PianoSystemCanvas({
       // タイミング差で残った古い選択への Delete / 矢印キーが別レイヤーの音符を書き換える事故を防ぐ
       const layerPart=latestRef.current.activeLayerPartIndex;
       if(layerPart!=null&&sel.partIndex!==layerPart)return;
+      // 声部側も同様（V キー切替は選択を手放すが、タイミング差の残留に備える）。
+      // voiceIndex を記録しない旧経路の選択（単声部）は従来どおり通す
+      if(layerPart!=null&&sel.voiceIndex!=null&&sel.voiceIndex!==latestRef.current.activeVoiceIndex)return;
       const {partIndex,measure,index,keyIndex}=sel;
       const clef=partsClefRef.current[partIndex]??'treble';
       const l2k=(l:number)=>lineToKeyForClef(clef,l);
@@ -4751,11 +4755,15 @@ export default function PianoSystemCanvas({
         // クリックでレイヤーが自動切替される）。空白クリックの挿入は ir（小節背景）経由で
         // 従来どおり帯域のパートへ入る（裁定②案B）。activeLayerPartIndex 未指定なら従来どおり
         const isActiveLayerPart = activeLayerPartIndex == null || pi === activeLayerPartIndex;
-        const activeRenderedEntry = isActiveLayerPart
-          ? renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex)
-          : undefined;
+        // このパート自身のアクティブ声部エントリ。空白クリック挿入の位置計算は
+        // レイヤーに関係なくこれを使う（裁定②案B: 挿入は帯域のパートへ入るため、
+        // レイヤー外パートで並びを空にすると挿入位置が常に先頭（at=0）へ化ける。Codex round2 P1）
+        const partActiveVoiceEntry = renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex);
+        const activeRenderedEntry = isActiveLayerPart ? partActiveVoiceEntry : undefined;
         const activeVfNotes = activeRenderedEntry?.vfNotes ?? [];
         const activeEvs = activeRenderedEntry?.sourceEvents ?? [];
+        const insertVfNotes = partActiveVoiceEntry?.vfNotes ?? [];
+        const insertEvs = partActiveVoiceEntry?.sourceEvents ?? [];
 
         /**
          * 音符1つぶんの「当たり判定の幾何」と「その位置は符頭を選ぶクリックか」の判定式を作る。
@@ -4878,13 +4886,13 @@ export default function PianoSystemCanvas({
           // 声部2がアクティブなときも同じロジックで、声部2自身の音符列に対して
           // クリック位置に最も近い位置へ挿入できるようにする
           // （以前は「常に末尾へ追記」の簡易実装だったが、声部1と同じ操作体系に揃えた）。
-          let at=activeEvs.length,minD=Infinity;
-          if(activeVfNotes.length>0){
-            [{x:measLeft,j:0},{x:measRight,j:activeVfNotes.length}].forEach(({x,j})=>{
+          let at=insertEvs.length,minD=Infinity;
+          if(insertVfNotes.length>0){
+            [{x:measLeft,j:0},{x:measRight,j:insertVfNotes.length}].forEach(({x,j})=>{
               const d=Math.abs(lx-x);if(d<minD){minD=d;at=j;}
             });
-            for(let j=0;j<activeVfNotes.length;j++){
-              const n:any=activeVfNotes[j];
+            for(let j=0;j<insertVfNotes.length;j++){
+              const n:any=insertVfNotes[j];
               const lx2=n.getAbsoluteX?n.getAbsoluteX():measLeft;
               const rx2=lx2+(n.getBoundingBox?.()?.getW()??20);
               if(lx>=lx2&&lx<=rx2){at=lx<(lx2+rx2)/2?j:j+1;minD=0;break;}
@@ -4896,7 +4904,7 @@ export default function PianoSystemCanvas({
           // 2音目・3音目の手前が選ばれることがある。そのまま差し込むとグループが前後に
           // 割れ、同じ tuplet.id が離れて並ぶ壊れたデータになる（Issue #282 の発生経路）。
           // グループの手前か直後の、近いほうへ寄せてから使う。
-          at=snapInsertIndexOutOfTupletGroup(activeEvs,at);
+          at=snapInsertIndexOutOfTupletGroup(insertEvs,at);
 
           const currentMeasure = score[absI] ?? createEmptyMeasure();
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey;
@@ -5036,6 +5044,9 @@ export default function PianoSystemCanvas({
          */
         const notifyLayerAutoSwitchOnInsert = () => {
           if (activeLayerPartIndex == null || pi === activeLayerPartIndex) return;
+          // レイヤーが変わるので、前のレイヤーの選択（音符・弧・松葉）は全 Canvas で手放す。
+          // 残すと切替後の Delete / 矢印キーが古いレイヤーの対象へ届いてしまう（Codex round2 P2）
+          requestScoreSelectionClear();
           requestActiveVoiceChange(activeVoiceIndex, pi);
           notifyScoreEdit(describeActiveLayerSwitched(layerPartLabel(pi), activeVoiceIndex));
         };
