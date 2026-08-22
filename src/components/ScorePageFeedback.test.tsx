@@ -1,6 +1,6 @@
 // src/components/ScorePageFeedback.test.tsx
 // フィードバックボタン（Issue #91）の統合テスト。
-// ヘッダーのタブ行右端に常設された「フィードバック」ボタン（Issue #142 で「その他」タブから移動）を
+// ヘッダーのタブ行右端に常設された「フィードバック」ボタン（Issue #142 で旧「その他」タブから移動）を
 // 押すと、状態一式のJSONがクリップボードへコピーされ、GitHubのIssue下書き画面が
 // 新しいタブで開くことを確認する。
 // レンダー手法は ScorePageSettingsProfile.test.tsx と同じ ScorePage の直接マウントを使う。
@@ -33,7 +33,7 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-const TOOLBAR_TABS = ['音符・休符', '演奏記号', '楽譜設定', 'レイアウト', '再生・音色', 'その他'];
+const TOOLBAR_TABS = ['音符・休符', '演奏記号', '楽譜設定', 'レイアウト', '再生・音色', 'ファイル'];
 
 describe('フィードバックボタン', () => {
   beforeEach(() => {
@@ -64,7 +64,7 @@ describe('フィードバックボタン', () => {
     const data = JSON.parse(json);
 
     // 既存のファイル読込（handleImportFile → importScoreFromFile）と同じ検証関数を通しても
-    // 有効な譜面データとして認識される（＝そのまま「ファイルを開く」で読み込める）ことを確認する
+    // 有効な譜面データとして認識される（＝そのまま「開く」メニューのファイル読込で読み込める）ことを確認する
     expect(validateSavedScoreData(data)).toBe(true);
     // フィードバック専用の追加情報も含まれている
     expect(typeof data.appVersion).toBe('string');

@@ -1,5 +1,5 @@
 // src/components/PrintPreview.test.tsx
-// 印刷プレビューモード（その他タブの「印刷プレビュー」トグル）の最小限の動作確認。
+// 印刷プレビューモード（レイアウトタブの「印刷プレビュー」トグル・#109 第4段で移動）の最小限の動作確認。
 // - トグルを押すと app-root に .print-preview クラスが付く/外れる
 // - プレビュー中に「レイアウト」タブへ切り替えても段の間隔・余白などのレイアウト
 //   調整コントロールが操作でき、プレビューが解除されない
@@ -47,8 +47,8 @@ describe('印刷プレビューモード', () => {
   it('トグルを押すと app-root に print-preview クラスが付き、もう一度押すと外れる', async () => {
     const { container } = render(<ScorePage />);
 
-    // 「その他」タブを開く
-    const otherTab = screen.getByRole('tab', { name: 'その他' });
+    // 「レイアウト」タブを開く
+    const otherTab = screen.getByRole('tab', { name: 'レイアウト' });
     fireEvent.click(otherTab);
 
     const toggleButton = await screen.findByRole('button', { name: /印刷プレビュー/ });
@@ -67,7 +67,7 @@ describe('印刷プレビューモード', () => {
   it('プレビュー中にレイアウトタブへ切り替えてもプレビューが維持され、ページ余白などのレイアウト調整コントロールが操作できる', async () => {
     const { container } = render(<ScorePage />);
 
-    const otherTab = screen.getByRole('tab', { name: 'その他' });
+    const otherTab = screen.getByRole('tab', { name: 'レイアウト' });
     fireEvent.click(otherTab);
 
     const toggleButton = await screen.findByRole('button', { name: /印刷プレビュー/ });

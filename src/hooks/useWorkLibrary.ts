@@ -107,6 +107,8 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
 
   const saveCurrentWork = useCallback((data: SavedScoreData): boolean => {
     let workId = currentWorkIdRef.current;
+    // この呼び出しで発行した作品ID（保存に失敗したらロールバックする対象）
+    let createdWorkId: string | null = null;
 
     if (!workId) {
       const created = createWork(data.metadata?.title ?? '');
@@ -115,11 +117,20 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
         return false;
       }
       workId = created.data.id;
+      createdWorkId = workId;
       setCurrentWorkId(workId);
     }
 
     const result = saveWorkAutosaveData(workId, data);
     if (!result.success) {
+      // いま発行したばかりの作品IDなら取り消す（Codex #109 第4段 round2）。
+      // 残すと「中身の無い空作品」がカタログに増え、currentWorkId も
+      // 保存できていない作品を指したままになる
+      if (createdWorkId) {
+        deleteWork(createdWorkId);
+        setCurrentWorkId(null);
+        setWorks(listWorks());
+      }
       setWorkError(result.error?.message ?? '作品の保存に失敗しました');
       return false;
     }
@@ -160,8 +171,10 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
   }, [saveCurrentWork, setCurrentWorkId]);
 
   const startNewWork = useCallback((currentData: SavedScoreData | null): boolean => {
-    if (currentData) {
-      saveCurrentWork(currentData);
+    if (currentData && !saveCurrentWork(currentData)) {
+      // いまの内容を保存できないまま新しい作品へ切り替えると、その編集だけが失われる
+      // （Codex round1 P1）。workError は saveCurrentWork が設定済み
+      return false;
     }
 
     const created = createWork('');

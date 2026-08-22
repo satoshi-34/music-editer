@@ -96,6 +96,31 @@ describe('useWorkLibrary（作品カタログの操作・Issue #181）', () => {
   });
 
   describe('保存と切替', () => {
+    it('startNewWork: いまの内容の保存に失敗したら新規作品を発行しない（#109 第4段 Codex round1）', () => {
+      const { result } = renderHook(() => useWorkLibrary());
+      const data = makeScore('保存失敗テスト');
+      // 事前保存を失敗させる（自動保存スロットへの書き込みだけ落とす）
+      const original = localStorageMock.setItem.bind(localStorageMock);
+      localStorageMock.setItem = (key: string, value: string) => {
+        if (key.includes('-autosave')) throw new Error('quota');
+        return original(key, value);
+      };
+      try {
+        let started = true;
+        act(() => {
+          started = result.current.startNewWork(data);
+        });
+        // 失敗を無視して新規作品へ進むと、保存できなかった編集だけが失われる
+        expect(started).toBe(false);
+        expect(result.current.workError).not.toBeNull();
+        // 発行しかけた作品はロールバックされ、カタログも現在IDも不変（Codex round2）
+        expect(result.current.currentWorkId).toBeNull();
+        expect(listWorks()).toHaveLength(0);
+      } finally {
+        localStorageMock.setItem = original;
+      }
+    });
+
     it('最初の保存で作品IDが発行され、一覧に1件だけ現れる', () => {
       const { result } = renderHook(() => useWorkLibrary());
       act(() => { result.current.initializeWorks(); });

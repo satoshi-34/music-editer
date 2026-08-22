@@ -47,7 +47,7 @@ type Props = {
   plannedMeasureWidths?: number[];
   systemRanges?: SystemMeasureRange[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
-  // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
+  // 小節幅の均し具合（0〜1）。「レイアウト」タブのスライダー値を Canvas へ中継する。
   measureWidthEvenness?: number;
   /**
    * ページの左右余白(mm)。値そのものは使わず、余白変更時に子の PianoSystemCanvas の
@@ -60,7 +60,7 @@ type Props = {
   finalMeasureIndex?: number;
   // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
   symbolsClickable?: boolean;
-  // 段内の隣接パート間隔への加算補正(px)。「その他」タブの「パート間隔」スライダー
+  // 段内の隣接パート間隔への加算補正(px)。「レイアウト」タブの「パート間隔」スライダー
   // （Issue #90）から中継する。省略時・0のときは従来どおり自動値のまま。
   partSpacingOffsetPx?: number;
   /**

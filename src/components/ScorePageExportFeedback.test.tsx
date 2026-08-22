@@ -31,10 +31,12 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-/** 書出ボタンは「その他」タブにあるため、そちらへ切り替えてから押す */
+/** 書き出しは「ファイル」タブの「書き出し」メニュー（#109 第4段で select 化）から実行する */
 function clickExport(name: 'MusicXML書出' | 'MIDI書出') {
-  fireEvent.click(screen.getByRole('tab', { name: 'その他' }));
-  fireEvent.click(screen.getByRole('button', { name }));
+  fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+  fireEvent.change(screen.getByLabelText('書き出し'), {
+    target: { value: name === 'MusicXML書出' ? 'musicxml' : 'midi' },
+  });
 }
 
 describe('書出のフィードバック（Issue #278）', () => {
@@ -126,7 +128,7 @@ describe('書出のフィードバック（Issue #278）', () => {
 
     // 原因が解消したあと、押し直せば成功の表示に変わる（失敗表示に固まらない）
     Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(() => 'blob:mock'), configurable: true });
-    fireEvent.click(screen.getByRole('button', { name: 'MusicXML書出' }));
+    fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'musicxml' } });
 
     const indicator = await screen.findByTestId('save-status-indicator');
     expect(indicator.textContent).toContain('MusicXMLを書き出しました');
@@ -135,12 +137,9 @@ describe('書出のフィードバック（Issue #278）', () => {
 });
 
 describe('書出インジケータの出し分け（SaveLoadButtons 単体）', () => {
+  // #109 第4段で保存/読込系の props は撤去された
   const baseProps: SaveLoadButtonsProps = {
-    onSave: vi.fn(),
-    onLoad: vi.fn(),
-    isSaving: false,
     isLoading: false,
-    hasStoredData: false,
   };
 
   afterEach(() => cleanup());

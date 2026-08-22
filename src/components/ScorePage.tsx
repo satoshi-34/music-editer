@@ -160,6 +160,7 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
+  describeLegacyImportResult,
   describeWorkHistoryRestoreBlocked,
   describeWorkHistoryRestored,
   describeSliceClearNoop,
@@ -190,14 +191,14 @@ const TOOLBAR_COLLAPSED_KEY = 'score-toolbar-collapsed';
 // 保存する（Issue #211）。キー名・移行・既定値の正本は utils/systemLayoutPrefs.ts。
 // 旧「段数/ページ」の単一キー（score-systems-per-page）も、古いバージョンで開いたとき
 // のために書き続けている（読み取りには使わない）。
-// 「小節幅の均等さ」のユーザー設定（その他タブのスライダー、0〜1）。
+// 「小節幅の均等さ」のユーザー設定（レイアウトタブのスライダー、0〜1）。
 // SavedScoreData には含めず、段数/ページと同じく画面設定として保存する
 const MEASURE_WIDTH_EVENNESS_KEY = 'score-measure-width-evenness';
 // 「画面表示のズーム」のユーザー設定（常設エリアのスライダー、0.5〜3.0）。
 // useAutoPageScale が算出する自動縮尺（--scale）に掛け合わせる倍率として使う。
 // 1.0 = 自動縮尺そのまま（従来どおりの表示）。印刷には影響させない（App.css の @media print 側で解除される）
 const VIEW_ZOOM_KEY = 'score-view-zoom';
-// 「音符の大きさ」のユーザー設定（その他タブのスライダー、0.8〜2.0）。
+// 「音符の大きさ」のユーザー設定（レイアウトタブのスライダー、0.8〜2.0）。
 // SCORE_LAYOUT_RENDER_SCALE（VexFlow の論理座標→物理SVG座標の倍率）に掛け合わせ、
 // 実際に描画・レイアウト計算へ使う「実効スケール」を作る。VIEW_ZOOM と違い、
 // これは画面表示だけでなく印刷結果や段組み（1段に入る小節数）にも影響する。
@@ -208,13 +209,13 @@ const NOTATION_SIZE_KEY = 'score-notation-size';
 // スライダーの min/max、state 初期化時のクランプ、maxSystemsPerPage の動的計算で
 // 同じ範囲を使うため、値のズレが起きないよう定数化しておく（NOTATION_SIZE_MULTIPLIER_MIN/MAX は
 // settingsProfile.ts とも共有するため measureLayoutUtils.ts 側で定義している）。
-// 「ページ余白（左右）」のユーザー設定（その他タブのスライダー、mm単位）。
+// 「ページ余白（左右）」のユーザー設定（レイアウトタブのスライダー、mm単位）。
 // 正本は measureLayoutUtils.ts の printScoreAreaWidthPx()/worstCaseSystemContentBudget() に集約し、
 // CSS 側（.print-page の padding）へはここで作る値を CSS カスタムプロパティとして渡す
 // （CSSとJSでの二重定義を避ける）。既定値 14mm は従来の固定 padding と同じにし、
 // スライダーを一度も触らなければ見た目が変わらないようにする。
 const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
-// 「ページ余白（上）」「ページ余白（下）」のユーザー設定（その他タブのスライダー、各8〜25mm）。
+// 「ページ余白（上）」「ページ余白（下）」のユーザー設定（レイアウトタブのスライダー、各8〜25mm）。
 // 以前は「余白(上下)」1本のスライダーで、上 padding の値をそのまま使い、下 padding は
 // 常に「上 − 2mm」を保つ仕様だった（従来の固定値が 上14mm/下12mm だったため）。
 // これを上下別々に調整できるよう2本のスライダーへ分離した。既定値は分離前と同じ
@@ -234,7 +235,7 @@ const TITLE_MARGIN_BOTTOM_KEY = 'score-title-margin-bottom';
 // window.confirm 時代から変えていない）。テストからも参照できるよう定数にしている。
 export const NEW_SCORE_CONFIRM_MESSAGE =
   'いまの内容を保存して、新しい作品として空の譜面を開きます。これまでの作品は「作品一覧」に残ります。よろしいですか？';
-// 「段の間隔」のユーザー設定（その他タブのスライダー、px単位）。
+// 「段の間隔」のユーザー設定（レイアウトタブのスライダー、px単位）。
 // 正負を問わず単一の連続な方式で反映する: 段スロット高（ページの譜面領域÷段数）を
 // 基準に、この値をスロット高への加減として適用し（App.css の
 // `.score-area .system-stack > *` の flex-basis 計算式）、段の間には
@@ -249,7 +250,7 @@ const SYSTEM_ROW_GAP_KEY = 'score-system-row-gap';
 // 全体の「段の間隔」スライダーと同じ範囲（SYSTEM_ROW_GAP_MIN_PX〜SYSTEM_ROW_GAP_MAX_PX、
 // 現在 −30〜50px。範囲の正本は measureLayoutUtils.ts）を、この刻みで細かく調整できるようにする。
 const SYSTEM_ROW_GAP_OVERRIDE_STEP_PX = 4;
-// 「パート間隔」のユーザー設定（その他タブのスライダー、px単位、Issue #90）。
+// 「パート間隔」のユーザー設定（レイアウトタブのスライダー、px単位、Issue #90）。
 // 段内の隣接パート（右手/左手・四重奏の4段・編成譜のパート間）の間隔を、
 // 自動計算値（staveSpacingForPartCount）への加算補正として調整する。
 // 「段の間隔」（段と段の間）とは別軸の設定で、段内の全パート境界へ一律に適用する
@@ -472,8 +473,8 @@ export default function ScorePage() {
   }, [titleFontId]);
 
   const {
-    saveScore, loadScore, hasStoredData,
-    error, isLoading, isSaving
+    loadScore, hasStoredData,
+    error, isLoading
   } = useScoreStorage();
   // 複数作品の保存（Issue #181・第2段）。「いまどの作品を編集しているか」と
   // 作品一覧の操作（切替・新規作成・削除）はこのフックが受け持つ。
@@ -506,8 +507,9 @@ export default function ScorePage() {
       autoSaveTimerRef.current = null;
     }
   }, []);
-  // localStorage 自体は React の state ではないため、保存しても自動では再描画されない。
-  // 「保存後すぐ読込ボタンを押せるか」は画面状態として持ち、保存/読込の節目で更新する。
+  // localStorage 自体は React の state ではないため、読んでも自動では再描画されない。
+  // 「開く」メニューに「以前の手動保存を取り込む」を出すかどうか（旧スロットの有無）を
+  // 画面状態として持ち、取り込みの節目で更新する（#109 第4段）。
   const [storedDataAvailable, setStoredDataAvailable] = useState(() => hasStoredData());
   // 起動時のサイレント復元（自動保存データがあれば続きから編集できるようにする）が
   // 完了するまでは自動保存を始めない。ここが false のうちに自動保存が走ると、
@@ -526,36 +528,17 @@ export default function ScorePage() {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
     fileSaveWarningTimerRef.current = setTimeout(() => setFileSaveWarning(null), 10000);
   }, []);
-  // 「保存」ボタン（手動保存）の結果表示（Issue #229 のファイル保存とは別経路・Issue #236）。
-  // 自動保存インジケータと同じ場所・同じ体裁で数秒だけ出すため、状態だけをここで持つ。
-  const [manualSaveStatus, setManualSaveStatus] = useState<'idle' | 'saved' | 'failed'>('idle');
-  const manualSaveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 書出（MusicXML / MIDI）の結果表示（Issue #278）。押しても成功・失敗のどちらも画面に出ず、
-  // 例外は誰も捕まえずコンソールに流れるだけだったため、手動保存と同じ右下のインジケータで知らせる。
-  // 「どちらの書出か」「なぜ失敗したか」で文言が変わるので、状態名だけでなく文字列で持つ。
+  // 書き出し（MusicXML / MIDI）の結果表示（Issue #278。ファイル .score.json の結果は
+  // fileSaveWarning 経由で別表示）。押しても成功・失敗の
+  // どちらも画面に出ないと分からないため、右下のインジケータで知らせる。
+  // 「どの書き出しか」「なぜ失敗したか」で文言が変わるので、状態名ではなく文字列で持つ。
+  // ※手動「保存」の結果表示（Issue #236 の manualSaveStatus）は #109 第4段で保存ボタンごと廃止
   const [exportStatus, setExportStatus] = useState<ExportStatus>(null);
   const exportStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showManualSaveStatus = useCallback((status: 'saved' | 'failed') => {
-    setManualSaveStatus(status);
-    if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
-    // 直前の書出の結果が右下に残っていると、あとから押した「保存」の結果がそれに隠れてしまう
-    // （同じインジケータを共用しているため）。新しい操作の結果を出す前に古い表示を消しておく。
-    if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
-    setExportStatus(null);
-    // 成功は自動保存の通知と同じ 3 秒。失敗は「なぜ保存できなかったか」の詳細
-    // （赤いエラー表示）まで目を移してもらう必要があるため、長めに 10 秒残す。
-    manualSaveStatusTimerRef.current = setTimeout(
-      () => setManualSaveStatus('idle'),
-      status === 'saved' ? 3000 : 10000
-    );
-  }, []);
   const showExportStatus = useCallback((kind: 'success' | 'error', message: string) => {
     setExportStatus({ kind, message });
     if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
-    // 上の showManualSaveStatus と対称。古い保存結果に新しい書出結果が隠れないようにする
-    if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
-    setManualSaveStatus('idle');
-    // 表示時間は手動保存とそろえる（成功3秒・失敗10秒）。失敗は理由まで読む時間が要る
+    // 表示時間は成功3秒・失敗10秒。失敗は理由まで読む時間が要る
     exportStatusTimerRef.current = setTimeout(
       () => setExportStatus(null),
       kind === 'success' ? 3000 : 10000
@@ -564,7 +547,6 @@ export default function ScorePage() {
   // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける
   useEffect(() => () => {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
-    if (manualSaveStatusTimerRef.current) clearTimeout(manualSaveStatusTimerRef.current);
     if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
   }, []);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
@@ -584,7 +566,7 @@ export default function ScorePage() {
   // 自動計画（planSystemMeasureRanges）ではなく、ユーザーが個別に段の▶◀ボタンで調整した段だけを保持する。
   const [systemMeasureOverrides, setSystemMeasureOverrides] = useState<SystemMeasureOverride[]>([]);
   // 段ごとの間隔（上の段との距離）のユーザー上書き（「小節 X から始まる段は、全体設定に
-  // Ypx を追加する」の一覧）。その他タブの「段の間隔」（全体設定）とは別に、段ごとの
+  // Ypx を追加する」の一覧）。レイアウトタブの「段の間隔」（全体設定）とは別に、段ごとの
   // ◀▶コントロールの並びで個別に増減できる（.claude/specs/page-layout-controls/design.md 参照）。
   const [systemRowGapOverrides, setSystemRowGapOverrides] = useState<SystemRowGapOverride[]>([]);
 
@@ -1910,7 +1892,7 @@ export default function ScorePage() {
   }, [isScoreEditingLocked, pushHistory, markMeasureEdited]);
 
   // 現在の全 state から保存用データ（parts + metadata）を組み立てるヘルパー。
-  // handleSave / 自動保存 / ファイル書き出しで共通利用する。
+  // 自動保存 / ファイル書き出し / フィードバック payload で共通利用する。
   const buildScoreData = useCallback(() => {
     const metadata = { title, subtitle, lyricist, composer, arranger };
     const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'] as const;
@@ -1946,17 +1928,6 @@ export default function ScorePage() {
           ];
     return { metadata, parts };
   }, [title, subtitle, lyricist, composer, arranger, scoreType, instrumentation, quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData]);
-
-  const handleSave = async () => {
-    const { metadata, parts } = buildScoreData();
-    const saved = await saveScore(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
-    if (saved) {
-      setStoredDataAvailable(true);
-    }
-    // 成否のどちらでも画面に結果を出す（Issue #236）。以前は保存できても画面が
-    // まったく変わらず、押した本人に「保存されたのか」が分からなかった。
-    showManualSaveStatus(saved ? 'saved' : 'failed');
-  };
 
   /**
    * 画面を空の新規譜面へ戻す（保存データには触れない）。
@@ -2084,7 +2055,7 @@ export default function ScorePage() {
     e.target.value = '';
     try {
       const data = await importScoreFromFile(file);
-      // handleLoad と同じロジックで画面へ反映する
+      // applyLoadedScoreData と同等のロジックで画面へ反映する
       setTitle(data.metadata.title);
       setSubtitle(data.metadata.subtitle);
       setLyricist(data.metadata.lyricist);
@@ -2146,7 +2117,7 @@ export default function ScorePage() {
   // createSavedScoreData() の結果をそのまま土台にし、そこへ表示状態などの追加情報を
   // 上乗せするだけにしてある。validateSavedScoreData（src/utils/storage.ts）は既知の
   // フィールドしか見ないため、余分なフィールド（appVersion・viewState）があっても
-  // 無視されるだけで済み、「フィードバックボタンで作ったJSONをそのまま『ファイルを開く』で
+  // 無視されるだけで済み、「フィードバックボタンで作ったJSONをそのまま『開く』メニュー（ファイル）で
   // 読み込める」という受入条件を追加の変換なしに満たせる。
   //
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない
@@ -2156,7 +2127,7 @@ export default function ScorePage() {
     const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
     const feedbackState = {
       ...scoreData,
-      // フィードバック JSON は「ファイルを開く」で読み込める楽譜 JSON なので、
+      // フィードバック JSON は「開く」メニュー（ファイル）で読み込める楽譜 JSON なので、
       // 他の書き出し境界と同じ正規化（鏡同期+実体化）を通す（#244 段5-4）
       parts: scoreData.parts.map((part) => ({
         ...part,
@@ -2164,7 +2135,7 @@ export default function ScorePage() {
       })),
       appVersion: __APP_GIT_SHA__,
       // 譜面データそのものではなく「今どう見えているか」の表示状態。再現性のヒントとして
-      // 添えるだけで、この情報は「ファイルを開く」では読まれない（読込は既存のScoreData
+      // 添えるだけで、この情報は「開く」メニュー（ファイル）では読まれない（読込は既存のScoreData
       // フィールドだけを見るため）。
       viewState: {
         viewZoom,
@@ -2259,6 +2230,9 @@ export default function ScorePage() {
     }
     setSystemMeasureOverrides(restored.systemMeasureOverrides ?? []);
     setSystemRowGapOverrides(restored.systemRowGapOverrides ?? []);
+    // 前の譜面用に増やしていた画面専用の編集用空き段は引き継がない（Codex #109 第4段 round3。
+    // 旧 handleLoad にあったリセット。切替・復元・取り込みの全経路で効くようここへ置く）
+    setExtraEditingMeasures(0);
     // 開き直した譜面は編集位置とは無関係なので、段割りの安定化ヒントもリセットする（Issue #67）
     setLastEditedMeasureIndex(null);
   }, [setTimeSignature]);
@@ -2466,69 +2440,68 @@ export default function ScorePage() {
     notifyScoreEdit(describeWorkHistoryRestored(timestamp));
   }, [applyLoadedScoreData, cancelPendingAutosave, currentWorkId, restoreFromHistory, saveCurrentWork]);
 
-  const handleLoad = async () => {
+  /**
+   * 廃止した手動保存スロット（旧「保存」ボタンの保存先）のデータを、新しい作品として
+   * 取り込む（#109 第4段の移行導線）。旧スロットのデータ自体は消さない（安全側。
+   * 取り込みに失敗しても元データが残るように）。いまの内容は先に保存してから切り替える
+   */
+  const handleImportLegacyManualSave = async () => {
     const loadedData = await loadScore();
     setStoredDataAvailable(hasStoredData());
-    if (loadedData) {
-      setTitle(loadedData.metadata.title);
-      setSubtitle(loadedData.metadata.subtitle);
-      setLyricist(loadedData.metadata.lyricist);
-      setComposer(loadedData.metadata.composer);
-      setArranger(loadedData.metadata.arranger);
-
-      const loadedType = loadedData.scoreType ?? 'single';
-      setKeySignature(normalizeKeySignature(loadedData.keySignature));
-      await setTimeSignature(...normalizeTimeSignature(loadedData.timeSignature));
-      setScoreType(loadedType);
-      setInstrumentation(loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
-      // 旧データには notationMode が無いので、未指定なら実音表示で開く。
-      setNotationMode(loadedData.notationMode ?? 'concert');
-      setTitleFontId(resolveTitleFontOption(loadedData.titleFontId).id);
-      // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
-      setCustomSymbolDefs(loadedData.customSymbolDefs ?? []);
-      if (loadedData.measuresPerSystem && loadedData.measuresPerSystem >= 1 && loadedData.measuresPerSystem <= 8) {
-        setMeasuresPerSystem(loadedData.measuresPerSystem);
-      }
-
-      if (loadedType === 'quartet') {
-        const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
-        setQuartetParts(QUARTET_IDS.map(id =>
-          loadedData.parts.find(p => p.partId === id)?.measures ?? []
-        ));
-        setEnsembleParts([]);
-        setEnsembleSecondStaffParts([]);
-      } else if (loadedType === 'ensemble') {
-        const loadedInstrumentation = loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType);
-        setEnsembleParts(loadedInstrumentation.parts.map(part =>
-          loadedData.parts.find(p => p.partId === part.id)?.measures ?? []
-        ));
-        setEnsembleSecondStaffParts(loadedInstrumentation.parts.map(part =>
-          part.staffCount === 2 ? loadedData.parts.find(p => p.partId === ensembleSecondStaffPartId(part.id))?.measures ?? [] : []
-        ));
-      } else {
-        const rightPart = loadedData.parts.find(p => p.clef === 'treble') ?? loadedData.parts[0];
-        const leftPart  = loadedData.parts.find(p => p.clef === 'bass');
-        setRightHandData(rightPart?.measures ?? []);
-        setLeftHandData(leftPart?.measures);
-        setEnsembleParts([]);
-        setEnsembleSecondStaffParts([]);
-      }
-      // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
-      setExtraEditingMeasures(0);
-      // 段割りの手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
-      setSystemMeasureOverrides(loadedData.systemMeasureOverrides ?? []);
-      // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
-      setLastEditedMeasureIndex(null);
-      // 段の間隔の手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
-      setSystemRowGapOverrides(loadedData.systemRowGapOverrides ?? []);
+    if (!loadedData) {
+      // データが無いのか、あるのに読めない（破損・チェックサム不一致）のかを区別する。
+      // loadScore は失敗時も null を返すため、旧スロットの有無で読み分ける（Codex round2 P3）
+      notifyScoreEdit(describeLegacyImportResult(hasStoredData() ? 'readFailed' : 'notFound'));
+      return;
     }
+    cancelPendingAutosave();
+    // 新規作品の発行（いまの内容の保存を含む）に失敗したら取り込みを中止する。
+    // 失敗を無視して進めると、currentWorkId が旧作品のままの自動保存で
+    // 取り込んだ内容が現在の作品を上書きしてしまう（Codex round1 P1）
+    if (!startNewWork(buildCurrentWorkDataRef.current())) {
+      notifyScoreEdit(describeLegacyImportResult('blocked'));
+      return;
+    }
+    // 前の作品の保存先ファイルハンドルを引き継がない（通常の新規作成と同じ後始末）。
+    // 残っていると取り込み後の「書き出し→ファイル」がダイアログなしで旧作品の
+    // .score.json を上書きしてしまう（Codex round1 P1）
+    fileHandleRef.current = null;
+    await applyLoadedScoreData(loadedData);
+    // 取り込んだ内容を新作品へ同期保存してから完了を知らせる（Codex round3）。
+    // 自動保存（約1.5秒後）任せだと、その前にリロードすると新作品が空のまま残る。
+    // timestamp は現在時刻へ更新する（旧手動保存の保存時刻のままだと updatedAt が古くなり、
+    // 取り込んだばかりの作品が更新順の作品一覧で埋もれる。Codex round4）
+    if (!saveCurrentWork({ ...loadedData, timestamp: Date.now() })) {
+      notifyScoreEdit(describeLegacyImportResult('saveFailed'));
+      return;
+    }
+    notifyScoreEdit(describeLegacyImportResult('done'));
+  };
+
+  /** 「書き出し」メニュー（#109 第4段）。選んだ形式の既存ハンドラへ振り分けて select は空へ戻す */
+  const handleExportMenu = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const kind = event.target.value;
+    event.target.value = '';
+    if (kind === 'file') handleExportFile();
+    else if (kind === 'musicxml') handleExportMusicXml();
+    else if (kind === 'midi') handleExportMidi();
+    else if (kind === 'pdf') void handleExportPdf();
+  };
+
+  /** 「開く」メニュー（#109 第4段） */
+  const handleOpenMenu = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const kind = event.target.value;
+    event.target.value = '';
+    if (kind === 'file') fileImportRef.current?.click();
+    else if (kind === 'musicxml') musicXmlInputRef.current?.click();
+    else if (kind === 'legacy') void handleImportLegacyManualSave();
   };
 
   const handleLoadSample = useCallback((sampleId: DemoScoreId) => {
     const sampleScore = createDemoScore(sampleId);
 
     // 保存データを消さずに、いま表示中の譜面だけ説明用サンプルへ切り替える。
-    // 「あとで自分の譜面に戻したい」場合は、既存の保存/読込ボタンで戻せる。
+    // 「あとで自分の譜面に戻したい」場合は、作品一覧から開き直せる（#109 第4段以降）。
     setTitle(sampleScore.metadata.title);
     setSubtitle(sampleScore.metadata.subtitle);
     setLyricist(sampleScore.metadata.lyricist);
@@ -3166,7 +3139,7 @@ export default function ScorePage() {
   // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
   const effectiveScale = scale * viewZoom;
 
-  // ユーザー設定（その他タブの「音符の大きさ」スライダー、0.8〜2.0）。
+  // ユーザー設定（レイアウトタブの「音符の大きさ」スライダー、0.8〜2.0）。
   // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.8〜2.0 へクランプする
   const [notationSizeMultiplier, setNotationSizeMultiplier] = useState<number>(() => {
     const raw = localStorage.getItem(NOTATION_SIZE_KEY);
@@ -3175,7 +3148,7 @@ export default function ScorePage() {
       ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n))
       : resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier;
   });
-  // ユーザー設定（その他タブの「パート間隔」スライダー、-20〜50px、Issue #90）。
+  // ユーザー設定（レイアウトタブの「パート間隔」スライダー、-20〜50px、Issue #90）。
   // 「段の間隔」と同じく楽譜種別ごとの既定値を持つ（ピアノは+38px、それ以外は0＝
   // 自動計算のまま。Issue #199）。
   // 下の partCountForSystemLayout・ensembleAutoFitMultiplier から参照するため先に定義する。
@@ -3268,7 +3241,7 @@ export default function ScorePage() {
       })
   ), [isPrintPreview, effectiveRenderScale, effectiveScale, scoreStrokeWidthVar, devicePixelRatio]);
 
-  // ユーザー設定（その他タブの「ページ余白（左右）」スライダー、8〜25mm）。
+  // ユーザー設定（レイアウトタブの「ページ余白（左右）」スライダー、8〜25mm）。
   // 壊れた保存値でも安全なよう必ずクランプする。既定値は measureLayoutUtils の
   // DEFAULT_PAGE_SIDE_MARGIN_MM（14mm）と一致させ、未設定時は従来と同じ幅になるようにする。
   const [pageMarginSideMm, setPageMarginSideMm] = useState<number>(() => {
@@ -3276,7 +3249,7 @@ export default function ScorePage() {
     const n = raw == null ? NaN : parseFloat(raw);
     return Number.isFinite(n) ? Math.max(PAGE_MARGIN_SIDE_MIN_MM, Math.min(PAGE_MARGIN_SIDE_MAX_MM, n)) : DEFAULT_PAGE_SIDE_MARGIN_MM;
   });
-  // ユーザー設定（その他タブの「ページ余白（上）」スライダー、8〜25mm）。
+  // ユーザー設定（レイアウトタブの「ページ余白（上）」スライダー、8〜25mm）。
   // 新キーが未保存で旧キー（上下共通スライダー時代の値）が残っている場合は、
   // 旧仕様と同じ値（旧値そのもの）を初期値として引き継ぐ。
   const [pageMarginTopMm, setPageMarginTopMm] = useState<number>(() => {
@@ -3292,7 +3265,7 @@ export default function ScorePage() {
     }
     return DEFAULT_PAGE_MARGIN_TOP_MM;
   });
-  // ユーザー設定（その他タブの「ページ余白（下）」スライダー、8〜25mm）。
+  // ユーザー設定（レイアウトタブの「ページ余白（下）」スライダー、8〜25mm）。
   // 新キーが未保存で旧キーが残っている場合は、旧仕様と同じ値（旧値-2mm）を引き継ぐ。
   const [pageMarginBottomMm, setPageMarginBottomMm] = useState<number>(() => {
     const rawNew = localStorage.getItem(PAGE_MARGIN_BOTTOM_KEY);
@@ -3325,7 +3298,7 @@ export default function ScorePage() {
       ? Math.max(TITLE_MARGIN_BOTTOM_MIN_MM, Math.min(TITLE_MARGIN_BOTTOM_MAX_MM, n))
       : DEFAULT_TITLE_MARGIN_BOTTOM_MM;
   });
-  // ユーザー設定（その他タブの「段の間隔」スライダー、-30〜30px）。
+  // ユーザー設定（レイアウトタブの「段の間隔」スライダー、-30〜30px）。
   const [systemRowGapPx, setSystemRowGapPx] = useState<number>(() => {
     const raw = localStorage.getItem(SYSTEM_ROW_GAP_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
@@ -3425,7 +3398,7 @@ export default function ScorePage() {
   // 手動設定が実測の上限を超えていて、指定どおり描画するとページからあふれる状態か。
   const isSystemsPerPageOverflowing = systemsPerPage > maxSystemsPerPage;
 
-  // ユーザー設定（その他タブの「小節幅の均等さ」スライダー、0〜1）。
+  // ユーザー設定（レイアウトタブの「小節幅の均等さ」スライダー、0〜1）。
   // 初期値はコード側の既定値 MEASURE_WIDTH_EVENNESS（0.5）。楽譜データには保存せず、
   // 「段数/ページ」と同じくブラウザの画面設定（localStorage）として永続化する。
   const [measureWidthEvenness, setMeasureWidthEvenness] = useState<number>(() => {
@@ -3760,7 +3733,7 @@ export default function ScorePage() {
     });
   }, [contentMeasureCount, pushHistory]);
 
-  // その他タブの「段割りをリセット」ボタン用: 手動上書きをすべて解除し、自動計画へ戻す。
+  // レイアウトタブの「段割りをリセット」ボタン用: 手動上書きをすべて解除し、自動計画へ戻す。
   const handleResetSystemMeasureOverrides = useCallback(() => {
     if (systemMeasureOverrides.length === 0) return;
     pushHistory();
@@ -4000,7 +3973,7 @@ export default function ScorePage() {
       try {
         const xml = ev.target?.result as string;
         const loaded = parseMusicXml(xml);
-        // handleLoad と同じロジックで画面に反映する
+        // applyLoadedScoreData と同等のロジックで画面に反映する
         setTitle(loaded.metadata.title);
         setSubtitle(loaded.metadata.subtitle);
         setLyricist(loaded.metadata.lyricist);
@@ -4299,7 +4272,7 @@ export default function ScorePage() {
     if (tabId === 'notes') {
       setTool(lastNotesToolRef.current);
     } else {
-      // 演奏記号・楽譜設定・レイアウト・再生・音色・その他タブでは、無害な既定ツール（4分音符）に戻す。
+      // 演奏記号・楽譜設定・レイアウト・再生・音色・ファイルの各タブでは、無害な既定ツール（4分音符）に戻す。
       // これらのタブではPaletteの音符ボタン自体は表示されないが、tool state は
       // 譜面クリック時の挙動に影響するため、編集オーバーレイを開くようなモードを残さない。
       setTool({ duration: '4', isRest: false });
@@ -4333,7 +4306,8 @@ export default function ScorePage() {
     { id: 'score', label: '楽譜設定' },
     { id: 'layout', label: 'レイアウト' },
     { id: 'playback', label: '再生・音色' },
-    { id: 'other', label: 'その他' },
+    // 第4段（#109）: ファイル操作だけが残ったため「その他」から改名（id は保存済み状態の互換のため据え置き）
+    { id: 'other', label: 'ファイル' },
   ];
   const instrumentationGroups = useMemo(() => {
     // `solo` は「括弧でまとめない」指定なので、画面上のグループ数にも含めない。
@@ -4530,6 +4504,63 @@ export default function ScorePage() {
                   </button>
                 </div>
               )}
+              {/* 移調は「ファイル」タブ（旧・その他）から移動（#109 第4段）。
+                  ファイル操作ではなく小節選択に対する編集操作なので、小節の挿入・削除の隣に置く */}
+              {selectedMeasures && (
+                <div className="coord-correction-wrap">
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => { setTransposeError(null); setShowTransposePanel(v => !v); }}
+                    disabled={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null}
+                    title={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null
+                      ? describeSliceMeasureOpUnavailable('transpose')
+                      : '選択中の小節を半音/全音/オクターブ単位で移調します'}
+                  >
+                    移調
+                  </button>
+                  {showTransposePanel && (
+                    <>
+                      <div className="dropdown-overlay" onClick={() => setShowTransposePanel(false)} />
+                      <div className="coord-panel">
+                        <p className="coord-panel-note">選択中の小節（全パート）を移調します</p>
+                        <div className="coord-panel-row" style={{ flexWrap: 'wrap', gap: 4 }}>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(1)}>半音上</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(-1)}>半音下</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(2)}>全音上</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(-2)}>全音下</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(12)}>オクターブ上</button>
+                          <button type="button" className="ghost" onClick={() => handleTranspose(-12)}>オクターブ下</button>
+                        </div>
+                        <div className="coord-panel-row">
+                          <input
+                            type="number"
+                            min={-12}
+                            max={12}
+                            value={transposeSemitoneInput}
+                            onChange={e => setTransposeSemitoneInput(e.target.value)}
+                            aria-label="移調する半音数"
+                            style={{ width: 56 }}
+                          />
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => {
+                              const n = Math.max(-12, Math.min(12, Number(transposeSemitoneInput)));
+                              if (!Number.isNaN(n)) handleTranspose(n);
+                            }}
+                          >
+                            半音数指定で移調
+                          </button>
+                        </div>
+                        {transposeError && (
+                          <p className="coord-panel-note" style={{ color: 'crimson' }}>{transposeError}</p>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -4707,6 +4738,17 @@ export default function ScorePage() {
 
           {activeToolbarTab === 'layout' && (
             <div className="toolbar-section toolbar-layout-controls">
+              {/* 印刷プレビューは「ファイル」タブ（旧・その他）から移動（#109 第4段）。
+                  レイアウト調整のための表示なので、余白・段組みの操作と同じ場所に置く */}
+              <button
+                type="button"
+                className={`ghost${isPrintPreview ? ' active' : ''}`}
+                onClick={() => setIsPrintPreview(v => !v)}
+                aria-pressed={isPrintPreview}
+                title="実際に印刷される見た目（A4ページ・余白・段区切り）を画面上で確認しながら、ページ余白や段の間隔などのレイアウト調整ができます"
+              >
+                印刷プレビュー{isPrintPreview ? ' ON' : ''}
+              </button>
               {/* スライダーを「用紙と余白 / 譜面の密度 / タイトル」の3グループへ分ける（Issue #143）。
                   以前は10個近くが見出しなしで横一列に並び、どれが紙面の大きさに効いて
                   どれが詰め具合に効くのかが読み取れなかった。グループの箱と見出しを付けて、
@@ -5149,25 +5191,18 @@ export default function ScorePage() {
             <div className="toolbar-section toolbar-other-controls">
               <SaveLoadButtons
                 onNewScore={handleNewScore}
-                onSave={handleSave}
-                onLoad={handleLoad}
                 onLoadSample={import.meta.env.DEV ? handleLoadSample : undefined}
                 onSaveCurrentAsSample={import.meta.env.DEV ? handleSaveCurrentAsSample : undefined}
-                onExportFile={handleExportFile}
-                onImportFile={() => fileImportRef.current?.click()}
-                isSaving={isSaving}
                 isLoading={isLoading}
-                hasStoredData={storedDataAvailable}
                 canSaveCurrentAsSample={scoreType === 'piano'}
                 hasCustomPianoSample={hasCustomPianoSample}
                 autoSaveStatus={autoSaveStatus}
-                manualSaveStatus={manualSaveStatus}
                 exportStatus={exportStatus}
                 restoreNotice={restoreNotice}
                 warningNotice={fileSaveWarning}
                 error={workError ?? error}
               />
-              {/* 作品一覧（Issue #181）。保存・読込の並びの直後に置き、
+              {/* 作品一覧（Issue #181）。新規作成の隣に置き、
                   「ブラウザに保存されている作品を選ぶ」入口だと分かるようにする */}
               <div className="work-list-panel-wrap">
                 <button
@@ -5203,73 +5238,32 @@ export default function ScorePage() {
                 style={{ display: 'none' }}
                 onChange={handleImportFile}
               />
-              <button className="ghost" onClick={handleExportPdf} title="ブラウザの印刷ダイアログを開き、「PDFとして保存」を選ぶと楽譜をPDF書出できます">PDF書出 / 印刷</button>
+              {/* 書き出し・開くの2メニュー（#109 第4段）。個別ボタンの羅列をやめ、
+                  既存の編成選択と同じ select パターンで形式だけを選ぶ。
+                  value は常に空（実行のたびにプレースホルダーへ戻る） */}
+              <label className="toolbar-select-label" title="譜面をファイルや他形式で書き出します">
+                <span>書き出し</span>
+                <select value="" onChange={handleExportMenu} aria-label="書き出し">
+                  <option value="" disabled>形式を選ぶ…</option>
+                  <option value="file">ファイル (.score.json)</option>
+                  <option value="musicxml">MusicXML</option>
+                  <option value="midi">MIDI</option>
+                  <option value="pdf">PDF / 印刷</option>
+                </select>
+              </label>
+              <label className="toolbar-select-label" title="ファイルから譜面を開きます（ブラウザ内の作品切替は「作品一覧」から）">
+                <span>開く</span>
+                <select value="" onChange={handleOpenMenu} aria-label="開く">
+                  <option value="" disabled>開くものを選ぶ…</option>
+                  <option value="file">ファイル (.score.json)</option>
+                  <option value="musicxml">MusicXML読込</option>
+                  {storedDataAvailable && (
+                    <option value="legacy">以前の手動保存を取り込む</option>
+                  )}
+                </select>
+              </label>
               {/* フィードバックボタンはヘッダーのタブ行右端へ移動した（Issue #142）。
                   譜面操作ではなくアプリへのメタ操作であり、どのタブからでも押せる必要があるため。 */}
-              <button
-                type="button"
-                className={`ghost${isPrintPreview ? ' active' : ''}`}
-                onClick={() => setIsPrintPreview(v => !v)}
-                aria-pressed={isPrintPreview}
-                title="実際に印刷される見た目（A4ページ・余白・段区切り）を画面上で確認しながら、ページ余白や段の間隔などのレイアウト調整ができます"
-              >
-                印刷プレビュー{isPrintPreview ? ' ON' : ''}
-              </button>
-              {selectedMeasures && (
-                <div className="coord-correction-wrap">
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => { setTransposeError(null); setShowTransposePanel(v => !v); }}
-                    disabled={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null}
-                    title={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null
-                      ? describeSliceMeasureOpUnavailable('transpose')
-                      : '選択中の小節を半音/全音/オクターブ単位で移調します'}
-                  >
-                    移調
-                  </button>
-                  {showTransposePanel && (
-                    <>
-                      <div className="dropdown-overlay" onClick={() => setShowTransposePanel(false)} />
-                      <div className="coord-panel">
-                        <p className="coord-panel-note">選択中の小節（全パート）を移調します</p>
-                        <div className="coord-panel-row" style={{ flexWrap: 'wrap', gap: 4 }}>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(1)}>半音上</button>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(-1)}>半音下</button>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(2)}>全音上</button>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(-2)}>全音下</button>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(12)}>オクターブ上</button>
-                          <button type="button" className="ghost" onClick={() => handleTranspose(-12)}>オクターブ下</button>
-                        </div>
-                        <div className="coord-panel-row">
-                          <input
-                            type="number"
-                            min={-12}
-                            max={12}
-                            value={transposeSemitoneInput}
-                            onChange={e => setTransposeSemitoneInput(e.target.value)}
-                            aria-label="移調する半音数"
-                            style={{ width: 56 }}
-                          />
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => {
-                              const n = Math.max(-12, Math.min(12, Number(transposeSemitoneInput)));
-                              if (!Number.isNaN(n)) handleTranspose(n);
-                            }}
-                          >
-                            半音数指定で移調
-                          </button>
-                        </div>
-                        {transposeError && (
-                          <p className="coord-panel-note" style={{ color: 'crimson' }}>{transposeError}</p>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
               {partExtractionOptions.length > 0 && (
                 <label className="toolbar-select-label" title="合奏練習用に、選んだ1パートだけの譜面を表示・印刷します（音符の入力・削除はそのまま総譜へ反映されます。大譜表パートは閲覧・印刷専用）">
                   <span>パート譜表示</span>
@@ -5287,9 +5281,6 @@ export default function ScorePage() {
                   </select>
                 </label>
               )}
-              <button className="ghost" onClick={handleExportMusicXml}>MusicXML書出</button>
-              <button className="ghost" onClick={handleExportMidi}>MIDI書出</button>
-              <button className="ghost" onClick={() => musicXmlInputRef.current?.click()}>MusicXML読込</button>
               <input
                 ref={musicXmlInputRef}
                 type="file"
@@ -5688,7 +5679,7 @@ export default function ScorePage() {
                   // 「ページ高 ÷ 段数」をCSSに書きたいが、calc() の var() による除算は
                   // ブラウザ対応が不安定なため、逆数をここで計算して乗算だけで済ませる。
                   '--page-slot-ratio': String(1 / Math.max(1, getPageSystemsCapacity(i))),
-                  // 段の間隔（その他タブの「段の間隔」スライダー）。CSS カスタムプロパティは
+                  // 段の間隔（レイアウトタブの「段の間隔」スライダー）。CSS カスタムプロパティは
                   // 子孫（.system-stack）へ継承されるため、ここで指定すれば十分。
                   '--system-row-gap': `${systemRowGapPx}px`,
                 } as React.CSSProperties}>
@@ -5926,7 +5917,7 @@ export default function ScorePage() {
                       「この段だけ1小節増やしたい／減らしたい」「この段の上だけ間隔を広げたい」
                       という要望に応えられないため、ページ内の各段の直後に「◀ N小節 ▶」と
                       「間隔 － Npx ＋」を1本ずつ並べる。▶ で次段の先頭小節をこの段へ引き込み
-                      （+1）、◀ でこの段の末尾小節を次段へ送る（-1）。間隔の－／＋は、その他
+                      （+1）、◀ でこの段の末尾小節を次段へ送る（-1）。間隔の－／＋は、レイアウト
                       タブの「段の間隔」（全体設定）に加えてこの段だけ追加で詰める/広げる
                       （.claude/specs/page-layout-controls/design.md 参照）。
                       編集モードのときだけ表示し、印刷には出さない（App.css の @media print 参照）。 */}

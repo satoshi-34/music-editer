@@ -848,7 +848,7 @@ type Props = {
   plannedMeasureWidths?: number[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
   /**
-   * 小節幅の均し具合（0〜1）。「その他」タブのスライダーから渡される。
+   * 小節幅の均し具合（0〜1）。「レイアウト」タブのスライダーから渡される。
    * 省略時はコード側の既定値 MEASURE_WIDTH_EVENNESS を使う。
    * 値の意味は measureLayoutUtils.ts の定数コメントを参照。
    */
@@ -890,7 +890,7 @@ type Props = {
    */
   isPrintPreview?: boolean;
   /**
-   * 段内の隣接パート間隔への加算補正(px、ネイティブ単位)。「その他」タブの
+   * 段内の隣接パート間隔への加算補正(px、ネイティブ単位)。「レイアウト」タブの
    * 「パート間隔」スライダー（Issue #90）から渡される。省略時・0のときは
    * 従来どおり staveSpacingForPartCount の自動値のまま。
    */
@@ -1946,7 +1946,7 @@ export default function PianoSystemCanvas({
   const ref = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   // 描画幅は下の描画 useEffect の実行時に ref.current.parentElement.clientWidth を
-  // 一度だけ読む。ページ余白（その他タブの「余白(左右)」スライダー）などで
+  // 一度だけ読む。ページ余白（レイアウトタブの「余白(左右)」スライダー）などで
   // 親要素の実幅が変わっても、その変化だけでは描画 useEffect の依存配列が
   // 変化しないため再描画されない。ResizeObserver で親要素の幅変化を検知し、
   // カウンタを更新して描画 useEffect の依存配列に含めることで追従させる。
@@ -3782,7 +3782,7 @@ export default function PianoSystemCanvas({
     });
 
     // scale prop は ScorePage から「実効レンダースケール」（SCORE_LAYOUT_RENDER_SCALE ×
-    // その他タブの『音符の大きさ』ユーザー倍率）を渡す口。以前は SCORE_LAYOUT_RENDER_SCALE を
+    // レイアウトタブの『音符の大きさ』ユーザー倍率）を渡す口。以前は SCORE_LAYOUT_RENDER_SCALE を
     // 直接ハードコードしており、この prop が実際の描画計算に反映されない不具合があった
     // （deps 配列にだけ scale が入っていて再計算のトリガーにしか使われていなかった）。
     // scale が未指定（テスト等）のときのみ、既定値として SCORE_LAYOUT_RENDER_SCALE を使う。
@@ -3838,7 +3838,7 @@ export default function PianoSystemCanvas({
     });
     const pad=CLEF_PAD_FIRST;
     const alloc=Math.max(0,innerW*TARGET_FILL-pad);
-    // measureWidthEvenness は「その他」タブのスライダー値。段確定後の幅配分だけに効く
+    // measureWidthEvenness は「レイアウト」タブのスライダー値。段確定後の幅配分だけに効く
     // （改段判定は最低幅ベースのままなので、値を変えても段割り・ページ数は変わらない）。
     const widthAllocation=allocateCombinedMeasureWidths(minWs,alloc,requestedScale,measureWidthEvenness);
     // scoreLayoutScale は画面の viewport 縮小とは独立した譜刻用倍率。
