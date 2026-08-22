@@ -1445,6 +1445,46 @@ button.ghost.active:hover:not(:disabled) {
 }
 /* 2ページ目以降の欄外タイトルにも同じ書体を効かせる（未指定なら従来どおり継承） */
 .page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; font-family: var(--title-font-override, inherit); }
+/* ── アプリ内ヘルプ（Issue #341） ─────────────────────────────
+   ヘッダー右端の「❓ ヘルプ」から開くモーダル。dropdown-overlay（既存）で背景を閉じ、
+   本体は画面中央に固定して中身だけスクロールさせる */
+.help-panel {
+  position: fixed;
+  top: 8vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, 94vw);
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.25);
+  z-index: 1000;
+}
+.help-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e3e3e3;
+}
+.help-search { flex: 1; min-width: 0; padding: 6px 10px; border: 1px solid #bbb; border-radius: 6px; font-size: 14px; }
+.help-panel-body { overflow-y: auto; padding: 8px 16px 16px; font-size: 14px; line-height: 1.7; }
+.help-panel-body h3 { font-size: 15px; margin: 14px 0 6px; border-bottom: 2px solid #eee; padding-bottom: 4px; }
+.help-chapter { font-size: 13px; color: #666; margin: 12px 0 4px; }
+.help-guide-item, .help-ref-item { margin: 4px 0; }
+.help-guide-item summary, .help-ref-item summary { cursor: pointer; font-weight: 600; }
+.help-guide-item ol { margin: 6px 0 4px; }
+.help-see-also { border: none; background: none; color: #1a6bb8; cursor: pointer; padding: 0; font-size: 13px; text-decoration: underline; }
+.help-ref-body { padding: 2px 0 6px 4px; }
+.help-ref-body code { background: #f3f3f3; padding: 0 4px; border-radius: 3px; }
+.help-table-wrap { overflow-x: auto; }
+.help-table-wrap table { border-collapse: collapse; margin: 6px 0; }
+.help-table-wrap th, .help-table-wrap td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; vertical-align: top; }
+.help-empty { color: #777; }
+
 /* pointer-events: none — ページ番号は absolute 配置のため、上下余白を狭くしたり
    段の間隔をマイナスにすると、ページ最下段の「◀ N小節 ▶」コントロールに重なって
    クリックを吸ってしまう。フッターはクリック操作を受ける必要がないので素通しにする */
