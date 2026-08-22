@@ -46,3 +46,19 @@
 
 - ②の案A/案B切り替え（上記のとおり1点差し替え）
 - レイヤーごとの色分け表示（Finale 風）・ショートカット（1〜4）
+
+## Codex round1 対応（2026-08-22）
+
+- **描画 effect の依存に activeLayerPartIndex を追加**（P1）: 声部を変えずパートだけ
+  切り替えると SVG の編集セルが古いレイヤーのまま残る（Issue #112 と同型）。
+  再レンダーでセルが付け替わる回帰テストを追加（赤→緑確認済み）。
+  テスト側の注意: customSymbolDefs を省略するとデフォルト引数 `= []` が毎レンダー
+  新しい参照になり effect が常に再実行され、依存漏れを隠す。安定参照を渡すこと
+- **弧・松葉・キーボード編集にもレイヤー制限**（P2): isEditableArc と松葉の onClick に
+  「弧/松葉のパート === activeLayerPartIndex」を追加（未指定なら従来どおり）。
+  レイヤーボタンは requestScoreSelectionClear で選択を手放し、キーボードの音符編集も
+  選択の partIndex がアクティブレイヤーと食い違ったら編集しない（二重の守り）
+- **従来モードでは partIndex を送らない**（P2）: ScorePage 側は譜種を問わず 0/1 を
+  適用するため、四重奏・編成譜のクリックで非表示の activeLayerPart を汚さないよう、
+  activeLayerPartIndex 未指定時は requestActiveVoiceChange(voiceIndex) のみ
+- README の声部説明を4レイヤー選択へ更新（P3）

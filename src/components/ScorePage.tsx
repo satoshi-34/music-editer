@@ -4107,7 +4107,14 @@ export default function ScorePage() {
                       key={label}
                       type="button"
                       className={`ghost toolbar-chip-button${activeLayerPart === partIdx && activeVoice === voiceIdx ? ' active' : ''}`}
-                      onClick={() => { setActiveLayerPart(partIdx); setActiveVoice(voiceIdx); }}
+                      onClick={() => {
+                        // レイヤーを変えたら譜面の選択も手放す（Issue #238 の型）。
+                        // 前のレイヤーの音符・弧・松葉が選択のまま残ると、
+                        // そのあとの Delete / 矢印キーが別レイヤーへ届いてしまう
+                        requestScoreSelectionClear();
+                        setActiveLayerPart(partIdx);
+                        setActiveVoice(voiceIdx);
+                      }}
                       title={`${label}を編集レイヤーにする（V で同じ手の声部だけ切替）`}
                     >
                       {label}

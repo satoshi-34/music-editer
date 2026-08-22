@@ -57,24 +57,35 @@ function renderPiano(activeLayerPartIndex?: number) {
   const left: MeasureData[] = [{ events: [note('c/3'), note('d/3')] }];
   const onRightChange = vi.fn();
   const onLeftChange = vi.fn();
-  const { container } = render(
-    <PianoSystemCanvas
-      measuresPerSystem={1}
-      tool={{ duration: '4', isRest: false } as never}
-      scale={1}
-      partsConfig={[
-        { clef: 'treble', data: right, onChange: onRightChange, label: '右手' },
-        { clef: 'bass', data: left, onChange: onLeftChange, label: '左手' },
-      ]}
-      showInstrumentLabels={false}
-      timeSignature={[4, 4]}
-      activeVoiceIndex={0}
-      {...(activeLayerPartIndex !== undefined ? { activeLayerPartIndex } : {})}
-    />
-  );
+  // 再レンダーで activeLayerPartIndex 以外の参照が変わらないよう、オブジェクト系 prop は固定する。
+  // ここが毎回新しい参照だと、依存配列の別項目（tool 等）で描画 effect が再実行されてしまい、
+  // 「activeLayerPartIndex が依存に無い」取りこぼしをテストが検出できない
+  const stableTool = { duration: '4', isRest: false } as never;
+  const stablePartsConfig = [
+    { clef: 'treble' as const, data: right, onChange: onRightChange, label: '右手' },
+    { clef: 'bass' as const, data: left, onChange: onLeftChange, label: '左手' },
+  ];
+  const stableTimeSignature: [number, number] = [4, 4];
+  // customSymbolDefs は省略するとデフォルト引数 `= []` が毎レンダー新しい配列になり、
+  // 描画 effect が毎回再実行されて依存漏れを隠してしまう。実アプリ（ScorePage）は
+  // 安定した state を渡しているので、テストも安定参照を渡して同じ条件にする
+  const stableCustomSymbolDefs: never[] = [];
+  const props = (layerPart?: number) => ({
+    measuresPerSystem: 1,
+    tool: stableTool,
+    scale: 1,
+    partsConfig: stablePartsConfig,
+    showInstrumentLabels: false,
+    timeSignature: stableTimeSignature,
+    customSymbolDefs: stableCustomSymbolDefs,
+    activeVoiceIndex: 0,
+    ...(layerPart !== undefined ? { activeLayerPartIndex: layerPart } : {}),
+  });
+  const { container, rerender } = render(<PianoSystemCanvas {...props(activeLayerPartIndex)} />);
   const svg = container.querySelector('svg') as SVGSVGElement;
   mockSvgLayout(svg);
-  return { svg, onRightChange, onLeftChange };
+  const rerenderWithLayer = (layerPart: number) => rerender(<PianoSystemCanvas {...props(layerPart)} />);
+  return { svg, container, onRightChange, onLeftChange, rerenderWithLayer };
 }
 
 describe('PianoSystemCanvas 編集レイヤー明示選択（#316）', () => {
@@ -97,6 +108,19 @@ describe('PianoSystemCanvas 編集レイヤー明示選択（#316）', () => {
     expect(svg.querySelectorAll('.vf-note-hit').length).toBe(4);
     // 左手の音符（2音）は選択専用ヒット（.vf-inactive-voice-note-hit）になる
     expect(svg.querySelectorAll('.vf-inactive-voice-note-hit').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('声部を変えずレイヤーのパートだけ切り替えても、編集用セルが付け替わる（再レンダー）', () => {
+    // 右手・声部1 → 左手・声部1 の切替は activeVoiceIndex が変わらないため、
+    // 描画 effect の依存に activeLayerPartIndex が無いと SVG が古いレイヤーのまま残る
+    // （Issue #112 と同型の取りこぼし。Codex round1 P1）
+    const { container, rerenderWithLayer } = renderPiano(0);
+    expect(container.querySelectorAll('.vf-note-hit').length).toBe(4); // 右手4音
+    rerenderWithLayer(1);
+    // 左手（2音 + 空き2拍の詰め物休符）側にだけ編集用セルが付く
+    const cells = container.querySelectorAll('.vf-note-hit');
+    expect(cells.length).toBeGreaterThanOrEqual(2);
+    expect(cells.length).toBeLessThan(4); // 右手4音のセルが残っていない
   });
 
   it('レイヤー未指定（従来モード）では両手に編集用セルが作られる（後方互換）', () => {

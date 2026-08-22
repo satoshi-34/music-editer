@@ -2005,6 +2005,7 @@ export default function PianoSystemCanvas({
     selectedArc: SelectedArcSel;
     selectedHairpin: SelectedHairpinSel;
     activeVoiceIndex: number;
+    activeLayerPartIndex: number | undefined;
     beatsPerMeasure: number;
     selectedMeasures: { start: number; end: number } | null;
     disabled: boolean;
@@ -2015,6 +2016,7 @@ export default function PianoSystemCanvas({
     selectedArc: null,
     selectedHairpin: null,
     activeVoiceIndex,
+    activeLayerPartIndex,
     beatsPerMeasure,
     selectedMeasures: selectedMeasures ?? null,
     disabled,
@@ -2873,6 +2875,7 @@ export default function PianoSystemCanvas({
       selectedArc,
       selectedHairpin,
       activeVoiceIndex,
+      activeLayerPartIndex,
       beatsPerMeasure,
       selectedMeasures: selectedMeasures ?? null,
       disabled,
@@ -3285,6 +3288,11 @@ export default function PianoSystemCanvas({
       // 優先2: 音符が選択中 → 音符操作
       const sel=latestRef.current.selected;
       if(!sel)return;
+      // レイヤー明示選択（#316）中は、選択がアクティブレイヤーのパートと食い違ったら編集しない。
+      // レイヤー切替はツールバー側で選択解除（requestScoreSelectionClear）するので通常は起きないが、
+      // タイミング差で残った古い選択への Delete / 矢印キーが別レイヤーの音符を書き換える事故を防ぐ
+      const layerPart=latestRef.current.activeLayerPartIndex;
+      if(layerPart!=null&&sel.partIndex!==layerPart)return;
       const {partIndex,measure,index,keyIndex}=sel;
       const clef=partsClefRef.current[partIndex]??'treble';
       const l2k=(l:number)=>lineToKeyForClef(clef,l);
@@ -4225,7 +4233,10 @@ export default function PianoSystemCanvas({
       // アクティブ声部にしか作られない既存の考え方（Issue #105）とそろえるためで、
       // 2声部が重なって描かれる小節で、淡色の裏声部の弧を誤って掴む事故も防げる。
       // identity が引けない弧は tiedToNext 方式のレガシー弧で、これは従来から編集対象ではない。
-      const isEditableArc=arcIdentity!==undefined&&arcIdentity.voiceIndex===activeVoiceIndex;
+      // レイヤー明示選択（#316）中は、弧のパートもアクティブレイヤーと一致するときだけ編集可
+      // （音符の当たり判定と同じ考え方。未指定なら従来どおり声部だけで判定）
+      const isEditableArc=arcIdentity!==undefined&&arcIdentity.voiceIndex===activeVoiceIndex
+        &&(activeLayerPartIndex==null||arcIdentity.partIndex===activeLayerPartIndex);
 
       let hitPath:SVGPathElement|null=null;
       if(isEditableArc){
@@ -5332,8 +5343,10 @@ export default function PianoSystemCanvas({
               setSelectedHairpin(null);
               setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:entry.voiceIndex,keyIndex});
               // レイヤー明示選択（#316）: パートまで含めて切り替える。
-              // 従来モード（activeLayerPartIndex 未指定）では partIndex は無視される
-              requestActiveVoiceChange(targetVoiceIndex, pi);
+              // 従来モード（activeLayerPartIndex 未指定）では partIndex を送らない。
+              // ScorePage 側は譜種を問わず 0/1 を適用するため、四重奏・編成譜で
+              // 非表示の activeLayerPart を書き換えてしまわないようにする（Codex round1 P2）
+              requestActiveVoiceChange(targetVoiceIndex, activeLayerPartIndex != null ? pi : undefined);
               // 「勝手にモードが変わった」と感じさせないため、切り替えは必ず画面に出す（Issue #238 の通知）
               notifyScoreEdit(!isActiveLayerPart
                 ? describeActiveLayerSwitched(layerPartLabel(pi), targetVoiceIndex)
@@ -6742,6 +6755,7 @@ export default function PianoSystemCanvas({
         setSelectedHairpin({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
       };
       const onClick=voiceIndex===activeVoiceIndex
+        &&(activeLayerPartIndex==null||partIndex===activeLayerPartIndex)
         ? (ev:MouseEvent)=>{
             // 同じ場所の再クリックなら、奥に隠れている対象（符頭・弧）へ譲る（Issue #264）
             if(tryClickCycle(hairpinCycleId,ev.clientX,ev.clientY))return;
@@ -6817,7 +6831,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
