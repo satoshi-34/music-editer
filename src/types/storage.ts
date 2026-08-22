@@ -417,7 +417,7 @@ export interface SavedScoreData {
   systemMeasureOverrides?: SystemMeasureOverride[];
   /**
    * 段ごとの間隔（上の段との距離）のユーザー上書き。「絶対小節インデックス startMeasure
-   * から始まる段は、その他タブの『段の間隔』設定に加えて gapPx ぶん追加で間隔を空ける（負値は
+   * から始まる段は、レイアウトタブの『段の間隔』設定に加えて gapPx ぶん追加で間隔を空ける（負値は
    * 詰める）」という意味で保持する。systemMeasureOverrides と同様、段の並び順ではなく
    * 開始小節番号をキーにすることで、小節の挿入・削除があっても意味を保ちやすくしている。
    * 旧データ互換のため省略可（省略時は全段とも追加オフセット0＝全体設定のみが効く）。

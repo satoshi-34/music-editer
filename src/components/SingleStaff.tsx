@@ -50,7 +50,7 @@ type Props = {
   // こちらを優先し、各段をこの範囲で描画する（PianoStaff と同様）。
   systemRanges?: SystemMeasureRange[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
-  // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
+  // 小節幅の均し具合（0〜1）。「レイアウト」タブのスライダー値を Canvas へ中継する。
   measureWidthEvenness?: number;
   /**
    * ページの左右余白(mm)。値そのものは使わず、余白変更時に子の PianoSystemCanvas の
@@ -62,12 +62,12 @@ type Props = {
   finalMeasureIndex?: number;
   // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
   symbolsClickable?: boolean;
-  // 段内の隣接パート間隔への加算補正(px)。「その他」タブの「パート間隔」スライダー
+  // 段内の隣接パート間隔への加算補正(px)。「レイアウト」タブの「パート間隔」スライダー
   // （Issue #90）から中継する。省略時・0のときは従来どおり自動値のまま。
   partSpacingOffsetPx?: number;
   /**
    * 段ごとの間隔（上の段との距離）の追加オフセット(px)。systemRanges と同じ並び順の配列で、
-   * 各段の直前に marginTop として乗せる。その他タブの「段の間隔」設定（全体値）に、
+   * 各段の直前に marginTop として乗せる。レイアウトタブの「段の間隔」設定（全体値）に、
    * この段固有のオフセットを足し込む形で個別調整できるようにするため（詳細は
    * .claude/specs/page-layout-controls/design.md 参照）。省略時・値が0のときは従来どおり。
    */

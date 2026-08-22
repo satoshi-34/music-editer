@@ -1,6 +1,6 @@
 // src/components/ScorePageFeedback.test.tsx
 // フィードバックボタン（Issue #91）の統合テスト。
-// ヘッダーのタブ行右端に常設された「フィードバック」ボタン（Issue #142 で「その他」タブから移動）を
+// ヘッダーのタブ行右端に常設された「フィードバック」ボタン（Issue #142 で旧「その他」タブから移動）を
 // 押すと、状態一式のJSONがクリップボードへコピーされ、GitHubのIssue下書き画面が
 // 新しいタブで開くことを確認する。
 // レンダー手法は ScorePageSettingsProfile.test.tsx と同じ ScorePage の直接マウントを使う。

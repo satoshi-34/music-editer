@@ -55,7 +55,7 @@ export const SYSTEM_FIRST_CLEF_PADDING = 50;
 export const SYSTEM_MAX_LABEL_WIDTH = 74;
 // .print-page は box-sizing:border-box で左右のpaddingを持つ（既定14mm）。Canvas 親の実幅は
 // 「A4幅210mm − 左右余白×2」の本文幅であり、A4全幅からの別計算をしない（CSSとの二重定義を避ける）。
-// 左右余白はその他タブの「ページ余白（左右）」スライダーでユーザーが変更できるため、
+// 左右余白はレイアウトタブの「ページ余白（左右）」スライダーでユーザーが変更できるため、
 // 固定値ではなく sideMarginMm 引数を受け取る関数を正本にする。
 // 既定の14mmを省略時の値として使うことで、スライダーを一度も触らないユーザーには
 // 従来どおり全く同じ値（PRINT_SCORE_AREA_WIDTH_PX 相当）が返る。
@@ -109,7 +109,7 @@ export const SYSTEM_ROW_GAP_MAX_PX = 50;
 // への加算補正として使う。0は「自動計算のまま」を意味する（ピアノ以外の既定値）。
 // ピアノだけは既定値が +38（PART_SPACING_OFFSET_PIANO_DEFAULT_PX、Issue #199）。
 // ★調整するならここが正本★ — この3定数を変えるだけで、
-//   1) その他タブ「パート間隔」スライダーの min/max（ScorePage.tsx）
+//   1) レイアウトタブ「パート間隔」スライダーの min/max（ScorePage.tsx）
 //   2) 初期値プリセット読み込み時の範囲検査（settingsProfile.ts）
 //   3) 実描画・段高見積もりのクランプ（computeLayout → MIN_STAVE_SPACING_PX 下限）
 // が追従する。上限は 30→50 に拡大済み（2026-07-27、運用者要望）。
@@ -221,7 +221,7 @@ export function staveSpacingForPartCount(n: number): number {
   return n >= ENSEMBLE_DENSE_SPACING_MIN_PARTS ? STAVE_SPACING_ENSEMBLE : STAVE_SPACING;
 }
 /**
- * partSpacingOffsetPx は「パート間隔」スライダー（その他タブ、Issue #90）の値。
+ * partSpacingOffsetPx は「パート間隔」スライダー（レイアウトタブ、Issue #90）の値。
  * 自動計算した staveSpacingForPartCount への加算補正として、段内の全パート境界へ
  * 一律に適用する（layout-pipeline/design.md 不変条件I3「パート間隔が均一」を
  * 保つため、境界ごとの個別調整はしない）。MIN_STAVE_SPACING_PX を下回らないよう
@@ -715,7 +715,7 @@ export function vexFlowCombinedMeasureMinimumContentWidth(
 //   0.5 = 中間（各小節の幅を、最低幅ベースの配分と等分幅のちょうど中間へ寄せる）
 // ここを大きくすると小節幅は均等に近づくが、64分16連など極端に密な小節は
 // 符頭が近づく（黒い塊に見えやすくなる）トレードオフがある。
-// ※この値は「その他」タブの「小節幅の均等さ」スライダーで画面から調節できる。
+// ※この値は「レイアウト」タブの「小節幅の均等さ」スライダーで画面から調節できる。
 //   この定数はスライダー未設定時（初回起動など）の既定値として使われる。
 export const MEASURE_WIDTH_EVENNESS = 0.5;
 

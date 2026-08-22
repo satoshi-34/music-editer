@@ -53,7 +53,7 @@ type Props = {
   plannedMeasureWidths?: number[];
   systemRanges?: SystemMeasureRange[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
-  // 小節幅の均し具合（0〜1）。「その他」タブのスライダー値を Canvas へ中継する。
+  // 小節幅の均し具合（0〜1）。「レイアウト」タブのスライダー値を Canvas へ中継する。
   measureWidthEvenness?: number;
   /**
    * ページの左右余白(mm)。値そのものは使わず、余白変更時に子の PianoSystemCanvas の
@@ -64,7 +64,7 @@ type Props = {
   pageMarginSideMm?: number;
   // 終止線を描く「内容のある最後の小節」の絶対インデックス。省略時は終止線を描かない。
   finalMeasureIndex?: number;
-  // 段内の隣接パート間隔への加算補正(px)。「その他」タブの「パート間隔」スライダー
+  // 段内の隣接パート間隔への加算補正(px)。「レイアウト」タブの「パート間隔」スライダー
   // （Issue #90）から中継する。パート譜表示は常に1段のため見た目には影響しないが、
   // 他の Staff ラッパーと同じ props 形状にそろえるために受け取る。
   partSpacingOffsetPx?: number;

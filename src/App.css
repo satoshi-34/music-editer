@@ -1396,7 +1396,7 @@ button.ghost.active:hover:not(:disabled) {
   background-image: radial-gradient(#00000008 1px, transparent 1px);
   background-size: 4px 4px;
   color: #111;
-  /* 正本は ScorePage.tsx が算出する --page-margin-* （その他タブの「ページ余白」
+  /* 正本は ScorePage.tsx が算出する --page-margin-* （レイアウトタブの「ページ余白」
      スライダー）。ここでは CSS 変数をそのまま padding へ渡すだけにし、
      JS 側と別の余白定義を持たない（未設定時のフォールバックは従来と同じ 14mm/14mm/12mm）。 */
   padding: var(--page-margin-top, 14mm) var(--page-margin-side, 14mm) var(--page-margin-bottom, 12mm);
@@ -1541,7 +1541,7 @@ button.ghost.active:hover:not(:disabled) {
 }
 .score-area .system-stack > * {
   /* 段スロットの高さは「ページの譜面領域 ÷ 段数上限（--page-capacity）」を基準に、
-     その他タブの「段の間隔」スライダー（-60〜50px。既定はピアノ -30・それ以外0）を
+     レイアウトタブの「段の間隔」スライダー（-60〜50px。既定はピアノ -30・それ以外0）を
      連続的な加減として適用する。
      以前は flex:1 1 0%（残り高さの均等割）だったため、内容のある段がページの段数上限より
      少ない最終ページ等で、少ない段がページ全体へ間延びして散らばっていた
@@ -2036,7 +2036,7 @@ button.ghost.active:hover:not(:disabled) {
 }
 
 /* ===== 印刷プレビュー（画面上で印刷結果を再現するモード） =====
-   .print-preview は「その他」タブの「印刷プレビュー」トグルで app-root に付与される。
+   .print-preview は「レイアウト」タブの「印刷プレビュー」トグルで app-root に付与される。
    上の @media print と同じ見た目（A4紙面の余白・インク色・段区切り）を画面上でも
    再現するためのルール群。CSS の @media print はブラウザの印刷時にしか適用されず、
    画面表示中は効かせられないため、同じ内容をクラスベースで複製している
