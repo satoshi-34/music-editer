@@ -286,6 +286,52 @@ describe('voiceMeasureUtils', () => {
     });
   });
 
+  describe('withVoiceEventsUpdated の dual-write（#244 段5-1）', () => {
+    const note = (key: string): NoteEvent => ({ dur: '4', isRest: false, keys: [key] });
+
+    it('voices を持つ小節で声部1を書き換えると、events と voices[0] が同時に更新される', () => {
+      const measure: MeasureData = {
+        events: [note('c/4')],
+        voices: [
+          { id: 'voice-1', events: [note('c/4')] },
+          { id: 'voice-2', events: [note('e/3')], stemDirection: 'down' },
+        ],
+      };
+      const next = withVoiceEventsUpdated(measure, 0, (events) => [...events, note('d/4')]);
+      expect(next.events).toHaveLength(2);
+      expect(next.voices?.[0].events).toHaveLength(2);
+      expect(next.voices?.[0].events[1].keys).toEqual(['d/4']);
+      // 声部2は触らない（弧の索引を守る約束）
+      expect(next.voices?.[1].events).toHaveLength(1);
+      expect(next.voices?.[1].events[0].keys).toEqual(['e/3']);
+    });
+
+    it('voices[0] の鏡は events と別参照（後から events 側を破壊しても鏡へ波及しない）', () => {
+      const measure: MeasureData = {
+        events: [note('c/4')],
+        voices: [{ id: 'voice-1', events: [note('c/4')] }],
+      };
+      const next = withVoiceEventsUpdated(measure, 0, (events) => [...events, note('d/4')]);
+      expect(next.voices?.[0].events).not.toBe(next.events);
+      expect(next.voices?.[0].events[1]).not.toBe(next.events[1]);
+    });
+
+    it('voices を持たない単声部小節では器を作らない（現行の正規状態を保存・段5-4 まで形式を変えない）', () => {
+      const measure: MeasureData = { events: [note('c/4')] };
+      const next = withVoiceEventsUpdated(measure, 0, (events) => [...events, note('d/4')]);
+      expect(next.events).toHaveLength(2);
+      expect(next.voices).toBeUndefined();
+    });
+
+    it('声部2の書き換えは従来どおり（voices[0] は events のクローンで初期化される）', () => {
+      const measure: MeasureData = { events: [note('c/4')] };
+      const next = withVoiceEventsUpdated(measure, 1, () => [note('e/3')]);
+      expect(next.voices).toHaveLength(2);
+      expect(next.voices?.[0].events[0].keys).toEqual(['c/4']);
+      expect(next.voices?.[1].events[0].keys).toEqual(['e/3']);
+    });
+  });
+
   describe('resolveVoiceStemDirections（2声部の符幹向き固定）', () => {
     it('声部が1つだけなら stemDirection を上書きしない（自動判定のまま）', () => {
       const voices = [{ id: 'voice-1', events: [{ dur: '4' as const, isRest: false, keys: ['c/4'] }] }];

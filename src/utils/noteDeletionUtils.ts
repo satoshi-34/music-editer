@@ -14,7 +14,7 @@
 import type { HairpinMark, MeasureData, NoteEvent, TieArc } from '../types/storage';
 import type { ClefType } from '../components/clefUtils';
 import { buildTupletInnerRest, canReplaceTupletNoteWithRest, planTupletGroupDeletion } from './tupletUtils';
-import { collapseEmptyTrailingVoices, getVoiceEvents } from './voiceMeasureUtils';
+import { collapseEmptyTrailingVoices, getVoiceEvents, withVoiceEventsUpdated } from './voiceMeasureUtils';
 
 /**
  * MeasureData 配列を複製する（各小節・各イベント配列を新しい参照にする）。
@@ -98,8 +98,12 @@ function remapAllMeasuresAfterRemoval(
   removeEnd: number,
   shift: number
 ): void {
-  measures.forEach((m) => {
-    m.events = remapEventRefsAfterRemoval(m.events, measure, removeStart, removeEnd, shift);
+  measures.forEach((m, mi) => {
+    // 正規 API 経由で書く（#244 段5-1・設計メモ§2-5 で名指しの破壊的書き込み）。
+    // voices[0] を持つ小節では dual-write が鏡も同期する。voices[1] 以降の arcs を
+    // 触らない約束（このコメントブロック冒頭）は voiceIndex 0 指定でそのまま守られる。
+    measures[mi] = withVoiceEventsUpdated(m, 0, (events) =>
+      remapEventRefsAfterRemoval(events, measure, removeStart, removeEnd, shift));
   });
 }
 
@@ -286,17 +290,27 @@ export function deleteEventFromMeasures(
   const next = cloneMeasures(measures);
 
   if (plan.kind === 'chordKey') {
-    next[measure].events[index] = plan.nextEvent;
+    // 正規 API 経由で書く（#244 段5-1）。以下の2書き込みも同様
+    next[measure] = withVoiceEventsUpdated(next[measure], 0, (events) => {
+      const copy = [...events];
+      copy[index] = plan.nextEvent;
+      return copy;
+    });
     // 消えた符頭を終点として指していた弧は、別の小節から張られていることもあるので全小節を掃除する。
-    next.forEach((m) => {
-      m.events = purgeArcsToRemovedKey(m.events, measure, index, plan.removedKey);
+    next.forEach((m, mi) => {
+      next[mi] = withVoiceEventsUpdated(m, 0, (events) =>
+        purgeArcsToRemovedKey(events, measure, index, plan.removedKey));
     });
     return next;
   }
 
   // 弧・松葉の付け替えは splice の**前**に行う。arcs が持つ索引は削除前の並びを指しているため。
   remapAllMeasuresAfterRemoval(next, measure, plan.removeStart, plan.removeEnd, plan.shift);
-  next[measure].events.splice(plan.removeStart, plan.removeEnd - plan.removeStart + 1, ...plan.replacement);
+  next[measure] = withVoiceEventsUpdated(next[measure], 0, (events) => {
+    const copy = [...events];
+    copy.splice(plan.removeStart, plan.removeEnd - plan.removeStart + 1, ...plan.replacement);
+    return copy;
+  });
   return next;
 }
 
