@@ -156,3 +156,33 @@ describe('findFirstDifferingMeasureIndex（Issue #67: 段割り安定化用の�
     expect(findFirstDifferingMeasureIndex(undefined, [empty(), empty()])).toBeNull();
   });
 });
+
+describe('新形式（空の primary mirror 付き）の空小節判定（#244 段5-4）', () => {
+  it('空の voice-1 鏡だけを持つ小節は空小節として扱われ、末尾トリムされる', () => {
+    const materializedEmpty = { events: [], voices: [{ id: 'voice-1', events: [] }] };
+    expect(isEmptyMeasure(materializedEmpty)).toBe(true);
+    const trimmed = trimTrailingEmptyMeasures([
+      { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
+      materializedEmpty,
+      { events: [], voices: [{ id: 'voice-1', events: [] }] },
+    ]);
+    expect(trimmed).toHaveLength(1);
+  });
+
+  it('全休符の voice-1 鏡だけを持つ小節は印刷トリム対象になる', () => {
+    const rest = { dur: '1' as const, isRest: true, keys: ['b/4'] };
+    const materializedRestOnly = { events: [rest], voices: [{ id: 'voice-1', events: [rest] }] };
+    expect(isPrintTrimmableMeasure(materializedRestOnly)).toBe(true);
+  });
+
+  it('声部2を持つ小節は空でも従来どおり内容ありとして扱う（#305 の畳み込みの担当領域）', () => {
+    const withVoice2 = {
+      events: [],
+      voices: [
+        { id: 'voice-1', events: [] },
+        { id: 'voice-2', events: [], stemDirection: 'down' as const },
+      ],
+    };
+    expect(isEmptyMeasure(withVoice2)).toBe(false);
+  });
+});

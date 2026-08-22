@@ -96,7 +96,7 @@ describe('MusicXML の声部2（voices[1]）対応', () => {
     expect(measure.voices?.[1].events.map((e) => e.dur)).toEqual(['2', '2']);
   });
 
-  it('声部2が無い小節は export → import しても voices が付与されない（回帰防止）', () => {
+  it('声部2が無い小節は export → import で voice-1 のみ（多声化しない・回帰防止）', () => {
     const data = createSavedScoreData(
       { title: 'No Voice2 Roundtrip', subtitle: '', lyricist: '', composer: '', arranger: '' },
       [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }] }],
@@ -105,7 +105,12 @@ describe('MusicXML の声部2（voices[1]）対応', () => {
     );
     const xml = scoreToMusicXml(data);
     const imported = parseMusicXml(xml);
-    expect(imported.parts[0].measures[0].voices).toBeUndefined();
+    // 段5-4 から: 読込境界で voices[0]（鏡）が実体化される。
+    // 回帰防止の本旨は「勝手に声部2（多声）にならない」ことなので、
+    // voice-1 1本だけ＝多声判定されないことを確認する
+    expect(imported.parts[0].measures[0].voices).toHaveLength(1);
+    expect(imported.parts[0].measures[0].voices?.[0].id).toBe('voice-1');
+    expect(imported.parts[0].measures[0].voices?.[0].events.map((e) => e.keys[0])).toEqual(['c/4']);
   });
 
   it('声部2の松葉（ヘアピン）は <backup> より後（声部2の音符列の側）に出力される', () => {

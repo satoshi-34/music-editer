@@ -143,7 +143,7 @@ import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } fro
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
-import { flattenMeasureForPlayback, getMeasureDurationBeats, getPrimaryVoiceEvents } from '../utils/voiceMeasureUtils';
+import { flattenMeasureForPlayback, getMeasureDurationBeats, getPrimaryVoiceEvents, normalizeMeasuresForPersistence } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import { buildPlaybackPositionTimeline, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
@@ -2084,6 +2084,12 @@ export default function ScorePage() {
     const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides);
     const feedbackState = {
       ...scoreData,
+      // フィードバック JSON は「ファイルを開く」で読み込める楽譜 JSON なので、
+      // 他の書き出し境界と同じ正規化（鏡同期+実体化）を通す（#244 段5-4）
+      parts: scoreData.parts.map((part) => ({
+        ...part,
+        measures: normalizeMeasuresForPersistence(part.measures),
+      })),
       appVersion: __APP_GIT_SHA__,
       // 譜面データそのものではなく「今どう見えているか」の表示状態。再現性のヒントとして
       // 添えるだけで、この情報は「ファイルを開く」では読まれない（読込は既存のScoreData

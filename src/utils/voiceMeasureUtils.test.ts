@@ -162,11 +162,14 @@ describe('voiceMeasureUtils', () => {
       expect(getVoiceEvents(measure, 1)).toEqual([]);
     });
 
-    it('withVoiceEventsUpdated は voiceIndex 0 のとき measure.events を直接書き換える', () => {
+    it('withVoiceEventsUpdated は voiceIndex 0 のとき events と voices[0] の両方を書き換える（#244 段5-4）', () => {
       const measure: MeasureData = { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] };
       const next = withVoiceEventsUpdated(measure, 0, (events) => [...events, { dur: '8', isRest: false, keys: ['d/4'] }]);
       expect(next.events).toHaveLength(2);
-      expect(next.voices).toBeUndefined();
+      // 段5-4 から: voices が無い小節でも書き込み時に鏡（voice-1）を実体化する。
+      // voices[voice-1] 1本だけなら多声小節とは判定されない（getMeasureVoices.length===1）
+      expect(next.voices).toHaveLength(1);
+      expect(next.voices?.[0].events).toEqual(next.events);
     });
 
     it('withVoiceEventsUpdated は voices が無い小節に声部2を新規作成し、符幹を下向きにする', () => {
@@ -222,7 +225,8 @@ describe('voiceMeasureUtils', () => {
         return copy;
       });
       expect(next.events.map((e) => e.keys[0])).toEqual(['c/4', 'd/4', 'e/4']);
-      expect(next.voices).toBeUndefined();
+      // 段5-4 から: 書き込み時に鏡（voice-1）が実体化される
+      expect(next.voices?.[0].events.map((e) => e.keys[0])).toEqual(['c/4', 'd/4', 'e/4']);
     });
 
     it('位置指定挿入（splice）は voiceIndex 1 のとき声部2のクリック位置に挿入できる（以前は末尾追記のみだった）', () => {
@@ -339,10 +343,20 @@ describe('voiceMeasureUtils', () => {
       expect(next.voices?.[0].events[1]).not.toBe(next.events[1]);
     });
 
-    it('voices を持たない単声部小節では器を作らない（現行の正規状態を保存・段5-4 まで形式を変えない）', () => {
+    it('voices を持たない単声部小節にも書き込み時に鏡を実体化する（#244 段5-4 で解禁）', () => {
       const measure: MeasureData = { events: [note('c/4')] };
       const next = withVoiceEventsUpdated(measure, 0, (events) => [...events, note('d/4')]);
       expect(next.events).toHaveLength(2);
+      expect(next.voices).toHaveLength(1);
+      expect(next.voices?.[0].events).toEqual(next.events);
+    });
+
+    it('no-op（updater が同一参照を返す）では鏡を実体化せず元の measure を返す（#244 段5-4）', () => {
+      const measure: MeasureData = { events: [note('c/4')] };
+      const next = withVoiceEventsUpdated(measure, 0, (events) => events);
+      // 参照そのまま＝JSON 差分ゼロ。全小節走査（remap 等）が未編集小節を
+      // 変えてしまわないための約束（Issue #245 / #67 の段割り安定化）
+      expect(next).toBe(measure);
       expect(next.voices).toBeUndefined();
     });
 

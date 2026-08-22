@@ -25,7 +25,7 @@ import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type 
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 import { isArticulationMarkingValue } from './articulationMarkingUtils';
 import { isRenderStaffDirection } from './crossStaffUtils';
-import { normalizeEmptyVoicesInParts, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
@@ -707,9 +707,11 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   // 手編集された JSON では鏡（voices[0]）が古いことがある。read が voices[0] を
   // 優先するようになったため、ここで同期しないと古い鏡が表示・出力に出てしまう。
   // 正本は現段階では events 側（設計メモ§2-5・§11）。
+  // 鏡の同期+全小節への voices 実体化（#244 段5-3/5-4・normalizeMeasuresForPersistence に共通化）。
+  // 旧形式（events-only）のファイルもここを通れば新形式と同じ形になる（読込互換の維持）。
   parsedData.parts = parsedData.parts.map((part) => ({
     ...part,
-    measures: syncMeasuresPrimaryVoiceFromEvents(part.measures),
+    measures: normalizeMeasuresForPersistence(part.measures),
   }));
 
   return {
@@ -823,7 +825,8 @@ function saveScoreDataToSlot(data: SavedScoreData, keys: StorageSlotKeys): Stora
             ...part,
             // 既存の編集ロジックは primary voice を measure.events だけ更新する箇所が多い。
             // 保存直前に voices[0] を同期して、複数声部データの食い違いを防ぐ。
-            measures: syncMeasuresPrimaryVoiceFromEvents(part.measures),
+            // さらに全小節へ voices を実体化する（#244 段5-4・保存の新形式化）。
+            measures: normalizeMeasuresForPersistence(part.measures),
           }))
         : (data as any).parts,
     };

@@ -5,7 +5,7 @@ import type { SavedScoreData } from '../types/storage';
 import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { validateSavedScoreData } from './storage';
 import { normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
-import { normalizeEmptyVoicesInParts, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
 
 // ファイル名に使えない文字を除去するヘルパー
 function safeFileName(title: string): string {
@@ -84,7 +84,17 @@ export async function exportScoreToFile(
   title: string,
   fileHandle?: FileSystemFileHandle | null,
 ): Promise<ExportScoreResult> {
-  const json = JSON.stringify(data, null, 2);
+  // 書き出し境界でも同期+実体化する（#244 段5-4・Codex 1巡目 P2）。
+  // localStorage 保存（saveScoreDataToSlot）だけに入れると、未編集小節を含む譜面の
+  // ファイル書き出しが events-only の旧形式 JSON のまま残ってしまう
+  const normalized: SavedScoreData = {
+    ...data,
+    parts: data.parts.map((part) => ({
+      ...part,
+      measures: normalizeMeasuresForPersistence(part.measures),
+    })),
+  };
+  const json = JSON.stringify(normalized, null, 2);
   const fileName = `${safeFileName(title)}.score.json`;
 
   // File System Access API 対応チェック
@@ -178,7 +188,8 @@ export async function importScoreFromFile(file: File): Promise<SavedScoreData> {
       //    手編集のファイルで鏡が古い場合にここで events（正本）から同期する
       const mirrorSyncedParts = normalizedParts.map((part) => ({
         ...part,
-        measures: syncMeasuresPrimaryVoiceFromEvents(part.measures),
+        // ⑤ 全小節へ voices を実体化（#244 段5-4・保存形式の移行。読込互換の維持）
+        measures: normalizeMeasuresForPersistence(part.measures),
       }));
       resolve({ ...data, parts: mirrorSyncedParts });
     };

@@ -1374,10 +1374,14 @@ describe('Storage Foundation Tests', () => {
       return loadResult.data!.parts[0].measures;
     }
 
-    it('空の voices[1] を含む保存データを読むと、単声部の小節へ畳まれて返る', () => {
+    it('空の voices[1] を含む保存データを読むと、単声部（voice-1 のみ）へ畳まれて返る', () => {
       const [loaded] = saveAndLoad([measureWithEmptyVoice2()]);
 
-      expect(loaded.voices).toBeUndefined();
+      // #305 の目的は「空の声部2で多声小節と誤判定させない」こと。
+      // 段5-4（保存形式の移行）からは全小節が voices を持つため、
+      // 「畳まれた」ことは voices が voice-1 の1本だけ＝多声判定されない、で確認する
+      expect(loaded.voices).toHaveLength(1);
+      expect(loaded.voices?.[0].id).toBe('voice-1');
       // 声部1の中身は畳んでも変わらない
       expect(loaded.events.map((ev) => ev.keys[0])).toEqual(['c/5']);
     });

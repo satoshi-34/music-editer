@@ -175,6 +175,40 @@ describe('events ≡ voices[0] の不変条件（#244 段5-2）', () => {
     }
   });
 
+  it('旧形式（events-only）のデータは保存→読込で全小節に voices が実体化される（#244 段5-4）', () => {
+    const legacy: MeasureData[] = [
+      { events: [note('c/4')] },
+      { events: [] },
+      twoVoiceMeasure(),
+    ];
+    const data: SavedScoreData = {
+      version: '1.0',
+      timestamp: 1,
+      metadata: { title: 't', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      scoreType: 'grand-staff',
+      parts: [
+        { partId: 'right-hand', clef: 'treble', measures: legacy },
+        { partId: 'left-hand', clef: 'bass', measures: [{ events: [note('e/3')] }] },
+      ],
+      systems: 1,
+      measuresPerSystem: 4,
+    };
+    try {
+      expect(saveScoreData(data).success).toBe(true);
+      const loaded = loadScoreData();
+      expect(loaded.success).toBe(true);
+      const loadedParts = loaded.success ? loaded.data?.parts ?? [] : [];
+      loadedParts.forEach((part) => {
+        part.measures.forEach((m) => {
+          expect(m.voices?.length ?? 0).toBeGreaterThanOrEqual(1);
+        });
+        expectPrimaryMirror(part.measures);
+      });
+    } finally {
+      clearStoredData();
+    }
+  });
+
   it('非同期の（レガシー書き込み相当の）データも保存→読込で鏡が直る', () => {
     // events だけ書き換えられ voices[0] が古い、という dual-write 以前の書き込みを模す。
     // 保存時同期（syncMeasuresPrimaryVoiceFromEvents）が外れるとここで検出される
@@ -322,10 +356,10 @@ describe('events ≡ voices[0] の不変条件（#244 段5-2）', () => {
     }
   });
 
-  it('voices を持たない単声部小節は events-only のまま（不変条件の限定の確認）', () => {
+  it('voices を持たない単声部小節も、書き込み後は鏡が実体化され不変条件が成り立つ（#244 段5-4）', () => {
     const measures: MeasureData[] = [{ events: [note('c/4')] }];
     const next = [withVoiceEventsUpdated(measures[0], 0, (events) => [...events, note('d/4')])];
-    expect(next[0].voices).toBeUndefined();
-    expectPrimaryMirror(next); // voices が無いので vacuous に成立
+    expect(next[0].voices).toHaveLength(1);
+    expectPrimaryMirror(next);
   });
 });

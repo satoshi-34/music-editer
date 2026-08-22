@@ -7,6 +7,7 @@ import type { ClefType } from '../components/clefUtils';
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
 import { isValidTimeSignature } from './timeSignatureUtils';
+import { ensureMeasuresPrimaryVoiceMaterialized } from './voiceMeasureUtils';
 
 /**
  * MusicXML の <clef><sign>/<line> を ClefType に変換する。
@@ -366,7 +367,11 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     return {
       partId: partName,
       clef,
-      measures: measures.length ? measures : [{ events: [{ dur: '1', isRest: true, keys: [] }] }],
+      // 読込境界の実体化（#244 段5-4）: 単声部の小節は voices: undefined で組み立てられる
+      // ため、ここで全小節へ voices[0] を実体化してから返す（他の読込境界と同じ扱い）
+      measures: ensureMeasuresPrimaryVoiceMaterialized(
+        measures.length ? measures : [{ events: [{ dur: '1', isRest: true, keys: [] }] }],
+      ),
     };
   });
 
