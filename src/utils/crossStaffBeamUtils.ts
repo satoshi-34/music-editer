@@ -46,9 +46,29 @@ export function generateCrossStaffBeams(
   renderPartIndexes: readonly number[],
   beamOptions: BeamGenerationOptions
 ): Beam[] {
-  // 手順1: またぎが無いときとまったく同じ区切りを求める。ここで作られる Beam は
+  // 手順1: またぎが無いときとまったく同じ「拍の区切り」を求める。ここで作られる Beam は
   // 「どこで拍が切れるか」を知るためだけのもので、描画には使わず捨てる。
-  const beatGroups = Beam.generateBeams([...notes] as StemmableNote[], beamOptions);
+  //
+  // 注意（Codex 1巡目 P1）: 区切り決定に符幹方向オプションを渡してはいけない。
+  // 声部2では maintainStemDirections: true が来ており、またぎ音符（向き未設定=自動）と
+  // 自五線の音符（下向き固定）の**方向の変化位置でグループが先に分断**され、
+  // またぎ検出（crossing）に届く前に各グループが単一五線になってしまう。
+  // 区切りは純粋に拍だけで決め、方向は後段（またぎ=五線間向き / 非またぎ=元のオプション）で付ける。
+  const {
+    stemDirection: _ignoredStemDirection,
+    maintainStemDirections: _ignoredMaintain,
+    ...beatOnlyOptions
+  } = (beamOptions ?? {}) as Record<string, unknown>;
+  // 区切り決定パスは符幹方向を書き換える（自動判定を適用する）ので、先に控えて後で戻す。
+  // 戻さないと、非またぎグループの再生成（maintainStemDirections: true）が
+  // 「自動判定に上書きされた向き」を維持してしまい、声部の向き固定（#239）が壊れる
+  const originalDirections = notes.map(note => (note as StemmableNote).getStemDirection());
+  const beatGroups = Beam.generateBeams([...notes] as StemmableNote[], beatOnlyOptions);
+  notes.forEach((note, index) => {
+    if ((note as StemmableNote).getStemDirection() !== originalDirections[index]) {
+      (note as StemmableNote).setStemDirection(originalDirections[index]);
+    }
+  });
   const indexOfNote = new Map<StemmableNote, number>();
   notes.forEach((note, index) => indexOfNote.set(note as StemmableNote, index));
 

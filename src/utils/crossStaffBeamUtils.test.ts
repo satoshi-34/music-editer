@@ -108,6 +108,26 @@ describe('段またぎがあるときのビームの束ね方（Issue #313）', 
   });
 });
 
+describe('声部2（符幹固定オプションあり）の段またぎ連桁（Codex 1巡目 P1 の回帰）', () => {
+  it('maintainStemDirections が来ても、またぎを含む拍は1本で繋がる', () => {
+    // 声部2の実際の呼ばれ方: makeVFNote が自五線の音符へ down を設定済み+
+    // beamOptions に { stemDirection: -1, maintainStemDirections: true }
+    const notes = eighthNotes(4);
+    notes.forEach((n, i) => n.setStemDirection(i === 1 ? 1 : -1)); // またぎ音符(1)は自動=上向き相当
+    const voice2Options = { ...BEAM_OPTIONS, stemDirection: -1, maintainStemDirections: true };
+    const beams = generateCrossStaffBeams(notes, [0, 1, 0, 0], voice2Options);
+
+    // 区切り決定が方向の変化で分断されず、1拍目がまたぎ連桁として1本になる
+    expect(beams.map((beam) => beam.getNotes().length)).toEqual([2, 2]);
+    // またぎグループの向きは五線間へ（上の五線=下向き / 下の五線=上向き）
+    expect(notes[0].getStemDirection()).toBe(-1);
+    expect(notes[1].getStemDirection()).toBe(1);
+    // 非またぎグループ（2拍目）は声部の向き固定（down）が維持される（#239）
+    expect(notes[2].getStemDirection()).toBe(-1);
+    expect(notes[3].getStemDirection()).toBe(-1);
+  });
+});
+
 describe('整形後のビーム参照の復元（Issue #319）', () => {
   it('setStemDirection で消えたビーム参照と符幹の向きを復元する', () => {
     const notes = eighthNotes(12);
