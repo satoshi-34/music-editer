@@ -33,6 +33,7 @@ import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/
 import {
   SCORE_SELECTION_CLEAR_EVENT,
   describeAbsorbedChordKey,
+  describeActiveLayerSwitched,
   describeActiveVoiceSwitched,
   describeVoiceSwitchUnavailable,
   describeCrossStaffToggled,
@@ -827,6 +828,13 @@ type Props = {
   // 声部切り替えトグル: 0 = 声部1（上声）、1 = 声部2（下声）、…（N 声対応で number・#244 段5-5。
   // 0|1 の制約は ScorePage / パレットの UI 境界にのみ残す）。省略時は 0（従来互換）。
   activeVoiceIndex?: number;
+  /**
+   * 編集レイヤーのパート側（#316）。指定すると「レイヤー = (このパート, activeVoiceIndex)」の
+   * 明示選択モードになり、他パートの音符は選択専用（クリックでレイヤー自動切替+通知）になる。
+   * 空白クリックの挿入は従来どおり帯域優先（クリックした帯のパート×activeVoiceIndex。
+   * 設計メモ editor-layer-selection の裁定②案B）。省略時は従来の帯域推測のみ（非ピアノ譜種）。
+   */
+  activeLayerPartIndex?: number;
   /** ScorePage の線形Plannerが計測済みの、現在システム内の小節幅。 */
   plannedMeasureWidths?: number[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
@@ -1912,6 +1920,7 @@ export default function PianoSystemCanvas({
   onMeasureRangeSelect,
   customSymbolDefs = [],
   activeVoiceIndex = 0,
+  activeLayerPartIndex,
   measureWidthEvenness = MEASURE_WIDTH_EVENNESS,
   pageMarginSideMm,
   symbolsClickable = false,
@@ -1947,6 +1956,14 @@ export default function PianoSystemCanvas({
     { clef: 'treble', data: trebleData ?? [], onChange: onTrebleChange ?? (() => {}), label: undefined },
     { clef: 'bass',   data: bassData   ?? [], onChange: onBassChange   ?? (() => {}), label: undefined },
   ];
+  /**
+   * レイヤー切替通知（#316）用のパート名。part.label（五線のパート名表示と共用）が
+   * 無いときは、レイヤー通知が出るのはピアノ譜（activeLayerPartIndex はピアノ経路のみ）
+   * なので右手/左手で補う。label を直接埋めないのは、showInstrumentLabels の
+   * 五線ラベル描画に影響させないため
+   */
+  const layerPartLabel = (p: number): string =>
+    parts[p]?.label ?? (p === 0 ? '右手' : p === 1 ? '左手' : `パート${p + 1}`);
   const partsLayoutSignature = JSON.stringify(parts.map(part => ({
     clef: part.clef,
     label: part.label,
@@ -4718,7 +4735,14 @@ export default function PianoSystemCanvas({
         // ときは空の声部として扱い、ヒット領域を一切作らない（＝クリックは常に
         // 背景クリックとして扱われ、この小節にアクティブ声部の音符を新規挿入する）
         // ことで、声部1側を誤って編集しないようにする。
-        const activeRenderedEntry = renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex);
+        // レイヤー明示選択（#316）: 選択レイヤーのパートでなければ、この小節に
+        // 「編集用」のアクティブ声部セルを作らない（音符はすべて選択専用ヒットになり、
+        // クリックでレイヤーが自動切替される）。空白クリックの挿入は ir（小節背景）経由で
+        // 従来どおり帯域のパートへ入る（裁定②案B）。activeLayerPartIndex 未指定なら従来どおり
+        const isActiveLayerPart = activeLayerPartIndex == null || pi === activeLayerPartIndex;
+        const activeRenderedEntry = isActiveLayerPart
+          ? renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex)
+          : undefined;
         const activeVfNotes = activeRenderedEntry?.vfNotes ?? [];
         const activeEvs = activeRenderedEntry?.sourceEvents ?? [];
 
@@ -4953,6 +4977,7 @@ export default function PianoSystemCanvas({
             });
             notifyLeadingRestFill(leading, voiceCountAfterInsert);
             playNoteEvent(groupEvents[0], part.playbackInstrument);
+            notifyLayerAutoSwitchOnInsert();
             return;
           }
 
@@ -4989,6 +5014,19 @@ export default function PianoSystemCanvas({
             // 置いた直後の確認音があると、右手左手どちらでも音高チェックがしやすい。
             playNoteEvent(insertedEvent, part.playbackInstrument);
           }
+          notifyLayerAutoSwitchOnInsert();
+        };
+
+        /**
+         * レイヤー明示選択（#316・裁定②案B）: 空白クリックの挿入は帯域のパートへ入るが、
+         * それが選択レイヤーと違うパートだったときは、入れた先へレイヤーを自動切替して
+         * 必ず通知する（#258 の「切り替えは画面に出す」原則）。こうしないと
+         * 「置いた音符がすぐには編集できない（選択専用になる）」ちぐはぐが起きる
+         */
+        const notifyLayerAutoSwitchOnInsert = () => {
+          if (activeLayerPartIndex == null || pi === activeLayerPartIndex) return;
+          requestActiveVoiceChange(activeVoiceIndex, pi);
+          notifyScoreEdit(describeActiveLayerSwitched(layerPartLabel(pi), activeVoiceIndex));
         };
 
         const isMeasureSelected = selectedMeasures != null &&
@@ -5255,7 +5293,9 @@ export default function PianoSystemCanvas({
         //  - ハンドラがするのは「声部の切り替え・選択・通知・試聴」だけで、
         //    音符を増やす/置き換える編集は一切しない
         renderedVoiceEntries.forEach((entry)=>{
-          if(entry.voiceIndex===activeVoiceIndex)return;
+          // レイヤー明示選択（#316）: 選択レイヤーのパートではアクティブ声部を除外（従来）、
+          // 他パートでは全声部の音符が「選ぶだけ」の対象になる
+          if(entry.voiceIndex===activeVoiceIndex && isActiveLayerPart)return;
           const otherVfNotes=entry.vfNotes;
           const otherEvs=entry.sourceEvents;
           if(otherVfNotes.length===0)return;
@@ -5291,9 +5331,13 @@ export default function PianoSystemCanvas({
               setSelectedArc(null);
               setSelectedHairpin(null);
               setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:entry.voiceIndex,keyIndex});
-              requestActiveVoiceChange(targetVoiceIndex);
+              // レイヤー明示選択（#316）: パートまで含めて切り替える。
+              // 従来モード（activeLayerPartIndex 未指定）では partIndex は無視される
+              requestActiveVoiceChange(targetVoiceIndex, pi);
               // 「勝手にモードが変わった」と感じさせないため、切り替えは必ず画面に出す（Issue #238 の通知）
-              notifyScoreEdit(describeActiveVoiceSwitched(targetVoiceIndex));
+              notifyScoreEdit(!isActiveLayerPart
+                ? describeActiveLayerSwitched(layerPartLabel(pi), targetVoiceIndex)
+                : describeActiveVoiceSwitched(targetVoiceIndex));
               playNoteEvent({...ev,keys:[ev.keys[keyIndex]]}, part.playbackInstrument);
             };
             // 符頭ごとに1枚ずつ rect を作る。和音は符頭が縦に離れて並ぶので、

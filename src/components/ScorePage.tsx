@@ -395,6 +395,9 @@ export default function ScorePage() {
   // 1=声部2（下声・符幹下向き）。ピアノ譜以外では使わないが、
   // 楽譜種別を切り替えても迷わないように値自体は保持しておく。
   const [activeVoice, setActiveVoice] = useState<0 | 1>(0);
+  // 編集レイヤーのパート側（#316・ピアノ譜のみ）。レイヤー = (activeLayerPart, activeVoice) の
+  // 4通り（右手/左手 × 声部1/2）。既定は右手（裁定③案A: 常に明示選択）
+  const [activeLayerPart, setActiveLayerPart] = useState<0 | 1>(0);
   const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
   // 「音符・休符」タブで直前に選んでいたツール（音価・タイ・臨時記号など）を覚えておくための ref。
   // 他のタブ（演奏記号タブなど）へ切り替えたあと再び「音符・休符」タブへ戻ったときに、
@@ -3909,9 +3912,13 @@ export default function ScorePage() {
   // 通知そのものは譜面側が notifyScoreEdit で出すため、ここでは声部を変えるだけでよい。
   useEffect(() => {
     const onActiveVoiceChange = (e: Event) => {
-      const voiceIndex = (e as CustomEvent<ScoreActiveVoiceChangeDetail>).detail?.voiceIndex;
+      const detail = (e as CustomEvent<ScoreActiveVoiceChangeDetail>).detail;
+      const voiceIndex = detail?.voiceIndex;
       if (voiceIndex !== 0 && voiceIndex !== 1) return;
       setActiveVoice(voiceIndex);
+      // レイヤー切替（#316）: パート付きの要求ならパート側も切り替える（0/1 以外は無視 = UI 境界）
+      const partIndex = detail?.partIndex;
+      if (partIndex === 0 || partIndex === 1) setActiveLayerPart(partIndex);
     };
     window.addEventListener(SCORE_ACTIVE_VOICE_CHANGE_EVENT, onActiveVoiceChange);
     return () => window.removeEventListener(SCORE_ACTIVE_VOICE_CHANGE_EVENT, onActiveVoiceChange);
@@ -4089,26 +4096,23 @@ export default function ScorePage() {
                 crossStaffAvailable={scoreType === 'piano' && !isPartExtractionActive}
               />
               {scoreType === 'piano' && (
-                // ピアノ譜だけ声部切り替えトグルを出す。単旋律譜・弦楽四重奏などは
-                // 声部2の入力先（下声パート）という概念自体がないため出さない。
-                <div className="toolbar-chip-group" role="group" aria-label="声部切り替え">
-                  <span className="toolbar-group-label">声部</span>
-                  <button
-                    type="button"
-                    className={`ghost toolbar-chip-button${activeVoice === 0 ? ' active' : ''}`}
-                    onClick={() => setActiveVoice(0)}
-                    title="声部1（上声・符幹上向き）"
-                  >
-                    声部1（上声）
-                  </button>
-                  <button
-                    type="button"
-                    className={`ghost toolbar-chip-button${activeVoice === 1 ? ' active' : ''}`}
-                    onClick={() => setActiveVoice(1)}
-                    title="声部2（下声・符幹下向き）。ショートカット: V"
-                  >
-                    声部2（下声）
-                  </button>
+                // 編集レイヤーの統合セレクタ（#316）: 手×声部の4レイヤーを明示選択する。
+                // 従来の「パートは帯域推測・声部はトグル」の二層を一本化した。
+                // 音符クリックでそのレイヤーへ自動切替+通知（#258 の型）。
+                // 空白クリックの挿入は従来どおりクリックした帯のパートへ入る（裁定②案B）
+                <div className="toolbar-chip-group" role="group" aria-label="編集レイヤー切り替え">
+                  <span className="toolbar-group-label">レイヤー</span>
+                  {([[0, 0, '右手・声部1'], [0, 1, '右手・声部2'], [1, 0, '左手・声部1'], [1, 1, '左手・声部2']] as const).map(([partIdx, voiceIdx, label]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className={`ghost toolbar-chip-button${activeLayerPart === partIdx && activeVoice === voiceIdx ? ' active' : ''}`}
+                      onClick={() => { setActiveLayerPart(partIdx); setActiveVoice(voiceIdx); }}
+                      title={`${label}を編集レイヤーにする（V で同じ手の声部だけ切替）`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               )}
               {selectedMeasures && (
@@ -5461,6 +5465,7 @@ export default function ScorePage() {
                       onMeasureRangeSelect={handleMeasureRangeSelect}
                       customSymbolDefs={customSymbolDefs}
                       activeVoiceIndex={activeVoice}
+                      activeLayerPartIndex={activeLayerPart}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}

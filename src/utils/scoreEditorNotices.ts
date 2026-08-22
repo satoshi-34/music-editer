@@ -28,6 +28,11 @@ export const SCORE_ACTIVE_VOICE_CHANGE_EVENT = 'music-editer-score-active-voice-
 export interface ScoreActiveVoiceChangeDetail {
   /** 切り替え先の声部（0 = 上声/声部1、1 = 下声/声部2、… N 声対応で number・#244 段5-5） */
   voiceIndex: number;
+  /**
+   * 切り替え先のパート（#316 レイヤー選択）。省略時はパートを変えず声部だけ切り替える
+   * （従来の声部トグル互換）。ピアノ譜では 0=右手・1=左手
+   */
+  partIndex?: number;
 }
 
 export interface ScoreEditNoticeDetail {
@@ -68,10 +73,10 @@ export function requestScoreSelectionClear(): void {
  * ScorePage で、あいだに5つのラッパーが挟まっている事情は通知（notifyScoreEdit）と同じなので、
  * 同じ window の CustomEvent 方式にそろえている。
  */
-export function requestActiveVoiceChange(voiceIndex: number): void {
+export function requestActiveVoiceChange(voiceIndex: number, partIndex?: number): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(
-    new CustomEvent<ScoreActiveVoiceChangeDetail>(SCORE_ACTIVE_VOICE_CHANGE_EVENT, { detail: { voiceIndex } })
+    new CustomEvent<ScoreActiveVoiceChangeDetail>(SCORE_ACTIVE_VOICE_CHANGE_EVENT, { detail: { voiceIndex, partIndex } })
   );
 }
 
@@ -85,6 +90,14 @@ export function requestActiveVoiceChange(voiceIndex: number): void {
  */
 export function describeActiveVoiceSwitched(voiceIndex: number): string {
   return `声部${voiceIndex + 1}に切り替えました`;
+}
+
+/**
+ * レイヤー（パート×声部）ごと切り替わったことを知らせる文言（#316）。
+ * パートが変わらない切り替えは describeActiveVoiceSwitched を使う。
+ */
+export function describeActiveLayerSwitched(partLabel: string, voiceIndex: number): string {
+  return `${partLabel}・声部${voiceIndex + 1}に切り替えました`;
 }
 
 /**
