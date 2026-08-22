@@ -18,6 +18,8 @@ import { insertEmptyMeasureBefore, deleteMeasureAt } from './measureInsertDelete
 import { transposeMeasuresForDisplay } from './displayTransposeUtils';
 import { fillPriorMeasureRests } from './measureRestFillUtils';
 import { transposeMeasureRange } from './transposeUtils';
+import { saveScoreData, loadScoreData, clearStoredData } from './storage';
+import type { SavedScoreData } from '../types/storage';
 
 const note = (key: string, extra?: Partial<NoteEvent>): NoteEvent =>
   ({ dur: '4', isRest: false, keys: [key], ...extra });
@@ -99,11 +101,31 @@ describe('events ≡ voices[0] の不変条件（#244 段5-2）', () => {
     expect(getVoiceEvents(v1[0], 1)[0].keys).toEqual(['c/3']);
   });
 
-  it('小節の挿入・削除（events と voices を同時に扱う経路）後に成り立つ', () => {
-    const measures = [twoVoiceMeasure(), twoVoiceMeasure()];
+  it('小節の挿入・削除で弧の小節参照（toMeasureIndex）が実際に繰り上がっても成り立つ', () => {
+    // 小節0のイベントが小節1のイベントを指す弧を、events と voices[0] の両方に同期して持たせる。
+    // 挿入で toMeasureIndex が 1→2 へ変わるので、remap が events だけを更新して
+    // voices[0] を置き去りにする実装へ戻ると expectPrimaryMirror で検出される
+    // （Codex 2巡目 P2: 弧なしフィクスチャでは remap が no-op で検出力が無かった）。
+    const withCrossMeasureArc: NoteEvent = {
+      dur: '4', isRest: false, keys: ['c/4'],
+      arcs: [{ fromKey: 'c/4', toKey: 'e/4', toMeasureIndex: 1, toEventIndex: 0, kind: 'slur' }],
+    };
+    const m0Primary = [withCrossMeasureArc, note('d/4')];
+    const measures: MeasureData[] = [
+      {
+        events: m0Primary,
+        voices: [
+          { id: 'voice-1', events: m0Primary.map((ev) => ({ ...ev, keys: [...ev.keys], arcs: ev.arcs?.map(a => ({ ...a })) })) },
+          { id: 'voice-2', events: [note('e/3'), note('f/3')], stemDirection: 'down' },
+        ],
+      },
+      twoVoiceMeasure(),
+    ];
     const inserted = insertEmptyMeasureBefore(measures, 1);
+    expect(inserted[0].events[0].arcs?.[0].toMeasureIndex).toBe(2);
     expectPrimaryMirror(inserted);
     const deleted = deleteMeasureAt(inserted, 1);
+    expect(deleted[0].events[0].arcs?.[0].toMeasureIndex).toBe(1);
     expectPrimaryMirror(deleted);
   });
 
@@ -119,6 +141,74 @@ describe('events ≡ voices[0] の不変条件（#244 段5-2）', () => {
     // 逆変換後は実音: 追加した g/4（表示座標）は実音では g/4 - 2半音 = f/4
     const added = savedBack[0].events.at(-1)!;
     expect(added.keys).toHaveLength(1);
+  });
+
+  it('実APIの保存→読込の往復（saveScoreData/loadScoreData）後に成り立つ', () => {
+    // ヘルパー直呼びではなく保存・読込の境界そのものを通す（Codex 2巡目 P2）。
+    // 保存側の同期が外れる・読込の正規化が片側だけ書き換える、のどちらの回帰もここで検出される。
+    const edited = [withVoiceEventsUpdated(twoVoiceMeasure(), 0, (events) => [...events, note('g/4')])];
+    const data: SavedScoreData = {
+      version: '1.0',
+      timestamp: 1,
+      metadata: { title: 't', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      scoreType: 'grand-staff',
+      parts: [
+        { partId: 'right-hand', clef: 'treble', measures: edited },
+        { partId: 'left-hand', clef: 'bass', measures: [twoVoiceMeasure()] },
+      ],
+      systems: 1,
+      measuresPerSystem: 4,
+    };
+    try {
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+      const loaded = loadScoreData();
+      expect(loaded.success).toBe(true);
+      const loadedParts = loaded.success ? loaded.data?.parts ?? [] : [];
+      expect(loadedParts).toHaveLength(2);
+      loadedParts.forEach((part) => expectPrimaryMirror(part.measures));
+      // 編集内容も失われていない（往復等価）
+      expect(loadedParts[0].measures[0].events).toHaveLength(5);
+      expect(loadedParts[0].measures[0].events.at(-1)!.keys).toEqual(['g/4']);
+    } finally {
+      clearStoredData();
+    }
+  });
+
+  it('非同期の（レガシー書き込み相当の）データも保存→読込で鏡が直る', () => {
+    // events だけ書き換えられ voices[0] が古い、という dual-write 以前の書き込みを模す。
+    // 保存時同期（syncMeasuresPrimaryVoiceFromEvents）が外れるとここで検出される
+    // （同期済み入力の往復テストでは dual-write が肩代わりするため検出できない）。
+    const desynced: MeasureData = {
+      events: [note('a/4')],
+      voices: [
+        { id: 'voice-1', events: [note('c/4')] },
+        { id: 'voice-2', events: [note('e/3')], stemDirection: 'down' },
+      ],
+    };
+    const data: SavedScoreData = {
+      version: '1.0',
+      timestamp: 1,
+      metadata: { title: 't', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      scoreType: 'grand-staff',
+      parts: [
+        { partId: 'right-hand', clef: 'treble', measures: [desynced] },
+        { partId: 'left-hand', clef: 'bass', measures: [twoVoiceMeasure()] },
+      ],
+      systems: 1,
+      measuresPerSystem: 4,
+    };
+    try {
+      expect(saveScoreData(data).success).toBe(true);
+      const loaded = loadScoreData();
+      expect(loaded.success).toBe(true);
+      const loadedParts = loaded.success ? loaded.data?.parts ?? [] : [];
+      loadedParts.forEach((part) => expectPrimaryMirror(part.measures));
+      // 正本は events 側（a/4）。鏡がそちらへ揃う
+      expect(loadedParts[0].measures[0].voices?.[0].events[0].keys).toEqual(['a/4']);
+    } finally {
+      clearStoredData();
+    }
   });
 
   it('保存時同期（syncMeasuresPrimaryVoiceFromEvents）は dual-write 済みデータに対して冪等', () => {

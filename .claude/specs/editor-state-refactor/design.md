@@ -338,3 +338,10 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
   - 選択範囲の移調 `transposeMeasureRange`（events と voices を別々に再構築する経路）
 - **レッドチェック実施**: fillPriorMeasureRests を破壊的 push へ・remap を events 直接代入へ
   一時的に戻し、それぞれ対応するテストが 1 件だけ落ちることを確認（検出力の実証）
+- **Codex 2巡目（P2×2）への対応（計17件へ）**:
+  - 小節挿入/削除の弧参照（toMeasureIndex）が実際に繰り上がるフィクスチャを追加
+    （レッドチェック: voices 側の remap を外すと検出される）
+  - 実 API（saveScoreData/loadScoreData）を通した往復テストを追加。同期済み入力に加えて
+    **非同期入力（レガシー書き込み相当）**のケースも用意 — 同期済み入力だけでは保存時同期の
+    除去を検出できないことがレッドチェックで判明したため（dual-write が肩代わりする）。
+    非同期入力ケースは保存時同期を外すと検出される
