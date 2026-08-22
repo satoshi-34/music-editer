@@ -398,3 +398,8 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
 - 実機検証の記録: スモーク中に描画数の差（163→169）を検知したが、main へ一時切替して
   同一データで数え直した結果 main も 169 ＝ 差はコードではなく検証用ブラウザ内データの
   ドリフト由来と確認（このベースライン比較の手順は再利用価値あり）
+- **Codex 1巡目（P2×2: 境界の漏れ）への対応**: (1) ファイル書き出し exportScoreToFile と
+  カスタムサンプル保存 saveCustomPianoDemoScore（localStorage 保存とは別の JSON 書き込み
+  境界）にも同期+実体化を適用 (2) MusicXML 読込 parseMusicXml の小節組み立てにも実体化を
+  適用（単声部は voices: undefined で生成されていた）。声部2なし往復テストの期待を
+  「voices が付かない」→「voice-1 のみ＝多声化しない」へ更新（回帰防止の本旨は維持）

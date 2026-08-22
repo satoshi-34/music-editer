@@ -124,6 +124,9 @@ export function saveCustomPianoDemoScore(score: DemoScore): boolean {
     ...score,
     scoreType: 'piano',
     recommendedInstrument: score.recommendedInstrument ?? InstrumentType.PIANO,
+    // 書き出し境界でも同期+実体化する（#244 段5-4・fileStorage の書き出しと同じ理由）
+    rightHand: ensureMeasuresPrimaryVoiceMaterialized(syncMeasuresPrimaryVoiceFromEvents(score.rightHand)),
+    leftHand: ensureMeasuresPrimaryVoiceMaterialized(syncMeasuresPrimaryVoiceFromEvents(score.leftHand)),
   };
 
   try {

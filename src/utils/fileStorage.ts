@@ -84,7 +84,17 @@ export async function exportScoreToFile(
   title: string,
   fileHandle?: FileSystemFileHandle | null,
 ): Promise<ExportScoreResult> {
-  const json = JSON.stringify(data, null, 2);
+  // 書き出し境界でも同期+実体化する（#244 段5-4・Codex 1巡目 P2）。
+  // localStorage 保存（saveScoreDataToSlot）だけに入れると、未編集小節を含む譜面の
+  // ファイル書き出しが events-only の旧形式 JSON のまま残ってしまう
+  const normalized: SavedScoreData = {
+    ...data,
+    parts: data.parts.map((part) => ({
+      ...part,
+      measures: ensureMeasuresPrimaryVoiceMaterialized(syncMeasuresPrimaryVoiceFromEvents(part.measures)),
+    })),
+  };
+  const json = JSON.stringify(normalized, null, 2);
   const fileName = `${safeFileName(title)}.score.json`;
 
   // File System Access API 対応チェック
