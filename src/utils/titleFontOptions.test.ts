@@ -1,10 +1,11 @@
 // タイトルまわりのフォント選択（Issue #342）の純関数テスト。
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_TITLE_FONT_ID,
   TITLE_FONT_OPTIONS,
   ensureTitleFontLoaded,
   resolveTitleFontOption,
+  waitForTitleFontReady,
 } from './titleFontOptions';
 
 describe('titleFontOptions（#342）', () => {
@@ -43,5 +44,27 @@ describe('titleFontOptions（#342）', () => {
     ensureTitleFontLoaded(resolveTitleFontOption('mincho'));
     expect(document.getElementById('title-font-mincho')).toBeNull();
     document.getElementById(linkId)?.remove();
+  });
+
+  it('waitForTitleFontReady はシステムフォントでは即 resolve、Webフォントでは fonts.load を待つ', async () => {
+    // システムスタック: document.fonts に触れず即終わる
+    await expect(waitForTitleFontReady(resolveTitleFontOption('mincho'))).resolves.toBeUndefined();
+    // Webフォント: document.fonts.load をスタック先頭の family 名で呼ぶ（jsdom には無いのでモック）
+    const load = vi.fn().mockResolvedValue([]);
+    Object.defineProperty(document, 'fonts', { value: { load }, configurable: true });
+    const webFont = TITLE_FONT_OPTIONS.find((option) => option.googleFontFamily)!;
+    await waitForTitleFontReady(webFont);
+    expect(load).toHaveBeenCalledWith(expect.stringContaining('Noto'));
+    Reflect.deleteProperty(document, 'fonts');
+    document.getElementById(`title-font-${webFont.id}`)?.remove();
+  });
+
+  it('waitForTitleFontReady は読み込みが返らなくてもタイムアウトで先へ進む（印刷を止めない）', async () => {
+    const load = vi.fn().mockReturnValue(new Promise(() => {})); // 永遠に解決しない
+    Object.defineProperty(document, 'fonts', { value: { load }, configurable: true });
+    const webFont = TITLE_FONT_OPTIONS.find((option) => option.googleFontFamily)!;
+    await expect(waitForTitleFontReady(webFont, 50)).resolves.toBeUndefined();
+    Reflect.deleteProperty(document, 'fonts');
+    document.getElementById(`title-font-${webFont.id}`)?.remove();
   });
 });

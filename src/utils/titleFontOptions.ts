@@ -62,3 +62,22 @@ export function ensureTitleFontLoaded(option: TitleFontOption): void {
   link.href = `https://fonts.googleapis.com/css2?family=${option.googleFontFamily}&display=swap`;
   document.head.appendChild(link);
 }
+
+/**
+ * 印刷（window.print）前に、選択中のWebフォントの読み込み完了を待つ。
+ * 読み込み前に印刷すると、フォールバック書体のままPDFへ固定されてしまうため（Codex round1 P1）。
+ * システムスタックのフォントは即 resolve。ネットワーク断などで読み込めない場合に
+ * 印刷が永久に止まらないよう、タイムアウトで必ず先へ進む（そのときはフォールバック書体で出る）。
+ */
+export async function waitForTitleFontReady(option: TitleFontOption, timeoutMs = 2000): Promise<void> {
+  if (!option.googleFontFamily || typeof document === 'undefined' || !document.fonts?.load) return;
+  ensureTitleFontLoaded(option);
+  // スタック先頭の family 名（例: "Noto Serif JP"）で読み込みを待つ
+  const primaryFamily = option.stack.split(',')[0].trim().replace(/^"|"$/g, '');
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs));
+  try {
+    await Promise.race([document.fonts.load(`16px "${primaryFamily}"`).then(() => undefined), timeout]);
+  } catch {
+    // 読み込み失敗は握りつぶす（スタックの後続フォントで印刷される）
+  }
+}

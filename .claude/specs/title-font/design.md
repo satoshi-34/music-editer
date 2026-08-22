@@ -42,3 +42,12 @@
 
 - 受入条件「既存譜面の見た目が1pxも変わらない」を「変数を注入しない」で満たす設計にした。
   既定にもスタック文字列を持たせて常に注入する案は、--score-text-font との二重管理になるため不採用
+
+## Codex round1 対応（2026-08-22）
+
+- **印刷前にWebフォントの読み込みを待つ**（P1）: handleExportPdf を async 化し、
+  waitForTitleFontReady（新設）で document.fonts.load をスタック先頭 family 名で待つ。
+  タイムアウト付き（既定2秒）でオフラインでも印刷は止まらない（フォールバック書体で出る）。
+  システムスタックのフォントは即 resolve
+- **未知IDの読込時正規化**（P2）: 読込3経路の `?? DEFAULT` を `resolveTitleFontOption(id).id` へ。
+  一覧から消えたIDが state に残ってセレクトが空欄になり、そのIDが再保存され続けるのを防ぐ

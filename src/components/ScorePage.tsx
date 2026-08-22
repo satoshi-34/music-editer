@@ -31,7 +31,7 @@ import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useWorkLibrary } from '../hooks/useWorkLibrary';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
 import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
-import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, ensureTitleFontLoaded, resolveTitleFontOption } from '../utils/titleFontOptions';
+import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, ensureTitleFontLoaded, resolveTitleFontOption, waitForTitleFontReady } from '../utils/titleFontOptions';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXml } from '../utils/musicXmlImport';
 import { downloadMidi } from '../utils/midiExport';
@@ -2104,7 +2104,7 @@ export default function ScorePage() {
       setScoreType(loadedType);
       setInstrumentation(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
       setNotationMode(data.notationMode ?? 'concert');
-    setTitleFontId(data.titleFontId ?? DEFAULT_TITLE_FONT_ID);
+    setTitleFontId(resolveTitleFontOption(data.titleFontId).id);
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
       setCustomSymbolDefs(data.customSymbolDefs ?? []);
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
@@ -2236,7 +2236,7 @@ export default function ScorePage() {
     setScoreType(restoredType);
     setInstrumentation(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType));
     setNotationMode(restored.notationMode ?? 'concert');
-    setTitleFontId(restored.titleFontId ?? DEFAULT_TITLE_FONT_ID);
+    setTitleFontId(resolveTitleFontOption(restored.titleFontId).id);
     setCustomSymbolDefs(restored.customSymbolDefs ?? []);
     if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
       setMeasuresPerSystem(restored.measuresPerSystem);
@@ -2464,7 +2464,7 @@ export default function ScorePage() {
       setInstrumentation(loadedData.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
       // 旧データには notationMode が無いので、未指定なら実音表示で開く。
       setNotationMode(loadedData.notationMode ?? 'concert');
-      setTitleFontId(loadedData.titleFontId ?? DEFAULT_TITLE_FONT_ID);
+      setTitleFontId(resolveTitleFontOption(loadedData.titleFontId).id);
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
       setCustomSymbolDefs(loadedData.customSymbolDefs ?? []);
       if (loadedData.measuresPerSystem && loadedData.measuresPerSystem >= 1 && loadedData.measuresPerSystem <= 8) {
@@ -3961,9 +3961,13 @@ export default function ScorePage() {
   // PDF書出: 自前でPDFを生成せず、ブラウザの印刷ダイアログを開く方式にする。
   // App.css の @media print が既に A4 整形済みの印刷スタイルを用意しているため、
   // ここでは window.print() を呼ぶだけで良い（ユーザーが印刷ダイアログで「PDFとして保存」を選ぶ）。
-  const handleExportPdf = useCallback(() => {
+  const handleExportPdf = useCallback(async () => {
+    // Webフォント（Noto系）選択時は読み込み完了を待ってから印刷する。
+    // 待たずに print すると読み込み前のフォールバック書体がPDFへ固定される（Codex round1 P1）。
+    // タイムアウト付きなので、オフラインでも印刷が止まることはない
+    await waitForTitleFontReady(resolveTitleFontOption(titleFontId));
     window.print();
-  }, []);
+  }, [titleFontId]);
 
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
