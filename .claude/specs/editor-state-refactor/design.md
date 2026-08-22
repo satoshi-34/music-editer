@@ -294,3 +294,27 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
   - **段4c-2**: Pass 3 のうち描画専用の部分（声部・ビーム・連符の draw ループ、
     エントリ消費の最終描画段）の関数化。ハンドラ設定部は段3 で既にテーブル化済みのため、
     無理に閉包から引き剥がさない（引数化で偽の継ぎ目を作らない・段3c doInsert と同じ裁定）
+
+## 11. 段5-1 の実装記録（2026-08-22・write 正規化 + dual-write）
+
+- **dual-write**: `withVoiceEventsUpdated(voiceIndex 0)` が、voices を持つ小節では正本 events と
+  鏡 voices[0]（cloneNoteEvent で別参照）を同時更新する。**voices を持たない単声部小節には
+  器を作らない** — events-only が現行の正規状態（§2-5 移行境界）で、保存形式を段5-4 より前に
+  変えないため。§2-5 本文の「常に同時更新」はこの読みで実装（Codex 1巡目が移行境界として妥当と判定）。
+  これに伴い段5-2 の不変条件は「**voices を持つ小節では**編集後常に events ≡ voices[0]」と読む
+- **破壊的書き込みの根絶**（§2-5 名指しの3か所）: fillPriorMeasureRests（PSC）の events.push /
+  noteDeletionUtils の remapAllMeasuresAfterRemoval・chordKey置換+purgeArcsToRemovedKey・splice を
+  すべて `withVoiceEventsUpdated(m, 0, ...)` 経由へ。声部2以降の arcs を触らない既存の約束
+  （弧の声部ローカル索引の保護）は voiceIndex 0 指定でそのまま維持
+- **記譜音表示ブリッジの対称化**（Codex 1巡目 P1・2巡目 P2 の対応。バグ修正として挙動差あり）:
+  - 問題: `transposeMeasuresForDisplay` が表示用 events の keys/arcs だけを移調しており、
+    (a) dual-write が記譜音の events を voices[0] へ複製→逆変換が events しか戻さず鏡に記譜音が残る
+    (b) 記譜音モードの声部2編集が voices[1] に記譜音のまま保存され実音へ戻らない（潜在バグ）
+    (c) 前打音（graceNotes[].keys）が両方向とも未変換で、表示は実音のまま・新規追加は記譜音のまま
+    保存され主音との音程関係が崩れる（潜在バグ）
+  - 修正設計: shiftEvent（keys・arcs・graceNotes）を **events と全 voices[*].events へ両方向で適用**
+    し、表示⇄保存の往復を対称にする。voices を持たない小節にはキーを作らない（保存形式不変）
+  - 影響範囲: 移調楽器（semitones≠0）×記譜音モードのみ。声部2の表示が記譜音になる・
+    声部2/前打音の保存音高が実音に正しく戻る、の2点がバグ修正としての挙動差
+  - データ構造: 変更なし（MeasureData/NoteEvent の形はそのまま）
+  - 経緯: PR #350 の Codex レビュー1〜2巡目。テスト: dual-write 4件 + 往復3件を追加

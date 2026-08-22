@@ -134,7 +134,27 @@ export function withVoiceEventsUpdated(
   updater: (events: NoteEvent[]) => NoteEvent[],
 ): MeasureData {
   if (voiceIndex <= 0) {
-    return { ...measure, events: updater(measure.events ?? []) };
+    const nextEvents = updater(measure.events ?? []);
+    // dual-write（#244 段5-1）: 正本 events を書き換えたら、voices を持つ小節では
+    // その場で voices[0] も同期する。従来は保存時の syncMeasuresPrimaryVoiceFromEvents
+    // 頼みで、編集してから保存されるまでの間 voices[0] が古いままだった
+    // （read を voices[0] 優先へ切り替える段5-3 の前提を崩す）。
+    // voices を持たない小節にはあえて器を作らない — 単声部小節は voices を
+    // 持たないのが現行の正規状態（設計メモ§2-5 移行境界）で、ここで作ると
+    // 保存形式が段5-4（保存形式の移行）より前に変わってしまう。読み手は
+    // 「voices[0]?.events ?? events」のフォールバックで両形式を吸収する。
+    if (!measure.voices || measure.voices.length === 0) {
+      return { ...measure, events: nextEvents };
+    }
+    return {
+      ...measure,
+      events: nextEvents,
+      voices: measure.voices.map((voice, index) => (
+        index === 0
+          ? { ...voice, events: nextEvents.map(cloneNoteEvent) }
+          : voice
+      )),
+    };
   }
 
   const existingVoices = measure.voices?.map(cloneVoiceData) ?? [

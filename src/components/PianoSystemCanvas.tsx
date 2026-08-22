@@ -483,7 +483,13 @@ function fillPriorMeasureRests(
     const currentBeats = measure.events.reduce((sum, event) => sum + eventOccupiedBeats(event), 0);
     const remainingBeats = beatsPerMeasure - currentBeats;
     if (remainingBeats > 0.0001) {
-      measure.events.push(...buildRestEventsForBeats(remainingBeats, clef));
+      // 正規 API 経由で書く（#244 段5-1）。measure.events を直接 push すると
+      // voices[0] を持つ小節で dual-write が効かず、鏡が古いまま残る
+      // （設計メモ§2-5「破壊的書き込みの根絶」で名指しされていた1か所目）。
+      measures[measureIndex] = withVoiceEventsUpdated(measure, 0, (events) => [
+        ...events,
+        ...buildRestEventsForBeats(remainingBeats, clef),
+      ]);
     }
   }
 }
