@@ -1230,6 +1230,157 @@ export function getWorkStorageKeys(workId: string): {
   };
 }
 
+/* ===== 復元履歴（数世代）: multi-score-storage 設計 第3段（Issue #109） ===== */
+
+/**
+ * 復元履歴の1世代。data は保存データそのもの。
+ * checksum は data の JSON 文字列に対する generateChecksum（設計の正本 §保存領域の
+ * `{ timestamp, checksum, data }` どおり）。構造は正しいまま中身だけ壊れた世代
+ * （タイトル・音高が別の有効値へ化けたケース）を復元候補から外すために使う
+ */
+export interface WorkHistoryGeneration {
+  timestamp: number;
+  checksum: string;
+  data: SavedScoreData;
+}
+
+/** 保持する世代数の上限。1作品 ≒ 数十KB × 5世代 = 高々数百KB（localStorage 全体 5MB 目安） */
+export const WORK_HISTORY_MAX_GENERATIONS = 5;
+/**
+ * 世代を積む最短間隔。自動保存は約1.5秒デバウンスで走るため、毎回積むと
+ * 「数秒違いの世代」で埋まって復元先として役に立たない。10分より近い保存は
+ * 世代化せず読み飛ばす（直前1世代の -backup は従来どおり毎回退避される）
+ */
+export const WORK_HISTORY_MIN_INTERVAL_MS = 10 * 60 * 1000;
+
+/**
+ * 作品の復元履歴を新しい順で返す。壊れた世代（構造検証・チェックサムに落ちるもの）は黙って除く。
+ * isStorageAvailable()（テストキーの書き込みで判定）は使わない: localStorage が満杯だと
+ * 書き込み判定が false になり、読めるはずの既存履歴まで空として扱ってしまう（Codex round1 P2）。
+ * 読み取りは try/catch だけで守る
+ */
+export function loadWorkHistory(workId: string): WorkHistoryGeneration[] {
+  if (!isValidWorkId(workId) || typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(getWorkStorageKeys(workId).history);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((generation): generation is WorkHistoryGeneration => {
+      if (!generation || typeof generation !== 'object') return false;
+      const candidate = generation as WorkHistoryGeneration;
+      return isFiniteNumber(candidate.timestamp)
+        && typeof candidate.checksum === 'string'
+        && validateSavedScoreData(candidate.data)
+        && generateChecksum(JSON.stringify(candidate.data)) === candidate.checksum;
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 自動保存の内容を復元履歴へ1世代として積む。
+ * 最新世代から WORK_HISTORY_MIN_INTERVAL_MS 以内の保存は積まない（force で無視できる。
+ * 「この時点に戻す」の直前退避は force=true で必ず積む）。
+ * 容量あふれのときは古い世代を1つずつ落としながら書けるまで縮めて再試行し
+ * （最後は新しい1世代だけでも残す）、それでも書けなければ失敗を返す。
+ */
+export function pushWorkHistoryGeneration(
+  workId: string,
+  data: SavedScoreData,
+  options?: { force?: boolean }
+): StorageResult<boolean> {
+  if (!isValidWorkId(workId)) {
+    return { success: false, error: createInvalidWorkIdError() };
+  }
+  if (typeof localStorage === 'undefined') {
+    return { success: false, error: { type: StorageErrorType.STORAGE_DISABLED, message: 'ストレージが利用できません', recoverable: true } };
+  }
+  // isStorageAvailable()（新規テストキーの書き込み判定）は使わない: 満杯のときに
+  // 「古い世代を落として縮めて書く」再試行へ到達できなくなる（Codex round1 P2）。
+  // 書けるかどうかは実際の setItem の成否で判定する
+  const history = loadWorkHistory(workId);
+  const now = Date.now();
+  if (!options?.force && history.length > 0 && now - history[0].timestamp < WORK_HISTORY_MIN_INTERVAL_MS) {
+    return { success: true, data: false };
+  }
+  const newGeneration: WorkHistoryGeneration = {
+    timestamp: now,
+    checksum: generateChecksum(JSON.stringify(data)),
+    data,
+  };
+  let next: WorkHistoryGeneration[] = [newGeneration, ...history].slice(0, WORK_HISTORY_MAX_GENERATIONS);
+  const key = getWorkStorageKeys(workId).history;
+  // 容量不足なら、古い世代を1つずつ落としながら新しい世代だけでも残るまで縮めて再試行する
+  while (next.length > 0) {
+    try {
+      localStorage.setItem(key, JSON.stringify(next));
+      return { success: true, data: true };
+    } catch {
+      next = next.slice(0, next.length - 1);
+    }
+  }
+  return { success: false, error: { type: StorageErrorType.QUOTA_EXCEEDED, message: '復元履歴を保存する空き容量がありません', recoverable: true } };
+}
+
+/**
+ * 「この時点に戻す」。指定 timestamp の世代を自動保存スロットへ書き戻し、その内容を返す。
+ * 戻す前に、いまの自動保存内容を必ず1世代として積む（設計 §復元履歴: 「戻す」操作自体も
+ * 1世代になるため、誤って古い世代へ戻しても「戻す前」に再度戻せる）。
+ */
+export function restoreWorkHistoryGeneration(workId: string, timestamp: number): StorageResult<SavedScoreData> {
+  if (!isValidWorkId(workId)) {
+    return { success: false, error: createInvalidWorkIdError() };
+  }
+  const generation = loadWorkHistory(workId).find((item) => item.timestamp === timestamp);
+  if (!generation) {
+    return { success: false, error: { type: StorageErrorType.CORRUPTED_DATA, message: '選択した復元履歴が見つかりません', recoverable: true } };
+  }
+  // 「いまの内容も履歴に残る」という確認文言の保証: 退避に失敗したら復元自体を中止する
+  // （Codex round1 P1。容量不足などで現在世代を積めないまま上書きすると、戻す前へ復帰できない）。
+  // 現在内容の読み取りに失敗した場合も同じ理由で中止する（round2 P1。チェックサム不一致等で
+  // 「退避すべきものがあるのに読めない」状態を、退避不要と混同しない）
+  const currentResult = loadWorkAutosaveData(workId);
+  if (!currentResult.success) {
+    return {
+      success: false,
+      error: {
+        type: currentResult.error?.type ?? StorageErrorType.CORRUPTED_DATA,
+        message: 'いまの内容を読み取れなかったため、復元を中止しました',
+        recoverable: true,
+      },
+    };
+  }
+  if (currentResult.data) {
+    // 直前の同期保存（ScorePage 側）が同じ内容をすでに世代化していれば二重に積まない
+    // （round2 P2。同一内容で2枠消費して古い世代を余分に追い出さないための重複排除）。
+    // 照合キーはチェックサムではなく data.timestamp（保存データの作成時刻）を使う:
+    // 保存→読込のラウンドトリップで migrateData がキー順を変えるため、同一内容でも
+    // JSON 文字列（＝チェックサム）は一致しないことがある
+    const currentTimestamp = currentResult.data.timestamp;
+    const alreadyStashed = loadWorkHistory(workId).some((item) => item.data.timestamp === currentTimestamp);
+    if (!alreadyStashed) {
+      const stashed = pushWorkHistoryGeneration(workId, currentResult.data, { force: true });
+      if (!stashed.success) {
+        return {
+          success: false,
+          error: {
+            type: stashed.error?.type ?? StorageErrorType.QUOTA_EXCEEDED,
+            message: 'いまの内容を履歴へ退避できなかったため、復元を中止しました（ブラウザ保存の空き容量を確認してください）',
+            recoverable: true,
+          },
+        };
+      }
+    }
+  }
+  const saved = saveWorkAutosaveData(workId, generation.data);
+  if (!saved.success) {
+    return { success: false, error: saved.error };
+  }
+  return { success: true, data: generation.data };
+}
+
 function getWorkSlotKeys(workId: string): StorageSlotKeys {
   const keys = getWorkStorageKeys(workId);
   return { primary: keys.primary, backup: keys.backup, metadata: keys.metadata };

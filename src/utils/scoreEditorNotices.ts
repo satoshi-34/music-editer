@@ -417,6 +417,17 @@ export function describeSlicePasteUnavailable(reason: 'noSelection' | 'noFit' | 
   }
 }
 
+/** 復元履歴（#109 第3段）: 編集中の内容を保存できず復元を中止したことを知らせる（#318） */
+export function describeWorkHistoryRestoreBlocked(): string {
+  return '編集中の内容を保存できなかったため、復元を中止しました（ブラウザ保存の空き容量を確認してください）';
+}
+
+/** 復元履歴（#109 第3段）: 選んだ世代へ戻したことを知らせる */
+export function describeWorkHistoryRestored(timestamp: number): string {
+  const when = new Date(timestamp).toLocaleString('ja-JP');
+  return `${when} の内容に戻しました（戻す前の内容も作品一覧の「履歴」に残っています）`;
+}
+
 /** 途中再生（#108）: 選択小節から再生を始めたことを知らせる */
 export function describePlaybackFromMeasure(startMeasure: number): string {
   return `${startMeasure + 1}小節目から再生します（先頭から聴くには Escape で小節の選択を外してください）`;

@@ -23,6 +23,8 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof WorkListPane
     onSelect: vi.fn(),
     onCreate: vi.fn(),
     onDelete: vi.fn(),
+    onListHistory: vi.fn().mockReturnValue([]),
+    onRestoreHistory: vi.fn(),
     onClose: vi.fn(),
     ...overrides
   };
@@ -91,6 +93,45 @@ describe('作品一覧パネル（Issue #181）', () => {
       fireEvent.click(screen.getByRole('button', { name: '春の歌 を削除' }));
 
       expect(props.onDelete).toHaveBeenCalledWith('work-new');
+    });
+  });
+
+  describe('復元履歴（Issue #109 第3段）', () => {
+    const GENERATIONS = [
+      { timestamp: new Date(2026, 7, 4, 20, 0).getTime(), checksum: 'x', data: {} as never },
+      { timestamp: new Date(2026, 7, 4, 18, 30).getTime(), checksum: 'x', data: {} as never },
+    ];
+
+    it('「履歴」で世代一覧が開き、無ければ説明が出る', () => {
+      // 履歴があるのは work-new だけ、というモック（作品ごとに違う結果を返す）
+      const props = renderPanel({
+        onListHistory: vi.fn().mockImplementation((workId: string) => (workId === 'work-new' ? GENERATIONS : [])),
+      });
+      fireEvent.click(screen.getByLabelText('春の歌 の復元履歴'));
+      expect(props.onListHistory).toHaveBeenCalledWith('work-new');
+      expect(screen.getByText('2026/08/04 20:00')).toBeInTheDocument();
+      expect(screen.getByText('2026/08/04 18:30')).toBeInTheDocument();
+      // 世代が無い作品では説明文
+      fireEvent.click(screen.getByLabelText('無題 の復元履歴'));
+      expect(screen.getByText(/復元できる世代はまだありません/)).toBeInTheDocument();
+    });
+
+    it('「この時点に戻す」はアプリ内の確認ダイアログで実行したときだけ onRestoreHistory を呼ぶ', () => {
+      // window.confirm は埋め込みブラウザで表示されないため使わない（ConfirmDialog 経由）
+      const props = renderPanel({ onListHistory: vi.fn().mockReturnValue(GENERATIONS) });
+      fireEvent.click(screen.getByLabelText('春の歌 の復元履歴'));
+      fireEvent.click(screen.getAllByText('この時点に戻す')[0]);
+      // ダイアログが開き、文言は「いまの内容も履歴に残る」ことを伝える
+      const dialog = screen.getByRole('dialog', { name: '復元の確認' });
+      expect(dialog.textContent).toContain('いまの内容も履歴に残る');
+      // 「やめる」では呼ばれない
+      fireEvent.click(screen.getByText('やめる'));
+      expect(props.onRestoreHistory).not.toHaveBeenCalled();
+      // もう一度開いて実行ボタンで確定すると呼ばれる
+      fireEvent.click(screen.getAllByText('この時点に戻す')[0]);
+      const confirmButton = screen.getAllByRole('button', { name: 'この時点に戻す' }).at(-1)!;
+      fireEvent.click(confirmButton);
+      expect(props.onRestoreHistory).toHaveBeenCalledWith('work-new', GENERATIONS[0].timestamp);
     });
   });
 

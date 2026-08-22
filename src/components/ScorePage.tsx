@@ -160,6 +160,8 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
+  describeWorkHistoryRestoreBlocked,
+  describeWorkHistoryRestored,
   describeSliceClearNoop,
   describeSliceCopied,
   describeSliceDeleteUnavailable,
@@ -477,7 +479,8 @@ export default function ScorePage() {
   // 作品一覧の操作（切替・新規作成・削除）はこのフックが受け持つ。
   const {
     works, currentWorkId, workError,
-    refreshWorks, initializeWorks, saveCurrentWork, switchWork, startNewWork, deleteWorkById
+    refreshWorks, initializeWorks, saveCurrentWork, switchWork, startNewWork, deleteWorkById,
+    listHistory, restoreFromHistory
   } = useWorkLibrary();
   const [showWorkList, setShowWorkList] = useState(false);
   const [workListPos, setWorkListPos] = useState<{ top: number; left: number } | null>(null);
@@ -486,7 +489,9 @@ export default function ScorePage() {
   // 呼んで現在の内容を保存するために使う。段あたり小節数などの state はこの位置より
   // 後ろで宣言されており useCallback の依存配列に入れられないため、レンダーのたびに
   // 最新版を入れ直す ref（latest ref）として持つ。
-  const buildCurrentWorkDataRef = useRef<() => SavedScoreData | null>(() => null);
+  // includeEmpty: 空譜面でも保存データを組み立てる（復元履歴の退避用・Codex round3 P1）。
+  // 通常の切替・自動保存経路は従来どおり「空は保存しない」（空上書き事故の防止）
+  const buildCurrentWorkDataRef = useRef<(options?: { includeEmpty?: boolean }) => SavedScoreData | null>(() => null);
   // 自動保存のデバウンス用タイマー（実際の保存処理は下の自動保存 useEffect にある）。
   // 作品を切り替える前に止める必要があるため、切替処理より前でここに宣言している。
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2311,10 +2316,12 @@ export default function ScorePage() {
   // 段あたり小節数のように、この位置より後ろで宣言される値も読む必要があるため、
   // レンダー後に ref へ入れ直す（useCallback の依存配列には入れられない）。
   useEffect(() => {
-    buildCurrentWorkDataRef.current = () => {
+    buildCurrentWorkDataRef.current = (options) => {
       const { metadata, parts } = buildScoreData();
-      // 空の譜面は保存しない（自動保存と同じ判断。空で上書きして中身を失わないため）
-      if (isEmptyScoreData(parts)) return null;
+      // 空の譜面は保存しない（自動保存と同じ判断。空で上書きして中身を失わないため）。
+      // ただし復元履歴の退避（includeEmpty）では、空譜面＝「全音符を消した直後」や
+      // 「タイトルだけ編集した状態」も戻す前の内容として残す必要があるため組み立てる
+      if (!options?.includeEmpty && isEmptyScoreData(parts)) return null;
       return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
     };
   });
@@ -2433,6 +2440,31 @@ export default function ScorePage() {
       await resetScoreStateToEmpty();
     }
   }, [cancelPendingAutosave, deleteWorkById, resetScoreStateToEmpty]);
+
+  /** 復元履歴から1世代へ戻す（multi-score-storage 第3段・Issue #109）。
+      いま開いている作品なら画面へも反映する。保存待ちのタイマーが残っていると
+      復元した内容が編集中の内容で上書きされて元の木阿弥になるため、先に止める */
+  const handleRestoreWorkHistory = useCallback(async (workId: string, timestamp: number) => {
+    cancelPendingAutosave();
+    // 画面の最新内容を先に同期保存する（Codex round1 P1）。デバウンス中の編集が
+    // 自動保存にも履歴にも残らないまま復元で上書きされるのを防ぐ。
+    // 別作品の履歴を復元する場合も、編集中の作品の未保存分をここで確定させる
+    // 空譜面（全音符を消した直後・タイトルだけの状態）も「戻す前の内容」として退避する
+    const currentData = buildCurrentWorkDataRef.current({ includeEmpty: true });
+    if (currentData && !saveCurrentWork(currentData)) {
+      // 最新編集を保存できないまま復元すると、その編集だけが失われる（Codex round2 P1）。
+      // 保存に失敗した理由は useWorkLibrary の workError にも出るが、行き止まりは喋る（#318）
+      notifyScoreEdit(describeWorkHistoryRestoreBlocked());
+      return;
+    }
+    const restored = restoreFromHistory(workId, timestamp);
+    if (!restored) return;
+    if (workId === currentWorkId) {
+      await applyLoadedScoreData(restored);
+    }
+    setShowWorkList(false);
+    notifyScoreEdit(describeWorkHistoryRestored(timestamp));
+  }, [applyLoadedScoreData, cancelPendingAutosave, currentWorkId, restoreFromHistory, saveCurrentWork]);
 
   const handleLoad = async () => {
     const loadedData = await loadScore();
@@ -5157,6 +5189,8 @@ export default function ScorePage() {
                     onSelect={handleSelectWork}
                     onCreate={handleCreateWorkFromList}
                     onDelete={handleDeleteWork}
+                    onListHistory={listHistory}
+                    onRestoreHistory={handleRestoreWorkHistory}
                     onClose={() => setShowWorkList(false)}
                     style={workListPos ? { top: workListPos.top, left: workListPos.left } : undefined}
                   />

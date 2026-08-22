@@ -11,10 +11,14 @@ import {
   getLastOpenedWorkId,
   listWorks,
   loadWorkAutosaveData,
+  loadWorkHistory,
   migrateLegacyDataToAutosave,
   migrateLegacyDataToWorks,
+  pushWorkHistoryGeneration,
+  restoreWorkHistoryGeneration,
   saveWorkAutosaveData,
-  setLastOpenedWorkId
+  setLastOpenedWorkId,
+  type WorkHistoryGeneration
 } from '../utils/storage';
 import type { SavedScoreData, WorkSummary } from '../types/storage';
 
@@ -44,6 +48,14 @@ export interface UseWorkLibraryReturn {
   startNewWork: (currentData: SavedScoreData | null) => boolean;
   /** 作品を削除する。いま開いている作品を削除した場合は deletedCurrent が true */
   deleteWorkById: (workId: string) => { success: boolean; deletedCurrent: boolean };
+  /** 作品の復元履歴（新しい順）。パネルを開いたときに読む */
+  listHistory: (workId: string) => WorkHistoryGeneration[];
+  /**
+   * 復元履歴の1世代へ戻す（multi-score-storage 第3段）。
+   * 戻す前にいまの内容が1世代として積まれるので、「戻す前」へも再度戻せる。
+   * 戻り値は復元した譜面データ（いま開いている作品なら呼び出し側が画面へ反映する）。
+   */
+  restoreFromHistory: (workId: string, timestamp: number) => SavedScoreData | null;
 }
 
 export function useWorkLibrary(): UseWorkLibraryReturn {
@@ -112,6 +124,11 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
       return false;
     }
 
+    // 復元履歴（第3段）: 最新世代から一定時間が空いた保存だけを世代として積む
+    // （間隔の判定は storage 側）。履歴が書けなくても自動保存本体は成功しているので、
+    // ここでの失敗は編集を止めない（黙って諦める）
+    pushWorkHistoryGeneration(workId, data);
+
     setLastOpenedWorkId(workId);
     setWorkError(null);
     return true;
@@ -178,6 +195,21 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
     return { success: true, deletedCurrent };
   }, [setCurrentWorkId]);
 
+  const listHistory = useCallback((workId: string): WorkHistoryGeneration[] => {
+    return loadWorkHistory(workId);
+  }, []);
+
+  const restoreFromHistory = useCallback((workId: string, timestamp: number): SavedScoreData | null => {
+    const result = restoreWorkHistoryGeneration(workId, timestamp);
+    if (!result.success || !result.data) {
+      setWorkError(result.error?.message ?? '復元履歴からの復元に失敗しました');
+      return null;
+    }
+    setWorkError(null);
+    setWorks(listWorks());
+    return result.data;
+  }, []);
+
   return {
     works,
     currentWorkId,
@@ -187,6 +219,8 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
     saveCurrentWork,
     switchWork,
     startNewWork,
-    deleteWorkById
+    deleteWorkById,
+    listHistory,
+    restoreFromHistory
   };
 }
