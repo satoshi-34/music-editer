@@ -39,6 +39,8 @@ type Props = {
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
   // ドラッグ範囲選択（PianoSystemCanvas から呼ばれる）をそのまま親へ渡す
   onMeasureRangeSelect?: (startIndex: number, endIndex: number) => void;
+  /** 拍範囲スライス選択（#333 段2）。小節選択ドラッグの拍まで見た版（PianoSystemCanvas 参照） */
+  onBeatRangeSelect?: (sel: { startMeasure: number; startBeat: number; endMeasure: number; endBeat: number }) => void;
   customSymbolDefs?: CustomSymbolDef[];
   // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
   // 省略時は全段を印刷する。画面表示には影響しない。
@@ -100,6 +102,7 @@ export default function SingleStaff({
   selectedMeasures,
   onMeasureSelect,
   onMeasureRangeSelect,
+  onBeatRangeSelect,
   customSymbolDefs,
   printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
@@ -152,6 +155,7 @@ export default function SingleStaff({
               selectedMeasures={selectedMeasures}
               onMeasureSelect={onMeasureSelect}
               onMeasureRangeSelect={onMeasureRangeSelect}
+              onBeatRangeSelect={onBeatRangeSelect}
               customSymbolDefs={customSymbolDefs}
               plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
               incomingArcIndex={incomingArcIndex}

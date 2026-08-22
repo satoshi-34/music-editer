@@ -134,6 +134,7 @@ import {
 } from '../utils/engravingDefaults';
 import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildBeatColumns, planLeadingRestFillBeats, type BeatColumn } from '../utils/beatColumnUtils';
+import { sliceBoundaryCandidates, snapToSliceBoundary } from '../utils/beatSliceUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
 import { resolveArcEndpointY, resolveSlurObstacleY, shouldAnchorArcToStemSide } from '../utils/arcStemAnchorUtils';
 import {
@@ -815,8 +816,15 @@ type Props = {
   // 知って、実音側へ逆変換できるようにするため。
   onKeySignatureChange?: (keySignature: KeySignature, partIndex?: number) => void;
   // コピー＆ペースト用: 選択中の小節範囲（絶対インデックス）と選択コールバック
-  selectedMeasures?: { start: number; end: number };
+  // startBeat/endBeat は拍範囲スライス選択（#333 段2）。省略時は小節丸ごと。
+  selectedMeasures?: { start: number; end: number; startBeat?: number; endBeat?: number };
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
+  /**
+   * 小節選択ツールのドラッグで拍範囲（縦スライス）を選んだときに呼ばれる（#333 段2）。
+   * 端の拍は全パート・全声部の共通境界へスナップ済み。丸ごと選択（startBeat=0 かつ
+   * endBeat=小節の拍数）のときも呼ばれるので、受け手側で beat 無し形へ正規化してよい。
+   */
+  onBeatRangeSelect?: (sel: { startMeasure: number; startBeat: number; endMeasure: number; endBeat: number }) => void;
   // 小節をまたぐドラッグ範囲選択で呼ばれる。start/end は「ドラッグ開始位置と現在位置」を
   // 小さい順に並べた絶対インデックス。onMeasureSelect と違い、押しっぱなしのまま
   // 何度も呼ばれるので、呼び出し側は同じ範囲なら state を更新しないようにすること
@@ -1908,6 +1916,7 @@ export default function PianoSystemCanvas({
   timeSignature = [4, 4],
   onKeySignatureChange,
   selectedMeasures,
+  onBeatRangeSelect,
   onMeasureSelect,
   onMeasureRangeSelect,
   customSymbolDefs = [],
@@ -1989,7 +1998,7 @@ export default function PianoSystemCanvas({
     selectedHairpin: SelectedHairpinSel;
     activeVoiceIndex: number;
     beatsPerMeasure: number;
-    selectedMeasures: { start: number; end: number } | null;
+    selectedMeasures: { start: number; end: number; startBeat?: number; endBeat?: number } | null;
     disabled: boolean;
     isPrintPreview: boolean;
     keySignature: KeySignature;
@@ -2447,11 +2456,13 @@ export default function PianoSystemCanvas({
       noteX: number; noteY: number; stemDir: number;
     } | null;
     measureAnchor: number | null;
+    /** 拍範囲スライス選択（#333 段2）のドラッグ開始点。null なら小節丸ごとドラッグ */
+    beatAnchor: { measure: number; beat: number } | null;
     measureMoved: boolean;
   };
   const dragSessionsRef = useRef<DragSessions>({
     arcCp: null, arcEp: null, arcMoved: false, tieStart: null,
-    measureAnchor: null, measureMoved: false,
+    measureAnchor: null, beatAnchor: null, measureMoved: false,
   });
   // タイ/松葉ドラッグの破線プレビュー要素。実体は描画 effect が SVG ごとに作り直すため、
   // コンポーネント階層の掃除処理（ツール切替・pointercancel・SVG外 mouseup）から
@@ -2664,6 +2675,7 @@ export default function PianoSystemCanvas({
     }
     dragSessionsRef.current.tieStart = null;
     dragSessionsRef.current.measureAnchor = null;
+    dragSessionsRef.current.beatAnchor = null;
     if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
   }, [cancelArcDrag]);
 
@@ -2840,7 +2852,7 @@ export default function PianoSystemCanvas({
   //   dragSessionsRef.current.measureMoved  … ドラッグで範囲を変えたか。直後に来る click を読み飛ばす判定に使う
   useEffect(() => {
     // ドラッグの終了は譜面の外で指を離した場合も拾う必要があるため window で受ける。
-    const endMeasureDrag = () => { dragSessionsRef.current.measureAnchor = null; };
+    const endMeasureDrag = () => { dragSessionsRef.current.measureAnchor = null; dragSessionsRef.current.beatAnchor = null; };
     window.addEventListener('mouseup', endMeasureDrag);
     return () => window.removeEventListener('mouseup', endMeasureDrag);
   }, []);
@@ -4991,10 +5003,49 @@ export default function PianoSystemCanvas({
           }
         };
 
-        const isMeasureSelected = selectedMeasures != null &&
-          absI >= selectedMeasures.start &&
-          absI <= selectedMeasures.end;
+        // 選択状態の分類（#333 段2）: 丸ごと / 端の部分（拍範囲）/ 非選択。
+        // 拍範囲は端の小節だけ partial になり、間の小節は full（Finale と同じ）。
+        const sliceSelection = selectedMeasures != null && absI >= selectedMeasures.start && absI <= selectedMeasures.end
+          ? (() => {
+              const fromBeat = absI === selectedMeasures.start ? (selectedMeasures.startBeat ?? 0) : 0;
+              const toBeat = absI === selectedMeasures.end ? (selectedMeasures.endBeat ?? beatsPerMeasure) : beatsPerMeasure;
+              const partial = fromBeat > 0.0001 || toBeat < beatsPerMeasure - 0.0001;
+              return { partial, fromBeat, toBeat };
+            })()
+          : null;
+        const isMeasureSelected = sliceSelection != null && !sliceSelection.partial;
         const isSelectTool = 'mode' in tool && tool.mode === 'select';
+
+        // ── 拍範囲スライスのドラッグ解決（#333 段2）──
+        // x→拍: 拍台帳（beatColumnsByMeasureP。全声部のイベント開始拍→x）の最近傍列で読む。
+        // 台帳はこの小節の Pass 3 で全パートぶん埋まっているので、ここ（同じ小節の
+        // ハンドラ設置時点）では自パートまでの列があれば足りる（合同整形で x は揃う）。
+        const beatAtX = (lx: number): number => {
+          const columns = beatColumnsByMeasureP.get(absI) ?? [];
+          // 完全な空小節でも描画時には全休符プレースホルダーが1列だけ台帳へ載る
+          // （Issue #322 の「見えている詰め物休符も物差しにする」規則）。その1列だけを
+          // 最近傍で読むと x がどこでも拍0へ張り付き、空小節の途中の拍を選べない。
+          // 実データの音符が全パートに1つも無い小節は、台帳を捨てて線形補間で読む
+          const hasRealEvents = parts.some((_, otherPi) =>
+            getMeasureVoices((partsScoreForRender[otherPi] ?? [])[absI]).some((v) => v.events.length > 0));
+          if (columns.length === 0 || !hasRealEvents) {
+            // 空小節: 小節幅の線形補間で読む
+            const ratio = Math.max(0, Math.min(1, (lx - measLeft) / Math.max(1, measRight - measLeft)));
+            return ratio * beatsPerMeasure;
+          }
+          let best = columns[0];
+          for (const col of columns) {
+            if (Math.abs(col.x - lx) < Math.abs(best.x - lx)) best = col;
+          }
+          // 最終列より右は小節末とみなす（末尾の音符の後ろをなぞったとき）
+          const last = columns.reduce((a, b) => (a.x > b.x ? a : b));
+          if (lx > last.x + (last.x - measLeft) * 0.0 + 12) return beatsPerMeasure;
+          return best.beats;
+        };
+        const sliceCandidatesHere = (): number[] =>
+          sliceBoundaryCandidates(parts.map((_, otherPi) => (partsScoreForRender[otherPi] ?? [])[absI]), beatsPerMeasure);
+        const snappedBeatAtX = (lx: number): number =>
+          snapToSliceBoundary(beatAtX(lx), sliceCandidatesHere());
 
         // 小節選択の入力（クリック・ドラッグ範囲選択）をこの小節の当たり判定へ付ける。
         // 小節の背景（.vf-hit）だけでなく音符の当たり判定（.vf-note-hit）にも同じものを
@@ -5014,13 +5065,41 @@ export default function PianoSystemCanvas({
             // Shift+クリック（範囲拡張）は従来どおり click 側で処理するのでここでは始めない。
             if (!isSelectTool || me.shiftKey) return;
             dragSessionsRef.current.measureAnchor = absI;
+            // 拍範囲スライス（#333 段2）: 押した位置の拍もアンカーに持つ。
+            // 受け手（onBeatRangeSelect）が無ければ従来の小節丸ごとドラッグのまま
+            if (onBeatRangeSelect) {
+              const { x: lx } = clientToGroup(svg, svgRoot, me.clientX, me.clientY);
+              dragSessionsRef.current.beatAnchor = { measure: absI, beat: snappedBeatAtX(lx) };
+            }
           });
-          el.addEventListener('mouseenter', () => {
+          const updateDragRange = (me: MouseEvent) => {
             const anchor = dragSessionsRef.current.measureAnchor;
             if (anchor == null) return;
-            // 開始小節から今カーソルがある小節までを範囲にする（右→左のドラッグでも同じ）。
             dragSessionsRef.current.measureMoved = true;
+            const beatAnchor = dragSessionsRef.current.beatAnchor;
+            if (onBeatRangeSelect && beatAnchor) {
+              // 拍まで見た範囲。アンカーと現在位置を (小節, 拍) のタプルで比較して並べ替える
+              const { x: lx } = clientToGroup(svg, svgRoot, me.clientX, me.clientY);
+              const cur = { measure: absI, beat: snappedBeatAtX(lx) };
+              const forward = beatAnchor.measure < cur.measure
+                || (beatAnchor.measure === cur.measure && beatAnchor.beat <= cur.beat);
+              const from = forward ? beatAnchor : cur;
+              const to = forward ? cur : beatAnchor;
+              if (from.measure === to.measure && Math.abs(from.beat - to.beat) < 0.0001) return;
+              onBeatRangeSelect({
+                startMeasure: from.measure, startBeat: from.beat,
+                endMeasure: to.measure, endBeat: to.beat,
+              });
+              return;
+            }
+            // 従来: 開始小節から今カーソルがある小節までを範囲にする（右→左のドラッグでも同じ）。
             onMeasureRangeSelect?.(Math.min(anchor, absI), Math.max(anchor, absI));
+          };
+          el.addEventListener('mouseenter', ev => updateDragRange(ev as MouseEvent));
+          // 小節内のドラッグでも拍範囲を更新する（mouseenter は小節をまたいだ時しか来ない）
+          el.addEventListener('mousemove', ev => {
+            if (dragSessionsRef.current.measureAnchor == null) return;
+            updateDragRange(ev as MouseEvent);
           });
         };
 
@@ -5122,6 +5201,30 @@ export default function PianoSystemCanvas({
         ir.setAttribute('pointer-events','all');
         (ir.style as any).cursor = isSelectTool ? 'pointer' : 'crosshair';
         attachMeasureSelectDrag(ir);
+        // 拍範囲スライスの強調表示（#333 段2）: 端の小節はスライスの x 範囲だけを塗る。
+        // ir 本体は当たり判定を兼ねるので全幅のまま、表示専用の overlay を重ねる
+        if (sliceSelection?.partial) {
+          const xForBeat = (b: number): number => {
+            if (b >= beatsPerMeasure - 0.0001) return measRight;
+            if (b <= 0.0001) return measLeft;
+            const columns = beatColumnsByMeasureP.get(absI) ?? [];
+            const hit = columns.find((c) => Math.abs(c.beats - b) < 0.0001);
+            return hit ? hit.x : measLeft + (b / beatsPerMeasure) * (measRight - measLeft);
+          };
+          const x1 = xForBeat(sliceSelection.fromBeat);
+          const x2 = xForBeat(sliceSelection.toBeat);
+          const overlay = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          overlay.setAttribute('class', 'vf-beat-slice-selected');
+          overlay.setAttribute('x', String(Math.min(x1, x2)));
+          overlay.setAttribute('y', String(staveTop));
+          overlay.setAttribute('width', String(Math.max(2, Math.abs(x2 - x1))));
+          overlay.setAttribute('height', String(staveBot - staveTop));
+          overlay.setAttribute('fill', 'rgba(37,99,235,0.18)');
+          overlay.setAttribute('stroke', '#1d4ed8');
+          overlay.setAttribute('stroke-width', '2');
+          overlay.setAttribute('pointer-events', 'none');
+          svgRoot.appendChild(overlay);
+        }
         ir.addEventListener('mousemove',e=>{
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
           hideChordGuide();

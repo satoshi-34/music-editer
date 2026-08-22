@@ -9,10 +9,12 @@ import { describe, it, expect } from 'vitest';
 import type { NoteEvent } from '../types/storage';
 import {
   UNDO_HINT,
+  describeClearedBeatRange,
   describeClearedMeasures,
   describeDeletedArc,
   describeDeletedHairpin,
   describeDeletedNoteEvent,
+  describeSliceMeasureOpUnavailable,
 } from './scoreEditorNotices';
 
 const note = (over: Partial<NoteEvent> = {}): NoteEvent => ({
@@ -123,5 +125,24 @@ describe('弧・松葉・小節の削除', () => {
   it('小節範囲は画面表記（1始まり）に直して伝える', () => {
     expect(describeClearedMeasures(0, 0)).toBe(`1小節目の音符を削除しました${UNDO_HINT}`);
     expect(describeClearedMeasures(2, 5)).toBe(`3〜6小節目の音符を削除しました${UNDO_HINT}`);
+  });
+});
+
+describe('拍範囲スライスの通知（#333 段2）', () => {
+  it('終了境界が小節末なら「小節末」と表示する（存在しない次拍を出さない）', () => {
+    // 4/4 で 2拍目〜小節末を削除: 旧実装は「5拍目」という存在しない拍を表示していた
+    expect(describeClearedBeatRange(0, 1, 0, 4, 4)).toBe(`1小節2拍目〜1小節末の範囲を休符にしました${UNDO_HINT}`);
+  });
+
+  it('終了境界が小節の途中なら「N拍目の手前」と表示する', () => {
+    expect(describeClearedBeatRange(0, 0, 0, 2, 4)).toBe(`1小節1拍目〜1小節3拍目の手前の範囲を休符にしました${UNDO_HINT}`);
+  });
+
+  it('拍選択中に使えない小節単位の操作は、理由と戻し方を必ず添える（#318）', () => {
+    for (const op of ['transpose', 'move', 'measurePaste', 'insertRemove'] as const) {
+      const text = describeSliceMeasureOpUnavailable(op);
+      expect(text).toContain('拍の範囲を選択中');
+      expect(text).toContain('小節全体を選択し直して');
+    }
   });
 });
