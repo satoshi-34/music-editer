@@ -48,7 +48,6 @@ import {
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   requestActiveVoiceChange,
-  type SymbolTool,
 } from '../utils/scoreEditorNotices';
 import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
@@ -97,8 +96,8 @@ import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../ut
 import {
   CHORD_HIT_PAD, EXTRA_TOP, EXTRA_BOTTOM, INACTIVE_VOICE_COLOR,
   keySelectXPad, snapLine, findKeyIndexAtLine,
-  getRawPerScreenPxSafe, clientToGroup, resolveNoteHitGeometry,
-  type HitAttributionPolicy,
+  getRawPerScreenPxSafe, clientToGroup, resolveNoteHitGeometry, resolveHitAttribution,
+  type HitAttributionPolicy, type NoteClickOutcome,
 } from '../editor/hitResolution';
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
@@ -3918,13 +3917,18 @@ export default function PianoSystemCanvas({
         } = cache;
         const stave=staveSets[pi][i];
         const score=partsScore[pi]??[];
-        const setScore=(updater:(prev:MeasureData[])=>MeasureData[])=>{
+        // score の書き込みは「どのパートへ書くか」を引数で受ける（#244 段3c・Codex 1巡目指摘）。
+        // クリックテーブルは resolveHitAttribution の解決結果（hitPi）でこの writer を選ぶので、
+        // #316 で帰属が 'band' 以外になっても書き込み先だけが取り残されることはない。
+        const setScoreFor=(targetPi:number)=>(updater:(prev:MeasureData[])=>MeasureData[])=>{
           setPartsScore(prev=>{
             const next=[...prev];
-            next[pi]=updater(prev[pi]??[]);
+            next[targetPi]=updater(prev[targetPi]??[]);
             return next;
           });
         };
+        // 従来名の setScore は「この帯のパート」への書き込み（挙動そのまま）
+        const setScore=setScoreFor(pi);
         const l2k=(l:number)=>lineToKeyForClef(clefHere,l);
         const k2l=(k:string)=>keyToLineForClef(clefHere,k);
 
@@ -4187,10 +4191,15 @@ export default function PianoSystemCanvas({
           computeStaveBand,
         }, evs, vfNotes, j, anchors, mids);
 
-        // アクティブ声部の j 番目のイベントを書き換える共通ヘルパー。
+        // 帰属先の j 番目のイベントを書き換える共通ヘルパー。
         // voiceIndex 0 のときは withVoiceEventsUpdated が measure.events を直接更新するので、
         // 従来通りの保存形（events 直接更新）と完全に同じ挙動になる（リグレッション防止）。
         // compute が null を返したときは何もしない（対象が休符などで無効な場合のガード用）。
+        // 書き込み先は attribution 引数で受ける（#244 段3c・Codex 1巡目指摘の対応）。
+        // 既定値は「この帯のパート + アクティブ声部」＝従来挙動。クリックテーブルは
+        // resolveHitAttribution の解決結果（hitPi/hitVoice）を渡す。
+        // 注意: j は描画時のアクティブ声部のイベント列に対する位置。'explicitLayer'（#316）では
+        // 候補列そのものを選択レイヤー由来へ差し替えた上で j を作ること（入口関数の注記を参照）。
         const updateActiveEvent = (
           j: number,
           // NoteEvent はこのファイル内で臨時記号など編集頻度の高いプロパティだけを
@@ -4199,15 +4208,16 @@ export default function PianoSystemCanvas({
           // ここでは既存コードと同じ考え方（一部は any 経由で読み書き）に合わせて
           // any を許容し、呼び出し側の柔軟性を優先する。
           compute: (targetEv: any) => any,
+          attribution: { partIndex: number; voiceIndex: number } = { partIndex: pi, voiceIndex: activeVoiceIndex },
         ) => {
-          setScore(prev=>{
+          setScoreFor(attribution.partIndex)(prev=>{
             const next=prev.map(cloneMeasureData);
             if(absI>=next.length)return prev;
-            const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
+            const targetEv=getVoiceEvents(next[absI], attribution.voiceIndex)[j];
             if(!targetEv)return prev;
             const nextEv=compute(targetEv);
             if(!nextEv)return prev;
-            next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
+            next[absI]=withVoiceEventsUpdated(next[absI], attribution.voiceIndex, (events)=>{
               const copy=[...events];
               copy[j]=nextEv;
               return copy;
@@ -4252,6 +4262,12 @@ export default function PianoSystemCanvas({
           });
         };
 
+        // 新規挿入の計画+書き込み。挿入位置（at）・空き拍・詰め物休符・音高の全部を
+        // 描画時の束縛（この帯のパート pi・アクティブ声部の activeEvs/activeVfNotes・clefHere）から
+        // 導くため、あえて帰属引数を持たない（#244 段3c・Codex 1巡目指摘への裁定）。
+        // 書き込み先だけ hitPi へ向けても計画側が帯のままでは偽の継ぎ目になる（段3b の P1 と同型）。
+        // 'explicitLayer'（#316）では挿入コンテキスト（候補列・クレフ・拍台帳）ごと
+        // 選択レイヤー由来に再導出する — resolveHitAttribution の注記と設計メモ§9 参照。
         const doInsert=(lx:number,ly:number)=>{
           // パート固有の調号があれば、入力された自然音もそのパートの調号に揃える。
           // 例: 記譜音表示で D メジャー（♯2）になっている B♭管に F の線を置くと、
@@ -5022,111 +5038,145 @@ export default function PianoSystemCanvas({
               // 音符の上をクリックしても小節単位のツールが同じに動くよう、
               // 小節背景側と共通のディスパッチャで処理する（#244 段3a）
               if (handleMeasureScopedTool(e) === 'handled') return;
-              const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
-              const microtoneMode = 'mode' in tool && tool.mode === 'microtone' ? tool.type : null;
-              const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
-              const customSymbolMode = 'mode' in tool && tool.mode === 'customSymbol' ? tool.symbolId : null;
-              const customSymbolResizeMode = 'mode' in tool && tool.mode === 'customSymbolResize' ? tool.symbolId : null;
-              const customSymbolOffsetMode = 'mode' in tool && tool.mode === 'customSymbolOffset' ? tool.symbolId : null;
-              const symbolAdjustResizeMode = 'mode' in tool && tool.mode === 'symbolAdjustResize';
-              const symbolAdjustOffsetMode = 'mode' in tool && tool.mode === 'symbolAdjustOffset';
-              const tupletNumberToggleMode = 'mode' in tool && tool.mode === 'tupletNumberToggle';
-              const crossStaffToggleMode = 'mode' in tool && tool.mode === 'crossStaffToggle';
-              const textElementMode = 'mode' in tool && tool.mode === 'textElement' ? tool.textKind : null;
-              const graceNoteMode = 'mode' in tool && tool.mode === 'graceNote';
-              const ornamentMode = 'mode' in tool && tool.mode === 'ornament' ? (tool as any).ornamentType as OrnamentType : null;
-              const pedalMode = 'mode' in tool && tool.mode === 'pedal' ? (tool as any).pedalType as 'down' | 'up' : null;
-              const ottavaMode = 'mode' in tool && tool.mode === 'ottava' ? (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd' : null;
+              // --- #244 段3c: ここから下は「(ツールモード, 対象種別) → 3値結果」のテーブル ---
+              // 旧実装はモードごとのフラグ定数15本 + if の連鎖だった。モードは排他なので
+              // switch 1枚に畳み、結果を NoteClickOutcome（handled/rejected/passThrough）で
+              // 返す。rejected の通知は末尾で機械的に notifyScoreEdit へ渡すため、
+              // 「無言の行き止まり」はこのテーブルの型では書けない（設計メモ§2-3・#318）。
+              //
+              // 帰属（このクリックをどのパート・声部への操作として扱うか）は
+              // resolveHitAttribution を唯一の入口とする（#316 の差し込み口）。
+              // 'band' では従来値（クリックした帯のパート + アクティブ声部）そのもの。
+              // 注意: クリック候補のイベント列（activeEvs）と updateActiveEvent の書き込み先は
+              // 描画時にアクティブ声部で束縛されており、'explicitLayer' 実装時はそちらの
+              // 差し替えも必要（hitResolution.ts の resolveHitAttribution の注記を参照）。
+              const { partIndex: hitPi, voiceIndex: hitVoice } =
+                resolveHitAttribution(HIT_ATTRIBUTION_POLICY, { partIndex: pi, voiceIndex: activeVoiceIndex });
+              // テーブル内の score 書き込みとイベント書き換えも、必ず解決済み帰属で行う
+              // （Codex 1巡目指摘: 選択だけ hitPi へ移して書き込みが帯のパートに残ると、
+              //  'explicitLayer' 実装時に「クリックした帯が書き換わる」食い違いになる）
+              const setHitScore = setScoreFor(hitPi);
+              const updateHitEvent = (targetJ: number, compute: Parameters<typeof updateActiveEvent>[1]) =>
+                updateActiveEvent(targetJ, compute, { partIndex: hitPi, voiceIndex: hitVoice });
               // カスタム記号の日本語名（ユーザーが記号に付けた名前）を id から引く。
               // 通知の文言と調整オーバーレイで同じ名前を使うため、解決はここ1か所にまとめる。
               const customSymbolNameOf = (symbolId: string) =>
                 customSymbolDefs.find(d => d.id === symbolId)?.name ?? symbolId;
-              // 記号系ツール（強弱・カスタム記号・サイズ/位置調整）のうち、いま選ばれているもの。
-              // 休符クリックの通知（Issue #330）で「どのツールが効かなかったのか」を伝えるために使う。
-              const activeSymbolTool: SymbolTool | null =
-                dynamicMode ? { type: 'dynamic' }
-                : customSymbolMode ? { type: 'customSymbol', symbolName: customSymbolNameOf(customSymbolMode) }
-                : customSymbolResizeMode
-                  ? { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(customSymbolResizeMode), adjust: 'resize' }
-                : customSymbolOffsetMode
-                  ? { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(customSymbolOffsetMode), adjust: 'offset' }
-                : symbolAdjustResizeMode ? { type: 'symbolAdjust', adjust: 'resize' }
-                : symbolAdjustOffsetMode ? { type: 'symbolAdjust', adjust: 'offset' }
-                : null;
               const me=e as MouseEvent;
               const {x:lx,y:ly}=clientToGroup(svg,svgRoot,me.clientX,me.clientY);
+              // 対象種別: 休符（全休符プレースホルダー含む）か音符か。
+              // 旧実装の `!activeEvs[j]?.isRest / isRest` の2分岐と同値（イベント欠損は音符側。
+              // 旧コード末尾の else 分岐はこの2条件で全域が尽きるため到達不能だった＝削除しても挙動差なし）
+              const clickedIsRest = !!activeEvs[j]?.isRest;
               // この hit rect は既にアクティブ声部（activeVfNotes/activeEvs）から生成されているので、
               // 以下の判定はそのままアクティブ声部の j 番目のイベントに対して行われる。
               // 声部1・声部2どちらがアクティブでも同じコードパスで
               // 和音追加・臨時記号・強弱・削除などの操作ができる。
               // 符頭の実際の描画X範囲（±CHORD_HIT_PAD）かつ 五線±3加線の固定Y範囲内なら和音追加ゾーン
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
-              if (tupletNumberToggleMode) {
+              /**
+               * フラグ系ツール15モードのテーブル（#244 段3c）。
+               * 各 case が「モード×対象種別（音符/休符/placeholder）」のセルに相当する。
+               * passThrough は既定の対象種別処理（noteDefaultOutcome / restDefaultOutcome）へ
+               * 続けることを意味し、旧実装で「フラグ分岐のガードに合致せず if 連鎖を
+               * 素通りしていた」経路と1対1に対応する。
+               */
+              const flagToolOutcome = (): NoteClickOutcome => {
+              if (!('mode' in tool)) return { kind: 'passThrough' };
+              switch (tool.mode) {
+              case 'tupletNumberToggle': {
                 // 連符ではない音符を押しても何も起きないため、理由と代替手順を伝える
                 // （Issue #318「行き止まりは喋る」）。判定を setScore の updater の外で
                 // 行うのは、updater が2回呼ばれる場面（StrictMode など）で通知が
                 // 二重に出るのを避けるため（#238 の設計メモと同じ理由）。
+                // rejected にしないのは、通知した後も選択移動（下の setSelected）を行う
+                // 現行挙動を保存するため（rejected は「通知して終わり」の終端専用）。
                 if (!toggleTupletNumberVisibility(activeEvs, j)) {
                   notifyScoreEdit(describeTupletNumberToggleUnavailable());
                 }
                 // 連符数字（3 等）の表示/非表示をグループ単位で切り替える（Issue #269）。
                 // 連符内休符をクリックしても同じグループが切り替わるよう、休符も対象に含める
                 // （グループの中に休符が残ったままの譜面でも「数字の近く」を押せば効く）。
-                setScore(prev=>{
+                setHitScore(prev=>{
                   const next=prev.map(cloneMeasureData);
                   if(absI>=next.length)return prev;
-                  const currentEvents=getVoiceEvents(next[absI], activeVoiceIndex);
+                  const currentEvents=getVoiceEvents(next[absI], hitVoice);
                   const toggled=toggleTupletNumberVisibility(currentEvents, j);
                   // 連符ではない位置なら score を書き換えない。
                   // ここで withVoiceEventsUpdated を呼ぶと、声部2モードのときに
                   // 中身の無い voices[1] が生まれてしまう（#112 の教訓）。
                   if(!toggled)return prev;
-                  next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, ()=>toggled);
+                  next[absI]=withVoiceEventsUpdated(next[absI], hitVoice, ()=>toggled);
                   return next;
                 });
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-                return;
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
+                return { kind: 'handled' };
               }
-              if (crossStaffToggleMode) {
+              case 'crossStaffToggle': {
                 // 段またぎ表示（Issue #310）: クリックした音符の描き先を self ↔ 隣の五線で切り替える。
                 // 向きはパートで決まる（右手＝下へ、左手＝上へ）ので、ユーザーは
                 // 「モードを選んで音符を押す」だけでよい（#294 の連符数字トグルと同じ操作感）。
-                const direction = availableRenderStaffDirection(pi, parts.length);
+                const direction = availableRenderStaffDirection(hitPi, parts.length);
                 const clickedEv = activeEvs[j];
                 // 対象外のクリックを黙って捨てない（Issue #318。発端は #315 で、
                 // 回避手順を口頭で伝えないと使えない行き止まりになっていた）。
                 // 判定を setScore の updater の外に置くのは、updater が2回呼ばれる場面で
                 // 通知が二重に出るのを避けるため（#238 の設計メモと同じ理由）。
                 if (direction === null) {
-                  notifyScoreEdit(describeCrossStaffUnavailable('singleStaff'));
-                  return;
+                  return { kind: 'rejected', notice: describeCrossStaffUnavailable('singleStaff') };
                 }
                 if (!clickedEv || clickedEv.isRest) {
-                  notifyScoreEdit(describeCrossStaffUnavailable('rest'));
-                  return;
+                  return { kind: 'rejected', notice: describeCrossStaffUnavailable('rest') };
                 }
                 // 「どちらへ移すのか」は書き換える前の値から決める（切替後の値では逆になる）
                 const turnedOn = clickedEv.renderStaff !== direction;
-                setScore(prev=>{
+                setHitScore(prev=>{
                   const next=prev.map(cloneMeasureData);
                   if(absI>=next.length)return prev;
-                  const currentEvents=getVoiceEvents(next[absI], activeVoiceIndex);
+                  const currentEvents=getVoiceEvents(next[absI], hitVoice);
                   const toggled=toggleRenderStaffAt(currentEvents, j, direction);
                   // 対象外（休符・単段編成・範囲外）のときは score を書き換えない。
                   // ここで withVoiceEventsUpdated を呼ぶと、声部2モードのときに
                   // 中身の無い voices[1] が生まれてしまう（#112 の教訓）。
                   if(!toggled)return prev;
-                  next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, ()=>toggled);
+                  next[absI]=withVoiceEventsUpdated(next[absI], hitVoice, ()=>toggled);
                   return next;
                 });
                 // 表示先の五線と「所属（どのパート・声部の音か）」は別物である。
                 // 取り違えたまま声部2が空だと思い込むと #322 の症状を踏むため、
                 // 移したことと「所属は変わらない」ことを必ず伝える（運用者の追加提案2）。
-                notifyScoreEdit(describeCrossStaffToggled(direction, turnedOn, activeVoiceIndex));
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-                return;
+                // 成功の報告なので rejected ではなく handled 内の通知（rejected は失敗の終端専用）。
+                notifyScoreEdit(describeCrossStaffToggled(direction, turnedOn, hitVoice));
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
+                return { kind: 'handled' };
               }
-              if (accidentalMode && !activeEvs[j]?.isRest) {
+              case 'accidental': {
+                const accidentalMode = tool.accidental;
+                if (clickedIsRest) {
+                  // 休符×臨時記号（旧実装では休符分岐の中にあったセルをここへ移設）:
+                  // 先頭段の調号領域だけは調号変更へ流し、それ以外は消費して終える。
+                  const isKeySignatureZone = i===0 &&
+                    lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
+                  if (isKeySignatureZone) {
+                    // 多段譜でも空小節は全休符プレースホルダーが背景クリックを拾うため、
+                    // 調号領域だけはここから調号変更へ流す。
+                    // パート固有調号があればそれを基準にシフトし、partIndex を添えて返す。
+                    const baseKey = partKeyForAccidental;
+                    const nextKey = shiftKeySignatureByAccidental(baseKey, accidentalMode);
+                    console.info('[PianoSystemCanvas] 調号領域クリック', {
+                      tool: accidentalMode,
+                      partIndex: hitPi,
+                      current: baseKey,
+                      next: nextKey,
+                      x: lx,
+                      bounds: firstStaveKeySignatureHitBounds,
+                    });
+                    onKeySignatureChange?.(nextKey, hitPi);
+                  }
+                  // 調号領域の外は従来から無反応でクリックを消費する（挙動ゼロ差のため
+                  // 通知は足さない。喋るべきかは #318 系の別Issueで扱う）
+                  return { kind: 'handled' };
+                }
                 // 多段譜でも単旋律譜と同じ感覚で使えるよう、
                 // 臨時記号は音符セル内クリックなら適用できるようにする。
                 // 符頭の狭い当たり判定だけにすると「置けない」と感じやすいため、
@@ -5140,7 +5190,7 @@ export default function PianoSystemCanvas({
                   accidentalMode,
                   clickedKeyIndex>=0?clickedKeyIndex:undefined
                 );
-                updateActiveEvent(j, (targetEv) => {
+                updateHitEvent(j, (targetEv) => {
                   if(targetEv.isRest)return null;
                   const latestKeyIndex = clickedKeyIndex>=0
                     ? findKeyIndexAtLine(targetEv.keys, snappedLine, k2l)
@@ -5151,13 +5201,16 @@ export default function PianoSystemCanvas({
                     latestKeyIndex>=0?latestKeyIndex:undefined
                   );
                 });
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex>=0?clickedKeyIndex:undefined});
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex>=0?clickedKeyIndex:undefined});
                 if (previewAccidentalOnApply) {
                   playNoteEvent(nextEv, part.playbackInstrument);
                 }
-                return;
+                return { kind: 'handled' };
               }
-              if (microtoneMode && !activeEvs[j]?.isRest) {
+              case 'microtone': {
+                // 微分音×休符は旧実装どおり既定処理へ（休符置換もされず選択/挿入になる）
+                if (clickedIsRest) return { kind: 'passThrough' };
+                const microtoneMode = tool.type;
                 // 微分音（四分音）も、通常の臨時記号と同じ「音符セルクリックで適用」操作にする。
                 const snappedLine = snapLineForKeySelect(ly);
                 const clickedKeyIndex = findKeyIndexAtLine(activeEvs[j].keys, snappedLine, k2l);
@@ -5166,7 +5219,7 @@ export default function PianoSystemCanvas({
                   microtoneMode,
                   clickedKeyIndex>=0?clickedKeyIndex:undefined
                 );
-                updateActiveEvent(j, (targetEv) => {
+                updateHitEvent(j, (targetEv) => {
                   if(targetEv.isRest)return null;
                   const latestKeyIndex = clickedKeyIndex>=0
                     ? findKeyIndexAtLine(targetEv.keys, snappedLine, k2l)
@@ -5177,74 +5230,94 @@ export default function PianoSystemCanvas({
                     latestKeyIndex>=0?latestKeyIndex:undefined
                   );
                 });
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex>=0?clickedKeyIndex:undefined});
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex>=0?clickedKeyIndex:undefined});
                 if (previewAccidentalOnApply) {
                   playNoteEvent(nextEv, part.playbackInstrument);
                 }
-                return;
+                return { kind: 'handled' };
               }
-              if (dynamicMode && !activeEvs[j]?.isRest) {
+              case 'dynamic': {
+                // 記号系ツール×休符は音符専用のため通知して終える
+                // （旧実装では休符分岐の activeSymbolTool でまとめて通知していたセル。
+                //  Issue #330 / #318「行き止まりは喋る」）
+                if (clickedIsRest) {
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable({ type: 'dynamic' }, 'rest') };
+                }
+                const dynamicMode = tool.dynamic;
                 // 多段譜でも「この音符から強弱が始まる」と分かるよう、
                 // 音符セルクリックで直接 NoteEvent に強弱を付ける。
                 const nextEv = applyDynamicMarkingToEvent(activeEvs[j], dynamicMode);
-                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : applyDynamicMarkingToEvent(targetEv, dynamicMode));
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
+                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : applyDynamicMarkingToEvent(targetEv, dynamicMode));
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                 playNoteEvent(nextEv, part.playbackInstrument);
-                return;
+                return { kind: 'handled' };
               }
-              if (customSymbolMode && !activeEvs[j]?.isRest) {
+              case 'customSymbol': {
+                if (clickedIsRest) {
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
+                    { type: 'customSymbol', symbolName: customSymbolNameOf(tool.symbolId) }, 'rest') };
+                }
+                const customSymbolMode = tool.symbolId;
                 // カスタム記号も既存音符にトグルで付け外しする（StaffCanvas と同じ挙動）。
                 const nextEv = applyCustomSymbolToEvent(activeEvs[j], customSymbolMode);
-                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : applyCustomSymbolToEvent(targetEv, customSymbolMode));
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
+                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : applyCustomSymbolToEvent(targetEv, customSymbolMode));
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                 playNoteEvent(nextEv, part.playbackInstrument);
-                return;
+                return { kind: 'handled' };
               }
-              if (customSymbolResizeMode && !activeEvs[j]?.isRest) {
+              case 'customSymbolResize': {
+                if (clickedIsRest) {
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
+                    { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(tool.symbolId), adjust: 'resize' }, 'rest') };
+                }
+                const customSymbolResizeMode = tool.symbolId;
                 // サイズ変更は「その音符に対象記号が既に付いている場合」のみオーバーレイを開く
                 // （StaffCanvas と同じ考え方。付いていない記号を新規に生やす事故を防ぐ）。
                 const existing = activeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolResizeMode);
                 if (!existing) {
                   // 付いていない記号のサイズ調整を押しても何も起きないので、
                   // 「まだ付いていない」ことと先に付ける手順を伝える（Issue #330）
-                  notifyScoreEdit(describeSymbolToolUnavailable(
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
                     { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(customSymbolResizeMode), adjust: 'resize' },
                     'symbolNotAttached',
-                  ));
-                  return;
+                  ) };
                 }
                 const currentPercent = Math.round((existing.scale ?? 1) * 100);
                 const resizeTarget: AdjustTarget = { type: 'custom', symbolId: customSymbolResizeMode, name: customSymbolResizeMode };
                 setSymbolResizeEditState({
-                  partIndex: pi,
+                  partIndex: hitPi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
                   // j はアクティブ声部の events 内の位置なので、どの声部かも一緒に覚えておく
-                  voiceIndex: activeVoiceIndex,
+                  voiceIndex: hitVoice,
                   target: resizeTarget,
                   currentValue: String(currentPercent),
                   // 押したのは音符なので、対象記号の描画位置は DOM から引き当てる（Issue #230）
-                  anchor: findSymbolAnchorRect(pi, absI, j, resizeTarget) ?? anchorFromClientPoint(me.clientX, me.clientY),
+                  anchor: findSymbolAnchorRect(hitPi, absI, j, resizeTarget) ?? anchorFromClientPoint(me.clientX, me.clientY),
                 });
-                return;
+                return { kind: 'handled' };
               }
-              if (customSymbolOffsetMode && !activeEvs[j]?.isRest) {
+              case 'customSymbolOffset': {
+                if (clickedIsRest) {
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
+                    { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(tool.symbolId), adjust: 'offset' }, 'rest') };
+                }
+                const customSymbolOffsetMode = tool.symbolId;
                 // 位置調整も同様に、対象記号が既に付いている場合のみオーバーレイを開く。
                 const existing = activeEvs[j].customSymbols?.find(s => s.symbolId === customSymbolOffsetMode);
                 if (!existing) {
                   // サイズ調整と同じ理由（Issue #330）。付いていない記号は位置も動かせない
-                  notifyScoreEdit(describeSymbolToolUnavailable(
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
                     { type: 'customSymbolAdjust', symbolName: customSymbolNameOf(customSymbolOffsetMode), adjust: 'offset' },
                     'symbolNotAttached',
-                  ));
-                  return;
+                  ) };
                 }
                 const offsetTarget: AdjustTarget = { type: 'custom', symbolId: customSymbolOffsetMode, name: customSymbolOffsetMode };
                 setSymbolOffsetEditState({
-                  partIndex: pi,
+                  partIndex: hitPi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
-                  voiceIndex: activeVoiceIndex,
+                  voiceIndex: hitVoice,
                   target: offsetTarget,
                   currentX: String(existing.offsetX ?? 0),
                   currentY: String(existing.offsetY ?? 0),
@@ -5252,11 +5325,17 @@ export default function PianoSystemCanvas({
                   draftX: existing.offsetX ?? 0,
                   draftY: existing.offsetY ?? 0,
                   // 押したのは音符なので、対象記号の描画位置は DOM から引き当てる（Issue #230）
-                  anchor: findSymbolAnchorRect(pi, absI, j, offsetTarget) ?? anchorFromClientPoint(me.clientX, me.clientY),
+                  anchor: findSymbolAnchorRect(hitPi, absI, j, offsetTarget) ?? anchorFromClientPoint(me.clientX, me.clientY),
                 });
-                return;
+                return { kind: 'handled' };
               }
-              if ((symbolAdjustResizeMode || symbolAdjustOffsetMode) && !activeEvs[j]?.isRest) {
+              case 'symbolAdjustResize':
+              case 'symbolAdjustOffset': {
+                const adjustKind = tool.mode === 'symbolAdjustResize' ? 'resize' as const : 'offset' as const;
+                if (clickedIsRest) {
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
+                    { type: 'symbolAdjust', adjust: adjustKind }, 'rest') };
+                }
                 // 汎用サイズ・位置調整: カスタム記号＋標準記号のうち、この音符に実際に
                 // 付いているものを列挙する（StaffCanvas と同じロジック）。
                 const currentEv = activeEvs[j];
@@ -5267,39 +5346,40 @@ export default function PianoSystemCanvas({
                 if (targets.length === 0) {
                   // 調整できる記号が1つも無い音符では選択リストすら開けない。
                   // ボタンが押せる＝どの音符でも使える、と受け取られるため理由を言う（Issue #330）
-                  notifyScoreEdit(describeSymbolToolUnavailable(
-                    { type: 'symbolAdjust', adjust: symbolAdjustResizeMode ? 'resize' : 'offset' },
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
+                    { type: 'symbolAdjust', adjust: adjustKind },
                     'noAdjustableSymbol',
-                  ));
-                  return;
+                  ) };
                 }
                 const containerRect = containerRef.current?.getBoundingClientRect();
                 const overlayX = me.clientX - (containerRect?.left ?? 0);
                 const overlayY = me.clientY - (containerRect?.top ?? 0);
-                const kindKey = symbolAdjustResizeMode ? 'resize' : 'offset';
+                const kindKey = adjustKind;
                 if (targets.length === 1) {
                   // 対象が1つなら選択リストを挟まずに開く。記号に重ならない位置にするため、
                   // その記号の実描画範囲を DOM から引き当てる（見つからなければクリック点・Issue #230）
-                  const anchor = findSymbolAnchorRect(pi, absI, j, targets[0])
+                  const anchor = findSymbolAnchorRect(hitPi, absI, j, targets[0])
                     ?? anchorFromClientPoint(me.clientX, me.clientY);
-                  openSymbolAdjustEditor(kindKey, pi, absI, j, activeVoiceIndex, targets[0], currentEv, anchor);
+                  openSymbolAdjustEditor(kindKey, hitPi, absI, j, hitVoice, targets[0], currentEv, anchor);
                 } else {
                   setSymbolAdjustPickerState({
-                    partIndex: pi,
+                    partIndex: hitPi,
                     measureAbsoluteIndex: absI,
                     eventIndex: j,
-                    voiceIndex: activeVoiceIndex,
+                    voiceIndex: hitVoice,
                     kind: kindKey,
                     options: targets,
                     overlayX,
                     overlayY,
                   });
                 }
-                return;
+                return { kind: 'handled' };
               }
-              if (graceNoteMode && !activeEvs[j]?.isRest) {
+              case 'graceNote': {
+                // 前打音×休符は旧実装どおり既定処理へ（休符の選択/挿入になる）
+                if (clickedIsRest) return { kind: 'passThrough' };
                 // 前打音をトグルで付け外しする
-                updateActiveEvent(j, (targetEv) => {
+                updateHitEvent(j, (targetEv) => {
                   if(targetEv.isRest)return null;
                   const hasGrace=(targetEv.graceNotes?.length??0)>0;
                   // 前打音のデフォルト音高は主音符の1音上（stepUp 関数は StaffCanvas と同じロジック）
@@ -5318,55 +5398,74 @@ export default function PianoSystemCanvas({
                     ?{...targetEv,graceNotes:undefined}
                     :{...targetEv,graceNotes:[{keys:[nextKey],slash:true}]};
                 });
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-                return;
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
+                return { kind: 'handled' };
               }
-              if (ornamentMode && !activeEvs[j]?.isRest) {
+              case 'ornament': {
+                // 装飾記号×休符は旧実装どおり既定処理へ（休符の選択/挿入になる）
+                if (clickedIsRest) return { kind: 'passThrough' };
+                const ornamentMode = (tool as any).ornamentType as OrnamentType;
                 // 装飾記号（トリル・モルデント・プラルトリラー・ターン）をトグルで付け外しする
-                updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : applyOrnamentToEvent(targetEv, ornamentMode));
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-                return;
+                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : applyOrnamentToEvent(targetEv, ornamentMode));
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
+                return { kind: 'handled' };
               }
-              if (pedalMode && activeEvs[j] && !activeEvs[j].__isPlaceholder) {
+              case 'pedal': {
+                // ペダルは休符にも付くが、全休符プレースホルダーは実データが無いので既定処理へ
+                if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
+                const pedalMode = (tool as any).pedalType as 'down' | 'up';
                 // ペダル記号をトグルで付け外しする
-                updateActiveEvent(j, (targetEv) => ({
+                updateHitEvent(j, (targetEv) => ({
                   ...targetEv,
                   pedalMark: targetEv.pedalMark===pedalMode?undefined:pedalMode,
                 }));
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-                return;
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
+                return { kind: 'handled' };
               }
-              if (ottavaMode && activeEvs[j] && !activeEvs[j].__isPlaceholder) {
+              case 'ottava': {
+                // オッターバも休符に付く。プレースホルダーだけ既定処理へ（ペダルと同じ理由）
+                if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
+                const ottavaMode = (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd';
                 // オッターバ記号をトグルで付け外しする
-                updateActiveEvent(j, (targetEv) => ({
+                updateHitEvent(j, (targetEv) => ({
                   ...targetEv,
                   ottava: targetEv.ottava===ottavaMode?undefined:ottavaMode,
                 }));
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-                return;
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
+                return { kind: 'handled' };
               }
-              if (textElementMode && activeEvs[j] && !activeEvs[j].__isPlaceholder) {
+              case 'textElement': {
+                // テキストも休符に付く。プレースホルダーだけ既定処理へ（ペダルと同じ理由）
+                if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
+                const textElementMode = tool.textKind;
                 // テキスト要素はクリック位置にオーバーレイを表示して文字入力を受け付ける。
                 // TextElementKind で NoteEvent を索引するため any キャストを使う
                 const currentText = (activeEvs[j] as any)[textElementMode] ?? '';
                 const containerRect = containerRef.current?.getBoundingClientRect();
-                const me = e as MouseEvent;
                 setTextEditState({
                   kind: textElementMode,
-                  partIndex: pi,
+                  partIndex: hitPi,
                   measureAbsoluteIndex: absI,
                   eventIndex: j,
-                  voiceIndex: activeVoiceIndex,
+                  voiceIndex: hitVoice,
                   currentValue: currentText,
                   overlayX: me.clientX - (containerRect?.left ?? 0),
                   overlayY: me.clientY - (containerRect?.top ?? 0),
                 });
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-                return;
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
+                return { kind: 'handled' };
               }
+              default:
+                // 音価ツール・休符ツールなど、フラグ系ではないツールは既定処理へ
+                return { kind: 'passThrough' };
+              }
+              };
 
-              if(!activeEvs[j]?.isRest){
-
+              /**
+               * 既定処理・音符セル（#244 段3c）: 符頭の個別選択 → 和音追加 → 隣接挿入。
+               * 中身は旧実装の `!isRest` 分岐そのまま（挙動ゼロ差）。
+               */
+              const noteDefaultOutcome = (): NoteClickOutcome => {
                 const snappedLine = snapLine(stave,ly);
                 const newKey=applyKeySignatureToNaturalKey(l2k(snappedLine), partKeyForAccidental);
                 const currentEv=activeEvs[j];
@@ -5385,9 +5484,9 @@ export default function PianoSystemCanvas({
                   // 「選択で終わったクリック」だけを起点にすることで、休符の1クリック置換（#233）や
                   // 奏法記号のトグルのように再クリックへ既存の意味がある操作を巻き込まない。
                   armClickCycleFor(noteCycleId,me.clientX,me.clientY);
-                  setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:clickedKeyIndex});
+                  setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex});
                   playNoteEvent({...currentEv,keys:[currentEv.keys[clickedKeyIndex]]}, part.playbackInstrument);
-                  return;
+                  return { kind: 'handled' };
                 }
                 if(!isOnNote){
                   // 五線から遠い音符のためにヒット領域を広げた領域（固定範囲の外側）は、
@@ -5395,9 +5494,10 @@ export default function PianoSystemCanvas({
                   // ここは隣のパートの領域と重なっている可能性があるので、
                   // 挿入まで引き受けると「隣の段を押したのにこちらへ音符が増える」誤配置になる。
                   // 固定範囲の中（＝従来からクリックが届いていた範囲）の挙動は変えない。
-                  if(ly<chordTopY||ly>chordBotY)return;
+                  // 消費して終える意図的な無反応（誤配置防止）なので handled（挙動ゼロ差）。
+                  if(ly<chordTopY||ly>chordBotY)return { kind: 'handled' };
                   doInsert(lx,ly);
-                  return;
+                  return { kind: 'handled' };
                 }
                 // 音符の描画範囲内 → 和音追加
                 let playEvent = currentEv;
@@ -5406,41 +5506,19 @@ export default function PianoSystemCanvas({
                   const newKeys=[...currentEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
                   selectedKeyIndex = newKeys.indexOf(newKey);
                   playEvent = { ...currentEv, keys: newKeys };
-                  updateActiveEvent(j, (targetEv) => targetEv.isRest ? null : {...targetEv,keys:newKeys});
+                  updateHitEvent(j, (targetEv) => targetEv.isRest ? null : {...targetEv,keys:newKeys});
                 }
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex,keyIndex:selectedKeyIndex});
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:selectedKeyIndex});
                 playNoteEvent(playEvent, part.playbackInstrument);
-              }else if(activeEvs[j]?.isRest){
-                // 記号系ツール（強弱・カスタム記号・サイズ/位置調整）はすべて音符専用で、
-                // 休符を押しても何も起きなかった。どのツールが効かなかったのかと
-                // 次の一手（音符をクリックする）を伝える（Issue #330 / #318「行き止まりは喋る」）。
-                // 拒否の条件そのものは変えていない（activeSymbolTool が立つのは、
-                // 従来ここで1行ずつ return していた6ツールとまったく同じ場合）。
-                if (activeSymbolTool) {
-                  notifyScoreEdit(describeSymbolToolUnavailable(activeSymbolTool, 'rest'));
-                  return;
-                }
-                if (accidentalMode) {
-                  const isKeySignatureZone = i===0 &&
-                    lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
-                  if (isKeySignatureZone) {
-                    // 多段譜でも空小節は全休符プレースホルダーが背景クリックを拾うため、
-                    // 調号領域だけはここから調号変更へ流す。
-                    // パート固有調号があればそれを基準にシフトし、partIndex を添えて返す。
-                    const baseKey = partKeyForAccidental;
-                    const nextKey = shiftKeySignatureByAccidental(baseKey, accidentalMode);
-                    console.info('[PianoSystemCanvas] 調号領域クリック', {
-                      tool: accidentalMode,
-                      partIndex: pi,
-                      current: baseKey,
-                      next: nextKey,
-                      x: lx,
-                      bounds: firstStaveKeySignatureHitBounds,
-                    });
-                    onKeySignatureChange?.(nextKey, pi);
-                  }
-                  return;
-                }
+                return { kind: 'handled' };
+              };
+
+              /**
+               * 既定処理・休符セル（#244 段3c）: 連符グループ貼り付け → 置換/分割 → 選択/挿入。
+               * 中身は旧実装の `isRest` 分岐から、フラグ系ツールのセル（記号系の通知と
+               * 臨時記号の調号領域）をテーブル側へ移した残り（挙動ゼロ差）。
+               */
+              const restDefaultOutcome = (): NoteClickOutcome => {
                 const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
                 // 休符の bounding box は横に広く返る場合があるため、
                 // 休符だけは描画アンカー中心の固定幅で「本体クリック」を判定する。
@@ -5464,15 +5542,15 @@ export default function PianoSystemCanvas({
                 if(clipboardGroup&&getDurationTool(tool)&&isInRestRowY){
                   const paste=planTupletGroupPasteIntoRest(activeEvs[j],clipboardGroup);
                   if(paste){
-                    setScore(prev=>{
+                    setHitScore(prev=>{
                       const next=prev.map(cloneMeasureData);
                       fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
-                      const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
+                      const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
                       if(!targetEv?.isRest)return prev;
                       // 最新データで計画を作り直す（クリック時点の描画データは古い可能性があるため）。
                       const latestPaste=planTupletGroupPasteIntoRest(targetEv,clipboardGroup);
                       if(!latestPaste)return prev;
-                      next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
+                      next[absI]=withVoiceEventsUpdated(next[absI], hitVoice, (events)=>{
                         const copy=[...events];
                         // 余った拍は Issue #224 と同じ規則で通常の休符としてグループの後ろに残す。
                         copy.splice(j,1,...latestPaste.groupEvents,...buildRestEventsForBeats(latestPaste.remainingBeats, clefHere));
@@ -5480,26 +5558,27 @@ export default function PianoSystemCanvas({
                       });
                       return next;
                     });
-                    setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
+                    setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                     const pastedNote=paste.groupEvents.find((event)=>!event.isRest);
                     if(pastedNote)playNoteEvent(pastedNote, part.playbackInstrument);
+                    return { kind: 'handled' };
                   }
-                  else{
-                    // 入らない休符（グループより短い・連符内の休符）では譜面を変えない。
-                    // 音符を置く動作へ流さないのは、貼り付けるつもりのクリックで
-                    // 別の音符が増えるほうが分かりにくいため（ホバー時のカーソルで事前に判別できる）。
-                    // ただし無言で終わらせない（Issue #318 の「行き止まりは喋る」・Issue #325）。
-                    const blockReason=findTupletGroupPasteBlockReason(activeEvs[j],clipboardGroup);
-                    if(blockReason)notifyScoreEdit(describeTupletGroupPasteUnavailable(blockReason));
-                  }
-                  return;
+                  // 入らない休符（グループより短い・連符内の休符）では譜面を変えない。
+                  // 音符を置く動作へ流さないのは、貼り付けるつもりのクリックで
+                  // 別の音符が増えるほうが分かりにくいため（ホバー時のカーソルで事前に判別できる）。
+                  // ただし無言で終わらせない（Issue #318 の「行き止まりは喋る」・Issue #325）。
+                  const blockReason=findTupletGroupPasteBlockReason(activeEvs[j],clipboardGroup);
+                  if(blockReason)return { kind: 'rejected', notice: describeTupletGroupPasteUnavailable(blockReason) };
+                  // 理由を特定できない不成立は従来どおり無反応で消費する（挙動ゼロ差。
+                  // findTupletGroupPasteBlockReason が plan の失敗理由を網羅すれば起きない経路）
+                  return { kind: 'handled' };
                 }
                 if(!isOnRest){
                   // 休符の透明 hit rect は、隣接挿入しやすいよう時間枠全体を覆っている。
                   // 休符本体から外れたクリックまで置換扱いにすると、
                   // 「8分休符の次に8分音符」が休符置換になってしまうため挿入へ回す。
                   doInsert(lx,ly);
-                  return;
+                  return { kind: 'handled' };
                 }
 
                 // 休符の視覚的中心（符頭バウンディングボックスの中央）を基準にする。
@@ -5517,28 +5596,28 @@ export default function PianoSystemCanvas({
                   // 休符を選択したい場合は休符ツール・調整ツール（音符を置かないツール）を使う。
                   // それらのツールでは buildRestEditReplacement が null を返すため、
                   // 下の setSelected（従来どおりの選択）へ落ちる。
-                  setScore(prev=>{
+                  setHitScore(prev=>{
                     const next=prev.map(cloneMeasureData);
                     // 声部1側の休符補完は従来どおり必要（声部2の拍位置合わせのため）。
                     fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
-                    const targetEv=getVoiceEvents(next[absI], activeVoiceIndex)[j];
+                    const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
                     if(!targetEv?.isRest)return prev;
                     const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest,clefHere);
                     if(!latestReplacement)return prev;
-                    next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
+                    next[absI]=withVoiceEventsUpdated(next[absI], hitVoice, (events)=>{
                       const copy=[...events];
                       copy.splice(j,1,...latestReplacement);
                       return copy;
                     });
                     return next;
                   });
-                  setSelected({partIndex:pi,measure:absI,index:j+(restReplacement.length===2&&noteAfterRest?1:0),voiceIndex:activeVoiceIndex});
+                  setSelected({partIndex:hitPi,measure:absI,index:j+(restReplacement.length===2&&noteAfterRest?1:0),voiceIndex:hitVoice});
                   const insertedEvent = restReplacement.find((event) => !event.isRest);
                   if (insertedEvent) {
                     // 休符を音符へ置換・分割したときも、新しく入った音だけ確認できるようにする。
                     playNoteEvent(insertedEvent, part.playbackInstrument);
                   }
-                  return;
+                  return { kind: 'handled' };
                 }
                 // ここへ来るのは置換できないクリック（休符ツール・調整ツールを選んでいる、
                 // または音価ツールだが連符内で音価が違う・ツールの音符のほうが長い、など）。
@@ -5550,15 +5629,18 @@ export default function PianoSystemCanvas({
                 // 選択の入口が壊れないことを優先する。
                 // 休符の隣へ置きたいときは、休符本体の外側をクリックすれば
                 // 従来どおり doInsert() へ流れる（上の !isOnRest 分岐）。
-                setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:activeVoiceIndex});
-              }else{
-                if (dynamicMode) return;
-                if (accidentalMode) return;
-                if (pedalMode) return;
-                if (ottavaMode) return;
-                // 音符のX範囲外（セル内の空白）→ 新規音符挿入
-                doInsert(lx,ly);
-              }
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
+                return { kind: 'handled' };
+              };
+
+              // テーブルの評価: フラグ系 → （passThrough なら）対象種別の既定処理。
+              // rejected の通知はここで機械的に送る（#318。テーブル本体は通知手段を知らない）。
+              const outcome = ((): NoteClickOutcome => {
+                const flag = flagToolOutcome();
+                if (flag.kind !== 'passThrough') return flag;
+                return clickedIsRest ? restDefaultOutcome() : noteDefaultOutcome();
+              })();
+              if (outcome.kind === 'rejected') notifyScoreEdit(outcome.notice);
             });
             svgRoot.appendChild(hit);
             });

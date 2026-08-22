@@ -227,3 +227,41 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
 - **段3c（次PR）**: 音符クリックの残りのモード分岐（フラグ15種+既定の音符/休符/placeholder 分岐）を
   `handled(action) | rejected(reason, guidance) | passThrough` の3値テーブルへ。
   rejected は #318 通知へ機械的に接続し、無言 no-op を型から排除する
+
+## 9. 段3c の実装記録（2026-08-22・音符クリックの3値テーブル化）
+
+- **NoteClickOutcome**（hitResolution.ts に定義）: `handled | rejected(notice) | passThrough`。
+  クリックハンドラ末尾で `rejected` の notice を機械的に notifyScoreEdit へ渡す（#318）。
+  テーブル本体は通知手段を知らない
+- **構造**: フラグ系15モードの if 連鎖 → `flagToolOutcome()` の switch 1枚（モードは排他のため
+  評価順の畳み込みに挙動差なし。段3a と同じ論拠）。passThrough は対象種別の既定処理
+  `noteDefaultOutcome()` / `restDefaultOutcome()` へ続く
+- **セルの移設（挙動ゼロ差）**: 旧休符分岐にあった (記号系6ツール×休符)=rejected 通知
+  （activeSymbolTool 集約変数は廃止し各セルがリテラルで組む）と (臨時記号×休符)=調号領域判定を、
+  それぞれのツールの case へ移した。通知文面・発火条件は同一
+- **rejected にしなかった既存挙動（型の原則との折り合い。いずれも挙動ゼロ差優先）**:
+  - 連符数字トグの「連符ではない」通知は**通知後も選択移動する**現行挙動のため、
+    rejected（通知して終わり）ではなく handled 内の inline 通知のまま
+  - 無言でクリックを消費する3セルは handled + 理由コメントで保存
+    （臨時記号×休符の調号領域外 / 拡張ヒット領域の外れ選択 / 貼り付け不成立の理由不明時）。
+    通知を足すべきかは #318 系の別Issueで扱う（このPRでは足さない）
+- **到達不能コードの削除**: 旧 `else`（音符でも休符でもない）分岐は `!isRest / isRest` で
+  全域が尽きるため到達不能だった。削除（挙動差なし）
+- **resolveHitAttribution 新設**（段3b レビューで約束した帰属解決の入口関数）:
+  クリックテーブルは操作対象のパート・声部を必ず `resolveHitAttribution(policy, {帯のパート,
+  アクティブ声部})` の返り値（hitPi / hitVoice）から取る。'band' は入力をそのまま返す（ゼロ差）。
+  **#316 実装時の残作業も明記**: クリック候補列（activeEvs）の生成と updateActiveEvent の
+  書き込み先は描画時にアクティブ声部で束縛されており、'explicitLayer' はこの2点の差し替えも要る
+- 検証: フルテスト 199ファイル/2132件 緑・lint:ratchet 326（基準値ちょうど）・build 成功・
+  実機スモーク（連符数字×非連符=rejected 通知 / 段またぎ往復=handled+成功通知+原状復帰 /
+  符頭クリック=選択）
+- **Codex 1巡目（P2: 帰属の単一入口が score 書き込み経路に未接続）への対応**:
+  - `setScoreFor(targetPi)` を導入し（従来の `setScore` は `setScoreFor(pi)` の別名）、
+    クリックテーブル内の score 書き込み4か所は `setHitScore = setScoreFor(hitPi)` 経由に
+  - `updateActiveEvent` に attribution 引数（既定 = 帯のパート+アクティブ声部）を追加し、
+    テーブル内の9呼び出しは `updateHitEvent`（hitPi/hitVoice 固定）経由に。'band' では既定値と
+    同値のため挙動ゼロ差
+  - **doInsert はあえて帰属引数を持たせない（裁定）**: 挿入は計画（at 位置・空き拍・詰め物・音高）
+    まで描画時の束縛（activeEvs/activeVfNotes/clefHere）から導かれ、書き込み先だけ hitPi へ
+    向けると計画と書き込みが食い違う偽の継ぎ目になる（段3b P1 と同型）。#316 では挿入
+    コンテキストごと選択レイヤー由来へ再導出する。この判断は doInsert 冒頭コメントにも明記

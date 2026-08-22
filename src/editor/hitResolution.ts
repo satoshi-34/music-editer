@@ -15,14 +15,52 @@ import type { Stave } from 'vexflow';
 /**
  * クリックの帰属ポリシー（設計メモ§2-3）。
  *
- * **現段階では 'band'（帯域推測）のみ**。'explicitLayer'（#316）の席をここで型に足すのは
- * まだ早い — 帰属の実処理（どのパートか＝.vf-hit の帯、どの声部か＝activeVoiceIndex、
- * 空白クリックの帰属）はこの純関数モジュールの外（クリックハンドラの入口）にあり、
- * 幾何計算だけに policy を渡しても実装の差し込み口にならない（Codex レビュー指摘）。
- * #316 を実装する段（段3c 以降）で、帰属解決の入口関数をこのモジュールに作り、
- * そこで union を拡張する。
+ * **現段階では 'band'（帯域推測）のみ**。'explicitLayer'（#316）はこの union に
+ * `{ attribution: 'explicitLayer'; activeLayer: HitAttribution }` を追加し、
+ * resolveHitAttribution の分岐を実装して差し替える。
  */
 export type HitAttributionPolicy = { attribution: 'band' };
+
+/** クリックが「どのパート・どの声部への操作か」の解決結果 */
+export type HitAttribution = { partIndex: number; voiceIndex: number };
+
+/**
+ * 帰属解決の唯一の入口（#244 段3c で新設。段3b の Codex レビューで
+ * 「幾何計算に policy を渡すだけでは #316 の差し込み口にならない」と指摘された箇所）。
+ *
+ * クリックハンドラは、操作の対象（setSelected / イベント書き換えに使うパート・声部）を
+ * 必ずこの関数の返り値から取る。'band' は従来どおり「クリックした帯のパート +
+ * アクティブ声部」をそのまま返す（挙動ゼロ差）。
+ *
+ * #316（'explicitLayer'）実装時の注意: 帰属を差し替えるだけでは足りず、クリック候補の
+ * イベント列（現状はアクティブ声部の activeEvs から hit rect を生成）も選択レイヤー由来へ
+ * 切り替える必要がある（設計メモ§2-3・段3b 実装記録）。この関数はその際の分岐点になる。
+ */
+export function resolveHitAttribution(
+  policy: HitAttributionPolicy,
+  bandAttribution: HitAttribution,
+): HitAttribution {
+  switch (policy.attribution) {
+    case 'band':
+      return bandAttribution;
+  }
+}
+
+/**
+ * 音符クリックのモード分岐テーブルの結果型（設計メモ§2-3 の3値判別 union。#244 段3c）。
+ *
+ * - handled: この分岐がクリックを消費した（状態変更あり／「意図して何もしない」の両方。
+ *   後者は 段3a の tie/hairpin と同じ扱いで、必ず理由コメントを添える）
+ * - rejected: クリックを消費し、理由と次の一手をユーザーへ通知する（#318「行き止まりは喋る」）。
+ *   notice は scoreEditorNotices の describe* が組み立てた文面で、呼び出し側が機械的に
+ *   notifyScoreEdit へ渡す。無言の行き止まりはこの型では書けない
+ * - passThrough: このモードはクリックを消費せず、既定の対象種別処理（音符=選択/和音追加/挿入、
+ *   休符=貼り付け/置換/選択/挿入）へ続ける
+ */
+export type NoteClickOutcome =
+  | { kind: 'handled' }
+  | { kind: 'rejected'; notice: string }
+  | { kind: 'passThrough' };
 
 /** 幾何計算が音符イベントから読む最小の形（ストレージ型に依存しないための構造的部分型） */
 export type HitEventLike = {
