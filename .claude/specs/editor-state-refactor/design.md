@@ -283,3 +283,14 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
 - **段4c（Pass 1/2/3 の関数化）**: Voice 構築（Pass 1）・合同フォーマット（Pass 2）・
   描画+ヒット領域（Pass 3）を入出力明示の関数へ物理分割。cross-staff 段2（またぎ連桁）は
   この後に着手可能になる
+- **段4c の再分割（実装時判断）**: Pass 3（描画+ヒット領域+クリックハンドラ・約2,300行）は
+  クリックテーブル（段3c）と多数の setter/reducer を閉包で参照しており、1PRでの関数化は
+  審査不能。次の2本に割る:
+  - **段4c-1**: Pass 1（buildPartVoicesForMeasure）と Pass 2（formatSystemColumnVoices）を
+    module スコープの入出力明示関数へ物理移設。**ビーム構築（Beam.generateBeams /
+    generateCrossStaffBeams）が buildPartVoicesForMeasure の中に閉じた**ので、
+    cross-staff 段2（またぎ連桁）の着手条件はこの段で満たされる。臨時記号状態の
+    小節間引き継ぎは prevMeasureState 入力 → nextPrevMeasureState 戻り値で明示化
+  - **段4c-2**: Pass 3 のうち描画専用の部分（声部・ビーム・連符の draw ループ、
+    エントリ消費の最終描画段）の関数化。ハンドラ設定部は段3 で既にテーブル化済みのため、
+    無理に閉包から引き剥がさない（引数化で偽の継ぎ目を作らない・段3c doInsert と同じ裁定）
