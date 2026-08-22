@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPlaybackPositionTimeline, findPlaybackStartExpandedIndex } from './playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex } from './playbackPositionUtils';
 import type { MeasureData } from '../types/storage';
 import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
 
@@ -100,6 +100,43 @@ describe('途中再生（#108）', () => {
     expect(findPlaybackStartExpandedIndex(expanded, 2)).toBe(4);
     // 存在しない小節番号 → その先の最初の小節（すべて手前なら 0 = 先頭）
     expect(findPlaybackStartExpandedIndex(expanded, 99)).toBe(0);
+  });
+});
+
+describe('calculateExpandedPlaybackDurationMs（展開済み列の残り時間）', () => {
+  it('展開済み列を再展開しない（repeatEnd が残っていても二重に数えない）', () => {
+    // 展開済みの並び [0,1] を模す。小節1に repeatEnd が残っていても長さは 2小節ぶんのまま
+    const expanded: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }] },
+      { events: [{ dur: '1', isRest: false, keys: ['d/4'] }], repeatEnd: true },
+    ];
+    // 4/4 @120BPM: 1小節 = 2000ms × 2
+    expect(calculateExpandedPlaybackDurationMs(expanded, 120, [4, 4])).toBe(4000);
+  });
+
+  it('声部2だけの小節も演奏対象として数える（主声部が空でも 0 秒にならない）', () => {
+    const expanded: MeasureData[] = [
+      {
+        events: [],
+        voices: [
+          { id: 'v1', events: [] },
+          { id: 'v2', events: [{ dur: '1', isRest: false, keys: ['c/3'] }], stemDirection: 'down' },
+        ],
+      },
+    ];
+    expect(calculateExpandedPlaybackDurationMs(expanded, 120, [4, 4])).toBe(2000);
+  });
+
+  it('末尾の完全な空小節は数えず、途中の空小節は拍子ぶん数える', () => {
+    const expanded: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }] },
+      { events: [] },
+      { events: [{ dur: '1', isRest: false, keys: ['d/4'] }] },
+      { events: [] },
+      { events: [] },
+    ];
+    // 実小節2 + 途中の空小節1 = 3小節ぶん。末尾の空小節2つは含まない
+    expect(calculateExpandedPlaybackDurationMs(expanded, 120, [4, 4])).toBe(6000);
   });
 });
 

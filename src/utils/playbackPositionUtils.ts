@@ -101,3 +101,41 @@ export function findPlaybackStartExpandedIndex(
   const after = expandedMeasures.findIndex((item) => item.sourceMeasureIndex > startMeasureIndex);
   return after >= 0 ? after : 0;
 }
+
+/**
+ * すでに展開済み（リピートを再生順へ並べ替え済み）の小節列の再生時間（ms）を数える。
+ * calculateScoreDuration（ScorePage）は内部で expandMeasuresForPlayback を呼ぶため、
+ * 展開済みの列を渡すと repeatStart/repeatEnd が再解釈されて二重に伸びる（Codex round1 P2）。
+ * 途中再生の残り時間はこの関数で数える。
+ *
+ * 前進規則は buildPlaybackPositionTimeline と同じ向きにそろえる:
+ * - 主声部が空の小節（全休符・声部2のみの小節）は拍子の長さと全声部の実長の大きい方
+ *   （タイムラインは拍子ぶん進むので、停止タイマーがそれより先に切れないようにする）
+ * - 主声部がある小節は全声部を考慮した実長
+ * 末尾の「全声部が空」の小節は再生対象がないため数えない（声部2だけの小節は演奏対象。Codex round1 P1）
+ */
+export function calculateExpandedPlaybackDurationMs(
+  measures: MeasureData[],
+  bpm: number,
+  timeSignature: TimeSignature,
+): number {
+  let lastUsedIndex = -1;
+  for (let i = measures.length - 1; i >= 0; i--) {
+    if (getMeasureDurationBeats(measures[i]) > 0) {
+      lastUsedIndex = i;
+      break;
+    }
+  }
+  if (lastUsedIndex < 0) return 0;
+  const msPerBeat = (60 / bpm) * 1000;
+  let beats = 0;
+  for (let i = 0; i <= lastUsedIndex; i++) {
+    const measure = measures[i];
+    const contentBeats = getMeasureDurationBeats(measure);
+    const primaryEmpty = getPrimaryVoiceEvents(measure).length === 0;
+    beats += primaryEmpty
+      ? Math.max(contentBeats, getMeasureBeats(measure.timeSignature ?? timeSignature))
+      : contentBeats;
+  }
+  return beats * msPerBeat;
+}

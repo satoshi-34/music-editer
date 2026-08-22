@@ -151,7 +151,7 @@ import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { buildPlaybackPositionTimeline, findPlaybackStartExpandedIndex, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
@@ -1263,7 +1263,10 @@ export default function ScorePage() {
 
       // 途中再生（#108）: 小節を選択したまま再生すると、その小節から始める。
       // リピートがある譜面では「その小節の最初の出現」から（findPlaybackStartExpandedIndex）。
-      const startMeasure = selectedMeasures?.start ?? 0;
+      // パート譜表示中は総譜で選んだ選択が画面に見えない（選択UIが無い）ため、
+      // 見えない選択で途中再生になって混乱しないよう対象外にする（Codex round1 P2）
+      const startFromSelection = !isPartExtractionActive && selectedMeasures != null;
+      const startMeasure = startFromSelection ? selectedMeasures.start : 0;
 
       await runWithPlaybackFallback(async (audioEngine) => {
         if (parts.length > 0) {
@@ -1283,10 +1286,11 @@ export default function ScorePage() {
               : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures);
             // 途中再生では、展開後の再生順を開始位置で切ってからエンジンへ渡す。
             // 全パートとも先頭パートの反復順にそろえてあるため、同じ位置で切れば拍が一致する。
-            // 既知の制限: 開始位置より前から始まる cresc./dim. の途中経過は反映されない
-            // （強弱の傾斜は切った後の並びで計算し直すため）
+            // 強弱（絶対強弱と cresc./dim. の傾斜）は**切る前の全列**で解決し、キーの
+            // 小節番号をオフセットして引く。切った後で解決し直すと、開始位置より前で
+            // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
-            const dynamicVelocities = resolveDynamicVelocities(expandedMeasures.map(item => item.measure));
+            const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
 
             return {
               // 編成譜ではパート定義に再生楽器を持たせている。
@@ -1306,7 +1310,7 @@ export default function ScorePage() {
                   // 強弱記号から決まった基準ベロシティ（未設定なら既定 0.5）に
                   // アクセント等の倍率を掛けて、最後に 0..1 へ収める。
                   const baseVelocity = dynamicVelocities.get(
-                    buildDynamicEventKey(expandedMeasureIndex, eventIndex)
+                    buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, eventIndex)
                   ) ?? 0.5;
                   return {
                     ...event,
@@ -1330,9 +1334,12 @@ export default function ScorePage() {
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
           // ここでは最大値を採用して全体の終了時刻を決める。
           // 途中再生では、切った後の展開順（実際に鳴らす小節列）から残り時間を数える。
+          // calculateScoreDuration は内部でリピートを再展開するため展開済み列には使えない
+          // （repeatStart/repeatEnd が再解釈されて二重に伸びる）。専用の
+          // calculateExpandedPlaybackDurationMs（全声部で末尾判定・タイムラインと同じ前進規則）で数える。
           // 先頭からの再生は従来どおり生の小節列から数える（挙動を変えない）
           const totalDuration = startExpandedIndex > 0
-            ? Math.max(...partObjs.map(partObj => calculateScoreDuration(partObj.measures, tempoSettings.bpm, scoreTimeSignature)))
+            ? Math.max(...partObjs.map(partObj => calculateExpandedPlaybackDurationMs(partObj.measures, tempoSettings.bpm, scoreTimeSignature) / 1000))
             : Math.max(...parts.map(part => calculateScoreDuration(part.measures, tempoSettings.bpm, scoreTimeSignature)));
           setPlaybackState('playing');
           clearPlaybackTimer();
@@ -1348,8 +1355,10 @@ export default function ScorePage() {
             soundRuntimeSettings.swingEnabled,
             startExpandedIndex
           );
-          // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）
-          if (startExpandedIndex > 0) {
+          // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
+          // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
+          // なので通知する（Codex round1 P3）
+          if (startFromSelection) {
             setCurrentPosition({ measureIndex: startMeasure, beatPosition: 0, noteIndex: 0 });
             notifyScoreEdit(describePlaybackFromMeasure(startMeasure));
           }
