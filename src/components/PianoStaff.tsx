@@ -39,6 +39,8 @@ type Props = {
   customSymbolDefs?: CustomSymbolDef[];
   // 声部切り替えトグル（0=声部1・上声、1=声部2・下声）。省略時は従来通り声部1のみ。
   activeVoiceIndex?: 0 | 1;
+  /** 編集レイヤーのパート側（#316）。0=右手・1=左手。省略時は従来の帯域推測 */
+  activeLayerPartIndex?: number;
   // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
   // 省略時は全段を印刷する。画面表示には影響しない。
   printVisibleSystems?: number;
@@ -98,6 +100,7 @@ export default function PianoStaff({
   onBeatRangeSelect,
   customSymbolDefs,
   activeVoiceIndex = 0,
+  activeLayerPartIndex,
   printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
   pageMarginSideMm,
@@ -141,6 +144,7 @@ export default function PianoStaff({
           onBeatRangeSelect={onBeatRangeSelect}
           customSymbolDefs={customSymbolDefs}
           activeVoiceIndex={activeVoiceIndex}
+          activeLayerPartIndex={activeLayerPartIndex}
           plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
           incomingArcIndex={incomingArcIndex}
           measureWidthEvenness={measureWidthEvenness}

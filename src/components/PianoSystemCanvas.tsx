@@ -33,6 +33,7 @@ import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/
 import {
   SCORE_SELECTION_CLEAR_EVENT,
   describeAbsorbedChordKey,
+  describeActiveLayerSwitched,
   describeActiveVoiceSwitched,
   describeVoiceSwitchUnavailable,
   describeCrossStaffToggled,
@@ -49,6 +50,7 @@ import {
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   requestActiveVoiceChange,
+  requestScoreSelectionClear,
 } from '../utils/scoreEditorNotices';
 import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
@@ -835,6 +837,13 @@ type Props = {
   // 声部切り替えトグル: 0 = 声部1（上声）、1 = 声部2（下声）、…（N 声対応で number・#244 段5-5。
   // 0|1 の制約は ScorePage / パレットの UI 境界にのみ残す）。省略時は 0（従来互換）。
   activeVoiceIndex?: number;
+  /**
+   * 編集レイヤーのパート側（#316）。指定すると「レイヤー = (このパート, activeVoiceIndex)」の
+   * 明示選択モードになり、他パートの音符は選択専用（クリックでレイヤー自動切替+通知）になる。
+   * 空白クリックの挿入は従来どおり帯域優先（クリックした帯のパート×activeVoiceIndex。
+   * 設計メモ editor-layer-selection の裁定②案B）。省略時は従来の帯域推測のみ（非ピアノ譜種）。
+   */
+  activeLayerPartIndex?: number;
   /** ScorePage の線形Plannerが計測済みの、現在システム内の小節幅。 */
   plannedMeasureWidths?: number[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
@@ -1921,6 +1930,7 @@ export default function PianoSystemCanvas({
   onMeasureRangeSelect,
   customSymbolDefs = [],
   activeVoiceIndex = 0,
+  activeLayerPartIndex,
   measureWidthEvenness = MEASURE_WIDTH_EVENNESS,
   pageMarginSideMm,
   symbolsClickable = false,
@@ -1956,6 +1966,14 @@ export default function PianoSystemCanvas({
     { clef: 'treble', data: trebleData ?? [], onChange: onTrebleChange ?? (() => {}), label: undefined },
     { clef: 'bass',   data: bassData   ?? [], onChange: onBassChange   ?? (() => {}), label: undefined },
   ];
+  /**
+   * レイヤー切替通知（#316）用のパート名。part.label（五線のパート名表示と共用）が
+   * 無いときは、レイヤー通知が出るのはピアノ譜（activeLayerPartIndex はピアノ経路のみ）
+   * なので右手/左手で補う。label を直接埋めないのは、showInstrumentLabels の
+   * 五線ラベル描画に影響させないため
+   */
+  const layerPartLabel = (p: number): string =>
+    parts[p]?.label ?? (p === 0 ? '右手' : p === 1 ? '左手' : `パート${p + 1}`);
   const partsLayoutSignature = JSON.stringify(parts.map(part => ({
     clef: part.clef,
     label: part.label,
@@ -1997,6 +2015,7 @@ export default function PianoSystemCanvas({
     selectedArc: SelectedArcSel;
     selectedHairpin: SelectedHairpinSel;
     activeVoiceIndex: number;
+    activeLayerPartIndex: number | undefined;
     beatsPerMeasure: number;
     selectedMeasures: { start: number; end: number; startBeat?: number; endBeat?: number } | null;
     disabled: boolean;
@@ -2007,6 +2026,7 @@ export default function PianoSystemCanvas({
     selectedArc: null,
     selectedHairpin: null,
     activeVoiceIndex,
+    activeLayerPartIndex,
     beatsPerMeasure,
     selectedMeasures: selectedMeasures ?? null,
     disabled,
@@ -2868,6 +2888,7 @@ export default function PianoSystemCanvas({
       selectedArc,
       selectedHairpin,
       activeVoiceIndex,
+      activeLayerPartIndex,
       beatsPerMeasure,
       selectedMeasures: selectedMeasures ?? null,
       disabled,
@@ -3280,6 +3301,14 @@ export default function PianoSystemCanvas({
       // 優先2: 音符が選択中 → 音符操作
       const sel=latestRef.current.selected;
       if(!sel)return;
+      // レイヤー明示選択（#316）中は、選択がアクティブレイヤーのパートと食い違ったら編集しない。
+      // レイヤー切替はツールバー側で選択解除（requestScoreSelectionClear）するので通常は起きないが、
+      // タイミング差で残った古い選択への Delete / 矢印キーが別レイヤーの音符を書き換える事故を防ぐ
+      const layerPart=latestRef.current.activeLayerPartIndex;
+      if(layerPart!=null&&sel.partIndex!==layerPart)return;
+      // 声部側も同様（V キー切替は選択を手放すが、タイミング差の残留に備える）。
+      // voiceIndex を記録しない旧経路の選択（単声部）は従来どおり通す
+      if(layerPart!=null&&sel.voiceIndex!=null&&sel.voiceIndex!==latestRef.current.activeVoiceIndex)return;
       const {partIndex,measure,index,keyIndex}=sel;
       const clef=partsClefRef.current[partIndex]??'treble';
       const l2k=(l:number)=>lineToKeyForClef(clef,l);
@@ -4220,7 +4249,10 @@ export default function PianoSystemCanvas({
       // アクティブ声部にしか作られない既存の考え方（Issue #105）とそろえるためで、
       // 2声部が重なって描かれる小節で、淡色の裏声部の弧を誤って掴む事故も防げる。
       // identity が引けない弧は tiedToNext 方式のレガシー弧で、これは従来から編集対象ではない。
-      const isEditableArc=arcIdentity!==undefined&&arcIdentity.voiceIndex===activeVoiceIndex;
+      // レイヤー明示選択（#316）中は、弧のパートもアクティブレイヤーと一致するときだけ編集可
+      // （音符の当たり判定と同じ考え方。未指定なら従来どおり声部だけで判定）
+      const isEditableArc=arcIdentity!==undefined&&arcIdentity.voiceIndex===activeVoiceIndex
+        &&(activeLayerPartIndex==null||arcIdentity.partIndex===activeLayerPartIndex);
 
       let hitPath:SVGPathElement|null=null;
       if(isEditableArc){
@@ -4730,9 +4762,20 @@ export default function PianoSystemCanvas({
         // ときは空の声部として扱い、ヒット領域を一切作らない（＝クリックは常に
         // 背景クリックとして扱われ、この小節にアクティブ声部の音符を新規挿入する）
         // ことで、声部1側を誤って編集しないようにする。
-        const activeRenderedEntry = renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex);
+        // レイヤー明示選択（#316）: 選択レイヤーのパートでなければ、この小節に
+        // 「編集用」のアクティブ声部セルを作らない（音符はすべて選択専用ヒットになり、
+        // クリックでレイヤーが自動切替される）。空白クリックの挿入は ir（小節背景）経由で
+        // 従来どおり帯域のパートへ入る（裁定②案B）。activeLayerPartIndex 未指定なら従来どおり
+        const isActiveLayerPart = activeLayerPartIndex == null || pi === activeLayerPartIndex;
+        // このパート自身のアクティブ声部エントリ。空白クリック挿入の位置計算は
+        // レイヤーに関係なくこれを使う（裁定②案B: 挿入は帯域のパートへ入るため、
+        // レイヤー外パートで並びを空にすると挿入位置が常に先頭（at=0）へ化ける。Codex round2 P1）
+        const partActiveVoiceEntry = renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex);
+        const activeRenderedEntry = isActiveLayerPart ? partActiveVoiceEntry : undefined;
         const activeVfNotes = activeRenderedEntry?.vfNotes ?? [];
         const activeEvs = activeRenderedEntry?.sourceEvents ?? [];
+        const insertVfNotes = partActiveVoiceEntry?.vfNotes ?? [];
+        const insertEvs = partActiveVoiceEntry?.sourceEvents ?? [];
 
         /**
          * 音符1つぶんの「当たり判定の幾何」と「その位置は符頭を選ぶクリックか」の判定式を作る。
@@ -4855,13 +4898,13 @@ export default function PianoSystemCanvas({
           // 声部2がアクティブなときも同じロジックで、声部2自身の音符列に対して
           // クリック位置に最も近い位置へ挿入できるようにする
           // （以前は「常に末尾へ追記」の簡易実装だったが、声部1と同じ操作体系に揃えた）。
-          let at=activeEvs.length,minD=Infinity;
-          if(activeVfNotes.length>0){
-            [{x:measLeft,j:0},{x:measRight,j:activeVfNotes.length}].forEach(({x,j})=>{
+          let at=insertEvs.length,minD=Infinity;
+          if(insertVfNotes.length>0){
+            [{x:measLeft,j:0},{x:measRight,j:insertVfNotes.length}].forEach(({x,j})=>{
               const d=Math.abs(lx-x);if(d<minD){minD=d;at=j;}
             });
-            for(let j=0;j<activeVfNotes.length;j++){
-              const n:any=activeVfNotes[j];
+            for(let j=0;j<insertVfNotes.length;j++){
+              const n:any=insertVfNotes[j];
               const lx2=n.getAbsoluteX?n.getAbsoluteX():measLeft;
               const rx2=lx2+(n.getBoundingBox?.()?.getW()??20);
               if(lx>=lx2&&lx<=rx2){at=lx<(lx2+rx2)/2?j:j+1;minD=0;break;}
@@ -4873,7 +4916,7 @@ export default function PianoSystemCanvas({
           // 2音目・3音目の手前が選ばれることがある。そのまま差し込むとグループが前後に
           // 割れ、同じ tuplet.id が離れて並ぶ壊れたデータになる（Issue #282 の発生経路）。
           // グループの手前か直後の、近いほうへ寄せてから使う。
-          at=snapInsertIndexOutOfTupletGroup(activeEvs,at);
+          at=snapInsertIndexOutOfTupletGroup(insertEvs,at);
 
           const currentMeasure = score[absI] ?? createEmptyMeasure();
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey;
@@ -4965,6 +5008,7 @@ export default function PianoSystemCanvas({
             });
             notifyLeadingRestFill(leading, voiceCountAfterInsert);
             playNoteEvent(groupEvents[0], part.playbackInstrument);
+            notifyLayerAutoSwitchOnInsert();
             return;
           }
 
@@ -5001,6 +5045,22 @@ export default function PianoSystemCanvas({
             // 置いた直後の確認音があると、右手左手どちらでも音高チェックがしやすい。
             playNoteEvent(insertedEvent, part.playbackInstrument);
           }
+          notifyLayerAutoSwitchOnInsert();
+        };
+
+        /**
+         * レイヤー明示選択（#316・裁定②案B）: 空白クリックの挿入は帯域のパートへ入るが、
+         * それが選択レイヤーと違うパートだったときは、入れた先へレイヤーを自動切替して
+         * 必ず通知する（#258 の「切り替えは画面に出す」原則）。こうしないと
+         * 「置いた音符がすぐには編集できない（選択専用になる）」ちぐはぐが起きる
+         */
+        const notifyLayerAutoSwitchOnInsert = () => {
+          if (activeLayerPartIndex == null || pi === activeLayerPartIndex) return;
+          // レイヤーが変わるので、前のレイヤーの選択（音符・弧・松葉）は全 Canvas で手放す。
+          // 残すと切替後の Delete / 矢印キーが古いレイヤーの対象へ届いてしまう（Codex round2 P2）
+          requestScoreSelectionClear();
+          requestActiveVoiceChange(activeVoiceIndex, pi);
+          notifyScoreEdit(describeActiveLayerSwitched(layerPartLabel(pi), activeVoiceIndex));
         };
 
         // 選択状態の分類（#333 段2）: 丸ごと / 端の部分（拍範囲）/ 非選択。
@@ -5358,7 +5418,9 @@ export default function PianoSystemCanvas({
         //  - ハンドラがするのは「声部の切り替え・選択・通知・試聴」だけで、
         //    音符を増やす/置き換える編集は一切しない
         renderedVoiceEntries.forEach((entry)=>{
-          if(entry.voiceIndex===activeVoiceIndex)return;
+          // レイヤー明示選択（#316）: 選択レイヤーのパートではアクティブ声部を除外（従来）、
+          // 他パートでは全声部の音符が「選ぶだけ」の対象になる
+          if(entry.voiceIndex===activeVoiceIndex && isActiveLayerPart)return;
           const otherVfNotes=entry.vfNotes;
           const otherEvs=entry.sourceEvents;
           if(otherVfNotes.length===0)return;
@@ -5394,9 +5456,15 @@ export default function PianoSystemCanvas({
               setSelectedArc(null);
               setSelectedHairpin(null);
               setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:entry.voiceIndex,keyIndex});
-              requestActiveVoiceChange(targetVoiceIndex);
+              // レイヤー明示選択（#316）: パートまで含めて切り替える。
+              // 従来モード（activeLayerPartIndex 未指定）では partIndex を送らない。
+              // ScorePage 側は譜種を問わず 0/1 を適用するため、四重奏・編成譜で
+              // 非表示の activeLayerPart を書き換えてしまわないようにする（Codex round1 P2）
+              requestActiveVoiceChange(targetVoiceIndex, activeLayerPartIndex != null ? pi : undefined);
               // 「勝手にモードが変わった」と感じさせないため、切り替えは必ず画面に出す（Issue #238 の通知）
-              notifyScoreEdit(describeActiveVoiceSwitched(targetVoiceIndex));
+              notifyScoreEdit(!isActiveLayerPart
+                ? describeActiveLayerSwitched(layerPartLabel(pi), targetVoiceIndex)
+                : describeActiveVoiceSwitched(targetVoiceIndex));
               playNoteEvent({...ev,keys:[ev.keys[keyIndex]]}, part.playbackInstrument);
             };
             // 符頭ごとに1枚ずつ rect を作る。和音は符頭が縦に離れて並ぶので、
@@ -6801,6 +6869,7 @@ export default function PianoSystemCanvas({
         setSelectedHairpin({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
       };
       const onClick=voiceIndex===activeVoiceIndex
+        &&(activeLayerPartIndex==null||partIndex===activeLayerPartIndex)
         ? (ev:MouseEvent)=>{
             // 同じ場所の再クリックなら、奥に隠れている対象（符頭・弧）へ譲る（Issue #264）
             if(tryClickCycle(hairpinCycleId,ev.clientX,ev.clientY))return;
@@ -6876,7 +6945,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
