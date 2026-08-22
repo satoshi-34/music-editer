@@ -88,6 +88,15 @@ export function describeActiveVoiceSwitched(voiceIndex: number): string {
 }
 
 /**
+ * UI が対応していない声部（3声以降）への切り替えを求められたときの案内（#244 段5-5）。
+ * データ・再生・書き出しは N 声対応だが、編集 UI（声部トグル）は2声まで。
+ * 黙って無視すると「クリックしたのに何も起きない」行き止まりになる（#318）。
+ */
+export function describeVoiceSwitchUnavailable(voiceIndex: number): string {
+  return `声部${voiceIndex + 1}の音符です（表示・再生・書き出しのみ対応）。編集ツールでの切り替えは声部1・2までです`;
+}
+
+/**
  * 削除される音符/休符から、通知に出す文言を組み立てる。
  *
  * 分岐は utils/noteDeletionUtils.ts の deleteEventFromMeasures と**同じ順序**にしてある。

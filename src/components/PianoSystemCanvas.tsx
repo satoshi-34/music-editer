@@ -34,6 +34,7 @@ import {
   SCORE_SELECTION_CLEAR_EVENT,
   describeAbsorbedChordKey,
   describeActiveVoiceSwitched,
+  describeVoiceSwitchUnavailable,
   describeCrossStaffToggled,
   describeCrossStaffUnavailable,
   describeDeletedArc,
@@ -5280,6 +5281,13 @@ export default function PianoSystemCanvas({
             const switchVoiceAndSelect=(clientX:number,clientY:number)=>{
               const keyIndex=resolveKeyIndexAtClient(clientX,clientY);
               if(keyIndex<0)return;
+              // 編集 UI（声部トグル）は2声まで。3声以降のデータは表示・再生・書き出しのみ
+              // 対応なので、切り替え要求を ScorePage が黙って無視して選択と実状態が
+              // 食い違う前に、ここで理由と対応範囲を伝えて終える（#318・#244 段5-5）
+              if (targetVoiceIndex > 1) {
+                notifyScoreEdit(describeVoiceSwitchUnavailable(targetVoiceIndex));
+                return;
+              }
               setSelectedArc(null);
               setSelectedHairpin(null);
               setSelected({partIndex:pi,measure:absI,index:j,voiceIndex:entry.voiceIndex,keyIndex});

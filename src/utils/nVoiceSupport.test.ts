@@ -98,8 +98,12 @@ describe('N 声（声部3・4）のコア対応（#244 段5-5）', () => {
     expect(xml).toContain('<voice>4</voice>');
     const imported = parseMusicXml(xml);
     const measure = imported.parts[0].measures[0];
-    // 読込側は <backup> 境界で声部を復元する。「壊れず全声部が出る」水準の確認
-    expect((measure.voices?.length ?? 0)).toBeGreaterThanOrEqual(2);
+    // 読込側は <backup> ごとに区切って全声部を復元する（Codex 1巡目 P1:
+    // 旧実装は最初の <backup> だけで分割し、4声が2声へ潰れていた）
+    expect(measure.voices).toHaveLength(4);
+    expect(getVoiceEvents(measure, 1).map((e) => e.keys[0])).toEqual(['a/4', 'b/4', 'c/5', 'd/5']);
+    expect(getVoiceEvents(measure, 2).map((e) => e.keys[0])).toEqual(['e/4', 'f/4', 'g/4', 'a/4']);
+    expect(getVoiceEvents(measure, 3).map((e) => e.keys[0])).toEqual(['c/4', 'd/4']);
   });
 
   it('MIDI 書出に全声部の音が出る（声部2以降が出ないバグの修正・§2-5 予告分）', () => {

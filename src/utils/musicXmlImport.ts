@@ -293,12 +293,21 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     const openHairpinRefs: HairpinMark[] = [];
     const openHairpinRefsVoice2: HairpinMark[] = [];
     const measures: MeasureData[] = measureEls.map((measureEl, mi) => {
-      // 声部2（下声など）は書出側が <backup> で区切って出力しているため、
-      // <backup> より前を声部1、後を声部2として分ける。
+      // 追加声部（下声など）は書出側が <backup> で区切って出力しているため、
+      // <backup> ごとに区切って「1つ目の区間=声部1、2つ目=声部2、…」として分ける。
+      // #244 段5-5: 旧実装は最初の <backup> だけで2分割しており、3声以上の自己往復で
+      // 声部3以降がすべて声部2へ連結される（4声→2声へ潰れる）データ破壊があった。
       const allChildren = Array.from(measureEl.children);
-      const backupIndex = allChildren.findIndex((el) => el.tagName === 'backup');
-      const voice1Children = backupIndex === -1 ? allChildren : allChildren.slice(0, backupIndex);
-      const voice2Children = backupIndex === -1 ? [] : allChildren.slice(backupIndex + 1);
+      const voiceSections: Element[][] = [[]];
+      for (const el of allChildren) {
+        if (el.tagName === 'backup') {
+          voiceSections.push([]);
+        } else {
+          voiceSections[voiceSections.length - 1].push(el);
+        }
+      }
+      const voice1Children = voiceSections[0];
+      const voice2Children = voiceSections[1] ?? [];
 
       const voice1NoteEls = voice1Children.filter((el) => el.tagName === 'note');
       const events = parseNotes(voice1NoteEls);
@@ -308,6 +317,10 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
       const voice2Events = voice2NoteEls.length > 0 ? parseNotes(voice2NoteEls) : [];
       // 声部2の松葉も同じ方式で復元する（voice2Events の要素を直接書き換える）
       attachHairpinsToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2);
+
+      // 声部3以降（松葉の復元は現行 UI が2声までなので行わない。「壊れず全声部が戻る」水準）
+      const extraVoiceEvents: NoteEvent[][] = voiceSections.slice(2).map((children) =>
+        parseNotes(children.filter((el) => el.tagName === 'note')));
 
       // リピート
       const leftBarline = measureEl.querySelector('barline[location="left"] repeat');
@@ -350,10 +363,14 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
 
       return {
         events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }],
-        // 声部2（下声）: 入力があった小節だけ voices を持たせる。
-        // voiceMeasureUtils の withVoiceEventsUpdated と同じ形（声部2は既定で符幹下向き）に揃える。
-        voices: voice2Events.length > 0
-          ? [{ id: 'voice-1', events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }] }, { id: 'voice-2', events: voice2Events, stemDirection: 'down' }]
+        // 追加声部: 入力があった小節だけ voices を持たせる。
+        // voiceMeasureUtils の withVoiceEventsUpdated と同じ形（声部2以降は既定で符幹下向き）に揃える。
+        voices: (voice2Events.length > 0 || extraVoiceEvents.some((ve) => ve.length > 0))
+          ? [
+              { id: 'voice-1', events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }] },
+              { id: 'voice-2', events: voice2Events, stemDirection: 'down' as const },
+              ...extraVoiceEvents.map((ve, i) => ({ id: `voice-${i + 3}`, events: ve, stemDirection: 'down' as const })),
+            ]
           : undefined,
         repeatStart: leftBarline?.getAttribute('direction') === 'forward' ? true : undefined,
         repeatEnd: rightBarline?.getAttribute('direction') === 'backward' ? true : undefined,
