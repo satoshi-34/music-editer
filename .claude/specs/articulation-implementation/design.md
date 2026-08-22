@@ -191,3 +191,22 @@ articulations を「VexFlowのグリフ構造上、安全な描画反映を作�
   コンソールエラーなし。StaffCanvas 側は PianoSystemCanvas と全く同じロジックのコード変更を
   行っており、コードレビューで同等の反映を確認した（複雑テスト楽譜はピアノ譜のため、単旋律譜
   （StaffCanvas）でのブラウザ実機確認はできていない）。
+
+## 回帰修復の記録（2026-08-22）: 適用ケースの移植漏れ
+
+**原因**: StaffCanvas 廃止（PianoSystemCanvas 一本化）の際、音符クリックの
+ツール振り分け（音符セルの switch）へ `case 'articulation'` が移植されなかった。
+パレットのボタン・描画・再生効果・位置/サイズ調整・MusicXML 入出力は残っていたため、
+「ツールを選んで音符を押しても何も付かない」だけが静かに欠けていた
+（Issue #279 のコード記号描画の移植漏れと同型）。#173（パート譜の記号編集）の
+調査で PSC 分岐と Palette の Tool union を突き合わせて発見。
+
+**復旧内容**: PSC の音符セル分岐へ `case 'articulation'` を追加。強弱記号（dynamic）と
+同じ形 — `toggleArticulationOnEvent` によるトグル付け外し・選択と再生プレビューの更新・
+休符クリックは `describeSymbolToolUnavailable({type:'articulation'}, 'rest')` で理由通知（#318）。
+SymbolTool union へ articulation を追加。
+
+**影響範囲**: PSC の当該 switch 1ケース + scoreEditorNotices の union/文言のみ。
+
+**回帰テスト**: PianoSystemCanvasArticulationTool.test.tsx 3件
+（付与＝修正前は赤・再クリックでトグル解除・休符は拒否+通知）。

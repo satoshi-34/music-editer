@@ -106,6 +106,7 @@ import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasur
 // 自動休符補完は #244 段5-2 で utils へ物理移設（不変条件テストから直接呼ぶため）
 import { buildRestEventsForBeats, fillPriorMeasureRests } from '../utils/measureRestFillUtils';
 import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
+import { toggleArticulationOnEvent } from '../utils/articulationMarkingUtils';
 import {
   applyCustomSymbolToEvent,
   setCustomSymbolScale,
@@ -5991,6 +5992,19 @@ export default function PianoSystemCanvas({
                 // 音符セルクリックで直接 NoteEvent に強弱を付ける。
                 const nextEv = applyDynamicMarkingToEvent(activeEvs[j], dynamicMode);
                 updateHitEvent(j, (targetEv) => targetEv.isRest ? null : applyDynamicMarkingToEvent(targetEv, dynamicMode));
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
+                playNoteEvent(nextEv, part.playbackInstrument);
+                return { kind: 'handled' };
+              }
+              case 'articulation': {
+                // StaffCanvas 廃止（PSC 一本化）時の移植漏れの復旧（#279 のコード記号と同型）。
+                // 強弱記号と同じ形で、音符クリックでトグル付け外しする
+                if (clickedIsRest) {
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable({ type: 'articulation' }, 'rest') };
+                }
+                const articulationMode = tool.articulation;
+                const nextEv = toggleArticulationOnEvent(activeEvs[j], articulationMode);
+                updateHitEvent(j, (targetEv) => targetEv.isRest ? null : toggleArticulationOnEvent(targetEv, articulationMode));
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                 playNoteEvent(nextEv, part.playbackInstrument);
                 return { kind: 'handled' };

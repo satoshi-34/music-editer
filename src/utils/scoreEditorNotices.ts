@@ -251,6 +251,8 @@ export function describeTupletNumberToggleUnavailable(): string {
 export type SymbolTool =
   /** 強弱記号（p, f など）を付けるツール */
   | { type: 'dynamic' }
+  /** アーティキュレーション（スタッカート等）を付けるツール */
+  | { type: 'articulation' }
   /** カスタム記号を付け外しするツール。symbolName はユーザーが付けた記号の名前 */
   | { type: 'customSymbol'; symbolName: string }
   /** 特定のカスタム記号のサイズ・位置を調整するツール */
@@ -268,6 +270,8 @@ function describeSymbolToolName(tool: SymbolTool): string {
   switch (tool.type) {
     case 'dynamic':
       return '強弱記号';
+    case 'articulation':
+      return 'アーティキュレーション';
     case 'customSymbol':
       return `カスタム記号「${tool.symbolName}」`;
     case 'customSymbolAdjust':
