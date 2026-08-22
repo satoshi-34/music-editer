@@ -57,23 +57,57 @@ export function generateCrossStaffBeams(
   // 手順3 で作り直す前に、いったん全部の参照を外しておく。
   notes.forEach(note => clearBeam(note as StemmableNote));
 
-  // 手順2: 拍の区切りを、またぎ位置でさらに分割する。
+  // 手順2: 拍グループごとに「またぎを含むか」で分岐する。
   // 束ねる対象にならなかった音符（4分音符など）は beatGroups に現れないので、
   // ここに出てこない音符は従来どおりビーム無しのまま。
-  const fragments = beatGroups.flatMap(beam => {
+  return beatGroups.flatMap(beam => {
     const indexes = beam.getNotes()
       .map(note => indexOfNote.get(note))
       .filter((index): index is number => index !== undefined);
-    return splitIndexesByRenderTarget(indexes, renderPartIndexes);
-  });
+    const firstPart = renderPartIndexes[indexes[0]];
+    const crossing = indexes.some(index => renderPartIndexes[index] !== firstPart);
 
-  // 手順3: 断片ごとに Beam を作り直す。1音だけの断片も generateBeams に通すのは、
-  // 符幹の向きを「その断片の音符だけ」で決め直させるため（VexFlow は渡された
-  // グループ単位で向きを揃える。またぎで別の五線へ行った音符の高さに引きずられない）。
-  return fragments.flatMap(fragment =>
-    Beam.generateBeams(fragment.map(index => notes[index]) as StemmableNote[], beamOptions)
-  );
+    if (!crossing) {
+      // またぎの無いグループは従来どおり（符幹の向きもグループ単位で自動決定）
+      return splitIndexesByRenderTarget(indexes, renderPartIndexes).flatMap(fragment =>
+        Beam.generateBeams(fragment.map(index => notes[index]) as StemmableNote[], beamOptions)
+      );
+    }
+
+    // ── 段またぎ連桁（Issue #259 段2）──
+    // 段1では「またぎ位置でビームを切る」だったが、市販譜の慣行どおり
+    // 1本のビームを五線間に斜めに渡す。作り方:
+    //   1. 符幹の向きを「五線の間」へ向ける（グループ内で上の五線に載る音は下向き、
+    //      下の五線に載る音は上向き）。ビームは両方の符幹の先端の間＝五線間に置かれる
+    //   2. Beam.generateBeams ではなく new Beam(...) を使う。generateBeams は
+    //      グループの向きを1方向へ揃え直すが、コンストラクタは既存の向きを保つ
+    //      （混在方向のビームは VexFlow が公式にサポートする段またぎの描き方。
+    //      実挙動はプローブテストで確認済み: ビームのパスは五線の間の y に描かれる）
+    // 多声小節の「声部1=上向き」固定より、またぎグループの向きを優先する
+    // （浄書上、またぎ連桁の符幹は五線間へ向けるのが前提のため）。
+    const groupNotes = indexes.map(index => notes[index] as StemmableNote);
+    const topPart = Math.min(...indexes.map(index => renderPartIndexes[index]));
+    groupNotes.forEach((note, k) => {
+      const notePart = renderPartIndexes[indexes[k]];
+      note.setStemDirection(notePart === topPart ? -1 : 1);
+    });
+    const spanning = new Beam(groupNotes);
+    // 合同整形後の復元（restoreCrossStaffBeamAssignments）が混在方向を
+    // 一律方向で潰さないよう、作成時点の向きを記録しておく
+    crossStaffBeamStemDirections.set(
+      spanning,
+      new Map(groupNotes.map(note => [note, note.getStemDirection()])),
+    );
+    return [spanning];
+  });
 }
+
+/**
+ * 段またぎ連桁（混在方向ビーム）の「作成時点の符幹の向き」の台帳。
+ * restoreCrossStaffBeamAssignments が復元時に参照する。WeakMap なので
+ * ビームが捨てられれば記録も一緒に消える（描画ごとに作り直す運用と整合）。
+ */
+const crossStaffBeamStemDirections = new WeakMap<Beam, Map<StemmableNote, number>>();
 
 /**
  * 合同整形のあとで、ビームの「参照」と「符幹の向き」をビーム自身の記録から復元する（Issue #319）。
@@ -95,8 +129,12 @@ export function generateCrossStaffBeams(
  */
 export function restoreCrossStaffBeamAssignments(beams: readonly Beam[]): void {
   beams.forEach(beam => {
-    const direction = beam.getStemDirection();
+    // 段またぎ連桁（段2）は符幹の向きが混在するので、作成時点の記録から音符ごとに戻す。
+    // 記録が無いビーム（またぎを含まない従来グループ）はビームの一律方向でよい
+    const recorded = crossStaffBeamStemDirections.get(beam);
+    const uniformDirection = beam.getStemDirection();
     beam.getNotes().forEach(note => {
+      const direction = recorded?.get(note) ?? uniformDirection;
       if (note.getStemDirection() !== direction) {
         note.setStemDirection(direction);
       }
