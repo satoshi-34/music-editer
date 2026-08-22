@@ -13,6 +13,26 @@
 - コンソールエラーが出ていないことを確認する
 - 確認できたらスクリーンショットを添えてユーザーに報告する
 
+## 統合テスト（配線テスト）ルール
+
+新機能・機能変更のテストは、コンポーネント単体テスト（props 直接注入）だけで終わらせず、
+**ScorePage を実際にマウントする統合テストで「配線」まで固定する**（2026-08-22 の
+open バッチで標準化。props 直接注入のテストは ScorePage 側の受け渡しを消しても通って
+しまい、配線の削除・退行を検出できないことが PR #371 / #372 のレビューで繰り返し指摘された）。
+
+- 型（先行例を踏襲する）: `src/components/ScorePagePartSymbolsWiring.test.tsx` /
+  `ScorePagePartLayout.test.tsx`。localStorage モックへ作品を仕込み
+  （`createWork` → `saveWorkAutosaveData` → `setLastOpenedWorkId`）、
+  `render(<ScorePage />)` → 復元を待ち、実際のタブ・セレクト・クリック操作で機能に到達する
+- 検証は DOM で行う（描画された svg の属性・pointer-events・テキストの座標など）。
+  jsdom で未実装、または実レイアウト値を得られない API・プロパティ
+  （`getBBox`・`clientWidth`・`getBoundingClientRect` 等）は先行例と同じ
+  モックで補う。ScorePage の全体マウントは重いので、タイムアウトは先行例と同じく個別に延長する
+- 単体テストが不要になるわけではない。ロジックの分岐網羅は単体テストで、
+  「ScorePage からその機能に実際に届くこと」は統合テストで、と役割分担する
+- バグ修正のテストは、可能なら**負のテスト**（修正を一時的に外すと落ちること）で
+  検出力を確認してから確定する（一時改変の復元は git checkout ではなく cp で行う）
+
 ## 「行き止まりは喋る」原則（Issue #318）
 
 操作が効かない・機能が意図的に制限されている場面では、アプリが必ず **理由** と **代替手順** を示す。
@@ -93,3 +113,17 @@ const wrapper = el.closest('.page-wrapper');
 // 0.5 行刻みで正確に丸める（toFixed(1) は 0.1 刻みなので不適切）
 bestLine = Math.round(line * 2) / 2;
 ```
+
+## リリースフロー（2026-07-25 導入）
+
+本番（Vercel Production）は `release` ブランチからデプロイされる。`main` はテスト・検証用で、マージしても本番には反映されない。
+
+- 夜間エージェント・PR のマージ先は従来どおり `main`（このルールに変更なし。`release` へは push しない）
+- 運用者が朝レビューと実機スモーク確認（新規作成4譜種の見た目 → デモ譜面読込 → 音符入力 → 印刷プレビュー）を通過させた後、`release` を `main` の位置へ fast-forward して本番反映する:
+  ```sh
+  git switch release
+  git merge --ff-only main
+  git push origin release
+  git switch main
+  ```
+- 本番で不具合が出た場合は、`release` を前の位置へ戻すのではなく、`main` 側で revert → 検証 → 通常の昇格手順で反映する（履歴を一方向に保つ）
