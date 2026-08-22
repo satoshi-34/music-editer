@@ -644,8 +644,11 @@ export default function ScorePage() {
    * 複数小節のスライスは「端は部分・中は全体」の順で並ぶ。後勝ち3すくみ
    * （小節 / 連符グループ / スライス）の一角（Issue #234 の規則を拡張）
    */
-  // parts は位置ではなく partId（小節クリップボードと同じ命名）で照合する。
-  // コピー後に楽譜種別や編成が変わっても、別の楽器へ内容を上書きしない（Codex round2 P1）
+  // parts は位置ではなく partId で照合する（piano/quartet/single は固定名、編成譜は
+  // instrumentation.parts の安定 id と ensembleSecondStaffPartId(id)）。コピー後に
+  // 楽譜種別や編成が変わっても、別の楽器へ内容を上書きしない（Codex round2/3 P1）。
+  // 小節クリップボード（setClipboard）の編成譜は従来どおり添字ベース（ensemble-i）のままで、
+  // 同種の並べ替え問題を持つ（既存挙動・別Issue候補）
   const [sliceClipboard, setSliceClipboard] = useState<Array<{ beats: number; parts: Array<{ partId: string; voices: NoteEvent[][] }> }> | null>(null);
   // コピーした小節データ。各パートごとのスナップショット
   const [clipboard, setClipboard] = useState<{ partId: string; measures: MeasureData[] }[] | null>(null);
@@ -1594,8 +1597,9 @@ export default function ScorePage() {
   // 適用する」という同じ形をしているため、パートの列挙部分だけを共通化する
   // （Cmd+C/V・Deleteのキーボードハンドラは選択範囲へのスライス/上書きという別の形のため
   // 対象外のまま。あちらは既存の scoreType 分岐踏襲でそろえてある）。
-  // partId は小節クリップボード（Cmd+C の setClipboard）と同じ命名規則。
-  // スライスのクリップボード（#333 段2）がパートを位置ではなく ID で照合するために使う
+  // partId はスライスのクリップボード（#333 段2）がパートを位置ではなく ID で照合するためのもの。
+  // piano/quartet/single は小節クリップボードと同じ固定名、編成譜だけは添字（ensemble-i）ではなく
+  // 編成パートの安定 id（alignMeasuresToInstrumentationParts と同じ id 空間）を使う
   type PartEntry = { partId: string; measures: MeasureData[]; apply: (next: MeasureData[]) => void; clef: ClefType };
   const getEditablePartEntries = useCallback((): PartEntry[] => {
     const parts: PartEntry[] = [];
@@ -2951,6 +2955,18 @@ export default function ScorePage() {
           const beatsPerMeasureNow = getMeasureBeats(scoreTimeSignature);
           const destMeasure = selectedMeasures.start;
           const destBeat = selectedMeasures.startBeat ?? 0;
+          // 複数小節にまたがるスライスは、1個目の断片が貼り先の小節末で終わる位置
+          // （＝コピー元と同じ小節内オフセット）にだけ貼れる。それ以外の位置だと
+          // 2個目以降が無条件に次小節の拍0へ飛び、断片の間に元の内容が残って
+          // 「コピーした幅を選択位置から上書き」にならない（Codex round4 P1）。
+          // 貼り先での連続的な再分割は、小節境界がコピー元と違う位置で音符を
+          // 割ってしまうため v1 ではやらない（境界スナップの規則と同じ安全側）
+          if (sliceClipboard.length > 1
+            && Math.abs(destBeat + sliceClipboard[0].beats - beatsPerMeasureNow) > 0.0001) {
+            notifyScoreEdit(describeSlicePasteUnavailable('misaligned'));
+            e.preventDefault();
+            return;
+          }
           const entries = getEditablePartEntries();
           // 先に全パート・全セグメントを検証してから適用する（部分適用しない・#318）
           type Planned = { entryIndex: number; measureIndex: number; voiceEdits: Array<VoiceSliceEdit | null> };
