@@ -2,6 +2,7 @@ import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, NoteEvent, ScoreMetadata, ScoreType, TimeSignature } from '../types/storage';
 import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/clefUtils';
 import type { KeySignature } from '../utils/noteKeyUtils';
+import { syncMeasuresPrimaryVoiceFromEvents } from '../utils/voiceMeasureUtils';
 
 export interface DemoScore {
   metadata: ScoreMetadata;
@@ -154,6 +155,11 @@ export function loadCustomPianoDemoScore(): DemoScore | null {
       ...parsed,
       scoreType: 'piano',
       recommendedInstrument: parsed.recommendedInstrument || InstrumentType.PIANO,
+      // 読込境界の鏡同期（#244 段5-3）: 段5-1 以前に保存されたカスタムサンプルは
+      // voices[0]（鏡）が古いことがある。read が鏡を優先するため、正本（events）から
+      // 同期してから返す（localStorage 通常読込・ファイル読込と同じ安全網）
+      rightHand: syncMeasuresPrimaryVoiceFromEvents(parsed.rightHand),
+      leftHand: syncMeasuresPrimaryVoiceFromEvents(parsed.leftHand),
     };
   } catch (error) {
     console.error('[demoScores] カスタムピアノサンプルの読込に失敗しました:', error);

@@ -5,7 +5,7 @@ import type { SavedScoreData, NoteEvent, MeasureData } from '../types/storage';
 import type { KeySignature } from './noteKeyUtils';
 import type { ClefType } from '../components/clefUtils';
 import { resolveMeasureClef } from './clefMeasureUtils';
-import { getMeasureVoices, getVoiceEvents } from './voiceMeasureUtils';
+import { getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 
 // 分割数（division）: 四分音符 = 16分割。全音符〜64分音符を整数で表せる最小値
 const DIVISIONS = 16;
@@ -299,7 +299,7 @@ function measureToXml(
   // 音符・休符
   // 連符（tuplet）は同じ id の連続イベントが1グループなので、その先頭/末尾を判定して
   // <notations><tuplet type="start"/ "stop"/></notations> を出し分ける。
-  const events = measure.events;
+  const events = getPrimaryVoiceEvents(measure);
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
     const dynDir = dynamicsDirectionXml(ev, options.staff);
@@ -360,7 +360,11 @@ function measureToXml(
  * @returns MusicXML XML 文字列
  */
 export function scoreToMusicXml(data: SavedScoreData): string {
-  const { metadata, parts, keySignature = 'C', timeSignature = [4, 4] } = data;
+  const { metadata, keySignature = 'C', timeSignature = [4, 4] } = data;
+  // 書き出し境界の正規化（#244 段5-3）: read は voices[0]（鏡）を優先するため、
+  // 呼び出し側から鏡が古いデータ（旧バージョン由来・手組みのテストデータ等）が来ても
+  // 正本（events）から同期してから書き出す。アプリ内の通常経路では dual-write 済みで no-op
+  const parts = data.parts.map((p) => ({ ...p, measures: syncMeasuresPrimaryVoiceFromEvents(p.measures) }));
   const globalKeyFifths = KEY_FIFTHS[keySignature as KeySignature] ?? 0;
   const globalTimeSig: [number, number] = [timeSignature[0], timeSignature[1]];
 

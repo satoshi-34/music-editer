@@ -345,3 +345,34 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
     **非同期入力（レガシー書き込み相当）**のケースも用意 — 同期済み入力だけでは保存時同期の
     除去を検出できないことがレッドチェックで判明したため（dual-write が肩代わりする）。
     非同期入力ケースは保存時同期を外すと検出される
+
+## 13. 段5-3 の実装記録（2026-08-22・フォールバック付き read 切替）
+
+- **正規 read アクセサ `getPrimaryVoiceEvents(measure)`**（voiceMeasureUtils）:
+  `voices[0]?.events ?? events ?? []`。不変条件（§12）下で従来の events 読みと同値
+- **切替した読み**（§2-5 の実害順）: getVoiceEvents(voice 0)・getMeasureVoices の主声部・
+  getMeasureDurationBeats・flattenMeasureForPlayback（以上 voiceMeasureUtils）／
+  ScorePage の空判定・演奏時間見積り／measureLayoutUtils の幅計算・臨時記号走査・声部リスト構築／
+  ScorePlayer の再生列挙・再生位置計算・位置検証／musicXmlExport・midiExport の主声部読み／
+  PSC の描画ソース（safeEvs）／measureRestFillUtils の埋まり拍計算
+- **境界の正規化（read 切替の安全網）**: read が鏡を優先するため、鏡が古いデータが
+  読み込まれた場合に古い内容が表示・出力に出てしまう。これを防ぐため、**データの出入口で
+  正本（events）から鏡を同期**する: (1) localStorage 読込（parseAndNormalizeStoredScore・
+  primary/backup 両スロット） (2) ファイル読込（fileStorage.importScoreFromFile の後始末④）
+  (3) MusicXML/MIDI 書き出し入口（呼び出し側から鏡が古いデータが来ても正本から同期。
+  アプリ内の通常経路では dual-write 済みで no-op）。MusicXML import は元から鏡同期の形で生成
+- **テスト**: getPrimaryVoiceEvents のユニット3件（voices 優先・フォールバック・空）。
+  旧規約（鏡が空）の手組みフィクスチャで書かれていた musicXmlVoice2.test.ts は、
+  export 境界の正規化により**無修正で緑**（＝境界正規化の検出テストを兼ねる）
+- 挙動差: 不変条件下でゼロ差。鏡が古い異常データに対してのみ「正本＝events が勝つ」ことが
+  境界で保証されるようになった（従来は読み手ごとにまちまちだった）
+- 既知バグの別Issue化: **声部2が MIDI に出ていない**（§2-5 で予告済み）は本段では触らず、
+  段5-4 完了後に起票する
+- **Codex 1巡目（P2×2: 読み残し）への対応**: measurePlannerSafetyPadding（記譜音表示用の
+  安全幅）・resolveDynamicVelocities（再生の強弱割り当て）・playbackPositionUtils（画面の
+  再生位置タイムライン）の3読みを正規アクセサへ追加切替。いずれも ScorePlayer 内部入口の
+  ように境界正規化を通らない純関数直呼びのため、鏡と正本の食い違いで別音符へ強弱が付く・
+  ハイライト時刻がずれる余地があった
+- **Codex 2巡目（P2）への対応**: カスタムピアノサンプル（loadCustomPianoDemoScore・
+  独自の localStorage キー）も永続化データの流入経路だった。読込時に rightHand/leftHand を
+  正本から鏡同期する安全網を追加（他の読込境界と同じ扱い）

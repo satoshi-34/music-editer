@@ -6,6 +6,7 @@ import type {
   NoteEvent,
   RelativeDynamicMarking
 } from '../types/storage';
+import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
 
 export const ABSOLUTE_DYNAMIC_VALUES: AbsoluteDynamicMarking[] = ['pp', 'p', 'mp', 'mf', 'f', 'ff'];
 export const RELATIVE_DYNAMIC_VALUES: RelativeDynamicMarking[] = ['cresc', 'dim'];
@@ -166,7 +167,9 @@ function createRelativePlan(
  */
 export function resolveDynamicVelocities(measures: MeasureData[]): Map<string, number> {
   const flattenedEvents = measures.flatMap((measure, measureIndex) =>
-    measure.events.map((event, eventIndex) => ({ measureIndex, eventIndex, event }))
+    // 主声部の読みは正規アクセサ（#244 段5-3）。再生列挙（ScorePlayer）と同じ並び・件数で
+    // 読まないと、鏡が古い異常データで別音符へ強弱が割り当てられてしまう
+    getPrimaryVoiceEvents(measure).map((event, eventIndex) => ({ measureIndex, eventIndex, event }))
   );
 
   const velocities = new Map<string, number>();

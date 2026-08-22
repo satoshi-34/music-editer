@@ -1,7 +1,7 @@
 import type { MeasureData, TimeSignature } from '../types/storage';
 import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
 import { getMeasureBeats } from './timeSignatureUtils';
-import { getEventDurationBeats, getMeasureDurationBeats } from './voiceMeasureUtils';
+import { getEventDurationBeats, getMeasureDurationBeats, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { applySwingToTiming, shouldApplySwing } from './swingUtils';
 
 export interface PlaybackTimelinePosition {
@@ -37,7 +37,8 @@ export function buildPlaybackPositionTimeline(
   let elapsedBeats = 0;
 
   expandedMeasures.forEach(({ sourceMeasureIndex, measure }) => {
-    const visibleEvents = measure.events ?? [];
+    // 主声部の読みは正規アクセサ（#244 段5-3）。再生列挙と同じ源を読むことで索引・時刻を一致させる
+    const visibleEvents = getPrimaryVoiceEvents(measure);
     let beatPosition = 0;
     // 小節ごとに拍子が変わる譜面では、その小節の拍子でスウィング対象かどうかを判定する。
     const measureTimeSignature = measure.timeSignature ?? timeSignature;

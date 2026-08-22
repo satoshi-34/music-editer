@@ -11,7 +11,7 @@ import { AudioErrorHandler, AudioErrorFactory } from './AudioError';
 import { expandMeasuresForPlayback } from './repeatPlaybackUtils';
 import type { MeasureData, NoteEvent, DurKey } from '../types/storage';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
-import { getDurationBeats, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
+import { getDurationBeats, getPrimaryVoiceEvents, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { applySwingToTiming, shouldApplySwing } from '../utils/swingUtils';
 
 /**
@@ -428,8 +428,9 @@ export class ScorePlayer {
       const swingActiveForMeasure = shouldApplySwing(this.swingEnabled, currentTimeSignature);
       let measureBeatPosition = 0; // 小節内での拍位置（4分音符=1拍）
 
-      for (let noteIndex = 0; noteIndex < measure.events.length; noteIndex++) {
-        const event = measure.events[noteIndex];
+      const primaryEvents = getPrimaryVoiceEvents(measure);
+      for (let noteIndex = 0; noteIndex < primaryEvents.length; noteIndex++) {
+        const event = primaryEvents[noteIndex];
 
         // 音価を拍数へ変換してから、スウィング対象なら開始位置・長さを変換する。
         const durationBeats = getDurationBeats(event.dur, event.dots) * tupletBeatsMultiplier(event.tuplet);
@@ -580,7 +581,7 @@ export class ScorePlayer {
     // 指定した小節まで時間を累積
     for (let i = 0; i < position.measureIndex && i < this.measures.length; i++) {
       const measure = this.measures[i];
-      for (const event of measure.events) {
+      for (const event of getPrimaryVoiceEvents(measure)) {
         time += this.durToSeconds(event.dur, tempoSettings.bpm, event.dots, event.tuplet);
       }
     }
@@ -588,8 +589,9 @@ export class ScorePlayer {
     // 小節内での位置を追加
     if (position.measureIndex < this.measures.length) {
       const measure = this.measures[position.measureIndex];
-      for (let i = 0; i < position.noteIndex && i < measure.events.length; i++) {
-        const event = measure.events[i];
+      const primaryEvents = getPrimaryVoiceEvents(measure);
+      for (let i = 0; i < position.noteIndex && i < primaryEvents.length; i++) {
+        const event = primaryEvents[i];
         time += this.durToSeconds(event.dur, tempoSettings.bpm, event.dots, event.tuplet);
       }
     }
@@ -607,7 +609,7 @@ export class ScorePlayer {
     }
 
     const measure = this.measures[position.measureIndex];
-    if (position.noteIndex < 0 || position.noteIndex >= measure.events.length) {
+    if (position.noteIndex < 0 || position.noteIndex >= getPrimaryVoiceEvents(measure).length) {
       return false;
     }
 

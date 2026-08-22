@@ -5,7 +5,7 @@ import type { SavedScoreData } from '../types/storage';
 import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { validateSavedScoreData } from './storage';
 import { normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
-import { normalizeEmptyVoicesInParts } from './voiceMeasureUtils';
+import { normalizeEmptyVoicesInParts, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 
 // ファイル名に使えない文字を除去するヘルパー
 function safeFileName(title: string): string {
@@ -174,7 +174,13 @@ export async function importScoreFromFile(file: File): Promise<SavedScoreData> {
       const dedupedParts = normalizeDuplicateChordKeys(data.parts);
       const tupletNormalizedParts = normalizeTupletGroupsInParts(dedupedParts);
       const normalizedParts = normalizeEmptyVoicesInParts(tupletNormalizedParts);
-      resolve(normalizedParts === data.parts ? data : { ...data, parts: normalizedParts });
+      // ④ 鏡の同期（#244 段5-3）: read が voices[0] を優先するため、旧バージョンや
+      //    手編集のファイルで鏡が古い場合にここで events（正本）から同期する
+      const mirrorSyncedParts = normalizedParts.map((part) => ({
+        ...part,
+        measures: syncMeasuresPrimaryVoiceFromEvents(part.measures),
+      }));
+      resolve({ ...data, parts: mirrorSyncedParts });
     };
     reader.onerror = () => reject(new Error('ファイルの読み込みに失敗しました'));
     reader.readAsText(file);

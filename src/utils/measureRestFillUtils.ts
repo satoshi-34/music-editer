@@ -6,7 +6,7 @@
 import type { MeasureData, NoteEvent } from '../types/storage';
 import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/clefUtils';
 import { createEmptyMeasure } from './repeatMarkerUtils';
-import { getDurationBeats, getEventDurationBeats, withVoiceEventsUpdated } from './voiceMeasureUtils';
+import { getDurationBeats, getEventDurationBeats, getPrimaryVoiceEvents, withVoiceEventsUpdated } from './voiceMeasureUtils';
 
 /** 休符へ割り当てる音価の候補（大きい順）。PianoSystemCanvas の DURATION_TOOL_VALUES と同じ並び */
 const REST_FILL_DURATIONS: NoteEvent['dur'][] = ['1', '2', '4', '8', '16', '32', '64'];
@@ -45,7 +45,7 @@ export function fillPriorMeasureRests(
       measures.push(createEmptyMeasure());
     }
     const measure = measures[measureIndex];
-    const currentBeats = measure.events.reduce((sum, event) => sum + getEventDurationBeats(event), 0);
+    const currentBeats = getPrimaryVoiceEvents(measure).reduce((sum, event) => sum + getEventDurationBeats(event), 0);
     const remainingBeats = beatsPerMeasure - currentBeats;
     if (remainingBeats > 0.0001) {
       // 正規 API 経由で書く（#244 段5-1）。measure.events を直接 push すると

@@ -10,6 +10,7 @@ import {
   getEventDurationBeats,
   getMeasureDurationBeats,
   getMeasureVoices,
+  getPrimaryVoiceEvents,
   getVoiceEvents,
   normalizeEmptyVoicesInParts,
   resolveVoiceStemDirections,
@@ -283,6 +284,28 @@ describe('voiceMeasureUtils', () => {
       expect(next.voices?.[1].events).toHaveLength(2);
       expect(next.voices?.[1].events[0]).toEqual(replacement[0]);
       expect(next.voices?.[1].events[1]).toEqual(replacement[1]);
+    });
+  });
+
+  describe('getPrimaryVoiceEvents（#244 段5-3 の正規 read）', () => {
+    const note = (key: string): NoteEvent => ({ dur: '4', isRest: false, keys: [key] });
+
+    it('voices を持つ小節では voices[0]（鏡）を読む', () => {
+      const measure: MeasureData = {
+        events: [note('a/4')],
+        voices: [{ id: 'voice-1', events: [note('c/4')] }],
+      };
+      // 不変条件下では両者は等しいが、read の向き先が voices[0] であることを固定する
+      expect(getPrimaryVoiceEvents(measure)[0].keys).toEqual(['c/4']);
+    });
+
+    it('voices を持たない小節では events へフォールバックする', () => {
+      expect(getPrimaryVoiceEvents({ events: [note('a/4')] })[0].keys).toEqual(['a/4']);
+    });
+
+    it('undefined・空小節では空配列を返す', () => {
+      expect(getPrimaryVoiceEvents(undefined)).toEqual([]);
+      expect(getPrimaryVoiceEvents({ events: [] })).toEqual([]);
     });
   });
 
