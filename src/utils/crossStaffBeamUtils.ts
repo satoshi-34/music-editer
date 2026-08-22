@@ -61,12 +61,26 @@ export function generateCrossStaffBeams(
   } = (beamOptions ?? {}) as Record<string, unknown>;
   // 区切り決定パスは符幹方向を書き換える（自動判定を適用する）ので、先に控えて後で戻す。
   // 戻さないと、非またぎグループの再生成（maintainStemDirections: true）が
-  // 「自動判定に上書きされた向き」を維持してしまい、声部の向き固定（#239）が壊れる
-  const originalDirections = notes.map(note => (note as StemmableNote).getStemDirection());
+  // 「自動判定に上書きされた向き」を維持してしまい、声部の向き固定（#239）が壊れる。
+  //
+  // 注意: 音符列には GhostNote（追加声部の前後のダミー休符を表示だけ消した詰め物）が
+  // 混ざることがあり、GhostNote は符幹を持たないため getStemDirection() が NoStem 例外を
+  // 投げる（月光の実データで小節ごと描画が落ちた回帰）。符幹の無い音符は控え・復元の
+  // 対象外にする（ビームのグループにも入らないので向きの問題は起きない）
+  const getDirectionSafely = (note: StemmableNote): number | undefined => {
+    try {
+      return note.getStemDirection();
+    } catch {
+      return undefined;
+    }
+  };
+  const originalDirections = notes.map(note => getDirectionSafely(note as StemmableNote));
   const beatGroups = Beam.generateBeams([...notes] as StemmableNote[], beatOnlyOptions);
   notes.forEach((note, index) => {
-    if ((note as StemmableNote).getStemDirection() !== originalDirections[index]) {
-      (note as StemmableNote).setStemDirection(originalDirections[index]);
+    const original = originalDirections[index];
+    if (original === undefined) return;
+    if (getDirectionSafely(note as StemmableNote) !== original) {
+      (note as StemmableNote).setStemDirection(original);
     }
   });
   const indexOfNote = new Map<StemmableNote, number>();

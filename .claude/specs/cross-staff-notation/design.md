@@ -525,3 +525,24 @@ Issue #315 の本文でも許容と裁定されている。
   そのパスが書き換えた符幹方向はスナップショットから復元してから後段へ渡す
   （復元しないと非またぎグループの再生成が自動判定の向きを維持して #239 の声部固定が壊れる）。
   声部2相当の回帰テストを追加（レッドチェック済み）
+
+### 段2の回帰修正（PR #362・2026-08-22）: GhostNote 混在声部で NoStem クラッシュ
+
+**原因**: 段2（PR #358）で入れた「区切り決定パス前後の符幹方向スナップショット」が、
+音符列に混ざる GhostNote（追加声部の前後のダミー休符を表示だけ消した詰め物。
+`buildVexFlowNote` の renderAsGhostRest 経路）へ `getStemDirection()` を呼び、
+GhostNote は Stem を持たないため NoStem 例外 → 描画 effect ごと落ちて譜面全体が白画面。
+再現条件は「声部2 = renderStaff 付き連桁 + 末尾ダミー休符（Ghost化）」+「声部1 = 全休符」
+（月光 autosave の小節10で実発生）。
+
+**修正設計**: 方向の控え・復元を「符幹を持つ音符だけ」に限定する。
+安全アクセサ（try/catch で NoStem を undefined に読み替え）で控え、undefined は復元をスキップ。
+GhostNote は `beamRests: false` により最終ビームグループへ入らないため、crossing 判定・
+またぎ向きの setStemDirection・restoreCrossStaffBeamAssignments には元々現れない
+（Codex レビューで VexFlow 5.0.0 実装に照らして確認済み）。
+
+**影響範囲**: generateCrossStaffBeams のスナップショット/復元のみ（他は不変）。
+
+**回帰テスト**: PianoSystemCanvasCrossStaff.test.tsx
+「回帰（#358）: 末尾のダミー休符（GhostNote）がある声部でも段またぎ描画が落ちない」
+（修正を外すと失敗する赤→緑確認済み）。
