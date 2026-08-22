@@ -40,3 +40,18 @@
   （リンク不可）のため第1弾では見送り。ヘルプ検索で同じ語を引けることで代替
 - ガイドの手順は README の記述と突き合わせて書いた。UI 文言を変えたら
   helpContent.test.ts の「seeAlso 実在」テストが README との乖離を検出する
+
+## Codex round1 対応（2026-08-22）
+
+- **モーダルのキー遮断**（P1）: パネル root の onKeyDown で全キーを stopPropagation
+  （ConfirmDialog と同じ守り）。検索欄の Backspace/Delete が window のグローバルハンドラへ
+  伝播して裏の選択物を消す事故を防ぐ。Escape はヘルプを閉じる。フォーカスは開いた時に
+  検索欄へ（autoFocus）— ConfirmDialog と同等の範囲
+- **ガイド手順の是正**（P2）: タイ/スラー・松葉は「クリック→クリック」ではなく
+  **ドラッグで設置**、途中変更の解除は「解除」（または空欄確定）に修正。
+  段またぎの seeAlso（無関係な節を指していた）は削除
+- **「詳しく」ジャンプで対象を開いたままに**（P2）: pinnedSectionId state を追加し、
+  検索を消しても対象 details だけ open を維持。テストは「正しい対象が open で
+  スクロールされる」ことまで検証する形へ強化
+- **リスト継続行の保持**（P3）: レンダラーを components/helpMarkdown.tsx へ分離し、
+  インデント付き継続行を直前の <li> の続きとして保つ。README「調号」の実形でテスト
