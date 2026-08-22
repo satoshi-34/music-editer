@@ -71,6 +71,38 @@ describe('resolveBelowSymbolShifts（五線下の記号の押し出し）', () =
     expect(shifts[1]).toBeGreaterThan(0);
   });
 
+  it('手動記号が x 順で後（右側）にあっても、自動記号は手動記号を避ける', () => {
+    // 手動記号は処理順に関係なく先に占有域へ登録される（Codex round1 P2）。
+    // ここを一括登録にしないと、左の自動記号が右の手動記号を知らずに重なる
+    const auto = { rect: rect(100, 150, 20, 12), hasManualOffset: false };
+    const manual = { rect: rect(110, 150, 20, 12), hasManualOffset: true };
+    const shifts = resolveBelowSymbolShifts([auto, manual], []);
+    expect(shifts[1]).toBe(0);
+    expect(shifts[0]).toBeGreaterThan(0);
+    expect(rectsIntersect(rect(100, 150 + shifts[0], 20, 12), manual.rect)).toBe(false);
+  });
+
+  it('stepPx=0 などの不正オプションは既定値へ置き換えられ、無限ループしない', () => {
+    const shifts = resolveBelowSymbolShifts(
+      [{ rect: rect(100, 150, 20, 12), hasManualOffset: false }],
+      [rect(95, 140, 30, 30)],
+      { stepPx: 0 },
+    );
+    expect(shifts[0]).toBeGreaterThan(0);
+    expect(shifts[0] % BELOW_SYMBOL_STEP_PX).toBe(0);
+  });
+
+  it('stepPx が maxShiftPx を割り切れなくても、シフトは上限を超えない', () => {
+    const shifts = resolveBelowSymbolShifts(
+      [{ rect: rect(100, 150, 20, 12), hasManualOffset: false }],
+      [rect(95, 140, 30, 40)],
+      { stepPx: 15, maxShiftPx: 20 },
+    );
+    // 15 → 30 と超過せず 15 → 20 で clamp され、上限内で空けばその値・
+    // 空かなければ 0（このケースは 140+40=180 の障害物なので上限内では空かない）
+    expect(shifts[0]).toBeLessThanOrEqual(20);
+  });
+
   it('上限まで押しても空かないときは、元の位置に留める（半端に下がらない）', () => {
     // 縦にどこまでも続く障害物
     const wall = rect(90, 0, 40, 100000);

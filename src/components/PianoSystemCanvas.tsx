@@ -4716,6 +4716,19 @@ export default function PianoSystemCanvas({
         // 声部・ビーム・連符の描画（実体は drawRenderedVoiceEntries・#244 段4c-2）
         drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries);
 
+        // 自動衝突回避（#340 段1）の障害物: 描画した全声部の音符の BoundingBox
+        // （符頭＋符幹を含む）を段ごとに集める。編集レイヤーやアクティブ声部の
+        // 選択状態とは無関係に「画面に描かれたもの」を全部含める（Codex round1 P2:
+        // レイヤー選択中の非選択パートのアクティブ声部が漏れていた）。
+        // 表示専用のパディング休符・空小節の見た目用全休符も描かれている以上は含めるが、
+        // どちらも五線内の休符グリフなので五線下の記号判定には実質影響しない。
+        renderedVoiceEntries.forEach((entry) => {
+          entry.vfNotes.forEach((n) => {
+            const nbb = (n as unknown as { getBoundingBox?: () => { getX: () => number; getY: () => number; getW: () => number; getH: () => number } }).getBoundingBox?.();
+            if (nbb) noteObstacles.push({ partIndex: pi, x: nbb.getX(), y: nbb.getY(), w: nbb.getW(), h: nbb.getH() });
+          });
+        });
+
         // レガシー（tiedToNext 方式）のタイ描画用データ収集。
         // こちらは声部1（measure.events）専用のまま残す。arcs[] 方式より前の旧データ互換の
         // 経路であり、声部2は arcs[] 方式より後に生まれた機能なので旧データが存在しないため。
@@ -5601,10 +5614,6 @@ export default function PianoSystemCanvas({
               bb,noteVisualLeft,noteVisualRight,yHit,noteStave,noteK2l,
               snapLineForKeySelect,resolveSelectableKeyIndexAt,
             } = buildNoteHitGeometry(activeEvs,activeVfNotes,j,anchors,mids);
-            // 自動衝突回避（#340 段1）の障害物: 符頭＋符幹を含む BoundingBox を段ごとに集める
-            if (bb?.getY && bb?.getH) {
-              noteObstacles.push({ partIndex: pi, x: bb.getX?.() ?? noteVisualLeft, y: bb.getY(), w: bb.getW?.() ?? (noteVisualRight - noteVisualLeft), h: bb.getH() });
-            }
             // 各値の意味と、そう決めた理由（Issue #218 / #219 / #255 / #271）は
             // buildNoteHitGeometry の中にまとめてある。
             //
@@ -6608,10 +6617,15 @@ export default function PianoSystemCanvas({
         // 上のインタラクティブ層（hit rect・クリックハンドラ）はアクティブ声部だけから作るが、
         // それだけだと「声部2に切り替えた瞬間、声部1に付けた強弱記号が画面から消える」という
         // 表示上の退行が起きてしまう。ここでは当たり判定を持たない“見た目だけ”の描画として、
-        // 非アクティブ声部にも同じマーカーを描き足す。
-        if (isMultiVoiceMeasure) {
+        // 編集用ループが担当しなかった全エントリに同じマーカーを描き足す。
+        // 対象は「編集用ループの補集合」で選ぶ（#340 round1 で発覚した #316 の退行の修正）:
+        // 以前の isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex という条件では、
+        // レイヤー明示選択（#316・ピアノ譜は常に明示選択）中の非選択パートの
+        // アクティブ声部がどちらのループにも入らず、非選択の手の強弱記号などが
+        // 画面から消えていた（単声部小節で声部2選択中の声部1も同様）。
+        {
           renderedVoiceEntries
-            .filter((entry) => entry.voiceIndex !== activeVoiceIndex)
+            .filter((entry) => !(isActiveLayerPart && entry.voiceIndex === activeVoiceIndex))
             .forEach((entry) => {
               entry.vfNotes.forEach((n: any, j) => {
                 const ev = entry.sourceEvents[j];
@@ -6620,10 +6634,6 @@ export default function PianoSystemCanvas({
                 const noteVisualLeft = bb?.getX?.() ?? (n.getAbsoluteX?.() ?? measLeft);
                 const noteVisualRight = bb ? noteVisualLeft + (bb.getW?.() ?? 12) : noteVisualLeft + 12;
                 const cx = noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2);
-                // 非アクティブ声部の「見た目だけ」描画の音符も、衝突回避（#340）の障害物には含める
-                if (bb?.getY && bb?.getH) {
-                  noteObstacles.push({ partIndex: pi, x: noteVisualLeft, y: bb.getY(), w: noteVisualRight - noteVisualLeft, h: bb.getH() });
-                }
                 if (ev.dynamics?.length) {
                   dynamicTextEntries.push({
                     anchorX: cx,

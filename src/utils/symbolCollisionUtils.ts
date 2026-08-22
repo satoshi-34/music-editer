@@ -75,33 +75,45 @@ export function resolveBelowSymbolShifts(
   obstacles: CollisionRect[],
   options?: BelowSymbolAvoidanceOptions,
 ): number[] {
-  const step = options?.stepPx ?? BELOW_SYMBOL_STEP_PX;
-  const maxShift = options?.maxShiftPx ?? BELOW_SYMBOL_MAX_SHIFT_PX;
-  const pad = options?.padPx ?? BELOW_SYMBOL_PAD_PX;
+  // 公開オプションは正の有限値だけを受け付け、不正値は既定値で置き換える
+  // （stepPx=0 は無限ループ、負値・NaN は挙動未定義になるため。Codex round1 P3）
+  const step = Number.isFinite(options?.stepPx) && (options?.stepPx as number) > 0
+    ? (options?.stepPx as number)
+    : BELOW_SYMBOL_STEP_PX;
+  const maxShift = Number.isFinite(options?.maxShiftPx) && (options?.maxShiftPx as number) >= 0
+    ? (options?.maxShiftPx as number)
+    : BELOW_SYMBOL_MAX_SHIFT_PX;
+  const pad = Number.isFinite(options?.padPx) ? (options?.padPx as number) : BELOW_SYMBOL_PAD_PX;
 
-  // 処理順は x 順（左の記号から確定させる）。ただし戻り値は入力順を保つ
-  const order = symbols
+  const shifts = new Array<number>(symbols.length).fill(0);
+  const occupied: CollisionRect[] = [];
+
+  // 手動調整済みの記号は位置が確定しているので、先に全件を占有域へ登録する。
+  // 処理順で後になった手動記号を自動記号が知らずに重なってしまうため、
+  // 「手動を先に全部・自動をその後で」の2段構えにする（Codex round1 P2）
+  for (const symbol of symbols) {
+    if (symbol.hasManualOffset) occupied.push(symbol.rect);
+  }
+
+  // 自動配置の記号だけを x 順（左から確定）で処理する。戻り値は入力順を保つ
+  const autoOrder = symbols
     .map((symbol, index) => ({ symbol, index }))
+    .filter(({ symbol }) => !symbol.hasManualOffset)
     .sort((a, b) => a.symbol.rect.x - b.symbol.rect.x);
 
-  const occupied: CollisionRect[] = [];
-  const shifts = new Array<number>(symbols.length).fill(0);
-
-  for (const { symbol, index } of order) {
-    if (symbol.hasManualOffset) {
-      occupied.push(symbol.rect);
-      continue;
-    }
+  for (const { symbol, index } of autoOrder) {
     let dy = 0;
     const collides = (candidate: CollisionRect): boolean =>
       obstacles.some((obstacle) => rectsIntersect(candidate, obstacle, pad)) ||
       occupied.some((other) => rectsIntersect(candidate, other, pad));
+    // maxShift を超えないよう clamp しながら押し出す（step が maxShift を
+    // 割り切れない値でも上限内に収まる）
     while (dy < maxShift && collides({ ...symbol.rect, y: symbol.rect.y + dy })) {
-      dy += step;
+      dy = Math.min(dy + step, maxShift);
     }
-    // maxShift に達してもまだ重なるなら、押し出しは諦めて元の位置に戻す
+    // 上限まで押してもまだ重なるなら、押し出しは諦めて元の位置に戻す
     // （中途半端に下がった位置は「避けたのに重なっている」ように見えて紛らわしい）
-    if (dy >= maxShift && collides({ ...symbol.rect, y: symbol.rect.y + dy })) {
+    if (collides({ ...symbol.rect, y: symbol.rect.y + dy })) {
       dy = 0;
     }
     shifts[index] = dy;

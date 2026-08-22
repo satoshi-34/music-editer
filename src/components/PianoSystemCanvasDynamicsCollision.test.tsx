@@ -95,6 +95,36 @@ describe('強弱記号の自動衝突回避（Issue #340 段1）', () => {
     expect(ppTextY(manual)).toBe(ppTextY(high) + OFFSET);
   });
 
+  it('レイヤー選択中でも、非選択パートの音符は障害物として扱われる', () => {
+    // ピアノ大譜表では activeLayerPartIndex が常に指定される。右手（part 0）を
+    // 選択中でも、左手（part 1）の低音と pp の衝突は避けなければならない
+    // （Codex round1 P2: 旧実装は選択レイヤーの編集用ループからしか障害物を
+    // 集めておらず、非選択パートのアクティブ声部が漏れていた）
+    const renderPiano = (leftKeys: string[], leftDur: '1' | '4') => {
+      const { container } = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[
+            { clef: 'treble', data: [{ events: [{ dur: '1', isRest: false, keys: ['c/5'] }] }], onChange: vi.fn() },
+            { clef: 'bass', data: [{ events: [{ dur: leftDur, isRest: false, keys: leftKeys, dynamics: [{ value: 'pp' }] }] }], onChange: vi.fn() },
+          ]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+          activeLayerPartIndex={0}
+          activeVoiceIndex={0}
+        />
+      );
+      return container;
+    };
+    // 基準: 符幹なし・五線内の音（衝突なし）
+    const clear = renderPiano(['d/3'], '1');
+    // 低音（ヘ音記号で五線の下・加線）に pp
+    const low = renderPiano(['c/2'], '4');
+    expect(ppTextY(low)).toBeGreaterThan(ppTextY(clear));
+  });
+
   it('同じ音符の複数記号（pp と cresc）はまとまって一緒に押し出される', () => {
     const container = renderWithData([{
       events: [{
