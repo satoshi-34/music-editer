@@ -7,7 +7,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import PartExtractionStaff from './PartExtractionStaff';
-import type { MeasureData } from '../types/storage';
+import EnsembleStaff from './EnsembleStaff';
+import type { InstrumentPartDefinition, MeasureData } from '../types/storage';
 import { keyToMidi } from '../utils/noteMidiUtils';
 
 vi.mock('../audio/NotePlayer', () => ({
@@ -55,6 +56,20 @@ function renderPart(tool: unknown, data: MeasureData[], options?: { symbolsClick
   const svg = container.querySelector('svg') as SVGSVGElement;
   mockSvgLayout(svg);
   return { svg, onChange, container };
+}
+
+function makeInstrumentPart(overrides: Partial<InstrumentPartDefinition> & { id: string }): InstrumentPartDefinition {
+  return {
+    name: overrides.id,
+    abbreviation: overrides.id,
+    family: 'brass',
+    clef: 'treble',
+    staffCount: 1,
+    transposition: 'C',
+    bracketGroup: 'solo',
+    order: 0,
+    ...overrides,
+  };
 }
 
 function clickCenter(el: SVGRectElement) {
@@ -114,6 +129,86 @@ describe('パート譜表示中の記号編集（Issue #173 第2段階）', () =
     const saved = onChange.mock.calls.at(-1)![0][0].events[0];
     expect(saved.dynamics).toEqual([{ value: 'pp' }]);
     expect(keyToMidi(saved.keys[0])).toBe(keyToMidi('c/4'));
+  });
+
+  it('disabled（大譜表パートのパート譜・再生中など）では symbolsClickable でも判定が無効のまま', () => {
+    // 有効なままだと調整オーバーレイから内部譜面を変更でき、上位の onChange が no-op のため
+    // 「編集できたように見えて保存されない」状態になる（Codex round1 P1）
+    const data: MeasureData[] = [{ events: [{ dur: '4', isRest: false, keys: ['c/4'], dynamics: [{ value: 'f' }] }] }];
+    const { container } = render(
+      <PartExtractionStaff
+        systems={1}
+        measuresPerSystem={1}
+        tool={{ duration: '4', isRest: false } as never}
+        scale={1}
+        partConfig={{ clef: 'treble', label: 'Pf.' } as never}
+        data={data}
+        onChange={undefined}
+        disabled={true}
+        transpositionSemitones={0}
+        symbolsClickable={true}
+      />
+    );
+    const svg = container.querySelector('svg') as SVGSVGElement;
+    mockSvgLayout(svg);
+    const region = container.querySelector('.symbol-hit-region') as SVGElement;
+    expect(region).toBeTruthy();
+    expect(region.style.pointerEvents).toBe('none');
+  });
+
+  it('編成譜パート譜（EnsembleStaff・B♭管・記譜音モード）でも記号編集は実音を保存する', () => {
+    // 本番の編成譜パート譜は PartExtractionStaff ではなく EnsembleStaff を1パートに絞って
+    // 描画する経路（ScorePage の isPartExtractionActive && scoreType === 'ensemble' 分岐）。
+    // その実経路で、記譜音表示（+2）のままアーティキュレーションを付けても
+    // 保存される実音が動かないことを固定する。
+    const onPartChange = vi.fn();
+    const { container } = render(
+      <EnsembleStaff
+        tool={{ mode: 'articulation', articulation: 'staccato' } as never}
+        scale={1}
+        systems={1}
+        measuresPerSystem={1}
+        instrumentationParts={[makeInstrumentPart({ id: 'trumpet', transposition: 'Bb' })]}
+        partsData={[[{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }]]}
+        onPartChange={[onPartChange]}
+        notationMode="written"
+        timeSignature={[4, 4]}
+      />
+    );
+    const svg = container.querySelector('svg') as SVGSVGElement;
+    mockSvgLayout(svg);
+    clickCenter(svg.querySelector('.vf-note-hit') as SVGRectElement);
+    expect(onPartChange).toHaveBeenCalled();
+    const saved = onPartChange.mock.calls.at(-1)![0][0].events[0];
+    expect(saved.articulations).toEqual(['staccato']);
+    expect(keyToMidi(saved.keys[0])).toBe(keyToMidi('c/4'));
+  });
+
+  it('編成譜パート譜の大譜表パート（staffCount:2）は disabled のため記号判定も無効', () => {
+    // 大譜表パートのパート譜は閲覧・印刷専用（ScorePage が disabled を渡す）。
+    // Codex round1 P1: ここで記号判定が生きていると、調整オーバーレイの操作が
+    // 上位 no-op に飲まれて「編集できたように見えて保存されない」
+    const { container } = render(
+      <EnsembleStaff
+        tool={{ duration: '4', isRest: false } as never}
+        scale={1}
+        systems={1}
+        measuresPerSystem={1}
+        instrumentationParts={[makeInstrumentPart({ id: 'piano', staffCount: 2, clef: 'treble' })]}
+        partsData={[[{ events: [{ dur: '4', isRest: false, keys: ['c/4'], dynamics: [{ value: 'f' }] }] }]]}
+        onPartChange={[() => {}]}
+        secondStaffPartsData={[[{ events: [] }]]}
+        onSecondStaffPartChange={[() => {}]}
+        disabled={true}
+        symbolsClickable={true}
+        timeSignature={[4, 4]}
+      />
+    );
+    const svg = container.querySelector('svg') as SVGSVGElement;
+    mockSvgLayout(svg);
+    const region = container.querySelector('.symbol-hit-region') as SVGElement;
+    expect(region).toBeTruthy();
+    expect(region.style.pointerEvents).toBe('none');
   });
 
   it('symbolsClickable を渡すと記号のクリック判定が有効になる（#173 で配線した口）', () => {

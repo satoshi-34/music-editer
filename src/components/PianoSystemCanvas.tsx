@@ -3623,7 +3623,11 @@ export default function PianoSystemCanvas({
      * 「演奏記号」タブが選択されているとき（symbolsClickable === true）だけ、
      * 記号の描画 bbox より少し広め（±SYMBOL_HIT_PAD px）の透明 rect を重ねてクリックを受け付ける。
      * それ以外のタブでは pointer-events を無効化して完全に素通しする。
+     * 編集不可（disabled: 大譜表パートのパート譜・再生中など）のときも無効化する —
+     * 有効なままだと調整オーバーレイから内部譜面を変更でき、上位の onChange が no-op のため
+     * 「編集できたように見えて保存されない」状態になる（#173 Codex round1 P1）。
      */
+    const symbolsInteractive = symbolsClickable && !disabled;
     const SYMBOL_HIT_PAD = 3;
     function appendSymbolHitRegion(
       elements: SVGGraphicsElement[],
@@ -3683,8 +3687,8 @@ export default function PianoSystemCanvas({
       hit.setAttribute('data-symbol-measure', String(measureAbsoluteIndex));
       hit.setAttribute('data-symbol-event', String(eventIndex));
       hit.setAttribute('data-symbol-target', symbolHitRegionKey(target));
-      hit.style.pointerEvents = symbolsClickable ? 'auto' : 'none';
-      if (symbolsClickable) {
+      hit.style.pointerEvents = symbolsInteractive ? 'auto' : 'none';
+      if (symbolsInteractive) {
         hit.style.cursor = 'pointer';
         hit.addEventListener('mouseenter', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0.16)'));
         hit.addEventListener('mouseleave', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0)'));
@@ -6959,7 +6963,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
