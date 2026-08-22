@@ -86,12 +86,6 @@ export function buildPlaybackPositionTimeline(
 }
 
 /**
- * 途中再生（#108）の開始位置: 指定の小節が「展開後の再生順」で最初に現れる位置を返す。
- * リピートのある譜面では同じ小節が複数回鳴るため、「最初の出現から」を仕様とする
- * （2周目のどこか、を選ぶ UI は持たない）。見つからない場合は、その小節以降で
- * 最初に現れる小節（すべて手前なら 0 = 先頭）へ倒す。
- */
-/**
  * 1小節ぶんの前進拍数。実音エンジン（playParts）は measureBeats = グローバル拍子の長さを
  * 下限に小節を進めるため、タイムライン・残り時間の両方をこの共通規則でそろえる:
  * max(全声部の実長, 拍子の長さ)。空小節は拍子ぶん、あふれた小節は実長で進む。
@@ -100,6 +94,12 @@ function measureAdvanceBeats(measure: MeasureData, timeSignature: TimeSignature)
   return Math.max(getMeasureDurationBeats(measure), getMeasureBeats(timeSignature));
 }
 
+/**
+ * 途中再生（#108）の開始位置: 指定の小節が「展開後の再生順」で最初に現れる位置を返す。
+ * リピートのある譜面では同じ小節が複数回鳴るため、「最初の出現から」を仕様とする
+ * （2周目のどこか、を選ぶ UI は持たない）。見つからない場合は、その小節以降で
+ * 最初に現れる小節（すべて手前なら 0 = 先頭）へ倒す。
+ */
 export function findPlaybackStartExpandedIndex(
   expandedMeasures: ExpandedPlaybackMeasure[],
   startMeasureIndex: number

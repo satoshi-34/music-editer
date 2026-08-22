@@ -38,7 +38,7 @@
 ## 影響範囲
 
 - utils/playbackPositionUtils.ts（startExpandedIndex・findPlaybackStartExpandedIndex）
-- ScorePage の handlePlayScore（展開の共有・slice・通知・位置初期化・残り時間）
+- ScorePage の handlePlay（展開の共有・slice・通知・位置初期化・残り時間）
 - scoreEditorNotices（describePlaybackFromMeasure）・README
 - テスト: タイムラインの途中開始・リピート展開の最初の出現（展開順 [0,1,0,1,2] を固定）
 
