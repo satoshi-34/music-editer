@@ -46,25 +46,62 @@ describe('titleFontOptions（#342）', () => {
     document.getElementById(linkId)?.remove();
   });
 
-  it('waitForTitleFontReady はシステムフォントでは即 resolve、Webフォントでは fonts.load を待つ', async () => {
+  /** jsdom は <link> の読み込みイベントを発火しないので、注入済みの link を先に置いて待ちを省く */
+  const preinjectLink = (id: string) => {
+    const link = document.createElement('link');
+    link.id = `title-font-${id}`;
+    document.head.appendChild(link);
+    return () => link.remove();
+  };
+
+  it('waitForTitleFontReady はシステムフォントでは即 resolve、Webフォントでは実際の文字列で fonts.load を待つ', async () => {
     // システムスタック: document.fonts に触れず即終わる
     await expect(waitForTitleFontReady(resolveTitleFontOption('mincho'))).resolves.toBeUndefined();
-    // Webフォント: document.fonts.load をスタック先頭の family 名で呼ぶ（jsdom には無いのでモック）
+    // Webフォント: stylesheet 読込後に、印刷される文字列を渡して fonts.load を呼ぶ
+    // （unicode-range 分割配信の日本語グリフまで読み込ませるため。Codex round2 P1）。
+    // jsdom は link の onload を発火しないので、注入された link に手動で発火させる
     const load = vi.fn().mockResolvedValue([]);
-    Object.defineProperty(document, 'fonts', { value: { load }, configurable: true });
+    Object.defineProperty(document, 'fonts', { value: { load, ready: Promise.resolve() }, configurable: true });
     const webFont = TITLE_FONT_OPTIONS.find((option) => option.googleFontFamily)!;
-    await waitForTitleFontReady(webFont);
-    expect(load).toHaveBeenCalledWith(expect.stringContaining('Noto'));
-    Reflect.deleteProperty(document, 'fonts');
     document.getElementById(`title-font-${webFont.id}`)?.remove();
+    const waiting = waitForTitleFontReady(webFont, '月光ソナタ', 5000);
+    await new Promise((r) => setTimeout(r, 20));
+    const link = document.getElementById(`title-font-${webFont.id}`) as HTMLLinkElement;
+    link.onload?.(new Event('load'));
+    await waiting;
+    expect(load).toHaveBeenCalledWith(expect.stringContaining('Noto'), '月光ソナタ');
+    // 標準と太字の両ウェイトを対象にする
+    expect(load).toHaveBeenCalledWith(expect.stringContaining('600'), '月光ソナタ');
+    Reflect.deleteProperty(document, 'fonts');
+    link.remove();
   });
 
   it('waitForTitleFontReady は読み込みが返らなくてもタイムアウトで先へ進む（印刷を止めない）', async () => {
     const load = vi.fn().mockReturnValue(new Promise(() => {})); // 永遠に解決しない
-    Object.defineProperty(document, 'fonts', { value: { load }, configurable: true });
+    Object.defineProperty(document, 'fonts', { value: { load, ready: new Promise(() => {}) }, configurable: true });
     const webFont = TITLE_FONT_OPTIONS.find((option) => option.googleFontFamily)!;
-    await expect(waitForTitleFontReady(webFont, 50)).resolves.toBeUndefined();
+    const cleanup = preinjectLink(webFont.id);
+    await expect(waitForTitleFontReady(webFont, 'タイトル', 50)).resolves.toBeUndefined();
     Reflect.deleteProperty(document, 'fonts');
+    cleanup();
+  });
+
+  it('waitForTitleFontReady は stylesheet（link）の読み込み完了を待ってから fonts.load を呼ぶ', async () => {
+    // link 未読込のまま fonts.load すると face 未登録で即 resolve してしまうため、順序を固定する
+    const load = vi.fn().mockResolvedValue([]);
+    Object.defineProperty(document, 'fonts', { value: { load, ready: Promise.resolve() }, configurable: true });
+    const webFont = TITLE_FONT_OPTIONS.find((option) => option.googleFontFamily)!;
     document.getElementById(`title-font-${webFont.id}`)?.remove();
+    // link は新規注入され、onload が来るまで fonts.load は呼ばれない
+    const waiting = waitForTitleFontReady(webFont, 'あ', 5000);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(load).not.toHaveBeenCalled();
+    const link = document.getElementById(`title-font-${webFont.id}`) as HTMLLinkElement;
+    expect(link).toBeTruthy();
+    link.onload?.(new Event('load'));
+    await waiting;
+    expect(load).toHaveBeenCalled();
+    Reflect.deleteProperty(document, 'fonts');
+    link.remove();
   });
 });

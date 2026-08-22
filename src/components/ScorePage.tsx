@@ -3964,10 +3964,14 @@ export default function ScorePage() {
   const handleExportPdf = useCallback(async () => {
     // Webフォント（Noto系）選択時は読み込み完了を待ってから印刷する。
     // 待たずに print すると読み込み前のフォールバック書体がPDFへ固定される（Codex round1 P1）。
+    // 実際に印刷されるタイトルまわりの文字列を渡す（unicode-range 分割配信対応・round2 P1）。
     // タイムアウト付きなので、オフラインでも印刷が止まることはない
-    await waitForTitleFontReady(resolveTitleFontOption(titleFontId));
+    await waitForTitleFontReady(
+      resolveTitleFontOption(titleFontId),
+      [title, subtitle, lyricist, composer, arranger].join(''),
+    );
     window.print();
-  }, [titleFontId]);
+  }, [titleFontId, title, subtitle, lyricist, composer, arranger]);
 
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

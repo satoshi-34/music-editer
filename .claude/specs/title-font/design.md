@@ -51,3 +51,13 @@
   システムスタックのフォントは即 resolve
 - **未知IDの読込時正規化**（P2）: 読込3経路の `?? DEFAULT` を `resolveTitleFontOption(id).id` へ。
   一覧から消えたIDが state に残ってセレクトが空欄になり、そのIDが再保存され続けるのを防ぐ
+
+## Codex round2 対応（2026-08-22）
+
+- **フォント読込待ちの厳密化**（P1）: fonts.load の第2引数省略は空白1文字ぶんの face しか
+  対象にせず、unicode-range 分割配信の Google Fonts では日本語グリフの完了を保証しない。
+  また stylesheet 解釈前は face 未登録のまま即 resolve する。対応:
+  ①注入 <link> の onload を Promise 化（ensureTitleFontLink）して先に待つ
+  ②fonts.load へ実際に印刷される文字列（タイトル・サブタイトル・作者欄の連結）を渡す
+  ③標準/太字（600）の両ウェイトを対象 ④最後に document.fonts.ready も同じタイムアウト内で待つ。
+  テストは「link 読込前に fonts.load が呼ばれない」順序と、文字列・両ウェイトの引数を固定

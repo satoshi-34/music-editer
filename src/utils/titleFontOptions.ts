@@ -47,37 +47,72 @@ export function resolveTitleFontOption(id: string | undefined): TitleFontOption 
   return TITLE_FONT_OPTIONS.find((option) => option.id === id) ?? TITLE_FONT_OPTIONS[0];
 }
 
+/** 注入した <link> の読み込み完了を待てるように、id ごとの Promise を控えておく */
+const fontLinkPromises = new Map<string, Promise<void>>();
+
 /**
- * Google Fonts が必要なフォントなら <link> を1回だけ注入する。
+ * Google Fonts が必要なフォントなら <link> を1回だけ注入し、stylesheet の
+ * 読み込み完了で resolve する Promise を返す。すでに <link> がある場合は
+ * 控えてある Promise（無ければ解決済み）を返す。
  * システムスタックのフォントでは何もしない。オフラインで読み込めない場合も
- * スタックの後続フォントで表示できるため、失敗は握りつぶしてよい。
+ * スタックの後続フォントで表示できるため、onerror も resolve に倒す。
  */
-export function ensureTitleFontLoaded(option: TitleFontOption): void {
-  if (!option.googleFontFamily || typeof document === 'undefined') return;
+function ensureTitleFontLink(option: TitleFontOption): Promise<void> {
+  if (!option.googleFontFamily || typeof document === 'undefined') return Promise.resolve();
   const linkId = `title-font-${option.id}`;
-  if (document.getElementById(linkId)) return;
-  const link = document.createElement('link');
-  link.id = linkId;
-  link.rel = 'stylesheet';
-  link.href = `https://fonts.googleapis.com/css2?family=${option.googleFontFamily}&display=swap`;
-  document.head.appendChild(link);
+  const existing = fontLinkPromises.get(option.id);
+  if (existing && document.getElementById(linkId)) return existing;
+  if (document.getElementById(linkId)) return Promise.resolve();
+  const promise = new Promise<void>((resolve) => {
+    const link = document.createElement('link');
+    link.id = linkId;
+    link.rel = 'stylesheet';
+    link.href = `https://fonts.googleapis.com/css2?family=${option.googleFontFamily}&display=swap`;
+    link.onload = () => resolve();
+    link.onerror = () => resolve();
+    document.head.appendChild(link);
+  });
+  fontLinkPromises.set(option.id, promise);
+  return promise;
+}
+
+/** Google Fonts が必要なフォントなら <link> を1回だけ注入する（完了を待たない版） */
+export function ensureTitleFontLoaded(option: TitleFontOption): void {
+  void ensureTitleFontLink(option);
 }
 
 /**
  * 印刷（window.print）前に、選択中のWebフォントの読み込み完了を待つ。
  * 読み込み前に印刷すると、フォールバック書体のままPDFへ固定されてしまうため（Codex round1 P1）。
+ *
+ * 待ち方の要点（Codex round2 P1）:
+ * - まず stylesheet（注入した <link>）の読み込みを待つ。解釈前だと font face が未登録で、
+ *   document.fonts.load() が「該当なし」の即 resolve をしてしまう
+ * - fonts.load には**実際に印刷される文字列**（タイトル等）を渡す。Google Fonts は
+ *   unicode-range で分割配信されるため、文字列を渡さないと空白1文字ぶんの face しか
+ *   読み込み対象にならず、日本語グリフの読み込み完了を保証できない
+ * - 最後に document.fonts.ready も同じタイムアウト内で待つ
+ *
  * システムスタックのフォントは即 resolve。ネットワーク断などで読み込めない場合に
- * 印刷が永久に止まらないよう、タイムアウトで必ず先へ進む（そのときはフォールバック書体で出る）。
+ * 印刷が永久に止まらないよう、全体をタイムアウトで必ず先へ進める
+ * （そのときはスタックの後続フォントで印刷される）。
  */
-export async function waitForTitleFontReady(option: TitleFontOption, timeoutMs = 2000): Promise<void> {
+export async function waitForTitleFontReady(
+  option: TitleFontOption,
+  sampleText = '',
+  timeoutMs = 2000,
+): Promise<void> {
   if (!option.googleFontFamily || typeof document === 'undefined' || !document.fonts?.load) return;
-  ensureTitleFontLoaded(option);
-  // スタック先頭の family 名（例: "Noto Serif JP"）で読み込みを待つ
-  const primaryFamily = option.stack.split(',')[0].trim().replace(/^"|"$/g, '');
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs));
-  try {
-    await Promise.race([document.fonts.load(`16px "${primaryFamily}"`).then(() => undefined), timeout]);
-  } catch {
-    // 読み込み失敗は握りつぶす（スタックの後続フォントで印刷される）
-  }
+  const work = (async () => {
+    await ensureTitleFontLink(option);
+    // スタック先頭の family 名（例: "Noto Serif JP"）で読み込みを待つ
+    const primaryFamily = option.stack.split(',')[0].trim().replace(/^"|"$/g, '');
+    const text = sampleText || undefined;
+    // タイトルは太字（600）で描かれ得るため、標準と太字の両ウェイトを対象にする
+    await document.fonts.load(`16px "${primaryFamily}"`, text);
+    await document.fonts.load(`600 16px "${primaryFamily}"`, text);
+    await document.fonts.ready;
+  })().catch(() => undefined);
+  await Promise.race([work, timeout]);
 }
