@@ -3384,13 +3384,14 @@ export default function ScorePage() {
     const baseHeight = measuredSystemHeightPx(partCountForSystemLayout, partSpacingOffsetPx);
     return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * effectiveNotationSizeMultiplier + systemRowGapPx)));
   }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx, partSpacingOffsetPx]);
-  // 推奨値（初期値）。ピアノは（上限に余裕があれば）4段までを既定とする。大譜表は
-  // 右手・左手で1段が縦に長く、段間の余白を一律に見込むだけでは詰まって見えるため、
-  // 音符を小さくしたときでも4段を超えないようにしている。
-  // recommendedMaxSystemsPerPage を基準にしつつ、万一それが実測の上限
-  // （maxSystemsPerPage）を超える場合にあふれないよう、実測の上限でも必ずクランプする。
+  // 推奨値（初期値）。ピアノは物理的に収まる限り常に4段を既定とする（運用者指定・
+  // 2026-08-23。3段より4段の方が行間が自然）。以前は「余白込みの目安段数
+  // （recommendedMaxSystemsPerPage）」でもクランプしていたため、段の間隔を一度でも
+  // 保存したことがある環境では目安が3に落ち、工場出荷時と初期値が食い違っていた。
+  // ピアノの4段は目安ではなく運用者の決めた既定値なので、あふれ防止の実測上限
+  // （maxSystemsPerPage）だけでクランプする。他の譜種は従来どおり目安段数を基準にする。
   const recommendedSystemsPerPage = Math.min(
-    scoreType === 'piano' ? Math.min(4, recommendedMaxSystemsPerPage) : recommendedMaxSystemsPerPage,
+    scoreType === 'piano' ? 4 : recommendedMaxSystemsPerPage,
     maxSystemsPerPage
   );
   // ユーザー設定（レイアウトタブの「段数/ページ」）。null = 未設定（推奨値を使う）。
