@@ -353,16 +353,33 @@ export function describeLeadingRestFill(
 }
 
 /** 選択した小節範囲をまとめて空にしたときの文言 */
-/** 拍範囲スライスの削除通知（#333 段2）。拍は1始まりで表示する */
-export function describeClearedBeatRange(startMeasure: number, startBeat: number, endMeasure: number, endBeat: number): string {
+/**
+ * 拍範囲スライスの削除通知（#333 段2）。拍は1始まりで表示する。
+ * endBeat は「排他的な終了境界」なので、開始拍と同じ「N拍目」表記に +1 して流用すると
+ * 存在しない次の拍（4/4 で「5拍目」）が現れてしまう。終了側は
+ * 小節末なら「小節末」、途中なら「N拍目の手前」と表現する（Codex round1 P2 対応）。
+ */
+export function describeClearedBeatRange(
+  startMeasure: number,
+  startBeat: number,
+  endMeasure: number,
+  endBeat: number,
+  beatsPerMeasure: number,
+): string {
   const from = `${startMeasure + 1}小節${formatBeatLabel(startBeat)}`;
-  const to = `${endMeasure + 1}小節${formatBeatLabel(endBeat)}`;
+  const to = `${endMeasure + 1}小節${formatBeatEndLabel(endBeat, beatsPerMeasure)}`;
   return `${from}〜${to}の範囲を休符にしました${UNDO_HINT}`;
 }
 
 function formatBeatLabel(beat: number): string {
   const rounded = Math.round(beat * 100) / 100;
   return `${rounded + 1}拍目`.replace('.0拍目', '拍目');
+}
+
+/** 排他的な終了境界の表示（小節末 / N拍目の手前） */
+function formatBeatEndLabel(endBeat: number, beatsPerMeasure: number): string {
+  if (endBeat >= beatsPerMeasure - 0.0001) return '末';
+  return `${formatBeatLabel(endBeat)}の手前`;
 }
 
 /** 拍範囲スライスのコピー通知（#333 段2） */
@@ -380,6 +397,33 @@ export function describeSlicePasteUnavailable(reason: 'noSelection' | 'noFit' | 
       return '貼り先の小節に収まらないため貼り付けませんでした（小節の拍数を超えます）';
     case 'boundary':
       return '貼り先の音符を途中で分断してしまうため貼り付けませんでした（音符の切れ目に合う位置を選んでください）';
+  }
+}
+
+/**
+ * 拍範囲スライスの削除が不成立だったときの通知（#318「行き止まりは喋る」）。
+ * 選択後の Undo などで譜面が変わり、境界が音符の切れ目に合わなくなったケース。
+ * 一部の声部だけ消す部分適用はしない（貼り付けと同じ全計画→全適用の規則）。
+ */
+export function describeSliceDeleteUnavailable(): string {
+  return '選択範囲が音符の切れ目に合わなくなったため削除しませんでした（範囲を選び直してください）';
+}
+
+/**
+ * 拍範囲スライスを選択中は使えない小節単位の操作を、理由つきで断る通知（#318）。
+ * 黙って効かないのではなく「なぜ効かないか・どうすればよいか」を必ず伝える。
+ */
+export function describeSliceMeasureOpUnavailable(op: 'transpose' | 'move' | 'measurePaste' | 'insertRemove'): string {
+  const back = '小節全体を選択し直してください（Escape で解除して小節をクリック）';
+  switch (op) {
+    case 'transpose':
+      return `拍の範囲を選択中は移調できません。${back}`;
+    case 'move':
+      return `拍の範囲を選択中は矢印キーでの選択移動はできません。${back}`;
+    case 'measurePaste':
+      return `拍の範囲を選択中は小節単位の貼り付けはできません。拍範囲をコピーし直すか、${back}`;
+    case 'insertRemove':
+      return `拍の範囲を選択中は小節の挿入・削除はできません。${back}`;
   }
 }
 

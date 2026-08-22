@@ -144,7 +144,7 @@ import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamic
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
-import { extractVoiceSlice, pasteVoiceSlice, replaceVoiceSliceWithRests } from '../utils/beatSliceUtils';
+import { extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { flattenMeasureForPlayback, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
@@ -158,6 +158,8 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describeSliceCopied,
+  describeSliceDeleteUnavailable,
+  describeSliceMeasureOpUnavailable,
   describeSlicePasteUnavailable,
   notifyScoreEdit,
   requestScoreSelectionClear,
@@ -639,7 +641,12 @@ export default function ScorePage() {
   // グループのコピーは譜面キャンバス側で起きるため、モジュール側の
   // クリップボード（utils/tupletClipboard.ts）の変化を購読して受け取る。
   useEffect(() => subscribeTupletClipboard(() => {
-    if (getTupletClipboardGroup()) setClipboard(null);
+    if (getTupletClipboardGroup()) {
+      setClipboard(null);
+      // 拍範囲スライスのコピー（#333 段2）も同じ「後勝ち」に参加させる。
+      // 残しておくと Cmd/Ctrl+V が後からコピーした連符ではなく古いスライスを貼ってしまう
+      setSliceClipboard(null);
+    }
   }), []);
 
   // 選択範囲の移調（トランスポーズ）用の UI 状態
@@ -1625,6 +1632,12 @@ export default function ScorePage() {
   // （途中まで移調されたパートと元のままのパートが混在する事故を防ぐため）。
   const handleTranspose = useCallback((semitones: number) => {
     if (!selectedMeasures || semitones === 0) return;
+    // 拍範囲スライス選択中（#333 段2）は対象が曖昧なので効かせない。
+    // 入口のボタンは disabled にしてあるが、ショートカット等の経路も理由つきで断る（#318）
+    if (selectedMeasures.startBeat != null || selectedMeasures.endBeat != null) {
+      notifyScoreEdit(describeSliceMeasureOpUnavailable('transpose'));
+      return;
+    }
     const { start, end } = selectedMeasures;
     const parts = getEditablePartEntries();
 
@@ -1663,6 +1676,11 @@ export default function ScorePage() {
   // 複数小節をまとめて挿入する機能は範囲外のため、単一小節選択のときのみ動作する。
   const handleInsertMeasure = useCallback(() => {
     if (!selectedMeasures || selectedMeasures.start !== selectedMeasures.end) return;
+    // 拍範囲スライス選択中（#333 段2）は小節単位の挿入をしない（ボタンは disabled 済み・#318）
+    if (selectedMeasures.startBeat != null || selectedMeasures.endBeat != null) {
+      notifyScoreEdit(describeSliceMeasureOpUnavailable('insertRemove'));
+      return;
+    }
     const at = selectedMeasures.start;
     const parts = getEditablePartEntries();
     if (parts.length === 0) return;
@@ -1680,6 +1698,11 @@ export default function ScorePage() {
   // 複数小節をまとめて削除する機能は範囲外のため、単一小節選択のときのみ動作する。
   const handleDeleteMeasure = useCallback(() => {
     if (!selectedMeasures || selectedMeasures.start !== selectedMeasures.end) return;
+    // 拍範囲スライス選択中（#333 段2）は小節単位の削除をしない（ボタンは disabled 済み・#318）
+    if (selectedMeasures.startBeat != null || selectedMeasures.endBeat != null) {
+      notifyScoreEdit(describeSliceMeasureOpUnavailable('insertRemove'));
+      return;
+    }
     const at = selectedMeasures.start;
     const parts = getEditablePartEntries();
     if (parts.length === 0) return;
@@ -1920,6 +1943,9 @@ export default function ScorePage() {
     futureStack.current = [];
     setSelectedMeasures(null);
     setClipboard(null);
+    // 拍範囲スライスのクリップボード（#333 段2）も空にする。
+    // 残っていると前の譜面のスライスを新しい譜面へ持ち越して貼れてしまう
+    setSliceClipboard(null);
     // 連符グループのクリップボード（Issue #234）も一緒に空にする。
     // 残っていると、新規譜面で休符をクリックしただけで前の譜面の連符が現れてしまう。
     setTupletClipboardGroup(null);
@@ -2664,8 +2690,13 @@ export default function ScorePage() {
       // 修飾キーを1つ増やして区別する（.claude/specs/transpose-selection/design.md 参照）。
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         if (!selectedMeasures) return;
-        // 拍範囲スライス選択中は小節丸ごとの移調は対象が曖昧なので効かせない（#333 段2 v1）
-        if (selectedMeasures.startBeat != null || selectedMeasures.endBeat != null) return;
+        // 拍範囲スライス選択中は小節丸ごとの移調は対象が曖昧なので効かせない（#333 段2 v1）。
+        // 黙って無視せず理由を通知する（#318）
+        if (selectedMeasures.startBeat != null || selectedMeasures.endBeat != null) {
+          notifyScoreEdit(describeSliceMeasureOpUnavailable('transpose'));
+          e.preventDefault();
+          return;
+        }
         handleTranspose(e.key === 'ArrowUp' ? 1 : -1);
         e.preventDefault();
         return;
@@ -2677,8 +2708,13 @@ export default function ScorePage() {
         if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) return;
         if (e.metaKey || e.ctrlKey) return;
         if (!selectedMeasures) return;
-        // 拍範囲スライス選択中の矢印移動は v1 では対象外（小節丸ごと選択へ持ち替えてから）
-        if (selectedMeasures.startBeat != null || selectedMeasures.endBeat != null) return;
+        // 拍範囲スライス選択中の矢印移動は v1 では対象外（小節丸ごと選択へ持ち替えてから）。
+        // こちらも黙って無視せず理由を通知する（#318）
+        if (selectedMeasures.startBeat != null || selectedMeasures.endBeat != null) {
+          notifyScoreEdit(describeSliceMeasureOpUnavailable('move'));
+          e.preventDefault();
+          return;
+        }
         const dir = e.key === 'ArrowRight' ? 1 : -1;
         const totalMeasures = totalSystems * measuresPerSystem;
         setSelectedMeasures(prev => {
@@ -2772,31 +2808,70 @@ export default function ScorePage() {
           const beatsPerMeasureNow = getMeasureBeats(scoreTimeSignature);
           const { start, end } = selectedMeasures;
           const entries = getEditablePartEntries();
-          pushHistory();
-          entries.forEach((entry) => {
-            const copy = [...entry.measures];
-            for (let mi = start; mi <= end && mi < copy.length; mi++) {
+          // 先に全パート・全小節・全声部の置換を計画してから適用する（部分適用しない・#318）。
+          // 選択後の Undo 等で譜面が変わり境界が音符の切れ目に合わなくなると
+          // replaceVoiceSliceWithRests が null を返す。一部の声部だけ消すのは
+          // 安全側ではないので、1件でも失敗したら理由を通知して何も変えない
+          type PlannedClear = { entryIndex: number; measureIndex: number; voiceEdits: Array<VoiceSliceEdit | null> };
+          const planned: PlannedClear[] = [];
+          for (let ei = 0; ei < entries.length; ei++) {
+            const entry = entries[ei];
+            for (let mi = start; mi <= end && mi < entry.measures.length; mi++) {
               const segStart = mi === start ? (selectedMeasures.startBeat ?? 0) : 0;
               const segEnd = mi === end ? (selectedMeasures.endBeat ?? beatsPerMeasureNow) : beatsPerMeasureNow;
-              let measure = copy[mi];
+              const measure = entry.measures[mi];
               if (!measure) continue;
+              const voiceEdits: Array<VoiceSliceEdit | null> = [];
+              let failed = false;
               getMeasureVoices(measure).forEach((voice, vi) => {
-                const replaced = replaceVoiceSliceWithRests(
+                if (voice.events.length === 0) {
+                  voiceEdits[vi] = null; // 空声部は触らない（失敗ではない）
+                  return;
+                }
+                const edit = replaceVoiceSliceWithRests(
                   voice.events, segStart, segEnd,
                   (beats) => buildRestEventsForBeats(beats, entry.clef),
                 );
-                // 境界をまたぐイベントはスナップ済み選択では現れない想定。
-                // 現れた場合はその声部だけ触らない（安全側・部分適用を許す削除は休符化なので無害）
-                if (replaced) measure = withVoiceEventsUpdated(measure, vi, () => replaced);
+                if (!edit) failed = true;
+                voiceEdits[vi] = edit;
               });
-              copy[mi] = measure;
+              if (failed) {
+                notifyScoreEdit(describeSliceDeleteUnavailable());
+                e.preventDefault();
+                return;
+              }
+              planned.push({ entryIndex: ei, measureIndex: mi, voiceEdits });
             }
+          }
+          pushHistory();
+          entries.forEach((entry, ei) => {
+            let copy = [...entry.measures];
+            const mine = planned.filter((p) => p.entryIndex === ei);
+            mine.forEach((p) => {
+              let measure = copy[p.measureIndex];
+              p.voiceEdits.forEach((edit, vi) => {
+                // 何も消えず何も入らない no-op は書き込まない（未編集小節を JSON 差分にして
+                // 段割り安定化（Issue #67）を全再計画にしない・#244 段5-4 と同じ配慮）
+                if (edit && (edit.removeEndExclusive > edit.removeStart || edit.insertedCount > 0)) {
+                  measure = withVoiceEventsUpdated(measure, vi, () => edit.events);
+                }
+              });
+              copy[p.measureIndex] = measure;
+            });
+            // イベント数が変わった声部は、他の音符・他の小節から張られた弧・松葉の
+            // 終点参照を全小節ぶん直す（消えた終点は除去、後ろの終点はずらす）
+            mine.forEach((p) => {
+              p.voiceEdits.forEach((edit, vi) => {
+                if (edit) copy = remapVoiceRefsAfterSliceEdit(copy, vi, p.measureIndex, edit);
+              });
+            });
             entry.apply(copy);
           });
           setLastEditedMeasureIndex(start);
           notifyScoreEdit(describeClearedBeatRange(
             start, selectedMeasures.startBeat ?? 0,
             end, selectedMeasures.endBeat ?? beatsPerMeasureNow,
+            beatsPerMeasureNow,
           ));
           e.preventDefault();
           return;
@@ -2845,7 +2920,7 @@ export default function ScorePage() {
           const destBeat = selectedMeasures.startBeat ?? 0;
           const entries = getEditablePartEntries();
           // 先に全パート・全セグメントを検証してから適用する（部分適用しない・#318）
-          type Planned = { entryIndex: number; measureIndex: number; nextEvents: NoteEvent[][] };
+          type Planned = { entryIndex: number; measureIndex: number; voiceEdits: Array<VoiceSliceEdit | null> };
           const planned: Planned[] = [];
           for (let si = 0; si < sliceClipboard.length; si++) {
             const segment = sliceClipboard[si];
@@ -2860,40 +2935,60 @@ export default function ScorePage() {
               const srcVoices = segment.parts[ei] ?? [];
               const targetVoices = getMeasureVoices(measure);
               const voiceCount = Math.max(srcVoices.length, targetVoices.length);
-              const nextEvents: NoteEvent[][] = [];
+              const voiceEdits: Array<VoiceSliceEdit | null> = [];
               for (let vi = 0; vi < voiceCount; vi++) {
                 const slice = srcVoices[vi] ?? [];
                 const targetEvents = targetVoices[vi]?.events ?? [];
-                if (slice.length === 0) {
-                  nextEvents.push(targetEvents);
+                // コピー元の声部が無音でも「選択幅ぶんの無音」として上書きする
+                // （音符の上へ空の拍を貼れば消える）。空→空だけは no-op として飛ばす
+                if (slice.length === 0 && targetEvents.length === 0) {
+                  voiceEdits.push(null);
                   continue;
                 }
-                const pasted = pasteVoiceSlice(
-                  targetEvents, atBeat, slice, beatsPerMeasureNow,
+                const edit = pasteVoiceSlice(
+                  targetEvents, atBeat, slice, segment.beats, beatsPerMeasureNow,
                   (beats) => buildRestEventsForBeats(beats, entries[ei].clef),
                 );
-                if (pasted === null) {
+                if (edit === null) {
                   notifyScoreEdit(describeSlicePasteUnavailable('boundary'));
                   return;
                 }
-                nextEvents.push(pasted);
+                voiceEdits.push(edit);
               }
-              planned.push({ entryIndex: ei, measureIndex: mi, nextEvents });
+              planned.push({ entryIndex: ei, measureIndex: mi, voiceEdits });
             }
           }
           pushHistory();
           entries.forEach((entry, ei) => {
-            const copy = [...entry.measures];
-            planned.filter((p) => p.entryIndex === ei).forEach((p) => {
+            let copy = [...entry.measures];
+            const mine = planned.filter((p) => p.entryIndex === ei);
+            mine.forEach((p) => {
               let measure = copy[p.measureIndex] ?? { events: [] };
-              p.nextEvents.forEach((events, vi) => {
-                measure = withVoiceEventsUpdated(measure, vi, () => events);
+              p.voiceEdits.forEach((edit, vi) => {
+                // 何も消えず何も入らない no-op は書き込まない（Issue #67 の段割り安定化への配慮）
+                if (edit && (edit.removeEndExclusive > edit.removeStart || edit.insertedCount > 0)) {
+                  measure = withVoiceEventsUpdated(measure, vi, () => edit.events);
+                }
               });
               copy[p.measureIndex] = measure;
+            });
+            // イベント数が変わった声部は、弧・松葉の終点参照を全小節ぶん直す（削除と同じ規則）
+            mine.forEach((p) => {
+              p.voiceEdits.forEach((edit, vi) => {
+                if (edit) copy = remapVoiceRefsAfterSliceEdit(copy, vi, p.measureIndex, edit);
+              });
             });
             entry.apply(copy);
           });
           setLastEditedMeasureIndex(destMeasure);
+          e.preventDefault();
+          return;
+        }
+        // 拍範囲を選択中に小節クリップボードで Cmd/Ctrl+V されたら、拍範囲を無視して
+        // 小節全体を上書きしてしまう前に中止して理由を伝える（#318・Codex round1 P1）
+        if (clipboard && selectedMeasures
+          && (selectedMeasures.startBeat != null || selectedMeasures.endBeat != null)) {
+          notifyScoreEdit(describeSliceMeasureOpUnavailable('measurePaste'));
           e.preventDefault();
           return;
         }
@@ -4277,8 +4372,11 @@ export default function ScorePage() {
                     type="button"
                     className="ghost toolbar-chip-button"
                     onClick={handleInsertMeasure}
-                    disabled={selectedMeasures.start !== selectedMeasures.end}
-                    title={selectedMeasures.start !== selectedMeasures.end
+                    disabled={selectedMeasures.start !== selectedMeasures.end
+                      || selectedMeasures.startBeat != null || selectedMeasures.endBeat != null}
+                    title={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null
+                      ? '拍の範囲を選択中は挿入できません。小節全体を選択し直してください'
+                      : selectedMeasures.start !== selectedMeasures.end
                       ? '複数小節を選択中は挿入できません。1小節だけ選択してください'
                       : '選択中の小節の直前に、全パート同時に空の小節を1つ挿入します'}
                   >
@@ -4288,8 +4386,11 @@ export default function ScorePage() {
                     type="button"
                     className="ghost toolbar-chip-button"
                     onClick={handleDeleteMeasure}
-                    disabled={selectedMeasures.start !== selectedMeasures.end}
-                    title={selectedMeasures.start !== selectedMeasures.end
+                    disabled={selectedMeasures.start !== selectedMeasures.end
+                      || selectedMeasures.startBeat != null || selectedMeasures.endBeat != null}
+                    title={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null
+                      ? '拍の範囲を選択中は削除できません。小節全体を選択し直してください'
+                      : selectedMeasures.start !== selectedMeasures.end
                       ? '複数小節を選択中は削除できません。1小節だけ選択してください'
                       : '選択中の小節を、全パート同時に削除します'}
                   >
@@ -4971,7 +5072,10 @@ export default function ScorePage() {
                     type="button"
                     className="ghost"
                     onClick={() => { setTransposeError(null); setShowTransposePanel(v => !v); }}
-                    title="選択中の小節を半音/全音/オクターブ単位で移調します"
+                    disabled={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null}
+                    title={selectedMeasures.startBeat != null || selectedMeasures.endBeat != null
+                      ? '拍の範囲を選択中は移調できません。小節全体を選択し直してください'
+                      : '選択中の小節を半音/全音/オクターブ単位で移調します'}
                   >
                     移調
                   </button>

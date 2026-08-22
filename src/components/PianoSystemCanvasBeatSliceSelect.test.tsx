@@ -53,8 +53,11 @@ function mockSvgLayout(svg: SVGSVGElement) {
 
 const note = (key: string): MeasureData['events'][number] => ({ dur: '4', isRest: false, keys: [key] });
 
-function renderScore(selectedMeasures?: { start: number; end: number; startBeat?: number; endBeat?: number }) {
-  const data: MeasureData[] = [
+function renderScore(
+  selectedMeasures?: { start: number; end: number; startBeat?: number; endBeat?: number },
+  measures?: MeasureData[],
+) {
+  const data: MeasureData[] = measures ?? [
     { events: [note('c/5'), note('d/5'), note('e/5'), note('f/5')] },
     { events: [note('g/4'), note('a/4'), note('b/4'), note('c/5')] },
   ];
@@ -128,6 +131,26 @@ describe('PianoSystemCanvas 拍範囲スライス選択（#333 段2）', () => {
     expect(overlays.length).toBeGreaterThanOrEqual(1);
     // 丸ごと選択のクラス（vf-measure-selected）は付かない（partial なので）
     expect(svg.querySelectorAll('.vf-measure-selected').length).toBe(0);
+  });
+
+  it('完全な空小節でも途中の拍を選択できる（プレースホルダー列を最近傍にしない）', () => {
+    // 空小節は描画時に全休符プレースホルダーが拍台帳へ1列だけ載る。
+    // その列を最近傍で読むとどの x も拍0へ張り付くため、線形補間で読む（Codex round1 P2）
+    const { measureHits, onBeatRangeSelect } = renderScore(undefined, [
+      { events: [] },
+      { events: [] },
+    ]);
+    const rect = measureHits[0];
+    const left = parseFloat(rect.getAttribute('x') ?? '0');
+    const width = parseFloat(rect.getAttribute('width') ?? '0');
+    // 小節の中央付近から4分の3付近までドラッグ → 2拍目〜3拍目あたりが選ばれるはず
+    fireEvent.mouseDown(rect, { button: 0, clientX: left + width * 0.5, clientY: 100 });
+    fireEvent.mouseMove(rect, { clientX: left + width * 0.78, clientY: 100 });
+    expect(onBeatRangeSelect).toHaveBeenCalled();
+    const last = onBeatRangeSelect.mock.calls.at(-1)![0];
+    // プレースホルダー列に吸われると startBeat は 0 になる。補間なら途中の拍が取れる
+    expect(last.startBeat).toBeGreaterThan(0);
+    expect(last.endBeat).toBeGreaterThan(last.startBeat);
   });
 
   it('丸ごと選択（beat 無し）は従来どおり vf-measure-selected になる', () => {

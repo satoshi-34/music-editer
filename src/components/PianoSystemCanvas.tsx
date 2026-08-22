@@ -5022,7 +5022,13 @@ export default function PianoSystemCanvas({
         // ハンドラ設置時点）では自パートまでの列があれば足りる（合同整形で x は揃う）。
         const beatAtX = (lx: number): number => {
           const columns = beatColumnsByMeasureP.get(absI) ?? [];
-          if (columns.length === 0) {
+          // 完全な空小節でも描画時には全休符プレースホルダーが1列だけ台帳へ載る
+          // （Issue #322 の「見えている詰め物休符も物差しにする」規則）。その1列だけを
+          // 最近傍で読むと x がどこでも拍0へ張り付き、空小節の途中の拍を選べない。
+          // 実データの音符が全パートに1つも無い小節は、台帳を捨てて線形補間で読む
+          const hasRealEvents = parts.some((_, otherPi) =>
+            getMeasureVoices((partsScoreForRender[otherPi] ?? [])[absI]).some((v) => v.events.length > 0));
+          if (columns.length === 0 || !hasRealEvents) {
             // 空小節: 小節幅の線形補間で読む
             const ratio = Math.max(0, Math.min(1, (lx - measLeft) / Math.max(1, measRight - measLeft)));
             return ratio * beatsPerMeasure;
