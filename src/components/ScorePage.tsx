@@ -32,6 +32,7 @@ import { useWorkLibrary } from '../hooks/useWorkLibrary';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
 import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
 import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, ensureTitleFontLoaded, resolveTitleFontOption, waitForTitleFontReady } from '../utils/titleFontOptions';
+import HelpPanel from './HelpPanel';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXml } from '../utils/musicXmlImport';
 import { downloadMidi } from '../utils/midiExport';
@@ -4337,6 +4338,10 @@ export default function ScorePage() {
   // 中身をここに1つだけ定義して両方から使い回す。
   // ボタンを2か所に同時に描かないのは、同じボタンが2個見えると混乱するのに加えて、
   // 結果通知（role="status"）が2つ存在すると支援技術に二重で読み上げられてしまうため。
+  // アプリ内ヘルプ（Issue #341）。フィードバックと同じくヘッダー右端に常設し、
+  // どのタブを開いていても「やりたいこと」から操作を引けるようにする
+  const [showHelp, setShowHelp] = useState(false);
+
   const feedbackControls = (
     <div className="toolbar-feedback">
       {/* 通知はボタンの手前（左）に出す。あとに置くとボタンが通知の幅ぶん
@@ -4350,6 +4355,17 @@ export default function ScorePage() {
           {feedbackNotice.message}
         </span>
       )}
+      <button
+        type="button"
+        className="toolbar-feedback-button"
+        onClick={() => setShowHelp(true)}
+        aria-label="ヘルプ"
+        title="操作の説明書を開きます。「タイを付けたい」のような目的からも、タブごとの説明からも探せます"
+      >
+        <span aria-hidden="true">❓</span>{' '}
+        <span className="toolbar-feedback-label">ヘルプ</span>
+      </button>
+      {showHelp && <HelpPanel onClose={() => setShowHelp(false)} />}
       <button
         type="button"
         className="toolbar-feedback-button"

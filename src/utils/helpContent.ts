@@ -1,0 +1,326 @@
+// アプリ内ヘルプ（Issue #341）のコンテンツ層。
+//
+// 2層構成（Issue の Codex レビュー反映）:
+// 1. 目的別ガイド（タスク起点）: 「タイを付けたい」→ 手順。この配列が正本
+// 2. 操作リファレンス（UI起点）: README の操作章（3〜7章）をそのまま画面へ出す。
+//    **README が唯一の正本**で、ここでは実行時にパースするだけ（二重管理しない）。
+//    README を更新すればヘルプも追従し、章立てが変わってもタイトルで拾い直す。
+//
+// パース・検索は純関数にして、README の実物を読み込むのはコンポーネント側
+// （HelpPanel が `?raw` import で渡す）に寄せる。テストはフィクスチャ文字列で書ける。
+
+/** リファレンスの1項目（README の ### 小見出し単位。### の無い章は ## 丸ごと1項目） */
+export type HelpSection = {
+  /** アンカー用の安定 id（章番号-連番） */
+  id: string;
+  /** 属する章のタイトル（## 見出し。番号は除去済み） */
+  chapter: string;
+  /** 項目タイトル（### 見出し。章丸ごとの場合は章タイトルと同じ） */
+  title: string;
+  /** 本文（markdown のまま。表示側で簡易レンダリングする） */
+  body: string;
+};
+
+/** 目的別ガイドの1項目 */
+export type TaskGuide = {
+  id: string;
+  /** 「〜したい」の形で書く */
+  title: string;
+  /** 検索用の別名・関連語（画面には出さない） */
+  keywords: string[];
+  /** 手順（1行ずつ） */
+  steps: string[];
+  /** 併せて読むリファレンス項目のタイトル（HelpSection.title と一致させる。無ければ省略） */
+  seeAlso?: string;
+};
+
+/**
+ * README の操作章（「3. 画面・各タブの説明」〜「7. 既知の制限とトラブル対処」）を
+ * 項目リストへ分解する。章の判定は番号ではなくタイトルの内容語で行い、
+ * 番号の振り直しに耐える。開発者向け章（起動方法・開発文書・ライセンス等）は含めない。
+ */
+export function parseReadmeSections(markdown: string): HelpSection[] {
+  // ヘルプに載せる章 = タイトルにこれらの語を含む ## 章
+  const includePatterns = [/画面/, /基本操作/, /応用操作/, /ショートカット/, /既知の制限/];
+  const lines = markdown.split('\n');
+  const sections: HelpSection[] = [];
+  let chapter: string | null = null;
+  let chapterIndex = 0;
+  let sectionTitle: string | null = null;
+  let sectionIndex = 0;
+  let body: string[] = [];
+
+  const flush = () => {
+    if (chapter === null) return;
+    const text = body.join('\n').trim();
+    if (!text && sectionTitle === null) return;
+    sections.push({
+      id: `ref-${chapterIndex}-${sectionIndex}`,
+      chapter,
+      title: sectionTitle ?? chapter,
+      body: text,
+    });
+    sectionIndex += 1;
+    body = [];
+  };
+
+  for (const line of lines) {
+    const h2 = /^## (.+)$/.exec(line);
+    if (h2) {
+      flush();
+      const title = h2[1].replace(/^\d+\.\s*/, '').trim();
+      if (includePatterns.some((re) => re.test(title))) {
+        chapter = title;
+        chapterIndex += 1;
+        sectionIndex = 0;
+        sectionTitle = null;
+      } else {
+        chapter = null;
+      }
+      continue;
+    }
+    const h3 = /^### (.+)$/.exec(line);
+    if (h3 && chapter !== null) {
+      flush();
+      sectionTitle = h3[1].trim();
+      continue;
+    }
+    if (chapter !== null) body.push(line);
+  }
+  flush();
+  return sections;
+}
+
+/**
+ * 目的別ガイド（タスク起点）。弟インタビュー（#89）の「書きたいことをどうやるか」を
+ * 起点に、よく聞かれる操作を「〜したい」で引ける形に書き起こしたもの。
+ * ここが第1層の正本。リファレンス（README 由来）と重複して書かず、手順の要点だけを持つ。
+ */
+export const TASK_GUIDES: TaskGuide[] = [
+  {
+    id: 'tie-slur',
+    title: 'タイ／スラーを付けたい',
+    keywords: ['タイ', 'スラー', 'つなげる', '弧'],
+    steps: [
+      '「音符・休符」タブのタイボタン（音価の並びの右）を選ぶ',
+      '開始音符から終了音符へドラッグして設置する（同音はタイ・異音はスラーに自動判定。小節をまたいでもよい）',
+      '描いた弧は中央（頂点）付近をクリックすると選べる。ドラッグで形を調整、Delete で削除できる',
+    ],
+    seeAlso: 'タイ／スラー',
+  },
+  {
+    id: 'tuplet',
+    title: '3連符（連符）を入れたい',
+    keywords: ['連符', '3連符', '5連符', 'トリプレット'],
+    steps: [
+      '「音符・休符」タブで音価（8分音符など）を選び、「3連符」などの連符トグルを押す',
+      '五線をクリックすると「音符1つ＋連符内休符2つ」のグループが置かれる',
+      '連符内の休符をクリックして残りの音を埋めていく',
+    ],
+    seeAlso: '自動休符補完',
+  },
+  {
+    id: 'tuplet-number',
+    title: '連符の数字を消したい',
+    keywords: ['連符', '数字', '非表示', '3'],
+    steps: [
+      '「音符・休符」タブの「連符数字の表示/非表示」ボタン（取り消し線付きの3）を押す',
+      '消したい連符の音符をクリックする（グループ単位で数字と括弧が消える。もう一度で戻る）',
+      '小節の何もない場所をクリックすると、その小節の連符をまとめて切り替えられる',
+    ],
+  },
+  {
+    id: 'cross-staff',
+    title: '音を別の五線（隣の段）に表示したい',
+    keywords: ['段またぎ', 'クロススタッフ', '加線', '五線', 'renderStaff'],
+    steps: [
+      'ピアノ譜で「音符・休符」タブの「⇵」（段またぎ表示）ボタンを押す',
+      '移したい音符をクリックする（右手の音は下の五線へ、左手の音は上の五線へ）',
+      'もう一度クリックすると元へ戻る。音の高さ・リズム・再生は変わらない',
+    ],
+  },
+  {
+    id: 'voices',
+    title: '1つの五線に2声部（上声・下声）を書きたい',
+    keywords: ['声部', 'ボイス', '多声', 'レイヤー', '上声', '下声'],
+    steps: [
+      'ピアノ譜の「音符・休符」タブにある「レイヤー」ボタン（右手・声部1〜左手・声部2）で書き込み先を選ぶ',
+      'V キーで同じ手の声部1↔2を素早く切り替えられる',
+      '編集していないレイヤーは薄いグレーで表示される（印刷では黒に戻る）',
+    ],
+  },
+  {
+    id: 'chord',
+    title: '和音を入れたい',
+    keywords: ['和音', 'コード', '重ねる'],
+    steps: ['音符を置いたあと、同じ拍の上下の位置をクリックすると音が重なって和音になる'],
+    seeAlso: '和音入力',
+  },
+  {
+    id: 'accidental',
+    title: '♯・♭・♮（臨時記号）を付けたい',
+    keywords: ['臨時記号', 'シャープ', 'フラット', 'ナチュラル', '半音'],
+    steps: [
+      '「音符・休符」タブで ♯／♭／♮ を選んで音符をクリックする',
+      '（入力済みの音は Alt+↑/↓ でも半音ずつ動かせる）',
+    ],
+    seeAlso: '臨時記号',
+  },
+  {
+    id: 'dynamics',
+    title: '強弱記号（p・f など）やクレッシェンドを付けたい',
+    keywords: ['強弱', 'ダイナミクス', 'クレッシェンド', 'デクレッシェンド', '松葉', 'pp', 'ff'],
+    steps: [
+      '「演奏記号」タブで強弱記号を選んで音符をクリックする',
+      '松葉（＜／＞）は開始音符から終了音符へドラッグして設置する（タイ/スラーと同じ操作系）',
+      '位置がぶつかるときは「✥」（位置調整）で1件ずつ動かせる',
+    ],
+    seeAlso: '強弱記号',
+  },
+  {
+    id: 'time-signature',
+    title: '曲の途中で拍子やテンポを変えたい',
+    keywords: ['拍子', 'テンポ', '転調', '調号', '音部記号', '途中'],
+    steps: [
+      '「演奏記号」タブの「拍子変更」「テンポ変更」「調号変更」「音部記号変更」ツールを選ぶ',
+      '変えたい小節をクリックすると入力欄やドロップダウンが開く。「解除」（または空欄での確定）でその小節の指定を外せる',
+    ],
+    seeAlso: '曲の途中で拍子・テンポ・調号・音部記号を変える',
+  },
+  {
+    id: 'copy-measures',
+    title: '小節をコピーして貼り付けたい',
+    keywords: ['コピー', 'ペースト', '貼り付け', '複製', 'Cmd+C'],
+    steps: [
+      '「小節選択」ツール（または他ツール中は Shift+クリック）で小節を選ぶ。ドラッグで範囲選択もできる',
+      'Cmd/Ctrl+C でコピー、貼り先の小節を選んで Cmd/Ctrl+V で上書き貼り付け',
+    ],
+    seeAlso: '小節を選ぶ',
+  },
+  {
+    id: 'copy-beats',
+    title: '小節の一部（拍の範囲）だけコピー・削除したい',
+    keywords: ['部分コピー', '拍', 'スライス', '範囲', '半分'],
+    steps: [
+      '「小節選択」ツールのドラッグを小節の途中の拍で始める／止めると、拍の範囲が選ばれる',
+      '端は音符の切れ目に自動で吸着する。Cmd/Ctrl+C でコピー、Delete で休符化、Cmd/Ctrl+V で上書き貼り付け',
+    ],
+    seeAlso: '拍の範囲を選んでコピー・削除・貼り付け（部分コピペ）',
+  },
+  {
+    id: 'transpose',
+    title: '移調したい（まとめて音を上げ下げしたい）',
+    keywords: ['移調', 'トランスポーズ', '半音', 'オクターブ'],
+    steps: [
+      '小節（範囲）を選択すると「その他」タブに「移調」ボタンが現れる',
+      '半音/全音/オクターブの6ボタンか、半音数指定（-12〜+12）でまとめて移調できる',
+      'ショートカットは Cmd/Ctrl+Shift+↑/↓（半音）',
+    ],
+    seeAlso: '小節の挿入・削除、選択範囲の移調',
+  },
+  {
+    id: 'grace-note',
+    title: '装飾音符（前打音・トリル）を付けたい',
+    keywords: ['装飾音符', '前打音', 'トリル', 'ゴーストノート'],
+    steps: ['「演奏記号」タブの「前打音」または「トリル」などの装飾ボタンを選び、付けたい音符をクリックする（同じ音符を再クリックで解除）'],
+  },
+  {
+    id: 'lyrics',
+    title: '歌詞やコード記号を付けたい',
+    keywords: ['歌詞', 'コード', 'テキスト', '運指', '指番号', '発想標語'],
+    steps: [
+      '「演奏記号」タブのテキスト系ツール（歌詞・コード・運指・テンポ表記・発想標語）を選ぶ',
+      '付けたい音符をクリックすると入力欄が開く',
+    ],
+  },
+  {
+    id: 'title-font',
+    title: 'タイトルの書体（フォント）を変えたい',
+    keywords: ['フォント', '書体', 'タイトル', '明朝', 'ゴシック'],
+    steps: ['「楽譜設定」タブの「タイトルの書体」で選ぶ（タイトル・サブタイトル・作者欄に効く。音符の書体は変わらない）'],
+  },
+  {
+    id: 'print',
+    title: '印刷したい／PDFにしたい',
+    keywords: ['印刷', 'PDF', '書き出し', 'エクスポート'],
+    steps: [
+      '「その他」タブの「PDF書出 / 印刷」を押し、ブラウザの印刷ダイアログで「PDFとして保存」を選ぶ',
+      '「印刷プレビュー」を押すと、実際に印刷される見た目（A4・余白・段区切り）を画面で確認しながらレイアウト調整できる',
+    ],
+  },
+  {
+    id: 'part-extraction',
+    title: 'パート譜（1パートだけの譜面）を出したい',
+    keywords: ['パート譜', '抜き出し', '合奏', 'パート'],
+    steps: [
+      '弦楽四重奏・編成譜で「その他」タブの「パート譜表示」から見たいパートを選ぶ',
+      'そのまま印刷すればパート譜として出力できる。音符の入力・削除は総譜へ反映される（大譜表パートは閲覧・印刷専用）',
+    ],
+    seeAlso: 'パート譜・他のソフトとのやりとり',
+  },
+  {
+    id: 'musicxml',
+    title: '他のソフト（MuseScore 等）とやりとりしたい',
+    keywords: ['MusicXML', 'ミューズスコア', 'Finale', 'インポート', 'エクスポート', 'MIDI'],
+    steps: [
+      '「その他」タブの「MusicXML書出」で書き出し、他のソフトで開く',
+      '取り込みは「MusicXML読込」から。「MIDI書出」（MIDI Type 1）にも対応している',
+    ],
+    seeAlso: 'パート譜・他のソフトとのやりとり',
+  },
+  {
+    id: 'undo',
+    title: '間違えたので元に戻したい',
+    keywords: ['元に戻す', 'アンドゥ', 'やり直す', 'Undo', '取り消し'],
+    steps: ['Cmd/Ctrl+Z で元に戻す、Cmd/Ctrl+Shift+Z でやり直す（ツールバーのボタンでも可）'],
+    seeAlso: 'キーボードショートカット',
+  },
+  {
+    id: 'no-sound',
+    title: '音が鳴らない',
+    keywords: ['音', '鳴らない', '再生', 'Safari', '無音'],
+    steps: [
+      '一度画面のどこかをクリックしてから再生する（ブラウザの自動再生制限のため）',
+      '鳴らないままなら「再生・音色」タブの「音声復旧」ボタンを押す（内蔵音源・ピアノ・既定プロファイルへ安全に戻る。Safari の AudioContext 異常向け）',
+      'それでも鳴らないときは同タブの音量と、OS側の消音を確認する',
+    ],
+    seeAlso: '音が鳴らない（特に Safari）',
+  },
+  {
+    id: 'save',
+    title: '譜面を保存したい・複数の曲を切り替えたい',
+    keywords: ['保存', '読込', '作品一覧', '自動保存', 'ファイル'],
+    steps: [
+      '編集内容はブラウザへ自動保存される。「その他」タブの「保存」で明示保存もできる',
+      '複数の曲は「作品一覧」で切替・新規作成・削除ができる',
+      'ファイルとして残したいときは「ファイル保存」（JSON）を使う（別ブラウザ・別マシンへ持ち運べる）',
+    ],
+    seeAlso: 'データ管理',
+  },
+];
+
+/** 検索用の正規化（大文字小文字と全角半角スペースの揺れだけ吸収する） */
+function normalize(text: string): string {
+  // \u3000 = 全角スペース（正規表現にリテラルで書くと no-irregular-whitespace に当たるためエスケープ）
+  return text.toLowerCase().replace(/[\s\u3000]+/g, ' ');
+}
+
+/**
+ * クエリで目的別ガイドとリファレンスを横断検索する。
+ * 空クエリは「全件」を返す（一覧として眺められるように）。
+ * スペース区切りは AND 条件（例: 「連符 数字」）。
+ */
+export function searchHelp(
+  query: string,
+  sections: HelpSection[],
+): { guides: TaskGuide[]; sections: HelpSection[] } {
+  const terms = normalize(query).split(' ').filter(Boolean);
+  if (terms.length === 0) return { guides: TASK_GUIDES, sections };
+  const hit = (haystack: string) => terms.every((t) => haystack.includes(t));
+  return {
+    guides: TASK_GUIDES.filter((g) =>
+      hit(normalize([g.title, ...g.keywords, ...g.steps].join(' ')))),
+    sections: sections.filter((s) =>
+      hit(normalize([s.chapter, s.title, s.body].join(' ')))),
+  };
+}
