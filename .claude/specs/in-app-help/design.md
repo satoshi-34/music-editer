@@ -74,3 +74,11 @@
   リセットメニュー等を開いたままヘルプを開いても裏で操作できない）
 - README タブ表の是正の取りこぼし: 微分音・リピート記号/1番2番括弧も実装は「音符・休符」タブ
   （Palette section='notes'）。README を実装に合わせて再修正
+
+## Codex round4 対応（2026-08-22）
+
+- **document.body へ portal**: ヘルプはツールバー（z-index:20 の stacking context）配下で
+  描かれるため、z-index を上げても body 直下のポップアップ（パート編集=950）を越えられない。
+  createPortal(document.body) で stacking context を離脱
+- **フォーカストラップ**: Tab/Shift+Tab をモーダル内で循環（閉じた details の中身は
+  巡回から除外）。抜けると以後のキー入力が stopPropagation を通らず譜面へ届くため

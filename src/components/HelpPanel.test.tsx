@@ -29,9 +29,10 @@ describe('HelpPanel', () => {
 
   it('✕ 閉じるボタンと背景クリックで onClose が呼ばれる', () => {
     const onClose = vi.fn();
-    const { container } = render(<HelpPanel onClose={onClose} />);
+    render(<HelpPanel onClose={onClose} />);
     fireEvent.click(screen.getByLabelText('ヘルプを閉じる'));
-    fireEvent.click(container.querySelector('.help-overlay')!);
+    // portal 先（body 直下）のオーバーレイをクリック
+    fireEvent.click(document.querySelector('.help-overlay')!);
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
@@ -50,6 +51,28 @@ describe('HelpPanel', () => {
     expect(target.open).toBe(true);
     // スクロールもその対象（かその内部）へ向けて呼ばれている
     expect(scrollSpy).toHaveBeenCalled();
+  });
+
+  it('body 直下へ portal される（ツールバーの stacking context を離れる）', () => {
+    render(<HelpPanel onClose={vi.fn()} />);
+    const panel = document.querySelector('.help-panel')!;
+    expect(panel.parentElement).toBe(document.body);
+    expect(document.querySelector('.help-overlay')!.parentElement).toBe(document.body);
+  });
+
+  it('Tab のフォーカスはモーダル内で循環する（Shift+Tab で背面へ抜けない）', () => {
+    render(<HelpPanel onClose={vi.fn()} />);
+    const panel = document.querySelector('.help-panel') as HTMLElement;
+    const search = screen.getByLabelText('ヘルプ内を検索') as HTMLInputElement;
+    const focusables = Array.from(panel.querySelectorAll<HTMLElement>('button, input, summary'));
+    const last = focusables[focusables.length - 1];
+    // 先頭（検索欄）で Shift+Tab → 末尾へ回る
+    search.focus();
+    fireEvent.keyDown(panel, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+    // 末尾で Tab → 先頭へ回る
+    fireEvent.keyDown(panel, { key: 'Tab' });
+    expect(document.activeElement).toBe(search);
   });
 
   it('モーダル内のキー入力は譜面（window のハンドラ）へ伝播しない・Escape で閉じる', () => {

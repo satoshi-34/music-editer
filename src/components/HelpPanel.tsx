@@ -3,6 +3,7 @@
 // 1つの検索ボックスで横断する。コンテンツの正本は utils/helpContent.ts（ガイド）と
 // README.md（リファレンス。実行時にパースするだけで二重管理しない）。
 import { useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import readmeRaw from '../../README.md?raw';
 import {
   parseReadmeSections,
@@ -48,9 +49,45 @@ export default function HelpPanel({ onClose }: Props) {
   // 検索欄の Backspace/Delete が window のグローバルハンドラへ伝播すると、
   // ヘルプの裏で選択中の音符・弧・松葉が無言で消えてしまう（#238 と同型）。
   // Escape はヘルプを閉じる操作として受ける
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  /** 閉じた details の中身（summary 以外）はブラウザ上フォーカス不可なので巡回から除く */
+  const isFocusTarget = (el: HTMLElement): boolean => {
+    let node: HTMLElement | null = el.parentElement;
+    while (node) {
+      if (node.tagName === 'DETAILS' && !(node as HTMLDetailsElement).open
+        && !(el.tagName === 'SUMMARY' && el.parentElement === node)) {
+        return false;
+      }
+      node = node.parentElement;
+    }
+    return true;
+  };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     e.stopPropagation();
-    if (e.key === 'Escape') onClose();
+    if (e.key === 'Escape') {
+      onClose();
+      return;
+    }
+    // フォーカスをモーダル内で循環させる（Codex round4）。閉じ込めないと Shift+Tab で
+    // 背面のボタンへ抜け、その後のキー入力が handleKeyDown を通らず譜面へ届いてしまう
+    if (e.key === 'Tab') {
+      const root = panelRef.current;
+      if (!root) return;
+      const focusables = Array.from(
+        root.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], summary, [tabindex]:not([tabindex="-1"])'),
+      ).filter(isFocusTarget);
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && (active === first || !active || !root.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      }
+    }
   };
 
   // 目的別ガイドの「詳しく」からリファレンス項目へスクロールする
@@ -74,12 +111,15 @@ export default function HelpPanel({ onClose }: Props) {
     else chapters.push({ chapter: section.chapter, items: [section] });
   }
 
-  return (
+  // document.body へ portal する（Codex round4）: ヘルプはツールバー（z-index:20 の
+  // stacking context）配下で描かれるため、そのままでは body 直下のポップアップ
+  // （パート編集 = 950 等）を z-index でも越えられない
+  return createPortal(
     <>
       {/* ツールバーも含む全画面を覆う専用オーバーレイ。dropdown-overlay はヘッダーの
           下から始まるため、流用するとヘルプの裏でタブ切替や Undo が押せてしまう（Codex round2 P2） */}
       <div className="help-overlay" onClick={onClose} />
-      <div className="help-panel" role="dialog" aria-label="ヘルプ" aria-modal="true" onKeyDown={handleKeyDown}>
+      <div className="help-panel" role="dialog" aria-label="ヘルプ" aria-modal="true" onKeyDown={handleKeyDown} ref={panelRef}>
         <div className="help-panel-head">
           <strong>ヘルプ</strong>
           <input
@@ -122,6 +162,7 @@ export default function HelpPanel({ onClose }: Props) {
           </section>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
