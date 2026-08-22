@@ -1391,6 +1391,548 @@ const createRenderCollectors = (): RenderCollectors => ({
   arcIdentityMap: new Map(),
 });
 
+/* ===== Pass 3 の声部描画（#244 段4c-2） =====
+ * 1パート×1小節ぶんの Voice・ビーム・連符を実際に描く。段またぎ声部の
+ * 1音ずつ描画・パディング休符のクラス付与・非アクティブ声部の淡色化を含む。
+ * 本体は描画 effect からの物理移設で内容不変（挙動ゼロ差）。
+ */
+function drawRenderedVoiceEntries(
+  vexCtx: ReturnType<Renderer['getContext']>,
+  stave: Stave,
+  renderedVoiceEntries: RenderedVoiceEntry[],
+): void {
+    renderedVoiceEntries.forEach((entry) => {
+      try{
+        if (entry.hasCrossStaffNote) {
+          // 合同整形中の衝突解決（同一拍の音符の符幹反転）でビームの参照が
+          // 消えていることがあるので、描画の直前に復元する（Issue #319）。
+          // またぎの無い声部では起きない事象なので、この分岐の中だけで行う。
+          restoreCrossStaffBeamAssignments(entry.beams);
+          // VexFlow の Voice.draw(ctx, stave) は、描画の直前に**全音符の五線を
+          // 引数の五線で上書き**する。段またぎの音符はここで自分のパートの五線へ
+          // 引き戻されてしまうので、この声部だけは音符を1つずつ描く
+          // （Voice.draw が音符に対して行っているのと同じ手順）。
+          entry.voice.setRendered();
+          entry.voice.getTickables().forEach((tickable) => {
+            tickable.setContext(vexCtx);
+            tickable.drawWithStyle();
+          });
+        } else {
+          entry.voice.draw(vexCtx,stave);
+        }
+      }catch{
+        // 1つの声部の描画に失敗しても、残りの声部と他の段の描画は続けたい。
+        // ここで例外を投げると譜面全体が真っ白になってしまうため握りつぶす。
+      }
+      // 表示専用のパディング休符（データには保存されていない）に
+      // クラスを付けておく。App.css の「svg path/line を印刷インク色に戻す」
+      // ルールがこのクラスの要素にも効くので、画面では薄いグレーのまま、
+      // 印刷・PDF書出では通常の休符と同じ黒で出力される（Issue #59）。
+      entry.sourceEvents.forEach((ev, idx) => {
+        if (!(ev as RenderNoteEvent).__isPlaceholder) return;
+        try {
+          const svgEl = (entry.vfNotes[idx] as any)?.getSVGElement?.();
+          svgEl?.classList?.add('vf-padding-rest');
+        } catch {
+          /* SVG未対応環境などでは無視 */
+        }
+      });
+      // 非アクティブ声部は、音符本体（符頭・符幹）だけでなくビーム（連桁）と
+      // 連符の括弧・数字も淡色にする（Issue #175）。
+      // VexFlow の Beam.draw()/Tuplet.draw() は setStyle() したスタイルを
+      // 自分では適用しない（Element.applyStyle を呼ばない）ため、setStyle だけでは
+      // 黒いまま残ってしまう。代わりに drawWithStyle() を使うと、VexFlow 側が
+      // 「ctx.save() → applyStyle() → draw() → ctx.restore()」を行ってくれる。
+      const inactiveVoiceStyle = {fillStyle:INACTIVE_VOICE_COLOR,strokeStyle:INACTIVE_VOICE_COLOR};
+      entry.beams.forEach(b=>{
+        b.setContext(vexCtx);
+        if(entry.isInactiveVoiceEntry){
+          b.setStyle(inactiveVoiceStyle);
+          b.drawWithStyle();
+        }else{
+          b.draw();
+        }
+      });
+      entry.tuplets.forEach(({ tuplet, hideNumber }) => {
+        // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
+        // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
+        // 数字を省略する連符は括弧も省くのが浄書の慣行（Gould, Behind Bars）なので、
+        // 表示一式を描かないことで慣行どおりの見た目になる。
+        // 音符の拍（tick）への倍率は Tuplet の生成時点で既に掛かっているため、
+        // 描かなくても小節の拍数・ビームの束ね方は変わらない。
+        if (hideNumber) {
+          return;
+        }
+        try {
+          (tuplet as any).setContext?.(vexCtx);
+          if (entry.isInactiveVoiceEntry) {
+            tuplet.setStyle(inactiveVoiceStyle);
+            tuplet.drawWithStyle();
+          } else {
+            tuplet.draw();
+          }
+        } catch (tupletError) {
+          console.error('連符の描画でエラーが発生しました:', tupletError);
+        }
+      });
+    });
+}
+
+/* ===== 記号エントリの一括描画（#244 段4c-2） =====
+ * 収集器（RenderCollectors）に積まれた記号エントリを SVG へ描く最終描画段。
+ * クリック判定の配線（appendSymbolHitRegion）はオーバーレイ setter を閉包で持つ
+ * 呼び出し側の責務のままにし、この関数へは引数で渡す（描画は配線を知らない、が
+ * 正しい分割。配線関数まで引数の束で持ち込むと偽の継ぎ目になる）。
+ * 本体は描画 effect からの物理移設で内容不変（挙動ゼロ差）。
+ */
+type SymbolHitRegionAppender = {
+  (elements: SVGGraphicsElement[], partIndex: number, measureAbsoluteIndex: number, eventIndex: number, event: NoteEvent, kind: AdjustableSymbolKind, isCustomSymbolId?: false): void;
+  (elements: SVGGraphicsElement[], partIndex: number, measureAbsoluteIndex: number, eventIndex: number, event: NoteEvent, symbolId: string, isCustomSymbolId: true): void;
+};
+function drawCollectedSymbolEntries(args: {
+  svgRoot: SVGGElement;
+  collectors: RenderCollectors;
+  customSymbolDefs: CustomSymbolDef[];
+  appendSymbolHitRegion: SymbolHitRegionAppender;
+}): void {
+  const { svgRoot, customSymbolDefs, appendSymbolHitRegion } = args;
+  const {
+    dynamicTextEntries, customSymbolEntries, bpmMarkingEntries, rehearsalMarkEntries,
+    measureNumberEntries, fingeringEntries, articulationEntries, tempoMarkingEntries,
+    expressionMarkingEntries, chordSymbolEntries, lyricsEntries, pedalMarkEntries, ottavaEntries,
+  } = args.collectors;
+  dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+    const orderedMarkings = [...markings].sort((left, right) => {
+      const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
+      const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
+      return leftPriority - rightPriority;
+    });
+    const drawnElements: SVGGraphicsElement[] = [];
+    orderedMarkings.forEach((marking, index) => {
+      const text=document.createElementNS('http://www.w3.org/2000/svg','text');
+      text.textContent=formatDynamicMarking(marking);
+      // ⤢/✥ ツールで配置済みの調整値を、位置は座標へ加算・サイズはフォントサイズへの倍率として反映する
+      text.setAttribute('x',String(anchorX + adjust.offsetX));
+      text.setAttribute('y',String(baseY + index * 14 + adjust.offsetY));
+      text.setAttribute('text-anchor','middle');
+      text.setAttribute('fill','#1f2937');
+      text.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+      // 強弱記号は 1.6 sp → 2.0 sp（Issue #202・候補A）。
+      // cresc./dim. は強弱記号より一段小さい文字という関係を保ったまま同じ倍率で拡大する。
+      const baseFontSize = marking.value === 'cresc' || marking.value === 'dim'
+        ? ENGRAVING_TEXT_UNITS.expressiveText
+        : ENGRAVING_TEXT_UNITS.dynamics;
+      text.setAttribute('font-size', String(baseFontSize * adjust.scale));
+      text.setAttribute('font-style','italic');
+      text.setAttribute('pointer-events','none');
+      svgRoot.appendChild(text);
+      drawnElements.push(text);
+    });
+    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+      appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'dynamics');
+    }
+  });
+
+  // ── カスタム記号を一括描画（StaffCanvas と同じ共通ユーティリティを使う） ──
+  drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot, (entry, symbolId, g) => {
+    // 非アクティブ声部の「見た目だけ」描画（partIndex 省略）にはクリック判定を作らない
+    if (entry.partIndex === undefined) return;
+    appendSymbolHitRegion([g], entry.partIndex, entry.measureAbsoluteIndex, entry.eventIndex, entry.event, symbolId, true);
+  });
+
+  // ── 途中テンポ変更マーキングを一括描画（StaffCanvas と同じ表示） ──
+  // 各小節の左端上方に「♩=XXX」と琥珀色のテキストで表示する。
+  // 五線上端より 36px 上に配置して、コード記号・テンポ表記テキストと重ならないようにする。
+  bpmMarkingEntries.forEach(({ x, topY, bpm }) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    el.textContent = `♩=${bpm}`;
+    el.setAttribute('x', String(x + 2));
+    el.setAttribute('y', String(topY - 36));
+    el.setAttribute('fill', '#b45309');  // 琥珀色で他の記号と区別しやすくする
+    el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    el.setAttribute('font-size', '12');
+    el.setAttribute('font-weight', 'bold');
+    el.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(el);
+  });
+
+  // ── リハーサルマーク（練習番号）を一括描画（StaffCanvas と同じ四角枠+太字） ──
+  // 途中テンポ変更（♩=XXX）よりさらに上に置くことで、同じ小節に両方が
+  // 付いても重ならないようにする（テンポは五線上端の36px上、
+  // リハーサルマークはそれよりさらに20px上＝56px上）。
+  rehearsalMarkEntries.forEach(({ x, topY, mark }) => {
+    const boxWidth = Math.max(16, mark.length * 8 + 8);
+    const boxHeight = 16;
+    const boxX = x + 2;
+    const boxY = topY - 56 - boxHeight;
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', String(boxX));
+    rect.setAttribute('y', String(boxY));
+    rect.setAttribute('width', String(boxWidth));
+    rect.setAttribute('height', String(boxHeight));
+    rect.setAttribute('fill', 'none');
+    rect.setAttribute('stroke', '#111827');
+    // 文字を囲む枠線は 0.14 sp → 0.16 sp（Bravura: textEnclosureThickness、Issue #202）
+    rect.setAttribute('stroke-width', String(ENGRAVING_THICKNESS_UNITS.textEnclosure));
+    rect.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(rect);
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    el.textContent = mark;
+    el.setAttribute('x', String(boxX + boxWidth / 2));
+    el.setAttribute('y', String(boxY + boxHeight - 4));
+    el.setAttribute('text-anchor', 'middle');
+    el.setAttribute('fill', '#111827');
+    el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    el.setAttribute('font-size', '12');
+    el.setAttribute('font-weight', 'bold');
+    el.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(el);
+  });
+
+  // ── 小節番号（通し番号）を一括描画。段の先頭小節・最上段の五線左上に小さく表示する ──
+  // 略称パート名（showInstrumentLabels のテキスト）と同程度のフォントサイズ・黒色にする。
+  measureNumberEntries.forEach(({ x, topY, number }) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    el.textContent = String(number);
+    el.setAttribute('x', String(x));
+    el.setAttribute('y', String(topY - 6));
+    el.setAttribute('text-anchor', 'start');
+    el.setAttribute('fill', '#111827');
+    el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    // 小節番号は 1.1 sp → 1.4 sp（Issue #202・候補A）
+    el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.measureNumber));
+    el.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(el);
+  });
+
+  // 運指番号: 音高に関わらず五線上端基準の統一高さに揃えて表示する
+  // （カスタム記号と同じ方針）。五線より上へ飛び出す高音だけは、
+  // 符頭と重ならないよう、その音符に限り符頭上端の上へ逃がす。
+  fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    el.textContent = text;
+    el.setAttribute('x', String(anchorX + adjust.offsetX));
+    el.setAttribute('y', String(Math.min(staveTopY - 12, noteTopY - 10) + adjust.offsetY));
+    el.setAttribute('text-anchor', 'middle');
+    el.setAttribute('fill', '#1f2937');
+    el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    // 既定サイズは engravingDefaults の1か所で持つ（Issue #232 で 10 u → 18 u）。
+    // adjust.scale は「既定に対する倍率」なので、既定を変えると個別調整済みの運指の
+    // 実効サイズも一緒に変わる（保存データの自動変換はしない方針）。
+    el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.fingering * adjust.scale));
+    el.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(el);
+    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'fingering');
+    }
+  });
+
+  // ── アーティキュレーション記号を一括描画（StaffCanvas と同じ描き方に揃える） ──
+  articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+    // ⤢/✥ ツールの調整値を反映する（StaffCanvas と同じ考え方）。
+    // offsetX/offsetY は座標へ加算、scale は各図形の半径・線幅・線の長さへの倍率として使う。
+    const ax = anchorX + adjust.offsetX;
+    const s = adjust.scale;
+    // フェルマータ以外は noteTopY の上に重ならないよう積み上げる（積み上げ間隔も scale に応じて伸縮する）
+    let aboveOffset = 0;
+    const drawnElements: SVGGraphicsElement[] = [];
+    markings.forEach((type) => {
+      const ns = 'http://www.w3.org/2000/svg';
+      if (type === 'fermata') {
+        // フェルマータは五線上端より上に配置する（符頭位置に依存しない）
+        const baseY = Math.min(staveTopY, noteTopY) - 14 + adjust.offsetY;
+        // 半円弧（下が開いた椀形）
+        const arc = document.createElementNS(ns, 'path');
+        arc.setAttribute('d', `M ${ax - 11 * s} ${baseY} A ${11 * s} ${9 * s} 0 0 1 ${ax + 11 * s} ${baseY}`);
+        arc.setAttribute('stroke', '#1f2937');
+        arc.setAttribute('stroke-width', String(1.6 * s));
+        arc.setAttribute('stroke-linecap', 'round');
+        arc.setAttribute('fill', 'none');
+        arc.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(arc);
+        drawnElements.push(arc);
+        // 中心の点（弧の内側）
+        const dot = document.createElementNS(ns, 'circle');
+        dot.setAttribute('cx', String(ax));
+        dot.setAttribute('cy', String(baseY - 4 * s));
+        dot.setAttribute('r', String(2.5 * s));
+        dot.setAttribute('fill', '#1f2937');
+        dot.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(dot);
+        drawnElements.push(dot);
+      } else if (type === 'staccato') {
+        // スタッカート: 符頭上方に小さな黒丸
+        const cy = noteTopY - 6 - aboveOffset + adjust.offsetY;
+        const dot = document.createElementNS(ns, 'circle');
+        dot.setAttribute('cx', String(ax));
+        dot.setAttribute('cy', String(cy));
+        dot.setAttribute('r', String(2.5 * s));
+        dot.setAttribute('fill', '#1f2937');
+        dot.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(dot);
+        drawnElements.push(dot);
+        aboveOffset += 10 * s;
+      } else if (type === 'accent') {
+        // アクセント: 下向きの楔形（「>」を90°回した形）
+        const tipY = noteTopY - 5 - aboveOffset + adjust.offsetY;
+        const wingY = tipY - 9 * s;
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', `M ${ax - 10 * s} ${wingY} L ${ax} ${tipY} L ${ax + 10 * s} ${wingY}`);
+        path.setAttribute('stroke', '#1f2937');
+        path.setAttribute('stroke-width', String(1.6 * s));
+        path.setAttribute('stroke-linecap', 'round');
+        path.setAttribute('stroke-linejoin', 'round');
+        path.setAttribute('fill', 'none');
+        path.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(path);
+        drawnElements.push(path);
+        aboveOffset += 14 * s;
+      } else if (type === 'tenuto') {
+        // テヌート: 符頭上方に水平線
+        const lineY = noteTopY - 6 - aboveOffset + adjust.offsetY;
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('x1', String(ax - 9 * s));
+        line.setAttribute('y1', String(lineY));
+        line.setAttribute('x2', String(ax + 9 * s));
+        line.setAttribute('y2', String(lineY));
+        line.setAttribute('stroke', '#1f2937');
+        line.setAttribute('stroke-width', String(2.2 * s));
+        line.setAttribute('stroke-linecap', 'round');
+        line.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(line);
+        drawnElements.push(line);
+        aboveOffset += 10 * s;
+      } else if (type === 'marcato') {
+        // マルカート: 塗りつぶした山形（ストロークのみのアクセントと区別するため塗りで表現する）
+        const tipY = noteTopY - 5 - aboveOffset + adjust.offsetY;
+        const wingY = tipY - 9 * s;
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', `M ${ax - 8 * s} ${wingY} L ${ax} ${tipY - 4 * s} L ${ax + 8 * s} ${wingY} L ${ax} ${tipY} Z`);
+        path.setAttribute('fill', '#1f2937');
+        path.setAttribute('pointer-events', 'none');
+        svgRoot.appendChild(path);
+        drawnElements.push(path);
+        aboveOffset += 14 * s;
+      }
+    });
+    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+      appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'articulations');
+    }
+  });
+
+  // テンポ表記（"Fine" 等）: 五線上端より24px上、イタリック体で表示する
+  // （StaffCanvas の tempoMarkingEntries と同じ描き方）
+  tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust, stackedWithExpression, stackedWithChord, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    el.textContent = text;
+    el.setAttribute('x', String(anchorX + adjust.offsetX));
+    // 同じ音符に発想標語・コード記号も付いているときは、五線に近い側をそれらに譲って
+    // テンポ表記を1行ぶんずつ上へ持ち上げる
+    // （上から「テンポ → 発想標語 → コード記号 → 五線」の順・Issue #237, #279）
+    const stackedLines = (stackedWithExpression ? 1 : 0) + (stackedWithChord ? 1 : 0);
+    el.setAttribute('y', String(topY - 24 - stackedLines * TEXT_STACK_LINE_GAP_UNITS + adjust.offsetY));
+    el.setAttribute('text-anchor', 'middle');
+    el.setAttribute('fill', '#1f2937');
+    el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    // テンポ表記（Allegro 等）は cresc./dim. と同じ「イタリックの標語」の仲間なので、
+    // 強弱記号と同じ倍率で 1.2 sp → 1.5 sp へそろえる（Issue #202・候補A）
+    el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.expressiveText * adjust.scale));
+    el.setAttribute('font-style', 'italic');
+    el.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(el);
+    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'tempoMarking');
+    }
+  });
+
+  // 発想標語（espressivo, dolce, Si deve suonare... 等）: テンポ表記と同じ高さの段に、
+  // 一回り小さいイタリック体で表示する（Issue #237）。
+  // テンポ表記と同じ音符に付いている場合はテンポ表記の側が上へ逃げるので、
+  // ここは「五線上端より24u上」の定位置でよい。
+  // ただしコード記号も同じ音符に付いているときだけは、定位置をコード記号に譲って
+  // 自分が1行ぶん上へ逃げる（五線に近い順に コード記号 → 発想標語 → テンポ表記・Issue #279）。
+  //
+  // 長い標語（月光の "Si deve suonare..." は約60字）が小節幅を超える場合は、
+  // 折り返さず**はみ出しを許容**する（第1段の決定）。
+  // 中央揃えのまま折り返すと段の縦位置計算にも影響するため、まずは
+  // 位置調整ツール（✥）で逃がせる形にとどめている（`.claude/specs/extended-notation-features/design.md` 参照）。
+  // ただし**左だけは五線の左端で止める**。左は紙面の端が近く、はみ出すと
+  // 文字が切れて読めなくなってしまうため（右へのはみ出しは許容する）
+  expressionMarkingEntries.forEach(({ anchorX, topY, text, adjust, staveLeftX, stackedWithChord, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    el.textContent = text;
+    el.setAttribute('x', String(anchorX + adjust.offsetX));
+    // 同じ音符にコード記号も付いているときは、五線寄りの定位置をコード記号に譲って1行ぶん上へ逃げる（Issue #279）
+    el.setAttribute('y', String(topY - 24 - (stackedWithChord ? TEXT_STACK_LINE_GAP_UNITS : 0) + adjust.offsetY));
+    el.setAttribute('text-anchor', 'middle');
+    el.setAttribute('fill', '#1f2937');
+    el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.expressionMarking * adjust.scale));
+    el.setAttribute('font-style', 'italic');
+    el.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(el);
+    // 実際の文字幅は DOM に入れてからでないと測れない（getComputedTextLength）。
+    // 中央揃えなので左端は「アンカー − 文字幅の半分」。それが五線の左端より左なら、
+    // 左端にそろう位置まで右へずらす。
+    // ・手動で位置調整（✥）した場合（offsetX ≠ 0）は利用者の指定を優先して何もしない
+    // ・jsdom には文字幅の実測が無く 0 を返すので、その場合も何もしない（テスト環境では従来どおり）
+    if (adjust.offsetX === 0 && typeof el.getComputedTextLength === 'function') {
+      const width = el.getComputedTextLength();
+      const minAnchorX = staveLeftX + (width / 2);
+      if (width > 0 && anchorX < minAnchorX) {
+        el.setAttribute('x', String(minAnchorX));
+      }
+    }
+    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'expressionMarking');
+    }
+  });
+
+  // コード記号（C, Am7 等）: 五線上端より24u上の定位置に、**正体（イタリックでない字）**で表示する（Issue #279）。
+  //
+  // ・体裁: コードネームは「和音の名前」であって発想を述べる標語ではないので、
+  //   浄書慣例どおりイタリックにしない。テンポ表記・発想標語がどちらもイタリックなので、
+  //   正体であること自体が3種類を見分ける手がかりになる（太字はリハーサルマーク・♩=XXX が
+  //   すでに使っているので、そちらと紛れないよう太字にはしない）
+  // ・積み順: 3種類の中でいちばん五線に近い行に置く。コード記号は「その拍で何の和音か」を
+  //   示すものなので、音符の近くにあるほど読みやすいため。同じ音符に発想標語・テンポ表記が
+  //   あるときは、それらが上へ逃げる（上の2つの forEach の stackedWithChord）
+  chordSymbolEntries.forEach(({ anchorX, topY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    el.textContent = text;
+    el.setAttribute('x', String(anchorX + adjust.offsetX));
+    el.setAttribute('y', String(topY - 24 + adjust.offsetY));
+    el.setAttribute('text-anchor', 'middle');
+    el.setAttribute('fill', '#1f2937');
+    el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.chordSymbol * adjust.scale));
+    el.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(el);
+    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'chordSymbol');
+    }
+  });
+
+  // 歌詞: 音符が属する段の五線上端のさらに上（staveTopY - 26）に通常体で表示する。
+  // ピアノ大譜表なら右手に付けた歌詞は右手譜表の上、左手なら左手譜表の上に出る。
+  // 多パート譜では歌詞データを持つイベントの段の上に描かれる（データ駆動）。
+  lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, entry));
+
+  // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
+  // Ped と ✱ が時系列でペアになる区間は、間を破線でつないで「踏み続けている範囲」を示す
+  // （実装の詳細・設計判断は StaffCanvas.tsx の同名処理・pedalBridgeUtils.ts を参照）
+  const pedalTextY = (botY: number) => botY + 25;
+  const PED_TEXT_HALF_WIDTH = 12;
+  const AST_TEXT_HALF_WIDTH = 6;
+  const drawPedalText = (anchorX: number, botY: number, mark: 'down' | 'up') => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    el.textContent = mark === 'down' ? 'Ped' : '✱';
+    el.setAttribute('x', String(anchorX));
+    el.setAttribute('y', String(pedalTextY(botY)));
+    el.setAttribute('text-anchor', 'middle');
+    el.setAttribute('fill', '#1e293b');
+    el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    el.setAttribute('font-size', mark === 'down' ? '13' : '14');
+    if (mark === 'down') el.setAttribute('font-style', 'italic');
+    el.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(el);
+  };
+  pairPedalMarks(pedalMarkEntries).forEach((result) => {
+    if (result.kind === 'down') {
+      drawPedalText(result.down.anchorX, result.down.botY, 'down');
+      return;
+    }
+    if (result.kind === 'up') {
+      drawPedalText(result.up.anchorX, result.up.botY, 'up');
+      return;
+    }
+    const { down, up } = result;
+    drawPedalText(down.anchorX, down.botY, 'down');
+    drawPedalText(up.anchorX, up.botY, 'up');
+    const crossSystem = Math.abs(down.stave.getYForLine(2) - up.stave.getYForLine(2)) > 30
+      || up.anchorX < down.anchorX;
+    if (!crossSystem) {
+      drawPedalBridgeLine({
+        svgRoot: svgRoot as unknown as SVGElement,
+        x1: down.anchorX + PED_TEXT_HALF_WIDTH,
+        x2: up.anchorX - AST_TEXT_HALF_WIDTH,
+        y: pedalTextY(down.botY) - 4,
+      });
+    } else {
+      const edgeX1 = down.stave.getX() + down.stave.getWidth();
+      const edgeX2 = up.stave.getX();
+      drawPedalBridgeLine({
+        svgRoot: svgRoot as unknown as SVGElement,
+        x1: down.anchorX + PED_TEXT_HALF_WIDTH,
+        x2: edgeX1,
+        y: pedalTextY(down.botY) - 4,
+      });
+      drawPedalBridgeLine({
+        svgRoot: svgRoot as unknown as SVGElement,
+        x1: edgeX2,
+        x2: up.anchorX - AST_TEXT_HALF_WIDTH,
+        y: pedalTextY(up.botY) - 4,
+      });
+    }
+  });
+  // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
+  ottavaEntries.forEach(({ kind, startX, endX, lineY, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+    // symbolAdjust: offsetX/offsetY はブラケット全体に、scale はテキストの font-size と線の太さに効かせる
+    const ax = startX + adjust.offsetX;
+    const aex = endX + adjust.offsetX;
+    const ay = lineY + adjust.offsetY;
+    const fontSize = 11 * adjust.scale;
+    const strokeWidth = 1 * adjust.scale;
+    const drawnElements: SVGGraphicsElement[] = [];
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.textContent = kind;
+    label.setAttribute('x', String(ax - 4));
+    label.setAttribute('y', String(ay));
+    label.setAttribute('text-anchor', 'start');
+    label.setAttribute('fill', '#374151');
+    label.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    label.setAttribute('font-style', 'italic');
+    label.setAttribute('font-size', String(fontSize));
+    label.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(label);
+    drawnElements.push(label);
+    const lineStart = ax + 18;
+    if (lineStart < aex) {
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', String(lineStart));
+      line.setAttribute('y1', String(ay - 3));
+      line.setAttribute('x2', String(aex));
+      line.setAttribute('y2', String(ay - 3));
+      line.setAttribute('stroke', '#374151');
+      line.setAttribute('stroke-width', String(strokeWidth));
+      line.setAttribute('stroke-dasharray', '4,2');
+      line.setAttribute('pointer-events', 'none');
+      svgRoot.appendChild(line);
+      drawnElements.push(line);
+    }
+    const bracketDir = kind === '8va' ? 1 : -1;
+    const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    vline.setAttribute('x1', String(aex));
+    vline.setAttribute('y1', String(ay - 3));
+    vline.setAttribute('x2', String(aex));
+    vline.setAttribute('y2', String(ay - 3 + 6 * bracketDir));
+    vline.setAttribute('stroke', '#374151');
+    vline.setAttribute('stroke-width', String(strokeWidth));
+    vline.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(vline);
+    drawnElements.push(vline);
+    if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
+      appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'ottava');
+    }
+  });
+}
+
 export default function PianoSystemCanvas({
   measuresPerSystem=4, tool, scale=0.86, plannedMeasureWidths, incomingArcIndex,
   trebleData, bassData, onTrebleChange, onBassChange,
@@ -4111,81 +4653,8 @@ export default function PianoSystemCanvas({
           }
         }
 
-        renderedVoiceEntries.forEach((entry) => {
-          try{
-            if (entry.hasCrossStaffNote) {
-              // 合同整形中の衝突解決（同一拍の音符の符幹反転）でビームの参照が
-              // 消えていることがあるので、描画の直前に復元する（Issue #319）。
-              // またぎの無い声部では起きない事象なので、この分岐の中だけで行う。
-              restoreCrossStaffBeamAssignments(entry.beams);
-              // VexFlow の Voice.draw(ctx, stave) は、描画の直前に**全音符の五線を
-              // 引数の五線で上書き**する。段またぎの音符はここで自分のパートの五線へ
-              // 引き戻されてしまうので、この声部だけは音符を1つずつ描く
-              // （Voice.draw が音符に対して行っているのと同じ手順）。
-              entry.voice.setRendered();
-              entry.voice.getTickables().forEach((tickable) => {
-                tickable.setContext(ctx);
-                tickable.drawWithStyle();
-              });
-            } else {
-              entry.voice.draw(ctx,stave);
-            }
-          }catch{
-            // 1つの声部の描画に失敗しても、残りの声部と他の段の描画は続けたい。
-            // ここで例外を投げると譜面全体が真っ白になってしまうため握りつぶす。
-          }
-          // 表示専用のパディング休符（データには保存されていない）に
-          // クラスを付けておく。App.css の「svg path/line を印刷インク色に戻す」
-          // ルールがこのクラスの要素にも効くので、画面では薄いグレーのまま、
-          // 印刷・PDF書出では通常の休符と同じ黒で出力される（Issue #59）。
-          entry.sourceEvents.forEach((ev, idx) => {
-            if (!(ev as RenderNoteEvent).__isPlaceholder) return;
-            try {
-              const svgEl = (entry.vfNotes[idx] as any)?.getSVGElement?.();
-              svgEl?.classList?.add('vf-padding-rest');
-            } catch {
-              /* SVG未対応環境などでは無視 */
-            }
-          });
-          // 非アクティブ声部は、音符本体（符頭・符幹）だけでなくビーム（連桁）と
-          // 連符の括弧・数字も淡色にする（Issue #175）。
-          // VexFlow の Beam.draw()/Tuplet.draw() は setStyle() したスタイルを
-          // 自分では適用しない（Element.applyStyle を呼ばない）ため、setStyle だけでは
-          // 黒いまま残ってしまう。代わりに drawWithStyle() を使うと、VexFlow 側が
-          // 「ctx.save() → applyStyle() → draw() → ctx.restore()」を行ってくれる。
-          const inactiveVoiceStyle = {fillStyle:INACTIVE_VOICE_COLOR,strokeStyle:INACTIVE_VOICE_COLOR};
-          entry.beams.forEach(b=>{
-            b.setContext(ctx);
-            if(entry.isInactiveVoiceEntry){
-              b.setStyle(inactiveVoiceStyle);
-              b.drawWithStyle();
-            }else{
-              b.draw();
-            }
-          });
-          entry.tuplets.forEach(({ tuplet, hideNumber }) => {
-            // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
-            // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
-            // 数字を省略する連符は括弧も省くのが浄書の慣行（Gould, Behind Bars）なので、
-            // 表示一式を描かないことで慣行どおりの見た目になる。
-            // 音符の拍（tick）への倍率は Tuplet の生成時点で既に掛かっているため、
-            // 描かなくても小節の拍数・ビームの束ね方は変わらない。
-            if (hideNumber) {
-              return;
-            }
-            try {
-              (tuplet as any).setContext?.(ctx);
-              if (entry.isInactiveVoiceEntry) {
-                tuplet.setStyle(inactiveVoiceStyle);
-                tuplet.drawWithStyle();
-              } else {
-                tuplet.draw();
-              }
-            } catch (tupletError) {
-              console.error('連符の描画でエラーが発生しました:', tupletError);
-            }
-          });
-        });
+        // 声部・ビーム・連符の描画（実体は drawRenderedVoiceEntries・#244 段4c-2）
+        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries);
 
         // レガシー（tiedToNext 方式）のタイ描画用データ収集。
         // こちらは声部1（measure.events）専用のまま残す。arcs[] 方式より前の旧データ互換の
@@ -6044,436 +6513,9 @@ export default function PianoSystemCanvas({
     // このさらに前面に積まれるため、記号のクリックは従来どおり優先される。
     svgRoot.querySelectorAll('.vf-note-hit').forEach(el=>svgRoot.appendChild(el));
 
-    dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
-      const orderedMarkings = [...markings].sort((left, right) => {
-        const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
-        const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
-        return leftPriority - rightPriority;
-      });
-      const drawnElements: SVGGraphicsElement[] = [];
-      orderedMarkings.forEach((marking, index) => {
-        const text=document.createElementNS('http://www.w3.org/2000/svg','text');
-        text.textContent=formatDynamicMarking(marking);
-        // ⤢/✥ ツールで配置済みの調整値を、位置は座標へ加算・サイズはフォントサイズへの倍率として反映する
-        text.setAttribute('x',String(anchorX + adjust.offsetX));
-        text.setAttribute('y',String(baseY + index * 14 + adjust.offsetY));
-        text.setAttribute('text-anchor','middle');
-        text.setAttribute('fill','#1f2937');
-        text.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-        // 強弱記号は 1.6 sp → 2.0 sp（Issue #202・候補A）。
-        // cresc./dim. は強弱記号より一段小さい文字という関係を保ったまま同じ倍率で拡大する。
-        const baseFontSize = marking.value === 'cresc' || marking.value === 'dim'
-          ? ENGRAVING_TEXT_UNITS.expressiveText
-          : ENGRAVING_TEXT_UNITS.dynamics;
-        text.setAttribute('font-size', String(baseFontSize * adjust.scale));
-        text.setAttribute('font-style','italic');
-        text.setAttribute('pointer-events','none');
-        svgRoot.appendChild(text);
-        drawnElements.push(text);
-      });
-      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
-      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-        appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'dynamics');
-      }
-    });
-
-    // ── カスタム記号を一括描画（StaffCanvas と同じ共通ユーティリティを使う） ──
-    drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot, (entry, symbolId, g) => {
-      // 非アクティブ声部の「見た目だけ」描画（partIndex 省略）にはクリック判定を作らない
-      if (entry.partIndex === undefined) return;
-      appendSymbolHitRegion([g], entry.partIndex, entry.measureAbsoluteIndex, entry.eventIndex, entry.event, symbolId, true);
-    });
-
-    // ── 途中テンポ変更マーキングを一括描画（StaffCanvas と同じ表示） ──
-    // 各小節の左端上方に「♩=XXX」と琥珀色のテキストで表示する。
-    // 五線上端より 36px 上に配置して、コード記号・テンポ表記テキストと重ならないようにする。
-    bpmMarkingEntries.forEach(({ x, topY, bpm }) => {
-      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      el.textContent = `♩=${bpm}`;
-      el.setAttribute('x', String(x + 2));
-      el.setAttribute('y', String(topY - 36));
-      el.setAttribute('fill', '#b45309');  // 琥珀色で他の記号と区別しやすくする
-      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      el.setAttribute('font-size', '12');
-      el.setAttribute('font-weight', 'bold');
-      el.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(el);
-    });
-
-    // ── リハーサルマーク（練習番号）を一括描画（StaffCanvas と同じ四角枠+太字） ──
-    // 途中テンポ変更（♩=XXX）よりさらに上に置くことで、同じ小節に両方が
-    // 付いても重ならないようにする（テンポは五線上端の36px上、
-    // リハーサルマークはそれよりさらに20px上＝56px上）。
-    rehearsalMarkEntries.forEach(({ x, topY, mark }) => {
-      const boxWidth = Math.max(16, mark.length * 8 + 8);
-      const boxHeight = 16;
-      const boxX = x + 2;
-      const boxY = topY - 56 - boxHeight;
-      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      rect.setAttribute('x', String(boxX));
-      rect.setAttribute('y', String(boxY));
-      rect.setAttribute('width', String(boxWidth));
-      rect.setAttribute('height', String(boxHeight));
-      rect.setAttribute('fill', 'none');
-      rect.setAttribute('stroke', '#111827');
-      // 文字を囲む枠線は 0.14 sp → 0.16 sp（Bravura: textEnclosureThickness、Issue #202）
-      rect.setAttribute('stroke-width', String(ENGRAVING_THICKNESS_UNITS.textEnclosure));
-      rect.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(rect);
-      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      el.textContent = mark;
-      el.setAttribute('x', String(boxX + boxWidth / 2));
-      el.setAttribute('y', String(boxY + boxHeight - 4));
-      el.setAttribute('text-anchor', 'middle');
-      el.setAttribute('fill', '#111827');
-      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      el.setAttribute('font-size', '12');
-      el.setAttribute('font-weight', 'bold');
-      el.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(el);
-    });
-
-    // ── 小節番号（通し番号）を一括描画。段の先頭小節・最上段の五線左上に小さく表示する ──
-    // 略称パート名（showInstrumentLabels のテキスト）と同程度のフォントサイズ・黒色にする。
-    measureNumberEntries.forEach(({ x, topY, number }) => {
-      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      el.textContent = String(number);
-      el.setAttribute('x', String(x));
-      el.setAttribute('y', String(topY - 6));
-      el.setAttribute('text-anchor', 'start');
-      el.setAttribute('fill', '#111827');
-      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      // 小節番号は 1.1 sp → 1.4 sp（Issue #202・候補A）
-      el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.measureNumber));
-      el.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(el);
-    });
-
-    // 運指番号: 音高に関わらず五線上端基準の統一高さに揃えて表示する
-    // （カスタム記号と同じ方針）。五線より上へ飛び出す高音だけは、
-    // 符頭と重ならないよう、その音符に限り符頭上端の上へ逃がす。
-    fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
-      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      el.textContent = text;
-      el.setAttribute('x', String(anchorX + adjust.offsetX));
-      el.setAttribute('y', String(Math.min(staveTopY - 12, noteTopY - 10) + adjust.offsetY));
-      el.setAttribute('text-anchor', 'middle');
-      el.setAttribute('fill', '#1f2937');
-      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      // 既定サイズは engravingDefaults の1か所で持つ（Issue #232 で 10 u → 18 u）。
-      // adjust.scale は「既定に対する倍率」なので、既定を変えると個別調整済みの運指の
-      // 実効サイズも一緒に変わる（保存データの自動変換はしない方針）。
-      el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.fingering * adjust.scale));
-      el.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(el);
-      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
-      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-        appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'fingering');
-      }
-    });
-
-    // ── アーティキュレーション記号を一括描画（StaffCanvas と同じ描き方に揃える） ──
-    articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
-      // ⤢/✥ ツールの調整値を反映する（StaffCanvas と同じ考え方）。
-      // offsetX/offsetY は座標へ加算、scale は各図形の半径・線幅・線の長さへの倍率として使う。
-      const ax = anchorX + adjust.offsetX;
-      const s = adjust.scale;
-      // フェルマータ以外は noteTopY の上に重ならないよう積み上げる（積み上げ間隔も scale に応じて伸縮する）
-      let aboveOffset = 0;
-      const drawnElements: SVGGraphicsElement[] = [];
-      markings.forEach((type) => {
-        const ns = 'http://www.w3.org/2000/svg';
-        if (type === 'fermata') {
-          // フェルマータは五線上端より上に配置する（符頭位置に依存しない）
-          const baseY = Math.min(staveTopY, noteTopY) - 14 + adjust.offsetY;
-          // 半円弧（下が開いた椀形）
-          const arc = document.createElementNS(ns, 'path');
-          arc.setAttribute('d', `M ${ax - 11 * s} ${baseY} A ${11 * s} ${9 * s} 0 0 1 ${ax + 11 * s} ${baseY}`);
-          arc.setAttribute('stroke', '#1f2937');
-          arc.setAttribute('stroke-width', String(1.6 * s));
-          arc.setAttribute('stroke-linecap', 'round');
-          arc.setAttribute('fill', 'none');
-          arc.setAttribute('pointer-events', 'none');
-          svgRoot.appendChild(arc);
-          drawnElements.push(arc);
-          // 中心の点（弧の内側）
-          const dot = document.createElementNS(ns, 'circle');
-          dot.setAttribute('cx', String(ax));
-          dot.setAttribute('cy', String(baseY - 4 * s));
-          dot.setAttribute('r', String(2.5 * s));
-          dot.setAttribute('fill', '#1f2937');
-          dot.setAttribute('pointer-events', 'none');
-          svgRoot.appendChild(dot);
-          drawnElements.push(dot);
-        } else if (type === 'staccato') {
-          // スタッカート: 符頭上方に小さな黒丸
-          const cy = noteTopY - 6 - aboveOffset + adjust.offsetY;
-          const dot = document.createElementNS(ns, 'circle');
-          dot.setAttribute('cx', String(ax));
-          dot.setAttribute('cy', String(cy));
-          dot.setAttribute('r', String(2.5 * s));
-          dot.setAttribute('fill', '#1f2937');
-          dot.setAttribute('pointer-events', 'none');
-          svgRoot.appendChild(dot);
-          drawnElements.push(dot);
-          aboveOffset += 10 * s;
-        } else if (type === 'accent') {
-          // アクセント: 下向きの楔形（「>」を90°回した形）
-          const tipY = noteTopY - 5 - aboveOffset + adjust.offsetY;
-          const wingY = tipY - 9 * s;
-          const path = document.createElementNS(ns, 'path');
-          path.setAttribute('d', `M ${ax - 10 * s} ${wingY} L ${ax} ${tipY} L ${ax + 10 * s} ${wingY}`);
-          path.setAttribute('stroke', '#1f2937');
-          path.setAttribute('stroke-width', String(1.6 * s));
-          path.setAttribute('stroke-linecap', 'round');
-          path.setAttribute('stroke-linejoin', 'round');
-          path.setAttribute('fill', 'none');
-          path.setAttribute('pointer-events', 'none');
-          svgRoot.appendChild(path);
-          drawnElements.push(path);
-          aboveOffset += 14 * s;
-        } else if (type === 'tenuto') {
-          // テヌート: 符頭上方に水平線
-          const lineY = noteTopY - 6 - aboveOffset + adjust.offsetY;
-          const line = document.createElementNS(ns, 'line');
-          line.setAttribute('x1', String(ax - 9 * s));
-          line.setAttribute('y1', String(lineY));
-          line.setAttribute('x2', String(ax + 9 * s));
-          line.setAttribute('y2', String(lineY));
-          line.setAttribute('stroke', '#1f2937');
-          line.setAttribute('stroke-width', String(2.2 * s));
-          line.setAttribute('stroke-linecap', 'round');
-          line.setAttribute('pointer-events', 'none');
-          svgRoot.appendChild(line);
-          drawnElements.push(line);
-          aboveOffset += 10 * s;
-        } else if (type === 'marcato') {
-          // マルカート: 塗りつぶした山形（ストロークのみのアクセントと区別するため塗りで表現する）
-          const tipY = noteTopY - 5 - aboveOffset + adjust.offsetY;
-          const wingY = tipY - 9 * s;
-          const path = document.createElementNS(ns, 'path');
-          path.setAttribute('d', `M ${ax - 8 * s} ${wingY} L ${ax} ${tipY - 4 * s} L ${ax + 8 * s} ${wingY} L ${ax} ${tipY} Z`);
-          path.setAttribute('fill', '#1f2937');
-          path.setAttribute('pointer-events', 'none');
-          svgRoot.appendChild(path);
-          drawnElements.push(path);
-          aboveOffset += 14 * s;
-        }
-      });
-      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
-      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-        appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'articulations');
-      }
-    });
-
-    // テンポ表記（"Fine" 等）: 五線上端より24px上、イタリック体で表示する
-    // （StaffCanvas の tempoMarkingEntries と同じ描き方）
-    tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust, stackedWithExpression, stackedWithChord, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
-      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      el.textContent = text;
-      el.setAttribute('x', String(anchorX + adjust.offsetX));
-      // 同じ音符に発想標語・コード記号も付いているときは、五線に近い側をそれらに譲って
-      // テンポ表記を1行ぶんずつ上へ持ち上げる
-      // （上から「テンポ → 発想標語 → コード記号 → 五線」の順・Issue #237, #279）
-      const stackedLines = (stackedWithExpression ? 1 : 0) + (stackedWithChord ? 1 : 0);
-      el.setAttribute('y', String(topY - 24 - stackedLines * TEXT_STACK_LINE_GAP_UNITS + adjust.offsetY));
-      el.setAttribute('text-anchor', 'middle');
-      el.setAttribute('fill', '#1f2937');
-      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      // テンポ表記（Allegro 等）は cresc./dim. と同じ「イタリックの標語」の仲間なので、
-      // 強弱記号と同じ倍率で 1.2 sp → 1.5 sp へそろえる（Issue #202・候補A）
-      el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.expressiveText * adjust.scale));
-      el.setAttribute('font-style', 'italic');
-      el.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(el);
-      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
-      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-        appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'tempoMarking');
-      }
-    });
-
-    // 発想標語（espressivo, dolce, Si deve suonare... 等）: テンポ表記と同じ高さの段に、
-    // 一回り小さいイタリック体で表示する（Issue #237）。
-    // テンポ表記と同じ音符に付いている場合はテンポ表記の側が上へ逃げるので、
-    // ここは「五線上端より24u上」の定位置でよい。
-    // ただしコード記号も同じ音符に付いているときだけは、定位置をコード記号に譲って
-    // 自分が1行ぶん上へ逃げる（五線に近い順に コード記号 → 発想標語 → テンポ表記・Issue #279）。
-    //
-    // 長い標語（月光の "Si deve suonare..." は約60字）が小節幅を超える場合は、
-    // 折り返さず**はみ出しを許容**する（第1段の決定）。
-    // 中央揃えのまま折り返すと段の縦位置計算にも影響するため、まずは
-    // 位置調整ツール（✥）で逃がせる形にとどめている（`.claude/specs/extended-notation-features/design.md` 参照）。
-    // ただし**左だけは五線の左端で止める**。左は紙面の端が近く、はみ出すと
-    // 文字が切れて読めなくなってしまうため（右へのはみ出しは許容する）
-    expressionMarkingEntries.forEach(({ anchorX, topY, text, adjust, staveLeftX, stackedWithChord, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
-      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      el.textContent = text;
-      el.setAttribute('x', String(anchorX + adjust.offsetX));
-      // 同じ音符にコード記号も付いているときは、五線寄りの定位置をコード記号に譲って1行ぶん上へ逃げる（Issue #279）
-      el.setAttribute('y', String(topY - 24 - (stackedWithChord ? TEXT_STACK_LINE_GAP_UNITS : 0) + adjust.offsetY));
-      el.setAttribute('text-anchor', 'middle');
-      el.setAttribute('fill', '#1f2937');
-      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.expressionMarking * adjust.scale));
-      el.setAttribute('font-style', 'italic');
-      el.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(el);
-      // 実際の文字幅は DOM に入れてからでないと測れない（getComputedTextLength）。
-      // 中央揃えなので左端は「アンカー − 文字幅の半分」。それが五線の左端より左なら、
-      // 左端にそろう位置まで右へずらす。
-      // ・手動で位置調整（✥）した場合（offsetX ≠ 0）は利用者の指定を優先して何もしない
-      // ・jsdom には文字幅の実測が無く 0 を返すので、その場合も何もしない（テスト環境では従来どおり）
-      if (adjust.offsetX === 0 && typeof el.getComputedTextLength === 'function') {
-        const width = el.getComputedTextLength();
-        const minAnchorX = staveLeftX + (width / 2);
-        if (width > 0 && anchorX < minAnchorX) {
-          el.setAttribute('x', String(minAnchorX));
-        }
-      }
-      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
-      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-        appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'expressionMarking');
-      }
-    });
-
-    // コード記号（C, Am7 等）: 五線上端より24u上の定位置に、**正体（イタリックでない字）**で表示する（Issue #279）。
-    //
-    // ・体裁: コードネームは「和音の名前」であって発想を述べる標語ではないので、
-    //   浄書慣例どおりイタリックにしない。テンポ表記・発想標語がどちらもイタリックなので、
-    //   正体であること自体が3種類を見分ける手がかりになる（太字はリハーサルマーク・♩=XXX が
-    //   すでに使っているので、そちらと紛れないよう太字にはしない）
-    // ・積み順: 3種類の中でいちばん五線に近い行に置く。コード記号は「その拍で何の和音か」を
-    //   示すものなので、音符の近くにあるほど読みやすいため。同じ音符に発想標語・テンポ表記が
-    //   あるときは、それらが上へ逃げる（上の2つの forEach の stackedWithChord）
-    chordSymbolEntries.forEach(({ anchorX, topY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
-      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      el.textContent = text;
-      el.setAttribute('x', String(anchorX + adjust.offsetX));
-      el.setAttribute('y', String(topY - 24 + adjust.offsetY));
-      el.setAttribute('text-anchor', 'middle');
-      el.setAttribute('fill', '#1f2937');
-      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.chordSymbol * adjust.scale));
-      el.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(el);
-      // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
-      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-        appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'chordSymbol');
-      }
-    });
-
-    // 歌詞: 音符が属する段の五線上端のさらに上（staveTopY - 26）に通常体で表示する。
-    // ピアノ大譜表なら右手に付けた歌詞は右手譜表の上、左手なら左手譜表の上に出る。
-    // 多パート譜では歌詞データを持つイベントの段の上に描かれる（データ駆動）。
-    lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, entry));
-
-    // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
-    // Ped と ✱ が時系列でペアになる区間は、間を破線でつないで「踏み続けている範囲」を示す
-    // （実装の詳細・設計判断は StaffCanvas.tsx の同名処理・pedalBridgeUtils.ts を参照）
-    const pedalTextY = (botY: number) => botY + 25;
-    const PED_TEXT_HALF_WIDTH = 12;
-    const AST_TEXT_HALF_WIDTH = 6;
-    const drawPedalText = (anchorX: number, botY: number, mark: 'down' | 'up') => {
-      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      el.textContent = mark === 'down' ? 'Ped' : '✱';
-      el.setAttribute('x', String(anchorX));
-      el.setAttribute('y', String(pedalTextY(botY)));
-      el.setAttribute('text-anchor', 'middle');
-      el.setAttribute('fill', '#1e293b');
-      el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      el.setAttribute('font-size', mark === 'down' ? '13' : '14');
-      if (mark === 'down') el.setAttribute('font-style', 'italic');
-      el.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(el);
-    };
-    pairPedalMarks(pedalMarkEntries).forEach((result) => {
-      if (result.kind === 'down') {
-        drawPedalText(result.down.anchorX, result.down.botY, 'down');
-        return;
-      }
-      if (result.kind === 'up') {
-        drawPedalText(result.up.anchorX, result.up.botY, 'up');
-        return;
-      }
-      const { down, up } = result;
-      drawPedalText(down.anchorX, down.botY, 'down');
-      drawPedalText(up.anchorX, up.botY, 'up');
-      const crossSystem = Math.abs(down.stave.getYForLine(2) - up.stave.getYForLine(2)) > 30
-        || up.anchorX < down.anchorX;
-      if (!crossSystem) {
-        drawPedalBridgeLine({
-          svgRoot: svgRoot as unknown as SVGElement,
-          x1: down.anchorX + PED_TEXT_HALF_WIDTH,
-          x2: up.anchorX - AST_TEXT_HALF_WIDTH,
-          y: pedalTextY(down.botY) - 4,
-        });
-      } else {
-        const edgeX1 = down.stave.getX() + down.stave.getWidth();
-        const edgeX2 = up.stave.getX();
-        drawPedalBridgeLine({
-          svgRoot: svgRoot as unknown as SVGElement,
-          x1: down.anchorX + PED_TEXT_HALF_WIDTH,
-          x2: edgeX1,
-          y: pedalTextY(down.botY) - 4,
-        });
-        drawPedalBridgeLine({
-          svgRoot: svgRoot as unknown as SVGElement,
-          x1: edgeX2,
-          x2: up.anchorX - AST_TEXT_HALF_WIDTH,
-          y: pedalTextY(up.botY) - 4,
-        });
-      }
-    });
-    // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
-    ottavaEntries.forEach(({ kind, startX, endX, lineY, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
-      // symbolAdjust: offsetX/offsetY はブラケット全体に、scale はテキストの font-size と線の太さに効かせる
-      const ax = startX + adjust.offsetX;
-      const aex = endX + adjust.offsetX;
-      const ay = lineY + adjust.offsetY;
-      const fontSize = 11 * adjust.scale;
-      const strokeWidth = 1 * adjust.scale;
-      const drawnElements: SVGGraphicsElement[] = [];
-      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      label.textContent = kind;
-      label.setAttribute('x', String(ax - 4));
-      label.setAttribute('y', String(ay));
-      label.setAttribute('text-anchor', 'start');
-      label.setAttribute('fill', '#374151');
-      label.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      label.setAttribute('font-style', 'italic');
-      label.setAttribute('font-size', String(fontSize));
-      label.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(label);
-      drawnElements.push(label);
-      const lineStart = ax + 18;
-      if (lineStart < aex) {
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', String(lineStart));
-        line.setAttribute('y1', String(ay - 3));
-        line.setAttribute('x2', String(aex));
-        line.setAttribute('y2', String(ay - 3));
-        line.setAttribute('stroke', '#374151');
-        line.setAttribute('stroke-width', String(strokeWidth));
-        line.setAttribute('stroke-dasharray', '4,2');
-        line.setAttribute('pointer-events', 'none');
-        svgRoot.appendChild(line);
-        drawnElements.push(line);
-      }
-      const bracketDir = kind === '8va' ? 1 : -1;
-      const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      vline.setAttribute('x1', String(aex));
-      vline.setAttribute('y1', String(ay - 3));
-      vline.setAttribute('x2', String(aex));
-      vline.setAttribute('y2', String(ay - 3 + 6 * bracketDir));
-      vline.setAttribute('stroke', '#374151');
-      vline.setAttribute('stroke-width', String(strokeWidth));
-      vline.setAttribute('pointer-events', 'none');
-      svgRoot.appendChild(vline);
-      drawnElements.push(vline);
-      if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-        appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'ottava');
-      }
-    });
+    // 記号エントリの一括描画（実体は drawCollectedSymbolEntries・#244 段4c-2）。
+    // クリック判定の配線（appendSymbolHitRegion）は閉包側の責務のまま引数で渡す。
+    drawCollectedSymbolEntries({ svgRoot, collectors, customSymbolDefs, appendSymbolHitRegion });
 
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
     pendingArcsP.forEach(({partIndex,voiceIndex,arc,arcIndex,startNote,startStave,startClef,startMeasureIdx,startEventIdx,startIsMultiVoice})=>{
