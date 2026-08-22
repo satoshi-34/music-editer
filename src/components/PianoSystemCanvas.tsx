@@ -2862,7 +2862,7 @@ export default function PianoSystemCanvas({
     const labelW = showInstrumentLabels ? labelLayout.areaWidth : 0;
     const innerW=W-PAGE_LEFT-PAGE_RIGHT-labelW;
     // 途中調号は最上段の小節データが正本。幅計測でも本描画と同じ正本を参照する。
-    const topPartMeasuresForKey = partsScore[0] ?? parts[0]?.data ?? [];
+    const topPartMeasuresForKey = partsScoreForRender[0] ?? parts[0]?.data ?? [];
     // 全パートを1回の Formatter で合同フォーマットするため（拍の縦揃え）、
     // 小節の最低幅も「パート単体の最大」ではなく「全パートの開始拍の和集合」で
     // 見積もる。単体基準のままだと、右手と左手で拍がずれる密な小節
@@ -2872,7 +2872,7 @@ export default function PianoSystemCanvas({
       if (plannedWidth != null && Number.isFinite(plannedWidth)) return plannedWidth;
       const ai=startMeasureIndex+i;
       const measuresAtPosition = parts.map((_, pi) => {
-        const score=partsScore[pi]??[];
+        const score=partsScoreForRender[pi]??[];
         return ai<score.length?score[ai]:undefined;
       });
       const estimatedWidth = combinedMeasureMinimumContentWidth(measuresAtPosition);
@@ -2883,9 +2883,9 @@ export default function PianoSystemCanvas({
           measureIndex: ai,
           keySignature: normalizedKeySignature,
           parts: parts.map((part, pi) => ({
-            measures: partsScore[pi] ?? part.data,
+            measures: partsScoreForRender[pi] ?? part.data,
             keySignatureMeasures: topPartMeasuresForKey,
-            clef: resolveMeasureClef(partsScore[pi] ?? part.data, ai, part.clef),
+            clef: resolveMeasureClef(partsScoreForRender[pi] ?? part.data, ai, part.clef),
             keySignature: part.keySignature,
           })),
         },
@@ -2915,6 +2915,7 @@ export default function PianoSystemCanvas({
 
     // 途中調号変更を段全体で先に解決しておく。
     // 調号は最上段（partsScore[0]）の小節データに保存し、下段の楽器はここから
+    // （読み取りは描画用コピー partsScoreForRender。差は記号オフセット下書きのみ＝#244 段4a）
     // パート固有の移調シフトをかけて使う（stave 生成ループと音符描画ループの両方で同じ値を使う）。
     const baseGlobalKeySigForSystem = resolveMeasureKeySignature(topPartMeasuresForKey, startMeasureIndex - 1, normalizedKeySignature);
     const effectiveKeySigPerMeasure: KeySignature[] = [];
@@ -2954,14 +2955,14 @@ export default function PianoSystemCanvas({
       // 段の右端縦線（StaveConnector）は、この列が終止線を描く列かどうかで
       // 使う種類（細線 or 太い二重線）を切り替える。sharedMeasure は最上段基準なので
       // 各パートの forEach 内より前、列単位で一度だけ判定する。
-      const sharedMeasureForColumn = (partsScore[0] ?? parts[0]?.data ?? [])[startMeasureIndex + i];
+      const sharedMeasureForColumn = (partsScoreForRender[0] ?? parts[0]?.data ?? [])[startMeasureIndex + i];
       const isFinalBarlineColumn = finalMeasureIndex != null
         && startMeasureIndex + i === finalMeasureIndex
         && !sharedMeasureForColumn?.repeatEnd;
       parts.forEach((part, pi) => {
         // 反復記号と終止括弧は多段譜で段ごとに食い違うと読みにくいので、
         // 見た目の基準は最上段の小節データへ寄せる。
-        const sharedMeasure = (partsScore[0] ?? parts[0]?.data ?? [])[startMeasureIndex + i];
+        const sharedMeasure = (partsScoreForRender[0] ?? parts[0]?.data ?? [])[startMeasureIndex + i];
         // Y だけは x/w と違い「/s しない」。x/w は「ページ幅いっぱいに広げる」ため
         // 実ピクセル値を ctx.scale(s,s) で割り戻して渡すが、Y も同じようにすると
         // パート間の間隔だけが音符の大きさに追従せず常に staveSpacing ピクセルのまま残り、
@@ -2986,7 +2987,7 @@ export default function PianoSystemCanvas({
         // （楽器ごとに違うタイミングで変わりうるため。例: チェロだけテナー記号に変わる）。
         // クレフは partsScore（内部 state。編集中の最新データ）から解決する。
         // part.data は親から渡された初期値の可能性があり、編集後の値を反映しないため使わない。
-        const partMeasuresForClef = partsScore[pi] ?? part.data;
+        const partMeasuresForClef = partsScoreForRender[pi] ?? part.data;
         const effectiveClefHere = resolveMeasureClef(partMeasuresForClef, startMeasureIndex + i, part.clef);
         const prevEffectiveClef = resolveMeasureClef(partMeasuresForClef, startMeasureIndex + i - 1, part.clef);
         const clefChangedHere = i > 0 && effectiveClefHere !== prevEffectiveClef;
@@ -3027,7 +3028,7 @@ export default function PianoSystemCanvas({
               : Barline.type.SINGLE
         );
         if (pi === 0) {
-          const topPartMeasures = partsScore[0] ?? parts[0]?.data ?? [];
+          const topPartMeasures = partsScoreForRender[0] ?? parts[0]?.data ?? [];
           const voltaConfig = getVoltaRenderConfig(topPartMeasures, startMeasureIndex + i);
           if (voltaConfig) {
             const voltaTypeMap = {
@@ -3644,7 +3645,7 @@ export default function PianoSystemCanvas({
         // この小節時点で有効なクレフ（途中クレフ変更対応）。パートごとの小節データ（part.data）から解決する。
         // クリックハンドラなど後から呼ばれる処理でも、absI は forEach 反復ごとに固定された const のため
         // ここで解決した clefHere をそのまま安全に参照できる。
-        // score は partsScore[pi]（内部 state）を指すため、こちらから解決する（part.data は初期値のみ）
+        // score は partsScoreForRender[pi]（内部 state の描画用コピー）を指すため、こちらから解決する（part.data は初期値のみ）
         const clefHere=resolveMeasureClef(score, absI, part.clef);
 
         const data=absI<score.length?score[absI]:undefined;
@@ -3916,7 +3917,10 @@ export default function PianoSystemCanvas({
           isMultiVoiceMeasure, renderedVoiceEntries, vfNotes,
         } = cache;
         const stave=staveSets[pi][i];
-        const score=partsScore[pi]??[];
+        // 読み取りは Pass 1 と同じ描画用コピー（#244 段4a で統一）。partsScore との差は
+        // 記号オフセットの矢印キー下書き中、その1イベントの offset のみで、拍・音高・
+        // クレフを読むこの層では同値。下書き中に差が出る読みは「下書き値基準が正しい」（§2-4）。
+        const score=partsScoreForRender[pi]??[];
         // score の書き込みは「どのパートへ書くか」を引数で受ける（#244 段3c・Codex 1巡目指摘）。
         // クリックテーブルは resolveHitAttribution の解決結果（hitPi）でこの writer を選ぶので、
         // #316 で帰属が 'band' 以外になっても書き込み先だけが取り残されることはない。
@@ -4492,7 +4496,7 @@ export default function PianoSystemCanvas({
               toggleEndingAcrossParts(absI, tool.ending);
               return 'handled';
             case 'measureTempo': {
-              const currentBpm = partsScore[0]?.[absI]?.bpm;
+              const currentBpm = partsScoreForRender[0]?.[absI]?.bpm;
               setBpmEditState({
                 measureAbsoluteIndex: absI,
                 currentValue: currentBpm != null ? String(currentBpm) : '',
@@ -4501,7 +4505,7 @@ export default function PianoSystemCanvas({
               return 'handled';
             }
             case 'measureTimeSig': {
-              const currentTS = partsScore[0]?.[absI]?.timeSignature;
+              const currentTS = partsScoreForRender[0]?.[absI]?.timeSignature;
               setTimeSigEditState({
                 measureAbsoluteIndex: absI,
                 currentValue: currentTS ? `${currentTS[0]}/${currentTS[1]}` : '',
@@ -4510,8 +4514,8 @@ export default function PianoSystemCanvas({
               return 'handled';
             }
             case 'measureKeySig': {
-              // 調号は最上段（partsScore[0]）の小節データに保存する
-              const currentKS = partsScore[0]?.[absI]?.keySignature;
+              // 調号は最上段（partsScore[0]）の小節データに保存する（読み取りは描画用コピー）
+              const currentKS = partsScoreForRender[0]?.[absI]?.keySignature;
               setKeySigEditState({
                 measureAbsoluteIndex: absI,
                 currentValue: currentKS ?? '',
@@ -4521,7 +4525,7 @@ export default function PianoSystemCanvas({
             }
             case 'measureClef': {
               // クレフはクリックした段（パート）自身の小節データに保存する
-              const currentClef = partsScore[pi]?.[absI]?.clef;
+              const currentClef = partsScoreForRender[pi]?.[absI]?.clef;
               setClefEditState({
                 measureAbsoluteIndex: absI,
                 partIndex: pi,
@@ -4531,11 +4535,11 @@ export default function PianoSystemCanvas({
               return 'handled';
             }
             case 'measureRehearsal': {
-              // リハーサルマークも最上段（partsScore[0]）の小節データに保存する
-              const currentMark = partsScore[0]?.[absI]?.rehearsalMark;
+              // リハーサルマークも最上段（partsScore[0]）の小節データに保存する（読み取りは描画用コピー）
+              const currentMark = partsScoreForRender[0]?.[absI]?.rehearsalMark;
               setRehearsalEditState({
                 measureAbsoluteIndex: absI,
-                currentValue: currentMark ?? suggestNextRehearsalMark(partsScore[0] ?? []),
+                currentValue: currentMark ?? suggestNextRehearsalMark(partsScoreForRender[0] ?? []),
                 ...overlayAt(),
               });
               return 'handled';
@@ -6611,6 +6615,14 @@ export default function PianoSystemCanvas({
         }else{fi++;}
       }
     });
+    // cleanup（#244 段4a）: この effect が作った SVG を指す ref を破棄する。
+    // 次の実行では冒頭で SVG ごと作り直して両 ref を再代入するため、再実行パスの挙動は
+    // 変わらない（ドラッグ中の window ハンドラは ctx が null なら no-op）。
+    // 目的はアンマウント後に取り外された SVG ツリーを ref が握り続けないこと。
+    return () => {
+      arcDragContextRef.current = null;
+      tiePreviewPathRef.current = null;
+    };
   // measureWidthEvenness を deps に含め、スライダー操作で即座に再描画されるようにする
   // pageMarginSideMm: 値自体は使わないが、ResizeObserver の発火漏れ対策として
   // 呼び出し元（ScorePage）の余白変更を確実にこの effect へ伝える依存トリガー。
