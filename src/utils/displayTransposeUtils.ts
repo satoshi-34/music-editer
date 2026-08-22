@@ -1,4 +1,4 @@
-import type { MeasureData } from '../types/storage';
+import type { MeasureData, NoteEvent } from '../types/storage';
 import { transposeKeyBySemitones } from './noteKeyUtils';
 
 /**
@@ -16,28 +16,46 @@ export function transposeMeasuresForDisplay(
   if (semitones === 0) {
     return measures;
   }
-  return measures.map(measure => ({
-    ...measure,
-    // 古い保存データや import データでは events が配列でないことがある。
-    // ここで落とすと記譜音表示モードのとき編成譜全体が描けなくなるため、
-    // 壊れた小節はシフトせずそのまま下流（PianoSystemCanvas の安全化）へ渡す。
-    events: Array.isArray(measure.events)
-      ? measure.events.map(event => {
-        // keys が配列でない壊れた音符は、ここでシフトせず素通りさせる。
-        // 最終的な休符フォールバックは描画直前の sanitizeRenderEvent が担う。
-        if (event.isRest || !Array.isArray(event.keys)) {
-          return event;
-        }
-        const shiftedKeys = event.keys.map(key => transposeKeyBySemitones(key, semitones));
-        const shiftedArcs = event.arcs?.map(arc => ({
-          ...arc,
-          fromKey: transposeKeyBySemitones(arc.fromKey, semitones),
-          toKey: transposeKeyBySemitones(arc.toKey, semitones),
-        }));
-        return { ...event, keys: shiftedKeys, arcs: shiftedArcs };
-      })
-      : measure.events,
-  }));
+  const shiftEvent = (event: NoteEvent): NoteEvent => {
+    // keys が配列でない壊れた音符は、ここでシフトせず素通りさせる。
+    // 最終的な休符フォールバックは描画直前の sanitizeRenderEvent が担う。
+    if (event.isRest || !Array.isArray(event.keys)) {
+      return event;
+    }
+    const shiftedKeys = event.keys.map(key => transposeKeyBySemitones(key, semitones));
+    const shiftedArcs = event.arcs?.map(arc => ({
+      ...arc,
+      fromKey: transposeKeyBySemitones(arc.fromKey, semitones),
+      toKey: transposeKeyBySemitones(arc.toKey, semitones),
+    }));
+    return { ...event, keys: shiftedKeys, arcs: shiftedArcs };
+  };
+  return measures.map(measure => {
+    const next: MeasureData = {
+      ...measure,
+      // 古い保存データや import データでは events が配列でないことがある。
+      // ここで落とすと記譜音表示モードのとき編成譜全体が描けなくなるため、
+      // 壊れた小節はシフトせずそのまま下流（PianoSystemCanvas の安全化）へ渡す。
+      events: Array.isArray(measure.events)
+        ? measure.events.map(shiftEvent)
+        : measure.events,
+    };
+    // 表示⇄保存の対変換は voices にも同じく掛ける（#244 段5-1・Codex 1巡目 P1）。
+    // events だけシフトすると、(a) dual-write が表示用（記譜音）の events を
+    // voices[0] の鏡へ複製し、逆変換が events しか戻さないため鏡に記譜音が残る
+    // (b) 声部2の編集は voices[1] に記譜音のまま書かれ、実音へ戻らない（潜在バグ）。
+    // 「対を別々の場所に書かない」というこのファイル自身の原則どおり、
+    // 全声部へ同じ shiftEvent を両方向で適用して往復を対称にする。
+    if (measure.voices) {
+      next.voices = measure.voices.map(voice => ({
+        ...voice,
+        events: Array.isArray(voice.events)
+          ? voice.events.map(shiftEvent)
+          : voice.events,
+      }));
+    }
+    return next;
+  });
 }
 
 /** 小節データの変更を上位へ通知するハンドラ（PartConfig.onChange と同じ形） */

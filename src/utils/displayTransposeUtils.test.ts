@@ -78,4 +78,31 @@ describe('createDisplayTransposeBridge（記譜音表示の往復）', () => {
       expect(keyToMidi(saved[0].events[0].keys[0])).toBe(keyToMidi('c/4'));
     }
   });
+
+
+  it('voices（声部2と voices[0] の鏡）も events と同じく往復変換される（#244 段5-1・Codex P1）', () => {
+    const semitones = 2; // B♭管相当
+    const measures: MeasureData[] = [{
+      events: [{ dur: '4', isRest: false, keys: ['c/4'] }],
+      voices: [
+        { id: 'voice-1', events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
+        { id: 'voice-2', events: [{ dur: '4', isRest: false, keys: ['e/3'] }], stemDirection: 'down' },
+      ],
+    }];
+    const displayed = transposeMeasuresForDisplay(measures, semitones);
+    // 表示: 全声部が記譜音（+2半音）になる
+    expect(keyToMidi(displayed[0].voices![0].events[0].keys[0])).toBe(keyToMidi('c/4') + semitones);
+    expect(keyToMidi(displayed[0].voices![1].events[0].keys[0])).toBe(keyToMidi('e/3') + semitones);
+    // 保存: 逆変換で全声部が実音へ戻る（events だけ戻して voices に記譜音が残らない）
+    const roundTripped = transposeMeasuresForDisplay(displayed, -semitones);
+    expect(keyToMidi(roundTripped[0].events[0].keys[0])).toBe(keyToMidi('c/4'));
+    expect(keyToMidi(roundTripped[0].voices![0].events[0].keys[0])).toBe(keyToMidi('c/4'));
+    expect(keyToMidi(roundTripped[0].voices![1].events[0].keys[0])).toBe(keyToMidi('e/3'));
+  });
+
+  it('voices を持たない小節では voices キーを勝手に作らない', () => {
+    const measures: MeasureData[] = [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }];
+    const displayed = transposeMeasuresForDisplay(measures, 2);
+    expect(displayed[0].voices).toBeUndefined();
+  });
 });
