@@ -20,6 +20,7 @@
 - [フォルダ構成（抜粋）](#フォルダ構成抜粋)
 - [最小チェック](#最小チェック)（手動の回帰確認手順）
 
+**不具合を直したいときの入口は [docs/MAINTENANCE.md](MAINTENANCE.md)**（症状→見る場所の対応表・直し方の型・データ救出）。
 回帰チェックの短縮版は [docs/REGRESSION.md](REGRESSION.md)、編集・選択・休符補完の設計は [docs/editing-selection-and-rests.md](editing-selection-and-rests.md)、
 Safari 固有の座標・音声の調査メモは [docs/safari-coordinate-transform.md](safari-coordinate-transform.md) / [docs/audio-safari-notes.md](audio-safari-notes.md) にあります。
 
