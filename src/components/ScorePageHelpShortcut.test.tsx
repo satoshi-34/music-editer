@@ -41,6 +41,31 @@ describe('? キーでヘルプを開く（Issue #114）', () => {
     expect(screen.getByText('やりたいことから探す')).toBeTruthy();
   });
 
+  it('Shift 付き（Shift+/ で ? を入力するレイアウト）でも開き、Ctrl/Cmd/Alt 付きでは開かない', () => {
+    render(<ScorePage />);
+    // 多くの配列で ? は Shift+/ なので、shiftKey 付きの ? で開くことを固定する
+    fireEvent.keyDown(window, { key: '?', shiftKey: true });
+    expect(document.querySelector('.help-panel')).not.toBeNull();
+    // window への Escape はパネル内ハンドラへ届かないため、✕ ボタンで閉じる
+    fireEvent.click(screen.getByLabelText('ヘルプを閉じる'));
+    expect(document.querySelector('.help-panel')).toBeNull();
+    // 修飾キー付き（ブラウザ側ショートカットの可能性）は開かない
+    fireEvent.keyDown(window, { key: '?', ctrlKey: true });
+    fireEvent.keyDown(window, { key: '?', metaKey: true });
+    fireEvent.keyDown(window, { key: '?', altKey: true });
+    expect(document.querySelector('.help-panel')).toBeNull();
+  });
+
+  it('印刷プレビュー中でも ? でヘルプが開く（閲覧操作は妨げない）', () => {
+    render(<ScorePage />);
+    // レイアウトタブの印刷プレビュートグルを ON にする
+    fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
+    fireEvent.click(screen.getByRole('button', { name: /印刷プレビュー/ }));
+    expect(document.querySelector('.print-preview')).not.toBeNull();
+    fireEvent.keyDown(window, { key: '?' });
+    expect(document.querySelector('.help-panel')).not.toBeNull();
+  });
+
   it('テキスト入力中の ? はヘルプを開かない（文字入力を邪魔しない）', () => {
     render(<ScorePage />);
     const input = document.createElement('input');
