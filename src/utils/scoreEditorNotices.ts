@@ -353,6 +353,36 @@ export function describeLeadingRestFill(
 }
 
 /** 選択した小節範囲をまとめて空にしたときの文言 */
+/** 拍範囲スライスの削除通知（#333 段2）。拍は1始まりで表示する */
+export function describeClearedBeatRange(startMeasure: number, startBeat: number, endMeasure: number, endBeat: number): string {
+  const from = `${startMeasure + 1}小節${formatBeatLabel(startBeat)}`;
+  const to = `${endMeasure + 1}小節${formatBeatLabel(endBeat)}`;
+  return `${from}〜${to}の範囲を休符にしました${UNDO_HINT}`;
+}
+
+function formatBeatLabel(beat: number): string {
+  const rounded = Math.round(beat * 100) / 100;
+  return `${rounded + 1}拍目`.replace('.0拍目', '拍目');
+}
+
+/** 拍範囲スライスのコピー通知（#333 段2） */
+export function describeSliceCopied(totalBeats: number): string {
+  const rounded = Math.round(totalBeats * 100) / 100;
+  return `${rounded}拍ぶんの範囲をコピーしました（小節選択ツールで貼り先を選んで Cmd/Ctrl+V）`;
+}
+
+/** 拍範囲スライスの貼り付け不成立の通知（#318「行き止まりは喋る」） */
+export function describeSlicePasteUnavailable(reason: 'noSelection' | 'noFit' | 'boundary'): string {
+  switch (reason) {
+    case 'noSelection':
+      return '貼り先が選ばれていません。小節選択ツールで貼り付け先の位置を選んでください';
+    case 'noFit':
+      return '貼り先の小節に収まらないため貼り付けませんでした（小節の拍数を超えます）';
+    case 'boundary':
+      return '貼り先の音符を途中で分断してしまうため貼り付けませんでした（音符の切れ目に合う位置を選んでください）';
+  }
+}
+
 export function describeClearedMeasures(start: number, end: number): string {
   const count = end - start + 1;
   // 小節番号は 0 始まりの内部インデックスなので、画面表記の 1 始まりへ直して伝える

@@ -76,6 +76,8 @@ type Props = {
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
   // ドラッグ範囲選択（PianoSystemCanvas から呼ばれる）をそのまま親へ渡す
   onMeasureRangeSelect?: (startIndex: number, endIndex: number) => void;
+  /** 拍範囲スライス選択（#333 段2）。小節選択ドラッグの拍まで見た版（PianoSystemCanvas 参照） */
+  onBeatRangeSelect?: (sel: { startMeasure: number; startBeat: number; endMeasure: number; endBeat: number }) => void;
   /**
    * このコンポーネントが譜面の1ページ目を描いているときだけ true（Issue #60）。
    * 総譜のいちばん最初の段だけパート名をフル名（Violin I）にし、以降は略称（Vn. I）にする。
@@ -112,6 +114,7 @@ export default function QuartetStaff({
   selectedMeasures,
   onMeasureSelect,
   onMeasureRangeSelect,
+  onBeatRangeSelect,
   isFirstPage = false,
 }: Props) {
   return (
@@ -159,6 +162,7 @@ export default function QuartetStaff({
             selectedMeasures={selectedMeasures}
             onMeasureSelect={onMeasureSelect}
             onMeasureRangeSelect={onMeasureRangeSelect}
+            onBeatRangeSelect={onBeatRangeSelect}
           />
           </div>
         );

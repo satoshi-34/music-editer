@@ -83,6 +83,8 @@ type Props = {
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
   // ドラッグ範囲選択（PianoSystemCanvas から呼ばれる）をそのまま親へ渡す
   onMeasureRangeSelect?: (startIndex: number, endIndex: number) => void;
+  /** 拍範囲スライス選択（#333 段2）。小節選択ドラッグの拍まで見た版（PianoSystemCanvas 参照） */
+  onBeatRangeSelect?: (sel: { startMeasure: number; startBeat: number; endMeasure: number; endBeat: number }) => void;
   /**
    * このコンポーネントが譜面の1ページ目を描いているときだけ true（Issue #60）。
    * 浄書の慣習では、総譜の「いちばん最初の段」だけパート名をフル名（Flute）で書き、
@@ -125,6 +127,7 @@ export default function EnsembleStaff({
   selectedMeasures,
   onMeasureSelect,
   onMeasureRangeSelect,
+  onBeatRangeSelect,
   isFirstPage = false,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
@@ -254,6 +257,7 @@ export default function EnsembleStaff({
             selectedMeasures={selectedMeasures}
             onMeasureSelect={onMeasureSelect}
             onMeasureRangeSelect={onMeasureRangeSelect}
+            onBeatRangeSelect={onBeatRangeSelect}
           />
           </div>
         );
