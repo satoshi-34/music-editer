@@ -280,6 +280,48 @@ describe('PianoSystemCanvas 段またぎ記譜 段1a（Issue #309）', () => {
     expect(Math.max(...spansPerBeam)).toBeGreaterThan(20);
   });
 
+  it('回帰（#358）: 末尾のダミー休符（GhostNote）がある声部でも段またぎ描画が落ちない', () => {
+    // 月光の実データ（autosave）で描画ごと落ちた回帰。追加声部の前後のダミー休符は
+    // GhostNote（符幹なし）として描かれるため、generateCrossStaffBeams の
+    // 方向スナップショットが getStemDirection() で NoStem 例外を投げていた。
+    // 「声部2 = renderStaff 付き連符 + 末尾の2分休符（=Ghost化）」「声部1 = 全休符」が再現条件
+    const triplet = (keys: string[], id: string, extra: Partial<NoteEvent> = {}): NoteEvent => ({
+      dur: '8', isRest: false, keys, tuplet: { id, ...TRIPLET }, ...extra,
+    });
+    const right: MeasureData[] = [{
+      events: [{ dur: '1', isRest: true, keys: ['b/4'] }],
+      voices: [
+        { id: 'voice-1', events: [{ dur: '1', isRest: true, keys: ['b/4'] }] },
+        { id: 'voice-2', events: [
+          triplet(['g#/3'], 'ta', { renderStaff: 'below' }),
+          triplet(['c#/4'], 'ta', { renderStaff: 'below' }),
+          triplet(['e/4'], 'ta'),
+          triplet(['g#/3'], 'tb'),
+          triplet(['c#/4'], 'tb'),
+          triplet(['e/4'], 'tb'),
+          { dur: '2', isRest: true, keys: ['b/4'] },
+        ] },
+      ],
+    }];
+    const left: MeasureData[] = [{
+      events: [],
+      voices: [
+        { id: 'voice-1', events: [] },
+        { id: 'voice-2', events: [
+          { dur: '4', isRest: true, keys: ['b/2'] },
+          { dur: '4', isRest: false, keys: ['f#/2'] },
+        ], stemDirection: 'down' },
+      ],
+    }];
+    const { svg, unmount } = renderPiano([
+      { clef: 'treble', data: right },
+      { clef: 'bass', data: left },
+    ]);
+    // 描画が完走し、またぎ音符を含む譜面が実際に出ている（クラッシュすると SVG が空になる）
+    expect(svg.querySelectorAll('.vf-notehead').length).toBeGreaterThan(0);
+    unmount();
+  });
+
   it('受入1: renderStaff を使っていない譜面は、符頭の座標が実測値のまま変わらない', () => {
     const { svg } = renderMoonlightLike();
     const measured = noteGroups(svg).map((note) => [
