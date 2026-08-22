@@ -507,8 +507,9 @@ export default function ScorePage() {
       autoSaveTimerRef.current = null;
     }
   }, []);
-  // localStorage 自体は React の state ではないため、保存しても自動では再描画されない。
-  // 「保存後すぐ読込ボタンを押せるか」は画面状態として持ち、保存/読込の節目で更新する。
+  // localStorage 自体は React の state ではないため、読んでも自動では再描画されない。
+  // 「開く」メニューに「以前の手動保存を取り込む」を出すかどうか（旧スロットの有無）を
+  // 画面状態として持ち、取り込みの節目で更新する（#109 第4段）。
   const [storedDataAvailable, setStoredDataAvailable] = useState(() => hasStoredData());
   // 起動時のサイレント復元（自動保存データがあれば続きから編集できるようにする）が
   // 完了するまでは自動保存を始めない。ここが false のうちに自動保存が走ると、
@@ -1890,7 +1891,7 @@ export default function ScorePage() {
   }, [isScoreEditingLocked, pushHistory, markMeasureEdited]);
 
   // 現在の全 state から保存用データ（parts + metadata）を組み立てるヘルパー。
-  // handleSave / 自動保存 / ファイル書き出しで共通利用する。
+  // 自動保存 / ファイル書き出し / フィードバック payload で共通利用する。
   const buildScoreData = useCallback(() => {
     const metadata = { title, subtitle, lyricist, composer, arranger };
     const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'] as const;
@@ -5200,7 +5201,7 @@ export default function ScorePage() {
                 warningNotice={fileSaveWarning}
                 error={workError ?? error}
               />
-              {/* 作品一覧（Issue #181）。保存・読込の並びの直後に置き、
+              {/* 作品一覧（Issue #181）。新規作成の隣に置き、
                   「ブラウザに保存されている作品を選ぶ」入口だと分かるようにする */}
               <div className="work-list-panel-wrap">
                 <button

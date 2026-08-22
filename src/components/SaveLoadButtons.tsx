@@ -108,7 +108,7 @@ export default function SaveLoadButtons({
             // 右端固定のまま左へ伸びて画面外にはみ出す（Issue #278）
             maxWidth: 360,
             lineHeight: 1.5,
-            // 自動保存は裏で勝手に走るので薄く出す。手動保存・書出はユーザーが結果を待って
+            // 自動保存は裏で勝手に走るので薄く出す。書き出しはユーザーが結果を待って
             // 見ている表示なので、同じ枠のまま濃さだけ上げて読み落とされないようにする
             opacity: !exportStatus ? 0.75 : 1,
             pointerEvents: 'none',
