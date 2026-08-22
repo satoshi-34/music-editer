@@ -403,3 +403,7 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
   境界）にも同期+実体化を適用 (2) MusicXML 読込 parseMusicXml の小節組み立てにも実体化を
   適用（単声部は voices: undefined で生成されていた）。声部2なし往復テストの期待を
   「voices が付かない」→「voice-1 のみ＝多声化しない」へ更新（回帰防止の本旨は維持）
+- **Codex 2巡目（P2）への対応**: フィードバック JSON（クリップボード出力・「ファイルを開く」で
+  読込可能な楽譜 JSON）も書き出し境界だった。正規化を normalizeMeasuresForPersistence
+  （鏡同期+実体化）として共通関数化し、全境界（localStorage 保存/読込・ファイル書き出し/読込・
+  フィードバック JSON・カスタムサンプル保存/読込）をこの1関数へ寄せた

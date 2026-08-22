@@ -2,7 +2,7 @@ import { InstrumentType } from '../audio/SoundSource';
 import type { MeasureData, NoteEvent, ScoreMetadata, ScoreType, TimeSignature } from '../types/storage';
 import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/clefUtils';
 import type { KeySignature } from '../utils/noteKeyUtils';
-import { ensureMeasuresPrimaryVoiceMaterialized, syncMeasuresPrimaryVoiceFromEvents } from '../utils/voiceMeasureUtils';
+import { normalizeMeasuresForPersistence } from '../utils/voiceMeasureUtils';
 
 export interface DemoScore {
   metadata: ScoreMetadata;
@@ -125,8 +125,8 @@ export function saveCustomPianoDemoScore(score: DemoScore): boolean {
     scoreType: 'piano',
     recommendedInstrument: score.recommendedInstrument ?? InstrumentType.PIANO,
     // 書き出し境界でも同期+実体化する（#244 段5-4・fileStorage の書き出しと同じ理由）
-    rightHand: ensureMeasuresPrimaryVoiceMaterialized(syncMeasuresPrimaryVoiceFromEvents(score.rightHand)),
-    leftHand: ensureMeasuresPrimaryVoiceMaterialized(syncMeasuresPrimaryVoiceFromEvents(score.leftHand)),
+    rightHand: normalizeMeasuresForPersistence(score.rightHand),
+    leftHand: normalizeMeasuresForPersistence(score.leftHand),
   };
 
   try {
@@ -161,8 +161,8 @@ export function loadCustomPianoDemoScore(): DemoScore | null {
       // 読込境界の鏡同期（#244 段5-3）: 段5-1 以前に保存されたカスタムサンプルは
       // voices[0]（鏡）が古いことがある。read が鏡を優先するため、正本（events）から
       // 同期してから返す（localStorage 通常読込・ファイル読込と同じ安全網）
-      rightHand: ensureMeasuresPrimaryVoiceMaterialized(syncMeasuresPrimaryVoiceFromEvents(parsed.rightHand)),
-      leftHand: ensureMeasuresPrimaryVoiceMaterialized(syncMeasuresPrimaryVoiceFromEvents(parsed.leftHand)),
+      rightHand: normalizeMeasuresForPersistence(parsed.rightHand),
+      leftHand: normalizeMeasuresForPersistence(parsed.leftHand),
     };
   } catch (error) {
     console.error('[demoScores] カスタムピアノサンプルの読込に失敗しました:', error);

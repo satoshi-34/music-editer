@@ -140,6 +140,16 @@ export function ensureMeasuresPrimaryVoiceMaterialized(measures: MeasureData[]):
 }
 
 /**
+ * 楽譜 JSON の読み書き境界で使う正規化の共通形（#244 段5-4・Codex 2巡目の共通化提案）。
+ * 「鏡の同期（正本 events → voices[0]）」と「全小節への voices 実体化」を1回で行う。
+ * 対象境界: localStorage 保存/読込・ファイル書き出し/読込・フィードバック JSON・
+ * カスタムサンプル保存/読込・MusicXML 読込（読込側は組み立て時に実体化）。
+ */
+export function normalizeMeasuresForPersistence(measures: MeasureData[]): MeasureData[] {
+  return ensureMeasuresPrimaryVoiceMaterialized(syncMeasuresPrimaryVoiceFromEvents(measures));
+}
+
+/**
  * 指定した声部（voiceIndex）の events 配列を取得する。
  * voiceIndex 0 は primary voice なので measure.events を正本として返す。
  * voiceIndex 1 以降は measure.voices[voiceIndex] が無ければ空配列を返す
