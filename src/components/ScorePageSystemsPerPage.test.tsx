@@ -5,7 +5,8 @@
 // src/utils/measuredSystemHeight.test.ts で検証済み）。
 // 単旋律・ピアノの「段数/ページ」の初期表示（推奨値）は、Issue #49 で音符の大きさの
 // 工場出荷既定値が150%へ変わったことに伴い、1段の実測高さが増え、1ページに収まる
-// 段数の推奨値も従来（単旋律8段・ピアノ4段）より少なくなっている（単旋律5段・ピアノ3段）。
+// 段数の推奨値も従来（単旋律8段・ピアノ4段）より少なくなっている（単旋律5段。ピアノは #199 の
+// 段間隔既定変更と 2026-08-23 の固定既定化を経て現在は4段 — ScorePagePianoDefaultSystems.test.tsx 参照）。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import ScorePage from './ScorePage';

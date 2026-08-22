@@ -59,6 +59,21 @@ describe('ピアノ譜の「段数/ページ」初期値は4（物理上限内�
     expect(switchToPiano().value).toBe('4');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('物理上限が4未満の環境では上限値へクランプされ、あふれ警告は出ない', () => {
+    // 音符200%・段の間隔50pxを保存済みにすると、実測上限（maxSystemsPerPage）は3になる。
+    // 固定既定の4がそのまま使われると、初期状態からあふれ警告が出てしまう
+    localStorageMock.setItem('score-notation-size', '2');
+    localStorageMock.setItem('score-system-row-gap', '50');
+    render(<ScorePage />);
+    const input = switchToPiano();
+    expect(Number(input.value)).toBeLessThan(4);
+    expect(Number(input.value)).toBeGreaterThanOrEqual(1);
+    // 「⚠ あふれます」の警告が初期状態で出ていない
+    const alerts = Array.from(document.querySelectorAll('[role="alert"]'))
+      .filter((el) => (el.textContent ?? '').includes('あふれ'));
+    expect(alerts).toHaveLength(0);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('ユーザーが段数/ページを手動保存していれば、その値が既定より優先される', () => {
     localStorageMock.setItem('score-system-layout-by-score-type', JSON.stringify({ piano: { systemsPerPage: 3 } }));
     render(<ScorePage />);
