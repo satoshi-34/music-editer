@@ -61,7 +61,7 @@ export const SYSTEM_MAX_LABEL_WIDTH = 74;
 // 従来どおり全く同じ値（PRINT_SCORE_AREA_WIDTH_PX 相当）が返る。
 export const DEFAULT_PAGE_SIDE_MARGIN_MM = 14;
 
-// 「その他/楽譜設定」タブのレイアウト系スライダーが取りうる範囲。ScorePage.tsx と
+// 「レイアウト/楽譜設定」タブのレイアウト系スライダーが取りうる範囲。ScorePage.tsx と
 // settingsProfile.ts（初期値プリセット、issue #39）の両方から同じ値を参照する必要があるため、
 // スライダー実装側（元は ScorePage.tsx にローカル定義していた）からこちらへ集約し、
 // 値の食い違い（二重管理）が起きないようにしている。

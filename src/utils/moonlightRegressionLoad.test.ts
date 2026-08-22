@@ -27,7 +27,7 @@ function readFixtureText(): string {
   return readFileSync(FIXTURE_PATH, 'utf-8');
 }
 
-/** アプリの「その他 → ファイルを開く」と同じ経路（File → importScoreFromFile）で読み込む。 */
+/** アプリの「ファイル」タブ →「開く」→「ファイル」と同じ経路（File → importScoreFromFile）で読み込む。 */
 function loadViaImport(): Promise<SavedScoreData> {
   const file = new File([readFixtureText()], 'moonlight-bars1-9.score.json', {
     type: 'application/json',
