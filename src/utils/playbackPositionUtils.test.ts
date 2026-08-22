@@ -142,4 +142,3 @@ describe('calculateExpandedPlaybackDurationMs（展開済み列の残り時間�
     expect(calculateExpandedPlaybackDurationMs(expanded, 120, [4, 4])).toBe(6000);
   });
 });
-
