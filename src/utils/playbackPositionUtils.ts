@@ -76,11 +76,10 @@ export function buildPlaybackPositionTimeline(
       beatPosition += getEventDurationBeats(event);
     });
 
-    // 空小節は拍子の長さぶん進める。
-    // 中身がある小節は、複数声部も考慮した実際の小節長を使う。
-    elapsedBeats += visibleEvents.length === 0
-      ? getMeasureBeats(timeSignature)
-      : getMeasureDurationBeats(measure);
+    // 実音エンジンは各小節に measureBeats（グローバル拍子の長さ）を下限として渡されるため、
+    // 表示の前進も「全声部の実長と拍子長の大きい方」でそろえる（Codex 2巡目）。
+    // 未充足の小節を実長だけで進めると、ハイライトが実音より先へ走ってしまう
+    elapsedBeats += measureAdvanceBeats(measure, timeSignature);
   });
 
   return timeline;
@@ -92,6 +91,15 @@ export function buildPlaybackPositionTimeline(
  * （2周目のどこか、を選ぶ UI は持たない）。見つからない場合は、その小節以降で
  * 最初に現れる小節（すべて手前なら 0 = 先頭）へ倒す。
  */
+/**
+ * 1小節ぶんの前進拍数。実音エンジン（playParts）は measureBeats = グローバル拍子の長さを
+ * 下限に小節を進めるため、タイムライン・残り時間の両方をこの共通規則でそろえる:
+ * max(全声部の実長, 拍子の長さ)。空小節は拍子ぶん、あふれた小節は実長で進む。
+ */
+function measureAdvanceBeats(measure: MeasureData, timeSignature: TimeSignature): number {
+  return Math.max(getMeasureDurationBeats(measure), getMeasureBeats(timeSignature));
+}
+
 export function findPlaybackStartExpandedIndex(
   expandedMeasures: ExpandedPlaybackMeasure[],
   startMeasureIndex: number
@@ -108,10 +116,8 @@ export function findPlaybackStartExpandedIndex(
  * 展開済みの列を渡すと repeatStart/repeatEnd が再解釈されて二重に伸びる（Codex round1 P2）。
  * 途中再生の残り時間はこの関数で数える。
  *
- * 前進規則は buildPlaybackPositionTimeline と同じ向きにそろえる:
- * - 主声部が空の小節（全休符・声部2のみの小節）は拍子の長さと全声部の実長の大きい方
- *   （タイムラインは拍子ぶん進むので、停止タイマーがそれより先に切れないようにする）
- * - 主声部がある小節は全声部を考慮した実長
+ * 前進規則は buildPlaybackPositionTimeline と共通（measureAdvanceBeats =
+ * max(全声部の実長, 拍子の長さ)。実音エンジンの「拍子長を下限に進む」挙動に一致）。
  * 末尾の「全声部が空」の小節は再生対象がないため数えない（声部2だけの小節は演奏対象。Codex round1 P1）
  */
 export function calculateExpandedPlaybackDurationMs(
@@ -130,12 +136,7 @@ export function calculateExpandedPlaybackDurationMs(
   const msPerBeat = (60 / bpm) * 1000;
   let beats = 0;
   for (let i = 0; i <= lastUsedIndex; i++) {
-    const measure = measures[i];
-    const contentBeats = getMeasureDurationBeats(measure);
-    const primaryEmpty = getPrimaryVoiceEvents(measure).length === 0;
-    beats += primaryEmpty
-      ? Math.max(contentBeats, getMeasureBeats(measure.timeSignature ?? timeSignature))
-      : contentBeats;
+    beats += measureAdvanceBeats(measures[i], timeSignature);
   }
   return beats * msPerBeat;
 }

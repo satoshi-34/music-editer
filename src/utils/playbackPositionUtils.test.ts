@@ -24,7 +24,10 @@ describe('buildPlaybackPositionTimeline', () => {
     expect(timeline).toEqual([
       { atMs: 0, position: { measureIndex: 0, beatPosition: 0, noteIndex: 0 } },
       { atMs: 500, position: { measureIndex: 0, beatPosition: 1, noteIndex: 1 } },
-      { atMs: 1000, position: { measureIndex: 1, beatPosition: 0, noteIndex: 0 } },
+      // 1小節目は2拍ぶんしか書かれていないが、実音エンジンは measureBeats（4/4 = 4拍）を
+      // 下限に小節を進める（SimpleAudioEngine の max(実長, measureSeconds)）。
+      // 以前はここが 1000ms（実長のみ）で、ハイライトが実音より先へ走っていた（#108 2巡目で統一）
+      { atMs: 2000, position: { measureIndex: 1, beatPosition: 0, noteIndex: 0 } },
     ]);
   });
 

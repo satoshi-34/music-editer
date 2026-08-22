@@ -1338,7 +1338,9 @@ export default function ScorePage() {
           // （repeatStart/repeatEnd が再解釈されて二重に伸びる）。専用の
           // calculateExpandedPlaybackDurationMs（全声部で末尾判定・タイムラインと同じ前進規則）で数える。
           // 先頭からの再生は従来どおり生の小節列から数える（挙動を変えない）
-          const totalDuration = startExpandedIndex > 0
+          // 分岐は「選択起点かどうか」。1小節目の選択（startExpandedIndex === 0）でも
+          // 専用計算を通す（旧計算は声部2のみの譜面で 0 秒 → 即 stopped になる。Codex 2巡目 P1）
+          const totalDuration = startFromSelection
             ? Math.max(...partObjs.map(partObj => calculateExpandedPlaybackDurationMs(partObj.measures, tempoSettings.bpm, scoreTimeSignature) / 1000))
             : Math.max(...parts.map(part => calculateScoreDuration(part.measures, tempoSettings.bpm, scoreTimeSignature)));
           setPlaybackState('playing');
