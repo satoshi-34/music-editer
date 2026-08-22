@@ -135,22 +135,25 @@ describe('パート譜表示中の記号編集（Issue #173 第2段階）', () =
     // 有効なままだと調整オーバーレイから内部譜面を変更でき、上位の onChange が no-op のため
     // 「編集できたように見えて保存されない」状態になる（Codex round1 P1）
     const data: MeasureData[] = [{ events: [{ dur: '4', isRest: false, keys: ['c/4'], dynamics: [{ value: 'f' }] }] }];
-    const { container } = render(
-      <PartExtractionStaff
-        systems={1}
-        measuresPerSystem={1}
-        tool={{ duration: '4', isRest: false } as never}
-        scale={1}
-        partConfig={{ clef: 'treble', label: 'Pf.' } as never}
-        data={data}
-        onChange={undefined}
-        disabled={true}
-        transpositionSemitones={0}
-        symbolsClickable={true}
-      />
-    );
+    const props = {
+      systems: 1,
+      measuresPerSystem: 1,
+      tool: { duration: '4', isRest: false } as never,
+      scale: 1,
+      partConfig: { clef: 'treble', label: 'Pf.' } as never,
+      data,
+      onChange: undefined,
+      transpositionSemitones: 0,
+      symbolsClickable: true,
+    };
+    // 有効 → 無効の rerender で確認する（Codex round2 P3）: 最初から disabled で
+    // マウントするだけだと、再描画 deps から disabled が脱落しても通ってしまう。
+    // 再生開始（disabled だけが単独で変わる遷移）を模して切り替える
+    const { container, rerender } = render(<PartExtractionStaff {...props} disabled={false} />);
     const svg = container.querySelector('svg') as SVGSVGElement;
     mockSvgLayout(svg);
+    expect((container.querySelector('.symbol-hit-region') as SVGElement).style.pointerEvents).toBe('auto');
+    rerender(<PartExtractionStaff {...props} disabled={true} />);
     const region = container.querySelector('.symbol-hit-region') as SVGElement;
     expect(region).toBeTruthy();
     expect(region.style.pointerEvents).toBe('none');
