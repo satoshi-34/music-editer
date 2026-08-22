@@ -13,7 +13,8 @@ import {
   saveWorkAutosaveData,
   setLastOpenedWorkId,
 } from '../utils/storage';
-import type { MeasureData, PartData } from '../types/storage';
+import { ensembleSecondStaffPartId } from '../utils/instrumentationPartUtils';
+import type { InstrumentPartDefinition, MeasureData, PartData, SavedScoreData } from '../types/storage';
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -47,6 +48,17 @@ function sparseMeasure(): MeasureData {
   return { events: [{ dur: '1', isRest: false, keys: ['c/5'] }] };
 }
 
+/** 4分音符3つ（4拍目が空き）の小節。editMeasure が空き拍へ音符を足すための形 */
+function editableMeasure(): MeasureData {
+  return {
+    events: [
+      { dur: '4', isRest: false, keys: ['b/4'] },
+      { dur: '4', isRest: false, keys: ['b/4'] },
+      { dur: '4', isRest: false, keys: ['b/4'] },
+    ],
+  };
+}
+
 /** 16分音符16個の小節（幅が広い） */
 function denseMeasure(): MeasureData {
   return { events: Array.from({ length: 16 }, () => ({ dur: '16' as const, isRest: false, keys: ['g/4'] })) };
@@ -61,8 +73,9 @@ function seedQuartetWork() {
   const parts: PartData[] = (['violin-1', 'violin-2', 'viola', 'cello'] as const).map((partId, i) => ({
     partId,
     clef: clefs[i],
-    measures: Array.from({ length: MEASURE_COUNT }, () => (
-      partId === 'violin-1' ? sparseMeasure()
+    measures: Array.from({ length: MEASURE_COUNT }, (_, measureIndex) => (
+      // 5小節目（editMeasure の対象）は4拍目が空きの形にして、クリックで音符を足せるようにする
+      partId === 'violin-1' ? (measureIndex === 4 ? editableMeasure() : sparseMeasure())
         : partId === 'violin-2' ? denseMeasure()
         : { events: [] }
     )),
@@ -75,11 +88,93 @@ function seedQuartetWork() {
     'quartet'
   );
   data.systemMeasureOverrides = [{ startMeasure: 0, count: 1 }];
-  const created = createWork('段割りテスト');
+  seedWork(data, '段割りテスト');
+}
+
+/** 作品を1件仕込んで最後に開いた作品にする */
+function seedWork(data: SavedScoreData, title: string) {
+  const created = createWork(title);
   if (!created.success || !created.data) throw new Error('createWork failed');
   const saved = saveWorkAutosaveData(created.data.id, data);
   if (!saved.success) throw new Error('saveWorkAutosaveData failed');
   setLastOpenedWorkId(created.data.id);
+}
+
+function makeInstrumentPart(overrides: Partial<InstrumentPartDefinition> & { id: string }): InstrumentPartDefinition {
+  return {
+    name: overrides.id,
+    abbreviation: overrides.id,
+    family: 'woodwind',
+    clef: 'treble',
+    staffCount: 1,
+    transposition: 'C',
+    bracketGroup: 'woodwinds',
+    order: 0,
+    ...overrides,
+  };
+}
+
+/**
+ * 編成譜（フルート=密集・ハープ=大譜表でスカスカ）の作品を仕込む。
+ * ハープの2段目は ensembleSecondStaffPartId の別 PartData として保存される
+ */
+function seedEnsembleWork() {
+  const parts: PartData[] = [
+    { partId: 'flute', clef: 'treble', measures: Array.from({ length: MEASURE_COUNT }, (_, measureIndex) => (measureIndex === 4 ? editableMeasure() : denseMeasure())) },
+    { partId: 'harp', clef: 'treble', measures: Array.from({ length: MEASURE_COUNT }, sparseMeasure) },
+    { partId: ensembleSecondStaffPartId('harp'), clef: 'bass', measures: Array.from({ length: MEASURE_COUNT }, sparseMeasure) },
+  ];
+  const data = createSavedScoreData(
+    { title: '編成段割りテスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+    parts,
+    1,
+    8,
+    'ensemble',
+    'C',
+    [4, 4],
+    {
+      presetId: 'custom',
+      name: 'テスト編成',
+      parts: [
+        makeInstrumentPart({ id: 'flute', name: 'Flute', abbreviation: 'Fl.' }),
+        makeInstrumentPart({ id: 'harp', name: 'Harp', abbreviation: 'Hp.', staffCount: 2, bracketGroup: 'strings', order: 1 }),
+      ],
+    }
+  );
+  seedWork(data, '編成段割りテスト');
+}
+
+/** クリック座標計算のための svg レイアウトモック（jsdom は実レイアウトを持たない） */
+function mockSvgLayout(svg: SVGSVGElement) {
+  const height = parseFloat(svg.getAttribute('height') ?? '0') || 300;
+  svg.getBoundingClientRect = vi.fn(() => ({
+    left: 0, top: 0, right: 700, bottom: height, width: 700, height, x: 0, y: 0, toJSON: () => ({}),
+  })) as unknown as typeof svg.getBoundingClientRect;
+  Object.defineProperty(svg, 'width', { value: { baseVal: { value: 700 } }, configurable: true });
+  Object.defineProperty(svg, 'height', { value: { baseVal: { value: height } }, configurable: true });
+}
+
+/**
+ * 指定した絶対小節（editableMeasure で仕込んだ、4拍目が空きの小節）の空き拍へ
+ * 既定ツールの4分音符を1つ足して「最後に編集した小節」を作る（Issue #67 の
+ * 安定化が効き始める条件）。既存音符の上をクリックしても編集にならないため、
+ * PartScoreEditing.test.tsx と同じく「最後の音符のヒット領域は小節右端まで広がる」
+ * 性質を使って右端＝空き拍を叩き、音符が実際に増えたことまで検証する
+ */
+async function editMeasure(measureIndex: number) {
+  const hit = document.querySelector(`rect.vf-note-hit[data-measure="${measureIndex}"][data-note="2"]`) as SVGRectElement | null;
+  expect(hit).toBeTruthy();
+  const svg = hit!.closest('svg') as SVGSVGElement;
+  mockSvgLayout(svg);
+  const y = parseFloat(hit!.getAttribute('y')!) + parseFloat(hit!.getAttribute('height')!) / 2;
+  fireEvent.click(hit!, {
+    clientX: parseFloat(hit!.getAttribute('x')!) + parseFloat(hit!.getAttribute('width')!) - 3,
+    clientY: y,
+  });
+  // 4拍目に音符が増えた（= lastEditedMeasureIndex が立った）ことを確認する
+  await waitFor(() => {
+    expect(document.querySelector(`rect.vf-note-hit[data-measure="${measureIndex}"][data-note="3"]`)).toBeTruthy();
+  });
 }
 
 /** 最初の内容段（音符ヒット領域を持つ最初の svg）に含まれる小節の絶対インデックス集合 */
@@ -152,6 +247,65 @@ describe('パート譜表示中の段割り（Issue #174 段A）', () => {
     await selectPartView(null);
     await waitFor(() => {
       expect(firstSystemMeasures()).toEqual(new Set(['0']));
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('総譜で後方小節を編集した直後でも、パート譜は前ビューの段割りを引き継がない', async () => {
+    // Issue #67 の安定化は「最後に編集した小節より前の段」を前回の段割りに固定する。
+    // 表示切替でヒントを捨てないと、総譜の細かい改行（ここでは上書きの1小節/段）が
+    // パート譜の前方段に残ってしまう（Codex round1 P3 で指摘されたリセットの固定）
+    seedQuartetWork();
+    render(<ScorePage />);
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    await screen.findByLabelText('パート譜表示');
+
+    // 総譜のまま後方（5小節目）を編集して lastEditedMeasureIndex を立てる
+    await editMeasure(4);
+
+    // パート譜へ切り替えると、安定化ではなくパート単体の計画で最初の段が組まれる
+    await selectPartView('violin-1');
+    await waitFor(() => {
+      expect(firstSystemMeasures().size).toBeGreaterThan(1);
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('編成譜: 大譜表パートのパート譜も単体で組まれ、表示中パートの削除で総譜の計画へ戻る', async () => {
+    // 表示中パートを編成編集で削除すると partExtractionId は変わらないまま
+    // 選択だけが null（総譜復帰）になる。生の ID だけを監視していると
+    // 安定化ヒントが残り、削除直前のパート譜の段割りが総譜に漏れる（Codex round1 P2）
+    seedEnsembleWork();
+    render(<ScorePage />);
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    await screen.findByLabelText('パート譜表示');
+
+    // 総譜: 密集したフルートに合わせた改行（全6小節は1段に入らない）
+    const scoreViewSize = firstSystemMeasures().size;
+    expect(scoreViewSize).toBeLessThan(MEASURE_COUNT);
+
+    // 大譜表（ハープ）のパート譜: スカスカなので全小節が1段に入る（2段展開の計画が動く）
+    await selectPartView('harp');
+    await waitFor(() => {
+      expect(firstSystemMeasures().size).toBe(MEASURE_COUNT);
+    });
+
+    // 編集可能なフルートのパート譜へ移り、後方小節を編集して安定化の条件を作る
+    // （フルートは密集しているので、パート譜でも全小節は1段に入らない）
+    await selectPartView('flute');
+    await waitFor(() => {
+      expect(firstSystemMeasures().size).toBeLessThan(MEASURE_COUNT);
+    });
+    await editMeasure(4);
+
+    // 表示中のフルートを編成編集で削除する → 総譜（ハープのみ）へ復帰
+    fireEvent.click(screen.getByRole('tab', { name: '楽譜設定' }));
+    fireEvent.click(screen.getByRole('button', { name: 'パート編集' }));
+    const deleteButtons = await screen.findAllByRole('button', { name: '削除' });
+    fireEvent.click(deleteButtons[0]);
+
+    // ハープだけの総譜はスカスカ＝全小節が1段に入るのが正しい計画。
+    // 削除前のフルートのパート譜（細かい改行）が安定化で残っていると小さいままになる
+    await waitFor(() => {
+      expect(firstSystemMeasures().size).toBe(MEASURE_COUNT);
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

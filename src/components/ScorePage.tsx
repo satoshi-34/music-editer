@@ -2187,6 +2187,10 @@ export default function ScorePage() {
    * （片方だけ更新し忘れると「切り替えたのに前の譜面の設定が残る」不具合になるため）。
    */
   const applyLoadedScoreData = useCallback(async (restored: SavedScoreData) => {
+    // パート譜表示は保存されない一時ビュー（設計書どおり「読込後は必ず総譜」）。
+    // 同じパートIDを持つ別作品へ切り替えたときにパート譜表示が引き継がれてしまう
+    // 取りこぼしがあった（Codex round1 P3）
+    setPartExtractionId(null);
     setTitle(restored.metadata.title);
     setSubtitle(restored.metadata.subtitle);
     setLyricist(restored.metadata.lyricist);
@@ -3754,10 +3758,15 @@ export default function ScorePage() {
   // 総譜⇄パート譜では段割りの前提（対象パート・上書きの適用有無）が変わるため、
   // 直前ビューの段割りを Issue #67 の安定化で引き継ぐと古い改行位置が残ってしまう。
   // 切替直後は常に貪欲法だけで計画し直す。
+  // 監視するのは生の partExtractionId ではなく「実際に有効な表示モード」
+  // （partExtractionSelection の解決結果）。表示中パートを編成編集で削除すると
+  // ID は変わらないまま選択だけが null（＝総譜へ復帰）になるため、
+  // 生の ID だけを見ているとこの切替でヒントが残ってしまう（Codex round1 P2）
+  const activePartExtractionId = partExtractionSelection?.id ?? null;
   useEffect(() => {
     previousSystemRangesRef.current = [];
     setLastEditedMeasureIndex(null);
-  }, [partExtractionId]);
+  }, [activePartExtractionId]);
 
   // 段ごとの小節数の手動上書きを1段ぶんだけ増減する。
   // 「小節 range.start から始まる段は count 小節」という上書きを配列に upsert するだけで、
