@@ -417,6 +417,11 @@ export function describeSlicePasteUnavailable(reason: 'noSelection' | 'noFit' | 
   }
 }
 
+/** 途中再生（#108）: 選択小節から再生を始めたことを知らせる */
+export function describePlaybackFromMeasure(startMeasure: number): string {
+  return `${startMeasure + 1}小節目から再生します（先頭から聴くには Escape で小節の選択を外してください）`;
+}
+
 /** 拍範囲スライスの削除で消すものが無かったときの通知（#318。履歴も積まない） */
 export function describeSliceClearNoop(): string {
   return '選択範囲に音符が無いため、消すものがありませんでした';

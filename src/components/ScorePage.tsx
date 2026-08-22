@@ -148,10 +148,10 @@ import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId,
 import type { ClefType } from './clefUtils';
 import { extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
-import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { buildPlaybackPositionTimeline, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
@@ -159,6 +159,7 @@ import {
   SCORE_EDIT_NOTICE_EVENT,
   describeClearedBeatRange,
   describeClearedMeasures,
+  describePlaybackFromMeasure,
   describeSliceClearNoop,
   describeSliceCopied,
   describeSliceDeleteUnavailable,
@@ -338,53 +339,6 @@ function isRealSliceEdit(edit: VoiceSliceEdit | null): edit is VoiceSliceEdit {
   return edit != null && (edit.removeEndExclusive > edit.removeStart || edit.insertedCount > 0);
 }
 
-function calculateScoreDuration(scoreData: MeasureData[], bpm: number, timeSignature: TimeSignature): number {
-  // 再生時間の見積もりも、実際に鳴らす順番と同じでないとずれる。
-  // 例えば 2 小節ぶんを繰り返す譜面なのに元データの長さだけで測ると、
-  // UI が先に stopped へ戻ってしまうため、ここでも先に展開しておく。
-  const expandedScoreData = expandMeasuresForPlayback(scoreData).map(item => item.measure);
-
-  // 末尾の空小節は実際には再生対象がないため、終了タイマーには含めない。
-  // 途中の空小節は「全休符の小節」として長さを保持する。
-  let lastUsedMeasureIndex = -1;
-  for (let i = expandedScoreData.length - 1; i >= 0; i--) {
-    const measure = expandedScoreData[i];
-    if (getPrimaryVoiceEvents(measure).length > 0) {
-      lastUsedMeasureIndex = i;
-      break;
-    }
-  }
-
-  if (lastUsedMeasureIndex === -1) {
-    return 0;
-  }
-
-  let totalDuration = 0;
-  const globalEmptyMeasureBeats = getMeasureBeats(timeSignature);
-  // 小節単位のテンポ・拍子変更に対応するため「現在有効な値」を追跡する
-  let currentBpm = bpm;
-  let currentTimeSig = timeSignature;
-  for (let i = 0; i <= lastUsedMeasureIndex; i++) {
-    const measure = expandedScoreData[i];
-    // 小節に途中テンポが設定されていれば切り替える
-    if (measure?.bpm != null) {
-      currentBpm = measure.bpm;
-    }
-    // 小節に途中拍子が設定されていれば切り替える
-    if (measure?.timeSignature != null) {
-      currentTimeSig = measure.timeSignature;
-    }
-    const emptyBeats = getMeasureBeats(currentTimeSig ?? timeSignature) || globalEmptyMeasureBeats;
-    if (getPrimaryVoiceEvents(measure).length === 0) {
-      totalDuration += (60 / currentBpm) * emptyBeats;
-    } else {
-      // 複数声部小節では voice ごとの長さの最大値を使わないと、
-      // 上声と下声を同時に持つ小節の終わり時刻が短く見積もられてしまう。
-      totalDuration += getMeasureDurationBeats(measure) * (60 / currentBpm);
-    }
-  }
-  return totalDuration;
-}
 
 function getPreviewDurationSeconds(dur: NoteEvent['dur']): number {
   const quarterSeconds = 60 / 120;
@@ -1260,19 +1214,36 @@ export default function ScorePage() {
         if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: currentInstrument });
       }
 
+      // 途中再生（#108）: 小節を選択したまま再生すると、その小節から始める。
+      // リピートがある譜面では「その小節の最初の出現」から（findPlaybackStartExpandedIndex）。
+      // パート譜表示中は総譜で選んだ選択が画面に見えない（選択UIが無い）ため、
+      // 見えない選択で途中再生になって混乱しないよう対象外にする（Codex round1 P2）
+      const startFromSelection = !isPartExtractionActive && selectedMeasures != null;
+      const startMeasure = startFromSelection ? selectedMeasures.start : 0;
+
       await runWithPlaybackFallback(async (audioEngine) => {
         if (parts.length > 0) {
           const referenceMeasures = parts[0]?.measures ?? [];
+          const referenceExpanded = expandMeasuresForPlayback(referenceMeasures);
+          const startExpandedIndex = startMeasure > 0
+            ? findPlaybackStartExpandedIndex(referenceExpanded, startMeasure)
+            : 0;
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
             // ここで「展開後の再生順」と「各音符のベロシティ」を一緒に作って渡す。
             // 多段譜では各段が別々に repeat 情報を持つと再生順が分かれやすいので、
             // 先頭パートの反復順を基準に他パートも同じ順番へそろえる。
-            const expandedMeasures = partIndex === 0
-              ? expandMeasuresForPlayback(partSource.measures)
+            const expandedMeasuresFull = partIndex === 0
+              ? referenceExpanded
               : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures);
-            const dynamicVelocities = resolveDynamicVelocities(expandedMeasures.map(item => item.measure));
+            // 途中再生では、展開後の再生順を開始位置で切ってからエンジンへ渡す。
+            // 全パートとも先頭パートの反復順にそろえてあるため、同じ位置で切れば拍が一致する。
+            // 強弱（絶対強弱と cresc./dim. の傾斜）は**切る前の全列**で解決し、キーの
+            // 小節番号をオフセットして引く。切った後で解決し直すと、開始位置より前で
+            // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
+            const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
+            const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
 
             return {
               // 編成譜ではパート定義に再生楽器を持たせている。
@@ -1292,7 +1263,7 @@ export default function ScorePage() {
                   // 強弱記号から決まった基準ベロシティ（未設定なら既定 0.5）に
                   // アクセント等の倍率を掛けて、最後に 0..1 へ収める。
                   const baseVelocity = dynamicVelocities.get(
-                    buildDynamicEventKey(expandedMeasureIndex, eventIndex)
+                    buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, eventIndex)
                   ) ?? 0.5;
                   return {
                     ...event,
@@ -1315,7 +1286,14 @@ export default function ScorePage() {
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
           // ここでは最大値を採用して全体の終了時刻を決める。
-          const totalDuration = Math.max(...parts.map(part => calculateScoreDuration(part.measures, tempoSettings.bpm, scoreTimeSignature)));
+          // 終了タイマーは、実際にエンジンへ渡した展開済み小節列（partObjs.measures）から
+          // calculateExpandedPlaybackDurationMs で数える。選択の有無で分けない（Codex 3巡目）:
+          // 旧 calculateScoreDuration は未充足小節を実長だけで数える・末尾判定が主声部のみ、
+          // のため、拍子長を下限に進む実音・タイムラインより早く stopped になっていた
+          const totalDuration = Math.max(
+            ...partObjs.map(partObj =>
+              calculateExpandedPlaybackDurationMs(partObj.measures, tempoSettings.bpm, scoreTimeSignature) / 1000)
+          );
           setPlaybackState('playing');
           clearPlaybackTimer();
           remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
@@ -1327,8 +1305,16 @@ export default function ScorePage() {
             referenceMeasures,
             tempoSettings.bpm,
             scoreTimeSignature,
-            soundRuntimeSettings.swingEnabled
+            soundRuntimeSettings.swingEnabled,
+            startExpandedIndex
           );
+          // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
+          // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
+          // なので通知する（Codex round1 P3）
+          if (startFromSelection) {
+            setCurrentPosition({ measureIndex: startMeasure, beatPosition: 0, noteIndex: 0 });
+            notifyScoreEdit(describePlaybackFromMeasure(startMeasure));
+          }
           schedulePositionTimeline(0);
           playbackTimerRef.current = setTimeout(() => {
             setPlaybackState('stopped');
@@ -1374,7 +1360,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
