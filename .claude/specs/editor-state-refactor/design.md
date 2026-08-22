@@ -329,3 +329,12 @@ reducer の中（selection / overlay）しか掃除しておらず、**進行中
   連続編集・単声部小節の events-only 維持（vacuous 成立の確認）
 - テストのみの追加＝挙動ゼロ差。全11件が初回から緑で、段5-1 の dual-write と書き込み正規化が
   不変条件を実際に満たしていることの検証になった
+- **Codex 1巡目（P2×3: カバレッジの穴）への対応**: 指摘どおり「初回全緑」は検出力の証明に
+  ならなかったため、次の3経路を追加（計15件）:
+  - 自動休符補完 `fillPriorMeasureRests` を voices を持つ拍不足の小節で実際に発火
+    （このために同関数と buildRestEventsForBeats を PSC から measureRestFillUtils.ts へ物理移設）
+  - 別小節から張られた弧の掃除（purgeArcsToRemovedKey）と索引繰り上げ
+    （remapEventRefsAfterRemoval）を実際に発火させ、**非対象小節の鏡**の更新を検証
+  - 選択範囲の移調 `transposeMeasureRange`（events と voices を別々に再構築する経路）
+- **レッドチェック実施**: fillPriorMeasureRests を破壊的 push へ・remap を events 直接代入へ
+  一時的に戻し、それぞれ対応するテストが 1 件だけ落ちることを確認（検出力の実証）

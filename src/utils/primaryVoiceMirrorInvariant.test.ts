@@ -16,6 +16,8 @@ import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from './noteDel
 import { applyPitchChangeToMeasures } from './pitchShiftUtils';
 import { insertEmptyMeasureBefore, deleteMeasureAt } from './measureInsertDeleteUtils';
 import { transposeMeasuresForDisplay } from './displayTransposeUtils';
+import { fillPriorMeasureRests } from './measureRestFillUtils';
+import { transposeMeasureRange } from './transposeUtils';
 
 const note = (key: string, extra?: Partial<NoteEvent>): NoteEvent =>
   ({ dur: '4', isRest: false, keys: [key], ...extra });
@@ -135,6 +137,99 @@ describe('events ≡ voices[0] の不変条件（#244 段5-2）', () => {
     measures = applyPitchChangeToMeasures(measures, 0, 0, undefined, ['b/4'], 0);
     measures = [withVoiceEventsUpdated(measures[0], 1, (events) => [...events, note('b/2')])];
     expectPrimaryMirror(measures);
+  });
+
+  it('自動休符補完（fillPriorMeasureRests）が voices を持つ手前の小節を埋めても成り立つ', () => {
+    // 手前の小節: 2声部・拍不足（1拍だけ入っている）・鏡は同期済み
+    const shortPrimary = [note('c/4')];
+    const prior: MeasureData = {
+      events: shortPrimary,
+      voices: [
+        { id: 'voice-1', events: shortPrimary.map((ev) => ({ ...ev, keys: [...ev.keys] })) },
+        { id: 'voice-2', events: [note('e/3')], stemDirection: 'down' },
+      ],
+    };
+    const measures: MeasureData[] = [prior, twoVoiceMeasure()];
+    fillPriorMeasureRests(measures, 1, 4, 'treble');
+    // 4拍へ補完される（1拍 + 休符3拍ぶん）
+    expect(measures[0].events.length).toBeGreaterThan(1);
+    // 破壊的 push に戻ると voices[0] だけ 1 件のまま残り、ここで検出される
+    expectPrimaryMirror(measures);
+  });
+
+  it('別小節から張られた弧の掃除（purgeArcsToRemovedKey）でも非対象小節の鏡が更新される', () => {
+    // 小節1のイベントが、小節0のイベント0の 'e/4' を終点として指している
+    const withArc: NoteEvent = {
+      dur: '4', isRest: false, keys: ['g/4'],
+      arcs: [{ fromKey: 'g/4', toKey: 'e/4', toMeasureIndex: 0, toEventIndex: 0, kind: 'slur' }],
+    };
+    const m0Primary: NoteEvent[] = [{ dur: '4', isRest: false, keys: ['c/4', 'e/4'] }, note('d/4')];
+    const m1Primary = [withArc, note('a/4')];
+    const measures: MeasureData[] = [
+      {
+        events: m0Primary,
+        voices: [
+          { id: 'voice-1', events: m0Primary.map((ev) => ({ ...ev, keys: [...ev.keys] })) },
+          { id: 'voice-2', events: [note('e/3'), note('f/3')], stemDirection: 'down' },
+        ],
+      },
+      {
+        events: m1Primary,
+        voices: [
+          { id: 'voice-1', events: m1Primary.map((ev) => ({ ...ev, keys: [...ev.keys], arcs: ev.arcs?.map(a => ({ ...a })) })) },
+          { id: 'voice-2', events: [note('g/3'), note('a/3')], stemDirection: 'down' },
+        ],
+      },
+    ];
+    // 小節0のイベント0から 'e/4'（keyIndex 1）だけ削除 → 小節1の弧が行き先を失い掃除される
+    const next = deleteEventFromMeasures(measures, 0, 0, 1, 'treble');
+    expect(next).not.toBe(measures);
+    expect(next[1].events[0].arcs ?? []).toHaveLength(0);
+    // events だけ掃除して voices[0] に弧が残る実装へ戻ると、ここで検出される
+    expectPrimaryMirror(next);
+  });
+
+  it('イベント削除による弧の索引繰り上げ（remapEventRefsAfterRemoval）でも非対象小節の鏡が更新される', () => {
+    // 小節1のイベントが、小節0のイベント1を終点として指している
+    const withArc: NoteEvent = {
+      dur: '4', isRest: false, keys: ['g/4'],
+      arcs: [{ fromKey: 'g/4', toKey: 'd/4', toMeasureIndex: 0, toEventIndex: 1, kind: 'slur' }],
+    };
+    const m0Primary = [note('c/4'), note('d/4'), note('e/4')];
+    const m1Primary = [withArc];
+    const measures: MeasureData[] = [
+      {
+        events: m0Primary,
+        voices: [
+          { id: 'voice-1', events: m0Primary.map((ev) => ({ ...ev, keys: [...ev.keys] })) },
+          { id: 'voice-2', events: [note('e/3')], stemDirection: 'down' },
+        ],
+      },
+      {
+        events: m1Primary,
+        voices: [
+          { id: 'voice-1', events: m1Primary.map((ev) => ({ ...ev, keys: [...ev.keys], arcs: ev.arcs?.map(a => ({ ...a })) })) },
+          { id: 'voice-2', events: [note('g/3')], stemDirection: 'down' },
+        ],
+      },
+    ];
+    // 小節0のイベント0を削除 → 小節1の弧の toEventIndex が 1→0 へ繰り上がる
+    const next = deleteEventFromMeasures(measures, 0, 0, undefined, 'treble');
+    expect(next).not.toBe(measures);
+    expect(next[1].events[0].arcs?.[0].toEventIndex).toBe(0);
+    // events だけ繰り上げて voices[0] が古い索引のまま、の実装へ戻るとここで検出される
+    expectPrimaryMirror(next);
+  });
+
+  it('選択範囲の移調（transposeMeasureRange）後にも成り立つ', () => {
+    const measures = [twoVoiceMeasure(), twoVoiceMeasure()];
+    const result = transposeMeasureRange(measures, 0, 1, 2);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expectPrimaryMirror(result.measures);
+      // 実際に移調されている（c/4 → d/4 相当の +2半音）ことも確認する
+      expect(result.measures[0].events[0].keys).not.toEqual(['c/4']);
+    }
   });
 
   it('voices を持たない単声部小節は events-only のまま（不変条件の限定の確認）', () => {
