@@ -1,5 +1,7 @@
 // src/components/SaveLoadButtons.tsx
-// Save and Load buttons component with loading states and error display
+// 「ファイル」タブの基本操作コンポーネント。
+// 手動「保存」「読込」ボタンは #109 第4段で廃止され、現在の責務は
+// 新規作成ボタン・右下の保存/書き出しインジケータと各種トースト・サンプル操作（開発用）だけ
 
 import { useState } from 'react';
 
