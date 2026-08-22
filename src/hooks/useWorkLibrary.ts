@@ -160,8 +160,10 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
   }, [saveCurrentWork, setCurrentWorkId]);
 
   const startNewWork = useCallback((currentData: SavedScoreData | null): boolean => {
-    if (currentData) {
-      saveCurrentWork(currentData);
+    if (currentData && !saveCurrentWork(currentData)) {
+      // いまの内容を保存できないまま新しい作品へ切り替えると、その編集だけが失われる
+      // （Codex round1 P1）。workError は saveCurrentWork が設定済み
+      return false;
     }
 
     const created = createWork('');

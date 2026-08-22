@@ -1,11 +1,13 @@
 // src/integration/SaveLoadIntegration.test.tsx
-// 統合テスト: 完全な保存・読込ワークフローの検証
+// 統合テスト: 保存・読込ワークフローの検証
 // Feature: score-save-load, Task 11: 統合テストと最終検証
+// #109 第4段でフックの保存系 API は撤去された。保存（seed）とクリアは storage 層の
+// 関数を直接使い、読み取りだけをフック経由で検証する
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useScoreStorage } from '../hooks/useScoreStorage';
-import { saveScoreData, loadScoreData, clearStoredData, CURRENT_VERSION, STORAGE_KEYS } from '../utils/storage';
+import { createSavedScoreData, saveScoreData, loadScoreData, clearStoredData, CURRENT_VERSION, STORAGE_KEYS } from '../utils/storage';
 import type { SavedScoreData, ScoreMetadata, MeasureData, PartData, DurKey } from '../types/storage';
 
 // localStorage のモック
@@ -92,7 +94,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
       let saveSuccess = false;
       await act(async () => {
-        saveSuccess = await result.current.saveScore(metadata, parts, systems, measuresPerSystem);
+        saveSuccess = saveScoreData(createSavedScoreData(metadata, parts, systems, measuresPerSystem)).success;
       });
 
       expect(saveSuccess).toBe(true);
@@ -155,7 +157,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const parts1: PartData[] = [{ partId: 'melody', clef: 'treble', measures: measures1 }];
 
       await act(async () => {
-        await result.current.saveScore(metadata1, parts1, 1, 1);
+        saveScoreData(createSavedScoreData(metadata1, parts1, 1, 1));
       });
 
       let loaded1: SavedScoreData | null = null;
@@ -180,7 +182,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const parts2: PartData[] = [{ partId: 'melody', clef: 'treble', measures: measures2 }];
 
       await act(async () => {
-        await result.current.saveScore(metadata2, parts2, 2, 2);
+        saveScoreData(createSavedScoreData(metadata2, parts2, 2, 2));
       });
 
       let loaded2: SavedScoreData | null = null;
@@ -212,14 +214,14 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       await act(async () => {
-        await result.current.saveScore(metadata, parts, 1, 1);
+        saveScoreData(createSavedScoreData(metadata, parts, 1, 1));
       });
 
       expect(result.current.hasStoredData()).toBe(true);
 
       // データをクリア
       await act(async () => {
-        result.current.clearStoredData();
+        clearStoredData();
       });
 
       expect(result.current.hasStoredData()).toBe(false);
@@ -265,19 +267,17 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       ];
       const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
-      let saveSuccess = false;
-      await act(async () => {
-        saveSuccess = await result.current.saveScore(metadata, parts, 1, 1);
-      });
-
-      // 保存は失敗するはず
-      expect(saveSuccess).toBe(false);
-      // エラーメッセージが設定されているはず
-      expect(result.current.error).not.toBeNull();
-      expect(result.current.error).toContain('quota');
-
-      // 元のsetItemを復元
-      localStorageMock.setItem = originalSetItem;
+      try {
+        // 保存は storage 層の関数で直接検証する（フックの保存 API は #109 第4段で撤去）
+        const saveResult = saveScoreData(createSavedScoreData(metadata, parts, 1, 1));
+        expect(saveResult.success).toBe(false);
+        expect(saveResult.error?.type).toBe('quota_exceeded');
+        // 読み取り専用フックはこの失敗の影響を受けない
+        expect(result.current.error).toBeNull();
+      } finally {
+        // 途中で assertion が落ちても後続テストへ壊れた setItem を持ち越さない
+        localStorageMock.setItem = originalSetItem;
+      }
     });
 
     it('破損したデータを読み込もうとした場合にエラーを処理する', async () => {
@@ -345,17 +345,14 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       ];
       const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
-      let saveSuccess = false;
-      await act(async () => {
-        saveSuccess = await result.current.saveScore(metadata, parts, 1, 1);
-      });
-
-      // 保存は失敗するはず
-      expect(saveSuccess).toBe(false);
-      expect(result.current.error).not.toBeNull();
-
-      // 元のsetItemを復元
-      localStorageMock.setItem = originalSetItem;
+      try {
+        const saveResult = saveScoreData(createSavedScoreData(metadata, parts, 1, 1));
+        expect(saveResult.success).toBe(false);
+        expect(saveResult.error).toBeTruthy();
+        expect(result.current.error).toBeNull();
+      } finally {
+        localStorageMock.setItem = originalSetItem;
+      }
     });
   });
 
@@ -385,7 +382,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const startSave = performance.now();
       let saveSuccess = false;
       await act(async () => {
-        saveSuccess = await result.current.saveScore(metadata, parts, 6, 4);
+        saveSuccess = saveScoreData(createSavedScoreData(metadata, parts, 6, 4)).success;
       });
       const endSave = performance.now();
 
@@ -426,7 +423,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       await act(async () => {
-        await result.current.saveScore(metadata, parts, 1, 3);
+        saveScoreData(createSavedScoreData(metadata, parts, 1, 3));
       });
 
       let loadedData: SavedScoreData | null = null;
@@ -456,7 +453,7 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       await act(async () => {
-        await result.current.saveScore(metadata, parts, 1, 1);
+        saveScoreData(createSavedScoreData(metadata, parts, 1, 1));
       });
 
       let loadedData: SavedScoreData | null = null;
@@ -488,16 +485,14 @@ describe('統合テスト: 保存・読込ワークフロー', () => {
       const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
 
       // 初期状態
-      expect(result.current.isSaving).toBe(false);
       expect(result.current.isLoading).toBe(false);
 
       // 保存中の状態は非同期なので直接確認できないが、
       // 保存完了後はfalseに戻るはず
       await act(async () => {
-        await result.current.saveScore(metadata, parts, 1, 1);
+        saveScoreData(createSavedScoreData(metadata, parts, 1, 1));
       });
 
-      expect(result.current.isSaving).toBe(false);
 
       // 読込完了後もfalseに戻るはず
       await act(async () => {

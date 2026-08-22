@@ -1,391 +1,85 @@
 // src/hooks/useScoreStorage.test.ts
-// Property-based tests for useScoreStorage hook
-// Feature: score-save-load, Property 2: ストレージキー一貫性
+// 旧・手動保存スロットの読み取り（移行用）フックのテスト。
+// #109 第4段で保存系 API は撤去され、残る責務は loadScore / hasStoredData だけ。
+// スロットへの書き込み（seed）は storage 層の saveScoreData を直接使う
+// （保存の仕様そのものは utils/storage.test.ts が固定している）。
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import * as fc from 'fast-check';
 import { useScoreStorage } from './useScoreStorage';
-import { CURRENT_VERSION, STORAGE_KEYS } from '../utils/storage';
-import type {
-  ScoreMetadata,
-  MeasureData,
-  PartData,
-  NoteEvent,
-  DurKey
-} from '../types/storage';
+import { createSavedScoreData, saveScoreData, STORAGE_KEYS } from '../utils/storage';
+import type { ScoreMetadata, PartData } from '../types/storage';
 
-// Mock localStorage for testing
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
-
   return {
     getItem: (key: string) => store[key] || null,
-    setItem: (key: string, value: string) => {
-      store[key] = value.toString();
-    },
-    removeItem: (key: string) => {
-      delete store[key];
-    },
-    clear: () => {
-      store = {};
-    },
-    get length() {
-      return Object.keys(store).length;
-    },
-    key: (index: number) => {
-      const keys = Object.keys(store);
-      return keys[index] || null;
-    }
+    setItem: (key: string, value: string) => { store[key] = value.toString(); },
+    removeItem: (key: string) => { delete store[key]; },
+    clear: () => { store = {}; },
+    get length() { return Object.keys(store).length; },
+    key: (index: number) => Object.keys(store)[index] || null,
   };
 })();
+vi.stubGlobal('localStorage', localStorageMock);
 
-// Replace global localStorage with mock
-Object.defineProperty(window, 'localStorage', {
-  value: localStorageMock
-});
+const metadata: ScoreMetadata = { title: '移行テスト', subtitle: '', lyricist: '', composer: '', arranger: '' };
+const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }] }];
 
-// Fast-check arbitraries for generating test data
-const durKeyArbitrary = fc.constantFrom('1', '2', '4', '8', '16', '32', '64') as fc.Arbitrary<DurKey>;
-
-const noteEventArbitrary: fc.Arbitrary<NoteEvent> = fc.record({
-  dur: durKeyArbitrary,
-  isRest: fc.boolean(),
-  keys: fc.array(
-    fc.string({ minLength: 1, maxLength: 5 }).filter(s => s.trim().length > 0),
-    { minLength: 1, maxLength: 4 }
-  )
-});
-
-const measureDataArbitrary: fc.Arbitrary<MeasureData> = fc.record({
-  events: fc.array(noteEventArbitrary, { maxLength: 8 })
-});
-
-const scoreMetadataArbitrary: fc.Arbitrary<ScoreMetadata> = fc.record({
-  title: fc.string({ maxLength: 100 }),
-  subtitle: fc.string({ maxLength: 100 }),
-  lyricist: fc.string({ maxLength: 50 }),
-  composer: fc.string({ maxLength: 50 }),
-  arranger: fc.string({ maxLength: 50 })
-});
-
-describe('useScoreStorage Hook Tests', () => {
+describe('useScoreStorage（旧・手動保存スロットの移行用読み取り）', () => {
   beforeEach(() => {
     localStorageMock.clear();
   });
 
-  afterEach(() => {
-    localStorageMock.clear();
+  it('初期状態: エラーなし・読み取り中でなく、移行用の2関数だけを公開する', () => {
+    const { result } = renderHook(() => useScoreStorage());
+    expect(result.current.error).toBeNull();
+    expect(result.current.isLoading).toBe(false);
+    expect(typeof result.current.loadScore).toBe('function');
+    expect(typeof result.current.hasStoredData).toBe('function');
+    // 廃止した保存系 API は公開しない（#109 第4段）
+    expect('saveScore' in result.current).toBe(false);
+    expect('isSaving' in result.current).toBe(false);
+    expect('clearStoredData' in result.current).toBe(false);
+    expect('loadAutosave' in result.current).toBe(false);
   });
 
-  describe('Property 2: ストレージキー一貫性', () => {
-    /**
-     * Feature: score-save-load, Property 2: ストレージキー一貫性
-     * **Validates: Requirements 1.2, 4.4**
-     * 
-     * For any save operation, data should be stored in localStorage 
-     * using the consistent key "music-score-app-data"
-     */
-    it('should use consistent storage key for all save operations', { timeout: 30000 }, async () => {
-      await fc.assert(
-        fc.asyncProperty(
-          scoreMetadataArbitrary,
-          fc.array(measureDataArbitrary, { minLength: 1, maxLength: 12 }),
-          fc.integer({ min: 1, max: 6 }),
-          fc.integer({ min: 1, max: 4 }),
-          async (metadata, measures, systems, measuresPerSystem) => {
-            // Clear storage before each test
-            localStorageMock.clear();
-
-            const { result } = renderHook(() => useScoreStorage());
-
-            // Perform save operation
-            const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
-            let saveResult: boolean;
-            await act(async () => {
-              saveResult = await result.current.saveScore(metadata, parts, systems, measuresPerSystem);
-            });
-
-            // If save was successful, check that data was stored with consistent key
-            if (saveResult!) {
-              // Should have data stored in the primary key
-              const storedData = localStorageMock.getItem(STORAGE_KEYS.PRIMARY);
-              expect(storedData).not.toBeNull();
-              
-              // Should be valid JSON
-              expect(() => JSON.parse(storedData!)).not.toThrow();
-              
-              // Should also have backup data (if storage allows)
-              const backupData = localStorageMock.getItem(STORAGE_KEYS.BACKUP);
-              if (backupData) {
-                expect(() => JSON.parse(backupData)).not.toThrow();
-              }
-              
-              // Should have metadata stored
-              const metadataStored = localStorageMock.getItem(STORAGE_KEYS.METADATA);
-              if (metadataStored) {
-                expect(() => JSON.parse(metadataStored)).not.toThrow();
-              }
-            }
-          }
-        ),
-        { numRuns: 20 }
-      );
-    });
+  it('hasStoredData: 旧スロットにデータがあるときだけ true', () => {
+    const { result } = renderHook(() => useScoreStorage());
+    expect(result.current.hasStoredData()).toBe(false);
+    expect(saveScoreData(createSavedScoreData(metadata, parts, 1, 4)).success).toBe(true);
+    expect(result.current.hasStoredData()).toBe(true);
   });
 
-  describe('Property 3: 保存データ完全性', () => {
-    /**
-     * Feature: score-save-load, Property 3: 保存データ完全性
-     * **Validates: Requirements 1.3, 1.4**
-     * 
-     * For any score with measures, notes, and metadata, when saving, 
-     * all measure data, note events, and metadata fields should be preserved in the saved JSON
-     */
-    it('should preserve all measure data, note events, and metadata when saving', { timeout: 30000 }, async () => {
-      await fc.assert(
-        fc.asyncProperty(
-          scoreMetadataArbitrary,
-          fc.array(measureDataArbitrary, { minLength: 1, maxLength: 12 }),
-          fc.integer({ min: 1, max: 6 }),
-          fc.integer({ min: 1, max: 4 }),
-          async (metadata, measures, systems, measuresPerSystem) => {
-            // Clear storage before each test
-            localStorageMock.clear();
-
-            const { result } = renderHook(() => useScoreStorage());
-
-            // Perform save operation
-            const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
-            let saveResult: boolean;
-            await act(async () => {
-              saveResult = await result.current.saveScore(metadata, parts, systems, measuresPerSystem);
-            });
-
-            // If save was successful, verify all data is preserved
-            if (saveResult!) {
-              const storedData = localStorageMock.getItem(STORAGE_KEYS.PRIMARY);
-              expect(storedData).not.toBeNull();
-
-              const parsedData = JSON.parse(storedData!);
-
-              // Verify metadata is completely preserved
-              expect(parsedData.metadata.title).toBe(metadata.title);
-              expect(parsedData.metadata.subtitle).toBe(metadata.subtitle);
-              expect(parsedData.metadata.lyricist).toBe(metadata.lyricist);
-              expect(parsedData.metadata.composer).toBe(metadata.composer);
-              expect(parsedData.metadata.arranger).toBe(metadata.arranger);
-
-              // Verify systems and measures per system are preserved
-              expect(parsedData.systems).toBe(systems);
-              expect(parsedData.measuresPerSystem).toBe(measuresPerSystem);
-
-              // Verify all measures are preserved (v2 format: parts[0].measures)
-              expect(parsedData.parts[0].measures).toHaveLength(measures.length);
-
-              // Verify each measure and its events are preserved
-              for (let i = 0; i < measures.length; i++) {
-                const originalMeasure = measures[i];
-                const savedMeasure = parsedData.parts[0].measures[i];
-
-                expect(savedMeasure.events).toHaveLength(originalMeasure.events.length);
-
-                // Verify each note event is preserved
-                for (let j = 0; j < originalMeasure.events.length; j++) {
-                  const originalEvent = originalMeasure.events[j];
-                  const savedEvent = savedMeasure.events[j];
-
-                  expect(savedEvent.dur).toBe(originalEvent.dur);
-                  expect(savedEvent.isRest).toBe(originalEvent.isRest);
-                  expect(savedEvent.keys).toEqual(originalEvent.keys);
-                }
-              }
-
-              // Verify version and timestamp are added
-              expect(parsedData.version).toBe(CURRENT_VERSION);
-              expect(typeof parsedData.timestamp).toBe('number');
-              expect(parsedData.timestamp).toBeGreaterThan(0);
-            }
-          }
-        ),
-        { numRuns: 20 }
-      );
+  it('loadScore: 旧スロットのデータを読み戻せる（保存往復）', async () => {
+    expect(saveScoreData(createSavedScoreData(metadata, parts, 2, 3)).success).toBe(true);
+    const { result } = renderHook(() => useScoreStorage());
+    let loaded: Awaited<ReturnType<typeof result.current.loadScore>> = null;
+    await act(async () => {
+      loaded = await result.current.loadScore();
     });
+    expect(loaded?.metadata.title).toBe('移行テスト');
+    expect(loaded?.systems).toBe(2);
+    expect(loaded?.measuresPerSystem).toBe(3);
+    expect(result.current.error).toBeNull();
   });
 
-  describe('Property 5: 読込データ取得', () => {
-    /**
-     * Feature: score-save-load, Property 5: 読込データ取得
-     * **Validates: Requirements 2.1**
-     * 
-     * For any score data stored in localStorage, the load operation 
-     * should retrieve exactly the same JSON data that was saved
-     */
-    it('should retrieve exactly the same JSON data that was saved', { timeout: 30000 }, async () => {
-      await fc.assert(
-        fc.asyncProperty(
-          scoreMetadataArbitrary,
-          fc.array(measureDataArbitrary, { minLength: 1, maxLength: 12 }),
-          fc.integer({ min: 1, max: 6 }),
-          fc.integer({ min: 1, max: 4 }),
-          async (metadata, measures, systems, measuresPerSystem) => {
-            // Clear storage before each test
-            localStorageMock.clear();
-
-            const { result } = renderHook(() => useScoreStorage());
-
-            // First, save the data
-            const parts: PartData[] = [{ partId: 'melody', clef: 'treble', measures }];
-            let saveResult: boolean;
-            await act(async () => {
-              saveResult = await result.current.saveScore(metadata, parts, systems, measuresPerSystem);
-            });
-
-            // If save was successful, test load operation
-            if (saveResult!) {
-              // Get the raw stored data for comparison
-              const rawStoredData = localStorageMock.getItem(STORAGE_KEYS.PRIMARY);
-              expect(rawStoredData).not.toBeNull();
-
-              const expectedData = JSON.parse(rawStoredData!);
-
-              // Now load the data using the hook
-              let loadedData: any;
-              await act(async () => {
-                loadedData = await result.current.loadScore();
-              });
-
-              // Should have loaded data
-              expect(loadedData).not.toBeNull();
-
-              // The loaded data should be exactly the same as what was stored
-              expect(loadedData.version).toBe(expectedData.version);
-              expect(loadedData.timestamp).toBe(expectedData.timestamp);
-              expect(loadedData.systems).toBe(expectedData.systems);
-              expect(loadedData.measuresPerSystem).toBe(expectedData.measuresPerSystem);
-
-              // Metadata should match exactly
-              expect(loadedData.metadata).toEqual(expectedData.metadata);
-
-              // Parts should match exactly (v2 format)
-              expect(loadedData.parts).toEqual(expectedData.parts);
-
-              // The entire objects should be deeply equal
-              expect(loadedData).toEqual(expectedData);
-            }
-          }
-        ),
-        { numRuns: 20 }
-      );
+  it('loadScore: データが無ければ null（エラーにはしない）', async () => {
+    const { result } = renderHook(() => useScoreStorage());
+    let loaded: unknown = 'sentinel';
+    await act(async () => {
+      loaded = await result.current.loadScore();
     });
+    expect(loaded).toBeNull();
   });
 
-  describe('Hook functionality tests', () => {
-    it('should provide correct initial state', () => {
-      const { result } = renderHook(() => useScoreStorage());
-      
-      expect(result.current.error).toBeNull();
-      expect(result.current.isLoading).toBe(false);
-      expect(result.current.isSaving).toBe(false);
-      expect(typeof result.current.saveScore).toBe('function');
-      expect(typeof result.current.loadScore).toBe('function');
-      expect(typeof result.current.hasStoredData).toBe('function');
-      expect(typeof result.current.clearStoredData).toBe('function');
+  it('loadScore: 壊れたデータ（primary/backupとも不正）はエラーを表示して null', async () => {
+    localStorageMock.setItem(STORAGE_KEYS.SCORE_DATA ?? 'music-score-app-data', '{broken');
+    const { result } = renderHook(() => useScoreStorage());
+    let loaded: unknown = 'sentinel';
+    await act(async () => {
+      loaded = await result.current.loadScore();
     });
-
-    it('should handle empty storage correctly', () => {
-      localStorageMock.clear();
-      const { result } = renderHook(() => useScoreStorage());
-      
-      expect(result.current.hasStoredData()).toBe(false);
-    });
-
-    it('should detect stored data correctly', async () => {
-      localStorageMock.clear();
-      const { result } = renderHook(() => useScoreStorage());
-      
-      const testMetadata = {
-        title: 'Test',
-        subtitle: '',
-        lyricist: '',
-        composer: '',
-        arranger: ''
-      };
-      const testMeasures = [{ events: [{ dur: '4' as DurKey, isRest: false, keys: ['c/4'] }] }];
-      const testParts: PartData[] = [{ partId: 'melody', clef: 'treble', measures: testMeasures }];
-
-      // Initially no data
-      expect(result.current.hasStoredData()).toBe(false);
-
-      // Save some data
-      await act(async () => {
-        await result.current.saveScore(testMetadata, testParts, 1, 1);
-      });
-      
-      // Should now have data
-      expect(result.current.hasStoredData()).toBe(true);
-    });
-  });
-
-  describe('自動保存スロット（saveAutosave/loadAutosave）', () => {
-    const testMetadata = {
-      title: 'AutosaveTest',
-      subtitle: '',
-      lyricist: '',
-      composer: '',
-      arranger: ''
-    };
-    const testParts: PartData[] = [{
-      partId: 'melody',
-      clef: 'treble',
-      measures: [{ events: [{ dur: '4' as DurKey, isRest: false, keys: ['c/4'] }] }]
-    }];
-
-    it('saveAutosave は手動保存スロットに影響しない', async () => {
-      const { result } = renderHook(() => useScoreStorage());
-
-      await act(async () => {
-        await result.current.saveAutosave(testMetadata, testParts, 1, 1);
-      });
-
-      expect(result.current.hasAutosaveData()).toBe(true);
-      expect(result.current.hasStoredData()).toBe(false);
-      expect(localStorageMock.getItem(STORAGE_KEYS.PRIMARY)).toBeNull();
-      expect(localStorageMock.getItem(STORAGE_KEYS.AUTOSAVE)).not.toBeNull();
-    });
-
-    it('loadAutosave は saveAutosave で保存した内容を取得できる', async () => {
-      const { result } = renderHook(() => useScoreStorage());
-
-      await act(async () => {
-        await result.current.saveAutosave(testMetadata, testParts, 2, 3);
-      });
-
-      let loaded: any;
-      await act(async () => {
-        loaded = await result.current.loadAutosave();
-      });
-
-      expect(loaded).not.toBeNull();
-      expect(loaded.metadata.title).toBe('AutosaveTest');
-      expect(loaded.systems).toBe(2);
-      expect(loaded.measuresPerSystem).toBe(3);
-    });
-
-    it('clearAutosaveData は自動保存スロットだけを消し、手動保存スロットは残す', async () => {
-      const { result } = renderHook(() => useScoreStorage());
-
-      await act(async () => {
-        await result.current.saveScore(testMetadata, testParts, 1, 1);
-        await result.current.saveAutosave(testMetadata, testParts, 1, 1);
-      });
-
-      await act(async () => {
-        await result.current.clearAutosaveData();
-      });
-
-      expect(result.current.hasAutosaveData()).toBe(false);
-      expect(result.current.hasStoredData()).toBe(true);
-    });
+    expect(loaded).toBeNull();
   });
 });

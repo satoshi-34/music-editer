@@ -494,3 +494,20 @@ loadWorkAutosaveData(workId) → applyLoadedScoreData() で画面へ反映
   実運用（本人+弟の数作品）には十分な余裕がある
 - **判定: IndexedDB への移行は現時点で不要**。作品数が20を超える運用が見えた時点で
   別 Issue として切り出す（第3段の Quota 時縮小再試行が安全弁として機能する）
+
+### 第4段 Codex round1 対応（2026-08-22）
+
+- **取り込みの失敗系**（P1）: startNewWork は事前保存（saveCurrentWork）の失敗で false を
+  返すよう修正し、取り込みハンドラは false なら中止+通知（成功通知を出さない）。
+  失敗を無視すると currentWorkId が旧作品のまま自動保存が走り、取り込んだ内容が
+  現在の作品を上書きし得る。フックの失敗系テストを追加
+- **fileHandleRef の破棄**（P1）: 取り込み成功時に通常の新規作成と同じく保存先ファイル
+  ハンドルを破棄（残すと「書き出し→ファイル」がダイアログなしで旧作品の .score.json を上書き）
+- **useScoreStorage のスリム化**（P2）: 責務を移行用の loadScore / hasStoredData だけに絞り、
+  saveScore・自動保存スロット API・clearStoredData・isSaving を撤去。
+  フック/統合テストは storage 層の saveScoreData で seed する形へ書き直し
+  （保存の仕様は utils/storage.test.ts が正本）。副次効果で lint 基準値が 326→324 へ改善
+- **文書の取りこぼし**（P2）: README のできること・トラブル節、docs/DEVELOPMENT.md の
+  タブ一覧・現行UIを指す記述（パート譜表示/MusicXML/新規作成/PDF/印刷プレビュー/移調/回帰手順/
+  ストレージ節）を新配置へ更新
+- 取り込みの通知文言をビルダー（describeLegacyImportResult）へ集約（P3）

@@ -417,6 +417,18 @@ export function describeSlicePasteUnavailable(reason: 'noSelection' | 'noFit' | 
   }
 }
 
+/** 旧手動保存の取り込み（#109 第4段）の結果通知 */
+export function describeLegacyImportResult(result: 'done' | 'notFound' | 'blocked'): string {
+  switch (result) {
+    case 'done':
+      return '以前の手動保存を新しい作品として取り込みました（元のデータはそのまま残っています）';
+    case 'notFound':
+      return '取り込める以前の手動保存データが見つかりませんでした';
+    case 'blocked':
+      return 'いまの内容を保存できなかったため、取り込みを中止しました（ブラウザ保存の空き容量を確認してください）';
+  }
+}
+
 /** 復元履歴（#109 第3段）: 編集中の内容を保存できず復元を中止したことを知らせる（#318） */
 export function describeWorkHistoryRestoreBlocked(): string {
   return '編集中の内容を保存できなかったため、復元を中止しました（ブラウザ保存の空き容量を確認してください）';

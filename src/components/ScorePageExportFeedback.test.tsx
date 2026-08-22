@@ -137,12 +137,9 @@ describe('書出のフィードバック（Issue #278）', () => {
 });
 
 describe('書出インジケータの出し分け（SaveLoadButtons 単体）', () => {
+  // #109 第4段で保存/読込系の props は撤去された
   const baseProps: SaveLoadButtonsProps = {
-    onSave: vi.fn(),
-    onLoad: vi.fn(),
-    isSaving: false,
     isLoading: false,
-    hasStoredData: false,
   };
 
   afterEach(() => cleanup());

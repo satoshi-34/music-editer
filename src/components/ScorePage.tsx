@@ -160,6 +160,7 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
+  describeLegacyImportResult,
   describeWorkHistoryRestoreBlocked,
   describeWorkHistoryRestored,
   describeSliceClearNoop,
@@ -2443,13 +2444,23 @@ export default function ScorePage() {
     const loadedData = await loadScore();
     setStoredDataAvailable(hasStoredData());
     if (!loadedData) {
-      notifyScoreEdit('取り込める以前の手動保存データが見つかりませんでした');
+      notifyScoreEdit(describeLegacyImportResult('notFound'));
       return;
     }
     cancelPendingAutosave();
-    startNewWork(buildCurrentWorkDataRef.current());
+    // 新規作品の発行（いまの内容の保存を含む）に失敗したら取り込みを中止する。
+    // 失敗を無視して進めると、currentWorkId が旧作品のままの自動保存で
+    // 取り込んだ内容が現在の作品を上書きしてしまう（Codex round1 P1）
+    if (!startNewWork(buildCurrentWorkDataRef.current())) {
+      notifyScoreEdit(describeLegacyImportResult('blocked'));
+      return;
+    }
+    // 前の作品の保存先ファイルハンドルを引き継がない（通常の新規作成と同じ後始末）。
+    // 残っていると取り込み後の「書き出し→ファイル」がダイアログなしで旧作品の
+    // .score.json を上書きしてしまう（Codex round1 P1）
+    fileHandleRef.current = null;
     await applyLoadedScoreData(loadedData);
-    notifyScoreEdit('以前の手動保存を新しい作品として取り込みました（元のデータはそのまま残っています）');
+    notifyScoreEdit(describeLegacyImportResult('done'));
   };
 
   /** 「書き出し」メニュー（#109 第4段）。選んだ形式の既存ハンドラへ振り分けて select は空へ戻す */

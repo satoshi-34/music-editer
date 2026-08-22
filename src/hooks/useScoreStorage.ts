@@ -1,139 +1,39 @@
 // src/hooks/useScoreStorage.ts
-// Custom hook for score storage operations with loading states and error handling
+// 旧・手動保存スロット（廃止済みの「保存」「読込」ボタンの保存先）を読むためのフック。
+//
+// #109 第4段で手動保存は廃止され、ブラウザ内保存は作品単位の自動保存（useWorkLibrary）+
+// 復元履歴が引き継いだ。このフックに残る責務は**移行用の読み取りだけ**:
+// - loadScore: 旧スロットのデータを読む（「開く」メニューの「以前の手動保存を取り込む」）
+// - hasStoredData: 旧スロットにデータが残っているか（取り込み項目の表示条件）
+// 保存系 API（saveScore / 自動保存スロット / clearStoredData / isSaving）は
+// 呼び出し元が無くなったため撤去した（Codex round1 P2。死んだ公開APIを残さない）。
 
 import { useState, useCallback } from 'react';
-import {
-  saveScoreData,
-  loadScoreData,
-  hasStoredData,
-  clearStoredData,
-  saveAutosaveData,
-  loadAutosaveData,
-  hasAutosaveData,
-  clearAutosaveData,
-  createSavedScoreData
-} from '../utils/storage';
-import type {
-  SavedScoreData,
-  ScoreMetadata,
-  PartData,
-  ScoreType,
-  TimeSignature,
-  ScoreInstrumentation,
-  CustomSymbolDef,
-  SystemMeasureOverride,
-  SystemRowGapOverride
-} from '../types/storage';
-import type { KeySignature } from '../utils/noteKeyUtils';
+import { loadScoreData, hasStoredData } from '../utils/storage';
+import type { SavedScoreData } from '../types/storage';
 
 export interface UseScoreStorageReturn {
-  saveScore: (
-    metadata: ScoreMetadata,
-    parts: PartData[],
-    systems: number,
-    measuresPerSystem: number,
-    scoreType?: ScoreType,
-    keySignature?: KeySignature,
-    timeSignature?: TimeSignature,
-    instrumentation?: ScoreInstrumentation,
-    notationMode?: 'concert' | 'written',
-    customSymbolDefs?: CustomSymbolDef[],
-    systemMeasureOverrides?: SystemMeasureOverride[],
-    systemRowGapOverrides?: SystemRowGapOverride[],
-    titleFontId?: string
-  ) => Promise<boolean>;
+  /** 旧・手動保存スロットのデータを読む（移行用） */
   loadScore: () => Promise<SavedScoreData | null>;
+  /** 旧・手動保存スロットにデータが残っているか */
   hasStoredData: () => boolean;
-  clearStoredData: () => Promise<boolean>;
-  /**
-   * 自動保存専用スロットへ保存する。手動保存(saveScore)とは別の localStorage キーに
-   * 書き込むため、自動保存が走っても手動保存済みデータには影響しない。
-   */
-  saveAutosave: (
-    metadata: ScoreMetadata,
-    parts: PartData[],
-    systems: number,
-    measuresPerSystem: number,
-    scoreType?: ScoreType,
-    keySignature?: KeySignature,
-    timeSignature?: TimeSignature,
-    instrumentation?: ScoreInstrumentation,
-    notationMode?: 'concert' | 'written',
-    customSymbolDefs?: CustomSymbolDef[],
-    systemMeasureOverrides?: SystemMeasureOverride[],
-    systemRowGapOverrides?: SystemRowGapOverride[],
-    titleFontId?: string
-  ) => Promise<boolean>;
-  /** 自動保存スロットから読み込む（起動時のサイレント復元用） */
-  loadAutosave: () => Promise<SavedScoreData | null>;
-  hasAutosaveData: () => boolean;
-  /** 自動保存スロットだけを消す（新規作成時に使う。手動保存スロットには触れない） */
-  clearAutosaveData: () => Promise<boolean>;
+  /** 直近の読み取りエラー（成功時は null） */
   error: string | null;
+  /** 読み取り中か */
   isLoading: boolean;
-  isSaving: boolean;
 }
 
-/**
- * Custom hook for managing score storage operations
- * Provides save/load functionality with loading states and error handling
- */
 export function useScoreStorage(): UseScoreStorageReturn {
-  const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-
-  const clearError = useCallback(() => {
-    setError(null);
-  }, []);
-
-  const saveScore = useCallback(async (
-    metadata: ScoreMetadata,
-    parts: PartData[],
-    systems: number,
-    measuresPerSystem: number,
-    scoreType: ScoreType = 'single',
-    keySignature: KeySignature = 'C',
-    timeSignature: TimeSignature = [4, 4],
-    instrumentation?: ScoreInstrumentation,
-    notationMode?: 'concert' | 'written',
-    customSymbolDefs?: CustomSymbolDef[],
-    systemMeasureOverrides?: SystemMeasureOverride[],
-    systemRowGapOverrides?: SystemRowGapOverride[],
-    titleFontId?: string
-  ): Promise<boolean> => {
-    setIsSaving(true);
-    clearError();
-
-    try {
-      // Create the saved score data with current timestamp
-      const scoreData = createSavedScoreData(metadata, parts, systems, measuresPerSystem, scoreType, keySignature, timeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
-      
-      // Attempt to save
-      const result = saveScoreData(scoreData);
-      
-      if (!result.success) {
-        setError(result.error?.message || 'Failed to save score');
-        return false;
-      }
-
-      return true;
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred while saving';
-      setError(errorMessage);
-      return false;
-    } finally {
-      setIsSaving(false);
-    }
-  }, [clearError]);
+  const [error, setError] = useState<string | null>(null);
 
   const loadScore = useCallback(async (): Promise<SavedScoreData | null> => {
     setIsLoading(true);
-    clearError();
+    setError(null);
 
     try {
       const result = loadScoreData();
-      
+
       if (!result.success) {
         setError(result.error?.message || 'Failed to load score');
         return null;
@@ -147,7 +47,7 @@ export function useScoreStorage(): UseScoreStorageReturn {
     } finally {
       setIsLoading(false);
     }
-  }, [clearError]);
+  }, []);
 
   const checkHasStoredData = useCallback((): boolean => {
     try {
@@ -157,122 +57,10 @@ export function useScoreStorage(): UseScoreStorageReturn {
     }
   }, []);
 
-  const clearData = useCallback(async (): Promise<boolean> => {
-    clearError();
-
-    try {
-      const result = clearStoredData();
-      
-      if (!result.success) {
-        setError(result.error?.message || 'Failed to clear stored data');
-        return false;
-      }
-
-      return true;
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred while clearing data';
-      setError(errorMessage);
-      return false;
-    }
-  }, [clearError]);
-
-  const saveAutosave = useCallback(async (
-    metadata: ScoreMetadata,
-    parts: PartData[],
-    systems: number,
-    measuresPerSystem: number,
-    scoreType: ScoreType = 'single',
-    keySignature: KeySignature = 'C',
-    timeSignature: TimeSignature = [4, 4],
-    instrumentation?: ScoreInstrumentation,
-    notationMode?: 'concert' | 'written',
-    customSymbolDefs?: CustomSymbolDef[],
-    systemMeasureOverrides?: SystemMeasureOverride[],
-    systemRowGapOverrides?: SystemRowGapOverride[],
-    titleFontId?: string
-  ): Promise<boolean> => {
-    setIsSaving(true);
-    clearError();
-
-    try {
-      const scoreData = createSavedScoreData(metadata, parts, systems, measuresPerSystem, scoreType, keySignature, timeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
-      const result = saveAutosaveData(scoreData);
-
-      if (!result.success) {
-        setError(result.error?.message || 'Failed to autosave score');
-        return false;
-      }
-
-      return true;
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred while autosaving';
-      setError(errorMessage);
-      return false;
-    } finally {
-      setIsSaving(false);
-    }
-  }, [clearError]);
-
-  const loadAutosave = useCallback(async (): Promise<SavedScoreData | null> => {
-    setIsLoading(true);
-    clearError();
-
-    try {
-      const result = loadAutosaveData();
-
-      if (!result.success) {
-        setError(result.error?.message || 'Failed to load autosaved score');
-        return null;
-      }
-
-      return result.data || null;
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred while loading autosaved score';
-      setError(errorMessage);
-      return null;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [clearError]);
-
-  const checkHasAutosaveData = useCallback((): boolean => {
-    try {
-      return hasAutosaveData();
-    } catch {
-      return false;
-    }
-  }, []);
-
-  const clearAutosave = useCallback(async (): Promise<boolean> => {
-    clearError();
-
-    try {
-      const result = clearAutosaveData();
-
-      if (!result.success) {
-        setError(result.error?.message || 'Failed to clear autosaved data');
-        return false;
-      }
-
-      return true;
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred while clearing autosaved data';
-      setError(errorMessage);
-      return false;
-    }
-  }, [clearError]);
-
   return {
-    saveScore,
     loadScore,
     hasStoredData: checkHasStoredData,
-    clearStoredData: clearData,
-    saveAutosave,
-    loadAutosave,
-    hasAutosaveData: checkHasAutosaveData,
-    clearAutosaveData: clearAutosave,
     error,
     isLoading,
-    isSaving
   };
 }
