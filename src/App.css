@@ -1454,7 +1454,9 @@ button.ghost.active:hover:not(:disabled) {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, .18);
-  z-index: 999;
+  /* 既存のポップアップ（リセットメニュー・作品一覧・移調パネル等 = 1001）より上に置く。
+     低いと、ポップアップを開いたままヘルプを開いたときに裏で操作できてしまう（Codex round3） */
+  z-index: 1200;
 }
 .help-panel {
   position: fixed;
@@ -1469,7 +1471,7 @@ button.ghost.active:hover:not(:disabled) {
   border: 1px solid #ccc;
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0,0,0,.25);
-  z-index: 1000;
+  z-index: 1201;
 }
 .help-panel-head {
   display: flex;
