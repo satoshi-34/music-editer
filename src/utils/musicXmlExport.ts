@@ -323,28 +323,38 @@ function measureToXml(
     }
   }
 
-  // 声部2（ピアノ譜の下声など）: 入力されている小節だけ <backup> で時間を巻き戻してから出力する。
+  // 追加声部（voices[1] 以降）: 入力されている声部だけ <backup> で小節頭へ巻き戻してから出力する。
   // <backup> は「今の書き出し位置を duration ぶん巻き戻す」指示なので、これ以降に並べた
-  // 音符・direction はすべて声部2の側に属する（読込側も <backup> を境に声部を分けている）。
+  // 音符・direction はすべてその声部の側に属する（読込側も <backup> を境に声部を分けている）。
+  // #244 段5-5: 旧実装は voices[1]（声部2）の明示参照だった。§2-5 完了条件に従い
+  // 全声部ループへ一般化（2声のときの出力は従来と同一。3声以降も「壊れず全声部が出る」）。
+  // 松葉の位置マップ（hairpinsVoice2）は現行 UI が2声までなので声部2にだけ適用する。
   const voicesForXml = getMeasureVoices(measure);
-  const voice2Events = voicesForXml.length > 1 ? voicesForXml[1].events : [];
-  if (voice2Events.length > 0) {
-    const voice1Ticks = events.reduce((sum, ev) => sum + eventDurationTicks(ev), 0);
-    lines.push(`<backup><duration>${voice1Ticks}</duration></backup>`);
-    voice2Events.forEach((ev, i) => {
+  let prevWrittenVoiceTicks = events.reduce((sum, ev) => sum + eventDurationTicks(ev), 0);
+  voicesForXml.slice(1).forEach((voice, extraIndex) => {
+    const voiceEvents = voice.events;
+    if (voiceEvents.length === 0) return;
+    const voiceNumber = extraIndex + 2;
+    lines.push(`<backup><duration>${prevWrittenVoiceTicks}</duration></backup>`);
+    voiceEvents.forEach((ev, i) => {
       // 声部2の松葉（ヘアピン）も声部1と同じ並び（開始音符の直前・終了音符の直後）で出す。
       // 位置マップは声部2ぶんを別に受け取っているので、声部1の松葉と混ざることはない。
       const hpKey = `${options.measureIndex ?? 0}-${i}`;
-      options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
-        lines.push(wedgeDirectionXml(wedgeType, options.staff));
-      });
-      lines.push(noteToXml(ev, 2, options.staff));
-      const stopCount = options.hairpinsVoice2?.stops.get(hpKey) ?? 0;
-      for (let k = 0; k < stopCount; k++) {
-        lines.push(wedgeDirectionXml('stop', options.staff));
+      if (voiceNumber === 2) {
+        options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
+          lines.push(wedgeDirectionXml(wedgeType, options.staff));
+        });
+      }
+      lines.push(noteToXml(ev, voiceNumber, options.staff));
+      if (voiceNumber === 2) {
+        const stopCount = options.hairpinsVoice2?.stops.get(hpKey) ?? 0;
+        for (let k = 0; k < stopCount; k++) {
+          lines.push(wedgeDirectionXml('stop', options.staff));
+        }
       }
     });
-  }
+    prevWrittenVoiceTicks = voiceEvents.reduce((sum, ev) => sum + eventDurationTicks(ev), 0);
+  });
 
   // リピート終了
   if (measure.repeatEnd) {
