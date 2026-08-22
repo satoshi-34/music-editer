@@ -5774,6 +5774,8 @@ export default function ScorePage() {
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       customSymbolDefs={customSymbolDefs}
+                      symbolsClickable={activeToolbarTab === 'symbols'}
+                      isPrintPreview={isPrintPreview}
                     />
                   ) : scoreType === 'ensemble' ? (
                     <EnsembleStaff
