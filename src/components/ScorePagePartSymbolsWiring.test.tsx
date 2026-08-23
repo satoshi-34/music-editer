@@ -116,6 +116,53 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('オーバーレイは .print-page（overflow:hidden）の内側に置かれる（#392 配線）', async () => {
+    // 実 DOM の祖先関係（オーバーレイ ⊂ 譜面コンテナ ⊂ .print-page）でのみ意味を持つ検証。
+    // jsdom は実レイアウトを持たないため、.print-page とコンテナの矩形だけモックして
+    // 「ページ左端より左には置かない」ことを固定する
+    seedQuartetWorkWithDynamics();
+    render(<ScorePage />);
+    fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
+    await waitFor(() => {
+      const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
+      expect(region).toBeTruthy();
+      expect(region!.style.pointerEvents).toBe('auto');
+    });
+    const region = document.querySelector('.symbol-hit-region') as SVGRectElement;
+
+    // 実環境と同じ関係を注入する: ページは画面左端より右（x=200〜）にあり、
+    // 記号はページ左端のすぐ内側（x=205 付近）にある。オーバーレイ幅（実測不能時の
+    // 代替値200）を記号中央から振ると左へ大きくはみ出し、交差処理が無ければ
+    // ビューポート左端（x=0 → コンテナ座標 -210）まで許してしまう
+    const page = region.closest('.print-page') as HTMLElement;
+    expect(page).toBeTruthy();
+    page.getBoundingClientRect = () => ({
+      left: 200, top: 0, right: 900, bottom: 800, width: 700, height: 800, x: 200, y: 0, toJSON: () => ({}),
+    }) as DOMRect;
+    // オーバーレイの offsetParent になる譜面コンテナ（PianoSystemCanvas の
+    // position:relative な最外 div）。svg の親は overflow:visible の内側 div なので、
+    // その1つ上を掴む
+    const canvasContainer = region.closest('svg')!.parentElement!.parentElement as HTMLElement;
+    canvasContainer.getBoundingClientRect = () => ({
+      left: 200, top: 10, right: 890, bottom: 790, width: 690, height: 780, x: 200, y: 10, toJSON: () => ({}),
+    }) as DOMRect;
+    Object.defineProperty(canvasContainer, 'offsetWidth', { value: 690, configurable: true });
+    // 記号の実描画範囲（anchor）もページ左端のすぐ内側に見えるようモックする
+    region.getBoundingClientRect = () => ({
+      left: 205, top: 300, right: 225, bottom: 312, width: 20, height: 12, x: 205, y: 300, toJSON: () => ({}),
+    }) as DOMRect;
+
+    fireEvent.click(region, { clientX: 215, clientY: 306 });
+    await waitFor(() => {
+      expect(document.querySelector('.symbol-adjust-overlay')).toBeTruthy();
+    });
+    const overlay = document.querySelector('.symbol-adjust-overlay') as HTMLElement;
+    // コンテナ座標でのページ左端 = 200 - 200 = 0。これより左には置かない
+    // （置くと .print-page の overflow:hidden に切り取られて入力欄が見えなくなる）。
+    // 交差処理が無いと、ビューポート左端まで許して -100 付近になる
+    expect(parseFloat(overlay.style.left)).toBeGreaterThanOrEqual(0);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('演奏記号タブで記号をクリック→矢印キーで、オーバーレイが半透明になる（#385 配線）', async () => {
     // PianoSystemCanvas 直マウントのテストと違い、ScorePage からタブ選択→記号クリック→
     // 矢印入力の実経路で .symbol-adjust-overlay-translucent が付くことを固定する

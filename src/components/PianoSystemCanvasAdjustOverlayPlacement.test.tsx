@@ -250,6 +250,46 @@ describe('計測できない場合の暫定位置（Issue #392 防御）', () =>
     expect(parseFloat(overlay.style.top)).toBeGreaterThanOrEqual(8);
   });
 
+  it('overflow:hidden の祖先（A4ページ）に切り取られない位置へ置く（#392 の真因）', () => {
+    // オーバーレイは position:absolute で譜面コンテナに属するため、.print-page の
+    // overflow:hidden に視覚的に切られる。ビューポート内に収めるだけでは
+    // 「画面内だがページの外」に置かれ、譜面左端の記号で左側が見切れていた
+    const page = document.createElement('div');
+    page.className = 'print-page';
+    page.style.overflow = 'hidden';
+    // ページは画面左端より右（x=200〜）にある想定
+    page.getBoundingClientRect = () => ({
+      left: 200, top: 0, right: 900, bottom: 800, width: 700, height: 800, x: 200, y: 0, toJSON: () => ({}),
+    }) as DOMRect;
+    const host = document.createElement('div');
+    // コンテナ（オーバーレイの offsetParent）はページ内の x=210 から始まる
+    host.getBoundingClientRect = () => ({
+      left: 210, top: 10, right: 890, bottom: 790, width: 680, height: 780, x: 210, y: 10, toJSON: () => ({}),
+    }) as DOMRect;
+    Object.defineProperty(host, 'offsetWidth', { value: 680, configurable: true });
+    page.appendChild(host);
+    document.body.appendChild(page);
+    try {
+      // 記号はコンテナ左端付近（＝ページ左端付近）にある
+      const { container } = render(
+        <SymbolAdjustOverlay
+          anchor={{ left: 5, top: 300, width: 20, height: 10 }}
+          containerRef={{ current: host }}
+          minWidth={100}
+        >
+          <span>x</span>
+        </SymbolAdjustOverlay>
+      );
+      const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
+      expect(overlay.dataset.placed).toBe('true');
+      // コンテナ座標での左端 = ページ左端(200) - コンテナ左端(210) = -10。
+      // これより左には置かない（置くと overflow:hidden に切られる）
+      expect(parseFloat(overlay.style.left)).toBeGreaterThanOrEqual(-10);
+    } finally {
+      page.remove();
+    }
+  });
+
   it('あとから ref が揃うと、リトライで確定位置（data-placed=true）へ到達する', async () => {
     // 計測が空振りした場合の rAF リトライ経路（最大10回）の固定
     const containerRef: { current: HTMLDivElement | null } = { current: null };
