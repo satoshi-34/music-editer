@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, fireEvent, act } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
+import SymbolAdjustOverlay from './SymbolAdjustOverlay';
 import type { CustomSymbolDef, MeasureData } from '../types/storage';
 import { SYMBOL_OVERLAY_GAP, SYMBOL_OVERLAY_FALLBACK_HEIGHT } from '../utils/symbolOverlayPlacementUtils';
 
@@ -226,5 +227,26 @@ describe('記号調整オーバーレイの表示位置（Issue #230）', () => 
     const symbol = symbolRect(container);
     expect(parseFloat(overlay.style.top)).toBe(symbol.top - SYMBOL_OVERLAY_GAP - SYMBOL_OVERLAY_FALLBACK_HEIGHT);
     expect(overlapsSymbol(overlay, symbol)).toBe(false);
+  });
+});
+
+describe('計測できない場合の暫定位置（Issue #392 防御）', () => {
+  it('コンテナ ref が無いままでも、暫定位置は画面内（コンテナ左上の内側）へクランプされる', () => {
+    // 譜面左端・上端の記号では概算位置が負座標になり、そのまま描くと入力欄が
+    // 画面外へ見切れる（#392 の報告と同じ形）。計測が走らない経路でも
+    // 最低限コンテナの左上より内側に収まることを固定する
+    const { container } = render(
+      <SymbolAdjustOverlay
+        anchor={{ left: -60, top: -50, width: 20, height: 10 }}
+        containerRef={{ current: null }}
+        minWidth={100}
+      >
+        <span>x</span>
+      </SymbolAdjustOverlay>
+    );
+    const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
+    expect(overlay.dataset.placed).toBe('false');
+    expect(parseFloat(overlay.style.left)).toBeGreaterThanOrEqual(8);
+    expect(parseFloat(overlay.style.top)).toBeGreaterThanOrEqual(8);
   });
 });

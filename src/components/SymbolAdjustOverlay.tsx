@@ -16,6 +16,7 @@ import {
   estimateSymbolOverlayPosition,
   SYMBOL_OVERLAY_FALLBACK_HEIGHT,
   SYMBOL_OVERLAY_FALLBACK_WIDTH,
+  SYMBOL_OVERLAY_GAP,
   type OverlayRectLike,
 } from '../utils/symbolOverlayPlacementUtils';
 
@@ -81,11 +82,23 @@ export default function SymbolAdjustOverlay({ anchor, containerRef, minWidth, tr
   const overlayRef = useRef<HTMLDivElement>(null);
   // null の間は「まだ測っていない」。暫定位置で描いてから、下の useLayoutEffect で確定位置へ差し替える。
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  // 計測が空振りしたとき（ref がまだ無い等）のリトライ用カウンタ（#392 防御）。
+  // 依存に入れることで、rAF 後にもう一度 useLayoutEffect を走らせる
+  const [measureRetry, setMeasureRetry] = useState(0);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
     const overlay = overlayRef.current;
-    if (!container || !overlay) return;
+    if (!container || !overlay) {
+      // ここで諦めると暫定位置（クランプの弱い概算）のまま表示され続け、
+      // 譜面左端の記号では画面外へ見切れる（#392 で報告された形）。
+      // ref が揃うまで数フレームだけリトライする
+      if (measureRetry < 10) {
+        const raf = requestAnimationFrame(() => setMeasureRetry((n) => n + 1));
+        return () => cancelAnimationFrame(raf);
+      }
+      return;
+    }
     const scale = resolvePageScale(container);
     const overlayRect = overlay.getBoundingClientRect();
     // jsdom はレイアウトしないので幅・高さが 0 になる。0 のまま計算すると
@@ -100,12 +113,21 @@ export default function SymbolAdjustOverlay({ anchor, containerRef, minWidth, tr
       bounds: resolveBounds(container, scale),
     });
     setPosition({ left: next.left, top: next.top });
-    // 依存は anchor だけ。anchor は「オーバーレイを開いた時点」に作られた1個のオブジェクトで、
-    // 矢印キーで記号を動かしても差し替わらない。つまりここは開いた直後に1回だけ走り、
-    // 調整中にオーバーレイが記号を追いかけて逃げることがない（Issue #230 の要件）。
-  }, [anchor, containerRef]);
+    // 依存は anchor（+リトライカウンタ）。anchor は「オーバーレイを開いた時点」に作られた
+    // 1個のオブジェクトで、矢印キーで記号を動かしても差し替わらない。つまりここは開いた
+    // 直後に1回だけ走り、調整中にオーバーレイが記号を追いかけて逃げることがない（#230 の要件）。
+  }, [anchor, containerRef, measureRetry]);
 
-  const { left, top } = position ?? estimateSymbolOverlayPosition(anchor);
+  // 暫定位置にも最低限のクランプを掛ける（#392 防御）。確定位置は
+  // computeSymbolOverlayPlacement が可視範囲へクランプ済みだが、暫定は記号中央基準の
+  // 概算のため、譜面左端・上端の記号では負座標（コンテナ外＝ほぼ画面外）になり得る。
+  // コンテナ左上より内側（余白ぶん）を下限にしておけば、計測前の一瞬（または計測が
+  // 走らない未知の経路）でも入力欄が画面外へ出ない
+  const estimated = estimateSymbolOverlayPosition(anchor);
+  const { left, top } = position ?? {
+    left: Math.max(SYMBOL_OVERLAY_GAP, estimated.left),
+    top: Math.max(SYMBOL_OVERLAY_GAP, estimated.top),
+  };
 
   return (
     <div
