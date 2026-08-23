@@ -112,7 +112,7 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
     await waitFor(() => {
       expect(screen.getByLabelText('パート譜表示')).toBeTruthy();
-    });
+    }, { timeout: 15000 });
     const select = screen.getByLabelText('パート譜表示') as HTMLSelectElement;
     const violin1 = Array.from(select.options).find((o) => o.value.includes('violin-1'));
     expect(violin1).toBeTruthy();
@@ -124,7 +124,7 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
       const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
       expect(region).toBeTruthy();
       expect(region!.style.pointerEvents).toBe('auto');
-    });
+    }, { timeout: 15000 });
 
     // 音符・休符タブでは無効（pointer-events: none）に戻り、記号は素通しになる。
     // 音符入力中に記号がクリックを奪うと、記号のあるところへ音符を置けなくなるため
@@ -134,7 +134,7 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
       const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
       expect(region).toBeTruthy();
       expect(region!.style.pointerEvents).toBe('none');
-    });
+    }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('他レイヤーの記号クリックで ScorePage のレイヤー状態が実際に切り替わる（#316 配線）', async () => {
@@ -143,10 +143,12 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     // 再描画後も小窓が開いたままであることを固定する（Codex最終ゲート P2）
     seedPianoWorkWithBothHands();
     render(<ScorePage />);
-    // レイヤーボタンは「音符・休符」タブにあるので、まず既定（右手・声部1）を確認する
+    // レイヤーボタンは「音符・休符」タブにあるので、まず既定（右手・声部1）を確認する。
+    // ScorePage の初回マウント＋譜面描画は waitFor の既定1秒に収まらないことがあるので、
+    // 「最初の描画待ち」だけは明示的に延ばす（CI の遅い実行機で実際に落ちた）
     await waitFor(() => {
       expect(screen.getByRole('button', { name: '右手・声部1' }).className).toContain('active');
-    });
+    }, { timeout: 15000 });
 
     // 記号をクリックできるのは「演奏記号」タブ（#397）
     fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
@@ -161,13 +163,13 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     // 切り替えに伴う再描画のあとも、調整の小窓は開いたまま
     await waitFor(() => {
       expect(document.querySelector('.symbol-adjust-overlay')).toBeTruthy();
-    });
+    }, { timeout: 15000 });
 
     // ScorePage 側のレイヤー状態が左手へ切り替わっている（音符タブへ戻って確認）
     fireEvent.click(screen.getByRole('tab', { name: '音符・休符' }));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: '左手・声部1' }).className).toContain('active');
-    });
+    }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('オーバーレイは .print-page（overflow:hidden）の内側に置かれる（#392 配線）', async () => {
@@ -181,7 +183,7 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
       const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
       expect(region).toBeTruthy();
       expect(region!.style.pointerEvents).toBe('auto');
-    });
+    }, { timeout: 15000 });
     const region = document.querySelector('.symbol-hit-region') as SVGRectElement;
 
     // 実環境と同じ関係を注入する: ページは画面左端より右（x=200〜）にあり、
@@ -209,7 +211,7 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     fireEvent.click(region, { clientX: 215, clientY: 306 });
     await waitFor(() => {
       expect(document.querySelector('.symbol-adjust-overlay')).toBeTruthy();
-    });
+    }, { timeout: 15000 });
     const overlay = document.querySelector('.symbol-adjust-overlay') as HTMLElement;
     // コンテナ座標でのページ左端 = 200 - 200 = 0。これより左には置かない
     // （置くと .print-page の overflow:hidden に切り取られて入力欄が見えなくなる）。
@@ -228,7 +230,7 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
       const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
       expect(region).toBeTruthy();
       expect(region!.style.pointerEvents).toBe('auto');
-    });
+    }, { timeout: 15000 });
     const region = document.querySelector('.symbol-hit-region') as SVGRectElement;
     const svg = region.closest('svg') as SVGSVGElement;
     svg.getBoundingClientRect = vi.fn(() => ({
@@ -241,7 +243,7 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     fireEvent.click(region, { clientX: 10, clientY: 10 });
     await waitFor(() => {
       expect(document.querySelector('.symbol-adjust-overlay')).toBeTruthy();
-    });
+    }, { timeout: 15000 });
     expect(document.querySelector('.symbol-adjust-overlay-translucent')).toBeNull();
 
     // 矢印キーで透ける
@@ -258,12 +260,12 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     fireEvent.click(screen.getByRole('button', { name: '強弱記号 f（対象の音符をクリック）' }));
     await waitFor(() => {
       expect(document.querySelector('.symbol-hit-region')).toBeTruthy();
-    });
+    }, { timeout: 15000 });
     const region = document.querySelector('.symbol-hit-region') as SVGRectElement;
     fireEvent.click(region, { clientX: 10, clientY: 10 });
     await waitFor(() => {
       expect(document.querySelector('.symbol-adjust-overlay')).toBeTruthy();
-    });
+    }, { timeout: 15000 });
     expect(document.querySelector('.symbol-hit-region')).toBeTruthy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
@@ -278,6 +280,6 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
       expect(el).toBeTruthy();
       expect(el!.getAttribute('font-family')).toBe('Bravura');
       expect(parseFloat(el!.getAttribute('font-size')!)).toBe(40);
-    });
+    }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
