@@ -10,8 +10,6 @@ import {
   listPresentAdjustableSymbolKinds,
   setSymbolAdjustOffset,
   setSymbolAdjustScale,
-  setSymbolAdjustScale,
-  setSymbolAdjustOffset,
   DEFAULT_SYMBOL_ADJUST,
 } from './symbolAdjustUtils';
 

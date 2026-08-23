@@ -265,8 +265,9 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
 - **MusicXML には出力しない**: symbolAdjust はこのアプリ独自の表示調整であり、MusicXML の標準的な位置指定
   （`default-x`/`default-y` 等）とは意味論が異なるため、書き出し・読み込みの対象外とした（customSymbols の
   scale/offset と同じ扱い）。
-- **テスト**: `src/utils/symbolAdjustUtils.test.ts`（新規）で `listPresentAdjustableSymbolKinds`（休符除外・
-  装飾記号/アーティキュレーション除外・付与済み記号のみ列挙）・`getSymbolAdjust`（既定値・設定済み値）・
+- **テスト**: `src/utils/symbolAdjustUtils.test.ts`（新規）で `listPresentAdjustableSymbolKinds`（音符専用の記号
+  ＝運指・強弱・アーティキュレーションは休符では除外／テキスト系とオッターバは休符でも対象・
+  付与済み記号のみ列挙。休符の扱いは #398 で改訂。custom-symbol-editor 設計メモ追補8を参照）・`getSymbolAdjust`（既定値・設定済み値）・
   `setSymbolAdjustScale`/`setSymbolAdjustOffset`（未付与記号への無視・範囲外クランプ・他記号のsymbolAdjustを
   保持したまま更新）を検証。`src/utils/storage.test.ts` に symbolAdjust 込みの保存/読込ラウンドトリップ・
   不正キー拒否・範囲外の scale/offset 拒否のテストを追加。

@@ -190,6 +190,28 @@ describe('記号系ツールを対象外へ使ったときの通知（Issue #330
       expect(notices[0]).toContain('位置調整');
       expect(notices[0]).toContain('休符には');
     });
+
+    // ただし「休符だから一律に拒否」ではない。テキスト系（歌詞・コード記号・テンポ表記・
+    // 発想標語）とオッターバは休符にも付けられるので、付いているなら調整できる。
+    // 以前は列挙前に休符を弾いていたため、付いているのに触れない行き止まりだった
+    // （#398 Codex round5 P2）。
+    it('休符でもコード記号が付いていれば✥で調整の小窓が開く', async () => {
+      const restWithChord: MeasureData[] = [{
+        events: [
+          { dur: '4', isRest: false, keys: ['c/5'] },
+          { dur: '4', isRest: true, keys: ['b/4'], chordSymbol: 'C' },
+          { dur: '2', isRest: true, keys: ['b/4'] },
+        ],
+      }];
+      const { svg } = renderScore(restWithChord, { mode: 'symbolAdjustOffset' });
+      clickEvent(svg, 1);
+
+      await waitFor(() => {
+        expect(document.body.textContent).toContain('横');
+      });
+      // 拒否通知は出ない
+      expect(notices).toHaveLength(0);
+    });
   });
 
   describe('C-2: その記号が付いていない音符で調整ツールを押したとき', () => {

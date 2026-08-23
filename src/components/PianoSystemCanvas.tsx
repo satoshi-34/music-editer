@@ -6342,12 +6342,11 @@ export default function PianoSystemCanvas({
               case 'symbolAdjustResize':
               case 'symbolAdjustOffset': {
                 const adjustKind = tool.mode === 'symbolAdjustResize' ? 'resize' as const : 'offset' as const;
-                if (clickedIsRest) {
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
-                    { type: 'symbolAdjust', adjust: adjustKind }, 'rest') };
-                }
                 // 汎用サイズ・位置調整: カスタム記号＋標準記号のうち、この音符に実際に
                 // 付いているものを列挙する（StaffCanvas と同じロジック）。
+                // 休符でも列挙してから判断する。テキスト系（歌詞・コード記号・テンポ表記・
+                // 発想標語）とオッターバは休符にも付けられるため、一律に弾くと
+                // 「付いているのに調整できない」行き止まりになる（#398 Codex round5 P2）。
                 const currentEv = activeEvs[j];
                 const targets: AdjustTarget[] = [
                   ...(currentEv.customSymbols?.map((s): AdjustTarget => ({ type: 'custom', symbolId: s.symbolId, name: customSymbolDefs.find(d => d.id === s.symbolId)?.name ?? s.symbolId })) ?? []),
@@ -6355,10 +6354,11 @@ export default function PianoSystemCanvas({
                 ];
                 if (targets.length === 0) {
                   // 調整できる記号が1つも無い音符では選択リストすら開けない。
-                  // ボタンが押せる＝どの音符でも使える、と受け取られるため理由を言う（Issue #330）
+                  // ボタンが押せる＝どの音符でも使える、と受け取られるため理由を言う（Issue #330）。
+                  // 休符なら「休符には付けられない記号がある」ことまで言った方が分かりやすい。
                   return { kind: 'rejected', notice: describeSymbolToolUnavailable(
                     { type: 'symbolAdjust', adjust: adjustKind },
-                    'noAdjustableSymbol',
+                    clickedIsRest ? 'rest' : 'noAdjustableSymbol',
                   ) };
                 }
                 const containerRect = containerRef.current?.getBoundingClientRect();
