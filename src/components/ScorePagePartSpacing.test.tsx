@@ -93,12 +93,13 @@ describe('パート間隔スライダー（Issue #90）', () => {
     expect(localStorageMock.getItem('score-part-spacing-offset')).toBe('15');
   });
 
-  it('範囲（-20〜50px）が正しく設定されている', () => {
+  it('範囲（-20〜80px）が正しく設定されている', () => {
     render(<ScorePage />);
     openLayoutTab();
     const slider = getPartSpacingSlider();
     expect(slider.min).toBe('-20');
-    expect(slider.max).toBe('50');
+    // 上限は 2026-08-23 に 50→80 へ拡大（月光級の深い音型 + #382 クランプの逃げ場）
+    expect(slider.max).toBe('80');
   });
 
   it('保存済みの値はリロード（再マウント）後も復元される', () => {
