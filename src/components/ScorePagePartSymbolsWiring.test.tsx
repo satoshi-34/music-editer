@@ -84,7 +84,7 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     vi.restoreAllMocks();
   });
 
-  it('パート譜表示中も記号のクリック判定は常に有効（タブに依らない・2026-08-24 統一）', async () => {
+  it('パート譜表示中、演奏記号タブのときだけ記号のクリック判定が有効になる', async () => {
     seedQuartetWorkWithDynamics();
     render(<ScorePage />);
 
@@ -107,13 +107,14 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
       expect(region!.style.pointerEvents).toBe('auto');
     });
 
-    // 音符・休符タブへ移っても有効なまま。無効に戻すと記号を押したつもりのクリックが
-    // 下の音符セルへ抜けて**音符が入って**しまう（2026-08-24 の実機フィードバック）
+    // 音符・休符タブでは無効（pointer-events: none）に戻り、記号は素通しになる。
+    // 音符入力中に記号がクリックを奪うと、記号のあるところへ音符を置けなくなるため
+    // （Finale の Simple Entry / Sibelius の音符入力モードと同じ考え方・2026-08-24 再確認）
     fireEvent.click(screen.getByRole('tab', { name: '音符・休符' }));
     await waitFor(() => {
       const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
       expect(region).toBeTruthy();
-      expect(region!.style.pointerEvents).toBe('auto');
+      expect(region!.style.pointerEvents).toBe('none');
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
