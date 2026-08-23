@@ -882,10 +882,12 @@ type Props = {
    */
   pageMarginSideMm?: number;
   /**
-   * 演奏記号（強弱・アーティキュレーション・8va等）を直接クリックして調整オーバーレイを
-   * 開けるようにするかどうか。ScorePage の「演奏記号」タブが選択されているときだけ true にする。
-   * false のときは記号のヒット領域は pointer-events を無効化して完全に素通しし、
-   * 従来の音符クリック（音符入力・和音追加・選択）を一切妨げない。StaffCanvas.tsx と同じ役割。
+   * 演奏記号（強弱・アーティキュレーション・8va等）を直接クリックして選べるようにするか。
+   * **ScorePage からは常に true**（2026-08-24 統一。タブ依存だった頃は、音符・休符タブで
+   * 記号を押すとヒット領域が素通しになり、下の音符セルへ抜けて音符が入ってしまった）。
+   * false のときは記号のヒット領域が pointer-events を無効化して完全に素通しする。
+   * 編集不可（disabled: 大譜表パートのパート譜・再生中・印刷プレビュー）のときも、
+   * この prop に関わらず無効化する（symbolsInteractive）。StaffCanvas.tsx と同じ役割。
    */
   symbolsClickable?: boolean;
   /**

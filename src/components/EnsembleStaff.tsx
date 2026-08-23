@@ -60,7 +60,7 @@ type Props = {
   pageMarginSideMm?: number;
   // 終止線を描く「内容のある最後の小節」の絶対インデックス。省略時は終止線を描かない。
   finalMeasureIndex?: number;
-  // 演奏記号タブが選択されているときだけ true にする。PianoSystemCanvas 側のコメント参照。
+  // ScorePage からは常に true（2026-08-24 統一）。PianoSystemCanvas 側のコメント参照。
   symbolsClickable?: boolean;
   // 段内の隣接パート間隔への加算補正(px)。「レイアウト」タブの「パート間隔」スライダー
   // （Issue #90）から中継する。省略時・0のときは従来どおり自動値のまま。
