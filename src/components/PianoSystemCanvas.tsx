@@ -1302,11 +1302,10 @@ type RenderCollectors = {
    * 歌詞（データ駆動: 歌詞を持つイベントが属する段の五線上端を基準にする）。
    * StaffCanvas と同じ座標計算・見た目を drawLyricsEntry（lyricsRenderUtils.ts）で共有する
    */
-  lyricsEntries: Array<{
-    anchorX: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust;
-    // クリック判定に使う（他の記号と同じ配線。省略時は判定を作らない）
-    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
-  }>;
+  // 歌詞は現状クリック非対応（判定領域を作らない）。同じ高さ帯に描くコード記号・
+  // テンポ表記・発想標語とのクリックの取り合いと、休符に付けた歌詞の調整が
+  // symbolAdjust 側で no-op になる問題を先に解く必要があるため（#399）
+  lyricsEntries: Array<{ anchorX: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }>;
   /** 運指番号（五線上端基準の統一高さに表示） */
   fingeringEntries: Array<{
     anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust;
@@ -1914,15 +1913,7 @@ function drawCollectedSymbolEntries(args: {
   // 歌詞: 音符が属する段の五線上端のさらに上（staveTopY - 26）に通常体で表示する。
   // ピアノ大譜表なら右手に付けた歌詞は右手譜表の上、左手なら左手譜表の上に出る。
   // 多パート譜では歌詞データを持つイベントの段の上に描かれる（データ駆動）。
-  lyricsEntries.forEach((entry) => {
-    const el = drawLyricsEntry(svgRoot, entry);
-    // 歌詞も他の記号と同じくクリックで選べるようにする（README/DEVELOPMENT が対象に
-    // 挙げているのに配線が漏れていた。#398 Codex round2 P2）
-    if (entry.partIndex !== undefined && entry.measureAbsoluteIndex !== undefined
-      && entry.eventIndex !== undefined && entry.event) {
-      appendSymbolHitRegion([el], entry.partIndex, entry.measureAbsoluteIndex, entry.eventIndex, entry.voiceIndex ?? 0, entry.event, 'lyrics');
-    }
-  });
+  lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, entry));
 
   // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
   // Ped と ✱ が時系列でペアになる区間は、間を破線でつないで「踏み続けている範囲」を示す
@@ -6753,7 +6744,6 @@ export default function PianoSystemCanvas({
                 staveTopY: stave.getYForLine(0),
                 text: activeEvs[j].lyrics!,
                 adjust: getSymbolAdjust(activeEvs[j], 'lyrics'),
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.ottava) {
@@ -6876,7 +6866,6 @@ export default function PianoSystemCanvas({
                     staveTopY: stave.getYForLine(0),
                     text: ev.lyrics,
                     adjust: getSymbolAdjust(ev, 'lyrics'),
-                    partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
                   });
                 }
                 if (!ev.isRest && ev.articulations?.length) {
