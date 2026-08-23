@@ -3887,6 +3887,14 @@ export default function PianoSystemCanvas({
           // ものかは画面から見分けられないため、押しても無反応に見える
           const layerPartChanged = activeLayerPartIndex != null && partIndex !== activeLayerPartIndex;
           const voiceChanged = symbolVoiceIndex !== activeVoiceIndex;
+          // 編集 UI（声部トグル）は2声まで。3声以降のデータは表示・再生・書き出しのみ対応
+          // なので、切り替え要求を ScorePage が黙って無視して「切り替えたと言われたのに
+          // 実状態は変わらないまま編集できてしまう」食い違いを防ぐ（音符クリックと同じ
+          // ガード・#318 / #244 段5-5）
+          if (voiceChanged && symbolVoiceIndex > 1) {
+            notifyScoreEdit(describeVoiceSwitchUnavailable(symbolVoiceIndex));
+            return;
+          }
           if (layerPartChanged || voiceChanged) {
             requestActiveVoiceChange(symbolVoiceIndex, activeLayerPartIndex != null ? partIndex : undefined);
             notifyScoreEdit(layerPartChanged
