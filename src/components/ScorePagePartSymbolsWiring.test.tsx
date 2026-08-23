@@ -84,7 +84,7 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     vi.restoreAllMocks();
   });
 
-  it('パート譜表示中、演奏記号タブのときだけ記号のクリック判定が有効になる', async () => {
+  it('パート譜表示中も記号のクリック判定は常に有効（タブに依らない・2026-08-24 統一）', async () => {
     seedQuartetWorkWithDynamics();
     render(<ScorePage />);
 
@@ -99,7 +99,7 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     expect(violin1).toBeTruthy();
     fireEvent.change(select, { target: { value: violin1!.value } });
 
-    // 演奏記号タブ → 判定が有効（pointer-events: auto）
+    // 演奏記号タブで有効（pointer-events: auto）
     fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
     await waitFor(() => {
       const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
@@ -107,12 +107,13 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
       expect(region!.style.pointerEvents).toBe('auto');
     });
 
-    // 他のタブへ戻すと無効（pointer-events: none）に戻る
+    // 音符・休符タブへ移っても有効なまま。無効に戻すと記号を押したつもりのクリックが
+    // 下の音符セルへ抜けて**音符が入って**しまう（2026-08-24 の実機フィードバック）
     fireEvent.click(screen.getByRole('tab', { name: '音符・休符' }));
     await waitFor(() => {
       const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
       expect(region).toBeTruthy();
-      expect(region!.style.pointerEvents).toBe('none');
+      expect(region!.style.pointerEvents).toBe('auto');
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
@@ -196,24 +197,21 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     expect(document.querySelector('.symbol-adjust-overlay-translucent')).toBeTruthy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('強弱ツールを選んで記号の字面をクリックすると外れる（#385続報 配線）', async () => {
-    // 実経路: 演奏記号タブ→ f ボタン選択→記号字面クリック→トグル解除
+  it('強弱ツールを選んでいても、記号の字面クリックは選択（消えない・2026-08-24 統一）', async () => {
+    // 実経路: 演奏記号タブ→ f ボタン選択→記号字面クリック→ ✥ が開き記号は残る
     seedQuartetWorkWithDynamics();
     render(<ScorePage />);
     fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
     fireEvent.click(screen.getByRole('button', { name: '強弱記号 f（対象の音符をクリック）' }));
     await waitFor(() => {
-      const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
-      expect(region).toBeTruthy();
-      expect(region!.style.pointerEvents).toBe('auto');
+      expect(document.querySelector('.symbol-hit-region')).toBeTruthy();
     });
     const region = document.querySelector('.symbol-hit-region') as SVGRectElement;
     fireEvent.click(region, { clientX: 10, clientY: 10 });
-    // トグル解除で f のグリフ（と判定 rect）が消える。オーバーレイは開かない
-    expect(document.querySelector('.symbol-adjust-overlay')).toBeNull();
     await waitFor(() => {
-      expect(document.querySelector('.symbol-hit-region')).toBeNull();
+      expect(document.querySelector('.symbol-adjust-overlay')).toBeTruthy();
     });
+    expect(document.querySelector('.symbol-hit-region')).toBeTruthy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('復元された強弱記号 f は ScorePage 経由でも Bravura の SMuFL グリフで描かれる（#380 配線）', async () => {

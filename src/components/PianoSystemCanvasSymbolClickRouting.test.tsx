@@ -1,9 +1,9 @@
-// 記号字面クリックの行き先をツールで振り分ける（Issue #385 続報・裁定B+C拡張）。
-// 従来は常に ✥（位置調整）へ吸われ、「消せない」「⤢ に届かない」詰みがあった:
-//   1. ⤢（サイズ変更）選択中 → サイズ調整オーバーレイ
-//   2. 同種の記号ツール選択中 → トグル（付いているものをクリックで外す）
-//   3. それ以外 → ✥（従来どおり）
-// あわせて ✥ オーバーレイに「この記号を削除」ボタン（裁定B）。
+// 記号字面クリックの意味（Issue #385 続報 → 2026-08-24 の実機フィードバックで統一）:
+//   - **常に「その記号を選ぶ」**（✥ 位置調整パネルを開く）。ツールやタブで意味が変わらない
+//   - ⤢（サイズ変更ツール）中だけ、その場でサイズ調整パネルを開く
+//   - 削除は ✥ パネルの「この記号を削除」ボタン（＋従来どおり音符クリックのトグル）
+// 一時期あった「同種ツール中はトグル解除」は、pp ツールを持ったまま pp を押すと
+// 消えて選択できない詰みになったため撤回した（履歴は design.md 追補5）。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import PianoSystemCanvas from './PianoSystemCanvas';
@@ -65,25 +65,25 @@ describe('記号字面クリックのツール別ルーティング（Issue #385
     Reflect.deleteProperty(SVGElement.prototype, 'getBBox');
   });
 
-  it('同じ強弱ツール選択中に pp の字面をクリックすると外れる（トグル解除）', () => {
+  it('同じ強弱ツール選択中でも、記号の字面クリックは「選択」（消えない・2026-08-24 統一）', () => {
+    // 一時期は同種ツール中トグル解除にしていたが、pp ツールを持ったまま pp を押すと
+    // 消えてしまい選択・位置調整ができない詰みになったため撤回した
     const { container, onChange } = renderWithTool({ mode: 'dynamic', dynamic: 'pp' }, [PP_EVENT]);
     clickRegion(container);
-    // オーバーレイは開かず、データから dynamics が外れる
-    expect(container.querySelector('.symbol-adjust-overlay')).toBeNull();
-    expect(onChange).toHaveBeenCalled();
-    const saved = onChange.mock.calls.at(-1)![0][0].events[0];
-    expect(saved.dynamics).toBeUndefined();
+    const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
+    expect(overlay).toBeTruthy();
+    expect(overlay.textContent).toContain('記号位置調整');
+    expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('アーティキュレーションツール選択中も、字面クリックでトグル解除できる', () => {
+  it('アーティキュレーションツール選択中も、字面クリックは「選択」で記号は消えない', () => {
     const { container, onChange } = renderWithTool(
       { mode: 'articulation', articulation: 'staccato' },
       [{ dur: '1', isRest: false, keys: ['b/4'], articulations: ['staccato'] }],
     );
     clickRegion(container);
-    expect(container.querySelector('.symbol-adjust-overlay')).toBeNull();
-    const saved = onChange.mock.calls.at(-1)![0][0].events[0];
-    expect(saved.articulations ?? []).toEqual([]);
+    expect(container.querySelector('.symbol-adjust-overlay')).toBeTruthy();
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('⤢（サイズ変更ツール）選択中の字面クリックはサイズ調整オーバーレイを開く', () => {
