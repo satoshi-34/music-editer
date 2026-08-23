@@ -48,19 +48,25 @@ describe('強弱記号の Bravura グリフ描画（Issue #380）', () => {
     else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth');
   });
 
-  it.each(['pp', 'p', 'mp', 'mf', 'f', 'ff'] as const)('%s は Bravura の SMuFL グリフで描かれる', (value) => {
+  // 期待値は実装（dynamicGlyphFor）を経由せず、SMuFL 公式 Dynamics 表の
+  // コードポイントを直接固定する（実装の対応表が入れ替わったら落ちる。Codex round1 P3）
+  it.each([
+    ['pp', '\uE52B'], // dynamicPP
+    ['p', '\uE520'],  // dynamicPiano
+    ['mp', '\uE52C'], // dynamicMP
+    ['mf', '\uE52D'], // dynamicMF
+    ['f', '\uE522'],  // dynamicForte
+    ['ff', '\uE52F'], // dynamicFF
+  ] as const)('%s は Bravura の SMuFL グリフ %s で描かれる', (value, expectedGlyph) => {
     const container = renderWithDynamics([{ value }]);
-    const glyph = dynamicGlyphFor({ value })!;
-    const el = Array.from(container.querySelectorAll('text')).find((t) => t.textContent === glyph)!;
+    const el = Array.from(container.querySelectorAll('text')).find((t) => t.textContent === expectedGlyph)!;
     expect(el).toBeTruthy();
     expect(el.getAttribute('font-family')).toBe('Bravura');
     // グリフ自体がイタリック形なので font-style は付けない
     expect(el.getAttribute('font-style')).toBeNull();
     // SMuFL の設計サイズ（1em = 4sp = 40 論理単位）
     expect(parseFloat(el.getAttribute('font-size')!)).toBe(40);
-    // コードポイントは SMuFL Dynamics 範囲（U+E520〜）の PUA 文字
-    expect(glyph.codePointAt(0)!).toBeGreaterThanOrEqual(0xe520);
-    expect(glyph.codePointAt(0)!).toBeLessThanOrEqual(0xe52f);
+    expect(dynamicGlyphFor({ value })).toBe(expectedGlyph);
   });
 
   it('cresc. は従来のテキスト（イタリックのセリフ体）のまま', () => {
@@ -107,7 +113,30 @@ describe('強弱記号の Bravura グリフ描画（Issue #380）', () => {
     }
   });
 
-  it('✥ の手動サイズ調整（scale）はグリフのフォントサイズにも効く', () => {
+  it('⤢ で拡大したグリフの判定クランプはサイズに追従する（scale=4 で判定も4倍）', () => {
+    (SVGElement.prototype as unknown as { getBBox: () => { x: number; y: number; width: number; height: number } }).getBBox =
+      () => ({ x: 0, y: 0, width: 10, height: 10 });
+    try {
+      const container = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data: [{ events: [{ dur: '1', isRest: false, keys: ['b/4'], dynamics: [{ value: 'pp' }], symbolAdjust: { dynamics: { scale: 4 } } }] }], onChange: vi.fn() }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+          symbolsClickable={true}
+        />
+      ).container;
+      const region = container.querySelector('.symbol-hit-region') as SVGRectElement;
+      // ±1.4sp×4（=112論理単位）+ 判定パディング（3×2）
+      expect(parseFloat(region.getAttribute('height')!)).toBe(112 + 6);
+    } finally {
+      Reflect.deleteProperty(SVGElement.prototype, 'getBBox');
+    }
+  });
+
+  it('⤢ のサイズ調整（scale）はグリフのフォントサイズにも効く', () => {
     const container = render(
       <PianoSystemCanvas
         measuresPerSystem={1}

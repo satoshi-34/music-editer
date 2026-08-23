@@ -1556,6 +1556,9 @@ function drawCollectedSymbolEntries(args: {
         // font-style は付けない。フォールバックを置いても PUA 文字は他フォントで出ないため単独指定）
         text.setAttribute('font-family', 'Bravura');
         text.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.dynamicsGlyph * adjust.scale));
+        // クリック判定のクランプ対象の識別子（appendSymbolHitRegion 参照）。
+        // font-family での判別は将来 Bravura を他用途で使ったとき誤爆するため専用属性にする
+        text.setAttribute('data-smufl-glyph', '1');
       } else {
         text.textContent = formatDynamicMarking(marking);
         text.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
@@ -3727,12 +3730,17 @@ export default function PianoSystemCanvas({
           // フォントの em 箱を返し、SMuFL フォントは背の高いグリフを収めるため
           // アセント/ディセントが極端に大きい（実測で縦約16sp）。そのままだと判定 rect が
           // 縦に巨大化して他の記号のクリックを飲み込むので、ベースライン（y 属性）から
-          // 字面ぶん（±1.4sp）だけに絞る
-          if (el.tagName === 'text' && el.getAttribute('font-family') === 'Bravura') {
+          // 字面ぶん（±1.4sp）だけに絞る。⤢ のサイズ変更（25〜400%）にも追従するよう、
+          // 実フォントサイズから倍率を復元して掛ける（Codex round1 P2）
+          if (el.tagName === 'text' && el.getAttribute('data-smufl-glyph') === '1') {
             const baseline = parseFloat(el.getAttribute('y') ?? '');
+            const fontSize = parseFloat(el.getAttribute('font-size') ?? '');
+            const glyphScale = Number.isFinite(fontSize) && fontSize > 0
+              ? fontSize / ENGRAVING_TEXT_UNITS.dynamicsGlyph
+              : 1;
             if (Number.isFinite(baseline)) {
-              top = baseline - spToUnits(1.4);
-              bottom = baseline + spToUnits(1.4);
+              top = baseline - spToUnits(1.4) * glyphScale;
+              bottom = baseline + spToUnits(1.4) * glyphScale;
             }
           }
           minX = Math.min(minX, bbox.x);

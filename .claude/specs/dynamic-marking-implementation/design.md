@@ -135,9 +135,12 @@ VexFlow の音符本体とは別に、描画後の SVG へテキストを直接�
 - 衝突回避（#373）の文字箱概算は従来どおり文字数ベース（"pp" 2文字×旧フォント想定）の
   ままとした。グリフ pp の実幅（約2.6sp）と概算幅がほぼ一致するため
 
-**影響範囲**: 表示の字形のみ。保存データ・パレット表示・MusicXML・再生・クリック判定
-（描画実測 getBBox から作るため自動追従）・⤢/✥ は不変。
+**影響範囲**: 表示の字形のみ。保存データ・パレット表示・MusicXML・再生・⤢/✥ は不変。
+クリック判定は getBBox が SMuFL フォントの em 箱（縦約16sp）を返すため自動追従できず、
+`data-smufl-glyph` 属性付きの text はベースライン±1.4sp×サイズ倍率へクランプする
+（倍率は実フォントサイズ ÷ 設計サイズから復元。⤢ の 25〜400% に追従）。
 
-**テスト**: PianoSystemCanvasDynamicsGlyph.test.tsx（9件: 6種のグリフ/フォント/サイズ・
-cresc はテキストのまま・併記の行間・scale 反映）。既存の衝突回避テストは
-PP_TEXT をグリフ参照へ更新。
+**テスト**: PianoSystemCanvasDynamicsGlyph.test.tsx（11件: 6種のグリフを SMuFL 公式表の
+コードポイント直書きで固定・cresc はテキストのまま・併記の行間・⤢ の scale 反映・
+判定クランプの基本と scale=4 追従）。既存の衝突回避テストは PP_TEXT をグリフ参照へ更新。
+ScorePage 配線は ScorePagePartSymbolsWiring.test.tsx に復元→グリフ描画のケースを追加。
