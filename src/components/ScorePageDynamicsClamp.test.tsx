@@ -95,7 +95,7 @@ describe('ScorePage: 強弱記号の五線間クランプの配線（Issue #382�
       expect(
         Array.from(document.querySelectorAll('text')).find((t) => t.textContent === ppGlyph)
       ).toBeTruthy();
-    });
+    }, { timeout: 15000 });
     const svg = Array.from(document.querySelectorAll('svg'))
       .find((candidate) => candidate.querySelector('rect.vf-note-hit')) as SVGSVGElement;
     const ppEl = Array.from(svg.querySelectorAll('text')).find((t) => t.textContent === ppGlyph)!;

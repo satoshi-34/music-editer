@@ -28,6 +28,8 @@ export interface CustomSymbolRenderEntry {
   measureAbsoluteIndex: number;
   eventIndex: number;
   event: NoteEvent;
+  /** その記号が付いている音符の声部。調整値を正しい声部へ書き戻すために使う（省略時は声部1） */
+  voiceIndex?: number;
   // PianoSystemCanvas（複数パート譜）だけが使うパート番号。StaffCanvas では常に undefined。
   partIndex?: number;
 }
@@ -54,6 +56,7 @@ export function buildCustomSymbolEntry(
   measureAbsoluteIndex = 0,
   eventIndex = 0,
   partIndex?: number,
+  voiceIndex?: number,
 ): CustomSymbolRenderEntry | null {
   if (event.isRest || event.__isPlaceholder || !event.customSymbols?.length) return null;
   return {
@@ -68,6 +71,7 @@ export function buildCustomSymbolEntry(
     measureAbsoluteIndex,
     eventIndex,
     event,
+    voiceIndex,
     partIndex,
   };
 }

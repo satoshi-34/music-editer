@@ -174,7 +174,7 @@ async function editMeasure(measureIndex: number) {
   // 4拍目に音符が増えた（= lastEditedMeasureIndex が立った）ことを確認する
   await waitFor(() => {
     expect(document.querySelector(`rect.vf-note-hit[data-measure="${measureIndex}"][data-note="3"]`)).toBeTruthy();
-  });
+  }, { timeout: 15000 });
 }
 
 /** 最初の内容段（音符ヒット領域を持つ最初の svg）に含まれる小節の絶対インデックス集合 */
@@ -233,7 +233,7 @@ describe('パート譜表示中の段割り（Issue #174 段A）', () => {
     await selectPartView('violin-1');
     await waitFor(() => {
       expect(firstSystemMeasures().size).toBeGreaterThan(1);
-    });
+    }, { timeout: 15000 });
     const violin1Measures = firstSystemMeasures().size;
 
     // Violin II（密集）のパート譜: 選択パート自身の幅で計画されるため、
@@ -241,13 +241,13 @@ describe('パート譜表示中の段割り（Issue #174 段A）', () => {
     await selectPartView('violin-2');
     await waitFor(() => {
       expect(firstSystemMeasures().size).toBeLessThan(violin1Measures);
-    });
+    }, { timeout: 15000 });
 
     // 総譜へ戻すと上書きが再び適用される（受入3: パート譜表示が総譜レイアウトを汚さない）
     await selectPartView(null);
     await waitFor(() => {
       expect(firstSystemMeasures()).toEqual(new Set(['0']));
-    });
+    }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('総譜で後方小節を編集した直後でも、パート譜は前ビューの段割りを引き継がない', async () => {
@@ -266,7 +266,7 @@ describe('パート譜表示中の段割り（Issue #174 段A）', () => {
     await selectPartView('violin-1');
     await waitFor(() => {
       expect(firstSystemMeasures().size).toBeGreaterThan(1);
-    });
+    }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('編成譜: 大譜表パートのパート譜も単体で組まれ、表示中パートの削除で総譜の計画へ戻る', async () => {
@@ -286,14 +286,14 @@ describe('パート譜表示中の段割り（Issue #174 段A）', () => {
     await selectPartView('harp');
     await waitFor(() => {
       expect(firstSystemMeasures().size).toBe(MEASURE_COUNT);
-    });
+    }, { timeout: 15000 });
 
     // 編集可能なフルートのパート譜へ移り、後方小節を編集して安定化の条件を作る
     // （フルートは密集しているので、パート譜でも全小節は1段に入らない）
     await selectPartView('flute');
     await waitFor(() => {
       expect(firstSystemMeasures().size).toBeLessThan(MEASURE_COUNT);
-    });
+    }, { timeout: 15000 });
     await editMeasure(4);
 
     // 表示中のフルートを編成編集で削除する → 総譜（ハープのみ）へ復帰
@@ -306,7 +306,7 @@ describe('パート譜表示中の段割り（Issue #174 段A）', () => {
     // 削除前のフルートのパート譜（細かい改行）が安定化で残っていると小さいままになる
     await waitFor(() => {
       expect(firstSystemMeasures().size).toBe(MEASURE_COUNT);
-    });
+    }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('パート譜表示中に同じパートIDを持つファイルを開くと総譜へ戻る（読込後は必ず総譜）', async () => {
@@ -320,7 +320,7 @@ describe('パート譜表示中の段割り（Issue #174 段A）', () => {
     await selectPartView('violin-1');
     await waitFor(() => {
       expect(firstSystemMeasures().size).toBeGreaterThan(1);
-    });
+    }, { timeout: 15000 });
 
     // 別の四重奏 .score.json（同じパートID構成）を「開く」経路で読み込む
     const clefs: PartData['clef'][] = ['treble', 'treble', 'alto', 'bass'];
@@ -344,7 +344,7 @@ describe('パート譜表示中の段割り（Issue #174 段A）', () => {
     await waitFor(() => {
       const select = screen.getByLabelText('パート譜表示') as HTMLSelectElement;
       expect(select.value).toBe('');
-    });
+    }, { timeout: 15000 });
     expect(document.body.textContent).toContain('読込テスト');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

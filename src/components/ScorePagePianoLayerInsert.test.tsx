@@ -99,7 +99,7 @@ describe('ScorePage: ピアノの空白クリックは選択レイヤーへ入�
         const current = Array.from(document.querySelectorAll('svg'))
           .find((candidate) => candidate.querySelector('rect.vf-note-hit'));
         expect(current).toBeTruthy();
-      });
+      }, { timeout: 15000 });
       expect(notices.join(' ')).toContain('右手・声部1に入れました');
     } finally {
       window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);

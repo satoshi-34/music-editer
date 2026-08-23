@@ -1256,9 +1256,11 @@ type RenderCollectors = {
     adjust: ResolvedSymbolAdjust;
     /** どのパート（段）の五線下に描くか。自動衝突回避（#340）で同じ段の音符だけを避けるために使う */
     obstaclePartIndex: number;
-    // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
+    // クリック判定に使う。非アクティブなレイヤー（手×声部）の記号にも渡す（#398。省略時は判定を作らない）
     partIndex?: number;
     measureAbsoluteIndex?: number;
+    /** その記号が付いている音符の声部。調整値を正しい声部へ書き戻すために必須（#316/#389 のレイヤー跨ぎクリック） */
+    voiceIndex?: number;
     eventIndex?: number;
     event?: NoteEvent;
   }>;
@@ -1300,12 +1302,15 @@ type RenderCollectors = {
    * 歌詞（データ駆動: 歌詞を持つイベントが属する段の五線上端を基準にする）。
    * StaffCanvas と同じ座標計算・見た目を drawLyricsEntry（lyricsRenderUtils.ts）で共有する
    */
+  // 歌詞は現状クリック非対応（判定領域を作らない）。同じ高さ帯に描くコード記号・
+  // テンポ表記・発想標語とのクリックの取り合いを先に解く必要があるため（#399）。
+  // 休符に付けた歌詞の調整が no-op だった問題は #398 で解消済み
   lyricsEntries: Array<{ anchorX: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }>;
   /** 運指番号（五線上端基準の統一高さに表示） */
   fingeringEntries: Array<{
     anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust;
-    // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
-    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+    // クリック判定に使う。非アクティブなレイヤー（手×声部）の記号にも渡す（#398。省略時は判定を作らない）
+    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
   }>;
   /**
    * アーティキュレーション記号（フェルマータ・スタッカート等）。
@@ -1321,6 +1326,8 @@ type RenderCollectors = {
     adjust: ResolvedSymbolAdjust;
     partIndex?: number;
     measureAbsoluteIndex?: number;
+    /** その記号が付いている音符の声部。調整値を正しい声部へ書き戻すために必須（#316/#389 のレイヤー跨ぎクリック） */
+    voiceIndex?: number;
     eventIndex?: number;
     event?: NoteEvent;
   }>;
@@ -1334,7 +1341,7 @@ type RenderCollectors = {
     anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
     stackedWithExpression?: boolean;
     stackedWithChord?: boolean;
-    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
   }>;
   /**
    * 発想標語（espressivo など・Issue #237）。テンポ表記と同じ「五線上端より上のテキスト」の
@@ -1346,7 +1353,7 @@ type RenderCollectors = {
     /** 左へはみ出しすぎて紙面の外で切れないようにするための、その小節の五線の左端X */
     staveLeftX: number;
     stackedWithChord?: boolean;
-    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
   }>;
   /**
    * コード記号（C, Am7 など・Issue #279)。テンポ表記・発想標語と同じ「五線上端より上のテキスト」の
@@ -1354,7 +1361,7 @@ type RenderCollectors = {
    */
   chordSymbolEntries: Array<{
     anchorX: number; topY: number; text: string; adjust: ResolvedSymbolAdjust;
-    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
   }>;
   /** オッターバ（8va/8vb）括弧 */
   ottavaEntries: Array<{
@@ -1364,6 +1371,8 @@ type RenderCollectors = {
     adjust: ResolvedSymbolAdjust;
     partIndex?: number;
     measureAbsoluteIndex?: number;
+    /** その記号が付いている音符の声部。調整値を正しい声部へ書き戻すために必須（#316/#389 のレイヤー跨ぎクリック） */
+    voiceIndex?: number;
     eventIndex?: number;
     event?: NoteEvent;
   }>;
@@ -1503,8 +1512,8 @@ function drawRenderedVoiceEntries(
  * 本体は描画 effect からの物理移設で内容不変（挙動ゼロ差）。
  */
 type SymbolHitRegionAppender = {
-  (elements: SVGGraphicsElement[], partIndex: number, measureAbsoluteIndex: number, eventIndex: number, event: NoteEvent, kind: AdjustableSymbolKind, isCustomSymbolId?: false): void;
-  (elements: SVGGraphicsElement[], partIndex: number, measureAbsoluteIndex: number, eventIndex: number, event: NoteEvent, symbolId: string, isCustomSymbolId: true): void;
+  (elements: SVGGraphicsElement[], partIndex: number, measureAbsoluteIndex: number, eventIndex: number, symbolVoiceIndex: number, event: NoteEvent, kind: AdjustableSymbolKind, isCustomSymbolId?: false): void;
+  (elements: SVGGraphicsElement[], partIndex: number, measureAbsoluteIndex: number, eventIndex: number, symbolVoiceIndex: number, event: NoteEvent, symbolId: string, isCustomSymbolId: true): void;
 };
 function drawCollectedSymbolEntries(args: {
   svgRoot: SVGGElement;
@@ -1556,7 +1565,7 @@ function drawCollectedSymbolEntries(args: {
       indices.forEach((index, k) => { dynamicCollisionShifts[index] = shifts[k]; });
     }
   }
-  dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }, dynamicEntryIndex) => {
+  dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }, dynamicEntryIndex) => {
     // 行割り（絶対強弱→cresc/dim）は衝突概算と共有する（orderedDynamicMarkings）
     const orderedMarkings = orderedDynamicMarkings(markings);
     const drawnElements: SVGGraphicsElement[] = [];
@@ -1604,17 +1613,18 @@ function drawCollectedSymbolEntries(args: {
       svgRoot.appendChild(text);
       drawnElements.push(text);
     });
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-      appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'dynamics');
+      appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'dynamics');
     }
   });
 
   // ── カスタム記号を一括描画（StaffCanvas と同じ共通ユーティリティを使う） ──
   drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot, (entry, symbolId, g) => {
-    // 非アクティブ声部の「見た目だけ」描画（partIndex 省略）にはクリック判定を作らない
+    // index 情報が無いエントリ（partIndex 省略）にはクリック判定を作らない
     if (entry.partIndex === undefined) return;
-    appendSymbolHitRegion([g], entry.partIndex, entry.measureAbsoluteIndex, entry.eventIndex, entry.event, symbolId, true);
+    appendSymbolHitRegion([g], entry.partIndex, entry.measureAbsoluteIndex, entry.eventIndex, entry.voiceIndex ?? 0, entry.event, symbolId, true);
   });
 
   // ── 途中テンポ変更マーキングを一括描画（StaffCanvas と同じ表示） ──
@@ -1685,7 +1695,7 @@ function drawCollectedSymbolEntries(args: {
   // 運指番号: 音高に関わらず五線上端基準の統一高さに揃えて表示する
   // （カスタム記号と同じ方針）。五線より上へ飛び出す高音だけは、
   // 符頭と重ならないよう、その音符に限り符頭上端の上へ逃がす。
-  fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+  fingeringEntries.forEach(({ anchorX, noteTopY, staveTopY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }) => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     el.textContent = text;
     el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -1699,14 +1709,15 @@ function drawCollectedSymbolEntries(args: {
     el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.fingering * adjust.scale));
     el.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(el);
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'fingering');
+      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'fingering');
     }
   });
 
   // ── アーティキュレーション記号を一括描画（StaffCanvas と同じ描き方に揃える） ──
-  articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+  articulationEntries.forEach(({ anchorX, noteTopY, staveTopY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }) => {
     // ⤢/✥ ツールの調整値を反映する（StaffCanvas と同じ考え方）。
     // offsetX/offsetY は座標へ加算、scale は各図形の半径・線幅・線の長さへの倍率として使う。
     const ax = anchorX + adjust.offsetX;
@@ -1793,15 +1804,16 @@ function drawCollectedSymbolEntries(args: {
         aboveOffset += 14 * s;
       }
     });
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-      appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'articulations');
+      appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'articulations');
     }
   });
 
   // テンポ表記（"Fine" 等）: 五線上端より24px上、イタリック体で表示する
   // （StaffCanvas の tempoMarkingEntries と同じ描き方）
-  tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust, stackedWithExpression, stackedWithChord, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+  tempoMarkingEntries.forEach(({ anchorX, topY, text, adjust, stackedWithExpression, stackedWithChord, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }) => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     el.textContent = text;
     el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -1819,9 +1831,10 @@ function drawCollectedSymbolEntries(args: {
     el.setAttribute('font-style', 'italic');
     el.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(el);
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'tempoMarking');
+      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'tempoMarking');
     }
   });
 
@@ -1838,7 +1851,7 @@ function drawCollectedSymbolEntries(args: {
   // 位置調整ツール（✥）で逃がせる形にとどめている（`.claude/specs/extended-notation-features/design.md` 参照）。
   // ただし**左だけは五線の左端で止める**。左は紙面の端が近く、はみ出すと
   // 文字が切れて読めなくなってしまうため（右へのはみ出しは許容する）
-  expressionMarkingEntries.forEach(({ anchorX, topY, text, adjust, staveLeftX, stackedWithChord, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+  expressionMarkingEntries.forEach(({ anchorX, topY, text, adjust, staveLeftX, stackedWithChord, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }) => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     el.textContent = text;
     el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -1863,9 +1876,10 @@ function drawCollectedSymbolEntries(args: {
         el.setAttribute('x', String(minAnchorX));
       }
     }
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'expressionMarking');
+      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'expressionMarking');
     }
   });
 
@@ -1878,7 +1892,7 @@ function drawCollectedSymbolEntries(args: {
   // ・積み順: 3種類の中でいちばん五線に近い行に置く。コード記号は「その拍で何の和音か」を
   //   示すものなので、音符の近くにあるほど読みやすいため。同じ音符に発想標語・テンポ表記が
   //   あるときは、それらが上へ逃げる（上の2つの forEach の stackedWithChord）
-  chordSymbolEntries.forEach(({ anchorX, topY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+  chordSymbolEntries.forEach(({ anchorX, topY, text, adjust, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }) => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     el.textContent = text;
     el.setAttribute('x', String(anchorX + adjust.offsetX));
@@ -1889,9 +1903,10 @@ function drawCollectedSymbolEntries(args: {
     el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.chordSymbol * adjust.scale));
     el.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(el);
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, event, 'chordSymbol');
+      appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'chordSymbol');
     }
   });
 
@@ -1958,7 +1973,7 @@ function drawCollectedSymbolEntries(args: {
     }
   });
   // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
-  ottavaEntries.forEach(({ kind, startX, endX, lineY, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }) => {
+  ottavaEntries.forEach(({ kind, startX, endX, lineY, adjust, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }) => {
     // symbolAdjust: offsetX/offsetY はブラケット全体に、scale はテキストの font-size と線の太さに効かせる
     const ax = startX + adjust.offsetX;
     const aex = endX + adjust.offsetX;
@@ -2004,7 +2019,7 @@ function drawCollectedSymbolEntries(args: {
     svgRoot.appendChild(vline);
     drawnElements.push(vline);
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
-      appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, event, 'ottava');
+      appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'ottava');
     }
   });
 }
@@ -3764,6 +3779,9 @@ export default function PianoSystemCanvas({
       partIndex: number,
       measureAbsoluteIndex: number,
       eventIndex: number,
+      // その記号が付いている音符の声部。アクティブ声部で決め打ちすると、他声部の記号を
+      // 触ったときに別の声部へ調整値が書かれてしまう（#316/#389 のレイヤー跨ぎクリック）
+      symbolVoiceIndex: number,
       event: NoteEvent,
       kind: AdjustableSymbolKind,
       isCustomSymbolId?: false,
@@ -3773,6 +3791,9 @@ export default function PianoSystemCanvas({
       partIndex: number,
       measureAbsoluteIndex: number,
       eventIndex: number,
+      // その記号が付いている音符の声部。アクティブ声部で決め打ちすると、他声部の記号を
+      // 触ったときに別の声部へ調整値が書かれてしまう（#316/#389 のレイヤー跨ぎクリック）
+      symbolVoiceIndex: number,
       event: NoteEvent,
       symbolId: string,
       isCustomSymbolId: true,
@@ -3782,6 +3803,9 @@ export default function PianoSystemCanvas({
       partIndex: number,
       measureAbsoluteIndex: number,
       eventIndex: number,
+      // その記号が付いている音符の声部。アクティブ声部で決め打ちすると、他声部の記号を
+      // 触ったときに別の声部へ調整値が書かれてしまう（#316/#389 のレイヤー跨ぎクリック）
+      symbolVoiceIndex: number,
       event: NoteEvent,
       kindOrSymbolId: AdjustableSymbolKind | string,
       isCustomSymbolId?: boolean,
@@ -3866,10 +3890,30 @@ export default function PianoSystemCanvas({
             ? toContainerRect(hitRect)
             : anchorFromClientPoint((domEvent as MouseEvent).clientX, (domEvent as MouseEvent).clientY);
           const overlayKind = 'mode' in tool && tool.mode === 'symbolAdjustResize' ? 'resize' : 'offset';
-          // ここで渡す eventIndex は、記号の描画エントリを積んだときのアクティブ声部の
-          // events 内の位置なので、声部も activeVoiceIndex を渡してそろえる
+          // 別のレイヤー（手×声部）の記号をクリックしたときは、**そのレイヤーへ切り替えてから**
+          // 調整の小窓を開く（#316 の音符クリックと同じ型。切り替えは必ず画面に出す）。
+          // こうしないと「レイヤーを合わせないと記号を触れない」うえ、どの記号がどの声部の
+          // ものかは画面から見分けられないため、押しても無反応に見える
+          const layerPartChanged = activeLayerPartIndex != null && partIndex !== activeLayerPartIndex;
+          const voiceChanged = symbolVoiceIndex !== activeVoiceIndex;
+          // 編集 UI（声部トグル）は2声まで。3声以降のデータは表示・再生・書き出しのみ対応
+          // なので、切り替え要求を ScorePage が黙って無視して「切り替えたと言われたのに
+          // 実状態は変わらないまま編集できてしまう」食い違いを防ぐ（音符クリックと同じ
+          // ガード・#318 / #244 段5-5）
+          if (voiceChanged && symbolVoiceIndex > 1) {
+            notifyScoreEdit(describeVoiceSwitchUnavailable(symbolVoiceIndex));
+            return;
+          }
+          if (layerPartChanged || voiceChanged) {
+            requestActiveVoiceChange(symbolVoiceIndex, activeLayerPartIndex != null ? partIndex : undefined);
+            notifyScoreEdit(layerPartChanged
+              ? describeActiveLayerSwitched(layerPartLabel(partIndex), symbolVoiceIndex)
+              : describeActiveVoiceSwitched(symbolVoiceIndex));
+          }
+          // eventIndex は記号の描画エントリを積んだときの**その声部の** events 内の位置なので、
+          // 声部も記号自身のもの（symbolVoiceIndex）を渡してそろえる
           // （声部2の音符に付いた記号をクリックしたとき、声部1側を書き換えないため）。
-          openSymbolAdjustEditor(overlayKind, partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex, target, event, anchor);
+          openSymbolAdjustEditor(overlayKind, partIndex, measureAbsoluteIndex, eventIndex, symbolVoiceIndex, target, event, anchor);
         });
       }
       svgRoot.appendChild(hit);
@@ -3892,7 +3936,7 @@ export default function PianoSystemCanvas({
     arcDragContextRef.current={svg,svgRoot,arcGeomMap};
     let pendingOttava: {
       kind: '8va' | '8vb'; startX: number; lineY: number; adjust: ResolvedSymbolAdjust;
-      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; event?: NoteEvent;
+      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
     } | null = null;
 
     // ドラッグの確定/キャンセル直後に必ず1回来る click は、**capture フェーズで1回だけ消費**する
@@ -6298,12 +6342,11 @@ export default function PianoSystemCanvas({
               case 'symbolAdjustResize':
               case 'symbolAdjustOffset': {
                 const adjustKind = tool.mode === 'symbolAdjustResize' ? 'resize' as const : 'offset' as const;
-                if (clickedIsRest) {
-                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
-                    { type: 'symbolAdjust', adjust: adjustKind }, 'rest') };
-                }
                 // 汎用サイズ・位置調整: カスタム記号＋標準記号のうち、この音符に実際に
                 // 付いているものを列挙する（StaffCanvas と同じロジック）。
+                // 休符でも列挙してから判断する。テキスト系（歌詞・コード記号・テンポ表記・
+                // 発想標語）とオッターバは休符にも付けられるため、一律に弾くと
+                // 「付いているのに調整できない」行き止まりになる（#398 Codex round5 P2）。
                 const currentEv = activeEvs[j];
                 const targets: AdjustTarget[] = [
                   ...(currentEv.customSymbols?.map((s): AdjustTarget => ({ type: 'custom', symbolId: s.symbolId, name: customSymbolDefs.find(d => d.id === s.symbolId)?.name ?? s.symbolId })) ?? []),
@@ -6311,10 +6354,12 @@ export default function PianoSystemCanvas({
                 ];
                 if (targets.length === 0) {
                   // 調整できる記号が1つも無い音符では選択リストすら開けない。
-                  // ボタンが押せる＝どの音符でも使える、と受け取られるため理由を言う（Issue #330）
+                  // ボタンが押せる＝どの音符でも使える、と受け取られるため理由を言う（Issue #330）。
+                  // 休符では「休符だから使えない」と言うと事実に反する（テキスト系は付けられる）。
+                  // 本当の理由は「まだ何も付いていない」なので、休符用の文言を使う（#398 round6 P2）。
                   return { kind: 'rejected', notice: describeSymbolToolUnavailable(
                     { type: 'symbolAdjust', adjust: adjustKind },
-                    'noAdjustableSymbol',
+                    clickedIsRest ? 'noAdjustableSymbolOnRest' : 'noAdjustableSymbol',
                   ) };
                 }
                 const containerRect = containerRef.current?.getBoundingClientRect();
@@ -6404,6 +6449,14 @@ export default function PianoSystemCanvas({
                 // テキストも休符に付く。プレースホルダーだけ既定処理へ（ペダルと同じ理由）
                 if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
                 const textElementMode = tool.textKind;
+                // 運指だけは休符に描画されない（符頭の上に出す記号のため）。保存はできてしまうので
+                // 入力欄を開く前に断る。開かせると「入力したのに何も出ない」無言の行き止まりになる
+                // （#318・#398 round7 P2）。他のテキスト系（歌詞・コード記号・テンポ表記・発想標語）は
+                // 休符でも描画されるので従来どおり受け付ける。
+                if (textElementMode === 'fingering' && clickedIsRest) {
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
+                    { type: 'fingering' }, 'rest') };
+                }
                 // テキスト要素はクリック位置にオーバーレイを表示して文字入力を受け付ける。
                 // TextElementKind で NoteEvent を索引するため any キャストを使う
                 const currentText = (activeEvs[j] as any)[textElementMode] ?? '';
@@ -6618,7 +6671,7 @@ export default function PianoSystemCanvas({
                 markings: activeEvs[j].dynamics,
                 adjust: getSymbolAdjust(activeEvs[j], 'dynamics'),
                 obstaclePartIndex: pi,
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
               });
             }
             {
@@ -6631,6 +6684,7 @@ export default function PianoSystemCanvas({
                 absI,
                 j,
                 pi,
+                activeVoiceIndex,
               );
               if (entry) customSymbolEntries.push(entry);
             }
@@ -6649,7 +6703,7 @@ export default function PianoSystemCanvas({
                 staveTopY: stave.getYForLine(0),
                 text: activeEvs[j].fingering!,
                 adjust: getSymbolAdjust(activeEvs[j], 'fingering'),
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && !activeEvs[j]?.isRest && activeEvs[j]?.articulations?.length) {
@@ -6659,7 +6713,7 @@ export default function PianoSystemCanvas({
                 staveTopY: stave.getYForLine(0),
                 markings: activeEvs[j].articulations!,
                 adjust: getSymbolAdjust(activeEvs[j], 'articulations'),
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.tempoMarking) {
@@ -6670,7 +6724,7 @@ export default function PianoSystemCanvas({
                 adjust: getSymbolAdjust(activeEvs[j], 'tempoMarking'),
                 stackedWithExpression: !!activeEvs[j]?.expressionMarking,
                 stackedWithChord: !!activeEvs[j]?.chordSymbol,
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.expressionMarking) {
@@ -6681,7 +6735,7 @@ export default function PianoSystemCanvas({
                 adjust: getSymbolAdjust(activeEvs[j], 'expressionMarking'),
                 staveLeftX: stave.getX(),
                 stackedWithChord: !!activeEvs[j]?.chordSymbol,
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.chordSymbol) {
@@ -6690,7 +6744,7 @@ export default function PianoSystemCanvas({
                 topY: stave.getYForLine(0),
                 text: activeEvs[j].chordSymbol!,
                 adjust: getSymbolAdjust(activeEvs[j], 'chordSymbol'),
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j],
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.lyrics) {
@@ -6707,9 +6761,9 @@ export default function PianoSystemCanvas({
               const botY = stave.getYForLine(4);
               const ot = activeEvs[j].ottava!;
               if (ot === '8va') {
-                pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(activeEvs[j], 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j] };
+                pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(activeEvs[j], 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j] };
               } else if (ot === '8vb') {
-                pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(activeEvs[j], 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, event: activeEvs[j] };
+                pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(activeEvs[j], 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j] };
               } else if (pendingOttava && ot === '8vaEnd' && pendingOttava.kind === '8va') {
                 ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
                 pendingOttava = null;
@@ -6759,10 +6813,16 @@ export default function PianoSystemCanvas({
         }
 
         // 非アクティブ声部の強弱・カスタム記号・ペダル・オッターバの「見た目」も引き続き描画する。
-        // 上のインタラクティブ層（hit rect・クリックハンドラ）はアクティブ声部だけから作るが、
-        // それだけだと「声部2に切り替えた瞬間、声部1に付けた強弱記号が画面から消える」という
-        // 表示上の退行が起きてしまう。ここでは当たり判定を持たない“見た目だけ”の描画として、
-        // 編集用ループが担当しなかった全エントリに同じマーカーを描き足す。
+        // 上のインタラクティブ層（音符の hit rect・クリックハンドラ）はアクティブ声部だけから
+        // 作るが、それだけだと「声部2に切り替えた瞬間、声部1に付けた強弱記号が画面から消える」
+        // という表示上の退行が起きてしまう。ここでは編集用ループが担当しなかった全エントリに
+        // 同じマーカーを描き足す。
+        // **記号のクリック判定はここでも作る**（2026-08-24）: 画面上どの記号がどの声部の
+        // ものかは見分けられないため、レイヤーを合わせないと触れない仕様では
+        // 「押しても無反応＝壊れている」ように見える。他レイヤーの記号を押したときは
+        // クリック側でそのレイヤーへ切り替えてから小窓を開く（#316 の音符クリックと同じ型）。
+        // そのため各 push に partIndex / measureAbsoluteIndex / eventIndex / voiceIndex を
+        // 必ず渡す（voiceIndex を省くと調整値が別の声部へ書かれる）。
         // 対象は「編集用ループの補集合」で選ぶ（#340 round1 で発覚した #316 の退行の修正）:
         // 以前の isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex という条件では、
         // レイヤー明示選択（#316・ピアノ譜は常に明示選択）中の非選択パートの
@@ -6786,9 +6846,10 @@ export default function PianoSystemCanvas({
                     markings: ev.dynamics,
                     adjust: getSymbolAdjust(ev, 'dynamics'),
                     obstaclePartIndex: pi,
+                    partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
                   });
                 }
-                const symbolEntry = buildCustomSymbolEntry(ev, cx, stave.getYForLine(0));
+                const symbolEntry = buildCustomSymbolEntry(ev, cx, stave.getYForLine(0), absI, j, pi, entry.voiceIndex);
                 if (symbolEntry) customSymbolEntries.push(symbolEntry);
                 if (ev.pedalMark) {
                   pedalMarkEntries.push({
@@ -6805,6 +6866,7 @@ export default function PianoSystemCanvas({
                     staveTopY: stave.getYForLine(0),
                     text: ev.fingering,
                     adjust: getSymbolAdjust(ev, 'fingering'),
+                    partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
                   });
                 }
                 if (ev.lyrics) {
@@ -6822,6 +6884,7 @@ export default function PianoSystemCanvas({
                     staveTopY: stave.getYForLine(0),
                     markings: ev.articulations,
                     adjust: getSymbolAdjust(ev, 'articulations'),
+                    partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
                   });
                 }
                 if (ev.tempoMarking) {
@@ -6832,6 +6895,7 @@ export default function PianoSystemCanvas({
                     adjust: getSymbolAdjust(ev, 'tempoMarking'),
                     stackedWithExpression: !!ev.expressionMarking,
                     stackedWithChord: !!ev.chordSymbol,
+                    partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
                   });
                 }
                 if (ev.expressionMarking) {
@@ -6842,6 +6906,7 @@ export default function PianoSystemCanvas({
                     adjust: getSymbolAdjust(ev, 'expressionMarking'),
                     staveLeftX: stave.getX(),
                     stackedWithChord: !!ev.chordSymbol,
+                    partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
                   });
                 }
                 if (ev.chordSymbol) {
@@ -6850,15 +6915,16 @@ export default function PianoSystemCanvas({
                     topY: stave.getYForLine(0),
                     text: ev.chordSymbol,
                     adjust: getSymbolAdjust(ev, 'chordSymbol'),
+                    partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
                   });
                 }
                 if (ev.ottava) {
                   const topY = stave.getYForLine(0);
                   const botY = stave.getYForLine(4);
                   if (ev.ottava === '8va') {
-                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(ev, 'ottava') };
+                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
                   } else if (ev.ottava === '8vb') {
-                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(ev, 'ottava') };
+                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
                   } else if (pendingOttava && ev.ottava === '8vaEnd' && pendingOttava.kind === '8va') {
                     ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
                     pendingOttava = null;

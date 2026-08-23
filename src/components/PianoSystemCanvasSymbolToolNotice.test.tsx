@@ -163,6 +163,29 @@ describe('記号系ツールを対象外へ使ったときの通知（Issue #330
       expect(onChange).not.toHaveBeenCalled();
     });
 
+    // 運指は休符には描画されない（符頭の上に出す記号のため）が、保存自体はできてしまう。
+    // 入力欄を開くと「入力したのに何も出ない」無言の行き止まりになるので、開く前に断る
+    // （#398 round7 P2）。他のテキスト系は休符でも描画されるので従来どおり受け付ける。
+    it('運指ツールでは休符に入力欄を開かず「付けられません」と出る', async () => {
+      const { svg, onChange } = renderScore(NOTE_AND_REST, { mode: 'textElement', textKind: 'fingering' });
+      clickEvent(svg, 1);
+
+      await waitFor(() => expect(notices).toHaveLength(1));
+      expect(notices[0]).toContain('休符には運指（指番号）を付けられません');
+      expect(notices[0]).toContain('音符をクリックしてください');
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it('歌詞ツールは休符でも入力欄が開く（休符にも描画されるため）', async () => {
+      const { svg } = renderScore(NOTE_AND_REST, { mode: 'textElement', textKind: 'lyrics' });
+      clickEvent(svg, 1);
+
+      await waitFor(() => {
+        expect(document.querySelector('input')).toBeTruthy();
+      });
+      expect(notices).toHaveLength(0);
+    });
+
     it('カスタム記号ツールでは記号の名前を差し込んで伝える', async () => {
       const { svg, onChange } = renderScore(NOTE_AND_REST, { mode: 'customSymbol', symbolId: 'sym-1' });
       clickEvent(svg, 1);
@@ -182,13 +205,40 @@ describe('記号系ツールを対象外へ使ったときの通知（Issue #330
       expect(notices[0]).toContain('休符には');
     });
 
-    it('汎用の位置調整（✥）でも休符では使えないと出る', async () => {
+    // 何も付いていない休符で✥を押したとき。「休符だから使えない」ではなく
+    // 「まだ何も付いていない」と言う。休符にもテキスト系は付けられるので、
+    // 前者は事実に反する（#398 round6 P2）。
+    it('何も付いていない休符で✥を押すと、休符に付けられる記号を案内する', async () => {
       const { svg } = renderScore(NOTE_AND_REST, { mode: 'symbolAdjustOffset' });
       clickEvent(svg, 1);
 
       await waitFor(() => expect(notices).toHaveLength(1));
-      expect(notices[0]).toContain('位置調整');
-      expect(notices[0]).toContain('休符には');
+      expect(notices[0]).toContain('この休符には調整できる記号がありません');
+      expect(notices[0]).toContain('コード記号');
+      // 「休符には使えません」という旧文言に戻っていないこと
+      expect(notices[0]).not.toContain('休符には記号の');
+    });
+
+    // ただし「休符だから一律に拒否」ではない。テキスト系（歌詞・コード記号・テンポ表記・
+    // 発想標語）とオッターバは休符にも付けられるので、付いているなら調整できる。
+    // 以前は列挙前に休符を弾いていたため、付いているのに触れない行き止まりだった
+    // （#398 Codex round5 P2）。
+    it('休符でもコード記号が付いていれば✥で調整の小窓が開く', async () => {
+      const restWithChord: MeasureData[] = [{
+        events: [
+          { dur: '4', isRest: false, keys: ['c/5'] },
+          { dur: '4', isRest: true, keys: ['b/4'], chordSymbol: 'C' },
+          { dur: '2', isRest: true, keys: ['b/4'] },
+        ],
+      }];
+      const { svg } = renderScore(restWithChord, { mode: 'symbolAdjustOffset' });
+      clickEvent(svg, 1);
+
+      await waitFor(() => {
+        expect(document.body.textContent).toContain('横');
+      });
+      // 拒否通知は出ない
+      expect(notices).toHaveLength(0);
     });
   });
 

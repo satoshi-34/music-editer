@@ -8,8 +8,8 @@ import type { NoteEvent } from '../types/storage';
 import {
   getSymbolAdjust,
   listPresentAdjustableSymbolKinds,
-  setSymbolAdjustScale,
   setSymbolAdjustOffset,
+  setSymbolAdjustScale,
   DEFAULT_SYMBOL_ADJUST,
 } from './symbolAdjustUtils';
 
@@ -18,8 +18,26 @@ function baseNote(overrides: Partial<NoteEvent> = {}): NoteEvent {
 }
 
 describe('listPresentAdjustableSymbolKinds', () => {
-  it('休符では常に空配列を返す', () => {
+  it('休符では音符専用の記号（運指・強弱・アーティキュレーション）を列挙しない', () => {
     expect(listPresentAdjustableSymbolKinds(baseNote({ isRest: true, fingering: '1' }))).toEqual([]);
+  });
+
+  it('休符でもテキスト系・オッターバは列挙する（休符にも付けられるため・#398 round4）', () => {
+    // 以前は休符を一律で除外していたため、休符に付けたコード記号などの調整が
+    // 「小窓は開くのに保存されない」無言の no-op になっていた
+    const ev = baseNote({ isRest: true, chordSymbol: 'Am', lyrics: 'ら', tempoMarking: 'Fine', expressionMarking: 'dolce', ottava: '8va' });
+    expect(listPresentAdjustableSymbolKinds(ev).sort())
+      .toEqual(['chordSymbol', 'expressionMarking', 'lyrics', 'ottava', 'tempoMarking'].sort());
+  });
+
+  it('休符に付いたテキスト記号は調整値を保存できる（設定関数側の回帰）', () => {
+    const rest = baseNote({ isRest: true, chordSymbol: 'Am' });
+    expect(setSymbolAdjustOffset(rest, 'chordSymbol', 4, -8).symbolAdjust?.chordSymbol)
+      .toEqual({ offsetX: 4, offsetY: -8 });
+    expect(setSymbolAdjustScale(rest, 'chordSymbol', 1.5).symbolAdjust?.chordSymbol?.scale).toBe(1.5);
+    // 音符専用の記号は休符では従来どおり no-op（データを汚さない）
+    const restWithFingering = baseNote({ isRest: true, fingering: '1' });
+    expect(setSymbolAdjustOffset(restWithFingering, 'fingering', 4, -8)).toBe(restWithFingering);
   });
 
   it('付いている記号だけを列挙する', () => {
