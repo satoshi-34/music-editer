@@ -8,7 +8,7 @@
 //   - SVG 要素の getBoundingClientRect: x/y/width/height 属性をそのまま画面座標として返す
 //     （コンテナは原点 0,0・縮小率 1 として扱われるため、SVG 座標＝オーバーレイ座標になる）
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+import { render, fireEvent, act } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { CustomSymbolDef, MeasureData } from '../types/storage';
@@ -144,6 +144,36 @@ describe('記号調整オーバーレイの表示位置（Issue #230）', () => 
     // 記号の上・余白ぶん離れた位置に出る
     expect(parseFloat(overlay.style.top)).toBe(symbol.top - SYMBOL_OVERLAY_GAP - SYMBOL_OVERLAY_FALLBACK_HEIGHT);
     expect(overlapsSymbol(overlay, symbol)).toBe(false);
+  });
+
+  it('矢印キーの調整中はオーバーレイが半透明になり、止まる/カーソルが乗ると戻る（#385 裁定C）', () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = renderScore();
+      fireEvent.click(symbolHitRegion(container), { clientX: 128, clientY: 246 });
+      const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
+      // 開いた直後は不透明
+      expect(overlay.classList.contains('symbol-adjust-overlay-translucent')).toBe(false);
+
+      // 矢印キーを押すと透ける（位置合わせの参照物＝周辺の音符が見える）
+      const xInput = container.querySelectorAll('.symbol-adjust-overlay input')[0] as HTMLInputElement;
+      fireEvent.keyDown(xInput, { key: 'ArrowRight' });
+      expect(container.querySelector('.symbol-adjust-overlay-translucent')).toBeTruthy();
+
+      // キー入力が止まって 800ms 経つと不透明へ戻る
+      act(() => {
+        vi.advanceTimersByTime(800);
+      });
+      expect(container.querySelector('.symbol-adjust-overlay-translucent')).toBeNull();
+
+      // もう一度透かした状態でカーソルが乗ると、待たずに戻る
+      fireEvent.keyDown(xInput, { key: 'ArrowDown' });
+      expect(container.querySelector('.symbol-adjust-overlay-translucent')).toBeTruthy();
+      fireEvent.mouseEnter(container.querySelector('.symbol-adjust-overlay') as HTMLElement);
+      expect(container.querySelector('.symbol-adjust-overlay-translucent')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('矢印キーで記号を動かしてもオーバーレイは動かない（開いた位置に固定）', () => {
