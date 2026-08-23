@@ -3839,23 +3839,14 @@ export default function PianoSystemCanvas({
         hit.addEventListener('mouseleave', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0)'));
         hit.addEventListener('click', (domEvent) => {
           domEvent.stopPropagation();
-          // 記号クリックの行き先は**選択中のツールで振り分ける**（Issue #385 続報・裁定C拡張）。
-          // 従来は常に ✥（位置調整）へ吸われ、「⤢ 選択中に記号をクリックしてもサイズ調整に
-          // 届かない」「同種ツールでの再クリック解除が効かない」という詰みがあった。
-          //   1. ⤢（サイズ変更ツール）選択中 → サイズ調整オーバーレイ
-          //   2. 同種の記号ツール（強弱↔dynamics・アーティキュレーション↔articulations）選択中
-          //      → 音符クリックと同じトグル（＝付いているものをクリックすれば外れる）
-          //   3. それ以外 → ✥（位置調整）オーバーレイ（従来どおり）
-          if ('mode' in tool && tool.mode === 'dynamic' && target.type === 'standard' && target.kind === 'dynamics') {
-            toggleSymbolAtIndices(partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex,
-              (targetEv) => applyDynamicMarkingToEvent(targetEv, tool.dynamic));
-            return;
-          }
-          if ('mode' in tool && tool.mode === 'articulation' && target.type === 'standard' && target.kind === 'articulations') {
-            toggleSymbolAtIndices(partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex,
-              (targetEv) => toggleArticulationOnEvent(targetEv, tool.articulation));
-            return;
-          }
+          // 記号クリックは**常に「その記号を選ぶ」**（2026-08-24 の実機フィードバックで統一）。
+          // 一時期は選択中のツールで振り分け（同種の記号ツール中はトグル解除）にしていたが、
+          //   - pp ツールを持ったまま pp を押すと消えてしまい、**選択・位置調整ができない**
+          //   - タブ（symbolsClickable）とツールの組み合わせで意味が4通りに割れて予測できない
+          // という詰みが出たため撤回した。削除は ✥ パネルの「この記号を削除」ボタンと、
+          // 従来どおり**音符**を同種ツールでクリックするトグルの2経路が担う。
+          // ⤢（サイズ変更ツール）中だけは、その場でサイズ調整パネルを開く（詰みの解消は維持）。
+          // 選択そのものを Delete で消す統一は #389 で扱う。
           // 押した記号そのものの範囲をオーバーレイの回避対象にする。
           // 計測できない環境ではクリック点（大きさ0）で代用する。
           const hitRect = hit.getBoundingClientRect();
@@ -7358,34 +7349,6 @@ export default function PianoSystemCanvas({
       return next;
     });
     setSymbolOffsetEditState(null);
-  }
-
-  /**
-   * 記号字面クリックからのトグル適用（Issue #385 続報・裁定C拡張）。
-   * 音符クリックと同じ更新関数（applyDynamicMarkingToEvent 等）を、記号エントリが
-   * 指している（パート・小節・イベント・声部）へそのまま適用する。
-   */
-  function toggleSymbolAtIndices(
-    partIndex: number,
-    measureAbsoluteIndex: number,
-    eventIndex: number,
-    voiceIndex: number,
-    compute: (targetEv: NoteEvent) => NoteEvent,
-  ) {
-    setPartsScore(prev => {
-      const next = [...prev];
-      const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
-      if (measureAbsoluteIndex >= partData.length) return prev;
-      const targetEv = getVoiceEvents(partData[measureAbsoluteIndex], voiceIndex)[eventIndex];
-      if (!targetEv) return prev;
-      partData[measureAbsoluteIndex] = withVoiceEventsUpdated(partData[measureAbsoluteIndex], voiceIndex, (events) => {
-        const copy = [...events];
-        copy[eventIndex] = compute(targetEv);
-        return copy;
-      });
-      next[partIndex] = partData;
-      return next;
-    });
   }
 
   /**
