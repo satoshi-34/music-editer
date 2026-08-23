@@ -36,6 +36,7 @@ import {
   describeAbsorbedChordKey,
   describeActiveLayerSwitched,
   describeCrossBandInsert,
+  describeSymbolDeleted,
   describeActiveVoiceSwitched,
   describeVoiceSwitchUnavailable,
   describeCrossStaffToggled,
@@ -122,6 +123,7 @@ import {
   setSymbolAdjustScale,
   setSymbolAdjustOffset,
   ADJUSTABLE_SYMBOL_KIND_LABELS,
+  removeAdjustableSymbol,
   type ResolvedSymbolAdjust,
 } from '../utils/symbolAdjustUtils';
 import SymbolAdjustOverlay from './SymbolAdjustOverlay';
@@ -3821,16 +3823,34 @@ export default function PianoSystemCanvas({
         hit.addEventListener('mouseleave', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0)'));
         hit.addEventListener('click', (domEvent) => {
           domEvent.stopPropagation();
+          // 記号クリックの行き先は**選択中のツールで振り分ける**（Issue #385 続報・裁定C拡張）。
+          // 従来は常に ✥（位置調整）へ吸われ、「⤢ 選択中に記号をクリックしてもサイズ調整に
+          // 届かない」「同種ツールでの再クリック解除が効かない」という詰みがあった。
+          //   1. ⤢（サイズ変更ツール）選択中 → サイズ調整オーバーレイ
+          //   2. 同種の記号ツール（強弱↔dynamics・アーティキュレーション↔articulations）選択中
+          //      → 音符クリックと同じトグル（＝付いているものをクリックすれば外れる）
+          //   3. それ以外 → ✥（位置調整）オーバーレイ（従来どおり）
+          if ('mode' in tool && tool.mode === 'dynamic' && target.type === 'standard' && target.kind === 'dynamics') {
+            toggleSymbolAtIndices(partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex,
+              (targetEv) => applyDynamicMarkingToEvent(targetEv, tool.dynamic));
+            return;
+          }
+          if ('mode' in tool && tool.mode === 'articulation' && target.type === 'standard' && target.kind === 'articulations') {
+            toggleSymbolAtIndices(partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex,
+              (targetEv) => toggleArticulationOnEvent(targetEv, tool.articulation));
+            return;
+          }
           // 押した記号そのものの範囲をオーバーレイの回避対象にする。
           // 計測できない環境ではクリック点（大きさ0）で代用する。
           const hitRect = hit.getBoundingClientRect();
           const anchor = (hitRect.width || hitRect.height)
             ? toContainerRect(hitRect)
             : anchorFromClientPoint((domEvent as MouseEvent).clientX, (domEvent as MouseEvent).clientY);
+          const overlayKind = 'mode' in tool && tool.mode === 'symbolAdjustResize' ? 'resize' : 'offset';
           // ここで渡す eventIndex は、記号の描画エントリを積んだときのアクティブ声部の
           // events 内の位置なので、声部も activeVoiceIndex を渡してそろえる
           // （声部2の音符に付いた記号をクリックしたとき、声部1側を書き換えないため）。
-          openSymbolAdjustEditor('offset', partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex, target, event, anchor);
+          openSymbolAdjustEditor(overlayKind, partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex, target, event, anchor);
         });
       }
       svgRoot.appendChild(hit);
@@ -7322,6 +7342,67 @@ export default function PianoSystemCanvas({
   }
 
   /**
+   * 記号字面クリックからのトグル適用（Issue #385 続報・裁定C拡張）。
+   * 音符クリックと同じ更新関数（applyDynamicMarkingToEvent 等）を、記号エントリが
+   * 指している（パート・小節・イベント・声部）へそのまま適用する。
+   */
+  function toggleSymbolAtIndices(
+    partIndex: number,
+    measureAbsoluteIndex: number,
+    eventIndex: number,
+    voiceIndex: number,
+    compute: (targetEv: NoteEvent) => NoteEvent,
+  ) {
+    setPartsScore(prev => {
+      const next = [...prev];
+      const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
+      if (measureAbsoluteIndex >= partData.length) return prev;
+      const targetEv = getVoiceEvents(partData[measureAbsoluteIndex], voiceIndex)[eventIndex];
+      if (!targetEv) return prev;
+      partData[measureAbsoluteIndex] = withVoiceEventsUpdated(partData[measureAbsoluteIndex], voiceIndex, (events) => {
+        const copy = [...events];
+        copy[eventIndex] = compute(targetEv);
+        return copy;
+      });
+      next[partIndex] = partData;
+      return next;
+    });
+  }
+
+  /**
+   * 位置調整オーバーレイの「削除」ボタン（Issue #385 続報・裁定B）。
+   * オーバーレイが対象にしている記号（✥ と同じ種類単位）を音符から外す。
+   * 「選択できる（ように見える）記号が Delete で消せない」詰みへの短期対処で、
+   * 中期の「選択→Delete 統一」（別Issue）へ移行しても削除ボタンは残す。
+   */
+  function handleSymbolDeleteFromOverlay() {
+    if (!symbolOffsetEditState) return;
+    const { partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target } = symbolOffsetEditState;
+    setPartsScore(prev => {
+      const next = [...prev];
+      const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
+      if (measureAbsoluteIndex >= partData.length) return prev;
+      const targetEv = getVoiceEvents(partData[measureAbsoluteIndex], voiceIndex)[eventIndex];
+      if (!targetEv) return prev;
+      partData[measureAbsoluteIndex] = withVoiceEventsUpdated(partData[measureAbsoluteIndex], voiceIndex, (events) => {
+        const copy = [...events];
+        copy[eventIndex] = target.type === 'custom'
+          ? applyCustomSymbolToEvent(targetEv, target.symbolId)  // 既存トグル: 付いているものに使えば「外す」
+          : removeAdjustableSymbol(targetEv, target.kind);
+        return copy;
+      });
+      next[partIndex] = partData;
+      return next;
+    });
+    notifyScoreEdit(describeSymbolDeleted(
+      symbolOffsetEditState.target.type === 'custom'
+        ? symbolOffsetEditState.target.name
+        : ADJUSTABLE_SYMBOL_KIND_LABELS[symbolOffsetEditState.target.kind]
+    ));
+    setSymbolOffsetEditState(null);
+  }
+
+  /**
    * 汎用サイズ・位置調整ツール共通の「オーバーレイを開く」処理（StaffCanvas と同じ役割）。
    *
    * TODO(phase2): StaffCanvas の同名関数とロジックはほぼ同じだが、partIndex の有無で
@@ -7778,6 +7859,20 @@ export default function PianoSystemCanvas({
           <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'sans-serif' }}>
             矢印キーで{SYMBOL_OFFSET_NUDGE_STEP}pxずつ移動（Shiftで{SYMBOL_OFFSET_NUDGE_STEP_LARGE}px）・Enterで確定・Escで元へ戻す
           </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button
+              type="button"
+              className="ghost compact-button"
+              style={{ fontSize: 11, color: '#b91c1c', borderColor: '#fca5a5', marginLeft: 'auto' }}
+              // 入力欄の blur（＝確定して閉じる）より先にクリックを成立させる。
+              // preventDefault しないと mousedown で blur → オーバーレイが閉じ、
+              // click がボタンに届かない（Issue #385 続報・裁定B）
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={handleSymbolDeleteFromOverlay}
+            >
+              この記号を削除
+            </button>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
               <span style={{ fontSize: 12, fontFamily: 'sans-serif' }}>横</span>

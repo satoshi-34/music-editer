@@ -149,6 +149,26 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     expect(document.querySelector('.symbol-adjust-overlay-translucent')).toBeTruthy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('強弱ツールを選んで記号の字面をクリックすると外れる（#385続報 配線）', async () => {
+    // 実経路: 演奏記号タブ→ f ボタン選択→記号字面クリック→トグル解除
+    seedQuartetWorkWithDynamics();
+    render(<ScorePage />);
+    fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
+    fireEvent.click(screen.getByRole('button', { name: '強弱記号 f（対象の音符をクリック）' }));
+    await waitFor(() => {
+      const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
+      expect(region).toBeTruthy();
+      expect(region!.style.pointerEvents).toBe('auto');
+    });
+    const region = document.querySelector('.symbol-hit-region') as SVGRectElement;
+    fireEvent.click(region, { clientX: 10, clientY: 10 });
+    // トグル解除で f のグリフ（と判定 rect）が消える。オーバーレイは開かない
+    expect(document.querySelector('.symbol-adjust-overlay')).toBeNull();
+    await waitFor(() => {
+      expect(document.querySelector('.symbol-hit-region')).toBeNull();
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('復元された強弱記号 f は ScorePage 経由でも Bravura の SMuFL グリフで描かれる（#380 配線）', async () => {
     // props 直接注入の PianoSystemCanvasDynamicsGlyph.test.tsx と違い、
     // 実際の復元→描画経路（ScorePage 直マウント）でグリフ描画を固定する
