@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData } from '../types/storage';
-import { dynamicGlyphFor, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
+import { dynamicGlyphFor, formatDynamicMarking, estimateDynamicMarkingsWidthUnits } from '../utils/dynamicMarkingUtils';
 
 vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function() {
@@ -113,7 +113,9 @@ describe('強弱記号の Bravura グリフ描画（Issue #380）', () => {
     }
   });
 
-  it('⤢ で拡大したグリフの判定クランプはサイズに追従する（scale=4 で判定も4倍）', () => {
+  it('⤢ で拡大した f の判定クランプはサイズと非対称な字面に追従する（scale=4）', () => {
+    // f 系はアセンダ（約1.8sp）がディセンダ（約1.0sp）より高い非対称な字面。
+    // 対称 ±1.4sp だと拡大時に上端がクリック不能になる（Codex round2 P2）
     (SVGElement.prototype as unknown as { getBBox: () => { x: number; y: number; width: number; height: number } }).getBBox =
       () => ({ x: 0, y: 0, width: 10, height: 10 });
     try {
@@ -122,18 +124,65 @@ describe('強弱記号の Bravura グリフ描画（Issue #380）', () => {
           measuresPerSystem={1}
           tool={{ duration: '4', isRest: false } as never}
           scale={1}
-          partsConfig={[{ clef: 'treble', data: [{ events: [{ dur: '1', isRest: false, keys: ['b/4'], dynamics: [{ value: 'pp' }], symbolAdjust: { dynamics: { scale: 4 } } }] }], onChange: vi.fn() }]}
+          partsConfig={[{ clef: 'treble', data: [{ events: [{ dur: '1', isRest: false, keys: ['b/4'], dynamics: [{ value: 'f' }], symbolAdjust: { dynamics: { scale: 4 } } }] }], onChange: vi.fn() }]}
           showInstrumentLabels={false}
           timeSignature={[4, 4]}
           symbolsClickable={true}
         />
       ).container;
       const region = container.querySelector('.symbol-hit-region') as SVGRectElement;
-      // ±1.4sp×4（=112論理単位）+ 判定パディング（3×2）
+      const glyphEl = Array.from(container.querySelectorAll('text')).find((t) => t.getAttribute('data-smufl-glyph') === '1')!;
+      const baseline = parseFloat(glyphEl.getAttribute('y')!);
+      // 高さ = (1.8+1.0)sp × 4倍 = 112論理単位 + 判定パディング（3×2）
       expect(parseFloat(region.getAttribute('height')!)).toBe(112 + 6);
+      // 上端はベースラインの 1.8sp×4 = 72 上（+パディング3）＝非対称に上へ広い
+      expect(parseFloat(region.getAttribute('y')!)).toBe(baseline - 72 - 3);
     } finally {
       Reflect.deleteProperty(SVGElement.prototype, 'getBBox');
     }
+  });
+
+  it('衝突回避の文字箱幅は Bravura グリフの実幅で見積もられる（単体）', () => {
+    // pp のグリフ実幅（3.4sp=34単位）は、旧・文字数ベース概算
+    // （2文字×2sp×0.62 = 24.8単位）より広い。過小評価すると隣接音符の
+    // 符幹・加線とグリフ端だけが重なるケースを見逃す（Codex round2 P2）
+    expect(estimateDynamicMarkingsWidthUnits([{ value: 'pp' }], 1)).toBe(34);
+    expect(estimateDynamicMarkingsWidthUnits([{ value: 'f' }], 1)).toBe(22);
+    // 文字系（cresc.）は従来どおり文字数ベース（6文字×20×0.62 = 74.4）
+    expect(estimateDynamicMarkingsWidthUnits([{ value: 'cresc' }], 1)).toBeCloseTo(74.4);
+    // 併記は最大幅・scale は線形に効く
+    expect(estimateDynamicMarkingsWidthUnits([{ value: 'pp' }, { value: 'cresc' }], 1)).toBeCloseTo(74.4);
+    expect(estimateDynamicMarkingsWidthUnits([{ value: 'pp' }], 2)).toBe(68);
+  });
+
+  it('隣接する幅広グリフ同士は横端の重なりを検出して連鎖回避する（統合）', () => {
+    // 16分音符で隣接する2つの pp（⤢で1.3倍）は、グリフ実幅（44.2単位）では
+    // 横端が重なり2つ目が下へ連鎖する。旧・文字数ベース概算（32.2単位）では
+    // 重ならず同じ高さに残っていた（Codex round2 P2 の統合検証）
+    const data: MeasureData = {
+      events: Array.from({ length: 16 }, (_, i) => (
+        i === 7 || i === 8
+          ? { dur: '16' as const, isRest: false, keys: ['b/4'], dynamics: [{ value: 'pp' as const }], symbolAdjust: { dynamics: { scale: 1.3 } } }
+          : { dur: '16' as const, isRest: true, keys: ['b/4'] }
+      )),
+    };
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={1}
+        tool={{ duration: '4', isRest: false } as never}
+        scale={1}
+        partsConfig={[{ clef: 'treble', data: [data], onChange: vi.fn() }]}
+        showInstrumentLabels={false}
+        timeSignature={[4, 4]}
+      />
+    );
+    const ppGlyph = dynamicGlyphFor({ value: 'pp' })!;
+    const ys = Array.from(container.querySelectorAll('text'))
+      .filter((t) => t.textContent === ppGlyph)
+      .map((t) => parseFloat(t.getAttribute('y')!));
+    expect(ys).toHaveLength(2);
+    // x順で後（右）の pp が下へ連鎖している
+    expect(Math.max(...ys)).toBeGreaterThan(Math.min(...ys));
   });
 
   it('⤢ のサイズ調整（scale）はグリフのフォントサイズにも効く', () => {

@@ -137,7 +137,11 @@ export function estimateTextRect(
   baselineY: number,
   text: string,
   fontSizePx: number,
+  /** 実測・メタデータ由来の幅が分かっている場合の明示指定（px）。文字数概算より優先 */
+  explicitWidthPx?: number,
 ): CollisionRect {
-  const w = Math.max(fontSizePx * 0.62, text.length * fontSizePx * 0.62);
+  const w = explicitWidthPx != null && explicitWidthPx > 0
+    ? explicitWidthPx
+    : Math.max(fontSizePx * 0.62, text.length * fontSizePx * 0.62);
   return { x: centerX - w / 2, y: baselineY - fontSizePx * 0.55, w, h: fontSizePx * 0.75 };
 }

@@ -7,6 +7,7 @@ import type {
   RelativeDynamicMarking
 } from '../types/storage';
 import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
+import { ENGRAVING_TEXT_UNITS, spToUnits } from './engravingDefaults';
 
 export const ABSOLUTE_DYNAMIC_VALUES: AbsoluteDynamicMarking[] = ['pp', 'p', 'mp', 'mf', 'f', 'ff'];
 export const RELATIVE_DYNAMIC_VALUES: RelativeDynamicMarking[] = ['cresc', 'dim'];
@@ -83,6 +84,53 @@ const DYNAMIC_GLYPHS: Record<AbsoluteDynamicMarking, string> = {
 export function dynamicGlyphFor(marking: DynamicMarking): string | null {
   return marking.value === 'cresc' || marking.value === 'dim' ? null : DYNAMIC_GLYPHS[marking.value];
 }
+
+/**
+ * グリフの字面幅（単位 sp・標準倍率時）。衝突回避（#373）の文字箱概算に使う。
+ * Bravura 公式メタデータ（glyphBBoxes）の実幅に 5〜10% の安全側マージンを乗せた
+ * 保守的な包絡値（過小評価すると隣接音符の符幹・加線とグリフ端の重なりを見逃す。
+ * 過大評価側の実害は「わずかに早めに避ける」だけ）。
+ */
+const DYNAMIC_GLYPH_WIDTH_SP: Record<AbsoluteDynamicMarking, number> = {
+  p: 1.9,
+  pp: 3.4,
+  mp: 3.0,
+  mf: 3.4,
+  f: 2.2,
+  ff: 3.3,
+};
+
+/**
+ * 衝突回避（#373）用の、この強弱エントリの文字箱幅（SVG論理単位）。
+ * 絶対強弱は Bravura グリフの実幅（DYNAMIC_GLYPH_WIDTH_SP）、cresc/dim は
+ * 文字数ベースの概算。複数記号の併記は最も幅の広いものを使う。
+ * 旧・文字数のみの概算はグリフ実幅（例: pp 約3.2sp）を過小評価し、
+ * 隣接音符とグリフ端だけが重なるケースを見逃していた（#380 Codex round2 P2）。
+ */
+export function estimateDynamicMarkingsWidthUnits(markings: DynamicMarking[], scale: number): number {
+  const letterFontSize = ENGRAVING_TEXT_UNITS.dynamics * scale;
+  return markings.reduce((best, marking) => {
+    const glyphWidthSp = dynamicGlyphWidthSp(marking);
+    const width = glyphWidthSp != null
+      ? spToUnits(glyphWidthSp) * scale
+      : formatDynamicMarking(marking).length * letterFontSize * 0.62;
+    return Math.max(best, width);
+  }, 0);
+}
+
+/** グリフの字面幅（sp）。文字系（cresc/dim）は null（文字数ベースの概算に委ねる） */
+export function dynamicGlyphWidthSp(marking: DynamicMarking): number | null {
+  return marking.value === 'cresc' || marking.value === 'dim' ? null : DYNAMIC_GLYPH_WIDTH_SP[marking.value];
+}
+
+/**
+ * グリフの字面の縦範囲（単位 sp・ベースライン基準・標準倍率時）。クリック判定の
+ * クランプに使う。Bravura 公式メタデータでは f 系のアセンダが約 1.78sp・
+ * p 系のディセンダが約 0.9sp と**非対称**なので、上下別の包絡値を持つ
+ * （対称 ±1.4sp だと f/mf/ff の上端が判定からはみ出す）。
+ */
+export const DYNAMIC_GLYPH_ASCENT_SP = 1.8;
+export const DYNAMIC_GLYPH_DESCENT_SP = 1.0;
 
 export function getAbsoluteDynamicVelocity(value: AbsoluteDynamicMarking): number {
   return ABSOLUTE_DYNAMIC_VELOCITY_MAP[value];

@@ -106,7 +106,7 @@ import {
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 // 自動休符補完は #244 段5-2 で utils へ物理移設（不変条件テストから直接呼ぶため）
 import { buildRestEventsForBeats, fillPriorMeasureRests } from '../utils/measureRestFillUtils';
-import { applyDynamicMarkingToEvent, formatDynamicMarking, dynamicGlyphFor } from '../utils/dynamicMarkingUtils';
+import { applyDynamicMarkingToEvent, formatDynamicMarking, dynamicGlyphFor, estimateDynamicMarkingsWidthUnits, DYNAMIC_GLYPH_ASCENT_SP, DYNAMIC_GLYPH_DESCENT_SP } from '../utils/dynamicMarkingUtils';
 import { toggleArticulationOnEvent } from '../utils/articulationMarkingUtils';
 import {
   applyCustomSymbolToEvent,
@@ -1511,18 +1511,18 @@ function drawCollectedSymbolEntries(args: {
       const obstacles = noteObstacles.filter((obstacle) => obstacle.partIndex === partIndex);
       const inputs = indices.map((index) => {
         const entry = dynamicTextEntries[index];
-        // 文字幅は DOM に入れる前は実測できないため概算（cresc/dim は本来ひと回り
-        // 小さい文字だが、大きい方の強弱フォントで見積もる＝控えめ側に倒す）
+        // 文字幅は DOM に入れる前は実測できないため概算。絶対強弱は Bravura グリフの
+        // 実幅（sp・メタデータ由来の保守値）、cresc/dim は文字数ベース。旧・文字数のみの
+        // 概算はグリフ幅（例: pp 実幅約3.2sp）を過小評価し、隣接音符の符幹・加線と
+        // グリフ端だけが重なるケースを見逃していた（Codex round2 P2）
         const fontSize = ENGRAVING_TEXT_UNITS.dynamics * entry.adjust.scale;
-        const longestText = entry.markings.reduce((best, marking) => {
-          const text = formatDynamicMarking(marking);
-          return text.length > best.length ? text : best;
-        }, '');
+        const widestPx = estimateDynamicMarkingsWidthUnits(entry.markings, entry.adjust.scale);
         const rect = estimateTextRect(
           entry.anchorX + entry.adjust.offsetX,
           entry.baseY + entry.adjust.offsetY,
-          longestText,
+          '',
           fontSize,
+          widestPx,
         );
         // 複数記号（pp と cresc など）は 14px 間隔で縦に並ぶぶん箱を伸ばす
         rect.h += Math.max(0, entry.markings.length - 1) * 14;
@@ -3730,8 +3730,10 @@ export default function PianoSystemCanvas({
           // フォントの em 箱を返し、SMuFL フォントは背の高いグリフを収めるため
           // アセント/ディセントが極端に大きい（実測で縦約16sp）。そのままだと判定 rect が
           // 縦に巨大化して他の記号のクリックを飲み込むので、ベースライン（y 属性）から
-          // 字面ぶん（±1.4sp）だけに絞る。⤢ のサイズ変更（25〜400%）にも追従するよう、
-          // 実フォントサイズから倍率を復元して掛ける（Codex round1 P2）
+          // 字面ぶんだけに絞る。字面は非対称（f 系のアセンダ約1.8sp・p 系の
+          // ディセンダ約1.0sp。Bravura メタデータの包絡値）で、⤢ のサイズ変更
+          // （25〜400%）にも追従するよう実フォントサイズから倍率を復元して掛ける
+          // （Codex round1-2 P2）
           if (el.tagName === 'text' && el.getAttribute('data-smufl-glyph') === '1') {
             const baseline = parseFloat(el.getAttribute('y') ?? '');
             const fontSize = parseFloat(el.getAttribute('font-size') ?? '');
@@ -3739,8 +3741,8 @@ export default function PianoSystemCanvas({
               ? fontSize / ENGRAVING_TEXT_UNITS.dynamicsGlyph
               : 1;
             if (Number.isFinite(baseline)) {
-              top = baseline - spToUnits(1.4) * glyphScale;
-              bottom = baseline + spToUnits(1.4) * glyphScale;
+              top = baseline - spToUnits(DYNAMIC_GLYPH_ASCENT_SP) * glyphScale;
+              bottom = baseline + spToUnits(DYNAMIC_GLYPH_DESCENT_SP) * glyphScale;
             }
           }
           minX = Math.min(minX, bbox.x);
