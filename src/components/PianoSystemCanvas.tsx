@@ -37,6 +37,7 @@ import {
   describeActiveLayerSwitched,
   describeCrossBandInsert,
   describeSymbolDeleted,
+  describeSymbolSelected,
   describeActiveVoiceSwitched,
   describeVoiceSwitchUnavailable,
   describeCrossStaffToggled,
@@ -123,7 +124,10 @@ import {
   setSymbolAdjustScale,
   setSymbolAdjustOffset,
   ADJUSTABLE_SYMBOL_KIND_LABELS,
-  removeAdjustableSymbol,
+  removeSymbolTargetFromEvent,
+  adjustTargetLabel,
+  adjustTargetKey,
+  type AdjustTarget,
   type ResolvedSymbolAdjust,
 } from '../utils/symbolAdjustUtils';
 import SymbolAdjustOverlay from './SymbolAdjustOverlay';
@@ -222,6 +226,44 @@ type Sel = { partIndex: number; measure: number; index: number; keyIndex?: numbe
 // 選択中の弧・松葉の型（#244 段1: latestRef と useState で共用するため alias 化）
 type SelectedArcSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null;
 type SelectedHairpinSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null;
+// 選択中の記号（強弱・アーティキュレーション・カスタム記号など）の型（Issue #389）。
+// 弧・松葉と同じく「どのイベントに載っているか」＋「どの記号か（target）」で1件を指す。
+type SymbolLocation = {
+  partIndex: number;
+  measureAbsoluteIndex: number;
+  eventIndex: number;
+  // eventIndex がどの声部の events を指しているか（ピアノ譜の声部2なら 1）
+  voiceIndex: number;
+  target: AdjustTarget;
+};
+type SelectedSymbolSel = SymbolLocation | null;
+
+/**
+ * 記号1件を譜面（パート×小節）から取り除いた新しい譜面を返す（Issue #389）。
+ *
+ * 「選択→Delete」（キーボード）と ✥ オーバーレイの「この記号を削除」ボタンの
+ * **両方がこの1本を通る**。同じ削除処理を2箇所に書くと、片方だけ直したときに
+ * もう片方へ修正が届かない（過去に #223 の修正が声部2側の別実装へ届かず #280 を
+ * 起こした）ため、入口を1つにそろえている。
+ *
+ * 対象のイベントが見つからないときは prev をそのまま返す（呼び出し側は
+ * setPartsScore の updater としてそのまま使える＝同値なら React が再描画しない）。
+ */
+function removeSymbolFromPartsScore(prev: MeasureData[][], loc: SymbolLocation): MeasureData[][] {
+  const { partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target } = loc;
+  const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
+  if (measureAbsoluteIndex >= partData.length) return prev;
+  const targetEv = getVoiceEvents(partData[measureAbsoluteIndex], voiceIndex)[eventIndex];
+  if (!targetEv) return prev;
+  partData[measureAbsoluteIndex] = withVoiceEventsUpdated(partData[measureAbsoluteIndex], voiceIndex, (events) => {
+    const copy = [...events];
+    copy[eventIndex] = removeSymbolTargetFromEvent(targetEv, target);
+    return copy;
+  });
+  const next = [...prev];
+  next[partIndex] = partData;
+  return next;
+}
 
 /**
  * 弧（タイ／スラー）・松葉が載っているイベントを「その弧が属する声部の中で」書き換える（Issue #190）。
@@ -2097,6 +2139,7 @@ export default function PianoSystemCanvas({
     selected: Sel;
     selectedArc: SelectedArcSel;
     selectedHairpin: SelectedHairpinSel;
+    selectedSymbol: SelectedSymbolSel;
     activeVoiceIndex: number;
     activeLayerPartIndex: number | undefined;
     beatsPerMeasure: number;
@@ -2108,6 +2151,7 @@ export default function PianoSystemCanvas({
     selected: null,
     selectedArc: null,
     selectedHairpin: null,
+    selectedSymbol: null,
     activeVoiceIndex,
     activeLayerPartIndex,
     beatsPerMeasure,
@@ -2122,15 +2166,10 @@ export default function PianoSystemCanvas({
   const partsClefRef = useRef(parts.map(p => p.clef));
   // 選択中のスラー/タイ（null = 未選択）
 
-  // サイズ・位置調整の対象1件。カスタム記号（symbolId で識別）と
-  // 標準記号（kind で識別。fingering/dynamics など）の両方を同じ形で扱えるようにする（StaffCanvas と同じ考え方）。
-  type AdjustTarget =
-    | { type: 'custom'; symbolId: string; name: string }
-    | { type: 'standard'; kind: AdjustableSymbolKind };
-
-  /** 記号のクリック判定 rect（.symbol-hit-region）へ付ける「どの記号か」の目印を1本の文字列にする */
-  const symbolHitRegionKey = (target: AdjustTarget): string =>
-    target.type === 'custom' ? `custom:${target.symbolId}` : `standard:${target.kind}`;
+  // サイズ・位置調整・削除の対象1件（AdjustTarget）と、その識別キー（symbolHitRegionKey）は
+  // utils（symbolAdjustUtils）へ移した（Issue #389）。キーボードの「選択→Delete」と
+  // オーバーレイの削除ボタンが同じ型・同じ削除処理を使うため。
+  const symbolHitRegionKey = adjustTargetKey;
 
   /**
    * 画面座標（getBoundingClientRect の結果）を、オーバーレイと同じ座標系
@@ -2282,11 +2321,15 @@ export default function PianoSystemCanvas({
   //   同値 bailout（段1の教訓）は reducer が prev を返すことで維持する
   type OverlayKind = keyof OverlayStates;
   type OverlayUnion = { [K in OverlayKind]: { kind: K; payload: NonNullable<OverlayStates[K]> } }[OverlayKind];
-  type SelectionSlot = 'note' | 'arc' | 'hairpin';
+  // 'symbol' は記号1件の選択（Issue #389）。弧・松葉と同じ「選択→Delete」を
+  // 強弱・アーティキュレーション等へ広げるためのスロット。union なので、
+  // 記号を選べば音符・弧・松葉の選択は自動的に外れる（＝Delete の対象は常に1つ）。
+  type SelectionSlot = 'note' | 'arc' | 'hairpin' | 'symbol';
   type SelectionPayloads = {
     note: NonNullable<Sel>;
     arc: NonNullable<SelectedArcSel>;
     hairpin: NonNullable<SelectedHairpinSel>;
+    symbol: NonNullable<SelectedSymbolSel>;
   };
   type SelectionUnion = { [K in SelectionSlot]: { kind: K; payload: SelectionPayloads[K] } }[SelectionSlot];
   type EditorLocalState = { selection: SelectionUnion | null; overlay: OverlayUnion | null };
@@ -2353,6 +2396,7 @@ export default function PianoSystemCanvas({
         dispatchEditorLocal({ type: 'OVERLAY_SET', kind, value });
     return {
       note: selectionSetter('note'), arc: selectionSetter('arc'), hairpin: selectionSetter('hairpin'),
+      symbol: selectionSetter('symbol'),
       timeSig: overlaySetter('timeSig'), keySig: overlaySetter('keySig'), clef: overlaySetter('clef'),
       bpm: overlaySetter('bpm'), rehearsal: overlaySetter('rehearsal'), text: overlaySetter('text'),
       symbolResize: overlaySetter('symbolResize'), symbolOffset: overlaySetter('symbolOffset'),
@@ -2366,6 +2410,8 @@ export default function PianoSystemCanvas({
   const setSelectedArc = editorLocalSetters.arc;
   const selectedHairpin: SelectedHairpinSel = editorLocal.selection?.kind === 'hairpin' ? editorLocal.selection.payload : null;
   const setSelectedHairpin = editorLocalSetters.hairpin;
+  const selectedSymbol: SelectedSymbolSel = editorLocal.selection?.kind === 'symbol' ? editorLocal.selection.payload : null;
+  const setSelectedSymbol = editorLocalSetters.symbol;
   const timeSigEditState = editorLocal.overlay?.kind === 'timeSig' ? editorLocal.overlay.payload : null;
   const setTimeSigEditState = editorLocalSetters.timeSig;
   const keySigEditState = editorLocal.overlay?.kind === 'keySig' ? editorLocal.overlay.payload : null;
@@ -3006,6 +3052,7 @@ export default function PianoSystemCanvas({
       selected,
       selectedArc,
       selectedHairpin,
+      selectedSymbol,
       activeVoiceIndex,
       activeLayerPartIndex,
       beatsPerMeasure,
@@ -3028,6 +3075,9 @@ export default function PianoSystemCanvas({
   useEffect(()=>{
     setSelectedArc(prev=>(prev&&prev.voiceIndex!==activeVoiceIndex?null:prev));
     setSelectedHairpin(prev=>(prev&&prev.voiceIndex!==activeVoiceIndex?null:prev));
+    // 記号の選択も同じ理由で手放す（Issue #389）。見えていない声部の記号が
+    // Delete で消える、という食い違いを防ぐ
+    setSelectedSymbol(prev=>(prev&&prev.voiceIndex!==activeVoiceIndex?null:prev));
   },[activeVoiceIndex]);
 
   // 選択の一意化（SELECTION_CLAIMED_EVENT のコメント参照）。
@@ -3035,11 +3085,11 @@ export default function PianoSystemCanvas({
   const selectionOwnerIdRef = useRef(0);
   if (selectionOwnerIdRef.current === 0) selectionOwnerIdRef.current = ++selectionOwnerSeq;
   useEffect(() => {
-    if (selected == null && selectedArc == null && selectedHairpin == null) return;
+    if (selected == null && selectedArc == null && selectedHairpin == null && selectedSymbol == null) return;
     window.dispatchEvent(new CustomEvent(SELECTION_CLAIMED_EVENT, {
       detail: { owner: selectionOwnerIdRef.current },
     }));
-  }, [selected, selectedArc, selectedHairpin]);
+  }, [selected, selectedArc, selectedHairpin, selectedSymbol]);
   useEffect(() => {
     const onClaim = (e: Event) => {
       const owner = (e as CustomEvent<{ owner: number }>).detail?.owner;
@@ -3289,6 +3339,13 @@ export default function PianoSystemCanvas({
       if(!prev) return prev;
       return voiceEventsUnchanged(prev.partIndex,prev.fromMeasure,prev.voiceIndex)?prev:null;
     });
+    // 記号の選択も同じ規則で掃除する（Issue #389）。記号も「何番目のイベントか」だけの
+    // 参照なので、Undo などでイベント列が入れ替わると、選んでいない記号を指したまま
+    // 次の Delete がそれを消してしまう
+    setSelectedSymbol(prev=>{
+      if(!prev) return prev;
+      return voiceEventsUnchanged(prev.partIndex,prev.measureAbsoluteIndex,prev.voiceIndex)?prev:null;
+    });
   },[partsScore]);
 
   /* ----- 親への通知 ----- */
@@ -3408,6 +3465,28 @@ export default function PianoSystemCanvas({
       const eventTarget = e.target as HTMLElement | null;
       const targetTag = eventTarget?.tagName?.toLowerCase();
       const isTextInputTarget = targetTag === 'input' || targetTag === 'textarea' || !!eventTarget?.isContentEditable;
+
+      // 優先1.6: 記号（強弱・アーティキュレーション・カスタム記号など）が選択中 →
+      //          Delete で削除 / Escape で選択解除（Issue #389）。
+      //
+      // 弧・松葉の分岐（優先1/1.5）と違ってここを isTextInputTarget の**後**に置いているのは、
+      // 記号の選択は調整オーバーレイ（数値入力欄）と同時に成立しうるためで、
+      // 入力欄にフォーカスがあるときの Delete は文字編集を優先する（受入条件3）。
+      const symSel=latestRef.current.selectedSymbol;
+      if(symSel&&!isTextInputTarget){
+        if(e.key==='Delete'||e.key==='Backspace'){
+          // 消す前の譜面から通知文を作る（弧・松葉と同じ理由: updater の中で通知すると
+          // React が updater を2回呼ぶ場面で通知が二重に出る）
+          const label=adjustTargetLabel(symSel.target);
+          setPartsScore(prev=>removeSymbolFromPartsScore(prev,symSel));
+          setSelectedSymbol(null);
+          // 対象イベントを指したまま残るオーバーレイ（位置・サイズ・選択リスト）も閉じる
+          closeEventEditOverlaysFor(symSel.partIndex,symSel.measureAbsoluteIndex,symSel.eventIndex,symSel.voiceIndex);
+          notifyScoreEdit(describeSymbolDeleted(label));
+          e.preventDefault();return;
+        }
+        if(e.key==='Escape'){setSelectedSymbol(null);e.preventDefault();return;}
+      }
 
       // 優先1.7: Escape で連符グループのコピー状態を解除する（Issue #234）。
       // グループをコピーしているあいだは休符クリックの意味が「貼り付け」に変わるため、
@@ -3824,8 +3903,22 @@ export default function PianoSystemCanvas({
       hit.setAttribute('y', String(minY - SYMBOL_HIT_PAD));
       hit.setAttribute('width', String(maxX - minX + SYMBOL_HIT_PAD * 2));
       hit.setAttribute('height', String(maxY - minY + SYMBOL_HIT_PAD * 2));
-      hit.setAttribute('fill', 'rgba(37, 99, 235, 0)');
+      // 選択中の記号は青枠＋薄い青地で示す（Issue #389。弧・松葉の選択と同じ意味の表示）。
+      // 選択は「どのイベントのどの記号か」で一致を見る（声部も含める）。
+      const isSelectedSymbol = !!selectedSymbol
+        && selectedSymbol.partIndex === partIndex
+        && selectedSymbol.measureAbsoluteIndex === measureAbsoluteIndex
+        && selectedSymbol.eventIndex === eventIndex
+        && selectedSymbol.voiceIndex === activeVoiceIndex
+        && adjustTargetKey(selectedSymbol.target) === symbolHitRegionKey(target);
+      const restingFill = isSelectedSymbol ? 'rgba(37, 99, 235, 0.16)' : 'rgba(37, 99, 235, 0)';
+      hit.setAttribute('fill', restingFill);
       hit.setAttribute('class', 'symbol-hit-region');
+      if (isSelectedSymbol) {
+        hit.setAttribute('class', 'symbol-hit-region symbol-hit-region--selected');
+        hit.setAttribute('stroke', '#2563eb');
+        hit.setAttribute('stroke-width', '1');
+      }
       // 「どの音符のどの記号か」を DOM 側にも残しておく。音符クリックでオーバーレイを開く経路が
       // ここから記号の実描画範囲を引き当て、オーバーレイを記号に重ねないようにするため（Issue #230）。
       hit.setAttribute('data-symbol-part', String(partIndex));
@@ -3836,7 +3929,8 @@ export default function PianoSystemCanvas({
       if (symbolsInteractive) {
         hit.style.cursor = 'pointer';
         hit.addEventListener('mouseenter', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0.16)'));
-        hit.addEventListener('mouseleave', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0)'));
+        // マウスが離れたら「選択中なら青地のまま・そうでなければ透明」へ戻す
+        hit.addEventListener('mouseleave', () => hit.setAttribute('fill', restingFill));
         hit.addEventListener('click', (domEvent) => {
           domEvent.stopPropagation();
           // 記号クリックの行き先は**選択中のツールで振り分ける**（Issue #385 続報・裁定C拡張）。
@@ -3845,7 +3939,9 @@ export default function PianoSystemCanvas({
           //   1. ⤢（サイズ変更ツール）選択中 → サイズ調整オーバーレイ
           //   2. 同種の記号ツール（強弱↔dynamics・アーティキュレーション↔articulations）選択中
           //      → 音符クリックと同じトグル（＝付いているものをクリックすれば外れる）
-          //   3. それ以外 → ✥（位置調整）オーバーレイ（従来どおり）
+          //   3. ✥（位置調整ツール）選択中 → ✥ オーバーレイ（従来どおり）
+          //   4. それ以外（調整ツールを持っていない）→ 1クリック目は選択のみ・
+          //      同じ記号の2クリック目で ✥ オーバーレイ（Issue #389 の「選択→Delete」）
           if ('mode' in tool && tool.mode === 'dynamic' && target.type === 'standard' && target.kind === 'dynamics') {
             toggleSymbolAtIndices(partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex,
               (targetEv) => applyDynamicMarkingToEvent(targetEv, tool.dynamic));
@@ -3854,6 +3950,18 @@ export default function PianoSystemCanvas({
           if ('mode' in tool && tool.mode === 'articulation' && target.type === 'standard' && target.kind === 'articulations') {
             toggleSymbolAtIndices(partIndex, measureAbsoluteIndex, eventIndex, activeVoiceIndex,
               (targetEv) => toggleArticulationOnEvent(targetEv, tool.articulation));
+            return;
+          }
+          //   4. 上記以外（＝調整ツールを持っていない）→ 1クリック目は**選択だけ**（Issue #389）。
+          //      同じ記号をもう一度クリックすると位置調整オーバーレイを開く（2段階）。
+          //      選択と同時にオーバーレイを開く案は、オーバーレイの入力欄へ自動でフォーカスが
+          //      入る（#205 の矢印キー操作のため）ので、そのままでは Delete が文字編集に
+          //      吸われて「選択→Delete」が成立しない。だから削除動線は選択だけの段を持つ。
+          const hasAdjustTool = 'mode' in tool
+            && (tool.mode === 'symbolAdjustResize' || tool.mode === 'symbolAdjustOffset');
+          if (!hasAdjustTool && !isSelectedSymbol) {
+            setSelectedSymbol({ partIndex, measureAbsoluteIndex, eventIndex, voiceIndex: activeVoiceIndex, target });
+            notifyScoreEdit(describeSymbolSelected(adjustTargetLabel(target)));
             return;
           }
           // 押した記号そのものの範囲をオーバーレイの回避対象にする。
@@ -3918,6 +4026,8 @@ export default function PianoSystemCanvas({
       tiePreviewPath.style.display='none';
       setSelectedArc(null);
       setSelectedHairpin(null);
+      // 記号の選択も背景クリックで解除する（Issue #389・受入条件「Esc / 空白クリックで選択解除」）
+      setSelectedSymbol(null);
     });
 
     svg.addEventListener('mousemove',(ev)=>{
@@ -7172,7 +7282,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,disabled]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,selectedSymbol,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
@@ -7397,27 +7507,9 @@ export default function PianoSystemCanvas({
   function handleSymbolDeleteFromOverlay() {
     if (!symbolOffsetEditState) return;
     const { partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target } = symbolOffsetEditState;
-    setPartsScore(prev => {
-      const next = [...prev];
-      const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
-      if (measureAbsoluteIndex >= partData.length) return prev;
-      const targetEv = getVoiceEvents(partData[measureAbsoluteIndex], voiceIndex)[eventIndex];
-      if (!targetEv) return prev;
-      partData[measureAbsoluteIndex] = withVoiceEventsUpdated(partData[measureAbsoluteIndex], voiceIndex, (events) => {
-        const copy = [...events];
-        copy[eventIndex] = target.type === 'custom'
-          ? applyCustomSymbolToEvent(targetEv, target.symbolId)  // 既存トグル: 付いているものに使えば「外す」
-          : removeAdjustableSymbol(targetEv, target.kind);
-        return copy;
-      });
-      next[partIndex] = partData;
-      return next;
-    });
-    notifyScoreEdit(describeSymbolDeleted(
-      symbolOffsetEditState.target.type === 'custom'
-        ? symbolOffsetEditState.target.name
-        : ADJUSTABLE_SYMBOL_KIND_LABELS[symbolOffsetEditState.target.kind]
-    ));
+    // 削除の本体は「選択→Delete」（Issue #389）と共通の1本を使う
+    setPartsScore(prev => removeSymbolFromPartsScore(prev, { partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, target }));
+    notifyScoreEdit(describeSymbolDeleted(adjustTargetLabel(target)));
     setSymbolOffsetEditState(null);
   }
 

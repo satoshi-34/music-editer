@@ -1819,6 +1819,16 @@ button.ghost.active:hover:not(:disabled) {
   stroke: none !important;
 }
 
+/* 選択中の記号の青枠（Issue #389: 「選択できる記号は Delete で消せる」）
+   すぐ上のルールが当たり判定の stroke を !important で消しているため、
+   選択中だけはここで打ち返す（後勝ち＋!important）。印刷・印刷プレビュー側の
+   打ち消しルールは要素名＋クラス2つぶんで詳細度が高いので、紙・プレビューには
+   青枠が出ない（当たり判定は画面だけの表示、という原則は変えていない）。 */
+.symbol-hit-region--selected {
+  stroke: #2563eb !important;
+  stroke-width: 1 !important;
+}
+
 /* 選択中の音符の見た目（青い枠）
    これはクリック判定ではなく、現在 selected に入っている対象を見せるだけ。
    pointer-events:none なので、枠がクリックを奪って操作不能になることはありません。 */

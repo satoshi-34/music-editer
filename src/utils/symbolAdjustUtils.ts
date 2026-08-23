@@ -9,7 +9,7 @@
 //   symbolAdjust は「すでに付いている記号の見た目だけ」を上書きする補助データとして扱う。
 
 import type { AdjustableSymbolKind, NoteEvent } from '../types/storage';
-import { MIN_SYMBOL_SCALE, MAX_SYMBOL_SCALE, MIN_SYMBOL_OFFSET, MAX_SYMBOL_OFFSET } from './customSymbolUtils';
+import { MIN_SYMBOL_SCALE, MAX_SYMBOL_SCALE, MIN_SYMBOL_OFFSET, MAX_SYMBOL_OFFSET, applyCustomSymbolToEvent } from './customSymbolUtils';
 
 /** symbolAdjust の値を範囲内に丸めるためだけのローカル関数（customSymbolUtils と同じ考え方） */
 function clampNumber(value: number, min: number, max: number): number {
@@ -140,4 +140,37 @@ export function removeAdjustableSymbol(event: NoteEvent, kind: AdjustableSymbolK
     next.symbolAdjust = Object.keys(rest).length > 0 ? rest : undefined;
   }
   return next;
+}
+
+/**
+ * サイズ・位置調整と削除の対象1件（Issue #389 で PianoSystemCanvas から移設）。
+ * カスタム記号（symbolId で識別）と標準記号（kind で識別）の両方を同じ形で扱う。
+ *
+ * なぜ utils 側に置くか: 「記号を1件消す」処理を画面（オーバーレイの削除ボタン）と
+ * キーボード（選択→Delete）の2箇所が使うため。型と処理を画面側に置いたままだと
+ * 片方だけ直してもう片方に届かない「同じロジックの2枚目」になる。
+ */
+export type AdjustTarget =
+  | { type: 'custom'; symbolId: string; name: string }
+  | { type: 'standard'; kind: AdjustableSymbolKind };
+
+/**
+ * 音符から「調整対象1件」を外す（標準記号・カスタム記号の共通入口）。
+ * 標準記号は removeAdjustableSymbol（種類単位で本体＋調整値を除去）、
+ * カスタム記号は既存のトグル関数を「付いているものに使う＝外す」形で流用する。
+ */
+export function removeSymbolTargetFromEvent(event: NoteEvent, target: AdjustTarget): NoteEvent {
+  return target.type === 'custom'
+    ? applyCustomSymbolToEvent(event, target.symbolId)
+    : removeAdjustableSymbol(event, target.kind);
+}
+
+/** 削除通知などに使う、対象1件の表示名（カスタム記号は登録名、標準記号は種別名） */
+export function adjustTargetLabel(target: AdjustTarget): string {
+  return target.type === 'custom' ? target.name : ADJUSTABLE_SYMBOL_KIND_LABELS[target.kind];
+}
+
+/** 対象1件を「どの記号か」の1本の文字列にする（DOM の data 属性・同一判定に使う） */
+export function adjustTargetKey(target: AdjustTarget): string {
+  return target.type === 'custom' ? `custom:${target.symbolId}` : `standard:${target.kind}`;
 }

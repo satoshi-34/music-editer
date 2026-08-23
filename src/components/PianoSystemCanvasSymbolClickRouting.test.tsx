@@ -95,8 +95,13 @@ describe('記号字面クリックのツール別ルーティング（Issue #385
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('それ以外のツール（音符ツール等）では従来どおり ✥（位置調整）が開く', () => {
+  // Issue #389 で「調整ツールを持っていないときの記号クリック」は2段階になった
+  // （1クリック目＝選択のみ／同じ記号の2クリック目＝✥）。1クリックで即オーバーレイだと、
+  // 入力欄へ自動フォーカスが入るせいで「選択→Delete」が文字編集に吸われて成立しない
+  it('それ以外のツール（音符ツール等）では、2クリック目で ✥（位置調整）が開く', () => {
     const { container } = renderWithTool({ duration: '4', isRest: false }, [PP_EVENT]);
+    clickRegion(container);
+    expect(container.querySelector('.symbol-adjust-overlay')).toBeNull();
     clickRegion(container);
     const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
     expect(overlay).toBeTruthy();
@@ -114,7 +119,8 @@ describe('記号字面クリックのツール別ルーティング（Issue #385
         { duration: '4', isRest: false },
         [{ ...PP_EVENT, symbolAdjust: { dynamics: { offsetY: -20 } } }],
       );
-      clickRegion(container);
+      clickRegion(container);   // 1クリック目: 選択（Issue #389）
+      clickRegion(container);   // 2クリック目: ✥ オーバーレイを開く
       const button = Array.from(container.querySelectorAll('.symbol-adjust-overlay button'))
         .find((b) => b.textContent === 'この記号を削除') as HTMLButtonElement;
       expect(button).toBeTruthy();

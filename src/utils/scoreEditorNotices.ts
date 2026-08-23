@@ -100,6 +100,15 @@ export function describeActiveLayerSwitched(partLabel: string, voiceIndex: numbe
   return `${partLabel}・声部${voiceIndex + 1}に切り替えました`;
 }
 
+/**
+ * 記号をクリックして「選択」したときの通知（Issue #389）。
+ * 青枠が付いただけでは次に何ができるか分からないため、
+ * 「Delete で消せる」「もう一度クリックすれば位置調整に入れる」の2つを一緒に伝える。
+ */
+export function describeSymbolSelected(symbolLabel: string): string {
+  return `${symbolLabel}を選択しました（Delete キーで削除・もう一度クリックで位置調整）`;
+}
+
 /** 調整オーバーレイの「削除」で記号を外したときの通知（Issue #385 続報・裁定B） */
 export function describeSymbolDeleted(symbolLabel: string): string {
   return `${symbolLabel}を削除しました`;

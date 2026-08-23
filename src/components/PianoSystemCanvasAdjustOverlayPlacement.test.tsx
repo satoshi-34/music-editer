@@ -125,6 +125,16 @@ describe('記号調整オーバーレイの表示位置（Issue #230）', () => 
     return hit!;
   }
 
+  /**
+   * 記号の字面クリックで ✥（位置調整）オーバーレイを開く。
+   * Issue #389 で「調整ツールを持っていないときの記号クリック」は2段階になった
+   * （1クリック目＝選択のみ・同じ記号の2クリック目＝オーバーレイ）ので、ここも2回押す。
+   */
+  function openOffsetOverlayBySymbolClick(container: HTMLElement) {
+    fireEvent.click(symbolHitRegion(container), { clientX: 128, clientY: 246 });
+    fireEvent.click(symbolHitRegion(container), { clientX: 128, clientY: 246 });
+  }
+
   /** 記号のクリック判定 rect の位置・大きさ（＝オーバーレイが避けるべき範囲） */
   function symbolRect(container: HTMLElement) {
     const r = symbolHitRegion(container).getBoundingClientRect();
@@ -133,7 +143,7 @@ describe('記号調整オーバーレイの表示位置（Issue #230）', () => 
 
   it('記号をクリックして開いた位置調整オーバーレイが、記号に重ならず上に出る', () => {
     const { container } = renderScore();
-    fireEvent.click(symbolHitRegion(container), { clientX: 128, clientY: 246 });
+    openOffsetOverlayBySymbolClick(container);
 
     const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
     expect(overlay).toBeTruthy();
@@ -150,7 +160,7 @@ describe('記号調整オーバーレイの表示位置（Issue #230）', () => 
     vi.useFakeTimers();
     try {
       const { container } = renderScore();
-      fireEvent.click(symbolHitRegion(container), { clientX: 128, clientY: 246 });
+      openOffsetOverlayBySymbolClick(container);
       const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
       // 開いた直後は不透明
       expect(overlay.classList.contains('symbol-adjust-overlay-translucent')).toBe(false);
@@ -178,7 +188,7 @@ describe('記号調整オーバーレイの表示位置（Issue #230）', () => 
 
   it('矢印キーで記号を動かしてもオーバーレイは動かない（開いた位置に固定）', () => {
     const { container } = renderScore();
-    fireEvent.click(symbolHitRegion(container), { clientX: 128, clientY: 246 });
+    openOffsetOverlayBySymbolClick(container);
 
     const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
     const beforeTop = overlay.style.top;
