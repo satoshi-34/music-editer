@@ -107,7 +107,7 @@ function resolve<T>(auto: T, override: T | undefined): Resolved<T> {
 |---|---|---|---|
 | 段の小節数 | `planSystemMeasureRanges` の貪欲法 | `systemMeasureOverrides[].count` | 絶対小節番号 `startMeasure`（段番号ではない） |
 | 段の間隔 | `systemRowGapPx`（全体設定） | `systemRowGapOverrides[].gapPx`（段ごとの追加分） | 絶対小節番号 `startMeasure` |
-| パート間隔（段内の譜表間） | `staveSpacingForPartCount(partCount)` | `partSpacingOffsetPx`（全体設定、-20〜50px、Issue #90。既定値は Issue #199 から楽譜種別ごと＝ピアノ+38px・それ以外0） | localStorageキー（設定全体で1つ。段ごと・パート境界ごとの個別上書きは今回スコープ外） |
+| パート間隔（段内の譜表間） | `staveSpacingForPartCount(partCount)` | `partSpacingOffsetPx`（全体設定、-20〜80px、Issue #90。上限は 2026-08-23 に 50→80 へ拡大＝月光級の深い音型+#382 クランプの逃げ場。既定値は Issue #199 から楽譜種別ごと＝ピアノ+38px・それ以外0） | localStorageキー（設定全体で1つ。段ごと・パート境界ごとの個別上書きは今回スコープ外） |
 | 休符の位置 | `defaultRestKeyForClef`（音価・クレフごとの標準位置） | 手動で動かした休符のキー（ただし「歴代の既定値集合に含まれない」ことで間接的に判定） | 判定方式が上記2つと異なる（下記参照） |
 | ページ余白・音符の大きさ・段の間隔（全体） | コード上の既定値 `resolveDefaultLayoutForScoreType` | localStorage 保存値 | localStorageキー（設定全体で1つ、要素単位ではない） |
 

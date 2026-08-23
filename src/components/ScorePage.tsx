@@ -3156,7 +3156,7 @@ export default function ScorePage() {
       ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n))
       : resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier;
   });
-  // ユーザー設定（レイアウトタブの「パート間隔」スライダー、-20〜50px、Issue #90）。
+  // ユーザー設定（レイアウトタブの「パート間隔」スライダー、-20〜80px、Issue #90）。
   // 「段の間隔」と同じく楽譜種別ごとの既定値を持つ（ピアノは+38px、それ以外は0＝
   // 自動計算のまま。Issue #199）。
   // 下の partCountForSystemLayout・ensembleAutoFitMultiplier から参照するため先に定義する。
