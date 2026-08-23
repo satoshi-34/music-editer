@@ -182,13 +182,18 @@ describe('記号系ツールを対象外へ使ったときの通知（Issue #330
       expect(notices[0]).toContain('休符には');
     });
 
-    it('汎用の位置調整（✥）でも休符では使えないと出る', async () => {
+    // 何も付いていない休符で✥を押したとき。「休符だから使えない」ではなく
+    // 「まだ何も付いていない」と言う。休符にもテキスト系は付けられるので、
+    // 前者は事実に反する（#398 round6 P2）。
+    it('何も付いていない休符で✥を押すと、休符に付けられる記号を案内する', async () => {
       const { svg } = renderScore(NOTE_AND_REST, { mode: 'symbolAdjustOffset' });
       clickEvent(svg, 1);
 
       await waitFor(() => expect(notices).toHaveLength(1));
-      expect(notices[0]).toContain('位置調整');
-      expect(notices[0]).toContain('休符には');
+      expect(notices[0]).toContain('この休符には調整できる記号がありません');
+      expect(notices[0]).toContain('コード記号');
+      // 「休符には使えません」という旧文言に戻っていないこと
+      expect(notices[0]).not.toContain('休符には記号の');
     });
 
     // ただし「休符だから一律に拒否」ではない。テキスト系（歌詞・コード記号・テンポ表記・

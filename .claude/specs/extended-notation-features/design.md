@@ -254,7 +254,10 @@ ScorePage.tsx に `useEffect` で `document.keydown` ハンドラを追加:
   `setCustomSymbolScale`系（カスタム記号）と `setSymbolAdjustScale`系（標準記号）のどちらを呼ぶか分岐するだけに
   した。これにより既存のオーバーレイJSX（入力欄・Enter確定・Escapeキャンセル・空欄で既定値に戻す挙動）は
   一切変更せず再利用でき、リグレッションのリスクを最小化した。
-- **PianoSystemCanvas の制約（既知の制限）**: 既存の「カスタム記号のサイズ変更・位置調整・テキスト要素」ツールと
+- **PianoSystemCanvas の制約（既知の制限。当時の記述で、現在は解消済み）**: 以下は本 Issue 実装当時の状態。
+  声部の制約は #316・#398 で解消し（記号エントリが `voiceIndex` を持ち、他レイヤーの記号もクリックで調整できる）、
+  テキスト系記号もピアノ譜で描画・調整の対象になっている。歴史的経緯として残す。
+  既存の「カスタム記号のサイズ変更・位置調整・テキスト要素」ツールと
   同様、汎用⤢/✥ツールも声部1（`activeVoiceIndex === 0`）のみで動作する。理由は既存コメントの通り、確定処理が
   `partData[...].events[eventIndex]` を直接書き換える前提で、まだ声部（voiceIndex）を持っていないため。
   声部2の音符へ適用すると声部1側を誤って書き換えてしまう。将来 voiceIndex 対応する際にまとめて解消する。
@@ -445,6 +448,9 @@ export interface HairpinMark {
 - 新しい prop `symbolsClickable?: boolean` を StaffCanvas / PianoSystemCanvas に追加。`true` のときだけヒット領域の `pointer-events` を `auto` にし、hover ハイライト（薄い水色）とクリックリスナー（`openSymbolAdjustEditor('offset', ...)` を直接呼び出し、既存の✥ツールと同じ位置調整オーバーレイを開く）を有効にする。`false`（既定値）のときは `pointer-events: none` で完全に素通しし、従来の音符クリック処理（`hit.addEventListener('click', ...)`）を一切妨げない。ヒット領域のクリックリスナーは `stopPropagation()` で SVG 背景クリック（弧/松葉選択解除など）より先に処理されるため、記号と音符が重なる位置では記号側が優先される。
 - `symbolsClickable` は `ScorePage.tsx` の `activeToolbarTab === 'symbols'`（ツールバー「演奏記号」タブ選択中）から、`EnsembleStaff` / `QuartetStaff` / `PianoStaff` / 単一譜表（`StaffCanvas` 直呼び出し）へ prop 中継する（`measureWidthEvenness` と同じ中継パターン）。`PartExtractionStaff`（閲覧・印刷専用のパート譜表示、`disabled` 固定）には配線していない。
 - PianoSystemCanvas は複数パート（段）を1つの SVG にまとめて描くため、`openSymbolAdjustEditor` は `partIndex` を追加引数に取る。ヒット領域を作る各エントリ（`dynamicTextEntries` / `articulationEntries` / `ottavaEntries`）に `partIndex` / `measureAbsoluteIndex` / `eventIndex` / `event` を optional で持たせ、アクティブ声部の描画箇所だけこれらを渡す。非アクティブ声部の「見た目だけ」再描画（`isMultiVoiceMeasure` のとき声部2切替中でも声部1の記号を見せ続ける処理）には index 情報を渡さず、`appendSymbolHitRegion` 側で `undefined` ならヒット領域自体を作らない（誤ってクリックできてしまうのを防ぐ）。
+  **※この最後の一文は #398（2026-08-24）で反転した**: 画面上どの記号がどの声部のものか見分けられないため、
+  「押しても無反応」に見えてしまう。現在は非アクティブ声部にも index 情報と `voiceIndex` を渡してヒット領域を作り、
+  クリック時はそのレイヤーへ自動切替してから小窓を開く。詳細は custom-symbol-editor 設計メモ追補7〜9。
 
 ### 対象範囲・既知の制限
 

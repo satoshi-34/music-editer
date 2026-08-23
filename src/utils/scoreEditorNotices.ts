@@ -309,10 +309,13 @@ function describeSymbolToolName(tool: SymbolTool): string {
  *   - `rest`: 休符をクリックした（記号系ツールはすべて音符専用）
  *   - `symbolNotAttached`: 調整しようとした記号が、その音符に付いていない
  *   - `noAdjustableSymbol`: 調整できる記号が1つも付いていない音符を押した
+ *   - `noAdjustableSymbolOnRest`: 同上の休符版。休符にも歌詞・コード記号・テンポ表記・
+ *     発想標語・オッターバは付けられるので、「休符だから使えない」ではなく
+ *     「まだ何も付いていない」と言う（#398）
  */
 export function describeSymbolToolUnavailable(
   tool: SymbolTool,
-  reason: 'rest' | 'symbolNotAttached' | 'noAdjustableSymbol'
+  reason: 'rest' | 'symbolNotAttached' | 'noAdjustableSymbol' | 'noAdjustableSymbolOnRest'
 ): string {
   switch (reason) {
     case 'rest': {
@@ -328,6 +331,9 @@ export function describeSymbolToolUnavailable(
     }
     case 'noAdjustableSymbol':
       return 'この音符には調整できる記号がありません（記号を付けてから ⤢ / ✥ を使ってください）';
+    case 'noAdjustableSymbolOnRest':
+      // 休符に付けられるのはテキスト系とオッターバだけなので、代替手順もそこへ限定して案内する
+      return 'この休符には調整できる記号がありません（休符には歌詞・コード記号・テンポ表記・発想標語・オッターバを付けられます）';
   }
 }
 

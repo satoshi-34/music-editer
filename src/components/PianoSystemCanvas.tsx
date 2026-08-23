@@ -6355,10 +6355,11 @@ export default function PianoSystemCanvas({
                 if (targets.length === 0) {
                   // 調整できる記号が1つも無い音符では選択リストすら開けない。
                   // ボタンが押せる＝どの音符でも使える、と受け取られるため理由を言う（Issue #330）。
-                  // 休符なら「休符には付けられない記号がある」ことまで言った方が分かりやすい。
+                  // 休符では「休符だから使えない」と言うと事実に反する（テキスト系は付けられる）。
+                  // 本当の理由は「まだ何も付いていない」なので、休符用の文言を使う（#398 round6 P2）。
                   return { kind: 'rejected', notice: describeSymbolToolUnavailable(
                     { type: 'symbolAdjust', adjust: adjustKind },
-                    clickedIsRest ? 'rest' : 'noAdjustableSymbol',
+                    clickedIsRest ? 'noAdjustableSymbolOnRest' : 'noAdjustableSymbol',
                   ) };
                 }
                 const containerRect = containerRef.current?.getBoundingClientRect();
