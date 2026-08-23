@@ -616,3 +616,22 @@ Enter / Esc / blur でしか閉じない作りだった。
   なお、この確認環境（ブラウザペイン）は `document.hasFocus()` が false でフォーカス系イベントが
   発火しないため、**Safari と同じ「ボタンを押してもフォーカスが移らない」経路の再現になっている**。
   Chrome 系の「blur が先に走る」経路は jsdom のテスト（`fireEvent.blur` に `relatedTarget` を渡す）で固定した。
+
+## 追補（2026-08-23・Issue #385 裁定C: 矢印キー調整中のオーバーレイ半透明化）
+
+**問題**: 位置調整オーバーレイ（#230 の配置回避は「調整対象の記号そのもの」だけが対象）が、
+位置合わせの**参照物**（周辺の音符。月光 m5 では三連符）を隠す。五線間の狭い場所の記号で
+顕在化した。
+
+**裁定（2026-08-23）**: 比較（A: 回避対象の拡大 / B: ドラッグ退避 / C: 半透明化 / D: 組合せ、
+Issue #385）から **C を採用**。「矢印キーを押したら透ける（opacity 0.25）・
+止まったら 800ms で戻る・カーソルが乗ったら即戻る」。
+
+**実装**: SymbolAdjustOverlay に translucent / onTranslucentCancel props を追加
+（CSS クラス切替・prefers-reduced-motion では transition なし）。状態とタイマーは
+PianoSystemCanvas 側（handleSymbolOffsetArrowKey で点灯・800ms タイマーと
+mouseenter で消灯・オーバーレイを閉じたら必ず破棄）。対象は位置調整オーバーレイのみ
+（サイズ変更オーバーレイには矢印ナッジが無い）。#230 の配置ロジック自体は不変。
+
+**テスト**: PianoSystemCanvasAdjustOverlayPlacement.test.tsx（点灯・800ms 消灯・
+mouseenter 消灯）。

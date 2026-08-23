@@ -2484,6 +2484,41 @@ export default function PianoSystemCanvas({
   };
 
   /**
+   * 矢印キーで調整中は位置調整オーバーレイを半透明にする（Issue #385・裁定C）。
+   * オーバーレイが位置合わせの参照物（周辺の音符）を隠す問題への対処で、
+   * 「キー操作を始めたら透ける・止まったら（800ms）またはカーソルが乗ったら戻る」。
+   */
+  const [offsetOverlayTranslucent, setOffsetOverlayTranslucent] = useState(false);
+  const offsetOverlayTranslucentTimerRef = useRef<number | null>(null);
+  const cancelOffsetOverlayTranslucent = useCallback(() => {
+    if (offsetOverlayTranslucentTimerRef.current != null) {
+      window.clearTimeout(offsetOverlayTranslucentTimerRef.current);
+      offsetOverlayTranslucentTimerRef.current = null;
+    }
+    setOffsetOverlayTranslucent(false);
+  }, []);
+  const markOffsetOverlayKeyAdjust = useCallback(() => {
+    setOffsetOverlayTranslucent(true);
+    if (offsetOverlayTranslucentTimerRef.current != null) {
+      window.clearTimeout(offsetOverlayTranslucentTimerRef.current);
+    }
+    offsetOverlayTranslucentTimerRef.current = window.setTimeout(() => {
+      offsetOverlayTranslucentTimerRef.current = null;
+      setOffsetOverlayTranslucent(false);
+    }, 800);
+  }, []);
+  // オーバーレイを閉じたら（Enter/Esc/確定）半透明状態とタイマーを必ず捨てる。
+  // 残すと、800ms 以内に開き直した次のオーバーレイが一瞬透けたまま始まる
+  useEffect(() => {
+    if (!symbolOffsetEditState) cancelOffsetOverlayTranslucent();
+  }, [symbolOffsetEditState, cancelOffsetOverlayTranslucent]);
+  useEffect(() => () => {
+    if (offsetOverlayTranslucentTimerRef.current != null) {
+      window.clearTimeout(offsetOverlayTranslucentTimerRef.current);
+    }
+  }, []);
+
+  /**
    * 位置調整オーバーレイの入力欄で押されたキーの処理。横・縦の両方の入力欄で共通に使う。
    * 矢印キーは number 入力の既定動作（スピンボタン・カーソル移動）を preventDefault で止めてから
    * 自前の移動へ振り替える。理由は .claude/specs/custom-symbol-editor/design.md に記録。
@@ -2494,6 +2529,7 @@ export default function PianoSystemCanvas({
     if (!nudge) return false;
     e.preventDefault();
     nudgeSymbolOffset(nudge);
+    markOffsetOverlayKeyAdjust();
     return true;
   };
 
@@ -7733,6 +7769,8 @@ export default function PianoSystemCanvas({
           anchor={symbolOffsetEditState.anchor}
           containerRef={containerRef}
           minWidth={160}
+          translucent={offsetOverlayTranslucent}
+          onTranslucentCancel={cancelOffsetOverlayTranslucent}
         >
           <span style={{ fontSize: 10, color: '#0891b2', fontFamily: 'sans-serif' }}>
             記号位置調整（横・縦は{MIN_SYMBOL_OFFSET}〜{MAX_SYMBOL_OFFSET}px、縦は＋で下・−で上、空欄で0）
