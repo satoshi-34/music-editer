@@ -112,13 +112,17 @@ export const SYSTEM_ROW_GAP_MAX_PX = 50;
 //   1) レイアウトタブ「パート間隔」スライダーの min/max（ScorePage.tsx）
 //   2) 初期値プリセット読み込み時の範囲検査（settingsProfile.ts）
 //   3) 実描画・段高見積もりのクランプ（computeLayout → MIN_STAVE_SPACING_PX 下限）
-// が追従する。上限は 30→50 に拡大済み（2026-07-27、運用者要望）。
+// が追従する。上限は 30→50（2026-07-27、運用者要望）→ 50→80（2026-08-23、運用者裁定a）。
+// 80 の根拠: 月光級の深い音型（三連符が五線間の空きを 65〜70px 占有）+ 強弱記号の
+// 五線間クランプ（#382）で、pp の字面ぶんを確保するには空き 95〜100px = オフセット
+// 55〜60px が必要で、上限 50 ではわずかに届かなかった。80 なら空き 108px となり、
+// スラーの膨らみ（#390）にも余裕が出る。
 // 下限 −20 は「補正後も MIN_STAVE_SPACING_PX(=30) を下回らない」クランプと併せて、
 // ピアノの右手/左手が音符ごと衝突しない安全圏に収めるための値なので据え置き。
 // 上限を広げるとパート間隔ぶん段が高くなり、段数/ページ上限・編成譜の自動縮小fit
 // （ensembleAutoFitMultiplier）も自動で追従する（README「パート間隔」の節を参照）。
 export const PART_SPACING_OFFSET_MIN_PX = -20;
-export const PART_SPACING_OFFSET_MAX_PX = 50;
+export const PART_SPACING_OFFSET_MAX_PX = 80;
 export const PART_SPACING_OFFSET_DEFAULT_PX = 0;
 
 // 「音符の大きさ」「段の間隔」「パート間隔」の楽譜種別ごとの工場出荷既定値（Issue #49・#199）。
