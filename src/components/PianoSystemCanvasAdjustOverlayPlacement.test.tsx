@@ -8,7 +8,7 @@
 //   - SVG 要素の getBoundingClientRect: x/y/width/height 属性をそのまま画面座標として返す
 //     （コンテナは原点 0,0・縮小率 1 として扱われるため、SVG 座標＝オーバーレイ座標になる）
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, fireEvent, act } from '@testing-library/react';
+import { render, fireEvent, act, waitFor } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import SymbolAdjustOverlay from './SymbolAdjustOverlay';
@@ -248,5 +248,32 @@ describe('計測できない場合の暫定位置（Issue #392 防御）', () =>
     expect(overlay.dataset.placed).toBe('false');
     expect(parseFloat(overlay.style.left)).toBeGreaterThanOrEqual(8);
     expect(parseFloat(overlay.style.top)).toBeGreaterThanOrEqual(8);
+  });
+
+  it('あとから ref が揃うと、リトライで確定位置（data-placed=true）へ到達する', async () => {
+    // 計測が空振りした場合の rAF リトライ経路（最大10回）の固定
+    const containerRef: { current: HTMLDivElement | null } = { current: null };
+    const { container } = render(
+      <SymbolAdjustOverlay
+        anchor={{ left: -60, top: -50, width: 20, height: 10 }}
+        containerRef={containerRef}
+        minWidth={100}
+      >
+        <span>x</span>
+      </SymbolAdjustOverlay>
+    );
+    const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
+    expect(overlay.dataset.placed).toBe('false');
+    // コンテナが後から現れる（マウント順の揺れの再現）
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    containerRef.current = host;
+    try {
+      await waitFor(() => {
+        expect((container.querySelector('.symbol-adjust-overlay') as HTMLElement).dataset.placed).toBe('true');
+      });
+    } finally {
+      host.remove();
+    }
   });
 });
