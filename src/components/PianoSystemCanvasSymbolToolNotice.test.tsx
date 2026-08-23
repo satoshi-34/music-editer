@@ -163,6 +163,29 @@ describe('記号系ツールを対象外へ使ったときの通知（Issue #330
       expect(onChange).not.toHaveBeenCalled();
     });
 
+    // 運指は休符には描画されない（符頭の上に出す記号のため）が、保存自体はできてしまう。
+    // 入力欄を開くと「入力したのに何も出ない」無言の行き止まりになるので、開く前に断る
+    // （#398 round7 P2）。他のテキスト系は休符でも描画されるので従来どおり受け付ける。
+    it('運指ツールでは休符に入力欄を開かず「付けられません」と出る', async () => {
+      const { svg, onChange } = renderScore(NOTE_AND_REST, { mode: 'textElement', textKind: 'fingering' });
+      clickEvent(svg, 1);
+
+      await waitFor(() => expect(notices).toHaveLength(1));
+      expect(notices[0]).toContain('休符には運指（指番号）を付けられません');
+      expect(notices[0]).toContain('音符をクリックしてください');
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it('歌詞ツールは休符でも入力欄が開く（休符にも描画されるため）', async () => {
+      const { svg } = renderScore(NOTE_AND_REST, { mode: 'textElement', textKind: 'lyrics' });
+      clickEvent(svg, 1);
+
+      await waitFor(() => {
+        expect(document.querySelector('input')).toBeTruthy();
+      });
+      expect(notices).toHaveLength(0);
+    });
+
     it('カスタム記号ツールでは記号の名前を差し込んで伝える', async () => {
       const { svg, onChange } = renderScore(NOTE_AND_REST, { mode: 'customSymbol', symbolId: 'sym-1' });
       clickEvent(svg, 1);

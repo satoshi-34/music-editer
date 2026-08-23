@@ -268,6 +268,8 @@ export type SymbolTool =
   | { type: 'dynamic' }
   /** アーティキュレーション（スタッカート等）を付けるツール */
   | { type: 'articulation' }
+  /** 運指（指番号）を入力するツール。休符には描画されないので音符専用 */
+  | { type: 'fingering' }
   /** カスタム記号を付け外しするツール。symbolName はユーザーが付けた記号の名前 */
   | { type: 'customSymbol'; symbolName: string }
   /** 特定のカスタム記号のサイズ・位置を調整するツール */
@@ -287,6 +289,8 @@ function describeSymbolToolName(tool: SymbolTool): string {
       return '強弱記号';
     case 'articulation':
       return 'アーティキュレーション';
+    case 'fingering':
+      return '運指（指番号）';
     case 'customSymbol':
       return `カスタム記号「${tool.symbolName}」`;
     case 'customSymbolAdjust':
@@ -300,13 +304,14 @@ function describeSymbolToolName(tool: SymbolTool): string {
 /**
  * 記号系ツールを対象外の音符・休符へ使ったときの文言（Issue #330・#318 の「行き止まりは喋る」）。
  *
- * これらのツールは「押しても何も起きない」場面が3種類あり、どれも無言で終わっていた。
- * 拒否の条件そのものは変えず（記号は音符に付くもの・調整は付いている記号にだけ効く）、
- * 理由と次の一手だけを添える。
+ * これらのツールは「押しても何も起きない」場面が無言で終わっていた。
+ * 拒否の条件そのものは基本的に変えず、理由と次の一手だけを添える。
+ * なお「記号はすべて音符専用」ではない: 歌詞・コード記号・テンポ表記・発想標語・オッターバは
+ * 休符にも付けられ、調整もできる（#398）。音符専用なのは運指・強弱・アーティキュレーション。
  *
  * @param tool 使おうとしたツール。文中に名前を差し込む
  * @param reason なぜ効かなかったのか
- *   - `rest`: 休符をクリックした（記号系ツールはすべて音符専用）
+ *   - `rest`: 休符をクリックした（そのツールが扱う記号は音符専用）
  *   - `symbolNotAttached`: 調整しようとした記号が、その音符に付いていない
  *   - `noAdjustableSymbol`: 調整できる記号が1つも付いていない音符を押した
  *   - `noAdjustableSymbolOnRest`: 同上の休符版。休符にも歌詞・コード記号・テンポ表記・
@@ -320,7 +325,8 @@ export function describeSymbolToolUnavailable(
   switch (reason) {
     case 'rest': {
       // 「付ける」ツールと「調整する」ツールで自然な動詞が違うので、そこだけ出し分ける
-      const verb = tool.type === 'dynamic' || tool.type === 'customSymbol' ? '付けられません' : '使えません';
+      const verb = tool.type === 'dynamic' || tool.type === 'customSymbol' || tool.type === 'fingering'
+        ? '付けられません' : '使えません';
       return `休符には${describeSymbolToolName(tool)}を${verb}（音符をクリックしてください）`;
     }
     case 'symbolNotAttached': {

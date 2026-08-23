@@ -1303,8 +1303,8 @@ type RenderCollectors = {
    * StaffCanvas と同じ座標計算・見た目を drawLyricsEntry（lyricsRenderUtils.ts）で共有する
    */
   // 歌詞は現状クリック非対応（判定領域を作らない）。同じ高さ帯に描くコード記号・
-  // テンポ表記・発想標語とのクリックの取り合いと、休符に付けた歌詞の調整が
-  // symbolAdjust 側で no-op になる問題を先に解く必要があるため（#399）
+  // テンポ表記・発想標語とのクリックの取り合いを先に解く必要があるため（#399）。
+  // 休符に付けた歌詞の調整が no-op だった問題は #398 で解消済み
   lyricsEntries: Array<{ anchorX: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }>;
   /** 運指番号（五線上端基準の統一高さに表示） */
   fingeringEntries: Array<{
@@ -6449,6 +6449,14 @@ export default function PianoSystemCanvas({
                 // テキストも休符に付く。プレースホルダーだけ既定処理へ（ペダルと同じ理由）
                 if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
                 const textElementMode = tool.textKind;
+                // 運指だけは休符に描画されない（符頭の上に出す記号のため）。保存はできてしまうので
+                // 入力欄を開く前に断る。開かせると「入力したのに何も出ない」無言の行き止まりになる
+                // （#318・#398 round7 P2）。他のテキスト系（歌詞・コード記号・テンポ表記・発想標語）は
+                // 休符でも描画されるので従来どおり受け付ける。
+                if (textElementMode === 'fingering' && clickedIsRest) {
+                  return { kind: 'rejected', notice: describeSymbolToolUnavailable(
+                    { type: 'fingering' }, 'rest') };
+                }
                 // テキスト要素はクリック位置にオーバーレイを表示して文字入力を受け付ける。
                 // TextElementKind で NoteEvent を索引するため any キャストを使う
                 const currentText = (activeEvs[j] as any)[textElementMode] ?? '';
