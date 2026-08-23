@@ -4841,11 +4841,13 @@ export default function PianoSystemCanvas({
         // レイヤー明示選択（#316）: 選択レイヤーのパートでなければ、この小節に
         // 「編集用」のアクティブ声部セルを作らない（音符はすべて選択専用ヒットになり、
         // クリックでレイヤーが自動切替される）。空白クリックの挿入は ir（小節背景）経由で
-        // 従来どおり帯域のパートへ入る（裁定②案B）。activeLayerPartIndex 未指定なら従来どおり
+        // **選択レイヤーのパート**へ入る（裁定②は 2026-08-23 に案Aへ差し替え。ir ハンドラの
+        // doInsertByPart 委譲を参照）。activeLayerPartIndex 未指定なら従来どおり
         const isActiveLayerPart = activeLayerPartIndex == null || pi === activeLayerPartIndex;
         // このパート自身のアクティブ声部エントリ。空白クリック挿入の位置計算は
-        // レイヤーに関係なくこれを使う（裁定②案B: 挿入は帯域のパートへ入るため、
-        // レイヤー外パートで並びを空にすると挿入位置が常に先頭（at=0）へ化ける。Codex round2 P1）
+        // レイヤーに関係なくこれを使う（挿入は選択レイヤーのパートの doInsert が
+        // 自パートの並びで位置計算する＝案Aでも各パートの closure に自パートの並びが要る。
+        // 並びを空にすると挿入位置が常に先頭（at=0）へ化ける。#316 Codex round2 P1）
         const partActiveVoiceEntry = renderedVoiceEntries.find((entry) => entry.voiceIndex === activeVoiceIndex);
         const activeRenderedEntry = isActiveLayerPart ? partActiveVoiceEntry : undefined;
         const activeVfNotes = activeRenderedEntry?.vfNotes ?? [];
@@ -5365,7 +5367,11 @@ export default function PianoSystemCanvas({
         ir.addEventListener('mousemove',e=>{
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
           hideChordGuide();
-          if(lx>=measLeft&&lx<=measRight&&ly>=staveTop&&ly<=staveBot)showGuide(lx,ly,stave);
+          // 入力ガイド（押す前の予告）も挿入（裁定②案A）と同じ物差し＝選択レイヤーの
+          // パートの五線で描く。クリック元の帯の五線で予告すると、右手選択中に左手帯へ
+          // カーソルを置いたとき「予告はヘ音基準・確定はト音の下加線」と食い違ってしまう
+          const guideStave = staveSets[activeLayerPartIndex ?? pi]?.[i] ?? stave;
+          if(lx>=measLeft&&lx<=measRight&&ly>=staveTop&&ly<=staveBot)showGuide(lx,ly,guideStave);
           else hideGuide();
         });
         ir.addEventListener('mouseleave',()=>{hideGuide();hideChordGuide();});

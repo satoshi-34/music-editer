@@ -213,6 +213,39 @@ describe('PianoSystemCanvas 編集レイヤー明示選択（#316）', () => {
     }
   });
 
+  it('入力ガイド（押す前の予告）も選択レイヤーの五線を物差しに描かれる', () => {
+    // 右手選択中に左手帯へカーソルを置いたとき、ガイドが左手（ヘ音）の五線基準だと
+    // 「予告と確定位置が食い違う」（Codex round1 P2）。右手基準なら五線の下の
+    // 加線プレビューが表示される
+    const { svg } = renderPiano(0, { rightHasRoom: true });
+    const bg = svg.querySelectorAll('rect.vf-hit')[1] as SVGRectElement;
+    const bx = parseFloat(bg.getAttribute('x') ?? '0');
+    const bw = parseFloat(bg.getAttribute('width') ?? '0');
+    const by = parseFloat(bg.getAttribute('y') ?? '0');
+    const bh = parseFloat(bg.getAttribute('height') ?? '0');
+    fireEvent.mouseMove(bg, { clientX: bx + bw * 0.85, clientY: by + bh * 0.5 });
+    const layerLedgers = Array.from(svg.querySelectorAll('line.vf-guide-ledger'))
+      .filter((el) => (el as SVGLineElement).style.display !== 'none');
+    const layerGuideY = parseFloat((svg.querySelector('line.vf-guide-line') as SVGLineElement).getAttribute('y1')!);
+    // 右手（ト音）五線のはるか下なので、加線のプレビューが出る
+    expect(layerLedgers.length).toBeGreaterThan(0);
+
+    // 比較: レイヤー未指定（従来モード）では左手五線基準＝五線内なので加線は出ない
+    const legacy = renderPiano(undefined, { rightHasRoom: true });
+    const lbg = legacy.svg.querySelectorAll('rect.vf-hit')[1] as SVGRectElement;
+    const lx = parseFloat(lbg.getAttribute('x') ?? '0');
+    const lw = parseFloat(lbg.getAttribute('width') ?? '0');
+    const lyy = parseFloat(lbg.getAttribute('y') ?? '0');
+    const lh = parseFloat(lbg.getAttribute('height') ?? '0');
+    fireEvent.mouseMove(lbg, { clientX: lx + lw * 0.85, clientY: lyy + lh * 0.5 });
+    const legacyLedgers = Array.from(legacy.svg.querySelectorAll('line.vf-guide-ledger'))
+      .filter((el) => (el as SVGLineElement).style.display !== 'none');
+    const legacyGuideY = parseFloat((legacy.svg.querySelector('line.vf-guide-line') as SVGLineElement).getAttribute('y1')!);
+    expect(legacyLedgers).toHaveLength(0);
+    // スナップ先の五線が違うので、ガイド線の高さも一致しない
+    expect(layerGuideY).not.toBe(legacyGuideY);
+  });
+
   it('レイヤー未指定（従来モード・非ピアノ相当）では空白クリックは帯域のパートへ入る（後方互換）', () => {
     const { svg, onLeftChange, onRightChange } = renderPiano(undefined);
     const bg = svg.querySelectorAll('rect.vf-hit')[1] as SVGRectElement;
