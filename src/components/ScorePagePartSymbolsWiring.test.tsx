@@ -116,6 +116,59 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('演奏記号タブで記号をクリック→矢印キーで、オーバーレイが半透明になる（#385 配線）', async () => {
+    // PianoSystemCanvas 直マウントのテストと違い、ScorePage からタブ選択→記号クリック→
+    // 矢印入力の実経路で .symbol-adjust-overlay-translucent が付くことを固定する
+    seedQuartetWorkWithDynamics();
+    render(<ScorePage />);
+    fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
+    // 記号のクリック判定が有効になるのを待つ
+    await waitFor(() => {
+      const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
+      expect(region).toBeTruthy();
+      expect(region!.style.pointerEvents).toBe('auto');
+    });
+    const region = document.querySelector('.symbol-hit-region') as SVGRectElement;
+    const svg = region.closest('svg') as SVGSVGElement;
+    svg.getBoundingClientRect = vi.fn(() => ({
+      left: 0, top: 0, right: 700, bottom: 400, width: 700, height: 400, x: 0, y: 0, toJSON: () => ({}),
+    })) as unknown as typeof svg.getBoundingClientRect;
+    Object.defineProperty(svg, 'width', { value: { baseVal: { value: 700 } }, configurable: true });
+    Object.defineProperty(svg, 'height', { value: { baseVal: { value: 400 } }, configurable: true });
+
+    // 記号クリックで位置調整オーバーレイが開く（開いた直後は不透明）
+    fireEvent.click(region, { clientX: 10, clientY: 10 });
+    await waitFor(() => {
+      expect(document.querySelector('.symbol-adjust-overlay')).toBeTruthy();
+    });
+    expect(document.querySelector('.symbol-adjust-overlay-translucent')).toBeNull();
+
+    // 矢印キーで透ける
+    const input = document.querySelectorAll('.symbol-adjust-overlay input')[0] as HTMLInputElement;
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    expect(document.querySelector('.symbol-adjust-overlay-translucent')).toBeTruthy();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('強弱ツールを選んで記号の字面をクリックすると外れる（#385続報 配線）', async () => {
+    // 実経路: 演奏記号タブ→ f ボタン選択→記号字面クリック→トグル解除
+    seedQuartetWorkWithDynamics();
+    render(<ScorePage />);
+    fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
+    fireEvent.click(screen.getByRole('button', { name: '強弱記号 f（対象の音符をクリック）' }));
+    await waitFor(() => {
+      const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
+      expect(region).toBeTruthy();
+      expect(region!.style.pointerEvents).toBe('auto');
+    });
+    const region = document.querySelector('.symbol-hit-region') as SVGRectElement;
+    fireEvent.click(region, { clientX: 10, clientY: 10 });
+    // トグル解除で f のグリフ（と判定 rect）が消える。オーバーレイは開かない
+    expect(document.querySelector('.symbol-adjust-overlay')).toBeNull();
+    await waitFor(() => {
+      expect(document.querySelector('.symbol-hit-region')).toBeNull();
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('復元された強弱記号 f は ScorePage 経由でも Bravura の SMuFL グリフで描かれる（#380 配線）', async () => {
     // props 直接注入の PianoSystemCanvasDynamicsGlyph.test.tsx と違い、
     // 実際の復元→描画経路（ScorePage 直マウント）でグリフ描画を固定する

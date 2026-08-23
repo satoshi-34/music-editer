@@ -100,6 +100,11 @@ export function describeActiveLayerSwitched(partLabel: string, voiceIndex: numbe
   return `${partLabel}・声部${voiceIndex + 1}に切り替えました`;
 }
 
+/** 調整オーバーレイの「削除」で記号を外したときの通知（Issue #385 続報・裁定B） */
+export function describeSymbolDeleted(symbolLabel: string): string {
+  return `${symbolLabel}を削除しました`;
+}
+
 /**
  * 選択レイヤーと違う五線（帯）の空白をクリックして音符を入れたときの案内
  * （裁定②案A・2026-08-23）。挿入先は常に選択レイヤーのパートで、レイヤーは

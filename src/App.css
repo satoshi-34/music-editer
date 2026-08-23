@@ -2203,3 +2203,16 @@ svg { animation: none; transition: none; }
   border: 1px solid #ced4da;
   border-radius: 4px;
 }
+
+/* 記号調整オーバーレイの半透明化（Issue #385・裁定C）:
+   矢印キーで位置を合わせている間だけ透かして、参照物（周辺の音符）を見えるようにする。
+   カーソルが乗るか、キー入力が止まる（800ms）と不透明へ戻る（制御は PianoSystemCanvas 側） */
+.symbol-adjust-overlay {
+  transition: opacity 120ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .symbol-adjust-overlay { transition: none; }
+}
+.symbol-adjust-overlay-translucent {
+  opacity: 0.25;
+}

@@ -30,6 +30,14 @@ interface SymbolAdjustOverlayProps {
   containerRef: RefObject<HTMLDivElement | null>;
   /** オーバーレイの最小幅（オーバーレイごとに入力欄の数が違うため親から渡す） */
   minWidth: number;
+  /**
+   * 矢印キーで調整中の半透明化（Issue #385・裁定C）。true の間はオーバーレイを
+   * 透かして、位置合わせの参照物（周辺の音符）を見えるようにする。
+   * 不透明へ戻す条件（キー入力が止まった・カーソルが乗った）は親が管理する。
+   */
+  translucent?: boolean;
+  /** オーバーレイにカーソルが乗ったら不透明へ戻すための通知（translucent 管理者へ） */
+  onTranslucentCancel?: () => void;
   children: ReactNode;
 }
 
@@ -69,7 +77,7 @@ function resolveBounds(container: HTMLElement, scale: number) {
   };
 }
 
-export default function SymbolAdjustOverlay({ anchor, containerRef, minWidth, children }: SymbolAdjustOverlayProps) {
+export default function SymbolAdjustOverlay({ anchor, containerRef, minWidth, translucent, onTranslucentCancel, children }: SymbolAdjustOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   // null の間は「まだ測っていない」。暫定位置で描いてから、下の useLayoutEffect で確定位置へ差し替える。
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
@@ -102,8 +110,9 @@ export default function SymbolAdjustOverlay({ anchor, containerRef, minWidth, ch
   return (
     <div
       ref={overlayRef}
-      className="symbol-adjust-overlay"
+      className={`symbol-adjust-overlay${translucent ? ' symbol-adjust-overlay-translucent' : ''}`}
       data-placed={position ? 'true' : 'false'}
+      onMouseEnter={onTranslucentCancel}
       style={{
         position: 'absolute',
         left,

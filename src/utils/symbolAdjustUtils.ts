@@ -115,3 +115,29 @@ export const ADJUSTABLE_SYMBOL_KIND_LABELS: Record<AdjustableSymbolKind, string>
   expressionMarking: '発想標語',
   ottava: 'オクターヴ記号(8va/8vb)',
 };
+
+/**
+ * 音符から指定種類の記号を外す（Issue #385 続報の裁定B: オーバーレイの「削除」）。
+ * ✥/⤢ の調整と同じ**種類（kind）単位**で消す（例: dynamics は pp と cresc の併記なら
+ * 両方消える。1件ずつの粒度は調整も持っていないため、削除も揃える）。
+ * 記号本体と一緒に、その種類の調整値（symbolAdjust[kind]）も片付ける。
+ */
+export function removeAdjustableSymbol(event: NoteEvent, kind: AdjustableSymbolKind): NoteEvent {
+  const next: NoteEvent = { ...event };
+  switch (kind) {
+    case 'fingering': delete next.fingering; break;
+    case 'ornament': delete next.ornament; break;
+    case 'dynamics': delete next.dynamics; break;
+    case 'articulations': delete next.articulations; break;
+    case 'lyrics': delete next.lyrics; break;
+    case 'chordSymbol': delete next.chordSymbol; break;
+    case 'tempoMarking': delete next.tempoMarking; break;
+    case 'expressionMarking': delete next.expressionMarking; break;
+    case 'ottava': delete next.ottava; break;
+  }
+  if (next.symbolAdjust && kind in next.symbolAdjust) {
+    const { [kind]: _removed, ...rest } = next.symbolAdjust;
+    next.symbolAdjust = Object.keys(rest).length > 0 ? rest : undefined;
+  }
+  return next;
+}
