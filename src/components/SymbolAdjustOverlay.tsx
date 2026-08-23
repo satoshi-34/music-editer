@@ -57,9 +57,16 @@ function resolvePageScale(container: HTMLElement): number {
 }
 
 /**
- * オーバーレイを置いてよい範囲（＝いま画面に見えている範囲）をコンテナ座標で求める。
+ * オーバーレイを置いてよい範囲（＝いま実際に見えている範囲）をコンテナ座標で求める。
  * 上端はツールバー（position: fixed で画面上部に居座る）の下端にする。
  * ツールバーの下へ潜り込むと、見えていても操作できないため。
+ *
+ * 「見えている範囲」はビューポートだけでは足りない（Issue #392）。オーバーレイは
+ * position: absolute で譜面のコンテナに属するため、**overflow が visible でない祖先**
+ * （A4ページの `.print-page` は紙面をはみ出す描画を切るため overflow: hidden）に
+ * 視覚的に切り取られる。ビューポート内に収めただけでは、譜面左端の記号で
+ * 「画面内だが .print-page の外」に置かれ、入力欄の左側が見切れていた。
+ * そこで、クリップする祖先すべての矩形との**共通部分**まで範囲を狭める。
  */
 function resolveBounds(container: HTMLElement, scale: number) {
   const rect = container.getBoundingClientRect();
@@ -70,11 +77,27 @@ function resolveBounds(container: HTMLElement, scale: number) {
   // jsdom（テスト環境）は clientWidth が 0 なので、その場合だけ innerWidth へ落とす。
   const viewportWidth = document.documentElement.clientWidth || window.innerWidth || 0;
   const viewportHeight = document.documentElement.clientHeight || window.innerHeight || 0;
+  let left = 0;
+  let top = Math.max(0, toolbarBottom);
+  let right = viewportWidth;
+  let bottom = viewportHeight;
+  // コンテナ自身から body までの祖先で、描画を切る（overflow が visible でない）ものを交差する。
+  // 大きさを測れない環境（jsdom）の 0 矩形は、範囲を潰してしまうので無視する
+  for (let el: HTMLElement | null = container; el && el !== document.body; el = el.parentElement) {
+    const style = window.getComputedStyle(el);
+    if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+    const clipRect = el.getBoundingClientRect();
+    if (!clipRect.width && !clipRect.height) continue;
+    left = Math.max(left, clipRect.left);
+    top = Math.max(top, clipRect.top);
+    right = Math.min(right, clipRect.right);
+    bottom = Math.min(bottom, clipRect.bottom);
+  }
   return {
-    left: (0 - rect.left) / scale,
-    top: (Math.max(0, toolbarBottom) - rect.top) / scale,
-    right: (viewportWidth - rect.left) / scale,
-    bottom: (viewportHeight - rect.top) / scale,
+    left: (left - rect.left) / scale,
+    top: (top - rect.top) / scale,
+    right: (right - rect.left) / scale,
+    bottom: (bottom - rect.top) / scale,
   };
 }
 
