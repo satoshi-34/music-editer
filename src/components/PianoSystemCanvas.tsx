@@ -2,7 +2,7 @@
 // 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { resolveBelowSymbolShifts, type CollisionRect } from '../utils/symbolCollisionUtils';
+import { resolveBelowSymbolShifts, BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX, type CollisionRect } from '../utils/symbolCollisionUtils';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
@@ -1256,6 +1256,14 @@ type RenderCollectors = {
    * VexFlow のモデル側から取れる値なので DOM 計測は不要（jsdom でも動く）
    */
   noteObstacles: Array<{ partIndex: number } & CollisionRect>;
+  /**
+   * パート（段）ごとの五線の上端（第1線）の Y。強弱記号の押し出しを
+   * 「下の五線の手前」で止めるための境界に使う（#382）。
+   * VexFlow の Stave は y の 4 スペース下から線を引く（spaceAboveStaffLn）ので、
+   * レイアウト計算の staveYs をそのまま境界に使うと五線1つぶん高く見積もってしまう。
+   * そのため実際に描いた Stave から getYForLine(0) を記録する
+   */
+  staveTopYByPart: Map<number, number>;
   /** カスタム記号の描画情報（段ごとの五線上端基準の統一高さで描く） */
   customSymbolEntries: CustomSymbolRenderEntry[];
   /** リハーサルマーク（練習番号）。最上段（pi===0）の上にだけ表示する */
@@ -1369,6 +1377,7 @@ type RenderCollectors = {
 const createRenderCollectors = (): RenderCollectors => ({
   dynamicTextEntries: [],
   noteObstacles: [],
+  staveTopYByPart: new Map(),
   customSymbolEntries: [],
   rehearsalMarkEntries: [],
   bpmMarkingEntries: [],
@@ -1493,7 +1502,7 @@ function drawCollectedSymbolEntries(args: {
 }): void {
   const { svgRoot, customSymbolDefs, appendSymbolHitRegion } = args;
   const {
-    dynamicTextEntries, noteObstacles, customSymbolEntries, bpmMarkingEntries, rehearsalMarkEntries,
+    dynamicTextEntries, noteObstacles, staveTopYByPart, customSymbolEntries, bpmMarkingEntries, rehearsalMarkEntries,
     measureNumberEntries, fingeringEntries, articulationEntries, tempoMarkingEntries,
     expressionMarkingEntries, chordSymbolEntries, lyricsEntries, pedalMarkEntries, ottavaEntries,
   } = args.collectors;
@@ -1524,7 +1533,14 @@ function drawCollectedSymbolEntries(args: {
         );
         return { rect, hasManualOffset: entry.adjust.offsetX !== 0 || entry.adjust.offsetY !== 0 };
       });
-      const shifts = resolveBelowSymbolShifts(inputs, obstacles);
+      // 押し出しの下限は「下の五線の上端の手前」（#382）。大譜表では自パートの下が
+      // すぐ隣の五線なので、境界を知らないまま押すと pp が左手の五線へ入ってしまう
+      // （月光 m5 の実測）。最下段（下に五線が無い）は従来どおり境界なし
+      const nextStaveTopY = staveTopYByPart.get(partIndex + 1);
+      const maxBottomY = nextStaveTopY === undefined
+        ? undefined
+        : nextStaveTopY - BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX;
+      const shifts = resolveBelowSymbolShifts(inputs, obstacles, { maxBottomY });
       indices.forEach((index, k) => { dynamicCollisionShifts[index] = shifts[k]; });
     }
   }
@@ -3864,7 +3880,7 @@ export default function PianoSystemCanvas({
       dynamicTextEntries, customSymbolEntries, rehearsalMarkEntries, bpmMarkingEntries,
       measureNumberEntries, pedalMarkEntries, lyricsEntries, fingeringEntries,
       articulationEntries, tempoMarkingEntries, expressionMarkingEntries,
-      chordSymbolEntries, ottavaEntries, noteObstacles,
+      chordSymbolEntries, ottavaEntries, noteObstacles, staveTopYByPart,
       arcGeomMap, beatColumnsByMeasureP, notePositionMapP, arcIdentityMap,
     } = collectors;
     // ドラッグ中の更新（window の mousemove）から今回の描画結果を参照できるようにしておく。
@@ -4064,6 +4080,9 @@ export default function PianoSystemCanvas({
         // staveYs をそのまま渡せば ctx.scale で間隔も五線も同じ s 倍になり、
         // 段の実際の高さが sysH * s（= measuredSystemHeightPx）と一致する。
         const stave=new Stave(x/s, staveYs[pi], w/s);
+        // 強弱記号の押し出しの境界（#382）に使う「実際に描かれた五線の上端」。
+        // 同じ段では小節が変わっても同じ値なので、上書きしても値は変わらない
+        staveTopYByPart.set(pi, stave.getYForLine(0));
         // パート固有の移調シフト（fifths）。part.keySignature はグローバル調号を移調楽器用に
         // シフトした固定値として渡ってくるので、その差分だけ「この小節時点の有効調号」にも適用する。
         const partFifthsShift = part.keySignature

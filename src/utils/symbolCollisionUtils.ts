@@ -37,6 +37,12 @@ export interface BelowSymbolAvoidanceOptions {
   maxShiftPx?: number;
   /** 記号と障害物の間にあける余白（px） */
   padPx?: number;
+  /**
+   * 押し出しを止める下の境界（px・記号 rect の**下端**がこれを超える押し出しはしない）。
+   * 大譜表の「下の五線の上端の手前」を渡す想定（Issue #382）。
+   * 未指定（最下段など、下に五線が無い段）なら境界なしで、従来どおり maxShiftPx だけが上限。
+   */
+  maxBottomY?: number;
 }
 
 export const BELOW_SYMBOL_STEP_PX = 7;
@@ -46,6 +52,12 @@ export const BELOW_SYMBOL_STEP_PX = 7;
  */
 export const BELOW_SYMBOL_MAX_SHIFT_PX = 112;
 export const BELOW_SYMBOL_PAD_PX = 2;
+/**
+ * 「下の五線の上端」からどれだけ手前で押し出しを止めるか（px）。
+ * 0 だと記号の下端が五線の第1線にぴったり接して読みにくいので、髪の毛一本ぶん空ける
+ * （市販譜は強弱記号を五線間に収める。Issue #382 の運用者裁定）。
+ */
+export const BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX = 3;
 
 /** 余白 pad を含めた AABB の交差判定 */
 export function rectsIntersect(a: CollisionRect, b: CollisionRect, pad: number = 0): boolean {
@@ -63,8 +75,11 @@ export function rectsIntersect(a: CollisionRect, b: CollisionRect, pad: number =
  * 決め方:
  * 1. 記号を x 順に処理し、障害物（音符・符幹・加線の BoundingBox）と
  *    既に確定した記号の占有域のどれかに重なる間、step ずつ下へ押し出す
- * 2. maxShift まで押しても空かなければ、それ以上は押さない（重なったまま）。
+ * 2. maxShift まで押しても空かなければ、それ以上は押さない（元の位置へ戻す）。
  *    無限に下がって次の段へ食い込むより、目で気づける重なりの方がまし
+ * 2-b. maxBottomY（下の五線の上端の手前）が指定され、そちらが先に来る場合は
+ *    **境界で止めて、その位置で確定する**（元位置へ戻さない）。「避けたのに重なっている」
+ *    見た目より「隣の五線へ入る」方が読譜上の害が大きいため（Issue #382 の裁定）
  * 3. 手動調整済みの記号は動かさない（シフト 0）。ただし占有域には加えるので、
  *    自動配置の記号の方が手動配置を避ける
  *
@@ -84,6 +99,9 @@ export function resolveBelowSymbolShifts(
     ? (options?.maxShiftPx as number)
     : BELOW_SYMBOL_MAX_SHIFT_PX;
   const pad = Number.isFinite(options?.padPx) ? (options?.padPx as number) : BELOW_SYMBOL_PAD_PX;
+  // 境界の指定が無い（下に五線が無い最下段など）ときは Infinity にしておくと、
+  // 下の「境界とmaxShiftの小さい方で止める」計算がそのまま従来の挙動になる
+  const maxBottomY = Number.isFinite(options?.maxBottomY) ? (options?.maxBottomY as number) : Infinity;
 
   const shifts = new Array<number>(symbols.length).fill(0);
   const occupied: CollisionRect[] = [];
@@ -106,14 +124,25 @@ export function resolveBelowSymbolShifts(
     const collides = (candidate: CollisionRect): boolean =>
       obstacles.some((obstacle) => rectsIntersect(candidate, obstacle, pad)) ||
       occupied.some((other) => rectsIntersect(candidate, other, pad));
-    // maxShift を超えないよう clamp しながら押し出す（step が maxShift を
+    // 境界（下の五線の上端の手前）まで押せる量。記号ごとに箱の高さ・予定位置が違うので
+    // 記号単位で求める。負になる（既に境界より下にいる）ケースは 0 に丸めて動かさない
+    const boundaryShift = maxBottomY - (symbol.rect.y + symbol.rect.h);
+    // 「境界で止まった」のか「maxShift で止まった」のかで、この後の扱いが変わる
+    // （境界で止めたときだけ元位置へ戻さない）
+    const stopsAtBoundary = boundaryShift < maxShift;
+    const limit = Math.max(0, Math.min(maxShift, boundaryShift));
+    // limit を超えないよう clamp しながら押し出す（step が limit を
     // 割り切れない値でも上限内に収まる）
-    while (dy < maxShift && collides({ ...symbol.rect, y: symbol.rect.y + dy })) {
-      dy = Math.min(dy + step, maxShift);
+    while (dy < limit && collides({ ...symbol.rect, y: symbol.rect.y + dy })) {
+      dy = Math.min(dy + step, limit);
     }
-    // 上限まで押してもまだ重なるなら、押し出しは諦めて元の位置に戻す
-    // （中途半端に下がった位置は「避けたのに重なっている」ように見えて紛らわしい）
-    if (collides({ ...symbol.rect, y: symbol.rect.y + dy })) {
+    // 上限まで押してもまだ重なるときの扱い（Issue #382 で境界ありの場合だけ変更）:
+    // - 境界（下の五線）で止めた場合: **その境界位置に留める**。元位置へ戻すと
+    //   「隣の五線へ食い込む」より紛らわしい重なりが残るうえ、パート間隔を広げても
+    //   自動では解消しなくなる（市販譜の「強弱は五線間に収める」慣習に合わせる）
+    // - 境界が無い（最下段など）場合: 従来どおり元の位置に戻す
+    //   （中途半端に下がった位置は「避けたのに重なっている」ように見えて紛らわしい）
+    if (!stopsAtBoundary && collides({ ...symbol.rect, y: symbol.rect.y + dy })) {
       dy = 0;
     }
     shifts[index] = dy;
