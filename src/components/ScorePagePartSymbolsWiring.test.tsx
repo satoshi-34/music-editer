@@ -136,8 +136,11 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     Object.defineProperty(svg, 'width', { value: { baseVal: { value: 700 } }, configurable: true });
     Object.defineProperty(svg, 'height', { value: { baseVal: { value: 400 } }, configurable: true });
 
-    // 記号クリックで位置調整オーバーレイが開く（開いた直後は不透明）
+    // 記号クリックで位置調整オーバーレイが開く（開いた直後は不透明）。
+    // Issue #389 で、調整ツールを持っていないときの記号クリックは2段階になった
+    // （1クリック目＝選択のみ・2クリック目＝オーバーレイ）ため、ここも2回押す
     fireEvent.click(region, { clientX: 10, clientY: 10 });
+    fireEvent.click(document.querySelector('.symbol-hit-region') as SVGRectElement, { clientX: 10, clientY: 10 });
     await waitFor(() => {
       expect(document.querySelector('.symbol-adjust-overlay')).toBeTruthy();
     });
@@ -147,6 +150,34 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
     const input = document.querySelectorAll('.symbol-adjust-overlay input')[0] as HTMLInputElement;
     fireEvent.keyDown(input, { key: 'ArrowRight' });
     expect(document.querySelector('.symbol-adjust-overlay-translucent')).toBeTruthy();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('演奏記号タブで記号をクリック→Delete で削除できる（#389 配線）', async () => {
+    // 実経路: 演奏記号タブ→記号の字面クリック（＝選択）→Delete。
+    // props 直接注入の単体テストでは ScorePage 側の受け渡しを消しても通ってしまうため、
+    // 「ScorePage からこの機能に実際に届くこと」をここで固定する
+    seedQuartetWorkWithDynamics();
+    render(<ScorePage />);
+    fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
+    await waitFor(() => {
+      const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
+      expect(region).toBeTruthy();
+      expect(region!.style.pointerEvents).toBe('auto');
+    });
+    fireEvent.click(document.querySelector('.symbol-hit-region') as SVGRectElement, { clientX: 10, clientY: 10 });
+    // 1クリック目は選択だけ（青枠が付き、オーバーレイは開かない）
+    await waitFor(() => {
+      expect(document.querySelector('.symbol-hit-region--selected')).toBeTruthy();
+    });
+    expect(document.querySelector('.symbol-adjust-overlay')).toBeNull();
+
+    // Delete で記号そのもの（＝グリフと判定 rect）が消える
+    fireEvent.keyDown(window, { key: 'Delete' });
+    await waitFor(() => {
+      expect(document.querySelector('.symbol-hit-region')).toBeNull();
+    });
+    expect(Array.from(document.querySelectorAll('text'))
+      .find((t) => t.textContent === dynamicGlyphFor({ value: 'f' }))).toBeFalsy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('強弱ツールを選んで記号の字面をクリックすると外れる（#385続報 配線）', async () => {
