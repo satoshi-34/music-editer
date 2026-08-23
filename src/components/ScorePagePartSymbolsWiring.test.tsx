@@ -13,6 +13,7 @@ import {
   setLastOpenedWorkId,
 } from '../utils/storage';
 import type { PartData } from '../types/storage';
+import { dynamicGlyphFor } from '../utils/dynamicMarkingUtils';
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -112,6 +113,20 @@ describe('ScorePage のパート譜記号編集の配線（Issue #173）', () =>
       const region = document.querySelector('.symbol-hit-region') as SVGElement | null;
       expect(region).toBeTruthy();
       expect(region!.style.pointerEvents).toBe('none');
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('復元された強弱記号 f は ScorePage 経由でも Bravura の SMuFL グリフで描かれる（#380 配線）', async () => {
+    // props 直接注入の PianoSystemCanvasDynamicsGlyph.test.tsx と違い、
+    // 実際の復元→描画経路（ScorePage 直マウント）でグリフ描画を固定する
+    seedQuartetWorkWithDynamics();
+    render(<ScorePage />);
+    await waitFor(() => {
+      const el = Array.from(document.querySelectorAll('text'))
+        .find((t) => t.textContent === dynamicGlyphFor({ value: 'f' }));
+      expect(el).toBeTruthy();
+      expect(el!.getAttribute('font-family')).toBe('Bravura');
+      expect(parseFloat(el!.getAttribute('font-size')!)).toBe(40);
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

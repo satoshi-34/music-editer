@@ -7,6 +7,7 @@ import type {
   RelativeDynamicMarking
 } from '../types/storage';
 import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
+import { ENGRAVING_TEXT_UNITS, spToUnits } from './engravingDefaults';
 
 export const ABSOLUTE_DYNAMIC_VALUES: AbsoluteDynamicMarking[] = ['pp', 'p', 'mp', 'mf', 'f', 'ff'];
 export const RELATIVE_DYNAMIC_VALUES: RelativeDynamicMarking[] = ['cresc', 'dim'];
@@ -61,6 +62,100 @@ export function isRelativeDynamicMarking(marking: DynamicMarking): boolean {
 
 export function formatDynamicMarking(marking: DynamicMarking): string {
   return marking.value === 'cresc' ? 'cresc.' : marking.value === 'dim' ? 'dim.' : marking.value;
+}
+
+/**
+ * 絶対強弱の SMuFL グリフ計測値（Issue #380）。
+ * 市販譜の強弱は専用グリフ（太いイタリック体）で、通常フォントの "pp" とは字形が違う。
+ * 音符・臨時記号は既に VexFlow 5 同梱の Bravura（SMuFL）なので、強弱も同じフォントで揃える。
+ * cresc./dim. などの文字系表記は SMuFL に対応グリフが無いため対象外（テキストのまま）。
+ *
+ * 値はすべて **Bravura 公式メタデータ（redist/Bravura.json）の実測値**（単位 sp・y は上向き正）:
+ * - codepoint: SMuFL 仕様の Dynamics 範囲（U+E520〜）
+ * - opticalCenterSp: 光学中心の x（glyphsWithAnchors.opticalCenter）。text-anchor="middle" は
+ *   文字送り（advance）中央で揃えてしまい、f では光学中心と約0.53sp ずれるため、
+ *   描画はこの値で音符中心へ合わせる
+ * - leftSp/rightSp: 字面の横範囲（glyphBBoxes。イタリック体のため左右にオーバーハングがある）
+ * - topSp/bottomSp: 字面の縦範囲（ベースライン基準。f 系は上に高く p 系は下に深い非対称）
+ */
+export interface DynamicGlyphMetrics {
+  codepoint: string;
+  opticalCenterSp: number;
+  leftSp: number;
+  rightSp: number;
+  topSp: number;
+  bottomSp: number;
+}
+
+const DYNAMIC_GLYPH_METRICS: Record<AbsoluteDynamicMarking, DynamicGlyphMetrics> = {
+  p:  { codepoint: '\uE520', opticalCenterSp: 1.22,  leftSp: -0.356, rightSp: 1.464, topSp: 1.096, bottomSp: -0.568 }, // dynamicPiano
+  pp: { codepoint: '\uE52B', opticalCenterSp: 1.708, leftSp: -0.328, rightSp: 2.912, topSp: 1.096, bottomSp: -0.568 }, // dynamicPP
+  mp: { codepoint: '\uE52C', opticalCenterSp: 1.848, leftSp: -0.08,  rightSp: 3.3,   topSp: 1.096, bottomSp: -0.568 }, // dynamicMP
+  mf: { codepoint: '\uE52D', opticalCenterSp: 1.796, leftSp: -0.08,  rightSp: 3.272, topSp: 1.724, bottomSp: -0.66 },  // dynamicMF
+  f:  { codepoint: '\uE522', opticalCenterSp: 1.256, leftSp: -0.564, rightSp: 1.456, topSp: 1.776, bottomSp: -0.608 }, // dynamicForte
+  ff: { codepoint: '\uE52F', opticalCenterSp: 1.852, leftSp: -0.54,  rightSp: 2.44,  topSp: 1.776, bottomSp: -0.608 }, // dynamicFF
+};
+
+/** グリフ計測値。文字系（cresc/dim）は null */
+export function dynamicGlyphMetricsFor(marking: DynamicMarking): DynamicGlyphMetrics | null {
+  return marking.value === 'cresc' || marking.value === 'dim' ? null : DYNAMIC_GLYPH_METRICS[marking.value];
+}
+
+/** SMuFL グリフで描ける強弱ならそのグリフ文字を、文字系（cresc/dim）なら null を返す */
+export function dynamicGlyphFor(marking: DynamicMarking): string | null {
+  return dynamicGlyphMetricsFor(marking)?.codepoint ?? null;
+}
+
+/**
+ * 同一音符の複数記号の描画順（絶対強弱を先・cresc/dim を後）。
+ * 描画と衝突概算が同じ行割りを共有するためにここへ一本化する。
+ */
+export function orderedDynamicMarkings(markings: DynamicMarking[]): DynamicMarking[] {
+  return [...markings].sort((left, right) => {
+    const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
+    const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
+    return leftPriority - rightPriority;
+  });
+}
+
+/**
+ * 衝突回避（#373）用の、この強弱エントリ全体（複数記号の行を含む）の文字箱。
+ * 絶対強弱は Bravura 公式メタデータの字面（左右オーバーハング・非対称な上下・
+ * 光学中心の描画位置補正込み）、cresc/dim は文字数ベースの概算。
+ * 旧・文字数のみの概算はグリフの実字面（例: pp 幅3.24sp・f 上1.776sp）を
+ * 過小評価し、隣接音符との端の重なりを見逃していた（#380 Codex round2-3 P2）。
+ *
+ * 行割り（絶対強弱→cresc/dim の順・14px 間隔）は描画側と orderedDynamicMarkings を
+ * 共有しており、各行の箱の合併を返す。
+ */
+export function estimateDynamicMarkingsCollisionRect(
+  markings: DynamicMarking[],
+  scale: number,
+  anchorX: number,
+  baselineY: number,
+): { x: number; y: number; w: number; h: number } {
+  const u = (sp: number) => spToUnits(sp) * scale;
+  const letterFontSize = ENGRAVING_TEXT_UNITS.expressiveText * scale;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  orderedDynamicMarkings(markings).forEach((marking, row) => {
+    const rowBase = baselineY + row * 14;
+    const metrics = dynamicGlyphMetricsFor(marking);
+    if (metrics) {
+      // 描画と同じく光学中心を anchorX に合わせた原点から字面範囲を取る
+      const originX = anchorX - u(metrics.opticalCenterSp);
+      minX = Math.min(minX, originX + u(metrics.leftSp));
+      maxX = Math.max(maxX, originX + u(metrics.rightSp));
+      minY = Math.min(minY, rowBase - u(metrics.topSp));
+      maxY = Math.max(maxY, rowBase - u(metrics.bottomSp));
+    } else {
+      const w = Math.max(letterFontSize * 0.62, formatDynamicMarking(marking).length * letterFontSize * 0.62);
+      minX = Math.min(minX, anchorX - w / 2);
+      maxX = Math.max(maxX, anchorX + w / 2);
+      minY = Math.min(minY, rowBase - letterFontSize * 0.55);
+      maxY = Math.max(maxY, rowBase + letterFontSize * 0.2);
+    }
+  });
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
 export function getAbsoluteDynamicVelocity(value: AbsoluteDynamicMarking): number {

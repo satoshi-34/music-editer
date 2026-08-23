@@ -116,3 +116,44 @@ VexFlow の音符本体とは別に、描画後の SVG へテキストを直接�
 - 保存データの `dynamics` は許可済み文字列だけ受け入れる
 - ベロシティは必ず `0..1` に収まるよう丸める
 - 背景クリックでは強弱ツールが新規音符挿入へ化けないよう分岐を分ける
+
+## 追補（2026-08-23・Issue #380: 絶対強弱を Bravura の SMuFL グリフで描画）
+
+**問題**: 強弱記号が通常フォント（Century Schoolbook イタリック）の文字 "pp" で、
+音符・臨時記号（VexFlow 5 同梱の Bravura = SMuFL 準拠）と字形の系統が違っていた。
+市販譜の強弱は専用グリフで、作曲科ユーザー（弟）の見慣れた字形と差が出る。
+
+**修正設計**:
+- `dynamicMarkingUtils.dynamicGlyphFor()` — 絶対強弱（pp/p/mp/mf/f/ff）を SMuFL の
+  Dynamics 合字（U+E52B/E520/E52C/E52D/E522/E52F）へ対応づける。cresc./dim. は
+  対応グリフが無いため null（テキストのまま。運用者指定）
+- 描画（PianoSystemCanvas の強弱一括描画）: グリフありなら font-family "Bravura"・
+  font-style なし（グリフ自体がイタリック形）・font-size は
+  `ENGRAVING_TEXT_SP.dynamicsGlyph = 4`（SMuFL は 1em = 4sp 設計。字面は pp で高さ約
+  1.7sp なので旧テキスト 2.0sp と見た目の大きさはほぼ揃う）。フォントは VexFlow 5 が
+  読み込む Bravura をそのまま使う（追加ロードなし）
+- 衝突回避（#373）の文字箱は `estimateDynamicMarkingsCollisionRect` が
+  **Bravura 公式メタデータの実測値**（`DYNAMIC_GLYPH_METRICS`: bBox の左右オーバーハング・
+  非対称な上下・opticalCenter 補正・複数記号の行割り）で見積もる。cresc/dim は
+  文字数ベース。当初の文字数のみ→round 2 の近似幅→round 3 でメタデータ実測値へ、
+  と段階的に正確化した（近似は mp などで実 bBox より小さく、横端の重なりを見逃す）
+- 描画の横位置は text-anchor="middle"（文字送り中央）ではなく、Bravura の
+  **opticalCenter を音符中心へ合わせる**（f では両者が約0.53spずれるため。
+  アンカーは既定の start のまま x = anchorX − opticalCenter×倍率 で描く）
+
+**影響範囲**: 表示の字形のみ。保存データ・パレット表示・MusicXML・再生・⤢/✥ は不変。
+クリック判定は getBBox が SMuFL フォントの em 箱（縦約16sp）を返すため自動追従できず、
+`data-smufl-glyph` 属性付きの text は、描画時に data 属性へ残した**グリフごとの字面実測値**
+（`data-glyph-top-sp` / `data-glyph-bottom-sp`。Bravura メタデータの bBox）×サイズ倍率へ
+クランプする（f 系は上1.776sp・下は p 系 0.568sp〜mf 0.66sp と非対称。倍率は実フォントサイズ ÷
+設計サイズから復元。⤢ の 25〜400% に追従。属性が読めない場合は 1.8sp/1.0sp の包絡へ
+フォールバック）。
+
+**テスト**: PianoSystemCanvasDynamicsGlyph.test.tsx（15件: 6種のグリフを SMuFL 公式表の
+コードポイント直書きで固定・cresc はテキストのまま・併記の行間・⤢ の scale 反映・
+判定クランプの基本と f・scale=4 の非対称追従・文字箱のメタデータ単体検証・
+光学中心揃え・隣接グリフの横端連鎖・表示ウェイトの regular 固定）。
+グリフは表示ウェイト「太い」の一括 CSS の影響を受けないよう font-weight:400 と
+font-synthesis:none をインラインで固定している（疑似太字の合成で実字面が
+メタデータより広がるのを防ぐ）。既存の衝突回避テストは PP_TEXT をグリフ参照へ更新。
+ScorePage 配線は ScorePagePartSymbolsWiring.test.tsx に復元→グリフ描画のケースを追加。

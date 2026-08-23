@@ -91,6 +91,14 @@ export const ENGRAVING_TEXT_SP = {
   lyrics: 1.5,
   /** 強弱記号（f, p など）。cresc./dim. とテンポ表記も同じ比率で拡大する */
   dynamics: 2.0,
+  /**
+   * 強弱の SMuFL グリフ（Bravura）の font-size（Issue #380）。
+   * SMuFL フォントは「1em = 4sp（五線1本ぶんの高さ）」で設計されているため、
+   * 標準の浄書サイズで描くには em を 4sp にする。グリフ自体の字面は
+   * これより小さい（pp で高さ約1.7sp）ので、旧テキスト（2.0sp）と見た目の
+   * 大きさはほぼ揃う。
+   */
+  dynamicsGlyph: 4,
   /** cresc. / dim. とテンポ表記（Allegro 等）。強弱記号と同じ 1.25 倍を掛けた値 */
   expressiveText: 1.5,
   /**
@@ -146,6 +154,7 @@ export const ENGRAVING_TEXT_UNITS = {
   measureNumber: spToUnits(ENGRAVING_TEXT_SP.measureNumber),
   lyrics: spToUnits(ENGRAVING_TEXT_SP.lyrics),
   dynamics: spToUnits(ENGRAVING_TEXT_SP.dynamics),
+  dynamicsGlyph: spToUnits(ENGRAVING_TEXT_SP.dynamicsGlyph),
   expressiveText: spToUnits(ENGRAVING_TEXT_SP.expressiveText),
   expressionMarking: spToUnits(ENGRAVING_TEXT_SP.expressionMarking),
   chordSymbol: spToUnits(ENGRAVING_TEXT_SP.chordSymbol),
