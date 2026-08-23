@@ -1256,7 +1256,7 @@ type RenderCollectors = {
     adjust: ResolvedSymbolAdjust;
     /** どのパート（段）の五線下に描くか。自動衝突回避（#340）で同じ段の音符だけを避けるために使う */
     obstaclePartIndex: number;
-    // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
+    // クリック判定に使う。非アクティブなレイヤー（手×声部）の記号にも渡す（#398。省略時は判定を作らない）
     partIndex?: number;
     measureAbsoluteIndex?: number;
     /** その記号が付いている音符の声部。調整値を正しい声部へ書き戻すために必須（#316/#389 のレイヤー跨ぎクリック） */
@@ -1302,11 +1302,15 @@ type RenderCollectors = {
    * 歌詞（データ駆動: 歌詞を持つイベントが属する段の五線上端を基準にする）。
    * StaffCanvas と同じ座標計算・見た目を drawLyricsEntry（lyricsRenderUtils.ts）で共有する
    */
-  lyricsEntries: Array<{ anchorX: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust }>;
+  lyricsEntries: Array<{
+    anchorX: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust;
+    // クリック判定に使う（他の記号と同じ配線。省略時は判定を作らない）
+    partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
+  }>;
   /** 運指番号（五線上端基準の統一高さに表示） */
   fingeringEntries: Array<{
     anchorX: number; noteTopY: number; staveTopY: number; text: string; adjust: ResolvedSymbolAdjust;
-    // クリック判定に使う。非アクティブ声部の「見た目だけ」描画からは付与しない（省略時はクリック判定を作らない）
+    // クリック判定に使う。非アクティブなレイヤー（手×声部）の記号にも渡す（#398。省略時は判定を作らない）
     partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
   }>;
   /**
@@ -1610,7 +1614,8 @@ function drawCollectedSymbolEntries(args: {
       svgRoot.appendChild(text);
       drawnElements.push(text);
     });
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
       appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'dynamics');
     }
@@ -1618,7 +1623,7 @@ function drawCollectedSymbolEntries(args: {
 
   // ── カスタム記号を一括描画（StaffCanvas と同じ共通ユーティリティを使う） ──
   drawCustomSymbolEntries(customSymbolEntries, customSymbolDefs, svgRoot, (entry, symbolId, g) => {
-    // 非アクティブ声部の「見た目だけ」描画（partIndex 省略）にはクリック判定を作らない
+    // index 情報が無いエントリ（partIndex 省略）にはクリック判定を作らない
     if (entry.partIndex === undefined) return;
     appendSymbolHitRegion([g], entry.partIndex, entry.measureAbsoluteIndex, entry.eventIndex, entry.voiceIndex ?? 0, entry.event, symbolId, true);
   });
@@ -1705,7 +1710,8 @@ function drawCollectedSymbolEntries(args: {
     el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.fingering * adjust.scale));
     el.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(el);
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
       appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'fingering');
     }
@@ -1799,7 +1805,8 @@ function drawCollectedSymbolEntries(args: {
         aboveOffset += 14 * s;
       }
     });
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
       appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'articulations');
     }
@@ -1825,7 +1832,8 @@ function drawCollectedSymbolEntries(args: {
     el.setAttribute('font-style', 'italic');
     el.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(el);
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
       appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'tempoMarking');
     }
@@ -1869,7 +1877,8 @@ function drawCollectedSymbolEntries(args: {
         el.setAttribute('x', String(minAnchorX));
       }
     }
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
       appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'expressionMarking');
     }
@@ -1895,7 +1904,8 @@ function drawCollectedSymbolEntries(args: {
     el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.chordSymbol * adjust.scale));
     el.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(el);
-    // 演奏記号タブでのクリック判定（非アクティブ声部の「見た目だけ」描画には index 情報が無いため作らない）
+    // 演奏記号タブでのクリック判定。非アクティブなレイヤー（手×声部）の記号にも作る（#398。
+    // index 情報が無いエントリ＝配線漏れのときだけ作らない）
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
       appendSymbolHitRegion([el], partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'chordSymbol');
     }
@@ -1904,7 +1914,15 @@ function drawCollectedSymbolEntries(args: {
   // 歌詞: 音符が属する段の五線上端のさらに上（staveTopY - 26）に通常体で表示する。
   // ピアノ大譜表なら右手に付けた歌詞は右手譜表の上、左手なら左手譜表の上に出る。
   // 多パート譜では歌詞データを持つイベントの段の上に描かれる（データ駆動）。
-  lyricsEntries.forEach((entry) => drawLyricsEntry(svgRoot, entry));
+  lyricsEntries.forEach((entry) => {
+    const el = drawLyricsEntry(svgRoot, entry);
+    // 歌詞も他の記号と同じくクリックで選べるようにする（README/DEVELOPMENT が対象に
+    // 挙げているのに配線が漏れていた。#398 Codex round2 P2）
+    if (entry.partIndex !== undefined && entry.measureAbsoluteIndex !== undefined
+      && entry.eventIndex !== undefined && entry.event) {
+      appendSymbolHitRegion([el], entry.partIndex, entry.measureAbsoluteIndex, entry.eventIndex, entry.voiceIndex ?? 0, entry.event, 'lyrics');
+    }
+  });
 
   // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
   // Ped と ✱ が時系列でペアになる区間は、間を破線でつないで「踏み続けている範囲」を示す
@@ -6735,6 +6753,7 @@ export default function PianoSystemCanvas({
                 staveTopY: stave.getYForLine(0),
                 text: activeEvs[j].lyrics!,
                 adjust: getSymbolAdjust(activeEvs[j], 'lyrics'),
+                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
               });
             }
             if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.ottava) {
@@ -6857,6 +6876,7 @@ export default function PianoSystemCanvas({
                     staveTopY: stave.getYForLine(0),
                     text: ev.lyrics,
                     adjust: getSymbolAdjust(ev, 'lyrics'),
+                    partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
                   });
                 }
                 if (!ev.isRest && ev.articulations?.length) {
