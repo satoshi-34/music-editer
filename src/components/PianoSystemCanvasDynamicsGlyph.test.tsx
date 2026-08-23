@@ -128,8 +128,8 @@ describe('強弱記号の Bravura グリフ描画（Issue #380）', () => {
   });
 
   it('⤢ で拡大した f の判定クランプはサイズと非対称な字面に追従する（scale=4）', () => {
-    // f 系はアセンダ（約1.8sp）がディセンダ（約1.0sp）より高い非対称な字面。
-    // 対称 ±1.4sp だと拡大時に上端がクリック不能になる（Codex round2 P2）
+    // f の字面は上1.776sp・下0.608sp（Bravura メタデータ実測）の非対称。
+    // 対称な包絡だと拡大時に上端がクリック不能になる（Codex round2-4 P2）
     (SVGElement.prototype as unknown as { getBBox: () => { x: number; y: number; width: number; height: number } }).getBBox =
       () => ({ x: 0, y: 0, width: 10, height: 10 });
     try {
@@ -215,6 +215,16 @@ describe('強弱記号の Bravura グリフ描画（Issue #380）', () => {
     expect(ys).toHaveLength(2);
     // x順で後（右）の pp が下へ連鎖している
     expect(Math.max(...ys)).toBeGreaterThan(Math.min(...ys));
+  });
+
+  it('グリフは表示ウェイトの影響を受けない（regular 固定・疑似太字の合成禁止）', () => {
+    // 表示ウェイト「太い」は .score-area svg text へ font-weight:700 を一括適用するが、
+    // Bravura は regular のみでブラウザが疑似太字を合成し、メタデータ転記の
+    // 衝突矩形・判定クランプより実字面が広がってしまう（Codex round4 P2）
+    const container = renderWithDynamics([{ value: 'pp' }]);
+    const el = Array.from(container.querySelectorAll('text')).find((t) => t.getAttribute('data-smufl-glyph') === '1')!;
+    expect(el.style.fontWeight).toBe('400');
+    expect(el.style.fontSynthesis).toBe('none');
   });
 
   it('⤢ のサイズ調整（scale）はグリフのフォントサイズにも効く', () => {

@@ -1555,6 +1555,12 @@ function drawCollectedSymbolEntries(args: {
         text.setAttribute('data-smufl-glyph', '1');
         text.setAttribute('data-glyph-top-sp', String(glyphMetrics.topSp));
         text.setAttribute('data-glyph-bottom-sp', String(-glyphMetrics.bottomSp));
+        // 表示ウェイト「太い」の一括 CSS（.score-area svg text { font-weight:700 }）が
+        // かかると、Bravura は regular のみのためブラウザが疑似太字を合成し、
+        // メタデータ転記の衝突矩形・判定クランプより実字面が広がってしまう。
+        // グリフは常に regular に固定し、合成もインラインで禁止する（Codex round4 P2）
+        text.style.fontWeight = '400';
+        text.style.fontSynthesis = 'none';
       } else {
         text.setAttribute('x',String(anchorX + adjust.offsetX));
         text.setAttribute('text-anchor','middle');
@@ -3739,8 +3745,9 @@ export default function PianoSystemCanvas({
               ? fontSize / ENGRAVING_TEXT_UNITS.dynamicsGlyph
               : 1;
             // 字面の縦範囲は描画時にグリフごとの実測値（Bravura メタデータ）を
-            // data 属性へ残してあるので、それを倍率付きで使う（属性が読めない場合は
-            // 全グリフを包絡する 1.8sp / 1.0sp へフォールバック）
+            // data 属性へ残してあるので、それを倍率付きで使う。1.8sp / 1.0sp は
+            // 属性が読めない場合だけの安全側フォールバック（実測は f 系で上1.776sp・
+            // p 系で下0.568〜0.66sp。フォールバックはそれらを広めに包絡する値）
             const topSp = parseFloat(el.getAttribute('data-glyph-top-sp') ?? '');
             const bottomSp = parseFloat(el.getAttribute('data-glyph-bottom-sp') ?? '');
             if (Number.isFinite(baseline)) {

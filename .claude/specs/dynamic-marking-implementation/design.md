@@ -149,8 +149,11 @@ VexFlow の音符本体とは別に、描画後の SVG へテキストを直接�
 設計サイズから復元。⤢ の 25〜400% に追従。属性が読めない場合は 1.8sp/1.0sp の包絡へ
 フォールバック）。
 
-**テスト**: PianoSystemCanvasDynamicsGlyph.test.tsx（13件: 6種のグリフを SMuFL 公式表の
+**テスト**: PianoSystemCanvasDynamicsGlyph.test.tsx（15件: 6種のグリフを SMuFL 公式表の
 コードポイント直書きで固定・cresc はテキストのまま・併記の行間・⤢ の scale 反映・
 判定クランプの基本と f・scale=4 の非対称追従・文字箱のメタデータ単体検証・
-光学中心揃え・隣接グリフの横端連鎖）。既存の衝突回避テストは PP_TEXT をグリフ参照へ更新。
+光学中心揃え・隣接グリフの横端連鎖・表示ウェイトの regular 固定）。
+グリフは表示ウェイト「太い」の一括 CSS の影響を受けないよう font-weight:400 と
+font-synthesis:none をインラインで固定している（疑似太字の合成で実字面が
+メタデータより広がるのを防ぐ）。既存の衝突回避テストは PP_TEXT をグリフ参照へ更新。
 ScorePage 配線は ScorePagePartSymbolsWiring.test.tsx に復元→グリフ描画のケースを追加。
