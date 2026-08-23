@@ -5801,7 +5801,7 @@ export default function ScorePage() {
                       timeSignature={scoreTimeSignature}
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
-                      symbolsClickable
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
                       // 1ページ目の1段目だけパート名をフル名で出す（Issue #60）
                       isFirstPage={i === 0}
@@ -5834,7 +5834,7 @@ export default function ScorePage() {
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       customSymbolDefs={customSymbolDefs}
-                      symbolsClickable
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
                     />
                   ) : scoreType === 'ensemble' ? (
@@ -5867,7 +5867,7 @@ export default function ScorePage() {
                       onKeySignatureChange={handleKeySignatureChange}
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
-                      symbolsClickable
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
@@ -5904,7 +5904,7 @@ export default function ScorePage() {
                       timeSignature={scoreTimeSignature}
                       onKeySignatureChange={handleKeySignatureChange}
                       customSymbolDefs={customSymbolDefs}
-                      symbolsClickable
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
@@ -5950,7 +5950,7 @@ export default function ScorePage() {
                       customSymbolDefs={customSymbolDefs}
                       activeVoiceIndex={activeVoice}
                       activeLayerPartIndex={activeLayerPart}
-                      symbolsClickable
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
@@ -5985,7 +5985,7 @@ export default function ScorePage() {
                       onMeasureRangeSelect={handleMeasureRangeSelect}
                       onBeatRangeSelect={handleBeatRangeSelect}
                       customSymbolDefs={customSymbolDefs}
-                      symbolsClickable
+                      symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
