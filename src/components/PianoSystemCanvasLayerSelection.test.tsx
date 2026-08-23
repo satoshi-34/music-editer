@@ -191,8 +191,10 @@ describe('PianoSystemCanvas 編集レイヤー明示選択（#316）', () => {
     }
   });
 
-  it('選択レイヤーと同じ帯の空白クリックでは帯またぎ通知は出ない', () => {
-    const { svg, onRightChange } = renderPiano(0);
+  it('選択レイヤーと同じ帯の空白クリックは挿入が成功し、帯またぎ通知は出ない', () => {
+    // 空きのある右手（rightHasRoom）で「挿入が実際に起きた」ところまで検証する
+    // （満杯小節だと挿入前に終わってしまい、通知なしの理由が判別できない。Codex round2 P3）
+    const { svg, onRightChange } = renderPiano(0, { rightHasRoom: true });
     const notices: string[] = [];
     const onNotice = (e: Event) => notices.push((e as CustomEvent<{ message: string }>).detail?.message ?? '');
     window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
@@ -202,12 +204,9 @@ describe('PianoSystemCanvas 編集レイヤー明示選択（#316）', () => {
       const bw = parseFloat(bg.getAttribute('width') ?? '0');
       const by = parseFloat(bg.getAttribute('y') ?? '0');
       const bh = parseFloat(bg.getAttribute('height') ?? '0');
-      // 右手は4音で満杯なので、満杯通知が出るケースを避けるため上端（高音）ではなく…
-      // →この小節は満杯（4分×4）なので挿入自体は起きず「入りきりません」通知になる。
-      // ここでは「帯またぎの通知が出ない」ことだけを確認する
-      fireEvent.click(bg, { clientX: bx + bw * 0.5, clientY: by + bh * 0.3 });
+      fireEvent.click(bg, { clientX: bx + bw * 0.85, clientY: by + bh * 0.5 });
+      expect(onRightChange).toHaveBeenCalled();
       expect(notices.join(' ')).not.toContain('に入れました（');
-      void onRightChange;
     } finally {
       window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
     }

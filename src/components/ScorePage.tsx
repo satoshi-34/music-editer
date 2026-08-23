@@ -4523,7 +4523,7 @@ export default function ScorePage() {
                 // 編集レイヤーの統合セレクタ（#316）: 手×声部の4レイヤーを明示選択する。
                 // 従来の「パートは帯域推測・声部はトグル」の二層を一本化した。
                 // 音符クリックでそのレイヤーへ自動切替+通知（#258 の型）。
-                // 空白クリックの挿入は従来どおりクリックした帯のパートへ入る（裁定②案B）
+                // 空白クリックの挿入は常に選択レイヤーへ入る（裁定②は 2026-08-23 に案Aへ差し替え）
                 <div className="toolbar-chip-group" role="group" aria-label="編集レイヤー切り替え">
                   <span className="toolbar-group-label">レイヤー</span>
                   {([[0, 0, '右手・声部1'], [0, 1, '右手・声部2'], [1, 0, '左手・声部1'], [1, 1, '左手・声部2']] as const).map(([partIdx, voiceIdx, label]) => (

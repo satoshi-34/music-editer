@@ -119,6 +119,9 @@
 - 後方互換: activeLayerPartIndex 未指定（非ピアノ・従来呼び出し）は従来どおり帯域のパートへ
   入る（テストで固定）
 
-**テスト:** PianoSystemCanvasLayerSelection.test.tsx を案Aの仕様へ書き換え（7件）:
+**テスト:** PianoSystemCanvasLayerSelection.test.tsx を案Aの仕様へ書き換え（8件）:
 低い加線音として右手へ入る・レイヤー切替イベントが飛ばない・帯またぎ通知・
-同じ帯では通知なし・レイヤー未指定の後方互換。
+同じ帯では挿入成功+通知なし・入力ガイドも選択レイヤーの五線基準・
+レイヤー未指定の後方互換。加えて ScorePagePianoLayerInsert.test.tsx
+（統合テストルールに基づく ScorePage 直マウントの配線テスト。
+activeLayerPartIndex の受け渡しを外すと落ちることを負のテストで確認済み）。
