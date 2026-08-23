@@ -2,7 +2,7 @@
 // 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { resolveBelowSymbolShifts, estimateTextRect, type CollisionRect } from '../utils/symbolCollisionUtils';
+import { resolveBelowSymbolShifts, type CollisionRect } from '../utils/symbolCollisionUtils';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
@@ -106,7 +106,7 @@ import {
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 // 自動休符補完は #244 段5-2 で utils へ物理移設（不変条件テストから直接呼ぶため）
 import { buildRestEventsForBeats, fillPriorMeasureRests } from '../utils/measureRestFillUtils';
-import { applyDynamicMarkingToEvent, formatDynamicMarking, dynamicGlyphFor, estimateDynamicMarkingsWidthUnits, DYNAMIC_GLYPH_ASCENT_SP, DYNAMIC_GLYPH_DESCENT_SP } from '../utils/dynamicMarkingUtils';
+import { applyDynamicMarkingToEvent, formatDynamicMarking, dynamicGlyphMetricsFor, orderedDynamicMarkings, estimateDynamicMarkingsCollisionRect } from '../utils/dynamicMarkingUtils';
 import { toggleArticulationOnEvent } from '../utils/articulationMarkingUtils';
 import {
   applyCustomSymbolToEvent,
@@ -1511,21 +1511,15 @@ function drawCollectedSymbolEntries(args: {
       const obstacles = noteObstacles.filter((obstacle) => obstacle.partIndex === partIndex);
       const inputs = indices.map((index) => {
         const entry = dynamicTextEntries[index];
-        // 文字幅は DOM に入れる前は実測できないため概算。絶対強弱は Bravura グリフの
-        // 実幅（sp・メタデータ由来の保守値）、cresc/dim は文字数ベース。旧・文字数のみの
-        // 概算はグリフ幅（例: pp 実幅約3.2sp）を過小評価し、隣接音符の符幹・加線と
-        // グリフ端だけが重なるケースを見逃していた（Codex round2 P2）
-        const fontSize = ENGRAVING_TEXT_UNITS.dynamics * entry.adjust.scale;
-        const widestPx = estimateDynamicMarkingsWidthUnits(entry.markings, entry.adjust.scale);
-        const rect = estimateTextRect(
+        // 文字箱は DOM に入れる前は実測できないため、Bravura 公式メタデータの字面
+        // （左右オーバーハング・非対称な上下・光学中心補正・複数記号の行割り込み）で
+        // 見積もる。詳細は estimateDynamicMarkingsCollisionRect のコメント参照
+        const rect = estimateDynamicMarkingsCollisionRect(
+          entry.markings,
+          entry.adjust.scale,
           entry.anchorX + entry.adjust.offsetX,
           entry.baseY + entry.adjust.offsetY,
-          '',
-          fontSize,
-          widestPx,
         );
-        // 複数記号（pp と cresc など）は 14px 間隔で縦に並ぶぶん箱を伸ばす
-        rect.h += Math.max(0, entry.markings.length - 1) * 14;
         return { rect, hasManualOffset: entry.adjust.offsetX !== 0 || entry.adjust.offsetY !== 0 };
       });
       const shifts = resolveBelowSymbolShifts(inputs, obstacles);
@@ -1533,33 +1527,37 @@ function drawCollectedSymbolEntries(args: {
     }
   }
   dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, event }, dynamicEntryIndex) => {
-    const orderedMarkings = [...markings].sort((left, right) => {
-      const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
-      const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
-      return leftPriority - rightPriority;
-    });
+    // 行割り（絶対強弱→cresc/dim）は衝突概算と共有する（orderedDynamicMarkings）
+    const orderedMarkings = orderedDynamicMarkings(markings);
     const drawnElements: SVGGraphicsElement[] = [];
     orderedMarkings.forEach((marking, index) => {
       const text=document.createElementNS('http://www.w3.org/2000/svg','text');
       // 絶対強弱（pp〜ff）は Bravura の SMuFL グリフで描く（Issue #380）。
       // 音符・臨時記号と同じフォントに揃い、市販譜と同じ字形になる。
       // cresc./dim. は対応グリフが無いため従来のテキスト（イタリックのセリフ体）のまま
-      const glyph = dynamicGlyphFor(marking);
+      const glyphMetrics = dynamicGlyphMetricsFor(marking);
       // ⤢/✥ ツールで配置済みの調整値を、位置は座標へ加算・サイズはフォントサイズへの倍率として反映する
-      text.setAttribute('x',String(anchorX + adjust.offsetX));
       text.setAttribute('y',String(baseY + index * 14 + adjust.offsetY + dynamicCollisionShifts[dynamicEntryIndex]));
-      text.setAttribute('text-anchor','middle');
       text.setAttribute('fill','#1f2937');
-      if (glyph) {
-        text.textContent = glyph;
+      if (glyphMetrics) {
+        text.textContent = glyphMetrics.codepoint;
         // VexFlow 5 が読み込む Bravura をそのまま使う（グリフは設計段階でイタリック形なので
         // font-style は付けない。フォールバックを置いても PUA 文字は他フォントで出ないため単独指定）
         text.setAttribute('font-family', 'Bravura');
         text.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.dynamicsGlyph * adjust.scale));
-        // クリック判定のクランプ対象の識別子（appendSymbolHitRegion 参照）。
+        // text-anchor="middle" は文字送り（advance）中央で揃えるため、光学中心が
+        // 音符中心から右へずれる（f で約0.53sp）。Bravura の opticalCenter を
+        // anchorX に合わせた原点 x（アンカーは既定の start のまま）で描く（Codex round3 P2）
+        const glyphScale = adjust.scale;
+        text.setAttribute('x', String(anchorX + adjust.offsetX - spToUnits(glyphMetrics.opticalCenterSp) * glyphScale));
+        // クリック判定のクランプ用に、字面の縦範囲（sp・メタデータ実測値）を DOM へ残す。
         // font-family での判別は将来 Bravura を他用途で使ったとき誤爆するため専用属性にする
         text.setAttribute('data-smufl-glyph', '1');
+        text.setAttribute('data-glyph-top-sp', String(glyphMetrics.topSp));
+        text.setAttribute('data-glyph-bottom-sp', String(-glyphMetrics.bottomSp));
       } else {
+        text.setAttribute('x',String(anchorX + adjust.offsetX));
+        text.setAttribute('text-anchor','middle');
         text.textContent = formatDynamicMarking(marking);
         text.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
         // cresc./dim. は強弱記号より一段小さい文字という関係を保ったまま同じ倍率で拡大する（#202）
@@ -3740,9 +3738,14 @@ export default function PianoSystemCanvas({
             const glyphScale = Number.isFinite(fontSize) && fontSize > 0
               ? fontSize / ENGRAVING_TEXT_UNITS.dynamicsGlyph
               : 1;
+            // 字面の縦範囲は描画時にグリフごとの実測値（Bravura メタデータ）を
+            // data 属性へ残してあるので、それを倍率付きで使う（属性が読めない場合は
+            // 全グリフを包絡する 1.8sp / 1.0sp へフォールバック）
+            const topSp = parseFloat(el.getAttribute('data-glyph-top-sp') ?? '');
+            const bottomSp = parseFloat(el.getAttribute('data-glyph-bottom-sp') ?? '');
             if (Number.isFinite(baseline)) {
-              top = baseline - spToUnits(DYNAMIC_GLYPH_ASCENT_SP) * glyphScale;
-              bottom = baseline + spToUnits(DYNAMIC_GLYPH_DESCENT_SP) * glyphScale;
+              top = baseline - spToUnits(Number.isFinite(topSp) ? topSp : 1.8) * glyphScale;
+              bottom = baseline + spToUnits(Number.isFinite(bottomSp) ? bottomSp : 1.0) * glyphScale;
             }
           }
           minX = Math.min(minX, bbox.x);

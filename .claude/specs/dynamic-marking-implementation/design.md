@@ -132,19 +132,25 @@ VexFlow の音符本体とは別に、描画後の SVG へテキストを直接�
   `ENGRAVING_TEXT_SP.dynamicsGlyph = 4`（SMuFL は 1em = 4sp 設計。字面は pp で高さ約
   1.7sp なので旧テキスト 2.0sp と見た目の大きさはほぼ揃う）。フォントは VexFlow 5 が
   読み込む Bravura をそのまま使う（追加ロードなし）
-- 衝突回避（#373）の文字箱幅は、グリフは Bravura メタデータ由来の実幅（保守値・
-  `DYNAMIC_GLYPH_WIDTH_SP`、pp=3.4sp 等）、cresc/dim は文字数ベースで見積もる
-  （`estimateDynamicMarkingsWidthUnits`）。当初は文字数ベースのままにしていたが、
-  グリフ実幅を過小評価して隣接音符と横端だけが重なるケースを見逃すため
-  round 2 で実幅へ変更した
+- 衝突回避（#373）の文字箱は `estimateDynamicMarkingsCollisionRect` が
+  **Bravura 公式メタデータの実測値**（`DYNAMIC_GLYPH_METRICS`: bBox の左右オーバーハング・
+  非対称な上下・opticalCenter 補正・複数記号の行割り）で見積もる。cresc/dim は
+  文字数ベース。当初の文字数のみ→round 2 の近似幅→round 3 でメタデータ実測値へ、
+  と段階的に正確化した（近似は mp などで実 bBox より小さく、横端の重なりを見逃す）
+- 描画の横位置は text-anchor="middle"（文字送り中央）ではなく、Bravura の
+  **opticalCenter を音符中心へ合わせる**（f では両者が約0.53spずれるため。
+  アンカーは既定の start のまま x = anchorX − opticalCenter×倍率 で描く）
 
 **影響範囲**: 表示の字形のみ。保存データ・パレット表示・MusicXML・再生・⤢/✥ は不変。
 クリック判定は getBBox が SMuFL フォントの em 箱（縦約16sp）を返すため自動追従できず、
-`data-smufl-glyph` 属性付きの text はベースラインから上1.8sp・下1.0sp（×サイズ倍率）へ
-クランプする（f 系のアセンダ約1.78sp・p 系のディセンダ約0.9sp と字面が非対称なため
-上下別の包絡値。倍率は実フォントサイズ ÷ 設計サイズから復元。⤢ の 25〜400% に追従）。
+`data-smufl-glyph` 属性付きの text は、描画時に data 属性へ残した**グリフごとの字面実測値**
+（`data-glyph-top-sp` / `data-glyph-bottom-sp`。Bravura メタデータの bBox）×サイズ倍率へ
+クランプする（f 系は上1.776sp・p 系は下0.568sp と非対称。倍率は実フォントサイズ ÷
+設計サイズから復元。⤢ の 25〜400% に追従。属性が読めない場合は 1.8sp/1.0sp の包絡へ
+フォールバック）。
 
 **テスト**: PianoSystemCanvasDynamicsGlyph.test.tsx（13件: 6種のグリフを SMuFL 公式表の
 コードポイント直書きで固定・cresc はテキストのまま・併記の行間・⤢ の scale 反映・
-判定クランプの基本と f・scale=4 の非対称追従・幅概算の単体・隣接グリフの横端連鎖）。既存の衝突回避テストは PP_TEXT をグリフ参照へ更新。
+判定クランプの基本と f・scale=4 の非対称追従・文字箱のメタデータ単体検証・
+光学中心揃え・隣接グリフの横端連鎖）。既存の衝突回避テストは PP_TEXT をグリフ参照へ更新。
 ScorePage 配線は ScorePagePartSymbolsWiring.test.tsx に復元→グリフ描画のケースを追加。
