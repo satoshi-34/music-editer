@@ -108,11 +108,22 @@ describe('記号字面クリックのツール別ルーティング（Issue #385
     const onNotice = (e: Event) => notices.push((e as CustomEvent<{ message: string }>).detail?.message ?? '');
     window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
     try {
-      const { container, onChange } = renderWithTool({ duration: '4', isRest: false }, [PP_EVENT]);
+      // 調整値（symbolAdjust.dynamics）を事前に持たせ、削除で一緒に消えることまで検証する
+      // （Codex最終ゲート P3: 元データに無いと120行の確認が常時成功してしまう）
+      const { container, onChange } = renderWithTool(
+        { duration: '4', isRest: false },
+        [{ ...PP_EVENT, symbolAdjust: { dynamics: { offsetY: -20 } } }],
+      );
       clickRegion(container);
       const button = Array.from(container.querySelectorAll('.symbol-adjust-overlay button'))
         .find((b) => b.textContent === 'この記号を削除') as HTMLButtonElement;
       expect(button).toBeTruthy();
+      // 実ブラウザでは mousedown の preventDefault が入力欄の blur（＝確定して閉じる）を
+      // 抑止することでボタンの click が成立する。jsdom はこの focus 連動を再現できない
+      // （手動 fireEvent.blur は preventDefault を素通りする）ため、
+      // 「mousedown が preventDefault されたこと」自体を fireEvent の戻り値
+      // （false = preventDefault 済み）で固定する（Codex最終ゲート P3）
+      expect(fireEvent.mouseDown(button)).toBe(false);
       fireEvent.click(button);
       expect(container.querySelector('.symbol-adjust-overlay')).toBeNull();
       const saved = onChange.mock.calls.at(-1)![0][0].events[0];
