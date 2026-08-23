@@ -7,6 +7,7 @@ import {
   estimateTextRect,
   BELOW_SYMBOL_STEP_PX,
   BELOW_SYMBOL_MAX_SHIFT_PX,
+  BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX,
   type CollisionRect,
 } from './symbolCollisionUtils';
 
@@ -124,6 +125,67 @@ describe('resolveBelowSymbolShifts（五線下の記号の押し出し）', () =
     const shifts = resolveBelowSymbolShifts([right, left], [rect(95, 140, 30, 30)]);
     expect(shifts[0]).toBe(0);
     expect(shifts[1]).toBeGreaterThan(0);
+  });
+});
+
+describe('resolveBelowSymbolShifts の maxBottomY（下の五線の手前で止める・Issue #382）', () => {
+  // 大譜表では自パートの下がすぐ隣の五線なので、境界を知らずに押すと
+  // 強弱記号が下の五線へ食い込む（月光 m5 の実測）。
+  // 境界を渡したときだけ「境界で止めて、その位置で確定する」ようにした。
+  const WALL = rect(90, 0, 40, 100000); // 縦にどこまでも続く障害物（絶対に空かない）
+
+  it('未指定なら従来どおり（上限まで押しても空かなければ元の位置に戻る）', () => {
+    const symbols = [{ rect: rect(100, 150, 20, 12), hasManualOffset: false }];
+    expect(resolveBelowSymbolShifts(symbols, [WALL])).toEqual([0]);
+    // 明示的に undefined / NaN を渡しても「境界なし」として扱う
+    expect(resolveBelowSymbolShifts(symbols, [WALL], { maxBottomY: undefined })).toEqual([0]);
+    expect(resolveBelowSymbolShifts(symbols, [WALL], { maxBottomY: Number.NaN })).toEqual([0]);
+  });
+
+  it('境界（下の五線の手前）まで押しても空かないときは、元位置へ戻さず境界に留める', () => {
+    // 記号の下端は 150+12=162。境界 180 まではあと 18px 押せる
+    const shifts = resolveBelowSymbolShifts(
+      [{ rect: rect(100, 150, 20, 12), hasManualOffset: false }],
+      [WALL],
+      { maxBottomY: 180 },
+    );
+    expect(shifts[0]).toBe(18);
+    // 押し出し後の下端はちょうど境界（＝下の五線の手前）に一致し、それを超えない
+    expect(150 + shifts[0] + 12).toBe(180);
+  });
+
+  it('境界の手前で障害物を抜けられるときは、そこで止まる（境界まで下げきらない）', () => {
+    const shifts = resolveBelowSymbolShifts(
+      [{ rect: rect(100, 150, 20, 12), hasManualOffset: false }],
+      [rect(95, 140, 30, 20)], // y=140〜160 の障害物（余白 pad=2 のぶん 162 まで避ける）
+      { maxBottomY: 500 },
+    );
+    // 7px×2回で記号の上端が 164 まで下がり、障害物＋余白（162）を抜ける
+    expect(shifts[0]).toBe(BELOW_SYMBOL_STEP_PX * 2);
+  });
+
+  it('境界より maxShift の方が先に来る場合は、従来どおり元位置へ戻す', () => {
+    // 境界（下端 162 + 1000）は 112px の上限よりずっと遠いので、止めたのは上限の側
+    const shifts = resolveBelowSymbolShifts(
+      [{ rect: rect(100, 150, 20, 12), hasManualOffset: false }],
+      [WALL],
+      { maxBottomY: 162 + BELOW_SYMBOL_MAX_SHIFT_PX + 1000 },
+    );
+    expect(shifts).toEqual([0]);
+  });
+
+  it('既に境界より下にいる記号は動かさない（上へは戻さない）', () => {
+    const shifts = resolveBelowSymbolShifts(
+      [{ rect: rect(100, 150, 20, 12), hasManualOffset: false }],
+      [WALL],
+      { maxBottomY: 100 },
+    );
+    expect(shifts).toEqual([0]);
+  });
+
+  it('境界の余白は五線に触れない程度の小さな値', () => {
+    expect(BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX).toBeGreaterThan(0);
+    expect(BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX).toBeLessThan(10);
   });
 });
 
