@@ -106,7 +106,7 @@ import {
 import { cloneMeasureData, createEmptyMeasure, toggleMeasureEnding, toggleMeasureRepeatMarker } from '../utils/repeatMarkerUtils';
 // 自動休符補完は #244 段5-2 で utils へ物理移設（不変条件テストから直接呼ぶため）
 import { buildRestEventsForBeats, fillPriorMeasureRests } from '../utils/measureRestFillUtils';
-import { applyDynamicMarkingToEvent, formatDynamicMarking } from '../utils/dynamicMarkingUtils';
+import { applyDynamicMarkingToEvent, formatDynamicMarking, dynamicGlyphFor } from '../utils/dynamicMarkingUtils';
 import { toggleArticulationOnEvent } from '../utils/articulationMarkingUtils';
 import {
   applyCustomSymbolToEvent,
@@ -131,6 +131,7 @@ import { drawLyricsEntry } from '../utils/lyricsRenderUtils';
 import {
   ENGRAVING_TEXT_UNITS,
   ENGRAVING_THICKNESS_UNITS,
+  spToUnits,
   SCORE_TEXT_FONT_FAMILY,
   TEXT_STACK_LINE_GAP_UNITS,
   widenThinBarlineRect,
@@ -1540,20 +1541,28 @@ function drawCollectedSymbolEntries(args: {
     const drawnElements: SVGGraphicsElement[] = [];
     orderedMarkings.forEach((marking, index) => {
       const text=document.createElementNS('http://www.w3.org/2000/svg','text');
-      text.textContent=formatDynamicMarking(marking);
+      // 絶対強弱（pp〜ff）は Bravura の SMuFL グリフで描く（Issue #380）。
+      // 音符・臨時記号と同じフォントに揃い、市販譜と同じ字形になる。
+      // cresc./dim. は対応グリフが無いため従来のテキスト（イタリックのセリフ体）のまま
+      const glyph = dynamicGlyphFor(marking);
       // ⤢/✥ ツールで配置済みの調整値を、位置は座標へ加算・サイズはフォントサイズへの倍率として反映する
       text.setAttribute('x',String(anchorX + adjust.offsetX));
       text.setAttribute('y',String(baseY + index * 14 + adjust.offsetY + dynamicCollisionShifts[dynamicEntryIndex]));
       text.setAttribute('text-anchor','middle');
       text.setAttribute('fill','#1f2937');
-      text.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
-      // 強弱記号は 1.6 sp → 2.0 sp（Issue #202・候補A）。
-      // cresc./dim. は強弱記号より一段小さい文字という関係を保ったまま同じ倍率で拡大する。
-      const baseFontSize = marking.value === 'cresc' || marking.value === 'dim'
-        ? ENGRAVING_TEXT_UNITS.expressiveText
-        : ENGRAVING_TEXT_UNITS.dynamics;
-      text.setAttribute('font-size', String(baseFontSize * adjust.scale));
-      text.setAttribute('font-style','italic');
+      if (glyph) {
+        text.textContent = glyph;
+        // VexFlow 5 が読み込む Bravura をそのまま使う（グリフは設計段階でイタリック形なので
+        // font-style は付けない。フォールバックを置いても PUA 文字は他フォントで出ないため単独指定）
+        text.setAttribute('font-family', 'Bravura');
+        text.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.dynamicsGlyph * adjust.scale));
+      } else {
+        text.textContent = formatDynamicMarking(marking);
+        text.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+        // cresc./dim. は強弱記号より一段小さい文字という関係を保ったまま同じ倍率で拡大する（#202）
+        text.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.expressiveText * adjust.scale));
+        text.setAttribute('font-style','italic');
+      }
       text.setAttribute('pointer-events','none');
       svgRoot.appendChild(text);
       drawnElements.push(text);
@@ -3712,10 +3721,24 @@ export default function PianoSystemCanvas({
       elements.forEach((el) => {
         try {
           const bbox = el.getBBox();
+          let top = bbox.y;
+          let bottom = bbox.y + bbox.height;
+          // Bravura の SMuFL グリフ（#380 の強弱記号）: <text> の getBBox は字面ではなく
+          // フォントの em 箱を返し、SMuFL フォントは背の高いグリフを収めるため
+          // アセント/ディセントが極端に大きい（実測で縦約16sp）。そのままだと判定 rect が
+          // 縦に巨大化して他の記号のクリックを飲み込むので、ベースライン（y 属性）から
+          // 字面ぶん（±1.4sp）だけに絞る
+          if (el.tagName === 'text' && el.getAttribute('font-family') === 'Bravura') {
+            const baseline = parseFloat(el.getAttribute('y') ?? '');
+            if (Number.isFinite(baseline)) {
+              top = baseline - spToUnits(1.4);
+              bottom = baseline + spToUnits(1.4);
+            }
+          }
           minX = Math.min(minX, bbox.x);
-          minY = Math.min(minY, bbox.y);
+          minY = Math.min(minY, top);
           maxX = Math.max(maxX, bbox.x + bbox.width);
-          maxY = Math.max(maxY, bbox.y + bbox.height);
+          maxY = Math.max(maxY, bottom);
         } catch {
           // getBBox は要素が非表示の場合などに例外を投げることがあるため、その場合は無視する
         }

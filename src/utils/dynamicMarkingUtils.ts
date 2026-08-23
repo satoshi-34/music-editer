@@ -63,6 +63,27 @@ export function formatDynamicMarking(marking: DynamicMarking): string {
   return marking.value === 'cresc' ? 'cresc.' : marking.value === 'dim' ? 'dim.' : marking.value;
 }
 
+/**
+ * 絶対強弱の SMuFL グリフ（Bravura で描く合字。Issue #380）。
+ * 市販譜の強弱は専用グリフ（太いイタリック体）で、通常フォントの "pp" とは字形が違う。
+ * 音符・臨時記号は既に VexFlow 5 同梱の Bravura（SMuFL）なので、強弱も同じフォントで揃える。
+ * cresc./dim. などの文字系表記は SMuFL に対応グリフが無いため対象外（テキストのまま）。
+ * コードポイントは SMuFL 仕様の Dynamics 範囲（U+E520〜）。
+ */
+const DYNAMIC_GLYPHS: Record<AbsoluteDynamicMarking, string> = {
+  pp: '\uE52B', // dynamicPP
+  p: '\uE520',  // dynamicPiano
+  mp: '\uE52C', // dynamicMP
+  mf: '\uE52D', // dynamicMF
+  f: '\uE522',  // dynamicForte
+  ff: '\uE52F', // dynamicFF
+};
+
+/** SMuFL グリフで描ける強弱ならそのグリフ文字を、文字系（cresc/dim）なら null を返す */
+export function dynamicGlyphFor(marking: DynamicMarking): string | null {
+  return marking.value === 'cresc' || marking.value === 'dim' ? null : DYNAMIC_GLYPHS[marking.value];
+}
+
 export function getAbsoluteDynamicVelocity(value: AbsoluteDynamicMarking): number {
   return ABSOLUTE_DYNAMIC_VELOCITY_MAP[value];
 }

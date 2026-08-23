@@ -116,3 +116,28 @@ VexFlow の音符本体とは別に、描画後の SVG へテキストを直接�
 - 保存データの `dynamics` は許可済み文字列だけ受け入れる
 - ベロシティは必ず `0..1` に収まるよう丸める
 - 背景クリックでは強弱ツールが新規音符挿入へ化けないよう分岐を分ける
+
+## 追補（2026-08-23・Issue #380: 絶対強弱を Bravura の SMuFL グリフで描画）
+
+**問題**: 強弱記号が通常フォント（Century Schoolbook イタリック）の文字 "pp" で、
+音符・臨時記号（VexFlow 5 同梱の Bravura = SMuFL 準拠）と字形の系統が違っていた。
+市販譜の強弱は専用グリフで、作曲科ユーザー（弟）の見慣れた字形と差が出る。
+
+**修正設計**:
+- `dynamicMarkingUtils.dynamicGlyphFor()` — 絶対強弱（pp/p/mp/mf/f/ff）を SMuFL の
+  Dynamics 合字（U+E52B/E520/E52C/E52D/E522/E52F）へ対応づける。cresc./dim. は
+  対応グリフが無いため null（テキストのまま。運用者指定）
+- 描画（PianoSystemCanvas の強弱一括描画）: グリフありなら font-family "Bravura"・
+  font-style なし（グリフ自体がイタリック形）・font-size は
+  `ENGRAVING_TEXT_SP.dynamicsGlyph = 4`（SMuFL は 1em = 4sp 設計。字面は pp で高さ約
+  1.7sp なので旧テキスト 2.0sp と見た目の大きさはほぼ揃う）。フォントは VexFlow 5 が
+  読み込む Bravura をそのまま使う（追加ロードなし）
+- 衝突回避（#373）の文字箱概算は従来どおり文字数ベース（"pp" 2文字×旧フォント想定）の
+  ままとした。グリフ pp の実幅（約2.6sp）と概算幅がほぼ一致するため
+
+**影響範囲**: 表示の字形のみ。保存データ・パレット表示・MusicXML・再生・クリック判定
+（描画実測 getBBox から作るため自動追従）・⤢/✥ は不変。
+
+**テスト**: PianoSystemCanvasDynamicsGlyph.test.tsx（9件: 6種のグリフ/フォント/サイズ・
+cresc はテキストのまま・併記の行間・scale 反映）。既存の衝突回避テストは
+PP_TEXT をグリフ参照へ更新。

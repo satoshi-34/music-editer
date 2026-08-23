@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData } from '../types/storage';
-import { formatDynamicMarking } from '../utils/dynamicMarkingUtils';
+import { formatDynamicMarking, dynamicGlyphFor } from '../utils/dynamicMarkingUtils';
 
 vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function() {
@@ -24,7 +24,8 @@ vi.mock('../audio/SoundSource', () => ({
 }));
 
 const WIDTH = 700;
-const PP_TEXT = formatDynamicMarking({ value: 'pp' });
+// pp は #380 で Bravura の SMuFL グリフ描画になった（テキスト 'pp' ではなくグリフ文字）
+const PP_TEXT = dynamicGlyphFor({ value: 'pp' })!;
 
 function renderWithData(data: MeasureData[]) {
   const { container } = render(
