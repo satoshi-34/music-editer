@@ -177,6 +177,43 @@ describe('他レイヤーの記号クリック（2026-08-24 裁定A）', () => {
     }
   });
 
+  it('非アクティブレイヤーの休符に付いたコード記号も、クリックして調整値を保存できる', () => {
+    // テキスト系・オッターバは休符にも付けられる。以前は symbolAdjust 側が休符を
+    // 一律で除外していたため、小窓は開くのに保存されない無言の no-op だった
+    // （#398 Codex round4 P2）
+    const onRightChange = vi.fn();
+    const withRestChord: MeasureData[] = [{
+      events: [{ dur: '1', isRest: false, keys: ['a/4'] }],
+      voices: [
+        { id: 'voice-1', events: [{ dur: '1', isRest: false, keys: ['a/4'] }] },
+        { id: 'voice-2', events: [{ dur: '1', isRest: true, keys: ['b/4'], chordSymbol: 'Am' }] },
+      ],
+    }];
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={1}
+        tool={{ duration: '4', isRest: false } as never}
+        scale={1}
+        partsConfig={[{ clef: 'treble', data: withRestChord, onChange: onRightChange, label: '右手' }]}
+        showInstrumentLabels={false}
+        timeSignature={[4, 4]}
+        symbolsClickable={true}
+        activeVoiceIndex={0}
+      />
+    );
+    const region = Array.from(container.querySelectorAll('.symbol-hit-region'))
+      .find((r) => (r.getAttribute('data-symbol-target') ?? '').includes('chordSymbol')) as SVGRectElement;
+    expect(region).toBeTruthy();
+    fireEvent.click(region, { clientX: 5, clientY: 5 });
+    expect(container.querySelector('.symbol-adjust-overlay')).toBeTruthy();
+
+    const yInput = container.querySelectorAll('.symbol-adjust-overlay input')[1] as HTMLInputElement;
+    fireEvent.change(yInput, { target: { value: '-12' } });
+    fireEvent.blur(yInput);
+    const saved = onRightChange.mock.calls.at(-1)![0] as MeasureData[];
+    expect(saved[0].voices![1].events[0].symbolAdjust?.chordSymbol?.offsetY).toBe(-12);
+  });
+
   it('調整値は記号が属する声部へ書き戻される（アクティブ声部へ誤爆しない）', () => {
     // 右手・声部1 がアクティブな状態で、右手・声部2 の f を触って確定する
     const onRightChange = vi.fn();

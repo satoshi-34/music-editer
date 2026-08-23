@@ -54,11 +54,17 @@ export function getSymbolAdjust(event: NoteEvent, kind: AdjustableSymbolKind): R
  * 詳細は .claude/specs/extended-notation-features/design.md を参照。
  */
 export function listPresentAdjustableSymbolKinds(event: NoteEvent): AdjustableSymbolKind[] {
-  if (event.isRest) return [];
   const kinds: AdjustableSymbolKind[] = [];
-  if (event.fingering) kinds.push('fingering');
-  if (event.dynamics && event.dynamics.length > 0) kinds.push('dynamics');
-  if (event.articulations && event.articulations.length > 0) kinds.push('articulations');
+  // 音符にしか付かない記号（運指・強弱・アーティキュレーション）は休符では対象外。
+  // 一方、テキスト系（歌詞・コード記号・テンポ表記・発想標語）とオッターバは
+  // **休符にも付けられる**ので、休符でも調整対象にする（#398 Codex round4 P2。
+  // 以前は休符を一律で除外していたため、休符に付けたコード記号などを調整しようとすると
+  // 小窓は開くのに保存されない「無言の no-op」になっていた＝#318「行き止まりは喋る」違反）
+  if (!event.isRest) {
+    if (event.fingering) kinds.push('fingering');
+    if (event.dynamics && event.dynamics.length > 0) kinds.push('dynamics');
+    if (event.articulations && event.articulations.length > 0) kinds.push('articulations');
+  }
   if (event.lyrics) kinds.push('lyrics');
   if (event.chordSymbol) kinds.push('chordSymbol');
   if (event.tempoMarking) kinds.push('tempoMarking');
