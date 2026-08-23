@@ -35,6 +35,7 @@ import {
   SCORE_SELECTION_CLEAR_EVENT,
   describeAbsorbedChordKey,
   describeActiveLayerSwitched,
+  describeCrossBandInsert,
   describeActiveVoiceSwitched,
   describeVoiceSwitchUnavailable,
   describeCrossStaffToggled,
@@ -51,7 +52,6 @@ import {
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   requestActiveVoiceChange,
-  requestScoreSelectionClear,
 } from '../utils/scoreEditorNotices';
 import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
@@ -4639,6 +4639,10 @@ export default function PianoSystemCanvas({
       formatSystemColumnVoices(allVoicesForFormatting, restAlignVoices, staveSets[0][i]);
 
       // Pass 3: フォーマット済みの Voice を使って実際の描画・イベントハンドラ設定を行う。
+      // 空白クリック挿入のパートごとの実体。レイヤー明示選択中は「クリックした帯」では
+      // なく「選択レイヤーのパート」の doInsert を呼ぶため（裁定②案A）、後段の ir ハンドラ
+      // から他パートの doInsert を引けるよう登録しておく（クリック発火時には全パート登録済み）
+      const doInsertByPart: Array<(lx: number, ly: number, sourceBandPi?: number) => void> = [];
       parts.forEach((part, pi) => {
         const cache = partVoiceCache[pi];
         if (!cache) return;
@@ -4960,7 +4964,7 @@ export default function PianoSystemCanvas({
         // 書き込み先だけ hitPi へ向けても計画側が帯のままでは偽の継ぎ目になる（段3b の P1 と同型）。
         // 'explicitLayer'（#316）では挿入コンテキスト（候補列・クレフ・拍台帳）ごと
         // 選択レイヤー由来に再導出する — resolveHitAttribution の注記と設計メモ§9 参照。
-        const doInsert=(lx:number,ly:number)=>{
+        const doInsert=(lx:number,ly:number,sourceBandPi:number=pi)=>{
           // パート固有の調号があれば、入力された自然音もそのパートの調号に揃える。
           // 例: 記譜音表示で D メジャー（♯2）になっている B♭管に F の線を置くと、
           // 自動的に F♯ として保存される。
@@ -5080,7 +5084,7 @@ export default function PianoSystemCanvas({
             });
             notifyLeadingRestFill(leading, voiceCountAfterInsert);
             playNoteEvent(groupEvents[0], part.playbackInstrument);
-            notifyLayerAutoSwitchOnInsert();
+            notifyCrossBandInsert(sourceBandPi);
             return;
           }
 
@@ -5117,22 +5121,23 @@ export default function PianoSystemCanvas({
             // 置いた直後の確認音があると、右手左手どちらでも音高チェックがしやすい。
             playNoteEvent(insertedEvent, part.playbackInstrument);
           }
-          notifyLayerAutoSwitchOnInsert();
+          notifyCrossBandInsert(sourceBandPi);
         };
+        doInsertByPart[pi] = doInsert;
 
         /**
-         * レイヤー明示選択（#316・裁定②案B）: 空白クリックの挿入は帯域のパートへ入るが、
-         * それが選択レイヤーと違うパートだったときは、入れた先へレイヤーを自動切替して
-         * 必ず通知する（#258 の「切り替えは画面に出す」原則）。こうしないと
-         * 「置いた音符がすぐには編集できない（選択専用になる）」ちぐはぐが起きる
+         * レイヤー明示選択（#316・裁定②**案A**へ差し替え・2026-08-23 運用者裁定）:
+         * 空白クリックの挿入は**常に選択レイヤーのパート**へ入り、レイヤーは変わらない。
+         * クリックした帯（sourceBandPi）が選択レイヤーと違うときだけ、どこへ入ったかを通知する。
+         * 旧・案B（帯域のパートへ入れて自動切替）は、月光 m5 の低い右手三連符のような
+         * 「片手が帯域を外れる」常態的な音型で明示選択が壊れたため差し替えた
+         * （①実例 ②交差・月光型はピアノ曲で常態 ③Finale も選択レイヤー絶対方式で
+         * 弟のメンタルモデルもこれ。テスト会で引っかかりの逆流が無いか検証する。
+         * 経緯は .claude/specs/editor-layer-selection/design.md の追補を参照）
          */
-        const notifyLayerAutoSwitchOnInsert = () => {
-          if (activeLayerPartIndex == null || pi === activeLayerPartIndex) return;
-          // レイヤーが変わるので、前のレイヤーの選択（音符・弧・松葉）は全 Canvas で手放す。
-          // 残すと切替後の Delete / 矢印キーが古いレイヤーの対象へ届いてしまう（Codex round2 P2）
-          requestScoreSelectionClear();
-          requestActiveVoiceChange(activeVoiceIndex, pi);
-          notifyScoreEdit(describeActiveLayerSwitched(layerPartLabel(pi), activeVoiceIndex));
+        const notifyCrossBandInsert = (sourceBandPi: number) => {
+          if (activeLayerPartIndex == null || sourceBandPi === pi) return;
+          notifyScoreEdit(describeCrossBandInsert(layerPartLabel(pi), activeVoiceIndex, layerPartLabel(sourceBandPi)));
         };
 
         // 選択状態の分類（#333 段2）: 丸ごと / 端の部分（拍範囲）/ 非選択。
@@ -5452,7 +5457,12 @@ export default function PianoSystemCanvas({
           // 声部2の既存音符の真上をクリックした場合も、doInsert 内の位置判定で
           // その音符の直前/直後に挿入されるので違和感はない
           // （個別音符の選択・和音追加は下の vf-note-hit 側で処理する）。
-          doInsert(lx,ly);
+          // レイヤー明示選択中は、クリックした帯ではなく**選択レイヤーのパート**の
+          // doInsert へ委譲する（裁定②案A・2026-08-23）。音高はそのパートの五線を
+          // 基準に計算されるので、左手の帯の位置でクリックした低い右手の音は
+          // 右手五線の下の加線として正しく入る（月光 m5 の三連符のユースケース）
+          const insertTargetPi = activeLayerPartIndex ?? pi;
+          (doInsertByPart[insertTargetPi] ?? doInsert)(lx, ly, pi);
         });
         svgRoot.appendChild(ir);
         if ('mode' in tool && tool.mode === 'accidental' && i === 0) {

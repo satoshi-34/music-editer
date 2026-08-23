@@ -101,6 +101,16 @@ export function describeActiveLayerSwitched(partLabel: string, voiceIndex: numbe
 }
 
 /**
+ * 選択レイヤーと違う五線（帯）の空白をクリックして音符を入れたときの案内
+ * （裁定②案A・2026-08-23）。挿入先は常に選択レイヤーのパートで、レイヤーは
+ * クリックでは変わらない。低い右手（月光型）を左手の帯の位置で入力する操作が
+ * 正当なユースケースなので、警告ではなく「どこへ入ったか」の事実+代替手順を伝える。
+ */
+export function describeCrossBandInsert(targetPartLabel: string, voiceIndex: number, clickedPartLabel: string): string {
+  return `${targetPartLabel}・声部${voiceIndex + 1}に入れました（${clickedPartLabel}へ入れるにはレイヤーボタンで切り替えてください）`;
+}
+
+/**
  * UI が対応していない声部（3声以降）への切り替えを求められたときの案内（#244 段5-5）。
  * データ・再生・書き出しは N 声対応だが、編集 UI（声部トグル）は2声まで。
  * 黙って無視すると「クリックしたのに何も起きない」行き止まりになる（#318）。

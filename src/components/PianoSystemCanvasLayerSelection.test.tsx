@@ -1,11 +1,12 @@
 // 編集レイヤー明示選択（#316）: 手×声部のレイヤーで編集対象を絞る挙動の検証。
-// 設計は .claude/specs/editor-layer-selection/design.md（裁定②案B・③案A）。
+// 設計は .claude/specs/editor-layer-selection/design.md（裁定②は 2026-08-23 に案Aへ差し替え・③案A）。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData } from '../types/storage';
-import { SCORE_ACTIVE_VOICE_CHANGE_EVENT, type ScoreActiveVoiceChangeDetail } from '../utils/scoreEditorNotices';
+import { SCORE_ACTIVE_VOICE_CHANGE_EVENT, SCORE_EDIT_NOTICE_EVENT, type ScoreActiveVoiceChangeDetail } from '../utils/scoreEditorNotices';
+import { keyToMidi } from '../utils/noteMidiUtils';
 
 vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function() {
@@ -51,8 +52,13 @@ function mockSvgLayout(svg: SVGSVGElement) {
 
 const note = (key: string): MeasureData['events'][number] => ({ dur: '4', isRest: false, keys: [key] });
 
-function renderPiano(activeLayerPartIndex?: number) {
-  const right: MeasureData[] = [{ events: [note('c/5'), note('d/5'), note('e/5'), note('f/5')] }];
+function renderPiano(activeLayerPartIndex?: number, options?: { rightHasRoom?: boolean }) {
+  // 既定は満杯の右手（既存テストの前提）。挿入テストは rightHasRoom で空きを作る
+  const right: MeasureData[] = [{
+    events: options?.rightHasRoom
+      ? [note('c/5'), note('d/5')]
+      : [note('c/5'), note('d/5'), note('e/5'), note('f/5')],
+  }];
   // 左手は2音だけにして空きを残す（空白クリック挿入の検証で満杯にならないように）
   const left: MeasureData[] = [{ events: [note('c/3'), note('d/3')] }];
   const onRightChange = vi.fn();
@@ -147,35 +153,80 @@ describe('PianoSystemCanvas 編集レイヤー明示選択（#316）', () => {
     }
   });
 
-  it('レイヤー=右手でも、左手の帯の空白クリックは左手パートへ挿入される（裁定②案B）+ レイヤー自動切替', () => {
-    const { svg, onLeftChange, onRightChange } = renderPiano(0);
+  it('レイヤー=右手のまま左手の帯の空白をクリックすると、右手へ低い加線音として入る（裁定②案A）', () => {
+    // 月光 m5 の三連符のユースケース: 右手なのに音域が低く、視覚上は左手の帯にある。
+    // 旧・案B（帯域優先+自動切替）ではここで左手に音が入り明示選択が壊れた（2026-08-23 裁定で差し替え）
+    const { svg, onLeftChange, onRightChange } = renderPiano(0, { rightHasRoom: true });
     const events: ScoreActiveVoiceChangeDetail[] = [];
+    const notices: string[] = [];
     const onChange = (e: Event) => events.push((e as CustomEvent<ScoreActiveVoiceChangeDetail>).detail);
+    const onNotice = (e: Event) => notices.push((e as CustomEvent<{ message: string }>).detail?.message ?? '');
     window.addEventListener(SCORE_ACTIVE_VOICE_CHANGE_EVENT, onChange);
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
     try {
-      // 左手の小節背景（2つ目の .vf-hit）の空き（3拍目以降）をクリック
+      // 左手の小節背景（2つ目の .vf-hit）の空き（3拍目以降・左手五線の中央の高さ）をクリック
       const bg = svg.querySelectorAll('rect.vf-hit')[1] as SVGRectElement;
       const bx = parseFloat(bg.getAttribute('x') ?? '0');
       const bw = parseFloat(bg.getAttribute('width') ?? '0');
       const by = parseFloat(bg.getAttribute('y') ?? '0');
       const bh = parseFloat(bg.getAttribute('height') ?? '0');
       fireEvent.click(bg, { clientX: bx + bw * 0.85, clientY: by + bh * 0.5 });
-      // 帯域帰属（裁定②案B）: 右手ではなく左手パートへ入る
-      expect(onRightChange).not.toHaveBeenCalled();
-      expect(onLeftChange).toHaveBeenCalled();
-      const nextLeft = onLeftChange.mock.calls.at(-1)![0] as MeasureData[];
-      // 挿入位置の検証（Codex round2 P1）: レイヤー外パートでも既存2音の並びは保たれ、
-      // 新しい音は後ろに入る（位置計算の並びが空だと at=0 になり先頭へ割り込む）
-      const nonRestKeys = nextLeft[0].events.filter((ev) => !ev.isRest).map((ev) => ev.keys[0]);
-      expect(nonRestKeys).toHaveLength(3);
-      expect(nonRestKeys[0]).toBe('c/3');
-      expect(nonRestKeys[1]).toBe('d/3');
-      // 入れた先へレイヤー自動切替（パート付きの要求）+ 声部はセレクタ（0）のまま
-      const switchEv = events.find((d) => d.partIndex === 1);
-      expect(switchEv).toBeTruthy();
-      expect(switchEv?.voiceIndex).toBe(0);
+
+      // 挿入先は選択レイヤー（右手）。左手は一切変わらない
+      expect(onLeftChange).not.toHaveBeenCalled();
+      expect(onRightChange).toHaveBeenCalled();
+      const nextRight = onRightChange.mock.calls.at(-1)![0] as MeasureData[];
+      const inserted = nextRight[0].events.filter((ev) => !ev.isRest).at(-1)!;
+      // 音高は右手（ト音記号）の五線を物差しに計算されるので、
+      // 左手の帯の高さのクリックは右手五線のはるか下の加線音になる
+      expect(keyToMidi(inserted.keys[0])!).toBeLessThan(keyToMidi('c/4')!);
+
+      // レイヤーは自動で変わらない（切替イベントが飛ばない）
+      expect(events).toHaveLength(0);
+      // どこへ入ったかは通知される（帯またぎのときだけ）
+      expect(notices.join(' ')).toContain('右手・声部1に入れました');
     } finally {
       window.removeEventListener(SCORE_ACTIVE_VOICE_CHANGE_EVENT, onChange);
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
     }
+  });
+
+  it('選択レイヤーと同じ帯の空白クリックでは帯またぎ通知は出ない', () => {
+    const { svg, onRightChange } = renderPiano(0);
+    const notices: string[] = [];
+    const onNotice = (e: Event) => notices.push((e as CustomEvent<{ message: string }>).detail?.message ?? '');
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    try {
+      const bg = svg.querySelectorAll('rect.vf-hit')[0] as SVGRectElement;
+      const bx = parseFloat(bg.getAttribute('x') ?? '0');
+      const bw = parseFloat(bg.getAttribute('width') ?? '0');
+      const by = parseFloat(bg.getAttribute('y') ?? '0');
+      const bh = parseFloat(bg.getAttribute('height') ?? '0');
+      // 右手は4音で満杯なので、満杯通知が出るケースを避けるため上端（高音）ではなく…
+      // →この小節は満杯（4分×4）なので挿入自体は起きず「入りきりません」通知になる。
+      // ここでは「帯またぎの通知が出ない」ことだけを確認する
+      fireEvent.click(bg, { clientX: bx + bw * 0.5, clientY: by + bh * 0.3 });
+      expect(notices.join(' ')).not.toContain('に入れました（');
+      void onRightChange;
+    } finally {
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    }
+  });
+
+  it('レイヤー未指定（従来モード・非ピアノ相当）では空白クリックは帯域のパートへ入る（後方互換）', () => {
+    const { svg, onLeftChange, onRightChange } = renderPiano(undefined);
+    const bg = svg.querySelectorAll('rect.vf-hit')[1] as SVGRectElement;
+    const bx = parseFloat(bg.getAttribute('x') ?? '0');
+    const bw = parseFloat(bg.getAttribute('width') ?? '0');
+    const by = parseFloat(bg.getAttribute('y') ?? '0');
+    const bh = parseFloat(bg.getAttribute('height') ?? '0');
+    fireEvent.click(bg, { clientX: bx + bw * 0.85, clientY: by + bh * 0.5 });
+    expect(onRightChange).not.toHaveBeenCalled();
+    expect(onLeftChange).toHaveBeenCalled();
+    const nextLeft = onLeftChange.mock.calls.at(-1)![0] as MeasureData[];
+    const nonRestKeys = nextLeft[0].events.filter((ev) => !ev.isRest).map((ev) => ev.keys[0]);
+    expect(nonRestKeys).toHaveLength(3);
+    expect(nonRestKeys[0]).toBe('c/3');
+    expect(nonRestKeys[1]).toBe('d/3');
   });
 });
