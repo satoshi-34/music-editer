@@ -94,6 +94,39 @@ describe('ScorePage: UI案切り替えの配線（Issue #405 段1）', () => {
     expect(rootVariant()).toBe('current');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  // 本番ビルド相当（DEV=false）での防御。ここを固定しないと、
+  // useUiVariant の既定を `?? true` にしたり ScorePage の `import.meta.env.DEV &&` を
+  // 消したりしても気づけず、未完成のUIが本番で出うる（#407 Codex round2 P2）
+  describe('本番ビルド相当（import.meta.env.DEV = false）', () => {
+    beforeEach(() => { vi.stubEnv('DEV', false); });
+    afterEach(() => { vi.unstubAllEnvs(); });
+
+    it('?ui=a1 を付けても current のままで、バッジも出ない', async () => {
+      setSearch('?ui=a1');
+      render(<ScorePage />);
+
+      await waitFor(() => expect(document.querySelector('.app-root')).toBeTruthy(), { timeout: 15000 });
+      expect(rootVariant()).toBe('current');
+      expect(screen.queryByTestId('ui-variant-badge')).toBeNull();
+    }, MOUNT_HEAVY_TIMEOUT_MS);
+
+    it('記憶に a2 が残っている端末でも current になる', async () => {
+      localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a2');
+      render(<ScorePage />);
+
+      await waitFor(() => expect(document.querySelector('.app-root')).toBeTruthy(), { timeout: 15000 });
+      expect(rootVariant()).toBe('current');
+    }, MOUNT_HEAVY_TIMEOUT_MS);
+
+    it('記憶を書き換えない（利用者の端末に余計な痕跡を残さない）', async () => {
+      setSearch('?ui=a1');
+      render(<ScorePage />);
+
+      await waitFor(() => expect(document.querySelector('.app-root')).toBeTruthy(), { timeout: 15000 });
+      expect(localStorageMock.getItem(UI_VARIANT_STORAGE_KEY)).toBeNull();
+    }, MOUNT_HEAVY_TIMEOUT_MS);
+  });
+
   // 既定の判定が import.meta.env.DEV に繋がっていること。
   // テストは開発ビルド相当（DEV=true）で走るので、?ui= が効くこと自体がその証拠になる。
   // 本番で current に固定される保証は useUiVariant.test.ts が isDev:false を注入して確認している
