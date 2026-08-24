@@ -269,4 +269,96 @@ describe('PianoSystemCanvas UI案A2 の譜面側レイヤー表示（Issue #405 
       });
     });
   });
+
+  // パートまたぎ（⇵ / renderStaff）の音符は隣の五線に描かれる。
+  // 淡色の判定を「所属パート」で行うと、左手をアクティブにしても左手五線へ移した音符が
+  // 淡いまま／右手をアクティブにすると左手五線上なのに黒く残る
+  // （#409 Codex round1 P2。#403 で同じ取り違えを実際に踏んでいる）
+  describe('パートまたぎ（⇵）の音符', () => {
+    /** 右手所属の8分音符3つを、すべて左手五線へ移した小節 */
+    const crossToBelow = [{
+      events: [
+        { dur: '8' as const, isRest: false, keys: ['e/3'], renderStaff: 'below' as const },
+        { dur: '8' as const, isRest: false, keys: ['g/3'], renderStaff: 'below' as const },
+        { dur: '4' as const, isRest: false, keys: ['c/4'], renderStaff: 'below' as const },
+      ],
+    }];
+    const plainBass = [{ events: [{ dur: '1' as const, isRest: false, keys: ['c/3'] }] }];
+
+    it('左手をアクティブにすると、左手五線へ移した音符は淡色にならない', () => {
+      const { svg } = renderPiano({
+        treble: crossToBelow,
+        bass: plainBass,
+        activeLayerPartIndex: 1,
+        highlightActiveLayer: true,
+      });
+
+      // 左手五線に描かれているビームは、左手がアクティブなので淡色にしない
+      const dimmed = beamGroups(svg).filter((b) =>
+        b.getAttribute('fill') === INACTIVE_VOICE_COLOR
+        || b.getAttribute('stroke') === INACTIVE_VOICE_COLOR);
+      expect(dimmed.length).toBe(0);
+    });
+
+    it('右手をアクティブにすると、左手五線へ移した音符は淡色になる', () => {
+      const { svg } = renderPiano({
+        treble: crossToBelow,
+        bass: plainBass,
+        activeLayerPartIndex: 0,
+        highlightActiveLayer: true,
+      });
+
+      const beams = beamGroups(svg);
+      expect(beams.length).toBeGreaterThan(0);
+      const dimmed = beams.filter((b) =>
+        b.getAttribute('fill') === INACTIVE_VOICE_COLOR
+        || b.getAttribute('stroke') === INACTIVE_VOICE_COLOR);
+      // 左手五線に降りているので、右手がアクティブなら淡色になる
+      expect(dimmed.length).toBe(beams.length);
+    });
+  });
+
+  // 弧（スラー・タイ）は記号の共通経路（appendSymbolHitRegion）を通らないため、
+  // 淡色化から漏れていた（#409 Codex round1 P2）
+  describe('弧（スラー）の淡色化', () => {
+    const slurMeasure = (keys: [string, string]) => ([{
+      events: [
+        { dur: '4' as const, isRest: false, keys: [keys[0]],
+          arcs: [{ fromKey: keys[0], toKey: keys[1], toMeasureIndex: 0, toEventIndex: 1, kind: 'slur' as const }] },
+        { dur: '4' as const, isRest: false, keys: [keys[1]] },
+        { dur: '2' as const, isRest: true, keys: ['b/4'] },
+      ],
+    }]);
+
+    const arcs = (svg: SVGSVGElement) =>
+      Array.from(svg.querySelectorAll('path.vf-arc')) as SVGElement[];
+
+    it('渡さなければ弧は淡色にならない（対照群では変わらない）', () => {
+      const { svg } = renderPiano({
+        treble: slurMeasure(['c/5', 'e/5']),
+        bass: slurMeasure(['c/3', 'e/3']),
+        activeLayerPartIndex: 0,
+      });
+      expect(arcs(svg).length).toBeGreaterThan(0);
+      expect(arcs(svg).filter((a) => a.getAttribute('opacity')).length).toBe(0);
+    });
+
+    it('非アクティブなレイヤーの弧だけが淡くなる', () => {
+      const { svg } = renderPiano({
+        treble: slurMeasure(['c/5', 'e/5']),
+        bass: slurMeasure(['c/3', 'e/3']),
+        activeLayerPartIndex: 0,
+        highlightActiveLayer: true,
+      });
+
+      const dimmed = arcs(svg).filter((a) => a.getAttribute('opacity'));
+      const plain = arcs(svg).filter((a) => !a.getAttribute('opacity'));
+      // 右手（アクティブ）の弧はそのまま、左手の弧だけ淡くなる
+      expect(dimmed.length).toBeGreaterThan(0);
+      expect(plain.length).toBeGreaterThan(0);
+      dimmed.forEach((a) => {
+        expect((a.getAttribute('data-arc-key') ?? '').startsWith('p1')).toBe(true);
+      });
+    });
+  });
 });

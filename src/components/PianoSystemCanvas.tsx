@@ -212,6 +212,8 @@ type RenderedVoiceEntry = {
   // 2声部小節で、この声部が「今編集していない側」かどうか。
   // 音符本体だけでなくビーム・連符も淡色にするために、描画パスへ持ち越す（Issue #175）。
   isInactiveVoiceEntry: boolean;
+  /** ビームごとの淡色判定（段またぎで五線が分かれるため声部単位では足りない） */
+  beamInactiveFlags: boolean[];
   // 段またぎ記譜（Issue #309）で、この声部に「隣の五線へ載せる音符」が1つでもあるか。
   // 描画パス（Pass 3）は、これが true の声部だけ専用の描き方に切り替える
   // （段またぎを使っていない譜面は従来とまったく同じ経路を通す＝1pxも変えない）。
@@ -1108,7 +1110,14 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
           // UI案A2 のときは、もう一方の手のパート全体も同じ淡色にする（#405 段3）。
           // 「声部の淡色化」と同じ見せ方に乗せることで、A2 の「非アクティブなレイヤーを薄く」を
           // 新しい表現を増やさずに実現している（既存の淡色と2種類の薄さが混ざらない）。
-          const isInactiveVoice = isInactiveLayerPart
+          // 手（レイヤー）の判定は**実際に描かれる五線**で行う。パートまたぎ（⇵）の音符は
+          // 隣の五線に描かれるので、所属パート（pi）で判定すると
+          // 「左手をアクティブにしたのに、左手五線へ移した音符だけ淡いまま」になる
+          // （#409 Codex round1 P2。#403 で同じ取り違えを実際に踏んでいる）
+          const renderedPi = renderPartIndexes[idx] ?? pi;
+          const isInactiveRenderedPart =
+            highlightedLayerPartIndex != null && renderedPi !== highlightedLayerPartIndex;
+          const isInactiveVoice = isInactiveRenderedPart
             || (isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex);
           // computeVoiceDisplayPadding が補完した「拍が足りない残りを埋めるだけの休符」は
           // データに保存されていない表示専用のものなので、薄いグレーにして
@@ -1177,6 +1186,17 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         const beams = hasCrossStaffNote
           ? generateCrossStaffBeams(vfNotes, renderPartIndexes, beamOptions)
           : Beam.generateBeams(vfNotes, beamOptions);
+        // UI案A2（#405 段3）: ビームは段またぎのとき五線ごとに分割されるので、
+        // 淡色にするかどうかも**ビーム単位**で決める必要がある。
+        // 声部ひとまとめで判定すると、右手所属の音符を左手五線へ移した段またぎで
+        // 「片方の五線だけ色が合わない」状態になる（#409 Codex round1 P2）。
+        // 各ビームの先頭音符が載っている五線から、実際の描画先パートを引く。
+        const noteRenderedPartByNote = new Map<StaveNote, number>();
+        vfNotes.forEach((n, idx) => { noteRenderedPartByNote.set(n, renderPartIndexes[idx] ?? pi); });
+        const renderedPartOfNotes = (notes: StaveNote[] | undefined): number =>
+          (notes && notes.length > 0 ? noteRenderedPartByNote.get(notes[0]) : undefined) ?? pi;
+        const beamRenderedParts = beams.map((b) =>
+          renderedPartOfNotes(((b as unknown as { notes?: StaveNote[] }).notes)));
         // Tuplet は「括弧を描くかどうか」をコンストラクタの時点で
         // 「ビームの付いていない音符が1つでもあるか」で決めてしまう。
         // 上の順序変更でビームがまだ無い状態で作ることになったため、
@@ -1203,8 +1223,13 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         // 「この声部が非アクティブかどうか」を描画パス（Pass 3）へ持ち越す。
         // 音符ごとの判定（上の isInactiveVoice）と同じ条件だが、
         // ビーム・連符は声部単位で1つなので声部側に持たせる。
-        const isInactiveVoiceEntry = isInactiveLayerPart
-          || (isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex);
+        // 声部側の淡色判定（手の側はビーム・連符ごとに描画先で判定するのでここでは見ない）
+        const isInactiveVoiceOnly = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+        const isInactiveVoiceEntry = isInactiveLayerPart || isInactiveVoiceOnly;
+        /** ビームごとの淡色判定。描画先の五線がアクティブでなければ淡くする */
+        const beamInactiveFlags = beamRenderedParts.map((rp) =>
+          isInactiveVoiceOnly
+          || (highlightedLayerPartIndex != null && rp !== highlightedLayerPartIndex));
 
         return {
           voiceIndex,
@@ -1215,6 +1240,7 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
           tuplets,
           voice,
           isInactiveVoiceEntry,
+          beamInactiveFlags,
           hasCrossStaffNote,
         };
       })
@@ -1499,9 +1525,9 @@ function drawRenderedVoiceEntries(
       // 黒いまま残ってしまう。代わりに drawWithStyle() を使うと、VexFlow 側が
       // 「ctx.save() → applyStyle() → draw() → ctx.restore()」を行ってくれる。
       const inactiveVoiceStyle = {fillStyle:INACTIVE_VOICE_COLOR,strokeStyle:INACTIVE_VOICE_COLOR};
-      entry.beams.forEach(b=>{
+      entry.beams.forEach((b, beamIndex)=>{
         b.setContext(vexCtx);
-        if(entry.isInactiveVoiceEntry){
+        if(entry.beamInactiveFlags[beamIndex] ?? entry.isInactiveVoiceEntry){
           b.setStyle(inactiveVoiceStyle);
           b.drawWithStyle();
         }else{
@@ -7221,6 +7247,26 @@ export default function PianoSystemCanvas({
             drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0,arc.apexXRatio2??0);
           }catch{/* 壊れた旧arcでも他の譜面描画を止めない */}
       });
+
+    // UI案A2（#405 段3）: 弧（スラー・タイ）も非アクティブなレイヤーでは淡くする。
+    //
+    // 記号（強弱・運指など）は appendSymbolHitRegion の一点を包めば全種類に効くが、
+    // 弧はそこを通らず別経路で描かれるため、淡色化から漏れていた
+    // （#409 Codex round1 P2）。弧のパスは data-arc-key に `p{パート番号}v…` を持つので、
+    // それを手がかりに後段でまとめて処理する。
+    //
+    // 既知の範囲外: 松葉（ヘアピン）・ペダル・歌詞。これらは要素に識別情報を持たないため、
+    // 淡色化するには描画側へ属性を足す改修が要る。A2 は「譜面側でレイヤーが分かるか」を
+    // 試すための開発時限定の案であり、主要素（音符・ビーム・記号・弧）が揃えば
+    // 判断はできると考えて範囲外とした。採用する場合は残りも揃える。
+    if (activeLayerHighlightPartIndex != null) {
+      svgRoot.querySelectorAll('path.vf-arc').forEach((el) => {
+        const key = el.getAttribute('data-arc-key') ?? '';
+        const owner = Number(key.match(/^p(\d+)v/)?.[1]);
+        if (!Number.isFinite(owner) || owner === activeLayerHighlightPartIndex) return;
+        (el as SVGElement).setAttribute('opacity', String(INACTIVE_LAYER_SYMBOL_OPACITY));
+      });
+    }
 
     // ── 松葉（ヘアピン）を一括描画（全パート・全小節レンダリング後に実行） ─────
     // 五線の下（強弱記号と同じ高さ帯）に、開始音符から終了音符まで開く/閉じる2本線を描く
