@@ -26,7 +26,7 @@ import {
   lineToKey as lineToKeyForClef,
   keyToLine as keyToLineForClef,
 } from './clefUtils';
-import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
+import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio, clampArcCpDyOffsetToStaveLimit } from './arcUtils';
 import { armClickCycle, planClickCycle, type ClickCycleState } from './clickCycleUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
@@ -4632,7 +4632,7 @@ export default function PianoSystemCanvas({
     // fromKey / toKey の音高から個別符頭の正確な Y 座標を求めて弧を描く。
     // クレフは始点・終点それぞれの「実際に載っている五線」のものを受け取る（Issue #310）。
     // 段またぎの音符は隣の五線に描かれるため、五線とクレフが食い違うと端点だけがずれる。
-    const drawTieArcP=(clefs:{from:ClefType;to:ClefType},firstNote:StaveNote,fromKey:string,fromStave:Stave,lastNote:StaveNote,toKey:string,toStave:Stave,kind:'tie'|'slur',arcVoiceIndex:number,isMultiVoiceMeasure:boolean,allLines:number[]|undefined,allNoteYs:number[]|undefined,allObstacleNotes:StaveNote[]|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,flipDirection?:boolean,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatio=0)=>{
+    const drawTieArcP=(clefs:{from:ClefType;to:ClefType},firstNote:StaveNote,fromKey:string,fromStave:Stave,lastNote:StaveNote,toKey:string,toStave:Stave,kind:'tie'|'slur',arcVoiceIndex:number,isMultiVoiceMeasure:boolean,allLines:number[]|undefined,allNoteYs:number[]|undefined,allObstacleNotes:StaveNote[]|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,flipDirection?:boolean,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatio=0,maxBottomY?:number)=>{
       type R=Record<string,(...a:unknown[])=>unknown>;
       const bb1=(firstNote as unknown as R)['getBoundingBox']?.() as {getX:()=>number;getW:()=>number}|undefined;
       const bb2=(lastNote  as unknown as R)['getBoundingBox']?.() as {getX:()=>number;getW:()=>number}|undefined;
@@ -4674,7 +4674,12 @@ export default function PianoSystemCanvas({
           : undefined;
         obstacleY=resolveSlurObstacleY({upward,noteheadYs:allNoteYs,stemTipYs});
       }
-      drawArcPathP(x1+startDx,y1+startDy,x2+endDx,y2+endDy,upward,kind,stemDir,obstacleY,cpDyOffset,arcKey,isSelected,minNoteY,maxNoteY,startDx,startDy,endDx,endDy,apexXRatio);
+      // 弧の膨らみが次の五線へ食い込まないように抑える（Issue #390）。
+      // 手で調整済みの弧（cpDyOffset≠0）と上向きの弧は関数側で素通しされる
+      const clampedCpDyOffset=clampArcCpDyOffsetToStaveLimit(
+        x1+startDx,y1+startDy,x2+endDx,y2+endDy,upward,kind,stemDir,obstacleY,
+        cpDyOffset,apexXRatio,maxBottomY);
+      drawArcPathP(x1+startDx,y1+startDy,x2+endDx,y2+endDy,upward,kind,stemDir,obstacleY,clampedCpDyOffset,arcKey,isSelected,minNoteY,maxNoteY,startDx,startDy,endDx,endDy,apexXRatio);
     };
 
     // パートごとの前小節臨時記号状態。小節線を越えた courtesy accidental 判定に使う。
@@ -7039,7 +7044,15 @@ export default function PianoSystemCanvas({
       const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30
                      ||roughAbsX2P<roughAbsX1P;
       if(!crossSystem){
-        try{drawTieArcP({from:startClef,to:destClef},startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,allObstacleNotes,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio);}catch{/* 保険 */}
+        // 弧の膨らみを次の五線の手前までに抑える（Issue #390）。#382（pp）と同じ
+        // 「次の五線の上端−マージン」を境界にする＝境界の定義を2箇所に持たない。
+        // 段をまたぐ弧（else 側）は2本に割れて五線間を通らないので対象外。
+        // 実際のクランプは座標が出そろう drawTieArcP の中で行う
+        const nextStaveTopYForArc = collectors.staveTopYByPart.get(partIndex + 1);
+        const arcMaxBottomY = nextStaveTopYForArc === undefined
+          ? undefined
+          : nextStaveTopYForArc - BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX;
+        try{drawTieArcP({from:startClef,to:destClef},startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,allObstacleNotes,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio,arcMaxBottomY);}catch{/* 保険 */}
       }else{
         try{
           const bb1=(startNote as unknown as R)['getBoundingBox']?.() as{getX:()=>number;getW:()=>number}|undefined;

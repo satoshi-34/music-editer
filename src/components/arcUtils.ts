@@ -295,3 +295,54 @@ export function computeArcHitGeometry(
   const [b0, b1, b2, b3] = cubicSegment(p0, c1, c2, p3, t0, t1);
   return { dAttr: `M ${b0.x} ${b0.y} C ${b1.x} ${b1.y} ${b2.x} ${b2.y} ${b3.x} ${b3.y}` };
 }
+
+/**
+ * 弧の膨らみを「次の五線の手前」までに抑える（Issue #390）。
+ *
+ * 深い音型に掛けた下向きの弧は、既定の膨らみのままだと五線間の空きを超えて
+ * **隣の五線へ食い込む**（月光 m1 で実測）。#382 の pp と同型の
+ * 「描画が隣の五線を知らない」問題の弧版。
+ *
+ * 方針（Issue #390 の案C）:
+ * - 自動で膨らみを減らすのは **手で調整していない弧だけ**（cpDyOffset === 0）。
+ *   手で整えた弧を勝手に平たくしない（#373 の手動優先原則）
+ * - 上向きの弧は下の五線を脅かさないので対象外
+ * - どれだけ縮めても収まらない場合（弧には最小の膨らみがある）は、縮めた形のまま描く。
+ *   「境界に留めて部分的な重なりは許容する」は #382 で確定した原則と同じ
+ *
+ * 頂点Yは cpDyOffset について単調増加なので、二分探索で
+ * 「頂点が境界を超えない最大の cpDyOffset」を求める。内部にある制御点の下限
+ * （computeArcControlPoints の clamp）も含めて扱えるよう、閉形式ではなく数値で解く。
+ */
+export const ARC_STAVE_CLAMP_MAX_SHRINK_PX = 200;
+
+export function clampArcCpDyOffsetToStaveLimit(
+  x1: number, y1: number, x2: number, y2: number,
+  upward: boolean, kind: 'tie' | 'slur', stemDir: number,
+  obstacleY: number | undefined,
+  cpDyOffset: number,
+  apexXRatio: number,
+  maxBottomY: number | undefined
+): number {
+  // 境界が無い（最下段）・上向き・手動調整済みは対象外
+  if (maxBottomY === undefined || !Number.isFinite(maxBottomY)) return cpDyOffset;
+  if (upward || cpDyOffset !== 0) return cpDyOffset;
+
+  const apexYFor = (c: number): number =>
+    computeArcApexPoint(x1, y1, x2, y2, upward, kind, stemDir, obstacleY, c, apexXRatio).y;
+
+  if (apexYFor(0) <= maxBottomY) return 0;
+
+  let good = -ARC_STAVE_CLAMP_MAX_SHRINK_PX;
+  const bad0 = 0;
+  // 最大まで縮めても収まらないなら、そこで止める（部分重なりを許容する）
+  if (apexYFor(good) > maxBottomY) return good;
+
+  let bad = bad0;
+  for (let i = 0; i < 24; i++) {
+    const mid = (good + bad) / 2;
+    if (apexYFor(mid) <= maxBottomY) good = mid;
+    else bad = mid;
+  }
+  return good;
+}
