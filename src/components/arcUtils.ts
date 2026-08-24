@@ -39,6 +39,28 @@ function apexRatioToCpRatio(kind: 'tie' | 'slur', apexXRatio: number): number {
  * @param cpDyOffset ユーザーがドラッグで調節した制御点の縦オフセット（SVG px、正 = 下方向）
  * @param apexXRatio ユーザーがドラッグで調節した頂点の左右位置（スパンに対する比率、正 = 右）
  */
+// スラーの形を決める調整値。SMuFL/Bravura が定めるのは線の太さだけで曲率の規定は
+// 無いため、ここは浄書の慣習に寄せた値。曲率を調整するときはこの4つを動かす。
+/** 膨らみの下限（SVG px）。短い弧が深く見えすぎないための値 */
+export const SLUR_MIN_CLEARANCE_PX = 5;
+/** 膨らみの上限（SVG px）。長い弧はここに張り付くので、緩めるにはこちらも下げる */
+export const SLUR_MAX_CLEARANCE_PX = 16;
+/** 膨らみのスパン比 */
+export const SLUR_CLEARANCE_SPAN_RATIO = 0.09;
+/** 制御点を端からどれだけ離すか（スパン比）。大きいほど頂点付近が平らになる */
+export const SLUR_CP_X_RATIO = 0.32;
+/**
+ * 制御点を障害物からどれだけ離すかの下限（SVG px）。
+ *
+ * 符頭の半分の高さ（約5px）＋弧の太さ＋わずかな余白を、頂点の位置で確保するための値。
+ * 頂点は `端点×0.25 + 制御点×0.75` で決まるので、符頭中心から見た頂点の離れは
+ * おおよそ `0.75 + 0.75 × この値`。9px なら約7.5px となり、符頭の縁（5px）を越える。
+ *
+ * 2026-08-24: 6px では、符幹が上向きで conflict の +8px が付かない短いスラーが
+ * 符頭の縁に接していた（曲率を緩めた際に顕在化。#406 Codex P2）。
+ */
+export const SLUR_OBSTACLE_MIN_GAP_PX = 9;
+
 function computeArcControlPoints(
   x1: number, y1: number, x2: number, y2: number,
   upward: boolean, kind: 'tie' | 'slur', stemDir: number,
@@ -63,23 +85,38 @@ function computeArcControlPoints(
   }
 
   // スラー: 常に三次ベジェ C（両端から緩やかに立ち上がる自然な形）
-  const clearance = Math.max(10, Math.min(24, span * 0.15));
+  //
+  // 膨らみの量。SMuFL/Bravura が定めているのは線の太さだけで、曲率の規定は無いので
+  // ここは浄書の慣習に寄せた調整値。
+  // 2026-08-24: スラーが深すぎるという実機所感を受けて緩めた（実機で2段階調整）
+  //   下限 10 → 5px（短い弧が下限に張り付いて相対的に深く見えていた）
+  //   係数 0.15 → 0.09
+  //   上限 24 → 16px（長い弧は上限に張り付くので、ここを下げないと効かない）
+  // 運用者確認: 「まだちょっと深い気もするが、以降は利用者の指摘があれば」で確定。
+  // さらに調整するときはこの3つの数字だけ動かせばよい
+  const clearance = Math.max(SLUR_MIN_CLEARANCE_PX, Math.min(SLUR_MAX_CLEARANCE_PX, span * SLUR_CLEARANCE_SPAN_RATIO));
   // obstacleY がある場合はそれを基準に、なければ端点の外側を基準にする
   const refY = obstacleY !== undefined
     ? obstacleY
     : (upward ? Math.min(y1, y2) : Math.max(y1, y2));
-  // 制御点: refY から clearance 分だけ弧の外側に置き、さらにユーザーオフセットを加算
+  // 既定の離れ。**ユーザーオフセットを足す前に**最低隙間を適用する。
+  // 後から適用すると、既定値が最低隙間より小さい短い弧では「外へドラッグしても
+  // 最低隙間に飲み込まれて見た目が動かないが、値だけ溜まって後で跳ねる」という
+  // 無反応帯ができる（#406 Codex round2 P2）
+  const baseClearance = Math.max(clearance + (conflict ? 8 : 0), SLUR_OBSTACLE_MIN_GAP_PX);
   let cpY = upward
-    ? refY - (clearance + (conflict ? 8 : 0)) + cpDyOffset
-    : refY + (clearance + (conflict ? 8 : 0)) + cpDyOffset;
-  // 音符と最低 6px の隙間を確保（ユーザーが引っ張っても重ならない）
-  if (upward  && cpY > refY - 6) cpY = refY - 6;
-  if (!upward && cpY < refY + 6) cpY = refY + 6;
+    ? refY - baseClearance + cpDyOffset
+    : refY + baseClearance + cpDyOffset;
+  // ユーザーが内側へ引っ張っても符頭には重ねない（こちらは意図的な下限）
+  if (upward  && cpY > refY - SLUR_OBSTACLE_MIN_GAP_PX) cpY = refY - SLUR_OBSTACLE_MIN_GAP_PX;
+  if (!upward && cpY < refY + SLUR_OBSTACLE_MIN_GAP_PX) cpY = refY + SLUR_OBSTACLE_MIN_GAP_PX;
 
   return {
     p0: { x: x1, y: y1 },
-    c1: { x: x1 + span * 0.25 + cpDx, y: cpY },
-    c2: { x: x2 - span * 0.25 + cpDx, y: cpY },
+    // 制御点を端から遠ざけるほど頂点付近が平らになり、両端の立ち上がりが緩やかになる。
+    // 深さを変えずに「きつい弧」の印象だけを和らげられる（2026-08-24: 0.25 → 0.32）
+    c1: { x: x1 + span * SLUR_CP_X_RATIO + cpDx, y: cpY },
+    c2: { x: x2 - span * SLUR_CP_X_RATIO + cpDx, y: cpY },
     p3: { x: x2, y: y2 },
   };
 }

@@ -75,7 +75,13 @@ export function computeArcGeometry(
 ```
 
 - **タイ**: 二次ベジェ Q。`cpY = 中点Y + (upward ? -curve : curve) + cpDyOffset`
-- **スラー**: 三次ベジェ C。制御点を `span * 0.25` で左右に分けて自然な立ち上がりを出す。`obstacleY` から `clearance` 分外側に制御点を置き、符頭と最低 6px の隙間を確保する。
+- **スラー**: 三次ベジェ C。制御点を `span * SLUR_CP_X_RATIO`（0.32）で左右に分けて自然な立ち上がりを出す。`obstacleY` から `clearance` 分外側に制御点を置き、符頭との最低隙間 `SLUR_OBSTACLE_MIN_GAP_PX`（9px）を確保する。
+  - `clearance = max(SLUR_MIN_CLEARANCE_PX, min(SLUR_MAX_CLEARANCE_PX, span × SLUR_CLEARANCE_SPAN_RATIO))` = `max(5, min(16, span × 0.09))`
+  - **これらは規格ではない**。SMuFL/Bravura が定めるのは線の太さ（`slurEndpointThickness` / `slurMidpointThickness`）だけで、曲率の規定は無い。浄書の慣習に寄せた調整値であり、変えるときはこの4つの定数（arcUtils.ts の先頭）を動かす
+  - 2026-08-24: 運用者の実機所感「もうちょい緩やか」を受けて2段階で調整。下限10→5px・係数0.15→0.09・上限24→16px・制御点0.25→0.32。**上限を下げないと長い弧には効かない**（長い弧は上限に張り付くため）
+  - 適用の順序が重要: **①既定の離れに最低隙間を先に適用（`max(clearance + conflict分, 9px)`）→ ②ユーザーオフセットを加算 → ③内側へ引っ張った場合だけ符頭手前で再クランプ**。
+    ②の後に最低隙間を掛けると、既定値が最低隙間より小さい短い弧で「外へドラッグしても見た目が動かないのに値だけ溜まり、後から跳ねる」無反応帯ができる（#406 Codex round2）。回帰テストは `arcNoteheadClearance.test.ts`
+  - 同時に符頭との最低隙間を6→9pxへ。曲率を緩めた結果、符幹が上向きで conflict の +8px が付かない短いスラーが符頭の縁に接するようになったため（頂点は `端点×0.25 + 制御点×0.75` で決まるので、9px なら符頭中心から約7.5px＝符頭の縁5pxを越える）。回帰テストは `arcNoteheadClearance.test.ts`
 - 符幹との衝突判定: `(upward && stemDir > 0) || (!upward && stemDir < 0)` のときカーブ量を加算。
 
 ---

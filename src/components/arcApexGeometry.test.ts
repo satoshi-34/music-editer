@@ -3,7 +3,9 @@
 // 短い弧でも掴めるようにする「掴み代の下限（minHitLen）」の幾何を固定する単体テスト。
 //
 // ここで固定したいこと:
-//   1. 既定値（apexXRatio=0・minHitLen=0）では、これまでの形と1文字も変わらない
+//   1. 既定値（apexXRatio=0・minHitLen=0）の出力を実値で固定する。固定している性質は
+//      「apexXRatio / minHitLen の導入や変更が既定の形に漏れていないこと」であって、
+//      曲率そのものではない（曲率の調整時は基準値を意図的に更新する。2026-08-24 に更新済み）
 //   2. apexXRatio は「頂点が動く量 ÷ スパン」として素直に効く（ハンドルがカーソルへ追従できる根拠）
 //   3. 壊れた保存値（NaN・極端な値）でも形が壊れない
 //   4. 当たり判定パスは頂点の左右移動に追従し、短い弧では中央部より広く切り出される
@@ -45,9 +47,11 @@ const SLUR = [100, 50, 200, 55, true, 'slur', 1, undefined, 0] as const;
 const TIE = [100, 50, 160, 50, true, 'tie', 1, undefined, 0] as const;
 
 describe('apexXRatio（頂点の左右位置）', () => {
-  it('既定値（0）では従来の形のまま＝リグレッションしていない', () => {
-    // 制御点の計算を共通化したので、既定の出力が1文字も変わらないことを実値で固定する
-    expect(computeArcGeometry(...SLUR).dAttr).toBe('M 100 50 C 125 27 175 27 200 55');
+  it('既定値（0）の出力を実値で固定する（apexXRatio 経路が形を変えていないこと）', () => {
+    // 固定している性質は「apexXRatio の導入で既定の形が変わらないこと」であって曲率そのものではない。
+    // 曲率の調整（2026-08-24: 下限10→5px・係数0.15→0.09・上限24→16px・制御点0.25→0.32）に伴い、
+    // 基準値は意図的に更新している
+    expect(computeArcGeometry(...SLUR).dAttr).toBe('M 100 50 C 132 33 168 33 200 55');
     expect(computeArcGeometry(...TIE).dAttr).toBe('M 100 50 Q 130 30 160 50');
     // 引数を省略した場合と 0 を渡した場合が同じであること（呼び出し側の移行漏れ検出用）
     expect(computeArcGeometry(...SLUR, 0).dAttr).toBe(computeArcGeometry(...SLUR).dAttr);
