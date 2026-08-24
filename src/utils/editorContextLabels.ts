@@ -119,6 +119,12 @@ export function pianoLayerLabel(partIndex: number, voiceIndex: number): string {
   const found = PIANO_LAYER_OPTIONS.find(
     o => o.partIndex === partIndex && o.voiceIndex === voiceIndex
   );
-  // 想定外の組み合わせ（将来 N 声へ拡張したときなど）でも空欄にせず、数字で言い表す
-  return found?.label ?? `パート${partIndex + 1}・声部${voiceIndex + 1}`;
+  if (found) return found.label;
+  // 想定外の組み合わせ（将来 N 声へ拡張したときなど）でも空欄にしない。
+  // ピアノ譜では手の呼び名（右手/左手）が分かっているので、そこは保ったまま
+  // 声部だけ数字にする。「パート1」に落とすと、せっかくの手の情報が消える
+  // （#408 Codex round1 P3）
+  const handLabel = PIANO_LAYER_OPTIONS.find(o => o.partIndex === partIndex)?.label;
+  const hand = handLabel?.split('・')[0];
+  return hand ? `${hand}・声部${voiceIndex + 1}` : `パート${partIndex + 1}・声部${voiceIndex + 1}`;
 }

@@ -23,7 +23,8 @@ import PlaybackControls, {
 } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
-import UiContextBar from './UiContextBar';
+import UiContextBar, { UI_CONTEXT_BAR_HEIGHT_ALLOWANCE_PX } from './UiContextBar';
+import { resolveToolbarHeight } from '../utils/toolbarHeight';
 import UiVariantBadge from './UiVariantBadge';
 import { useUiVariant } from '../hooks/useUiVariant';
 // タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
@@ -378,6 +379,9 @@ export default function ScorePage() {
   // 開発時のみ有効（本番ビルドでは常に 'current'＝現状のUI）。
   // 段2（A1 文脈バー）・段3（A2 譜面側表現）はこの値を見て自分の案のときだけ描く。
   const uiVariant = useUiVariant();
+  // A1（文脈バー）を出すか。ツールバーの高さ計算と描画で同じ判定を使う
+  // （2箇所に持つと、片方だけ変えたときに高さと見た目がずれる）
+  const showUiContextBar = import.meta.env.DEV && uiVariant === 'a1';
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
   // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
   // 1=声部2（下声・符幹下向き）。ピアノ譜以外では使わないが、
@@ -4257,8 +4261,10 @@ export default function ScorePage() {
       // ここでは「タブ付きヘッダーとして妥当な範囲」へ丸めて、崩れを防ぐ。
       // 折り畳み中は「復帰ボタン1個ぶんの帯」しか残らないため、展開時の下限（60px）で
       // 丸めると隠したぶんの余白が返ってこない。折り畳み中だけ下限を下げる（Issue #125）。
-      const minHeight = isToolbarCollapsed ? 24 : 60;
-      const clampedHeight = Math.min(280, Math.max(minHeight, measuredHeight));
+      const clampedHeight = resolveToolbarHeight(measuredHeight, {
+        collapsed: isToolbarCollapsed,
+        extraAllowancePx: showUiContextBar ? UI_CONTEXT_BAR_HEIGHT_ALLOWANCE_PX : 0,
+      });
       setToolbarHeight(clampedHeight);
     };
 
@@ -4273,7 +4279,7 @@ export default function ScorePage() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateToolbarHeight);
     };
-  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed]);
+  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed, showUiContextBar]);
 
   // リセットメニュー（Issue #143）の表示位置をボタンの実測位置から決める。
   // 画面の右端からはみ出さないよう、左位置は「画面幅 − メニュー幅 − 余白」までで止める。
@@ -4528,7 +4534,7 @@ export default function ScorePage() {
         {/* 段1 と同じ二重の防御: 案の解決自体が本番では current に固定されるが、
             バッジと同じく import.meta.env.DEV でも囲み、本番バンドルから
             テスト会用のUIごと落ちるようにする */}
-        {import.meta.env.DEV && uiVariant === 'a1' && (
+        {showUiContextBar && (
           <UiContextBar
             scoreType={scoreType}
             activeLayerPart={activeLayerPart}

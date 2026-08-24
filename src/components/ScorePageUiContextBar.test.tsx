@@ -86,4 +86,21 @@ describe('ScorePage: A1 文脈バーの配線', () => {
     // タブ行など既存のUIはそのまま出ている
     expect(screen.getByRole('tab', { name: '音符・休符' })).toBeTruthy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 描画側は `import.meta.env.DEV && uiVariant === 'a1'` の二重ガード。
+  // DEV は Vitest では true なので、ガードの片側（DEV）を消しても
+  // ?ui=a1 のテストだけでは気づけない（#408 Codex round1 P3）
+  it('本番ビルド相当（DEV=false）では、?ui=a1 でもバーが出ない', () => {
+    vi.stubEnv('DEV', false);
+    try {
+      // 記憶側から a1 を与える（このファイルの他のテストと同じやり方）
+      localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a1');
+      render(<ScorePage />);
+
+      expect(document.querySelector('.app-root')).toBeTruthy();
+      expect(screen.queryByTestId('ui-context-bar')).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
