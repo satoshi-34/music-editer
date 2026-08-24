@@ -119,6 +119,46 @@
   background: #eff6ff;
   box-shadow: inset 0 0 0 1px #bfdbfe;
 }
+/* UI案 A1 の文脈バー（Issue #405 段2・`?ui=a1` のときだけ描かれる）。
+   ツールバーのタブ行のすぐ下に1行だけ置き、「いま どのレイヤーの・どのタブで・
+   どのツールを持っているか」を言葉で出す。
+   画面が狭いときは折り返さずに横スクロールさせる（1行を保たないと
+   ツールバーの高さが変わって譜面が上下に動き、テスト会の比較が濁るため）。 */
+.ui-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 3px 8px;
+  border: 1px solid #bfdbfe;
+  border-radius: 7px;
+  background: #eff6ff;
+  color: #1e3a5f;
+  font-size: 12px;
+  line-height: 1.6;
+  /* 表示専用の帯なので、うっかりドラッグ選択されないようにしておく */
+  user-select: none;
+}
+.ui-context-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  /* 「レイヤー 右手・声部1」が途中で改行されると読みにくいので折らない */
+  white-space: nowrap;
+}
+/* 見出し語（レイヤー／タブ／ツール）は控えめに。読み取ってほしいのは中身のほう */
+.ui-context-bar-caption {
+  color: #64748b;
+  font-size: 11px;
+}
+.ui-context-bar-value {
+  font-weight: 600;
+}
+.ui-context-bar-separator {
+  color: #94a3b8;
+  padding-right: 1px;
+}
+
 .toolbar-panel {
   overflow-x: auto;
   max-width: 100%;
@@ -133,6 +173,9 @@
    ここで高さを直接書かなくても本文（.app-root の padding-top）が自動で詰まる。 */
 .toolbar.collapsed .toolbar-tab-row,
 .toolbar.collapsed .toolbar-history-controls,
+/* A1 の文脈バー（Issue #405 段2）も他の行と同じく折り畳み中は隠す。
+   折り畳みは「譜面を広く見たい」ときの操作なので、帯だけ残ると目的に反する。 */
+.toolbar.collapsed .ui-context-bar,
 .toolbar.collapsed .toolbar-panel {
   display: none;
 }

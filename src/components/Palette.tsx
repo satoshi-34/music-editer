@@ -19,6 +19,21 @@ import { ornamentLabel } from '../utils/ornamentUtils';
 import { symbolDefToPreviewSvg } from '../utils/customSymbolUtils';
 import { type TextElementKind, textElementLabel } from '../utils/textElementUtils';
 import { TUPLET_KINDS, type TupletKind } from '../utils/tupletUtils';
+// 日本語ラベルは Issue #405 段2 で utils/editorContextLabels.ts へ移した。
+// A1 案の文脈バーが同じ言葉を出すため、正本を1か所にまとめてある（コピーを増やさない）。
+import {
+  accidentalLabel,
+  accidentalSymbol,
+  durationLabel,
+  dynamicLabel,
+  dynamicSymbol,
+  endingLabel,
+  endingSymbol,
+  microtoneLabel,
+  microtoneSymbol,
+  repeatLabel,
+  repeatSymbol,
+} from '../utils/editorContextLabels';
 
 // ========== 表示サイズ＆色（コンパクト版） ==========
 const BUTTON_W = 36;   // ボタン幅（縮小）
@@ -260,9 +275,9 @@ export default function Palette({
                 key={i}
                 type="button"
                 onClick={() => onChange(t)}
-                title={`音符 ${label((t as {duration: DurKey}).duration)}`}
+                title={`音符 ${durationLabel((t as {duration: DurKey}).duration)}`}
 
-                aria-label={`音符 ${label((t as {duration: DurKey}).duration)}`}
+                aria-label={`音符 ${durationLabel((t as {duration: DurKey}).duration)}`}
                 style={btnStyle(active)}
               >
                 <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={false} />
@@ -409,9 +424,9 @@ export default function Palette({
                 key={i}
                 type="button"
                 onClick={() => onChange(t)}
-                title={`休符 ${label((t as {duration: DurKey}).duration)}`}
+                title={`休符 ${durationLabel((t as {duration: DurKey}).duration)}`}
 
-                aria-label={`休符 ${label((t as {duration: DurKey}).duration)}`}
+                aria-label={`休符 ${durationLabel((t as {duration: DurKey}).duration)}`}
                 style={btnStyle(active)}
               >
                 <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={true} />
@@ -796,56 +811,6 @@ export default function Palette({
       </div>
     </div>
   );
-}
-
-// ツールチップ用の日本語ラベル
-function label(d: DurKey) {
-  return d==='1'?'全':d==='2'?'2分':d==='4'?'4分':d==='8'?'8分':d==='16'?'16分':d==='32'?'32分':'64分';
-}
-
-function accidentalSymbol(kind: AccidentalToolKind) {
-  return kind === 'sharp' ? '♯' : kind === 'flat' ? '♭' : '♮';
-}
-
-function accidentalLabel(kind: AccidentalToolKind) {
-  return kind === 'sharp' ? 'シャープ' : kind === 'flat' ? 'フラット' : 'ナチュラル';
-}
-
-function microtoneSymbol(type: MicrotoneType) {
-  // U+1D132/1D133（四分音記号）は多くの環境でフォントが無く「□」（豆腐）になるため、
-  // どの環境でも確実に表示できる「¼♯ / ¼♭」というテキスト表記にする。
-  // 正式なグリフは楽譜側（VexFlow）で描画されるので、ボタンは意味が伝われば十分。
-  return type === 'quarterSharp' ? '¼♯' : '¼♭';
-}
-
-function microtoneLabel(type: MicrotoneType) {
-  return type === 'quarterSharp' ? '四分音上げ（+50セント）' : '四分音下げ（-50セント）';
-}
-
-function repeatSymbol(kind: RepeatMarkerKind) {
-  return kind === 'start' ? '||:' : ':||';
-}
-
-function repeatLabel(kind: RepeatMarkerKind) {
-  return kind === 'start' ? '開始リピート' : '終了リピート';
-}
-
-function endingSymbol(ending: EndingNumber) {
-  return `${ending}.`;
-}
-
-function endingLabel(ending: EndingNumber) {
-  return `${ending}番括弧`;
-}
-
-function dynamicSymbol(kind: DynamicMarkingValue) {
-  return kind === 'cresc' ? 'cresc.' : kind === 'dim' ? 'dim.' : kind;
-}
-
-function dynamicLabel(kind: DynamicMarkingValue) {
-  if (kind === 'cresc') return 'クレッシェンド';
-  if (kind === 'dim') return 'ディミヌエンド';
-  return `強弱記号 ${kind}`;
 }
 
 /**
