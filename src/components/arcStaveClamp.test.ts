@@ -9,6 +9,7 @@ import {
   computeArcApexPoint,
   computeArcMaxY,
   ARC_STAVE_CLAMP_MAX_SHRINK_PX,
+  nextStaveTopBelow,
 } from './arcUtils';
 
 /** 下向きスラーの標準的な引数（深い音型を想定して端点を離す） */
@@ -112,5 +113,29 @@ describe('clampArcCpDyOffsetToStaveLimit（Issue #390）', () => {
   it('どれだけ縮めても収まらないときは、最大まで縮めた値を返す', () => {
     const clamped = clampWith(-10000);         // 到達不能な境界
     expect(clamped).toBe(-ARC_STAVE_CLAMP_MAX_SHRINK_PX);
+  });
+});
+
+// 境界を「パート番号の次」ではなく「弧が描かれている五線の次」から引く（2026-08-24 実機修正）
+describe('nextStaveTopBelow', () => {
+  const STAVE_TOPS = [60, 140];   // 右手五線の上端60 / 左手五線の上端140
+
+  it('上の五線に描かれた弧には、下の五線の上端を返す', () => {
+    expect(nextStaveTopBelow(STAVE_TOPS, 60)).toBe(140);
+  });
+
+  // ここが実機で壊れていた点。パートまたぎ（⇵）の音符は左手五線に描かれるので、
+  // 「右手パートの次＝左手五線」を境界にすると音符より上を境界にしてしまい、
+  // 弧が最大まで潰れて直線同然になる
+  it('下の五線に描かれた弧には境界を返さない（下にもう五線が無いため）', () => {
+    expect(nextStaveTopBelow(STAVE_TOPS, 140)).toBeUndefined();
+  });
+
+  it('五線が3つ以上あるときは、すぐ下の1つを選ぶ（一番下ではない）', () => {
+    expect(nextStaveTopBelow([60, 140, 220], 60)).toBe(140);
+  });
+
+  it('同じ高さの五線（誤差込み）は自分自身とみなして選ばない', () => {
+    expect(nextStaveTopBelow([140, 140.5], 140)).toBeUndefined();
   });
 });

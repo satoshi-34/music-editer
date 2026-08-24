@@ -317,6 +317,28 @@ export function computeArcHitGeometry(
 export const ARC_STAVE_CLAMP_MAX_SHRINK_PX = 200;
 
 /**
+ * 「この弧が描かれている五線のすぐ下にある五線」の上端を返す（無ければ undefined）。
+ *
+ * 境界をパート番号（partIndex + 1）から引いてはいけない。パートまたぎ（⇵ / renderStaff）の
+ * 音符は隣の五線に描かれるため、パート番号で引くと**音符より上**を境界にしてしまい、
+ * 弧が最大まで潰れて直線同然になる（2026-08-24 実機で発生。月光 m2 の声部2がこの形）。
+ *
+ * @param staveTopYs 全パートの五線上端Y
+ * @param ownStaveTopY 弧が実際に描かれている五線の上端Y
+ */
+export function nextStaveTopBelow(
+  staveTopYs: Iterable<number>,
+  ownStaveTopY: number
+): number | undefined {
+  let next: number | undefined;
+  for (const top of staveTopYs) {
+    // 同じ五線（誤差込み）は除く。下にあるものの中で最も近いものを選ぶ
+    if (top > ownStaveTopY + 1 && (next === undefined || top < next)) next = top;
+  }
+  return next;
+}
+
+/**
  * 弧の「実際の最下点（最大Y）」を t∈[0,1] 全体から求める。
  *
  * 中央（t=0.5）の点は始点と終点の高さが同じときしか極値にならない。

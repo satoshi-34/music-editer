@@ -99,6 +99,41 @@ function lowestCurveYInPath(d: string): number {
   return Math.max(outer, inner);
 }
 
+/**
+ * 運用者の月光 m2 と同じ形: ピアノ譜の右手・声部2の三連符を renderStaff:'below' で
+ * 左手五線へ移し、その音符どうしにスラーを掛ける。
+ * 音符は左手五線に描かれるので、右手パートの「次の五線＝左手五線の上端」を境界にすると
+ * 音符より上を境界にしてしまい、弧が最大まで潰れる（2026-08-24 実機で発生）
+ */
+function seedCrossStaffSlurWork() {
+  const voice2 = [
+    { dur: '8' as const, isRest: false, keys: ['e/3'], renderStaff: 'below' as const,
+      arcs: [{ fromKey: 'e/3', toKey: 'c/4', toMeasureIndex: 0, toEventIndex: 2, kind: 'slur' as const }] },
+    { dur: '8' as const, isRest: false, keys: ['g/3'], renderStaff: 'below' as const },
+    { dur: '8' as const, isRest: false, keys: ['c/4'], renderStaff: 'below' as const },
+  ];
+  const voice1 = [{ dur: '2' as const, isRest: true, keys: ['b/4'] }];
+  const lh = [{ dur: '1' as const, isRest: false, keys: ['c/2', 'g/2', 'c/3'] }];
+  const data = createSavedScoreData(
+    { title: 'パートまたぎ弧テスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+    [
+      { partId: 'right-hand', clef: 'treble', measures: [{
+        events: voice1,
+        voices: [{ id: 'voice-1', events: voice1 }, { id: 'voice-2', events: voice2, stemDirection: 'down' }],
+      }] },
+      { partId: 'left-hand', clef: 'bass', measures: [{ events: lh, voices: [{ id: 'voice-1', events: lh }] }] },
+    ],
+    1,
+    1,
+    'piano'
+  );
+  const created = createWork('パートまたぎ弧テスト');
+  if (!created.success || !created.data) throw new Error('createWork failed');
+  const saved = saveWorkAutosaveData(created.data.id, data);
+  if (!saved.success) throw new Error('saveWorkAutosaveData failed');
+  setLastOpenedWorkId(created.data.id);
+}
+
 describe('ScorePage: 弧が次の五線へ食い込まない（Issue #390）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
@@ -147,5 +182,33 @@ describe('ScorePage: 弧が次の五線へ食い込まない（Issue #390）', (
     expect(lowest).toBeLessThan(nextStaveTopY);
     // マージンぶんの余白もおおむね保たれている（太さぶんの超過だけ許す）
     expect(lowest).toBeLessThan(nextStaveTopY - BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX + 1);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // クランプが「音符より上」を境界にしてしまうと、弧は最大まで潰されてほぼ直線になる。
+  // 潰れていない＝ちゃんと弧の形が残っていることを固定する
+  it('パートまたぎ（⇵）の音符に掛けた弧を、平らに潰さない', async () => {
+    seedCrossStaffSlurWork();
+    render(<ScorePage />);
+
+    await waitFor(() => {
+      expect(document.querySelector('path.vf-arc')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    const arcPath = document.querySelector('path.vf-arc')!.getAttribute('d') ?? '';
+    const nums = arcPath.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+    expect(nums.length).toBeGreaterThanOrEqual(8);
+
+    // 端点を結ぶ直線から、曲線の最下点がどれだけ離れているか（＝弧の深さ）
+    const p0y = nums[1];
+    const p3y = nums[7];
+    const chordMidY = (p0y + p3y) / 2;
+    const lowest = lowestCurveYInPath(arcPath);
+    const depth = lowest - chordMidY;
+
+    // 最大まで潰されると深さはほぼ0になる。弧として見える深さが残っていること
+    // 境界をパート番号から引いていた頃は、音符より上を境界にしてしまうため
+    // 最大まで潰されて深さ 14 前後になっていた（正しくクランプ対象外なら 26 前後）。
+    // 20 はその中間で、潰れの再発を捕まえるための線
+    expect(depth).toBeGreaterThan(20);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
