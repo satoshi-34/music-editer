@@ -13,11 +13,24 @@ function loadAppCss(): string {
   return readFileSync(resolve(__dirname, './App.css'), 'utf-8');
 }
 
-/** @media print { ... } の中身だけを取り出す */
+/**
+ * `@media print { ... }` の**中身だけ**を取り出す。
+ *
+ * 末尾まで返すと、印刷ブロックの外へ規則が移動しても気づけない
+ * （#407 Codex round1 P3）。対応する閉じ括弧まで数えて切り出す。
+ */
 function printBlock(css: string): string {
-  const start = css.indexOf('@media print {');
+  const marker = '@media print {';
+  const start = css.indexOf(marker);
   expect(start).toBeGreaterThanOrEqual(0);
-  return css.slice(start);
+  let depth = 1;
+  let i = start + marker.length;
+  for (; i < css.length && depth > 0; i += 1) {
+    if (css[i] === '{') depth += 1;
+    else if (css[i] === '}') depth -= 1;
+  }
+  expect(depth).toBe(0);   // 括弧が閉じていないCSSは異常
+  return css.slice(start + marker.length, i - 1);
 }
 
 describe('App.css: UI案バッジ（Issue #405）', () => {
