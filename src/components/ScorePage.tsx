@@ -23,6 +23,8 @@ import PlaybackControls, {
 } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
+import UiVariantBadge from './UiVariantBadge';
+import { useUiVariant } from '../hooks/useUiVariant';
 import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useDevicePixelRatio } from './useDevicePixelRatio';
@@ -369,6 +371,10 @@ function describeExportError(error: unknown): string {
 }
 
 export default function ScorePage() {
+  // 適用中のUI案（Issue #405 段1）。URLの `?ui=a1|a2|current` で切り替わり、
+  // 開発時のみ有効（本番ビルドでは常に 'current'＝現状のUI）。
+  // 段2（A1 文脈バー）・段3（A2 譜面側表現）はこの値を見て自分の案のときだけ描く。
+  const uiVariant = useUiVariant();
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
   // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
   // 1=声部2（下声・符幹下向き）。ピアノ譜以外では使わないが、
@@ -4485,6 +4491,7 @@ export default function ScorePage() {
     <div
       className={`app-root${isPrintPreview ? ' print-preview' : ''}`}
       style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
+      data-ui-variant={uiVariant}
     >
       <header className={`toolbar${isToolbarCollapsed ? ' collapsed' : ''}`} ref={toolbarRef}>
         {/* タブ行（Issue #142）。右端にフィードバックを常設し、どのタブを開いていても
@@ -6137,6 +6144,11 @@ export default function ScorePage() {
         containerSelector=".score-area"
         enablePageScroll={true}
       />
+
+      {/* いまどのUI案かの表示（Issue #405 段1）。開発時のみ出す。
+          既存のサンプル読込ボタンと同じく import.meta.env.DEV で囲い、
+          本番ビルドではこの要素自体が出ないようにしている。 */}
+      {import.meta.env.DEV && <UiVariantBadge variant={uiVariant} />}
     </div>
   );
 }
