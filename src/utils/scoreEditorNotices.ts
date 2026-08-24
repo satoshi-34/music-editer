@@ -432,6 +432,17 @@ export function describeSliceCopied(totalBeats: number): string {
   return `${rounded}拍ぶんの範囲をコピーしました（小節選択ツールで貼り先を選んで Cmd/Ctrl+V）`;
 }
 
+/**
+ * 小節の貼り付けで、コピー範囲の外を指していた弧・松葉を落としたときの通知。
+ *
+ * タイ/スラー・ヘアピンの終点は絶対小節インデックスなので、貼り付け先へ付け替える。
+ * ただし終点がコピー範囲の外にある場合、その音符が貼り付け先にも同じ形で存在する
+ * 保証がないため落とす。黙って消すと「コピーしたのに一部だけ消えた」に見えるので伝える。
+ */
+export function describeArcsDroppedOnPaste(count: number): string {
+  return `貼り付け時に、コピー範囲の外へつながっていたスラー・タイ・松葉 ${count}件は付けませんでした（終点の音符が貼り付け先にないため）`;
+}
+
 /** 拍範囲スライスの貼り付け不成立の通知（#318「行き止まりは喋る」） */
 export function describeSlicePasteUnavailable(reason: 'noSelection' | 'noFit' | 'boundary' | 'noEffect' | 'misaligned'): string {
   switch (reason) {

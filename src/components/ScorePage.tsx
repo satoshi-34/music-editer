@@ -75,6 +75,7 @@ import {
 import { transposeMeasureRange } from '../utils/transposeUtils';
 import { getTupletClipboardGroup, setTupletClipboardGroup, subscribeTupletClipboard } from '../utils/tupletClipboard';
 import { insertEmptyMeasureBefore, deleteMeasureAt, shiftOverridesStartMeasure } from '../utils/measureInsertDeleteUtils';
+import { rebaseMeasureArcsForPaste } from '../utils/measurePasteUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { buildIncomingArcIndex } from '../utils/incomingArcUtils';
 import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
@@ -157,6 +158,7 @@ import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHis
 import {
   SCORE_ACTIVE_VOICE_CHANGE_EVENT,
   SCORE_EDIT_NOTICE_EVENT,
+  describeArcsDroppedOnPaste,
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
@@ -605,7 +607,12 @@ export default function ScorePage() {
   // 同種の並べ替え問題を持つ（既存挙動・別Issue候補）
   const [sliceClipboard, setSliceClipboard] = useState<Array<{ beats: number; parts: Array<{ partId: string; voices: NoteEvent[][] }> }> | null>(null);
   // コピーした小節データ。各パートごとのスナップショット
-  const [clipboard, setClipboard] = useState<{ partId: string; measures: MeasureData[] }[] | null>(null);
+  // コピー元の先頭小節（sourceStart）も持つ。タイ/スラーの終点・ヘアピンの終点は
+  // 絶対小節インデックスなので、貼り付け時にここを基準へ付け替える必要がある
+  // （持たずに貼ると弧がコピー元の小節を指したまま伸びて壊れる・2026-08-24 実発生）
+  const [clipboard, setClipboard] = useState<
+    { sourceStart: number; parts: { partId: string; measures: MeasureData[] }[] } | null
+  >(null);
   // 連符グループがコピーされたら、小節のコピーは捨てる（Issue #234 の「後勝ち」）。
   // グループのコピーは譜面キャンバス側で起きるため、モジュール側の
   // クリップボード（utils/tupletClipboard.ts）の変化を購読して受け取る。
@@ -2813,17 +2820,17 @@ export default function ScorePage() {
         const slice = (arr: MeasureData[] | undefined) =>
           (arr ?? []).slice(start, end + 1);
         if (scoreType === 'piano') {
-          setClipboard([
+          setClipboard({ sourceStart: start, parts: [
             { partId: 'right', measures: slice(rightHandData) },
             { partId: 'left',  measures: slice(leftHandData) },
-          ]);
+          ] });
         } else if (scoreType === 'quartet') {
-          setClipboard(quartetParts.map((part, i) => ({
+          setClipboard({ sourceStart: start, parts: quartetParts.map((part, i) => ({
             partId: `quartet-${i}`,
             measures: slice(part),
-          })));
+          })) });
         } else if (scoreType === 'ensemble') {
-          setClipboard([
+          setClipboard({ sourceStart: start, parts: [
             ...ensembleParts.map((part, i) => ({
               partId: `ensemble-${i}`,
               measures: slice(part),
@@ -2834,10 +2841,10 @@ export default function ScorePage() {
                 ? [{ partId: `ensemble-${i}::2`, measures: slice(ensembleSecondStaffParts[i]) }]
                 : []
             )),
-          ]);
+          ] });
         } else {
           // single
-          setClipboard([{ partId: 'single', measures: slice(rightHandData) }]);
+          setClipboard({ sourceStart: start, parts: [{ partId: 'single', measures: slice(rightHandData) }] });
         }
         e.preventDefault();
         return;
@@ -3077,34 +3084,45 @@ export default function ScorePage() {
         if (!clipboard || !selectedMeasures) return;
         pushHistory();
         const dest = selectedMeasures.start;
+        // タイ/スラー・ヘアピンの終点は絶対小節インデックスなので、貼り付け先へ付け替える。
+        // 付け替えないと弧がコピー元の小節を指したまま伸びる（2026-08-24 実発生）。
+        // コピー範囲の外を指していた弧はここで落ち、本数を後でまとめて通知する
+        let droppedArcs = 0;
+        const rebase = (measures: MeasureData[]): MeasureData[] => {
+          const result = rebaseMeasureArcsForPaste(measures, clipboard.sourceStart, dest);
+          droppedArcs += result.droppedCount;
+          return result.measures;
+        };
         const paste = (arr: MeasureData[] | undefined, measures: MeasureData[]): MeasureData[] => {
           const copy = [...(arr ?? [])];
-          measures.forEach((m, i) => { copy[dest + i] = m; });
+          rebase(measures).forEach((m, i) => { copy[dest + i] = m; });
           return copy;
         };
         if (scoreType === 'piano') {
-          const right = clipboard.find(c => c.partId === 'right');
-          const left  = clipboard.find(c => c.partId === 'left');
+          const right = clipboard.parts.find(c => c.partId === 'right');
+          const left  = clipboard.parts.find(c => c.partId === 'left');
           if (right) setRightHandData(paste(rightHandData, right.measures));
           if (left)  setLeftHandData(paste(leftHandData, left.measures));
         } else if (scoreType === 'quartet') {
           setQuartetParts(prev => prev.map((part, i) => {
-            const src = clipboard.find(c => c.partId === `quartet-${i}`);
+            const src = clipboard.parts.find(c => c.partId === `quartet-${i}`);
             return src ? paste(part, src.measures) : part;
           }));
         } else if (scoreType === 'ensemble') {
           setEnsembleParts(prev => prev.map((part, i) => {
-            const src = clipboard.find(c => c.partId === `ensemble-${i}`);
+            const src = clipboard.parts.find(c => c.partId === `ensemble-${i}`);
             return src ? paste(part, src.measures) : part;
           }));
           setEnsembleSecondStaffParts(prev => prev.map((part, i) => {
-            const src = clipboard.find(c => c.partId === `ensemble-${i}::2`);
+            const src = clipboard.parts.find(c => c.partId === `ensemble-${i}::2`);
             return src ? paste(part, src.measures) : part;
           }));
         } else {
-          const src = clipboard.find(c => c.partId === 'single');
+          const src = clipboard.parts.find(c => c.partId === 'single');
           if (src) setRightHandData(paste(rightHandData, src.measures));
         }
+        // 落とした弧は黙って消さずに本数を伝える（#318「行き止まりは喋る」と同じ理由）
+        if (droppedArcs > 0) notifyScoreEdit(describeArcsDroppedOnPaste(droppedArcs));
         // 貼り付け先の先頭を「最後に編集した小節」として記録する（Issue #67）。
         setLastEditedMeasureIndex(dest);
         e.preventDefault();
