@@ -171,6 +171,75 @@ function seedCrossStaffSlurWork() {
   setLastOpenedWorkId(created.data.id);
 }
 
+/**
+ * 段（システム）をまたぐ深い下向きスラー。1段2小節にして m1(1段目の最後)→m2(2段目の最初)
+ * へ掛ける。弧は2本のセグメントに割れ、それぞれ自分の段の五線間に描かれるので、
+ * 境界も別々に引く必要がある（#403 round2 P2）
+ */
+function seedCrossSystemDeepSlurWork() {
+  // 各段のセグメントが自然には境界を越えるよう、あいだの音を深くする
+  // （越えないとクランプの有無で差が出ず、テストに検出力が無くなる）
+  const m1 = [
+    { dur: '2' as const, isRest: false, keys: ['b/3'],
+      arcs: [{ fromKey: 'b/3', toKey: 'd/4', toMeasureIndex: 2, toEventIndex: 1, kind: 'slur' as const }] },
+    { dur: '2' as const, isRest: false, keys: ['c/3'] },
+  ];
+  const m2 = [
+    { dur: '2' as const, isRest: false, keys: ['c/3'] },
+    { dur: '2' as const, isRest: false, keys: ['d/4'] },
+  ];
+  const plain = [{ dur: '1' as const, isRest: false, keys: ['c/4'] }];
+  const clefs = ['treble', 'treble', 'alto', 'bass'] as const;
+  const data = createSavedScoreData(
+    { title: '段またぎ弧テスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+    (['violin-1', 'violin-2', 'viola', 'cello'] as const).map((partId, i) => ({
+      partId,
+      clef: clefs[i],
+      measures: [0, 1, 2, 3].map((mi) => {
+        const events = i === 0 ? (mi === 1 ? m1 : mi === 2 ? m2 : plain) : plain;
+        return { events, voices: [{ id: 'voice-1', events }] };
+      }),
+    })),
+    2,
+    2,
+    'quartet'
+  );
+  const created = createWork('段またぎ弧テスト');
+  if (!created.success || !created.data) throw new Error('createWork failed');
+  const saved = saveWorkAutosaveData(created.data.id, data);
+  if (!saved.success) throw new Error('saveWorkAutosaveData failed');
+  setLastOpenedWorkId(created.data.id);
+}
+
+/** 旧形式のタイ（tiedToNext）。同じ五線内で隣の音符へ繋がる */
+function seedLegacyTieWork() {
+  const events = [
+    { dur: '2' as const, isRest: false, keys: ['b/3'], tiedToNext: true },
+    { dur: '2' as const, isRest: false, keys: ['b/3'] },
+  ];
+  const plain = [{ dur: '1' as const, isRest: false, keys: ['c/4'] }];
+  const clefs = ['treble', 'treble', 'alto', 'bass'] as const;
+  const data = createSavedScoreData(
+    { title: '旧タイテスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+    (['violin-1', 'violin-2', 'viola', 'cello'] as const).map((partId, i) => ({
+      partId,
+      clef: clefs[i],
+      measures: [{
+        events: i === 0 ? events : plain,
+        voices: [{ id: 'voice-1', events: i === 0 ? events : plain }],
+      }],
+    })),
+    1,
+    1,
+    'quartet'
+  );
+  const created = createWork('旧タイテスト');
+  if (!created.success || !created.data) throw new Error('createWork failed');
+  const saved = saveWorkAutosaveData(created.data.id, data);
+  if (!saved.success) throw new Error('saveWorkAutosaveData failed');
+  setLastOpenedWorkId(created.data.id);
+}
+
 describe('ScorePage: 弧が次の五線へ食い込まない（Issue #390）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
@@ -225,6 +294,80 @@ describe('ScorePage: 弧が次の五線へ食い込まない（Issue #390）', (
   // 小節をまたぐ弧が「別の五線」と判定されてクランプ対象外になる（#403 round2 P2）
   it('小節をまたぐ弧でも、下の五線に食い込まない', async () => {
     seedCrossMeasureDeepSlurWork();
+    render(<ScorePage />);
+
+    await waitFor(() => {
+      expect(document.querySelector('path.vf-arc')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    const svg = Array.from(document.querySelectorAll('svg'))
+      .find((c) => c.querySelector('rect.vf-note-hit')) as SVGSVGElement;
+    const staveTops = [...new Set(
+      Array.from(svg.querySelectorAll('.vf-note-hit'))
+        .map((el) => parseFloat(el.getAttribute('data-line0-y')!))
+    )].sort((a, b) => a - b);
+    expect(staveTops.length).toBeGreaterThanOrEqual(2);
+
+    const lowest = Math.max(...Array.from(svg.querySelectorAll('path.vf-arc'))
+      .map((p) => lowestCurveYInPath(p.getAttribute('d') ?? '')));
+    expect(lowest).toBeLessThan(staveTops[1]);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  /** その弧の下にある「次の五線の上端」を返す（無ければ undefined） */
+  function nextStaveTopBelowY(staveTops: number[], y: number): number | undefined {
+    return staveTops.find((t) => t > y + 1);
+  }
+
+  // 段またぎの弧は2本に割れ、それぞれ自分の段の五線間に描かれる。
+  //
+  // 注意（検出力の限界）: 段またぎセグメントの膨らみは**端点だけ**で決まり
+  // （obstacleY に端点のYを渡している）、間の音符の深さに影響されない。実測でも
+  // 深さは常に18px前後で、五線間隔80pxでは境界（五線上端−3px）に届かない。
+  // そのためセグメント側のクランプは**防御的**な位置づけで、外しても現在の
+  // レイアウトでは差が出ない。このテストは「両セグメントが境界内にある」ことと
+  // 2本とも実際に検証したことを固定するに留まる（#403 round2/3）。
+  it('段をまたぐ弧は、2本のセグメントとも自分の段の次の五線に食い込まない', async () => {
+    seedCrossSystemDeepSlurWork();
+    render(<ScorePage />);
+
+    // 段は段ごとに別の SVG に描かれる（＝弧の2本目は別 Canvas 側の経路を通る）
+    await waitFor(() => {
+      const keys = Array.from(document.querySelectorAll('path.vf-arc'))
+        .map((p) => p.getAttribute('data-arc-key') ?? '');
+      expect(keys.some((k) => k.endsWith('-1'))).toBe(true);
+      expect(keys.some((k) => k.endsWith('-2'))).toBe(true);
+    }, { timeout: 15000 });
+
+    const svgs = Array.from(document.querySelectorAll('svg'))
+      .filter((c) => c.querySelector('rect.vf-note-hit'));
+    expect(svgs.length).toBeGreaterThanOrEqual(2);
+
+    let checked = 0;
+    svgs.forEach((svg) => {
+      const staveTops = [...new Set(
+        Array.from(svg.querySelectorAll('.vf-note-hit'))
+          .map((el) => parseFloat(el.getAttribute('data-line0-y')!))
+      )].sort((a, b) => a - b);
+
+      Array.from(svg.querySelectorAll('path.vf-arc'))
+        .filter((p) => (p.getAttribute('data-arc-key') ?? '').match(/-[12]$/))
+        .forEach((seg) => {
+          const d = seg.getAttribute('d') ?? '';
+          const startY = Number((d.match(/-?\d+(\.\d+)?/g) ?? [])[1]);
+          const boundary = nextStaveTopBelowY(staveTops, startY);
+          if (boundary === undefined) return;   // 最下段のセグメントは境界なし
+          expect(lowestCurveYInPath(d)).toBeLessThan(boundary);
+          checked += 1;
+        });
+    });
+    // 1本目・2本目の両方を実際に検証できていること（素通りで通らないように）
+    expect(checked).toBeGreaterThanOrEqual(2);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 旧形式のタイ（tiedToNext）も同じ経路を通ることの確認。
+  // タイは元々浅いので境界に届かず、こちらも防御的な配線の確認に留まる
+  it('旧形式のタイでも、下の五線に食い込まない', async () => {
+    seedLegacyTieWork();
     render(<ScorePage />);
 
     await waitFor(() => {
