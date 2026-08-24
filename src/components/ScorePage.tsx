@@ -6011,6 +6011,9 @@ export default function ScorePage() {
                       customSymbolDefs={customSymbolDefs}
                       activeVoiceIndex={activeVoice}
                       activeLayerPartIndex={activeLayerPart}
+                      // UI案A2（#405 段3・テスト会用）: 譜面側で編集中のレイヤーを示す。
+                      // それ以外の案（current / a1）では false のままなので描画は変わらない
+                      highlightActiveLayer={import.meta.env.DEV && uiVariant === 'a2'}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}

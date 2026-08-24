@@ -1941,6 +1941,12 @@ button.ghost.active:hover:not(:disabled) {
      ページ末尾の段が次の紙へ押し出されてしまう */
   body { background: #fff !important; margin: 0 !important; }
   .toolbar { display: none !important; }
+  /* UI案A2（Issue #405 段3・開発時のテスト会用）の「編集中レイヤーの色帯」は
+     画面上で今どこを触っているかを示すための表示なので、紙面には出さない。
+     非アクティブレイヤーの記号に掛けた不透明度も、紙では他の記号と同じ濃さへ戻す
+     （淡色は「編集中でない」という画面上の意味しか持たないため。Issue #59 の休符と同じ考え方）。 */
+  .vf-active-layer-band { display: none !important; }
+  .vf-inactive-layer-symbol { opacity: 1 !important; }
   /* プレビュー中の編集ロック帯（Issue #88）も画面専用の案内なので印刷には出さない。 */
   .print-preview-lock-banner { display: none !important; }
   /* 削除の通知（Issue #238）は「いま何が起きたか」を伝える画面専用の一時表示。
@@ -2148,6 +2154,10 @@ button.ghost.active:hover:not(:disabled) {
   opacity: 1;
 }
 .print-preview .paper-rail { background: #e5e7eb; }
+/* UI案A2 の色帯・淡色記号は、印刷プレビュー中も紙面と同じ見え方にそろえる
+   （@media print 側と同じ理由。プレビューで見た通りに刷れる、を崩さないため） */
+.print-preview .vf-active-layer-band { display: none; }
+.print-preview .vf-inactive-layer-symbol { opacity: 1; }
 .print-preview .print-page {
   --score-stroke-width: 0.8;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);

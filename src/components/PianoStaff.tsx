@@ -41,6 +41,8 @@ type Props = {
   activeVoiceIndex?: 0 | 1;
   /** 編集レイヤーのパート側（#316）。0=右手・1=左手。省略時は従来の帯域推測 */
   activeLayerPartIndex?: number;
+  /** UI案A2（#405 段3）のとき true。譜面側で編集中のレイヤーを示す（PianoSystemCanvas 側のコメント参照） */
+  highlightActiveLayer?: boolean;
   // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
   // 省略時は全段を印刷する。画面表示には影響しない。
   printVisibleSystems?: number;
@@ -101,6 +103,7 @@ export default function PianoStaff({
   customSymbolDefs,
   activeVoiceIndex = 0,
   activeLayerPartIndex,
+  highlightActiveLayer,
   printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
   pageMarginSideMm,
@@ -145,6 +148,7 @@ export default function PianoStaff({
           customSymbolDefs={customSymbolDefs}
           activeVoiceIndex={activeVoiceIndex}
           activeLayerPartIndex={activeLayerPartIndex}
+          highlightActiveLayer={highlightActiveLayer}
           plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
           incomingArcIndex={incomingArcIndex}
           measureWidthEvenness={measureWidthEvenness}

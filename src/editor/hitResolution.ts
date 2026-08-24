@@ -81,6 +81,18 @@ export const CHORD_HIT_PAD = 1.5;
 // 2声部小節で、非アクティブ声部の音符を淡色表示するときの色。
 // 印刷時は App.css 側の @media print で svg path/line を強制的に #000 に戻す（紙面では常に黒）。
 export const INACTIVE_VOICE_COLOR = '#9ca3af';
+// UI案A2（Issue #405 段3）で、アクティブなレイヤーの五線の背後に敷く帯の色。
+// 「いまどの手を編集しているか」を譜面から目を離さずに分かるようにするための表示。
+// 五線・音符より先に描くので、薄い水色（不透明度の低い青）にして線を邪魔しない。
+export const ACTIVE_LAYER_BAND_COLOR = 'rgba(37, 99, 235, 0.08)';
+// 色帯を五線の上下へどれだけはみ出させるか（px・SVG内部座標）。
+// 五線の高さ（線0〜線4）ちょうどだと帯の縁が最上線・最下線と重なって
+// 「線が太くなった」ように見えるので、少しだけ外へ広げる。
+export const ACTIVE_LAYER_BAND_PAD = 6;
+// UI案A2で、非アクティブなレイヤーの記号（強弱・アーティキュレーション等）に掛ける不透明度。
+// 音符は INACTIVE_VOICE_COLOR で色を差し替えるが、記号は種類ごとに色が違う
+// （黒い文字・青い矢印など）ため、色を上書きせず薄くする方式にそろえている。
+export const INACTIVE_LAYER_SYMBOL_OPACITY = 0.35;
 // 和音追加のY判定は「五線 ± 3加線」の固定範囲
 export const CHORD_LEDGER_TOP = -3; // 上方向の加線数（マイナス = 上）
 export const CHORD_LEDGER_BOT = 7;  // 下方向（ライン5〜7 = 3本の加線）

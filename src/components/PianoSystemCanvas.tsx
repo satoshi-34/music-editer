@@ -100,6 +100,7 @@ import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, 
 import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../utils/crossStaffBeamUtils';
 import {
   CHORD_HIT_PAD, EXTRA_TOP, EXTRA_BOTTOM, INACTIVE_VOICE_COLOR,
+  ACTIVE_LAYER_BAND_COLOR, ACTIVE_LAYER_BAND_PAD, INACTIVE_LAYER_SYMBOL_OPACITY,
   keySelectXPad, snapLine, findKeyIndexAtLine,
   getRawPerScreenPxSafe, clientToGroup, resolveNoteHitGeometry, resolveHitAttribution,
   type HitAttributionPolicy, type NoteClickOutcome,
@@ -211,6 +212,10 @@ type RenderedVoiceEntry = {
   // 2声部小節で、この声部が「今編集していない側」かどうか。
   // 音符本体だけでなくビーム・連符も淡色にするために、描画パスへ持ち越す（Issue #175）。
   isInactiveVoiceEntry: boolean;
+  /** ビームごとの淡色判定（段またぎで五線が分かれるため声部単位では足りない） */
+  beamInactiveFlags: boolean[];
+  /** 連符ごとの淡色判定（同上） */
+  tupletInactiveFlags: boolean[];
   // 段またぎ記譜（Issue #309）で、この声部に「隣の五線へ載せる音符」が1つでもあるか。
   // 描画パス（Pass 3）は、これが true の声部だけ専用の描き方に切り替える
   // （段またぎを使っていない譜面は従来とまったく同じ経路を通す＝1pxも変えない）。
@@ -850,6 +855,18 @@ type Props = {
    * 省略時は従来の帯域推測のみ（非ピアノ譜種）。
    */
   activeLayerPartIndex?: number;
+  /**
+   * UI案A2（Issue #405 段3・テスト会用）のとき true。譜面側で「いまどのレイヤーか」を示す:
+   * アクティブなレイヤーの五線の背後に色帯を敷き、非アクティブなパート（もう一方の手）の
+   * 音符・記号を淡色にする。
+   *
+   * UI案そのもの（`?ui=a2`）ではなく真偽値で受け取るのは、この描画コンポーネントに
+   * 「テスト会のUI案」という上位の都合を持ち込まないため。省略時（false）は従来どおりの
+   * 描画で、既定のUI（current）では 1px も変わらない。
+   * `activeLayerPartIndex` が無い譜種（非ピアノ譜）では、そもそも「手のレイヤー」が
+   * 無いので true でも何も起きない。
+   */
+  highlightActiveLayer?: boolean;
   /** ScorePage の線形Plannerが計測済みの、現在システム内の小節幅。 */
   plannedMeasureWidths?: number[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
@@ -948,6 +965,12 @@ type BuildPartVoicesInput = {
   timeSignatureDenominator: number;
   selected: Sel;
   activeVoiceIndex: number;
+  /**
+   * UI案A2（#405 段3）で「アクティブなレイヤーのパート」。指定されたときだけ、
+   * これと違うパート（もう一方の手）の音符を淡色で描く。
+   * null / undefined なら従来どおり（声部だけの淡色化）で、見た目は変わらない。
+   */
+  highlightedLayerPartIndex?: number | null;
   /** 前の小節の臨時記号最終状態（courtesy accidental 判定用） */
   prevMeasureState: MeasureAccidentalState | undefined;
 };
@@ -962,8 +985,13 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
     pi, systemColumnIndex, absI, staveSets, parts, partsScoreForRender,
     normalizedKeySignature, effectiveKeySigForMeasure, beatsPerMeasure,
     timeSignatureNumerator, timeSignatureDenominator, selected, activeVoiceIndex,
-    prevMeasureState,
+    highlightedLayerPartIndex, prevMeasureState,
   } = input;
+  // UI案A2（#405 段3）: このパートが「編集中でないレイヤー」かどうか。
+  // レイヤー = (手, 声部) のうち **手** の側の判定で、声部側の判定（isInactiveVoice）とは独立。
+  // A2 以外（highlightedLayerPartIndex が無い）ときは常に false なので、
+  // 従来の描画から 1px も変わらない。
+  const isInactiveLayerPart = highlightedLayerPartIndex != null && pi !== highlightedLayerPartIndex;
   const part = parts[pi];
     const stave=staveSets[pi][systemColumnIndex];
     // 描画に使うのは partsScoreForRender（矢印キーで動かしている最中の下書きを反映したコピー）。
@@ -1081,7 +1109,18 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
           // 声部1しか無い小節や、声部トグル自体が無い画面（単旋律譜など）では
           // isMultiVoiceMeasure が false のままなので、従来通り常に黒で描画される
           // （リグレッション防止）。
-          const isInactiveVoice = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+          // UI案A2 のときは、もう一方の手のパート全体も同じ淡色にする（#405 段3）。
+          // 「声部の淡色化」と同じ見せ方に乗せることで、A2 の「非アクティブなレイヤーを薄く」を
+          // 新しい表現を増やさずに実現している（既存の淡色と2種類の薄さが混ざらない）。
+          // 手（レイヤー）の判定は**実際に描かれる五線**で行う。パートまたぎ（⇵）の音符は
+          // 隣の五線に描かれるので、所属パート（pi）で判定すると
+          // 「左手をアクティブにしたのに、左手五線へ移した音符だけ淡いまま」になる
+          // （#409 Codex round1 P2。#403 で同じ取り違えを実際に踏んでいる）
+          const renderedPi = renderPartIndexes[idx] ?? pi;
+          const isInactiveRenderedPart =
+            highlightedLayerPartIndex != null && renderedPi !== highlightedLayerPartIndex;
+          const isInactiveVoice = isInactiveRenderedPart
+            || (isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex);
           // computeVoiceDisplayPadding が補完した「拍が足りない残りを埋めるだけの休符」は
           // データに保存されていない表示専用のものなので、薄いグレーにして
           // 「ここは実際にはまだ空いている」ことが一目で分かるようにする。
@@ -1142,13 +1181,24 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
             ? { stemDirection: beamStemDirection, maintainStemDirections: true }
             : {}),
         };
-        // 段またぎがある声部は、載る五線が変わる位置で連桁（ビーム）を切る（設計メモ §4-2）。
-        // 1本のビームを五線の間に斜めに渡す書き方（段またぎ連桁）は段2の課題。
-        // 「拍の区切りは全音符列で決め、またぎ位置では切るだけ」にしないと、
-        // またぎで抜けた音符の tick が数えられず残りの拍がずれる（Issue #313）。
+        // 段またぎの連桁は五線間を1本で結ぶ（設計メモ §4-2）。そのため A2 の淡色判定は
+        // 「グループの音符が全部、非アクティブな五線に載っているときだけ」にしている。
+        // 拍の区切りは全音符列で決める。またぎで抜けた音符の tick を数え落とすと
+        // 残りの拍がずれるため（Issue #313）。
         const beams = hasCrossStaffNote
           ? generateCrossStaffBeams(vfNotes, renderPartIndexes, beamOptions)
           : Beam.generateBeams(vfNotes, beamOptions);
+        // UI案A2（#405 段3）: 淡色にするかどうかはビーム・連符の**グループ単位**で決める。
+        // 声部ひとまとめで判定すると、段またぎで「片方の五線だけ色が合わない」
+        // 「音符と連符数字の濃さが逆転する」状態になる（#409 Codex round1/2 P2）。
+        // 判定にはグループの音符が載っている五線の集合を使う（先頭音符だけでは足りない）。
+        const noteRenderedPartByNote = new Map<StaveNote, number>();
+        vfNotes.forEach((n, idx) => { noteRenderedPartByNote.set(n, renderPartIndexes[idx] ?? pi); });
+        /** そのグループの音符が載っている五線（重複なし） */
+        const renderedPartsOfGroup = (notes: StaveNote[] | undefined): number[] =>
+          [...new Set((notes ?? []).map((n) => noteRenderedPartByNote.get(n) ?? pi))];
+        const beamRenderedPartSets = beams.map((b) =>
+          renderedPartsOfGroup((b as unknown as { notes?: StaveNote[] }).notes));
         // Tuplet は「括弧を描くかどうか」をコンストラクタの時点で
         // 「ビームの付いていない音符が1つでもあるか」で決めてしまう。
         // 上の順序変更でビームがまだ無い状態で作ることになったため、
@@ -1175,7 +1225,26 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         // 「この声部が非アクティブかどうか」を描画パス（Pass 3）へ持ち越す。
         // 音符ごとの判定（上の isInactiveVoice）と同じ条件だが、
         // ビーム・連符は声部単位で1つなので声部側に持たせる。
-        const isInactiveVoiceEntry = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+        // 声部側の淡色判定（手の側はビーム・連符ごとに描画先で判定するのでここでは見ない）
+        const isInactiveVoiceOnly = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+        const isInactiveVoiceEntry = isInactiveLayerPart || isInactiveVoiceOnly;
+        /**
+         * グループ（ビーム・連符）ごとの淡色判定。
+         * 五線をまたぐ1本のビームは**どちらの五線にも属する**ので淡くしない。
+         * 片方だけ薄くはできないうえ、またいでいる事実そのものが情報だから
+         * （#409 Codex round2 P2）。
+         */
+        const groupInactive = (renderedParts: number[]): boolean => {
+          if (isInactiveVoiceOnly) return true;
+          if (highlightedLayerPartIndex == null || renderedParts.length === 0) return false;
+          return renderedParts.every((rp) => rp !== highlightedLayerPartIndex);
+        };
+        const beamInactiveFlags = beamRenderedPartSets.map(groupInactive);
+        // 連符も同じ規則にする。所属パート由来の値を使うと、段またぎ三連符で
+        // 音符・ビームと連符数字の濃さが逆転する
+        const tupletInactiveFlags = tuplets.map((t) =>
+          groupInactive(renderedPartsOfGroup(
+            (t.tuplet as unknown as { notes?: StaveNote[] }).notes)));
 
         return {
           voiceIndex,
@@ -1186,6 +1255,8 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
           tuplets,
           voice,
           isInactiveVoiceEntry,
+          beamInactiveFlags,
+          tupletInactiveFlags,
           hasCrossStaffNote,
         };
       })
@@ -1470,16 +1541,16 @@ function drawRenderedVoiceEntries(
       // 黒いまま残ってしまう。代わりに drawWithStyle() を使うと、VexFlow 側が
       // 「ctx.save() → applyStyle() → draw() → ctx.restore()」を行ってくれる。
       const inactiveVoiceStyle = {fillStyle:INACTIVE_VOICE_COLOR,strokeStyle:INACTIVE_VOICE_COLOR};
-      entry.beams.forEach(b=>{
+      entry.beams.forEach((b, beamIndex)=>{
         b.setContext(vexCtx);
-        if(entry.isInactiveVoiceEntry){
+        if(entry.beamInactiveFlags[beamIndex] ?? entry.isInactiveVoiceEntry){
           b.setStyle(inactiveVoiceStyle);
           b.drawWithStyle();
         }else{
           b.draw();
         }
       });
-      entry.tuplets.forEach(({ tuplet, hideNumber }) => {
+      entry.tuplets.forEach(({ tuplet, hideNumber }, tupletIndex) => {
         // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
         // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
         // 数字を省略する連符は括弧も省くのが浄書の慣行（Gould, Behind Bars）なので、
@@ -1491,7 +1562,7 @@ function drawRenderedVoiceEntries(
         }
         try {
           (tuplet as any).setContext?.(vexCtx);
-          if (entry.isInactiveVoiceEntry) {
+          if (entry.tupletInactiveFlags[tupletIndex] ?? entry.isInactiveVoiceEntry) {
             tuplet.setStyle(inactiveVoiceStyle);
             tuplet.drawWithStyle();
           } else {
@@ -1520,8 +1591,34 @@ function drawCollectedSymbolEntries(args: {
   collectors: RenderCollectors;
   customSymbolDefs: CustomSymbolDef[];
   appendSymbolHitRegion: SymbolHitRegionAppender;
+  /**
+   * UI案A2（#405 段3）でアクティブなレイヤーのパート。指定されたときだけ、
+   * これと違うパートの記号を淡色にする。null / undefined なら従来どおり。
+   */
+  highlightedLayerPartIndex?: number | null;
 }): void {
-  const { svgRoot, customSymbolDefs, appendSymbolHitRegion } = args;
+  const { svgRoot, customSymbolDefs, highlightedLayerPartIndex } = args;
+  // UI案A2 の記号の淡色化（#405 段3）。
+  // 記号の描画はどれも「要素を作る → appendSymbolHitRegion(作った要素, partIndex, …)」の順で
+  // 通るので、その1か所を包むだけで全種類（強弱・アーティキュレーション・運指・
+  // 発想標語・コードネーム・オクターブ記号・カスタム記号）へ一度に効かせられる。
+  // 記号は種類ごとに色が違う（黒い文字・青い線など）ため、音符のように色を差し替えず
+  // 不透明度を下げる方式にしている。
+  const appendSymbolHitRegion: SymbolHitRegionAppender = ((
+    elements: SVGGraphicsElement[],
+    partIndex: number,
+    ...rest: unknown[]
+  ) => {
+    if (highlightedLayerPartIndex != null && partIndex !== highlightedLayerPartIndex) {
+      elements.forEach((el) => {
+        el.setAttribute('opacity', String(INACTIVE_LAYER_SYMBOL_OPACITY));
+        // 印刷・印刷プレビューで濃さを戻すための目印。既に付いているクラス
+        // （カスタム記号の <g> など）を消さないよう classList.add で足す
+        el.classList.add('vf-inactive-layer-symbol');
+      });
+    }
+    return (args.appendSymbolHitRegion as (...a: unknown[]) => void)(elements, partIndex, ...rest);
+  }) as SymbolHitRegionAppender;
   const {
     dynamicTextEntries, noteObstacles, staveTopYByPart, customSymbolEntries, bpmMarkingEntries, rehearsalMarkEntries,
     measureNumberEntries, fingeringEntries, articulationEntries, tempoMarkingEntries,
@@ -2041,12 +2138,19 @@ export default function PianoSystemCanvas({
   customSymbolDefs = [],
   activeVoiceIndex = 0,
   activeLayerPartIndex,
+  highlightActiveLayer = false,
   measureWidthEvenness = MEASURE_WIDTH_EVENNESS,
   pageMarginSideMm,
   symbolsClickable = false,
   isPrintPreview = false,
   partSpacingOffsetPx = 0,
 }: Props) {
+  // UI案A2（#405 段3）で色帯・淡色化の基準になるパート（＝編集中のレイヤーの手）。
+  // 「A2 のときだけ」「手のレイヤーがある譜種のときだけ」効かせたいので、
+  // 2つの条件をここで1回だけ畳んでおく（描画のあちこちで同じ条件を書き写さないため）。
+  const activeLayerHighlightPartIndex = highlightActiveLayer && activeLayerPartIndex != null
+    ? activeLayerPartIndex
+    : null;
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
   const timeSignatureNumerator = normalizedTimeSignature[0];
@@ -4204,6 +4308,24 @@ export default function PianoSystemCanvas({
         stave.format();
         placeKeySignatureAfterTimeSignature(stave);
         stave.draw();
+        // UI案A2（#405 段3）: 編集中のレイヤーの五線の背後に色帯を敷く。
+        // svgRoot の先頭へ入れるのは、あとから append すると五線・音符の「上」に載って
+        // しまうため（SVG は後から描いた要素が手前になる）。塗りだけの薄い帯なので、
+        // 背後に回せば線の見た目を変えずに「この段を触っている」ことだけを示せる。
+        if (activeLayerHighlightPartIndex === pi) {
+          const band = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          band.setAttribute('class', 'vf-active-layer-band');
+          const bandTop = stave.getYForLine(0) - ACTIVE_LAYER_BAND_PAD;
+          const bandBottom = stave.getYForLine(4) + ACTIVE_LAYER_BAND_PAD;
+          band.setAttribute('x', String(x / s));
+          band.setAttribute('y', String(bandTop));
+          band.setAttribute('width', String(w / s));
+          band.setAttribute('height', String(bandBottom - bandTop));
+          band.setAttribute('fill', ACTIVE_LAYER_BAND_COLOR);
+          // 帯は表示専用。譜面のクリック（音符入力・小節選択）を横取りしないようにする
+          band.setAttribute('pointer-events', 'none');
+          svgRoot.insertBefore(band, svgRoot.firstChild);
+        }
         staveSets[pi].push(stave);
         // リハーサルマークは最上段（pi===0）の上にだけ表示する（repeatStart/ending と同じ「最上段基準」の方針）
         if (pi === 0 && sharedMeasure?.rehearsalMark) {
@@ -4787,6 +4909,7 @@ export default function PianoSystemCanvas({
           effectiveKeySigForMeasure: effectiveKeySigPerMeasure[i],
           beatsPerMeasure, timeSignatureNumerator, timeSignatureDenominator,
           selected, activeVoiceIndex,
+          highlightedLayerPartIndex: activeLayerHighlightPartIndex,
           prevMeasureState: prevMeasureStatePerPart[pi],
         });
         prevMeasureStatePerPart[pi] = built.nextPrevMeasureState;
@@ -6953,9 +7076,24 @@ export default function PianoSystemCanvas({
 
     // 記号エントリの一括描画（実体は drawCollectedSymbolEntries・#244 段4c-2）。
     // クリック判定の配線（appendSymbolHitRegion）は閉包側の責務のまま引数で渡す。
-    drawCollectedSymbolEntries({ svgRoot, collectors, customSymbolDefs, appendSymbolHitRegion });
+    drawCollectedSymbolEntries({
+      svgRoot, collectors, customSymbolDefs, appendSymbolHitRegion,
+      highlightedLayerPartIndex: activeLayerHighlightPartIndex,
+    });
 
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
+    // UI案A2（#405 段3）: 弧を淡くするかは「実際に描かれている五線」で決める。
+    // Y座標から推測すると、五線間の加線音（ヘ音記号の C5 など）で逆転する
+    // （#409 Codex round4 P2）。描画時に台帳へ控える。
+    const arcRenderedPartByKey = new Map<string, number>();
+    const partIndexOfStave = (stave: Stave): number | undefined => {
+      const top = stave.getYForLine(0);
+      let hit: number | undefined;
+      collectors.staveTopYByPart.forEach((t, partIdx) => {
+        if (Math.abs(t - top) <= 1) hit = partIdx;
+      });
+      return hit;
+    };
     pendingArcsP.forEach(({partIndex,voiceIndex,arc,arcIndex,startNote,startStave,startClef,startMeasureIdx,startEventIdx,startIsMultiVoice})=>{
       // 弧の終点は「同じ声部の events 配列の位置」を指す（設計メモの案A）。
       // そのため終点の逆引きも必ず同じ声部のキーで行う。
@@ -6999,6 +7137,10 @@ export default function PianoSystemCanvas({
             anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:stemDir}),
           })+startDy;
           const edgeX=startStave.getX()+startStave.getWidth();
+          {
+            const rp = partIndexOfStave(startStave);
+            if (rp !== undefined) arcRenderedPartByKey.set(arcKey+'-1', rp);
+          }
           drawArcPathP(x1+startDx,y,edgeX+(arc.breakEndDx??0),y+(arc.breakEndDy??0),upward,arc.kind,stemDir,y,cpDyOffset,arcKey+'-1',isSelected,undefined,undefined,startDx,startDy,arc.breakEndDx??0,arc.breakEndDy??0,apexXRatio);
         }catch{/* 段境界でも本文描画を止めない */}
         return;
@@ -7039,6 +7181,11 @@ export default function PianoSystemCanvas({
       const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30
                      ||roughAbsX2P<roughAbsX1P;
       if(!crossSystem){
+        {
+          // 同一五線に描かれる通常の弧。startStave がその五線
+          const rp = partIndexOfStave(startStave);
+          if (rp !== undefined) arcRenderedPartByKey.set(arcKey, rp);
+        }
         try{drawTieArcP({from:startClef,to:destClef},startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,allObstacleNotes,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio);}catch{/* 保険 */}
       }else{
         try{
@@ -7093,6 +7240,12 @@ export default function PianoSystemCanvas({
           const segmentObstacleY2P=effY2P;
           // 段またぎの片側セグメントは、境界点の高さを各段の音符高さに揃える。
           // ふくらみは制御点で作ることで、不自然な斜め線を避ける。
+          {
+            const rp1 = partIndexOfStave(startStave);
+            const rp2 = partIndexOfStave(dest.stave);
+            if (rp1 !== undefined) arcRenderedPartByKey.set(arcKey+'-1', rp1);
+            if (rp2 !== undefined) arcRenderedPartByKey.set(arcKey+'-2', rp2);
+          }
           drawArcPathP(x1+startDx,effY1P,edgeX1+breakEndDx,effY1P+breakEndDy,upward,arc.kind,stemDir,segmentObstacleY1P,cpDyOffset,arcKey+'-1',isSelected,crossMinNoteY,crossMaxNoteY,startDx,startDy,breakEndDx,breakEndDy,apexXRatio);
           drawArcPathP(edgeX2+breakStartDx,effY2P+breakStartDy,x2+endDx,effY2P,upward,arc.kind,0,segmentObstacleY2P,cpDy2,arcKey+'-2',isSelected,crossMinNoteY,crossMaxNoteY,breakStartDx,breakStartDy,endDx,endDy,arc.apexXRatio2??0);
         }catch{/* 保険 */}
@@ -7134,9 +7287,36 @@ export default function PianoSystemCanvas({
             const edgeX=dest.stave.getX();
             const baseKey=arcKeyP({partIndex,voiceIndex,fromMeasure,fromEvent,arcIndex});
             const selectedHere=selectedArc!==null&&selectedArc.voiceIndex===voiceIndex&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
+            {
+              const rp = partIndexOfStave(dest.stave);
+              if (rp !== undefined) arcRenderedPartByKey.set(baseKey+'-2', rp);
+            }
             drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0,arc.apexXRatio2??0);
           }catch{/* 壊れた旧arcでも他の譜面描画を止めない */}
       });
+
+    // UI案A2（#405 段3）: 弧（スラー・タイ）も非アクティブなレイヤーでは淡くする。
+    //
+    // 記号（強弱・運指など）は appendSymbolHitRegion の一点を包めば全種類に効くが、
+    // 弧はそこを通らず別経路で描かれるため、淡色化から漏れていた（#409 Codex round1 P2）。
+    // どの五線に描かれたかは描画時に台帳（arcRenderedPartByKey）へ控えてある。
+    //
+    // 既知の範囲外: 松葉（ヘアピン）・ペダル・歌詞。これらは要素に識別情報を持たないため、
+    // 淡色化するには描画側へ属性を足す改修が要る。A2 は「譜面側でレイヤーが分かるか」を
+    // 試すための開発時限定の案であり、主要素（音符・ビーム・記号・弧）が揃えば
+    // 判断はできると考えて範囲外とした。採用する場合は残りも揃える。
+    if (activeLayerHighlightPartIndex != null) {
+      // 判定は描画時に控えた台帳から引く。Y座標からの推測は五線間の加線音で逆転する
+      // （#409 Codex round4 P2）
+      svgRoot.querySelectorAll('path.vf-arc').forEach((el) => {
+        const drawnPart = arcRenderedPartByKey.get(el.getAttribute('data-arc-key') ?? '');
+        if (drawnPart === undefined || drawnPart === activeLayerHighlightPartIndex) return;
+        const target = el as SVGElement;
+        target.setAttribute('opacity', String(INACTIVE_LAYER_SYMBOL_OPACITY));
+        // 印刷では不透明度を戻す。記号と同じクラスを付けて既存の印刷CSSに乗せる
+        target.classList.add('vf-inactive-layer-symbol');
+      });
+    }
 
     // ── 松葉（ヘアピン）を一括描画（全パート・全小節レンダリング後に実行） ─────
     // 五線の下（強弱記号と同じ高さ帯）に、開始音符から終了音符まで開く/閉じる2本線を描く
@@ -7241,7 +7421,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,disabled]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
