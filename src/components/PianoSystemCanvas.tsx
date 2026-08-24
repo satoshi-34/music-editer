@@ -1195,8 +1195,6 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         // 各ビームの先頭音符が載っている五線から、実際の描画先パートを引く。
         const noteRenderedPartByNote = new Map<StaveNote, number>();
         vfNotes.forEach((n, idx) => { noteRenderedPartByNote.set(n, renderPartIndexes[idx] ?? pi); });
-        const renderedPartOfNotes = (notes: StaveNote[] | undefined): number =>
-          (notes && notes.length > 0 ? noteRenderedPartByNote.get(notes[0]) : undefined) ?? pi;
         /** そのグループの音符が載っている五線（重複なし） */
         const renderedPartsOfGroup = (notes: StaveNote[] | undefined): number[] =>
           [...new Set((notes ?? []).map((n) => noteRenderedPartByNote.get(n) ?? pi))];
