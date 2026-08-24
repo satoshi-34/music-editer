@@ -75,6 +75,7 @@ import {
 import { transposeMeasureRange } from '../utils/transposeUtils';
 import { getTupletClipboardGroup, setTupletClipboardGroup, subscribeTupletClipboard } from '../utils/tupletClipboard';
 import { insertEmptyMeasureBefore, deleteMeasureAt, shiftOverridesStartMeasure } from '../utils/measureInsertDeleteUtils';
+import { rebaseMeasureArcsForPaste } from '../utils/measurePasteUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { buildIncomingArcIndex } from '../utils/incomingArcUtils';
 import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
@@ -157,6 +158,7 @@ import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHis
 import {
   SCORE_ACTIVE_VOICE_CHANGE_EVENT,
   SCORE_EDIT_NOTICE_EVENT,
+  describeArcsDroppedOnPaste,
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
@@ -605,7 +607,12 @@ export default function ScorePage() {
   // 同種の並べ替え問題を持つ（既存挙動・別Issue候補）
   const [sliceClipboard, setSliceClipboard] = useState<Array<{ beats: number; parts: Array<{ partId: string; voices: NoteEvent[][] }> }> | null>(null);
   // コピーした小節データ。各パートごとのスナップショット
-  const [clipboard, setClipboard] = useState<{ partId: string; measures: MeasureData[] }[] | null>(null);
+  // コピー元の先頭小節（sourceStart）も持つ。タイ/スラーの終点・ヘアピンの終点は
+  // 絶対小節インデックスなので、貼り付け時にここを基準へ付け替える必要がある
+  // （持たずに貼ると弧がコピー元の小節を指したまま伸びて壊れる・2026-08-24 実発生）
+  const [clipboard, setClipboard] = useState<
+    { sourceStart: number; parts: { partId: string; measures: MeasureData[] }[] } | null
+  >(null);
   // 連符グループがコピーされたら、小節のコピーは捨てる（Issue #234 の「後勝ち」）。
   // グループのコピーは譜面キャンバス側で起きるため、モジュール側の
   // クリップボード（utils/tupletClipboard.ts）の変化を購読して受け取る。
@@ -2813,17 +2820,17 @@ export default function ScorePage() {
         const slice = (arr: MeasureData[] | undefined) =>
           (arr ?? []).slice(start, end + 1);
         if (scoreType === 'piano') {
-          setClipboard([
+          setClipboard({ sourceStart: start, parts: [
             { partId: 'right', measures: slice(rightHandData) },
             { partId: 'left',  measures: slice(leftHandData) },
-          ]);
+          ] });
         } else if (scoreType === 'quartet') {
-          setClipboard(quartetParts.map((part, i) => ({
+          setClipboard({ sourceStart: start, parts: quartetParts.map((part, i) => ({
             partId: `quartet-${i}`,
             measures: slice(part),
-          })));
+          })) });
         } else if (scoreType === 'ensemble') {
-          setClipboard([
+          setClipboard({ sourceStart: start, parts: [
             ...ensembleParts.map((part, i) => ({
               partId: `ensemble-${i}`,
               measures: slice(part),
@@ -2834,10 +2841,10 @@ export default function ScorePage() {
                 ? [{ partId: `ensemble-${i}::2`, measures: slice(ensembleSecondStaffParts[i]) }]
                 : []
             )),
-          ]);
+          ] });
         } else {
           // single
-          setClipboard([{ partId: 'single', measures: slice(rightHandData) }]);
+          setClipboard({ sourceStart: start, parts: [{ partId: 'single', measures: slice(rightHandData) }] });
         }
         e.preventDefault();
         return;
@@ -3077,34 +3084,57 @@ export default function ScorePage() {
         if (!clipboard || !selectedMeasures) return;
         pushHistory();
         const dest = selectedMeasures.start;
-        const paste = (arr: MeasureData[] | undefined, measures: MeasureData[]): MeasureData[] => {
+        // タイ/スラー・ヘアピンの終点は絶対小節インデックスなので、貼り付け先へ付け替える。
+        // 付け替えないと弧がコピー元の小節を指したまま伸びる（2026-08-24 実発生）。
+        //
+        // 付け替えと集計は **setter を呼ぶ前に**すべて済ませる。setXxx(prev => ...) の
+        // updater は遅延・再実行され得る（StrictMode では意図的に2回走る）ため、
+        // updater の中で数えると通知の件数が倍になったり出なかったりする
+        // （#401 Codex round1 P2）
+        //
+        // 数えるのは「実際に貼られるパート」だけ。クリップボードには貼り先に対応が無い
+        // partId が残りうるため（コピー後に楽譜種別を変えた場合など）、
+        // クリップボード全件を数えると出ない通知の件数まで足してしまう
+        const pastedPartIds =
+          scoreType === 'piano' ? ['right', 'left']
+          : scoreType === 'quartet' ? quartetParts.map((_, i) => `quartet-${i}`)
+          : scoreType === 'ensemble' ? [
+              ...ensembleParts.map((_, i) => `ensemble-${i}`),
+              ...instrumentation.parts.flatMap((p, i) => (p.staffCount === 2 ? [`ensemble-${i}::2`] : [])),
+            ]
+          : ['single'];
+        const rebasedByPartId = new Map<string, MeasureData[]>();
+        let droppedArcs = 0;
+        clipboard.parts.forEach((part) => {
+          if (!pastedPartIds.includes(part.partId)) return;
+          const result = rebaseMeasureArcsForPaste(part.measures, clipboard.sourceStart, dest);
+          droppedArcs += result.droppedCount;
+          rebasedByPartId.set(part.partId, result.measures);
+        });
+        const paste = (arr: MeasureData[] | undefined, partId: string): MeasureData[] => {
           const copy = [...(arr ?? [])];
-          measures.forEach((m, i) => { copy[dest + i] = m; });
+          (rebasedByPartId.get(partId) ?? []).forEach((m, i) => { copy[dest + i] = m; });
           return copy;
         };
         if (scoreType === 'piano') {
-          const right = clipboard.find(c => c.partId === 'right');
-          const left  = clipboard.find(c => c.partId === 'left');
-          if (right) setRightHandData(paste(rightHandData, right.measures));
-          if (left)  setLeftHandData(paste(leftHandData, left.measures));
+          if (rebasedByPartId.has('right')) setRightHandData(paste(rightHandData, 'right'));
+          if (rebasedByPartId.has('left'))  setLeftHandData(paste(leftHandData, 'left'));
         } else if (scoreType === 'quartet') {
-          setQuartetParts(prev => prev.map((part, i) => {
-            const src = clipboard.find(c => c.partId === `quartet-${i}`);
-            return src ? paste(part, src.measures) : part;
-          }));
+          setQuartetParts(prev => prev.map((part, i) => (
+            rebasedByPartId.has(`quartet-${i}`) ? paste(part, `quartet-${i}`) : part
+          )));
         } else if (scoreType === 'ensemble') {
-          setEnsembleParts(prev => prev.map((part, i) => {
-            const src = clipboard.find(c => c.partId === `ensemble-${i}`);
-            return src ? paste(part, src.measures) : part;
-          }));
-          setEnsembleSecondStaffParts(prev => prev.map((part, i) => {
-            const src = clipboard.find(c => c.partId === `ensemble-${i}::2`);
-            return src ? paste(part, src.measures) : part;
-          }));
-        } else {
-          const src = clipboard.find(c => c.partId === 'single');
-          if (src) setRightHandData(paste(rightHandData, src.measures));
+          setEnsembleParts(prev => prev.map((part, i) => (
+            rebasedByPartId.has(`ensemble-${i}`) ? paste(part, `ensemble-${i}`) : part
+          )));
+          setEnsembleSecondStaffParts(prev => prev.map((part, i) => (
+            rebasedByPartId.has(`ensemble-${i}::2`) ? paste(part, `ensemble-${i}::2`) : part
+          )));
+        } else if (rebasedByPartId.has('single')) {
+          setRightHandData(paste(rightHandData, 'single'));
         }
+        // 落とした弧は黙って消さずに本数を伝える（#318「行き止まりは喋る」と同じ理由）
+        if (droppedArcs > 0) notifyScoreEdit(describeArcsDroppedOnPaste(droppedArcs));
         // 貼り付け先の先頭を「最後に編集した小節」として記録する（Issue #67）。
         setLastEditedMeasureIndex(dest);
         e.preventDefault();
