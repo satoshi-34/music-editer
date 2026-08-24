@@ -100,6 +100,7 @@ import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, 
 import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../utils/crossStaffBeamUtils';
 import {
   CHORD_HIT_PAD, EXTRA_TOP, EXTRA_BOTTOM, INACTIVE_VOICE_COLOR,
+  ACTIVE_LAYER_BAND_COLOR, ACTIVE_LAYER_BAND_PAD, INACTIVE_LAYER_SYMBOL_OPACITY,
   keySelectXPad, snapLine, findKeyIndexAtLine,
   getRawPerScreenPxSafe, clientToGroup, resolveNoteHitGeometry, resolveHitAttribution,
   type HitAttributionPolicy, type NoteClickOutcome,
@@ -850,6 +851,18 @@ type Props = {
    * 省略時は従来の帯域推測のみ（非ピアノ譜種）。
    */
   activeLayerPartIndex?: number;
+  /**
+   * UI案A2（Issue #405 段3・テスト会用）のとき true。譜面側で「いまどのレイヤーか」を示す:
+   * アクティブなレイヤーの五線の背後に色帯を敷き、非アクティブなパート（もう一方の手）の
+   * 音符・記号を淡色にする。
+   *
+   * UI案そのもの（`?ui=a2`）ではなく真偽値で受け取るのは、この描画コンポーネントに
+   * 「テスト会のUI案」という上位の都合を持ち込まないため。省略時（false）は従来どおりの
+   * 描画で、既定のUI（current）では 1px も変わらない。
+   * `activeLayerPartIndex` が無い譜種（非ピアノ譜）では、そもそも「手のレイヤー」が
+   * 無いので true でも何も起きない。
+   */
+  highlightActiveLayer?: boolean;
   /** ScorePage の線形Plannerが計測済みの、現在システム内の小節幅。 */
   plannedMeasureWidths?: number[];
   incomingArcIndex?: Map<number, IncomingArcEntry[]>;
@@ -948,6 +961,12 @@ type BuildPartVoicesInput = {
   timeSignatureDenominator: number;
   selected: Sel;
   activeVoiceIndex: number;
+  /**
+   * UI案A2（#405 段3）で「アクティブなレイヤーのパート」。指定されたときだけ、
+   * これと違うパート（もう一方の手）の音符を淡色で描く。
+   * null / undefined なら従来どおり（声部だけの淡色化）で、見た目は変わらない。
+   */
+  highlightedLayerPartIndex?: number | null;
   /** 前の小節の臨時記号最終状態（courtesy accidental 判定用） */
   prevMeasureState: MeasureAccidentalState | undefined;
 };
@@ -962,8 +981,13 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
     pi, systemColumnIndex, absI, staveSets, parts, partsScoreForRender,
     normalizedKeySignature, effectiveKeySigForMeasure, beatsPerMeasure,
     timeSignatureNumerator, timeSignatureDenominator, selected, activeVoiceIndex,
-    prevMeasureState,
+    highlightedLayerPartIndex, prevMeasureState,
   } = input;
+  // UI案A2（#405 段3）: このパートが「編集中でないレイヤー」かどうか。
+  // レイヤー = (手, 声部) のうち **手** の側の判定で、声部側の判定（isInactiveVoice）とは独立。
+  // A2 以外（highlightedLayerPartIndex が無い）ときは常に false なので、
+  // 従来の描画から 1px も変わらない。
+  const isInactiveLayerPart = highlightedLayerPartIndex != null && pi !== highlightedLayerPartIndex;
   const part = parts[pi];
     const stave=staveSets[pi][systemColumnIndex];
     // 描画に使うのは partsScoreForRender（矢印キーで動かしている最中の下書きを反映したコピー）。
@@ -1081,7 +1105,11 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
           // 声部1しか無い小節や、声部トグル自体が無い画面（単旋律譜など）では
           // isMultiVoiceMeasure が false のままなので、従来通り常に黒で描画される
           // （リグレッション防止）。
-          const isInactiveVoice = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+          // UI案A2 のときは、もう一方の手のパート全体も同じ淡色にする（#405 段3）。
+          // 「声部の淡色化」と同じ見せ方に乗せることで、A2 の「非アクティブなレイヤーを薄く」を
+          // 新しい表現を増やさずに実現している（既存の淡色と2種類の薄さが混ざらない）。
+          const isInactiveVoice = isInactiveLayerPart
+            || (isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex);
           // computeVoiceDisplayPadding が補完した「拍が足りない残りを埋めるだけの休符」は
           // データに保存されていない表示専用のものなので、薄いグレーにして
           // 「ここは実際にはまだ空いている」ことが一目で分かるようにする。
@@ -1175,7 +1203,8 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         // 「この声部が非アクティブかどうか」を描画パス（Pass 3）へ持ち越す。
         // 音符ごとの判定（上の isInactiveVoice）と同じ条件だが、
         // ビーム・連符は声部単位で1つなので声部側に持たせる。
-        const isInactiveVoiceEntry = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
+        const isInactiveVoiceEntry = isInactiveLayerPart
+          || (isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex);
 
         return {
           voiceIndex,
@@ -1520,8 +1549,34 @@ function drawCollectedSymbolEntries(args: {
   collectors: RenderCollectors;
   customSymbolDefs: CustomSymbolDef[];
   appendSymbolHitRegion: SymbolHitRegionAppender;
+  /**
+   * UI案A2（#405 段3）でアクティブなレイヤーのパート。指定されたときだけ、
+   * これと違うパートの記号を淡色にする。null / undefined なら従来どおり。
+   */
+  highlightedLayerPartIndex?: number | null;
 }): void {
-  const { svgRoot, customSymbolDefs, appendSymbolHitRegion } = args;
+  const { svgRoot, customSymbolDefs, highlightedLayerPartIndex } = args;
+  // UI案A2 の記号の淡色化（#405 段3）。
+  // 記号の描画はどれも「要素を作る → appendSymbolHitRegion(作った要素, partIndex, …)」の順で
+  // 通るので、その1か所を包むだけで全種類（強弱・アーティキュレーション・運指・
+  // 発想標語・コードネーム・オクターブ記号・カスタム記号）へ一度に効かせられる。
+  // 記号は種類ごとに色が違う（黒い文字・青い線など）ため、音符のように色を差し替えず
+  // 不透明度を下げる方式にしている。
+  const appendSymbolHitRegion: SymbolHitRegionAppender = ((
+    elements: SVGGraphicsElement[],
+    partIndex: number,
+    ...rest: unknown[]
+  ) => {
+    if (highlightedLayerPartIndex != null && partIndex !== highlightedLayerPartIndex) {
+      elements.forEach((el) => {
+        el.setAttribute('opacity', String(INACTIVE_LAYER_SYMBOL_OPACITY));
+        // 印刷・印刷プレビューで濃さを戻すための目印。既に付いているクラス
+        // （カスタム記号の <g> など）を消さないよう classList.add で足す
+        el.classList.add('vf-inactive-layer-symbol');
+      });
+    }
+    return (args.appendSymbolHitRegion as (...a: unknown[]) => void)(elements, partIndex, ...rest);
+  }) as SymbolHitRegionAppender;
   const {
     dynamicTextEntries, noteObstacles, staveTopYByPart, customSymbolEntries, bpmMarkingEntries, rehearsalMarkEntries,
     measureNumberEntries, fingeringEntries, articulationEntries, tempoMarkingEntries,
@@ -2041,12 +2096,19 @@ export default function PianoSystemCanvas({
   customSymbolDefs = [],
   activeVoiceIndex = 0,
   activeLayerPartIndex,
+  highlightActiveLayer = false,
   measureWidthEvenness = MEASURE_WIDTH_EVENNESS,
   pageMarginSideMm,
   symbolsClickable = false,
   isPrintPreview = false,
   partSpacingOffsetPx = 0,
 }: Props) {
+  // UI案A2（#405 段3）で色帯・淡色化の基準になるパート（＝編集中のレイヤーの手）。
+  // 「A2 のときだけ」「手のレイヤーがある譜種のときだけ」効かせたいので、
+  // 2つの条件をここで1回だけ畳んでおく（描画のあちこちで同じ条件を書き写さないため）。
+  const activeLayerHighlightPartIndex = highlightActiveLayer && activeLayerPartIndex != null
+    ? activeLayerPartIndex
+    : null;
   const normalizedKeySignature = normalizeKeySignature(keySignature);
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
   const timeSignatureNumerator = normalizedTimeSignature[0];
@@ -4204,6 +4266,24 @@ export default function PianoSystemCanvas({
         stave.format();
         placeKeySignatureAfterTimeSignature(stave);
         stave.draw();
+        // UI案A2（#405 段3）: 編集中のレイヤーの五線の背後に色帯を敷く。
+        // svgRoot の先頭へ入れるのは、あとから append すると五線・音符の「上」に載って
+        // しまうため（SVG は後から描いた要素が手前になる）。塗りだけの薄い帯なので、
+        // 背後に回せば線の見た目を変えずに「この段を触っている」ことだけを示せる。
+        if (activeLayerHighlightPartIndex === pi) {
+          const band = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          band.setAttribute('class', 'vf-active-layer-band');
+          const bandTop = stave.getYForLine(0) - ACTIVE_LAYER_BAND_PAD;
+          const bandBottom = stave.getYForLine(4) + ACTIVE_LAYER_BAND_PAD;
+          band.setAttribute('x', String(x / s));
+          band.setAttribute('y', String(bandTop));
+          band.setAttribute('width', String(w / s));
+          band.setAttribute('height', String(bandBottom - bandTop));
+          band.setAttribute('fill', ACTIVE_LAYER_BAND_COLOR);
+          // 帯は表示専用。譜面のクリック（音符入力・小節選択）を横取りしないようにする
+          band.setAttribute('pointer-events', 'none');
+          svgRoot.insertBefore(band, svgRoot.firstChild);
+        }
         staveSets[pi].push(stave);
         // リハーサルマークは最上段（pi===0）の上にだけ表示する（repeatStart/ending と同じ「最上段基準」の方針）
         if (pi === 0 && sharedMeasure?.rehearsalMark) {
@@ -4787,6 +4867,7 @@ export default function PianoSystemCanvas({
           effectiveKeySigForMeasure: effectiveKeySigPerMeasure[i],
           beatsPerMeasure, timeSignatureNumerator, timeSignatureDenominator,
           selected, activeVoiceIndex,
+          highlightedLayerPartIndex: activeLayerHighlightPartIndex,
           prevMeasureState: prevMeasureStatePerPart[pi],
         });
         prevMeasureStatePerPart[pi] = built.nextPrevMeasureState;
@@ -6953,7 +7034,10 @@ export default function PianoSystemCanvas({
 
     // 記号エントリの一括描画（実体は drawCollectedSymbolEntries・#244 段4c-2）。
     // クリック判定の配線（appendSymbolHitRegion）は閉包側の責務のまま引数で渡す。
-    drawCollectedSymbolEntries({ svgRoot, collectors, customSymbolDefs, appendSymbolHitRegion });
+    drawCollectedSymbolEntries({
+      svgRoot, collectors, customSymbolDefs, appendSymbolHitRegion,
+      highlightedLayerPartIndex: activeLayerHighlightPartIndex,
+    });
 
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
     pendingArcsP.forEach(({partIndex,voiceIndex,arc,arcIndex,startNote,startStave,startClef,startMeasureIdx,startEventIdx,startIsMultiVoice})=>{
@@ -7241,7 +7325,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,disabled]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
