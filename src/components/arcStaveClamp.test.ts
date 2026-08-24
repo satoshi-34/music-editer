@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   clampArcCpDyOffsetToStaveLimit,
   computeArcApexPoint,
+  computeArcMaxY,
   ARC_STAVE_CLAMP_MAX_SHRINK_PX,
 } from './arcUtils';
 
@@ -69,6 +70,41 @@ describe('clampArcCpDyOffsetToStaveLimit（Issue #390）', () => {
       ARC.x1, ARC.y1, ARC.x2, ARC.y2, true, ARC.kind, 1, undefined, 0, 0, 0
     );
     expect(upwardClamped).toBe(0);
+  });
+
+  // 実機で再発した形（月光 m1）: 始点と終点の高さが違うスラー。
+  // 最下点が t=0.5 からずれるため、中央だけ見てクランプすると境界を越えたまま残る
+  // （#403 Codex round1 P2）
+  it('始点と終点の高さが違う弧でも、実際の最下点が境界に収まる', () => {
+    const asym = { x1: 100, y1: 220, x2: 320, y2: 170 };
+    const maxYWith = (c: number): number => computeArcMaxY(
+      asym.x1, asym.y1, asym.x2, asym.y2, false, 'slur', -1, undefined, c, 0);
+    const natural = maxYWith(0);
+    const maxBottomY = natural - 4;
+
+    const clamped = clampArcCpDyOffsetToStaveLimit(
+      asym.x1, asym.y1, asym.x2, asym.y2, false, 'slur', -1, undefined, 0, 0, maxBottomY);
+
+    expect(clamped).toBeLessThan(0);
+    expect(maxYWith(clamped)).toBeLessThanOrEqual(maxBottomY + 0.01);
+    // 中央(t=0.5)の値より実際の最下点の方が下にある形であることも確かめる
+    // （この差が無いとテストとして意味がない）
+    const apexAtHalf = computeArcApexPoint(
+      asym.x1, asym.y1, asym.x2, asym.y2, false, 'slur', -1, undefined, 0, 0).y;
+    expect(natural).toBeGreaterThan(apexAtHalf);
+  });
+
+  // タイ（二次ベジェ）でも同じ規則が効くこと
+  it('タイでも境界を超えるなら膨らみを減らす', () => {
+    const maxYWith = (c: number): number => computeArcMaxY(
+      100, 200, 300, 200, false, 'tie', -1, undefined, c, 0);
+    const maxBottomY = maxYWith(0) - 3;
+
+    const clamped = clampArcCpDyOffsetToStaveLimit(
+      100, 200, 300, 200, false, 'tie', -1, undefined, 0, 0, maxBottomY);
+
+    expect(clamped).toBeLessThan(0);
+    expect(maxYWith(clamped)).toBeLessThanOrEqual(maxBottomY + 0.01);
   });
 
   // 板挟み（どれだけ縮めても収まらない）ときは、縮めた形のまま境界に留める。

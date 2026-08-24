@@ -316,6 +316,65 @@ export function computeArcHitGeometry(
  */
 export const ARC_STAVE_CLAMP_MAX_SHRINK_PX = 200;
 
+/**
+ * 弧の「実際の最下点（最大Y）」を t∈[0,1] 全体から求める。
+ *
+ * 中央（t=0.5）の点は始点と終点の高さが同じときしか極値にならない。
+ * 音が上がる/下がる形のスラーでは極値が中央からずれるため、t=0.5 だけを見て
+ * クランプすると弧が境界を越えたまま残る（#403 Codex round1 P2・実機で再発）。
+ *
+ * 導関数の根（三次ベジェなら2次方程式、二次ベジェなら1次方程式）を解き、
+ * 区間内の根と両端の中で最大のYを返す。
+ */
+export function computeArcMaxY(
+  x1: number, y1: number, x2: number, y2: number,
+  upward: boolean, kind: 'tie' | 'slur', stemDir: number,
+  obstacleY: number | undefined,
+  cpDyOffset: number,
+  apexXRatio = 0
+): number {
+  const { p0, c1, c2, p3 } = computeArcControlPoints(x1, y1, x2, y2, upward, kind, stemDir, obstacleY, cpDyOffset, apexXRatio);
+  const ts: number[] = [0, 1];
+  if (!c2) {
+    // 二次: B'y(t) = 2[(1-t)(c1-p0) + t(p3-c1)] = 0
+    const d1 = c1.y - p0.y;
+    const d2 = p3.y - c1.y;
+    const denom = d1 - d2;
+    if (denom !== 0) {
+      const t = d1 / denom;
+      if (t > 0 && t < 1) ts.push(t);
+    }
+  } else {
+    // 三次: B'y(t)/3 = (d1-2d2+d3)t² + 2(d2-d1)t + d1 = 0
+    const d1 = c1.y - p0.y;
+    const d2 = c2.y - c1.y;
+    const d3 = p3.y - c2.y;
+    const a2 = d1 - 2 * d2 + d3;
+    const b2 = 2 * (d2 - d1);
+    const c2c = d1;
+    if (Math.abs(a2) < 1e-12) {
+      if (b2 !== 0) {
+        const t = -c2c / b2;
+        if (t > 0 && t < 1) ts.push(t);
+      }
+    } else {
+      const disc = b2 * b2 - 4 * a2 * c2c;
+      if (disc >= 0) {
+        const sq = Math.sqrt(disc);
+        [(-b2 + sq) / (2 * a2), (-b2 - sq) / (2 * a2)].forEach((t) => {
+          if (t > 0 && t < 1) ts.push(t);
+        });
+      }
+    }
+  }
+  const yAt = (t: number): number => {
+    const mt = 1 - t;
+    if (!c2) return mt * mt * p0.y + 2 * mt * t * c1.y + t * t * p3.y;
+    return mt * mt * mt * p0.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p3.y;
+  };
+  return Math.max(...ts.map(yAt));
+}
+
 export function clampArcCpDyOffsetToStaveLimit(
   x1: number, y1: number, x2: number, y2: number,
   upward: boolean, kind: 'tie' | 'slur', stemDir: number,
@@ -328,8 +387,9 @@ export function clampArcCpDyOffsetToStaveLimit(
   if (maxBottomY === undefined || !Number.isFinite(maxBottomY)) return cpDyOffset;
   if (upward || cpDyOffset !== 0) return cpDyOffset;
 
+  // 中央(t=0.5)ではなく、曲線全体の実際の最下点で判定する（#403 round1 P2）
   const apexYFor = (c: number): number =>
-    computeArcApexPoint(x1, y1, x2, y2, upward, kind, stemDir, obstacleY, c, apexXRatio).y;
+    computeArcMaxY(x1, y1, x2, y2, upward, kind, stemDir, obstacleY, c, apexXRatio);
 
   if (apexYFor(0) <= maxBottomY) return 0;
 

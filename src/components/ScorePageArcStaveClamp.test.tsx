@@ -73,25 +73,30 @@ function seedDeepSlurWork() {
 /**
  * 弧のパスの「実際に描かれる曲線」の最下点を求める。
  *
- * d 属性の数値をそのまま拾うと制御点（曲線上に無い点）まで数えてしまい、
- * 実際より下に見積もる。ベジェの t=0.5 の点を閉形式で出す
- * （三次: (p0 + 3c1 + 3c2 + p3) / 8）。
+ * 注意が2つある:
+ * - d 属性の数値をそのまま拾うと**制御点**（曲線上に無い点）まで数えてしまう
+ * - t=0.5 の点は、始点と終点の高さが違う弧では極値にならない。
+ *   実装と同じ誤りをテストが踏むと不具合を検出できない（#403 round1 P2）
+ *
+ * ここでは曲線を細かく刻んで最大Yを取る（実装の閉形式とは別のやり方にして、
+ * 同じ間違いを両側でしないようにする）。
  */
 function lowestCurveYInPath(d: string): number {
   const nums = d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
-  // "M x y C c1x c1y c2x c2y x y C ..." の並び。8個ずつ見て各セグメントの頂点を出す
-  if (nums.length < 10) return Number.NaN;
-  const p0 = { x: nums[0], y: nums[1] };
-  const apexOf = (o: number, start: { x: number; y: number }): number => {
-    const c1y = nums[o + 1], c2y = nums[o + 3], p3y = nums[o + 5];
-    return (start.y + 3 * c1y + 3 * c2y + p3y) / 8;
+  if (nums.length < 8) return Number.NaN;
+  const yOfCubic = (p0y: number, c1y: number, c2y: number, p3y: number, t: number): number => {
+    const mt = 1 - t;
+    return mt * mt * mt * p0y + 3 * mt * mt * t * c1y + 3 * mt * t * t * c2y + t * t * t * p3y;
   };
-  // 外側の曲線（1本目のC）と内側の曲線（2本目のC）の両方を見る
-  const first = apexOf(2, p0);
-  const second = nums.length >= 16
-    ? apexOf(8, { x: nums[6], y: nums[7] })
-    : first;
-  return Math.max(first, second);
+  const sample = (p0y: number, c1y: number, c2y: number, p3y: number): number => {
+    let max = -Infinity;
+    for (let i = 0; i <= 200; i++) max = Math.max(max, yOfCubic(p0y, c1y, c2y, p3y, i / 200));
+    return max;
+  };
+  // "M x y C c1x c1y c2x c2y x y C c1x c1y c2x c2y x y Z"
+  const outer = sample(nums[1], nums[3], nums[5], nums[7]);
+  const inner = nums.length >= 16 ? sample(nums[7], nums[9], nums[11], nums[13]) : outer;
+  return Math.max(outer, inner);
 }
 
 describe('ScorePage: 弧が次の五線へ食い込まない（Issue #390）', () => {
