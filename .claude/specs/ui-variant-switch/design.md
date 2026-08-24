@@ -223,3 +223,38 @@ worktree を共有 dev サーバー経由で開いて確認した。
 - 行が1つ増えたぶんは `--toolbar-h`（ResizeObserver の実測）に反映され、譜面が帯の下に潜らない
 - `?ui=current` → 帯は DOM ごと存在しない（既存の画面は変わらない）
 - コンソールエラーなし
+
+## レビューで足した修正（#408 round1・round2）
+
+### ツールバー高さの上限（実害あり）
+
+文脈バーはツールバーを1行ぶん高くする。ScorePage の高さ計測には「暴走した実測値を弾く」
+上限280pxがあり、**スマホ幅でタブ行とパレットが折り返すと実高がこれを超えて切り捨てられ、
+固定ヘッダーの下へ譜面が潜る**。
+
+- 丸めの計算を純粋関数 `src/utils/toolbarHeight.ts` の `resolveToolbarHeight` へ切り出した
+- A1 のときだけ `extraAllowancePx: UI_CONTEXT_BAR_HEIGHT_ALLOWANCE_PX`（44px）を渡して上限を上げる
+- 表示判定は `showUiContextBar` に一本化し、高さ計算と描画で同じ条件を使う（2箇所に持つと片方だけ変わる）
+- 実測が数値にならないとき `--toolbar-h: NaNpx` になる既存の穴も塞いだ
+
+### 声部3以降のラベル
+
+`pianoLayerLabel` のフォールバックが「パート1・声部3」になり、手の呼び名が消えていた。
+ピアノ譜では手が分かっているので「右手・声部3」を保つ。`editorContextLabels.test.ts` を新設
+（このファイルはテストが0件だった）。
+
+### 二重ガードの意味とテスト
+
+描画側は `import.meta.env.DEV && uiVariant === 'a1'`。フック側（段1）が既に本番で `current` を
+返すため**画面の挙動としては冗長**だが、二重にする目的は「**本番バンドルからコンポーネント自体を
+落とす**」ことにもある。これは観測可能な差なので、フックを `a1` に固定した隔離テスト
+（`ScorePageUiContextBarProdGuard.test.tsx`）で描画側ガードだけを検証する。
+
+### 追加したテスト
+
+| ファイル | 内容 |
+| --- | --- |
+| `src/utils/toolbarHeight.test.ts` | 丸めの規則7件（上限の加算・NaN・折り畳み時の下限ほか） |
+| `src/utils/editorContextLabels.test.ts` | レイヤー名。声部3以降で手の呼び名を保つ |
+| `ScorePageUiContextBar.test.tsx` | 実高300pxがA1では切り捨てられず、対照群では280pxで止まる |
+| `ScorePageUiContextBarProdGuard.test.tsx` | フックを a1 に固定し、DEV=false で描かないこと |
