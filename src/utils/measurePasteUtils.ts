@@ -92,7 +92,10 @@ export function rebaseMeasureArcsForPaste(
   srcStart: number,
   destStart: number
 ): MeasurePasteRebaseResult {
-  if (srcStart === destStart) return { measures, droppedCount: 0 };
+  // 同じ位置への貼り付けでも素通ししない。コピー後に終点の音符を消す/動かすと、
+  // クリップボード内の弧はもう届かない先を指しており、貼り戻すと復活してしまう。
+  // 「範囲外を指す弧は落とす」の規則は貼り付け先が同じでも同じように適用する
+  // （#401 Codex round1 P2）
   const srcEndInclusive = srcStart + measures.length - 1;
   const counter = { dropped: 0 };
   // events は voices[0] の鏡なので、両方で数えると本数が倍になる。

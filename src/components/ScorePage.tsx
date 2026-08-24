@@ -3086,40 +3086,52 @@ export default function ScorePage() {
         const dest = selectedMeasures.start;
         // タイ/スラー・ヘアピンの終点は絶対小節インデックスなので、貼り付け先へ付け替える。
         // 付け替えないと弧がコピー元の小節を指したまま伸びる（2026-08-24 実発生）。
-        // コピー範囲の外を指していた弧はここで落ち、本数を後でまとめて通知する
+        //
+        // 付け替えと集計は **setter を呼ぶ前に**すべて済ませる。setXxx(prev => ...) の
+        // updater は遅延・再実行され得る（StrictMode では意図的に2回走る）ため、
+        // updater の中で数えると通知の件数が倍になったり出なかったりする
+        // （#401 Codex round1 P2）
+        //
+        // 数えるのは「実際に貼られるパート」だけ。クリップボードには貼り先に対応が無い
+        // partId が残りうるため（コピー後に楽譜種別を変えた場合など）、
+        // クリップボード全件を数えると出ない通知の件数まで足してしまう
+        const pastedPartIds =
+          scoreType === 'piano' ? ['right', 'left']
+          : scoreType === 'quartet' ? quartetParts.map((_, i) => `quartet-${i}`)
+          : scoreType === 'ensemble' ? [
+              ...ensembleParts.map((_, i) => `ensemble-${i}`),
+              ...instrumentation.parts.flatMap((p, i) => (p.staffCount === 2 ? [`ensemble-${i}::2`] : [])),
+            ]
+          : ['single'];
+        const rebasedByPartId = new Map<string, MeasureData[]>();
         let droppedArcs = 0;
-        const rebase = (measures: MeasureData[]): MeasureData[] => {
-          const result = rebaseMeasureArcsForPaste(measures, clipboard.sourceStart, dest);
+        clipboard.parts.forEach((part) => {
+          if (!pastedPartIds.includes(part.partId)) return;
+          const result = rebaseMeasureArcsForPaste(part.measures, clipboard.sourceStart, dest);
           droppedArcs += result.droppedCount;
-          return result.measures;
-        };
-        const paste = (arr: MeasureData[] | undefined, measures: MeasureData[]): MeasureData[] => {
+          rebasedByPartId.set(part.partId, result.measures);
+        });
+        const paste = (arr: MeasureData[] | undefined, partId: string): MeasureData[] => {
           const copy = [...(arr ?? [])];
-          rebase(measures).forEach((m, i) => { copy[dest + i] = m; });
+          (rebasedByPartId.get(partId) ?? []).forEach((m, i) => { copy[dest + i] = m; });
           return copy;
         };
         if (scoreType === 'piano') {
-          const right = clipboard.parts.find(c => c.partId === 'right');
-          const left  = clipboard.parts.find(c => c.partId === 'left');
-          if (right) setRightHandData(paste(rightHandData, right.measures));
-          if (left)  setLeftHandData(paste(leftHandData, left.measures));
+          if (rebasedByPartId.has('right')) setRightHandData(paste(rightHandData, 'right'));
+          if (rebasedByPartId.has('left'))  setLeftHandData(paste(leftHandData, 'left'));
         } else if (scoreType === 'quartet') {
-          setQuartetParts(prev => prev.map((part, i) => {
-            const src = clipboard.parts.find(c => c.partId === `quartet-${i}`);
-            return src ? paste(part, src.measures) : part;
-          }));
+          setQuartetParts(prev => prev.map((part, i) => (
+            rebasedByPartId.has(`quartet-${i}`) ? paste(part, `quartet-${i}`) : part
+          )));
         } else if (scoreType === 'ensemble') {
-          setEnsembleParts(prev => prev.map((part, i) => {
-            const src = clipboard.parts.find(c => c.partId === `ensemble-${i}`);
-            return src ? paste(part, src.measures) : part;
-          }));
-          setEnsembleSecondStaffParts(prev => prev.map((part, i) => {
-            const src = clipboard.parts.find(c => c.partId === `ensemble-${i}::2`);
-            return src ? paste(part, src.measures) : part;
-          }));
-        } else {
-          const src = clipboard.parts.find(c => c.partId === 'single');
-          if (src) setRightHandData(paste(rightHandData, src.measures));
+          setEnsembleParts(prev => prev.map((part, i) => (
+            rebasedByPartId.has(`ensemble-${i}`) ? paste(part, `ensemble-${i}`) : part
+          )));
+          setEnsembleSecondStaffParts(prev => prev.map((part, i) => (
+            rebasedByPartId.has(`ensemble-${i}::2`) ? paste(part, `ensemble-${i}::2`) : part
+          )));
+        } else if (rebasedByPartId.has('single')) {
+          setRightHandData(paste(rightHandData, 'single'));
         }
         // 落とした弧は黙って消さずに本数を伝える（#318「行き止まりは喋る」と同じ理由）
         if (droppedArcs > 0) notifyScoreEdit(describeArcsDroppedOnPaste(droppedArcs));

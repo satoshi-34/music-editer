@@ -76,21 +76,39 @@ describe('rebaseMeasureArcsForPaste', () => {
     const m: MeasureData = {
       events: [{
         dur: '4', isRest: false, keys: ['c/4'],
-        hairpins: [{ type: 'crescendo', endMeasure: 0, endEventIndex: 2 }],
+        hairpins: [{ type: 'cresc', endMeasure: 0, endEvent: 2 }],
       }],
     };
     const { measures, droppedCount } = rebaseMeasureArcsForPaste([m], 0, 4);
 
     expect(droppedCount).toBe(0);
     expect(measures[0].events[0].hairpins![0].endMeasure).toBe(4);
+    // 小節内の位置（endEvent）は変えない
+    expect(measures[0].events[0].hairpins![0].endEvent).toBe(2);
+    expect(measures[0].events[0].hairpins![0].type).toBe('cresc');
   });
 
-  it('同じ位置への貼り付けでは何も変えない（元の参照をそのまま返す）', () => {
-    const input = [measureWithInnerSlur(2)];
-    const { measures, droppedCount } = rebaseMeasureArcsForPaste(input, 2, 2);
+  it('同じ位置への貼り付けでも、範囲内の弧はそのまま残る', () => {
+    const { measures, droppedCount } = rebaseMeasureArcsForPaste([measureWithInnerSlur(2)], 2, 2);
 
     expect(droppedCount).toBe(0);
-    expect(measures).toBe(input);
+    expect(measures[0].events[0].arcs![0].toMeasureIndex).toBe(2);
+  });
+
+  // コピーしてから終点の音符を消し、元の位置へ貼り戻すと、クリップボード内の弧は
+  // もう届かない先を指している。同位置を素通しすると、その弧が復活してしまう
+  // （#401 Codex round1 P2）
+  it('同じ位置への貼り付けでも、範囲外を指す弧は落とす', () => {
+    const m: MeasureData = {
+      events: [{
+        dur: '4', isRest: false, keys: ['c/4'],
+        arcs: [{ fromKey: 'c/4', toKey: 'd/4', toMeasureIndex: 7, toEventIndex: 0, kind: 'slur' }],
+      }],
+    };
+    const { measures, droppedCount } = rebaseMeasureArcsForPaste([m], 2, 2);
+
+    expect(droppedCount).toBe(1);
+    expect(measures[0].events[0].arcs).toBeUndefined();
   });
 
   it('声部2の弧も付け替わり、落とした本数は events と voices[0] で二重に数えない', () => {

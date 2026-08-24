@@ -18,6 +18,7 @@ import {
   setLastOpenedWorkId,
   loadWorkAutosaveData,
 } from '../utils/storage';
+import { SCORE_EDIT_NOTICE_EVENT } from '../utils/scoreEditorNotices';
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -87,16 +88,70 @@ function seedWorkWithInnerSlur() {
   workId = created.data.id;
 }
 
+/** Violin I の1小節目に「2小節目へ伸びる（＝コピー範囲外を指す）スラー」を持つ四重奏 */
+function seedQuartetWithOutgoingSlur() {
+  const withSlur = [{
+    dur: '1' as const, isRest: false, keys: ['c/5'],
+    arcs: [{ fromKey: 'c/5', toKey: 'd/5', toMeasureIndex: 1, toEventIndex: 0, kind: 'slur' as const }],
+  }];
+  const plain = [{ dur: '1' as const, isRest: false, keys: ['c/4'] }];
+  const measuresFor = (first: typeof plain) => ([
+    { events: first, voices: [{ id: 'voice-1', events: first }] },
+    { events: plain, voices: [{ id: 'voice-1', events: plain }] },
+  ]);
+  const clefs = ['treble', 'treble', 'alto', 'bass'] as const;
+  const data = createSavedScoreData(
+    { title: '四重奏コピペ通知テスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+    (['violin-1', 'violin-2', 'viola', 'cello'] as const).map((partId, i) => ({
+      partId,
+      clef: clefs[i],
+      measures: measuresFor(i === 0 ? withSlur : plain),
+    })),
+    1,
+    2,
+    'quartet'
+  );
+  const created = createWork('四重奏コピペ通知テスト');
+  if (!created.success || !created.data) throw new Error('createWork failed');
+  const saved = saveWorkAutosaveData(created.data.id, data);
+  if (!saved.success) throw new Error('saveWorkAutosaveData failed');
+  setLastOpenedWorkId(created.data.id);
+  workId = created.data.id;
+}
+
+/**
+ * 小節の当たり判定は x 座標の昇順が小節順（同じ x のものは別の段・重ね）。
+ * data 属性が無いので distinct な x の小さい順で引く
+ */
+function measureHitByX(index: number): SVGRectElement | undefined {
+  const hits = Array.from(document.querySelectorAll('rect.vf-hit')) as SVGRectElement[];
+  const byX = new Map<number, SVGRectElement>();
+  hits.forEach((h) => {
+    const x = Math.round(parseFloat(h.getAttribute('x') ?? '0'));
+    if (!byX.has(x)) byX.set(x, h);
+  });
+  return [...byX.entries()].sort((a, b) => a[0] - b[0])[index]?.[1];
+}
+
 describe('ScorePage: 小節コピペでのスラー終点の付け替え（実機報告 2026-08-24）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
+  let notices: string[] = [];
+  let noticeListener: (e: Event) => void;
 
   beforeEach(() => {
     localStorageMock.clear();
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get: () => 900, configurable: true });
+    notices = [];
+    noticeListener = (e: Event) => {
+      const detail = (e as CustomEvent<{ message?: string }>).detail;
+      if (detail?.message) notices.push(detail.message);
+    };
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, noticeListener);
   });
 
   afterEach(() => {
+    window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, noticeListener);
     cleanup();
     if (clientWidthSpy) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidthSpy);
     else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth');
@@ -117,18 +172,7 @@ describe('ScorePage: 小節コピペでのスラー終点の付け替え（実�
 
     // 小節の当たり判定（rect.vf-hit）には小節番号の data 属性が無いため、描画順で引く。
     // 単旋律2小節なので [0]=1小節目・[1]=2小節目
-    // 小節の当たり判定は x 座標の昇順が小節順（同じ x のものはスライス表示用の重ね）。
-    // data 属性が無いので、distinct な x の小さい順で引く
-    const measureHit = (index: number) => {
-      const hits = Array.from(document.querySelectorAll('rect.vf-hit')) as SVGRectElement[];
-      const byX = new Map<number, SVGRectElement>();
-      hits.forEach((h) => {
-        const x = Math.round(parseFloat(h.getAttribute('x') ?? '0'));
-        if (!byX.has(x)) byX.set(x, h);
-      });
-      return [...byX.entries()].sort((a2, b2) => a2[0] - b2[0])[index]?.[1];
-    };
-    const first = measureHit(0) as SVGRectElement;
+    const first = measureHitByX(0) as SVGRectElement;
     expect(first).toBeTruthy();
     // 小節選択は mousedown 起点（ドラッグ範囲選択があるため）
     fireEvent.mouseDown(first, { clientX: 10, clientY: 10 });
@@ -137,7 +181,7 @@ describe('ScorePage: 小節コピペでのスラー終点の付け替え（実�
     fireEvent.keyDown(window, { key: 'c', metaKey: true });
 
     // 2小節目を選んで貼り付け
-    const second = measureHit(1) as SVGRectElement;
+    const second = measureHitByX(1) as SVGRectElement;
     expect(second).toBeTruthy();
     fireEvent.mouseDown(second, { clientX: 10, clientY: 10 });
     fireEvent.mouseUp(second, { clientX: 10, clientY: 10 });
@@ -153,5 +197,46 @@ describe('ScorePage: 小節コピペでのスラー終点の付け替え（実�
       expect(arc).toBeTruthy();
       expect(arc!.toMeasureIndex).toBe(1);
     }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 通知の件数を setter の updater 内で数えていると、React の updater は遅延・再実行され得るため
+  // （StrictMode では意図的に2回走る）件数が倍になったり出なかったりする。
+  // 四重奏は setQuartetParts(prev => ...) 経由なので、その経路で件数を固定する
+  // （#401 Codex round1 P2）
+  it('四重奏でも、範囲外へ伸びる弧を落とした通知が1回だけ正しい件数で出る', async () => {
+    seedQuartetWithOutgoingSlur();
+    render(<ScorePage />);
+
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    const selectTool = await screen.findByRole('button', { name: /小節選択/ }, { timeout: 15000 });
+    fireEvent.click(selectTool);
+
+    // 四重奏は段が4つあり x だけでは小節を引きにくいので、音符の当たり判定から辿る
+    const noteHit = (m: number) =>
+      document.querySelector(`rect.vf-note-hit[data-measure="${m}"]`) as SVGRectElement | null;
+    const first = noteHit(0);
+    expect(first).toBeTruthy();
+    fireEvent.mouseDown(first!, { clientX: 10, clientY: 10 });
+    fireEvent.mouseUp(first!, { clientX: 10, clientY: 10 });
+    fireEvent.click(first!, { clientX: 10, clientY: 10 });
+    fireEvent.keyDown(window, { key: 'c', metaKey: true });
+
+    const second = noteHit(1);
+    expect(second).toBeTruthy();
+    fireEvent.mouseDown(second!, { clientX: 10, clientY: 10 });
+    fireEvent.mouseUp(second!, { clientX: 10, clientY: 10 });
+    fireEvent.click(second!, { clientX: 10, clientY: 10 });
+    fireEvent.keyDown(window, { key: 'v', metaKey: true });
+
+    // Violin I の1本だけが範囲外（2小節目へ伸びる）。他3パートには弧が無い
+    await waitFor(() => {
+      expect(notices.some((n) => n.includes('コピー範囲の外へつながっていた'))).toBe(true);
+    }, { timeout: 15000 });
+    const dropNotices = notices.filter((n) => n.includes('コピー範囲の外へつながっていた'));
+    expect(dropNotices).toHaveLength(1);
+    expect(dropNotices[0]).toContain('1件');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
