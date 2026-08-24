@@ -453,4 +453,30 @@ describe('PianoSystemCanvas UI案A2 の譜面側レイヤー表示（Issue #405 
       expect(arcs.every((a) => a.getAttribute('opacity'))).toBe(true);
     });
   });
+
+  // Y座標から五線を推測すると、五線と五線のあいだに来る加線音で逆転する。
+  // ヘ音記号の C5 は左手五線の上に高く出るため、上段扱いされやすい
+  // （#409 Codex round4 P2）
+  it('左手五線の高い音に付けた弧も、左手が非アクティブなら淡くなる', () => {
+    const highBass = [{
+      events: [
+        { dur: '4' as const, isRest: false, keys: ['c/5'],
+          arcs: [{ fromKey: 'c/5', toKey: 'e/5', toMeasureIndex: 0, toEventIndex: 1, kind: 'slur' as const }] },
+        { dur: '4' as const, isRest: false, keys: ['e/5'] },
+        { dur: '2' as const, isRest: true, keys: ['d/3'] },
+      ],
+    }];
+    const plainTreble = [{ events: [{ dur: '1' as const, isRest: false, keys: ['c/5'] }] }];
+
+    const { svg } = renderPiano({
+      treble: plainTreble,
+      bass: highBass,
+      activeLayerPartIndex: 0,   // 右手がアクティブ＝左手の弧は淡くなるべき
+      highlightActiveLayer: true,
+    });
+
+    const arcs = Array.from(svg.querySelectorAll('path.vf-arc'));
+    expect(arcs.length).toBeGreaterThan(0);
+    expect(arcs.every((a) => a.getAttribute('opacity'))).toBe(true);
+  });
 });

@@ -1181,18 +1181,18 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
             ? { stemDirection: beamStemDirection, maintainStemDirections: true }
             : {}),
         };
-        // 段またぎがある声部は、載る五線が変わる位置で連桁（ビーム）を切る（設計メモ §4-2）。
+        // 段またぎの連桁は五線間を1本で結ぶ（設計メモ §4-2）。そのため A2 の淡色判定は
+        // 「グループの音符が全部、非アクティブな五線に載っているときだけ」にしている。
         // 1本のビームを五線の間に斜めに渡す書き方（段またぎ連桁）は段2の課題。
         // 「拍の区切りは全音符列で決め、またぎ位置では切るだけ」にしないと、
         // またぎで抜けた音符の tick が数えられず残りの拍がずれる（Issue #313）。
         const beams = hasCrossStaffNote
           ? generateCrossStaffBeams(vfNotes, renderPartIndexes, beamOptions)
           : Beam.generateBeams(vfNotes, beamOptions);
-        // UI案A2（#405 段3）: ビームは段またぎのとき五線ごとに分割されるので、
-        // 淡色にするかどうかも**ビーム単位**で決める必要がある。
-        // 声部ひとまとめで判定すると、右手所属の音符を左手五線へ移した段またぎで
-        // 「片方の五線だけ色が合わない」状態になる（#409 Codex round1 P2）。
-        // 各ビームの先頭音符が載っている五線から、実際の描画先パートを引く。
+        // UI案A2（#405 段3）: 淡色にするかどうかはビーム・連符の**グループ単位**で決める。
+        // 声部ひとまとめで判定すると、段またぎで「片方の五線だけ色が合わない」
+        // 「音符と連符数字の濃さが逆転する」状態になる（#409 Codex round1/2 P2）。
+        // 判定にはグループの音符が載っている五線の集合を使う（先頭音符だけでは足りない）。
         const noteRenderedPartByNote = new Map<StaveNote, number>();
         vfNotes.forEach((n, idx) => { noteRenderedPartByNote.set(n, renderPartIndexes[idx] ?? pi); });
         /** そのグループの音符が載っている五線（重複なし） */
@@ -7083,6 +7083,18 @@ export default function PianoSystemCanvas({
     });
 
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
+    // UI案A2（#405 段3）: 弧を淡くするかは「実際に描かれている五線」で決める。
+    // Y座標から推測すると、五線間の加線音（ヘ音記号の C5 など）で逆転する
+    // （#409 Codex round4 P2）。描画時に台帳へ控える。
+    const arcRenderedPartByKey = new Map<string, number>();
+    const partIndexOfStave = (stave: Stave): number | undefined => {
+      const top = stave.getYForLine(0);
+      let hit: number | undefined;
+      collectors.staveTopYByPart.forEach((t, partIdx) => {
+        if (Math.abs(t - top) <= 1) hit = partIdx;
+      });
+      return hit;
+    };
     pendingArcsP.forEach(({partIndex,voiceIndex,arc,arcIndex,startNote,startStave,startClef,startMeasureIdx,startEventIdx,startIsMultiVoice})=>{
       // 弧の終点は「同じ声部の events 配列の位置」を指す（設計メモの案A）。
       // そのため終点の逆引きも必ず同じ声部のキーで行う。
@@ -7126,6 +7138,10 @@ export default function PianoSystemCanvas({
             anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:stemDir}),
           })+startDy;
           const edgeX=startStave.getX()+startStave.getWidth();
+          {
+            const rp = partIndexOfStave(startStave);
+            if (rp !== undefined) arcRenderedPartByKey.set(arcKey+'-1', rp);
+          }
           drawArcPathP(x1+startDx,y,edgeX+(arc.breakEndDx??0),y+(arc.breakEndDy??0),upward,arc.kind,stemDir,y,cpDyOffset,arcKey+'-1',isSelected,undefined,undefined,startDx,startDy,arc.breakEndDx??0,arc.breakEndDy??0,apexXRatio);
         }catch{/* 段境界でも本文描画を止めない */}
         return;
@@ -7166,6 +7182,11 @@ export default function PianoSystemCanvas({
       const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30
                      ||roughAbsX2P<roughAbsX1P;
       if(!crossSystem){
+        {
+          // 同一五線に描かれる通常の弧。startStave がその五線
+          const rp = partIndexOfStave(startStave);
+          if (rp !== undefined) arcRenderedPartByKey.set(arcKey, rp);
+        }
         try{drawTieArcP({from:startClef,to:destClef},startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,allObstacleNotes,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio);}catch{/* 保険 */}
       }else{
         try{
@@ -7220,6 +7241,12 @@ export default function PianoSystemCanvas({
           const segmentObstacleY2P=effY2P;
           // 段またぎの片側セグメントは、境界点の高さを各段の音符高さに揃える。
           // ふくらみは制御点で作ることで、不自然な斜め線を避ける。
+          {
+            const rp1 = partIndexOfStave(startStave);
+            const rp2 = partIndexOfStave(dest.stave);
+            if (rp1 !== undefined) arcRenderedPartByKey.set(arcKey+'-1', rp1);
+            if (rp2 !== undefined) arcRenderedPartByKey.set(arcKey+'-2', rp2);
+          }
           drawArcPathP(x1+startDx,effY1P,edgeX1+breakEndDx,effY1P+breakEndDy,upward,arc.kind,stemDir,segmentObstacleY1P,cpDyOffset,arcKey+'-1',isSelected,crossMinNoteY,crossMaxNoteY,startDx,startDy,breakEndDx,breakEndDy,apexXRatio);
           drawArcPathP(edgeX2+breakStartDx,effY2P+breakStartDy,x2+endDx,effY2P,upward,arc.kind,0,segmentObstacleY2P,cpDy2,arcKey+'-2',isSelected,crossMinNoteY,crossMaxNoteY,breakStartDx,breakStartDy,endDx,endDy,arc.apexXRatio2??0);
         }catch{/* 保険 */}
@@ -7261,6 +7288,10 @@ export default function PianoSystemCanvas({
             const edgeX=dest.stave.getX();
             const baseKey=arcKeyP({partIndex,voiceIndex,fromMeasure,fromEvent,arcIndex});
             const selectedHere=selectedArc!==null&&selectedArc.voiceIndex===voiceIndex&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
+            {
+              const rp = partIndexOfStave(dest.stave);
+              if (rp !== undefined) arcRenderedPartByKey.set(baseKey+'-2', rp);
+            }
             drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0,arc.apexXRatio2??0);
           }catch{/* 壊れた旧arcでも他の譜面描画を止めない */}
       });
@@ -7268,37 +7299,22 @@ export default function PianoSystemCanvas({
     // UI案A2（#405 段3）: 弧（スラー・タイ）も非アクティブなレイヤーでは淡くする。
     //
     // 記号（強弱・運指など）は appendSymbolHitRegion の一点を包めば全種類に効くが、
-    // 弧はそこを通らず別経路で描かれるため、淡色化から漏れていた
-    // （#409 Codex round1 P2）。弧のパスは data-arc-key に `p{パート番号}v…` を持つので、
-    // それを手がかりに後段でまとめて処理する。
+    // 弧はそこを通らず別経路で描かれるため、淡色化から漏れていた（#409 Codex round1 P2）。
+    // どの五線に描かれたかは描画時に台帳（arcRenderedPartByKey）へ控えてある。
     //
     // 既知の範囲外: 松葉（ヘアピン）・ペダル・歌詞。これらは要素に識別情報を持たないため、
     // 淡色化するには描画側へ属性を足す改修が要る。A2 は「譜面側でレイヤーが分かるか」を
     // 試すための開発時限定の案であり、主要素（音符・ビーム・記号・弧）が揃えば
     // 判断はできると考えて範囲外とした。採用する場合は残りも揃える。
     if (activeLayerHighlightPartIndex != null) {
-      // 判定は**弧が実際に描かれている位置**から引く。data-arc-key の所有パートを使うと、
-      // 右手所属の弧を左手五線へ移した段またぎで色が逆転する（#409 Codex round2 P2）
-      const staveTops = [...collectors.staveTopYByPart.entries()].sort((x, y) => x[1] - y[1]);
-      const partAtY = (y: number): number | undefined => {
-        if (staveTops.length === 0) return undefined;
-        // 最上段より上（上向きの弧・高い音の加線など）は最上段のものとして扱う。
-        // ここを undefined にすると、非アクティブな右手の上向き弧が黒いまま残る
-        // （#409 Codex round3 P2）
-        let found: number | undefined = staveTops[0][0];
-        staveTops.forEach(([partIdx, top]) => { if (y >= top - 20) found = partIdx; });
-        return found;
-      };
+      // 判定は描画時に控えた台帳から引く。Y座標からの推測は五線間の加線音で逆転する
+      // （#409 Codex round4 P2）
       svgRoot.querySelectorAll('path.vf-arc').forEach((el) => {
-        const d = el.getAttribute('d') ?? '';
-        const firstY = Number((d.match(/-?\d+(\.\d+)?/g) ?? [])[1]);
-        if (!Number.isFinite(firstY)) return;
-        const drawnPart = partAtY(firstY);
+        const drawnPart = arcRenderedPartByKey.get(el.getAttribute('data-arc-key') ?? '');
         if (drawnPart === undefined || drawnPart === activeLayerHighlightPartIndex) return;
         const target = el as SVGElement;
         target.setAttribute('opacity', String(INACTIVE_LAYER_SYMBOL_OPACITY));
-        // 印刷では不透明度を戻す必要がある。記号と同じクラスを付けて既存の
-        // 印刷CSS（.vf-inactive-layer-symbol の打ち消し）に乗せる（#409 Codex round2 P2）
+        // 印刷では不透明度を戻す。記号と同じクラスを付けて既存の印刷CSSに乗せる
         target.classList.add('vf-inactive-layer-symbol');
       });
     }
