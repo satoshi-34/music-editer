@@ -88,6 +88,29 @@ function seedWorkWithInnerSlur() {
   workId = created.data.id;
 }
 
+/** 4小節。1小節目→2小節目へ伸びるスラー（＝コピー範囲の内側をまたぐ弧）を持つ単旋律 */
+function seedFourMeasuresWithSpanningSlur() {
+  const withSlur = [{
+    dur: '1' as const, isRest: false, keys: ['c/5'],
+    arcs: [{ fromKey: 'c/5', toKey: 'd/5', toMeasureIndex: 1, toEventIndex: 0, kind: 'slur' as const }],
+  }];
+  const plain = [{ dur: '1' as const, isRest: false, keys: ['d/5'] }];
+  const mk = (e: typeof plain) => ({ events: e, voices: [{ id: 'voice-1', events: e }] });
+  const data = createSavedScoreData(
+    { title: '複数小節コピペテスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+    [{ partId: 'melody', clef: 'treble', measures: [mk(withSlur), mk(plain), mk(plain), mk(plain)] }],
+    1,
+    4,
+    'single'
+  );
+  const created = createWork('複数小節コピペテスト');
+  if (!created.success || !created.data) throw new Error('createWork failed');
+  const saved = saveWorkAutosaveData(created.data.id, data);
+  if (!saved.success) throw new Error('saveWorkAutosaveData failed');
+  setLastOpenedWorkId(created.data.id);
+  workId = created.data.id;
+}
+
 /** Violin I の1小節目に「2小節目へ伸びる（＝コピー範囲外を指す）スラー」を持つ四重奏 */
 function seedQuartetWithOutgoingSlur() {
   const withSlur = [{
@@ -196,6 +219,46 @@ describe('ScorePage: 小節コピペでのスラー終点の付け替え（実�
       const arc = part?.measures?.[1]?.events?.[0]?.arcs?.[0];
       expect(arc).toBeTruthy();
       expect(arc!.toMeasureIndex).toBe(1);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 複数小節をまとめて貼る経路。1小節だけの付け替えが合っていても、範囲内をまたぐ弧の
+  // 「何小節先か」という相対関係まで保たれるとは限らないので別に固定する
+  it('1〜2小節目を3〜4小節目へ貼ると、またぐスラーは3→4小節目になる', async () => {
+    seedFourMeasuresWithSpanningSlur();
+    render(<ScorePage />);
+
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    fireEvent.click(await screen.findByRole('button', { name: /小節選択/ }, { timeout: 15000 }));
+    const noteHit = (m: number) =>
+      document.querySelector(`rect.vf-note-hit[data-measure="${m}"]`) as SVGRectElement | null;
+
+    // 1小節目を選び、Shift+→ で2小節目まで範囲を広げてコピー
+    const m0 = noteHit(0);
+    expect(m0).toBeTruthy();
+    fireEvent.mouseDown(m0!, { clientX: 10, clientY: 10 });
+    fireEvent.mouseUp(m0!, { clientX: 10, clientY: 10 });
+    fireEvent.click(m0!, { clientX: 10, clientY: 10 });
+    fireEvent.keyDown(window, { key: 'ArrowRight', shiftKey: true });
+    fireEvent.keyDown(window, { key: 'c', metaKey: true });
+
+    // 3小節目を選んで貼る
+    const m2 = noteHit(2);
+    expect(m2).toBeTruthy();
+    fireEvent.mouseDown(m2!, { clientX: 10, clientY: 10 });
+    fireEvent.mouseUp(m2!, { clientX: 10, clientY: 10 });
+    fireEvent.click(m2!, { clientX: 10, clientY: 10 });
+    fireEvent.keyDown(window, { key: 'v', metaKey: true });
+
+    await waitFor(() => {
+      const measures = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures;
+      const arc = measures?.[2]?.events?.[0]?.arcs?.[0];
+      expect(arc).toBeTruthy();
+      // 「1つ先の小節」という関係が保たれる（1 → 3）
+      expect(arc!.toMeasureIndex).toBe(3);
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
