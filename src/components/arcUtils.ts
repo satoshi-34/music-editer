@@ -40,7 +40,7 @@ function apexRatioToCpRatio(kind: 'tie' | 'slur', apexXRatio: number): number {
  * @param apexXRatio ユーザーがドラッグで調節した頂点の左右位置（スパンに対する比率、正 = 右）
  */
 /** スラーの膨らみの下限（SVG px）。短い弧が深く見えすぎないための値 */
-export const SLUR_MIN_CLEARANCE_PX = 7;
+export const SLUR_MIN_CLEARANCE_PX = 5;
 /** スラーの制御点を端からどれだけ離すか（スパン比）。大きいほど頂点付近が平らになる */
 export const SLUR_CP_X_RATIO = 0.32;
 
@@ -71,10 +71,13 @@ function computeArcControlPoints(
   //
   // 膨らみの量。SMuFL/Bravura が定めているのは線の太さだけで、曲率の規定は無いので
   // ここは浄書の慣習に寄せた調整値。
-  // 2026-08-24: 三連符のような短いスラーが深すぎるという実機所感を受けて緩めた
-  //   下限 10 → 7px（短い弧が下限に張り付いて相対的に深く見えていた）
-  //   係数 0.15 → 0.13
-  const clearance = Math.max(SLUR_MIN_CLEARANCE_PX, Math.min(24, span * 0.13));
+  // 2026-08-24: スラーが深すぎるという実機所感を受けて緩めた（実機で2段階調整）
+  //   下限 10 → 5px（短い弧が下限に張り付いて相対的に深く見えていた）
+  //   係数 0.15 → 0.09
+  //   上限 24 → 16px（長い弧は上限に張り付くので、ここを下げないと効かない）
+  // 運用者確認: 「まだちょっと深い気もするが、以降は利用者の指摘があれば」で確定。
+  // さらに調整するときはこの3つの数字だけ動かせばよい
+  const clearance = Math.max(SLUR_MIN_CLEARANCE_PX, Math.min(16, span * 0.09));
   // obstacleY がある場合はそれを基準に、なければ端点の外側を基準にする
   const refY = obstacleY !== undefined
     ? obstacleY

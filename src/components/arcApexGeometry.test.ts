@@ -47,7 +47,7 @@ const TIE = [100, 50, 160, 50, true, 'tie', 1, undefined, 0] as const;
 describe('apexXRatio（頂点の左右位置）', () => {
   it('既定値（0）では従来の形のまま＝リグレッションしていない', () => {
     // 制御点の計算を共通化したので、既定の出力が1文字も変わらないことを実値で固定する
-    expect(computeArcGeometry(...SLUR).dAttr).toBe('M 100 50 C 132 29 168 29 200 55');
+    expect(computeArcGeometry(...SLUR).dAttr).toBe('M 100 50 C 132 33 168 33 200 55');
     expect(computeArcGeometry(...TIE).dAttr).toBe('M 100 50 Q 130 30 160 50');
     // 引数を省略した場合と 0 を渡した場合が同じであること（呼び出し側の移行漏れ検出用）
     expect(computeArcGeometry(...SLUR, 0).dAttr).toBe(computeArcGeometry(...SLUR).dAttr);
