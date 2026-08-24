@@ -81,6 +81,10 @@ function beamGroups(svg: SVGSVGElement): SVGGElement[] {
   return Array.from(svg.querySelectorAll('g.vf-beam')) as SVGGElement[];
 }
 
+function tupletGroups(svg: SVGSVGElement): SVGGElement[] {
+  return Array.from(svg.querySelectorAll('g.vf-tuplet')) as SVGGElement[];
+}
+
 function dimmedSymbols(svg: SVGSVGElement): Element[] {
   return Array.from(svg.querySelectorAll('.vf-inactive-layer-symbol'));
 }
@@ -478,5 +482,45 @@ describe('PianoSystemCanvas UI案A2 の譜面側レイヤー表示（Issue #405 
     const arcs = Array.from(svg.querySelectorAll('path.vf-arc'));
     expect(arcs.length).toBeGreaterThan(0);
     expect(arcs.every((a) => a.getAttribute('opacity'))).toBe(true);
+  });
+
+  // 連符（数字・括弧）もビームと同じ規則。所属パート判定へ戻す退行を捕まえる
+  // （#409 Codex round5 P2）
+  describe('連符の淡色化', () => {
+    const tripletAllBelow = [{
+      events: [0, 1, 2].map((i) => ({
+        dur: '8' as const,
+        isRest: false,
+        keys: [['e/3', 'g/3', 'c/4'][i]],
+        renderStaff: 'below' as const,
+        tuplet: { id: 'tb', numNotes: 3, notesOccupied: 2 },
+      })),
+    }];
+    const plainBass = [{ events: [{ dur: '1' as const, isRest: false, keys: ['c/3'] }] }];
+    const dimmedTuplets = (svg: SVGSVGElement) => tupletGroups(svg).filter((t) =>
+      t.getAttribute('fill') === INACTIVE_VOICE_COLOR
+      || t.getAttribute('stroke') === INACTIVE_VOICE_COLOR);
+
+    it('全音を左手五線へ移した連符は、左手がアクティブなら淡くならない', () => {
+      const { svg } = renderPiano({
+        treble: tripletAllBelow,
+        bass: plainBass,
+        activeLayerPartIndex: 1,
+        highlightActiveLayer: true,
+      });
+      expect(tupletGroups(svg).length).toBeGreaterThan(0);
+      expect(dimmedTuplets(svg).length).toBe(0);
+    });
+
+    it('同じ連符でも右手がアクティブなら淡くなる', () => {
+      const { svg } = renderPiano({
+        treble: tripletAllBelow,
+        bass: plainBass,
+        activeLayerPartIndex: 0,
+        highlightActiveLayer: true,
+      });
+      expect(dimmedTuplets(svg).length).toBe(tupletGroups(svg).length);
+      expect(tupletGroups(svg).length).toBeGreaterThan(0);
+    });
   });
 });

@@ -5,7 +5,7 @@
 // （#409 Codex round1 P2）。ここでは作品を復元した実経路で、
 // ?ui=a2 のときだけ譜面側の表示が出ることを固定する。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, waitFor } from '@testing-library/react';
+import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/react';
 import ScorePage from './ScorePage';
 import { UI_VARIANT_STORAGE_KEY } from '../utils/uiVariant';
 import {
@@ -100,5 +100,25 @@ describe('ScorePage: A2 譜面側レイヤー表示の配線（Issue #405 段3�
       expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
     }, { timeout: 15000 });
     expect(bands().length).toBe(0);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 「帯が出る」だけでは、activeLayerPartIndex を固定した退行を検出できない。
+  // 実際にレイヤーを切り替えて帯が追随することまで見る（#409 Codex round5 P2）
+  it('左手レイヤーへ切り替えると、色帯も左手の五線へ移る', async () => {
+    localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a2');
+    seedPianoWork();
+    render(<ScorePage />);
+
+    await waitFor(() => expect(bands().length).toBeGreaterThan(0), { timeout: 15000 });
+    const rightY = Number(bands()[0].getAttribute('y'));
+
+    // レイヤー切替チップは「音符・休符」タブにある
+    fireEvent.click(screen.getByRole('button', { name: '左手・声部1' }));
+
+    await waitFor(() => {
+      const y = Number(bands()[0]?.getAttribute('y'));
+      expect(Number.isFinite(y)).toBe(true);
+      expect(y).toBeGreaterThan(rightY);   // 左手の五線は右手より下
+    }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

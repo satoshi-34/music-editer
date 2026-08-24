@@ -1183,9 +1183,8 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         };
         // 段またぎの連桁は五線間を1本で結ぶ（設計メモ §4-2）。そのため A2 の淡色判定は
         // 「グループの音符が全部、非アクティブな五線に載っているときだけ」にしている。
-        // 1本のビームを五線の間に斜めに渡す書き方（段またぎ連桁）は段2の課題。
-        // 「拍の区切りは全音符列で決め、またぎ位置では切るだけ」にしないと、
-        // またぎで抜けた音符の tick が数えられず残りの拍がずれる（Issue #313）。
+        // 拍の区切りは全音符列で決める。またぎで抜けた音符の tick を数え落とすと
+        // 残りの拍がずれるため（Issue #313）。
         const beams = hasCrossStaffNote
           ? generateCrossStaffBeams(vfNotes, renderPartIndexes, beamOptions)
           : Beam.generateBeams(vfNotes, beamOptions);

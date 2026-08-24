@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor } from '@testing-library/react';
 
-// フックを固定する。これで「本番なのに変数だけ a1」という、
+// フックを固定する。これで「本番なのに変数だけ a2」という、
 // 描画側ガードしか防げない状況を作れる
 vi.mock('../hooks/useUiVariant', () => ({
   useUiVariant: () => 'a2',
