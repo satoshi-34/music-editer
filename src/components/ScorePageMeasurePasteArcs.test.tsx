@@ -94,11 +94,15 @@ function seedFourMeasuresWithSpanningSlur() {
     dur: '1' as const, isRest: false, keys: ['c/5'],
     arcs: [{ fromKey: 'c/5', toKey: 'd/5', toMeasureIndex: 1, toEventIndex: 0, kind: 'slur' as const }],
   }];
-  const plain = [{ dur: '1' as const, isRest: false, keys: ['d/5'] }];
+  // 2小節目（コピー範囲の2つ目）と、貼り先の2つ目になる4小節目に別々の音を置く。
+  // 同じ内容だと「先頭小節しか貼らない」退行でもテストが通ってしまうため（#402 Codex P3）
+  const copiedSecond = [{ dur: '1' as const, isRest: false, keys: ['d/5'] }];
+  const destSecond = [{ dur: '1' as const, isRest: false, keys: ['a/4'] }];
+  const plain = [{ dur: '1' as const, isRest: false, keys: ['g/4'] }];
   const mk = (e: typeof plain) => ({ events: e, voices: [{ id: 'voice-1', events: e }] });
   const data = createSavedScoreData(
     { title: '複数小節コピペテスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
-    [{ partId: 'melody', clef: 'treble', measures: [mk(withSlur), mk(plain), mk(plain), mk(plain)] }],
+    [{ partId: 'melody', clef: 'treble', measures: [mk(withSlur), mk(copiedSecond), mk(plain), mk(destSecond)] }],
     1,
     4,
     'single'
@@ -259,6 +263,9 @@ describe('ScorePage: 小節コピペでのスラー終点の付け替え（実�
       expect(arc).toBeTruthy();
       // 「1つ先の小節」という関係が保たれる（1 → 3）
       expect(arc!.toMeasureIndex).toBe(3);
+      // 範囲の2つ目もちゃんと貼られている（貼り先の a/4 が、コピーした d/5 に置き換わる）。
+      // 先頭小節だけ貼る退行を捕まえるための確認
+      expect(measures?.[3]?.events?.[0]?.keys).toEqual(['d/5']);
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
