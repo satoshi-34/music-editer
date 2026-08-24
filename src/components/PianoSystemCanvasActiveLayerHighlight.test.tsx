@@ -361,4 +361,47 @@ describe('PianoSystemCanvas UI案A2 の譜面側レイヤー表示（Issue #405 
       });
     });
   });
+
+  // 段またぎの弧・連符は「所属パート」で判定すると色が逆転する（#409 Codex round2 P2）
+  describe('段またぎの弧・連符', () => {
+    const crossSlurTriplet = [{
+      events: [
+        { dur: '8' as const, isRest: false, keys: ['e/3'], renderStaff: 'below' as const,
+          tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 },
+          arcs: [{ fromKey: 'e/3', toKey: 'c/4', toMeasureIndex: 0, toEventIndex: 2, kind: 'slur' as const }] },
+        { dur: '8' as const, isRest: false, keys: ['g/3'], renderStaff: 'below' as const,
+          tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 } },
+        { dur: '8' as const, isRest: false, keys: ['c/4'], renderStaff: 'below' as const,
+          tuplet: { id: 't1', numNotes: 3, notesOccupied: 2 } },
+      ],
+    }];
+    const plainBass = [{ events: [{ dur: '1' as const, isRest: false, keys: ['c/3'] }] }];
+
+    it('左手をアクティブにすると、左手五線へ移した弧は淡色にならない', () => {
+      const { svg } = renderPiano({
+        treble: crossSlurTriplet,
+        bass: plainBass,
+        activeLayerPartIndex: 1,
+        highlightActiveLayer: true,
+      });
+      const dimmed = Array.from(svg.querySelectorAll('path.vf-arc'))
+        .filter((a) => a.getAttribute('opacity'));
+      expect(dimmed.length).toBe(0);
+    });
+
+    it('淡色にした弧には印刷で戻すためのクラスが付く', () => {
+      const { svg } = renderPiano({
+        treble: crossSlurTriplet,
+        bass: plainBass,
+        activeLayerPartIndex: 0,
+        highlightActiveLayer: true,
+      });
+      const dimmed = Array.from(svg.querySelectorAll('path.vf-arc'))
+        .filter((a) => a.getAttribute('opacity'));
+      expect(dimmed.length).toBeGreaterThan(0);
+      dimmed.forEach((a) => {
+        expect(a.classList.contains('vf-inactive-layer-symbol')).toBe(true);
+      });
+    });
+  });
 });

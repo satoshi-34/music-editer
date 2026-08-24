@@ -3,9 +3,12 @@
 // 通常の DEV=false テストでは、フック（useUiVariant）が先に `current` を返すため
 // 描画側ガードを外しても挙動が変わらず検出できない（#408 Codex round1 P3）。
 //
-// だが二重ガードには「本番バンドルからコンポーネント自体を落とす」という
-// 観測可能な目的がある（#408 Codex round2 P3）。ここではフックを `a1` に固定した上で
-// DEV=false にし、描画側ガードだけが効いていることを確かめる。
+// ここではフックを `a2` に固定した上で DEV=false にし、
+// 描画側ガードだけが効いていることを確かめる。
+//
+// 保証しているのは「本番相当の条件で描かれないこと」であって、
+// 本番バンドルからコードが落ちること（tree-shaking）ではない。
+// バンドルの中身は別の手段（成果物検査）でしか確かめられない。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor } from '@testing-library/react';
 

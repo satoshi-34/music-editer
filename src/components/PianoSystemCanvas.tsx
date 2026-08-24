@@ -214,6 +214,8 @@ type RenderedVoiceEntry = {
   isInactiveVoiceEntry: boolean;
   /** ビームごとの淡色判定（段またぎで五線が分かれるため声部単位では足りない） */
   beamInactiveFlags: boolean[];
+  /** 連符ごとの淡色判定（同上） */
+  tupletInactiveFlags: boolean[];
   // 段またぎ記譜（Issue #309）で、この声部に「隣の五線へ載せる音符」が1つでもあるか。
   // 描画パス（Pass 3）は、これが true の声部だけ専用の描き方に切り替える
   // （段またぎを使っていない譜面は従来とまったく同じ経路を通す＝1pxも変えない）。
@@ -1195,8 +1197,11 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         vfNotes.forEach((n, idx) => { noteRenderedPartByNote.set(n, renderPartIndexes[idx] ?? pi); });
         const renderedPartOfNotes = (notes: StaveNote[] | undefined): number =>
           (notes && notes.length > 0 ? noteRenderedPartByNote.get(notes[0]) : undefined) ?? pi;
-        const beamRenderedParts = beams.map((b) =>
-          renderedPartOfNotes(((b as unknown as { notes?: StaveNote[] }).notes)));
+        /** そのグループの音符が載っている五線（重複なし） */
+        const renderedPartsOfGroup = (notes: StaveNote[] | undefined): number[] =>
+          [...new Set((notes ?? []).map((n) => noteRenderedPartByNote.get(n) ?? pi))];
+        const beamRenderedPartSets = beams.map((b) =>
+          renderedPartsOfGroup((b as unknown as { notes?: StaveNote[] }).notes));
         // Tuplet は「括弧を描くかどうか」をコンストラクタの時点で
         // 「ビームの付いていない音符が1つでもあるか」で決めてしまう。
         // 上の順序変更でビームがまだ無い状態で作ることになったため、
@@ -1226,10 +1231,23 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         // 声部側の淡色判定（手の側はビーム・連符ごとに描画先で判定するのでここでは見ない）
         const isInactiveVoiceOnly = isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex;
         const isInactiveVoiceEntry = isInactiveLayerPart || isInactiveVoiceOnly;
-        /** ビームごとの淡色判定。描画先の五線がアクティブでなければ淡くする */
-        const beamInactiveFlags = beamRenderedParts.map((rp) =>
-          isInactiveVoiceOnly
-          || (highlightedLayerPartIndex != null && rp !== highlightedLayerPartIndex));
+        /**
+         * グループ（ビーム・連符）ごとの淡色判定。
+         * 五線をまたぐ1本のビームは**どちらの五線にも属する**ので淡くしない。
+         * 片方だけ薄くはできないうえ、またいでいる事実そのものが情報だから
+         * （#409 Codex round2 P2）。
+         */
+        const groupInactive = (renderedParts: number[]): boolean => {
+          if (isInactiveVoiceOnly) return true;
+          if (highlightedLayerPartIndex == null || renderedParts.length === 0) return false;
+          return renderedParts.every((rp) => rp !== highlightedLayerPartIndex);
+        };
+        const beamInactiveFlags = beamRenderedPartSets.map(groupInactive);
+        // 連符も同じ規則にする。所属パート由来の値を使うと、段またぎ三連符で
+        // 音符・ビームと連符数字の濃さが逆転する
+        const tupletInactiveFlags = tuplets.map((t) =>
+          groupInactive(renderedPartsOfGroup(
+            (t.tuplet as unknown as { notes?: StaveNote[] }).notes)));
 
         return {
           voiceIndex,
@@ -1241,6 +1259,7 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
           voice,
           isInactiveVoiceEntry,
           beamInactiveFlags,
+          tupletInactiveFlags,
           hasCrossStaffNote,
         };
       })
@@ -1534,7 +1553,7 @@ function drawRenderedVoiceEntries(
           b.draw();
         }
       });
-      entry.tuplets.forEach(({ tuplet, hideNumber }) => {
+      entry.tuplets.forEach(({ tuplet, hideNumber }, tupletIndex) => {
         // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
         // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
         // 数字を省略する連符は括弧も省くのが浄書の慣行（Gould, Behind Bars）なので、
@@ -1546,7 +1565,7 @@ function drawRenderedVoiceEntries(
         }
         try {
           (tuplet as any).setContext?.(vexCtx);
-          if (entry.isInactiveVoiceEntry) {
+          if (entry.tupletInactiveFlags[tupletIndex] ?? entry.isInactiveVoiceEntry) {
             tuplet.setStyle(inactiveVoiceStyle);
             tuplet.drawWithStyle();
           } else {
@@ -7260,11 +7279,25 @@ export default function PianoSystemCanvas({
     // 試すための開発時限定の案であり、主要素（音符・ビーム・記号・弧）が揃えば
     // 判断はできると考えて範囲外とした。採用する場合は残りも揃える。
     if (activeLayerHighlightPartIndex != null) {
+      // 判定は**弧が実際に描かれている位置**から引く。data-arc-key の所有パートを使うと、
+      // 右手所属の弧を左手五線へ移した段またぎで色が逆転する（#409 Codex round2 P2）
+      const staveTops = [...collectors.staveTopYByPart.entries()].sort((x, y) => x[1] - y[1]);
+      const partAtY = (y: number): number | undefined => {
+        let found: number | undefined;
+        staveTops.forEach(([partIdx, top]) => { if (y >= top - 20) found = partIdx; });
+        return found;
+      };
       svgRoot.querySelectorAll('path.vf-arc').forEach((el) => {
-        const key = el.getAttribute('data-arc-key') ?? '';
-        const owner = Number(key.match(/^p(\d+)v/)?.[1]);
-        if (!Number.isFinite(owner) || owner === activeLayerHighlightPartIndex) return;
-        (el as SVGElement).setAttribute('opacity', String(INACTIVE_LAYER_SYMBOL_OPACITY));
+        const d = el.getAttribute('d') ?? '';
+        const firstY = Number((d.match(/-?\d+(\.\d+)?/g) ?? [])[1]);
+        if (!Number.isFinite(firstY)) return;
+        const drawnPart = partAtY(firstY);
+        if (drawnPart === undefined || drawnPart === activeLayerHighlightPartIndex) return;
+        const target = el as SVGElement;
+        target.setAttribute('opacity', String(INACTIVE_LAYER_SYMBOL_OPACITY));
+        // 印刷では不透明度を戻す必要がある。記号と同じクラスを付けて既存の
+        // 印刷CSS（.vf-inactive-layer-symbol の打ち消し）に乗せる（#409 Codex round2 P2）
+        target.classList.add('vf-inactive-layer-symbol');
       });
     }
 
