@@ -139,7 +139,7 @@ README は更新していない。開発時のみのテスト会用表示で、�
 
 ## 受入テスト
 
-`src/components/PianoSystemCanvasActiveLayerHighlight.test.tsx`（18件）。
+`src/components/PianoSystemCanvasActiveLayerHighlight.test.tsx`（20件）。
 **A2 のときの表示**と**渡さないとき（current）は従来どおり**を必ず対にしている。
 
 - current: 色帯が無い / もう一方の手のビームも黒 / 記号が淡色にならない
