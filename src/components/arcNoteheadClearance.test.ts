@@ -28,6 +28,15 @@ function apexBelowNoteheadCenter(span: number, stemDir: number): number {
   return apex - noteheadCenterY;
 }
 
+/** 指定オフセットでの頂点Y（符頭中心を基準にした相対値） */
+function apexWithOffset(span: number, stemDir: number, cpDyOffset: number): number {
+  const noteheadCenterY = 200;
+  const endpointY = noteheadCenterY + 3;
+  return computeArcApexPoint(
+    0, endpointY, span, endpointY, false, 'slur', stemDir, noteheadCenterY, cpDyOffset, 0
+  ).y - noteheadCenterY;
+}
+
 describe('スラーが中間の符頭に重ならない（#406）', () => {
   // 符幹が上向きのとき conflict の +8px が付かないので、ここが最も厳しい
   it.each([20, 30, 40, 60])('span=%i の短いスラーでも符頭の縁を越える（符幹上向き）', (span) => {
@@ -44,5 +53,28 @@ describe('スラーが中間の符頭に重ならない（#406）', () => {
     const apexRatioOfControlPoint = 0.75;
     expect(SLUR_OBSTACLE_MIN_GAP_PX * apexRatioOfControlPoint)
       .toBeGreaterThan(NOTEHEAD_HALF_HEIGHT_PX + ARC_HALF_THICKNESS_PX);
+  });
+});
+
+// 最低隙間をユーザーオフセットの**後**に適用すると、既定値が最低隙間より小さい短い弧では
+// 「外へドラッグしても見た目が動かないのに値だけ溜まり、後から跳ねる」無反応帯ができる
+// （#406 Codex round2 P2）
+describe('短いスラーのドラッグに無反応帯が無い（#406）', () => {
+  it('外側へのドラッグは1pxから見た目に反映される（符幹上向き・短い弧）', () => {
+    const base = apexWithOffset(30, 1, 0);
+    expect(apexWithOffset(30, 1, 1)).toBeGreaterThan(base);
+    expect(apexWithOffset(30, 1, 4)).toBeGreaterThan(apexWithOffset(30, 1, 1));
+  });
+
+  it('ドラッグ量に比例して深くなる（途中で飲み込まれない）', () => {
+    const d1 = apexWithOffset(30, 1, 2) - apexWithOffset(30, 1, 0);
+    const d2 = apexWithOffset(30, 1, 4) - apexWithOffset(30, 1, 2);
+    expect(d1).toBeGreaterThan(0);
+    // 等間隔のドラッグなら等間隔に動く（誤差0.01）
+    expect(Math.abs(d1 - d2)).toBeLessThan(0.01);
+  });
+
+  it('内側へのドラッグは符頭の手前で止まる（こちらは意図的な下限）', () => {
+    expect(apexWithOffset(30, 1, -50)).toBeGreaterThan(NOTEHEAD_HALF_HEIGHT_PX + ARC_HALF_THICKNESS_PX);
   });
 });

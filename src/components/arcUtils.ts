@@ -99,11 +99,15 @@ function computeArcControlPoints(
   const refY = obstacleY !== undefined
     ? obstacleY
     : (upward ? Math.min(y1, y2) : Math.max(y1, y2));
-  // 制御点: refY から clearance 分だけ弧の外側に置き、さらにユーザーオフセットを加算
+  // 既定の離れ。**ユーザーオフセットを足す前に**最低隙間を適用する。
+  // 後から適用すると、既定値が最低隙間より小さい短い弧では「外へドラッグしても
+  // 最低隙間に飲み込まれて見た目が動かないが、値だけ溜まって後で跳ねる」という
+  // 無反応帯ができる（#406 Codex round2 P2）
+  const baseClearance = Math.max(clearance + (conflict ? 8 : 0), SLUR_OBSTACLE_MIN_GAP_PX);
   let cpY = upward
-    ? refY - (clearance + (conflict ? 8 : 0)) + cpDyOffset
-    : refY + (clearance + (conflict ? 8 : 0)) + cpDyOffset;
-  // 音符との最低隙間を確保（ユーザーが引っ張っても重ならない）
+    ? refY - baseClearance + cpDyOffset
+    : refY + baseClearance + cpDyOffset;
+  // ユーザーが内側へ引っ張っても符頭には重ねない（こちらは意図的な下限）
   if (upward  && cpY > refY - SLUR_OBSTACLE_MIN_GAP_PX) cpY = refY - SLUR_OBSTACLE_MIN_GAP_PX;
   if (!upward && cpY < refY + SLUR_OBSTACLE_MIN_GAP_PX) cpY = refY + SLUR_OBSTACLE_MIN_GAP_PX;
 
