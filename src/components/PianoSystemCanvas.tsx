@@ -7281,7 +7281,11 @@ export default function PianoSystemCanvas({
       // 右手所属の弧を左手五線へ移した段またぎで色が逆転する（#409 Codex round2 P2）
       const staveTops = [...collectors.staveTopYByPart.entries()].sort((x, y) => x[1] - y[1]);
       const partAtY = (y: number): number | undefined => {
-        let found: number | undefined;
+        if (staveTops.length === 0) return undefined;
+        // 最上段より上（上向きの弧・高い音の加線など）は最上段のものとして扱う。
+        // ここを undefined にすると、非アクティブな右手の上向き弧が黒いまま残る
+        // （#409 Codex round3 P2）
+        let found: number | undefined = staveTops[0][0];
         staveTops.forEach(([partIdx, top]) => { if (y >= top - 20) found = partIdx; });
         return found;
       };

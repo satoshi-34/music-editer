@@ -404,4 +404,53 @@ describe('PianoSystemCanvas UI案A2 の譜面側レイヤー表示（Issue #405 
       });
     });
   });
+
+  // round2/3 の規則そのもののテスト
+  describe('段またぎのビーム・連符・上向きの弧', () => {
+    /** 3音のうち1音だけ左手五線へ移す＝五線をまたぐ1本のビームになる */
+    const spanningBeam = [{
+      events: [
+        { dur: '8' as const, isRest: false, keys: ['c/5'] },
+        { dur: '8' as const, isRest: false, keys: ['e/3'], renderStaff: 'below' as const },
+        { dur: '4' as const, isRest: false, keys: ['g/4'] },
+      ],
+    }];
+    const plainBass = [{ events: [{ dur: '1' as const, isRest: false, keys: ['c/3'] }] }];
+    const dimmedBeams = (svg: SVGSVGElement) => beamGroups(svg).filter((b) =>
+      b.getAttribute('fill') === INACTIVE_VOICE_COLOR
+      || b.getAttribute('stroke') === INACTIVE_VOICE_COLOR);
+
+    it('五線をまたぐ1本のビームは淡くしない（どちらの五線にも属するため）', () => {
+      const { svg } = renderPiano({
+        treble: spanningBeam,
+        bass: plainBass,
+        activeLayerPartIndex: 1,   // 左手をアクティブにしても
+        highlightActiveLayer: true,
+      });
+      expect(beamGroups(svg).length).toBeGreaterThan(0);
+      expect(dimmedBeams(svg).length).toBe(0);
+    });
+
+    // 上向きの弧は五線の上端より上へ出る。位置から五線を引くとき、
+    // 最上段より上を「該当なし」にすると淡色化から漏れる（#409 Codex round3 P2）
+    it('高い音に付けた上向きの弧も、非アクティブなら淡くなる', () => {
+      const highSlur = [{
+        events: [
+          { dur: '4' as const, isRest: false, keys: ['c/6'],
+            arcs: [{ fromKey: 'c/6', toKey: 'e/6', toMeasureIndex: 0, toEventIndex: 1, kind: 'slur' as const }] },
+          { dur: '4' as const, isRest: false, keys: ['e/6'] },
+          { dur: '2' as const, isRest: true, keys: ['b/4'] },
+        ],
+      }];
+      const { svg } = renderPiano({
+        treble: highSlur,
+        bass: plainBass,
+        activeLayerPartIndex: 1,   // 左手がアクティブ＝右手の弧は淡くなるべき
+        highlightActiveLayer: true,
+      });
+      const arcs = Array.from(svg.querySelectorAll('path.vf-arc'));
+      expect(arcs.length).toBeGreaterThan(0);
+      expect(arcs.every((a) => a.getAttribute('opacity'))).toBe(true);
+    });
+  });
 });

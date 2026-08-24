@@ -58,7 +58,7 @@ class ResizeObserverMock { observe() {} unobserve() {} disconnect() {} }
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-describe('ScorePage: A2 譜面側表示の描画側ガード（本番バンドルから落とすため）', () => {
+describe('ScorePage: A2 譜面側表示の描画側ガード（本番相当の条件で描かれないことの確認）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
   beforeEach(() => {
