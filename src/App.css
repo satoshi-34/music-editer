@@ -1865,6 +1865,27 @@ button.ghost.active:hover:not(:disabled) {
 }
 
 /* ===== 印刷用 ===== */
+/* いまどのUI案かを示す隅の表示（Issue #405 段1・開発時のみ描画される）。
+   テスト会の観察記録用なので、譜面の邪魔をしないよう右下に小さく置き、
+   pointer-events: none でクリックを素通りさせる（下にある譜面を触れなくしない）。
+   印刷には出さない（@media print 側で display:none にする）。 */
+.ui-variant-badge {
+  position: fixed;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2000;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(11, 42, 26, 0.85);
+  color: #d1fae5;
+  font-size: 11px;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  user-select: none;
+}
+
 @media print {
   /* margin: 0 にして .print-page の padding（14mm）を余白として使う。
      @page margin を 12mm にすると印刷可能領域が 186mm になり、
@@ -1886,6 +1907,8 @@ button.ghost.active:hover:not(:disabled) {
   .layout-overflow-alert { display: none !important; }
   /* 画面専用の「＋小節を追加」ボタンは編集用UIなので印刷には出さない。 */
   .add-measures-ghost-button { display: none !important; }
+  /* UI案の表示（Issue #405）は開発時の観察用なので、紙には出さない。 */
+  .ui-variant-badge { display: none !important; }
   /* 空の段（Issue #41）は画面専用の書き始めの誘いであり、演奏用の印刷譜には出さない。 */
   .empty-stave-filler { display: none !important; }
   /* 段ごとの小節数調整コントロール（◀ N小節 ▶）も編集用UIなので印刷には出さない。 */
