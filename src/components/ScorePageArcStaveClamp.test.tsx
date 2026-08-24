@@ -100,6 +100,43 @@ function lowestCurveYInPath(d: string): number {
 }
 
 /**
+ * 小節をまたぐ下向きスラー。Stave は小節ごとに作り直されるので、同じ五線かどうかを
+ * オブジェクト同一性で判定するとここが対象外になり、五線へ食い込む（#403 round2 P2）
+ */
+function seedCrossMeasureDeepSlurWork() {
+  const m0 = [
+    { dur: '2' as const, isRest: false, keys: ['b/3'],
+      arcs: [{ fromKey: 'b/3', toKey: 'd/4', toMeasureIndex: 1, toEventIndex: 1, kind: 'slur' as const }] },
+    { dur: '2' as const, isRest: false, keys: ['f/3'] },
+  ];
+  const m1 = [
+    { dur: '2' as const, isRest: false, keys: ['f/3'] },
+    { dur: '2' as const, isRest: false, keys: ['d/4'] },
+  ];
+  const plain = [{ dur: '1' as const, isRest: false, keys: ['c/4'] }];
+  const clefs = ['treble', 'treble', 'alto', 'bass'] as const;
+  const data = createSavedScoreData(
+    { title: '小節またぎ弧テスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+    (['violin-1', 'violin-2', 'viola', 'cello'] as const).map((partId, i) => ({
+      partId,
+      clef: clefs[i],
+      measures: [0, 1].map((mi) => {
+        const events = i === 0 ? (mi === 0 ? m0 : m1) : plain;
+        return { events, voices: [{ id: 'voice-1', events }] };
+      }),
+    })),
+    1,
+    2,
+    'quartet'
+  );
+  const created = createWork('小節またぎ弧テスト');
+  if (!created.success || !created.data) throw new Error('createWork failed');
+  const saved = saveWorkAutosaveData(created.data.id, data);
+  if (!saved.success) throw new Error('saveWorkAutosaveData failed');
+  setLastOpenedWorkId(created.data.id);
+}
+
+/**
  * 運用者の月光 m2 と同じ形: ピアノ譜の右手・声部2の三連符を renderStaff:'below' で
  * 左手五線へ移し、その音符どうしにスラーを掛ける。
  * 音符は左手五線に描かれるので、右手パートの「次の五線＝左手五線の上端」を境界にすると
@@ -182,6 +219,29 @@ describe('ScorePage: 弧が次の五線へ食い込まない（Issue #390）', (
     expect(lowest).toBeLessThan(nextStaveTopY);
     // マージンぶんの余白もおおむね保たれている（太さぶんの超過だけ許す）
     expect(lowest).toBeLessThan(nextStaveTopY - BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX + 1);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // Stave は小節ごとに new されるため、同じ五線かどうかをオブジェクト同一性で比べると
+  // 小節をまたぐ弧が「別の五線」と判定されてクランプ対象外になる（#403 round2 P2）
+  it('小節をまたぐ弧でも、下の五線に食い込まない', async () => {
+    seedCrossMeasureDeepSlurWork();
+    render(<ScorePage />);
+
+    await waitFor(() => {
+      expect(document.querySelector('path.vf-arc')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    const svg = Array.from(document.querySelectorAll('svg'))
+      .find((c) => c.querySelector('rect.vf-note-hit')) as SVGSVGElement;
+    const staveTops = [...new Set(
+      Array.from(svg.querySelectorAll('.vf-note-hit'))
+        .map((el) => parseFloat(el.getAttribute('data-line0-y')!))
+    )].sort((a, b) => a - b);
+    expect(staveTops.length).toBeGreaterThanOrEqual(2);
+
+    const lowest = Math.max(...Array.from(svg.querySelectorAll('path.vf-arc'))
+      .map((p) => lowestCurveYInPath(p.getAttribute('d') ?? '')));
+    expect(lowest).toBeLessThan(staveTops[1]);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   // クランプが「音符より上」を境界にしてしまうと、弧は最大まで潰されてほぼ直線になる。

@@ -6968,6 +6968,9 @@ export default function PianoSystemCanvas({
     // パートまたぎ（renderStaff・⇵）の音符は隣の五線に描かれるため、パート番号から
     // 引くと「音符より上」を境界にしてしまい、弧を最大まで潰してしまう
     // （2026-08-24 実機で発生。月光 m2 の声部2がこの形）
+    // Stave は小節ごとに new されるため、同じ五線かどうかは上端Yで比べる（誤差1px許容）
+    const isSameStaveY=(a:Stave,b:Stave):boolean=>
+      Math.abs(a.getYForLine(0)-b.getYForLine(0))<=1;
     const arcMaxBottomYForStave=(ownStaveTopY:number):number|undefined=>{
       const nextTop=nextStaveTopBelow(collectors.staveTopYByPart.values(),ownStaveTopY);
       return nextTop===undefined?undefined:nextTop-BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX;
@@ -7063,8 +7066,10 @@ export default function PianoSystemCanvas({
         // 段をまたぐ弧（else 側）は2本に割れて五線間を通らないので対象外。
         // 実際のクランプは座標が出そろう drawTieArcP の中で行う
         // 始点と終点が別の五線に載る弧（パートまたぎで片方だけ移した等）は、
-        // 五線間に収める話ではないので対象外にする
-        const arcMaxBottomY = startStave === dest.stave
+        // 五線間に収める話ではないので対象外にする。
+        // Stave は小節ごとに作り直されるのでオブジェクト同一性では比べられない
+        // （同じ五線上の小節またぎ弧が対象外になってしまう・#403 round2 P2）
+        const arcMaxBottomY = isSameStaveY(startStave,dest.stave)
           ? arcMaxBottomYForStave(startStave.getYForLine(0))
           : undefined;
         try{drawTieArcP({from:startClef,to:destClef},startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,allObstacleNotes,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio,arcMaxBottomY);}catch{/* 保険 */}
@@ -7121,9 +7126,11 @@ export default function PianoSystemCanvas({
           const segmentObstacleY2P=effY2P;
           // 段またぎの片側セグメントは、境界点の高さを各段の音符高さに揃える。
           // ふくらみは制御点で作ることで、不自然な斜め線を避ける。
+          // 各セグメントはそれぞれ自分の段の五線に描かれるので、境界も別々に引く
           const crossMaxBottomY=arcMaxBottomYForStave(startStave.getYForLine(0));
+          const crossMaxBottomY2=arcMaxBottomYForStave(dest.stave.getYForLine(0));
           drawArcPathP(x1+startDx,effY1P,edgeX1+breakEndDx,effY1P+breakEndDy,upward,arc.kind,stemDir,segmentObstacleY1P,clampArcCpDyOffsetToStaveLimit(x1+startDx,effY1P,edgeX1+breakEndDx,effY1P+breakEndDy,upward,arc.kind,stemDir,segmentObstacleY1P,cpDyOffset,apexXRatio,crossMaxBottomY),arcKey+'-1',isSelected,crossMinNoteY,crossMaxNoteY,startDx,startDy,breakEndDx,breakEndDy,apexXRatio);
-          drawArcPathP(edgeX2+breakStartDx,effY2P+breakStartDy,x2+endDx,effY2P,upward,arc.kind,0,segmentObstacleY2P,clampArcCpDyOffsetToStaveLimit(edgeX2+breakStartDx,effY2P+breakStartDy,x2+endDx,effY2P,upward,arc.kind,0,segmentObstacleY2P,cpDy2,arc.apexXRatio2??0,crossMaxBottomY),arcKey+'-2',isSelected,crossMinNoteY,crossMaxNoteY,breakStartDx,breakStartDy,endDx,endDy,arc.apexXRatio2??0);
+          drawArcPathP(edgeX2+breakStartDx,effY2P+breakStartDy,x2+endDx,effY2P,upward,arc.kind,0,segmentObstacleY2P,clampArcCpDyOffsetToStaveLimit(edgeX2+breakStartDx,effY2P+breakStartDy,x2+endDx,effY2P,upward,arc.kind,0,segmentObstacleY2P,cpDy2,arc.apexXRatio2??0,crossMaxBottomY2),arcKey+'-2',isSelected,crossMinNoteY,crossMaxNoteY,breakStartDx,breakStartDy,endDx,endDy,arc.apexXRatio2??0);
         }catch{/* 保険 */}
       }
     });
@@ -7163,7 +7170,8 @@ export default function PianoSystemCanvas({
             const edgeX=dest.stave.getX();
             const baseKey=arcKeyP({partIndex,voiceIndex,fromMeasure,fromEvent,arcIndex});
             const selectedHere=selectedArc!==null&&selectedArc.voiceIndex===voiceIndex&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
-            drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0,arc.apexXRatio2??0);
+            const endSegMaxBottomY=arcMaxBottomYForStave(dest.stave.getYForLine(0));
+            drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,clampArcCpDyOffsetToStaveLimit(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,arc.apexXRatio2??0,endSegMaxBottomY),baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0,arc.apexXRatio2??0);
           }catch{/* 壊れた旧arcでも他の譜面描画を止めない */}
       });
 
@@ -7245,7 +7253,7 @@ export default function PianoSystemCanvas({
           while(fi<ln.length&&ln[fi].tiedToNext&&!ln[fi].isRest)fi++;
           if(fi<ln.length){
             const s=ln[start], e=ln[fi];
-            try{drawTieArcP({from:part.clef,to:part.clef},s.note,tieRepKeyP(part.clef,s.keys),s.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,s.isMultiVoice,undefined,undefined,undefined,0,'legacy',false,undefined,0,0,0,0,0,arcMaxBottomYForStave(s.stave.getYForLine(0)));}catch{/* 保険 */}
+            try{drawTieArcP({from:part.clef,to:part.clef},s.note,tieRepKeyP(part.clef,s.keys),s.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,s.isMultiVoice,undefined,undefined,undefined,0,'legacy',false,undefined,0,0,0,0,0,(isSameStaveY(s.stave,e.stave)?arcMaxBottomYForStave(s.stave.getYForLine(0)):undefined));}catch{/* 保険 */}
             fi++;
           }else{
             carryTies[pi]={note:ln[start].note,keys:ln[start].keys,stave:ln[start].stave,isMultiVoice:ln[start].isMultiVoice};
