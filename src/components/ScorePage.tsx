@@ -23,8 +23,12 @@ import PlaybackControls, {
 } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
+import UiContextBar from './UiContextBar';
 import UiVariantBadge from './UiVariantBadge';
 import { useUiVariant } from '../hooks/useUiVariant';
+// タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
+// ツールバーのタブ行と A1 文脈バーで同じ言葉を出すため、両方がこの定数を参照する。
+import { PIANO_LAYER_OPTIONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
 import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useDevicePixelRatio } from './useDevicePixelRatio';
@@ -183,7 +187,6 @@ import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure,
 import { computeFitZoom, readPageAreaAvailableWidth, VIEW_ZOOM_MIN, VIEW_ZOOM_MAX } from '../utils/viewZoomUtils';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
-type ToolbarTab = 'notes' | 'symbols' | 'score' | 'layout' | 'playback' | 'other';
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 // ツールバー（ヘッダー）の折り畳み状態（Issue #125）。譜面データではなく画面設定なので
@@ -4396,15 +4399,13 @@ export default function ScorePage() {
     });
   };
 
-  const toolbarTabButtons: Array<{ id: ToolbarTab; label: string }> = [
-    { id: 'notes', label: '音符・休符' },
-    { id: 'symbols', label: '演奏記号' },
-    { id: 'score', label: '楽譜設定' },
-    { id: 'layout', label: 'レイアウト' },
-    { id: 'playback', label: '再生・音色' },
-    // 第4段（#109）: ファイル操作だけが残ったため「その他」から改名（id は保存済み状態の互換のため据え置き）
-    { id: 'other', label: 'ファイル' },
-  ];
+  const toolbarTabButtons = TOOLBAR_TAB_BUTTONS;
+  // カスタム記号は id しか持たないツールなので、A1 文脈バーで名前を出せるよう対応表にしておく
+  // （記号を増減したときだけ作り直せば十分なので useMemo で包む）
+  const customSymbolNames = useMemo(
+    () => Object.fromEntries(customSymbolDefs.map(def => [def.id, def.name])),
+    [customSymbolDefs]
+  );
   const instrumentationGroups = useMemo(() => {
     // `solo` は「括弧でまとめない」指定なので、画面上のグループ数にも含めない。
     // 全パートが solo のときは 0 ではなく 1 と表示して、編成自体が空に見えないようにする。
@@ -4521,6 +4522,23 @@ export default function ScorePage() {
           {!isToolbarCollapsed && feedbackControls}
         </div>
 
+        {/* UI案 A1（Issue #405 段2）: いま「どのレイヤーの・どのタブで・どのツールを持っているか」を
+            1行の言葉で常設表示する。案が有効なときだけ描くので、対照群（current）では
+            この要素自体が存在せず既存の見た目は変わらない。 */}
+        {/* 段1 と同じ二重の防御: 案の解決自体が本番では current に固定されるが、
+            バッジと同じく import.meta.env.DEV でも囲み、本番バンドルから
+            テスト会用のUIごと落ちるようにする */}
+        {import.meta.env.DEV && uiVariant === 'a1' && (
+          <UiContextBar
+            scoreType={scoreType}
+            activeLayerPart={activeLayerPart}
+            activeVoice={activeVoice}
+            activeToolbarTab={activeToolbarTab}
+            tool={tool}
+            customSymbolNames={customSymbolNames}
+          />
+        )}
+
         {/* Undo/Redo はタブに関係なく常時操作できるようにする */}
         <div className="toolbar-history-controls" role="group" aria-label="元に戻す・やり直す">
           <button
@@ -4563,7 +4581,7 @@ export default function ScorePage() {
                 // 空白クリックの挿入は常に選択レイヤーへ入る（裁定②は 2026-08-23 に案Aへ差し替え）
                 <div className="toolbar-chip-group" role="group" aria-label="編集レイヤー切り替え">
                   <span className="toolbar-group-label">レイヤー</span>
-                  {([[0, 0, '右手・声部1'], [0, 1, '右手・声部2'], [1, 0, '左手・声部1'], [1, 1, '左手・声部2']] as const).map(([partIdx, voiceIdx, label]) => (
+                  {PIANO_LAYER_OPTIONS.map(({ partIndex: partIdx, voiceIndex: voiceIdx, label }) => (
                     <button
                       key={label}
                       type="button"
