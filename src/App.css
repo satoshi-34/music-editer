@@ -2099,10 +2099,6 @@ button.ghost.active:hover:not(:disabled) {
 /* パディング休符（.vf-padding-rest）は @media print 側と同じ理由（Issue #59）で
    ここでは隠さない。下の「svg path/line を印刷インク色に戻す」ルールが他の
    音符と同様に効いて、画面の薄いグレーとは異なり黒で表示される。 */
-/* UI案A2 の色帯・淡色記号は、印刷プレビュー中も紙面と同じ見え方にそろえる
-   （@media print 側と同じ理由。プレビューで見た通りに刷れる、を崩さないため） */
-.print-preview .vf-active-layer-band { display: none; }
-.print-preview .vf-inactive-layer-symbol { opacity: 1; }
 /* システム調整コントロールは隠さず、紙面の邪魔をしにくい半透明フローティング行として見せる */
 .print-preview .system-measure-override-controls {
   opacity: 0.55;
@@ -2115,6 +2111,10 @@ button.ghost.active:hover:not(:disabled) {
   opacity: 1;
 }
 .print-preview .paper-rail { background: #e5e7eb; }
+/* UI案A2 の色帯・淡色記号は、印刷プレビュー中も紙面と同じ見え方にそろえる
+   （@media print 側と同じ理由。プレビューで見た通りに刷れる、を崩さないため） */
+.print-preview .vf-active-layer-band { display: none; }
+.print-preview .vf-inactive-layer-symbol { opacity: 1; }
 .print-preview .print-page {
   --score-stroke-width: 0.8;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);

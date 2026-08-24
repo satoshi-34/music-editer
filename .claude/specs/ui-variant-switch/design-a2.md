@@ -108,6 +108,19 @@ UI案に関係なく常に読み込まれるコンポーネントで、A2 の分
 `@media print` と `.print-preview`（印刷プレビュー）では帯を `display: none`、
 記号の不透明度を `1` に戻す。パディング休符（Issue #59）が印刷では黒に戻るのと同じ考え方。
 
+#### 打ち消しルールを置く場所には注意が必要（CI で1回踏んだ）
+
+印刷プレビュー側の打ち消しルールは、最初 `.vf-padding-rest` の説明コメントの直後に置いたところ、
+`src/AppCssPaddingRestPrint.test.ts`（Issue #59 の回帰テスト）が落ちた。
+このテストは App.css を**文字列として**走査し、
+`/[^{}]*\.vf-padding-rest[^{}]*\{[^}]*\}/` で「`.vf-padding-rest` を含むルール」を拾って
+`display: none` が無いことを確かめる。コメントには波括弧が無いため、
+**コメントの直後に置いた別セレクタの `{ display: none; }` まで同じ塊として拾われてしまう**。
+
+`.vf-padding-rest` を隠していないこと自体は変わっていないので、ルールを
+`.print-preview .paper-rail` の後ろ（間にルールブロックが1つ挟まる位置）へ移して解消した。
+今後 App.css へ `display: none` を足すときは、`.vf-padding-rest` のコメントの直後を避けること。
+
 ## 影響範囲
 
 変更:
