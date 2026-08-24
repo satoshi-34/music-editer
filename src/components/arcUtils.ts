@@ -39,6 +39,11 @@ function apexRatioToCpRatio(kind: 'tie' | 'slur', apexXRatio: number): number {
  * @param cpDyOffset ユーザーがドラッグで調節した制御点の縦オフセット（SVG px、正 = 下方向）
  * @param apexXRatio ユーザーがドラッグで調節した頂点の左右位置（スパンに対する比率、正 = 右）
  */
+/** スラーの膨らみの下限（SVG px）。短い弧が深く見えすぎないための値 */
+export const SLUR_MIN_CLEARANCE_PX = 7;
+/** スラーの制御点を端からどれだけ離すか（スパン比）。大きいほど頂点付近が平らになる */
+export const SLUR_CP_X_RATIO = 0.32;
+
 function computeArcControlPoints(
   x1: number, y1: number, x2: number, y2: number,
   upward: boolean, kind: 'tie' | 'slur', stemDir: number,
@@ -63,7 +68,13 @@ function computeArcControlPoints(
   }
 
   // スラー: 常に三次ベジェ C（両端から緩やかに立ち上がる自然な形）
-  const clearance = Math.max(10, Math.min(24, span * 0.15));
+  //
+  // 膨らみの量。SMuFL/Bravura が定めているのは線の太さだけで、曲率の規定は無いので
+  // ここは浄書の慣習に寄せた調整値。
+  // 2026-08-24: 三連符のような短いスラーが深すぎるという実機所感を受けて緩めた
+  //   下限 10 → 7px（短い弧が下限に張り付いて相対的に深く見えていた）
+  //   係数 0.15 → 0.13
+  const clearance = Math.max(SLUR_MIN_CLEARANCE_PX, Math.min(24, span * 0.13));
   // obstacleY がある場合はそれを基準に、なければ端点の外側を基準にする
   const refY = obstacleY !== undefined
     ? obstacleY
@@ -78,8 +89,10 @@ function computeArcControlPoints(
 
   return {
     p0: { x: x1, y: y1 },
-    c1: { x: x1 + span * 0.25 + cpDx, y: cpY },
-    c2: { x: x2 - span * 0.25 + cpDx, y: cpY },
+    // 制御点を端から遠ざけるほど頂点付近が平らになり、両端の立ち上がりが緩やかになる。
+    // 深さを変えずに「きつい弧」の印象だけを和らげられる（2026-08-24: 0.25 → 0.32）
+    c1: { x: x1 + span * SLUR_CP_X_RATIO + cpDx, y: cpY },
+    c2: { x: x2 - span * SLUR_CP_X_RATIO + cpDx, y: cpY },
     p3: { x: x2, y: y2 },
   };
 }
