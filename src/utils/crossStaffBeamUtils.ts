@@ -12,7 +12,7 @@
 //   2. その区切りを、またぎ位置（載る五線が変わる位置）で**さらに切る**
 // という2段構えにしている。
 import { Beam, type StaveNote, type StemmableNote } from 'vexflow';
-import { splitIndexesByRenderTarget } from './crossStaffUtils';
+import { splitIndexesByRenderTarget, type RenderedPartIndex } from './crossStaffUtils';
 
 /** `Beam.generateBeams` に渡す設定（VexFlow が型を公開していないので必要な項目だけ持つ） */
 export type BeamGenerationOptions = Parameters<typeof Beam.generateBeams>[1];
@@ -43,7 +43,7 @@ function clearBeam(note: StemmableNote): void {
  */
 export function generateCrossStaffBeams(
   notes: readonly StaveNote[],
-  renderPartIndexes: readonly number[],
+  renderPartIndexes: readonly RenderedPartIndex[],
   beamOptions: BeamGenerationOptions
 ): Beam[] {
   // 手順1: またぎが無いときとまったく同じ「拍の区切り」を求める。ここで作られる Beam は

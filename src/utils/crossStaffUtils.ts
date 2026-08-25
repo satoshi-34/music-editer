@@ -27,16 +27,36 @@ export function isRenderStaffDirection(value: unknown): value is RenderStaffDire
  *   - パートが1つしかない編成（単段の譜面・パート譜表示）
  *   - 未知の文字列が入っていた場合（旧データや手書きJSON対策）
  */
+/**
+ * 「実際に描かれる五線」を指すパート番号のブランド型（#376）。
+ *
+ * パートまたぎ（⇵ / renderStaff）の導入以降、「データ上の所属パート」と
+ * 「実際に描かれる五線のパート」は一致しない。この取り違えは実バグを繰り返し
+ * 生んでいる（#403 の弧クランプ・#409 のA2淡色で、所属基準の判定が段またぎ音符で
+ * 逆転した。いずれも実機で発覚）。
+ *
+ * 描画位置に関わる判定（衝突・淡色・クランプ・帯）は必ずこの型の値を使うこと。
+ * 所属パート（クリックの書き込み先・保存データの添字）は素の number のままにして、
+ * 混ぜようとしたときに型エラーで気づけるようにする。
+ */
+export type RenderedPartIndex = number & { readonly __renderedPart: unique symbol };
+
+/** 素の番号を「描画先パート」として刻印する（resolveRenderPartIndex の内部と、
+ *  五線から直接引いた場合にだけ使う） */
+export function asRenderedPartIndex(value: number): RenderedPartIndex {
+  return value as RenderedPartIndex;
+}
+
 export function resolveRenderPartIndex(
   partIndex: number,
   renderStaff: RenderStaffDirection | undefined,
   partCount: number
-): number {
-  if (!isRenderStaffDirection(renderStaff)) return partIndex;
+): RenderedPartIndex {
+  if (!isRenderStaffDirection(renderStaff)) return asRenderedPartIndex(partIndex);
   const target = renderStaff === 'below' ? partIndex + 1 : partIndex - 1;
   // 相手の五線が存在しないときは自分の五線へ戻す（単段編成・パート譜もここで吸収される）
-  if (target < 0 || target >= partCount) return partIndex;
-  return target;
+  if (target < 0 || target >= partCount) return asRenderedPartIndex(partIndex);
+  return asRenderedPartIndex(target);
 }
 
 /** イベント配列を「実際に描くパート番号」の配列へ変換する（描画側の入口） */
@@ -44,7 +64,7 @@ export function resolveRenderPartIndexes(
   events: Pick<NoteEvent, 'renderStaff'>[],
   partIndex: number,
   partCount: number
-): number[] {
+): RenderedPartIndex[] {
   return events.map(ev => resolveRenderPartIndex(partIndex, ev.renderStaff, partCount));
 }
 
@@ -55,7 +75,7 @@ export function resolveRenderPartIndexes(
  * 描画側はこの判定が false のときは新しい分岐に一切入らない
  * （不変条件1「使っていない譜面は1pxも変わらない」を構造で守るため）。
  */
-export function hasCrossStaffRender(renderPartIndexes: number[], partIndex: number): boolean {
+export function hasCrossStaffRender(renderPartIndexes: RenderedPartIndex[], partIndex: number): boolean {
   return renderPartIndexes.some(target => target !== partIndex);
 }
 
@@ -121,7 +141,7 @@ export function toggleRenderStaffAt<T extends Pick<NoteEvent, 'renderStaff' | 'i
  */
 export function splitIndexesByRenderTarget(
   indexes: readonly number[],
-  renderPartIndexes: readonly number[]
+  renderPartIndexes: readonly RenderedPartIndex[]
 ): number[][] {
   const groups: number[][] = [];
   indexes.forEach(index => {

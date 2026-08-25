@@ -96,7 +96,7 @@ import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accident
 import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
-import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt } from '../utils/crossStaffUtils';
+import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt, asRenderedPartIndex, type RenderedPartIndex } from '../utils/crossStaffUtils';
 import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../utils/crossStaffBeamUtils';
 import {
   CHORD_HIT_PAD, EXTRA_TOP, EXTRA_BOTTOM, INACTIVE_VOICE_COLOR,
@@ -1192,11 +1192,13 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         // 声部ひとまとめで判定すると、段またぎで「片方の五線だけ色が合わない」
         // 「音符と連符数字の濃さが逆転する」状態になる（#409 Codex round1/2 P2）。
         // 判定にはグループの音符が載っている五線の集合を使う（先頭音符だけでは足りない）。
-        const noteRenderedPartByNote = new Map<StaveNote, number>();
-        vfNotes.forEach((n, idx) => { noteRenderedPartByNote.set(n, renderPartIndexes[idx] ?? pi); });
+        // 描画先パート（RenderedPartIndex）で持つ。所属パート（pi）を混ぜると
+        // 段またぎで淡色が逆転する（#409 で実発生・#376 の型区別）
+        const noteRenderedPartByNote = new Map<StaveNote, RenderedPartIndex>();
+        vfNotes.forEach((n, idx) => { noteRenderedPartByNote.set(n, renderPartIndexes[idx] ?? asRenderedPartIndex(pi)); });
         /** そのグループの音符が載っている五線（重複なし） */
-        const renderedPartsOfGroup = (notes: StaveNote[] | undefined): number[] =>
-          [...new Set((notes ?? []).map((n) => noteRenderedPartByNote.get(n) ?? pi))];
+        const renderedPartsOfGroup = (notes: StaveNote[] | undefined): RenderedPartIndex[] =>
+          [...new Set((notes ?? []).map((n) => noteRenderedPartByNote.get(n) ?? asRenderedPartIndex(pi)))];
         const beamRenderedPartSets = beams.map((b) =>
           renderedPartsOfGroup((b as unknown as { notes?: StaveNote[] }).notes));
         // Tuplet は「括弧を描くかどうか」をコンストラクタの時点で
@@ -1234,7 +1236,7 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
          * 片方だけ薄くはできないうえ、またいでいる事実そのものが情報だから
          * （#409 Codex round2 P2）。
          */
-        const groupInactive = (renderedParts: number[]): boolean => {
+        const groupInactive = (renderedParts: RenderedPartIndex[]): boolean => {
           if (isInactiveVoiceOnly) return true;
           if (highlightedLayerPartIndex == null || renderedParts.length === 0) return false;
           return renderedParts.every((rp) => rp !== highlightedLayerPartIndex);
@@ -6805,114 +6807,11 @@ export default function PianoSystemCanvas({
             svgRoot.appendChild(hit);
             });
 
-            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.dynamics?.length) {
-              dynamicTextEntries.push({
-                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                baseY: stave.getYForLine(4) + 26,
-                markings: activeEvs[j].dynamics,
-                adjust: getSymbolAdjust(activeEvs[j], 'dynamics'),
-                obstaclePartIndex: pi,
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
-              });
-            }
-            {
-              // その段（パート）の五線上端を基準にした統一高さで描く。
-              // StaffCanvas と同じ共通ユーティリティを使うことで見た目を揃える。
-              const entry = buildCustomSymbolEntry(
-                activeEvs[j],
-                noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                stave.getYForLine(0),
-                absI,
-                j,
-                pi,
-                activeVoiceIndex,
-              );
-              if (entry) customSymbolEntries.push(entry);
-            }
-            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.pedalMark) {
-              pedalMarkEntries.push({
-                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                botY: stave.getYForLine(4),
-                mark: activeEvs[j].pedalMark!,
-                stave,
-              });
-            }
-            if (!activeEvs[j]?.__isPlaceholder && !activeEvs[j]?.isRest && activeEvs[j]?.fingering) {
-              fingeringEntries.push({
-                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
-                staveTopY: stave.getYForLine(0),
-                text: activeEvs[j].fingering!,
-                adjust: getSymbolAdjust(activeEvs[j], 'fingering'),
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
-              });
-            }
-            if (!activeEvs[j]?.__isPlaceholder && !activeEvs[j]?.isRest && activeEvs[j]?.articulations?.length) {
-              articulationEntries.push({
-                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                noteTopY: bb?.getY?.() ?? stave.getYForLine(0) - 4,
-                staveTopY: stave.getYForLine(0),
-                markings: activeEvs[j].articulations!,
-                adjust: getSymbolAdjust(activeEvs[j], 'articulations'),
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
-              });
-            }
-            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.tempoMarking) {
-              tempoMarkingEntries.push({
-                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                topY: stave.getYForLine(0),
-                text: activeEvs[j].tempoMarking!,
-                adjust: getSymbolAdjust(activeEvs[j], 'tempoMarking'),
-                stackedWithExpression: !!activeEvs[j]?.expressionMarking,
-                stackedWithChord: !!activeEvs[j]?.chordSymbol,
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
-              });
-            }
-            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.expressionMarking) {
-              expressionMarkingEntries.push({
-                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                topY: stave.getYForLine(0),
-                text: activeEvs[j].expressionMarking!,
-                adjust: getSymbolAdjust(activeEvs[j], 'expressionMarking'),
-                staveLeftX: stave.getX(),
-                stackedWithChord: !!activeEvs[j]?.chordSymbol,
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
-              });
-            }
-            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.chordSymbol) {
-              chordSymbolEntries.push({
-                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                topY: stave.getYForLine(0),
-                text: activeEvs[j].chordSymbol!,
-                adjust: getSymbolAdjust(activeEvs[j], 'chordSymbol'),
-                partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j],
-              });
-            }
-            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.lyrics) {
-              lyricsEntries.push({
-                anchorX: noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2),
-                staveTopY: stave.getYForLine(0),
-                text: activeEvs[j].lyrics!,
-                adjust: getSymbolAdjust(activeEvs[j], 'lyrics'),
-              });
-            }
-            if (!activeEvs[j]?.__isPlaceholder && activeEvs[j]?.ottava) {
-              const cx = noteVisualLeft + ((noteVisualRight - noteVisualLeft) / 2);
-              const topY = stave.getYForLine(0);
-              const botY = stave.getYForLine(4);
-              const ot = activeEvs[j].ottava!;
-              if (ot === '8va') {
-                pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(activeEvs[j], 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j] };
-              } else if (ot === '8vb') {
-                pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(activeEvs[j], 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: activeVoiceIndex, event: activeEvs[j] };
-              } else if (pendingOttava && ot === '8vaEnd' && pendingOttava.kind === '8va') {
-                ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
-                pendingOttava = null;
-              } else if (pendingOttava && ot === '8vbEnd' && pendingOttava.kind === '8vb') {
-                ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
-                pendingOttava = null;
-              }
-            }
+            // 記号エントリの収集はここでは行わない（#376）。
+            // かつては「編集用ループ（ここ）」と「見た目だけループ」の2箇所から積んでいて、
+            // 両者の条件が補集合である保証がどこにもなく、#316 のレイヤー導入時に隙間が
+            // できて非選択の手の記号が消えた。全声部を1回で走査する統一ループ
+            // （この下の renderedVoiceEntries 走査）だけが記号を積む。
 
             const isSel=!!selected&&selected.partIndex===pi&&selected.measure===absI&&selected.index===j&&(selected.voiceIndex??0)===activeVoiceIndex;
             if(isSel){
@@ -6953,25 +6852,28 @@ export default function PianoSystemCanvas({
           });
         }
 
-        // 非アクティブ声部の強弱・カスタム記号・ペダル・オッターバの「見た目」も引き続き描画する。
-        // 上のインタラクティブ層（音符の hit rect・クリックハンドラ）はアクティブ声部だけから
-        // 作るが、それだけだと「声部2に切り替えた瞬間、声部1に付けた強弱記号が画面から消える」
-        // という表示上の退行が起きてしまう。ここでは編集用ループが担当しなかった全エントリに
-        // 同じマーカーを描き足す。
-        // **記号のクリック判定はここでも作る**（2026-08-24）: 画面上どの記号がどの声部の
-        // ものかは見分けられないため、レイヤーを合わせないと触れない仕様では
-        // 「押しても無反応＝壊れている」ように見える。他レイヤーの記号を押したときは
-        // クリック側でそのレイヤーへ切り替えてから小窓を開く（#316 の音符クリックと同じ型）。
-        // そのため各 push に partIndex / measureAbsoluteIndex / eventIndex / voiceIndex を
-        // 必ず渡す（voiceIndex を省くと調整値が別の声部へ書かれる）。
-        // 対象は「編集用ループの補集合」で選ぶ（#340 round1 で発覚した #316 の退行の修正）:
-        // 以前の isMultiVoiceMeasure && voiceIndex !== activeVoiceIndex という条件では、
-        // レイヤー明示選択（#316・ピアノ譜は常に明示選択）中の非選択パートの
-        // アクティブ声部がどちらのループにも入らず、非選択の手の強弱記号などが
-        // 画面から消えていた（単声部小節で声部2選択中の声部1も同様）。
+        // 記号エントリの統一収集（#376）: **描かれる全声部を、この1つのループだけで走査する**。
+        //
+        // かつては「編集用ループ（アクティブレイヤーのアクティブ声部）」と
+        // 「見た目だけループ（その補集合）」の2箇所から積んでいた。両者の条件が
+        // 補集合である保証はどこにもなく、#316 のレイヤー導入時に隙間ができて
+        // 非選択の手の記号が消える退行を起こした（応急処置の経緯は
+        // symbol-collision-avoidance / editor-layer-selection の設計メモ 2026-08-22 追補）。
+        // 集合の分割をやめて全量を1回で走査すれば、この種の隙間は構造的に生じない。
+        //
+        // 各 push には partIndex / measureAbsoluteIndex / eventIndex / voiceIndex を必ず渡す
+        // （#398: どの声部の記号もクリックでき、調整値は記号が属する声部へ書き戻すため。
+        //   クリック判定を作るかどうかは描画側 appendSymbolHitRegion がメタデータの有無で
+        //   決める＝「編集可能か」はループの分岐ではなくエントリの属性）。
+        //
+        // 走査順はアクティブ声部を先にする。旧実装（編集用ループが先）と
+        // 描画順・オッターバの状態機械（pendingOttava は共有変数）の並びを保つため。
         {
-          renderedVoiceEntries
-            .filter((entry) => !(isActiveLayerPart && entry.voiceIndex === activeVoiceIndex))
+          const orderedEntries = [
+            ...renderedVoiceEntries.filter((entry) => isActiveLayerPart && entry.voiceIndex === activeVoiceIndex),
+            ...renderedVoiceEntries.filter((entry) => !(isActiveLayerPart && entry.voiceIndex === activeVoiceIndex)),
+          ];
+          orderedEntries
             .forEach((entry) => {
               entry.vfNotes.forEach((n: any, j) => {
                 const ev = entry.sourceEvents[j];
@@ -7103,12 +7005,15 @@ export default function PianoSystemCanvas({
     // UI案A2（#405 段3）: 弧を淡くするかは「実際に描かれている五線」で決める。
     // Y座標から推測すると、五線間の加線音（ヘ音記号の C5 など）で逆転する
     // （#409 Codex round4 P2）。描画時に台帳へ控える。
-    const arcRenderedPartByKey = new Map<string, number>();
-    const partIndexOfStave = (stave: Stave): number | undefined => {
+    // 弧がどの五線に描かれたかの台帳。**描画先パート型**（#376）で持ち、
+    // 所属パート番号（arc.partIndex 等）を誤って入れると型エラーになるようにする
+    // （所属基準の判定は #409 round2/4 で二度逆転バグを生んだ）
+    const arcRenderedPartByKey = new Map<string, RenderedPartIndex>();
+    const partIndexOfStave = (stave: Stave): RenderedPartIndex | undefined => {
       const top = stave.getYForLine(0);
-      let hit: number | undefined;
+      let hit: RenderedPartIndex | undefined;
       collectors.staveTopYByPart.forEach((t, partIdx) => {
-        if (Math.abs(t - top) <= 1) hit = partIdx;
+        if (Math.abs(t - top) <= 1) hit = asRenderedPartIndex(partIdx);
       });
       return hit;
     };
