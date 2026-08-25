@@ -41,7 +41,7 @@ describe('readUiVariantParam: URLから ?ui= を読む', () => {
 });
 
 describe('isUiVariant: 未知の値を弾く', () => {
-  it.each(['current', 'a1', 'a2'])('%s は有効', (value) => {
+  it.each(['current', 'a1', 'a2', 'a3'])('%s は有効', (value) => {
     expect(isUiVariant(value)).toBe(true);
   });
 
@@ -60,7 +60,7 @@ describe('resolveUiVariant: 適用する案を決める', () => {
     expect(resolveUiVariant({ param: 'a2', stored: null, isDev: false }).variant).toBe('current');
   });
 
-  it.each(['current', 'a1', 'a2'] as const)('開発時は ?ui=%s がそのまま採用され、記憶される', (variant) => {
+  it.each(['current', 'a1', 'a2', 'a3'] as const)('開発時は ?ui=%s がそのまま採用され、記憶される', (variant) => {
     expect(resolveUiVariant({ param: variant, stored: null, isDev: true })).toEqual({
       variant,
       shouldPersist: true,

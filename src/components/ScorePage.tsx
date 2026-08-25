@@ -4560,7 +4560,7 @@ export default function ScorePage() {
               レイヤーはタブ非依存の状態なので、同じくタブ非依存の Undo/Redo の隣へ常設する
               （実機所感 2026-08-25）。音符クリックでの自動切替+通知（#258）は従来どおり */}
           {scoreType === 'piano' && (
-            <div className="toolbar-chip-group" role="group" aria-label="編集レイヤー切り替え">
+            <div className="toolbar-chip-group toolbar-layer-chips" role="group" aria-label="編集レイヤー切り替え">
               <span className="toolbar-group-label">レイヤー</span>
               {PIANO_LAYER_OPTIONS.map(({ partIndex: partIdx, voiceIndex: voiceIdx, label }) => (
                 <button

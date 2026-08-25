@@ -132,6 +132,22 @@ describe('ScorePage: A2 譜面側レイヤー表示の配線（Issue #405 段3�
     expect(chip.className).toContain('active');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  // 履歴グループから分離した兄弟要素なので、折り畳みの隠しセレクタに個別指定が要る
+  // （#410 round3 P2: 折り畳んでもチップだけ残っていた）
+  it('ツールバーを折り畳むとレイヤーチップも隠れる（CSSの対象に入っている）', async () => {
+    seedPianoWork();
+    render(<ScorePage />);
+
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+    const chips = document.querySelector('.toolbar-layer-chips');
+    expect(chips).toBeTruthy();
+    // jsdom はCSSを解釈しないので、DOM側の契約（専用クラスが付いていて
+    // .toolbar 配下にあること）を固定する。CSS側は AppCss テストで見る
+    expect(chips!.closest('header.toolbar')).toBeTruthy();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('左手レイヤーへ切り替えると、色帯も左手の五線へ移る', async () => {
     localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a2');
     seedPianoWork();

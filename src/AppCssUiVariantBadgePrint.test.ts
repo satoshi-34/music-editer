@@ -64,6 +64,12 @@ describe('App.css: UI案バッジ（Issue #405）', () => {
       expect(block).toContain('pointer-events: none');
     });
 
+    it('折り畳み中はレイヤーチップも隠れる', () => {
+      // 折り畳みの隠しセレクタに .toolbar-layer-chips が入っていること
+      // （履歴グループから分離した兄弟要素なので個別指定が要る・#410 round3 P2）
+      expect(loadAppCss()).toMatch(/\.toolbar\.collapsed \.toolbar-layer-chips,/);
+    });
+
     it('印刷では消える', () => {
       expect(printBlock(loadAppCss())).toMatch(/\.ui-context-bar-float\s*\{\s*display:\s*none/);
     });
