@@ -4552,6 +4552,35 @@ export default function ScorePage() {
           >
             ↷ やり直す
           </button>
+
+          {/* 編集レイヤーの統合セレクタ（#316）。もとは「音符・休符」タブ内にあったが、
+              記号を付けるときも「アクティブレイヤーの音符しかクリックできない」ため
+              （#316 の仕様）、タブを往復しないと左手に記号を付けられなかった。
+              レイヤーはタブ非依存の状態なので、同じくタブ非依存の Undo/Redo の隣へ常設する
+              （実機所感 2026-08-25）。音符クリックでの自動切替+通知（#258）は従来どおり */}
+          {scoreType === 'piano' && (
+            <div className="toolbar-chip-group" role="group" aria-label="編集レイヤー切り替え">
+              <span className="toolbar-group-label">レイヤー</span>
+              {PIANO_LAYER_OPTIONS.map(({ partIndex: partIdx, voiceIndex: voiceIdx, label }) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={`ghost toolbar-chip-button${activeLayerPart === partIdx && activeVoice === voiceIdx ? ' active' : ''}`}
+                  onClick={() => {
+                    // レイヤーを変えたら譜面の選択も手放す（Issue #238 の型）。
+                    // 前のレイヤーの音符・弧・松葉が選択のまま残ると、
+                    // そのあとの Delete / 矢印キーが別レイヤーへ届いてしまう
+                    requestScoreSelectionClear();
+                    setActiveLayerPart(partIdx);
+                    setActiveVoice(voiceIdx);
+                  }}
+                  title={`${label}を編集レイヤーにする（V で同じ手の声部だけ切替）`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="toolbar-panel" id="toolbar-panel">
@@ -4565,33 +4594,6 @@ export default function ScorePage() {
                 // パート譜表示中は相手の五線が画面に無いため、同じく無効にする。
                 crossStaffAvailable={scoreType === 'piano' && !isPartExtractionActive}
               />
-              {scoreType === 'piano' && (
-                // 編集レイヤーの統合セレクタ（#316）: 手×声部の4レイヤーを明示選択する。
-                // 従来の「パートは帯域推測・声部はトグル」の二層を一本化した。
-                // 音符クリックでそのレイヤーへ自動切替+通知（#258 の型）。
-                // 空白クリックの挿入は常に選択レイヤーへ入る（裁定②は 2026-08-23 に案Aへ差し替え）
-                <div className="toolbar-chip-group" role="group" aria-label="編集レイヤー切り替え">
-                  <span className="toolbar-group-label">レイヤー</span>
-                  {PIANO_LAYER_OPTIONS.map(({ partIndex: partIdx, voiceIndex: voiceIdx, label }) => (
-                    <button
-                      key={label}
-                      type="button"
-                      className={`ghost toolbar-chip-button${activeLayerPart === partIdx && activeVoice === voiceIdx ? ' active' : ''}`}
-                      onClick={() => {
-                        // レイヤーを変えたら譜面の選択も手放す（Issue #238 の型）。
-                        // 前のレイヤーの音符・弧・松葉が選択のまま残ると、
-                        // そのあとの Delete / 矢印キーが別レイヤーへ届いてしまう
-                        requestScoreSelectionClear();
-                        setActiveLayerPart(partIdx);
-                        setActiveVoice(voiceIdx);
-                      }}
-                      title={`${label}を編集レイヤーにする（V で同じ手の声部だけ切替）`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
               {selectedMeasures && (
                 // 小節の挿入・削除（Issue #110）。選択ツールで小節をクリックしたときだけ出す。
                 // 複数小節をまとめて挿入・削除する機能は範囲外のため、単一小節を選択しているときのみ有効にする。
@@ -5474,7 +5476,9 @@ export default function ScorePage() {
           「今の状態の表示」を場所で分ける。fixed なのでスクロールしても見え続ける。
           案が有効なときだけ描くので、対照群（current）ではこの要素自体が存在しない。
           段1 と同じ二重の防御（DEVガード＝showUiContextBar 内）も維持。 */}
-      {showUiContextBar && (
+      {/* 折り畳み中は出さない（#410 Codex P2）。ヘッダーを畳むのは「譜面を広く見たい」
+          意思表示なので、浮いた表示も一緒に引っ込める */}
+      {showUiContextBar && !isToolbarCollapsed && (
         <div className="ui-context-bar-float">
           <UiContextBar
             scoreType={scoreType}

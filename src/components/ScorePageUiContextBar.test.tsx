@@ -98,6 +98,17 @@ describe('ScorePage: A1 文脈バーの配線', () => {
     expect(bar.closest('.ui-context-bar-float')).toBeTruthy();
   });
 
+  // ヘッダーを畳むのは「譜面を広く見たい」意思表示なので、浮いたバーも引っ込める
+  // （#410 Codex P2: 折り畳んでもバーだけ譜面上に残っていた）
+  it('ツールバーを折り畳むとバーも消える', () => {
+    localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a1');
+    render(<ScorePage />);
+
+    expect(screen.getByTestId('ui-context-bar')).toBeTruthy();
+    fireEvent.click(screen.getByTitle('ツールバーを隠して譜面を広く見る'));
+    expect(screen.queryByTestId('ui-context-bar')).toBeNull();
+  });
+
   it('A3（両方込み）でもバーが出る', () => {
     localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a3');
     render(<ScorePage />);

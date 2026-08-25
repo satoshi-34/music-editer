@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/react';
 import ScorePage from './ScorePage';
 import { UI_VARIANT_STORAGE_KEY } from '../utils/uiVariant';
+import { ACTIVE_LAYER_BAND_COLOR } from '../editor/hitResolution';
 import {
   createSavedScoreData, createWork, saveWorkAutosaveData, setLastOpenedWorkId,
 } from '../utils/storage';
@@ -77,6 +78,9 @@ describe('ScorePage: A2 譜面側レイヤー表示の配線（Issue #405 段3�
     render(<ScorePage />);
 
     await waitFor(() => expect(bands().length).toBeGreaterThan(0), { timeout: 15000 });
+    // 帯の濃さは定数から取られている（0.08時代の実機所感「違いが分からない」への調整値。
+    // ハードコードへ退行して定数を変えても効かない、を防ぐ）
+    expect(bands()[0].getAttribute('fill')).toBe(ACTIVE_LAYER_BAND_COLOR);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('A3（両方込み）でも色帯が出る', async () => {
@@ -112,6 +116,22 @@ describe('ScorePage: A2 譜面側レイヤー表示の配線（Issue #405 段3�
 
   // 「帯が出る」だけでは、activeLayerPartIndex を固定した退行を検出できない。
   // 実際にレイヤーを切り替えて帯が追随することまで見る（#409 Codex round5 P2）
+  // レイヤーチップは Undo/Redo の隣へ常設した（実機所感 2026-08-25）。
+  // 記号を付けるときもアクティブレイヤーの音符しかクリックできない（#316）ため、
+  // 「音符・休符」タブ内だと記号1つ付けるのにタブ往復が要った
+  it('レイヤーチップは演奏記号タブでも押せる（タブ非依存の常設）', async () => {
+    seedPianoWork();
+    render(<ScorePage />);
+
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
+    const chip = screen.getByRole('button', { name: '左手・声部1' });
+    fireEvent.click(chip);
+    expect(chip.className).toContain('active');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('左手レイヤーへ切り替えると、色帯も左手の五線へ移る', async () => {
     localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a2');
     seedPianoWork();
