@@ -1613,8 +1613,11 @@ export default function ScorePage() {
     const parts: PartEntry[] = [];
 
     if (scoreType === 'piano') {
-      if (rightHandData) parts.push({ partId: 'right', measures: rightHandData, apply: setRightHandData, clef: 'treble' });
-      if (leftHandData) parts.push({ partId: 'left', measures: leftHandData, apply: setLeftHandData, clef: 'bass' });
+      // 未入力の手（state が undefined）も空配列で常に列挙する（#412 Codex round2 P1）。
+      // 抜くと「右手でコピーして、まだ何も無い左手へ貼る」が entries[1] 不在で
+      // 例外になったり無反応になったりする。空配列でも apply は state を実体化する
+      parts.push({ partId: 'right', measures: rightHandData ?? [], apply: setRightHandData, clef: 'treble' });
+      parts.push({ partId: 'left', measures: leftHandData ?? [], apply: setLeftHandData, clef: 'bass' });
     } else if (scoreType === 'quartet') {
       quartetParts.forEach((part, i) => {
         parts.push({

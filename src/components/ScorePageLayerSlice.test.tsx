@@ -63,8 +63,9 @@ function seedWork() {
 }
 
 function mockSvgLayout() {
+  // 音符ヒットはアクティブレイヤーに音が無いと消えるので、小節ヒットで探す
   const svg = Array.from(document.querySelectorAll('svg'))
-    .find((c) => c.querySelector('rect.vf-note-hit')) as SVGSVGElement;
+    .find((c) => c.querySelector('rect.vf-hit')) as SVGSVGElement;
   const width = 900;
   const height = parseFloat(svg.getAttribute('height') ?? '0') || 300;
   svg.getBoundingClientRect = vi.fn(() => ({
@@ -162,6 +163,65 @@ describe('ScorePage: ピアノ譜のレイヤー限定スライス（裁定A）'
 
     expect(notices.some((n) => n.includes('切れ目に合っていません'))).toBe(true);
     expect(notices.some((n) => n.includes('コピーしました'))).toBe(false);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 左手が一度も入力されていない譜面（state 未実体化）でも、右手でコピーして
+  // 左手へ貼れる（#412 Codex round2 P1: entries から左手が抜けて例外/無反応だった）
+  it('右手でコピーし、未入力の左手へ貼れる', async () => {
+    // 左手の小節を持たない作品を用意する
+    const rh = [
+      { dur: '4' as const, isRest: false, keys: ['c/5'] },
+      { dur: '4' as const, isRest: false, keys: ['d/5'] },
+      { dur: '2' as const, isRest: false, keys: ['e/5'] },
+    ];
+    const data = createSavedScoreData(
+      { title: '未実体化左手', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      // 左手パーツを持たない保存データ。ただし自動保存の復元は左手を正規化して
+      // 実体化するため、このテストが実際に踏むのは「空の左手へ貼る」経路まで。
+      // leftHandData === undefined（Codex round2 P1）に到達するのは新規作成リセットと
+      // ファイル読込（setLeftHandData(leftPart?.measures)）で、そちらは
+      // getEditablePartEntries の ?? [] が防ぐ（実経路での再現はコストに見合わず断念）
+      [
+        { partId: 'right-hand', clef: 'treble', measures: [{ events: rh, voices: [{ id: 'voice-1', events: rh }] }] },
+      ],
+      1, 1, 'piano'
+    );
+    const created = createWork('未実体化左手');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+    workId = created.data.id;
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('button', { name: /小節選択/ }));
+    const svg = mockSvgLayout();
+    const xs = activeNoteXs(svg);
+    const hit = svg.querySelector('rect.vf-hit') as SVGRectElement;
+    // 2音目（1〜2拍）を選んでコピー
+    fireEvent.mouseDown(hit, { button: 0, clientX: xs[1] + 2, clientY: 100 });
+    fireEvent.mouseMove(hit, { clientX: xs[2] + 2, clientY: 100 });
+    fireEvent.mouseUp(window, { clientX: xs[2] + 2, clientY: 100 });
+    fireEvent.keyDown(window, { key: 'c', metaKey: true });
+    expect(notices.some((n) => n.includes('コピー'))).toBe(true);
+
+    // 左手へ切替 → 1小節目を丸ごと選択 → 貼り付け
+    fireEvent.click(screen.getByRole('button', { name: '左手・声部1' }));
+    const svgB = mockSvgLayout();
+    const m0 = svgB.querySelector('rect.vf-hit') as SVGRectElement;
+    const m0x = parseFloat(m0.getAttribute('x')!);
+    fireEvent.mouseDown(m0, { button: 0, clientX: m0x + 2, clientY: 100 });
+    fireEvent.mouseUp(window, { clientX: m0x + 2, clientY: 100 });
+    fireEvent.click(m0, { clientX: m0x + 2, clientY: 100 });
+    fireEvent.keyDown(window, { key: 'v', metaKey: true });
+
+    await waitFor(() => {
+      const parts = loadWorkAutosaveData(workId).data?.parts;
+      const lh = parts?.[1]?.measures?.[0]?.events ?? [];
+      expect(lh.some((ev) => !ev.isRest && ev.keys?.[0] === 'd/5')).toBe(true);
+    }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('スライス削除は右手（選択レイヤー）だけを休符化し、左手の全音符は残る', async () => {
