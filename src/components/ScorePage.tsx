@@ -154,7 +154,7 @@ import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamic
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
-import { extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, type VoiceSliceEdit } from '../utils/beatSliceUtils';
+import { extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
@@ -173,6 +173,7 @@ import {
   describeWorkHistoryRestoreBlocked,
   describeWorkHistoryRestored,
   describeSliceClearNoop,
+  describeSliceCopyUnavailable,
   describeSliceCopied,
   describeSliceDeleteUnavailable,
   describeSliceMeasureOpUnavailable,
@@ -617,7 +618,9 @@ export default function ScorePage() {
   // 楽譜種別や編成が変わっても、別の楽器へ内容を上書きしない（Codex round2/3 P1）。
   // 小節クリップボード（setClipboard）の編成譜は従来どおり添字ベース（ensemble-i）のままで、
   // 同種の並べ替え問題を持つ（既存挙動・別Issue候補）
-  const [sliceClipboard, setSliceClipboard] = useState<Array<{ beats: number; parts: Array<{ partId: string; voices: NoteEvent[][] }> }> | null>(null);
+  // layerSlice: ピアノ譜で「選択レイヤーのみ」をコピーしたときの中身（裁定A・2026-08-25）。
+  // 貼り付け先も**貼り付け時点の選択レイヤー**になる（右手でコピーして左手へ貼る、もできる）
+  const [sliceClipboard, setSliceClipboard] = useState<Array<{ beats: number; parts: Array<{ partId: string; voices: NoteEvent[][] }>; layerSlice?: NoteEvent[] }> | null>(null);
   // コピーした小節データ。各パートごとのスナップショット
   // コピー元の先頭小節（sourceStart）も持つ。タイ/スラーの終点・ヘアピンの終点は
   // 絶対小節インデックスなので、貼り付け時にここを基準へ付け替える必要がある
@@ -1610,8 +1613,12 @@ export default function ScorePage() {
     const parts: PartEntry[] = [];
 
     if (scoreType === 'piano') {
-      if (rightHandData) parts.push({ partId: 'right', measures: rightHandData, apply: setRightHandData, clef: 'treble' });
-      if (leftHandData) parts.push({ partId: 'left', measures: leftHandData, apply: setLeftHandData, clef: 'bass' });
+      // 未入力の手（state が undefined）も空配列で常に列挙する（#412 round2〜4）。
+      // 現在は undefined でもキャンバスの初期同期が最初のレンダーで実体化するため
+      // ユーザー操作は壊れないが、同期の順序が変わる将来に備えた防御として置く。
+      // 空配列でも apply は state を実体化する
+      parts.push({ partId: 'right', measures: rightHandData ?? [], apply: setRightHandData, clef: 'treble' });
+      parts.push({ partId: 'left', measures: leftHandData ?? [], apply: setLeftHandData, clef: 'bass' });
     } else if (scoreType === 'quartet') {
       quartetParts.forEach((part, i) => {
         parts.push({
@@ -2804,10 +2811,31 @@ export default function ScorePage() {
           const beatsPerMeasureNow = getMeasureBeats(scoreTimeSignature);
           const { start, end } = selectedMeasures;
           const entries = getEditablePartEntries();
-          const segments: Array<{ beats: number; parts: Array<{ partId: string; voices: NoteEvent[][] }> }> = [];
+          const segments: Array<{ beats: number; parts: Array<{ partId: string; voices: NoteEvent[][] }>; layerSlice?: NoteEvent[] }> = [];
           for (let mi = start; mi <= end; mi++) {
             const segStart = mi === start ? (selectedMeasures.startBeat ?? 0) : 0;
             const segEnd = mi === end ? (selectedMeasures.endBeat ?? beatsPerMeasureNow) : beatsPerMeasureNow;
+            if (scoreType === 'piano') {
+              // ピアノ譜のスライスは選択レイヤーのみ（裁定A・2026-08-25）。
+              // 「パーツの繰り返し」を運ぶのが主用途なので、他の手・声部は巻き込まない
+              const layerEvents = getMeasureVoices(entries[activeLayerPart]?.measures[mi])[activeVoice]?.events ?? [];
+              // 範囲を選んだ**あとに**レイヤーを切り替えると、境界は旧レイヤー由来のまま
+              // 現在のレイヤーの音符の切れ目に合わないことがある。extractVoiceSlice は
+              // 境界をまたぐ音符を黙って除外するため、そのままだと「1拍コピーしました」と
+              // 言いながら中身の欠けたコピーになる（#412 Codex P1）。合わなければ断る
+              if (!sliceBoundaryFitsVoice(layerEvents, segStart, beatsPerMeasureNow)
+                || !sliceBoundaryFitsVoice(layerEvents, segEnd, beatsPerMeasureNow)) {
+                notifyScoreEdit(describeSliceCopyUnavailable());
+                e.preventDefault();
+                return;
+              }
+              segments.push({
+                beats: segEnd - segStart,
+                parts: [],
+                layerSlice: extractVoiceSlice(layerEvents, segStart, segEnd),
+              });
+              continue;
+            }
             const partsSlices = entries.map((entry) => ({
               partId: entry.partId,
               voices: getMeasureVoices(entry.measures[mi]).map((voice) =>
@@ -2879,6 +2907,8 @@ export default function ScorePage() {
           type PlannedClear = { entryIndex: number; measureIndex: number; voiceEdits: Array<VoiceSliceEdit | null> };
           const planned: PlannedClear[] = [];
           for (let ei = 0; ei < entries.length; ei++) {
+            // ピアノ譜のスライス削除は選択レイヤーのみ（裁定A・2026-08-25）
+            if (scoreType === 'piano' && ei !== activeLayerPart) continue;
             const entry = entries[ei];
             for (let mi = start; mi <= end && mi < entry.measures.length; mi++) {
               const segStart = mi === start ? (selectedMeasures.startBeat ?? 0) : 0;
@@ -2888,6 +2918,10 @@ export default function ScorePage() {
               const voiceEdits: Array<VoiceSliceEdit | null> = [];
               let failed = false;
               getMeasureVoices(measure).forEach((voice, vi) => {
+                if (scoreType === 'piano' && vi !== activeVoice) {
+                  voiceEdits[vi] = null; // 選択レイヤー以外の声部は触らない（裁定A）
+                  return;
+                }
                 if (voice.events.length === 0) {
                   voiceEdits[vi] = null; // 空声部は触らない（失敗ではない）
                   return;
@@ -3016,6 +3050,35 @@ export default function ScorePage() {
             if (atBeat + segment.beats > beatsPerMeasureNow + 0.0001) {
               notifyScoreEdit(describeSlicePasteUnavailable('noFit'));
               return;
+            }
+            if (segment.layerSlice) {
+              // ピアノ譜の「選択レイヤーのみ」コピー（裁定A）。貼り先は**貼り付け時点の**
+              // 選択レイヤー。他の手・声部には一切触らない
+              if (scoreType !== 'piano') {
+                // ピアノでコピーして譜種を変えた場合。貼り先のレイヤーが存在しない
+                notifyScoreEdit(describeSlicePasteUnavailable('noEffect'));
+                e.preventDefault();
+                return;
+              }
+              const targetEntryIndex = activeLayerPart;
+              const measure = entries[targetEntryIndex]?.measures[mi];
+              const targetEvents = getMeasureVoices(measure)[activeVoice]?.events ?? [];
+              if (segment.layerSlice.length === 0 && targetEvents.length === 0) {
+                planned.push({ entryIndex: targetEntryIndex, measureIndex: mi, voiceEdits: [] });
+                continue;
+              }
+              const edit = pasteVoiceSlice(
+                targetEvents, atBeat, segment.layerSlice, segment.beats, beatsPerMeasureNow,
+                (beats) => buildRestEventsForBeats(beats, entries[targetEntryIndex].clef),
+              );
+              if (edit === null) {
+                notifyScoreEdit(describeSlicePasteUnavailable('boundary'));
+                return;
+              }
+              const voiceEdits: Array<VoiceSliceEdit | null> = [];
+              voiceEdits[activeVoice] = edit;
+              planned.push({ entryIndex: targetEntryIndex, measureIndex: mi, voiceEdits });
+              continue;
             }
             for (let ei = 0; ei < entries.length; ei++) {
               const measure = entries[ei].measures[mi];
@@ -3158,7 +3221,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は useEffect より後に宣言されるため deps に入れられない。
   // 代わりに ref で最新値を追跡する（arrow key ハンドラ内で参照）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMeasures, clipboard, sliceClipboard, scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, pushHistory, handleTranspose, isPrintPreview, scoreTimeSignature, getEditablePartEntries]);
+  }, [selectedMeasures, clipboard, sliceClipboard, scoreType, activeLayerPart, activeVoice, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, pushHistory, handleTranspose, isPrintPreview, scoreTimeSignature, getEditablePartEntries]);
 
   const { spreadRef, scale } = useAutoPageScale(columns, 20);
   // ユーザー設定（常設エリアの「画面表示のズーム」スライダー、0.5〜3.0）。
