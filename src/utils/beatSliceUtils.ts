@@ -19,6 +19,22 @@ const EPS = 0.0001;
  *
  * @param measuresAcrossParts 同じ小節番号の小節を全パートぶん並べた配列
  */
+/**
+ * 拍 b がこの声部の「音符の切れ目」に載っているか（連符内部は切れ目にしない）。
+ *
+ * 範囲選択のあとにレイヤーを切り替えてコピーすると、選択境界が新しいレイヤーの
+ * 切れ目に合わないことがある。extractVoiceSlice は境界をまたぐ音符を黙って除外する
+ * 仕様なので、コピー前にこれで検証して、合わなければ断る（#412 Codex P1）。
+ */
+export function sliceBoundaryFitsVoice(
+  events: NoteEvent[],
+  beat: number,
+  beatsPerMeasure: number,
+): boolean {
+  const candidates = sliceBoundaryCandidates([{ events }], beatsPerMeasure);
+  return candidates.some((c) => Math.abs(c - beat) < 0.001);
+}
+
 export function sliceBoundaryCandidates(
   measuresAcrossParts: Array<MeasureData | undefined>,
   beatsPerMeasure: number,

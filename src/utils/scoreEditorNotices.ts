@@ -426,6 +426,15 @@ function formatBeatEndLabel(endBeat: number, beatsPerMeasure: number): string {
   return `${formatBeatLabel(endBeat)}の手前`;
 }
 
+/**
+ * 拍範囲スライスのコピーを断る通知（#412）。
+ * 範囲選択のあとにレイヤーを切り替えると、境界が新しいレイヤーの音符の切れ目に
+ * 合わないことがある。黙って欠けたコピーを作らず、選び直しを案内する
+ */
+export function describeSliceCopyUnavailable(): string {
+  return '選択範囲がこのレイヤーの音符の切れ目に合っていません（レイヤーを替えた場合は、範囲を選び直してからコピーしてください）';
+}
+
 /** 拍範囲スライスのコピー通知（#333 段2） */
 export function describeSliceCopied(totalBeats: number): string {
   const rounded = Math.round(totalBeats * 100) / 100;

@@ -5441,7 +5441,12 @@ export default function PianoSystemCanvas({
               return { partial, fromBeat, toBeat };
             })()
           : null;
-        const isMeasureSelected = sliceSelection != null && !sliceSelection.partial;
+        // スライス選択（拍範囲）中の丸ごと区間（中間小節など）。レイヤー限定の譜面では
+        // 強調も選択レイヤーのパートにだけ出す（裁定A。両方の手に出すと「全パートに
+        // 効く」ように見える・#412 Codex P2）。小節丸ごと選択（beat無し）は従来どおり全パート
+        const isBeatSliceSelection = selectedMeasures?.startBeat != null || selectedMeasures?.endBeat != null;
+        const isMeasureSelected = sliceSelection != null && !sliceSelection.partial
+          && !(isBeatSliceSelection && activeLayerPartIndex != null && pi !== activeLayerPartIndex);
         const isSelectTool = 'mode' in tool && tool.mode === 'select';
 
         // ── 拍範囲スライスのドラッグ解決（#333 段2）──

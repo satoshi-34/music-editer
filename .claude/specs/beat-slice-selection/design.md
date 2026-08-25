@@ -1,1 +1,0 @@
-ls .claude/specs/ | grep -i "slice\|333" | head -3

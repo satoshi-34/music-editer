@@ -154,7 +154,7 @@ import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamic
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
-import { extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, type VoiceSliceEdit } from '../utils/beatSliceUtils';
+import { extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
@@ -173,6 +173,7 @@ import {
   describeWorkHistoryRestoreBlocked,
   describeWorkHistoryRestored,
   describeSliceClearNoop,
+  describeSliceCopyUnavailable,
   describeSliceCopied,
   describeSliceDeleteUnavailable,
   describeSliceMeasureOpUnavailable,
@@ -2814,6 +2815,16 @@ export default function ScorePage() {
               // ピアノ譜のスライスは選択レイヤーのみ（裁定A・2026-08-25）。
               // 「パーツの繰り返し」を運ぶのが主用途なので、他の手・声部は巻き込まない
               const layerEvents = getMeasureVoices(entries[activeLayerPart]?.measures[mi])[activeVoice]?.events ?? [];
+              // 範囲を選んだ**あとに**レイヤーを切り替えると、境界は旧レイヤー由来のまま
+              // 現在のレイヤーの音符の切れ目に合わないことがある。extractVoiceSlice は
+              // 境界をまたぐ音符を黙って除外するため、そのままだと「1拍コピーしました」と
+              // 言いながら中身の欠けたコピーになる（#412 Codex P1）。合わなければ断る
+              if (!sliceBoundaryFitsVoice(layerEvents, segStart, beatsPerMeasureNow)
+                || !sliceBoundaryFitsVoice(layerEvents, segEnd, beatsPerMeasureNow)) {
+                notifyScoreEdit(describeSliceCopyUnavailable());
+                e.preventDefault();
+                return;
+              }
               segments.push({
                 beats: segEnd - segStart,
                 parts: [],
