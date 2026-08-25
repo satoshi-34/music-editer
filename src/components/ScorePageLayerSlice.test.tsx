@@ -165,9 +165,10 @@ describe('ScorePage: ピアノ譜のレイヤー限定スライス（裁定A）'
     expect(notices.some((n) => n.includes('コピーしました'))).toBe(false);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  // 左手が未実体化（leftHandData === undefined）でも、右手でコピーして左手へ貼れる
-  // （#412 Codex round2 P1）。undefined へは「左手パーツを持たない piano JSON の
-  // ファイル読込」で到達する（setLeftHandData(leftPart?.measures)・round3 の指摘手順）
+  // 片手だけの piano JSON をファイル読込→右手でコピー→左手へ貼る、の実経路カバレッジ。
+  // 読込直後 leftHandData は undefined になるが、キャンバスの初期同期が最初のレンダーで
+  // 空配列へ実体化するため、貼り付け時点では常に実体化済み（#412 round3 で実測）。
+  // よってこのテストは ?? [] ガードの検出器ではなく、経路が通ることの固定
   it('右手でコピーし、ファイル読込で未実体化になった左手へ貼れる', async () => {
     seedWork();
     render(<ScorePage />);
