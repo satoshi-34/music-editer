@@ -45,7 +45,7 @@ describe('isUiVariant: 未知の値を弾く', () => {
     expect(isUiVariant(value)).toBe(true);
   });
 
-  it.each(['', 'A1', 'a3', 'ui', null, undefined, 1])('%s は無効', (value) => {
+  it.each(['', 'A1', 'a4', 'ui', null, undefined, 1])('%s は無効', (value) => {
     expect(isUiVariant(value)).toBe(false);
   });
 });
@@ -112,7 +112,7 @@ describe('表示まわりの定数', () => {
     expect(DEFAULT_UI_VARIANT).toBe('current');
   });
 
-  it('3案すべてに隅の表示用のラベルがある', () => {
-    expect(Object.keys(UI_VARIANT_LABELS).sort()).toEqual(['a1', 'a2', 'current']);
+  it('4案すべてに隅の表示用のラベルがある', () => {
+    expect(Object.keys(UI_VARIANT_LABELS).sort()).toEqual(['a1', 'a2', 'a3', 'current']);
   });
 });

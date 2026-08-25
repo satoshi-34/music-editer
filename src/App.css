@@ -124,17 +124,25 @@
    どのツールを持っているか」を言葉で出す。
    画面が狭いときは折り返さずに横スクロールさせる（1行を保たないと
    ツールバーの高さが変わって譜面が上下に動き、テスト会の比較が濁るため）。 */
+/* 文脈バーの置き場所（実機所感 2026-08-25 第2版）: 譜面背景の左上に浮かせる。
+   入力するボタン群（ヘッダー）と「今の状態の表示」を場所で分けるため。
+   fixed + --toolbar-h でヘッダーの直下に貼り付き、スクロールしても見える */
+.ui-context-bar-float {
+  position: fixed;
+  top: calc(var(--toolbar-h, 60px) + 8px);
+  left: 8px;
+  z-index: 40;
+  max-width: min(70vw, 560px);
+  /* 表示専用。下の譜面のクリック・スクロールを邪魔しない（バッジと同じ扱い） */
+  pointer-events: none;
+}
 .ui-context-bar {
   display: flex;
   align-items: center;
   gap: 6px;
   overflow-x: auto;
-  /* タブ列とフィードバックの間に置く（実機所感 2026-08-25: 独立行だとヘッダーが太る）。
-     余った幅を使いつつ、狭い幅では自分だけ横スクロールして行を折り返させない */
-  flex: 1 1 auto;
-  min-width: 0;
-  align-self: center;
-  padding: 2px 8px;
+  padding: 3px 10px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
   border: 1px solid #bfdbfe;
   border-radius: 7px;
   background: #eff6ff;
@@ -1963,6 +1971,8 @@ button.ghost.active:hover:not(:disabled) {
   .add-measures-ghost-button { display: none !important; }
   /* UI案の表示（Issue #405）は開発時の観察用なので、紙には出さない。 */
   .ui-variant-badge { display: none !important; }
+  /* 文脈バー（A1/A3）も画面専用。紙面には出さない */
+  .ui-context-bar-float { display: none !important; }
   /* 空の段（Issue #41）は画面専用の書き始めの誘いであり、演奏用の印刷譜には出さない。 */
   .empty-stave-filler { display: none !important; }
   /* 段ごとの小節数調整コントロール（◀ N小節 ▶）も編集用UIなので印刷には出さない。 */

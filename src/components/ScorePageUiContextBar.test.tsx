@@ -87,38 +87,21 @@ describe('ScorePage: A1 文脈バーの配線', () => {
     expect(screen.getByRole('tab', { name: '音符・休符' })).toBeTruthy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  /** ツールバーの実測高さを差し替える（jsdom は実測が 0 になるため） */
-  function withMockedToolbarHeight<T>(heightPx: number, run: () => T): T {
-    const originalRect = HTMLElement.prototype.getBoundingClientRect;
-    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-      if (this.classList?.contains('toolbar')) {
-        return { height: heightPx, width: 375, top: 0, left: 0, right: 375,
-          bottom: heightPx, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
-      }
-      return originalRect.call(this);
-    };
-    try { return run(); } finally { HTMLElement.prototype.getBoundingClientRect = originalRect; }
-  }
-
-  /** ルート要素へ書かれた --toolbar-h を読む */
-  function toolbarHeightPx(): number {
-    const style = document.querySelector('.app-root')?.getAttribute('style') ?? '';
-    return parseFloat(style.replace(/.*--toolbar-h:\s*/, '').replace(/px.*/, ''));
-  }
-
-  // スマホ幅ではタブ行とパレットが折り返し、文脈バーのぶんも足されて実高が
-  // 上限（280px）を超える。上限を上げないと固定ヘッダーの下へ譜面が潜る
-  // （#408 Codex round1 P2）。ScorePage 側で extraAllowancePx を渡す配線を固定する
-  it('A1では実高300pxが上限で切り捨てられない', () => {
+  // 実機所感（2026-08-25 第2版）でバーは譜面背景の左上（ヘッダーの外）へ移した。
+  // ヘッダー内へ戻る退行と、ツールバー高さへの影響が無いことを固定する
+  it('バーはヘッダーの外（譜面背景の左上）に浮く', () => {
     localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a1');
-    withMockedToolbarHeight(300, () => { render(<ScorePage />); });
-    expect(toolbarHeightPx()).toBe(300);
+    render(<ScorePage />);
+
+    const bar = screen.getByTestId('ui-context-bar');
+    expect(bar.closest('header')).toBeNull();
+    expect(bar.closest('.ui-context-bar-float')).toBeTruthy();
   });
 
-  it('対照群では従来どおり280pxで止まる（上限の緩和がA1限定であること）', () => {
-    localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'current');
-    withMockedToolbarHeight(300, () => { render(<ScorePage />); });
-    expect(toolbarHeightPx()).toBe(280);
+  it('A3（両方込み）でもバーが出る', () => {
+    localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a3');
+    render(<ScorePage />);
+    expect(screen.getByTestId('ui-context-bar')).toBeTruthy();
   });
 
   // 描画側は `import.meta.env.DEV && uiVariant === 'a1'` の二重ガード。

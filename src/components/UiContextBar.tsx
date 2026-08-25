@@ -9,16 +9,6 @@
 
 import { buildContextBarSegments, type ContextBarInput } from '../utils/uiContextBar';
 
-/**
- * ツールバーの高さ上限に上乗せする量（px）。
- *
- * このバー自体は約27pxだが、狭い幅では上下の余白ぶんも効くので少し多めに取る。
- * ScorePage の高さ計算（resolveToolbarHeight）へ、バーを出すときだけ渡す。
- * 渡さないと実高が上限で切り捨てられ、固定ヘッダーの下へ譜面が潜る
- * （#408 Codex round1 P2）。
- */
-export const UI_CONTEXT_BAR_HEIGHT_ALLOWANCE_PX = 44;
-
 type UiContextBarProps = ContextBarInput;
 
 export default function UiContextBar(props: UiContextBarProps) {

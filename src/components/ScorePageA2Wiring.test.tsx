@@ -79,6 +79,14 @@ describe('ScorePage: A2 譜面側レイヤー表示の配線（Issue #405 段3�
     await waitFor(() => expect(bands().length).toBeGreaterThan(0), { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('A3（両方込み）でも色帯が出る', async () => {
+    localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a3');
+    seedPianoWork();
+    render(<ScorePage />);
+
+    await waitFor(() => expect(bands().length).toBeGreaterThan(0), { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('対照群（current）では色帯が出ない（既存の譜面が変わらない）', async () => {
     localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'current');
     seedPianoWork();

@@ -23,7 +23,7 @@ import PlaybackControls, {
 } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
-import UiContextBar, { UI_CONTEXT_BAR_HEIGHT_ALLOWANCE_PX } from './UiContextBar';
+import UiContextBar from './UiContextBar';
 import { resolveToolbarHeight } from '../utils/toolbarHeight';
 import UiVariantBadge from './UiVariantBadge';
 import { useUiVariant } from '../hooks/useUiVariant';
@@ -381,7 +381,8 @@ export default function ScorePage() {
   const uiVariant = useUiVariant();
   // A1（文脈バー）を出すか。ツールバーの高さ計算と描画で同じ判定を使う
   // （2箇所に持つと、片方だけ変えたときに高さと見た目がずれる）
-  const showUiContextBar = import.meta.env.DEV && uiVariant === 'a1';
+  // A1（文脈バー）を出すか。A3 は「A1 + A2 の両方」なのでこちらにも含める
+  const showUiContextBar = import.meta.env.DEV && (uiVariant === 'a1' || uiVariant === 'a3');
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
   // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
   // 1=声部2（下声・符幹下向き）。ピアノ譜以外では使わないが、
@@ -4261,9 +4262,10 @@ export default function ScorePage() {
       // ここでは「タブ付きヘッダーとして妥当な範囲」へ丸めて、崩れを防ぐ。
       // 折り畳み中は「復帰ボタン1個ぶんの帯」しか残らないため、展開時の下限（60px）で
       // 丸めると隠したぶんの余白が返ってこない。折り畳み中だけ下限を下げる（Issue #125）。
+      // 文脈バーは譜面背景の左上へ移した（2026-08-25）ため、ツールバーの高さには
+      // もう影響しない。extraAllowancePx の仕組み自体は resolveToolbarHeight に残る
       const clampedHeight = resolveToolbarHeight(measuredHeight, {
         collapsed: isToolbarCollapsed,
-        extraAllowancePx: showUiContextBar ? UI_CONTEXT_BAR_HEIGHT_ALLOWANCE_PX : 0,
       });
       setToolbarHeight(clampedHeight);
     };
@@ -4279,7 +4281,7 @@ export default function ScorePage() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateToolbarHeight);
     };
-  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed, showUiContextBar]);
+  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed]);
 
   // リセットメニュー（Issue #143）の表示位置をボタンの実測位置から決める。
   // 画面の右端からはみ出さないよう、左位置は「画面幅 − メニュー幅 − 余白」までで止める。
@@ -4525,22 +4527,6 @@ export default function ScorePage() {
               専用スタイルで7個目のタブに見えないようにしている。
               aria-label を付けているのは、先頭のアイコンが読み上げ名に混ざらないようにするため。
               折り畳み中はこの行ごと隠れてしまうので、そのときだけ折り畳み行へ出す（Issue #150）。 */}
-          {/* UI案 A1（Issue #405 段2）: 文脈の常設表示。実機所感（2026-08-25）を受けて
-              独立行からタブ列の横（ファイルタブの隣）へ移した。行が増えないので
-              ヘッダーがすっきりし、視線もタブと同じ高さで完結する。
-              案が有効なときだけ描くので、対照群（current）ではこの要素自体が存在しない。
-              段1 と同じ二重の防御（DEVガード）も維持。 */}
-          {showUiContextBar && (
-            <UiContextBar
-              scoreType={scoreType}
-              activeLayerPart={activeLayerPart}
-              activeVoice={activeVoice}
-              activeToolbarTab={activeToolbarTab}
-              tool={tool}
-              customSymbolNames={customSymbolNames}
-            />
-          )}
-
           {!isToolbarCollapsed && feedbackControls}
         </div>
 
@@ -5483,6 +5469,24 @@ export default function ScorePage() {
         </div>
       </header>
 
+      {/* UI案 A1/A3（Issue #405）: 文脈の常設表示。実機所感（2026-08-25）を受けて
+          ヘッダー内から**譜面背景の左上**へ移した。入力するボタン群（ツールバー）と
+          「今の状態の表示」を場所で分ける。fixed なのでスクロールしても見え続ける。
+          案が有効なときだけ描くので、対照群（current）ではこの要素自体が存在しない。
+          段1 と同じ二重の防御（DEVガード＝showUiContextBar 内）も維持。 */}
+      {showUiContextBar && (
+        <div className="ui-context-bar-float">
+          <UiContextBar
+            scoreType={scoreType}
+            activeLayerPart={activeLayerPart}
+            activeVoice={activeVoice}
+            activeToolbarTab={activeToolbarTab}
+            tool={tool}
+            customSymbolNames={customSymbolNames}
+          />
+        </div>
+      )}
+
       {isPrintPreview && (
         // プレビュー中は譜面編集ができないことを知らせる小さな帯（Issue #88）。
         // 「設定変更は引き続き可能」と分かるよう文言に補足を添える。
@@ -6012,7 +6016,7 @@ export default function ScorePage() {
                       activeLayerPartIndex={activeLayerPart}
                       // UI案A2（#405 段3・テスト会用）: 譜面側で編集中のレイヤーを示す。
                       // それ以外の案（current / a1）では false のままなので描画は変わらない
-                      highlightActiveLayer={import.meta.env.DEV && uiVariant === 'a2'}
+                      highlightActiveLayer={import.meta.env.DEV && (uiVariant === 'a2' || uiVariant === 'a3')}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
