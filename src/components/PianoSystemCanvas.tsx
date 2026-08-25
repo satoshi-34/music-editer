@@ -5470,8 +5470,19 @@ export default function PianoSystemCanvas({
           if (lx > last.x + (last.x - measLeft) * 0.0 + 12) return beatsPerMeasure;
           return best.beats;
         };
-        const sliceCandidatesHere = (): number[] =>
-          sliceBoundaryCandidates(parts.map((_, otherPi) => (partsScoreForRender[otherPi] ?? [])[absI]), beatsPerMeasure);
+        const sliceCandidatesHere = (): number[] => {
+          // レイヤー明示選択のある譜面（ピアノ）では、スライスは**選択レイヤーのみ**が対象
+          // （2026-08-25 裁定A）。従来の「全パート・全声部の共通の切れ目」だと、
+          // 左手が全音符の小節では切れ目が小節の頭と末尾に潰れ、月光型の
+          // 「パーツの繰り返し」をコピーできなかった。
+          // レイヤー概念の無い譜種（単旋律・四重奏・編成譜）は従来どおり全パート縦スライス
+          if (activeLayerPartIndex != null) {
+            const layerMeasure = (partsScoreForRender[activeLayerPartIndex] ?? [])[absI];
+            const layerEvents = getMeasureVoices(layerMeasure)[activeVoiceIndex]?.events ?? [];
+            return sliceBoundaryCandidates([{ events: layerEvents }], beatsPerMeasure);
+          }
+          return sliceBoundaryCandidates(parts.map((_, otherPi) => (partsScoreForRender[otherPi] ?? [])[absI]), beatsPerMeasure);
+        };
         const snappedBeatAtX = (lx: number): number =>
           snapToSliceBoundary(beatAtX(lx), sliceCandidatesHere());
 
@@ -5631,7 +5642,9 @@ export default function PianoSystemCanvas({
         attachMeasureSelectDrag(ir);
         // 拍範囲スライスの強調表示（#333 段2）: 端の小節はスライスの x 範囲だけを塗る。
         // ir 本体は当たり判定を兼ねるので全幅のまま、表示専用の overlay を重ねる
-        if (sliceSelection?.partial) {
+        // レイヤー明示選択のある譜面では、スライスは選択レイヤーだけに効く（裁定A）ので、
+        // 強調表示もそのパートの五線にだけ出す。他の段まで塗ると「全パートに効く」ように見える
+        if (sliceSelection?.partial && (activeLayerPartIndex == null || pi === activeLayerPartIndex)) {
           const xForBeat = (b: number): number => {
             if (b >= beatsPerMeasure - 0.0001) return measRight;
             if (b <= 0.0001) return measLeft;
