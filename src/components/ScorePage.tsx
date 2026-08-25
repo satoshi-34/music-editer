@@ -379,9 +379,7 @@ export default function ScorePage() {
   // 開発時のみ有効（本番ビルドでは常に 'current'＝現状のUI）。
   // 段2（A1 文脈バー）・段3（A2 譜面側表現）はこの値を見て自分の案のときだけ描く。
   const uiVariant = useUiVariant();
-  // A1（文脈バー）を出すか。ツールバーの高さ計算と描画で同じ判定を使う
-  // （2箇所に持つと、片方だけ変えたときに高さと見た目がずれる）
-  // A1（文脈バー）を出すか。A3 は「A1 + A2 の両方」なのでこちらにも含める
+  // A1/A3 の文脈バーを出すか。バーは譜面背景の左上に浮くのでツールバーの高さには影響しない
   const showUiContextBar = import.meta.env.DEV && (uiVariant === 'a1' || uiVariant === 'a3');
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
   // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
@@ -4531,6 +4529,10 @@ export default function ScorePage() {
         </div>
 
         {/* Undo/Redo はタブに関係なく常時操作できるようにする */}
+        {/* 常設操作の行: Undo/Redo とレイヤーチップを同じ行に横並びさせる
+            （運用者要望は「元に戻すの隣」。.toolbar は縦積みなので、
+             兄弟のまま置くと別の行になってヘッダーが1行高くなる・#410 round4 P2） */}
+        <div className="toolbar-persistent-row">
         <div className="toolbar-history-controls" role="group" aria-label="元に戻す・やり直す">
           <button
             type="button"
@@ -4582,6 +4584,7 @@ export default function ScorePage() {
               ))}
             </div>
           )}
+        </div>
 
         <div className="toolbar-panel" id="toolbar-panel">
           {activeToolbarTab === 'notes' && (

@@ -146,6 +146,10 @@ describe('ScorePage: A2 譜面側レイヤー表示の配線（Issue #405 段3�
     // jsdom はCSSを解釈しないので、DOM側の契約（専用クラスが付いていて
     // .toolbar 配下にあること）を固定する。CSS側は AppCss テストで見る
     expect(chips!.closest('header.toolbar')).toBeTruthy();
+    // Undo/Redo と同じ横並び行に属する（別の行に落ちるとヘッダーが1行高くなる・#410 round4 P2）
+    const row = chips!.closest('.toolbar-persistent-row');
+    expect(row).toBeTruthy();
+    expect(row!.querySelector('.toolbar-history-controls')).toBeTruthy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('左手レイヤーへ切り替えると、色帯も左手の五線へ移る', async () => {

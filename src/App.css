@@ -185,6 +185,7 @@
    ヘッダーの高さは ScorePage 側の ResizeObserver が実測して --toolbar-h へ反映するので、
    ここで高さを直接書かなくても本文（.app-root の padding-top）が自動で詰まる。 */
 .toolbar.collapsed .toolbar-tab-row,
+.toolbar.collapsed .toolbar-persistent-row,
 .toolbar.collapsed .toolbar-history-controls,
 /* レイヤーチップ（Undo/Redo 横へ常設・2026-08-25）も折り畳み中は隠す。
    履歴グループから分離した兄弟要素なので個別に指定が要る（#410 round3 P2） */
@@ -2313,4 +2314,13 @@ svg { animation: none; transition: none; }
 }
 .symbol-adjust-overlay-translucent {
   opacity: 0.25;
+}
+
+/* 常設操作の行（2026-08-25）: Undo/Redo とレイヤーチップを横並びにする。
+   .toolbar は縦積みなので、兄弟のまま置くと別の行になりヘッダーが1行高くなる */
+.toolbar-persistent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
