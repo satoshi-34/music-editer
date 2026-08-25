@@ -11,7 +11,7 @@
 // 「本番では current に固定される」ことをテストから確かめられるようにしている。
 
 /** UI案の識別子。`current` は対照群（現状のまま・実装なし）。 */
-export type UiVariant = 'current' | 'a1' | 'a2';
+export type UiVariant = 'current' | 'a1' | 'a2' | 'a3';
 
 /** 未指定・不正値・本番ビルドで使う既定値（＝現状のUI） */
 export const DEFAULT_UI_VARIANT: UiVariant = 'current';
@@ -27,11 +27,12 @@ export const UI_VARIANT_LABELS: Record<UiVariant, string> = {
   current: '現状',
   a1: 'A1 文脈バー',
   a2: 'A2 譜面側',
+  a3: 'A3 両方',
 };
 
 /** 受け取った値が UiVariant のどれかかどうか（未知の文字列を弾く） */
 export function isUiVariant(value: unknown): value is UiVariant {
-  return value === 'current' || value === 'a1' || value === 'a2';
+  return value === 'current' || value === 'a1' || value === 'a2' || value === 'a3';
 }
 
 /**

@@ -47,4 +47,31 @@ describe('App.css: UI案バッジ（Issue #405）', () => {
     const rule = css.match(/\.ui-variant-badge\s*\{[^}]*\}/)?.[0] ?? '';
     expect(rule).toMatch(/pointer-events:\s*none/);
   });
+
+  // 文脈バーの浮かせ方（#410）。ヘッダー外の fixed 配置なので、
+  // この3点が消えると「動かない場所に居座る/譜面のクリックを奪う/紙に写る」になる
+  describe('文脈バーの浮かせ CSS（.ui-context-bar-float）', () => {
+    function floatBlock(css: string): string {
+      const start = css.indexOf('.ui-context-bar-float {');
+      expect(start).toBeGreaterThanOrEqual(0);
+      return css.slice(start, css.indexOf('}', start));
+    }
+
+    it('fixed で --toolbar-h に追随し、クリックを奪わない', () => {
+      const block = floatBlock(loadAppCss());
+      expect(block).toContain('position: fixed');
+      expect(block).toContain('var(--toolbar-h');
+      expect(block).toContain('pointer-events: none');
+    });
+
+    it('折り畳み中はレイヤーチップも隠れる', () => {
+      // 折り畳みの隠しセレクタに .toolbar-layer-chips が入っていること
+      // （履歴グループから分離した兄弟要素なので個別指定が要る・#410 round3 P2）
+      expect(loadAppCss()).toMatch(/\.toolbar\.collapsed \.toolbar-layer-chips,/);
+    });
+
+    it('印刷では消える', () => {
+      expect(printBlock(loadAppCss())).toMatch(/\.ui-context-bar-float\s*\{\s*display:\s*none/);
+    });
+  });
 });

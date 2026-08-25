@@ -119,17 +119,30 @@
   background: #eff6ff;
   box-shadow: inset 0 0 0 1px #bfdbfe;
 }
-/* UI案 A1 の文脈バー（Issue #405 段2・`?ui=a1` のときだけ描かれる）。
-   ツールバーのタブ行のすぐ下に1行だけ置き、「いま どのレイヤーの・どのタブで・
-   どのツールを持っているか」を言葉で出す。
-   画面が狭いときは折り返さずに横スクロールさせる（1行を保たないと
-   ツールバーの高さが変わって譜面が上下に動き、テスト会の比較が濁るため）。 */
+/* UI案 A1/A3 の文脈バー（Issue #405・`?ui=a1|a3` のときだけ描かれる）。
+   「いま どのレイヤーの・どのタブで・どのツールを持っているか」を言葉で出す。 */
+/* 文脈バーの置き場所（実機所感 2026-08-25 第2版）: 譜面背景の左上に浮かせる。
+   入力するボタン群（ヘッダー）と「今の状態の表示」を場所で分けるため。
+   fixed + --toolbar-h でヘッダーの直下に貼り付き、スクロールしても見える */
+.ui-context-bar-float {
+  position: fixed;
+  top: calc(var(--toolbar-h, 60px) + 8px);
+  left: 8px;
+  z-index: 40;
+  max-width: min(70vw, 560px);
+  /* 表示専用。下の譜面のクリック・スクロールを邪魔しない（バッジと同じ扱い） */
+  pointer-events: none;
+}
 .ui-context-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 3px 8px;
+  /* 狭い幅では折り返す。親が pointer-events:none なので横スクロールは操作できず、
+     切れた右端（ツール名）が読めなくなる（#410 Codex round2 P2）。
+     譜面上に浮いているのでヘッダー高には影響しない */
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  padding: 3px 10px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
   border: 1px solid #bfdbfe;
   border-radius: 7px;
   background: #eff6ff;
@@ -172,7 +185,11 @@
    ヘッダーの高さは ScorePage 側の ResizeObserver が実測して --toolbar-h へ反映するので、
    ここで高さを直接書かなくても本文（.app-root の padding-top）が自動で詰まる。 */
 .toolbar.collapsed .toolbar-tab-row,
+.toolbar.collapsed .toolbar-persistent-row,
 .toolbar.collapsed .toolbar-history-controls,
+/* レイヤーチップ（Undo/Redo 横へ常設・2026-08-25）も折り畳み中は隠す。
+   履歴グループから分離した兄弟要素なので個別に指定が要る（#410 round3 P2） */
+.toolbar.collapsed .toolbar-layer-chips,
 /* A1 の文脈バー（Issue #405 段2）も他の行と同じく折り畳み中は隠す。
    折り畳みは「譜面を広く見たい」ときの操作なので、帯だけ残ると目的に反する。 */
 .toolbar.collapsed .ui-context-bar,
@@ -474,8 +491,12 @@
 .work-list-history-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .work-list-history-time { color: #444; }
 
-/* ghost ボタンよりコンパクトなサイズに上書き */
-.toolbar-chip-button {
+/* ghost ボタンよりコンパクトなサイズに上書き。
+   .toolbar-panel の外（Undo/Redo 横の常設列）でも同じ寸法になるよう、
+   汎用 button.ghost（padding 8px 12px）より詳細度を上げ box-sizing も自前で持つ
+   （#410 Codex round2 P2: パネル外へ移した途端に約46px へ肥大していた） */
+button.ghost.toolbar-chip-button {
+  box-sizing: border-box;
   height: var(--toolbar-control-height);
   padding: 0 8px;
   font-size: 12px;
@@ -1958,6 +1979,8 @@ button.ghost.active:hover:not(:disabled) {
   .add-measures-ghost-button { display: none !important; }
   /* UI案の表示（Issue #405）は開発時の観察用なので、紙には出さない。 */
   .ui-variant-badge { display: none !important; }
+  /* 文脈バー（A1/A3）も画面専用。紙面には出さない */
+  .ui-context-bar-float { display: none !important; }
   /* 空の段（Issue #41）は画面専用の書き始めの誘いであり、演奏用の印刷譜には出さない。 */
   .empty-stave-filler { display: none !important; }
   /* 段ごとの小節数調整コントロール（◀ N小節 ▶）も編集用UIなので印刷には出さない。 */
@@ -2291,4 +2314,13 @@ svg { animation: none; transition: none; }
 }
 .symbol-adjust-overlay-translucent {
   opacity: 0.25;
+}
+
+/* 常設操作の行（2026-08-25）: Undo/Redo とレイヤーチップを横並びにする。
+   .toolbar は縦積みなので、兄弟のまま置くと別の行になりヘッダーが1行高くなる */
+.toolbar-persistent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }

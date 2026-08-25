@@ -1,23 +1,14 @@
 // src/components/UiContextBar.tsx
 // Issue #405（段2）: UI案 A1「文脈バー」。
 //
-// ツールバーに1行だけ常設し、「いま どのレイヤーの・どのタブで・どのツールを持っているか」を
-// 言葉で出す。譜面をクリックしたときに何が起きるかを、押す前に読み取れるようにするのが目的。
+// 譜面背景の左上に浮かせて（2026-08-25 実機所感で移設）、「いま どのレイヤーの・
+// どのタブで・どのツールを持っているか」を言葉で出す。
+// 譜面をクリックしたときに何が起きるかを、押す前に読み取れるようにするのが目的。
 //
 // この案が有効（`?ui=a1`）なときだけ描画される。対照群（current）では
 // この要素自体が存在しないので、既存の見た目は1pxも変わらない。
 
 import { buildContextBarSegments, type ContextBarInput } from '../utils/uiContextBar';
-
-/**
- * ツールバーの高さ上限に上乗せする量（px）。
- *
- * このバー自体は約27pxだが、狭い幅では上下の余白ぶんも効くので少し多めに取る。
- * ScorePage の高さ計算（resolveToolbarHeight）へ、バーを出すときだけ渡す。
- * 渡さないと実高が上限で切り捨てられ、固定ヘッダーの下へ譜面が潜る
- * （#408 Codex round1 P2）。
- */
-export const UI_CONTEXT_BAR_HEIGHT_ALLOWANCE_PX = 44;
 
 type UiContextBarProps = ContextBarInput;
 

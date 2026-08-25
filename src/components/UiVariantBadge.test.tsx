@@ -10,6 +10,7 @@ describe('UiVariantBadge', () => {
     ['current', '現状'],
     ['a1', 'A1 文脈バー'],
     ['a2', 'A2 譜面側'],
+    ['a3', 'A3 両方'],
   ] as const)('%s のとき「%s」と表示する', (variant, label) => {
     render(<UiVariantBadge variant={variant} />);
     const badge = screen.getByTestId('ui-variant-badge');

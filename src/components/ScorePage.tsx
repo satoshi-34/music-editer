@@ -23,7 +23,7 @@ import PlaybackControls, {
 } from './PlaybackControls';
 import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
-import UiContextBar, { UI_CONTEXT_BAR_HEIGHT_ALLOWANCE_PX } from './UiContextBar';
+import UiContextBar from './UiContextBar';
 import { resolveToolbarHeight } from '../utils/toolbarHeight';
 import UiVariantBadge from './UiVariantBadge';
 import { useUiVariant } from '../hooks/useUiVariant';
@@ -377,11 +377,10 @@ function describeExportError(error: unknown): string {
 export default function ScorePage() {
   // 適用中のUI案（Issue #405 段1）。URLの `?ui=a1|a2|current` で切り替わり、
   // 開発時のみ有効（本番ビルドでは常に 'current'＝現状のUI）。
-  // 段2（A1 文脈バー）・段3（A2 譜面側表現）はこの値を見て自分の案のときだけ描く。
+  // 段2（A1 文脈バー）・段3（A2 譜面側表現）・A3（両方込み）はこの値を見て自分の案のときだけ描く。
   const uiVariant = useUiVariant();
-  // A1（文脈バー）を出すか。ツールバーの高さ計算と描画で同じ判定を使う
-  // （2箇所に持つと、片方だけ変えたときに高さと見た目がずれる）
-  const showUiContextBar = import.meta.env.DEV && uiVariant === 'a1';
+  // A1/A3 の文脈バーを出すか。バーは譜面背景の左上に浮くのでツールバーの高さには影響しない
+  const showUiContextBar = import.meta.env.DEV && (uiVariant === 'a1' || uiVariant === 'a3');
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
   // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
   // 1=声部2（下声・符幹下向き）。ピアノ譜以外では使わないが、
@@ -4261,9 +4260,10 @@ export default function ScorePage() {
       // ここでは「タブ付きヘッダーとして妥当な範囲」へ丸めて、崩れを防ぐ。
       // 折り畳み中は「復帰ボタン1個ぶんの帯」しか残らないため、展開時の下限（60px）で
       // 丸めると隠したぶんの余白が返ってこない。折り畳み中だけ下限を下げる（Issue #125）。
+      // 文脈バーは譜面背景の左上へ移した（2026-08-25）ため、ツールバーの高さには
+      // もう影響しない。extraAllowancePx の仕組み自体は resolveToolbarHeight に残る
       const clampedHeight = resolveToolbarHeight(measuredHeight, {
         collapsed: isToolbarCollapsed,
-        extraAllowancePx: showUiContextBar ? UI_CONTEXT_BAR_HEIGHT_ALLOWANCE_PX : 0,
       });
       setToolbarHeight(clampedHeight);
     };
@@ -4279,7 +4279,7 @@ export default function ScorePage() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateToolbarHeight);
     };
-  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed, showUiContextBar]);
+  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed]);
 
   // リセットメニュー（Issue #143）の表示位置をボタンの実測位置から決める。
   // 画面の右端からはみ出さないよう、左位置は「画面幅 − メニュー幅 − 余白」までで止める。
@@ -4528,24 +4528,11 @@ export default function ScorePage() {
           {!isToolbarCollapsed && feedbackControls}
         </div>
 
-        {/* UI案 A1（Issue #405 段2）: いま「どのレイヤーの・どのタブで・どのツールを持っているか」を
-            1行の言葉で常設表示する。案が有効なときだけ描くので、対照群（current）では
-            この要素自体が存在せず既存の見た目は変わらない。 */}
-        {/* 段1 と同じ二重の防御: 案の解決自体が本番では current に固定されるが、
-            バッジと同じく import.meta.env.DEV でも囲み、本番バンドルから
-            テスト会用のUIごと落ちるようにする */}
-        {showUiContextBar && (
-          <UiContextBar
-            scoreType={scoreType}
-            activeLayerPart={activeLayerPart}
-            activeVoice={activeVoice}
-            activeToolbarTab={activeToolbarTab}
-            tool={tool}
-            customSymbolNames={customSymbolNames}
-          />
-        )}
-
         {/* Undo/Redo はタブに関係なく常時操作できるようにする */}
+        {/* 常設操作の行: Undo/Redo とレイヤーチップを同じ行に横並びさせる
+            （運用者要望は「元に戻すの隣」。.toolbar は縦積みなので、
+             兄弟のまま置くと別の行になってヘッダーが1行高くなる・#410 round4 P2） */}
+        <div className="toolbar-persistent-row">
         <div className="toolbar-history-controls" role="group" aria-label="元に戻す・やり直す">
           <button
             type="button"
@@ -4569,6 +4556,36 @@ export default function ScorePage() {
           </button>
         </div>
 
+        {/* 編集レイヤーの統合セレクタ（#316）。もとは「音符・休符」タブ内にあったが、
+              記号を付けるときも「アクティブレイヤーの音符しかクリックできない」ため
+              （#316 の仕様）、タブを往復しないと左手に記号を付けられなかった。
+              レイヤーはタブ非依存の状態なので、同じくタブ非依存の Undo/Redo の隣へ常設する
+              （実機所感 2026-08-25）。音符クリックでの自動切替+通知（#258）は従来どおり */}
+          {scoreType === 'piano' && (
+            <div className="toolbar-chip-group toolbar-layer-chips" role="group" aria-label="編集レイヤー切り替え">
+              <span className="toolbar-group-label">レイヤー</span>
+              {PIANO_LAYER_OPTIONS.map(({ partIndex: partIdx, voiceIndex: voiceIdx, label }) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={`ghost toolbar-chip-button${activeLayerPart === partIdx && activeVoice === voiceIdx ? ' active' : ''}`}
+                  onClick={() => {
+                    // レイヤーを変えたら譜面の選択も手放す（Issue #238 の型）。
+                    // 前のレイヤーの音符・弧・松葉が選択のまま残ると、
+                    // そのあとの Delete / 矢印キーが別レイヤーへ届いてしまう
+                    requestScoreSelectionClear();
+                    setActiveLayerPart(partIdx);
+                    setActiveVoice(voiceIdx);
+                  }}
+                  title={`${label}を編集レイヤーにする（V で同じ手の声部だけ切替）`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="toolbar-panel" id="toolbar-panel">
           {activeToolbarTab === 'notes' && (
             <div className="toolbar-section">
@@ -4580,33 +4597,6 @@ export default function ScorePage() {
                 // パート譜表示中は相手の五線が画面に無いため、同じく無効にする。
                 crossStaffAvailable={scoreType === 'piano' && !isPartExtractionActive}
               />
-              {scoreType === 'piano' && (
-                // 編集レイヤーの統合セレクタ（#316）: 手×声部の4レイヤーを明示選択する。
-                // 従来の「パートは帯域推測・声部はトグル」の二層を一本化した。
-                // 音符クリックでそのレイヤーへ自動切替+通知（#258 の型）。
-                // 空白クリックの挿入は常に選択レイヤーへ入る（裁定②は 2026-08-23 に案Aへ差し替え）
-                <div className="toolbar-chip-group" role="group" aria-label="編集レイヤー切り替え">
-                  <span className="toolbar-group-label">レイヤー</span>
-                  {PIANO_LAYER_OPTIONS.map(({ partIndex: partIdx, voiceIndex: voiceIdx, label }) => (
-                    <button
-                      key={label}
-                      type="button"
-                      className={`ghost toolbar-chip-button${activeLayerPart === partIdx && activeVoice === voiceIdx ? ' active' : ''}`}
-                      onClick={() => {
-                        // レイヤーを変えたら譜面の選択も手放す（Issue #238 の型）。
-                        // 前のレイヤーの音符・弧・松葉が選択のまま残ると、
-                        // そのあとの Delete / 矢印キーが別レイヤーへ届いてしまう
-                        requestScoreSelectionClear();
-                        setActiveLayerPart(partIdx);
-                        setActiveVoice(voiceIdx);
-                      }}
-                      title={`${label}を編集レイヤーにする（V で同じ手の声部だけ切替）`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
               {selectedMeasures && (
                 // 小節の挿入・削除（Issue #110）。選択ツールで小節をクリックしたときだけ出す。
                 // 複数小節をまとめて挿入・削除する機能は範囲外のため、単一小節を選択しているときのみ有効にする。
@@ -5484,6 +5474,26 @@ export default function ScorePage() {
         </div>
       </header>
 
+      {/* UI案 A1/A3（Issue #405）: 文脈の常設表示。実機所感（2026-08-25）を受けて
+          ヘッダー内から**譜面背景の左上**へ移した。入力するボタン群（ツールバー）と
+          「今の状態の表示」を場所で分ける。fixed なのでスクロールしても見え続ける。
+          案が有効なときだけ描くので、対照群（current）ではこの要素自体が存在しない。
+          段1 と同じ二重の防御（DEVガード＝showUiContextBar 内）も維持。 */}
+      {/* 折り畳み中は出さない（#410 Codex P2）。ヘッダーを畳むのは「譜面を広く見たい」
+          意思表示なので、浮いた表示も一緒に引っ込める */}
+      {showUiContextBar && !isToolbarCollapsed && (
+        <div className="ui-context-bar-float">
+          <UiContextBar
+            scoreType={scoreType}
+            activeLayerPart={activeLayerPart}
+            activeVoice={activeVoice}
+            activeToolbarTab={activeToolbarTab}
+            tool={tool}
+            customSymbolNames={customSymbolNames}
+          />
+        </div>
+      )}
+
       {isPrintPreview && (
         // プレビュー中は譜面編集ができないことを知らせる小さな帯（Issue #88）。
         // 「設定変更は引き続き可能」と分かるよう文言に補足を添える。
@@ -6013,7 +6023,7 @@ export default function ScorePage() {
                       activeLayerPartIndex={activeLayerPart}
                       // UI案A2（#405 段3・テスト会用）: 譜面側で編集中のレイヤーを示す。
                       // それ以外の案（current / a1）では false のままなので描画は変わらない
-                      highlightActiveLayer={import.meta.env.DEV && uiVariant === 'a2'}
+                      highlightActiveLayer={import.meta.env.DEV && (uiVariant === 'a2' || uiVariant === 'a3')}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}

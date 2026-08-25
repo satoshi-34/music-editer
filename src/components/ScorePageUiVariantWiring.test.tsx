@@ -110,8 +110,8 @@ describe('ScorePage: UI案切り替えの配線（Issue #405 段1）', () => {
       expect(screen.queryByTestId('ui-variant-badge')).toBeNull();
     }, MOUNT_HEAVY_TIMEOUT_MS);
 
-    it('記憶に a2 が残っている端末でも current になる', async () => {
-      localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, 'a2');
+    it.each(['a2', 'a3'])('記憶に %s が残っている端末でも current になる', async (stored) => {
+      localStorageMock.setItem(UI_VARIANT_STORAGE_KEY, stored);
       render(<ScorePage />);
 
       await waitFor(() => expect(document.querySelector('.app-root')).toBeTruthy(), { timeout: 15000 });
