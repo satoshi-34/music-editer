@@ -129,7 +129,12 @@
   align-items: center;
   gap: 6px;
   overflow-x: auto;
-  padding: 3px 8px;
+  /* タブ列とフィードバックの間に置く（実機所感 2026-08-25: 独立行だとヘッダーが太る）。
+     余った幅を使いつつ、狭い幅では自分だけ横スクロールして行を折り返させない */
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: center;
+  padding: 2px 8px;
   border: 1px solid #bfdbfe;
   border-radius: 7px;
   background: #eff6ff;

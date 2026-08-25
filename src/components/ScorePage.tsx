@@ -4525,25 +4525,24 @@ export default function ScorePage() {
               専用スタイルで7個目のタブに見えないようにしている。
               aria-label を付けているのは、先頭のアイコンが読み上げ名に混ざらないようにするため。
               折り畳み中はこの行ごと隠れてしまうので、そのときだけ折り畳み行へ出す（Issue #150）。 */}
+          {/* UI案 A1（Issue #405 段2）: 文脈の常設表示。実機所感（2026-08-25）を受けて
+              独立行からタブ列の横（ファイルタブの隣）へ移した。行が増えないので
+              ヘッダーがすっきりし、視線もタブと同じ高さで完結する。
+              案が有効なときだけ描くので、対照群（current）ではこの要素自体が存在しない。
+              段1 と同じ二重の防御（DEVガード）も維持。 */}
+          {showUiContextBar && (
+            <UiContextBar
+              scoreType={scoreType}
+              activeLayerPart={activeLayerPart}
+              activeVoice={activeVoice}
+              activeToolbarTab={activeToolbarTab}
+              tool={tool}
+              customSymbolNames={customSymbolNames}
+            />
+          )}
+
           {!isToolbarCollapsed && feedbackControls}
         </div>
-
-        {/* UI案 A1（Issue #405 段2）: いま「どのレイヤーの・どのタブで・どのツールを持っているか」を
-            1行の言葉で常設表示する。案が有効なときだけ描くので、対照群（current）では
-            この要素自体が存在せず既存の見た目は変わらない。 */}
-        {/* 段1 と同じ二重の防御: 案の解決自体が本番では current に固定されるが、
-            バッジと同じく import.meta.env.DEV でも囲み、本番バンドルから
-            テスト会用のUIごと落ちるようにする */}
-        {showUiContextBar && (
-          <UiContextBar
-            scoreType={scoreType}
-            activeLayerPart={activeLayerPart}
-            activeVoice={activeVoice}
-            activeToolbarTab={activeToolbarTab}
-            tool={tool}
-            customSymbolNames={customSymbolNames}
-          />
-        )}
 
         {/* Undo/Redo はタブに関係なく常時操作できるようにする */}
         <div className="toolbar-history-controls" role="group" aria-label="元に戻す・やり直す">
