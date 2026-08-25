@@ -165,49 +165,51 @@ describe('ScorePage: ピアノ譜のレイヤー限定スライス（裁定A）'
     expect(notices.some((n) => n.includes('コピーしました'))).toBe(false);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  // 左手が一度も入力されていない譜面（state 未実体化）でも、右手でコピーして
-  // 左手へ貼れる（#412 Codex round2 P1: entries から左手が抜けて例外/無反応だった）
-  it('右手でコピーし、未入力の左手へ貼れる', async () => {
-    // 左手の小節を持たない作品を用意する
+  // 左手が未実体化（leftHandData === undefined）でも、右手でコピーして左手へ貼れる
+  // （#412 Codex round2 P1）。undefined へは「左手パーツを持たない piano JSON の
+  // ファイル読込」で到達する（setLeftHandData(leftPart?.measures)・round3 の指摘手順）
+  it('右手でコピーし、ファイル読込で未実体化になった左手へ貼れる', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    // 左手パーツを持たない piano JSON を読み込む → leftHandData が undefined になる
     const rh = [
       { dur: '4' as const, isRest: false, keys: ['c/5'] },
       { dur: '4' as const, isRest: false, keys: ['d/5'] },
       { dur: '2' as const, isRest: false, keys: ['e/5'] },
     ];
-    const data = createSavedScoreData(
-      { title: '未実体化左手', subtitle: '', lyricist: '', composer: '', arranger: '' },
-      // 左手パーツを持たない保存データ。ただし自動保存の復元は左手を正規化して
-      // 実体化するため、このテストが実際に踏むのは「空の左手へ貼る」経路まで。
-      // leftHandData === undefined（Codex round2 P1）に到達するのは新規作成リセットと
-      // ファイル読込（setLeftHandData(leftPart?.measures)）で、そちらは
-      // getEditablePartEntries の ?? [] が防ぐ（実経路での再現はコストに見合わず断念）
-      [
-        { partId: 'right-hand', clef: 'treble', measures: [{ events: rh, voices: [{ id: 'voice-1', events: rh }] }] },
-      ],
+    const imported = createSavedScoreData(
+      { title: '片手読込', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'right-hand', clef: 'treble', measures: [{ events: rh, voices: [{ id: 'voice-1', events: rh }] }] }],
       1, 1, 'piano'
     );
-    const created = createWork('未実体化左手');
-    if (!created.success || !created.data) throw new Error('createWork failed');
-    saveWorkAutosaveData(created.data.id, data);
-    setLastOpenedWorkId(created.data.id);
-    workId = created.data.id;
-
-    render(<ScorePage />);
+    const file = new File([JSON.stringify(imported)], 'one-hand.score.json', { type: 'application/json' });
+    // ファイル入力は「ファイル」タブの中にある
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    const input = document.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    fireEvent.change(input, { target: { files: [file] } });
     await waitFor(() => {
-      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+      expect(document.body.textContent).toContain('片手読込');
     }, { timeout: 15000 });
+
+    // 右手の2音目（1〜2拍）を選んでコピー（小節選択ツールは音符・休符タブ）
+    fireEvent.click(screen.getByRole('tab', { name: '音符・休符' }));
     fireEvent.click(screen.getByRole('button', { name: /小節選択/ }));
     const svg = mockSvgLayout();
     const xs = activeNoteXs(svg);
+    expect(xs.length).toBeGreaterThanOrEqual(3);
     const hit = svg.querySelector('rect.vf-hit') as SVGRectElement;
-    // 2音目（1〜2拍）を選んでコピー
     fireEvent.mouseDown(hit, { button: 0, clientX: xs[1] + 2, clientY: 100 });
     fireEvent.mouseMove(hit, { clientX: xs[2] + 2, clientY: 100 });
     fireEvent.mouseUp(window, { clientX: xs[2] + 2, clientY: 100 });
     fireEvent.keyDown(window, { key: 'c', metaKey: true });
     expect(notices.some((n) => n.includes('コピー'))).toBe(true);
 
-    // 左手へ切替 → 1小節目を丸ごと選択 → 貼り付け
+    // 左手（未実体化）へ切り替えて、1小節目へ貼る
     fireEvent.click(screen.getByRole('button', { name: '左手・声部1' }));
     const svgB = mockSvgLayout();
     const m0 = svgB.querySelector('rect.vf-hit') as SVGRectElement;
@@ -217,10 +219,14 @@ describe('ScorePage: ピアノ譜のレイヤー限定スライス（裁定A）'
     fireEvent.click(m0, { clientX: m0x + 2, clientY: 100 });
     fireEvent.keyDown(window, { key: 'v', metaKey: true });
 
+    // 左手に d/5 が入ったことを自動保存データで確認する。ガードが無いと
+    // 貼り付けが例外/無反応になり、ここへ到達しない
     await waitFor(() => {
-      const parts = loadWorkAutosaveData(workId).data?.parts;
-      const lh = parts?.[1]?.measures?.[0]?.events ?? [];
-      expect(lh.some((ev) => !ev.isRest && ev.keys?.[0] === 'd/5')).toBe(true);
+      const parts = loadWorkAutosaveData(workId).data?.parts ?? [];
+      const bass = parts.find((p) => p.clef === 'bass');
+      expect(bass).toBeTruthy();
+      expect((bass!.measures?.[0]?.events ?? []).some(
+        (ev) => !ev.isRest && ev.keys?.[0] === 'd/5')).toBe(true);
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
