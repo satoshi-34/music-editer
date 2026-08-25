@@ -4552,8 +4552,9 @@ export default function ScorePage() {
           >
             ↷ やり直す
           </button>
+        </div>
 
-          {/* 編集レイヤーの統合セレクタ（#316）。もとは「音符・休符」タブ内にあったが、
+        {/* 編集レイヤーの統合セレクタ（#316）。もとは「音符・休符」タブ内にあったが、
               記号を付けるときも「アクティブレイヤーの音符しかクリックできない」ため
               （#316 の仕様）、タブを往復しないと左手に記号を付けられなかった。
               レイヤーはタブ非依存の状態なので、同じくタブ非依存の Undo/Redo の隣へ常設する
@@ -4581,7 +4582,6 @@ export default function ScorePage() {
               ))}
             </div>
           )}
-        </div>
 
         <div className="toolbar-panel" id="toolbar-panel">
           {activeToolbarTab === 'notes' && (

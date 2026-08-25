@@ -139,8 +139,11 @@
 .ui-context-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  overflow-x: auto;
+  /* 狭い幅では折り返す。親が pointer-events:none なので横スクロールは操作できず、
+     切れた右端（ツール名）が読めなくなる（#410 Codex round2 P2）。
+     譜面上に浮いているのでヘッダー高には影響しない */
+  flex-wrap: wrap;
+  gap: 2px 6px;
   padding: 3px 10px;
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
   border: 1px solid #bfdbfe;
@@ -487,8 +490,12 @@
 .work-list-history-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .work-list-history-time { color: #444; }
 
-/* ghost ボタンよりコンパクトなサイズに上書き */
-.toolbar-chip-button {
+/* ghost ボタンよりコンパクトなサイズに上書き。
+   .toolbar-panel の外（Undo/Redo 横の常設列）でも同じ寸法になるよう、
+   汎用 button.ghost（padding 8px 12px）より詳細度を上げ box-sizing も自前で持つ
+   （#410 Codex round2 P2: パネル外へ移した途端に約46px へ肥大していた） */
+button.ghost.toolbar-chip-button {
+  box-sizing: border-box;
   height: var(--toolbar-control-height);
   padding: 0 8px;
   font-size: 12px;
