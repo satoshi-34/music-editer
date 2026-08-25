@@ -377,7 +377,7 @@ function describeExportError(error: unknown): string {
 export default function ScorePage() {
   // 適用中のUI案（Issue #405 段1）。URLの `?ui=a1|a2|current` で切り替わり、
   // 開発時のみ有効（本番ビルドでは常に 'current'＝現状のUI）。
-  // 段2（A1 文脈バー）・段3（A2 譜面側表現）はこの値を見て自分の案のときだけ描く。
+  // 段2（A1 文脈バー）・段3（A2 譜面側表現）・A3（両方込み）はこの値を見て自分の案のときだけ描く。
   const uiVariant = useUiVariant();
   // A1/A3 の文脈バーを出すか。バーは譜面背景の左上に浮くのでツールバーの高さには影響しない
   const showUiContextBar = import.meta.env.DEV && (uiVariant === 'a1' || uiVariant === 'a3');
