@@ -141,7 +141,7 @@ export function toggleRenderStaffAt<T extends Pick<NoteEvent, 'renderStaff' | 'i
  */
 export function splitIndexesByRenderTarget(
   indexes: readonly number[],
-  renderPartIndexes: readonly number[]
+  renderPartIndexes: readonly RenderedPartIndex[]
 ): number[][] {
   const groups: number[][] = [];
   indexes.forEach(index => {
