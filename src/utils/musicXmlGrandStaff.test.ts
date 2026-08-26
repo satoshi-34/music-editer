@@ -174,4 +174,85 @@ describe('MusicXML 読込: 1パート複数五線（ピアノ大譜表）', () =
     expect(voiceKeys(parsed.parts[0].measures[0])).toEqual([['c/5']]);
     expect(voiceKeys(parsed.parts[1].measures[0])).toEqual([['c/3']]);
   });
+
+  // Codex round1 P1: <voice> 番号の対応表を小節ごとに作ると、「voice 6 だけの小節では
+  // voice-1、voice 5・6 が揃う小節では voice-2」と同じ声部が小節境界で入れ替わる。
+  // パート全体の対応表で一貫することを固定する
+  it('声部番号の対応はパート全体で一貫する（voice 6 だけの小節でも声部2のまま）', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions><staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>16</duration><voice>1</voice><type>whole</type><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>E</step><octave>2</octave></pitch><duration>16</duration><voice>6</voice><type>whole</type><staff>2</staff></note>
+    </measure>
+    <measure number="2">
+      <note><pitch><step>D</step><octave>5</octave></pitch><duration>16</duration><voice>1</voice><type>whole</type><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>16</duration><voice>5</voice><type>whole</type><staff>2</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>E</step><octave>2</octave></pitch><duration>16</duration><voice>6</voice><type>whole</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const parsed = parseMusicXml(xml);
+    const left = parsed.parts[1];
+    // 左手には voice 5・6 の2声部がある。voice 6 は**両方の小節で**声部2（voices[1]）
+    expect(left.measures[0].voices?.[1]?.events?.[0]?.keys).toEqual(['e/2']);
+    expect(left.measures[1].voices?.[0]?.events?.[0]?.keys).toEqual(['c/3']);
+    expect(left.measures[1].voices?.[1]?.events?.[0]?.keys).toEqual(['e/2']);
+    // voice 6 しか無い1小節目の声部1は全休符の詰め物だけ（音符は入らない）
+    expect(left.measures[0].voices?.[0]?.events?.every((e) => e.isRest)).toBe(true);
+  });
+
+  // Codex round1 P1: <forward>（時間送り）を無視すると「後半だけの声部」が小節先頭へ
+  // 詰まり、リズムが黙って壊れる。休符として合成されることを固定する
+  it('<forward> は休符として合成され、後半だけの声部が先頭へ詰まらない', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions><staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>16</duration><voice>1</voice><type>whole</type><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <forward><duration>8</duration></forward>
+      <note><pitch><step>G</step><octave>2</octave></pitch><duration>8</duration><voice>5</voice><type>half</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const parsed = parseMusicXml(xml);
+    const leftEvents = parsed.parts[1].measures[0].events;
+    // 前半2拍の休符（合成）＋後半の2分音符
+    expect(leftEvents[0]?.isRest).toBe(true);
+    expect(leftEvents[0]?.dur).toBe('2');
+    expect(leftEvents[1]?.isRest).toBe(false);
+    expect(leftEvents[1]?.keys).toEqual(['g/2']);
+  });
+
+  // Codex round1 P2: 受け皿の無い形（3段以上・複数パート内の大譜表）は黙って欠落させず、
+  // 理由付きで読込を中止する（#318）
+  it('3段の大譜表は理由付きで読込を中止する', () => {
+    const xml = GRAND_STAFF_XML.replace('<staves>2</staves>', '<staves>3</staves>');
+    expect(() => parseMusicXml(xml)).toThrowError(/3段以上/);
+  });
+
+  it('複数パート編成の中の大譜表は理由付きで読込を中止する', () => {
+    const second = `<part id="P2"><measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note></measure></part>`;
+    const xml = GRAND_STAFF_XML
+      .replace('</part-list>', '<score-part id="P2"><part-name>Violin</part-name></score-part></part-list>')
+      .replace('</score-partwise>', second + '</score-partwise>');
+    expect(() => parseMusicXml(xml)).toThrowError(/複数パート編成/);
+  });
 });

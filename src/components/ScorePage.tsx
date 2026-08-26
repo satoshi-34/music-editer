@@ -4187,8 +4187,16 @@ export default function ScorePage() {
           setEnsembleParts(loaded.parts.map(p => p.measures));
           setEnsembleSecondStaffParts([]);
         } else {
-          const rightPart = loaded.parts.find(p => p.clef === 'treble') ?? loaded.parts[0];
-          const leftPart  = loaded.parts.find(p => p.clef === 'bass');
+          // 大譜表分割（#419）が partId を right-hand / left-hand に揃えて返すので、
+          // まず partId で選ぶ。clef だけで選ぶと「両段ともト音」の正当な大譜表で
+          // 2段目が読み捨てられ、「上段がヘ音」の曲では左右が逆転する（Codex round1 P1）。
+          // partId が無い従来形式（パート分離の2パートXML等）は従来どおり clef で推定する
+          const byId = (id: string) => loaded.parts.find(p => p.partId === id);
+          const rightPart = byId('right-hand')
+            ?? loaded.parts.find(p => p.clef === 'treble') ?? loaded.parts[0];
+          const leftPart = byId('left-hand')
+            ?? loaded.parts.find(p => p !== rightPart && p.clef === 'bass')
+            ?? (loaded.parts.length === 2 ? loaded.parts.find(p => p !== rightPart) : undefined);
           setRightHandData(rightPart?.measures ?? []);
           setLeftHandData(leftPart?.measures);
           setEnsembleParts([]);

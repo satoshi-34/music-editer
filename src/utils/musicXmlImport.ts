@@ -9,6 +9,7 @@ import { isValidKeySignature } from './noteKeyUtils';
 import { isValidTimeSignature } from './timeSignatureUtils';
 import { ensureMeasuresPrimaryVoiceMaterialized } from './voiceMeasureUtils';
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
+import { buildRestEventsForBeats } from './measureRestFillUtils';
 
 /**
  * MusicXML の <clef><sign>/<line> を ClefType に変換する。
@@ -191,6 +192,7 @@ function attachHairpinsToVoiceEvents(
   events: NoteEvent[],
   measureIndex: number,
   openRefs: HairpinMark[],
+  forwardRestCount?: (el: Element) => number,
 ): void {
   let eventIndex = -1;
   let pendingTypes: Array<'cresc' | 'dim'> = [];
@@ -207,6 +209,12 @@ function attachHairpinsToVoiceEvents(
           ref.endEvent = eventIndex;
         }
       }
+      continue;
+    }
+    if (child.tagName === 'forward') {
+      // <forward>（時間送り）から合成した休符イベントのぶん、対応位置を進める
+      // （進めないと以降の松葉の付き先が前へずれる）
+      eventIndex += forwardRestCount?.(child) ?? 0;
       continue;
     }
     if (child.tagName !== 'note') continue;
@@ -292,12 +300,47 @@ function staffPartId(
  * @param measureEls その <part> の <measure> 要素すべて
  * @param staffNumber 取り出す五線の番号。null は「五線で分けない」（<staves> が無い従来の譜）
  */
-function buildStaffMeasures(measureEls: Element[], staffNumber: number | null): MeasureData[] {
+function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, staffClef: ClefType): MeasureData[] {
   // 松葉（ヘアピン）は小節をまたぐ場合があるため、パート全体で1つの待ち行列を使い回す。
   // 声部1と声部2で別々に持つのは、<backup> を挟んで別々の松葉が同時に開くことがあるため。
   const openHairpinRefs: HairpinMark[] = [];
   const openHairpinRefsVoice2: HairpinMark[] = [];
+  // <voice> 番号 → アプリの声部番号（1始まり）の対応表は**パート全体から一度だけ**作る。
+  // 小節ごとに作ると「voice 6 だけの小節では voice-1、voice 5・6 が揃う小節では voice-2」と
+  // 同じ声部が小節境界で入れ替わり、編集レイヤー・再生・松葉の継続が壊れる（Codex round1 P1）
+  const globalVoiceNumbers = staffNumber === null ? null : Array.from(new Set(
+    measureEls.flatMap((m) => Array.from(m.children)
+      .filter((el) => el.tagName === 'note' && staffNumberOf(el) === staffNumber)
+      .map((el) => parseInt(el.querySelector('voice')?.textContent ?? '', 10))
+      .filter((v) => Number.isInteger(v) && v >= 1)),
+  )).sort((a, b) => a - b);
+  // <forward>（時間送り）の長さは <duration>（divisions 単位）でしか書かれないため、
+  // <attributes><divisions> をパート先頭から追跡する（MusicXML の既定値は 1 = 4分音符）
+  let divisions = 1;
   return measureEls.map((measureEl, mi) => {
+    const divEl = measureEl.querySelector('attributes divisions');
+    const divVal = parseInt(divEl?.textContent ?? '', 10);
+    if (Number.isInteger(divVal) && divVal > 0) divisions = divVal;
+    // <forward> を「その長さぶんの休符」へ合成する。無視すると後続の音が小節先頭へ詰まり、
+    // 「backup → forward 半小節 → 後半だけの声部」のような外部ソフト定番の書き方で
+    // リズムが黙って壊れる（Codex round1 P1）
+    const forwardRests = (el: Element): NoteEvent[] => {
+      const d = parseInt(el.querySelector('duration')?.textContent ?? '', 10);
+      if (!Number.isInteger(d) || d <= 0) return [];
+      return buildRestEventsForBeats(d / divisions, staffClef);
+    };
+    const parseVoiceChildren = (children: Element[]): NoteEvent[] => {
+      const evs: NoteEvent[] = [];
+      let noteRun: Element[] = [];
+      const flush = () => { if (noteRun.length) { evs.push(...parseNotes(noteRun)); noteRun = []; } };
+      for (const el of children) {
+        if (el.tagName === 'note') { noteRun.push(el); continue; }
+        if (el.tagName === 'forward') { flush(); evs.push(...forwardRests(el)); }
+      }
+      flush();
+      return evs;
+    };
+    const forwardRestCount = (el: Element): number => forwardRests(el).length;
     // 追加声部（下声など）は書出側が <backup> で区切って出力している。
     // #244 段5-5: 旧実装は最初の <backup> だけで2分割しており、3声以上の自己往復で
     // 声部3以降が声部2へ連結される（4声→2声へ潰れる）データ破壊があった。
@@ -320,43 +363,38 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null): 
         rawSections[rawSections.length - 1].push(el);
       }
     }
-    const sectionVoiceNumber = (children: Element[], fallback: number): number => {
+    const explicitSectionVoice = (children: Element[]): number | null => {
       const firstNote = children.find((el) => el.tagName === 'note');
       const v = parseInt(firstNote?.querySelector('voice')?.textContent ?? '', 10);
-      return !isNaN(v) && v >= 1 ? v : fallback;
+      return !isNaN(v) && v >= 1 ? v : null;
     };
     // 五線で分けたときは、その五線の音符が1つも残らなかった区間（＝別の五線ぶんの区間）を
     // 捨ててから声部を数える。残すと空の声部が増えてしまう。
     const sections = staffNumber === null
       ? rawSections
       : rawSections.filter((children) => children.some((el) => el.tagName === 'note'));
-    const sectionsWithVoice = sections.map((children, si) => ({
-      children,
-      voiceNumber: sectionVoiceNumber(children, si + 1),
-    }));
     // MusicXML の <voice> 番号は五線をまたいだ通し番号になる慣習がある
-    // （例: 右手が 1・2、左手が 5・6）。五線ごとに小さい順で 1 から振り直して、
-    // アプリの「声部1・声部2…」と対応させる。
-    if (staffNumber !== null) {
-      const uniqueVoiceNumbers = Array.from(new Set(sectionsWithVoice.map((s) => s.voiceNumber)))
-        .sort((a, b) => a - b);
-      for (const section of sectionsWithVoice) {
-        section.voiceNumber = uniqueVoiceNumbers.indexOf(section.voiceNumber) + 1;
-      }
-    }
+    // （例: 右手が 1・2、左手が 5・6）。パート全体の対応表（globalVoiceNumbers）で
+    // 1 から振り直して、アプリの「声部1・声部2…」と対応させる。
+    // <voice> タグの無い区間は従来どおり区間順（si+1）で数える
+    const sectionsWithVoice = sections.map((children, si) => {
+      const explicit = explicitSectionVoice(children);
+      const voiceNumber = staffNumber !== null && explicit !== null && globalVoiceNumbers
+        ? globalVoiceNumbers.indexOf(explicit) + 1
+        : (explicit ?? si + 1);
+      return { children, voiceNumber };
+    });
     const childrenForVoice = (n: number): Element[] =>
       sectionsWithVoice.filter((s) => s.voiceNumber === n).flatMap((s) => s.children);
     const voice1Children = childrenForVoice(1);
     const voice2Children = childrenForVoice(2);
 
-    const voice1NoteEls = voice1Children.filter((el) => el.tagName === 'note');
-    const events = parseNotes(voice1NoteEls);
-    attachHairpinsToVoiceEvents(voice1Children, events, mi, openHairpinRefs);
+    const events = parseVoiceChildren(voice1Children);
+    attachHairpinsToVoiceEvents(voice1Children, events, mi, openHairpinRefs, forwardRestCount);
 
-    const voice2NoteEls = voice2Children.filter((el) => el.tagName === 'note');
-    const voice2Events = voice2NoteEls.length > 0 ? parseNotes(voice2NoteEls) : [];
+    const voice2Events = parseVoiceChildren(voice2Children);
     // 声部2の松葉も同じ方式で復元する（voice2Events の要素を直接書き換える）
-    attachHairpinsToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2);
+    attachHairpinsToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2, forwardRestCount);
 
     // 声部3以降（松葉の復元は現行 UI が2声までなので行わない。「壊れず全声部が戻る」水準）。
     // 疎な番号（間の声部が空）は空の器で埋め、声部番号を保存データ上の位置と一致させる
@@ -366,7 +404,7 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null): 
     const maxVoiceNumber = noteBearingVoiceNumbers.length > 0 ? Math.max(...noteBearingVoiceNumbers) : 1;
     const extraVoiceEvents: NoteEvent[][] = [];
     for (let n = 3; n <= maxVoiceNumber; n++) {
-      extraVoiceEvents.push(parseNotes(childrenForVoice(n).filter((el) => el.tagName === 'note')));
+      extraVoiceEvents.push(parseVoiceChildren(childrenForVoice(n)));
     }
 
     // リピート
@@ -494,15 +532,27 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     // （Finale / MuseScore / OMR ツールの出力もこの形）。この場合は五線ごとに
     // PartData を分けないと、左手の音が右手の五線へ混ざって取り込まれてしまう。
     const staffCount = readStaffCount(partEl);
+    // 五線分割の対象は「単独パート × 2五線」（ピアノ大譜表）だけに限定する。
+    // 3五線以上（オルガン譜）や複数パート編成内の大譜表は、分割しても受け皿の
+    // 譜種判定・編成復元が対応しておらず、黙ってパートが欠落する（Codex round1 P2）。
+    // #318 の方針どおり、理由と代替手順を付けて読込を中止する
+    if (staffCount > 2 || (staffCount === 2 && partEls.length > 1)) {
+      throw new Error(
+        staffCount > 2
+          ? `3段以上の大譜表（${partName}: ${staffCount}段）の読み込みには未対応です。書き出し元で五線ごとに別パートへ分けてから読み込んでください`
+          : `複数パート編成の中の大譜表（${partName}）の読み込みには未対応です。ピアノ単独の楽譜として書き出すか、五線ごとに別パートへ分けてから読み込んでください`,
+      );
+    }
     const staffNumbers: (number | null)[] = staffCount >= 2
       ? Array.from({ length: staffCount }, (_, i) => i + 1)
       : [null]; // <staves> が無い従来の「1パート1五線」はこれまでどおり分けずに読む
 
     for (const staffNumber of staffNumbers) {
-      const measures = buildStaffMeasures(measureEls, staffNumber);
+      const staffClef = clefForStaff(firstPartAttrs, staffNumber) ?? defaultClef;
+      const measures = buildStaffMeasures(measureEls, staffNumber, staffClef);
       parts.push({
         partId: staffPartId(partName, staffNumber, staffCount, partEls.length),
-        clef: clefForStaff(firstPartAttrs, staffNumber) ?? defaultClef,
+        clef: staffClef,
         // 読込境界の実体化（#244 段5-4）: 単声部の小節は voices: undefined で組み立てられる
         // ため、ここで全小節へ voices[0] を実体化してから返す（他の読込境界と同じ扱い）
         measures: ensureMeasuresPrimaryVoiceMaterialized(

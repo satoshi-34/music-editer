@@ -93,3 +93,10 @@ repeat・テンポ・拍子・調号は、このアプリがピアノ譜を保�
   `parseMusicXml` は `instrumentation` を作らないため、編成譜としての読込経路には載らない
 - **逆方向（`musicXmlExport`）**: いまも右手/左手を別 `<part>` として書き出している。
   1part×2staves 形式へ寄せると他ソフトとの相互運用が上がるが、別Issueとする
+
+## Codex round1 対応（2026-08-27）
+
+- **声部対応表はパート全体で一度だけ作る**: 小節ごとに作ると voice 6 だけの小節で声部が繰り上がり、小節境界で同じ声部が入れ替わる（P1）。`globalVoiceNumbers` をパート先頭で構築し全小節で共有。`<voice>` タグの無い区間は従来どおり区間順
+- **`<forward>` は休符として合成**: `<attributes><divisions>` を追跡し、`duration/divisions` 拍ぶんを `buildRestEventsForBeats` で休符化（P1）。無視すると「backup→forward→後半だけの声部」で音が小節先頭へ詰まりリズムが黙って壊れる。松葉の対応付け（attachHairpinsToVoiceEvents）へは合成休符の個数を `forwardRestCount` で伝え、付き先のずれを防ぐ
+- **受け皿の無い形は理由付きで読込中止**（P2・#318）: 3段以上の大譜表、複数パート編成内の大譜表は、黙ってパートを欠落させず代替手順付きのエラーにする。分割対象は「単独パート×2五線」のみ
+- **ScorePage の両手選択は partId 優先**（P1）: clef だけで選ぶと両段ト音の正当な大譜表で2段目が消え、上段ヘ音の曲で左右が逆転する。`right-hand`/`left-hand` を優先し、partId が無い従来形式のみ clef で推定。配線は ScorePageMusicXmlGrandStaff.test.tsx で固定（実ファイル選択→保存データまで）
