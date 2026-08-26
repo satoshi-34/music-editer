@@ -122,9 +122,17 @@ describe('App.css と TypeScript 側の定数がずれていない', () => {
   });
 
   it('タイトル・作者欄が候補Aの大きさで書かれている', () => {
-    expect(/\.score-title\s*\{[^}]*font-size:\s*26px/.test(appCss)).toBe(true);
+    // Issue #420 で文字サイズ倍率（--title-font-scale）を掛けられるようにしたため、
+    // 指定は calc(26px * var(--title-font-scale, 1)) の形になった。
+    // 倍率が既定（1）のときの見た目＝候補Aの px 値は変わっていないので、
+    // 「基準の px 値がこの数字であること」を確かめる形へ regex を寄せてある。
+    expect(/\.score-title\s*\{[^}]*font-size:\s*calc\(26px\s*\*\s*var\(--title-font-scale,\s*1\)\)/.test(appCss)).toBe(true);
     expect(/\.score-title\s*\{[^}]*letter-spacing:\s*\.02em/.test(appCss)).toBe(true);
-    expect(/\.score-credit\s*\{[^}]*font-size:\s*13px/.test(appCss)).toBe(true);
+    expect(/\.score-credit\s*\{[^}]*font-size:\s*calc\(13px\s*\*\s*var\(--title-font-scale,\s*1\)\)/.test(appCss)).toBe(true);
+    // 印刷側の基準サイズ（24px / 12px）にも同じ倍率が掛かること。
+    // 画面だけに掛けると「画面では大きいのに印刷すると元のまま」になる
+    expect(/\.score-title\s*\{\s*font-size:\s*calc\(24px\s*\*\s*var\(--title-font-scale,\s*1\)\)/.test(appCss)).toBe(true);
+    expect(/\.score-subtitle\s*\{\s*font-size:\s*calc\(12px\s*\*\s*var\(--title-font-scale,\s*1\)\)/.test(appCss)).toBe(true);
   });
 
   it('表示ウェイト設定を個別指定へ渡す倍率が定義されている', () => {

@@ -38,7 +38,8 @@ import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useWorkLibrary } from '../hooks/useWorkLibrary';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
 import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
-import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, ensureTitleFontLoaded, resolveTitleFontOption, waitForTitleFontReady } from '../utils/titleFontOptions';
+import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, TITLE_FONT_SIZE_DEFAULT, TITLE_FONT_SIZE_MAX, TITLE_FONT_SIZE_MIN, TITLE_FONT_SIZE_STEP, ensureTitleFontLoaded, normalizeTitleFontSize, normalizeTitleFontWeight, resolveTitleFontOption, titleBlockStyleVars, waitForTitleFontReady } from '../utils/titleFontOptions';
+import type { TitleFontWeight } from '../utils/titleFontOptions';
 import HelpPanel from './HelpPanel';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXml } from '../utils/musicXmlImport';
@@ -481,8 +482,17 @@ export default function ScorePage() {
   const [arranger, setArranger] = useState('編曲者');
   // タイトル・サブタイトル・作者欄のフォント（Issue #342）。id は utils/titleFontOptions.ts の一覧
   const [titleFontId, setTitleFontId] = useState<string>(DEFAULT_TITLE_FONT_ID);
+  // タイトルブロックの文字サイズ倍率と太さ（Issue #420）。
+  // サイズは 1 = 従来どおり、太さは undefined = 従来どおり（タイトル行だけ太字）
+  const [titleFontSize, setTitleFontSize] = useState<number>(TITLE_FONT_SIZE_DEFAULT);
+  const [titleFontWeight, setTitleFontWeight] = useState<TitleFontWeight | undefined>(undefined);
   // 空文字 = 上書きなし（既定）。CSS 変数 --title-font-override を注入しない
   const titleFontStack = resolveTitleFontOption(titleFontId).stack;
+  // 既定値のときは変数を注入しない（＝App.css のフォールバックが効き、既存譜面の見た目は不変）
+  const titleBlockVars = useMemo(
+    () => titleBlockStyleVars(titleFontStack, titleFontSize, titleFontWeight),
+    [titleFontStack, titleFontSize, titleFontWeight],
+  );
   // Webフォント（Noto系）を選んだときだけ <link> を読み込む。読込・復元経路でも効くよう id を見張る
   useEffect(() => {
     ensureTitleFontLoaded(resolveTitleFontOption(titleFontId));
@@ -2055,7 +2065,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const handleExportFile = async () => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight);
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
     const result = await exportScoreToFile(data, title, fileHandleRef.current);
     if (result.status === 'saved') {
@@ -2099,6 +2109,8 @@ export default function ScorePage() {
       setInstrumentation(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
       setNotationMode(data.notationMode ?? 'concert');
     setTitleFontId(resolveTitleFontOption(data.titleFontId).id);
+      setTitleFontSize(normalizeTitleFontSize(data.titleFontSize));
+      setTitleFontWeight(normalizeTitleFontWeight(data.titleFontWeight));
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
       setCustomSymbolDefs(data.customSymbolDefs ?? []);
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
@@ -2155,7 +2167,7 @@ export default function ScorePage() {
   // （handleExportFile と同じ理由で通常関数として定義。TDZ 回避）。
   const handleFeedback = async () => {
     const { metadata, parts } = buildScoreData();
-    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
+    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight);
     const feedbackState = {
       ...scoreData,
       // フィードバック JSON は「開く」メニュー（ファイル）で読み込める楽譜 JSON なので、
@@ -2235,6 +2247,8 @@ export default function ScorePage() {
     setInstrumentation(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType));
     setNotationMode(restored.notationMode ?? 'concert');
     setTitleFontId(resolveTitleFontOption(restored.titleFontId).id);
+    setTitleFontSize(normalizeTitleFontSize(restored.titleFontSize));
+    setTitleFontWeight(normalizeTitleFontWeight(restored.titleFontWeight));
     setCustomSymbolDefs(restored.customSymbolDefs ?? []);
     if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
       setMeasuresPerSystem(restored.measuresPerSystem);
@@ -2331,7 +2345,7 @@ export default function ScorePage() {
       // ただし復元履歴の退避（includeEmpty）では、空譜面＝「全音符を消した直後」や
       // 「タイトルだけ編集した状態」も戻す前の内容として残す必要があるため組み立てる
       if (!options?.includeEmpty && isEmptyScoreData(parts)) return null;
-      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId);
+      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight);
     };
   });
 
@@ -2357,7 +2371,7 @@ export default function ScorePage() {
       // 保存先は「いま開いている作品」の自動保存スロット。まだ作品IDが無い
       // （＝一度も保存していない新規状態）ときは、この保存で新しい作品が作られる。
       const saved = saveCurrentWork(
-        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId)
+        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight)
       );
       if (saved) {
         setAutoSaveStatus('saved');
@@ -2384,7 +2398,7 @@ export default function ScorePage() {
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, titleFontId, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -4911,6 +4925,34 @@ export default function ScorePage() {
                     ))}
                   </select>
                 </label>
+
+                {/* 文字サイズ（倍率）と太さ（Issue #420）。タイトル・サブタイトル・作者欄へ一括で効く */}
+                <label className="toolbar-select-label" title="タイトル・サブタイトル・作詞/作曲/編曲者の文字の大きさを、既定の見た目に対する倍率で変えます">
+                  <span>タイトルの文字サイズ</span>
+                  <input
+                    type="range"
+                    min={TITLE_FONT_SIZE_MIN}
+                    max={TITLE_FONT_SIZE_MAX}
+                    step={TITLE_FONT_SIZE_STEP}
+                    value={titleFontSize}
+                    onChange={(event) => setTitleFontSize(normalizeTitleFontSize(Number(event.target.value)))}
+                    aria-label="タイトルの文字サイズ"
+                  />
+                  <span className="toolbar-range-value">{Math.round(titleFontSize * 100)}%</span>
+                </label>
+
+                <label className="toolbar-select-label" title="タイトル・サブタイトル・作詞/作曲/編曲者の文字の太さをまとめて変えます（未設定のときはタイトル行だけが太字の従来どおりの見た目です）">
+                  <span>タイトルの太さ</span>
+                  <select
+                    value={titleFontWeight ?? ''}
+                    onChange={(event) => setTitleFontWeight(normalizeTitleFontWeight(event.target.value))}
+                    aria-label="タイトルの太さ"
+                  >
+                    <option value="">既定（タイトルのみ太字）</option>
+                    <option value="normal">標準</option>
+                    <option value="bold">太字</option>
+                  </select>
+                </label>
               </div>
 
               <div className="instrumentation-summary" aria-live="polite">
@@ -5854,9 +5896,10 @@ export default function ScorePage() {
                       '--title-margin-top': `${titleMarginTopMm}mm`,
                       '--title-margin-bottom': `${titleMarginBottomMm}mm`,
                     } : {}),
-                    // タイトルまわりのフォント（Issue #342）。既定（空文字）では注入しない＝
-                    // App.css の従来指定（--score-text-font）がそのまま効き、既存譜面の見た目は変わらない
-                    ...(titleFontStack ? { '--title-font-override': titleFontStack } : {}),
+                    // タイトルまわりのフォント（Issue #342）・文字サイズ倍率と太さ（Issue #420）。
+                    // 既定値のときは変数を注入しない＝App.css の従来指定（--score-text-font と
+                    // 従来の px 値・太さ）がそのまま効き、既存譜面の見た目は変わらない
+                    ...titleBlockVars,
                   } as React.CSSProperties}
                 >
                   {i === 0 ? (

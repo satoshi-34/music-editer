@@ -618,6 +618,10 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     (data.instrumentation === undefined || validateScoreInstrumentation(data.instrumentation)) &&
     (data.notationMode === undefined || data.notationMode === 'concert' || data.notationMode === 'written') &&
     (data.titleFontId === undefined || typeof data.titleFontId === 'string') &&
+    // サイズ・太さは読み込み時に正規化して使う（範囲外は既定へ倒す）ので、
+    // ここでは「型が違うデータを弾く」ところまでを見る
+    (data.titleFontSize === undefined || (typeof data.titleFontSize === 'number' && Number.isFinite(data.titleFontSize))) &&
+    (data.titleFontWeight === undefined || typeof data.titleFontWeight === 'string') &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -1754,7 +1758,9 @@ export function createSavedScoreData(
   customSymbolDefs?: CustomSymbolDef[],
   systemMeasureOverrides?: SavedScoreData['systemMeasureOverrides'],
   systemRowGapOverrides?: SavedScoreData['systemRowGapOverrides'],
-  titleFontId?: string
+  titleFontId?: string,
+  titleFontSize?: number,
+  titleFontWeight?: string
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -1766,6 +1772,8 @@ export function createSavedScoreData(
     instrumentation,
     notationMode,
     titleFontId,
+    titleFontSize,
+    titleFontWeight,
     parts,
     systems,
     measuresPerSystem,

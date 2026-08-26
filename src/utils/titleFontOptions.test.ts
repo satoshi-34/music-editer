@@ -3,8 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_TITLE_FONT_ID,
   TITLE_FONT_OPTIONS,
+  TITLE_FONT_SIZE_DEFAULT,
+  TITLE_FONT_SIZE_MAX,
+  TITLE_FONT_SIZE_MIN,
   ensureTitleFontLoaded,
+  normalizeTitleFontSize,
+  normalizeTitleFontWeight,
   resolveTitleFontOption,
+  titleBlockStyleVars,
   waitForTitleFontReady,
 } from './titleFontOptions';
 
@@ -103,5 +109,55 @@ describe('titleFontOptions（#342）', () => {
     expect(load).toHaveBeenCalled();
     Reflect.deleteProperty(document, 'fonts');
     link.remove();
+  });
+});
+
+describe('タイトルブロックの文字サイズ・太さ（#420）', () => {
+  it('サイズは未指定・数値でない・範囲外をすべて既定（1）か範囲内へ丸める', () => {
+    expect(normalizeTitleFontSize(undefined)).toBe(TITLE_FONT_SIZE_DEFAULT);
+    expect(normalizeTitleFontSize(Number.NaN)).toBe(TITLE_FONT_SIZE_DEFAULT);
+    expect(normalizeTitleFontSize(0.1)).toBe(TITLE_FONT_SIZE_MIN);
+    expect(normalizeTitleFontSize(99)).toBe(TITLE_FONT_SIZE_MAX);
+    expect(normalizeTitleFontSize(1.2)).toBe(1.2);
+  });
+
+  it('太さは normal / bold 以外を undefined（従来どおり）へ倒す', () => {
+    expect(normalizeTitleFontWeight(undefined)).toBeUndefined();
+    expect(normalizeTitleFontWeight('heavy')).toBeUndefined();
+    expect(normalizeTitleFontWeight('normal')).toBe('normal');
+    expect(normalizeTitleFontWeight('bold')).toBe('bold');
+  });
+
+  it('既定値のときは CSS 変数を1つも注入しない（既存譜面の見た目を変えないため）', () => {
+    expect(titleBlockStyleVars('', undefined, undefined)).toEqual({});
+    expect(titleBlockStyleVars('', TITLE_FONT_SIZE_DEFAULT, undefined)).toEqual({});
+    // 範囲外の値も既定へ丸められるので、変数は注入されない
+    expect(titleBlockStyleVars('', Number.NaN, 'unknown' as never)).toEqual({});
+  });
+
+  it('書体・サイズ・太さを指定すると、それぞれの CSS 変数になる', () => {
+    const vars = titleBlockStyleVars('Georgia, serif', 1.25, 'bold');
+    expect(vars['--title-font-override']).toBe('Georgia, serif');
+    expect(vars['--title-font-scale']).toBe('1.25');
+    // 太字はタイトル行とサブ（サブタイトル・作者欄）の両方へ同じ値で効く
+    expect(vars['--title-font-weight']).toBe('700');
+    expect(vars['--title-font-weight-sub']).toBe('700');
+  });
+
+  it('太さ「標準」はタイトル行も 400 にする', () => {
+    const vars = titleBlockStyleVars('', undefined, 'normal');
+    expect(vars['--title-font-weight']).toBe('400');
+    expect(vars['--title-font-weight-sub']).toBe('400');
+    // サイズは既定のままなので注入されない
+    expect(vars['--title-font-scale']).toBeUndefined();
+  });
+
+  it('追加した Webフォントはすべて標準(400)と太字(700)を読み込む指定になっている', () => {
+    const webFonts = TITLE_FONT_OPTIONS.filter((option) => option.googleFontFamily);
+    expect(webFonts.length).toBeGreaterThanOrEqual(12);
+    for (const option of webFonts) {
+      expect(option.googleFontFamily).toMatch(/wght@[\d;]*400/);
+      expect(option.googleFontFamily).toMatch(/wght@[\d;]*700/);
+    }
   });
 });
