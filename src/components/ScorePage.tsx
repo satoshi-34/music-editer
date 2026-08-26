@@ -487,11 +487,12 @@ export default function ScorePage() {
   const [titleFontSize, setTitleFontSize] = useState<number>(TITLE_FONT_SIZE_DEFAULT);
   const [titleFontWeight, setTitleFontWeight] = useState<TitleFontWeight | undefined>(undefined);
   // 空文字 = 上書きなし（既定）。CSS 変数 --title-font-override を注入しない
-  const titleFontStack = resolveTitleFontOption(titleFontId).stack;
+  const titleFontOption = resolveTitleFontOption(titleFontId);
+  const titleFontStack = titleFontOption.stack;
   // 既定値のときは変数を注入しない（＝App.css のフォールバックが効き、既存譜面の見た目は不変）
   const titleBlockVars = useMemo(
-    () => titleBlockStyleVars(titleFontStack, titleFontSize, titleFontWeight),
-    [titleFontStack, titleFontSize, titleFontWeight],
+    () => titleBlockStyleVars(titleFontStack, titleFontSize, titleFontWeight, titleFontOption.legacyTitleWeight),
+    [titleFontStack, titleFontSize, titleFontWeight, titleFontOption.legacyTitleWeight],
   );
   // Webフォント（Noto系）を選んだときだけ <link> を読み込む。読込・復元経路でも効くよう id を見張る
   useEffect(() => {
@@ -1997,6 +1998,10 @@ export default function ScorePage() {
     setTool({ duration: '4', isRest: false });
     setNotationMode('concert');
     setTitleFontId(DEFAULT_TITLE_FONT_ID);
+    // タイトルの文字サイズ・太さも既定へ戻す（書体だけ戻してサイズが残ると、
+    // 新規譜面が前の作品の見た目を引きずる。#420 Codex round1）
+    setTitleFontSize(TITLE_FONT_SIZE_DEFAULT);
+    setTitleFontWeight(undefined);
     // 楽譜の種類・拍子・調号・段組み・余白などは、保存済みの初期値プリセット（issue #39）が
     // あればその値、無ければ従来どおりのコード上の既定値（工場出荷値）を適用する。
     await applySettingsProfileToState(loadSettingsProfile());

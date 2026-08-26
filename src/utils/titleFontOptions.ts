@@ -12,6 +12,14 @@
 // 太さもこのファイルで面倒を見る（保存データの正規化まで含める）。
 
 export type TitleFontOption = {
+  /**
+   * 太さ未指定時に注入する互換用の title 側ウェイト。
+   * 旧来の Noto 2書体は 400;600 だけを配信しており、h1 の太字要求（700）は 600 で
+   * 描画されていた。#420 で 700 を配信に加えたため、未指定の既存譜面が 600→700 へ
+   * 変わってしまう（Codex round1 P1）。この値がある書体は、未指定時に明示的に
+   * この太さ（600）を注入して旧来の見た目を保ち、明示的な「太い」だけが 700 になる
+   */
+  legacyTitleWeight?: number;
   /** 保存データ（SavedScoreData.titleFontId）に入る安定 id */
   id: string;
   /** 楽譜設定タブの選択肢に出す表示名 */
@@ -37,8 +45,8 @@ export const TITLE_FONT_OPTIONS: TitleFontOption[] = [
   { id: 'gothic', label: 'ゴシック', stack: '"Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", Arial, sans-serif' },
   { id: 'serif-latin', label: 'セリフ（欧文向け）', stack: 'Georgia, "Times New Roman", "Hiragino Mincho ProN", serif' },
   { id: 'sans-latin', label: 'サンセリフ（欧文向け）', stack: '"Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", sans-serif' },
-  { id: 'noto-serif-jp', label: 'Noto Serif JP（Webフォント）', stack: '"Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", serif', googleFontFamily: 'Noto+Serif+JP:wght@400;600;700' },
-  { id: 'noto-sans-jp', label: 'Noto Sans JP（Webフォント）', stack: '"Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif', googleFontFamily: 'Noto+Sans+JP:wght@400;600;700' },
+  { id: 'noto-serif-jp', label: 'Noto Serif JP（Webフォント）', stack: '"Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", serif', googleFontFamily: 'Noto+Serif+JP:wght@400;600;700', legacyTitleWeight: 600 },
+  { id: 'noto-sans-jp', label: 'Noto Sans JP（Webフォント）', stack: '"Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif', googleFontFamily: 'Noto+Sans+JP:wght@400;600;700', legacyTitleWeight: 600 },
   // ここから Issue #420 の追加分。いずれも 400（標準）と 700（太字）を持つ書体だけを選んである
   // （太さトグルで 700 を使うため。無い書体を混ぜるとブラウザの合成太字になり品位が落ちる）。
   // 欧文の浄書向きセリフ体
@@ -79,7 +87,8 @@ export const TITLE_FONT_WEIGHT_NORMAL = 400;
 
 /**
  * 保存データの titleFontSize を安全な倍率へ丸める。
- * 未指定・数値でない・範囲外（手書き JSON や将来の仕様変更）はすべて既定の 1 へ倒す。
+ * 未指定・数値でないものは既定の 1 へ、範囲外は最小/最大へクランプする
+ * （打ち込み途中の値や手書き JSON の意図をできるだけ保つため。設計書と同語）。
  */
 export function normalizeTitleFontSize(size: number | undefined): number {
   if (typeof size !== 'number' || !Number.isFinite(size)) return TITLE_FONT_SIZE_DEFAULT;
@@ -107,12 +116,18 @@ export function titleBlockStyleVars(
   fontStack: string,
   fontSize: number | undefined,
   fontWeight: TitleFontWeight | undefined,
+  /** 太さ未指定時に注入する互換ウェイト（TitleFontOption.legacyTitleWeight）。 */
+  legacyTitleWeight?: number,
 ): Record<string, string> {
   const vars: Record<string, string> = {};
   if (fontStack) vars['--title-font-override'] = fontStack;
   const size = normalizeTitleFontSize(fontSize);
   if (size !== TITLE_FONT_SIZE_DEFAULT) vars['--title-font-scale'] = String(size);
   const weight = normalizeTitleFontWeight(fontWeight);
+  if (!weight && legacyTitleWeight) {
+    // 旧来 600 上限だった書体の既存譜面の見た目を保つ（サブタイトル側は元々 400 なので触らない）
+    vars['--title-font-weight'] = String(legacyTitleWeight);
+  }
   if (weight) {
     const value = weight === 'bold' ? TITLE_FONT_WEIGHT_BOLD : TITLE_FONT_WEIGHT_NORMAL;
     // タイトル行と、サブタイトル・作者欄で別変数にしてある。
