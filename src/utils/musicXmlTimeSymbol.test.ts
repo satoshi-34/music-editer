@@ -72,4 +72,20 @@ describe('MusicXML の拍子記号表記（Issue #422）', () => {
     expect(loaded.timeSignature).toEqual([2, 2]);
     expect(loaded.timeSignatureStyle).toBe('numeric');
   });
+
+  // #422 round1 P2: 記号表記の対象は譜面先頭の拍子だけ。小節単位の拍子変更に
+  // symbol を付けると、読込側は先頭しか見ないため往復でスタイルが消える。
+  // 「途中に 2/2 の小節変更がある symbol 譜面」の往復でスタイルが保たれることを固定する
+  it('小節単位の拍子変更には symbol を付けず、往復でスタイルが保たれる', () => {
+    const data = build([2, 2], 'symbol');
+    data.parts[0].measures.push({ events: [{ dur: '1', isRest: true, keys: [] }], timeSignature: [2, 2] });
+    const xml = scoreToMusicXml(data);
+    // 先頭の拍子にだけ symbol が付く
+    expect(xml.match(/symbol="cut"/g)?.length).toBe(1);
+    // 往復してもスタイルは symbol のまま
+    const reparsed = parseMusicXml(xml);
+    expect(reparsed.timeSignatureStyle).toBe('symbol');
+    const xml2 = scoreToMusicXml(reparsed);
+    expect(xml2).toContain('symbol="cut"');
+  });
 });

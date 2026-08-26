@@ -279,7 +279,10 @@ function measureToXml(
     const keyXml = (options.isFirstMeasure || keyChanged) ? `<key><fifths>${keyFifths}</fifths><mode>major</mode></key>` : '';
     // symbol 属性は 4/4（common）と 2/2（cut）にだけ意味がある。
     // それ以外の拍子で付けると、読み込む側が「数字なのに記号指定」と解釈して崩れるため付けない。
-    const timeSymbol = options.timeSignatureStyle === 'symbol'
+    // 記号表記の対象は**譜面先頭の拍子だけ**にする（#422 round1 P2）。小節単位の
+    // 拍子変更へ付けると、読込側は先頭しか見ないため往復でスタイルが消える。
+    // 途中の拍子変更はデータのみ（画面表示も未対応の既存仕様）なので数字のまま出す
+    const timeSymbol = options.isFirstMeasure && options.timeSignatureStyle === 'symbol'
       ? timeSig[0] === 4 && timeSig[1] === 4
         ? ' symbol="common"'
         : timeSig[0] === 2 && timeSig[1] === 2

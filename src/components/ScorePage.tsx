@@ -4150,13 +4150,16 @@ export default function ScorePage() {
       scoreType,
       keySignature: normalizeKeySignature(keySignature),
       timeSignature: scoreTimeSignature,
+      // 拍子の記号表記（C / 𝄵・#422）。ここに入れないと画面で切り替えても
+      // MusicXML 書き出しへ symbol="common"/"cut" が付かない（Codex round1 P1）
+      timeSignatureStyle,
       parts,
       systems: totalSystems,
       measuresPerSystem,
     };
   }, [
     title, subtitle, lyricist, composer, arranger,
-    scoreType, keySignature, scoreTimeSignature,
+    scoreType, keySignature, scoreTimeSignature, timeSignatureStyle,
     quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData,
     instrumentation, totalSystems, measuresPerSystem,
   ]);

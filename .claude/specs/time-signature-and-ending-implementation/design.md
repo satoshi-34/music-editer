@@ -236,3 +236,15 @@ MusicXML は `<time symbol="common">` / `<time symbol="cut">` で相互運用す
 そのため今回の記号表記も適用先は「譜面の先頭の拍子記号」1 箇所である。
 途中の拍子変更を五線に描く機能を入れるときは、同じ `formatTimeSignature(ts, style)` を
 通せば記号表記もそのまま効く（整形を 2 系統にしないこと）。
+
+## Codex round1 対応（2026-08-27・#422）
+
+- **書き出し配線（P1）**: `buildCurrentScoreData()`（ファイルタブの MusicXML 書出の実経路）が
+  `timeSignatureStyle` を落としていた。プロパティと依存配列へ追加し、ScorePage 実操作
+  （記号表示に切替→書出）で `symbol="cut"` が付く配線テストを追加（ScorePageTimeSigSymbolExport.test.tsx。
+  配線を外すと落ちることを確認済み）
+- **記号表記の適用範囲の確定（P2）**: 記号表記は**譜面先頭の拍子だけ**を対象とする。
+  小節単位の拍子変更（measure.timeSignature）は、そもそも五線上への再表示が未実装の既存仕様
+  （PianoSystemCanvas は先頭でしか addTimeSignature しない）で、書き出しに symbol を付けても
+  読込側は先頭しか見ないため往復で消える。よって書き出し側も先頭のみに限定し、対称にした。
+  往復（symbol 書出→読込→再書出）でスタイルが保存されることをテストで固定
