@@ -92,12 +92,20 @@ describe('MusicXML の拍子記号表記（Issue #422）', () => {
     expect(scoreToMusicXml(reparsed)).toContain('symbol="common"');
   });
 
-  // round2 P2 の仕様確定: 先頭の拍子が記号非対応（6/8 等）のとき、MusicXML には
-  // スタイルを表現する場所が無いため往復で numeric に戻る（設計上の境界。
-  // アプリ内保存 .score.json では 6/8 へ変えても設定が保持される、とは別の話）
-  it('先頭が記号非対応の拍子（6/8）では、MusicXML 往復でスタイルは保存されない（仕様）', () => {
+  // round3 P2: 先頭が記号非対応（6/8 等）でも、アプリ固有メタ
+  // （identification > miscellaneous-field）で設定を往復させる。
+  // <time symbol> は他ソフト向けの標準表現、miscellaneous-field は自アプリの往復用
+  it('先頭が記号非対応の拍子（6/8）でも、miscellaneous-field でスタイルが往復する', () => {
     const xml = scoreToMusicXml(build([6, 8], 'symbol'));
+    // 標準の symbol 属性は付かない（6/8 に common/cut は無い）
     expect(xml).not.toContain('symbol=');
-    expect(parseMusicXml(xml).timeSignatureStyle ?? 'numeric').toBe('numeric');
+    expect(xml).toContain('music-editer.time-signature-style');
+    // 読み込むと設定が復元される（6/8 のままなので表示は数字だが、2/2 へ戻すと記号になる）
+    expect(parseMusicXml(xml).timeSignatureStyle).toBe('symbol');
+  });
+
+  it('numeric のときは miscellaneous-field を出力しない（既定は身軽なまま）', () => {
+    const xml = scoreToMusicXml(build([2, 2], 'numeric'));
+    expect(xml).not.toContain('music-editer.time-signature-style');
   });
 });

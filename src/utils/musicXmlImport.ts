@@ -568,6 +568,14 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     const clefLine = firstAttrs.querySelector('clef line')?.textContent;
     defaultClef = xmlClefToClefType(clefSign, clefLine);
   }
+  {
+    // アプリ固有メタ（miscellaneous-field・round3 P2）: 先頭拍子が 4/4・2/2 でない間に
+    // 書き出しても記号表示の設定が往復するよう、<time symbol> とは別に自前の印も読む
+    const miscStyle = Array.from(doc.querySelectorAll('identification miscellaneous-field'))
+      .find((el) => el.getAttribute('name') === 'music-editer.time-signature-style')
+      ?.textContent?.trim();
+    if (miscStyle === 'symbol') globalTimeSigStyle = 'symbol';
+  }
 
   const keySignature: KeySignature = FIFTHS_TO_KEY[globalKeyFifths] ?? 'C';
   const validKey = isValidKeySignature(keySignature) ? keySignature : 'C';

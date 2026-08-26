@@ -205,10 +205,12 @@ VexFlow はモディファイア（拍子記号・調号など）を `draw()` �
 UI は「楽譜設定」タブの拍子セレクトの隣のチェックボックス（記号で表示（C / 𝄵））。
 4/4・2/2 以外を選んでいる間は無効化するが、**設定値そのもの（`symbol`）は保持する**。
 拍子を 6/8 へ変えて 2/2 へ戻したときに、記号表示の設定が消えていない方が自然なため。
-**この「保持」はアプリ内保存（.score.json / 自動保存）の話**であり、MusicXML には
-先頭拍子が 4/4・2/2 のときの `symbol` 属性以外にスタイルを表現する場所が無い。
-したがって「6/8 のまま MusicXML へ書き出して読み込む」と設定は numeric へ戻る
-（round2 P2 で仕様として確定。テストで固定済み）。
+MusicXML でもこの「保持」を往復させる（round3 P2）: 標準の `<time symbol>` は先頭拍子が
+4/4・2/2 のときしか書けないため、**アプリ固有メタ**（MusicXML 公式の
+`<identification><miscellaneous><miscellaneous-field name="music-editer.time-signature-style">`）
+に style=symbol を保存し、読込側は symbol 属性と miscellaneous-field の**どちらか**があれば
+記号表示として復元する。symbol 属性は他ソフトとの相互運用用、miscellaneous-field は
+自アプリの往復用という役割分担。numeric（既定）のときは何も出力しない。
 描画へ渡す値だけを `effectiveTimeSignatureStyle` で切り替えている。
 無効時は `title` に理由と代替手順（「4/4 か 2/2 を選んでください」）を出す
 （AGENTS.md の「行き止まりは喋る」原則）。
