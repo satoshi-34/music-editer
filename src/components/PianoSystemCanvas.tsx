@@ -1590,6 +1590,16 @@ type SymbolHitRegionAppender = {
   (elements: SVGGraphicsElement[], partIndex: number, measureAbsoluteIndex: number, eventIndex: number, symbolVoiceIndex: number, event: NoteEvent, kind: AdjustableSymbolKind, isCustomSymbolId?: false): void;
   (elements: SVGGraphicsElement[], partIndex: number, measureAbsoluteIndex: number, eventIndex: number, symbolVoiceIndex: number, event: NoteEvent, symbolId: string, isCustomSymbolId: true): void;
 };
+/**
+ * オッターバ（8va/8vb）の見た目の調整値（実機所感 2026-08-26: 「文字が小さくて五線に近い」）。
+ * - 文字: 11px → 22px（2倍）
+ * - 五線からの距離: 14px → 28px（2倍・収集側 pendingOttava の lineY で使う）
+ * - 障害物との最低間隔: 範囲内の音符の描画範囲から、五線と反対側へ逃がす
+ */
+export const OTTAVA_FONT_SIZE_PX = 22;
+export const OTTAVA_STAFF_GAP_PX = 28;
+export const OTTAVA_OBSTACLE_CLEARANCE_PX = 6;
+
 function drawCollectedSymbolEntries(args: {
   svgRoot: SVGGElement;
   collectors: RenderCollectors;
@@ -2078,8 +2088,27 @@ function drawCollectedSymbolEntries(args: {
     // symbolAdjust: offsetX/offsetY はブラケット全体に、scale はテキストの font-size と線の太さに効かせる
     const ax = startX + adjust.offsetX;
     const aex = endX + adjust.offsetX;
-    const ay = lineY + adjust.offsetY;
-    const fontSize = 11 * adjust.scale;
+    // 障害物回避（実機所感 2026-08-26）: 範囲内に高い音（8vbなら低い音）があると
+    // ブラケットが符頭・符幹に重なる。他の記号（強弱の押し出し #340）と同じく
+    // 音符の実描画範囲（noteObstacles）を見て、五線から遠ざかる向きへ逃がす。
+    // 手動調整済み（offsetY≠0）は自動で動かさない（#373 の手動優先原則）
+    let avoidedLineY = lineY;
+    if (adjust.offsetY === 0 && partIndex !== undefined) {
+      const spanObstacles = noteObstacles.filter((o) =>
+        o.partIndex === partIndex && o.x + o.w >= Math.min(ax, aex) && o.x <= Math.max(ax, aex));
+      if (spanObstacles.length > 0) {
+        if (kind === '8va') {
+          const minTop = Math.min(...spanObstacles.map((o) => o.y));
+          avoidedLineY = Math.min(avoidedLineY, minTop - OTTAVA_OBSTACLE_CLEARANCE_PX);
+        } else {
+          const maxBottom = Math.max(...spanObstacles.map((o) => o.y + o.h));
+          // 8vb はテキストが基線から上に伸びるので、文字の高さぶんも下げる
+          avoidedLineY = Math.max(avoidedLineY, maxBottom + OTTAVA_OBSTACLE_CLEARANCE_PX + OTTAVA_FONT_SIZE_PX * 0.8);
+        }
+      }
+    }
+    const ay = avoidedLineY + adjust.offsetY;
+    const fontSize = OTTAVA_FONT_SIZE_PX * adjust.scale;
     const strokeWidth = 1 * adjust.scale;
     const drawnElements: SVGGraphicsElement[] = [];
     const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -6972,9 +7001,9 @@ export default function PianoSystemCanvas({
                   const topY = stave.getYForLine(0);
                   const botY = stave.getYForLine(4);
                   if (ev.ottava === '8va') {
-                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
+                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - OTTAVA_STAFF_GAP_PX, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
                   } else if (ev.ottava === '8vb') {
-                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
+                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + OTTAVA_STAFF_GAP_PX, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
                   } else if (pendingOttava && ev.ottava === '8vaEnd' && pendingOttava.kind === '8va') {
                     ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
                     pendingOttava = null;
