@@ -3152,6 +3152,21 @@ export default function ScorePage() {
             entry.apply(copy);
           });
           setLastEditedMeasureIndex(destMeasure);
+          // 貼り付け成功後は、選択を「いま貼った範囲の直後」へ同じ幅で進める
+          // （実機要望 2026-08-27: 月光の三連符を連続で並べたい）。選択し直さずに
+          // Cmd/Ctrl+V を繰り返すだけで、次の位置・次の小節へ順に貼れる。
+          // 複数小節スライスは貼り位置の整列制約（misaligned）があるため従来どおり動かさない
+          if (sliceClipboard.length === 1) {
+            const w = sliceClipboard[0].beats;
+            const nextStart = destBeat + w;
+            const totalMeasuresNow = totalSystems * measuresPerSystem;
+            if (nextStart + w <= beatsPerMeasureNow + 0.0001) {
+              setSelectedMeasures({ start: destMeasure, end: destMeasure, startBeat: nextStart, endBeat: nextStart + w });
+            } else if (w <= beatsPerMeasureNow + 0.0001 && destMeasure + 1 < totalMeasuresNow) {
+              // 小節内に入り切らなければ次の小節の頭へ（末尾小節なら進めない）
+              setSelectedMeasures({ start: destMeasure + 1, end: destMeasure + 1, startBeat: 0, endBeat: w });
+            }
+          }
           e.preventDefault();
           return;
         }
