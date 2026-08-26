@@ -242,6 +242,35 @@ describe('記号系ツールを対象外へ使ったときの通知（Issue #330
     });
   });
 
+  describe('編集操作のコンソールログ（テスト会の切り分け用・開発時のみ）', () => {
+    it('音符クリックが処理されると [編集] ログが1行出る', async () => {
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+      try {
+        const { svg } = renderScore(NOTE_AND_REST, { mode: 'dynamic', dynamic: 'f' });
+        clickEvent(svg, 0);
+        await waitFor(() => {
+          expect(infoSpy.mock.calls.some((c) => String(c[0]).includes('[編集]'))).toBe(true);
+        });
+        const call = infoSpy.mock.calls.find((c) => String(c[0]).includes('[編集]'))!;
+        expect(call[1]).toMatchObject({ measure: 0, event: 0, outcome: 'handled' });
+      } finally {
+        infoSpy.mockRestore();
+      }
+    });
+
+    it('描画パスごとに記号の件数サマリ（[描画]）が出る', () => {
+      const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+      try {
+        renderScore(NOTE_AND_REST, { mode: 'dynamic', dynamic: 'f' });
+        const call = debugSpy.mock.calls.find((c) => String(c[0]).includes('[描画]'));
+        expect(call).toBeTruthy();
+        expect(call![1]).toHaveProperty('オッターバ');
+      } finally {
+        debugSpy.mockRestore();
+      }
+    });
+  });
+
   describe('オッターバの付け外し通知（#318・実機で「置けない」と誤認 2026-08-26）', () => {
     // 括弧は開始+終了のペアで初めて描かれる。開始だけの状態が無言だと
     // 「クリックが効いていない」ように見える

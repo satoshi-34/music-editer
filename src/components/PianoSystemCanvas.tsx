@@ -98,6 +98,7 @@ import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accident
 import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
+import { logEditOp, logRenderPass } from '../utils/editDebugLog';
 import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt, asRenderedPartIndex, type RenderedPartIndex } from '../utils/crossStaffUtils';
 import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../utils/crossStaffBeamUtils';
 import {
@@ -1612,6 +1613,21 @@ function drawCollectedSymbolEntries(args: {
   highlightedLayerPartIndex?: number | null;
 }): void {
   const { svgRoot, customSymbolDefs, highlightedLayerPartIndex } = args;
+  // テスト会の切り分け用（開発時のみ・console.debug）: この描画パスに各記号が
+  // 何件届いたか。クリックのログ（[編集]）は出るのにここで件数が0なら、
+  // 収集〜描画側の問題だと分かる（8va の「開始だけでは描かれない」が典型）
+  logRenderPass({
+    強弱: args.collectors.dynamicTextEntries.length,
+    カスタム記号: args.collectors.customSymbolEntries.length,
+    ペダル: args.collectors.pedalMarkEntries.length,
+    運指: args.collectors.fingeringEntries.length,
+    アーティキュレーション: args.collectors.articulationEntries.length,
+    テンポ: args.collectors.tempoMarkingEntries.length,
+    発想標語: args.collectors.expressionMarkingEntries.length,
+    コード: args.collectors.chordSymbolEntries.length,
+    歌詞: args.collectors.lyricsEntries.length,
+    オッターバ: args.collectors.ottavaEntries.length,
+  });
   // UI案A2 の記号の淡色化（#405 段3）。
   // 記号の描画はどれも「要素を作る → appendSymbolHitRegion(作った要素, partIndex, …)」の順で
   // 通るので、その1か所を包むだけで全種類（強弱・アーティキュレーション・運指・
@@ -6838,6 +6854,16 @@ export default function PianoSystemCanvas({
                 if (flag.kind !== 'passThrough') return flag;
                 return clickedIsRest ? restDefaultOutcome() : noteDefaultOutcome();
               })();
+              // テスト会の切り分け用（開発時のみ）: クリックが処理に届いたことと、
+              // どう裁かれたかをコンソールへ残す。「反応しない」の原因が
+              // 当たり判定側か描画側かをこの1行の有無で切り分けられる
+              logEditOp('音符クリック', {
+                tool: 'mode' in tool ? tool.mode : `音価:${(tool as { duration?: string }).duration}`,
+                part: hitPi, measure: absI, event: j, voice: hitVoice,
+                isRest: clickedIsRest,
+                outcome: outcome.kind,
+                ...(outcome.kind === 'rejected' ? { notice: outcome.notice } : {}),
+              });
               if (outcome.kind === 'rejected') notifyScoreEdit(outcome.notice);
             });
             svgRoot.appendChild(hit);
