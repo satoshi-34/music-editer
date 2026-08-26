@@ -192,7 +192,7 @@ function attachHairpinsToVoiceEvents(
   events: NoteEvent[],
   measureIndex: number,
   openRefs: HairpinMark[],
-  forwardRestCount?: (el: Element) => number,
+  syntheticRestCount?: (el: Element) => number,
 ): void {
   let eventIndex = -1;
   let pendingTypes: Array<'cresc' | 'dim'> = [];
@@ -211,11 +211,11 @@ function attachHairpinsToVoiceEvents(
       }
       continue;
     }
-    if (child.tagName === 'forward') {
-      // <forward>（時間送り）から合成した休符イベントのぶん、対応位置を進める
-      // （進めないと以降の松葉の付き先が前へずれる）
-      eventIndex += forwardRestCount?.(child) ?? 0;
-      continue;
+    {
+      // <forward> や別五線の音符（クロススタッフ）から合成した休符イベントのぶん
+      // 対応位置を進める（進めないと以降の松葉の付き先が前へずれる）
+      const synthetic = syntheticRestCount?.(child) ?? 0;
+      if (synthetic > 0) { eventIndex += synthetic; continue; }
     }
     if (child.tagName !== 'note') continue;
     // parseNotes と同じ判定（前打音はスキップ、和音の2音目以降は新しい event を作らない）
@@ -324,23 +324,36 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     // <forward> を「その長さぶんの休符」へ合成する。無視すると後続の音が小節先頭へ詰まり、
     // 「backup → forward 半小節 → 後半だけの声部」のような外部ソフト定番の書き方で
     // リズムが黙って壊れる（Codex round1 P1）
-    const forwardRests = (el: Element): NoteEvent[] => {
+    const durationRests = (el: Element): NoteEvent[] => {
       const d = parseInt(el.querySelector('duration')?.textContent ?? '', 10);
       if (!Number.isInteger(d) || d <= 0) return [];
       return buildRestEventsForBeats(d / divisions, staffClef);
+    };
+    // この要素が「音符としては読まず、休符として合成する」対象か。
+    // <forward>（時間送り）と、別五線へ移った音符（クロススタッフ）の2種。
+    // 和音の2音目以降（<chord/>）と前打音（<grace/>）は時間を持たないので対象外
+    const isSyntheticRestEl = (el: Element): boolean => {
+      if (el.tagName === 'forward') return true;
+      if (el.tagName !== 'note' || staffNumber === null) return false;
+      if (staffNumberOf(el) === staffNumber) return false;
+      return !el.querySelector('chord') && !el.querySelector('grace');
     };
     const parseVoiceChildren = (children: Element[]): NoteEvent[] => {
       const evs: NoteEvent[] = [];
       let noteRun: Element[] = [];
       const flush = () => { if (noteRun.length) { evs.push(...parseNotes(noteRun)); noteRun = []; } };
       for (const el of children) {
-        if (el.tagName === 'note') { noteRun.push(el); continue; }
-        if (el.tagName === 'forward') { flush(); evs.push(...forwardRests(el)); }
+        if (isSyntheticRestEl(el)) { flush(); evs.push(...durationRests(el)); continue; }
+        if (el.tagName === 'note') {
+          // 別五線の和音メンバー・前打音は時間を持たないので黙って飛ばす
+          if (staffNumber !== null && staffNumberOf(el) !== staffNumber) continue;
+          noteRun.push(el);
+        }
       }
       flush();
       return evs;
     };
-    const forwardRestCount = (el: Element): number => forwardRests(el).length;
+    const syntheticRestCount = (el: Element): number => (isSyntheticRestEl(el) ? durationRests(el).length : 0);
     // 追加声部（下声など）は書出側が <backup> で区切って出力している。
     // #244 段5-5: 旧実装は最初の <backup> だけで2分割しており、3声以上の自己往復で
     // 声部3以降が声部2へ連結される（4声→2声へ潰れる）データ破壊があった。
@@ -350,9 +363,13 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     // 各 note の <voice> タグから決める（タグの無い XML は従来どおり区間順で数える）。
     // 五線ごとに分けるときは、その五線に属さない note / direction を先に除く。
     // <backup>（時間の巻き戻し）や <attributes> は五線に属さないので残す。
+    // 別五線の <note> は**捨てずに残す**: 同じ voice が小節内で五線を移るクロススタッフ記譜では、
+    // 捨てると先行音の時間が消えて後続が小節先頭へ詰まる（Codex round2 P1）。
+    // 残した別五線の音は parseVoiceChildren で「同じ長さの休符」に合成する（時間を保存し、
+    // 見た目のまたぎは読み込み後に ⇵ で付け直せる）。direction だけは自五線ぶんに絞る
     const allChildren = Array.from(measureEl.children).filter((el) => {
       if (staffNumber === null) return true;
-      if (el.tagName !== 'note' && el.tagName !== 'direction') return true;
+      if (el.tagName !== 'direction') return true;
       return staffNumberOf(el) === staffNumber;
     });
     const rawSections: Element[][] = [[]];
@@ -364,7 +381,8 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
       }
     }
     const explicitSectionVoice = (children: Element[]): number | null => {
-      const firstNote = children.find((el) => el.tagName === 'note');
+      const firstNote = children.find((el) => el.tagName === 'note'
+        && (staffNumber === null || staffNumberOf(el) === staffNumber));
       const v = parseInt(firstNote?.querySelector('voice')?.textContent ?? '', 10);
       return !isNaN(v) && v >= 1 ? v : null;
     };
@@ -372,7 +390,8 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     // 捨ててから声部を数える。残すと空の声部が増えてしまう。
     const sections = staffNumber === null
       ? rawSections
-      : rawSections.filter((children) => children.some((el) => el.tagName === 'note'));
+      : rawSections.filter((children) =>
+          children.some((el) => el.tagName === 'note' && staffNumberOf(el) === staffNumber));
     // MusicXML の <voice> 番号は五線をまたいだ通し番号になる慣習がある
     // （例: 右手が 1・2、左手が 5・6）。パート全体の対応表（globalVoiceNumbers）で
     // 1 から振り直して、アプリの「声部1・声部2…」と対応させる。
@@ -390,16 +409,17 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     const voice2Children = childrenForVoice(2);
 
     const events = parseVoiceChildren(voice1Children);
-    attachHairpinsToVoiceEvents(voice1Children, events, mi, openHairpinRefs, forwardRestCount);
+    attachHairpinsToVoiceEvents(voice1Children, events, mi, openHairpinRefs, syntheticRestCount);
 
     const voice2Events = parseVoiceChildren(voice2Children);
     // 声部2の松葉も同じ方式で復元する（voice2Events の要素を直接書き換える）
-    attachHairpinsToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2, forwardRestCount);
+    attachHairpinsToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2, syntheticRestCount);
 
     // 声部3以降（松葉の復元は現行 UI が2声までなので行わない。「壊れず全声部が戻る」水準）。
     // 疎な番号（間の声部が空）は空の器で埋め、声部番号を保存データ上の位置と一致させる
     const noteBearingVoiceNumbers = sectionsWithVoice
-      .filter((s) => s.children.some((el) => el.tagName === 'note'))
+      .filter((s) => s.children.some((el) => el.tagName === 'note'
+        && (staffNumber === null || staffNumberOf(el) === staffNumber)))
       .map((s) => s.voiceNumber);
     const maxVoiceNumber = noteBearingVoiceNumbers.length > 0 ? Math.max(...noteBearingVoiceNumbers) : 1;
     const extraVoiceEvents: NoteEvent[][] = [];

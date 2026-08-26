@@ -255,4 +255,38 @@ describe('MusicXML 読込: 1パート複数五線（ピアノ大譜表）', () =
       .replace('</score-partwise>', second + '</score-partwise>');
     expect(() => parseMusicXml(xml)).toThrowError(/複数パート編成/);
   });
+
+  // Codex round2 P1: 同じ voice が小節内で五線を移るクロススタッフ記譜。
+  // 別五線の音の時間を捨てると後続が小節先頭へ詰まる。休符として合成され、
+  // 時間が保存されることを固定する
+  it('クロススタッフ（voice が五線を移る）でも時間が保存される', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions><staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>8</duration><voice>1</voice><type>half</type><staff>1</staff></note>
+      <note><pitch><step>E</step><octave>3</octave></pitch><duration>8</duration><voice>1</voice><type>half</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const parsed = parseMusicXml(xml);
+    // 上段: 前半は実音、後半は（下段へ移った時間の）合成休符
+    const upper = parsed.parts[0].measures[0].events;
+    expect(upper[0]?.isRest).toBe(false);
+    expect(upper[0]?.keys).toEqual(['c/4']);
+    expect(upper[1]?.isRest).toBe(true);
+    expect(upper[1]?.dur).toBe('2');
+    // 下段: 前半が合成休符、後半が実音（先頭へ詰まらない）
+    const lower = parsed.parts[1].measures[0].events;
+    expect(lower[0]?.isRest).toBe(true);
+    expect(lower[0]?.dur).toBe('2');
+    expect(lower[1]?.isRest).toBe(false);
+    expect(lower[1]?.keys).toEqual(['e/3']);
+  });
 });

@@ -179,6 +179,7 @@ import {
   describeSliceMeasureOpUnavailable,
   describeSlicePasteUnavailable,
   notifyScoreEdit,
+  describeImportedClefNormalized,
   requestScoreSelectionClear,
   type ScoreActiveVoiceChangeDetail,
   type ScoreEditNoticeDetail,
@@ -4199,6 +4200,13 @@ export default function ScorePage() {
             ?? (loaded.parts.length === 2 ? loaded.parts.find(p => p !== rightPart) : undefined);
           setRightHandData(rightPart?.measures ?? []);
           setLeftHandData(leftPart?.measures);
+          // アプリのピアノモデルはクレフ固定（上=ト・下=ヘ）で、任意クレフの大譜表
+          // （両段ト音など）は保持できない。keys は絶対音名なので音の高さは変わらないが、
+          // 見た目のクレフが黙って変わるのは #318 に反するため通知する（#419 round2 P1）
+          if (loaded.scoreType === 'piano'
+            && ((rightPart && rightPart.clef !== 'treble') || (leftPart && leftPart.clef !== 'bass'))) {
+            notifyScoreEdit(describeImportedClefNormalized());
+          }
           setEnsembleParts([]);
           setEnsembleSecondStaffParts([]);
         }

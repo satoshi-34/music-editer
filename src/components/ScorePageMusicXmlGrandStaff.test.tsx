@@ -10,6 +10,7 @@ import ScorePage from './ScorePage';
 import {
   createSavedScoreData, createWork, saveWorkAutosaveData, setLastOpenedWorkId, loadWorkAutosaveData,
 } from '../utils/storage';
+import { SCORE_EDIT_NOTICE_EVENT, type ScoreEditNoticeDetail } from '../utils/scoreEditorNotices';
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -132,7 +133,13 @@ describe('ScorePage: MusicXML 大譜表（<staves>2）の読込配線（#419）'
 
   // 旧実装（clef だけで両手を選ぶ）だと、両段ともト音の正当な大譜表で
   // 2段目が読み捨てられる（Codex round1 P1）。partId 優先の選択を固定する
-  it('両段ともト音記号の大譜表でも、2段目が左手として残る', async () => {
+  it('両段ともト音記号の大譜表でも、2段目が左手として残る（クレフ正規化は通知される）', async () => {
+    const notices: string[] = [];
+    const listener = (e: Event) => {
+      const detail = (e as CustomEvent<ScoreEditNoticeDetail>).detail;
+      if (detail?.message) notices.push(detail.message);
+    };
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, listener);
     seedEmptyWork();
     render(<ScorePage />);
     await waitFor(() => {
@@ -153,5 +160,8 @@ describe('ScorePage: MusicXML 大譜表（<staves>2）の読込配線（#419）'
       // ピアノモデル（左手=bass固定）に正規化されるため、ここでは断言しない
       expect(left?.measures?.[0]?.events?.[0]?.keys?.[0]).toBe('c/3');
     }, { timeout: 15000 });
+    // 見た目のクレフが黙って変わらない: 正規化の通知が出ている（#318）
+    expect(notices.some((n) => n.includes('クレフ') && n.includes('標準'))).toBe(true);
+    window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, listener);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
