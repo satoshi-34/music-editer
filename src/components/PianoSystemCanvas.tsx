@@ -3563,6 +3563,11 @@ export default function PianoSystemCanvas({
           e.preventDefault();return;
         }
         if(e.key==='Escape'){clearArcInteraction();setSelectedArc(null);e.preventDefault();return;}
+        // 矢印キーはここで消費する（実機報告 2026-08-26）。素通しすると下の「音符選択中」の
+        // 処理へ落ち、以前に選択したままの音符の音高が動く（見えない場所の音符が変わる事故）。
+        // 音符選択も無ければブラウザのスクロールになり、挙動が場当たりに見える。
+        // 弧の形の調整はドラッグ専用なので、選択中の矢印キーは何もしないのが正しい
+        if(e.key==='ArrowUp'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();return;}
       }
 
       // 優先1.5: 松葉（ヘアピン）が選択中 → Delete で削除 / Escape で選択解除
@@ -3594,6 +3599,8 @@ export default function PianoSystemCanvas({
           e.preventDefault();return;
         }
         if(e.key==='Escape'){setSelectedHairpin(null);e.preventDefault();return;}
+        // 弧の選択と同じ理由で、松葉の選択中も矢印キーはここで消費する
+        if(e.key==='ArrowUp'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();return;}
       }
 
       // 歌詞・記号調整などの入力欄にフォーカスがあるときは、文字列のコピー＆ペーストを
