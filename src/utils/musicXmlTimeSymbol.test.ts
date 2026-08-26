@@ -77,15 +77,27 @@ describe('MusicXML の拍子記号表記（Issue #422）', () => {
   // symbol を付けると、読込側は先頭しか見ないため往復でスタイルが消える。
   // 「途中に 2/2 の小節変更がある symbol 譜面」の往復でスタイルが保たれることを固定する
   it('小節単位の拍子変更には symbol を付けず、往復でスタイルが保たれる', () => {
-    const data = build([2, 2], 'symbol');
+    // 先頭 4/4（symbol=common）→ 途中で 2/2 へ変更。途中変更の <time> が実際に
+    // 出力される形にしないと、対象分岐を通らず退行を検出できない（round2 P3）
+    const data = build([4, 4], 'symbol');
     data.parts[0].measures.push({ events: [{ dur: '1', isRest: true, keys: [] }], timeSignature: [2, 2] });
     const xml = scoreToMusicXml(data);
-    // 先頭の拍子にだけ symbol が付く
-    expect(xml.match(/symbol="cut"/g)?.length).toBe(1);
+    // symbol が付くのは先頭（common）だけ。途中の 2/2 は属性なしの数字で出る
+    expect(xml.match(/symbol="common"/g)?.length).toBe(1);
+    expect(xml).not.toContain('symbol="cut"');
+    expect(xml).toContain('<time><beats>2</beats><beat-type>2</beat-type></time>');
     // 往復してもスタイルは symbol のまま
     const reparsed = parseMusicXml(xml);
     expect(reparsed.timeSignatureStyle).toBe('symbol');
-    const xml2 = scoreToMusicXml(reparsed);
-    expect(xml2).toContain('symbol="cut"');
+    expect(scoreToMusicXml(reparsed)).toContain('symbol="common"');
+  });
+
+  // round2 P2 の仕様確定: 先頭の拍子が記号非対応（6/8 等）のとき、MusicXML には
+  // スタイルを表現する場所が無いため往復で numeric に戻る（設計上の境界。
+  // アプリ内保存 .score.json では 6/8 へ変えても設定が保持される、とは別の話）
+  it('先頭が記号非対応の拍子（6/8）では、MusicXML 往復でスタイルは保存されない（仕様）', () => {
+    const xml = scoreToMusicXml(build([6, 8], 'symbol'));
+    expect(xml).not.toContain('symbol=');
+    expect(parseMusicXml(xml).timeSignatureStyle ?? 'numeric').toBe('numeric');
   });
 });
