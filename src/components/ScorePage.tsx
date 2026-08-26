@@ -154,7 +154,7 @@ import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamic
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
-import { extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
+import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
@@ -3152,6 +3152,24 @@ export default function ScorePage() {
             entry.apply(copy);
           });
           setLastEditedMeasureIndex(destMeasure);
+          // 貼り付け成功後は、選択を「いま貼った範囲の直後」へ同じ幅で進める
+          // （実機要望 2026-08-27: 月光の三連符を連続で並べたい）。選択し直さずに
+          // Cmd/Ctrl+V を繰り返すだけで、次の位置・次の小節へ順に貼れる。
+          // 複数小節スライスは貼り位置の整列制約（misaligned）があるため従来どおり動かさない
+          if (sliceClipboard.length === 1) {
+            // 上限は**実データの小節数**（entries は貼り付けで実体化した後の値ではなく
+            // 貼り付け前だが、前進先はいま貼った小節の次までなので長さ比較には十分）。
+            // レイアウトの枠（totalSystems×measuresPerSystem）は内容に応じて伸びる設計で
+            // 実小節数と一致しない（48小節超で前進が止まる。PR #418 Codex round1 P2）
+            const next = planSlicePasteAdvance({
+              destMeasure,
+              destBeat,
+              sliceBeats: sliceClipboard[0].beats,
+              beatsPerMeasure: beatsPerMeasureNow,
+              measureCount: Math.max(0, ...entries.map((en) => en.measures.length)),
+            });
+            if (next) setSelectedMeasures(next);
+          }
           e.preventDefault();
           return;
         }
