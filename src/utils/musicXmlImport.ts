@@ -8,6 +8,7 @@ import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
 import { isValidTimeSignature } from './timeSignatureUtils';
 import { ensureMeasuresPrimaryVoiceMaterialized } from './voiceMeasureUtils';
+import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 
 /**
  * MusicXML の <clef><sign>/<line> を ClefType に変換する。
@@ -226,6 +227,211 @@ function attachHairpinsToVoiceEvents(
   }
 }
 
+/** 1つの <part> が持てる五線の数の上限（大譜表=2、オルガン譜=3 を想定した安全弁） */
+const MAX_STAVES_PER_PART = 4;
+
+/**
+ * <note> / <direction> が属する五線の番号を返す。
+ * MusicXML では 1つの <part> に複数の五線がある譜（ピアノ大譜表など）で、
+ * 各要素が <staff>1</staff> のように自分の五線を名乗る。<staff> が無い場合は
+ * 1番目の五線に属する。
+ */
+function staffNumberOf(el: Element): number {
+  const n = parseInt(el.querySelector('staff')?.textContent ?? '', 10);
+  return Number.isInteger(n) && n >= 1 ? n : 1;
+}
+
+/** <part> が宣言している五線の数（<attributes><staves>）。宣言が無ければ 1 */
+function readStaffCount(partEl: Element): number {
+  const n = parseInt(partEl.querySelector('attributes staves')?.textContent ?? '', 10);
+  if (!Number.isInteger(n) || n < 1) return 1;
+  return Math.min(n, MAX_STAVES_PER_PART);
+}
+
+/**
+ * <attributes> の中から、その五線に対応する <clef> を選んで ClefType に変換する。
+ * 複数五線の譜では <clef number="1">ト音</clef><clef number="2">ヘ音</clef> のように
+ * number 属性で五線を指す。該当が無ければ最初の <clef> を使う。
+ */
+function clefForStaff(attrsEl: Element | null, staffNumber: number | null): ClefType | null {
+  if (!attrsEl) return null;
+  const clefEls = Array.from(attrsEl.querySelectorAll('clef'));
+  if (clefEls.length === 0) return null;
+  const matched = staffNumber !== null
+    ? clefEls.find((el) => (parseInt(el.getAttribute('number') ?? '1', 10) || 1) === staffNumber)
+    : undefined;
+  const target = matched ?? clefEls[0];
+  const sign = target.querySelector('sign')?.textContent ?? 'G';
+  const line = target.querySelector('line')?.textContent;
+  return xmlClefToClefType(sign, line);
+}
+
+/**
+ * 五線ごとに分けた PartData の partId を決める。
+ * 単独パートの大譜表（＝ピアノ譜）は、アプリ側の右手／左手の器へそのまま載せられるよう
+ * 'right-hand' / 'left-hand' にそろえる（読込側は clef でも右手/左手を判定するが、
+ * partId も保存データの慣習に合わせておく）。
+ */
+function staffPartId(
+  partName: string,
+  staffNumber: number | null,
+  staffCount: number,
+  totalPartCount: number,
+): string {
+  if (staffNumber === null) return partName;
+  if (totalPartCount === 1 && staffCount === 2) return staffNumber === 1 ? 'right-hand' : 'left-hand';
+  if (staffNumber === 1) return partName;
+  // 編成譜の「パート内2段目」は保存データと同じ `${partId}::2` 形式にそろえる
+  if (staffNumber === 2) return ensembleSecondStaffPartId(partName);
+  return `${partName}::${staffNumber}`;
+}
+
+/**
+ * 1つの五線ぶんの小節データを組み立てる。
+ *
+ * @param measureEls その <part> の <measure> 要素すべて
+ * @param staffNumber 取り出す五線の番号。null は「五線で分けない」（<staves> が無い従来の譜）
+ */
+function buildStaffMeasures(measureEls: Element[], staffNumber: number | null): MeasureData[] {
+  // 松葉（ヘアピン）は小節をまたぐ場合があるため、パート全体で1つの待ち行列を使い回す。
+  // 声部1と声部2で別々に持つのは、<backup> を挟んで別々の松葉が同時に開くことがあるため。
+  const openHairpinRefs: HairpinMark[] = [];
+  const openHairpinRefsVoice2: HairpinMark[] = [];
+  return measureEls.map((measureEl, mi) => {
+    // 追加声部（下声など）は書出側が <backup> で区切って出力している。
+    // #244 段5-5: 旧実装は最初の <backup> だけで2分割しており、3声以上の自己往復で
+    // 声部3以降が声部2へ連結される（4声→2声へ潰れる）データ破壊があった。
+    // さらに区間の順番だけで声部を決めると、空声部をスキップして書き出された疎なデータ
+    // （声部2なし・声部3あり）や外部ソフト由来の XML で番号がずれる（Codex 2巡目 P1）。
+    // <backup> は「時間の巻き戻し」であって声部番号ではないため、区間ごとの声部番号は
+    // 各 note の <voice> タグから決める（タグの無い XML は従来どおり区間順で数える）。
+    // 五線ごとに分けるときは、その五線に属さない note / direction を先に除く。
+    // <backup>（時間の巻き戻し）や <attributes> は五線に属さないので残す。
+    const allChildren = Array.from(measureEl.children).filter((el) => {
+      if (staffNumber === null) return true;
+      if (el.tagName !== 'note' && el.tagName !== 'direction') return true;
+      return staffNumberOf(el) === staffNumber;
+    });
+    const rawSections: Element[][] = [[]];
+    for (const el of allChildren) {
+      if (el.tagName === 'backup') {
+        rawSections.push([]);
+      } else {
+        rawSections[rawSections.length - 1].push(el);
+      }
+    }
+    const sectionVoiceNumber = (children: Element[], fallback: number): number => {
+      const firstNote = children.find((el) => el.tagName === 'note');
+      const v = parseInt(firstNote?.querySelector('voice')?.textContent ?? '', 10);
+      return !isNaN(v) && v >= 1 ? v : fallback;
+    };
+    // 五線で分けたときは、その五線の音符が1つも残らなかった区間（＝別の五線ぶんの区間）を
+    // 捨ててから声部を数える。残すと空の声部が増えてしまう。
+    const sections = staffNumber === null
+      ? rawSections
+      : rawSections.filter((children) => children.some((el) => el.tagName === 'note'));
+    const sectionsWithVoice = sections.map((children, si) => ({
+      children,
+      voiceNumber: sectionVoiceNumber(children, si + 1),
+    }));
+    // MusicXML の <voice> 番号は五線をまたいだ通し番号になる慣習がある
+    // （例: 右手が 1・2、左手が 5・6）。五線ごとに小さい順で 1 から振り直して、
+    // アプリの「声部1・声部2…」と対応させる。
+    if (staffNumber !== null) {
+      const uniqueVoiceNumbers = Array.from(new Set(sectionsWithVoice.map((s) => s.voiceNumber)))
+        .sort((a, b) => a - b);
+      for (const section of sectionsWithVoice) {
+        section.voiceNumber = uniqueVoiceNumbers.indexOf(section.voiceNumber) + 1;
+      }
+    }
+    const childrenForVoice = (n: number): Element[] =>
+      sectionsWithVoice.filter((s) => s.voiceNumber === n).flatMap((s) => s.children);
+    const voice1Children = childrenForVoice(1);
+    const voice2Children = childrenForVoice(2);
+
+    const voice1NoteEls = voice1Children.filter((el) => el.tagName === 'note');
+    const events = parseNotes(voice1NoteEls);
+    attachHairpinsToVoiceEvents(voice1Children, events, mi, openHairpinRefs);
+
+    const voice2NoteEls = voice2Children.filter((el) => el.tagName === 'note');
+    const voice2Events = voice2NoteEls.length > 0 ? parseNotes(voice2NoteEls) : [];
+    // 声部2の松葉も同じ方式で復元する（voice2Events の要素を直接書き換える）
+    attachHairpinsToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2);
+
+    // 声部3以降（松葉の復元は現行 UI が2声までなので行わない。「壊れず全声部が戻る」水準）。
+    // 疎な番号（間の声部が空）は空の器で埋め、声部番号を保存データ上の位置と一致させる
+    const noteBearingVoiceNumbers = sectionsWithVoice
+      .filter((s) => s.children.some((el) => el.tagName === 'note'))
+      .map((s) => s.voiceNumber);
+    const maxVoiceNumber = noteBearingVoiceNumbers.length > 0 ? Math.max(...noteBearingVoiceNumbers) : 1;
+    const extraVoiceEvents: NoteEvent[][] = [];
+    for (let n = 3; n <= maxVoiceNumber; n++) {
+      extraVoiceEvents.push(parseNotes(childrenForVoice(n).filter((el) => el.tagName === 'note')));
+    }
+
+    // リピート
+    const leftBarline = measureEl.querySelector('barline[location="left"] repeat');
+    const rightBarline = measureEl.querySelector('barline[location="right"] repeat');
+
+    // 小節単位テンポ（sound/@tempo があれば取得）
+    const soundEl = measureEl.querySelector('sound[tempo]');
+    const bpm = soundEl ? parseInt(soundEl.getAttribute('tempo') ?? '', 10) : undefined;
+
+    // リハーサルマーク（練習番号）: <direction-type><rehearsal> を拾う
+    // 練習番号は段に1つ。五線で分けたとき両手へ二重に付かないよう、1番目の五線ぶんだけ拾う
+    const rehearsalEl = staffNumber === null || staffNumber === 1
+      ? measureEl.querySelector('direction-type rehearsal')
+      : null;
+    const rehearsalText = rehearsalEl?.textContent?.trim();
+    const rehearsalMark = rehearsalText && rehearsalText.length > 0 && rehearsalText.length <= 4
+      ? rehearsalText
+      : undefined;
+
+    // 小節単位拍子変更
+    const attrEl = measureEl.querySelector('attributes time');
+    let timeSig: [number, number] | undefined;
+    if (attrEl) {
+      const b = parseInt(attrEl.querySelector('beats')?.textContent ?? '', 10);
+      const bt = parseInt(attrEl.querySelector('beat-type')?.textContent ?? '', 10);
+      if (!isNaN(b) && !isNaN(bt) && isValidTimeSignature([b, bt])) {
+        timeSig = [b, bt];
+      }
+    }
+
+    // 小節単位調号変更（先頭小節はグローバル調号として別に扱うため、2小節目以降のみ拾う）
+    let measureKeySig: KeySignature | undefined;
+    if (mi > 0) {
+      const keyEl = measureEl.querySelector('key fifths');
+      if (keyEl) {
+        const fifths = parseInt(keyEl.textContent ?? '', 10);
+        if (!isNaN(fifths) && fifths >= -7 && fifths <= 7) {
+          const ks = FIFTHS_TO_KEY[fifths];
+          if (ks && isValidKeySignature(ks)) measureKeySig = ks;
+        }
+      }
+    }
+
+    return {
+      events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }],
+      // 追加声部: 入力があった小節だけ voices を持たせる。
+      // voiceMeasureUtils の withVoiceEventsUpdated と同じ形（声部2以降は既定で符幹下向き）に揃える。
+      voices: (voice2Events.length > 0 || extraVoiceEvents.some((ve) => ve.length > 0))
+        ? [
+            { id: 'voice-1', events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }] },
+            { id: 'voice-2', events: voice2Events, stemDirection: 'down' as const },
+            ...extraVoiceEvents.map((ve, i) => ({ id: `voice-${i + 3}`, events: ve, stemDirection: 'down' as const })),
+          ]
+        : undefined,
+      repeatStart: leftBarline?.getAttribute('direction') === 'forward' ? true : undefined,
+      repeatEnd: rightBarline?.getAttribute('direction') === 'backward' ? true : undefined,
+      bpm: bpm && !isNaN(bpm) ? bpm : undefined,
+      timeSignature: timeSig,
+      keySignature: measureKeySig,
+      rehearsalMark,
+    };
+  });
+}
+
 /**
  * MusicXML 文字列を解析して SavedScoreData を返す。
  * @param xmlString MusicXML の文字列
@@ -273,145 +479,38 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
 
   // パート一覧
   const partEls = Array.from(doc.querySelectorAll('part'));
-  const parts: PartData[] = partEls.map((partEl, pi) => {
+  const parts: PartData[] = [];
+
+  for (let pi = 0; pi < partEls.length; pi++) {
+    const partEl = partEls[pi];
     const partId = partEl.getAttribute('id') ?? `P${pi + 1}`;
     const scorePartEl = doc.querySelector(`score-part[id="${partId}"]`);
     const partName = scorePartEl?.querySelector('part-name')?.textContent ?? partId;
 
-    // 音部記号（パートごとに取得）
     const firstPartAttrs = partEl.querySelector('attributes');
-    let clef: ClefType = defaultClef;
-    if (firstPartAttrs) {
-      const sign = firstPartAttrs.querySelector('clef sign')?.textContent ?? 'G';
-      const line = firstPartAttrs.querySelector('clef line')?.textContent;
-      clef = xmlClefToClefType(sign, line);
-    }
-
     const measureEls = Array.from(partEl.querySelectorAll('measure'));
-    // 松葉（ヘアピン）は小節をまたぐ場合があるため、パート全体で1つの待ち行列を使い回す。
-    // 声部1と声部2で別々に持つのは、<backup> を挟んで別々の松葉が同時に開くことがあるため。
-    const openHairpinRefs: HairpinMark[] = [];
-    const openHairpinRefsVoice2: HairpinMark[] = [];
-    const measures: MeasureData[] = measureEls.map((measureEl, mi) => {
-      // 追加声部（下声など）は書出側が <backup> で区切って出力している。
-      // #244 段5-5: 旧実装は最初の <backup> だけで2分割しており、3声以上の自己往復で
-      // 声部3以降が声部2へ連結される（4声→2声へ潰れる）データ破壊があった。
-      // さらに区間の順番だけで声部を決めると、空声部をスキップして書き出された疎なデータ
-      // （声部2なし・声部3あり）や外部ソフト由来の XML で番号がずれる（Codex 2巡目 P1）。
-      // <backup> は「時間の巻き戻し」であって声部番号ではないため、区間ごとの声部番号は
-      // 各 note の <voice> タグから決める（タグの無い XML は従来どおり区間順で数える）。
-      const allChildren = Array.from(measureEl.children);
-      const rawSections: Element[][] = [[]];
-      for (const el of allChildren) {
-        if (el.tagName === 'backup') {
-          rawSections.push([]);
-        } else {
-          rawSections[rawSections.length - 1].push(el);
-        }
-      }
-      const sectionVoiceNumber = (children: Element[], fallback: number): number => {
-        const firstNote = children.find((el) => el.tagName === 'note');
-        const v = parseInt(firstNote?.querySelector('voice')?.textContent ?? '', 10);
-        return !isNaN(v) && v >= 1 ? v : fallback;
-      };
-      const sectionsWithVoice = rawSections.map((children, si) => ({
-        children,
-        voiceNumber: sectionVoiceNumber(children, si + 1),
-      }));
-      const childrenForVoice = (n: number): Element[] =>
-        sectionsWithVoice.filter((s) => s.voiceNumber === n).flatMap((s) => s.children);
-      const voice1Children = childrenForVoice(1);
-      const voice2Children = childrenForVoice(2);
 
-      const voice1NoteEls = voice1Children.filter((el) => el.tagName === 'note');
-      const events = parseNotes(voice1NoteEls);
-      attachHairpinsToVoiceEvents(voice1Children, events, mi, openHairpinRefs);
+    // ピアノ譜の MusicXML は「1つの <part> に <staves>2</staves>」で書かれるのが主流
+    // （Finale / MuseScore / OMR ツールの出力もこの形）。この場合は五線ごとに
+    // PartData を分けないと、左手の音が右手の五線へ混ざって取り込まれてしまう。
+    const staffCount = readStaffCount(partEl);
+    const staffNumbers: (number | null)[] = staffCount >= 2
+      ? Array.from({ length: staffCount }, (_, i) => i + 1)
+      : [null]; // <staves> が無い従来の「1パート1五線」はこれまでどおり分けずに読む
 
-      const voice2NoteEls = voice2Children.filter((el) => el.tagName === 'note');
-      const voice2Events = voice2NoteEls.length > 0 ? parseNotes(voice2NoteEls) : [];
-      // 声部2の松葉も同じ方式で復元する（voice2Events の要素を直接書き換える）
-      attachHairpinsToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2);
-
-      // 声部3以降（松葉の復元は現行 UI が2声までなので行わない。「壊れず全声部が戻る」水準）。
-      // 疎な番号（間の声部が空）は空の器で埋め、声部番号を保存データ上の位置と一致させる
-      const noteBearingVoiceNumbers = sectionsWithVoice
-        .filter((s) => s.children.some((el) => el.tagName === 'note'))
-        .map((s) => s.voiceNumber);
-      const maxVoiceNumber = noteBearingVoiceNumbers.length > 0 ? Math.max(...noteBearingVoiceNumbers) : 1;
-      const extraVoiceEvents: NoteEvent[][] = [];
-      for (let n = 3; n <= maxVoiceNumber; n++) {
-        extraVoiceEvents.push(parseNotes(childrenForVoice(n).filter((el) => el.tagName === 'note')));
-      }
-
-      // リピート
-      const leftBarline = measureEl.querySelector('barline[location="left"] repeat');
-      const rightBarline = measureEl.querySelector('barline[location="right"] repeat');
-
-      // 小節単位テンポ（sound/@tempo があれば取得）
-      const soundEl = measureEl.querySelector('sound[tempo]');
-      const bpm = soundEl ? parseInt(soundEl.getAttribute('tempo') ?? '', 10) : undefined;
-
-      // リハーサルマーク（練習番号）: <direction-type><rehearsal> を拾う
-      const rehearsalEl = measureEl.querySelector('direction-type rehearsal');
-      const rehearsalText = rehearsalEl?.textContent?.trim();
-      const rehearsalMark = rehearsalText && rehearsalText.length > 0 && rehearsalText.length <= 4
-        ? rehearsalText
-        : undefined;
-
-      // 小節単位拍子変更
-      const attrEl = measureEl.querySelector('attributes time');
-      let timeSig: [number, number] | undefined;
-      if (attrEl) {
-        const b = parseInt(attrEl.querySelector('beats')?.textContent ?? '', 10);
-        const bt = parseInt(attrEl.querySelector('beat-type')?.textContent ?? '', 10);
-        if (!isNaN(b) && !isNaN(bt) && isValidTimeSignature([b, bt])) {
-          timeSig = [b, bt];
-        }
-      }
-
-      // 小節単位調号変更（先頭小節はグローバル調号として別に扱うため、2小節目以降のみ拾う）
-      let measureKeySig: KeySignature | undefined;
-      if (mi > 0) {
-        const keyEl = measureEl.querySelector('key fifths');
-        if (keyEl) {
-          const fifths = parseInt(keyEl.textContent ?? '', 10);
-          if (!isNaN(fifths) && fifths >= -7 && fifths <= 7) {
-            const ks = FIFTHS_TO_KEY[fifths];
-            if (ks && isValidKeySignature(ks)) measureKeySig = ks;
-          }
-        }
-      }
-
-      return {
-        events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }],
-        // 追加声部: 入力があった小節だけ voices を持たせる。
-        // voiceMeasureUtils の withVoiceEventsUpdated と同じ形（声部2以降は既定で符幹下向き）に揃える。
-        voices: (voice2Events.length > 0 || extraVoiceEvents.some((ve) => ve.length > 0))
-          ? [
-              { id: 'voice-1', events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }] },
-              { id: 'voice-2', events: voice2Events, stemDirection: 'down' as const },
-              ...extraVoiceEvents.map((ve, i) => ({ id: `voice-${i + 3}`, events: ve, stemDirection: 'down' as const })),
-            ]
-          : undefined,
-        repeatStart: leftBarline?.getAttribute('direction') === 'forward' ? true : undefined,
-        repeatEnd: rightBarline?.getAttribute('direction') === 'backward' ? true : undefined,
-        bpm: bpm && !isNaN(bpm) ? bpm : undefined,
-        timeSignature: timeSig,
-        keySignature: measureKeySig,
-        rehearsalMark,
-      };
-    });
-
-    return {
-      partId: partName,
-      clef,
-      // 読込境界の実体化（#244 段5-4）: 単声部の小節は voices: undefined で組み立てられる
-      // ため、ここで全小節へ voices[0] を実体化してから返す（他の読込境界と同じ扱い）
-      measures: ensureMeasuresPrimaryVoiceMaterialized(
-        measures.length ? measures : [{ events: [{ dur: '1', isRest: true, keys: [] }] }],
-      ),
-    };
-  });
+    for (const staffNumber of staffNumbers) {
+      const measures = buildStaffMeasures(measureEls, staffNumber);
+      parts.push({
+        partId: staffPartId(partName, staffNumber, staffCount, partEls.length),
+        clef: clefForStaff(firstPartAttrs, staffNumber) ?? defaultClef,
+        // 読込境界の実体化（#244 段5-4）: 単声部の小節は voices: undefined で組み立てられる
+        // ため、ここで全小節へ voices[0] を実体化してから返す（他の読込境界と同じ扱い）
+        measures: ensureMeasuresPrimaryVoiceMaterialized(
+          measures.length ? measures : [{ events: [{ dur: '1', isRest: true, keys: [] }] }],
+        ),
+      });
+    }
+  }
 
   // score type は partの数で推定
   const scoreType = parts.length >= 4 ? 'ensemble' : parts.length === 2 ? 'piano' : 'single';
