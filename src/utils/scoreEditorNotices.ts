@@ -455,6 +455,15 @@ export function describeOttavaRemoved(kind: '8va' | '8vb' | '8vaEnd' | '8vbEnd')
   return `${kind}を外しました`;
 }
 
+/**
+ * MusicXML 読込で大譜表のクレフをピアノ標準（上=ト・下=ヘ）へ正規化したときの通知（#419 round2）。
+ * アプリのピアノモデルはクレフ固定のため任意クレフを保持できないが、keys（絶対音名）は
+ * そのままなので音の高さは変わらない。黙って見た目が変わる自動処理は通知する（#318）。
+ */
+export function describeImportedClefNormalized(): string {
+  return '読み込んだ大譜表のクレフを、ピアノ譜の標準（上段=ト音・下段=ヘ音）へ揃えました（音の高さはそのままです）';
+}
+
 export function describeSliceCopyUnavailable(): string {
   return '選択範囲がこのレイヤーの音符の切れ目に合っていません（レイヤーを替えた場合は、範囲を選び直してからコピーしてください）';
 }
