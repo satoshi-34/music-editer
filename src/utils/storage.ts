@@ -14,6 +14,7 @@ import type {
   NoteEvent,
   DurKey,
   TimeSignature,
+  TimeSignatureStyle,
   ScoreInstrumentation,
   InstrumentPartDefinition,
   CustomSymbolDef,
@@ -28,7 +29,12 @@ import { isRenderStaffDirection } from './crossStaffUtils';
 import { normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
-import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
+import {
+  DEFAULT_TIME_SIGNATURE,
+  isValidTimeSignature,
+  normalizeTimeSignature,
+  normalizeTimeSignatureStyle,
+} from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
 import type { ClefType } from '../components/clefUtils';
 import {
@@ -623,6 +629,9 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     // ここでは「型が違うデータを弾く」ところまでを見る
     (data.titleFontSize === undefined || (typeof data.titleFontSize === 'number' && Number.isFinite(data.titleFontSize))) &&
     (data.titleFontWeight === undefined || typeof data.titleFontWeight === 'string') &&
+    (data.timeSignatureStyle === undefined ||
+      data.timeSignatureStyle === 'numeric' ||
+      data.timeSignatureStyle === 'symbol') &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -695,6 +704,11 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   }
   parsedData.keySignature = normalizeKeySignature(parsedData.keySignature);
   parsedData.timeSignature = normalizeTimeSignature(parsedData.timeSignature);
+  // 表示スタイルは「省略＝数字表記」が正なので、未指定のときは足さずにそのまま残す。
+  // 値が入っているときだけ丸めることで、旧データを保存し直しても余計な項目が増えない。
+  if (parsedData.timeSignatureStyle !== undefined) {
+    parsedData.timeSignatureStyle = normalizeTimeSignatureStyle(parsedData.timeSignatureStyle);
+  }
 
   // 保存済みデータはユーザーが手編集した JSON や古いバックアップから来ることがある。
   // ここで必ず検証してから返すことで、画面側は「読み込めたデータは安全」と考えられる。
@@ -1761,7 +1775,8 @@ export function createSavedScoreData(
   systemRowGapOverrides?: SavedScoreData['systemRowGapOverrides'],
   titleFontId?: string,
   titleFontSize?: number,
-  titleFontWeight?: string
+  titleFontWeight?: string,
+  timeSignatureStyle?: TimeSignatureStyle
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -1770,6 +1785,11 @@ export function createSavedScoreData(
     scoreType,
     keySignature,
     timeSignature: normalizeTimeSignature(timeSignature),
+    // 既定（数字表記）のときは項目自体を持たせない。旧データとの差分を増やさないため。
+    timeSignatureStyle:
+      timeSignatureStyle && normalizeTimeSignatureStyle(timeSignatureStyle) === 'symbol'
+        ? 'symbol'
+        : undefined,
     instrumentation,
     notationMode,
     titleFontId,

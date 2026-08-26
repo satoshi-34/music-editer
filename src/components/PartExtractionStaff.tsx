@@ -16,7 +16,7 @@
 
 import PianoSystemCanvas, { type PartConfig } from './PianoSystemCanvas';
 import type { Tool } from './Palette';
-import type { MeasureData, TimeSignature, CustomSymbolDef, NoteEvent } from '../types/storage';
+import type { MeasureData, TimeSignature, CustomSymbolDef, NoteEvent, TimeSignatureStyle } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
 import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
@@ -49,6 +49,8 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
+  /** 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。描画は PianoSystemCanvas に委譲する */
+  timeSignatureStyle?: TimeSignatureStyle;
   customSymbolDefs?: CustomSymbolDef[];
   plannedMeasureWidths?: number[];
   systemRanges?: SystemMeasureRange[];
@@ -97,6 +99,7 @@ export default function PartExtractionStaff({
   previewAccidentalOnApply = true,
   keySignature = 'C',
   timeSignature = [4, 4],
+  timeSignatureStyle = 'numeric',
   customSymbolDefs, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
   pageMarginSideMm,
@@ -138,6 +141,7 @@ export default function PartExtractionStaff({
             previewAccidentalOnApply={previewAccidentalOnApply}
             keySignature={keySignature}
             timeSignature={timeSignature}
+            timeSignatureStyle={timeSignatureStyle}
             customSymbolDefs={customSymbolDefs}
             plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
             incomingArcIndex={incomingArcIndex}

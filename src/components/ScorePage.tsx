@@ -158,10 +158,16 @@ import type { ClefType } from './clefUtils';
 import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
-import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import {
+  canUseTimeSignatureSymbol,
+  formatTimeSignature,
+  getMeasureBeats,
+  normalizeTimeSignature,
+  normalizeTimeSignatureStyle,
+} from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
 import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
-import type { TimeSignature } from '../types/storage';
+import type { TimeSignature, TimeSignatureStyle } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
   SCORE_ACTIVE_VOICE_CHANGE_EVENT,
@@ -480,6 +486,10 @@ export default function ScorePage() {
   const [lyricist, setLyricist] = useState('作詞者');
   const [composer, setComposer] = useState('作曲者');
   const [arranger, setArranger] = useState('編曲者');
+  // 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。
+  // 拍子データ（tempoSettings.timeSignature）とは別に「見た目だけ」を持つので、
+  // 記号表示にしても再生の拍数や小節の入力上限は変わらない。
+  const [timeSignatureStyle, setTimeSignatureStyle] = useState<TimeSignatureStyle>('numeric');
   // タイトル・サブタイトル・作者欄のフォント（Issue #342）。id は utils/titleFontOptions.ts の一覧
   const [titleFontId, setTitleFontId] = useState<string>(DEFAULT_TITLE_FONT_ID);
   // タイトルブロックの文字サイズ倍率と太さ（Issue #420）。
@@ -578,6 +588,13 @@ export default function ScorePage() {
   }, []);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
+  // 記号表記（C / 𝄵）が存在するのは 4/4 と 2/2 だけ。トグルの有効・無効と、
+  // 実際に記号で描くかの判定を同じ関数から作り、UI と描画のズレを防ぐ。
+  const timeSignatureSymbolAvailable = canUseTimeSignatureSymbol(scoreTimeSignature);
+  // 拍子を 6/8 などへ変えたあとも設定自体（symbol）は保持し、4/4・2/2 に戻したら
+  // また記号で描く。描画へ渡す値だけを「いま記号にできるか」で切り替える。
+  const effectiveTimeSignatureStyle: TimeSignatureStyle =
+    timeSignatureSymbolAvailable ? timeSignatureStyle : 'numeric';
 
   // パートごとのデータ
   const [rightHandData, setRightHandData] = useState<MeasureData[] | undefined>(undefined);
@@ -2002,6 +2019,9 @@ export default function ScorePage() {
     // 新規譜面が前の作品の見た目を引きずる。#420 Codex round1）
     setTitleFontSize(TITLE_FONT_SIZE_DEFAULT);
     setTitleFontWeight(undefined);
+    // 拍子の表示スタイルも工場出荷値（数字表記）へ戻す。
+    // 戻し忘れると、前の譜面で記号表示にしていた設定が新規譜面へ持ち越される。
+    setTimeSignatureStyle('numeric');
     // 楽譜の種類・拍子・調号・段組み・余白などは、保存済みの初期値プリセット（issue #39）が
     // あればその値、無ければ従来どおりのコード上の既定値（工場出荷値）を適用する。
     await applySettingsProfileToState(loadSettingsProfile());
@@ -2070,7 +2090,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const handleExportFile = async () => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle);
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
     const result = await exportScoreToFile(data, title, fileHandleRef.current);
     if (result.status === 'saved') {
@@ -2116,6 +2136,7 @@ export default function ScorePage() {
     setTitleFontId(resolveTitleFontOption(data.titleFontId).id);
       setTitleFontSize(normalizeTitleFontSize(data.titleFontSize));
       setTitleFontWeight(normalizeTitleFontWeight(data.titleFontWeight));
+    setTimeSignatureStyle(normalizeTimeSignatureStyle(data.timeSignatureStyle));
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
       setCustomSymbolDefs(data.customSymbolDefs ?? []);
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
@@ -2172,7 +2193,7 @@ export default function ScorePage() {
   // （handleExportFile と同じ理由で通常関数として定義。TDZ 回避）。
   const handleFeedback = async () => {
     const { metadata, parts } = buildScoreData();
-    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight);
+    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle);
     const feedbackState = {
       ...scoreData,
       // フィードバック JSON は「開く」メニュー（ファイル）で読み込める楽譜 JSON なので、
@@ -2254,6 +2275,7 @@ export default function ScorePage() {
     setTitleFontId(resolveTitleFontOption(restored.titleFontId).id);
     setTitleFontSize(normalizeTitleFontSize(restored.titleFontSize));
     setTitleFontWeight(normalizeTitleFontWeight(restored.titleFontWeight));
+    setTimeSignatureStyle(normalizeTimeSignatureStyle(restored.timeSignatureStyle));
     setCustomSymbolDefs(restored.customSymbolDefs ?? []);
     if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
       setMeasuresPerSystem(restored.measuresPerSystem);
@@ -2350,7 +2372,7 @@ export default function ScorePage() {
       // ただし復元履歴の退避（includeEmpty）では、空譜面＝「全音符を消した直後」や
       // 「タイトルだけ編集した状態」も戻す前の内容として残す必要があるため組み立てる
       if (!options?.includeEmpty && isEmptyScoreData(parts)) return null;
-      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight);
+      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle);
     };
   });
 
@@ -2376,7 +2398,7 @@ export default function ScorePage() {
       // 保存先は「いま開いている作品」の自動保存スロット。まだ作品IDが無い
       // （＝一度も保存していない新規状態）ときは、この保存で新しい作品が作られる。
       const saved = saveCurrentWork(
-        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight)
+        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle)
       );
       if (saved) {
         setAutoSaveStatus('saved');
@@ -2403,7 +2425,7 @@ export default function ScorePage() {
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -2565,6 +2587,8 @@ export default function ScorePage() {
     setInstrumentation(getDefaultInstrumentationForScoreType(sampleScore.scoreType));
     setKeySignature(normalizeKeySignature(sampleScore.keySignature));
     void setTimeSignature(...sampleScore.timeSignature);
+    // サンプル譜は数字表記で作ってあるので、直前の譜面の記号表示を引きずらせない
+    setTimeSignatureStyle('numeric');
     setRightHandData(sampleScore.rightHand);
     setLeftHandData(sampleScore.leftHand);
     setQuartetParts(Array.from({ length: 4 }, () => []));
@@ -4192,6 +4216,8 @@ export default function ScorePage() {
         const loadedType = loaded.scoreType ?? 'single';
         setKeySignature(normalizeKeySignature(loaded.keySignature));
         await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
+        // MusicXML の <time symbol="common"/"cut"> を読み込んだ場合はここで表示スタイルへ戻す
+        setTimeSignatureStyle(normalizeTimeSignatureStyle(loaded.timeSignatureStyle));
         setScoreType(loadedType);
         if (loadedType === 'quartet') {
           const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
@@ -4899,6 +4925,24 @@ export default function ScorePage() {
                       </option>
                     ))}
                   </select>
+                </label>
+
+                <label
+                  className="toolbar-select-label toolbar-checkbox-label"
+                  title={
+                    timeSignatureSymbolAvailable
+                      ? '4/4 を C、2/2 をアッラ・ブレーヴェ（縦線入りの C）で描きます。拍子データ自体は変わりません'
+                      : '記号があるのは 4/4（C）と 2/2（𝄵）だけです。記号で表示したいときは、左の「拍子」で 4/4 か 2/2 を選んでください'
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={timeSignatureSymbolAvailable && timeSignatureStyle === 'symbol'}
+                    disabled={!timeSignatureSymbolAvailable}
+                    onChange={(event) => setTimeSignatureStyle(event.target.checked ? 'symbol' : 'numeric')}
+                    aria-label="拍子を記号で表示"
+                  />
+                  <span>記号で表示（C / 𝄵）</span>
                 </label>
 
                 <label className="toolbar-select-label">
@@ -6022,6 +6066,7 @@ export default function ScorePage() {
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
+                      timeSignatureStyle={effectiveTimeSignatureStyle}
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
@@ -6056,6 +6101,7 @@ export default function ScorePage() {
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
+                      timeSignatureStyle={effectiveTimeSignatureStyle}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
@@ -6087,6 +6133,7 @@ export default function ScorePage() {
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
+                      timeSignatureStyle={effectiveTimeSignatureStyle}
                       onKeySignatureChange={handleKeySignatureChange}
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
@@ -6125,6 +6172,7 @@ export default function ScorePage() {
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
+                      timeSignatureStyle={effectiveTimeSignatureStyle}
                       onKeySignatureChange={handleKeySignatureChange}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
@@ -6165,6 +6213,7 @@ export default function ScorePage() {
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
+                      timeSignatureStyle={effectiveTimeSignatureStyle}
                       onKeySignatureChange={handleKeySignatureChange}
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
@@ -6205,6 +6254,7 @@ export default function ScorePage() {
                       previewAccidentalOnApply={soundRuntimeSettings.previewAccidentalOnApply}
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
+                      timeSignatureStyle={effectiveTimeSignatureStyle}
                       onKeySignatureChange={handleKeySignatureChange}
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}

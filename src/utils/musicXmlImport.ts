@@ -2,7 +2,7 @@
 // MusicXML ファイルを SavedScoreData 形式にパースする。
 // score-partwise 形式（Finale / Sibelius / MuseScore 等が出力する標準形式）に対応。
 
-import type { SavedScoreData, MeasureData, NoteEvent, PartData, HairpinMark } from '../types/storage';
+import type { SavedScoreData, MeasureData, NoteEvent, PartData, HairpinMark, TimeSignatureStyle } from '../types/storage';
 import type { ClefType } from '../components/clefUtils';
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
@@ -543,6 +543,8 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
   // デフォルト設定（最初の attributes から取得する）
   let globalKeyFifths = 0;
   let globalTimeSig: [number, number] = [4, 4];
+  // 拍子の表示スタイル（Issue #422）。<time symbol="..."> が無ければ従来どおり数字表記
+  let globalTimeSigStyle: TimeSignatureStyle = 'numeric';
   let defaultClef: ClefType = 'treble';
 
   // 最初のパートの最初の小節の attributes を見てグローバル設定を取得
@@ -554,6 +556,13 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     const beats = parseInt(firstAttrs.querySelector('time beats')?.textContent ?? '4', 10);
     const beatType = parseInt(firstAttrs.querySelector('time beat-type')?.textContent ?? '4', 10);
     if (isValidTimeSignature([beats, beatType])) globalTimeSig = [beats, beatType];
+
+    // <time symbol="common"/"cut"> が付いていれば記号表記として読み込む（Issue #422）。
+    // 数字（beats / beat-type）は symbol の有無に関わらずそのまま拍子データにする。
+    const timeSymbol = firstAttrs.querySelector('time')?.getAttribute('symbol');
+    if (timeSymbol === 'common' || timeSymbol === 'cut') {
+      globalTimeSigStyle = 'symbol';
+    }
 
     const clefSign = firstAttrs.querySelector('clef sign')?.textContent ?? 'G';
     const clefLine = firstAttrs.querySelector('clef line')?.textContent;
@@ -626,6 +635,7 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     scoreType,
     keySignature: validKey,
     timeSignature: globalTimeSig,
+    timeSignatureStyle: globalTimeSigStyle,
     parts,
     systems: 6,
     measuresPerSystem: 4,
