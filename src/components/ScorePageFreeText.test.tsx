@@ -230,4 +230,39 @@ describe('ScorePage: 自由注釈テキストの配線（#421）', () => {
       expect(ft?.offsetY).toBe(10);
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 実機所感 2026-08-27: 置いた注釈テキストを**直接クリック**して編集を開きたい
+  // （他の記号は演奏記号タブでクリック選択できるのに、注釈だけTツール経由だった非一貫の解消）
+  it('演奏記号タブでは、注釈テキストのクリックで編集オーバーレイが開く', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    await selectFreeTextTool();
+    clickMeasureOfPart(0);
+    await typeAnnotation('click me');
+    await waitFor(() => {
+      expect(loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText?.text).toBe('click me');
+    }, { timeout: 15000 });
+
+    // 別のツールに切り替えても、演奏記号タブ内ならテキストを直接押せる
+    // （強弱グループの先頭ボタンを押す。名前はグリフ描画で拾えないため role 一覧から選ぶ）
+    const symbolButtons = screen.getAllByRole('button').filter((b) => b.getAttribute('title')?.includes('強弱'));
+    if (symbolButtons[0]) fireEvent.click(symbolButtons[0]);
+    await waitFor(() => {
+      // テキストの上に判定 rect（symbol-hit-region）が重なっている
+      const svgText = document.querySelector('text[data-free-text]');
+      expect(svgText).toBeTruthy();
+    }, { timeout: 15000 });
+    const hit = Array.from(document.querySelectorAll('rect.symbol-hit-region'))
+      .find((r) => r.classList.contains('vf-screen-only')) as SVGRectElement;
+    expect(hit).toBeTruthy();
+    fireEvent.click(hit, { clientX: 100, clientY: 40 });
+
+    // 現在値入りで編集オーバーレイが開く
+    const input = await screen.findByLabelText('自由注釈テキスト', {}, { timeout: 15000 }) as HTMLInputElement;
+    expect(input.value).toBe('click me');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

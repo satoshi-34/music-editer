@@ -145,3 +145,10 @@ Issue の論点「記号序列（#416）上の扱い」については、**自�
 **譜面上の SVG テキストを DOM 直更新**でライブ追従させ（描画時に `data-free-text` /
 `data-base-x/y` を持たせて対象を特定）、保存は Enter の1回だけ（Undo も1回で戻る）。
 オフセットは ±MAX_FREE_TEXT_OFFSET にクランプ。テスト: ScorePageFreeText.test.tsx。
+
+## クリック選択（2026-08-27 実機所感・同日2件目）
+
+演奏記号タブでは、**置いた注釈テキストを直接クリック**して編集オーバーレイを開ける
+（他の記号のクリック選択 #398 と一貫させる。従来はTツールを選び直して小節を押すしかなかった）。
+描画後に `text[data-free-text]` の bbox へ透明の判定 rect（`symbol-hit-region vf-screen-only`）を
+重ねる方式。getBBox が使えない環境（jsdom 等）では x/y・フォントサイズからのフォールバック見積もり。

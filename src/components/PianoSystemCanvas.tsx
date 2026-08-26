@@ -7202,6 +7202,64 @@ export default function PianoSystemCanvas({
       highlightedLayerPartIndex: activeLayerHighlightPartIndex,
     });
 
+    // 自由注釈テキスト（#421）のクリック選択（実機所感 2026-08-27）。
+    // 他の記号は appendSymbolHitRegion（音符イベント紐づけ）でクリック選択できるのに、
+    // 小節紐づけの注釈だけ「Tツールで小節を探して押す」しかないのは非一貫だった。
+    // 演奏記号タブ（symbolsInteractive）では、描かれたテキストの bbox に透明の判定 rect を
+    // 重ね、クリックで編集オーバーレイを開く（Tツールを選び直す必要をなくす）
+    if (symbolsInteractive) {
+      svgRoot.querySelectorAll('text[data-free-text]').forEach((textEl) => {
+        const idAttr = textEl.getAttribute('data-free-text') ?? '';
+        const [piStr, miStr] = idAttr.split('-');
+        const pi = parseInt(piStr, 10);
+        const absI = parseInt(miStr, 10);
+        if (!Number.isInteger(pi) || !Number.isInteger(absI)) return;
+        let bbox: { x: number; y: number; width: number; height: number };
+        try {
+          const b = (textEl as SVGGraphicsElement).getBBox();
+          bbox = { x: b.x, y: b.y, width: b.width, height: b.height };
+        } catch { bbox = { x: 0, y: 0, width: 0, height: 0 }; }
+        if (bbox.width <= 0 || bbox.height <= 0) {
+          // getBBox が使えない環境（jsdom 等）向けのフォールバック:
+          // x/y 属性とフォントサイズから字面をおおまかに見積もる（当たりが少し緩くても、
+          // クリック選択の目的には十分）
+          const fx = parseFloat(textEl.getAttribute('x') ?? '0');
+          const fy = parseFloat(textEl.getAttribute('y') ?? '0');
+          const fs = parseFloat(textEl.getAttribute('font-size') ?? '14');
+          const len = (textEl.textContent ?? '').length;
+          bbox = { x: fx, y: fy - fs, width: Math.max(fs, len * fs * 0.6), height: fs * 1.3 };
+        }
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        // 画面専用要素の共通クラス（印刷・プレビューには出さない）
+        rect.setAttribute('class', 'symbol-hit-region vf-screen-only');
+        rect.setAttribute('x', String(bbox.x - 3));
+        rect.setAttribute('y', String(bbox.y - 3));
+        rect.setAttribute('width', String(bbox.width + 6));
+        rect.setAttribute('height', String(bbox.height + 6));
+        rect.setAttribute('fill', 'rgba(37,99,235,0)');
+        rect.setAttribute('pointer-events', 'all');
+        (rect.style as CSSStyleDeclaration).cursor = 'pointer';
+        rect.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const me = ev as MouseEvent;
+          const current = partsScoreForRender[pi]?.[absI]?.freeText;
+          const resolved = current ? resolveFreeTextAnnotation(current) : null;
+          const containerRect = containerRef.current?.getBoundingClientRect();
+          setFreeTextEditState({
+            measureAbsoluteIndex: absI,
+            partIndex: pi,
+            currentText: resolved?.text ?? '',
+            currentScalePercent: resolved && resolved.scale !== 1 ? String(Math.round(resolved.scale * 100)) : '',
+            currentOffsetX: resolved && resolved.offsetX !== 0 ? String(resolved.offsetX) : '',
+            currentOffsetY: resolved && resolved.offsetY !== 0 ? String(resolved.offsetY) : '',
+            overlayX: me.clientX - (containerRect?.left ?? 0),
+            overlayY: me.clientY - (containerRect?.top ?? 0),
+          });
+        });
+        svgRoot.appendChild(rect);
+      });
+    }
+
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
     // UI案A2（#405 段3）: 弧を淡くするかは「実際に描かれている五線」で決める。
     // Y座標から推測すると、五線間の加線音（ヘ音記号の C5 など）で逆転する
