@@ -84,6 +84,31 @@ function activeNoteXs(svg: SVGSVGElement): number[] {
     .sort((a, b) => a - b);
 }
 
+/** 単旋律・50小節。48小節目（index 47）にだけ4分音符4つ、他は空。
+ *  レイアウトの枠（既定12段×4小節=48）を超える小節への前進を実経路で見るための種
+ *  （#418 Codex round1 P2: 枠を上限にすると48小節目の末で前進が止まる） */
+function seedLongWork() {
+  const notes = [
+    { dur: '4' as const, isRest: false, keys: ['c/5'] },
+    { dur: '4' as const, isRest: false, keys: ['d/5'] },
+    { dur: '4' as const, isRest: false, keys: ['e/5'] },
+    { dur: '4' as const, isRest: false, keys: ['f/5'] },
+  ];
+  const empty = () => ({ events: [], voices: [{ id: 'voice-1', events: [] }] });
+  const measures = Array.from({ length: 50 }, (_, i) =>
+    (i === 0 || i === 47) ? { events: notes, voices: [{ id: 'voice-1', events: notes }] } : empty());
+  const data = createSavedScoreData(
+    { title: '長い曲の前進', subtitle: '', lyricist: '', composer: '', arranger: '' },
+    [{ partId: 'melody', clef: 'treble', measures }],
+    12, 4, 'single'
+  );
+  const created = createWork('長い曲の前進');
+  if (!created.success || !created.data) throw new Error('createWork failed');
+  saveWorkAutosaveData(created.data.id, data);
+  setLastOpenedWorkId(created.data.id);
+  workId = created.data.id;
+}
+
 describe('ScorePage: スライス貼り付け後は選択が前進し、Cmd/Ctrl+V の連打で並べられる', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
@@ -170,4 +195,51 @@ describe('ScorePage: スライス貼り付け後は選択が前進し、Cmd/Ctrl
       expect(m1[0]?.isRest).toBe(false);
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // #418 Codex round2 P3: 前進上限の配線（実データの小節数）を実経路で固定する。
+  // 旧実装（totalSystems×measuresPerSystem=48 を上限）に戻すと、48小節目の末で
+  // 前進が止まり、3打目が同じ場所への上書きになってこのテストが落ちる
+  it('レイアウトの枠（48小節）を超える49小節目へも前進して貼れる', async () => {
+    seedLongWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit[data-measure="47"]')).toBeTruthy();
+    }, { timeout: 30000 });
+    fireEvent.click(screen.getByRole('button', { name: /小節選択/ }));
+
+    // コピーは1小節目（先頭システム）でドラッグ（既知の動く経路）
+    const svg = mockSvgLayout();
+    const xs = activeNoteXs(svg);
+    expect(xs.length).toBeGreaterThanOrEqual(3);
+    const hit = svg.querySelector('rect.vf-hit') as SVGRectElement;
+    fireEvent.mouseDown(hit, { button: 0, clientX: xs[1] + 2, clientY: 100 });
+    fireEvent.mouseMove(hit, { clientX: xs[2] + 2, clientY: 100 });
+    fireEvent.mouseUp(window, { clientX: xs[2] + 2, clientY: 100 });
+    fireEvent.keyDown(window, { key: 'c', metaKey: true });
+
+    // 貼り先: 48小節目（index 47）を丸ごと選択（クリック）。丸ごと選択でも
+    // destBeat=0 として扱われ、貼り付け後の前進は同じに効く
+    const far = Array.from(document.querySelectorAll('svg'))
+      .find((c) => c.querySelector('.vf-note-hit[data-measure="47"]')) as SVGSVGElement;
+    expect(far).toBeTruthy();
+    const noteHit47 = far.querySelector('.vf-note-hit[data-measure="47"]') as SVGRectElement;
+    fireEvent.mouseDown(noteHit47, { button: 0, clientX: 10, clientY: 10 });
+    fireEvent.mouseUp(noteHit47, { clientX: 10, clientY: 10 });
+    fireEvent.click(noteHit47, { clientX: 10, clientY: 10 });
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-measure-selected')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    // 5連打: 0〜1,1〜2,2〜3,3〜4拍 → 49小節目（index 48）の頭。
+    // 旧実装（上限48）だと5打目の前進が起きず、49小節目は空のまま
+    for (let i = 0; i < 5; i++) fireEvent.keyDown(window, { key: 'v', metaKey: true });
+
+    await waitFor(() => {
+      const measures = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures ?? [];
+      // 48小節目が d/5 ×4 に置き換わり、49小節目の頭にも d/5 が入る
+      expect(measures[47]?.events?.map((e) => e.keys?.[0])).toEqual(['d/5', 'd/5', 'd/5', 'd/5']);
+      expect(measures[48]?.events?.[0]?.keys?.[0]).toBe('d/5');
+      expect(measures[48]?.events?.[0]?.isRest).toBe(false);
+    }, { timeout: 30000 });
+  }, 120000);
 });

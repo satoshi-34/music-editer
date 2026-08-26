@@ -361,4 +361,6 @@ PR #359 の Codex レビュー（P1×6・P2×5）を受けて、次を実装で�
 - **複数小節スライスは前進しない**: 貼り位置の整列制約（misaligned・Codex round4 P1）があり、前進先が常に合法とは限らないため v1 では対象外
 - レイヤー限定スライス（裁定A）にもそのまま効く（前進は選択の話で、貼り先レイヤーの決定とは独立）
 
-テスト: ScorePageSlicePasteAdvance.test.tsx（3連打で1〜3拍が順に置換・小節末→次小節頭）
+- 前進先の上限は**実データの小節数**（貼り付けハンドラ内で毎回計算する `entries[].measures.length` の最大値）。当初はレイアウトの枠（`totalSystems × measuresPerSystem`）を使っており、枠が内容に追従しない場面（既定の12段×4小節=48小節を超える長い曲）で前進が止まった（#418 Codex round1 P2）。計算は `planSlicePasteAdvance`（beatSliceUtils.ts）へ純関数化し、48小節超・末尾小節・端数拍を単体テストで固定
+
+テスト: ScorePageSlicePasteAdvance.test.tsx（3連打で1〜3拍が順に置換・小節末→次小節頭・50小節の譜面で48小節目→49小節目へ前進）、beatSliceUtils.test.ts（planSlicePasteAdvance 単体）
