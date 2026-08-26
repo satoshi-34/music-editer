@@ -1,7 +1,7 @@
 // src/utils/musicXmlExport.ts
 // SavedScoreData を MusicXML 3.1 (partwise) 形式に変換してダウンロードする。
 
-import type { SavedScoreData, NoteEvent, MeasureData } from '../types/storage';
+import type { SavedScoreData, NoteEvent, MeasureData, TimeSignatureStyle } from '../types/storage';
 import type { KeySignature } from './noteKeyUtils';
 import type { ClefType } from '../components/clefUtils';
 import { resolveMeasureClef } from './clefMeasureUtils';
@@ -255,6 +255,11 @@ function measureToXml(
     hairpinsVoice2?: HairpinPositionMaps;
     /** この小節の絶対インデックス（hairpins のキー照合に使う） */
     measureIndex?: number;
+    /**
+     * 拍子記号の表示スタイル（Issue #422）。'symbol' のとき MusicXML の
+     * <time symbol="common"/"cut"> 属性を付けて、他ソフトでも C・𝄵 で開けるようにする。
+     */
+    timeSignatureStyle?: TimeSignatureStyle;
   }
 ): string {
   const lines: string[] = [];
@@ -272,7 +277,19 @@ function measureToXml(
   if (options.isFirstMeasure || timeSigChanged || keyChanged || clefChanged) {
     const divXml = options.isFirstMeasure ? `<divisions>${DIVISIONS}</divisions>` : '';
     const keyXml = (options.isFirstMeasure || keyChanged) ? `<key><fifths>${keyFifths}</fifths><mode>major</mode></key>` : '';
-    const timeXml = `<time><beats>${timeSig[0]}</beats><beat-type>${timeSig[1]}</beat-type></time>`;
+    // symbol 属性は 4/4（common）と 2/2（cut）にだけ意味がある。
+    // それ以外の拍子で付けると、読み込む側が「数字なのに記号指定」と解釈して崩れるため付けない。
+    // 記号表記の対象は**譜面先頭の拍子だけ**にする（#422 round1 P2）。小節単位の
+    // 拍子変更へ付けると、読込側は先頭しか見ないため往復でスタイルが消える。
+    // 途中の拍子変更はデータのみ（画面表示も未対応の既存仕様）なので数字のまま出す
+    const timeSymbol = options.isFirstMeasure && options.timeSignatureStyle === 'symbol'
+      ? timeSig[0] === 4 && timeSig[1] === 4
+        ? ' symbol="common"'
+        : timeSig[0] === 2 && timeSig[1] === 2
+          ? ' symbol="cut"'
+          : ''
+      : '';
+    const timeXml = `<time${timeSymbol}><beats>${timeSig[0]}</beats><beat-type>${timeSig[1]}</beat-type></time>`;
     const clefXmlStr = (options.isFirstMeasure || clefChanged) ? clefXml(options.clef) : '';
     lines.push(`<attributes>${divXml}${keyXml}${timeXml}${clefXmlStr}</attributes>`);
   }
@@ -370,7 +387,7 @@ function measureToXml(
  * @returns MusicXML XML 文字列
  */
 export function scoreToMusicXml(data: SavedScoreData): string {
-  const { metadata, keySignature = 'C', timeSignature = [4, 4] } = data;
+  const { metadata, keySignature = 'C', timeSignature = [4, 4], timeSignatureStyle } = data;
   // 書き出し境界の正規化（#244 段5-3）: read は voices[0]（鏡）を優先するため、
   // 呼び出し側から鏡が古いデータ（旧バージョン由来・手組みのテストデータ等）が来ても
   // 正本（events）から同期してから書き出す。アプリ内の通常経路では dual-write 済みで no-op
@@ -412,6 +429,7 @@ export function scoreToMusicXml(data: SavedScoreData): string {
         hairpins,
         hairpinsVoice2,
         measureIndex: mi,
+        timeSignatureStyle,
       });
       prevClef = effectiveClef;
       prevTimeSig = m.timeSignature ?? globalTimeSig;
@@ -430,7 +448,13 @@ export function scoreToMusicXml(data: SavedScoreData): string {
   <work><work-title>${escXml(title)}</work-title></work>
   <identification>
     <creator type="composer">${escXml(composer)}</creator>
-    <encoding><software>my-music-app</software></encoding>
+    <encoding><software>my-music-app</software></encoding>${timeSignatureStyle === 'symbol'
+      // 拍子の記号表示設定（#422）。<time symbol> は先頭が 4/4・2/2 のときしか
+      // 書けないため、6/8 等へ変更中でも設定を往復させるにはアプリ固有メタが要る。
+      // MusicXML 公式のアプリ固有情報置き場（miscellaneous-field）を使う（round3 P2）。
+      // numeric（既定）のときは改行ごと何も足さない（従来出力と1バイトも変えない）
+      ? '\n    <miscellaneous><miscellaneous-field name="music-editer.time-signature-style">symbol</miscellaneous-field></miscellaneous>'
+      : ''}
   </identification>
   <part-list>${partListItems.join('')}</part-list>
   ${partXmls.join('\n  ')}

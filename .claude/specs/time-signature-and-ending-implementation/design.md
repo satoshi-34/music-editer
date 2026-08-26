@@ -172,3 +172,85 @@ VexFlow はモディファイア（拍子記号・調号など）を `draw()` �
 `stave.setContext(ctx) → stave.format() → stave.draw()` の**前**へ移動した。
 あわせて、第1段・第1小節（グローバル拍子を表示する場所）でも
 小節固有の拍子がある場合はそちらを優先して表示するよう変更した。
+
+## 追記: 拍子の記号表記（C / アッラ・ブレーヴェ）— Issue #422
+
+### 問題
+
+月光ソナタ第1楽章の拍子は 2/2 だが、市販譜ではアッラ・ブレーヴェ記号
+（縦線入りの C ＝ cut time）で書かれる。これまでは数字の「2/2」でしか描けなかった。
+
+カスタム記号（自由に置ける絵）で C を重ねる回避策は採らない。
+拍子データは 2/2 のまま絵だけ 4/4 に見える、といった**データと見た目のずれ**を
+作り込むことになり、再生・小節の拍数チェック・MusicXML 書き出しと食い違うため。
+
+### 修正設計
+
+**「拍子データ」と「その見た目」を別々に持つ**方針にした。
+
+- データ: `SavedScoreData.timeSignature`（`[2, 2]`）は従来どおり不変
+- 表示: `SavedScoreData.timeSignatureStyle?: 'numeric' | 'symbol'` を追加
+  （省略＝`numeric`。旧データはすべて従来どおりの数字表記になる）
+
+描画の整形は `timeSignatureUtils.formatTimeSignature(timeSignature, style)` に集約した。
+`style` が `'symbol'` のとき 4/4 は `'C'`、2/2 は `'C|'` を返す。この 2 つは VexFlow の
+`Stave#addTimeSignature` がそのまま解釈する標準の指定で、SMuFL の
+`timeSigCommon`（U+E08A）/ `timeSigCutCommon`（U+E08B）のグリフが描かれる。
+
+記号が存在するのは 4/4 と 2/2 だけなので、判定は `canUseTimeSignatureSymbol()` に
+1 本化し、**UI のトグルの有効・無効と、実際に記号で描くかの判定で同じ関数を共有する**
+（2 箇所に同じ条件を書くと、片方だけ直したときに「トグルは押せるのに絵が変わらない」
+というずれ方をするため）。6/8 などでは記号表示を指定しても数字のまま描く。
+
+UI は「楽譜設定」タブの拍子セレクトの隣のチェックボックス（記号で表示（C / 𝄵））。
+4/4・2/2 以外を選んでいる間は無効化するが、**設定値そのもの（`symbol`）は保持する**。
+拍子を 6/8 へ変えて 2/2 へ戻したときに、記号表示の設定が消えていない方が自然なため。
+MusicXML でもこの「保持」を往復させる（round3 P2）: 標準の `<time symbol>` は先頭拍子が
+4/4・2/2 のときしか書けないため、**アプリ固有メタ**（MusicXML 公式の
+`<identification><miscellaneous><miscellaneous-field name="music-editer.time-signature-style">`）
+に style=symbol を保存し、読込側は symbol 属性と miscellaneous-field の**どちらか**があれば
+記号表示として復元する。symbol 属性は他ソフトとの相互運用用、miscellaneous-field は
+自アプリの往復用という役割分担。numeric（既定）のときは何も出力しない。
+描画へ渡す値だけを `effectiveTimeSignatureStyle` で切り替えている。
+無効時は `title` に理由と代替手順（「4/4 か 2/2 を選んでください」）を出す
+（AGENTS.md の「行き止まりは喋る」原則）。
+
+MusicXML は `<time symbol="common">` / `<time symbol="cut">` で相互運用する。
+`<beats>` / `<beat-type>` の数字は記号表示でも変えない（＝他ソフトでも拍子は 2/2 のまま）。
+読み込み側も `symbol` 属性を見て `timeSignatureStyle` を復元する。
+
+### 影響範囲
+
+- `src/types/storage.ts`: `TimeSignatureStyle` 型と `SavedScoreData.timeSignatureStyle` を追加
+- `src/utils/timeSignatureUtils.ts`: `formatTimeSignature` に `style` 引数（既定 `numeric`）、
+  `normalizeTimeSignatureStyle` / `canUseTimeSignatureSymbol` / `DEFAULT_TIME_SIGNATURE_STYLE` を追加
+- `src/utils/storage.ts`: 保存データの検証・正規化・`createSavedScoreData` の引数
+- `src/components/ScorePage.tsx`: 状態・トグル UI・保存/復元・新規作成とサンプル読込でのリセット
+- `src/components/PianoSystemCanvas.tsx`: `timeSignatureStyle` prop を受けて描画文字列を作る
+- `src/components/{Single,Piano,Quartet,Ensemble,PartExtraction}Staff.tsx`: prop の受け渡しのみ
+- `src/utils/musicXmlExport.ts` / `musicXmlImport.ts`: `<time symbol="...">` の書き出し・読み込み
+- `src/App.css`: ツールバー内チェックボックスの見た目（無効時は薄く）
+
+### 現状の制限（実装時に確認したこと）
+
+上の「拍子変更がある小節では `stave.addTimeSignature()` で記号を表示」という記述は
+現在のコードには当てはまらない。`addTimeSignature()` の呼び出しは
+`PianoSystemCanvas.tsx` の**1 箇所だけ**（段頭かつ `startMeasureIndex === 0`、
+つまり譜面のいちばん先頭）で、小節単位の拍子変更（`MeasureData.timeSignature`）は
+拍数計算・小節幅・再生には効くが、五線上に拍子記号としては描かれない。
+
+そのため今回の記号表記も適用先は「譜面の先頭の拍子記号」1 箇所である。
+途中の拍子変更を五線に描く機能を入れるときは、同じ `formatTimeSignature(ts, style)` を
+通せば記号表記もそのまま効く（整形を 2 系統にしないこと）。
+
+## Codex round1 対応（2026-08-27・#422）
+
+- **書き出し配線（P1）**: `buildCurrentScoreData()`（ファイルタブの MusicXML 書出の実経路）が
+  `timeSignatureStyle` を落としていた。プロパティと依存配列へ追加し、ScorePage 実操作
+  （記号表示に切替→書出）で `symbol="cut"` が付く配線テストを追加（ScorePageTimeSigSymbolExport.test.tsx。
+  配線を外すと落ちることを確認済み）
+- **記号表記の適用範囲の確定（P2）**: 記号表記は**譜面先頭の拍子だけ**を対象とする。
+  小節単位の拍子変更（measure.timeSignature）は、そもそも五線上への再表示が未実装の既存仕様
+  （PianoSystemCanvas は先頭でしか addTimeSignature しない）で、書き出しに symbol を付けても
+  読込側は先頭しか見ないため往復で消える。よって書き出し側も先頭のみに限定し、対称にした。
+  往復（symbol 書出→読込→再書出）でスタイルが保存されることをテストで固定

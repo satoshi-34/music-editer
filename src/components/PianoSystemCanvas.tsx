@@ -13,7 +13,7 @@ import type { Tool } from './Palette';
 // NoteEvent はこのファイル内で編集頻度の高いプロパティだけを抜粋した同名の型を独自定義している。
 // 保存データそのものを扱うヘルパー（声部をまたぐ書き込み先の解決など）では、
 // ストレージ側の完全な型が要るので StoredNoteEvent という別名で読み込む。
-import type { MeasureData, NoteEvent as StoredNoteEvent, TieArc, HairpinMark, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind, ArticulationMarking } from '../types/storage';
+import type { MeasureData, NoteEvent as StoredNoteEvent, TieArc, HairpinMark, DynamicMarking, CustomSymbolDef, OrnamentType, AdjustableSymbolKind, ArticulationMarking, TimeSignatureStyle } from '../types/storage';
 import { applyOrnamentToEvent, ornamentToVexCode } from '../utils/ornamentUtils';
 import type { ClefType } from './clefUtils';
 import {
@@ -163,7 +163,12 @@ import {
 } from '../utils/tupletUtils';
 import { snapInsertIndexOutOfTupletGroup } from '../utils/tupletGroupIntegrity';
 import { getTupletClipboardGroup, setTupletClipboardGroup } from '../utils/tupletClipboard';
-import { formatTimeSignature, getMeasureBeats, normalizeTimeSignature } from '../utils/timeSignatureUtils';
+import {
+  formatTimeSignature,
+  getMeasureBeats,
+  normalizeTimeSignature,
+  normalizeTimeSignatureStyle,
+} from '../utils/timeSignatureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
   allocateCombinedMeasureWidths,
@@ -836,6 +841,9 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: [number, number];
+  // 拍子記号の見た目（Issue #422）。'symbol' のとき 4/4 は C、2/2 はアッラ・ブレーヴェで描く。
+  // 拍子データ自体は timeSignature のままなので、再生・小節の拍数計算には影響しない。
+  timeSignatureStyle?: TimeSignatureStyle;
   // 調号変更ハンドラ。`partIndex` には実際にクリックされた段のインデックスを渡す。
   // 記譜音表示などで段ごとに調号が違う場合、呼び出し側が「どの段の調号操作だったか」を
   // 知って、実音側へ逆変換できるようにするため。
@@ -2241,6 +2249,7 @@ export default function PianoSystemCanvas({
   startMeasureIndex=0, disabled=false, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   finalMeasureIndex,
   timeSignature = [4, 4],
+  timeSignatureStyle = 'numeric',
   onKeySignatureChange,
   selectedMeasures,
   onBeatRangeSelect,
@@ -2267,7 +2276,8 @@ export default function PianoSystemCanvas({
   const timeSignatureNumerator = normalizedTimeSignature[0];
   const timeSignatureDenominator = normalizedTimeSignature[1];
   const beatsPerMeasure = getMeasureBeats(normalizedTimeSignature);
-  const formattedTimeSignature = formatTimeSignature(normalizedTimeSignature);
+  const normalizedTimeSignatureStyle = normalizeTimeSignatureStyle(timeSignatureStyle);
+  const formattedTimeSignature = formatTimeSignature(normalizedTimeSignature, normalizedTimeSignatureStyle);
   const ref = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   // 描画幅は下の描画 useEffect の実行時に ref.current.parentElement.clientWidth を
@@ -7525,7 +7535,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で

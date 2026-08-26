@@ -13,7 +13,7 @@
 // 詳細な調査・移行方針は docs/phase2-staffcanvas-retirement-feasibility.md を参照。
 import PianoSystemCanvas, { type PartConfig } from './PianoSystemCanvas';
 import type { Tool } from './Palette';
-import type { MeasureData, TimeSignature, CustomSymbolDef, NoteEvent } from '../types/storage';
+import type { MeasureData, TimeSignature, CustomSymbolDef, NoteEvent, TimeSignatureStyle } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
 import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
@@ -34,6 +34,8 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
+  /** 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。描画は PianoSystemCanvas に委譲する */
+  timeSignatureStyle?: TimeSignatureStyle;
   onKeySignatureChange?: (keySignature: KeySignature) => void;
   selectedMeasures?: { start: number; end: number };
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
@@ -98,6 +100,7 @@ export default function SingleStaff({
   previewAccidentalOnApply = true,
   keySignature = 'C',
   timeSignature = [4, 4],
+  timeSignatureStyle = 'numeric',
   onKeySignatureChange,
   selectedMeasures,
   onMeasureSelect,
@@ -151,6 +154,7 @@ export default function SingleStaff({
               previewAccidentalOnApply={previewAccidentalOnApply}
               keySignature={keySignature}
               timeSignature={timeSignature}
+              timeSignatureStyle={timeSignatureStyle}
               onKeySignatureChange={onKeySignatureChange}
               selectedMeasures={selectedMeasures}
               onMeasureSelect={onMeasureSelect}
@@ -198,6 +202,7 @@ export default function SingleStaff({
             currentInstrument={currentInstrument}
             keySignature={keySignature}
             timeSignature={timeSignature}
+            timeSignatureStyle={timeSignatureStyle}
             plannedMeasureWidths={range.minimumWidths}
             measureWidthEvenness={measureWidthEvenness}
             pageMarginSideMm={pageMarginSideMm}

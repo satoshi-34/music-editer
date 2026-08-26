@@ -4,7 +4,7 @@
 
 import type { Tool } from './Palette';
 import PianoSystemCanvas from './PianoSystemCanvas';
-import type { MeasureData, TimeSignature, CustomSymbolDef } from '../types/storage';
+import type { MeasureData, TimeSignature, CustomSymbolDef, TimeSignatureStyle } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
@@ -29,6 +29,8 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
+  /** 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。描画は PianoSystemCanvas に委譲する */
+  timeSignatureStyle?: TimeSignatureStyle;
   onKeySignatureChange?: (keySignature: KeySignature) => void;
   selectedMeasures?: { start: number; end: number };
   onMeasureSelect?: (absoluteIndex: number, shiftHeld: boolean) => void;
@@ -95,6 +97,7 @@ export default function PianoStaff({
   previewAccidentalOnApply = true,
   keySignature = 'C',
   timeSignature = [4, 4],
+  timeSignatureStyle = 'numeric',
   onKeySignatureChange,
   selectedMeasures,
   onMeasureSelect,
@@ -140,6 +143,7 @@ export default function PianoStaff({
           previewAccidentalOnApply={previewAccidentalOnApply}
           keySignature={keySignature}
           timeSignature={timeSignature}
+          timeSignatureStyle={timeSignatureStyle}
           onKeySignatureChange={onKeySignatureChange}
           selectedMeasures={selectedMeasures}
           onMeasureSelect={onMeasureSelect}
@@ -189,6 +193,7 @@ export default function PianoStaff({
             currentInstrument={currentInstrument}
             keySignature={keySignature}
             timeSignature={timeSignature}
+            timeSignatureStyle={timeSignatureStyle}
             plannedMeasureWidths={range.minimumWidths}
             measureWidthEvenness={measureWidthEvenness}
             pageMarginSideMm={pageMarginSideMm}

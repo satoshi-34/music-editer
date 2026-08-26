@@ -519,6 +519,16 @@ button.ghost.toolbar-chip-button {
   font-size: 11px;
   color: #444;
 }
+/* 拍子の「記号で表示」トグル（Issue #422）。セレクトと同じ行に並ぶチェックボックスなので、
+   ラベル文字とチェックの高さをそろえ、使えない拍子のときは薄く見せて理由を title で伝える。 */
+.toolbar-checkbox-label input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+.toolbar-checkbox-label:has(input[type="checkbox"]:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .toolbar-select-label select {
   border: 1px solid #ccc;
   border-radius: 6px;

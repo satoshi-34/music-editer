@@ -3,7 +3,7 @@
 
 import PianoSystemCanvas, { type PartConfig } from './PianoSystemCanvas';
 import type { Tool } from './Palette';
-import type { MeasureData, TimeSignature, CustomSymbolDef } from '../types/storage';
+import type { MeasureData, TimeSignature, CustomSymbolDef, TimeSignatureStyle } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import type { KeySignature } from '../utils/noteKeyUtils';
@@ -34,6 +34,8 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
+  /** 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。描画は PianoSystemCanvas に委譲する */
+  timeSignatureStyle?: TimeSignatureStyle;
   onKeySignatureChange?: (keySignature: KeySignature) => void;
   customSymbolDefs?: CustomSymbolDef[];
   // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
@@ -99,6 +101,7 @@ export default function QuartetStaff({
   previewAccidentalOnApply = true,
   keySignature = 'C',
   timeSignature = [4, 4],
+  timeSignatureStyle = 'numeric',
   onKeySignatureChange,
   customSymbolDefs,
   printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
@@ -149,6 +152,7 @@ export default function QuartetStaff({
             previewAccidentalOnApply={previewAccidentalOnApply}
             keySignature={keySignature}
             timeSignature={timeSignature}
+            timeSignatureStyle={timeSignatureStyle}
             onKeySignatureChange={onKeySignatureChange}
             customSymbolDefs={customSymbolDefs}
             plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
@@ -198,6 +202,7 @@ export default function QuartetStaff({
             currentInstrument={currentInstrument}
             keySignature={keySignature}
             timeSignature={timeSignature}
+            timeSignatureStyle={timeSignatureStyle}
             plannedMeasureWidths={range.minimumWidths}
             measureWidthEvenness={measureWidthEvenness}
             pageMarginSideMm={pageMarginSideMm}

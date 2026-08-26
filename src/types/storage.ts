@@ -7,6 +7,14 @@ import type { ClefType } from '../components/clefUtils';
 
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
 export type TimeSignature = [number, number];
+
+/**
+ * 拍子記号の見た目（Issue #422）。
+ * 'numeric' は従来どおりの数字表記（4/4）、'symbol' は 4/4 を C、
+ * 2/2 をアッラ・ブレーヴェ（縦線入りの C）で描く。
+ * 拍子データ（TimeSignature）そのものは変えず、表示の指定だけを分けて持つ。
+ */
+export type TimeSignatureStyle = 'numeric' | 'symbol';
 export type AbsoluteDynamicMarking = 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff';
 export type RelativeDynamicMarking = 'cresc' | 'dim';
 export type DynamicMarkingValue = AbsoluteDynamicMarking | RelativeDynamicMarking;
@@ -439,6 +447,11 @@ export interface SavedScoreData {
    * 旧データ互換のため省略可で、省略時は従来どおり（タイトル行だけ太字）。
    */
   titleFontWeight?: string;
+  /**
+   * 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。
+   * 旧データ互換のため省略可で、省略時は数字表記として扱う。
+   */
+  timeSignatureStyle?: TimeSignatureStyle;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;

@@ -1,6 +1,6 @@
 import PianoSystemCanvas, { type PartConfig } from './PianoSystemCanvas';
 import type { Tool } from './Palette';
-import type { InstrumentPartDefinition, MeasureData, ScoreNotationMode, TimeSignature, CustomSymbolDef } from '../types/storage';
+import type { InstrumentPartDefinition, MeasureData, ScoreNotationMode, TimeSignature, CustomSymbolDef, TimeSignatureStyle } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
 import {
@@ -35,6 +35,8 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
+  /** 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。描画は PianoSystemCanvas に委譲する */
+  timeSignatureStyle?: TimeSignatureStyle;
   onKeySignatureChange?: (keySignature: KeySignature) => void;
   /**
    * 編成譜の表示モード。`written` のとき、各パートの音符を
@@ -111,6 +113,7 @@ export default function EnsembleStaff({
   previewAccidentalOnApply = true,
   keySignature = 'C',
   timeSignature = [4, 4],
+  timeSignatureStyle = 'numeric',
   onKeySignatureChange,
   notationMode = 'concert',
   customSymbolDefs,
@@ -231,6 +234,7 @@ export default function EnsembleStaff({
             previewAccidentalOnApply={previewAccidentalOnApply}
             keySignature={keySignature}
             timeSignature={timeSignature}
+            timeSignatureStyle={timeSignatureStyle}
             onKeySignatureChange={(newKey, partIndex) => {
               if (!onKeySignatureChange) return;
               // 記譜音モードでは canvas から「クリックされた段の記譜音側の新しい調号」が返ってくる。
@@ -314,6 +318,7 @@ export default function EnsembleStaff({
             currentInstrument={currentInstrument}
             keySignature={keySignature}
             timeSignature={timeSignature}
+            timeSignatureStyle={timeSignatureStyle}
             plannedMeasureWidths={range.minimumWidths}
             measureWidthEvenness={measureWidthEvenness}
             pageMarginSideMm={pageMarginSideMm}
