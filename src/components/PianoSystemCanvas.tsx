@@ -47,6 +47,8 @@ import {
   describeLeadingRestFill,
   describeMeasureFull,
   describeNoTupletInMeasure,
+  describeOttavaPlaced,
+  describeOttavaRemoved,
   describeSymbolToolUnavailable,
   describeTupletGroupPasteUnavailable,
   describeTupletNumberToggleUnavailable,
@@ -6580,11 +6582,16 @@ export default function PianoSystemCanvas({
                 // オッターバも休符に付く。プレースホルダーだけ既定処理へ（ペダルと同じ理由）
                 if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
                 const ottavaMode = (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd';
-                // オッターバ記号をトグルで付け外しする
+                // オッターバ記号をトグルで付け外しする。
+                // 括弧は開始と終了のペアが揃って初めて描かれるため、開始だけ置いた状態は
+                // 画面に何も出ない。そのまま黙ると「置けない」ように見える（#318・
+                // 実機で誤認 2026-08-26）ので、付け外しのたびに何をしたかと次の一手を伝える
+                const removedOttava = activeEvs[j].ottava === ottavaMode;
                 updateHitEvent(j, (targetEv) => ({
                   ...targetEv,
                   ottava: targetEv.ottava===ottavaMode?undefined:ottavaMode,
                 }));
+                notifyScoreEdit(removedOttava ? describeOttavaRemoved(ottavaMode) : describeOttavaPlaced(ottavaMode));
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                 return { kind: 'handled' };
               }

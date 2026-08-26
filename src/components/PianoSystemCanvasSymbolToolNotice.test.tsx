@@ -242,6 +242,35 @@ describe('記号系ツールを対象外へ使ったときの通知（Issue #330
     });
   });
 
+  describe('オッターバの付け外し通知（#318・実機で「置けない」と誤認 2026-08-26）', () => {
+    // 括弧は開始+終了のペアで初めて描かれる。開始だけの状態が無言だと
+    // 「クリックが効いていない」ように見える
+    it('8va開始を置くと、終了の置き方まで案内される', async () => {
+      const { svg, onChange } = renderScore(NOTE_AND_REST, { mode: 'ottava', ottavaType: '8va' });
+      clickEvent(svg, 0);
+
+      await waitFor(() => expect(notices).toHaveLength(1));
+      expect(notices[0]).toContain('8vaの開始を付けました');
+      expect(notices[0]).toContain('8va終了');
+      expect(onChange).toHaveBeenCalled();
+    });
+
+    it('同じ音符をもう一度クリックすると外れたことが通知される', async () => {
+      const withOttava: MeasureData[] = [{
+        events: [
+          { dur: '4', isRest: false, keys: ['c/5'], ottava: '8va' },
+          { dur: '4', isRest: true, keys: ['b/4'] },
+          { dur: '2', isRest: true, keys: ['b/4'] },
+        ],
+      }];
+      const { svg } = renderScore(withOttava, { mode: 'ottava', ottavaType: '8va' });
+      clickEvent(svg, 0);
+
+      await waitFor(() => expect(notices).toHaveLength(1));
+      expect(notices[0]).toContain('8vaを外しました');
+    });
+  });
+
   describe('C-2: その記号が付いていない音符で調整ツールを押したとき', () => {
     it('サイズ調整では「まだ付いていない」ことと先に付ける手順が出る', async () => {
       const { svg } = renderScore(NOTE_AND_REST, { mode: 'customSymbolResize', symbolId: 'sym-1' });

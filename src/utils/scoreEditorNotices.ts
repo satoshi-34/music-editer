@@ -431,6 +431,27 @@ function formatBeatEndLabel(endBeat: number, beatsPerMeasure: number): string {
  * 範囲選択のあとにレイヤーを切り替えると、境界が新しいレイヤーの音符の切れ目に
  * 合わないことがある。黙って欠けたコピーを作らず、選び直しを案内する
  */
+export function describeOttavaPlaced(kind: '8va' | '8vb' | '8vaEnd' | '8vbEnd'): string {
+  // 括弧は開始と終了のペアが揃って初めて描画される。開始だけ置いた状態は
+  // データに保存されるのに画面に何も出ず、「置けない」ように見えていた
+  // （#318 の無言の行き止まり・実機で誤認 2026-08-26）。次の一手まで案内する
+  switch (kind) {
+    case '8va':
+      return '8vaの開始を付けました（「8va終了」で範囲の最後の音符をクリックすると括弧が表示されます）';
+    case '8vb':
+      return '8vbの開始を付けました（「8vb終了」で範囲の最後の音符をクリックすると括弧が表示されます）';
+    case '8vaEnd':
+      return '8vaの終了を付けました';
+    case '8vbEnd':
+      return '8vbの終了を付けました';
+  }
+}
+
+/** オッターバをトグルで外したときの通知 */
+export function describeOttavaRemoved(kind: '8va' | '8vb' | '8vaEnd' | '8vbEnd'): string {
+  return `${kind}を外しました`;
+}
+
 export function describeSliceCopyUnavailable(): string {
   return '選択範囲がこのレイヤーの音符の切れ目に合っていません（レイヤーを替えた場合は、範囲を選び直してからコピーしてください）';
 }
