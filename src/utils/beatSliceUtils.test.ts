@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MeasureData, NoteEvent } from '../types/storage';
 import {
+  planSlicePasteAdvance,
   sliceBoundaryCandidates,
   snapToSliceBoundary,
   extractVoiceSlice,
@@ -280,5 +281,34 @@ describe('remapVoiceRefsAfterSliceEdit（弧・松葉の終点補正）', () => 
     // 声部1の弧はそのまま
     expect(next[0].voices![0].events[0].arcs).toHaveLength(1);
     expect(next[0].events[0].arcs).toHaveLength(1);
+  });
+});
+
+describe('planSlicePasteAdvance（貼り付け後の選択前進・PR #418）', () => {
+  it('小節内に次の幅が入るなら、同じ小節の直後へ進む', () => {
+    expect(planSlicePasteAdvance({ destMeasure: 2, destBeat: 1, sliceBeats: 1, beatsPerMeasure: 4, measureCount: 10 }))
+      .toEqual({ start: 2, end: 2, startBeat: 2, endBeat: 3 });
+  });
+
+  it('小節末に到達したら次の小節の頭へ進む', () => {
+    expect(planSlicePasteAdvance({ destMeasure: 2, destBeat: 3, sliceBeats: 1, beatsPerMeasure: 4, measureCount: 10 }))
+      .toEqual({ start: 3, end: 3, startBeat: 0, endBeat: 1 });
+  });
+
+  // レイアウトの枠（totalSystems×measuresPerSystem）ではなく実データの小節数を上限にする
+  // （Codex round1 P2: 旧実装は長い曲の48小節超で前進が止まった）
+  it('48小節を超える長い曲でも、実小節数の範囲なら前進する', () => {
+    expect(planSlicePasteAdvance({ destMeasure: 47, destBeat: 3, sliceBeats: 1, beatsPerMeasure: 4, measureCount: 60 }))
+      .toEqual({ start: 48, end: 48, startBeat: 0, endBeat: 1 });
+  });
+
+  it('末尾小節の末では前進しない（null）', () => {
+    expect(planSlicePasteAdvance({ destMeasure: 9, destBeat: 3, sliceBeats: 1, beatsPerMeasure: 4, measureCount: 10 }))
+      .toBeNull();
+  });
+
+  it('端数拍（0.5拍）でも既存のイプシロンで小節境界に収まる', () => {
+    expect(planSlicePasteAdvance({ destMeasure: 0, destBeat: 3, sliceBeats: 0.5, beatsPerMeasure: 4, measureCount: 2 }))
+      .toEqual({ start: 0, end: 0, startBeat: 3.5, endBeat: 4 });
   });
 });

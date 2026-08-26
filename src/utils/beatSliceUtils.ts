@@ -308,3 +308,30 @@ export function remapVoiceRefsAfterSliceEdit(
     return withVoiceEventsUpdated(measure, voiceIndex, () => nextEvents);
   });
 }
+
+/**
+ * スライス貼り付け成功後の「選択の前進」先を計算する（実機要望 2026-08-27）。
+ * 貼った範囲の直後へ同じ幅で進み、小節内に入り切らなければ次の小節の頭へ。
+ * 進み先の小節が実データに無い（末尾小節）場合は null（前進しない）。
+ *
+ * 上限 measureCount は**実データの小節数**を渡すこと。レイアウトの枠
+ * （totalSystems×measuresPerSystem）は内容に応じて伸びる設計で、実小節数と
+ * 一致しない（48小節超の曲で前進が止まる。PR #418 Codex round1 P2）。
+ */
+export function planSlicePasteAdvance(args: {
+  destMeasure: number;
+  destBeat: number;
+  sliceBeats: number;
+  beatsPerMeasure: number;
+  measureCount: number;
+}): { start: number; end: number; startBeat: number; endBeat: number } | null {
+  const { destMeasure, destBeat, sliceBeats, beatsPerMeasure, measureCount } = args;
+  const nextStart = destBeat + sliceBeats;
+  if (nextStart + sliceBeats <= beatsPerMeasure + 0.0001) {
+    return { start: destMeasure, end: destMeasure, startBeat: nextStart, endBeat: nextStart + sliceBeats };
+  }
+  if (sliceBeats <= beatsPerMeasure + 0.0001 && destMeasure + 1 < measureCount) {
+    return { start: destMeasure + 1, end: destMeasure + 1, startBeat: 0, endBeat: sliceBeats };
+  }
+  return null;
+}
