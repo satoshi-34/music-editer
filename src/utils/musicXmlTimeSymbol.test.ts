@@ -31,6 +31,9 @@ function build(timeSignature: TimeSignature, style: TimeSignatureStyle) {
     undefined,
     undefined,
     undefined,
+    // titleFontSize / titleFontWeight（#420 が先にマージされ引数が2つ増えた）
+    undefined,
+    undefined,
     style
   );
 }

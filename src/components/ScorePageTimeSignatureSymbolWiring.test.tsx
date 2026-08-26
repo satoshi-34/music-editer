@@ -61,6 +61,9 @@ function seedWork(timeSignature: TimeSignature, timeSignatureStyle?: 'numeric' |
     undefined,
     undefined,
     undefined,
+    // titleFontSize / titleFontWeight（#420 が先にマージされ引数が2つ増えた）
+    undefined,
+    undefined,
     timeSignatureStyle
   );
   const created = createWork('拍子記号の配線');
