@@ -448,12 +448,12 @@ export function scoreToMusicXml(data: SavedScoreData): string {
   <work><work-title>${escXml(title)}</work-title></work>
   <identification>
     <creator type="composer">${escXml(composer)}</creator>
-    <encoding><software>my-music-app</software></encoding>
-    ${timeSignatureStyle === 'symbol'
+    <encoding><software>my-music-app</software></encoding>${timeSignatureStyle === 'symbol'
       // 拍子の記号表示設定（#422）。<time symbol> は先頭が 4/4・2/2 のときしか
       // 書けないため、6/8 等へ変更中でも設定を往復させるにはアプリ固有メタが要る。
-      // MusicXML 公式のアプリ固有情報置き場（miscellaneous-field）を使う（round3 P2）
-      ? '<miscellaneous><miscellaneous-field name="music-editer.time-signature-style">symbol</miscellaneous-field></miscellaneous>'
+      // MusicXML 公式のアプリ固有情報置き場（miscellaneous-field）を使う（round3 P2）。
+      // numeric（既定）のときは改行ごと何も足さない（従来出力と1バイトも変えない）
+      ? '\n    <miscellaneous><miscellaneous-field name="music-editer.time-signature-style">symbol</miscellaneous-field></miscellaneous>'
       : ''}
   </identification>
   <part-list>${partListItems.join('')}</part-list>
