@@ -2749,6 +2749,13 @@ export default function ScorePage() {
       // 印刷プレビュー中はコピー・ペースト・削除・移調・選択操作もまとめて無効化する
       // （Issue #88: 入口で早期returnする方式）。
       if (isPrintPreview) return;
+      // 譜面キャンバス側（PianoSystemCanvas）が消費したキーには重ねて反応しない。
+      // 弧・松葉の選択中は矢印キーがそちらで消費される（2026-08-26 実機報告）が、
+      // ここで defaultPrevented を見ないと、残留した小節選択が矢印で動いたり
+      // Cmd/Ctrl+Shift+↑↓で移調されたりする（PR #414 Codex round1 P1）。
+      // キャンバスのリスナーはマウント時に1回だけ登録（deps安定）、こちらは依存の変化で
+      // 登録し直されるため、実行順は常に「キャンバス→ここ」で安定している
+      if (e.defaultPrevented) return;
       // Escape で選択解除
       if (e.key === 'Escape') {
         setSelectedMeasures(null);

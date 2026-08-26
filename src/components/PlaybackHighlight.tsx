@@ -17,7 +17,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
  * - `vf-playback-band`: 帯そのものを指す（CSS と印刷の除外条件で使う）
  * - `playback-highlight`: 「再生中の目印」を表す従来からのクラス（明滅アニメーション）
  */
-export const PLAYBACK_BAND_CLASS = 'vf-playback-band';
+export const PLAYBACK_BAND_CLASS = 'vf-playback-band vf-screen-only';
 const PLAYBACK_HIGHLIGHT_CLASS = 'playback-highlight';
 
 /**

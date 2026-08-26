@@ -1600,6 +1600,9 @@ type SymbolHitRegionAppender = {
 export const OTTAVA_FONT_SIZE_PX = 22;
 export const OTTAVA_STAFF_GAP_PX = 28;
 export const OTTAVA_OBSTACLE_CLEARANCE_PX = 6;
+// "8va"/"8vb"（イタリック3文字）の字面幅の em 係数。破線の開始位置をフォントサイズへ
+// 追従させるための見積もり値（実測: 22px イタリックのセリフ体で約 36px ≒ 1.65em に余裕を足した値）
+export const OTTAVA_LABEL_WIDTH_EM = 1.75;
 
 function drawCollectedSymbolEntries(args: {
   svgRoot: SVGGElement;
@@ -2120,6 +2123,7 @@ function drawCollectedSymbolEntries(args: {
     // ブラケットが符頭・符幹に重なる。他の記号（強弱の押し出し #340）と同じく
     // 音符の実描画範囲（noteObstacles）を見て、五線から遠ざかる向きへ逃がす。
     // 手動調整済み（offsetY≠0）は自動で動かさない（#373 の手動優先原則）
+    const fontSize = OTTAVA_FONT_SIZE_PX * adjust.scale;
     let avoidedLineY = lineY;
     if (adjust.offsetY === 0 && partIndex !== undefined) {
       // 音符に加え、強弱記号（上へ移動済みの pp 等）も避ける
@@ -2131,13 +2135,14 @@ function drawCollectedSymbolEntries(args: {
           avoidedLineY = Math.min(avoidedLineY, minTop - OTTAVA_OBSTACLE_CLEARANCE_PX);
         } else {
           const maxBottom = Math.max(...spanObstacles.map((o) => o.y + o.h));
-          // 8vb はテキストが基線から上に伸びるので、文字の高さぶんも下げる
-          avoidedLineY = Math.max(avoidedLineY, maxBottom + OTTAVA_OBSTACLE_CLEARANCE_PX + OTTAVA_FONT_SIZE_PX * 0.8);
+          // 8vb はテキストが基線から上に伸びるので、文字の高さぶんも下げる。
+          // 高さは実際の描画サイズ（scale 込みの fontSize）から見積もる。定数のままだと
+          // サイズ調整で拡大した 8vb が障害物へ戻って重なる（PR #414 Codex round1 P2）
+          avoidedLineY = Math.max(avoidedLineY, maxBottom + OTTAVA_OBSTACLE_CLEARANCE_PX + fontSize * 0.8);
         }
       }
     }
     const ay = avoidedLineY + adjust.offsetY;
-    const fontSize = OTTAVA_FONT_SIZE_PX * adjust.scale;
     const strokeWidth = 1 * adjust.scale;
     const drawnElements: SVGGraphicsElement[] = [];
     const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -2152,7 +2157,10 @@ function drawCollectedSymbolEntries(args: {
     label.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(label);
     drawnElements.push(label);
-    const lineStart = ax + 18;
+    // 破線はラベル（"8va"/"8vb"・ax-4 起点）の右端から始める。旧実装の +18 固定は
+    // 文字を22pxへ拡大した時点で字面より短く、破線が文字へ重なっていた
+    // （PR #414 Codex round1 P1）。字面幅はイタリック3文字ぶんを em 換算で見積もる
+    const lineStart = ax - 4 + fontSize * OTTAVA_LABEL_WIDTH_EM + 4;
     if (lineStart < aex) {
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       line.setAttribute('x1', String(lineStart));
@@ -4383,7 +4391,7 @@ export default function PianoSystemCanvas({
         // 背後に回せば線の見た目を変えずに「この段を触っている」ことだけを示せる。
         if (activeLayerHighlightPartIndex === pi) {
           const band = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          band.setAttribute('class', 'vf-active-layer-band');
+          band.setAttribute('class', 'vf-active-layer-band vf-screen-only');
           const bandTop = stave.getYForLine(0) - ACTIVE_LAYER_BAND_PAD;
           const bandBottom = stave.getYForLine(4) + ACTIVE_LAYER_BAND_PAD;
           band.setAttribute('x', String(x / s));
@@ -5729,7 +5737,7 @@ export default function PianoSystemCanvas({
           const x1 = xForBeat(sliceSelection.fromBeat);
           const x2 = xForBeat(sliceSelection.toBeat);
           const overlay = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          overlay.setAttribute('class', 'vf-beat-slice-selected');
+          overlay.setAttribute('class', 'vf-beat-slice-selected vf-screen-only');
           overlay.setAttribute('x', String(Math.min(x1, x2)));
           overlay.setAttribute('y', String(staveTop));
           overlay.setAttribute('width', String(Math.max(2, Math.abs(x2 - x1))));
@@ -5947,7 +5955,7 @@ export default function PianoSystemCanvas({
               // クラス名はアクティブ声部の .vf-note-hit と分ける。
               // .vf-note-hit は「アクティブ声部の編集用ヒット領域」を指す名前として
               // CSS・テストが参照しているので、意味の違うものへ同じ名前を付けない。
-              rect.setAttribute('class','vf-inactive-voice-note-hit');
+              rect.setAttribute('class','vf-inactive-voice-note-hit vf-screen-only');
               rect.setAttribute('data-measure',String(absI));
               rect.setAttribute('data-note',String(j));
               rect.setAttribute('data-voice',String(entry.voiceIndex));

@@ -4,7 +4,7 @@
 // - 範囲内に高い音（加線の音）があれば、その上へ逃がす（障害物回避・#340 の型）
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
-import PianoSystemCanvas, { OTTAVA_FONT_SIZE_PX, OTTAVA_STAFF_GAP_PX } from './PianoSystemCanvas';
+import PianoSystemCanvas, { OTTAVA_FONT_SIZE_PX, OTTAVA_STAFF_GAP_PX, OTTAVA_LABEL_WIDTH_EM } from './PianoSystemCanvas';
 import type { MeasureData } from '../types/storage';
 
 vi.mock('../audio/NotePlayer', () => ({
@@ -114,6 +114,68 @@ describe('オッターバの見た目（2026-08-26 実機所感）', () => {
     const { label, staveTopY } = renderSingle(measures);
     // 音符は五線内（回避の理由にならない）なのに、既定位置より上へ動いている
     expect(parseFloat(label.getAttribute('y')!)).toBeLessThan(staveTopY - OTTAVA_STAFF_GAP_PX);
+  });
+
+  // PR #414 Codex round1 P1: 破線の始点が旧サイズ時代の +18 固定だと、22px の
+  // "8va" の字面（ax-4 起点）に破線が重なる。フォントサイズ由来の字面幅の外から始めることを固定する
+  it('破線はラベルの字面の右端より外から始まる', () => {
+    const measures: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: false, keys: ['b/4'], ottava: '8va' },
+        { dur: '4', isRest: false, keys: ['c/5'], ottava: '8vaEnd' },
+        { dur: '2', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    const { svg, label } = renderSingle(measures);
+    const dash = Array.from(svg.querySelectorAll('line'))
+      .find((l) => l.getAttribute('stroke-dasharray'))!;
+    const labelX = parseFloat(label.getAttribute('x')!);
+    // 字面の見積もり右端（ラベルx + フォントサイズ×em係数）より右にある
+    expect(parseFloat(dash.getAttribute('x1')!)).toBeGreaterThanOrEqual(
+      labelX + OTTAVA_FONT_SIZE_PX * OTTAVA_LABEL_WIDTH_EM
+    );
+  });
+
+  // PR #414 Codex round1 P2: 8vb の回避量は実際の描画サイズ（scale込み）に追従する。
+  // 定数（22px）のままだと、サイズ調整で拡大した 8vb が下側の障害物へ戻って重なる
+  it('8vb をサイズ調整で拡大すると、回避量も文字の実サイズぶん深くなる', () => {
+    const base: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: false, keys: ['c/3'], ottava: '8vb' },
+        { dur: '4', isRest: false, keys: ['d/3'], ottava: '8vbEnd' },
+        { dur: '2', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    const scaled: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: false, keys: ['c/3'], ottava: '8vb',
+          symbolAdjust: { ottava: { scale: 2 } } },
+        { dur: '4', isRest: false, keys: ['d/3'], ottava: '8vbEnd' },
+        { dur: '2', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    const yOf = (m: MeasureData[]) => {
+      const { container } = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data: m, onChange: vi.fn() }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+        />
+      );
+      const svg = container.querySelector('svg') as SVGSVGElement;
+      const label = Array.from(svg.querySelectorAll('text')).find((t) => t.textContent === '8vb')!;
+      const y = parseFloat(label.getAttribute('y')!);
+      cleanup();
+      return y;
+    };
+    const baseY = yOf(base);
+    const scaledY = yOf(scaled);
+    // 低い音（加線下の c/3）が障害物になる音型で、2倍サイズの 8vb は
+    // 文字高さの増分（fontSize×0.8 の差）ぶんさらに下へ逃げる
+    expect(scaledY).toBeGreaterThanOrEqual(baseY + OTTAVA_FONT_SIZE_PX * 0.8 - 1);
   });
 
   // #373 の手動優先: 手で動かした位置は自動回避で上書きしない

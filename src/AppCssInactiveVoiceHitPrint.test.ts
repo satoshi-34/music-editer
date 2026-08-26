@@ -64,7 +64,8 @@ describe('App.css: 非アクティブ声部のクリック判定と拍スライ�
       resolve(__dirname, './components/PianoSystemCanvas.tsx'),
       'utf-8',
     );
-    expect(source).toMatch(/setAttribute\('class',\s*'vf-inactive-voice-note-hit'\)/);
-    expect(source).toMatch(/setAttribute\('class',\s*'vf-beat-slice-selected'\)/);
+    // 画面専用要素には共通クラス vf-screen-only を併記する（print-preview/design.md）
+    expect(source).toMatch(/setAttribute\('class',\s*'vf-inactive-voice-note-hit vf-screen-only'\)/);
+    expect(source).toMatch(/setAttribute\('class',\s*'vf-beat-slice-selected vf-screen-only'\)/);
   });
 });
