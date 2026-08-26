@@ -8116,6 +8116,10 @@ export default function PianoSystemCanvas({
       )}
       {freeTextEditState && (
         <div
+          // 対象（パート×小節）が変わったら DOM ごと作り直す。入力欄は非制御
+          // （defaultValue）なので、key が無いと開いたまま別の小節をクリックしたとき
+          // 前の小節の入力値が残り、別の対象へ上書き保存される（#421 Codex round1 P1）
+          key={`free-text-${freeTextEditState.partIndex}-${freeTextEditState.measureAbsoluteIndex}`}
           style={{
             position: 'absolute',
             left: freeTextEditState.overlayX,
