@@ -47,6 +47,8 @@ import {
   describeLeadingRestFill,
   describeMeasureFull,
   describeNoTupletInMeasure,
+  describeOttavaPlaced,
+  describeOttavaRemoved,
   describeSymbolToolUnavailable,
   describeTupletGroupPasteUnavailable,
   describeTupletNumberToggleUnavailable,
@@ -96,6 +98,7 @@ import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accident
 import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import { resolveMeasureClef } from '../utils/clefMeasureUtils';
+import { logEditOp, logRenderPass } from '../utils/editDebugLog';
 import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt, asRenderedPartIndex, type RenderedPartIndex } from '../utils/crossStaffUtils';
 import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../utils/crossStaffBeamUtils';
 import {
@@ -1588,6 +1591,19 @@ type SymbolHitRegionAppender = {
   (elements: SVGGraphicsElement[], partIndex: number, measureAbsoluteIndex: number, eventIndex: number, symbolVoiceIndex: number, event: NoteEvent, kind: AdjustableSymbolKind, isCustomSymbolId?: false): void;
   (elements: SVGGraphicsElement[], partIndex: number, measureAbsoluteIndex: number, eventIndex: number, symbolVoiceIndex: number, event: NoteEvent, symbolId: string, isCustomSymbolId: true): void;
 };
+/**
+ * オッターバ（8va/8vb）の見た目の調整値（実機所感 2026-08-26: 「文字が小さくて五線に近い」）。
+ * - 文字: 11px → 22px（2倍）
+ * - 五線からの距離: 14px → 28px（2倍・収集側 pendingOttava の lineY で使う）
+ * - 障害物との最低間隔: 範囲内の音符の描画範囲から、五線と反対側へ逃がす
+ */
+export const OTTAVA_FONT_SIZE_PX = 22;
+export const OTTAVA_STAFF_GAP_PX = 28;
+export const OTTAVA_OBSTACLE_CLEARANCE_PX = 6;
+// "8va"/"8vb"（イタリック3文字）の字面幅の em 係数。破線の開始位置をフォントサイズへ
+// 追従させるための見積もり値（実測: 22px イタリックのセリフ体で約 36px ≒ 1.65em に余裕を足した値）
+export const OTTAVA_LABEL_WIDTH_EM = 1.75;
+
 function drawCollectedSymbolEntries(args: {
   svgRoot: SVGGElement;
   collectors: RenderCollectors;
@@ -1600,6 +1616,21 @@ function drawCollectedSymbolEntries(args: {
   highlightedLayerPartIndex?: number | null;
 }): void {
   const { svgRoot, customSymbolDefs, highlightedLayerPartIndex } = args;
+  // テスト会の切り分け用（開発時のみ・console.debug）: この描画パスに各記号が
+  // 何件届いたか。クリックのログ（[編集]）は出るのにここで件数が0なら、
+  // 収集〜描画側の問題だと分かる（8va の「開始だけでは描かれない」が典型）
+  logRenderPass({
+    強弱: args.collectors.dynamicTextEntries.length,
+    カスタム記号: args.collectors.customSymbolEntries.length,
+    ペダル: args.collectors.pedalMarkEntries.length,
+    運指: args.collectors.fingeringEntries.length,
+    アーティキュレーション: args.collectors.articulationEntries.length,
+    テンポ: args.collectors.tempoMarkingEntries.length,
+    発想標語: args.collectors.expressionMarkingEntries.length,
+    コード: args.collectors.chordSymbolEntries.length,
+    歌詞: args.collectors.lyricsEntries.length,
+    オッターバ: args.collectors.ottavaEntries.length,
+  });
   // UI案A2 の記号の淡色化（#405 段3）。
   // 記号の描画はどれも「要素を作る → appendSymbolHitRegion(作った要素, partIndex, …)」の順で
   // 通るので、その1か所を包むだけで全種類（強弱・アーティキュレーション・運指・
@@ -1664,7 +1695,19 @@ function drawCollectedSymbolEntries(args: {
       indices.forEach((index, k) => { dynamicCollisionShifts[index] = shifts[k]; });
     }
   }
-  dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }, dynamicEntryIndex) => {
+  // オッターバの回避用に、強弱の確定位置（手動調整＋押し出し込み）を障害物として控える。
+  // 上へ手動移動した pp にブラケットが重なる実例（2026-08-26）。noteObstacles と同じ形
+  const dynamicObstacles: Array<{ partIndex: number } & CollisionRect> = [];
+  dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, obstaclePartIndex, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }, dynamicEntryIndex) => {
+    dynamicObstacles.push({
+      partIndex: obstaclePartIndex,
+      ...estimateDynamicMarkingsCollisionRect(
+        markings,
+        adjust.scale,
+        anchorX + adjust.offsetX,
+        baseY + adjust.offsetY + dynamicCollisionShifts[dynamicEntryIndex],
+      ),
+    });
     // 行割り（絶対強弱→cresc/dim）は衝突概算と共有する（orderedDynamicMarkings）
     const orderedMarkings = orderedDynamicMarkings(markings);
     const drawnElements: SVGGraphicsElement[] = [];
@@ -2076,8 +2119,30 @@ function drawCollectedSymbolEntries(args: {
     // symbolAdjust: offsetX/offsetY はブラケット全体に、scale はテキストの font-size と線の太さに効かせる
     const ax = startX + adjust.offsetX;
     const aex = endX + adjust.offsetX;
-    const ay = lineY + adjust.offsetY;
-    const fontSize = 11 * adjust.scale;
+    // 障害物回避（実機所感 2026-08-26）: 範囲内に高い音（8vbなら低い音）があると
+    // ブラケットが符頭・符幹に重なる。他の記号（強弱の押し出し #340）と同じく
+    // 音符の実描画範囲（noteObstacles）を見て、五線から遠ざかる向きへ逃がす。
+    // 手動調整済み（offsetY≠0）は自動で動かさない（#373 の手動優先原則）
+    const fontSize = OTTAVA_FONT_SIZE_PX * adjust.scale;
+    let avoidedLineY = lineY;
+    if (adjust.offsetY === 0 && partIndex !== undefined) {
+      // 音符に加え、強弱記号（上へ移動済みの pp 等）も避ける
+      const spanObstacles = [...noteObstacles, ...dynamicObstacles].filter((o) =>
+        o.partIndex === partIndex && o.x + o.w >= Math.min(ax, aex) && o.x <= Math.max(ax, aex));
+      if (spanObstacles.length > 0) {
+        if (kind === '8va') {
+          const minTop = Math.min(...spanObstacles.map((o) => o.y));
+          avoidedLineY = Math.min(avoidedLineY, minTop - OTTAVA_OBSTACLE_CLEARANCE_PX);
+        } else {
+          const maxBottom = Math.max(...spanObstacles.map((o) => o.y + o.h));
+          // 8vb はテキストが基線から上に伸びるので、文字の高さぶんも下げる。
+          // 高さは実際の描画サイズ（scale 込みの fontSize）から見積もる。定数のままだと
+          // サイズ調整で拡大した 8vb が障害物へ戻って重なる（PR #414 Codex round1 P2）
+          avoidedLineY = Math.max(avoidedLineY, maxBottom + OTTAVA_OBSTACLE_CLEARANCE_PX + fontSize * 0.8);
+        }
+      }
+    }
+    const ay = avoidedLineY + adjust.offsetY;
     const strokeWidth = 1 * adjust.scale;
     const drawnElements: SVGGraphicsElement[] = [];
     const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -2092,7 +2157,10 @@ function drawCollectedSymbolEntries(args: {
     label.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(label);
     drawnElements.push(label);
-    const lineStart = ax + 18;
+    // 破線はラベル（"8va"/"8vb"・ax-4 起点）の右端から始める。旧実装の +18 固定は
+    // 文字を22pxへ拡大した時点で字面より短く、破線が文字へ重なっていた
+    // （PR #414 Codex round1 P1）。字面幅はイタリック3文字ぶんを em 換算で見積もる
+    const lineStart = ax - 4 + fontSize * OTTAVA_LABEL_WIDTH_EM + 4;
     if (lineStart < aex) {
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       line.setAttribute('x1', String(lineStart));
@@ -3503,6 +3571,11 @@ export default function PianoSystemCanvas({
           e.preventDefault();return;
         }
         if(e.key==='Escape'){clearArcInteraction();setSelectedArc(null);e.preventDefault();return;}
+        // 矢印キーはここで消費する（実機報告 2026-08-26）。素通しすると下の「音符選択中」の
+        // 処理へ落ち、以前に選択したままの音符の音高が動く（見えない場所の音符が変わる事故）。
+        // 音符選択も無ければブラウザのスクロールになり、挙動が場当たりに見える。
+        // 弧の形の調整はドラッグ専用なので、選択中の矢印キーは何もしないのが正しい
+        if(e.key==='ArrowUp'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();return;}
       }
 
       // 優先1.5: 松葉（ヘアピン）が選択中 → Delete で削除 / Escape で選択解除
@@ -3534,6 +3607,8 @@ export default function PianoSystemCanvas({
           e.preventDefault();return;
         }
         if(e.key==='Escape'){setSelectedHairpin(null);e.preventDefault();return;}
+        // 弧の選択と同じ理由で、松葉の選択中も矢印キーはここで消費する
+        if(e.key==='ArrowUp'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();return;}
       }
 
       // 歌詞・記号調整などの入力欄にフォーカスがあるときは、文字列のコピー＆ペーストを
@@ -4316,7 +4391,7 @@ export default function PianoSystemCanvas({
         // 背後に回せば線の見た目を変えずに「この段を触っている」ことだけを示せる。
         if (activeLayerHighlightPartIndex === pi) {
           const band = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          band.setAttribute('class', 'vf-active-layer-band');
+          band.setAttribute('class', 'vf-active-layer-band vf-screen-only');
           const bandTop = stave.getYForLine(0) - ACTIVE_LAYER_BAND_PAD;
           const bandBottom = stave.getYForLine(4) + ACTIVE_LAYER_BAND_PAD;
           band.setAttribute('x', String(x / s));
@@ -5662,7 +5737,7 @@ export default function PianoSystemCanvas({
           const x1 = xForBeat(sliceSelection.fromBeat);
           const x2 = xForBeat(sliceSelection.toBeat);
           const overlay = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          overlay.setAttribute('class', 'vf-beat-slice-selected');
+          overlay.setAttribute('class', 'vf-beat-slice-selected vf-screen-only');
           overlay.setAttribute('x', String(Math.min(x1, x2)));
           overlay.setAttribute('y', String(staveTop));
           overlay.setAttribute('width', String(Math.max(2, Math.abs(x2 - x1))));
@@ -5880,7 +5955,7 @@ export default function PianoSystemCanvas({
               // クラス名はアクティブ声部の .vf-note-hit と分ける。
               // .vf-note-hit は「アクティブ声部の編集用ヒット領域」を指す名前として
               // CSS・テストが参照しているので、意味の違うものへ同じ名前を付けない。
-              rect.setAttribute('class','vf-inactive-voice-note-hit');
+              rect.setAttribute('class','vf-inactive-voice-note-hit vf-screen-only');
               rect.setAttribute('data-measure',String(absI));
               rect.setAttribute('data-note',String(j));
               rect.setAttribute('data-voice',String(entry.voiceIndex));
@@ -6580,11 +6655,16 @@ export default function PianoSystemCanvas({
                 // オッターバも休符に付く。プレースホルダーだけ既定処理へ（ペダルと同じ理由）
                 if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return { kind: 'passThrough' };
                 const ottavaMode = (tool as any).ottavaType as '8va' | '8vb' | '8vaEnd' | '8vbEnd';
-                // オッターバ記号をトグルで付け外しする
+                // オッターバ記号をトグルで付け外しする。
+                // 括弧は開始と終了のペアが揃って初めて描かれるため、開始だけ置いた状態は
+                // 画面に何も出ない。そのまま黙ると「置けない」ように見える（#318・
+                // 実機で誤認 2026-08-26）ので、付け外しのたびに何をしたかと次の一手を伝える
+                const removedOttava = activeEvs[j].ottava === ottavaMode;
                 updateHitEvent(j, (targetEv) => ({
                   ...targetEv,
                   ottava: targetEv.ottava===ottavaMode?undefined:ottavaMode,
                 }));
+                notifyScoreEdit(removedOttava ? describeOttavaRemoved(ottavaMode) : describeOttavaPlaced(ottavaMode));
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
                 return { kind: 'handled' };
               }
@@ -6802,6 +6882,16 @@ export default function PianoSystemCanvas({
                 if (flag.kind !== 'passThrough') return flag;
                 return clickedIsRest ? restDefaultOutcome() : noteDefaultOutcome();
               })();
+              // テスト会の切り分け用（開発時のみ）: クリックが処理に届いたことと、
+              // どう裁かれたかをコンソールへ残す。「反応しない」の原因が
+              // 当たり判定側か描画側かをこの1行の有無で切り分けられる
+              logEditOp('音符クリック', {
+                tool: 'mode' in tool ? tool.mode : `音価:${(tool as { duration?: string }).duration}`,
+                part: hitPi, measure: absI, event: j, voice: hitVoice,
+                isRest: clickedIsRest,
+                outcome: outcome.kind,
+                ...(outcome.kind === 'rejected' ? { notice: outcome.notice } : {}),
+              });
               if (outcome.kind === 'rejected') notifyScoreEdit(outcome.notice);
             });
             svgRoot.appendChild(hit);
@@ -6965,9 +7055,9 @@ export default function PianoSystemCanvas({
                   const topY = stave.getYForLine(0);
                   const botY = stave.getYForLine(4);
                   if (ev.ottava === '8va') {
-                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - 14, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
+                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - OTTAVA_STAFF_GAP_PX, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
                   } else if (ev.ottava === '8vb') {
-                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + 14, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
+                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + OTTAVA_STAFF_GAP_PX, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
                   } else if (pendingOttava && ev.ottava === '8vaEnd' && pendingOttava.kind === '8va') {
                     ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
                     pendingOttava = null;

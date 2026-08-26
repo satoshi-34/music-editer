@@ -2065,24 +2065,33 @@ button.ghost.active:hover:not(:disabled) {
      塗りつぶさない。リハーサルマークの囲み枠 rect はここで文字が見えるようになる */
   .print-page svg circle[stroke]:not([stroke="none"]) { stroke: var(--print-ink) !important; }
   .print-page svg circle:not([fill="none"]) { fill: var(--print-ink) !important; }
-  .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band) {
+  .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band):not(.vf-inactive-voice-note-hit):not(.vf-beat-slice-selected) {
     stroke: var(--print-ink) !important;
   }
   /* .symbol-hit-region は fill="rgba(37,99,235,0)"（アルファ 0 の透明色）なので
      fill="none" の除外条件に引っかからず、このルールで黒く塗り潰されていた（Issue #203）。
      再生中の帯（.vf-playback-band）も半透明の塗りを持つので同じ穴に落ちる（Issue #268） */
-  .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band) {
+  .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band):not(.vf-inactive-voice-note-hit):not(.vf-beat-slice-selected) {
     fill: var(--print-ink) !important;
   }
   .print-page svg rect.vf-hit,
   .print-page svg rect.vf-note-hit,
   .print-page svg rect.vf-note-selected,
   .print-page svg rect.vf-key-signature-debug,
-  .print-page svg rect.symbol-hit-region {
+  .print-page svg rect.symbol-hit-region,
+  .print-page svg rect.vf-inactive-voice-note-hit {
     stroke: none !important; fill: transparent !important;
   }
+  /* 拍スライスの選択ハイライトは画面だけのもの（再生帯と同じ扱い） */
+  .print-page svg rect.vf-beat-slice-selected { display: none !important; }
   /* 再生中の帯は画面だけのもの。印刷には出さない */
   .print-page svg rect.vf-playback-band { display: none !important; }
+  /* 画面専用要素の共通クラス（PR #414 Codex round1 P2）。クリック判定・選択帯・再生帯など
+     「印刷に出てはいけない要素」は、個別クラスの除外リストに頼らずこのクラスを併記する。
+     除外リスト方式は追加のたびに4か所へ足す必要があり、実際に3回漏れた
+     （#203 symbol-hit-region / #268 vf-playback-band / 2026-08-26 vf-inactive-voice-note-hit）。
+     新しい画面専用要素には vf-screen-only を必ず付けること */
+  .print-page svg .vf-screen-only { display: none !important; }
   /* 強弱記号・運指番号・リハーサルマーク・ペダル・オッターバなどのテキストは
      ダークグレー系（#1f2937 等）で描かれているため、印刷では純粋な黒に統一する */
   .print-page svg text { fill: var(--print-ink) !important; }
@@ -2196,23 +2205,28 @@ button.ghost.active:hover:not(:disabled) {
 }
 .print-preview .print-page svg circle[stroke]:not([stroke="none"]) { stroke: var(--print-ink, #000); }
 .print-preview .print-page svg circle:not([fill="none"]) { fill: var(--print-ink, #000); }
-.print-preview .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band) {
+.print-preview .print-page svg rect[stroke]:not([stroke="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band):not(.vf-inactive-voice-note-hit):not(.vf-beat-slice-selected) {
   stroke: var(--print-ink, #000);
 }
 /* @media print 側と同じ理由で .symbol-hit-region（Issue #203）と
    再生中の帯 .vf-playback-band（Issue #268）を除外する */
-.print-preview .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band) {
+.print-preview .print-page svg rect:not([fill="none"]):not(.vf-hit):not(.vf-note-hit):not(.vf-note-selected):not(.vf-key-signature-debug):not(.symbol-hit-region):not(.vf-playback-band):not(.vf-inactive-voice-note-hit):not(.vf-beat-slice-selected) {
   fill: var(--print-ink, #000);
 }
 .print-preview .print-page svg rect.vf-hit,
 .print-preview .print-page svg rect.vf-note-hit,
 .print-preview .print-page svg rect.vf-note-selected,
 .print-preview .print-page svg rect.vf-key-signature-debug,
-.print-preview .print-page svg rect.symbol-hit-region {
+.print-preview .print-page svg rect.symbol-hit-region,
+.print-preview .print-page svg rect.vf-inactive-voice-note-hit {
   stroke: none; fill: transparent;
 }
+/* 拍スライスの選択ハイライトはプレビューにも出さない（再生帯と同じ扱い） */
+.print-preview .print-page svg rect.vf-beat-slice-selected { display: none; }
 /* 印刷プレビューでも帯は出さない（画面での再生位置表示のためだけの要素） */
 .print-preview .print-page svg rect.vf-playback-band { display: none; }
+/* 画面専用要素はプレビューにも出さない（@media print 側の .vf-screen-only と対） */
+.print-preview .print-page svg .vf-screen-only { display: none; }
 .print-preview .print-page svg text { fill: var(--print-ink, #000); }
 .print-preview .print-page svg g[stroke]:not([stroke="none"]) { stroke: var(--print-ink, #000); }
 .print-preview .print-page svg g[fill]:not([fill="none"]) { fill: var(--print-ink, #000); }

@@ -100,3 +100,14 @@
 - `npm run lint`: 353エラー・6警告（着手前と完全に同数、新規エラーなし）。
 - `npm run build`: `tsc -b && vite build` エラーなし。
 - ブラウザでの実地確認は未実施（共有Dockerコンテナの5173番ポートが既に別プロセスに使われており、本worktree用のポート公開手段が無かったため。PR #84/#85 と同じ既知の制約）。朝のレビューで、「＋小節を追加」で余り小節を数個表示 → 印刷プレビューON → 実際の印刷/PDF書出と同じページ数になることを実機確認していただきたい。
+
+## 画面専用要素の印刷除外と vf-screen-only（2026-08-26・PR #414）
+
+### 問題（3例目）
+
+非アクティブ声部のクリック判定 `rect.vf-inactive-voice-note-hit`（#258・fill=transparent）が、印刷インク色を強制する rect ルールの :not() 除外リストに入っておらず、印刷プレビューで音符位置に黒い矩形の塊として描かれた。#203（symbol-hit-region）・#268（vf-playback-band）と同じ漏れ方。拍スライスの選択ハイライト `vf-beat-slice-selected` も同経路。
+
+### 設計
+
+- 当面の修正: 4か所の :not() リストへ両クラスを追加し、透明リセット／display:none を併記（AppCssInactiveVoiceHitPrint.test.ts で固定）。
+- 構造的対策: **画面専用要素の共通クラス `vf-screen-only`** を導入。クリック判定・選択帯・再生帯・アクティブレイヤー帯に既存クラスと併記し、@media print と .print-preview の両方で一括 `display:none`。**新しい画面専用要素には vf-screen-only を必ず付けること**（除外リストへの追記は不要になる）。既存の意味別クラスとルールは互換のため残す。
