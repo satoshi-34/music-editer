@@ -245,6 +245,52 @@ describe('Storage Foundation Tests', () => {
     });
   });
 
+  describe('タイトルの文字サイズ・太さの保存互換（Issue #420）', () => {
+    const makeFontData = (
+      titleFontId?: string,
+      titleFontSize?: number,
+      titleFontWeight?: string,
+    ) => createSavedScoreData(
+      { title: 'Font Size Test', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+      1,
+      4,
+      'single',
+      'C',
+      [4, 4],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      titleFontId,
+      titleFontSize,
+      titleFontWeight,
+    );
+
+    it('titleFontSize / titleFontWeight を保存して読み戻せる（保存往復）', () => {
+      const scoreData = makeFontData('mincho', 1.25, 'bold');
+      expect(scoreData.titleFontSize).toBe(1.25);
+      expect(scoreData.titleFontWeight).toBe('bold');
+      expect(saveScoreData(scoreData).success).toBe(true);
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.titleFontSize).toBe(1.25);
+      expect(loadResult.data?.titleFontWeight).toBe('bold');
+    });
+
+    it('サイズ・太さ無しの旧データも従来どおり有効（既定値互換）', () => {
+      const scoreData = makeFontData();
+      expect(scoreData.titleFontSize).toBeUndefined();
+      expect(scoreData.titleFontWeight).toBeUndefined();
+      expect(validateSavedScoreData(scoreData)).toBe(true);
+      // 型の違うデータは弾く（手書き JSON の取り込み対策）
+      expect(validateSavedScoreData({ ...scoreData, titleFontSize: '1.2' })).toBe(false);
+      expect(validateSavedScoreData({ ...scoreData, titleFontSize: Number.NaN })).toBe(false);
+      expect(validateSavedScoreData({ ...scoreData, titleFontWeight: 700 })).toBe(false);
+    });
+  });
+
   describe('復元履歴（Issue #109 第3段）', () => {
     const makeData = (title: string, timestamp: number): SavedScoreData => ({
       ...createSavedScoreData(

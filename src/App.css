@@ -527,6 +527,12 @@ button.ghost.toolbar-chip-button {
   background: #fff;
   height: var(--toolbar-control-height);
 }
+/* スライダーの右に出す現在値（例: 「120%」）。桁が変わっても隣の要素が動かないよう幅を固定する */
+.toolbar-range-value {
+  min-width: 3.2em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ツールバー各タブ内のボタン・トグル・数値入力・セレクトの高さを統一する（Issue #104）。
    個々の要素に高さを書き足す代わりに、ここ1箇所で共通化する。
@@ -1501,13 +1507,19 @@ button.ghost.active:hover:not(:disabled) {
    .08em だと間延びして見え、かつ折り返しやすくなるため（#195 の調査 §3-4）。
    書体は Bravura が推奨するセリフ体（.print-page で定義した --score-text-font）にそろえる。 */
 .score-title {
-  margin: 0; font-size: 26px; text-align: center; letter-spacing: .02em;
+  margin: 0; text-align: center; letter-spacing: .02em;
   /* --title-font-override はタイトル書体の選択（Issue #342）。未指定なら従来どおり浄書セリフ体 */
   font-family: var(--title-font-override, var(--score-text-font));
+  /* --title-font-scale / --title-font-weight は文字サイズ・太さの調整（Issue #420）。
+     どちらも未注入のときは従来の見た目（26px・h1 の既定太字＝700）のままになる */
+  font-size: calc(26px * var(--title-font-scale, 1));
+  font-weight: var(--title-font-weight, 700);
 }
 .score-subtitle {
-  margin: 4px 0 0; font-size: 14px; text-align: center; color: #555;
+  margin: 4px 0 0; text-align: center; color: #555;
   font-family: var(--title-font-override, var(--score-text-font));
+  font-size: calc(14px * var(--title-font-scale, 1));
+  font-weight: var(--title-font-weight-sub, 400);
 }
 /* 作詞者・作曲者・編曲者。以前は ScorePage.tsx のインライン style に
    直書きされていて A/B 比較でしか値を変えられなかったので、クラスへ切り出した（#202）。
@@ -1520,8 +1532,10 @@ button.ghost.active:hover:not(:disabled) {
 .score-credit {
   text-align: right;
   margin-top: 2mm;
-  font-size: 13px; color: #555;
+  color: #555;
   font-family: var(--title-font-override, var(--score-text-font));
+  font-size: calc(13px * var(--title-font-scale, 1));
+  font-weight: var(--title-font-weight-sub, 400);
 }
 /* 2ページ目以降の欄外タイトルにも同じ書体を効かせる（未指定なら従来どおり継承） */
 .page-title { margin: 0 0 2mm; font-size: 14px; text-align: center; color: #444; font-family: var(--title-font-override, inherit); }
@@ -2025,8 +2039,9 @@ button.ghost.active:hover:not(:disabled) {
     background: #fff;
     background-image: none;
   }
-  .score-title { font-size: 24px; }
-  .score-subtitle { font-size: 12px; }
+  /* 印刷時の基準サイズ。倍率（--title-font-scale）は画面と同じように掛かる */
+  .score-title { font-size: calc(24px * var(--title-font-scale, 1)); }
+  .score-subtitle { font-size: calc(12px * var(--title-font-scale, 1)); }
 
   /* 印刷は市販譜の濃度感に近づける:
      線の太さは画面の表示ウェイト設定に関わらず「細い」相当（0.8）へ固定。

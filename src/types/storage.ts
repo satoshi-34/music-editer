@@ -427,6 +427,18 @@ export interface SavedScoreData {
    * 省略時・未知の id は既定（現行の浄書セリフ体のまま）として扱う。
    */
   titleFontId?: string;
+  /**
+   * タイトルブロック（タイトル・サブタイトル・作者欄）の文字サイズ倍率（Issue #420）。
+   * px の実値ではなく既定の見た目に対する倍率で、1 = 従来どおり。
+   * 旧データ互換のため省略可。省略時・数値でない値は 1、範囲外は最小/最大へクランプ
+   * （normalizeTitleFontSize が正本。#420 round1 P2 でクランプを正と確定）。
+   */
+  titleFontSize?: number;
+  /**
+   * タイトルブロックの太さ（Issue #420）。'normal' | 'bold'。
+   * 旧データ互換のため省略可で、省略時は従来どおり（タイトル行だけ太字）。
+   */
+  titleFontWeight?: string;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;
