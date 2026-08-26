@@ -120,6 +120,11 @@ describe('ScorePage: MusicXML 大譜表（<staves>2）の読込配線（#419）'
       expect(document.body.textContent).toContain('右手・声部1');
     }, { timeout: 15000 });
 
+    // SVG に両段ぶんの音符が実際に描かれている（保存だけ通って描画へ渡らない退行の検出）
+    await waitFor(() => {
+      expect(document.querySelectorAll('g.vf-stavenote').length).toBeGreaterThanOrEqual(2);
+    }, { timeout: 15000 });
+
     // 自動保存データで右手=c/5・左手=c/3 を確認（表示の実体）
     await waitFor(() => {
       const parts = loadWorkAutosaveData(workId).data?.parts;
@@ -160,7 +165,12 @@ describe('ScorePage: MusicXML 大譜表（<staves>2）の読込配線（#419）'
       // ピアノモデル（左手=bass固定）に正規化されるため、ここでは断言しない
       expect(left?.measures?.[0]?.events?.[0]?.keys?.[0]).toBe('c/3');
     }, { timeout: 15000 });
-    // 見た目のクレフが黙って変わらない: 正規化の通知が出ている（#318）
+    // 見た目のクレフが黙って変わらない: 正規化の通知が**画面に**出ている（#318）。
+    // イベント収集だけでなく、通知UI（data-testid=edit-notice）の表示まで固定する
+    await waitFor(() => {
+      const noticeEl = document.querySelector('[data-testid="edit-notice"]');
+      expect(noticeEl?.textContent ?? '').toContain('クレフ');
+    }, { timeout: 15000 });
     expect(notices.some((n) => n.includes('クレフ') && n.includes('標準'))).toBe(true);
     window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, listener);
   }, MOUNT_HEAVY_TIMEOUT_MS);

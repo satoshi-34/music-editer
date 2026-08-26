@@ -310,7 +310,9 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
   // 同じ声部が小節境界で入れ替わり、編集レイヤー・再生・松葉の継続が壊れる（Codex round1 P1）
   const globalVoiceNumbers = staffNumber === null ? null : Array.from(new Set(
     measureEls.flatMap((m) => Array.from(m.children)
-      .filter((el) => el.tagName === 'note' && staffNumberOf(el) === staffNumber)
+      // 和音の構成音は親音と同じ voice を持つ（別五線を名乗るクロススタッフ和音も
+      // 時間・声部は親音側）ので、対応表は親音（chordなし）だけから作る
+      .filter((el) => el.tagName === 'note' && !el.querySelector('chord') && staffNumberOf(el) === staffNumber)
       .map((el) => parseInt(el.querySelector('voice')?.textContent ?? '', 10))
       .filter((v) => Number.isInteger(v) && v >= 1)),
   )).sort((a, b) => a - b);
@@ -325,6 +327,13 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     // 「backup → forward 半小節 → 後半だけの声部」のような外部ソフト定番の書き方で
     // リズムが黙って壊れる（Codex round1 P1）
     const durationRests = (el: Element): NoteEvent[] => {
+      // 連符の音が五線をまたぐ形は、合成休符が二進音価しか表せず 1/3 拍などの端数を
+      // 落として両段の時間がずれる（round3 P1）。黙って壊さず理由付きで読込を中止する
+      if (el.tagName === 'note' && el.querySelector('time-modification')) {
+        throw new Error(
+          '連符が五線をまたぐクロススタッフ記譜を含むため、この MusicXML は読み込めません。書き出し元で段またぎ（クロススタッフ）を外してから書き出してください（読み込み後に ⇵ で見た目を付け直せます）',
+        );
+      }
       const d = parseInt(el.querySelector('duration')?.textContent ?? '', 10);
       if (!Number.isInteger(d) || d <= 0) return [];
       return buildRestEventsForBeats(d / divisions, staffClef);
@@ -335,7 +344,7 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     const isSyntheticRestEl = (el: Element): boolean => {
       if (el.tagName === 'forward') return true;
       if (el.tagName !== 'note' || staffNumber === null) return false;
-      if (staffNumberOf(el) === staffNumber) return false;
+      if (noteUnitStaff(el) === staffNumber) return false;
       return !el.querySelector('chord') && !el.querySelector('grace');
     };
     const parseVoiceChildren = (children: Element[]): NoteEvent[] => {
@@ -345,8 +354,9 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
       for (const el of children) {
         if (isSyntheticRestEl(el)) { flush(); evs.push(...durationRests(el)); continue; }
         if (el.tagName === 'note') {
-          // 別五線の和音メンバー・前打音は時間を持たないので黙って飛ばす
-          if (staffNumber !== null && staffNumberOf(el) !== staffNumber) continue;
+          // ユニット五線（和音は親音の五線）が別ならここへは来ない（synthetic 側で処理済み）。
+          // 前打音だけは時間を持たないので、別五線でも黙って飛ばす
+          if (staffNumber !== null && noteUnitStaff(el) !== staffNumber) continue;
           noteRun.push(el);
         }
       }
@@ -363,6 +373,24 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     // 各 note の <voice> タグから決める（タグの無い XML は従来どおり区間順で数える）。
     // 五線ごとに分けるときは、その五線に属さない note / direction を先に除く。
     // <backup>（時間の巻き戻し）や <attributes> は五線に属さないので残す。
+    // 和音は**親音（<chord/> の無い最初の音）の五線**をユニットの五線とする（round3 P1）。
+    // MusicXML では和音の構成音が別五線を名乗れる（クロススタッフ和音）が、時間は親音が
+    // 持つため、構成音を独立に扱うと同時発音が「休符＋遅れた音」に分裂する。
+    // ここで note ごとのユニット五線を先に求め、以降の判定はすべてこれを使う
+    const unitStaffOf = new Map<Element, number>();
+    {
+      let lastParentStaff = 1;
+      for (const el of Array.from(measureEl.children)) {
+        if (el.tagName !== 'note') continue;
+        if (el.querySelector('chord')) {
+          unitStaffOf.set(el, lastParentStaff);
+        } else {
+          lastParentStaff = staffNumberOf(el);
+          unitStaffOf.set(el, lastParentStaff);
+        }
+      }
+    }
+    const noteUnitStaff = (el: Element): number => unitStaffOf.get(el) ?? staffNumberOf(el);
     // 別五線の <note> は**捨てずに残す**: 同じ voice が小節内で五線を移るクロススタッフ記譜では、
     // 捨てると先行音の時間が消えて後続が小節先頭へ詰まる（Codex round2 P1）。
     // 残した別五線の音は parseVoiceChildren で「同じ長さの休符」に合成する（時間を保存し、
@@ -382,7 +410,7 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     }
     const explicitSectionVoice = (children: Element[]): number | null => {
       const firstNote = children.find((el) => el.tagName === 'note'
-        && (staffNumber === null || staffNumberOf(el) === staffNumber));
+        && (staffNumber === null || noteUnitStaff(el) === staffNumber));
       const v = parseInt(firstNote?.querySelector('voice')?.textContent ?? '', 10);
       return !isNaN(v) && v >= 1 ? v : null;
     };
@@ -391,7 +419,7 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     const sections = staffNumber === null
       ? rawSections
       : rawSections.filter((children) =>
-          children.some((el) => el.tagName === 'note' && staffNumberOf(el) === staffNumber));
+          children.some((el) => el.tagName === 'note' && noteUnitStaff(el) === staffNumber));
     // MusicXML の <voice> 番号は五線をまたいだ通し番号になる慣習がある
     // （例: 右手が 1・2、左手が 5・6）。パート全体の対応表（globalVoiceNumbers）で
     // 1 から振り直して、アプリの「声部1・声部2…」と対応させる。
@@ -419,7 +447,7 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     // 疎な番号（間の声部が空）は空の器で埋め、声部番号を保存データ上の位置と一致させる
     const noteBearingVoiceNumbers = sectionsWithVoice
       .filter((s) => s.children.some((el) => el.tagName === 'note'
-        && (staffNumber === null || staffNumberOf(el) === staffNumber)))
+        && (staffNumber === null || noteUnitStaff(el) === staffNumber)))
       .map((s) => s.voiceNumber);
     const maxVoiceNumber = noteBearingVoiceNumbers.length > 0 ? Math.max(...noteBearingVoiceNumbers) : 1;
     const extraVoiceEvents: NoteEvent[][] = [];

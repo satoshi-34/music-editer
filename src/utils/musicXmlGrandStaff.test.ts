@@ -289,4 +289,57 @@ describe('MusicXML 読込: 1パート複数五線（ピアノ大譜表）', () =
     expect(lower[1]?.isRest).toBe(false);
     expect(lower[1]?.keys).toEqual(['e/3']);
   });
+
+  // round3 P1: クロススタッフ和音（親音=下段・構成音=上段）。構成音を独立扱いすると
+  // 上段が「休符→遅れた音」に分裂する。和音はユニットごと親音の五線に載ることを固定する
+  it('クロススタッフ和音は親音の五線へまとまり、同時発音が保たれる', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions><staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>16</duration><voice>1</voice><type>whole</type><staff>2</staff></note>
+      <note><chord/><pitch><step>C</step><octave>4</octave></pitch><duration>16</duration><voice>1</voice><type>whole</type><staff>1</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const parsed = parseMusicXml(xml);
+    // 下段: 和音（c/3 + c/4）が1イベントで同時に鳴る
+    const lower = parsed.parts[1].measures[0].events;
+    expect(lower[0]?.isRest).toBe(false);
+    expect(lower[0]?.keys).toEqual(['c/3', 'c/4']);
+    // 上段: 実音は無い（全休符の詰め物のみ）。「休符＋遅れた音」に分裂しない
+    const upper = parsed.parts[0].measures[0].events;
+    expect(upper.every((e) => e.isRest)).toBe(true);
+  });
+
+  // round3 P1: 連符が五線をまたぐと合成休符が 1/3 拍等を表せず時間がずれる。
+  // 黙って壊さず、理由付きで読込を中止する
+  it('連符が五線をまたぐ形は理由付きで読込を中止する', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>12</divisions><staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>8</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff></note>
+      <note><pitch><step>E</step><octave>3</octave></pitch><duration>8</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>2</staff></note>
+      <note><pitch><step>G</step><octave>3</octave></pitch><duration>8</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    expect(() => parseMusicXml(xml)).toThrowError(/連符が五線をまたぐ/);
+  });
 });
