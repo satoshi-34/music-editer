@@ -44,6 +44,7 @@ import {
   MIN_SYMBOL_OFFSET,
   MAX_SYMBOL_OFFSET
 } from './customSymbolUtils';
+import { isValidFreeTextAnnotation } from './freeTextUtils';
 
 // Storage keys
 //
@@ -399,7 +400,10 @@ function validateMeasureData(measure: any): measure is MeasureData {
     (measure.rehearsalMark === undefined ||
       (typeof measure.rehearsalMark === 'string' &&
         measure.rehearsalMark.trim().length > 0 &&
-        measure.rehearsalMark.trim().length <= 4))
+        measure.rehearsalMark.trim().length <= 4)) &&
+    // 自由注釈テキスト（Issue #421）。壊れた値をそのまま描くと NaN 座標になるので、
+    // 型・範囲の検証を通ったものだけ受け入れる。
+    (measure.freeText === undefined || isValidFreeTextAnnotation(measure.freeText))
   );
 }
 

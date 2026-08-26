@@ -1727,6 +1727,77 @@ describe('Storage Foundation Tests', () => {
     });
   });
 
+  describe('自由注釈テキスト（小節単位 freeText）の保存互換とバリデーション（Issue #421）', () => {
+    it('小節の freeText を保存して読み戻せる（倍率・オフセット込み）', () => {
+      const data = createSavedScoreData(
+        { title: 'Free Text Test', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{
+          partId: 'right-hand',
+          clef: 'treble',
+          measures: [
+            { events: [{ dur: '4', isRest: false, keys: ['c/4'] }], freeText: { text: 'senza sordini' } },
+            { events: [{ dur: '4', isRest: false, keys: ['c/4'] }], freeText: { text: 'dolce', scale: 1.5, offsetX: -10, offsetY: 6 } },
+            { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }
+          ]
+        }],
+        1,
+        3,
+        'single',
+        'C'
+      );
+
+      const saveResult = saveScoreData(data);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.parts[0].measures[0].freeText).toEqual({ text: 'senza sordini' });
+      expect(loadResult.data?.parts[0].measures[1].freeText).toEqual({ text: 'dolce', scale: 1.5, offsetX: -10, offsetY: 6 });
+      // 注釈の無い小節は従来どおり undefined のまま（旧データと同じ形）
+      expect(loadResult.data?.parts[0].measures[2].freeText).toBeUndefined();
+    });
+
+    it('壊れた freeText（text が文字列でない）を持つ保存データは無効として弾く', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.PRIMARY,
+        JSON.stringify({
+          version: CURRENT_VERSION,
+          timestamp: Date.now(),
+          metadata: { title: '', subtitle: '', lyricist: '', composer: '', arranger: '' },
+          scoreType: 'single',
+          parts: [{
+            partId: 'melody',
+            clef: 'treble',
+            measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }], freeText: { text: 123 } }]
+          }],
+          systems: 1,
+          measuresPerSystem: 1,
+        })
+      );
+      expect(loadScoreData().success).toBe(false);
+    });
+
+    it('範囲外の倍率が入った freeText は無効として弾く（描画で異常なサイズにしないため）', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.PRIMARY,
+        JSON.stringify({
+          version: CURRENT_VERSION,
+          timestamp: Date.now(),
+          metadata: { title: '', subtitle: '', lyricist: '', composer: '', arranger: '' },
+          scoreType: 'single',
+          parts: [{
+            partId: 'melody',
+            clef: 'treble',
+            measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }], freeText: { text: 'a', scale: 99 } }]
+          }],
+          systems: 1,
+          measuresPerSystem: 1,
+        })
+      );
+      expect(loadScoreData().success).toBe(false);
+    });
+  });
+
   describe('強弱記号の保存互換', () => {
     it('音符の dynamics を保存して読み戻せる', () => {
       const data = createSavedScoreData(

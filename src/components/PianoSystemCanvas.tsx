@@ -192,6 +192,16 @@ export { computeLayout, staveSpacingForPartCount };
 import { createVexFlowTuplets, syncTupletBracketsWithBeams, vexFlowDotCount, type RenderedTuplet } from '../utils/vexFlowTimingUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
+import {
+  FREE_TEXT_BASE_OFFSET_Y,
+  MAX_FREE_TEXT_OFFSET,
+  MAX_FREE_TEXT_SCALE,
+  MIN_FREE_TEXT_SCALE,
+  buildFreeTextAnnotation,
+  parseFreeTextOffsetInput,
+  parseFreeTextScaleInput,
+  resolveFreeTextAnnotation,
+} from '../utils/freeTextUtils';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -1359,6 +1369,14 @@ type RenderCollectors = {
   /** リハーサルマーク（練習番号）。最上段（pi===0）の上にだけ表示する */
   rehearsalMarkEntries: Array<{ x: number; topY: number; mark: string }>;
   /**
+   * 自由注釈テキスト（音符に紐づかない、小節アンカーのテキスト。Issue #421）。
+   * リハーサルマークと違い最上段に限定せず、**その注釈を持つ段の上**に描く
+   * （大譜表の左手五線の上にも置けるようにするため）。x/topY は実際に描いた Stave から取る
+   */
+  freeTextEntries: Array<{
+    x: number; topY: number; text: string; scale: number; offsetX: number; offsetY: number;
+  }>;
+  /**
    * 途中テンポ変更（MeasureData.bpm）。最上段（pi===0）の上にだけ ♩=XXX と表示する。
    * リハーサルマークと同じ「最上段基準」の方針だが、StaffCanvas の既存レイアウトに合わせ
    * リハーサルマークより下（五線上端の36px上）に置くことで重ならないようにする
@@ -1477,6 +1495,7 @@ const createRenderCollectors = (): RenderCollectors => ({
   staveTopYByPart: new Map(),
   customSymbolEntries: [],
   rehearsalMarkEntries: [],
+  freeTextEntries: [],
   bpmMarkingEntries: [],
   measureNumberEntries: [],
   pedalMarkEntries: [],
@@ -1654,6 +1673,7 @@ function drawCollectedSymbolEntries(args: {
   }) as SymbolHitRegionAppender;
   const {
     dynamicTextEntries, noteObstacles, staveTopYByPart, customSymbolEntries, bpmMarkingEntries, rehearsalMarkEntries,
+    freeTextEntries,
     measureNumberEntries, fingeringEntries, articulationEntries, tempoMarkingEntries,
     expressionMarkingEntries, chordSymbolEntries, lyricsEntries, pedalMarkEntries, ottavaEntries,
   } = args.collectors;
@@ -1814,6 +1834,27 @@ function drawCollectedSymbolEntries(args: {
     el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
     el.setAttribute('font-size', '12');
     el.setAttribute('font-weight', 'bold');
+    el.setAttribute('pointer-events', 'none');
+    svgRoot.appendChild(el);
+  });
+
+  // ── 自由注釈テキスト（音符に紐づかないテキスト。Issue #421）を一括描画 ──
+  // 発想標語（espressivo 等）と同じイタリックのセリフ体にする（浄書の慣習で、
+  // この種の指示文は発想標語と同じ扱いのため）。既定位置は五線上端の
+  // FREE_TEXT_BASE_OFFSET_Y px 上で、♩=XXX（36px 上）・リハーサルマーク（72px 上）より
+  // 下の帯に入るので、同じ小節に3つ付いても既定のままで重ならない。
+  // 自動衝突回避（#340）の対象にはしない: 利用者が置いた場所に出ることを優先する。
+  freeTextEntries.forEach(({ x, topY, text, scale, offsetX, offsetY }) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    el.textContent = text;
+    el.setAttribute('class', 'vf-free-text');
+    el.setAttribute('x', String(x + offsetX));
+    el.setAttribute('y', String(topY - FREE_TEXT_BASE_OFFSET_Y + offsetY));
+    el.setAttribute('fill', '#111827');
+    el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.expressiveText * scale));
+    el.setAttribute('font-style', 'italic');
+    // 表示専用。譜面のクリック（音符入力・小節選択）を横取りしないようにする
     el.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(el);
   });
@@ -2418,6 +2459,17 @@ export default function PianoSystemCanvas({
     overlayX: number;
     overlayY: number;
     } | null;
+    /** 自由注釈テキスト（Issue #421）。文字・サイズ・位置を1枚のオーバーレイで扱う */
+    freeText: {
+    measureAbsoluteIndex: number;
+    partIndex: number;
+    currentText: string;
+    currentScalePercent: string;
+    currentOffsetX: string;
+    currentOffsetY: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
     rehearsal: {
     measureAbsoluteIndex: number;
     currentValue: string;
@@ -2556,6 +2608,7 @@ export default function PianoSystemCanvas({
       note: selectionSetter('note'), arc: selectionSetter('arc'), hairpin: selectionSetter('hairpin'),
       timeSig: overlaySetter('timeSig'), keySig: overlaySetter('keySig'), clef: overlaySetter('clef'),
       bpm: overlaySetter('bpm'), rehearsal: overlaySetter('rehearsal'), text: overlaySetter('text'),
+      freeText: overlaySetter('freeText'),
       symbolResize: overlaySetter('symbolResize'), symbolOffset: overlaySetter('symbolOffset'),
       symbolPicker: overlaySetter('symbolPicker'),
     };
@@ -2579,6 +2632,8 @@ export default function PianoSystemCanvas({
   const setRehearsalEditState = editorLocalSetters.rehearsal;
   const textEditState = editorLocal.overlay?.kind === 'text' ? editorLocal.overlay.payload : null;
   const setTextEditState = editorLocalSetters.text;
+  const freeTextEditState = editorLocal.overlay?.kind === 'freeText' ? editorLocal.overlay.payload : null;
+  const setFreeTextEditState = editorLocalSetters.freeText;
   const symbolResizeEditState = editorLocal.overlay?.kind === 'symbolResize' ? editorLocal.overlay.payload : null;
   const setSymbolResizeEditState = editorLocalSetters.symbolResize;
   const symbolOffsetEditState = editorLocal.overlay?.kind === 'symbolOffset' ? editorLocal.overlay.payload : null;
@@ -2588,6 +2643,14 @@ export default function PianoSystemCanvas({
 
   const symbolOffsetXInputRef = useRef<HTMLInputElement>(null);
   const symbolOffsetYInputRef = useRef<HTMLInputElement>(null);
+  // 自由注釈オーバーレイ（Issue #421）の入力欄。文字・サイズ・横・縦の4つを
+  // まとめて1回で確定するため、他のオーバーレイのような onBlur 確定にはできない
+  // （入力欄を移るたびに blur が起きて、途中の値で確定してしまうため）。
+  // Enter か「確定」ボタンで、4つの ref から現在値を読んでまとめて反映する。
+  const freeTextInputRef = useRef<HTMLInputElement>(null);
+  const freeTextScaleInputRef = useRef<HTMLInputElement>(null);
+  const freeTextOffsetXInputRef = useRef<HTMLInputElement>(null);
+  const freeTextOffsetYInputRef = useRef<HTMLInputElement>(null);
 
 
   /**
@@ -4105,7 +4168,7 @@ export default function PianoSystemCanvas({
     // （push側・消費側の差分を出さないため。段4c で Pass 関数の入出力になる）。
     const collectors = createRenderCollectors();
     const {
-      dynamicTextEntries, customSymbolEntries, rehearsalMarkEntries, bpmMarkingEntries,
+      dynamicTextEntries, customSymbolEntries, rehearsalMarkEntries, freeTextEntries, bpmMarkingEntries,
       measureNumberEntries, pedalMarkEntries, lyricsEntries, fingeringEntries,
       articulationEntries, tempoMarkingEntries, expressionMarkingEntries,
       chordSymbolEntries, ottavaEntries, noteObstacles, staveTopYByPart,
@@ -4410,6 +4473,17 @@ export default function PianoSystemCanvas({
             x: x / s,
             topY: stave.getYForLine(0),
             mark: sharedMeasure.rehearsalMark,
+          });
+        }
+        // 自由注釈テキスト（Issue #421）は、リハーサルマークと違い**その段自身**の小節データを見る。
+        // 大譜表の左手五線の上にも置けるようにするため（保存も段ごと＝途中クレフ変更と同じ流儀）。
+        const freeTextMeasure = (partsScoreForRender[pi] ?? part.data ?? [])[startMeasureIndex + i];
+        if (freeTextMeasure?.freeText) {
+          const resolved = resolveFreeTextAnnotation(freeTextMeasure.freeText);
+          freeTextEntries.push({
+            x: x / s,
+            topY: stave.getYForLine(0),
+            ...resolved,
           });
         }
         // 途中テンポ変更（♩=XXX）も最上段（pi===0）の上にだけ表示する
@@ -5691,6 +5765,23 @@ export default function PianoSystemCanvas({
                 measureAbsoluteIndex: absI,
                 partIndex: pi,
                 currentValue: currentClef ?? '',
+                ...overlayAt(),
+              });
+              return 'handled';
+            }
+            case 'measureText': {
+              // 自由注釈は「クリックした段（パート）自身」の小節へ保存する（途中クレフ変更と同じ）。
+              // 既に注釈があるときは現在値を入力欄に出す＝同じ操作で編集・削除もできる。
+              const current = partsScoreForRender[pi]?.[absI]?.freeText;
+              const resolved = current ? resolveFreeTextAnnotation(current) : null;
+              setFreeTextEditState({
+                measureAbsoluteIndex: absI,
+                partIndex: pi,
+                currentText: resolved?.text ?? '',
+                // 倍率は入力欄では％で扱う。等倍（1）は空欄にして「既定のまま」と見せる
+                currentScalePercent: resolved && resolved.scale !== 1 ? String(Math.round(resolved.scale * 100)) : '',
+                currentOffsetX: resolved && resolved.offsetX !== 0 ? String(resolved.offsetX) : '',
+                currentOffsetY: resolved && resolved.offsetY !== 0 ? String(resolved.offsetY) : '',
                 ...overlayAt(),
               });
               return 'handled';
@@ -7536,6 +7627,45 @@ export default function PianoSystemCanvas({
     setRehearsalEditState(null);
   }
 
+  /**
+   * 自由注釈テキスト（Issue #421）を確定する。
+   * クリックした段（パート）自身の小節データにだけ保存する。テキストが空なら
+   * フィールドごと削除する＝「空欄で確定＝消す」というリハーサルマークと同じ操作感。
+   */
+  function handleFreeTextConfirm(input: { text: string; scalePercent: string; offsetX: string; offsetY: string }) {
+    if (!freeTextEditState) return;
+    const { measureAbsoluteIndex, partIndex } = freeTextEditState;
+    const freeText = buildFreeTextAnnotation({
+      text: input.text,
+      scale: parseFreeTextScaleInput(input.scalePercent),
+      offsetX: parseFreeTextOffsetInput(input.offsetX),
+      offsetY: parseFreeTextOffsetInput(input.offsetY),
+    });
+    setPartsScore(prev => {
+      const next = [...prev];
+      const partData = (prev[partIndex] ?? []).map(cloneMeasureData);
+      if (measureAbsoluteIndex >= partData.length) return prev;
+      const target = { ...partData[measureAbsoluteIndex], freeText };
+      // undefined を代入するとキーだけ残って JSON に "freeText": null 相当が混ざりうるので、
+      // 消すときは delete でキーごと落とす（旧データと同じ形の JSON を保つため）
+      if (!freeText) delete target.freeText;
+      partData[measureAbsoluteIndex] = target;
+      next[partIndex] = partData;
+      return next;
+    });
+    setFreeTextEditState(null);
+  }
+
+  /** 自由注釈オーバーレイの4つの入力欄から現在値を読んで確定する */
+  function commitFreeTextFromInputs() {
+    handleFreeTextConfirm({
+      text: freeTextInputRef.current?.value ?? '',
+      scalePercent: freeTextScaleInputRef.current?.value ?? '',
+      offsetX: freeTextOffsetXInputRef.current?.value ?? '',
+      offsetY: freeTextOffsetYInputRef.current?.value ?? '',
+    });
+  }
+
   function handleTextConfirm(text: string) {
     if (!textEditState) return;
     const { kind, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex } = textEditState;
@@ -7982,6 +8112,115 @@ export default function PianoSystemCanvas({
               handleRehearsalConfirm(e.target.value);
             }}
           />
+        </div>
+      )}
+      {freeTextEditState && (
+        <div
+          // 対象（パート×小節）が変わったら DOM ごと作り直す。入力欄は非制御
+          // （defaultValue）なので、key が無いと開いたまま別の小節をクリックしたとき
+          // 前の小節の入力値が残り、別の対象へ上書き保存される（#421 Codex round1 P1）
+          key={`free-text-${freeTextEditState.partIndex}-${freeTextEditState.measureAbsoluteIndex}`}
+          style={{
+            position: 'absolute',
+            left: freeTextEditState.overlayX,
+            top: freeTextEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #111827',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '4px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            minWidth: 220,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#111827', fontFamily: 'sans-serif' }}>
+            自由注釈テキスト（空欄で確定すると削除）
+          </span>
+          <input
+            ref={freeTextInputRef}
+            autoFocus
+            type="text"
+            aria-label="自由注釈テキスト"
+            defaultValue={freeTextEditState.currentText}
+            placeholder="例: senza sordini"
+            style={{
+              border: '1px solid #d1d5db',
+              outline: 'none',
+              fontSize: 13,
+              fontFamily: '"Times New Roman", serif',
+              fontStyle: 'italic',
+              width: 210,
+              padding: 2,
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                commitFreeTextFromInputs();
+              } else if (e.key === 'Escape') {
+                setFreeTextEditState(null);
+              }
+              e.stopPropagation();
+            }}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontFamily: 'sans-serif' }}>
+            <span>サイズ</span>
+            <input
+              ref={freeTextScaleInputRef}
+              type="number"
+              aria-label="自由注釈の文字サイズ（％）"
+              min={MIN_FREE_TEXT_SCALE * 100}
+              max={MAX_FREE_TEXT_SCALE * 100}
+              defaultValue={freeTextEditState.currentScalePercent}
+              placeholder="100"
+              style={{ width: 52, fontSize: 12, padding: 2 }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitFreeTextFromInputs();
+                else if (e.key === 'Escape') setFreeTextEditState(null);
+                e.stopPropagation();
+              }}
+            />
+            <span>% 横</span>
+            <input
+              ref={freeTextOffsetXInputRef}
+              type="number"
+              aria-label="自由注釈の横位置（px）"
+              min={-MAX_FREE_TEXT_OFFSET}
+              max={MAX_FREE_TEXT_OFFSET}
+              defaultValue={freeTextEditState.currentOffsetX}
+              placeholder="0"
+              style={{ width: 48, fontSize: 12, padding: 2 }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitFreeTextFromInputs();
+                else if (e.key === 'Escape') setFreeTextEditState(null);
+                e.stopPropagation();
+              }}
+            />
+            <span>縦</span>
+            <input
+              ref={freeTextOffsetYInputRef}
+              type="number"
+              aria-label="自由注釈の縦位置（px）"
+              min={-MAX_FREE_TEXT_OFFSET}
+              max={MAX_FREE_TEXT_OFFSET}
+              defaultValue={freeTextEditState.currentOffsetY}
+              placeholder="0"
+              style={{ width: 48, fontSize: 12, padding: 2 }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitFreeTextFromInputs();
+                else if (e.key === 'Escape') setFreeTextEditState(null);
+                e.stopPropagation();
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => commitFreeTextFromInputs()}
+            style={{ fontSize: 11, fontFamily: 'sans-serif', padding: '2px 6px', alignSelf: 'flex-end' }}
+          >
+            確定
+          </button>
         </div>
       )}
       {textEditState && (
