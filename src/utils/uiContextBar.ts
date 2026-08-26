@@ -111,6 +111,7 @@ export function describeTool(tool: Tool, customSymbolNames?: Record<string, stri
     case 'measureKeySig': return '途中調号変更';
     case 'measureClef': return '途中音部記号変更';
     case 'measureRehearsal': return 'リハーサルマーク';
+    case 'measureText': return '自由注釈テキスト';
     case 'graceNote': return '前打音';
     case 'ornament': return ornamentLabel(tool.ornamentType);
     case 'pedal': return tool.pedalType === 'down' ? 'ペダル（Ped）' : 'ペダル解除（✱）';
