@@ -99,6 +99,23 @@ describe('オッターバの見た目（2026-08-26 実機所感）', () => {
     expect(parseFloat(dash!.getAttribute('y1')!)).toBe(y - 3);
   });
 
+  // 実機報告 2026-08-26: 上へ手動移動した pp（offsetY -95）にブラケットが重なった。
+  // 音符だけでなく、強弱記号の確定位置も障害物として避ける
+  it('上へ移動した強弱記号があると、その上へ逃げる', () => {
+    const measures: MeasureData[] = [{
+      events: [
+        { dur: '4', isRest: false, keys: ['a/4'], ottava: '8va',
+          dynamics: [{ value: 'pp' }],
+          symbolAdjust: { dynamics: { offsetX: 0, offsetY: -95 } } },
+        { dur: '4', isRest: false, keys: ['g/4'], ottava: '8vaEnd' },
+        { dur: '2', isRest: true, keys: ['b/4'] },
+      ],
+    }];
+    const { label, staveTopY } = renderSingle(measures);
+    // 音符は五線内（回避の理由にならない）なのに、既定位置より上へ動いている
+    expect(parseFloat(label.getAttribute('y')!)).toBeLessThan(staveTopY - OTTAVA_STAFF_GAP_PX);
+  });
+
   // #373 の手動優先: 手で動かした位置は自動回避で上書きしない
   it('手動で offsetY を設定した弧は自動回避しない', () => {
     const measures: MeasureData[] = [{

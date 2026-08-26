@@ -1692,7 +1692,19 @@ function drawCollectedSymbolEntries(args: {
       indices.forEach((index, k) => { dynamicCollisionShifts[index] = shifts[k]; });
     }
   }
-  dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }, dynamicEntryIndex) => {
+  // オッターバの回避用に、強弱の確定位置（手動調整＋押し出し込み）を障害物として控える。
+  // 上へ手動移動した pp にブラケットが重なる実例（2026-08-26）。noteObstacles と同じ形
+  const dynamicObstacles: Array<{ partIndex: number } & CollisionRect> = [];
+  dynamicTextEntries.forEach(({ anchorX, baseY, markings, adjust, obstaclePartIndex, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }, dynamicEntryIndex) => {
+    dynamicObstacles.push({
+      partIndex: obstaclePartIndex,
+      ...estimateDynamicMarkingsCollisionRect(
+        markings,
+        adjust.scale,
+        anchorX + adjust.offsetX,
+        baseY + adjust.offsetY + dynamicCollisionShifts[dynamicEntryIndex],
+      ),
+    });
     // 行割り（絶対強弱→cresc/dim）は衝突概算と共有する（orderedDynamicMarkings）
     const orderedMarkings = orderedDynamicMarkings(markings);
     const drawnElements: SVGGraphicsElement[] = [];
@@ -2110,7 +2122,8 @@ function drawCollectedSymbolEntries(args: {
     // 手動調整済み（offsetY≠0）は自動で動かさない（#373 の手動優先原則）
     let avoidedLineY = lineY;
     if (adjust.offsetY === 0 && partIndex !== undefined) {
-      const spanObstacles = noteObstacles.filter((o) =>
+      // 音符に加え、強弱記号（上へ移動済みの pp 等）も避ける
+      const spanObstacles = [...noteObstacles, ...dynamicObstacles].filter((o) =>
         o.partIndex === partIndex && o.x + o.w >= Math.min(ax, aex) && o.x <= Math.max(ax, aex));
       if (spanObstacles.length > 0) {
         if (kind === '8va') {
