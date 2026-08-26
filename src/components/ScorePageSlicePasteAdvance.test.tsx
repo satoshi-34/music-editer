@@ -84,7 +84,7 @@ function activeNoteXs(svg: SVGSVGElement): number[] {
     .sort((a, b) => a - b);
 }
 
-/** 単旋律・50小節。48小節目（index 47）にだけ4分音符4つ、他は空。
+/** 単旋律・50小節。1小節目（コピー元）と48小節目（index 47）に4分音符4つ、他は空。
  *  レイアウトの枠（既定12段×4小節=48）を超える小節への前進を実経路で見るための種
  *  （#418 Codex round1 P2: 枠を上限にすると48小節目の末で前進が止まる） */
 function seedLongWork() {
@@ -198,7 +198,7 @@ describe('ScorePage: スライス貼り付け後は選択が前進し、Cmd/Ctrl
 
   // #418 Codex round2 P3: 前進上限の配線（実データの小節数）を実経路で固定する。
   // 旧実装（totalSystems×measuresPerSystem=48 を上限）に戻すと、48小節目の末で
-  // 前進が止まり、3打目が同じ場所への上書きになってこのテストが落ちる
+  // 前進が止まり、5打目が同じ場所への上書きになってこのテストが落ちる
   it('レイアウトの枠（48小節）を超える49小節目へも前進して貼れる', async () => {
     seedLongWork();
     render(<ScorePage />);
