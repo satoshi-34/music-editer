@@ -609,3 +609,30 @@ describe('resolveDefaultLayoutForScoreType（楽譜種別ごとの音符サイ�
     expect(SYSTEM_ROW_GAP_MIN_PX).toBeLessThan(resolveDefaultLayoutForScoreType('piano').systemRowGapPx);
   });
 });
+
+describe('ダブルシャープ・ダブルフラットの描画（Issue #423）', () => {
+  const plain: MeasureData = {
+    events: [
+      { dur: '4', isRest: false, keys: ['c/4'] },
+      { dur: '4', isRest: false, keys: ['d/4'] },
+      { dur: '2', isRest: false, keys: ['e/4'] },
+    ],
+  };
+  const doubled: MeasureData = {
+    events: [
+      { dur: '4', isRest: false, keys: ['c##/4'] },
+      { dur: '4', isRest: false, keys: ['dbb/4'] },
+      { dur: '2', isRest: false, keys: ['e/4'] },
+    ],
+  };
+
+  it('VexFlow が 𝄪 / 𝄫 を受け付け、記号ぶんだけ小節が広くなる', () => {
+    // この関数は VexFlow が例外を投げると undefined を返す。
+    // つまり「値が返ってくる」こと自体が、Accidental('##'/'bb') を描けている証拠になる。
+    const plainWidth = vexFlowCombinedMeasureMinimumContentWidth([plain], [4, 4]);
+    const doubledWidth = vexFlowCombinedMeasureMinimumContentWidth([doubled], [4, 4]);
+    expect(plainWidth).toBeDefined();
+    expect(doubledWidth).toBeDefined();
+    expect(doubledWidth as number).toBeGreaterThan(plainWidth as number);
+  });
+});

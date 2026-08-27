@@ -5939,7 +5939,10 @@ export default function PianoSystemCanvas({
                 x: lx,
                 bounds: firstStaveKeySignatureHitBounds,
               });
-              onKeySignatureChange?.(nextKey, pi);
+              // 調号が変わらないときは通知しない（Issue #423。理由は上の同じ判定を参照）
+              if (nextKey !== baseKey) {
+                onKeySignatureChange?.(nextKey, pi);
+              }
             }
             // 調号領域以外の背景クリックでは、音符を新規挿入しない。
             return;
@@ -6487,7 +6490,12 @@ export default function PianoSystemCanvas({
                       x: lx,
                       bounds: firstStaveKeySignatureHitBounds,
                     });
-                    onKeySignatureChange?.(nextKey, hitPi);
+                    // 調号が変わらないときは通知しない（Issue #423）。
+                    // 𝄪・𝄫 は調号には存在しないため必ず同じ調号が返り、
+                    // そのまま通知すると「何も変わらない取り消し操作」が履歴に積まれてしまう。
+                    if (nextKey !== baseKey) {
+                      onKeySignatureChange?.(nextKey, hitPi);
+                    }
                   }
                   // 調号領域の外は従来から無反応でクリックを消費する（挙動ゼロ差のため
                   // 通知は足さない。喋るべきかは #318 系の別Issueで扱う）
@@ -6715,7 +6723,7 @@ export default function PianoSystemCanvas({
                   // 前打音のデフォルト音高は主音符の1音上（stepUp 関数は StaffCanvas と同じロジック）
                   const graceKey=targetEv.keys[0]??'b/4';
                   const noteNames=['c','d','e','f','g','a','b'];
-                  const m=graceKey.match(/^([a-g])[#b]?\/(\d+)$/i);
+                  const m=graceKey.match(/^([a-g])(?:##|bb|[#b])?\/(\d+)$/i);
                   const nextKey=m
                     ? (()=>{
                         const idx=noteNames.indexOf(m[1].toLowerCase());

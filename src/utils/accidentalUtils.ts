@@ -8,7 +8,7 @@
 // AccidentalEditableEvent をジェネリクスの制約として使い、
 // 呼び出し側の具体的な NoteEvent 型をそのまま維持できるようにしている。
 
-import { setKeyAccidental, type MicrotoneType } from './noteKeyUtils';
+import { setKeyAccidental, type AccidentalToolKind, type MicrotoneType } from './noteKeyUtils';
 
 /** applyAccidentalToEvent / applyMicrotoneToEvent が読み書きする最小限のフィールド */
 export interface AccidentalEditableEvent {
@@ -18,14 +18,14 @@ export interface AccidentalEditableEvent {
 }
 
 /**
- * 通常の臨時記号（♯/♭/♮）を音符に適用する。
+ * 通常の臨時記号（♯/♭/♮/𝄪/𝄫）を音符に適用する。
  * keyIndex を指定すると和音中の1音だけを対象にし、省略時は全音に適用する。
  * ♯/♭/♮ と微分音は同じ keyIndex に同時には付けない（排他）ため、
  * 対象 keyIndex に付いていた微分音は取り除く。
  */
 export function applyAccidentalToEvent<T extends AccidentalEditableEvent>(
   ev: T,
-  accidental: 'sharp' | 'flat' | 'natural',
+  accidental: AccidentalToolKind,
   keyIndex?: number
 ): T {
   if (ev.isRest) {

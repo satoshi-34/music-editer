@@ -1361,6 +1361,41 @@ describe('Storage Foundation Tests', () => {
       expect('renderStaff' in events[2]).toBe(false);
     });
 
+    it('ダブルシャープ・ダブルフラットと descresc. は保存・読込で保持される（Issue #423）', () => {
+      const testData = createSavedScoreData(
+        {
+          title: 'Double Accidental Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [
+              { dur: '4', isRest: false, keys: ['f##/4'], dynamics: [{ value: 'descresc' }] },
+              { dur: '4', isRest: false, keys: ['ebb/4'] },
+              { dur: '2', isRest: false, keys: ['c/4'] },
+            ]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const saveResult = saveScoreData(testData);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      const events = loadResult.data?.parts[0].measures[0].events ?? [];
+      expect(events[0].keys).toEqual(['f##/4']);
+      expect(events[0].dynamics).toEqual([{ value: 'descresc' }]);
+      expect(events[1].keys).toEqual(['ebb/4']);
+    });
+
     it('renderStaff に不正な値を含むデータは保存時に拒否する（Issue #309）', () => {
       const invalidData = createSavedScoreData(
         {

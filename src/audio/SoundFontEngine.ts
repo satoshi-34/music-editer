@@ -6,6 +6,7 @@ import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS, getMasterVolumeGain } from './
 import { InstrumentType } from './SoundSource';
 import { getDurationBeats, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { applySwingToTiming } from '../utils/swingUtils';
+import { respellDoubleAccidentalKey } from '../utils/noteMidiUtils';
 
 type SoundFontModule = typeof import('soundfont-player');
 
@@ -406,7 +407,11 @@ export class SoundFontEngine implements PlaybackEngine {
     return beats * (60 / bpm);
   }
 
-  private normalizeNoteFormat(note: string): string {
+  private normalizeNoteFormat(rawNote: string): string {
+    // ダブルシャープ・ダブルフラットは、この下の音名テーブル／サンプル名に無いため、
+    // 同じ高さの通常表記（例: c##/4 → d/4）へ先に読み替える。
+    // 半音の計算は譜面側と同じ noteMidiUtils に任せ、鳴る高さがずれないようにする。
+    const note = respellDoubleAccidentalKey(rawNote);
     if (/^[A-G][#b]?\d+$/.test(note)) {
       return note;
     }

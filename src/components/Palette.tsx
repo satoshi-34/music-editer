@@ -16,6 +16,7 @@ import type { EndingNumber, RepeatMarkerKind } from '../utils/repeatMarkerUtils'
 import type { ArticulationType, CustomSymbolDef, DynamicMarkingValue, OrnamentType } from '../types/storage';
 import { articulationLabel } from '../utils/articulationUtils';
 import { ornamentLabel } from '../utils/ornamentUtils';
+import { isRelativeDynamicMarkingValue } from '../utils/dynamicMarkingUtils';
 import { symbolDefToPreviewSvg } from '../utils/customSymbolUtils';
 import { type TextElementKind, textElementLabel } from '../utils/textElementUtils';
 import { TUPLET_KINDS, type TupletKind } from '../utils/tupletUtils';
@@ -125,6 +126,9 @@ const ACCIDENTAL_TOOLS: AccidentalTool[] = [
   { mode: 'accidental', accidental: 'sharp' },
   { mode: 'accidental', accidental: 'flat' },
   { mode: 'accidental', accidental: 'natural' },
+  // ダブルシャープ・ダブルフラット（全音の上げ下げ）。嬰ト短調など♯の多い調で使う
+  { mode: 'accidental', accidental: 'doubleSharp' },
+  { mode: 'accidental', accidental: 'doubleFlat' },
 ];
 const MICROTONE_TOOLS: MicrotoneTool[] = [
   { mode: 'microtone', type: 'quarterSharp' },
@@ -147,6 +151,8 @@ const DYNAMIC_TOOLS: DynamicTool[] = [
   { mode: 'dynamic', dynamic: 'ff' },
   { mode: 'dynamic', dynamic: 'cresc' },
   { mode: 'dynamic', dynamic: 'dim' },
+  // descresc. は dim. と同じ意味の別表記（実譜で使われるため表記として選べるようにする）
+  { mode: 'dynamic', dynamic: 'descresc' },
 ];
 const ARTICULATION_TOOLS: ArticulationTool[] = [
   { mode: 'articulation', articulation: 'staccato' },
@@ -577,7 +583,7 @@ export default function Palette({
               aria-label={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
               style={btnStyle(active, {
                 minWidth: BUTTON_W,
-                fontSize: tool.dynamic === 'cresc' || tool.dynamic === 'dim' ? 10 : 15,
+                fontSize: isRelativeDynamicMarkingValue(tool.dynamic) ? 10 : 15,
                 fontFamily: '"Times New Roman", serif',
                 fontStyle: 'italic',
                 padding: '0 4px',

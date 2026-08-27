@@ -145,3 +145,59 @@ VexFlow 5 では `StaveNote.addModifier()` の引数順が `addModifier(modifier
 - `PianoSystemCanvas` はパートごとに `prevMeasureStatePerPart[]` で管理し、
   主旋律（voice 0）にのみ courtesy を適用する（追加声部はノイズになりやすいため除外）
 - システム（SVG）境界をまたいだ courtesy は現状未対応（次の拡張余地）
+
+## 追記: ダブルシャープ（𝄪）・ダブルフラット（𝄫）（Issue #423, 2026-08-27）
+
+### 問題
+
+嬰ト短調など♯の多い調ではダブルシャープが頻出するが、臨時記号は ♯/♭/♮ と四分音のみで、
+`keys` の解析（`NOTE_KEY_PATTERN`）が1文字の `#`/`b` しか受け付けなかった。
+そのため `c##/4` のような綴りは保存バリデーションで弾かれ、描画・再生・移調でも扱えなかった。
+
+### 修正設計
+
+**四分音（microtones）と違い、独立フィールドは追加しない。** 四分音は「半音とは独立した ±50 セント補正」
+という性質のため `NoteEvent.microtones` に分けたが、ダブルシャープ・ダブルフラットは
+**音高そのもの（半音±2）** なので、既存の ♯/♭ と同じく `keys` 文字列に埋め込むのが自然で、
+移調・MIDI 変換・MusicXML の alter がそのまま通る。
+
+- `KeyAccidental` を `'' | '#' | 'b' | '##' | 'bb'` へ、`DisplayAccidental` に `'##' | 'bb'` を追加
+- `AccidentalToolKind` に `'doubleSharp' | 'doubleFlat'` を追加（パレットのボタンもこの一覧から生成される）
+- `NOTE_KEY_PATTERN` を `/^([a-gA-G])(##|bb|[#b])?(?:\/)?([0-9]+)$/` に変更。
+  **2文字の候補を先に並べる**のが要点で、逆順だと `c##/4` の2つ目の `#` が余って解析に失敗する。
+  なお `bb/3` は従来どおり「シのフラット」であり、「シのダブルフラット」は `bbb/3` になる
+- 半音差の計算は `keyAccidentalSemitoneOffset()` に一本化し、
+  `transposeKeyBySemitones`（noteKeyUtils）・`transposeKey`（transposeUtils）・`keyToMidi`（noteMidiUtils）
+  の3か所が同じ関数を呼ぶようにした（同じ表を3枚持つと、記号が増えたとき片方だけ直し忘れる）
+- 表示判定（`resolveDisplayAccidental`）は既存の状態機械をそのまま使う。
+  `accidentalStateKey` は「音名+オクターブ」なので、`f##/4` → `f/4` の変化ではナチュラルが自動で出る。
+  小節線をまたぐ courtesy accidental も既存規則のまま動く
+- 描画は `new Accidental('##' | 'bb')`。VexFlow 5 の accidentals マップに標準で入っており、
+  追加のグリフ指定は不要（`measureLayoutUtils` の計測経路・`PianoSystemCanvas` の本描画で共用）
+- 調号（`shiftKeySignatureByAccidental`）には 𝄪/𝄫 が存在しないため、行頭クリックでは調号を変えない。
+  あわせて「調号が変わらないときは `onKeySignatureChange` を呼ばない」ガードを入れ、
+  何も変わらない操作が取り消し履歴に積まれないようにした
+- 再生は音名テーブル／SoundFont のサンプル名が1文字の #/b しか持たないため、
+  `respellDoubleAccidentalKey()`（noteMidiUtils）で鳴らす直前に同じ高さの通常表記へ読み替える
+  （例: `c##/4` → `d/4`）。半音計算は `keyToMidi`/`midiToKey` に任せるので、譜面側とずれない
+- MusicXML は書出（`alter` ±2）・読込（`alter` ±2 → `##`/`bb`）とも既に対応済みだったため変更なし。
+  往復テスト（`musicXmlDoubleAccidental.test.ts`）で綴りが保存されることを固定した
+
+### 影響範囲
+
+| ファイル | 変更内容 |
+|---|---|
+| `src/utils/noteKeyUtils.ts` | 型・解析パターン・`setKeyAccidental`・`keyAccidentalSemitoneOffset` 追加・調号シフトの除外 |
+| `src/utils/noteMidiUtils.ts` | `keyToMidi` の2文字対応、`respellDoubleAccidentalKey` 追加 |
+| `src/utils/transposeUtils.ts` | 半音差を共有関数へ差し替え |
+| `src/utils/accidentalUtils.ts` | `applyAccidentalToEvent` の引数を `AccidentalToolKind` へ拡張（四分音との排他は据え置き） |
+| `src/components/clefUtils.ts` | 音高キー→五線位置の解析を2文字対応（これが無いと 𝄪 付きの音が既定位置に落ちる） |
+| `src/components/PianoSystemCanvas.tsx` | 前打音キーの解析を2文字対応、調号無変化時の通知抑止 |
+| `src/components/Palette.tsx` / `src/utils/editorContextLabels.ts` | ボタン追加とラベル（ボタン表記は `×` / `♭♭`。𝄪/𝄫 はフォントが無い環境で豆腐になるため、四分音ボタンと同じ方針） |
+| `src/audio/SimpleAudioEngine.ts` / `src/audio/SoundFontEngine.ts` | 鳴らす直前の読み替え |
+
+### 除外項目
+
+- 3/4音（3 quarter tones）は従来どおりスコープ外
+- `measureLayoutUtils` の幅見積り（`/^[a-g][#b]/` の本数カウント）は 𝄪 も1個として数える。
+  ダブル記号は実グリフが少し広いが、既存の安全マージンの範囲内として今回は変更していない
