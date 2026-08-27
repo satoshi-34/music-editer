@@ -157,3 +157,79 @@
    `clef` prop（固定値）を使う。これは調号変更機能が矢印キー操作時に `keySignatureRef.current`
    （グローバル調号）を使い、小節ごとの実効調号を解決していないのと同じ既存の設計方針を踏襲した
    もので、範囲外とした。
+
+---
+
+# 小節途中での音部記号変更（mid-measure clef change / Issue #424 段1）
+
+## 背景
+
+上記の実装は「小節単位」（`MeasureData.clef`）までで、小節の**途中**でクレフが変わる譜面
+（例: 月光第1楽章37小節。右手が小節の途中でト音→ヘ音記号へ切り替わる）は表現できなかった。
+⇵（段またぎ表示）で近い見た目は作れるが、1音ずつの指定なので長いパッセージに耐えない。
+
+## データ設計
+
+- `NoteEvent.clefChange?: ClefType`（`src/types/storage.ts`）を追加した。
+  意味は「**このイベントの直前に小型クレフを置き、このイベントから有効**」。
+  次の変更（イベント単位 or 次の小節の `MeasureData.clef`）まで持続し、実譜の慣習どおり
+  **小節をまたいでも持続する**。
+- 元に戻すときはプロパティごと削除する（`renderStaff` と同じ約束。保存内容が増えない）。
+- v1 では**主声部（`MeasureData.events`）のイベントに付いたものだけ**を有効とする。
+  追加声部にも付けられるようにすると、同じ時刻に別々のクレフを主張できてしまうため。
+- バリデーションは `validateNoteEvent`（`src/utils/storage.ts`）で小節単位の clef と同じ
+  `isValidClefType` を使う。未知の値を含む保存データは無効として読み込みを拒否する。
+
+## 解決関数（`src/utils/clefMeasureUtils.ts`）
+
+- `resolveMeasureClef(measures, index, partClef)` を拡張し、**前の小節の末尾時点の実効クレフ**を
+  引き継ぐようにした（`index` より前の小節については、その小節のイベントの `clefChange` も
+  適用してから次へ進む）。対象小節自身の途中変更は「先頭時点」の値には含めない。
+  途中変更を含まないデータでの戻り値は従来と完全に同じ（リグレッション防止）。
+- `resolveEventClef(measures, measureIndex, eventIndex, partClef)` を新設した。
+  「その音符の時点で有効なクレフ」を返す。`clefChange` は**そのイベント自身から**有効なので、
+  `eventIndex` のイベントが持つ変更も含めて解決する。
+- `resolveEventClefsInMeasure(events, clefAtMeasureStart)`: 1小節ぶんのイベント別実効クレフを
+  1回の走査でまとめて返す（描画側が音符ごとに小節を走査し直さないため）。
+- `collectMidMeasureClefChanges(events)` / `resolveClefAtBeat(...)`: 「何拍目からどのクレフか」の
+  一覧と、拍位置での解決。**追加声部（声部2）はイベント数もリズムも主声部と違い、添字では
+  対応が取れない**ため、同じ小節の中で声部ごとにクレフがねじれないよう拍位置でそろえる。
+- `hasMidMeasureClefChange(events)`: 途中変更の有無の安い判定。
+
+## 描画（`src/components/PianoSystemCanvas.tsx`）
+
+- `buildPartVoicesForMeasure` で、小節先頭のクレフ（`clefHere`）に加えて
+  **イベント別の実効クレフ**（`primaryEventClefs` / 追加声部は拍位置解決）を用意し、
+  `sanitizeRenderEvent`・`makeVFNote`・休符位置（`standardRestDisplayKey` /
+  `restKeyForVoice`）のすべてを音符ごとのクレフで解決するようにした。
+- 小型クレフは VexFlow の `ClefNote`（音価を持たない tickable）を
+  **その音符の直前**に差し込んで描く。`voice.addTickables` へ渡す配列にだけ混ぜ、
+  `vfNotes` 配列には入れない。ビーム・連符・選択ハイライトはすべて
+  「音符の並び＝保存データのイベントの並び」を添字で対応づけているため、
+  ここに1件でも混ぜるとその対応が全部ずれる（この設計判断は変えないこと）。
+- 小型クレフは主声部にだけ置く。追加声部にも置くと同じ位置に声部の数だけ重なる。
+- 拍を埋める表示専用の休符（padding rest）は小節末尾に付くので、末尾時点のクレフで位置を決める。
+
+## キーボード操作の既存バグ修正
+
+キーボードハンドラの音高換算が `partsClefRef`（パートの既定クレフ）決め打ちで、
+**小節単位のクレフ変更すら見ていなかった**。↑↓の相対移動は同じ誤ったクレフで往復変換するため
+結果的に無事だったが、休符位置のリセット（0 キー → `standardRestDisplayKey`）はクレフ変更後の
+小節でずれていた。`resolveEventClef` へ寄せて修正した。
+
+## 影響範囲
+
+- `src/types/storage.ts`: `NoteEvent.clefChange` 追加
+- `src/utils/storage.ts`: `validateNoteEvent` に `clefChange` の検証を追加
+- `src/utils/clefMeasureUtils.ts`: `resolveMeasureClef` 拡張、`resolveEventClef` ほか新設
+- `src/components/PianoSystemCanvas.tsx`: イベント別クレフでの描画、小型クレフの挿入、
+  キーボード操作のクレフ解決
+
+## この段で入れていないもの（段1の残り・段2）
+
+- **入力UI**: 演奏記号タブの「音部記号の変更」ツールを音符クリックへ拡張する部分
+  （現状は保存データ（JSON）に `clefChange` があれば描画・編集できるところまで）
+- **クリック入力の音高換算**: 空白クリックの音高決定を「クリック位置直前のイベントの
+  実効クレフ」にする部分（現状は小節先頭のクレフを使う）
+- **MusicXML 書き出し**: 小節途中への `<attributes><clef>` 出力（現状は小節単位のみ）
+- **段2**: MusicXML 読み込み（#419 合流後）・⇵共存の断り通知・パート譜表示の追随確認

@@ -7,7 +7,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Renderer, Stave, StaveNote, Voice, Formatter,
   Barline, Beam, Accidental, StaveConnector, GhostNote, VoltaType, Dot,
-  GraceNote, GraceNoteGroup, Ornament,
+  GraceNote, GraceNoteGroup, Ornament, ClefNote,
 } from 'vexflow';
 import type { Tool } from './Palette';
 // NoteEvent はこのファイル内で編集頻度の高いプロパティだけを抜粋した同名の型を独自定義している。
@@ -98,7 +98,13 @@ import {
 import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accidentalUtils';
 import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
-import { resolveMeasureClef } from '../utils/clefMeasureUtils';
+import {
+  resolveMeasureClef,
+  resolveEventClef,
+  resolveEventClefsInMeasure,
+  collectMidMeasureClefChanges,
+  resolveClefAtBeat,
+} from '../utils/clefMeasureUtils';
 import { logEditOp, logRenderPass } from '../utils/editDebugLog';
 import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt, asRenderedPartIndex, type RenderedPartIndex } from '../utils/crossStaffUtils';
 import { generateCrossStaffBeams, restoreCrossStaffBeamAssignments } from '../utils/crossStaffBeamUtils';
@@ -144,7 +150,7 @@ import {
   widenThinBarlineRect,
   markThickBarlineRect,
 } from '../utils/engravingDefaults';
-import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildBeatColumns, planLeadingRestFillBeats, type BeatColumn } from '../utils/beatColumnUtils';
 import { sliceBoundaryCandidates, snapToSliceBoundary } from '../utils/beatSliceUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
@@ -211,7 +217,7 @@ import {
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
-type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number; hideNumber?: boolean }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; lyrics?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[]; renderStaff?: 'below' | 'above'; articulations?: ArticulationMarking[]; tempoMarking?: string; expressionMarking?: string; chordSymbol?: string };
+type NoteEvent = { dur: DurKey; isRest: boolean; keys: string[]; tiedToNext?: boolean; arcs?: TieArc[]; hairpins?: HairpinMark[]; dynamics?: DynamicMarking[]; pedalMark?: 'down' | 'up'; ottava?: '8va' | '8vb' | '8vaEnd' | '8vbEnd'; dots?: 1 | 2; tuplet?: { id: string; numNotes: number; notesOccupied: number; hideNumber?: boolean }; customSymbols?: { symbolId: string; scale?: number; offsetX?: number; offsetY?: number }[]; fingering?: string; lyrics?: string; symbolAdjust?: Partial<Record<AdjustableSymbolKind, { scale?: number; offsetX?: number; offsetY?: number }>>; microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[]; renderStaff?: 'below' | 'above'; clefChange?: ClefType; articulations?: ArticulationMarking[]; tempoMarking?: string; expressionMarking?: string; chordSymbol?: string };
 type RenderNoteEvent = NoteEvent & { __isPlaceholder?: boolean };
 // 1声部ぶんの VexFlow 描画データ（音符・ビーム・タイミング管理オブジェクト）。
 // 右手/左手など複数パートの Formatter を1回にまとめるためのキャッシュ型として使う
@@ -1028,8 +1034,15 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
     const data=absI<score.length?score[absI]:undefined;
     // 主声部の読みは正規 read（#244 段5-3）。不変条件により従来の data.events と同値
     const primaryEvents = getPrimaryVoiceEvents(data);
+    // 小節の途中でのクレフ変更（Issue #424）。主声部のイベントに付いた clefChange を
+    // 「そのイベント以降で有効なクレフ」に展開しておく。変更が無い小節では
+    // すべて clefHere と同じ値になるので、従来の描画から 1px も変わらない。
+    const primaryEventClefs = resolveEventClefsInMeasure(primaryEvents, clefHere);
+    // 追加声部（声部2など）はイベント数もリズムも主声部と違うため、インデックスでは
+    // 対応が取れない。同じ小節で声部ごとにクレフがねじれないよう拍位置でそろえる。
+    const midMeasureClefChanges = collectMidMeasureClefChanges(primaryEvents);
     const safeEvs:RenderNoteEvent[]=(primaryEvents.length?primaryEvents:[{dur:'1',isRest:true,keys:[defaultRestDisplayKeyForDuration(clefHere, '1')],__isPlaceholder:true}])
-      .map(ev=>sanitizeRenderEvent(ev, clefHere));
+      .map((ev,idx)=>sanitizeRenderEvent(ev, primaryEventClefs[idx] ?? clefHere));
     // 臨時記号の効力は小節単位なので、パートごとの各小節で状態を作り直す。
     // 移調楽器の記譜音表示などでパート固有の調号がある場合は、
     // そちらを基準に「調号で既に変化している音」を判定する。
@@ -1054,11 +1067,35 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
     const isMultiVoiceMeasure = measureVoices.length > 1;
     const renderedVoiceEntries = measureVoices
       .map((measureVoice, voiceIndex) => {
+        // 追加声部の音符も「その拍位置で有効なクレフ」で描く（Issue #424）。
+        // 主声部の途中クレフ変更を無視すると、同じ小節の中で声部ごとに別のクレフの
+        // 高さで描かれてしまう。
+        const voiceEventClefs: ClefType[] = voiceIndex === 0
+          ? primaryEventClefs
+          : (() => {
+              if (midMeasureClefChanges.length === 0) return [];
+              let beat = 0;
+              return measureVoice.events.map((ev) => {
+                const clefAtThisBeat = resolveClefAtBeat(clefHere, midMeasureClefChanges, beat);
+                beat += getEventDurationBeats(ev as StoredNoteEvent);
+                return clefAtThisBeat;
+              });
+            })();
         const rawSourceEvents: RenderNoteEvent[] = voiceIndex === 0
           ? safeEvs
           : (measureVoice.events.length > 0
-              ? measureVoice.events.map(ev => sanitizeRenderEvent(ev, clefHere))
+              ? measureVoice.events.map((ev, idx) => sanitizeRenderEvent(ev, voiceEventClefs[idx] ?? clefHere))
               : []);
+        /**
+         * この声部の idx 番目の音符を描くときのクレフ。
+         * 途中クレフ変更が無い小節では常に clefHere を返す（従来と同じ）。
+         * 末尾に補完される表示専用の休符（padding rest）は、小節末尾時点のクレフに従う。
+         */
+        const clefForVoiceEvent = (idx: number): ClefType => (
+          voiceEventClefs[idx]
+          ?? voiceEventClefs[voiceEventClefs.length - 1]
+          ?? clefHere
+        );
 
         // ある声部の音価合計が拍子ぶんに満たないときは、表示用に末尾へ休符を補完する
         // （保存データ＝measure.events/voices は一切書き換えない、見た目だけの補完）。
@@ -1072,8 +1109,10 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         // 追加分0件を返し、何も変わらない（リグレッション防止）。
         // 2声部共存時は従来通り声部ごとの上下振り分け位置を使い、
         // 単声部小節だけ音価に応じた標準浄書位置（全休符/2分休符以下）を使う。
+        // 拍を埋める表示専用の休符は小節の末尾に付くので、末尾時点のクレフで位置を決める。
+        const clefAtVoiceEnd = clefForVoiceEvent(rawSourceEvents.length);
         const restKeyForPaddingDuration = (duration: NoteEvent['dur']) =>
-          standardRestDisplayKey(clefHere, duration, voiceIndex, measureVoices.length);
+          standardRestDisplayKey(clefAtVoiceEnd, duration, voiceIndex, measureVoices.length);
         const paddingRests: RenderNoteEvent[] = computeVoiceDisplayPadding(rawSourceEvents, beatsPerMeasure, restKeyForPaddingDuration)
           .map(rest => ({ ...sanitizeRenderEvent(rest, clefHere), __isPlaceholder: true }));
         let sourceEvents: RenderNoteEvent[] = rawSourceEvents;
@@ -1102,9 +1141,11 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
 
         // 2声部共存時のみ、休符の描画位置を声部1=やや上/声部2=やや下にずらす。
         // 単声部小節では undefined を渡し、音価に応じた既定位置（makeVFNote 内）を使う。
-        const restKeyOverride = isMultiVoiceMeasure
-          ? restKeyForVoice(clefHere, voiceIndex, measureVoices.length)
-          : undefined;
+        const restKeyOverrideForIndex = (idx: number) => (
+          isMultiVoiceMeasure
+            ? restKeyForVoice(clefForVoiceEvent(idx), voiceIndex, measureVoices.length)
+            : undefined
+        );
 
         const vfNotes = sourceEvents.map((ev, idx) => {
           const renderAsGhostRest = shouldRenderGhostRest(sourceEvents, idx, voiceIndex);
@@ -1113,7 +1154,7 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
           const n=makeVFNote(
             ev,
             accidentalState,
-            isCrossStaffNote ? clefForRenderPart(renderPartIndexes[idx]) : clefHere,
+            isCrossStaffNote ? clefForRenderPart(renderPartIndexes[idx]) : clefForVoiceEvent(idx),
             // 多声部小節の「声部1=上向き固定」は自分の五線にいる音符のための規則なので、
             // 隣の五線へ載せた音符には当てず VexFlow の自動判定に任せる（設計メモ §4-1）。
             isCrossStaffNote ? undefined : measureVoice.stemDirection,
@@ -1121,7 +1162,7 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
             // courtesy accidental は主旋律（voice 0）だけに適用する。
             // 追加声部は拍合わせ用の音符が多く、courtesy が邪魔になりやすい。
             voiceIndex === 0 ? thisPrevMeasState : undefined,
-            restKeyOverride
+            restKeyOverrideForIndex(idx)
           ) as any;
           // 選択中の声部（selected.voiceIndex、未指定時は 0 扱い）と一致する音符だけハイライトする。
           // こうしないと声部2を選択したときに声部1の同じインデックスも一緒に青くなってしまう。
@@ -1236,7 +1277,32 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
           }
         } as any);
         voice.setMode((Voice as any).Mode.SOFT??1);
-        voice.addTickables(vfNotes);
+        // 小節の途中でクレフが変わる音符の**直前**に、小型のクレフを差し込む（Issue #424）。
+        // VexFlow の ClefNote は音価を持たない tickable なので、拍の合計は変わらない。
+        // vfNotes 側の配列には入れない: ビーム・連符・選択ハイライトはすべて
+        // 「音符の並び＝保存データのイベントの並び」を前提に添字で対応づけているため、
+        // ここに1件でも混ぜるとその対応が全部ずれる。
+        // 小型クレフは主声部（voiceIndex === 0）にだけ置く。追加声部にも置くと、
+        // 同じ位置に同じクレフが声部の数だけ重なって描かれてしまう。
+        const midMeasureClefTickables = voiceIndex === 0 && midMeasureClefChanges.length > 0
+          ? sourceEvents.map((ev, idx) => (
+              ev.clefChange ? { idx, clef: ev.clefChange } : null
+            )).filter((entry): entry is { idx: number; clef: ClefType } => entry !== null)
+          : [];
+        if (midMeasureClefTickables.length > 0) {
+          const tickables: (StaveNote | ClefNote)[] = [];
+          const clefByIndex = new Map(midMeasureClefTickables.map((entry) => [entry.idx, entry.clef]));
+          vfNotes.forEach((n, idx) => {
+            const clefBefore = clefByIndex.get(idx);
+            if (clefBefore) {
+              tickables.push(new ClefNote(clefBefore, 'small'));
+            }
+            tickables.push(n);
+          });
+          voice.addTickables(tickables);
+        } else {
+          voice.addTickables(vfNotes);
+        }
         // この Voice を「自分のパートの五線」に載せる。
         // 合同フォーマット（Pass 2）で全 Voice を最上段の五線へ載せてしまうと、
         // 低音（左手 g3 など）が最上段基準で幅計算され、間隔配分が歪む。
@@ -3730,7 +3796,17 @@ export default function PianoSystemCanvas({
       // voiceIndex を記録しない旧経路の選択（単声部）は従来どおり通す
       if(layerPart!=null&&sel.voiceIndex!=null&&sel.voiceIndex!==latestRef.current.activeVoiceIndex)return;
       const {partIndex,measure,index,keyIndex}=sel;
-      const clef=partsClefRef.current[partIndex]??'treble';
+      // キーボード操作の音高換算は「選択している音符のその時点のクレフ」を物差しにする。
+      // 以前はパートの既定クレフ（partsClefRef）決め打ちで、小節単位のクレフ変更すら
+      // 見ていなかった（Issue #424 の設計メモで指摘された既存バグ）。↑↓の相対移動は
+      // 同じ誤ったクレフで往復変換するため結果的に無事だったが、休符位置のリセット
+      // （0 キー → standardRestDisplayKey）はクレフ変更後の小節でずれていた。
+      const clef=resolveEventClef(
+        partsScoreRef.current[partIndex]??[],
+        measure,
+        index,
+        partsClefRef.current[partIndex]??'treble',
+      );
       const l2k=(l:number)=>lineToKeyForClef(clef,l);
       const k2l=(k:string)=>keyToLineForClef(clef,k);
       const setS=(updater:(prev:MeasureData[])=>MeasureData[])=>{
