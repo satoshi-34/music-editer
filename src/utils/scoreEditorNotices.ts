@@ -460,6 +460,15 @@ export function describeOttavaRemoved(kind: '8va' | '8vb' | '8vaEnd' | '8vbEnd')
  * アプリのピアノモデルはクレフ固定のため任意クレフを保持できないが、keys（絶対音名）は
  * そのままなので音の高さは変わらない。黙って見た目が変わる自動処理は通知する（#318）。
  */
+/**
+ * ダブルシャープ・ダブルフラットのツールで調号領域をクリックしたときの案内（#430 round1 P2）。
+ * 𝄪・𝄫 は調号には存在しないため何も変わらないが、無言だと「効かない」ようにしか見えない。
+ */
+export function describeDoubleAccidentalKeySignatureUnavailable(kind: '##' | 'bb'): string {
+  const label = kind === '##' ? 'ダブルシャープ' : 'ダブルフラット';
+  return `${label}は調号には使えません（調号にあるのは♯と♭だけです）。付けたい音符をクリックしてください`;
+}
+
 export function describeImportedClefNormalized(): string {
   return '読み込んだ大譜表のクレフを、ピアノ譜の標準（上段=ト音・下段=ヘ音）へ揃えました（音の高さはそのままです）';
 }

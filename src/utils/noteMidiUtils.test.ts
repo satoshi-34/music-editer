@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { keyToMidi, midiToKey, respellDoubleAccidentalKey } from './noteMidiUtils';
 
 describe('keyToMidi', () => {
+  // #430 Codex round1 P1: オクターブ境界をまたぐダブル記号の回帰テスト。
+  // ピッチクラスを先に 0..11 へ丸めると1オクターブずれる
+  it('オクターブ境界をまたぐダブル記号が正しい絶対音高になる', () => {
+    expect(keyToMidi('b##/3')).toBe(61); // = C#4
+    expect(keyToMidi('cbb/4')).toBe(58); // = Bb3
+    expect(keyToMidi('b#/3')).toBe(60);  // = C4（シングルも境界を確認）
+    expect(keyToMidi('cb/4')).toBe(59);  // = B3
+  });
+
   it('中央ハ(c/4)は60を返す', () => {
     expect(keyToMidi('c/4')).toBe(60);
   });

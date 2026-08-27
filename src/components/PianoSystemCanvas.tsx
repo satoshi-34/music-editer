@@ -54,6 +54,7 @@ import {
   describeTupletNumberToggleUnavailable,
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
+  describeDoubleAccidentalKeySignatureUnavailable,
   requestActiveVoiceChange,
 } from '../utils/scoreEditorNotices';
 import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
@@ -5939,9 +5940,13 @@ export default function PianoSystemCanvas({
                 x: lx,
                 bounds: firstStaveKeySignatureHitBounds,
               });
-              // 調号が変わらないときは通知しない（Issue #423。理由は上の同じ判定を参照）
+              // 調号が変わらないときは書き換え・履歴を積まない（Issue #423。理由は上の同じ判定を参照）
               if (nextKey !== baseKey) {
                 onKeySignatureChange?.(nextKey, pi);
+              } else if (tool.accidental === 'doubleSharp' || tool.accidental === 'doubleFlat') {
+                // 𝄪・𝄫 は調号に存在しないため必ずここへ来る。無言だと「効かない」ようにしか
+                // 見えないので、次の一手を案内する（#318・#430 round1 P2）
+                notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(tool.accidental === 'doubleSharp' ? '##' : 'bb'));
               }
             }
             // 調号領域以外の背景クリックでは、音符を新規挿入しない。
@@ -6490,11 +6495,13 @@ export default function PianoSystemCanvas({
                       x: lx,
                       bounds: firstStaveKeySignatureHitBounds,
                     });
-                    // 調号が変わらないときは通知しない（Issue #423）。
-                    // 𝄪・𝄫 は調号には存在しないため必ず同じ調号が返り、
-                    // そのまま通知すると「何も変わらない取り消し操作」が履歴に積まれてしまう。
+                    // 調号が変わらないときは書き換え・履歴を積まない（Issue #423）。
+                    // 𝄪・𝄫 は調号には存在しないため必ず同じ調号が返る。
                     if (nextKey !== baseKey) {
                       onKeySignatureChange?.(nextKey, hitPi);
+                    } else if (tool.accidental === 'doubleSharp' || tool.accidental === 'doubleFlat') {
+                      // 無言の行き止まりにしない（#318・#430 round1 P2）
+                      notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(tool.accidental === 'doubleSharp' ? '##' : 'bb'));
                     }
                   }
                   // 調号領域の外は従来から無反応でクリックを消費する（挙動ゼロ差のため

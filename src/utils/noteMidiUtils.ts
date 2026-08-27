@@ -19,9 +19,11 @@ export function keyToMidi(key: string): number | null {
   const m = key.match(/^([a-g])(##|bb|[#b])?[/ ]([0-9]+)$/i);
   if (!m) return null;
   // 半音差は noteKeyUtils と同じ関数で求める（記号が増えたときの直し忘れ防止）。
-  let pc = LETTER_TO_PC[m[1].toLowerCase()] + keyAccidentalSemitoneOffset((m[2] ?? '') as KeyAccidental);
-  pc = ((pc % 12) + 12) % 12;
-  return 12 * (parseInt(m[3], 10) + 1) + pc; // C4=60
+  // オクターブ加算より前にピッチクラスを 0..11 へ丸めてはいけない:
+  // b##/3（=C#4）や cbb/4（=Bb3）のようにオクターブ境界をまたぐダブル記号が
+  // 1オクターブずれて再生される（#430 Codex round1 P1）。丸めずにそのまま加算する
+  const offset = LETTER_TO_PC[m[1].toLowerCase()] + keyAccidentalSemitoneOffset((m[2] ?? '') as KeyAccidental);
+  return 12 * (parseInt(m[3], 10) + 1) + offset; // C4=60
 }
 
 /**
