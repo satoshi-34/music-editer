@@ -16,7 +16,12 @@ export type TimeSignature = [number, number];
  */
 export type TimeSignatureStyle = 'numeric' | 'symbol';
 export type AbsoluteDynamicMarking = 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff';
-export type RelativeDynamicMarking = 'cresc' | 'dim';
+/**
+ * 変化強弱の文字表記。
+ * 'descresc' は 'dim' と同じ意味（だんだん弱く）の別表記で、
+ * 月光ソナタなどの実譜で使われる。再生時の音量変化も dim と同じ扱いにする。
+ */
+export type RelativeDynamicMarking = 'cresc' | 'dim' | 'descresc';
 export type DynamicMarkingValue = AbsoluteDynamicMarking | RelativeDynamicMarking;
 
 /**

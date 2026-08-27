@@ -116,6 +116,17 @@ describe('SimpleAudioEngine', () => {
     expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(2, expect.any(Number), expect.any(Number), expect.any(Number), 0.74);
   });
 
+  describe('ダブルシャープ・ダブルフラットの周波数計算（Issue #423）', () => {
+    it('𝄪 は全音上、𝄫 は全音下の音として鳴る', () => {
+      const d4 = engine.noteToFrequency('d/4');
+      // c##/4（ドのダブルシャープ）と ebb/4（ミのダブルフラット）はどちらも実音レの高さ
+      expect(engine.noteToFrequency('c##/4')).toBeCloseTo(d4, 6);
+      expect(engine.noteToFrequency('ebb/4')).toBeCloseTo(d4, 6);
+      // 1文字の臨時記号の扱いは変わらない
+      expect(engine.noteToFrequency('c#/4')).toBeLessThan(d4);
+    });
+  });
+
   describe('微分音（四分音）の周波数計算', () => {
     it('noteToFrequency は centsOffset 未指定なら半音単位の周波数のまま', () => {
       const c4 = engine.noteToFrequency('c/4');

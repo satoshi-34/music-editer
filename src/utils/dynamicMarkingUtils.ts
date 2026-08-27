@@ -7,10 +7,11 @@ import type {
   RelativeDynamicMarking
 } from '../types/storage';
 import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
+import { dynamicSymbol } from './editorContextLabels';
 import { ENGRAVING_TEXT_UNITS, spToUnits } from './engravingDefaults';
 
 export const ABSOLUTE_DYNAMIC_VALUES: AbsoluteDynamicMarking[] = ['pp', 'p', 'mp', 'mf', 'f', 'ff'];
-export const RELATIVE_DYNAMIC_VALUES: RelativeDynamicMarking[] = ['cresc', 'dim'];
+export const RELATIVE_DYNAMIC_VALUES: RelativeDynamicMarking[] = ['cresc', 'dim', 'descresc'];
 
 const ABSOLUTE_DYNAMIC_SET = new Set<string>(ABSOLUTE_DYNAMIC_VALUES);
 const RELATIVE_DYNAMIC_SET = new Set<string>(RELATIVE_DYNAMIC_VALUES);
@@ -61,7 +62,9 @@ export function isRelativeDynamicMarking(marking: DynamicMarking): boolean {
 }
 
 export function formatDynamicMarking(marking: DynamicMarking): string {
-  return marking.value === 'cresc' ? 'cresc.' : marking.value === 'dim' ? 'dim.' : marking.value;
+  // 表記の正本は editorContextLabels（パレットのボタン・文脈バーと同じ言葉）。
+  // ここでコピーして書き直すと、片方だけ直して表記がずれる事故になる。
+  return dynamicSymbol(marking.value);
 }
 
 /**
@@ -96,24 +99,24 @@ const DYNAMIC_GLYPH_METRICS: Record<AbsoluteDynamicMarking, DynamicGlyphMetrics>
   ff: { codepoint: '\uE52F', opticalCenterSp: 1.852, leftSp: -0.54,  rightSp: 2.44,  topSp: 1.776, bottomSp: -0.608 }, // dynamicFF
 };
 
-/** グリフ計測値。文字系（cresc/dim）は null */
+/** グリフ計測値。文字系（cresc/dim/descresc）は null */
 export function dynamicGlyphMetricsFor(marking: DynamicMarking): DynamicGlyphMetrics | null {
-  return marking.value === 'cresc' || marking.value === 'dim' ? null : DYNAMIC_GLYPH_METRICS[marking.value];
+  return isRelativeDynamicMarkingValue(marking.value) ? null : DYNAMIC_GLYPH_METRICS[marking.value];
 }
 
-/** SMuFL グリフで描ける強弱ならそのグリフ文字を、文字系（cresc/dim）なら null を返す */
+/** SMuFL グリフで描ける強弱ならそのグリフ文字を、文字系（cresc/dim/descresc）なら null を返す */
 export function dynamicGlyphFor(marking: DynamicMarking): string | null {
   return dynamicGlyphMetricsFor(marking)?.codepoint ?? null;
 }
 
 /**
- * 同一音符の複数記号の描画順（絶対強弱を先・cresc/dim を後）。
+ * 同一音符の複数記号の描画順（絶対強弱を先・変化強弱の文字表記を後）。
  * 描画と衝突概算が同じ行割りを共有するためにここへ一本化する。
  */
 export function orderedDynamicMarkings(markings: DynamicMarking[]): DynamicMarking[] {
   return [...markings].sort((left, right) => {
-    const leftPriority = left.value === 'cresc' || left.value === 'dim' ? 1 : 0;
-    const rightPriority = right.value === 'cresc' || right.value === 'dim' ? 1 : 0;
+    const leftPriority = isRelativeDynamicMarkingValue(left.value) ? 1 : 0;
+    const rightPriority = isRelativeDynamicMarkingValue(right.value) ? 1 : 0;
     return leftPriority - rightPriority;
   });
 }

@@ -227,3 +227,73 @@ describe('微分音（四分音）ユーティリティ', () => {
     expect(isValidMicrotoneType(null)).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// ダブルシャープ（𝄪）・ダブルフラット（𝄫）（Issue #423）
+// ─────────────────────────────────────────────────────────────
+describe('ダブルシャープ・ダブルフラット', () => {
+  it('2文字の臨時記号を含むキーを解析できる', () => {
+    expect(parseNoteKey('c##/4')).toMatchObject({
+      letter: 'c',
+      accidental: '##',
+      octave: 4,
+      vexflowKey: 'c##/4',
+      // 臨時記号の効力は「音名+オクターブ」単位なので、状態キーは通常の音と同じ
+      accidentalStateKey: 'c/4',
+    });
+    expect(parseNoteKey('ebb/3')).toMatchObject({ letter: 'e', accidental: 'bb', octave: 3 });
+    expect(parseNoteKey('C##4')).toMatchObject({ letter: 'c', accidental: '##', octave: 4 });
+  });
+
+  it('bb/3（シが1つ下がった音）は従来どおりフラット1つとして解析する', () => {
+    expect(parseNoteKey('bb/3')).toMatchObject({ letter: 'b', accidental: 'b', octave: 3 });
+    // 「シのダブルフラット」は bbb/3 と書く
+    expect(parseNoteKey('bbb/3')).toMatchObject({ letter: 'b', accidental: 'bb', octave: 3 });
+  });
+
+  it('保存バリデーションでも受け入れる', () => {
+    expect(isValidNoteKeyString('f##/5')).toBe(true);
+    expect(isValidNoteKeyString('gbb/2')).toBe(true);
+    expect(isValidNoteKeyString('c###/4')).toBe(false);
+  });
+
+  it('ツールから 𝄪 / 𝄫 を付け外しできる', () => {
+    expect(setKeyAccidental('f/4', 'doubleSharp')).toBe('f##/4');
+    expect(setKeyAccidental('f#/4', 'doubleSharp')).toBe('f##/4');
+    expect(setKeyAccidental('e/4', 'doubleFlat')).toBe('ebb/4');
+    // ナチュラルで元に戻せる（既存の臨時記号と同じ操作）
+    expect(setKeyAccidental('f##/4', 'natural')).toBe('f/4');
+    expect(setKeyAccidental('ebb/4', 'sharp')).toBe('e#/4');
+  });
+
+  it('全音ぶん（±2半音）移調した音として扱う', () => {
+    // f##/4 は g/4 と同じ高さ。1半音下げれば f#/4 相当の音になる
+    expect(transposeKeyBySemitones('f##/4', 0)).toBe('f##/4');
+    expect(transposeKeyBySemitones('f##/4', 1)).toBe('g#/4');
+    expect(transposeKeyBySemitones('ebb/4', -1)).toBe('c#/4');
+  });
+
+  it('描画では 𝄪 / 𝄫 の記号を表示し、同じ小節内の繰り返しは省略する', () => {
+    const state = createMeasureAccidentalState('C');
+    expect(resolveDisplayAccidentalsForKeys(['f##/4'], state)).toEqual([{ type: '##', cautionary: false }]);
+    // 同じ小節内で同じ音が続けば記号は省略する
+    expect(resolveDisplayAccidentalsForKeys(['f##/4'], state)).toEqual([null]);
+    // 自然音へ戻ったらナチュラルで打ち消す
+    expect(resolveDisplayAccidentalsForKeys(['f/4'], state)).toEqual([{ type: 'n', cautionary: false }]);
+  });
+
+  it('小節線をまたいで自然音へ戻るときはカッコ付き臨時記号になる', () => {
+    const prev = createMeasureAccidentalState('C');
+    resolveDisplayAccidentalsForKeys(['f##/4'], prev);
+    const next = createMeasureAccidentalState('C');
+    expect(resolveDisplayAccidentalsForKeys(['f/4'], next, snapshotAccidentalState(prev)))
+      .toEqual([{ type: 'n', cautionary: true }]);
+  });
+
+  it('行頭クリックでの調号切り替えでは何も変えない（調号にダブル記号は無いため）', () => {
+    expect(shiftKeySignatureByAccidental('G', 'doubleSharp')).toBe('G');
+    expect(shiftKeySignatureByAccidental('Eb', 'doubleFlat')).toBe('Eb');
+    // 既存の ♯/♭/♮ の挙動は変わらない
+    expect(shiftKeySignatureByAccidental('G', 'sharp')).toBe('D');
+  });
+});

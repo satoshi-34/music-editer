@@ -2,8 +2,13 @@
 // 描画・保存バリデーションの両方で同じ判定を使い、
 // 「画面では読めるのに保存で弾かれる」ズレを防ぐ。
 
-export type KeyAccidental = '' | '#' | 'b';
-export type DisplayAccidental = '#' | 'b' | 'n';
+/**
+ * 音高キー文字列（"f#/4" など）に埋め込める臨時記号。
+ * '##' はダブルシャープ（𝄪・全音上げ）、'bb' はダブルフラット（𝄫・全音下げ）で、
+ * どちらも VexFlow の標準表記をそのまま使う。
+ */
+export type KeyAccidental = '' | '#' | 'b' | '##' | 'bb';
+export type DisplayAccidental = '#' | 'b' | 'n' | '##' | 'bb';
 
 /**
  * 微分音（四分音）の種類。
@@ -45,7 +50,7 @@ export type DisplayAccidentalResult = {
   type: DisplayAccidental;
   cautionary: boolean;
 };
-export type AccidentalToolKind = 'sharp' | 'flat' | 'natural';
+export type AccidentalToolKind = 'sharp' | 'flat' | 'natural' | 'doubleSharp' | 'doubleFlat';
 export type KeySignature =
   'C' | 'G' | 'D' | 'A' | 'E' | 'B' | 'F#' | 'C#' |
   'F' | 'Bb' | 'Eb' | 'Ab' | 'Db' | 'Gb' | 'Cb';
@@ -121,9 +126,12 @@ export interface ParsedNoteKey {
 }
 
 // 受け入れる形式:
-// - VexFlow: c/4, f#/5, bb/3
-// - Tone.js 風: C4, F#5, Bb3
-const NOTE_KEY_PATTERN = /^([a-gA-G])([#b]?)(?:\/)?([0-9]+)$/;
+// - VexFlow: c/4, f#/5, bb/3, c##/4, ebb/3
+// - Tone.js 風: C4, F#5, Bb3, C##4
+// 2文字の記号（## / bb）を1文字の #/b より先に並べるのがポイント。
+// 正規表現の | は左から順に試すため、逆順だと "c##/4" の2つ目の # が
+// 余りとして扱われ、解析に失敗する。
+const NOTE_KEY_PATTERN = /^([a-gA-G])(##|bb|[#b])?(?:\/)?([0-9]+)$/;
 
 export function parseNoteKey(key: string): ParsedNoteKey | null {
   const match = key.match(NOTE_KEY_PATTERN);
@@ -211,6 +219,12 @@ export function shiftKeySignatureByAccidental(
   // 行頭の記号クリックは「その記号系の調号へ入る」操作に寄せる。
   // たとえば G（♯1つ）で ♭ を押したときは C に戻すのではなく、
   // まず F（♭1つ）へ切り替える方が見た目の期待に合いやすい。
+  // 調号にダブルシャープ・ダブルフラットは存在しないため、
+  // 行頭クリックでの調号切り替えでは何もしない（音符へ付ける用途だけの記号）。
+  if (accidental === 'doubleSharp' || accidental === 'doubleFlat') {
+    return currentKeySignature;
+  }
+
   if (accidental === 'natural') {
     return 'C';
   }
@@ -224,13 +238,36 @@ export function shiftKeySignatureByAccidental(
   return KEY_SIGNATURE_BY_COUNT[nextCount];
 }
 
+/** 臨時記号ツール → 音高キー文字列に埋め込む記号 */
+const ACCIDENTAL_TOOL_TO_KEY_ACCIDENTAL: Record<AccidentalToolKind, KeyAccidental> = {
+  sharp: '#',
+  flat: 'b',
+  natural: '',
+  doubleSharp: '##',
+  doubleFlat: 'bb',
+};
+
+/**
+ * 音高キーに付いた臨時記号の半音差。
+ * ダブルシャープは +2、ダブルフラットは -2（全音ぶん）。
+ * 移調・MIDI 変換など「音の高さを計算する側」はすべてこの関数を通し、
+ * 記号の種類が増えたときに片方だけ直し忘れる事故を防ぐ。
+ */
+export function keyAccidentalSemitoneOffset(accidental: KeyAccidental): number {
+  return accidental === '#' ? 1
+    : accidental === 'b' ? -1
+    : accidental === '##' ? 2
+    : accidental === 'bb' ? -2
+    : 0;
+}
+
 export function setKeyAccidental(key: string, kind: AccidentalToolKind): string {
   const parsed = parseNoteKey(key);
   if (!parsed) {
     return key;
   }
 
-  const accidental = kind === 'sharp' ? '#' : kind === 'flat' ? 'b' : '';
+  const accidental = ACCIDENTAL_TOOL_TO_KEY_ACCIDENTAL[kind];
   return `${parsed.letter}${accidental}/${parsed.octave}`;
 }
 
@@ -426,8 +463,7 @@ export function transposeKeyBySemitones(key: string, semitones: number): string 
     return parsed.vexflowKey;
   }
   const baseClass = LETTER_TO_PITCH_CLASS[parsed.letter];
-  const accidentalOffset = parsed.accidental === '#' ? 1 : parsed.accidental === 'b' ? -1 : 0;
-  const absolute = baseClass + accidentalOffset + parsed.octave * 12 + semitones;
+  const absolute = baseClass + keyAccidentalSemitoneOffset(parsed.accidental) + parsed.octave * 12 + semitones;
 
   // 範囲外（負の値や巨大値）を作らないよう、12 で割って整数オクターブと半音に分ける。
   const octave = Math.floor(absolute / 12);

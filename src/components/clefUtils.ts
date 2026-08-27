@@ -16,7 +16,7 @@ function lineToKeyTreble(line: number): string {
   return `${letters[idx]}/${oct}`;
 }
 function keyToLineTreble(key: string): number {
-  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if (!m) return 2;
+  const m = key.match(/^([a-g])(##|bb|[#b])?[/ ]([0-9]+)$/i); if (!m) return 2;
   const idxMap: Record<string, number> = { c:0,d:1,e:2,f:3,g:4,a:5,b:6 };
   const target = +m[3] * 7 + (idxMap[m[1].toLowerCase()] ?? 0);
   const base = 5 * 7 + idxMap['f']; // F5
@@ -34,7 +34,7 @@ function lineToKeyBass(line: number): string {
   return `${letters[idx]}/${oct}`;
 }
 function keyToLineBass(key: string): number {
-  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if (!m) return 2;
+  const m = key.match(/^([a-g])(##|bb|[#b])?[/ ]([0-9]+)$/i); if (!m) return 2;
   const idxMap: Record<string, number> = { c:0,d:1,e:2,f:3,g:4,a:5,b:6 };
   const target = +m[3] * 7 + (idxMap[m[1].toLowerCase()] ?? 0);
   const base = 3 * 7 + idxMap['a']; // A3
@@ -52,7 +52,7 @@ function lineToKeyAlto(line: number): string {
   return `${letters[idx]}/${oct}`;
 }
 function keyToLineAlto(key: string): number {
-  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if (!m) return 2;
+  const m = key.match(/^([a-g])(##|bb|[#b])?[/ ]([0-9]+)$/i); if (!m) return 2;
   const idxMap: Record<string, number> = { c:0,d:1,e:2,f:3,g:4,a:5,b:6 };
   const target = +m[3] * 7 + (idxMap[m[1].toLowerCase()] ?? 0);
   const base = 4 * 7 + idxMap['g']; // G4 = 32
@@ -70,7 +70,7 @@ function lineToKeyTenor(line: number): string {
   return `${letters[idx]}/${oct}`;
 }
 function keyToLineTenor(key: string): number {
-  const m = key.match(/^([a-g])([#b]?)[/ ]([0-9]+)$/i); if (!m) return 2;
+  const m = key.match(/^([a-g])(##|bb|[#b])?[/ ]([0-9]+)$/i); if (!m) return 2;
   const idxMap: Record<string, number> = { c:0,d:1,e:2,f:3,g:4,a:5,b:6 };
   const target = +m[3] * 7 + (idxMap[m[1].toLowerCase()] ?? 0);
   const base = 4 * 7 + idxMap['e']; // E4

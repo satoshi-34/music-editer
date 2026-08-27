@@ -54,3 +54,18 @@ describe('applyMicrotoneToEvent', () => {
     expect(next.microtones).toBeUndefined();
   });
 });
+
+describe('ダブルシャープ・ダブルフラット（Issue #423）', () => {
+  it('和音の1音だけに 𝄪 を付けられる', () => {
+    const ev = makeEvent(['c/4', 'e/4']);
+    expect(applyAccidentalToEvent(ev, 'doubleSharp', 0).keys).toEqual(['c##/4', 'e/4']);
+    expect(applyAccidentalToEvent(ev, 'doubleFlat', 1).keys).toEqual(['c/4', 'ebb/4']);
+  });
+
+  it('四分音が付いていた音に 𝄪 を付けると四分音は外れる（排他）', () => {
+    const ev = makeEvent(['c/4'], { microtones: [{ keyIndex: 0, type: 'quarterSharp' }] });
+    const next = applyAccidentalToEvent(ev, 'doubleSharp', 0);
+    expect(next.keys).toEqual(['c##/4']);
+    expect(next.microtones).toEqual([]);
+  });
+});

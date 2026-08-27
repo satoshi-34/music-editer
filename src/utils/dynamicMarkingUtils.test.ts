@@ -3,7 +3,11 @@ import type { MeasureData, NoteEvent } from '../types/storage';
 import {
   applyDynamicMarkingToEvent,
   buildDynamicEventKey,
+  dynamicGlyphMetricsFor,
   formatDynamicMarking,
+  isRelativeDynamicMarkingValue,
+  orderedDynamicMarkings,
+  RELATIVE_DYNAMIC_VALUES,
   getPreviewVelocityForEvent,
   resolveDynamicVelocities
 } from './dynamicMarkingUtils';
@@ -60,5 +64,52 @@ describe('dynamicMarkingUtils', () => {
     expect(velocities.get(buildDynamicEventKey(0, 1))).toBeGreaterThan(0.34);
     expect(velocities.get(buildDynamicEventKey(0, 1))).toBeLessThan(0.74);
     expect(velocities.get(buildDynamicEventKey(0, 2))).toBeCloseTo(0.74, 5);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// descresc.（dim. と同じ意味の別表記）（Issue #423）
+// ─────────────────────────────────────────────────────────────
+describe('descresc.', () => {
+  it('変化強弱の一覧に入り、cresc./dim. と同じ扱いになる', () => {
+    expect(RELATIVE_DYNAMIC_VALUES).toContain('descresc');
+    expect(isRelativeDynamicMarkingValue('descresc')).toBe(true);
+    // 文字系なので SMuFL グリフは持たない（cresc./dim. と同じく通常フォントで描く）
+    expect(dynamicGlyphMetricsFor({ value: 'descresc' })).toBeNull();
+  });
+
+  it('譜面には descresc. と表示する', () => {
+    expect(formatDynamicMarking({ value: 'descresc' })).toBe('descresc.');
+  });
+
+  it('同じ音符では絶対強弱のあとに描く（cresc./dim. と同じ行割り）', () => {
+    const ordered = orderedDynamicMarkings([{ value: 'descresc' }, { value: 'mf' }]);
+    expect(ordered.map(m => m.value)).toEqual(['mf', 'descresc']);
+  });
+
+  it('絶対強弱と共存でき、同じ記号の再選択で解除できる', () => {
+    const base = createNoteEvent();
+    const withAbsolute = applyDynamicMarkingToEvent(base, 'f');
+    const withRelative = applyDynamicMarkingToEvent(withAbsolute, 'descresc');
+    expect(withRelative.dynamics).toEqual([{ value: 'f' }, { value: 'descresc' }]);
+    expect(applyDynamicMarkingToEvent(withRelative, 'descresc').dynamics).toEqual([{ value: 'f' }]);
+  });
+
+  it('再生では dim. と同じく次の絶対強弱へ向かって弱くなる', () => {
+    const measures: MeasureData[] = [
+      {
+        events: [
+          createNoteEvent({ keys: ['c/4'], dynamics: [{ value: 'f' }, { value: 'descresc' }] }),
+          createNoteEvent({ keys: ['d/4'] }),
+          createNoteEvent({ keys: ['e/4'], dynamics: [{ value: 'p' }] }),
+        ],
+      },
+    ];
+
+    const velocities = resolveDynamicVelocities(measures);
+    expect(velocities.get(buildDynamicEventKey(0, 0))).toBeCloseTo(0.74, 5);
+    expect(velocities.get(buildDynamicEventKey(0, 1))).toBeLessThan(0.74);
+    expect(velocities.get(buildDynamicEventKey(0, 1))).toBeGreaterThan(0.34);
+    expect(velocities.get(buildDynamicEventKey(0, 2))).toBeCloseTo(0.34, 5);
   });
 });

@@ -10,7 +10,7 @@
 // 個々の音符の綴りを都度選び直す機能ではないため、そのまま再利用はできない。
 // 代わりに getKeySignatureFifths() で調号の♯♭方向だけを取り出して再利用する。
 
-import { parseNoteKey, getKeySignatureFifths, type KeySignature } from './noteKeyUtils';
+import { parseNoteKey, keyAccidentalSemitoneOffset, getKeySignatureFifths, type KeySignature } from './noteKeyUtils';
 import type { MeasureData, NoteEvent, VoiceData } from '../types/storage';
 
 // VexFlow の octave は 0〜9 のみ有効（noteKeyUtils.ts の parseNoteKey と同じ制約）。
@@ -86,8 +86,7 @@ export function transposeKey(
   }
 
   const baseClass = LETTER_TO_PITCH_CLASS[parsed.letter];
-  const accidentalOffset = parsed.accidental === '#' ? 1 : parsed.accidental === 'b' ? -1 : 0;
-  const absolute = baseClass + accidentalOffset + parsed.octave * 12 + semitones;
+  const absolute = baseClass + keyAccidentalSemitoneOffset(parsed.accidental) + parsed.octave * 12 + semitones;
 
   const octave = Math.floor(absolute / 12);
   if (octave < MIN_OCTAVE || octave > MAX_OCTAVE) {

@@ -157,3 +157,46 @@ VexFlow の音符本体とは別に、描画後の SVG へテキストを直接�
 font-synthesis:none をインラインで固定している（疑似太字の合成で実字面が
 メタデータより広がるのを防ぐ）。既存の衝突回避テストは PP_TEXT をグリフ参照へ更新。
 ScorePage 配線は ScorePagePartSymbolsWiring.test.tsx に復元→グリフ描画のケースを追加。
+
+## 追記: descresc. の追加（Issue #423, 2026-08-27）
+
+### 問題
+
+変化強弱の文字表記は `cresc.` / `dim.` の2つだけだった。実際の楽譜（月光ソナタなど）では
+`dim.` と同じ意味で `descresc.` と書かれることがあり、その表記が選べなかった。
+
+### 修正設計
+
+**「dim. の表示バリエーション」ではなく、`RelativeDynamicMarking` の独立した値として追加した。**
+表示バリエーションにすると `DynamicMarking` に「表記の種類」フィールドを足すことになり、
+保存形式・バリデーション・パレットの選択状態がすべて二段構えになる。値を1つ増やすほうが、
+既存の「同じ記号をもう一度選ぶと解除」「絶対強弱と共存」の仕組みにそのまま乗る。
+
+- `RelativeDynamicMarking = 'cresc' | 'dim' | 'descresc'`。保存バリデーションは
+  `isDynamicMarkingValue` 経由なので追加の変更は不要（新しい値がそのまま通り、未知の文字列は従来どおり弾かれる）
+- 再生は `resolveDynamicVelocities` の `relative === 'cresc' ? 増 : 減` の分岐にそのまま乗り、
+  `dim.` と同じく次の絶対強弱へ向かって段階的に弱くなる
+- 描画・衝突回避で「文字系か（＝SMuFL グリフを持たないか）」を判定していた
+  `value === 'cresc' || value === 'dim'` というベタ書きの分岐は、値が増えるたびに直し漏れるため
+  `isRelativeDynamicMarkingValue()` に置き換えた（`dynamicGlyphMetricsFor` / `orderedDynamicMarkings` /
+  パレットの文字サイズ分岐）
+- 表記の正本は `editorContextLabels.dynamicSymbol()` に一本化した。
+  `formatDynamicMarking()`（譜面描画）が同じ変換をコピーで持っていたため、
+  そちらから `dynamicSymbol()` を呼ぶ形へ変えている（パレットのボタン・文脈バー・譜面の3か所で表記がずれない）
+
+### MusicXML との対応
+
+MusicXML の `<wedge>`（松葉）は別機能で、文字表記の `cresc.` / `dim.` は**もともと書き出していない**
+（`dynamicsDirectionXml` は `pp`〜`ff` の絶対強弱だけを `<dynamics>` として出力する）。
+`descresc.` も同じ扱いで、今回 MusicXML 側の変更は無い。将来 `<words>` として書き出す場合は、
+`descresc.` は `dim.` と同じ `<direction-type><words>` に文字列そのままを載せるのが素直
+（MusicXML に descresc. 専用の要素は無く、あくまで表記の違いであるため）。
+
+### 影響範囲
+
+| ファイル | 変更内容 |
+|---|---|
+| `src/types/storage.ts` | `RelativeDynamicMarking` に `'descresc'` を追加 |
+| `src/utils/dynamicMarkingUtils.ts` | 一覧・文字系判定の共通化・表記を `dynamicSymbol` へ委譲 |
+| `src/utils/editorContextLabels.ts` | `descresc.` の表記と日本語ラベル |
+| `src/components/Palette.tsx` | ボタン追加（演奏記号タブ） |

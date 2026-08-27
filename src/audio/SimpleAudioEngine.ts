@@ -10,6 +10,7 @@ import {
   type PlaybackSoundProfile
 } from './playbackSettings';
 import { applySwingToTiming } from '../utils/swingUtils';
+import { respellDoubleAccidentalKey } from '../utils/noteMidiUtils';
 
 interface SimpleInstrumentConfig {
   // 1つの音色を何本の波で作るかを表す。
@@ -265,7 +266,11 @@ export class SimpleAudioEngine implements PlaybackEngine {
    * @param note 音高名（c/4, C4, f#/3, F#3 など）
    * @returns MIDI形式の音高名（C4, F#3 など）
    */
-  private normalizeNoteFormat(note: string): string {
+  private normalizeNoteFormat(rawNote: string): string {
+    // ダブルシャープ・ダブルフラットは、この下の音名テーブル／サンプル名に無いため、
+    // 同じ高さの通常表記（例: c##/4 → d/4）へ先に読み替える。
+    // 半音の計算は譜面側と同じ noteMidiUtils に任せ、鳴る高さがずれないようにする。
+    const note = respellDoubleAccidentalKey(rawNote);
     // 既にMIDI形式（C4, F#3など）の場合はそのまま返す
     if (/^[A-G][#b]?\d+$/.test(note)) {
       return note;

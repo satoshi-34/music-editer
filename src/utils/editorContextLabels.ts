@@ -27,10 +27,17 @@ export function durationLabel(d: '1' | '2' | '4' | '8' | '16' | '32' | '64'): st
 }
 
 export function accidentalSymbol(kind: AccidentalToolKind): string {
+  // 𝄪（U+1D12A）・𝄫（U+1D12B）はフォントが無い環境で豆腐（□）になりやすいため、
+  // ボタンの表記はどの環境でも読める代用表記（×・♭♭）を使う。四分音ボタン（¼♯）と同じ考え方で、
+  // 正式なグリフは譜面側（VexFlow の Bravura フォント）が描くので、ボタンは意味が伝われば十分。
+  if (kind === 'doubleSharp') return '×';
+  if (kind === 'doubleFlat') return '♭♭';
   return kind === 'sharp' ? '♯' : kind === 'flat' ? '♭' : '♮';
 }
 
 export function accidentalLabel(kind: AccidentalToolKind): string {
+  if (kind === 'doubleSharp') return 'ダブルシャープ（全音上げ）';
+  if (kind === 'doubleFlat') return 'ダブルフラット（全音下げ）';
   return kind === 'sharp' ? 'シャープ' : kind === 'flat' ? 'フラット' : 'ナチュラル';
 }
 
@@ -63,12 +70,17 @@ export function endingLabel(ending: EndingNumber): string {
 
 /** 強弱記号の楽譜上の表記（`pp` や `cresc.`）。文脈バーもこの表記をそのまま出す */
 export function dynamicSymbol(kind: DynamicMarkingValue): string {
-  return kind === 'cresc' ? 'cresc.' : kind === 'dim' ? 'dim.' : kind;
+  if (kind === 'cresc') return 'cresc.';
+  if (kind === 'dim') return 'dim.';
+  // descresc. は dim. と同じ意味の別表記（月光ソナタなどの実譜で使われる）
+  if (kind === 'descresc') return 'descresc.';
+  return kind;
 }
 
 export function dynamicLabel(kind: DynamicMarkingValue): string {
   if (kind === 'cresc') return 'クレッシェンド';
   if (kind === 'dim') return 'ディミヌエンド';
+  if (kind === 'descresc') return 'デクレッシェンド（dim. と同じ意味の別表記）';
   return `強弱記号 ${kind}`;
 }
 

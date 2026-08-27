@@ -54,6 +54,7 @@ import {
   describeTupletNumberToggleUnavailable,
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
+  describeDoubleAccidentalKeySignatureUnavailable,
   requestActiveVoiceChange,
 } from '../utils/scoreEditorNotices';
 import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
@@ -5949,7 +5950,14 @@ export default function PianoSystemCanvas({
                 x: lx,
                 bounds: firstStaveKeySignatureHitBounds,
               });
-              onKeySignatureChange?.(nextKey, pi);
+              // 調号が変わらないときは書き換え・履歴を積まない（Issue #423。理由は上の同じ判定を参照）
+              if (nextKey !== baseKey) {
+                onKeySignatureChange?.(nextKey, pi);
+              } else if (tool.accidental === 'doubleSharp' || tool.accidental === 'doubleFlat') {
+                // 𝄪・𝄫 は調号に存在しないため必ずここへ来る。無言だと「効かない」ようにしか
+                // 見えないので、次の一手を案内する（#318・#430 round1 P2）
+                notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(tool.accidental === 'doubleSharp' ? '##' : 'bb'));
+              }
             }
             // 調号領域以外の背景クリックでは、音符を新規挿入しない。
             return;
@@ -6497,7 +6505,14 @@ export default function PianoSystemCanvas({
                       x: lx,
                       bounds: firstStaveKeySignatureHitBounds,
                     });
-                    onKeySignatureChange?.(nextKey, hitPi);
+                    // 調号が変わらないときは書き換え・履歴を積まない（Issue #423）。
+                    // 𝄪・𝄫 は調号には存在しないため必ず同じ調号が返る。
+                    if (nextKey !== baseKey) {
+                      onKeySignatureChange?.(nextKey, hitPi);
+                    } else if (tool.accidental === 'doubleSharp' || tool.accidental === 'doubleFlat') {
+                      // 無言の行き止まりにしない（#318・#430 round1 P2）
+                      notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(tool.accidental === 'doubleSharp' ? '##' : 'bb'));
+                    }
                   }
                   // 調号領域の外は従来から無反応でクリックを消費する（挙動ゼロ差のため
                   // 通知は足さない。喋るべきかは #318 系の別Issueで扱う）
@@ -6725,7 +6740,7 @@ export default function PianoSystemCanvas({
                   // 前打音のデフォルト音高は主音符の1音上（stepUp 関数は StaffCanvas と同じロジック）
                   const graceKey=targetEv.keys[0]??'b/4';
                   const noteNames=['c','d','e','f','g','a','b'];
-                  const m=graceKey.match(/^([a-g])[#b]?\/(\d+)$/i);
+                  const m=graceKey.match(/^([a-g])(?:##|bb|[#b])?\/(\d+)$/i);
                   const nextKey=m
                     ? (()=>{
                         const idx=noteNames.indexOf(m[1].toLowerCase());
