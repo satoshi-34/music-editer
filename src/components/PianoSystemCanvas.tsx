@@ -2808,8 +2808,11 @@ export default function PianoSystemCanvas({
     const entries = JSON.parse(freeTextFontSignature) as Array<[string, string]>;
     if (entries.length === 0) return;
     let cancelled = false;
+    // タイムアウト無しで実際の読み込み完了まで待つ（#432 Codex round2 P1）。
+    // 既定の2秒で打ち切ると、遅い回線でフォールバック書体のまま判定を再計測し、
+    // その後に実フォントへ切り替わっても再描画されない
     Promise.all(entries.map(([fontId, sample]) =>
-      waitForTitleFontReady(resolveTitleFontOption(fontId), sample)))
+      waitForTitleFontReady(resolveTitleFontOption(fontId), sample, Number.POSITIVE_INFINITY)))
       .then(() => { if (!cancelled) setFreeTextFontReadyTick((t) => t + 1); });
     return () => { cancelled = true; };
   }, [freeTextFontSignature]);

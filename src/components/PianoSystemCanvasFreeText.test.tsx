@@ -362,4 +362,51 @@ describe('Webフォント読み込み後のクリック判定の作り直し', (
       expect(hitWidth()).toBe(126);
     }, { timeout: 5000 });
   });
+
+  // #432 Codex round2 P1: 印刷用の待機（2秒タイムアウト）を流用すると、読み込みが
+  // 2秒を超える遅い回線ではフォールバック寸法のまま再計測して終わってしまう。
+  // 再描画トリガーはタイムアウト無しで「実際の完了」まで待つことを固定する
+  it('フォント読み込みが2秒を超えても、完了時に判定 rect が作り直される', async () => {
+    let fontLoaded = false;
+    (SVGElement.prototype as unknown as { getBBox: () => { x: number; y: number; width: number; height: number } }).getBBox =
+      function () { return { x: 10, y: 10, width: fontLoaded ? 120 : 40, height: 12 }; };
+    // fonts.load が2.5秒後にやっと解決するモック（遅い回線の再現）
+    let resolveLoads: (() => void) | null = null;
+    const gate = new Promise<void>((r) => { resolveLoads = r; });
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { load: vi.fn(() => gate.then(() => [])), ready: Promise.resolve() },
+    });
+
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        symbolsClickable={true}
+        partsConfig={[{
+          clef: 'treble',
+          data: withFreeText(2, 0, { text: 'con pedale', fontId: 'noto-serif-jp' }),
+          onChange: () => {},
+        }]}
+      />
+    );
+    const hitWidth = () => {
+      const rect = container.querySelector('rect.symbol-hit-region');
+      return rect ? parseFloat(rect.getAttribute('width') ?? '0') : null;
+    };
+    expect(hitWidth()).toBe(46);
+    const link = document.querySelector('link#title-font-noto-serif-jp') as HTMLLinkElement;
+    link.dispatchEvent(new Event('load'));
+
+    // 2.5秒（旧実装のタイムアウト2秒より後）に読み込み完了
+    await new Promise((r) => setTimeout(r, 2500));
+    fontLoaded = true;
+    resolveLoads!();
+
+    await waitFor(() => {
+      expect(hitWidth()).toBe(126);
+    }, { timeout: 5000 });
+  }, 15000);
 });
