@@ -518,3 +518,58 @@ TS2345 で止まる。所属パートは素の number のままにして、混�
 ルート tsconfig は `files: []` の参照構成のため、**素の `npx tsc --noEmit` は何も検査しない**
 （常に成功する）。型検査の実体は `npm run build` の `tsc -b`。本リファクタの負の型テストで発覚。
 単発の型検査は `npx tsc -b` を使うこと。
+
+## 付録B: 旧実装の標本集（2026-08-28 採取・運用者発案）
+
+削除された「悪いコード」の実物は git 履歴（`git show d297b79^:src/components/PianoSystemCanvas.tsx`）
+を掘らないと見えないため、代表的な標本をここへ転記して残す。後から読み返すと
+「大工事の前がどうだったか」「なぜ表・型で縛る設計にしたか」の一次資料になる。
+（採取元コミット: d297b79 の親。段3c 直前 = 2026-08-22 時点）
+
+### 標本1: フラグ変数15本 + if 連鎖（音符クリックハンドラ冒頭）
+
+```typescript
+const accidentalMode = 'mode' in tool && tool.mode === 'accidental' ? tool.accidental : null;
+const microtoneMode = 'mode' in tool && tool.mode === 'microtone' ? tool.type : null;
+const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : null;
+// …同型が計15本続き、その後に
+if (tupletNumberToggleMode) { /* … */ return; }
+if (crossStaffToggleMode)   { /* … */ return; }
+if (accidentalMode && !activeEvs[j]?.isRest) { /* … */ return; }
+// …if+return が15連続
+```
+
+**何が悪いか**: (1) ガード条件（`&& !isRest` 等）をすり抜けたクリックは黙って下へ落ち、
+既定処理か「何も起きない」に着地する — 無言経路が当時27箇所。(2) 通知は各分岐の自由裁量で、
+書き忘れてもエラーにならない。(3) if の順序が意味を持つため、新モードの挿入位置を誤ると
+既存挙動が変わる。(4) `(tool as any)` が3箇所（ornament/pedal/ottava）で型検査を自ら外していた。
+→ 段3c の `NoteClickOutcome`（handled / rejected(notice必須) / passThrough）で全て型の問題に変換した。
+
+### 標本2: インデント13段（前打音トグルの音名計算）
+
+```typescript
+if (graceNoteMode && !activeEvs[j]?.isRest) {
+  updateActiveEvent(j, (targetEv) => {
+    // …
+    const nextKey=m
+      ? (()=>{
+          const idx=noteNames.indexOf(m[1].toLowerCase());
+          return idx===noteNames.length-1
+            ? `c/${parseInt(m[2],10)+1}`          // ← ここがインデント13段目
+            : `${noteNames[idx+1]}/${m[2]}`;
+        })()
+      : graceKey;
+```
+
+到達経路: コンポーネント → 描画useEffect（当時4,200行）→ 小節ループ → parts.forEach →
+声部ループ → notes.forEach → クリックリスナー → if連鎖 → updateActiveEvent コールバック →
+三項 → 即時実行関数 → 三項 → 三項。「主音符の1音上の音名を求める」だけの音楽理論計算が
+クリックハンドラの三項演算子内に直書きされていた（本来は3行のユーティリティ関数）。
+
+### 標本の教訓（なぜ増殖したか）
+
+フラグ15本も最初は2本だった。3本目を足す実装者は前例に倣っただけで、各1行はその場では
+合理的。つまり悪い構造は**前例の複製**で増える。対策も同じ理屈で効く: 前例側を
+表+型に変えれば、以後の追加は自動的に安全な型に倣う（段3c 以降の新モードが実証）。
+なお、深いネスト自体（描画effect内の 小節→パート→音符→ハンドラ の入れ子）は本リファクタの
+対象外で現存する。解消は renderPipeline の独立ファイル化（未着手・§2-4 の残課題）に相当する。
