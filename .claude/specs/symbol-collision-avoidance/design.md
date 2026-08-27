@@ -163,3 +163,46 @@
 ### 影響範囲
 
 オッターバの描画位置のみ。収集側（lineY）は不変。テストは PianoSystemCanvasOttavaLayout.test.tsx。
+
+## オッターバの段またぎ（2026-08-28・実機報告）
+
+ペア照合（pendingOttava の状態機械）は段（システム）単位で走るため、開始が前の段・
+終了が次の段にある括弧は両側とも無言で消えていた。段の外の小節を走査して対応する:
+
+- **終了側の段**: 開始が手前の段にある終了（pending 無しの End）は、`scanOttavaState` で
+  段より前の未クローズ開始を確認し、**段の左端（先頭五線の音符開始位置）から**続きの括弧を描く
+- **開始側の段**: 段末に pending が残った開始は、`ottavaEndsAfter` で以降の段に対応する終了が
+  あるとき**段の右端まで**描く。`openEnd: true` で終端フック（縦線）を描かず「続き」を示す
+- **中間の段**（開始も終了も無い）: 前が開いていて後に終了があるなら全幅の括弧（openEnd）
+- 終了がどこにも無い開始は従来どおり描かない（#414 の通知が案内する）
+- 走査の状態機械はペア照合本体と同じ規則（開始で開く・同種の終了で閉じる）
+
+### Codex round 1 対応（2026-08-28）
+
+- **pending はパート×種類ごと**: 共有の単一 pending だと、同じ段に 8va と 8vb（あるいは
+  複数パート）が混在したとき先勝ちで片方が消える。`pendingOttavaByKey`（キー `${partIndex}:${kind}`
+  の Map）に置き換え、パートも種類も独立にペア照合する
+- **続き括弧の編集は開始イベントへ配線**: 続き・中間・終了側のエントリが持つ
+  `measureAbsoluteIndex / eventIndex / voiceIndex / event` は**開始イベント**のもの
+  （`scanOttavaState` が開始時点の識別情報を `OttavaOrigin` として保持）。終了イベントに
+  配線すると、クリック調整が `8vaEnd` 側の `symbolAdjust` に書かれて描画へ反映されない
+  無言の no-op になる
+- **presence gate**: 段外走査（`ottavaOpenBefore` / `ottavaEndsAfter`）はオッターバを
+  1つも含まないパートでは走らせない（パートごとの有無を先に1回だけ調べて保持）。
+  オッターバ無しの通常譜面に O(段数×小節数) の走査コストを掛けないため
+
+### Codex round 2 対応（2026-08-28）
+
+- **presence 判定はモジュールレベルの WeakMap キャッシュ**: round1 の presence gate は
+  段（PianoSystemCanvas）ごとの描画 effect 内で Map を作り直していたため、オッターバ皆無の
+  譜面でも各段がパートの全小節を再走査し O(段数×小節数) のままだった。判定結果を
+  **小節配列の参照**をキーに WeakMap へキャッシュする。全段が親から同一の配列参照を
+  受け取るため走査は譜面全体で1回になり、編集で配列が差し替われば自然に再計算される
+- **同種の開始のやり直しで古い段外状態を失効**: 段内で `8va` を新たに開始したとき、
+  `pendingOttavaByKey` の更新だけでは前の段から開いていた古い origin（`ottavaOpenBefore`）が
+  残り、段末の全幅処理が古い括弧を重ねて描いた（二重描画）。開始時に
+  `ottavaOpenBefore(pi).delete(kind)` で失効させ、scanOttavaState の上書き規則と一致させる
+
+テスト: PianoSystemCanvasOttavaLayout.test.tsx「段またぎの 8va」（開始側・終了側・中間段・
+8vb・種類混在・**開始やり直しの二重描画回帰**・段内回帰）、ScorePageOttavaCrossSystem.test.tsx
+（実段組で3段すべてに括弧が出ること・続き括弧クリックの位置調整が開始イベントへ保存されること）
