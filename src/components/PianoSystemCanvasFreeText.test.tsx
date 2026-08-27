@@ -5,11 +5,12 @@
 // startMeasureIndex を渡す。段割り（段あたり小節数）を変えたときの追従は、
 // 「同じ絶対小節が別の段・別の x に描かれる」ことで確認する。
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, waitFor } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData } from '../types/storage';
-import { ENGRAVING_TEXT_UNITS } from '../utils/engravingDefaults';
+import { ENGRAVING_TEXT_UNITS, SCORE_TEXT_FONT_FAMILY } from '../utils/engravingDefaults';
+import { resolveTitleFontOption } from '../utils/titleFontOptions';
 
 vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function () {
@@ -237,4 +238,175 @@ describe('PianoSystemCanvas の自由注釈テキスト（Issue #421）', () => 
     // 縦は「＋で下・−で上」（記号位置調整と同じ向き）
     expect(Number(adjustedText.getAttribute('y'))).toBeCloseTo(baseY - 8);
   });
+
+  // ── 書体選択（Issue #432） ────────────────────────────────────────────
+  it('fontId が無い注釈は従来どおり浄書セリフ体のイタリックで描く（回帰防止）', () => {
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        partsConfig={[{ clef: 'treble', data: withFreeText(2, 0, { text: 'dolce' }), onChange: () => {} }]}
+      />
+    );
+    const text = freeTexts(container)[0];
+    expect(text.getAttribute('font-family')).toBe(SCORE_TEXT_FONT_FAMILY);
+    expect(text.getAttribute('font-style')).toBe('italic');
+  });
+
+  it('fontId を指定すると font-family がその書体になり、イタリックが外れる', () => {
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        partsConfig={[{
+          clef: 'treble',
+          data: withFreeText(2, 0, { text: 'con pedale', fontId: 'mincho' }),
+          onChange: () => {},
+        }]}
+      />
+    );
+    const text = freeTexts(container)[0];
+    expect(text.getAttribute('font-family')).toBe(resolveTitleFontOption('mincho').stack);
+    expect(text.getAttribute('font-style')).toBe('normal');
+  });
+
+  it('一覧に無い fontId は既定へ倒す（未知の family 名を SVG へ書かない）', () => {
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        partsConfig={[{
+          clef: 'treble',
+          data: withFreeText(2, 0, { text: 'dolce', fontId: 'no-such-font' }),
+          onChange: () => {},
+        }]}
+      />
+    );
+    const text = freeTexts(container)[0];
+    expect(text.getAttribute('font-family')).toBe(SCORE_TEXT_FONT_FAMILY);
+    expect(text.getAttribute('font-style')).toBe('italic');
+  });
+
+  it('Webフォントの書体を選ぶと Google Fonts の <link> が1回だけ入る', () => {
+    render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        partsConfig={[{
+          clef: 'treble',
+          data: withFreeText(2, 0, { text: 'con pedale', fontId: 'noto-serif-jp' }),
+          onChange: () => {},
+        }]}
+      />
+    );
+    expect(document.querySelectorAll('link#title-font-noto-serif-jp')).toHaveLength(1);
+  });
+});
+
+// #432 Codex round1 P2: クリック判定 rect は描画時の getBBox() から作られるため、
+// Webフォント読み込み完了後に再描画（＝判定の作り直し）が走ることを固定する。
+// getBBox の幅を「読み込み前=40 / 後=120」で切り替え、判定 rect の幅が追従することを見る
+describe('Webフォント読み込み後のクリック判定の作り直し', () => {
+  afterEach(() => {
+    cleanup();
+    Reflect.deleteProperty(SVGElement.prototype, 'getBBox');
+    Reflect.deleteProperty(document, 'fonts');
+  });
+
+  it('フォント読み込み完了後に判定 rect が実寸で作り直される', async () => {
+    let fontLoaded = false;
+    (SVGElement.prototype as unknown as { getBBox: () => { x: number; y: number; width: number; height: number } }).getBBox =
+      function () { return { x: 10, y: 10, width: fontLoaded ? 120 : 40, height: 12 }; };
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { load: vi.fn().mockResolvedValue([]), ready: Promise.resolve() },
+    });
+
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        symbolsClickable={true}
+        partsConfig={[{
+          clef: 'treble',
+          data: withFreeText(2, 0, { text: 'con pedale', fontId: 'noto-serif-jp' }),
+          onChange: () => {},
+        }]}
+      />
+    );
+    const hitWidth = () => {
+      const rect = container.querySelector('text[data-free-text] ~ rect.symbol-hit-region, rect.symbol-hit-region');
+      return rect ? parseFloat(rect.getAttribute('width') ?? '0') : null;
+    };
+    // 読み込み前: フォールバック書体の実寸（40 + パディング6）
+    expect(hitWidth()).toBe(46);
+
+    // <link> の読み込み完了を再現（jsdom は onload を発火しないため手で起こす）
+    fontLoaded = true;
+    const link = document.querySelector('link#title-font-noto-serif-jp') as HTMLLinkElement;
+    expect(link).toBeTruthy();
+    link.dispatchEvent(new Event('load'));
+
+    // フォント読み込み完了 → tick → 再描画で判定が 120 + 6 になる
+    await waitFor(() => {
+      expect(hitWidth()).toBe(126);
+    }, { timeout: 5000 });
+  });
+
+  // #432 Codex round2 P1: 印刷用の待機（2秒タイムアウト）を流用すると、読み込みが
+  // 2秒を超える遅い回線ではフォールバック寸法のまま再計測して終わってしまう。
+  // 再描画トリガーはタイムアウト無しで「実際の完了」まで待つことを固定する
+  it('フォント読み込みが2秒を超えても、完了時に判定 rect が作り直される', async () => {
+    let fontLoaded = false;
+    (SVGElement.prototype as unknown as { getBBox: () => { x: number; y: number; width: number; height: number } }).getBBox =
+      function () { return { x: 10, y: 10, width: fontLoaded ? 120 : 40, height: 12 }; };
+    // fonts.load が2.5秒後にやっと解決するモック（遅い回線の再現）
+    let resolveLoads: (() => void) | null = null;
+    const gate = new Promise<void>((r) => { resolveLoads = r; });
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { load: vi.fn(() => gate.then(() => [])), ready: Promise.resolve() },
+    });
+
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        symbolsClickable={true}
+        partsConfig={[{
+          clef: 'treble',
+          data: withFreeText(2, 0, { text: 'con pedale', fontId: 'noto-serif-jp' }),
+          onChange: () => {},
+        }]}
+      />
+    );
+    const hitWidth = () => {
+      const rect = container.querySelector('rect.symbol-hit-region');
+      return rect ? parseFloat(rect.getAttribute('width') ?? '0') : null;
+    };
+    expect(hitWidth()).toBe(46);
+    const link = document.querySelector('link#title-font-noto-serif-jp') as HTMLLinkElement;
+    link.dispatchEvent(new Event('load'));
+
+    // 2.5秒（旧実装のタイムアウト2秒より後）に読み込み完了
+    await new Promise((r) => setTimeout(r, 2500));
+    fontLoaded = true;
+    resolveLoads!();
+
+    await waitFor(() => {
+      expect(hitWidth()).toBe(126);
+    }, { timeout: 5000 });
+  }, 15000);
 });

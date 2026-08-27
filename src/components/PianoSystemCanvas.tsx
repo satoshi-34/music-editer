@@ -207,7 +207,10 @@ import {
   parseFreeTextOffsetInput,
   parseFreeTextScaleInput,
   resolveFreeTextAnnotation,
+  resolveFreeTextFont,
 } from '../utils/freeTextUtils';
+// 自由注釈の書体（Issue #432）はタイトル書体の一覧をそのまま共用する（別リストを作らない）
+import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, ensureTitleFontLoaded, resolveTitleFontOption, waitForTitleFontReady } from '../utils/titleFontOptions';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -1384,6 +1387,8 @@ type RenderCollectors = {
    */
   freeTextEntries: Array<{
     x: number; topY: number; text: string; scale: number; offsetX: number; offsetY: number;
+    /** 書体の id（Issue #432）。既定は 'default' で、従来のイタリックのセリフ体になる */
+    fontId: string;
     /** 矢印キーのライブ移動（オーバーレイから対象SVG要素を特定するため）に使う */
     partIndex: number; measureAbsoluteIndex: number;
   }>;
@@ -1864,7 +1869,7 @@ function drawCollectedSymbolEntries(args: {
   // FREE_TEXT_BASE_OFFSET_Y px 上で、♩=XXX（36px 上）・リハーサルマーク（72px 上）より
   // 下の帯に入るので、同じ小節に3つ付いても既定のままで重ならない。
   // 自動衝突回避（#340）の対象にはしない: 利用者が置いた場所に出ることを優先する。
-  freeTextEntries.forEach(({ x, topY, text, scale, offsetX, offsetY, partIndex, measureAbsoluteIndex }) => {
+  freeTextEntries.forEach(({ x, topY, text, scale, offsetX, offsetY, fontId, partIndex, measureAbsoluteIndex }) => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     el.textContent = text;
     el.setAttribute('class', 'vf-free-text');
@@ -1877,9 +1882,15 @@ function drawCollectedSymbolEntries(args: {
     el.setAttribute('x', String(x + offsetX));
     el.setAttribute('y', String(topY - FREE_TEXT_BASE_OFFSET_Y + offsetY));
     el.setAttribute('fill', '#111827');
-    el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
+    // 書体（Issue #432）はタイトル書体の一覧を共用する。既定は従来どおり
+    // SCORE_TEXT_FONT_FAMILY のイタリックなので、既存の注釈は 1px も変わらない
+    const font = resolveFreeTextFont(fontId);
+    // Webフォントを選んでいる場合は <link> を1回だけ入れる（注入済みなら何もしない）。
+    // 読み込み前はスタックの後続フォントで表示され、読み込み完了後に自動で切り替わる
+    ensureTitleFontLoaded(resolveTitleFontOption(fontId));
+    el.setAttribute('font-family', font.fontFamily);
     el.setAttribute('font-size', String(ENGRAVING_TEXT_UNITS.expressiveText * scale));
-    el.setAttribute('font-style', 'italic');
+    el.setAttribute('font-style', font.fontStyle);
     // 表示専用。譜面のクリック（音符入力・小節選択）を横取りしないようにする
     el.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(el);
@@ -2497,6 +2508,8 @@ export default function PianoSystemCanvas({
     currentScalePercent: string;
     currentOffsetX: string;
     currentOffsetY: string;
+    /** 書体の id（Issue #432）。既定は DEFAULT_TITLE_FONT_ID */
+    currentFontId: string;
     overlayX: number;
     overlayY: number;
     } | null;
@@ -2681,6 +2694,7 @@ export default function PianoSystemCanvas({
   const freeTextScaleInputRef = useRef<HTMLInputElement>(null);
   const freeTextOffsetXInputRef = useRef<HTMLInputElement>(null);
   const freeTextOffsetYInputRef = useRef<HTMLInputElement>(null);
+  const freeTextFontSelectRef = useRef<HTMLSelectElement>(null);
 
 
   /**
@@ -2770,6 +2784,39 @@ export default function PianoSystemCanvas({
     next[partIndex] = nextPart;
     return next;
   }, [partsScore, symbolOffsetDraft]);
+
+  // 自由注釈のWebフォント読み込み完了で1回だけ再描画する（#432 Codex round1 P2）。
+  // クリック判定 rect は描画時の getBBox() から作られるため、フォールバック書体で
+  // 測った判定のままだと、Webフォントへ切り替わった後に字面と判定がずれる
+  // （幅の広い書体では文字の右側を押しても編集が開かない）。
+  // 「使われている書体ID＋文字列」が変わったときだけ待ち直し、完了時に tick を進めて
+  // 描画 effect を再実行する（判定 rect が読み込み後の実寸で作り直される）。
+  const [freeTextFontReadyTick, setFreeTextFontReadyTick] = useState(0);
+  const freeTextFontSignature = useMemo(() => {
+    const byFont = new Map<string, string>();
+    partsScoreForRender.forEach((measures) => measures.forEach((m) => {
+      if (!m.freeText) return;
+      const resolved = resolveFreeTextAnnotation(m.freeText);
+      const option = resolveTitleFontOption(resolved.fontId);
+      // 待つ必要があるのは Google Fonts（非同期読み込み）だけ。システムスタックは即描画される
+      if (!option.googleFontFamily) return;
+      byFont.set(resolved.fontId, (byFont.get(resolved.fontId) ?? '') + resolved.text);
+    }));
+    return JSON.stringify(Array.from(byFont.entries()).sort());
+  }, [partsScoreForRender]);
+  useEffect(() => {
+    const entries = JSON.parse(freeTextFontSignature) as Array<[string, string]>;
+    if (entries.length === 0) return;
+    let cancelled = false;
+    // タイムアウト無しで実際の読み込み完了まで待つ（#432 Codex round2 P1）。
+    // 既定の2秒で打ち切ると、遅い回線でフォールバック書体のまま判定を再計測し、
+    // その後に実フォントへ切り替わっても再描画されない
+    Promise.all(entries.map(([fontId, sample]) =>
+      waitForTitleFontReady(resolveTitleFontOption(fontId), sample, Number.POSITIVE_INFINITY)))
+      .then(() => { if (!cancelled) setFreeTextFontReadyTick((t) => t + 1); });
+    return () => { cancelled = true; };
+  }, [freeTextFontSignature]);
+
 
   /**
    * 矢印キー1押しぶんの移動を下書きへ反映する。
@@ -5893,6 +5940,7 @@ export default function PianoSystemCanvas({
                 currentScalePercent: resolved && resolved.scale !== 1 ? String(Math.round(resolved.scale * 100)) : '',
                 currentOffsetX: resolved && resolved.offsetX !== 0 ? String(resolved.offsetX) : '',
                 currentOffsetY: resolved && resolved.offsetY !== 0 ? String(resolved.offsetY) : '',
+                currentFontId: resolved?.fontId ?? DEFAULT_TITLE_FONT_ID,
                 ...overlayAt(),
               });
               return 'handled';
@@ -7440,6 +7488,7 @@ export default function PianoSystemCanvas({
             currentScalePercent: resolved && resolved.scale !== 1 ? String(Math.round(resolved.scale * 100)) : '',
             currentOffsetX: resolved && resolved.offsetX !== 0 ? String(resolved.offsetX) : '',
             currentOffsetY: resolved && resolved.offsetY !== 0 ? String(resolved.offsetY) : '',
+            currentFontId: resolved?.fontId ?? DEFAULT_TITLE_FONT_ID,
             overlayX: me.clientX - (containerRect?.left ?? 0),
             overlayY: me.clientY - (containerRect?.top ?? 0),
           });
@@ -7791,7 +7840,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,freeTextFontReadyTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
@@ -7898,7 +7947,7 @@ export default function PianoSystemCanvas({
    * クリックした段（パート）自身の小節データにだけ保存する。テキストが空なら
    * フィールドごと削除する＝「空欄で確定＝消す」というリハーサルマークと同じ操作感。
    */
-  function handleFreeTextConfirm(input: { text: string; scalePercent: string; offsetX: string; offsetY: string }) {
+  function handleFreeTextConfirm(input: { text: string; scalePercent: string; offsetX: string; offsetY: string; fontId: string }) {
     if (!freeTextEditState) return;
     const { measureAbsoluteIndex, partIndex } = freeTextEditState;
     const freeText = buildFreeTextAnnotation({
@@ -7906,6 +7955,7 @@ export default function PianoSystemCanvas({
       scale: parseFreeTextScaleInput(input.scalePercent),
       offsetX: parseFreeTextOffsetInput(input.offsetX),
       offsetY: parseFreeTextOffsetInput(input.offsetY),
+      fontId: input.fontId,
     });
     setPartsScore(prev => {
       const next = [...prev];
@@ -7975,6 +8025,7 @@ export default function PianoSystemCanvas({
       scalePercent: freeTextScaleInputRef.current?.value ?? '',
       offsetX: freeTextOffsetXInputRef.current?.value ?? '',
       offsetY: freeTextOffsetYInputRef.current?.value ?? '',
+      fontId: freeTextFontSelectRef.current?.value ?? DEFAULT_TITLE_FONT_ID,
     });
   }
 
@@ -8477,6 +8528,34 @@ export default function PianoSystemCanvas({
               e.stopPropagation();
             }}
           />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontFamily: 'sans-serif' }}>
+            <span>書体</span>
+            <select
+              ref={freeTextFontSelectRef}
+              aria-label="自由注釈の書体"
+              defaultValue={freeTextEditState.currentFontId}
+              style={{ flex: 1, fontSize: 11, padding: 1, maxWidth: 170 }}
+              onChange={(e) => {
+                // 確定を待たずに <link> を入れておく。確定した瞬間に描き直されるので、
+                // ここで読み込みを始めておくとフォールバック書体が見える時間が短くなる
+                ensureTitleFontLoaded(resolveTitleFontOption(e.target.value));
+              }}
+              onKeyDown={(e) => {
+                // ここでは矢印キーを横取りしない（セレクトの選択肢移動に使うため。
+                // 位置の微調整は他の入力欄で行える）
+                if (e.key === 'Enter') commitFreeTextFromInputs();
+                else if (e.key === 'Escape') setFreeTextEditState(null);
+                e.stopPropagation();
+              }}
+            >
+              {TITLE_FONT_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {/* 既定は「発想標語と同じイタリック」という意味なので、タイトル側とは別の言い方にする */}
+                  {option.id === DEFAULT_TITLE_FONT_ID ? '既定（イタリック・指示文向き）' : option.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontFamily: 'sans-serif' }}>
             <span>サイズ</span>
             <input

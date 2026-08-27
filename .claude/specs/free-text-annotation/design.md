@@ -128,8 +128,7 @@ Issue の論点「記号序列（#416）上の扱い」については、**自�
 - **ページ固定アンカー**（タイトル脇など紙面固定の用途）: Issue の論点3のハイブリッド案。v2
 - **ドラッグでの移動**: v1 は数値入力（オーバーレイ）のみ。音符に付いた記号のドラッグ移動は
   `appendSymbolHitRegion` の台帳経由なので、自由注釈をそこへ載せる改修が別途必要
-- **フォント指定**: トリアージの「#420 の仕組みで変更可」は、#420（PR #426）が未マージのため
-  v1 では**サイズのみ**対応。書体の指定は #420 マージ後に `titleFontId` と同じ仕組みで足す
+- ~~**フォント指定**~~: Issue #432 で対応済み（下記「書体選択」）
 - **MusicXML 入出力**: `<direction><words>`（小節付き）への対応は未着手
 - **1小節に複数の注釈**: v1 はパート×小節につき1つ
 
@@ -152,3 +151,120 @@ Issue の論点「記号序列（#416）上の扱い」については、**自�
 （他の記号のクリック選択 #398 と一貫させる。従来はTツールを選び直して小節を押すしかなかった）。
 描画後に `text[data-free-text]` の bbox へ透明の判定 rect（`symbol-hit-region vf-screen-only`）を
 重ねる方式。getBBox が使えない環境（jsdom 等）では x/y・フォントサイズからのフォールバック見積もり。
+
+## 書体選択（Issue #432）
+
+### 問題
+
+#421 の当初仕様にあった「フォントは #420 のタイトル書体リストを共用」が v1 実装で落ちていた
+（#420 が当時未マージだったため）。指示文（senza sordini 型）はイタリックのセリフ体が浄書慣習
+として正しいが、献呈・出典・説明書きでは書体を変えたい。
+
+### 修正設計
+
+**データ**: `FreeTextAnnotation.fontId?: string`。`titleFontId` と同じ後方互換パターンで、
+**省略時＝既定＝従来のイタリックのセリフ体**。未知の id（手書き JSON・将来の一覧変更）は
+読み込み時に既定へ倒す。検証（`isValidFreeTextAnnotation`）は「文字列であること」だけを見て、
+一覧に無い id でも**弾かない**——弾くと「選択肢を1つ減らしただけで昔のファイルが開けない」
+ことになってしまうため。
+
+**選択肢の共用**: 一覧は `TITLE_FONT_OPTIONS` をそのまま使う（別リストを作らない）。
+Webフォントの読み込みも `ensureTitleFontLoaded` / `waitForTitleFontReady` を共用する。
+「同じ目的の2枚目の実装」を作らないのが要点で、書体を追加するときは #420 と同じ 1 か所
+（`titleFontOptions.ts`）を触れば自由注釈にも増える。
+
+**描画**: `resolveFreeTextFont(fontId)` が font-family / font-style を決める1か所。
+
+| fontId | font-family | font-style |
+| --- | --- | --- |
+| 未指定・`default`・未知の id | `SCORE_TEXT_FONT_FAMILY` | `italic` |
+| 一覧にある id | その選択肢の `stack` | `normal` |
+
+**書体を選んだときに italic を外す**のは、選んだ書体そのものの見た目を見せるため
+（イタリックを重ねるとブラウザの合成斜体になり品位が落ちる。#420 で太さの合成を避けたのと同じ理由）。
+描画時に `ensureTitleFontLoaded` を呼んで `<link>` を1回だけ注入する。読み込み前はスタックの
+後続フォント（Hiragino 等）で表示され、完了後に自動で切り替わる。
+
+**UI**: 自由注釈オーバーレイに書体セレクトを1行追加。既定の表示名だけはタイトル側の
+「既定（浄書セリフ体）」ではなく **「既定（イタリック・指示文向き）」** にする（自由注釈での
+既定はイタリック込みという意味なので、同じ文言だと誤解を招く）。セレクトでは**矢印キーを
+横取りしない**——矢印は選択肢の移動に要るため（位置の微調整は他の3つの入力欄で従来どおりできる）。
+ライブプレビューは実装していない: 確定すれば即座に描き直されるうえ、プレビューを入れると
+Escape で閉じたときの復元（#429 round1 P2 と同じ型のバグ）を font まで面倒見る必要が出るため。
+
+**印刷・PDF**: `handleExportPdf` が、タイトル書体に加えて**譜面内で実際に使われている自由注釈の
+書体ごとに** `waitForTitleFontReady` を待つ。待たずに印刷すると読み込み前のフォールバック書体が
+PDF へ固定される（#420 Codex round1 P1 と同じ）。Google Fonts は unicode-range で分割配信される
+ため、その書体で描かれる文字を連結して渡す。
+
+### 影響範囲
+
+| ファイル | 変更 |
+| --- | --- |
+| `src/types/storage.ts` | `FreeTextAnnotation.fontId?: string` |
+| `src/utils/freeTextUtils.ts` | `buildFreeTextAnnotation` / `resolveFreeTextAnnotation` / `isValidFreeTextAnnotation` に fontId、`resolveFreeTextFont` を新設 |
+| `src/components/PianoSystemCanvas.tsx` | 収集・描画（font-family/font-style）・オーバーレイの書体セレクト・確定処理 |
+| `src/components/ScorePage.tsx` | 印刷前のWebフォント待ち |
+
+既定のまま置いた既存の注釈は `fontId` を持たず、描画も従来と同じ属性値になるので**見た目は 1px も変わらない**
+（回帰テストで固定）。
+
+### 受入テスト
+
+`src/utils/freeTextUtils.test.ts`
+
+- 既定・未指定・未知の id は `fontId` をフィールドごと省く（旧データと同じ形の JSON）
+- 既定以外は `fontId` として保存する
+- `resolveFreeTextFont`: 既定→セリフ体＋italic、選択→スタック＋normal、未知→既定
+- 検証は文字列の fontId を受け入れ（一覧に無い id も可）、文字列でないものを弾く
+
+`src/components/PianoSystemCanvasFreeText.test.tsx`
+
+- `fontId` の無い注釈は従来どおり `SCORE_TEXT_FONT_FAMILY` ＋ italic（回帰防止）
+- `fontId` 指定で font-family がその書体になり italic が外れる／未知の id は既定へ倒す
+- Webフォントの書体で Google Fonts の `<link>` が1回だけ入る
+
+`src/components/ScorePageFreeText.test.tsx`（配線）
+
+- 書体を選んで確定→保存され、SVG の font-family が変わる。開き直すと現在の書体が選ばれている
+- 書体を選ばずに置いた注釈は `fontId` を保存せず、従来どおりイタリックのセリフ体で描かれる
+
+### 積み残し
+
+- 一覧は**タイトル書体と完全に同じ**。自由注釈向けだけの書体（音楽記号を含む Unicode 対応フォント等）は
+  入れていない。Issue #432 のコメントにある「テキスト記号をカスタム記号ライブラリへ寄せる」方向
+  （#89 と合流）が出てきたときに、あらためて一覧の分離を検討する
+- 1小節1注釈・単一行という v1 の制限はそのまま
+
+## #432 Codex round 1 対応（2026-08-28）
+
+- **Webフォント読み込み後の判定作り直し**: クリック判定 rect は描画時の getBBox() 実寸から
+  作られるため、フォールバック書体で測ったままだと読み込み後に字面とずれる。
+  「使われている書体ID＋文字列」の署名（useMemo）を監視し、waitForTitleFontReady の完了で
+  tick を進めて描画 effect を再実行する。回帰テストは PianoSystemCanvasFreeText.test.tsx
+  「フォント読み込み完了後に判定 rect が実寸で作り直される」。
+  **検証の正直な記録**: tick を deps から外しても現状はテストが通る（描画 effect の依存に
+  レンダーごとに identity が変わる値が含まれており、再レンダーだけで再描画されるため）。
+  tick の役割は「フォント読み込み完了時に再レンダー自体を起こす」ことにある
+- **PDF書き出しの待機の配線テスト**: handleExportPdf の注釈フォント集約は、削除しても他の
+  テストが通ってしまう。ScorePageFreeText.test.tsx に「fonts.load へ注釈本文が渡る・
+  読み込み完了までは print しない・完了後に print する」を追加（集約を外すと失敗する
+  ことを負のテストで確認済み）
+- README の矢印キー説明を「文章・文字サイズ・横・縦の入力欄で効く（書体リストでは
+  選択に使われる）」へ限定
+- **スクリーンショット添付は未達**: ブランチの dev サーバをアプリ内ブラウザで駆動し、
+  注釈へ noto-serif-jp を設定 → svg text の font-family/font-style と <link> 注入を DOM で
+  実測確認した。ただし本セッションの環境ではブラウザペインが非表示でスクリーンショットを
+  取得できず、リポジトリに Playwright 等の撮影手段も無いため画像の添付は行っていない
+  （行き止まりは喋る: 撮影は運用者の実機確認または撮影手段の導入後に補完する）
+
+## #432 Codex round 2 対応（2026-08-28）
+
+- **再描画トリガーは無期限待機・PDFは2秒維持**: 再描画用のフォント待機に印刷用の
+  waitForTitleFontReady（2秒タイムアウト）を流用していたため、読み込みが2秒を超える
+  遅い回線ではフォールバック寸法のまま再計測して終わり、その後の実フォント切り替えで
+  再描画されなかった（round2 P1）。waitForTitleFontReady に `timeoutMs = Infinity` の
+  経路を追加し、**再描画トリガーだけ**実際の読み込み完了まで待つ。PDF書き出しの待機は
+  従来どおり2秒タイムアウト（オフライン等で印刷を永久に止めないため）。
+  回帰テスト「フォント読み込みが2秒を超えても、完了時に判定 rect が作り直される」
+  （2.5秒遅延モック）を追加し、Infinity 指定を外すと失敗することを負のテストで確認済み

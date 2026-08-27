@@ -203,6 +203,21 @@ export async function waitForTitleFontReady(
   timeoutMs = 2000,
 ): Promise<void> {
   if (!option.googleFontFamily || typeof document === 'undefined' || !document.fonts?.load) return;
+  // timeoutMs に Infinity を渡すと「実際の読み込み完了まで待つ」（#432 Codex round2 P1）。
+  // 画面の再描画トリガーは印刷と違って永久に待っても害がなく（ユーザーを止めない）、
+  // 2秒タイムアウトで打ち切ると遅い回線でフォールバック寸法のまま再計測してしまう
+  if (!Number.isFinite(timeoutMs)) {
+    await (async () => {
+      await ensureTitleFontLink(option);
+      const primaryFamily = option.stack.split(',')[0].trim().replace(/^"|"$/g, '');
+      const text = sampleText || undefined;
+      await document.fonts.load(`16px "${primaryFamily}"`, text);
+      await document.fonts.load(`600 16px "${primaryFamily}"`, text);
+      await document.fonts.load(`700 16px "${primaryFamily}"`, text);
+      await document.fonts.ready;
+    })().catch(() => undefined);
+    return;
+  }
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs));
   const work = (async () => {
     await ensureTitleFontLink(option);

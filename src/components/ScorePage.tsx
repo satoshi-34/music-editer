@@ -38,6 +38,7 @@ import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useWorkLibrary } from '../hooks/useWorkLibrary';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
 import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
+import { resolveFreeTextAnnotation } from '../utils/freeTextUtils';
 import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, TITLE_FONT_SIZE_DEFAULT, TITLE_FONT_SIZE_MAX, TITLE_FONT_SIZE_MIN, TITLE_FONT_SIZE_STEP, ensureTitleFontLoaded, normalizeTitleFontSize, normalizeTitleFontWeight, resolveTitleFontOption, titleBlockStyleVars, waitForTitleFontReady } from '../utils/titleFontOptions';
 import type { TitleFontWeight } from '../utils/titleFontOptions';
 import HelpPanel from './HelpPanel';
@@ -4237,8 +4238,24 @@ export default function ScorePage() {
       resolveTitleFontOption(titleFontId),
       [title, subtitle, lyricist, composer, arranger].join(''),
     );
+    // 自由注釈テキスト（Issue #432）も書体を選べるので、同じように読み込みを待つ。
+    // 使われている書体ごとに1回だけ、その書体で描かれる文字をまとめて渡す
+    // （Google Fonts は unicode-range で分割配信されるため、文字列を渡さないと
+    // 日本語グリフの読み込み完了を保証できない。#420 と同じ理由）
+    const freeTextByFont = new Map<string, string>();
+    for (const part of buildCurrentScoreData().parts) {
+      for (const measure of part.measures) {
+        if (!measure.freeText) continue;
+        const resolved = resolveFreeTextAnnotation(measure.freeText);
+        freeTextByFont.set(resolved.fontId, (freeTextByFont.get(resolved.fontId) ?? '') + resolved.text);
+      }
+    }
+    await Promise.all(
+      Array.from(freeTextByFont, ([fontId, sample]) =>
+        waitForTitleFontReady(resolveTitleFontOption(fontId), sample)),
+    );
     window.print();
-  }, [titleFontId, title, subtitle, lyricist, composer, arranger]);
+  }, [titleFontId, title, subtitle, lyricist, composer, arranger, buildCurrentScoreData]);
 
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

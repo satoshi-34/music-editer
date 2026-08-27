@@ -10,6 +10,8 @@ import ScorePage from './ScorePage';
 import {
   createSavedScoreData, createWork, saveWorkAutosaveData, setLastOpenedWorkId, loadWorkAutosaveData,
 } from '../utils/storage';
+import { SCORE_TEXT_FONT_FAMILY } from '../utils/engravingDefaults';
+import { resolveTitleFontOption } from '../utils/titleFontOptions';
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -323,5 +325,120 @@ describe('ScorePage: 自由注釈テキストの配線（#421）', () => {
     fireEvent.change(xInput, { target: { value: '150' } });
     fireEvent.keyDown(input, { key: 'ArrowRight' });
     expect(xInput.value).toBe('151');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // ── 書体選択（Issue #432） ────────────────────────────────────────────
+  it('書体を選んで確定すると保存され、SVG の font-family が変わる', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    await selectFreeTextTool();
+    clickMeasureOfPart(0);
+    const input = await screen.findByLabelText('自由注釈テキスト', {}, { timeout: 15000 }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'con pedale' } });
+    const fontSelect = screen.getByLabelText('自由注釈の書体') as HTMLSelectElement;
+    // 開いた時点では「既定」が選ばれている
+    expect(fontSelect.value).toBe('default');
+    fireEvent.change(fontSelect, { target: { value: 'mincho' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      const ft = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText;
+      expect(ft?.text).toBe('con pedale');
+      expect(ft?.fontId).toBe('mincho');
+    }, { timeout: 15000 });
+
+    // 譜面の描画も選んだ書体になり、イタリックが外れている
+    await waitFor(() => {
+      const svgText = document.querySelector('text[data-free-text]') as SVGTextElement;
+      expect(svgText.getAttribute('font-family')).toBe(resolveTitleFontOption('mincho').stack);
+      expect(svgText.getAttribute('font-style')).toBe('normal');
+    }, { timeout: 15000 });
+
+    // 開き直すと現在の書体が選ばれた状態で出る
+    clickMeasureOfPart(0);
+    await waitFor(() => {
+      expect((screen.getByLabelText('自由注釈の書体') as HTMLSelectElement).value).toBe('mincho');
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 既定のまま置いた注釈は、書体セレクトが増えても見た目が 1px も変わらないこと（回帰防止）
+  it('書体を選ばずに置いた注釈は従来どおりイタリックのセリフ体で、fontId を保存しない', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    await selectFreeTextTool();
+    clickMeasureOfPart(0);
+    await typeAnnotation('senza sordini');
+
+    await waitFor(() => {
+      const ft = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText;
+      expect(ft?.text).toBe('senza sordini');
+      expect(ft?.fontId).toBeUndefined();
+    }, { timeout: 15000 });
+    const svgText = document.querySelector('text[data-free-text]') as SVGTextElement;
+    expect(svgText.getAttribute('font-family')).toBe(SCORE_TEXT_FONT_FAMILY);
+    expect(svgText.getAttribute('font-style')).toBe('italic');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // #432 Codex round1 P2: PDF書き出し前の「注釈のWebフォント読み込み待ち」の配線。
+  // この集約処理（handleExportPdf 内）を消しても他のテストは通ってしまうため、
+  // 実マウントで「fonts.load に注釈本文が渡る」「読み込み完了までは print しない」
+  // 「完了後に print する」を固定する
+  it('PDF書き出しは、注釈のWebフォント読み込み完了を待ってから print する', async () => {
+    // fonts.load を「手動で解決できる」モックにする
+    let resolveLoads: (() => void) | null = null;
+    const gate = new Promise<void>((r) => { resolveLoads = r; });
+    const loadMock = vi.fn(() => gate.then(() => []));
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { load: loadMock, ready: Promise.resolve() },
+    });
+    // Webフォント付きの注釈を仕込む
+    const seeded = loadWorkAutosaveData; // 参照維持（lint対策なし・下で使用）
+    void seeded;
+    seedWork();
+    {
+      const data = loadWorkAutosaveData(workId).data!;
+      data.parts[0].measures[0].freeText = { text: 'espressivo', fontId: 'noto-serif-jp' };
+      saveWorkAutosaveData(workId, data);
+    }
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('text[data-free-text]')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    const printMock = window.print as ReturnType<typeof vi.fn>;
+    printMock.mockClear();
+    loadMock.mockClear();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'pdf' } });
+
+    // <link> は jsdom では onload が発火しないため手で起こす（読み込み完了の再現）
+    await waitFor(() => {
+      expect(document.querySelector('link#title-font-noto-serif-jp')).toBeTruthy();
+    }, { timeout: 15000 });
+    document.querySelector('link#title-font-noto-serif-jp')!.dispatchEvent(new Event('load'));
+
+    // fonts.load へ注釈本文が渡る（unicode-range 分割配信対応の要）
+    await waitFor(() => {
+      expect(loadMock.mock.calls.some((c) => String(c[1] ?? '').includes('espressivo'))).toBe(true);
+    }, { timeout: 15000 });
+    // 読み込みが終わるまでは print されない
+    expect(printMock).not.toHaveBeenCalled();
+
+    // 読み込み完了 → print される
+    resolveLoads!();
+    await waitFor(() => {
+      expect(printMock).toHaveBeenCalled();
+    }, { timeout: 15000 });
+    Reflect.deleteProperty(document, 'fonts');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

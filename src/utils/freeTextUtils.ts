@@ -5,6 +5,8 @@
 // そろえてある。
 
 import type { FreeTextAnnotation } from '../types/storage';
+import { SCORE_TEXT_FONT_FAMILY } from './engravingDefaults';
+import { DEFAULT_TITLE_FONT_ID, resolveTitleFontOption } from './titleFontOptions';
 
 /** サイズ倍率の下限・上限（記号サイズ変更オーバーレイの 25〜400% と同じ範囲にそろえる） */
 export const MIN_FREE_TEXT_SCALE = 0.25;
@@ -50,6 +52,8 @@ export function buildFreeTextAnnotation(input: {
   scale: number;
   offsetX: number;
   offsetY: number;
+  /** 書体の id（Issue #432）。未指定・既定・未知の id は「既定」としてフィールドごと省く */
+  fontId?: string;
 }): FreeTextAnnotation | undefined {
   const text = input.text.trim();
   if (!text) return undefined;
@@ -57,6 +61,10 @@ export function buildFreeTextAnnotation(input: {
   if (input.scale !== 1) annotation.scale = input.scale;
   if (input.offsetX !== 0) annotation.offsetX = input.offsetX;
   if (input.offsetY !== 0) annotation.offsetY = input.offsetY;
+  // 既定の書体を選んだときはキーごと省く（旧データと同じ形の JSON を保つため）。
+  // 未知の id も resolveTitleFontOption が既定へ倒すので、ここで自然に省かれる
+  const fontId = resolveTitleFontOption(input.fontId).id;
+  if (fontId !== DEFAULT_TITLE_FONT_ID) annotation.fontId = fontId;
   return annotation;
 }
 
@@ -66,13 +74,34 @@ export function resolveFreeTextAnnotation(annotation: FreeTextAnnotation): {
   scale: number;
   offsetX: number;
   offsetY: number;
+  fontId: string;
 } {
   return {
     text: annotation.text,
     scale: annotation.scale ?? 1,
     offsetX: annotation.offsetX ?? 0,
     offsetY: annotation.offsetY ?? 0,
+    // 未知の id は既定へ倒して返す（描画側が未知の family 名を書かないようにするため）
+    fontId: resolveTitleFontOption(annotation.fontId).id,
   };
+}
+
+/**
+ * 自由注釈の書体 id から、SVG の text へ書く font-family / font-style を決める（Issue #432）。
+ *
+ * 既定（fontId 未指定）は発想標語と同じ「浄書セリフ体＋イタリック」。指示文（senza sordini 型）は
+ * この見た目が浄書の慣習として正しいので、既存の注釈は 1px も変えない。
+ * 書体を選んだときは italic を外す: 選んだ書体そのものの見た目を見せるのが目的で、
+ * イタリックを重ねるとブラウザの合成斜体になり品位が落ちるため。
+ */
+export function resolveFreeTextFont(fontId: string | undefined): {
+  fontFamily: string;
+  fontStyle: 'italic' | 'normal';
+} {
+  const option = resolveTitleFontOption(fontId);
+  // 既定の選択肢は stack が空文字（「上書きしない」の意味）なので、従来の見た目へ倒す
+  if (!option.stack) return { fontFamily: SCORE_TEXT_FONT_FAMILY, fontStyle: 'italic' };
+  return { fontFamily: option.stack, fontStyle: 'normal' };
 }
 
 /**
@@ -86,6 +115,9 @@ export function isValidFreeTextAnnotation(value: unknown): value is FreeTextAnno
   if (typeof annotation.text !== 'string' || annotation.text.trim().length === 0) return false;
   const isValidOptionalNumber = (n: unknown, min: number, max: number): boolean =>
     n === undefined || (typeof n === 'number' && Number.isFinite(n) && n >= min && n <= max);
+  // 書体 id は文字列でありさえすれば受け入れる。一覧に無い id は描画時に既定へ倒す方針なので、
+  // ここで弾くと「一覧を減らしただけで昔のファイルが開けない」ことになってしまう
+  if (annotation.fontId !== undefined && typeof annotation.fontId !== 'string') return false;
   return (
     isValidOptionalNumber(annotation.scale, MIN_FREE_TEXT_SCALE, MAX_FREE_TEXT_SCALE) &&
     isValidOptionalNumber(annotation.offsetX, -MAX_FREE_TEXT_OFFSET, MAX_FREE_TEXT_OFFSET) &&
