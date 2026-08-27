@@ -199,6 +199,15 @@ import { computeFitZoom, readPageAreaAvailableWidth, VIEW_ZOOM_MIN, VIEW_ZOOM_MA
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
+
+/**
+ * 自動保存デバウンスの max-wait（ms）。前回保存からこの時間を超えて編集が続いた場合、
+ * デバウンス（1.5秒待ち）をやめてその場で同期保存する。
+ * 2026-08-27 に本番で「編集のたびにデバウンスが張り直され続けて自動保存が一度も
+ * 発火しない」状態（無限再レンダー由来）が実測され、セッションの編集内容が
+ * 丸ごと失われた。原因のレンダーループとは独立に、保存の飢餓を構造的に不可能にする
+ */
+const AUTOSAVE_MAX_WAIT_MS = 5000;
 // ツールバー（ヘッダー）の折り畳み状態（Issue #125）。譜面データではなく画面設定なので
 // 他のUI設定と同じく localStorage へ保存し、リロード後も同じ状態で開けるようにする。
 // 真偽値の保存形式は '1'（折り畳み中）/ '0'（展開中）。JSON.parse を挟まないぶん、
@@ -544,6 +553,12 @@ export default function ScorePage() {
       autoSaveTimerRef.current = null;
     }
   }, []);
+  /**
+   * 前回の自動保存（完了 or 空スキップ）の時刻。デバウンス飢餓ガード（max-wait）の基準。
+   * 初期値を「マウント時刻」にするのは、起動直後の復元・初期化ラッシュで
+   * いきなり同期保存経路へ入らないようにするため（起動から max-wait の猶予を持たせる）
+   */
+  const lastAutosaveCompletedAtRef = useRef(Date.now());
   // localStorage 自体は React の state ではないため、読んでも自動では再描画されない。
   // 「開く」メニューに「以前の手動保存を取り込む」を出すかどうか（旧スロットの有無）を
   // 画面状態として持ち、取り込みの節目で更新する（#109 第4段）。
@@ -2386,12 +2401,14 @@ export default function ScorePage() {
     // rightHandData が undefined のうちは初期ロード前なので保存しない
     if (rightHandData === undefined && scoreType !== 'quartet' && scoreType !== 'ensemble') return;
 
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(async () => {
+    const performAutosave = () => {
       const { metadata, parts } = buildScoreData();
       // 内容が空（全パート・全小節が空）のときは自動保存で既存の内容を上書きしない。
       // 「新規作成」では別の作品IDへ切り替えるので、前の作品はそのまま一覧に残る。
       if (isEmptyScoreData(parts)) {
+        // 空のうちは保存しないが「保存を試みた時刻」は進める。進めないと、空のまま
+        // max-wait を超えた後の編集のたびに同期保存経路へ入り続ける（デバウンスが効かない）
+        lastAutosaveCompletedAtRef.current = Date.now();
         return;
       }
       setAutoSaveStatus('saving');
@@ -2401,6 +2418,7 @@ export default function ScorePage() {
         createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle)
       );
       if (saved) {
+        lastAutosaveCompletedAtRef.current = Date.now();
         setAutoSaveStatus('saved');
         if (autoSaveStatusTimerRef.current) clearTimeout(autoSaveStatusTimerRef.current);
         // 3 秒後に「保存済み」表示を消す
@@ -2408,7 +2426,22 @@ export default function ScorePage() {
       } else {
         setAutoSaveStatus('idle');
       }
-    }, 1500);
+    };
+
+    // デバウンス飢餓ガード（2026-08-27 本番で実発生）: この effect は編集のたびに走り、
+    // 走るたびに前回の1.5秒タイマーを取り消して張り直す。そのため、レンダーが高頻度で
+    // 続く異常状態（無限再レンダー等）や編集が1.5秒以内に連続し続ける状況では、
+    // タイマーが**一度も発火しないまま永遠に延期**され、編集内容が丸ごと失われる。
+    // 前回保存から一定時間（max-wait）を超えていたら、デバウンスせずこの場で同期保存する。
+    // localStorage への保存は同期処理なので、effect 内で直接呼んで問題ない。
+    const overdue = Date.now() - lastAutosaveCompletedAtRef.current > AUTOSAVE_MAX_WAIT_MS;
+    if (overdue) {
+      performAutosave();
+      return;
+    }
+
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(performAutosave, 1500);
 
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
