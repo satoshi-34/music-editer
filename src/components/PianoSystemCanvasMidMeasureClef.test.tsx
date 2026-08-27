@@ -68,6 +68,24 @@ function renderScore(data: MeasureData[], tool: Record<string, unknown>, activeV
   return { container, svg, onChange };
 }
 
+/** 1段に複数小節を並べて描く（段の途中でのクレフ表示を見るため） */
+function renderScoreWithMeasuresPerSystem(data: MeasureData[], measuresPerSystem: number) {
+  const { container, unmount } = render(
+    <PianoSystemCanvas
+      measuresPerSystem={measuresPerSystem}
+      tool={{ duration: '4', isRest: false } as never}
+      scale={1}
+      partsConfig={[{ clef: 'treble', data, onChange: vi.fn() }]}
+      showInstrumentLabels={false}
+      timeSignature={[4, 4]}
+    />
+  );
+  const svg = container.querySelector('svg') as SVGSVGElement;
+  expect(svg).toBeTruthy();
+  mockSvgLayout(svg);
+  return { container, svg, unmount };
+}
+
 function clickCenter(el: SVGRectElement) {
   const x = parseFloat(el.getAttribute('x')!) + parseFloat(el.getAttribute('width')!) / 2;
   const y = parseFloat(el.getAttribute('y')!) + parseFloat(el.getAttribute('height')!) / 2;
@@ -156,6 +174,39 @@ describe('小節途中での音部記号変更の入力（Issue #424 段1）', (
     } finally {
       window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
     }
+  });
+
+  it('受入6: 途中で変えたあと、次の小節の頭にクレフを描き直さない（重複の回帰）', () => {
+    // 実際の楽譜では、小節の途中でクレフを変えたあと、次の小節の頭では書き直さない。
+    // 「前の小節の**先頭**時点」と比べていると、途中変更のぶんだけ次の小節の頭にも
+    // 小型クレフが出て二重になる（ブラウザ確認で見つかった不具合）。
+    const q = (key: string, clefChange?: 'bass'): MeasureData['events'][number] => ({
+      dur: '4', isRest: false, keys: [key], ...(clefChange ? { clefChange } : {}),
+    });
+    const midChange: MeasureData[] = [
+      { events: [q('c/5'), q('e/5'), q('g/5', 'bass'), q('e/5')] },
+      { events: [q('c/5'), q('e/5'), q('g/5'), q('e/5')] },
+    ];
+    const measureChange: MeasureData[] = [
+      { events: [q('c/5'), q('e/5'), q('g/5'), q('e/5')] },
+      { clef: 'bass', events: [q('c/5'), q('e/5'), q('g/5'), q('e/5')] },
+    ];
+
+    /** 小型クレフ（VexFlow は通常 30pt・小型 20pt で描く）の数 */
+    const smallClefCount = (svg: SVGSVGElement) =>
+      Array.from(svg.querySelectorAll('text')).filter((text) =>
+        ['e050', 'e062'].includes((text.textContent ?? '').codePointAt(0)?.toString(16) ?? '')
+        && (text.getAttribute('font-size') ?? '') === '20pt'
+      ).length;
+
+    const mid = renderScoreWithMeasuresPerSystem(midChange, 2);
+    expect(smallClefCount(mid.svg), '途中変更ぶんの小型クレフは1つだけ').toBe(1);
+    mid.unmount();
+
+    // 小節単位の変更（従来機能）は、これまでどおり次の小節の頭に小型クレフが出る
+    const measure = renderScoreWithMeasuresPerSystem(measureChange, 2);
+    expect(smallClefCount(measure.svg), '小節単位の変更は従来どおり').toBe(1);
+    measure.unmount();
   });
 
   it('受入5: クリック入力の音高は「その位置の時点のクレフ」で決まる', () => {

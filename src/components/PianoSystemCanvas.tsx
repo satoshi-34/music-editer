@@ -106,6 +106,7 @@ import {
   collectMidMeasureClefChanges,
   resolveClefAtBeat,
   hasMidMeasureClefChange,
+  resolveClefAtMeasureEnd,
 } from '../utils/clefMeasureUtils';
 import { logEditOp, logRenderPass } from '../utils/editDebugLog';
 import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt, asRenderedPartIndex, type RenderedPartIndex } from '../utils/crossStaffUtils';
@@ -4583,7 +4584,14 @@ export default function PianoSystemCanvas({
         // part.data は親から渡された初期値の可能性があり、編集後の値を反映しないため使わない。
         const partMeasuresForClef = partsScoreForRender[pi] ?? part.data;
         const effectiveClefHere = resolveMeasureClef(partMeasuresForClef, startMeasureIndex + i, part.clef);
-        const prevEffectiveClef = resolveMeasureClef(partMeasuresForClef, startMeasureIndex + i - 1, part.clef);
+        // 比べる相手は「前の小節の**末尾**時点」のクレフ（Issue #424）。
+        // 前の小節の先頭時点と比べると、その小節の途中で変えた場合に
+        // 「途中で1つ・次の小節の頭でもう1つ」と小型クレフが二重に出る
+        // （実際の楽譜では、途中で変えたあとに小節が変わっても書き直さない）。
+        const prevEffectiveClef = resolveClefAtMeasureEnd(
+          getPrimaryVoiceEvents(partMeasuresForClef[startMeasureIndex + i - 1]),
+          resolveMeasureClef(partMeasuresForClef, startMeasureIndex + i - 1, part.clef)
+        );
         const clefChangedHere = i > 0 && effectiveClefHere !== prevEffectiveClef;
         if(i===0){
           // 段頭は「その段の先頭小節時点で有効なクレフ」を通常サイズで表示する（途中クレフ変更対応）
