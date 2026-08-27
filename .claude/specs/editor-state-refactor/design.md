@@ -519,7 +519,7 @@ TS2345 で止まる。所属パートは素の number のままにして、混�
 （常に成功する）。型検査の実体は `npm run build` の `tsc -b`。本リファクタの負の型テストで発覚。
 単発の型検査は `npx tsc -b` を使うこと。
 
-## 付録B: 旧実装の標本集（2026-08-28 採取・運用者発案）
+## 付録B: 旧実装の標本集（2026-08-27 採取・運用者発案）
 
 削除された「悪いコード」の実物は git 履歴（`git show d297b79^:src/components/PianoSystemCanvas.tsx`）
 を掘らないと見えないため、代表的な標本をここへ転記して残す。後から読み返すと
@@ -536,14 +536,18 @@ const dynamicMode = 'mode' in tool && tool.mode === 'dynamic' ? tool.dynamic : n
 if (tupletNumberToggleMode) { /* … */ return; }
 if (crossStaffToggleMode)   { /* … */ return; }
 if (accidentalMode && !activeEvs[j]?.isRest) { /* … */ return; }
-// …if+return が15連続
+// …15モードを14個の if+return で処理（symbolAdjustResize/Offset は1つの if に統合）
 ```
 
 **何が悪いか**: (1) ガード条件（`&& !isRest` 等）をすり抜けたクリックは黙って下へ落ち、
 既定処理か「何も起きない」に着地する — 無言経路が当時27箇所。(2) 通知は各分岐の自由裁量で、
-書き忘れてもエラーにならない。(3) if の順序が意味を持つため、新モードの挿入位置を誤ると
-既存挙動が変わる。(4) `(tool as any)` が3箇所（ornament/pedal/ottava）で型検査を自ら外していた。
-→ 段3c の `NoteClickOutcome`（handled / rejected(notice必須) / passThrough）で全て型の問題に変換した。
+書き忘れてもエラーにならない。(3) フラグ宣言と if 分岐が離れており、新モード追加は
+「宣言を1本+ifを1個」の2箇所への追記になる（モード自体は排他なので順序依存はないが、
+素通り経路が1本増えるリスクは追加のたびにあった）。
+→ 段3c の `NoteClickOutcome`（handled / rejected(notice必須) / passThrough）が保証するのは
+**rejected の通知必須化**と「素通りは明示的な passThrough としてしか書けない」こと。
+なお `(tool as any)`（ornament/pedal/ottava の3箇所）は段3c では解消しておらず現存する
+（旧実装の悪さではなく残課題として記す）。
 
 ### 標本2: インデント13段（前打音トグルの音名計算）
 
@@ -571,5 +575,7 @@ if (graceNoteMode && !activeEvs[j]?.isRest) {
 フラグ15本も最初は2本だった。3本目を足す実装者は前例に倣っただけで、各1行はその場では
 合理的。つまり悪い構造は**前例の複製**で増える。対策も同じ理屈で効く: 前例側を
 表+型に変えれば、以後の追加は自動的に安全な型に倣う（段3c 以降の新モードが実証）。
-なお、深いネスト自体（描画effect内の 小節→パート→音符→ハンドラ の入れ子）は本リファクタの
-対象外で現存する。解消は renderPipeline の独立ファイル化（未着手・§2-4 の残課題）に相当する。
+なお、深いネスト自体（描画effect内の 小節→パート→音符→ハンドラ の入れ子）は現存する。
+これは §2-4 の未完ではない: 段4c は §10 の裁定（ハンドラを無理に分離しない）どおり完了しており、
+描画部の独立ファイル化は**当初案から意図的に外した別課題**である。着手するなら新しい
+Issue として起票し、閉包共有（stave 参照等）の受け渡し設計から検討する。
