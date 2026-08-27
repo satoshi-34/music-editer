@@ -177,4 +177,20 @@
 - 終了がどこにも無い開始は従来どおり描かない（#414 の通知が案内する）
 - 走査の状態機械はペア照合本体と同じ規則（開始で開く・同種の終了で閉じる）
 
-テスト: PianoSystemCanvasOttavaLayout.test.tsx「段またぎの 8va」（開始側・終了側・段内回帰）
+### Codex round 1 対応（2026-08-28）
+
+- **pending はパート×種類ごと**: 共有の単一 pending だと、同じ段に 8va と 8vb（あるいは
+  複数パート）が混在したとき先勝ちで片方が消える。`pendingOttavaByKey`（キー `${partIndex}:${kind}`
+  の Map）に置き換え、パートも種類も独立にペア照合する
+- **続き括弧の編集は開始イベントへ配線**: 続き・中間・終了側のエントリが持つ
+  `measureAbsoluteIndex / eventIndex / voiceIndex / event` は**開始イベント**のもの
+  （`scanOttavaState` が開始時点の識別情報を `OttavaOrigin` として保持）。終了イベントに
+  配線すると、クリック調整が `8vaEnd` 側の `symbolAdjust` に書かれて描画へ反映されない
+  無言の no-op になる
+- **presence gate**: 段外走査（`ottavaOpenBefore` / `ottavaEndsAfter`）はオッターバを
+  1つも含まないパートでは走らせない（パートごとの有無を先に1回だけ調べて保持）。
+  オッターバ無しの通常譜面に O(段数×小節数) の走査コストを掛けないため
+
+テスト: PianoSystemCanvasOttavaLayout.test.tsx「段またぎの 8va」（開始側・終了側・中間段・
+8vb・種類混在・段内回帰）、ScorePageOttavaCrossSystem.test.tsx（実段組で3段すべてに括弧が
+出ること・続き括弧クリックの位置調整が開始イベントへ保存されること）

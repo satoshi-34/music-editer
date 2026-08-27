@@ -232,20 +232,105 @@ describe('オッターバの見た目（2026-08-26 実機所感）', () => {
       return result;
     }
 
-    it('開始側の段: ラベル＋破線が右端まで伸び、終端フックは無い', () => {
-      const { label, dash, hookCount } = renderSystem(0);
+    it('開始側の段: ラベル＋破線が段の右端まで伸び、終端フックは無い', () => {
+      const { svg, label, dash, hookCount } = renderSystem(0);
       expect(label).toBeTruthy();
       expect(dash).toBeTruthy();
-      // 破線の右端が開始音符よりずっと右（段の右端側）まで届いている
-      expect(parseFloat(dash!.getAttribute('x2')!)).toBeGreaterThan(parseFloat(label!.getAttribute('x')!) + 100);
+      // 「右端」は小節の当たり判定（vf-hit）の右端と同座標系。±2px で一致を要求する
+      // （「100px以上」のような緩い判定だと端まで届かない退行を固定できない。round1 P2）
+      const hitRight = Math.max(...Array.from(svg.querySelectorAll('rect.vf-hit'))
+        .map((r) => parseFloat(r.getAttribute('x')!) + parseFloat(r.getAttribute('width')!)));
+      expect(parseFloat(dash!.getAttribute('x2')!)).toBeGreaterThan(hitRight - 2);
       expect(hookCount).toBe(0);
     });
 
     it('終了側の段: 段の左端から続きの括弧（ラベル＋破線＋終端フック）が描かれる', () => {
-      const { label, dash, hookCount } = renderSystem(1);
+      const { svg, label, dash, hookCount } = renderSystem(1);
       expect(label).toBeTruthy();
       expect(dash).toBeTruthy();
       expect(hookCount).toBe(1);
+      // ラベルは段の左端（小節当たり判定の左端）付近から始まる
+      const hitLeft = Math.min(...Array.from(svg.querySelectorAll('rect.vf-hit'))
+        .map((r) => parseFloat(r.getAttribute('x')!)));
+      expect(parseFloat(label!.getAttribute('x')!)).toBeLessThan(hitLeft + 40);
+    });
+
+    it('中間の段（開始も終了も無い）には全幅の括弧が終端フックなしで描かれる', () => {
+      const threeSystems: MeasureData[] = [
+        { events: [{ dur: '2', isRest: false, keys: ['c/5'] }, { dur: '2', isRest: false, keys: ['d/5'], ottava: '8va' }] },
+        { events: [{ dur: '1', isRest: false, keys: ['c/5'] }] },
+        { events: [{ dur: '2', isRest: true, keys: ['b/4'] }, { dur: '2', isRest: false, keys: ['e/5'], ottava: '8vaEnd' }] },
+      ];
+      const { container } = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data: threeSystems, onChange: vi.fn() }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+          startMeasureIndex={1}
+        />
+      );
+      const svg = container.querySelector('svg') as SVGSVGElement;
+      const label = Array.from(svg.querySelectorAll('text')).find((t) => t.textContent === '8va');
+      const dash = Array.from(svg.querySelectorAll('line')).find((l) => l.getAttribute('stroke-dasharray'));
+      const hooks = Array.from(svg.querySelectorAll('line')).filter((l) => !l.getAttribute('stroke-dasharray')
+        && l.getAttribute('stroke') === '#374151'
+        && l.getAttribute('x1') === l.getAttribute('x2'));
+      expect(label).toBeTruthy();
+      expect(dash).toBeTruthy();
+      expect(hooks.length).toBe(0);
+      cleanup();
+    });
+
+    it('8vb も段をまたげる（終了側の段に続きの括弧）', () => {
+      const vbData: MeasureData[] = [
+        { events: [{ dur: '1', isRest: false, keys: ['c/4'], ottava: '8vb' }] },
+        { events: [{ dur: '2', isRest: true, keys: ['b/4'] }, { dur: '2', isRest: false, keys: ['d/4'], ottava: '8vbEnd' }] },
+      ];
+      const { container } = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data: vbData, onChange: vi.fn() }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+          startMeasureIndex={1}
+        />
+      );
+      const svg = container.querySelector('svg') as SVGSVGElement;
+      expect(Array.from(svg.querySelectorAll('text')).some((t) => t.textContent === '8vb')).toBe(true);
+      cleanup();
+    });
+
+    // round1 P2: 旧実装は pending が単一共有で、同じ段に 8va と 8vb が同時に
+    // 開くと後の開始が先の開始を上書きし、片方のブラケットが消えた
+    it('同じ段で 8va と 8vb が同時に開いても、両方のブラケットが描かれる', () => {
+      const mixed: MeasureData[] = [{
+        events: [
+          { dur: '4', isRest: false, keys: ['c/5'], ottava: '8va' },
+          { dur: '4', isRest: false, keys: ['c/4'], ottava: '8vb' },
+          { dur: '4', isRest: false, keys: ['d/5'], ottava: '8vaEnd' },
+          { dur: '4', isRest: false, keys: ['d/4'], ottava: '8vbEnd' },
+        ],
+      }];
+      const { container } = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data: mixed, onChange: vi.fn() }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+        />
+      );
+      const svg = container.querySelector('svg') as SVGSVGElement;
+      const texts = Array.from(svg.querySelectorAll('text')).map((t) => t.textContent);
+      expect(texts).toContain('8va');
+      expect(texts).toContain('8vb');
+      cleanup();
     });
 
     it('段内で完結する場合は従来どおり（回帰なし: 開始と終了が同じ段）', () => {

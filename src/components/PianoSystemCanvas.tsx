@@ -4201,40 +4201,69 @@ export default function PianoSystemCanvas({
     // 描画のたびに SVG は作り直される（innerHTML='' → 新しい <svg>）ので、
     // 古い SVG を掴んだままにならないよう毎回ここで差し替える。
     arcDragContextRef.current={svg,svgRoot,arcGeomMap};
-    let pendingOttava: {
+    type PendingOttava = {
       kind: '8va' | '8vb'; startX: number; lineY: number; adjust: ResolvedSymbolAdjust;
       partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
-    } | null = null;
+    };
+    // ペア照合の途中状態。**パート×種類ごと**に持つ（#433 Codex round1 P2:
+    // 単一変数の共有だと、同じ段で複数パートや 8va/8vb が開始したとき後の開始が
+    // 先の開始を上書きし、先のブラケットが消える）
+    const pendingOttavaByKey = new Map<string, PendingOttava>();
+    const pendingKey = (pi: number, kind: '8va' | '8vb') => `${pi}:${kind}`;
     // ── オッターバの段またぎ（実機報告 2026-08-28）──
     // ペア照合を段内で閉じると、開始が前の段・終了が次の段にある括弧が両側とも無言で
     // 消える。段の外の小節を走査して「前の段から続いている開始」「次の段にある終了」を
     // 判定し、続きの括弧（段左端から／段右端まで・終端フックなし）を作る。
     // 走査の状態機械はペア照合本体と同じ（開始で開く・同種の終了で閉じる・別種は無視）。
-    const scanOttavaState = (pi: number, from: number, to: number, initial: Map<'8va' | '8vb', ResolvedSymbolAdjust>) => {
-      const open = new Map(initial);
+    type OttavaOrigin = {
+      adjust: ResolvedSymbolAdjust;
+      measureAbsoluteIndex: number; eventIndex: number; voiceIndex: number; event: NoteEvent;
+    };
+    const scanOttavaState = (pi: number, from: number, to: number) => {
+      const open = new Map<'8va' | '8vb', OttavaOrigin>();
       const measures = partsScoreForRender[pi] ?? [];
       for (let mi = from; mi < to && mi < measures.length; mi++) {
-        for (const voice of getMeasureVoices(measures[mi])) {
-          for (const ev of voice.events) {
-            if (ev.ottava === '8va') open.set('8va', getSymbolAdjust(ev, 'ottava'));
-            else if (ev.ottava === '8vb') open.set('8vb', getSymbolAdjust(ev, 'ottava'));
-            else if (ev.ottava === '8vaEnd') open.delete('8va');
+        const voicesHere = getMeasureVoices(measures[mi]);
+        for (let vi = 0; vi < voicesHere.length; vi++) {
+          const evs = voicesHere[vi].events;
+          for (let ei = 0; ei < evs.length; ei++) {
+            const ev = evs[ei];
+            if (ev.ottava === '8va' || ev.ottava === '8vb') {
+              open.set(ev.ottava, {
+                adjust: getSymbolAdjust(ev, 'ottava'),
+                measureAbsoluteIndex: mi, eventIndex: ei, voiceIndex: vi, event: ev,
+              });
+            } else if (ev.ottava === '8vaEnd') open.delete('8va');
             else if (ev.ottava === '8vbEnd') open.delete('8vb');
           }
         }
       }
       return open;
     };
+    // パートにオッターバが1つでもあるか（無ければ以降の走査を全て省く。round1 P2 の
+    // 「オッターバ皆無の譜面でも段ごとに全小節を再走査する」二次コストの回避）
+    const ottavaPresenceByPart = new Map<number, boolean>();
+    const partHasOttava = (pi: number) => {
+      if (!ottavaPresenceByPart.has(pi)) {
+        const measures = partsScoreForRender[pi] ?? [];
+        ottavaPresenceByPart.set(pi, measures.some((m) =>
+          getMeasureVoices(m).some((v) => v.events.some((ev) => ev.ottava !== undefined))));
+      }
+      return ottavaPresenceByPart.get(pi)!;
+    };
     // この段の手前で開いたままの括弧（パートごと・遅延計算）
-    const ottavaOpenBeforeByPart = new Map<number, Map<'8va' | '8vb', ResolvedSymbolAdjust>>();
+    const ottavaOpenBeforeByPart = new Map<number, Map<'8va' | '8vb', OttavaOrigin>>();
     const ottavaOpenBefore = (pi: number) => {
       if (!ottavaOpenBeforeByPart.has(pi)) {
-        ottavaOpenBeforeByPart.set(pi, scanOttavaState(pi, 0, startMeasureIndex, new Map()));
+        ottavaOpenBeforeByPart.set(pi, partHasOttava(pi)
+          ? scanOttavaState(pi, 0, startMeasureIndex)
+          : new Map());
       }
       return ottavaOpenBeforeByPart.get(pi)!;
     };
     // この段より後ろに、開いたままの括弧を閉じる終了があるか
     const ottavaEndsAfter = (pi: number, kind: '8va' | '8vb') => {
+      if (!partHasOttava(pi)) return false;
       const measures = partsScoreForRender[pi] ?? [];
       for (let mi = startMeasureIndex + measuresPerSystem; mi < measures.length; mi++) {
         for (const voice of getMeasureVoices(measures[mi])) {
@@ -7226,34 +7255,45 @@ export default function PianoSystemCanvas({
                 if (ev.ottava) {
                   const topY = stave.getYForLine(0);
                   const botY = stave.getYForLine(4);
-                  if (ev.ottava === '8va') {
-                    pendingOttava = { kind: '8va', startX: cx, lineY: topY - OTTAVA_STAFF_GAP_PX, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
-                  } else if (ev.ottava === '8vb') {
-                    pendingOttava = { kind: '8vb', startX: cx, lineY: botY + OTTAVA_STAFF_GAP_PX, adjust: getSymbolAdjust(ev, 'ottava'), partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev };
-                  } else if (pendingOttava && ev.ottava === '8vaEnd' && pendingOttava.kind === '8va') {
-                    ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
-                    pendingOttava = null;
-                  } else if (pendingOttava && ev.ottava === '8vbEnd' && pendingOttava.kind === '8vb') {
-                    ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
-                    pendingOttava = null;
-                  } else if ((ev.ottava === '8vaEnd' || ev.ottava === '8vbEnd') && !pendingOttava) {
-                    // 段またぎの終了側: 開始は前の段にある。段の左端から続きの括弧を描く
+                  if (ev.ottava === '8va' || ev.ottava === '8vb') {
+                    const kind = ev.ottava;
+                    pendingOttavaByKey.set(pendingKey(pi, kind), {
+                      kind,
+                      startX: cx,
+                      lineY: kind === '8va' ? topY - OTTAVA_STAFF_GAP_PX : botY + OTTAVA_STAFF_GAP_PX,
+                      adjust: getSymbolAdjust(ev, 'ottava'),
+                      partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
+                    });
+                  } else if (ev.ottava === '8vaEnd' || ev.ottava === '8vbEnd') {
                     const kind = ev.ottava === '8vaEnd' ? '8va' as const : '8vb' as const;
-                    const originAdjust = ottavaOpenBefore(pi).get(kind);
-                    if (originAdjust) {
-                      const firstStave = staveSets[pi]?.[0];
-                      const systemLeftX = (typeof (firstStave as unknown as { getNoteStartX?: () => number })?.getNoteStartX === 'function'
-                        ? (firstStave as unknown as { getNoteStartX: () => number }).getNoteStartX()
-                        : firstStave?.getX?.()) ?? stave.getX();
-                      ottavaEntries.push({
-                        kind,
-                        startX: systemLeftX,
-                        lineY: kind === '8va' ? topY - OTTAVA_STAFF_GAP_PX : botY + OTTAVA_STAFF_GAP_PX,
-                        adjust: originAdjust,
-                        endX: cx + 8,
-                        partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
-                      });
-                      ottavaOpenBefore(pi).delete(kind); // 段末の全幅処理で二重に描かない
+                    const pending = pendingOttavaByKey.get(pendingKey(pi, kind));
+                    if (pending) {
+                      ottavaEntries.push({ ...pending, endX: cx + 8 });
+                      pendingOttavaByKey.delete(pendingKey(pi, kind));
+                    } else {
+                      // 段またぎの終了側: 開始は前の段にある。段の左端から続きの括弧を描く。
+                      // 編集（✥/クリック調整・削除）の配線は**開始イベント**へ向ける
+                      // （終了イベントは調整対象外で、無言の no-op になる。round1 P2）
+                      const origin = ottavaOpenBefore(pi).get(kind);
+                      if (origin) {
+                        const firstStave = staveSets[pi]?.[0];
+                        const systemLeftX = (typeof (firstStave as unknown as { getNoteStartX?: () => number })?.getNoteStartX === 'function'
+                          ? (firstStave as unknown as { getNoteStartX: () => number }).getNoteStartX()
+                          : firstStave?.getX?.()) ?? stave.getX();
+                        ottavaEntries.push({
+                          kind,
+                          startX: systemLeftX,
+                          lineY: kind === '8va' ? topY - OTTAVA_STAFF_GAP_PX : botY + OTTAVA_STAFF_GAP_PX,
+                          adjust: origin.adjust,
+                          endX: cx + 8,
+                          partIndex: pi,
+                          measureAbsoluteIndex: origin.measureAbsoluteIndex,
+                          eventIndex: origin.eventIndex,
+                          voiceIndex: origin.voiceIndex,
+                          event: origin.event,
+                        });
+                        ottavaOpenBefore(pi).delete(kind); // 段末の全幅処理で二重に描かない
+                      }
                     }
                   }
                 }
@@ -7280,21 +7320,18 @@ export default function PianoSystemCanvas({
         const g = first as unknown as { getNoteStartX?: () => number };
         return typeof g.getNoteStartX === 'function' ? g.getNoteStartX() : first.getX();
       };
-      // TS の制御フロー解析はコールバック内の代入を追えず pendingOttava を null に
-      // 狭めたままにするため、関数呼び出しで宣言型に戻して読む
-      type PendingOttava = { kind: '8va' | '8vb'; startX: number; lineY: number; adjust: ResolvedSymbolAdjust;
-        partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent };
-      // let の宣言直後 null からの絞り込みを TS が保持し続けるため、明示キャストで戻す
-      const carried = pendingOttava as unknown as PendingOttava | null;
-      if (carried && carried.partIndex !== undefined
-        && ottavaEndsAfter(carried.partIndex, carried.kind)) {
+      // (a) この段で開始したまま終了が来なかった括弧（パート×種類ごと）
+      for (const carried of pendingOttavaByKey.values()) {
+        if (carried.partIndex === undefined) continue;
+        if (!ottavaEndsAfter(carried.partIndex, carried.kind)) continue; // 終了がどこにも無い開始は描かない
         ottavaEntries.push({ ...carried, endX: systemRightXOf(carried.partIndex), openEnd: true });
-        pendingOttava = null;
       }
+      pendingOttavaByKey.clear();
       parts.forEach((_, pi) => {
+        if (!partHasOttava(pi)) return;
         for (const kind of ['8va', '8vb'] as const) {
-          const originAdjust = ottavaOpenBefore(pi).get(kind);
-          if (!originAdjust) continue; // 開いていない／この段の終了で消費済み
+          const origin = ottavaOpenBefore(pi).get(kind);
+          if (!origin) continue; // 開いていない／この段の終了で消費済み
           if (!ottavaEndsAfter(pi, kind)) continue; // 終了がどこにも無い開始は従来どおり描かない
           const first = staveSets[pi]?.[0];
           if (!first) continue;
@@ -7305,8 +7342,12 @@ export default function PianoSystemCanvas({
             startX: systemLeftXOf(pi),
             endX: systemRightXOf(pi),
             lineY: kind === '8va' ? topY - OTTAVA_STAFF_GAP_PX : botY + OTTAVA_STAFF_GAP_PX,
-            adjust: originAdjust,
+            adjust: origin.adjust,
             partIndex: pi,
+            measureAbsoluteIndex: origin.measureAbsoluteIndex,
+            eventIndex: origin.eventIndex,
+            voiceIndex: origin.voiceIndex,
+            event: origin.event,
             openEnd: true,
           });
         }
