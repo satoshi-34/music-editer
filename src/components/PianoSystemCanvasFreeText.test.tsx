@@ -9,7 +9,8 @@ import { render, cleanup } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData } from '../types/storage';
-import { ENGRAVING_TEXT_UNITS } from '../utils/engravingDefaults';
+import { ENGRAVING_TEXT_UNITS, SCORE_TEXT_FONT_FAMILY } from '../utils/engravingDefaults';
+import { resolveTitleFontOption } from '../utils/titleFontOptions';
 
 vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function () {
@@ -236,5 +237,76 @@ describe('PianoSystemCanvas の自由注釈テキスト（Issue #421）', () => 
     expect(Number(adjustedText.getAttribute('x'))).toBeCloseTo(baseX + 20);
     // 縦は「＋で下・−で上」（記号位置調整と同じ向き）
     expect(Number(adjustedText.getAttribute('y'))).toBeCloseTo(baseY - 8);
+  });
+
+  // ── 書体選択（Issue #432） ────────────────────────────────────────────
+  it('fontId が無い注釈は従来どおり浄書セリフ体のイタリックで描く（回帰防止）', () => {
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        partsConfig={[{ clef: 'treble', data: withFreeText(2, 0, { text: 'dolce' }), onChange: () => {} }]}
+      />
+    );
+    const text = freeTexts(container)[0];
+    expect(text.getAttribute('font-family')).toBe(SCORE_TEXT_FONT_FAMILY);
+    expect(text.getAttribute('font-style')).toBe('italic');
+  });
+
+  it('fontId を指定すると font-family がその書体になり、イタリックが外れる', () => {
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        partsConfig={[{
+          clef: 'treble',
+          data: withFreeText(2, 0, { text: 'con pedale', fontId: 'mincho' }),
+          onChange: () => {},
+        }]}
+      />
+    );
+    const text = freeTexts(container)[0];
+    expect(text.getAttribute('font-family')).toBe(resolveTitleFontOption('mincho').stack);
+    expect(text.getAttribute('font-style')).toBe('normal');
+  });
+
+  it('一覧に無い fontId は既定へ倒す（未知の family 名を SVG へ書かない）', () => {
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        partsConfig={[{
+          clef: 'treble',
+          data: withFreeText(2, 0, { text: 'dolce', fontId: 'no-such-font' }),
+          onChange: () => {},
+        }]}
+      />
+    );
+    const text = freeTexts(container)[0];
+    expect(text.getAttribute('font-family')).toBe(SCORE_TEXT_FONT_FAMILY);
+    expect(text.getAttribute('font-style')).toBe('italic');
+  });
+
+  it('Webフォントの書体を選ぶと Google Fonts の <link> が1回だけ入る', () => {
+    render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        partsConfig={[{
+          clef: 'treble',
+          data: withFreeText(2, 0, { text: 'con pedale', fontId: 'noto-serif-jp' }),
+          onChange: () => {},
+        }]}
+      />
+    );
+    expect(document.querySelectorAll('link#title-font-noto-serif-jp')).toHaveLength(1);
   });
 });

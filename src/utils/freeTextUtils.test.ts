@@ -9,7 +9,10 @@ import {
   parseFreeTextOffsetInput,
   parseFreeTextScaleInput,
   resolveFreeTextAnnotation,
+  resolveFreeTextFont,
 } from './freeTextUtils';
+import { SCORE_TEXT_FONT_FAMILY } from './engravingDefaults';
+import { DEFAULT_TITLE_FONT_ID, resolveTitleFontOption } from './titleFontOptions';
 
 describe('buildFreeTextAnnotation', () => {
   it('空文字列・空白のみは undefined（＝注釈を消す）', () => {
@@ -64,7 +67,7 @@ describe('parseFreeTextOffsetInput', () => {
 describe('resolveFreeTextAnnotation', () => {
   it('省略された項目に既定値（等倍・ズレなし）を埋める', () => {
     expect(resolveFreeTextAnnotation({ text: 'dolce' }))
-      .toEqual({ text: 'dolce', scale: 1, offsetX: 0, offsetY: 0 });
+      .toEqual({ text: 'dolce', scale: 1, offsetX: 0, offsetY: 0, fontId: DEFAULT_TITLE_FONT_ID });
   });
 });
 
@@ -86,5 +89,71 @@ describe('isValidFreeTextAnnotation', () => {
     expect(isValidFreeTextAnnotation({ text: 'a', scale: 99 })).toBe(false);
     expect(isValidFreeTextAnnotation({ text: 'a', offsetY: 9999 })).toBe(false);
     expect(isValidFreeTextAnnotation({ text: 'a', offsetX: '10' })).toBe(false);
+  });
+});
+
+// ── 書体選択（Issue #432） ─────────────────────────────────────────────
+// 選択肢はタイトル書体（TITLE_FONT_OPTIONS）を共用する。既定は「発想標語と同じ
+// イタリックのセリフ体」で、既存の注釈の見た目を 1px も変えないことが要点。
+
+describe('buildFreeTextAnnotation の書体（#432）', () => {
+  it('既定の書体・未指定は fontId をフィールドごと省く（旧データと同じ形の JSON）', () => {
+    const omitted = buildFreeTextAnnotation({ text: 'dolce', scale: 1, offsetX: 0, offsetY: 0 });
+    expect(Object.keys(omitted!)).toEqual(['text']);
+    const explicitDefault = buildFreeTextAnnotation({
+      text: 'dolce', scale: 1, offsetX: 0, offsetY: 0, fontId: DEFAULT_TITLE_FONT_ID,
+    });
+    expect(Object.keys(explicitDefault!)).toEqual(['text']);
+  });
+
+  it('既定以外の書体は fontId として保存する', () => {
+    expect(buildFreeTextAnnotation({ text: 'dolce', scale: 1, offsetX: 0, offsetY: 0, fontId: 'mincho' }))
+      .toEqual({ text: 'dolce', fontId: 'mincho' });
+  });
+
+  it('一覧に無い id は既定へ倒す＝保存しない（手書き JSON 対策）', () => {
+    const annotation = buildFreeTextAnnotation({
+      text: 'dolce', scale: 1, offsetX: 0, offsetY: 0, fontId: 'no-such-font',
+    });
+    expect(annotation).toEqual({ text: 'dolce' });
+  });
+});
+
+describe('resolveFreeTextFont（#432）', () => {
+  it('既定は従来どおり浄書セリフ体のイタリック', () => {
+    expect(resolveFreeTextFont(undefined))
+      .toEqual({ fontFamily: SCORE_TEXT_FONT_FAMILY, fontStyle: 'italic' });
+    expect(resolveFreeTextFont(DEFAULT_TITLE_FONT_ID))
+      .toEqual({ fontFamily: SCORE_TEXT_FONT_FAMILY, fontStyle: 'italic' });
+  });
+
+  it('書体を選んだときは選択肢のスタックを使い、イタリックを外す', () => {
+    const font = resolveFreeTextFont('mincho');
+    expect(font.fontFamily).toBe(resolveTitleFontOption('mincho').stack);
+    expect(font.fontStyle).toBe('normal');
+  });
+
+  it('一覧に無い id は既定へ倒す（未知の family 名を SVG へ書かない）', () => {
+    expect(resolveFreeTextFont('no-such-font'))
+      .toEqual({ fontFamily: SCORE_TEXT_FONT_FAMILY, fontStyle: 'italic' });
+  });
+});
+
+describe('isValidFreeTextAnnotation の書体（#432）', () => {
+  it('文字列の fontId を受け入れる。一覧に無い id も読み込みでは弾かない', () => {
+    expect(isValidFreeTextAnnotation({ text: 'a', fontId: 'mincho' })).toBe(true);
+    expect(isValidFreeTextAnnotation({ text: 'a', fontId: 'no-such-font' })).toBe(true);
+  });
+
+  it('文字列でない fontId は弾く', () => {
+    expect(isValidFreeTextAnnotation({ text: 'a', fontId: 123 })).toBe(false);
+    expect(isValidFreeTextAnnotation({ text: 'a', fontId: null })).toBe(false);
+  });
+});
+
+describe('resolveFreeTextAnnotation の書体（#432）', () => {
+  it('保存済みの fontId をそのまま返し、一覧に無い id は既定へ倒す', () => {
+    expect(resolveFreeTextAnnotation({ text: 'a', fontId: 'mincho' }).fontId).toBe('mincho');
+    expect(resolveFreeTextAnnotation({ text: 'a', fontId: 'no-such-font' }).fontId).toBe(DEFAULT_TITLE_FONT_ID);
   });
 });

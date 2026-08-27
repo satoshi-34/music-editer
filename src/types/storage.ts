@@ -349,6 +349,12 @@ export interface FreeTextAnnotation {
   offsetY?: number;
   /** 既定サイズに対する倍率（1 = 既定）。省略時は 1 */
   scale?: number;
+  /**
+   * 書体の id（Issue #432）。選択肢はタイトル書体（TITLE_FONT_OPTIONS）と同じものを共用する。
+   * 省略時は「既定」＝発想標語と同じイタリックのセリフ体で、既存の注釈は見た目が変わらない。
+   * 未知の id（手書き JSON・将来の一覧変更）は読み込み時に既定へ倒す（titleFontId と同じ流儀）。
+   */
+  fontId?: string;
 }
 
 export interface ScoreMetadata {
