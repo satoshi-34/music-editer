@@ -4,7 +4,7 @@
 import type { SavedScoreData, NoteEvent, MeasureData, TimeSignatureStyle } from '../types/storage';
 import type { KeySignature } from './noteKeyUtils';
 import type { ClefType } from '../components/clefUtils';
-import { resolveMeasureClef } from './clefMeasureUtils';
+import { resolveMeasureClef, resolveClefAtMeasureEnd } from './clefMeasureUtils';
 import { getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 
 // 分割数（division）: 四分音符 = 16分割。全音符〜64分音符を整数で表せる最小値
@@ -319,6 +319,12 @@ function measureToXml(
   const events = getPrimaryVoiceEvents(measure);
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
+    // 小節途中でのクレフ変更（Issue #424）: MusicXML では小節の途中にも <attributes> を
+    // 置けるので、変更が付いたイベントの**直前**に <clef> だけの <attributes> を出す。
+    // 楽譜上も小型のクレフはその音符の手前に描かれるので、順序はこれで一致する。
+    if (ev.clefChange) {
+      lines.push(`<attributes>${clefXml(ev.clefChange)}</attributes>`);
+    }
     const dynDir = dynamicsDirectionXml(ev, options.staff);
     if (dynDir) lines.push(dynDir);
     // 松葉（ヘアピン）開始: この音符の直前に <wedge type="crescendo|diminuendo"/> を置く
@@ -431,7 +437,10 @@ export function scoreToMusicXml(data: SavedScoreData): string {
         measureIndex: mi,
         timeSignatureStyle,
       });
-      prevClef = effectiveClef;
+      // 引き継ぐのは「小節の**末尾**時点」のクレフ。小節途中で変わった場合に
+      // 先頭時点の値を引き継ぐと、次の小節の頭で同じクレフをもう一度出力してしまう
+      // （読み込む側では冒頭にクレフが二重に出る）。
+      prevClef = resolveClefAtMeasureEnd(getPrimaryVoiceEvents(m), effectiveClef);
       prevTimeSig = m.timeSignature ?? globalTimeSig;
       prevKeyFifths = effectiveKeyFifths;
       return xml;

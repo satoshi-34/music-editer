@@ -15,6 +15,7 @@ import {
   systemRowTopOffsetsPx,
   resolveDefaultLayoutForScoreType,
   SYSTEM_ROW_GAP_MIN_PX,
+  measurePlannerSafetyPadding,
 } from './measureLayoutUtils';
 
 describe('printScoreAreaWidthPx / worstCaseSystemContentBudget（ページ余白と本文幅の連動）', () => {
@@ -634,5 +635,30 @@ describe('ダブルシャープ・ダブルフラットの描画（Issue #423）
     expect(plainWidth).toBeDefined();
     expect(doubledWidth).toBeDefined();
     expect(doubledWidth as number).toBeGreaterThan(plainWidth as number);
+  });
+});
+
+describe('小節途中のクレフ変更ぶんの幅の見込み（Issue #424）', () => {
+  const quarter = (key: string, clefChange?: 'treble' | 'bass'): MeasureData['events'][number] => ({
+    dur: '4', isRest: false, keys: [key], ...(clefChange ? { clefChange } : {}),
+  });
+
+  it('途中変更が無い小節の余裕幅は従来どおり（1pxも増えない）', () => {
+    const measure: MeasureData = { events: [quarter('c/5'), quarter('e/5')] };
+    expect(measurePlannerSafetyPadding([measure])).toBe(0);
+  });
+
+  it('途中変更の件数ぶん、小型クレフの幅が余裕幅に足される', () => {
+    const one: MeasureData = { events: [quarter('c/5'), quarter('a/3', 'bass')] };
+    const two: MeasureData = { events: [quarter('c/5', 'bass'), quarter('a/3'), quarter('e/5', 'treble')] };
+    // 小節単位のクレフ変更（measure.clef）と同じ 28px を1件につき見込む。
+    // 足りないと、途中変更のある小節だけ音符が詰まって重なる。
+    expect(measurePlannerSafetyPadding([one])).toBe(28);
+    expect(measurePlannerSafetyPadding([two])).toBe(56);
+  });
+
+  it('小節単位の変更（measure.clef）と途中変更は両方とも足される', () => {
+    const measure: MeasureData = { clef: 'bass', events: [quarter('c/3'), quarter('e/5', 'treble')] };
+    expect(measurePlannerSafetyPadding([measure])).toBe(28 + 28);
   });
 });

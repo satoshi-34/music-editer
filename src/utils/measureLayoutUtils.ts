@@ -13,6 +13,7 @@ import {
   type MeasureAccidentalState,
 } from './noteKeyUtils';
 import { resolveMeasureKeySignature } from './keySignatureMeasureUtils';
+import { resolveClefAtMeasureEnd } from './clefMeasureUtils';
 import type { ClefType } from '../components/clefUtils';
 
 // VexFlow が符頭・符尾・ビームを並べるために必要な、音価ごとの最低横幅。
@@ -937,6 +938,14 @@ export type MeasurePlannerSafetyOptions = {
   includeTranspositionAccidentalWorstCase?: boolean;
 };
 
+/**
+ * その小節に含まれる「小節途中のクレフ変更」の件数（Issue #424）。
+ * 主声部にだけ付けられる約束なので、主声部のイベントだけを数える。
+ */
+function countMidMeasureClefChanges(measure: MeasureData): number {
+  return getPrimaryVoiceEvents(measure).filter((event) => !!event.clefChange).length;
+}
+
 export function measurePlannerSafetyPadding(
   measures: (MeasureData | undefined)[],
   options: MeasurePlannerSafetyOptions = {},
@@ -956,6 +965,10 @@ export function measurePlannerSafetyPadding(
     if (measure.keySignature) padding += 42;
     if (measure.clef) padding += 28;
     if (measure.timeSignature) padding += 30;
+    // 小節途中のクレフ変更（Issue #424）は、音符の並びの中に小型クレフ（ClefNote）が
+    // 1つ増えるぶんだけ幅を食う。ここで見込まないと、途中変更のある小節だけ
+    // 音符が詰まって重なる。小型は本来もう少し細いが、足りないより広い側で丸める。
+    padding += countMidMeasureClefChanges(measure) * 28;
   });
   return padding;
 }
@@ -990,12 +1003,17 @@ export function planEffectiveMeasuresPerSystem(
     const runtimeParts = parts.map((part, partIndex) => {
       const current = part.measures[index];
       if (current?.clef) runningClefs[partIndex] = current.clef;
+      // 小節途中の変更（Issue #424）は「その小節の末尾時点」の値として次の小節へ引き継ぐ。
+      // 引き継がないと、途中でヘ音記号へ変えた次の小節の幅を古いクレフで測ってしまう。
+      const clefAtMeasureStart = runningClefs[partIndex];
+      runningClefs[partIndex] = resolveClefAtMeasureEnd(getPrimaryVoiceEvents(current), clefAtMeasureStart);
       const shift = part.keySignature
         ? getKeySignatureFifths(part.keySignature) - getKeySignatureFifths(keySignature)
         : 0;
       const effectiveKey = shift === 0 ? runningGlobalKey : shiftKeySignatureByFifths(runningGlobalKey, shift);
       return {
-        clef: runningClefs[partIndex],
+        // この小節を測るのは「先頭時点」のクレフ（途中変更は上で次の小節へ渡す）
+        clef: clefAtMeasureStart,
         accidentalState: createMeasureAccidentalState(effectiveKey),
         prevMeasureState: previousStates[partIndex],
       };

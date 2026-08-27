@@ -230,6 +230,19 @@ export function describeCrossStaffUnavailable(reason: 'rest' | 'singleStaff'): s
 }
 
 /**
+ * 小節途中でのクレフ変更（Issue #424）が付けられない対象を押したときの文言。
+ *
+ * ツールを選んで音符を押しても何も起きない＝行き止まりになるので、
+ * 「なぜ効かないのか」と「代わりにどうするか」を必ず言う（#318 の原則）。
+ */
+export function describeMidMeasureClefUnavailable(reason: 'voice' | 'noEvent'): string {
+  if (reason === 'voice') {
+    return '小節途中の音部記号変更は声部1の音符にだけ付けられます（声部1に切り替えてから、変えたい音をクリックしてください）';
+  }
+  return 'この小節にはまだ音符がありません（小節の背景をクリックすると、小節の頭から音部記号を変えられます）';
+}
+
+/**
  * 段またぎ表示を切り替えたときの文言（Issue #318・運用者の追加提案2）。
  *
  * **表示先の五線と、その音符の所属（パート・声部）は別物**である。

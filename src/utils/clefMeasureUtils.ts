@@ -169,3 +169,18 @@ export function resolveClefAtBeat(
   }
   return effective;
 }
+
+/**
+ * 1小節を通過した「末尾時点で有効なクレフ」を返す（Issue #424）。
+ *
+ * 小節の頭のクレフに、その小節の途中変更（`NoteEvent.clefChange`）を順に適用した結果。
+ * 「次の小節へ何を引き継ぐか」を求める場所（MusicXML 書き出しの重複 `<clef>` 判定、
+ * 小節幅計画のクレフ追跡）で使う。途中変更が無い小節では引数の値をそのまま返すので、
+ * 従来のデータでの挙動は変わらない。
+ */
+export function resolveClefAtMeasureEnd(
+  events: readonly NoteEvent[] | undefined,
+  clefAtMeasureStart: ClefType
+): ClefType {
+  return applyEventClefChanges(events, clefAtMeasureStart);
+}

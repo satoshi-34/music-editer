@@ -41,6 +41,7 @@ import {
   describeVoiceSwitchUnavailable,
   describeCrossStaffToggled,
   describeCrossStaffUnavailable,
+  describeMidMeasureClefUnavailable,
   describeDeletedArc,
   describeDeletedHairpin,
   describeDeletedNoteEvent,
@@ -104,6 +105,7 @@ import {
   resolveEventClefsInMeasure,
   collectMidMeasureClefChanges,
   resolveClefAtBeat,
+  hasMidMeasureClefChange,
 } from '../utils/clefMeasureUtils';
 import { logEditOp, logRenderPass } from '../utils/editDebugLog';
 import { resolveRenderPartIndexes, resolveRenderPartIndex, hasCrossStaffRender, availableRenderStaffDirection, toggleRenderStaffAt, asRenderedPartIndex, type RenderedPartIndex } from '../utils/crossStaffUtils';
@@ -2545,6 +2547,12 @@ export default function PianoSystemCanvas({
     clef: {
     measureAbsoluteIndex: number;
     partIndex: number;
+    /**
+     * 小節途中のクレフ変更（Issue #424）で「この音から変える」対象にした音符の位置。
+     * 音符をクリックしたときだけ入り、小節の背景をクリックしたとき（従来の小節単位の
+     * 変更）は undefined。確定処理はこの有無だけで書き込み先を切り替える。
+     */
+    eventIndex?: number;
     currentValue: string;
     overlayX: number;
     overlayY: number;
@@ -5594,10 +5602,6 @@ export default function PianoSystemCanvas({
         // 'explicitLayer'（#316）では挿入コンテキスト（候補列・クレフ・拍台帳）ごと
         // 選択レイヤー由来に再導出する — resolveHitAttribution の注記と設計メモ§9 参照。
         const doInsert=(lx:number,ly:number,sourceBandPi:number=pi)=>{
-          // パート固有の調号があれば、入力された自然音もそのパートの調号に揃える。
-          // 例: 記譜音表示で D メジャー（♯2）になっている B♭管に F の線を置くと、
-          // 自動的に F♯ として保存される。
-          const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
           // 挿入位置（at）はアクティブ声部の描画済み音符（activeVfNotes）から判定する。
           // 声部1のときは従来通り voice0 の並びで判定するので挙動は変わらない。
           // 声部2がアクティブなときも同じロジックで、声部2自身の音符列に対して
@@ -5622,6 +5626,30 @@ export default function PianoSystemCanvas({
           // 割れ、同じ tuplet.id が離れて並ぶ壊れたデータになる（Issue #282 の発生経路）。
           // グループの手前か直後の、近いほうへ寄せてから使う。
           at=snapInsertIndexOutOfTupletGroup(insertEvs,at);
+
+          // ── 音高の物差し（クレフ）を、挿入位置の時点のものにする（Issue #424）──
+          // 小節の途中でクレフが変わる譜面では、同じ y でも「どの音か」が前半と後半で違う。
+          // 小節の頭のクレフ（clefHere）で換算すると、変更後に置いた音だけ音名がずれる。
+          // 途中変更が1つも無い小節では clefHere をそのまま返すので、従来の入力は1音も変わらない。
+          const primaryEventsForClef = getVoiceEvents(score[absI] ?? createEmptyMeasure(), 0);
+          const clefAtInsert: ClefType = !hasMidMeasureClefChange(primaryEventsForClef)
+            ? clefHere
+            : activeVoiceIndex === 0
+              // 主声部: 「at 番目の手前まで」の変更が効いた状態＝at-1 のイベント時点のクレフ
+              ? resolveEventClef(score, absI, at - 1, part.clef)
+              // 追加声部: イベントの並びが主声部と対応しないので、挿入位置の拍でそろえる
+              : resolveClefAtBeat(
+                  clefHere,
+                  collectMidMeasureClefChanges(primaryEventsForClef),
+                  insertEvs.slice(0, at).reduce((sum, event)=>sum+eventOccupiedBeats(event), 0)
+                );
+          // パート固有の調号があれば、入力された自然音もそのパートの調号に揃える。
+          // 例: 記譜音表示で D メジャー（♯2）になっている B♭管に F の線を置くと、
+          // 自動的に F♯ として保存される。
+          const key=applyKeySignatureToNaturalKey(
+            lineToKeyForClef(clefAtInsert, snapLine(stave,ly)),
+            partKeyForAccidental
+          );
 
           const currentMeasure = score[absI] ?? createEmptyMeasure();
           const addDuration = (['1','2','4','8','16','32','64'].includes((tool as any)?.duration)?(tool as any).duration:'4') as DurKey;
@@ -5896,7 +5924,15 @@ export default function PianoSystemCanvas({
          * 拒否＝rejected に相当するものはこの集合には無い: tie/hairpin はドラッグ操作
          * なので click では意図的に何もしない＝handled として扱う）。
          */
-        const handleMeasureScopedTool = (e: Event): 'handled' | 'passThrough' => {
+        const handleMeasureScopedTool = (
+          e: Event,
+          /**
+           * どこを押したか。音部記号の変更だけは「小節の背景＝小節の頭から」と
+           * 「音符＝この音から（小節途中・Issue #424）」で意味が変わるため、
+           * 共通ディスパッチャに対象の種別を渡す（他のツールはどちらでも同じ動き）。
+           */
+          target: { kind: 'measure' } | { kind: 'note'; eventIndex: number; voiceIndex: number } = { kind: 'measure' }
+        ): 'handled' | 'passThrough' => {
           if (!('mode' in tool)) return 'passThrough';
           const me = e as MouseEvent;
           const overlayAt = () => {
@@ -5947,6 +5983,30 @@ export default function PianoSystemCanvas({
             }
             case 'measureClef': {
               // クレフはクリックした段（パート）自身の小節データに保存する
+              if (target.kind === 'note') {
+                // 音符クリック＝小節途中での変更（Issue #424。月光37小節のような書き方）。
+                // v1 は主声部にだけ付けられる。追加声部にも付けられるようにすると、
+                // 同じ時刻に声部ごとの別々のクレフを主張できてしまうため。
+                if (target.voiceIndex !== 0) {
+                  notifyScoreEdit(describeMidMeasureClefUnavailable('voice'));
+                  return 'handled';
+                }
+                // 空の小節に出ている全休符は表示専用のプレースホルダーで、保存データに
+                // 対応するイベントが無い。付ける先が無いことを黙らずに伝える（#318）。
+                const primaryEvents = getVoiceEvents(partsScoreForRender[pi]?.[absI] ?? createEmptyMeasure(), 0);
+                if (!primaryEvents[target.eventIndex]) {
+                  notifyScoreEdit(describeMidMeasureClefUnavailable('noEvent'));
+                  return 'handled';
+                }
+                setClefEditState({
+                  measureAbsoluteIndex: absI,
+                  partIndex: pi,
+                  eventIndex: target.eventIndex,
+                  currentValue: primaryEvents[target.eventIndex]?.clefChange ?? '',
+                  ...overlayAt(),
+                });
+                return 'handled';
+              }
               const currentClef = partsScoreForRender[pi]?.[absI]?.clef;
               setClefEditState({
                 measureAbsoluteIndex: absI,
@@ -6536,8 +6596,10 @@ export default function PianoSystemCanvas({
               setSelectedArc(null);
               setSelectedHairpin(null);
               // 音符の上をクリックしても小節単位のツールが同じに動くよう、
-              // 小節背景側と共通のディスパッチャで処理する（#244 段3a）
-              if (handleMeasureScopedTool(e) === 'handled') return;
+              // 小節背景側と共通のディスパッチャで処理する（#244 段3a）。
+              // 音部記号の変更だけは「この音から」の意味になるので、押した音符の位置を渡す
+              // （Issue #424。共通ディスパッチャの中で分岐させ、2本目の実装を作らない）
+              if (handleMeasureScopedTool(e, { kind: 'note', eventIndex: j, voiceIndex: activeVoiceIndex }) === 'handled') return;
               // --- #244 段3c: ここから下は「(ツールモード, 対象種別) → 3値結果」のテーブル ---
               // 旧実装はモードごとのフラグ定数15本 + if の連鎖だった。モードは排他なので
               // switch 1枚に畳み、結果を NoteClickOutcome（handled/rejected/passThrough）で
@@ -7920,8 +7982,32 @@ export default function PianoSystemCanvas({
    */
   function handleClefConfirm(value: string) {
     if (!clefEditState) return;
-    const { measureAbsoluteIndex, partIndex } = clefEditState;
+    const { measureAbsoluteIndex, partIndex, eventIndex } = clefEditState;
     const newClef = parseClefInput(value) as ClefType | undefined;
+    // 音符を押して開いた場合（eventIndex あり）は、小節の頭ではなく
+    // 「その音符から」変える＝主声部のイベントへ clefChange を書く（Issue #424）。
+    if (eventIndex != null) {
+      setPartsScore(prev => {
+        const next = [...prev];
+        const targetPartData = (prev[partIndex] ?? []).map(cloneMeasureData);
+        if (measureAbsoluteIndex >= targetPartData.length) return prev;
+        const measure = targetPartData[measureAbsoluteIndex];
+        if (!getVoiceEvents(measure, 0)[eventIndex]) return prev;
+        targetPartData[measureAbsoluteIndex] = withVoiceEventsUpdated(measure, 0, events =>
+          events.map((event, index) => {
+            if (index !== eventIndex) return event;
+            // 「解除」は値を undefined にせずプロパティごと削除する。
+            // 旧データと同じ形に戻り、保存内容も増えない（renderStaff と同じ約束）。
+            const { clefChange: _removed, ...rest } = event;
+            return newClef ? { ...rest, clefChange: newClef } : rest;
+          })
+        );
+        next[partIndex] = targetPartData;
+        return next;
+      });
+      setClefEditState(null);
+      return;
+    }
     setPartsScore(prev => {
       const next = [...prev];
       const targetPartData = (prev[partIndex] ?? []).map(cloneMeasureData);
@@ -8364,7 +8450,10 @@ export default function PianoSystemCanvas({
           }}
         >
           <span style={{ fontSize: 10, color: '#0f766e', fontFamily: 'sans-serif' }}>
-            途中音部記号変更（「解除」で元に戻す）
+            {clefEditState.eventIndex != null
+              // 音符を押して開いたときは「小節の頭から」ではないことが一目で分かる文言にする
+              ? 'この音から音部記号を変更（「解除」で元に戻す）'
+              : '途中音部記号変更（「解除」で元に戻す）'}
           </span>
           <select
             // eslint-disable-next-line jsx-a11y/no-autofocus
