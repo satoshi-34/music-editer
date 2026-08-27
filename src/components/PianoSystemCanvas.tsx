@@ -7741,12 +7741,31 @@ export default function PianoSystemCanvas({
    * 直接更新し（1px・Shiftで10px）、保存は Enter の1回だけ（Undoも1回で戻る）。
    * どの入力欄（本文・サイズ・横・縦）にフォーカスがあっても効く。
    */
+  // 矢印キーのライブ移動は SVG を直接動かすため、保存せずに閉じた（Escape・対象切替・
+  // 他ツールへの移動）とき表示だけが動いたまま残る（#429 round1 P2）。
+  // オーバーレイの対象が変わるたび、前の対象のプレビューを保存済みオフセットへ復元する
+  useEffect(() => {
+    const st = freeTextEditState;
+    if (!st) return;
+    const key = `${st.partIndex}-${st.measureAbsoluteIndex}`;
+    return () => {
+      const el = containerRef.current?.querySelector(`text[data-free-text="${key}"]`);
+      if (!el) return;
+      const saved = partsScoreRef.current[st.partIndex]?.[st.measureAbsoluteIndex]?.freeText;
+      const resolved = saved ? resolveFreeTextAnnotation(saved) : null;
+      el.setAttribute('x', String(parseFloat(el.getAttribute('data-base-x') ?? '0') + (resolved?.offsetX ?? 0)));
+      el.setAttribute('y', String(parseFloat(el.getAttribute('data-base-y') ?? '0') + (resolved?.offsetY ?? 0)));
+    };
+  }, [freeTextEditState]);
+
   const handleFreeTextArrowKey = (e: ReactKeyboardEvent<HTMLInputElement>): boolean => {
     const nudge = resolveSymbolOffsetNudge(e.key, e.shiftKey);
     if (!nudge || !freeTextEditState) return false;
     e.preventDefault();
-    const baseX = parseSymbolOffsetInput(freeTextOffsetXInputRef.current?.value ?? freeTextEditState.currentOffsetX);
-    const baseY = parseSymbolOffsetInput(freeTextOffsetYInputRef.current?.value ?? freeTextEditState.currentOffsetY);
+    // クランプは自由注釈用の ±MAX_FREE_TEXT_OFFSET（±200）。記号用（±100）を使うと
+    // 150px などの有効位置が最初の矢印で 100px へ飛ぶ（#429 round1 P2）
+    const baseX = parseFreeTextOffsetInput(freeTextOffsetXInputRef.current?.value ?? freeTextEditState.currentOffsetX);
+    const baseY = parseFreeTextOffsetInput(freeTextOffsetYInputRef.current?.value ?? freeTextEditState.currentOffsetY);
     const x = Math.max(-MAX_FREE_TEXT_OFFSET, Math.min(MAX_FREE_TEXT_OFFSET, baseX + nudge.dx));
     const y = Math.max(-MAX_FREE_TEXT_OFFSET, Math.min(MAX_FREE_TEXT_OFFSET, baseY + nudge.dy));
     if (freeTextOffsetXInputRef.current) freeTextOffsetXInputRef.current.value = String(x);
@@ -8261,7 +8280,7 @@ export default function PianoSystemCanvas({
               padding: 2,
             }}
             onKeyDown={(e) => {
-              if (handleFreeTextArrowKey(e)) return;
+              if (handleFreeTextArrowKey(e)) { e.stopPropagation(); return; }
               if (e.key === 'Enter') {
                 commitFreeTextFromInputs();
               } else if (e.key === 'Escape') {
@@ -8282,7 +8301,7 @@ export default function PianoSystemCanvas({
               placeholder="100"
               style={{ width: 52, fontSize: 12, padding: 2 }}
               onKeyDown={(e) => {
-                if (handleFreeTextArrowKey(e)) return;
+                if (handleFreeTextArrowKey(e)) { e.stopPropagation(); return; }
                 if (e.key === 'Enter') commitFreeTextFromInputs();
                 else if (e.key === 'Escape') setFreeTextEditState(null);
                 e.stopPropagation();
@@ -8299,7 +8318,7 @@ export default function PianoSystemCanvas({
               placeholder="0"
               style={{ width: 48, fontSize: 12, padding: 2 }}
               onKeyDown={(e) => {
-                if (handleFreeTextArrowKey(e)) return;
+                if (handleFreeTextArrowKey(e)) { e.stopPropagation(); return; }
                 if (e.key === 'Enter') commitFreeTextFromInputs();
                 else if (e.key === 'Escape') setFreeTextEditState(null);
                 e.stopPropagation();
@@ -8316,7 +8335,7 @@ export default function PianoSystemCanvas({
               placeholder="0"
               style={{ width: 48, fontSize: 12, padding: 2 }}
               onKeyDown={(e) => {
-                if (handleFreeTextArrowKey(e)) return;
+                if (handleFreeTextArrowKey(e)) { e.stopPropagation(); return; }
                 if (e.key === 'Enter') commitFreeTextFromInputs();
                 else if (e.key === 'Escape') setFreeTextEditState(null);
                 e.stopPropagation();

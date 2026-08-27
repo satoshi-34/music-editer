@@ -265,4 +265,63 @@ describe('ScorePage: 自由注釈テキストの配線（#421）', () => {
     const input = await screen.findByLabelText('自由注釈テキスト', {}, { timeout: 15000 }) as HTMLInputElement;
     expect(input.value).toBe('click me');
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // #429 round1 P1/P2 のリグレッション:
+  // - 矢印キーが window 側へ伝播しない（残留した音符選択が動かない）
+  // - Escape で閉じるとライブ移動のプレビューが保存値へ戻る
+  it('矢印キーは伝播せず、Escape でプレビューが元の位置へ戻る', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    await selectFreeTextTool();
+    clickMeasureOfPart(0);
+    await typeAnnotation('escape check');
+    await waitFor(() => {
+      expect(loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText?.text).toBe('escape check');
+    }, { timeout: 15000 });
+
+    clickMeasureOfPart(0);
+    const input = await screen.findByLabelText('自由注釈テキスト', {}, { timeout: 15000 }) as HTMLInputElement;
+    const svgText = () => document.querySelector('text[data-free-text]') as SVGTextElement;
+    const baseX = parseFloat(svgText().getAttribute('data-base-x')!);
+
+    // window へ矢印キーが漏れないこと（漏れると残留音符選択の音高移動が走る・P1）
+    let leaked = 0;
+    const listener = (e: KeyboardEvent) => { if (e.key === 'ArrowRight') leaked += 1; };
+    window.addEventListener('keydown', listener);
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    window.removeEventListener('keydown', listener);
+    expect(leaked).toBe(0);
+    expect(parseFloat(svgText().getAttribute('x')!)).toBeCloseTo(baseX + 2, 5);
+
+    // Escape → 保存せず閉じ、プレビューが保存値（オフセット0）へ戻る（P2）
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() => {
+      expect(parseFloat(svgText().getAttribute('x')!)).toBeCloseTo(baseX, 5);
+    }, { timeout: 15000 });
+    const ft = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText;
+    expect(ft?.offsetX ?? 0).toBe(0);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // #429 round1 P2: クランプは注釈仕様の ±200。記号用の ±100 だと 150 から → で 101 へ飛ぶ
+  it('横位置150からの矢印は151になる（±200のクランプ）', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    await selectFreeTextTool();
+    clickMeasureOfPart(0);
+    const input = await screen.findByLabelText('自由注釈テキスト', {}, { timeout: 15000 }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'clamp' } });
+    const xInput = screen.getByLabelText('自由注釈の横位置（px）') as HTMLInputElement;
+    fireEvent.change(xInput, { target: { value: '150' } });
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    expect(xInput.value).toBe('151');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });
