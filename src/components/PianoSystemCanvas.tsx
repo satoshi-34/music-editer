@@ -1097,6 +1097,10 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
          */
         const clefForVoiceEvent = (idx: number): ClefType => (
           voiceEventClefs[idx]
+          // 実イベントの範囲を超えた添字は、まず補完休符のクレフ台帳（下で構築）を見る。
+          // ここでフォールバックだけに頼ると、休符キーは新クレフ・makeVFNote へ渡す
+          // クレフは旧クレフという食い違いで休符が五線外へずれる（#431 Codex round2 P2）
+          ?? paddingRestClefs[idx - rawSourceEvents.length]
           ?? voiceEventClefs[voiceEventClefs.length - 1]
           ?? clefHere
         );
@@ -1120,10 +1124,15 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         // ため、開始拍のカーソルをクロージャで進めながら解決する。
         let paddingBeatCursor = rawSourceEvents.reduce(
           (sum, ev) => sum + getEventDurationBeats(ev as StoredNoteEvent), 0);
+        // 補完休符ごとの「その開始拍時点のクレフ」の台帳。休符キーの生成と
+        // makeVFNote へ渡すクレフ（clefForVoiceEvent）の両方がここを参照することで、
+        // キーとクレフが必ず同じ物差しになる（#431 Codex round2 P2）
+        const paddingRestClefs: ClefType[] = [];
         const restKeyForPaddingDuration = (duration: NoteEvent['dur']) => {
           const clefAtRestStart = midMeasureClefChanges.length === 0
-            ? clefForVoiceEvent(rawSourceEvents.length)
+            ? (voiceEventClefs[voiceEventClefs.length - 1] ?? clefHere)
             : resolveClefAtBeat(clefHere, midMeasureClefChanges, paddingBeatCursor);
+          paddingRestClefs.push(clefAtRestStart);
           paddingBeatCursor += getEventDurationBeats(
             { dur: duration, isRest: true, keys: [] } as unknown as StoredNoteEvent);
           return standardRestDisplayKey(clefAtRestStart, duration, voiceIndex, measureVoices.length);

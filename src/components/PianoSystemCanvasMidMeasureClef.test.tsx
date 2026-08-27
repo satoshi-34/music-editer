@@ -9,7 +9,7 @@
 //   4. 声部2の音符では付けず、理由を通知する（#318 の「行き止まりは喋る」）
 //   5. クリック入力の音高が「クリック位置の時点のクレフ」で決まる
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+import { render, fireEvent, cleanup } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import { keyToLine } from './clefUtils';
@@ -246,3 +246,69 @@ describe('小節途中での音部記号変更の入力（Issue #424 段1）', (
     expect(keyToLine('bass', bassKey)).toBeCloseTo(keyToLine('treble', trebleKey), 5);
   });
 });
+
+// #431 Codex round2 P2: 声部2の表示用パディング休符は、休符キーだけでなく
+// makeVFNote へ渡すクレフも「その休符の開始拍」のもので一致していないと、
+// キー（新クレフ基準）を旧クレフの物差しで描いて五線外へずれる。
+// 途中変更あり/なしの2回描画を比べ、「変更後の拍の休符だけ実座標が動く」ことで固定する
+describe('声部2のパディング休符と途中クレフ変更（round2 P2）', () => {
+  /** 主声部4分×4（3音目からヘ音）+ 声部2は1拍だけ → 残り3拍が補完休符 */
+  const twoVoiceMeasures = (withClefChange: boolean): MeasureData[] => {
+    const primary = (['c/5', 'e/5', 'a/3', 'g/3'] as const).map((key, i) => ({
+      dur: '4' as const, isRest: false, keys: [key],
+      ...(withClefChange && i === 2 ? { clefChange: 'bass' as const } : {}),
+    }));
+    const voice2 = [{ dur: '4' as const, isRest: false, keys: ['e/4'] }];
+    return [{
+      events: primary,
+      voices: [
+        { id: 'voice-1', events: primary },
+        { id: 'voice-2', events: voice2 },
+      ],
+    }];
+  };
+
+  /** 声部2側の補完休符（.vf-padding-rest）の描画Y座標（path の最初の座標）を先頭から順に返す */
+  const paddingRestYs = (svg: SVGSVGElement): number[] =>
+    Array.from(svg.querySelectorAll('.vf-padding-rest text'))
+      .map((text) => parseFloat(text.getAttribute('y') ?? ''))
+      .filter((y) => Number.isFinite(y));
+
+  it('途中変更より後の拍の補完休符だけ、描画位置が変わる（キーとクレフの一致）', () => {
+    const before = renderScore(twoVoiceMeasures(false), { duration: '4', isRest: false });
+    const ysBefore = paddingRestYs(before.svg);
+    cleanup();
+    const after = renderScore(twoVoiceMeasures(true), { duration: '4', isRest: false });
+    const ysAfter = paddingRestYs(after.svg);
+
+    expect(ysBefore.length).toBeGreaterThanOrEqual(2);
+    expect(ysAfter.length).toBe(ysBefore.length);
+    // 変更前の拍（2拍目）の休符は同じ位置のまま
+    expect(ysAfter[0]).toBeCloseTo(ysBefore[0], 1);
+    // 変更後の拍（3拍目以降）の休符は位置が変わっている＝新クレフで描かれている。
+    // キーだけ新クレフでクレフが旧のままだと、ここが同じ位置（または五線外の異常値）になる
+    expect(Math.abs(ysAfter[ysAfter.length - 1] - ysBefore[ysBefore.length - 1])).toBeGreaterThan(1);
+
+    // さらに厳密な基準: 「小節全体がヘ音」の描画と最後の補完休符が同じ高さになること。
+    // 位置が「動いた」だけでは、キー（新クレフ）とクレフ（旧のまま）の食い違いで
+    // 誤った位置へ動いたケースを見逃す（round2 P2 の負のテストで実証）。
+    cleanup();
+    const bassPrimary = (['c/3', 'e/3', 'a/3', 'g/3'] as const).map((key) => ({
+      dur: '4' as const, isRest: false, keys: [key],
+    }));
+    const bassVoice2 = [{ dur: '4' as const, isRest: false, keys: ['e/2'] }];
+    const allBass: MeasureData[] = [{
+      clef: 'bass',
+      events: bassPrimary,
+      voices: [
+        { id: 'voice-1', events: bassPrimary },
+        { id: 'voice-2', events: bassVoice2 },
+      ],
+    }];
+    const reference = renderScore(allBass, { duration: '4', isRest: false });
+    const ysReference = paddingRestYs(reference.svg);
+    expect(ysReference.length).toBe(ysAfter.length);
+    expect(ysAfter[ysAfter.length - 1]).toBeCloseTo(ysReference[ysReference.length - 1], 1);
+  });
+});
+
