@@ -1361,6 +1361,67 @@ describe('Storage Foundation Tests', () => {
       expect('renderStaff' in events[2]).toBe(false);
     });
 
+    it('小節途中のクレフ変更（clefChange）は保存・読込で保持され、未指定なら増えない（Issue #424）', () => {
+      const testData = createSavedScoreData(
+        {
+          title: 'Mid Measure Clef Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [
+              { dur: '4', isRest: false, keys: ['c/5'] },
+              { dur: '4', isRest: false, keys: ['a/3'], clefChange: 'bass' },
+              { dur: '2', isRest: false, keys: ['e/5'], clefChange: 'treble' },
+            ]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const saveResult = saveScoreData(testData);
+      expect(saveResult.success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      const events = loadResult.data?.parts[0].measures[0].events ?? [];
+      expect('clefChange' in events[0]).toBe(false);
+      expect(events[1].clefChange).toBe('bass');
+      expect(events[2].clefChange).toBe('treble');
+    });
+
+    it('clefChange に未知の値が入ったデータは保存を拒否する（Issue #424）', () => {
+      const testData = createSavedScoreData(
+        {
+          title: 'Invalid Clef Test',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: [{
+            events: [
+              { dur: '4', isRest: false, keys: ['c/5'], clefChange: 'ophicleide' as never },
+            ]
+          }]
+        }],
+        1,
+        1
+      );
+
+      const saveResult = saveScoreData(testData);
+      expect(saveResult.success).toBe(false);
+    });
+
     it('ダブルシャープ・ダブルフラットと descresc. は保存・読込で保持される（Issue #423）', () => {
       const testData = createSavedScoreData(
         {

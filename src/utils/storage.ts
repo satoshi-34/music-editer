@@ -246,6 +246,10 @@ function validateNoteEvent(event: any): event is NoteEvent {
       // 段またぎ記譜（Issue #309）: 描く五線の向きは 'below' / 'above' のみ許可する。
       // 省略時（undefined）は従来どおり自分の五線なので、旧データもそのまま通る。
       event.renderStaff === undefined || isRenderStaffDirection(event.renderStaff)
+    ) &&
+    (
+      // 小節途中のクレフ変更（Issue #424）。小節単位の clef と同じ集合だけ許可する。
+      event.clefChange === undefined || isValidClefType(event.clefChange)
     )
   );
 }

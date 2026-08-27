@@ -533,9 +533,9 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureClefActive ? ROW1[2] : { mode: 'measureClef' })}
-          title="途中音部記号変更（小節をクリックしてクレフを選択）"
+          title="途中音部記号変更（小節をクリックすると小節の頭から、音符をクリックするとその音からクレフが変わる）"
 
-          aria-label="途中音部記号変更（小節をクリックしてクレフを選択）"
+          aria-label="途中音部記号変更（小節をクリックすると小節の頭から、音符をクリックするとその音からクレフが変わる）"
           style={btnStyle(measureClefActive, { width: 30 })}
         >
           <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true">
