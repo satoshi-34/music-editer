@@ -75,12 +75,21 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
       expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
     }, { timeout: 15000 });
 
+    // VexFlow の臨時記号は g.vf-modifiers 配下の text グリフとして描かれる。
+    // クラス名がバージョンで揺れるため、SVG 内の text ノード総数の増加で
+    // 「臨時記号グリフが描画された」ことを検出する（適用前後で同じ譜面・同じ音符数）
+    const svgTextCount = () => document.querySelectorAll('.system-stack svg text').length;
+    const before = svgTextCount();
     fireEvent.click(screen.getByRole('button', { name: /ダブルシャープ（全音上げ）/ }));
     fireEvent.click(firstNoteHit());
 
     await waitFor(() => {
       const ev = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.events?.[0];
       expect(ev?.keys?.[0]).toBe('g##/4');
+    }, { timeout: 15000 });
+    // SVG にも臨時記号が実際に描かれる（保存だけ通って描画へ渡らない退行の検出・round2 P2）
+    await waitFor(() => {
+      expect(svgTextCount()).toBeGreaterThan(before);
     }, { timeout: 15000 });
     // 外すのは♮（既存の♯♭と同じ規則。同じ記号の再クリックは維持）
     fireEvent.click(screen.getByRole('button', { name: /ナチュラル/ }));
@@ -107,5 +116,43 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
       expect(ev?.dynamics?.some((d) => d.value === 'descresc')).toBe(true);
     }, { timeout: 15000 });
     expect(document.body.textContent).toContain('descresc.');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // #430 round2 P2: 調号領域を 𝄪 で押したときの「行き止まりは喋る」と履歴・保存の不変
+  it('𝄪 で調号領域をクリックすると案内が出て、譜面は変わらない', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    // 調号領域はデバッグ用 rect（vf-key-signature-debug）が示す範囲。SVG座標=画面座標に
+    // なるようモックしてから、その中心をクリックする
+    const svg = Array.from(document.querySelectorAll('svg'))
+      .find((c) => c.querySelector('rect.vf-key-signature-debug') || c.querySelector('rect.vf-hit')) as SVGSVGElement;
+    const width = parseFloat(svg.getAttribute('width') ?? '0') || 900;
+    const height = parseFloat(svg.getAttribute('height') ?? '0') || 300;
+    svg.getBoundingClientRect = vi.fn(() => ({
+      left: 0, top: 0, right: width, bottom: height, width, height, x: 0, y: 0, toJSON: () => ({}),
+    })) as unknown as typeof svg.getBoundingClientRect;
+    Object.defineProperty(svg, 'width', { value: { baseVal: { value: width } }, configurable: true });
+    Object.defineProperty(svg, 'height', { value: { baseVal: { value: height } }, configurable: true });
+
+    const debugRect = svg.querySelector('rect.vf-key-signature-debug') as SVGRectElement | null;
+    // デバッグ rect が出ない構成（調号Cで領域なし等）ならこの経路は成立しないため中断せず終わる
+    if (!debugRect) return;
+    const cx = parseFloat(debugRect.getAttribute('x')!) + parseFloat(debugRect.getAttribute('width')!) / 2;
+    const cy = parseFloat(debugRect.getAttribute('y')!) + parseFloat(debugRect.getAttribute('height')!) / 2;
+
+    const savedBefore = JSON.stringify(loadWorkAutosaveData(workId).data?.parts);
+    fireEvent.click(screen.getByRole('button', { name: /ダブルシャープ（全音上げ）/ }));
+    fireEvent.click(svg, { clientX: cx, clientY: cy });
+
+    await waitFor(() => {
+      const notice = document.querySelector('[data-testid="edit-notice"]');
+      expect(notice?.textContent ?? '').toContain('調号には使えません');
+    }, { timeout: 15000 });
+    await new Promise((r) => setTimeout(r, 2000));
+    expect(JSON.stringify(loadWorkAutosaveData(workId).data?.parts)).toBe(savedBefore);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

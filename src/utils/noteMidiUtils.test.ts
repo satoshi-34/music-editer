@@ -61,3 +61,12 @@ describe('ダブルシャープ・ダブルフラット（Issue #423）', () => 
     expect(respellDoubleAccidentalKey('こわれた')).toBe('こわれた');
   });
 });
+
+describe('respellDoubleAccidentalKey の音域下端', () => {
+  // #430 round2 P2: オクターブ0の下端をまたぐと負のオクターブになり再生エンジンが壊れる。
+  // 最低オクターブ内へ丸めて必ず鳴る音名を返す
+  it('オクターブ0の下端をまたぐ読み替えは負のオクターブにしない', () => {
+    expect(respellDoubleAccidentalKey('cbb/0')).toBe('bb/0');
+    expect(respellDoubleAccidentalKey('dbb/0')).toBe('c/0');
+  });
+});

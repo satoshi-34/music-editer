@@ -51,8 +51,13 @@ export function midiToKey(midi: number, preferSharp: boolean): string {
 export function respellDoubleAccidentalKey(key: string): string {
   const m = key.match(/^([a-g])(##|bb)[/ ]([0-9]+)$/i);
   if (!m) return key;
-  const midi = keyToMidi(key);
+  let midi = keyToMidi(key);
   if (midi === null) return key;
+  // cbb/0 のようにオクターブ 0 の下端をまたぐと読み替え先が負のオクターブ（bb/-1）になるが、
+  // 再生エンジンは負のオクターブを受理しない（内蔵音源は A4 へフォールバック・SoundFont は
+  // 不正音名）。MusicXML 読込から到達しうるため、最低オクターブ内へ丸めて必ず鳴る音にする
+  // （#430 round2 P2。1オクターブ上で鳴るのは近似だが、無音や A4 化よりずっとまし）
+  while (midi < 12) midi += 12;
   // ## は上げた結果なのでシャープ表記、bb は下げた結果なのでフラット表記に寄せると
   // 元の綴りに近い読み替えになる（鳴る高さはどちらでも同じ）。
   return midiToKey(midi, m[2] === '##');
