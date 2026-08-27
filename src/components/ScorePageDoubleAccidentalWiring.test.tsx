@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react';
 import ScorePage from './ScorePage';
+import { SCORE_EDIT_NOTICE_EVENT, type ScoreEditNoticeDetail } from '../utils/scoreEditorNotices';
 import {
   createSavedScoreData, createWork, saveWorkAutosaveData, setLastOpenedWorkId, loadWorkAutosaveData,
 } from '../utils/storage';
@@ -126,10 +127,15 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
       expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
     }, { timeout: 15000 });
 
-    // 調号領域はデバッグ用 rect（vf-key-signature-debug）が示す範囲。SVG座標=画面座標に
-    // なるようモックしてから、その中心をクリックする
+    // 調号領域のデバッグ rect（vf-key-signature-debug）は**臨時記号ツールを選んだ後**に
+    // だけ描かれる。先にツールを選び、出現を必須アサーションにする（round3 P2:
+    // 早期 return で空洞化していた）
+    fireEvent.click(screen.getByRole('button', { name: /ダブルシャープ（全音上げ）/ }));
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-key-signature-debug')).toBeTruthy();
+    }, { timeout: 15000 });
     const svg = Array.from(document.querySelectorAll('svg'))
-      .find((c) => c.querySelector('rect.vf-key-signature-debug') || c.querySelector('rect.vf-hit')) as SVGSVGElement;
+      .find((c) => c.querySelector('rect.vf-key-signature-debug')) as SVGSVGElement;
     const width = parseFloat(svg.getAttribute('width') ?? '0') || 900;
     const height = parseFloat(svg.getAttribute('height') ?? '0') || 300;
     svg.getBoundingClientRect = vi.fn(() => ({
@@ -138,15 +144,26 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
     Object.defineProperty(svg, 'width', { value: { baseVal: { value: width } }, configurable: true });
     Object.defineProperty(svg, 'height', { value: { baseVal: { value: height } }, configurable: true });
 
-    const debugRect = svg.querySelector('rect.vf-key-signature-debug') as SVGRectElement | null;
-    // デバッグ rect が出ない構成（調号Cで領域なし等）ならこの経路は成立しないため中断せず終わる
-    if (!debugRect) return;
-    const cx = parseFloat(debugRect.getAttribute('x')!) + parseFloat(debugRect.getAttribute('width')!) / 2;
-    const cy = parseFloat(debugRect.getAttribute('y')!) + parseFloat(debugRect.getAttribute('height')!) / 2;
+    const debugRect = svg.querySelector('rect.vf-key-signature-debug') as SVGRectElement;
+    expect(debugRect).toBeTruthy();
+    // debug rect の座標は viewBox（論理）単位。クリックの clientX/Y は表示px なので、
+    // viewBox→表示 の比で換算してから押す（換算しないと境界のすぐ外を押してしまう）
+    const vbParts = (svg.getAttribute('viewBox') ?? '').split(/\s+/);
+    const ratio = vbParts.length === 4 && parseFloat(vbParts[2]) > 0 ? width / parseFloat(vbParts[2]) : 1;
+    const cx = (parseFloat(debugRect.getAttribute('x')!) + parseFloat(debugRect.getAttribute('width')!) / 2) * ratio;
+    const cy = (parseFloat(debugRect.getAttribute('y')!) + parseFloat(debugRect.getAttribute('height')!) / 2) * ratio;
 
     const savedBefore = JSON.stringify(loadWorkAutosaveData(workId).data?.parts);
-    fireEvent.click(screen.getByRole('button', { name: /ダブルシャープ（全音上げ）/ }));
-    fireEvent.click(svg, { clientX: cx, clientY: cy });
+    const notices: string[] = [];
+    const listener = (e: Event) => {
+      const d = (e as CustomEvent<ScoreEditNoticeDetail>).detail;
+      if (d?.message) notices.push(d.message);
+    };
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, listener);
+    // 背景クリックの受け手は小節の当たり判定（vf-hit）。調号領域の座標で押す
+    const bgHit = svg.querySelector('rect.vf-hit') as SVGRectElement;
+    fireEvent.click(bgHit, { clientX: cx, clientY: cy });
+    window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, listener);
 
     await waitFor(() => {
       const notice = document.querySelector('[data-testid="edit-notice"]');
