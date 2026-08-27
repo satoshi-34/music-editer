@@ -5,7 +5,7 @@
 // startMeasureIndex を渡す。段割り（段あたり小節数）を変えたときの追従は、
 // 「同じ絶対小節が別の段・別の x に描かれる」ことで確認する。
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, waitFor } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData } from '../types/storage';
@@ -308,5 +308,58 @@ describe('PianoSystemCanvas の自由注釈テキスト（Issue #421）', () => 
       />
     );
     expect(document.querySelectorAll('link#title-font-noto-serif-jp')).toHaveLength(1);
+  });
+});
+
+// #432 Codex round1 P2: クリック判定 rect は描画時の getBBox() から作られるため、
+// Webフォント読み込み完了後に再描画（＝判定の作り直し）が走ることを固定する。
+// getBBox の幅を「読み込み前=40 / 後=120」で切り替え、判定 rect の幅が追従することを見る
+describe('Webフォント読み込み後のクリック判定の作り直し', () => {
+  afterEach(() => {
+    cleanup();
+    Reflect.deleteProperty(SVGElement.prototype, 'getBBox');
+    Reflect.deleteProperty(document, 'fonts');
+  });
+
+  it('フォント読み込み完了後に判定 rect が実寸で作り直される', async () => {
+    let fontLoaded = false;
+    (SVGElement.prototype as unknown as { getBBox: () => { x: number; y: number; width: number; height: number } }).getBBox =
+      function () { return { x: 10, y: 10, width: fontLoaded ? 120 : 40, height: 12 }; };
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { load: vi.fn().mockResolvedValue([]), ready: Promise.resolve() },
+    });
+
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={2}
+        tool={tool}
+        scale={1}
+        startMeasureIndex={0}
+        symbolsClickable={true}
+        partsConfig={[{
+          clef: 'treble',
+          data: withFreeText(2, 0, { text: 'con pedale', fontId: 'noto-serif-jp' }),
+          onChange: () => {},
+        }]}
+      />
+    );
+    const hitWidth = () => {
+      const rect = container.querySelector('text[data-free-text] ~ rect.symbol-hit-region, rect.symbol-hit-region');
+      return rect ? parseFloat(rect.getAttribute('width') ?? '0') : null;
+    };
+    // 読み込み前: フォールバック書体の実寸（40 + パディング6）
+    expect(hitWidth()).toBe(46);
+
+    // <link> の読み込み完了を再現（jsdom は onload を発火しないため手で起こす）
+    fontLoaded = true;
+    const link = document.querySelector('link#title-font-noto-serif-jp') as HTMLLinkElement;
+    expect(link).toBeTruthy();
+    link.dispatchEvent(new Event('load'));
+
+    // フォント読み込み完了 → tick → 再描画で判定が 120 + 6 になる
+    await waitFor(() => {
+      expect(hitWidth()).toBe(126);
+    }, { timeout: 5000 });
   });
 });

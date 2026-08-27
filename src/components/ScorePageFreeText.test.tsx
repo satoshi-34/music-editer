@@ -386,4 +386,59 @@ describe('ScorePage: 自由注釈テキストの配線（#421）', () => {
     expect(svgText.getAttribute('font-family')).toBe(SCORE_TEXT_FONT_FAMILY);
     expect(svgText.getAttribute('font-style')).toBe('italic');
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // #432 Codex round1 P2: PDF書き出し前の「注釈のWebフォント読み込み待ち」の配線。
+  // この集約処理（handleExportPdf 内）を消しても他のテストは通ってしまうため、
+  // 実マウントで「fonts.load に注釈本文が渡る」「読み込み完了までは print しない」
+  // 「完了後に print する」を固定する
+  it('PDF書き出しは、注釈のWebフォント読み込み完了を待ってから print する', async () => {
+    // fonts.load を「手動で解決できる」モックにする
+    let resolveLoads: (() => void) | null = null;
+    const gate = new Promise<void>((r) => { resolveLoads = r; });
+    const loadMock = vi.fn(() => gate.then(() => []));
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { load: loadMock, ready: Promise.resolve() },
+    });
+    // Webフォント付きの注釈を仕込む
+    const seeded = loadWorkAutosaveData; // 参照維持（lint対策なし・下で使用）
+    void seeded;
+    seedWork();
+    {
+      const data = loadWorkAutosaveData(workId).data!;
+      data.parts[0].measures[0].freeText = { text: 'espressivo', fontId: 'noto-serif-jp' };
+      saveWorkAutosaveData(workId, data);
+    }
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('text[data-free-text]')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    const printMock = window.print as ReturnType<typeof vi.fn>;
+    printMock.mockClear();
+    loadMock.mockClear();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'pdf' } });
+
+    // <link> は jsdom では onload が発火しないため手で起こす（読み込み完了の再現）
+    await waitFor(() => {
+      expect(document.querySelector('link#title-font-noto-serif-jp')).toBeTruthy();
+    }, { timeout: 15000 });
+    document.querySelector('link#title-font-noto-serif-jp')!.dispatchEvent(new Event('load'));
+
+    // fonts.load へ注釈本文が渡る（unicode-range 分割配信対応の要）
+    await waitFor(() => {
+      expect(loadMock.mock.calls.some((c) => String(c[1] ?? '').includes('espressivo'))).toBe(true);
+    }, { timeout: 15000 });
+    // 読み込みが終わるまでは print されない
+    expect(printMock).not.toHaveBeenCalled();
+
+    // 読み込み完了 → print される
+    resolveLoads!();
+    await waitFor(() => {
+      expect(printMock).toHaveBeenCalled();
+    }, { timeout: 15000 });
+    Reflect.deleteProperty(document, 'fonts');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

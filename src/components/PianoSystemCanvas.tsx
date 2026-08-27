@@ -210,7 +210,7 @@ import {
   resolveFreeTextFont,
 } from '../utils/freeTextUtils';
 // 自由注釈の書体（Issue #432）はタイトル書体の一覧をそのまま共用する（別リストを作らない）
-import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, ensureTitleFontLoaded, resolveTitleFontOption } from '../utils/titleFontOptions';
+import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, ensureTitleFontLoaded, resolveTitleFontOption, waitForTitleFontReady } from '../utils/titleFontOptions';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -2784,6 +2784,36 @@ export default function PianoSystemCanvas({
     next[partIndex] = nextPart;
     return next;
   }, [partsScore, symbolOffsetDraft]);
+
+  // 自由注釈のWebフォント読み込み完了で1回だけ再描画する（#432 Codex round1 P2）。
+  // クリック判定 rect は描画時の getBBox() から作られるため、フォールバック書体で
+  // 測った判定のままだと、Webフォントへ切り替わった後に字面と判定がずれる
+  // （幅の広い書体では文字の右側を押しても編集が開かない）。
+  // 「使われている書体ID＋文字列」が変わったときだけ待ち直し、完了時に tick を進めて
+  // 描画 effect を再実行する（判定 rect が読み込み後の実寸で作り直される）。
+  const [freeTextFontReadyTick, setFreeTextFontReadyTick] = useState(0);
+  const freeTextFontSignature = useMemo(() => {
+    const byFont = new Map<string, string>();
+    partsScoreForRender.forEach((measures) => measures.forEach((m) => {
+      if (!m.freeText) return;
+      const resolved = resolveFreeTextAnnotation(m.freeText);
+      const option = resolveTitleFontOption(resolved.fontId);
+      // 待つ必要があるのは Google Fonts（非同期読み込み）だけ。システムスタックは即描画される
+      if (!option.googleFontFamily) return;
+      byFont.set(resolved.fontId, (byFont.get(resolved.fontId) ?? '') + resolved.text);
+    }));
+    return JSON.stringify(Array.from(byFont.entries()).sort());
+  }, [partsScoreForRender]);
+  useEffect(() => {
+    const entries = JSON.parse(freeTextFontSignature) as Array<[string, string]>;
+    if (entries.length === 0) return;
+    let cancelled = false;
+    Promise.all(entries.map(([fontId, sample]) =>
+      waitForTitleFontReady(resolveTitleFontOption(fontId), sample)))
+      .then(() => { if (!cancelled) setFreeTextFontReadyTick((t) => t + 1); });
+    return () => { cancelled = true; };
+  }, [freeTextFontSignature]);
+
 
   /**
    * 矢印キー1押しぶんの移動を下書きへ反映する。
@@ -7807,7 +7837,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,freeTextFontReadyTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
