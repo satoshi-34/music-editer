@@ -1474,6 +1474,8 @@ type RenderCollectors = {
     startX: number; endX: number;
     lineY: number;
     adjust: ResolvedSymbolAdjust;
+    /** 段またぎで次の段へ続く括弧。終端フック（縦線）を描かない */
+    openEnd?: boolean;
     partIndex?: number;
     measureAbsoluteIndex?: number;
     /** その記号が付いている音符の声部。調整値を正しい声部へ書き戻すために必須（#316/#389 のレイヤー跨ぎクリック） */
@@ -2173,7 +2175,7 @@ function drawCollectedSymbolEntries(args: {
     }
   });
   // オッターバ（8va / 8vb）: テキスト + 破線 + 終端の縦線を描く
-  ottavaEntries.forEach(({ kind, startX, endX, lineY, adjust, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event }) => {
+  ottavaEntries.forEach(({ kind, startX, endX, lineY, adjust, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex, event, openEnd }) => {
     // symbolAdjust: offsetX/offsetY はブラケット全体に、scale はテキストの font-size と線の太さに効かせる
     const ax = startX + adjust.offsetX;
     const aex = endX + adjust.offsetX;
@@ -2233,6 +2235,7 @@ function drawCollectedSymbolEntries(args: {
       drawnElements.push(line);
     }
     const bracketDir = kind === '8va' ? 1 : -1;
+    if (!openEnd) {
     const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     vline.setAttribute('x1', String(aex));
     vline.setAttribute('y1', String(ay - 3));
@@ -2243,6 +2246,7 @@ function drawCollectedSymbolEntries(args: {
     vline.setAttribute('pointer-events', 'none');
     svgRoot.appendChild(vline);
     drawnElements.push(vline);
+    } // 段またぎで続く括弧（openEnd）は終端フックを描かない
     if (partIndex !== undefined && measureAbsoluteIndex !== undefined && eventIndex !== undefined && event) {
       appendSymbolHitRegion(drawnElements, partIndex, measureAbsoluteIndex, eventIndex, voiceIndex ?? 0, event, 'ottava');
     }
@@ -4201,6 +4205,47 @@ export default function PianoSystemCanvas({
       kind: '8va' | '8vb'; startX: number; lineY: number; adjust: ResolvedSymbolAdjust;
       partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
     } | null = null;
+    // ── オッターバの段またぎ（実機報告 2026-08-28）──
+    // ペア照合を段内で閉じると、開始が前の段・終了が次の段にある括弧が両側とも無言で
+    // 消える。段の外の小節を走査して「前の段から続いている開始」「次の段にある終了」を
+    // 判定し、続きの括弧（段左端から／段右端まで・終端フックなし）を作る。
+    // 走査の状態機械はペア照合本体と同じ（開始で開く・同種の終了で閉じる・別種は無視）。
+    const scanOttavaState = (pi: number, from: number, to: number, initial: Map<'8va' | '8vb', ResolvedSymbolAdjust>) => {
+      const open = new Map(initial);
+      const measures = partsScoreForRender[pi] ?? [];
+      for (let mi = from; mi < to && mi < measures.length; mi++) {
+        for (const voice of getMeasureVoices(measures[mi])) {
+          for (const ev of voice.events) {
+            if (ev.ottava === '8va') open.set('8va', getSymbolAdjust(ev, 'ottava'));
+            else if (ev.ottava === '8vb') open.set('8vb', getSymbolAdjust(ev, 'ottava'));
+            else if (ev.ottava === '8vaEnd') open.delete('8va');
+            else if (ev.ottava === '8vbEnd') open.delete('8vb');
+          }
+        }
+      }
+      return open;
+    };
+    // この段の手前で開いたままの括弧（パートごと・遅延計算）
+    const ottavaOpenBeforeByPart = new Map<number, Map<'8va' | '8vb', ResolvedSymbolAdjust>>();
+    const ottavaOpenBefore = (pi: number) => {
+      if (!ottavaOpenBeforeByPart.has(pi)) {
+        ottavaOpenBeforeByPart.set(pi, scanOttavaState(pi, 0, startMeasureIndex, new Map()));
+      }
+      return ottavaOpenBeforeByPart.get(pi)!;
+    };
+    // この段より後ろに、開いたままの括弧を閉じる終了があるか
+    const ottavaEndsAfter = (pi: number, kind: '8va' | '8vb') => {
+      const measures = partsScoreForRender[pi] ?? [];
+      for (let mi = startMeasureIndex + measuresPerSystem; mi < measures.length; mi++) {
+        for (const voice of getMeasureVoices(measures[mi])) {
+          for (const ev of voice.events) {
+            if (ev.ottava === kind) return false; // 先に新しい開始が来たら別の括弧
+            if (ev.ottava === `${kind}End`) return true;
+          }
+        }
+      }
+      return false;
+    };
 
     // ドラッグの確定/キャンセル直後に必ず1回来る click は、**capture フェーズで1回だけ消費**する
     //（#244 段2・Codexレビュー4巡目）。個別ハンドラ先頭のガード方式には2つの穴があった:
@@ -4575,6 +4620,7 @@ export default function PianoSystemCanvas({
       }
       x+=w;
     }
+
 
     // 左端コネクタ
     // オーケストラ譜では、木管・金管・弦などの「楽器グループ」を
@@ -7190,6 +7236,25 @@ export default function PianoSystemCanvas({
                   } else if (pendingOttava && ev.ottava === '8vbEnd' && pendingOttava.kind === '8vb') {
                     ottavaEntries.push({ ...pendingOttava, endX: cx + 8 });
                     pendingOttava = null;
+                  } else if ((ev.ottava === '8vaEnd' || ev.ottava === '8vbEnd') && !pendingOttava) {
+                    // 段またぎの終了側: 開始は前の段にある。段の左端から続きの括弧を描く
+                    const kind = ev.ottava === '8vaEnd' ? '8va' as const : '8vb' as const;
+                    const originAdjust = ottavaOpenBefore(pi).get(kind);
+                    if (originAdjust) {
+                      const firstStave = staveSets[pi]?.[0];
+                      const systemLeftX = (typeof (firstStave as unknown as { getNoteStartX?: () => number })?.getNoteStartX === 'function'
+                        ? (firstStave as unknown as { getNoteStartX: () => number }).getNoteStartX()
+                        : firstStave?.getX?.()) ?? stave.getX();
+                      ottavaEntries.push({
+                        kind,
+                        startX: systemLeftX,
+                        lineY: kind === '8va' ? topY - OTTAVA_STAFF_GAP_PX : botY + OTTAVA_STAFF_GAP_PX,
+                        adjust: originAdjust,
+                        endX: cx + 8,
+                        partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
+                      });
+                      ottavaOpenBefore(pi).delete(kind); // 段末の全幅処理で二重に描かない
+                    }
                   }
                 }
               });
@@ -7198,6 +7263,54 @@ export default function PianoSystemCanvas({
       }); // end parts.forEach
 
       x+=w;
+    }
+    // ── オッターバの段またぎ: 段末の後処理（実機報告 2026-08-28）──
+    // (a) この段で開始したまま終了が来なかった括弧は、次の段以降に終了があるなら
+    //     段の右端まで描く（終端フックなし＝続きがあることを示す）
+    // (b) 前の段から開いたまま、この段に開始も終了も無い中間段は、全幅の括弧を描く
+    {
+      const systemRightXOf = (pi: number) => {
+        const staves = staveSets[pi] ?? [];
+        const last = staves[staves.length - 1];
+        return last ? last.getX() + last.getWidth() : 0;
+      };
+      const systemLeftXOf = (pi: number) => {
+        const first = staveSets[pi]?.[0];
+        if (!first) return 0;
+        const g = first as unknown as { getNoteStartX?: () => number };
+        return typeof g.getNoteStartX === 'function' ? g.getNoteStartX() : first.getX();
+      };
+      // TS の制御フロー解析はコールバック内の代入を追えず pendingOttava を null に
+      // 狭めたままにするため、関数呼び出しで宣言型に戻して読む
+      type PendingOttava = { kind: '8va' | '8vb'; startX: number; lineY: number; adjust: ResolvedSymbolAdjust;
+        partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent };
+      // let の宣言直後 null からの絞り込みを TS が保持し続けるため、明示キャストで戻す
+      const carried = pendingOttava as unknown as PendingOttava | null;
+      if (carried && carried.partIndex !== undefined
+        && ottavaEndsAfter(carried.partIndex, carried.kind)) {
+        ottavaEntries.push({ ...carried, endX: systemRightXOf(carried.partIndex), openEnd: true });
+        pendingOttava = null;
+      }
+      parts.forEach((_, pi) => {
+        for (const kind of ['8va', '8vb'] as const) {
+          const originAdjust = ottavaOpenBefore(pi).get(kind);
+          if (!originAdjust) continue; // 開いていない／この段の終了で消費済み
+          if (!ottavaEndsAfter(pi, kind)) continue; // 終了がどこにも無い開始は従来どおり描かない
+          const first = staveSets[pi]?.[0];
+          if (!first) continue;
+          const topY = first.getYForLine(0);
+          const botY = first.getYForLine(4);
+          ottavaEntries.push({
+            kind,
+            startX: systemLeftXOf(pi),
+            endX: systemRightXOf(pi),
+            lineY: kind === '8va' ? topY - OTTAVA_STAFF_GAP_PX : botY + OTTAVA_STAFF_GAP_PX,
+            adjust: originAdjust,
+            partIndex: pi,
+            openEnd: true,
+          });
+        }
+      });
     }
 
     // 音符の当たり判定（.vf-note-hit）を、小節背景（.vf-hit）と弧の当たり判定より前面へ出す。

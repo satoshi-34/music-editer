@@ -192,4 +192,87 @@ describe('オッターバの見た目（2026-08-26 実機所感）', () => {
     // 既定位置 + 手動オフセットのまま（障害物回避が効いていない）
     expect(parseFloat(label.getAttribute('y')!)).toBe(staveTopY - OTTAVA_STAFF_GAP_PX + 10);
   });
+
+  // 実機報告 2026-08-28: 段をまたぐ 8va（開始が段1・終了が段2）。
+  // ペア照合を段内で閉じると両側とも無言で消える。開始側の段は右端まで
+  // 終端フックなしで描き、終了側の段は左端から続きの括弧を描くことを固定する
+  describe('段またぎの 8va', () => {
+    const crossData: MeasureData[] = [
+      { events: [
+        { dur: '2', isRest: false, keys: ['c/5'] },
+        { dur: '2', isRest: false, keys: ['d/5'], ottava: '8va' },
+      ] },
+      { events: [
+        { dur: '2', isRest: true, keys: ['b/4'] },
+        { dur: '2', isRest: false, keys: ['e/5'], ottava: '8vaEnd' },
+      ] },
+    ];
+    function renderSystem(startMeasureIndex: number) {
+      const { container } = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data: crossData, onChange: vi.fn() }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+          startMeasureIndex={startMeasureIndex}
+        />
+      );
+      const svg = container.querySelector('svg') as SVGSVGElement;
+      const label = Array.from(svg.querySelectorAll('text')).find((t) => t.textContent === '8va');
+      const dash = Array.from(svg.querySelectorAll('line')).find((l) => l.getAttribute('stroke-dasharray'));
+      // 終端フックはオッターバ描画コードの色（#374151）を持つ実線の縦線に限定して数える
+      // （五線・小節線など他の縦線を誤カウントしないため）
+      const hooks = Array.from(svg.querySelectorAll('line')).filter((l) => !l.getAttribute('stroke-dasharray')
+        && l.getAttribute('stroke') === '#374151'
+        && l.getAttribute('x1') === l.getAttribute('x2'));
+      const result = { svg, label, dash, hookCount: hooks.length };
+      cleanup();
+      return result;
+    }
+
+    it('開始側の段: ラベル＋破線が右端まで伸び、終端フックは無い', () => {
+      const { label, dash, hookCount } = renderSystem(0);
+      expect(label).toBeTruthy();
+      expect(dash).toBeTruthy();
+      // 破線の右端が開始音符よりずっと右（段の右端側）まで届いている
+      expect(parseFloat(dash!.getAttribute('x2')!)).toBeGreaterThan(parseFloat(label!.getAttribute('x')!) + 100);
+      expect(hookCount).toBe(0);
+    });
+
+    it('終了側の段: 段の左端から続きの括弧（ラベル＋破線＋終端フック）が描かれる', () => {
+      const { label, dash, hookCount } = renderSystem(1);
+      expect(label).toBeTruthy();
+      expect(dash).toBeTruthy();
+      expect(hookCount).toBe(1);
+    });
+
+    it('段内で完結する場合は従来どおり（回帰なし: 開始と終了が同じ段）', () => {
+      const inSystem: MeasureData[] = [{
+        events: [
+          { dur: '2', isRest: false, keys: ['c/5'], ottava: '8va' },
+          { dur: '2', isRest: false, keys: ['d/5'], ottava: '8vaEnd' },
+        ],
+      }];
+      const { container } = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data: inSystem, onChange: vi.fn() }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+        />
+      );
+      const svg = container.querySelector('svg') as SVGSVGElement;
+      // 終端フックはオッターバ描画コードの色（#374151）を持つ実線の縦線に限定して数える
+      // （五線・小節線など他の縦線を誤カウントしないため）
+      const hooks = Array.from(svg.querySelectorAll('line')).filter((l) => !l.getAttribute('stroke-dasharray')
+        && l.getAttribute('stroke') === '#374151'
+        && l.getAttribute('x1') === l.getAttribute('x2'));
+      expect(hooks.length).toBe(1);
+      cleanup();
+    });
+  });
 });
