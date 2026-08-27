@@ -1383,6 +1383,8 @@ type RenderCollectors = {
    */
   freeTextEntries: Array<{
     x: number; topY: number; text: string; scale: number; offsetX: number; offsetY: number;
+    /** 矢印キーのライブ移動（オーバーレイから対象SVG要素を特定するため）に使う */
+    partIndex: number; measureAbsoluteIndex: number;
   }>;
   /**
    * 途中テンポ変更（MeasureData.bpm）。最上段（pi===0）の上にだけ ♩=XXX と表示する。
@@ -1852,10 +1854,16 @@ function drawCollectedSymbolEntries(args: {
   // FREE_TEXT_BASE_OFFSET_Y px 上で、♩=XXX（36px 上）・リハーサルマーク（72px 上）より
   // 下の帯に入るので、同じ小節に3つ付いても既定のままで重ならない。
   // 自動衝突回避（#340）の対象にはしない: 利用者が置いた場所に出ることを優先する。
-  freeTextEntries.forEach(({ x, topY, text, scale, offsetX, offsetY }) => {
+  freeTextEntries.forEach(({ x, topY, text, scale, offsetX, offsetY, partIndex, measureAbsoluteIndex }) => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     el.textContent = text;
     el.setAttribute('class', 'vf-free-text');
+    // 矢印キーのライブ移動用: どの注釈か（part-measure）と、オフセット0のときの基準座標。
+    // オーバーレイは data-free-text で要素を見つけ、基準＋入力中オフセットで x/y を直接書く
+    // （保存は Enter の1回だけ。⤢/✥ の記号調整と同じ「押している間はDOM直更新」の型）
+    el.setAttribute('data-free-text', `${partIndex}-${measureAbsoluteIndex}`);
+    el.setAttribute('data-base-x', String(x));
+    el.setAttribute('data-base-y', String(topY - FREE_TEXT_BASE_OFFSET_Y));
     el.setAttribute('x', String(x + offsetX));
     el.setAttribute('y', String(topY - FREE_TEXT_BASE_OFFSET_Y + offsetY));
     el.setAttribute('fill', '#111827');
@@ -4493,6 +4501,8 @@ export default function PianoSystemCanvas({
           freeTextEntries.push({
             x: x / s,
             topY: stave.getYForLine(0),
+            partIndex: pi,
+            measureAbsoluteIndex: startMeasureIndex + i,
             ...resolved,
           });
         }
@@ -7192,6 +7202,64 @@ export default function PianoSystemCanvas({
       highlightedLayerPartIndex: activeLayerHighlightPartIndex,
     });
 
+    // 自由注釈テキスト（#421）のクリック選択（実機所感 2026-08-27）。
+    // 他の記号は appendSymbolHitRegion（音符イベント紐づけ）でクリック選択できるのに、
+    // 小節紐づけの注釈だけ「Tツールで小節を探して押す」しかないのは非一貫だった。
+    // 演奏記号タブ（symbolsInteractive）では、描かれたテキストの bbox に透明の判定 rect を
+    // 重ね、クリックで編集オーバーレイを開く（Tツールを選び直す必要をなくす）
+    if (symbolsInteractive) {
+      svgRoot.querySelectorAll('text[data-free-text]').forEach((textEl) => {
+        const idAttr = textEl.getAttribute('data-free-text') ?? '';
+        const [piStr, miStr] = idAttr.split('-');
+        const pi = parseInt(piStr, 10);
+        const absI = parseInt(miStr, 10);
+        if (!Number.isInteger(pi) || !Number.isInteger(absI)) return;
+        let bbox: { x: number; y: number; width: number; height: number };
+        try {
+          const b = (textEl as SVGGraphicsElement).getBBox();
+          bbox = { x: b.x, y: b.y, width: b.width, height: b.height };
+        } catch { bbox = { x: 0, y: 0, width: 0, height: 0 }; }
+        if (bbox.width <= 0 || bbox.height <= 0) {
+          // getBBox が使えない環境（jsdom 等）向けのフォールバック:
+          // x/y 属性とフォントサイズから字面をおおまかに見積もる（当たりが少し緩くても、
+          // クリック選択の目的には十分）
+          const fx = parseFloat(textEl.getAttribute('x') ?? '0');
+          const fy = parseFloat(textEl.getAttribute('y') ?? '0');
+          const fs = parseFloat(textEl.getAttribute('font-size') ?? '14');
+          const len = (textEl.textContent ?? '').length;
+          bbox = { x: fx, y: fy - fs, width: Math.max(fs, len * fs * 0.6), height: fs * 1.3 };
+        }
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        // 画面専用要素の共通クラス（印刷・プレビューには出さない）
+        rect.setAttribute('class', 'symbol-hit-region vf-screen-only');
+        rect.setAttribute('x', String(bbox.x - 3));
+        rect.setAttribute('y', String(bbox.y - 3));
+        rect.setAttribute('width', String(bbox.width + 6));
+        rect.setAttribute('height', String(bbox.height + 6));
+        rect.setAttribute('fill', 'rgba(37,99,235,0)');
+        rect.setAttribute('pointer-events', 'all');
+        (rect.style as CSSStyleDeclaration).cursor = 'pointer';
+        rect.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const me = ev as MouseEvent;
+          const current = partsScoreForRender[pi]?.[absI]?.freeText;
+          const resolved = current ? resolveFreeTextAnnotation(current) : null;
+          const containerRect = containerRef.current?.getBoundingClientRect();
+          setFreeTextEditState({
+            measureAbsoluteIndex: absI,
+            partIndex: pi,
+            currentText: resolved?.text ?? '',
+            currentScalePercent: resolved && resolved.scale !== 1 ? String(Math.round(resolved.scale * 100)) : '',
+            currentOffsetX: resolved && resolved.offsetX !== 0 ? String(resolved.offsetX) : '',
+            currentOffsetY: resolved && resolved.offsetY !== 0 ? String(resolved.offsetY) : '',
+            overlayX: me.clientX - (containerRect?.left ?? 0),
+            overlayY: me.clientY - (containerRect?.top ?? 0),
+          });
+        });
+        svgRoot.appendChild(rect);
+      });
+    }
+
     // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
     // UI案A2（#405 段3）: 弧を淡くするかは「実際に描かれている五線」で決める。
     // Y座標から推測すると、五線間の加線音（ヘ音記号の C5 など）で逆転する
@@ -7667,6 +7735,52 @@ export default function PianoSystemCanvas({
   }
 
   /** 自由注釈オーバーレイの4つの入力欄から現在値を読んで確定する */
+  /**
+   * 自由注釈オーバーレイの矢印キー移動（#421 実機所感 2026-08-27）。
+   * ⤢/✥ の記号調整と同じ手触り: 押している間は横・縦の入力欄と譜面上のSVG要素を
+   * 直接更新し（1px・Shiftで10px）、保存は Enter の1回だけ（Undoも1回で戻る）。
+   * どの入力欄（本文・サイズ・横・縦）にフォーカスがあっても効く。
+   */
+  // 矢印キーのライブ移動は SVG を直接動かすため、保存せずに閉じた（Escape・対象切替・
+  // 他ツールへの移動）とき表示だけが動いたまま残る（#429 round1 P2）。
+  // オーバーレイの対象が変わるたび、前の対象のプレビューを保存済みオフセットへ復元する
+  useEffect(() => {
+    const st = freeTextEditState;
+    if (!st) return;
+    const key = `${st.partIndex}-${st.measureAbsoluteIndex}`;
+    return () => {
+      const el = containerRef.current?.querySelector(`text[data-free-text="${key}"]`);
+      if (!el) return;
+      const saved = partsScoreRef.current[st.partIndex]?.[st.measureAbsoluteIndex]?.freeText;
+      const resolved = saved ? resolveFreeTextAnnotation(saved) : null;
+      el.setAttribute('x', String(parseFloat(el.getAttribute('data-base-x') ?? '0') + (resolved?.offsetX ?? 0)));
+      el.setAttribute('y', String(parseFloat(el.getAttribute('data-base-y') ?? '0') + (resolved?.offsetY ?? 0)));
+    };
+  }, [freeTextEditState]);
+
+  const handleFreeTextArrowKey = (e: ReactKeyboardEvent<HTMLInputElement>): boolean => {
+    const nudge = resolveSymbolOffsetNudge(e.key, e.shiftKey);
+    if (!nudge || !freeTextEditState) return false;
+    e.preventDefault();
+    // クランプは自由注釈用の ±MAX_FREE_TEXT_OFFSET（±200）。記号用（±100）を使うと
+    // 150px などの有効位置が最初の矢印で 100px へ飛ぶ（#429 round1 P2）
+    const baseX = parseFreeTextOffsetInput(freeTextOffsetXInputRef.current?.value ?? freeTextEditState.currentOffsetX);
+    const baseY = parseFreeTextOffsetInput(freeTextOffsetYInputRef.current?.value ?? freeTextEditState.currentOffsetY);
+    const x = Math.max(-MAX_FREE_TEXT_OFFSET, Math.min(MAX_FREE_TEXT_OFFSET, baseX + nudge.dx));
+    const y = Math.max(-MAX_FREE_TEXT_OFFSET, Math.min(MAX_FREE_TEXT_OFFSET, baseY + nudge.dy));
+    if (freeTextOffsetXInputRef.current) freeTextOffsetXInputRef.current.value = String(x);
+    if (freeTextOffsetYInputRef.current) freeTextOffsetYInputRef.current.value = String(y);
+    // 譜面上の該当テキストを DOM 直更新でライブ追従させる（基準座標は描画時の data 属性）
+    const el = containerRef.current?.querySelector(
+      `text[data-free-text="${freeTextEditState.partIndex}-${freeTextEditState.measureAbsoluteIndex}"]`,
+    );
+    if (el) {
+      el.setAttribute('x', String(parseFloat(el.getAttribute('data-base-x') ?? '0') + x));
+      el.setAttribute('y', String(parseFloat(el.getAttribute('data-base-y') ?? '0') + y));
+    }
+    return true;
+  };
+
   function commitFreeTextFromInputs() {
     handleFreeTextConfirm({
       text: freeTextInputRef.current?.value ?? '',
@@ -8166,6 +8280,7 @@ export default function PianoSystemCanvas({
               padding: 2,
             }}
             onKeyDown={(e) => {
+              if (handleFreeTextArrowKey(e)) { e.stopPropagation(); return; }
               if (e.key === 'Enter') {
                 commitFreeTextFromInputs();
               } else if (e.key === 'Escape') {
@@ -8186,6 +8301,7 @@ export default function PianoSystemCanvas({
               placeholder="100"
               style={{ width: 52, fontSize: 12, padding: 2 }}
               onKeyDown={(e) => {
+                if (handleFreeTextArrowKey(e)) { e.stopPropagation(); return; }
                 if (e.key === 'Enter') commitFreeTextFromInputs();
                 else if (e.key === 'Escape') setFreeTextEditState(null);
                 e.stopPropagation();
@@ -8202,6 +8318,7 @@ export default function PianoSystemCanvas({
               placeholder="0"
               style={{ width: 48, fontSize: 12, padding: 2 }}
               onKeyDown={(e) => {
+                if (handleFreeTextArrowKey(e)) { e.stopPropagation(); return; }
                 if (e.key === 'Enter') commitFreeTextFromInputs();
                 else if (e.key === 'Escape') setFreeTextEditState(null);
                 e.stopPropagation();
@@ -8218,6 +8335,7 @@ export default function PianoSystemCanvas({
               placeholder="0"
               style={{ width: 48, fontSize: 12, padding: 2 }}
               onKeyDown={(e) => {
+                if (handleFreeTextArrowKey(e)) { e.stopPropagation(); return; }
                 if (e.key === 'Enter') commitFreeTextFromInputs();
                 else if (e.key === 'Escape') setFreeTextEditState(null);
                 e.stopPropagation();

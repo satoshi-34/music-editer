@@ -191,4 +191,137 @@ describe('ScorePage: 自由注釈テキストの配線（#421）', () => {
       expect(loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText).toBeUndefined();
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 実機所感 2026-08-27: 矢印キーで場所を変えたい（⤢/✥ の記号調整と同じ手触り）。
+  // どの入力欄にフォーカスがあっても矢印キーで動き、譜面のテキストがライブ追従し、
+  // Enter の1回で保存されることを固定する
+  it('矢印キーで注釈が動き（ライブ追従）、Enter で保存される', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    await selectFreeTextTool();
+    clickMeasureOfPart(0);
+    await typeAnnotation('nudge target');
+    await waitFor(() => {
+      expect(loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText?.text).toBe('nudge target');
+    }, { timeout: 15000 });
+
+    // 開き直して、本文入力欄にフォーカスがあるまま矢印キー（→→・Shift+↓）
+    clickMeasureOfPart(0);
+    const input = await screen.findByLabelText('自由注釈テキスト', {}, { timeout: 15000 }) as HTMLInputElement;
+    const svgText = () => document.querySelector('text[data-free-text]') as SVGTextElement;
+    const baseX = parseFloat(svgText().getAttribute('data-base-x')!);
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    fireEvent.keyDown(input, { key: 'ArrowDown', shiftKey: true });
+
+    // 入力欄と譜面の両方がライブ更新される（まだ保存はされない）
+    expect((screen.getByLabelText('自由注釈の横位置（px）') as HTMLInputElement).value).toBe('2');
+    expect((screen.getByLabelText('自由注釈の縦位置（px）') as HTMLInputElement).value).toBe('10');
+    expect(parseFloat(svgText().getAttribute('x')!)).toBeCloseTo(baseX + 2, 5);
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => {
+      const ft = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText;
+      expect(ft?.offsetX).toBe(2);
+      expect(ft?.offsetY).toBe(10);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 実機所感 2026-08-27: 置いた注釈テキストを**直接クリック**して編集を開きたい
+  // （他の記号は演奏記号タブでクリック選択できるのに、注釈だけTツール経由だった非一貫の解消）
+  it('演奏記号タブでは、注釈テキストのクリックで編集オーバーレイが開く', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    await selectFreeTextTool();
+    clickMeasureOfPart(0);
+    await typeAnnotation('click me');
+    await waitFor(() => {
+      expect(loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText?.text).toBe('click me');
+    }, { timeout: 15000 });
+
+    // 別のツールに切り替えても、演奏記号タブ内ならテキストを直接押せる
+    // （強弱グループの先頭ボタンを押す。名前はグリフ描画で拾えないため role 一覧から選ぶ）
+    const symbolButtons = screen.getAllByRole('button').filter((b) => b.getAttribute('title')?.includes('強弱'));
+    if (symbolButtons[0]) fireEvent.click(symbolButtons[0]);
+    await waitFor(() => {
+      // テキストの上に判定 rect（symbol-hit-region）が重なっている
+      const svgText = document.querySelector('text[data-free-text]');
+      expect(svgText).toBeTruthy();
+    }, { timeout: 15000 });
+    const hit = Array.from(document.querySelectorAll('rect.symbol-hit-region'))
+      .find((r) => r.classList.contains('vf-screen-only')) as SVGRectElement;
+    expect(hit).toBeTruthy();
+    fireEvent.click(hit, { clientX: 100, clientY: 40 });
+
+    // 現在値入りで編集オーバーレイが開く
+    const input = await screen.findByLabelText('自由注釈テキスト', {}, { timeout: 15000 }) as HTMLInputElement;
+    expect(input.value).toBe('click me');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // #429 round1 P1/P2 のリグレッション:
+  // - 矢印キーが window 側へ伝播しない（残留した音符選択が動かない）
+  // - Escape で閉じるとライブ移動のプレビューが保存値へ戻る
+  it('矢印キーは伝播せず、Escape でプレビューが元の位置へ戻る', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    await selectFreeTextTool();
+    clickMeasureOfPart(0);
+    await typeAnnotation('escape check');
+    await waitFor(() => {
+      expect(loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText?.text).toBe('escape check');
+    }, { timeout: 15000 });
+
+    clickMeasureOfPart(0);
+    const input = await screen.findByLabelText('自由注釈テキスト', {}, { timeout: 15000 }) as HTMLInputElement;
+    const svgText = () => document.querySelector('text[data-free-text]') as SVGTextElement;
+    const baseX = parseFloat(svgText().getAttribute('data-base-x')!);
+
+    // window へ矢印キーが漏れないこと（漏れると残留音符選択の音高移動が走る・P1）
+    let leaked = 0;
+    const listener = (e: KeyboardEvent) => { if (e.key === 'ArrowRight') leaked += 1; };
+    window.addEventListener('keydown', listener);
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    window.removeEventListener('keydown', listener);
+    expect(leaked).toBe(0);
+    expect(parseFloat(svgText().getAttribute('x')!)).toBeCloseTo(baseX + 2, 5);
+
+    // Escape → 保存せず閉じ、プレビューが保存値（オフセット0）へ戻る（P2）
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() => {
+      expect(parseFloat(svgText().getAttribute('x')!)).toBeCloseTo(baseX, 5);
+    }, { timeout: 15000 });
+    const ft = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.freeText;
+    expect(ft?.offsetX ?? 0).toBe(0);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // #429 round1 P2: クランプは注釈仕様の ±200。記号用の ±100 だと 150 から → で 101 へ飛ぶ
+  it('横位置150からの矢印は151になる（±200のクランプ）', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    await selectFreeTextTool();
+    clickMeasureOfPart(0);
+    const input = await screen.findByLabelText('自由注釈テキスト', {}, { timeout: 15000 }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'clamp' } });
+    const xInput = screen.getByLabelText('自由注釈の横位置（px）') as HTMLInputElement;
+    fireEvent.change(xInput, { target: { value: '150' } });
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    expect(xInput.value).toBe('151');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });
