@@ -8011,9 +8011,22 @@ export default function PianoSystemCanvas({
     // 音符を押して開いた場合（eventIndex あり）は、小節の頭ではなく
     // 「その音符から」変える＝主声部のイベントへ clefChange を書く（Issue #424）。
     if (eventIndex != null) {
+      // #318: 対象の音符が消えている（オーバーレイを開いたまま外部で楽譜が差し替わった等）
+      // 場合は、updater の外で判定して理由を通知する（updater 内で通知すると
+      // StrictMode の2回呼びで二重に出るため。#238 と同じ理由）。
+      const currentTarget = getVoiceEvents(
+        (partsScoreRef.current[partIndex] ?? [])[measureAbsoluteIndex], 0)[eventIndex];
+      if (!currentTarget) {
+        notifyScoreEdit(describeMidMeasureClefUnavailable('noEvent'));
+        setClefEditState(null);
+        return;
+      }
       setPartsScore(prev => {
         const next = [...prev];
         const targetPartData = (prev[partIndex] ?? []).map(cloneMeasureData);
+        // ここから下の範囲外・欠損ガードは、上の事前判定を通過した後の
+        // 純粋な防御（並行更新との競合）。updater 内では通知できないため黙って
+        // prev を返す（#318 の「通知できない理由をコメントに書く」ケース）
         if (measureAbsoluteIndex >= targetPartData.length) return prev;
         const measure = targetPartData[measureAbsoluteIndex];
         if (!getVoiceEvents(measure, 0)[eventIndex]) return prev;

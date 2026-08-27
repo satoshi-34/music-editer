@@ -320,3 +320,28 @@ worktree だけを載せた使い捨てコンテナ（:5174）でピアノ大譜
 - 途中変更を入れても**ページの縮小率は変わらなかった**（`--scale` は 0.7705 のまま）
 - 元に戻す（Cmd+Z）で小型クレフが消え、やり直すと戻る
 - 印刷プレビューでも同じ見え方になる
+
+## Codex round 1 対応（2026-08-28・レビュアー側で実施）
+
+- **main とのリベース**: measureLayoutUtils.test.ts 末尾で #430（ダブル臨時記号の幅）と
+  本PRの途中クレフ幅テストが競合。両 describe を残して解消（テスト50件緑を確認）
+- **声部2のクレフ解決の不一致（P2×2）**:
+  - キーボード操作（↑↓・0キー等）の音高換算が主声部インデックスで resolveEventClef を
+    呼んでいたため、声部2の選択では描画と別のクレフを解決していた。
+    `resolveVoiceEventClef(measures, mi, voiceIndex, eventIndex, partClef)` を新設し、
+    声部2は描画と同じ「先行イベントの拍数→resolveClefAtBeat」で解決する
+    （voiceIndex=0 は従来の resolveEventClef と同値）
+  - 表示用パディング休符が「声部の最後のイベント開始時点」のクレフで固定されていたため、
+    声部2が途中変更より前に終わる小節では残りの拍の休符が旧クレフ基準だった。
+    buildTrailingRestEventsForBeats が休符を先頭から順に問い合わせる性質を使い、
+    開始拍カーソルを進めながら各休符自身の拍でクレフを解決する
+- **ScorePage 実マウント統合テスト**: ScorePageMidMeasureClef.test.tsx を新設
+  （演奏記号タブ→ツール→音符クリック→ヘ音選択→保存データの clefChange・
+  小型クレフ（20pt text）の DOM 表示まで実経路で固定）
+- **#318（updater 内の無言 return）**: handleClefConfirm のイベント経路は、updater の
+  外で対象の存在を事前判定し、消えていれば describeMidMeasureClefUnavailable('noEvent')
+  を通知して閉じる。updater 内に残る範囲外ガードは並行更新との競合に対する純粋な防御で、
+  updater 内からは通知できない（StrictMode の2回呼びで二重通知になる）ため黙って prev を
+  返す旨をコメントに明記
+- **保存バリデーションの回帰テスト**: storage.test.ts に「clefChange の保存・読込保持
+  （未指定の音符にプロパティが生えない）」「未知の値（'ophicleide'）は保存拒否」を追加
