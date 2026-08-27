@@ -77,4 +77,42 @@ describe('自動保存の max-wait ガード', () => {
     }
     expect(savedDuringEditing).toBe(true);
   }, 60000);
+
+  // #440 Codex round1 P1: max-wait 超過状態で新規作成すると、切替処理の中間レンダー
+  // （作品IDは切替先・画面はまだ旧内容）で同期保存が走り、旧作品の内容が新しい作品へ
+  // 書かれてしまう。切替時に基準時刻をリセットして防ぐことを固定する
+  it('max-wait 超過後に新規作成しても、旧作品の内容が新しい作品へ保存されない', async () => {
+    const { getByRole, getAllByRole } = render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    // 内容を作って保存させる
+    const hit = document.querySelector('rect.vf-hit') as SVGRectElement;
+    fireEvent.click(hit, { clientX: 30, clientY: 30 });
+    await waitFor(() => {
+      expect(autosaveKeys().length).toBe(1);
+    }, { timeout: 10000 });
+
+    // 前回保存から max-wait（5秒）を超えるまで放置（この間は編集が無いので保存も走らない）
+    await new Promise((r) => setTimeout(r, 5600));
+
+    // overdue 状態で新規作成 → OK
+    fireEvent.click(getByRole('tab', { name: 'ファイル' }));
+    fireEvent.click(getByRole('button', { name: '新規作成' }));
+    fireEvent.click(getAllByRole('button', { name: 'OK' })[0]);
+
+    // 切替処理（リセットの中間レンダー含む）が落ち着くのを待つ
+    await new Promise((r) => setTimeout(r, 2500));
+
+    const idxRaw = localStorageMock.getItem('music-score-app-work-index');
+    const idx = JSON.parse(idxRaw ?? '{}') as { lastOpenedWorkId?: string };
+    const newId = idx.lastOpenedWorkId;
+    expect(newId).toBeTruthy();
+    // 新しい（空の）作品に自動保存データが書かれていない＝旧内容の混入が無い
+    const newKey = `music-score-app-work-${newId}-autosave`;
+    expect(localStorageMock.getItem(newKey)).toBeNull();
+    // 旧作品側の自動保存は残っている（切替前の保存が消えていない）
+    expect(autosaveKeys().length).toBe(1);
+  }, 60000);
 });

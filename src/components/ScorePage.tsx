@@ -552,6 +552,13 @@ export default function ScorePage() {
       clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
     }
+    // max-wait の基準時刻もここでリセットする（#440 Codex round1 P1）。
+    // リセットしないと、前回保存から5秒超の状態で新規作成・作品切替をしたとき、
+    // 切替処理の途中（currentWorkIdRef は切替先・画面 state はまだ旧作品）の
+    // 中間レンダーで自動保存 effect が overdue と判定し、**旧作品の内容を切替先の
+    // 作品IDへ同期保存**してしまう。リセットすれば切替後5秒はデバウンス経路のみになり、
+    // 中間状態が保存されることはない（デバウンス中に切替が完了して旧挙動と同じになる）
+    lastAutosaveCompletedAtRef.current = Date.now();
   }, []);
   /**
    * 前回の自動保存（完了 or 空スキップ）の時刻。デバウンス飢餓ガード（max-wait）の基準。
