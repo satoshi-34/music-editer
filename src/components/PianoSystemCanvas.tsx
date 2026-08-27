@@ -102,6 +102,7 @@ import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import {
   resolveMeasureClef,
   resolveEventClef,
+  resolveVoiceEventClef,
   resolveEventClefsInMeasure,
   collectMidMeasureClefChanges,
   resolveClefAtBeat,
@@ -1112,10 +1113,21 @@ function buildPartVoicesForMeasure(input: BuildPartVoicesInput): BuildPartVoices
         // 追加分0件を返し、何も変わらない（リグレッション防止）。
         // 2声部共存時は従来通り声部ごとの上下振り分け位置を使い、
         // 単声部小節だけ音価に応じた標準浄書位置（全休符/2分休符以下）を使う。
-        // 拍を埋める表示専用の休符は小節の末尾に付くので、末尾時点のクレフで位置を決める。
-        const clefAtVoiceEnd = clefForVoiceEvent(rawSourceEvents.length);
-        const restKeyForPaddingDuration = (duration: NoteEvent['dur']) =>
-          standardRestDisplayKey(clefAtVoiceEnd, duration, voiceIndex, measureVoices.length);
+        // 拍を埋める表示専用の休符は「その休符自身の開始拍」時点のクレフで位置を決める
+        // （#431 Codex round1 P2）。「声部の最後のイベント時点」で固定すると、声部2が
+        // 主声部の途中クレフ変更より前に終わる場合、残りの拍の休符が旧クレフ基準のまま
+        // になる。buildTrailingRestEventsForBeats は休符を先頭から順に1回ずつ問い合わせる
+        // ため、開始拍のカーソルをクロージャで進めながら解決する。
+        let paddingBeatCursor = rawSourceEvents.reduce(
+          (sum, ev) => sum + getEventDurationBeats(ev as StoredNoteEvent), 0);
+        const restKeyForPaddingDuration = (duration: NoteEvent['dur']) => {
+          const clefAtRestStart = midMeasureClefChanges.length === 0
+            ? clefForVoiceEvent(rawSourceEvents.length)
+            : resolveClefAtBeat(clefHere, midMeasureClefChanges, paddingBeatCursor);
+          paddingBeatCursor += getEventDurationBeats(
+            { dur: duration, isRest: true, keys: [] } as unknown as StoredNoteEvent);
+          return standardRestDisplayKey(clefAtRestStart, duration, voiceIndex, measureVoices.length);
+        };
         const paddingRests: RenderNoteEvent[] = computeVoiceDisplayPadding(rawSourceEvents, beatsPerMeasure, restKeyForPaddingDuration)
           .map(rest => ({ ...sanitizeRenderEvent(rest, clefHere), __isPlaceholder: true }));
         let sourceEvents: RenderNoteEvent[] = rawSourceEvents;
@@ -3810,9 +3822,13 @@ export default function PianoSystemCanvas({
       // 見ていなかった（Issue #424 の設計メモで指摘された既存バグ）。↑↓の相対移動は
       // 同じ誤ったクレフで往復変換するため結果的に無事だったが、休符位置のリセット
       // （0 キー → standardRestDisplayKey）はクレフ変更後の小節でずれていた。
-      const clef=resolveEventClef(
+      // 声部2の選択は主声部とイベント数が違うため、インデックスではなく拍位置で
+      // 解決する（描画と同じ規則。#431 Codex round1 P2: 声部2のキーボード操作が
+      // 描画と別のクレフを解決し、0 キーの休符位置などがずれていた）
+      const clef=resolveVoiceEventClef(
         partsScoreRef.current[partIndex]??[],
         measure,
+        sel.voiceIndex??0,
         index,
         partsClefRef.current[partIndex]??'treble',
       );

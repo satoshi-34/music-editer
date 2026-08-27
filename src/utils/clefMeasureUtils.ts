@@ -9,7 +9,7 @@
 
 import type { ClefType } from '../components/clefUtils';
 import type { MeasureData, NoteEvent } from '../types/storage';
-import { getEventDurationBeats } from './voiceMeasureUtils';
+import { getEventDurationBeats, getMeasureVoices } from './voiceMeasureUtils';
 
 /**
  * 1小節ぶんのイベント列から「小節の末尾時点で有効なクレフ」を求める。
@@ -92,6 +92,37 @@ export function resolveEventClef(
   const atMeasureStart = resolveMeasureClef(measures, measureIndex, partClef);
   if (eventIndex < 0) return atMeasureStart;
   return applyEventClefChanges(measures[measureIndex]?.events, atMeasureStart, eventIndex);
+}
+
+/**
+ * 声部を指定して「そのイベント時点で有効なクレフ」を解決する（#431 Codex round1 P2）。
+ *
+ * 途中クレフ変更（clefChange）は主声部のイベントに付くため、追加声部（声部2など）は
+ * インデックスでは対応が取れない。描画側（resolveClefAtBeat による拍位置そろえ）と
+ * 同じ規則で、その声部の eventIndex までの拍数から解決する。voiceIndex === 0 は
+ * 従来の resolveEventClef と完全に同じ結果になる。
+ */
+export function resolveVoiceEventClef(
+  measures: readonly MeasureData[],
+  measureIndex: number,
+  voiceIndex: number,
+  eventIndex: number,
+  partClef: ClefType
+): ClefType {
+  if (voiceIndex <= 0) {
+    return resolveEventClef(measures, measureIndex, eventIndex, partClef);
+  }
+  const atMeasureStart = resolveMeasureClef(measures, measureIndex, partClef);
+  const measure = measures[measureIndex];
+  if (!measure) return atMeasureStart;
+  const changes = collectMidMeasureClefChanges(measure.events);
+  if (changes.length === 0) return atMeasureStart;
+  const voiceEvents = getMeasureVoices(measure)[voiceIndex]?.events ?? [];
+  let beat = 0;
+  for (let i = 0; i < eventIndex && i < voiceEvents.length; i++) {
+    beat += getEventDurationBeats(voiceEvents[i]);
+  }
+  return resolveClefAtBeat(atMeasureStart, changes, beat);
 }
 
 /**
