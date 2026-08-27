@@ -1635,6 +1635,13 @@ export const OTTAVA_OBSTACLE_CLEARANCE_PX = 6;
 // "8va"/"8vb"（イタリック3文字）の字面幅の em 係数。破線の開始位置をフォントサイズへ
 // 追従させるための見積もり値（実測: 22px イタリックのセリフ体で約 36px ≒ 1.65em に余裕を足した値）
 export const OTTAVA_LABEL_WIDTH_EM = 1.75;
+/**
+ * 「この小節配列にオッターバが1つでもあるか」のキャッシュ（#433 Codex round2 P2）。
+ * キーは小節配列の参照。全段（各 PianoSystemCanvas）が親から同一の配列参照を受け取るため、
+ * 最初の段の計算を残りの段が再利用でき、オッターバ皆無の譜面でも走査は譜面全体で1回になる。
+ * WeakMap なので編集で配列が差し替わった後の古いエントリは GC に回収される
+ */
+const ottavaPresenceCache = new WeakMap<object, boolean>();
 
 function drawCollectedSymbolEntries(args: {
   svgRoot: SVGGElement;
@@ -4241,15 +4248,23 @@ export default function PianoSystemCanvas({
       return open;
     };
     // パートにオッターバが1つでもあるか（無ければ以降の走査を全て省く。round1 P2 の
-    // 「オッターバ皆無の譜面でも段ごとに全小節を再走査する」二次コストの回避）
-    const ottavaPresenceByPart = new Map<number, boolean>();
+    // 「オッターバ皆無の譜面でも段ごとに全小節を再走査する」二次コストの回避）。
+    // 判定結果は小節配列の参照をキーにモジュールレベルの WeakMap へキャッシュする:
+    // この effect は段（PianoSystemCanvas）ごとに走るが、全段が親（ScorePage）から
+    // **同一の配列参照**を受け取るため、最初の段が O(小節数) で計算した結果を残りの段が
+    // O(1) で再利用でき、譜面全体では O(小節数) に収まる（段ごとに Map を作り直すと
+    // オッターバ皆無でも O(段数×小節数) のまま。#433 Codex round2 P2）。
+    // 編集で配列が作り直されれば参照が変わり、自然に再計算される
     const partHasOttava = (pi: number) => {
-      if (!ottavaPresenceByPart.has(pi)) {
-        const measures = partsScoreForRender[pi] ?? [];
-        ottavaPresenceByPart.set(pi, measures.some((m) =>
-          getMeasureVoices(m).some((v) => v.events.some((ev) => ev.ottava !== undefined))));
+      const measures = partsScoreForRender[pi];
+      if (!measures) return false;
+      let cached = ottavaPresenceCache.get(measures);
+      if (cached === undefined) {
+        cached = measures.some((m) =>
+          getMeasureVoices(m).some((v) => v.events.some((ev) => ev.ottava !== undefined)));
+        ottavaPresenceCache.set(measures, cached);
       }
-      return ottavaPresenceByPart.get(pi)!;
+      return cached;
     };
     // この段の手前で開いたままの括弧（パートごと・遅延計算）
     const ottavaOpenBeforeByPart = new Map<number, Map<'8va' | '8vb', OttavaOrigin>>();
@@ -7264,6 +7279,10 @@ export default function PianoSystemCanvas({
                       adjust: getSymbolAdjust(ev, 'ottava'),
                       partIndex: pi, measureAbsoluteIndex: absI, eventIndex: j, voiceIndex: entry.voiceIndex, event: ev,
                     });
+                    // 同種の新しい開始は、前の段から開いていた古い括弧を失効させる
+                    // （scanOttavaState の上書き規則と同じ。残すと段末の全幅処理が
+                    // 古い開始の括弧を重ねて描いてしまう。#433 Codex round2 P2）
+                    ottavaOpenBefore(pi).delete(kind);
                   } else if (ev.ottava === '8vaEnd' || ev.ottava === '8vbEnd') {
                     const kind = ev.ottava === '8vaEnd' ? '8va' as const : '8vb' as const;
                     const pending = pendingOttavaByKey.get(pendingKey(pi, kind));

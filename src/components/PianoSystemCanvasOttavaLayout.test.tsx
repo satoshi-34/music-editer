@@ -333,6 +333,38 @@ describe('オッターバの見た目（2026-08-26 実機所感）', () => {
       cleanup();
     });
 
+    // round2 P2: 前の段から開いたままの 8va がある段で同種の 8va を新たに開始すると、
+    // 旧実装は古い開始（段外走査の origin）を失効させず、段末の全幅処理が古い括弧を
+    // 重ねて描いた（新しい開始の括弧との二重描画）。新しい開始で古い状態を失効させる
+    it('同種の開始をやり直した段では、括弧は1本だけ描かれる（前の段からの古い開始は失効）', () => {
+      const restart: MeasureData[] = [
+        { events: [{ dur: '2', isRest: false, keys: ['c/5'] }, { dur: '2', isRest: false, keys: ['d/5'], ottava: '8va' }] },
+        { events: [{ dur: '1', isRest: false, keys: ['e/5'], ottava: '8va' }] },
+        { events: [{ dur: '2', isRest: true, keys: ['b/4'] }, { dur: '2', isRest: false, keys: ['f/5'], ottava: '8vaEnd' }] },
+      ];
+      const renderAt = (startMeasureIndex: number) => {
+        const { container } = render(
+          <PianoSystemCanvas
+            measuresPerSystem={1}
+            tool={{ duration: '4', isRest: false } as never}
+            scale={1}
+            partsConfig={[{ clef: 'treble', data: restart, onChange: vi.fn() }]}
+            showInstrumentLabels={false}
+            timeSignature={[4, 4]}
+            startMeasureIndex={startMeasureIndex}
+          />
+        );
+        const svg = container.querySelector('svg') as SVGSVGElement;
+        const labels = Array.from(svg.querySelectorAll('text')).filter((t) => t.textContent === '8va');
+        cleanup();
+        return labels.length;
+      };
+      // やり直しの段（段2）: 新しい開始の括弧1本だけ（旧実装はここが2本になった）
+      expect(renderAt(1)).toBe(1);
+      // 最初の開始（段1）は対応する終了が無い（先に新しい開始が来る）ので描かれない
+      expect(renderAt(0)).toBe(0);
+    });
+
     it('段内で完結する場合は従来どおり（回帰なし: 開始と終了が同じ段）', () => {
       const inSystem: MeasureData[] = [{
         events: [

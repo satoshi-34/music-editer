@@ -191,6 +191,18 @@
   1つも含まないパートでは走らせない（パートごとの有無を先に1回だけ調べて保持）。
   オッターバ無しの通常譜面に O(段数×小節数) の走査コストを掛けないため
 
+### Codex round 2 対応（2026-08-28）
+
+- **presence 判定はモジュールレベルの WeakMap キャッシュ**: round1 の presence gate は
+  段（PianoSystemCanvas）ごとの描画 effect 内で Map を作り直していたため、オッターバ皆無の
+  譜面でも各段がパートの全小節を再走査し O(段数×小節数) のままだった。判定結果を
+  **小節配列の参照**をキーに WeakMap へキャッシュする。全段が親から同一の配列参照を
+  受け取るため走査は譜面全体で1回になり、編集で配列が差し替われば自然に再計算される
+- **同種の開始のやり直しで古い段外状態を失効**: 段内で `8va` を新たに開始したとき、
+  `pendingOttavaByKey` の更新だけでは前の段から開いていた古い origin（`ottavaOpenBefore`）が
+  残り、段末の全幅処理が古い括弧を重ねて描いた（二重描画）。開始時に
+  `ottavaOpenBefore(pi).delete(kind)` で失効させ、scanOttavaState の上書き規則と一致させる
+
 テスト: PianoSystemCanvasOttavaLayout.test.tsx「段またぎの 8va」（開始側・終了側・中間段・
-8vb・種類混在・段内回帰）、ScorePageOttavaCrossSystem.test.tsx（実段組で3段すべてに括弧が
-出ること・続き括弧クリックの位置調整が開始イベントへ保存されること）
+8vb・種類混在・**開始やり直しの二重描画回帰**・段内回帰）、ScorePageOttavaCrossSystem.test.tsx
+（実段組で3段すべてに括弧が出ること・続き括弧クリックの位置調整が開始イベントへ保存されること）
