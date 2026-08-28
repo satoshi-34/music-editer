@@ -190,7 +190,7 @@ describe('ScorePage: ピアノ譜のレイヤー限定スライス（裁定A）'
     const file = new File([JSON.stringify(imported)], 'one-hand.score.json', { type: 'application/json' });
     // ファイル入力は「ファイル」タブの中にある
     fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
-    const input = document.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+    const input = document.querySelector('input[type="file"][accept^=".json"]') as HTMLInputElement;
     expect(input).toBeTruthy();
     fireEvent.change(input, { target: { files: [file] } });
     await waitFor(() => {

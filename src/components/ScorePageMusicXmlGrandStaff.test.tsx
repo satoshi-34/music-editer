@@ -85,7 +85,7 @@ async function importXml(xml: string) {
   // 隠しファイル入力は「ファイル」タブの中にしか描画されない
   fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
   const file = new File([xml], 'grand.musicxml', { type: 'application/xml' });
-  const input = document.querySelector('input[type="file"][accept=".xml,.musicxml"]') as HTMLInputElement;
+  const input = document.querySelector('input[type="file"][accept^=".xml,.musicxml"]') as HTMLInputElement;
   expect(input).toBeTruthy();
   fireEvent.change(input, { target: { files: [file] } });
 }
