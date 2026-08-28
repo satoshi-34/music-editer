@@ -5286,8 +5286,7 @@ export default function PianoSystemCanvas({
       const anchorStart=shouldAnchorArcToStemSide({isMultiVoiceMeasure,upward,stemDirection:stemDir});
       const lastStemDir=((lastNote as unknown as R)['getStemDirection']?.() as number|undefined)??stemDir;
       const anchorEnd=shouldAnchorArcToStemSide({isMultiVoiceMeasure,upward,stemDirection:lastStemDir});
-      // 手動でずらした端点は隙間を広げない（Issue #446）。端点ごとに見るので、
-      // 片側だけ調整した弧では、触っていない側だけが新しい隙間になる。
+      // 端点の隙間は手動調整の有無にかかわらず一律 ARC_NOTEHEAD_GAP（Issue #446 round1 裁定）。
       const y1=resolveArcEndpointY({noteheadY:fromStave.getYForLine(fromLine),stemTipY:stemTipYOfP(firstNote,upward),upward,anchorToStem:anchorStart});
       const y2=resolveArcEndpointY({noteheadY:toStave.getYForLine(toLine),stemTipY:stemTipYOfP(lastNote,upward),upward,anchorToStem:anchorEnd});
       let obstacleY:number|undefined;

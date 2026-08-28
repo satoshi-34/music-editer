@@ -21,6 +21,11 @@ describe('shouldAnchorArcToStemSide（符幹側へ付けるかの判定）', () 
     expect(shouldAnchorArcToStemSide({ isMultiVoiceMeasure: true, upward: false, stemDirection: -1 })).toBe(true);
   });
 
+  it('弧と符幹が反対側なら符頭側のまま（手動反転した弧はここに落ちる）', () => {
+    expect(shouldAnchorArcToStemSide({ isMultiVoiceMeasure: true, upward: true, stemDirection: -1 })).toBe(false);
+    expect(shouldAnchorArcToStemSide({ isMultiVoiceMeasure: true, upward: false, stemDirection: 1 })).toBe(false);
+  });
+
 
   it('単声部小節では、向きが一致していても符頭側のまま（既存譜面の見た目を変えない）', () => {
     expect(shouldAnchorArcToStemSide({ isMultiVoiceMeasure: false, upward: true, stemDirection: 1 })).toBe(false);
@@ -65,8 +70,8 @@ describe('resolveArcEndpointY（端点のY）', () => {
   });
 });
 
-// Issue #446: 「タイが音符とくっつきすぎ」という利用者フィードバックへの対応。
-// 端点の隙間を広げたが、手動で位置を決めた端点だけは動かさない。
+// Issue #446: 「タイが音符とくっつきすぎ」への対応で隙間を 3→6 へ広げた
+// （手動調整の有無にかかわらず一律。round1 裁定・tie-implementation 設計書参照）。
 describe('resolveSlurObstacleY（スラーが避ける高さ）', () => {
   it('上向きなら符頭と符幹先端をまとめて見て、いちばん上を返す', () => {
     expect(resolveSlurObstacleY({ upward: true, noteheadYs: [120, 110, 100], stemTipYs: [73, 69, 65] })).toBe(65);
