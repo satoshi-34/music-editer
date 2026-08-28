@@ -160,6 +160,7 @@ import type { ClefType } from './clefUtils';
 import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { expandTrillForPlayback } from '../utils/ornamentPlaybackUtils';
 import {
   canUseTimeSignatureSymbol,
   formatTimeSignature,
@@ -1326,6 +1327,17 @@ export default function ScorePage() {
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
+            // トリル再生の上隣接音は「その小節で有効な調号」の音階から決める。
+            // 途中調号変更（measure.keySignature）を先頭から追跡し、切る前の全列で
+            // 解決しておく（途中再生でも開始位置より前の変更が効くように。強弱と同じ理屈）
+            const effectiveKeySignatures: KeySignature[] = [];
+            {
+              let currentKey: KeySignature = keySignature;
+              for (const item of expandedMeasuresFull) {
+                if (item.measure.keySignature != null) currentKey = item.measure.keySignature;
+                effectiveKeySignatures.push(currentKey);
+              }
+            }
 
             return {
               // 編成譜ではパート定義に再生楽器を持たせている。
@@ -1338,7 +1350,7 @@ export default function ScorePage() {
                 measureBeats: getMeasureBeats(scoreTimeSignature),
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
-                events: flattenMeasureForPlayback(item.measure).map((event, eventIndex) => {
+                events: flattenMeasureForPlayback(item.measure).flatMap((event, eventIndex) => {
                   // アーティキュレーション（スタッカート＝短く、アクセント＝強く 等）を
                   // 音の長さ・音量の倍率として取り出す。
                   const articulation = getArticulationPlaybackEffect(event);
@@ -1347,7 +1359,7 @@ export default function ScorePage() {
                   const baseVelocity = dynamicVelocities.get(
                     buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, eventIndex)
                   ) ?? 0.5;
-                  return {
+                  const playbackEvent = {
                     ...event,
                     // 強弱未設定や休符では velocity を省略し、
                     // エンジン側の安全な既定値 0.5 をそのまま使う。
@@ -1359,6 +1371,12 @@ export default function ScorePage() {
                       ? undefined
                       : articulation.durationScale,
                   };
+                  // トリルは主音と上隣接音（その小節の調号に沿う）の交互連打へ展開して鳴らす。
+                  // トリル以外・展開できない形はそのまま1イベントで返る（挙動不変）
+                  return expandTrillForPlayback(
+                    playbackEvent,
+                    effectiveKeySignatures[expandedMeasureIndex + startExpandedIndex] ?? keySignature,
+                  );
                 })
               }))
             };

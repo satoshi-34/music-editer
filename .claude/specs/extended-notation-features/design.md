@@ -653,3 +653,23 @@ export interface HairpinMark {
 （`PaletteDoubleAccidentalDescresc.test.tsx` の `aria-label` 前方一致も同じ理由で
 「デクレッシェンド（」まで含めた）。**UI 文言を増やすときは、既存テストの
 `getByRole` 名前検索が一意でなくなっていないかを確認する**。
+
+## トリルの再生対応（2026-08-29・弟フィードバック）
+
+装飾記号はこれまで見た目だけで、再生では主音符が1回鳴るだけだった。トリルを
+**主音と上隣接音（その小節で有効な調号の音階上の音）の交互連打**として鳴らす。
+
+- 実装は純関数 `src/utils/ornamentPlaybackUtils.ts` の `expandTrillForPlayback`。
+  ScorePage が playParts へ渡すイベント列を組むところ（velocity/durationScale 付与の直後）で
+  flatMap するだけなので、内蔵音源と SoundFont の**両エンジンへ同時に効き、エンジン側は無変更**
+- サブ音符は 32分（短い主音符は 64分）で、dots は個数へ換算・tuplet は倍率として引き継ぐ
+  （サブ音符の合計拍 = 元の音価。厳密に割り切れる分割だけを使い、拍を一切壊さない）。
+  tuplet id は再生専用の別 id（描画側の「同一 id 連続」数えと衝突させない）
+- 交互は主音から始め、**最後は必ず主音**で終える（上隣接音で切れると解決感がないため）
+- 途中調号変更は強弱と同じく「切る前の全列」で有効調号を追跡（途中再生でも正しい）
+- 展開しない形（挙動不変）: 休符・和音・微分音つき・32分/64分の主音符（4分割未満）・
+  トリル以外の装飾（モルデント/プラルトリラー/ターンは「残り時間ぶん主音を伸ばす」表現に
+  任意長の音価が必要で dur 文字列で表せないため対象外。対応するなら別Issueで
+  PlaybackMeasureEvent へ「拍数直接指定」を足すところから）
+- テスト: ornamentPlaybackUtils.test.ts（10件）+ ScorePageTrillPlayback.test.tsx
+  （エンジンをモックして playParts へ届く展開列を実マウントで固定）
