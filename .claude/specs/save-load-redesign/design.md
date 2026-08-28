@@ -434,3 +434,19 @@ Issue #236 と同じ考え方で、**枠は1つのまま**にする。書出ボ�
 #236 の棚卸し表のうち、**MusicXML書出 / MIDI書出は本Issueで解消**した。
 残るのは **サンプル保存**（DEV ビルド限定のため優先度低）と、
 **ファイル保存の成功・キャンセル**（OS のダイアログとダウンロードが実質のフィードバック）。
+
+## Safari でファイルを開けない問題の修正（#464・2026-08-28 実機）
+
+- 隠しファイル入力（.score.json / MusicXML）が `display: none` だと、Safari は
+  プログラムからの `.click()` を無視することがあり「開く→ファイル」で何も起きない
+  （Chromium は動く）。「レイアウトに存在するが不可視」の定石スタイル
+  （fixed 1×1・opacity 0・pointer-events none・clip-path）へ変更した
+- あわせて `tabIndex={-1}` / `aria-hidden="true"` を付与し、見えないタブストップ・
+  読み上げ対象にならないようにした（Codex round1）
+- `accept` は拡張子のみだと Safari の解釈ゆらぎで正しいファイルまでグレーアウトする
+  ことがあるため、MIME を併記（.json+application/json、
+  .xml/.musicxml+application/xml,text/xml,application/vnd.recordare.musicxml+xml）
+- なお **.mxl（圧縮MusicXML）は未対応**（zip 展開が必要・別Issue）。Finale の既定書き出しが
+  .mxl の場合は「非圧縮 MusicXML」を選んでもらう案内が必要
+- 配線テスト: ScorePageFileOpenWiring.test.tsx（メニュー→click 呼び出し・display:none でない・
+  a11y 属性・accept の MIME 併記を実マウントで固定）

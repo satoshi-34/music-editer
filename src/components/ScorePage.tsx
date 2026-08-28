@@ -202,6 +202,25 @@ type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 
 /**
+ * 隠しファイル入力のスタイル（#464・Safari対応）。
+ * display: none にすると Safari がプログラムからの .click() を無視することがあり、
+ * 「開く→ファイル」を選んでも何も起きない（2026-08-28 実機で発生。Chromium は動く）。
+ * 「レイアウトに存在するが見えない・押せない」定石スタイルなら全ブラウザで開く。
+ */
+const VISUALLY_HIDDEN_FILE_INPUT_STYLE: React.CSSProperties = {
+  position: 'fixed',
+  top: 0,
+  left: 0,
+  width: 1,
+  height: 1,
+  padding: 0,
+  border: 0,
+  opacity: 0,
+  pointerEvents: 'none',
+  clipPath: 'inset(50%)',
+};
+
+/**
  * 自動保存デバウンスの max-wait（ms）。前回保存からこの時間を超えて編集が続いた場合、
  * デバウンス（1.5秒待ち）をやめてその場で同期保存する。
  * 2026-08-27 に本番で「編集のたびにデバウンスが張り直され続けて自動保存が一度も
@@ -5617,8 +5636,10 @@ export default function ScorePage() {
               <input
                 ref={fileImportRef}
                 type="file"
-                accept=".json"
-                style={{ display: 'none' }}
+                tabIndex={-1}
+                aria-hidden="true"
+                accept=".json,application/json"
+                style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
                 onChange={handleImportFile}
               />
               {/* 書き出し・開くの2メニュー（#109 第4段）。個別ボタンの羅列をやめ、
@@ -5667,8 +5688,10 @@ export default function ScorePage() {
               <input
                 ref={musicXmlInputRef}
                 type="file"
-                accept=".xml,.musicxml"
-                style={{ display: 'none' }}
+                tabIndex={-1}
+                aria-hidden="true"
+                accept=".xml,.musicxml,application/xml,text/xml,application/vnd.recordare.musicxml+xml"
+                style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
                 onChange={handleImportMusicXml}
               />
             </div>

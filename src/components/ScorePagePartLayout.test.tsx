@@ -336,7 +336,7 @@ describe('パート譜表示中の段割り（Issue #174 段A）', () => {
       'quartet'
     );
     const file = new File([JSON.stringify(imported)], 'imported.score.json', { type: 'application/json' });
-    const input = document.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+    const input = document.querySelector('input[type="file"][accept^=".json"]') as HTMLInputElement;
     expect(input).toBeTruthy();
     fireEvent.change(input, { target: { files: [file] } });
 
