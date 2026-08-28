@@ -291,9 +291,17 @@ export class SimpleAudioEngine implements PlaybackEngine {
   }
 
   /**
-   * 音価から秒数を計算する
+   * 音価から秒数を計算する。
+   * 付点（dots）・連符（tuplet）の倍率も SoundFontEngine と同じ式で反映する。
+   * 以前は dur だけを見ていたため、付点・連符のイベントは並びの時間が
+   * ずれていた（トリル再生対応 PR #479 の Codex 指摘で発覚した既存の穴）。
    */
-  durationToSeconds(duration: string, bpm: number = 120): number {
+  durationToSeconds(
+    duration: string,
+    bpm: number = 120,
+    dots?: 1 | 2,
+    tuplet?: { numNotes: number; notesOccupied: number },
+  ): number {
     const durMap: Record<string, number> = {
       '1': 4,     // 全音符
       '2': 2,     // 2分音符
@@ -304,11 +312,12 @@ export class SimpleAudioEngine implements PlaybackEngine {
       '64': 0.0625// 64分音符
     };
 
-    const beats = durMap[duration] || 1;
+    const dotMultiplier = dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1;
+    const tupletMultiplier = tuplet && tuplet.numNotes ? tuplet.notesOccupied / tuplet.numNotes : 1;
+    const beats = (durMap[duration] || 1) * dotMultiplier * tupletMultiplier;
     const secondsPerBeat = 60 / bpm;
     const seconds = beats * secondsPerBeat;
-    
-    console.log('[SimpleAudioEngine] 音価変換:', duration, '->', seconds, '秒 (BPM:', bpm, ')');
+
     return seconds;
   }
 
@@ -374,6 +383,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
         dots?: 1 | 2;
         tuplet?: { numNotes: number; notesOccupied: number };
         microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[];
+        tieExtendBeatsByKey?: Record<string, number>;
+        tieSuppressedKeys?: string[];
       }>;
       measureBeats?: number;
       isCompoundMeter?: boolean;
@@ -415,7 +426,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
         // 小節内の各音符を処理
         for (const event of measure.events) {
-          const duration = this.durationToSeconds(event.dur, bpm);
+          const duration = this.durationToSeconds(event.dur, bpm, event.dots, event.tuplet);
           // startBeat を持たない単声部イベントは、直前までの累積時間から拍位置を逆算する。
           const nominalStartBeat = typeof event.startBeat === 'number'
             ? event.startBeat
@@ -439,7 +450,11 @@ export class SimpleAudioEngine implements PlaybackEngine {
           const soundDuration = (swingTiming.durationBeats * secondsPerBeat) * (event.durationScale ?? 1);
           const eventStartTime = measureStartTime + (swingTiming.startBeat * secondsPerBeat);
 
-          if (!event.isRest && event.keys && event.keys.length > 0) {
+          // 内蔵エンジンは先頭音（keys[0]）だけを鳴らす単音再生なので、
+          // タイの判定も先頭音について行う。
+          const primaryKey = event.keys?.[0];
+          const tieSuppressed = primaryKey != null && (event.tieSuppressedKeys?.includes(primaryKey) ?? false);
+          if (!event.isRest && event.keys && event.keys.length > 0 && !tieSuppressed) {
             // 音符の場合は最初の音高を再生（単音対応）。
             // 微分音（四分音）は先頭音（keyIndex 0）にだけ対応する既知の制限がある。
             // 和音2音目以降の微分音は、クリック確認音・ピアノ譜描画では反映されるが、
@@ -449,9 +464,19 @@ export class SimpleAudioEngine implements PlaybackEngine {
               ? (microtoneForFirstKey.type === 'quarterSharp' ? 50 : -50)
               : 0;
             const frequency = this.noteToFrequency(event.keys[0], centsOffset);
+            // タイの開始音は、連鎖の終端（記譜どおりの位置）まで鳴らす。
+            // スウィングで開始が動いた場合も「終端は動かない」ので、単純に
+            // 変換後の長さへ extend を足すのではなく、終端から逆算する
+            // （表拍8分+裏拍8分のタイが 7/6 拍に伸びる誤差の防止・Codex round1 P1）。
+            // 次の音の位置（currentTime）は下で duration のまま進めるのでテンポは崩れない。
+            const tieExtendBeats = event.tieExtendBeatsByKey?.[primaryKey] ?? 0;
+            const tiedSoundDuration = tieExtendBeats > 0
+              ? ((nominalStartBeat + nominalDurationBeats + tieExtendBeats) - swingTiming.startBeat)
+                * secondsPerBeat * (event.durationScale ?? 1)
+              : soundDuration;
             await this.playNoteAtTime(
               frequency,
-              soundDuration,
+              tiedSoundDuration,
               eventStartTime,
               this.normalizePlaybackVelocity((event as { velocity?: number }).velocity)
             );
@@ -460,7 +485,11 @@ export class SimpleAudioEngine implements PlaybackEngine {
           if (typeof event.startBeat === 'number') {
             // 複数声部イベントは startBeat で時刻が決まるので、
             // currentTime 自体は進めず「この小節で一番遅く終わる時刻」だけ更新する。
-            maxMeasureEndTime = Math.max(maxMeasureEndTime, eventStartTime + duration);
+            // 終端は**記譜どおりの位置**（nominal）で数える。スウィング後の開始位置で数えると
+            // 4拍目裏の8分などで小節線が 1/6 拍ずれ、次小節やタイ計画の物差しと食い違う
+            // （単声部経路が変換前の duration で進めるのと同じ理由・Codex round2 P1）
+            const nominalEndTime = measureStartTime + (nominalStartBeat + nominalDurationBeats) * secondsPerBeat;
+            maxMeasureEndTime = Math.max(maxMeasureEndTime, nominalEndTime);
           } else {
             currentTime += duration;
             maxMeasureEndTime = Math.max(maxMeasureEndTime, currentTime);

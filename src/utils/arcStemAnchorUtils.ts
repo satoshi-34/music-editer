@@ -10,9 +10,18 @@
 
 /**
  * 端点を符頭に付けるときの隙間（SVG 論理単位。五線の1間＝10）。
- * 従来コードが直書きしていた ±3 と同じ値で、単声部の見た目を変えないためにこの数字を守る。
+ *
+ * 2026-08-29（Issue #446）: 3 → 6 へ広げた。
+ * 3 は「符頭の中心から 3」なので、符頭の高さの半分（約 5）より内側で、
+ * 弧の端が符頭にめり込んで見えていた（利用者フィードバック「タイが音符とくっつきすぎ」）。
+ * 6 なら端点は符頭の縁（5）より外に出て、弧の線の太さ（端 0.10 sp ＝ 半分 0.5）を
+ * 足しても符頭に触れない。浄書（Behind Bars）でもタイは符頭からわずかに離して描く。
+ *
+ * 線間にある音符では、端点（中心から 6）は最寄りの線（5）をわずかに越えるが、
+ * 浄書上許容している（Behind Bars でもタイの端は線に触れ得る）。上限として
+ * 1間（10）以上は離さない（arcNoteheadClearance.test.ts で固定）。
  */
-export const ARC_NOTEHEAD_GAP = 3;
+export const ARC_NOTEHEAD_GAP = 6;
 
 /**
  * 端点を符幹の先端に付けるときの隙間（SVG 論理単位）。
@@ -57,6 +66,13 @@ export function shouldAnchorArcToStemSide(params: {
  * @param stemTipY   その音符の符幹先端のY（符幹が無い音符・取得できない場合は undefined）
  * @param upward     弧が上へふくらむか
  * @param anchorToStem `shouldAnchorArcToStemSide()` の結果
+ *
+ * 隙間は手動調整の有無にかかわらず一律 ARC_NOTEHEAD_GAP（レビュー裁定・Issue #446 round1）。
+ * 当初は「手動調整済みの端点だけ従来値 3」の分岐を入れたが、未調整の端点を初めて
+ * ドラッグした瞬間に基準が 6→3 へ切り替わり、確定時に 3px 跳ねる不連続が生まれる。
+ * 分岐をやめて基準を1つにし、既存の手動オフセットは新基準からの相対値として扱う
+ * （旧データの端点は一律 3 外へ出る。相対的な調整の意図は保たれ、気になる場合は
+ * ハンドルで引き続き調整できる）。
  */
 export function resolveArcEndpointY(params: {
   noteheadY: number;
