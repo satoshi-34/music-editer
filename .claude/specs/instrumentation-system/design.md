@@ -651,3 +651,20 @@ SVG の `getComputedTextLength()` は描画後にしか測れないため、幅�
 既存の assert はこの変更で成り立たなくなるため、**上限に対する余裕が残っているか**を
 見張る形へ書き換えた（拒否ではなく仕様変更に伴う期待値の更新であることを明記してある）。
 
+
+## #443 Codex round 1 対応（2026-08-28・レビュアー側で実施）
+
+- **MusicXML の <part-name> を表示名に**: 従来は安定ID（partId: cello 等）をそのまま出して
+  いた。書き出し側（musicXmlExport）に表示名解決を追加: 保存済み instrumentation.parts[].name
+  最優先（既存作品の保存名優先）→ 既知の固定 partId の正式名（Violin I / Violoncello /
+  Piano (right hand) 等）→ partId 素通し。partId 自体は変えない（#419 の読込判定が参照）
+- **往復の維持**: ScorePage の四重奏読込は partId 照合（violin-1 等）のため、読込側
+  （musicXmlImport の staffPartId）に既知表示名→安定IDの正規化を追加（大文字小文字無視）。
+  Finale 等の実ファイルでも Violin I / Violoncello は慣用名なので外部持ち込みの命中率も上がる。
+  往復テスト: musicXmlPartNames.test.ts（四重奏4パートの export→parse で partId 復元・
+  instrumentation 保存名優先・melody 往復）
+- **ScorePage 統合テストの拡充**: 保存済み編成の name:"Cello" が復元後も Cello のまま／
+  パート譜セレクトに Violoncello が並び選択で見出しへ反映／2ページ目の先頭段で略称 Vc. が
+  実描画（略称ラベルは2ページ目以降の先頭段に出る設計のため、5段=2ページの種データで確認）
+- **スクリーンショット**: 本セッション環境ではブラウザペイン非表示で画像取得不可
+  （#441 と同じ制約）。DOM 実測（上記統合テスト）で代替し、画像は運用者の実機スモークで補完

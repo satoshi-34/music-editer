@@ -275,6 +275,30 @@ function clefForStaff(attrsEl: Element | null, staffNumber: number | null): Clef
 }
 
 /**
+ * <part-name> の表示名を、アプリ内の安定 partId へ正規化する（#443）。
+ *
+ * 書き出し側（#443）は <part-name> に表示名（Violin I / Violoncello 等）を出すため、
+ * partId 照合（ScorePage の四重奏読込は 'violin-1' 等の一致で器へ載せる）が
+ * 表示名のままだと空振りする。既知の表示名は安定IDへ戻し、それ以外（一般の外部
+ * ファイルの名前・旧形式で partId がそのまま入っている場合）は素通しする。
+ * Finale 等の実ファイルでも Violin I / Violoncello は慣用名なので、外部持ち込みの
+ * 命中率も上がる。大文字小文字は無視して照合する。
+ */
+const DISPLAY_NAME_TO_PART_ID: Record<string, string> = {
+  'violin i': 'violin-1',
+  'violin ii': 'violin-2',
+  'viola': 'viola',
+  'violoncello': 'cello',
+  'cello': 'cello',
+  'piano (right hand)': 'right-hand',
+  'piano (left hand)': 'left-hand',
+  'melody': 'melody',
+};
+function normalizeImportedPartName(partName: string): string {
+  return DISPLAY_NAME_TO_PART_ID[partName.trim().toLowerCase()] ?? partName;
+}
+
+/**
  * 五線ごとに分けた PartData の partId を決める。
  * 単独パートの大譜表（＝ピアノ譜）は、アプリ側の右手／左手の器へそのまま載せられるよう
  * 'right-hand' / 'left-hand' にそろえる（読込側は clef でも右手/左手を判定するが、
@@ -286,12 +310,12 @@ function staffPartId(
   staffCount: number,
   totalPartCount: number,
 ): string {
-  if (staffNumber === null) return partName;
+  if (staffNumber === null) return normalizeImportedPartName(partName);
   if (totalPartCount === 1 && staffCount === 2) return staffNumber === 1 ? 'right-hand' : 'left-hand';
-  if (staffNumber === 1) return partName;
+  if (staffNumber === 1) return normalizeImportedPartName(partName);
   // 編成譜の「パート内2段目」は保存データと同じ `${partId}::2` 形式にそろえる
-  if (staffNumber === 2) return ensembleSecondStaffPartId(partName);
-  return `${partName}::${staffNumber}`;
+  if (staffNumber === 2) return ensembleSecondStaffPartId(normalizeImportedPartName(partName));
+  return `${normalizeImportedPartName(partName)}::${staffNumber}`;
 }
 
 /**
