@@ -25,6 +25,26 @@ export const SCORE_SELECTION_CLEAR_EVENT = 'music-editer-score-selection-clear';
 /** 譜面のクリックから「アクティブ声部を切り替えてほしい」と伝えるイベント名（Issue #258） */
 export const SCORE_ACTIVE_VOICE_CHANGE_EVENT = 'music-editer-score-active-voice-change';
 
+/** ←/→ による選択移動で、別の段（システム）へ選択を渡すための要求イベント名（Issue #442） */
+export const SCORE_NOTE_SELECTION_MOVE_EVENT = 'music-editer-score-note-selection-move';
+
+export interface ScoreNoteSelectionMoveDetail {
+  /** 移動先のパート（段が変わってもパートの並びは同じなので、そのまま渡してよい） */
+  partIndex: number;
+  /** 移動先の絶対小節インデックス */
+  measure: number;
+  /** 移動先の、その声部の中でのイベント位置 */
+  index: number;
+  /** 移動元の声部。声部をまたぐ移動はしないので、そのまま引き継ぐ */
+  voiceIndex?: number;
+  /**
+   * 要求を出した譜面が属する document。パート譜編集は別ウィンドウ（window.open + createPortal）
+   * へ描くため、同じ window のリスナーに別ウィンドウの譜面も並んでいる。
+   * 同じ document の段だけが要求を受け取るようにして、見えない窓の選択が動くのを防ぐ。
+   */
+  sourceDocument?: Document;
+}
+
 export interface ScoreActiveVoiceChangeDetail {
   /** 切り替え先の声部（0 = 上声/声部1、1 = 下声/声部2、… N 声対応で number・#244 段5-5） */
   voiceIndex: number;
@@ -77,6 +97,22 @@ export function requestActiveVoiceChange(voiceIndex: number, partIndex?: number)
   if (typeof window === 'undefined') return;
   window.dispatchEvent(
     new CustomEvent<ScoreActiveVoiceChangeDetail>(SCORE_ACTIVE_VOICE_CHANGE_EVENT, { detail: { voiceIndex, partIndex } })
+  );
+}
+
+/**
+ * ←/→ の選択移動で、移動先が別の段（システム）だったときに選択を渡す（Issue #442）。
+ *
+ * 段は1つずつ別の PianoSystemCanvas インスタンスで、選択状態（青枠）もインスタンスごとに
+ * 持っている。そのため自分が描いていない小節へは自分で選択を移せない。
+ * 該当の小節を描いている段が受け取って選択する、という形にそろえた。
+ * 仕組みは声部切り替え・通知と同じ window の CustomEvent（ラッパー5つを props で
+ * 貫通させない、というこのファイル冒頭の方針どおり）。
+ */
+export function requestNoteSelectionMove(detail: ScoreNoteSelectionMoveDetail): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(
+    new CustomEvent<ScoreNoteSelectionMoveDetail>(SCORE_NOTE_SELECTION_MOVE_EVENT, { detail })
   );
 }
 
@@ -375,6 +411,18 @@ export function describeDeletedHairpin(type: 'cresc' | 'dim'): string {
  */
 export function describeTupletNumbersToggledInMeasure(groupCount: number, hidden: boolean): string {
   return `この小節の連符数字を${groupCount}グループ${hidden ? '隠しました' : '表示しました'}${UNDO_HINT}`;
+}
+
+/**
+ * ←/→ での選択移動が、曲の端で止まったときの文言（Issue #442・#318 の「行き止まりは喋る」）。
+ *
+ * 端に着いたことは青枠が動かないことでしか分からず、「キーが効いていない」のか
+ * 「これ以上先が無い」のかを区別できない。譜面は変えないので UNDO_HINT は付けない。
+ */
+export function describeNoteNavigationEdge(direction: 'prev' | 'next'): string {
+  return direction === 'next'
+    ? '最後の音符です（続きを書くには、次の小節の五線をクリックして音符を置いてください）'
+    : '最初の音符です（前に足すには、手前の小節の五線をクリックして音符を置いてください）';
 }
 
 /**

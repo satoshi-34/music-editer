@@ -56,8 +56,13 @@ import {
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   describeDoubleAccidentalKeySignatureUnavailable,
+  describeNoteNavigationEdge,
   requestActiveVoiceChange,
+  requestNoteSelectionMove,
+  SCORE_NOTE_SELECTION_MOVE_EVENT,
+  type ScoreNoteSelectionMoveDetail,
 } from '../utils/scoreEditorNotices';
+import { findAdjacentNotePosition } from '../utils/noteNavigationUtils';
 import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
   parseTimeSignatureInput,
@@ -2477,6 +2482,9 @@ export default function PianoSystemCanvas({
     disabled: boolean;
     isPrintPreview: boolean;
     keySignature: KeySignature;
+    // この段が描いている小節の範囲（←/→ の選択移動で「自分の担当か」を判定する・Issue #442）
+    startMeasureIndex: number;
+    measuresPerSystem: number;
   }>({
     selected: null,
     selectedArc: null,
@@ -2488,6 +2496,8 @@ export default function PianoSystemCanvas({
     disabled,
     isPrintPreview,
     keySignature: normalizedKeySignature,
+    startMeasureIndex,
+    measuresPerSystem,
   });
   const notePlayerRef = useRef<NotePlayer | null>(null);
   const soundSourceRef = useRef<SoundSource | null>(null);
@@ -3450,6 +3460,8 @@ export default function PianoSystemCanvas({
       disabled,
       isPrintPreview,
       keySignature: normalizedKeySignature,
+      startMeasureIndex,
+      measuresPerSystem,
     };
   });
 
@@ -3487,6 +3499,38 @@ export default function PianoSystemCanvas({
     };
     window.addEventListener(SELECTION_CLAIMED_EVENT, onClaim);
     return () => window.removeEventListener(SELECTION_CLAIMED_EVENT, onClaim);
+  }, []);
+
+  // ←/→ の選択移動が段（システム）をまたいだときの受け取り口（Issue #442）。
+  // 移動元の段は自分が描いていない小節へ青枠を出せないので、
+  // 「その小節を描いている段」であるこのインスタンスが選択を引き受ける。
+  useEffect(() => {
+    const onMove = (e: Event) => {
+      const detail = (e as CustomEvent<ScoreNoteSelectionMoveDetail>).detail;
+      if (!detail) return;
+      // パート譜編集は別ウィンドウへ描かれるが、リスナーは同じ window に並ぶ。
+      // 要求元と違う document の段は、見えないところで選択が動かないよう無視する
+      const ownDocument = ref.current?.ownerDocument;
+      if (detail.sourceDocument && ownDocument && detail.sourceDocument !== ownDocument) return;
+      const systemStart = latestRef.current.startMeasureIndex;
+      const systemEnd = systemStart + latestRef.current.measuresPerSystem;
+      if (detail.measure < systemStart || detail.measure >= systemEnd) return;
+      // 小節の範囲だけでは足りない。譜面の余りを埋める「空の段」（Issue #41）は
+      // 譜面データを持たないまま同じ小節番号の範囲を名乗るため、範囲だけで受けると
+      // 空の段まで選択を主張し、選択の一意化（SELECTION_CLAIMED_EVENT）で
+      // 本物の段の青枠まで消し合ってしまう。実際にその音符を描いている段だけが受け取る
+      const targetMeasure = partsScoreRef.current[detail.partIndex]?.[detail.measure];
+      if (!targetMeasure) return;
+      if (!getVoiceEvents(targetMeasure, detail.voiceIndex ?? 0)[detail.index]) return;
+      setSelected({
+        partIndex: detail.partIndex,
+        measure: detail.measure,
+        index: detail.index,
+        voiceIndex: detail.voiceIndex,
+      });
+    };
+    window.addEventListener(SCORE_NOTE_SELECTION_MOVE_EVENT, onMove);
+    return () => window.removeEventListener(SCORE_NOTE_SELECTION_MOVE_EVENT, onMove);
   }, []);
 
   // モードが変わったら選択とオーバーレイを手放す（Issue #238 / #244 差分表#4）。
@@ -3960,6 +4004,42 @@ export default function PianoSystemCanvas({
           return next;
         });
         e.preventDefault();return;
+      }
+
+      // ←/→: 選択を同じ声部の隣のイベント（音符・休符）へ移す（Issue #442）。
+      // 声部2の選択でも同じように使えるよう、下の「声部2はここで打ち切り」より手前に置く
+      // （選択を動かすだけで譜面データは書き換えないため、声部1側を誤って触る心配がない）。
+      // 修飾キー付き（Shift+←/→ の小節範囲拡張など）は従来どおり ScorePage 側へ渡す。
+      if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&!isTextInputTarget&&!e.metaKey&&!e.ctrlKey&&!e.altKey&&!e.shiftKey){
+        const direction=e.key==='ArrowRight'?1:-1;
+        const target=findAdjacentNotePosition(
+          partsScoreRef.current[partIndex]??[],
+          voiceIndex,
+          { measure, index },
+          direction,
+        );
+        // 端で止まった場合も含め、このキーはここで消費する。素通しすると
+        // ScorePage 側の小節選択移動が続けて動き、青枠と小節ハイライトが別々に走る
+        e.preventDefault();
+        if(!target){
+          // 曲頭・最後のイベント。譜面は変えず、理由と次の一手だけ伝える（#318）
+          notifyScoreEdit(describeNoteNavigationEdge(direction>0?'next':'prev'));
+          return;
+        }
+        // 和音の中の1音を選んでいても、移動先では「イベント全体の選択」に戻す
+        // （移動先の和音に同じ位置の符頭があるとは限らないため）
+        const nextSel={ partIndex, measure: target.measure, index: target.index, voiceIndex: sel.voiceIndex };
+        const systemStart=latestRef.current.startMeasureIndex;
+        const systemEnd=systemStart+latestRef.current.measuresPerSystem;
+        if(target.measure>=systemStart&&target.measure<systemEnd){
+          setSelected(nextSel);
+        }else{
+          // 移動先はこの段が描いていない小節。選択状態は段ごとに別なので、
+          // その小節を描いている段へ引き継ぎを頼む（受け取った段が青枠を出す）
+          setSelected(null);
+          requestNoteSelectionMove({ ...nextSel, sourceDocument: ref.current?.ownerDocument });
+        }
+        return;
       }
 
       // 声部2（下声）の音符を選んでいるときは、削除（Delete/Backspace）・選択解除（Escape）に加えて
