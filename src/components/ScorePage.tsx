@@ -160,6 +160,7 @@ import type { ClefType } from './clefUtils';
 import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { buildTiePlaybackEventKey, buildTiePlaybackPlan } from '../utils/tiePlaybackUtils';
 import { expandTrillForPlayback } from '../utils/ornamentPlaybackUtils';
 import {
   canUseTimeSignatureSymbol,
@@ -1344,6 +1345,10 @@ export default function ScorePage() {
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
+            // タイ（同じ高さの音を結んで1音として伸ばす記号）を再生へ反映する計画。
+            // 強弱と違って**切ったあとの列**で解決する: 開始音が開始位置より前にあって
+            // 切り落とされた継続音は、抑制せずそのまま鳴らしたい（途中再生で音が消えないため）。
+            const tiePlan = buildTiePlaybackPlan(expandedMeasures, getMeasureBeats(scoreTimeSignature));
 
             return {
               // 編成譜ではパート定義に再生楽器を持たせている。
@@ -1365,6 +1370,11 @@ export default function ScorePage() {
                   const baseVelocity = dynamicVelocities.get(
                     buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, eventIndex)
                   ) ?? 0.5;
+                  // タイの計画は「声部の中での位置」で引く。
+                  // 畳んだあとの eventIndex は複数声部で並べ替えられているため使えない。
+                  const tieAdjustment = tiePlan.get(
+                    buildTiePlaybackEventKey(expandedMeasureIndex, event.voiceIndex, event.eventIndex)
+                  );
                   const playbackEvent = {
                     ...event,
                     // 強弱未設定や休符では velocity を省略し、
@@ -1376,9 +1386,19 @@ export default function ScorePage() {
                     durationScale: event.isRest || articulation.durationScale === 1
                       ? undefined
                       : articulation.durationScale,
+                    // タイが無い音符では省略して、古い挙動と完全に同じにする。
+                    tieExtendBeatsByKey: tieAdjustment && Object.keys(tieAdjustment.extendBeatsByKey).length > 0
+                      ? tieAdjustment.extendBeatsByKey
+                      : undefined,
+                    tieSuppressedKeys: tieAdjustment && tieAdjustment.suppressedKeys.length > 0
+                      ? tieAdjustment.suppressedKeys
+                      : undefined,
                   };
                   // トリルは主音と上隣接音（その小節の調号に沿う）の交互連打へ展開して鳴らす。
-                  // トリル以外・展開できない形・スウィング対象の音はそのまま1イベントで返る（挙動不変）
+                  // トリル以外・展開できない形・スウィング対象の音はそのまま1イベントで返る（挙動不変）。
+                  // タイの延長・抑制が付いた音は展開しない（タイで伸びた長さの中で
+                  // 交互連打を組む対応は別課題。展開するとタイ情報がサブ音符へ複製され拍が壊れる）
+                  if (tieAdjustment) return [playbackEvent];
                   return expandTrillForPlayback(
                     playbackEvent,
                     effectiveKeySignatures[expandedMeasureIndex + startExpandedIndex] ?? keySignature,
