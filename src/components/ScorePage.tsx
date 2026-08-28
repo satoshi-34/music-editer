@@ -4285,13 +4285,19 @@ export default function ScorePage() {
           try {
             xml = extractMusicXmlFromMxl(bytes);
           } catch (mxlErr) {
-            if (mxlErr instanceof MxlExtractError && mxlErr.reason !== 'notZip') {
+            if (mxlErr instanceof MxlExtractError) {
               notifyScoreEdit(describeMxlExtractFailed(mxlErr.reason));
               if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
               return;
             }
             throw mxlErr;
           }
+        } else if (file.name.toLowerCase().endsWith('.mxl')) {
+          // .mxl と名乗っているのに ZIP マジックが無い＝先頭破損など。
+          // 一般の XML パース失敗 alert に落とさず、理由つきで通知する（#318）
+          notifyScoreEdit(describeMxlExtractFailed('notZip'));
+          if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
+          return;
         } else {
           xml = new TextDecoder('utf-8').decode(bytes);
         }

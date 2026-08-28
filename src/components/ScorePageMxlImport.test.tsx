@@ -133,4 +133,35 @@ describe('ScorePage: .mxl（圧縮MusicXML）の読込（#465）', () => {
     // 元の譜面（読込前）が保たれている
     expect(document.body.textContent).toContain('読込前');
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('PK で始まる壊れた ZIP の .mxl は展開失敗として通知される', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    const valid = zipSync({ 'score.xml': strToU8(SINGLE_XML) });
+    await importFile(valid.slice(0, Math.floor(valid.length / 2)), 'truncated.mxl');
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('展開できませんでした');
+    }, { timeout: 15000 });
+    expect(document.body.textContent).toContain('読込前');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('ZIP マジックの無い .mxl（先頭破損）は notZip として通知される', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    await importFile(strToU8('this is not a zip at all'), 'headless.mxl');
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('圧縮MusicXML（ZIP）として読めませんでした');
+    }, { timeout: 15000 });
+    expect(document.body.textContent).toContain('読込前');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

@@ -2,7 +2,7 @@
 // フィクスチャはテスト内で fflate.zipSync により生成する（バイナリを直接コミットしない）。
 import { describe, it, expect } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
-import { extractMusicXmlFromMxl, isMxlContainer, MxlExtractError } from './mxlUtils';
+import { extractMusicXmlFromMxl, isMxlContainer, MxlExtractError, MXL_MAX_COMPRESSED_BYTES } from './mxlUtils';
 
 const SCORE_XML = '<?xml version="1.0"?><score-partwise version="3.1"><part-list/></score-partwise>';
 const CONTAINER_XML = `<?xml version="1.0"?>
@@ -43,6 +43,33 @@ describe('mxlUtils（圧縮MusicXMLの展開・#465）', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(MxlExtractError);
       expect((err as MxlExtractError).reason).toBe('noXmlEntry');
+    }
+  });
+
+  it('PK で始まるが壊れている ZIP は brokenZip として失敗する', () => {
+    const valid = zipSync({ 'score.xml': strToU8(SCORE_XML) });
+    const broken = valid.slice(0, Math.floor(valid.length / 2)); // 後半を欠損させる
+    expect(isMxlContainer(broken)).toBe(true);
+    try {
+      extractMusicXmlFromMxl(broken);
+      expect.unreachable('例外が投げられるはず');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MxlExtractError);
+      expect((err as MxlExtractError).reason).toBe('brokenZip');
+    }
+  });
+
+  it('圧縮ファイル自体が上限超過なら tooLarge として失敗する（zip bomb 対策）', () => {
+    const mxl = zipSync({ 'score.xml': strToU8(SCORE_XML) });
+    // 上限+1 バイトのバッファ先頭に実ZIPを置く（サイズ検査は伸長前に走るので安全）
+    const oversized = new Uint8Array(MXL_MAX_COMPRESSED_BYTES + 1);
+    oversized.set(mxl);
+    try {
+      extractMusicXmlFromMxl(oversized);
+      expect.unreachable('例外が投げられるはず');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MxlExtractError);
+      expect((err as MxlExtractError).reason).toBe('tooLarge');
     }
   });
 
