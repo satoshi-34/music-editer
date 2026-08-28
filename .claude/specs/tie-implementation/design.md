@@ -751,8 +751,7 @@ Issue の指示「まず定数で +2〜3px 程度から調整」の範囲内で�
 - `src/utils/arcStemAnchorUtils.test.ts`: 端点は符頭から一律 ARC_NOTEHEAD_GAP（6）外側
   （round1 裁定で手動調整分岐を廃止したため、隙間のテストは1系統のみ）
 - `src/components/arcNoteheadClearance.test.ts`: **間隔の下限を固定**
-  （隙間 − 端の太さの半分 > 符頭の縁）。従来値 3 がこの下限を割っていたことも
-  逆向きのテストで残し、定数を下げる変更が通らないようにした。
+  （隙間 − 端の太さの半分 > 符頭の縁。現在値に対する下限なので、3 へ戻す退行もここで落ちる）。
   広げすぎ側（1間 = 10 未満）も上限として固定
 - `src/components/PianoSystemCanvasMultiVoiceArcStem.test.tsx`: 単声部の基準パス
   （`SINGLE_VOICE_ARC_D`）を実測値で更新（両端のYが 3 ずつ外側へ、制御点は不変）
