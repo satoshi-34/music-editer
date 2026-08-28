@@ -125,11 +125,12 @@ epsilon 比較パターンをそのまま踏襲した（`StaffCanvas.tsx` に `E
 
 **Import**（`src/utils/musicXmlImport.ts`）:
 - `<time-modification>` を検出したら `tuplet` フィールドを再構築
-- 連続する `<time-modification>` 持ちの `<note>` を1グループとみなし、
-  モジュールレベルのカウンタ（`xml-tuplet-${n}`）でグループIDを割り当てる
-  （MusicXML の `<tuplet type="start/stop">` にも対応できるが、
-  `time-modification` の連続性だけで十分にグループ境界を判定できるため、
-  実装を簡潔にするためそちらは参照していない）
+- グループIDはモジュールレベルのカウンタ（`xml-tuplet-${n}`）で割り当てる。
+  境界判定は **`<notations><tuplet type="start"/"stop">` を最優先**し（2026-08-29 改訂・
+  ソナチネ実測: 同じ比の連符が並ぶと「連続性だけ」の旧判定では1グループへ結合し
+  連符表示が消えていた）、マーカーの無い出力には「均一音価が numNotes 個で切る」
+  フォールバックを使う（`assignMeasureTupletIds`・musicxml-grand-staff-import 設計書も参照）。
+  マーカー無し+混合音価の連続グループは判定不能のため従来どおり結合したまま読む（既知の制約）
 
 ### MIDI 書き出し（`src/utils/midiExport.ts`）
 

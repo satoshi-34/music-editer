@@ -214,4 +214,40 @@ describe('ScorePage: MusicXML 大譜表（<staves>2）の読込配線（#419）'
       expect(document.querySelectorAll('g.vf-tuplet').length).toBeGreaterThanOrEqual(2);
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 連続する同じ比の連符グループの分離（PR #478・ソナチネ実測）: 取り込みが1グループへ
+  // 結合すると描画側が連符と認識せず vf-tuplet が出ない。ScorePage 経由で
+  // 「グループ数ぶんの連符括り」が描かれることを固定する
+  it('連続する三連×3 が3つの連符括り（vf-tuplet）として描画される', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    const start = '<notations><tuplet type="start"/></notations>';
+    const stop = '<notations><tuplet type="stop"/></notations>';
+    const note = (step: string, marks: string) => `
+      <note><pitch><step>${step}</step><octave>4</octave></pitch><duration>4</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>
+        ${marks}</note>`;
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Mel</part-name></score-part></part-list>
+  <part id="P1"><measure number="1">
+    <attributes><divisions>12</divisions>
+      <time><beats>4</beats><beat-type>4</beat-type></time>
+      <clef><sign>G</sign><line>2</line></clef></attributes>
+    ${note('C', start)}${note('D', '')}${note('E', stop)}
+    ${note('F', start)}${note('G', '')}${note('A', stop)}
+    ${note('B', start)}${note('C', '')}${note('D', stop)}
+    <note><rest/><duration>24</duration><voice>1</voice><type>half</type></note>
+  </measure></part>
+</score-partwise>`;
+    await importXml(xml);
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('g.vf-tuplet').length).toBeGreaterThanOrEqual(3);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

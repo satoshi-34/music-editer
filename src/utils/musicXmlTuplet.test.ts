@@ -194,6 +194,38 @@ describe('MusicXML 読込: 連符グループの境界', () => {
     expect(events.filter((e) => e.tuplet?.id === ids[0]).length).toBe(3);
   });
 
+  it('明示グループ内では numNotes 個数カットが働かない（4分+8分の2イベント三連が保持される）', () => {
+    const start = '<notations><tuplet type="start"/></notations>';
+    const stop = '<notations><tuplet type="stop"/></notations>';
+    const mixed = (type: string, dur: number, marks: string) => `
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>${dur}</duration><voice>1</voice><type>${type}</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>
+        ${marks}</note>`;
+    const xml = wrap(
+      mixed('quarter', 8, start) + mixed('eighth', 4, stop)
+      + mixed('quarter', 8, start) + mixed('eighth', 4, stop));
+    const events = parseMusicXml(xml).parts[0].measures[0].events;
+    const ids = events.map((e) => e.tuplet?.id);
+    // 明示の境界どおり 2+2 の2グループ（個数カットで 3+1 に割らない）
+    expect(new Set(ids).size).toBe(2);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).toBe(ids[3]);
+    expect(ids[1]).not.toBe(ids[2]);
+  });
+
+  it('マーカー無し+混合音価の連続グループは結合したまま読む（既知の制約・3+1に誤分割しない）', () => {
+    const mixed = (type: string, dur: number) => `
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>${dur}</duration><voice>1</voice><type>${type}</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>
+        </note>`;
+    const xml = wrap(mixed('quarter', 8) + mixed('eighth', 4) + mixed('quarter', 8) + mixed('eighth', 4));
+    const events = parseMusicXml(xml).parts[0].measures[0].events;
+    const ids = events.map((e) => e.tuplet?.id);
+    // 境界を判定できないため1グループのまま（時間は各イベントの比で保存されている）。
+    // 少なくとも「3個で切って 3+1」の誤分割にはならないことを固定する
+    expect(new Set(ids).size).toBe(1);
+  });
+
   it('マーカーの無い出力でも numNotes 個ごとにグループが切れる（フォールバック）', () => {
     const xml = wrap(Array.from({ length: 6 }, () => NOTE('C', '')).join(''));
     const events = parseMusicXml(xml).parts[0].measures[0].events;
