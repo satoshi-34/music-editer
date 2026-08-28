@@ -242,4 +242,4 @@
 - リピートで「次の小節」が変わる箇所（1番括弧の末尾など）をまたぐタイは、
   繋がらず2音として鳴る。これは意図した安全側の動作。
 - 音色を「内蔵音源」に切り替えても同じように聞こえること（両エンジンに実装済み）。
-- 固定テスト: tiePlaybackUtils.test.ts（12件）・SimpleAudioEngine.test.ts / SoundFontEngine.test.ts のタイ節・ScorePageTiePlayback.test.tsx（1件・配線）
+- 固定テスト: tiePlaybackUtils.test.ts（17件）・SimpleAudioEngine.test.ts / SoundFontEngine.test.ts のタイ節（スウィング・小節送りを含む）・ScorePageTiePlayback.test.tsx（3件・声部2/トリル相互作用を含む配線）
