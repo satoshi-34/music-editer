@@ -26,6 +26,7 @@ describe('shouldAnchorArcToStemSide（符幹側へ付けるかの判定）', () 
     expect(shouldAnchorArcToStemSide({ isMultiVoiceMeasure: true, upward: false, stemDirection: 1 })).toBe(false);
   });
 
+
   it('単声部小節では、向きが一致していても符頭側のまま（既存譜面の見た目を変えない）', () => {
     expect(shouldAnchorArcToStemSide({ isMultiVoiceMeasure: false, upward: true, stemDirection: 1 })).toBe(false);
     expect(shouldAnchorArcToStemSide({ isMultiVoiceMeasure: false, upward: false, stemDirection: -1 })).toBe(false);
@@ -41,7 +42,7 @@ describe('resolveArcEndpointY（端点のY）', () => {
   const NOTEHEAD_Y = 120;
   const STEM_TIP_Y = 73;
 
-  it('符頭アンカーのときは従来どおり符頭から 3 だけ外側', () => {
+  it('符頭アンカーのときは符頭から ARC_NOTEHEAD_GAP だけ外側', () => {
     expect(resolveArcEndpointY({ noteheadY: NOTEHEAD_Y, stemTipY: STEM_TIP_Y, upward: true, anchorToStem: false }))
       .toBe(NOTEHEAD_Y - ARC_NOTEHEAD_GAP);
     expect(resolveArcEndpointY({ noteheadY: NOTEHEAD_Y, upward: false, anchorToStem: false }))
@@ -69,6 +70,8 @@ describe('resolveArcEndpointY（端点のY）', () => {
   });
 });
 
+// Issue #446: 「タイが音符とくっつきすぎ」への対応で隙間を 3→6 へ広げた
+// （手動調整の有無にかかわらず一律。round1 裁定・tie-implementation 設計書参照）。
 describe('resolveSlurObstacleY（スラーが避ける高さ）', () => {
   it('上向きなら符頭と符幹先端をまとめて見て、いちばん上を返す', () => {
     expect(resolveSlurObstacleY({ upward: true, noteheadYs: [120, 110, 100], stemTipYs: [73, 69, 65] })).toBe(65);
