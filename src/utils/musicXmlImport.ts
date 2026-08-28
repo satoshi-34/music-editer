@@ -73,45 +73,102 @@ let tupletGroupCounter = 0;
  * 満たせず、連符倍率が適用されない（Codex round1 P1）。そこで**両者が読む前に**
  * 子要素の並びからグループ境界を決め、実音と合成休符へ同じ id を配る。
  *
- * 境界の規則: time-modification の無い音・<backup>（声部区切り）・<forward>・
- * 連符比（actual/normal）の変化で切る。direction / attributes / 前打音 / 和音の
- * 構成音はグループを切らない（parseNotes の従来の連続判定と同じ感覚）。
+ * 境界の規則（優先順）:
+ * 1. **明示の `<notations><tuplet type="start"/"stop">`**（MusicXML の正式なグループ境界。
+ *    Finale はこれを必ず書く）。start で新グループ・stop でグループを閉じる
+ * 2. マーカーが無い場合のフォールバック: time-modification の無い音・<backup>・<forward>・
+ *    連符比（actual/normal）の変化・**均一音価のグループが numNotes 個に達したとき**に切る。
+ *    以前は「time-modification の連続」だけで判定していたため、同じ比の連符が並ぶと
+ *    複数グループが1つに結合し（三連×3=9イベントの巨大グループ）、描画側の
+ *    「同一 id が numNotes 個連続」条件を満たせず連符括りが消えていた（ソナチネ実測）
+ * direction / attributes / 前打音 / 和音の構成音はグループを切らない。
+ *
+ * 既知の制約: マーカーの無い出力で**音価が混在する**連符（4分+8分の三連等）が連続する形は、
+ * イベント数からは境界を判定できないため従来どおり結合したまま読む（誤って 3+1 に割るよりよい。
+ * Finale / MuseScore はマーカーを書くため実害は限定的）。入れ子連符（tuplet number=2 以上）は
+ * データモデルがイベントに連符を1つしか持てないため未対応（従来どおり）。
  */
 function assignMeasureTupletIds(measureEl: Element): Map<Element, string> {
   const idOf = new Map<Element, string>();
-  let runId: string | null = null;
-  let runRatio: string | null = null;
+  const newId = () => {
+    tupletGroupCounter += 1;
+    return `xml-tuplet-${tupletGroupCounter}`;
+  };
+  // マーカーの無い連符 run は**貯めてから**分割を決める（先読み方式）。
+  // 1音ずつ切ると「8分×3のあとに4分」のような並びで、混在に気づく前に
+  // 個数カットが発火して 3+1 に誤分割する（Codex round2 P1）
+  let pending: Array<{ el: Element; durKey: string; actual: number }> = [];
+  let pendingRatio: string | null = null;
+  const flushPending = () => {
+    if (pending.length) {
+      const uniform = pending.every((p) => p.durKey === pending[0].durKey);
+      if (uniform) {
+        // 均一音価: numNotes 個ずつのグループへ分割（三連×3=9個 → 3+3+3）
+        const n = pending[0].actual;
+        for (let i = 0; i < pending.length; i += n) {
+          const id = newId();
+          for (const p of pending.slice(i, i + n)) idOf.set(p.el, id);
+        }
+      } else {
+        // 混合音価: イベント数から境界を判定できないため1グループのまま（既知の制約）
+        const id = newId();
+        for (const p of pending) idOf.set(p.el, id);
+      }
+    }
+    pending = [];
+    pendingRatio = null;
+  };
+  let explicitId: string | null = null; // start〜stop の明示グループ（最優先・個数では切らない）
   for (const el of Array.from(measureEl.children)) {
-    if (el.tagName === 'backup' || el.tagName === 'forward') { runId = null; runRatio = null; continue; }
+    if (el.tagName === 'backup' || el.tagName === 'forward') { flushPending(); explicitId = null; continue; }
     if (el.tagName !== 'note') continue;
     if (el.querySelector('grace') || el.querySelector('chord')) continue;
     const timeModEl = el.querySelector('time-modification');
-    if (!timeModEl) { runId = null; runRatio = null; continue; }
+    if (!timeModEl) { flushPending(); explicitId = null; continue; }
     const actualNotes = parseInt(timeModEl.querySelector('actual-notes')?.textContent ?? '', 10);
     const normalNotes = parseInt(timeModEl.querySelector('normal-notes')?.textContent ?? '', 10);
     if (!Number.isInteger(actualNotes) || actualNotes <= 0 || !Number.isInteger(normalNotes) || normalNotes <= 0) {
-      runId = null;
-      runRatio = null;
+      flushPending();
+      explicitId = null;
       continue;
     }
-    const ratio = `${actualNotes}/${normalNotes}`;
-    if (!runId || ratio !== runRatio) {
-      tupletGroupCounter += 1;
-      runId = `xml-tuplet-${tupletGroupCounter}`;
-      runRatio = ratio;
+    const marks = Array.from(el.querySelectorAll('notations tuplet')).map((t) => t.getAttribute('type'));
+    if (explicitId) {
+      // 明示グループの中: stop までは音価・個数に関わらず同じグループ
+      idOf.set(el, explicitId);
+      if (marks.includes('stop')) explicitId = null;
+      continue;
     }
-    idOf.set(el, runId);
+    if (marks.includes('start')) {
+      flushPending();
+      explicitId = newId();
+      idOf.set(el, explicitId);
+      if (marks.includes('stop')) explicitId = null; // 1音だけの明示グループ
+      continue;
+    }
+    // マーカーの無い連符: run へ貯める（比が変われば手前で確定）
+    const ratio = `${actualNotes}/${normalNotes}`;
+    if (pendingRatio !== null && ratio !== pendingRatio) flushPending();
+    pendingRatio = ratio;
+    pending.push({
+      el,
+      durKey: `${el.querySelector('type')?.textContent ?? ''}:${Array.from(el.children).filter((c) => c.tagName === 'dot').length}`,
+      actual: actualNotes,
+    });
+    // start 無しの stop（迷子マーカー）はそこまでで run を確定する
+    if (marks.includes('stop')) flushPending();
   }
+  flushPending();
   return idOf;
 }
 
 function parseNotes(noteEls: Element[], tupletIdByEl?: Map<Element, string>): NoteEvent[] {
   const events: NoteEvent[] = [];
   let chordBuffer: NoteEvent | null = null;
-  // 連符（tuplet）の読み込み: <time-modification> がある連続した note を
-  // ひとまとまりのグループとみなし、共通の id を割り当てる。
-  // MusicXML は明示的な <tuplet type="start"/"stop"/> でグループ境界を示すこともあるが、
-  // ここでは「time-modification が連続しているかどうか」で十分に判定できる。
+  // 連符（tuplet）の読み込み: グループ境界は assignMeasureTupletIds（<tuplet start/stop>
+  // 最優先+numNotes フォールバック）が決めた id（tupletIdByEl）を使う。
+  // 下の「連続性だけ」の判定は tupletIdByEl が渡されない旧経路の後方互換で、
+  // 現行の読込経路では全 note が map に載るため実質使われない。
   let currentTupletId: string | null = null;
   let prevHadTimeMod = false;
 

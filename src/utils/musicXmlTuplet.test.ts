@@ -160,3 +160,91 @@ describe('MusicXML の連符（tuplet）対応', () => {
     expect(xml).not.toContain('show-number');
   });
 });
+
+// 連続する同じ比の連符グループの分離（ソナチネ実測バグの再発防止）。
+// 以前は「time-modification の連続」だけで判定していたため、三連×3（8分×9個）が
+// 1グループ（9イベント/numNotes3）に結合し、描画側が連符と認識しなかった。
+describe('MusicXML 読込: 連符グループの境界', () => {
+  const NOTE = (step: string, marks: string) => `
+      <note><pitch><step>${step}</step><octave>4</octave></pitch><duration>4</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>
+        ${marks}</note>`;
+  const wrap = (notes: string) => `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Mel</part-name></score-part></part-list>
+  <part id="P1"><measure number="1">
+    <attributes><divisions>12</divisions><clef><sign>G</sign><line>2</line></clef></attributes>${notes}
+  </measure></part>
+</score-partwise>`;
+
+  it('明示の <tuplet type="start"/"stop"> で連続する三連×3 が3グループに分かれる', () => {
+    const start = '<notations><tuplet type="start"/></notations>';
+    const stop = '<notations><tuplet type="stop"/></notations>';
+    const xml = wrap(
+      NOTE('C', start) + NOTE('D', '') + NOTE('E', stop)
+      + NOTE('F', start) + NOTE('G', '') + NOTE('A', stop)
+      + NOTE('B', start) + NOTE('C', '') + NOTE('D', stop));
+    const events = parseMusicXml(xml).parts[0].measures[0].events;
+    const ids = events.map((e) => e.tuplet?.id);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids[0]).toBe(ids[2]);
+    expect(ids[3]).toBe(ids[5]);
+    expect(ids[2]).not.toBe(ids[3]);
+    // 各グループが numNotes と同数 → 描画側の連符条件を満たす
+    expect(events.filter((e) => e.tuplet?.id === ids[0]).length).toBe(3);
+  });
+
+  it('明示グループ内では numNotes 個数カットが働かない（4分+8分の2イベント三連が保持される）', () => {
+    const start = '<notations><tuplet type="start"/></notations>';
+    const stop = '<notations><tuplet type="stop"/></notations>';
+    const mixed = (type: string, dur: number, marks: string) => `
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>${dur}</duration><voice>1</voice><type>${type}</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>
+        ${marks}</note>`;
+    const xml = wrap(
+      mixed('quarter', 8, start) + mixed('eighth', 4, stop)
+      + mixed('quarter', 8, start) + mixed('eighth', 4, stop));
+    const events = parseMusicXml(xml).parts[0].measures[0].events;
+    const ids = events.map((e) => e.tuplet?.id);
+    // 明示の境界どおり 2+2 の2グループ（個数カットで 3+1 に割らない）
+    expect(new Set(ids).size).toBe(2);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).toBe(ids[3]);
+    expect(ids[1]).not.toBe(ids[2]);
+  });
+
+  it('マーカー無し+混合音価の連続グループは結合したまま読む（既知の制約・3+1に誤分割しない）', () => {
+    const mixed = (type: string, dur: number) => `
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>${dur}</duration><voice>1</voice><type>${type}</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>
+        </note>`;
+    const xml = wrap(mixed('quarter', 8) + mixed('eighth', 4) + mixed('quarter', 8) + mixed('eighth', 4));
+    const events = parseMusicXml(xml).parts[0].measures[0].events;
+    const ids = events.map((e) => e.tuplet?.id);
+    // 境界を判定できないため1グループのまま（時間は各イベントの比で保存されている）。
+    // 少なくとも「3個で切って 3+1」の誤分割にはならないことを固定する
+    expect(new Set(ids).size).toBe(1);
+  });
+
+  it('マーカー無し+混合音価: 先頭3つが同音価で4つ目から変わる並びでも 3+1 に誤分割しない', () => {
+    const mk = (type: string, dur: number) => `
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>${dur}</duration><voice>1</voice><type>${type}</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>
+        </note>`;
+    // 8分×3 → 4分 の並び（1音ずつの個数カットだと3個目で切ってしまう経路）
+    const xml = wrap(mk('eighth', 4) + mk('eighth', 4) + mk('eighth', 4) + mk('quarter', 8));
+    const events = parseMusicXml(xml).parts[0].measures[0].events;
+    const ids = events.map((e) => e.tuplet?.id);
+    expect(new Set(ids).size).toBe(1);
+  });
+
+  it('マーカーの無い出力でも numNotes 個ごとにグループが切れる（フォールバック）', () => {
+    const xml = wrap(Array.from({ length: 6 }, () => NOTE('C', '')).join(''));
+    const events = parseMusicXml(xml).parts[0].measures[0].events;
+    const ids = events.map((e) => e.tuplet?.id);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids[0]).toBe(ids[2]);
+    expect(ids[3]).toBe(ids[5]);
+    expect(ids[2]).not.toBe(ids[3]);
+  });
+});
