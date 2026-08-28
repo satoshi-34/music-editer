@@ -640,3 +640,14 @@ export interface HairpinMark {
 - `src/components/PaletteHairpinLabel.test.tsx`（新規）: 松葉＞＝デクレッシェンド／松葉＜＝クレッシェンド／文字表記 `dim.` ＝ディミヌエンドのまま、を `getByRole` の名前で固定する
 - `README.md` / `docs/DEVELOPMENT.md`: 松葉の説明にある「ディミヌエンド」を「デクレッシェンド」へ（MusicXML の型名は据え置き）
 - 挙動の変更は無し。データ構造・保存フォーマット・再生・書出しはいずれも不変
+
+### 既存テストへの波及（名前の一意性）
+
+`ScorePageDoubleAccidentalWiring.test.tsx` は文字表記の `descresc.` ボタンを
+`getByRole('button', { name: /デクレッシェンド/ })` で探していた。松葉＞の名前も
+「デクレッシェンドの松葉＞…」になったことで**2件マッチして落ちる**（Testing Library は
+複数一致をエラーにする）。ローカルの関連テストでは気付けず GitHub Actions の全スイートで
+検出された。文字表記ボタンだけを指すよう `/^デクレッシェンド（dim\./` へ絞り込んで解消した
+（`PaletteDoubleAccidentalDescresc.test.tsx` の `aria-label` 前方一致も同じ理由で
+「デクレッシェンド（」まで含めた）。**UI 文言を増やすときは、既存テストの
+`getByRole` 名前検索が一意でなくなっていないかを確認する**。
