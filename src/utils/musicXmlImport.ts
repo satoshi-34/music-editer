@@ -3,7 +3,7 @@
 // score-partwise 形式（Finale / Sibelius / MuseScore 等が出力する標準形式）に対応。
 
 import type { SavedScoreData, MeasureData, NoteEvent, PartData, HairpinMark, TimeSignatureStyle } from '../types/storage';
-import type { ClefType } from '../components/clefUtils';
+import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/clefUtils';
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
 import { isValidTimeSignature } from './timeSignatureUtils';
@@ -63,6 +63,12 @@ const FIFTHS_TO_KEY: Record<number, KeySignature> = {
 
 /** note 要素群をまとめて MeasureData.events に変換する */
 let tupletGroupCounter = 0;
+
+/** クロススタッフ連符の合成休符グループへ、通常の連符と同じ採番で id を切り出す */
+function nextCrossStaffTupletRestId(): string {
+  tupletGroupCounter += 1;
+  return `xml-tuplet-${tupletGroupCounter}`;
+}
 
 function parseNotes(noteEls: Element[]): NoteEvent[] {
   const events: NoteEvent[] = [];
@@ -352,8 +358,18 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     // リズムが黙って壊れる（Codex round1 P1）
     const durationRests = (el: Element): NoteEvent[] => {
       // 連符の音が五線をまたぐ形は、合成休符が二進音価しか表せず 1/3 拍などの端数を
-      // 落として両段の時間がずれる（round3 P1）。黙って壊さず理由付きで読込を中止する
+      // 落として両段の時間がずれる（round3 P1）。以前は理由付きで読込を中止していたが、
+      // Finale 実ファイル（ピアノ曲の右手↔左手またぎ・2026-08-29 ラヴェル ソナチネで実測）が
+      // 普通に該当するため、「同じ音価+同じ連符比を持つ休符」への1:1置換で時間を厳密に
+      // 保存して読み込む（下の syntheticTupletRest を参照）
       if (el.tagName === 'note' && el.querySelector('time-modification')) {
+        const rest = syntheticTupletRest.get(el);
+        if (rest) {
+          // 同じ el を「イベント生成」と「位置数え（syntheticRestCount）」の2回参照するため、
+          // 使い回しで hairpins 等が二重に付かないよう毎回複製する
+          return [{ ...rest, tuplet: rest.tuplet ? { ...rest.tuplet } : undefined }];
+        }
+        // actual/normal が壊れていて比を復元できない場合だけ、従来どおり黙って壊さず中止する
         throw new Error(
           '連符が五線をまたぐクロススタッフ記譜を含むため、この MusicXML は読み込めません。書き出し元で段またぎ（クロススタッフ）を外してから書き出してください（読み込み後に ⇵ で見た目を付け直せます）',
         );
@@ -415,6 +431,41 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
       }
     }
     const noteUnitStaff = (el: Element): number => unitStaffOf.get(el) ?? staffNumberOf(el);
+    // クロススタッフ連符の合成休符（round3 P1 の読込拒否の解除）:
+    // 別五線へ移った連符の音を「同じ音価・付点・連符比を持つ休符」へ1:1で置き換える。
+    // duration/divisions からの二進分割（buildRestEventsForBeats）では 1/3 拍などを
+    // 表せないが、音価+連符比をそのまま写せば時間は厳密に保存される。
+    // グループ id は**連続する置換対象ごと**に割り当てる（間に自五線の音や <backup> が
+    // 挟まれば別グループ）。元の連符が自五線の音と休符置換に分かれると見た目の括りは
+    // 元と変わることがあるが、時間は正しく、またぎの見た目は読込後に ⇵ で付け直せる
+    const syntheticTupletRest = new Map<Element, NoteEvent>();
+    {
+      let runId: string | null = null;
+      for (const el of Array.from(measureEl.children)) {
+        const timeModEl = el.tagName === 'note' ? el.querySelector('time-modification') : null;
+        const isTarget = timeModEl !== null && staffNumber !== null
+          && noteUnitStaff(el) !== staffNumber
+          && !el.querySelector('chord') && !el.querySelector('grace');
+        if (!isTarget) { runId = null; continue; }
+        const actualNotes = parseInt(timeModEl.querySelector('actual-notes')?.textContent ?? '', 10);
+        const normalNotes = parseInt(timeModEl.querySelector('normal-notes')?.textContent ?? '', 10);
+        if (!Number.isInteger(actualNotes) || actualNotes <= 0 || !Number.isInteger(normalNotes) || normalNotes <= 0) {
+          runId = null;
+          continue;
+        }
+        if (!runId) runId = nextCrossStaffTupletRestId();
+        const dur = (TYPE_TO_DUR[el.querySelector('type')?.textContent ?? ''] ?? '4') as NoteEvent['dur'];
+        const dotCount = Array.from(el.children).filter((c) => c.tagName === 'dot').length;
+        const dots: 1 | 2 | undefined = dotCount === 1 ? 1 : dotCount >= 2 ? 2 : undefined;
+        syntheticTupletRest.set(el, {
+          dur,
+          isRest: true,
+          keys: [defaultRestDisplayKeyForDuration(staffClef, dur)],
+          dots,
+          tuplet: { id: runId, numNotes: actualNotes, notesOccupied: normalNotes },
+        });
+      }
+    }
     // 別五線の <note> は**捨てずに残す**: 同じ voice が小節内で五線を移るクロススタッフ記譜では、
     // 捨てると先行音の時間が消えて後続が小節先頭へ詰まる（Codex round2 P1）。
     // 残した別五線の音は parseVoiceChildren で「同じ長さの休符」に合成する（時間を保存し、
