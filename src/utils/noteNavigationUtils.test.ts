@@ -1,6 +1,6 @@
 // Issue #442: 音符選択中の ←/→ で隣のイベントへ選択を移すときの「隣の探し方」を固定する。
 // 画面（PianoSystemCanvas / ScorePage）を通した操作は
-// ScorePageNoteArrowNavigation.test.tsx・SingleStaffNoteArrowNavigation.test.tsx で見る。
+// ScorePageNoteArrowNavigation.test.tsx で見る。
 import { describe, it, expect } from 'vitest';
 import { findAdjacentNotePosition } from './noteNavigationUtils';
 import type { MeasureData } from '../types/storage';

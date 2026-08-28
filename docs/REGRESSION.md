@@ -226,4 +226,4 @@
   **どこにも青枠が残らない**（実装中に実際に踏んだ）。実際にその音符を描いている段だけが受け取ること。
 - 曲の最初・最後でさらに押したときは選択が動かず、理由の通知が出ること（#318）。
 - 音符を選んでいないときの ←/→ は従来どおり小節選択のカーソル移動であること。
-- 固定テスト: ScorePageNoteArrowNavigation.test.tsx（3件）・noteNavigationUtils.test.ts（7件）
+- 固定テスト: ScorePageNoteArrowNavigation.test.tsx（6件。小節選択残し・声部2実配線・入力欄フォーカス除外を含む）・noteNavigationUtils.test.ts（7件）
