@@ -1312,12 +1312,18 @@ export default function ScorePage() {
             ? findPlaybackStartExpandedIndex(referenceExpanded, startMeasure)
             : 0;
           // トリル再生の上隣接音は「その小節で有効な調号」の音階から決める。
-          // 途中調号は最上段（parts[0]）の小節にだけ保存される設計（handleKeySigConfirm）なので、
-          // 全パート共通で**最上段の小節列**から解決する。展開順ではなく元小節の位置
-          // （sourceMeasureIndex）で resolveMeasureKeySignature を引くことで、
-          // リピート折返し後も「その小節の見た目どおりの調号」になる（画面表示と同じ関数）
+          // 途中調号は**譜面本来の最上段**の小節にだけ保存される設計（handleKeySigConfirm）。
+          // パート譜表示中は parts が選択パートだけに絞られていて parts[0] が最上段とは
+          // 限らないため、調号参照は譜種ごとの正本の最上段から別途取る（Codex round2）。
+          // 展開順ではなく元小節の位置（sourceMeasureIndex）で resolveMeasureKeySignature を
+          // 引くことで、リピート折返し後も「その小節の見た目どおりの調号」になる（画面表示と同じ関数）
+          const keySigReferenceMeasures = scoreType === 'quartet'
+            ? (quartetParts[0] ?? [])
+            : scoreType === 'ensemble'
+              ? (ensembleParts[0] ?? [])
+              : (rightHandData ?? []);
           const effectiveKeySignatures = referenceExpanded.map((item) =>
-            resolveMeasureKeySignature(referenceMeasures, item.sourceMeasureIndex, keySignature));
+            resolveMeasureKeySignature(keySigReferenceMeasures, item.sourceMeasureIndex, keySignature));
           // スウィング対象になり得る音（付点なし8分・複合拍子でない）はトリル展開しない。
           // 32分へ割るとエンジンのスウィング判定（8分のみ）から外れ、
           // 実音とハイライトの位置がずれるため（裏拍の 2/3 シフトが消える）

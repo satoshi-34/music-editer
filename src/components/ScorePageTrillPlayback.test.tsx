@@ -181,4 +181,56 @@ describe('ScorePage: トリルの再生（playParts への展開配線）', () =
     expect(notes).toHaveLength(8);
     expect(notes[1].keys[0]).toBe('c#/3');
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // パート譜表示中は再生対象が選択パートだけに絞られるため、調号参照が
+  // 「絞られた parts[0]」になると最上段の途中調号を見失う（Codex round2 の再発防止）。
+  // Viola のパート譜を選んで再生しても、Violin I の途中調号がトリルへ効くことを固定する
+  it('パート譜表示（Viola）でも、Violin I の途中調号がトリルへ効く', async () => {
+    const restBar = [{ dur: '1' as const, isRest: true, keys: ['b/4'] }];
+    const restMeasure = () => ({ events: restBar, voices: [{ id: 'voice-1', events: restBar }] });
+    const violaBar2 = [
+      { dur: '4' as const, isRest: false, keys: ['b/3'], ornament: 'trill' as const },
+      { dur: '4' as const, isRest: true, keys: ['c/4'] },
+      { dur: '4' as const, isRest: true, keys: ['c/4'] },
+      { dur: '4' as const, isRest: true, keys: ['c/4'] },
+    ];
+    const data = createSavedScoreData(
+      { title: 'ビオラトリル', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'violin-1', clef: 'treble', measures: [restMeasure(), { ...restMeasure(), keySignature: 'D' as const }] },
+        { partId: 'violin-2', clef: 'treble', measures: [restMeasure(), restMeasure()] },
+        { partId: 'viola', clef: 'alto', measures: [restMeasure(), { events: violaBar2, voices: [{ id: 'voice-1', events: violaBar2 }] }] },
+        { partId: 'cello', clef: 'bass', measures: [restMeasure(), restMeasure()] },
+      ],
+      1, 2, 'quartet'
+    );
+    data.keySignature = 'C';
+    const created = createWork('ビオラトリル');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+
+    render(<ScorePage />);
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText('パート譜表示')).toBeTruthy();
+    }, { timeout: 15000 });
+    const select = screen.getByLabelText('パート譜表示') as HTMLSelectElement;
+    const viola = Array.from(select.options).find((o) => o.value.includes('viola'));
+    expect(viola).toBeTruthy();
+    fireEvent.change(select, { target: { value: viola!.value } });
+
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => {
+      expect(capturedPlayParts.length).toBeGreaterThan(0);
+    }, { timeout: 15000 });
+
+    // パート譜再生では parts は Viola の1本だけ
+    expect(capturedPlayParts[0].parts).toHaveLength(1);
+    const notes = capturedPlayParts[0].parts[0].measures[1].events.filter((e) => !e.isRest);
+    expect(notes).toHaveLength(8);
+    // Violin I 側の2小節目からの D dur が効き、b/3 の上隣接音は c#/4
+    expect(notes[1].keys[0]).toBe('c#/4');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });
