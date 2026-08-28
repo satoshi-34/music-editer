@@ -163,7 +163,7 @@ import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDu
 import { buildBeatColumns, planLeadingRestFillBeats, type BeatColumn } from '../utils/beatColumnUtils';
 import { sliceBoundaryCandidates, snapToSliceBoundary } from '../utils/beatSliceUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
-import { resolveArcEndpointY, resolveSlurObstacleY, shouldAnchorArcToStemSide, hasManualArcEndpointOffset } from '../utils/arcStemAnchorUtils';
+import { resolveArcEndpointY, resolveSlurObstacleY, shouldAnchorArcToStemSide } from '../utils/arcStemAnchorUtils';
 import {
   buildTupletGroupPlan,
   buildTupletRestReplacement,
@@ -5288,8 +5288,8 @@ export default function PianoSystemCanvas({
       const anchorEnd=shouldAnchorArcToStemSide({isMultiVoiceMeasure,upward,stemDirection:lastStemDir});
       // 手動でずらした端点は隙間を広げない（Issue #446）。端点ごとに見るので、
       // 片側だけ調整した弧では、触っていない側だけが新しい隙間になる。
-      const y1=resolveArcEndpointY({noteheadY:fromStave.getYForLine(fromLine),stemTipY:stemTipYOfP(firstNote,upward),upward,anchorToStem:anchorStart,hasManualEndpointOffset:hasManualArcEndpointOffset(startDx,startDy)});
-      const y2=resolveArcEndpointY({noteheadY:toStave.getYForLine(toLine),stemTipY:stemTipYOfP(lastNote,upward),upward,anchorToStem:anchorEnd,hasManualEndpointOffset:hasManualArcEndpointOffset(endDx,endDy)});
+      const y1=resolveArcEndpointY({noteheadY:fromStave.getYForLine(fromLine),stemTipY:stemTipYOfP(firstNote,upward),upward,anchorToStem:anchorStart});
+      const y2=resolveArcEndpointY({noteheadY:toStave.getYForLine(toLine),stemTipY:stemTipYOfP(lastNote,upward),upward,anchorToStem:anchorEnd});
       let obstacleY:number|undefined;
       // minNoteY / maxNoteY は曲率ドラッグの「反転する境目」の基準に使う値なので、
       // 従来どおり符頭だけから求める（符幹先端を混ぜると反転のしきい値が変わってしまう）。
@@ -7807,7 +7807,6 @@ export default function PianoSystemCanvas({
             stemTipY:stemTipYOfP(startNote,upward),
             upward,
             anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:stemDir}),
-            hasManualEndpointOffset:hasManualArcEndpointOffset(startDx,startDy),
           })+startDy;
           const edgeX=startStave.getX()+startStave.getWidth();
           {
@@ -7885,14 +7884,12 @@ export default function PianoSystemCanvas({
             stemTipY:stemTipYOfP(startNote,upward),
             upward,
             anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:stemDir}),
-            hasManualEndpointOffset:hasManualArcEndpointOffset(startDx,startDy),
           });
           const y2=resolveArcEndpointY({
             noteheadY:dest.stave.getYForLine(toLine),
             stemTipY:stemTipYOfP(dest.note,upward),
             upward,
             anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:destStemDir}),
-            hasManualEndpointOffset:hasManualArcEndpointOffset(endDx,endDy),
           });
           const crossMinNoteY=allNoteYs&&allNoteYs.length>0?Math.min(...allNoteYs):undefined;
           const crossMaxNoteY=allNoteYs&&allNoteYs.length>0?Math.max(...allNoteYs):undefined;
@@ -7958,7 +7955,6 @@ export default function PianoSystemCanvas({
               stemTipY:stemTipYOfP(dest.note,upward),
               upward,
               anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure,upward,stemDirection:destStemDir}),
-              hasManualEndpointOffset:hasManualArcEndpointOffset(arc.endDx,arc.endDy),
             })+(arc.endDy??0);
             const edgeX=dest.stave.getX();
             const baseKey=arcKeyP({partIndex,voiceIndex,fromMeasure,fromEvent,arcIndex});

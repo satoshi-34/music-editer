@@ -8,7 +8,7 @@
 // 制御点の下限がそのまま頂点の余裕になる。
 import { describe, it, expect } from 'vitest';
 import { computeArcApexPoint, SLUR_OBSTACLE_MIN_GAP_PX } from './arcUtils';
-import { ARC_NOTEHEAD_GAP, ARC_NOTEHEAD_GAP_LEGACY } from '../utils/arcStemAnchorUtils';
+import { ARC_NOTEHEAD_GAP } from '../utils/arcStemAnchorUtils';
 import { ENGRAVING_THICKNESS_UNITS } from '../utils/engravingDefaults';
 
 /** 符頭の半分の高さ（VexFlow の描画に合わせた目安） */
@@ -99,13 +99,12 @@ describe('弧の端点が符頭にめり込まない（#446）', () => {
       .toBeGreaterThan(NOTEHEAD_HALF_HEIGHT_PX);
   });
 
-  it('従来の隙間（3）はこの下限を満たしていなかった（＝これが今回の不具合）', () => {
-    expect(ARC_NOTEHEAD_GAP_LEGACY - ARC_ENDPOINT_HALF_THICKNESS)
-      .toBeLessThan(NOTEHEAD_HALF_HEIGHT_PX);
-  });
 
-  it('広げすぎて隣の五線の線を越えない（線間の音符でも1間の内側に収まる）', () => {
-    // 五線の1間は 10。符頭中心から 10 以上離すと、隣の線を越えて見える
+  it('隙間は五線の1間（10）より小さい（際限なく外へ出ない上限の確認）', () => {
+    // 五線上の音符では、符頭中心から 10 未満なら端点は次の線の内側に収まる。
+    // 線間の音符では最寄りの線まで 5 なので、6 の端点はその線をわずかに越えるが、
+    // これは浄書上許容している（Behind Bars でもタイの端は線に触れ得る）。
+    // ここで保証するのは「1間ぶん以上は離れない」ことだけ（Codex round1 P2 の文言修正）
     expect(ARC_NOTEHEAD_GAP).toBeLessThan(10);
   });
 });
@@ -118,11 +117,4 @@ describe('スラー側の見た目が崩れない（#446 の巻き添え確認�
       .toBeGreaterThan(NOTEHEAD_HALF_HEIGHT_PX + ARC_HALF_THICKNESS_PX);
   });
 
-  it('端点を外へ出したぶん、頂点も外側（または同じ）へ動く＝内側へ食い込まない', () => {
-    const noteheadCenterY = 200;
-    const apexAt = (gap: number) => computeArcApexPoint(
-      0, noteheadCenterY + gap, 40, noteheadCenterY + gap, false, 'slur', 1, noteheadCenterY, 0, 0
-    ).y;
-    expect(apexAt(ARC_NOTEHEAD_GAP)).toBeGreaterThanOrEqual(apexAt(ARC_NOTEHEAD_GAP_LEGACY));
-  });
 });

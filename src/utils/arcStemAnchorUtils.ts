@@ -23,15 +23,6 @@
 export const ARC_NOTEHEAD_GAP = 6;
 
 /**
- * 手動で端点をずらした弧に使う、従来の隙間（SVG 論理単位）。
- *
- * ユーザーが端点ハンドルで位置を決めた弧まで一律に押し出すと、
- * 「せっかく合わせた位置が勝手に動く」ことになるため、
- * 手動調整済みの端点だけは従来の 3 を使い、保存されたオフセットの意味を保つ。
- */
-export const ARC_NOTEHEAD_GAP_LEGACY = 3;
-
-/**
  * 端点を符幹の先端に付けるときの隙間（SVG 論理単位）。
  *
  * 3 ではなく 5（＝五線の半間）にしているのは、**ビーム（連桁）をまたぐため**。
@@ -42,16 +33,6 @@ export const ARC_NOTEHEAD_GAP_LEGACY = 3;
  * 16分音符のように本数が増えても外側の位置は変わらない）。
  */
 export const ARC_STEM_TIP_GAP = 5;
-
-/**
- * その端点をユーザーが手動でずらしているか（Issue #446）。
- *
- * 保存値は「未調整（undefined）」と「調整したが結果ゼロ（0）」が混ざるので、
- * どちらも「動かしていない」とみなして既定の隙間を適用する。
- */
-export function hasManualArcEndpointOffset(dx?: number, dy?: number): boolean {
-  return (dx ?? 0) !== 0 || (dy ?? 0) !== 0;
-}
 
 /**
  * その弧の端点を符幹側へアンカーするかどうか。
@@ -84,19 +65,22 @@ export function shouldAnchorArcToStemSide(params: {
  * @param stemTipY   その音符の符幹先端のY（符幹が無い音符・取得できない場合は undefined）
  * @param upward     弧が上へふくらむか
  * @param anchorToStem `shouldAnchorArcToStemSide()` の結果
- * @param hasManualEndpointOffset その端点をユーザーが手動でずらしているか（Issue #446）。
- *        true なら隙間を広げず従来値のままにして、保存済みの位置を動かさない
+ *
+ * 隙間は手動調整の有無にかかわらず一律 ARC_NOTEHEAD_GAP（レビュー裁定・Issue #446 round1）。
+ * 当初は「手動調整済みの端点だけ従来値 3」の分岐を入れたが、未調整の端点を初めて
+ * ドラッグした瞬間に基準が 6→3 へ切り替わり、確定時に 3px 跳ねる不連続が生まれる。
+ * 分岐をやめて基準を1つにし、既存の手動オフセットは新基準からの相対値として扱う
+ * （旧データの端点は一律 3 外へ出る。相対的な調整の意図は保たれ、気になる場合は
+ * ハンドルで引き続き調整できる）。
  */
 export function resolveArcEndpointY(params: {
   noteheadY: number;
   stemTipY?: number;
   upward: boolean;
   anchorToStem: boolean;
-  hasManualEndpointOffset?: boolean;
 }): number {
-  const { noteheadY, stemTipY, upward, anchorToStem, hasManualEndpointOffset = false } = params;
-  const gap = hasManualEndpointOffset ? ARC_NOTEHEAD_GAP_LEGACY : ARC_NOTEHEAD_GAP;
-  const noteheadAnchored = noteheadY + (upward ? -gap : gap);
+  const { noteheadY, stemTipY, upward, anchorToStem } = params;
+  const noteheadAnchored = noteheadY + (upward ? -ARC_NOTEHEAD_GAP : ARC_NOTEHEAD_GAP);
   if (!anchorToStem || stemTipY === undefined || !Number.isFinite(stemTipY)) {
     return noteheadAnchored;
   }
