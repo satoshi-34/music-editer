@@ -84,7 +84,7 @@ export type Tool =
   | { mode: 'ornament'; ornamentType: OrnamentType }       // 装飾記号（トリル/モルデント/プラルトリラー/ターン）を付けるモード
   | { mode: 'pedal'; pedalType: 'down' | 'up' }           // ペダル記号（Ped / ✱）を付けるモード
   | { mode: 'ottava'; ottavaType: '8va' | '8vb' | '8vaEnd' | '8vbEnd' } // オッターバ記号を付けるモード
-  | { mode: 'hairpin'; hairpinType: 'cresc' | 'dim' };     // 松葉（クレッシェンド＜／ディミヌエンド＞）を付けるモード。タイと同様に開始音符→終了音符へドラッグして設置
+  | { mode: 'hairpin'; hairpinType: 'cresc' | 'dim' };     // 松葉（クレッシェンド＜／デクレッシェンド＞）を付けるモード。タイと同様に開始音符→終了音符へドラッグして設置
 
 type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
 type MicrotoneTool = Extract<Tool, { mode: 'microtone' }>;
@@ -593,7 +593,9 @@ export default function Palette({
             </button>
           );
         })}
-        {/* 松葉（クレッシェンド／ディミヌエンド）: タイと同じくドラッグで開始音符→終了音符を結ぶ */}
+        {/* 松葉（クレッシェンド／デクレッシェンド）: タイと同じくドラッグで開始音符→終了音符を結ぶ。
+            松葉＞の説明文言は「デクレッシェンド」で統一する（弟フィードバック・Issue #444）。
+            文字表記の dim. ボタン（dynamicLabel）は別の記号なので「ディミヌエンド」のまま変えない */}
         <button
           type="button"
           onClick={() => onChange(selectedHairpinType === 'cresc' ? ROW1[2] : { mode: 'hairpin', hairpinType: 'cresc' })}
@@ -608,8 +610,8 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedHairpinType === 'dim' ? ROW1[2] : { mode: 'hairpin', hairpinType: 'dim' })}
-          title="ディミヌエンドの松葉＞（開始音符から終了音符へドラッグ）"
-          aria-label="ディミヌエンドの松葉＞（開始音符から終了音符へドラッグ）"
+          title="デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）"
+          aria-label="デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）"
           style={btnStyle(selectedHairpinType === 'dim')}
         >
           <svg width="22" height="14" viewBox="0 0 22 14" aria-hidden="true">
