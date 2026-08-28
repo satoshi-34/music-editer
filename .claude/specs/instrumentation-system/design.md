@@ -758,3 +758,21 @@ SVG の `getComputedTextLength()` は描画後にしか測れないため、幅�
 - ブラウザ（dev サーバー）: 弦楽四重奏で「パート名編集」を開き、Violin I → `Violino primo`、
   Violoncello → `チェロ` に書き換えて、五線左の表示が即座に変わること・譜種が
   弦楽四重奏（編成テンプレート `string-quartet`）のままであることを確認
+
+## パート名編集のレビュー対応（2026-08-29・Codex round1・#448）
+
+- **[P1] MusicXML への反映**: buildCurrentScoreData の返却値に instrumentation が
+  入っておらず、書き出しが既定の固定名へフォールバックしていた。返却値へ追加し、
+  編集名が <part-name> に出ることをテストで固定
+- **[P1] 名前だけの自動保存**: 「空の譜面は保存しない」ガードに、
+  hasCustomInstrumentationLabels（instrumentationPresets）の例外を追加。
+  音符が空でも楽器名を既定から書き換えた編成は「内容あり」として保存する
+- **[P2] 総譜とパート譜選択肢の名前解決を統一**: getPartExtractionOptions（四重奏）も
+  resolveInstrumentPartLabels を通す（正式名空+略称のみのパートで食い違っていた）
+- **[P2] 入力の検証**: 名前・略称は 40 文字上限（INSTRUMENT_NAME_MAX_LENGTH。
+  maxLength 属性+保存側 slice の二重）。空白だけの入力は resolveInstrumentPartLabels の
+  trim で「未入力」に倒れ、ラベルは略称（または既定名）で代用される
+- **既知の制限（設計判断）**: 名前を書き換えた四重奏の MusicXML を再読込すると、
+  表示名から安定ID（violin-1 等）へ戻せないため汎用の編成譜として読み込まれる
+  （データは失われない。既知の表示名のみ ID へ正規化する #443 の設計のまま）
+- テスト追加: 保存作品の復元配線・名前だけの自動保存・MusicXML 書き出し・空白のみ入力

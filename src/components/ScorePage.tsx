@@ -67,6 +67,7 @@ import {
   getDefaultInstrumentationForScoreType,
   getInstrumentationPreset,
   getScoreTypeForInstrumentation,
+  hasCustomInstrumentationLabels,
   INSTRUMENTATION_PRESETS,
 } from '../data/instrumentationPresets';
 import type { InstrumentationPresetId, ScoreInstrumentation, ScoreNotationMode } from '../types/storage';
@@ -155,7 +156,7 @@ import {
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
-import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, resolveInstrumentPartLabels, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
+import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, INSTRUMENT_NAME_MAX_LENGTH, resolveInstrumentPartLabels, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
 import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
@@ -1167,10 +1168,12 @@ export default function ScorePage() {
     field: 'name' | 'abbreviation',
     value: string
   ) => {
+    // maxLength 属性は貼り付け経路で効かないブラウザがあるため、保存値側でも切り詰める
+    const clamped = value.slice(0, INSTRUMENT_NAME_MAX_LENGTH);
     setInstrumentation(prev => ({
       ...prev,
       parts: prev.parts.map((part, index) => (
-        index === partIndex ? { ...part, [field]: value } : part
+        index === partIndex ? { ...part, [field]: clamped } : part
       )),
     }));
   }, []);
@@ -2484,7 +2487,10 @@ export default function ScorePage() {
       // 空の譜面は保存しない（自動保存と同じ判断。空で上書きして中身を失わないため）。
       // ただし復元履歴の退避（includeEmpty）では、空譜面＝「全音符を消した直後」や
       // 「タイトルだけ編集した状態」も戻す前の内容として残す必要があるため組み立てる
-      if (!options?.includeEmpty && isEmptyScoreData(parts)) return null;
+      // 音符が空でも、楽器名を既定から書き換えた編成は「内容あり」として保存する
+      // （新規四重奏で名前だけ設定して閉じると失われるため。Codex round1 P1・#448）
+      if (!options?.includeEmpty && isEmptyScoreData(parts)
+        && !hasCustomInstrumentationLabels(instrumentation, scoreType)) return null;
       return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle);
     };
   });
@@ -2503,7 +2509,7 @@ export default function ScorePage() {
       const { metadata, parts } = buildScoreData();
       // 内容が空（全パート・全小節が空）のときは自動保存で既存の内容を上書きしない。
       // 「新規作成」では別の作品IDへ切り替えるので、前の作品はそのまま一覧に残る。
-      if (isEmptyScoreData(parts)) {
+      if (isEmptyScoreData(parts) && !hasCustomInstrumentationLabels(instrumentation, scoreType)) {
         // 空のうちは保存しないが「保存を試みた時刻」は進める。進めないと、空のまま
         // max-wait を超えた後の編集のたびに同期保存経路へ入り続ける（デバウンスが効かない）
         lastAutosaveCompletedAtRef.current = Date.now();
@@ -4289,6 +4295,9 @@ export default function ScorePage() {
       // MusicXML 書き出しへ symbol="common"/"cut" が付かない（Codex round1 P1）
       timeSignatureStyle,
       parts,
+      // 編成定義（パート名の編集 #448 を含む）。ここに入れないと MusicXML 書き出しが
+      // 既定の固定名へフォールバックし、編集した楽器名が出力に反映されない（Codex round1 P1）
+      instrumentation,
       systems: totalSystems,
       measuresPerSystem,
     };
@@ -6020,6 +6029,9 @@ export default function ScorePage() {
                 </>)}
                 <input
                   value={part.name}
+                  // 長すぎる名前はラベル領域に収まらないため上限を設ける（#448 round1）。
+                  // 空白だけの入力は resolveInstrumentPartLabels 側で「未入力」に倒れる
+                  maxLength={INSTRUMENT_NAME_MAX_LENGTH}
                   onChange={(event) => (isNameOnlyInstrumentationEditor
                     ? handleInstrumentationPartNameChange(partIndex, 'name', event.target.value)
                     : handleInstrumentationPartFieldChange(partIndex, 'name', event.target.value))}
@@ -6027,6 +6039,7 @@ export default function ScorePage() {
                 />
                 <input
                   value={part.abbreviation}
+                  maxLength={INSTRUMENT_NAME_MAX_LENGTH}
                   onChange={(event) => (isNameOnlyInstrumentationEditor
                     ? handleInstrumentationPartNameChange(partIndex, 'abbreviation', event.target.value)
                     : handleInstrumentationPartFieldChange(partIndex, 'abbreviation', event.target.value))}

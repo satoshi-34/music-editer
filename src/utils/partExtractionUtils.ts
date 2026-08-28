@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { InstrumentPartDefinition, ScoreType } from '../types/storage';
+import { resolveInstrumentPartLabels } from './instrumentationPartUtils';
 
 /** パート譜表示のドロップダウンに出す1件分（総譜以外の選択肢） */
 export type PartExtractionOption = {
@@ -51,7 +52,11 @@ export function getPartExtractionOptions(
       : [];
     return QUARTET_PART_IDS.map((id, index) => ({
       id,
-      label: editedParts[index]?.name || QUARTET_PART_EXTRACTION_LABELS[index],
+      // 総譜のラベルと同じ解決規則（resolveInstrumentPartLabels）を通す。
+      // name だけを見ると「正式名が空で略称のみ」のパートで総譜と選択肢の名前が
+      // 食い違う（総譜=略称・選択肢=既定名。Codex round1 P2）
+      label: (editedParts[index] ? resolveInstrumentPartLabels(editedParts[index]).fullLabel : undefined)
+        || QUARTET_PART_EXTRACTION_LABELS[index],
       index,
     }));
   }

@@ -9,6 +9,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
 import ScorePage from './ScorePage';
+import { waitFor } from '@testing-library/react';
+import { createSavedScoreData, createWork, saveWorkAutosaveData, setLastOpenedWorkId } from '../utils/storage';
+import { scoreToMusicXml } from '../utils/musicXmlExport';
+import { getDefaultInstrumentationForScoreType } from '../data/instrumentationPresets';
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -129,4 +133,89 @@ describe('弦楽四重奏の楽器名・略称を編集する（Issue #448）', 
     const dialog = screen.getByRole('dialog', { name: '編成パート編集' });
     expect(within(dialog).getByRole('button', { name: '追加' })).toBeInTheDocument();
   }, 30000);
+
+  // Codex round1: 保存・復元の配線（規約の createWork → saveWorkAutosaveData 型）
+  it('保存作品に入っている編集済みパート名が、復元後の表示とパート譜選択肢に出る', async () => {
+    const events = [{ dur: '1' as const, isRest: false, keys: ['c/4'] }];
+    const mk = () => ({ events, voices: [{ id: 'voice-1', events }] });
+    const inst = getDefaultInstrumentationForScoreType('quartet');
+    const customInst = {
+      ...inst,
+      parts: inst.parts.map((part) => part.id === 'violin-1'
+        ? { ...part, name: 'Violino primo', abbreviation: 'V.p.' }
+        : part),
+    };
+    const data = createSavedScoreData(
+      { title: '保存名復元', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'violin-1', clef: 'treble' as const, measures: [mk()] },
+        { partId: 'violin-2', clef: 'treble' as const, measures: [mk()] },
+        { partId: 'viola', clef: 'alto' as const, measures: [mk()] },
+        { partId: 'cello', clef: 'bass' as const, measures: [mk()] },
+      ],
+      1, 1, 'quartet', 'C', [4, 4], customInst as never
+    );
+    const created = createWork('保存名復元');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(renderedLabels()).toContain('Violino primo');
+    }, { timeout: 15000 });
+    // パート譜選択肢にも同じ名前（総譜と選択肢の一致）
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    const partSelect = Array.from(document.querySelectorAll('select')).find((select) =>
+      Array.from(select.options).some((option) => option.textContent === 'Violino primo'));
+    expect(partSelect, 'パート譜セレクトに編集名').toBeTruthy();
+  }, 60000);
+
+  // Codex round1 P1: 名前だけ編集した空の四重奏も自動保存される
+  it('音符が空でも、パート名の編集は自動保存に残る', async () => {
+    openQuartetScore();
+    const dialog = openPartNameEditor();
+    const nameInput = within(dialog).getByRole('textbox', { name: 'Violin Iのパート名' });
+    fireEvent.change(nameInput, { target: { value: '第1ヴァイオリン' } });
+
+    // 自動保存（1.5秒デバウンス）を待って localStorage の実体を確認する
+    await waitFor(() => {
+      const keys = Array.from({ length: window.localStorage.length }, (_, i) => window.localStorage.key(i)!);
+      const workKey = keys.find((k) => k.includes('work') && k.includes('autosave'));
+      expect(workKey).toBeTruthy();
+    }, { timeout: 15000 });
+    const keys = Array.from({ length: window.localStorage.length }, (_, i) => window.localStorage.key(i)!);
+    const found = keys.some((k) => (window.localStorage.getItem(k) ?? '').includes('第1ヴァイオリン'));
+    expect(found).toBe(true);
+  }, 60000);
+
+  // Codex round1 P1: 編集した名前が MusicXML 書き出しへ渡る（buildCurrentScoreData の instrumentation）
+  it('編集した名前が MusicXML の part-name に出る', () => {
+    const inst = getDefaultInstrumentationForScoreType('quartet');
+    const customInst = {
+      ...inst,
+      parts: inst.parts.map((part) => part.id === 'cello'
+        ? { ...part, name: 'Basso', abbreviation: 'B.' }
+        : part),
+    };
+    const events = [{ dur: '1' as const, isRest: false, keys: ['c/3'] }];
+    const data = createSavedScoreData(
+      { title: '書き出し名', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'cello', clef: 'bass' as const, measures: [{ events, voices: [{ id: 'voice-1', events }] }] }],
+      1, 1, 'quartet', 'C', [4, 4], customInst as never
+    );
+    const xml = scoreToMusicXml(data);
+    expect(xml).toContain('<part-name>Basso</part-name>');
+    expect(xml).not.toContain('<part-name>Violoncello</part-name>');
+  });
+
+  it('空白だけの名前は「未入力」扱いで、略称（または既定）で代用される', () => {
+    openQuartetScore();
+    const dialog = openPartNameEditor();
+    const nameInput = within(dialog).getByRole('textbox', { name: 'Violin Iのパート名' });
+    fireEvent.change(nameInput, { target: { value: '   ' } });
+    // 正式名が空白のみ → フル名の位置にも略称（Vln. I）が出る（resolveInstrumentPartLabels）
+    expect(renderedLabels()).not.toContain('   ');
+    expect(renderedLabels()).toContain('Vln. I');
+  });
 });

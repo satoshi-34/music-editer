@@ -196,3 +196,25 @@ export function getScoreTypeForInstrumentation(presetId: InstrumentationPresetId
   }
   return 'single';
 }
+
+
+/**
+ * 編成のパート名・略称が、その譜種の既定から書き換えられているか（Issue #448）。
+ *
+ * 自動保存は「内容（音符）が空の譜面は保存しない」ガードを持つが、
+ * 新規の四重奏で先に楽器名だけを設定した状態はこのガードに落ちて名前が失われる。
+ * 「名前が既定から変わっている」ことを内容の一部とみなすための判定。
+ * パート数が違う場合（編成を組み替えた場合）もカスタムとみなす。
+ */
+export function hasCustomInstrumentationLabels(
+  instrumentation: ScoreInstrumentation,
+  scoreType: ScoreType,
+): boolean {
+  const defaults = getDefaultInstrumentationForScoreType(scoreType).parts;
+  if (instrumentation.parts.length !== defaults.length) return true;
+  return instrumentation.parts.some((part) => {
+    const def = defaults.find((d) => d.id === part.id);
+    if (!def) return true;
+    return part.name !== def.name || part.abbreviation !== def.abbreviation;
+  });
+}
