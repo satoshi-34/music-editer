@@ -587,7 +587,7 @@ export default function ScorePage() {
    */
   const lastAutosaveCompletedAtRef = useRef(Date.now());
   // localStorage 自体は React の state ではないため、読んでも自動では再描画されない。
-  // 「開く」メニューに「以前の手動保存を取り込む」を出すかどうか（旧スロットの有無）を
+  // 「開く」に「以前の手動保存」ボタンを出すかどうか（旧スロットの有無）を
   // 画面状態として持ち、取り込みの節目で更新する（#109 第4段）。
   const [storedDataAvailable, setStoredDataAvailable] = useState(() => hasStoredData());
   // 起動時のサイレント復元（自動保存データがあれば続きから編集できるようにする）が
@@ -2228,7 +2228,7 @@ export default function ScorePage() {
   // createSavedScoreData() の結果をそのまま土台にし、そこへ表示状態などの追加情報を
   // 上乗せするだけにしてある。validateSavedScoreData（src/utils/storage.ts）は既知の
   // フィールドしか見ないため、余分なフィールド（appVersion・viewState）があっても
-  // 無視されるだけで済み、「フィードバックボタンで作ったJSONをそのまま『開く』メニュー（ファイル）で
+  // 無視されるだけで済み、「フィードバックボタンで作ったJSONをそのまま『開く』の『ファイル』ボタンで
   // 読み込める」という受入条件を追加の変換なしに満たせる。
   //
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない
@@ -2238,7 +2238,7 @@ export default function ScorePage() {
     const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle);
     const feedbackState = {
       ...scoreData,
-      // フィードバック JSON は「開く」メニュー（ファイル）で読み込める楽譜 JSON なので、
+      // フィードバック JSON は「開く」の「ファイル」ボタンで読み込める楽譜 JSON なので、
       // 他の書き出し境界と同じ正規化（鏡同期+実体化）を通す（#244 段5-4）
       parts: scoreData.parts.map((part) => ({
         ...part,
@@ -2246,7 +2246,7 @@ export default function ScorePage() {
       })),
       appVersion: __APP_GIT_SHA__,
       // 譜面データそのものではなく「今どう見えているか」の表示状態。再現性のヒントとして
-      // 添えるだけで、この情報は「開く」メニュー（ファイル）では読まれない（読込は既存のScoreData
+      // 添えるだけで、この情報は「開く」の「ファイル」ボタンでは読まれない（読込は既存のScoreData
       // フィールドだけを見るため）。
       viewState: {
         viewZoom,
@@ -2622,15 +2622,6 @@ export default function ScorePage() {
     else if (kind === 'musicxml') handleExportMusicXml();
     else if (kind === 'midi') handleExportMidi();
     else if (kind === 'pdf') void handleExportPdf();
-  };
-
-  /** 「開く」メニュー（#109 第4段） */
-  const handleOpenMenu = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const kind = event.target.value;
-    event.target.value = '';
-    if (kind === 'file') fileImportRef.current?.click();
-    else if (kind === 'musicxml') musicXmlInputRef.current?.click();
-    else if (kind === 'legacy') void handleImportLegacyManualSave();
   };
 
   const handleLoadSample = useCallback((sampleId: DemoScoreId) => {
@@ -5642,9 +5633,9 @@ export default function ScorePage() {
                 style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
                 onChange={handleImportFile}
               />
-              {/* 書き出し・開くの2メニュー（#109 第4段）。個別ボタンの羅列をやめ、
-                  既存の編成選択と同じ select パターンで形式だけを選ぶ。
-                  value は常に空（実行のたびにプレースホルダーへ戻る） */}
+              {/* 書き出しメニューと「開く」ボタン群（#109 第4段→#464 続報で開く側をボタン化）。
+                  書き出しは select（value は常に空・実行のたびにプレースホルダーへ戻る）、
+                  開くは Safari の user activation 制約によりボタン（設計書 save-load-redesign 参照） */}
               <label className="toolbar-select-label" title="譜面をファイルや他形式で書き出します">
                 <span>書き出し</span>
                 <select value="" onChange={handleExportMenu} aria-label="書き出し">
@@ -5655,17 +5646,25 @@ export default function ScorePage() {
                   <option value="pdf">PDF / 印刷</option>
                 </select>
               </label>
-              <label className="toolbar-select-label" title="ファイルから譜面を開きます（ブラウザ内の作品切替は「作品一覧」から）">
-                <span>開く</span>
-                <select value="" onChange={handleOpenMenu} aria-label="開く">
-                  <option value="" disabled>開くものを選ぶ…</option>
-                  <option value="file">ファイル (.score.json)</option>
-                  <option value="musicxml">MusicXML読込</option>
-                  {storedDataAvailable && (
-                    <option value="legacy">以前の手動保存を取り込む</option>
-                  )}
-                </select>
-              </label>
+              {/* 「開く」は select ではなく**ボタン**にする（#464 続報・Safari 実機で確定）。
+                  Safari は <select> の change をファイルダイアログを開ける「ユーザー操作」と
+                  認めず、input.click() が黙って無視される（ボタンの click なら開く。
+                  2026-08-28 に「🧪直接ボタンで開く／select 経由で開かない」を実機で切り分け）。
+                  書き出しメニューはダウンロード系のため select のまま（ダイアログ不要）。 */}
+              <div className="toolbar-chip-group" role="group" aria-label="開く" title="ファイルから譜面を開きます（ブラウザ内の作品切替は「作品一覧」から）">
+                <span className="toolbar-group-label">開く</span>
+                <button type="button" className="ghost toolbar-chip-button" onClick={() => fileImportRef.current?.click()}>
+                  ファイル
+                </button>
+                <button type="button" className="ghost toolbar-chip-button" onClick={() => musicXmlInputRef.current?.click()}>
+                  MusicXML
+                </button>
+                {storedDataAvailable && (
+                  <button type="button" className="ghost toolbar-chip-button" onClick={() => void handleImportLegacyManualSave()}>
+                    以前の手動保存
+                  </button>
+                )}
+              </div>
               {/* フィードバックボタンはヘッダーのタブ行右端へ移動した（Issue #142）。
                   譜面操作ではなくアプリへのメタ操作であり、どのタブからでも押せる必要があるため。 */}
               {partExtractionOptions.length > 0 && (

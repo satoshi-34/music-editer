@@ -30,7 +30,7 @@
 
 ### 使い方
 
-- 手動: アプリの「ファイル」タブ →「開く」メニュー →「ファイル (.score.json)」で読み込む
+- 手動: アプリの「ファイル」タブ →「開く」の「ファイル」ボタン →「ファイル (.score.json)」で読み込む
 - 自動化: 毎回のテスト（`npx vitest --run src`）で読込・描画・再生スケジュールの3経路を検証している（Issue #243）
   - `src/utils/moonlightRegressionLoad.test.ts`（読込）
   - `src/components/MoonlightRegressionRender.test.tsx`（描画）
