@@ -6,7 +6,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   ARC_NOTEHEAD_GAP,
+  ARC_NOTEHEAD_GAP_LEGACY,
   ARC_STEM_TIP_GAP,
+  hasManualArcEndpointOffset,
   resolveArcEndpointY,
   resolveSlurObstacleY,
   shouldAnchorArcToStemSide,
@@ -41,7 +43,7 @@ describe('resolveArcEndpointY（端点のY）', () => {
   const NOTEHEAD_Y = 120;
   const STEM_TIP_Y = 73;
 
-  it('符頭アンカーのときは従来どおり符頭から 3 だけ外側', () => {
+  it('符頭アンカーのときは符頭から ARC_NOTEHEAD_GAP だけ外側', () => {
     expect(resolveArcEndpointY({ noteheadY: NOTEHEAD_Y, stemTipY: STEM_TIP_Y, upward: true, anchorToStem: false }))
       .toBe(NOTEHEAD_Y - ARC_NOTEHEAD_GAP);
     expect(resolveArcEndpointY({ noteheadY: NOTEHEAD_Y, upward: false, anchorToStem: false }))
@@ -66,6 +68,37 @@ describe('resolveArcEndpointY（端点のY）', () => {
     // 上向きの弧なのに符幹先端が符頭より下（y が大きい）という矛盾したデータ。
     expect(resolveArcEndpointY({ noteheadY: NOTEHEAD_Y, stemTipY: 140, upward: true, anchorToStem: true }))
       .toBe(NOTEHEAD_Y - ARC_NOTEHEAD_GAP);
+  });
+});
+
+// Issue #446: 「タイが音符とくっつきすぎ」という利用者フィードバックへの対応。
+// 端点の隙間を広げたが、手動で位置を決めた端点だけは動かさない。
+describe('手動調整済みの端点は隙間を広げない（#446）', () => {
+  const NOTEHEAD_Y = 120;
+
+  it('手動オフセットがある端点は従来の隙間（3）のまま', () => {
+    expect(resolveArcEndpointY({
+      noteheadY: NOTEHEAD_Y, upward: true, anchorToStem: false, hasManualEndpointOffset: true,
+    })).toBe(NOTEHEAD_Y - ARC_NOTEHEAD_GAP_LEGACY);
+    expect(resolveArcEndpointY({
+      noteheadY: NOTEHEAD_Y, upward: false, anchorToStem: false, hasManualEndpointOffset: true,
+    })).toBe(NOTEHEAD_Y + ARC_NOTEHEAD_GAP_LEGACY);
+  });
+
+  it('未調整の端点は新しい隙間になる（＝手動調整の有無で差が出る）', () => {
+    const auto = resolveArcEndpointY({ noteheadY: NOTEHEAD_Y, upward: true, anchorToStem: false });
+    const manual = resolveArcEndpointY({
+      noteheadY: NOTEHEAD_Y, upward: true, anchorToStem: false, hasManualEndpointOffset: true,
+    });
+    // 上向きなら「外側 = Y が小さい」。未調整のほうが符頭から離れている
+    expect(auto).toBeLessThan(manual);
+  });
+
+  it('hasManualArcEndpointOffset: 未設定と 0 は「動かしていない」扱い', () => {
+    expect(hasManualArcEndpointOffset(undefined, undefined)).toBe(false);
+    expect(hasManualArcEndpointOffset(0, 0)).toBe(false);
+    expect(hasManualArcEndpointOffset(0, -4)).toBe(true);
+    expect(hasManualArcEndpointOffset(2, 0)).toBe(true);
   });
 });
 

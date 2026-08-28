@@ -10,9 +10,26 @@
 
 /**
  * 端点を符頭に付けるときの隙間（SVG 論理単位。五線の1間＝10）。
- * 従来コードが直書きしていた ±3 と同じ値で、単声部の見た目を変えないためにこの数字を守る。
+ *
+ * 2026-08-29（Issue #446）: 3 → 6 へ広げた。
+ * 3 は「符頭の中心から 3」なので、符頭の高さの半分（約 5）より内側で、
+ * 弧の端が符頭にめり込んで見えていた（利用者フィードバック「タイが音符とくっつきすぎ」）。
+ * 6 なら端点は符頭の縁（5）より外に出て、弧の線の太さ（端 0.10 sp ＝ 半分 0.5）を
+ * 足しても符頭に触れない。浄書（Behind Bars）でもタイは符頭からわずかに離して描く。
+ *
+ * これ以上（7 以上）広げると、「線間にある音符」のタイの端が
+ * 隣の五線の線を越えて見えるため、まずはここから始める。
  */
-export const ARC_NOTEHEAD_GAP = 3;
+export const ARC_NOTEHEAD_GAP = 6;
+
+/**
+ * 手動で端点をずらした弧に使う、従来の隙間（SVG 論理単位）。
+ *
+ * ユーザーが端点ハンドルで位置を決めた弧まで一律に押し出すと、
+ * 「せっかく合わせた位置が勝手に動く」ことになるため、
+ * 手動調整済みの端点だけは従来の 3 を使い、保存されたオフセットの意味を保つ。
+ */
+export const ARC_NOTEHEAD_GAP_LEGACY = 3;
 
 /**
  * 端点を符幹の先端に付けるときの隙間（SVG 論理単位）。
@@ -25,6 +42,16 @@ export const ARC_NOTEHEAD_GAP = 3;
  * 16分音符のように本数が増えても外側の位置は変わらない）。
  */
 export const ARC_STEM_TIP_GAP = 5;
+
+/**
+ * その端点をユーザーが手動でずらしているか（Issue #446）。
+ *
+ * 保存値は「未調整（undefined）」と「調整したが結果ゼロ（0）」が混ざるので、
+ * どちらも「動かしていない」とみなして既定の隙間を適用する。
+ */
+export function hasManualArcEndpointOffset(dx?: number, dy?: number): boolean {
+  return (dx ?? 0) !== 0 || (dy ?? 0) !== 0;
+}
 
 /**
  * その弧の端点を符幹側へアンカーするかどうか。
@@ -57,15 +84,19 @@ export function shouldAnchorArcToStemSide(params: {
  * @param stemTipY   その音符の符幹先端のY（符幹が無い音符・取得できない場合は undefined）
  * @param upward     弧が上へふくらむか
  * @param anchorToStem `shouldAnchorArcToStemSide()` の結果
+ * @param hasManualEndpointOffset その端点をユーザーが手動でずらしているか（Issue #446）。
+ *        true なら隙間を広げず従来値のままにして、保存済みの位置を動かさない
  */
 export function resolveArcEndpointY(params: {
   noteheadY: number;
   stemTipY?: number;
   upward: boolean;
   anchorToStem: boolean;
+  hasManualEndpointOffset?: boolean;
 }): number {
-  const { noteheadY, stemTipY, upward, anchorToStem } = params;
-  const noteheadAnchored = noteheadY + (upward ? -ARC_NOTEHEAD_GAP : ARC_NOTEHEAD_GAP);
+  const { noteheadY, stemTipY, upward, anchorToStem, hasManualEndpointOffset = false } = params;
+  const gap = hasManualEndpointOffset ? ARC_NOTEHEAD_GAP_LEGACY : ARC_NOTEHEAD_GAP;
+  const noteheadAnchored = noteheadY + (upward ? -gap : gap);
   if (!anchorToStem || stemTipY === undefined || !Number.isFinite(stemTipY)) {
     return noteheadAnchored;
   }
