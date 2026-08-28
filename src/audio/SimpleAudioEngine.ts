@@ -464,12 +464,19 @@ export class SimpleAudioEngine implements PlaybackEngine {
               ? (microtoneForFirstKey.type === 'quarterSharp' ? 50 : -50)
               : 0;
             const frequency = this.noteToFrequency(event.keys[0], centsOffset);
-            // タイの開始音は、結ばれた先の音価ぶんだけ長く鳴らす。
+            // タイの開始音は、連鎖の終端（記譜どおりの位置）まで鳴らす。
+            // スウィングで開始が動いた場合も「終端は動かない」ので、単純に
+            // 変換後の長さへ extend を足すのではなく、終端から逆算する
+            // （表拍8分+裏拍8分のタイが 7/6 拍に伸びる誤差の防止・Codex round1 P1）。
             // 次の音の位置（currentTime）は下で duration のまま進めるのでテンポは崩れない。
-            const tieExtendSeconds = (event.tieExtendBeatsByKey?.[primaryKey] ?? 0) * secondsPerBeat;
+            const tieExtendBeats = event.tieExtendBeatsByKey?.[primaryKey] ?? 0;
+            const tiedSoundDuration = tieExtendBeats > 0
+              ? ((nominalStartBeat + nominalDurationBeats + tieExtendBeats) - swingTiming.startBeat)
+                * secondsPerBeat * (event.durationScale ?? 1)
+              : soundDuration;
             await this.playNoteAtTime(
               frequency,
-              soundDuration + tieExtendSeconds,
+              tiedSoundDuration,
               eventStartTime,
               this.normalizePlaybackVelocity((event as { velocity?: number }).velocity)
             );

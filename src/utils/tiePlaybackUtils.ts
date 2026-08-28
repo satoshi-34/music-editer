@@ -53,7 +53,11 @@ type TieEdge = {
   voiceIndex: number;
   toEventIndex: number;
   toKey: string;
-  /** 継続音の長さ（拍）。開始音へ足し込む値 */
+  /**
+   * 開始音の鳴り終わりから終点音の鳴り終わりまでの拍数（開始音へ足し込む値）。
+   * 終点音自身の音価だけでなく、間に挟まるイベントや小節の残り拍も含む実時間で持つ。
+   * （タイは入力上、間にイベントを挟んだ後続音へも張れるため。Codex round1 P2）
+   */
   beats: number;
 };
 
@@ -99,7 +103,44 @@ function resolveTargetExpandedIndex(
  */
 export function buildTiePlaybackPlan(
   expandedMeasures: TiePlaybackExpandedMeasure[],
+  /**
+   * 各小節が最低限占める拍数（拍子ぶん。ScorePage が measureBeats として
+   * エンジンへ渡すのと同じ値）。小節をまたぐタイの「実時間」を、エンジンの
+   * 小節送り（内容と拍子長の大きい方）と同じ物差しで数えるために使う。
+   * 省略時は各小節の内容拍のみで数える（旧挙動互換・テスト用）。
+   */
+  measureBeatsFloor?: number,
 ): TiePlaybackPlan {
+  // タイの実時間を数えるための絶対位置表:
+  // - measureTimelineStart[mi] = その小節の開始が再生タイムライン上で何拍目か
+  // - startBeatOf: 各イベントの小節内開始拍（声部ごとの累積）
+  const measureTimelineStart: number[] = [];
+  const startBeatByHead = new Map<string, number>(); // key: `mi:vi:ei` -> 小節内開始拍
+  {
+    let timeline = 0;
+    expandedMeasures.forEach((expandedMeasure, mi) => {
+      measureTimelineStart.push(timeline);
+      let maxVoiceBeats = 0;
+      const voices = getMeasureVoices(expandedMeasure.measure);
+      voices.forEach((voice, vi) => {
+        let cursor = 0;
+        voice.events?.forEach((event, ei) => {
+          startBeatByHead.set(buildTiePlaybackEventKey(mi, vi, ei), cursor);
+          cursor += getEventDurationBeats(event);
+        });
+        maxVoiceBeats = Math.max(maxVoiceBeats, cursor);
+      });
+      // エンジンと同じ小節送り: 内容の実長と拍子長の大きい方
+      timeline += Math.max(maxVoiceBeats, measureBeatsFloor ?? 0);
+    });
+  }
+  /** イベントの「鳴り終わり」がタイムライン上で何拍目か */
+  const absoluteEndBeat = (mi: number, vi: number, ei: number, durBeats: number): number | null => {
+    const start = startBeatByHead.get(buildTiePlaybackEventKey(mi, vi, ei));
+    if (start == null) return null;
+    return measureTimelineStart[mi] + start + durBeats;
+  };
+
   // 符頭ID -> 次の符頭（タイ1本ぶん）。連鎖（A—B—C）はこの辺をたどって伸ばす。
   const edges = new Map<string, TieEdge>();
   // 「誰かのタイの終点になっている」符頭。連鎖の先頭を見つけるために使う。
@@ -143,12 +184,23 @@ export function buildTiePlaybackPlan(
           );
           // 1つの符頭から2本以上タイが出ることは記譜上ありえない。最初の1本だけ採用する。
           if (edges.has(fromId)) return;
+          // 伸ばす量は「開始音の鳴り終わり → 終点音の鳴り終わり」の実時間。
+          // 終点音の音価だけを足すと、間にイベントを挟んだタイや、小節末尾以外から
+          // 次小節へ渡るタイで隙間の時間が欠落する（Codex round1 P2）
+          const sourceEnd = absoluteEndBeat(
+            expandedMeasureIndex, voiceIndex, eventIndex, getEventDurationBeats(event));
+          const targetEnd = absoluteEndBeat(
+            toExpandedMeasureIndex, voiceIndex, arc.toEventIndex, getEventDurationBeats(targetEvent));
+          if (sourceEnd == null || targetEnd == null) return;
+          const beats = targetEnd - sourceEnd;
+          // 壊れたデータ（終点が手前で終わる等）は繋げず記譜どおり2音で鳴らす（安全側）
+          if (beats <= 0) return;
           edges.set(fromId, {
             toExpandedMeasureIndex,
             voiceIndex,
             toEventIndex: arc.toEventIndex,
             toKey: arc.toKey,
-            beats: getEventDurationBeats(targetEvent),
+            beats,
           });
           targetIds.add(toId);
         });

@@ -1348,7 +1348,7 @@ export default function ScorePage() {
             // タイ（同じ高さの音を結んで1音として伸ばす記号）を再生へ反映する計画。
             // 強弱と違って**切ったあとの列**で解決する: 開始音が開始位置より前にあって
             // 切り落とされた継続音は、抑制せずそのまま鳴らしたい（途中再生で音が消えないため）。
-            const tiePlan = buildTiePlaybackPlan(expandedMeasures);
+            const tiePlan = buildTiePlaybackPlan(expandedMeasures, getMeasureBeats(scoreTimeSignature));
 
             return {
               // 編成譜ではパート定義に再生楽器を持たせている。

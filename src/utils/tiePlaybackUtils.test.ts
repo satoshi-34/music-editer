@@ -198,3 +198,42 @@ describe('buildTiePlaybackPlan', () => {
     expect(adjustmentAt(plan, 1, 0, 0)?.suppressedKeys).toEqual(['c/4']);
   });
 });
+
+// Codex round1 P2: タイは入力上、間にイベントを挟んだ後続音へも張れる。
+// 終点音の音価だけを足すと隙間の時間が欠落し、終点区間で音が消える
+describe('隙間のあるタイの実時間（Codex round1 P2）', () => {
+  it('間にイベントを挟むタイは「開始音の鳴り終わり→終点音の鳴り終わり」の実時間で伸ばす', () => {
+    // 8分C → 8分D → 8分C で、1音目と3音目をタイで結ぶ
+    const events = [
+      { dur: '8' as const, isRest: false, keys: ['c/4'], arcs: [{ fromKey: 'c/4', toKey: 'c/4', toMeasureIndex: 0, toEventIndex: 2, kind: 'tie' as const }] },
+      { dur: '8' as const, isRest: false, keys: ['d/4'] },
+      { dur: '8' as const, isRest: false, keys: ['c/4'] },
+    ];
+    const plan = buildTiePlaybackPlan([
+      { sourceMeasureIndex: 0, measure: { events, voices: [{ id: 'voice-1', events }] } },
+    ]);
+    // 開始音の終わり=0.5拍・終点音の終わり=1.5拍 → 1.0拍伸ばす（終点音価0.5だけでは不足）
+    expect(plan.get(buildTiePlaybackEventKey(0, 0, 0))?.extendBeatsByKey['c/4']).toBeCloseTo(1.0, 10);
+    expect(plan.get(buildTiePlaybackEventKey(0, 0, 2))?.suppressedKeys).toContain('c/4');
+  });
+
+  it('小節末尾以外から次小節頭以外へ渡るタイも、小節の残り拍を含む実時間で伸ばす', () => {
+    // 1小節目: 4分C + 4分休符×3（Cは1拍目で終わる）。2小節目: 4分D + 4分C（Cは2拍目に開始）
+    const m1 = [
+      { dur: '4' as const, isRest: false, keys: ['c/4'], arcs: [{ fromKey: 'c/4', toKey: 'c/4', toMeasureIndex: 1, toEventIndex: 1, kind: 'tie' as const }] },
+      { dur: '4' as const, isRest: true, keys: ['b/4'] },
+      { dur: '4' as const, isRest: true, keys: ['b/4'] },
+      { dur: '4' as const, isRest: true, keys: ['b/4'] },
+    ];
+    const m2 = [
+      { dur: '4' as const, isRest: false, keys: ['d/4'] },
+      { dur: '4' as const, isRest: false, keys: ['c/4'] },
+    ];
+    const plan = buildTiePlaybackPlan([
+      { sourceMeasureIndex: 0, measure: { events: m1, voices: [{ id: 'voice-1', events: m1 }] } },
+      { sourceMeasureIndex: 1, measure: { events: m2, voices: [{ id: 'voice-1', events: m2 }] } },
+    ], 4);
+    // 開始音の終わり=1拍目・終点音の終わり=タイムライン6拍目（4+2） → 5拍伸ばす
+    expect(plan.get(buildTiePlaybackEventKey(0, 0, 0))?.extendBeatsByKey['c/4']).toBeCloseTo(5.0, 10);
+  });
+});

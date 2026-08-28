@@ -216,13 +216,19 @@ export class SoundFontEngine implements PlaybackEngine {
               // タイの継続音は開始音の中で鳴り続けているので、ここでは鳴らさない。
               // （鳴らすと「タン・タン」と2回聞こえてしまう）
               if (event.tieSuppressedKeys?.includes(key)) return;
-              // タイの開始音は、結ばれた先の音価ぶんだけ長く鳴らす。
+              // タイの開始音は、連鎖の終端（記譜どおりの位置）まで鳴らす。
+              // スウィングで開始が動いても終端は動かないため、終端から逆算する
+              // （変換後の長さへ extend を足すと表拍/裏拍で長短の誤差が出る・Codex round1 P1）。
               // 開始位置と次の音までの間隔は変えないので、テンポは崩れない。
-              const tieExtendSeconds = (event.tieExtendBeatsByKey?.[key] ?? 0) * (60 / bpm);
+              const tieExtendBeats = event.tieExtendBeatsByKey?.[key] ?? 0;
+              const tiedSoundDuration = tieExtendBeats > 0
+                ? ((nominalStartBeat + durationBeats + tieExtendBeats) - swingTiming.startBeat)
+                  * (60 / bpm) * (event.durationScale ?? 1)
+                : soundDuration;
               player.play(
                 this.normalizeNoteFormat(key),
                 eventStartTime,
-                this.buildPlaybackOptions(soundDuration + tieExtendSeconds, velocity)
+                this.buildPlaybackOptions(tiedSoundDuration, velocity)
               );
             });
           }

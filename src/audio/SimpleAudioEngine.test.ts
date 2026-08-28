@@ -188,6 +188,50 @@ describe('SimpleAudioEngine', () => {
     });
   });
 
+  describe('スウィングON時のタイの長さ（Codex round1 P1）', () => {
+    type PlayNoteAtTimeHost = {
+      playNoteAtTime: (frequency: number, duration: number, startTime: number, velocity?: number) => Promise<void>;
+    };
+    const internals = (target: SimpleAudioEngine) => target as unknown as PlayNoteAtTimeHost;
+
+    it('表拍8分+裏拍8分のタイは、スウィングでも合計1拍で鳴り終わる', async () => {
+      await engine.initialize();
+      engine.setSwingEnabled(true);
+      const spy = vi.spyOn(internals(engine), 'playNoteAtTime').mockResolvedValue(undefined);
+      await engine.playScore([
+        {
+          events: [
+            { dur: '8', isRest: false, keys: ['c/4'], tieExtendBeatsByKey: { 'c/4': 0.5 } },
+            { dur: '8', isRest: false, keys: ['c/4'], tieSuppressedKeys: ['c/4'] }
+          ],
+          measureBeats: 4
+        }
+      ], 120);
+      expect(spy).toHaveBeenCalledTimes(1);
+      // 表拍開始は動かないので、鳴りは 1拍 = 0.5秒（2/3+0.5 の 7/6 拍にならない）
+      expect(spy.mock.calls[0][1]).toBeCloseTo(0.5, 5);
+    });
+
+    it('裏拍から始まるタイは、スウィング後の開始から連鎖終端までの長さで鳴る', async () => {
+      await engine.initialize();
+      engine.setSwingEnabled(true);
+      const spy = vi.spyOn(internals(engine), 'playNoteAtTime').mockResolvedValue(undefined);
+      await engine.playScore([
+        {
+          events: [
+            { dur: '8', isRest: false, keys: ['d/4'] },
+            { dur: '8', isRest: false, keys: ['c/4'], tieExtendBeatsByKey: { 'c/4': 1 } },
+            { dur: '4', isRest: false, keys: ['c/4'], tieSuppressedKeys: ['c/4'] }
+          ],
+          measureBeats: 4
+        }
+      ], 120);
+      expect(spy).toHaveBeenCalledTimes(2);
+      // 裏拍開始は 2/3 拍へ動く。連鎖終端は記譜どおり 2 拍目 → 鳴りは 4/3 拍 = 2/3 秒
+      expect(spy.mock.calls[1][1]).toBeCloseTo((4 / 3) * 0.5, 5);
+    });
+  });
+
   describe('durationToSeconds の付点・連符反映（PR #479 で発覚した既存の穴の修正）', () => {
     it('付点は 1.5 倍・複付点は 1.75 倍・三連は 2/3 倍で計算される', () => {
       const base = engine.durationToSeconds('4', 120);
