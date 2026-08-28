@@ -12,6 +12,7 @@ import QuartetStaff from './QuartetStaff';
 import EnsembleStaff from './EnsembleStaff';
 import PartExtractionStaff from './PartExtractionStaff';
 import { QUARTET_PART_CONFIGS } from './QuartetStaff';
+import { extractMusicXmlFromMxl, isMxlContainer, MxlExtractError } from '../utils/mxlUtils';
 import SymbolEditor from './SymbolEditor';
 import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
@@ -160,6 +161,7 @@ import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRe
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildTiePlaybackEventKey, buildTiePlaybackPlan } from '../utils/tiePlaybackUtils';
+import { expandTrillForPlayback } from '../utils/ornamentPlaybackUtils';
 import {
   canUseTimeSignatureSymbol,
   formatTimeSignature,
@@ -179,6 +181,7 @@ import {
   describeClearedMeasures,
   describePlaybackFromMeasure,
   describeLegacyImportResult,
+  describeMxlExtractFailed,
   describeWorkHistoryRestoreBlocked,
   describeWorkHistoryRestored,
   describeSliceClearNoop,
@@ -1309,6 +1312,23 @@ export default function ScorePage() {
           const startExpandedIndex = startMeasure > 0
             ? findPlaybackStartExpandedIndex(referenceExpanded, startMeasure)
             : 0;
+          // トリル再生の上隣接音は「その小節で有効な調号」の音階から決める。
+          // 途中調号は**譜面本来の最上段**の小節にだけ保存される設計（handleKeySigConfirm）。
+          // パート譜表示中は parts が選択パートだけに絞られていて parts[0] が最上段とは
+          // 限らないため、調号参照は譜種ごとの正本の最上段から別途取る（Codex round2）。
+          // 展開順ではなく元小節の位置（sourceMeasureIndex）で resolveMeasureKeySignature を
+          // 引くことで、リピート折返し後も「その小節の見た目どおりの調号」になる（画面表示と同じ関数）
+          const keySigReferenceMeasures = scoreType === 'quartet'
+            ? (quartetParts[0] ?? [])
+            : scoreType === 'ensemble'
+              ? (ensembleParts[0] ?? [])
+              : (rightHandData ?? []);
+          const effectiveKeySignatures = referenceExpanded.map((item) =>
+            resolveMeasureKeySignature(keySigReferenceMeasures, item.sourceMeasureIndex, keySignature));
+          // スウィング対象になり得る音（付点なし8分・複合拍子でない）はトリル展開しない。
+          // 32分へ割るとエンジンのスウィング判定（8分のみ）から外れ、
+          // 実音とハイライトの位置がずれるため（裏拍の 2/3 シフトが消える）
+          const swingActive = soundRuntimeSettings.swingEnabled && !isCompoundTimeSignature(scoreTimeSignature);
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
@@ -1341,7 +1361,7 @@ export default function ScorePage() {
                 measureBeats: getMeasureBeats(scoreTimeSignature),
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
-                events: flattenMeasureForPlayback(item.measure).map((event, eventIndex) => {
+                events: flattenMeasureForPlayback(item.measure).flatMap((event, eventIndex) => {
                   // アーティキュレーション（スタッカート＝短く、アクセント＝強く 等）を
                   // 音の長さ・音量の倍率として取り出す。
                   const articulation = getArticulationPlaybackEffect(event);
@@ -1355,7 +1375,7 @@ export default function ScorePage() {
                   const tieAdjustment = tiePlan.get(
                     buildTiePlaybackEventKey(expandedMeasureIndex, event.voiceIndex, event.eventIndex)
                   );
-                  return {
+                  const playbackEvent = {
                     ...event,
                     // 強弱未設定や休符では velocity を省略し、
                     // エンジン側の安全な既定値 0.5 をそのまま使う。
@@ -1374,6 +1394,16 @@ export default function ScorePage() {
                       ? tieAdjustment.suppressedKeys
                       : undefined,
                   };
+                  // トリルは主音と上隣接音（その小節の調号に沿う）の交互連打へ展開して鳴らす。
+                  // トリル以外・展開できない形・スウィング対象の音はそのまま1イベントで返る（挙動不変）。
+                  // タイの延長・抑制が付いた音は展開しない（タイで伸びた長さの中で
+                  // 交互連打を組む対応は別課題。展開するとタイ情報がサブ音符へ複製され拍が壊れる）
+                  if (tieAdjustment) return [playbackEvent];
+                  return expandTrillForPlayback(
+                    playbackEvent,
+                    effectiveKeySignatures[expandedMeasureIndex + startExpandedIndex] ?? keySignature,
+                    { swingActive },
+                  );
                 })
               }))
             };
@@ -1457,7 +1487,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -4290,7 +4320,32 @@ export default function ScorePage() {
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
-        const xml = ev.target?.result as string;
+        // 常にバイト列で読み、ZIP（= .mxl 圧縮MusicXML・Finale の既定書き出し）なら
+        // 展開して本文を取り出す（Issue #465）。非圧縮はそのまま UTF-8 として読む。
+        // 拡張子ではなくマジックバイトで判定するので、「.xml なのに実は zip」も救える
+        const buffer = ev.target?.result as ArrayBuffer;
+        const bytes = new Uint8Array(buffer);
+        let xml: string;
+        if (isMxlContainer(bytes)) {
+          try {
+            xml = extractMusicXmlFromMxl(bytes);
+          } catch (mxlErr) {
+            if (mxlErr instanceof MxlExtractError) {
+              notifyScoreEdit(describeMxlExtractFailed(mxlErr.reason));
+              if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
+              return;
+            }
+            throw mxlErr;
+          }
+        } else if (file.name.toLowerCase().endsWith('.mxl')) {
+          // .mxl と名乗っているのに ZIP マジックが無い＝先頭破損など。
+          // 一般の XML パース失敗 alert に落とさず、理由つきで通知する（#318）
+          notifyScoreEdit(describeMxlExtractFailed('notZip'));
+          if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
+          return;
+        } else {
+          xml = new TextDecoder('utf-8').decode(bytes);
+        }
         const loaded = parseMusicXml(xml);
         // applyLoadedScoreData と同等のロジックで画面に反映する
         // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
@@ -4354,7 +4409,7 @@ export default function ScorePage() {
       // 同じファイルを再度選択できるよう値をリセットする
       if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
     };
-    reader.readAsText(file);
+    reader.readAsArrayBuffer(file);
   }, [setTimeSignature, measuresPerSystem]);
 
   const [hasCustomPianoSample, setHasCustomPianoSample] = useState<boolean>(() => hasCustomPianoDemoScore());
@@ -5706,7 +5761,7 @@ export default function ScorePage() {
                 type="file"
                 tabIndex={-1}
                 aria-hidden="true"
-                accept=".xml,.musicxml,application/xml,text/xml,application/vnd.recordare.musicxml+xml"
+                accept=".xml,.musicxml,.mxl,application/xml,text/xml,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml"
                 style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
                 onChange={handleImportMusicXml}
               />

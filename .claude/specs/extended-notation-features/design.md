@@ -62,7 +62,7 @@ VexFlow コード文字列   → グリフ（SMuFL glyph）        → 見た目
     `'mordentInverted'` → `<inverted-mordent/>`、`'turn'` → `<turn/>`
     （MusicXML 側の命名は音楽用語通りで VexFlow のようなねじれはない。`<mordent/>`=下、`<inverted-mordent/>`=上）
   - 読み込み: `<mordent>` / `<inverted-mordent>` / `<turn>` 要素の有無から `ornament` を復元
-- 再生: 表示のみ（トリルと同じ扱い）。装飾音を実際に鳴らす処理は未実装
+- 再生: モルデント/プラルトリラー/ターンは表示のみ。**トリルだけは 2026-08-29 に再生対応**（下の「トリルの再生対応」の節を参照）
 - 保存/読込・Undo: 既存の `ornament` フィールドと同じ経路（`setScore` のスナップショット履歴）に乗るため追加対応不要（動作確認済み）
 - テスト: `src/utils/musicXmlOrnament.test.ts` を新規作成し、以下を検証
   - 4種類の装飾記号それぞれの MusicXML 書き出し
@@ -653,3 +653,33 @@ export interface HairpinMark {
 （`PaletteDoubleAccidentalDescresc.test.tsx` の `aria-label` 前方一致も同じ理由で
 「デクレッシェンド（」まで含めた）。**UI 文言を増やすときは、既存テストの
 `getByRole` 名前検索が一意でなくなっていないかを確認する**。
+
+## トリルの再生対応（2026-08-29・弟フィードバック）
+
+装飾記号はこれまで見た目だけで、再生では主音符が1回鳴るだけだった。トリルを
+**主音と上隣接音（その小節で有効な調号の音階上の音）の交互連打**として鳴らす。
+
+- 実装は純関数 `src/utils/ornamentPlaybackUtils.ts` の `expandTrillForPlayback`。
+  ScorePage が playParts へ渡すイベント列を組むところ（velocity/durationScale 付与の直後）で
+  flatMap するだけなので、内蔵音源と SoundFont の**両エンジンへ同時に効き、エンジン側は無変更**
+- サブ音符は 32分（短い主音符は 64分）で、dots は個数へ換算・tuplet は倍率として引き継ぐ
+  （サブ音符の合計拍 = 元の音価。厳密に割り切れる分割だけを使い、拍を一切壊さない）。
+  tuplet id は再生専用の別 id（描画側の「同一 id 連続」数えと衝突させない）
+- 交互は主音から始め、**最後は必ず主音**で終える（上隣接音で切れると解決感がないため）
+- 途中調号は譜面本来の最上段にだけ保存される設計のため、**全パート共通で譜種ごとの正本の
+  最上段（quartetParts[0] / ensembleParts[0] / rightHandData）から** resolveMeasureKeySignature
+  （画面表示と同じ関数）で解決する。パート譜表示中は再生対象の parts が選択パートだけに
+  絞られるため、絞り込みと独立に正本を参照する（Codex round2）。元小節の位置
+  （sourceMeasureIndex）で引くので、リピート折返し後もその小節の見た目どおりの調号になる
+- スウィングON時、スウィング対象になり得る音（付点なし8分・複合拍子でない）は展開しない
+  （32分へ割るとエンジンのスウィング判定から外れ、実音とハイライトがずれるため）
+- 内蔵音源（SimpleAudioEngine）の durationToSeconds が dots / tuplet を無視していた
+  既存の穴も同時に修正（付点・連符イベントの並び時間が正しくなる。SoundFont と同式）
+- 展開しない形（挙動不変）: 休符・和音・微分音つき・32分/64分の主音符（4分割未満）・
+  トリル以外の装飾（モルデント/プラルトリラー/ターンは「残り時間ぶん主音を伸ばす」表現に
+  任意長の音価が必要で dur 文字列で表せないため対象外。対応するなら別Issueで
+  PlaybackMeasureEvent へ「拍数直接指定」を足すところから）
+- テスト: ornamentPlaybackUtils.test.ts（11件）+ SimpleAudioEngine.test.ts（付点/連符の時間）
+  + ScorePageTrillPlayback.test.tsx 4件（基本展開・UI 調号変更後の再生=useCallback deps の
+  再発防止・右手の途中調号が左手のトリルへ効くこと・Viola パート譜表示でも Violin I の
+  途中調号が効くこと。エンジンをモックして実マウントで固定）

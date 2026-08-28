@@ -188,6 +188,17 @@ describe('SimpleAudioEngine', () => {
     });
   });
 
+  describe('durationToSeconds の付点・連符反映（PR #479 で発覚した既存の穴の修正）', () => {
+    it('付点は 1.5 倍・複付点は 1.75 倍・三連は 2/3 倍で計算される', () => {
+      const base = engine.durationToSeconds('4', 120);
+      expect(base).toBeCloseTo(0.5, 10);
+      expect(engine.durationToSeconds('4', 120, 1)).toBeCloseTo(0.75, 10);
+      expect(engine.durationToSeconds('4', 120, 2)).toBeCloseTo(0.875, 10);
+      expect(engine.durationToSeconds('8', 120, undefined, { numNotes: 3, notesOccupied: 2 }))
+        .toBeCloseTo(0.25 * (2 / 3), 10);
+    });
+  });
+
   describe('ダブルシャープ・ダブルフラットの周波数計算（Issue #423）', () => {
     it('𝄪 は全音上、𝄫 は全音下の音として鳴る', () => {
       const d4 = engine.noteToFrequency('d/4');
