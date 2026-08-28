@@ -90,7 +90,7 @@ describe('describeTool', () => {
     [{ mode: 'measureKeySig' }, '途中調号変更'],
     [{ mode: 'graceNote' }, '前打音'],
     [{ mode: 'pedal', pedalType: 'down' }, 'ペダル（Ped）'],
-    [{ mode: 'hairpin', hairpinType: 'dim' }, '松葉（ディミヌエンド＞）'],
+    [{ mode: 'hairpin', hairpinType: 'dim' }, '松葉（デクレッシェンド＞）'],
     [{ mode: 'ottava', ottavaType: '8vaEnd' }, '8va の終わり'],
     [{ mode: 'crossStaffToggle' }, '段またぎ表示の切替'],
     [{ mode: 'symbolAdjustOffset' }, '記号の位置調整'],

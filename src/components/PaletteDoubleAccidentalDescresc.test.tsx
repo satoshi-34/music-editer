@@ -55,7 +55,9 @@ describe('Palette descresc.（Issue #423）', () => {
       <Palette value={{ duration: '4' }} onChange={onChange} section="symbols" />
     );
 
-    const btn = buttonByLabelPrefix(container, 'デクレッシェンド');
+    // 「デクレッシェンドの松葉＞」（Issue #444）と区別するため、
+    // 文字表記ボタンだけに一致する「デクレッシェンド（」まで含めて探す
+    const btn = buttonByLabelPrefix(container, 'デクレッシェンド（');
     // ボタンの表記は譜面に描かれる文字と同じ（表記の正本は editorContextLabels）
     expect(btn.textContent).toBe('descresc.');
 

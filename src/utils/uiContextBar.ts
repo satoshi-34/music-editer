@@ -116,7 +116,7 @@ export function describeTool(tool: Tool, customSymbolNames?: Record<string, stri
     case 'ornament': return ornamentLabel(tool.ornamentType);
     case 'pedal': return tool.pedalType === 'down' ? 'ペダル（Ped）' : 'ペダル解除（✱）';
     case 'ottava': return ottavaLabel(tool.ottavaType);
-    case 'hairpin': return tool.hairpinType === 'cresc' ? '松葉（クレッシェンド＜）' : '松葉（ディミヌエンド＞）';
+    case 'hairpin': return tool.hairpinType === 'cresc' ? '松葉（クレッシェンド＜）' : '松葉（デクレッシェンド＞）';
     default: {
       // 将来ツールを増やしたときに「バーだけ更新し忘れる」ことがないよう、
       // 網羅していない場合はここで型エラーになるようにしておく（never 検査）

@@ -109,7 +109,11 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
     }, { timeout: 15000 });
 
     fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
-    fireEvent.click(await screen.findByRole('button', { name: /デクレッシェンド/ }, { timeout: 15000 }));
+    // 松葉＞ボタンも「デクレッシェンドの松葉＞…」という名前になった（Issue #444）ため、
+    // /デクレッシェンド/ だけだと2件マッチしてしまう。文字表記の descresc. ボタンだけを指す
+    fireEvent.click(
+      await screen.findByRole('button', { name: /^デクレッシェンド（dim\./ }, { timeout: 15000 })
+    );
     fireEvent.click(firstNoteHit());
 
     await waitFor(() => {
