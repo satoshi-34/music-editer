@@ -1,7 +1,7 @@
 // 「開く」ボタン群→隠しファイル入力の配線（#464）。
 // Safari は display:none の file input へのプログラム .click() を無視することがあり、
 // また拡張子のみの accept 指定を正しく解釈しないことがある（2026-08-28 実機で発生）。
-// ScorePage 実マウントで「メニュー選択が対応する input の click を呼ぶ」
+// ScorePage 実マウントで「ボタンが対応する input の click を呼ぶ」
 // 「display:none ではない」「a11y 上は隠れている」「accept に MIME 併記」を固定する。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, fireEvent, screen, within } from '@testing-library/react';
@@ -81,8 +81,23 @@ describe('開くボタン群と隠しファイル入力の配線（#464）', () 
   }, 60000);
 
   it('旧・手動保存がある環境では「以前の手動保存」ボタンが出て、取り込みが動く', async () => {
-    // 旧スロット（music-score-app-data 系）に手動保存データを仕込む
-    const { saveScoreData, createSavedScoreData } = await import('../utils/storage');
+    // 検出力の要（Codex round2 P2）: 起動時の自動移行が旧保存を復元してしまうと、
+    // ボタンを押さなくても曲名が出て試験が素通りする。**別タイトルの現行作品**を
+    // 先に用意して自動移行を経路から外し、「クリック前=現行作品／クリック後=旧保存の曲」
+    // の切り替わりで onClick の配線そのものを検証する
+    const { saveScoreData, createSavedScoreData, createWork, saveWorkAutosaveData, setLastOpenedWorkId } = await import('../utils/storage');
+    const currentEvents = [
+      { dur: '1' as const, isRest: false, keys: ['g/4'] },
+    ];
+    const currentWork = createSavedScoreData(
+      { title: '現行の作品', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: currentEvents, voices: [{ id: 'voice-1', events: currentEvents }] }] }],
+      1, 1, 'single'
+    );
+    const created = createWork('現行の作品');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, currentWork);
+    setLastOpenedWorkId(created.data.id);
     const events = [
       { dur: '4' as const, isRest: false, keys: ['c/5'] },
       { dur: '4' as const, isRest: false, keys: ['d/5'] },
@@ -100,14 +115,18 @@ describe('開くボタン群と隠しファイル入力の配線（#464）', () 
     await waitFor(() => {
       expect(document.querySelector('rect.vf-hit')).toBeTruthy();
     }, { timeout: 15000 });
-    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    // クリック前は現行作品が開いており、旧保存の曲名はまだ画面に無い
+    expect(document.body.textContent).toContain('現行の作品');
+    expect(document.body.textContent).not.toContain('旧保存の曲');
 
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
     const openGroup = screen.getByRole('group', { name: '開く' });
     const legacyButton = within(openGroup).getByRole('button', { name: '以前の手動保存' });
     fireEvent.click(legacyButton);
-    // 取り込み完了（または結果）の通知が出て、タイトルが取り込んだ曲になる
+    // クリック後に旧保存の曲へ切り替わり、取り込み完了の通知が出る
     await waitFor(() => {
       expect(document.body.textContent).toContain('旧保存の曲');
+      expect(document.body.textContent).toContain('以前の手動保存を新しい作品として取り込みました');
     }, { timeout: 15000 });
   }, 60000);
 });

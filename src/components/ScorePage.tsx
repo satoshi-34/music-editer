@@ -587,7 +587,7 @@ export default function ScorePage() {
    */
   const lastAutosaveCompletedAtRef = useRef(Date.now());
   // localStorage 自体は React の state ではないため、読んでも自動では再描画されない。
-  // 「開く」メニューに「以前の手動保存を取り込む」を出すかどうか（旧スロットの有無）を
+  // 「開く」に「以前の手動保存」ボタンを出すかどうか（旧スロットの有無）を
   // 画面状態として持ち、取り込みの節目で更新する（#109 第4段）。
   const [storedDataAvailable, setStoredDataAvailable] = useState(() => hasStoredData());
   // 起動時のサイレント復元（自動保存データがあれば続きから編集できるようにする）が
@@ -5633,9 +5633,9 @@ export default function ScorePage() {
                 style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
                 onChange={handleImportFile}
               />
-              {/* 書き出しメニューと「開く」ボタン群（#109 第4段→#464 続報で開く側をボタン化）。個別ボタンの羅列をやめ、
-                  既存の編成選択と同じ select パターンで形式だけを選ぶ。
-                  value は常に空（実行のたびにプレースホルダーへ戻る） */}
+              {/* 書き出しメニューと「開く」ボタン群（#109 第4段→#464 続報で開く側をボタン化）。
+                  書き出しは select（value は常に空・実行のたびにプレースホルダーへ戻る）、
+                  開くは Safari の user activation 制約によりボタン（設計書 save-load-redesign 参照） */}
               <label className="toolbar-select-label" title="譜面をファイルや他形式で書き出します">
                 <span>書き出し</span>
                 <select value="" onChange={handleExportMenu} aria-label="書き出し">
