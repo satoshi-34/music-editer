@@ -62,7 +62,7 @@ VexFlow コード文字列   → グリフ（SMuFL glyph）        → 見た目
     `'mordentInverted'` → `<inverted-mordent/>`、`'turn'` → `<turn/>`
     （MusicXML 側の命名は音楽用語通りで VexFlow のようなねじれはない。`<mordent/>`=下、`<inverted-mordent/>`=上）
   - 読み込み: `<mordent>` / `<inverted-mordent>` / `<turn>` 要素の有無から `ornament` を復元
-- 再生: 表示のみ（トリルと同じ扱い）。装飾音を実際に鳴らす処理は未実装
+- 再生: モルデント/プラルトリラー/ターンは表示のみ。**トリルだけは 2026-08-29 に再生対応**（下の「トリルの再生対応」の節を参照）
 - 保存/読込・Undo: 既存の `ornament` フィールドと同じ経路（`setScore` のスナップショット履歴）に乗るため追加対応不要（動作確認済み）
 - テスト: `src/utils/musicXmlOrnament.test.ts` を新規作成し、以下を検証
   - 4種類の装飾記号それぞれの MusicXML 書き出し
@@ -666,8 +666,10 @@ export interface HairpinMark {
   （サブ音符の合計拍 = 元の音価。厳密に割り切れる分割だけを使い、拍を一切壊さない）。
   tuplet id は再生専用の別 id（描画側の「同一 id 連続」数えと衝突させない）
 - 交互は主音から始め、**最後は必ず主音**で終える（上隣接音で切れると解決感がないため）
-- 途中調号は最上段（parts[0]）にだけ保存される設計のため、**全パート共通で最上段の小節列から**
-  resolveMeasureKeySignature（画面表示と同じ関数）で解決する。元小節の位置
+- 途中調号は譜面本来の最上段にだけ保存される設計のため、**全パート共通で譜種ごとの正本の
+  最上段（quartetParts[0] / ensembleParts[0] / rightHandData）から** resolveMeasureKeySignature
+  （画面表示と同じ関数）で解決する。パート譜表示中は再生対象の parts が選択パートだけに
+  絞られるため、絞り込みと独立に正本を参照する（Codex round2）。元小節の位置
   （sourceMeasureIndex）で引くので、リピート折返し後もその小節の見た目どおりの調号になる
 - スウィングON時、スウィング対象になり得る音（付点なし8分・複合拍子でない）は展開しない
   （32分へ割るとエンジンのスウィング判定から外れ、実音とハイライトがずれるため）
@@ -678,5 +680,6 @@ export interface HairpinMark {
   任意長の音価が必要で dur 文字列で表せないため対象外。対応するなら別Issueで
   PlaybackMeasureEvent へ「拍数直接指定」を足すところから）
 - テスト: ornamentPlaybackUtils.test.ts（11件）+ SimpleAudioEngine.test.ts（付点/連符の時間）
-  + ScorePageTrillPlayback.test.tsx 3件（基本展開・UI 調号変更後の再生=useCallback deps の
-  再発防止・右手の途中調号が左手のトリルへ効くこと。エンジンをモックして実マウントで固定）
+  + ScorePageTrillPlayback.test.tsx 4件（基本展開・UI 調号変更後の再生=useCallback deps の
+  再発防止・右手の途中調号が左手のトリルへ効くこと・Viola パート譜表示でも Violin I の
+  途中調号が効くこと。エンジンをモックして実マウントで固定）
