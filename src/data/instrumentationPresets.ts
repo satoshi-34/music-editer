@@ -82,10 +82,17 @@ const STRING_ORCHESTRA_PARTS: PartInput[] = [
   // 視覚的にひとまとめに見せたいので低弦のサブグループを追加する。
   // 弦楽四重奏では Violoncello だけなので括弧を出さず、弦楽合奏以上に展開するときだけ
   // Violoncello と Contrabass を同じ 'low-strings' にして細い括弧でまとめる。
-  ...STRING_QUARTET_PARTS.map(part => part.id === 'cello'
-    ? { ...part, subBracketGroup: 'low-strings' }
-    : part
-  ),
+  // 弦セクションの略称はオーケストラ系の従来表記（Vln. / Vla.）を保つ。
+  // 四重奏プリセットの略称互換修正（Vn. / Va.）を波及させない（Codex round3 P2）
+  ...STRING_QUARTET_PARTS.map(part => {
+    const orchestraAbbreviation =
+      part.id === 'violin-1' ? 'Vln. I'
+      : part.id === 'violin-2' ? 'Vln. II'
+      : part.id === 'viola' ? 'Vla.'
+      : part.abbreviation;
+    const withAbbr = { ...part, abbreviation: orchestraAbbreviation };
+    return part.id === 'cello' ? { ...withAbbr, subBracketGroup: 'low-strings' } : withAbbr;
+  }),
   simplePart('contrabass', 'Contrabass', 'Cb.', 'strings', 'strings', 'bass', InstrumentType.CONTRABASS, 'octave-down', 'low-strings'),
 ];
 
@@ -220,4 +227,32 @@ export function hasCustomInstrumentationLabels(
     if (!def) return true;
     return part.name !== def.name || part.abbreviation !== def.abbreviation;
   });
+}
+
+/**
+ * 旧既定の略称（Vln. I / Vln. II / Vla.）を新既定（Vn. I / Vn. II / Va.）へ移行する（#448 round3）。
+ *
+ * 四重奏の略称正本が QuartetStaff の固定値から編成定義へ移った際、
+ * プリセットの略称を従来表示（Vn. I / Va.）に合わせた。旧プリセット値で
+ * 保存された作品を開くと略称だけ旧表記（Vln. I / Vla.）へ戻ってしまうため、
+ * 復元時に「旧既定のまま＝未編集」の略称だけ差し替える。
+ * ユーザーが書き換えた略称（旧既定と一致しない値）はそのまま残す。
+ */
+export function migrateLegacyQuartetAbbreviations(
+  instrumentation: ScoreInstrumentation,
+): ScoreInstrumentation {
+  if (instrumentation.presetId !== 'string-quartet') return instrumentation;
+  const LEGACY_DEFAULT_ABBREVIATIONS: Record<string, [legacy: string, current: string]> = {
+    'violin-1': ['Vln. I', 'Vn. I'],
+    'violin-2': ['Vln. II', 'Vn. II'],
+    'viola': ['Vla.', 'Va.'],
+  };
+  let changed = false;
+  const parts = instrumentation.parts.map((part) => {
+    const entry = LEGACY_DEFAULT_ABBREVIATIONS[part.id];
+    if (!entry || part.abbreviation !== entry[0]) return part;
+    changed = true;
+    return { ...part, abbreviation: entry[1] };
+  });
+  return changed ? { ...instrumentation, parts } : instrumentation;
 }

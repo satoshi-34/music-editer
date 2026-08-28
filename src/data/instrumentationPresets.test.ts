@@ -6,6 +6,7 @@ import { totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import {
   getDefaultInstrumentationForScoreType,
   getInstrumentationPreset,
+  migrateLegacyQuartetAbbreviations,
   getScoreTypeForInstrumentation,
   INSTRUMENTATION_PRESETS,
 } from './instrumentationPresets';
@@ -118,5 +119,52 @@ describe('instrumentationPresets', () => {
     expect(preset.parts).toHaveLength(2);
     expect(preset.parts.every(part => part.staffCount === 1)).toBe(true);
     expect(totalEnsembleStaffCount(preset.parts)).toBe(2);
+  });
+});
+
+// #448 round3: 四重奏の略称互換（Vn. I / Va.）とオーケストラ系（Vln. I / Vla.）の分離
+describe('弦パートの既定略称（#448）', () => {
+  it('弦楽四重奏は QuartetStaff の従来表記（Vn. I / Vn. II / Va. / Vc.）', () => {
+    const abbrs = getInstrumentationPreset('string-quartet').parts.map(p => p.abbreviation);
+    expect(abbrs).toEqual(['Vn. I', 'Vn. II', 'Va.', 'Vc.']);
+  });
+
+  it('弦楽合奏以上の弦セクションは従来どおり Vln. I / Vln. II / Vla. のまま', () => {
+    const byId = new Map(getInstrumentationPreset('string-orchestra').parts.map(p => [p.id, p.abbreviation]));
+    expect(byId.get('violin-1')).toBe('Vln. I');
+    expect(byId.get('violin-2')).toBe('Vln. II');
+    expect(byId.get('viola')).toBe('Vla.');
+    expect(byId.get('cello')).toBe('Vc.');
+  });
+});
+
+describe('migrateLegacyQuartetAbbreviations（#448 round3）', () => {
+  it('旧既定（Vln. I / Vln. II / Vla.）の略称だけ新既定へ差し替える', () => {
+    const inst = getInstrumentationPreset('string-quartet');
+    const legacy = {
+      ...inst,
+      parts: inst.parts.map(p =>
+        p.id === 'violin-1' ? { ...p, abbreviation: 'Vln. I' }
+        : p.id === 'violin-2' ? { ...p, abbreviation: 'Vln. II' }
+        : p.id === 'viola' ? { ...p, abbreviation: 'Vla.' }
+        : p),
+    };
+    const migrated = migrateLegacyQuartetAbbreviations(legacy);
+    expect(migrated.parts.map(p => p.abbreviation)).toEqual(['Vn. I', 'Vn. II', 'Va.', 'Vc.']);
+  });
+
+  it('ユーザーが書き換えた略称は移行しない', () => {
+    const inst = getInstrumentationPreset('string-quartet');
+    const custom = {
+      ...inst,
+      parts: inst.parts.map(p => p.id === 'viola' ? { ...p, abbreviation: 'ヴィオラ' } : p),
+    };
+    const migrated = migrateLegacyQuartetAbbreviations(custom);
+    expect(migrated.parts.find(p => p.id === 'viola')?.abbreviation).toBe('ヴィオラ');
+  });
+
+  it('四重奏以外の編成（弦楽合奏など）には触れない', () => {
+    const inst = getInstrumentationPreset('string-orchestra');
+    expect(migrateLegacyQuartetAbbreviations(inst)).toBe(inst);
   });
 });

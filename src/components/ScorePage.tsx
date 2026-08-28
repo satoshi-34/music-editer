@@ -65,6 +65,7 @@ import type {
 import type { NoteEvent } from '../types/storage';
 import {
   getDefaultInstrumentationForScoreType,
+  migrateLegacyQuartetAbbreviations,
   getInstrumentationPreset,
   getScoreTypeForInstrumentation,
   hasCustomInstrumentationLabels,
@@ -2247,7 +2248,7 @@ export default function ScorePage() {
       setKeySignature(normalizeKeySignature(data.keySignature));
       await setTimeSignature(...normalizeTimeSignature(data.timeSignature));
       setScoreType(loadedType);
-      setInstrumentation(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
+      setInstrumentation(migrateLegacyQuartetAbbreviations(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType)));
       setNotationMode(data.notationMode ?? 'concert');
     setTitleFontId(resolveTitleFontOption(data.titleFontId).id);
       setTitleFontSize(normalizeTitleFontSize(data.titleFontSize));
@@ -2386,7 +2387,8 @@ export default function ScorePage() {
     setKeySignature(normalizeKeySignature(restored.keySignature));
     await setTimeSignature(...normalizeTimeSignature(restored.timeSignature));
     setScoreType(restoredType);
-    setInstrumentation(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType));
+    // 旧既定の略称（Vln. I 等）で保存された未編集の四重奏を新既定（Vn. I 等）へ移行する（#448 round3）
+    setInstrumentation(migrateLegacyQuartetAbbreviations(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType)));
     setNotationMode(restored.notationMode ?? 'concert');
     setTitleFontId(resolveTitleFontOption(restored.titleFontId).id);
     setTitleFontSize(normalizeTitleFontSize(restored.titleFontSize));

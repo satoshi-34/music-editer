@@ -171,6 +171,46 @@ describe('弦楽四重奏の楽器名・略称を編集する（Issue #448）', 
     expect(partSelect, 'パート譜セレクトに編集名').toBeTruthy();
   }, 60000);
 
+  // Codex round3 P2: 旧既定の略称（Vln. I 等）で保存された未編集作品は、
+  // 復元時に新既定（Vn. I 等）へ移行され、旧表記が画面に出ない
+  it('旧既定の略称で保存された作品を開くと、新既定の略称（Vn. I）で表示される', async () => {
+    const events = [{ dur: '1' as const, isRest: false, keys: ['c/4'] }];
+    const mk = () => ({ events, voices: [{ id: 'voice-1', events }] });
+    const inst = getDefaultInstrumentationForScoreType('quartet');
+    const legacyInst = {
+      ...inst,
+      parts: inst.parts.map((part) =>
+        part.id === 'violin-1' ? { ...part, abbreviation: 'Vln. I' }
+        : part.id === 'violin-2' ? { ...part, abbreviation: 'Vln. II' }
+        : part.id === 'viola' ? { ...part, abbreviation: 'Vla.' }
+        : part),
+    };
+    const data = createSavedScoreData(
+      { title: '旧略称移行', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'violin-1', clef: 'treble' as const, measures: [mk(), mk()] },
+        { partId: 'violin-2', clef: 'treble' as const, measures: [mk(), mk()] },
+        { partId: 'viola', clef: 'alto' as const, measures: [mk(), mk()] },
+        { partId: 'cello', clef: 'bass' as const, measures: [mk(), mk()] },
+      ],
+      2, 1, 'quartet', 'C', [4, 4], legacyInst as never
+    );
+    const created = createWork('旧略称移行');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(renderedLabels()).toContain('Violin I');
+    }, { timeout: 15000 });
+    // 復元された編成の略称が移行済みであることを、パート名編集ダイアログの実値で確かめる
+    fireEvent.click(screen.getByRole('tab', { name: '楽譜設定' }));
+    const dialog = openPartNameEditor();
+    expect((within(dialog).getByRole('textbox', { name: 'Violin Iの略称' }) as HTMLInputElement).value).toBe('Vn. I');
+    expect((within(dialog).getByRole('textbox', { name: 'Violaの略称' }) as HTMLInputElement).value).toBe('Va.');
+  }, 60000);
+
   // Codex round1 P1: 名前だけ編集した空の四重奏も自動保存される
   it('音符が空でも、パート名の編集は自動保存に残る', async () => {
     openQuartetScore();
