@@ -150,6 +150,23 @@ describe('ScorePage: .mxl（圧縮MusicXML）の読込（#465）', () => {
     expect(document.body.textContent).toContain('読込前');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('エントリ数が上限超過の .mxl は tooLarge として通知される（zip bomb 対策の配線）', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    const entries: Record<string, Uint8Array> = {};
+    for (let i = 0; i < 1025; i += 1) entries[`e${i}.txt`] = strToU8('x');
+    await importFile(zipSync(entries), 'bomb.mxl');
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('大きすぎるため読み込めません');
+    }, { timeout: 15000 });
+    expect(document.body.textContent).toContain('読込前');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('ZIP マジックの無い .mxl（先頭破損）は notZip として通知される', async () => {
     seedEmptyWork();
     render(<ScorePage />);

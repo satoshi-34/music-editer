@@ -2,7 +2,14 @@
 // フィクスチャはテスト内で fflate.zipSync により生成する（バイナリを直接コミットしない）。
 import { describe, it, expect } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
-import { extractMusicXmlFromMxl, isMxlContainer, MxlExtractError, MXL_MAX_COMPRESSED_BYTES } from './mxlUtils';
+import {
+  extractMusicXmlFromMxl,
+  isMxlContainer,
+  MxlExtractError,
+  MXL_MAX_COMPRESSED_BYTES,
+  MXL_MAX_ENTRY_BYTES,
+  MXL_MAX_ENTRIES,
+} from './mxlUtils';
 
 const SCORE_XML = '<?xml version="1.0"?><score-partwise version="3.1"><part-list/></score-partwise>';
 const CONTAINER_XML = `<?xml version="1.0"?>
@@ -66,6 +73,34 @@ describe('mxlUtils（圧縮MusicXMLの展開・#465）', () => {
     oversized.set(mxl);
     try {
       extractMusicXmlFromMxl(oversized);
+      expect.unreachable('例外が投げられるはず');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MxlExtractError);
+      expect((err as MxlExtractError).reason).toBe('tooLarge');
+    }
+  });
+
+  it('展開後サイズが上限超過のエントリは tooLarge として失敗する（zip bomb 対策）', () => {
+    // ゼロ埋めの巨大テキストは ZIP で数百KBまで縮む＝「圧縮は小さいが展開後が巨大」の再現
+    const bomb = zipSync({ 'score.xml': new Uint8Array(MXL_MAX_ENTRY_BYTES + 1) });
+    expect(bomb.length).toBeLessThan(MXL_MAX_COMPRESSED_BYTES);
+    try {
+      extractMusicXmlFromMxl(bomb);
+      expect.unreachable('例外が投げられるはず');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MxlExtractError);
+      expect((err as MxlExtractError).reason).toBe('tooLarge');
+    }
+  });
+
+  it('エントリ数が上限超過の ZIP は tooLarge として失敗する（zip bomb 対策）', () => {
+    const entries: Record<string, Uint8Array> = {};
+    for (let i = 0; i < MXL_MAX_ENTRIES + 1; i += 1) {
+      entries[`e${i}.txt`] = strToU8('x');
+    }
+    const mxl = zipSync(entries);
+    try {
+      extractMusicXmlFromMxl(mxl);
       expect.unreachable('例外が投げられるはず');
     } catch (err) {
       expect(err).toBeInstanceOf(MxlExtractError);
