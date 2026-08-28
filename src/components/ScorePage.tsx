@@ -160,6 +160,7 @@ import type { ClefType } from './clefUtils';
 import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { expandTrillForPlayback } from '../utils/ornamentPlaybackUtils';
 import {
   canUseTimeSignatureSymbol,
   formatTimeSignature,
@@ -1310,6 +1311,23 @@ export default function ScorePage() {
           const startExpandedIndex = startMeasure > 0
             ? findPlaybackStartExpandedIndex(referenceExpanded, startMeasure)
             : 0;
+          // トリル再生の上隣接音は「その小節で有効な調号」の音階から決める。
+          // 途中調号は**譜面本来の最上段**の小節にだけ保存される設計（handleKeySigConfirm）。
+          // パート譜表示中は parts が選択パートだけに絞られていて parts[0] が最上段とは
+          // 限らないため、調号参照は譜種ごとの正本の最上段から別途取る（Codex round2）。
+          // 展開順ではなく元小節の位置（sourceMeasureIndex）で resolveMeasureKeySignature を
+          // 引くことで、リピート折返し後も「その小節の見た目どおりの調号」になる（画面表示と同じ関数）
+          const keySigReferenceMeasures = scoreType === 'quartet'
+            ? (quartetParts[0] ?? [])
+            : scoreType === 'ensemble'
+              ? (ensembleParts[0] ?? [])
+              : (rightHandData ?? []);
+          const effectiveKeySignatures = referenceExpanded.map((item) =>
+            resolveMeasureKeySignature(keySigReferenceMeasures, item.sourceMeasureIndex, keySignature));
+          // スウィング対象になり得る音（付点なし8分・複合拍子でない）はトリル展開しない。
+          // 32分へ割るとエンジンのスウィング判定（8分のみ）から外れ、
+          // 実音とハイライトの位置がずれるため（裏拍の 2/3 シフトが消える）
+          const swingActive = soundRuntimeSettings.swingEnabled && !isCompoundTimeSignature(scoreTimeSignature);
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
@@ -1338,7 +1356,7 @@ export default function ScorePage() {
                 measureBeats: getMeasureBeats(scoreTimeSignature),
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
-                events: flattenMeasureForPlayback(item.measure).map((event, eventIndex) => {
+                events: flattenMeasureForPlayback(item.measure).flatMap((event, eventIndex) => {
                   // アーティキュレーション（スタッカート＝短く、アクセント＝強く 等）を
                   // 音の長さ・音量の倍率として取り出す。
                   const articulation = getArticulationPlaybackEffect(event);
@@ -1347,7 +1365,7 @@ export default function ScorePage() {
                   const baseVelocity = dynamicVelocities.get(
                     buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, eventIndex)
                   ) ?? 0.5;
-                  return {
+                  const playbackEvent = {
                     ...event,
                     // 強弱未設定や休符では velocity を省略し、
                     // エンジン側の安全な既定値 0.5 をそのまま使う。
@@ -1359,6 +1377,13 @@ export default function ScorePage() {
                       ? undefined
                       : articulation.durationScale,
                   };
+                  // トリルは主音と上隣接音（その小節の調号に沿う）の交互連打へ展開して鳴らす。
+                  // トリル以外・展開できない形・スウィング対象の音はそのまま1イベントで返る（挙動不変）
+                  return expandTrillForPlayback(
+                    playbackEvent,
+                    effectiveKeySignatures[expandedMeasureIndex + startExpandedIndex] ?? keySignature,
+                    { swingActive },
+                  );
                 })
               }))
             };
@@ -1442,7 +1467,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
