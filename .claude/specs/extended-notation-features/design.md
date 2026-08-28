@@ -666,10 +666,17 @@ export interface HairpinMark {
   （サブ音符の合計拍 = 元の音価。厳密に割り切れる分割だけを使い、拍を一切壊さない）。
   tuplet id は再生専用の別 id（描画側の「同一 id 連続」数えと衝突させない）
 - 交互は主音から始め、**最後は必ず主音**で終える（上隣接音で切れると解決感がないため）
-- 途中調号変更は強弱と同じく「切る前の全列」で有効調号を追跡（途中再生でも正しい）
+- 途中調号は最上段（parts[0]）にだけ保存される設計のため、**全パート共通で最上段の小節列から**
+  resolveMeasureKeySignature（画面表示と同じ関数）で解決する。元小節の位置
+  （sourceMeasureIndex）で引くので、リピート折返し後もその小節の見た目どおりの調号になる
+- スウィングON時、スウィング対象になり得る音（付点なし8分・複合拍子でない）は展開しない
+  （32分へ割るとエンジンのスウィング判定から外れ、実音とハイライトがずれるため）
+- 内蔵音源（SimpleAudioEngine）の durationToSeconds が dots / tuplet を無視していた
+  既存の穴も同時に修正（付点・連符イベントの並び時間が正しくなる。SoundFont と同式）
 - 展開しない形（挙動不変）: 休符・和音・微分音つき・32分/64分の主音符（4分割未満）・
   トリル以外の装飾（モルデント/プラルトリラー/ターンは「残り時間ぶん主音を伸ばす」表現に
   任意長の音価が必要で dur 文字列で表せないため対象外。対応するなら別Issueで
   PlaybackMeasureEvent へ「拍数直接指定」を足すところから）
-- テスト: ornamentPlaybackUtils.test.ts（10件）+ ScorePageTrillPlayback.test.tsx
-  （エンジンをモックして playParts へ届く展開列を実マウントで固定）
+- テスト: ornamentPlaybackUtils.test.ts（11件）+ SimpleAudioEngine.test.ts（付点/連符の時間）
+  + ScorePageTrillPlayback.test.tsx 3件（基本展開・UI 調号変更後の再生=useCallback deps の
+  再発防止・右手の途中調号が左手のトリルへ効くこと。エンジンをモックして実マウントで固定）

@@ -86,4 +86,13 @@ describe('expandTrillForPlayback', () => {
     expect(subs[1].startBeat).toBeCloseTo(2.125, 10);
     expect(subs.every((s) => (s as { velocity?: number }).velocity === 0.7)).toBe(true);
   });
+
+  it('スウィング対象の音（付点なし8分・swingActive）は展開しない。それ以外は展開する', () => {
+    const eighth = trillNote({ dur: '8' });
+    expect(expandTrillForPlayback(eighth, 'C', { swingActive: true })).toHaveLength(1);
+    expect(expandTrillForPlayback(eighth, 'C', { swingActive: false })).toHaveLength(4);
+    // 4分（スウィング非対象）や付点8分は swingActive でも展開される
+    expect(expandTrillForPlayback(trillNote(), 'C', { swingActive: true })).toHaveLength(8);
+    expect(expandTrillForPlayback(trillNote({ dur: '8', dots: 1 }), 'C', { swingActive: true })).toHaveLength(6);
+  });
 });

@@ -291,9 +291,17 @@ export class SimpleAudioEngine implements PlaybackEngine {
   }
 
   /**
-   * 音価から秒数を計算する
+   * 音価から秒数を計算する。
+   * 付点（dots）・連符（tuplet）の倍率も SoundFontEngine と同じ式で反映する。
+   * 以前は dur だけを見ていたため、付点・連符のイベントは並びの時間が
+   * ずれていた（トリル再生対応 PR #479 の Codex 指摘で発覚した既存の穴）。
    */
-  durationToSeconds(duration: string, bpm: number = 120): number {
+  durationToSeconds(
+    duration: string,
+    bpm: number = 120,
+    dots?: 1 | 2,
+    tuplet?: { numNotes: number; notesOccupied: number },
+  ): number {
     const durMap: Record<string, number> = {
       '1': 4,     // 全音符
       '2': 2,     // 2分音符
@@ -304,11 +312,12 @@ export class SimpleAudioEngine implements PlaybackEngine {
       '64': 0.0625// 64分音符
     };
 
-    const beats = durMap[duration] || 1;
+    const dotMultiplier = dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1;
+    const tupletMultiplier = tuplet && tuplet.numNotes ? tuplet.notesOccupied / tuplet.numNotes : 1;
+    const beats = (durMap[duration] || 1) * dotMultiplier * tupletMultiplier;
     const secondsPerBeat = 60 / bpm;
     const seconds = beats * secondsPerBeat;
-    
-    console.log('[SimpleAudioEngine] 音価変換:', duration, '->', seconds, '秒 (BPM:', bpm, ')');
+
     return seconds;
   }
 
@@ -415,7 +424,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
         // 小節内の各音符を処理
         for (const event of measure.events) {
-          const duration = this.durationToSeconds(event.dur, bpm);
+          const duration = this.durationToSeconds(event.dur, bpm, event.dots, event.tuplet);
           // startBeat を持たない単声部イベントは、直前までの累積時間から拍位置を逆算する。
           const nominalStartBeat = typeof event.startBeat === 'number'
             ? event.startBeat

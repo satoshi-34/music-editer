@@ -47,7 +47,7 @@ window.ResizeObserver = ResizeObserverMock;
 const MOUNT_HEAVY_TIMEOUT_MS = 60000;
 
 /** 4/4 の1小節: トリルつき4分 b/3 + 4分休符×3（単旋律・調号 D: 上隣接音は c#/4 になる） */
-function seedTrillWork() {
+function seedTrillWork(key: 'C' | 'D' = 'D') {
   const events = [
     { dur: '4' as const, isRest: false, keys: ['b/3'], ornament: 'trill' as const },
     { dur: '4' as const, isRest: true, keys: ['b/4'] },
@@ -59,7 +59,7 @@ function seedTrillWork() {
     [{ partId: 'melody', clef: 'treble', measures: [{ events, voices: [{ id: 'voice-1', events }] }] }],
     1, 1, 'single'
   );
-  data.keySignature = 'D';
+  data.keySignature = key;
   const created = createWork('トリル再生');
   if (!created.success || !created.data) throw new Error('createWork failed');
   saveWorkAutosaveData(created.data.id, data);
@@ -104,5 +104,81 @@ describe('ScorePage: トリルの再生（playParts への展開配線）', () =
     expect(notes.every((n) => n.dur === '32')).toBe(true);
     // 調号 D の音階では b/3 の上隣接音は c#/4。交互列と「最後は主音」を固定する
     expect(notes.map((n) => n.keys[0])).toEqual(['b/3', 'c#/4', 'b/3', 'c#/4', 'b/3', 'c#/4', 'b/3', 'b/3']);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // useCallback の依存配列に keySignature が無いと、UI で調号を変えても
+  // 古い調号のまま再生される（Codex round1 P3 の再発防止）
+  it('UI で調号を D へ変えてから再生すると、上隣接音が c#/4 になる', async () => {
+    seedTrillWork('C');
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    // 楽譜設定タブの調号セレクトを D dur へ
+    fireEvent.click(screen.getByRole('tab', { name: '楽譜設定' }));
+    const keySelect = screen.getByLabelText('調号') as HTMLSelectElement;
+    fireEvent.change(keySelect, { target: { value: 'D' } });
+
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+
+    await waitFor(() => {
+      expect(capturedPlayParts.length).toBeGreaterThan(0);
+    }, { timeout: 15000 });
+    const notes = capturedPlayParts[0].parts[0].measures[0].events.filter((e) => !e.isRest);
+    expect(notes[1].keys[0]).toBe('c#/4');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 途中調号は最上段（右手）にだけ保存される設計。左手（第2パート）のトリルにも
+  // 最上段基準で解決した調号が効くことを固定する（Codex round1 P1 の再発防止）
+  it('右手側の途中調号変更（2小節目から D）が、左手2小節目のトリルへ効く', async () => {
+    const restBar = [
+      { dur: '1' as const, isRest: true, keys: ['b/4'] },
+    ];
+    const rightMeasures = [
+      { events: restBar, voices: [{ id: 'voice-1', events: restBar }] },
+      { events: restBar, voices: [{ id: 'voice-1', events: restBar }], keySignature: 'D' as const },
+    ];
+    const leftBar2 = [
+      { dur: '4' as const, isRest: false, keys: ['b/2'], ornament: 'trill' as const },
+      { dur: '4' as const, isRest: true, keys: ['d/3'] },
+      { dur: '4' as const, isRest: true, keys: ['d/3'] },
+      { dur: '4' as const, isRest: true, keys: ['d/3'] },
+    ];
+    const leftMeasures = [
+      { events: restBar, voices: [{ id: 'voice-1', events: restBar }] },
+      { events: leftBar2, voices: [{ id: 'voice-1', events: leftBar2 }] },
+    ];
+    const data = createSavedScoreData(
+      { title: '左手トリル', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'right-hand', clef: 'treble', measures: rightMeasures },
+        { partId: 'left-hand', clef: 'bass', measures: leftMeasures },
+      ],
+      1, 2, 'piano'
+    );
+    data.keySignature = 'C';
+    const created = createWork('左手トリル');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => {
+      expect(capturedPlayParts.length).toBeGreaterThan(0);
+    }, { timeout: 15000 });
+
+    // parts[1] = 左手。2小節目のトリルの上隣接音が D dur の c#/3 になっている
+    const leftEvents = capturedPlayParts[0].parts[1].measures[1].events;
+    const notes = leftEvents.filter((e) => !e.isRest);
+    expect(notes).toHaveLength(8);
+    expect(notes[1].keys[0]).toBe('c#/3');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

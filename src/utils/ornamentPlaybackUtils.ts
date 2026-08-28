@@ -61,10 +61,18 @@ const MIN_SUB_NOTES = 4;
  * velocity / durationScale / startBeat は元イベントから引き継ぐ
  * （startBeat はサブ音符ごとに実拍ぶん進める。無ければ省略のまま＝エンジン側の累積で進む）。
  */
-export function expandTrillForPlayback(event: PlaybackEventLike, keySignature: KeySignature): PlaybackEventLike[] {
+export function expandTrillForPlayback(
+  event: PlaybackEventLike,
+  keySignature: KeySignature,
+  options?: { swingActive?: boolean },
+): PlaybackEventLike[] {
   if (event.ornament !== 'trill' || event.isRest) return [event];
   if (!event.keys || event.keys.length !== 1) return [event];
   if (event.microtones && event.microtones.length > 0) return [event];
+  // スウィングON時、スウィング対象になり得る音（付点なし8分）は展開しない。
+  // 32分へ割るとエンジンのスウィング判定（8分のみ）から外れ、裏拍の 2/3 シフトが
+  // 消えて実音とハイライトの位置がずれるため（Codex round1 P2）
+  if (options?.swingActive && event.dur === '8' && !event.dots) return [event];
 
   const upperKey = trillUpperNeighborKey(event.keys[0], keySignature);
   if (!upperKey) return [event];

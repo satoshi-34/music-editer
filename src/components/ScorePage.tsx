@@ -1311,6 +1311,17 @@ export default function ScorePage() {
           const startExpandedIndex = startMeasure > 0
             ? findPlaybackStartExpandedIndex(referenceExpanded, startMeasure)
             : 0;
+          // トリル再生の上隣接音は「その小節で有効な調号」の音階から決める。
+          // 途中調号は最上段（parts[0]）の小節にだけ保存される設計（handleKeySigConfirm）なので、
+          // 全パート共通で**最上段の小節列**から解決する。展開順ではなく元小節の位置
+          // （sourceMeasureIndex）で resolveMeasureKeySignature を引くことで、
+          // リピート折返し後も「その小節の見た目どおりの調号」になる（画面表示と同じ関数）
+          const effectiveKeySignatures = referenceExpanded.map((item) =>
+            resolveMeasureKeySignature(referenceMeasures, item.sourceMeasureIndex, keySignature));
+          // スウィング対象になり得る音（付点なし8分・複合拍子でない）はトリル展開しない。
+          // 32分へ割るとエンジンのスウィング判定（8分のみ）から外れ、
+          // 実音とハイライトの位置がずれるため（裏拍の 2/3 シフトが消える）
+          const swingActive = soundRuntimeSettings.swingEnabled && !isCompoundTimeSignature(scoreTimeSignature);
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
@@ -1327,17 +1338,6 @@ export default function ScorePage() {
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
-            // トリル再生の上隣接音は「その小節で有効な調号」の音階から決める。
-            // 途中調号変更（measure.keySignature）を先頭から追跡し、切る前の全列で
-            // 解決しておく（途中再生でも開始位置より前の変更が効くように。強弱と同じ理屈）
-            const effectiveKeySignatures: KeySignature[] = [];
-            {
-              let currentKey: KeySignature = keySignature;
-              for (const item of expandedMeasuresFull) {
-                if (item.measure.keySignature != null) currentKey = item.measure.keySignature;
-                effectiveKeySignatures.push(currentKey);
-              }
-            }
 
             return {
               // 編成譜ではパート定義に再生楽器を持たせている。
@@ -1372,10 +1372,11 @@ export default function ScorePage() {
                       : articulation.durationScale,
                   };
                   // トリルは主音と上隣接音（その小節の調号に沿う）の交互連打へ展開して鳴らす。
-                  // トリル以外・展開できない形はそのまま1イベントで返る（挙動不変）
+                  // トリル以外・展開できない形・スウィング対象の音はそのまま1イベントで返る（挙動不変）
                   return expandTrillForPlayback(
                     playbackEvent,
                     effectiveKeySignatures[expandedMeasureIndex + startExpandedIndex] ?? keySignature,
+                    { swingActive },
                   );
                 })
               }))
@@ -1460,7 +1461,7 @@ export default function ScorePage() {
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
