@@ -641,3 +641,21 @@ export function describeClearedMeasures(start: number, end: number): string {
   const range = count === 1 ? `${start + 1}小節目` : `${start + 1}〜${end + 1}小節目`;
   return `${range}の音符を削除しました${UNDO_HINT}`;
 }
+
+/**
+ * 圧縮MusicXML（.mxl）の展開に失敗したときの文言（Issue #465・#318）。
+ * 黙って失敗すると「Finale のファイルなのに開けない」で行き止まりになるため、
+ * 理由と代替手順（書き出し側で非圧縮を選ぶ）を必ず伝える。
+ */
+export function describeMxlExtractFailed(reason: 'notZip' | 'brokenZip' | 'noXmlEntry' | 'tooLarge'): string {
+  if (reason === 'notZip') {
+    return 'この .mxl ファイルは圧縮MusicXML（ZIP）として読めませんでした（ファイルが壊れている可能性があります。書き出し元で「非圧縮の MusicXML（.musicxml / .xml）」を選んで書き出し直してください）';
+  }
+  if (reason === 'brokenZip') {
+    return 'この .mxl ファイルを展開できませんでした（ファイルが壊れている可能性があります。書き出し元で「非圧縮の MusicXML（.musicxml / .xml）」を選んで書き出し直してください）';
+  }
+  if (reason === 'tooLarge') {
+    return 'この .mxl ファイルは大きすぎるため読み込めません（書き出し元で「非圧縮の MusicXML（.musicxml / .xml）」を選んで書き出し直すか、曲を分割してください）';
+  }
+  return 'この .mxl の中に MusicXML が見つかりませんでした（書き出し元で「非圧縮の MusicXML（.musicxml / .xml）」を選んで書き出し直してください）';
+}
