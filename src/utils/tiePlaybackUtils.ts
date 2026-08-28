@@ -84,12 +84,21 @@ function resolveTargetExpandedIndex(
   fromExpandedIndex: number,
   toMeasureIndex: number,
 ): number | null {
-  if (expandedMeasures[fromExpandedIndex]?.sourceMeasureIndex === toMeasureIndex) {
-    return fromExpandedIndex;
-  }
-  const nextIndex = fromExpandedIndex + 1;
-  if (expandedMeasures[nextIndex]?.sourceMeasureIndex === toMeasureIndex) {
-    return nextIndex;
+  // 入力（ドラッグ）は任意の後続小節へタイを張れるため、「自分自身の小節」または
+  // 「並び上の後続で最初に現れる該当小節」を終点とする（Codex round2 P2:
+  // 2小節以上先へ張ったタイが無視されていた）。
+  // ただし探索は「元小節番号が単調増加している区間」だけ:
+  // リピートで並びが折り返す（番号が戻る・同じ小節が再登場する）先まで繋ぐと、
+  // 繰り返し区間を貫いて鳴り続けてしまう。折返しに当たったら打ち切り、
+  // null（繋げず記譜どおり2音で鳴らす安全側）にする。
+  let previousSource = expandedMeasures[fromExpandedIndex]?.sourceMeasureIndex;
+  if (previousSource == null) return null;
+  if (previousSource === toMeasureIndex) return fromExpandedIndex;
+  for (let index = fromExpandedIndex + 1; index < expandedMeasures.length; index += 1) {
+    const source = expandedMeasures[index]?.sourceMeasureIndex;
+    if (source == null || source <= previousSource) return null; // リピート折返し
+    if (source === toMeasureIndex) return index;
+    previousSource = source;
   }
   return null;
 }
@@ -146,12 +155,47 @@ export function buildTiePlaybackPlan(
   // 「誰かのタイの終点になっている」符頭。連鎖の先頭を見つけるために使う。
   const targetIds = new Set<string>();
 
+  /** 旧形式 tiedToNext（「すぐ次の音へタイ」だけを表すレガシーフィールド）を arcs 相当へ読み替える */
+  const legacyArcsFor = (
+    expandedMeasureIndex: number,
+    voiceIndex: number,
+    eventIndex: number,
+    event: { keys: string[]; tiedToNext?: boolean },
+  ): Array<{ fromKey: string; toKey: string; toMeasureIndex: number; toEventIndex: number; kind: 'tie' }> => {
+    if (!event.tiedToNext) return [];
+    // 次のイベント: 同じ声部の次位置。小節末尾なら次の展開小節の先頭
+    const sameMeasureVoice = getMeasureVoices(expandedMeasures[expandedMeasureIndex].measure)[voiceIndex];
+    let toExpanded = expandedMeasureIndex;
+    let toEventIndex = eventIndex + 1;
+    if (!sameMeasureVoice?.events?.[toEventIndex]) {
+      toExpanded = expandedMeasureIndex + 1;
+      toEventIndex = 0;
+    }
+    const targetMeasure = expandedMeasures[toExpanded];
+    if (!targetMeasure) return [];
+    const target = getMeasureVoices(targetMeasure.measure)[voiceIndex]?.events?.[toEventIndex];
+    if (!target || target.isRest) return [];
+    // 同じ高さのキーだけを結ぶ（旧形式は key 指定を持たないため）
+    return event.keys
+      .filter((key) => target.keys.includes(key))
+      .map((key) => ({
+        fromKey: key,
+        toKey: key,
+        toMeasureIndex: targetMeasure.sourceMeasureIndex,
+        toEventIndex,
+        kind: 'tie' as const,
+      }));
+  };
+
   expandedMeasures.forEach((expandedMeasure, expandedMeasureIndex) => {
     const voices = getMeasureVoices(expandedMeasure.measure);
     voices.forEach((voice, voiceIndex) => {
       voice.events?.forEach((event, eventIndex) => {
         if (event.isRest) return;
-        event.arcs?.forEach((arc) => {
+        // 旧保存データの tiedToNext も再生へ反映する（描画は既にレガシー経路で対応済み。
+        // arcs だけを見ると旧作品のタイが再アタックされる・Codex round2 P3）
+        const arcsToPlan = [...(event.arcs ?? []), ...legacyArcsFor(expandedMeasureIndex, voiceIndex, eventIndex, event)];
+        arcsToPlan.forEach((arc) => {
           // スラー（なめらかに繋げる指示）は音を1つにまとめない。タイだけが対象。
           if (arc.kind !== 'tie') return;
           if (!event.keys.includes(arc.fromKey)) return;

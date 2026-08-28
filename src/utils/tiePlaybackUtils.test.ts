@@ -237,3 +237,43 @@ describe('隙間のあるタイの実時間（Codex round1 P2）', () => {
     expect(plan.get(buildTiePlaybackEventKey(0, 0, 0))?.extendBeatsByKey['c/4']).toBeCloseTo(5.0, 10);
   });
 });
+
+describe('2小節以上先へ張ったタイ・旧形式 tiedToNext（Codex round2）', () => {
+  it('2小節先の同音へ張ったタイも実時間で伸ばし、終点を抑制する', () => {
+    const m0 = [
+      { dur: '1' as const, isRest: false, keys: ['c/4'], arcs: [{ fromKey: 'c/4', toKey: 'c/4', toMeasureIndex: 2, toEventIndex: 0, kind: 'tie' as const }] },
+    ];
+    const m1 = [{ dur: '1' as const, isRest: true, keys: ['b/4'] }];
+    const m2 = [{ dur: '1' as const, isRest: false, keys: ['c/4'] }];
+    const plan = buildTiePlaybackPlan([
+      { sourceMeasureIndex: 0, measure: { events: m0, voices: [{ id: 'voice-1', events: m0 }] } },
+      { sourceMeasureIndex: 1, measure: { events: m1, voices: [{ id: 'voice-1', events: m1 }] } },
+      { sourceMeasureIndex: 2, measure: { events: m2, voices: [{ id: 'voice-1', events: m2 }] } },
+    ], 4);
+    // 開始音の終わり=4拍・終点音の終わり=12拍 → 8拍伸ばす
+    expect(plan.get(buildTiePlaybackEventKey(0, 0, 0))?.extendBeatsByKey['c/4']).toBeCloseTo(8, 10);
+    expect(plan.get(buildTiePlaybackEventKey(2, 0, 0))?.suppressedKeys).toContain('c/4');
+  });
+
+  it('旧形式 tiedToNext（arcs なし）のタイも計画される', () => {
+    const m0 = [
+      { dur: '2' as const, isRest: false, keys: ['c/4'], tiedToNext: true },
+      { dur: '2' as const, isRest: false, keys: ['c/4'] },
+    ];
+    const plan = buildTiePlaybackPlan([
+      { sourceMeasureIndex: 0, measure: { events: m0, voices: [{ id: 'voice-1', events: m0 }] } },
+    ], 4);
+    expect(plan.get(buildTiePlaybackEventKey(0, 0, 0))?.extendBeatsByKey['c/4']).toBeCloseTo(2, 10);
+    expect(plan.get(buildTiePlaybackEventKey(0, 0, 1))?.suppressedKeys).toContain('c/4');
+  });
+
+  it('旧形式 tiedToNext の小節またぎ（小節末尾→次小節頭）も計画される', () => {
+    const m0 = [{ dur: '1' as const, isRest: false, keys: ['c/4'], tiedToNext: true }];
+    const m1 = [{ dur: '2' as const, isRest: false, keys: ['c/4'] }];
+    const plan = buildTiePlaybackPlan([
+      { sourceMeasureIndex: 0, measure: { events: m0, voices: [{ id: 'voice-1', events: m0 }] } },
+      { sourceMeasureIndex: 1, measure: { events: m1, voices: [{ id: 'voice-1', events: m1 }] } },
+    ], 4);
+    expect(plan.get(buildTiePlaybackEventKey(0, 0, 0))?.extendBeatsByKey['c/4']).toBeCloseTo(2, 10);
+  });
+});

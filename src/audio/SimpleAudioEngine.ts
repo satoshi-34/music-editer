@@ -485,7 +485,11 @@ export class SimpleAudioEngine implements PlaybackEngine {
           if (typeof event.startBeat === 'number') {
             // 複数声部イベントは startBeat で時刻が決まるので、
             // currentTime 自体は進めず「この小節で一番遅く終わる時刻」だけ更新する。
-            maxMeasureEndTime = Math.max(maxMeasureEndTime, eventStartTime + duration);
+            // 終端は**記譜どおりの位置**（nominal）で数える。スウィング後の開始位置で数えると
+            // 4拍目裏の8分などで小節線が 1/6 拍ずれ、次小節やタイ計画の物差しと食い違う
+            // （単声部経路が変換前の duration で進めるのと同じ理由・Codex round2 P1）
+            const nominalEndTime = measureStartTime + (nominalStartBeat + nominalDurationBeats) * secondsPerBeat;
+            maxMeasureEndTime = Math.max(maxMeasureEndTime, nominalEndTime);
           } else {
             currentTime += duration;
             maxMeasureEndTime = Math.max(maxMeasureEndTime, currentTime);

@@ -232,6 +232,33 @@ describe('SimpleAudioEngine', () => {
     });
   });
 
+  describe('スウィングON時の小節送り（Codex round2 P1）', () => {
+    type PlayNoteAtTimeHost = {
+      playNoteAtTime: (frequency: number, duration: number, startTime: number, velocity?: number) => Promise<void>;
+    };
+    const internals = (target: SimpleAudioEngine) => target as unknown as PlayNoteAtTimeHost;
+
+    it('複数声部の小節でも、スウィングは小節線（次小節の開始）を動かさない', async () => {
+      await engine.initialize();
+      engine.setSwingEnabled(true);
+      const spy = vi.spyOn(internals(engine), 'playNoteAtTime').mockResolvedValue(undefined);
+      await engine.playScore([
+        {
+          // startBeat つき（複数声部扱い）で、4拍目裏の8分が最後にある小節
+          events: [
+            { dur: '2', isRest: false, keys: ['c/4'], startBeat: 0 },
+            { dur: '8', isRest: false, keys: ['d/4'], startBeat: 3.5 },
+          ],
+          measureBeats: 4
+        },
+        { events: [{ dur: '4', isRest: false, keys: ['e/4'], startBeat: 0 }], measureBeats: 4 }
+      ], 120, 0);
+      expect(spy).toHaveBeenCalledTimes(3);
+      // 2小節目の頭は「スウィング後の 4+1/6 拍」ではなく記譜どおり 4拍目 = 2.0秒
+      expect(spy.mock.calls[2][2]).toBeCloseTo(2.0, 5);
+    });
+  });
+
   describe('durationToSeconds の付点・連符反映（PR #479 で発覚した既存の穴の修正）', () => {
     it('付点は 1.5 倍・複付点は 1.75 倍・三連は 2/3 倍で計算される', () => {
       const base = engine.durationToSeconds('4', 120);
