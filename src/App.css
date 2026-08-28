@@ -1450,7 +1450,12 @@ button.ghost.active:hover:not(:disabled) {
 .page-wrapper > .print-page {
   transform: scale(var(--scale, 1));
   transform-origin: top left;
-  will-change: transform;
+  /* will-change: transform は付けない（#462・2026-08-28 実機で確認）。
+     付けるとブラウザがこのレイヤーを「読み込み時点の倍率」でラスタライズして
+     キャッシュし、その後にズーム（--scale）を変えると画像の引き伸ばしになって
+     譜面が滲む（再読み込みするまで直らない）。外せば倍率変更のたびに
+     最終倍率で再ラスタライズされ、SVG が常にくっきり描かれる。
+     ズーム変更は頻繁な操作ではないため、再ラスタライズのコストは許容する。 */
 }
 
 .print-page {
