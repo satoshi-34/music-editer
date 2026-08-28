@@ -135,10 +135,12 @@ describe('チェロの正式名は Violoncello（Issue #443）', () => {
     expect(partSelect, 'パート譜セレクトに Violoncello').toBeTruthy();
     const vcOption = Array.from(partSelect!.options).find((o) => o.textContent === 'Violoncello')!;
     fireEvent.change(partSelect!, { target: { value: vcOption.value } });
+    // 選択が実配線で効いたことを、変更後にしか現れない DOM で検証する
+    // （Codex round2 P2: 変更前から存在する option の文字列では退行を検出できない）
     await waitFor(() => {
-      expect(document.body.textContent).toContain('Violoncello');
+      expect(partSelect!.value).toBe(vcOption.value);
+      expect(document.body.textContent).toContain('パート譜: Violoncello');
     }, { timeout: 15000 });
-    expect(document.body.textContent).not.toContain('Cello ');
   }, 30000);
 
   it('弦楽四重奏の2ページ目の先頭段では略称 Vc. が実際に描画される', async () => {
