@@ -68,9 +68,12 @@ const PIANO_PARTS: PartInput[] = [
 const STRING_QUARTET_PARTS: PartInput[] = [
   // Vln I と Vln II は伝統的に細い括弧でまとめて「ヴァイオリン群」と見せるため、
   // 同じ subBracketGroup 'violins' を割り当てる。
-  simplePart('violin-1', 'Violin I', 'Vln. I', 'strings', 'strings', 'treble', InstrumentType.VIOLIN, 'C', 'violins'),
-  simplePart('violin-2', 'Violin II', 'Vln. II', 'strings', 'strings', 'treble', InstrumentType.VIOLIN, 'C', 'violins'),
-  simplePart('viola', 'Viola', 'Vla.', 'strings', 'strings', 'alto', InstrumentType.VIOLA),
+  // 略称は QuartetStaff の既定名（QUARTET_PART_CONFIGS: Vn. I / Va.）に合わせる。
+  // #448 で総譜のラベル正本がこちらへ移ったため、ここが違うと未編集の四重奏でも
+  // 2段目以降の略称が従来（Vn. I / Va.）から変わってしまう（Codex round2 P2）
+  simplePart('violin-1', 'Violin I', 'Vn. I', 'strings', 'strings', 'treble', InstrumentType.VIOLIN, 'C', 'violins'),
+  simplePart('violin-2', 'Violin II', 'Vn. II', 'strings', 'strings', 'treble', InstrumentType.VIOLIN, 'C', 'violins'),
+  simplePart('viola', 'Viola', 'Va.', 'strings', 'strings', 'alto', InstrumentType.VIOLA),
   simplePart('cello', 'Violoncello', 'Vc.', 'strings', 'strings', 'bass', InstrumentType.CELLO),
 ];
 

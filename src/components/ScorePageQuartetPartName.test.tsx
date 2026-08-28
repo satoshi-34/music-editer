@@ -189,24 +189,63 @@ describe('弦楽四重奏の楽器名・略称を編集する（Issue #448）', 
     expect(found).toBe(true);
   }, 60000);
 
-  // Codex round1 P1: 編集した名前が MusicXML 書き出しへ渡る（buildCurrentScoreData の instrumentation）
-  it('編集した名前が MusicXML の part-name に出る', () => {
+  // Codex round1 P1 → round2 P1: 編集した名前が MusicXML 書き出しへ渡る。
+  // 完成済みデータを scoreToMusicXml へ直接渡すと ScorePage → buildCurrentScoreData →
+  // exporter の配線（instrumentation を返り値に入れる箇所）を検証できないため、
+  // ScorePageTimeSigSymbolExport.test.tsx と同じく実マウントで
+  // 名前編集 → ファイルタブ → MusicXML 書き出し → Blob 本文まで通して固定する。
+  it('画面で編集した名前が MusicXML 書き出しの part-name に出る（実マウント配線）', async () => {
+    let exportedXml: string | null = null;
+    const origCreateObjectURL = URL.createObjectURL;
+    // ダウンロードの Blob を横取りして XML 本文を読む（jsdom は実ダウンロードできない）
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn((blob: Blob) => {
+        const reader = new FileReader();
+        reader.onload = () => { exportedXml = String(reader.result); };
+        reader.readAsText(blob);
+        return 'blob:mock';
+      }),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      openQuartetScore();
+      const dialog = openPartNameEditor();
+      fireEvent.change(
+        within(dialog).getByRole('textbox', { name: 'Violoncelloのパート名' }),
+        { target: { value: 'Basso' } },
+      );
+
+      fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+      fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'musicxml' } });
+      await waitFor(() => {
+        expect(exportedXml ?? '').toContain('<part-name>Basso</part-name>');
+      }, { timeout: 15000 });
+      expect(exportedXml ?? '').not.toContain('<part-name>Violoncello</part-name>');
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: origCreateObjectURL });
+    }
+  }, 60000);
+
+  // Codex round2 P2: 空白だけの名前は書き出しでも「未入力」扱い（表示と同じ解決規則）
+  it('空白だけの名前は MusicXML に空白のまま出ず、略称で代用される', () => {
     const inst = getDefaultInstrumentationForScoreType('quartet');
     const customInst = {
       ...inst,
       parts: inst.parts.map((part) => part.id === 'cello'
-        ? { ...part, name: 'Basso', abbreviation: 'B.' }
+        ? { ...part, name: '   ', abbreviation: 'B.' }
         : part),
     };
     const events = [{ dur: '1' as const, isRest: false, keys: ['c/3'] }];
     const data = createSavedScoreData(
-      { title: '書き出し名', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      { title: '空白名書き出し', subtitle: '', lyricist: '', composer: '', arranger: '' },
       [{ partId: 'cello', clef: 'bass' as const, measures: [{ events, voices: [{ id: 'voice-1', events }] }] }],
       1, 1, 'quartet', 'C', [4, 4], customInst as never
     );
     const xml = scoreToMusicXml(data);
-    expect(xml).toContain('<part-name>Basso</part-name>');
-    expect(xml).not.toContain('<part-name>Violoncello</part-name>');
+    expect(xml).not.toContain('<part-name>   </part-name>');
+    expect(xml).toContain('<part-name>B.</part-name>');
   });
 
   it('空白だけの名前は「未入力」扱いで、略称（または既定）で代用される', () => {
@@ -214,8 +253,8 @@ describe('弦楽四重奏の楽器名・略称を編集する（Issue #448）', 
     const dialog = openPartNameEditor();
     const nameInput = within(dialog).getByRole('textbox', { name: 'Violin Iのパート名' });
     fireEvent.change(nameInput, { target: { value: '   ' } });
-    // 正式名が空白のみ → フル名の位置にも略称（Vln. I）が出る（resolveInstrumentPartLabels）
+    // 正式名が空白のみ → フル名の位置にも略称（Vn. I）が出る（resolveInstrumentPartLabels）
     expect(renderedLabels()).not.toContain('   ');
-    expect(renderedLabels()).toContain('Vln. I');
+    expect(renderedLabels()).toContain('Vn. I');
   });
 });
