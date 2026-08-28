@@ -5636,7 +5636,9 @@ export default function ScorePage() {
               <input
                 ref={fileImportRef}
                 type="file"
-                accept=".json"
+                tabIndex={-1}
+                aria-hidden="true"
+                accept=".json,application/json"
                 style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
                 onChange={handleImportFile}
               />
@@ -5686,7 +5688,9 @@ export default function ScorePage() {
               <input
                 ref={musicXmlInputRef}
                 type="file"
-                accept=".xml,.musicxml"
+                tabIndex={-1}
+                aria-hidden="true"
+                accept=".xml,.musicxml,application/xml,text/xml,application/vnd.recordare.musicxml+xml"
                 style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
                 onChange={handleImportMusicXml}
               />
