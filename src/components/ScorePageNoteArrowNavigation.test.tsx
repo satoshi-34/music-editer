@@ -16,8 +16,7 @@ import {
   createSavedScoreData,
   createWork,
   saveWorkAutosaveData,
-  setLastOpenedWorkId,
-} from '../utils/storage';
+  setLastOpenedWorkId, loadWorkAutosaveData } from '../utils/storage';
 import type { MeasureData, PartData } from '../types/storage';
 
 const localStorageMock = (() => {
@@ -55,6 +54,8 @@ const TEST_CONTAINER_WIDTH = 700;
  *
  * 「1段目は2小節」の上書きを付けて、小節2 → 小節4 の移動が必ず段をまたぐようにする。
  */
+let workId = '';
+
 function seedWork() {
   const measures: MeasureData[] = [
     { events: [
@@ -81,6 +82,7 @@ function seedWork() {
   const saved = saveWorkAutosaveData(created.data.id, data);
   if (!saved.success) throw new Error('saveWorkAutosaveData failed');
   setLastOpenedWorkId(created.data.id);
+  workId = created.data.id;
 }
 
 // jsdom はレイアウトを持たないので、SVG の見た目サイズを width/height 属性どおりに見せる。
@@ -213,6 +215,120 @@ describe('音符選択中の ←/→ で選択を隣のイベントへ移す（I
 
     const notice = await screen.findByTestId('edit-notice', undefined, { timeout: 15000 });
     expect(notice).toHaveTextContent('最初の音符です');
+    expect(selectedPosition()).toEqual({ measure: 0, note: 0 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+
+  // Codex round1 P2-1: 小節選択が残ったまま音符選択で ←/→ を押したとき、
+  // 音符だけが移り、小節ハイライトは動かない（preventDefault が ScorePage 側の
+  // 小節移動を確実に止めていることの負のテスト。外すとこのテストは失敗する）
+  it('小節選択を残したまま → を押しても、小節ハイライトは動かず音符だけ移る', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit[data-measure="1"]')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    // Shift+クリックで小節2（vf-hit の2つ目）を選択（他ツール中でも小節選択できる経路）
+    const measureHit = document.querySelectorAll('rect.vf-hit')[1] as SVGRectElement;
+    expect(measureHit).toBeTruthy();
+    fireEvent.click(measureHit, { shiftKey: true, clientX: 10, clientY: 10 });
+    await waitFor(() => {
+      expect(document.querySelectorAll('rect.vf-measure-selected').length).toBe(1);
+    }, { timeout: 15000 });
+    const highlightedX = () =>
+      (document.querySelector('rect.vf-measure-selected') as SVGRectElement).getAttribute('x');
+    const xBefore = highlightedX();
+
+    // 音符を選択してから →
+    await selectNote(0, 0);
+    await pressArrow('ArrowRight', { measure: 0, note: 1 });
+
+    // 小節ハイライトは同じ小節のまま（←/→ が小節選択の移動に化けていない）
+    expect(document.querySelectorAll('rect.vf-measure-selected').length).toBe(1);
+    expect(highlightedX()).toBe(xBefore);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // Codex round1 P2-2: 声部2でも実配線で動くこと（小節を越えても声部2に留まり、
+  // 移動先へ ↑ が声部2のデータとして効く）
+  it('ピアノ譜の声部2でも → が小節を越えて働き、移動先の ↑ が声部2に効く', async () => {
+    // 右手2小節。声部1は全音符、声部2は 4分×4（小節1）+ 4分1つ（小節2）
+    const v1m0 = [{ dur: '1' as const, isRest: false, keys: ['c/5'] }];
+    const v1m1 = [{ dur: '1' as const, isRest: false, keys: ['c/5'] }];
+    const v2m0 = [
+      { dur: '4' as const, isRest: false, keys: ['e/4'] },
+      { dur: '4' as const, isRest: false, keys: ['e/4'] },
+      { dur: '4' as const, isRest: false, keys: ['e/4'] },
+      { dur: '4' as const, isRest: false, keys: ['e/4'] },
+    ];
+    const v2m1 = [{ dur: '4' as const, isRest: false, keys: ['g/4'] }];
+    const lh = [{ dur: '1' as const, isRest: false, keys: ['c/3'] }];
+    const rhMeasure = (v1: typeof v1m0, v2: typeof v2m0 | typeof v2m1): MeasureData => ({
+      events: v1,
+      voices: [
+        { id: 'voice-1', events: v1 },
+        { id: 'voice-2', events: v2 },
+      ],
+    });
+    const lhMeasure = (): MeasureData => ({ events: lh, voices: [{ id: 'voice-1', events: lh }] });
+    const data = createSavedScoreData(
+      { title: '声部2の矢印移動', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'right-hand', clef: 'treble', measures: [rhMeasure(v1m0, v2m0), rhMeasure(v1m1, v2m1)] },
+        { partId: 'left-hand', clef: 'bass', measures: [lhMeasure(), lhMeasure()] },
+      ],
+      1, 2, 'piano'
+    );
+    const created = createWork('声部2の矢印移動');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+    const voiceWorkId = created.data.id;
+
+    render(<ScorePage />);
+    // 当たり判定はアクティブレイヤー（初期=右手・声部1）の音符ぶんだけ生成される
+    await waitFor(() => {
+      expect(document.querySelectorAll('rect.vf-note-hit').length).toBeGreaterThanOrEqual(2);
+    }, { timeout: 15000 });
+
+    // 右手・声部2 レイヤーへ切り替え → 声部2の当たり判定（4分×4）が生えるのを待って選択
+    fireEvent.click(screen.getByRole('button', { name: '右手・声部2' }));
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit[data-measure="0"][data-note="3"]')).toBeTruthy();
+    }, { timeout: 15000 });
+    await selectNote(0, 3);
+
+    // → で小節を越えて声部2の小節2先頭へ
+    await pressArrow('ArrowRight', { measure: 1, note: 0 });
+
+    // 移動先で ↑ を押すと、**声部2**（voices[1]）の音高が変わる（g/4 → a/4 相当）
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    await waitFor(() => {
+      const saved = loadWorkAutosaveData(voiceWorkId).data;
+      const v2 = saved?.parts?.[0]?.measures?.[1]?.voices?.[1]?.events?.[0];
+      expect(v2?.keys?.[0]).not.toBe('g/4');
+      // 声部1（全音符）は巻き添えにならない
+      const v1 = saved?.parts?.[0]?.measures?.[1]?.voices?.[0]?.events?.[0];
+      expect(v1?.keys?.[0]).toBe('c/5');
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // 入力欄フォーカス中は ←/→ が選択移動に化けない（テキスト編集を壊さない）
+  it('入力欄にフォーカスがある間は ←/→ で選択が動かない', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit[data-measure="0"]')).toBeTruthy();
+    }, { timeout: 15000 });
+    await selectNote(0, 0);
+
+    // ズームのスライダー（常設の入力欄）へフォーカスして →
+    const input = document.querySelector('input') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    input.focus();
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    // 少し待っても選択は動かない
+    await new Promise((r) => setTimeout(r, 300));
     expect(selectedPosition()).toEqual({ measure: 0, note: 0 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
