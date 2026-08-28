@@ -174,4 +174,44 @@ describe('ScorePage: MusicXML 大譜表（<staves>2）の読込配線（#419）'
     expect(notices.some((n) => n.includes('クレフ') && n.includes('標準'))).toBe(true);
     window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, listener);
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // クロススタッフ連符（PR #475）: 実音と置換休符で連符 id が割れると描画側が
+  // 連符と認識せず（同一 id が numNotes 個連続の条件）、g.vf-tuplet が出ない。
+  // 読込→両段の描画までを実マウントで固定する
+  it('連符が五線をまたぐ大譜表でも、両段に連符（vf-tuplet）が描画される', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>12</divisions><staves>2</staves>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>8</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff></note>
+      <note><pitch><step>E</step><octave>3</octave></pitch><duration>8</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>2</staff></note>
+      <note><pitch><step>G</step><octave>3</octave></pitch><duration>8</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>2</staff></note>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>36</duration><voice>1</voice><type>half</type><dot/><staff>1</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    await importXml(xml);
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('右手・声部1');
+      // 上段（実音1+置換休符2）と下段（置換休符1+実音2）の両方で連符括りが描かれる
+      expect(document.querySelectorAll('g.vf-tuplet').length).toBeGreaterThanOrEqual(2);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

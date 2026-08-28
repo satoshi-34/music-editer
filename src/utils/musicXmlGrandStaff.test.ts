@@ -352,17 +352,55 @@ describe('MusicXML 読込: 1パート複数五線（ピアノ大譜表）', () =
     ]);
     expect(upper[1]?.tuplet).toMatchObject({ numNotes: 3, notesOccupied: 2 });
     expect(upper[2]?.tuplet).toMatchObject({ numNotes: 3, notesOccupied: 2 });
-    // 連続する置換対象は同じグループ id を共有する（バラバラの1音連符にしない）
+    // 実音+合成休符の3イベント**すべて**が同じグループ id を共有する。
+    // id が割れると描画側（createVexFlowTuplets）の「同一 id が numNotes 個連続」条件を
+    // 満たせず、連符倍率が適用されない（Codex round1 P1）
+    expect(upper[0]?.tuplet?.id).toBe(upper[1]?.tuplet?.id);
     expect(upper[1]?.tuplet?.id).toBe(upper[2]?.tuplet?.id);
     // 下段: またいで来た2音は実音として読まれ、同じ三連グループとして揃う
     const lower = parsed.parts[1].measures[0].events;
     const lowerNotes = lower.filter((e) => !e.isRest);
     expect(lowerNotes.map((e) => e.keys)).toEqual([['e/3'], ['g/3']]);
     expect(lowerNotes[0]?.tuplet).toMatchObject({ numNotes: 3, notesOccupied: 2 });
-    // 下段側の合成休符（上段の三連8分1個ぶん）も連符比を保つ
+    // 下段側の合成休符（上段の三連8分1個ぶん）も連符比を保ち、下段の3イベントも id を共有する
     expect(lower[0]?.isRest).toBe(true);
     expect(lower[0]?.dur).toBe('8');
     expect(lower[0]?.tuplet).toMatchObject({ numNotes: 3, notesOccupied: 2 });
+    expect(lower[0]?.tuplet?.id).toBe(lowerNotes[0]?.tuplet?.id);
+    expect(lowerNotes[0]?.tuplet?.id).toBe(lowerNotes[1]?.tuplet?.id);
+  });
+
+  it('クロススタッフ連符: 付点は保持され、連符比が変わる隣接グループは id が切れる', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>60</divisions><staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>30</duration><voice>1</voice><type>quarter</type><dot/>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff></note>
+      <note><pitch><step>E</step><octave>3</octave></pitch><duration>30</duration><voice>1</voice><type>quarter</type><dot/>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>2</staff></note>
+      <note><pitch><step>G</step><octave>3</octave></pitch><duration>30</duration><voice>1</voice><type>quarter</type><dot/>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>2</staff></note>
+      <note><pitch><step>A</step><octave>3</octave></pitch><duration>12</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>5</actual-notes><normal-notes>2</normal-notes></time-modification><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const parsed = parseMusicXml(xml);
+    const upper = parsed.parts[0].measures[0].events;
+    // 付点つき三連4分の置換休符: 付点と連符比を保持
+    expect(upper[1]).toMatchObject({ isRest: true, dur: '4', dots: 1 });
+    expect(upper[1]?.tuplet).toMatchObject({ numNotes: 3, notesOccupied: 2 });
+    expect(upper[0]?.tuplet?.id).toBe(upper[1]?.tuplet?.id);
+    // 連符比が 3:2 → 5:2 に変わる隣接グループは同じ id に結合しない
+    expect(upper[3]?.tuplet).toMatchObject({ numNotes: 5, notesOccupied: 2 });
+    expect(upper[3]?.tuplet?.id).not.toBe(upper[2]?.tuplet?.id);
   });
 
   // 壊れた time-modification（actual/normal が読めない）は比を復元できないため、
