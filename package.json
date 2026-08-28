@@ -14,6 +14,7 @@
     "deps:add:safe": "sh ./scripts/safe-add-package-in-docker.sh"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "soundfont-player": "^0.12.0",

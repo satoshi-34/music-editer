@@ -446,8 +446,7 @@ Issue #236 と同じ考え方で、**枠は1つのまま**にする。書出ボ�
 - `accept` は拡張子のみだと Safari の解釈ゆらぎで正しいファイルまでグレーアウトする
   ことがあるため、MIME を併記（.json+application/json、
   .xml/.musicxml+application/xml,text/xml,application/vnd.recordare.musicxml+xml）
-- なお **.mxl（圧縮MusicXML）は未対応**（zip 展開が必要・別Issue）。Finale の既定書き出しが
-  .mxl の場合は「非圧縮 MusicXML」を選んでもらう案内が必要
+- .mxl（圧縮MusicXML）は #465 で対応済み（下記の節を参照）
 - 配線テスト: ScorePageFileOpenWiring.test.tsx（メニュー→click 呼び出し・display:none でない・
   a11y 属性・accept の MIME 併記を実マウントで固定）
 
@@ -460,3 +459,23 @@ Issue #236 と同じ考え方で、**枠は1つのまま**にする。書出ボ�
 （ファイル／MusicXML／以前の手動保存）へ変更した。書き出しメニューはダウンロード系で
 ダイアログを開かないため select のまま。配線テスト（ScorePageFileOpenWiring）は
 ボタン経由の click 検証+「開く combobox が存在しない」の回帰ガードへ更新。
+
+## 圧縮MusicXML（.mxl）の読み込み対応（#465・2026-08-29）
+
+Finale の既定書き出しは .mxl（ZIP コンテナ）で、対面テスト（2026-08-29）で弟の実ファイルが
+開けなかった実害を受けて対応した。
+
+- 展開は `src/utils/mxlUtils.ts`。判定は拡張子ではなく**マジックバイト（PK\x03\x04）**で行う
+  ため、「.xml なのに実は zip」のファイルも救える
+- エントリ解決は MusicXML 仕様どおり META-INF/container.xml の rootfile を最優先し、
+  無い/壊れている場合は「META-INF 以外の最初の .xml/.musicxml」へフォールバック
+  （現実の .mxl には container 欠落品が流通しているため）
+- 失敗は MxlExtractError（brokenZip / noXmlEntry）で理由を持ち、describeMxlExtractFailed が
+  「非圧縮で書き出し直す」代替手順つきで通知する（#318）
+- 読み込み経路は readAsText → **readAsArrayBuffer** に変更。非圧縮 XML は TextDecoder(utf-8)
+  で従来どおり読む（回帰テストあり）
+- ZIP 展開は fflate（依存ゼロ・MIT・軽量）。JSZip は Promise ベースで依存も大きく見送り。
+  追加は scripts/safe-add-package-in-docker.sh（--ignore-scripts）経由
+- テスト: mxlUtils.test.ts（container あり/なし/壊れ rootfile/XML 無し/非ZIP の5件）・
+  ScorePageMxlImport.test.tsx（.mxl 読込・非圧縮回帰・壊れ ZIP の通知、実マウント3件）
+

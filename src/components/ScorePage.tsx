@@ -12,6 +12,7 @@ import QuartetStaff from './QuartetStaff';
 import EnsembleStaff from './EnsembleStaff';
 import PartExtractionStaff from './PartExtractionStaff';
 import { QUARTET_PART_CONFIGS } from './QuartetStaff';
+import { extractMusicXmlFromMxl, isMxlContainer, MxlExtractError } from '../utils/mxlUtils';
 import SymbolEditor from './SymbolEditor';
 import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
@@ -178,6 +179,7 @@ import {
   describeClearedMeasures,
   describePlaybackFromMeasure,
   describeLegacyImportResult,
+  describeMxlExtractFailed,
   describeWorkHistoryRestoreBlocked,
   describeWorkHistoryRestored,
   describeSliceClearNoop,
@@ -4273,7 +4275,26 @@ export default function ScorePage() {
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
-        const xml = ev.target?.result as string;
+        // 常にバイト列で読み、ZIP（= .mxl 圧縮MusicXML・Finale の既定書き出し）なら
+        // 展開して本文を取り出す（Issue #465）。非圧縮はそのまま UTF-8 として読む。
+        // 拡張子ではなくマジックバイトで判定するので、「.xml なのに実は zip」も救える
+        const buffer = ev.target?.result as ArrayBuffer;
+        const bytes = new Uint8Array(buffer);
+        let xml: string;
+        if (isMxlContainer(bytes)) {
+          try {
+            xml = extractMusicXmlFromMxl(bytes);
+          } catch (mxlErr) {
+            if (mxlErr instanceof MxlExtractError && mxlErr.reason !== 'notZip') {
+              notifyScoreEdit(describeMxlExtractFailed(mxlErr.reason));
+              if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
+              return;
+            }
+            throw mxlErr;
+          }
+        } else {
+          xml = new TextDecoder('utf-8').decode(bytes);
+        }
         const loaded = parseMusicXml(xml);
         // applyLoadedScoreData と同等のロジックで画面に反映する
         // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
@@ -4337,7 +4358,7 @@ export default function ScorePage() {
       // 同じファイルを再度選択できるよう値をリセットする
       if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
     };
-    reader.readAsText(file);
+    reader.readAsArrayBuffer(file);
   }, [setTimeSignature, measuresPerSystem]);
 
   const [hasCustomPianoSample, setHasCustomPianoSample] = useState<boolean>(() => hasCustomPianoDemoScore());
@@ -5689,7 +5710,7 @@ export default function ScorePage() {
                 type="file"
                 tabIndex={-1}
                 aria-hidden="true"
-                accept=".xml,.musicxml,application/xml,text/xml,application/vnd.recordare.musicxml+xml"
+                accept=".xml,.musicxml,.mxl,application/xml,text/xml,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml"
                 style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
                 onChange={handleImportMusicXml}
               />
