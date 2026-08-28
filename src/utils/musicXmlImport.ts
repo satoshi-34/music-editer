@@ -73,34 +73,46 @@ let tupletGroupCounter = 0;
  * 満たせず、連符倍率が適用されない（Codex round1 P1）。そこで**両者が読む前に**
  * 子要素の並びからグループ境界を決め、実音と合成休符へ同じ id を配る。
  *
- * 境界の規則: time-modification の無い音・<backup>（声部区切り）・<forward>・
- * 連符比（actual/normal）の変化で切る。direction / attributes / 前打音 / 和音の
- * 構成音はグループを切らない（parseNotes の従来の連続判定と同じ感覚）。
+ * 境界の規則（優先順）:
+ * 1. **明示の `<notations><tuplet type="start"/"stop">`**（MusicXML の正式なグループ境界。
+ *    Finale はこれを必ず書く）。start で新グループ・stop でグループを閉じる
+ * 2. マーカーが無い場合のフォールバック: time-modification の無い音・<backup>・<forward>・
+ *    連符比（actual/normal）の変化・**グループが numNotes 個に達したとき**に切る。
+ *    以前は「time-modification の連続」だけで判定していたため、同じ比の連符が並ぶと
+ *    複数グループが1つに結合し（三連×3=9イベントの巨大グループ）、描画側の
+ *    「同一 id が numNotes 個連続」条件を満たせず連符括りが消えていた（ソナチネ実測）
+ * direction / attributes / 前打音 / 和音の構成音はグループを切らない。
  */
 function assignMeasureTupletIds(measureEl: Element): Map<Element, string> {
   const idOf = new Map<Element, string>();
   let runId: string | null = null;
   let runRatio: string | null = null;
+  let runCount = 0;
+  const closeRun = () => { runId = null; runRatio = null; runCount = 0; };
   for (const el of Array.from(measureEl.children)) {
-    if (el.tagName === 'backup' || el.tagName === 'forward') { runId = null; runRatio = null; continue; }
+    if (el.tagName === 'backup' || el.tagName === 'forward') { closeRun(); continue; }
     if (el.tagName !== 'note') continue;
     if (el.querySelector('grace') || el.querySelector('chord')) continue;
     const timeModEl = el.querySelector('time-modification');
-    if (!timeModEl) { runId = null; runRatio = null; continue; }
+    if (!timeModEl) { closeRun(); continue; }
     const actualNotes = parseInt(timeModEl.querySelector('actual-notes')?.textContent ?? '', 10);
     const normalNotes = parseInt(timeModEl.querySelector('normal-notes')?.textContent ?? '', 10);
     if (!Number.isInteger(actualNotes) || actualNotes <= 0 || !Number.isInteger(normalNotes) || normalNotes <= 0) {
-      runId = null;
-      runRatio = null;
+      closeRun();
       continue;
     }
+    const marks = Array.from(el.querySelectorAll('notations tuplet')).map((t) => t.getAttribute('type'));
     const ratio = `${actualNotes}/${normalNotes}`;
-    if (!runId || ratio !== runRatio) {
+    if (marks.includes('start') || !runId || ratio !== runRatio || runCount >= actualNotes) {
       tupletGroupCounter += 1;
       runId = `xml-tuplet-${tupletGroupCounter}`;
       runRatio = ratio;
+      runCount = 0;
     }
     idOf.set(el, runId);
+    runCount += 1;
+    // stop はこの音**まで**がグループ（次の音から新グループ）
+    if (marks.includes('stop')) closeRun();
   }
   return idOf;
 }
