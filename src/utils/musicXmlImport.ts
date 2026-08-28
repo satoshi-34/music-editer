@@ -90,45 +90,75 @@ let tupletGroupCounter = 0;
  */
 function assignMeasureTupletIds(measureEl: Element): Map<Element, string> {
   const idOf = new Map<Element, string>();
-  let runId: string | null = null;
-  let runRatio: string | null = null;
-  let runCount = 0;
-  let runDur: string | null = null; // 均一音価判定用（音価+付点数）。混在したら null のまま固定
-  let runMixed = false;
-  let inExplicitGroup = false; // start〜stop の間は個数カットを無効化（明示境界を最優先）
-  const closeRun = () => { runId = null; runRatio = null; runCount = 0; runDur = null; runMixed = false; inExplicitGroup = false; };
+  const newId = () => {
+    tupletGroupCounter += 1;
+    return `xml-tuplet-${tupletGroupCounter}`;
+  };
+  // マーカーの無い連符 run は**貯めてから**分割を決める（先読み方式）。
+  // 1音ずつ切ると「8分×3のあとに4分」のような並びで、混在に気づく前に
+  // 個数カットが発火して 3+1 に誤分割する（Codex round2 P1）
+  let pending: Array<{ el: Element; durKey: string; actual: number }> = [];
+  let pendingRatio: string | null = null;
+  const flushPending = () => {
+    if (pending.length) {
+      const uniform = pending.every((p) => p.durKey === pending[0].durKey);
+      if (uniform) {
+        // 均一音価: numNotes 個ずつのグループへ分割（三連×3=9個 → 3+3+3）
+        const n = pending[0].actual;
+        for (let i = 0; i < pending.length; i += n) {
+          const id = newId();
+          for (const p of pending.slice(i, i + n)) idOf.set(p.el, id);
+        }
+      } else {
+        // 混合音価: イベント数から境界を判定できないため1グループのまま（既知の制約）
+        const id = newId();
+        for (const p of pending) idOf.set(p.el, id);
+      }
+    }
+    pending = [];
+    pendingRatio = null;
+  };
+  let explicitId: string | null = null; // start〜stop の明示グループ（最優先・個数では切らない）
   for (const el of Array.from(measureEl.children)) {
-    if (el.tagName === 'backup' || el.tagName === 'forward') { closeRun(); continue; }
+    if (el.tagName === 'backup' || el.tagName === 'forward') { flushPending(); explicitId = null; continue; }
     if (el.tagName !== 'note') continue;
     if (el.querySelector('grace') || el.querySelector('chord')) continue;
     const timeModEl = el.querySelector('time-modification');
-    if (!timeModEl) { closeRun(); continue; }
+    if (!timeModEl) { flushPending(); explicitId = null; continue; }
     const actualNotes = parseInt(timeModEl.querySelector('actual-notes')?.textContent ?? '', 10);
     const normalNotes = parseInt(timeModEl.querySelector('normal-notes')?.textContent ?? '', 10);
     if (!Number.isInteger(actualNotes) || actualNotes <= 0 || !Number.isInteger(normalNotes) || normalNotes <= 0) {
-      closeRun();
+      flushPending();
+      explicitId = null;
       continue;
     }
     const marks = Array.from(el.querySelectorAll('notations tuplet')).map((t) => t.getAttribute('type'));
-    const ratio = `${actualNotes}/${normalNotes}`;
-    const durKey = `${el.querySelector('type')?.textContent ?? ''}:${Array.from(el.children).filter((c) => c.tagName === 'dot').length}`;
-    const countCut = !inExplicitGroup && !runMixed && runCount >= actualNotes;
-    if (marks.includes('start') || !runId || ratio !== runRatio || countCut) {
-      tupletGroupCounter += 1;
-      runId = `xml-tuplet-${tupletGroupCounter}`;
-      runRatio = ratio;
-      runCount = 0;
-      runDur = durKey;
-      runMixed = false;
-      inExplicitGroup = marks.includes('start');
-    } else if (durKey !== runDur) {
-      runMixed = true;
+    if (explicitId) {
+      // 明示グループの中: stop までは音価・個数に関わらず同じグループ
+      idOf.set(el, explicitId);
+      if (marks.includes('stop')) explicitId = null;
+      continue;
     }
-    idOf.set(el, runId);
-    runCount += 1;
-    // stop はこの音**まで**がグループ（次の音から新グループ）
-    if (marks.includes('stop')) closeRun();
+    if (marks.includes('start')) {
+      flushPending();
+      explicitId = newId();
+      idOf.set(el, explicitId);
+      if (marks.includes('stop')) explicitId = null; // 1音だけの明示グループ
+      continue;
+    }
+    // マーカーの無い連符: run へ貯める（比が変われば手前で確定）
+    const ratio = `${actualNotes}/${normalNotes}`;
+    if (pendingRatio !== null && ratio !== pendingRatio) flushPending();
+    pendingRatio = ratio;
+    pending.push({
+      el,
+      durKey: `${el.querySelector('type')?.textContent ?? ''}:${Array.from(el.children).filter((c) => c.tagName === 'dot').length}`,
+      actual: actualNotes,
+    });
+    // start 無しの stop（迷子マーカー）はそこまでで run を確定する
+    if (marks.includes('stop')) flushPending();
   }
+  flushPending();
   return idOf;
 }
 

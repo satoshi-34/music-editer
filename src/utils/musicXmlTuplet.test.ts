@@ -226,6 +226,18 @@ describe('MusicXML 読込: 連符グループの境界', () => {
     expect(new Set(ids).size).toBe(1);
   });
 
+  it('マーカー無し+混合音価: 先頭3つが同音価で4つ目から変わる並びでも 3+1 に誤分割しない', () => {
+    const mk = (type: string, dur: number) => `
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>${dur}</duration><voice>1</voice><type>${type}</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>
+        </note>`;
+    // 8分×3 → 4分 の並び（1音ずつの個数カットだと3個目で切ってしまう経路）
+    const xml = wrap(mk('eighth', 4) + mk('eighth', 4) + mk('eighth', 4) + mk('quarter', 8));
+    const events = parseMusicXml(xml).parts[0].measures[0].events;
+    const ids = events.map((e) => e.tuplet?.id);
+    expect(new Set(ids).size).toBe(1);
+  });
+
   it('マーカーの無い出力でも numNotes 個ごとにグループが切れる（フォールバック）', () => {
     const xml = wrap(Array.from({ length: 6 }, () => NOTE('C', '')).join(''));
     const events = parseMusicXml(xml).parts[0].measures[0].events;
