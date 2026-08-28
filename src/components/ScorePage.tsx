@@ -2625,14 +2625,6 @@ export default function ScorePage() {
   };
 
   /** 「開く」メニュー（#109 第4段） */
-  const handleOpenMenu = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const kind = event.target.value;
-    event.target.value = '';
-    if (kind === 'file') fileImportRef.current?.click();
-    else if (kind === 'musicxml') musicXmlInputRef.current?.click();
-    else if (kind === 'legacy') void handleImportLegacyManualSave();
-  };
-
   const handleLoadSample = useCallback((sampleId: DemoScoreId) => {
     const sampleScore = createDemoScore(sampleId);
 
@@ -5655,17 +5647,25 @@ export default function ScorePage() {
                   <option value="pdf">PDF / 印刷</option>
                 </select>
               </label>
-              <label className="toolbar-select-label" title="ファイルから譜面を開きます（ブラウザ内の作品切替は「作品一覧」から）">
-                <span>開く</span>
-                <select value="" onChange={handleOpenMenu} aria-label="開く">
-                  <option value="" disabled>開くものを選ぶ…</option>
-                  <option value="file">ファイル (.score.json)</option>
-                  <option value="musicxml">MusicXML読込</option>
-                  {storedDataAvailable && (
-                    <option value="legacy">以前の手動保存を取り込む</option>
-                  )}
-                </select>
-              </label>
+              {/* 「開く」は select ではなく**ボタン**にする（#464 続報・Safari 実機で確定）。
+                  Safari は <select> の change をファイルダイアログを開ける「ユーザー操作」と
+                  認めず、input.click() が黙って無視される（ボタンの click なら開く。
+                  2026-08-28 に「🧪直接ボタンで開く／select 経由で開かない」を実機で切り分け）。
+                  書き出しメニューはダウンロード系のため select のまま（ダイアログ不要）。 */}
+              <div className="toolbar-chip-group" role="group" aria-label="開く" title="ファイルから譜面を開きます（ブラウザ内の作品切替は「作品一覧」から）">
+                <span className="toolbar-group-label">開く</span>
+                <button type="button" className="ghost toolbar-chip-button" onClick={() => fileImportRef.current?.click()}>
+                  ファイル
+                </button>
+                <button type="button" className="ghost toolbar-chip-button" onClick={() => musicXmlInputRef.current?.click()}>
+                  MusicXML
+                </button>
+                {storedDataAvailable && (
+                  <button type="button" className="ghost toolbar-chip-button" onClick={() => void handleImportLegacyManualSave()}>
+                    以前の手動保存
+                  </button>
+                )}
+              </div>
               {/* フィードバックボタンはヘッダーのタブ行右端へ移動した（Issue #142）。
                   譜面操作ではなくアプリへのメタ操作であり、どのタブからでも押せる必要があるため。 */}
               {partExtractionOptions.length > 0 && (

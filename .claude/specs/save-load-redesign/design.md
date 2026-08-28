@@ -450,3 +450,13 @@ Issue #236 と同じ考え方で、**枠は1つのまま**にする。書出ボ�
   .mxl の場合は「非圧縮 MusicXML」を選んでもらう案内が必要
 - 配線テスト: ScorePageFileOpenWiring.test.tsx（メニュー→click 呼び出し・display:none でない・
   a11y 属性・accept の MIME 併記を実マウントで固定）
+
+### 続報: 「開く」を select からボタン群へ（#464・2026-08-28 実機で確定）
+
+不可視スタイル化（前節）後も Safari でダイアログが開かなかった。実機の切り分け
+（デバッグ用の直接ボタン→開く／select の change 経由→開かない）により、
+**Safari は `<select>` の change イベントをファイルダイアログを開ける「ユーザー操作
+（user activation）」と認めない**ことが確定。「開く」メニューを select からボタン群
+（ファイル／MusicXML／以前の手動保存）へ変更した。書き出しメニューはダウンロード系で
+ダイアログを開かないため select のまま。配線テスト（ScorePageFileOpenWiring）は
+ボタン経由の click 検証+「開く combobox が存在しない」の回帰ガードへ更新。

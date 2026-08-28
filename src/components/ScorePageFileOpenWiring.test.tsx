@@ -4,7 +4,7 @@
 // ScorePage 実マウントで「メニュー選択が対応する input の click を呼ぶ」
 // 「display:none ではない」「a11y 上は隠れている」「accept に MIME 併記」を固定する。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react';
+import { render, cleanup, waitFor, fireEvent, screen, within } from '@testing-library/react';
 import ScorePage from './ScorePage';
 
 const localStorageMock = (() => {
@@ -66,13 +66,17 @@ describe('開くメニューと隠しファイル入力の配線（#464）', () 
     expect(jsonInput.getAttribute('accept')).toContain('application/json');
     expect(xmlInput.getAttribute('accept')).toContain('application/vnd.recordare.musicxml+xml');
 
-    // メニュー選択 → 対応する input の click が呼ばれる
+    // ボタンクリック → 対応する input の click が呼ばれる（#464 続報:
+    // Safari は select の change をファイルダイアログを開けるユーザー操作と
+    // 認めないため、「開く」は select ではなくボタン群で提供する）
     const jsonClick = vi.spyOn(jsonInput, 'click');
     const xmlClick = vi.spyOn(xmlInput, 'click');
-    const openSelect = screen.getByRole('combobox', { name: '開く' });
-    fireEvent.change(openSelect, { target: { value: 'file' } });
+    const openGroup = screen.getByRole('group', { name: '開く' });
+    fireEvent.click(within(openGroup).getByRole('button', { name: 'ファイル' }));
     expect(jsonClick).toHaveBeenCalledTimes(1);
-    fireEvent.change(openSelect, { target: { value: 'musicxml' } });
+    fireEvent.click(within(openGroup).getByRole('button', { name: 'MusicXML' }));
     expect(xmlClick).toHaveBeenCalledTimes(1);
+    // 「開く」が select として存在しない（Safari で無反応になる形へ戻さない）
+    expect(screen.queryByRole('combobox', { name: '開く' })).toBeNull();
   }, 60000);
 });
