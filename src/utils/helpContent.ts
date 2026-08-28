@@ -266,7 +266,7 @@ export const TASK_GUIDES: TaskGuide[] = [
     keywords: ['MusicXML', 'ミューズスコア', 'Finale', 'インポート', 'エクスポート', 'MIDI'],
     steps: [
       '「ファイル」タブの「書き出し」メニューで「MusicXML」を選んで書き出し、他のソフトで開く',
-      '取り込みは「開く」メニューの「MusicXML読込」から。書き出しメニューは「MIDI」（MIDI Type 1）にも対応している',
+      '取り込みは「開く」の「MusicXML」ボタンから。書き出しメニューは「MIDI」（MIDI Type 1）にも対応している',
     ],
     seeAlso: 'パート譜・他のソフトとのやりとり',
   },

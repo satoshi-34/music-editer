@@ -1,4 +1,4 @@
-// 「開く」メニュー→隠しファイル入力の配線（#464）。
+// 「開く」ボタン群→隠しファイル入力の配線（#464）。
 // Safari は display:none の file input へのプログラム .click() を無視することがあり、
 // また拡張子のみの accept 指定を正しく解釈しないことがある（2026-08-28 実機で発生）。
 // ScorePage 実マウントで「メニュー選択が対応する input の click を呼ぶ」
@@ -24,7 +24,7 @@ class ResizeObserverMock { observe() {} unobserve() {} disconnect() {} }
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-describe('開くメニューと隠しファイル入力の配線（#464）', () => {
+describe('開くボタン群と隠しファイル入力の配線（#464）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
   beforeEach(() => {
@@ -40,7 +40,7 @@ describe('開くメニューと隠しファイル入力の配線（#464）', () 
     vi.restoreAllMocks();
   });
 
-  it('メニュー選択が対応する input の click を呼び、input は Safari 互換の隠し方になっている', async () => {
+  it('ボタンが対応する input の click を呼び、input は Safari 互換の隠し方になっている', async () => {
     render(<ScorePage />);
     await waitFor(() => {
       expect(document.querySelector('rect.vf-hit')).toBeTruthy();
@@ -78,5 +78,36 @@ describe('開くメニューと隠しファイル入力の配線（#464）', () 
     expect(xmlClick).toHaveBeenCalledTimes(1);
     // 「開く」が select として存在しない（Safari で無反応になる形へ戻さない）
     expect(screen.queryByRole('combobox', { name: '開く' })).toBeNull();
+  }, 60000);
+
+  it('旧・手動保存がある環境では「以前の手動保存」ボタンが出て、取り込みが動く', async () => {
+    // 旧スロット（music-score-app-data 系）に手動保存データを仕込む
+    const { saveScoreData, createSavedScoreData } = await import('../utils/storage');
+    const events = [
+      { dur: '4' as const, isRest: false, keys: ['c/5'] },
+      { dur: '4' as const, isRest: false, keys: ['d/5'] },
+      { dur: '4' as const, isRest: false, keys: ['e/5'] },
+      { dur: '4' as const, isRest: false, keys: ['f/5'] },
+    ];
+    const legacy = createSavedScoreData(
+      { title: '旧保存の曲', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events, voices: [{ id: 'voice-1', events }] }] }],
+      1, 1, 'single'
+    );
+    expect(saveScoreData(legacy).success).toBe(true);
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+
+    const openGroup = screen.getByRole('group', { name: '開く' });
+    const legacyButton = within(openGroup).getByRole('button', { name: '以前の手動保存' });
+    fireEvent.click(legacyButton);
+    // 取り込み完了（または結果）の通知が出て、タイトルが取り込んだ曲になる
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('旧保存の曲');
+    }, { timeout: 15000 });
   }, 60000);
 });

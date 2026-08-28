@@ -2624,7 +2624,6 @@ export default function ScorePage() {
     else if (kind === 'pdf') void handleExportPdf();
   };
 
-  /** 「開く」メニュー（#109 第4段） */
   const handleLoadSample = useCallback((sampleId: DemoScoreId) => {
     const sampleScore = createDemoScore(sampleId);
 
@@ -5634,7 +5633,7 @@ export default function ScorePage() {
                 style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
                 onChange={handleImportFile}
               />
-              {/* 書き出し・開くの2メニュー（#109 第4段）。個別ボタンの羅列をやめ、
+              {/* 書き出しメニューと「開く」ボタン群（#109 第4段→#464 続報で開く側をボタン化）。個別ボタンの羅列をやめ、
                   既存の編成選択と同じ select パターンで形式だけを選ぶ。
                   value は常に空（実行のたびにプレースホルダーへ戻る） */}
               <label className="toolbar-select-label" title="譜面をファイルや他形式で書き出します">
