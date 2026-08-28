@@ -54,8 +54,6 @@ const TEST_CONTAINER_WIDTH = 700;
  *
  * 「1段目は2小節」の上書きを付けて、小節2 → 小節4 の移動が必ず段をまたぐようにする。
  */
-let workId = '';
-
 function seedWork() {
   const measures: MeasureData[] = [
     { events: [
@@ -82,7 +80,6 @@ function seedWork() {
   const saved = saveWorkAutosaveData(created.data.id, data);
   if (!saved.success) throw new Error('saveWorkAutosaveData failed');
   setLastOpenedWorkId(created.data.id);
-  workId = created.data.id;
 }
 
 // jsdom はレイアウトを持たないので、SVG の見た目サイズを width/height 属性どおりに見せる。
