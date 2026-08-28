@@ -213,10 +213,16 @@ export class SoundFontEngine implements PlaybackEngine {
             // 提供していない（サンプル自体の音高固定のため）。そのため微分音（四分音, event.microtones）
             // は SoundFont 再生では反映されず、記譜どおりの半音に丸まって鳴る（README参照）。
             event.keys.forEach(key => {
+              // タイの継続音は開始音の中で鳴り続けているので、ここでは鳴らさない。
+              // （鳴らすと「タン・タン」と2回聞こえてしまう）
+              if (event.tieSuppressedKeys?.includes(key)) return;
+              // タイの開始音は、結ばれた先の音価ぶんだけ長く鳴らす。
+              // 開始位置と次の音までの間隔は変えないので、テンポは崩れない。
+              const tieExtendSeconds = (event.tieExtendBeatsByKey?.[key] ?? 0) * (60 / bpm);
               player.play(
                 this.normalizeNoteFormat(key),
                 eventStartTime,
-                this.buildPlaybackOptions(soundDuration, velocity)
+                this.buildPlaybackOptions(soundDuration + tieExtendSeconds, velocity)
               );
             });
           }

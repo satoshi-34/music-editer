@@ -374,6 +374,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
         dots?: 1 | 2;
         tuplet?: { numNotes: number; notesOccupied: number };
         microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[];
+        tieExtendBeatsByKey?: Record<string, number>;
+        tieSuppressedKeys?: string[];
       }>;
       measureBeats?: number;
       isCompoundMeter?: boolean;
@@ -439,7 +441,11 @@ export class SimpleAudioEngine implements PlaybackEngine {
           const soundDuration = (swingTiming.durationBeats * secondsPerBeat) * (event.durationScale ?? 1);
           const eventStartTime = measureStartTime + (swingTiming.startBeat * secondsPerBeat);
 
-          if (!event.isRest && event.keys && event.keys.length > 0) {
+          // 内蔵エンジンは先頭音（keys[0]）だけを鳴らす単音再生なので、
+          // タイの判定も先頭音について行う。
+          const primaryKey = event.keys?.[0];
+          const tieSuppressed = primaryKey != null && (event.tieSuppressedKeys?.includes(primaryKey) ?? false);
+          if (!event.isRest && event.keys && event.keys.length > 0 && !tieSuppressed) {
             // 音符の場合は最初の音高を再生（単音対応）。
             // 微分音（四分音）は先頭音（keyIndex 0）にだけ対応する既知の制限がある。
             // 和音2音目以降の微分音は、クリック確認音・ピアノ譜描画では反映されるが、
@@ -449,9 +455,12 @@ export class SimpleAudioEngine implements PlaybackEngine {
               ? (microtoneForFirstKey.type === 'quarterSharp' ? 50 : -50)
               : 0;
             const frequency = this.noteToFrequency(event.keys[0], centsOffset);
+            // タイの開始音は、結ばれた先の音価ぶんだけ長く鳴らす。
+            // 次の音の位置（currentTime）は下で duration のまま進めるのでテンポは崩れない。
+            const tieExtendSeconds = (event.tieExtendBeatsByKey?.[primaryKey] ?? 0) * secondsPerBeat;
             await this.playNoteAtTime(
               frequency,
-              soundDuration,
+              soundDuration + tieExtendSeconds,
               eventStartTime,
               this.normalizePlaybackVelocity((event as { velocity?: number }).velocity)
             );

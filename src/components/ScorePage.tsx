@@ -159,6 +159,7 @@ import type { ClefType } from './clefUtils';
 import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { buildTiePlaybackEventKey, buildTiePlaybackPlan } from '../utils/tiePlaybackUtils';
 import {
   canUseTimeSignatureSymbol,
   formatTimeSignature,
@@ -1324,6 +1325,10 @@ export default function ScorePage() {
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
+            // タイ（同じ高さの音を結んで1音として伸ばす記号）を再生へ反映する計画。
+            // 強弱と違って**切ったあとの列**で解決する: 開始音が開始位置より前にあって
+            // 切り落とされた継続音は、抑制せずそのまま鳴らしたい（途中再生で音が消えないため）。
+            const tiePlan = buildTiePlaybackPlan(expandedMeasures);
 
             return {
               // 編成譜ではパート定義に再生楽器を持たせている。
@@ -1345,6 +1350,11 @@ export default function ScorePage() {
                   const baseVelocity = dynamicVelocities.get(
                     buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, eventIndex)
                   ) ?? 0.5;
+                  // タイの計画は「声部の中での位置」で引く。
+                  // 畳んだあとの eventIndex は複数声部で並べ替えられているため使えない。
+                  const tieAdjustment = tiePlan.get(
+                    buildTiePlaybackEventKey(expandedMeasureIndex, event.voiceIndex, event.eventIndex)
+                  );
                   return {
                     ...event,
                     // 強弱未設定や休符では velocity を省略し、
@@ -1356,6 +1366,13 @@ export default function ScorePage() {
                     durationScale: event.isRest || articulation.durationScale === 1
                       ? undefined
                       : articulation.durationScale,
+                    // タイが無い音符では省略して、古い挙動と完全に同じにする。
+                    tieExtendBeatsByKey: tieAdjustment && Object.keys(tieAdjustment.extendBeatsByKey).length > 0
+                      ? tieAdjustment.extendBeatsByKey
+                      : undefined,
+                    tieSuppressedKeys: tieAdjustment && tieAdjustment.suppressedKeys.length > 0
+                      ? tieAdjustment.suppressedKeys
+                      : undefined,
                   };
                 })
               }))

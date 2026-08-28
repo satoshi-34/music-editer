@@ -116,6 +116,78 @@ describe('SimpleAudioEngine', () => {
     expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(2, expect.any(Number), expect.any(Number), expect.any(Number), 0.74);
   });
 
+  describe('タイで結ばれた音の再生（Issue #445）', () => {
+    /**
+     * 内部メソッド playNoteAtTime を型付きで覗くための入り口。
+     * 「いつ・どの高さを・何秒鳴らす予約をしたか」だけを見たいので、
+     * 実際の発音はスパイで差し替える。
+     */
+    type PlayNoteAtTimeHost = {
+      playNoteAtTime: (frequency: number, duration: number, startTime: number, velocity?: number) => Promise<void>;
+    };
+    const internals = (target: SimpleAudioEngine) => target as unknown as PlayNoteAtTimeHost;
+
+    it('タイ2音は「1回の発音・合計の長さ」で鳴る', async () => {
+      await engine.initialize();
+      const playNoteAtTimeSpy = vi.spyOn(internals(engine), 'playNoteAtTime').mockResolvedValue(undefined);
+
+      // 4分音符 + タイ + 4分音符（BPM 120 なら 1拍 = 0.5秒）
+      await engine.playScore([
+        {
+          events: [
+            { dur: '4', isRest: false, keys: ['c/4'], tieExtendBeatsByKey: { 'c/4': 1 } },
+            { dur: '4', isRest: false, keys: ['c/4'], tieSuppressedKeys: ['c/4'] }
+          ]
+        }
+      ], 120);
+
+      // 発音は1回だけ（継続音は鳴らさない）
+      expect(playNoteAtTimeSpy).toHaveBeenCalledTimes(1);
+      // 長さは 0.5秒 + 0.5秒 = 1.0秒
+      const [, duration] = playNoteAtTimeSpy.mock.calls[0];
+      expect(duration).toBeCloseTo(1.0, 5);
+    });
+
+    it('タイの継続音を止めても次の音の位置はずれない', async () => {
+      await engine.initialize();
+      const playNoteAtTimeSpy = vi.spyOn(internals(engine), 'playNoteAtTime').mockResolvedValue(undefined);
+
+      await engine.playScore([
+        {
+          events: [
+            { dur: '4', isRest: false, keys: ['c/4'], tieExtendBeatsByKey: { 'c/4': 1 } },
+            { dur: '4', isRest: false, keys: ['c/4'], tieSuppressedKeys: ['c/4'] },
+            { dur: '4', isRest: false, keys: ['d/4'] }
+          ],
+          measureBeats: 4
+        }
+      ], 120);
+
+      expect(playNoteAtTimeSpy).toHaveBeenCalledTimes(2);
+      const [, , tieStartTime] = playNoteAtTimeSpy.mock.calls[0];
+      const [, , nextNoteStartTime] = playNoteAtTimeSpy.mock.calls[1];
+      // 3音目は「2音ぶん（1.0秒）あと」から始まる＝タイでテンポが崩れていない
+      expect(nextNoteStartTime - tieStartTime).toBeCloseTo(1.0, 5);
+    });
+
+    it('タイが無い譜面では発音回数も長さも従来どおり', async () => {
+      await engine.initialize();
+      const playNoteAtTimeSpy = vi.spyOn(internals(engine), 'playNoteAtTime').mockResolvedValue(undefined);
+
+      await engine.playScore([
+        {
+          events: [
+            { dur: '4', isRest: false, keys: ['c/4'] },
+            { dur: '4', isRest: false, keys: ['c/4'] }
+          ]
+        }
+      ], 120);
+
+      expect(playNoteAtTimeSpy).toHaveBeenCalledTimes(2);
+      expect(playNoteAtTimeSpy.mock.calls[0][1]).toBeCloseTo(0.5, 5);
+    });
+  });
+
   describe('ダブルシャープ・ダブルフラットの周波数計算（Issue #423）', () => {
     it('𝄪 は全音上、𝄫 は全音下の音として鳴る', () => {
       const d4 = engine.noteToFrequency('d/4');
