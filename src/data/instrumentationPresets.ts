@@ -71,7 +71,7 @@ const STRING_QUARTET_PARTS: PartInput[] = [
   simplePart('violin-1', 'Violin I', 'Vln. I', 'strings', 'strings', 'treble', InstrumentType.VIOLIN, 'C', 'violins'),
   simplePart('violin-2', 'Violin II', 'Vln. II', 'strings', 'strings', 'treble', InstrumentType.VIOLIN, 'C', 'violins'),
   simplePart('viola', 'Viola', 'Vla.', 'strings', 'strings', 'alto', InstrumentType.VIOLA),
-  simplePart('cello', 'Cello', 'Vc.', 'strings', 'strings', 'bass', InstrumentType.CELLO),
+  simplePart('cello', 'Violoncello', 'Vc.', 'strings', 'strings', 'bass', InstrumentType.CELLO),
 ];
 
 const STRING_ORCHESTRA_PARTS: PartInput[] = [

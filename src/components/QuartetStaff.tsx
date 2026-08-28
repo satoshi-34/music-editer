@@ -13,11 +13,13 @@ import { createEmptyMeasures } from '../utils/voiceMeasureUtils';
 
 // パート譜表示（PartExtractionStaff）からも同じ clef/楽器定義を使うため export する
 // fullLabel は総譜1段目に出すフル名（Issue #60）。2段目以降は label（略称）を使う。
+// fullLabel を変えるときは utils/partExtractionUtils.ts の
+// QUARTET_PART_EXTRACTION_LABELS（パート譜表示の選択肢の名前）も必ず一緒に変えること。
 export const QUARTET_PART_CONFIGS: Omit<PartConfig, 'data' | 'onChange'>[] = [
   { clef: 'treble', label: 'Vn. I',  fullLabel: 'Violin I',  playbackInstrument: InstrumentType.VIOLIN },
   { clef: 'treble', label: 'Vn. II', fullLabel: 'Violin II', playbackInstrument: InstrumentType.VIOLIN },
   { clef: 'alto',   label: 'Va.',    fullLabel: 'Viola',     playbackInstrument: InstrumentType.VIOLA },
-  { clef: 'bass',   label: 'Vc.',    fullLabel: 'Cello',     playbackInstrument: InstrumentType.CELLO },
+  { clef: 'bass',   label: 'Vc.',    fullLabel: 'Violoncello', playbackInstrument: InstrumentType.CELLO },
 ];
 
 type Props = {

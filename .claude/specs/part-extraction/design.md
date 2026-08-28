@@ -26,7 +26,7 @@ README ロードマップ「パート譜の抽出」に対応する。編成譜�
 
 - `getPartExtractionOptions(scoreType, instrumentationParts)`: 選択肢一覧
   (`{ id, label, index }[]`) を作る。`quartet` は固定4パート
-  （`violin-1/violin-2/viola/cello` = Violin I/Violin II/Viola/Cello）、
+  （`violin-1/violin-2/viola/cello` = Violin I/Violin II/Viola/Violoncello。Issue #443 で Cello から改名）、
   `ensemble` は `instrumentation.parts` の順序・ID・`name` をそのまま使う
 - `resolvePartExtractionSelection(options, selectedId)`: 選択中 ID から選択肢を解決する。
   見つからない場合（楽譜種別切り替えでID自体が変わった、パート削除で消えた等）は `null`

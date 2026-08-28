@@ -20,7 +20,7 @@ function makePart(overrides: Partial<InstrumentPartDefinition>): InstrumentPartD
 describe('getPartExtractionOptions', () => {
   it('弦楽四重奏では固定4パートを返す', () => {
     const options = getPartExtractionOptions('quartet', []);
-    expect(options.map(o => o.label)).toEqual(['Violin I', 'Violin II', 'Viola', 'Cello']);
+    expect(options.map(o => o.label)).toEqual(['Violin I', 'Violin II', 'Viola', 'Violoncello']);
     expect(options.map(o => o.index)).toEqual([0, 1, 2, 3]);
   });
 
