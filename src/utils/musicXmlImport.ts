@@ -3,7 +3,7 @@
 // score-partwise 形式（Finale / Sibelius / MuseScore 等が出力する標準形式）に対応。
 
 import type { SavedScoreData, MeasureData, NoteEvent, PartData, HairpinMark, TimeSignatureStyle } from '../types/storage';
-import type { ClefType } from '../components/clefUtils';
+import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/clefUtils';
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
 import { isValidTimeSignature } from './timeSignatureUtils';
@@ -64,13 +64,111 @@ const FIFTHS_TO_KEY: Record<number, KeySignature> = {
 /** note 要素群をまとめて MeasureData.events に変換する */
 let tupletGroupCounter = 0;
 
-function parseNotes(noteEls: Element[]): NoteEvent[] {
+/**
+ * 小節の子要素列から「元の連符グループ」単位で共通 id を割り当てる（クロススタッフ連符対応）。
+ *
+ * 連符が五線をまたぐと、同じグループの音が「自五線の実音（parseNotes 経由）」と
+ * 「別五線の合成休符（syntheticTupletRest 経由）」に分かれて読まれる。id をそれぞれで
+ * 採番すると描画側（createVexFlowTuplets）が「同一 id が numNotes 個連続」の条件を
+ * 満たせず、連符倍率が適用されない（Codex round1 P1）。そこで**両者が読む前に**
+ * 子要素の並びからグループ境界を決め、実音と合成休符へ同じ id を配る。
+ *
+ * 境界の規則（優先順）:
+ * 1. **明示の `<notations><tuplet type="start"/"stop">`**（MusicXML の正式なグループ境界。
+ *    Finale はこれを必ず書く）。start で新グループ・stop でグループを閉じる
+ * 2. マーカーが無い場合のフォールバック: time-modification の無い音・<backup>・<forward>・
+ *    連符比（actual/normal）の変化・**均一音価のグループが numNotes 個に達したとき**に切る。
+ *    以前は「time-modification の連続」だけで判定していたため、同じ比の連符が並ぶと
+ *    複数グループが1つに結合し（三連×3=9イベントの巨大グループ）、描画側の
+ *    「同一 id が numNotes 個連続」条件を満たせず連符括りが消えていた（ソナチネ実測）
+ * direction / attributes / 前打音 / 和音の構成音はグループを切らない。
+ *
+ * 既知の制約: マーカーの無い出力で**音価が混在する**連符（4分+8分の三連等）が連続する形は、
+ * イベント数からは境界を判定できないため従来どおり結合したまま読む（誤って 3+1 に割るよりよい。
+ * Finale / MuseScore はマーカーを書くため実害は限定的）。入れ子連符（tuplet number=2 以上）は
+ * データモデルがイベントに連符を1つしか持てないため未対応（従来どおり）。
+ */
+function assignMeasureTupletIds(measureEl: Element): Map<Element, string> {
+  const idOf = new Map<Element, string>();
+  const newId = () => {
+    tupletGroupCounter += 1;
+    return `xml-tuplet-${tupletGroupCounter}`;
+  };
+  // マーカーの無い連符 run は**貯めてから**分割を決める（先読み方式）。
+  // 1音ずつ切ると「8分×3のあとに4分」のような並びで、混在に気づく前に
+  // 個数カットが発火して 3+1 に誤分割する（Codex round2 P1）
+  let pending: Array<{ el: Element; durKey: string; actual: number }> = [];
+  let pendingRatio: string | null = null;
+  const flushPending = () => {
+    if (pending.length) {
+      const uniform = pending.every((p) => p.durKey === pending[0].durKey);
+      if (uniform) {
+        // 均一音価: numNotes 個ずつのグループへ分割（三連×3=9個 → 3+3+3）
+        const n = pending[0].actual;
+        for (let i = 0; i < pending.length; i += n) {
+          const id = newId();
+          for (const p of pending.slice(i, i + n)) idOf.set(p.el, id);
+        }
+      } else {
+        // 混合音価: イベント数から境界を判定できないため1グループのまま（既知の制約）
+        const id = newId();
+        for (const p of pending) idOf.set(p.el, id);
+      }
+    }
+    pending = [];
+    pendingRatio = null;
+  };
+  let explicitId: string | null = null; // start〜stop の明示グループ（最優先・個数では切らない）
+  for (const el of Array.from(measureEl.children)) {
+    if (el.tagName === 'backup' || el.tagName === 'forward') { flushPending(); explicitId = null; continue; }
+    if (el.tagName !== 'note') continue;
+    if (el.querySelector('grace') || el.querySelector('chord')) continue;
+    const timeModEl = el.querySelector('time-modification');
+    if (!timeModEl) { flushPending(); explicitId = null; continue; }
+    const actualNotes = parseInt(timeModEl.querySelector('actual-notes')?.textContent ?? '', 10);
+    const normalNotes = parseInt(timeModEl.querySelector('normal-notes')?.textContent ?? '', 10);
+    if (!Number.isInteger(actualNotes) || actualNotes <= 0 || !Number.isInteger(normalNotes) || normalNotes <= 0) {
+      flushPending();
+      explicitId = null;
+      continue;
+    }
+    const marks = Array.from(el.querySelectorAll('notations tuplet')).map((t) => t.getAttribute('type'));
+    if (explicitId) {
+      // 明示グループの中: stop までは音価・個数に関わらず同じグループ
+      idOf.set(el, explicitId);
+      if (marks.includes('stop')) explicitId = null;
+      continue;
+    }
+    if (marks.includes('start')) {
+      flushPending();
+      explicitId = newId();
+      idOf.set(el, explicitId);
+      if (marks.includes('stop')) explicitId = null; // 1音だけの明示グループ
+      continue;
+    }
+    // マーカーの無い連符: run へ貯める（比が変われば手前で確定）
+    const ratio = `${actualNotes}/${normalNotes}`;
+    if (pendingRatio !== null && ratio !== pendingRatio) flushPending();
+    pendingRatio = ratio;
+    pending.push({
+      el,
+      durKey: `${el.querySelector('type')?.textContent ?? ''}:${Array.from(el.children).filter((c) => c.tagName === 'dot').length}`,
+      actual: actualNotes,
+    });
+    // start 無しの stop（迷子マーカー）はそこまでで run を確定する
+    if (marks.includes('stop')) flushPending();
+  }
+  flushPending();
+  return idOf;
+}
+
+function parseNotes(noteEls: Element[], tupletIdByEl?: Map<Element, string>): NoteEvent[] {
   const events: NoteEvent[] = [];
   let chordBuffer: NoteEvent | null = null;
-  // 連符（tuplet）の読み込み: <time-modification> がある連続した note を
-  // ひとまとまりのグループとみなし、共通の id を割り当てる。
-  // MusicXML は明示的な <tuplet type="start"/"stop"/> でグループ境界を示すこともあるが、
-  // ここでは「time-modification が連続しているかどうか」で十分に判定できる。
+  // 連符（tuplet）の読み込み: グループ境界は assignMeasureTupletIds（<tuplet start/stop>
+  // 最優先+numNotes フォールバック）が決めた id（tupletIdByEl）を使う。
+  // 下の「連続性だけ」の判定は tupletIdByEl が渡されない旧経路の後方互換で、
+  // 現行の読込経路では全 note が map に載るため実質使われない。
   let currentTupletId: string | null = null;
   let prevHadTimeMod = false;
 
@@ -94,7 +192,12 @@ function parseNotes(noteEls: Element[]): NoteEvent[] {
       const actualNotes = parseInt(timeModEl.querySelector('actual-notes')?.textContent ?? '', 10);
       const normalNotes = parseInt(timeModEl.querySelector('normal-notes')?.textContent ?? '', 10);
       if (Number.isInteger(actualNotes) && actualNotes > 0 && Number.isInteger(normalNotes) && normalNotes > 0) {
-        if (!prevHadTimeMod || !currentTupletId) {
+        // 大譜表（クロススタッフの可能性がある経路）では、実音と合成休符が同じ id を
+        // 共有できるよう、小節単位で先に決めたグループ id（assignMeasureTupletIds）を使う
+        const presetId = tupletIdByEl?.get(noteEl);
+        if (presetId) {
+          currentTupletId = presetId;
+        } else if (!prevHadTimeMod || !currentTupletId) {
           tupletGroupCounter += 1;
           currentTupletId = `xml-tuplet-${tupletGroupCounter}`;
         }
@@ -352,8 +455,18 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     // リズムが黙って壊れる（Codex round1 P1）
     const durationRests = (el: Element): NoteEvent[] => {
       // 連符の音が五線をまたぐ形は、合成休符が二進音価しか表せず 1/3 拍などの端数を
-      // 落として両段の時間がずれる（round3 P1）。黙って壊さず理由付きで読込を中止する
+      // 落として両段の時間がずれる（round3 P1）。以前は理由付きで読込を中止していたが、
+      // Finale 実ファイル（ピアノ曲の右手↔左手またぎ・2026-08-29 ラヴェル ソナチネで実測）が
+      // 普通に該当するため、「同じ音価+同じ連符比を持つ休符」への1:1置換で時間を厳密に
+      // 保存して読み込む（下の syntheticTupletRest を参照）
       if (el.tagName === 'note' && el.querySelector('time-modification')) {
+        const rest = syntheticTupletRest.get(el);
+        if (rest) {
+          // 同じ el を「イベント生成」と「位置数え（syntheticRestCount）」の2回参照するため、
+          // 使い回しで hairpins 等が二重に付かないよう毎回複製する
+          return [{ ...rest, tuplet: rest.tuplet ? { ...rest.tuplet } : undefined }];
+        }
+        // actual/normal が壊れていて比を復元できない場合だけ、従来どおり黙って壊さず中止する
         throw new Error(
           '連符が五線をまたぐクロススタッフ記譜を含むため、この MusicXML は読み込めません。書き出し元で段またぎ（クロススタッフ）を外してから書き出してください（読み込み後に ⇵ で見た目を付け直せます）',
         );
@@ -374,7 +487,7 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     const parseVoiceChildren = (children: Element[]): NoteEvent[] => {
       const evs: NoteEvent[] = [];
       let noteRun: Element[] = [];
-      const flush = () => { if (noteRun.length) { evs.push(...parseNotes(noteRun)); noteRun = []; } };
+      const flush = () => { if (noteRun.length) { evs.push(...parseNotes(noteRun, measureTupletIdOf)); noteRun = []; } };
       for (const el of children) {
         if (isSyntheticRestEl(el)) { flush(); evs.push(...durationRests(el)); continue; }
         if (el.tagName === 'note') {
@@ -415,6 +528,37 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
       }
     }
     const noteUnitStaff = (el: Element): number => unitStaffOf.get(el) ?? staffNumberOf(el);
+    // クロススタッフ連符の合成休符（round3 P1 の読込拒否の解除）:
+    // 別五線へ移った連符の音を「同じ音価・付点・連符比を持つ休符」へ1:1で置き換える。
+    // duration/divisions からの二進分割（buildRestEventsForBeats）では 1/3 拍などを
+    // 表せないが、音価+連符比をそのまま写せば時間は厳密に保存される。
+    // グループ id は assignMeasureTupletIds が「元の連符グループ」単位で決めたものを、
+    // 実音（parseNotes）と合成休符の**両方**が共有する。id を別々に採番すると描画側の
+    // 「同一 id が numNotes 個連続」条件が満たせず連符倍率が適用されない（Codex round1 P1）。
+    // 時間は正しく保存され、またぎの見た目は読込後に ⇵ で付け直せる
+    const measureTupletIdOf = assignMeasureTupletIds(measureEl);
+    const syntheticTupletRest = new Map<Element, NoteEvent>();
+    for (const el of Array.from(measureEl.children)) {
+      const timeModEl = el.tagName === 'note' ? el.querySelector('time-modification') : null;
+      const isTarget = timeModEl !== null && staffNumber !== null
+        && noteUnitStaff(el) !== staffNumber
+        && !el.querySelector('chord') && !el.querySelector('grace');
+      if (!isTarget) continue;
+      const groupId = measureTupletIdOf.get(el);
+      if (!groupId) continue; // 連符比が壊れている場合は id が無い → durationRests 側で中止
+      const actualNotes = parseInt(timeModEl.querySelector('actual-notes')?.textContent ?? '', 10);
+      const normalNotes = parseInt(timeModEl.querySelector('normal-notes')?.textContent ?? '', 10);
+      const dur = (TYPE_TO_DUR[el.querySelector('type')?.textContent ?? ''] ?? '4') as NoteEvent['dur'];
+      const dotCount = Array.from(el.children).filter((c) => c.tagName === 'dot').length;
+      const dots: 1 | 2 | undefined = dotCount === 1 ? 1 : dotCount >= 2 ? 2 : undefined;
+      syntheticTupletRest.set(el, {
+        dur,
+        isRest: true,
+        keys: [defaultRestDisplayKeyForDuration(staffClef, dur)],
+        dots,
+        tuplet: { id: groupId, numNotes: actualNotes, notesOccupied: normalNotes },
+      });
+    }
     // 別五線の <note> は**捨てずに残す**: 同じ voice が小節内で五線を移るクロススタッフ記譜では、
     // 捨てると先行音の時間が消えて後続が小節先頭へ詰まる（Codex round2 P1）。
     // 残した別五線の音は parseVoiceChildren で「同じ長さの休符」に合成する（時間を保存し、
