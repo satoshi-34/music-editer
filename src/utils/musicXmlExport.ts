@@ -401,9 +401,28 @@ export function scoreToMusicXml(data: SavedScoreData): string {
   const globalKeyFifths = KEY_FIFTHS[keySignature as KeySignature] ?? 0;
   const globalTimeSig: [number, number] = [timeSignature[0], timeSignature[1]];
 
-  // part-list
+  // part-list（#443 Codex round1 P2: <part-name> には安定ID（partId）ではなく表示名を出す）。
+  // 名前の優先順位: 保存済み instrumentation.parts[].name（編成譜・既存作品の保存名優先）
+  // → 既知の固定 partId の正式名（弦楽四重奏・ピアノ大譜表・単旋律）→ partId そのまま。
+  // partId 自体はアプリ内の安定IDとして変えない（読込側の右手/左手判定 #419 が参照する）
+  const KNOWN_PART_DISPLAY_NAMES: Record<string, string> = {
+    'violin-1': 'Violin I',
+    'violin-2': 'Violin II',
+    'viola': 'Viola',
+    'cello': 'Violoncello',
+    'right-hand': 'Piano (right hand)',
+    'left-hand': 'Piano (left hand)',
+    'melody': 'Melody',
+  };
+  const instrumentationNameById = new Map(
+    (data.instrumentation?.parts ?? [])
+      .filter((part) => typeof part?.id === 'string' && typeof part?.name === 'string' && part.name.length > 0)
+      .map((part) => [part.id, part.name] as const)
+  );
+  const partDisplayName = (partId: string): string =>
+    instrumentationNameById.get(partId) ?? KNOWN_PART_DISPLAY_NAMES[partId] ?? partId;
   const partListItems = parts.map((p, i) =>
-    `<score-part id="P${i + 1}"><part-name>${p.partId}</part-name></score-part>`
+    `<score-part id="P${i + 1}"><part-name>${escapeXmlText(partDisplayName(p.partId))}</part-name></score-part>`
   );
 
   // 各パートの小節 XML

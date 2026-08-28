@@ -71,14 +71,14 @@ const STRING_QUARTET_PARTS: PartInput[] = [
   simplePart('violin-1', 'Violin I', 'Vln. I', 'strings', 'strings', 'treble', InstrumentType.VIOLIN, 'C', 'violins'),
   simplePart('violin-2', 'Violin II', 'Vln. II', 'strings', 'strings', 'treble', InstrumentType.VIOLIN, 'C', 'violins'),
   simplePart('viola', 'Viola', 'Vla.', 'strings', 'strings', 'alto', InstrumentType.VIOLA),
-  simplePart('cello', 'Cello', 'Vc.', 'strings', 'strings', 'bass', InstrumentType.CELLO),
+  simplePart('cello', 'Violoncello', 'Vc.', 'strings', 'strings', 'bass', InstrumentType.CELLO),
 ];
 
 const STRING_ORCHESTRA_PARTS: PartInput[] = [
   // 低弦（Vc・Cb）は同じ五線上にまたいで書く流派もあるが、ここではセクションだけ分け、
   // 視覚的にひとまとめに見せたいので低弦のサブグループを追加する。
-  // 弦楽四重奏では Cello だけなので括弧を出さず、弦楽合奏以上に展開するときだけ
-  // Cello と Contrabass を同じ 'low-strings' にして細い括弧でまとめる。
+  // 弦楽四重奏では Violoncello だけなので括弧を出さず、弦楽合奏以上に展開するときだけ
+  // Violoncello と Contrabass を同じ 'low-strings' にして細い括弧でまとめる。
   ...STRING_QUARTET_PARTS.map(part => part.id === 'cello'
     ? { ...part, subBracketGroup: 'low-strings' }
     : part

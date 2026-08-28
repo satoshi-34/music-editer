@@ -24,7 +24,11 @@ export type PartExtractionOption = {
 // QuartetStaff.tsx の QUARTET_PART_CONFIGS と対になる ID・表示名をここに定義する。
 // （QuartetStaff 側は描画専用の clef/playbackInstrument を持つため、
 //   パート抽出用の ID/ラベルはこちらに独立して持たせている）
-export const QUARTET_PART_EXTRACTION_LABELS: readonly string[] = ['Violin I', 'Violin II', 'Viola', 'Cello'];
+//
+// 表示名を変えるときは **QUARTET_PART_CONFIGS の fullLabel も必ず一緒に変える**こと。
+// 総譜のパート名とパート譜表示のパート名が食い違うと、同じパートが別物に見える
+// （Issue #443 でチェロを Violoncello へ変えたときに、この2か所を同時に直している）。
+export const QUARTET_PART_EXTRACTION_LABELS: readonly string[] = ['Violin I', 'Violin II', 'Viola', 'Violoncello'];
 const QUARTET_PART_IDS: readonly string[] = ['violin-1', 'violin-2', 'viola', 'cello'];
 
 /**

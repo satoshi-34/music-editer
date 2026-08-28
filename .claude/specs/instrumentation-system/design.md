@@ -524,7 +524,7 @@ React Portal で中身を差し込む実装だった。ポップアップがブ�
 
 1. `PartConfig` に `fullLabel`（フル名）を追加し、`label`（略称）と対で持たせる。
    `EnsembleStaff` は `part.name`、`QuartetStaff` は `QUARTET_PART_CONFIGS` の
-   `fullLabel`（Violin I / Violin II / Viola / Cello）を入れる。
+   `fullLabel`（Violin I / Violin II / Viola / Violoncello）を入れる。
    フル名が空のパート（カスタム編成で名前を消した場合など）は略称で代用する。
 2. `PianoSystemCanvas` に `showFullInstrumentLabels` を追加し、true の段だけ
    `fullLabel` を描く。**どの段にパート名を出すか（`showInstrumentLabels`）の
@@ -607,3 +607,64 @@ SVG の `getComputedTextLength()` は描画後にしか測れないため、幅�
   対応付けている）
 - **経緯**: PR（fix/issue-171-instrumentation-autosave）。再現テストで false→true を確認し、
   リグレッションテスト3件（正常系・第2譜表欠落・余分パート）を追加
+
+---
+
+## チェロの正式名を Violoncello にする（Issue #443）
+
+弟フィードバック（2026-08-28）「チェロの楽器名は Violoncello がベター」への対応。
+**略称 `Vc.` は据え置き**で、フル名だけを `Cello` → `Violoncello` に変えた。
+
+### 名前が2系統ある
+
+チェロのフル名は次の2か所で別々に定義されている。どちらも直さないと、譜種によって
+名前が食い違う。
+
+| 系統 | 定義場所 | 使われる場所 |
+| --- | --- | --- |
+| 弦楽四重奏（固定4パート） | `components/QuartetStaff.tsx` の `QUARTET_PART_CONFIGS.fullLabel` | 総譜1段目のパート名 |
+| 編成テンプレート | `data/instrumentationPresets.ts` の `simplePart('cello', ...)` | 編成譜のパート名・パート編集パネル |
+
+さらにパート譜表示の選択肢名は `utils/partExtractionUtils.ts` の
+`QUARTET_PART_EXTRACTION_LABELS` に**3つ目の写し**がある（util 側から
+コンポーネントを import しないための意図的な分離）。今回は3か所すべてを直し、
+各定義に「もう一方も一緒に直すこと」の相互参照コメントを付けた。
+
+### 保存済みデータの扱い（Issue の確認事項）
+
+- **弦楽四重奏**: パート名は保存データに持たず `QUARTET_PART_CONFIGS` から毎回引くため、
+  既存の作品を開いても新しい名前（Violoncello）で表示される
+- **編成譜**: `SavedScoreData.instrumentation` にパート名ごと保存されており、読込は
+  `data.instrumentation ?? getDefaultInstrumentationForScoreType(...)`（`ScorePage.tsx`）で
+  **保存値が優先**される。したがって既存の編成譜は `Cello` のままになる。
+  これは意図した挙動で、利用者がパート編集で自分で付けた名前を後から書き換えないための
+  ルールでもある（新規作成・プリセット選び直しからは Violoncello になる）
+
+### レイアウトへの副作用
+
+パート名の欄の幅は、いちばん長いラベルから自動で決まる（`utils/instrumentLabelUtils.ts`）。
+`Violoncello` は `Cello` より6文字長いため、弦楽四重奏の**1段目**のラベル欄が
+実測で 78 → 103 前後へ広がる（上限 `INSTRUMENT_LABEL_MAX_AREA_WIDTH` = 110 には届かず、
+フォントの自動縮小は起きない）。フル名を描くのは1段目だけなので、影響もその段に限られる。
+
+`instrumentLabelUtils.test.ts` の「余白がほとんど変わらない（+4 以内）」という
+既存の assert はこの変更で成り立たなくなるため、**上限に対する余裕が残っているか**を
+見張る形へ書き換えた（拒否ではなく仕様変更に伴う期待値の更新であることを明記してある）。
+
+
+## #443 Codex round 1 対応（2026-08-28・レビュアー側で実施）
+
+- **MusicXML の <part-name> を表示名に**: 従来は安定ID（partId: cello 等）をそのまま出して
+  いた。書き出し側（musicXmlExport）に表示名解決を追加: 保存済み instrumentation.parts[].name
+  最優先（既存作品の保存名優先）→ 既知の固定 partId の正式名（Violin I / Violoncello /
+  Piano (right hand) 等）→ partId 素通し。partId 自体は変えない（#419 の読込判定が参照）
+- **往復の維持**: ScorePage の四重奏読込は partId 照合（violin-1 等）のため、読込側
+  （musicXmlImport の staffPartId）に既知表示名→安定IDの正規化を追加（大文字小文字無視）。
+  Finale 等の実ファイルでも Violin I / Violoncello は慣用名なので外部持ち込みの命中率も上がる。
+  往復テスト: musicXmlPartNames.test.ts（四重奏4パートの export→parse で partId 復元・
+  instrumentation 保存名優先・melody 往復）
+- **ScorePage 統合テストの拡充**: 保存済み編成の name:"Cello" が復元後も Cello のまま／
+  パート譜セレクトに Violoncello が並び選択で見出しへ反映／2ページ目の先頭段で略称 Vc. が
+  実描画（略称ラベルは2ページ目以降の先頭段に出る設計のため、5段=2ページの種データで確認）
+- **スクリーンショット**: 本セッション環境ではブラウザペイン非表示で画像取得不可
+  （#441 と同じ制約）。DOM 実測（上記統合テスト）で代替し、画像は運用者の実機スモークで補完

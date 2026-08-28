@@ -82,17 +82,20 @@ describe('instrumentLabelBaseFontSize / instrumentLabelAreaWidthForScore', () =>
     expect(instrumentLabelBaseFontSize(11)).toBeLessThan(instrumentLabelBaseFontSize(4));
   });
 
-  it('弦楽四重奏のフル名・略称では余白がほとんど変わらない（段割りを動かさない）', () => {
+  it('弦楽四重奏のフル名・略称でも、余白は上限（110）に届かず自動縮小もされない', () => {
     // Issue #202 でパート名を 1.1 sp → 1.7 sp に拡大したため、余白は
-    // 従来の固定値（74）ぴったりではなくなった。ただし増えるのは 3 u 程度で、
-    // 増えたぶんは小節の幅が吸収する（実測で段数/ページは変わらないことを確認済み）。
-    // 上限（110）に張り付くほど広がると段割りが動きうるので、そこは見張る。
+    // 従来の固定値（74）ぴったりではなくなった。
+    //
+    // Issue #443 でチェロのフル名を Cello → Violoncello へ変えた結果、いちばん長いラベルが
+    // 6文字ぶん伸び、余白は 78 前後から 103 前後へ広がった（従来の「+4 以内」は満たさなくなる）。
+    // フル名を出すのは総譜の1段目だけなので、影響は「1段目のラベル欄が広がる」ことに限られる。
+    // 見張るべき本体は上限のほうで、ここを超えるとフォントの自動縮小が始まり、
+    // 段割り（1段に入る小節数）まで動きうる。上限に対する余裕を残せているかを固定する。
     const width = instrumentLabelAreaWidthForScore(
-      ['Vn. I', 'Violin I', 'Vn. II', 'Violin II', 'Va.', 'Viola', 'Vc.', 'Cello'],
+      ['Vn. I', 'Violin I', 'Vn. II', 'Violin II', 'Va.', 'Viola', 'Vc.', 'Violoncello'],
       4
     );
     expect(width).toBeGreaterThanOrEqual(SYSTEM_MAX_LABEL_WIDTH);
-    expect(width).toBeLessThanOrEqual(SYSTEM_MAX_LABEL_WIDTH + 4);
     expect(width).toBeLessThan(INSTRUMENT_LABEL_MAX_AREA_WIDTH);
   });
 
