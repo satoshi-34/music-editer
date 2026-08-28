@@ -2228,7 +2228,7 @@ export default function ScorePage() {
   // createSavedScoreData() の結果をそのまま土台にし、そこへ表示状態などの追加情報を
   // 上乗せするだけにしてある。validateSavedScoreData（src/utils/storage.ts）は既知の
   // フィールドしか見ないため、余分なフィールド（appVersion・viewState）があっても
-  // 無視されるだけで済み、「フィードバックボタンで作ったJSONをそのまま『開く』メニュー（ファイル）で
+  // 無視されるだけで済み、「フィードバックボタンで作ったJSONをそのまま『開く』の『ファイル』ボタンで
   // 読み込める」という受入条件を追加の変換なしに満たせる。
   //
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない
@@ -2238,7 +2238,7 @@ export default function ScorePage() {
     const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle);
     const feedbackState = {
       ...scoreData,
-      // フィードバック JSON は「開く」メニュー（ファイル）で読み込める楽譜 JSON なので、
+      // フィードバック JSON は「開く」の「ファイル」ボタンで読み込める楽譜 JSON なので、
       // 他の書き出し境界と同じ正規化（鏡同期+実体化）を通す（#244 段5-4）
       parts: scoreData.parts.map((part) => ({
         ...part,
@@ -2246,7 +2246,7 @@ export default function ScorePage() {
       })),
       appVersion: __APP_GIT_SHA__,
       // 譜面データそのものではなく「今どう見えているか」の表示状態。再現性のヒントとして
-      // 添えるだけで、この情報は「開く」メニュー（ファイル）では読まれない（読込は既存のScoreData
+      // 添えるだけで、この情報は「開く」の「ファイル」ボタンでは読まれない（読込は既存のScoreData
       // フィールドだけを見るため）。
       viewState: {
         viewZoom,

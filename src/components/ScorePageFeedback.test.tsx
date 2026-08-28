@@ -64,7 +64,7 @@ describe('フィードバックボタン', () => {
     const data = JSON.parse(json);
 
     // 既存のファイル読込（handleImportFile → importScoreFromFile）と同じ検証関数を通しても
-    // 有効な譜面データとして認識される（＝そのまま「開く」メニューのファイル読込で読み込める）ことを確認する
+    // 有効な譜面データとして認識される（＝そのまま「開く」の「ファイル」ボタンで読み込める）ことを確認する
     expect(validateSavedScoreData(data)).toBe(true);
     // フィードバック専用の追加情報も含まれている
     expect(typeof data.appVersion).toBe('string');
