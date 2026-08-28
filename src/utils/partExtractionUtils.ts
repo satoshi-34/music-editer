@@ -43,9 +43,15 @@ export function getPartExtractionOptions(
   instrumentationParts: InstrumentPartDefinition[]
 ): PartExtractionOption[] {
   if (scoreType === 'quartet') {
+    // ユーザーが楽器名を書き換えた場合（Issue #448）は、その名前をパート譜表示の
+    // 選択肢にも出す。総譜と選択肢で名前が食い違うと同じパートが別物に見えるため。
+    // パート数が既定の4と違う編成定義のときは添字の対応が崩れるので既定名を使う。
+    const editedParts = instrumentationParts.length === QUARTET_PART_IDS.length
+      ? instrumentationParts
+      : [];
     return QUARTET_PART_IDS.map((id, index) => ({
       id,
-      label: QUARTET_PART_EXTRACTION_LABELS[index],
+      label: editedParts[index]?.name || QUARTET_PART_EXTRACTION_LABELS[index],
       index,
     }));
   }

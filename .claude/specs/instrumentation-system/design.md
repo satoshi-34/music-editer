@@ -668,3 +668,93 @@ SVG の `getComputedTextLength()` は描画後にしか測れないため、幅�
   実描画（略称ラベルは2ページ目以降の先頭段に出る設計のため、5段=2ページの種データで確認）
 - **スクリーンショット**: 本セッション環境ではブラウザペイン非表示で画像取得不可
   （#441 と同じ制約）。DOM 実測（上記統合テスト）で代替し、画像は運用者の実機スモークで補完
+
+
+## #448 楽器名・略称をユーザーが編集できるようにする（2026-08-29）
+
+### 問題
+
+弟フィードバック「楽器名や楽器の略称も好みがあるので、変更できると良い」。
+編成譜（`ensemble`）は以前から「パート編集」ウィンドウで `instrumentation.parts[].name` /
+`abbreviation` を書き換えられたが、弦楽四重奏（`quartet`）はパート名が
+`QuartetStaff.QUARTET_PART_CONFIGS` に固定で埋め込まれており、
+`instrumentation`（保存データ側の定義）を編集しても表示に反映されなかった。
+
+なお単旋律・ピアノ大譜表は五線左にパート名を描かない仕様のため、今回の対象外
+（名前を編集しても画面に出るところが無い）。
+
+### 修正設計
+
+**1. 表示名の決め方を1か所へ寄せる**
+
+「略称が空ならフル名で代用、フル名が空なら略称で代用、両方空ならラベルなし」という規則が
+`EnsembleStaff` の中にだけ書かれていた。弦楽四重奏でも同じ規則が要るので、
+`utils/instrumentationPartUtils.ts` に `resolveInstrumentPartLabels(part)` を新設し、
+`EnsembleStaff` もこれを呼ぶように置き換えた（同じ規則の2枚目を作らないため）。
+
+**2. 弦楽四重奏の表示名を `instrumentation` 由来にする**
+
+- `QuartetStaff` に任意 prop `partLabels`（`QUARTET_PART_CONFIGS` と同じ並び順の
+  `{ label, fullLabel }` 配列）を追加。渡されたパートだけラベルを丸ごと差し替える。
+  `??` による既定名フォールバックにしないのは、ユーザーが意図的に空欄にした名前を
+  「ラベルなし」として尊重するため。
+- `ScorePage` は `scoreType === 'quartet'` かつ `instrumentation.parts.length === 4` のときだけ
+  `instrumentation.parts.map(resolveInstrumentPartLabels)` を渡す。パート数が違う編成定義
+  （別の譜種から切り替えた直後など）では添字の対応が崩れるので既定名のままにする。
+- 五線左のラベル余白（`instrumentLabelAreaWidth`）も同じラベルから計算する。
+  既定名だけで見積もると、長い名前へ変えたときに五線がラベルへ食い込む。
+- パート譜表示の選択肢（`getPartExtractionOptions` の quartet 分岐）も、編集後の
+  `instrumentationParts[i].name` を優先する。総譜と選択肢で名前が食い違うと
+  同じパートが別物に見えるため（既存の `QUARTET_PART_EXTRACTION_LABELS` はフォールバック）。
+
+**3. 「パート名編集」モード（同じウィンドウの簡易版）**
+
+弦楽四重奏は「Vn. I / Vn. II / Va. / Vc. の4段固定」レイアウトなので、
+パートの追加・削除・並び替えや音部記号・段数・移調・括弧・音色の変更は受け付けられない。
+そこで既存の編成パート編集ウィンドウを再利用しつつ、`isNameOnlyInstrumentationEditor`
+（`scoreType !== 'ensemble'`）で正式名・略称の2欄だけを出すモードにした。
+
+- 楽譜設定タブのボタン名も出し分ける（編成譜=「パート編集」／弦楽四重奏=「パート名編集」）
+- ダイアログの `aria-label` も「編成パート編集」／「パート名編集」で分ける
+- 譜種を切り替えたときはウィンドウを閉じる（中身も表示条件も譜種で変わるため）
+- 列数が変わるので `.instrumentation-part-row--names` / `.instrumentation-editor-window--names`
+  で専用のグリッド・幅をあてる
+
+「1段目=正式名・2段目以降=略称」（Issue #60）のルールは変更していない。
+
+**4. 名前の更新は `updateInstrumentationParts` を通さない**
+
+ブラウザ確認で判明した問題: 既存の `updateInstrumentationParts`（パート編集の共通更新経路）は
+「編成定義を手で触った＝カスタム編成」とみなして `presetId: 'custom'` へ倒し、
+`setScoreType('ensemble')` まで行う。名前を1文字書き換えただけの弦楽四重奏が
+その場で「カスタム編成の編成譜」に変わってしまう（画面上も編成譜の描画に切り替わる）。
+
+名前（正式名・略称）はパート構成を何も変えないので、名前のみモードでは
+`handleInstrumentationPartNameChange`（該当パートの `name` / `abbreviation` だけ差し替える）
+を使い、`presetId`・`scoreType`・小節データには触らない。編成譜側の「パート編集」は
+従来どおり `updateInstrumentationParts` を通す（そちらはパート構成の変更を含むため）。
+`ScorePageQuartetPartName.test.tsx` の「譜種は弦楽四重奏のまま」で固定した。
+
+### 影響範囲
+
+- `src/utils/instrumentationPartUtils.ts`（`resolveInstrumentPartLabels` 追加）
+- `src/components/EnsembleStaff.tsx`（表示名の決め方を共通関数へ）
+- `src/components/QuartetStaff.tsx`（`partLabels` prop）
+- `src/components/ScorePage.tsx`（quartet のラベル配線・余白計算・名前のみ編集モード・名前専用の更新経路）
+- `src/utils/partExtractionUtils.ts`（quartet のパート譜選択肢名）
+- `src/App.css`（名前のみモードの列指定）
+- 保存形式の変更なし。編集結果は既存の `instrumentation.parts[].name / abbreviation` に入る
+  ため、旧データ・保存互換への影響はない
+- 単旋律・ピアノ大譜表の見た目と操作は変わらない（パート名を描かない譜種のため）
+
+### 動作確認
+
+- `src/components/QuartetStaffPartLabels.test.tsx`: 既定名／差し替え名で
+  「1ページ目1段目＝フル名、2ページ目以降＝略称」、空欄はラベルなし
+- `src/components/ScorePageQuartetPartName.test.tsx`: 楽譜設定タブから名前を書き換えると
+  五線左の表示とパート譜セレクトが追随する／名前のみモードには追加・削除・音部記号が出ない／
+  編成譜は従来どおり「パート編集」
+- `src/utils/instrumentationPartUtils.test.ts`: `resolveInstrumentPartLabels` の代用ルール
+- ブラウザ（dev サーバー）: 弦楽四重奏で「パート名編集」を開き、Violin I → `Violino primo`、
+  Violoncello → `チェロ` に書き換えて、五線左の表示が即座に変わること・譜種が
+  弦楽四重奏（編成テンプレート `string-quartet`）のままであることを確認
