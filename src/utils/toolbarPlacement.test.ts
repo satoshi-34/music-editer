@@ -17,6 +17,7 @@ import {
   resolveEffectiveToolbarPlacement,
   resolveToolbarWidth,
   saveToolbarPlacement,
+  clampDropdownMenuTop,
 } from './toolbarPlacement';
 
 describe('isToolbarPlacement', () => {
@@ -113,5 +114,22 @@ describe('resolveToolbarWidth', () => {
 
   it('数値にならない実測値は下限にする（--toolbar-w: NaNpx を防ぐ）', () => {
     expect(resolveToolbarWidth(Number.NaN, { collapsed: false })).toBe(TOOLBAR_WIDTH_MIN_PX);
+  });
+});
+
+// #483 Codex round1 P1: 左（縦）配置でツールバー末尾から開いたメニューが画面外へ出ない
+describe('clampDropdownMenuTop', () => {
+  it('画面に余裕があるときはボタンの直下（+6px）に開く', () => {
+    expect(clampDropdownMenuTop({ anchorBottom: 100, viewportHeight: 900 })).toBe(106);
+  });
+
+  it('画面下部のボタンから開くときは、メニューの最大高さぶん上へずらす', () => {
+    const top = clampDropdownMenuTop({ anchorBottom: 850, viewportHeight: 900 });
+    // 900 - min(420, 900*0.7=630) - 8 = 472
+    expect(top).toBe(472);
+  });
+
+  it('極端に低い画面でも上端 8px を割らない', () => {
+    expect(clampDropdownMenuTop({ anchorBottom: 100, viewportHeight: 40 })).toBe(8);
   });
 });

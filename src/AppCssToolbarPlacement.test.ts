@@ -76,3 +76,17 @@ describe('App.css: ツールバーの左（縦）配置（Issue #483）', () => 
     expect(ruleBlock(css, '.app-root')).toMatch(/padding-top:\s*var\(--toolbar-h\)/);
   });
 });
+
+// #483 Codex round1: 左配置に伴うポップアップの収まり
+describe('App.css: 左配置でのポップアップの収まり（round1）', () => {
+  it('リセットメニューは高さ上限とメニュー内スクロールを持つ（P1）', () => {
+    const rule = ruleBlock(loadAppCss(), '.toolbar-reset-menu');
+    expect(rule).toMatch(/max-height\s*:\s*min\(70vh,\s*420px\)/);
+    expect(rule).toMatch(/overflow-y\s*:\s*auto/);
+  });
+
+  it('パート名編集（--names）の幅も左配置ではツールバー幅ぶん狭める（P2）', () => {
+    const rule = ruleBlock(loadAppCss(), '.instrumentation-editor-window--toolbar-left.instrumentation-editor-window--names');
+    expect(rule).toMatch(/calc\(100vw - var\(--toolbar-w, 0px\) - 36px\)/);
+  });
+});

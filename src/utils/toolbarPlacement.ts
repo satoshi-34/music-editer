@@ -103,3 +103,24 @@ export function resolveToolbarWidth(
   if (!Number.isFinite(measuredWidthPx)) return min;
   return Math.min(TOOLBAR_WIDTH_MAX_PX, Math.max(min, measuredWidthPx));
 }
+
+/** リセットメニュー等の fixed ポップアップの最大高さ(px)。App.css の max-height と同じ値 */
+export const DROPDOWN_MENU_MAX_HEIGHT_PX = 420;
+
+/**
+ * ボタン直下へ開く fixed メニューの top を、画面内へ収まるようにクランプする（#483 round1 P1）。
+ * 左（縦）配置ではツールバー末尾のボタンが画面下部に来るため、常に下向きへ開くと
+ * メニューの後半が画面外へ出て操作できなくなる。メニューの最大高さぶんの余地が
+ * なければ上へずらす（最低 8px は残す）。
+ */
+export function clampDropdownMenuTop(input: {
+  anchorBottom: number;
+  viewportHeight: number;
+  menuMaxHeightPx?: number;
+}): number {
+  const menuMax = Math.min(
+    input.menuMaxHeightPx ?? DROPDOWN_MENU_MAX_HEIGHT_PX,
+    input.viewportHeight * 0.7,
+  );
+  return Math.max(8, Math.min(input.anchorBottom + 6, input.viewportHeight - menuMax - 8));
+}

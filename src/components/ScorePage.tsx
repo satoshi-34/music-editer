@@ -205,6 +205,7 @@ import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure,
 import { computeFitZoom, readPageAreaAvailableWidth, VIEW_ZOOM_MIN, VIEW_ZOOM_MAX } from '../utils/viewZoomUtils';
 import {
   TOOLBAR_PLACEMENT_OPTIONS,
+  clampDropdownMenuTop,
   loadStoredToolbarPlacement,
   resolveEffectiveToolbarPlacement,
   resolveToolbarWidth,
@@ -4775,7 +4776,12 @@ export default function ScorePage() {
     // メニュー幅は CSS の width: min(360px, 100vw - 32px) と同じ計算にそろえる
     const menuWidth = Math.min(360, window.innerWidth - 32);
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
-    setResetMenuPos({ top: rect.bottom + 6, left });
+    // 縦も画面内へクランプする。左（縦）配置ではボタンが画面下部に来るため、
+    // 常に下向きだとメニュー後半が画面外へ出て押せなくなる（#483 round1 P1）
+    setResetMenuPos({
+      top: clampDropdownMenuTop({ anchorBottom: rect.bottom, viewportHeight: window.innerHeight }),
+      left,
+    });
   }, []);
 
   const handleToggleResetMenu = useCallback(() => {

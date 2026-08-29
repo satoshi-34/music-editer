@@ -811,3 +811,13 @@ Issue の実装メモにあった「モバイル幅では左配置を強制解�
   ※ `vite.config.ts` の `server.watch.ignored` が `.night-worktrees/**` を無視するため、
   dev サーバーは編集後の App.css を再変換しない。折り畳み帯の詰め（上記153px）だけは、
   同じ内容の規則を DevTools 経由で流し込んで確認した（正本はファイル側）
+
+### #483 Codex round 1 対応（2026-08-29）
+
+- **[P1] 左配置でリセットメニューが画面外へ**: 左（縦）配置ではツールバー末尾の
+  ボタンが画面下部に来るが、メニューは常に下向き・高さ無制限だった。
+  clampDropdownMenuTop（toolbarPlacement.ts・純関数）で top を画面内へクランプし、
+  CSS 側にも max-height: min(70vh, 420px) + overflow-y: auto を追加（二重の防御）
+- **[P2] パート名編集（--names）の幅が左配置の補正を上書き**: 同じ詳細度で後方定義の
+  --names の幅が勝ち、768〜820px 前後で左ツールバーへ重なっていた。
+  複合クラス（--toolbar-left.--names）で詳細度を上げ、--toolbar-w を反映した幅にする

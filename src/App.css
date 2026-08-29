@@ -259,6 +259,12 @@
 .instrumentation-editor-window--toolbar-left {
   width: min(1180px, calc(100vw - var(--toolbar-w, 0px) - 36px));
 }
+/* 名前だけ編集モード（--names）の幅指定は後方で定義され同じ詳細度のため、
+   左配置の補正が上書きされて 768〜820px 前後でツールバーへ重なっていた
+   （#483 Codex round1 P2）。複合クラスで詳細度を上げ、こちらを勝たせる */
+.instrumentation-editor-window--toolbar-left.instrumentation-editor-window--names {
+  width: min(520px, calc(100vw - var(--toolbar-w, 0px) - 36px));
+}
 /* 狭い画面（スマホ等）で左配置を上配置へ戻す判断は、CSS ではなく JS 側で行う
    （toolbarPlacement.ts の resolveEffectiveToolbarPlacement・768px 未満で上に戻す）。
    ここに @media の保険を置かなかったのは、左配置のとき ScorePage が
@@ -441,6 +447,11 @@
   top: 120px;
   left: 10px;
   z-index: 1001;
+  /* 左（縦）配置でツールバー末尾のボタンから開いても画面に収まるよう、
+     高さに上限を設けてはみ出す分はメニュー内スクロールにする（#483 round1 P1）。
+     位置側のクランプ（ScorePage の updateResetMenuPosition）とペアで効く */
+  max-height: min(70vh, 420px);
+  overflow-y: auto;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
