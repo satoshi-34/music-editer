@@ -71,7 +71,10 @@ describe('表示倍率はレール幅から読まない（Issue #212 の副作�
     const source = stripComments(
       readFileSync(resolve(__dirname, './components/ScorePage.tsx'), 'utf-8'),
     );
-    expect(source).not.toMatch(/computeFitZoom\(rail\.clientWidth\)/);
-    expect(source).toMatch(/computeFitZoom\(readPageAreaAvailableWidth\(rail\)\)/);
+    // 守りたいのは「幅の出どころが readPageAreaAvailableWidth であること」。
+    // 引数がその呼び出し「ちょうど」である必要はない（Issue #483 で、左（縦）配置の
+    // ツールバー幅を引いてから渡すようになったため、完全一致の判定はやめた）。
+    expect(source).not.toMatch(/computeFitZoom\([^;]*rail\.clientWidth/);
+    expect(source).toMatch(/computeFitZoom\([^;]*readPageAreaAvailableWidth\(rail\)/);
   });
 });
