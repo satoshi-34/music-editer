@@ -250,4 +250,57 @@ describe('ScorePage: MusicXML 大譜表（<staves>2）の読込配線（#419）'
       expect(document.querySelectorAll('g.vf-tuplet').length).toBeGreaterThanOrEqual(3);
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
+  // 小節途中のクレフ変更の読み込み（#453・段2）: パーサー単体テストだけでは
+  // 「読めているが画面へ渡っていない」退行を検出できないため、ファイル選択から
+  // 保存データの clefChange・小型クレフの表示までを実マウントで固定する
+  it('小節途中の <clef> がある大譜表を読み込むと、clefChange が保存され小型クレフが描かれる', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    // 上段の2つ目の音（2拍目）からヘ音記号へ変わる大譜表
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions>
+        <key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch>
+        <duration>8</duration><voice>1</voice><type>half</type><staff>1</staff></note>
+      <attributes><clef number="1"><sign>F</sign><line>4</line></clef></attributes>
+      <note><pitch><step>A</step><octave>3</octave></pitch>
+        <duration>8</duration><voice>1</voice><type>half</type><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>C</step><octave>3</octave></pitch>
+        <duration>16</duration><voice>5</voice><type>whole</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    await importXml(xml);
+
+    // 保存データ: 右手の2音目に clefChange: 'bass'（1音目には生えない）
+    await waitFor(() => {
+      const parts = loadWorkAutosaveData(workId).data?.parts;
+      const right = parts?.find((p) => p.partId === 'right-hand');
+      const events = right?.measures?.[0]?.events ?? [];
+      expect(events[1]?.clefChange).toBe('bass');
+      expect('clefChange' in (events[0] ?? {})).toBe(false);
+    }, { timeout: 15000 });
+
+    // 小型クレフ（VexFlow は小型を 20pt で描く）が実際に描かれている
+    await waitFor(() => {
+      const smallClefs = Array.from(document.querySelectorAll('svg text')).filter((text) =>
+        (text.getAttribute('font-size') ?? '').startsWith('20'));
+      expect(smallClefs.length).toBeGreaterThan(0);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

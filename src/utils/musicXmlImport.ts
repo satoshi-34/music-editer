@@ -7,7 +7,7 @@ import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/c
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
 import { isValidTimeSignature } from './timeSignatureUtils';
-import { ensureMeasuresPrimaryVoiceMaterialized } from './voiceMeasureUtils';
+import { ensureMeasuresPrimaryVoiceMaterialized, getEventDurationBeats } from './voiceMeasureUtils';
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { buildRestEventsForBeats } from './measureRestFillUtils';
 
@@ -378,6 +378,73 @@ function clefForStaff(attrsEl: Element | null, staffNumber: number | null): Clef
 }
 
 /**
+ * <attributes> の中から「その五線を明示的に指している <clef>」だけを取り出す（#453）。
+ *
+ * clefForStaff との違いは、該当が無いときに先頭の <clef> へフォールバックしないこと。
+ * 小節の途中に置かれた <clef number="1"> は上段だけのクレフ変更なので、下段を読んでいる
+ * ときにフォールバックで拾うと、指示されていない段のクレフまで変わってしまう。
+ * MusicXML の number 属性の既定値は 1 なので、番号なしの <clef> は第1五線を指す扱いにする。
+ */
+function clefForStaffExact(attrsEl: Element, staffNumber: number | null): ClefType | null {
+  const clefEls = Array.from(attrsEl.querySelectorAll('clef'));
+  if (clefEls.length === 0) return null;
+  const target = staffNumber === null
+    ? clefEls[0]
+    : clefEls.find((el) => (parseInt(el.getAttribute('number') ?? '1', 10) || 1) === staffNumber);
+  if (!target) return null;
+  const sign = target.querySelector('sign')?.textContent ?? 'G';
+  const line = target.querySelector('line')?.textContent;
+  return xmlClefToClefType(sign, line);
+}
+
+/** 拍位置の突き合わせに使う許容誤差（divisions 割り算の丸め対策。1e-6 拍＝実質ゼロ） */
+const BEAT_EPSILON = 1e-6;
+
+/**
+ * 1小節の中に現れる <attributes><clef> を「小節の頭のもの」と「小節途中のもの」に分けて拾う（#453）。
+ *
+ * MusicXML では小節の途中にも <attributes> を置ける（月光ソナタ37小節のように、
+ * 小節の途中でト音→ヘ音記号へ変わる書き方）。どこで変わったかは要素の並び順ではなく
+ * **小節先頭からの時間**で決まるので、MusicXML の時間カーソル（音符と <forward> で進み、
+ * <backup> で戻る）をたどりながら位置を測る。こうしておけば、<backup> で区切られた
+ * 下声の側に書かれたクレフ変更でも、同じ時刻の主声部の音へ正しく結び付けられる。
+ *
+ * @param divisions この小節で有効な <divisions>（4分音符1つぶんの単位数）
+ * @returns headClef = 小節の頭（時刻0）のクレフ / midClefs = 小節途中のクレフ（拍位置つき）
+ */
+function collectMeasureClefs(
+  measureEl: Element,
+  staffNumber: number | null,
+  divisions: number
+): { headClef: ClefType | null; midClefs: { beat: number; clef: ClefType }[] } {
+  const durationOf = (el: Element): number => {
+    const d = parseInt(el.querySelector('duration')?.textContent ?? '', 10);
+    return Number.isInteger(d) && d > 0 ? d : 0;
+  };
+  let cursor = 0;
+  let headClef: ClefType | null = null;
+  const midClefs: { beat: number; clef: ClefType }[] = [];
+  for (const el of Array.from(measureEl.children)) {
+    if (el.tagName === 'attributes') {
+      const clef = clefForStaffExact(el, staffNumber);
+      if (clef) {
+        if (cursor <= 0) headClef = clef;
+        else midClefs.push({ beat: cursor / divisions, clef });
+      }
+      continue;
+    }
+    if (el.tagName === 'backup') { cursor = Math.max(0, cursor - durationOf(el)); continue; }
+    if (el.tagName === 'forward') { cursor += durationOf(el); continue; }
+    if (el.tagName === 'note') {
+      // 和音の構成音（<chord/>）は親音と同時刻、前打音（<grace/>）は時間を持たないので進めない
+      if (el.querySelector('chord') || el.querySelector('grace')) continue;
+      cursor += durationOf(el);
+    }
+  }
+  return { headClef, midClefs };
+}
+
+/**
  * <part-name> の表示名を、アプリ内の安定 partId へ正規化する（#443）。
  *
  * 書き出し側（#443）は <part-name> に表示名（Violin I / Violoncello 等）を出すため、
@@ -446,6 +513,12 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
   // <forward>（時間送り）の長さは <duration>（divisions 単位）でしか書かれないため、
   // <attributes><divisions> をパート先頭から追跡する（MusicXML の既定値は 1 = 4分音符）
   let divisions = 1;
+  // 途中クレフ変更（#453）の取り込み用。runningClef は「前の小節の末尾時点で有効なクレフ」で、
+  // 同じクレフを念押しで書いた <clef> を「変更」と誤読しないための比較相手になる。
+  // carriedClef は小節の末尾（最後の音符より後ろ）に置かれた予告クレフで、実譜と同じく
+  // 次の小節の頭から有効として扱う
+  let runningClef: ClefType = staffClef;
+  let carriedClef: ClefType | null = null;
   return measureEls.map((measureEl, mi) => {
     const divEl = measureEl.querySelector('attributes divisions');
     const divVal = parseInt(divEl?.textContent ?? '', 10);
@@ -665,6 +738,51 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
       }
     }
 
+    // 途中クレフ変更の取り込み（#453）。書き出し側（musicXmlExport.ts）は
+    // 「小節単位の変更＝小節頭の <attributes><clef>」「小節途中の変更＝対象の音符の直前の
+    // <attributes><clef>」で出しているので、その両方をここで元のデータ形へ戻す。
+    const { headClef, midClefs } = collectMeasureClefs(measureEl, staffNumber, divisions);
+    // 小節の頭のクレフは、前の小節の末尾時点と違うときだけ小節単位の変更として保存する
+    // （毎小節クレフを書き直す書き出し元でも、変更が無ければ何も足さない）
+    const headCandidate = headClef ?? carriedClef;
+    carriedClef = null;
+    let measureClef: ClefType | undefined;
+    if (headCandidate && headCandidate !== runningClef) {
+      measureClef = headCandidate;
+      runningClef = headCandidate;
+    }
+    if (midClefs.length > 0) {
+      // 主声部イベントの開始拍を先に積算しておき、クレフの拍位置と突き合わせる
+      const startBeats: number[] = [];
+      let acc = 0;
+      for (const ev of events) {
+        startBeats.push(acc);
+        acc += getEventDurationBeats(ev);
+      }
+      // <backup> で戻った下声側に書かれたクレフは、文書順では拍位置の前後が入れ替わり得る。
+      // クレフの効き方は「時間順」なので、拍位置で安定ソートしてから適用する（round1 P1）
+      const orderedMidClefs = [...midClefs].sort((a, b) => a.beat - b.beat);
+      for (const { beat, clef } of orderedMidClefs) {
+        // その時刻以降に始まる最初の音（＝小型クレフを手前に置く音）へ結び付ける。
+        // 音が伸びている途中に書かれたクレフは、次に始まる音から有効になる
+        const at = startBeats.findIndex((b) => b >= beat - BEAT_EPSILON);
+        if (at < 0) {
+          // 最後の音より後ろ＝小節末尾の予告クレフ。次の小節の頭から有効にする。
+          // 比較相手は「現時点の末尾状態」（すでに予告があればそれ）。予告後にさらに
+          // 変更が続く（treble→bass→treble 等）と、単純な runningClef 比較では
+          // 最後の変更を念押しと誤判定して bass のまま持ち越してしまう（round1 P1）
+          if (clef !== (carriedClef ?? runningClef)) carriedClef = clef;
+          continue;
+        }
+        if (clef === runningClef) continue; // すでに有効なクレフの念押し表記は取り込まない
+        // v1 は主声部のイベントにだけ clefChange を持たせる（追加声部にも持たせると、
+        // 同じ時刻に声部ごとの別クレフを主張できてしまう）。clefChange は
+        // 「このイベントの直前に小型クレフを置き、このイベントから有効」の意味
+        events[at] = { ...events[at], clefChange: clef };
+        runningClef = clef;
+      }
+    }
+
     return {
       events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }],
       // 追加声部: 入力があった小節だけ voices を持たせる。
@@ -681,6 +799,7 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
       bpm: bpm && !isNaN(bpm) ? bpm : undefined,
       timeSignature: timeSig,
       keySignature: measureKeySig,
+      clef: measureClef,
       rehearsalMark,
     };
   });
