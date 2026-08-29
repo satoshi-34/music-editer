@@ -395,4 +395,5 @@ npm run dev
 
 ## ライセンス
 
-MIT
+All rights reserved（ソース公開はポートフォリオ・参照目的のみ。詳細は [LICENSE](LICENSE) を参照）。
+コミット `376b1dc` までの過去リビジョンは MIT License で提供されていました。
