@@ -264,6 +264,53 @@ describe('ScorePage: 段の選択とレイアウト調整パネル（Issue #482�
     expect(document.body.textContent).toContain('間隔は -60〜50 の範囲で指定できます');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  // Codex round3 P2: 空文字での確定は Number('')===0 に化けず、変更せず理由を通知する
+  it('入力を消して確定しても値は変わらず、読み取れなかった旨を通知する', async () => {
+    await renderScore();
+    selectFirstSystemFromLeftEdge();
+    await waitFor(() => {
+      expect(screen.getByTestId('system-layout-panel-0')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId('system-measure-count-0'));
+    const input = await screen.findByTestId('system-measure-input-0');
+    fireEvent.keyDown(input, { key: 'Enter', target: { value: '' } });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('小節数を数値として読み取れなかった');
+    }, { timeout: 15000 });
+    // 段割りは変わらない（空文字が 0 → 1小節へ化けない）
+    expect(firstSystemMeasureCount()).toBe(2);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // Codex round3 P2: 編集バッファ段（内容末尾より後ろ）の実配線。
+  // ScorePage が maxMeasureCount へ「最低でも現在値」を渡していないと、
+  // 値を変えない確定だけで段がクランプで縮む（round2 P2 の配線側の固定）
+  it('＋小節を追加で作ったバッファ段では、値を変えない確定で小節数が縮まない', async () => {
+    await renderScore();
+    // バッファ段（内容8小節の直後・start=8）を2小節ぶん作る
+    const addButton = screen.getByRole('button', { name: '＋ 小節を追加' });
+    fireEvent.click(addButton);
+    fireEvent.click(addButton);
+    await waitFor(() => {
+      expect(screen.getAllByTestId('system-select-left-8').length).toBeGreaterThan(0);
+    }, { timeout: 15000 });
+
+    fireEvent.click(screen.getAllByTestId('system-select-left-8')[0]);
+    await waitFor(() => {
+      expect(screen.getByTestId('system-layout-panel-8')).toBeTruthy();
+    });
+    expect(screen.getByTestId('system-measure-count-8').textContent).toBe('2小節');
+
+    // 直接入力を開き、値を変えずに blur で確定 → クランプで縮まない・丸め通知も出ない
+    fireEvent.click(screen.getByTestId('system-measure-count-8'));
+    const input = await screen.findByTestId('system-measure-input-8');
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect(screen.queryByTestId('system-measure-input-8')).toBeNull();
+    });
+    expect(screen.getByTestId('system-measure-count-8').textContent).toBe('2小節');
+    expect(document.body.textContent).not.toContain('丸めて適用しました');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   // Codex round1 P2: 4譜種すべての Staff コンポーネントで SystemSelectFrame の配線が生きている
   for (const scoreType of ['piano', 'quartet', 'ensemble'] as const) {
     it(`${scoreType} でも右端クリックで段が選択され、パネルが出る`, async () => {

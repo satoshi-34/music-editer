@@ -47,7 +47,8 @@ function InlineNumberInput({
   defaultValue: number;
   min: number;
   max: number;
-  onCommit: (value: number) => void;
+  /** 確定。空文字などの検証を確定側で一元化するため、生の文字列のまま渡す */
+  onCommit: (raw: string) => void;
   onCancel: () => void;
   /** Enter / Esc のときだけ呼ぶ「段の選択も解除する」処理 */
   onClose: () => void;
@@ -68,7 +69,7 @@ function InlineNumberInput({
   // 走らない（Codex round1 P1）。未確定のままアンマウントされたら、入力中だった値で確定する。
   useEffect(() => () => {
     if (!settledRef.current) {
-      onCommitRef.current(Number(latestValueRef.current));
+      onCommitRef.current(latestValueRef.current);
     }
   }, []);
   return (
@@ -89,7 +90,7 @@ function InlineNumberInput({
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           settledRef.current = true;
-          onCommit(Number((e.target as HTMLInputElement).value));
+          onCommit((e.target as HTMLInputElement).value);
           onClose();
         } else if (e.key === 'Escape') {
           settledRef.current = true;
@@ -106,7 +107,7 @@ function InlineNumberInput({
         // 入力欄がアンマウントされ、上のクリーンアップが同じ値をもう一度確定して
         // 差分が二重適用される（Codex round2 P1）
         settledRef.current = true;
-        onCommit(Number(e.target.value));
+        onCommit(e.target.value);
       }}
     />
   );
@@ -132,10 +133,19 @@ export default function SystemLayoutPanel({
   // どちらの数値をいま直接入力しているか（null = ボタン操作の状態）
   const [editing, setEditing] = useState<'measures' | 'gap' | null>(null);
 
+  /** 生文字列 → 数値。空文字は Number('') === 0 になってしまうため、変換前に弾く（round3 P2） */
+  const parseInput = (raw: string): number | null => {
+    const trimmed = raw.trim();
+    if (trimmed === '') return null;
+    const value = Number(trimmed);
+    return Number.isFinite(value) ? value : null;
+  };
+
   /** 直接入力の確定。数値でなければ通知して閉じ、範囲外は端へ丸めて通知する（#318） */
-  const commitMeasures = (value: number) => {
+  const commitMeasures = (raw: string) => {
     setEditing(null);
-    if (!Number.isFinite(value)) {
+    const value = parseInput(raw);
+    if (value === null) {
       onNotice(describeSystemLayoutValueInvalid('小節数'));
       return;
     }
@@ -147,9 +157,10 @@ export default function SystemLayoutPanel({
     // ボタン操作と完全に同じ経路へ通す（同じ判定を二重に書かないため）
     if (next !== measureCount) onMeasureDelta(next - measureCount);
   };
-  const commitGap = (value: number) => {
+  const commitGap = (raw: string) => {
     setEditing(null);
-    if (!Number.isFinite(value)) {
+    const value = parseInput(raw);
+    if (value === null) {
       onNotice(describeSystemLayoutValueInvalid('間隔'));
       return;
     }
