@@ -12,7 +12,7 @@
 
 - [技術スタック](#技術スタック)
 - [実装ルールの参照先](#実装ルールの参照先)
-- [セットアップと起動](#セットアップと起動)（Docker / npm / テスト・lint / CI）
+- [セットアップと起動](#セットアップと起動)（Docker / npm / PDF変換API / テスト・lint / CI）
 - [主要機能](#-主要機能)（機能ごとの実装メモ）
 - [レイアウトの実装](#ページレイアウトの実装ポイント)（改段・小節幅・ズーム・余白・Safari）
 - [浄書の既定値を変えるとき](#浄書の既定値線の太さ文字の大きさ書体を変えるとき)（線の太さ・文字の大きさ・書体）
@@ -121,6 +121,17 @@ npm run dev
 
 起動後、ブラウザで以下のURLにアクセスします。 
 http://localhost:5173
+
+### PDF楽譜の取り込み（変換API・Issue #487）
+
+PDF の楽譜を自動で読み取る「PDF (β)」ボタンは、**変換API の場所を指定したときだけ**表示されます（本番は未設定＝非表示のまま）。
+
+```bash
+docker compose --profile omr up omr                      # 変換API（Audiveris 同梱・初回ビルドは重い）
+VITE_OMR_API_URL=http://localhost:8080 npm run dev       # アプリ側に変換APIの場所を教える
+```
+
+変換API の中身と API 仕様は [`server/omr/README.md`](../server/omr/README.md)、方式決定と AGPL の整理は `.claude/specs/omr-import/design.md` にあります。
 
 ### テストと lint
 
@@ -644,6 +655,9 @@ src/
 │  └─ storage.ts             # データ型定義
 ├─ App.tsx
 └─ App.css
+
+server/
+└─ omr/                      # PDF楽譜 → .mxl 変換API（Audiveris 同梱コンテナ。アプリ本体とは HTTP のみで繋がる）
 ```
 
 ## 最小チェック

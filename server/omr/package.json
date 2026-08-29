@@ -1,0 +1,10 @@
+{
+  "name": "music-editer-omr-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "PDF楽譜を Audiveris で .mxl へ変換する薄いHTTPラッパー（Issue #487）",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

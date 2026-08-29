@@ -14,6 +14,7 @@
 // （SELECTION_CLAIMED_EVENT）の前例があるため、同じ作法にそろえた。
 
 import type { NoteEvent } from '../types/storage';
+import type { OmrConvertFailure } from './omrApi';
 import { canReplaceTupletNoteWithRest, type TupletGroupPasteBlockReason } from './tupletUtils';
 
 /** 削除など「編集で何が起きたか」を画面へ出すための通知イベント名 */
@@ -658,4 +659,35 @@ export function describeMxlExtractFailed(reason: 'notZip' | 'brokenZip' | 'noXml
     return 'この .mxl ファイルは大きすぎるため読み込めません（書き出し元で「非圧縮の MusicXML（.musicxml / .xml）」を選んで書き出し直すか、曲を分割してください）';
   }
   return 'この .mxl の中に MusicXML が見つかりませんでした（書き出し元で「非圧縮の MusicXML（.musicxml / .xml）」を選んで書き出し直してください）';
+}
+
+/**
+ * PDF楽譜の取り込み（Issue #487）が失敗したときの文言（#318）。
+ * 変換は「うまくいかないことがある」前提の機能なので、
+ * 理由に加えて必ず**代替手順（Audiveris で手元変換して .mxl を開く）**を添える。
+ */
+export function describeOmrConvertFailed(reason: OmrConvertFailure): string {
+  const fallback = 'うまくいかないときは、Audiveris（無料）で手元で .mxl に変換してから「MusicXML (.mxl)」で開いてください';
+  if (reason === 'notConfigured') {
+    return `PDF変換サーバーの場所が設定されていません（${fallback}）`;
+  }
+  if (reason === 'network') {
+    return `PDF変換サーバーに接続できませんでした（${fallback}）`;
+  }
+  if (reason === 'notPdf') {
+    return `このファイルは PDF として読めませんでした（${fallback}）`;
+  }
+  if (reason === 'tooLarge') {
+    return `この PDF は大きすぎて変換できません（曲を分割するか、${fallback}）`;
+  }
+  if (reason === 'tooManyPages') {
+    return `この PDF はページ数が多すぎて変換できません（曲を分割するか、${fallback}）`;
+  }
+  if (reason === 'timeout') {
+    return `変換が時間内に終わりませんでした（ページ数の少ない PDF で試すか、${fallback}）`;
+  }
+  if (reason === 'noOutput') {
+    return `この PDF からは楽譜を読み取れませんでした（解像度の高いスキャンで試すか、${fallback}）`;
+  }
+  return `PDF の変換に失敗しました（${fallback}）`;
 }
