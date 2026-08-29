@@ -71,13 +71,19 @@ function resolvePageScale(container: HTMLElement): number {
 function resolveBounds(container: HTMLElement, scale: number) {
   const rect = container.getBoundingClientRect();
   const toolbar = document.querySelector('header.toolbar');
-  const toolbarBottom = toolbar ? toolbar.getBoundingClientRect().bottom : 0;
+  // 左（縦）配置のツールバー（Issue #483）は bottom が画面下端になるため、
+  // 「上端＝ツールバーの下端」の前提を当てはめると可視範囲が潰れてしまう。
+  // 左配置では上端は 0（画面上端）、左端をツールバーの右端にする（Codex round5 P1）
+  const isToolbarLeft = toolbar?.classList.contains('toolbar--left') ?? false;
+  const toolbarRect = toolbar?.getBoundingClientRect();
+  const toolbarBottom = !isToolbarLeft && toolbarRect ? toolbarRect.bottom : 0;
+  const toolbarRight = isToolbarLeft && toolbarRect ? toolbarRect.right : 0;
   // clientWidth/Height を優先するのは、スクロールバーのぶんを除いた「実際に見えている幅」だから。
   // window.innerWidth はスクロールバーを含むので、右端に置いたオーバーレイがバーに隠れることがある。
   // jsdom（テスト環境）は clientWidth が 0 なので、その場合だけ innerWidth へ落とす。
   const viewportWidth = document.documentElement.clientWidth || window.innerWidth || 0;
   const viewportHeight = document.documentElement.clientHeight || window.innerHeight || 0;
-  let left = 0;
+  let left = Math.max(0, toolbarRight);
   let top = Math.max(0, toolbarBottom);
   let right = viewportWidth;
   let bottom = viewportHeight;
