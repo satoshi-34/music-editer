@@ -2089,7 +2089,10 @@ button.ghost.active:hover:not(:disabled) {
      選択中の薄い枠も同様（紙面に編集中の印を残さない）。 */
   .system-select-edge { display: none !important; }
   .system-layout-panel { display: none !important; }
+  /* outline の実体は内側ラッパー側に付く（round1 の当たり判定修正で移動）ため、
+     両方をリセットする（外側だけだと選択したまま印刷すると青枠が残る。Codex round2 P2） */
   .system-select-frame--selected { outline: none !important; }
+  .system-select-frame--selected .system-select-inner { outline: none !important; }
   /* 拍が埋まっていない小節の残り拍に「入力先が分かるよう」表示するパディング休符
      （PianoSystemCanvas がデータには保存せず見た目だけ描画する薄いグレーの休符）。
      以前はここで display:none にして印刷から消していたが、紙面の後半が

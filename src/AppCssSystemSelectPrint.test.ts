@@ -30,6 +30,9 @@ describe('App.css: 段の選択UIは印刷に出さない（Issue #482）', () =
   it('@media print で選択中の薄い枠（outline）も消している', () => {
     const css = printBlock(loadAppCss());
     expect(css).toMatch(/\.system-select-frame--selected\s*\{[^}]*outline\s*:\s*none/);
+    // outline の実体は内側ラッパーに付く（round1 の修正で移動）ため、こちらの
+    // リセットが本命（外側だけを見ていると選択したまま印刷で青枠が残る。round2 P2）
+    expect(css).toMatch(/\.system-select-frame--selected\s+\.system-select-inner\s*\{[^}]*outline\s*:\s*none/);
   });
 
   it('廃止した段下のコントロール行のスタイルは残っていない', () => {

@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react';
 import ScorePage from './ScorePage';
+import SystemLayoutPanel from './SystemLayoutPanel';
 import {
   createSavedScoreData,
   createWork,
@@ -274,4 +275,63 @@ describe('ScorePage: 段の選択とレイアウト調整パネル（Issue #482�
       }, { timeout: 15000 });
     }, MOUNT_HEAVY_TIMEOUT_MS);
   }
+});
+
+// SystemLayoutPanel 単体: 確定経路の呼び出し回数を厳密に固定する
+// （ScorePage 実マウントでは差分の合算結果しか見えず、二重確定を見逃すため）
+describe('SystemLayoutPanel: 直接入力の確定は一度だけ（Codex round2 P1）', () => {
+  function renderPanel(overrides: Partial<React.ComponentProps<typeof SystemLayoutPanel>> = {}) {
+    const onGapDelta = vi.fn();
+    const onMeasureDelta = vi.fn();
+    render(
+      <SystemLayoutPanel
+        systemLabel="段1"
+        side="left"
+        startMeasure={0}
+        measureCount={2}
+        maxMeasureCount={4}
+        canDecreaseMeasure
+        canIncreaseMeasure
+        onMeasureDelta={onMeasureDelta}
+        gapPx={0}
+        gapMinPx={-60}
+        gapMaxPx={50}
+        gapStepPx={4}
+        onGapDelta={onGapDelta}
+        onClose={() => {}}
+        onNotice={() => {}}
+        {...overrides}
+      />
+    );
+    return { onGapDelta, onMeasureDelta };
+  }
+
+  afterEach(() => cleanup());
+
+  it('通常の blur で一度だけ確定される（クリーンアップで二重適用されない）', async () => {
+    const { onGapDelta } = renderPanel();
+    fireEvent.click(screen.getByTestId('system-gap-value-0'));
+    const input = await screen.findByTestId('system-gap-input-0');
+    fireEvent.change(input, { target: { value: '12' } });
+    // blur → onCommit → setEditing(null) → 入力欄アンマウント（クリーンアップが走る）
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect(screen.queryByTestId('system-gap-input-0')).toBeNull();
+    });
+    expect(onGapDelta).toHaveBeenCalledTimes(1);
+    expect(onGapDelta).toHaveBeenCalledWith(12);
+  });
+
+  it('編集バッファ段（上限=現在値）では、値を変えない確定で小節数が動かない', async () => {
+    // ScorePage 側は maxMeasureCount に最低でも現在値を渡す（round2 P2）。
+    // その前提で、現在値のままの確定が no-op になることを固定する
+    const { onMeasureDelta } = renderPanel({ measureCount: 3, maxMeasureCount: 3 });
+    fireEvent.click(screen.getByTestId('system-measure-count-0'));
+    const input = await screen.findByTestId('system-measure-input-0');
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect(screen.queryByTestId('system-measure-input-0')).toBeNull();
+    });
+    expect(onMeasureDelta).not.toHaveBeenCalled();
+  });
 });

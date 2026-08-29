@@ -102,6 +102,10 @@ function InlineNumberInput({
       }}
       onBlur={(e) => {
         if (settledRef.current) return;
+        // 確定済みの印を立ててから確定する。立てないと onCommit 内の setEditing(null) で
+        // 入力欄がアンマウントされ、上のクリーンアップが同じ値をもう一度確定して
+        // 差分が二重適用される（Codex round2 P1）
+        settledRef.current = true;
         onCommit(Number(e.target.value));
       }}
     />

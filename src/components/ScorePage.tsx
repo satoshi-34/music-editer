@@ -4316,8 +4316,11 @@ export default function ScorePage() {
         startMeasure={range.start}
         measureCount={range.count}
         // 引き込めるのは「内容のある小節」まで。編集用の空きバッファ小節まで引き込むと
-        // 「最後の音符がある小節が譜面の最後」という終止線の作法が壊れるため
-        maxMeasureCount={Math.max(1, contentMeasureCount - range.start)}
+        // 「最後の音符がある小節が譜面の最後」という終止線の作法が壊れるため。
+        // ただし内容末尾より後ろの編集バッファ段（＋小節を追加で生まれた段）では
+        // この残数が現在の小節数を下回る。上限が現在値より小さいと、値を変えずに
+        // 確定しただけでクランプが縮めてしまうため、最低でも現在値を上限にする（Codex round2 P2）
+        maxMeasureCount={Math.max(1, contentMeasureCount - range.start, range.count)}
         canDecreaseMeasure={range.count > 1}
         canIncreaseMeasure={range.start + range.count < contentMeasureCount}
         onMeasureDelta={(delta) => adjustSystemMeasureOverride(range, delta)}
