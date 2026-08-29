@@ -17,6 +17,7 @@ import { convertPdfToMxl, getOmrApiUrl, OmrConvertError } from '../utils/omrApi'
 import SymbolEditor from './SymbolEditor';
 import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
+import SystemLayoutPanel from './SystemLayoutPanel';
 import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
@@ -665,6 +666,11 @@ export default function ScorePage() {
   // Ypx を追加する」の一覧）。レイアウトタブの「段の間隔」（全体設定）とは別に、段ごとの
   // ◀▶コントロールの並びで個別に増減できる（.claude/specs/page-layout-controls/design.md 参照）。
   const [systemRowGapOverrides, setSystemRowGapOverrides] = useState<SystemRowGapOverride[]>([]);
+  // いま選択している段（Issue #482）。五線の左右端をクリックすると、その段が選択状態になり
+  // 横にレイアウト調整のフローティングパネルが出る。start は段の先頭小節（段の同定キー）、
+  // side はクリックされた端＝パネルを出す側。null はどの段も選択していない状態。
+  // 譜面データではなく画面の一時状態なので、保存・Undo の対象にはしない。
+  const [selectedSystem, setSelectedSystem] = useState<{ start: number; side: 'left' | 'right' } | null>(null);
 
   // パート譜表示の選択肢と、現在選択中のパート。
   // 単旋律譜・ピアノ大譜表では対象外（getPartExtractionOptions が空配列を返す）。
@@ -4254,6 +4260,94 @@ export default function ScorePage() {
     return result;
   }, [effectiveTotalSystems, getPageSystemsCapacity, visiblePlannedRanges]);
 
+  // ===== 段の選択とフローティングパネル（Issue #482 = #450 の段階1） =====
+  // これまで段の下に常設していたコントロール行（段N ◀小節数▶ 間隔−＋）を廃止し、
+  // 「五線の左右端をクリックして段を選ぶ → 段の横にパネルが出る」方式へ移した。
+  // 値の増減そのものは従来の adjustSystemMeasureOverride / adjustSystemRowGapOverride を
+  // そのまま呼ぶので、保存・Undo の挙動は移設前と変わらない（入力装置の置き場所だけの変更）。
+  const isSystemSelectionEnabled = !isPartExtractionActive && !isEditingDisabled;
+  const closeSystemSelection = useCallback(() => setSelectedSystem(null), []);
+  const handleSystemSelect = useCallback((startMeasure: number, side: 'left' | 'right') => {
+    // 同じ端をもう一度押したら閉じる（トグル）。別の段・別の端を押したらそちらへ選択が移る
+    setSelectedSystem((prev) => (
+      prev && prev.start === startMeasure && prev.side === side ? null : { start: startMeasure, side }
+    ));
+  }, []);
+
+  // 選択中は「譜面の他の場所をクリック」「Esc / Enter」で解除する（譜面上に常設物を残さない）。
+  // パネル自身と端の当たり判定（data-system-select-keep）を押したときだけ解除しない。
+  useEffect(() => {
+    if (selectedSystem === null) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      // closest は SVG 要素にも生えているが、テスト用のダミー要素等では無いこともあるので
+      // オプショナル呼び出しにしておく（無ければ「外側を押した」とみなして閉じる）
+      if (target?.closest?.('[data-system-select-keep="true"]')) return;
+      setSelectedSystem(null);
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Enter') {
+        // Enter の既定動作を止める。フォーカスが端ボタンに残ったまま Enter を押すと、
+        // ここで解除した直後にボタンの既定 click が発火して同じ段を再選択してしまう
+        // （Codex round5 P2）。Esc 側は既定動作が無いが、扱いを揃えておく
+        e.preventDefault();
+        setSelectedSystem(null);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedSystem]);
+
+  // 段割りが変わって選択中の段が消えた（その先頭小節で始まる段が無くなった）ときは選択を解く。
+  // 残したままだと、どこにも出ないパネルの選択状態だけが残ってしまう。
+  useEffect(() => {
+    if (selectedSystem === null) return;
+    if (!visiblePlannedRanges.some((range) => range.start === selectedSystem.start)) {
+      setSelectedSystem(null);
+    }
+  }, [selectedSystem, visiblePlannedRanges]);
+
+  // 選択中の段の横に出すパネル。各 Staff コンポーネントは段のラッパー
+  // （SystemSelectFrame）の中でこれを呼ぶだけで、パネルの中身は知らなくてよい。
+  const renderSystemPanel = useCallback((startMeasure: number) => {
+    if (selectedSystem === null || selectedSystem.start !== startMeasure) return null;
+    const systemIndex = visiblePlannedRanges.findIndex((range) => range.start === startMeasure);
+    const range = visiblePlannedRanges[systemIndex];
+    if (!range) return null;
+    const rowGapPx = systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0;
+    return (
+      <SystemLayoutPanel
+        systemLabel={`段${systemIndex + 1}`}
+        side={selectedSystem.side}
+        startMeasure={range.start}
+        measureCount={range.count}
+        // 引き込めるのは「内容のある小節」まで。編集用の空きバッファ小節まで引き込むと
+        // 「最後の音符がある小節が譜面の最後」という終止線の作法が壊れるため。
+        // ただし内容末尾より後ろの編集バッファ段（＋小節を追加で生まれた段）では
+        // この残数が現在の小節数を下回る。上限が現在値より小さいと、値を変えずに
+        // 確定しただけでクランプが縮めてしまうため、最低でも現在値を上限にする（Codex round2 P2）
+        maxMeasureCount={Math.max(1, contentMeasureCount - range.start, range.count)}
+        canDecreaseMeasure={range.count > 1}
+        canIncreaseMeasure={range.start + range.count < contentMeasureCount}
+        onMeasureDelta={(delta) => adjustSystemMeasureOverride(range, delta)}
+        gapPx={rowGapPx}
+        gapMinPx={SYSTEM_ROW_GAP_MIN_PX}
+        gapMaxPx={SYSTEM_ROW_GAP_MAX_PX}
+        gapStepPx={SYSTEM_ROW_GAP_OVERRIDE_STEP_PX}
+        onGapDelta={(delta) => adjustSystemRowGapOverride(range.start, delta)}
+        onClose={closeSystemSelection}
+        onNotice={notifyScoreEdit}
+      />
+    );
+  }, [
+    selectedSystem, visiblePlannedRanges, systemRowGapOverrides, contentMeasureCount,
+    adjustSystemMeasureOverride, adjustSystemRowGapOverride, closeSystemSelection, notifyScoreEdit,
+  ]);
+
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
   // totalSystems と measuresPerSystem の宣言より後に置く必要がある
   const buildCurrentScoreData = useCallback((): import('../types/storage').SavedScoreData => {
@@ -6413,6 +6507,11 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
+                      // 段の選択+フローティングパネル（Issue #482）
+                      selectedSystemStart={selectedSystem?.start ?? null}
+                      onSystemSelect={isSystemSelectionEnabled ? handleSystemSelect : undefined}
+                      renderSystemPanel={renderSystemPanel}
+                      systemNumberOffset={getPageSystemOffset(i)}
                       incomingArcIndex={ensembleDisplayIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       partSpacingOffsetPx={partSpacingOffsetPx}
@@ -6455,6 +6554,11 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
+                      // 段の選択+フローティングパネル（Issue #482）
+                      selectedSystemStart={selectedSystem?.start ?? null}
+                      onSystemSelect={isSystemSelectionEnabled ? handleSystemSelect : undefined}
+                      renderSystemPanel={renderSystemPanel}
+                      systemNumberOffset={getPageSystemOffset(i)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       partSpacingOffsetPx={partSpacingOffsetPx}
@@ -6495,6 +6599,11 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
+                      // 段の選択+フローティングパネル（Issue #482）
+                      selectedSystemStart={selectedSystem?.start ?? null}
+                      onSystemSelect={isSystemSelectionEnabled ? handleSystemSelect : undefined}
+                      renderSystemPanel={renderSystemPanel}
+                      systemNumberOffset={getPageSystemOffset(i)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       partSpacingOffsetPx={partSpacingOffsetPx}
@@ -6539,6 +6648,11 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
+                      // 段の選択+フローティングパネル（Issue #482）
+                      selectedSystemStart={selectedSystem?.start ?? null}
+                      onSystemSelect={isSystemSelectionEnabled ? handleSystemSelect : undefined}
+                      renderSystemPanel={renderSystemPanel}
+                      systemNumberOffset={getPageSystemOffset(i)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       partSpacingOffsetPx={partSpacingOffsetPx}
@@ -6570,83 +6684,6 @@ export default function ScorePage() {
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
                     />
-                  )}
-
-                  {/* 段ごとの小節数・間隔を個別に調整するコントロール。段の自動計画（幅ベース）だけでは
-                      「この段だけ1小節増やしたい／減らしたい」「この段の上だけ間隔を広げたい」
-                      という要望に応えられないため、ページ内の各段の直後に「◀ N小節 ▶」と
-                      「間隔 － Npx ＋」を1本ずつ並べる。▶ で次段の先頭小節をこの段へ引き込み
-                      （+1）、◀ でこの段の末尾小節を次段へ送る（-1）。間隔の－／＋は、レイアウト
-                      タブの「段の間隔」（全体設定）に加えてこの段だけ追加で詰める/広げる
-                      （.claude/specs/page-layout-controls/design.md 参照）。
-                      編集モードのときだけ表示し、印刷には出さない（App.css の @media print 参照）。 */}
-                  {!isPartExtractionActive && !isEditingDisabled && (
-                    <div className="system-measure-override-controls">
-                      {p.systemRanges.map((range, rangeIndex) => {
-                        const canDecrease = range.count > 1;
-                        // 引き込める「内容のある小節」が次に残っている段だけ ▶ を押せる。
-                        // 空きバッファ小節まで引き込むと終止線の作法が壊れるため上限は contentMeasureCount
-                        const canIncrease = range.start + range.count < contentMeasureCount;
-                        const rowGapPx = systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0;
-                        const canDecreaseGap = rowGapPx > SYSTEM_ROW_GAP_MIN_PX;
-                        const canIncreaseGap = rowGapPx < SYSTEM_ROW_GAP_MAX_PX;
-                        return (
-                          // data-testid は「どの段」を対象にした行かを外部（テストコード）から判定できるように、
-                          // 譜面全体で一意な開始小節番号（range.start）をキーとして付与する。
-                          // （夜間QAフェーズBでのテスト容易性改善。.claude/specs/page-layout-controls/design.md 参照）
-                          <div
-                            className="system-measure-override-row"
-                            key={range.start}
-                            data-testid={`system-measure-row-${range.start}`}
-                          >
-                            <span className="system-measure-override-label">段{getPageSystemOffset(i) + rangeIndex + 1}</span>
-                            <button
-                              type="button"
-                              className="system-measure-override-button"
-                              disabled={!canDecrease}
-                              onClick={() => adjustSystemMeasureOverride(range, -1)}
-                              title="この段の末尾の小節を次の段へ送る"
-                              data-testid={`system-measure-decrease-${range.start}`}
-                            >
-                              ◀
-                            </button>
-                            <span className="system-measure-override-count" data-testid={`system-measure-count-${range.start}`}>{range.count}小節</span>
-                            <button
-                              type="button"
-                              className="system-measure-override-button"
-                              disabled={!canIncrease}
-                              onClick={() => adjustSystemMeasureOverride(range, 1)}
-                              title="次の段の先頭の小節をこの段へ引き込む"
-                              data-testid={`system-measure-increase-${range.start}`}
-                            >
-                              ▶
-                            </button>
-                            <span className="system-row-gap-override-label">間隔</span>
-                            <button
-                              type="button"
-                              className="system-measure-override-button"
-                              disabled={!canDecreaseGap}
-                              onClick={() => adjustSystemRowGapOverride(range.start, -SYSTEM_ROW_GAP_OVERRIDE_STEP_PX)}
-                              title="この段の間隔（上の段との距離）を詰める"
-                              data-testid={`system-gap-decrease-${range.start}`}
-                            >
-                              －
-                            </button>
-                            <span className="system-measure-override-count" data-testid={`system-gap-value-${range.start}`}>{rowGapPx >= 0 ? `+${rowGapPx}` : rowGapPx}px</span>
-                            <button
-                              type="button"
-                              className="system-measure-override-button"
-                              disabled={!canIncreaseGap}
-                              onClick={() => adjustSystemRowGapOverride(range.start, SYSTEM_ROW_GAP_OVERRIDE_STEP_PX)}
-                              title="この段の間隔（上の段との距離）を広げる"
-                              data-testid={`system-gap-increase-${range.start}`}
-                            >
-                              ＋
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
                   )}
 
                   {/* ＋小節を追加: 最後の音符がある小節が譜面の最後になるよう、既定では

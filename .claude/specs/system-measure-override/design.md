@@ -453,3 +453,7 @@ mainからrevertした（Issue #67）。本追補は revert 後の main を起�
     安定化）は、本セッションでは自動テスト（`measureLayoutUtils.test.ts` の
     `previousRanges / lastEditedMeasureIndex` テスト群）でのみ確認し、ブラウザでの
     多段シナリオの手動確認は未実施
+
+## 追補: 操作の入口が「段下の行」から「段の選択+パネル」へ移った（2026-08-29・Issue #482）
+
+`systemMeasureOverrides` の意味・保存・Undo の扱いはこのファイルの記述のままで一切変わらない。変わったのは**入力装置の置き場所だけ**で、段の下に常設していた `段N ◀ N小節 ▶` の行は廃止し、五線の左右端をクリックして出るフローティングパネル（`SystemLayoutPanel`）から同じ `adjustSystemMeasureOverride` を呼ぶ形になった。設計の詳細は `.claude/specs/page-layout-controls/design.md` の追補（2026-08-29）を参照。

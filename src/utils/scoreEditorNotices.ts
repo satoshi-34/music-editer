@@ -691,3 +691,22 @@ export function describeOmrConvertFailed(reason: OmrConvertFailure): string {
   }
   return `PDF の変換に失敗しました（${fallback}）`;
 }
+
+/**
+ * 段レイアウトパネルの直接入力が数値として読めなかったときの文言（#482 round1・#318）。
+ * 黙って閉じると「入力したのに何も起きない」行き止まりになるため理由を伝える。
+ */
+export function describeSystemLayoutValueInvalid(kind: '小節数' | '間隔'): string {
+  return `${kind}を数値として読み取れなかったため、変更しませんでした`;
+}
+
+/**
+ * 段レイアウトパネルの直接入力が入力どおりに適用できず、丸めて適用したときの文言
+ * （#482 round1・round4・#318）。範囲外だけでなく小数入力（round4 P2）も対象なので、
+ * 「範囲」と「整数」の両方の制約を1文で伝える。
+ */
+export function describeSystemLayoutValueClamped(
+  kind: '小節数' | '間隔', applied: number, min: number, max: number,
+): string {
+  return `${kind}は ${min}〜${max} の整数で指定できます（${applied} に丸めて適用しました）`;
+}
