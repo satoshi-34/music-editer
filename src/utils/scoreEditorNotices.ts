@@ -662,7 +662,6 @@ export function describeMxlExtractFailed(reason: 'notZip' | 'brokenZip' | 'noXml
 }
 
 /**
-<<<<<<< HEAD
  * 段レイアウトパネルの直接入力が数値として読めなかったときの文言（#482 round1・#318）。
  * 黙って閉じると「入力したのに何も起きない」行き止まりになるため理由を伝える。
  */
@@ -682,10 +681,7 @@ export function describeSystemLayoutValueClamped(
 }
 
 /**
-* PDF楽譜の取り込み（Issue #487）が失敗したときの文言（#318）。
-=======
  * PDF楽譜の取り込み（Issue #487）が失敗したときの文言（#318）。
->>>>>>> 1a3e882203edc331e093fa53d824354f91f77bcb
  * 変換は「うまくいかないことがある」前提の機能なので、
  * 理由に加えて必ず**代替手順（Audiveris で手元変換して .mxl を開く）**を添える。
  */
@@ -713,27 +709,4 @@ export function describeOmrConvertFailed(reason: OmrConvertFailure): string {
     return `この PDF からは楽譜を読み取れませんでした（解像度の高いスキャンで試すか、${fallback}）`;
   }
   return `PDF の変換に失敗しました（${fallback}）`;
-<<<<<<< HEAD
-
-=======
-}
-
-/**
- * 段レイアウトパネルの直接入力が数値として読めなかったときの文言（#482 round1・#318）。
- * 黙って閉じると「入力したのに何も起きない」行き止まりになるため理由を伝える。
- */
-export function describeSystemLayoutValueInvalid(kind: '小節数' | '間隔'): string {
-  return `${kind}を数値として読み取れなかったため、変更しませんでした`;
-}
-
-/**
- * 段レイアウトパネルの直接入力が入力どおりに適用できず、丸めて適用したときの文言
- * （#482 round1・round4・#318）。範囲外だけでなく小数入力（round4 P2）も対象なので、
- * 「範囲」と「整数」の両方の制約を1文で伝える。
- */
-export function describeSystemLayoutValueClamped(
-  kind: '小節数' | '間隔', applied: number, min: number, max: number,
-): string {
-  return `${kind}は ${min}〜${max} の整数で指定できます（${applied} に丸めて適用しました）`;
->>>>>>> 1a3e882203edc331e093fa53d824354f91f77bcb
 }
