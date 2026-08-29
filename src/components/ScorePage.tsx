@@ -5781,8 +5781,15 @@ export default function ScorePage() {
                 <button type="button" className="ghost toolbar-chip-button" onClick={() => fileImportRef.current?.click()}>
                   ファイル
                 </button>
-                <button type="button" className="ghost toolbar-chip-button" onClick={() => musicXmlInputRef.current?.click()}>
-                  MusicXML
+                <button
+                  type="button"
+                  className="ghost toolbar-chip-button"
+                  onClick={() => musicXmlInputRef.current?.click()}
+                  title="MusicXML（.musicxml / .xml）と Finale 既定の圧縮形式（.mxl）を開きます"
+                >
+                  {/* .mxl 対応（#467）後もラベルが MusicXML のままで、.mxl が開けることが
+                      伝わらなかった（対面テストの指摘）。拡張子を併記する */}
+                  MusicXML (.mxl)
                 </button>
                 {storedDataAvailable && (
                   <button type="button" className="ghost toolbar-chip-button" onClick={() => void handleImportLegacyManualSave()}>

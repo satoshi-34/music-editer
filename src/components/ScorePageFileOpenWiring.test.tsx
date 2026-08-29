@@ -74,7 +74,7 @@ describe('開くボタン群と隠しファイル入力の配線（#464）', () 
     const openGroup = screen.getByRole('group', { name: '開く' });
     fireEvent.click(within(openGroup).getByRole('button', { name: 'ファイル' }));
     expect(jsonClick).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(openGroup).getByRole('button', { name: 'MusicXML' }));
+    fireEvent.click(within(openGroup).getByRole('button', { name: 'MusicXML (.mxl)' }));
     expect(xmlClick).toHaveBeenCalledTimes(1);
     // 「開く」が select として存在しない（Safari で無反応になる形へ戻さない）
     expect(screen.queryByRole('combobox', { name: '開く' })).toBeNull();
