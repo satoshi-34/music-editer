@@ -150,7 +150,9 @@ export default function SystemLayoutPanel({
       return;
     }
     const next = Math.max(1, Math.min(maxMeasureCount, Math.round(value)));
-    if (next !== Math.round(value)) {
+    // 丸め前の入力値と比較する。Math.round 後同士の比較だと、小数入力（1.5→2 等）が
+    // 無通知で別の値になる（Codex round4 P2）
+    if (next !== value) {
       onNotice(describeSystemLayoutValueClamped('小節数', next, 1, maxMeasureCount));
     }
     // 増減ハンドラ（既存）を「差分」で呼ぶだけにして、上限・下限やUndoの積み方を
@@ -165,7 +167,7 @@ export default function SystemLayoutPanel({
       return;
     }
     const next = Math.max(gapMinPx, Math.min(gapMaxPx, Math.round(value)));
-    if (next !== Math.round(value)) {
+    if (next !== value) {
       onNotice(describeSystemLayoutValueClamped('間隔', next, gapMinPx, gapMaxPx));
     }
     if (next !== gapPx) onGapDelta(next - gapPx);

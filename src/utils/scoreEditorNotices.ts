@@ -669,11 +669,12 @@ export function describeSystemLayoutValueInvalid(kind: '小節数' | '間隔'): 
 }
 
 /**
- * 段レイアウトパネルの直接入力が範囲外で、端の値へ丸めて適用したときの文言（#482 round1・#318）。
- * 入力どおりにならなかった理由（有効範囲）まで伝える。
+ * 段レイアウトパネルの直接入力が入力どおりに適用できず、丸めて適用したときの文言
+ * （#482 round1・round4・#318）。範囲外だけでなく小数入力（round4 P2）も対象なので、
+ * 「範囲」と「整数」の両方の制約を1文で伝える。
  */
 export function describeSystemLayoutValueClamped(
   kind: '小節数' | '間隔', applied: number, min: number, max: number,
 ): string {
-  return `${kind}は ${min}〜${max} の範囲で指定できます（${applied} に丸めて適用しました）`;
+  return `${kind}は ${min}〜${max} の整数で指定できます（${applied} に丸めて適用しました）`;
 }

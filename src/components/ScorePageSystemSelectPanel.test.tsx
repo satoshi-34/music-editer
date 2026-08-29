@@ -261,7 +261,7 @@ describe('ScorePage: 段の選択とレイアウト調整パネル（Issue #482�
     await waitFor(() => {
       expect((screen.getByTestId('system-frame-0') as HTMLElement).style.marginTop).toBe('50px');
     }, { timeout: 15000 });
-    expect(document.body.textContent).toContain('間隔は -60〜50 の範囲で指定できます');
+    expect(document.body.textContent).toContain('間隔は -60〜50 の整数で指定できます');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   // Codex round3 P2: 空文字での確定は Number('')===0 に化けず、変更せず理由を通知する
@@ -367,6 +367,41 @@ describe('SystemLayoutPanel: 直接入力の確定は一度だけ（Codex round2
     });
     expect(onGapDelta).toHaveBeenCalledTimes(1);
     expect(onGapDelta).toHaveBeenCalledWith(12);
+  });
+
+  // Codex round4 P2: 小数の手入力（type=number でも入力可能）は丸めて適用し、その旨を通知する
+  for (const [label, key] of [['Enter', 'enter'], ['blur', 'blur']] as const) {
+    it(`小数入力（${label} 確定）は丸めて適用され、通知が出る`, async () => {
+      const onNotice = vi.fn();
+      const { onGapDelta } = renderPanel({ onNotice });
+      fireEvent.click(screen.getByTestId('system-gap-value-0'));
+      const input = await screen.findByTestId('system-gap-input-0');
+      if (key === 'enter') {
+        fireEvent.keyDown(input, { key: 'Enter', target: { value: '3.5' } });
+      } else {
+        fireEvent.change(input, { target: { value: '3.5' } });
+        fireEvent.blur(input);
+      }
+      await waitFor(() => {
+        expect(screen.queryByTestId('system-gap-input-0')).toBeNull();
+      });
+      expect(onGapDelta).toHaveBeenCalledWith(4); // 3.5 → 4px（0 からの差分）
+      expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('整数で指定できます'));
+    });
+  }
+
+  it('小節数の小数入力も丸めて通知される（適用値が現在値と同じでも通知は出る）', async () => {
+    const onNotice = vi.fn();
+    const { onMeasureDelta } = renderPanel({ onNotice, measureCount: 2, maxMeasureCount: 4 });
+    fireEvent.click(screen.getByTestId('system-measure-count-0'));
+    const input = await screen.findByTestId('system-measure-input-0');
+    fireEvent.keyDown(input, { key: 'Enter', target: { value: '2.4' } });
+    await waitFor(() => {
+      expect(screen.queryByTestId('system-measure-input-0')).toBeNull();
+    });
+    // 2.4 → 2（現在値と同じ）なので変更は走らないが、入力どおりでない旨は通知する
+    expect(onMeasureDelta).not.toHaveBeenCalled();
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('小節数は 1〜4 の整数で指定できます'));
   });
 
   it('編集バッファ段（上限=現在値）では、値を変えない確定で小節数が動かない', async () => {
