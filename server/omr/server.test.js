@@ -79,6 +79,24 @@ describe('POST /convert の上限超過（round1 P1: 413 が実際に届くこ�
     expect(res.status).toBe(413);
     expect(JSON.parse(res.body.toString('utf8')).error.reason).toBe('tooLarge');
   });
+
+  it('multipart の余裕枠には収まるが PDF 本体が上限超過なら tooLarge（round2 P2）', async () => {
+    // bodyLimit は maxPdfBytes + 1MB の余裕枠を持つ。余裕枠のせいで PDF 本体の
+    // 上限検査（assertAcceptablePdf）に maxPdfBytes が渡らない退行を検出する
+    const { port } = await listen({
+      convert: async () => { throw new Error('呼ばれてはいけない'); },
+      maxPdfBytes: 1024,
+    });
+    const pdf = Buffer.concat([Buffer.from('%PDF-1.7\n', 'latin1'), Buffer.alloc(2048, 0x20)]);
+    const body = multipartBody('bnd1', pdf);
+    const res = await request({
+      port,
+      headers: { 'content-type': 'multipart/form-data; boundary=bnd1', 'content-length': String(body.length) },
+      body,
+    });
+    expect(res.status).toBe(413);
+    expect(JSON.parse(res.body.toString('utf8')).error.reason).toBe('tooLarge');
+  });
 });
 
 describe('POST /convert の基本配線', () => {

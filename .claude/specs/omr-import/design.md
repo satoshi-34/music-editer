@@ -76,9 +76,18 @@ ARG にしているのはこのため）。
 - **依存パッケージを入れない**: multipart の解析は「PDFが1つ入っているだけ」の用途に絞った
   最小実装（`convert.js`）にした。express/busboy を足すと、変換サーバ側にも依存更新の運用が
   発生するため（アプリ本体の依存追加ルールと同じ考え方）
-- **ページ数の数え方は best-effort**: PDF は本文をオブジェクトストリームで圧縮でき、
-  非圧縮の `/Type /Page` を数える方法では**数えられない PDF がある**。数えられない場合は
-  ページ上限を課さず、変換タイムアウト（120秒）で守る。正当なPDFを誤って弾かないことを優先した
+- **ページ上限は二段構え**（round1 P1）: 入口の `countPdfPages`（非圧縮の `/Type /Page` を数える
+  簡易カウント）は安価な足切りで、オブジェクトストリームで圧縮された PDF は数えられず素通しする。
+  そこで**確定判定は変換直前の `pdfinfo`**（poppler-utils・無改造バイナリの子プロセス起動のみ＝
+  Audiveris と同じプロセス分離）が必ず行う（`audiveris.js` の `assertPageCountWithPdfinfo`）。
+  pdfinfo が使えない・出力を読めない場合は fail-closed（`conversionFailed`）で変換に進まない。
+  Dockerfile には poppler-utils を追加してある
+- **上限超過でも理由コードを届ける**（round1 P1）: 受信中に `req.destroy()` すると 413 の JSON を
+  返す前に接続が切れるため、上限超過時はバッファを捨てて読み流し、レスポンス送信完了後に
+  接続を閉じる。`Content-Length` が申告されていれば受信前に 413 で断る。
+  テストできるように `createOmrServer()`（listen しない工場関数）へ分離し、直接実行時のみ待ち受ける
+- **multipart の境界は正式な境界行のみ**（round1 P2）: PDF はバイナリなので本文中に `--境界` と
+  同じバイト列が現れうる。本文先頭か CRLF 直後にあり、直後が CRLF か `--` のものだけを区切りとする
 - **一時ファイルは必ず消す**: 入力PDFと出力 .mxl は `mkdtemp` の作業ディレクトリに置き、
   成功・失敗にかかわらず `finally` で削除する（ユーザーの楽譜をサーバーに残さない）
 - **実行ファイルのパスを決め打ちしない**: .deb の配置はパッケージの作り方で変わるため、
@@ -102,7 +111,9 @@ ARG にしているのはこのため）。
 
 | テスト | 内容 |
 | --- | --- |
-| `server/omr/convert.test.js` | 正常系（multipart から PDF を取り出す）・上限超過（tooLarge / tooManyPages）・壊れたPDF（notPdf）・ページ数を数えられないPDFを弾かないこと |
+| `server/omr/convert.test.js` | 正常系（multipart から PDF を取り出す）・上限超過（tooLarge / tooManyPages）・壊れたPDF（notPdf）・入口の簡易カウントで数えられないPDFを入口では弾かないこと（確定判定は pdfinfo 側）・PDF本文中の境界と同じバイト列で切断しないこと |
+| `server/omr/audiveris.test.js` | spawn モックで子プロセスの約束を固定: 成功・異常終了・タイムアウト時の SIGKILL・pdfinfo のページ上限確定判定（超過時は Audiveris を起動しない）・一時ディレクトリを成功失敗問わず消すこと |
+| `server/omr/server.test.js` | 実HTTPで配線を固定: 上限超過でも理由コード付き 413 JSON が届くこと（Content-Length 事前拒否 / chunked 受信中の打ち切りの両方）・maxPdfBytes 指定が PDF 本体の上限にも効くこと・CORS・正常系・OPTIONS / health / 404 |
 | `src/utils/omrApi.test.ts` | fetch モックで送信先/形式、失敗レスポンスの理由コードの持ち上げ、URL 未設定時に通信しないこと |
 | `src/components/ScorePagePdfImport.test.tsx` | ScorePage の配線: URL 未設定ならボタンを出さない／PDF を選ぶと変換APIへ送り、返った .mxl が画面へ反映される／失敗時は理由と代替手順を通知し譜面を変えない |
 

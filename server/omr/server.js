@@ -117,7 +117,7 @@ export function createOmrServer({
       }
       const body = await readBody(req, bodyLimit);
       const { filename, bytes } = extractUploadedFile(body, boundary);
-      assertAcceptablePdf(bytes);
+      assertAcceptablePdf(bytes, { maxBytes: maxPdfBytes });
       const { mxl, name } = await convert(bytes, filename);
       res.writeHead(200, {
         'content-type': 'application/vnd.recordare.musicxml',
