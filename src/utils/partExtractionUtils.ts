@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { InstrumentPartDefinition, ScoreType } from '../types/storage';
+import { resolveInstrumentPartLabels } from './instrumentationPartUtils';
 
 /** パート譜表示のドロップダウンに出す1件分（総譜以外の選択肢） */
 export type PartExtractionOption = {
@@ -43,9 +44,19 @@ export function getPartExtractionOptions(
   instrumentationParts: InstrumentPartDefinition[]
 ): PartExtractionOption[] {
   if (scoreType === 'quartet') {
+    // ユーザーが楽器名を書き換えた場合（Issue #448）は、その名前をパート譜表示の
+    // 選択肢にも出す。総譜と選択肢で名前が食い違うと同じパートが別物に見えるため。
+    // パート数が既定の4と違う編成定義のときは添字の対応が崩れるので既定名を使う。
+    const editedParts = instrumentationParts.length === QUARTET_PART_IDS.length
+      ? instrumentationParts
+      : [];
     return QUARTET_PART_IDS.map((id, index) => ({
       id,
-      label: QUARTET_PART_EXTRACTION_LABELS[index],
+      // 総譜のラベルと同じ解決規則（resolveInstrumentPartLabels）を通す。
+      // name だけを見ると「正式名が空で略称のみ」のパートで総譜と選択肢の名前が
+      // 食い違う（総譜=略称・選択肢=既定名。Codex round1 P2）
+      label: (editedParts[index] ? resolveInstrumentPartLabels(editedParts[index]).fullLabel : undefined)
+        || QUARTET_PART_EXTRACTION_LABELS[index],
       index,
     }));
   }

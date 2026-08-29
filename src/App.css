@@ -696,6 +696,18 @@ button.ghost.toolbar-chip-button {
   width: max-content;
   min-width: min(100%, 1060px);
 }
+/* 名前だけを編集するモード（弦楽四重奏。Issue #448）。
+   列が「正式名・略称」の2つだけになるので、横幅も列指定も専用にする。 */
+.instrumentation-editor-window--names {
+  width: min(520px, calc(100vw - 36px));
+}
+.instrumentation-part-row--names {
+  grid-template-columns: minmax(120px, 1fr) minmax(80px, 140px);
+}
+.instrumentation-editor-window .instrumentation-part-row--names {
+  width: auto;
+  min-width: 0;
+}
 .compact-button {
   padding: 4px 7px;
   border-radius: 6px;

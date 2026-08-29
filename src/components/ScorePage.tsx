@@ -65,8 +65,10 @@ import type {
 import type { NoteEvent } from '../types/storage';
 import {
   getDefaultInstrumentationForScoreType,
+  migrateLegacyQuartetAbbreviations,
   getInstrumentationPreset,
   getScoreTypeForInstrumentation,
+  hasCustomInstrumentationLabels,
   INSTRUMENTATION_PRESETS,
 } from '../data/instrumentationPresets';
 import type { InstrumentationPresetId, ScoreInstrumentation, ScoreNotationMode } from '../types/storage';
@@ -155,7 +157,7 @@ import {
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
-import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
+import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, INSTRUMENT_NAME_MAX_LENGTH, resolveInstrumentPartLabels, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
 import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
@@ -1023,6 +1025,9 @@ export default function ScorePage() {
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
     const nextInstrumentation = getDefaultInstrumentationForScoreType(newType);
     setScoreType(newType);
+    // 譜種によって編集ウィンドウの中身（編成パート編集 / パート名編集）も
+    // 出る条件も変わるので、切り替え時はいったん閉じる（Issue #448）
+    setShowInstrumentationEditor(false);
     // 楽譜種別ごとの「音符の大きさ」「段の間隔」「パート間隔」既定値（Issue #49・#199）。
     // ユーザーがまだ該当スライダーを触っていない（localStorage未保存の）場合だけ
     // 切り替え先の既定値を適用し、既に明示的に設定済みの値は上書きしない。
@@ -1156,6 +1161,24 @@ export default function ScorePage() {
     );
   }, [updateInstrumentationParts]);
 
+  // 名前（正式名・略称）だけを変えるときの更新。パート構成は何も変わらないので、
+  // updateInstrumentationParts（カスタム編成へ移行し、譜種も編成譜へ切り替える）は通さない。
+  // 弦楽四重奏で名前を書き換えただけで編成譜に変わってしまうのを避けるため（Issue #448）。
+  const handleInstrumentationPartNameChange = useCallback((
+    partIndex: number,
+    field: 'name' | 'abbreviation',
+    value: string
+  ) => {
+    // maxLength 属性は貼り付け経路で効かないブラウザがあるため、保存値側でも切り詰める
+    const clamped = value.slice(0, INSTRUMENT_NAME_MAX_LENGTH);
+    setInstrumentation(prev => ({
+      ...prev,
+      parts: prev.parts.map((part, index) => (
+        index === partIndex ? { ...part, [field]: clamped } : part
+      )),
+    }));
+  }, []);
+
   const handleInstrumentationPartFieldChange = useCallback((
     partIndex: number,
     field: 'name' | 'abbreviation' | 'family' | 'clef' | 'transposition' | 'bracketGroup' | 'subBracketGroup' | 'playbackInstrument',
@@ -1220,6 +1243,11 @@ export default function ScorePage() {
   const openInstrumentationEditor = useCallback(() => {
     setShowInstrumentationEditor(true);
   }, []);
+
+  // 弦楽四重奏は「Vn. I / Vn. II / Va. / Vc. の4段固定」というレイアウトなので、
+  // パートの追加・削除・並び替えや音部記号・段数の変更は受け付けられない。
+  // そこで同じ編集ウィンドウを「名前（正式名・略称）だけ編集できるモード」で開く（Issue #448）。
+  const isNameOnlyInstrumentationEditor = scoreType !== 'ensemble';
 
   const handlePlay = useCallback(async () => {
     // 再生は「編集の手を止めて聴く」モードへの切り替えなので、譜面の選択も手放す（Issue #238）。
@@ -2220,7 +2248,7 @@ export default function ScorePage() {
       setKeySignature(normalizeKeySignature(data.keySignature));
       await setTimeSignature(...normalizeTimeSignature(data.timeSignature));
       setScoreType(loadedType);
-      setInstrumentation(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType));
+      setInstrumentation(migrateLegacyQuartetAbbreviations(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType), data.version));
       setNotationMode(data.notationMode ?? 'concert');
     setTitleFontId(resolveTitleFontOption(data.titleFontId).id);
       setTitleFontSize(normalizeTitleFontSize(data.titleFontSize));
@@ -2359,7 +2387,8 @@ export default function ScorePage() {
     setKeySignature(normalizeKeySignature(restored.keySignature));
     await setTimeSignature(...normalizeTimeSignature(restored.timeSignature));
     setScoreType(restoredType);
-    setInstrumentation(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType));
+    // 旧既定の略称（Vln. I 等）で保存された未編集の四重奏を新既定（Vn. I 等）へ移行する（#448 round3）
+    setInstrumentation(migrateLegacyQuartetAbbreviations(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType), restored.version));
     setNotationMode(restored.notationMode ?? 'concert');
     setTitleFontId(resolveTitleFontOption(restored.titleFontId).id);
     setTitleFontSize(normalizeTitleFontSize(restored.titleFontSize));
@@ -2460,7 +2489,10 @@ export default function ScorePage() {
       // 空の譜面は保存しない（自動保存と同じ判断。空で上書きして中身を失わないため）。
       // ただし復元履歴の退避（includeEmpty）では、空譜面＝「全音符を消した直後」や
       // 「タイトルだけ編集した状態」も戻す前の内容として残す必要があるため組み立てる
-      if (!options?.includeEmpty && isEmptyScoreData(parts)) return null;
+      // 音符が空でも、楽器名を既定から書き換えた編成は「内容あり」として保存する
+      // （新規四重奏で名前だけ設定して閉じると失われるため。Codex round1 P1・#448）
+      if (!options?.includeEmpty && isEmptyScoreData(parts)
+        && !hasCustomInstrumentationLabels(instrumentation, scoreType)) return null;
       return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle);
     };
   });
@@ -2479,7 +2511,7 @@ export default function ScorePage() {
       const { metadata, parts } = buildScoreData();
       // 内容が空（全パート・全小節が空）のときは自動保存で既存の内容を上書きしない。
       // 「新規作成」では別の作品IDへ切り替えるので、前の作品はそのまま一覧に残る。
-      if (isEmptyScoreData(parts)) {
+      if (isEmptyScoreData(parts) && !hasCustomInstrumentationLabels(instrumentation, scoreType)) {
         // 空のうちは保存しないが「保存を試みた時刻」は進める。進めないと、空のまま
         // max-wait を超えた後の編集のたびに同期保存経路へ入り続ける（デバウンスが効かない）
         lastAutosaveCompletedAtRef.current = Date.now();
@@ -3885,6 +3917,16 @@ export default function ScorePage() {
     }
     return [{ measures: rightHandData ?? [], clef: 'treble' }];
   }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, partExtractionSelection]);
+  // 弦楽四重奏のパート名（Issue #448）。QuartetStaff の既定名（QUARTET_PART_CONFIGS）ではなく、
+  // ユーザーが「パート名編集」で書き換えられる instrumentation.parts 側を正本にする。
+  // パート数が既定の4と違う編成定義（別の譜種から切り替えた直後など）のときは、
+  // 添字の対応が崩れるので差し替えず既定名のままにする。
+  const quartetPartLabels = useMemo(() => {
+    if (scoreType !== 'quartet' || instrumentation.parts.length !== QUARTET_PART_CONFIGS.length) {
+      return undefined;
+    }
+    return instrumentation.parts.map(resolveInstrumentPartLabels);
+  }, [scoreType, instrumentation.parts]);
   // 五線の左に取るパート名用の余白（Issue #60）。1段目はフル名・2段目以降は略称なので、
   // 両方を候補に入れて「この譜面で最大どれだけ必要か」で段割りを計画する。
   // 計画（ここ）と描画（PianoSystemCanvas の labelW）で違う値を使うと、本文幅が食い違って
@@ -3907,7 +3949,10 @@ export default function ScorePage() {
       }
     }
     if (scoreType === 'quartet') {
-      const labels = QUARTET_PART_CONFIGS.flatMap((part) => [part.label, part.fullLabel]);
+      // 名前を編集できるようになったので、余白の見積もりも描画に渡すラベルと同じものから計算する
+      // （既定名だけで見積もると、長い名前に変えたとき五線がラベルに食い込む。Issue #448）
+      const labelSource = quartetPartLabels ?? QUARTET_PART_CONFIGS;
+      const labels = labelSource.flatMap((part) => [part.label, part.fullLabel]);
       return instrumentLabelAreaWidthForScore(
         labels.filter((label): label is string => !!label),
         QUARTET_PART_CONFIGS.length,
@@ -3923,7 +3968,7 @@ export default function ScorePage() {
     // 単旋律・ピアノはパート名を出さないが、従来どおり既定の余白ぶんを見込んだまま
     // 計画する（ここを 0 にすると既存譜面の段割り・ページ数が変わってしまう）。
     return SYSTEM_MAX_LABEL_WIDTH;
-  }, [scoreType, instrumentation.parts, partExtractionSelection]);
+  }, [scoreType, instrumentation.parts, partExtractionSelection, quartetPartLabels]);
   const incomingArcIndex = useMemo(
     () => buildIncomingArcIndex(layoutParts.map((part) => part.measures)),
     [layoutParts],
@@ -4252,6 +4297,9 @@ export default function ScorePage() {
       // MusicXML 書き出しへ symbol="common"/"cut" が付かない（Codex round1 P1）
       timeSignatureStyle,
       parts,
+      // 編成定義（パート名の編集 #448 を含む）。ここに入れないと MusicXML 書き出しが
+      // 既定の固定名へフォールバックし、編集した楽器名が出力に反映されない（Codex round1 P1）
+      instrumentation,
       systems: totalSystems,
       measuresPerSystem,
     };
@@ -5181,7 +5229,9 @@ export default function ScorePage() {
                 </div>
               )}
 
-              {scoreType === 'ensemble' && (
+              {/* 弦楽四重奏でも楽器名・略称だけは編集できる（Issue #448）。
+                  段構成そのものを変えられる「パート編集」は編成譜だけなので、名前を出し分ける */}
+              {(scoreType === 'ensemble' || scoreType === 'quartet') && (
                 <button
                   type="button"
                   className={`ghost compact-button${showInstrumentationEditor ? ' active' : ''}`}
@@ -5194,8 +5244,11 @@ export default function ScorePage() {
                   }}
                   aria-expanded={showInstrumentationEditor}
                   aria-controls="instrumentation-editor-window"
+                  title={isNameOnlyInstrumentationEditor
+                    ? '五線の左に出る楽器名（1段目）と略称（2段目以降）を書き換えます'
+                    : undefined}
                 >
-                  パート編集
+                  {isNameOnlyInstrumentationEditor ? 'パート名編集' : 'パート編集'}
                 </button>
               )}
             </div>
@@ -5909,12 +5962,12 @@ export default function ScorePage() {
         />
       )}
 
-      {scoreType === 'ensemble' && showInstrumentationEditor && createPortal(
+      {(scoreType === 'ensemble' || scoreType === 'quartet') && showInstrumentationEditor && createPortal(
         <section
           id="instrumentation-editor-window"
-          className="instrumentation-editor-window"
+          className={`instrumentation-editor-window${isNameOnlyInstrumentationEditor ? ' instrumentation-editor-window--names' : ''}`}
           role="dialog"
-          aria-label="編成パート編集"
+          aria-label={isNameOnlyInstrumentationEditor ? 'パート名編集' : '編成パート編集'}
           // document.body 直下へ createPortal するため、.app-root の
           // --toolbar-h（ページ拡縮の transform コンテキストの外）を継承できない。
           // 自分自身に同じ値を持たせて、fixed 位置がツールバー高さに追従するようにする。
@@ -5922,15 +5975,21 @@ export default function ScorePage() {
         >
           <div className="instrumentation-editor-titlebar">
             <div>
-              <div className="instrumentation-editor-title">パート編集</div>
+              <div className="instrumentation-editor-title">
+                {isNameOnlyInstrumentationEditor ? 'パート名編集' : 'パート編集'}
+              </div>
               <div className="instrumentation-editor-meta">
-                {instrumentation.parts.length}パート / {instrumentationGroups}グループ
+                {isNameOnlyInstrumentationEditor
+                  ? '左が正式名（1段目に表示）、右が略称（2段目以降に表示）'
+                  : `${instrumentation.parts.length}パート / ${instrumentationGroups}グループ`}
               </div>
             </div>
             <div className="instrumentation-editor-actions">
-              <button type="button" className="ghost compact-button" onClick={handleAddInstrumentationPart}>
-                追加
-              </button>
+              {!isNameOnlyInstrumentationEditor && (
+                <button type="button" className="ghost compact-button" onClick={handleAddInstrumentationPart}>
+                  追加
+                </button>
+              )}
               <button
                 type="button"
                 className="ghost compact-button icon-button"
@@ -5944,7 +6003,13 @@ export default function ScorePage() {
           </div>
           <div className="instrumentation-part-list">
             {instrumentation.parts.map((part, partIndex) => (
-              <div className="instrumentation-part-row" key={part.id}>
+              <div
+                className={`instrumentation-part-row${isNameOnlyInstrumentationEditor ? ' instrumentation-part-row--names' : ''}`}
+                key={part.id}
+              >
+                {/* 並び替え・追加削除・音部記号などは段構成を変える操作なので、
+                    4段固定の弦楽四重奏（名前のみモード）では出さない（Issue #448） */}
+                {!isNameOnlyInstrumentationEditor && (<>
                 <button
                   type="button"
                   className="ghost compact-button icon-button"
@@ -5963,16 +6028,26 @@ export default function ScorePage() {
                 >
                   ↓
                 </button>
+                </>)}
                 <input
                   value={part.name}
-                  onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'name', event.target.value)}
+                  // 長すぎる名前はラベル領域に収まらないため上限を設ける（#448 round1）。
+                  // 空白だけの入力は resolveInstrumentPartLabels 側で「未入力」に倒れる
+                  maxLength={INSTRUMENT_NAME_MAX_LENGTH}
+                  onChange={(event) => (isNameOnlyInstrumentationEditor
+                    ? handleInstrumentationPartNameChange(partIndex, 'name', event.target.value)
+                    : handleInstrumentationPartFieldChange(partIndex, 'name', event.target.value))}
                   aria-label={`${part.name}のパート名`}
                 />
                 <input
                   value={part.abbreviation}
-                  onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'abbreviation', event.target.value)}
+                  maxLength={INSTRUMENT_NAME_MAX_LENGTH}
+                  onChange={(event) => (isNameOnlyInstrumentationEditor
+                    ? handleInstrumentationPartNameChange(partIndex, 'abbreviation', event.target.value)
+                    : handleInstrumentationPartFieldChange(partIndex, 'abbreviation', event.target.value))}
                   aria-label={`${part.name}の略称`}
                 />
+                {!isNameOnlyInstrumentationEditor && (<>
                 <select
                   value={part.family}
                   onChange={(event) => handleInstrumentationPartFieldChange(partIndex, 'family', event.target.value)}
@@ -6057,6 +6132,7 @@ export default function ScorePage() {
                 >
                   削除
                 </button>
+                </>)}
               </div>
             ))}
           </div>
@@ -6339,6 +6415,8 @@ export default function ScorePage() {
                       onBeatRangeSelect={handleBeatRangeSelect}
                       // 1ページ目の1段目だけパート名をフル名で出す（Issue #60）
                       isFirstPage={i === 0}
+                      // ユーザーが編集したパート名（Issue #448）
+                      partLabels={quartetPartLabels}
                     />
                   ) : scoreType === 'piano' ? (
                     <PianoStaff
