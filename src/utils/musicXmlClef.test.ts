@@ -220,6 +220,75 @@ describe('MusicXML の途中クレフ変更対応（読み込み・Issue #453）
     expect(part.measures[1].clef).toBe('bass');
   });
 
+  // round1 P1: <backup> で戻った側に書かれたクレフは文書順では拍位置が前後する。
+  // 拍位置順に適用されることを固定する
+  it('<backup> で拍位置が前後して書かれた複数のクレフ変更を、時間順に適用する', () => {
+    // 文書順: 3拍目のヘ音（voice1側）→ backup → forward 1拍 → 2拍目のアルト。
+    // 時間順では アルト(2拍目) → ヘ音(3拍目)
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Melody</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions><key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice><type>quarter</type></note>
+      <note><pitch><step>E</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice><type>quarter</type></note>
+      <attributes><clef><sign>F</sign><line>4</line></clef></attributes>
+      <note><pitch><step>A</step><octave>3</octave></pitch><duration>4</duration><voice>1</voice><type>quarter</type></note>
+      <note><pitch><step>F</step><octave>3</octave></pitch><duration>4</duration><voice>1</voice><type>quarter</type></note>
+      <backup><duration>16</duration></backup>
+      <forward><duration>4</duration></forward>
+      <attributes><clef><sign>C</sign><line>3</line></clef></attributes>
+      <forward><duration>12</duration></forward>
+    </measure>
+    <measure number="2">
+      <attributes><clef><sign>F</sign><line>4</line></clef></attributes>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>16</duration><voice>1</voice><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const part = parseMusicXml(xml).parts[0];
+    const events = part.measures[0].events;
+    // 2拍目（2つ目の音）からアルト、3拍目（3つ目の音）からヘ音
+    expect(events[1].clefChange).toBe('alto');
+    expect(events[2].clefChange).toBe('bass');
+    // 小節末尾時点はヘ音なので、2小節目の頭の同じヘ音の書き直しは取り込まない
+    // （文書順のまま処理すると末尾状態をアルトと誤認し、ここに clef が生えてしまう）
+    expect(part.measures[1].clef).toBeUndefined();
+  });
+
+  // round1 P1: 予告クレフの位置で複数回変更されたときは、最後の状態だけを持ち越す
+  it('小節末尾で treble→bass→treble と変わったときは、次の小節に何も持ち越さない', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Melody</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions><key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>16</duration><voice>1</voice><type>whole</type></note>
+      <attributes><clef><sign>F</sign><line>4</line></clef></attributes>
+      <attributes><clef><sign>G</sign><line>2</line></clef></attributes>
+    </measure>
+    <measure number="2">
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>16</duration><voice>1</voice><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const part = parseMusicXml(xml).parts[0];
+    // 正味の変更は無い（ヘ音→すぐト音へ戻している）ので、どこにも指定が生えない
+    expect(part.measures[0].events[0].clefChange).toBeUndefined();
+    expect(part.measures[0].clef).toBeUndefined();
+    expect(part.measures[1].clef).toBeUndefined();
+  });
+
   it('大譜表（<staves>2）では、番号で指された段だけが小節途中のクレフ変更を受け取る', () => {
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">

@@ -759,16 +759,22 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
         startBeats.push(acc);
         acc += getEventDurationBeats(ev);
       }
-      for (const { beat, clef } of midClefs) {
-        if (clef === runningClef) continue; // すでに有効なクレフの念押し表記は取り込まない
+      // <backup> で戻った下声側に書かれたクレフは、文書順では拍位置の前後が入れ替わり得る。
+      // クレフの効き方は「時間順」なので、拍位置で安定ソートしてから適用する（round1 P1）
+      const orderedMidClefs = [...midClefs].sort((a, b) => a.beat - b.beat);
+      for (const { beat, clef } of orderedMidClefs) {
         // その時刻以降に始まる最初の音（＝小型クレフを手前に置く音）へ結び付ける。
         // 音が伸びている途中に書かれたクレフは、次に始まる音から有効になる
         const at = startBeats.findIndex((b) => b >= beat - BEAT_EPSILON);
         if (at < 0) {
-          // 最後の音より後ろ＝小節末尾の予告クレフ。次の小節の頭から有効にする
-          carriedClef = clef;
+          // 最後の音より後ろ＝小節末尾の予告クレフ。次の小節の頭から有効にする。
+          // 比較相手は「現時点の末尾状態」（すでに予告があればそれ）。予告後にさらに
+          // 変更が続く（treble→bass→treble 等）と、単純な runningClef 比較では
+          // 最後の変更を念押しと誤判定して bass のまま持ち越してしまう（round1 P1）
+          if (clef !== (carriedClef ?? runningClef)) carriedClef = clef;
           continue;
         }
+        if (clef === runningClef) continue; // すでに有効なクレフの念押し表記は取り込まない
         // v1 は主声部のイベントにだけ clefChange を持たせる（追加声部にも持たせると、
         // 同じ時刻に声部ごとの別クレフを主張できてしまう）。clefChange は
         // 「このイベントの直前に小型クレフを置き、このイベントから有効」の意味
