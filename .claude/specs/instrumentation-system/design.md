@@ -743,8 +743,9 @@ SVG の `getComputedTextLength()` は描画後にしか測れないため、幅�
 - `src/components/ScorePage.tsx`（quartet のラベル配線・余白計算・名前のみ編集モード・名前専用の更新経路）
 - `src/utils/partExtractionUtils.ts`（quartet のパート譜選択肢名）
 - `src/App.css`（名前のみモードの列指定）
-- 保存形式の変更なし。編集結果は既存の `instrumentation.parts[].name / abbreviation` に入る
-  ため、旧データ・保存互換への影響はない
+- 編集結果は既存の `instrumentation.parts[].name / abbreviation` に入る。
+  保存構造は変わらないが、round3〜4 で四重奏の既定略称変更に伴う値の移行を追加した
+  （後述「round2〜4 のレビュー対応」。保存形式バージョンを 3.6.0 へ上げた）
 - 単旋律・ピアノ大譜表の見た目と操作は変わらない（パート名を描かない譜種のため）
 
 ### 動作確認
@@ -776,3 +777,27 @@ SVG の `getComputedTextLength()` は描画後にしか測れないため、幅�
   表示名から安定ID（violin-1 等）へ戻せないため汎用の編成譜として読み込まれる
   （データは失われない。既知の表示名のみ ID へ正規化する #443 の設計のまま）
 - テスト追加: 保存作品の復元配線・名前だけの自動保存・MusicXML 書き出し・空白のみ入力
+
+## パート名編集のレビュー対応（2026-08-29・Codex round2〜4・#448）
+
+- **[round2 P1] 書き出し配線テスト**: scoreToMusicXml 直呼びでは buildCurrentScoreData の
+  配線を検証できないため、実マウント（名前編集→ファイルタブ→MusicXML書出→Blob本文）の
+  配線テストへ置き換えた（ScorePageQuartetPartName.test.tsx）
+- **[round2 P2] 書き出しの名前解決統一**: musicXmlExport のパート名解決を
+  resolveInstrumentPartLabels（trim + 略称フォールバック）へ統一。空白のみの名前が
+  `<part-name>   </part-name>` として出力されるのを防ぐ
+- **[round2 P2] 既定略称の互換**: 総譜ラベルの正本が QuartetStaff の固定値
+  （Vn. I / Va.）から編成定義（旧: Vln. I / Vla.）へ移ったことで、未編集の四重奏でも
+  略称表示が変わっていた。弦楽四重奏プリセットの略称を Vn. I / Vn. II / Va. へ揃えた
+- **[round3 P2] 旧既定略称の移行**: 旧プリセット値（Vln. I 等）で保存済みの未編集作品を
+  開くと旧表記へ戻るため、migrateLegacyQuartetAbbreviations を追加し、ScorePage の
+  両復元経路（読込・自動保存復元）で旧既定と一致する略称だけ新既定へ差し替える
+- **[round3 P2] オーケストラ系プリセットの分離**: STRING_ORCHESTRA_PARTS は
+  弦楽四重奏パーツを再利用しているため、弦楽合奏以上の弦セクションは従来表記
+  （Vln. I / Vln. II / Vla.）を明示的に維持した
+- **[round4 P1] 移行のバージョンゲート**: 文字列一致だけで毎回移行すると、現行版で
+  ユーザーが意図して Vln. I 等へ書き換えた値まで再読込のたびに戻してしまう。
+  保存形式バージョンを 3.6.0 へ上げ（構造変更なし・migrateData は 3.5.0 も受理）、
+  移行は「保存データの version が 3.6.0 未満」のときだけ適用する。
+  正・負（3.5.0 は移行 / 3.6.0 は保持）の両テストをユニット・ScorePage 復元の
+  両レベルで固定した

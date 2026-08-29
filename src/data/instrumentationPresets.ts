@@ -237,10 +237,16 @@ export function hasCustomInstrumentationLabels(
  * 保存された作品を開くと略称だけ旧表記（Vln. I / Vla.）へ戻ってしまうため、
  * 復元時に「旧既定のまま＝未編集」の略称だけ差し替える。
  * ユーザーが書き換えた略称（旧既定と一致しない値）はそのまま残す。
+ *
+ * savedVersion は保存データの version（例: '3.5.0'）。3.6.0 以降のデータは
+ * 新既定で保存されているため移行しない（round4: 現行版でユーザーが意図して
+ * Vln. I 等へ書き換えた値を、再読込のたびに戻してしまわないため）。
  */
 export function migrateLegacyQuartetAbbreviations(
   instrumentation: ScoreInstrumentation,
+  savedVersion: string | undefined,
 ): ScoreInstrumentation {
+  if (!isVersionBefore(savedVersion, [3, 6, 0])) return instrumentation;
   if (instrumentation.presetId !== 'string-quartet') return instrumentation;
   const LEGACY_DEFAULT_ABBREVIATIONS: Record<string, [legacy: string, current: string]> = {
     'violin-1': ['Vln. I', 'Vn. I'],
@@ -255,4 +261,15 @@ export function migrateLegacyQuartetAbbreviations(
     return { ...part, abbreviation: entry[1] };
   });
   return changed ? { ...instrumentation, parts } : instrumentation;
+}
+
+/** 保存データのバージョン文字列が指定バージョンより古いか（数値の辞書順比較） */
+function isVersionBefore(version: string | undefined, target: [number, number, number]): boolean {
+  if (!version) return true; // バージョン不明の旧データは移行対象とみなす
+  const nums = version.split('.').map(n => Number.parseInt(n, 10));
+  if (nums.length < 3 || nums.some(n => !Number.isFinite(n))) return true;
+  for (let i = 0; i < 3; i++) {
+    if (nums[i] !== target[i]) return nums[i] < target[i];
+  }
+  return false;
 }

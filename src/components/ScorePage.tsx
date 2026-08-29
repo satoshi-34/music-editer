@@ -2248,7 +2248,7 @@ export default function ScorePage() {
       setKeySignature(normalizeKeySignature(data.keySignature));
       await setTimeSignature(...normalizeTimeSignature(data.timeSignature));
       setScoreType(loadedType);
-      setInstrumentation(migrateLegacyQuartetAbbreviations(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType)));
+      setInstrumentation(migrateLegacyQuartetAbbreviations(data.instrumentation ?? getDefaultInstrumentationForScoreType(loadedType), data.version));
       setNotationMode(data.notationMode ?? 'concert');
     setTitleFontId(resolveTitleFontOption(data.titleFontId).id);
       setTitleFontSize(normalizeTitleFontSize(data.titleFontSize));
@@ -2388,7 +2388,7 @@ export default function ScorePage() {
     await setTimeSignature(...normalizeTimeSignature(restored.timeSignature));
     setScoreType(restoredType);
     // 旧既定の略称（Vln. I 等）で保存された未編集の四重奏を新既定（Vn. I 等）へ移行する（#448 round3）
-    setInstrumentation(migrateLegacyQuartetAbbreviations(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType)));
+    setInstrumentation(migrateLegacyQuartetAbbreviations(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType), restored.version));
     setNotationMode(restored.notationMode ?? 'concert');
     setTitleFontId(resolveTitleFontOption(restored.titleFontId).id);
     setTitleFontSize(normalizeTitleFontSize(restored.titleFontSize));

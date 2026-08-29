@@ -195,6 +195,9 @@ describe('弦楽四重奏の楽器名・略称を編集する（Issue #448）', 
       ],
       2, 1, 'quartet', 'C', [4, 4], legacyInst as never
     );
+    // 旧バージョン（3.5.0）で保存されたデータを再現する。3.6.0 以降のデータは
+    // 「ユーザーが意図して旧表記へ編集した」とみなして移行しない（round4）
+    (data as { version: string }).version = '3.5.0';
     const created = createWork('旧略称移行');
     if (!created.success || !created.data) throw new Error('createWork failed');
     saveWorkAutosaveData(created.data.id, data);
@@ -209,6 +212,41 @@ describe('弦楽四重奏の楽器名・略称を編集する（Issue #448）', 
     const dialog = openPartNameEditor();
     expect((within(dialog).getByRole('textbox', { name: 'Violin Iの略称' }) as HTMLInputElement).value).toBe('Vn. I');
     expect((within(dialog).getByRole('textbox', { name: 'Violaの略称' }) as HTMLInputElement).value).toBe('Va.');
+  }, 60000);
+
+  // round4 の負のテスト: 現行バージョン（3.6.0）で保存された Vln. I は
+  // ユーザーの意図的な編集値なので、再読込しても移行されない
+  it('現行版で Vln. I へ編集して保存した略称は、開き直しても保持される', async () => {
+    const events = [{ dur: '1' as const, isRest: false, keys: ['c/4'] }];
+    const mk = () => ({ events, voices: [{ id: 'voice-1', events }] });
+    const inst = getDefaultInstrumentationForScoreType('quartet');
+    const editedInst = {
+      ...inst,
+      parts: inst.parts.map((part) =>
+        part.id === 'violin-1' ? { ...part, abbreviation: 'Vln. I' } : part),
+    };
+    const data = createSavedScoreData(
+      { title: '編集値保持', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'violin-1', clef: 'treble' as const, measures: [mk()] },
+        { partId: 'violin-2', clef: 'treble' as const, measures: [mk()] },
+        { partId: 'viola', clef: 'alto' as const, measures: [mk()] },
+        { partId: 'cello', clef: 'bass' as const, measures: [mk()] },
+      ],
+      1, 1, 'quartet', 'C', [4, 4], editedInst as never
+    );
+    const created = createWork('編集値保持');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(renderedLabels()).toContain('Violin I');
+    }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '楽譜設定' }));
+    const dialog = openPartNameEditor();
+    expect((within(dialog).getByRole('textbox', { name: 'Violin Iの略称' }) as HTMLInputElement).value).toBe('Vln. I');
   }, 60000);
 
   // Codex round1 P1: 名前だけ編集した空の四重奏も自動保存される

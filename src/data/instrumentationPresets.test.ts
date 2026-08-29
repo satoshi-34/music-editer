@@ -149,7 +149,7 @@ describe('migrateLegacyQuartetAbbreviations（#448 round3）', () => {
         : p.id === 'viola' ? { ...p, abbreviation: 'Vla.' }
         : p),
     };
-    const migrated = migrateLegacyQuartetAbbreviations(legacy);
+    const migrated = migrateLegacyQuartetAbbreviations(legacy, '3.5.0');
     expect(migrated.parts.map(p => p.abbreviation)).toEqual(['Vn. I', 'Vn. II', 'Va.', 'Vc.']);
   });
 
@@ -159,12 +159,34 @@ describe('migrateLegacyQuartetAbbreviations（#448 round3）', () => {
       ...inst,
       parts: inst.parts.map(p => p.id === 'viola' ? { ...p, abbreviation: 'ヴィオラ' } : p),
     };
-    const migrated = migrateLegacyQuartetAbbreviations(custom);
+    const migrated = migrateLegacyQuartetAbbreviations(custom, '3.5.0');
     expect(migrated.parts.find(p => p.id === 'viola')?.abbreviation).toBe('ヴィオラ');
   });
 
   it('四重奏以外の編成（弦楽合奏など）には触れない', () => {
     const inst = getInstrumentationPreset('string-orchestra');
-    expect(migrateLegacyQuartetAbbreviations(inst)).toBe(inst);
+    expect(migrateLegacyQuartetAbbreviations(inst, '3.5.0')).toBe(inst);
+  });
+
+  // round4: 3.6.0 以降のデータは移行しない（現行版でユーザーが意図して旧表記へ
+  // 書き換えた略称を、再読込のたびに新既定へ戻してしまわないため）
+  it('3.6.0 以降のデータでは Vln. I 等をユーザー編集値として保持する', () => {
+    const inst = getInstrumentationPreset('string-quartet');
+    const edited = {
+      ...inst,
+      parts: inst.parts.map(p => p.id === 'violin-1' ? { ...p, abbreviation: 'Vln. I' } : p),
+    };
+    const kept = migrateLegacyQuartetAbbreviations(edited, '3.6.0');
+    expect(kept.parts.find(p => p.id === 'violin-1')?.abbreviation).toBe('Vln. I');
+  });
+
+  it('バージョン不明の旧データは移行対象とみなす', () => {
+    const inst = getInstrumentationPreset('string-quartet');
+    const legacy = {
+      ...inst,
+      parts: inst.parts.map(p => p.id === 'viola' ? { ...p, abbreviation: 'Vla.' } : p),
+    };
+    const migrated = migrateLegacyQuartetAbbreviations(legacy, undefined);
+    expect(migrated.parts.find(p => p.id === 'viola')?.abbreviation).toBe('Va.');
   });
 });

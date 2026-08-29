@@ -76,7 +76,9 @@ export const STORAGE_KEYS = {
 } as const;
 
 // Current version for data migration
-export const CURRENT_VERSION = '3.5.0';
+// 3.6.0（#448 round4）: 弦楽四重奏プリセットの既定略称を Vln. I / Vla. → Vn. I / Va. へ変更。
+// 3.6.0 未満のデータだけ復元時に旧既定略称を移行する（現行版で編集した Vln. I 等は保持する）
+export const CURRENT_VERSION = '3.6.0';
 
 /** 作品カタログ（WorkIndex）自体のバージョン。カタログの構造を変えたときに上げる */
 export const WORK_INDEX_VERSION = '1.0.0';
@@ -1813,8 +1815,9 @@ export function createSavedScoreData(
  * This function is prepared for future version migrations
  */
 export function migrateData(data: any, fromVersion: string): SavedScoreData | null {
-  // Currently only version 1.0.0 exists, so no migration needed
-  if (fromVersion === CURRENT_VERSION) {
+  // 3.5.0 → 3.6.0 は保存構造の変更なし（四重奏の既定略称の移行は復元側
+  // migrateLegacyQuartetAbbreviations がデータのバージョンを見て行う）
+  if (fromVersion === CURRENT_VERSION || fromVersion === '3.5.0') {
     return {
       ...(data as SavedScoreData),
       keySignature: normalizeKeySignature((data as SavedScoreData).keySignature),
