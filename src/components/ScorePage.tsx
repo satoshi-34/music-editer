@@ -203,6 +203,15 @@ import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrin
 import { getPartExtractionOptions, isPartExtractionEditable, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
 import { computeFitZoom, readPageAreaAvailableWidth, VIEW_ZOOM_MIN, VIEW_ZOOM_MAX } from '../utils/viewZoomUtils';
+import {
+  TOOLBAR_PLACEMENT_OPTIONS,
+  clampDropdownMenuTop,
+  loadStoredToolbarPlacement,
+  resolveEffectiveToolbarPlacement,
+  resolveToolbarWidth,
+  saveToolbarPlacement,
+  type ToolbarPlacement,
+} from '../utils/toolbarPlacement';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
@@ -515,6 +524,34 @@ export default function ScorePage() {
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState<boolean>(
     () => localStorage.getItem(TOOLBAR_COLLAPSED_KEY) === '1'
   );
+  // ツールバーの配置（Issue #483）。`top` が従来の画面上部の横並び、`left` が画面左の縦並び。
+  // Finale などの楽譜ソフトは入力パレットを左右へ縦置きできるため、その持ち方に慣れた人が
+  // 同じ操作感で使えるようにする。既定は `top` のままで、選ばない限り見た目は変わらない。
+  const [toolbarPlacement, setToolbarPlacement] = useState<ToolbarPlacement>(
+    () => loadStoredToolbarPlacement()
+  );
+  // 左配置を許すかどうかの判定に使うウィンドウ幅。狭い画面では左配置を上配置へ戻すため、
+  // 幅の変化を state で追う（CSS の @media だけで戻すと、幅フィットの計算＝JS 側と食い違う）。
+  const [viewportWidth, setViewportWidth] = useState<number>(
+    () => (typeof window === 'undefined' ? 0 : window.innerWidth)
+  );
+  // 左配置のときのツールバー幅(px)。高さ（--toolbar-h）と同じく実測して CSS 変数へ流す。
+  const [toolbarWidth, setToolbarWidth] = useState(0);
+  // ウィンドウ幅の変化を追う（左配置を許してよい幅かどうかの判定に使う）。
+  // 上配置しか使っていない人にも動くが、state を更新するのは幅が変わったときだけなので
+  // 余計な再描画にはならない。
+  useEffect(() => {
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+  // 実際に適用する配置。左を選んでいても狭い画面では上へ戻す（選択自体は消さないので、
+  // 画面を広げれば左配置へ戻る）。
+  const effectiveToolbarPlacement = resolveEffectiveToolbarPlacement({
+    placement: toolbarPlacement,
+    viewportWidth,
+  });
+  const isToolbarLeft = effectiveToolbarPlacement === 'left';
   const musicXmlInputRef = useRef<HTMLInputElement | null>(null);
 
   const [title, setTitle] = useState('タイトル');
@@ -2580,7 +2617,13 @@ export default function ScorePage() {
     // パネル幅は CSS の width: min(380px, 100vw - 32px) と同じ計算にそろえる
     const panelWidth = Math.min(380, window.innerWidth - 32);
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - panelWidth - 8));
-    setWorkListPos({ top: rect.bottom + 6, left });
+    // 縦も画面内へクランプする（リセットメニューと同じ理由・#483 round6 P1）。
+    // 左（縦）配置ではツールバーが縦スクロールでき、ボタンが画面下部に来た状態で
+    // 開けるため、常に「ボタンの下」だとパネルが画面外へはみ出して操作できない
+    setWorkListPos({
+      top: clampDropdownMenuTop({ anchorBottom: rect.bottom, viewportHeight: window.innerHeight }),
+      left,
+    });
   }, []);
 
   const handleToggleWorkList = useCallback(() => {
@@ -2790,17 +2833,22 @@ export default function ScorePage() {
   ]);
 
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
+  // 列数の判定も「ページを並べられる実効幅」で行う（#483 round3）。
+  // 左（縦）配置ではツールバー幅ぶん狭くなるため、全画面幅のままだと
+  // 1280px 幅で2列のまま右へはみ出す（1280 − 281 ≒ 999px しか無い）。
+  const toolbarOccupiedWidth = isToolbarLeft ? toolbarWidth : 0;
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
+    const compute = () => setColumns((window.innerWidth - toolbarOccupiedWidth) < 1200 ? 1 : 2);
+    // 配置の切り替え・ツールバー幅の実測が入った時点でも即座に判定し直す
+    compute();
     const onResize = () => {
       clearTimeout(timer);
-      timer = setTimeout(() => {
-        setColumns(window.innerWidth < 1200 ? 1 : 2);
-      }, 150);
+      timer = setTimeout(compute, 150);
     };
     window.addEventListener('resize', onResize);
     return () => { window.removeEventListener('resize', onResize); clearTimeout(timer); };
-  }, []);
+  }, [toolbarOccupiedWidth]);
 
   // Finale 風キーボードショートカット: 数字キーで音価を選択する。
   // テキスト入力中（input/textarea にフォーカスがある場合）は無効にする。
@@ -3428,7 +3476,9 @@ export default function ScorePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMeasures, clipboard, sliceClipboard, scoreType, activeLayerPart, activeVoice, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, pushHistory, handleTranspose, isPrintPreview, scoreTimeSignature, getEditablePartEntries]);
 
-  const { spreadRef, scale } = useAutoPageScale(columns, 20);
+  // 自動縮尺にも占有幅を渡す（#483 round3。列数と同じ実効幅で計算しないと
+  // 「2列のまま縮まず、はみ出す」「1列なのに小さすぎる」のズレが出る）
+  const { spreadRef, scale } = useAutoPageScale(columns, 20, toolbarOccupiedWidth);
   // ユーザー設定（常設エリアの「画面表示のズーム」スライダー、0.5〜3.0）。
   // 自動縮尺（useAutoPageScale の scale）に掛け合わせて画面上の表示サイズだけを変える。
   // 印刷は @media print で transform: none !important により解除されるため影響しない。
@@ -3444,14 +3494,20 @@ export default function ScorePage() {
   // （初期値決定のみ。設計判断は .claude/specs/view-zoom/design.md 追補を参照）。
   // 幅の測り先は .paper-rail ではない（Issue #212。レールは横スクロール時に
   // 中身の幅まで広がるため、狭いウィンドウでも「広い」と誤って読めてしまう）。
+  // ツールバーが左（縦）配置のときは、その幅ぶんだけ譜面を並べられる幅が狭くなる（Issue #483）。
+  // 幅の測り先（body）は fixed のツールバーぶんまでは縮まないので、ここで引いてから
+  // フィット倍率を出さないと「ページが収まらないのに100%」になる。
   useEffect(() => {
     if (localStorage.getItem(VIEW_ZOOM_KEY) != null) return;
     const rail = spreadRef.current?.parentElement;
     if (!rail) return;
-    setViewZoom(computeFitZoom(readPageAreaAvailableWidth(rail)));
-    // 初回マウント時に一度だけ適用する
+    const occupiedWidth = isToolbarLeft ? toolbarWidth : 0;
+    setViewZoom(computeFitZoom(Math.max(0, readPageAreaAvailableWidth(rail) - occupiedWidth)));
+    // 初回マウントに加え、配置を切り替えたとき・ツールバー幅の実測が入ったときも計算し直す。
+    // ズーム保存済み（＝ユーザーが自分で決めた倍率）のときは冒頭で return するので、
+    // 配置を変えてもユーザーの設定を勝手に書き換えることはない。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isToolbarLeft, toolbarWidth]);
   // 自動縮尺にユーザーのズーム倍率を掛けた、実際に画面へ適用する縮尺。
   // クリック等の座標系は --scale から読むため、ここで一本化しておけば
   // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
@@ -4699,6 +4755,17 @@ export default function ScorePage() {
         collapsed: isToolbarCollapsed,
       });
       setToolbarHeight(clampedHeight);
+      // 左（縦）配置のときは、本文を逃がすのが「上」ではなく「左」になる（Issue #483）。
+      // 高さは画面いっぱい（＝丸めの上限で切られた値）になり意味を持たないので、
+      // 代わりに幅を実測して --toolbar-w へ流す。上配置のときは測らない（0のまま）。
+      setToolbarWidth(
+        isToolbarLeft
+          ? resolveToolbarWidth(
+              Math.ceil(toolbarElement.getBoundingClientRect().width),
+              { collapsed: isToolbarCollapsed }
+            )
+          : 0
+      );
     };
 
     updateToolbarHeight();
@@ -4712,7 +4779,7 @@ export default function ScorePage() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateToolbarHeight);
     };
-  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed]);
+  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed, isToolbarLeft]);
 
   // リセットメニュー（Issue #143）の表示位置をボタンの実測位置から決める。
   // 画面の右端からはみ出さないよう、左位置は「画面幅 − メニュー幅 − 余白」までで止める。
@@ -4722,7 +4789,12 @@ export default function ScorePage() {
     // メニュー幅は CSS の width: min(360px, 100vw - 32px) と同じ計算にそろえる
     const menuWidth = Math.min(360, window.innerWidth - 32);
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
-    setResetMenuPos({ top: rect.bottom + 6, left });
+    // 縦も画面内へクランプする。左（縦）配置ではボタンが画面下部に来るため、
+    // 常に下向きだとメニュー後半が画面外へ出て押せなくなる（#483 round1 P1）
+    setResetMenuPos({
+      top: clampDropdownMenuTop({ anchorBottom: rect.bottom, viewportHeight: window.innerHeight }),
+      left,
+    });
   }, []);
 
   const handleToggleResetMenu = useCallback(() => {
@@ -4838,6 +4910,12 @@ export default function ScorePage() {
     });
   };
 
+  // ツールバーの配置を切り替える（Issue #483）。次回起動時も同じ配置で開けるよう保存する。
+  const handleChangeToolbarPlacement = (placement: ToolbarPlacement) => {
+    setToolbarPlacement(placement);
+    saveToolbarPlacement(placement);
+  };
+
   const toolbarTabButtons = TOOLBAR_TAB_BUTTONS;
   // カスタム記号は id しか持たないツールなので、A1 文脈バーで名前を出せるよう対応表にしておく
   // （記号を増減したときだけ作り直せば十分なので useMemo で包む）
@@ -4929,11 +5007,19 @@ export default function ScorePage() {
 
   return (
     <div
-      className={`app-root${isPrintPreview ? ' print-preview' : ''}`}
-      style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
+      className={`app-root${isPrintPreview ? ' print-preview' : ''}${isToolbarLeft ? ' toolbar-left' : ''}`}
+      style={{
+        // 左配置のときヘッダーは画面の左端に立つので、本文の上余白は要らない（0にする）。
+        // 代わりに --toolbar-w を左余白として使う（CSS の .app-root.toolbar-left 側で参照）。
+        '--toolbar-h': `${isToolbarLeft ? 0 : toolbarHeight}px`,
+        ...(isToolbarLeft ? { '--toolbar-w': `${toolbarWidth}px` } : {}),
+      } as React.CSSProperties}
       data-ui-variant={uiVariant}
     >
-      <header className={`toolbar${isToolbarCollapsed ? ' collapsed' : ''}`} ref={toolbarRef}>
+      <header
+        className={`toolbar${isToolbarCollapsed ? ' collapsed' : ''}${isToolbarLeft ? ' toolbar--left' : ''}`}
+        ref={toolbarRef}
+      >
         {/* タブ行（Issue #142）。右端にフィードバックを常設し、どのタブを開いていても
             押せるようにする。フィードバックは「押した時点の表示状態」をJSONに写して送る
             仕組みなので、報告のために別タブへ移動させると再現情報が変わってしまう。 */}
@@ -5380,6 +5466,31 @@ export default function ScorePage() {
                     {w === 'thin' ? '細い' : w === 'normal' ? '普通' : '太い'}
                   </button>
                 ))}
+              </div>
+              {/* ツールバー（パレット）自体の置き場所（Issue #483）。紙面ではなく画面の使い方を
+                  決める設定だが、「どこに何を置くか」という意味でレイアウトタブが最も近い。
+                  既定は従来の「上（横）」で、選ばない限り見た目は1pxも変わらない。 */}
+              <div className="toolbar-chip-group toolbar-placement-chips" role="group" aria-label="ツールバーの位置">
+                <span className="toolbar-group-label">ツールバーの位置</span>
+                {TOOLBAR_PLACEMENT_OPTIONS.map(({ value, label, description }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`ghost toolbar-chip-button${toolbarPlacement === value ? ' active' : ''}`}
+                    onClick={() => handleChangeToolbarPlacement(value)}
+                    aria-pressed={toolbarPlacement === value}
+                    title={description}
+                  >
+                    {label}
+                  </button>
+                ))}
+                {/* 左を選んでいるのに上で表示している（＝画面が狭い）ときだけ、その理由を伝える。
+                    黙って上に戻ると「設定が効かない不具合」に見えてしまうため。 */}
+                {toolbarPlacement === 'left' && !isToolbarLeft && (
+                  <span className="toolbar-placement-note">
+                    画面が狭いため、いまは上に表示しています
+                  </span>
+                )}
               </div>
               <div className="toolbar-layout-group" role="group" aria-label="用紙と余白">
                 <span className="toolbar-group-label">用紙と余白</span>
@@ -6066,13 +6177,16 @@ export default function ScorePage() {
       {(scoreType === 'ensemble' || scoreType === 'quartet') && showInstrumentationEditor && createPortal(
         <section
           id="instrumentation-editor-window"
-          className={`instrumentation-editor-window${isNameOnlyInstrumentationEditor ? ' instrumentation-editor-window--names' : ''}`}
+          className={`instrumentation-editor-window${isNameOnlyInstrumentationEditor ? ' instrumentation-editor-window--names' : ''}${isToolbarLeft ? ' instrumentation-editor-window--toolbar-left' : ''}`}
           role="dialog"
           aria-label={isNameOnlyInstrumentationEditor ? 'パート名編集' : '編成パート編集'}
           // document.body 直下へ createPortal するため、.app-root の
           // --toolbar-h（ページ拡縮の transform コンテキストの外）を継承できない。
           // 自分自身に同じ値を持たせて、fixed 位置がツールバー高さに追従するようにする。
-          style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
+          style={{
+            '--toolbar-h': `${isToolbarLeft ? 0 : toolbarHeight}px`,
+            ...(isToolbarLeft ? { '--toolbar-w': `${toolbarWidth}px` } : {}),
+          } as React.CSSProperties}
         >
           <div className="instrumentation-editor-titlebar">
             <div>
