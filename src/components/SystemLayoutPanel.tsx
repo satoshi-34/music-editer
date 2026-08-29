@@ -7,7 +7,9 @@
 //   - 間隔 － ±Npx ＋   … 上の段との距離の追加オフセット
 // 加えて、数値をクリックすると直接入力できる（拍子・調号などの「途中変更オーバーレイ」と
 // 同じ型: autoFocus の入力欄、Enter で確定、Esc で取り消し、フォーカスを外しても確定）。
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+import { describeSystemLayoutValueClamped, describeSystemLayoutValueInvalid } from '../utils/scoreEditorNotices';
 
 type Props = {
   /** 見出しに出す段の名前（例: 「段3」） */
@@ -34,6 +36,8 @@ type Props = {
 
   /** Enter・Esc・「×」で段の選択を解除する */
   onClose: () => void;
+  /** 行き止まりの通知（#318）。範囲外・不正な直接入力の結果を利用者へ伝える */
+  onNotice: (message: string) => void;
 };
 
 /** 数値の直接入力欄。どちらの項目でも同じ作法（Enter確定 / Esc取消 / blur確定）にする */
@@ -53,8 +57,23 @@ function InlineNumberInput({
   // Enter/Esc で確定・取消したあと、入力欄が消えるときの blur でもう一度
   // 確定処理が走るのを防ぐ（増減は「差分」で適用するため、二重に走ると倍動いてしまう）
   const settledRef = useRef(false);
+  // 入力中の最新値。アンマウント時クリーンアップの時点では DOM の ref が既に外れている
+  // ことがあるため、DOM からではなく onChange で控えたこの値を使う
+  const latestValueRef = useRef(String(defaultValue));
+  // 確定処理はアンマウント時クリーンアップからも呼ぶため、最新の関数を ref で保持する
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
+  // 譜面の他の場所をクリックすると、ScorePage の document mousedown が blur より先に
+  // パネルごと閉じて（アンマウントして）しまい、「フォーカスを外して確定」の経路が
+  // 走らない（Codex round1 P1）。未確定のままアンマウントされたら、入力中だった値で確定する。
+  useEffect(() => () => {
+    if (!settledRef.current) {
+      onCommitRef.current(Number(latestValueRef.current));
+    }
+  }, []);
   return (
     <input
+      onChange={(e) => { latestValueRef.current = e.target.value; }}
       // 開いた瞬間に打ち始められるようにフォーカスを当てる（途中変更オーバーレイと同じ作法）
       autoFocus
       type="number"
@@ -104,23 +123,36 @@ export default function SystemLayoutPanel({
   gapStepPx,
   onGapDelta,
   onClose,
+  onNotice,
 }: Props) {
   // どちらの数値をいま直接入力しているか（null = ボタン操作の状態）
   const [editing, setEditing] = useState<'measures' | 'gap' | null>(null);
 
-  /** 直接入力の確定。値が壊れていたら何もしないで入力欄を閉じるだけにする */
+  /** 直接入力の確定。数値でなければ通知して閉じ、範囲外は端へ丸めて通知する（#318） */
   const commitMeasures = (value: number) => {
     setEditing(null);
-    if (!Number.isFinite(value)) return;
-    const next = Math.round(value);
+    if (!Number.isFinite(value)) {
+      onNotice(describeSystemLayoutValueInvalid('小節数'));
+      return;
+    }
+    const next = Math.max(1, Math.min(maxMeasureCount, Math.round(value)));
+    if (next !== Math.round(value)) {
+      onNotice(describeSystemLayoutValueClamped('小節数', next, 1, maxMeasureCount));
+    }
     // 増減ハンドラ（既存）を「差分」で呼ぶだけにして、上限・下限やUndoの積み方を
     // ボタン操作と完全に同じ経路へ通す（同じ判定を二重に書かないため）
     if (next !== measureCount) onMeasureDelta(next - measureCount);
   };
   const commitGap = (value: number) => {
     setEditing(null);
-    if (!Number.isFinite(value)) return;
-    const next = Math.round(value);
+    if (!Number.isFinite(value)) {
+      onNotice(describeSystemLayoutValueInvalid('間隔'));
+      return;
+    }
+    const next = Math.max(gapMinPx, Math.min(gapMaxPx, Math.round(value)));
+    if (next !== Math.round(value)) {
+      onNotice(describeSystemLayoutValueClamped('間隔', next, gapMinPx, gapMaxPx));
+    }
     if (next !== gapPx) onGapDelta(next - gapPx);
   };
 

@@ -50,6 +50,11 @@ export default function SystemSelectFrame({
       style={style}
       data-testid={startMeasure != null ? `system-frame-${startMeasure}` : undefined}
     >
+      {/* 外側（.system-select-frame）はページの段スロット（固定高）に引き伸ばされるため、
+          当たり判定を外側基準で置くと段間の余白まで反応してしまう（Codex round1 P1）。
+          内側ラッパーは中身（五線の SVG）の自然な高さになるので、ここを基準にすると
+          当たり判定・選択枠・パネルが「五線の実描画範囲」に沿う。 */}
+      <div className="system-select-inner">
       {children}
       {selectable && (['left', 'right'] as const).map((side) => (
         // 当たり判定は五線の左右端（音部記号の手前／終止線の外〜ページ余白）に置く。
@@ -69,6 +74,7 @@ export default function SystemSelectFrame({
         />
       ))}
       {selected && renderPanel?.(startMeasure!)}
+      </div>
     </div>
   );
 }

@@ -48,18 +48,32 @@ function sparseMeasure(): MeasureData {
   return { events: [{ dur: '1', isRest: false, keys: ['c/5'] }] };
 }
 
-/** 8小節・2小節/段の単旋律作品を仕込む（＝1段目は小節0〜1から始まる） */
-function seedWork() {
+/** 譜種ごとの作品を仕込む（4譜種すべての SystemSelectFrame 配線を固定するため） */
+function seedTypedWork(scoreType: 'single' | 'piano' | 'quartet' | 'ensemble') {
+  const measures = () => Array.from({ length: MEASURE_COUNT }, sparseMeasure);
+  const parts =
+    scoreType === 'single' ? [{ partId: 'melody', clef: 'treble' as const, measures: measures() }]
+    : scoreType === 'piano' ? [
+        { partId: 'right-hand', clef: 'treble' as const, measures: measures() },
+        { partId: 'left-hand', clef: 'bass' as const, measures: measures() },
+      ]
+    : scoreType === 'quartet' ? [
+        { partId: 'violin-1', clef: 'treble' as const, measures: measures() },
+        { partId: 'violin-2', clef: 'treble' as const, measures: measures() },
+        { partId: 'viola', clef: 'alto' as const, measures: measures() },
+        { partId: 'cello', clef: 'bass' as const, measures: measures() },
+      ]
+    : [
+        // 編成譜は既定編成（室内オーケストラ）の先頭パートにだけ音を入れる。
+        // 残りのパートは復元時に空配列で補われる（実装の既定挙動）
+        { partId: 'flute', clef: 'treble' as const, measures: measures() },
+      ];
   const data = createSavedScoreData(
     { title: '段選択テスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
-    [{
-      partId: 'melody',
-      clef: 'treble',
-      measures: Array.from({ length: MEASURE_COUNT }, sparseMeasure),
-    }],
+    parts,
     1,
     2,
-    'single'
+    scoreType
   );
   const created = createWork('段選択テスト');
   if (!created.success || !created.data) throw new Error('createWork failed');
@@ -80,8 +94,8 @@ function firstSystemMeasureCount(): number {
 }
 
 /** 譜面が描き終わるまで待つ */
-async function renderScore() {
-  seedWork();
+async function renderScore(scoreType: 'single' | 'piano' | 'quartet' | 'ensemble' = 'single') {
+  seedTypedWork(scoreType);
   render(<ScorePage />);
   await waitFor(() => {
     expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
@@ -195,4 +209,69 @@ describe('ScorePage: 段の選択とレイアウト調整パネル（Issue #482�
     // Enter は確定と同時に段の選択も解く（譜面上に常設物を残さない）
     expect(screen.queryByTestId('system-layout-panel-0')).toBeNull();
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // Codex round1 P1: document の mousedown（選択解除）が blur より先に走り、
+  // 入力欄がアンマウントされて「フォーカスを外して確定」が失われるレース
+  it('直接入力の途中で譜面の他の場所を押しても、入力していた値で確定される', async () => {
+    await renderScore();
+    selectFirstSystemFromLeftEdge();
+    await waitFor(() => {
+      expect(screen.getByTestId('system-layout-panel-0')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId('system-gap-value-0'));
+    const input = await screen.findByTestId('system-gap-input-0');
+    fireEvent.change(input, { target: { value: '12' } });
+    // Enter を押さずに譜面をクリック → パネルは閉じるが、値は失われない
+    fireEvent.mouseDown(document.querySelector('rect.vf-note-hit')!);
+    await waitFor(() => {
+      expect(screen.queryByTestId('system-layout-panel-0')).toBeNull();
+    });
+    await waitFor(() => {
+      expect((screen.getByTestId('system-frame-0') as HTMLElement).style.marginTop).toBe('12px');
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('小節数も直接入力で変えられる', async () => {
+    await renderScore();
+    selectFirstSystemFromLeftEdge();
+    await waitFor(() => {
+      expect(screen.getByTestId('system-layout-panel-0')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId('system-measure-count-0'));
+    const input = await screen.findByTestId('system-measure-input-0');
+    fireEvent.keyDown(input, { key: 'Enter', target: { value: '1' } });
+    await waitFor(() => {
+      expect(firstSystemMeasureCount()).toBe(1);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // Codex round1 P2: 範囲外の入力を黙って捨てない（#318「行き止まりは喋る」）
+  it('範囲外の間隔を入力すると端の値へ丸め、その旨を通知する', async () => {
+    await renderScore();
+    selectFirstSystemFromLeftEdge();
+    await waitFor(() => {
+      expect(screen.getByTestId('system-layout-panel-0')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId('system-gap-value-0'));
+    const input = await screen.findByTestId('system-gap-input-0');
+    fireEvent.keyDown(input, { key: 'Enter', target: { value: '999' } });
+    // 上限（+50px）へ丸めて適用され、丸めた理由が画面に出る
+    await waitFor(() => {
+      expect((screen.getByTestId('system-frame-0') as HTMLElement).style.marginTop).toBe('50px');
+    }, { timeout: 15000 });
+    expect(document.body.textContent).toContain('間隔は -60〜50 の範囲で指定できます');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // Codex round1 P2: 4譜種すべての Staff コンポーネントで SystemSelectFrame の配線が生きている
+  for (const scoreType of ['piano', 'quartet', 'ensemble'] as const) {
+    it(`${scoreType} でも右端クリックで段が選択され、パネルが出る`, async () => {
+      await renderScore(scoreType);
+      const edge = screen.getAllByTestId('system-select-right-0')[0];
+      fireEvent.click(edge);
+      await waitFor(() => {
+        expect(screen.getByTestId('system-layout-panel-0')).toBeTruthy();
+      }, { timeout: 15000 });
+    }, MOUNT_HEAVY_TIMEOUT_MS);
+  }
 });

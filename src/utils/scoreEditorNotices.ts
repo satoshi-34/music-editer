@@ -659,3 +659,21 @@ export function describeMxlExtractFailed(reason: 'notZip' | 'brokenZip' | 'noXml
   }
   return 'この .mxl の中に MusicXML が見つかりませんでした（書き出し元で「非圧縮の MusicXML（.musicxml / .xml）」を選んで書き出し直してください）';
 }
+
+/**
+ * 段レイアウトパネルの直接入力が数値として読めなかったときの文言（#482 round1・#318）。
+ * 黙って閉じると「入力したのに何も起きない」行き止まりになるため理由を伝える。
+ */
+export function describeSystemLayoutValueInvalid(kind: '小節数' | '間隔'): string {
+  return `${kind}を数値として読み取れなかったため、変更しませんでした`;
+}
+
+/**
+ * 段レイアウトパネルの直接入力が範囲外で、端の値へ丸めて適用したときの文言（#482 round1・#318）。
+ * 入力どおりにならなかった理由（有効範囲）まで伝える。
+ */
+export function describeSystemLayoutValueClamped(
+  kind: '小節数' | '間隔', applied: number, min: number, max: number,
+): string {
+  return `${kind}は ${min}〜${max} の範囲で指定できます（${applied} に丸めて適用しました）`;
+}

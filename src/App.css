@@ -1712,11 +1712,17 @@ button.ghost.active:hover:not(:disabled) {
    .score-area .system-stack > * のスロット高の指定は「直下の子」に効くので、
    ラッパーの中身を変えてもページ内の段配置は従来どおり。 */
 .system-select-frame {
+  /* 位置の基準は内側ラッパー（.system-select-inner）に持たせる。
+     外側は段スロット（固定高）に引き伸ばされるため、ここを基準にすると
+     当たり判定が段間の余白まで広がってしまう（Codex round1 P1） */
+}
+.system-select-inner {
   position: relative;
 }
 /* 選択中の段は「薄い枠」だけで示す（譜面の見た目を邪魔しない控えめな表示）。
-   outline は要素の外側に描かれるためレイアウトを1pxもずらさない（border だと段がずれる）。 */
-.system-select-frame--selected {
+   outline は要素の外側に描かれるためレイアウトを1pxもずらさない（border だと段がずれる）。
+   枠も内側ラッパー＝五線の実描画範囲に沿わせる。 */
+.system-select-frame--selected .system-select-inner {
   outline: 1px solid #93c5fd;
   outline-offset: 2px;
   border-radius: 4px;

@@ -4327,11 +4327,12 @@ export default function ScorePage() {
         gapStepPx={SYSTEM_ROW_GAP_OVERRIDE_STEP_PX}
         onGapDelta={(delta) => adjustSystemRowGapOverride(range.start, delta)}
         onClose={closeSystemSelection}
+        onNotice={notifyScoreEdit}
       />
     );
   }, [
     selectedSystem, visiblePlannedRanges, systemRowGapOverrides, contentMeasureCount,
-    adjustSystemMeasureOverride, adjustSystemRowGapOverride, closeSystemSelection,
+    adjustSystemMeasureOverride, adjustSystemRowGapOverride, closeSystemSelection, notifyScoreEdit,
   ]);
 
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
