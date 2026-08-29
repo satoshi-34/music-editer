@@ -683,3 +683,42 @@ export interface HairpinMark {
   + ScorePageTrillPlayback.test.tsx 4件（基本展開・UI 調号変更後の再生=useCallback deps の
   再発防止・右手の途中調号が左手のトリルへ効くこと・Viola パート譜表示でも Violin I の
   途中調号が効くこと。エンジンをモックして実マウントで固定）
+
+## テンポ表記の定番候補（速度標語プリセット・2026-08-29・弟フィードバック / Issue #457）
+
+「アンダンテとかアレグロが欲しい」という要望。テンポ表記ツールは自由入力のみで、
+定番の速度標語も毎回タイプする必要があった。
+
+### 修正設計
+
+- `src/utils/tempoMarkingPresets.ts` を新設し、定番12語を **遅い → 速い** の順で持つ
+  （`Grave / Largo / Lento / Adagio / Andante / Andantino / Moderato / Allegretto /
+  Allegro / Vivace / Presto / Prestissimo`）。辞書順にすると Adagio と Allegro が
+  隣り合って選びにくいため、音楽の慣習どおりの並びにしている
+- UI は **`<datalist>`**（HTML 標準の入力候補）にした。Issue が挙げた
+  「datalist もしくは 選択リスト+自由入力の併用」のうち datalist を選んだ理由:
+  - テキスト編集オーバーレイの入力欄は **onBlur で確定して閉じる**設計
+    （`handleTextConfirm`）。`<select>` を隣に足すと、候補を選ぼうとクリックした瞬間に
+    入力欄から focus が外れて確定・クローズしてしまう。防ぐには blur の
+    `relatedTarget` 判定が要るが、これは Safari と Chrome で挙動が割れる場所
+    （#237 の「Safari ではパレットのボタンを押しても入力欄から focus が外れない」）で、
+    既存の確定経路に手を入れる価値がない
+  - datalist は入力欄が1つのままなので、確定・キャンセル・`key` による作り直し
+    （#237 対策）の経路がすべて従来どおりで、退行の余地が無い
+  - 「候補は補助であり制約にしない」という受入条件をそのまま満たす（自由入力が素通り）
+- datalist は入力欄を触るまで見えないため、オーバーレイの種別ラベルへ
+  「（候補から選べます）」の一言を足して気づけるようにした
+- 候補を出すのは `kind === 'tempoMarking'` のときだけ。他の種別には `list` 属性も
+  `<datalist>` も出さない
+
+### 影響範囲
+
+- `src/utils/tempoMarkingPresets.ts`（新規）: 定番語の配列と datalist の id
+- `src/components/PianoSystemCanvas.tsx`: テキスト編集オーバーレイに `<datalist>` を追加し、
+  入力欄へ `list` 属性を条件付きで付与。**保存形式・描画は一切変更していない**
+  （`applyTextElementToEvent` 経由で `tempoMarking` に文字列が入るだけ。五線上・イタリックの
+  見た目も従来のまま）
+- テスト: `PianoSystemCanvasTempoPreset.test.tsx`（候補の紐づけ・12語・候補選択の保存・
+  自由入力・他種別に出さないこと）、`ScorePageTempoPresetWiring.test.tsx`
+  （ScorePage 実マウントで 演奏記号タブ→テンポ表記→音符クリック→候補選択→確定→
+  SVG 表示と localStorage への保存まで）
