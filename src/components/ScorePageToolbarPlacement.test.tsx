@@ -166,6 +166,27 @@ describe('ツールバーの配置切り替え', () => {
     expect(screen.getByText(/画面が狭いため/)).toBeTruthy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  // Codex round3 P2: 2列判定・自動縮尺が「ツールバー幅を引いた実効幅」で行われる
+  it('1280px幅の左配置では2列に収まらないため1列へ落ちる（上配置なら2列のまま）', async () => {
+    setViewportWidth(1280);
+    localStorageMock.setItem(TOOLBAR_PLACEMENT_KEY, 'left');
+    const { unmount } = render(<ScorePage />);
+    // jsdom ではツールバー幅は下限（120px）に丸められる → 1280-120=1160 < 1200 で1列
+    await waitFor(() => {
+      const spread = document.querySelector('.spread') as HTMLElement;
+      expect(spread.style.getPropertyValue('--columns')).toBe('1');
+    });
+    unmount();
+
+    // 上配置なら従来どおり2列（既存挙動の回帰ガード）
+    localStorageMock.setItem(TOOLBAR_PLACEMENT_KEY, 'top');
+    render(<ScorePage />);
+    await waitFor(() => {
+      const spread = document.querySelector('.spread') as HTMLElement;
+      expect(spread.style.getPropertyValue('--columns')).toBe('2');
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   // Codex round2 P2: round1 の修正が ScorePage の配線として生きていることの固定
   it('リセットメニューの top が clampDropdownMenuTop でクランプされる（画面下部のボタンから開いても収まる）', async () => {
     Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 768 });

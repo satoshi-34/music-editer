@@ -2827,17 +2827,22 @@ export default function ScorePage() {
   ]);
 
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
+  // 列数の判定も「ページを並べられる実効幅」で行う（#483 round3）。
+  // 左（縦）配置ではツールバー幅ぶん狭くなるため、全画面幅のままだと
+  // 1280px 幅で2列のまま右へはみ出す（1280 − 281 ≒ 999px しか無い）。
+  const toolbarOccupiedWidth = isToolbarLeft ? toolbarWidth : 0;
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
+    const compute = () => setColumns((window.innerWidth - toolbarOccupiedWidth) < 1200 ? 1 : 2);
+    // 配置の切り替え・ツールバー幅の実測が入った時点でも即座に判定し直す
+    compute();
     const onResize = () => {
       clearTimeout(timer);
-      timer = setTimeout(() => {
-        setColumns(window.innerWidth < 1200 ? 1 : 2);
-      }, 150);
+      timer = setTimeout(compute, 150);
     };
     window.addEventListener('resize', onResize);
     return () => { window.removeEventListener('resize', onResize); clearTimeout(timer); };
-  }, []);
+  }, [toolbarOccupiedWidth]);
 
   // Finale 風キーボードショートカット: 数字キーで音価を選択する。
   // テキスト入力中（input/textarea にフォーカスがある場合）は無効にする。
@@ -3465,7 +3470,9 @@ export default function ScorePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMeasures, clipboard, sliceClipboard, scoreType, activeLayerPart, activeVoice, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, pushHistory, handleTranspose, isPrintPreview, scoreTimeSignature, getEditablePartEntries]);
 
-  const { spreadRef, scale } = useAutoPageScale(columns, 20);
+  // 自動縮尺にも占有幅を渡す（#483 round3。列数と同じ実効幅で計算しないと
+  // 「2列のまま縮まず、はみ出す」「1列なのに小さすぎる」のズレが出る）
+  const { spreadRef, scale } = useAutoPageScale(columns, 20, toolbarOccupiedWidth);
   // ユーザー設定（常設エリアの「画面表示のズーム」スライダー、0.5〜3.0）。
   // 自動縮尺（useAutoPageScale の scale）に掛け合わせて画面上の表示サイズだけを変える。
   // 印刷は @media print で transform: none !important により解除されるため影響しない。
