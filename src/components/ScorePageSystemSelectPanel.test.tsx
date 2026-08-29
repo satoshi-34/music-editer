@@ -150,6 +150,29 @@ describe('ScorePage: 段の選択とレイアウト調整パネル（Issue #482�
     expect(screen.getByTestId('system-frame-0').className).not.toContain('system-select-frame--selected');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  // Codex round5 P2: フォーカスが端ボタンに残ったまま Enter → 既定 click で再選択されない
+  it('端ボタンにフォーカスしたまま Enter を押すと、選択が解けたままになる', async () => {
+    await renderScore();
+    const edge = screen.getByTestId('system-select-left-0');
+    fireEvent.click(edge);
+    await waitFor(() => {
+      expect(screen.getByTestId('system-layout-panel-0')).toBeTruthy();
+    });
+
+    (edge as HTMLButtonElement).focus();
+    // fireEvent は preventDefault が呼ばれると false を返す。既定動作（ボタンの click 発火）
+    // が止まっていること＝再選択が起きないことの根拠として固定する
+    const notPrevented = fireEvent.keyDown(edge, { key: 'Enter' });
+    expect(notPrevented).toBe(false);
+    await waitFor(() => {
+      expect(screen.queryByTestId('system-layout-panel-0')).toBeNull();
+    });
+    // 実ブラウザでは preventDefault が無いと Enter の既定動作で click が続く。
+    // その状況を再現しても再選択されない（クリック自体はトグルなので、既定動作が
+    // 止まっている＝click は来ない、が本命の防御）ことまでは求めず、上の
+    // defaultPrevented の固定を本テストの検証点とする
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('譜面の他の場所を押すと選択が解ける', async () => {
     await renderScore();
     selectFirstSystemFromLeftEdge();

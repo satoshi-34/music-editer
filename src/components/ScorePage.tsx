@@ -4282,7 +4282,13 @@ export default function ScorePage() {
       setSelectedSystem(null);
     };
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' || e.key === 'Enter') setSelectedSystem(null);
+      if (e.key === 'Escape' || e.key === 'Enter') {
+        // Enter の既定動作を止める。フォーカスが端ボタンに残ったまま Enter を押すと、
+        // ここで解除した直後にボタンの既定 click が発火して同じ段を再選択してしまう
+        // （Codex round5 P2）。Esc 側は既定動作が無いが、扱いを揃えておく
+        e.preventDefault();
+        setSelectedSystem(null);
+      }
     };
     document.addEventListener('mousedown', handlePointerDown);
     document.addEventListener('keydown', handleKeyDown);
