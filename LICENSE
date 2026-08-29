@@ -1,21 +1,29 @@
-MIT License
+Copyright (c) 2025-2026 satoshi-34. All rights reserved.
 
-Copyright (c) 2025 satoshi-34
+This source code is made publicly viewable for reference and portfolio
+purposes only. Except for the limited rights that hosting services'
+terms of service require to be granted to their users (such as viewing
+and forking within the service, per the GitHub Terms of Service), no
+license is granted to use, copy, modify, merge, publish, distribute,
+sublicense, or sell copies of this software or any portion of it, in
+source or binary form, without prior written permission from the
+copyright holder.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Note: Revisions of this repository up to and including commit 376b1dc
+were made available under the MIT License. Rights already granted under
+that license for those revisions are not affected by this change.
+Revisions after commit 376b1dc are provided under the terms above.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+---
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+本リポジトリのソースコードは、閲覧・参照（ポートフォリオ用途を含む）の
+ためにのみ公開しています。ホスティングサービスの利用規約上その利用者へ
+付与が必要となる限定的な権利（GitHub 利用規約に基づくサービス内での閲覧・
+フォーク等）を除き、著作権者の書面による事前の許可なく、本ソフトウェアの
+全部または一部を利用・複製・改変・結合・公開・頒布・再許諾・販売する
+ことはできません。
+
+補足: コミット 376b1dc までの本リポジトリの各リビジョンは MIT License の
+下で提供されており、当該リビジョンについて既に付与された権利はこの変更の
+影響を受けません。コミット 376b1dc より後のリビジョンは上記の条件で提供
+されます。

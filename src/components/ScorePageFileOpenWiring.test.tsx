@@ -74,8 +74,14 @@ describe('開くボタン群と隠しファイル入力の配線（#464）', () 
     const openGroup = screen.getByRole('group', { name: '開く' });
     fireEvent.click(within(openGroup).getByRole('button', { name: 'ファイル' }));
     expect(jsonClick).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(openGroup).getByRole('button', { name: 'MusicXML' }));
+    const xmlButton = within(openGroup).getByRole('button', { name: 'MusicXML (.mxl)' });
+    fireEvent.click(xmlButton);
     expect(xmlClick).toHaveBeenCalledTimes(1);
+    // title 属性で対応形式（.musicxml / .xml / .mxl）の説明が維持されること（#467 続報）
+    const xmlButtonTitle = xmlButton.getAttribute('title') ?? '';
+    expect(xmlButtonTitle).toContain('.musicxml');
+    expect(xmlButtonTitle).toContain('.xml');
+    expect(xmlButtonTitle).toContain('.mxl');
     // 「開く」が select として存在しない（Safari で無反応になる形へ戻さない）
     expect(screen.queryByRole('combobox', { name: '開く' })).toBeNull();
   }, 60000);
