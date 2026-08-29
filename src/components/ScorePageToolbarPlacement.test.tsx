@@ -187,6 +187,35 @@ describe('ツールバーの配置切り替え', () => {
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  // Codex round4 P2: 自動縮尺（useAutoPageScale → --scale）にも占有幅が渡っている配線の固定。
+  // 上・左とも2列になる十分広い幅で、保存済みズーム100%（幅フィットを無効化）にし、
+  // --scale が左配置だけツールバー幅ぶん小さくなることを見る。
+  // ScorePage の useAutoPageScale 呼び出しから第3引数を外すと、左右の --scale が
+  // 同値になりこのテストだけが落ちる
+  it('自動縮尺（--scale）が左配置ではツールバー幅を引いた実効幅で計算される', async () => {
+    setViewportWidth(3000); // 左でも 3000-120=2880 ≥ 1200 → 両配置とも2列
+    mockClientWidth = 1607; // 2列がぎりぎり収まらない幅（scale < 1 になる領域）
+    localStorageMock.setItem('score-view-zoom', '1'); // 幅フィット（viewZoom）を無効化
+
+    localStorageMock.setItem(TOOLBAR_PLACEMENT_KEY, 'top');
+    const { unmount } = render(<ScorePage />);
+    let spread = document.querySelector('.spread') as HTMLElement;
+    await waitFor(() => {
+      expect(Number(spread.style.getPropertyValue('--scale'))).toBeGreaterThan(0);
+    });
+    const topScale = Number(spread.style.getPropertyValue('--scale'));
+    unmount();
+
+    localStorageMock.setItem(TOOLBAR_PLACEMENT_KEY, 'left');
+    render(<ScorePage />);
+    spread = document.querySelector('.spread') as HTMLElement;
+    await waitFor(() => {
+      const leftScale = Number(spread.style.getPropertyValue('--scale'));
+      expect(leftScale).toBeGreaterThan(0);
+      expect(leftScale).toBeLessThan(topScale);
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   // Codex round2 P2: round1 の修正が ScorePage の配線として生きていることの固定
   it('リセットメニューの top が clampDropdownMenuTop でクランプされる（画面下部のボタンから開いても収まる）', async () => {
     Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 768 });
