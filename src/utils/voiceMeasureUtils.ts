@@ -6,6 +6,14 @@ export type PlaybackMeasureEventWithStart = NoteEvent & {
    * 単声部では省略できるが、複数声部では同時発音位置をそろえるために使う。
    */
   startBeat?: number;
+  /** この音符が属する声部（0 = 主声部＝ measure.events） */
+  voiceIndex: number;
+  /**
+   * 畳む前の「声部の中での位置」。
+   * 複数声部は開始拍で並べ替えられるため、畳んだあとの配列位置とは一致しない。
+   * タイ（TieArc.toEventIndex）のように声部内の位置を指す情報と突き合わせるために残す。
+   */
+  eventIndex: number;
 };
 
 const DURATION_TO_BEATS: Record<NoteEvent['dur'], number> = {
@@ -443,17 +451,24 @@ export function getMeasureDurationBeats(measure: MeasureData): number {
 export function flattenMeasureForPlayback(measure: MeasureData): PlaybackMeasureEventWithStart[] {
   const voices = getMeasureVoices(measure);
   if (voices.length <= 1) {
-    return getPrimaryVoiceEvents(measure).map((event) => ({ ...cloneNoteEvent(event) }));
+    // 単声部では startBeat を付けない（再生エンジンはその有無で「順に積む小節」か
+    // 「開始拍で並べる小節」かを見分けているため、ここで付けると挙動が変わる）。
+    return getPrimaryVoiceEvents(measure).map((event, eventIndex) => ({
+      ...cloneNoteEvent(event),
+      voiceIndex: 0,
+      eventIndex,
+    }));
   }
 
-  const flattened: Array<PlaybackMeasureEventWithStart & { voiceIndex: number }> = [];
+  const flattened: PlaybackMeasureEventWithStart[] = [];
   voices.forEach((voice, voiceIndex) => {
     let currentBeat = 0;
-    voice.events.forEach((event) => {
+    voice.events.forEach((event, eventIndex) => {
       flattened.push({
         ...cloneNoteEvent(event),
         startBeat: currentBeat,
         voiceIndex,
+        eventIndex,
       });
       currentBeat += getEventDurationBeats(event);
     });
@@ -467,5 +482,5 @@ export function flattenMeasureForPlayback(measure: MeasureData): PlaybackMeasure
     return left.voiceIndex - right.voiceIndex;
   });
 
-  return flattened.map(({ voiceIndex, ...event }) => event);
+  return flattened;
 }

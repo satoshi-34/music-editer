@@ -13,6 +13,7 @@ import type { SystemMeasureRange } from '../utils/measureLayoutUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { createDisplayTransposeBridge } from '../utils/displayTransposeUtils';
 import { createEmptyMeasures } from '../utils/voiceMeasureUtils';
+import { resolveInstrumentPartLabels } from '../utils/instrumentationPartUtils';
 
 type Props = {
   tool: Tool;
@@ -172,11 +173,14 @@ export default function EnsembleStaff({
             : 0;
           const partKey = fifthsShift === 0 ? undefined : shiftKeySignatureByFifths(keySignature, fifthsShift);
           const isGrandStaff = part.staffCount === 2;
+          // 略称・フル名の決め方（片方だけ入力されたときの代用ルール）は
+          // 弦楽四重奏と共通の関数へ寄せてある（Issue #448）。
+          const partLabels = resolveInstrumentPartLabels(part);
           const primaryEntry: PartConfig = {
             clef: part.clef,
-            label: part.abbreviation || part.name,
+            label: partLabels.label,
             // 総譜1段目に出すフル名。略称しか登録されていないパートは略称で代用する。
-            fullLabel: part.name || part.abbreviation,
+            fullLabel: partLabels.fullLabel,
             playbackInstrument: part.playbackInstrument,
             // 木管・金管・弦などの楽器グループ識別子。
             // PianoSystemCanvas はこの値が連続するパートをひとまとめにし、

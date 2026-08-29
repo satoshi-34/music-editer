@@ -53,3 +53,33 @@ export function ensembleSecondStaffPartId(partId: string): string {
 export function totalEnsembleStaffCount(parts: InstrumentPartDefinition[]): number {
   return parts.reduce((sum, part) => sum + (part.staffCount === 2 ? 2 : 1), 0);
 }
+
+/**
+ * パート定義から、五線の左に描くラベル2種（略称・フル名）を作る。
+ *
+ * 総譜は「いちばん最初の段だけフル名、それ以降の段は略称」で書く慣習（Issue #60）。
+ * どちらか片方しか入っていないパートは、もう一方で代用する（例: 略称だけ入力した
+ * パートは、フル名の位置にも略称を出す）。両方空なら undefined を返し、
+ * 描画側は「ラベルなし」として扱う。
+ *
+ * 編成譜（EnsembleStaff）と弦楽四重奏（QuartetStaff）の両方が同じ規則を使うため、
+ * ここに1つだけ置いて共有する。同じ規則を2か所に書くと、片方だけ直したときに
+ * 譜種によって表示が食い違うため（Issue #448）。
+ */
+/**
+ * 楽器名・略称の最大文字数（#448）。ラベル領域は五線の左の限られた幅しかなく、
+ * 極端に長い名前は最小フォントでも収まらないため上限を設ける。
+ */
+export const INSTRUMENT_NAME_MAX_LENGTH = 40;
+
+export function resolveInstrumentPartLabels(
+  part: Pick<InstrumentPartDefinition, 'name' | 'abbreviation'>
+): { label?: string; fullLabel?: string } {
+  // 空白だけの入力は「未入力」と同じに扱う（見えないラベルを描かないため・#448 round1）
+  const name = part.name?.trim();
+  const abbreviation = part.abbreviation?.trim();
+  return {
+    label: abbreviation || name || undefined,
+    fullLabel: name || abbreviation || undefined,
+  };
+}

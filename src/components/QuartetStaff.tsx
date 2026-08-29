@@ -87,6 +87,12 @@ type Props = {
    * 総譜のいちばん最初の段だけパート名をフル名（Violin I）にし、以降は略称（Vn. I）にする。
    */
   isFirstPage?: boolean;
+  /**
+   * パートごとの表示名（略称・フル名）の差し替え。QUARTET_PART_CONFIGS と同じ並び順で、
+   * ユーザーが「パート名編集」で書き換えた名前を受け取る（Issue #448）。
+   * 省略時は従来どおり QUARTET_PART_CONFIGS の既定名を使う。
+   */
+  partLabels?: ReadonlyArray<{ label?: string; fullLabel?: string }>;
 };
 
 export default function QuartetStaff({
@@ -121,6 +127,7 @@ export default function QuartetStaff({
   onMeasureRangeSelect,
   onBeatRangeSelect,
   isFirstPage = false,
+  partLabels,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
@@ -128,6 +135,10 @@ export default function QuartetStaff({
       {Array.from({ length: systemRanges?.length ?? systems }, (_, i) => {
         const partsConfig: PartConfig[] = QUARTET_PART_CONFIGS.map((cfg, pi) => ({
           ...cfg,
+          // partLabels が渡された譜面では、ユーザーが空欄にした名前も「ラベルなし」として
+          // 尊重したい。そのため ?? での既定名フォールバックではなく、
+          // 「その要素が渡されているかどうか」で丸ごと差し替える（Issue #448）
+          ...(partLabels?.[pi] ? { label: partLabels[pi].label, fullLabel: partLabels[pi].fullLabel } : {}),
           data: partsData[pi] ?? [],
           onChange: onPartChange[pi] ?? (() => {}),
         }));

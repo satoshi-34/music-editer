@@ -1,6 +1,7 @@
 // src/utils/musicXmlExport.ts
 // SavedScoreData を MusicXML 3.1 (partwise) 形式に変換してダウンロードする。
 
+import { resolveInstrumentPartLabels } from './instrumentationPartUtils';
 import type { SavedScoreData, NoteEvent, MeasureData, TimeSignatureStyle } from '../types/storage';
 import type { KeySignature } from './noteKeyUtils';
 import type { ClefType } from '../components/clefUtils';
@@ -414,10 +415,17 @@ export function scoreToMusicXml(data: SavedScoreData): string {
     'left-hand': 'Piano (left hand)',
     'melody': 'Melody',
   };
+  // 名前の解決は表示側と同じ規則（resolveInstrumentPartLabels）を通す。
+  // 空白だけの名前を「未入力」に倒す判定が表示と書き出しで食い違うと、
+  // <part-name>   </part-name> のような空白名が出力される（#448 round2）
   const instrumentationNameById = new Map(
     (data.instrumentation?.parts ?? [])
-      .filter((part) => typeof part?.id === 'string' && typeof part?.name === 'string' && part.name.length > 0)
-      .map((part) => [part.id, part.name] as const)
+      .filter((part) => typeof part?.id === 'string')
+      .map((part) => [part.id, resolveInstrumentPartLabels({
+        name: typeof part?.name === 'string' ? part.name : '',
+        abbreviation: typeof part?.abbreviation === 'string' ? part.abbreviation : '',
+      }).fullLabel] as const)
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
   );
   const partDisplayName = (partId: string): string =>
     instrumentationNameById.get(partId) ?? KNOWN_PART_DISPLAY_NAMES[partId] ?? partId;

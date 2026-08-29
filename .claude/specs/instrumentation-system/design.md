@@ -668,3 +668,136 @@ SVG の `getComputedTextLength()` は描画後にしか測れないため、幅�
   実描画（略称ラベルは2ページ目以降の先頭段に出る設計のため、5段=2ページの種データで確認）
 - **スクリーンショット**: 本セッション環境ではブラウザペイン非表示で画像取得不可
   （#441 と同じ制約）。DOM 実測（上記統合テスト）で代替し、画像は運用者の実機スモークで補完
+
+
+## #448 楽器名・略称をユーザーが編集できるようにする（2026-08-29）
+
+### 問題
+
+弟フィードバック「楽器名や楽器の略称も好みがあるので、変更できると良い」。
+編成譜（`ensemble`）は以前から「パート編集」ウィンドウで `instrumentation.parts[].name` /
+`abbreviation` を書き換えられたが、弦楽四重奏（`quartet`）はパート名が
+`QuartetStaff.QUARTET_PART_CONFIGS` に固定で埋め込まれており、
+`instrumentation`（保存データ側の定義）を編集しても表示に反映されなかった。
+
+なお単旋律・ピアノ大譜表は五線左にパート名を描かない仕様のため、今回の対象外
+（名前を編集しても画面に出るところが無い）。
+
+### 修正設計
+
+**1. 表示名の決め方を1か所へ寄せる**
+
+「略称が空ならフル名で代用、フル名が空なら略称で代用、両方空ならラベルなし」という規則が
+`EnsembleStaff` の中にだけ書かれていた。弦楽四重奏でも同じ規則が要るので、
+`utils/instrumentationPartUtils.ts` に `resolveInstrumentPartLabels(part)` を新設し、
+`EnsembleStaff` もこれを呼ぶように置き換えた（同じ規則の2枚目を作らないため）。
+
+**2. 弦楽四重奏の表示名を `instrumentation` 由来にする**
+
+- `QuartetStaff` に任意 prop `partLabels`（`QUARTET_PART_CONFIGS` と同じ並び順の
+  `{ label, fullLabel }` 配列）を追加。渡されたパートだけラベルを丸ごと差し替える。
+  `??` による既定名フォールバックにしないのは、ユーザーが意図的に空欄にした名前を
+  「ラベルなし」として尊重するため。
+- `ScorePage` は `scoreType === 'quartet'` かつ `instrumentation.parts.length === 4` のときだけ
+  `instrumentation.parts.map(resolveInstrumentPartLabels)` を渡す。パート数が違う編成定義
+  （別の譜種から切り替えた直後など）では添字の対応が崩れるので既定名のままにする。
+- 五線左のラベル余白（`instrumentLabelAreaWidth`）も同じラベルから計算する。
+  既定名だけで見積もると、長い名前へ変えたときに五線がラベルへ食い込む。
+- パート譜表示の選択肢（`getPartExtractionOptions` の quartet 分岐）も、編集後の
+  `instrumentationParts[i].name` を優先する。総譜と選択肢で名前が食い違うと
+  同じパートが別物に見えるため（既存の `QUARTET_PART_EXTRACTION_LABELS` はフォールバック）。
+
+**3. 「パート名編集」モード（同じウィンドウの簡易版）**
+
+弦楽四重奏は「Vn. I / Vn. II / Va. / Vc. の4段固定」レイアウトなので、
+パートの追加・削除・並び替えや音部記号・段数・移調・括弧・音色の変更は受け付けられない。
+そこで既存の編成パート編集ウィンドウを再利用しつつ、`isNameOnlyInstrumentationEditor`
+（`scoreType !== 'ensemble'`）で正式名・略称の2欄だけを出すモードにした。
+
+- 楽譜設定タブのボタン名も出し分ける（編成譜=「パート編集」／弦楽四重奏=「パート名編集」）
+- ダイアログの `aria-label` も「編成パート編集」／「パート名編集」で分ける
+- 譜種を切り替えたときはウィンドウを閉じる（中身も表示条件も譜種で変わるため）
+- 列数が変わるので `.instrumentation-part-row--names` / `.instrumentation-editor-window--names`
+  で専用のグリッド・幅をあてる
+
+「1段目=正式名・2段目以降=略称」（Issue #60）のルールは変更していない。
+
+**4. 名前の更新は `updateInstrumentationParts` を通さない**
+
+ブラウザ確認で判明した問題: 既存の `updateInstrumentationParts`（パート編集の共通更新経路）は
+「編成定義を手で触った＝カスタム編成」とみなして `presetId: 'custom'` へ倒し、
+`setScoreType('ensemble')` まで行う。名前を1文字書き換えただけの弦楽四重奏が
+その場で「カスタム編成の編成譜」に変わってしまう（画面上も編成譜の描画に切り替わる）。
+
+名前（正式名・略称）はパート構成を何も変えないので、名前のみモードでは
+`handleInstrumentationPartNameChange`（該当パートの `name` / `abbreviation` だけ差し替える）
+を使い、`presetId`・`scoreType`・小節データには触らない。編成譜側の「パート編集」は
+従来どおり `updateInstrumentationParts` を通す（そちらはパート構成の変更を含むため）。
+`ScorePageQuartetPartName.test.tsx` の「譜種は弦楽四重奏のまま」で固定した。
+
+### 影響範囲
+
+- `src/utils/instrumentationPartUtils.ts`（`resolveInstrumentPartLabels` 追加）
+- `src/components/EnsembleStaff.tsx`（表示名の決め方を共通関数へ）
+- `src/components/QuartetStaff.tsx`（`partLabels` prop）
+- `src/components/ScorePage.tsx`（quartet のラベル配線・余白計算・名前のみ編集モード・名前専用の更新経路）
+- `src/utils/partExtractionUtils.ts`（quartet のパート譜選択肢名）
+- `src/App.css`（名前のみモードの列指定）
+- 編集結果は既存の `instrumentation.parts[].name / abbreviation` に入る。
+  保存構造は変わらないが、round3〜4 で四重奏の既定略称変更に伴う値の移行を追加した
+  （後述「round2〜4 のレビュー対応」。保存形式バージョンを 3.6.0 へ上げた）
+- 単旋律・ピアノ大譜表の見た目と操作は変わらない（パート名を描かない譜種のため）
+
+### 動作確認
+
+- `src/components/QuartetStaffPartLabels.test.tsx`: 既定名／差し替え名で
+  「1ページ目1段目＝フル名、2ページ目以降＝略称」、空欄はラベルなし
+- `src/components/ScorePageQuartetPartName.test.tsx`: 楽譜設定タブから名前を書き換えると
+  五線左の表示とパート譜セレクトが追随する／名前のみモードには追加・削除・音部記号が出ない／
+  編成譜は従来どおり「パート編集」
+- `src/utils/instrumentationPartUtils.test.ts`: `resolveInstrumentPartLabels` の代用ルール
+- ブラウザ（dev サーバー）: 弦楽四重奏で「パート名編集」を開き、Violin I → `Violino primo`、
+  Violoncello → `チェロ` に書き換えて、五線左の表示が即座に変わること・譜種が
+  弦楽四重奏（編成テンプレート `string-quartet`）のままであることを確認
+
+## パート名編集のレビュー対応（2026-08-29・Codex round1・#448）
+
+- **[P1] MusicXML への反映**: buildCurrentScoreData の返却値に instrumentation が
+  入っておらず、書き出しが既定の固定名へフォールバックしていた。返却値へ追加し、
+  編集名が <part-name> に出ることをテストで固定
+- **[P1] 名前だけの自動保存**: 「空の譜面は保存しない」ガードに、
+  hasCustomInstrumentationLabels（instrumentationPresets）の例外を追加。
+  音符が空でも楽器名を既定から書き換えた編成は「内容あり」として保存する
+- **[P2] 総譜とパート譜選択肢の名前解決を統一**: getPartExtractionOptions（四重奏）も
+  resolveInstrumentPartLabels を通す（正式名空+略称のみのパートで食い違っていた）
+- **[P2] 入力の検証**: 名前・略称は 40 文字上限（INSTRUMENT_NAME_MAX_LENGTH。
+  maxLength 属性+保存側 slice の二重）。空白だけの入力は resolveInstrumentPartLabels の
+  trim で「未入力」に倒れ、ラベルは略称（または既定名）で代用される
+- **既知の制限（設計判断）**: 名前を書き換えた四重奏の MusicXML を再読込すると、
+  表示名から安定ID（violin-1 等）へ戻せないため汎用の編成譜として読み込まれる
+  （データは失われない。既知の表示名のみ ID へ正規化する #443 の設計のまま）
+- テスト追加: 保存作品の復元配線・名前だけの自動保存・MusicXML 書き出し・空白のみ入力
+
+## パート名編集のレビュー対応（2026-08-29・Codex round2〜4・#448）
+
+- **[round2 P1] 書き出し配線テスト**: scoreToMusicXml 直呼びでは buildCurrentScoreData の
+  配線を検証できないため、実マウント（名前編集→ファイルタブ→MusicXML書出→Blob本文）の
+  配線テストへ置き換えた（ScorePageQuartetPartName.test.tsx）
+- **[round2 P2] 書き出しの名前解決統一**: musicXmlExport のパート名解決を
+  resolveInstrumentPartLabels（trim + 略称フォールバック）へ統一。空白のみの名前が
+  `<part-name>   </part-name>` として出力されるのを防ぐ
+- **[round2 P2] 既定略称の互換**: 総譜ラベルの正本が QuartetStaff の固定値
+  （Vn. I / Va.）から編成定義（旧: Vln. I / Vla.）へ移ったことで、未編集の四重奏でも
+  略称表示が変わっていた。弦楽四重奏プリセットの略称を Vn. I / Vn. II / Va. へ揃えた
+- **[round3 P2] 旧既定略称の移行**: 旧プリセット値（Vln. I 等）で保存済みの未編集作品を
+  開くと旧表記へ戻るため、migrateLegacyQuartetAbbreviations を追加し、ScorePage の
+  両復元経路（読込・自動保存復元）で旧既定と一致する略称だけ新既定へ差し替える
+- **[round3 P2] オーケストラ系プリセットの分離**: STRING_ORCHESTRA_PARTS は
+  弦楽四重奏パーツを再利用しているため、弦楽合奏以上の弦セクションは従来表記
+  （Vln. I / Vln. II / Vla.）を明示的に維持した
+- **[round4 P1] 移行のバージョンゲート**: 文字列一致だけで毎回移行すると、現行版で
+  ユーザーが意図して Vln. I 等へ書き換えた値まで再読込のたびに戻してしまう。
+  保存形式バージョンを 3.6.0 へ上げ（構造変更なし・migrateData は 3.5.0 も受理）、
+  移行は「保存データの version が 3.6.0 未満」のときだけ適用する。
+  正・負（3.5.0 は移行 / 3.6.0 は保持）の両テストをユニット・ScorePage 復元の
+  両レベルで固定した

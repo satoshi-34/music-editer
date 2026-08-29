@@ -6,6 +6,7 @@ import {
   alignMeasuresToInstrumentationParts,
   createUniqueInstrumentationPartId,
   ensembleSecondStaffPartId,
+  resolveInstrumentPartLabels,
   totalEnsembleStaffCount,
 } from './instrumentationPartUtils';
 
@@ -110,5 +111,27 @@ describe('totalEnsembleStaffCount', () => {
 
   it('パートが無ければ0', () => {
     expect(totalEnsembleStaffCount([])).toBe(0);
+  });
+});
+
+describe('resolveInstrumentPartLabels（Issue #448）', () => {
+  it('正式名と略称が両方あるときは、そのまま返す', () => {
+    expect(resolveInstrumentPartLabels({ name: 'Violin I', abbreviation: 'Vn. I' }))
+      .toEqual({ label: 'Vn. I', fullLabel: 'Violin I' });
+  });
+
+  it('略称だけのパートは、フル名の位置にも略称を出す', () => {
+    expect(resolveInstrumentPartLabels({ name: '', abbreviation: 'Fl.' }))
+      .toEqual({ label: 'Fl.', fullLabel: 'Fl.' });
+  });
+
+  it('正式名だけのパートは、略称の位置にも正式名を出す', () => {
+    expect(resolveInstrumentPartLabels({ name: 'Flute', abbreviation: '' }))
+      .toEqual({ label: 'Flute', fullLabel: 'Flute' });
+  });
+
+  it('両方空ならラベルなし（undefined）にする', () => {
+    expect(resolveInstrumentPartLabels({ name: '', abbreviation: '' }))
+      .toEqual({ label: undefined, fullLabel: undefined });
   });
 });

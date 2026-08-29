@@ -29,6 +29,18 @@ export interface PlaybackMeasureEvent {
    * NoteEvent.microtones（src/types/storage.ts）と同じ形。
    */
   microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[];
+  /**
+   * タイ（同じ高さの音を弧で結んで1音として伸ばす記号）で、この音を何拍ぶん長く鳴らすか。
+   * 和音の一部だけが結ばれることがあるため、キー（"e/4" 形式）ごとに持つ。
+   * タイミング（次の音までの間隔）は変えず、「鳴っている長さ」だけを伸ばす点は durationScale と同じ。
+   */
+  tieExtendBeatsByKey?: Record<string, number>;
+  /**
+   * タイの継続音（弧の後ろ側）として、発音（アタック）を止めるキー。
+   * 開始音を伸ばして鳴らしているので、ここで鳴らすと同じ音が2回聞こえてしまう。
+   * 音符自体は時間を占め続けるので、次の音の位置は変わらない。
+   */
+  tieSuppressedKeys?: string[];
 }
 
 export interface PlaybackPart {
