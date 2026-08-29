@@ -88,18 +88,34 @@ export function countPdfPages(bytes) {
  */
 export function extractUploadedFile(body, boundary) {
   const delimiter = Buffer.from(`--${boundary}`, 'latin1');
+  const crlf = Buffer.from('\r\n', 'latin1');
+
+  // 「正式な境界行」だけを区切りとして採用する（round1 P2）。
+  // PDF はバイナリなので、本文の中に `--境界` と同じバイト列が偶然（あるいは故意に）
+  // 現れうる。RFC 2046 どおり、境界は本文先頭か CRLF の直後に置かれ、
+  // 直後に CRLF（続きのパートあり）か `--`（終端）が来るものだけが本物。
+  const findRealDelimiter = (from) => {
+    let pos = body.indexOf(delimiter, from);
+    while (pos !== -1) {
+      const precededOk = pos === 0 || body.slice(pos - 2, pos).equals(crlf);
+      const after = body.slice(pos + delimiter.length, pos + delimiter.length + 2);
+      const followedOk = after.equals(crlf) || after.toString('latin1') === '--';
+      if (precededOk && followedOk) return pos;
+      pos = body.indexOf(delimiter, pos + 1);
+    }
+    return -1;
+  };
+
   const parts = [];
-  let searchFrom = 0;
-  let start = body.indexOf(delimiter, searchFrom);
+  let start = findRealDelimiter(0);
   while (start !== -1) {
     // 区切り直後が '--' なら終端マーカー（--boundary--）なので打ち切る
     const afterDelimiter = start + delimiter.length;
     if (body.slice(afterDelimiter, afterDelimiter + 2).toString('latin1') === '--') break;
-    const next = body.indexOf(delimiter, afterDelimiter);
+    const next = findRealDelimiter(afterDelimiter);
     if (next === -1) break;
     // 区切りの直後の CRLF と、次の区切りの直前の CRLF はパート本体に含めない
     parts.push(body.slice(afterDelimiter + 2, next - 2));
-    searchFrom = next;
     start = next;
   }
 

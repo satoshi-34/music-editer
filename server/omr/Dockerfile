@@ -15,10 +15,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # バッチ変換では画面を使わないので AWT をヘッドレスに固定する（X が無い環境での失敗回避）
 ENV JAVA_TOOL_OPTIONS=-Djava.awt.headless=true
 
+# poppler-utils(pdfinfo) はページ数上限（20ページ）の確定判定に使う。
+# GPL だが Audiveris と同じく無改造バイナリの子プロセス起動のみ（プロセス分離）。
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      ca-certificates curl nodejs fontconfig fonts-dejavu-core; \
+      ca-certificates curl nodejs fontconfig fonts-dejavu-core \
+      poppler-utils; \
     curl -fsSL -o /tmp/audiveris.deb \
       "https://github.com/Audiveris/audiveris/releases/download/${AUDIVERIS_VERSION}/${AUDIVERIS_DEB}"; \
     # .deb の依存（Tesseract のデータ等）は apt に解決させる

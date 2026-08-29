@@ -56,6 +56,21 @@ describe('extractUploadedFile（正常系）', () => {
     expect(isPdfBytes(extracted.bytes)).toBe(true);
   });
 
+  it('PDF の本文中に境界と同じバイト列が現れても切断しない（round1 P2）', () => {
+    // PDF はバイナリなので `--境界` と同じ並びが本文に紛れ込みうる。
+    // 正式な境界行（本文先頭か CRLF 直後、直後が CRLF か --）だけを区切りとして
+    // 扱うことを固定する。壊れると「変換したらPDFが途中で切れていた」に直結する
+    const boundary = '----boundary1';
+    const pdf = Buffer.concat([
+      Buffer.from('%PDF-1.7\nstream\n', 'latin1'),
+      Buffer.from(`--${boundary}`, 'latin1'), // CRLF を伴わない偽の境界トークン
+      Buffer.from('\nendstream\n/Type /Page\n%%EOF\n', 'latin1'),
+    ]);
+    const body = multipartBody(boundary, 'trap.pdf', pdf);
+    const extracted = extractUploadedFile(body, boundary);
+    expect(Buffer.compare(extracted.bytes, pdf)).toBe(0);
+  });
+
   it('ファイルが入っていない multipart は noFile で失敗する', () => {
     const body = Buffer.concat([
       Buffer.from('------boundary1\r\n', 'latin1'),
@@ -102,9 +117,11 @@ describe('assertAcceptablePdf（上限超過）', () => {
     expect(() => assertAcceptablePdf(fakePdf(3), { maxBytes: 1024 * 1024, maxPages: 20 })).not.toThrow();
   });
 
-  it('ページ数を数えられない PDF（本文が圧縮されている等）はページ上限で弾かない', () => {
-    // /Type /Page が現れない = 数えられないケース。ここで弾くと正当なPDFを拒否してしまうため、
-    // タイムアウト側で守る設計になっていることを固定する
+  it('ページ数を数えられない PDF（本文が圧縮されている等）は入口の足切りでは弾かない', () => {
+    // /Type /Page が現れない = この簡易カウントでは数えられないケース。
+    // ここで弾くと正当なPDFを拒否してしまうため入口では通し、上限の**確定判定**は
+    // 変換直前の pdfinfo（audiveris.js の assertPageCountWithPdfinfo）が必ず行う
+    // （round1 P1。そちらの退行は audiveris.test.js が検出する）
     const compressed = Buffer.from('%PDF-1.7\n<< /ObjStm >>\n%%EOF\n', 'latin1');
     expect(countPdfPages(compressed)).toBeNull();
     expect(() => assertAcceptablePdf(compressed, { maxPages: 1 })).not.toThrow();

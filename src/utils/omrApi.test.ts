@@ -77,7 +77,7 @@ describe('convertPdfToMxl', () => {
     });
   });
 
-  it('知らない理由コードや JSON でない失敗応答は conversionFailed に丸める', async () => {
+  it('JSON でない失敗応答は conversionFailed に丸める', async () => {
     vi.stubEnv('VITE_OMR_API_URL', 'http://localhost:8080');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
@@ -86,6 +86,22 @@ describe('convertPdfToMxl', () => {
     }));
 
     await expect(convertPdfToMxl(pdfFile())).rejects.toMatchObject({ reason: 'conversionFailed' });
+  });
+
+  it('知らない理由コード（サーバーが将来増やした語彙など）も conversionFailed に丸める', async () => {
+    // JSON としては正常だが reason がアプリの知らない文字列のケース（round1 P3）。
+    // 丸めが壊れると、通知の出し分けが undefined 分岐へ落ちて説明のない失敗になる
+    vi.stubEnv('VITE_OMR_API_URL', 'http://localhost:8080');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({ error: { reason: 'unknownReason', message: '新しい失敗理由' } }),
+    }));
+
+    await expect(convertPdfToMxl(pdfFile())).rejects.toMatchObject({
+      reason: 'conversionFailed',
+      message: '新しい失敗理由',
+    });
   });
 
   it('中身が空の応答は noOutput（読み取れる譜面が無かった）として扱う', async () => {
