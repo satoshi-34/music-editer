@@ -253,6 +253,12 @@
 .app-root.toolbar-left .dropdown-overlay {
   left: var(--toolbar-w, 260px);
 }
+/* UI案 A1/A3 の文脈バー（開発時のみ）。左配置では --toolbar-h が 0 になり
+   画面左上（＝縦ツールバーの上・z-index も上）へ重なってタブを覆うため、
+   ツールバーの右隣へ逃がす（#483 Codex round2 P2） */
+.app-root.toolbar-left .ui-context-bar-float {
+  left: calc(var(--toolbar-w, 260px) + 8px);
+}
 /* パート編集ウィンドウ（body 直下へ portal されるため .app-root の子ではない）。
    右端固定・幅 100vw ぶんのままだと左のツールバーへ覆いかぶさるので、
    ツールバーの幅ぶんだけ狭くする。--toolbar-w は ScorePage が要素へ直接渡している。 */

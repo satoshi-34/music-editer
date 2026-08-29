@@ -165,4 +165,35 @@ describe('ツールバーの配置切り替え', () => {
     expect(getPlacementButton('左（縦）').getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByText(/画面が狭いため/)).toBeTruthy();
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  // Codex round2 P2: round1 の修正が ScorePage の配線として生きていることの固定
+  it('リセットメニューの top が clampDropdownMenuTop でクランプされる（画面下部のボタンから開いても収まる）', async () => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 768 });
+    render(<ScorePage />);
+    openLayoutTab();
+    const toggle = screen.getByTestId('layout-reset-menu-toggle');
+    // 画面下部にボタンがある状況を実測モックで作る（jsdom は実レイアウトを持たない）
+    toggle.getBoundingClientRect = () => ({
+      top: 460, bottom: 480, left: 10, right: 100, width: 90, height: 20, x: 10, y: 460, toJSON: () => ({}),
+    }) as DOMRect;
+    fireEvent.click(toggle);
+    const menu = await screen.findByRole('group', { name: 'リセット' });
+    // clampDropdownMenuTop({anchorBottom:480, viewportHeight:768}) = min(486, 768-420-8=340) = 340。
+    // クランプ配線を外すと 486px になり、このテストだけが落ちる
+    expect((menu as HTMLElement).style.top).toBe('340px');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('左配置でパート名編集を開くと、ポータル先のウィンドウに左配置の複合クラスが付く', async () => {
+    render(<ScorePage />);
+    openLayoutTab();
+    fireEvent.click(getPlacementButton('左（縦）'));
+    // 弦楽四重奏に切り替えてパート名編集（--names モード）を開く
+    fireEvent.click(screen.getByRole('tab', { name: '楽譜設定' }));
+    fireEvent.click(screen.getByRole('button', { name: '弦楽四重奏' }));
+    fireEvent.click(screen.getByRole('button', { name: 'パート名編集' }));
+    const dialog = await screen.findByRole('dialog', { name: 'パート名編集' });
+    // 複合クラスが両方付いていること（CSS 側の幅補正 .--toolbar-left.--names が効く前提）
+    expect(dialog.className).toContain('instrumentation-editor-window--toolbar-left');
+    expect(dialog.className).toContain('instrumentation-editor-window--names');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

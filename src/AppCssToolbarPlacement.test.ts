@@ -85,6 +85,11 @@ describe('App.css: 左配置でのポップアップの収まり（round1）', (
     expect(rule).toMatch(/overflow-y\s*:\s*auto/);
   });
 
+  it('文脈バー（開発UI）は左配置ではツールバーの右へ逃がす（round2 P2）', () => {
+    const rule = ruleBlock(loadAppCss(), '.app-root.toolbar-left .ui-context-bar-float');
+    expect(rule).toMatch(/left\s*:\s*calc\(var\(--toolbar-w, 260px\) \+ 8px\)/);
+  });
+
   it('パート名編集（--names）の幅も左配置ではツールバー幅ぶん狭める（P2）', () => {
     const rule = ruleBlock(loadAppCss(), '.instrumentation-editor-window--toolbar-left.instrumentation-editor-window--names');
     expect(rule).toMatch(/calc\(100vw - var\(--toolbar-w, 0px\) - 36px\)/);
