@@ -11,7 +11,9 @@
 // SingleStaff もこのパターンに合わせ、PianoStaff の単一パート版として
 // PianoSystemCanvas を流用する（props の受け渡し方は PianoStaff.tsx に合わせている）。
 // 詳細な調査・移行方針は docs/phase2-staffcanvas-retirement-feasibility.md を参照。
+import type { ReactNode } from 'react';
 import PianoSystemCanvas, { type PartConfig } from './PianoSystemCanvas';
+import SystemSelectFrame from './SystemSelectFrame';
 import type { Tool } from './Palette';
 import type { MeasureData, TimeSignature, CustomSymbolDef, NoteEvent, TimeSignatureStyle } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
@@ -84,6 +86,15 @@ type Props = {
   onEmptyFillerClick?: (index: number) => void;
   // 印刷プレビュー中は true。PianoSystemCanvas 側のコメント参照（Issue #88）。
   isPrintPreview?: boolean;
+  /**
+   * 段の選択（左右端クリック）まわり（Issue #482）。値は ScorePage が持ち、
+   * ここでは共通の段ラッパー（SystemSelectFrame）へそのまま中継するだけ。
+   */
+  selectedSystemStart?: number | null;
+  onSystemSelect?: (startMeasure: number, side: 'left' | 'right') => void;
+  renderSystemPanel?: (startMeasure: number) => ReactNode;
+  /** このページの1段目が譜面全体で何段目か（0始まり）。段の読み上げ名「段N」に使う */
+  systemNumberOffset?: number;
 };
 
 export default function SingleStaff({
@@ -117,6 +128,10 @@ export default function SingleStaff({
   emptyFillerRanges,
   onEmptyFillerClick,
   isPrintPreview = false,
+  selectedSystemStart = null,
+  onSystemSelect,
+  renderSystemPanel,
+  systemNumberOffset = 0,
 }: Props) {
   const scoreData = data ?? [];
   const handleChange = onChange ?? (() => {});
@@ -136,10 +151,15 @@ export default function SingleStaff({
         const gapOverride = systemGapOverridesPx?.[i] ?? 0;
         return (
           // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
-          <div
+          <SystemSelectFrame
             key={i}
             className={printVisibleSystems != null && i >= printVisibleSystems ? 'print-hidden-system' : undefined}
             style={gapOverride !== 0 ? { marginTop: gapOverride } : undefined}
+            startMeasure={systemRanges?.[i]?.start}
+            systemNumber={systemNumberOffset + i + 1}
+            selectedSystemStart={selectedSystemStart}
+            onSelect={onSystemSelect}
+            renderPanel={renderSystemPanel}
           >
             <PianoSystemCanvas
               measuresPerSystem={systemRanges?.[i]?.count ?? measuresPerSystem}
@@ -170,7 +190,7 @@ export default function SingleStaff({
               isPrintPreview={isPrintPreview}
               partSpacingOffsetPx={partSpacingOffsetPx}
             />
-          </div>
+          </SystemSelectFrame>
         );
       })}
       {emptyFillerRanges?.map((range, i) => (
