@@ -1,4 +1,6 @@
+import type { ReactNode } from 'react';
 import PianoSystemCanvas, { type PartConfig } from './PianoSystemCanvas';
+import SystemSelectFrame from './SystemSelectFrame';
 import type { Tool } from './Palette';
 import type { InstrumentPartDefinition, MeasureData, ScoreNotationMode, TimeSignature, CustomSymbolDef, TimeSignatureStyle } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
@@ -80,6 +82,15 @@ type Props = {
   onEmptyFillerClick?: (index: number) => void;
   // 印刷プレビュー中は true。PianoSystemCanvas 側のコメント参照（Issue #88）。
   isPrintPreview?: boolean;
+  /**
+   * 段の選択（左右端クリック）まわり（Issue #482）。値は ScorePage が持ち、
+   * ここでは共通の段ラッパー（SystemSelectFrame）へそのまま中継するだけ。
+   */
+  selectedSystemStart?: number | null;
+  onSystemSelect?: (startMeasure: number, side: 'left' | 'right') => void;
+  renderSystemPanel?: (startMeasure: number) => ReactNode;
+  /** このページの1段目が譜面全体で何段目か（0始まり）。段の読み上げ名「段N」に使う */
+  systemNumberOffset?: number;
   // 小節選択（Issue #110の挿入・削除等で使う）。PianoStaff/SingleStaffと同じ仕組みを
   // 編成譜でも使えるよう中継する（絶対小節インデックスは startMeasureIndex 起点で共通）。
   selectedMeasures?: { start: number; end: number };
@@ -133,6 +144,10 @@ export default function EnsembleStaff({
   onMeasureRangeSelect,
   onBeatRangeSelect,
   isFirstPage = false,
+  selectedSystemStart = null,
+  onSystemSelect,
+  renderSystemPanel,
+  systemNumberOffset = 0,
 }: Props) {
   // 記譜音表示は「実音データを見た目だけシフトする」モード。
   // 入力された音符は逆方向にシフトして実音として保存することで、
@@ -218,10 +233,15 @@ export default function EnsembleStaff({
         const gapOverride = systemGapOverridesPx?.[systemIndex] ?? 0;
         return (
           // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
-          <div
+          <SystemSelectFrame
             key={systemIndex}
             className={printVisibleSystems != null && systemIndex >= printVisibleSystems ? 'print-hidden-system' : undefined}
             style={gapOverride !== 0 ? { marginTop: gapOverride } : undefined}
+            startMeasure={systemRanges?.[systemIndex]?.start}
+            systemNumber={systemNumberOffset + systemIndex + 1}
+            selectedSystemStart={selectedSystemStart}
+            onSelect={onSystemSelect}
+            renderPanel={renderSystemPanel}
           >
           <PianoSystemCanvas
             measuresPerSystem={systemRanges?.[systemIndex]?.count ?? measuresPerSystem}
@@ -267,7 +287,7 @@ export default function EnsembleStaff({
             onMeasureRangeSelect={onMeasureRangeSelect}
             onBeatRangeSelect={onBeatRangeSelect}
           />
-          </div>
+          </SystemSelectFrame>
         );
       })}
       {emptyFillerRanges?.map((range, i) => (
