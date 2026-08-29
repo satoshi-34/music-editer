@@ -488,3 +488,40 @@ Issue #195（浄書の既定値の棚卸し）を受けて、運用者がプラ�
 ペインでの will-change 無効化→改善の実測で確認）。削除により倍率変更のたびに最終倍率で
 再ラスタライズされ、常にベクター品質で描かれる。transform: scale 方式自体（座標系 #13）は
 変更していないため、クリック座標変換への影響は無い。
+
+## 追補: 段ごとの調整UIを「段の選択+フローティングパネル」へ移設（2026-08-29・Issue #482）
+
+### 問題
+
+段ごとの小節数・間隔の調整UIは、ページ内の各段の直後に置いた**常設のコントロール行**（`段N ◀ N小節 ▶  間隔 － ±Npx ＋`）だった。これは実装としては素直だが、「譜面（紙面）の上に編集用の行がずっと居座っているのは不自然」というフィードバックが出た（#450 の運用者裁定 2026-08-29）。裁定では、操作の入口を**譜面上の直接操作**へ寄せ、段下の行は廃止する方針が確定した。本追補はその実装段階1（クリックでの選択+パネル化。ドラッグは段階2でスコープ外）。
+
+### 修正設計
+
+- **当たり判定は五線の左右端だけ**に置く。音部記号の手前／終止線の外からページ余白側へはみ出す位置（`left: -32px` / `right: -32px`・幅34px）に透明なボタンを重ねる。音符が来ない場所なので、譜面への入力クリックと物理的に衝突しない。`.print-page` は `overflow: hidden` だが、はみ出す先は紙の内側の余白なので隠れない。
+- **段のラッパーを共通コンポーネント化**した（`src/components/SystemSelectFrame.tsx`）。これまで SingleStaff / PianoStaff / QuartetStaff / EnsembleStaff が各自で持っていた「`print-hidden-system` の付与 + 段ごとの間隔 `marginTop`」のラッパー div をここへ集約し、当たり判定・選択枠・パネルの差し込み口も同じ場所に置く（同じ見た目のラッパーを4か所へ複製しないため。#280 の「同じロジックの2枚目」問題への対処）。
+- **パネル**（`src/components/SystemLayoutPanel.tsx`）は選択中の段にだけ描く。中身は旧コントロール行と同じ2項目で、値の増減は**既存の `adjustSystemMeasureOverride` / `adjustSystemRowGapOverride` をそのまま呼ぶ**。直接入力も「差分」に直してから同じハンドラへ通すので、上限・下限の判定と Undo の積み方はボタン操作と完全に同一（＝保存・Undo は移設前と変わらない）。
+- **数値の直接入力**は、拍子・調号などの「途中変更オーバーレイ」と同じ型にそろえた（autoFocus・開いた時点で全選択・Enter で確定・Esc で取消・フォーカスを外しても確定）。Enter/Esc のあとに走る blur で二重に適用されないよう、確定済みフラグ（`settledRef`）で blur 側を無視する（増減が「差分」適用のため、二重に走ると倍動く）。
+- **選択状態は ScorePage の画面 state**（`selectedSystem = { start, side }`）。譜面データではないので保存・Undo の対象にしない。解除は「Esc / Enter」「譜面の他の場所を押す（document の mousedown）」で、パネルと当たり判定には `data-system-select-keep="true"` を付けて解除対象から外す。段割りが変わって選択中の段が消えたときも自動で解除する。
+- **パネルの位置は段の下端の外側**（クリックされた端の側）。当初は段の上に出していたが、ブラウザ実測で**1段目のパネルが画面上端の固定ツールバーに潜り込んで読めない**ことが分かったため下側へ変更した。
+- 画面専用。`@media print` で当たり判定・パネル・選択枠を消す（旧コントロール行と同じ扱い）。印刷プレビュー中は操作できるよう隠さず、触っていない間だけ半透明にする（これも旧行の扱いを引き継ぎ）。
+
+### 影響範囲
+
+- 追加: `src/components/SystemSelectFrame.tsx`（段の共通ラッパー）、`src/components/SystemLayoutPanel.tsx`（パネル）。
+- `src/components/ScorePage.tsx`: 段下コントロール行のJSXを削除。選択 state・解除の配線・`renderSystemPanel` を追加し、4つの Staff コンポーネントへ中継。
+- `src/components/SingleStaff.tsx` / `PianoStaff.tsx` / `QuartetStaff.tsx` / `EnsembleStaff.tsx`: 段のラッパー div を `SystemSelectFrame` へ差し替え、選択まわりの props を中継。
+- `src/App.css`: `.system-measure-override-*` 系を削除し、`.system-select-frame` / `.system-select-edge` / `.system-layout-panel` 系を追加（`@media print` と `.print-preview` の対応するルールも差し替え）。
+- テスト追加: `src/components/ScorePageSystemSelectPanel.test.tsx`（実マウントで選択→パネル→値変更→反映→Undo→解除）、`src/AppCssSystemSelectPrint.test.ts`（印刷で出ないこと・旧クラスが残っていないこと）。
+
+### 検証結果
+
+- `npx tsc --noEmit`: エラーなし。`npm run lint:ratchet -- --check`: 基準値ちょうど（324件）。`npm run build`: 成功。
+- vitest（変更に関係するファイル）: 新規5テスト＋既存の Staff 系・ScorePage レイアウト系 84テスト すべて緑。
+- ブラウザ実測（dev サーバー・単旋律譜）:
+  - 段の左端／右端クリックで薄い枠が付き、クリックした側の下にパネルが出る。
+  - 「間隔 ＋」2回で `+8px`、段のラッパーの `margin-top: 8px` が実際に反映される。
+  - 数値クリック→直接入力→Enter で確定し、パネルが閉じる。
+  - 譜面の他の場所をクリックすると選択が解け、譜面上に何も残らない。
+  - 段下のコントロール行は1つも描画されない（`.system-measure-override-controls` は0件）。
+  - コンソールエラーなし。
+  - 注意: 共有 dev サーバーは worktree 配下のファイルを監視しておらず、CSSの再取得が効かない。パネル位置の変更（上→下）は、同じ内容のルールをページへ注入して実測した。

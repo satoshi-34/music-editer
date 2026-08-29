@@ -3,7 +3,9 @@
 // 各システムを PianoSystemCanvas（1SVGに右手+左手）で描画する
 
 import type { Tool } from './Palette';
+import type { ReactNode } from 'react';
 import PianoSystemCanvas from './PianoSystemCanvas';
+import SystemSelectFrame from './SystemSelectFrame';
 import type { MeasureData, TimeSignature, CustomSymbolDef, TimeSignatureStyle } from '../types/storage';
 import type { NoteEvent } from '../types/storage';
 import { InstrumentType } from '../audio/SoundSource';
@@ -79,6 +81,15 @@ type Props = {
   onEmptyFillerClick?: (index: number) => void;
   // 印刷プレビュー中は true。PianoSystemCanvas 側のコメント参照（Issue #88）。
   isPrintPreview?: boolean;
+  /**
+   * 段の選択（左右端クリック）まわり（Issue #482）。値は ScorePage が持ち、
+   * ここでは共通の段ラッパー（SystemSelectFrame）へそのまま中継するだけ。
+   */
+  selectedSystemStart?: number | null;
+  onSystemSelect?: (startMeasure: number, side: 'left' | 'right') => void;
+  renderSystemPanel?: (startMeasure: number) => ReactNode;
+  /** このページの1段目が譜面全体で何段目か（0始まり）。段の読み上げ名「段N」に使う */
+  systemNumberOffset?: number;
 };
 
 export default function PianoStaff({
@@ -117,16 +128,28 @@ export default function PianoStaff({
   emptyFillerRanges,
   onEmptyFillerClick,
   isPrintPreview = false,
+  selectedSystemStart = null,
+  onSystemSelect,
+  renderSystemPanel,
+  systemNumberOffset = 0,
 }: Props) {
   return (
     // system-stack: ページ内の段を縦方向へ均等配置するためのクラス（App.css 参照）
     <div className="system-stack">
-      {Array.from({ length: systemRanges?.length ?? systems }, (_, i) => (
+      {Array.from({ length: systemRanges?.length ?? systems }, (_, i) => {
+        // 段ごとの間隔の個別オフセット。0のときは style を付けず従来どおりの見た目にする。
+        const gapOverride = systemGapOverridesPx?.[i] ?? 0;
+        return (
         // print-hidden-system: 内容のない末尾の段は印刷から除外する（画面では表示）
-        <div
+        <SystemSelectFrame
           key={i}
           className={printVisibleSystems != null && i >= printVisibleSystems ? 'print-hidden-system' : undefined}
-          style={(systemGapOverridesPx?.[i] ?? 0) !== 0 ? { marginTop: systemGapOverridesPx![i] } : undefined}
+          style={gapOverride !== 0 ? { marginTop: gapOverride } : undefined}
+          startMeasure={systemRanges?.[i]?.start}
+          systemNumber={systemNumberOffset + i + 1}
+          selectedSystemStart={selectedSystemStart}
+          onSelect={onSystemSelect}
+          renderPanel={renderSystemPanel}
         >
         <PianoSystemCanvas
           measuresPerSystem={systemRanges?.[i]?.count ?? measuresPerSystem}
@@ -162,8 +185,9 @@ export default function PianoStaff({
           isPrintPreview={isPrintPreview}
           partSpacingOffsetPx={partSpacingOffsetPx}
         />
-        </div>
-      ))}
+        </SystemSelectFrame>
+        );
+      })}
       {emptyFillerRanges?.map((range, i) => (
         // empty-stave-filler: 五線紙のような「空の段」プレースホルダー（Issue #41）。
         // SingleStaff.tsx 側のコメント参照。

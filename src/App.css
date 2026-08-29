@@ -1705,41 +1705,74 @@ button.ghost.active:hover:not(:disabled) {
   outline-offset: 2px;
 }
 
-/* 段ごとの小節数を個別調整するコントロール（◀ N小節 ▶）。
-   ページ内の各段につき1行、score-area の下に控えめに並べる。画面専用で印刷には出さない
-   （@media print 側で display:none にする）。 */
-.system-measure-override-controls {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 4px 0;
-  align-items: center;
+/* 段の選択（Issue #482 = #450 の段階1）
+   ------------------------------------------------------------------
+   段（システム）1つぶんの外枠。左右端の当たり判定とフローティングパネルを
+   絶対配置するための基準になる（描画は SystemSelectFrame.tsx）。
+   .score-area .system-stack > * のスロット高の指定は「直下の子」に効くので、
+   ラッパーの中身を変えてもページ内の段配置は従来どおり。 */
+.system-select-frame {
+  position: relative;
 }
-.system-measure-override-row {
+/* 選択中の段は「薄い枠」だけで示す（譜面の見た目を邪魔しない控えめな表示）。
+   outline は要素の外側に描かれるためレイアウトを1pxもずらさない（border だと段がずれる）。 */
+.system-select-frame--selected {
+  outline: 1px solid #93c5fd;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* 段を選ぶための「掴みしろ」。五線の左右端（音部記号の手前／終止線の外）から
+   ページ余白側へはみ出す位置に置く。譜面の内側にほとんど入らないので、
+   音符・記号のクリックを奪わない（.print-page は overflow:hidden だが、
+   はみ出す先は紙の内側の余白なので隠れない）。 */
+.system-select-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  z-index: 3;
+}
+.system-select-edge--left { left: -32px; }
+.system-select-edge--right { right: -32px; }
+/* 掴みしろは普段は完全に透明。カーソルを乗せたときだけ薄く光らせて場所を知らせる */
+.system-select-edge:hover,
+.system-select-edge:focus-visible {
+  background: rgba(147, 197, 253, 0.25);
+  border-radius: 4px;
+}
+
+/* 選択中の段の横に出るレイアウト調整パネル（SystemLayoutPanel.tsx）。
+   段の下端の外側（段と段のすき間）へ、クリックされた端の側に寄せて出す。
+   五線の中身（音符）を隠さず、上に出す案のように画面上端の固定ツールバーへ
+   潜り込むこともない（ブラウザ実測で、上に出すと1段目のパネルが隠れた）。
+   拍子・調号などの「途中変更オーバーレイ」と同じ見た目にそろえている。 */
+.system-layout-panel {
+  position: absolute;
+  top: 100%;
+  transform: translateY(-2px);
+  z-index: 30;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  padding: 3px 6px;
   font-size: 11px;
-  color: #9ca3af;
+  color: #374151;
+  background: #fff;
+  border: 1.5px solid #93c5fd;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
 }
-.system-measure-override-label {
-  width: 36px;
-  text-align: right;
+.system-layout-panel--left { left: -24px; }
+.system-layout-panel--right { right: -24px; }
+.system-layout-panel-label {
+  color: #6b7280;
 }
-.system-measure-override-count {
-  width: 44px;
-  text-align: center;
-}
-/* 段ごとの間隔（上の段との距離）を個別調整する「間隔 － Npx ＋」のラベル。
-   小節数側の .system-measure-override-label と見た目を揃えつつ、
-   同じ行に並べるので少し幅を詰めている。 */
-.system-row-gap-override-label {
-  width: 28px;
-  text-align: right;
-  margin-left: 4px;
-}
-.system-measure-override-button {
+.system-layout-panel-button {
   width: 20px;
   height: 20px;
   line-height: 1;
@@ -1751,14 +1784,36 @@ button.ghost.active:hover:not(:disabled) {
   border-radius: 4px;
   cursor: pointer;
 }
-.system-measure-override-button:hover:not(:disabled) {
+.system-layout-panel-button:hover:not(:disabled) {
   color: #374151;
   border-color: #9ca3af;
   background: #f9fafb;
 }
-.system-measure-override-button:disabled {
+.system-layout-panel-button:disabled {
   opacity: 0.4;
   cursor: default;
+}
+/* 数値そのものがボタン: クリックすると直接入力の欄へ変わる（下線で「押せる」ことを示す） */
+.system-layout-panel-value {
+  min-width: 44px;
+  padding: 1px 2px;
+  font-size: 11px;
+  color: #374151;
+  text-align: center;
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed #9ca3af;
+  cursor: text;
+}
+.system-layout-panel-value:hover {
+  background: #f3f4f6;
+}
+.system-layout-panel-input {
+  width: 52px;
+  padding: 1px 2px;
+  font-size: 11px;
+  border: 1px solid #93c5fd;
+  border-radius: 3px;
 }
 
 .layout-overflow-alert {
@@ -2024,8 +2079,11 @@ button.ghost.active:hover:not(:disabled) {
   .ui-context-bar-float { display: none !important; }
   /* 空の段（Issue #41）は画面専用の書き始めの誘いであり、演奏用の印刷譜には出さない。 */
   .empty-stave-filler { display: none !important; }
-  /* 段ごとの小節数調整コントロール（◀ N小節 ▶）も編集用UIなので印刷には出さない。 */
-  .system-measure-override-controls { display: none !important; }
+  /* 段の選択の当たり判定とレイアウト調整パネル（Issue #482）も編集用UIなので紙には出さない。
+     選択中の薄い枠も同様（紙面に編集中の印を残さない）。 */
+  .system-select-edge { display: none !important; }
+  .system-layout-panel { display: none !important; }
+  .system-select-frame--selected { outline: none !important; }
   /* 拍が埋まっていない小節の残り拍に「入力先が分かるよう」表示するパディング休符
      （PianoSystemCanvas がデータには保存せず見た目だけ描画する薄いグレーの休符）。
      以前はここで display:none にして印刷から消していたが、紙面の後半が
@@ -2191,7 +2249,7 @@ button.ghost.active:hover:not(:disabled) {
    重複定義にとどめた。詳細は .claude/specs/print-preview/design.md 参照）。
    ただし以下は @media print と異なり、プレビュー中も操作できるよう「隠さない」:
    - .toolbar（ツールバー全体。レイアウト調整コントロールがここにあるため）
-   - .system-measure-override-controls（段ごとの小節数 ◀▶）
+   - 段の選択の当たり判定・レイアウト調整パネル（Issue #482。段の左右端クリック）
    - 段ごとの間隔調整、ページ余白・段の間隔・音符サイズのスライダー類（ツールバー内） */
 .print-preview .layout-overflow-alert { display: none !important; }
 .print-preview .add-measures-ghost-button { display: none !important; }
@@ -2216,15 +2274,15 @@ button.ghost.active:hover:not(:disabled) {
 /* パディング休符（.vf-padding-rest）は @media print 側と同じ理由（Issue #59）で
    ここでは隠さない。下の「svg path/line を印刷インク色に戻す」ルールが他の
    音符と同様に効いて、画面の薄いグレーとは異なり黒で表示される。 */
-/* システム調整コントロールは隠さず、紙面の邪魔をしにくい半透明フローティング行として見せる */
-.print-preview .system-measure-override-controls {
+/* 段のレイアウト調整パネルは、プレビュー中も操作できるよう隠さない。
+   ただし紙面の見え方の邪魔をしないよう、触っていない間は半透明にする
+   （旧・段下のコントロール行に対する扱いをそのまま引き継いだもの）。 */
+.print-preview .system-layout-panel {
   opacity: 0.55;
   transition: opacity 0.15s ease;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 6px;
 }
-.print-preview .system-measure-override-controls:hover,
-.print-preview .system-measure-override-controls:focus-within {
+.print-preview .system-layout-panel:hover,
+.print-preview .system-layout-panel:focus-within {
   opacity: 1;
 }
 .print-preview .paper-rail { background: #e5e7eb; }
