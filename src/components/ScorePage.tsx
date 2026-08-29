@@ -2617,7 +2617,13 @@ export default function ScorePage() {
     // パネル幅は CSS の width: min(380px, 100vw - 32px) と同じ計算にそろえる
     const panelWidth = Math.min(380, window.innerWidth - 32);
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - panelWidth - 8));
-    setWorkListPos({ top: rect.bottom + 6, left });
+    // 縦も画面内へクランプする（リセットメニューと同じ理由・#483 round6 P1）。
+    // 左（縦）配置ではツールバーが縦スクロールでき、ボタンが画面下部に来た状態で
+    // 開けるため、常に「ボタンの下」だとパネルが画面外へはみ出して操作できない
+    setWorkListPos({
+      top: clampDropdownMenuTop({ anchorBottom: rect.bottom, viewportHeight: window.innerHeight }),
+      left,
+    });
   }, []);
 
   const handleToggleWorkList = useCallback(() => {

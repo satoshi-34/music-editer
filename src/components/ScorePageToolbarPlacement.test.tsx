@@ -233,6 +233,21 @@ describe('ツールバーの配置切り替え', () => {
     expect((menu as HTMLElement).style.top).toBe('340px');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  // Codex round6 P1: 作品一覧パネルもリセットメニューと同じ縦クランプが効く
+  it('作品一覧パネルの top もクランプされる（画面下部のボタンから開いても収まる）', async () => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 768 });
+    render(<ScorePage />);
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    const toggle = screen.getByTestId('work-list-toggle');
+    toggle.getBoundingClientRect = () => ({
+      top: 460, bottom: 480, left: 10, right: 100, width: 90, height: 20, x: 10, y: 460, toJSON: () => ({}),
+    }) as DOMRect;
+    fireEvent.click(toggle);
+    const panel = await screen.findByRole('dialog', { name: '作品一覧' });
+    // clampDropdownMenuTop({anchorBottom:480, viewportHeight:768}) = 340（クランプを外すと 486）
+    expect((panel as HTMLElement).style.top).toBe('340px');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('左配置でパート名編集を開くと、ポータル先のウィンドウに左配置の複合クラスが付く', async () => {
     render(<ScorePage />);
     openLayoutTab();

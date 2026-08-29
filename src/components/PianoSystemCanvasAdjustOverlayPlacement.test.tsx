@@ -242,10 +242,12 @@ describe('左（縦）配置ツールバーとの共存（Issue #483）', () => 
     }) as DOMRect;
     document.body.appendChild(toolbar);
     const host = document.createElement('div');
+    // コンテナはツールバー（右端260）と重なる位置から始まる。左端の境界
+    // （＝ツールバーの右端より左へ置かない）も検証できるようにする（round6 P2）
     host.getBoundingClientRect = () => ({
-      left: 300, top: 0, right: 900, bottom: 600, width: 600, height: 600, x: 300, y: 0, toJSON: () => ({}),
+      left: 100, top: 0, right: 900, bottom: 600, width: 800, height: 600, x: 100, y: 0, toJSON: () => ({}),
     }) as DOMRect;
-    Object.defineProperty(host, 'offsetWidth', { value: 600, configurable: true });
+    Object.defineProperty(host, 'offsetWidth', { value: 800, configurable: true });
     document.body.appendChild(host);
     try {
       // 記号は画面下寄り（top=500）。左配置なら「記号の上」に置ける。
@@ -263,6 +265,9 @@ describe('左（縦）配置ツールバーとの共存（Issue #483）', () => 
       const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
       expect(overlay.dataset.placed).toBe('true');
       expect(parseFloat(overlay.style.top)).toBe(500 - SYMBOL_OVERLAY_GAP - SYMBOL_OVERLAY_FALLBACK_HEIGHT);
+      // 左端の境界: ツールバーの右端（画面座標260 → コンテナ座標 260-100=160）より
+      // 左へは置かない。toolbarRight の扱いを外すと、アンカー中央寄せで 160 未満になり検出する
+      expect(parseFloat(overlay.style.left)).toBeGreaterThanOrEqual(160);
     } finally {
       toolbar.remove();
       host.remove();
