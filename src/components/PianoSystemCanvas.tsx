@@ -149,6 +149,7 @@ import {
 import SymbolAdjustOverlay from './SymbolAdjustOverlay';
 import type { OverlayRectLike } from '../utils/symbolOverlayPlacementUtils';
 import { applyTextElementToEvent, textElementLabel, textElementPlaceholder, type TextElementKind } from '../utils/textElementUtils';
+import { TEMPO_MARKING_PRESETS, TEMPO_MARKING_DATALIST_ID } from '../utils/tempoMarkingPresets';
 import { drawLyricsEntry } from '../utils/lyricsRenderUtils';
 import {
   ENGRAVING_TEXT_UNITS,
@@ -8930,7 +8931,18 @@ export default function PianoSystemCanvas({
         >
           <span style={{ fontSize: 10, color: '#6b7280', fontFamily: 'sans-serif' }}>
             {textElementLabel(textEditState.kind)}
+            {/* 候補があることに気づいてもらうための一言（datalist は入力欄を触るまで見えないため） */}
+            {textEditState.kind === 'tempoMarking' && '（候補から選べます）'}
           </span>
+          {/* 定番の速度標語の候補。datalist なので「候補は補助・自由入力は従来どおり」を保てる
+              （select と違って入力欄そのものは1つのままなので、確定・キャンセルの経路も変わらない） */}
+          {textEditState.kind === 'tempoMarking' && (
+            <datalist id={TEMPO_MARKING_DATALIST_ID}>
+              {TEMPO_MARKING_PRESETS.map((preset) => (
+                <option key={preset} value={preset} />
+              ))}
+            </datalist>
+          )}
           <input
             // 編集対象（種別・パート・小節・声部・音符）が変わったら別の入力欄として作り直す。
             // defaultValue は「最初に表示したとき」しか反映されない（非制御コンポーネント）ため、
@@ -8944,6 +8956,8 @@ export default function PianoSystemCanvas({
             autoFocus
             defaultValue={textEditState.currentValue}
             placeholder={textElementPlaceholder(textEditState.kind)}
+            // テンポ表記のときだけ定番の速度標語を候補に出す（他の種別に候補は無いので付けない）
+            list={textEditState.kind === 'tempoMarking' ? TEMPO_MARKING_DATALIST_ID : undefined}
             style={{
               border: 'none',
               outline: 'none',

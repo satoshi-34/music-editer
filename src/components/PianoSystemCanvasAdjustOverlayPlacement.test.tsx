@@ -230,6 +230,51 @@ describe('記号調整オーバーレイの表示位置（Issue #230）', () => 
   });
 });
 
+// #483 Codex round5 P1: 左（縦）配置のツールバーでは bottom が画面下端になるため、
+// 「可視範囲の上端＝ツールバーの下端」の前提だと範囲が潰れてオーバーレイが画面外へ出る
+describe('左（縦）配置ツールバーとの共存（Issue #483）', () => {
+  it('toolbar--left のときは上端 0・左端はツールバーの右端として配置される', () => {
+    const toolbar = document.createElement('header');
+    toolbar.className = 'toolbar toolbar--left';
+    // 左の縦帯: 幅260px・画面の上から下まで（bottom=600 が画面下端）
+    toolbar.getBoundingClientRect = () => ({
+      left: 0, top: 0, right: 260, bottom: 600, width: 260, height: 600, x: 0, y: 0, toJSON: () => ({}),
+    }) as DOMRect;
+    document.body.appendChild(toolbar);
+    const host = document.createElement('div');
+    // コンテナはツールバー（右端260）と重なる位置から始まる。左端の境界
+    // （＝ツールバーの右端より左へ置かない）も検証できるようにする（round6 P2）
+    host.getBoundingClientRect = () => ({
+      left: 100, top: 0, right: 900, bottom: 600, width: 800, height: 600, x: 100, y: 0, toJSON: () => ({}),
+    }) as DOMRect;
+    Object.defineProperty(host, 'offsetWidth', { value: 800, configurable: true });
+    document.body.appendChild(host);
+    try {
+      // 記号は画面下寄り（top=500）。左配置なら「記号の上」に置ける。
+      // 旧実装（上端＝ツールバー bottom=600）では aboveTop(374) < 600 で上に置けず、
+      // below（516）へ落ちるため、この期待値だけが検出する
+      const { container } = render(
+        <SymbolAdjustOverlay
+          anchor={{ left: 50, top: 500, width: 20, height: 10 }}
+          containerRef={{ current: host }}
+          minWidth={100}
+        >
+          <span>x</span>
+        </SymbolAdjustOverlay>
+      );
+      const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
+      expect(overlay.dataset.placed).toBe('true');
+      expect(parseFloat(overlay.style.top)).toBe(500 - SYMBOL_OVERLAY_GAP - SYMBOL_OVERLAY_FALLBACK_HEIGHT);
+      // 左端の境界: ツールバーの右端（画面座標260 → コンテナ座標 260-100=160）より
+      // 左へは置かない。toolbarRight の扱いを外すと、アンカー中央寄せで 160 未満になり検出する
+      expect(parseFloat(overlay.style.left)).toBeGreaterThanOrEqual(160);
+    } finally {
+      toolbar.remove();
+      host.remove();
+    }
+  });
+});
+
 describe('計測できない場合の暫定位置（Issue #392 防御）', () => {
   it('コンテナ ref が無いままでも、暫定位置は画面内（コンテナ左上の内側）へクランプされる', () => {
     // 譜面左端・上端の記号では概算位置が負座標になり、そのまま描くと入力欄が

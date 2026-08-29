@@ -17,6 +17,7 @@ import { convertPdfToMxl, getOmrApiUrl, OmrConvertError } from '../utils/omrApi'
 import SymbolEditor from './SymbolEditor';
 import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
+import SystemLayoutPanel from './SystemLayoutPanel';
 import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
@@ -204,6 +205,15 @@ import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrin
 import { getPartExtractionOptions, isPartExtractionEditable, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
 import { computeFitZoom, readPageAreaAvailableWidth, VIEW_ZOOM_MIN, VIEW_ZOOM_MAX } from '../utils/viewZoomUtils';
+import {
+  TOOLBAR_PLACEMENT_OPTIONS,
+  clampDropdownMenuTop,
+  loadStoredToolbarPlacement,
+  resolveEffectiveToolbarPlacement,
+  resolveToolbarWidth,
+  saveToolbarPlacement,
+  type ToolbarPlacement,
+} from '../utils/toolbarPlacement';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
 type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
@@ -516,6 +526,34 @@ export default function ScorePage() {
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState<boolean>(
     () => localStorage.getItem(TOOLBAR_COLLAPSED_KEY) === '1'
   );
+  // ツールバーの配置（Issue #483）。`top` が従来の画面上部の横並び、`left` が画面左の縦並び。
+  // Finale などの楽譜ソフトは入力パレットを左右へ縦置きできるため、その持ち方に慣れた人が
+  // 同じ操作感で使えるようにする。既定は `top` のままで、選ばない限り見た目は変わらない。
+  const [toolbarPlacement, setToolbarPlacement] = useState<ToolbarPlacement>(
+    () => loadStoredToolbarPlacement()
+  );
+  // 左配置を許すかどうかの判定に使うウィンドウ幅。狭い画面では左配置を上配置へ戻すため、
+  // 幅の変化を state で追う（CSS の @media だけで戻すと、幅フィットの計算＝JS 側と食い違う）。
+  const [viewportWidth, setViewportWidth] = useState<number>(
+    () => (typeof window === 'undefined' ? 0 : window.innerWidth)
+  );
+  // 左配置のときのツールバー幅(px)。高さ（--toolbar-h）と同じく実測して CSS 変数へ流す。
+  const [toolbarWidth, setToolbarWidth] = useState(0);
+  // ウィンドウ幅の変化を追う（左配置を許してよい幅かどうかの判定に使う）。
+  // 上配置しか使っていない人にも動くが、state を更新するのは幅が変わったときだけなので
+  // 余計な再描画にはならない。
+  useEffect(() => {
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+  // 実際に適用する配置。左を選んでいても狭い画面では上へ戻す（選択自体は消さないので、
+  // 画面を広げれば左配置へ戻る）。
+  const effectiveToolbarPlacement = resolveEffectiveToolbarPlacement({
+    placement: toolbarPlacement,
+    viewportWidth,
+  });
+  const isToolbarLeft = effectiveToolbarPlacement === 'left';
   const musicXmlInputRef = useRef<HTMLInputElement | null>(null);
   // PDF楽譜の取り込み（#487）用の隠しファイル入力。変換APIのURLが設定されているときだけ使う
   const pdfInputRef = useRef<HTMLInputElement | null>(null);
@@ -665,6 +703,11 @@ export default function ScorePage() {
   // Ypx を追加する」の一覧）。レイアウトタブの「段の間隔」（全体設定）とは別に、段ごとの
   // ◀▶コントロールの並びで個別に増減できる（.claude/specs/page-layout-controls/design.md 参照）。
   const [systemRowGapOverrides, setSystemRowGapOverrides] = useState<SystemRowGapOverride[]>([]);
+  // いま選択している段（Issue #482）。五線の左右端をクリックすると、その段が選択状態になり
+  // 横にレイアウト調整のフローティングパネルが出る。start は段の先頭小節（段の同定キー）、
+  // side はクリックされた端＝パネルを出す側。null はどの段も選択していない状態。
+  // 譜面データではなく画面の一時状態なので、保存・Undo の対象にはしない。
+  const [selectedSystem, setSelectedSystem] = useState<{ start: number; side: 'left' | 'right' } | null>(null);
 
   // パート譜表示の選択肢と、現在選択中のパート。
   // 単旋律譜・ピアノ大譜表では対象外（getPartExtractionOptions が空配列を返す）。
@@ -2578,7 +2621,13 @@ export default function ScorePage() {
     // パネル幅は CSS の width: min(380px, 100vw - 32px) と同じ計算にそろえる
     const panelWidth = Math.min(380, window.innerWidth - 32);
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - panelWidth - 8));
-    setWorkListPos({ top: rect.bottom + 6, left });
+    // 縦も画面内へクランプする（リセットメニューと同じ理由・#483 round6 P1）。
+    // 左（縦）配置ではツールバーが縦スクロールでき、ボタンが画面下部に来た状態で
+    // 開けるため、常に「ボタンの下」だとパネルが画面外へはみ出して操作できない
+    setWorkListPos({
+      top: clampDropdownMenuTop({ anchorBottom: rect.bottom, viewportHeight: window.innerHeight }),
+      left,
+    });
   }, []);
 
   const handleToggleWorkList = useCallback(() => {
@@ -2788,17 +2837,22 @@ export default function ScorePage() {
   ]);
 
   const [columns, setColumns] = useState(window.innerWidth < 1200 ? 1 : 2);
+  // 列数の判定も「ページを並べられる実効幅」で行う（#483 round3）。
+  // 左（縦）配置ではツールバー幅ぶん狭くなるため、全画面幅のままだと
+  // 1280px 幅で2列のまま右へはみ出す（1280 − 281 ≒ 999px しか無い）。
+  const toolbarOccupiedWidth = isToolbarLeft ? toolbarWidth : 0;
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
+    const compute = () => setColumns((window.innerWidth - toolbarOccupiedWidth) < 1200 ? 1 : 2);
+    // 配置の切り替え・ツールバー幅の実測が入った時点でも即座に判定し直す
+    compute();
     const onResize = () => {
       clearTimeout(timer);
-      timer = setTimeout(() => {
-        setColumns(window.innerWidth < 1200 ? 1 : 2);
-      }, 150);
+      timer = setTimeout(compute, 150);
     };
     window.addEventListener('resize', onResize);
     return () => { window.removeEventListener('resize', onResize); clearTimeout(timer); };
-  }, []);
+  }, [toolbarOccupiedWidth]);
 
   // Finale 風キーボードショートカット: 数字キーで音価を選択する。
   // テキスト入力中（input/textarea にフォーカスがある場合）は無効にする。
@@ -3426,7 +3480,9 @@ export default function ScorePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMeasures, clipboard, sliceClipboard, scoreType, activeLayerPart, activeVoice, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, pushHistory, handleTranspose, isPrintPreview, scoreTimeSignature, getEditablePartEntries]);
 
-  const { spreadRef, scale } = useAutoPageScale(columns, 20);
+  // 自動縮尺にも占有幅を渡す（#483 round3。列数と同じ実効幅で計算しないと
+  // 「2列のまま縮まず、はみ出す」「1列なのに小さすぎる」のズレが出る）
+  const { spreadRef, scale } = useAutoPageScale(columns, 20, toolbarOccupiedWidth);
   // ユーザー設定（常設エリアの「画面表示のズーム」スライダー、0.5〜3.0）。
   // 自動縮尺（useAutoPageScale の scale）に掛け合わせて画面上の表示サイズだけを変える。
   // 印刷は @media print で transform: none !important により解除されるため影響しない。
@@ -3442,14 +3498,20 @@ export default function ScorePage() {
   // （初期値決定のみ。設計判断は .claude/specs/view-zoom/design.md 追補を参照）。
   // 幅の測り先は .paper-rail ではない（Issue #212。レールは横スクロール時に
   // 中身の幅まで広がるため、狭いウィンドウでも「広い」と誤って読めてしまう）。
+  // ツールバーが左（縦）配置のときは、その幅ぶんだけ譜面を並べられる幅が狭くなる（Issue #483）。
+  // 幅の測り先（body）は fixed のツールバーぶんまでは縮まないので、ここで引いてから
+  // フィット倍率を出さないと「ページが収まらないのに100%」になる。
   useEffect(() => {
     if (localStorage.getItem(VIEW_ZOOM_KEY) != null) return;
     const rail = spreadRef.current?.parentElement;
     if (!rail) return;
-    setViewZoom(computeFitZoom(readPageAreaAvailableWidth(rail)));
-    // 初回マウント時に一度だけ適用する
+    const occupiedWidth = isToolbarLeft ? toolbarWidth : 0;
+    setViewZoom(computeFitZoom(Math.max(0, readPageAreaAvailableWidth(rail) - occupiedWidth)));
+    // 初回マウントに加え、配置を切り替えたとき・ツールバー幅の実測が入ったときも計算し直す。
+    // ズーム保存済み（＝ユーザーが自分で決めた倍率）のときは冒頭で return するので、
+    // 配置を変えてもユーザーの設定を勝手に書き換えることはない。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isToolbarLeft, toolbarWidth]);
   // 自動縮尺にユーザーのズーム倍率を掛けた、実際に画面へ適用する縮尺。
   // クリック等の座標系は --scale から読むため、ここで一本化しておけば
   // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
@@ -4254,6 +4316,94 @@ export default function ScorePage() {
     return result;
   }, [effectiveTotalSystems, getPageSystemsCapacity, visiblePlannedRanges]);
 
+  // ===== 段の選択とフローティングパネル（Issue #482 = #450 の段階1） =====
+  // これまで段の下に常設していたコントロール行（段N ◀小節数▶ 間隔−＋）を廃止し、
+  // 「五線の左右端をクリックして段を選ぶ → 段の横にパネルが出る」方式へ移した。
+  // 値の増減そのものは従来の adjustSystemMeasureOverride / adjustSystemRowGapOverride を
+  // そのまま呼ぶので、保存・Undo の挙動は移設前と変わらない（入力装置の置き場所だけの変更）。
+  const isSystemSelectionEnabled = !isPartExtractionActive && !isEditingDisabled;
+  const closeSystemSelection = useCallback(() => setSelectedSystem(null), []);
+  const handleSystemSelect = useCallback((startMeasure: number, side: 'left' | 'right') => {
+    // 同じ端をもう一度押したら閉じる（トグル）。別の段・別の端を押したらそちらへ選択が移る
+    setSelectedSystem((prev) => (
+      prev && prev.start === startMeasure && prev.side === side ? null : { start: startMeasure, side }
+    ));
+  }, []);
+
+  // 選択中は「譜面の他の場所をクリック」「Esc / Enter」で解除する（譜面上に常設物を残さない）。
+  // パネル自身と端の当たり判定（data-system-select-keep）を押したときだけ解除しない。
+  useEffect(() => {
+    if (selectedSystem === null) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      // closest は SVG 要素にも生えているが、テスト用のダミー要素等では無いこともあるので
+      // オプショナル呼び出しにしておく（無ければ「外側を押した」とみなして閉じる）
+      if (target?.closest?.('[data-system-select-keep="true"]')) return;
+      setSelectedSystem(null);
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Enter') {
+        // Enter の既定動作を止める。フォーカスが端ボタンに残ったまま Enter を押すと、
+        // ここで解除した直後にボタンの既定 click が発火して同じ段を再選択してしまう
+        // （Codex round5 P2）。Esc 側は既定動作が無いが、扱いを揃えておく
+        e.preventDefault();
+        setSelectedSystem(null);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedSystem]);
+
+  // 段割りが変わって選択中の段が消えた（その先頭小節で始まる段が無くなった）ときは選択を解く。
+  // 残したままだと、どこにも出ないパネルの選択状態だけが残ってしまう。
+  useEffect(() => {
+    if (selectedSystem === null) return;
+    if (!visiblePlannedRanges.some((range) => range.start === selectedSystem.start)) {
+      setSelectedSystem(null);
+    }
+  }, [selectedSystem, visiblePlannedRanges]);
+
+  // 選択中の段の横に出すパネル。各 Staff コンポーネントは段のラッパー
+  // （SystemSelectFrame）の中でこれを呼ぶだけで、パネルの中身は知らなくてよい。
+  const renderSystemPanel = useCallback((startMeasure: number) => {
+    if (selectedSystem === null || selectedSystem.start !== startMeasure) return null;
+    const systemIndex = visiblePlannedRanges.findIndex((range) => range.start === startMeasure);
+    const range = visiblePlannedRanges[systemIndex];
+    if (!range) return null;
+    const rowGapPx = systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0;
+    return (
+      <SystemLayoutPanel
+        systemLabel={`段${systemIndex + 1}`}
+        side={selectedSystem.side}
+        startMeasure={range.start}
+        measureCount={range.count}
+        // 引き込めるのは「内容のある小節」まで。編集用の空きバッファ小節まで引き込むと
+        // 「最後の音符がある小節が譜面の最後」という終止線の作法が壊れるため。
+        // ただし内容末尾より後ろの編集バッファ段（＋小節を追加で生まれた段）では
+        // この残数が現在の小節数を下回る。上限が現在値より小さいと、値を変えずに
+        // 確定しただけでクランプが縮めてしまうため、最低でも現在値を上限にする（Codex round2 P2）
+        maxMeasureCount={Math.max(1, contentMeasureCount - range.start, range.count)}
+        canDecreaseMeasure={range.count > 1}
+        canIncreaseMeasure={range.start + range.count < contentMeasureCount}
+        onMeasureDelta={(delta) => adjustSystemMeasureOverride(range, delta)}
+        gapPx={rowGapPx}
+        gapMinPx={SYSTEM_ROW_GAP_MIN_PX}
+        gapMaxPx={SYSTEM_ROW_GAP_MAX_PX}
+        gapStepPx={SYSTEM_ROW_GAP_OVERRIDE_STEP_PX}
+        onGapDelta={(delta) => adjustSystemRowGapOverride(range.start, delta)}
+        onClose={closeSystemSelection}
+        onNotice={notifyScoreEdit}
+      />
+    );
+  }, [
+    selectedSystem, visiblePlannedRanges, systemRowGapOverrides, contentMeasureCount,
+    adjustSystemMeasureOverride, adjustSystemRowGapOverride, closeSystemSelection, notifyScoreEdit,
+  ]);
+
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
   // totalSystems と measuresPerSystem の宣言より後に置く必要がある
   const buildCurrentScoreData = useCallback((): import('../types/storage').SavedScoreData => {
@@ -4643,6 +4793,17 @@ export default function ScorePage() {
         collapsed: isToolbarCollapsed,
       });
       setToolbarHeight(clampedHeight);
+      // 左（縦）配置のときは、本文を逃がすのが「上」ではなく「左」になる（Issue #483）。
+      // 高さは画面いっぱい（＝丸めの上限で切られた値）になり意味を持たないので、
+      // 代わりに幅を実測して --toolbar-w へ流す。上配置のときは測らない（0のまま）。
+      setToolbarWidth(
+        isToolbarLeft
+          ? resolveToolbarWidth(
+              Math.ceil(toolbarElement.getBoundingClientRect().width),
+              { collapsed: isToolbarCollapsed }
+            )
+          : 0
+      );
     };
 
     updateToolbarHeight();
@@ -4656,7 +4817,7 @@ export default function ScorePage() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateToolbarHeight);
     };
-  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed]);
+  }, [activeToolbarTab, showResetMenu, scoreType, isToolbarCollapsed, isToolbarLeft]);
 
   // リセットメニュー（Issue #143）の表示位置をボタンの実測位置から決める。
   // 画面の右端からはみ出さないよう、左位置は「画面幅 − メニュー幅 − 余白」までで止める。
@@ -4666,7 +4827,12 @@ export default function ScorePage() {
     // メニュー幅は CSS の width: min(360px, 100vw - 32px) と同じ計算にそろえる
     const menuWidth = Math.min(360, window.innerWidth - 32);
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
-    setResetMenuPos({ top: rect.bottom + 6, left });
+    // 縦も画面内へクランプする。左（縦）配置ではボタンが画面下部に来るため、
+    // 常に下向きだとメニュー後半が画面外へ出て押せなくなる（#483 round1 P1）
+    setResetMenuPos({
+      top: clampDropdownMenuTop({ anchorBottom: rect.bottom, viewportHeight: window.innerHeight }),
+      left,
+    });
   }, []);
 
   const handleToggleResetMenu = useCallback(() => {
@@ -4782,6 +4948,12 @@ export default function ScorePage() {
     });
   };
 
+  // ツールバーの配置を切り替える（Issue #483）。次回起動時も同じ配置で開けるよう保存する。
+  const handleChangeToolbarPlacement = (placement: ToolbarPlacement) => {
+    setToolbarPlacement(placement);
+    saveToolbarPlacement(placement);
+  };
+
   const toolbarTabButtons = TOOLBAR_TAB_BUTTONS;
   // カスタム記号は id しか持たないツールなので、A1 文脈バーで名前を出せるよう対応表にしておく
   // （記号を増減したときだけ作り直せば十分なので useMemo で包む）
@@ -4873,11 +5045,19 @@ export default function ScorePage() {
 
   return (
     <div
-      className={`app-root${isPrintPreview ? ' print-preview' : ''}`}
-      style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
+      className={`app-root${isPrintPreview ? ' print-preview' : ''}${isToolbarLeft ? ' toolbar-left' : ''}`}
+      style={{
+        // 左配置のときヘッダーは画面の左端に立つので、本文の上余白は要らない（0にする）。
+        // 代わりに --toolbar-w を左余白として使う（CSS の .app-root.toolbar-left 側で参照）。
+        '--toolbar-h': `${isToolbarLeft ? 0 : toolbarHeight}px`,
+        ...(isToolbarLeft ? { '--toolbar-w': `${toolbarWidth}px` } : {}),
+      } as React.CSSProperties}
       data-ui-variant={uiVariant}
     >
-      <header className={`toolbar${isToolbarCollapsed ? ' collapsed' : ''}`} ref={toolbarRef}>
+      <header
+        className={`toolbar${isToolbarCollapsed ? ' collapsed' : ''}${isToolbarLeft ? ' toolbar--left' : ''}`}
+        ref={toolbarRef}
+      >
         {/* タブ行（Issue #142）。右端にフィードバックを常設し、どのタブを開いていても
             押せるようにする。フィードバックは「押した時点の表示状態」をJSONに写して送る
             仕組みなので、報告のために別タブへ移動させると再現情報が変わってしまう。 */}
@@ -5324,6 +5504,31 @@ export default function ScorePage() {
                     {w === 'thin' ? '細い' : w === 'normal' ? '普通' : '太い'}
                   </button>
                 ))}
+              </div>
+              {/* ツールバー（パレット）自体の置き場所（Issue #483）。紙面ではなく画面の使い方を
+                  決める設定だが、「どこに何を置くか」という意味でレイアウトタブが最も近い。
+                  既定は従来の「上（横）」で、選ばない限り見た目は1pxも変わらない。 */}
+              <div className="toolbar-chip-group toolbar-placement-chips" role="group" aria-label="ツールバーの位置">
+                <span className="toolbar-group-label">ツールバーの位置</span>
+                {TOOLBAR_PLACEMENT_OPTIONS.map(({ value, label, description }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`ghost toolbar-chip-button${toolbarPlacement === value ? ' active' : ''}`}
+                    onClick={() => handleChangeToolbarPlacement(value)}
+                    aria-pressed={toolbarPlacement === value}
+                    title={description}
+                  >
+                    {label}
+                  </button>
+                ))}
+                {/* 左を選んでいるのに上で表示している（＝画面が狭い）ときだけ、その理由を伝える。
+                    黙って上に戻ると「設定が効かない不具合」に見えてしまうため。 */}
+                {toolbarPlacement === 'left' && !isToolbarLeft && (
+                  <span className="toolbar-placement-note">
+                    画面が狭いため、いまは上に表示しています
+                  </span>
+                )}
               </div>
               <div className="toolbar-layout-group" role="group" aria-label="用紙と余白">
                 <span className="toolbar-group-label">用紙と余白</span>
@@ -6037,13 +6242,16 @@ export default function ScorePage() {
       {(scoreType === 'ensemble' || scoreType === 'quartet') && showInstrumentationEditor && createPortal(
         <section
           id="instrumentation-editor-window"
-          className={`instrumentation-editor-window${isNameOnlyInstrumentationEditor ? ' instrumentation-editor-window--names' : ''}`}
+          className={`instrumentation-editor-window${isNameOnlyInstrumentationEditor ? ' instrumentation-editor-window--names' : ''}${isToolbarLeft ? ' instrumentation-editor-window--toolbar-left' : ''}`}
           role="dialog"
           aria-label={isNameOnlyInstrumentationEditor ? 'パート名編集' : '編成パート編集'}
           // document.body 直下へ createPortal するため、.app-root の
           // --toolbar-h（ページ拡縮の transform コンテキストの外）を継承できない。
           // 自分自身に同じ値を持たせて、fixed 位置がツールバー高さに追従するようにする。
-          style={{ '--toolbar-h': `${toolbarHeight}px` } as React.CSSProperties}
+          style={{
+            '--toolbar-h': `${isToolbarLeft ? 0 : toolbarHeight}px`,
+            ...(isToolbarLeft ? { '--toolbar-w': `${toolbarWidth}px` } : {}),
+          } as React.CSSProperties}
         >
           <div className="instrumentation-editor-titlebar">
             <div>
@@ -6413,6 +6621,11 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
+                      // 段の選択+フローティングパネル（Issue #482）
+                      selectedSystemStart={selectedSystem?.start ?? null}
+                      onSystemSelect={isSystemSelectionEnabled ? handleSystemSelect : undefined}
+                      renderSystemPanel={renderSystemPanel}
+                      systemNumberOffset={getPageSystemOffset(i)}
                       incomingArcIndex={ensembleDisplayIncomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       partSpacingOffsetPx={partSpacingOffsetPx}
@@ -6455,6 +6668,11 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
+                      // 段の選択+フローティングパネル（Issue #482）
+                      selectedSystemStart={selectedSystem?.start ?? null}
+                      onSystemSelect={isSystemSelectionEnabled ? handleSystemSelect : undefined}
+                      renderSystemPanel={renderSystemPanel}
+                      systemNumberOffset={getPageSystemOffset(i)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       partSpacingOffsetPx={partSpacingOffsetPx}
@@ -6495,6 +6713,11 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
+                      // 段の選択+フローティングパネル（Issue #482）
+                      selectedSystemStart={selectedSystem?.start ?? null}
+                      onSystemSelect={isSystemSelectionEnabled ? handleSystemSelect : undefined}
+                      renderSystemPanel={renderSystemPanel}
+                      systemNumberOffset={getPageSystemOffset(i)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       partSpacingOffsetPx={partSpacingOffsetPx}
@@ -6539,6 +6762,11 @@ export default function ScorePage() {
                       systems={p.systems}
                       systemRanges={p.systemRanges}
                       systemGapOverridesPx={getSystemGapOverridesPx(p.systemRanges)}
+                      // 段の選択+フローティングパネル（Issue #482）
+                      selectedSystemStart={selectedSystem?.start ?? null}
+                      onSystemSelect={isSystemSelectionEnabled ? handleSystemSelect : undefined}
+                      renderSystemPanel={renderSystemPanel}
+                      systemNumberOffset={getPageSystemOffset(i)}
                       incomingArcIndex={incomingArcIndex}
                       measureWidthEvenness={measureWidthEvenness}
                       partSpacingOffsetPx={partSpacingOffsetPx}
@@ -6570,83 +6798,6 @@ export default function ScorePage() {
                       emptyFillerRanges={i === lastVisiblePageIndex ? lastPageEmptyFillerRanges : undefined}
                       onEmptyFillerClick={handleEmptyFillerClick}
                     />
-                  )}
-
-                  {/* 段ごとの小節数・間隔を個別に調整するコントロール。段の自動計画（幅ベース）だけでは
-                      「この段だけ1小節増やしたい／減らしたい」「この段の上だけ間隔を広げたい」
-                      という要望に応えられないため、ページ内の各段の直後に「◀ N小節 ▶」と
-                      「間隔 － Npx ＋」を1本ずつ並べる。▶ で次段の先頭小節をこの段へ引き込み
-                      （+1）、◀ でこの段の末尾小節を次段へ送る（-1）。間隔の－／＋は、レイアウト
-                      タブの「段の間隔」（全体設定）に加えてこの段だけ追加で詰める/広げる
-                      （.claude/specs/page-layout-controls/design.md 参照）。
-                      編集モードのときだけ表示し、印刷には出さない（App.css の @media print 参照）。 */}
-                  {!isPartExtractionActive && !isEditingDisabled && (
-                    <div className="system-measure-override-controls">
-                      {p.systemRanges.map((range, rangeIndex) => {
-                        const canDecrease = range.count > 1;
-                        // 引き込める「内容のある小節」が次に残っている段だけ ▶ を押せる。
-                        // 空きバッファ小節まで引き込むと終止線の作法が壊れるため上限は contentMeasureCount
-                        const canIncrease = range.start + range.count < contentMeasureCount;
-                        const rowGapPx = systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0;
-                        const canDecreaseGap = rowGapPx > SYSTEM_ROW_GAP_MIN_PX;
-                        const canIncreaseGap = rowGapPx < SYSTEM_ROW_GAP_MAX_PX;
-                        return (
-                          // data-testid は「どの段」を対象にした行かを外部（テストコード）から判定できるように、
-                          // 譜面全体で一意な開始小節番号（range.start）をキーとして付与する。
-                          // （夜間QAフェーズBでのテスト容易性改善。.claude/specs/page-layout-controls/design.md 参照）
-                          <div
-                            className="system-measure-override-row"
-                            key={range.start}
-                            data-testid={`system-measure-row-${range.start}`}
-                          >
-                            <span className="system-measure-override-label">段{getPageSystemOffset(i) + rangeIndex + 1}</span>
-                            <button
-                              type="button"
-                              className="system-measure-override-button"
-                              disabled={!canDecrease}
-                              onClick={() => adjustSystemMeasureOverride(range, -1)}
-                              title="この段の末尾の小節を次の段へ送る"
-                              data-testid={`system-measure-decrease-${range.start}`}
-                            >
-                              ◀
-                            </button>
-                            <span className="system-measure-override-count" data-testid={`system-measure-count-${range.start}`}>{range.count}小節</span>
-                            <button
-                              type="button"
-                              className="system-measure-override-button"
-                              disabled={!canIncrease}
-                              onClick={() => adjustSystemMeasureOverride(range, 1)}
-                              title="次の段の先頭の小節をこの段へ引き込む"
-                              data-testid={`system-measure-increase-${range.start}`}
-                            >
-                              ▶
-                            </button>
-                            <span className="system-row-gap-override-label">間隔</span>
-                            <button
-                              type="button"
-                              className="system-measure-override-button"
-                              disabled={!canDecreaseGap}
-                              onClick={() => adjustSystemRowGapOverride(range.start, -SYSTEM_ROW_GAP_OVERRIDE_STEP_PX)}
-                              title="この段の間隔（上の段との距離）を詰める"
-                              data-testid={`system-gap-decrease-${range.start}`}
-                            >
-                              －
-                            </button>
-                            <span className="system-measure-override-count" data-testid={`system-gap-value-${range.start}`}>{rowGapPx >= 0 ? `+${rowGapPx}` : rowGapPx}px</span>
-                            <button
-                              type="button"
-                              className="system-measure-override-button"
-                              disabled={!canIncreaseGap}
-                              onClick={() => adjustSystemRowGapOverride(range.start, SYSTEM_ROW_GAP_OVERRIDE_STEP_PX)}
-                              title="この段の間隔（上の段との距離）を広げる"
-                              data-testid={`system-gap-increase-${range.start}`}
-                            >
-                              ＋
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
                   )}
 
                   {/* ＋小節を追加: 最後の音符がある小節が譜面の最後になるよう、既定では

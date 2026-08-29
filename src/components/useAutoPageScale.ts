@@ -9,7 +9,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { readPageAreaAvailableWidth } from '../utils/viewZoomUtils';
 
-export function useAutoPageScale(columns: number, gapPx: number = 20) {
+export function useAutoPageScale(
+  columns: number,
+  gapPx: number = 20,
+  // 画面幅のうち fixed 要素（左配置のツールバー等）が占有していて
+  // ページを並べられない幅(px)。#483 round3: 幅の測り先（body）は fixed の
+  // ツールバーぶんまでは縮まないため、ここで引かないと2列表示が右へはみ出す
+  occupiedWidthPx: number = 0,
+) {
   const spreadRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
 
@@ -31,7 +38,7 @@ export function useAutoPageScale(columns: number, gapPx: number = 20) {
     // ここで rail.clientWidth を読んではいけない（Issue #212）。
     // レールは横スクロール時に中身の幅まで広がるので、測ると自分の結果を測り直す形になる。
     // 詳しい理由は readPageAreaAvailableWidth のコメントを参照。
-    const avail = readPageAreaAvailableWidth(rail);
+    const avail = Math.max(0, readPageAreaAvailableWidth(rail) - occupiedWidthPx);
 
     const next = Math.min(1, Math.max(0.1, (avail * 0.98) / need));
 
@@ -41,7 +48,7 @@ export function useAutoPageScale(columns: number, gapPx: number = 20) {
 
     lastScaleRef.current = next;
     setScale(next);
-  }, [columns, gapPx]);
+  }, [columns, gapPx, occupiedWidthPx]);
 
   useEffect(() => {
     const schedule = () => {

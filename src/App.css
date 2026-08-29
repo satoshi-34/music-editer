@@ -177,6 +177,108 @@
   max-width: 100%;
 }
 
+/* ───────────── ツールバーの左（縦）配置（Issue #483） ─────────────
+   従来の「上（横）」配置は既定のままで、ここから下の規則は
+   `.toolbar--left` / `.app-root.toolbar-left` が付いたとき **だけ** 効く。
+   上配置の見た目を1pxも変えないため、既存の規則には一切手を入れていない。
+
+   仕組みは上配置と同じ「fixed のヘッダー＋本文側の余白」で、逃がす向きが
+   上（padding-top: --toolbar-h）から左（padding-left: --toolbar-w）へ変わるだけ。
+   幅は ScorePage 側の ResizeObserver が実測して --toolbar-w へ入れる。 */
+.toolbar--left {
+  /* 画面の左端に、上から下まで貼り付く帯にする */
+  right: auto;
+  bottom: 0;
+  width: var(--toolbar-left-width, 260px);
+  /* 中身がこの高さに収まらないときは帯の中だけを縦スクロールさせる。
+     ここが無いと、タブによっては下のほうのコントロールへ手が届かなくなる（受入条件3） */
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-bottom: none;
+  border-right: 1px solid #ddd;
+  box-shadow: 4px 0 16px #877f7f14;
+}
+/* 上配置では横1行だったタブを、縦帯の中では折り返して並べる */
+.toolbar--left .toolbar-tabs {
+  flex-wrap: wrap;
+}
+/* タブ行は上配置では「左にタブ・右端にフィードバック」の横1行だが、
+   幅260pxの縦帯では右端のフィードバックが帯からはみ出して切れてしまう。
+   縦に積んで、どちらも帯の中に収める（実機確認 2026-08-29）。 */
+.toolbar--left .toolbar-tab-row {
+  flex-direction: column;
+  align-items: stretch;
+}
+/* 上配置の max-width: 45% は「横1行の中での取り分」。縦帯では自分の行を丸ごと使える */
+.toolbar--left .toolbar-feedback {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.toolbar--left .toolbar-collapse-row .toolbar-feedback {
+  margin-left: 0;
+}
+/* パネルは横スクロールではなく折り返しで見せる。縦帯の中で横スクロールを出すと、
+   スクロールバーの存在に気づけないまま右側のコントロールが隠れてしまう */
+.toolbar--left .toolbar-panel {
+  overflow-x: hidden;
+}
+/* 折り畳み中は「表示に戻すボタン」だけが残る細い帯にして、譜面を広く見せる（受入条件6）。
+   上配置では帯の高さが縮むのに対し、左配置では帯の幅が縮む。
+   中身を縦に積むのは、幅90pxのズームスライダーとボタンを横に並べると
+   帯が細くならないため。 */
+.toolbar--left.collapsed {
+  width: max-content;
+  max-width: var(--toolbar-left-width, 260px);
+}
+.toolbar--left .toolbar-collapse-row {
+  flex-direction: column;
+  align-items: stretch;
+}
+/* 折り畳んだ帯にズームの見出し文字やフィードバックの文字まで残すと、
+   帯の幅が畳む前とほとんど変わらず「譜面を広く見る」目的を果たせない。
+   上配置の狭い画面（Issue #150）と同じ扱いで、文字を省いて操作だけ残す。
+   読み上げ名は input / button の aria-label で保たれるので情報は減らない。 */
+.toolbar--left.collapsed .toolbar-view-zoom-label,
+.toolbar--left.collapsed .toolbar-feedback-label {
+  display: none;
+}
+/* 本文（譜面）は上ではなく左へ逃がす */
+.app-root.toolbar-left {
+  padding-top: 0;
+  padding-left: var(--toolbar-w, 260px);
+}
+/* セレクト等を開いたときの透明な覆い。上配置ではヘッダー分だけ上端を下げていた
+   （＝ヘッダーのクリックを奪わない）のと同じ理由で、左配置では左端をずらす。
+   ここが無いと、ドロップダウンを開いている間ツールバーが一切押せなくなる。 */
+.app-root.toolbar-left .dropdown-overlay {
+  left: var(--toolbar-w, 260px);
+}
+/* UI案 A1/A3 の文脈バー（開発時のみ）。左配置では --toolbar-h が 0 になり
+   画面左上（＝縦ツールバーの上・z-index も上）へ重なってタブを覆うため、
+   ツールバーの右隣へ逃がす（#483 Codex round2 P2） */
+.app-root.toolbar-left .ui-context-bar-float {
+  left: calc(var(--toolbar-w, 260px) + 8px);
+}
+/* パート編集ウィンドウ（body 直下へ portal されるため .app-root の子ではない）。
+   右端固定・幅 100vw ぶんのままだと左のツールバーへ覆いかぶさるので、
+   ツールバーの幅ぶんだけ狭くする。--toolbar-w は ScorePage が要素へ直接渡している。 */
+.instrumentation-editor-window--toolbar-left {
+  width: min(1180px, calc(100vw - var(--toolbar-w, 0px) - 36px));
+}
+/* 名前だけ編集モード（--names）の幅指定は後方で定義され同じ詳細度のため、
+   左配置の補正が上書きされて 768〜820px 前後でツールバーへ重なっていた
+   （#483 Codex round1 P2）。複合クラスで詳細度を上げ、こちらを勝たせる */
+.instrumentation-editor-window--toolbar-left.instrumentation-editor-window--names {
+  width: min(520px, calc(100vw - var(--toolbar-w, 0px) - 36px));
+}
+/* 狭い画面（スマホ等）で左配置を上配置へ戻す判断は、CSS ではなく JS 側で行う
+   （toolbarPlacement.ts の resolveEffectiveToolbarPlacement・768px 未満で上に戻す）。
+   ここに @media の保険を置かなかったのは、左配置のとき ScorePage が
+   `--toolbar-h: 0px` を .app-root のインラインstyleで渡すため、
+   @media 側で `padding-top: var(--toolbar-h)` と書いてもインラインの 0px が勝ち、
+   本文がツールバーの下に潜るだけで保険にならないため（実機確認 2026-08-29）。
+   幅の判定を1か所（JS）に集約することで、幅フィットの計算とも食い違わない。 */
+
 /* ツールバーの折り畳み（Issue #125）。
    .collapsed のときはタブ行（フィードバック含む）・Undo/Redo・パネルを隠し、
    折り畳みトグルの行だけを残す。
@@ -331,6 +433,13 @@
   padding-right: 6px;
 }
 
+/* 「左（縦）」を選んでいるのに画面が狭くて上に出しているときの補足文（Issue #483）。
+   設定が効いていないように見えないよう、理由をその場に小さく添える。 */
+.toolbar-placement-note {
+  font-size: 11px;
+  color: #6b7280;
+}
+
 /* リセット系4種をまとめたメニュー（Issue #143）。ボタン直下に出す小さなポップアップで、
    各項目に「影響範囲」の説明文を添える。位置決めのため wrap 側を relative にする。 */
 .toolbar-reset-menu-wrap {
@@ -344,6 +453,11 @@
   top: 120px;
   left: 10px;
   z-index: 1001;
+  /* 左（縦）配置でツールバー末尾のボタンから開いても画面に収まるよう、
+     高さに上限を設けてはみ出す分はメニュー内スクロールにする（#483 round1 P1）。
+     位置側のクランプ（ScorePage の updateResetMenuPosition）とペアで効く */
+  max-height: min(70vh, 420px);
+  overflow-y: auto;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -1705,41 +1819,80 @@ button.ghost.active:hover:not(:disabled) {
   outline-offset: 2px;
 }
 
-/* 段ごとの小節数を個別調整するコントロール（◀ N小節 ▶）。
-   ページ内の各段につき1行、score-area の下に控えめに並べる。画面専用で印刷には出さない
-   （@media print 側で display:none にする）。 */
-.system-measure-override-controls {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 4px 0;
-  align-items: center;
+/* 段の選択（Issue #482 = #450 の段階1）
+   ------------------------------------------------------------------
+   段（システム）1つぶんの外枠。左右端の当たり判定とフローティングパネルを
+   絶対配置するための基準になる（描画は SystemSelectFrame.tsx）。
+   .score-area .system-stack > * のスロット高の指定は「直下の子」に効くので、
+   ラッパーの中身を変えてもページ内の段配置は従来どおり。 */
+.system-select-frame {
+  /* 位置の基準は内側ラッパー（.system-select-inner）に持たせる。
+     外側は段スロット（固定高）に引き伸ばされるため、ここを基準にすると
+     当たり判定が段間の余白まで広がってしまう（Codex round1 P1） */
 }
-.system-measure-override-row {
+.system-select-inner {
+  position: relative;
+}
+/* 選択中の段は「薄い枠」だけで示す（譜面の見た目を邪魔しない控えめな表示）。
+   outline は要素の外側に描かれるためレイアウトを1pxもずらさない（border だと段がずれる）。
+   枠も内側ラッパー＝五線の実描画範囲に沿わせる。 */
+.system-select-frame--selected .system-select-inner {
+  outline: 1px solid #93c5fd;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* 段を選ぶための「掴みしろ」。五線の左右端（音部記号の手前／終止線の外）から
+   ページ余白側へはみ出す位置に置く。譜面の内側にほとんど入らないので、
+   音符・記号のクリックを奪わない（.print-page は overflow:hidden だが、
+   はみ出す先は紙の内側の余白なので隠れない）。 */
+.system-select-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  z-index: 3;
+}
+.system-select-edge--left { left: -32px; }
+.system-select-edge--right { right: -32px; }
+/* 掴みしろは普段は完全に透明。カーソルを乗せたときだけ薄く光らせて場所を知らせる */
+.system-select-edge:hover,
+.system-select-edge:focus-visible {
+  background: rgba(147, 197, 253, 0.25);
+  border-radius: 4px;
+}
+
+/* 選択中の段の横に出るレイアウト調整パネル（SystemLayoutPanel.tsx）。
+   段の下端の外側（段と段のすき間）へ、クリックされた端の側に寄せて出す。
+   五線の中身（音符）を隠さず、上に出す案のように画面上端の固定ツールバーへ
+   潜り込むこともない（ブラウザ実測で、上に出すと1段目のパネルが隠れた）。
+   拍子・調号などの「途中変更オーバーレイ」と同じ見た目にそろえている。 */
+.system-layout-panel {
+  position: absolute;
+  top: 100%;
+  transform: translateY(-2px);
+  z-index: 30;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  padding: 3px 6px;
   font-size: 11px;
-  color: #9ca3af;
+  color: #374151;
+  background: #fff;
+  border: 1.5px solid #93c5fd;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
 }
-.system-measure-override-label {
-  width: 36px;
-  text-align: right;
+.system-layout-panel--left { left: -24px; }
+.system-layout-panel--right { right: -24px; }
+.system-layout-panel-label {
+  color: #6b7280;
 }
-.system-measure-override-count {
-  width: 44px;
-  text-align: center;
-}
-/* 段ごとの間隔（上の段との距離）を個別調整する「間隔 － Npx ＋」のラベル。
-   小節数側の .system-measure-override-label と見た目を揃えつつ、
-   同じ行に並べるので少し幅を詰めている。 */
-.system-row-gap-override-label {
-  width: 28px;
-  text-align: right;
-  margin-left: 4px;
-}
-.system-measure-override-button {
+.system-layout-panel-button {
   width: 20px;
   height: 20px;
   line-height: 1;
@@ -1751,14 +1904,36 @@ button.ghost.active:hover:not(:disabled) {
   border-radius: 4px;
   cursor: pointer;
 }
-.system-measure-override-button:hover:not(:disabled) {
+.system-layout-panel-button:hover:not(:disabled) {
   color: #374151;
   border-color: #9ca3af;
   background: #f9fafb;
 }
-.system-measure-override-button:disabled {
+.system-layout-panel-button:disabled {
   opacity: 0.4;
   cursor: default;
+}
+/* 数値そのものがボタン: クリックすると直接入力の欄へ変わる（下線で「押せる」ことを示す） */
+.system-layout-panel-value {
+  min-width: 44px;
+  padding: 1px 2px;
+  font-size: 11px;
+  color: #374151;
+  text-align: center;
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed #9ca3af;
+  cursor: text;
+}
+.system-layout-panel-value:hover {
+  background: #f3f4f6;
+}
+.system-layout-panel-input {
+  width: 52px;
+  padding: 1px 2px;
+  font-size: 11px;
+  border: 1px solid #93c5fd;
+  border-radius: 3px;
 }
 
 .layout-overflow-alert {
@@ -2024,8 +2199,14 @@ button.ghost.active:hover:not(:disabled) {
   .ui-context-bar-float { display: none !important; }
   /* 空の段（Issue #41）は画面専用の書き始めの誘いであり、演奏用の印刷譜には出さない。 */
   .empty-stave-filler { display: none !important; }
-  /* 段ごとの小節数調整コントロール（◀ N小節 ▶）も編集用UIなので印刷には出さない。 */
-  .system-measure-override-controls { display: none !important; }
+  /* 段の選択の当たり判定とレイアウト調整パネル（Issue #482）も編集用UIなので紙には出さない。
+     選択中の薄い枠も同様（紙面に編集中の印を残さない）。 */
+  .system-select-edge { display: none !important; }
+  .system-layout-panel { display: none !important; }
+  /* outline の実体は内側ラッパー側に付く（round1 の当たり判定修正で移動）ため、
+     両方をリセットする（外側だけだと選択したまま印刷すると青枠が残る。Codex round2 P2） */
+  .system-select-frame--selected { outline: none !important; }
+  .system-select-frame--selected .system-select-inner { outline: none !important; }
   /* 拍が埋まっていない小節の残り拍に「入力先が分かるよう」表示するパディング休符
      （PianoSystemCanvas がデータには保存せず見た目だけ描画する薄いグレーの休符）。
      以前はここで display:none にして印刷から消していたが、紙面の後半が
@@ -2038,6 +2219,9 @@ button.ghost.active:hover:not(:disabled) {
   /* 固定ツールバー分の逃し（padding-top: 60px）も印刷では不要。
      残すと1枚目だけ60px下へずれ、ページ末尾が次の紙へ押し出される */
   .app-root { padding-top: 0 !important; }
+  /* 左（縦）配置（Issue #483）のときの左余白も同じ理由で印刷には持ち込まない。
+     残すと紙の左が丸ごとツールバー幅ぶん空き、譜面が右へずれて切れる */
+  .app-root { padding-left: 0 !important; }
   /* 画面用の余白（paper-rail 16px / spread 16px 24px / gap）は印刷に持ち込まない。
      ここが残ると「タイトルの上の余白が画面より大きい」「紙のページ割りが
      .print-page の 297mm とずれていく」原因になる */
@@ -2191,7 +2375,7 @@ button.ghost.active:hover:not(:disabled) {
    重複定義にとどめた。詳細は .claude/specs/print-preview/design.md 参照）。
    ただし以下は @media print と異なり、プレビュー中も操作できるよう「隠さない」:
    - .toolbar（ツールバー全体。レイアウト調整コントロールがここにあるため）
-   - .system-measure-override-controls（段ごとの小節数 ◀▶）
+   - 段の選択の当たり判定・レイアウト調整パネル（Issue #482。段の左右端クリック）
    - 段ごとの間隔調整、ページ余白・段の間隔・音符サイズのスライダー類（ツールバー内） */
 .print-preview .layout-overflow-alert { display: none !important; }
 .print-preview .add-measures-ghost-button { display: none !important; }
@@ -2216,15 +2400,15 @@ button.ghost.active:hover:not(:disabled) {
 /* パディング休符（.vf-padding-rest）は @media print 側と同じ理由（Issue #59）で
    ここでは隠さない。下の「svg path/line を印刷インク色に戻す」ルールが他の
    音符と同様に効いて、画面の薄いグレーとは異なり黒で表示される。 */
-/* システム調整コントロールは隠さず、紙面の邪魔をしにくい半透明フローティング行として見せる */
-.print-preview .system-measure-override-controls {
+/* 段のレイアウト調整パネルは、プレビュー中も操作できるよう隠さない。
+   ただし紙面の見え方の邪魔をしないよう、触っていない間は半透明にする
+   （旧・段下のコントロール行に対する扱いをそのまま引き継いだもの）。 */
+.print-preview .system-layout-panel {
   opacity: 0.55;
   transition: opacity 0.15s ease;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 6px;
 }
-.print-preview .system-measure-override-controls:hover,
-.print-preview .system-measure-override-controls:focus-within {
+.print-preview .system-layout-panel:hover,
+.print-preview .system-layout-panel:focus-within {
   opacity: 1;
 }
 .print-preview .paper-rail { background: #e5e7eb; }

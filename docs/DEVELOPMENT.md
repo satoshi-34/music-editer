@@ -331,7 +331,7 @@ npm run build                   # tsc -b && vite build
 - 実装は「余剰幅を各小節へ均等配分した base」を「段内の等分幅 equalShare」へ線形にブレンドする方式で、総和は段の使用可能幅に保たれる（総和保存）。段に収まらない小節（overflow）はブレンドせず最低幅どおりに描き、はみ出し警告を隠さない。スライダー値は段確定後の幅配分だけに効き、改段（段割り・ページ数）には影響しない（詳細は `.claude/specs/multi-part-beat-alignment/design.md` 追補6・追補7を参照）
 
 ### 段ごとの小節数の個別調整
-- **どこで変えるか**: 譜面エリアの下（各段の一覧）に並ぶ「段N ◀ N小節 ▶」コントロールで、段ごとに小節数を1つずつ増減できる。▶ で次段の先頭小節をこの段へ引き込み（+1）、◀ でこの段の末尾小節を次段へ送る（−1）。編集モードのときだけ表示し、印刷には出ない（`.system-measure-override-controls` を `@media print` で非表示にしている）
+- **どこで変えるか**: 五線の左右端（音部記号の手前／終止線の外）をクリックすると段が選択され、段のすぐ下に出るフローティングパネル（Issue #482。`SystemSelectFrame.tsx` / `SystemLayoutPanel.tsx`）の「◀ N小節 ▶」で段ごとに小節数を1つずつ増減できる。数値をクリックすれば直接入力もできる。▶ で次段の先頭小節をこの段へ引き込み（+1）、◀ でこの段の末尾小節を次段へ送る（−1）。編集モードのときだけ選択でき、印刷には出ない（`.system-select-edge` / `.system-layout-panel` / 選択枠の outline を `@media print` で非表示・リセットしている）
 - **リセット**: レイアウトタブの「リセット」メニュー内「段割りをリセット」で、手動調整をすべて解除して自動計画（幅ベースの `planSystemMeasureRanges`）に戻せる
 - **データモデル**: `SavedScoreData.systemMeasureOverrides?: { startMeasure: number; count: number }[]`（`src/types/storage.ts`）。「絶対小節インデックス `startMeasure` から始まる段は `count` 小節」という意味で保持し、段の並び順ではなく小節番号をキーにしているため、他の段の編集で多少ずれても意味を保ちやすい。旧データ互換のため省略可（省略時は自動計画のみ）
 - **計画ロジック**: `planSystemMeasureRanges`（`src/utils/measureLayoutUtils.ts`）が、貪欲法で段の開始位置を進める際に上書き一覧を参照する。開始位置が上書きの `startMeasure` と一致する段はその小節数をそのまま使い（使用可能幅を超えても許容し、`overflow: true` を返すだけで縮めない＝はみ出しはユーザー判断）、一致しない段は従来どおりの自動計画が続く。そのため上書きした段より後ろは自動的に続きから再計画される
@@ -341,7 +341,7 @@ npm run build                   # tsc -b && vite build
 - 詳細は `.claude/specs/system-measure-override/design.md` を参照
 
 ### 段ごとの間隔（上の段との距離）の個別調整
-- **どこで変えるか**: 「段ごとの小節数の個別調整」と同じ行に並ぶ「間隔 － Npx ＋」コントロールで、段ごとに上の段との距離を追加で増減できる（－／＋1回につき4px、範囲は全体設定と同じ −60〜50px）。編集モードのときだけ表示し、印刷には出ない（同じ `.system-measure-override-controls` コンテナのため既存の `@media print` 非表示がそのまま効く）
+- **どこで変えるか**: 「段ごとの小節数の個別調整」と同じフローティングパネル（Issue #482）の「間隔 － Npx ＋」で、段ごとに上の段との距離を追加で増減できる（－／＋1回につき4px、範囲は全体設定と同じ −60〜50px。数値クリックで直接入力も可）。編集モードのときだけ選択でき、印刷には出ない（`@media print` でパネルごと非表示）
 - **全体設定との合成**: レイアウトタブの「段の間隔」（全体設定、`systemRowGapPx`）に、この段だけの追加オフセットを**足し込む**形で効く。全体設定は CSS カスタムプロパティ（`--system-row-gap`）で全段に一律反映され、段ごとのオフセットはその段の直前へ `marginTop` として個別に上乗せする（`SingleStaff.tsx` / `PianoStaff.tsx` / `QuartetStaff.tsx` / `EnsembleStaff.tsx` の `systemGapOverridesPx` prop）。値が0の段は従来どおりスタイル自体を付けない
 - **下限**: 段ごとのオフセット単体を全体設定と同じ範囲（−60〜50px）にクランプする。全体設定をマイナスにしたうえで段ごとにさらにマイナスへ寄せることもでき、詰めすぎた場合は見た目上、段同士が近づく（重なりを機械的に禁止してはいないため、詰めすぎには注意）
 - **データモデル**: `SavedScoreData.systemRowGapOverrides?: { startMeasure: number; gapPx: number }[]`（`src/types/storage.ts`）。`systemMeasureOverrides` と同様、段の並び順ではなく絶対小節インデックス `startMeasure` をキーに保持するため、小節の挿入・削除があっても意味を保ちやすい。旧データ互換のため省略可（省略時は全段とも追加オフセット0）
