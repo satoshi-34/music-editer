@@ -177,6 +177,96 @@
   max-width: 100%;
 }
 
+/* ───────────── ツールバーの左（縦）配置（Issue #483） ─────────────
+   従来の「上（横）」配置は既定のままで、ここから下の規則は
+   `.toolbar--left` / `.app-root.toolbar-left` が付いたとき **だけ** 効く。
+   上配置の見た目を1pxも変えないため、既存の規則には一切手を入れていない。
+
+   仕組みは上配置と同じ「fixed のヘッダー＋本文側の余白」で、逃がす向きが
+   上（padding-top: --toolbar-h）から左（padding-left: --toolbar-w）へ変わるだけ。
+   幅は ScorePage 側の ResizeObserver が実測して --toolbar-w へ入れる。 */
+.toolbar--left {
+  /* 画面の左端に、上から下まで貼り付く帯にする */
+  right: auto;
+  bottom: 0;
+  width: var(--toolbar-left-width, 260px);
+  /* 中身がこの高さに収まらないときは帯の中だけを縦スクロールさせる。
+     ここが無いと、タブによっては下のほうのコントロールへ手が届かなくなる（受入条件3） */
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-bottom: none;
+  border-right: 1px solid #ddd;
+  box-shadow: 4px 0 16px #877f7f14;
+}
+/* 上配置では横1行だったタブを、縦帯の中では折り返して並べる */
+.toolbar--left .toolbar-tabs {
+  flex-wrap: wrap;
+}
+/* タブ行は上配置では「左にタブ・右端にフィードバック」の横1行だが、
+   幅260pxの縦帯では右端のフィードバックが帯からはみ出して切れてしまう。
+   縦に積んで、どちらも帯の中に収める（実機確認 2026-08-29）。 */
+.toolbar--left .toolbar-tab-row {
+  flex-direction: column;
+  align-items: stretch;
+}
+/* 上配置の max-width: 45% は「横1行の中での取り分」。縦帯では自分の行を丸ごと使える */
+.toolbar--left .toolbar-feedback {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.toolbar--left .toolbar-collapse-row .toolbar-feedback {
+  margin-left: 0;
+}
+/* パネルは横スクロールではなく折り返しで見せる。縦帯の中で横スクロールを出すと、
+   スクロールバーの存在に気づけないまま右側のコントロールが隠れてしまう */
+.toolbar--left .toolbar-panel {
+  overflow-x: hidden;
+}
+/* 折り畳み中は「表示に戻すボタン」だけが残る細い帯にして、譜面を広く見せる（受入条件6）。
+   上配置では帯の高さが縮むのに対し、左配置では帯の幅が縮む。
+   中身を縦に積むのは、幅90pxのズームスライダーとボタンを横に並べると
+   帯が細くならないため。 */
+.toolbar--left.collapsed {
+  width: max-content;
+  max-width: var(--toolbar-left-width, 260px);
+}
+.toolbar--left .toolbar-collapse-row {
+  flex-direction: column;
+  align-items: stretch;
+}
+/* 折り畳んだ帯にズームの見出し文字やフィードバックの文字まで残すと、
+   帯の幅が畳む前とほとんど変わらず「譜面を広く見る」目的を果たせない。
+   上配置の狭い画面（Issue #150）と同じ扱いで、文字を省いて操作だけ残す。
+   読み上げ名は input / button の aria-label で保たれるので情報は減らない。 */
+.toolbar--left.collapsed .toolbar-view-zoom-label,
+.toolbar--left.collapsed .toolbar-feedback-label {
+  display: none;
+}
+/* 本文（譜面）は上ではなく左へ逃がす */
+.app-root.toolbar-left {
+  padding-top: 0;
+  padding-left: var(--toolbar-w, 260px);
+}
+/* セレクト等を開いたときの透明な覆い。上配置ではヘッダー分だけ上端を下げていた
+   （＝ヘッダーのクリックを奪わない）のと同じ理由で、左配置では左端をずらす。
+   ここが無いと、ドロップダウンを開いている間ツールバーが一切押せなくなる。 */
+.app-root.toolbar-left .dropdown-overlay {
+  left: var(--toolbar-w, 260px);
+}
+/* パート編集ウィンドウ（body 直下へ portal されるため .app-root の子ではない）。
+   右端固定・幅 100vw ぶんのままだと左のツールバーへ覆いかぶさるので、
+   ツールバーの幅ぶんだけ狭くする。--toolbar-w は ScorePage が要素へ直接渡している。 */
+.instrumentation-editor-window--toolbar-left {
+  width: min(1180px, calc(100vw - var(--toolbar-w, 0px) - 36px));
+}
+/* 狭い画面（スマホ等）で左配置を上配置へ戻す判断は、CSS ではなく JS 側で行う
+   （toolbarPlacement.ts の resolveEffectiveToolbarPlacement・768px 未満で上に戻す）。
+   ここに @media の保険を置かなかったのは、左配置のとき ScorePage が
+   `--toolbar-h: 0px` を .app-root のインラインstyleで渡すため、
+   @media 側で `padding-top: var(--toolbar-h)` と書いてもインラインの 0px が勝ち、
+   本文がツールバーの下に潜るだけで保険にならないため（実機確認 2026-08-29）。
+   幅の判定を1か所（JS）に集約することで、幅フィットの計算とも食い違わない。 */
+
 /* ツールバーの折り畳み（Issue #125）。
    .collapsed のときはタブ行（フィードバック含む）・Undo/Redo・パネルを隠し、
    折り畳みトグルの行だけを残す。
@@ -329,6 +419,13 @@
 .toolbar-layout-subgroup > .toolbar-group-label {
   border-right: 1px solid #e5e7eb;
   padding-right: 6px;
+}
+
+/* 「左（縦）」を選んでいるのに画面が狭くて上に出しているときの補足文（Issue #483）。
+   設定が効いていないように見えないよう、理由をその場に小さく添える。 */
+.toolbar-placement-note {
+  font-size: 11px;
+  color: #6b7280;
 }
 
 /* リセット系4種をまとめたメニュー（Issue #143）。ボタン直下に出す小さなポップアップで、
@@ -2038,6 +2135,9 @@ button.ghost.active:hover:not(:disabled) {
   /* 固定ツールバー分の逃し（padding-top: 60px）も印刷では不要。
      残すと1枚目だけ60px下へずれ、ページ末尾が次の紙へ押し出される */
   .app-root { padding-top: 0 !important; }
+  /* 左（縦）配置（Issue #483）のときの左余白も同じ理由で印刷には持ち込まない。
+     残すと紙の左が丸ごとツールバー幅ぶん空き、譜面が右へずれて切れる */
+  .app-root { padding-left: 0 !important; }
   /* 画面用の余白（paper-rail 16px / spread 16px 24px / gap）は印刷に持ち込まない。
      ここが残ると「タイトルの上の余白が画面より大きい」「紙のページ割りが
      .print-page の 297mm とずれていく」原因になる */

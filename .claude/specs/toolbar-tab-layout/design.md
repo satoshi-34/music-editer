@@ -711,3 +711,103 @@ Issue #150 で**折り畳み中だけ**フィードバックボタンがトグ�
   （メニュー幅は 343px のまま、右端・下端とも画面内）、「レイアウトをリセット」を押すと
   メニューが閉じても譜面の描画要素数が 273→273 と変わらない（＝説明文どおり音符は無事）
   ことを確認。コンソールエラーなし。
+
+## 追補: ツールバーを左（縦）配置に切り替えられるようにする（Issue #483・2026-08-29）
+
+### 背景・問題
+
+タブ化以降もツールバーは「画面上部の横並び」だけだった。運用者経由の弟フィードバックで、
+
+- Finale などの楽譜ソフトはパレットを左右に縦置きできる（現 Finale ユーザーの手に馴染む）
+- 縦長のディスプレイや「譜面を縦に長く見たい」場面で、上部固定の帯が高さを圧迫する
+
+という要望が出た。従来の上配置を廃止するのではなく、**上（横）と左（縦）を切り替えられる**
+ことが要件（受入条件5「従来の上配置の見た目・操作は1pxも変えない」）。
+
+### 修正設計
+
+#### 1. 逃がす向きだけを変える（既存の仕組みをそのまま使う）
+
+上配置は「`position: fixed` のヘッダー＋本文の `padding-top: var(--toolbar-h)`」で重なりを
+避けている。左配置はこれの向き違いにするだけにした。
+
+| | 上（従来） | 左（新規） |
+| --- | --- | --- |
+| ヘッダー | `top/left/right: 0` の横帯 | `top/left/bottom: 0` の縦帯（幅 260px） |
+| 本文の逃がし | `padding-top: var(--toolbar-h)` | `padding-left: var(--toolbar-w)` |
+| 実測 | 高さ → `--toolbar-h` | 幅 → `--toolbar-w` |
+
+左配置のときは `--toolbar-h` にインラインで `0px` を渡す。これで上余白が消えるだけでなく、
+`--toolbar-h` を参照している既存の浮き要素（`.ui-context-bar-float` / `.dropdown-overlay` /
+パート編集ウィンドウ）が自動的に画面の上端基準へ移る。
+
+新規CSSはすべて `.toolbar--left` / `.app-root.toolbar-left` で修飾し、既存の規則には
+一切手を入れていない（受入条件5）。この「素の `.toolbar` / `.app-root` に左配置用の変数が
+混ざっていないこと」は `src/AppCssToolbarPlacement.test.ts` で静的に守る。
+
+#### 2. 状態と保存
+
+- `src/utils/toolbarPlacement.ts`（新規）に、型・localStorage キー（`score-toolbar-placement`）・
+  読み書き・「狭い画面では上へ戻す」判定・幅の丸めをまとめた。`toolbarHeight.ts` と同じ
+  「ブラウザを立ち上げなくても仕様を単体テストで固定できる形」に寄せている。
+- 切り替えUIは**レイアウトタブ**のチップ（表示ウェイトと同じ形）。紙面ではなく画面の使い方を
+  決める設定だが、「どこに何を置くか」という意味でレイアウトタブが最も近いという判断。
+
+#### 3. 狭い画面では上配置へ戻す（判断の記録）
+
+Issue の実装メモにあった「モバイル幅では左配置を強制解除する」を採用した（縦幅より横幅が
+貴重なため）。**判定は CSS の `@media` ではなく JS に一本化**している。理由は2つ:
+
+1. 左配置では `--toolbar-h: 0px` を `.app-root` のインライン style で渡すため、`@media` 側で
+   `padding-top: var(--toolbar-h)` と書いてもインラインの `0px` が勝ち、本文がツールバーの
+   下に潜るだけで保険にならない（実機で確認済み）
+2. 幅フィット（下記）の計算も JS 側で行うため、判定が2か所にあると食い違う
+
+閾値は 768px（`TOOLBAR_LEFT_MIN_VIEWPORT_WIDTH_PX`）。ユーザーの選択自体は保存したままなので、
+画面を広げれば左配置に戻る。上に戻している間は、その理由をレイアウトタブに小さく添える
+（黙って戻ると「設定が効かない不具合」に見えるため）。
+
+#### 4. 幅フィット（初期ズーム #40）の再計算（受入条件4）
+
+`readPageAreaAvailableWidth` は `body.clientWidth` を読む。ツールバーは `fixed` なので、
+左配置にしても body の幅は縮まない → そのままでは「ページが収まらないのに100%」になる。
+そこで `computeFitZoom` へ渡す前にツールバー幅を引く。あわせてフィット計算の effect の
+依存に「配置」と「実測したツールバー幅」を足し、配置を切り替えたときにも計算し直すようにした。
+
+ズームが保存済み（＝ユーザーが自分でスライダーを動かした）のときは effect の冒頭で return
+する既存の条件をそのまま残しているので、**配置を変えてもユーザーの倍率を勝手に書き換えない**。
+
+#### 5. 折り畳み（受入条件6）
+
+`.toolbar.collapsed` の仕組みは共通のまま。上配置では帯の「高さ」が縮むのに対し、左配置では
+帯の「幅」が縮む（`width: max-content`）。折り畳み行は縦に積み、上配置の狭い画面（Issue #150）
+と同じくズームの見出し文字とフィードバックの文字を省く。これをしないと帯の幅が畳む前と
+ほとんど変わらず「譜面を広く見る」目的を果たせなかった（実機確認で判明。281px → 153px）。
+
+### 影響範囲
+
+- `src/utils/toolbarPlacement.ts`（新規）・`src/utils/toolbarPlacement.test.ts`（新規）
+- `src/components/ScorePage.tsx`: 配置 state・ウィンドウ幅の追跡・ツールバー幅の実測追加、
+  `.app-root` / `<header>` のクラスとCSS変数、レイアウトタブの切り替えチップ、幅フィットの
+  依存追加。**上配置のときの描画結果（クラス・変数）は従来と同じ**
+- `src/App.css`: 左配置用の規則を追加（既存規則は無変更）、印刷時に `padding-left: 0` を追加
+- `src/components/ScorePageToolbarPlacement.test.tsx`（新規）・`src/AppCssToolbarPlacement.test.ts`（新規）
+- `README.md`: レイアウトタブの説明と操作の節に追記
+
+### 検証
+
+- 変更に関係するテスト（`toolbarPlacement` / `AppCssToolbarPlacement` /
+  `ScorePageToolbarPlacement` / `ScorePageToolbarCollapse` / `ScorePageInitialZoomFit` /
+  `ScorePageCollapsedFeedback` / `toolbarHeight` / `viewZoomUtils` / `InstrumentSelector` /
+  `ScorePageA2Wiring`）はすべて成功。`npm run lint:ratchet -- --check` は基準値ちょうど、
+  `npm run build` 成功
+- ブラウザ確認（アプリ内ブラウザ・共有dev サーバー + `night-preview.html` 経由・1280px幅）:
+  レイアウトタブ →「左（縦）」で縦帯へ切り替わり（`--toolbar-w: 281px`・本文の `padding-left`
+  も 281px）、6タブすべてが縦帯に収まり切り替えも動作、譜面クリックで音符が入り、
+  **クリックしたY座標（273.6）と入った符頭の中心Y（273）が一致**（左余白が座標変換を壊して
+  いないことの確認）、折り畳みで帯が 281px → 153px に縮み復帰ボタンも残る、
+  ウィンドウを375px幅にすると上配置へ戻る、上（横）へ戻すと従来どおりの見た目に戻ることを確認。
+  コンソールエラーなし。
+  ※ `vite.config.ts` の `server.watch.ignored` が `.night-worktrees/**` を無視するため、
+  dev サーバーは編集後の App.css を再変換しない。折り畳み帯の詰め（上記153px）だけは、
+  同じ内容の規則を DevTools 経由で流し込んで確認した（正本はファイル側）
