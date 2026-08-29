@@ -13,6 +13,7 @@ import EnsembleStaff from './EnsembleStaff';
 import PartExtractionStaff from './PartExtractionStaff';
 import { QUARTET_PART_CONFIGS } from './QuartetStaff';
 import { extractMusicXmlFromMxl, isMxlContainer, MxlExtractError } from '../utils/mxlUtils';
+import { convertPdfToMxl, getOmrApiUrl, OmrConvertError } from '../utils/omrApi';
 import SymbolEditor from './SymbolEditor';
 import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
@@ -185,6 +186,7 @@ import {
   describePlaybackFromMeasure,
   describeLegacyImportResult,
   describeMxlExtractFailed,
+  describeOmrConvertFailed,
   describeWorkHistoryRestoreBlocked,
   describeWorkHistoryRestored,
   describeSliceClearNoop,
@@ -553,6 +555,8 @@ export default function ScorePage() {
   });
   const isToolbarLeft = effectiveToolbarPlacement === 'left';
   const musicXmlInputRef = useRef<HTMLInputElement | null>(null);
+  // PDF楽譜の取り込み（#487）用の隠しファイル入力。変換APIのURLが設定されているときだけ使う
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
 
   const [title, setTitle] = useState('タイトル');
   const [subtitle, setSubtitle] = useState('サブタイトル');
@@ -4512,103 +4516,137 @@ export default function ScorePage() {
     window.print();
   }, [titleFontId, title, subtitle, lyricist, composer, arranger, buildCurrentScoreData]);
 
+  /**
+   * MusicXML（.xml / .musicxml / 圧縮形式の .mxl）のバイト列を読み込んで画面へ反映する。
+   * ファイル選択からの読込と、PDF変換API から返ってきた .mxl（Issue #487）の**両方がここを通る**。
+   * 経路ごとに読込処理を書くと、片方だけ直って片方が古いままになる事故が起きるため、
+   * 入口（ファイル選択 / 変換API）だけを分けて中身は共用している。
+   * @returns 読み込めたら true（失敗時は理由を通知したうえで false）
+   */
+  const applyImportedMusicXmlBytes = useCallback(async (bytes: Uint8Array, fileName: string): Promise<boolean> => {
+    try {
+      // 常にバイト列で読み、ZIP（= .mxl 圧縮MusicXML・Finale の既定書き出し）なら
+      // 展開して本文を取り出す（Issue #465）。非圧縮はそのまま UTF-8 として読む。
+      // 拡張子ではなくマジックバイトで判定するので、「.xml なのに実は zip」も救える
+      let xml: string;
+      if (isMxlContainer(bytes)) {
+        try {
+          xml = extractMusicXmlFromMxl(bytes);
+        } catch (mxlErr) {
+          if (mxlErr instanceof MxlExtractError) {
+            notifyScoreEdit(describeMxlExtractFailed(mxlErr.reason));
+            return false;
+          }
+          throw mxlErr;
+        }
+      } else if (fileName.toLowerCase().endsWith('.mxl')) {
+        // .mxl と名乗っているのに ZIP マジックが無い＝先頭破損など。
+        // 一般の XML パース失敗 alert に落とさず、理由つきで通知する（#318）
+        notifyScoreEdit(describeMxlExtractFailed('notZip'));
+        return false;
+      } else {
+        xml = new TextDecoder('utf-8').decode(bytes);
+      }
+      const loaded = parseMusicXml(xml);
+      // applyLoadedScoreData と同等のロジックで画面に反映する
+      // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
+      setPartExtractionId(null);
+      setTitle(loaded.metadata.title);
+      setSubtitle(loaded.metadata.subtitle);
+      setLyricist(loaded.metadata.lyricist);
+      setComposer(loaded.metadata.composer);
+      setArranger(loaded.metadata.arranger);
+      const loadedType = loaded.scoreType ?? 'single';
+      setKeySignature(normalizeKeySignature(loaded.keySignature));
+      await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
+      // MusicXML の <time symbol="common"/"cut"> を読み込んだ場合はここで表示スタイルへ戻す
+      setTimeSignatureStyle(normalizeTimeSignatureStyle(loaded.timeSignatureStyle));
+      setScoreType(loadedType);
+      if (loadedType === 'quartet') {
+        const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
+        setQuartetParts(QUARTET_IDS.map(id =>
+          loaded.parts.find(p => p.partId === id)?.measures ?? []
+        ));
+        setEnsembleParts([]);
+        setEnsembleSecondStaffParts([]);
+      } else if (loadedType === 'ensemble') {
+        // MusicXML には staffCount（大譜表）の概念が無く、位置合わせでのみ復元できる。
+        // 大譜表パートの2段目は現状 MusicXML 側で表現できないため、常に空のまま
+        // （既存の位置ベース復元と同様、この経路の大譜表対応は本PRの対象外）。
+        setEnsembleParts(loaded.parts.map(p => p.measures));
+        setEnsembleSecondStaffParts([]);
+      } else {
+        // 大譜表分割（#419）が partId を right-hand / left-hand に揃えて返すので、
+        // まず partId で選ぶ。clef だけで選ぶと「両段ともト音」の正当な大譜表で
+        // 2段目が読み捨てられ、「上段がヘ音」の曲では左右が逆転する（Codex round1 P1）。
+        // partId が無い従来形式（パート分離の2パートXML等）は従来どおり clef で推定する
+        const byId = (id: string) => loaded.parts.find(p => p.partId === id);
+        const rightPart = byId('right-hand')
+          ?? loaded.parts.find(p => p.clef === 'treble') ?? loaded.parts[0];
+        const leftPart = byId('left-hand')
+          ?? loaded.parts.find(p => p !== rightPart && p.clef === 'bass')
+          ?? (loaded.parts.length === 2 ? loaded.parts.find(p => p !== rightPart) : undefined);
+        setRightHandData(rightPart?.measures ?? []);
+        setLeftHandData(leftPart?.measures);
+        // アプリのピアノモデルはクレフ固定（上=ト・下=ヘ）で、任意クレフの大譜表
+        // （両段ト音など）は保持できない。keys は絶対音名なので音の高さは変わらないが、
+        // 見た目のクレフが黙って変わるのは #318 に反するため通知する（#419 round2 P1）
+        if (loaded.scoreType === 'piano'
+          && ((rightPart && rightPart.clef !== 'treble') || (leftPart && leftPart.clef !== 'bass'))) {
+          notifyScoreEdit(describeImportedClefNormalized());
+        }
+        setEnsembleParts([]);
+        setEnsembleSecondStaffParts([]);
+      }
+      // MusicXML には段割り上書きの概念が無いため、前の譜面ぶんを引き継がずリセットする
+      setSystemMeasureOverrides([]);
+      // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
+      setLastEditedMeasureIndex(null);
+      // 段の間隔の手動上書きも同様に引き継がずリセットする
+      setSystemRowGapOverrides([]);
+      return true;
+    } catch (err) {
+      alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }, [setTimeSignature, measuresPerSystem]);
+
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async (ev) => {
-      try {
-        // 常にバイト列で読み、ZIP（= .mxl 圧縮MusicXML・Finale の既定書き出し）なら
-        // 展開して本文を取り出す（Issue #465）。非圧縮はそのまま UTF-8 として読む。
-        // 拡張子ではなくマジックバイトで判定するので、「.xml なのに実は zip」も救える
-        const buffer = ev.target?.result as ArrayBuffer;
-        const bytes = new Uint8Array(buffer);
-        let xml: string;
-        if (isMxlContainer(bytes)) {
-          try {
-            xml = extractMusicXmlFromMxl(bytes);
-          } catch (mxlErr) {
-            if (mxlErr instanceof MxlExtractError) {
-              notifyScoreEdit(describeMxlExtractFailed(mxlErr.reason));
-              if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
-              return;
-            }
-            throw mxlErr;
-          }
-        } else if (file.name.toLowerCase().endsWith('.mxl')) {
-          // .mxl と名乗っているのに ZIP マジックが無い＝先頭破損など。
-          // 一般の XML パース失敗 alert に落とさず、理由つきで通知する（#318）
-          notifyScoreEdit(describeMxlExtractFailed('notZip'));
-          if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
-          return;
-        } else {
-          xml = new TextDecoder('utf-8').decode(bytes);
-        }
-        const loaded = parseMusicXml(xml);
-        // applyLoadedScoreData と同等のロジックで画面に反映する
-        // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
-        setPartExtractionId(null);
-        setTitle(loaded.metadata.title);
-        setSubtitle(loaded.metadata.subtitle);
-        setLyricist(loaded.metadata.lyricist);
-        setComposer(loaded.metadata.composer);
-        setArranger(loaded.metadata.arranger);
-        const loadedType = loaded.scoreType ?? 'single';
-        setKeySignature(normalizeKeySignature(loaded.keySignature));
-        await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
-        // MusicXML の <time symbol="common"/"cut"> を読み込んだ場合はここで表示スタイルへ戻す
-        setTimeSignatureStyle(normalizeTimeSignatureStyle(loaded.timeSignatureStyle));
-        setScoreType(loadedType);
-        if (loadedType === 'quartet') {
-          const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
-          setQuartetParts(QUARTET_IDS.map(id =>
-            loaded.parts.find(p => p.partId === id)?.measures ?? []
-          ));
-          setEnsembleParts([]);
-          setEnsembleSecondStaffParts([]);
-        } else if (loadedType === 'ensemble') {
-          // MusicXML には staffCount（大譜表）の概念が無く、位置合わせでのみ復元できる。
-          // 大譜表パートの2段目は現状 MusicXML 側で表現できないため、常に空のまま
-          // （既存の位置ベース復元と同様、この経路の大譜表対応は本PRの対象外）。
-          setEnsembleParts(loaded.parts.map(p => p.measures));
-          setEnsembleSecondStaffParts([]);
-        } else {
-          // 大譜表分割（#419）が partId を right-hand / left-hand に揃えて返すので、
-          // まず partId で選ぶ。clef だけで選ぶと「両段ともト音」の正当な大譜表で
-          // 2段目が読み捨てられ、「上段がヘ音」の曲では左右が逆転する（Codex round1 P1）。
-          // partId が無い従来形式（パート分離の2パートXML等）は従来どおり clef で推定する
-          const byId = (id: string) => loaded.parts.find(p => p.partId === id);
-          const rightPart = byId('right-hand')
-            ?? loaded.parts.find(p => p.clef === 'treble') ?? loaded.parts[0];
-          const leftPart = byId('left-hand')
-            ?? loaded.parts.find(p => p !== rightPart && p.clef === 'bass')
-            ?? (loaded.parts.length === 2 ? loaded.parts.find(p => p !== rightPart) : undefined);
-          setRightHandData(rightPart?.measures ?? []);
-          setLeftHandData(leftPart?.measures);
-          // アプリのピアノモデルはクレフ固定（上=ト・下=ヘ）で、任意クレフの大譜表
-          // （両段ト音など）は保持できない。keys は絶対音名なので音の高さは変わらないが、
-          // 見た目のクレフが黙って変わるのは #318 に反するため通知する（#419 round2 P1）
-          if (loaded.scoreType === 'piano'
-            && ((rightPart && rightPart.clef !== 'treble') || (leftPart && leftPart.clef !== 'bass'))) {
-            notifyScoreEdit(describeImportedClefNormalized());
-          }
-          setEnsembleParts([]);
-          setEnsembleSecondStaffParts([]);
-        }
-        // MusicXML には段割り上書きの概念が無いため、前の譜面ぶんを引き継がずリセットする
-        setSystemMeasureOverrides([]);
-        // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
-        setLastEditedMeasureIndex(null);
-        // 段の間隔の手動上書きも同様に引き継がずリセットする
-        setSystemRowGapOverrides([]);
-      } catch (err) {
-        alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
-      }
+      const buffer = ev.target?.result as ArrayBuffer;
+      await applyImportedMusicXmlBytes(new Uint8Array(buffer), file.name);
       // 同じファイルを再度選択できるよう値をリセットする
       if (musicXmlInputRef.current) musicXmlInputRef.current.value = '';
     };
     reader.readAsArrayBuffer(file);
-  }, [setTimeSignature, measuresPerSystem]);
+  }, [applyImportedMusicXmlBytes]);
+
+  // PDF楽譜の取り込み（Issue #487・#461 段1）。
+  // 変換は数十秒かかることがあるので、進行中はボタンを「変換中…」にして二重送信を防ぐ。
+  const [isConvertingPdf, setIsConvertingPdf] = useState(false);
+  const handleImportPdf = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // 同じ PDF を続けて選べるよう、読み取った直後に入力値を空へ戻す
+    if (pdfInputRef.current) pdfInputRef.current.value = '';
+    if (!file) return;
+    setIsConvertingPdf(true);
+    try {
+      const mxl = await convertPdfToMxl(file);
+      // 変換結果は .mxl なので、拡張子も .mxl として既存の MusicXML 読込経路へ渡す
+      await applyImportedMusicXmlBytes(mxl, file.name.replace(/\.pdf$/i, '') + '.mxl');
+    } catch (err) {
+      // 失敗は必ず理由と代替手順（Audiveris で手元変換）つきで知らせる（#318）
+      notifyScoreEdit(describeOmrConvertFailed(err instanceof OmrConvertError ? err.reason : 'conversionFailed'));
+    } finally {
+      setIsConvertingPdf(false);
+    }
+  }, [applyImportedMusicXmlBytes]);
+
+  // 変換APIのURL（VITE_OMR_API_URL）。未設定なら「PDF (β)」ボタン自体を出さない
+  const omrApiUrl = getOmrApiUrl();
 
   const [hasCustomPianoSample, setHasCustomPianoSample] = useState<boolean>(() => hasCustomPianoDemoScore());
   // 以前は「2ページ分の幅がない画面では1ページ目だけ描画する」間引きをしていたが、
@@ -5996,6 +6034,20 @@ export default function ScorePage() {
                       伝わらなかった（対面テストの指摘）。拡張子を併記する */}
                   MusicXML (.mxl)
                 </button>
+                {/* PDF楽譜の取り込み（Issue #487）。変換API（server/omr）が用意されている
+                    ときだけ出す（VITE_OMR_API_URL 未設定＝本番では表示しない）。
+                    認識結果は「修正前提の下書き」水準なので β を付けて期待値を下げている */}
+                {omrApiUrl && (
+                  <button
+                    type="button"
+                    className="ghost toolbar-chip-button"
+                    onClick={() => pdfInputRef.current?.click()}
+                    disabled={isConvertingPdf}
+                    title="PDFの楽譜を自動で読み取って開きます（β版：読み取り結果は必ず確認・修正してください）"
+                  >
+                    {isConvertingPdf ? 'PDF 変換中…' : 'PDF (β)'}
+                  </button>
+                )}
                 {storedDataAvailable && (
                   <button type="button" className="ghost toolbar-chip-button" onClick={() => void handleImportLegacyManualSave()}>
                     以前の手動保存
@@ -6030,6 +6082,19 @@ export default function ScorePage() {
                 style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
                 onChange={handleImportMusicXml}
               />
+              {/* PDF 用の隠しファイル入力も、変換APIが無いときは丸ごと出さない
+                  （押せない導線だけが残るのを避ける。Issue #487） */}
+              {omrApiUrl && (
+                <input
+                  ref={pdfInputRef}
+                  type="file"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  accept=".pdf,application/pdf"
+                  style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
+                  onChange={(event) => void handleImportPdf(event)}
+                />
+              )}
             </div>
           )}
         </div>
