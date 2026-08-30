@@ -339,10 +339,20 @@ function readPersonalPageMarginSettings(): { sideMm: number; topMm: number; bott
     const n = raw == null ? NaN : parseFloat(raw);
     return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
   };
+  // 上下は旧・単一キー（score-page-margin-vertical）を後方互換として読む
+  // （state 初期化と同じ優先順位。round2 P2: 新キーだけ見ると旧設定利用者の
+  // 上下余白が工場値へ化けて、そのまま作品へ明示保存されてしまう）
+  const legacyVertical = (() => {
+    const raw = localStorage.getItem(PAGE_MARGIN_VERTICAL_LEGACY_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n)
+      ? Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, n))
+      : null;
+  })();
   return {
     sideMm: read(PAGE_MARGIN_SIDE_KEY, DEFAULT_PAGE_SIDE_MARGIN_MM, PAGE_MARGIN_SIDE_MIN_MM, PAGE_MARGIN_SIDE_MAX_MM),
-    topMm: read(PAGE_MARGIN_TOP_KEY, DEFAULT_PAGE_MARGIN_TOP_MM, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM),
-    bottomMm: read(PAGE_MARGIN_BOTTOM_KEY, DEFAULT_PAGE_MARGIN_BOTTOM_MM, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM),
+    topMm: read(PAGE_MARGIN_TOP_KEY, legacyVertical ?? DEFAULT_PAGE_MARGIN_TOP_MM, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM),
+    bottomMm: read(PAGE_MARGIN_BOTTOM_KEY, legacyVertical ?? DEFAULT_PAGE_MARGIN_BOTTOM_MM, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM),
   };
 }
 // 「タイトル余白（上）」「タイトル余白（下）」のユーザー設定（レイアウトタブのスライダー、
@@ -2638,13 +2648,17 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * localStorage（表示設定）へは書かない: 作品を1つ開いただけで
    * グローバル設定を書き換えてしまわないため（作品の属性であって表示設定ではない）。
    */
-  const applySavedLayoutAttributes = useCallback((data: SavedScoreData) => {
+  const applySavedLayoutAttributes = useCallback((data: SavedScoreData, options?: { resetOmitted?: boolean }) => {
+    // resetOmitted=false（MusicXML 取り込み経路・round2 P1）: <defaults> の無い取り込みは
+    // 「作品の切替」ではないので、省略項目は現在の値のまま（表示設定へも戻さない）。
+    // 省略時の表示設定復帰は、保存済み作品を開く・切り替える経路（既定 true）だけの約束
+    const resetOmitted = options?.resetOmitted ?? true;
     if (data.notationSizeMultiplier !== undefined) {
       setNotationSizeMultiplier(normalizeNotationSizeMultiplier(
         data.notationSizeMultiplier,
         resolveDefaultLayoutForScoreType(data.scoreType ?? 'single').notationSizeMultiplier,
       ));
-    } else {
+    } else if (resetOmitted) {
       setNotationSizeMultiplier(readPersonalNotationSizeSetting());
     }
     if (data.pageMargins !== undefined) {
@@ -2656,7 +2670,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       setPageMarginSideMm(margins.sideMm);
       setPageMarginTopMm(margins.topMm);
       setPageMarginBottomMm(margins.bottomMm);
-    } else {
+    } else if (resetOmitted) {
       const personal = readPersonalPageMarginSettings();
       setPageMarginSideMm(personal.sideMm);
       setPageMarginTopMm(personal.topMm);
@@ -4925,6 +4939,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       setComposer(loaded.metadata.composer);
       setArranger(loaded.metadata.arranger);
       const loadedType = loaded.scoreType ?? 'single';
+      // 取り込み時の通知は1本にまとめて出す（後勝ちで消えないように・#477 round2 P2）
+      const importNotices: string[] = [];
       setKeySignature(normalizeKeySignature(loaded.keySignature));
       await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
       // MusicXML の <time symbol="common"/"cut"> を読み込んだ場合はここで表示スタイルへ戻す
@@ -4949,7 +4965,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // まず partId で選ぶ。clef だけで選ぶと「両段ともト音」の正当な大譜表で
         // 2段目が読み捨てられ、「上段がヘ音」の曲では左右が逆転する（Codex round1 P1）。
         // partId が無い従来形式（パート分離の2パートXML等）は従来どおり clef で推定する
-        const byId = (id: string) => loaded.parts.find(p => p.partId === id);
+          const byId = (id: string) => loaded.parts.find(p => p.partId === id);
         const rightPart = byId('right-hand')
           ?? loaded.parts.find(p => p.clef === 'treble') ?? loaded.parts[0];
         const leftPart = byId('left-hand')
@@ -4959,10 +4975,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         setLeftHandData(leftPart?.measures);
         // アプリのピアノモデルはクレフ固定（上=ト・下=ヘ）で、任意クレフの大譜表
         // （両段ト音など）は保持できない。keys は絶対音名なので音の高さは変わらないが、
-        // 見た目のクレフが黙って変わるのは #318 に反するため通知する（#419 round2 P1）
+        // 見た目のクレフが黙って変わるのは #318 に反するため通知する（#419 round2 P1）。
+        // 単独送信ではなく importNotices へ積む: 通知は後勝ちのため、後続の
+        // レイアウト通知に消されて読めなくなる（#477 round2 P2）
         if (loaded.scoreType === 'piano'
           && ((rightPart && rightPart.clef !== 'treble') || (leftPart && leftPart.clef !== 'bass'))) {
-          notifyScoreEdit(describeImportedClefNormalized());
+          importNotices.push(describeImportedClefNormalized());
         }
         setEnsembleParts([]);
         setEnsembleSecondStaffParts([]);
@@ -4971,7 +4989,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // Finale などの書き出しは <defaults> に「その作品をどう組むか」（五線の大きさ・判型・余白）を
       // 持っている。従来はこれを全部捨てて既定サイズで組んでいたため、実曲を持ち込むと
       // 紙幅超過警告が出ていた。読めた項目だけを作品の属性として引き継ぐ。
-      const importNotices: string[] = [];
       if (importedDefaults?.pageSizeRounded) {
         importNotices.push(describeImportedPageSizeRounded(getPageSize(loaded.pageSize).label));
       }
@@ -4979,7 +4996,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const importedMargins = loaded.pageMargins ?? {
         sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm,
       };
-      applySavedLayoutAttributes(loaded);
+      applySavedLayoutAttributes(loaded, { resetOmitted: false });
 
       // ファイル指定（無ければ現在の設定）の縮尺で、1小節すら紙幅に入らない小節が無いか確かめる。
       // ファイルの縮尺をそのまま使っても収まるとは限らない（音符の間隔の詰め方はアプリ独自の

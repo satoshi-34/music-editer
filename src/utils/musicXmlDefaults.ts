@@ -105,7 +105,9 @@ function readPositiveNumber(parent: Element | null, selector: string): number | 
 function readNonNegativeNumber(parent: Element | null, tagName: string): number | null {
   if (!parent) return null;
   const text = parent.querySelector(tagName)?.textContent;
-  if (text == null) return null;
+  // Number('') / Number('   ') は 0 になるため、空要素を「正当な0余白」と
+  // 取り違えないよう先に弾く（round2 P3: 壊れた値は破棄する設計に合わせる）
+  if (text == null || text.trim() === '') return null;
   const value = Number(text);
   return Number.isFinite(value) && value >= 0 ? value : null;
 }

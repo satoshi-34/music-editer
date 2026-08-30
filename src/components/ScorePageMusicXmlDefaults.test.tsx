@@ -333,4 +333,42 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
     expect(notationSizeSlider().value).toBe('130');
     expect(sideMarginSlider().value).toBe('10');
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('縮尺スライダーだけを変えても自動保存へ反映される（round1/round2 P1: layoutAttrRevision 経路）', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
+    const workId = getLastOpenedWorkId();
+    expect(workId).toBeTruthy();
+
+    // 譜面本体には触れず、スライダーだけを 120% へ
+    fireEvent.change(notationSizeSlider(), { target: { value: '120' } });
+
+    // デバウンス（1.5秒）後の自動保存で作品属性が更新される
+    await waitFor(() => {
+      const saved = loadWorkAutosaveData(workId!);
+      expect(saved.success).toBe(true);
+      expect(saved.data?.notationSizeMultiplier).toBeCloseTo(1.2, 5);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('<defaults> の無い取り込みは、現在の縮尺・余白を一切変えない（round2 P1: 個人設定へも戻さない）', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
+
+    // 現在の作品を 120%/12mm にし、個人設定はそれと異なる 130%/10mm にしておく
+    fireEvent.change(notationSizeSlider(), { target: { value: '120' } });
+    fireEvent.change(sideMarginSlider(), { target: { value: '12' } });
+    localStorageMock.setItem('score-notation-size', '1.3');
+    localStorageMock.setItem('score-page-margin-side', '10');
+
+    await importXml(scoreXml('', `
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>32</duration><voice>1</voice><type>whole</type></note>`));
+    await waitFor(() => { expect(document.body.textContent).toContain('defaults の曲'); }, { timeout: 15000 });
+
+    // 取り込みは作品切替ではないので、120%/12mm のまま（130/10 へ化けない）
+    expect(notationSizeSlider().value).toBe('120');
+    expect(sideMarginSlider().value).toBe('12');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });
