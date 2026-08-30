@@ -6,7 +6,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, screen } from '@testing-library/react';
 import ScorePage from './ScorePage';
-import { STORAGE_LOCATION_NOTICE_SEEN_KEY } from '../utils/storageLocationNotice';
+import React from 'react';
+import { STORAGE_LOCATION_NOTICE_SEEN_KEY, resetStorageLocationNoticeForTest } from '../utils/storageLocationNotice';
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -37,6 +38,9 @@ describe('ScorePage: 保存先の説明を初回だけ出す（#497）', () => {
 
   beforeEach(() => {
     localStorageMock.clear();
+    // 「同じページ読み込み内か」のモジュール変数をテストごとに初期化する
+    // （残っていると『2回目の起動では出ない』が前のテストの読み込み扱いになって壊れる）
+    resetStorageLocationNoticeForTest();
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get: () => 700, configurable: true });
   });
@@ -53,7 +57,8 @@ describe('ScorePage: 保存先の説明を初回だけ出す（#497）', () => {
 
     const notice = await screen.findByTestId('edit-notice');
     expect(notice.textContent).toContain('この端末にのみ保存されます');
-    expect(notice.textContent).toContain('サーバーには送信されません');
+    // 送信の否定は「自動で」に限定（PDF取り込みβの例外と矛盾させない・round1 P1）
+    expect(notice.textContent).toContain('自動でサーバーへ送信されることはありません');
     // ヘルプへの導線まで言う（通知は数秒で消えるので、後から読み直せる場所を示す）
     expect(notice.textContent).toContain('データの保存場所と安全性');
 
@@ -64,6 +69,7 @@ describe('ScorePage: 保存先の説明を初回だけ出す（#497）', () => {
     render(<ScorePage />);
     await screen.findByTestId('edit-notice');
     cleanup();
+    resetStorageLocationNoticeForTest(); // 次の「ページ読み込み」相当
 
     render(<ScorePage />);
     // 譜面が描かれるまで待ってから、通知が無いことを確かめる
@@ -72,5 +78,17 @@ describe('ScorePage: 保存先の説明を初回だけ出す（#497）', () => {
       expect(document.querySelector('svg')).toBeTruthy();
     }, { timeout: 10000 });
     expect(screen.queryByTestId('edit-notice')).toBeNull();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('StrictMode（effect の実行→片付け→再実行）でも通知が出て、時間経過で消える（round1 P3）', async () => {
+    // 片付けで消去タイマーが失われたまま通知だけ残る退行を検出する。
+    // 表示時間（10秒）を実時間で待つため、このテストだけ長い
+    render(React.createElement(React.StrictMode, null, React.createElement(ScorePage)));
+
+    const notice = await screen.findByTestId('edit-notice');
+    expect(notice.textContent).toContain('この端末にのみ保存されます');
+    await waitFor(() => {
+      expect(screen.queryByTestId('edit-notice')).toBeNull();
+    }, { timeout: 20000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

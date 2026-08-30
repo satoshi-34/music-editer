@@ -202,8 +202,7 @@ import {
   type ScoreEditNoticeDetail,
 } from '../utils/scoreEditorNotices';
 import {
-  hasSeenStorageLocationNotice,
-  markStorageLocationNoticeSeen,
+  claimStorageLocationNotice,
   STORAGE_LOCATION_NOTICE_DURATION_MS,
   STORAGE_LOCATION_NOTICE_MESSAGE,
 } from '../utils/storageLocationNotice';
@@ -4902,8 +4901,10 @@ export default function ScorePage() {
   // この useEffect を通知リスナーの**後ろ**に置いているのは、React が宣言順に効果を実行するため。
   // 先に置くと dispatch した時点でまだリスナーが居らず、通知が誰にも届かずに消える。
   useEffect(() => {
-    if (hasSeenStorageLocationNotice()) return;
-    markStorageLocationNoticeSeen();
+    // claim は StrictMode の「実行→片付け→再実行」でも true を返し続けるため、
+    // 再実行時に通知と消去タイマーが張り直される（round1 P3。判定と既読記録は
+    // utils/storageLocationNotice.ts 側で1関数にまとめてある）
+    if (!claimStorageLocationNotice()) return;
     notifyScoreEdit(STORAGE_LOCATION_NOTICE_MESSAGE, STORAGE_LOCATION_NOTICE_DURATION_MS);
   }, []);
 
