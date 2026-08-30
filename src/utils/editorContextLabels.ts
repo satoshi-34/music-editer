@@ -13,7 +13,7 @@
 
 import type { AccidentalToolKind, MicrotoneType } from './noteKeyUtils';
 import type { EndingNumber, RepeatMarkerKind } from './repeatMarkerUtils';
-import type { DynamicMarkingValue } from '../types/storage';
+import type { DynamicMarkingValue, ScoreType } from '../types/storage';
 
 /** 音価（'4' など）の日本語ラベル。「4分」までを返し、音符/休符の別は呼び出し側で足す */
 export function durationLabel(d: '1' | '2' | '4' | '8' | '16' | '32' | '64'): string {
@@ -83,6 +83,26 @@ export function dynamicLabel(kind: DynamicMarkingValue): string {
   if (kind === 'descresc') return 'デクレッシェンド（dim. と同じ意味の別表記）';
   return `強弱記号 ${kind}`;
 }
+
+// ───────────── 楽譜の種類（譜種） ─────────────
+
+/**
+ * 楽譜の種類の並び・表示名・説明の正本（Issue #500）。
+ * 「楽譜設定」タブの種類ボタンと、ホーム画面の「新しく作る」の譜種選択が
+ * 同じ言葉になるよう、両方からこの定数を参照する
+ * （同じラベルを2か所に書くと、片方だけ直した時に食い違うため）。
+ */
+export const SCORE_TYPE_BUTTONS: ReadonlyArray<{
+  id: ScoreType;
+  label: string;
+  /** ボタンの title（マウスを乗せたときの説明）。ホームでは説明文としても出す */
+  description: string;
+}> = [
+  { id: 'single', label: '単旋律', description: '単旋律譜' },
+  { id: 'piano', label: 'ピアノ', description: 'ピアノ大譜表（右手＋左手）' },
+  { id: 'quartet', label: '弦楽四重奏', description: '弦楽四重奏（Vn. I / Vn. II / Va. / Vc.）' },
+  { id: 'ensemble', label: '編成譜', description: '編成テンプレートに沿った複数パート譜' },
+];
 
 // ───────────── ツールバーのタブ ─────────────
 

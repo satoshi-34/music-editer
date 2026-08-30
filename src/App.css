@@ -2564,3 +2564,158 @@ svg { animation: none; transition: none; }
   gap: 12px;
   flex-wrap: wrap;
 }
+
+/* ───────────── ホーム画面（Issue #500） ───────────── */
+/* 譜面画面の上に重ねる全画面レイヤー。譜面画面を display:none で消さないのは、
+   幅を実測して初期の表示倍率を決める処理（初期ズームフィット）が
+   幅 0 で狂ってしまうため。不透明な背景で覆って隠す。
+   z-index はモーダル類（2000〜2100）より上に置き、ホーム表示中に
+   下の画面のポップアップが顔を出さないようにする。 */
+.home-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  overflow-y: auto;
+  background: #0b2a1a;
+  color: #f4f7f5;
+  padding: 24px 16px 32px;
+  box-sizing: border-box;
+}
+/* 印刷は譜面のためのもの。ホームが出たまま印刷指示が飛んでも紙に出さない */
+@media print {
+  .home-screen { display: none; }
+}
+.home-inner {
+  width: min(880px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.home-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.home-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+/* 将来ログイン／アカウントのボタンを置くための枠（いまは空。Issue #500） */
+.home-header-slot {
+  min-width: 96px;
+  min-height: 32px;
+}
+.home-section {
+  background: #ffffff;
+  color: #212529;
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.home-section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #495057;
+}
+.home-primary-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  padding: 14px 16px;
+  border: none;
+  border-radius: 8px;
+  background: #1c7c4a;
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+.home-primary-button:hover { background: #17663d; }
+.home-primary-button-label { font-size: 16px; font-weight: 700; }
+.home-primary-button-sub { font-size: 12px; opacity: 0.92; }
+.home-note {
+  margin: 0;
+  font-size: 12px;
+  color: #666;
+  line-height: 1.6;
+}
+.home-card-grid {
+  display: grid;
+  /* 画面が狭いときは自動で段数が減る（スマホでも横スクロールを出さない） */
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+.home-card-button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #ced4da;
+  border-radius: 8px;
+  background: #f8f9fa;
+  cursor: pointer;
+  text-align: left;
+}
+.home-card-button:hover { background: #e9ecef; }
+.home-card-label { font-size: 14px; font-weight: 600; }
+.home-card-description { font-size: 11px; color: #666; line-height: 1.5; }
+.home-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.home-secondary-button {
+  padding: 8px 12px;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+.home-secondary-button:hover { background: #e9ecef; }
+.home-work-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* 作品が増えても画面が縦に伸び続けないよう、一覧だけスクロールさせる
+     （作品一覧パネルと同じ考え方） */
+  max-height: min(40vh, 300px);
+  overflow-y: auto;
+}
+.home-work-button {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+.home-work-button:hover { background: #f1f3f5; }
+.home-work-title { font-size: 13px; font-weight: 600; }
+.home-updated-at { font-size: 11px; color: #868e96; }
+.home-footer {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: #c8d6cd;
+}
+.home-version { font-variant-numeric: tabular-nums; }
+.home-footer-note { opacity: 0.85; }
