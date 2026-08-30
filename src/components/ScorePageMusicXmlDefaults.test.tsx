@@ -205,4 +205,132 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
       expect(restored.data?.pageMargins).toEqual({ sideMm: 12, topMm: 12, bottomMm: 12 });
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('B4 の判型は用紙サイズとして引き継がれる（round1 P2: A4 以外の配線）', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
+
+    // 100% スケーリング（7.0mm/40tenths ≒ 0.175mm/tenth）で B4（257×364mm）を指定
+    const scaling = '<scaling><millimeters>7</millimeters><tenths>40</tenths></scaling>';
+    const layout = `<page-layout>
+      <page-height>${Math.round(364 / 0.175)}</page-height>
+      <page-width>${Math.round(257 / 0.175)}</page-width>
+      <page-margins type="both">
+        <left-margin>80</left-margin><right-margin>80</right-margin>
+        <top-margin>80</top-margin><bottom-margin>69</bottom-margin>
+      </page-margins>
+    </page-layout>`;
+    await importXml(scoreXml(`${scaling}${layout}`, `
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>32</duration><voice>1</voice><type>whole</type></note>`));
+    await waitFor(() => { expect(document.body.textContent).toContain('defaults の曲'); }, { timeout: 15000 });
+
+    // 用紙サイズが B4 になる（.spread の CSS 変数で確認・#496 の配線）
+    await waitFor(() => {
+      const spread = document.querySelector('.spread') as HTMLElement | null;
+      expect(spread?.style.getPropertyValue('--paper-width').trim()).toBe('257mm');
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('Finale 実測値のゴールデンパス: 6.9674mm/40tenths・余白86tenths は警告なしで開ける（round1 P2）', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
+
+    // 実物の Finale 書き出しと同じ値（#477 の実測例）。16分音符×16 の実密度でも
+    // ファイル指定の縮尺のまま紙幅に収まること（=紙幅超過警告が出ない）
+    const scaling = '<scaling><millimeters>6.9674</millimeters><tenths>40</tenths></scaling>';
+    const layout = `<page-layout>
+      <page-height>1705</page-height>
+      <page-width>1206</page-width>
+      <page-margins type="both">
+        <left-margin>86</left-margin><right-margin>86</right-margin>
+        <top-margin>86</top-margin><bottom-margin>86</bottom-margin>
+      </page-margins>
+    </page-layout>`;
+    const sixteenths = Array.from({ length: 16 }, () =>
+      '<note><pitch><step>C</step><octave>5</octave></pitch><duration>2</duration><voice>1</voice><type>16th</type></note>'
+    ).join('');
+    await importXml(scoreXml(`${scaling}${layout}`, sixteenths));
+    await waitFor(() => { expect(document.body.textContent).toContain('defaults の曲'); }, { timeout: 15000 });
+
+    expect(document.body.textContent).not.toContain('紙幅を超えます');
+    // 判型は A4 相当（210×297mm）へ解決される
+    const spread = document.querySelector('.spread') as HTMLElement | null;
+    expect(spread?.style.getPropertyValue('--paper-width').trim()).toBe('210mm');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('<defaults> の無いファイルは縮尺を変えず、収まる値の提案だけ通知する（round1 P1）', async () => {
+    seedEmptyWork();
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
+
+    // 表示設定を大きめ（200%・余白25mm）にして、defaults 無しファイルが
+    // 紙幅に収まらない状況を作る（既存の「収まらない場合」テストと同じ密度条件）
+    localStorageMock.setItem('score-notation-size', '2');
+    localStorageMock.setItem('score-page-margin-side', '25');
+    cleanup();
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
+    const before = notationSizeSlider().value;
+    expect(before).toBe('200');
+    await importXml(scoreXml('', denseNotes(32)));
+    await waitFor(() => { expect(document.body.textContent).toContain('defaults の曲'); }, { timeout: 15000 });
+
+    // 縮尺は変わらない（開いただけで作品の縮尺が変更・保存される、を起こさない）
+    expect(notationSizeSlider().value).toBe(before);
+    // 提案だけが通知される
+    expect(document.body.textContent).toContain('にすると収まります');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('属性つき作品から属性なし作品へ切り替えると、縮尺・余白は表示設定へ戻る（round1 P1: 前の作品の値が混入しない）', async () => {
+    // 表示設定: 130%・左右10mm
+    localStorageMock.setItem('score-notation-size', '1.3');
+    localStorageMock.setItem('score-page-margin-side', '10');
+
+    // 属性なし作品（旧データ相当）を先に作る
+    const plain = createSavedScoreData(
+      { title: '属性なし', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '1', isRest: false, keys: ['c/5'] }] }] }],
+      1, 1, 'single'
+    );
+    delete (plain as { notationSizeMultiplier?: number }).notationSizeMultiplier;
+    delete (plain as { pageMargins?: unknown }).pageMargins;
+    const plainWork = createWork('属性なし');
+    if (!plainWork.success || !plainWork.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(plainWork.data.id, plain);
+
+    // 属性つき（120%・12mm）の作品を「前回の続き」にする
+    const attributed = createSavedScoreData(
+      { title: '属性つき', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '1', isRest: false, keys: ['c/5'] }] }] }],
+      1, 1, 'single', 'C', [4, 4],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, 1.2, { sideMm: 12, topMm: 14, bottomMm: 12 },
+    );
+    const attrWork = createWork('属性つき');
+    if (!attrWork.success || !attrWork.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(attrWork.data.id, attributed);
+    setLastOpenedWorkId(attrWork.data.id);
+
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.body.textContent).toContain('属性つき'); }, { timeout: 15000 });
+    expect(notationSizeSlider().value).toBe('120');
+    expect(sideMarginSlider().value).toBe('12');
+
+    // 作品一覧から属性なし作品へ切り替える（一覧ボタンはファイルタブにある）
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    fireEvent.click(screen.getByRole('button', { name: /作品一覧/ }));
+    const items = await screen.findAllByRole('button', { name: /属性なし/ });
+    const openButton = items.find((b) => b.className.includes('work-list-item-open'));
+    expect(openButton).toBeTruthy();
+    fireEvent.click(openButton!);
+    await waitFor(() => {
+      expect(document.querySelector('.score-title')?.textContent).toContain('属性なし');
+    }, { timeout: 15000 });
+
+    // 前の作品の 120%/12mm ではなく、表示設定の 130%/10mm へ戻る
+    expect(notationSizeSlider().value).toBe('130');
+    expect(sideMarginSlider().value).toBe('10');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

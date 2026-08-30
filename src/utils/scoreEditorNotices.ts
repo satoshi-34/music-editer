@@ -771,3 +771,11 @@ export function describeHomeActionBlocked(kind: 'create' | 'goHome'): string {
   }
   return `いまの作品を保存できなかったため、ホームへ戻るのを中止しました（${fallback}）`;
 }
+
+/**
+ * <defaults> を持たない MusicXML で紙幅に収まらない小節があるときの提案（Issue #477 round1 P1・#318）。
+ * ファイルにレイアウト指定が無い以上、作品の縮尺を勝手に変えず「次の一手」だけを示す。
+ */
+export function describeNotationSizeFitSuggestion(fittedPercent: number): string {
+  return `現在の音符サイズでは紙幅に収まらない小節があります（レイアウトタブで音符の大きさを ${fittedPercent}% にすると収まります）`;
+}

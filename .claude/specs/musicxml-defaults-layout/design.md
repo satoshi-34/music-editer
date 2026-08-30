@@ -109,3 +109,19 @@ MusicXML の単位は **tenths**（1/10 五線間隔）で、`<scaling>` の
   ScorePage.tsx の後方で宣言されており、依存配列はレンダー中に評価されるため TDZ になる）。
   これらだけを変えたときは自動保存が起動しないが、値は次の自動保存でそのまま保存される。
   MusicXML 読込では譜面本体と同時に変わるため必ず保存される
+
+## 追記（round 1 対応・2026-08-31）
+
+- **defaults 無しファイル（P1）**: 縮尺は変更せず、収まらないときは
+  describeNotationSizeFitSuggestion で「N% にすると収まります」の提案のみ通知
+- **保存の明示化（P1）**: notationSizeMultiplier / pageMargins は工場出荷値と同じでも
+  省略せず常に明示保存（省略+読込側の既定が食い違うと再読込で縮尺が化けるため）
+- **省略時は表示設定へ戻す（P1）**: applySavedLayoutAttributes は属性の無い項目を
+  localStorage の個人既定へ戻す（属性つき→属性なし作品の切替で前作品の値が混入しない）。
+  フォールバックは state 初期化と同じ「単旋律の既定」に固定（属性なしの既存
+  四重奏・編成譜の見た目を変えないため。ScorePagePartLayout の回帰で実測）
+- **自動保存の依存（P1）**: layoutAttrRevision カウンタ経由で notationSize/余白の
+  変更だけでも自動保存が走る（TDZ 制約の迂回）
+- **余白 0 tenths（P2）**: readNonNegativeNumber で読んで下限クランプ（余白指定全体を破棄しない）
+- テスト: B4 判型の配線・Finale 実測値ゴールデンパス・defaults 無し提案・
+  属性なし作品への切替（表示設定へ戻る）・0余白、を追加

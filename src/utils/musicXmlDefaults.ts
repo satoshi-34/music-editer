@@ -101,6 +101,15 @@ function readPositiveNumber(parent: Element | null, selector: string): number | 
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+/** 0 以上の数値を読む（余白用。負値・非数は null） */
+function readNonNegativeNumber(parent: Element | null, tagName: string): number | null {
+  if (!parent) return null;
+  const text = parent.querySelector(tagName)?.textContent;
+  if (text == null) return null;
+  const value = Number(text);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -155,10 +164,12 @@ export function readMusicXmlDefaults(doc: Document | Element): MusicXmlDefaultsL
       Array.from(pageLayoutEl.querySelectorAll('page-margins')).find(
         (el) => el.getAttribute('type') === 'both',
       ) ?? pageLayoutEl.querySelector('page-margins');
-    const leftTenths = readPositiveNumber(marginsEl, 'left-margin');
-    const rightTenths = readPositiveNumber(marginsEl, 'right-margin');
-    const topTenths = readPositiveNumber(marginsEl, 'top-margin');
-    const bottomTenths = readPositiveNumber(marginsEl, 'bottom-margin');
+    // 余白は 0 tenths が正当な指定（余白なし→アプリの下限へクランプ）なので、
+    // 正の数ではなく「0以上」を読む（round1 P2: 0 を弾くと余白指定全体が破棄される）
+    const leftTenths = readNonNegativeNumber(marginsEl, 'left-margin');
+    const rightTenths = readNonNegativeNumber(marginsEl, 'right-margin');
+    const topTenths = readNonNegativeNumber(marginsEl, 'top-margin');
+    const bottomTenths = readNonNegativeNumber(marginsEl, 'bottom-margin');
     if (leftTenths != null && rightTenths != null && topTenths != null && bottomTenths != null) {
       result.pageMargins = {
         sideMm: clamp(

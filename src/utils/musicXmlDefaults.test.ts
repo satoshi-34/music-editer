@@ -167,4 +167,23 @@ describe('readMusicXmlDefaults', () => {
     </defaults>`));
     expect(result?.pageMargins).toEqual({ sideMm: 8, topMm: 8, bottomMm: 8 });
   });
+
+  it('余白 0 tenths は「余白なし指定」として下限へクランプされ、余白全体が破棄されない（round1 P2）', () => {
+    const xml = `<score-partwise><defaults>
+      <scaling><millimeters>7</millimeters><tenths>40</tenths></scaling>
+      <page-layout>
+        <page-height>1697</page-height><page-width>1200</page-width>
+        <page-margins type="both">
+          <left-margin>0</left-margin><right-margin>0</right-margin>
+          <top-margin>0</top-margin><bottom-margin>0</bottom-margin>
+        </page-margins>
+      </page-layout>
+    </defaults></score-partwise>`;
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const result = readMusicXmlDefaults(doc);
+    expect(result?.pageMargins).toBeDefined();
+    // 0mm はアプリの下限（左右8mm・上下8mm）へクランプされる
+    expect(result!.pageMargins!.sideMm).toBeGreaterThanOrEqual(8);
+    expect(result!.pageMargins!.topMm).toBeGreaterThanOrEqual(8);
+  });
 });

@@ -47,10 +47,10 @@ describe('作品の属性としてのレイアウト（Issue #477）', () => {
     expect(data.pageMargins).toBeUndefined();
   });
 
-  it('工場出荷既定値（単旋律は150%・余白14/14/12mm）と同じなら書き出さない', () => {
+  it('工場出荷既定値と同じでも、渡された値は明示的に書き出す（round1 P1: 省略すると読込側の「表示設定へ戻す」と食い違い、表示設定を変えている環境で再読込のたび縮尺が化ける）', () => {
     const data = create(1.5, { sideMm: 14, topMm: 14, bottomMm: 12 });
-    expect(data.notationSizeMultiplier).toBeUndefined();
-    expect(data.pageMargins).toBeUndefined();
+    expect(data.notationSizeMultiplier).toBe(1.5);
+    expect(data.pageMargins).toEqual({ sideMm: 14, topMm: 14, bottomMm: 12 });
   });
 
   it('既定と違う値は作品の属性として保存し、読み直しでそのまま戻る', () => {

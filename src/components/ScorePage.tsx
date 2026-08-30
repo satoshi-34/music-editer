@@ -189,6 +189,7 @@ import {
   describeClearedMeasures,
   describePlaybackFromMeasure,
   describeHomeActionBlocked,
+  describeNotationSizeFitSuggestion,
   describeLegacyImportResult,
   describeMxlExtractFailed,
   describeOmrConvertFailed,
@@ -315,6 +316,35 @@ const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
 const PAGE_MARGIN_VERTICAL_LEGACY_KEY = 'score-page-margin-vertical';
 const PAGE_MARGIN_TOP_KEY = 'score-page-margin-top';
 const PAGE_MARGIN_BOTTOM_KEY = 'score-page-margin-bottom';
+
+/**
+ * 表示設定（localStorage の個人既定）から音符サイズを読む（Issue #477 round1 P1）。
+ * state 初期化と同じ読み方の関数化: 属性を持たない作品を開いたとき、ここへ戻す
+ */
+function readPersonalNotationSizeSetting(): number {
+  const raw = localStorage.getItem(NOTATION_SIZE_KEY);
+  const n = raw == null ? NaN : parseFloat(raw);
+  // フォールバックは state 初期化と同じ「単旋律の既定」に固定する。
+  // データ側の譜種の既定へ倒すと、属性を持たない既存の四重奏・編成譜作品の
+  // 見た目（これまで単旋律既定の縮尺で描かれていた）が変わってしまうため
+  return Number.isFinite(n)
+    ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n))
+    : resolveDefaultLayoutForScoreType('single').notationSizeMultiplier;
+}
+
+/** 表示設定からページ余白を読む（同上）。読めない・範囲外は既定値へ */
+function readPersonalPageMarginSettings(): { sideMm: number; topMm: number; bottomMm: number } {
+  const read = (key: string, fallback: number, min: number, max: number) => {
+    const raw = localStorage.getItem(key);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+  };
+  return {
+    sideMm: read(PAGE_MARGIN_SIDE_KEY, DEFAULT_PAGE_SIDE_MARGIN_MM, PAGE_MARGIN_SIDE_MIN_MM, PAGE_MARGIN_SIDE_MAX_MM),
+    topMm: read(PAGE_MARGIN_TOP_KEY, DEFAULT_PAGE_MARGIN_TOP_MM, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM),
+    bottomMm: read(PAGE_MARGIN_BOTTOM_KEY, DEFAULT_PAGE_MARGIN_BOTTOM_MM, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM),
+  };
+}
 // 「タイトル余白（上）」「タイトル余白（下）」のユーザー設定（レイアウトタブのスライダー、
 // 各0〜30mm、Issue #103）。タイトルページ（1ページ目）だけに効く追加余白で、上記の
 // 「ページ余白（上/下）」（全ページ共通のページ全体の余白）とは別軸の設定。
@@ -2602,8 +2632,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   /**
    * 作品の属性として保存されたレイアウト（音符の大きさ・ページ余白。Issue #477）を画面へ当てる。
    *
-   * 省略されている項目には触らない（＝従来どおり表示設定の値のまま）ので、旧データを開いても
-   * 挙動は変わらない。localStorage（表示設定）へは書かない: 作品を1つ開いただけで
+   * 省略されている項目は**表示設定（localStorage の個人既定）へ戻す**（round1 P1）。
+   * 以前の「現状維持」だと、属性つき作品→属性なし作品の切替で前の作品の縮尺・余白が
+   * 画面に残り、次の自動保存で属性なし作品へ混入してしまう。
+   * localStorage（表示設定）へは書かない: 作品を1つ開いただけで
    * グローバル設定を書き換えてしまわないため（作品の属性であって表示設定ではない）。
    */
   const applySavedLayoutAttributes = useCallback((data: SavedScoreData) => {
@@ -2612,6 +2644,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         data.notationSizeMultiplier,
         resolveDefaultLayoutForScoreType(data.scoreType ?? 'single').notationSizeMultiplier,
       ));
+    } else {
+      setNotationSizeMultiplier(readPersonalNotationSizeSetting());
     }
     if (data.pageMargins !== undefined) {
       const margins = normalizePageMargins(data.pageMargins, {
@@ -2622,6 +2656,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       setPageMarginSideMm(margins.sideMm);
       setPageMarginTopMm(margins.topMm);
       setPageMarginBottomMm(margins.bottomMm);
+    } else {
+      const personal = readPersonalPageMarginSettings();
+      setPageMarginSideMm(personal.sideMm);
+      setPageMarginTopMm(personal.topMm);
+      setPageMarginBottomMm(personal.bottomMm);
     }
   }, []);
 
@@ -2728,6 +2767,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyLoadedScoreData, initializeWorks, setTimeSignature]);
 
+  // 「音符の大きさ」「ページ余白」（作品の属性・Issue #477 round1 P1）の変更を
+  // 自動保存へ伝えるためのリビジョン。これらの state 本体はファイル後方で宣言されて
+  // いて依存配列に直接書けない（TDZ）ため、後方の小さな effect が変更のたびに
+  // このカウンタを進め、自動保存はカウンタだけを依存に持つ
+  const [layoutAttrRevision, setLayoutAttrRevision] = useState(0);
+
   // 段あたり小節数。自動保存 useEffect の依存配列に含めるため、useEffect より前で宣言する
   // （以前はここより後方で宣言されており、後方宣言のため deps に入れられなかった。
   // Issue #117: このため「段あたり小節数」だけを変更して閉じると自動保存されなかった）。
@@ -2821,13 +2866,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 大譜表の下段だけを編集して閉じると復元されなかった）。buildScoreData が読む
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
-  // 「音符の大きさ」「ページ余白」（作品の属性・Issue #477）はここに列挙できない:
-  // これらの state はファイル後方で宣言されており、依存配列はレンダー中に評価されるため
-  // TDZ エラーになる。これらだけを変えたときは自動保存が起動しないが、値は次の自動保存
-  // （譜面の編集・読込など、他の依存が動いたとき）でそのまま保存される。MusicXML 読込で
-  // 引き継いだ値は譜面本体（rightHandData 等）と同時に変わるため、必ず保存される。
+  // 「音符の大きさ」「ページ余白」（作品の属性・Issue #477）は state 本体を列挙できない
+  // （後方宣言のため TDZ）。代わりに layoutAttrRevision（後方の effect が変更のたびに
+  // 進めるカウンタ）を依存に持ち、これらだけを変えて閉じても保存されるようにする（round1 P1）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem, layoutAttrRevision]);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -3974,6 +4017,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
     return DEFAULT_PAGE_MARGIN_BOTTOM_MM;
   });
+
+  // 作品の属性（音符の大きさ・ページ余白）の変更を自動保存へ伝える（Issue #477 round1 P1。
+  // 依存配列の TDZ 制約の迂回。カウンタの正本コメントは自動保存 useEffect の直前を参照）
+  useEffect(() => {
+    setLayoutAttrRevision((revision) => revision + 1);
+  }, [notationSizeMultiplier, pageMarginSideMm, pageMarginTopMm, pageMarginBottomMm]);
   // ユーザー設定（レイアウトタブの「タイトル余白（上）」スライダー、0〜30mm、Issue #103）。
   // タイトルページ（1ページ目）だけに効く。旧キーは無いため、単純に新キーを読むだけでよい。
   const [titleMarginTopMm, setTitleMarginTopMm] = useState<number>(() => {
@@ -4956,17 +5005,30 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const fittedMultiplier = fitNotationSizeMultiplier(
         importedPlan.minimumWidths, importedContentBudgetPx, desiredMultiplier,
       );
-      // applySavedLayoutAttributes が入れた値（ファイル指定）を、収まる大きさで上書きする。
-      // notationSizeMultiplier（この時点では読込前の値）と比べるのではなく必ず設定する:
-      // ファイル指定を当てた直後の値は state にまだ反映されていない（同じレンダー内の
-      // 更新はまとめて適用される）ため、比較で分岐すると設定漏れになる。
-      setNotationSizeMultiplier(fittedMultiplier);
       const fittedPercent = Math.round(fittedMultiplier * 100);
-      if (fittedMultiplier < desiredMultiplier) {
-        importNotices.push(describeImportedNotationSizeShrunk(fittedPercent));
-      } else if (loaded.notationSizeMultiplier !== undefined && fittedMultiplier !== notationSizeMultiplier) {
-        // ファイル指定をそのまま引き継ぎ、かつ読込前の表示から変わったときだけ知らせる
-        importNotices.push(describeImportedNotationSize(fittedPercent));
+      // <defaults> を持つファイルだけが作品の縮尺を書き換える（round1 P1）。
+      // 持たないファイルは受け入れ条件どおり「従来挙動+提案のみ」: 開いただけで
+      // 作品の縮尺が変わって保存される、を起こさない
+      const hasImportedLayoutDefaults =
+        loaded.notationSizeMultiplier !== undefined
+        || loaded.pageMargins !== undefined
+        || loaded.pageSize !== undefined;
+      if (hasImportedLayoutDefaults) {
+        // applySavedLayoutAttributes が入れた値（ファイル指定）を、収まる大きさで上書きする。
+        // notationSizeMultiplier（この時点では読込前の値）と比べるのではなく必ず設定する:
+        // ファイル指定を当てた直後の値は state にまだ反映されていない（同じレンダー内の
+        // 更新はまとめて適用される）ため、比較で分岐すると設定漏れになる。
+        setNotationSizeMultiplier(fittedMultiplier);
+        if (fittedMultiplier < desiredMultiplier) {
+          importNotices.push(describeImportedNotationSizeShrunk(fittedPercent));
+        } else if (loaded.notationSizeMultiplier !== undefined && fittedMultiplier !== notationSizeMultiplier) {
+          // ファイル指定をそのまま引き継ぎ、かつ読込前の表示から変わったときだけ知らせる
+          importNotices.push(describeImportedNotationSize(fittedPercent));
+        }
+      } else if (fittedMultiplier < desiredMultiplier) {
+        // 縮尺は変えずに、収まる値を提案だけする（#318: 紙幅超過警告の行き止まりに
+        // 「次の一手」を添える）
+        importNotices.push(describeNotationSizeFitSuggestion(fittedPercent));
       }
       if (importNotices.length > 0) {
         // 複数出るときは1本にまとめる（通知は後勝ちで上書きされるため）。読む時間も長めに取る
