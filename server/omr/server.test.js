@@ -99,6 +99,60 @@ describe('POST /convert の上限超過（round1 P1: 413 が実際に届くこ�
   });
 });
 
+describe('POST /convert の共有トークン検査（#493）', () => {
+  const pdfBody = () => multipartBody('bnd1', Buffer.from('%PDF-1.7\n/Type /Page\n%%EOF', 'latin1'));
+  const post = (port, extraHeaders = {}) => {
+    const body = pdfBody();
+    return request({
+      port,
+      headers: {
+        'content-type': 'multipart/form-data; boundary=bnd1',
+        'content-length': String(body.length),
+        ...extraHeaders,
+      },
+      body,
+    });
+  };
+
+  it('トークン設定時: ヘッダ欠落・不一致は変換処理へ入らず 401', async () => {
+    const { port } = await listen({
+      apiToken: 'secret-token',
+      convert: async () => { throw new Error('呼ばれてはいけない'); },
+    });
+    const missing = await post(port);
+    expect(missing.status).toBe(401);
+    expect(JSON.parse(missing.body.toString('utf8')).error.reason).toBe('unauthorized');
+    const wrong = await post(port, { 'x-omr-token': 'wrong' });
+    expect(wrong.status).toBe(401);
+    expect(JSON.parse(wrong.body.toString('utf8')).error.reason).toBe('unauthorized');
+  });
+
+  it('トークン設定時: 一致すれば変換が動く', async () => {
+    const { port } = await listen({
+      apiToken: 'secret-token',
+      convert: async () => ({ mxl: Buffer.from('MXL'), name: 'x.mxl' }),
+    });
+    const res = await post(port, { 'x-omr-token': 'secret-token' });
+    expect(res.status).toBe(200);
+    expect(res.body.toString('utf8')).toBe('MXL');
+  });
+
+  it('トークン未設定時: 従来どおり検査なしで変換が動く（ローカル開発）', async () => {
+    const { port } = await listen({
+      apiToken: null,
+      convert: async () => ({ mxl: Buffer.from('MXL'), name: 'x.mxl' }),
+    });
+    const res = await post(port);
+    expect(res.status).toBe(200);
+  });
+
+  it('プリフライトは x-omr-token ヘッダを許可する', async () => {
+    const { port } = await listen({ apiToken: 'secret-token' });
+    const res = await request({ port, method: 'OPTIONS' });
+    expect(res.headers['access-control-allow-headers']).toContain('x-omr-token');
+  });
+});
+
 describe('POST /convert の基本配線', () => {
   it('multipart でない POST は noFile の 400', async () => {
     const { port } = await listen();

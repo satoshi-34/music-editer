@@ -8,6 +8,7 @@
 export type OmrConvertFailure =
   | 'notConfigured'
   | 'network'
+  | 'unauthorized'
   | 'noFile'
   | 'notPdf'
   | 'tooLarge'
@@ -39,7 +40,7 @@ export function getOmrApiUrl(): string | null {
 /** 変換API が返す理由コードかどうか（知らない文字列は conversionFailed 扱いにする） */
 function normalizeReason(reason: unknown): OmrConvertFailure {
   const known: OmrConvertFailure[] = [
-    'noFile', 'notPdf', 'tooLarge', 'tooManyPages', 'timeout', 'conversionFailed', 'noOutput',
+    'unauthorized', 'noFile', 'notPdf', 'tooLarge', 'tooManyPages', 'timeout', 'conversionFailed', 'noOutput',
   ];
   return known.includes(reason as OmrConvertFailure) ? (reason as OmrConvertFailure) : 'conversionFailed';
 }
@@ -58,9 +59,15 @@ export async function convertPdfToMxl(file: File): Promise<Uint8Array> {
   const form = new FormData();
   form.append('file', file, file.name);
 
+  // 共有トークン（#493）。試用公開ではプレビュー環境の環境変数にだけ設定し、
+  // 本番バンドルにはトークンも設定も一切載せない運用にしている
+  const token = import.meta.env?.VITE_OMR_API_TOKEN;
+  const headers: Record<string, string> =
+    typeof token === 'string' && token.trim().length > 0 ? { 'x-omr-token': token.trim() } : {};
+
   let response: Response;
   try {
-    response = await fetch(`${apiUrl}/convert`, { method: 'POST', body: form });
+    response = await fetch(`${apiUrl}/convert`, { method: 'POST', body: form, headers });
   } catch (err) {
     // 変換APIが起動していない・URLが違う等。ここで握りつぶすと「押しても何も起きない」になる
     throw new OmrConvertError('network', `変換サーバーに接続できませんでした: ${err instanceof Error ? err.message : String(err)}`);

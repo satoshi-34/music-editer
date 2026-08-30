@@ -47,6 +47,38 @@ describe('convertPdfToMxl', () => {
     expect(Array.from(result)).toEqual(Array.from(mxlBytes));
   });
 
+  it('トークン設定時のみ x-omr-token ヘッダを付ける（#493）', async () => {
+    vi.stubEnv('VITE_OMR_API_URL', 'http://localhost:8080');
+    vi.stubEnv('VITE_OMR_API_TOKEN', 'secret-token');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1]).buffer,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await convertPdfToMxl(pdfFile());
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({ 'x-omr-token': 'secret-token' });
+  });
+
+  it('トークン未設定なら余計なヘッダを付けない（従来挙動）', async () => {
+    vi.stubEnv('VITE_OMR_API_URL', 'http://localhost:8080');
+    vi.stubEnv('VITE_OMR_API_TOKEN', '');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1]).buffer,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await convertPdfToMxl(pdfFile());
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({});
+  });
+
+  it('サーバーの unauthorized（401）を理由コードのまま持ち上げる（#493）', async () => {
+    vi.stubEnv('VITE_OMR_API_URL', 'http://localhost:8080');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: { reason: 'unauthorized', message: '変換サーバーの利用トークンが一致しません' } }),
+    }));
+    await expect(convertPdfToMxl(pdfFile())).rejects.toMatchObject({ reason: 'unauthorized' });
+  });
+
   it('URL 未設定なら通信せず notConfigured で失敗する', async () => {
     vi.stubEnv('VITE_OMR_API_URL', '');
     const fetchMock = vi.fn();

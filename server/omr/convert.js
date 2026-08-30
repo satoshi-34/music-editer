@@ -18,6 +18,7 @@ export const CONVERT_TIMEOUT_MS = 120_000;
  * アプリ側はこのコードを見て、日本語の理由と代替手順（Audiveris 手動変換）を出す。
  */
 export const CONVERT_FAILURE_REASONS = /** @type {const} */ ([
+  'unauthorized',  // 共有トークンが欠落・不一致（#493: 試用公開の防護）
   'noFile',        // multipart に PDF が入っていない
   'notPdf',        // 中身が PDF ではない（先頭が %PDF- でない）
   'tooLarge',      // サイズ上限超過
@@ -37,9 +38,10 @@ export class ConvertError extends Error {
     super(message);
     this.name = 'ConvertError';
     this.reason = reason;
-    // 上限超過は 413、それ以外の入力不備は 400、変換側の失敗は 422 / 504 に割り当てる
+    // 上限超過は 413、認証失敗は 401、それ以外の入力不備は 400、変換側の失敗は 422 / 504 に割り当てる
     this.statusCode =
       reason === 'tooLarge' || reason === 'tooManyPages' ? 413
+      : reason === 'unauthorized' ? 401
       : reason === 'timeout' ? 504
       : reason === 'noFile' || reason === 'notPdf' ? 400
       : 422;

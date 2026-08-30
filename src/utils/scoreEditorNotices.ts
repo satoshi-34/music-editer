@@ -693,6 +693,9 @@ export function describeOmrConvertFailed(reason: OmrConvertFailure): string {
   if (reason === 'network') {
     return `PDF変換サーバーに接続できませんでした（${fallback}）`;
   }
+  if (reason === 'unauthorized') {
+    return `PDF変換サーバーの利用トークンが一致しませんでした（設定 VITE_OMR_API_TOKEN を確認するか、${fallback}）`;
+  }
   if (reason === 'notPdf') {
     return `このファイルは PDF として読めませんでした（${fallback}）`;
   }

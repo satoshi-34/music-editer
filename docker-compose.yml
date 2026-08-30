@@ -26,6 +26,10 @@ services:
     ports:
       # アプリと同じく 127.0.0.1 に限定する（LAN の他端末へ変換APIを晒さない）
       - "127.0.0.1:8080:8080"
+    environment:
+      # 共有トークン（#493）。未設定ならローカル開発向けに検査なし。
+      # 試用公開（Tunnel で外へ出す）時は必ず設定する（server/omr/README.md）
+      - OMR_API_TOKEN=${OMR_API_TOKEN:-}
 
 volumes:
   node_modules:
