@@ -297,6 +297,8 @@ describe('弦楽四重奏の楽器名・略称を編集する（Issue #448）', 
 
       fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
       fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'musicxml' } });
+      // Issue #507: 書き出しはファイル名の確認ダイアログを経由する（既定名のままOK）
+      fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
       await waitFor(() => {
         expect(exportedXml ?? '').toContain('<part-name>Basso</part-name>');
       }, { timeout: 15000 });

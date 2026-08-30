@@ -1361,6 +1361,38 @@ button.ghost.active:hover:not(:disabled) {
      white-space: nowrap を継承しないため） */
   white-space: normal;
 }
+/* 入力欄つきの確認ダイアログ（Issue #507 の書き出しファイル名）。
+   拡張子はアプリが付けるので、編集できない添え字として入力欄の右に並べる。 */
+.confirm-dialog-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.confirm-dialog-input {
+  box-sizing: border-box;
+  /* 名前が長くても入力欄が伸び縮みできるよう flex で幅を持たせる
+     （min-width: auto のままだと中身の幅でダイアログを押し広げてしまう） */
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  color: #111827;
+  background: #fff;
+}
+.confirm-dialog-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+.confirm-dialog-input-suffix {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: #6b7280;
+}
+
 .confirm-dialog-actions {
   display: flex;
   justify-content: flex-end;

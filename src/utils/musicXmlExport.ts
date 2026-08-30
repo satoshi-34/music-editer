@@ -1,6 +1,7 @@
 // src/utils/musicXmlExport.ts
 // SavedScoreData を MusicXML 3.1 (partwise) 形式に変換してダウンロードする。
 
+import { buildExportFileName } from './exportFileName';
 import { resolveInstrumentPartLabels } from './instrumentationPartUtils';
 import type { SavedScoreData, NoteEvent, MeasureData, TimeSignatureStyle } from '../types/storage';
 import type { KeySignature } from './noteKeyUtils';
@@ -509,7 +510,9 @@ export function downloadMusicXml(data: SavedScoreData, filename?: string): void 
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = (filename ?? (data.metadata.title || '楽譜')) + '.musicxml';
+  // 拡張子はここで付ける（Issue #507）。filename には画面のダイアログで
+  // ユーザーが編集した名前が渡ってくるので、使えない文字と拡張子の重複を落とす
+  a.download = buildExportFileName(filename ?? data.metadata.title, 'musicxml');
   a.click();
   URL.revokeObjectURL(url);
 }
