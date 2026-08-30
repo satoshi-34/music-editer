@@ -9,8 +9,14 @@
 //    「起動→即編集の速さを悪化させない」）
 //  - 譜面画面は表示幅を実測して初期の表示倍率を決める（#ScorePageInitialZoomFit）。
 //    display:none で隠すと幅が 0 になり、倍率が狂ってしまう
+//
+// ホーム表示中の譜面画面は「見えないが生きている」ため、2重の遮断を入れる（round1 P1）:
+//  - ラッパーの inert: フォーカス移動（Tab）・クリック・支援技術からの到達を止める
+//  - setHomeShown フラグ: window / document 級のキーボードショートカット
+//    （削除・貼り付け・Undo 等）を各リスナーの入口で無視させる（inert は
+//    フォーカスが body にあるときの window リスナーまでは止められないため）
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import ScorePage, { type ScorePageHomeActions } from './components/ScorePage';
 import HomeScreen, { type HomeOpenKind, type HomeResumeInfo } from './components/HomeScreen';
 import type { ScoreType, WorkSummary } from './types/storage';
@@ -18,6 +24,7 @@ import type { ToolbarTab } from './utils/editorContextLabels';
 import { getLastOpenedWorkId, hasStoredData, listWorks } from './utils/storage';
 import { getOmrApiUrl } from './utils/omrApi';
 import { APP_VERSION } from './utils/appVersion';
+import { setHomeShown } from './utils/homeVisibility';
 import './App.css';
 
 /** ホームに出す一覧・前回の続きの材料を、保存データから読み直す */
@@ -47,10 +54,19 @@ export default function App() {
   // 起動時はホームから始める（受入条件1）。譜面画面は裏で復元を進めている
   const [showHome, setShowHome] = useState(true);
   const homeActionsRef = useRef<ScorePageHomeActions | null>(null);
+  // 操作口が入る前にホームのボタンが押された場合の持ち越し（round1 P2）。
+  // 捨てると「押したのに何も起きない」無言の失敗になる（#318）
+  const pendingActionRef = useRef<((actions: ScorePageHomeActions) => void | Promise<void>) | null>(null);
   // 一覧・前回の続きはホームを開くたびに読み直す（編集して戻ってきたとき、
   // 最終更新日時やタイトルが古いままだと「保存されていない」と誤解させるため）
   const [snapshot, setSnapshot] = useState(() => readHomeSnapshot());
   const [availableOpenKinds, setAvailableOpenKinds] = useState<HomeOpenKind[]>(() => resolveAvailableOpenKinds());
+
+  // キーボードショートカットの共有フラグを表示状態と同期する（round1 P1）
+  useEffect(() => {
+    setHomeShown(showHome);
+    return () => setHomeShown(false);
+  }, [showHome]);
 
   const goHome = useCallback(() => {
     setSnapshot(readHomeSnapshot());
@@ -58,13 +74,42 @@ export default function App() {
     setShowHome(true);
   }, []);
 
-  /** ホームのボタンから譜面画面の処理を呼び、譜面画面へ移る */
-  const runOnScorePage = useCallback((action: (actions: ScorePageHomeActions) => void) => {
+  /**
+   * 譜面画面側で旧データの移行・起動時の復元が済んだとき（round1 P2）。
+   * App の初期スナップショットは移行**前**に読んでいるため、単一作品時代からの
+   * 移行ユーザーではここで読み直さないと「前回の続き」「保存した作品」が空のままになる
+   */
+  const handleLibraryReady = useCallback(() => {
+    setSnapshot(readHomeSnapshot());
+    setAvailableOpenKinds(resolveAvailableOpenKinds());
+    // 操作口の登録前に押されたボタンがあれば、ここで実行する（round1 P2）。
+    // 登録は復元と同じ初回レンダー直後なので、体感は「一瞬遅れて反応した」程度に収まる
+    const pending = pendingActionRef.current;
+    if (pending && homeActionsRef.current) {
+      pendingActionRef.current = null;
+      void pending(homeActionsRef.current);
+    }
+  }, []);
+
+  /**
+   * ホームのボタンから譜面画面の処理を呼ぶ。処理が成功したときだけ譜面画面へ移る
+   * （round1 P1: 保存失敗などで中断されたのにホームだけ閉じると、通知も文脈も失う）。
+   * 操作口が未登録なら持ち越して、登録直後（handleLibraryReady）に実行する。
+   */
+  const runOnScorePage = useCallback((action: (actions: ScorePageHomeActions) => boolean | Promise<boolean>) => {
+    const run = async (actions: ScorePageHomeActions) => {
+      const ok = await action(actions);
+      if (ok) setShowHome(false);
+      // 失敗時はホームに留まる。理由の通知は譜面画面側（notifyScoreEdit）が出しており、
+      // ホームを閉じた直後の譜面画面でそのまま読める（通知の受け皿は譜面画面にしかない
+      // ため、失敗時もホームは閉じる…とすると通知ごと隠れる。留まって再操作できる方を取る）
+    };
     const actions = homeActionsRef.current;
-    // 譜面画面のマウント直後（操作口がまだ入っていない一瞬）に押された場合でも、
-    // 黙って何も起きないことがないよう、画面の切り替えだけは必ず行う（#318）。
-    if (actions) action(actions);
-    setShowHome(false);
+    if (actions) {
+      void run(actions);
+    } else {
+      pendingActionRef.current = (late) => run(late);
+    }
   }, []);
 
   const handleResume = useCallback(() => setShowHome(false), []);
@@ -85,7 +130,11 @@ export default function App() {
 
   return (
     <>
-      <ScorePage homeActionsRef={homeActionsRef} onGoHome={goHome} />
+      {/* inert: ホーム表示中は譜面画面をフォーカス・クリック・支援技術から切り離す
+          （round1 P1）。React 19 は inert を boolean 属性として扱える */}
+      <div inert={showHome} data-testid="score-page-holder">
+        <ScorePage homeActionsRef={homeActionsRef} onGoHome={goHome} onLibraryReady={handleLibraryReady} />
+      </div>
       {showHome && (
         <HomeScreen
           appVersion={APP_VERSION}

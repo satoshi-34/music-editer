@@ -184,6 +184,7 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
+  describeHomeActionBlocked,
   describeLegacyImportResult,
   describeMxlExtractFailed,
   describeOmrConvertFailed,
@@ -222,6 +223,7 @@ import {
   pageWidthMm,
   type PageSizeId,
 } from '../utils/pageSize';
+import { ignoreWhenHomeShown } from '../utils/homeVisibility';
 import {
   TOOLBAR_PLACEMENT_OPTIONS,
   clampDropdownMenuTop,
@@ -460,13 +462,17 @@ function describeExportError(error: unknown): string {
  */
 export interface ScorePageHomeActions {
   /** ファイルを開く導線を起動する。ブラウザのファイル選択ダイアログが開く */
-  openFilePicker: (kind: 'file' | 'musicxml' | 'pdf' | 'legacy') => void;
-  /** 譜種を選んで新規作成する（いまの作品は保存されて作品一覧に残る） */
-  createNewScore: (scoreType: ScoreType) => void;
-  /** 保存済みの作品を開く（ツールバーの作品一覧から選んだときと同じ処理） */
-  openWork: (workId: string) => void;
+  openFilePicker: (kind: 'file' | 'musicxml' | 'pdf' | 'legacy') => boolean;
+  /**
+   * 譜種を選んで新規作成する（いまの作品は保存されて作品一覧に残る）。
+   * false = いまの内容の保存や新作品の発行に失敗（元の譜面は変更されない。
+   * ホームは閉じずに理由を見せる側で扱う。#500 round1 P1）
+   */
+  createNewScore: (scoreType: ScoreType) => Promise<boolean>;
+  /** 保存済みの作品を開く。false = 読み込み失敗（画面はリセットしない） */
+  openWork: (workId: string) => Promise<boolean>;
   /** 設定にあたるツールバーのタブを開く */
-  openSettingsTab: (tab: ToolbarTab) => void;
+  openSettingsTab: (tab: ToolbarTab) => boolean;
 }
 
 export interface ScorePageProps {
@@ -478,9 +484,17 @@ export interface ScorePageProps {
   homeActionsRef?: React.RefObject<ScorePageHomeActions | null>;
   /** 「ホームへ戻る」導線。渡されたときだけツールバーにホームボタンを出す */
   onGoHome?: () => void;
+  /**
+   * 起動時の移行・復元が終わったとき（Issue #500 round1 P2）。
+   * App はこれを合図にホームの一覧を読み直す（移行前に読んだ初期一覧は空のことがある）
+   */
+  onLibraryReady?: () => void;
 }
 
-export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps = {}) {
+export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady }: ScorePageProps = {}) {
+  // onLibraryReady は初期化 effect（依存: 空）から呼ぶため ref 経由で最新を参照する
+  const onLibraryReadyRef = useRef(onLibraryReady);
+  onLibraryReadyRef.current = onLibraryReady;
   // 適用中のUI案（Issue #405 段1）。URLの `?ui=a1|a2|current` で切り替わり、
   // 開発時のみ有効（本番ビルドでは常に 'current'＝現状のUI）。
   // 段2（A1 文脈バー）・段3（A2 譜面側表現）・A3（両方込み）はこの値を見て自分の案のときだけ描く。
@@ -2319,10 +2333,14 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
     cancelPendingAutosave();
     const created = startNewWork(buildCurrentWorkDataRef.current());
     if (!created) {
-      return;
+      // いまの内容の保存 or 新作品の発行に失敗（理由は useWorkLibrary の workError）。
+      // ここで false を返さないと、呼び出し側が失敗後も譜種変更などを続けて
+      // 元の作品を書き換えてしまう（#500 round1 P1）
+      return false;
     }
 
     await resetScoreStateToEmpty();
+    return true;
   }, [cancelPendingAutosave, resetScoreStateToEmpty, startNewWork]);
 
   const handleNewScore = useCallback(() => {
@@ -2331,7 +2349,7 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
     // confirm が表示されず常に false が返るため、ボタンが無反応に見えていた。
     setConfirmDialog({
       message: NEW_SCORE_CONFIRM_MESSAGE,
-      onConfirm: performNewScore,
+      onConfirm: () => { void performNewScore(); },
     });
   }, [performNewScore]);
 
@@ -2603,6 +2621,8 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
       }
 
       setAutosaveRestoreReady(true);
+      // 移行・復元が済んだことを App へ知らせる（ホームの一覧の読み直し。round1 P2）
+      onLibraryReadyRef.current?.();
     })();
   // applySettingsProfileToState はレンダーごとに作り直される素の関数のため、
   // handleNewScore と同じ理由で依存配列には含めない。
@@ -2743,16 +2763,30 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
   }, [showWorkList, updateWorkListPosition]);
 
   /** 作品一覧から別の作品を選んだとき。切替前に現在の内容を保存する */
-  const handleSelectWork = useCallback(async (workId: string) => {
+  const handleSelectWork = useCallback(async (workId: string): Promise<boolean> => {
     cancelPendingAutosave();
-    const loaded = switchWork(workId, buildCurrentWorkDataRef.current());
-    if (loaded) {
-      await applyLoadedScoreData(loaded);
+    const result = switchWork(workId, buildCurrentWorkDataRef.current());
+    if (result.status === 'sameWork') {
+      // いま開いている作品を選び直しただけ。リセットすると表示中の譜面が消えて
+      // 次の自動保存で保存内容まで上書きしてしまう（#500 round1 P1）。何もせず閉じる
+      setShowWorkList(false);
+      return true;
+    }
+    if (result.status === 'error') {
+      // 読み込みに失敗したときもリセットしない（画面に残っている内容が最後の砦）。
+      // 行き止まりは喋る（#318）
+      notifyScoreEdit(`${result.message}（画面の内容は変更していません）`);
+      setShowWorkList(false);
+      return false;
+    }
+    if (result.status === 'loaded') {
+      await applyLoadedScoreData(result.data);
     } else {
       // まだ中身の無い作品（新規作成した直後など）へ切り替えた場合は空の譜面から始める
       await resetScoreStateToEmpty();
     }
     setShowWorkList(false);
+    return true;
   }, [applyLoadedScoreData, cancelPendingAutosave, resetScoreStateToEmpty, switchWork]);
 
   // ───────── ホーム画面（Issue #500）との連携 ─────────
@@ -2775,20 +2809,26 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
         else if (kind === 'musicxml') musicXmlInputRef.current?.click();
         else if (kind === 'pdf') pdfInputRef.current?.click();
         else void handleImportLegacyManualSave();
+        return true;
       },
-      createNewScore: (nextScoreType) => {
-        void (async () => {
-          // 新規作成の本体（いまの作品を保存 → 新しい作品IDを発行 → 画面を空に戻す）は
-          // ツールバーの「新規作成」と同じものを使う。確認ダイアログを挟まないのは、
-          // ホームでは「譜種を選ぶ」という明示的な操作が確認を兼ねているため。
-          await performNewScore();
-          // 空に戻す処理は初期値プリセットの譜種を適用するので、選ばれた譜種は
-          // そのあとに適用する（順序が逆だと選択が上書きされる）。
-          scoreTypeChangeRef.current(nextScoreType);
-        })();
+      createNewScore: async (nextScoreType) => {
+        // 新規作成の本体（いまの作品を保存 → 新しい作品IDを発行 → 画面を空に戻す）は
+        // ツールバーの「新規作成」と同じものを使う。確認ダイアログを挟まないのは、
+        // ホームでは「譜種を選ぶ」という明示的な操作が確認を兼ねているため。
+        const ok = await performNewScore();
+        if (!ok) {
+          // 保存できないまま譜種を適用すると、元の作品の譜種・編成まで
+          // 書き換えてしまう（#500 round1 P1）。ここで止めて理由を喋る
+          notifyScoreEdit(describeHomeActionBlocked('create'));
+          return false;
+        }
+        // 空に戻す処理は初期値プリセットの譜種を適用するので、選ばれた譜種は
+        // そのあとに適用する（順序が逆だと選択が上書きされる）。
+        scoreTypeChangeRef.current(nextScoreType);
+        return true;
       },
-      openWork: (workId) => { void handleSelectWork(workId); },
-      openSettingsTab: (tab) => { handleToolbarTabChange(tab); },
+      openWork: (workId) => handleSelectWork(workId),
+      openSettingsTab: (tab) => { handleToolbarTabChange(tab); return true; },
     };
   });
 
@@ -2801,7 +2841,13 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
     if (!onGoHome) return;
     cancelPendingAutosave();
     const data = buildCurrentWorkDataRef.current();
-    if (data) saveCurrentWork(data);
+    if (data && !saveCurrentWork(data)) {
+      // 保存できないままホームへ移ると、「自動保存されています」という表示と裏腹に
+      // 直前の編集が消える（#500 round1 P1）。譜面に留まり、理由と代替手段を喋る（#318）。
+      // 以降の編集で自動保存のデバウンスは通常どおり再スケジュールされる
+      notifyScoreEdit(describeHomeActionBlocked('goHome'));
+      return;
+    }
     refreshWorks();
     onGoHome();
   }, [cancelPendingAutosave, onGoHome, refreshWorks, saveCurrentWork]);
@@ -3053,8 +3099,9 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
         e.preventDefault();
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    const guarded = ignoreWhenHomeShown(handler);
+    window.addEventListener('keydown', guarded);
+    return () => window.removeEventListener('keydown', guarded);
   }, [isPrintPreview]);
 
   // 小節選択コールバック（StaffCanvas / PianoSystemCanvas から呼ばれる）
@@ -3116,8 +3163,9 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
         return;
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    const guarded = ignoreWhenHomeShown(handler);
+    window.addEventListener('keydown', guarded);
+    return () => window.removeEventListener('keydown', guarded);
   }, [handleUndo, handleRedo]);
 
   // Cmd+C/V とEscape による選択解除ハンドラ
@@ -3618,8 +3666,9 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
         return;
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    const guarded = ignoreWhenHomeShown(handler);
+    window.addEventListener('keydown', guarded);
+    return () => window.removeEventListener('keydown', guarded);
   // totalSystems・measuresPerSystem は useEffect より後に宣言されるため deps に入れられない。
   // 代わりに ref で最新値を追跡する（arrow key ハンドラ内で参照）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4496,10 +4545,11 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
       }
     };
     document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
+    const guardedKeyDown = ignoreWhenHomeShown(handleKeyDown);
+    document.addEventListener('keydown', guardedKeyDown);
     return () => {
       document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keydown', guardedKeyDown);
     };
   }, [selectedSystem]);
 
@@ -5162,8 +5212,9 @@ export default function ScorePage({ homeActionsRef, onGoHome }: ScorePageProps =
       setShowHelp(true);
       e.preventDefault();
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    const guarded = ignoreWhenHomeShown(handler);
+    window.addEventListener('keydown', guarded);
+    return () => window.removeEventListener('keydown', guarded);
   }, []);
 
   const feedbackControls = (

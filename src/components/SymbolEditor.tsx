@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { CustomSymbolDef, ShapePrimitive } from '../types/storage';
+import { ignoreWhenHomeShown } from '../utils/homeVisibility';
 import {
   capPointCount,
   fitArcFromDragPoints,
@@ -169,8 +170,9 @@ export default function SymbolEditor({
         i === selectedShapeIndex ? clampShapeToLogicalBounds(translateShape(s, dx, dy)) : s
       )));
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    const guardedKeyDown = ignoreWhenHomeShown(handleKeyDown);
+    window.addEventListener('keydown', guardedKeyDown);
+    return () => window.removeEventListener('keydown', guardedKeyDown);
   }, [tool, selectedShapeIndex]);
 
   // clientX/Y を論理座標へ変換する。

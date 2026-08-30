@@ -106,3 +106,24 @@ Safari は「ユーザー操作と同じ処理の流れ」で呼ばれない `in
 - `src/App.test.tsx`: App を実際にマウントする配線テスト（起動時ホーム → 前回の続きで復帰 →
   譜種を選んだ新規作成 → 開く導線の起動とファイルタブ表示 → 設定タブ → ホームへ戻る →
   バージョン表示とサーバー通信が増えないこと）
+
+## 追記（round 1 対応・2026-08-31）
+
+Codex 最終ゲート round 1 の指摘（P1×4・P2×2）への対応で、以下が当初設計から変わった:
+
+- **切替結果の判別化（P1）**: `useWorkLibrary.switchWork` の戻り値を
+  `WorkSwitchResult`（sameWork / loaded / empty / error の判別付き）へ変更。
+  現在作品をホーム一覧から選んだとき・読込失敗時に譜面を空リセットしない
+- **ホーム表示中の遮断（P1）**: ラッパーの `inert`（フォーカス・クリック・支援技術）+
+  `utils/homeVisibility.ts` の共有フラグ（window/document 級のキーボードショートカットを
+  各リスナーの入口 `ignoreWhenHomeShown` で無視）。の2重遮断
+- **成功時のみ画面遷移（P1）**: `ScorePageHomeActions` の各操作は成否を返し、
+  App は成功時だけホームを閉じる。新規作成の保存失敗時は譜種を適用せず
+  `describeHomeActionBlocked('create')` を通知。「ホームへ戻る」も保存失敗時は
+  譜面に留まり `describeHomeActionBlocked('goHome')` を通知（#318）
+- **移行後の一覧読み直し（P2）**: ScorePage の起動時移行・復元完了で
+  `onLibraryReady` を呼び、App がホームのスナップショットを読み直す
+- **操作の持ち越し（P2）**: 操作口の登録前に押されたホームのボタンは
+  `pendingActionRef` に持ち越し、登録直後に実行する（無言で捨てない）
+- テスト: App.test.tsx に現在作品選択・ショートカット遮断（正の対照付き）・
+  保存失敗時の中断（新規作成／ホーム戻り）・移行後の一覧、の統合テストを追加

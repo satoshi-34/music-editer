@@ -149,11 +149,12 @@ describe('useWorkLibrary（作品カタログの操作・Issue #181）', () => {
       const workB = result.current.currentWorkId as string;
 
       // 作品Bを編集した状態（未保存）のままAへ切り替える
-      let opened: SavedScoreData | null = null;
+      let opened: ReturnType<typeof result.current.switchWork> | null = null;
       act(() => { opened = result.current.switchWork(workA, makeScore('作品B（編集中）', 'f/4')); });
 
-      // 切替先（A）の中身が返り、
-      expect(opened?.metadata.title).toBe('作品A');
+      // 切替先（A）の中身が判別付きで返り、
+      expect(opened).toMatchObject({ status: 'loaded' });
+      expect(opened!.status === 'loaded' && opened!.data.metadata.title).toBe('作品A');
       expect(result.current.currentWorkId).toBe(workA);
       // 切替前の編集内容（B）は失われていない
       const savedB = JSON.parse(localStorage.getItem(getWorkStorageKeys(workB).primary) as string);
@@ -187,9 +188,11 @@ describe('useWorkLibrary（作品カタログの操作・Issue #181）', () => {
       act(() => { result.current.saveCurrentWork(makeScore('作品A')); });
       const workA = result.current.currentWorkId as string;
 
-      let opened: SavedScoreData | null = null;
+      let opened: ReturnType<typeof result.current.switchWork> | null = null;
       act(() => { opened = result.current.switchWork(workA, makeScore('編集中')); });
-      expect(opened).toBeNull();
+      // 「同じ作品」であることが判別付きで返る（#500 round1 P1: null だと
+      // 呼び出し側が「中身の無い作品」と区別できず、譜面を空リセットしてしまう）
+      expect(opened).toEqual({ status: 'sameWork' });
     });
 
     it('新規作成では、それまでの内容を保存してから新しい作品IDへ移る', () => {
