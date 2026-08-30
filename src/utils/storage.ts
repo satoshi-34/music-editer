@@ -21,6 +21,7 @@ import type {
   ShapePrimitive
 } from '../types/storage';
 import { StorageErrorType } from '../types/storage';
+import { DEFAULT_PAGE_SIZE_ID, normalizePageSizeId, type PageSizeId } from './pageSize';
 import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
@@ -78,6 +79,9 @@ export const STORAGE_KEYS = {
 // Current version for data migration
 // 3.6.0（#448 round4）: 弦楽四重奏プリセットの既定略称を Vln. I / Vla. → Vn. I / Va. へ変更。
 // 3.6.0 未満のデータだけ復元時に旧既定略称を移行する（現行版で編集した Vln. I 等は保持する）
+// 3.6.0 のまま: 用紙サイズ（pageSize・Issue #495）は省略可能な項目の追加であり、
+// A4 のときは書き出さない（旧データと差分ゼロ）ため版数は繰り上げない（round1 P1）。
+// 追加は省略可能な項目1つだけなので、3.6.0 以前のデータもそのまま読める（省略時 A4）。
 export const CURRENT_VERSION = '3.6.0';
 
 /** 作品カタログ（WorkIndex）自体のバージョン。カタログの構造を変えたときに上げる */
@@ -638,6 +642,9 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     (data.timeSignatureStyle === undefined ||
       data.timeSignatureStyle === 'numeric' ||
       data.timeSignatureStyle === 'symbol') &&
+    // 用紙サイズ（Issue #495）。未知の文字列は読み込み時に A4 へ正規化されるので、
+    // ここでは「文字列でないデータを弾く」ところまでを見る（他の省略可能項目と同じ方針）。
+    (data.pageSize === undefined || typeof data.pageSize === 'string') &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -714,6 +721,11 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   // 値が入っているときだけ丸めることで、旧データを保存し直しても余計な項目が増えない。
   if (parsedData.timeSignatureStyle !== undefined) {
     parsedData.timeSignatureStyle = normalizeTimeSignatureStyle(parsedData.timeSignatureStyle);
+  }
+  // 用紙サイズも同じ考え方で、「省略＝A4」を正とするため未指定のときは足さずに残す。
+  // 値が入っているときだけ正規化する（未知の判型が入っていた場合は A4 へ倒れる）。
+  if (parsedData.pageSize !== undefined) {
+    parsedData.pageSize = normalizePageSizeId(parsedData.pageSize);
   }
 
   // 保存済みデータはユーザーが手編集した JSON や古いバックアップから来ることがある。
@@ -1782,7 +1794,8 @@ export function createSavedScoreData(
   titleFontId?: string,
   titleFontSize?: number,
   titleFontWeight?: string,
-  timeSignatureStyle?: TimeSignatureStyle
+  timeSignatureStyle?: TimeSignatureStyle,
+  pageSize?: PageSizeId
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -1795,6 +1808,12 @@ export function createSavedScoreData(
     timeSignatureStyle:
       timeSignatureStyle && normalizeTimeSignatureStyle(timeSignatureStyle) === 'symbol'
         ? 'symbol'
+        : undefined,
+    // 既定（A4）のときは項目自体を持たせない。旧データとの差分を増やさないため
+    // （timeSignatureStyle と同じ方針）。
+    pageSize:
+      pageSize && normalizePageSizeId(pageSize) !== DEFAULT_PAGE_SIZE_ID
+        ? normalizePageSizeId(pageSize)
         : undefined,
     instrumentation,
     notationMode,
@@ -1817,7 +1836,9 @@ export function createSavedScoreData(
 export function migrateData(data: any, fromVersion: string): SavedScoreData | null {
   // 3.5.0 → 3.6.0 は保存構造の変更なし（四重奏の既定略称の移行は復元側
   // migrateLegacyQuartetAbbreviations がデータのバージョンを見て行う）
-  if (fromVersion === CURRENT_VERSION || fromVersion === '3.5.0') {
+  // 用紙サイズ（Issue #495）は 3.6.0 のまま省略可能な項目として追加された
+  // （省略時は従来どおり A4 として読めるため、版数の繰り上げ・移行処理とも不要）
+  if (fromVersion === CURRENT_VERSION || fromVersion === '3.6.0' || fromVersion === '3.5.0') {
     return {
       ...(data as SavedScoreData),
       keySignature: normalizeKeySignature((data as SavedScoreData).keySignature),

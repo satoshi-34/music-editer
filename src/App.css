@@ -1565,12 +1565,14 @@ button.ghost.active:hover:not(:disabled) {
      transform は全ブラウザで getBoundingClientRect へ視覚座標として反映される。 */
   /* transform はレイアウト上の占有サイズを変えない。そのままだと縮小前のサイズで
      グリッドに居座ってページ間に大きな余白ができるため、ラッパー自身のサイズを
-     「縮小後の見た目サイズ」へ合わせる。幅はページ幅（A4 = 210mm）固定で CSS だけで決まる。 */
-  width: calc(210mm * var(--scale, 1));
-  /* 高さはページ内容により A4 を超えることがある（大編成の総譜など）ので、
+     「縮小後の見た目サイズ」へ合わせる。幅は用紙の幅で決まる。
+     --paper-width は ScorePage.tsx が用紙サイズ（Issue #495）から注入する。
+     未注入時のフォールバックは従来どおり A4 の 210mm なので、A4 の見た目は変わらない。 */
+  width: calc(var(--paper-width, 210mm) * var(--scale, 1));
+  /* 高さはページ内容により用紙の高さを超えることがある（大編成の総譜など）ので、
      ScaledPageWrapper が実測値 × scale をインライン style で上書きする。
-     ここは初回描画用のフォールバック（A4 高さ想定）。 */
-  height: calc(297mm * var(--scale, 1));
+     ここは初回描画用のフォールバック（用紙の高さ想定）。 */
+  height: calc(var(--paper-height, 297mm) * var(--scale, 1));
 }
 
 .page-wrapper > .print-page {
@@ -1592,12 +1594,15 @@ button.ghost.active:hover:not(:disabled) {
      値は src/utils/engravingDefaults.ts の SCORE_TEXT_FONT_FAMILY と同一にすること
      （engravingDefaults.test.ts が一致を見張っている）。 */
   --score-text-font: "Century Schoolbook", Georgia, "Times New Roman", serif;
-  width: 210mm;
-  /* 画面の1ページを常に A4 実寸（297mm）に固定する。
+  /* 用紙サイズ（A4/B4/A3・Issue #495）。正本は utils/pageSize.ts で、
+     ScorePage.tsx が --paper-width / --paper-height として注入する。
+     未注入時のフォールバックは従来の A4 実寸（210×297mm）。 */
+  width: var(--paper-width, 210mm);
+  /* 画面の1ページを常に用紙の実寸に固定する。
      こうすると編集画面のページ割りと印刷のページ割りが一致し、
      紙面の途中で段が切れたり、継ぎのシートにタイトルが無い問題が起きない。
      ページ内に収まる段数は ScorePage.tsx の systemsPerPage で楽譜種別ごとに調整する */
-  height: 297mm;
+  height: var(--paper-height, 297mm);
   overflow: hidden;
   /* ヘッダー・譜面・フッターを縦に並べ、譜面（.score-area）へ残り高さを渡す。
      市販譜のように段をページ全体へ均等配置するための土台 */
@@ -2169,7 +2174,9 @@ button.ghost.active:hover:not(:disabled) {
 @media print {
   /* margin: 0 にして .print-page の padding（14mm）を余白として使う。
      @page margin を 12mm にすると印刷可能領域が 186mm になり、
-     width: 210mm の .print-page がはみ出して左ズレする原因になるため。 */
+     用紙幅いっぱいの .print-page がはみ出して左ズレする原因になるため。
+     A4 以外の用紙（Issue #495）では ScorePage.tsx が同じ内容の @page を
+     後から <style> で差し込んで size だけ上書きする（@page は var() を読めないため）。 */
   @page { size: A4; margin: 0; }
   /* 印刷インク色。通常は #000（黒）。
      黒インク切れなどで一時的に別色で刷りたいときはここだけ変える（例: #1d4ed8） */
@@ -2241,7 +2248,7 @@ button.ghost.active:hover:not(:disabled) {
     height: auto !important;
   }
   .print-page {
-    /* 画面用の縮小は印刷に持ち込まない（印刷は常に原寸 A4） */
+    /* 画面用の縮小は印刷に持ち込まない（印刷は常に用紙の原寸） */
     transform: none !important;
     page-break-after: always;
     box-shadow: none;

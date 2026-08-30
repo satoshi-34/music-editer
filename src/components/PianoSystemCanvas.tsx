@@ -2078,11 +2078,13 @@ function drawCollectedSymbolEntries(args: {
         drawnElements.push(dot);
         aboveOffset += 10 * s;
       } else if (type === 'accent') {
-        // アクセント: 下向きの楔形（「>」を90°回した形）
-        const tipY = noteTopY - 5 - aboveOffset + adjust.offsetY;
-        const wingY = tipY - 9 * s;
+        // アクセント: 横向きの「>」（先端が右）。以前は下向きの楔（∨）で描いていたが、
+        // 記譜の作法として誤りで、マルカート（∧系）とも紛らわしかった（Issue #474・弟の実使用指摘）
+        const bottomY = noteTopY - 5 - aboveOffset + adjust.offsetY;
+        const midY = bottomY - 5.5 * s;
+        const topY = bottomY - 11 * s;
         const path = document.createElementNS(ns, 'path');
-        path.setAttribute('d', `M ${ax - 10 * s} ${wingY} L ${ax} ${tipY} L ${ax + 10 * s} ${wingY}`);
+        path.setAttribute('d', `M ${ax - 9 * s} ${topY} L ${ax + 9 * s} ${midY} L ${ax - 9 * s} ${bottomY}`);
         path.setAttribute('stroke', '#1f2937');
         path.setAttribute('stroke-width', String(1.6 * s));
         path.setAttribute('stroke-linecap', 'round');

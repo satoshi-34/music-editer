@@ -12,6 +12,7 @@ import {
   type KeySignature,
   type MeasureAccidentalState,
 } from './noteKeyUtils';
+import { DEFAULT_PAGE_WIDTH_MM } from './pageSize';
 import { resolveMeasureKeySignature } from './keySignatureMeasureUtils';
 import { resolveClefAtMeasureEnd } from './clefMeasureUtils';
 import type { ClefType } from '../components/clefUtils';
@@ -55,7 +56,8 @@ export const SYSTEM_TARGET_FILL = 0.99;
 export const SYSTEM_FIRST_CLEF_PADDING = 50;
 export const SYSTEM_MAX_LABEL_WIDTH = 74;
 // .print-page は box-sizing:border-box で左右のpaddingを持つ（既定14mm）。Canvas 親の実幅は
-// 「A4幅210mm − 左右余白×2」の本文幅であり、A4全幅からの別計算をしない（CSSとの二重定義を避ける）。
+// 「用紙の幅（A4なら210mm） − 左右余白×2」の本文幅であり、用紙全幅からの別計算をしない
+// （CSSとの二重定義を避ける）。用紙の幅の正本は utils/pageSize.ts（Issue #495）。
 // 左右余白はレイアウトタブの「ページ余白（左右）」スライダーでユーザーが変更できるため、
 // 固定値ではなく sideMarginMm 引数を受け取る関数を正本にする。
 // 既定の14mmを省略時の値として使うことで、スライダーを一度も触らないユーザーには
@@ -164,8 +166,13 @@ export function resolveDefaultLayoutForScoreType(scoreType: ScoreType): {
   return { notationSizeMultiplier, systemRowGapPx, partSpacingOffsetPx };
 }
 
-export function printScoreAreaWidthPx(sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM): number {
-  return (210 - sideMarginMm * 2) * (96 / 25.4);
+export function printScoreAreaWidthPx(
+  sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM,
+  // 用紙の幅(mm)。用紙サイズ（A4/B4/A3・Issue #495）で本文幅が変わるため引数で受け取る。
+  // 省略時は従来どおり A4（210mm）＝既存の呼び出しの結果は1pxも変わらない。
+  pageWidthMmValue: number = DEFAULT_PAGE_WIDTH_MM,
+): number {
+  return (pageWidthMmValue - sideMarginMm * 2) * (96 / 25.4);
 }
 
 // 後方互換用の定数（既定余白14mm時の値）。新規コードは printScoreAreaWidthPx() を使うこと。
@@ -409,9 +416,12 @@ export function systemRowTopOffsetsPx(
  */
 export function worstCaseSystemContentBudget(
   sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM,
-  labelAreaWidth: number = SYSTEM_MAX_LABEL_WIDTH
+  labelAreaWidth: number = SYSTEM_MAX_LABEL_WIDTH,
+  // 用紙の幅(mm)。用紙サイズ（Issue #495）で本文幅が変わるため引数で受け取る。
+  // 省略時は従来どおり A4（210mm）。
+  pageWidthMmValue: number = DEFAULT_PAGE_WIDTH_MM,
 ): number {
-  const innerWidth = printScoreAreaWidthPx(sideMarginMm) - SYSTEM_PAGE_SIDE_PADDING * 2 - labelAreaWidth;
+  const innerWidth = printScoreAreaWidthPx(sideMarginMm, pageWidthMmValue) - SYSTEM_PAGE_SIDE_PADDING * 2 - labelAreaWidth;
   return Math.max(1, innerWidth * SYSTEM_TARGET_FILL - SYSTEM_FIRST_CLEF_PADDING);
 }
 
