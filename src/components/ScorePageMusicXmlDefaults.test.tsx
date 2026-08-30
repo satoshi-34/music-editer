@@ -7,7 +7,8 @@
 // (3) 引き継いだ値が作品として保存されること、を実経路（input[type=file] の change）で固定する。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react';
-import ScorePage, { readPersonalPageMarginSettings } from './ScorePage';
+import ScorePage from './ScorePage';
+import { readPersonalPageMarginSettings } from '../utils/personalLayoutSettings';
 import { createSavedScoreData, createWork, getLastOpenedWorkId, loadWorkAutosaveData, saveWorkAutosaveData, setLastOpenedWorkId } from '../utils/storage';
 import { staffHeightMmForNotationSize } from '../utils/musicXmlDefaults';
 
