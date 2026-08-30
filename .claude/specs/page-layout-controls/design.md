@@ -580,3 +580,17 @@ Issue #195（浄書の既定値の棚卸し）を受けて、運用者がプラ�
   押すと、document の keydown で解除した直後にボタンの既定 click が発火して
   同じ段を再選択していた。keydown で preventDefault を呼び既定動作を止める。
   テストは fireEvent の戻り値（preventDefault 済みなら false）で既定動作の抑止を固定
+
+## 追補: 最終ページの例外（下端寄せ）を廃止し、行グリッドを全ページ共通にした（Issue #506、2026-08-31）
+
+本ドキュメント本文で「最終ページ専用の配置（`.print-final-page` / `.print-final-page-single`）は
+行グリッドの対象外」としていた例外は廃止した。最終ページも他ページと同じ固定スロット式
+（`--page-capacity` ベースの `flex: 0 0 calc(...)` ＋ `margin-top: var(--system-row-gap)`）で配置し、
+段数が足りないぶんはページ下端の余白として残す（上詰め）。
+
+理由と経緯は `.claude/specs/final-barline/design.md` の「追補3」を参照。要点は、最終ページだけ
+行グリッドを外して `space-between` で引き伸ばしていたため、段数が端数になる最終ページで
+段間隔だけが異常に広がり、最下段がページ番号（`.page-foot`）と重なっていたこと。
+
+- 画面表示側の `.screen-final-page-single`（表示段が実質1段だけのページを上揃えにする。Issue #68）は
+  今回変更していない。印刷側の例外とは判定基準も対象も異なるため（画面は空の段を含めて数える）。

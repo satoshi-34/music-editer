@@ -4496,23 +4496,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   }
   const visiblePlannedRanges = [...contentRanges, ...bufferRanges];
   const effectiveTotalSystems = Math.max(1, visiblePlannedRanges.length);
-  // 印刷時、内容のある最後のページだけ最後の段をページ下端へ寄せる（App.css の
+  // 印刷で「内容のある最後のページ」が何ページ目かを求める（App.css の
   // .print-final-page .system-stack 参照）。printVisibleContentSystems は「印刷で実際に
   // 出す段の総数」（最低1）なので、それが何ページ目に収まるかを逆算する。
   // ページごとの段数が可変（1ページ目だけ少ない）ため、単純な割り算ではなく
   // 累積オフセットを1ページずつ進めながら「その段が何ページ目に収まるか」を探す。
+  // Issue #506 以降、このページも他ページと同じ行グリッドで上詰めになるため、
+  // このクラスは「最終ページであること」を示す目印としてだけ使う
+  // （以前あった「可視段が1段だけなら下端寄せをやめる」例外＝print-final-page-single は、
+  //   下端寄せ自体を廃止したことで不要になったので削除した）。
   const finalContentPageIndex = useMemo(
     () => findPageIndexForSystem(printVisibleContentSystems - 1, pageSystemLayoutOptions),
     [printVisibleContentSystems, pageSystemLayoutOptions]
   );
-  // 最終内容ページに表示される「内容のある段数」。これが1段だけだと space-between は
-  // 子が1つしかないため上端に寄ってしまい、終止線がページ下端に届かない
-  // （App.css の .print-final-page-single 参照）。
-  const finalContentPageVisibleSystems = Math.max(0, Math.min(
-    getPageSystemsCapacity(finalContentPageIndex),
-    printVisibleContentSystems - getPageSystemOffset(finalContentPageIndex)
-  ));
-  // 画面表示用の「最終ページ・1段だけ」判定。印刷用（上のfinalContentPageVisibleSystems）は
+  // 画面表示用の「最終ページ・1段だけ」判定。印刷用の段数（printVisibleContentSystems）は
   // 「内容のある段」だけを数えるため、空の譜面や「＋小節を追加」で出した空段が
   // 画面に複数表示されていても1になってしまい、画面の全段が1段用の上詰めレイアウト
   // （.screen-final-page-single）に落ちて段間隔が潰れるバグがあった。
@@ -6709,11 +6706,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           {visiblePages.map((p, i) => (
             <ScaledPageWrapper key={i} scale={effectiveScale} pageHeight={sharedPageHeight}>
               {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
-              {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
-              {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}
+              {/* print-final-page: 内容のある最後のページの目印。印刷・プレビューでも他ページと同じ行グリッドで上詰めにする（Issue #506。App.css 参照） */}
               {/* screen-final-page-single: 空の段（フィラー）を含めても表示段が実質1段だけのときに限る（Issue #68。フィラーがある場合は他ページと同じ固定スロット配置で統一する） */}
               <section
-                className={`print-page${printVisibleContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}${i === screenFinalPageIndex && screenFinalPageTotalSystems === 1 ? ' screen-final-page-single' : ''}`}
+                className={`print-page${printVisibleContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === screenFinalPageIndex && screenFinalPageTotalSystems === 1 ? ' screen-final-page-single' : ''}`}
                 style={{
                   // ページ余白（左右・上・下）。正本はこの3値のみで、App.css 側は
                   // var(--page-margin-*) を padding へそのまま渡すだけにしてある
