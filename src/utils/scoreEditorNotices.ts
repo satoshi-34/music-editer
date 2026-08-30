@@ -546,6 +546,29 @@ export function describeImportedClefNormalized(): string {
   return '読み込んだ大譜表のクレフを、ピアノ譜の標準（上段=ト音・下段=ヘ音）へ揃えました（音の高さはそのままです）';
 }
 
+/**
+ * MusicXML の `<defaults>` から縮尺を引き継いだときの通知（Issue #477）。
+ * ファイル指定の五線サイズで組み直すと見た目が大きく変わるため、黙って変えずに知らせる（#318）。
+ */
+export function describeImportedNotationSize(percent: number): string {
+  return `ファイルの指定に合わせて音符の大きさを${percent}%にしました（レイアウトタブで変更できます）`;
+}
+
+/**
+ * 紙幅に収まらない小節があったため、読込時に音符の大きさを下げたときの通知（Issue #477）。
+ * ファイルに `<defaults>` が無い（または指定どおりでは収まらない）場合のフォールバック。
+ */
+export function describeImportedNotationSizeShrunk(percent: number): string {
+  return `紙幅に収まらない小節があったため、音符の大きさを${percent}%に調整しました（レイアウトタブで変更できます）`;
+}
+
+/**
+ * 読み込んだファイルの判型に対応するサイズが無く、最も近い判型へ丸めたときの通知（Issue #477）。
+ */
+export function describeImportedPageSizeRounded(label: string): string {
+  return `読み込んだファイルの判型に対応するサイズが無いため、最も近い ${label} で開きました（レイアウトタブで変更できます）`;
+}
+
 export function describeSliceCopyUnavailable(): string {
   return '選択範囲がこのレイヤーの音符の切れ目に合っていません（レイヤーを替えた場合は、範囲を選び直してからコピーしてください）';
 }
@@ -747,4 +770,12 @@ export function describeHomeActionBlocked(kind: 'create' | 'goHome'): string {
     return `いまの作品を保存できなかったため、新規作成を中止しました（${fallback}）`;
   }
   return `いまの作品を保存できなかったため、ホームへ戻るのを中止しました（${fallback}）`;
+}
+
+/**
+ * <defaults> を持たない MusicXML で紙幅に収まらない小節があるときの提案（Issue #477 round1 P1・#318）。
+ * ファイルにレイアウト指定が無い以上、作品の縮尺を勝手に変えず「次の一手」だけを示す。
+ */
+export function describeNotationSizeFitSuggestion(fittedPercent: number): string {
+  return `現在の音符サイズでは紙幅に収まらない小節があります（レイアウトタブで音符の大きさを ${fittedPercent}% にすると収まります）`;
 }

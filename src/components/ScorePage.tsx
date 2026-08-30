@@ -47,7 +47,7 @@ import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, TITLE_FONT_SIZE_DEFAULT, TIT
 import type { TitleFontWeight } from '../utils/titleFontOptions';
 import HelpPanel from './HelpPanel';
 import { downloadMusicXml } from '../utils/musicXmlExport';
-import { parseMusicXml } from '../utils/musicXmlImport';
+import { parseMusicXmlWithDefaults } from '../utils/musicXmlImport';
 import { downloadMidi } from '../utils/midiExport';
 import { useTempoStorage } from '../hooks/useTempoStorage';
 import type { PlaybackEngine } from '../audio/PlaybackEngine';
@@ -97,6 +97,9 @@ import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
 import { instrumentLabelAreaWidthForScore } from '../utils/instrumentLabelUtils';
 import {
   planEffectiveMeasuresPerSystem,
+  fitNotationSizeMultiplier,
+  normalizeNotationSizeMultiplier,
+  normalizePageMargins,
   MEASURE_WIDTH_EVENNESS,
   SCORE_LAYOUT_RENDER_SCALE,
   MIN_MEASURE_CONTENT_WIDTH,
@@ -186,6 +189,7 @@ import {
   describeClearedMeasures,
   describePlaybackFromMeasure,
   describeHomeActionBlocked,
+  describeNotationSizeFitSuggestion,
   describeLegacyImportResult,
   describeMxlExtractFailed,
   describeOmrConvertFailed,
@@ -200,6 +204,9 @@ import {
   notifyScoreEdit,
   describePageSizeChanged,
   describeImportedClefNormalized,
+  describeImportedNotationSize,
+  describeImportedNotationSizeShrunk,
+  describeImportedPageSizeRounded,
   requestScoreSelectionClear,
   type ScoreActiveVoiceChangeDetail,
   type ScoreEditNoticeDetail,
@@ -225,6 +232,15 @@ import {
   type PageSizeId,
 } from '../utils/pageSize';
 import { ignoreWhenHomeShown } from '../utils/homeVisibility';
+import {
+  NOTATION_SIZE_KEY,
+  PAGE_MARGIN_BOTTOM_KEY,
+  PAGE_MARGIN_SIDE_KEY,
+  PAGE_MARGIN_TOP_KEY,
+  PAGE_MARGIN_VERTICAL_LEGACY_KEY,
+  readPersonalNotationSizeSetting,
+  readPersonalPageMarginSettings,
+} from '../utils/personalLayoutSettings';
 import {
   TOOLBAR_PLACEMENT_OPTIONS,
   clampDropdownMenuTop,
@@ -288,7 +304,6 @@ const VIEW_ZOOM_KEY = 'score-view-zoom';
 // これは画面表示だけでなく印刷結果や段組み（1段に入る小節数）にも影響する。
 // 未保存時の既定値は楽譜種別により異なる（Issue #49、resolveDefaultLayoutForScoreType参照）:
 // 単旋律・ピアノ=1.5、弦楽四重奏・編成譜=1（従来どおり）。
-const NOTATION_SIZE_KEY = 'score-notation-size';
 // 音符の大きさスライダーが取りうる倍率の範囲（0.8〜2.0）。
 // スライダーの min/max、state 初期化時のクランプ、maxSystemsPerPage の動的計算で
 // 同じ範囲を使うため、値のズレが起きないよう定数化しておく（NOTATION_SIZE_MULTIPLIER_MIN/MAX は
@@ -298,7 +313,6 @@ const NOTATION_SIZE_KEY = 'score-notation-size';
 // CSS 側（.print-page の padding）へはここで作る値を CSS カスタムプロパティとして渡す
 // （CSSとJSでの二重定義を避ける）。既定値 14mm は従来の固定 padding と同じにし、
 // スライダーを一度も触らなければ見た目が変わらないようにする。
-const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
 // 「ページ余白（上）」「ページ余白（下）」のユーザー設定（レイアウトタブのスライダー、各8〜25mm）。
 // 以前は「余白(上下)」1本のスライダーで、上 padding の値をそのまま使い、下 padding は
 // 常に「上 − 2mm」を保つ仕様だった（従来の固定値が 上14mm/下12mm だったため）。
@@ -306,9 +320,8 @@ const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
 // 上14mm/下12mmを保つことで、初回表示時の見た目を変えない。
 // 旧キー（score-page-margin-vertical）に保存済みの値がある場合は、後方互換として
 // 旧仕様と同じ計算（上=旧値、下=旧値-2mm）で新キーの初期値へ引き継ぐ。
-const PAGE_MARGIN_VERTICAL_LEGACY_KEY = 'score-page-margin-vertical';
-const PAGE_MARGIN_TOP_KEY = 'score-page-margin-top';
-const PAGE_MARGIN_BOTTOM_KEY = 'score-page-margin-bottom';
+
+
 // 「タイトル余白（上）」「タイトル余白（下）」のユーザー設定（レイアウトタブのスライダー、
 // 各0〜30mm、Issue #103）。タイトルページ（1ページ目）だけに効く追加余白で、上記の
 // 「ページ余白（上/下）」（全ページ共通のページ全体の余白）とは別軸の設定。
@@ -2411,7 +2424,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const performExportFile = async (fileNameBase: string) => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
     // 覚えている保存先ハンドルは「同じファイル名のときだけ」使い回す（Issue #507）。
     // 名前を変えたのに前のファイルへ上書きしてしまうと、別名で書き出したつもりの
     // ユーザーが元のファイルを黙って壊すことになる（匿名化コピーの用途では致命的）
@@ -2473,6 +2486,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setTimeSignatureStyle(normalizeTimeSignatureStyle(data.timeSignatureStyle));
     // 旧データは pageSize を持たないので、省略時は A4 として開く（normalizePageSizeId が担保）
     setPageSize(normalizePageSizeId(data.pageSize));
+      // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
+      applySavedLayoutAttributes(data);
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
       setCustomSymbolDefs(data.customSymbolDefs ?? []);
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
@@ -2529,7 +2544,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // （handleExportFile と同じ理由で通常関数として定義。TDZ 回避）。
   const handleFeedback = async () => {
     const { metadata, parts } = buildScoreData();
-    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
+    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
     const feedbackState = {
       ...scoreData,
       // フィードバック JSON は「開く」の「ファイル」ボタンで読み込める楽譜 JSON なので、
@@ -2591,6 +2606,45 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * 起動時の復元と、作品一覧からの切替の両方で同じ手順を通す
    * （片方だけ更新し忘れると「切り替えたのに前の譜面の設定が残る」不具合になるため）。
    */
+  /**
+   * 作品の属性として保存されたレイアウト（音符の大きさ・ページ余白。Issue #477）を画面へ当てる。
+   *
+   * 省略されている項目は**表示設定（localStorage の個人既定）へ戻す**（round1 P1）。
+   * 以前の「現状維持」だと、属性つき作品→属性なし作品の切替で前の作品の縮尺・余白が
+   * 画面に残り、次の自動保存で属性なし作品へ混入してしまう。
+   * localStorage（表示設定）へは書かない: 作品を1つ開いただけで
+   * グローバル設定を書き換えてしまわないため（作品の属性であって表示設定ではない）。
+   */
+  const applySavedLayoutAttributes = useCallback((data: SavedScoreData, options?: { resetOmitted?: boolean }) => {
+    // resetOmitted=false（MusicXML 取り込み経路・round2 P1）: <defaults> の無い取り込みは
+    // 「作品の切替」ではないので、省略項目は現在の値のまま（表示設定へも戻さない）。
+    // 省略時の表示設定復帰は、保存済み作品を開く・切り替える経路（既定 true）だけの約束
+    const resetOmitted = options?.resetOmitted ?? true;
+    if (data.notationSizeMultiplier !== undefined) {
+      setNotationSizeMultiplier(normalizeNotationSizeMultiplier(
+        data.notationSizeMultiplier,
+        resolveDefaultLayoutForScoreType(data.scoreType ?? 'single').notationSizeMultiplier,
+      ));
+    } else if (resetOmitted) {
+      setNotationSizeMultiplier(readPersonalNotationSizeSetting());
+    }
+    if (data.pageMargins !== undefined) {
+      const margins = normalizePageMargins(data.pageMargins, {
+        sideMm: DEFAULT_PAGE_SIDE_MARGIN_MM,
+        topMm: DEFAULT_PAGE_MARGIN_TOP_MM,
+        bottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+      });
+      setPageMarginSideMm(margins.sideMm);
+      setPageMarginTopMm(margins.topMm);
+      setPageMarginBottomMm(margins.bottomMm);
+    } else if (resetOmitted) {
+      const personal = readPersonalPageMarginSettings();
+      setPageMarginSideMm(personal.sideMm);
+      setPageMarginTopMm(personal.topMm);
+      setPageMarginBottomMm(personal.bottomMm);
+    }
+  }, []);
+
   const applyLoadedScoreData = useCallback(async (restored: SavedScoreData) => {
     // パート譜表示は保存されない一時ビュー（設計書どおり「読込後は必ず総譜」）。
     // 同じパートIDを持つ別作品へ切り替えたときにパート譜表示が引き継がれてしまう
@@ -2614,6 +2668,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setTitleFontWeight(normalizeTitleFontWeight(restored.titleFontWeight));
     setTimeSignatureStyle(normalizeTimeSignatureStyle(restored.timeSignatureStyle));
     setPageSize(normalizePageSizeId(restored.pageSize));
+    // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
+    applySavedLayoutAttributes(restored);
     setCustomSymbolDefs(restored.customSymbolDefs ?? []);
     if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
       setMeasuresPerSystem(restored.measuresPerSystem);
@@ -2692,6 +2748,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyLoadedScoreData, initializeWorks, setTimeSignature]);
 
+  // 「音符の大きさ」「ページ余白」（作品の属性・Issue #477 round1 P1）の変更を
+  // 自動保存へ伝えるためのリビジョン。これらの state 本体はファイル後方で宣言されて
+  // いて依存配列に直接書けない（TDZ）ため、後方の小さな effect が変更のたびに
+  // このカウンタを進め、自動保存はカウンタだけを依存に持つ
+  const [layoutAttrRevision, setLayoutAttrRevision] = useState(0);
+
   // 段あたり小節数。自動保存 useEffect の依存配列に含めるため、useEffect より前で宣言する
   // （以前はここより後方で宣言されており、後方宣言のため deps に入れられなかった。
   // Issue #117: このため「段あたり小節数」だけを変更して閉じると自動保存されなかった）。
@@ -2715,7 +2777,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // （新規四重奏で名前だけ設定して閉じると失われるため。Codex round1 P1・#448）
       if (!options?.includeEmpty && isEmptyScoreData(parts)
         && !hasCustomInstrumentationLabels(instrumentation, scoreType)) return null;
-      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
+      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
     };
   });
 
@@ -2743,7 +2805,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 保存先は「いま開いている作品」の自動保存スロット。まだ作品IDが無い
       // （＝一度も保存していない新規状態）ときは、この保存で新しい作品が作られる。
       const saved = saveCurrentWork(
-        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize)
+        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm })
       );
       if (saved) {
         lastAutosaveCompletedAtRef.current = Date.now();
@@ -2785,8 +2847,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 大譜表の下段だけを編集して閉じると復元されなかった）。buildScoreData が読む
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
+  // 「音符の大きさ」「ページ余白」（作品の属性・Issue #477）は state 本体を列挙できない
+  // （後方宣言のため TDZ）。代わりに layoutAttrRevision（後方の effect が変更のたびに
+  // 進めるカウンタ）を依存に持ち、これらだけを変えて閉じても保存されるようにする（round1 P1）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem, layoutAttrRevision]);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -3933,6 +3998,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
     return DEFAULT_PAGE_MARGIN_BOTTOM_MM;
   });
+
+  // 作品の属性（音符の大きさ・ページ余白）の変更を自動保存へ伝える（Issue #477 round1 P1。
+  // 依存配列の TDZ 制約の迂回。カウンタの正本コメントは自動保存 useEffect の直前を参照）
+  useEffect(() => {
+    setLayoutAttrRevision((revision) => revision + 1);
+  }, [notationSizeMultiplier, pageMarginSideMm, pageMarginTopMm, pageMarginBottomMm]);
   // ユーザー設定（レイアウトタブの「タイトル余白（上）」スライダー、0〜30mm、Issue #103）。
   // タイトルページ（1ページ目）だけに効く。旧キーは無いため、単純に新キーを読むだけでよい。
   const [titleMarginTopMm, setTitleMarginTopMm] = useState<number>(() => {
@@ -4825,7 +4896,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       } else {
         xml = new TextDecoder('utf-8').decode(bytes);
       }
-      const loaded = parseMusicXml(xml);
+      const { score: loaded, defaults: importedDefaults } = parseMusicXmlWithDefaults(xml);
       // applyLoadedScoreData と同等のロジックで画面に反映する
       // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
       setPartExtractionId(null);
@@ -4835,6 +4906,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       setComposer(loaded.metadata.composer);
       setArranger(loaded.metadata.arranger);
       const loadedType = loaded.scoreType ?? 'single';
+      // 取り込み時の通知は1本にまとめて出す（後勝ちで消えないように・#477 round2 P2）
+      const importNotices: string[] = [];
       setKeySignature(normalizeKeySignature(loaded.keySignature));
       await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
       // MusicXML の <time symbol="common"/"cut"> を読み込んだ場合はここで表示スタイルへ戻す
@@ -4859,7 +4932,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // まず partId で選ぶ。clef だけで選ぶと「両段ともト音」の正当な大譜表で
         // 2段目が読み捨てられ、「上段がヘ音」の曲では左右が逆転する（Codex round1 P1）。
         // partId が無い従来形式（パート分離の2パートXML等）は従来どおり clef で推定する
-        const byId = (id: string) => loaded.parts.find(p => p.partId === id);
+          const byId = (id: string) => loaded.parts.find(p => p.partId === id);
         const rightPart = byId('right-hand')
           ?? loaded.parts.find(p => p.clef === 'treble') ?? loaded.parts[0];
         const leftPart = byId('left-hand')
@@ -4869,14 +4942,83 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         setLeftHandData(leftPart?.measures);
         // アプリのピアノモデルはクレフ固定（上=ト・下=ヘ）で、任意クレフの大譜表
         // （両段ト音など）は保持できない。keys は絶対音名なので音の高さは変わらないが、
-        // 見た目のクレフが黙って変わるのは #318 に反するため通知する（#419 round2 P1）
+        // 見た目のクレフが黙って変わるのは #318 に反するため通知する（#419 round2 P1）。
+        // 単独送信ではなく importNotices へ積む: 通知は後勝ちのため、後続の
+        // レイアウト通知に消されて読めなくなる（#477 round2 P2）
         if (loaded.scoreType === 'piano'
           && ((rightPart && rightPart.clef !== 'treble') || (leftPart && leftPart.clef !== 'bass'))) {
-          notifyScoreEdit(describeImportedClefNormalized());
+          importNotices.push(describeImportedClefNormalized());
         }
         setEnsembleParts([]);
         setEnsembleSecondStaffParts([]);
       }
+      // --- ファイル指定のレイアウト（<defaults>）の引き継ぎ（Issue #477）---
+      // Finale などの書き出しは <defaults> に「その作品をどう組むか」（五線の大きさ・判型・余白）を
+      // 持っている。従来はこれを全部捨てて既定サイズで組んでいたため、実曲を持ち込むと
+      // 紙幅超過警告が出ていた。読めた項目だけを作品の属性として引き継ぐ。
+      if (importedDefaults?.pageSizeRounded) {
+        importNotices.push(describeImportedPageSizeRounded(getPageSize(loaded.pageSize).label));
+      }
+      // 余白・判型はファイル指定があればそれを、無ければ現在の設定のまま使う
+      const importedMargins = loaded.pageMargins ?? {
+        sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm,
+      };
+      applySavedLayoutAttributes(loaded, { resetOmitted: false });
+
+      // ファイル指定（無ければ現在の設定）の縮尺で、1小節すら紙幅に入らない小節が無いか確かめる。
+      // ファイルの縮尺をそのまま使っても収まるとは限らない（音符の間隔の詰め方はアプリ独自の
+      // 浄書のため）。収まらないときだけ 5%刻みで下げ、下げたことを通知する（#318）。
+      const importedContentBudgetPx = worstCaseSystemContentBudget(
+        importedMargins.sideMm, instrumentLabelAreaWidth, pageWidthMm(loaded.pageSize),
+      );
+      const desiredMultiplier = loaded.notationSizeMultiplier ?? notationSizeMultiplier;
+      const importedPlan = planEffectiveMeasuresPerSystem(
+        loaded.parts.map((part) => ({
+          measures: part.measures,
+          // 調号変更の正本は先頭パート（layoutParts と同じ約束）
+          keySignatureMeasures: loaded.parts[0]?.measures,
+          clef: part.clef,
+        })),
+        normalizeTimeSignature(loaded.timeSignature),
+        normalizeKeySignature(loaded.keySignature),
+        loaded.measuresPerSystem ?? measuresPerSystem,
+        importedContentBudgetPx,
+        SCORE_LAYOUT_RENDER_SCALE,
+        { includeTranspositionAccidentalWorstCase: loadedType === 'ensemble' },
+      );
+      const fittedMultiplier = fitNotationSizeMultiplier(
+        importedPlan.minimumWidths, importedContentBudgetPx, desiredMultiplier,
+      );
+      const fittedPercent = Math.round(fittedMultiplier * 100);
+      // <defaults> を持つファイルだけが作品の縮尺を書き換える（round1 P1）。
+      // 持たないファイルは受け入れ条件どおり「従来挙動+提案のみ」: 開いただけで
+      // 作品の縮尺が変わって保存される、を起こさない
+      const hasImportedLayoutDefaults =
+        loaded.notationSizeMultiplier !== undefined
+        || loaded.pageMargins !== undefined
+        || loaded.pageSize !== undefined;
+      if (hasImportedLayoutDefaults) {
+        // applySavedLayoutAttributes が入れた値（ファイル指定）を、収まる大きさで上書きする。
+        // notationSizeMultiplier（この時点では読込前の値）と比べるのではなく必ず設定する:
+        // ファイル指定を当てた直後の値は state にまだ反映されていない（同じレンダー内の
+        // 更新はまとめて適用される）ため、比較で分岐すると設定漏れになる。
+        setNotationSizeMultiplier(fittedMultiplier);
+        if (fittedMultiplier < desiredMultiplier) {
+          importNotices.push(describeImportedNotationSizeShrunk(fittedPercent));
+        } else if (loaded.notationSizeMultiplier !== undefined && fittedMultiplier !== notationSizeMultiplier) {
+          // ファイル指定をそのまま引き継ぎ、かつ読込前の表示から変わったときだけ知らせる
+          importNotices.push(describeImportedNotationSize(fittedPercent));
+        }
+      } else if (fittedMultiplier < desiredMultiplier) {
+        // 縮尺は変えずに、収まる値を提案だけする（#318: 紙幅超過警告の行き止まりに
+        // 「次の一手」を添える）
+        importNotices.push(describeNotationSizeFitSuggestion(fittedPercent));
+      }
+      if (importNotices.length > 0) {
+        // 複数出るときは1本にまとめる（通知は後勝ちで上書きされるため）。読む時間も長めに取る
+        notifyScoreEdit(importNotices.join('／'), 8000);
+      }
+
       // MusicXML には段割り上書きの概念が無いため、前の譜面ぶんを引き継がずリセットする
       setSystemMeasureOverrides([]);
       // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
@@ -4888,7 +5030,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-  }, [setTimeSignature, measuresPerSystem]);
+  }, [setTimeSignature, measuresPerSystem, applySavedLayoutAttributes, instrumentLabelAreaWidth,
+    notationSizeMultiplier, pageMarginSideMm, pageMarginTopMm, pageMarginBottomMm]);
 
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

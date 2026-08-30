@@ -166,6 +166,66 @@ export function resolveDefaultLayoutForScoreType(scoreType: ScoreType): {
   return { notationSizeMultiplier, systemRowGapPx, partSpacingOffsetPx };
 }
 
+/** 保存データ由来の「音符の大きさ」倍率を、スライダーの範囲へ正規化する（Issue #477）。 */
+export function normalizeNotationSizeMultiplier(value: unknown, fallback: number): number {
+  const n = typeof value === 'number' ? value : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n));
+}
+
+/** 作品の属性として保存されたページ余白（mm）。左右はスライダーが1本なので左右同値で持つ。 */
+export interface SavedPageMargins {
+  sideMm: number;
+  topMm: number;
+  bottomMm: number;
+}
+
+/**
+ * 保存データ由来のページ余白を、スライダーの範囲へ正規化する（Issue #477）。
+ * 壊れた値（数値でない・範囲外）が来ても画面を壊さないよう、項目ごとに既定値・
+ * クランプへ倒す。
+ */
+export function normalizePageMargins(value: unknown, fallback: SavedPageMargins): SavedPageMargins {
+  const raw = (value ?? {}) as Partial<SavedPageMargins>;
+  const pick = (n: unknown, min: number, max: number, fb: number): number => {
+    const v = typeof n === 'number' ? n : NaN;
+    if (!Number.isFinite(v)) return fb;
+    return Math.max(min, Math.min(max, v));
+  };
+  return {
+    sideMm: pick(raw.sideMm, PAGE_MARGIN_SIDE_MIN_MM, PAGE_MARGIN_SIDE_MAX_MM, fallback.sideMm),
+    topMm: pick(raw.topMm, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM, fallback.topMm),
+    bottomMm: pick(raw.bottomMm, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM, fallback.bottomMm),
+  };
+}
+
+/**
+ * 紙幅に収まる最大の「音符の大きさ」倍率を求める（Issue #477 のフォールバック）。
+ *
+ * planEffectiveMeasuresPerSystem が返す minimumWidths は VexFlow の論理単位（倍率に
+ * 依存しない値）なので、「いちばん広い小節 × SCORE_LAYOUT_RENDER_SCALE × 倍率」が
+ * 本文幅に収まる、という一次不等式を解くだけで求められる。
+ *
+ * @param minimumWidths 各小節の最小幅（論理単位）
+ * @param availableWidthPx 段の本文幅（px。worstCaseSystemContentBudget の値）
+ * @param desiredMultiplier ユーザー（またはファイル）が望んだ倍率。これを超えて拡大はしない
+ * @returns 収まる最大の倍率（5%刻み・スライダーの範囲へクランプ）。desiredMultiplier で
+ *   すでに収まっていればそのまま返す
+ */
+export function fitNotationSizeMultiplier(
+  minimumWidths: readonly number[],
+  availableWidthPx: number,
+  desiredMultiplier: number,
+): number {
+  const widest = minimumWidths.reduce((max, width) => (width > max ? width : max), 0);
+  if (!(widest > 0) || !(availableWidthPx > 0)) return desiredMultiplier;
+  const maxMultiplier = availableWidthPx / (widest * SCORE_LAYOUT_RENDER_SCALE);
+  if (maxMultiplier >= desiredMultiplier) return desiredMultiplier;
+  // 5%刻みで切り下げる（スライダーの刻みに合わせ、境界で溢れないよう必ず下側へ丸める）
+  const stepped = Math.floor(maxMultiplier * 20) / 20;
+  return Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(desiredMultiplier, stepped));
+}
+
 export function printScoreAreaWidthPx(
   sideMarginMm: number = DEFAULT_PAGE_SIDE_MARGIN_MM,
   // 用紙の幅(mm)。用紙サイズ（A4/B4/A3・Issue #495）で本文幅が変わるため引数で受け取る。
