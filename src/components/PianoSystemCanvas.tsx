@@ -227,6 +227,7 @@ import {
 } from '../utils/freeTextUtils';
 // 自由注釈の書体（Issue #432）はタイトル書体の一覧をそのまま共用する（別リストを作らない）
 import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, ensureTitleFontLoaded, resolveTitleFontOption, waitForTitleFontReady } from '../utils/titleFontOptions';
+import { ignoreWhenHomeShown } from '../utils/homeVisibility';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -4136,8 +4137,9 @@ export default function PianoSystemCanvas({
       }
       if(e.key==='Escape'){setSelected(null);e.preventDefault();}
     };
-    window.addEventListener('keydown',onKey);
-    return()=>window.removeEventListener('keydown',onKey);
+    const guardedOnKey = ignoreWhenHomeShown(onKey);
+    window.addEventListener('keydown',guardedOnKey);
+    return()=>window.removeEventListener('keydown',guardedOnKey);
     // cancelArcDrag は useCallback で同一性が保たれるため、これで貼り直しは起きない
   },[cancelArcDrag]);
 

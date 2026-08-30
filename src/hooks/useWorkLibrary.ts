@@ -22,6 +22,17 @@ import {
 } from '../utils/storage';
 import type { SavedScoreData, WorkSummary } from '../types/storage';
 
+/**
+ * 作品切替の結果（#500 round1 P1）。呼び出し側の正しい挙動がそれぞれ違う:
+ * sameWork=何もしない / loaded=データを画面へ / empty=空の譜面から /
+ * error=リセットせず理由を通知（リセットすると表示中の譜面が消える）
+ */
+export type WorkSwitchResult =
+  | { status: 'sameWork' }
+  | { status: 'loaded'; data: SavedScoreData }
+  | { status: 'empty' }
+  | { status: 'error'; message: string };
+
 export interface UseWorkLibraryReturn {
   /** 作品一覧（更新の新しい順）。表示を更新したいときは refreshWorks を呼ぶ */
   works: WorkSummary[];
@@ -41,9 +52,9 @@ export interface UseWorkLibraryReturn {
   /**
    * 別の作品へ切り替える。切り替える前に現在の内容を保存するので、
    * 切替操作で編集中の内容が失われない（Issue #181 受入条件2）。
-   * 戻り値は切替先の譜面データ（中身がまだ無い作品なら null）。
+   * 戻り値は判別付きの切替結果（WorkSwitchResult 参照）。
    */
-  switchWork: (workId: string, currentData: SavedScoreData | null) => SavedScoreData | null;
+  switchWork: (workId: string, currentData: SavedScoreData | null) => WorkSwitchResult;
   /** 新しい作品IDを発行して「空の譜面を書き始める」状態にする（現在の内容は保存してから） */
   startNewWork: (currentData: SavedScoreData | null) => boolean;
   /** 作品を削除する。いま開いている作品を削除した場合は deletedCurrent が true */
@@ -145,29 +156,39 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
     return true;
   }, [setCurrentWorkId]);
 
-  const switchWork = useCallback((workId: string, currentData: SavedScoreData | null): SavedScoreData | null => {
+  const switchWork = useCallback((workId: string, currentData: SavedScoreData | null): WorkSwitchResult => {
     if (workId === currentWorkIdRef.current) {
-      // 同じ作品を選び直しただけ。読み直すと未保存の編集を巻き戻してしまうので何もしない
-      return null;
+      // 同じ作品を選び直しただけ。読み直すと未保存の編集を巻き戻してしまうので何もしない。
+      // 以前は null（＝データ無し）を返しており、ホーム一覧から現在作品を押すと
+      // 呼び出し側が「中身の無い作品」と誤解して譜面を空へリセットしていた（#500 round1 P1）。
+      // 「同じ作品」「読込失敗」「中身なし」は呼び出し側で挙動が違うため、判別付きで返す
+      return { status: 'sameWork' };
     }
 
-    // 切り替える前に、いま画面にある内容を必ず保存する（切替でデータを失わないため）
-    if (currentData) {
-      saveCurrentWork(currentData);
+    // 切り替える前に、いま画面にある内容を必ず保存する（切替でデータを失わないため）。
+    // 保存に失敗したまま切替先を開くと、その編集だけが静かに失われる（round2 P1）。
+    // ここで中断すれば画面の内容が残り、ユーザーは書き出し等で退避できる
+    if (currentData && !saveCurrentWork(currentData)) {
+      const message = 'いまの作品を保存できなかったため、切り替えを中止しました';
+      setWorkError(message);
+      return { status: 'error', message };
     }
 
     const result = loadWorkAutosaveData(workId);
+    if (!result.success) {
+      // 読込の成否を確かめる前に currentWorkId を切替先へ動かすと、画面は元の作品の
+      // ままなのに保存先だけが切替先になり、次の自動保存が別作品を上書きする
+      // （round2 P1）。失敗時は ID を一切動かさない（再試行も sameWork にならない）
+      const message = result.error?.message ?? '作品の読み込みに失敗しました';
+      setWorkError(message);
+      return { status: 'error', message };
+    }
+
     setCurrentWorkId(workId);
     setLastOpenedWorkId(workId);
     setWorks(listWorks());
-
-    if (!result.success) {
-      setWorkError(result.error?.message ?? '作品の読み込みに失敗しました');
-      return null;
-    }
-
     setWorkError(null);
-    return result.data ?? null;
+    return result.data ? { status: 'loaded', data: result.data } : { status: 'empty' };
   }, [saveCurrentWork, setCurrentWorkId]);
 
   const startNewWork = useCallback((currentData: SavedScoreData | null): boolean => {

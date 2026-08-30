@@ -1,6 +1,21 @@
 import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { defineConfig, configDefaults } from 'vitest/config'
 import react from '@vitejs/plugin-react'
+
+// ホーム画面のフッターに出すアプリのバージョン（Issue #500）。
+// package.json の version を唯一の正本にして、画面側に版番号を手書きしない
+// （手書きすると更新を忘れ、リリースノートと突き合わせられなくなる）。
+function resolveAppVersion(): string {
+  try {
+    const pkgUrl = new URL('./package.json', import.meta.url)
+    const pkg = JSON.parse(readFileSync(fileURLToPath(pkgUrl), 'utf-8')) as { version?: string }
+    return pkg.version ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
 
 // フィードバックボタン（Issue #91）で「どのビルドで発生したか」を報告に含めるための
 // ビルド時 git sha 埋め込み。Docker イメージ（.dockerignore で .git を除外）や
@@ -27,6 +42,7 @@ export default defineConfig({
   },
   define: {
     __APP_GIT_SHA__: JSON.stringify(resolveGitSha()),
+    __APP_VERSION__: JSON.stringify(resolveAppVersion()),
   },
   test: {
     environment: 'jsdom',
