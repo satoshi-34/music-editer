@@ -469,7 +469,7 @@ export type HomeActionResult = { ok: true } | { ok: false; message: string };
 
 export interface ScorePageHomeActions {
   /** ファイルを開く導線を起動する。ブラウザのファイル選択ダイアログが開く */
-  openFilePicker: (kind: 'file' | 'musicxml' | 'pdf' | 'legacy') => HomeActionResult;
+  openFilePicker: (kind: 'file' | 'musicxml' | 'pdf' | 'legacy') => Promise<HomeActionResult>;
   /**
    * 譜種を選んで新規作成する（いまの作品は保存されて作品一覧に残る）。
    * ok: false = いまの内容の保存や新作品の発行に失敗（元の譜面は変更されない。
@@ -2813,7 +2813,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   useEffect(() => {
     if (!homeActionsRef) return;
     homeActionsRef.current = {
-      openFilePicker: (kind) => {
+      openFilePicker: async (kind) => {
         // 「ファイル」タブへ切り替えてから開く。戻ってきた画面で
         // 同じ導線（開く・書き出し）がそのまま見えている方が迷わない。
         // クリックはこの場（＝ユーザー操作と同じ処理の流れ）で呼ぶ必要がある
@@ -2823,7 +2823,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         if (kind === 'file') fileImportRef.current?.click();
         else if (kind === 'musicxml') musicXmlInputRef.current?.click();
         else if (kind === 'pdf') pdfInputRef.current?.click();
-        else void handleImportLegacyManualSave();
+        else {
+          // 旧手動保存の取り込みは同期のクリックではなく非同期処理なので、
+          // 完了まで待つ（round4 P2: void で捨てると途中の例外を App の
+          // 例外受け止めが拾えず、未処理 Promise になる）
+          await handleImportLegacyManualSave();
+        }
         return { ok: true };
       },
       createNewScore: async (nextScoreType) => {

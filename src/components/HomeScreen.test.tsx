@@ -101,4 +101,27 @@ describe('ホーム画面（Issue #500）', () => {
     const buttonLabels = screen.getAllByRole('button').map(button => button.textContent ?? '');
     expect(buttonLabels.some(label => /ログイン|サインイン|アカウント/.test(label))).toBe(false);
   });
+
+  it('busy 中は設定を含む全ボタンが無効になる（round3/round4 P2: 連打の無言無視を見た目で防ぐ）', () => {
+    render(
+      <HomeScreen
+        appVersion="1.0.0"
+        resume={{ workId: 'w1', title: '作品', updatedAt: Date.now() }}
+        works={[{ id: 'w1', title: '作品', updatedAt: Date.now(), createdAt: Date.now() }]}
+        availableOpenKinds={['file', 'musicxml']}
+        busy
+        onResume={() => {}}
+        onSelectWork={() => {}}
+        onCreateNew={() => {}}
+        onOpen={() => {}}
+        onOpenSettings={() => {}}
+      />
+    );
+    const buttons = [...document.querySelectorAll('.home-screen button')];
+    expect(buttons.length).toBeGreaterThan(5);
+    for (const button of buttons) {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(screen.getByTestId('home-screen').getAttribute('aria-busy')).toBe('true');
+  });
 });

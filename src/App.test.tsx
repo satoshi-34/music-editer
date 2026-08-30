@@ -315,4 +315,26 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     fireEvent.keyDown(window, { key: '4' });
     expect(isEighthActive()).toBe(false);
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('操作中の想定外の例外もホームに留まり理由が表示される（round3/round4 P2）', async () => {
+    seedWork();
+    render(<App />);
+    await waitFor(() => { expect(scoreTitleText()).toContain(SEEDED_TITLE); });
+
+    // 保存経路の途中で例外を投げさせる（エラー結果ではなく throw の経路）
+    const originalSetItem = localStorageMock.setItem;
+    localStorageMock.setItem = (key: string, value: string) => {
+      if (key.includes('work-index')) throw new Error('boom');
+      originalSetItem(key, value);
+    };
+    try {
+      fireEvent.click(await screen.findByTestId('home-new-single'));
+      // 例外でもホームに留まり、理由が .home-error に出る（未処理 Promise にしない）
+      await waitFor(() => { expect(screen.getByTestId('home-screen')).toBeTruthy(); });
+      const error = await screen.findByTestId('home-error');
+      expect(error.textContent?.length).toBeGreaterThan(0);
+    } finally {
+      localStorageMock.setItem = originalSetItem;
+    }
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

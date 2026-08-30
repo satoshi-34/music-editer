@@ -218,6 +218,7 @@ export default function HomeScreen({
                 <button
                   key={entry.tab}
                   type="button"
+                  disabled={busy}
                   className="home-secondary-button"
                   onClick={() => onOpenSettings(entry.tab)}
                   title={entry.description}
