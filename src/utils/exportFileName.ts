@@ -59,7 +59,8 @@ export function sanitizeFileNameBase(
   // 「CON.json」のようにドット以降が続く形も予約扱いになるため、先頭部で判定して
   // 無害な接頭辞を足す（入力の面影を残すため置換ではなく前置にする）
   const stem = truncated.split('.')[0];
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem)) {
+  // COM/LPT は 1〜9 に加えて上付き数字 ¹²³ も予約（Microsoft の命名仕様。round2 P2）
+  if (/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])$/i.test(stem)) {
     return `_${truncated}`;
   }
   return truncated;

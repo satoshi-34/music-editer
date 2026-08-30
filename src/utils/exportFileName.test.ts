@@ -101,6 +101,9 @@ describe('buildExportFileName', () => {
     expect(sanitizeFileNameBase('con')).toBe('_con');
     expect(sanitizeFileNameBase('Com1')).toBe('_Com1');
     expect(sanitizeFileNameBase('LPT9')).toBe('_LPT9');
+    // 上付き数字の COM¹〜³ / LPT¹〜³ も予約（round2 P2）
+    expect(sanitizeFileNameBase('COM¹')).toBe('_COM¹');
+    expect(sanitizeFileNameBase('lpt³')).toBe('_lpt³');
     // 「CON.json」のようにドット以降が続く形も予約扱い
     expect(sanitizeFileNameBase('CON.backup')).toBe('_CON.backup');
     // 予約名を含むだけ（CONcerto 等）は通常どおり
