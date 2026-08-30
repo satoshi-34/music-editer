@@ -59,6 +59,12 @@ export interface ScoreActiveVoiceChangeDetail {
 export interface ScoreEditNoticeDetail {
   /** 画面に出す本文。「〜しました」までを含む完成した文にすること */
   message: string;
+  /**
+   * 表示しつづける時間（ミリ秒）。省略時は編集通知の既定（ScorePage 側の 4 秒）。
+   * 起動時の保存先の説明（Issue #497）のように、既定より長い文を落ち着いて読ませたい
+   * 通知だけが指定する。通知の見た目・出す場所は共通のまま（同じ仕組みの2枚目を作らない）
+   */
+  durationMs?: number;
 }
 
 /**
@@ -67,11 +73,16 @@ export interface ScoreEditNoticeDetail {
  */
 export const UNDO_HINT = '（Cmd/Ctrl+Z で元に戻せます）';
 
-/** 編集の通知を出す。リスナー（ScorePage）が居なければ何も起きない。 */
-export function notifyScoreEdit(message: string): void {
+/**
+ * 編集の通知を出す。リスナー（ScorePage）が居なければ何も起きない。
+ * durationMs を渡すと、その通知だけ表示時間を延ばせる（省略時は既定の 4 秒）。
+ */
+export function notifyScoreEdit(message: string, durationMs?: number): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(
-    new CustomEvent<ScoreEditNoticeDetail>(SCORE_EDIT_NOTICE_EVENT, { detail: { message } })
+    new CustomEvent<ScoreEditNoticeDetail>(SCORE_EDIT_NOTICE_EVENT, {
+      detail: { message, durationMs },
+    })
   );
 }
 

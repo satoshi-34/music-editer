@@ -87,3 +87,29 @@ describe('searchHelp（横断検索）', () => {
     expect(guides.some((g) => g.id === 'musicxml')).toBe(true);
   });
 });
+
+describe('データの保存場所と安全性（#497）', () => {
+  const sections = parseReadmeSections(readmeRaw);
+
+  it('README のリファレンス項目として存在し、保存先と非送信の両方を書いている', () => {
+    const section = sections.find((s) => s.title === 'データの保存場所と安全性');
+    expect(section).toBeDefined();
+    expect(section!.body).toContain('この端末の中だけ');
+    expect(section!.body).toContain('送られることはありません');
+  });
+
+  it('不安に思ったユーザーが打ちそうな言葉で引ける（「保存 どこ」「公開」）', () => {
+    // ヘルプは「知りたいときに引けて初めて意味がある」ので、検索経路まで固定する
+    const byWhere = searchHelp('保存 どこ', sections);
+    expect(
+      byWhere.guides.some((g) => g.id === 'storage-location')
+      || byWhere.sections.some((s) => s.title === 'データの保存場所と安全性'),
+    ).toBe(true);
+
+    const byPublic = searchHelp('公開', sections);
+    expect(
+      byPublic.guides.some((g) => g.id === 'storage-location')
+      || byPublic.sections.some((s) => s.title === 'データの保存場所と安全性'),
+    ).toBe(true);
+  });
+});

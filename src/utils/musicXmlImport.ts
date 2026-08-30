@@ -823,8 +823,15 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
   const root = doc.querySelector('score-partwise');
   if (!root) throw new Error('score-partwise 形式の MusicXML のみ対応しています');
 
-  // タイトル・作曲者
-  const title = doc.querySelector('work-title')?.textContent ?? '';
+  // タイトル・作曲者。
+  // タイトルは <work><work-title>（曲集全体の題）を優先しつつ、無ければ
+  // <movement-title>（単一楽章の題）へフォールバックする（Issue #502）。
+  // Finale は単曲書き出しで movement-title 側だけを使うため、work-title のみを
+  // 見ると Finale 持ち込み（#419 系）でタイトルが空になる
+  const title =
+    doc.querySelector('work-title')?.textContent
+    ?? doc.querySelector('movement-title')?.textContent
+    ?? '';
   const composer = doc.querySelector('creator[type="composer"]')?.textContent ?? '';
 
   // デフォルト設定（最初の attributes から取得する）
