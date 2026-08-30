@@ -149,11 +149,12 @@ describe('useWorkLibrary（作品カタログの操作・Issue #181）', () => {
       const workB = result.current.currentWorkId as string;
 
       // 作品Bを編集した状態（未保存）のままAへ切り替える
-      let opened: SavedScoreData | null = null;
+      let opened: ReturnType<typeof result.current.switchWork> | null = null;
       act(() => { opened = result.current.switchWork(workA, makeScore('作品B（編集中）', 'f/4')); });
 
-      // 切替先（A）の中身が返り、
-      expect(opened?.metadata.title).toBe('作品A');
+      // 切替先（A）の中身が判別付きで返り、
+      expect(opened).toMatchObject({ status: 'loaded' });
+      expect(opened!.status === 'loaded' && opened!.data.metadata.title).toBe('作品A');
       expect(result.current.currentWorkId).toBe(workA);
       // 切替前の編集内容（B）は失われていない
       const savedB = JSON.parse(localStorage.getItem(getWorkStorageKeys(workB).primary) as string);
@@ -187,9 +188,69 @@ describe('useWorkLibrary（作品カタログの操作・Issue #181）', () => {
       act(() => { result.current.saveCurrentWork(makeScore('作品A')); });
       const workA = result.current.currentWorkId as string;
 
-      let opened: SavedScoreData | null = null;
+      let opened: ReturnType<typeof result.current.switchWork> | null = null;
       act(() => { opened = result.current.switchWork(workA, makeScore('編集中')); });
-      expect(opened).toBeNull();
+      // 「同じ作品」であることが判別付きで返る（#500 round1 P1: null だと
+      // 呼び出し側が「中身の無い作品」と区別できず、譜面を空リセットしてしまう）
+      expect(opened).toEqual({ status: 'sameWork' });
+    });
+
+    it('切替前の保存に失敗したら切り替えず error を返す（round2 P1: 未保存の編集を失わない）', () => {
+      const { result } = renderHook(() => useWorkLibrary());
+      act(() => { result.current.initializeWorks(); });
+      act(() => { result.current.saveCurrentWork(makeScore('作品A')); });
+      const workA = result.current.currentWorkId as string;
+      act(() => { result.current.startNewWork(null); });
+      act(() => { result.current.saveCurrentWork(makeScore('作品B')); });
+      const workB = result.current.currentWorkId as string;
+
+      // 以後の「作品データの保存」だけを容量不足で失敗させる。
+      // 全キーで throw すると isStorageAvailable の探針まで落ち、読込側も別経路で
+      // error になって「保存失敗ガードの有無」を区別できなくなる（検出力ゼロの罠）
+      const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
+      (window.localStorage as unknown as { setItem: unknown }).setItem = (key: string, value: string) => {
+        if (key.includes('-autosave')) {
+          throw new DOMException('quota', 'QuotaExceededError');
+        }
+        originalSetItem(key, value);
+      };
+      try {
+        let outcome: ReturnType<typeof result.current.switchWork> | null = null;
+        act(() => { outcome = result.current.switchWork(workA, makeScore('B（未保存の編集）')); });
+        expect(outcome).toMatchObject({ status: 'error' });
+        // 切替は成立していない（保存先が B のまま。A へ動いていると次の自動保存が A を上書きする）
+        expect(result.current.currentWorkId).toBe(workB);
+      } finally {
+        (window.localStorage as unknown as { setItem: unknown }).setItem = originalSetItem;
+      }
+    });
+
+    it('切替先の読込に失敗したら currentWorkId を動かさない（round2 P1: 再試行が sameWork にならない）', () => {
+      const { result } = renderHook(() => useWorkLibrary());
+      act(() => { result.current.initializeWorks(); });
+      act(() => { result.current.saveCurrentWork(makeScore('作品A')); });
+      const workA = result.current.currentWorkId as string;
+      act(() => { result.current.startNewWork(null); });
+      act(() => { result.current.saveCurrentWork(makeScore('作品B')); });
+
+      // 作品Aの保存データを壊す（チェックサム不一致で読込失敗になる）
+      const keysA = getWorkStorageKeys(workA);
+      window.localStorage.setItem(keysA.primary, '{"broken":');
+      window.localStorage.removeItem(keysA.backup);
+
+      const workB = result.current.currentWorkId as string;
+      let outcome: ReturnType<typeof result.current.switchWork> | null = null;
+      act(() => { outcome = result.current.switchWork(workA, null); });
+      expect(outcome).toMatchObject({ status: 'error' });
+      // ID は元のまま（B）。ここが A・null・第三のIDへ動くと、画面は B のまま
+      // 保存先だけがずれて次の自動保存が別作品を上書きする（round3 P3: not.toBe では
+      // null 化の退行を通してしまうため、B のままであることを固定する）
+      expect(result.current.currentWorkId).toBe(workB);
+
+      // 再試行しても sameWork 扱いにならず、あらためて error が返る
+      let retry: ReturnType<typeof result.current.switchWork> | null = null;
+      act(() => { retry = result.current.switchWork(workA, null); });
+      expect(retry).toMatchObject({ status: 'error' });
     });
 
     it('新規作成では、それまでの内容を保存してから新しい作品IDへ移る', () => {

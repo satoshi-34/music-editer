@@ -31,11 +31,14 @@ class ResizeObserverMock {
 // @ts-expect-error jsdom 環境にはグローバル定義が無いため補う
 window.ResizeObserver = ResizeObserverMock;
 
-// ファイル保存は「ファイル」タブの「書き出し」メニューにある（#109 第4段）
+// ファイル保存は「ファイル」タブの「書き出し」メニューにある（#109 第4段）。
+// Issue #507 以降は、選ぶとまずファイル名の確認ダイアログが出るので、
+// 既定のファイル名のまま「書き出す」を押すところまでをひとまとまりにする。
 function clickExportFile() {
   fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
   // ファイル保存は「書き出し」メニュー（#109 第4段で select 化）の「ファイル」形式
   fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'file' } });
+  fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
 }
 
 function setSaveFilePicker(picker: unknown) {

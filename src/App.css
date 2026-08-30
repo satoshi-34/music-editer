@@ -1361,6 +1361,38 @@ button.ghost.active:hover:not(:disabled) {
      white-space: nowrap を継承しないため） */
   white-space: normal;
 }
+/* 入力欄つきの確認ダイアログ（Issue #507 の書き出しファイル名）。
+   拡張子はアプリが付けるので、編集できない添え字として入力欄の右に並べる。 */
+.confirm-dialog-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.confirm-dialog-input {
+  box-sizing: border-box;
+  /* 名前が長くても入力欄が伸び縮みできるよう flex で幅を持たせる
+     （min-width: auto のままだと中身の幅でダイアログを押し広げてしまう） */
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  color: #111827;
+  background: #fff;
+}
+.confirm-dialog-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+.confirm-dialog-input-suffix {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: #6b7280;
+}
+
 .confirm-dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -2346,30 +2378,21 @@ button.ghost.active:hover:not(:disabled) {
   .print-hidden-system { display: none !important; }
   .print-hidden-page { display: none !important; }
 
-  /* 内容のある最後のページだけ、最後の段をページ下端へ寄せる。
-     .system-stack は通常 space-evenly で段を均等配置しているが、末尾の空段が
-     print-hidden-system で消えると最後の段の下に余白だけ残ってしまう。
-     space-between にすると最初の段は上端、最後の段は下端へ付き、
-     終止線がページ右下角で締まって見える（画面表示には影響しない）。 */
-  /* 最終ページは行グリッド（--page-capacity による flex-grow 等分）を無効化し、
-     従来どおり「段の実サイズ＋ justify-content」で配置する。
-     行グリッドのまま space-between/flex-start を付けても、子が flex-grow で
-     残り高さを埋め切ってしまい隙間が生まれず、下端寄せ／上揃えの効果が出ないため。 */
-  .print-final-page .system-stack,
-  .print-final-page-single .system-stack {
-    flex: 1 1 0% !important;
-  }
-  .print-final-page .system-stack > *,
-  .print-final-page-single .system-stack > * {
-    flex: 0 0 auto !important;
-  }
-  .print-final-page .system-stack { justify-content: space-between; }
-  /* ただし、その最後のページの可視段が1段だけの場合は例外として「上揃え」にする。
-     1段しかないページを下端へ落とすと、上が大きく空いて紙面が不自然に見えるため
-     （市販譜でも最終ページが1段だけのときは上に置き、下は余白のままにする作法）。
-     終止線が段の右端に付くことは変わらないので、曲の締まりは損なわれない。
-     2段以上のページは従来の space-between のまま（最後の段が下端へ付く）。 */
-  .print-final-page-single .system-stack { justify-content: flex-start; }
+  /* 内容のある最後のページも、他ページとまったく同じ行グリッド
+     （--page-capacity ベースの固定スロット高＋ --system-row-gap）で「上詰め」にする。
+     段数が足りないぶんはページ下端の余白として残す（Issue #506）。
+     以前はこのページだけ行グリッドを外し（flex: 1 1 0%）、`justify-content: space-between`
+     で最後の段をページ下端へ寄せていた（終止線をページ右下角で締めるため）。しかし
+     15ページ中の最終ページのように残り段数が少ないと、その2〜3段がページ全高へ
+     引き伸ばされて段間隔だけ異常に広がり、最下段がページ番号（.page-foot）へ
+     食い込んで重なっていた。市販譜でも最終ページは上詰めで下を余白にするのが普通で、
+     Finale の書き出し（<system-distance>）も上限つきの控えめな引き伸ばしにとどめ、
+     下余白＝ページ番号の領域は必ず残している。
+     したがってここでは一切の上書きをせず、上の .score-area .system-stack の
+     共通ルールへ委ねる（＝下端寄せの特別扱いを廃止した）。
+     justify-content は既定値のままでも上詰めになるが、「意図して上詰めにしている」ことを
+     宣言として残すため明示する（将来また space-between を足し戻さないための目印）。 */
+  .print-final-page .system-stack { justify-content: flex-start; }
 }
 
 /* ===== 印刷プレビュー（画面上で印刷結果を再現するモード） =====
@@ -2476,19 +2499,9 @@ button.ghost.active:hover:not(:disabled) {
    1ページとして出てしまっていた）。 */
 .print-preview .print-hidden-system { display: none !important; }
 .print-preview .print-hidden-page { display: none !important; }
-/* 内容のある最後のページだけ最後の段をページ下端へ寄せる（@media print 側と同じ理由。
-   上の .print-hidden-system でページ内の末尾の段が消えると、space-evenly のままでは
-   最後の段の下に余白だけ残ってしまうため） */
-.print-preview .print-final-page .system-stack,
-.print-preview .print-final-page-single .system-stack {
-  flex: 1 1 0%;
-}
-.print-preview .print-final-page .system-stack > *,
-.print-preview .print-final-page-single .system-stack > * {
-  flex: 0 0 auto;
-}
-.print-preview .print-final-page .system-stack { justify-content: space-between; }
-.print-preview .print-final-page-single .system-stack { justify-content: flex-start; }
+/* 内容のある最後のページも他ページと同じ行グリッドで上詰めにする（@media print 側と同じ理由。
+   Issue #506。プレビューと実際の印刷で見た目が食い違わないよう、こちらにも同じ扱いを複製する） */
+.print-preview .print-final-page .system-stack { justify-content: flex-start; }
 
 /* 画面表示でも、最終ページに「実際に表示される段」が1段だけのときは上揃えにする。
    通常ページのグリッド配置（flex-grow 等分）だと1段だけのページでは段が
@@ -2571,3 +2584,169 @@ svg { animation: none; transition: none; }
   gap: 12px;
   flex-wrap: wrap;
 }
+
+/* ───────────── ホーム画面（Issue #500） ───────────── */
+/* 譜面画面の上に重ねる全画面レイヤー。譜面画面を display:none で消さないのは、
+   幅を実測して初期の表示倍率を決める処理（初期ズームフィット）が
+   幅 0 で狂ってしまうため。不透明な背景で覆って隠す。
+   z-index はモーダル類（2000〜2100）より上に置き、ホーム表示中に
+   下の画面のポップアップが顔を出さないようにする。 */
+.home-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  overflow-y: auto;
+  background: #0b2a1a;
+  color: #f4f7f5;
+  padding: 24px 16px 32px;
+  box-sizing: border-box;
+}
+/* 印刷は譜面のためのもの。ホームが出たまま印刷指示が飛んでも紙に出さない */
+@media print {
+  .home-screen { display: none; }
+}
+.home-inner {
+  width: min(880px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.home-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.home-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+/* 将来ログイン／アカウントのボタンを置くための枠（いまは空。Issue #500） */
+.home-header-slot {
+  min-width: 96px;
+  min-height: 32px;
+}
+.home-section {
+  background: #ffffff;
+  color: #212529;
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.home-section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #495057;
+}
+.home-primary-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  padding: 14px 16px;
+  border: none;
+  border-radius: 8px;
+  background: #1c7c4a;
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+.home-primary-button:hover { background: #17663d; }
+.home-primary-button-label { font-size: 16px; font-weight: 700; }
+.home-primary-button-sub { font-size: 12px; opacity: 0.92; }
+.home-error {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid #fca5a5;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.home-note {
+  margin: 0;
+  font-size: 12px;
+  color: #666;
+  line-height: 1.6;
+}
+.home-card-grid {
+  display: grid;
+  /* 画面が狭いときは自動で段数が減る（スマホでも横スクロールを出さない） */
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+.home-card-button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #ced4da;
+  border-radius: 8px;
+  background: #f8f9fa;
+  cursor: pointer;
+  text-align: left;
+}
+.home-card-button:hover { background: #e9ecef; }
+.home-card-label { font-size: 14px; font-weight: 600; }
+.home-card-description { font-size: 11px; color: #666; line-height: 1.5; }
+.home-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.home-secondary-button {
+  padding: 8px 12px;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+.home-secondary-button:hover { background: #e9ecef; }
+.home-work-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* 作品が増えても画面が縦に伸び続けないよう、一覧だけスクロールさせる
+     （作品一覧パネルと同じ考え方） */
+  max-height: min(40vh, 300px);
+  overflow-y: auto;
+}
+.home-work-button {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+.home-work-button:hover { background: #f1f3f5; }
+.home-work-title { font-size: 13px; font-weight: 600; }
+.home-updated-at { font-size: 11px; color: #868e96; }
+.home-footer {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: #c8d6cd;
+}
+.home-version { font-variant-numeric: tabular-nums; }
+.home-footer-note { opacity: 0.85; }

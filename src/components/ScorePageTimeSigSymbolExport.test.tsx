@@ -88,6 +88,8 @@ describe('ScorePage: 拍子の記号表記が MusicXML 書き出しへ届く（#
     // まず数字表示のまま書き出す → symbol は付かない
     fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
     fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'musicxml' } });
+    // Issue #507: 書き出しはファイル名の確認ダイアログを経由する（既定名のままOK）
+    fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
     await waitFor(() => { expect(exportedXml ?? '').toContain('<time>'); }, { timeout: 15000 });
     expect(exportedXml ?? '').not.toContain('symbol=');
 
@@ -97,6 +99,8 @@ describe('ScorePage: 拍子の記号表記が MusicXML 書き出しへ届く（#
     fireEvent.click(await screen.findByLabelText('拍子を記号で表示', {}, { timeout: 15000 }));
     fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
     fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'musicxml' } });
+    // Issue #507: 書き出しはファイル名の確認ダイアログを経由する（既定名のままOK）
+    fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
     await waitFor(() => {
       expect(exportedXml ?? '').toContain('<time symbol="cut">');
     }, { timeout: 15000 });

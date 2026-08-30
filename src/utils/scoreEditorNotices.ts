@@ -759,3 +759,15 @@ export function describeOmrConvertFailed(reason: OmrConvertFailure): string {
 export function describePageSizeChanged(label: string): string {
   return `用紙サイズを ${label} に変更しました（段の組み直しとページ数の変化が起きます）`;
 }
+
+/**
+ * ホーム連携の操作を中断したときの文言（Issue #500 round1 P1・#318）。
+ * どちらも「保存できていない編集を失わせない」ための中断で、代替手段まで言う。
+ */
+export function describeHomeActionBlocked(kind: 'create' | 'goHome'): string {
+  const fallback = '保存領域の空きを確認するか、「書き出し」でいまの内容をファイルへ退避してください';
+  if (kind === 'create') {
+    return `いまの作品を保存できなかったため、新規作成を中止しました（${fallback}）`;
+  }
+  return `いまの作品を保存できなかったため、ホームへ戻るのを中止しました（${fallback}）`;
+}

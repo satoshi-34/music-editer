@@ -32,7 +32,7 @@ import UiVariantBadge from './UiVariantBadge';
 import { useUiVariant } from '../hooks/useUiVariant';
 // タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
 // ツールバーのタブ行と A1 文脈バーで同じ言葉を出すため、両方がこの定数を参照する。
-import { PIANO_LAYER_OPTIONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
+import { PIANO_LAYER_OPTIONS, SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
 import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useDevicePixelRatio } from './useDevicePixelRatio';
@@ -40,6 +40,7 @@ import { computeScreenStrokeFloorMultiplier } from '../utils/engravingDefaults';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useWorkLibrary } from '../hooks/useWorkLibrary';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
+import { EXPORT_FILE_TYPES, buildExportFileName, sanitizeFileNameBase, type ExportFileType } from '../utils/exportFileName';
 import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
 import { resolveFreeTextAnnotation } from '../utils/freeTextUtils';
 import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, TITLE_FONT_SIZE_DEFAULT, TITLE_FONT_SIZE_MAX, TITLE_FONT_SIZE_MIN, TITLE_FONT_SIZE_STEP, ensureTitleFontLoaded, normalizeTitleFontSize, normalizeTitleFontWeight, resolveTitleFontOption, titleBlockStyleVars, waitForTitleFontReady } from '../utils/titleFontOptions';
@@ -187,6 +188,7 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
+  describeHomeActionBlocked,
   describeLegacyImportResult,
   describeMxlExtractFailed,
   describeOmrConvertFailed,
@@ -228,6 +230,7 @@ import {
   pageWidthMm,
   type PageSizeId,
 } from '../utils/pageSize';
+import { ignoreWhenHomeShown } from '../utils/homeVisibility';
 import {
   TOOLBAR_PLACEMENT_OPTIONS,
   clampDropdownMenuTop,
@@ -458,7 +461,61 @@ function describeExportError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export default function ScorePage() {
+/**
+ * ホーム画面（Issue #500）から呼ぶ譜面画面の操作口。
+ * ホームは「玄関」であって機能の実体は持たないので、開く・新規作成・設定など
+ * 既存の処理はすべてこの口を通して譜面画面側のものをそのまま呼ぶ
+ * （同じ機能を2か所に書くと、片方だけ直したときに食い違うため）。
+ */
+/**
+ * ホームからの操作の結果（#500 round1/round2）。失敗時の message はホーム側に
+ * 表示する（通知系はホームの下の inert な譜面画面にしか出せず、視覚・支援技術の
+ * 双方で届かないため。round2 P2）
+ */
+export type HomeActionResult = { ok: true } | { ok: false; message: string };
+
+export interface ScorePageHomeActions {
+  /** ファイルを開く導線を起動する。ブラウザのファイル選択ダイアログが開く */
+  openFilePicker: (kind: 'file' | 'musicxml' | 'pdf' | 'legacy') => Promise<HomeActionResult>;
+  /**
+   * 譜種を選んで新規作成する（いまの作品は保存されて作品一覧に残る）。
+   * ok: false = いまの内容の保存や新作品の発行に失敗（元の譜面は変更されない。
+   * ホームは閉じずに message を見せる。#500 round1 P1）
+   */
+  createNewScore: (scoreType: ScoreType) => Promise<HomeActionResult>;
+  /** 保存済みの作品を開く。ok: false = 読み込み失敗（画面はリセットしない） */
+  openWork: (workId: string) => Promise<HomeActionResult>;
+  /** 設定にあたるツールバーのタブを開く */
+  openSettingsTab: (tab: ToolbarTab) => HomeActionResult;
+}
+
+export interface ScorePageProps {
+  /**
+   * ホーム画面から譜面画面の操作を呼ぶための受け口。
+   * App がこの ref に入った関数をホームのボタンから呼ぶ。
+   * 渡さなければ従来どおり譜面画面単体として動く（既存のテストもこの形）。
+   */
+  homeActionsRef?: React.RefObject<ScorePageHomeActions | null>;
+  /** 「ホームへ戻る」導線。渡されたときだけツールバーにホームボタンを出す */
+  onGoHome?: () => void;
+  /**
+   * 起動時の移行・復元が終わったとき（Issue #500 round1 P2）。
+   * App はこれを合図にホームの一覧を読み直す（移行前に読んだ初期一覧は空のことがある）
+   */
+  onLibraryReady?: () => void;
+  /**
+   * homeActionsRef へ操作口が入った直後（round3 P2）。復元データの無い初回起動では
+   * onLibraryReady の方が先に走るため、持ち越した操作の排出はこちらが受け持つ
+   */
+  onHomeActionsReady?: () => void;
+}
+
+export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, onHomeActionsReady }: ScorePageProps = {}) {
+  // onLibraryReady は初期化 effect（依存: 空）から呼ぶため ref 経由で最新を参照する
+  const onLibraryReadyRef = useRef(onLibraryReady);
+  onLibraryReadyRef.current = onLibraryReady;
+  // onHomeActionsReady の「初回だけ」判定（round3 P2）
+  const homeActionsReadyNotifiedRef = useRef(false);
   // 適用中のUI案（Issue #405 段1）。URLの `?ui=a1|a2|current` で切り替わり、
   // 開発時のみ有効（本番ビルドでは常に 'current'＝現状のUI）。
   // 段2（A1 文脈バー）・段3（A2 譜面側表現）・A3（両方込み）はこの値を見て自分の案のときだけ描く。
@@ -533,8 +590,18 @@ export default function ScorePage() {
   // ConfirmDialog に描かせる。null のときはダイアログを出さない。
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
-    /** OK が押されたときに実行する処理（非同期でもよい） */
-    onConfirm: () => void | Promise<void>;
+    /** ダイアログの説明（スクリーンリーダー向け） */
+    ariaLabel?: string;
+    /** 実行ボタンの文言 */
+    confirmLabel?: string;
+    /** 入力欄つきで開くときの初期値（書き出しファイル名など。Issue #507） */
+    inputDefaultValue?: string;
+    /** 入力欄のラベル */
+    inputLabel?: string;
+    /** 入力欄の右に固定で見せる文字（拡張子） */
+    inputSuffix?: string;
+    /** OK が押されたときに実行する処理（非同期でもよい。入力欄つきなら入力値が渡る） */
+    onConfirm: (inputValue: string) => void | Promise<void>;
   } | null>(null);
   // フィードバックボタン（Issue #91）の結果通知。成功は数秒で消えるが、
   // クリップボード書き込み失敗・ポップアップブロックは見落とされると再試行されないため
@@ -1178,6 +1245,12 @@ export default function ScorePage() {
       setEnsembleSecondStaffParts(prev => nextInstrumentation.parts.map((_, index) => prev[index] ?? []));
     }
   }, [leftHandData, scoreType, systemLayoutPrefs]);
+
+  // ホーム画面からの新規作成（Issue #500）では、画面を空に戻したあとに譜種を適用する。
+  // await をまたぐと useCallback が捕まえた古い handleScoreTypeChange を呼ぶことに
+  // なるため、常に最新版を指す ref 経由で呼べるようにしておく。
+  const scoreTypeChangeRef = useRef(handleScoreTypeChange);
+  useEffect(() => { scoreTypeChangeRef.current = handleScoreTypeChange; }, [handleScoreTypeChange]);
 
   const handleInstrumentationPresetChange = useCallback((presetId: InstrumentationPresetId) => {
     const nextInstrumentation = getInstrumentationPreset(presetId);
@@ -2291,10 +2364,14 @@ export default function ScorePage() {
     cancelPendingAutosave();
     const created = startNewWork(buildCurrentWorkDataRef.current());
     if (!created) {
-      return;
+      // いまの内容の保存 or 新作品の発行に失敗（理由は useWorkLibrary の workError）。
+      // ここで false を返さないと、呼び出し側が失敗後も譜種変更などを続けて
+      // 元の作品を書き換えてしまう（#500 round1 P1）
+      return false;
     }
 
     await resetScoreStateToEmpty();
+    return true;
   }, [cancelPendingAutosave, resetScoreStateToEmpty, startNewWork]);
 
   const handleNewScore = useCallback(() => {
@@ -2303,7 +2380,7 @@ export default function ScorePage() {
     // confirm が表示されず常に false が返るため、ボタンが無反応に見えていた。
     setConfirmDialog({
       message: NEW_SCORE_CONFIRM_MESSAGE,
-      onConfirm: performNewScore,
+      onConfirm: () => { void performNewScore(); },
     });
   }, [performNewScore]);
 
@@ -2311,13 +2388,46 @@ export default function ScorePage() {
   // 取得後は同じファイルへ上書きできるよう ref で保持する。
   const fileHandleRef = useRef<FileSystemFileHandle | null>(null);
 
+  /**
+   * 書き出しの前にファイル名を確認・編集してもらう（Issue #507）。
+   *
+   * これまでファイル名はタイトル由来で実質固定だった。Chrome は保存先ダイアログで
+   * 変えられるが、Safari は showSaveFilePicker が無くダイアログ無しの即ダウンロードに
+   * なるため、名前を変える手段がまったく無かった（MusicXML / MIDI は全ブラウザで同じ）。
+   * どのブラウザでも同じ操作になるよう、アプリ内のダイアログで名前を受け取ってから
+   * 書き出す。拡張子は添え字として見せるだけで、入力欄には含めない（受入条件2）。
+   */
+  const requestExportFileName = useCallback((
+    type: ExportFileType,
+    run: (fileNameBase: string) => void | Promise<void>,
+  ) => {
+    setConfirmDialog({
+      message: 'ファイル名を入力して書き出します',
+      ariaLabel: '書き出しファイル名',
+      confirmLabel: '書き出す',
+      // 既定値はこれまでと同じタイトル由来。使えない文字は先に落としておく
+      inputDefaultValue: sanitizeFileNameBase(title),
+      inputLabel: 'ファイル名',
+      inputSuffix: EXPORT_FILE_TYPES[type].extension,
+      onConfirm: (inputValue) => run(inputValue),
+    });
+  }, [title]);
+
   // ファイルに書き出す（.score.json）
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
-  const handleExportFile = async () => {
+  const performExportFile = async (fileNameBase: string) => {
     const { metadata, parts } = buildScoreData();
     const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
+    // 覚えている保存先ハンドルは「同じファイル名のときだけ」使い回す（Issue #507）。
+    // 名前を変えたのに前のファイルへ上書きしてしまうと、別名で書き出したつもりの
+    // ユーザーが元のファイルを黙って壊すことになる（匿名化コピーの用途では致命的）
+    const requestedFileName = buildExportFileName(fileNameBase, 'score');
+    const previousHandle = fileHandleRef.current;
+    const reusableHandle = previousHandle && previousHandle.name === requestedFileName
+      ? previousHandle
+      : null;
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
-    const result = await exportScoreToFile(data, title, fileHandleRef.current);
+    const result = await exportScoreToFile(data, fileNameBase, reusableHandle);
     if (result.status === 'saved') {
       fileHandleRef.current = result.handle;
       return;
@@ -2333,6 +2443,11 @@ export default function ScorePage() {
           : '選択した場所へ書き込めなかったため、ダウンロードに保存しました'
       );
     }
+  };
+
+  /** 「書き出し」メニューの「ファイル」。ファイル名を確認してから書き出す（Issue #507） */
+  const handleExportFile = () => {
+    requestExportFileName('score', performExportFile);
   };
 
   // ファイルから読み込む（.score.json）
@@ -2605,6 +2720,8 @@ export default function ScorePage() {
       }
 
       setAutosaveRestoreReady(true);
+      // 移行・復元が済んだことを App へ知らせる（ホームの一覧の読み直し。round1 P2）
+      onLibraryReadyRef.current?.();
     })();
   // applySettingsProfileToState はレンダーごとに作り直される素の関数のため、
   // handleNewScore と同じ理由で依存配列には含めない。
@@ -2750,17 +2867,105 @@ export default function ScorePage() {
   }, [showWorkList, updateWorkListPosition]);
 
   /** 作品一覧から別の作品を選んだとき。切替前に現在の内容を保存する */
-  const handleSelectWork = useCallback(async (workId: string) => {
+  const handleSelectWork = useCallback(async (workId: string): Promise<HomeActionResult> => {
     cancelPendingAutosave();
-    const loaded = switchWork(workId, buildCurrentWorkDataRef.current());
-    if (loaded) {
-      await applyLoadedScoreData(loaded);
+    const result = switchWork(workId, buildCurrentWorkDataRef.current());
+    if (result.status === 'sameWork') {
+      // いま開いている作品を選び直しただけ。リセットすると表示中の譜面が消えて
+      // 次の自動保存で保存内容まで上書きしてしまう（#500 round1 P1）。何もせず閉じる
+      setShowWorkList(false);
+      return { ok: true };
+    }
+    if (result.status === 'error') {
+      // 切替前の保存失敗・読み込み失敗のどちらもリセットしない
+      // （画面に残っている内容が最後の砦。round2 P1）。行き止まりは喋る（#318）
+      const message = `${result.message}（画面の内容は変更していません）`;
+      notifyScoreEdit(message);
+      setShowWorkList(false);
+      return { ok: false, message };
+    }
+    if (result.status === 'loaded') {
+      await applyLoadedScoreData(result.data);
     } else {
       // まだ中身の無い作品（新規作成した直後など）へ切り替えた場合は空の譜面から始める
       await resetScoreStateToEmpty();
     }
     setShowWorkList(false);
+    return { ok: true };
   }, [applyLoadedScoreData, cancelPendingAutosave, resetScoreStateToEmpty, switchWork]);
+
+  // ───────── ホーム画面（Issue #500）との連携 ─────────
+  // ホームは「玄関」で、機能の実体は持たない。ここで譜面画面側の既存処理を
+  // ひとまとめの操作口にして ref へ入れ、ホームのボタンから呼んでもらう。
+  // レンダーのたびに入れ直すのは、この位置より後ろで宣言される handleToolbarTabChange
+  // なども読む必要があり、useCallback の依存配列には入れられないため
+  // （buildCurrentWorkDataRef と同じ手口）。
+  useEffect(() => {
+    if (!homeActionsRef) return;
+    homeActionsRef.current = {
+      openFilePicker: async (kind) => {
+        // 「ファイル」タブへ切り替えてから開く。戻ってきた画面で
+        // 同じ導線（開く・書き出し）がそのまま見えている方が迷わない。
+        // クリックはこの場（＝ユーザー操作と同じ処理の流れ）で呼ぶ必要がある
+        // ため、タブ切替の反映を待たない。隠しファイル入力はタブに関係なく
+        // 常に置いてあるので、待たなくても要素は存在する（#464 の Safari 制約）。
+        handleToolbarTabChange('other');
+        if (kind === 'file') fileImportRef.current?.click();
+        else if (kind === 'musicxml') musicXmlInputRef.current?.click();
+        else if (kind === 'pdf') pdfInputRef.current?.click();
+        else {
+          // 旧手動保存の取り込みは同期のクリックではなく非同期処理なので、
+          // 完了まで待ち、失敗はそのままホーム側へ返す（round4/round5 P2:
+          // void で捨てると例外もエラー結果も App の受け止めに届かない）
+          return await handleImportLegacyManualSave();
+        }
+        return { ok: true };
+      },
+      createNewScore: async (nextScoreType) => {
+        // 新規作成の本体（いまの作品を保存 → 新しい作品IDを発行 → 画面を空に戻す）は
+        // ツールバーの「新規作成」と同じものを使う。確認ダイアログを挟まないのは、
+        // ホームでは「譜種を選ぶ」という明示的な操作が確認を兼ねているため。
+        const ok = await performNewScore();
+        if (!ok) {
+          // 保存できないまま譜種を適用すると、元の作品の譜種・編成まで
+          // 書き換えてしまう（#500 round1 P1）。message はホーム側が表示する（round2 P2）
+          return { ok: false, message: describeHomeActionBlocked('create') };
+        }
+        // 空に戻す処理は初期値プリセットの譜種を適用するので、選ばれた譜種は
+        // そのあとに適用する（順序が逆だと選択が上書きされる）。
+        scoreTypeChangeRef.current(nextScoreType);
+        return { ok: true };
+      },
+      openWork: (workId) => handleSelectWork(workId),
+      openSettingsTab: (tab) => { handleToolbarTabChange(tab); return { ok: true }; },
+    };
+    // 操作口が初めて入ったことを App へ知らせる（round3 P2: 持ち越し操作の排出）。
+    // この effect は毎レンダー走るので、合図は最初の1回だけにする
+    if (!homeActionsReadyNotifiedRef.current) {
+      homeActionsReadyNotifiedRef.current = true;
+      onHomeActionsReady?.();
+    }
+  });
+
+  /**
+   * 「ホームへ戻る」。戻る前にいまの内容を作品へ保存しておく（Issue #500 受入条件5）。
+   * 自動保存は1.5秒待ってから走るので、待機中のまま戻ると直前の編集が
+   * 保存されないまま一覧に出てしまう。待機を止めて即座に保存する。
+   */
+  const handleGoHome = useCallback(() => {
+    if (!onGoHome) return;
+    cancelPendingAutosave();
+    const data = buildCurrentWorkDataRef.current();
+    if (data && !saveCurrentWork(data)) {
+      // 保存できないままホームへ移ると、「自動保存されています」という表示と裏腹に
+      // 直前の編集が消える（#500 round1 P1）。譜面に留まり、理由と代替手段を喋る（#318）。
+      // 以降の編集で自動保存のデバウンスは通常どおり再スケジュールされる
+      notifyScoreEdit(describeHomeActionBlocked('goHome'));
+      return;
+    }
+    refreshWorks();
+    onGoHome();
+  }, [cancelPendingAutosave, onGoHome, refreshWorks, saveCurrentWork]);
 
   /** 作品一覧の「新規作成」。ツールバーの新規作成ボタンと同じ動きにそろえる */
   const handleCreateWorkFromList = useCallback(() => {
@@ -2812,22 +3017,26 @@ export default function ScorePage() {
    * 取り込む（#109 第4段の移行導線）。旧スロットのデータ自体は消さない（安全側。
    * 取り込みに失敗しても元データが残るように）。いまの内容は先に保存してから切り替える
    */
-  const handleImportLegacyManualSave = async () => {
+  // 戻り値はホーム連携（openFilePicker）が失敗をホーム側に表示するために使う
+  // （#500 round5 P2）。ツールバーからの呼び出しは従来どおり戻り値を見ない
+  const handleImportLegacyManualSave = async (): Promise<HomeActionResult> => {
     const loadedData = await loadScore();
     setStoredDataAvailable(hasStoredData());
     if (!loadedData) {
       // データが無いのか、あるのに読めない（破損・チェックサム不一致）のかを区別する。
       // loadScore は失敗時も null を返すため、旧スロットの有無で読み分ける（Codex round2 P3）
-      notifyScoreEdit(describeLegacyImportResult(hasStoredData() ? 'readFailed' : 'notFound'));
-      return;
+      const message = describeLegacyImportResult(hasStoredData() ? 'readFailed' : 'notFound');
+      notifyScoreEdit(message);
+      return { ok: false, message };
     }
     cancelPendingAutosave();
     // 新規作品の発行（いまの内容の保存を含む）に失敗したら取り込みを中止する。
     // 失敗を無視して進めると、currentWorkId が旧作品のままの自動保存で
     // 取り込んだ内容が現在の作品を上書きしてしまう（Codex round1 P1）
     if (!startNewWork(buildCurrentWorkDataRef.current())) {
-      notifyScoreEdit(describeLegacyImportResult('blocked'));
-      return;
+      const message = describeLegacyImportResult('blocked');
+      notifyScoreEdit(message);
+      return { ok: false, message };
     }
     // 前の作品の保存先ファイルハンドルを引き継がない（通常の新規作成と同じ後始末）。
     // 残っていると取り込み後の「書き出し→ファイル」がダイアログなしで旧作品の
@@ -2839,10 +3048,12 @@ export default function ScorePage() {
     // timestamp は現在時刻へ更新する（旧手動保存の保存時刻のままだと updatedAt が古くなり、
     // 取り込んだばかりの作品が更新順の作品一覧で埋もれる。Codex round4）
     if (!saveCurrentWork({ ...loadedData, timestamp: Date.now() })) {
-      notifyScoreEdit(describeLegacyImportResult('saveFailed'));
-      return;
+      const message = describeLegacyImportResult('saveFailed');
+      notifyScoreEdit(message);
+      return { ok: false, message };
     }
     notifyScoreEdit(describeLegacyImportResult('done'));
+    return { ok: true };
   };
 
   /** 「書き出し」メニュー（#109 第4段）。選んだ形式の既存ハンドラへ振り分けて select は空へ戻す */
@@ -3009,8 +3220,9 @@ export default function ScorePage() {
         e.preventDefault();
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    const guarded = ignoreWhenHomeShown(handler);
+    window.addEventListener('keydown', guarded);
+    return () => window.removeEventListener('keydown', guarded);
   }, [isPrintPreview]);
 
   // 小節選択コールバック（StaffCanvas / PianoSystemCanvas から呼ばれる）
@@ -3072,8 +3284,9 @@ export default function ScorePage() {
         return;
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    const guarded = ignoreWhenHomeShown(handler);
+    window.addEventListener('keydown', guarded);
+    return () => window.removeEventListener('keydown', guarded);
   }, [handleUndo, handleRedo]);
 
   // Cmd+C/V とEscape による選択解除ハンドラ
@@ -3574,8 +3787,9 @@ export default function ScorePage() {
         return;
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    const guarded = ignoreWhenHomeShown(handler);
+    window.addEventListener('keydown', guarded);
+    return () => window.removeEventListener('keydown', guarded);
   // totalSystems・measuresPerSystem は useEffect より後に宣言されるため deps に入れられない。
   // 代わりに ref で最新値を追跡する（arrow key ハンドラ内で参照）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4372,23 +4586,20 @@ export default function ScorePage() {
   }
   const visiblePlannedRanges = [...contentRanges, ...bufferRanges];
   const effectiveTotalSystems = Math.max(1, visiblePlannedRanges.length);
-  // 印刷時、内容のある最後のページだけ最後の段をページ下端へ寄せる（App.css の
+  // 印刷で「内容のある最後のページ」が何ページ目かを求める（App.css の
   // .print-final-page .system-stack 参照）。printVisibleContentSystems は「印刷で実際に
   // 出す段の総数」（最低1）なので、それが何ページ目に収まるかを逆算する。
   // ページごとの段数が可変（1ページ目だけ少ない）ため、単純な割り算ではなく
   // 累積オフセットを1ページずつ進めながら「その段が何ページ目に収まるか」を探す。
+  // Issue #506 以降、このページも他ページと同じ行グリッドで上詰めになるため、
+  // このクラスは「最終ページであること」を示す目印としてだけ使う
+  // （以前あった「可視段が1段だけなら下端寄せをやめる」例外＝print-final-page-single は、
+  //   下端寄せ自体を廃止したことで不要になったので削除した）。
   const finalContentPageIndex = useMemo(
     () => findPageIndexForSystem(printVisibleContentSystems - 1, pageSystemLayoutOptions),
     [printVisibleContentSystems, pageSystemLayoutOptions]
   );
-  // 最終内容ページに表示される「内容のある段数」。これが1段だけだと space-between は
-  // 子が1つしかないため上端に寄ってしまい、終止線がページ下端に届かない
-  // （App.css の .print-final-page-single 参照）。
-  const finalContentPageVisibleSystems = Math.max(0, Math.min(
-    getPageSystemsCapacity(finalContentPageIndex),
-    printVisibleContentSystems - getPageSystemOffset(finalContentPageIndex)
-  ));
-  // 画面表示用の「最終ページ・1段だけ」判定。印刷用（上のfinalContentPageVisibleSystems）は
+  // 画面表示用の「最終ページ・1段だけ」判定。印刷用の段数（printVisibleContentSystems）は
   // 「内容のある段」だけを数えるため、空の譜面や「＋小節を追加」で出した空段が
   // 画面に複数表示されていても1になってしまい、画面の全段が1段用の上詰めレイアウト
   // （.screen-final-page-single）に落ちて段間隔が潰れるバグがあった。
@@ -4452,10 +4663,11 @@ export default function ScorePage() {
       }
     };
     document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
+    const guardedKeyDown = ignoreWhenHomeShown(handleKeyDown);
+    document.addEventListener('keydown', guardedKeyDown);
     return () => {
       document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keydown', guardedKeyDown);
     };
   }, [selectedSystem]);
 
@@ -4569,22 +4781,28 @@ export default function ScorePage() {
   // ダウンロードが始まれば成功には気づけるが、失敗すると完全に無言で「押しても何も起きない」
   // ように見えるため、成否のどちらでも右下のインジケータに結果を出す。
   const handleExportMusicXml = useCallback(() => {
-    try {
-      downloadMusicXml(buildCurrentScoreData());
-      showExportStatus('success', '✓ MusicXMLを書き出しました');
-    } catch (error) {
-      showExportStatus('error', `⚠ MusicXMLを書き出せませんでした: ${describeExportError(error)}`);
-    }
-  }, [buildCurrentScoreData, showExportStatus]);
+    // 書き出す前にファイル名を確認する（Issue #507）。ダイアログを閉じた（キャンセル）
+    // ときは run が呼ばれないので、従来どおり何も起きない
+    requestExportFileName('musicxml', (fileNameBase) => {
+      try {
+        downloadMusicXml(buildCurrentScoreData(), fileNameBase);
+        showExportStatus('success', '✓ MusicXMLを書き出しました');
+      } catch (error) {
+        showExportStatus('error', `⚠ MusicXMLを書き出せませんでした: ${describeExportError(error)}`);
+      }
+    });
+  }, [buildCurrentScoreData, requestExportFileName, showExportStatus]);
 
   const handleExportMidi = useCallback(() => {
-    try {
-      downloadMidi(buildCurrentScoreData());
-      showExportStatus('success', '✓ MIDIを書き出しました');
-    } catch (error) {
-      showExportStatus('error', `⚠ MIDIを書き出せませんでした: ${describeExportError(error)}`);
-    }
-  }, [buildCurrentScoreData, showExportStatus]);
+    requestExportFileName('midi', (fileNameBase) => {
+      try {
+        downloadMidi(buildCurrentScoreData(), fileNameBase);
+        showExportStatus('success', '✓ MIDIを書き出しました');
+      } catch (error) {
+        showExportStatus('error', `⚠ MIDIを書き出せませんでした: ${describeExportError(error)}`);
+      }
+    });
+  }, [buildCurrentScoreData, requestExportFileName, showExportStatus]);
 
   // PDF書出: 自前でPDFを生成せず、ブラウザの印刷ダイアログを開く方式にする。
   // App.css の @media print が既に A4 整形済みの印刷スタイルを用意しているため、
@@ -5174,8 +5392,9 @@ export default function ScorePage() {
       setShowHelp(true);
       e.preventDefault();
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    const guarded = ignoreWhenHomeShown(handler);
+    window.addEventListener('keydown', guarded);
+    return () => window.removeEventListener('keydown', guarded);
   }, []);
 
   const feedbackControls = (
@@ -5190,6 +5409,22 @@ export default function ScorePage() {
         >
           {feedbackNotice.message}
         </span>
+      )}
+      {/* ホームへ戻る導線（Issue #500）。ホーム画面を持つ App から onGoHome が
+          渡されたときだけ出す（譜面画面だけを使うテストや埋め込み利用では出ない）。
+          ヘルプ・フィードバックと同じ「どのタブからでも押せるアプリ操作」の並び。 */}
+      {onGoHome && (
+        <button
+          type="button"
+          className="toolbar-feedback-button"
+          onClick={handleGoHome}
+          aria-label="ホーム"
+          title="ホーム画面へ戻ります（編集中の内容はこの端末のブラウザへ保存され、ホームの「前回の続き」から開き直せます）"
+          data-testid="go-home"
+        >
+          <span aria-hidden="true">🏠</span>{' '}
+          <span className="toolbar-feedback-label">ホーム</span>
+        </button>
       )}
       <button
         type="button"
@@ -5229,6 +5464,43 @@ export default function ScorePage() {
       } as React.CSSProperties}
       data-ui-variant={uiVariant}
     >
+      {/* 譜面を開くための隠しファイル入力（.score.json / MusicXML / PDF）。
+          以前は「ファイル」タブの中に置いていたが、タブを開いていないと要素自体が
+          存在せず、ホーム画面（Issue #500）から開く導線を呼べなかった。
+          Safari はユーザーの操作と同じ処理の流れで input.click() を呼ばないと
+          ファイル選択ダイアログを開かない（#464）ため、「タブを開いてから押し直す」
+          という遅延を挟まずに済むよう、常に置いておく。 */}
+      <input
+        ref={fileImportRef}
+        type="file"
+        tabIndex={-1}
+        aria-hidden="true"
+        accept=".json,application/json"
+        style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
+        onChange={handleImportFile}
+      />
+      <input
+        ref={musicXmlInputRef}
+        type="file"
+        tabIndex={-1}
+        aria-hidden="true"
+        accept=".xml,.musicxml,.mxl,application/xml,text/xml,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml"
+        style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
+        onChange={handleImportMusicXml}
+      />
+      {/* PDF 用の入力は、変換APIが無いときは丸ごと出さない
+          （押せない導線だけが残るのを避ける。Issue #487） */}
+      {omrApiUrl && (
+        <input
+          ref={pdfInputRef}
+          type="file"
+          tabIndex={-1}
+          aria-hidden="true"
+          accept=".pdf,application/pdf"
+          style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
+          onChange={(event) => void handleImportPdf(event)}
+        />
+      )}
       <header
         className={`toolbar${isToolbarCollapsed ? ' collapsed' : ''}${isToolbarLeft ? ' toolbar--left' : ''}`}
         ref={toolbarRef}
@@ -5441,36 +5713,21 @@ export default function ScorePage() {
               {/* このタブは「楽譜の種類・編成・拍子・調号・パート表示」＝曲の骨格を決める項目だけに
                   絞ってある（Issue #144）。紙面の見た目を決める項目（表示ウェイト・段組）は
                   「レイアウト」タブへ移した。 */}
+              {/* 種類の並び・表示名・説明は SCORE_TYPE_BUTTONS が正本。
+                  ホーム画面の譜種選択（Issue #500）も同じ定数から描くので、
+                  片方だけ言葉が変わることがない */}
               <div className="toolbar-chip-group">
                 <span className="toolbar-group-label">楽譜の種類</span>
-                <button
-                  className={`ghost toolbar-chip-button${scoreType === 'single' ? ' active' : ''}`}
-                  onClick={() => handleScoreTypeChange('single')}
-                  title="単旋律譜"
-                >
-                  単旋律
-                </button>
-                <button
-                  className={`ghost toolbar-chip-button${scoreType === 'piano' ? ' active' : ''}`}
-                  onClick={() => handleScoreTypeChange('piano')}
-                  title="ピアノ大譜表（右手＋左手）"
-                >
-                  ピアノ
-                </button>
-                <button
-                  className={`ghost toolbar-chip-button${scoreType === 'quartet' ? ' active' : ''}`}
-                  onClick={() => handleScoreTypeChange('quartet')}
-                  title="弦楽四重奏（Vn. I / Vn. II / Va. / Vc.）"
-                >
-                  弦楽四重奏
-                </button>
-                <button
-                  className={`ghost toolbar-chip-button${scoreType === 'ensemble' ? ' active' : ''}`}
-                  onClick={() => handleScoreTypeChange('ensemble')}
-                  title="編成テンプレートに沿った複数パート譜"
-                >
-                  編成譜
-                </button>
+                {SCORE_TYPE_BUTTONS.map((option) => (
+                  <button
+                    key={option.id}
+                    className={`ghost toolbar-chip-button${scoreType === option.id ? ' active' : ''}`}
+                    onClick={() => handleScoreTypeChange(option.id)}
+                    title={option.description}
+                  >
+                    {option.label}
+                  </button>
+                ))}
               </div>
 
               <div className="toolbar-select-row">
@@ -6185,15 +6442,6 @@ export default function ScorePage() {
                   />
                 )}
               </div>
-              <input
-                ref={fileImportRef}
-                type="file"
-                tabIndex={-1}
-                aria-hidden="true"
-                accept=".json,application/json"
-                style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
-                onChange={handleImportFile}
-              />
               {/* 書き出しメニューと「開く」ボタン群（#109 第4段→#464 続報で開く側をボタン化）。
                   書き出しは select（value は常に空・実行のたびにプレースホルダーへ戻る）、
                   開くは Safari の user activation 制約によりボタン（設計書 save-load-redesign 参照） */}
@@ -6265,28 +6513,6 @@ export default function ScorePage() {
                     ))}
                   </select>
                 </label>
-              )}
-              <input
-                ref={musicXmlInputRef}
-                type="file"
-                tabIndex={-1}
-                aria-hidden="true"
-                accept=".xml,.musicxml,.mxl,application/xml,text/xml,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml"
-                style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
-                onChange={handleImportMusicXml}
-              />
-              {/* PDF 用の隠しファイル入力も、変換APIが無いときは丸ごと出さない
-                  （押せない導線だけが残るのを避ける。Issue #487） */}
-              {omrApiUrl && (
-                <input
-                  ref={pdfInputRef}
-                  type="file"
-                  tabIndex={-1}
-                  aria-hidden="true"
-                  accept=".pdf,application/pdf"
-                  style={VISUALLY_HIDDEN_FILE_INPUT_STYLE}
-                  onChange={(event) => void handleImportPdf(event)}
-                />
               )}
             </div>
           )}
@@ -6405,13 +6631,18 @@ export default function ScorePage() {
       {confirmDialog && (
         <ConfirmDialog
           message={confirmDialog.message}
-          onConfirm={() => {
+          ariaLabel={confirmDialog.ariaLabel}
+          confirmLabel={confirmDialog.confirmLabel}
+          inputDefaultValue={confirmDialog.inputDefaultValue}
+          inputLabel={confirmDialog.inputLabel}
+          inputSuffix={confirmDialog.inputSuffix}
+          onConfirm={(inputValue) => {
             // 先にダイアログを閉じてから本体を走らせる。本体（新規作成）は
             // 画面全体を作り直す重い処理なので、確認画面が残ったままだと
             // 「押したのに閉じない」ように見えてしまう。
             const run = confirmDialog.onConfirm;
             setConfirmDialog(null);
-            void run();
+            void run(inputValue);
           }}
           onCancel={() => setConfirmDialog(null)}
         />
@@ -6632,11 +6863,10 @@ export default function ScorePage() {
           {visiblePages.map((p, i) => (
             <ScaledPageWrapper key={i} scale={effectiveScale} pageHeight={sharedPageHeight}>
               {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
-              {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
-              {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}
+              {/* print-final-page: 内容のある最後のページの目印。印刷・プレビューでも他ページと同じ行グリッドで上詰めにする（Issue #506。App.css 参照） */}
               {/* screen-final-page-single: 空の段（フィラー）を含めても表示段が実質1段だけのときに限る（Issue #68。フィラーがある場合は他ページと同じ固定スロット配置で統一する） */}
               <section
-                className={`print-page${printVisibleContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}${i === screenFinalPageIndex && screenFinalPageTotalSystems === 1 ? ' screen-final-page-single' : ''}`}
+                className={`print-page${printVisibleContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === screenFinalPageIndex && screenFinalPageTotalSystems === 1 ? ' screen-final-page-single' : ''}`}
                 style={{
                   // ページ余白（左右・上・下）。正本はこの3値のみで、App.css 側は
                   // var(--page-margin-*) を padding へそのまま渡すだけにしてある
