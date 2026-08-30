@@ -713,3 +713,15 @@ export function describeOmrConvertFailed(reason: OmrConvertFailure): string {
   }
   return `PDF の変換に失敗しました（${fallback}）`;
 }
+
+/**
+ * 用紙サイズ（A4/B4/A3）を切り替えたときの文言（Issue #495・方針は #318）。
+ *
+ * 用紙の幅が変わると1段に入る小節数が変わり、高さが変わると1ページに入る段数が変わる。
+ * つまり「用紙を選び直す」という小さな操作が、譜面全体の段割り・ページ数を組み直す
+ * 大きな変化を起こす。黙って組み替えると「勝手にレイアウトが崩れた」と受け取られるため、
+ * 何が起きたのかを必ず伝える。
+ */
+export function describePageSizeChanged(label: string): string {
+  return `用紙サイズを ${label} に変更しました（段の組み直しとページ数の変化が起きます）`;
+}

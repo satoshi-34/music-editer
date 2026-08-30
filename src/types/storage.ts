@@ -4,6 +4,7 @@
 import type { KeySignature } from '../utils/noteKeyUtils';
 import type { InstrumentType } from '../audio/SoundSource';
 import type { ClefType } from '../components/clefUtils';
+import type { PageSizeId } from '../utils/pageSize';
 
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
 export type TimeSignature = [number, number];
@@ -477,6 +478,14 @@ export interface SavedScoreData {
    * 旧データ互換のため省略可で、省略時は数字表記として扱う。
    */
   timeSignatureStyle?: TimeSignatureStyle;
+  /**
+   * 用紙サイズ（Issue #495）。'a4' | 'b4' | 'a3'。
+   * 「表示設定」ではなく**作品の属性**として保存するので、別の環境で開き直しても
+   * 同じ判型で開く。旧データ互換のため省略可で、省略時・未知の値は既定の A4 として
+   * 扱う（normalizePageSizeId が正本）。既定（A4）のときは項目自体を書き出さないため、
+   * 従来の保存データとの差分は増えない。
+   */
+  pageSize?: PageSizeId;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;

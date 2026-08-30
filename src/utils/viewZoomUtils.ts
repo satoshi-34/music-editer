@@ -3,6 +3,8 @@
 // 初期表示のズームを「ページ幅がスコア表示領域の幅に収まる倍率（幅フィット）」にする
 // ための計算だけを切り出してある（issue #40）。
 
+import { DEFAULT_PAGE_WIDTH_MM, pageWidthMm } from './pageSize';
+
 // スライダーの下限（50%）。ScorePage.tsx の viewZoom クランプ・スライダー範囲・
 // このファイルの下限クランプで同じ値を共有し、値がズレないようにする。
 export const VIEW_ZOOM_MIN = 0.5;
@@ -15,10 +17,21 @@ export const VIEW_ZOOM_MIN = 0.5;
 // 上げても印刷結果・譜面データには影響しない。
 export const VIEW_ZOOM_MAX = 3;
 
-// A4（210mm）をpxへ変換する係数。useAutoPageScale.ts の pageWidthPx 算出と同じ値を使う
+// mm をpxへ変換する係数。useAutoPageScale.ts の pageWidthPx 算出と同じ値を使う
 // （実際の自動縮尺の正本は useAutoPageScale.ts。ここは初期ズームの見積もり専用の概算）。
 const MM_TO_PX = 3.78;
-export const A4_PAGE_WIDTH_PX = 210 * MM_TO_PX;
+
+/**
+ * 用紙の幅(mm)から、初期ズーム見積もり用のページ幅(px)を求める。
+ * 寸法の正本は utils/pageSize.ts（Issue #495）で、ここは mm→px の換算だけを担当する。
+ */
+export function pageWidthPxForSize(pageSizeId: unknown): number {
+  return pageWidthMm(pageSizeId) * MM_TO_PX;
+}
+
+// A4 のページ幅(px)。用紙サイズを指定しない既存の呼び出しの既定値として残している
+// （値は従来と同じ 210 * 3.78）。
+export const A4_PAGE_WIDTH_PX = DEFAULT_PAGE_WIDTH_MM * MM_TO_PX;
 
 /**
  * 「ページを並べられる幅」(px) を読む。
