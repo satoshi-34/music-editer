@@ -4509,7 +4509,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     () => findPageIndexForSystem(printVisibleContentSystems - 1, pageSystemLayoutOptions),
     [printVisibleContentSystems, pageSystemLayoutOptions]
   );
-  // 画面表示用の「最終ページ・1段だけ」判定。印刷用（上のfinalContentPageVisibleSystems）は
+  // 画面表示用の「最終ページ・1段だけ」判定。印刷用の段数（printVisibleContentSystems）は
   // 「内容のある段」だけを数えるため、空の譜面や「＋小節を追加」で出した空段が
   // 画面に複数表示されていても1になってしまい、画面の全段が1段用の上詰めレイアウト
   // （.screen-final-page-single）に落ちて段間隔が潰れるバグがあった。
