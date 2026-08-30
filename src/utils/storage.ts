@@ -79,9 +79,10 @@ export const STORAGE_KEYS = {
 // Current version for data migration
 // 3.6.0（#448 round4）: 弦楽四重奏プリセットの既定略称を Vln. I / Vla. → Vn. I / Va. へ変更。
 // 3.6.0 未満のデータだけ復元時に旧既定略称を移行する（現行版で編集した Vln. I 等は保持する）
-// 3.7.0: 用紙サイズ（pageSize・Issue #495）を作品の属性として追加。
+// 3.6.0 のまま: 用紙サイズ（pageSize・Issue #495）は省略可能な項目の追加であり、
+// A4 のときは書き出さない（旧データと差分ゼロ）ため版数は繰り上げない（round1 P1）。
 // 追加は省略可能な項目1つだけなので、3.6.0 以前のデータもそのまま読める（省略時 A4）。
-export const CURRENT_VERSION = '3.7.0';
+export const CURRENT_VERSION = '3.6.0';
 
 /** 作品カタログ（WorkIndex）自体のバージョン。カタログの構造を変えたときに上げる */
 export const WORK_INDEX_VERSION = '1.0.0';
@@ -1835,8 +1836,8 @@ export function createSavedScoreData(
 export function migrateData(data: any, fromVersion: string): SavedScoreData | null {
   // 3.5.0 → 3.6.0 は保存構造の変更なし（四重奏の既定略称の移行は復元側
   // migrateLegacyQuartetAbbreviations がデータのバージョンを見て行う）
-  // 3.6.0 → 3.7.0 も保存構造の破壊的変更は無い（用紙サイズが省略可能な項目として
-  // 増えただけで、省略時は従来どおり A4 として読める。Issue #495）
+  // 用紙サイズ（Issue #495）は 3.6.0 のまま省略可能な項目として追加された
+  // （省略時は従来どおり A4 として読めるため、版数の繰り上げ・移行処理とも不要）
   if (fromVersion === CURRENT_VERSION || fromVersion === '3.6.0' || fromVersion === '3.5.0') {
     return {
       ...(data as SavedScoreData),

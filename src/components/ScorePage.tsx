@@ -3571,7 +3571,7 @@ export default function ScorePage() {
     // ズーム保存済み（＝ユーザーが自分で決めた倍率）のときは冒頭で return するので、
     // 配置を変えてもユーザーの設定を勝手に書き換えることはない。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isToolbarLeft, toolbarWidth]);
+  }, [isToolbarLeft, toolbarWidth, pageSize]);
   // 自動縮尺にユーザーのズーム倍率を掛けた、実際に画面へ適用する縮尺。
   // クリック等の座標系は --scale から読むため、ここで一本化しておけば
   // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
@@ -4146,7 +4146,7 @@ export default function ScorePage() {
     // ピアノ・四重奏はここで盛ると実際に表示されない臨時記号ぶんまで幅を確保してしまい、
     // 1段に入る小節数が不当に減る（読込直後にほぼ全小節が1小節/段へ膨張する不具合の一因）。
     { includeTranspositionAccidentalWorstCase: scoreType === 'ensemble' },
-  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType, effectiveRenderScale, pageMarginSideMm, instrumentLabelAreaWidth]);
+  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType, effectiveRenderScale, pageMarginSideMm, instrumentLabelAreaWidth, paperWidthMm]);
   const plannerMinimumWidths = useMemo(() => {
     // 末尾の空小節は「入力を続けられるように」数小節ぶんの余白段だけ残す。
     // 以前は totalSystems(12) × measuresPerSystem を固定の編集枠としていたが、
@@ -4193,7 +4193,7 @@ export default function ScorePage() {
     // 再計画する（Issue #67。詳細は planSystemMeasureRanges 側のコメント参照）。
     previousSystemRangesRef.current,
     lastEditedMeasureIndex ?? undefined,
-  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm, lastEditedMeasureIndex, instrumentLabelAreaWidth, isPartExtractionActive]);
+  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm, lastEditedMeasureIndex, instrumentLabelAreaWidth, isPartExtractionActive, paperWidthMm]);
   const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
 
   // plannedRanges を計算し終えたレンダーの直後に、次回の安定化ヒントとして保持する。

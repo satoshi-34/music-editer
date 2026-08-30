@@ -22,6 +22,25 @@ import {
 } from '../utils/storage';
 import type { PartData, SavedScoreData } from '../types/storage';
 
+// 段割り計画へ渡る紙幅予算を観測するスパイ（round1 P1 の退行検出用）。
+// 実装はそのまま使い、呼び出し引数だけ記録する
+const planSpy = vi.hoisted(() => vi.fn());
+vi.mock('../utils/measureLayoutUtils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/measureLayoutUtils')>();
+  planSpy.mockImplementation(actual.planSystemMeasureRanges);
+  return { ...actual, planSystemMeasureRanges: planSpy };
+});
+
+// 幅フィット計算へ渡る用紙IDを観測するスパイ（round1 P2 の退行検出用）。
+// effect は依存配列の変更でしか再実行されないため、pageSize が依存から漏れると
+// 「B4 の作品を開いてもズームの初期フィットが A4 幅のまま」になる
+const pageWidthSpy = vi.hoisted(() => vi.fn());
+vi.mock('../utils/viewZoomUtils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/viewZoomUtils')>();
+  pageWidthSpy.mockImplementation(actual.pageWidthPxForSize);
+  return { ...actual, pageWidthPxForSize: pageWidthSpy };
+});
+
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
   return {
@@ -148,6 +167,40 @@ describe('用紙サイズの配線（Issue #495）', () => {
     });
     // 行き止まりは喋る（#318）: 段の組み直しが起きることを黙って行わない
     expect(await screen.findByText(/用紙サイズを B4 に変更しました/)).toBeTruthy();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('受入1: B4 を選ぶと段組みの計算も B4 の紙幅予算で再実行される（round1 P1: CSS変数だけの追従では足りない）', async () => {
+    // 用紙チップの切り替えが useMemo の依存（paperWidthMm）へ届いていないと、
+    // CSS のページ枠だけ広がって段割り計画は A4 幅の予算のまま再実行されない。
+    // 計画関数（planSystemMeasureRanges）へ渡る紙幅予算が B4 で広がることを直接固定する
+    seedSingleWork();
+    render(<ScorePage />);
+    await screen.findByRole('tab', { name: 'レイアウト' });
+
+    const budgetsSoFar = () => planSpy.mock.calls.map((call) => call[2] as number);
+    await waitFor(() => { expect(budgetsSoFar().length).toBeGreaterThan(0); });
+    const a4Budget = budgetsSoFar().at(-1)!;
+
+    await clickPageSizeChip('B4');
+
+    await waitFor(() => {
+      // B4（257mm）は A4（210mm）より広いぶん、段あたりの内容幅の予算も広がる
+      expect(budgetsSoFar().at(-1)!).toBeGreaterThan(a4Budget * 1.1);
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('受入2: B4 の作品を開くと、ズームの初期フィットも B4 の紙幅で計算される（round1 P2）', async () => {
+    seedSingleWork('b4');
+    render(<ScorePage />);
+    await screen.findByRole('tab', { name: 'レイアウト' });
+
+    // 保存作品の復元は非同期なので、B4 が state に入った後の再フィットまで待つ。
+    // pageSize が effect の依存から漏れていると、最後の呼び出しが 'a4'（初期state）のまま残る
+    await waitFor(() => {
+      const ids = pageWidthSpy.mock.calls.map((call) => call[0]);
+      expect(ids.length).toBeGreaterThan(0);
+      expect(ids.at(-1)).toBe('b4');
+    });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('受入1: A3 を選び直すと A3 実寸へ切り替わり、前の判型の <style> は残らない', async () => {
