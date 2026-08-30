@@ -40,6 +40,7 @@ import { computeScreenStrokeFloorMultiplier } from '../utils/engravingDefaults';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useWorkLibrary } from '../hooks/useWorkLibrary';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
+import { EXPORT_FILE_TYPES, buildExportFileName, sanitizeFileNameBase, type ExportFileType } from '../utils/exportFileName';
 import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
 import { resolveFreeTextAnnotation } from '../utils/freeTextUtils';
 import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, TITLE_FONT_SIZE_DEFAULT, TITLE_FONT_SIZE_MAX, TITLE_FONT_SIZE_MIN, TITLE_FONT_SIZE_STEP, ensureTitleFontLoaded, normalizeTitleFontSize, normalizeTitleFontWeight, resolveTitleFontOption, titleBlockStyleVars, waitForTitleFontReady } from '../utils/titleFontOptions';
@@ -583,8 +584,18 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // ConfirmDialog に描かせる。null のときはダイアログを出さない。
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
-    /** OK が押されたときに実行する処理（非同期でもよい） */
-    onConfirm: () => void | Promise<void>;
+    /** ダイアログの説明（スクリーンリーダー向け） */
+    ariaLabel?: string;
+    /** 実行ボタンの文言 */
+    confirmLabel?: string;
+    /** 入力欄つきで開くときの初期値（書き出しファイル名など。Issue #507） */
+    inputDefaultValue?: string;
+    /** 入力欄のラベル */
+    inputLabel?: string;
+    /** 入力欄の右に固定で見せる文字（拡張子） */
+    inputSuffix?: string;
+    /** OK が押されたときに実行する処理（非同期でもよい。入力欄つきなら入力値が渡る） */
+    onConfirm: (inputValue: string) => void | Promise<void>;
   } | null>(null);
   // フィードバックボタン（Issue #91）の結果通知。成功は数秒で消えるが、
   // クリップボード書き込み失敗・ポップアップブロックは見落とされると再試行されないため
@@ -2371,13 +2382,46 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 取得後は同じファイルへ上書きできるよう ref で保持する。
   const fileHandleRef = useRef<FileSystemFileHandle | null>(null);
 
+  /**
+   * 書き出しの前にファイル名を確認・編集してもらう（Issue #507）。
+   *
+   * これまでファイル名はタイトル由来で実質固定だった。Chrome は保存先ダイアログで
+   * 変えられるが、Safari は showSaveFilePicker が無くダイアログ無しの即ダウンロードに
+   * なるため、名前を変える手段がまったく無かった（MusicXML / MIDI は全ブラウザで同じ）。
+   * どのブラウザでも同じ操作になるよう、アプリ内のダイアログで名前を受け取ってから
+   * 書き出す。拡張子は添え字として見せるだけで、入力欄には含めない（受入条件2）。
+   */
+  const requestExportFileName = useCallback((
+    type: ExportFileType,
+    run: (fileNameBase: string) => void | Promise<void>,
+  ) => {
+    setConfirmDialog({
+      message: 'ファイル名を入力して書き出します',
+      ariaLabel: '書き出しファイル名',
+      confirmLabel: '書き出す',
+      // 既定値はこれまでと同じタイトル由来。使えない文字は先に落としておく
+      inputDefaultValue: sanitizeFileNameBase(title),
+      inputLabel: 'ファイル名',
+      inputSuffix: EXPORT_FILE_TYPES[type].extension,
+      onConfirm: (inputValue) => run(inputValue),
+    });
+  }, [title]);
+
   // ファイルに書き出す（.score.json）
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
-  const handleExportFile = async () => {
+  const performExportFile = async (fileNameBase: string) => {
     const { metadata, parts } = buildScoreData();
     const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
+    // 覚えている保存先ハンドルは「同じファイル名のときだけ」使い回す（Issue #507）。
+    // 名前を変えたのに前のファイルへ上書きしてしまうと、別名で書き出したつもりの
+    // ユーザーが元のファイルを黙って壊すことになる（匿名化コピーの用途では致命的）
+    const requestedFileName = buildExportFileName(fileNameBase, 'score');
+    const previousHandle = fileHandleRef.current;
+    const reusableHandle = previousHandle && previousHandle.name === requestedFileName
+      ? previousHandle
+      : null;
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
-    const result = await exportScoreToFile(data, title, fileHandleRef.current);
+    const result = await exportScoreToFile(data, fileNameBase, reusableHandle);
     if (result.status === 'saved') {
       fileHandleRef.current = result.handle;
       return;
@@ -2393,6 +2437,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           : '選択した場所へ書き込めなかったため、ダウンロードに保存しました'
       );
     }
+  };
+
+  /** 「書き出し」メニューの「ファイル」。ファイル名を確認してから書き出す（Issue #507） */
+  const handleExportFile = () => {
+    requestExportFileName('score', performExportFile);
   };
 
   // ファイルから読み込む（.score.json）
@@ -4694,22 +4743,28 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // ダウンロードが始まれば成功には気づけるが、失敗すると完全に無言で「押しても何も起きない」
   // ように見えるため、成否のどちらでも右下のインジケータに結果を出す。
   const handleExportMusicXml = useCallback(() => {
-    try {
-      downloadMusicXml(buildCurrentScoreData());
-      showExportStatus('success', '✓ MusicXMLを書き出しました');
-    } catch (error) {
-      showExportStatus('error', `⚠ MusicXMLを書き出せませんでした: ${describeExportError(error)}`);
-    }
-  }, [buildCurrentScoreData, showExportStatus]);
+    // 書き出す前にファイル名を確認する（Issue #507）。ダイアログを閉じた（キャンセル）
+    // ときは run が呼ばれないので、従来どおり何も起きない
+    requestExportFileName('musicxml', (fileNameBase) => {
+      try {
+        downloadMusicXml(buildCurrentScoreData(), fileNameBase);
+        showExportStatus('success', '✓ MusicXMLを書き出しました');
+      } catch (error) {
+        showExportStatus('error', `⚠ MusicXMLを書き出せませんでした: ${describeExportError(error)}`);
+      }
+    });
+  }, [buildCurrentScoreData, requestExportFileName, showExportStatus]);
 
   const handleExportMidi = useCallback(() => {
-    try {
-      downloadMidi(buildCurrentScoreData());
-      showExportStatus('success', '✓ MIDIを書き出しました');
-    } catch (error) {
-      showExportStatus('error', `⚠ MIDIを書き出せませんでした: ${describeExportError(error)}`);
-    }
-  }, [buildCurrentScoreData, showExportStatus]);
+    requestExportFileName('midi', (fileNameBase) => {
+      try {
+        downloadMidi(buildCurrentScoreData(), fileNameBase);
+        showExportStatus('success', '✓ MIDIを書き出しました');
+      } catch (error) {
+        showExportStatus('error', `⚠ MIDIを書き出せませんでした: ${describeExportError(error)}`);
+      }
+    });
+  }, [buildCurrentScoreData, requestExportFileName, showExportStatus]);
 
   // PDF書出: 自前でPDFを生成せず、ブラウザの印刷ダイアログを開く方式にする。
   // App.css の @media print が既に A4 整形済みの印刷スタイルを用意しているため、
@@ -6482,13 +6537,18 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       {confirmDialog && (
         <ConfirmDialog
           message={confirmDialog.message}
-          onConfirm={() => {
+          ariaLabel={confirmDialog.ariaLabel}
+          confirmLabel={confirmDialog.confirmLabel}
+          inputDefaultValue={confirmDialog.inputDefaultValue}
+          inputLabel={confirmDialog.inputLabel}
+          inputSuffix={confirmDialog.inputSuffix}
+          onConfirm={(inputValue) => {
             // 先にダイアログを閉じてから本体を走らせる。本体（新規作成）は
             // 画面全体を作り直す重い処理なので、確認画面が残ったままだと
             // 「押したのに閉じない」ように見えてしまう。
             const run = confirmDialog.onConfirm;
             setConfirmDialog(null);
-            void run();
+            void run(inputValue);
           }}
           onCancel={() => setConfirmDialog(null)}
         />
