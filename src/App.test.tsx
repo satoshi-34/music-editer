@@ -337,4 +337,20 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
       localStorageMock.setItem = originalSetItem;
     }
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('旧手動保存の取り込み失敗はホームに留まり理由が表示される（round5/round6 P2）', async () => {
+    seedWork();
+    // 旧・手動保存スロットに壊れたデータを置く（ボタンが出る条件=データあり、かつ読めない）
+    localStorageMock.setItem('music-score-app-data', '{"broken":');
+    render(<App />);
+    await waitFor(() => { expect(scoreTitleText()).toContain(SEEDED_TITLE); });
+
+    const legacyButton = await screen.findByTestId('home-open-legacy');
+    fireEvent.click(legacyButton);
+
+    // 失敗（読めない）はホームに留まり、.home-error に理由が出る
+    const error = await screen.findByTestId('home-error');
+    expect(error.textContent).toContain('読み込');
+    expect(screen.queryByTestId('home-screen')).not.toBeNull();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });
