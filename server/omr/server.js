@@ -18,7 +18,8 @@ import { convertPdfToMxl } from './audiveris.js';
 const PORT = Number(process.env.PORT ?? 8080);
 // 開発時はブラウザ（http://localhost:5173）から直接呼ぶため CORS を許可する。
 // 公開先では変換APIを呼べるオリジンを絞れるよう環境変数で指定できるようにしている
-const ALLOWED_ORIGIN = process.env.OMR_ALLOWED_ORIGIN ?? '*';
+// 空文字は未設定と同じ扱い（compose の `${OMR_ALLOWED_ORIGIN:-}` 対策。OMR_API_TOKEN と同じ理屈）
+const ALLOWED_ORIGIN = (process.env.OMR_ALLOWED_ORIGIN ?? '').trim() || '*';
 // 共有トークン（#493）。設定されている場合のみ x-omr-token ヘッダの一致を要求する。
 // 未設定＝検査なしはローカル開発（docker compose --profile omr）の従来挙動を保つため
 // 空文字は未設定と同じ扱いにする（docker compose の `${OMR_API_TOKEN:-}` は未設定時に

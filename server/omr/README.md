@@ -45,10 +45,16 @@ openssl rand -hex 32
 商用化前は GCP を使わず、手元マシン（Air）で動かして限定公開する構成です
 （判断の経緯は design.md の 6.5 節）。
 
-1. **Air でコンテナを起動**（トークン付き）:
+1. **Air でコンテナを起動**（トークン付き・呼び出し元オリジンも絞る）:
    ```sh
-   OMR_API_TOKEN=<生成したトークン> docker compose --profile omr up -d omr
+   OMR_API_TOKEN=<生成したトークン> \
+   OMR_ALLOWED_ORIGIN=<プレビューのオリジン> \
+   docker compose --profile omr up -d omr
    ```
+   プレビューのオリジンには、デプロイごとに変わるURLではなく**ブランチ固定のプレビューURL**
+   （`https://<プロジェクト>-git-<ブランチ>-<アカウント>.vercel.app`）を使うと差し替え不要です。
+   ※ CORS はブラウザ経由の呼び出し制限で、curl 等の直接叩きには効きません。直接叩きの防護は
+   上の共有トークンが担います（設計書 6.5 節）。
 2. **Cloudflare Tunnel で外向けURLを作る**（無料・カード不要・自宅ポートは開けない）:
    ```sh
    brew install cloudflared

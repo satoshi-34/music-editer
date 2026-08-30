@@ -30,6 +30,9 @@ services:
       # 共有トークン（#493）。未設定ならローカル開発向けに検査なし。
       # 試用公開（Tunnel で外へ出す）時は必ず設定する（server/omr/README.md）
       - OMR_API_TOKEN=${OMR_API_TOKEN:-}
+      # 変換APIを呼べるオリジン（#493 round1 P3）。未設定なら * （ローカル開発向け）。
+      # 試用公開時はプレビューの固定オリジンに絞る（server/omr/README.md）
+      - OMR_ALLOWED_ORIGIN=${OMR_ALLOWED_ORIGIN:-}
 
 volumes:
   node_modules:
