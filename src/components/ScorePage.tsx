@@ -201,6 +201,12 @@ import {
   type ScoreActiveVoiceChangeDetail,
   type ScoreEditNoticeDetail,
 } from '../utils/scoreEditorNotices';
+import {
+  hasSeenStorageLocationNotice,
+  markStorageLocationNoticeSeen,
+  STORAGE_LOCATION_NOTICE_DURATION_MS,
+  STORAGE_LOCATION_NOTICE_MESSAGE,
+} from '../utils/storageLocationNotice';
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrintableMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, isPartExtractionEditable, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
@@ -4869,21 +4875,36 @@ export default function ScorePage() {
   // （詳しい理由は utils/scoreEditorNotices.ts の冒頭コメント参照）。
   useEffect(() => {
     const onNotice = (e: Event) => {
-      const message = (e as CustomEvent<ScoreEditNoticeDetail>).detail?.message;
+      const detail = (e as CustomEvent<ScoreEditNoticeDetail>).detail;
+      const message = detail?.message;
       if (!message) return;
       setEditNotice(message);
+      // 通知ごとに表示時間を変えられる（既定は 4 秒。起動時の保存先の説明だけ長い・#497）
+      const durationMs = detail?.durationMs ?? EDIT_NOTICE_DURATION_MS;
       // 連続で削除したときに前のタイマーで早く消えないよう、毎回貼り直す
       if (editNoticeTimerRef.current) clearTimeout(editNoticeTimerRef.current);
       editNoticeTimerRef.current = setTimeout(() => {
         editNoticeTimerRef.current = null;
         setEditNotice(null);
-      }, EDIT_NOTICE_DURATION_MS);
+      }, durationMs);
     };
     window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
     return () => {
       window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
       if (editNoticeTimerRef.current) clearTimeout(editNoticeTimerRef.current);
     };
+  }, []);
+
+  // 初回起動時に一度だけ「楽譜データはこの端末にのみ保存される」ことを知らせる（Issue #497）。
+  // 実装は安全でも、アプリが黙っていると「どこかへ公開されているのでは」という不安が残る
+  // （実機テストでの指摘）。表示は上の通知系（#318）をそのまま使い、既読は localStorage に覚える。
+  //
+  // この useEffect を通知リスナーの**後ろ**に置いているのは、React が宣言順に効果を実行するため。
+  // 先に置くと dispatch した時点でまだリスナーが居らず、通知が誰にも届かずに消える。
+  useEffect(() => {
+    if (hasSeenStorageLocationNotice()) return;
+    markStorageLocationNoticeSeen();
+    notifyScoreEdit(STORAGE_LOCATION_NOTICE_MESSAGE, STORAGE_LOCATION_NOTICE_DURATION_MS);
   }, []);
 
   // 非アクティブ声部の音符をクリックしたときに、譜面側から届く「声部を切り替えて」の要求（Issue #258）。
