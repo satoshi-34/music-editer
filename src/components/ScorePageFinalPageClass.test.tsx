@@ -43,10 +43,12 @@ function seedWorkWithMeasures(measureCount: number) {
   setLastOpenedWorkId(created.data.id);
 }
 
-async function mountAndGetPages() {
+async function mountAndGetPages(expectedTitle: string) {
   render(<ScorePage />);
+  // 復元完了を「保存作品のタイトルが描画されたこと」で待つ（round2 P2:
+  // .print-page は既定の空譜面でも存在するため、それだけ待つと fixture 反映前に検証してしまう）
   await waitFor(() => {
-    expect(document.querySelectorAll('.print-page').length).toBeGreaterThan(0);
+    expect(document.querySelector('.score-title')?.textContent).toContain(expectedTitle);
   }, { timeout: MOUNT_HEAVY_TIMEOUT_MS });
   return [...document.querySelectorAll('.print-page')];
 }
@@ -67,19 +69,24 @@ describe('最終ページの上詰めクラス配線（#506）', () => {
     vi.restoreAllMocks();
   });
 
-  it('内容が端数で終わる曲: 内容のある最後のページにだけ print-final-page が付く', async () => {
-    seedWorkWithMeasures(8); // 4小節/段 → 内容2段（1ページ目の途中で終わる端数）
-    const pages = await mountAndGetPages();
+  it('複数ページの曲: 内容のある最後のページにだけ print-final-page が付く（先行ページには付かない）', async () => {
+    seedWorkWithMeasures(60); // 4小節/段 → 内容15段。印刷対象が複数ページになる規模（round2 P2）
+    const pages = await mountAndGetPages('小節60');
+    const visible = pages.filter(p => !p.classList.contains('print-hidden-page'));
+    // 「常に先頭ページへ付ける」退行を検出するため、印刷対象が2ページ以上であることを前提にする
+    expect(visible.length).toBeGreaterThan(1);
     const finals = pages.filter(p => p.classList.contains('print-final-page'));
     expect(finals.length).toBe(1);
-    // 印刷対象ページ（print-hidden-page でない）のうち最後のページであること
-    const visible = pages.filter(p => !p.classList.contains('print-hidden-page'));
     expect(finals[0]).toBe(visible[visible.length - 1]);
+    // 先行ページには付かない
+    for (const page of visible.slice(0, -1)) {
+      expect(page.classList.contains('print-final-page')).toBe(false);
+    }
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('内容のないページには print-hidden-page が付き、print-final-page は付かない', async () => {
     seedWorkWithMeasures(4); // 内容1段のみ → 2ページ目以降は空
-    const pages = await mountAndGetPages();
+    const pages = await mountAndGetPages('小節4');
     const hidden = pages.filter(p => p.classList.contains('print-hidden-page'));
     for (const page of hidden) {
       expect(page.classList.contains('print-final-page')).toBe(false);
