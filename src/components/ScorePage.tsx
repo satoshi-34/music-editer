@@ -2825,9 +2825,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         else if (kind === 'pdf') pdfInputRef.current?.click();
         else {
           // 旧手動保存の取り込みは同期のクリックではなく非同期処理なので、
-          // 完了まで待つ（round4 P2: void で捨てると途中の例外を App の
-          // 例外受け止めが拾えず、未処理 Promise になる）
-          await handleImportLegacyManualSave();
+          // 完了まで待ち、失敗はそのままホーム側へ返す（round4/round5 P2:
+          // void で捨てると例外もエラー結果も App の受け止めに届かない）
+          return await handleImportLegacyManualSave();
         }
         return { ok: true };
       },
@@ -2927,22 +2927,26 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * 取り込む（#109 第4段の移行導線）。旧スロットのデータ自体は消さない（安全側。
    * 取り込みに失敗しても元データが残るように）。いまの内容は先に保存してから切り替える
    */
-  const handleImportLegacyManualSave = async () => {
+  // 戻り値はホーム連携（openFilePicker）が失敗をホーム側に表示するために使う
+  // （#500 round5 P2）。ツールバーからの呼び出しは従来どおり戻り値を見ない
+  const handleImportLegacyManualSave = async (): Promise<HomeActionResult> => {
     const loadedData = await loadScore();
     setStoredDataAvailable(hasStoredData());
     if (!loadedData) {
       // データが無いのか、あるのに読めない（破損・チェックサム不一致）のかを区別する。
       // loadScore は失敗時も null を返すため、旧スロットの有無で読み分ける（Codex round2 P3）
-      notifyScoreEdit(describeLegacyImportResult(hasStoredData() ? 'readFailed' : 'notFound'));
-      return;
+      const message = describeLegacyImportResult(hasStoredData() ? 'readFailed' : 'notFound');
+      notifyScoreEdit(message);
+      return { ok: false, message };
     }
     cancelPendingAutosave();
     // 新規作品の発行（いまの内容の保存を含む）に失敗したら取り込みを中止する。
     // 失敗を無視して進めると、currentWorkId が旧作品のままの自動保存で
     // 取り込んだ内容が現在の作品を上書きしてしまう（Codex round1 P1）
     if (!startNewWork(buildCurrentWorkDataRef.current())) {
-      notifyScoreEdit(describeLegacyImportResult('blocked'));
-      return;
+      const message = describeLegacyImportResult('blocked');
+      notifyScoreEdit(message);
+      return { ok: false, message };
     }
     // 前の作品の保存先ファイルハンドルを引き継がない（通常の新規作成と同じ後始末）。
     // 残っていると取り込み後の「書き出し→ファイル」がダイアログなしで旧作品の
@@ -2954,10 +2958,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // timestamp は現在時刻へ更新する（旧手動保存の保存時刻のままだと updatedAt が古くなり、
     // 取り込んだばかりの作品が更新順の作品一覧で埋もれる。Codex round4）
     if (!saveCurrentWork({ ...loadedData, timestamp: Date.now() })) {
-      notifyScoreEdit(describeLegacyImportResult('saveFailed'));
-      return;
+      const message = describeLegacyImportResult('saveFailed');
+      notifyScoreEdit(message);
+      return { ok: false, message };
     }
     notifyScoreEdit(describeLegacyImportResult('done'));
+    return { ok: true };
   };
 
   /** 「書き出し」メニュー（#109 第4段）。選んだ形式の既存ハンドラへ振り分けて select は空へ戻す */
