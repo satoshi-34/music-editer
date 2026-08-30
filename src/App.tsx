@@ -64,6 +64,8 @@ export default function App() {
   // 失敗の理由はホーム側に表示する（round2 P2: 通知系は inert な譜面画面の下で
   // 視覚・支援技術の双方に届かない）
   const [homeError, setHomeError] = useState<string | null>(null);
+  // busy 表示用（ref は同期判定の正本・state は描画用の写し）
+  const [actionRunning, setActionRunning] = useState(false);
   // 一覧・前回の続きはホームを開くたびに読み直す（編集して戻ってきたとき、
   // 最終更新日時やタイトルが古いままだと「保存されていない」と誤解させるため）
   const [snapshot, setSnapshot] = useState(() => readHomeSnapshot());
@@ -93,11 +95,8 @@ export default function App() {
    * App の初期スナップショットは移行**前**に読んでいるため、単一作品時代からの
    * 移行ユーザーではここで読み直さないと「前回の続き」「保存した作品」が空のままになる
    */
-  const handleLibraryReady = useCallback(() => {
-    setSnapshot(readHomeSnapshot());
-    setAvailableOpenKinds(resolveAvailableOpenKinds());
-    // 操作口の登録前に押されたボタンがあれば、ここで順に実行する（round1/round2 P2）。
-    // 登録は復元と同じ初回レンダー直後なので、体感は「一瞬遅れて反応した」程度に収まる
+  /** 持ち越した操作を順に実行する（操作口が入っていれば） */
+  const drainPendingActions = useCallback(() => {
     const pending = pendingActionsRef.current;
     if (pending.length > 0 && homeActionsRef.current) {
       pendingActionsRef.current = [];
@@ -108,6 +107,21 @@ export default function App() {
     }
   }, []);
 
+  const handleLibraryReady = useCallback(() => {
+    setSnapshot(readHomeSnapshot());
+    setAvailableOpenKinds(resolveAvailableOpenKinds());
+    drainPendingActions();
+  }, [drainPendingActions]);
+
+  /**
+   * 操作口（homeActionsRef）が入った合図（round3 P2）。復元データの無い初回起動では
+   * onLibraryReady が登録 effect より先に走るため、そちらだけでキューを排出すると
+   * 起動直後の操作が永久に残る。登録側からも排出する
+   */
+  const handleActionsReady = useCallback(() => {
+    drainPendingActions();
+  }, [drainPendingActions]);
+
   /**
    * ホームのボタンから譜面画面の処理を呼ぶ。処理が成功したときだけ譜面画面へ移る
    * （round1 P1: 保存失敗などで中断されたのにホームだけ閉じると、通知も文脈も失う）。
@@ -115,9 +129,11 @@ export default function App() {
    */
   const runOnScorePage = useCallback((action: (actions: ScorePageHomeActions) => HomeActionResult | Promise<HomeActionResult>) => {
     const run = async (actions: ScorePageHomeActions) => {
-      // 実行中の連打は無視する（round2 P2: 新規作成の並行実行で重複作品が生まれる）
+      // 実行中の連打は無視する（round2 P2: 新規作成の並行実行で重複作品が生まれる）。
+      // 実行中はホームのボタンが busy 表示で無効化されるので、無言にはならない（round3 P2）
       if (actionRunningRef.current) return;
       actionRunningRef.current = true;
+      setActionRunning(true);
       try {
         setHomeError(null);
         const result = await action(actions);
@@ -129,8 +145,13 @@ export default function App() {
           // 失敗時はホームに留まり、理由をホーム側に表示する（round2 P2）
           setHomeError(result.message);
         }
+      } catch (err) {
+        // 操作の途中で投げられた例外も無処理にしない（round3 P2）。
+        // ホームに留まり、例外の内容ごと理由として見せる
+        setHomeError(`操作を完了できませんでした: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         actionRunningRef.current = false;
+        setActionRunning(false);
       }
     };
     const actions = homeActionsRef.current;
@@ -142,6 +163,9 @@ export default function App() {
   }, []);
 
   const handleResume = useCallback(() => {
+    // 「前回の続き」も他の操作と同じ busy 制御下に置く（round3 P2:
+    // 実行中の遷移で作品切替と復帰が競合しないように）
+    if (actionRunningRef.current) return;
     setHomeShown(false);
     setShowHome(false);
   }, []);
@@ -165,7 +189,12 @@ export default function App() {
       {/* inert: ホーム表示中は譜面画面をフォーカス・クリック・支援技術から切り離す
           （round1 P1）。React 19 は inert を boolean 属性として扱える */}
       <div inert={showHome} data-testid="score-page-holder">
-        <ScorePage homeActionsRef={homeActionsRef} onGoHome={goHome} onLibraryReady={handleLibraryReady} />
+        <ScorePage
+          homeActionsRef={homeActionsRef}
+          onGoHome={goHome}
+          onLibraryReady={handleLibraryReady}
+          onHomeActionsReady={handleActionsReady}
+        />
       </div>
       {showHome && (
         <HomeScreen
@@ -174,6 +203,7 @@ export default function App() {
           works={snapshot.works}
           availableOpenKinds={availableOpenKinds}
           errorMessage={homeError}
+          busy={actionRunning}
           onResume={handleResume}
           onSelectWork={handleSelectWork}
           onCreateNew={handleCreateNew}

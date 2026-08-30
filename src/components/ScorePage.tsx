@@ -496,12 +496,19 @@ export interface ScorePageProps {
    * App はこれを合図にホームの一覧を読み直す（移行前に読んだ初期一覧は空のことがある）
    */
   onLibraryReady?: () => void;
+  /**
+   * homeActionsRef へ操作口が入った直後（round3 P2）。復元データの無い初回起動では
+   * onLibraryReady の方が先に走るため、持ち越した操作の排出はこちらが受け持つ
+   */
+  onHomeActionsReady?: () => void;
 }
 
-export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady }: ScorePageProps = {}) {
+export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, onHomeActionsReady }: ScorePageProps = {}) {
   // onLibraryReady は初期化 effect（依存: 空）から呼ぶため ref 経由で最新を参照する
   const onLibraryReadyRef = useRef(onLibraryReady);
   onLibraryReadyRef.current = onLibraryReady;
+  // onHomeActionsReady の「初回だけ」判定（round3 P2）
+  const homeActionsReadyNotifiedRef = useRef(false);
   // 適用中のUI案（Issue #405 段1）。URLの `?ui=a1|a2|current` で切り替わり、
   // 開発時のみ有効（本番ビルドでは常に 'current'＝現状のUI）。
   // 段2（A1 文脈バー）・段3（A2 譜面側表現）・A3（両方込み）はこの値を見て自分の案のときだけ描く。
@@ -2837,6 +2844,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady }: 
       openWork: (workId) => handleSelectWork(workId),
       openSettingsTab: (tab) => { handleToolbarTabChange(tab); return { ok: true }; },
     };
+    // 操作口が初めて入ったことを App へ知らせる（round3 P2: 持ち越し操作の排出）。
+    // この effect は毎レンダー走るので、合図は最初の1回だけにする
+    if (!homeActionsReadyNotifiedRef.current) {
+      homeActionsReadyNotifiedRef.current = true;
+      onHomeActionsReady?.();
+    }
   });
 
   /**

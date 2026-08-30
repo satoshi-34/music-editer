@@ -143,3 +143,14 @@ Codex 最終ゲート round 1 の指摘（P1×4・P2×2）への対応で、以�
 - テスト: 旧・自動保存スロットだけを事前投入する実移行テスト、保存失敗の選択的注入
   （全キー throw は isStorageAvailable まで壊れて検出力ゼロになる罠を回避）、
   ホーム側エラー表示、戻った直後のキー遮断、切替失敗時の ID 不動、を追加
+
+## 追記（round 3 対応・2026-08-31）
+
+- **キュー排出の二重化（P2）**: 復元データの無い初回起動では onLibraryReady が
+  操作口の登録 effect より先に走るため、持ち越し操作の排出は onHomeActionsReady
+  （登録直後・初回のみの合図）側でも行う（drainPendingActions を共用）
+- **busy の可視化（P2）**: 実行中は HomeScreen の全ボタンを disabled+aria-busy にして
+  連打を見た目でも止める（無言で無視しない）。「前回の続き」も同じ busy 制御下
+- **例外の受け止め（P2）**: runOnScorePage は action の例外も catch し、ホームに留まって
+  .home-error へ理由を表示する（未処理 Promise にしない）
+- テスト修正（P3）: 読込失敗時の ID 検証を not.toBe(A) → toBe(B) へ（null 化の退行も検出）

@@ -73,6 +73,11 @@ export interface HomeScreenProps {
    * （inert）に出て見えないため、失敗の説明はホーム自身が表示する（round2 P2）
    */
   errorMessage?: string | null;
+  /**
+   * 操作の実行中か（round3 P2）。実行中は全ボタンを無効化して連打を防ぐ
+   * （無言で無視すると「押したのに反応しない」に見えるため、見た目でも止める）
+   */
+  busy?: boolean;
 }
 
 export default function HomeScreen({
@@ -86,11 +91,12 @@ export default function HomeScreen({
   availableOpenKinds,
   onOpenSettings,
   errorMessage = null,
+  busy = false,
 }: HomeScreenProps) {
   const openButtons = OPEN_BUTTONS.filter(button => availableOpenKinds.includes(button.kind));
 
   return (
-    <div className="home-screen" role="main" aria-label="ホーム" data-testid="home-screen">
+    <div className="home-screen" role="main" aria-label="ホーム" aria-busy={busy} data-testid="home-screen">
       <div className="home-inner">
         <header className="home-header">
           <h1 className="home-title">楽譜エディタ</h1>
@@ -114,6 +120,7 @@ export default function HomeScreen({
             <>
               <button
                 type="button"
+                disabled={busy}
                 className="home-primary-button"
                 onClick={onResume}
                 data-testid="home-resume"
@@ -143,6 +150,7 @@ export default function HomeScreen({
               <button
                 key={type.id}
                 type="button"
+                disabled={busy}
                 className="home-card-button"
                 onClick={() => onCreateNew(type.id)}
                 title={type.description}
@@ -163,6 +171,7 @@ export default function HomeScreen({
               <button
                 key={button.kind}
                 type="button"
+                disabled={busy}
                 className="home-secondary-button"
                 onClick={() => onOpen(button.kind)}
                 title={button.description}
@@ -183,6 +192,7 @@ export default function HomeScreen({
                 <li key={work.id}>
                   <button
                     type="button"
+                    disabled={busy}
                     className="home-work-button"
                     onClick={() => onSelectWork(work.id)}
                     data-testid={`home-work-${work.id}`}

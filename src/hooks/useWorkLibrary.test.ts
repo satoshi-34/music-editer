@@ -238,12 +238,14 @@ describe('useWorkLibrary（作品カタログの操作・Issue #181）', () => {
       window.localStorage.setItem(keysA.primary, '{"broken":');
       window.localStorage.removeItem(keysA.backup);
 
+      const workB = result.current.currentWorkId as string;
       let outcome: ReturnType<typeof result.current.switchWork> | null = null;
       act(() => { outcome = result.current.switchWork(workA, null); });
       expect(outcome).toMatchObject({ status: 'error' });
-      // ID は元のまま（B）。ここが A へ動くと、画面は B のまま保存先だけ A になり
-      // 次の自動保存が A を上書きする
-      expect(result.current.currentWorkId).not.toBe(workA);
+      // ID は元のまま（B）。ここが A・null・第三のIDへ動くと、画面は B のまま
+      // 保存先だけがずれて次の自動保存が別作品を上書きする（round3 P3: not.toBe では
+      // null 化の退行を通してしまうため、B のままであることを固定する）
+      expect(result.current.currentWorkId).toBe(workB);
 
       // 再試行しても sameWork 扱いにならず、あらためて error が返る
       let retry: ReturnType<typeof result.current.switchWork> | null = null;
