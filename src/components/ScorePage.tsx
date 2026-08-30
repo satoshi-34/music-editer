@@ -333,31 +333,34 @@ function readPersonalNotationSizeSetting(): number {
 }
 
 /** 表示設定からページ余白を読む（同上）。読めない・範囲外は既定値へ */
-function readPersonalPageMarginSettings(): { sideMm: number; topMm: number; bottomMm: number } {
+export function readPersonalPageMarginSettings(): { sideMm: number; topMm: number; bottomMm: number } {
   const read = (key: string, fallback: number, min: number, max: number) => {
     const raw = localStorage.getItem(key);
     const n = raw == null ? NaN : parseFloat(raw);
     return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
   };
   // 上下は旧・単一キー（score-page-margin-vertical）を後方互換として読む
-  // （state 初期化と同じ優先順位。round2 P2: 新キーだけ見ると旧設定利用者の
-  // 上下余白が工場値へ化けて、そのまま作品へ明示保存されてしまう）
-  const legacyVertical = (() => {
+  // （state 初期化と同じ優先順位・同じ計算順。round2/round3/round4 P2:
+  // 新キーだけ見ると旧設定利用者の上下余白が工場値へ化け、旧値を先にクランプすると
+  // 下余白の「生値 − 2mm → クランプ」という state 初期化の順序と食い違う）
+  const legacyVerticalRaw = (() => {
     const raw = localStorage.getItem(PAGE_MARGIN_VERTICAL_LEGACY_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
-    return Number.isFinite(n)
-      ? Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, n))
-      : null;
+    return Number.isFinite(n) ? n : null;
   })();
+  const clampVertical = (n: number) =>
+    Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, n));
   return {
     sideMm: read(PAGE_MARGIN_SIDE_KEY, DEFAULT_PAGE_SIDE_MARGIN_MM, PAGE_MARGIN_SIDE_MIN_MM, PAGE_MARGIN_SIDE_MAX_MM),
-    topMm: read(PAGE_MARGIN_TOP_KEY, legacyVertical ?? DEFAULT_PAGE_MARGIN_TOP_MM, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM),
-    // 下余白の旧仕様は「旧値 − 2mm」（state 初期化と同じ換算。round3 P2:
-    // 旧値をそのまま使うと旧設定利用者の下余白が 2mm 太って明示保存されてしまう）
+    topMm: read(
+      PAGE_MARGIN_TOP_KEY,
+      legacyVerticalRaw != null ? clampVertical(legacyVerticalRaw) : DEFAULT_PAGE_MARGIN_TOP_MM,
+      PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM,
+    ),
     bottomMm: read(
       PAGE_MARGIN_BOTTOM_KEY,
-      legacyVertical != null
-        ? Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Math.max(0, legacyVertical - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM)))
+      legacyVerticalRaw != null
+        ? clampVertical(Math.max(0, legacyVerticalRaw - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM))
         : DEFAULT_PAGE_MARGIN_BOTTOM_MM,
       PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM,
     ),

@@ -7,7 +7,7 @@
 // (3) 引き継いだ値が作品として保存されること、を実経路（input[type=file] の change）で固定する。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react';
-import ScorePage from './ScorePage';
+import ScorePage, { readPersonalPageMarginSettings } from './ScorePage';
 import { createSavedScoreData, createWork, getLastOpenedWorkId, loadWorkAutosaveData, saveWorkAutosaveData, setLastOpenedWorkId } from '../utils/storage';
 import { staffHeightMmForNotationSize } from '../utils/musicXmlDefaults';
 
@@ -371,4 +371,12 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
     expect(notationSizeSlider().value).toBe('120');
     expect(sideMarginSlider().value).toBe('12');
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('旧・縦余白キーの換算は state 初期化と同順（生値−2mm→クランプ。round4 P2）', () => {
+    // 旧値26mm: 下= (26−2)=24mm（先にクランプすると 25−2=23 になってしまう）
+    localStorageMock.setItem('score-page-margin-vertical', '26');
+    const margins = readPersonalPageMarginSettings();
+    expect(margins.topMm).toBe(25); // 上は 26 → 上限25へクランプ
+    expect(margins.bottomMm).toBe(24);
+  });
 });
