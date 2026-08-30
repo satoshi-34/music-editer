@@ -352,7 +352,15 @@ function readPersonalPageMarginSettings(): { sideMm: number; topMm: number; bott
   return {
     sideMm: read(PAGE_MARGIN_SIDE_KEY, DEFAULT_PAGE_SIDE_MARGIN_MM, PAGE_MARGIN_SIDE_MIN_MM, PAGE_MARGIN_SIDE_MAX_MM),
     topMm: read(PAGE_MARGIN_TOP_KEY, legacyVertical ?? DEFAULT_PAGE_MARGIN_TOP_MM, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM),
-    bottomMm: read(PAGE_MARGIN_BOTTOM_KEY, legacyVertical ?? DEFAULT_PAGE_MARGIN_BOTTOM_MM, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM),
+    // 下余白の旧仕様は「旧値 − 2mm」（state 初期化と同じ換算。round3 P2:
+    // 旧値をそのまま使うと旧設定利用者の下余白が 2mm 太って明示保存されてしまう）
+    bottomMm: read(
+      PAGE_MARGIN_BOTTOM_KEY,
+      legacyVertical != null
+        ? Math.max(PAGE_MARGIN_VERTICAL_MIN_MM, Math.min(PAGE_MARGIN_VERTICAL_MAX_MM, Math.max(0, legacyVertical - PAGE_MARGIN_VERTICAL_BOTTOM_OFFSET_MM)))
+        : DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+      PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM,
+    ),
   };
 }
 // 「タイトル余白（上）」「タイトル余白（下）」のユーザー設定（レイアウトタブのスライダー、
