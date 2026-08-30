@@ -2241,7 +2241,13 @@ button.ghost.active:hover:not(:disabled) {
     height: auto !important;
   }
   .print-page {
-    /* 画面用の縮小は印刷に持ち込まない（印刷は常に原寸 A4） */
+    /* 画面用の縮小は印刷に持ち込まない（印刷は常に原寸 A4）。
+       transform だけでなく寸法も固定する（Issue #504）: 通常時の width/height は
+       calc(210mm × --scale) / calc(297mm × --scale) で画面倍率込みのため、
+       倍率が 1 を超える環境ではページが A4 からあふれ、末尾数ミリが次の紙へ
+       押し出されてページ数が倍になる（97小節のピアノ譜で30ページの実測） */
+    width: 210mm !important;
+    height: 297mm !important;
     transform: none !important;
     page-break-after: always;
     box-shadow: none;
