@@ -22,6 +22,15 @@ import type {
 } from '../types/storage';
 import { StorageErrorType } from '../types/storage';
 import { DEFAULT_PAGE_SIZE_ID, normalizePageSizeId, type PageSizeId } from './pageSize';
+import {
+  DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+  DEFAULT_PAGE_MARGIN_TOP_MM,
+  DEFAULT_PAGE_SIDE_MARGIN_MM,
+  normalizeNotationSizeMultiplier,
+  normalizePageMargins,
+  resolveDefaultLayoutForScoreType,
+  type SavedPageMargins,
+} from './measureLayoutUtils';
 import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
@@ -645,6 +654,11 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     // 用紙サイズ（Issue #495）。未知の文字列は読み込み時に A4 へ正規化されるので、
     // ここでは「文字列でないデータを弾く」ところまでを見る（他の省略可能項目と同じ方針）。
     (data.pageSize === undefined || typeof data.pageSize === 'string') &&
+    // 音符の大きさ・ページ余白（Issue #477）。範囲外は読み込み時にクランプするので、
+    // ここでは型が違うデータを弾くところまでを見る（他の省略可能項目と同じ方針）。
+    (data.notationSizeMultiplier === undefined ||
+      (typeof data.notationSizeMultiplier === 'number' && Number.isFinite(data.notationSizeMultiplier))) &&
+    (data.pageMargins === undefined || (typeof data.pageMargins === 'object' && data.pageMargins !== null)) &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -726,6 +740,21 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   // 値が入っているときだけ正規化する（未知の判型が入っていた場合は A4 へ倒れる）。
   if (parsedData.pageSize !== undefined) {
     parsedData.pageSize = normalizePageSizeId(parsedData.pageSize);
+  }
+  // 音符の大きさ・ページ余白（Issue #477）も「省略＝表示設定に従う」が正なので、
+  // 値が入っているときだけスライダーの範囲へクランプする。
+  if (parsedData.notationSizeMultiplier !== undefined) {
+    parsedData.notationSizeMultiplier = normalizeNotationSizeMultiplier(
+      parsedData.notationSizeMultiplier,
+      resolveDefaultLayoutForScoreType(parsedData.scoreType ?? 'single').notationSizeMultiplier,
+    );
+  }
+  if (parsedData.pageMargins !== undefined) {
+    parsedData.pageMargins = normalizePageMargins(parsedData.pageMargins, {
+      sideMm: DEFAULT_PAGE_SIDE_MARGIN_MM,
+      topMm: DEFAULT_PAGE_MARGIN_TOP_MM,
+      bottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+    });
   }
 
   // 保存済みデータはユーザーが手編集した JSON や古いバックアップから来ることがある。
@@ -1795,7 +1824,9 @@ export function createSavedScoreData(
   titleFontSize?: number,
   titleFontWeight?: string,
   timeSignatureStyle?: TimeSignatureStyle,
-  pageSize?: PageSizeId
+  pageSize?: PageSizeId,
+  notationSizeMultiplier?: number,
+  pageMargins?: SavedPageMargins
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -1815,6 +1846,33 @@ export function createSavedScoreData(
       pageSize && normalizePageSizeId(pageSize) !== DEFAULT_PAGE_SIZE_ID
         ? normalizePageSizeId(pageSize)
         : undefined,
+    // 音符の大きさ・ページ余白（Issue #477）も既定値と同じなら項目自体を持たせない。
+    // これで「既定のまま使っている作品」の保存データは従来と1バイトも変わらず、
+    // MusicXML から引き継いだ作品（や、ユーザーが明示的に変えた作品）だけが値を持つ。
+    notationSizeMultiplier: (() => {
+      if (notationSizeMultiplier === undefined) return undefined;
+      const normalized = normalizeNotationSizeMultiplier(
+        notationSizeMultiplier,
+        resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier,
+      );
+      return normalized === resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier
+        ? undefined
+        : normalized;
+    })(),
+    pageMargins: (() => {
+      if (pageMargins === undefined) return undefined;
+      const defaults: SavedPageMargins = {
+        sideMm: DEFAULT_PAGE_SIDE_MARGIN_MM,
+        topMm: DEFAULT_PAGE_MARGIN_TOP_MM,
+        bottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+      };
+      const normalized = normalizePageMargins(pageMargins, defaults);
+      return normalized.sideMm === defaults.sideMm
+        && normalized.topMm === defaults.topMm
+        && normalized.bottomMm === defaults.bottomMm
+        ? undefined
+        : normalized;
+    })(),
     instrumentation,
     notationMode,
     titleFontId,

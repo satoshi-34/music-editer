@@ -46,7 +46,7 @@ import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, TITLE_FONT_SIZE_DEFAULT, TIT
 import type { TitleFontWeight } from '../utils/titleFontOptions';
 import HelpPanel from './HelpPanel';
 import { downloadMusicXml } from '../utils/musicXmlExport';
-import { parseMusicXml } from '../utils/musicXmlImport';
+import { parseMusicXmlWithDefaults } from '../utils/musicXmlImport';
 import { downloadMidi } from '../utils/midiExport';
 import { useTempoStorage } from '../hooks/useTempoStorage';
 import type { PlaybackEngine } from '../audio/PlaybackEngine';
@@ -96,6 +96,9 @@ import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
 import { instrumentLabelAreaWidthForScore } from '../utils/instrumentLabelUtils';
 import {
   planEffectiveMeasuresPerSystem,
+  fitNotationSizeMultiplier,
+  normalizeNotationSizeMultiplier,
+  normalizePageMargins,
   MEASURE_WIDTH_EVENNESS,
   SCORE_LAYOUT_RENDER_SCALE,
   MIN_MEASURE_CONTENT_WIDTH,
@@ -198,6 +201,9 @@ import {
   notifyScoreEdit,
   describePageSizeChanged,
   describeImportedClefNormalized,
+  describeImportedNotationSize,
+  describeImportedNotationSizeShrunk,
+  describeImportedPageSizeRounded,
   requestScoreSelectionClear,
   type ScoreActiveVoiceChangeDetail,
   type ScoreEditNoticeDetail,
@@ -2309,7 +2315,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const handleExportFile = async () => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
     const result = await exportScoreToFile(data, title, fileHandleRef.current);
     if (result.status === 'saved') {
@@ -2358,6 +2364,8 @@ export default function ScorePage() {
     setTimeSignatureStyle(normalizeTimeSignatureStyle(data.timeSignatureStyle));
     // 旧データは pageSize を持たないので、省略時は A4 として開く（normalizePageSizeId が担保）
     setPageSize(normalizePageSizeId(data.pageSize));
+      // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
+      applySavedLayoutAttributes(data);
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
       setCustomSymbolDefs(data.customSymbolDefs ?? []);
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
@@ -2414,7 +2422,7 @@ export default function ScorePage() {
   // （handleExportFile と同じ理由で通常関数として定義。TDZ 回避）。
   const handleFeedback = async () => {
     const { metadata, parts } = buildScoreData();
-    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
+    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
     const feedbackState = {
       ...scoreData,
       // フィードバック JSON は「開く」の「ファイル」ボタンで読み込める楽譜 JSON なので、
@@ -2476,6 +2484,32 @@ export default function ScorePage() {
    * 起動時の復元と、作品一覧からの切替の両方で同じ手順を通す
    * （片方だけ更新し忘れると「切り替えたのに前の譜面の設定が残る」不具合になるため）。
    */
+  /**
+   * 作品の属性として保存されたレイアウト（音符の大きさ・ページ余白。Issue #477）を画面へ当てる。
+   *
+   * 省略されている項目には触らない（＝従来どおり表示設定の値のまま）ので、旧データを開いても
+   * 挙動は変わらない。localStorage（表示設定）へは書かない: 作品を1つ開いただけで
+   * グローバル設定を書き換えてしまわないため（作品の属性であって表示設定ではない）。
+   */
+  const applySavedLayoutAttributes = useCallback((data: SavedScoreData) => {
+    if (data.notationSizeMultiplier !== undefined) {
+      setNotationSizeMultiplier(normalizeNotationSizeMultiplier(
+        data.notationSizeMultiplier,
+        resolveDefaultLayoutForScoreType(data.scoreType ?? 'single').notationSizeMultiplier,
+      ));
+    }
+    if (data.pageMargins !== undefined) {
+      const margins = normalizePageMargins(data.pageMargins, {
+        sideMm: DEFAULT_PAGE_SIDE_MARGIN_MM,
+        topMm: DEFAULT_PAGE_MARGIN_TOP_MM,
+        bottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+      });
+      setPageMarginSideMm(margins.sideMm);
+      setPageMarginTopMm(margins.topMm);
+      setPageMarginBottomMm(margins.bottomMm);
+    }
+  }, []);
+
   const applyLoadedScoreData = useCallback(async (restored: SavedScoreData) => {
     // パート譜表示は保存されない一時ビュー（設計書どおり「読込後は必ず総譜」）。
     // 同じパートIDを持つ別作品へ切り替えたときにパート譜表示が引き継がれてしまう
@@ -2499,6 +2533,8 @@ export default function ScorePage() {
     setTitleFontWeight(normalizeTitleFontWeight(restored.titleFontWeight));
     setTimeSignatureStyle(normalizeTimeSignatureStyle(restored.timeSignatureStyle));
     setPageSize(normalizePageSizeId(restored.pageSize));
+    // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
+    applySavedLayoutAttributes(restored);
     setCustomSymbolDefs(restored.customSymbolDefs ?? []);
     if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
       setMeasuresPerSystem(restored.measuresPerSystem);
@@ -2598,7 +2634,7 @@ export default function ScorePage() {
       // （新規四重奏で名前だけ設定して閉じると失われるため。Codex round1 P1・#448）
       if (!options?.includeEmpty && isEmptyScoreData(parts)
         && !hasCustomInstrumentationLabels(instrumentation, scoreType)) return null;
-      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
+      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
     };
   });
 
@@ -2626,7 +2662,7 @@ export default function ScorePage() {
       // 保存先は「いま開いている作品」の自動保存スロット。まだ作品IDが無い
       // （＝一度も保存していない新規状態）ときは、この保存で新しい作品が作られる。
       const saved = saveCurrentWork(
-        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize)
+        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm })
       );
       if (saved) {
         lastAutosaveCompletedAtRef.current = Date.now();
@@ -2668,6 +2704,11 @@ export default function ScorePage() {
   // 大譜表の下段だけを編集して閉じると復元されなかった）。buildScoreData が読む
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
+  // 「音符の大きさ」「ページ余白」（作品の属性・Issue #477）はここに列挙できない:
+  // これらの state はファイル後方で宣言されており、依存配列はレンダー中に評価されるため
+  // TDZ エラーになる。これらだけを変えたときは自動保存が起動しないが、値は次の自動保存
+  // （譜面の編集・読込など、他の依存が動いたとき）でそのまま保存される。MusicXML 読込で
+  // 引き継いだ値は譜面本体（rightHandData 等）と同時に変わるため、必ず保存される。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
 
@@ -4607,7 +4648,7 @@ export default function ScorePage() {
       } else {
         xml = new TextDecoder('utf-8').decode(bytes);
       }
-      const loaded = parseMusicXml(xml);
+      const { score: loaded, defaults: importedDefaults } = parseMusicXmlWithDefaults(xml);
       // applyLoadedScoreData と同等のロジックで画面に反映する
       // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
       setPartExtractionId(null);
@@ -4659,6 +4700,61 @@ export default function ScorePage() {
         setEnsembleParts([]);
         setEnsembleSecondStaffParts([]);
       }
+      // --- ファイル指定のレイアウト（<defaults>）の引き継ぎ（Issue #477）---
+      // Finale などの書き出しは <defaults> に「その作品をどう組むか」（五線の大きさ・判型・余白）を
+      // 持っている。従来はこれを全部捨てて既定サイズで組んでいたため、実曲を持ち込むと
+      // 紙幅超過警告が出ていた。読めた項目だけを作品の属性として引き継ぐ。
+      const importNotices: string[] = [];
+      if (importedDefaults?.pageSizeRounded) {
+        importNotices.push(describeImportedPageSizeRounded(getPageSize(loaded.pageSize).label));
+      }
+      // 余白・判型はファイル指定があればそれを、無ければ現在の設定のまま使う
+      const importedMargins = loaded.pageMargins ?? {
+        sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm,
+      };
+      applySavedLayoutAttributes(loaded);
+
+      // ファイル指定（無ければ現在の設定）の縮尺で、1小節すら紙幅に入らない小節が無いか確かめる。
+      // ファイルの縮尺をそのまま使っても収まるとは限らない（音符の間隔の詰め方はアプリ独自の
+      // 浄書のため）。収まらないときだけ 5%刻みで下げ、下げたことを通知する（#318）。
+      const importedContentBudgetPx = worstCaseSystemContentBudget(
+        importedMargins.sideMm, instrumentLabelAreaWidth, pageWidthMm(loaded.pageSize),
+      );
+      const desiredMultiplier = loaded.notationSizeMultiplier ?? notationSizeMultiplier;
+      const importedPlan = planEffectiveMeasuresPerSystem(
+        loaded.parts.map((part) => ({
+          measures: part.measures,
+          // 調号変更の正本は先頭パート（layoutParts と同じ約束）
+          keySignatureMeasures: loaded.parts[0]?.measures,
+          clef: part.clef,
+        })),
+        normalizeTimeSignature(loaded.timeSignature),
+        normalizeKeySignature(loaded.keySignature),
+        loaded.measuresPerSystem ?? measuresPerSystem,
+        importedContentBudgetPx,
+        SCORE_LAYOUT_RENDER_SCALE,
+        { includeTranspositionAccidentalWorstCase: loadedType === 'ensemble' },
+      );
+      const fittedMultiplier = fitNotationSizeMultiplier(
+        importedPlan.minimumWidths, importedContentBudgetPx, desiredMultiplier,
+      );
+      // applySavedLayoutAttributes が入れた値（ファイル指定）を、収まる大きさで上書きする。
+      // notationSizeMultiplier（この時点では読込前の値）と比べるのではなく必ず設定する:
+      // ファイル指定を当てた直後の値は state にまだ反映されていない（同じレンダー内の
+      // 更新はまとめて適用される）ため、比較で分岐すると設定漏れになる。
+      setNotationSizeMultiplier(fittedMultiplier);
+      const fittedPercent = Math.round(fittedMultiplier * 100);
+      if (fittedMultiplier < desiredMultiplier) {
+        importNotices.push(describeImportedNotationSizeShrunk(fittedPercent));
+      } else if (loaded.notationSizeMultiplier !== undefined && fittedMultiplier !== notationSizeMultiplier) {
+        // ファイル指定をそのまま引き継ぎ、かつ読込前の表示から変わったときだけ知らせる
+        importNotices.push(describeImportedNotationSize(fittedPercent));
+      }
+      if (importNotices.length > 0) {
+        // 複数出るときは1本にまとめる（通知は後勝ちで上書きされるため）。読む時間も長めに取る
+        notifyScoreEdit(importNotices.join('／'), 8000);
+      }
+
       // MusicXML には段割り上書きの概念が無いため、前の譜面ぶんを引き継がずリセットする
       setSystemMeasureOverrides([]);
       // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
@@ -4670,7 +4766,8 @@ export default function ScorePage() {
       alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-  }, [setTimeSignature, measuresPerSystem]);
+  }, [setTimeSignature, measuresPerSystem, applySavedLayoutAttributes, instrumentLabelAreaWidth,
+    notationSizeMultiplier, pageMarginSideMm, pageMarginTopMm, pageMarginBottomMm]);
 
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

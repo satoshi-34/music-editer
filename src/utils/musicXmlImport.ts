@@ -10,6 +10,7 @@ import { isValidTimeSignature } from './timeSignatureUtils';
 import { ensureMeasuresPrimaryVoiceMaterialized, getEventDurationBeats } from './voiceMeasureUtils';
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { buildRestEventsForBeats } from './measureRestFillUtils';
+import { readMusicXmlDefaults, type MusicXmlDefaultsLayout } from './musicXmlDefaults';
 
 /**
  * MusicXML の <clef><sign>/<line> を ClefType に変換する。
@@ -805,13 +806,24 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
   });
 }
 
+/** MusicXML の解析結果。`<defaults>` から読めたレイアウト指定も併せて返す（Issue #477）。 */
+export interface MusicXmlImportResult {
+  /** 譜面データ（レイアウト指定は既に score 側へ反映済み） */
+  score: SavedScoreData;
+  /**
+   * ファイルの `<defaults>` から読み取れたレイアウト（無ければ undefined）。
+   * 「ファイル指定を引き継いだ」ことを画面側が通知する（#318）ために返す。
+   */
+  defaults?: MusicXmlDefaultsLayout;
+}
+
 /**
- * MusicXML 文字列を解析して SavedScoreData を返す。
+ * MusicXML 文字列を解析して、譜面データと `<defaults>` のレイアウト指定を返す。
  * @param xmlString MusicXML の文字列
  * @returns 解析結果
  * @throws パースに失敗した場合は Error をスロー
  */
-export function parseMusicXml(xmlString: string): SavedScoreData {
+export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResult {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlString, 'application/xml');
 
@@ -924,7 +936,11 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
   // score type は partの数で推定
   const scoreType = parts.length >= 4 ? 'ensemble' : parts.length === 2 ? 'piano' : 'single';
 
-  return {
+  // <defaults>（Finale などが書き出す「その作品のレイアウト」）を読む（Issue #477）。
+  // 読めた項目だけを作品の属性として引き継ぎ、読めなければ従来どおりアプリの既定値で組む。
+  const defaults = readMusicXmlDefaults(doc);
+
+  const score: SavedScoreData = {
     version: '1.0',
     timestamp: Date.now(),
     metadata: {
@@ -941,5 +957,19 @@ export function parseMusicXml(xmlString: string): SavedScoreData {
     parts,
     systems: 6,
     measuresPerSystem: 4,
+    // ファイル指定のレイアウト（読めた項目だけ）。用紙サイズは #495 の作品属性に載せる
+    pageSize: defaults?.pageSize,
+    notationSizeMultiplier: defaults?.notationSizeMultiplier,
+    pageMargins: defaults?.pageMargins,
   };
+
+  return { score, defaults };
+}
+
+/**
+ * MusicXML 文字列を解析して SavedScoreData を返す（従来からの入口）。
+ * レイアウト指定の通知が要らない呼び出し向けの薄いラッパー。
+ */
+export function parseMusicXml(xmlString: string): SavedScoreData {
+  return parseMusicXmlWithDefaults(xmlString).score;
 }

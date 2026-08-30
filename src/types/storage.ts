@@ -5,6 +5,7 @@ import type { KeySignature } from '../utils/noteKeyUtils';
 import type { InstrumentType } from '../audio/SoundSource';
 import type { ClefType } from '../components/clefUtils';
 import type { PageSizeId } from '../utils/pageSize';
+import type { SavedPageMargins } from '../utils/measureLayoutUtils';
 
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
 export type TimeSignature = [number, number];
@@ -486,6 +487,21 @@ export interface SavedScoreData {
    * 従来の保存データとの差分は増えない。
    */
   pageSize?: PageSizeId;
+  /**
+   * 「音符の大きさ」倍率（Issue #477）。0.8〜2.0。
+   * MusicXML の `<defaults><scaling>` から引き継いだ縮尺を、その作品の属性として保存する
+   * （#495 の用紙サイズと同じ原則で、別の環境で開き直しても同じ縮尺で開く）。
+   * 旧データ互換のため省略可で、省略時は従来どおり表示設定（localStorage の
+   * 「音符の大きさ」スライダー値）に従う。工場出荷既定値と同じときは項目自体を
+   * 書き出さないため、従来の保存データとの差分は増えない。
+   */
+  notationSizeMultiplier?: number;
+  /**
+   * ページ余白（mm、Issue #477）。左右・上・下。
+   * MusicXML の `<defaults><page-layout><page-margins>` から引き継いだ余白を作品の属性として
+   * 保存する。notationSizeMultiplier と同じく省略可で、省略時は表示設定に従う。
+   */
+  pageMargins?: SavedPageMargins;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;
