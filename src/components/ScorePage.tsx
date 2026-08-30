@@ -196,6 +196,7 @@ import {
   describeSliceMeasureOpUnavailable,
   describeSlicePasteUnavailable,
   notifyScoreEdit,
+  describePageSizeChanged,
   describeImportedClefNormalized,
   requestScoreSelectionClear,
   type ScoreActiveVoiceChangeDetail,
@@ -209,7 +210,18 @@ import {
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrintableMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, isPartExtractionEditable, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
-import { computeFitZoom, readPageAreaAvailableWidth, VIEW_ZOOM_MIN, VIEW_ZOOM_MAX } from '../utils/viewZoomUtils';
+import { computeFitZoom, pageWidthPxForSize, readPageAreaAvailableWidth, VIEW_ZOOM_MIN, VIEW_ZOOM_MAX } from '../utils/viewZoomUtils';
+// 用紙サイズ（A4/B4/A3・Issue #495）。寸法の正本は utils/pageSize.ts に集約してある。
+import {
+  cssPageSizeValue,
+  DEFAULT_PAGE_SIZE_ID,
+  getPageSize,
+  normalizePageSizeId,
+  PAGE_SIZES,
+  pageHeightMm,
+  pageWidthMm,
+  type PageSizeId,
+} from '../utils/pageSize';
 import {
   TOOLBAR_PLACEMENT_OPTIONS,
   clampDropdownMenuTop,
@@ -345,8 +357,13 @@ const SCORE_AREA_BUDGET_PX = 876;
 // タイトルページ基準でわざと厳しめに取った値だが、自動縮小の判定にそのまま使うと
 // 通常編成（classical-orchestra の12パート等）でも本文ページでは実際は収まるのに
 // 不必要に縮小してしまう。ここではタイトル欄の無い本文ページを想定した、より現実的な
-// 予算（A4高297mm ≒1123px − 既定の上下余白26mm分）を使う。
-const ENSEMBLE_AUTO_FIT_BUDGET_PX = 297 * (96 / 25.4) - (DEFAULT_PAGE_MARGIN_TOP_MM + DEFAULT_PAGE_MARGIN_BOTTOM_MM) * MM_TO_PX;
+// 予算（用紙高 − 既定の上下余白26mm分。A4なら297mm ≒1123px）を使う。
+// 用紙サイズ（Issue #495）を大きくすると1ページに入る高さも増えるので、
+// 予算も用紙の高さに追従させる（B4/A3 で不必要に自動縮小しないため）。
+// A4（297mm）を渡したときの値は従来の定数と完全に一致する。
+function ensembleAutoFitBudgetPx(pageHeightMmValue: number): number {
+  return pageHeightMmValue * (96 / 25.4) - (DEFAULT_PAGE_MARGIN_TOP_MM + DEFAULT_PAGE_MARGIN_BOTTOM_MM) * MM_TO_PX;
+}
 
 // 無音検知（issue #14）のタイミング設定。
 // 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
@@ -572,6 +589,37 @@ export default function ScorePage() {
   // 拍子データ（tempoSettings.timeSignature）とは別に「見た目だけ」を持つので、
   // 記号表示にしても再生の拍数や小節の入力上限は変わらない。
   const [timeSignatureStyle, setTimeSignatureStyle] = useState<TimeSignatureStyle>('numeric');
+  // 用紙サイズ（A4/B4/A3・Issue #495）。「表示設定」ではなく作品の属性なので、
+  // localStorage の表示設定ではなく保存データ（SavedScoreData.pageSize）へ載せる。
+  // 寸法の正本は utils/pageSize.ts。
+  const [pageSize, setPageSize] = useState<PageSizeId>(DEFAULT_PAGE_SIZE_ID);
+  // 用紙の実寸(mm)。CSS 変数（--paper-width / --paper-height）・段組み計画・自動縮尺の
+  // すべてがこの2値を見る（寸法の直書きを1箇所も残さないため。Issue #495 受入条件3）。
+  const paperWidthMm = pageWidthMm(pageSize);
+  const paperHeightMm = pageHeightMm(pageSize);
+  // 印刷（@page）の用紙サイズ。CSS の @page は var()（CSS カスタムプロパティ）を読めないため、
+  // 画面側のように変数1つを差し替えるやり方が使えない。そこで A4 以外を選んだときだけ、
+  // App.css の既定（`@page { size: A4; margin: 0; }`）を上書きする <style> を差し込む。
+  // A4 のときは何も差し込まない＝従来の印刷結果と完全に同じになる（Issue #495 受入条件5）。
+  useEffect(() => {
+    if (pageSize === DEFAULT_PAGE_SIZE_ID) return;
+    const style = document.createElement('style');
+    style.setAttribute('data-page-size', pageSize);
+    // margin: 0 は App.css と同じ理由（.print-page の padding を余白として使うため）。
+    // ここで省くと既定の @page margin が復活して紙面が左へずれる。
+    style.textContent = `@media print { @page { size: ${cssPageSizeValue(pageSize)}; margin: 0; } }`;
+    document.head.appendChild(style);
+    return () => { style.remove(); };
+  }, [pageSize]);
+
+  // 用紙サイズの切り替え。段割り・ページ数が組み直されることを必ず伝える（#318 の方針）。
+  // 通知は setState の updater の外で出す（updater 内だと StrictMode で二重に出るため）。
+  const handleChangePageSize = useCallback((next: PageSizeId) => {
+    const normalized = normalizePageSizeId(next);
+    if (normalized === pageSize) return;
+    setPageSize(normalized);
+    notifyScoreEdit(describePageSizeChanged(getPageSize(normalized).label));
+  }, [pageSize]);
   // タイトル・サブタイトル・作者欄のフォント（Issue #342）。id は utils/titleFontOptions.ts の一覧
   const [titleFontId, setTitleFontId] = useState<string>(DEFAULT_TITLE_FONT_ID);
   // タイトルブロックの文字サイズ倍率と太さ（Issue #420）。
@@ -2211,6 +2259,8 @@ export default function ScorePage() {
     setLastEditedMeasureIndex(null);
     // 前の譜面用の段の間隔手動上書きも引き継がない
     setSystemRowGapOverrides([]);
+    // 用紙サイズも作品の属性なので、新しい譜面では既定（A4）へ戻す（Issue #495）
+    setPageSize(DEFAULT_PAGE_SIZE_ID);
   // applySettingsProfileToState はレンダーごとに作り直される素の関数（安定な setter・
   // インポート済みの純関数だけを参照するため、依存に加えても再生成のたびに
   // resetScoreStateToEmpty 自体を再構築するだけで挙動は変わらない）。他の setter 群と同様、
@@ -2259,7 +2309,7 @@ export default function ScorePage() {
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const handleExportFile = async () => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
     const result = await exportScoreToFile(data, title, fileHandleRef.current);
     if (result.status === 'saved') {
@@ -2306,6 +2356,8 @@ export default function ScorePage() {
       setTitleFontSize(normalizeTitleFontSize(data.titleFontSize));
       setTitleFontWeight(normalizeTitleFontWeight(data.titleFontWeight));
     setTimeSignatureStyle(normalizeTimeSignatureStyle(data.timeSignatureStyle));
+    // 旧データは pageSize を持たないので、省略時は A4 として開く（normalizePageSizeId が担保）
+    setPageSize(normalizePageSizeId(data.pageSize));
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
       setCustomSymbolDefs(data.customSymbolDefs ?? []);
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
@@ -2362,7 +2414,7 @@ export default function ScorePage() {
   // （handleExportFile と同じ理由で通常関数として定義。TDZ 回避）。
   const handleFeedback = async () => {
     const { metadata, parts } = buildScoreData();
-    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle);
+    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
     const feedbackState = {
       ...scoreData,
       // フィードバック JSON は「開く」の「ファイル」ボタンで読み込める楽譜 JSON なので、
@@ -2446,6 +2498,7 @@ export default function ScorePage() {
     setTitleFontSize(normalizeTitleFontSize(restored.titleFontSize));
     setTitleFontWeight(normalizeTitleFontWeight(restored.titleFontWeight));
     setTimeSignatureStyle(normalizeTimeSignatureStyle(restored.timeSignatureStyle));
+    setPageSize(normalizePageSizeId(restored.pageSize));
     setCustomSymbolDefs(restored.customSymbolDefs ?? []);
     if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
       setMeasuresPerSystem(restored.measuresPerSystem);
@@ -2545,7 +2598,7 @@ export default function ScorePage() {
       // （新規四重奏で名前だけ設定して閉じると失われるため。Codex round1 P1・#448）
       if (!options?.includeEmpty && isEmptyScoreData(parts)
         && !hasCustomInstrumentationLabels(instrumentation, scoreType)) return null;
-      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle);
+      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
     };
   });
 
@@ -2573,7 +2626,7 @@ export default function ScorePage() {
       // 保存先は「いま開いている作品」の自動保存スロット。まだ作品IDが無い
       // （＝一度も保存していない新規状態）ときは、この保存で新しい作品が作られる。
       const saved = saveCurrentWork(
-        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle)
+        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize)
       );
       if (saved) {
         lastAutosaveCompletedAtRef.current = Date.now();
@@ -2616,7 +2669,7 @@ export default function ScorePage() {
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -2798,6 +2851,8 @@ export default function ScorePage() {
     setLastEditedMeasureIndex(null);
     // 前の譜面用の段の間隔手動上書きも引き継がない
     setSystemRowGapOverrides([]);
+    // 用紙サイズも作品の属性なので、新しい譜面では既定（A4）へ戻す（Issue #495）
+    setPageSize(DEFAULT_PAGE_SIZE_ID);
   }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock, setTimeSignature]);
 
   const handleSaveCurrentAsSample = useCallback(() => {
@@ -3487,7 +3542,7 @@ export default function ScorePage() {
 
   // 自動縮尺にも占有幅を渡す（#483 round3。列数と同じ実効幅で計算しないと
   // 「2列のまま縮まず、はみ出す」「1列なのに小さすぎる」のズレが出る）
-  const { spreadRef, scale } = useAutoPageScale(columns, 20, toolbarOccupiedWidth);
+  const { spreadRef, scale } = useAutoPageScale(columns, 20, toolbarOccupiedWidth, paperWidthMm);
   // ユーザー設定（常設エリアの「画面表示のズーム」スライダー、0.5〜3.0）。
   // 自動縮尺（useAutoPageScale の scale）に掛け合わせて画面上の表示サイズだけを変える。
   // 印刷は @media print で transform: none !important により解除されるため影響しない。
@@ -3511,12 +3566,12 @@ export default function ScorePage() {
     const rail = spreadRef.current?.parentElement;
     if (!rail) return;
     const occupiedWidth = isToolbarLeft ? toolbarWidth : 0;
-    setViewZoom(computeFitZoom(Math.max(0, readPageAreaAvailableWidth(rail) - occupiedWidth)));
+    setViewZoom(computeFitZoom(Math.max(0, readPageAreaAvailableWidth(rail) - occupiedWidth), pageWidthPxForSize(pageSize)));
     // 初回マウントに加え、配置を切り替えたとき・ツールバー幅の実測が入ったときも計算し直す。
     // ズーム保存済み（＝ユーザーが自分で決めた倍率）のときは冒頭で return するので、
     // 配置を変えてもユーザーの設定を勝手に書き換えることはない。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isToolbarLeft, toolbarWidth]);
+  }, [isToolbarLeft, toolbarWidth, pageSize]);
   // 自動縮尺にユーザーのズーム倍率を掛けた、実際に画面へ適用する縮尺。
   // クリック等の座標系は --scale から読むため、ここで一本化しておけば
   // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
@@ -3580,10 +3635,10 @@ export default function ScorePage() {
   const ensembleAutoFitMultiplier = useMemo(() => (
     computeEnsembleAutoFitMultiplier(
       partCountForSystemLayout,
-      ENSEMBLE_AUTO_FIT_BUDGET_PX,
+      ensembleAutoFitBudgetPx(paperHeightMm),
       notationSizeMultiplier * partSpacingHeightRatio
     )
-  ), [partCountForSystemLayout, notationSizeMultiplier, partSpacingHeightRatio]);
+  ), [partCountForSystemLayout, notationSizeMultiplier, partSpacingHeightRatio, paperHeightMm]);
   // 「音符の大きさ」希望倍率と自動縮小倍率を合成した、実際に描画へ使う実効倍率。
   // 記号が判読できないほど小さくなる編成では下限（MIN_EFFECTIVE_NOTATION_SIZE_MULTIPLIER）
   // でクランプし、それでも収まらない場合は isNotationSizeOverflowingPageBudget で
@@ -3595,9 +3650,9 @@ export default function ScorePage() {
     isNotationSizeStillOverflowing(
       estimateEnsembleSystemHeightPx(partCountForSystemLayout) * partSpacingHeightRatio,
       effectiveNotationSizeMultiplier,
-      ENSEMBLE_AUTO_FIT_BUDGET_PX
+      ensembleAutoFitBudgetPx(paperHeightMm)
     )
-  ), [partCountForSystemLayout, effectiveNotationSizeMultiplier, partSpacingHeightRatio]);
+  ), [partCountForSystemLayout, effectiveNotationSizeMultiplier, partSpacingHeightRatio, paperHeightMm]);
   // SCORE_LAYOUT_RENDER_SCALE（既定0.44）に音符の大きさ実効倍率を掛けた、実際の
   // レイアウト計算・描画に使う実効スケール。段組み計画（planEffectiveMeasuresPerSystem /
   // planSystemMeasureRanges）と各 Canvas への scale prop の両方に必ずこの値を使い、
@@ -4085,13 +4140,13 @@ export default function ScorePage() {
     scoreTimeSignature,
     normalizeKeySignature(keySignature),
     measuresPerSystem,
-    worstCaseSystemContentBudget(pageMarginSideMm, instrumentLabelAreaWidth),
+    worstCaseSystemContentBudget(pageMarginSideMm, instrumentLabelAreaWidth, paperWidthMm),
     effectiveRenderScale,
     // Ensemble の記譜音表示だけ、移調後に臨時記号が増える最悪ケースの安全マージンを見込む。
     // ピアノ・四重奏はここで盛ると実際に表示されない臨時記号ぶんまで幅を確保してしまい、
     // 1段に入る小節数が不当に減る（読込直後にほぼ全小節が1小節/段へ膨張する不具合の一因）。
     { includeTranspositionAccidentalWorstCase: scoreType === 'ensemble' },
-  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType, effectiveRenderScale, pageMarginSideMm, instrumentLabelAreaWidth]);
+  ), [layoutParts, scoreTimeSignature, keySignature, measuresPerSystem, scoreType, effectiveRenderScale, pageMarginSideMm, instrumentLabelAreaWidth, paperWidthMm]);
   const plannerMinimumWidths = useMemo(() => {
     // 末尾の空小節は「入力を続けられるように」数小節ぶんの余白段だけ残す。
     // 以前は totalSystems(12) × measuresPerSystem を固定の編集枠としていたが、
@@ -4123,7 +4178,7 @@ export default function ScorePage() {
     // 逆変換して揃える。
     plannerMinimumWidths,
     measuresPerSystem,
-    worstCaseSystemContentBudget(pageMarginSideMm, instrumentLabelAreaWidth) / effectiveRenderScale,
+    worstCaseSystemContentBudget(pageMarginSideMm, instrumentLabelAreaWidth, paperWidthMm) / effectiveRenderScale,
     // 内容小節（終止線が付く最後の小節を含む段）と、それ以降の編集用の空きバッファ小節を
     // 同じ段に混ぜない。こうしないと最終小節の終止線が段の右端まで届かず余白が残ってしまう
     // （空の楽譜 contentMeasureCount===0 のときは強制しない＝undefined で従来どおり）。
@@ -4138,7 +4193,7 @@ export default function ScorePage() {
     // 再計画する（Issue #67。詳細は planSystemMeasureRanges 側のコメント参照）。
     previousSystemRangesRef.current,
     lastEditedMeasureIndex ?? undefined,
-  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm, lastEditedMeasureIndex, instrumentLabelAreaWidth, isPartExtractionActive]);
+  ), [plannerMinimumWidths, measuresPerSystem, contentMeasureCount, effectiveRenderScale, systemMeasureOverrides, pageMarginSideMm, lastEditedMeasureIndex, instrumentLabelAreaWidth, isPartExtractionActive, paperWidthMm]);
   const effectiveMeasuresPerSystem = effectiveMeasurePlan.effectiveMeasuresPerSystem;
 
   // plannedRanges を計算し終えたレンダーの直後に、次回の安定化ヒントとして保持する。
@@ -4566,6 +4621,7 @@ export default function ScorePage() {
       await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
       // MusicXML の <time symbol="common"/"cut"> を読み込んだ場合はここで表示スタイルへ戻す
       setTimeSignatureStyle(normalizeTimeSignatureStyle(loaded.timeSignatureStyle));
+      setPageSize(normalizePageSizeId(loaded.pageSize));
       setScoreType(loadedType);
       if (loadedType === 'quartet') {
         const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
@@ -5554,6 +5610,24 @@ export default function ScorePage() {
               </div>
               <div className="toolbar-layout-group" role="group" aria-label="用紙と余白">
                 <span className="toolbar-group-label">用紙と余白</span>
+                {/* 用紙サイズ（Issue #495）。ツールバーの位置（#483）と同じチップ型の並びにそろえる。
+                    「表示設定」ではなく作品の属性なので、保存すると判型ごと保存され、
+                    開き直しても同じ用紙で開く。既定は A4 で、選ばない限り見た目は変わらない。 */}
+                <div className="toolbar-chip-group page-size-chips" role="group" aria-label="用紙サイズ">
+                  <span className="toolbar-group-label">用紙サイズ</span>
+                  {PAGE_SIZES.map(({ id, label, description }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`ghost toolbar-chip-button${pageSize === id ? ' active' : ''}`}
+                      onClick={() => handleChangePageSize(id)}
+                      aria-pressed={pageSize === id}
+                      title={description}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
                 <label
                   style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}
                   title={`ページの左右余白です。本文幅（小節を並べる幅）もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
@@ -6446,7 +6520,17 @@ export default function ScorePage() {
         <div
           className="spread"
           ref={spreadRef}
-          style={{ '--scale': String(effectiveScale), '--columns': String(columns) } as React.CSSProperties}
+          style={{
+            '--scale': String(effectiveScale),
+            '--columns': String(columns),
+            // 用紙サイズ（Issue #495）。App.css の .page-wrapper（縮小後の占有サイズ）と
+            // .print-page（紙面の実寸）の両方がこの2変数を読むため、共通の親である
+            // .spread へ注入して両方へ継承させる。寸法の直書きは CSS 側に残さない。
+            // 名前が --page-* ではなく --paper-* なのは、ScaledPageWrapper が既に
+            // 「実測したページ高さ(px)」を --page-height として使っているため（衝突回避）。
+            '--paper-width': `${paperWidthMm}mm`,
+            '--paper-height': `${paperHeightMm}mm`,
+          } as React.CSSProperties}
         >
           {visiblePages.map((p, i) => (
             <ScaledPageWrapper key={i} scale={effectiveScale} pageHeight={sharedPageHeight}>

@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { readPageAreaAvailableWidth } from '../utils/viewZoomUtils';
+import { DEFAULT_PAGE_WIDTH_MM } from '../utils/pageSize';
 
 export function useAutoPageScale(
   columns: number,
@@ -16,6 +17,9 @@ export function useAutoPageScale(
   // ページを並べられない幅(px)。#483 round3: 幅の測り先（body）は fixed の
   // ツールバーぶんまでは縮まないため、ここで引かないと2列表示が右へはみ出す
   occupiedWidthPx: number = 0,
+  // 用紙の幅(mm)。用紙サイズ（A4/B4/A3・Issue #495）を変えると1ページの幅が変わるため、
+  // 自動縮尺もその幅に追従させる必要がある。省略時は従来どおり A4（210mm）。
+  pageWidthMmValue: number = DEFAULT_PAGE_WIDTH_MM,
 ) {
   const spreadRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
@@ -30,7 +34,9 @@ export function useAutoPageScale(
     const rail = spread.parentElement;
     if (!rail) return;
 
-    const pageWidthPx = 210 * 3.78; // A4 210mm ≒ 3.78px/mm
+    // mm→px は 3.78px/mm（viewZoomUtils.ts の初期ズーム見積もりと同じ係数を使う）。
+    // 用紙の幅は pageSize.ts が正本で、ここでは引数で受け取った mm を px へ直すだけ。
+    const pageWidthPx = pageWidthMmValue * 3.78;
     const cols = Math.max(1, columns);
     const totalGap = (cols - 1) * gapPx;
 
@@ -48,7 +54,7 @@ export function useAutoPageScale(
 
     lastScaleRef.current = next;
     setScale(next);
-  }, [columns, gapPx, occupiedWidthPx]);
+  }, [columns, gapPx, occupiedWidthPx, pageWidthMmValue]);
 
   useEffect(() => {
     const schedule = () => {
