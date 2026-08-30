@@ -95,4 +95,24 @@ describe('buildExportFileName', () => {
   it('先頭のドットは落とす（隠しファイルにしない）', () => {
     expect(buildExportFileName('.musicxml', 'musicxml')).toBe('musicxml.musicxml');
   });
+
+  it('Windows の予約デバイス名は接頭辞で回避する（round1 P2）', () => {
+    expect(sanitizeFileNameBase('CON')).toBe('_CON');
+    expect(sanitizeFileNameBase('con')).toBe('_con');
+    expect(sanitizeFileNameBase('Com1')).toBe('_Com1');
+    expect(sanitizeFileNameBase('LPT9')).toBe('_LPT9');
+    // 「CON.json」のようにドット以降が続く形も予約扱い
+    expect(sanitizeFileNameBase('CON.backup')).toBe('_CON.backup');
+    // 予約名を含むだけ（CONcerto 等）は通常どおり
+    expect(sanitizeFileNameBase('CONcerto')).toBe('CONcerto');
+  });
+
+  it('長さ切りはコードポイント単位で、絵文字のサロゲートペアを分断しない（round1 P3）', () => {
+    const base = 'a'.repeat(79) + '😀😀';
+    const result = sanitizeFileNameBase(base);
+    // 80コードポイント = 'a'×79 + 😀 1つ。分断された不正なサロゲート片が残らない
+    expect([...result].length).toBe(80);
+    expect(result.endsWith('😀')).toBe(true);
+    expect(result).not.toMatch(/[\uD800-\uDBFF]$/);
+  });
 });

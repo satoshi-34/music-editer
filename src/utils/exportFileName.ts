@@ -49,10 +49,20 @@ export function sanitizeFileNameBase(
     // 先頭のドットは macOS / Linux で隠しファイル扱いになり、
     // 保存したのに見つけられなくなるので落とす
     .replace(/^\.+/, '')
-    .trim()
-    .slice(0, MAX_FILE_NAME_BASE_LENGTH)
     .trim();
-  return cleaned || fallback;
+  // 長さはコードポイント単位で切る（round1 P3: String.slice は UTF-16 単位のため、
+  // 80文字目が絵文字だとサロゲートペアを分断して壊れた文字が残る）
+  const truncated = [...cleaned].slice(0, MAX_FILE_NAME_BASE_LENGTH).join('').trim();
+  if (!truncated) return fallback;
+  // Windows の予約デバイス名（CON / PRN / AUX / NUL / COM1〜9 / LPT1〜9）は
+  // 拡張子を付けても無効でファイルを作れない（round1 P2）。大文字小文字を問わず、
+  // 「CON.json」のようにドット以降が続く形も予約扱いになるため、先頭部で判定して
+  // 無害な接頭辞を足す（入力の面影を残すため置換ではなく前置にする）
+  const stem = truncated.split('.')[0];
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem)) {
+    return `_${truncated}`;
+  }
+  return truncated;
 }
 
 /**

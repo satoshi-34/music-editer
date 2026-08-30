@@ -86,6 +86,10 @@ export default function ConfirmDialog({
       return;
     }
     if (e.key === 'Enter') {
+      // IME 変換中の Enter は「変換の確定」であって「ダイアログの決定」ではない（#507 round1 P2）。
+      // ここで確定してしまうと、日本語のファイル名を変換した瞬間に未確定の値で
+      // 書き出しが走る。isComposing（古い環境向けに keyCode 229 も）で見送る
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       // 「フォーカス中のボタンを Enter で押す」というブラウザ標準の挙動に頼らず、
       // ここで明示的に決定する。埋め込みブラウザ（この Issue の発端になった環境）では
       // 標準の押下が起きないことがあるため。preventDefault で標準の押下を止め、

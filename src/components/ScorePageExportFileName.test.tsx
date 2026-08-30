@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import ScorePage from './ScorePage';
+import { createSavedScoreData, createWork, saveWorkAutosaveData, setLastOpenedWorkId } from '../utils/storage';
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -153,5 +154,45 @@ describe('書き出しファイル名の編集（Issue #507）', () => {
     fireEvent.change(fileNameInput(), { target: { value: '別名' } });
     fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
     await waitFor(() => expect(picker).toHaveBeenCalledTimes(2));
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('保存作品を復元した後は、その作品のタイトルが既定値に入る（round1 P3: 初期値の固定文字列では検出できない）', async () => {
+    const data = createSavedScoreData(
+      { title: '固有の曲名<>テスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '1', isRest: false, keys: ['c/5'] }] }] }],
+      1, 1, 'single'
+    );
+    const created = createWork('固有の曲名');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('.score-title')?.textContent).toContain('固有の曲名');
+    }, { timeout: MOUNT_HEAVY_TIMEOUT_MS });
+
+    chooseExport('musicxml');
+    // サニタイズ済み（<> が落ちる）のタイトルが既定値に入る
+    expect(fileNameInput().value).toBe('固有の曲名テスト');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('IME 変換中の Enter では書き出さず、確定後の Enter で書き出す（round1 P2）', async () => {
+    render(<ScorePage />);
+    chooseExport('musicxml');
+    const input = fileNameInput();
+
+    // 変換中の Enter（isComposing）はダイアログを閉じない・書き出さない
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(screen.queryByTestId('confirm-dialog')).not.toBeNull();
+    expect(downloadNames.length).toBe(0);
+    // 古い環境の変換中 Enter（keyCode 229）も同様
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    expect(screen.queryByTestId('confirm-dialog')).not.toBeNull();
+    expect(downloadNames.length).toBe(0);
+
+    // 変換確定後の通常の Enter で書き出される
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => { expect(downloadNames.length).toBe(1); });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
