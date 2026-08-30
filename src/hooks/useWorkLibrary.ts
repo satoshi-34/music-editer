@@ -165,22 +165,28 @@ export function useWorkLibrary(): UseWorkLibraryReturn {
       return { status: 'sameWork' };
     }
 
-    // 切り替える前に、いま画面にある内容を必ず保存する（切替でデータを失わないため）
-    if (currentData) {
-      saveCurrentWork(currentData);
+    // 切り替える前に、いま画面にある内容を必ず保存する（切替でデータを失わないため）。
+    // 保存に失敗したまま切替先を開くと、その編集だけが静かに失われる（round2 P1）。
+    // ここで中断すれば画面の内容が残り、ユーザーは書き出し等で退避できる
+    if (currentData && !saveCurrentWork(currentData)) {
+      const message = 'いまの作品を保存できなかったため、切り替えを中止しました';
+      setWorkError(message);
+      return { status: 'error', message };
     }
 
     const result = loadWorkAutosaveData(workId);
-    setCurrentWorkId(workId);
-    setLastOpenedWorkId(workId);
-    setWorks(listWorks());
-
     if (!result.success) {
+      // 読込の成否を確かめる前に currentWorkId を切替先へ動かすと、画面は元の作品の
+      // ままなのに保存先だけが切替先になり、次の自動保存が別作品を上書きする
+      // （round2 P1）。失敗時は ID を一切動かさない（再試行も sameWork にならない）
       const message = result.error?.message ?? '作品の読み込みに失敗しました';
       setWorkError(message);
       return { status: 'error', message };
     }
 
+    setCurrentWorkId(workId);
+    setLastOpenedWorkId(workId);
+    setWorks(listWorks());
     setWorkError(null);
     return result.data ? { status: 'loaded', data: result.data } : { status: 'empty' };
   }, [saveCurrentWork, setCurrentWorkId]);

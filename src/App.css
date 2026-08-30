@@ -2648,6 +2648,17 @@ svg { animation: none; transition: none; }
 .home-primary-button:hover { background: #17663d; }
 .home-primary-button-label { font-size: 16px; font-weight: 700; }
 .home-primary-button-sub { font-size: 12px; opacity: 0.92; }
+.home-error {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid #fca5a5;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .home-note {
   margin: 0;
   font-size: 12px;

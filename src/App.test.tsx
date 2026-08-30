@@ -8,6 +8,7 @@ import App from './App';
 import {
   createSavedScoreData,
   createWork,
+  saveAutosaveData,
   saveWorkAutosaveData,
   setLastOpenedWorkId,
 } from './utils/storage';
@@ -238,8 +239,11 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     try {
       const single = await screen.findByTestId('home-new-single');
       fireEvent.click(single);
-      // ホームに留まる（閉じてしまうと通知も文脈も失う）
-      await waitFor(() => { expect(screen.getByTestId('home-screen')).toBeTruthy(); });
+      // ホームに留まり、理由がホーム側に表示される（round2 P2: 譜面側の通知は
+      // inert なホームの下で見えない）
+      const error = await screen.findByTestId('home-error');
+      expect(error.textContent).toContain('新規作成を中止しました');
+      expect(screen.queryByTestId('home-screen')).not.toBeNull();
       // 少し待っても閉じないこと（非同期で閉じる退行の検出）
       await new Promise(resolve => setTimeout(resolve, 300));
       expect(screen.queryByTestId('home-screen')).not.toBeNull();
@@ -274,16 +278,41 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     }
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('起動時の移行・復元が済んだら、ホームの一覧が読み直される（round1 P2）', async () => {
-    // App の初期スナップショットは ScorePage の移行より前に読まれる。
-    // ここでは「初期は空 → onLibraryReady 相当のタイミングで作品が現れる」ことを、
-    // 遅延して現れる作品（復元通知の後の refresh）で近似的に固定するのは難しいため、
-    // 移行フックの配線そのもの（復元完了後に resume が空でないこと）を検証する
-    seedWork();
+  it('単一作品時代の旧データが、起動時の移行後にホームへ現れる（round1/round2 P2）', async () => {
+    // 作品カタログを作らず、旧・自動保存スロットにだけデータを置く（単一作品時代の形）。
+    // App の初期スナップショット（listWorks）はこの時点で空なので、
+    // onLibraryReady での読み直しが無いと「前回の続き」は空表示のままになる
+    const legacy = createSavedScoreData(
+      { title: '移行前の作品', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '1', isRest: false, keys: ['c/5'] }] }] }],
+      1, 1, 'single'
+    );
+    const saved = saveAutosaveData(legacy);
+    expect(saved.success).toBe(true);
+
     render(<App />);
+    // 初期表示は空でもよいが、移行完了後に旧作品が「前回の続き」として現れること
     await waitFor(() => {
       expect(screen.queryByTestId('home-resume-empty')).toBeNull();
-      expect(screen.getByTestId('home-resume')).toBeTruthy();
+      expect(screen.getByTestId('home-resume').textContent).toContain('移行前の作品');
     });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('ホームへ戻った直後（描画前）のキー入力も譜面へ届かない（round2 P3）', async () => {
+    seedWork();
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('home-resume'));
+    await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
+
+    const eighthButton = screen.getByRole('button', { name: '音符 8分' });
+    const isEighthActive = () => (eighthButton.style.border ?? '').includes('2px');
+    expect(isEighthActive()).toBe(false);
+
+    // 🏠 クリックと同じ同期処理内でキーを送る（effect の同期を待たない）。
+    // goHome が同期的に共有フラグを立てていないと、この一打が譜面へ届く
+    const homeButton = [...document.querySelectorAll('button')].find(b => (b.textContent || '').includes('ホーム'));
+    fireEvent.click(homeButton!);
+    fireEvent.keyDown(window, { key: '4' });
+    expect(isEighthActive()).toBe(false);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

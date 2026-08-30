@@ -460,19 +460,26 @@ function describeExportError(error: unknown): string {
  * 既存の処理はすべてこの口を通して譜面画面側のものをそのまま呼ぶ
  * （同じ機能を2か所に書くと、片方だけ直したときに食い違うため）。
  */
+/**
+ * ホームからの操作の結果（#500 round1/round2）。失敗時の message はホーム側に
+ * 表示する（通知系はホームの下の inert な譜面画面にしか出せず、視覚・支援技術の
+ * 双方で届かないため。round2 P2）
+ */
+export type HomeActionResult = { ok: true } | { ok: false; message: string };
+
 export interface ScorePageHomeActions {
   /** ファイルを開く導線を起動する。ブラウザのファイル選択ダイアログが開く */
-  openFilePicker: (kind: 'file' | 'musicxml' | 'pdf' | 'legacy') => boolean;
+  openFilePicker: (kind: 'file' | 'musicxml' | 'pdf' | 'legacy') => HomeActionResult;
   /**
    * 譜種を選んで新規作成する（いまの作品は保存されて作品一覧に残る）。
-   * false = いまの内容の保存や新作品の発行に失敗（元の譜面は変更されない。
-   * ホームは閉じずに理由を見せる側で扱う。#500 round1 P1）
+   * ok: false = いまの内容の保存や新作品の発行に失敗（元の譜面は変更されない。
+   * ホームは閉じずに message を見せる。#500 round1 P1）
    */
-  createNewScore: (scoreType: ScoreType) => Promise<boolean>;
-  /** 保存済みの作品を開く。false = 読み込み失敗（画面はリセットしない） */
-  openWork: (workId: string) => Promise<boolean>;
+  createNewScore: (scoreType: ScoreType) => Promise<HomeActionResult>;
+  /** 保存済みの作品を開く。ok: false = 読み込み失敗（画面はリセットしない） */
+  openWork: (workId: string) => Promise<HomeActionResult>;
   /** 設定にあたるツールバーのタブを開く */
-  openSettingsTab: (tab: ToolbarTab) => boolean;
+  openSettingsTab: (tab: ToolbarTab) => HomeActionResult;
 }
 
 export interface ScorePageProps {
@@ -2763,21 +2770,22 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady }: 
   }, [showWorkList, updateWorkListPosition]);
 
   /** 作品一覧から別の作品を選んだとき。切替前に現在の内容を保存する */
-  const handleSelectWork = useCallback(async (workId: string): Promise<boolean> => {
+  const handleSelectWork = useCallback(async (workId: string): Promise<HomeActionResult> => {
     cancelPendingAutosave();
     const result = switchWork(workId, buildCurrentWorkDataRef.current());
     if (result.status === 'sameWork') {
       // いま開いている作品を選び直しただけ。リセットすると表示中の譜面が消えて
       // 次の自動保存で保存内容まで上書きしてしまう（#500 round1 P1）。何もせず閉じる
       setShowWorkList(false);
-      return true;
+      return { ok: true };
     }
     if (result.status === 'error') {
-      // 読み込みに失敗したときもリセットしない（画面に残っている内容が最後の砦）。
-      // 行き止まりは喋る（#318）
-      notifyScoreEdit(`${result.message}（画面の内容は変更していません）`);
+      // 切替前の保存失敗・読み込み失敗のどちらもリセットしない
+      // （画面に残っている内容が最後の砦。round2 P1）。行き止まりは喋る（#318）
+      const message = `${result.message}（画面の内容は変更していません）`;
+      notifyScoreEdit(message);
       setShowWorkList(false);
-      return false;
+      return { ok: false, message };
     }
     if (result.status === 'loaded') {
       await applyLoadedScoreData(result.data);
@@ -2786,7 +2794,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady }: 
       await resetScoreStateToEmpty();
     }
     setShowWorkList(false);
-    return true;
+    return { ok: true };
   }, [applyLoadedScoreData, cancelPendingAutosave, resetScoreStateToEmpty, switchWork]);
 
   // ───────── ホーム画面（Issue #500）との連携 ─────────
@@ -2809,7 +2817,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady }: 
         else if (kind === 'musicxml') musicXmlInputRef.current?.click();
         else if (kind === 'pdf') pdfInputRef.current?.click();
         else void handleImportLegacyManualSave();
-        return true;
+        return { ok: true };
       },
       createNewScore: async (nextScoreType) => {
         // 新規作成の本体（いまの作品を保存 → 新しい作品IDを発行 → 画面を空に戻す）は
@@ -2818,17 +2826,16 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady }: 
         const ok = await performNewScore();
         if (!ok) {
           // 保存できないまま譜種を適用すると、元の作品の譜種・編成まで
-          // 書き換えてしまう（#500 round1 P1）。ここで止めて理由を喋る
-          notifyScoreEdit(describeHomeActionBlocked('create'));
-          return false;
+          // 書き換えてしまう（#500 round1 P1）。message はホーム側が表示する（round2 P2）
+          return { ok: false, message: describeHomeActionBlocked('create') };
         }
         // 空に戻す処理は初期値プリセットの譜種を適用するので、選ばれた譜種は
         // そのあとに適用する（順序が逆だと選択が上書きされる）。
         scoreTypeChangeRef.current(nextScoreType);
-        return true;
+        return { ok: true };
       },
       openWork: (workId) => handleSelectWork(workId),
-      openSettingsTab: (tab) => { handleToolbarTabChange(tab); return true; },
+      openSettingsTab: (tab) => { handleToolbarTabChange(tab); return { ok: true }; },
     };
   });
 

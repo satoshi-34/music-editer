@@ -68,6 +68,11 @@ export interface HomeScreenProps {
   availableOpenKinds: readonly HomeOpenKind[];
   /** 設定の入口（譜面画面の該当タブを開く） */
   onOpenSettings: (tab: ToolbarTab) => void;
+  /**
+   * 直前のホーム操作が失敗した理由（無ければ null）。譜面画面の通知はホームの下
+   * （inert）に出て見えないため、失敗の説明はホーム自身が表示する（round2 P2）
+   */
+  errorMessage?: string | null;
 }
 
 export default function HomeScreen({
@@ -80,6 +85,7 @@ export default function HomeScreen({
   onOpen,
   availableOpenKinds,
   onOpenSettings,
+  errorMessage = null,
 }: HomeScreenProps) {
   const openButtons = OPEN_BUTTONS.filter(button => availableOpenKinds.includes(button.kind));
 
@@ -93,6 +99,13 @@ export default function HomeScreen({
               場所だけ確保しておくことで、後から足しても並びが崩れない。 */}
           <div className="home-header-slot" aria-hidden="true" />
         </header>
+
+        {/* 直前の操作が失敗した理由（round2 P2）。role=alert で支援技術にも即時に届く */}
+        {errorMessage && (
+          <p className="home-error" role="alert" data-testid="home-error">
+            {errorMessage}
+          </p>
+        )}
 
         {/* 1. 前回の続き。起動直後に最短で編集へ戻れるよう最上段へ置く */}
         <section className="home-section home-resume-section" aria-labelledby="home-resume-heading">

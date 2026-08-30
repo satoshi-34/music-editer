@@ -195,6 +195,62 @@ describe('useWorkLibrary（作品カタログの操作・Issue #181）', () => {
       expect(opened).toEqual({ status: 'sameWork' });
     });
 
+    it('切替前の保存に失敗したら切り替えず error を返す（round2 P1: 未保存の編集を失わない）', () => {
+      const { result } = renderHook(() => useWorkLibrary());
+      act(() => { result.current.initializeWorks(); });
+      act(() => { result.current.saveCurrentWork(makeScore('作品A')); });
+      const workA = result.current.currentWorkId as string;
+      act(() => { result.current.startNewWork(null); });
+      act(() => { result.current.saveCurrentWork(makeScore('作品B')); });
+      const workB = result.current.currentWorkId as string;
+
+      // 以後の「作品データの保存」だけを容量不足で失敗させる。
+      // 全キーで throw すると isStorageAvailable の探針まで落ち、読込側も別経路で
+      // error になって「保存失敗ガードの有無」を区別できなくなる（検出力ゼロの罠）
+      const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
+      (window.localStorage as unknown as { setItem: unknown }).setItem = (key: string, value: string) => {
+        if (key.includes('-autosave')) {
+          throw new DOMException('quota', 'QuotaExceededError');
+        }
+        originalSetItem(key, value);
+      };
+      try {
+        let outcome: ReturnType<typeof result.current.switchWork> | null = null;
+        act(() => { outcome = result.current.switchWork(workA, makeScore('B（未保存の編集）')); });
+        expect(outcome).toMatchObject({ status: 'error' });
+        // 切替は成立していない（保存先が B のまま。A へ動いていると次の自動保存が A を上書きする）
+        expect(result.current.currentWorkId).toBe(workB);
+      } finally {
+        (window.localStorage as unknown as { setItem: unknown }).setItem = originalSetItem;
+      }
+    });
+
+    it('切替先の読込に失敗したら currentWorkId を動かさない（round2 P1: 再試行が sameWork にならない）', () => {
+      const { result } = renderHook(() => useWorkLibrary());
+      act(() => { result.current.initializeWorks(); });
+      act(() => { result.current.saveCurrentWork(makeScore('作品A')); });
+      const workA = result.current.currentWorkId as string;
+      act(() => { result.current.startNewWork(null); });
+      act(() => { result.current.saveCurrentWork(makeScore('作品B')); });
+
+      // 作品Aの保存データを壊す（チェックサム不一致で読込失敗になる）
+      const keysA = getWorkStorageKeys(workA);
+      window.localStorage.setItem(keysA.primary, '{"broken":');
+      window.localStorage.removeItem(keysA.backup);
+
+      let outcome: ReturnType<typeof result.current.switchWork> | null = null;
+      act(() => { outcome = result.current.switchWork(workA, null); });
+      expect(outcome).toMatchObject({ status: 'error' });
+      // ID は元のまま（B）。ここが A へ動くと、画面は B のまま保存先だけ A になり
+      // 次の自動保存が A を上書きする
+      expect(result.current.currentWorkId).not.toBe(workA);
+
+      // 再試行しても sameWork 扱いにならず、あらためて error が返る
+      let retry: ReturnType<typeof result.current.switchWork> | null = null;
+      act(() => { retry = result.current.switchWork(workA, null); });
+      expect(retry).toMatchObject({ status: 'error' });
+    });
+
     it('新規作成では、それまでの内容を保存してから新しい作品IDへ移る', () => {
       const { result } = renderHook(() => useWorkLibrary());
       act(() => { result.current.initializeWorks(); });
