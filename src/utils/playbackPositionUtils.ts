@@ -30,7 +30,13 @@ export function buildPlaybackPositionTimeline(
   bpm: number,
   timeSignature: TimeSignature,
   swingEnabled: boolean = false,
-  startExpandedIndex: number = 0
+  startExpandedIndex: number = 0,
+  /**
+   * スコア共通の解決済みテンポ列（#458 round2 P1）。渡された場合は内部で再解決せず
+   * これを使う（実音側と同じ列を共有し、他段だけに置かれた標語でもハイライトが同期する）。
+   * 省略時は従来どおり自パート列から解決（単体利用・後方互換）
+   */
+  sharedMeasureBpms?: number[]
 ): PlaybackTimelineItem[] {
   // 途中再生（#108）: 展開順の先頭 startExpandedIndex 個を丸ごと飛ばす。
   // 実音側（playParts へ渡す小節列）も同じ位置で切るため、atMs は 0 起点のままで一致する
@@ -38,7 +44,7 @@ export function buildPlaybackPositionTimeline(
   // 小節ごとのテンポ（途中テンポ変更・速度標語）は**切る前の全列**で解決する。
   // 切ってから解決すると、開始位置より前に置かれた標語やテンポ指定が失われ、
   // 途中再生のときだけハイライトが実音とズレる（強弱の解決と同じ理由・Issue #458）
-  const measureBpms = resolveMeasureBpms(expandedMeasuresFull.map((item) => item.measure), bpm);
+  const measureBpms = sharedMeasureBpms ?? resolveMeasureBpms(expandedMeasuresFull.map((item) => item.measure), bpm);
   const sliceStart = Math.max(0, startExpandedIndex);
   const expandedMeasures = expandedMeasuresFull.slice(sliceStart);
   const timeline: PlaybackTimelineItem[] = [];

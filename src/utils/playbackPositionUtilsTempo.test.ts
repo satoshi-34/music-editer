@@ -96,4 +96,21 @@ describe('終了タイマー: 小節ごとのテンポ（Issue #458）', () => {
 
     expect(durationMs).toBe(8000);
   });
+
+  it('共有テンポ列（sharedMeasureBpms）を渡すと、自パートからの再解決より優先される（#458 round2 P1）', () => {
+    // 自パートには標語なし。共有列は2小節目から132（=他パートに Allegro がある想定）
+    const timeline = buildPlaybackPositionTimeline(
+      [fullMeasure(), fullMeasure(), fullMeasure()],
+      60,
+      [4, 4],
+      false,
+      0,
+      [60, 132, 132],
+    );
+    // 1小節目は 1拍=1000ms のまま、2小節目からは共有列の 132 が効く
+    expect(timeline[4].atMs).toBe(4000);
+    const allegroMsPerBeat = 60000 / 132;
+    expect(timeline[5].atMs).toBeCloseTo(4000 + allegroMsPerBeat, 6);
+    expect(timeline[8].atMs).toBeCloseTo(4000 + allegroMsPerBeat * 4, 6);
+  });
 });

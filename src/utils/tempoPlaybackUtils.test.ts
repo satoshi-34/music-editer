@@ -4,7 +4,7 @@
 // ここが仕様の正本になる。
 import { describe, it, expect } from 'vitest';
 import type { MeasureData } from '../types/storage';
-import { beatSpanToSeconds, resolveMeasureBpms, resolveScoreMeasureBpms } from './tempoPlaybackUtils';
+import { beatSpanToSeconds, resolveMeasureBpms, resolveScoreMeasureBpms, tempoSegmentsFrom } from './tempoPlaybackUtils';
 import { TEMPO_MARKING_PRESET_ENTRIES, getTempoMarkingBpm } from './tempoMarkingPresets';
 import { MIN_BPM, MAX_BPM } from '../audio/tempoRange';
 
@@ -169,5 +169,29 @@ describe('beatSpanToSeconds（#458 round1 P2: テンポ変更をまたぐタイ�
       { beats: 4, bpm: 100 },
     ]);
     expect(seconds).toBeCloseTo(4 * (60 / 100), 6);
+  });
+});
+
+describe('tempoSegmentsFrom（#458 round2 P2: bpm 未設定小節の引き継ぎ）', () => {
+  it('bpm 未設定の小節は fallback（呼び出し時点の実効テンポ）で数える', () => {
+    const segments = tempoSegmentsFrom(
+      [{ measureBeats: 4 }, { measureBeats: 4 }],
+      0,
+      60, // 全体テンポ60の再生中
+    );
+    expect(segments).toEqual([{ beats: 4, bpm: 60 }, { beats: 4, bpm: 60 }]);
+  });
+
+  it('明示 bpm 以降はそれを引き継ぐ', () => {
+    const segments = tempoSegmentsFrom(
+      [{ measureBeats: 4 }, { measureBeats: 4, bpm: 90 }, { measureBeats: 3 }],
+      0,
+      60,
+    );
+    expect(segments).toEqual([
+      { beats: 4, bpm: 60 },
+      { beats: 4, bpm: 90 },
+      { beats: 3, bpm: 90 },
+    ]);
   });
 });

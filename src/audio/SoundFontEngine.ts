@@ -1,4 +1,4 @@
-import { beatSpanToSeconds } from '../utils/tempoPlaybackUtils';
+import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
 import type { Player as SoundFontPlayer } from 'soundfont-player';
 
 import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
@@ -235,7 +235,7 @@ export class SoundFontEngine implements PlaybackEngine {
                 ? beatSpanToSeconds(
                     swingTiming.startBeat,
                     nominalStartBeat + durationBeats + tieExtendBeats,
-                    tempoSegmentsFrom(part.measures, measureIndex),
+                    tempoSegmentsFrom(part.measures, measureIndex, measureBpm),
                   ) * (event.durationScale ?? 1)
                 : soundDuration;
               player.play(
@@ -482,21 +482,3 @@ export class SoundFontEngine implements PlaybackEngine {
   }
 }
 
-/** タイの秒数積算用: 指定小節から先の { 拍数, BPM } 区間列を作る（#458 round1 P2） */
-function tempoSegmentsFrom(
-  measures: ReadonlyArray<{ measureBeats?: number; bpm?: number } | undefined>,
-  fromIndex: number,
-): Array<{ beats: number; bpm: number }> {
-  const segments: Array<{ beats: number; bpm: number }> = [];
-  let lastBpm = 120;
-  for (let i = fromIndex; i < measures.length; i++) {
-    const measure = measures[i];
-    const beats = typeof measure?.measureBeats === 'number' ? measure.measureBeats : 4;
-    const bpm = typeof measure?.bpm === 'number' && Number.isFinite(measure.bpm) && measure.bpm > 0
-      ? measure.bpm
-      : lastBpm;
-    lastBpm = bpm;
-    segments.push({ beats, bpm });
-  }
-  return segments;
-}

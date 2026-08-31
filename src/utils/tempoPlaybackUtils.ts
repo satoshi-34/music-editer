@@ -143,3 +143,28 @@ export function beatSpanToSeconds(
   }
   return seconds;
 }
+
+/**
+ * タイの秒数積算（beatSpanToSeconds）用に、指定小節から先の { 拍数, BPM } 区間列を作る。
+ * bpm 未設定の小節は fallbackBpm（呼び出し時点の実効テンポ）から引き継ぐ
+ * （#458 round2 P2: 固定120にすると全体テンポ≠120で常にずれる）。
+ * SimpleAudioEngine / SoundFontEngine の両方が使うため、ここに1本化する。
+ */
+export function tempoSegmentsFrom(
+  measures: ReadonlyArray<{ measureBeats?: number; bpm?: number } | undefined>,
+  fromIndex: number,
+  fallbackBpm: number,
+): Array<{ beats: number; bpm: number }> {
+  const segments: Array<{ beats: number; bpm: number }> = [];
+  let lastBpm = fallbackBpm;
+  for (let i = fromIndex; i < measures.length; i++) {
+    const measure = measures[i];
+    const beats = typeof measure?.measureBeats === 'number' ? measure.measureBeats : 4;
+    const bpm = typeof measure?.bpm === 'number' && Number.isFinite(measure.bpm) && measure.bpm > 0
+      ? measure.bpm
+      : lastBpm;
+    lastBpm = bpm;
+    segments.push({ beats, bpm });
+  }
+  return segments;
+}

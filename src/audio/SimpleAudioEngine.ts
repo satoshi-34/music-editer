@@ -2,7 +2,7 @@
 // Web Audio APIを直接使用したシンプルな音声エンジン
 // ブラウザの自動再生ポリシーに完全対応
 
-import { beatSpanToSeconds } from '../utils/tempoPlaybackUtils';
+import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
 import { InstrumentType } from './SoundSource';
 import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
 import {
@@ -485,7 +485,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
               ? beatSpanToSeconds(
                   swingTiming.startBeat,
                   nominalStartBeat + nominalDurationBeats + tieExtendBeats,
-                  tempoSegmentsFrom(scoreData, measureIndex),
+                  tempoSegmentsFrom(scoreData, measureIndex, measureBpm),
                 ) * (event.durationScale ?? 1)
               : soundDuration;
             await this.playNoteAtTime(
@@ -1348,21 +1348,3 @@ export class SimpleAudioEngine implements PlaybackEngine {
 // デフォルトのSimpleAudioEngineインスタンスをエクスポート
 export const defaultSimpleAudioEngine = new SimpleAudioEngine();
 
-/** タイの秒数積算用: 指定小節から先の { 拍数, BPM } 区間列を作る（#458 round1 P2） */
-function tempoSegmentsFrom(
-  measures: ReadonlyArray<{ measureBeats?: number; bpm?: number } | undefined>,
-  fromIndex: number,
-): Array<{ beats: number; bpm: number }> {
-  const segments: Array<{ beats: number; bpm: number }> = [];
-  let lastBpm = 120;
-  for (let i = fromIndex; i < measures.length; i++) {
-    const measure = measures[i];
-    const beats = typeof measure?.measureBeats === 'number' ? measure.measureBeats : 4;
-    const bpm = typeof measure?.bpm === 'number' && Number.isFinite(measure.bpm) && measure.bpm > 0
-      ? measure.bpm
-      : lastBpm;
-    lastBpm = bpm;
-    segments.push({ beats, bpm });
-  }
-  return segments;
-}
