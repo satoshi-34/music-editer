@@ -8,6 +8,7 @@ import { InstrumentType } from './SoundSource';
 import { getDurationBeats, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { applySwingToTiming } from '../utils/swingUtils';
 import { respellDoubleAccidentalKey } from '../utils/noteMidiUtils';
+import { resolveReleaseTailSeconds } from './releaseTail';
 
 type SoundFontModule = typeof import('soundfont-player');
 
@@ -461,15 +462,19 @@ export class SoundFontEngine implements PlaybackEngine {
     // ここは耳で触る用の係数なので、違和感があれば少しずつ動かしてよい。
     // - gain: 全体の勢い。brightness と richness の両方を少し反映する
     // - attack: 鳴り始めの速さ
-    // - release: 音を離したあとの残り方
-    // - duration: release を少し足して、「余韻が増えた」と感じやすくする
+    // - release: 音を離したあとに残る「尻尾」の長さ（Issue #525）
+    // - duration: 記譜どおりの長さ（＝ダンパーが降りるまで）。尻尾はこのあとに続く
     return {
       // gain は音色キャラに加えて、強弱記号から来た velocity でも上下させる。
       // ただし極端な値は歪みや無音の原因になるため、最後に安全域へ丸める。
       gain: Math.max(0.05, Math.min(1, (0.45 + brightness * 0.15 + richness * 0.35) * velocity)),
       attack: 0.001 + attack * 0.04,
-      release: 0.05 + release * 0.45,
-      duration: duration + release * 0.15
+      // 以前は release=0.05〜0.5 と「duration に release×0.15 を足す」の合わせ技だったが、
+      // 全音符でも尻尾が 0.3 秒に届かず「早く切られた」印象になっていた（Issue #525）。
+      // 尻尾の長さは内蔵音源と共通の計算（releaseTail.ts）へ一本化し、
+      // duration は記譜どおりに戻す（音の開始位置・次の音までの間隔は変わらない）
+      release: resolveReleaseTailSeconds(release, duration),
+      duration
     };
   }
 

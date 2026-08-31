@@ -12,6 +12,7 @@ import {
 } from './playbackSettings';
 import { applySwingToTiming } from '../utils/swingUtils';
 import { respellDoubleAccidentalKey } from '../utils/noteMidiUtils';
+import { resolveReleaseTailSeconds } from './releaseTail';
 
 interface SimpleInstrumentConfig {
   // 1つの音色を何本の波で作るかを表す。
@@ -175,7 +176,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
       const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain);
       const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget);
       const adjustedReleaseFloor = this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor);
-      const adjustedTailSeconds = this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0);
+      const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
       gainNode.gain.setValueAtTime(0, context.currentTime);
       gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, context.currentTime + adjustedAttack);
       gainNode.gain.exponentialRampToValueAtTime(
@@ -565,7 +566,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
         0.0001,
         this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor) * velocity
       );
-      const adjustedTailSeconds = this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0);
+      const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
       gainNode.gain.setValueAtTime(0, startTime);
       gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, startTime + adjustedAttack);
       gainNode.gain.exponentialRampToValueAtTime(
@@ -1162,7 +1163,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
     const adjustedAttack = this.getAdjustedAttack(instrumentConfig.attack);
     const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain);
     const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget);
-    const adjustedTailSeconds = this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0);
+    // 簡易経路でも余韻の長さは通常経路と同じにする（Issue #525。
+    // ここだけ短いと、Safari だけ長い音がプツンと切れて聞こえる）
+    const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
 
     // Safari では複雑なノード構成より、単純な直結のほうが安定しやすい。
     // その代わり音色差は少し薄くなるが、まず「鳴る」ことを優先する。
@@ -1221,6 +1224,27 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
   private getAdjustedTailSeconds(baseTailSeconds: number): number {
     return Math.max(0, baseTailSeconds * (0.6 + this.soundProfile.release * 1.2));
+  }
+
+  /**
+   * 音価のあとに残す余韻（尻尾）の長さ（秒）を決める（Issue #525）。
+   *
+   * 音色ごとの `tailSeconds`（ギターの残響感など、その楽器の個性）と、
+   * 全音源共通の下限（`releaseTail.ts`）の**長い方**を採る。
+   * 下限を入れるのは、ピアノを含む多くの音色の `tailSeconds` が 0.05 秒前後しかなく、
+   * 2分・全音符が音価ちょうどで切られて硬く聞こえていたため（運用者の検聴・2026-08-31）。
+   * 個性として長い尻尾を持つ音色は、その長さのまま維持される。
+   *
+   * 伸びるのは「鳴り終わりの時刻」だけで、開始時刻・次の音までの間隔は一切変えない。
+   */
+  private resolveEffectiveTailSeconds(
+    instrumentConfig: { tailSeconds?: number },
+    duration: number,
+  ): number {
+    return Math.max(
+      this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0),
+      resolveReleaseTailSeconds(this.soundProfile.release, duration),
+    );
   }
 
   private getAdjustedLayerGainRatio(
