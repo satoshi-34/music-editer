@@ -2,6 +2,7 @@
 // Web Audio APIを直接使用したシンプルな音声エンジン
 // ブラウザの自動再生ポリシーに完全対応
 
+import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
 import { InstrumentType } from './SoundSource';
 import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
 import {
@@ -388,6 +389,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
       }>;
       measureBeats?: number;
       isCompoundMeter?: boolean;
+      /** この小節のテンポ（BPM）。省略時は引数 bpm（全体テンポ）を使う（Issue #458） */
+      bpm?: number;
     }>,
     bpm: number = 120,
     startTime?: number
@@ -411,7 +414,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
         // そのため小節開始時刻を別変数で退避しておく。
         const measureStartTime = currentTime;
         const measureBeats = typeof measure?.measureBeats === 'number' ? measure.measureBeats : 4;
-        const measureSeconds = measureBeats * (60 / bpm);
+        // 途中テンポ変更・速度標語で「この小節だけ速さが違う」ことがある（Issue #458）。
+        // 画面側が解決済みの BPM を小節へ載せてくるので、以降の秒換算はすべてこの値で行う。
+        // 指定が無い小節は従来どおり引数の全体テンポで鳴らす（後方互換）
+        const measureBpm = typeof measure?.bpm === 'number' && Number.isFinite(measure.bpm) && measure.bpm > 0
+          ? measure.bpm
+          : bpm;
+        const measureSeconds = measureBeats * (60 / measureBpm);
         if (!measure || !measure.events || measure.events.length === 0) {
           // 空小節でも拍子どおりの長さだけ進める。
           // 3/8 の譜面を 4/4 扱いすると、ここで他パートとずれてしまう。
@@ -420,13 +429,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
         }
         
         let maxMeasureEndTime = currentTime;
-        const secondsPerBeat = 60 / bpm;
+        const secondsPerBeat = 60 / measureBpm;
         // スウィングは複合拍子（6/8 等）では対象外にする（swingUtils 参照）。
         const swingActiveForMeasure = this.swingEnabled && !measure.isCompoundMeter;
 
         // 小節内の各音符を処理
         for (const event of measure.events) {
-          const duration = this.durationToSeconds(event.dur, bpm, event.dots, event.tuplet);
+          const duration = this.durationToSeconds(event.dur, measureBpm, event.dots, event.tuplet);
           // startBeat を持たない単声部イベントは、直前までの累積時間から拍位置を逆算する。
           const nominalStartBeat = typeof event.startBeat === 'number'
             ? event.startBeat
@@ -470,9 +479,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
             // （表拍8分+裏拍8分のタイが 7/6 拍に伸びる誤差の防止・Codex round1 P1）。
             // 次の音の位置（currentTime）は下で duration のまま進めるのでテンポは崩れない。
             const tieExtendBeats = event.tieExtendBeatsByKey?.[primaryKey] ?? 0;
+            // タイが次小節へまたぐとき、その先の小節はテンポが違うかもしれない（#458 round1 P2）。
+            // 「開始小節のBPM×総拍数」ではなく、小節ごとのテンポ区間で秒数を積算する
             const tiedSoundDuration = tieExtendBeats > 0
-              ? ((nominalStartBeat + nominalDurationBeats + tieExtendBeats) - swingTiming.startBeat)
-                * secondsPerBeat * (event.durationScale ?? 1)
+              ? beatSpanToSeconds(
+                  swingTiming.startBeat,
+                  nominalStartBeat + nominalDurationBeats + tieExtendBeats,
+                  tempoSegmentsFrom(scoreData, measureIndex, measureBpm),
+                ) * (event.durationScale ?? 1)
               : soundDuration;
             await this.playNoteAtTime(
               frequency,
@@ -1333,3 +1347,4 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
 // デフォルトのSimpleAudioEngineインスタンスをエクスポート
 export const defaultSimpleAudioEngine = new SimpleAudioEngine();
+

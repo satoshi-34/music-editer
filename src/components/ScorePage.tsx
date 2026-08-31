@@ -162,6 +162,7 @@ import {
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
+import { resolveScoreMeasureBpms } from '../utils/tempoPlaybackUtils';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, INSTRUMENT_NAME_MAX_LENGTH, resolveInstrumentPartLabels, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
@@ -1465,6 +1466,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       resetPlaybackClock();
 
       const parts: PlaybackPartSource[] = [];
+      // テンポ（数値・速度標語）はスコア共通の属性なので、パート譜表示で再生対象を
+      // 絞っても**全段から**解決する（#458 round2 P2）。こちらは絞り込み前の全パート
+      const tempoSourceParts: MeasureData[][] = [];
       // scoreType ごとに保持形式が違うので、
       // ここで「再生したいパート配列」へいったん正規化してから先へ渡す。
       // パート譜表示中（isPartExtractionActive）は、選んだパート以外を除外して
@@ -1472,6 +1476,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       if (scoreType === 'quartet') {
         const quartetInstrumentation = getDefaultInstrumentationForScoreType('quartet');
         quartetParts.forEach((part, partIndex) => {
+          if (part && part.length > 0) tempoSourceParts.push(part);
           if (isPartExtractionActive && partExtractionSelection?.index !== partIndex) {
             return;
           }
@@ -1484,6 +1489,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         });
       } else if (scoreType === 'ensemble') {
         ensembleParts.forEach((part, partIndex) => {
+          if (part && part.length > 0) tempoSourceParts.push(part);
+          {
+            const secondForTempo = instrumentation.parts[partIndex]?.staffCount === 2
+              ? ensembleSecondStaffParts[partIndex]
+              : undefined;
+            if (secondForTempo && secondForTempo.length > 0) tempoSourceParts.push(secondForTempo);
+          }
           if (isPartExtractionActive && partExtractionSelection?.index !== partIndex) {
             return;
           }
@@ -1508,8 +1520,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       } else if (scoreType === 'piano') {
         if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: InstrumentType.PIANO });
         if (leftHandData && leftHandData.length > 0) parts.push({ measures: leftHandData, instrument: InstrumentType.PIANO });
+        if (rightHandData && rightHandData.length > 0) tempoSourceParts.push(rightHandData);
+        if (leftHandData && leftHandData.length > 0) tempoSourceParts.push(leftHandData);
       } else {
         if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: currentInstrument });
+        if (rightHandData && rightHandData.length > 0) tempoSourceParts.push(rightHandData);
       }
 
       // 途中再生（#108）: 小節を選択したまま再生すると、その小節から始める。
@@ -1543,15 +1558,28 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 32分へ割るとエンジンのスウィング判定（8分のみ）から外れ、
           // 実音とハイライトの位置がずれるため（裏拍の 2/3 シフトが消える）
           const swingActive = soundRuntimeSettings.swingEnabled && !isCompoundTimeSignature(scoreTimeSignature);
+          // 各パートのリピート展開を先に済ませ、**スコア共通のテンポ列**を1回だけ解決する
+          // （#458 round1 P1: パートごとに解決すると、標語を置いた段だけ速くなり同期が崩れる）。
+          // 解決元は再生対象（parts）ではなく**絞り込み前の全段**（round2 P2:
+          // パート譜表示中でも他段の数値テンポ・標語を引き継ぐ。展開は再生と同じ
+          // 参照順にそろえる）
+          const expandedPerPart = parts.map((partSource, partIndex) =>
+            partIndex === 0
+              ? referenceExpanded
+              : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures));
+          const scoreMeasureBpms = resolveScoreMeasureBpms(
+            tempoSourceParts.map(partMeasures =>
+              expandMeasuresForPlaybackWithReference(referenceMeasures, partMeasures)
+                .map(item => item.measure)),
+            tempoSettings.bpm,
+          );
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
             // ここで「展開後の再生順」と「各音符のベロシティ」を一緒に作って渡す。
             // 多段譜では各段が別々に repeat 情報を持つと再生順が分かれやすいので、
             // 先頭パートの反復順を基準に他パートも同じ順番へそろえる。
-            const expandedMeasuresFull = partIndex === 0
-              ? referenceExpanded
-              : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures);
+            const expandedMeasuresFull = expandedPerPart[partIndex];
             // 途中再生では、展開後の再生順を開始位置で切ってからエンジンへ渡す。
             // 全パートとも先頭パートの反復順にそろえてあるため、同じ位置で切れば拍が一致する。
             // 強弱（絶対強弱と cresc./dim. の傾斜）は**切る前の全列**で解決し、キーの
@@ -1559,6 +1587,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
+            // テンポ列はスコア共通（上で1回だけ解決済み・#458 round1 P1）。
+            // 強弱と同じく**切る前の全列**で解決してあるので、途中再生でも
+            // 開始位置より前の標語・テンポ指定を引き継いだ状態で効く
+            const measureBpms = scoreMeasureBpms;
             // タイ（同じ高さの音を結んで1音として伸ばす記号）を再生へ反映する計画。
             // 強弱と違って**切ったあとの列**で解決する: 開始音が開始位置より前にあって
             // 切り落とされた継続音は、抑制せずそのまま鳴らしたい（途中再生で音が消えないため）。
@@ -1573,6 +1605,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 // 再生エンジン側が 3/8 や 6/8 の小節長を正しく保てるよう、
                 // 各小節の「本来ここまで進むべき拍数」を明示して渡す。
                 measureBeats: getMeasureBeats(scoreTimeSignature),
+                // この小節を鳴らすテンポ。元の measure.bpm（数値の途中テンポ変更のみ）を
+                // 解決済みの値で上書きする。標語だけが置かれた小節や、指定が無くて前の
+                // テンポを引き継ぐ小節にも、ここで必ず値が入る（#458）
+                bpm: measureBpms[expandedMeasureIndex + startExpandedIndex],
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
                 events: flattenMeasureForPlayback(item.measure).flatMap((event, eventIndex) => {
@@ -1647,7 +1683,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             tempoSettings.bpm,
             scoreTimeSignature,
             soundRuntimeSettings.swingEnabled,
-            startExpandedIndex
+            startExpandedIndex,
+            // 実音と同じスコア共通テンポ列を共有する（#458 round2 P1:
+            // タイムライン内部で先頭パートから再解決すると、他段だけに置かれた
+            // 標語がハイライトに効かず、実音と累積的にずれる）
+            scoreMeasureBpms
           );
           // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
           // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
@@ -3220,7 +3260,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // R キー: 現在の音価で休符入力モードに切り替え
       if (e.key === 'r' || e.key === 'R') {
         setTool(prev => {
-          if ('duration' in prev) return { ...prev, isRest: !prev.isRest };
+          if ('duration' in prev) {
+            // 入力用の臨時記号（#470）は音符専用。休符へ切り替えるときに残すと、
+            // ♯ボタンがON表示のままクリックしても効かない無言の行き止まりになる
+            // （#470 round1 P2・#318）。音符へ戻るときは付け直してもらう
+            const { accidental: _dropped, ...rest } = prev;
+            return { ...rest, isRest: !prev.isRest };
+          }
           return { duration: '4', isRest: true };
         });
         e.preventDefault();

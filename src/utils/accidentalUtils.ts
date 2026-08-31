@@ -92,3 +92,22 @@ export function applyMicrotoneToEvent<T extends AccidentalEditableEvent>(
     microtones: nextMicrotones.length > 0 ? nextMicrotones : undefined,
   };
 }
+
+/**
+ * 「入力時に付ける臨時記号」（Issue #470）を、これから置く音の音高キーへ適用する。
+ *
+ * 何のための関数か: パレットで音価と一緒に ♯ を選んでおくと、譜面をクリックした
+ * その1回でシャープ付きの音が入る。クリック位置から求めた音高キー（例 `f/4`）に
+ * 対して、選ばれている臨時記号の綴り（例 `f#/4`）へ寄せるのがこの関数の役目。
+ *
+ * accidental が未指定（トグルOFF）のときは、キーをそのまま返す＝従来の入力と1音も変わらない。
+ * 調号の反映（applyKeySignatureToNaturalKey）を通したあとに呼ぶこと。
+ * 例えば D メジャー（♯2つ）で F の線をクリックすると先に `f#/4` になるが、
+ * ♮ を選んでいる場合はここで `f/4` へ戻り、譜面にはナチュラルが表示される。
+ */
+export function applyInputAccidentalToKey(key: string, accidental?: AccidentalToolKind): string {
+  if (!accidental) {
+    return key;
+  }
+  return setKeyAccidental(key, accidental);
+}

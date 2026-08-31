@@ -54,6 +54,14 @@ export interface PlaybackPart {
     /** この小節が本来もつ長さ（4分音符=1拍） */
     measureBeats?: number;
     /**
+     * この小節を鳴らすテンポ（BPM）。省略時は playParts の引数 bpm（全体テンポ）を使う。
+     *
+     * 途中テンポ変更（♩=XXX）と速度標語（Andante 等）はどちらも「この小節から速さが変わる」
+     * 指定なので、画面側（ScorePage）が tempoPlaybackUtils.resolveMeasureBpms で
+     * 解決した結果をここへ載せて渡す（Issue #458）。
+     */
+    bpm?: number;
+    /**
      * この小節が複合拍子（6/8, 9/8, 12/8 など）かどうか。
      * スウィング再生は「4分音符=1拍」を前提にした表拍/裏拍判定のため、
      * 複合拍子ではこのフラグを見て対象から除外する（swingUtils.isCompoundTimeSignature 参照）。
