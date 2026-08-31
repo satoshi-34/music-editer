@@ -33,7 +33,7 @@ import { useUiVariant } from '../hooks/useUiVariant';
 // タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
 // ツールバーのタブ行と A1 文脈バーで同じ言葉を出すため、両方がこの定数を参照する。
 import { PIANO_LAYER_OPTIONS, SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
-import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
+import { checkAudioOutputHealth, formatAudioHealthReport, describeAudioOutputDestination } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useDevicePixelRatio } from './useDevicePixelRatio';
 import { computeScreenStrokeFloorMultiplier } from '../utils/engravingDefaults';
@@ -1161,6 +1161,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       console.info('[ScorePage] 出力ヘルスチェック:', formatAudioHealthReport(report));
 
       if (report.verdict === 'healthy') {
+        // 判定は正常なのに「聞こえない」場合、残る原因は OS 側の出力先しかない（Issue #521）。
+        // 画面に常時表示を足さない方針なので、次の一手は診断ログにだけ残す
+        console.info('[ScorePage] 出力先:', describeAudioOutputDestination(report));
         setAudioHealthNotice(null);
         return;
       }
@@ -1177,7 +1180,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       if (now - lastSilentRecoveryAtRef.current < SILENT_RECOVERY_COOLDOWN_MS) {
         // 直前に自動復旧したばかりで再発しているなら、作り直しを繰り返しても直らない。
         // ループを避けて手動の復旧手段へ誘導する。
-        setAudioHealthNotice('音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。');
+        setAudioHealthNotice(
+          `音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。${describeAudioOutputDestination(report)}`
+        );
         return;
       }
       lastSilentRecoveryAtRef.current = now;
@@ -1189,7 +1194,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 音源方式などのユーザー設定は維持したまま、エンジン（AudioContext）だけ作り直す。
       // 設定ごと既定値に戻したいときは従来どおり「音声復旧」ボタンを使う。
       recreateAudioEngine();
-      setAudioHealthNotice('無音状態を検知したため、音声エンジンを自動で再起動しました。もう一度再生をお試しください。');
+      setAudioHealthNotice(
+        `無音状態を検知したため、音声エンジンを自動で再起動しました。もう一度再生をお試しください。${describeAudioOutputDestination(report)}`
+      );
     } catch (error) {
       // 検知自体の失敗で再生機能を巻き込まない
       console.warn('[ScorePage] 無音ヘルスチェックに失敗しました（無視します）:', error);

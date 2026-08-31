@@ -86,3 +86,63 @@ silent failure の前提は「running 表示なのに無音」なので、意図
 - プローブのオシレーターを `destination` に接続しない（ユーザーに聞こえてしまう）
 - クールダウンを外さない（壊れた環境でエンジン再作成が無限に繰り返される）
 - 一時停止中（playbackState === 'paused'）にヘルスチェックを動かさない（suspended は正常な状態）
+
+## 追記: 出力先デバイス名を診断結果に含める（Issue #521, 2026-09-01）
+
+### 問題
+
+#520（2026-08-31）で「アプリは信号を出しているのにユーザーには聞こえない」実例が起きた
+（ポータブルモニターへ音声がルーティングされていた）。このときヘルスチェックは
+`signalDetected=true`（healthy）を返しており、**残る不明点は出力先だけ**だった。
+
+ヘルスチェックの3値判定は「JS から観測できない出力段の故障は unknown/healthy に倒す」
+設計なので、healthy のまま無音というケースは仕様上あり得る。その場合に
+「次にどこを見ればよいか」を利用者へ返せていなかった（AGENTS.md「行き止まりは喋る」）。
+
+### 採用した設計
+
+判定ロジック（3値の verdict）は**一切変えず**、診断結果に添える情報だけを増やす。
+
+1. `resolveAudioOutputDeviceLabel()` を追加。`navigator.mediaDevices.enumerateDevices()` から
+   `kind === 'audiooutput'` を拾い、`deviceId === 'default'`（＝いま鳴っている先に最も近い）を
+   優先して名前を返す
+2. `AudioOutputHealthReport` に `outputDeviceLabel: string | null` を追加し、
+   `formatAudioHealthReport` の一行診断へ `outputDevice=...` として出す
+3. `describeAudioOutputDestination(report)` で画面向けの一文を組み立てる。
+   デバイス名が取れたときだけ「現在の出力先: 〜。」を前置し、続けて
+   `AUDIO_OUTPUT_CHECK_HINT`（「音が聞こえない場合は、パソコンの音声の出力先…をご確認ください」）を返す
+
+**取得できない環境では名前を省略して従来どおりの文面に戻る**（受入条件2）。
+enumerateDevices のラベルはマイク権限が無いと空文字になるブラウザがあり、
+権限を要求してまで名前を出す設計にはしていない（診断の副作用で権限ダイアログを
+出さないため）。実際、開発用ブラウザでは `outputDevice=n/a` になる。
+
+### UI 制約（運用者指示 2026-08-31）
+
+**パレット・ツールバーに新しいボタン・表示を一切追加しない。** 実行導線と見た目は現状のまま、
+既存の結果文字列の中にだけ足す。常時表示のインジケータも作らない。この制約に従い、
+出力先の表示先は次の2つだけにした:
+
+- **healthy のとき**: 画面には何も出さず（従来どおり通知はクリア）、
+  `console.info('[ScorePage] 出力先: …')` として診断ログにだけ残す。
+  「healthy なのに聞こえない」と申告された際の一次情報になる
+- **unhealthy のとき**: 既存の2つの通知（自動再起動した／異常が続いている）の
+  **末尾に一文を足す**。通知が出る条件も見た目も変えていない
+
+### 影響範囲
+
+- `src/audio/audioOutputHealth.ts` — `resolveAudioOutputDeviceLabel` /
+  `describeAudioOutputDestination` / `AUDIO_OUTPUT_CHECK_HINT`（新規）、
+  `AudioOutputHealthReport.outputDeviceLabel`、`formatAudioHealthReport` に `outputDevice=`
+- `src/components/ScorePage.tsx` — healthy 時の診断ログ1行と、既存2通知への追記
+- テスト: `src/audio/audioOutputHealth.test.ts`（+8件）
+
+### やらなかったこと
+
+- **マイク権限の要求**はしない（診断のためにユーザーへ権限ダイアログを出さない）。
+  そのぶんラベルが空になる環境では名前を出せないが、案内文だけは必ず出る
+- **出力先の切り替え機能**（setSinkId）は入れていない。本Issueは「どこへ出ているかを言う」まで
+- **ScorePage をマウントする統合テスト**は追加していない。jsdom には `AudioContext` が無く、
+  エンジンが context を返せないためヘルスチェックは `unknown` で早期 return し、
+  通知へ到達しない。到達させるには AudioContext 一式を偽装する必要があり、
+  それは配線ではなくモックを検証することになるため見送った（PR に明記）
