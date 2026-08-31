@@ -110,3 +110,53 @@ export function syncTupletBracketsWithBeams(tuplets: readonly RenderedTuplet[]):
     tuplet.setBracketed(hasUnbeamedNote);
   });
 }
+
+/**
+ * 連符の数字・括弧を「五線の外側の決め打ち位置」ではなく、その連符自身の音符の側へ寄せ直す。
+ *
+ * VexFlow の Tuplet は、上下どちらに置くかを（ビーム生成時に）符幹の向きだけで決める。
+ * そのうえで縦位置は「五線の第1線の少し上」「第5線の少し下」を起点にして、そこから
+ * 外側へしか動かない（Tuplet.getYPosition）。そのため**符幹が五線の内側を向く配置**
+ * ――加線の上に乗った高い音符に下向き符幹が付いた場合など――では、連符の数字だけが
+ * 音符から五線をまたいで反対側へ取り残される。
+ *
+ * 実測（Issue #471・弦楽四重奏の実例で報告）: 第1線 y=60 / 第5線 y=100 の五線で、
+ * 五線の上（y≈30〜40）に置いた c/6〜e/6 の8分3連（符幹下向き・ビームは y=75〜80）に対し、
+ * 数字は y≈130 に描かれていた。自分のビームから5間ぶん離れ、多段譜では**下の段の
+ * 五線・ビームの上へ重なる**（下の段の第1線が y=140 だと、数字の下端がその直上に来る）。
+ *
+ * そこで「音符がすべて五線の外にある」連符に限り、音符と同じ側へ置き直す。
+ * 音符が五線にかかっている連符（大多数）は VexFlow の判断のままにするので、
+ * 既存の譜面の見た目は変えない。
+ *
+ * ビームの確定後（＝符幹の向きが決まったあと）に呼ぶこと。
+ */
+export function syncTupletPlacementWithNotes(tuplets: readonly RenderedTuplet[]): void {
+  tuplets.forEach(({ tuplet }) => {
+    const notes = tuplet.getNotes();
+    const stave = notes[0]?.getStave();
+    // 単体テストなど、まだ五線に紐づいていない音符では位置を判断できないので何もしない
+    if (!stave) {
+      return;
+    }
+
+    // 符頭の縦位置（休符は符頭を持たないので自然に空配列になる）
+    const noteheadYs = notes.flatMap((note) => note.getYs());
+    if (noteheadYs.length === 0) {
+      return;
+    }
+
+    const staveTopY = stave.getYForLine(0);
+    const staveBottomY = stave.getYForLine(4);
+    const highestNoteY = Math.min(...noteheadYs);
+    const lowestNoteY = Math.max(...noteheadYs);
+
+    if (lowestNoteY < staveTopY) {
+      // 連符ぜんぶが五線より上 → 数字も上に置く（下に置くと五線をまたいでしまう）
+      tuplet.setTupletLocation(Tuplet.LOCATION_TOP);
+    } else if (highestNoteY > staveBottomY) {
+      // 連符ぜんぶが五線より下 → 数字も下に置く
+      tuplet.setTupletLocation(Tuplet.LOCATION_BOTTOM);
+    }
+  });
+}

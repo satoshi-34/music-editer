@@ -243,3 +243,17 @@
   繋がらず2音として鳴る。これは意図した安全側の動作。
 - 音色を「内蔵音源」に切り替えても同じように聞こえること（両エンジンに実装済み）。
 - 固定テスト: tiePlaybackUtils.test.ts（17件）・SimpleAudioEngine.test.ts / SoundFontEngine.test.ts のタイ節（スウィング・小節送りを含む）・ScorePageTiePlayback.test.tsx（3件・声部2/トリル相互作用を含む配線）
+
+## V. 連符数字の置き場所（Issue #471）
+
+> 連符の数字は「符幹の向き」だけでなく「音符が五線のどちら側にあるか」で置き場所が決まる。
+> 設計の詳細は [`.claude/specs/tuplet-implementation/design.md`](../.claude/specs/tuplet-implementation/design.md) の追記12。
+
+- [ ] 大譜表の上の段に、加線の上まで高い音（`c/6`〜`e/6` など）の**8分3連**を置く →
+      数字の「3」が**音符の上**に出る（下の段のほうへ回り込まない）。
+      退行すると、数字だけが五線をまたいで下へ落ち、下の段の五線・ビームと重なる。
+- [ ] 逆に、加線の下まで低い音（`c/3`〜`e/3` など）の8分3連 → 数字は**音符の下**に出る。
+- [ ] 音符が五線の中に収まっている連符（月光 fixture の3連符など）の数字の位置が**従来と同じ**であること。
+      符幹が上向きなら上、下向きなら下、という従来の見え方が変わっていたら退行。
+- [ ] 固定テスト: vexFlowTimingUtils.test.ts の「連符数字の上下」節（4件）・
+      PianoSystemCanvasTupletPlacement.test.tsx（3件）
