@@ -116,4 +116,41 @@ describe('ScorePage: 全体テンポの MusicXML 書き出し/読み込み配線
       expect(tempoInput.value).toBe('126');
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('連符入り作品の実マウント書き出しで divisions とテンポが共存する（#519×#518 統合）', async () => {
+    // 8分3連×1組 + 4分休符×3 = 4拍
+    const tuplet = { id: 't1', numNotes: 3, notesOccupied: 2 };
+    const events = [
+      { dur: '8' as const, isRest: false, keys: ['c/4'], tuplet },
+      { dur: '8' as const, isRest: false, keys: ['d/4'], tuplet },
+      { dur: '8' as const, isRest: false, keys: ['e/4'], tuplet },
+      { dur: '4' as const, isRest: true, keys: ['b/4'] },
+      { dur: '4' as const, isRest: true, keys: ['b/4'] },
+      { dur: '4' as const, isRest: true, keys: ['b/4'] },
+    ];
+    const data = createSavedScoreData(
+      { title: '連符テンポ統合', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events, voices: [{ id: 'voice-1', events }] }] }],
+      1, 1, 'single', 'C'
+    );
+    const created = createWork('連符テンポ統合');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'musicxml' } });
+    fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
+    await waitFor(() => {
+      // #519: 連符に合わせた divisions（16×3=48）と、#518: 全体テンポ direction+メタが同じ出力に共存する
+      expect(exportedXml ?? '').toContain('<divisions>48</divisions>');
+      expect(exportedXml ?? '').toContain('<sound tempo="120"/>');
+      expect(exportedXml ?? '').toContain('<miscellaneous-field name="music-editer.global-bpm">120</miscellaneous-field>');
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

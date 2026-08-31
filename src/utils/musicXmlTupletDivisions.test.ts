@@ -162,7 +162,7 @@ describe('MusicXML 書き出し: 連符に合わせた divisions（Issue #519）
     expect(xml).toContain('<backup><duration>192</duration></backup>');
   });
 
-  it('3連・5連・7連が同居しても divisions は上限960を超えない（クランプ）', () => {
+  it('3連・5連・7連が同居しても全 duration が整数で小節合計が一致する（round1 P2: 上限撤廃）', () => {
     const events: NoteEvent[] = [
       ...tupletGroup('g3', '8', 3, 2),
       ...tupletGroup('g5', '8', 5, 4),
@@ -171,9 +171,13 @@ describe('MusicXML 書き出し: 連符に合わせた divisions（Issue #519）
     const xml = scoreToMusicXml(singleMeasureScore(events));
     const divisions = readDivisions(xml);
 
-    // 厳密に全部を整数化するには 16×lcm(3,5,7)=1680 が必要だが上限を超えるため、
-    // 上限内で最大の約数（16×35=560）へ落とす。5連・7連は整数のまま書ける
-    expect(divisions).toBe(560);
-    expect(divisions).toBeLessThanOrEqual(960);
+    // 当初は 960 の上限で 560 へ落としていたが、3連が 187 に丸められ小節合計が
+    // divisions×4 と食い違った。厳密に必要な 16×lcm(3,5,7)=1680 をそのまま使う
+    expect(divisions).toBe(1680);
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const total = Array.from(doc.querySelectorAll('measure > note > duration'))
+      .reduce((sum, el) => sum + parseInt(el.textContent ?? '0', 10), 0);
+    // 3連(8分)×3 + 5連(8分)×5 + 7連(16分)×7 = 1拍 + 2拍 + 1拍 = 4拍
+    expect(total).toBe(divisions * 4);
   });
 });

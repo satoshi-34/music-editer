@@ -15,10 +15,6 @@ import { getTempoMarkingBpm } from './tempoMarkingPresets';
 // （resolveDivisions を参照。Issue #519）
 const BASE_DIVISIONS = 16;
 
-// divisions の上限（MusicXML で広く使われている値）。3連・5連・7連が同居する曲などで
-// 倍率が際限なく膨らむのを防ぐためにクランプする
-const MAX_DIVISIONS = 960;
-
 // 音価 → MusicXML duration（BASE_DIVISIONS基準） と type 文字列のマッピング
 const DUR_TO_DIV: Record<string, number> = {
   '1': 64, '2': 32, '4': 16, '8': 8, '16': 4, '32': 2, '64': 1,
@@ -243,8 +239,13 @@ function requiredDivisionsScale(ev: NoteEvent): number {
 /**
  * 譜面全体を見て <divisions> の値を決める。
  * 使われている連符すべての duration が整数になる最小の倍率（各音符が要求する倍率の
- * 最小公倍数）を BASE_DIVISIONS に掛ける。3連・5連・7連が同居して上限を超える場合は、
- * 上限内に収まる約数のうち最大のものへ落とす（そこまでは整数のまま書ける）。
+ * 最小公倍数）を BASE_DIVISIONS に掛ける。
+ *
+ * 上限は設けない（round1 P2）: 当初 960 の上限を置いて「約数のうち最大」へ落としていたが、
+ * 3・5・7連が同居すると必要倍率 105 に対し 35 を選び、丸めが再発して小節合計がずれた
+ * （この不具合修正の目的そのものに矛盾）。連符の分母は 2〜7 なので倍率の最悪は
+ * lcm(3,5,7)=105（付点は分子側で約分される）、divisions=1680 で、MusicXML の整数として
+ * まったく問題ない大きさに収まる。
  */
 function resolveDivisions(parts: { measures: MeasureData[] }[]): number {
   let scale = 1;
@@ -261,13 +262,7 @@ function resolveDivisions(parts: { measures: MeasureData[] }[]): number {
       });
     });
   });
-  if (BASE_DIVISIONS * scale <= MAX_DIVISIONS) return BASE_DIVISIONS * scale;
-  // 上限超え: scale の約数を大きい順に試し、上限に収まるものを採用する
-  const limit = Math.floor(MAX_DIVISIONS / BASE_DIVISIONS);
-  for (let d = limit; d >= 1; d--) {
-    if (scale % d === 0) return BASE_DIVISIONS * d;
-  }
-  return BASE_DIVISIONS;
+  return BASE_DIVISIONS * scale;
 }
 
 /**
