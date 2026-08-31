@@ -171,3 +171,62 @@ resolveMeasureBpms(measures: MeasureData[], globalBpm: number): number[]
 - テスト: 両エンジンの「60→120またぎ=1.5秒」「全体60・省略=2.0秒」、
   ScorePage 配線「左手だけの Allegro が両パートに効く」、共有列優先のタイムライン、
   tempoSegmentsFrom のフォールバック、を追加
+
+## 追記: MusicXML へのテンポ書き出し（Issue #518・2026-09-01）
+
+### 問題
+
+アプリで ♩=126 に設定した作品を MusicXML 書き出し → 読み込みすると 120 で鳴る、という
+運用者QA（実ファイルで確定）。書き出したファイルを調べると **`<sound tempo>` / `<metronome>` が
+1つも入っていない**ことが原因で、読み込み側は無罪だった。
+
+理由は保存データの構造にある。**全体テンポ（再生パネルの ♩=N）は `SavedScoreData` に無い**
+（`TempoManager` の再生設定側にある）ため、`scoreToMusicXml(data)` は全体テンポを知る手段が
+そもそも無かった。書き出していたのは `measure.bpm`（小節ごとの数値テンポ変更）だけで、
+指定が1つも無い普通の作品は「テンポの記述がまったく無いファイル」になっていた。
+
+### 修正設計
+
+1. **全体テンポを呼び出し側から渡す**: `scoreToMusicXml(data, { globalBpm })` /
+   `downloadMusicXml(data, filename, { globalBpm })` の任意オプションを追加し、
+   `ScorePage` の書き出しハンドラが `tempoSettings.bpm` を渡す。
+   保存データ（`SavedScoreData`）にテンポを生やす案は採らなかった: 保存形式の意味が
+   変わる（＝作品の属性なのか再生設定なのかの裁定が要る）うえ、書き出しの問題を直すのに
+   保存形式を変える必要が無いため。
+2. **先頭小節にだけ全体テンポを出す**: 出力条件を
+   `measure.bpm ?? (先頭小節なら globalBpm)` に変えた。小節ごとの数値テンポ変更がある小節は
+   従来どおりそれを出すので、**その小節では全体テンポより measure.bpm が優先**される
+   （画面・再生の優先順位と同じ）。
+3. **速度標語も書き出す**: `<direction-type><words>Andante</words></direction-type>` に加えて、
+   対応表（`tempoMarkingPresets`）で引ける語には目安 BPM を `<sound tempo="76"/>` として併記する。
+   対応表に無い自由入力（`Allegro con brio` など）は `<words>` だけを出す
+   （画面の扱い＝「表示だけ・速さは変えない」と同じ規則）。
+4. **読み込み側**: `<words>` を拾い、**対応表にある語のときだけ** `tempoMarking` として
+   その小節の先頭音符へ載せる。`<words>` は発想標語（dolce 等）や任意の注釈にも使われる
+   汎用要素なので、無条件に取り込むと表示専用の語まで再生テンポを動かしてしまう。
+   リハーサルマークと同じ理由で、五線で分けた譜では1番目の五線ぶんだけ拾う（両手への二重付与を防ぐ）。
+   全体テンポは、先頭小節の `<sound tempo>` が既存の読み取り（`measure.bpm`）へ入り、
+   `resolveMeasureBpms` がそこから解決するため、**往復で再生テンポが保たれる**。
+
+### 上の「触っていないもの」からの方針変更（記録）
+
+このファイルの #458 の節には「MusicXML / MIDI 書き出しは `measure.bpm` のみを見る従来どおりの挙動
+（標語からの目安 BPM を書き出しへ混ぜると、出力ファイルに存在しないテンポ指定が紛れ込むため。
+**必要になったら別 Issue で裁定する**）」と書いてあった。#518 がその「別 Issue」にあたり、
+仕様として「速度標語は `<words>` ＋対応表の目安 BPM を `sound tempo` で併記」と明記されたため、
+**この方針は #518 で置き換わった**（黙って上書きしたのではなく、予告どおりの裁定である）。
+
+### 影響範囲
+
+- `src/utils/musicXmlExport.ts`: `MusicXmlExportOptions` 追加、テンポ direction の出力条件、
+  `tempoMarkingDirectionXml` 追加
+- `src/utils/musicXmlImport.ts`: `<words>` → `tempoMarking` の取り込み
+- `src/components/ScorePage.tsx`: 書き出しへ `globalBpm` を渡す
+- MIDI 書き出し（`midiExport.ts`）は今回も対象外（`data.timeSignature` と `measure.bpm` を見る従来のまま）
+
+### 残っている食い違い（レビュー判断待ち）
+
+読み込み直後、**再生は 126 になるが、再生パネルの表示は既定値のまま**（先頭小節の
+`measure.bpm` として入るため）。パネル表示までそろえるには「先頭小節の bpm を全体テンポへ
+持ち上げる」処理が要るが、それは「小節ごとのテンポ変更」との境目を変える判断になるため、
+この Issue の受入条件（往復で 126 のまま**再生**される）を満たす範囲に留めた。

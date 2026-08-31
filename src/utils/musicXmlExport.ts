@@ -8,6 +8,7 @@ import type { KeySignature } from './noteKeyUtils';
 import type { ClefType } from '../components/clefUtils';
 import { resolveMeasureClef, resolveClefAtMeasureEnd } from './clefMeasureUtils';
 import { getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { getTempoMarkingBpm } from './tempoMarkingPresets';
 
 // 分割数（division）: 四分音符 = 16分割。全音符〜64分音符を整数で表せる最小値
 const DIVISIONS = 16;
@@ -118,6 +119,25 @@ function dynamicsDirectionXml(ev: NoteEvent, staff: number): string {
   );
   if (!dyn) return '';
   return `<direction placement="below"><direction-type><dynamics><${dyn.value}/></dynamics></direction-type><staff>${staff}</staff></direction>`;
+}
+
+/**
+ * 速度標語（Andante 等）1つぶんの <direction> を作る（Issue #518）。
+ *
+ * 標語は MusicXML では <words> で表すが、それだけだと読み込む側は「文字」しか受け取れず、
+ * テンポは変わらない。このアプリは対応表（tempoMarkingPresets）で標語→目安BPMを持っており、
+ * 再生でも実際にその速さで鳴らしている（#458）ので、同じ目安を <sound tempo> として併記して
+ * 書き出す。こうすると他ソフトでも、往復で戻したときも、標語どおりの速さで再生される。
+ *
+ * 対応表に無い自由入力（'Allegro con brio' など）は BPM を決められないため、
+ * <words> だけを出す（画面の扱いと同じで「表示だけ・速さは変えない」）。
+ */
+function tempoMarkingDirectionXml(ev: NoteEvent, staff: number): string {
+  const marking = ev.tempoMarking?.trim();
+  if (!marking) return '';
+  const bpm = getTempoMarkingBpm(marking);
+  const soundXml = bpm != null ? `<sound tempo="${bpm}"/>` : '';
+  return `<direction placement="above"><direction-type><words>${escapeXmlText(marking)}</words></direction-type><staff>${staff}</staff>${soundXml}</direction>`;
 }
 
 /**
@@ -248,6 +268,11 @@ function measureToXml(
     globalTimeSig: [number, number];
     isFirstMeasure: boolean;
     staff: number;
+    /**
+     * 作品全体のテンポ（再生パネルの ♩=N）。先頭小節にだけ書き出す（Issue #518）。
+     * 省略時（テンポが分からない呼び出し）は従来どおり何も出さない。
+     */
+    globalBpm?: number;
     prevTimeSig?: [number, number];
     prevKeyFifths?: number;
     effectiveKeyFifths: number;
@@ -296,10 +321,15 @@ function measureToXml(
     lines.push(`<attributes>${divXml}${keyXml}${timeXml}${clefXmlStr}</attributes>`);
   }
 
-  // テンポ変更（BPM 指定がある場合）
-  if (measure.bpm != null) {
+  // テンポ（Issue #518）。
+  // - この小節に数値のテンポ変更（measure.bpm）があればそれを出す
+  // - 無くても**先頭小節**には作品全体のテンポ（再生パネルの ♩=N）を出す
+  // 以前は measure.bpm のあるときしか出しておらず、全体テンポは1つも書かれなかった。
+  // そのため書き出したファイルを読み直すと、読込側の既定（120）へ戻ってしまっていた。
+  const measureTempoBpm = measure.bpm ?? (options.isFirstMeasure ? options.globalBpm : undefined);
+  if (measureTempoBpm != null) {
     lines.push(
-      `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${measure.bpm}</per-minute></metronome></direction-type><sound tempo="${measure.bpm}"/></direction>`
+      `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${measureTempoBpm}</per-minute></metronome></direction-type><sound tempo="${measureTempoBpm}"/></direction>`
     );
   }
 
@@ -327,6 +357,10 @@ function measureToXml(
     if (ev.clefChange) {
       lines.push(`<attributes>${clefXml(ev.clefChange)}</attributes>`);
     }
+    // 速度標語（Andante 等）は強弱より先に出す。<direction> は書いた順に
+    // 同じ位置へ並ぶので、譜面の見た目（標語が上・強弱が下）と並びをそろえておく
+    const tempoDir = tempoMarkingDirectionXml(ev, options.staff);
+    if (tempoDir) lines.push(tempoDir);
     const dynDir = dynamicsDirectionXml(ev, options.staff);
     if (dynDir) lines.push(dynDir);
     // 松葉（ヘアピン）開始: この音符の直前に <wedge type="crescendo|diminuendo"/> を置く
@@ -394,7 +428,18 @@ function measureToXml(
  * @param data 楽譜データ
  * @returns MusicXML XML 文字列
  */
-export function scoreToMusicXml(data: SavedScoreData): string {
+/** MusicXML 書き出しの追加情報（譜面データに含まれない、画面側が持っている値） */
+export interface MusicXmlExportOptions {
+  /**
+   * 作品全体のテンポ（再生パネルの ♩=N）。Issue #518。
+   * 全体テンポは保存データ（SavedScoreData）ではなく再生設定（TempoManager）側に
+   * あるため、書き出すには呼び出し側から渡してもらう必要がある。
+   * 省略した場合は従来どおり、全体テンポの <direction> を出さない。
+   */
+  globalBpm?: number;
+}
+
+export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOptions = {}): string {
   const { metadata, keySignature = 'C', timeSignature = [4, 4], timeSignatureStyle } = data;
   // 書き出し境界の正規化（#244 段5-3）: read は voices[0]（鏡）を優先するため、
   // 呼び出し側から鏡が古いデータ（旧バージョン由来・手組みのテストデータ等）が来ても
@@ -457,6 +502,7 @@ export function scoreToMusicXml(data: SavedScoreData): string {
         globalTimeSig,
         isFirstMeasure: mi === 0,
         staff: 1,
+        globalBpm: options.globalBpm,
         prevTimeSig,
         prevKeyFifths,
         effectiveKeyFifths,
@@ -504,8 +550,12 @@ function escXml(s: string): string {
 }
 
 /** MusicXML をファイルとしてダウンロードする */
-export function downloadMusicXml(data: SavedScoreData, filename?: string): void {
-  const xml = scoreToMusicXml(data);
+export function downloadMusicXml(
+  data: SavedScoreData,
+  filename?: string,
+  options: MusicXmlExportOptions = {}
+): void {
+  const xml = scoreToMusicXml(data, options);
   const blob = new Blob([xml], { type: 'application/vnd.recordare.musicxml+xml' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

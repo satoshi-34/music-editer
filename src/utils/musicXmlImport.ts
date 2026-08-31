@@ -11,6 +11,7 @@ import { ensureMeasuresPrimaryVoiceMaterialized, getEventDurationBeats } from '.
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { buildRestEventsForBeats } from './measureRestFillUtils';
 import { readMusicXmlDefaults, type MusicXmlDefaultsLayout } from './musicXmlDefaults';
+import { getTempoMarkingBpm } from './tempoMarkingPresets';
 
 /**
  * MusicXML の <clef><sign>/<line> を ClefType に変換する。
@@ -715,6 +716,19 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
       ? rehearsalText
       : undefined;
 
+    // 速度標語（Andante 等）: <direction-type><words> を拾う（Issue #518）。
+    // <words> は速度標語だけでなく発想標語（dolce 等）や任意の注釈にも使われる汎用要素なので、
+    // 「対応表（tempoMarkingPresets）にある語」だけを速度標語として取り込む。
+    // こうしないと dolce のような表示専用の語まで再生テンポを動かしてしまう。
+    // リハーサルマークと同じ理由で、五線で分けた譜では1番目の五線ぶんだけ拾う（両手に二重に付けない）
+    const tempoWordsEl = staffNumber === null || staffNumber === 1
+      ? measureEl.querySelector('direction-type words')
+      : null;
+    const tempoWordsText = tempoWordsEl?.textContent?.trim();
+    const tempoMarking = tempoWordsText && getTempoMarkingBpm(tempoWordsText) != null
+      ? tempoWordsText
+      : undefined;
+
     // 小節単位拍子変更
     const attrEl = measureEl.querySelector('attributes time');
     let timeSig: [number, number] | undefined;
@@ -782,6 +796,12 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
         events[at] = { ...events[at], clefChange: clef };
         runningClef = clef;
       }
+    }
+
+    // 速度標語は「その小節の最初の音符に付く文字列」として持つ（#458 の持ち方に合わせる）。
+    // 音符が1つも無い小節では置き場所が無いので、その場合は捨てる（表示・再生とも影響なし）
+    if (tempoMarking && events.length > 0) {
+      events[0] = { ...events[0], tempoMarking };
     }
 
     return {
