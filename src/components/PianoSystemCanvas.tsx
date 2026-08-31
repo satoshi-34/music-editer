@@ -212,7 +212,7 @@ import {
 // Issue #38）。既存のテスト（PianoSystemCanvasPartSpacing.test.tsx）はこのファイルからの
 // named import を使っているため、後方互換として re-export する。
 export { computeLayout, staveSpacingForPartCount };
-import { createVexFlowTuplets, syncTupletBracketsWithBeams, vexFlowDotCount, type RenderedTuplet } from '../utils/vexFlowTimingUtils';
+import { createVexFlowTuplets, syncTupletBracketsWithBeams, syncTupletPlacementWithNotes, vexFlowDotCount, type RenderedTuplet } from '../utils/vexFlowTimingUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 import {
@@ -1701,6 +1701,11 @@ function drawRenderedVoiceEntries(
           b.draw();
         }
       });
+      // 連符の数字を上下どちらに置くかを、描画の直前にもう一度見直す（Issue #471）。
+      // VexFlow は符幹の向きだけで上下を決めるため、加線の上（下）に離れた音符では
+      // 数字だけが五線をまたいで反対側へ取り残され、多段譜では下の段のビームと重なる。
+      // 音符と五線の位置関係が要るので、音符が五線へ紐づいたあと（＝描画段）に呼ぶ。
+      syncTupletPlacementWithNotes(entry.tuplets);
       entry.tuplets.forEach(({ tuplet, hideNumber }, tupletIndex) => {
         // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
         // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
