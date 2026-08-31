@@ -961,10 +961,14 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   // part-list と本文の id が完全対応するときだけ part-list 順で番号付けする。
   // 一部でも引けない id があると、part-list 順と文書順の番号が混在して明示メタが
   // 誤ったパートへ適用され得る（round7 P3）ため、その場合は全パートを文書順へ切り替える
-  const partListConsistent = partEls.every((el) => {
-    const id = el.getAttribute('id');
-    return id != null && partListIds.indexOf(id) >= 0;
-  });
+  // 「完全対応」= 件数一致・id の一意性・双方向の集合一致（round8 P3）。
+  // 余分な score-part や重複 id のある不正ファイルで番号がずれるのを防ぐ
+  const bodyIds = partEls.map((el) => el.getAttribute('id'));
+  const partListConsistent =
+    partListIds.length === bodyIds.length
+    && new Set(partListIds).size === partListIds.length
+    && new Set(bodyIds).size === bodyIds.length
+    && bodyIds.every((id) => id != null && partListIds.includes(id));
   const sourcePartElIndexByPart: number[] = [];
 
   for (let pi = 0; pi < partEls.length; pi++) {
