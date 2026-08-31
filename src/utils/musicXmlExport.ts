@@ -327,24 +327,10 @@ function measureToXml(
   // 以前は measure.bpm のあるときしか出しておらず、全体テンポは1つも書かれなかった。
   // そのため書き出したファイルを読み直すと、読込側の既定（120）へ戻ってしまっていた。
   const measureTempoBpm = measure.bpm ?? (options.isFirstMeasure ? options.globalBpm : undefined);
-  const tempoDirectionXml = measureTempoBpm != null
-    ? `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${measureTempoBpm}</per-minute></metronome></direction-type><sound tempo="${measureTempoBpm}"/></direction>`
-    : '';
-  // 「全体テンポ+標語」と「先頭小節の数値変更+標語」は要素構成が同じで、並び順だけが
-  // 意味を区別する（round2 P1）。数値変更（measure.bpm）は同一小節の標語より**優先**
-  // されるので標語の後へ、全体テンポは標語に**負ける**ので標語の前（小節頭）へ出す。
-  // この並びは外部プレーヤーの「後に書かれた <sound> が勝つ」挙動とも一致し、
-  // 読み込み側も同じ順序規則で全体テンポ／数値変更を判別して往復させる。
-  const measureHasMarking = getMeasureVoices(measure).some(
-    (voice) => voice.events.some((ev) => ev.tempoMarking?.trim()),
-  );
-  let deferredTempoDirection = '';
-  if (tempoDirectionXml) {
-    if (measure.bpm != null && measureHasMarking) {
-      deferredTempoDirection = tempoDirectionXml; // 最初の標語の直後に出す
-    } else {
-      lines.push(tempoDirectionXml);
-    }
+  if (measureTempoBpm != null) {
+    lines.push(
+      `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${measureTempoBpm}</per-minute></metronome></direction-type><sound tempo="${measureTempoBpm}"/></direction>`
+    );
   }
 
   // リハーサルマーク（練習番号）: MusicXML の標準的な <rehearsal> 要素で出力する
@@ -374,14 +360,7 @@ function measureToXml(
     // 速度標語（Andante 等）は強弱より先に出す。<direction> は書いた順に
     // 同じ位置へ並ぶので、譜面の見た目（標語が上・強弱が下）と並びをそろえておく
     const tempoDir = tempoMarkingDirectionXml(ev, options.staff);
-    if (tempoDir) {
-      lines.push(tempoDir);
-      // 数値テンポ変更と標語が同居する小節では、数値を最初の標語の直後に出す（並び順の規則）
-      if (deferredTempoDirection) {
-        lines.push(deferredTempoDirection);
-        deferredTempoDirection = '';
-      }
-    }
+    if (tempoDir) lines.push(tempoDir);
     const dynDir = dynamicsDirectionXml(ev, options.staff);
     if (dynDir) lines.push(dynDir);
     // 松葉（ヘアピン）開始: この音符の直前に <wedge type="crescendo|diminuendo"/> を置く
@@ -423,13 +402,7 @@ function measureToXml(
       // 速度標語は追加声部の音符にも付けられる（#516 で再生対象になった）ので、
       // 主声部と同じく音符の直前に <words>（+目安BPMの <sound>）を出す（Codex round1 P2）
       const tempoDirExtra = tempoMarkingDirectionXml(ev, options.staff);
-      if (tempoDirExtra) {
-        lines.push(tempoDirExtra);
-        if (deferredTempoDirection) {
-          lines.push(deferredTempoDirection);
-          deferredTempoDirection = '';
-        }
-      }
+      if (tempoDirExtra) lines.push(tempoDirExtra);
       if (voiceNumber === 2) {
         options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
           lines.push(wedgeDirectionXml(wedgeType, options.staff));
@@ -562,13 +535,24 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
   <work><work-title>${escXml(title)}</work-title></work>
   <identification>
     <creator type="composer">${escXml(composer)}</creator>
-    <encoding><software>my-music-app</software></encoding>${timeSignatureStyle === 'symbol'
-      // 拍子の記号表示設定（#422）。<time symbol> は先頭が 4/4・2/2 のときしか
-      // 書けないため、6/8 等へ変更中でも設定を往復させるにはアプリ固有メタが要る。
-      // MusicXML 公式のアプリ固有情報置き場（miscellaneous-field）を使う（round3 P2）。
-      // numeric（既定）のときは改行ごと何も足さない（従来出力と1バイトも変えない）
-      ? '\n    <miscellaneous><miscellaneous-field name="music-editer.time-signature-style">symbol</miscellaneous-field></miscellaneous>'
-      : ''}
+    <encoding><software>my-music-app</software></encoding>${(() => {
+      // MusicXML 公式のアプリ固有情報置き場（miscellaneous-field）。
+      // - 拍子の記号表示設定（#422）: <time symbol> は先頭が 4/4・2/2 のときしか
+      //   書けないため、6/8 等へ変更中でも設定を往復させるにはアプリ固有メタが要る
+      // - 全体テンポ（#518 round3 P1）: 「全体テンポ」と「先頭小節の数値テンポ変更」は
+      //   小節側の要素構成が同一で区別できないため、全体テンポの正本をここに記録する。
+      //   読み込み側はこのメタを最優先で globalBpm とし、先頭小節の <sound> と値が
+      //   一致するときだけ measure.bpm から取り除く（数値変更はそのまま残る）
+      // どちらも無いときは改行ごと何も足さない（従来出力と1バイトも変えない）
+      const fields: string[] = [];
+      if (timeSignatureStyle === 'symbol') {
+        fields.push('<miscellaneous-field name="music-editer.time-signature-style">symbol</miscellaneous-field>');
+      }
+      if (options.globalBpm != null) {
+        fields.push(`<miscellaneous-field name="music-editer.global-bpm">${options.globalBpm}</miscellaneous-field>`);
+      }
+      return fields.length ? `\n    <miscellaneous>${fields.join('')}</miscellaneous>` : '';
+    })()}
   </identification>
   <part-list>${partListItems.join('')}</part-list>
   ${partXmls.join('\n  ')}

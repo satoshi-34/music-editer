@@ -871,8 +871,10 @@ export interface MusicXmlImportResult {
    * このアプリの書き出しは全体テンポを先頭小節の <metronome>+<sound> として出すため、
    * 先頭小節の単独 sound は「全体テンポ」として返し、measure.bpm には入れない。
    * こうしないと往復で「全体126」が「先頭小節だけ数値126・パネルは120のまま」に化ける。
-   * 読み替えは再生の意味が変わらないと確認できたときだけ行う（先頭小節に速度標語がある・
-   * 複数パートで値が食い違う場合は行わず、従来どおり measure.bpm として保持する）。
+   * 正本はアプリ固有メタ（music-editer.global-bpm）。メタがあれば先頭小節の <sound> 由来の
+   * bpm はメタと一致するものだけ取り除く（一致しない値＝本物の数値テンポ変更は保持）。
+   * メタの無い外部ファイルは、全パートで一致し標語より前に書かれた先頭小節の単独 <sound> を
+   * 全体テンポとみなす。それ以外は従来どおり measure.bpm として保持する。
    */
   globalBpm?: number;
 }
@@ -1011,32 +1013,52 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   // 読み替えない場合は従来どおり measure.bpm として保持する（数値の引き継ぎ規則により
   // 再生結果は書き出し前と同じ）。
   let globalBpm: number | undefined;
-  const firstMeasureBpms = parts
-    .map((part) => part.measures[0]?.bpm)
-    .filter((v): v is number => v != null);
-  const firstMeasureSoundIsGlobal = partEls.every((partEl) => {
-    const m = partEl.querySelector('measure');
-    if (!m) return true;
-    const sound = Array.from(m.querySelectorAll('sound[tempo]')).find(
-      (el) => !el.closest('direction')?.querySelector('direction-type words'),
-    );
-    if (!sound) return true;
-    const marking = Array.from(m.querySelectorAll('direction-type words')).find(
-      (el) => getTempoMarkingBpm(el.textContent?.trim() ?? '') != null,
-    );
-    if (!marking) return true;
-    // 単独 <sound> が標語より前（文書順）にあれば全体テンポ
-    return (sound.compareDocumentPosition(marking) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-  });
-  if (
-    firstMeasureBpms.length > 0
-    && firstMeasureBpms.every((v) => v === firstMeasureBpms[0])
-    && firstMeasureSoundIsGlobal
-  ) {
-    globalBpm = firstMeasureBpms[0];
+  const metaGlobalBpmText = Array.from(doc.querySelectorAll('identification miscellaneous-field'))
+    .find((el) => el.getAttribute('name') === 'music-editer.global-bpm')
+    ?.textContent?.trim();
+  const metaGlobalBpm = metaGlobalBpmText != null ? parseInt(metaGlobalBpmText, 10) : NaN;
+  if (!isNaN(metaGlobalBpm) && metaGlobalBpm > 0) {
+    // 自分の書き出し（メタあり）: メタが全体テンポの正本。先頭小節の <sound> 由来の bpm は、
+    // 値がメタと一致するもの（＝書き出し時に全体テンポとして出したもの）だけ取り除く。
+    // 一致しない値は本物の数値テンポ変更なので measure.bpm のまま残す（round3 P1）
+    globalBpm = metaGlobalBpm;
     for (const part of parts) {
       const first = part.measures[0];
-      if (first?.bpm != null) part.measures[0] = { ...first, bpm: undefined };
+      if (first?.bpm === metaGlobalBpm) part.measures[0] = { ...first, bpm: undefined };
+    }
+  } else {
+    // メタの無い外部ファイル: 全パートで一致する先頭小節の <sound> を全体テンポとみなす。
+    // 値を持たないパートがあっても読み替えてよい: 小節テンポはスコア共通の1列として解決される
+    //（#516 resolveScoreMeasureBpms）ため、どのパートに書かれていても再生結果は同じ（round3 P2）
+    const firstMeasureBpms = parts
+      .map((part) => part.measures[0]?.bpm)
+      .filter((v): v is number => v != null);
+    // 標語（対応表にある語）より後ろ（文書順）に書かれた単独 <sound> は、外部プレーヤーでは
+    // 標語の目安BPMを上書きする「テンポ変更」として鳴る。全体テンポへ読み替えると
+    // 標語が勝つ側に反転してしまうので、その形のファイルは読み替えない
+    const firstMeasureSoundIsGlobal = partEls.every((partEl) => {
+      const m = partEl.querySelector('measure');
+      if (!m) return true;
+      const sound = Array.from(m.querySelectorAll('sound[tempo]')).find(
+        (el) => !el.closest('direction')?.querySelector('direction-type words'),
+      );
+      if (!sound) return true;
+      const marking = Array.from(m.querySelectorAll('direction-type words')).find(
+        (el) => getTempoMarkingBpm(el.textContent?.trim() ?? '') != null,
+      );
+      if (!marking) return true;
+      return (sound.compareDocumentPosition(marking) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    });
+    if (
+      firstMeasureBpms.length > 0
+      && firstMeasureBpms.every((v) => v === firstMeasureBpms[0])
+      && firstMeasureSoundIsGlobal
+    ) {
+      globalBpm = firstMeasureBpms[0];
+      for (const part of parts) {
+        const first = part.measures[0];
+        if (first?.bpm != null) part.measures[0] = { ...first, bpm: undefined };
+      }
     }
   }
 
