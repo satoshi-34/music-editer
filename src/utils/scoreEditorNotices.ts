@@ -779,3 +779,11 @@ export function describeHomeActionBlocked(kind: 'create' | 'goHome'): string {
 export function describeNotationSizeFitSuggestion(fittedPercent: number): string {
   return `現在の音符サイズでは紙幅に収まらない小節があります（レイアウトタブで音符の大きさを ${fittedPercent}% にすると収まります）`;
 }
+
+/**
+ * MusicXML 書き出しが連符の分割数を決められず中止したときの文言（#519 round3 P3）。
+ * 分母が互いに素な巨大連符が多数同居する病的データでのみ起きる。
+ */
+export function describeDivisionsOverflow(): string {
+  return '連符の構成が複雑すぎて MusicXML の分割数を決められません。極端に大きい連符（分母が互いに素な多数の連符の同居）を減らしてから書き出してください';
+}

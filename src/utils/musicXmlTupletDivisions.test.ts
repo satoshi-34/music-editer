@@ -188,18 +188,23 @@ describe('MusicXML 書き出し: 連符に合わせた divisions（Issue #519）
     expect(() => scoreToMusicXml(singleMeasureScore(events))).toThrow(/連符の構成が複雑/);
   });
 
-  it('読み込みで持ち込まれ得る 9・11・13連の同居は安全上限内で厳密に書ける', () => {
+  it('読み込みで持ち込まれ得る 3〜13連の同居（lcm 45045）は安全上限内で厳密に書ける', () => {
     const events: NoteEvent[] = [
+      ...tupletGroup('g3', '8', 3, 2),
+      ...tupletGroup('g5', '8', 5, 4),
+      ...tupletGroup('g7', '16', 7, 4),
       ...tupletGroup('g9', '16', 9, 8),
       ...tupletGroup('g11', '16', 11, 8),
       ...tupletGroup('g13', '16', 13, 8),
     ];
     const xml = scoreToMusicXml(singleMeasureScore(events));
     const divisions = readDivisions(xml);
+    // 安全上限の説明値そのもの: 16 × lcm(3,5,7,9,11,13) = 16 × 45045
+    expect(divisions).toBe(16 * 45045);
     const doc = new DOMParser().parseFromString(xml, 'application/xml');
     const total = Array.from(doc.querySelectorAll('measure > note > duration'))
       .reduce((sum, el) => sum + parseInt(el.textContent ?? '0', 10), 0);
-    // 9連(16分)×9=2拍 + 11連(16分)×11=2拍 + 13連(16分)×13=2拍 = 6拍
-    expect(total).toBe(divisions * 6);
+    // 1 + 2 + 1 + 2 + 2 + 2 = 10拍
+    expect(total).toBe(divisions * 10);
   });
 });

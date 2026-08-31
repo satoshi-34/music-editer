@@ -9,6 +9,7 @@ import type { ClefType } from '../components/clefUtils';
 import { resolveMeasureClef, resolveClefAtMeasureEnd } from './clefMeasureUtils';
 import { getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { getTempoMarkingBpm } from './tempoMarkingPresets';
+import { describeDivisionsOverflow } from './scoreEditorNotices';
 
 // 分割数（division）の基準値: 四分音符 = 16分割。全音符〜64分音符を整数で表せる最小値。
 // 連符がある譜面では、この値を「連符の分母で割り切れる倍率」だけ引き上げて使う
@@ -262,16 +263,19 @@ function resolveDivisions(parts: { measures: MeasureData[] }[]): number {
         ...getMeasureVoices(measure).slice(1).flatMap((v) => v.events),
       ];
       allEvents.forEach((ev) => {
-        scale = lcm(scale, requiredDivisionsScale(ev));
+        // 上限判定は lcm を進める**たび**に行う（round3 P2）。まとめて最後に判定すると、
+        // 途中値が Infinity へ膨らんだとき gcd の剰余が NaN になり while が終わらない
+        const required = requiredDivisionsScale(ev);
+        if (!Number.isFinite(required) || required > MAX_DIVISIONS_SCALE) {
+          throw new Error(describeDivisionsOverflow());
+        }
+        scale = lcm(scale, required);
+        if (!Number.isFinite(scale) || scale > MAX_DIVISIONS_SCALE) {
+          throw new Error(describeDivisionsOverflow());
+        }
       });
     });
   });
-  if (scale > MAX_DIVISIONS_SCALE) {
-    throw new Error(
-      '連符の構成が複雑すぎて MusicXML の分割数を決められません。'
-      + '極端に大きい連符（分母が互いに素な多数の連符の同居）を減らしてから書き出してください',
-    );
-  }
   return BASE_DIVISIONS * scale;
 }
 
