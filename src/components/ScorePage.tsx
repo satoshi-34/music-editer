@@ -162,7 +162,7 @@ import {
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
-import { resolveMeasureBpms } from '../utils/tempoPlaybackUtils';
+import { resolveScoreMeasureBpms } from '../utils/tempoPlaybackUtils';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, INSTRUMENT_NAME_MAX_LENGTH, resolveInstrumentPartLabels, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
@@ -1544,15 +1544,23 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 32分へ割るとエンジンのスウィング判定（8分のみ）から外れ、
           // 実音とハイライトの位置がずれるため（裏拍の 2/3 シフトが消える）
           const swingActive = soundRuntimeSettings.swingEnabled && !isCompoundTimeSignature(scoreTimeSignature);
+          // 各パートのリピート展開を先に済ませ、**スコア共通のテンポ列**を1回だけ解決する
+          // （#458 round1 P1: パートごとに解決すると、標語を置いた段だけ速くなり同期が崩れる）
+          const expandedPerPart = parts.map((partSource, partIndex) =>
+            partIndex === 0
+              ? referenceExpanded
+              : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures));
+          const scoreMeasureBpms = resolveScoreMeasureBpms(
+            expandedPerPart.map(list => list.map(item => item.measure)),
+            tempoSettings.bpm,
+          );
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
             // ここで「展開後の再生順」と「各音符のベロシティ」を一緒に作って渡す。
             // 多段譜では各段が別々に repeat 情報を持つと再生順が分かれやすいので、
             // 先頭パートの反復順を基準に他パートも同じ順番へそろえる。
-            const expandedMeasuresFull = partIndex === 0
-              ? referenceExpanded
-              : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures);
+            const expandedMeasuresFull = expandedPerPart[partIndex];
             // 途中再生では、展開後の再生順を開始位置で切ってからエンジンへ渡す。
             // 全パートとも先頭パートの反復順にそろえてあるため、同じ位置で切れば拍が一致する。
             // 強弱（絶対強弱と cresc./dim. の傾斜）は**切る前の全列**で解決し、キーの
@@ -1560,10 +1568,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
-            // 速度標語（Andante 等）と途中テンポ変更（♩=XXX）から、小節ごとの再生テンポを決める（#458）。
-            // 強弱と同じく**切る前の全列**で解決する: 途中再生の開始位置より前に置かれた
-            // 標語やテンポ指定も、そこまでの変化を引き継いだ状態で効かせたいため
-            const measureBpms = resolveMeasureBpms(expandedMeasuresFull.map(item => item.measure), tempoSettings.bpm);
+            // テンポ列はスコア共通（上で1回だけ解決済み・#458 round1 P1）。
+            // 強弱と同じく**切る前の全列**で解決してあるので、途中再生でも
+            // 開始位置より前の標語・テンポ指定を引き継いだ状態で効く
+            const measureBpms = scoreMeasureBpms;
             // タイ（同じ高さの音を結んで1音として伸ばす記号）を再生へ反映する計画。
             // 強弱と違って**切ったあとの列**で解決する: 開始音が開始位置より前にあって
             // 切り落とされた継続音は、抑制せずそのまま鳴らしたい（途中再生で音が消えないため）。

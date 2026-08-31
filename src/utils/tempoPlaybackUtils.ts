@@ -70,3 +70,76 @@ export function resolveMeasureBpms(measures: MeasureData[], globalBpm: number): 
 
   return resolved;
 }
+
+/**
+ * 多段譜（ピアノ・四重奏・編成譜）向けに、**スコア全体で共通の**小節ごとの実効 BPM を
+ * 解決する（#458 round1 P1）。テンポは段ごとの属性ではなく曲の属性なので、
+ * どの段に数値テンポ・速度標語が置かれていても全パートが同じテンポ列で鳴るべき
+ * （段ごとに別々へ解決すると、標語を置いた段だけ速くなりパート間で同期が崩れる）。
+ *
+ * 優先順位は resolveMeasureBpms と同じ（数値 > 標語 > 引き継ぎ）を、
+ * 「同じ小節番号のどれかの段にあれば採用（複数段にある場合はパート順で先勝ち）」へ拡張。
+ *
+ * @param partMeasureLists 各パートの（リピート展開後・同じ長さに揃った）小節列
+ */
+export function resolveScoreMeasureBpms(partMeasureLists: MeasureData[][], globalBpm: number): number[] {
+  let currentBpm = clampBpm(globalBpm, 120);
+  const length = partMeasureLists[0]?.length ?? 0;
+  const resolved: number[] = [];
+
+  for (let i = 0; i < length; i++) {
+    const numeric = partMeasureLists
+      .map(list => list[i]?.bpm)
+      .find(bpm => isUsableBpm(bpm));
+    if (numeric != null) {
+      currentBpm = clampBpm(numeric as number, currentBpm);
+    } else {
+      for (const list of partMeasureLists) {
+        const markingBpm = list[i] ? findTempoMarkingBpmInMeasure(list[i]) : null;
+        if (markingBpm != null) {
+          currentBpm = clampBpm(markingBpm, currentBpm);
+          break;
+        }
+      }
+    }
+    resolved.push(currentBpm);
+  }
+
+  return resolved;
+}
+
+/**
+ * 「小節内の開始拍 → 終了拍（次小節へまたいでよい）」の実時間（秒）を、
+ * 小節ごとのテンポ区間で積算して求める（#458 round1 P2）。
+ * タイの実時間セマンティクス（#469）はテンポ変更をまたぐとき、またいだ先の
+ * 小節のテンポでその区間を数えないと長さがずれる（60→120BPM で 0.5秒の過伸長など）。
+ *
+ * @param startBeat 起点小節内の開始拍
+ * @param endBeat   起点小節の頭から数えた終了拍（起点小節の拍数を超えてよい）
+ * @param segments  起点小節から順に並んだ { beats: 小節の拍数, bpm } の列
+ */
+export function beatSpanToSeconds(
+  startBeat: number,
+  endBeat: number,
+  segments: ReadonlyArray<{ beats: number; bpm: number }>,
+): number {
+  let seconds = 0;
+  let segmentStart = 0;
+  for (const segment of segments) {
+    const segmentEnd = segmentStart + segment.beats;
+    const overlapStart = Math.max(startBeat, segmentStart);
+    const overlapEnd = Math.min(endBeat, segmentEnd);
+    if (overlapEnd > overlapStart) {
+      seconds += (overlapEnd - overlapStart) * (60 / clampBpm(segment.bpm, 120));
+    }
+    segmentStart = segmentEnd;
+    if (segmentStart >= endBeat) break;
+  }
+  // 区間列が尽きても終了拍に届かない場合（最終小節のタイ末尾など）は最後のテンポで延長する
+  if (segmentStart < endBeat) {
+    const lastBpm = segments.length > 0 ? segments[segments.length - 1].bpm : 120;
+    const from = Math.max(startBeat, segmentStart);
+    seconds += (endBeat - from) * (60 / clampBpm(lastBpm, 120));
+  }
+  return seconds;
+}

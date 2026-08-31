@@ -4,7 +4,7 @@
 // ここが仕様の正本になる。
 import { describe, it, expect } from 'vitest';
 import type { MeasureData } from '../types/storage';
-import { resolveMeasureBpms } from './tempoPlaybackUtils';
+import { beatSpanToSeconds, resolveMeasureBpms, resolveScoreMeasureBpms } from './tempoPlaybackUtils';
 import { TEMPO_MARKING_PRESET_ENTRIES, getTempoMarkingBpm } from './tempoMarkingPresets';
 import { MIN_BPM, MAX_BPM } from '../audio/tempoRange';
 
@@ -125,5 +125,49 @@ describe('速度標語プリセットの目安 BPM', () => {
     expect(getTempoMarkingBpm('存在しない標語')).toBeNull();
     expect(getTempoMarkingBpm(undefined)).toBeNull();
     expect(getTempoMarkingBpm('')).toBeNull();
+  });
+});
+
+describe('resolveScoreMeasureBpms（#458 round1 P1: スコア共通のテンポ列）', () => {
+  it('どのパートに標語があっても、全パート共通のテンポ列になる', () => {
+    // パート0には何もなく、パート1の2小節目に Allegro（対応表: 132）
+    const part0: MeasureData[] = [measureWith(), measureWith(), measureWith()];
+    const part1: MeasureData[] = [measureWith(), measureWith({ tempoMarking: 'Allegro' }), measureWith()];
+    const bpms = resolveScoreMeasureBpms([part0, part1], 120);
+    expect(bpms).toEqual([120, 132, 132]);
+  });
+
+  it('数値テンポは（別パートの）標語より優先される', () => {
+    const part0: MeasureData[] = [measureWith(), measureWith({ bpm: 90 })];
+    const part1: MeasureData[] = [measureWith(), measureWith({ tempoMarking: 'Allegro' })];
+    const bpms = resolveScoreMeasureBpms([part0, part1], 120);
+    expect(bpms).toEqual([120, 90]);
+  });
+});
+
+describe('beatSpanToSeconds（#458 round1 P2: テンポ変更をまたぐタイの秒数）', () => {
+  it('60→120BPM をまたぐ「4分+4分」のタイは 1.0+0.5=1.5秒になる', () => {
+    // 起点小節: 4/4・60BPM の4拍目から1拍（=1.0秒）、次小節: 120BPM の頭1拍（=0.5秒）
+    const seconds = beatSpanToSeconds(3, 5, [
+      { beats: 4, bpm: 60 },
+      { beats: 4, bpm: 120 },
+    ]);
+    expect(seconds).toBeCloseTo(1.5, 6);
+  });
+
+  it('逆方向（120→60）でも各区間のテンポで積算される', () => {
+    const seconds = beatSpanToSeconds(3, 5, [
+      { beats: 4, bpm: 120 },
+      { beats: 4, bpm: 60 },
+    ]);
+    expect(seconds).toBeCloseTo(0.5 + 1.0, 6);
+  });
+
+  it('テンポ変更が無ければ従来計算（拍数×一定秒/拍）と一致する', () => {
+    const seconds = beatSpanToSeconds(2, 6, [
+      { beats: 4, bpm: 100 },
+      { beats: 4, bpm: 100 },
+    ]);
+    expect(seconds).toBeCloseTo(4 * (60 / 100), 6);
   });
 });

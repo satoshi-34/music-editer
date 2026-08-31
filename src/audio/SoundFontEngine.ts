@@ -1,3 +1,4 @@
+import { beatSpanToSeconds } from '../utils/tempoPlaybackUtils';
 import type { Player as SoundFontPlayer } from 'soundfont-player';
 
 import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
@@ -168,7 +169,8 @@ export class SoundFontEngine implements PlaybackEngine {
     // こうすると Promise を待たずに、和音や複数パートが同時にそろって鳴る。
     playableParts.forEach(({ part, player }) => {
       let partTime = startTime;
-      for (const measure of part.measures) {
+      for (let measureIndex = 0; measureIndex < part.measures.length; measureIndex++) {
+        const measure = part.measures[measureIndex];
         // measureStartTime は「この小節の頭が絶対時刻でどこか」を固定するための値。
         // startBeat 付きイベントはここを基準に予約すると、
         // 上声と下声が同じ拍から鳴る小節でもずれにくい。
@@ -227,9 +229,14 @@ export class SoundFontEngine implements PlaybackEngine {
               // （変換後の長さへ extend を足すと表拍/裏拍で長短の誤差が出る・Codex round1 P1）。
               // 開始位置と次の音までの間隔は変えないので、テンポは崩れない。
               const tieExtendBeats = event.tieExtendBeatsByKey?.[key] ?? 0;
+              // タイが次小節へまたぐとき、その先はテンポが違うかもしれない（#458 round1 P2）。
+              // 「開始小節のBPM×総拍数」ではなく、小節ごとのテンポ区間で秒数を積算する
               const tiedSoundDuration = tieExtendBeats > 0
-                ? ((nominalStartBeat + durationBeats + tieExtendBeats) - swingTiming.startBeat)
-                  * (60 / measureBpm) * (event.durationScale ?? 1)
+                ? beatSpanToSeconds(
+                    swingTiming.startBeat,
+                    nominalStartBeat + durationBeats + tieExtendBeats,
+                    tempoSegmentsFrom(part.measures, measureIndex),
+                  ) * (event.durationScale ?? 1)
                 : soundDuration;
               player.play(
                 this.normalizeNoteFormat(key),
@@ -473,4 +480,23 @@ export class SoundFontEngine implements PlaybackEngine {
 
     return Math.max(0, Math.min(1, rawVelocity));
   }
+}
+
+/** タイの秒数積算用: 指定小節から先の { 拍数, BPM } 区間列を作る（#458 round1 P2） */
+function tempoSegmentsFrom(
+  measures: ReadonlyArray<{ measureBeats?: number; bpm?: number } | undefined>,
+  fromIndex: number,
+): Array<{ beats: number; bpm: number }> {
+  const segments: Array<{ beats: number; bpm: number }> = [];
+  let lastBpm = 120;
+  for (let i = fromIndex; i < measures.length; i++) {
+    const measure = measures[i];
+    const beats = typeof measure?.measureBeats === 'number' ? measure.measureBeats : 4;
+    const bpm = typeof measure?.bpm === 'number' && Number.isFinite(measure.bpm) && measure.bpm > 0
+      ? measure.bpm
+      : lastBpm;
+    lastBpm = bpm;
+    segments.push({ beats, bpm });
+  }
+  return segments;
 }

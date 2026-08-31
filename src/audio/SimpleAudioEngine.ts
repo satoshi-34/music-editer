@@ -2,6 +2,7 @@
 // Web Audio APIを直接使用したシンプルな音声エンジン
 // ブラウザの自動再生ポリシーに完全対応
 
+import { beatSpanToSeconds } from '../utils/tempoPlaybackUtils';
 import { InstrumentType } from './SoundSource';
 import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
 import {
@@ -478,9 +479,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
             // （表拍8分+裏拍8分のタイが 7/6 拍に伸びる誤差の防止・Codex round1 P1）。
             // 次の音の位置（currentTime）は下で duration のまま進めるのでテンポは崩れない。
             const tieExtendBeats = event.tieExtendBeatsByKey?.[primaryKey] ?? 0;
+            // タイが次小節へまたぐとき、その先の小節はテンポが違うかもしれない（#458 round1 P2）。
+            // 「開始小節のBPM×総拍数」ではなく、小節ごとのテンポ区間で秒数を積算する
             const tiedSoundDuration = tieExtendBeats > 0
-              ? ((nominalStartBeat + nominalDurationBeats + tieExtendBeats) - swingTiming.startBeat)
-                * secondsPerBeat * (event.durationScale ?? 1)
+              ? beatSpanToSeconds(
+                  swingTiming.startBeat,
+                  nominalStartBeat + nominalDurationBeats + tieExtendBeats,
+                  tempoSegmentsFrom(scoreData, measureIndex),
+                ) * (event.durationScale ?? 1)
               : soundDuration;
             await this.playNoteAtTime(
               frequency,
@@ -1341,3 +1347,22 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
 // デフォルトのSimpleAudioEngineインスタンスをエクスポート
 export const defaultSimpleAudioEngine = new SimpleAudioEngine();
+
+/** タイの秒数積算用: 指定小節から先の { 拍数, BPM } 区間列を作る（#458 round1 P2） */
+function tempoSegmentsFrom(
+  measures: ReadonlyArray<{ measureBeats?: number; bpm?: number } | undefined>,
+  fromIndex: number,
+): Array<{ beats: number; bpm: number }> {
+  const segments: Array<{ beats: number; bpm: number }> = [];
+  let lastBpm = 120;
+  for (let i = fromIndex; i < measures.length; i++) {
+    const measure = measures[i];
+    const beats = typeof measure?.measureBeats === 'number' ? measure.measureBeats : 4;
+    const bpm = typeof measure?.bpm === 'number' && Number.isFinite(measure.bpm) && measure.bpm > 0
+      ? measure.bpm
+      : lastBpm;
+    lastBpm = bpm;
+    segments.push({ beats, bpm });
+  }
+  return segments;
+}
