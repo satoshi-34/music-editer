@@ -100,8 +100,9 @@ import {
   type MeasureAccidentalState,
   type KeySignature,
   type MicrotoneType,
+  type AccidentalToolKind,
 } from '../utils/noteKeyUtils';
-import { applyAccidentalToEvent, applyMicrotoneToEvent } from '../utils/accidentalUtils';
+import { applyAccidentalToEvent, applyInputAccidentalToKey, applyMicrotoneToEvent } from '../utils/accidentalUtils';
 import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import {
@@ -423,6 +424,17 @@ function getDurationTool(tool: Tool): { duration: DurKey; isRest?: boolean; dots
   }
   const duration = tool.duration as DurKey;
   return DURATION_TOOL_VALUES.includes(duration) ? { duration, isRest: tool.isRest, dots: tool.dots } : null;
+}
+/**
+ * 音価ツールに乗っている「入力時に付ける臨時記号」（Issue #470）を取り出す。
+ * 休符には臨時記号が付かないので、休符ツールのときは undefined を返す。
+ * OFF（未選択）のときも undefined で、そのときは音高キーが一切変わらない＝従来どおりの入力になる。
+ */
+function getInputAccidental(tool: Tool): AccidentalToolKind | undefined {
+  if (!('duration' in tool) || tool.isRest) {
+    return undefined;
+  }
+  return tool.accidental;
 }
 // 付点1個=1.5倍、複付点(2個)=1.75倍。休符差し込み判定・拍数計算で共通利用する
 const dotBeatsMultiplier = (dots?: 1 | 2) => (dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1);
@@ -5812,9 +5824,14 @@ export default function PianoSystemCanvas({
           // パート固有の調号があれば、入力された自然音もそのパートの調号に揃える。
           // 例: 記譜音表示で D メジャー（♯2）になっている B♭管に F の線を置くと、
           // 自動的に F♯ として保存される。
-          const key=applyKeySignatureToNaturalKey(
-            lineToKeyForClef(clefAtInsert, snapLine(stave,ly)),
-            partKeyForAccidental
+          // 入力時の臨時記号（Issue #470）が選ばれていれば、ここで綴りを寄せる。
+          // 調号を反映したあとに掛けるので、♮ を選んだときは調号の ♯/♭ を外した自然音になる。
+          const key=applyInputAccidentalToKey(
+            applyKeySignatureToNaturalKey(
+              lineToKeyForClef(clefAtInsert, snapLine(stave,ly)),
+              partKeyForAccidental
+            ),
+            getInputAccidental(tool)
           );
 
           const currentMeasure = score[absI] ?? createEmptyMeasure();
@@ -7230,7 +7247,11 @@ export default function PianoSystemCanvas({
                */
               const noteDefaultOutcome = (): NoteClickOutcome => {
                 const snappedLine = snapLine(stave,ly);
-                const newKey=applyKeySignatureToNaturalKey(l2k(snappedLine), partKeyForAccidental);
+                // 和音に足す音にも、入力時の臨時記号（Issue #470）をそのまま効かせる。
+                const newKey=applyInputAccidentalToKey(
+                  applyKeySignatureToNaturalKey(l2k(snappedLine), partKeyForAccidental),
+                  getInputAccidental(tool)
+                );
                 const currentEv=activeEvs[j];
                 // 和音内の既存音を個別選択する入口。
                 // クリック位置が既存の構成音を指していたら keyIndex を保存し、
@@ -7282,7 +7303,11 @@ export default function PianoSystemCanvas({
                * 臨時記号の調号領域）をテーブル側へ移した残り（挙動ゼロ差）。
                */
               const restDefaultOutcome = (): NoteClickOutcome => {
-                const key=applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental);
+                // 休符を音符へ置き換えるときも、入力時の臨時記号（Issue #470）を反映する。
+                const key=applyInputAccidentalToKey(
+                  applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental),
+                  getInputAccidental(tool)
+                );
                 // 休符の bounding box は横に広く返る場合があるため、
                 // 休符だけは描画アンカー中心の固定幅で「本体クリック」を判定する。
                 const restBodyCenterX=anchors[j];

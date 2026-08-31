@@ -69,6 +69,10 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
     vi.restoreAllMocks();
   });
 
+  // Issue #470 で「入力時に付ける臨時記号」のトグル（aria-label は
+  // 「入力時に付ける臨時記号: ダブルシャープ（全音上げ）」など）が増え、同じ語を含む
+  // ボタンが2つになった。ここで試したいのは**すでにある音符へ付ける**適用ツールのほうなので、
+  // 名前は先頭一致（^）で探して取り違えないようにする。
   it('𝄪 ツールで音符をクリックすると keys が ## になり、保存・SVG まで届く', async () => {
     seedWork();
     render(<ScorePage />);
@@ -81,7 +85,7 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
     // 「臨時記号グリフが描画された」ことを検出する（適用前後で同じ譜面・同じ音符数）
     const svgTextCount = () => document.querySelectorAll('.system-stack svg text').length;
     const before = svgTextCount();
-    fireEvent.click(screen.getByRole('button', { name: /ダブルシャープ（全音上げ）/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^ダブルシャープ（全音上げ）/ }));
     fireEvent.click(firstNoteHit());
 
     await waitFor(() => {
@@ -93,7 +97,7 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
       expect(svgTextCount()).toBeGreaterThan(before);
     }, { timeout: 15000 });
     // 外すのは♮（既存の♯♭と同じ規則。同じ記号の再クリックは維持）
-    fireEvent.click(screen.getByRole('button', { name: /ナチュラル/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^ナチュラル/ }));
     fireEvent.click(firstNoteHit());
     await waitFor(() => {
       const ev = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.events?.[0];
@@ -134,7 +138,7 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
     // 調号領域のデバッグ rect（vf-key-signature-debug）は**臨時記号ツールを選んだ後**に
     // だけ描かれる。先にツールを選び、出現を必須アサーションにする（round3 P2:
     // 早期 return で空洞化していた）
-    fireEvent.click(screen.getByRole('button', { name: /ダブルシャープ（全音上げ）/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^ダブルシャープ（全音上げ）/ }));
     await waitFor(() => {
       expect(document.querySelector('rect.vf-key-signature-debug')).toBeTruthy();
     }, { timeout: 15000 });

@@ -72,6 +72,10 @@ describe('describeTool', () => {
     [{ duration: '2', dots: 1 }, '付点2分音符'],
     [{ duration: '16', isRest: true, dots: 1 }, '付点16分休符'],
     [{ duration: '8', tuplet: { numNotes: 3, notesOccupied: 2 } }, '3連符（8分音符）'],
+    // 入力時に付ける臨時記号（Issue #470）。ONになっていることが一番気づきにくいので文脈バーにも出す
+    [{ duration: '4', accidental: 'sharp' }, '♯付き4分音符'],
+    [{ duration: '8', dots: 1, accidental: 'flat' }, '♭付き付点8分音符'],
+    [{ duration: '8', tuplet: { numNotes: 3, notesOccupied: 2 }, accidental: 'natural' }, '♮付き3連符（8分音符）'],
   ] as Array<[Tool, string]>)('音符ツール %o は「%s」', (tool, expected) => {
     expect(describeTool(tool)).toBe(expected);
   });
