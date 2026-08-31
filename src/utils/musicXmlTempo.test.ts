@@ -149,6 +149,51 @@ describe('MusicXML の速度標語（Andante 等）', () => {
     expect(imported.score.parts[0].measures[0].events[0].tempoMarking).toBe('Andante');
   });
 
+  it('全体テンポと同値の明示テンポ変更が先頭小節にあっても消えない（round4 P1）', () => {
+    const measures: MeasureData[] = [
+      { bpm: 120, events: [{ dur: '4', isRest: false, keys: ['c/4'], tempoMarking: 'Andante' }] },
+    ];
+    const xml = scoreToMusicXml(makeScore(measures), { globalBpm: 120 });
+    // 由来メタが「先頭小節の数値は明示」と記録する
+    expect(xml).toContain('<miscellaneous-field name="music-editer.first-measure-bpm-explicit">true</miscellaneous-field>');
+    const imported = parseMusicXmlWithDefaults(xml);
+
+    // 値が全体テンポと同じ 120 でも明示の数値変更は保持される。
+    // 消すと実効テンポが「数値120」から「標語76」へ反転してしまう
+    expect(imported.globalBpm).toBe(120);
+    expect(imported.score.parts[0].measures[0].bpm).toBe(120);
+  });
+
+  it('不正な global-bpm メタは「メタ無し」扱いにせず読み替えを行わない（round4 P2）', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Melody</part-name></score-part></part-list>
+  <identification><miscellaneous><miscellaneous-field name="music-editer.global-bpm">120abc</miscellaneous-field></miscellaneous></identification>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>126</per-minute></metronome></direction-type><sound tempo="126"/></direction>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXmlWithDefaults(xml);
+
+    expect(imported.globalBpm).toBeUndefined();
+    expect(imported.score.parts[0].measures[0].bpm).toBe(126);
+  });
+
+  it('#422 の記号表示メタと global-bpm メタが同じ miscellaneous に併存して往復する', () => {
+    const score = makeScore([oneNoteMeasure()]);
+    const xml = scoreToMusicXml({ ...score, timeSignature: [2, 2], timeSignatureStyle: 'symbol' }, { globalBpm: 126 });
+
+    expect(xml).toContain('<miscellaneous-field name="music-editer.time-signature-style">symbol</miscellaneous-field>');
+    expect(xml).toContain('<miscellaneous-field name="music-editer.global-bpm">126</miscellaneous-field>');
+    const imported = parseMusicXmlWithDefaults(xml);
+    expect(imported.globalBpm).toBe(126);
+    expect(imported.score.timeSignatureStyle).toBe('symbol');
+  });
+
   it('メタの無い外部ファイルでも、標語より後の単独 <sound> は数値変更として保持する', () => {
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">

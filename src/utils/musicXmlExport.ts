@@ -550,6 +550,12 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
       }
       if (options.globalBpm != null) {
         fields.push(`<miscellaneous-field name="music-editer.global-bpm">${options.globalBpm}</miscellaneous-field>`);
+        // 先頭小節に明示の数値テンポ変更（measure.bpm）があるときは由来を記録する（round4 P1）。
+        // 全体テンポと明示値がたまたま同じ数字でも、読込側が明示側を消して
+        // 「数値 > 標語」の優先順位を壊さないようにするため（値の一致では由来を断定できない）
+        if (parts.some((p) => p.measures[0]?.bpm != null)) {
+          fields.push('<miscellaneous-field name="music-editer.first-measure-bpm-explicit">true</miscellaneous-field>');
+        }
       }
       return fields.length ? `\n    <miscellaneous>${fields.join('')}</miscellaneous>` : '';
     })()}

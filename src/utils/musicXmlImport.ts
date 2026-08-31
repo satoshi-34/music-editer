@@ -1003,29 +1003,39 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   const defaults = readMusicXmlDefaults(doc);
 
   // 先頭小節の sound tempo は「全体テンポ」へ読み替える（MusicXmlImportResult.globalBpm の
-  // ドキュメント参照）。ただし読み替えが再生の意味を変えないと確認できたときだけ行う:
-  // - 「全体テンポ+標語」と「先頭小節の数値変更+標語」は要素構成が同一で、**並び順**だけが
-  //   意味を区別する（round2 P1）。書き出し側の規則（全体テンポ=標語より前、数値変更=標語の後）
-  //   に合わせ、標語より後に書かれた単独 <sound> は数値変更として measure.bpm のまま残す。
-  //   この順序は外部プレーヤーの「後に書かれた <sound> が勝つ」挙動とも一致する
-  // - 複数パートで先頭小節の値が食い違う場合、1つへ統合すると再書き出しで復元できない
-  //   （round2 P2）→ 読み替えない
-  // 読み替えない場合は従来どおり measure.bpm として保持する（数値の引き継ぎ規則により
-  // 再生結果は書き出し前と同じ）。
+  // ドキュメント参照）。読み替えが再生の意味を変えないと確認できたときだけ行う。
+  // 正本はアプリ固有メタ（自分の書き出しにのみ存在）。メタの無い外部ファイルは
+  // フォールバックの推定で読む。
+  const readMetaField = (name: string): string | undefined =>
+    Array.from(doc.querySelectorAll('identification miscellaneous-field'))
+      .find((el) => el.getAttribute('name') === name)
+      ?.textContent?.trim();
+  // メタは「完全な数値・正の範囲」だけを受理する（round4 P2）。
+  // 不正なメタ（120abc・0・負数・空）は「メタが壊れている」のであって「メタが無い」のとは
+  // 違うため、外部ファイル向けの推定へ落とさず、読み替え自体を行わない（bpm を保持）
+  const parseMetaBpm = (text: string): number | 'invalid' => {
+    if (!/^\d+$/.test(text)) return 'invalid';
+    const v = parseInt(text, 10);
+    return v > 0 && v <= 400 ? v : 'invalid';
+  };
   let globalBpm: number | undefined;
-  const metaGlobalBpmText = Array.from(doc.querySelectorAll('identification miscellaneous-field'))
-    .find((el) => el.getAttribute('name') === 'music-editer.global-bpm')
-    ?.textContent?.trim();
-  const metaGlobalBpm = metaGlobalBpmText != null ? parseInt(metaGlobalBpmText, 10) : NaN;
-  if (!isNaN(metaGlobalBpm) && metaGlobalBpm > 0) {
-    // 自分の書き出し（メタあり）: メタが全体テンポの正本。先頭小節の <sound> 由来の bpm は、
-    // 値がメタと一致するもの（＝書き出し時に全体テンポとして出したもの）だけ取り除く。
-    // 一致しない値は本物の数値テンポ変更なので measure.bpm のまま残す（round3 P1）
-    globalBpm = metaGlobalBpm;
-    for (const part of parts) {
-      const first = part.measures[0];
-      if (first?.bpm === metaGlobalBpm) part.measures[0] = { ...first, bpm: undefined };
+  const metaGlobalBpmText = readMetaField('music-editer.global-bpm');
+  const metaGlobalBpm = metaGlobalBpmText != null ? parseMetaBpm(metaGlobalBpmText) : undefined;
+  // 先頭小節に明示の数値テンポ変更があったことを示すメタ（round4 P1）。
+  // 値の一致だけでは「全体テンポ由来」と断定できない（全体120+明示120+標語で、
+  // 明示を消すと実効テンポが標語側へ反転する）ため、由来そのものを書き出しが記録する
+  const firstMeasureExplicit = readMetaField('music-editer.first-measure-bpm-explicit') === 'true';
+  if (metaGlobalBpmText != null) {
+    if (metaGlobalBpm !== undefined && metaGlobalBpm !== 'invalid') {
+      globalBpm = metaGlobalBpm;
+      if (!firstMeasureExplicit) {
+        for (const part of parts) {
+          const first = part.measures[0];
+          if (first?.bpm === metaGlobalBpm) part.measures[0] = { ...first, bpm: undefined };
+        }
+      }
     }
+    // メタが不正: 読み替えなし（measure.bpm を保持）
   } else {
     // メタの無い外部ファイル: 全パートで一致する先頭小節の <sound> を全体テンポとみなす。
     // 値を持たないパートがあっても読み替えてよい: 小節テンポはスコア共通の1列として解決される

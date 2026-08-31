@@ -213,8 +213,12 @@ resolveMeasureBpms(measures: MeasureData[], globalBpm: number): number[]
    `<miscellaneous-field name="music-editer.global-bpm">`（#422 の time-signature-style と同じ置き場）
    に記録する。読み込みは:
    - メタあり: メタを `MusicXmlImportResult.globalBpm` として返し、ScorePage が再生パネル
-     （`setBPM`）へ反映。先頭小節の `<sound>` 由来 bpm は**メタと一致する値だけ**取り除く
-     （一致しない値＝本物の数値テンポ変更は `measure.bpm` のまま）。
+     （`setBPM`）へ反映。先頭小節の `<sound>` 由来 bpm は、由来メタ
+     `music-editer.first-measure-bpm-explicit`（先頭小節に明示の数値変更があるとき書き出しが記録）
+     が**無く**、値がメタと一致するときだけ取り除く。値の一致だけで消すと「全体120+明示120+標語」
+     で明示側が消え、実効テンポが標語へ反転する（round4 P1）。
+     メタが不正値（数値でない・0以下・400超）のときは外部ファイル扱いへ落とさず読み替え自体を
+     行わない（round4 P2）。
    - メタなし（外部ファイル）: 全パートで値が一致し、かつ対応表の標語より**前**（文書順）に
      書かれた先頭小節の単独 `<sound>` を全体テンポとみなす。標語より後の `<sound>` は
      外部プレーヤーで標語を上書きして鳴るため、数値変更として保持する。
