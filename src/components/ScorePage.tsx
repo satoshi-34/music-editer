@@ -162,6 +162,7 @@ import {
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
+import { resolveMeasureBpms } from '../utils/tempoPlaybackUtils';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, INSTRUMENT_NAME_MAX_LENGTH, resolveInstrumentPartLabels, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
@@ -1559,6 +1560,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
+            // 速度標語（Andante 等）と途中テンポ変更（♩=XXX）から、小節ごとの再生テンポを決める（#458）。
+            // 強弱と同じく**切る前の全列**で解決する: 途中再生の開始位置より前に置かれた
+            // 標語やテンポ指定も、そこまでの変化を引き継いだ状態で効かせたいため
+            const measureBpms = resolveMeasureBpms(expandedMeasuresFull.map(item => item.measure), tempoSettings.bpm);
             // タイ（同じ高さの音を結んで1音として伸ばす記号）を再生へ反映する計画。
             // 強弱と違って**切ったあとの列**で解決する: 開始音が開始位置より前にあって
             // 切り落とされた継続音は、抑制せずそのまま鳴らしたい（途中再生で音が消えないため）。
@@ -1573,6 +1578,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 // 再生エンジン側が 3/8 や 6/8 の小節長を正しく保てるよう、
                 // 各小節の「本来ここまで進むべき拍数」を明示して渡す。
                 measureBeats: getMeasureBeats(scoreTimeSignature),
+                // この小節を鳴らすテンポ。元の measure.bpm（数値の途中テンポ変更のみ）を
+                // 解決済みの値で上書きする。標語だけが置かれた小節や、指定が無くて前の
+                // テンポを引き継ぐ小節にも、ここで必ず値が入る（#458）
+                bpm: measureBpms[expandedMeasureIndex + startExpandedIndex],
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
                 events: flattenMeasureForPlayback(item.measure).flatMap((event, eventIndex) => {

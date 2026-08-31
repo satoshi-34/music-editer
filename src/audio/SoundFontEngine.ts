@@ -174,7 +174,13 @@ export class SoundFontEngine implements PlaybackEngine {
         // 上声と下声が同じ拍から鳴る小節でもずれにくい。
         const measureStartTime = partTime;
         const measureBeats = typeof measure.measureBeats === 'number' ? measure.measureBeats : 4;
-        const measureSeconds = measureBeats * (60 / bpm);
+        // 途中テンポ変更・速度標語で「この小節だけ速さが違う」ことがある（Issue #458）。
+        // 画面側が解決済みの BPM を小節へ載せてくるので、以降の秒換算はすべてこの値で行う。
+        // 指定が無い小節は従来どおり引数の全体テンポで鳴らす（後方互換）
+        const measureBpm = typeof measure.bpm === 'number' && Number.isFinite(measure.bpm) && measure.bpm > 0
+          ? measure.bpm
+          : bpm;
+        const measureSeconds = measureBeats * (60 / measureBpm);
         if (!measure?.events || measure.events.length === 0) {
           // 空小節でも拍子どおりの長さだけ進める。
           // 3/8 の譜面を 4/4 扱いしてしまうと、左右手がここでずれ始める。
@@ -189,7 +195,7 @@ export class SoundFontEngine implements PlaybackEngine {
 
         for (const event of measure.events) {
           const durationBeats = getDurationBeats(event.dur as never, event.dots) * tupletBeatsMultiplier((event as any).tuplet);
-          const duration = this.durationToSeconds(event.dur, bpm, event.dots, (event as any).tuplet);
+          const duration = this.durationToSeconds(event.dur, measureBpm, event.dots, (event as any).tuplet);
           // 和音・複数声部で同時発音位置をそろえるための開始拍。
           // startBeat が無い単声部イベントは、直前までの累積位置を使う。
           const nominalStartBeat = typeof event.startBeat === 'number' ? event.startBeat : sequentialBeatPosition;
@@ -203,8 +209,8 @@ export class SoundFontEngine implements PlaybackEngine {
 
           // アーティキュレーションで「鳴らす長さ」だけ伸縮させる。
           // タイミング（次の音までの間隔）は duration のまま据え置く。
-          const soundDuration = (swingTiming.durationBeats * (60 / bpm)) * (event.durationScale ?? 1);
-          const eventStartTime = measureStartTime + (swingTiming.startBeat * (60 / bpm));
+          const soundDuration = (swingTiming.durationBeats * (60 / measureBpm)) * (event.durationScale ?? 1);
+          const eventStartTime = measureStartTime + (swingTiming.startBeat * (60 / measureBpm));
           if (!event.isRest && event.keys.length > 0) {
             // 和音は keys を1つずつ同じ時刻で予約する。
             // SoundFont 側は単音 player なので、「同時刻に複数 start」を積む形で和音にする。
@@ -223,7 +229,7 @@ export class SoundFontEngine implements PlaybackEngine {
               const tieExtendBeats = event.tieExtendBeatsByKey?.[key] ?? 0;
               const tiedSoundDuration = tieExtendBeats > 0
                 ? ((nominalStartBeat + durationBeats + tieExtendBeats) - swingTiming.startBeat)
-                  * (60 / bpm) * (event.durationScale ?? 1)
+                  * (60 / measureBpm) * (event.durationScale ?? 1)
                 : soundDuration;
               player.play(
                 this.normalizeNoteFormat(key),
@@ -251,7 +257,7 @@ export class SoundFontEngine implements PlaybackEngine {
           }, 0);
           // 複数声部の小節は、最後の発音位置だけでなく小節本来の長さも守る。
           // これで「休符で埋めた後半」があっても次小節の頭が前倒しにならない。
-          partTime = measureStartTime + Math.max(measureEndOffset * (60 / bpm), measureSeconds);
+          partTime = measureStartTime + Math.max(measureEndOffset * (60 / measureBpm), measureSeconds);
         } else {
           // 単声部でも、入力途中で小節がまだ埋まり切っていない場合がある。
           // 再生では拍子を優先して次小節位置をそろえる。
