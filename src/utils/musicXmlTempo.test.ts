@@ -313,6 +313,68 @@ describe('MusicXML の速度標語（Andante 等）', () => {
     expect(imported.score.parts.every((p) => p.measures[0].bpm === 120)).toBe(true);
   });
 
+  it('part-list に余分な score-part があるときは全パート文書順へフォールバックする（round8/9）', () => {
+    // part-list=[P1,PX,P2]・本文=[P1,P2]。part-list 順だと P2 が番号2になり明示リスト「1」と
+    // 照合できない。不整合ファイルでは全パートを文書順（P1=0, P2=1）で照合する
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <identification><miscellaneous><miscellaneous-field name="music-editer.global-bpm">120</miscellaneous-field><miscellaneous-field name="music-editer.first-measure-bpm-explicit">1</miscellaneous-field></miscellaneous></identification>
+  <part-list>
+    <score-part id="P1"><part-name>A</part-name></score-part>
+    <score-part id="PX"><part-name>X</part-name></score-part>
+    <score-part id="P2"><part-name>B</part-name></score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type><sound tempo="120"/></direction>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+  <part id="P2">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type><sound tempo="120"/></direction>
+      <note><pitch><step>E</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXmlWithDefaults(xml);
+    // 文書順フォールバック: 明示「1」= 本文2番目の P2 が保持され、P1 は除去される
+    expect(imported.globalBpm).toBe(120);
+    expect(imported.score.parts[0].measures[0].bpm).toBeUndefined();
+    expect(imported.score.parts[1].measures[0].bpm).toBe(120);
+  });
+
+  it('part-list の id が重複しているときも全パート文書順へフォールバックする（round9）', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <identification><miscellaneous><miscellaneous-field name="music-editer.global-bpm">120</miscellaneous-field><miscellaneous-field name="music-editer.first-measure-bpm-explicit">1</miscellaneous-field></miscellaneous></identification>
+  <part-list>
+    <score-part id="P1"><part-name>A</part-name></score-part>
+    <score-part id="P1"><part-name>B</part-name></score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type><sound tempo="120"/></direction>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type><sound tempo="120"/></direction>
+      <note><pitch><step>E</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXmlWithDefaults(xml);
+    expect(imported.globalBpm).toBe(120);
+    expect(imported.score.parts[0].measures[0].bpm).toBeUndefined();
+    expect(imported.score.parts[1].measures[0].bpm).toBe(120);
+  });
+
   it('メタの無い外部ファイルでも、標語より後の単独 <sound> は数値変更として保持する', () => {
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">
