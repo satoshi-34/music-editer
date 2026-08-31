@@ -736,19 +736,22 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
       : null;
     const tempoMarking = tempoWordsEl?.textContent?.trim() || undefined;
     // 標語を付ける音符の位置: その direction より手前にある主声部の音符
-    // （<chord/> 続きの和音構成音は数えない）の個数 ＝ 標語イベントのインデックス。
-    // 自分の書き出し（イベントごとに <direction> を音符の直前へ挟む形）を正しく往復させる
-    // ための概算で、<backup> 後の追加声部領域に置かれた標語は末尾へクランプされる
+    // （<chord/> の和音構成音・イベント化されない <grace> は数えない）の個数
+    // ＝ 標語イベントのインデックス。自分の書き出し（イベントごとに <direction> を
+    // 音符の直前へ挟む形）を正しく往復させるための概算で、<backup> 後の追加声部領域に
+    // 置かれた標語は末尾へクランプされる。
+    // 五線分割（大譜表）の読み込みでは、別五線の音の時間を合成休符で埋めるため
+    // 生XML上の音符数と events のインデックスが一致しない（round2 P2）。その場合は
+    // 位置復元をあきらめて従来どおり先頭へ付ける
     let tempoMarkingEventIndex = 0;
-    if (tempoWordsEl) {
+    if (tempoWordsEl && staffNumber === null) {
       const dirEl = tempoWordsEl.closest('direction');
       let count = 0;
       for (const child of Array.from(measureEl.children)) {
         if (child === dirEl) break;
         if (child.tagName === 'backup') break; // 追加声部領域に入ったら主声部の位置は確定
-        if (child.tagName === 'note' && !child.querySelector('chord')) {
-          const st = child.querySelector('staff')?.textContent ?? null;
-          if (staffNumber === null || st === null || st === String(staffNumber)) count += 1;
+        if (child.tagName === 'note' && !child.querySelector('chord') && !child.querySelector('grace')) {
+          count += 1;
         }
       }
       tempoMarkingEventIndex = count;
@@ -868,9 +871,8 @@ export interface MusicXmlImportResult {
    * このアプリの書き出しは全体テンポを先頭小節の <metronome>+<sound> として出すため、
    * 先頭小節の単独 sound は「全体テンポ」として返し、measure.bpm には入れない。
    * こうしないと往復で「全体126」が「先頭小節だけ数値126・パネルは120のまま」に化ける。
-   * 先頭小節に本物の数値テンポ変更がある場合も、再生の解決規則
-   * （数値は以後の小節へ引き継がれ、全体テンポは先頭で上書きされる）では全体テンポ扱いと
-   * 等価なので、この読み替えで再生結果は変わらない。
+   * 読み替えは再生の意味が変わらないと確認できたときだけ行う（先頭小節に速度標語がある・
+   * 複数パートで値が食い違う場合は行わず、従来どおり measure.bpm として保持する）。
    */
   globalBpm?: number;
 }
@@ -999,13 +1001,42 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   const defaults = readMusicXmlDefaults(doc);
 
   // 先頭小節の sound tempo は「全体テンポ」へ読み替える（MusicXmlImportResult.globalBpm の
-  // ドキュメント参照）。全パート（五線分割後を含む）の先頭小節から取り除き、値は1つだけ返す
+  // ドキュメント参照）。ただし読み替えが再生の意味を変えないと確認できたときだけ行う:
+  // - 「全体テンポ+標語」と「先頭小節の数値変更+標語」は要素構成が同一で、**並び順**だけが
+  //   意味を区別する（round2 P1）。書き出し側の規則（全体テンポ=標語より前、数値変更=標語の後）
+  //   に合わせ、標語より後に書かれた単独 <sound> は数値変更として measure.bpm のまま残す。
+  //   この順序は外部プレーヤーの「後に書かれた <sound> が勝つ」挙動とも一致する
+  // - 複数パートで先頭小節の値が食い違う場合、1つへ統合すると再書き出しで復元できない
+  //   （round2 P2）→ 読み替えない
+  // 読み替えない場合は従来どおり measure.bpm として保持する（数値の引き継ぎ規則により
+  // 再生結果は書き出し前と同じ）。
   let globalBpm: number | undefined;
-  for (const part of parts) {
-    const first = part.measures[0];
-    if (first?.bpm != null) {
-      globalBpm = globalBpm ?? first.bpm;
-      part.measures[0] = { ...first, bpm: undefined };
+  const firstMeasureBpms = parts
+    .map((part) => part.measures[0]?.bpm)
+    .filter((v): v is number => v != null);
+  const firstMeasureSoundIsGlobal = partEls.every((partEl) => {
+    const m = partEl.querySelector('measure');
+    if (!m) return true;
+    const sound = Array.from(m.querySelectorAll('sound[tempo]')).find(
+      (el) => !el.closest('direction')?.querySelector('direction-type words'),
+    );
+    if (!sound) return true;
+    const marking = Array.from(m.querySelectorAll('direction-type words')).find(
+      (el) => getTempoMarkingBpm(el.textContent?.trim() ?? '') != null,
+    );
+    if (!marking) return true;
+    // 単独 <sound> が標語より前（文書順）にあれば全体テンポ
+    return (sound.compareDocumentPosition(marking) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  });
+  if (
+    firstMeasureBpms.length > 0
+    && firstMeasureBpms.every((v) => v === firstMeasureBpms[0])
+    && firstMeasureSoundIsGlobal
+  ) {
+    globalBpm = firstMeasureBpms[0];
+    for (const part of parts) {
+      const first = part.measures[0];
+      if (first?.bpm != null) part.measures[0] = { ...first, bpm: undefined };
     }
   }
 

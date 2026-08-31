@@ -327,10 +327,24 @@ function measureToXml(
   // 以前は measure.bpm のあるときしか出しておらず、全体テンポは1つも書かれなかった。
   // そのため書き出したファイルを読み直すと、読込側の既定（120）へ戻ってしまっていた。
   const measureTempoBpm = measure.bpm ?? (options.isFirstMeasure ? options.globalBpm : undefined);
-  if (measureTempoBpm != null) {
-    lines.push(
-      `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${measureTempoBpm}</per-minute></metronome></direction-type><sound tempo="${measureTempoBpm}"/></direction>`
-    );
+  const tempoDirectionXml = measureTempoBpm != null
+    ? `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${measureTempoBpm}</per-minute></metronome></direction-type><sound tempo="${measureTempoBpm}"/></direction>`
+    : '';
+  // 「全体テンポ+標語」と「先頭小節の数値変更+標語」は要素構成が同じで、並び順だけが
+  // 意味を区別する（round2 P1）。数値変更（measure.bpm）は同一小節の標語より**優先**
+  // されるので標語の後へ、全体テンポは標語に**負ける**ので標語の前（小節頭）へ出す。
+  // この並びは外部プレーヤーの「後に書かれた <sound> が勝つ」挙動とも一致し、
+  // 読み込み側も同じ順序規則で全体テンポ／数値変更を判別して往復させる。
+  const measureHasMarking = getMeasureVoices(measure).some(
+    (voice) => voice.events.some((ev) => ev.tempoMarking?.trim()),
+  );
+  let deferredTempoDirection = '';
+  if (tempoDirectionXml) {
+    if (measure.bpm != null && measureHasMarking) {
+      deferredTempoDirection = tempoDirectionXml; // 最初の標語の直後に出す
+    } else {
+      lines.push(tempoDirectionXml);
+    }
   }
 
   // リハーサルマーク（練習番号）: MusicXML の標準的な <rehearsal> 要素で出力する
@@ -360,7 +374,14 @@ function measureToXml(
     // 速度標語（Andante 等）は強弱より先に出す。<direction> は書いた順に
     // 同じ位置へ並ぶので、譜面の見た目（標語が上・強弱が下）と並びをそろえておく
     const tempoDir = tempoMarkingDirectionXml(ev, options.staff);
-    if (tempoDir) lines.push(tempoDir);
+    if (tempoDir) {
+      lines.push(tempoDir);
+      // 数値テンポ変更と標語が同居する小節では、数値を最初の標語の直後に出す（並び順の規則）
+      if (deferredTempoDirection) {
+        lines.push(deferredTempoDirection);
+        deferredTempoDirection = '';
+      }
+    }
     const dynDir = dynamicsDirectionXml(ev, options.staff);
     if (dynDir) lines.push(dynDir);
     // 松葉（ヘアピン）開始: この音符の直前に <wedge type="crescendo|diminuendo"/> を置く
@@ -402,7 +423,13 @@ function measureToXml(
       // 速度標語は追加声部の音符にも付けられる（#516 で再生対象になった）ので、
       // 主声部と同じく音符の直前に <words>（+目安BPMの <sound>）を出す（Codex round1 P2）
       const tempoDirExtra = tempoMarkingDirectionXml(ev, options.staff);
-      if (tempoDirExtra) lines.push(tempoDirExtra);
+      if (tempoDirExtra) {
+        lines.push(tempoDirExtra);
+        if (deferredTempoDirection) {
+          lines.push(deferredTempoDirection);
+          deferredTempoDirection = '';
+        }
+      }
       if (voiceNumber === 2) {
         options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
           lines.push(wedgeDirectionXml(wedgeType, options.staff));

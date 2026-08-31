@@ -81,12 +81,16 @@ describe('ScorePage: 全体テンポの MusicXML 書き出し/読み込み配線
       expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
     }, { timeout: 15000 });
 
-    // 書き出し方向: 再生パネルの既定テンポ（120）が <sound tempo> として出ること。
-    // ScorePage の書き出しハンドラから { globalBpm } を外すと <sound tempo> 自体が消えて落ちる
+    // 書き出し方向: 再生パネルのテンポを既定値ではない 132 へ変えてから書き出す。
+    // 既定値 120 のまま確かめると、ハンドラが 120 をハードコードしても通ってしまう（round2 P3）
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    const tempoInputForExport = screen.getByLabelText('テンポ（BPM）') as HTMLInputElement;
+    fireEvent.change(tempoInputForExport, { target: { value: '132' } });
+    fireEvent.blur(tempoInputForExport);
     fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
     fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'musicxml' } });
     fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
-    await waitFor(() => { expect(exportedXml ?? '').toContain('<sound tempo="120"/>'); }, { timeout: 15000 });
+    await waitFor(() => { expect(exportedXml ?? '').toContain('<sound tempo="132"/>'); }, { timeout: 15000 });
 
     // 読み込み方向: 先頭小節に <sound tempo="126"> を持つ XML を読み込むと、
     // 再生パネルのテンポ入力が 126 になること（従来は 120 のままだった）

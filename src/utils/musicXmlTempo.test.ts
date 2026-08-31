@@ -132,6 +132,49 @@ describe('MusicXML の速度標語（Andante 等）', () => {
     expect(imported.score.parts[0].measures[0].bpm).toBeUndefined();
   });
 
+  it('先頭小節に数値テンポ変更と標語が共存するときは globalBpm へ読み替えない（round2 P1）', () => {
+    const measures: MeasureData[] = [
+      { bpm: 126, events: [{ dur: '4', isRest: false, keys: ['c/4'], tempoMarking: 'Andante' }] },
+    ];
+    const xml = scoreToMusicXml(makeScore(measures));
+    const imported = parseMusicXmlWithDefaults(xml);
+
+    // 読み替えると優先順位が「数値 > 標語」から「標語 > 全体」へ反転し、
+    // 実効テンポが 126 → 76 に変わってしまう。数値のまま保持する
+    expect(imported.globalBpm).toBeUndefined();
+    expect(imported.score.parts[0].measures[0].bpm).toBe(126);
+    expect(imported.score.parts[0].measures[0].events[0].tempoMarking).toBe('Andante');
+  });
+
+  it('複数パートで先頭小節のテンポが食い違うときは globalBpm へ統合しない（round2 P2）', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list>
+    <score-part id="P1"><part-name>A</part-name></score-part>
+    <score-part id="P2"><part-name>B</part-name></score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>100</per-minute></metronome></direction-type><sound tempo="100"/></direction>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+  <part id="P2">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>140</per-minute></metronome></direction-type><sound tempo="140"/></direction>
+      <note><pitch><step>E</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXmlWithDefaults(xml);
+
+    expect(imported.globalBpm).toBeUndefined();
+    expect(imported.score.parts[0].measures[0].bpm).toBe(100);
+    expect(imported.score.parts[1].measures[0].bpm).toBe(140);
+  });
+
   it('発想標語の後にある速度標語も取り込める（round1 P2: 最初の <words> で止まらない）', () => {
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">
