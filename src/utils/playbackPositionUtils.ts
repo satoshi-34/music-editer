@@ -3,6 +3,7 @@ import { expandMeasuresForPlayback, type ExpandedPlaybackMeasure } from '../audi
 import { getMeasureBeats } from './timeSignatureUtils';
 import { getEventDurationBeats, getMeasureDurationBeats, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { applySwingToTiming, shouldApplySwing } from './swingUtils';
+import { resolveMeasureBpms } from './tempoPlaybackUtils';
 
 export interface PlaybackTimelinePosition {
   measureIndex: number;
@@ -29,17 +30,32 @@ export function buildPlaybackPositionTimeline(
   bpm: number,
   timeSignature: TimeSignature,
   swingEnabled: boolean = false,
-  startExpandedIndex: number = 0
+  startExpandedIndex: number = 0,
+  /**
+   * スコア共通の解決済みテンポ列（#458 round2 P1）。渡された場合は内部で再解決せず
+   * これを使う（実音側と同じ列を共有し、他段だけに置かれた標語でもハイライトが同期する）。
+   * 省略時は従来どおり自パート列から解決（単体利用・後方互換）
+   */
+  sharedMeasureBpms?: number[]
 ): PlaybackTimelineItem[] {
   // 途中再生（#108）: 展開順の先頭 startExpandedIndex 個を丸ごと飛ばす。
   // 実音側（playParts へ渡す小節列）も同じ位置で切るため、atMs は 0 起点のままで一致する
-  const expandedMeasures = expandMeasuresForPlayback(measures).slice(Math.max(0, startExpandedIndex));
-  const msPerBeat = (60 / bpm) * 1000;
+  const expandedMeasuresFull = expandMeasuresForPlayback(measures);
+  // 小節ごとのテンポ（途中テンポ変更・速度標語）は**切る前の全列**で解決する。
+  // 切ってから解決すると、開始位置より前に置かれた標語やテンポ指定が失われ、
+  // 途中再生のときだけハイライトが実音とズレる（強弱の解決と同じ理由・Issue #458）
+  const measureBpms = sharedMeasureBpms ?? resolveMeasureBpms(expandedMeasuresFull.map((item) => item.measure), bpm);
+  const sliceStart = Math.max(0, startExpandedIndex);
+  const expandedMeasures = expandedMeasuresFull.slice(sliceStart);
   const timeline: PlaybackTimelineItem[] = [];
 
-  let elapsedBeats = 0;
+  // 小節ごとにテンポが変わるため、経過は「拍」ではなくミリ秒で積む。
+  // 拍のまま積んで最後に1つの msPerBeat を掛けると、テンポ変更前の小節まで
+  // 変更後の速さで数えてしまう
+  let elapsedMs = 0;
 
-  expandedMeasures.forEach(({ sourceMeasureIndex, measure }) => {
+  expandedMeasures.forEach(({ sourceMeasureIndex, measure }, sliceIndex) => {
+    const msPerBeat = (60 / measureBpms[sliceStart + sliceIndex]) * 1000;
     // 主声部の読みは正規アクセサ（#244 段5-3）。再生列挙と同じ源を読むことで索引・時刻を一致させる
     const visibleEvents = getPrimaryVoiceEvents(measure);
     let beatPosition = 0;
@@ -63,7 +79,7 @@ export function buildPlaybackPositionTimeline(
           : { startBeat: beatPosition, durationBeats: getEventDurationBeats(event) };
 
         timeline.push({
-          atMs: elapsedBeats * msPerBeat + swingTiming.startBeat * msPerBeat,
+          atMs: elapsedMs + swingTiming.startBeat * msPerBeat,
           position: {
             measureIndex: sourceMeasureIndex,
             beatPosition: swingTiming.startBeat,
@@ -79,7 +95,7 @@ export function buildPlaybackPositionTimeline(
     // 実音エンジンは各小節に measureBeats（グローバル拍子の長さ）を下限として渡されるため、
     // 表示の前進も「全声部の実長と拍子長の大きい方」でそろえる（Codex 2巡目）。
     // 未充足の小節を実長だけで進めると、ハイライトが実音より先へ走ってしまう
-    elapsedBeats += measureAdvanceBeats(measure, timeSignature);
+    elapsedMs += measureAdvanceBeats(measure, timeSignature) * msPerBeat;
   });
 
   return timeline;
@@ -134,10 +150,14 @@ export function calculateExpandedPlaybackDurationMs(
     }
   }
   if (lastUsedIndex < 0) return 0;
-  const msPerBeat = (60 / bpm) * 1000;
-  let beats = 0;
+  // 小節ごとのテンポで数える（Issue #458）。渡ってくるのは「実際にエンジンへ渡す
+  // 展開済み・切り出し済みの列」で、各小節には解決済みの bpm が載っている。
+  // 載っていない小節は引数の全体テンポで数える（後方互換）
+  const measureBpms = resolveMeasureBpms(measures, bpm);
+  let totalMs = 0;
   for (let i = 0; i <= lastUsedIndex; i++) {
-    beats += measureAdvanceBeats(measures[i], timeSignature);
+    const msPerBeat = (60 / measureBpms[i]) * 1000;
+    totalMs += measureAdvanceBeats(measures[i], timeSignature) * msPerBeat;
   }
-  return beats * msPerBeat;
+  return totalMs;
 }
