@@ -3229,7 +3229,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // R キー: 現在の音価で休符入力モードに切り替え
       if (e.key === 'r' || e.key === 'R') {
         setTool(prev => {
-          if ('duration' in prev) return { ...prev, isRest: !prev.isRest };
+          if ('duration' in prev) {
+            // 入力用の臨時記号（#470）は音符専用。休符へ切り替えるときに残すと、
+            // ♯ボタンがON表示のままクリックしても効かない無言の行き止まりになる
+            // （#470 round1 P2・#318）。音符へ戻るときは付け直してもらう
+            const { accidental: _dropped, ...rest } = prev;
+            return { ...rest, isRest: !prev.isRest };
+          }
           return { duration: '4', isRest: true };
         });
         e.preventDefault();

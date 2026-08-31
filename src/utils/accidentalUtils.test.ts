@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyAccidentalToEvent, applyMicrotoneToEvent, type AccidentalEditableEvent } from './accidentalUtils';
+import { applyAccidentalToEvent, applyInputAccidentalToKey, applyMicrotoneToEvent, type AccidentalEditableEvent } from './accidentalUtils';
 
 function makeEvent(keys: string[], overrides: Partial<AccidentalEditableEvent> = {}): AccidentalEditableEvent {
   return { isRest: false, keys, ...overrides };
@@ -67,5 +67,28 @@ describe('ダブルシャープ・ダブルフラット（Issue #423）', () => 
     const next = applyAccidentalToEvent(ev, 'doubleSharp', 0);
     expect(next.keys).toEqual(['c##/4']);
     expect(next.microtones).toEqual([]);
+  });
+});
+
+describe('applyInputAccidentalToKey（入力時に付ける臨時記号・Issue #470）', () => {
+  it('臨時記号が選ばれていなければキーをそのまま返す', () => {
+    expect(applyInputAccidentalToKey('f/4', undefined)).toBe('f/4');
+  });
+
+  it('シャープを選んでいれば ♯ 付きの綴りにする', () => {
+    expect(applyInputAccidentalToKey('f/4', 'sharp')).toBe('f#/4');
+  });
+
+  it('ナチュラルを選んでいれば調号由来の ♯ を外す（D メジャーの F♯ → F）', () => {
+    expect(applyInputAccidentalToKey('f#/4', 'natural')).toBe('f/4');
+  });
+
+  it('ダブルシャープ・ダブルフラットも綴りへ反映する', () => {
+    expect(applyInputAccidentalToKey('g/4', 'doubleSharp')).toBe('g##/4');
+    expect(applyInputAccidentalToKey('b/3', 'doubleFlat')).toBe('bbb/3');
+  });
+
+  it('解析できないキーは変えない（描画・保存を壊さない安全側）', () => {
+    expect(applyInputAccidentalToKey('???', 'sharp')).toBe('???');
   });
 });

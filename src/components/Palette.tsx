@@ -57,7 +57,7 @@ export function normalizeToVF(d: DurKey): 'w'|'h'|'q'|'8'|'16'|'32'|'64' {
 
 // ツール（「音価」と「休符かどうか」、またはタイモード）
 export type Tool =
-  | { duration: DurKey; isRest?: boolean; dots?: 1; tuplet?: TupletKind }  // 通常の音符/休符入力（dots: 1で付点, tupletに{numNotes,notesOccupied}を入れるとN連符モード）
+  | { duration: DurKey; isRest?: boolean; dots?: 1; tuplet?: TupletKind; accidental?: AccidentalToolKind }  // 通常の音符/休符入力（dots: 1で付点, tupletに{numNotes,notesOccupied}を入れるとN連符モード, accidentalを入れると置いた音符に臨時記号が付く）
   | { mode: 'select' }                      // 小節選択モード（コピー&ペースト用）
   | { mode: 'tie' }                         // タイ記号を付けるモード
   | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
@@ -226,6 +226,9 @@ export default function Palette({
   const activeTupletNumNotes = 'duration' in value && value.tuplet ? value.tuplet.numNotes : null;
   const tupletNumberToggleActive = 'mode' in value && value.mode === 'tupletNumberToggle';
   const selectedAccidental = 'mode' in value && value.mode === 'accidental' ? value.accidental : null;
+  // 入力時に付ける臨時記号（Issue #470）。音価ツールに乗っているときだけ「ON」になる。
+  // 適用ツール（mode: 'accidental'）とは別物なので、判定も別に持つ。
+  const inputAccidental = 'duration' in value ? value.accidental ?? null : null;
   const selectedMicrotone = 'mode' in value && value.mode === 'microtone' ? value.type : null;
   const selectedRepeat = 'mode' in value && value.mode === 'repeat' ? value.repeat : null;
   const selectedEnding = 'mode' in value && value.mode === 'ending' ? value.ending : null;
@@ -417,6 +420,43 @@ export default function Palette({
                 style={btnStyle(active, { fontSize: 16, fontFamily: '"Times New Roman", serif' })}
               >
                 {microtoneSymbol(tool.type)}
+              </button>
+            );
+          })}
+          {/* 入力時に付ける臨時記号（Issue #470）:
+              上の ♯/♭/♮ が「すでにある音符へ付ける」ツールなのに対し、こちらは
+              **音価と同時にONにしておくトグル**。ONのあいだ、譜面をクリックして置いた音符に
+              最初からその臨時記号が付くので、「四分音符を置く → ♯ツールに持ち替える → もう一度クリック」
+              の2〜3手が1クリックになる（弟フィードバック・ステップ入力の速度）。
+              付点・連符トグルとまったく同じ流儀で、音価・付点・連符と共存できる。
+              ボタンの表記に ♩ を添えているのは、上の適用ツールと見分けるため
+              （「音符に付けて入力する」の意味）。 */}
+          {ACCIDENTAL_TOOLS.map((tool) => {
+            const active = inputAccidental === tool.accidental;
+            return (
+              <button
+                key={`input-${tool.accidental}`}
+                type="button"
+                onClick={() => {
+                  const nextAccidental = active ? undefined : tool.accidental;
+                  if ('duration' in value) {
+                    // 臨時記号は音符にしか付かない。休符ツールを持ったままONにしたときは、
+                    // 同じ音価の「音符」へ切り替える（ONにしたのに何も起きない状態を作らない）。
+                    onChange({
+                      ...value,
+                      isRest: nextAccidental && value.isRest ? undefined : value.isRest,
+                      accidental: nextAccidental,
+                    });
+                  } else {
+                    // 記号ツールを持っているときは、付点ボタンと同じく四分音符へ戻して付ける。
+                    onChange({ ...(ROW1[2] as { duration: DurKey }), accidental: tool.accidental });
+                  }
+                }}
+                title={`${accidentalLabel(tool.accidental)}を付けて入力（音価と同時に選べます。ONのあいだ、置いた音符に${accidentalSymbol(tool.accidental)}が付きます）`}
+                aria-label={`入力時に付ける臨時記号: ${accidentalLabel(tool.accidental)}`}
+                style={btnStyle(active, { width: 42, fontSize: 13, fontFamily: '"Times New Roman", serif', whiteSpace: 'nowrap' })}
+              >
+                {`♩${accidentalSymbol(tool.accidental)}`}
               </button>
             );
           })}
