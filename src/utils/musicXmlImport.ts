@@ -702,8 +702,14 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     const leftBarline = measureEl.querySelector('barline[location="left"] repeat');
     const rightBarline = measureEl.querySelector('barline[location="right"] repeat');
 
-    // 小節単位テンポ（sound/@tempo があれば取得）
-    const soundEl = measureEl.querySelector('sound[tempo]');
+    // 小節単位テンポ（sound/@tempo があれば取得）。
+    // ただし速度標語の direction に併記された <sound>（<words> と同じ <direction> 内）は
+    // 「標語の目安BPM」であって数値テンポ変更ではないので除外する。除外しないと、
+    // 標語だけの小節が往復で「標語+数値テンポ」に化け、数値が標語より優先される
+    // 規則（#516）により、標語を書き替えても再生が変わらなくなる（Codex round1 P1）
+    const soundEl = Array.from(measureEl.querySelectorAll('sound[tempo]')).find(
+      (el) => !el.closest('direction')?.querySelector('direction-type words'),
+    );
     const bpm = soundEl ? parseInt(soundEl.getAttribute('tempo') ?? '', 10) : undefined;
 
     // リハーサルマーク（練習番号）: <direction-type><rehearsal> を拾う
@@ -721,13 +727,32 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     // 「対応表（tempoMarkingPresets）にある語」だけを速度標語として取り込む。
     // こうしないと dolce のような表示専用の語まで再生テンポを動かしてしまう。
     // リハーサルマークと同じ理由で、五線で分けた譜では1番目の五線ぶんだけ拾う（両手に二重に付けない）
+    // 発想標語（dolce）の後に速度標語（Andante）が並ぶ場合に前者で止まらないよう、
+    // 小節内の <words> を全部見て「対応表にある最初の語」を採る（Codex round1 P2）
     const tempoWordsEl = staffNumber === null || staffNumber === 1
-      ? measureEl.querySelector('direction-type words')
+      ? Array.from(measureEl.querySelectorAll('direction-type words')).find(
+          (el) => getTempoMarkingBpm(el.textContent?.trim() ?? '') != null,
+        )
       : null;
-    const tempoWordsText = tempoWordsEl?.textContent?.trim();
-    const tempoMarking = tempoWordsText && getTempoMarkingBpm(tempoWordsText) != null
-      ? tempoWordsText
-      : undefined;
+    const tempoMarking = tempoWordsEl?.textContent?.trim() || undefined;
+    // 標語を付ける音符の位置: その direction より手前にある主声部の音符
+    // （<chord/> 続きの和音構成音は数えない）の個数 ＝ 標語イベントのインデックス。
+    // 自分の書き出し（イベントごとに <direction> を音符の直前へ挟む形）を正しく往復させる
+    // ための概算で、<backup> 後の追加声部領域に置かれた標語は末尾へクランプされる
+    let tempoMarkingEventIndex = 0;
+    if (tempoWordsEl) {
+      const dirEl = tempoWordsEl.closest('direction');
+      let count = 0;
+      for (const child of Array.from(measureEl.children)) {
+        if (child === dirEl) break;
+        if (child.tagName === 'backup') break; // 追加声部領域に入ったら主声部の位置は確定
+        if (child.tagName === 'note' && !child.querySelector('chord')) {
+          const st = child.querySelector('staff')?.textContent ?? null;
+          if (staffNumber === null || st === null || st === String(staffNumber)) count += 1;
+        }
+      }
+      tempoMarkingEventIndex = count;
+    }
 
     // 小節単位拍子変更
     const attrEl = measureEl.querySelector('attributes time');
@@ -798,10 +823,13 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
       }
     }
 
-    // 速度標語は「その小節の最初の音符に付く文字列」として持つ（#458 の持ち方に合わせる）。
+    // 速度標語は「音符に付く文字列」として持つ（#458 の持ち方に合わせる）。
+    // 位置は書き出し時の並び（direction が対象音符の直前）から復元した概算インデックス。
+    // 範囲外（追加声部領域の標語など）は末尾へクランプする。
     // 音符が1つも無い小節では置き場所が無いので、その場合は捨てる（表示・再生とも影響なし）
     if (tempoMarking && events.length > 0) {
-      events[0] = { ...events[0], tempoMarking };
+      const at = Math.min(tempoMarkingEventIndex, events.length - 1);
+      events[at] = { ...events[at], tempoMarking };
     }
 
     return {
@@ -835,6 +863,16 @@ export interface MusicXmlImportResult {
    * 「ファイル指定を引き継いだ」ことを画面側が通知する（#318）ために返す。
    */
   defaults?: MusicXmlDefaultsLayout;
+  /**
+   * 先頭小節の（標語に併記されていない）<sound tempo> から読み取った全体テンポ（#518）。
+   * このアプリの書き出しは全体テンポを先頭小節の <metronome>+<sound> として出すため、
+   * 先頭小節の単独 sound は「全体テンポ」として返し、measure.bpm には入れない。
+   * こうしないと往復で「全体126」が「先頭小節だけ数値126・パネルは120のまま」に化ける。
+   * 先頭小節に本物の数値テンポ変更がある場合も、再生の解決規則
+   * （数値は以後の小節へ引き継がれ、全体テンポは先頭で上書きされる）では全体テンポ扱いと
+   * 等価なので、この読み替えで再生結果は変わらない。
+   */
+  globalBpm?: number;
 }
 
 /**
@@ -960,6 +998,17 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   // 読めた項目だけを作品の属性として引き継ぎ、読めなければ従来どおりアプリの既定値で組む。
   const defaults = readMusicXmlDefaults(doc);
 
+  // 先頭小節の sound tempo は「全体テンポ」へ読み替える（MusicXmlImportResult.globalBpm の
+  // ドキュメント参照）。全パート（五線分割後を含む）の先頭小節から取り除き、値は1つだけ返す
+  let globalBpm: number | undefined;
+  for (const part of parts) {
+    const first = part.measures[0];
+    if (first?.bpm != null) {
+      globalBpm = globalBpm ?? first.bpm;
+      part.measures[0] = { ...first, bpm: undefined };
+    }
+  }
+
   const score: SavedScoreData = {
     version: '1.0',
     timestamp: Date.now(),
@@ -983,7 +1032,7 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
     pageMargins: defaults?.pageMargins,
   };
 
-  return { score, defaults };
+  return { score, defaults, globalBpm };
 }
 
 /**

@@ -4944,7 +4944,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       } else {
         xml = new TextDecoder('utf-8').decode(bytes);
       }
-      const { score: loaded, defaults: importedDefaults } = parseMusicXmlWithDefaults(xml);
+      const { score: loaded, defaults: importedDefaults, globalBpm: importedGlobalBpm } = parseMusicXmlWithDefaults(xml);
+      // 先頭小節の <sound tempo>（全体テンポ）は再生パネルへ反映する（#518）。
+      // これが無いと往復で全体テンポが既定 120 に戻る（QA で確定した症状）
+      if (importedGlobalBpm != null) setBPM(importedGlobalBpm);
       // applyLoadedScoreData と同等のロジックで画面に反映する
       // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
       setPartExtractionId(null);
@@ -5078,7 +5081,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-  }, [setTimeSignature, measuresPerSystem, applySavedLayoutAttributes, instrumentLabelAreaWidth,
+  }, [setTimeSignature, setBPM, measuresPerSystem, applySavedLayoutAttributes, instrumentLabelAreaWidth,
     notationSizeMultiplier, pageMarginSideMm, pageMarginTopMm, pageMarginBottomMm]);
 
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {

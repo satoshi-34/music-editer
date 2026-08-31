@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createSavedScoreData } from './storage';
 import { scoreToMusicXml } from './musicXmlExport';
-import { parseMusicXml } from './musicXmlImport';
+import { parseMusicXml, parseMusicXmlWithDefaults } from './musicXmlImport';
 import type { MeasureData, SavedScoreData } from '../types/storage';
 
 /** テスト用の単旋律スコアを作る小さなヘルパー */
@@ -38,12 +38,15 @@ describe('MusicXML の全体テンポ（♩=N）', () => {
     expect(measure2).not.toContain('<sound tempo=');
   });
 
-  it('export → import で全体テンポが保たれる（既定の 120 に戻らない）', () => {
+  it('export → import で全体テンポが globalBpm として保たれる（既定の 120 に戻らない）', () => {
     const xml = scoreToMusicXml(makeScore([oneNoteMeasure(), oneNoteMeasure()]), { globalBpm: 126 });
-    const imported = parseMusicXml(xml);
+    const imported = parseMusicXmlWithDefaults(xml);
 
-    // 読み込み側は「その小節から有効なテンポ」として先頭小節へ載せる
-    expect(imported.parts[0].measures[0].bpm).toBe(126);
+    // 先頭小節の単独 <sound tempo> は「全体テンポ」として別枠で返す（round1 P1）。
+    // measure.bpm（小節ごとの数値テンポ変更）へは入れない — 入れると再書き出しで
+    // 「全体テンポ」が「先頭小節の数値変更」へ意味が変わってしまう
+    expect(imported.globalBpm).toBe(126);
+    expect(imported.score.parts[0].measures[0].bpm).toBeUndefined();
   });
 
   it('globalBpm を渡さない書き出しは従来どおりテンポを出さない（回帰）', () => {
@@ -61,9 +64,10 @@ describe('MusicXML の全体テンポ（♩=N）', () => {
     expect(measure1).toContain('<sound tempo="126"/>');
     expect(measure2).toContain('<sound tempo="90"/>');
 
-    const imported = parseMusicXml(xml);
-    expect(imported.parts[0].measures[0].bpm).toBe(126);
-    expect(imported.parts[0].measures[1].bpm).toBe(90);
+    const imported = parseMusicXmlWithDefaults(xml);
+    expect(imported.globalBpm).toBe(126);
+    expect(imported.score.parts[0].measures[0].bpm).toBeUndefined();
+    expect(imported.score.parts[0].measures[1].bpm).toBe(90);
   });
 });
 
@@ -99,6 +103,81 @@ describe('MusicXML の速度標語（Andante 等）', () => {
 
     expect(imported.parts[0].measures[0].events[0].tempoMarking).toBe('Andante');
     expect(imported.parts[0].measures[1].events[0].tempoMarking).toBeUndefined();
+  });
+
+  it('標語に併記した <sound tempo> は数値テンポ変更として取り込まない（round1 P1）', () => {
+    const measures: MeasureData[] = [
+      oneNoteMeasure(),
+      { events: [{ dur: '4', isRest: false, keys: ['c/4'], tempoMarking: 'Andante' }] },
+    ];
+    const xml = scoreToMusicXml(makeScore(measures));
+    const imported = parseMusicXmlWithDefaults(xml);
+
+    // 2小節目は「標語 Andante」だけが復元され、目安 BPM の 76 は measure.bpm に入らない。
+    // 入ってしまうと数値優先の規則（#516）で、以後標語を書き替えても 76 のまま鳴る
+    expect(imported.score.parts[0].measures[1].events[0].tempoMarking).toBe('Andante');
+    expect(imported.score.parts[0].measures[1].bpm).toBeUndefined();
+    expect(imported.globalBpm).toBeUndefined();
+  });
+
+  it('全体テンポと先頭小節の標語が共存しても往復で意味が変わらない（round1 P1）', () => {
+    const measures: MeasureData[] = [
+      { events: [{ dur: '4', isRest: false, keys: ['c/4'], tempoMarking: 'Andante' }] },
+    ];
+    const xml = scoreToMusicXml(makeScore(measures), { globalBpm: 126 });
+    const imported = parseMusicXmlWithDefaults(xml);
+
+    expect(imported.globalBpm).toBe(126);
+    expect(imported.score.parts[0].measures[0].events[0].tempoMarking).toBe('Andante');
+    expect(imported.score.parts[0].measures[0].bpm).toBeUndefined();
+  });
+
+  it('発想標語の後にある速度標語も取り込める（round1 P2: 最初の <words> で止まらない）', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Melody</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction placement="above"><direction-type><words>dolce</words></direction-type></direction>
+      <direction placement="above"><direction-type><words>Andante</words></direction-type></direction>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration><type>quarter</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXml(xml);
+    expect(imported.parts[0].measures[0].events[0].tempoMarking).toBe('Andante');
+  });
+
+  it('小節途中の音符に付けた標語は同じ位置へ往復する（round1 P2）', () => {
+    const measures: MeasureData[] = [
+      { events: [
+        { dur: '4', isRest: false, keys: ['c/4'] },
+        { dur: '4', isRest: false, keys: ['d/4'] },
+        { dur: '4', isRest: false, keys: ['e/4'], tempoMarking: 'Allegro' },
+        { dur: '4', isRest: false, keys: ['f/4'] },
+      ] },
+    ];
+    const xml = scoreToMusicXml(makeScore(measures));
+    const imported = parseMusicXml(xml);
+
+    const evs = imported.parts[0].measures[0].events;
+    expect(evs[0].tempoMarking).toBeUndefined();
+    expect(evs[2].tempoMarking).toBe('Allegro');
+  });
+
+  it('追加声部（声部2）の標語も書き出される（round1 P2）', () => {
+    const measures: MeasureData[] = [
+      {
+        events: [{ dur: '4', isRest: false, keys: ['c/5'] }],
+        voices: [
+          { id: 'voice-1', events: [{ dur: '4', isRest: false, keys: ['c/5'] }] },
+          { id: 'voice-2', events: [{ dur: '4', isRest: false, keys: ['e/4'], tempoMarking: 'Vivace' }], stemDirection: 'down' as const },
+        ],
+      },
+    ];
+    const xml = scoreToMusicXml(makeScore(measures));
+    expect(xml).toContain('<words>Vivace</words>');
   });
 
   it('速度標語ではない <words>（発想標語など）は取り込まない', () => {

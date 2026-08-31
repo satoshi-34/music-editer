@@ -399,6 +399,10 @@ function measureToXml(
       // 声部2の松葉（ヘアピン）も声部1と同じ並び（開始音符の直前・終了音符の直後）で出す。
       // 位置マップは声部2ぶんを別に受け取っているので、声部1の松葉と混ざることはない。
       const hpKey = `${options.measureIndex ?? 0}-${i}`;
+      // 速度標語は追加声部の音符にも付けられる（#516 で再生対象になった）ので、
+      // 主声部と同じく音符の直前に <words>（+目安BPMの <sound>）を出す（Codex round1 P2）
+      const tempoDirExtra = tempoMarkingDirectionXml(ev, options.staff);
+      if (tempoDirExtra) lines.push(tempoDirExtra);
       if (voiceNumber === 2) {
         options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
           lines.push(wedgeDirectionXml(wedgeType, options.staff));
