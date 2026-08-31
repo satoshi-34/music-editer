@@ -32,8 +32,10 @@ describe('MusicXML の連符（tuplet）対応', () => {
     expect(xml).toContain('<normal-notes>2</normal-notes>');
     expect(xml).toContain('<tuplet type="start"');
     expect(xml).toContain('<tuplet type="stop"');
-    // 通常の8分音符(DIVISIONS=16基準で8) * (2/3) = 5.33... -> 四捨五入で5
-    expect(xml).toContain('<duration>5</duration>');
+    // Issue #519 以前は divisions=16 固定だったため 8*(2/3)=5.33… → 5 へ丸められていた。
+    // 現在は連符の分母3で割り切れる divisions=48 を選ぶので、8*3*(2/3)=16 と整数で書ける
+    expect(xml).toContain('<divisions>48</divisions>');
+    expect(xml).toContain('<duration>16</duration>');
   });
 
   it('3連符を export → import すると tuplet フィールドがそのまま復元される（ラウンドトリップ）', () => {
