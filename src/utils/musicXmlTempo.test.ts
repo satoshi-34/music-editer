@@ -155,7 +155,7 @@ describe('MusicXML の速度標語（Andante 等）', () => {
     ];
     const xml = scoreToMusicXml(makeScore(measures), { globalBpm: 120 });
     // 由来メタが「先頭小節の数値は明示」と記録する
-    expect(xml).toContain('<miscellaneous-field name="music-editer.first-measure-bpm-explicit">true</miscellaneous-field>');
+    expect(xml).toContain('<miscellaneous-field name="music-editer.first-measure-bpm-explicit">0</miscellaneous-field>');
     const imported = parseMusicXmlWithDefaults(xml);
 
     // 値が全体テンポと同じ 120 でも明示の数値変更は保持される。
@@ -187,11 +187,39 @@ describe('MusicXML の速度標語（Andante 等）', () => {
     const score = makeScore([oneNoteMeasure()]);
     const xml = scoreToMusicXml({ ...score, timeSignature: [2, 2], timeSignatureStyle: 'symbol' }, { globalBpm: 126 });
 
-    expect(xml).toContain('<miscellaneous-field name="music-editer.time-signature-style">symbol</miscellaneous-field>');
-    expect(xml).toContain('<miscellaneous-field name="music-editer.global-bpm">126</miscellaneous-field>');
+    // 文字列の存在だけでなく「同一の <miscellaneous> 要素の子」であることを DOM で固定する
+    //（別々の <miscellaneous> に分かれると XML スキーマ違反になる・round5 P3）
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const fields = Array.from(doc.querySelectorAll('identification miscellaneous-field'));
+    const styleField = fields.find((el) => el.getAttribute('name') === 'music-editer.time-signature-style');
+    const bpmField = fields.find((el) => el.getAttribute('name') === 'music-editer.global-bpm');
+    expect(styleField?.textContent).toBe('symbol');
+    expect(bpmField?.textContent).toBe('126');
+    expect(doc.querySelectorAll('identification miscellaneous').length).toBe(1);
+    expect(styleField?.parentElement).toBe(bpmField?.parentElement);
     const imported = parseMusicXmlWithDefaults(xml);
     expect(imported.globalBpm).toBe(126);
     expect(imported.score.timeSignatureStyle).toBe('symbol');
+  });
+
+  it('明示ありと無しのパートが混在しても、明示側だけが保持される（round5 P1）', () => {
+    const score = createSavedScoreData(
+      { title: '混在', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'p1', clef: 'treble', measures: [oneNoteMeasure()] },
+        { partId: 'p2', clef: 'treble', measures: [{ ...oneNoteMeasure(), bpm: 126 }] },
+      ],
+      1, 1, 'single', 'C'
+    );
+    const xml = scoreToMusicXml(score, { globalBpm: 120 });
+    expect(xml).toContain('<miscellaneous-field name="music-editer.first-measure-bpm-explicit">1</miscellaneous-field>');
+    const imported = parseMusicXmlWithDefaults(xml);
+
+    // P1（明示なし）は全体テンポ由来の 120 が取り除かれ、P2（明示 126）は保持される。
+    // 両方残ると先勝ちで 120 が選ばれ、本来の 126 から変わってしまう
+    expect(imported.globalBpm).toBe(120);
+    expect(imported.score.parts[0].measures[0].bpm).toBeUndefined();
+    expect(imported.score.parts[1].measures[0].bpm).toBe(126);
   });
 
   it('メタの無い外部ファイルでも、標語より後の単独 <sound> は数値変更として保持する', () => {

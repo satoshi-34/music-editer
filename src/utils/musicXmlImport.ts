@@ -872,7 +872,8 @@ export interface MusicXmlImportResult {
    * 先頭小節の単独 sound は「全体テンポ」として返し、measure.bpm には入れない。
    * こうしないと往復で「全体126」が「先頭小節だけ数値126・パネルは120のまま」に化ける。
    * 正本はアプリ固有メタ（music-editer.global-bpm）。メタがあれば先頭小節の <sound> 由来の
-   * bpm はメタと一致するものだけ取り除く（一致しない値＝本物の数値テンポ変更は保持）。
+   * bpm のうち「由来メタ（first-measure-bpm-explicit）で明示と記録されていないパート」の
+   * メタ一致値だけを取り除く（明示の数値テンポ変更は値が同じでも保持する）。
    * メタの無い外部ファイルは、全パートで一致し標語より前に書かれた先頭小節の単独 <sound> を
    * 全体テンポとみなす。それ以外は従来どおり measure.bpm として保持する。
    */
@@ -951,6 +952,9 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   // パート一覧
   const partEls = Array.from(doc.querySelectorAll('part'));
   const parts: PartData[] = [];
+  // 各 PartData がどの <part>（文書順の番号）から作られたか。五線分割（大譜表）では
+  // 1つの <part> から2つの PartData ができるため、パート単位メタの照合に使う
+  const sourcePartElIndexByPart: number[] = [];
 
   for (let pi = 0; pi < partEls.length; pi++) {
     const partEl = partEls[pi];
@@ -983,6 +987,7 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
     for (const staffNumber of staffNumbers) {
       const staffClef = clefForStaff(firstPartAttrs, staffNumber) ?? defaultClef;
       const measures = buildStaffMeasures(measureEls, staffNumber, staffClef);
+      sourcePartElIndexByPart.push(pi);
       parts.push({
         partId: staffPartId(partName, staffNumber, staffCount, partEls.length),
         clef: staffClef,
@@ -1021,19 +1026,29 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   let globalBpm: number | undefined;
   const metaGlobalBpmText = readMetaField('music-editer.global-bpm');
   const metaGlobalBpm = metaGlobalBpmText != null ? parseMetaBpm(metaGlobalBpmText) : undefined;
-  // 先頭小節に明示の数値テンポ変更があったことを示すメタ（round4 P1）。
+  // 先頭小節に明示の数値テンポ変更があるパート番号（書き出し順）のメタ（round4 P1 / round5 P1）。
   // 値の一致だけでは「全体テンポ由来」と断定できない（全体120+明示120+標語で、
-  // 明示を消すと実効テンポが標語側へ反転する）ため、由来そのものを書き出しが記録する
-  const firstMeasureExplicit = readMetaField('music-editer.first-measure-bpm-explicit') === 'true';
+  // 明示を消すと実効テンポが標語側へ反転する）ため、由来そのものを書き出しが記録する。
+  // パート単位なのは、明示ありと無しが混在する譜で無い側だけを取り除くため。
+  // 旧形式の 'true'（全パート一律）も後方互換で受ける
+  const explicitMetaText = readMetaField('music-editer.first-measure-bpm-explicit');
+  const explicitAllParts = explicitMetaText === 'true';
+  const explicitPartElIndices = new Set(
+    (explicitMetaText ?? '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => /^\d+$/.test(t))
+      .map((t) => parseInt(t, 10)),
+  );
   if (metaGlobalBpmText != null) {
     if (metaGlobalBpm !== undefined && metaGlobalBpm !== 'invalid') {
       globalBpm = metaGlobalBpm;
-      if (!firstMeasureExplicit) {
-        for (const part of parts) {
-          const first = part.measures[0];
-          if (first?.bpm === metaGlobalBpm) part.measures[0] = { ...first, bpm: undefined };
-        }
-      }
+      parts.forEach((part, partIndex) => {
+        if (explicitAllParts) return;
+        if (explicitPartElIndices.has(sourcePartElIndexByPart[partIndex])) return;
+        const first = part.measures[0];
+        if (first?.bpm === metaGlobalBpm) part.measures[0] = { ...first, bpm: undefined };
+      });
     }
     // メタが不正: 読み替えなし（measure.bpm を保持）
   } else {

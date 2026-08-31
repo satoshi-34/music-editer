@@ -541,8 +541,9 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
       //   書けないため、6/8 等へ変更中でも設定を往復させるにはアプリ固有メタが要る
       // - 全体テンポ（#518 round3 P1）: 「全体テンポ」と「先頭小節の数値テンポ変更」は
       //   小節側の要素構成が同一で区別できないため、全体テンポの正本をここに記録する。
-      //   読み込み側はこのメタを最優先で globalBpm とし、先頭小節の <sound> と値が
-      //   一致するときだけ measure.bpm から取り除く（数値変更はそのまま残る）
+      //   読み込み側はこのメタを最優先で globalBpm とし、由来メタ（下の
+      //   first-measure-bpm-explicit）で明示と記録されていないパートの一致値だけを
+      //   measure.bpm から取り除く（明示の数値変更は値が同じでも残る）
       // どちらも無いときは改行ごと何も足さない（従来出力と1バイトも変えない）
       const fields: string[] = [];
       if (timeSignatureStyle === 'symbol') {
@@ -550,11 +551,17 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
       }
       if (options.globalBpm != null) {
         fields.push(`<miscellaneous-field name="music-editer.global-bpm">${options.globalBpm}</miscellaneous-field>`);
-        // 先頭小節に明示の数値テンポ変更（measure.bpm）があるときは由来を記録する（round4 P1）。
+        // 先頭小節に明示の数値テンポ変更（measure.bpm）があるパートの番号（0始まり・
+        // 書き出し順=part-list 順）を記録する（round4 P1 / round5 P1）。
         // 全体テンポと明示値がたまたま同じ数字でも、読込側が明示側を消して
-        // 「数値 > 標語」の優先順位を壊さないようにするため（値の一致では由来を断定できない）
-        if (parts.some((p) => p.measures[0]?.bpm != null)) {
-          fields.push('<miscellaneous-field name="music-editer.first-measure-bpm-explicit">true</miscellaneous-field>');
+        // 「数値 > 標語」の優先順位を壊さないようにするため（値の一致では由来を断定できない）。
+        // パート単位で持つのは、明示ありと無しのパートが混在する譜で、無い側の
+        // 全体テンポ由来値だけを読込側が取り除けるようにするため
+        const explicitPartIndices = parts
+          .map((p, pi) => (p.measures[0]?.bpm != null ? pi : -1))
+          .filter((pi) => pi >= 0);
+        if (explicitPartIndices.length > 0) {
+          fields.push(`<miscellaneous-field name="music-editer.first-measure-bpm-explicit">${explicitPartIndices.join(',')}</miscellaneous-field>`);
         }
       }
       return fields.length ? `\n    <miscellaneous>${fields.join('')}</miscellaneous>` : '';
