@@ -207,4 +207,12 @@ describe('MusicXML 書き出し: 連符に合わせた divisions（Issue #519）
     // 1 + 2 + 1 + 2 + 2 + 2 = 10拍
     expect(total).toBe(divisions * 10);
   });
+
+  it('notesOccupied が Number.MAX_VALUE でもフリーズせず明示的に失敗する（round4 P2）', () => {
+    const tuplet = { id: 'gx', numNotes: 3, notesOccupied: Number.MAX_VALUE };
+    const events: NoteEvent[] = [
+      { dur: '8', isRest: false, keys: ['c/4'], tuplet } as NoteEvent,
+    ];
+    expect(() => scoreToMusicXml(singleMeasureScore(events))).toThrow(/連符の構成が複雑/);
+  });
 });

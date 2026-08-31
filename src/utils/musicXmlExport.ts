@@ -206,6 +206,9 @@ function dotRatio(ev: NoteEvent): { numer: number; denom: number } {
 
 /** 最大公約数（ユークリッドの互除法） */
 function gcd(a: number, b: number): number {
+  // 非有限値（Infinity/NaN）が混ざると剰余が NaN になり while が終わらない（#519 round4 P2）。
+  // ここで拒否しておけば、呼び出し側の検査漏れがあってもブラウザ停止には至らない
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return NaN;
   let x = Math.abs(a);
   let y = Math.abs(b);
   while (y !== 0) {
@@ -234,6 +237,9 @@ function requiredDivisionsScale(ev: NoteEvent): number {
   const dot = dotRatio(ev);
   const numer = (DUR_TO_DIV[ev.dur] ?? 16) * dot.numer * ev.tuplet.notesOccupied;
   const denom = dot.denom * ev.tuplet.numNotes;
+  // 乗算の時点で Infinity へ膨れる病的な比（例: notesOccupied = Number.MAX_VALUE）は
+  // gcd に入れず NaN を返す → 呼び出し側の有限性チェックが上限超過として通知する（round4 P2）
+  if (!Number.isFinite(numer) || !Number.isFinite(denom)) return NaN;
   return denom / gcd(denom, numer);
 }
 
