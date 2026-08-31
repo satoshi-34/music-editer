@@ -117,7 +117,9 @@ describe('連符数字の配置（#471 再現JSON）', () => {
     // 連符の x 範囲にかかるビームのパスから y 値を集める
     const svg = numberText.ownerSVGElement!;
     const beamYs: number[] = [];
-    for (const path of svg.querySelectorAll('path')) {
+    // ビームの path に限定する（round2 P2: path 全部だと五線・符幹の y が混ざり、
+    // 最小値が別要素になって「ビームの近く」判定が誤って通る）
+    for (const path of svg.querySelectorAll('g.vf-beam > path, g.vf-beam path')) {
       const d = path.getAttribute('d') ?? '';
       const points = [...d.matchAll(/([ML])\s*([\d.]+)\s+([\d.]+)/g)]
         .map(match => ({ x: parseFloat(match[2]), y: parseFloat(match[3]) }));
