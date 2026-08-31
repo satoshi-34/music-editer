@@ -952,8 +952,12 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   // パート一覧
   const partEls = Array.from(doc.querySelectorAll('part'));
   const parts: PartData[] = [];
-  // 各 PartData がどの <part>（文書順の番号）から作られたか。五線分割（大譜表）では
-  // 1つの <part> から2つの PartData ができるため、パート単位メタの照合に使う
+  // 各 PartData がどのパート（**part-list 順**の番号）から作られたか。パート単位メタは
+  // part-list 順で番号付けされる（MusicXML では譜面上の順序を part-list が定義し、
+  // <part> 本体の文書順は保証されない・round6 P2）。五線分割（大譜表）では
+  // 1つの <part> から2つの PartData ができるため、両方へ同じ番号を記録する
+  const partListIds = Array.from(doc.querySelectorAll('part-list score-part'))
+    .map((el) => el.getAttribute('id'));
   const sourcePartElIndexByPart: number[] = [];
 
   for (let pi = 0; pi < partEls.length; pi++) {
@@ -987,7 +991,9 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
     for (const staffNumber of staffNumbers) {
       const staffClef = clefForStaff(firstPartAttrs, staffNumber) ?? defaultClef;
       const measures = buildStaffMeasures(measureEls, staffNumber, staffClef);
-      sourcePartElIndexByPart.push(pi);
+      // part-list に id が無い不正なファイルは文書順を代用する
+      const partListIndex = partListIds.indexOf(partId);
+      sourcePartElIndexByPart.push(partListIndex >= 0 ? partListIndex : pi);
       parts.push({
         partId: staffPartId(partName, staffNumber, staffCount, partEls.length),
         clef: staffClef,

@@ -222,6 +222,97 @@ describe('MusicXML の速度標語（Andante 等）', () => {
     expect(imported.score.parts[1].measures[0].bpm).toBe(126);
   });
 
+  it('明示値が全体テンポと同値でも、番号リストのパートだけが保持される（round6 P3）', () => {
+    const score = createSavedScoreData(
+      { title: '同値混在', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'p1', clef: 'treble', measures: [oneNoteMeasure()] },
+        { partId: 'p2', clef: 'treble', measures: [{ ...oneNoteMeasure(), bpm: 120 }] },
+      ],
+      1, 1, 'single', 'C'
+    );
+    const xml = scoreToMusicXml(score, { globalBpm: 120 });
+    const imported = parseMusicXmlWithDefaults(xml);
+
+    // 値がどちらも 120 なので、番号リストを無視して値比較だけにすると P2 側も消えてしまう
+    expect(imported.globalBpm).toBe(120);
+    expect(imported.score.parts[0].measures[0].bpm).toBeUndefined();
+    expect(imported.score.parts[1].measures[0].bpm).toBe(120);
+  });
+
+  it('本文の <part> 順が part-list と逆でも、番号リストは part-list 順で照合される（round6 P2）', () => {
+    // part-list は P1→P2、本文は P2→P1。明示リスト「1」は part-list 上の2番目 = P2 を指す
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <identification><miscellaneous><miscellaneous-field name="music-editer.global-bpm">120</miscellaneous-field><miscellaneous-field name="music-editer.first-measure-bpm-explicit">1</miscellaneous-field></miscellaneous></identification>
+  <part-list>
+    <score-part id="P1"><part-name>A</part-name></score-part>
+    <score-part id="P2"><part-name>B</part-name></score-part>
+  </part-list>
+  <part id="P2">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type><sound tempo="120"/></direction>
+      <note><pitch><step>E</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type><sound tempo="120"/></direction>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXmlWithDefaults(xml);
+
+    // 文書順の番号で照合すると P2（本文1番目=番号0）の明示が消え、P1 が残る逆転が起きる
+    const p2 = imported.score.parts.find((p) => p.partId === 'B') ?? imported.score.parts[0];
+    const p1 = imported.score.parts.find((p) => p.partId === 'A') ?? imported.score.parts[1];
+    expect(imported.globalBpm).toBe(120);
+    expect(p2.measures[0].bpm).toBe(120);
+    expect(p1.measures[0].bpm).toBeUndefined();
+  });
+
+  it('旧形式の明示メタ true は全パート一律の保持として受理される（後方互換）', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <identification><miscellaneous><miscellaneous-field name="music-editer.global-bpm">120</miscellaneous-field><miscellaneous-field name="music-editer.first-measure-bpm-explicit">true</miscellaneous-field></miscellaneous></identification>
+  <part-list><score-part id="P1"><part-name>A</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type><sound tempo="120"/></direction>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXmlWithDefaults(xml);
+    expect(imported.globalBpm).toBe(120);
+    expect(imported.score.parts[0].measures[0].bpm).toBe(120);
+  });
+
+  it('五線分割される大譜表でも明示メタが両段に効く', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <identification><miscellaneous><miscellaneous-field name="music-editer.global-bpm">120</miscellaneous-field><miscellaneous-field name="music-editer.first-measure-bpm-explicit">0</miscellaneous-field></miscellaneous></identification>
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type><sound tempo="120"/></direction>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>16</duration><type>whole</type><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>16</duration><type>whole</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXmlWithDefaults(xml);
+    expect(imported.globalBpm).toBe(120);
+    // 分割後の右手・左手の両方が「明示パート由来」として保持される
+    expect(imported.score.parts.every((p) => p.measures[0].bpm === 120)).toBe(true);
+  });
+
   it('メタの無い外部ファイルでも、標語より後の単独 <sound> は数値変更として保持する', () => {
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">
