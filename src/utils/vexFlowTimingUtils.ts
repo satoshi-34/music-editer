@@ -139,6 +139,13 @@ export function syncTupletPlacementWithNotes(tuplets: readonly RenderedTuplet[])
     if (!stave) {
       return;
     }
+    // 段またぎ連符（クロススタッフ・#475 系）は対象外にする（round1 P2）。
+    // 段またぎでは音符ごとに別の五線が設定されるため、先頭音符の五線を物差しに
+    // 「全音符が五線の外」と誤判定し、正しい配置を反転させてしまう。
+    // この補正は「同じ五線の中で符幹が内側を向いた」ケース（#471）だけが対象
+    if (notes.some((note) => note.getStave() !== stave)) {
+      return;
+    }
 
     // 符頭の縦位置（休符は符頭を持たないので自然に空配列になる）
     const noteheadYs = notes.flatMap((note) => note.getYs());
