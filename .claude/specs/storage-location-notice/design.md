@@ -72,3 +72,14 @@ worktree を共有 dev サーバー（127.0.0.1:5173）の一時エントリ経�
   （StrictMode の実行→片付け→再実行）では true を返し続けて通知と消去タイマーを張り直す。
   `resetStorageLocationNoticeForTest()` をテスト専用に用意。
   配線テストに StrictMode ラップ+時間経過での消滅（10秒）の検証を追加
+
+## 追記: 既読管理を共通部品へ切り出した（Issue #524, 2026-09-01）
+
+Issue #524（音符の初回選択で矢印キーの操作を知らせる）が同じ「一度だけ出す通知」を
+必要としたため、既読の判定・記録を `src/utils/onceNotice.ts` の `createOnceNotice(key)` へ
+切り出し、このファイルはそれを使う形へ付け替えた。**公開している関数名・localStorage キー・
+文言・挙動（StrictMode で出し直す `claim`）はいずれも変えていない**。
+
+#524 側は同じ部品の `claimStrict`（この読み込み中も二度と出さない）を使う。
+きっかけがマウントではなくユーザー操作で、選び直すたびに effect が走るため。
+詳細は `.claude/specs/arrow-key-hint-notice/design.md` を参照。
