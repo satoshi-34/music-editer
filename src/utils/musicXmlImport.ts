@@ -958,6 +958,13 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   // 1つの <part> から2つの PartData ができるため、両方へ同じ番号を記録する
   const partListIds = Array.from(doc.querySelectorAll('part-list score-part'))
     .map((el) => el.getAttribute('id'));
+  // part-list と本文の id が完全対応するときだけ part-list 順で番号付けする。
+  // 一部でも引けない id があると、part-list 順と文書順の番号が混在して明示メタが
+  // 誤ったパートへ適用され得る（round7 P3）ため、その場合は全パートを文書順へ切り替える
+  const partListConsistent = partEls.every((el) => {
+    const id = el.getAttribute('id');
+    return id != null && partListIds.indexOf(id) >= 0;
+  });
   const sourcePartElIndexByPart: number[] = [];
 
   for (let pi = 0; pi < partEls.length; pi++) {
@@ -991,9 +998,7 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
     for (const staffNumber of staffNumbers) {
       const staffClef = clefForStaff(firstPartAttrs, staffNumber) ?? defaultClef;
       const measures = buildStaffMeasures(measureEls, staffNumber, staffClef);
-      // part-list に id が無い不正なファイルは文書順を代用する
-      const partListIndex = partListIds.indexOf(partId);
-      sourcePartElIndexByPart.push(partListIndex >= 0 ? partListIndex : pi);
+      sourcePartElIndexByPart.push(partListConsistent ? partListIds.indexOf(partId) : pi);
       parts.push({
         partId: staffPartId(partName, staffNumber, staffCount, partEls.length),
         clef: staffClef,
