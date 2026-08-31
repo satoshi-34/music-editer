@@ -154,3 +154,20 @@ resolveMeasureBpms(measures: MeasureData[], globalBpm: number): number[]
 - MusicXML / MIDI 書き出しは `measure.bpm` のみを見る従来どおりの挙動
   （標語からの目安 BPM を書き出しへ混ぜると、出力ファイルに存在しないテンポ指定が
   紛れ込むため。必要になったら別 Issue で裁定する）
+
+## 追記（round 2/3 対応・2026-08-31）
+
+- **テンポはスコア共通の属性（round1/2 P1・P2）**: 解決は `resolveScoreMeasureBpms` が
+  **絞り込み前の全段**（tempoSourceParts: quartet 全段 / ensemble 全段+大譜表2段目 /
+  piano 両手 / single）を先頭パートの反復順で展開して1回だけ行い、全パートへ配布する。
+  パート譜表示（選択パートのみ再生）でも他段の数値テンポ・標語を引き継ぐ
+- **ハイライトとの共有（round2 P1）**: `buildPlaybackPositionTimeline` は
+  `sharedMeasureBpms` 引数で実音側と同じ列を受け取る（省略時は従来解決の後方互換）。
+  内部で先頭パートから再解決すると、他段だけの標語がハイライトに効かず累積ズレする
+- **テンポ変更をまたぐタイ（round1 P2）**: 実時間は `beatSpanToSeconds` が
+  小節ごとのテンポ区間で積算する。区間列は `tempoSegmentsFrom`（tempoPlaybackUtils に
+  1本化・両エンジンで共用）が作り、bpm 未設定小節は **fallbackBpm=呼び出し時点の
+  実効テンポ**から引き継ぐ（固定120だと全体テンポ≠120で常にずれる・round2 P2）
+- テスト: 両エンジンの「60→120またぎ=1.5秒」「全体60・省略=2.0秒」、
+  ScorePage 配線「左手だけの Allegro が両パートに効く」、共有列優先のタイムライン、
+  tempoSegmentsFrom のフォールバック、を追加

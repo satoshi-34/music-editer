@@ -164,4 +164,50 @@ describe('ScorePage: 速度標語と再生テンポの連動（Issue #458）', (
     expect(measures[0].bpm).toBe(120);
     expect(measures[1].bpm).toBe(120);
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('ピアノ譜: 左手だけに置いた標語が両パート共通のテンポになる（round1/round2 P1: スコア共通テンポ列）', async () => {
+    // 右手には標語なし・左手の2小節目に Allegro
+    const plain = [
+      { dur: '4' as const, isRest: false, keys: ['c/5'] },
+      { dur: '4' as const, isRest: false, keys: ['d/5'] },
+      { dur: '4' as const, isRest: false, keys: ['e/5'] },
+      { dur: '4' as const, isRest: false, keys: ['f/5'] },
+    ];
+    const leftSecond = [
+      { dur: '4' as const, isRest: false, keys: ['c/3'], tempoMarking: 'Allegro' },
+      { dur: '4' as const, isRest: false, keys: ['d/3'] },
+      { dur: '4' as const, isRest: false, keys: ['e/3'] },
+      { dur: '4' as const, isRest: false, keys: ['f/3'] },
+    ];
+    const measureOf = (events: unknown[]) => ({ events, voices: [{ id: 'voice-1', events }] });
+    const data = createSavedScoreData(
+      { title: '左手標語', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'right-hand', clef: 'treble', measures: [measureOf(plain), measureOf(plain)] },
+        { partId: 'left-hand', clef: 'bass', measures: [measureOf(plain), measureOf(leftSecond)] },
+      ] as never,
+      1, 2, 'piano'
+    );
+    const created = createWork('左手標語');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalled(); }, { timeout: 15000 });
+
+    const parts = playPartsMock.mock.calls[0][0] as Array<{ measures: Array<{ bpm?: number }> }>;
+    expect(parts.length).toBe(2);
+    // 左手に置いた Allegro(132) が**両パート**の2小節目に効く
+    for (const part of parts) {
+      expect(part.measures[1].bpm).toBe(132);
+    }
+    // ハイライトも同じ共通列を使うため、右手だけから再解決した 120 のままにならない
+    // （実音とハイライトの同期は共有列の受け渡し=playbackPositionUtils 側のテストで担保）
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

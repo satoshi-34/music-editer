@@ -98,6 +98,56 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
     expect(play.mock.calls[0][2].duration).toBeCloseTo(expectedDuration, 5);
   });
 
+  it('テンポ変更をまたぐタイは、またいだ先のテンポで積算される（#458 round2 P2）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+
+    // 1小節目 60BPM の4拍目から、2小節目 120BPM の頭1拍へタイ → 1.0+0.5=1.5秒
+    await engine.playParts([{
+      measures: [
+        {
+          bpm: 60,
+          measureBeats: 4,
+          events: [
+            { dur: '2', isRest: true, keys: ['B4'] },
+            { dur: '4', isRest: true, keys: ['B4'] },
+            { dur: '4', isRest: false, keys: ['C4'], tieExtendBeatsByKey: { C4: 1 } },
+          ],
+        },
+        {
+          bpm: 120,
+          measureBeats: 4,
+          events: [
+            { dur: '4', isRest: false, keys: ['C4'], tieSuppressedKeys: ['C4'] },
+          ],
+        },
+      ],
+    }], 60);
+
+    expect(play).toHaveBeenCalledTimes(1);
+    // 開始小節BPM一律だと 2拍×1.0秒=2.0秒。正しくは 1.5秒
+    const expectedDuration = internals(engine).buildPlaybackOptions(1.5).duration;
+    expect(play.mock.calls[0][2].duration).toBeCloseTo(expectedDuration, 5);
+  });
+
+  it('全体テンポ60（小節bpm省略）のタイは、既定120ではなく実効60で数える（#458 round2 P2）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+
+    await engine.playParts([{
+      measures: [{
+        measureBeats: 4,
+        events: [
+          { dur: '4', isRest: false, keys: ['C4'], tieExtendBeatsByKey: { C4: 1 } },
+          { dur: '4', isRest: false, keys: ['C4'], tieSuppressedKeys: ['C4'] },
+        ],
+      }],
+    }], 60);
+
+    expect(play).toHaveBeenCalledTimes(1);
+    // 60BPM の2拍=2.0秒（固定120退行だと1.0秒）
+    const expectedDuration = internals(engine).buildPlaybackOptions(2.0).duration;
+    expect(play.mock.calls[0][2].duration).toBeCloseTo(expectedDuration, 5);
+  });
+
   it('和音では結ばれた音だけが伸び、結ばれていない音は2回鳴る', async () => {
     const { engine, play } = await setupEngineWithFakePlayer();
 
