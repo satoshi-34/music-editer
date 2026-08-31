@@ -180,4 +180,26 @@ describe('MusicXML 書き出し: 連符に合わせた divisions（Issue #519）
     // 3連(8分)×3 + 5連(8分)×5 + 7連(16分)×7 = 1拍 + 2拍 + 1拍 = 4拍
     expect(total).toBe(divisions * 4);
   });
+
+  it('倍率が安全上限を超える病的データでは黙って丸めず明示的に失敗する（round2 P2）', () => {
+    // 互いに素な大きい分母の同居で lcm を爆発させる（保存形式は任意比を受け入れる）
+    const primes = [101, 103, 107, 109, 113];
+    const events: NoteEvent[] = primes.flatMap((n, i) => tupletGroup(`gp${i}`, '8', n, 4));
+    expect(() => scoreToMusicXml(singleMeasureScore(events))).toThrow(/連符の構成が複雑/);
+  });
+
+  it('読み込みで持ち込まれ得る 9・11・13連の同居は安全上限内で厳密に書ける', () => {
+    const events: NoteEvent[] = [
+      ...tupletGroup('g9', '16', 9, 8),
+      ...tupletGroup('g11', '16', 11, 8),
+      ...tupletGroup('g13', '16', 13, 8),
+    ];
+    const xml = scoreToMusicXml(singleMeasureScore(events));
+    const divisions = readDivisions(xml);
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const total = Array.from(doc.querySelectorAll('measure > note > duration'))
+      .reduce((sum, el) => sum + parseInt(el.textContent ?? '0', 10), 0);
+    // 9連(16分)×9=2拍 + 11連(16分)×11=2拍 + 13連(16分)×13=2拍 = 6拍
+    expect(total).toBe(divisions * 6);
+  });
 });

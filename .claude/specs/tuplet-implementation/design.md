@@ -1385,10 +1385,14 @@ Issue #526 に切り分け済み（本件のトリアージコメントで受入
    `BASE_DIVISIONS(16) × 倍率` を `<divisions>` とする
    - 声部2にだけ連符がある譜面を見落とすと、その声部の duration だけが丸められて
      小節合計が合わなくなるため、追加声部も必ず走査する
-3. 上限 `MAX_DIVISIONS = 960`（MusicXML で広く使われる値）を超える場合は、
-   倍率の**約数のうち上限に収まる最大のもの**へ落とす。
-   例: 3連・5連・7連が同居すると厳密には `16×lcm(3,5,7)=1680` が必要だが、
-   `16×35=560` を採用して 5連・7連は整数のまま保つ
+3. 丸めのための上限は設けない（#519 round1 P2 で撤回）。当初は `MAX_DIVISIONS = 960` を
+   置いて「約数のうち最大」へ落としていたが、3連・5連・7連の同居（厳密には
+   `16×lcm(3,5,7)=1680` が必要）で 560 を選ぶと 3連が丸められ、小節合計がずれて
+   この修正の目的そのものに矛盾した。必要な倍率をそのまま使う。
+   ただし読み込みは任意の正整数比を受け入れるため、倍率が安全上限
+   `MAX_DIVISIONS_SCALE = 65536`（読み込みで持ち込まれ得る 9・11・13連の同居でも
+   届かない値）を超える病的データでは、黙って丸めず理由つきで書き出しを失敗させる
+   （#318・#519 round2 P2）
 
 倍率の実例:
 
@@ -1405,7 +1409,7 @@ Issue #526 に切り分け済み（本件のトリアージコメントで受入
 ### 影響範囲
 
 - `src/utils/musicXmlExport.ts`
-  - `DIVISIONS`（定数）→ `BASE_DIVISIONS` / `MAX_DIVISIONS` へ置き換え
+  - `DIVISIONS`（定数）→ `BASE_DIVISIONS`（+安全上限 `MAX_DIVISIONS_SCALE`）へ置き換え
   - `gcd` / `lcm` / `dotRatio` / `requiredDivisionsScale` / `resolveDivisions`（新規）
   - `eventDurationTicks(ev)` → `eventDurationTicks(ev, divisions)`。
     `<backup>` の合計計算も同じ関数を通るので声部2の巻き戻し量も自動で追随する
