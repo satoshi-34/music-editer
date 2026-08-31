@@ -11,6 +11,7 @@ import { ensureMeasuresPrimaryVoiceMaterialized, getEventDurationBeats } from '.
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { buildRestEventsForBeats } from './measureRestFillUtils';
 import { readMusicXmlDefaults, type MusicXmlDefaultsLayout } from './musicXmlDefaults';
+import { getTempoMarkingBpm } from './tempoMarkingPresets';
 
 /**
  * MusicXML の <clef><sign>/<line> を ClefType に変換する。
@@ -701,8 +702,14 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     const leftBarline = measureEl.querySelector('barline[location="left"] repeat');
     const rightBarline = measureEl.querySelector('barline[location="right"] repeat');
 
-    // 小節単位テンポ（sound/@tempo があれば取得）
-    const soundEl = measureEl.querySelector('sound[tempo]');
+    // 小節単位テンポ（sound/@tempo があれば取得）。
+    // ただし速度標語の direction に併記された <sound>（<words> と同じ <direction> 内）は
+    // 「標語の目安BPM」であって数値テンポ変更ではないので除外する。除外しないと、
+    // 標語だけの小節が往復で「標語+数値テンポ」に化け、数値が標語より優先される
+    // 規則（#516）により、標語を書き替えても再生が変わらなくなる（Codex round1 P1）
+    const soundEl = Array.from(measureEl.querySelectorAll('sound[tempo]')).find(
+      (el) => !el.closest('direction')?.querySelector('direction-type words'),
+    );
     const bpm = soundEl ? parseInt(soundEl.getAttribute('tempo') ?? '', 10) : undefined;
 
     // リハーサルマーク（練習番号）: <direction-type><rehearsal> を拾う
@@ -714,6 +721,41 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     const rehearsalMark = rehearsalText && rehearsalText.length > 0 && rehearsalText.length <= 4
       ? rehearsalText
       : undefined;
+
+    // 速度標語（Andante 等）: <direction-type><words> を拾う（Issue #518）。
+    // <words> は速度標語だけでなく発想標語（dolce 等）や任意の注釈にも使われる汎用要素なので、
+    // 「対応表（tempoMarkingPresets）にある語」だけを速度標語として取り込む。
+    // こうしないと dolce のような表示専用の語まで再生テンポを動かしてしまう。
+    // リハーサルマークと同じ理由で、五線で分けた譜では1番目の五線ぶんだけ拾う（両手に二重に付けない）
+    // 発想標語（dolce）の後に速度標語（Andante）が並ぶ場合に前者で止まらないよう、
+    // 小節内の <words> を全部見て「対応表にある最初の語」を採る（Codex round1 P2）
+    const tempoWordsEl = staffNumber === null || staffNumber === 1
+      ? Array.from(measureEl.querySelectorAll('direction-type words')).find(
+          (el) => getTempoMarkingBpm(el.textContent?.trim() ?? '') != null,
+        )
+      : null;
+    const tempoMarking = tempoWordsEl?.textContent?.trim() || undefined;
+    // 標語を付ける音符の位置: その direction より手前にある主声部の音符
+    // （<chord/> の和音構成音・イベント化されない <grace> は数えない）の個数
+    // ＝ 標語イベントのインデックス。自分の書き出し（イベントごとに <direction> を
+    // 音符の直前へ挟む形）を正しく往復させるための概算で、<backup> 後の追加声部領域に
+    // 置かれた標語は末尾へクランプされる。
+    // 五線分割（大譜表）の読み込みでは、別五線の音の時間を合成休符で埋めるため
+    // 生XML上の音符数と events のインデックスが一致しない（round2 P2）。その場合は
+    // 位置復元をあきらめて従来どおり先頭へ付ける
+    let tempoMarkingEventIndex = 0;
+    if (tempoWordsEl && staffNumber === null) {
+      const dirEl = tempoWordsEl.closest('direction');
+      let count = 0;
+      for (const child of Array.from(measureEl.children)) {
+        if (child === dirEl) break;
+        if (child.tagName === 'backup') break; // 追加声部領域に入ったら主声部の位置は確定
+        if (child.tagName === 'note' && !child.querySelector('chord') && !child.querySelector('grace')) {
+          count += 1;
+        }
+      }
+      tempoMarkingEventIndex = count;
+    }
 
     // 小節単位拍子変更
     const attrEl = measureEl.querySelector('attributes time');
@@ -784,6 +826,15 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
       }
     }
 
+    // 速度標語は「音符に付く文字列」として持つ（#458 の持ち方に合わせる）。
+    // 位置は書き出し時の並び（direction が対象音符の直前）から復元した概算インデックス。
+    // 範囲外（追加声部領域の標語など）は末尾へクランプする。
+    // 音符が1つも無い小節では置き場所が無いので、その場合は捨てる（表示・再生とも影響なし）
+    if (tempoMarking && events.length > 0) {
+      const at = Math.min(tempoMarkingEventIndex, events.length - 1);
+      events[at] = { ...events[at], tempoMarking };
+    }
+
     return {
       events: events.length ? events : [{ dur: '1', isRest: true, keys: [] }],
       // 追加声部: 入力があった小節だけ voices を持たせる。
@@ -815,6 +866,18 @@ export interface MusicXmlImportResult {
    * 「ファイル指定を引き継いだ」ことを画面側が通知する（#318）ために返す。
    */
   defaults?: MusicXmlDefaultsLayout;
+  /**
+   * 先頭小節の（標語に併記されていない）<sound tempo> から読み取った全体テンポ（#518）。
+   * このアプリの書き出しは全体テンポを先頭小節の <metronome>+<sound> として出すため、
+   * 先頭小節の単独 sound は「全体テンポ」として返し、measure.bpm には入れない。
+   * こうしないと往復で「全体126」が「先頭小節だけ数値126・パネルは120のまま」に化ける。
+   * 正本はアプリ固有メタ（music-editer.global-bpm）。メタがあれば先頭小節の <sound> 由来の
+   * bpm のうち「由来メタ（first-measure-bpm-explicit）で明示と記録されていないパート」の
+   * メタ一致値だけを取り除く（明示の数値テンポ変更は値が同じでも保持する）。
+   * メタの無い外部ファイルは、全パートで一致し標語より前に書かれた先頭小節の単独 <sound> を
+   * 全体テンポとみなす。それ以外は従来どおり measure.bpm として保持する。
+   */
+  globalBpm?: number;
 }
 
 /**
@@ -889,6 +952,24 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   // パート一覧
   const partEls = Array.from(doc.querySelectorAll('part'));
   const parts: PartData[] = [];
+  // 各 PartData がどのパート（**part-list 順**の番号）から作られたか。パート単位メタは
+  // part-list 順で番号付けされる（MusicXML では譜面上の順序を part-list が定義し、
+  // <part> 本体の文書順は保証されない・round6 P2）。五線分割（大譜表）では
+  // 1つの <part> から2つの PartData ができるため、両方へ同じ番号を記録する
+  const partListIds = Array.from(doc.querySelectorAll('part-list score-part'))
+    .map((el) => el.getAttribute('id'));
+  // part-list と本文の id が完全対応するときだけ part-list 順で番号付けする。
+  // 一部でも引けない id があると、part-list 順と文書順の番号が混在して明示メタが
+  // 誤ったパートへ適用され得る（round7 P3）ため、その場合は全パートを文書順へ切り替える
+  // 「完全対応」= 件数一致・id の一意性・双方向の集合一致（round8 P3）。
+  // 余分な score-part や重複 id のある不正ファイルで番号がずれるのを防ぐ
+  const bodyIds = partEls.map((el) => el.getAttribute('id'));
+  const partListConsistent =
+    partListIds.length === bodyIds.length
+    && new Set(partListIds).size === partListIds.length
+    && new Set(bodyIds).size === bodyIds.length
+    && bodyIds.every((id) => id != null && partListIds.includes(id));
+  const sourcePartElIndexByPart: number[] = [];
 
   for (let pi = 0; pi < partEls.length; pi++) {
     const partEl = partEls[pi];
@@ -921,6 +1002,7 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
     for (const staffNumber of staffNumbers) {
       const staffClef = clefForStaff(firstPartAttrs, staffNumber) ?? defaultClef;
       const measures = buildStaffMeasures(measureEls, staffNumber, staffClef);
+      sourcePartElIndexByPart.push(partListConsistent ? partListIds.indexOf(partId) : pi);
       parts.push({
         partId: staffPartId(partName, staffNumber, staffCount, partEls.length),
         clef: staffClef,
@@ -939,6 +1021,86 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   // <defaults>（Finale などが書き出す「その作品のレイアウト」）を読む（Issue #477）。
   // 読めた項目だけを作品の属性として引き継ぎ、読めなければ従来どおりアプリの既定値で組む。
   const defaults = readMusicXmlDefaults(doc);
+
+  // 先頭小節の sound tempo は「全体テンポ」へ読み替える（MusicXmlImportResult.globalBpm の
+  // ドキュメント参照）。読み替えが再生の意味を変えないと確認できたときだけ行う。
+  // 正本はアプリ固有メタ（自分の書き出しにのみ存在）。メタの無い外部ファイルは
+  // フォールバックの推定で読む。
+  const readMetaField = (name: string): string | undefined =>
+    Array.from(doc.querySelectorAll('identification miscellaneous-field'))
+      .find((el) => el.getAttribute('name') === name)
+      ?.textContent?.trim();
+  // メタは「完全な数値・正の範囲」だけを受理する（round4 P2）。
+  // 不正なメタ（120abc・0・負数・空）は「メタが壊れている」のであって「メタが無い」のとは
+  // 違うため、外部ファイル向けの推定へ落とさず、読み替え自体を行わない（bpm を保持）
+  const parseMetaBpm = (text: string): number | 'invalid' => {
+    if (!/^\d+$/.test(text)) return 'invalid';
+    const v = parseInt(text, 10);
+    return v > 0 && v <= 400 ? v : 'invalid';
+  };
+  let globalBpm: number | undefined;
+  const metaGlobalBpmText = readMetaField('music-editer.global-bpm');
+  const metaGlobalBpm = metaGlobalBpmText != null ? parseMetaBpm(metaGlobalBpmText) : undefined;
+  // 先頭小節に明示の数値テンポ変更があるパート番号（書き出し順）のメタ（round4 P1 / round5 P1）。
+  // 値の一致だけでは「全体テンポ由来」と断定できない（全体120+明示120+標語で、
+  // 明示を消すと実効テンポが標語側へ反転する）ため、由来そのものを書き出しが記録する。
+  // パート単位なのは、明示ありと無しが混在する譜で無い側だけを取り除くため。
+  // 旧形式の 'true'（全パート一律）も後方互換で受ける
+  const explicitMetaText = readMetaField('music-editer.first-measure-bpm-explicit');
+  const explicitAllParts = explicitMetaText === 'true';
+  const explicitPartElIndices = new Set(
+    (explicitMetaText ?? '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => /^\d+$/.test(t))
+      .map((t) => parseInt(t, 10)),
+  );
+  if (metaGlobalBpmText != null) {
+    if (metaGlobalBpm !== undefined && metaGlobalBpm !== 'invalid') {
+      globalBpm = metaGlobalBpm;
+      parts.forEach((part, partIndex) => {
+        if (explicitAllParts) return;
+        if (explicitPartElIndices.has(sourcePartElIndexByPart[partIndex])) return;
+        const first = part.measures[0];
+        if (first?.bpm === metaGlobalBpm) part.measures[0] = { ...first, bpm: undefined };
+      });
+    }
+    // メタが不正: 読み替えなし（measure.bpm を保持）
+  } else {
+    // メタの無い外部ファイル: 全パートで一致する先頭小節の <sound> を全体テンポとみなす。
+    // 値を持たないパートがあっても読み替えてよい: 小節テンポはスコア共通の1列として解決される
+    //（#516 resolveScoreMeasureBpms）ため、どのパートに書かれていても再生結果は同じ（round3 P2）
+    const firstMeasureBpms = parts
+      .map((part) => part.measures[0]?.bpm)
+      .filter((v): v is number => v != null);
+    // 標語（対応表にある語）より後ろ（文書順）に書かれた単独 <sound> は、外部プレーヤーでは
+    // 標語の目安BPMを上書きする「テンポ変更」として鳴る。全体テンポへ読み替えると
+    // 標語が勝つ側に反転してしまうので、その形のファイルは読み替えない
+    const firstMeasureSoundIsGlobal = partEls.every((partEl) => {
+      const m = partEl.querySelector('measure');
+      if (!m) return true;
+      const sound = Array.from(m.querySelectorAll('sound[tempo]')).find(
+        (el) => !el.closest('direction')?.querySelector('direction-type words'),
+      );
+      if (!sound) return true;
+      const marking = Array.from(m.querySelectorAll('direction-type words')).find(
+        (el) => getTempoMarkingBpm(el.textContent?.trim() ?? '') != null,
+      );
+      if (!marking) return true;
+      return (sound.compareDocumentPosition(marking) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    });
+    if (
+      firstMeasureBpms.length > 0
+      && firstMeasureBpms.every((v) => v === firstMeasureBpms[0])
+      && firstMeasureSoundIsGlobal
+    ) {
+      globalBpm = firstMeasureBpms[0];
+      for (const part of parts) {
+        const first = part.measures[0];
+        if (first?.bpm != null) part.measures[0] = { ...first, bpm: undefined };
+      }
+    }
+  }
 
   const score: SavedScoreData = {
     version: '1.0',
@@ -963,7 +1125,7 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
     pageMargins: defaults?.pageMargins,
   };
 
-  return { score, defaults };
+  return { score, defaults, globalBpm };
 }
 
 /**

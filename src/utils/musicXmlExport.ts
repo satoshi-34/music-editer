@@ -8,6 +8,7 @@ import type { KeySignature } from './noteKeyUtils';
 import type { ClefType } from '../components/clefUtils';
 import { resolveMeasureClef, resolveClefAtMeasureEnd } from './clefMeasureUtils';
 import { getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { getTempoMarkingBpm } from './tempoMarkingPresets';
 
 // 分割数（division）: 四分音符 = 16分割。全音符〜64分音符を整数で表せる最小値
 const DIVISIONS = 16;
@@ -118,6 +119,25 @@ function dynamicsDirectionXml(ev: NoteEvent, staff: number): string {
   );
   if (!dyn) return '';
   return `<direction placement="below"><direction-type><dynamics><${dyn.value}/></dynamics></direction-type><staff>${staff}</staff></direction>`;
+}
+
+/**
+ * 速度標語（Andante 等）1つぶんの <direction> を作る（Issue #518）。
+ *
+ * 標語は MusicXML では <words> で表すが、それだけだと読み込む側は「文字」しか受け取れず、
+ * テンポは変わらない。このアプリは対応表（tempoMarkingPresets）で標語→目安BPMを持っており、
+ * 再生でも実際にその速さで鳴らしている（#458）ので、同じ目安を <sound tempo> として併記して
+ * 書き出す。こうすると他ソフトでも、往復で戻したときも、標語どおりの速さで再生される。
+ *
+ * 対応表に無い自由入力（'Allegro con brio' など）は BPM を決められないため、
+ * <words> だけを出す（画面の扱いと同じで「表示だけ・速さは変えない」）。
+ */
+function tempoMarkingDirectionXml(ev: NoteEvent, staff: number): string {
+  const marking = ev.tempoMarking?.trim();
+  if (!marking) return '';
+  const bpm = getTempoMarkingBpm(marking);
+  const soundXml = bpm != null ? `<sound tempo="${bpm}"/>` : '';
+  return `<direction placement="above"><direction-type><words>${escapeXmlText(marking)}</words></direction-type><staff>${staff}</staff>${soundXml}</direction>`;
 }
 
 /**
@@ -248,6 +268,11 @@ function measureToXml(
     globalTimeSig: [number, number];
     isFirstMeasure: boolean;
     staff: number;
+    /**
+     * 作品全体のテンポ（再生パネルの ♩=N）。先頭小節にだけ書き出す（Issue #518）。
+     * 省略時（テンポが分からない呼び出し）は従来どおり何も出さない。
+     */
+    globalBpm?: number;
     prevTimeSig?: [number, number];
     prevKeyFifths?: number;
     effectiveKeyFifths: number;
@@ -296,10 +321,15 @@ function measureToXml(
     lines.push(`<attributes>${divXml}${keyXml}${timeXml}${clefXmlStr}</attributes>`);
   }
 
-  // テンポ変更（BPM 指定がある場合）
-  if (measure.bpm != null) {
+  // テンポ（Issue #518）。
+  // - この小節に数値のテンポ変更（measure.bpm）があればそれを出す
+  // - 無くても**先頭小節**には作品全体のテンポ（再生パネルの ♩=N）を出す
+  // 以前は measure.bpm のあるときしか出しておらず、全体テンポは1つも書かれなかった。
+  // そのため書き出したファイルを読み直すと、読込側の既定（120）へ戻ってしまっていた。
+  const measureTempoBpm = measure.bpm ?? (options.isFirstMeasure ? options.globalBpm : undefined);
+  if (measureTempoBpm != null) {
     lines.push(
-      `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${measure.bpm}</per-minute></metronome></direction-type><sound tempo="${measure.bpm}"/></direction>`
+      `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${measureTempoBpm}</per-minute></metronome></direction-type><sound tempo="${measureTempoBpm}"/></direction>`
     );
   }
 
@@ -327,6 +357,10 @@ function measureToXml(
     if (ev.clefChange) {
       lines.push(`<attributes>${clefXml(ev.clefChange)}</attributes>`);
     }
+    // 速度標語（Andante 等）は強弱より先に出す。<direction> は書いた順に
+    // 同じ位置へ並ぶので、譜面の見た目（標語が上・強弱が下）と並びをそろえておく
+    const tempoDir = tempoMarkingDirectionXml(ev, options.staff);
+    if (tempoDir) lines.push(tempoDir);
     const dynDir = dynamicsDirectionXml(ev, options.staff);
     if (dynDir) lines.push(dynDir);
     // 松葉（ヘアピン）開始: この音符の直前に <wedge type="crescendo|diminuendo"/> を置く
@@ -365,6 +399,10 @@ function measureToXml(
       // 声部2の松葉（ヘアピン）も声部1と同じ並び（開始音符の直前・終了音符の直後）で出す。
       // 位置マップは声部2ぶんを別に受け取っているので、声部1の松葉と混ざることはない。
       const hpKey = `${options.measureIndex ?? 0}-${i}`;
+      // 速度標語は追加声部の音符にも付けられる（#516 で再生対象になった）ので、
+      // 主声部と同じく音符の直前に <words>（+目安BPMの <sound>）を出す（Codex round1 P2）
+      const tempoDirExtra = tempoMarkingDirectionXml(ev, options.staff);
+      if (tempoDirExtra) lines.push(tempoDirExtra);
       if (voiceNumber === 2) {
         options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
           lines.push(wedgeDirectionXml(wedgeType, options.staff));
@@ -394,7 +432,18 @@ function measureToXml(
  * @param data 楽譜データ
  * @returns MusicXML XML 文字列
  */
-export function scoreToMusicXml(data: SavedScoreData): string {
+/** MusicXML 書き出しの追加情報（譜面データに含まれない、画面側が持っている値） */
+export interface MusicXmlExportOptions {
+  /**
+   * 作品全体のテンポ（再生パネルの ♩=N）。Issue #518。
+   * 全体テンポは保存データ（SavedScoreData）ではなく再生設定（TempoManager）側に
+   * あるため、書き出すには呼び出し側から渡してもらう必要がある。
+   * 省略した場合は従来どおり、全体テンポの <direction> を出さない。
+   */
+  globalBpm?: number;
+}
+
+export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOptions = {}): string {
   const { metadata, keySignature = 'C', timeSignature = [4, 4], timeSignatureStyle } = data;
   // 書き出し境界の正規化（#244 段5-3）: read は voices[0]（鏡）を優先するため、
   // 呼び出し側から鏡が古いデータ（旧バージョン由来・手組みのテストデータ等）が来ても
@@ -457,6 +506,7 @@ export function scoreToMusicXml(data: SavedScoreData): string {
         globalTimeSig,
         isFirstMeasure: mi === 0,
         staff: 1,
+        globalBpm: options.globalBpm,
         prevTimeSig,
         prevKeyFifths,
         effectiveKeyFifths,
@@ -485,13 +535,37 @@ export function scoreToMusicXml(data: SavedScoreData): string {
   <work><work-title>${escXml(title)}</work-title></work>
   <identification>
     <creator type="composer">${escXml(composer)}</creator>
-    <encoding><software>my-music-app</software></encoding>${timeSignatureStyle === 'symbol'
-      // 拍子の記号表示設定（#422）。<time symbol> は先頭が 4/4・2/2 のときしか
-      // 書けないため、6/8 等へ変更中でも設定を往復させるにはアプリ固有メタが要る。
-      // MusicXML 公式のアプリ固有情報置き場（miscellaneous-field）を使う（round3 P2）。
-      // numeric（既定）のときは改行ごと何も足さない（従来出力と1バイトも変えない）
-      ? '\n    <miscellaneous><miscellaneous-field name="music-editer.time-signature-style">symbol</miscellaneous-field></miscellaneous>'
-      : ''}
+    <encoding><software>my-music-app</software></encoding>${(() => {
+      // MusicXML 公式のアプリ固有情報置き場（miscellaneous-field）。
+      // - 拍子の記号表示設定（#422）: <time symbol> は先頭が 4/4・2/2 のときしか
+      //   書けないため、6/8 等へ変更中でも設定を往復させるにはアプリ固有メタが要る
+      // - 全体テンポ（#518 round3 P1）: 「全体テンポ」と「先頭小節の数値テンポ変更」は
+      //   小節側の要素構成が同一で区別できないため、全体テンポの正本をここに記録する。
+      //   読み込み側はこのメタを最優先で globalBpm とし、由来メタ（下の
+      //   first-measure-bpm-explicit）で明示と記録されていないパートの一致値だけを
+      //   measure.bpm から取り除く（明示の数値変更は値が同じでも残る）
+      // どちらも無いときは改行ごと何も足さない（従来出力と1バイトも変えない）
+      const fields: string[] = [];
+      if (timeSignatureStyle === 'symbol') {
+        fields.push('<miscellaneous-field name="music-editer.time-signature-style">symbol</miscellaneous-field>');
+      }
+      if (options.globalBpm != null) {
+        fields.push(`<miscellaneous-field name="music-editer.global-bpm">${options.globalBpm}</miscellaneous-field>`);
+        // 先頭小節に明示の数値テンポ変更（measure.bpm）があるパートの番号（0始まり・
+        // 書き出し順=part-list 順）を記録する（round4 P1 / round5 P1）。
+        // 全体テンポと明示値がたまたま同じ数字でも、読込側が明示側を消して
+        // 「数値 > 標語」の優先順位を壊さないようにするため（値の一致では由来を断定できない）。
+        // パート単位で持つのは、明示ありと無しのパートが混在する譜で、無い側の
+        // 全体テンポ由来値だけを読込側が取り除けるようにするため
+        const explicitPartIndices = parts
+          .map((p, pi) => (p.measures[0]?.bpm != null ? pi : -1))
+          .filter((pi) => pi >= 0);
+        if (explicitPartIndices.length > 0) {
+          fields.push(`<miscellaneous-field name="music-editer.first-measure-bpm-explicit">${explicitPartIndices.join(',')}</miscellaneous-field>`);
+        }
+      }
+      return fields.length ? `\n    <miscellaneous>${fields.join('')}</miscellaneous>` : '';
+    })()}
   </identification>
   <part-list>${partListItems.join('')}</part-list>
   ${partXmls.join('\n  ')}
@@ -504,8 +578,12 @@ function escXml(s: string): string {
 }
 
 /** MusicXML をファイルとしてダウンロードする */
-export function downloadMusicXml(data: SavedScoreData, filename?: string): void {
-  const xml = scoreToMusicXml(data);
+export function downloadMusicXml(
+  data: SavedScoreData,
+  filename?: string,
+  options: MusicXmlExportOptions = {}
+): void {
+  const xml = scoreToMusicXml(data, options);
   const blob = new Blob([xml], { type: 'application/vnd.recordare.musicxml+xml' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
