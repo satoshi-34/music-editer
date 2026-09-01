@@ -1161,7 +1161,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 非同期チェックを実行中のため）。アンマウント後に setState・recreateAudioEngine が
   // 走らないよう、await 後にこのフラグで打ち切る（#546 round1 P2）
   const scorePageUnmountedRef = useRef(false);
-  useEffect(() => () => { scorePageUnmountedRef.current = true; }, []);
+  useEffect(() => {
+    // StrictMode の「実行→片付け→再実行」では cleanup 後も再マウントされるため、
+    // setup で必ず false へ戻す（round2 P2: 戻さないと replay 後の検知が全部捨てられる）
+    scorePageUnmountedRef.current = false;
+    return () => { scorePageUnmountedRef.current = true; };
+  }, []);
 
   const runOutputHealthCheck = useCallback(async (engine: PlaybackEngine) => {
     try {
@@ -2812,14 +2817,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // マウント直後の1回だけ実行し、復元の有無に関わらず「復元処理は完了した」ことを
   // autosaveRestoreReady で示す（これが true になるまで下の自動保存 useEffect は書き込みをしない）。
   const restoreAttemptedRef = useRef(false);
+  const restoreRunSeqRef = useRef(0);
   useEffect(() => {
+    // 「完了済みなら再実行しない」。試行中フラグではなく**完了**フラグにするのは、
+    // StrictMode の「実行→片付け→再実行」で1回目が cancelled 打ち切りになったとき、
+    // 2回目が復元をやり直せるようにするため（round2 P2: 試行フラグだと
+    // autosaveRestoreReady が永遠に false のまま自動保存が止まる）
     if (restoreAttemptedRef.current) return;
-    restoreAttemptedRef.current = true;
 
     // applyLoadedScoreData の await 中にアンマウントされると、cleanup 実行後に
     // 通知とタイマーを新規予約してしまい二度と片付けられない（#546 round1 P2）。
-    // effect ローカルの cancelled で await 後の続行を抑止する
-    let cancelled = false;
+    // 世代トークンで await 後の続行を抑止する（applyLoadedScoreData 自体は同じ
+    // データの再適用なので、replay で2回走っても結果は同じ）
+    const runSeq = ++restoreRunSeqRef.current;
+    const isCancelled = () => restoreRunSeqRef.current !== runSeq;
     (async () => {
       // 旧バージョンのデータ（手動保存と自動保存のキーが分かれていない形／作品カタログが
       // 無い形）を、消さずに新しい保存先へ複製してから読み込む（初回起動時のみ・後方互換）。
@@ -2827,7 +2838,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const restored = initializeWorks();
       if (restored) {
         await applyLoadedScoreData(restored);
-        if (cancelled) return;
+        if (isCancelled()) return;
 
         setRestoreNotice('自動保存データから復元しました');
         console.info('[ScorePage] 起動時に自動保存データから復元しました');
@@ -2845,12 +2856,17 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         }
       }
 
-      if (cancelled) return;
+      if (isCancelled()) return;
+      restoreAttemptedRef.current = true;
       setAutosaveRestoreReady(true);
       // 移行・復元が済んだことを App へ知らせる（ホームの一覧の読み直し。round1 P2）
       onLibraryReadyRef.current?.();
     })();
-    return () => { cancelled = true; };
+    return () => {
+      // この実行を無効化する（次の setup が ++ するのを待たず、cleanup 時点で無効化。
+      // アンマウントの場合は誰も再開しないので、通知・タイマーの新規予約が止まる）
+      if (restoreRunSeqRef.current === runSeq) restoreRunSeqRef.current++;
+    };
   // applySettingsProfileToState はレンダーごとに作り直される素の関数のため、
   // handleNewScore と同じ理由で依存配列には含めない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
