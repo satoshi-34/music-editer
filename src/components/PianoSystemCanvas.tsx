@@ -3023,7 +3023,7 @@ export default function PianoSystemCanvas({
   }, [symbolOffsetEditState, cancelOffsetOverlayTranslucent]);
 
   // ── 記号のドラッグ移動（Issue #522）で使う「いつも最新」の入り口 ────────────
-  // ドラッグ中の mousemove / mouseup は window で受ける（理由は下の effect のコメント）。
+  // ドラッグ中の pointermove / pointerup は window で受ける（理由は下の effect のコメント）。
   // window のハンドラは1回だけ登録して使い回すため、そのままだと登録した回の
   // 古い state を掴んだままになる。state を読む処理はここで毎レンダー差し替える。
   const symbolOffsetEditStateRef = useRef(symbolOffsetEditState);
@@ -3407,14 +3407,25 @@ export default function PianoSystemCanvas({
     // pointercancel には mouseup も click も続かないので、click の読み飛ばしは立てない
     //（立てると解除役の mouseup が来ず、中断後の最初のクリックが1回捨てられる）
     const onPointerCancel = () => { cancelActiveDragSessions({ suppressNextClick: false }); };
+    // 記号ドラッグ側の安全弁だけは pointerup でも効かせる（round2 P2: タッチでは mouseup が
+    // 保証されず、preventDefault で互換 mouse イベントも抑止され得る）。
+    // onWindowMouseUp をそのまま pointerup へ登録してはいけない（round3 P1）:
+    // 通常マウスでは pointerup が mouseup より先に来るため、タイ/松葉の掃除
+    //（tieStart=null）が確定処理より先に走り、applyArc/applyHairpin へ到達しなくなる
+    const onWindowPointerUp = () => {
+      if (
+        dragSessionsRef.current.symbolOffset == null &&
+        dragSessionsRef.current.symbolOffsetMoved
+      ) {
+        setTimeout(() => { dragSessionsRef.current.symbolOffsetMoved = false; }, 0);
+      }
+    };
     window.addEventListener('mouseup', onWindowMouseUp);
-    // 記号ドラッグは pointer 系へ移行したため、安全弁も pointerup で効かせる（round2 P2:
-    // タッチでは mouseup が保証されず、preventDefault で互換 mouse イベントも抑止され得る）
-    window.addEventListener('pointerup', onWindowMouseUp);
+    window.addEventListener('pointerup', onWindowPointerUp);
     window.addEventListener('pointercancel', onPointerCancel);
     return () => {
       window.removeEventListener('mouseup', onWindowMouseUp);
-      window.removeEventListener('pointerup', onWindowMouseUp);
+      window.removeEventListener('pointerup', onWindowPointerUp);
       window.removeEventListener('pointercancel', onPointerCancel);
     };
   }, [cancelActiveDragSessions]);
@@ -3551,7 +3562,7 @@ export default function PianoSystemCanvas({
   }, [updateArcDragPreview]);
 
   /**
-   * 記号のドラッグ移動（Issue #522）の mousemove / mouseup を window で受ける。
+   * 記号のドラッグ移動（Issue #522）の pointermove / pointerup を window で受ける。
    *
    * window で受ける理由は弧のドラッグ（#235）と同じで、さらにもう1つある:
    * 記号を1px動かすたびに下書きが変わって SVG が作り直されるため、pointerdown を受けた
