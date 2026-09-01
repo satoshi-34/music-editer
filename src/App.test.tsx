@@ -237,6 +237,20 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     await waitFor(() => { expect(scoreTitleText()).toContain('古い作品'); }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('更新が古い作品でも「前回開いていた作品」が一覧の先頭に来る（#528 round1 P1）', async () => {
+    // 新しい作品Aを作った後、古い作品Bへ切り替えて（編集せず）終了した状況を再現する。
+    // 更新順だけだと先頭は A になり、「先頭 = 前回の続き」が崩れる
+    const olderId = seedWork('古い作品', new Date(2026, 7, 20, 10, 0).getTime());
+    seedWork(SEEDED_TITLE, new Date(2026, 7, 31, 10, 0).getTime());
+    setLastOpenedWorkId(olderId); // 最後に開いていたのは古い作品B
+
+    render(<App />);
+    await waitFor(() => {
+      const cards = [...document.querySelectorAll<HTMLButtonElement>('.home-work-list button')];
+      expect(cards[0]?.dataset.testid).toBe(`home-work-${olderId}`);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('ホーム表示中は譜面画面のキーボードショートカットが効かない（round1 P1）', async () => {
     seedWork();
     render(<App />);

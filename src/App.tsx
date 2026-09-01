@@ -21,7 +21,7 @@ import ScorePage, { type HomeActionResult, type ScorePageHomeActions } from './c
 import HomeScreen, { type HomeOpenKind } from './components/HomeScreen';
 import type { ScoreType, WorkSummary } from './types/storage';
 import type { ToolbarTab } from './utils/editorContextLabels';
-import { hasStoredData, listWorks } from './utils/storage';
+import { getLastOpenedWorkId, hasStoredData, listWorks } from './utils/storage';
 import { getOmrApiUrl } from './utils/omrApi';
 import { APP_VERSION } from './utils/appVersion';
 import { setHomeShown } from './utils/homeVisibility';
@@ -29,10 +29,19 @@ import './App.css';
 
 /**
  * ホームに出す「最近使ったファイル」の材料を、保存データから読み直す。
- * 並びは listWorks の更新の新しい順のままで、先頭が以前の「前回の続き」に相当する（Issue #528）。
+ * 並びは「前回開いていた作品を先頭」+「残りは更新の新しい順」（Issue #528 round1 P1）。
+ * 更新順だけに任せると、古い作品へ切り替えて編集せずに終了した場合に
+ * 「先頭 = 前回の続き」が崩れる（先頭クリックで別の作品へ切り替わってしまう）。
+ * updatedAt を開くだけで書き換える案は「更新日時」表示が嘘になるため採らない。
  */
 function readHomeSnapshot(): { works: WorkSummary[] } {
-  return { works: listWorks() };
+  const works = listWorks();
+  const lastOpenedId = getLastOpenedWorkId();
+  if (!lastOpenedId) return { works };
+  const lastOpenedIndex = works.findIndex((w) => w.id === lastOpenedId);
+  if (lastOpenedIndex <= 0) return { works };
+  const reordered = [works[lastOpenedIndex], ...works.slice(0, lastOpenedIndex), ...works.slice(lastOpenedIndex + 1)];
+  return { works: reordered };
 }
 
 /** いま押せる「開く」導線を決める（PDF は変換APIがあるとき、旧手動保存はデータがあるときだけ） */
