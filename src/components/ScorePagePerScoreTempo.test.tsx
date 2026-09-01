@@ -167,7 +167,10 @@ describe('ScorePage: 作品ごとの全体テンポ（Issue #543）', () => {
 
     // ダウンロードの Blob を横取りしてバイト列を読む
     let midiBytes: Uint8Array | null = null;
-    const origCreateObjectURL = URL.createObjectURL;
+    // descriptor ごと退避して finally で完全復元する（round3 P3: 値だけ戻すと
+    // 後続テストへグローバル状態が漏れる）
+    const origCreateDesc = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+    const origRevokeDesc = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
       value: vi.fn((blob: Blob) => {
@@ -197,7 +200,10 @@ describe('ScorePage: 作品ごとの全体テンポ（Issue #543）', () => {
         expect(hex).toContain(`ff 51 03 ${tempoHex}`);
       }, { timeout: 15000 });
     } finally {
-      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: origCreateObjectURL });
+      if (origCreateDesc) Object.defineProperty(URL, 'createObjectURL', origCreateDesc);
+      else Reflect.deleteProperty(URL, 'createObjectURL');
+      if (origRevokeDesc) Object.defineProperty(URL, 'revokeObjectURL', origRevokeDesc);
+      else Reflect.deleteProperty(URL, 'revokeObjectURL');
     }
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
@@ -222,14 +228,17 @@ describe('ScorePage: 作品ごとの全体テンポ（Issue #543）', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
     fireEvent.click(screen.getByRole('button', { name: '以前の手動保存' }));
 
-    // 取り込み完了（新作品へ切替）を待ち、その**同期保存の時点**で globalBpm が明示されている。
-    // 3151 付近の明示代入を消すと、自動保存が走るまで undefined のままになり落ちる
+    // 取り込み完了（新作品へ切替）だけを待つ。保存値の検証は**待たずに1回だけ**行う
+    //（round3 P2: waitFor で保存値を再取得すると、後続の自動保存が 88 を補った場合も
+    // 通ってしまい「同期保存の時点で明示」を固定できない）
     await waitFor(() => {
-      const newId = getLastOpenedWorkId();
-      expect(newId).not.toBe(startId);
-      const saved = loadWorkAutosaveData(newId!);
-      expect(saved.success).toBe(true);
-      expect(saved.data?.globalBpm).toBe(88);
+      expect(getLastOpenedWorkId()).not.toBe(startId);
     }, { timeout: 15000 });
+    const newId = getLastOpenedWorkId();
+    const saved = loadWorkAutosaveData(newId!);
+    expect(saved.success).toBe(true);
+    // 3151 付近の明示代入を消すと、この時点（自動保存の1.5秒デバウンス前）では
+    // undefined のままになり落ちる
+    expect(saved.data?.globalBpm).toBe(88);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
