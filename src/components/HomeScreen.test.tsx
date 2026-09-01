@@ -174,7 +174,12 @@ describe('ホーム画面（Issue #500）', () => {
     fireEvent.click(screen.getByTestId('home-rail-settings'));
     expect(screen.queryByTestId('home-open-file')).toBeNull();
     expect(screen.getByTestId('home-settings-score')).toBeTruthy();
-    // Escape で閉じてトグルへフォーカスが戻る（トグルにフォーカスが残ったままでも効く）
+    // Escape で閉じてトグルへフォーカスが戻る。フライアウト内ボタンから（従来経路）と
+    // トグルにフォーカスが残ったまま（round2 P2 の経路）の両方で効くことを固定する
+    fireEvent.keyDown(screen.getByTestId('home-settings-score'), { key: 'Escape' });
+    expect(screen.queryByTestId('home-settings-score')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId('home-rail-settings'));
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
     (screen.getByTestId('home-rail-settings') as HTMLButtonElement).focus();
     fireEvent.keyDown(screen.getByTestId('home-rail-settings'), { key: 'Escape' });
     expect(screen.queryByTestId('home-settings-score')).toBeNull();
