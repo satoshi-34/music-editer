@@ -49,8 +49,6 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
-  /** 曲頭の弱起（アウフタクト）の拍数（Issue #473）。省略時は弱起なし。描画は PianoSystemCanvas に委譲する */
-  pickupBeats?: number;
   /** 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。描画は PianoSystemCanvas に委譲する */
   timeSignatureStyle?: TimeSignatureStyle;
   customSymbolDefs?: CustomSymbolDef[];
@@ -101,7 +99,6 @@ export default function PartExtractionStaff({
   previewAccidentalOnApply = true,
   keySignature = 'C',
   timeSignature = [4, 4],
-  pickupBeats,
   timeSignatureStyle = 'numeric',
   customSymbolDefs, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
@@ -144,7 +141,6 @@ export default function PartExtractionStaff({
             previewAccidentalOnApply={previewAccidentalOnApply}
             keySignature={keySignature}
             timeSignature={timeSignature}
-            pickupBeats={pickupBeats}
             timeSignatureStyle={timeSignatureStyle}
             customSymbolDefs={customSymbolDefs}
             plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}

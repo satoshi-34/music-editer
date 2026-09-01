@@ -1,7 +1,7 @@
 import type { MeasureData, TimeSignature } from '../types/storage';
 import { expandMeasuresForPlayback, type ExpandedPlaybackMeasure } from '../audio/repeatPlaybackUtils';
 import { getMeasureBeats } from './timeSignatureUtils';
-import { getMeasureCapacityBeats } from './pickupMeasureUtils';
+import { resolveMeasureCapacityBeats } from './measureCapacityUtils';
 import { getEventDurationBeats, getMeasureDurationBeats, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { applySwingToTiming, shouldApplySwing } from './swingUtils';
 import { resolveMeasureBpms } from './tempoPlaybackUtils';
@@ -37,13 +37,7 @@ export function buildPlaybackPositionTimeline(
    * これを使う（実音側と同じ列を共有し、他段だけに置かれた標語でもハイライトが同期する）。
    * 省略時は従来どおり自パート列から解決（単体利用・後方互換）
    */
-  sharedMeasureBpms?: number[],
-  /**
-   * 曲頭の弱起（アウフタクト）の拍数（Issue #473）。省略時は弱起なし＝従来どおり。
-   * 弱起の小節は拍子より短いので、ここを拍子ぶんで数えるとハイライトだけが
-   * 実音より遅れて進む（実音側は ScorePage が小節ごとの measureBeats を渡している）。
-   */
-  pickupBeats?: number
+  sharedMeasureBpms?: number[]
 ): PlaybackTimelineItem[] {
   // 途中再生（#108）: 展開順の先頭 startExpandedIndex 個を丸ごと飛ばす。
   // 実音側（playParts へ渡す小節列）も同じ位置で切るため、atMs は 0 起点のままで一致する
@@ -102,9 +96,11 @@ export function buildPlaybackPositionTimeline(
     // 実音エンジンは各小節に measureBeats（グローバル拍子の長さ）を下限として渡されるため、
     // 表示の前進も「全声部の実長と拍子長の大きい方」でそろえる（Codex 2巡目）。
     // 未充足の小節を実長だけで進めると、ハイライトが実音より先へ走ってしまう
+    // 弱起（アウフタクト）の小節は拍子より短いので、小節ごとの容量で進める（Issue #473）。
+    // 途中拍子変更のある小節も同じ経路で正しい長さになる（設計メモ §6-1）
     elapsedMs += measureAdvanceBeats(
       measure,
-      getMeasureCapacityBeats(sourceMeasureIndex, timeSignature, pickupBeats),
+      resolveMeasureCapacityBeats(measures, sourceMeasureIndex, timeSignature),
     ) * msPerBeat;
   });
 

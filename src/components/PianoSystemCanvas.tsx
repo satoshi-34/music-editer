@@ -48,6 +48,9 @@ import {
   describeLeadingRestFill,
   describeMeasureFull,
   describeNoTupletInMeasure,
+  describePickupCleared,
+  describePickupOverflow,
+  describePickupSet,
   describeOttavaPlaced,
   describeOttavaRemoved,
   describeSymbolToolUnavailable,
@@ -166,7 +169,7 @@ import {
   widenThinBarlineRect,
   markThickBarlineRect,
 } from '../utils/engravingDefaults';
-import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDurationBeats, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildBeatColumns, planLeadingRestFillBeats, type BeatColumn } from '../utils/beatColumnUtils';
 import { sliceBoundaryCandidates, snapToSliceBoundary } from '../utils/beatSliceUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
@@ -191,7 +194,14 @@ import {
   normalizeTimeSignature,
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
-import { getDisplayMeasureNumber, getMeasureCapacityBeats, hasPickupMeasure } from '../utils/pickupMeasureUtils';
+import {
+  buildPickupBeatOptions,
+  getDisplayedMeasureNumber,
+  getPickupBeats,
+  normalizePickupBeats,
+  resolveMeasureCapacityBeats,
+  resolveTimeSignatureAtMeasure,
+} from '../utils/measureCapacityUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
   allocateCombinedMeasureWidths,
@@ -879,12 +889,6 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: [number, number];
-  /**
-   * 曲頭の弱起（アウフタクト）の拍数（Issue #473）。省略時は弱起なし。
-   * 「先頭小節（絶対インデックス0）だけは拍子ぶんではなくこの拍数まで入る」という意味で、
-   * 音符の入力上限・表示用の補完休符・拍範囲スライスの端の判定に効く。
-   */
-  pickupBeats?: number;
   // 拍子記号の見た目（Issue #422）。'symbol' のとき 4/4 は C、2/2 はアッラ・ブレーヴェで描く。
   // 拍子データ自体は timeSignature のままなので、再生・小節の拍数計算には影響しない。
   timeSignatureStyle?: TimeSignatureStyle;
@@ -2411,7 +2415,6 @@ export default function PianoSystemCanvas({
   startMeasureIndex=0, disabled=false, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   finalMeasureIndex,
   timeSignature = [4, 4],
-  pickupBeats,
   timeSignatureStyle = 'numeric',
   onKeySignatureChange,
   selectedMeasures,
@@ -2438,11 +2441,6 @@ export default function PianoSystemCanvas({
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
   const timeSignatureNumerator = normalizedTimeSignature[0];
   const timeSignatureDenominator = normalizedTimeSignature[1];
-  // 小節の容量（その小節に何拍ぶん入るか）。弱起（アウフタクト）があると先頭小節だけ
-  // 短くなるため、「段に1つの拍数」ではなく小節ごとに解決する（Issue #473）。
-  // 弱起が無いときは全小節で拍子ぶん＝従来と同じ値を返す。
-  const capacityBeatsAt = (absoluteMeasureIndex: number): number =>
-    getMeasureCapacityBeats(absoluteMeasureIndex, normalizedTimeSignature, pickupBeats);
   const normalizedTimeSignatureStyle = normalizeTimeSignatureStyle(timeSignatureStyle);
   const formattedTimeSignature = formatTimeSignature(normalizedTimeSignature, normalizedTimeSignatureStyle);
   const ref = useRef<HTMLDivElement>(null);
@@ -2498,6 +2496,19 @@ export default function PianoSystemCanvas({
   const [partsScore, setPartsScore] = useState<MeasureData[][]>(
     () => parts.map(p => mkInit(p.data))
   );
+
+  /**
+   * その小節に何拍ぶん入るか（小節の容量）。弱起（アウフタクト）の小節は拍子より短いので、
+   * 「段に1つの拍数」ではなく小節ごとに解決する（Issue #473）。
+   * 弱起が無いときは全小節で拍子ぶん＝従来と同じ値を返す。
+   *
+   * 弱起・途中拍子変更の正本はパート0の小節（keySignature と同じ読み取り規約）。
+   * 記号ドラッグ中の下書きコピー（partsScoreForRender）ではなく保存データ側の partsScore を
+   * 見ているのは、下書きが変えるのは記号のオフセットだけで拍数には影響しないため。
+   */
+  const capacityBeatsAt = (absoluteMeasureIndex: number): number =>
+    resolveMeasureCapacityBeats(partsScore[0] ?? parts[0]?.data ?? [], absoluteMeasureIndex, normalizedTimeSignature);
+
   const toggleRepeatMarkerAcrossParts = (measureIndex: number, kind: 'start' | 'end') => {
     // リピート記号はシステム全体でそろって見える方が自然なので、
     // 多段譜ではクリックした1段だけでなく全パートへ同じ印を付ける。
@@ -2618,6 +2629,13 @@ export default function PianoSystemCanvas({
   // 従来の個別 setState と同一なので挙動はゼロ差。
   type OverlayStates = {
     timeSig: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    /** 弱起（アウフタクト＝不完全小節）の設定オーバーレイ（Issue #473） */
+    pickup: {
     measureAbsoluteIndex: number;
     currentValue: string;
     overlayX: number;
@@ -2797,7 +2815,7 @@ export default function PianoSystemCanvas({
         dispatchEditorLocal({ type: 'OVERLAY_SET', kind, value });
     return {
       note: selectionSetter('note'), arc: selectionSetter('arc'), hairpin: selectionSetter('hairpin'),
-      timeSig: overlaySetter('timeSig'), keySig: overlaySetter('keySig'), clef: overlaySetter('clef'),
+      timeSig: overlaySetter('timeSig'), pickup: overlaySetter('pickup'), keySig: overlaySetter('keySig'), clef: overlaySetter('clef'),
       bpm: overlaySetter('bpm'), rehearsal: overlaySetter('rehearsal'), text: overlaySetter('text'),
       freeText: overlaySetter('freeText'),
       symbolResize: overlaySetter('symbolResize'), symbolOffset: overlaySetter('symbolOffset'),
@@ -2813,6 +2831,8 @@ export default function PianoSystemCanvas({
   const setSelectedHairpin = editorLocalSetters.hairpin;
   const timeSigEditState = editorLocal.overlay?.kind === 'timeSig' ? editorLocal.overlay.payload : null;
   const setTimeSigEditState = editorLocalSetters.timeSig;
+  const pickupEditState = editorLocal.overlay?.kind === 'pickup' ? editorLocal.overlay.payload : null;
+  const setPickupEditState = editorLocalSetters.pickup;
   const keySigEditState = editorLocal.overlay?.kind === 'keySig' ? editorLocal.overlay.payload : null;
   const setKeySigEditState = editorLocalSetters.keySig;
   const clefEditState = editorLocal.overlay?.kind === 'clef' ? editorLocal.overlay.payload : null;
@@ -4916,11 +4936,13 @@ export default function PianoSystemCanvas({
         // 弱起（アウフタクト）があるときは、慣習どおり弱起を0と数えるため番号が1つずつ
         // 繰り下がる（弱起の次の小節が「1」）。getDisplayMeasureNumber が正本（Issue #473）。
         if (pi === 0 && i === 0 && startMeasureIndex !== 0) {
-          const displayNumber = getDisplayMeasureNumber(
+          // 弱起は 0（＝番号を出さない小節）として返る
+          const displayNumber = getDisplayedMeasureNumber(
+            partsScoreForRender[0] ?? parts[0]?.data ?? [],
             startMeasureIndex,
-            hasPickupMeasure(pickupBeats, normalizedTimeSignature)
+            normalizedTimeSignature
           );
-          if (displayNumber !== null) {
+          if (displayNumber !== 0) {
             measureNumberEntries.push({
               x: x / s,
               topY: stave.getYForLine(0),
@@ -6205,6 +6227,21 @@ export default function PianoSystemCanvas({
               setTimeSigEditState({
                 measureAbsoluteIndex: absI,
                 currentValue: currentTS ? `${currentTS[0]}/${currentTS[1]}` : '',
+                ...overlayAt(),
+              });
+              return 'handled';
+            }
+            case 'measurePickup': {
+              // 弱起（不完全小節）はパート間で食い違わせない約束なので、拍子と同じく
+              // 正本のパート0から現在値を読む（書き込みは全パートへ・Issue #473）
+              const currentPickup = getPickupBeats(
+                partsScoreForRender[0] ?? parts[0]?.data ?? [],
+                absI,
+                normalizedTimeSignature
+              );
+              setPickupEditState({
+                measureAbsoluteIndex: absI,
+                currentValue: currentPickup != null ? String(currentPickup) : '',
                 ...overlayAt(),
               });
               return 'handled';
@@ -8177,7 +8214,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,pickupBeats,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,freeTextFontReadyTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,freeTextFontReadyTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
@@ -8200,6 +8237,46 @@ export default function PianoSystemCanvas({
       })
     );
     setTimeSigEditState(null);
+  }
+
+  /**
+   * 弱起（アウフタクト＝拍が足りない不完全小節）を確定する（Issue #473）。
+   *
+   * 拍子と同じく全パートの同じ小節へ同じ値を書く（「右手だけ弱起」のような
+   * パート間の食い違いを構造的に作らせないため）。
+   * 音符は勝手に消さない: 容量を超える音符が残っていても、データはそのままにして
+   * 事実だけを通知する（黙って消えるのは #238 の事故と同じ形）。
+   */
+  function handlePickupConfirm(value: string) {
+    if (!pickupEditState) return;
+    const { measureAbsoluteIndex } = pickupEditState;
+    const measuresForMeta = partsScoreRef.current[0] ?? [];
+    // 「拍子未満か」はその小節で有効な拍子（途中拍子変更を解決した値）で判定する
+    const effectiveTimeSignature = resolveTimeSignatureAtMeasure(
+      measuresForMeta, measureAbsoluteIndex, normalizedTimeSignature
+    );
+    const parsed = value === 'none' ? undefined : normalizePickupBeats(Number(value), effectiveTimeSignature);
+    setPartsScore(prev =>
+      prev.map(partData => {
+        if (measureAbsoluteIndex >= partData.length) return partData;
+        const next = partData.map(cloneMeasureData);
+        // 既定（弱起なし）のときは項目自体を消す。旧データとの差分を増やさないため
+        const { pickupBeats: _cleared, ...rest } = next[measureAbsoluteIndex];
+        next[measureAbsoluteIndex] = parsed === undefined ? rest : { ...rest, pickupBeats: parsed };
+        return next;
+      })
+    );
+    if (parsed === undefined) {
+      notifyScoreEdit(describePickupCleared());
+    } else {
+      // 容量を超える音符が残っているかは、いま画面に出ている全パートの実長で見る
+      const overflows = partsScoreRef.current.some((partData) => {
+        const measure = partData[measureAbsoluteIndex];
+        return measure != null && getMeasureDurationBeats(measure) > parsed + 0.0001;
+      });
+      notifyScoreEdit(overflows ? describePickupOverflow(parsed) : describePickupSet(parsed));
+    }
+    setPickupEditState(null);
   }
 
   /**
@@ -8640,6 +8717,64 @@ export default function PianoSystemCanvas({
             <option value="5/4">5/4</option>
             <option value="7/8">7/8</option>
             <option value="12/8">12/8</option>
+          </select>
+        </div>
+      )}
+      {pickupEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: pickupEditState.overlayX,
+            top: pickupEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #7c3aed',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            minWidth: 200,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#7c3aed', fontFamily: 'sans-serif' }}>
+            弱起（アウフタクト。「解除」で普通の小節に戻す）
+          </span>
+          <select
+            // 開いた瞬間にキーボードで選べるようにする（他の小節メタのオーバーレイと同じ）
+            autoFocus
+            aria-label="弱起（アウフタクト）の長さ"
+            defaultValue={pickupEditState.currentValue || 'none'}
+            style={{
+              fontSize: 13,
+              fontFamily: 'sans-serif',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              padding: '2px 4px',
+              outline: 'none',
+            }}
+            onChange={(e) => {
+              handlePickupConfirm(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setPickupEditState(null);
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              if (e.relatedTarget === null) setPickupEditState(null);
+            }}
+          >
+            <option value="none">（解除）</option>
+            {buildPickupBeatOptions(
+              resolveTimeSignatureAtMeasure(
+                partsScoreForRender[0] ?? parts[0]?.data ?? [],
+                pickupEditState.measureAbsoluteIndex,
+                normalizedTimeSignature
+              )
+            ).map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
           </select>
         </div>
       )}

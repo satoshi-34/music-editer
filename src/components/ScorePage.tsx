@@ -168,7 +168,7 @@ import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId,
 import type { ClefType } from './clefUtils';
 import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
-import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureDurationBeats, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildTiePlaybackEventKey, buildTiePlaybackPlan } from '../utils/tiePlaybackUtils';
 import { expandTrillForPlayback } from '../utils/ornamentPlaybackUtils';
 import {
@@ -178,7 +178,7 @@ import {
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { buildPickupBeatOptions, getMeasureCapacityBeats, normalizePickupBeats } from '../utils/pickupMeasureUtils';
+import { normalizePickupBeats, resolveMeasureCapacityBeats, resolveTimeSignatureAtMeasure } from '../utils/measureCapacityUtils';
 import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature, TimeSignatureStyle } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
@@ -197,9 +197,6 @@ import {
   describeWorkHistoryRestoreBlocked,
   describeWorkHistoryRestored,
   describeSliceClearNoop,
-  describePickupSet,
-  describePickupCleared,
-  describePickupOverflow,
   describeSliceCopyUnavailable,
   describeSliceCopied,
   describeSliceDeleteUnavailable,
@@ -675,9 +672,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 拍子データ（tempoSettings.timeSignature）とは別に「見た目だけ」を持つので、
   // 記号表示にしても再生の拍数や小節の入力上限は変わらない。
   const [timeSignatureStyle, setTimeSignatureStyle] = useState<TimeSignatureStyle>('numeric');
-  // 曲頭の弱起（アウフタクト）の拍数（Issue #473）。undefined は「弱起なし」。
-  // 拍子と違って曲の途中では変わらないので、作品の属性として1つだけ持つ。
-  const [pickupBeats, setPickupBeats] = useState<number | undefined>(undefined);
   // 用紙サイズ（A4/B4/A3・Issue #495）。「表示設定」ではなく作品の属性なので、
   // localStorage の表示設定ではなく保存データ（SavedScoreData.pageSize）へ載せる。
   // 寸法の正本は utils/pageSize.ts。
@@ -1605,10 +1599,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // タイ（同じ高さの音を結んで1音として伸ばす記号）を再生へ反映する計画。
             // 強弱と違って**切ったあとの列**で解決する: 開始音が開始位置より前にあって
             // 切り落とされた継続音は、抑制せずそのまま鳴らしたい（途中再生で音が消えないため）。
-            // 小節ごとの容量で数える（弱起の小節は拍子より短い・#473）
+            // 小節ごとの容量で数える（弱起の小節は拍子より短い・途中拍子変更も小節ごと・#473）
             const tiePlan = buildTiePlaybackPlan(
               expandedMeasures,
-              (sourceMeasureIndex) => getMeasureCapacityBeats(sourceMeasureIndex, scoreTimeSignature, pickupBeats),
+              (sourceMeasureIndex) => resolveMeasureCapacityBeats(referenceMeasures, sourceMeasureIndex, scoreTimeSignature),
             );
 
             return {
@@ -1620,8 +1614,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 // 再生エンジン側が 3/8 や 6/8 の小節長を正しく保てるよう、
                 // 各小節の「本来ここまで進むべき拍数」を明示して渡す。
                 // 弱起（アウフタクト）の小節は拍子より短いので、小節ごとの容量を渡す（#473）。
-                // リピート展開後も「元の何小節目か」で判定できる（弱起は元の0小節目）
-                measureBeats: getMeasureCapacityBeats(item.sourceMeasureIndex, scoreTimeSignature, pickupBeats),
+                // リピート展開後も「元の何小節目か」（sourceMeasureIndex）で引ける
+                measureBeats: resolveMeasureCapacityBeats(referenceMeasures, item.sourceMeasureIndex, scoreTimeSignature),
                 // この小節を鳴らすテンポ。元の measure.bpm（数値の途中テンポ変更のみ）を
                 // 解決済みの値で上書きする。標語だけが置かれた小節や、指定が無くて前の
                 // テンポを引き継ぐ小節にも、ここで必ず値が入る（#458）
@@ -1704,10 +1698,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 実音と同じスコア共通テンポ列を共有する（#458 round2 P1:
             // タイムライン内部で先頭パートから再解決すると、他段だけに置かれた
             // 標語がハイライトに効かず、実音と累積的にずれる）
-            scoreMeasureBpms,
-            // 弱起（#473）。実音側は小節ごとの measureBeats を渡しているので、
-            // ハイライトの前進も同じ物差しにそろえる
-            pickupBeats
+            scoreMeasureBpms
           );
           // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
           // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
@@ -2385,8 +2376,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // 拍子の表示スタイルも工場出荷値（数字表記）へ戻す。
     // 戻し忘れると、前の譜面で記号表示にしていた設定が新規譜面へ持ち越される。
     setTimeSignatureStyle('numeric');
-    // 弱起も新規作成では「なし」へ戻す（前の作品の弱起を持ち越さないため・Issue #473）
-    setPickupBeats(undefined);
     // 楽譜の種類・拍子・調号・段組み・余白などは、保存済みの初期値プリセット（issue #39）が
     // あればその値、無ければ従来どおりのコード上の既定値（工場出荷値）を適用する。
     await applySettingsProfileToState(loadSettingsProfile());
@@ -2486,7 +2475,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const performExportFile = async (fileNameBase: string) => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, pickupBeats);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
     // 覚えている保存先ハンドルは「同じファイル名のときだけ」使い回す（Issue #507）。
     // 名前を変えたのに前のファイルへ上書きしてしまうと、別名で書き出したつもりの
     // ユーザーが元のファイルを黙って壊すことになる（匿名化コピーの用途では致命的）
@@ -2546,8 +2535,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       setTitleFontSize(normalizeTitleFontSize(data.titleFontSize));
       setTitleFontWeight(normalizeTitleFontWeight(data.titleFontWeight));
     setTimeSignatureStyle(normalizeTimeSignatureStyle(data.timeSignatureStyle));
-    // 弱起（Issue #473）。旧データは項目を持たないので、その場合は「弱起なし」で開く
-    setPickupBeats(normalizePickupBeats(data.pickupBeats, normalizeTimeSignature(data.timeSignature)));
     // 旧データは pageSize を持たないので、省略時は A4 として開く（normalizePageSizeId が担保）
     setPageSize(normalizePageSizeId(data.pageSize));
       // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
@@ -2608,7 +2595,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // （handleExportFile と同じ理由で通常関数として定義。TDZ 回避）。
   const handleFeedback = async () => {
     const { metadata, parts } = buildScoreData();
-    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, pickupBeats);
+    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
     const feedbackState = {
       ...scoreData,
       // フィードバック JSON は「開く」の「ファイル」ボタンで読み込める楽譜 JSON なので、
@@ -2731,7 +2718,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setTitleFontSize(normalizeTitleFontSize(restored.titleFontSize));
     setTitleFontWeight(normalizeTitleFontWeight(restored.titleFontWeight));
     setTimeSignatureStyle(normalizeTimeSignatureStyle(restored.timeSignatureStyle));
-    setPickupBeats(normalizePickupBeats(restored.pickupBeats, normalizeTimeSignature(restored.timeSignature)));
     setPageSize(normalizePageSizeId(restored.pageSize));
     // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
     applySavedLayoutAttributes(restored);
@@ -2842,7 +2828,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // （新規四重奏で名前だけ設定して閉じると失われるため。Codex round1 P1・#448）
       if (!options?.includeEmpty && isEmptyScoreData(parts)
         && !hasCustomInstrumentationLabels(instrumentation, scoreType)) return null;
-      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, pickupBeats);
+      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
     };
   });
 
@@ -2870,7 +2856,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 保存先は「いま開いている作品」の自動保存スロット。まだ作品IDが無い
       // （＝一度も保存していない新規状態）ときは、この保存で新しい作品が作られる。
       const saved = saveCurrentWork(
-        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, pickupBeats)
+        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm })
       );
       if (saved) {
         lastAutosaveCompletedAtRef.current = Date.now();
@@ -2916,7 +2902,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // （後方宣言のため TDZ）。代わりに layoutAttrRevision（後方の effect が変更のたびに
   // 進めるカウンタ）を依存に持ち、これらだけを変えて閉じても保存されるようにする（round1 P1）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pickupBeats, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem, layoutAttrRevision]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem, layoutAttrRevision]);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -3345,11 +3331,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     ));
   }, []);
 
+  /**
+   * その小節に何拍ぶん入るか（小節の容量）。弱起（アウフタクト）の小節は拍子より短く、
+   * 途中拍子変更のある小節も拍子ぶんが変わるため、拍数は必ずここから取る（Issue #473）。
+   * 正本はパート0の小節データ（弱起・拍子は全パートへ同じ値を書く規約）。
+   */
+  const measureCapacityBeatsAt = useCallback((measureIndex: number): number =>
+    resolveMeasureCapacityBeats(getEditablePartEntries()[0]?.measures ?? [], measureIndex, scoreTimeSignature),
+  [getEditablePartEntries, scoreTimeSignature]);
+
   // 拍範囲スライスのドラッグ選択（#333 段2）。丸ごと選択（両端が 0〜小節末）は
   // beat 無しの従来形へ正規化し、矢印キー移動・移調など既存の小節操作をそのまま使えるようにする
   const handleBeatRangeSelect = useCallback((sel: { startMeasure: number; startBeat: number; endMeasure: number; endBeat: number }) => {
     // 「小節末まで選んだか」は終端の小節の容量で見る（弱起の小節は拍子より短い・#473）
-    const beats = getMeasureCapacityBeats(sel.endMeasure, scoreTimeSignature, pickupBeats);
+    const beats = measureCapacityBeatsAt(sel.endMeasure);
     const wholeStart = sel.startBeat <= 0.0001;
     const wholeEnd = sel.endBeat >= beats - 0.0001;
     setSelectedMeasures(prev => {
@@ -3360,38 +3355,32 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         && prev.startBeat === next.startBeat && prev.endBeat === next.endBeat
         ? prev : next;
     });
-  }, [scoreTimeSignature, pickupBeats]);
+  }, [measureCapacityBeatsAt]);
 
   /**
-   * 「弱起（アウフタクト）」セレクトの変更（Issue #473）。
+   * 拍子を変えて弱起が成り立たなくなったら（弱起の拍数がその小節の拍子ぶん以上になったら）、
+   * 小節データから弱起の指定を外す（Issue #473）。
    *
-   * 音符は勝手に消さない。弱起を後から付けたときに先頭小節がはみ出していても、
-   * データはそのままにして事実だけを通知する（黙って消えるのは #238 の事故と同じ形）。
-   * 譜面データを変えないので、Undo 履歴にも積まない（拍子の表示スタイル変更と同じ扱い）。
+   * 描画・再生は正規化を通すので画面上は既に弱起なしとして扱われるが、保存データには
+   * 「拍子以上の pickupBeats」という不正な値が残ってしまい、読み込みの検証で弾かれる
+   * （storage.ts の不変条件1）。残さないよう、拍子を変えた時点で落とす。
    */
-  const handlePickupBeatsChange = useCallback((rawValue: string) => {
-    const next = rawValue === 'none'
-      ? undefined
-      : normalizePickupBeats(Number(rawValue), scoreTimeSignature);
-    setPickupBeats(next);
-    if (next === undefined) {
-      if (pickupBeats !== undefined) notifyScoreEdit(describePickupCleared());
-      return;
-    }
-    // 先頭小節が弱起の長さを超えているパートがあるかを見る（全パートを見るのは、
-    // ピアノ譜のように片手だけ音符が入っている場合を取りこぼさないため）
-    const overflows = getEditablePartEntries().some((entry) => {
-      const firstMeasure = entry.measures[0];
-      return firstMeasure != null && getMeasureDurationBeats(firstMeasure) > next + 0.0001;
-    });
-    notifyScoreEdit(overflows ? describePickupOverflow(next) : describePickupSet(next));
-  }, [scoreTimeSignature, pickupBeats, getEditablePartEntries]);
-
-  // 拍子を変えて弱起が成り立たなくなったら（弱起の拍数が拍子ぶん以上になったら）自動で外す。
-  // 保存・書き出し・描画はすべて正規化を通すので表示は既に弱起なしになるが、
-  // 状態に残っていると拍子を戻したときだけ弱起が復活して分かりにくいため（Issue #473）
   useEffect(() => {
-    setPickupBeats((prev) => normalizePickupBeats(prev, scoreTimeSignature));
+    getEditablePartEntries().forEach((entry) => {
+      let changed = false;
+      const nextMeasures = entry.measures.map((measure, index) => {
+        if (measure.pickupBeats === undefined) return measure;
+        const effective = resolveTimeSignatureAtMeasure(entry.measures, index, scoreTimeSignature);
+        if (normalizePickupBeats(measure.pickupBeats, effective) !== undefined) return measure;
+        changed = true;
+        const { pickupBeats: _removed, ...rest } = measure;
+        return rest;
+      });
+      if (changed) entry.apply(nextMeasures);
+    });
+    // 拍子を変えたときだけ点検すればよい（小節データの変更のたびに走らせると、
+    // 入力のたびに全小節を舐めることになる）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scoreTimeSignature]);
 
   // Cmd+Z / Cmd+Shift+Z: Undo / Redo
@@ -3489,7 +3478,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         if (!selectedMeasures) return;
         // ── 拍範囲スライスのコピー（#333 段2）──
         if (selectedMeasures.startBeat != null || selectedMeasures.endBeat != null) {
-          const beatsPerMeasureAt = (mi: number) => getMeasureCapacityBeats(mi, scoreTimeSignature, pickupBeats);
+          const beatsPerMeasureAt = (mi: number) => measureCapacityBeatsAt(mi);
           const { start, end } = selectedMeasures;
           const entries = getEditablePartEntries();
           const segments: Array<{ beats: number; parts: Array<{ partId: string; voices: NoteEvent[][] }>; layerSlice?: NoteEvent[] }> = [];
@@ -3578,7 +3567,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // ── 拍範囲スライスの削除（#333 段2）: 範囲を等価の休符へ置き換える ──
         // 小節丸ごとの削除（events を空にする）と違い、範囲外の拍を保つため休符埋めにする
         if (selectedMeasures.startBeat != null || selectedMeasures.endBeat != null) {
-          const beatsPerMeasureAt = (mi: number) => getMeasureCapacityBeats(mi, scoreTimeSignature, pickupBeats);
+          const beatsPerMeasureAt = (mi: number) => measureCapacityBeatsAt(mi);
           const { start, end } = selectedMeasures;
           const entries = getEditablePartEntries();
           // 先に全パート・全小節・全声部の置換を計画してから適用する（部分適用しない・#318）。
@@ -3705,7 +3694,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             notifyScoreEdit(describeSlicePasteUnavailable('noSelection'));
             return;
           }
-          const beatsPerMeasureNow = getMeasureCapacityBeats(selectedMeasures.start, scoreTimeSignature, pickupBeats);
+          const beatsPerMeasureNow = measureCapacityBeatsAt(selectedMeasures.start);
           const destMeasure = selectedMeasures.start;
           const destBeat = selectedMeasures.startBeat ?? 0;
           // 複数小節にまたがるスライスは、1個目の断片が貼り先の小節末で終わる位置
@@ -4897,8 +4886,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 拍子の記号表記（C / 𝄵・#422）。ここに入れないと画面で切り替えても
       // MusicXML 書き出しへ symbol="common"/"cut" が付かない（Codex round1 P1）
       timeSignatureStyle,
-      // 弱起（Issue #473）。ここに入れないと書き出しへ implicit="yes" が付かない
-      pickupBeats,
       parts,
       // 編成定義（パート名の編集 #448 を含む）。ここに入れないと MusicXML 書き出しが
       // 既定の固定名へフォールバックし、編集した楽器名が出力に反映されない（Codex round1 P1）
@@ -4908,7 +4895,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     };
   }, [
     title, subtitle, lyricist, composer, arranger,
-    scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pickupBeats,
+    scoreType, keySignature, scoreTimeSignature, timeSignatureStyle,
     quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData,
     instrumentation, totalSystems, measuresPerSystem,
   ]);
@@ -5023,8 +5010,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
       // MusicXML の <time symbol="common"/"cut"> を読み込んだ場合はここで表示スタイルへ戻す
       setTimeSignatureStyle(normalizeTimeSignatureStyle(loaded.timeSignatureStyle));
-      // MusicXML の <measure implicit="yes"> から読んだ弱起もここで画面の状態へ戻す（#473）
-      setPickupBeats(normalizePickupBeats(loaded.pickupBeats, normalizeTimeSignature(loaded.timeSignature)));
       setPageSize(normalizePageSizeId(loaded.pageSize));
       setScoreType(loadedType);
       if (loadedType === 'quartet') {
@@ -5921,25 +5906,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                     {TIME_SIGNATURE_OPTIONS.map((option) => (
                       <option key={formatTimeSignature(option)} value={formatTimeSignature(option)}>
                         {formatTimeSignature(option)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label
-                  className="toolbar-select-label"
-                  title="曲頭の弱起（アウフタクト）＝拍が足りない小節の長さを決めます。小節番号は弱起を0と数えます"
-                >
-                  <span>弱起</span>
-                  <select
-                    value={pickupBeats ?? 'none'}
-                    onChange={(event) => handlePickupBeatsChange(event.target.value)}
-                    aria-label="弱起（アウフタクト）"
-                  >
-                    <option value="none">なし</option>
-                    {buildPickupBeatOptions(scoreTimeSignature).map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
                       </option>
                     ))}
                   </select>
@@ -7188,7 +7154,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       timeSignatureStyle={effectiveTimeSignatureStyle}
-                      pickupBeats={pickupBeats}
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
@@ -7224,7 +7189,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       timeSignatureStyle={effectiveTimeSignatureStyle}
-                      pickupBeats={pickupBeats}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
@@ -7262,7 +7226,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       timeSignatureStyle={effectiveTimeSignatureStyle}
-                      pickupBeats={pickupBeats}
                       onKeySignatureChange={handleKeySignatureChange}
                       notationMode={notationMode}
                       customSymbolDefs={customSymbolDefs}
@@ -7307,7 +7270,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       timeSignatureStyle={effectiveTimeSignatureStyle}
-                      pickupBeats={pickupBeats}
                       onKeySignatureChange={handleKeySignatureChange}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
@@ -7356,7 +7318,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       timeSignatureStyle={effectiveTimeSignatureStyle}
-                      pickupBeats={pickupBeats}
                       onKeySignatureChange={handleKeySignatureChange}
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}
@@ -7403,7 +7364,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       timeSignatureStyle={effectiveTimeSignatureStyle}
-                      pickupBeats={pickupBeats}
                       onKeySignatureChange={handleKeySignatureChange}
                       selectedMeasures={selectedMeasures ?? undefined}
                       onMeasureSelect={handleMeasureSelect}

@@ -342,6 +342,15 @@ export interface MeasureData {
    */
   rehearsalMark?: string;
   /**
+   * この小節を「不完全小節（弱起・アウフタクト）」として扱い、その実拍数を持つ（Issue #473）。
+   * 4分音符 = 1拍（timeSignatureUtils の getMeasureBeats と同じ単位）。
+   * 省略時は「拍子どおりの完全小節」で、従来のデータと同じ意味になる。
+   * MusicXML の <measure implicit="yes"> に対応し、曲頭だけでなく曲中の不完全小節も表せる。
+   * 正本はパート0の小節（timeSignature / keySignature と同じ規約）で、
+   * 書き込みは「全パートへ同じ値を書く」経路にそろえる。
+   */
+  pickupBeats?: number;
+  /**
    * この小節に付く自由注釈テキスト（音符に紐づかないテキスト。Issue #421）。
    * 献呈・演奏メモ・冒頭の指示文（月光の「senza sordini」など）を想定している。
    * 小節に持たせているのは、段割り（段あたり小節数）を変えても
@@ -452,15 +461,6 @@ export interface SavedScoreData {
   keySignature?: KeySignature;
   /** 拍子。旧データ互換のため省略時は 4/4 として扱う */
   timeSignature?: TimeSignature;
-  /**
-   * 曲頭の弱起（アウフタクト）小節の拍数（Issue #473）。
-   * 4分音符 = 1拍の換算で、「先頭小節（絶対インデックス0）だけは拍子ぶんではなく
-   * この拍数で数える」ことを表す。省略時・0・拍子ぶん以上の値は「弱起なし」＝
-   * 従来どおり全小節が拍子ぶん、として扱う（normalizePickupBeats が正本）。
-   * 小節ではなく作品に持たせているのは、小節データがパートごとに分かれており、
-   * 「右手だけ弱起」のようなパート間の食い違いを構造的に作らせないため。
-   */
-  pickupBeats?: number;
   /** 編成テンプレート。旧データ互換のため省略可 */
   instrumentation?: ScoreInstrumentation;
   /** 編成譜の表示モード（実音/記譜音）。旧データ互換のため省略可、省略時は実音表示 */

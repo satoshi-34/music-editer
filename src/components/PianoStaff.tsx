@@ -31,8 +31,6 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: TimeSignature;
-  /** 曲頭の弱起（アウフタクト）の拍数（Issue #473）。省略時は弱起なし。描画は PianoSystemCanvas に委譲する */
-  pickupBeats?: number;
   /** 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。描画は PianoSystemCanvas に委譲する */
   timeSignatureStyle?: TimeSignatureStyle;
   onKeySignatureChange?: (keySignature: KeySignature) => void;
@@ -110,7 +108,6 @@ export default function PianoStaff({
   previewAccidentalOnApply = true,
   keySignature = 'C',
   timeSignature = [4, 4],
-  pickupBeats,
   timeSignatureStyle = 'numeric',
   onKeySignatureChange,
   selectedMeasures,
@@ -169,7 +166,6 @@ export default function PianoStaff({
           previewAccidentalOnApply={previewAccidentalOnApply}
           keySignature={keySignature}
           timeSignature={timeSignature}
-          pickupBeats={pickupBeats}
           timeSignatureStyle={timeSignatureStyle}
           onKeySignatureChange={onKeySignatureChange}
           selectedMeasures={selectedMeasures}

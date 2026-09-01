@@ -1,12 +1,12 @@
 // src/components/PianoSystemCanvasPickup.test.tsx
-// アウフタクト（弱起）の描画テスト（Issue #473 段3）。
-// 設計メモ .claude/specs/pickup-measure/design.md §5「段3」の受入テストに対応する。
+// アウフタクト（弱起）の描画テスト（Issue #473 段2）。
+// 設計メモ .claude/specs/anacrusis-pickup-measure/design.md §4「段2」の受入テストに対応する。
 // ここで固定したいのは:
 //   1. 弱起があるとき、小節番号が慣例どおり1つずつ繰り下がる（弱起＝0小節目）
 //   2. 弱起の小節に「表示用の補完休符」が足されない（弱起に見えなくなるため）
 //   3. 弱起なしのときの描画は従来どおり（退行なし）
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, fireEvent } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData } from '../types/storage';
@@ -48,8 +48,10 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-/** 4分音符1つだけの小節（4/4 では拍が足りない＝弱起の中身） */
-const PICKUP: MeasureData = { events: [{ dur: '4', isRest: false, keys: ['g/4'] }] };
+/** 弱起の小節（4分音符1つ）。弱起であることは小節データ自身が持つ（案B） */
+const PICKUP: MeasureData = { events: [{ dur: '4', isRest: false, keys: ['g/4'] }], pickupBeats: 1 };
+/** 中身は同じだが弱起の指定が無い小節（＝拍が足りないだけの完全小節） */
+const SHORT: MeasureData = { events: [{ dur: '4', isRest: false, keys: ['g/4'] }] };
 /** 4分音符4つの完全小節 */
 const FULL: MeasureData = {
   events: [
@@ -60,7 +62,7 @@ const FULL: MeasureData = {
   ],
 };
 
-function renderSystem(options: { startMeasureIndex: number; pickupBeats?: number; data: MeasureData[] }) {
+function renderSystem(options: { startMeasureIndex: number; data: MeasureData[]; onChange?: (next: MeasureData[]) => void }) {
   return render(
     <PianoSystemCanvas
       measuresPerSystem={1}
@@ -68,8 +70,7 @@ function renderSystem(options: { startMeasureIndex: number; pickupBeats?: number
       tool={{ duration: '4', isRest: false }}
       scale={1}
       timeSignature={[4, 4]}
-      pickupBeats={options.pickupBeats}
-      partsConfig={[{ clef: 'treble', data: options.data, onChange: () => {} }]}
+      partsConfig={[{ clef: 'treble', data: options.data, onChange: options.onChange ?? (() => {}) }]}
     />
   );
 }
@@ -81,7 +82,6 @@ describe('PianoSystemCanvas の弱起（アウフタクト・Issue #473）', () 
   it('弱起があるとき、段の先頭小節の番号が1つ繰り下がる（3小節目 → 「2」）', () => {
     const { container } = renderSystem({
       startMeasureIndex: 2,
-      pickupBeats: 1,
       data: [PICKUP, FULL, FULL],
     });
     expect(textsOf(container)).toContain('2');
@@ -97,17 +97,35 @@ describe('PianoSystemCanvas の弱起（アウフタクト・Issue #473）', () 
   });
 
   it('弱起の小節には表示用の補完休符を足さない（音符1つだけ描く）', () => {
-    const { container } = renderSystem({ startMeasureIndex: 0, pickupBeats: 1, data: [PICKUP, FULL] });
+    const { container } = renderSystem({ startMeasureIndex: 0, data: [PICKUP, FULL] });
     expect(container.querySelectorAll('.vf-stavenote').length).toBe(1);
   });
 
-  it('弱起が無ければ、同じ小節は従来どおり残りの拍を休符で埋めて描く', () => {
-    const { container } = renderSystem({ startMeasureIndex: 0, data: [PICKUP, FULL] });
+  it('弱起の指定が無ければ、同じ中身の小節は従来どおり残りの拍を休符で埋めて描く', () => {
+    const { container } = renderSystem({ startMeasureIndex: 0, data: [SHORT, FULL] });
     expect(container.querySelectorAll('.vf-stavenote').length).toBeGreaterThan(1);
   });
 
+  it('弱起の小節には容量を超える音符が入らない（入力上限が効く）', () => {
+    // 1拍の弱起に4分音符1つが入っている＝もう満杯。小節の背景を押しても増えない
+    const onChange = vi.fn();
+    const { container } = renderSystem({ startMeasureIndex: 0, data: [PICKUP, FULL], onChange });
+    const background = container.querySelector('rect.vf-hit') as SVGRectElement;
+    expect(background).toBeTruthy();
+    fireEvent.click(background, { clientX: 10, clientY: 10 });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('弱起の指定が無ければ、同じ中身の小節にはまだ音符が入る（上限の比較対象）', () => {
+    const onChange = vi.fn();
+    const { container } = renderSystem({ startMeasureIndex: 0, data: [SHORT, FULL], onChange });
+    const background = container.querySelector('rect.vf-hit') as SVGRectElement;
+    fireEvent.click(background, { clientX: 10, clientY: 10 });
+    expect(onChange).toHaveBeenCalled();
+  });
+
   it('弱起の次の小節は従来どおり拍子ぶんで扱う（補完休符が出る）', () => {
-    const { container } = renderSystem({ startMeasureIndex: 1, pickupBeats: 1, data: [PICKUP, PICKUP] });
+    const { container } = renderSystem({ startMeasureIndex: 1, data: [PICKUP, SHORT] });
     expect(container.querySelectorAll('.vf-stavenote').length).toBeGreaterThan(1);
   });
 });

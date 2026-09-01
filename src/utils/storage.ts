@@ -41,11 +41,12 @@ import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import {
   DEFAULT_TIME_SIGNATURE,
+  getMeasureBeats,
   isValidTimeSignature,
   normalizeTimeSignature,
   normalizeTimeSignatureStyle,
 } from './timeSignatureUtils';
-import { normalizePickupBeats } from './pickupMeasureUtils';
+import { resolveTimeSignatureAtMeasure } from './measureCapacityUtils';
 import type { InstrumentType } from '../audio/SoundSource';
 import type { ClefType } from '../components/clefUtils';
 import {
@@ -427,6 +428,14 @@ function validateMeasureData(measure: any): measure is MeasureData {
       (typeof measure.rehearsalMark === 'string' &&
         measure.rehearsalMark.trim().length > 0 &&
         measure.rehearsalMark.trim().length <= 4)) &&
+    // 弱起（不完全小節）の実拍数（Issue #473）。0・負数・非数は「不完全小節」として
+    // 意味を成さず、そのまま使うと容量が NaN になって休符補完・拍スライスが黙って壊れる。
+    // 「拍子未満」であることは拍子が分からないとここでは判定できないので、
+    // 楽譜全体を見る validateSavedScoreData（hasValidPickupBeats）で確かめる。
+    (measure.pickupBeats === undefined ||
+      (typeof measure.pickupBeats === 'number' &&
+        Number.isFinite(measure.pickupBeats) &&
+        measure.pickupBeats > 0)) &&
     // 自由注釈テキスト（Issue #421）。壊れた値をそのまま描くと NaN 座標になるので、
     // 型・範囲の検証を通ったものだけ受け入れる。
     (measure.freeText === undefined || isValidFreeTextAnnotation(measure.freeText))
@@ -628,6 +637,22 @@ function validateSavedPartIds(data: SavedScoreData): boolean {
 }
 
 /**
+ * 弱起（不完全小節）の拍数が、その小節で有効な拍子より短いかを全パートについて確かめる
+ * （Issue #473 の不変条件1「正の有限・拍子未満」）。
+ * 拍子ぶん以上の値は「不完全小節」ではないので、正規化で黙って落とさず読み込みの時点で弾く。
+ */
+function hasValidPickupBeats(parts: PartData[], timeSignature: unknown): boolean {
+  const globalTimeSignature = normalizeTimeSignature(timeSignature);
+  return parts.every((part) =>
+    part.measures.every((measure, measureIndex) => {
+      if (measure.pickupBeats === undefined) return true;
+      const effective = resolveTimeSignatureAtMeasure(part.measures, measureIndex, globalTimeSignature);
+      return measure.pickupBeats < getMeasureBeats(effective);
+    })
+  );
+}
+
+/**
  * Validates a complete SavedScoreData object (v2 format)
  */
 // ファイルインポートなど localStorage 以外の経路でも深い検証を再利用できるよう export する。
@@ -641,10 +666,6 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     validateScoreMetadata(data.metadata) &&
     (data.keySignature === undefined || isValidKeySignature(data.keySignature)) &&
     (data.timeSignature === undefined || isValidTimeSignature(data.timeSignature)) &&
-    // 弱起の拍数（Issue #473）。範囲外・半端な値は読み込み時に正規化するので、
-    // ここでは「型が違うデータを弾く」ところまでを見る（他の省略可能項目と同じ方針）。
-    (data.pickupBeats === undefined ||
-      (typeof data.pickupBeats === 'number' && Number.isFinite(data.pickupBeats))) &&
     (data.instrumentation === undefined || validateScoreInstrumentation(data.instrumentation)) &&
     (data.notationMode === undefined || data.notationMode === 'concert' || data.notationMode === 'written') &&
     (data.titleFontId === undefined || typeof data.titleFontId === 'string') &&
@@ -667,6 +688,9 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
+    // 弱起の拍数が「その小節で有効な拍子未満」であること（Issue #473 の不変条件1）。
+    // 拍子ぶん以上の値は不完全小節ではないため、検証の境界で弾く。
+    hasValidPickupBeats(data.parts as PartData[], data.timeSignature) &&
     validateSavedPartIds(data) &&
     typeof data.systems === 'number' &&
     data.systems > 0 &&
@@ -736,17 +760,6 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   }
   parsedData.keySignature = normalizeKeySignature(parsedData.keySignature);
   parsedData.timeSignature = normalizeTimeSignature(parsedData.timeSignature);
-  // 弱起（Issue #473）も「省略＝弱起なし」が正なので、未指定のときは足さずに残す。
-  // 拍子ぶん以上・0 以下・半端な値は normalizePickupBeats が undefined（弱起なし）へ倒す。
-  // 正規化した拍子が確定したあとに評価する必要がある（弱起かどうかは拍子との比較で決まるため）。
-  if (parsedData.pickupBeats !== undefined) {
-    const normalizedPickup = normalizePickupBeats(parsedData.pickupBeats, parsedData.timeSignature);
-    if (normalizedPickup === undefined) {
-      delete parsedData.pickupBeats;
-    } else {
-      parsedData.pickupBeats = normalizedPickup;
-    }
-  }
   // 表示スタイルは「省略＝数字表記」が正なので、未指定のときは足さずにそのまま残す。
   // 値が入っているときだけ丸めることで、旧データを保存し直しても余計な項目が増えない。
   if (parsedData.timeSignatureStyle !== undefined) {
@@ -1842,8 +1855,7 @@ export function createSavedScoreData(
   timeSignatureStyle?: TimeSignatureStyle,
   pageSize?: PageSizeId,
   notationSizeMultiplier?: number,
-  pageMargins?: SavedPageMargins,
-  pickupBeats?: number
+  pageMargins?: SavedPageMargins
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -1852,9 +1864,6 @@ export function createSavedScoreData(
     scoreType,
     keySignature,
     timeSignature: normalizeTimeSignature(timeSignature),
-    // 弱起なし（既定）のときは項目自体を持たせない。旧データとの差分を増やさないため
-    // （timeSignatureStyle・pageSize と同じ方針）。
-    pickupBeats: normalizePickupBeats(pickupBeats, normalizeTimeSignature(timeSignature)),
     // 既定（数字表記）のときは項目自体を持たせない。旧データとの差分を増やさないため。
     timeSignatureStyle:
       timeSignatureStyle && normalizeTimeSignatureStyle(timeSignatureStyle) === 'symbol'

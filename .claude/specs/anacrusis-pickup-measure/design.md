@@ -2,10 +2,12 @@
 
 対応 Issue: #473「アウフタクト（弱起）の小節に対応する」
 
-> **このメモの状態: 設計のみ。実装は未着手。**
+> **このメモの状態: 設計 + 実装（PR #538 で段1〜段5をまとめて実装。2026-09-01）。**
+> 実装の詳細・設計との差分は §7「実装の記録」を参照。
 > Issue 本文に「設計メモ必須（拍数前提の箇所の洗い出しから）」とあるため、
-> まず §1 の洗い出しとデータモデルの決定（§2・§3）を先に確定させ、
-> 実装は §4 の段1〜段5 に分けて別 PR で行う。各段の受入テストは §4 に列挙してある。
+> まず §1 の洗い出しとデータモデルの決定（§2・§3）を確定させてから実装した。
+> §4 の段1〜段5 は当初「段ごとに別 PR」の計画だったが、実際は1つの PR にまとめた（§7-1）。
+> 各段の受入テストは §4 に列挙してあり、実装後のテストファイルとの対応は §7-1 の表にある。
 >
 > 仕様の正本は Issue #473 のオーナーコメント（2026-08-31）とする。そこで求められている
 > 受入は次の3点:
@@ -331,3 +333,74 @@ export function getDisplayedMeasureNumber(
    小節の送り方も現行エンジン（`max(実長, 拍子ぶん)`）と違う（実長のみ）。
    弱起対応では触らないが、放置すると「直したつもりで直っていない」の温床になるため、
    撤去または現行規則への追従を #244（構造的な歪みの記録先）へ回す。
+
+
+---
+
+## 7. 実装の記録（PR #538・2026-09-01）
+
+### 7-1. 実装の範囲と段分けの扱い
+
+§4 は段1〜段5をそれぞれ別 PR にする計画だったが、実際は **1つの PR で段1〜段5をまとめて**
+実装した。理由: 段1（データ土台）だけでは画面の挙動が何も変わらず、レビューで
+「弱起が使えるか」を確かめられないため。受入テストは §4 の段ごとの草案をそのまま
+ファイル単位で対応させてある（下表）。
+
+| 段 | 受入テスト（実装後のファイル名） |
+| --- | --- |
+| 段1 | `src/utils/measureCapacityUtils.test.ts` / `src/utils/pickupMeasureStorage.test.ts` |
+| 段2 | `src/components/PianoSystemCanvasPickup.test.tsx` / `src/utils/measureRestFillPickup.test.ts` |
+| 段3 | `src/utils/pickupPlayback.test.ts` |
+| 段4 | `src/utils/musicXmlPickup.test.ts` |
+| 段5 | `src/components/ScorePagePickupWiring.test.tsx`（実マウントの配線テスト） |
+
+### 7-2. 設計時の期待と変えたところ（理由つき）
+
+1. **`normalizePickupBeats` は値を丸めない**
+   最初の実装（案A・差し戻し版）は 0.25 拍刻みへ丸めていたが、連符（1/3 拍・0.125 拍など）を
+   含む譜面の弱起を読み込みだけで壊す。#534 が保証した連符の厳密性を守るため、
+   「正の有限数・その小節の拍子未満」だけを条件にし、値はそのまま保つ。
+2. **検証（`validateSavedScoreData`）で不変条件1を弾く**
+   §2-3 は「型が違うものを弾く」までとしていたが、0・負数・拍子ぶん以上も**無効なデータとして弾く**
+   （`validateMeasureData` で正の有限数、`hasValidPickupBeats` でその小節の拍子未満）。
+   容量が壊れた値のまま通ると、休符補完・拍スライスが黙って壊れるため。
+   これに伴い、**拍子を変えて成り立たなくなった弱起は ScorePage の effect が小節データから外す**
+   （残すと保存データが検証で弾かれ、次に開けなくなる）。
+3. **`getDisplayedMeasureNumber` は 0 を「番号を出さない小節」として返す**
+   §3 の予定どおり。呼び出し側（`PianoSystemCanvas`）は 0 のときだけ描画を省く。
+4. **UI（段5）はツール種別 `measurePickup` のオーバーレイ**
+   §4 段5 の予定どおり、小節メタのオーバーレイ（途中拍子変更・途中テンポ変更と同じ場所）へ
+   `measurePickup` を追加した。入力は音価の呼び名つきセレクト（`buildPickupBeatOptions`）で、
+   「（解除）」で普通の小節へ戻せる。値の書き込みは既存の「全パートへ同じ値を書く」経路
+   （`handleTimeSigConfirm` と同じ形）を共用する。
+   なお `measureMetaInputUtils.parsePickupBeatsInput` は作らなかった: 入力がセレクト（数値の文字列）で、
+   パースは `normalizePickupBeats` 1本で足りるため（同じ判定の2枚目を作らない方針）。
+
+### 7-3. 実装した窓口（§3 の集約結果）
+
+`src/utils/measureCapacityUtils.ts`:
+
+| 関数 | 役割 |
+| --- | --- |
+| `resolveTimeSignatureAtMeasure` | その小節で有効な拍子（途中拍子変更の引き継ぎ）。§3 の「3か所に散っていたループ」の集約先 |
+| `normalizePickupBeats` | 弱起の拍数の正規化（不変条件1。丸めない） |
+| `resolveMeasureCapacityBeats` | その小節の容量（弱起ならその拍数、それ以外は拍子ぶん） |
+| `getPickupBeats` / `isPickupMeasure` | その小節が弱起か・何拍か |
+| `getDisplayedMeasureNumber` | 表示・書き出し用の小節番号（弱起は 0） |
+| `buildPickupBeatOptions` | UI の選択肢（0.5 拍刻み・拍子未満） |
+
+置き換えた呼び出し側:
+- `PianoSystemCanvas`: 段に1つだった `beatsPerMeasure` を `capacityBeatsAt(絶対小節インデックス)` へ。
+  表示用の補完休符・入力上限・自動休符補完・拍スライスの端・小節番号がすべてここを通る。
+- `ScorePage`: 拍スライス（コピー/削除/貼り付け）と再生へ渡す `measureBeats`・タイの小節送り。
+- `playbackPositionUtils`: ハイライトの前進。副産物として **途中拍子変更が実音の小節長へ
+  反映されない既存不具合（§6-1）も解消**した（`pickupPlayback.test.ts` に回帰テストあり）。
+- `musicXmlExport` / `musicXmlImport`: `implicit="yes"` の読み書き（曲頭・曲中とも）。
+- `measureRestFillUtils.fillPriorMeasureRests`: 第3引数が `number | (measureIndex) => number` になった
+  （数値を渡す従来の呼び出しは挙動そのまま）。
+
+### 7-4. 残っている非スコープ
+
+§5 の非スコープはそのまま。加えて:
+- `src/audio/ScorePlayer.ts` の未使用実装（§6-3）は今回も触っていない。#244 へ回す。
+- MIDI 書き出し（`src/utils/midiExport.ts`）は弱起を見ていない。別 Issue。
