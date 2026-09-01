@@ -1157,6 +1157,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     playbackStateRef.current = playbackState;
   }, [playbackState]);
 
+  // 開始済みの無音検知はタイマー解除では止められない（コールバックが約250ms以上の
+  // 非同期チェックを実行中のため）。アンマウント後に setState・recreateAudioEngine が
+  // 走らないよう、await 後にこのフラグで打ち切る（#546 round1 P2）
+  const scorePageUnmountedRef = useRef(false);
+  useEffect(() => () => { scorePageUnmountedRef.current = true; }, []);
+
   const runOutputHealthCheck = useCallback(async (engine: PlaybackEngine) => {
     try {
       // ユーザーが一時停止した直後は AudioContext が suspended になるのが正しい状態。
@@ -1172,6 +1178,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // Safari の silent failure（issue #14）は例外が出ないため、
       // 再生開始後に「音が出ているはずの状態か」を能動的に確認する。
       const report = await checkAudioOutputHealth(engine.getAudioContext?.() ?? null);
+      if (scorePageUnmountedRef.current) return;
 
       // プローブ中（約250ms）に一時停止された場合も同様に無視する
       if (isPausedByUser()) {
@@ -2809,6 +2816,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     if (restoreAttemptedRef.current) return;
     restoreAttemptedRef.current = true;
 
+    // applyLoadedScoreData の await 中にアンマウントされると、cleanup 実行後に
+    // 通知とタイマーを新規予約してしまい二度と片付けられない（#546 round1 P2）。
+    // effect ローカルの cancelled で await 後の続行を抑止する
+    let cancelled = false;
     (async () => {
       // 旧バージョンのデータ（手動保存と自動保存のキーが分かれていない形／作品カタログが
       // 無い形）を、消さずに新しい保存先へ複製してから読み込む（初回起動時のみ・後方互換）。
@@ -2816,6 +2827,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const restored = initializeWorks();
       if (restored) {
         await applyLoadedScoreData(restored);
+        if (cancelled) return;
 
         setRestoreNotice('自動保存データから復元しました');
         console.info('[ScorePage] 起動時に自動保存データから復元しました');
@@ -2833,10 +2845,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         }
       }
 
+      if (cancelled) return;
       setAutosaveRestoreReady(true);
       // 移行・復元が済んだことを App へ知らせる（ホームの一覧の読み直し。round1 P2）
       onLibraryReadyRef.current?.();
     })();
+    return () => { cancelled = true; };
   // applySettingsProfileToState はレンダーごとに作り直される素の関数のため、
   // handleNewScore と同じ理由で依存配列には含めない。
   // eslint-disable-next-line react-hooks/exhaustive-deps

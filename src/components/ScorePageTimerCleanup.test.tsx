@@ -107,6 +107,12 @@ describe('ScorePage: アンマウント時のタイマー片付け（CIフレー
 
   afterEach(() => {
     cleanup();
+    // 退行検出（＝clearTimeout されなかった）時に、実タイマーが最大10,000秒残って
+    // ワーカーの終了遅延・ハングになるのを防ぐ（round1 P3）。モック復元前に全回収する
+    for (const id of pendingTimeouts) {
+      origClearTimeout(id as Parameters<typeof origClearTimeout>[0]);
+    }
+    pendingTimeouts.clear();
     vi.restoreAllMocks();
     if (clientWidthSpy) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidthSpy);
     else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth');

@@ -166,3 +166,21 @@ enumerateDevices のラベルはマイク権限が無いと空文字になるブ
   healthy（通知なし+診断ログに出力先）/ unhealthy 初回（既存接頭文+末尾案内）/
   cooldown 中（継続通知にも案内）の3状態を固定する。
 - README のトラブルシューティングにも出力先確認の案内を追記した。
+
+
+## 追補（#546・CIフレーク根本修正・2026-09-02）
+
+テスト teardown 後の setTimeout 発火（vitest 全緑なのに exit 1）への対応として、
+ScorePage のタイマーを横串で片付ける方針を定めた。
+
+- 通知系（feedback / edit / restore / autoSaveStatus / settingsProfileNotice）と
+  再生系（clearPlaybackTimer）・無音検知（outputHealthCheckTimerRef へ ref 化）を
+  アンマウント時に必ず clearTimeout する。
+- **タイマー解除だけでは足りない2経路**（round1 P2）:
+  1. 起動復元 effect は `applyLoadedScoreData` の await 中にアンマウントされ得るため、
+     effect ローカルの cancelled フラグで await 後の通知・タイマー新規予約を抑止する。
+  2. 無音検知はコールバック開始後に約250ms以上の非同期チェックを行うため、
+     scorePageUnmountedRef を await 後に確認し、アンマウント後の setState /
+     recreateAudioEngine を打ち切る。
+- 回帰テスト ScorePageTimerCleanup は保留 setTimeout を追跡して固定する。afterEach で
+  追跡中 ID を強制回収してから復元する（退行検出時に実タイマーを残さない）。
