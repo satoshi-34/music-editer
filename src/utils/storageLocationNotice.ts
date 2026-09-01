@@ -8,6 +8,8 @@
 // 方針: 「公開されていないことの証明」ではなく**事実の記述**に徹する。
 // 表示は #318（#238/#306 由来）の通知系をそのまま流用し、既読だけをここで覚える。
 
+import { createOnceNotice } from './onceNotice';
+
 /**
  * 既読フラグの localStorage キー。
  * 他の設定キー（music-score-app-ui-variant 等）と同じ接頭辞にそろえている。
@@ -31,50 +33,35 @@ export const STORAGE_LOCATION_NOTICE_MESSAGE =
 export const STORAGE_LOCATION_NOTICE_DURATION_MS = 10000;
 
 /**
+ * 既読の判定・記録は他の「一度きりの通知」と共通の部品を使う（Issue #524 で切り出し）。
+ * StrictMode 対策（下の claim のコメント参照）を含む同じ判定を2か所に書かないため。
+ */
+const notice = createOnceNotice(STORAGE_LOCATION_NOTICE_SEEN_KEY);
+
+/**
  * すでに一度見たかどうか。
  * localStorage が使えない環境（プライベートブラウジング等）では例外を投げず「未読」を返す。
- * その場合は毎回出てしまうが、記述内容は常に正しく、アプリが起動しなくなるより無害である
- * （そもそも localStorage が使えない環境では自動保存自体が働かない）。
  */
 export function hasSeenStorageLocationNotice(): boolean {
-  try {
-    return localStorage.getItem(STORAGE_LOCATION_NOTICE_SEEN_KEY) !== null;
-  } catch {
-    return false;
-  }
+  return notice.hasSeen();
 }
 
 /** 既読として記録する。保存に失敗しても致命的ではないので握りつぶす。 */
 export function markStorageLocationNoticeSeen(): void {
-  try {
-    localStorage.setItem(STORAGE_LOCATION_NOTICE_SEEN_KEY, '1');
-  } catch {
-    // quota超過・プライベートブラウジング等。今回の表示が出ていれば目的は果たしている
-  }
+  notice.markSeen();
 }
 
 /**
- * このページ読み込み中に一度でも表示を始めたか（モジュール変数＝リロードで消える）。
- * React の StrictMode は effect を「実行→片付け→再実行」するため、「既読なら出さない」
- * だけの判定だと、1回目で既読が付き2回目が黙ってしまい、片付けで消去タイマーを失った
- * 通知だけが画面に残る（round1 P3）。「この読み込みで出し始めたなら、再実行でも
- * もう一度出し直す（＝タイマーも張り直す）」ためにここで区別する。
- */
-let shownThisLoad = false;
-
-/**
- * 通知を出してよいかを判定し、出すと決めたら既読も記録する（判定と記録を分けると
- * 呼び出し側の順序ミスで「既読だけ付いて表示されない」が起きるため、1関数にまとめる）。
+ * 通知を出してよいかを判定し、出すと決めたら既読も記録する。
+ * StrictMode の「実行→片付け→再実行」でも true を返し続けるので、
+ * 再実行時に通知と消去タイマーが張り直される（round1 P3）。
  * @returns true なら呼び出し側は通知を dispatch する
  */
 export function claimStorageLocationNotice(): boolean {
-  if (!shownThisLoad && hasSeenStorageLocationNotice()) return false;
-  shownThisLoad = true;
-  markStorageLocationNoticeSeen();
-  return true;
+  return notice.claim();
 }
 
 /** テスト専用: ページ読み込み内フラグを初期化する（テスト間の独立性のため） */
 export function resetStorageLocationNoticeForTest(): void {
-  shownThisLoad = false;
+  notice.resetForTest();
 }
