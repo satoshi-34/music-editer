@@ -8,6 +8,7 @@ import { InstrumentType } from './SoundSource';
 import { getDurationBeats, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
 import { applySwingToTiming } from '../utils/swingUtils';
 import { respellDoubleAccidentalKey } from '../utils/noteMidiUtils';
+import { resolveReleaseTailSeconds } from './releaseTail';
 
 type SoundFontModule = typeof import('soundfont-player');
 
@@ -108,6 +109,17 @@ export function resolveSoundFontName(rawName: string): string {
  * SoundFont ベースの再生エンジン。
  * 波形を手作りする代わりに、既存の楽器サンプルを読み込んで鳴らす。
  */
+/**
+ * 停止（stopAll）によって進行中の SoundFont 読み込みが中断されたことを表すエラー（#525 round4 P1）。
+ * これを受けた再生要求は「停止された」ものとして静かに終わってよい。
+ */
+export class SoundFontLoadAbortedError extends Error {
+  constructor() {
+    super('停止により SoundFont の読み込みを中断しました');
+    this.name = 'SoundFontLoadAbortedError';
+  }
+}
+
 export class SoundFontEngine implements PlaybackEngine {
   private context: AudioContext | null = null;
   private module: SoundFontModule | null = null;
@@ -119,6 +131,18 @@ export class SoundFontEngine implements PlaybackEngine {
   // playerCache は「同じ楽器をもう一度使うときに、毎回ネット読み込みし直さない」ための置き場。
   // キーは「SoundFontパック名 + 楽器名」の組み合わせにしている。
   private readonly playerCache = new Map<string, SoundFontPlayer>();
+
+  /**
+   * 出力経路の世代番号（#525 round3/4 P1）。stopAll のたびに進める。
+   * 非同期の player 作成（module.instrument）が完了したとき、開始時と世代が
+   * 違っていたら「旧・切断済みマスターへ配線された player」なので停止・破棄し、
+   * **その読み込みを待っていた再生要求ごと中断する**（SoundFontLoadAbortedError）。
+   * 次の再生への備えは stopAll 側の先読み（新世代の別要求）が担う。
+   */
+  private outputGeneration = 0;
+
+  /** 作成中の player の共有置き場（キー = `${世代}:${soundfont}:${楽器}`・round4 P2） */
+  private readonly playerLoading = new Map<string, Promise<SoundFontPlayer>>();
   // すべての player の出力をこの GainNode 経由で destination へ流す。
   // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
   private masterGainNode: GainNode | null = null;
@@ -297,6 +321,29 @@ export class SoundFontEngine implements PlaybackEngine {
         console.warn('[SoundFontEngine] stopAll中の停止エラーを無視します:', error);
       }
     });
+    // sample-player の stop はリリース（尻尾・最大0.6秒）を鳴らし切るまでソースを
+    // 止めない（round1/2 P1）。ゲインを一時的に落として戻す方式では、戻した瞬間に
+    // 旧音の尻尾が再び聞こえてしまうため、**出力経路ごと世代交代**する:
+    // 旧マスターゲインを destination から切り離し（旧音の尻尾は行き場を失って消える）、
+    // 旧マスターへ配線済みの player キャッシュも捨てる（次の再生で新しいマスターに
+    // 繋いだ player を作り直す。音源データはブラウザの HTTP キャッシュが効く）
+    this.outputGeneration++;
+    if (this.masterGainNode) {
+      try {
+        this.masterGainNode.disconnect();
+      } catch (error) {
+        console.warn('[SoundFontEngine] stopAll中の切断エラーを無視します:', error);
+      }
+      this.masterGainNode = null;
+    }
+    this.playerCache.clear();
+    // 次の再生の待ち時間（読込・デコード・player 構築）を隠すため、現在の楽器を
+    // 裏で先読みしておく（round3 P2）。ユーザーが停止→再生を押すまでの間に済むことが多い
+    if (this.context) {
+      void this.getPlayerForCurrentInstrument().catch(() => {
+        // 先読みの失敗は無視する（実再生時に通常経路で改めて読み込まれる）
+      });
+    }
     console.log('[SoundFontEngine] すべての再生を停止しました');
   }
 
@@ -377,22 +424,49 @@ export class SoundFontEngine implements PlaybackEngine {
       return cached;
     }
 
-    const module = await this.loadModule();
-    const context = this.ensureContext();
+    // 作成中の Promise を楽器×世代単位で共有する（round4 P2）。
+    // 共有しないと「先読みと実再生」「複数パートの同一楽器」で module.instrument が
+    // 重複実行され、先読みの待ち時間短縮も効かなくなる
+    const generationAtStart = this.outputGeneration;
+    const loadKey = `${generationAtStart}:${cacheKey}`;
+    const inFlight = this.playerLoading.get(loadKey);
+    if (inFlight) return inFlight;
 
-    // notes を絞ると初回ダウンロード量は減らせるが、
-    // まずは「どの音域でも鳴る」ことを優先してフルレンジを使う。
-    // ここで soundfontName を差し替えると、MusyngKite / FluidR3_GM などを試せる。
-    // destination をマスター GainNode にすることで、音量スライダーが全 player に効く。
-    const player = await module.instrument(context, instrumentName as never, {
-      soundfont: this.soundfontName,
-      format: 'mp3',
-      destination: this.getOutputNode(context)
+    const loading = (async (): Promise<SoundFontPlayer> => {
+      const module = await this.loadModule();
+      const context = this.ensureContext();
+
+      // notes を絞ると初回ダウンロード量は減らせるが、
+      // まずは「どの音域でも鳴る」ことを優先してフルレンジを使う。
+      // ここで soundfontName を差し替えると、MusyngKite / FluidR3_GM などを試せる。
+      // destination をマスター GainNode にすることで、音量スライダーが全 player に効く。
+      const player = await module.instrument(context, instrumentName as never, {
+        soundfont: this.soundfontName,
+        format: 'mp3',
+        destination: this.getOutputNode(context)
+      });
+
+      // 作成中に stopAll が走った場合、この player は旧・切断済みマスターへ配線されて
+      // いる可能性がある。**この読み込みを待っていた再生要求ごと中断する**（round4 P1:
+      // 新世代で作り直して返すと、停止したはずの再生がロード完了後に鳴り出してしまう）。
+      // 次の再生に備えるのは stopAll 側の先読み（新世代の別要求）の役割
+      if (generationAtStart !== this.outputGeneration) {
+        try {
+          player.stop();
+        } catch {
+          // 旧世代 player の停止失敗は無視してよい（どこにも繋がっていない）
+        }
+        throw new SoundFontLoadAbortedError();
+      }
+
+      this.playerCache.set(cacheKey, player);
+      console.log('[SoundFontEngine] SoundFontを読み込みました:', instrumentName, this.soundfontName);
+      return player;
+    })().finally(() => {
+      this.playerLoading.delete(loadKey);
     });
-
-    this.playerCache.set(cacheKey, player);
-    console.log('[SoundFontEngine] SoundFontを読み込みました:', instrumentName, this.soundfontName);
-    return player;
+    this.playerLoading.set(loadKey, loading);
+    return loading;
   }
 
   private async loadModule(): Promise<SoundFontModule> {
@@ -461,15 +535,19 @@ export class SoundFontEngine implements PlaybackEngine {
     // ここは耳で触る用の係数なので、違和感があれば少しずつ動かしてよい。
     // - gain: 全体の勢い。brightness と richness の両方を少し反映する
     // - attack: 鳴り始めの速さ
-    // - release: 音を離したあとの残り方
-    // - duration: release を少し足して、「余韻が増えた」と感じやすくする
+    // - release: 音を離したあとに残る「尻尾」の長さ（Issue #525）
+    // - duration: 記譜どおりの長さ（＝ダンパーが降りるまで）。尻尾はこのあとに続く
     return {
       // gain は音色キャラに加えて、強弱記号から来た velocity でも上下させる。
       // ただし極端な値は歪みや無音の原因になるため、最後に安全域へ丸める。
       gain: Math.max(0.05, Math.min(1, (0.45 + brightness * 0.15 + richness * 0.35) * velocity)),
       attack: 0.001 + attack * 0.04,
-      release: 0.05 + release * 0.45,
-      duration: duration + release * 0.15
+      // 以前は release=0.05〜0.5 と「duration に release×0.15 を足す」の合わせ技だったが、
+      // 全音符でも尻尾が 0.3 秒に届かず「早く切られた」印象になっていた（Issue #525）。
+      // 尻尾の長さは内蔵音源と共通の計算（releaseTail.ts）へ一本化し、
+      // duration は記譜どおりに戻す（音の開始位置・次の音までの間隔は変わらない）
+      release: resolveReleaseTailSeconds(release, duration),
+      duration
     };
   }
 
