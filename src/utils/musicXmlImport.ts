@@ -369,7 +369,14 @@ function attachDirectionMarksToVoiceEvents(
       // 同じ音符に同じ記号が二重に付かないようにする（<dynamics> が重複して
       // 書かれたファイル・往復で二重に付いたデータのどちらでも1つに畳む）
       const existing = new Set((ev.dynamics ?? []).map((d) => d.value));
-      const added = pendingDynamics.filter((value) => !existing.has(value));
+      const added: typeof pendingDynamics = [];
+      for (const value of pendingDynamics) {
+        // 追加中にも Set を更新する（round1 P3: pendingDynamics 自体が ['p','p'] と
+        // 重複しているファイルで、同じ記号を2件追加してしまう）
+        if (existing.has(value)) continue;
+        existing.add(value);
+        added.push(value);
+      }
       if (added.length > 0) {
         ev.dynamics = [...(ev.dynamics ?? []), ...added.map((value) => ({ value }))];
       }
@@ -771,7 +778,13 @@ function buildStaffMeasures(
     const maxVoiceNumber = noteBearingVoiceNumbers.length > 0 ? Math.max(...noteBearingVoiceNumbers) : 1;
     const extraVoiceEvents: NoteEvent[][] = [];
     for (let n = 3; n <= maxVoiceNumber; n++) {
-      extraVoiceEvents.push(parseVoiceChildren(childrenForVoice(n)));
+      const childrenN = childrenForVoice(n);
+      const eventsN = parseVoiceChildren(childrenN);
+      // 強弱は全声部で復元する（round1 P2: 書き出しは全声部へ <dynamics> を出すため、
+      // 復元しないと声部3以降の f 等が**無通知のまま**往復で消える）。
+      // 松葉（openRefs）は現行 UI が2声までなので従来どおり復元しない
+      attachDirectionMarksToVoiceEvents(childrenN, eventsN, mi, [], syntheticRestCount);
+      extraVoiceEvents.push(eventsN);
     }
 
     // リピート

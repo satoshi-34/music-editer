@@ -151,4 +151,79 @@ describe('MusicXML の文字強弱（pp〜ff）読み込み（Issue #552）', ()
     expect(result.unsupportedDynamicsCount).toBeUndefined();
     expect(result.score.parts[0].measures[0].events[0].dynamics).toBeUndefined();
   });
+
+  it('声部3の強弱も往復で復元される（round1 P2）', () => {
+    const events = [{ dur: '4' as const, isRest: false, keys: ['c/5'] },
+      { dur: '4' as const, isRest: true, keys: [] },
+      { dur: '4' as const, isRest: true, keys: [] },
+      { dur: '4' as const, isRest: true, keys: [] }];
+    const v3 = [{ dur: '4' as const, isRest: false, keys: ['e/4'], dynamics: [{ value: 'f' as const }] },
+      { dur: '4' as const, isRest: true, keys: [] },
+      { dur: '4' as const, isRest: true, keys: [] },
+      { dur: '4' as const, isRest: true, keys: [] }];
+    const score = createSavedScoreData(
+      { title: 'v3', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{
+        events,
+        voices: [
+          { id: 'voice-1', events },
+          { id: 'voice-2', events: [{ dur: '1', isRest: true, keys: [] }], stemDirection: 'down' },
+          { id: 'voice-3', events: v3, stemDirection: 'down' },
+        ],
+      }] }] as never,
+      1,
+      1,
+    );
+    const xml = scoreToMusicXml(score);
+    const imported = parseMusicXml(xml);
+    expect(imported.parts[0].measures[0].voices?.[2]?.events?.[0]?.dynamics)
+      .toEqual([{ value: 'f' }]);
+  });
+
+  it('重複した <dynamics> は1件に畳む（round1 P3: 同一 direction 群の p p）', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>M</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction placement="below"><direction-type><dynamics><p/></dynamics></direction-type></direction>
+      <direction placement="below"><direction-type><dynamics><p/></dynamics></direction-type></direction>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXml(xml);
+    expect(imported.parts[0].measures[0].events[0].dynamics).toEqual([{ value: 'p' }]);
+  });
+
+  it('本物の大譜表（staves=2・backup・声部5）で staff 指定どおり振り分ける（round1 P2）', () => {
+    // MuseScore/Finale 相当: 1つの <part> に <staves>2</staves>。
+    // 上段（staff1）に p・下段（staff2・voice5）に f。和音の構成音（<chord/>）は
+    // イベント数に数えないことも同時に固定する
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>
+      <direction placement="below"><direction-type><dynamics><p/></dynamics></direction-type><staff>1</staff></direction>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>8</duration><type>half</type><voice>1</voice><staff>1</staff></note>
+      <note><chord/><pitch><step>E</step><octave>5</octave></pitch><duration>8</duration><type>half</type><voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>G</step><octave>5</octave></pitch><duration>8</duration><type>half</type><voice>1</voice><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <direction placement="below"><direction-type><dynamics><f/></dynamics></direction-type><staff>2</staff></direction>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>16</duration><type>whole</type><voice>5</voice><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXml(xml);
+    const right = imported.parts.find((pt) => pt.clef === 'treble')!;
+    const left = imported.parts.find((pt) => pt.clef === 'bass')!;
+    // 上段: p は1音目（和音）へ。<chord/> を数えると2音目へずれる
+    expect(right.measures[0].events[0].dynamics).toEqual([{ value: 'p' }]);
+    expect(right.measures[0].events[1]?.dynamics).toBeUndefined();
+    // 下段: staff=2 指定の f が付き、staff=1 の p は混入しない
+    expect(left.measures[0].events[0].dynamics).toEqual([{ value: 'f' }]);
+  });
 });
