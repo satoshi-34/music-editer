@@ -3148,7 +3148,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // 自動保存（約1.5秒後）任せだと、その前にリロードすると新作品が空のまま残る。
     // timestamp は現在時刻へ更新する（旧手動保存の保存時刻のままだと updatedAt が古くなり、
     // 取り込んだばかりの作品が更新順の作品一覧で埋もれる。Codex round4）
-    if (!saveCurrentWork({ ...loadedData, timestamp: Date.now() })) {
+    // 旧手動保存にも作品テンポを明示して移行する（#543 round1 P3: 自動保存前に
+    // 終了すると未移行のまま残る）。applyLoadedScoreData が画面へ適用した正規化済みの
+    // 値と同じものを書く
+    if (!saveCurrentWork({
+      ...loadedData,
+      globalBpm: normalizeSavedGlobalBpm(loadedData.globalBpm) ?? tempoSettings.bpm,
+      timestamp: Date.now(),
+    })) {
       const message = describeLegacyImportResult('saveFailed');
       notifyScoreEdit(message);
       return { ok: false, message };
@@ -4882,12 +4889,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       instrumentation,
       systems: totalSystems,
       measuresPerSystem,
+      // 作品のテンポ（#543）。ここに入れないと書き出し（.score.json / MIDI）へ
+      // 作品テンポが乗らず、MIDI が常に既定の 120 になる（#543 round1 P2）
+      globalBpm: tempoSettings.bpm,
     };
   }, [
     title, subtitle, lyricist, composer, arranger,
     scoreType, keySignature, scoreTimeSignature, timeSignatureStyle,
     quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData,
-    instrumentation, totalSystems, measuresPerSystem,
+    instrumentation, totalSystems, measuresPerSystem, tempoSettings.bpm,
   ]);
 
   // 書出は成功しても失敗しても画面に何も出ず、例外はコンソールに流れるだけだった（Issue #278）。

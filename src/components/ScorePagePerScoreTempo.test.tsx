@@ -12,6 +12,7 @@ import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/re
 import ScorePage from './ScorePage';
 import {
   createSavedScoreData, createWork, saveWorkAutosaveData, setLastOpenedWorkId,
+  loadWorkAutosaveData,
 } from '../utils/storage';
 
 const localStorageMock = (() => {
@@ -114,4 +115,68 @@ describe('ScorePage: 作品ごとの全体テンポ（Issue #543）', () => {
     switchToWork('作品A');
     await expectTempoToBe('112');
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('BPM だけ変更しても自動保存で作品へ書かれる（round1 P2: 依存配列の検出）', async () => {
+    const id = seedWork('BPMのみ', 112);
+    setLastOpenedWorkId(id);
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
+    await expectTempoToBe('112');
+
+    // テンポ**だけ**を変える（譜面・タイトルは触らない）
+    const tempoInput = screen.getByLabelText('テンポ（BPM）') as HTMLInputElement;
+    fireEvent.change(tempoInput, { target: { value: '96' } });
+    fireEvent.blur(tempoInput);
+
+    // 自動保存（1.5秒デバウンス）だけで作品へ 96 が入る。
+    // 依存配列から tempoSettings.bpm を外すとここが 112 のまま落ちる
+    await waitFor(() => {
+      const saved = loadWorkAutosaveData(id);
+      expect(saved.success).toBe(true);
+      expect(saved.data?.globalBpm).toBe(96);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('BPM 変更直後に作品を切り替えても、前作品の値が切替先へ書かれない（round1 P2: 切替競合）', async () => {
+    const idA = seedWork('競合A', 112);
+    const idB = seedWork('競合B', 54);
+    setLastOpenedWorkId(idA);
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
+    await expectTempoToBe('112');
+
+    // A の BPM を 98 へ変えて、自動保存を待たずすぐ B へ切り替える
+    const tempoInput = screen.getByLabelText('テンポ（BPM）') as HTMLInputElement;
+    fireEvent.change(tempoInput, { target: { value: '98' } });
+    fireEvent.blur(tempoInput);
+    switchToWork('競合B');
+    await expectTempoToBe('54');
+
+    // 両作品の保存値: A には 98 が入り、B は 54 のまま（98 が漏れない）
+    await waitFor(() => {
+      const savedA = loadWorkAutosaveData(idA);
+      const savedB = loadWorkAutosaveData(idB);
+      expect(savedA.data?.globalBpm).toBe(98);
+      expect(savedB.data?.globalBpm).toBe(54);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('MIDI 書き出しに作品テンポが乗る（round1 P2）', async () => {
+    const { scoreToMidi } = await import('../utils/midiExport');
+    const rest = [{ dur: '1' as const, isRest: true, keys: ['b/4'] }];
+    const data = createSavedScoreData(
+      { title: 'midi', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: rest, voices: [{ id: 'voice-1', events: rest }] }] }],
+      1, 1, 'single', 'C', [4, 4],
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      112,
+    );
+    const bytes = scoreToMidi(data);
+    // Set Tempo メタイベント: FF 51 03 のあと3バイトが µs/四分音符。112bpm = 535714µs = 0x082D05
+    const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join(' ');
+    const tempoUs = Math.round(60000000 / 112);
+    const tempoHex = [16, 8, 0].map((sh) => ((tempoUs >> sh) & 0xff).toString(16).padStart(2, '0')).join(' ');
+    expect(hex).toContain(`ff 51 03 ${tempoHex}`);
+  });
 });
