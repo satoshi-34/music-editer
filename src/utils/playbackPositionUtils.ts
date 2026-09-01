@@ -1,6 +1,7 @@
 import type { MeasureData, TimeSignature } from '../types/storage';
 import { expandMeasuresForPlayback, type ExpandedPlaybackMeasure } from '../audio/repeatPlaybackUtils';
 import { getMeasureBeats } from './timeSignatureUtils';
+import { getMeasureCapacityBeats } from './pickupMeasureUtils';
 import { getEventDurationBeats, getMeasureDurationBeats, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { applySwingToTiming, shouldApplySwing } from './swingUtils';
 import { resolveMeasureBpms } from './tempoPlaybackUtils';
@@ -36,7 +37,13 @@ export function buildPlaybackPositionTimeline(
    * これを使う（実音側と同じ列を共有し、他段だけに置かれた標語でもハイライトが同期する）。
    * 省略時は従来どおり自パート列から解決（単体利用・後方互換）
    */
-  sharedMeasureBpms?: number[]
+  sharedMeasureBpms?: number[],
+  /**
+   * 曲頭の弱起（アウフタクト）の拍数（Issue #473）。省略時は弱起なし＝従来どおり。
+   * 弱起の小節は拍子より短いので、ここを拍子ぶんで数えるとハイライトだけが
+   * 実音より遅れて進む（実音側は ScorePage が小節ごとの measureBeats を渡している）。
+   */
+  pickupBeats?: number
 ): PlaybackTimelineItem[] {
   // 途中再生（#108）: 展開順の先頭 startExpandedIndex 個を丸ごと飛ばす。
   // 実音側（playParts へ渡す小節列）も同じ位置で切るため、atMs は 0 起点のままで一致する
@@ -95,7 +102,10 @@ export function buildPlaybackPositionTimeline(
     // 実音エンジンは各小節に measureBeats（グローバル拍子の長さ）を下限として渡されるため、
     // 表示の前進も「全声部の実長と拍子長の大きい方」でそろえる（Codex 2巡目）。
     // 未充足の小節を実長だけで進めると、ハイライトが実音より先へ走ってしまう
-    elapsedMs += measureAdvanceBeats(measure, timeSignature) * msPerBeat;
+    elapsedMs += measureAdvanceBeats(
+      measure,
+      getMeasureCapacityBeats(sourceMeasureIndex, timeSignature, pickupBeats),
+    ) * msPerBeat;
   });
 
   return timeline;
@@ -106,8 +116,19 @@ export function buildPlaybackPositionTimeline(
  * 下限に小節を進めるため、タイムライン・残り時間の両方をこの共通規則でそろえる:
  * max(全声部の実長, 拍子の長さ)。空小節は拍子ぶん、あふれた小節は実長で進む。
  */
-function measureAdvanceBeats(measure: MeasureData, timeSignature: TimeSignature): number {
-  return Math.max(getMeasureDurationBeats(measure), getMeasureBeats(timeSignature));
+function measureAdvanceBeats(measure: MeasureData, capacityBeats: number): number {
+  return Math.max(getMeasureDurationBeats(measure), capacityBeats);
+}
+
+/**
+ * 展開済みの小節が「最低限占める拍数」。実音エンジンへ渡す小節オブジェクトには
+ * ScorePage が measureBeats（小節ごとの容量・弱起を含む）を載せているので、
+ * 載っていればそれを使う（実音と同じ物差しで数えるため）。
+ * 載っていない呼び出し（単体テスト・旧経路）は従来どおり拍子ぶんで数える。
+ */
+function measureCapacityFloor(measure: MeasureData, timeSignature: TimeSignature): number {
+  const carried = (measure as MeasureData & { measureBeats?: number }).measureBeats;
+  return typeof carried === 'number' && Number.isFinite(carried) ? carried : getMeasureBeats(timeSignature);
 }
 
 /**
@@ -157,7 +178,7 @@ export function calculateExpandedPlaybackDurationMs(
   let totalMs = 0;
   for (let i = 0; i <= lastUsedIndex; i++) {
     const msPerBeat = (60 / measureBpms[i]) * 1000;
-    totalMs += measureAdvanceBeats(measures[i], timeSignature) * msPerBeat;
+    totalMs += measureAdvanceBeats(measures[i], measureCapacityFloor(measures[i], timeSignature)) * msPerBeat;
   }
   return totalMs;
 }

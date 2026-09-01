@@ -188,10 +188,10 @@ import { snapInsertIndexOutOfTupletGroup } from '../utils/tupletGroupIntegrity';
 import { getTupletClipboardGroup, setTupletClipboardGroup } from '../utils/tupletClipboard';
 import {
   formatTimeSignature,
-  getMeasureBeats,
   normalizeTimeSignature,
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
+import { getDisplayMeasureNumber, getMeasureCapacityBeats, hasPickupMeasure } from '../utils/pickupMeasureUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
   allocateCombinedMeasureWidths,
@@ -879,6 +879,12 @@ type Props = {
   previewAccidentalOnApply?: boolean;
   keySignature?: KeySignature;
   timeSignature?: [number, number];
+  /**
+   * 曲頭の弱起（アウフタクト）の拍数（Issue #473）。省略時は弱起なし。
+   * 「先頭小節（絶対インデックス0）だけは拍子ぶんではなくこの拍数まで入る」という意味で、
+   * 音符の入力上限・表示用の補完休符・拍範囲スライスの端の判定に効く。
+   */
+  pickupBeats?: number;
   // 拍子記号の見た目（Issue #422）。'symbol' のとき 4/4 は C、2/2 はアッラ・ブレーヴェで描く。
   // 拍子データ自体は timeSignature のままなので、再生・小節の拍数計算には影響しない。
   timeSignatureStyle?: TimeSignatureStyle;
@@ -1019,6 +1025,10 @@ type BuildPartVoicesInput = {
   normalizedKeySignature: KeySignature;
   /** この小節時点で有効な調号（途中調号変更を解決済みの値） */
   effectiveKeySigForMeasure: KeySignature;
+  /**
+   * この小節の容量（何拍ぶん入るか）。弱起（アウフタクト）の小節では拍子より短い
+   * （Issue #473）。表示用の補完休符をどこまで足すかの基準になる。
+   */
   beatsPerMeasure: number;
   timeSignatureNumerator: number;
   timeSignatureDenominator: number;
@@ -2401,6 +2411,7 @@ export default function PianoSystemCanvas({
   startMeasureIndex=0, disabled=false, currentInstrument = InstrumentType.PIANO, onPreviewNoteEvent, previewAccidentalOnApply = true, keySignature = 'C',
   finalMeasureIndex,
   timeSignature = [4, 4],
+  pickupBeats,
   timeSignatureStyle = 'numeric',
   onKeySignatureChange,
   selectedMeasures,
@@ -2427,7 +2438,11 @@ export default function PianoSystemCanvas({
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
   const timeSignatureNumerator = normalizedTimeSignature[0];
   const timeSignatureDenominator = normalizedTimeSignature[1];
-  const beatsPerMeasure = getMeasureBeats(normalizedTimeSignature);
+  // 小節の容量（その小節に何拍ぶん入るか）。弱起（アウフタクト）があると先頭小節だけ
+  // 短くなるため、「段に1つの拍数」ではなく小節ごとに解決する（Issue #473）。
+  // 弱起が無いときは全小節で拍子ぶん＝従来と同じ値を返す。
+  const capacityBeatsAt = (absoluteMeasureIndex: number): number =>
+    getMeasureCapacityBeats(absoluteMeasureIndex, normalizedTimeSignature, pickupBeats);
   const normalizedTimeSignatureStyle = normalizeTimeSignatureStyle(timeSignatureStyle);
   const formattedTimeSignature = formatTimeSignature(normalizedTimeSignature, normalizedTimeSignatureStyle);
   const ref = useRef<HTMLDivElement>(null);
@@ -2503,7 +2518,8 @@ export default function PianoSystemCanvas({
     selectedHairpin: SelectedHairpinSel;
     activeVoiceIndex: number;
     activeLayerPartIndex: number | undefined;
-    beatsPerMeasure: number;
+    /** 小節の容量を解決する関数（弱起対応・Issue #473）。単一の拍数では弱起を表せない */
+    capacityBeatsAt: (absoluteMeasureIndex: number) => number;
     selectedMeasures: { start: number; end: number; startBeat?: number; endBeat?: number } | null;
     disabled: boolean;
     isPrintPreview: boolean;
@@ -2517,7 +2533,7 @@ export default function PianoSystemCanvas({
     selectedHairpin: null,
     activeVoiceIndex,
     activeLayerPartIndex,
-    beatsPerMeasure,
+    capacityBeatsAt,
     selectedMeasures: selectedMeasures ?? null,
     disabled,
     isPrintPreview,
@@ -3481,7 +3497,7 @@ export default function PianoSystemCanvas({
       selectedHairpin,
       activeVoiceIndex,
       activeLayerPartIndex,
-      beatsPerMeasure,
+      capacityBeatsAt,
       selectedMeasures: selectedMeasures ?? null,
       disabled,
       isPrintPreview,
@@ -4022,7 +4038,7 @@ export default function PianoSystemCanvas({
         }
         // 貼り付け先の声部は「いま編集中の声部」（コピー元の声部は問わない）。
         const targetVoiceIndex=latestRef.current.activeVoiceIndex;
-        const beatsLimit=latestRef.current.beatsPerMeasure;
+        const beatsLimit=latestRef.current.capacityBeatsAt(measure);
         // 空き拍の判定は setPartsScore の updater の**外**で行う（Issue #331）。
         // updater の中で通知すると、React が updater を2回呼ぶ場面（StrictMode など）で
         // 同じ通知が二重に出てしまうため（.claude/specs/dead-end-speaks/design.md の約束）。
@@ -4897,12 +4913,20 @@ export default function PianoSystemCanvas({
         }
         // 小節番号: 段の先頭小節（i===0）・最上段（pi===0）にだけ、絶対小節番号を表示する。
         // 曲頭（絶対インデックス0）は慣習として番号を出さない。
+        // 弱起（アウフタクト）があるときは、慣習どおり弱起を0と数えるため番号が1つずつ
+        // 繰り下がる（弱起の次の小節が「1」）。getDisplayMeasureNumber が正本（Issue #473）。
         if (pi === 0 && i === 0 && startMeasureIndex !== 0) {
-          measureNumberEntries.push({
-            x: x / s,
-            topY: stave.getYForLine(0),
-            number: startMeasureIndex + 1,
-          });
+          const displayNumber = getDisplayMeasureNumber(
+            startMeasureIndex,
+            hasPickupMeasure(pickupBeats, normalizedTimeSignature)
+          );
+          if (displayNumber !== null) {
+            measureNumberEntries.push({
+              x: x / s,
+              topY: stave.getYForLine(0),
+              number: displayNumber,
+            });
+          }
         }
       });
 
@@ -5461,7 +5485,7 @@ export default function PianoSystemCanvas({
           pi, systemColumnIndex: i, absI, staveSets, parts,
           partsScoreForRender, normalizedKeySignature,
           effectiveKeySigForMeasure: effectiveKeySigPerMeasure[i],
-          beatsPerMeasure, timeSignatureNumerator, timeSignatureDenominator,
+          beatsPerMeasure: capacityBeatsAt(absI), timeSignatureNumerator, timeSignatureDenominator,
           selected, activeVoiceIndex,
           highlightedLayerPartIndex: activeLayerHighlightPartIndex,
           prevMeasureState: prevMeasureStatePerPart[pi],
@@ -5890,7 +5914,7 @@ export default function PianoSystemCanvas({
               clickX:lx,
               currentBeats,
               addBeats,
-              beatsPerMeasure,
+              beatsPerMeasure: capacityBeatsAt(absI),
             });
             if(fillBeats<=0)return {rests:[],startBeat:currentBeats};
             // 埋める休符の高さは、画面に見えている補完休符（computeVoiceDisplayPadding）と
@@ -5931,7 +5955,7 @@ export default function PianoSystemCanvas({
               defaultRestKeyForClef(clefHere),
               (tool as any).tuplet
             );
-            if(currentBeats + groupBeats > beatsPerMeasure + 0.000001){
+            if(currentBeats + groupBeats > capacityBeatsAt(absI) + 0.000001){
               // 黙って諦めると「クリック位置が悪いのか、アプリが壊れたのか」が分からない。
               // 拒否は正しい挙動なので、理由と次の一手だけを伝える（Issue #318「行き止まりは喋る」）
               notifyScoreEdit(describeMeasureFull());
@@ -5942,7 +5966,7 @@ export default function PianoSystemCanvas({
             setScore(prev=>{
               const next=prev.map(cloneMeasureData);
               while(absI>=next.length)next.push(createEmptyMeasure());
-              fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+              fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
               // 通常音符の挿入と同じ経路（withVoiceEventsUpdated）へそろえる。
               // 直接 m.events を触ると、声部2がアクティブでも声部1へ書き込んでしまう。
               next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
@@ -5959,7 +5983,7 @@ export default function PianoSystemCanvas({
           }
 
           const addBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
-          if(currentBeats + addBeats > beatsPerMeasure){
+          if(currentBeats + addBeats > capacityBeatsAt(absI)){
             // 連符グループと同じく、入らない理由と代替手順を伝える（Issue #318）
             notifyScoreEdit(describeMeasureFull());
             return;
@@ -5978,7 +6002,7 @@ export default function PianoSystemCanvas({
           setScore(prev=>{
             const next=prev.map(cloneMeasureData);
             while(absI>=next.length)next.push(createEmptyMeasure());
-            fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+            fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
             next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
               const copy=[...events];
               copy.splice(Math.max(0,Math.min(at,copy.length)),0,...leading.rests,insertedEvent);
@@ -6015,8 +6039,9 @@ export default function PianoSystemCanvas({
         const sliceSelection = selectedMeasures != null && absI >= selectedMeasures.start && absI <= selectedMeasures.end
           ? (() => {
               const fromBeat = absI === selectedMeasures.start ? (selectedMeasures.startBeat ?? 0) : 0;
-              const toBeat = absI === selectedMeasures.end ? (selectedMeasures.endBeat ?? beatsPerMeasure) : beatsPerMeasure;
-              const partial = fromBeat > 0.0001 || toBeat < beatsPerMeasure - 0.0001;
+              const measureBeatsHere = capacityBeatsAt(absI);
+              const toBeat = absI === selectedMeasures.end ? (selectedMeasures.endBeat ?? measureBeatsHere) : measureBeatsHere;
+              const partial = fromBeat > 0.0001 || toBeat < measureBeatsHere - 0.0001;
               return { partial, fromBeat, toBeat };
             })()
           : null;
@@ -6043,7 +6068,7 @@ export default function PianoSystemCanvas({
           if (columns.length === 0 || !hasRealEvents) {
             // 空小節: 小節幅の線形補間で読む
             const ratio = Math.max(0, Math.min(1, (lx - measLeft) / Math.max(1, measRight - measLeft)));
-            return ratio * beatsPerMeasure;
+            return ratio * capacityBeatsAt(absI);
           }
           let best = columns[0];
           for (const col of columns) {
@@ -6051,7 +6076,7 @@ export default function PianoSystemCanvas({
           }
           // 最終列より右は小節末とみなす（末尾の音符の後ろをなぞったとき）
           const last = columns.reduce((a, b) => (a.x > b.x ? a : b));
-          if (lx > last.x + (last.x - measLeft) * 0.0 + 12) return beatsPerMeasure;
+          if (lx > last.x + (last.x - measLeft) * 0.0 + 12) return capacityBeatsAt(absI);
           return best.beats;
         };
         const sliceCandidatesHere = (): number[] => {
@@ -6063,9 +6088,9 @@ export default function PianoSystemCanvas({
           if (activeLayerPartIndex != null) {
             const layerMeasure = (partsScoreForRender[activeLayerPartIndex] ?? [])[absI];
             const layerEvents = getMeasureVoices(layerMeasure)[activeVoiceIndex]?.events ?? [];
-            return sliceBoundaryCandidates([{ events: layerEvents }], beatsPerMeasure);
+            return sliceBoundaryCandidates([{ events: layerEvents }], capacityBeatsAt(absI));
           }
-          return sliceBoundaryCandidates(parts.map((_, otherPi) => (partsScoreForRender[otherPi] ?? [])[absI]), beatsPerMeasure);
+          return sliceBoundaryCandidates(parts.map((_, otherPi) => (partsScoreForRender[otherPi] ?? [])[absI]), capacityBeatsAt(absI));
         };
         const snappedBeatAtX = (lx: number): number =>
           snapToSliceBoundary(beatAtX(lx), sliceCandidatesHere());
@@ -6280,11 +6305,11 @@ export default function PianoSystemCanvas({
         // 強調表示もそのパートの五線にだけ出す。他の段まで塗ると「全パートに効く」ように見える
         if (sliceSelection?.partial && (activeLayerPartIndex == null || pi === activeLayerPartIndex)) {
           const xForBeat = (b: number): number => {
-            if (b >= beatsPerMeasure - 0.0001) return measRight;
+            if (b >= capacityBeatsAt(absI) - 0.0001) return measRight;
             if (b <= 0.0001) return measLeft;
             const columns = beatColumnsByMeasureP.get(absI) ?? [];
             const hit = columns.find((c) => Math.abs(c.beats - b) < 0.0001);
-            return hit ? hit.x : measLeft + (b / beatsPerMeasure) * (measRight - measLeft);
+            return hit ? hit.x : measLeft + (b / capacityBeatsAt(absI)) * (measRight - measLeft);
           };
           const x1 = xForBeat(sliceSelection.fromBeat);
           const x2 = xForBeat(sliceSelection.toBeat);
@@ -7362,7 +7387,7 @@ export default function PianoSystemCanvas({
                   if(paste){
                     setHitScore(prev=>{
                       const next=prev.map(cloneMeasureData);
-                      fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+                      fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
                       const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
                       if(!targetEv?.isRest)return prev;
                       // 最新データで計画を作り直す（クリック時点の描画データは古い可能性があるため）。
@@ -7417,7 +7442,7 @@ export default function PianoSystemCanvas({
                   setHitScore(prev=>{
                     const next=prev.map(cloneMeasureData);
                     // 声部1側の休符補完は従来どおり必要（声部2の拍位置合わせのため）。
-                    fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+                    fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
                     const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
                     if(!targetEv?.isRest)return prev;
                     const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest,clefHere);
@@ -8152,7 +8177,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,freeTextFontReadyTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,pickupBeats,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,freeTextFontReadyTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で

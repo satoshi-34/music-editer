@@ -452,6 +452,15 @@ export interface SavedScoreData {
   keySignature?: KeySignature;
   /** 拍子。旧データ互換のため省略時は 4/4 として扱う */
   timeSignature?: TimeSignature;
+  /**
+   * 曲頭の弱起（アウフタクト）小節の拍数（Issue #473）。
+   * 4分音符 = 1拍の換算で、「先頭小節（絶対インデックス0）だけは拍子ぶんではなく
+   * この拍数で数える」ことを表す。省略時・0・拍子ぶん以上の値は「弱起なし」＝
+   * 従来どおり全小節が拍子ぶん、として扱う（normalizePickupBeats が正本）。
+   * 小節ではなく作品に持たせているのは、小節データがパートごとに分かれており、
+   * 「右手だけ弱起」のようなパート間の食い違いを構造的に作らせないため。
+   */
+  pickupBeats?: number;
   /** 編成テンプレート。旧データ互換のため省略可 */
   instrumentation?: ScoreInstrumentation;
   /** 編成譜の表示モード（実音/記譜音）。旧データ互換のため省略可、省略時は実音表示 */

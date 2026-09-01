@@ -7,7 +7,8 @@ import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/c
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
 import { isValidTimeSignature } from './timeSignatureUtils';
-import { ensureMeasuresPrimaryVoiceMaterialized, getEventDurationBeats } from './voiceMeasureUtils';
+import { ensureMeasuresPrimaryVoiceMaterialized, getEventDurationBeats, getMeasureDurationBeats } from './voiceMeasureUtils';
+import { normalizePickupBeats } from './pickupMeasureUtils';
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { buildRestEventsForBeats } from './measureRestFillUtils';
 import { readMusicXmlDefaults, type MusicXmlDefaultsLayout } from './musicXmlDefaults';
@@ -1102,6 +1103,20 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
     }
   }
 
+  // 弱起（アウフタクト）の読み取り（Issue #473）。
+  // MusicXML では曲頭の不完全小節を <measure implicit="yes" number="0"> と書く。
+  // 「何拍ぶんの弱起か」を書く欄は仕様に無いので、実際に入っている音価の合計から測る。
+  // 拍が足りている（＝ただ number="0" と書かれているだけの完全小節）ファイルでは
+  // normalizePickupBeats が undefined を返すため、弱起にはしない。
+  // 2小節目以降の implicit（volta の途中分割などで現れる）は今回は見ない
+  // （設計メモ .claude/specs/pickup-measure/design.md §4-3・§7）。
+  const firstMeasureEl = partEls[0]?.querySelector('measure');
+  const firstMeasureIsImplicit =
+    firstMeasureEl?.getAttribute('implicit') === 'yes' || firstMeasureEl?.getAttribute('number') === '0';
+  const pickupBeats = firstMeasureIsImplicit && parts[0]?.measures[0]
+    ? normalizePickupBeats(getMeasureDurationBeats(parts[0].measures[0]), globalTimeSig)
+    : undefined;
+
   const score: SavedScoreData = {
     version: '1.0',
     timestamp: Date.now(),
@@ -1116,6 +1131,7 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
     keySignature: validKey,
     timeSignature: globalTimeSig,
     timeSignatureStyle: globalTimeSigStyle,
+    pickupBeats,
     parts,
     systems: 6,
     measuresPerSystem: 4,

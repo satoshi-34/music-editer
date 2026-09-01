@@ -638,6 +638,25 @@ export function describePlaybackFromMeasure(startMeasure: number): string {
   return `${startMeasure + 1}小節目から再生します（先頭から聴くには Escape で小節の選択を外してください）`;
 }
 
+/**
+ * 弱起（アウフタクト）を後から設定したとき、先頭小節に容量を超える音符が残っていることを
+ * 知らせる（Issue #473）。音符を黙って消すのは「無言で消える」事故（#238）と同じ形なので、
+ * データは変えずに事実と次の一手だけを伝える。
+ */
+export function describePickupOverflow(pickupBeats: number): string {
+  return `弱起を${pickupBeats}拍にしました。先頭小節にはこれを超える音符が残っています（いらない音符を選んで Delete で消せます）`;
+}
+
+/** 弱起（アウフタクト）を設定したことを知らせる（Issue #473） */
+export function describePickupSet(pickupBeats: number): string {
+  return `弱起を${pickupBeats}拍にしました（先頭小節は${pickupBeats}拍まで入り、小節番号は次の小節から1になります）`;
+}
+
+/** 弱起（アウフタクト）を解除したことを知らせる（Issue #473） */
+export function describePickupCleared(): string {
+  return '弱起（アウフタクト）を解除しました。先頭小節も拍子ぶんの長さになります';
+}
+
 /** 拍範囲スライスの削除で消すものが無かったときの通知（#318。履歴も積まない） */
 export function describeSliceClearNoop(): string {
   return '選択範囲に音符が無いため、消すものがありませんでした';

@@ -10,6 +10,7 @@ import { resolveMeasureClef, resolveClefAtMeasureEnd } from './clefMeasureUtils'
 import { getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { getTempoMarkingBpm } from './tempoMarkingPresets';
 import { describeDivisionsOverflow } from './scoreEditorNotices';
+import { normalizePickupBeats } from './pickupMeasureUtils';
 
 // 分割数（division）の基準値: 四分音符 = 16分割。全音符〜64分音符を整数で表せる最小値。
 // 連符がある譜面では、この値を「連符の分母で割り切れる倍率」だけ引き上げて使う
@@ -385,6 +386,12 @@ function measureToXml(
     /** この小節の絶対インデックス（hairpins のキー照合に使う） */
     measureIndex?: number;
     /**
+     * この小節が弱起（アウフタクト）小節か（Issue #473）。
+     * true のとき <measure> に implicit="yes" を付ける。MusicXML では
+     * 「拍が足りないのは書き間違いではなく弱起だ」をこの属性で表す。
+     */
+    isPickupMeasure?: boolean;
+    /**
      * 拍子記号の表示スタイル（Issue #422）。'symbol' のとき MusicXML の
      * <time symbol="common"/"cut"> 属性を付けて、他ソフトでも C・𝄵 で開けるようにする。
      */
@@ -526,7 +533,10 @@ function measureToXml(
     lines.push('<barline location="right"><bar-style>light-heavy</bar-style><repeat direction="backward"/></barline>');
   }
 
-  return `<measure number="${measureNum}">${lines.join('')}</measure>`;
+  // 弱起小節には implicit="yes" を付ける（Issue #473）。他ソフトはこの属性で
+  // 「小節番号に数えない不完全小節」と解釈するため、往復しても弱起のまま開ける。
+  const implicitAttr = options.isPickupMeasure ? ' implicit="yes"' : '';
+  return `<measure number="${measureNum}"${implicitAttr}>${lines.join('')}</measure>`;
 }
 
 /**
@@ -555,6 +565,11 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
   const divisions = resolveDivisions(parts);
   const globalKeyFifths = KEY_FIFTHS[keySignature as KeySignature] ?? 0;
   const globalTimeSig: [number, number] = [timeSignature[0], timeSignature[1]];
+  // 弱起（アウフタクト）があるときは、慣例どおり弱起を 0 と数える（Issue #473）。
+  // その結果、先頭が number="0"、次の完全小節が number="1" になる。
+  // 弱起が無いときの出力は従来と 1 文字も変わらない。
+  const pickupBeats = normalizePickupBeats(data.pickupBeats, globalTimeSig);
+  const measureNumberBase = pickupBeats === undefined ? 1 : 0;
 
   // part-list（#443 Codex round1 P2: <part-name> には安定ID（partId）ではなく表示名を出す）。
   // 名前の優先順位: 保存済み instrumentation.parts[].name（編成譜・既存作品の保存名優先）
@@ -603,7 +618,7 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
       }
       // 途中クレフ変更: この小節時点で有効なクレフを解決する
       const effectiveClef = resolveMeasureClef(p.measures, mi, p.clef);
-      const xml = measureToXml(m, mi + 1, {
+      const xml = measureToXml(m, mi + measureNumberBase, {
         clef: effectiveClef,
         prevClef,
         globalKeyFifths,
@@ -618,6 +633,7 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
         hairpins,
         hairpinsVoice2,
         measureIndex: mi,
+        isPickupMeasure: pickupBeats !== undefined && mi === 0,
         timeSignatureStyle,
       });
       // 引き継ぐのは「小節の**末尾**時点」のクレフ。小節途中で変わった場合に

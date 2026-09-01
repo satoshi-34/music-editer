@@ -45,6 +45,7 @@ import {
   normalizeTimeSignature,
   normalizeTimeSignatureStyle,
 } from './timeSignatureUtils';
+import { normalizePickupBeats } from './pickupMeasureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
 import type { ClefType } from '../components/clefUtils';
 import {
@@ -640,6 +641,10 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     validateScoreMetadata(data.metadata) &&
     (data.keySignature === undefined || isValidKeySignature(data.keySignature)) &&
     (data.timeSignature === undefined || isValidTimeSignature(data.timeSignature)) &&
+    // 弱起の拍数（Issue #473）。範囲外・半端な値は読み込み時に正規化するので、
+    // ここでは「型が違うデータを弾く」ところまでを見る（他の省略可能項目と同じ方針）。
+    (data.pickupBeats === undefined ||
+      (typeof data.pickupBeats === 'number' && Number.isFinite(data.pickupBeats))) &&
     (data.instrumentation === undefined || validateScoreInstrumentation(data.instrumentation)) &&
     (data.notationMode === undefined || data.notationMode === 'concert' || data.notationMode === 'written') &&
     (data.titleFontId === undefined || typeof data.titleFontId === 'string') &&
@@ -731,6 +736,17 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   }
   parsedData.keySignature = normalizeKeySignature(parsedData.keySignature);
   parsedData.timeSignature = normalizeTimeSignature(parsedData.timeSignature);
+  // 弱起（Issue #473）も「省略＝弱起なし」が正なので、未指定のときは足さずに残す。
+  // 拍子ぶん以上・0 以下・半端な値は normalizePickupBeats が undefined（弱起なし）へ倒す。
+  // 正規化した拍子が確定したあとに評価する必要がある（弱起かどうかは拍子との比較で決まるため）。
+  if (parsedData.pickupBeats !== undefined) {
+    const normalizedPickup = normalizePickupBeats(parsedData.pickupBeats, parsedData.timeSignature);
+    if (normalizedPickup === undefined) {
+      delete parsedData.pickupBeats;
+    } else {
+      parsedData.pickupBeats = normalizedPickup;
+    }
+  }
   // 表示スタイルは「省略＝数字表記」が正なので、未指定のときは足さずにそのまま残す。
   // 値が入っているときだけ丸めることで、旧データを保存し直しても余計な項目が増えない。
   if (parsedData.timeSignatureStyle !== undefined) {
@@ -1826,7 +1842,8 @@ export function createSavedScoreData(
   timeSignatureStyle?: TimeSignatureStyle,
   pageSize?: PageSizeId,
   notationSizeMultiplier?: number,
-  pageMargins?: SavedPageMargins
+  pageMargins?: SavedPageMargins,
+  pickupBeats?: number
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -1835,6 +1852,9 @@ export function createSavedScoreData(
     scoreType,
     keySignature,
     timeSignature: normalizeTimeSignature(timeSignature),
+    // 弱起なし（既定）のときは項目自体を持たせない。旧データとの差分を増やさないため
+    // （timeSignatureStyle・pageSize と同じ方針）。
+    pickupBeats: normalizePickupBeats(pickupBeats, normalizeTimeSignature(timeSignature)),
     // 既定（数字表記）のときは項目自体を持たせない。旧データとの差分を増やさないため。
     timeSignatureStyle:
       timeSignatureStyle && normalizeTimeSignatureStyle(timeSignatureStyle) === 'symbol'
