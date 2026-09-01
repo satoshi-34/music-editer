@@ -36,3 +36,28 @@
   - `src/components/MoonlightRegressionRender.test.tsx`（描画）
   - `src/utils/moonlightRegressionPlayback.test.ts`（再生スケジュール）
   - 上の SHA-256 はテストで照合しているため、**このファイルを1バイトでも変えるとテストが落ちる**。意図的に更新する場合は README の SHA-256 とテスト内の `EXPECTED_FIXTURE_SHA256` を同時に直すこと（詳細は `.claude/specs/moonlight-regression/design.md`）
+
+## moonlight-bars1-9-grandstaff.musicxml
+
+上の `moonlight-bars1-9.score.json` を **MusicXML へ書き出し、外部ソフトの書き出し風へ
+組み直した**もの（Issue #526 の再現データ）。中身の音楽は同じなので、「同じ譜面を
+アプリで直接入力した場合の段割り」と読み込んだ結果を突き合わせられる。
+
+外部ソフト風に寄せてあるのは次の3点:
+
+1. **大譜表を1パート2五線で書く**（`<staves>2</staves>` ＋ `<backup>` ＋ `<staff>`）。
+   アプリの書き出しは右手・左手を別パートにするため、読込側の五線分割（#419）を通る形にした
+2. **変更が無くても毎小節 `<attributes>`（`<divisions>`・`<key>`・`<time>`・`<clef>`）を書き直す**。
+   これが #526 の再現条件で、修正前は2小節目以降が全部「調号変更・拍子変更のある小節」として
+   取り込まれ、段割りの計画が小節幅を水増ししていた
+3. **`<defaults><scaling>` を持つ**（五線高 7mm ＝ 浄書標準・アプリの150%相当）。実曲の書き出しは
+   ほぼ必ずこれを持っており、読込直後の「音符の大きさ」が決まる（#477）
+
+`<divisions>48` で 8分3連が `duration=16` の整数になり、各小節の拍合計は厳密に 192（4拍）。
+**拍が正確でも段割りが壊れる**という #526 の前提をそのまま満たしている。
+
+### 使い方
+
+- 手動: 「ファイル」タブ →「開く」→「MusicXML (.mxl)」で読み込む
+- 自動化: `src/utils/musicXmlRepeatedAttributesLayout.test.ts`（読込結果と段割りの純関数検証）と
+  `src/components/ScorePageMusicXmlRepeatedAttributes.test.tsx`（読込→描画の配線）で毎回検証している

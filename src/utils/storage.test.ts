@@ -206,6 +206,61 @@ describe('Storage Foundation Tests', () => {
     });
   });
 
+  describe('作品ごとの全体テンポの保存互換（Issue #543）', () => {
+    // 位置引数が長いので、テンポだけを差し替えられる作りにしておく
+    const makeTempoData = (globalBpm?: number) => createSavedScoreData(
+      { title: 'Tempo Test', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+      1,
+      4,
+      'single',
+      'C',
+      [4, 4],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      globalBpm,
+    );
+
+    it('全体テンポを保存して読み戻せる（保存往復）', () => {
+      const scoreData = makeTempoData(112);
+      expect(scoreData.globalBpm).toBe(112);
+      expect(saveScoreData(scoreData).success).toBe(true);
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.globalBpm).toBe(112);
+    });
+
+    it('既定値（120）でも省略せず明示的に保存する', () => {
+      // 省略すると読込側の既定（アプリ全体設定へ従う）と食い違い、
+      // 「全体設定が 40 の環境で 120 の作品を開くと 40 になる」穴が開く（#477 round1 P1 と同じ）
+      expect(makeTempoData(120).globalBpm).toBe(120);
+    });
+
+    it('範囲外・壊れた値は正規化される（端へ寄せる／未保存扱い）', () => {
+      expect(makeTempoData(1000).globalBpm).toBe(240);
+      expect(makeTempoData(0).globalBpm).toBeUndefined();
+      expect(makeTempoData(NaN).globalBpm).toBeUndefined();
+    });
+
+    it('テンポ無しの旧データも従来どおり有効（既定値互換）', () => {
+      const scoreData = makeTempoData(undefined);
+      expect(scoreData.globalBpm).toBeUndefined();
+      expect(validateSavedScoreData(scoreData)).toBe(true);
+      // 数値以外の globalBpm は弾く（手書き JSON の取り込み対策）
+      expect(validateSavedScoreData({ ...scoreData, globalBpm: '112' })).toBe(false);
+    });
+  });
+
   describe('タイトルの書体の保存互換（Issue #342）', () => {
     it('titleFontId を保存して読み戻せる（保存往復）', () => {
       const scoreData = createSavedScoreData(
