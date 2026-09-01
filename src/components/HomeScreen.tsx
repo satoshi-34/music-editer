@@ -1,14 +1,14 @@
 // src/components/HomeScreen.tsx
 // ホーム画面（Issue #500、レイアウトは #512 → #528 で「新規＋最近使ったファイル」中心へ再構成）。
 // 中央は「新しく作る（譜種カード＋ファイルを開く）」と「最近使ったファイル」の2つのカードグリッドで、
-// 「開く（種類別）」「設定」は従来どおり下段と左レールから辿れる。
+// 「開く（種類別）」「設定」は左レールのフライアウトから辿る（中央には置かない）。
 // 設計の正本: .claude/specs/home-screen/design.md
 //
 // この画面は表示専用（プレゼンテーショナル）にしてある。実際の処理（作品の切替・
 // ファイルを開く・設定タブを開く）はすべて譜面画面（ScorePage）側の既存処理を
 // 呼び出す形にして、同じ機能を2か所へ書かないようにしている。
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ScoreType, WorkSummary } from '../types/storage';
 import { SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
 import { formatWorkTitle, formatWorkUpdatedAt } from '../utils/workDisplay';
@@ -179,6 +179,17 @@ export default function HomeScreen({
   // レールのフライアウト（開く/設定）。中央からセクションを撤去したぶんの受け皿で、
   // 一度にどちらか1つだけ開く（運用者QA 2026-09-02）
   const [railFlyout, setRailFlyout] = useState<'open' | 'settings' | null>(null);
+  const openToggleRef = useRef<HTMLButtonElement>(null);
+  const settingsToggleRef = useRef<HTMLButtonElement>(null);
+  /**
+   * フライアウトを閉じてトグルへフォーカスを戻す（round1 P2）。
+   * 実行ボタン自身が DOM から消えるため、戻さないとフォーカスが body へ落ちて
+   * キーボード利用者が操作位置を見失う（失敗してホームに留まる経路で顕著）
+   */
+  const closeRailFlyout = (which: 'open' | 'settings') => {
+    setRailFlyout(null);
+    (which === 'open' ? openToggleRef : settingsToggleRef).current?.focus();
+  };
 
   return (
     <div className="home-screen" role="main" aria-label="ホーム" aria-busy={busy} data-testid="home-screen">
@@ -201,7 +212,9 @@ export default function HomeScreen({
               type="button"
               className={`home-rail-link home-rail-button${railFlyout === 'open' ? ' is-active' : ''}`}
               aria-expanded={railFlyout === 'open'}
+              aria-controls="home-rail-flyout-open"
               data-testid="home-rail-open"
+              ref={openToggleRef}
               onClick={() => setRailFlyout(prev => (prev === 'open' ? null : 'open'))}
             >
               <span className="home-rail-icon" aria-hidden="true">📂</span>
@@ -211,7 +224,9 @@ export default function HomeScreen({
               type="button"
               className={`home-rail-link home-rail-button${railFlyout === 'settings' ? ' is-active' : ''}`}
               aria-expanded={railFlyout === 'settings'}
+              aria-controls="home-rail-flyout-settings"
               data-testid="home-rail-settings"
+              ref={settingsToggleRef}
               onClick={() => setRailFlyout(prev => (prev === 'settings' ? null : 'settings'))}
             >
               <span className="home-rail-icon" aria-hidden="true">⚙</span>
@@ -219,14 +234,20 @@ export default function HomeScreen({
             </button>
           </nav>
           {railFlyout === 'open' && (
-            <div className="home-rail-flyout" role="group" aria-label="ファイルを開く">
+            <div
+              id="home-rail-flyout-open"
+              className="home-rail-flyout"
+              role="group"
+              aria-label="ファイルを開く"
+              onKeyDown={(e) => { if (e.key === 'Escape') closeRailFlyout('open'); }}
+            >
               {openButtons.map(button => (
                 <button
                   key={button.kind}
                   type="button"
                   disabled={busy}
                   className="home-secondary-button"
-                  onClick={() => { setRailFlyout(null); onOpen(button.kind); }}
+                  onClick={() => { closeRailFlyout('open'); onOpen(button.kind); }}
                   title={button.description}
                   data-testid={`home-open-${button.kind}`}
                 >
@@ -236,7 +257,13 @@ export default function HomeScreen({
             </div>
           )}
           {railFlyout === 'settings' && (
-            <div className="home-rail-flyout" role="group" aria-label="設定">
+            <div
+              id="home-rail-flyout-settings"
+              className="home-rail-flyout"
+              role="group"
+              aria-label="設定"
+              onKeyDown={(e) => { if (e.key === 'Escape') closeRailFlyout('settings'); }}
+            >
               {SETTINGS_TABS.map(entry => {
                 const label = TOOLBAR_TAB_BUTTONS.find(tab => tab.id === entry.tab)?.label ?? entry.tab;
                 return (
@@ -245,7 +272,7 @@ export default function HomeScreen({
                     type="button"
                     disabled={busy}
                     className="home-secondary-button"
-                    onClick={() => { setRailFlyout(null); onOpenSettings(entry.tab); }}
+                    onClick={() => { closeRailFlyout('settings'); onOpenSettings(entry.tab); }}
                     title={entry.description}
                     data-testid={`home-settings-${entry.tab}`}
                   >
@@ -295,7 +322,7 @@ export default function HomeScreen({
                 </button>
               ))}
               {/* 「開く」は使用頻度が高いので中央にも置く（Issue #528・運用者の指示）。
-                  下段の種類別「ファイルを開く」と併存させ、こちらは既定の .score.json を開く
+                  レールのフライアウト（種類別）と役割分担し、こちらは既定の .score.json を開く
                   （下段が使えない＝ファイル導線がひとつも無いときは、このカードも出さない） */}
               {openButtons.length > 0 && (
                 <button
