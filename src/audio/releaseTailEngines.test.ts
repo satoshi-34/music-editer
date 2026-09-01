@@ -270,7 +270,7 @@ describe('SoundFont のリリースの尻尾（Issue #525）', () => {
     expect(internals.playerCache.size).toBe(0);
   });
 
-  it('player 作成中に stopAll が走ったら旧世代を捨てて作り直す（round3 P1）', async () => {
+  it('player 作成中に stopAll が走ったら、その読み込みを待つ再生要求ごと中断する（round3/4 P1）', async () => {
     const engine = new SoundFontEngine();
     const internals = engine as unknown as {
       context: unknown;

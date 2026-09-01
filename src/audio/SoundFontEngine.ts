@@ -133,10 +133,11 @@ export class SoundFontEngine implements PlaybackEngine {
   private readonly playerCache = new Map<string, SoundFontPlayer>();
 
   /**
-   * 出力経路の世代番号（#525 round3 P1）。stopAll のたびに進める。
+   * 出力経路の世代番号（#525 round3/4 P1）。stopAll のたびに進める。
    * 非同期の player 作成（module.instrument）が完了したとき、開始時と世代が
-   * 違っていたら「旧・切断済みマスターへ配線された player」なのでキャッシュせず、
-   * 新しい世代で作り直す。これが無いと停止をまたいだ読み込みが無音 player を残す。
+   * 違っていたら「旧・切断済みマスターへ配線された player」なので停止・破棄し、
+   * **その読み込みを待っていた再生要求ごと中断する**（SoundFontLoadAbortedError）。
+   * 次の再生への備えは stopAll 側の先読み（新世代の別要求）が担う。
    */
   private outputGeneration = 0;
 
