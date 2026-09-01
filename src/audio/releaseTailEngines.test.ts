@@ -157,6 +157,43 @@ describe('内蔵音源（SimpleAudioEngine）のリリースの尻尾（Issue #5
     expect(expCalls.some(([value, time]) => value === 0.0001 && Math.abs(time - (startTime + whole + tail)) < 1e-6)).toBe(true);
   });
 
+  it('64分音符でもオートメーション点が時刻順に並ぶ（round2 P2: 終端後に音量が上がらない）', async () => {
+    const engine = new SimpleAudioEngine();
+    await engine.initialize();
+    createdOscillators.length = 0;
+    createdGains.length = 0;
+    engine.setSoundProfile(profileWithRelease(1));
+    engine.setInstrument(InstrumentType.STRINGS); // attack が長い音色
+    const startTime = 5;
+    const sixtyFourth = 0.0156; // 240BPM の 64分音符相当
+    await simpleInternals(engine).playNoteAtTime(440, sixtyFourth, startTime, 0.5);
+
+    const noteEnd = startTime + sixtyFourth;
+    const times = createdGains.flatMap((node) => [
+      ...node.gain.setValueAtTime.mock.calls,
+      ...node.gain.linearRampToValueAtTime.mock.calls,
+      ...node.gain.exponentialRampToValueAtTime.mock.calls,
+    ].map((call) => call[1] as number)).filter((t) => t >= startTime);
+    // 音価終端より後ろにあるのは尻尾の終端だけ（attack/decay が終端を跨がない）
+    const afterEnd = times.filter((t) => t > noteEnd + 1e-9);
+    expect(afterEnd.length).toBe(1);
+    expect(Math.max(...times.filter((t) => t <= noteEnd + 1e-9))).toBeLessThanOrEqual(noteEnd + 1e-9);
+  });
+
+  it('Safari 簡易経路は登録だけで配線を増やさない（round2 P1: 二重配線の検出）', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Macintosh) AppleWebKit/605 Version/17 Safari/605' });
+    const engine = new SimpleAudioEngine();
+    await engine.initialize();
+    createdOscillators.length = 0;
+    createdGains.length = 0;
+    engine.setSoundProfile(profileWithRelease(0.5));
+    await simpleInternals(engine).playNoteAtTime(440, 4, 5, 0.5);
+
+    // 簡易経路は oscillator→gainNode の直結1本だけ（層ゲインを作らない）。
+    // registerOscillators を経由すると connect が2回（並列加算）になる
+    expect(createdOscillators[0].connect.mock.calls.length).toBe(1);
+  });
+
   it('stopAll は Safari 簡易経路の音（予約済み含む）も止める（round1 P1）', async () => {
     vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Macintosh) AppleWebKit/605 Version/17 Safari/605' });
     const engine = new SimpleAudioEngine();
@@ -209,29 +246,28 @@ describe('SoundFont のリリースの尻尾（Issue #525）', () => {
     expect(options.release).toBeGreaterThanOrEqual(MIN_RELEASE_TAIL_SECONDS);
   });
 
-  it('stopAll はマスターゲインで尻尾ごと即時消音する（round1 P1）', () => {
-    const masterGain = {
-      gain: {
-        value: 0.8,
-        cancelScheduledValues: vi.fn(),
-        setValueAtTime: vi.fn(),
-        linearRampToValueAtTime: vi.fn(),
-      },
-      connect: vi.fn(),
-    };
+  it('stopAll は出力経路を世代交代し、旧音の尻尾が後から漏れない（round1/2 P1）', () => {
+    const masterGain = { gain: { value: 0.8 }, connect: vi.fn(), disconnect: vi.fn() };
+    const oldPlayer = { stop: vi.fn(), connect: vi.fn() };
     const engine = new SoundFontEngine();
-    const internals = engine as unknown as { context: unknown; masterGainNode: unknown };
+    const internals = engine as unknown as {
+      context: unknown;
+      masterGainNode: unknown;
+      playerCache: Map<string, unknown>;
+    };
     internals.context = { currentTime: 10 };
     internals.masterGainNode = masterGain;
+    internals.playerCache.set('k', oldPlayer);
 
     engine.stopAll();
 
-    // 尻尾ごと即時（0.03秒）でほぼゼロへ、その後に音量を元へ戻して次の再生へ備える
-    expect(masterGain.gain.cancelScheduledValues).toHaveBeenCalledWith(10);
-    expect(masterGain.gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.0001, 10.03);
-    const restoreCall = masterGain.gain.setValueAtTime.mock.calls.at(-1)!;
-    expect(restoreCall[1]).toBeCloseTo(10.08, 5);
-    expect(restoreCall[0]).toBeGreaterThan(0);
+    // 旧マスターは destination から切り離され（尻尾は行き場を失う）、
+    // 旧マスターへ配線済みの player キャッシュも捨てられる。
+    // ゲインを戻す方式（0.08秒後に復帰）だと戻した瞬間に旧音の尻尾が再び聞こえる
+    expect(oldPlayer.stop).toHaveBeenCalled();
+    expect(masterGain.disconnect).toHaveBeenCalled();
+    expect(internals.masterGainNode).toBeNull();
+    expect(internals.playerCache.size).toBe(0);
   });
 
   it('余韻スライダーで尻尾の長さが変わる', () => {

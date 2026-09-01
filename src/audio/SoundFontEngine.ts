@@ -298,22 +298,21 @@ export class SoundFontEngine implements PlaybackEngine {
         console.warn('[SoundFontEngine] stopAll中の停止エラーを無視します:', error);
       }
     });
-    // sample-player の stop はリリース（尻尾）を鳴らし切ってから止まるため、
-    // #525 で尻尾を 0.3〜0.6 秒へ伸ばした結果、停止直後の再再生と旧音の尻尾が
-    // 重なるようになる（round1 P1）。強制停止はマスターゲインで即時消音し、
-    // 少し後（尻尾が消えたあと）に音量を元へ戻して次の再生に備える
-    if (this.context && this.masterGainNode) {
-      const gain = this.masterGainNode.gain;
-      const now = this.context.currentTime;
+    // sample-player の stop はリリース（尻尾・最大0.6秒）を鳴らし切るまでソースを
+    // 止めない（round1/2 P1）。ゲインを一時的に落として戻す方式では、戻した瞬間に
+    // 旧音の尻尾が再び聞こえてしまうため、**出力経路ごと世代交代**する:
+    // 旧マスターゲインを destination から切り離し（旧音の尻尾は行き場を失って消える）、
+    // 旧マスターへ配線済みの player キャッシュも捨てる（次の再生で新しいマスターに
+    // 繋いだ player を作り直す。音源データはブラウザの HTTP キャッシュが効く）
+    if (this.masterGainNode) {
       try {
-        gain.cancelScheduledValues(now);
-        gain.setValueAtTime(gain.value, now);
-        gain.linearRampToValueAtTime(0.0001, now + 0.03);
-        gain.setValueAtTime(getMasterVolumeGain(this.soundProfile), now + 0.08);
+        this.masterGainNode.disconnect();
       } catch (error) {
-        console.warn('[SoundFontEngine] stopAll中の消音エラーを無視します:', error);
+        console.warn('[SoundFontEngine] stopAll中の切断エラーを無視します:', error);
       }
+      this.masterGainNode = null;
     }
+    this.playerCache.clear();
     console.log('[SoundFontEngine] すべての再生を停止しました');
   }
 

@@ -177,12 +177,15 @@ export class SimpleAudioEngine implements PlaybackEngine {
       const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget);
       const adjustedReleaseFloor = this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor);
       const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
-      gainNode.gain.setValueAtTime(0, context.currentTime);
-      gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, context.currentTime + adjustedAttack);
-      gainNode.gain.exponentialRampToValueAtTime(
-        adjustedDecayTarget,
-        context.currentTime + Math.max(adjustedAttack + 0.01, duration * 0.3)
+      // 短音でも「attack→decay→音価終端→尻尾」の時刻順を守る（round2 P2）
+      const envelope = this.clampEnvelopeTimes(
+        adjustedAttack,
+        Math.max(adjustedAttack + 0.01, duration * 0.3),
+        duration,
       );
+      gainNode.gain.setValueAtTime(0, context.currentTime);
+      gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, context.currentTime + envelope.attack);
+      gainNode.gain.exponentialRampToValueAtTime(adjustedDecayTarget, context.currentTime + envelope.decay);
       // 音価の終端の明示点 → 尻尾でほぼゼロへ（時刻指定経路と同じ形・round1 P2）
       gainNode.gain.exponentialRampToValueAtTime(
         Math.max(0.0001, adjustedReleaseFloor),
@@ -572,12 +575,15 @@ export class SimpleAudioEngine implements PlaybackEngine {
         this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor) * velocity
       );
       const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
-      gainNode.gain.setValueAtTime(0, startTime);
-      gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, startTime + adjustedAttack);
-      gainNode.gain.exponentialRampToValueAtTime(
-        adjustedDecayTarget,
-        startTime + Math.max(adjustedAttack + 0.01, duration * 0.3)
+      // 短音でも「attack→decay→音価終端→尻尾」の時刻順を守る（round2 P2）
+      const envelope = this.clampEnvelopeTimes(
+        adjustedAttack,
+        Math.max(adjustedAttack + 0.01, duration * 0.3),
+        duration,
       );
+      gainNode.gain.setValueAtTime(0, startTime);
+      gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, startTime + envelope.attack);
+      gainNode.gain.exponentialRampToValueAtTime(adjustedDecayTarget, startTime + envelope.decay);
       // 音価の終端に明示のオートメーション点を置き、そこから尻尾区間でほぼゼロへ減衰させる
       //（round1 P2: 終端の点が無いと「音価の後のリリース」ではなく音本体の勾配が緩むだけになる）
       gainNode.gain.exponentialRampToValueAtTime(
@@ -1081,6 +1087,29 @@ export class SimpleAudioEngine implements PlaybackEngine {
     });
   }
 
+  /**
+   * 台帳への登録だけを行う（配線はしない）。Safari 簡易経路用（#525 round2 P1）:
+   * registerOscillators は層ゲインの配線まで行うため、配線済みの簡易経路から呼ぶと
+   * 二重配線（並列加算で音量が変わる+Safari 対策で避けた GainNode の復活）になる。
+   */
+  private trackOscillatorsForStop(oscillators: OscillatorNode[], gainNode: GainNode): string {
+    const oscillatorId = `osc-${this.oscillatorCounter++}`;
+    this.oscillators.set(oscillatorId, { oscillators, gainNode });
+    return oscillatorId;
+  }
+
+  /**
+   * エンベロープの attack / decay の時刻を音価の終端までに収める（#525 round2 P2）。
+   * Web Audio のオートメーション点は時刻順に評価されるため、64分音符などの短音で
+   * attack/decay が音価終端より後ろへ出ると「終端→尻尾」の順序が壊れ、
+   * 終端の後に音量が上がってから尻尾へ入ってしまう。
+   */
+  private clampEnvelopeTimes(attackSeconds: number, decaySeconds: number, duration: number): { attack: number; decay: number } {
+    const attack = Math.min(attackSeconds, Math.max(0.001, duration * 0.5));
+    const decay = Math.min(Math.max(decaySeconds, attack + 0.001), duration);
+    return { attack, decay };
+  }
+
   private registerOscillators(
     oscillators: OscillatorNode[],
     gainNode: GainNode,
@@ -1174,23 +1203,30 @@ export class SimpleAudioEngine implements PlaybackEngine {
     const adjustedAttack = this.getAdjustedAttack(instrumentConfig.attack);
     const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain);
     const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget);
+    const adjustedReleaseFloor = Math.max(0.0001, this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor));
     // 簡易経路でも余韻の長さは通常経路と同じにする（Issue #525。
     // ここだけ短いと、Safari だけ長い音がプツンと切れて聞こえる）
     const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
+    // 短音でも「attack→decay→音価終端→尻尾」の時刻順を守る（round2 P2）
+    const envelope = this.clampEnvelopeTimes(
+      Math.max(0.005, adjustedAttack),
+      Math.max(0.08, duration * 0.35),
+      duration,
+    );
 
     // Safari では複雑なノード構成より、単純な直結のほうが安定しやすい。
     // その代わり音色差は少し薄くなるが、まず「鳴る」ことを優先する。
     gainNode.gain.setValueAtTime(0.0001, startTime);
     gainNode.gain.linearRampToValueAtTime(
       Math.max(0.12, Math.min(adjustedPeakGain, 0.25)),
-      startTime + Math.max(0.005, adjustedAttack)
+      startTime + envelope.attack
     );
     gainNode.gain.linearRampToValueAtTime(
       Math.max(0.02, adjustedDecayTarget),
-      startTime + Math.max(0.08, duration * 0.35)
+      startTime + envelope.decay
     );
-    // 音価の終端の明示点 → 尻尾でほぼゼロへ（通常経路と同じ形）
-    gainNode.gain.linearRampToValueAtTime(0.02, startTime + duration);
+    // 音価の終端の明示点（音色ごとの releaseFloor・round2 P2）→ 尻尾でほぼゼロへ
+    gainNode.gain.linearRampToValueAtTime(adjustedReleaseFloor, startTime + duration);
     gainNode.gain.linearRampToValueAtTime(
       0.0001,
       startTime + duration + adjustedTailSeconds
@@ -1198,9 +1234,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
     oscillator.connect(gainNode);
     gainNode.connect(this.getOutputNode(context));
-    // stopAll で尻尾ごと止められるよう、簡易経路の音も通常経路と同じ台帳に登録する
-    //（round1 P1: 未登録だと停止後も予約済みの音と 0.3〜0.6 秒の尻尾が鳴り続ける）
-    const safariOscillatorId = this.registerOscillators([oscillator], gainNode, instrumentConfig, startTime);
+    // stopAll で尻尾ごと止められるよう、簡易経路の音も台帳に登録する（round1 P1）。
+    // 配線は済んでいるので登録だけ行う（round2 P1: registerOscillators だと二重配線になる）
+    const safariOscillatorId = this.trackOscillatorsForStop([oscillator], gainNode);
     oscillator.start(startTime);
     oscillator.stop(startTime + duration + adjustedTailSeconds);
     oscillator.addEventListener('ended', () => {
@@ -1250,7 +1286,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
    * 全音源共通の下限（`releaseTail.ts`）の**長い方**を採る。
    * 下限を入れるのは、ピアノを含む多くの音色の `tailSeconds` が 0.05 秒前後しかなく、
    * 2分・全音符が音価ちょうどで切られて硬く聞こえていたため（運用者の検聴・2026-08-31）。
-   * 個性として長い尻尾を持つ音色は、その長さのまま維持される。
+   * 個性として長い尻尾を持つ音色は、**長い音符では**その長さのまま維持される。
+   * 短い音符では音色固有の尻尾も max(0.12, 音符長) を上限に抑える（round1/2 P2）。
    *
    * 伸びるのは「鳴り終わりの時刻」だけで、開始時刻・次の音までの間隔は一切変えない。
    */
