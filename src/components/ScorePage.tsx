@@ -33,7 +33,7 @@ import { useUiVariant } from '../hooks/useUiVariant';
 // タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
 // ツールバーのタブ行と A1 文脈バーで同じ言葉を出すため、両方がこの定数を参照する。
 import { PIANO_LAYER_OPTIONS, SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
-import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
+import { checkAudioOutputHealth, formatAudioHealthReport, describeAudioOutputDestination } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useDevicePixelRatio } from './useDevicePixelRatio';
 import { computeScreenStrokeFloorMultiplier } from '../utils/engravingDefaults';
@@ -48,6 +48,7 @@ import type { TitleFontWeight } from '../utils/titleFontOptions';
 import HelpPanel from './HelpPanel';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXmlWithDefaults } from '../utils/musicXmlImport';
+import { SoundFontLoadAbortedError } from '../audio/SoundFontEngine';
 import { downloadMidi } from '../utils/midiExport';
 import { useTempoStorage } from '../hooks/useTempoStorage';
 import type { PlaybackEngine } from '../audio/PlaybackEngine';
@@ -211,6 +212,8 @@ import {
   requestScoreSelectionClear,
   type ScoreActiveVoiceChangeDetail,
   type ScoreEditNoticeDetail,
+  describeAudioEngineRestarted,
+  describeAudioStillSilent,
 } from '../utils/scoreEditorNotices';
 import {
   claimStorageLocationNotice,
@@ -1060,6 +1063,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const preferredEngine = await prepareAudioEngine();
       return await action(preferredEngine);
     } catch (error) {
+      // 停止（stopAll）による読み込み中断は「失敗」ではない（#525 round5 P1）。
+      // フォールバックすると、停止したはずの再生が内蔵音源で鳴り始めてしまう。
+      // ユーザーの停止意図どおり、静かに終わる
+      if (error instanceof SoundFontLoadAbortedError) {
+        console.info('[ScorePage] 停止により再生要求を中断しました');
+        return undefined as T;
+      }
       // 実ブラウザでは、SoundFont 失敗だけでなく
       // 既存の built-in AudioContext が不安定化して無音になることもある。
       // そのため「一度失敗したら、新しい built-in エンジンで再試行する」
@@ -1161,6 +1171,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       console.info('[ScorePage] 出力ヘルスチェック:', formatAudioHealthReport(report));
 
       if (report.verdict === 'healthy') {
+        // 判定は正常なのに「聞こえない」場合、残る原因は OS 側の出力先しかない（Issue #521）。
+        // 画面に常時表示を足さない方針なので、次の一手は診断ログにだけ残す
+        console.info('[ScorePage] 出力先:', describeAudioOutputDestination(report));
         setAudioHealthNotice(null);
         return;
       }
@@ -1177,7 +1190,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       if (now - lastSilentRecoveryAtRef.current < SILENT_RECOVERY_COOLDOWN_MS) {
         // 直前に自動復旧したばかりで再発しているなら、作り直しを繰り返しても直らない。
         // ループを避けて手動の復旧手段へ誘導する。
-        setAudioHealthNotice('音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。');
+        setAudioHealthNotice(describeAudioStillSilent(describeAudioOutputDestination(report)));
         return;
       }
       lastSilentRecoveryAtRef.current = now;
@@ -1189,7 +1202,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 音源方式などのユーザー設定は維持したまま、エンジン（AudioContext）だけ作り直す。
       // 設定ごと既定値に戻したいときは従来どおり「音声復旧」ボタンを使う。
       recreateAudioEngine();
-      setAudioHealthNotice('無音状態を検知したため、音声エンジンを自動で再起動しました。もう一度再生をお試しください。');
+      setAudioHealthNotice(describeAudioEngineRestarted(describeAudioOutputDestination(report)));
     } catch (error) {
       // 検知自体の失敗で再生機能を巻き込まない
       console.warn('[ScorePage] 無音ヘルスチェックに失敗しました（無視します）:', error);
@@ -4861,13 +4874,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // ときは run が呼ばれないので、従来どおり何も起きない
     requestExportFileName('musicxml', (fileNameBase) => {
       try {
-        downloadMusicXml(buildCurrentScoreData(), fileNameBase);
+        // 全体テンポ（♩=N）は保存データではなく再生設定側にあるため、書き出しへ明示的に渡す。
+        // 渡さないと先頭小節にテンポが書かれず、読み直したときに既定の 120 へ戻る（Issue #518）
+        downloadMusicXml(buildCurrentScoreData(), fileNameBase, { globalBpm: tempoSettings.bpm });
         showExportStatus('success', '✓ MusicXMLを書き出しました');
       } catch (error) {
         showExportStatus('error', `⚠ MusicXMLを書き出せませんでした: ${describeExportError(error)}`);
       }
     });
-  }, [buildCurrentScoreData, requestExportFileName, showExportStatus]);
+  }, [buildCurrentScoreData, requestExportFileName, showExportStatus, tempoSettings.bpm]);
 
   const handleExportMidi = useCallback(() => {
     requestExportFileName('midi', (fileNameBase) => {
@@ -4942,7 +4957,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       } else {
         xml = new TextDecoder('utf-8').decode(bytes);
       }
-      const { score: loaded, defaults: importedDefaults } = parseMusicXmlWithDefaults(xml);
+      const { score: loaded, defaults: importedDefaults, globalBpm: importedGlobalBpm } = parseMusicXmlWithDefaults(xml);
+      // 先頭小節の <sound tempo>（全体テンポ）は再生パネルへ反映する（#518）。
+      // これが無いと往復で全体テンポが既定 120 に戻る（QA で確定した症状）
+      if (importedGlobalBpm != null) setBPM(importedGlobalBpm);
       // applyLoadedScoreData と同等のロジックで画面に反映する
       // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
       setPartExtractionId(null);
@@ -5076,7 +5094,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-  }, [setTimeSignature, measuresPerSystem, applySavedLayoutAttributes, instrumentLabelAreaWidth,
+  }, [setTimeSignature, setBPM, measuresPerSystem, applySavedLayoutAttributes, instrumentLabelAreaWidth,
     notationSizeMultiplier, pageMarginSideMm, pageMarginTopMm, pageMarginBottomMm]);
 
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
