@@ -570,6 +570,14 @@ export function describeImportedPageSizeRounded(label: string): string {
   return `読み込んだファイルの判型に対応するサイズが無いため、最も近い ${label} で開きました（レイアウトタブで変更できます）`;
 }
 
+/**
+ * MusicXML 読み込みで、対応表に無い強弱記号を取り込めなかったときの通知（Issue #552）。
+ * 近い記号へ勝手に寄せると譜面が黙って書き換わるため、取り込まずに件数だけ知らせる（#318）。
+ */
+export function describeImportedUnsupportedDynamics(count: number): string {
+  return `未対応の強弱記号 ${count} 件は取り込めませんでした（pp・p・mp・mf・f・ff に対応しています。読み込み自体は成功しています）`;
+}
+
 export function describeSliceCopyUnavailable(): string {
   return '選択範囲がこのレイヤーの音符の切れ目に合っていません（レイヤーを替えた場合は、範囲を選び直してからコピーしてください）';
 }

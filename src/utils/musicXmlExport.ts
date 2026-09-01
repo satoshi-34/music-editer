@@ -393,8 +393,11 @@ function measureToXml(
 ): string {
   const lines: string[] = [];
 
-  // attributes（最初の小節、または拍子・調号変更時に出力）
-  const timeSig = measure.timeSignature ?? options.globalTimeSig;
+  // attributes（最初の小節、または拍子・調号変更時に出力）。
+  // 未指定の小節は**直前の実効拍子を引き継ぐ**（#526 round1 P1: 読み込みが「変わった
+  // 小節だけ記録する」正規化をするため、グローバル拍子へ戻すと 4/4→3/4→(未指定) の
+  // 往復で3小節目に誤った 4/4 が生えて途中拍子変更が1小節で終わってしまう）
+  const timeSig = measure.timeSignature ?? options.prevTimeSig ?? options.globalTimeSig;
   const keyFifths = options.effectiveKeyFifths;
   const timeSigChanged = options.prevTimeSig &&
     (timeSig[0] !== options.prevTimeSig[0] || timeSig[1] !== options.prevTimeSig[1]);
@@ -505,6 +508,11 @@ function measureToXml(
       // 主声部と同じく音符の直前に <words>（+目安BPMの <sound>）を出す（Codex round1 P2）
       const tempoDirExtra = tempoMarkingDirectionXml(ev, options.staff);
       if (tempoDirExtra) lines.push(tempoDirExtra);
+      // 文字の強弱記号も追加声部の音符に付けられるので、主声部と同じ並び
+      // （標語のあと・音符の直前）で出す。ここを出していないと、声部2に置いた p が
+      // 書き出しの時点で消え、読み込みを直しても往復で戻らない（#552）
+      const dynDirExtra = dynamicsDirectionXml(ev, options.staff);
+      if (dynDirExtra) lines.push(dynDirExtra);
       if (voiceNumber === 2) {
         options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
           lines.push(wedgeDirectionXml(wedgeType, options.staff));
@@ -624,7 +632,8 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
       // 先頭時点の値を引き継ぐと、次の小節の頭で同じクレフをもう一度出力してしまう
       // （読み込む側では冒頭にクレフが二重に出る）。
       prevClef = resolveClefAtMeasureEnd(getPrimaryVoiceEvents(m), effectiveClef);
-      prevTimeSig = m.timeSignature ?? globalTimeSig;
+      // 実効拍子を引き継ぐ（未指定小節でグローバルへ戻さない・調号の effective と同じ考え方）
+      prevTimeSig = m.timeSignature ?? prevTimeSig ?? globalTimeSig;
       prevKeyFifths = effectiveKeyFifths;
       return xml;
     });
