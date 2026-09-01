@@ -392,6 +392,18 @@ const ARC_HIT_MIN_LEN_SCREEN_PX = 28;
 // 譜面の拡大縮小に合わせて大きさが変わる。
 const ARC_APEX_HANDLE_SIZE = 9;
 
+// フェルマータの形（Issue #527）。単位は五線の描画座標で、記号ごとの scale が掛かる。
+// 外側の弧は従来の見た目（11 × 9 の楕円）をそのまま引き継ぎ、記号が占める大きさを変えない。
+// 内側の弧を「横は外側とほぼ同じ・縦だけ浅く」すると、頂点が太く両端が細い彫版標準の
+// 形になる（頂点 9 - 5.2 = 3.8 に対し、両端は 11 - 9.6 = 1.4 で約1/2.7の細さ）。
+const FERMATA_ARC_OUTER_RX = 11;
+const FERMATA_ARC_OUTER_RY = 9;
+const FERMATA_ARC_INNER_RX = 9.6;
+const FERMATA_ARC_INNER_RY = 5.2;
+// 開口部（下側）の中央に置く点。ベースラインからの高さと半径で、
+// 内側の弧の頂点（5.2）とぶつからない位置に収まる（2.8 + 1.9 = 4.7 < 5.2）。
+const FERMATA_DOT_CENTER_Y = 2.8;
+const FERMATA_DOT_RADIUS = 1.9;
 // 記号のドラッグ移動（Issue #522）が始まるまでの遊び（画面px）。
 // これを超えるまでは「クリック（＝記号を選ぶ）」のまま扱う。押した指のわずかな震えで
 // 記号が動いて Undo 履歴が増えるのを防ぐための下限で、タイ/松葉のプレビュー開始判定
@@ -2075,21 +2087,40 @@ function drawCollectedSymbolEntries(args: {
       if (type === 'fermata') {
         // フェルマータは五線上端より上に配置する（符頭位置に依存しない）
         const baseY = Math.min(staveTopY, noteTopY) - 14 + adjust.offsetY;
-        // 半円弧（下が開いた椀形）
+        // 弧は「外側の弧と内側の弧を閉じた塗り」で描く（Issue #527）。
+        // 以前は太さ一定の細い線（stroke-width 1.6）1本だったため針金のように見えていた。
+        // 彫版標準（SMuFL の fermataAbove など）のフェルマータは、頂点がいちばん太く
+        // 両端へ向かって細くなる塗り形状なので、外側の楕円弧より「縦に薄く・横に長い」
+        // 内側の楕円弧を重ねて閉じることで、その太さの変化を作る:
+        //   ・頂点の太さ = 外Ry − 内Ry（FERMATA_ARC_OUTER_RY - FERMATA_ARC_INNER_RY）
+        //   ・両端の太さ = 外Rx − 内Rx（同上の横方向）で、頂点よりずっと細い
+        // 外側の大きさ（11 × 9）は従来のままにして、記号全体の占める大きさと
+        // 位置調整済みデータ（offsetX/offsetY/scale）の見え方を変えない。
+        const outerRx = FERMATA_ARC_OUTER_RX * s;
+        const outerRy = FERMATA_ARC_OUTER_RY * s;
+        const innerRx = FERMATA_ARC_INNER_RX * s;
+        const innerRy = FERMATA_ARC_INNER_RY * s;
         const arc = document.createElementNS(ns, 'path');
-        arc.setAttribute('d', `M ${ax - 11 * s} ${baseY} A ${11 * s} ${9 * s} 0 0 1 ${ax + 11 * s} ${baseY}`);
-        arc.setAttribute('stroke', '#1f2937');
-        arc.setAttribute('stroke-width', String(1.6 * s));
-        arc.setAttribute('stroke-linecap', 'round');
-        arc.setAttribute('fill', 'none');
+        // 外側は左端→右端へ上を通り（sweep 1）、内側は右端→左端へ上を戻る（sweep 0）。
+        // 同じ向きにすると帯にならず、8の字のようにねじれた形になる
+        arc.setAttribute('d', [
+          `M ${ax - outerRx} ${baseY}`,
+          `A ${outerRx} ${outerRy} 0 0 1 ${ax + outerRx} ${baseY}`,
+          `L ${ax + innerRx} ${baseY}`,
+          `A ${innerRx} ${innerRy} 0 0 0 ${ax - innerRx} ${baseY}`,
+          'Z',
+        ].join(' '));
+        arc.setAttribute('fill', '#1f2937');
         arc.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(arc);
         drawnElements.push(arc);
-        // 中心の点（弧の内側）
+        // 弧の開口部（下側の開いている側）の中央に置く点。
+        // 以前は弧の内側の上寄り（baseY - 4）にあり、標準の「開口部の中央・ベースライン寄り」
+        // からずれていた。内側の弧の頂点（baseY - 内Ry）とぶつからない高さに収める
         const dot = document.createElementNS(ns, 'circle');
         dot.setAttribute('cx', String(ax));
-        dot.setAttribute('cy', String(baseY - 4 * s));
-        dot.setAttribute('r', String(2.5 * s));
+        dot.setAttribute('cy', String(baseY - FERMATA_DOT_CENTER_Y * s));
+        dot.setAttribute('r', String(FERMATA_DOT_RADIUS * s));
         dot.setAttribute('fill', '#1f2937');
         dot.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(dot);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex } from './playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber } from './playbackPositionUtils';
 import type { MeasureData } from '../types/storage';
 import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
 
@@ -140,5 +140,35 @@ describe('calculateExpandedPlaybackDurationMs（展開済み列の残り時間�
     ];
     // 実小節2 + 途中の空小節1 = 3小節ぶん。末尾の空小節2つは含まない
     expect(calculateExpandedPlaybackDurationMs(expanded, 120, [4, 4])).toBe(6000);
+  });
+});
+
+describe('resolvePlaybackStartMeasureNumber（小節番号の指定・#545）', () => {
+  it('画面の小節番号（1始まり）を配列のインデックス（0始まり）へ直す', () => {
+    expect(resolvePlaybackStartMeasureNumber('1', 8)).toEqual({ ok: true, measureIndex: 0 });
+    expect(resolvePlaybackStartMeasureNumber('5', 8)).toEqual({ ok: true, measureIndex: 4 });
+    // 最終小節ちょうどは受け付ける（境界）
+    expect(resolvePlaybackStartMeasureNumber('8', 8)).toEqual({ ok: true, measureIndex: 7 });
+  });
+
+  it('前後の空白は無視する', () => {
+    expect(resolvePlaybackStartMeasureNumber('  3 ', 8)).toEqual({ ok: true, measureIndex: 2 });
+  });
+
+  it('0以下・総小節数超は範囲外として弾く', () => {
+    expect(resolvePlaybackStartMeasureNumber('0', 8)).toEqual({ ok: false, reason: 'outOfRange' });
+    expect(resolvePlaybackStartMeasureNumber('-2', 8)).toEqual({ ok: false, reason: 'outOfRange' });
+    expect(resolvePlaybackStartMeasureNumber('9', 8)).toEqual({ ok: false, reason: 'outOfRange' });
+  });
+
+  it('数字として読めない入力は弾く（parseInt の部分解釈に頼らない）', () => {
+    expect(resolvePlaybackStartMeasureNumber('', 8)).toEqual({ ok: false, reason: 'notANumber' });
+    expect(resolvePlaybackStartMeasureNumber('３', 8)).toEqual({ ok: false, reason: 'notANumber' });
+    expect(resolvePlaybackStartMeasureNumber('3abc', 8)).toEqual({ ok: false, reason: 'notANumber' });
+    expect(resolvePlaybackStartMeasureNumber('2.5', 8)).toEqual({ ok: false, reason: 'notANumber' });
+  });
+
+  it('再生できる小節がまだ無い譜面は、番号の前に「小節が無い」を理由にする', () => {
+    expect(resolvePlaybackStartMeasureNumber('1', 0)).toEqual({ ok: false, reason: 'noMeasures' });
   });
 });

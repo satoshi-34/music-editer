@@ -74,3 +74,53 @@
 - 補足: 途中テンポ変更（measure.bpm）は再生ボタン経路（playParts）では実音にも
   ハイライトにも効いていない（効くのは ScorePlayer 経路のみ）。旧計算だけが bpm を
   追跡しており、実音と食い違う見積もりだった。経路統一は #365（再生機能の拡張）の範囲
+
+## 小節番号を指定した途中再生（Issue #545・2026-09-02）
+
+### 問題
+
+途中再生は「小節を範囲選択してから再生」でしかできず、長い曲では聴きたい小節まで
+画面をスクロールして選択する手間がかかっていた（Finale のプレイバック・コントローラーは
+小節番号の入力でジャンプできる）。
+
+### 修正設計
+
+- **UI**: 「再生・音色」タブの位置表示のとなりに「小節番号」の入力欄と
+  「この小節から再生」ボタンを置く（`PlaybackControls`）。入力欄で Enter を押しても
+  同じ動作にして、入力→ボタンへマウスを動かす往復を省く
+- **実音**: 選択起点の途中再生と**同じ経路を共用**する。`handlePlay` に
+  `options.startMeasureIndex`（0 始まり）を足しただけで、展開・`findPlaybackStartExpandedIndex`・
+  slice・強弱/テンポの「絞り込み前に解決してからオフセットで引く」規則はそのまま。
+  開始位置より前のテンポ変更・速度標語・絶対強弱が引き継がれるのはこの共用の結果
+  （同じロジックの2枚目を作らない。#280 の再発防止）
+- **優先順位**: `startMeasureIndex` の指定があるときは選択起点より優先し、
+  一時停止からの `resume` 分岐にも入らない（「その小節から鳴らし直す」意味のため）
+- **判定の置き場所**: 「番号 → 小節インデックス」と範囲外の判定は
+  `resolvePlaybackStartMeasureNumber`（`utils/playbackPositionUtils.ts`）に集約し、
+  `PlaybackControls` は入力欄の**生の文字列**を親へ渡すだけにする。総小節数を知っているのは
+  ScorePage 側なので、判定を両側に置くと二重管理になる
+- **行き止まりは喋る（#318）**: 範囲外（0以下・総小節数超）・数字として読めない入力・
+  再生できる小節がまだ無い譜面の3つを理由として返し、
+  `describePlaybackStartMeasureRejected` の通知で「なぜ効かないか」「どう入れ直すか」を出す。
+  `parseInt` の部分解釈（`"3abc"` → 3）に頼らず、数字だけの入力かを正規表現で先に見る
+- **再生中の指定**: いったん `handleStop` してから頭出しし直す（音の途中への飛び込み＝
+  シークは本Issueのスコープ外。#545 仕様4）
+- **上限に使う小節数**: `contentMeasureCount`（末尾の空小節を除いた「内容のある小節数」）。
+  鳴らすものが無い末尾の空小節を指定できても意味が無いため
+
+### 既知の制限
+
+- 弱起（#473・実装中）が入ったときの表示番号（弱起=0）との一致は、#473 のマージ後に
+  `contentMeasureCount` と表示番号の対応を見直す必要がある（本PR時点では #473 未マージ）
+
+### 影響範囲
+
+- `utils/playbackPositionUtils.ts`（`resolvePlaybackStartMeasureNumber` と結果型）
+- `utils/scoreEditorNotices.ts`（`describePlaybackFromMeasureNumber` /
+  `describePlaybackStartMeasureRejected`）
+- `components/PlaybackControls.tsx`（入力欄・ボタン・`onPlayFromMeasure` / `totalMeasureCount`）
+- `components/ScorePage.tsx`（`handlePlay` の引数追加・`handlePlayFromMeasureNumber`・配線）
+- `App.css`（`.playback-start-measure` 一式）
+- テスト: `utils/playbackPositionUtils.test.ts`（解決規則）／
+  `components/ScorePagePlayFromMeasureNumber.test.tsx`（配線: エンジンへ渡る開始小節・
+  手前のテンポ引き継ぎ・範囲外は再生しない）

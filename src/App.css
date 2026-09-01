@@ -1101,6 +1101,29 @@ button.ghost.active:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+/* 小節番号を指定した途中再生（Issue #545）。位置表示のとなりに並べる */
+.playback-start-measure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #495057;
+}
+
+.playback-start-measure-label {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.playback-start-measure-input {
+  width: 64px;
+  padding: 4px 6px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: center;
+}
+
 /* レスポンシブ対応 */
 @media (max-width: 768px) {
   .toolbar {
@@ -1125,6 +1148,10 @@ button.ghost.active:hover:not(:disabled) {
   .position-display {
     justify-content: center;
     margin-left: 0;
+  }
+
+  .playback-start-measure {
+    justify-content: center;
   }
 
   .toolbar-score-controls,
