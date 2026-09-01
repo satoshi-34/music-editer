@@ -75,10 +75,11 @@ export async function resolveAudioOutputDeviceLabel(
   if (!devices || typeof devices.enumerateDevices !== 'function') return null;
   try {
     const list = await devices.enumerateDevices();
-    // ラベルが空の項目は名前として使えないので候補から外す
-    const outputs = list.filter((device) => device.kind === 'audiooutput' && !!device.label);
+    const outputs = list.filter((device) => device.kind === 'audiooutput');
     if (outputs.length === 0) return null;
-    // 既定デバイス（deviceId === 'default'）が「いま鳴っている先」に最も近い
+    // 既定デバイス（deviceId === 'default'）が「いま鳴っている先」。**先に全出力から**
+    // 既定を選び、そのラベルが空なら null にする（round1 P2: ラベルで絞ってから探すと、
+    // 既定のラベルだけ空の環境で別デバイスを「現在の出力先」と誤表示する）
     const preferred = outputs.find((device) => device.deviceId === 'default') ?? outputs[0];
     return preferred.label || null;
   } catch {
@@ -166,7 +167,9 @@ export async function checkAudioOutputHealth(
   // 出力先デバイス名は判定そのものには使わない（表示用の補助情報）。
   // 取得に失敗しても null のまま進めて、従来どおりの判定を続ける
   const resolveLabel = options.resolveOutputDeviceLabel ?? (() => resolveAudioOutputDeviceLabel());
-  const outputDeviceLabel = await resolveLabel();
+  // 補助情報の取得失敗が判定全体を巻き込まないよう、ここでも失敗を null へ閉じる
+  //（round1 P3: 差し替え関数が reject すると report が返らず診断・自動復旧ごと省略される）
+  const outputDeviceLabel = await resolveLabel().catch(() => null);
 
   if (!context) {
     // エンジンが context を公開していない場合は判定材料が無い。

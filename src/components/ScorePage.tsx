@@ -211,6 +211,8 @@ import {
   requestScoreSelectionClear,
   type ScoreActiveVoiceChangeDetail,
   type ScoreEditNoticeDetail,
+  describeAudioEngineRestarted,
+  describeAudioStillSilent,
 } from '../utils/scoreEditorNotices';
 import {
   claimStorageLocationNotice,
@@ -1180,9 +1182,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       if (now - lastSilentRecoveryAtRef.current < SILENT_RECOVERY_COOLDOWN_MS) {
         // 直前に自動復旧したばかりで再発しているなら、作り直しを繰り返しても直らない。
         // ループを避けて手動の復旧手段へ誘導する。
-        setAudioHealthNotice(
-          `音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。${describeAudioOutputDestination(report)}`
-        );
+        setAudioHealthNotice(describeAudioStillSilent(describeAudioOutputDestination(report)));
         return;
       }
       lastSilentRecoveryAtRef.current = now;
@@ -1194,9 +1194,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 音源方式などのユーザー設定は維持したまま、エンジン（AudioContext）だけ作り直す。
       // 設定ごと既定値に戻したいときは従来どおり「音声復旧」ボタンを使う。
       recreateAudioEngine();
-      setAudioHealthNotice(
-        `無音状態を検知したため、音声エンジンを自動で再起動しました。もう一度再生をお試しください。${describeAudioOutputDestination(report)}`
-      );
+      setAudioHealthNotice(describeAudioEngineRestarted(describeAudioOutputDestination(report)));
     } catch (error) {
       // 検知自体の失敗で再生機能を巻き込まない
       console.warn('[ScorePage] 無音ヘルスチェックに失敗しました（無視します）:', error);

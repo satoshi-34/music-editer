@@ -205,4 +205,23 @@ describe('出力先デバイス名（Issue #521）', () => {
     expect(describeAudioOutputDestination(withoutDevice)).toBe(AUDIO_OUTPUT_CHECK_HINT);
     expect(describeAudioOutputDestination(withoutDevice)).not.toContain('現在の出力先');
   });
+
+  it('既定デバイスのラベルだけ空なら null（別デバイスを誤表示しない・round1 P2）', async () => {
+    const devices = {
+      enumerateDevices: async () => [
+        { kind: 'audiooutput', deviceId: 'default', label: '' },
+        { kind: 'audiooutput', deviceId: 'hdmi-1', label: '外部モニター' },
+      ],
+    } as unknown as MediaDevices;
+    expect(await resolveAudioOutputDeviceLabel(devices)).toBeNull();
+  });
+
+  it('resolveOutputDeviceLabel が reject しても判定は従来どおり返る（round1 P3）', async () => {
+    const context = null;
+    const report = await checkAudioOutputHealth(context, {
+      resolveOutputDeviceLabel: () => Promise.reject(new Error('boom')),
+    });
+    expect(report.verdict).toBe('unknown');
+    expect(report.outputDeviceLabel).toBeNull();
+  });
 });

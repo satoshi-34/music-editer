@@ -787,3 +787,16 @@ export function describeNotationSizeFitSuggestion(fittedPercent: number): string
 export function describeDivisionsOverflow(): string {
   return '連符の構成が複雑すぎて MusicXML の分割数を決められません。極端に大きい連符（分母が互いに素な多数の連符の同居）を減らしてから書き出してください';
 }
+
+/**
+ * 無音検知→音声エンジン自動再起動の通知（Issue #521 で出力先の案内を末尾に追加）。
+ * destination は audioOutputHealth.describeAudioOutputDestination の結果。
+ */
+export function describeAudioEngineRestarted(destination: string): string {
+  return `無音状態を検知したため、音声エンジンを自動で再起動しました。もう一度再生をお試しください。${destination}`;
+}
+
+/** 自動再起動しても無音が続くときの通知（Issue #521 で出力先の案内を末尾に追加）。 */
+export function describeAudioStillSilent(destination: string): string {
+  return `音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。${destination}`;
+}
