@@ -181,7 +181,7 @@ import {
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature, TimeSignatureStyle } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
@@ -191,6 +191,8 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
+  describePlaybackFromMeasureNumber,
+  describePlaybackStartMeasureRejected,
   describeHomeActionBlocked,
   describeNotationSizeFitSuggestion,
   describeLegacyImportResult,
@@ -1482,13 +1484,21 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // そこで同じ編集ウィンドウを「名前（正式名・略称）だけ編集できるモード」で開く（Issue #448）。
   const isNameOnlyInstrumentationEditor = scoreType !== 'ensemble';
 
-  const handlePlay = useCallback(async () => {
+  /**
+   * 再生開始。options.startMeasureIndex を渡すと、その小節（0 始まり）から鳴らす。
+   * 小節番号を指定した途中再生（#545）はこの引数だけを使い、選択起点の途中再生（#108）と
+   * 同じ展開・スライスの経路を共用する（同じロジックの2枚目を作らない）。
+   */
+  const handlePlay = useCallback(async (options?: { startMeasureIndex?: number }) => {
+    // 小節番号の指定があるときは「その小節から鳴らし直す」意味なので、
+    // 一時停止からの再開（resume）ではなく通常の開始経路へ進める。
+    const explicitStartMeasure = options?.startMeasureIndex;
     // 再生は「編集の手を止めて聴く」モードへの切り替えなので、譜面の選択も手放す（Issue #238）。
     // 再生中は音を聴きながらキーを触りがちで、選択が残っていると Delete が譜面へ届いてしまう。
     // 一時停止からの再開もモードの切り替わりなので、分岐の手前でまとめて解除する。
     requestScoreSelectionClear();
     try {
-      if (playbackState === 'paused') {
+      if (playbackState === 'paused' && explicitStartMeasure == null) {
         // paused からの再生は「最初から」ではなく AudioContext の resume。
         await getAudioEngine().resume();
         setPlaybackState('playing');
@@ -1577,8 +1587,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // リピートがある譜面では「その小節の最初の出現」から（findPlaybackStartExpandedIndex）。
       // パート譜表示中は総譜で選んだ選択が画面に見えない（選択UIが無い）ため、
       // 見えない選択で途中再生になって混乱しないよう対象外にする（Codex round1 P2）
-      const startFromSelection = !isPartExtractionActive && selectedMeasures != null;
-      const startMeasure = startFromSelection ? selectedMeasures.start : 0;
+      // 小節番号の指定（#545）があればそれが最優先。無ければ従来どおり選択起点を見る
+      const startFromSelection = explicitStartMeasure == null
+        && !isPartExtractionActive && selectedMeasures != null;
+      const startMeasure = explicitStartMeasure
+        ?? (startFromSelection && selectedMeasures ? selectedMeasures.start : 0);
 
       await runWithPlaybackFallback(async (audioEngine) => {
         if (parts.length > 0) {
@@ -1738,9 +1751,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
           // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
           // なので通知する（Codex round1 P3）
-          if (startFromSelection) {
+          if (startFromSelection || explicitStartMeasure != null) {
             setCurrentPosition({ measureIndex: startMeasure, beatPosition: 0, noteIndex: 0 });
-            notifyScoreEdit(describePlaybackFromMeasure(startMeasure));
+            notifyScoreEdit(explicitStartMeasure != null
+              ? describePlaybackFromMeasureNumber(startMeasure, selectedMeasures != null)
+              : describePlaybackFromMeasure(startMeasure));
           }
           schedulePositionTimeline(0);
           playbackTimerRef.current = setTimeout(() => {
@@ -4415,6 +4430,28 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           : [rightHandData ?? []];
     return activeParts.reduce((max, part) => Math.max(max, trimTrailingEmptyMeasures(part).length), 0);
   }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts]);
+  /**
+   * 小節番号を指定した途中再生（#545）。「再生・音色」タブの入力欄から呼ばれる。
+   *
+   * 鳴らす仕組みは選択起点の途中再生（#108）と同じ handlePlay を共用し、ここでは
+   * 「入力を小節インデックスへ直す」「範囲外を理由つきで弾く」だけを受け持つ。
+   * 再生中・一時停止中に指定されたときは、いったん停止してから頭出しし直す
+   * （音の途中への飛び込み＝シークは #545 のスコープ外）。
+   */
+  const handlePlayFromMeasureNumber = useCallback(async (measureNumberInput: string) => {
+    const resolution = resolvePlaybackStartMeasureNumber(measureNumberInput, contentMeasureCount);
+    if (!resolution.ok) {
+      // 黙って無視せず、なぜ再生できないかと入れ直し方を伝える（#318）
+      notifyScoreEdit(describePlaybackStartMeasureRejected(resolution.reason, contentMeasureCount));
+      return;
+    }
+
+    if (playbackState === 'playing' || playbackState === 'paused') {
+      handleStop();
+    }
+    await handlePlay({ startMeasureIndex: resolution.measureIndex });
+  }, [contentMeasureCount, handlePlay, handleStop, playbackState]);
+
   // 印刷専用: 「最後に音符（または明示的な記号）がある小節」までを数える（Issue #80）。
   // contentMeasureCount（events が完全に空の小節だけを末尾から除外）より厳しく、末尾の
   // 全休符だけの小節（自動補完・誤操作などで実データに残った編集用の余り小節）も除外する。
@@ -6588,6 +6625,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 onPause={handlePause}
                 onStop={handleStop}
                 onSeek={handleSeek}
+                onPlayFromMeasure={handlePlayFromMeasureNumber}
+                totalMeasureCount={contentMeasureCount}
                 onTempoChange={handleTempoChange}
                 onInstrumentChange={handleInstrumentChange}
                 onInstrumentPreview={handleInstrumentPreview}
