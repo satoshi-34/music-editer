@@ -5529,7 +5529,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           className="toolbar-feedback-button"
           onClick={handleGoHome}
           aria-label="ホーム"
-          title="ホーム画面へ戻ります（編集中の内容はこの端末のブラウザへ保存され、ホームの「前回の続き」から開き直せます）"
+          title="ホーム画面へ戻ります（編集中の内容はこの端末のブラウザへ保存され、ホームの「最近使ったファイル」の先頭から開き直せます）"
           data-testid="go-home"
         >
           <span aria-hidden="true">🏠</span>{' '}

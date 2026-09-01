@@ -4,8 +4,8 @@
 //
 // 譜面画面（ScorePage）は起動時からずっとマウントしたままにして、ホームは
 // その上に重ねて表示する。こうしている理由:
-//  - 「前回の続き」を1クリックで開けるようにするため。起動時の復元は裏で
-//    済んでいるので、ホームを閉じるだけで編集を再開できる（受入条件1の
+//  - 直前まで開いていた作品を1クリックで開けるようにするため。起動時の復元は裏で
+//    済んでいるので、同じ作品を選び直しても読み直しは起きない（受入条件1の
 //    「起動→即編集の速さを悪化させない」）
 //  - 譜面画面は表示幅を実測して初期の表示倍率を決める（#ScorePageInitialZoomFit）。
 //    display:none で隠すと幅が 0 になり、倍率が狂ってしまう
@@ -18,28 +18,21 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ScorePage, { type HomeActionResult, type ScorePageHomeActions } from './components/ScorePage';
-import HomeScreen, { type HomeOpenKind, type HomeResumeInfo } from './components/HomeScreen';
+import HomeScreen, { type HomeOpenKind } from './components/HomeScreen';
 import type { ScoreType, WorkSummary } from './types/storage';
 import type { ToolbarTab } from './utils/editorContextLabels';
-import { getLastOpenedWorkId, hasStoredData, listWorks } from './utils/storage';
+import { hasStoredData, listWorks } from './utils/storage';
 import { getOmrApiUrl } from './utils/omrApi';
 import { APP_VERSION } from './utils/appVersion';
 import { setHomeShown } from './utils/homeVisibility';
 import './App.css';
 
-/** ホームに出す一覧・前回の続きの材料を、保存データから読み直す */
-function readHomeSnapshot(): { works: WorkSummary[]; resume: HomeResumeInfo | null } {
-  const works = listWorks();
-  // 「前回の続き」は起動時の復元先と同じ決め方にそろえる（記録が無ければ最新の作品）。
-  // ここがずれると、ホームに出ている作品と実際に開かれる作品が食い違う。
-  const lastOpenedId = getLastOpenedWorkId();
-  const resumeWork = works.find(work => work.id === lastOpenedId) ?? works[0] ?? null;
-  return {
-    works,
-    resume: resumeWork
-      ? { workId: resumeWork.id, title: resumeWork.title, updatedAt: resumeWork.updatedAt }
-      : null,
-  };
+/**
+ * ホームに出す「最近使ったファイル」の材料を、保存データから読み直す。
+ * 並びは listWorks の更新の新しい順のままで、先頭が以前の「前回の続き」に相当する（Issue #528）。
+ */
+function readHomeSnapshot(): { works: WorkSummary[] } {
+  return { works: listWorks() };
 }
 
 /** いま押せる「開く」導線を決める（PDF は変換APIがあるとき、旧手動保存はデータがあるときだけ） */
@@ -66,7 +59,7 @@ export default function App() {
   const [homeError, setHomeError] = useState<string | null>(null);
   // busy 表示用（ref は同期判定の正本・state は描画用の写し）
   const [actionRunning, setActionRunning] = useState(false);
-  // 一覧・前回の続きはホームを開くたびに読み直す（編集して戻ってきたとき、
+  // 一覧はホームを開くたびに読み直す（編集して戻ってきたとき、
   // 最終更新日時やタイトルが古いままだと「保存されていない」と誤解させるため）
   const [snapshot, setSnapshot] = useState(() => readHomeSnapshot());
   const [availableOpenKinds, setAvailableOpenKinds] = useState<HomeOpenKind[]>(() => resolveAvailableOpenKinds());
@@ -93,7 +86,7 @@ export default function App() {
   /**
    * 譜面画面側で旧データの移行・起動時の復元が済んだとき（round1 P2）。
    * App の初期スナップショットは移行**前**に読んでいるため、単一作品時代からの
-   * 移行ユーザーではここで読み直さないと「前回の続き」「保存した作品」が空のままになる
+   * 移行ユーザーではここで読み直さないと「最近使ったファイル」が空のままになる
    */
   /** 持ち越した操作を順に実行する（操作口が入っていれば） */
   const drainPendingActions = useCallback(() => {
@@ -162,16 +155,10 @@ export default function App() {
     }
   }, []);
 
-  const handleResume = useCallback(() => {
-    // 「前回の続き」も他の操作と同じ busy 制御下に置く（round3 P2:
-    // 実行中の遷移で作品切替と復帰が競合しないように）
-    if (actionRunningRef.current) return;
-    setHomeShown(false);
-    setShowHome(false);
-  }, []);
   const handleSelectWork = useCallback((workId: string) => {
-    // いま開いている作品を選んだ場合も openWork を通す（切替処理が
-    // 「同じ作品なら何もしない」を含めて面倒を見る）
+    // いま開いている作品（＝一覧の先頭になることが多い「前回の続き」）を選んだ場合も
+    // openWork を通す。切替処理が「同じ作品なら読み直さない」を含めて面倒を見るので、
+    // 起動直後に先頭を1クリックすれば、そのまま編集へ戻れる（Issue #528 受入条件2）
     runOnScorePage(actions => actions.openWork(workId));
   }, [runOnScorePage]);
   const handleCreateNew = useCallback((scoreType: ScoreType) => {
@@ -199,12 +186,10 @@ export default function App() {
       {showHome && (
         <HomeScreen
           appVersion={APP_VERSION}
-          resume={snapshot.resume}
           works={snapshot.works}
           availableOpenKinds={availableOpenKinds}
           errorMessage={homeError}
           busy={actionRunning}
-          onResume={handleResume}
           onSelectWork={handleSelectWork}
           onCreateNew={handleCreateNew}
           onOpen={handleOpen}

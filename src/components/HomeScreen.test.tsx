@@ -1,4 +1,4 @@
-// ホーム画面（Issue #500）の単体テスト。
+// ホーム画面（Issue #500・レイアウトは #512 → #528）の単体テスト。
 // 画面が「何を出すか」「押したら何を呼ぶか」をここで固定し、
 // 実際に譜面画面へ届くこと（配線）は App.test.tsx の統合テストで確かめる。
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -16,10 +16,8 @@ const ALL_OPEN_KINDS: HomeOpenKind[] = ['file', 'musicxml', 'pdf', 'legacy'];
 function renderHome(overrides: Partial<HomeScreenProps> = {}) {
   const props: HomeScreenProps = {
     appVersion: '3.6.0',
-    resume: { workId: 'w1', title: 'ソナタ', updatedAt: WORKS[0].updatedAt },
     works: WORKS,
     availableOpenKinds: ALL_OPEN_KINDS,
-    onResume: vi.fn(),
     onSelectWork: vi.fn(),
     onCreateNew: vi.fn(),
     onOpen: vi.fn(),
@@ -33,21 +31,42 @@ function renderHome(overrides: Partial<HomeScreenProps> = {}) {
 describe('ホーム画面（Issue #500）', () => {
   afterEach(() => cleanup());
 
-  it('「前回の続き」が最上段に出て、作品名と最終更新日時が分かる', () => {
+  it('「最近使ったファイル」の先頭が最新の作品で、1クリックで開ける（#528 受入条件2）', () => {
     const props = renderHome();
-    const resume = screen.getByTestId('home-resume');
-    expect(resume.textContent).toContain('前回の続きを開く');
-    expect(resume.textContent).toContain('ソナタ');
-    expect(resume.textContent).toContain('2026/08/30 12:34');
+    // 「前回の続き」専用バナーは廃止済み（#528）。一覧の先頭がその役割を引き継ぐ
+    expect(screen.queryByTestId('home-resume')).toBeNull();
 
-    fireEvent.click(resume);
-    expect(props.onResume).toHaveBeenCalledTimes(1);
+    const cards = [...document.querySelectorAll<HTMLButtonElement>('.home-work-list button')];
+    expect(cards.map(card => card.dataset.testid)).toEqual(['home-work-w1', 'home-work-w2']);
+    expect(cards[0].textContent).toContain('ソナタ');
+    expect(cards[0].textContent).toContain('2026/08/30 12:34');
+
+    fireEvent.click(cards[0]);
+    expect(props.onSelectWork).toHaveBeenCalledWith('w1');
+    expect(props.onSelectWork).toHaveBeenCalledTimes(1);
   });
 
-  it('前回の続きが無いときは、何をすればよいかを言葉で示す（黙って空にしない）', () => {
-    renderHome({ resume: null });
-    expect(screen.queryByTestId('home-resume')).toBeNull();
-    expect(screen.getByTestId('home-resume-empty').textContent).toContain('新しく作る');
+  it('作品が1つも無いときも、レイアウトは崩れず次にやることを言葉で示す（#528 受入条件3）', () => {
+    renderHome({ works: [] });
+    expect(document.querySelector('.home-work-list')).toBeNull();
+    expect(screen.getByTestId('home-works-empty').textContent).toContain('新しく作る');
+    // 新規作成カードは作品0件でもそのまま並ぶ（初回起動でも入口が消えない）
+    expect(screen.getByTestId('home-new-single')).toBeTruthy();
+    expect(screen.getByTestId('home-new-open')).toBeTruthy();
+  });
+
+  it('新規作成カードの行に「ファイルを開く」カードが並ぶ（#528 仕様更新）', () => {
+    const props = renderHome();
+    const cards = [...document.querySelectorAll<HTMLButtonElement>('.home-card-grid button')];
+    expect(cards.map(card => card.dataset.testid)).toEqual([
+      'home-new-single',
+      'home-new-piano',
+      'home-new-quartet',
+      'home-new-ensemble',
+      'home-new-open',
+    ]);
+    fireEvent.click(screen.getByTestId('home-new-open'));
+    expect(props.onOpen).toHaveBeenCalledWith('file');
   });
 
   it('譜種を選んで新規作成できる（4種類すべて）', () => {
@@ -106,11 +125,9 @@ describe('ホーム画面（Issue #500）', () => {
     render(
       <HomeScreen
         appVersion="1.0.0"
-        resume={{ workId: 'w1', title: '作品', updatedAt: Date.now() }}
         works={[{ id: 'w1', title: '作品', updatedAt: Date.now(), createdAt: Date.now() }]}
         availableOpenKinds={['file', 'musicxml']}
         busy
-        onResume={() => {}}
         onSelectWork={() => {}}
         onCreateNew={() => {}}
         onOpen={() => {}}

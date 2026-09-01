@@ -40,21 +40,41 @@ const MOUNT_HEAVY_TIMEOUT_MS = 60000;
 
 const SEEDED_TITLE = 'ホーム統合テスト';
 
-/** 「前回の続き」で開かれる作品を仕込む */
-function seedWork() {
+/**
+ * 起動時に復元される作品を仕込む。最後に仕込んだものが「前回開いていた作品」になる。
+ * updatedAt は保存データの timestamp から決まる（storage.saveWorkAutosaveData）ので、
+ * 一覧の並びを確かめたいときは timestamp を明示して時刻の同着を避ける。
+ */
+function seedWork(title: string = SEEDED_TITLE, timestamp?: number) {
   const data = createSavedScoreData(
-    { title: SEEDED_TITLE, subtitle: '', lyricist: '', composer: '', arranger: '' },
+    { title, subtitle: '', lyricist: '', composer: '', arranger: '' },
     [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '1', isRest: false, keys: ['c/5'] }] }] }],
     1,
     1,
     'single'
   );
-  const created = createWork(SEEDED_TITLE);
+  if (timestamp !== undefined) data.timestamp = timestamp;
+  const created = createWork(title);
   if (!created.success || !created.data) throw new Error('createWork failed');
   const saved = saveWorkAutosaveData(created.data.id, data);
   if (!saved.success) throw new Error('saveWorkAutosaveData failed');
   setLastOpenedWorkId(created.data.id);
   return created.data.id;
+}
+
+/**
+ * ホームの「最近使ったファイル」の先頭カード。Issue #528 で「前回の続き」の緑バナーを廃止し、
+ * この先頭カード（＝いちばん新しく触った作品）が「1クリックで編集へ戻る」役割を引き継いだ。
+ */
+function topRecentCard(): HTMLButtonElement {
+  const card = document.querySelector<HTMLButtonElement>('.home-work-list button');
+  if (!card) throw new Error('最近使ったファイルの先頭カードが見つからない');
+  return card;
+}
+
+/** 一覧に作品が現れるまで待ってから先頭カードを返す（移行や復元の完了待ち用） */
+function findTopRecentCard(): Promise<HTMLButtonElement> {
+  return waitFor(() => topRecentCard());
 }
 
 /** 譜面のタイトル見出し（復元できたかの確認に使う） */
@@ -78,20 +98,20 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     vi.restoreAllMocks();
   });
 
-  it('起動時はホームが出て、「前回の続き」ワンクリックで前回の譜面へ戻れる', async () => {
+  it('起動時はホームが出て、最近使ったファイルの先頭ワンクリックで前回の譜面へ戻れる（#528 受入条件2）', async () => {
     seedWork();
     render(<App />);
 
     // 受入条件1: 起動時にホームが表示される
     expect(screen.getByTestId('home-screen')).toBeTruthy();
-    expect(screen.getByTestId('home-resume').textContent).toContain(SEEDED_TITLE);
+    expect(topRecentCard().textContent).toContain(SEEDED_TITLE);
 
     // 譜面画面は裏で復元を進めている（＝ホームを閉じるだけで編集を再開できる）
     await waitFor(() => {
       expect(scoreTitleText()).toBe(SEEDED_TITLE);
     }, { timeout: 15000 });
 
-    fireEvent.click(screen.getByTestId('home-resume'));
+    fireEvent.click(topRecentCard());
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
     expect(scoreTitleText()).toBe(SEEDED_TITLE);
   }, MOUNT_HEAVY_TIMEOUT_MS);
@@ -150,7 +170,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
       expect(scoreTitleText()).toBe(SEEDED_TITLE);
     }, { timeout: 15000 });
 
-    fireEvent.click(screen.getByTestId('home-resume'));
+    fireEvent.click(topRecentCard());
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
 
     fireEvent.click(screen.getByTestId('go-home'));
@@ -172,7 +192,9 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
       }, { timeout: 15000 });
 
       expect(screen.getByTestId('home-version').textContent).toMatch(/^v\d+\.\d+\.\d+/);
-      fireEvent.click(screen.getByTestId('home-resume'));
+      fireEvent.click(topRecentCard());
+      // 一覧からの復帰は作品切替（保存→切替）を通るので、閉じるのを待ってから戻る
+      await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
       fireEvent.click(screen.getByTestId('go-home'));
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
@@ -185,17 +207,34 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     render(<App />);
     await waitFor(() => { expect(scoreTitleText()).toContain(SEEDED_TITLE); });
 
-    // 「保存した作品」の一覧から、いま開いている作品（先頭）を選ぶ
-    const list = document.querySelector('.home-work-list');
-    const first = list?.querySelector('button');
-    expect(first).toBeTruthy();
-    fireEvent.click(first!);
+    // 「最近使ったファイル」の一覧から、いま開いている作品（先頭）を選ぶ
+    fireEvent.click(topRecentCard());
 
     // 譜面画面へ移り、譜面は空にならず元のタイトルのまま
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
     expect(scoreTitleText()).toContain(SEEDED_TITLE);
     // 音符も残っている（空リセットされると .vf-note-hit が消える）
     expect(document.querySelectorAll('.vf-note-hit').length).toBeGreaterThan(0);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('複数の作品が最近使った順に並び、選んだ作品が開く（#528 受入条件1）', async () => {
+    // 更新時刻を明示して並びを確定させる（同じミリ秒に作ると順序が揺れるため）
+    const olderId = seedWork('古い作品', new Date(2026, 7, 20, 10, 0).getTime());
+    const newerId = seedWork(SEEDED_TITLE, new Date(2026, 7, 31, 10, 0).getTime());
+    render(<App />);
+    await waitFor(() => { expect(scoreTitleText()).toContain(SEEDED_TITLE); }, { timeout: 15000 });
+
+    // 新しい順（先頭＝最後に触った作品）で並ぶ
+    const cards = [...document.querySelectorAll<HTMLButtonElement>('.home-work-list button')];
+    expect(cards.map(card => card.dataset.testid)).toEqual([
+      `home-work-${newerId}`,
+      `home-work-${olderId}`,
+    ]);
+
+    // 先頭以外を選ぶと、その作品が読み込まれて譜面画面へ移る
+    fireEvent.click(screen.getByTestId(`home-work-${olderId}`));
+    await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
+    await waitFor(() => { expect(scoreTitleText()).toContain('古い作品'); }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('ホーム表示中は譜面画面のキーボードショートカットが効かない（round1 P1）', async () => {
@@ -218,7 +257,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     expect(screen.getByTestId('score-page-holder').hasAttribute('inert')).toBe(true);
 
     // ホームを閉じると inert が外れ、同じキーが今度は効く（正の対照）
-    fireEvent.click(screen.getByTestId('home-resume'));
+    fireEvent.click(topRecentCard());
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
     expect(screen.getByTestId('score-page-holder').hasAttribute('inert')).toBe(false);
     fireEvent.keyDown(window, { key: '4' }); // DUR_KEYS: '4' = 8分音符
@@ -251,7 +290,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
       localStorageMock.setItem = originalSetItem;
     }
     // 元の譜面は無傷
-    fireEvent.click(screen.getByTestId('home-resume'));
+    fireEvent.click(topRecentCard());
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
     expect(scoreTitleText()).toContain(SEEDED_TITLE);
   }, MOUNT_HEAVY_TIMEOUT_MS);
@@ -259,7 +298,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
   it('ホームへ戻る前の保存に失敗したら、譜面画面に留まり理由を通知する（round1 P1）', async () => {
     seedWork();
     render(<App />);
-    fireEvent.click(await screen.findByTestId('home-resume'));
+    fireEvent.click(await findTopRecentCard());
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
 
     const originalSetItem = localStorageMock.setItem;
@@ -281,7 +320,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
   it('単一作品時代の旧データが、起動時の移行後にホームへ現れる（round1/round2 P2）', async () => {
     // 作品カタログを作らず、旧・自動保存スロットにだけデータを置く（単一作品時代の形）。
     // App の初期スナップショット（listWorks）はこの時点で空なので、
-    // onLibraryReady での読み直しが無いと「前回の続き」は空表示のままになる
+    // onLibraryReady での読み直しが無いと「最近使ったファイル」は空表示のままになる
     const legacy = createSavedScoreData(
       { title: '移行前の作品', subtitle: '', lyricist: '', composer: '', arranger: '' },
       [{ partId: 'melody', clef: 'treble', measures: [{ events: [{ dur: '1', isRest: false, keys: ['c/5'] }] }] }],
@@ -291,17 +330,17 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     expect(saved.success).toBe(true);
 
     render(<App />);
-    // 初期表示は空でもよいが、移行完了後に旧作品が「前回の続き」として現れること
+    // 初期表示は空でもよいが、移行完了後に旧作品が一覧の先頭として現れること
     await waitFor(() => {
-      expect(screen.queryByTestId('home-resume-empty')).toBeNull();
-      expect(screen.getByTestId('home-resume').textContent).toContain('移行前の作品');
+      expect(screen.queryByTestId('home-works-empty')).toBeNull();
+      expect(topRecentCard().textContent).toContain('移行前の作品');
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('ホームへ戻った直後（描画前）のキー入力も譜面へ届かない（round2 P3）', async () => {
     seedWork();
     render(<App />);
-    fireEvent.click(await screen.findByTestId('home-resume'));
+    fireEvent.click(await findTopRecentCard());
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
 
     const eighthButton = screen.getByRole('button', { name: '音符 8分' });

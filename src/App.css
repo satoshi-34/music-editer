@@ -2657,10 +2657,14 @@ svg { animation: none; transition: none; }
 
 /* ── 本文（新規ギャラリー・最近使ったファイル・開く・設定）── */
 .home-main {
-  width: min(880px, 100%);
+  /* 幅を絞らずに画面いっぱいへ広げる（Issue #528）。カード類は下のグリッドが
+     幅に応じて列数を増やすので、広い画面ほど1行に並ぶ枚数が増える。
+     ただし超ワイド画面で文字が端から端まで散らばらないよう、上限だけ置く */
+  width: 100%;
+  max-width: 1800px;
   margin: 0 auto;
   box-sizing: border-box;
-  padding: 24px 20px 28px;
+  padding: 24px 28px 28px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -2698,23 +2702,6 @@ svg { animation: none; transition: none; }
   font-weight: 700;
   color: #495057;
 }
-.home-primary-button {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  width: 100%;
-  padding: 14px 16px;
-  border: none;
-  border-radius: 8px;
-  background: #1c7c4a;
-  color: #fff;
-  cursor: pointer;
-  text-align: left;
-}
-.home-primary-button:hover { background: #17663d; }
-.home-primary-button-label { font-size: 16px; font-weight: 700; }
-.home-primary-button-sub { font-size: 12px; opacity: 0.92; }
 .home-error {
   margin: 0;
   padding: 10px 14px;
@@ -2735,8 +2722,10 @@ svg { animation: none; transition: none; }
 /* 新規作成ギャラリー（Office の「空白のブック＋テンプレート」に相当） */
 .home-card-grid {
   display: grid;
-  /* 画面が狭いときは自動で段数が減る（スマホでも横スクロールを出さない） */
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  /* 1枚あたりの下限（200px）だけ決めて、あとは幅に応じて列数が増減する。
+     auto-fill にしているのは、カードが少ないときに1枚が横いっぱいへ
+     伸びてしまうのを防ぐため（auto-fit は空の列を潰してカードを引き伸ばす） */
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 12px;
 }
 .home-card-button {
@@ -2778,42 +2767,37 @@ svg { animation: none; transition: none; }
   cursor: pointer;
 }
 .home-secondary-button:hover { background: #e9ecef; }
-/* 最近使ったファイルの一覧（Office の「最近使ったアイテム」に相当する行形式） */
-.home-work-head {
-  display: flex;
-  justify-content: space-between;
-  padding: 0 10px 4px;
-  border-bottom: 1px solid #e9ecef;
-  font-size: 11px;
-  color: #868e96;
-}
+/* 最近使ったファイル（Issue #528 でカードグリッドへ。新規作成カードと同じ規則で横へ流す） */
 .home-work-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
   /* 作品が増えても画面が縦に伸び続けないよう、一覧だけスクロールさせる
-     （作品一覧パネルと同じ考え方） */
-  max-height: min(40vh, 300px);
+     （作品一覧パネルと同じ考え方）。列が増えるぶん、行形式のときより高さは緩める */
+  max-height: min(52vh, 420px);
   overflow-y: auto;
 }
 .home-work-button {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  padding: 9px 10px;
-  border: none;
-  border-bottom: 1px solid #f1f3f5;
-  border-radius: 0;
+  box-sizing: border-box;
+  padding: 12px 12px;
+  border: 1px solid #ced4da;
+  border-radius: 8px;
   background: #fff;
   cursor: pointer;
   text-align: left;
 }
-.home-work-button:hover { background: #f1f3f5; }
-.home-work-icon { color: #1c7c4a; font-size: 15px; }
-/* 名前は伸ばし、更新日時は右端へ寄せる（Office の一覧と同じ読み方になる） */
+.home-work-button:hover {
+  background: #f8f9fa;
+  border-color: #1c7c4a;
+}
+/* 名前は伸ばし、更新日時は右端へ寄せる（長い作品名でもカード幅を押し広げない） */
 .home-work-title {
   flex: 1;
   min-width: 0;
@@ -2823,6 +2807,7 @@ svg { animation: none; transition: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.home-work-icon { color: #1c7c4a; font-size: 15px; }
 .home-updated-at { font-size: 11px; color: #868e96; }
 .home-footer {
   display: flex;
@@ -2860,5 +2845,12 @@ svg { animation: none; transition: none; }
   }
   .home-main {
     padding: 16px 12px 24px;
+  }
+  /* 375px 幅でも横スクロールを出さずに2列へ収める（Issue #512 で実測した条件を維持） */
+  .home-card-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+  .home-work-list {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
