@@ -20,6 +20,11 @@ import {
  * 実際の音は鳴らさない（jsdom には AudioContext が無い）。
  */
 const playPartsMock = vi.fn().mockResolvedValue(undefined);
+const stopAllMock = vi.fn();
+/** stopAll と playParts の呼び出し順を横断で記録する（再生中ジャンプの停止→頭出し検証用） */
+const callOrder: string[] = [];
+playPartsMock.mockImplementation(() => { callOrder.push('playParts'); return Promise.resolve(undefined); });
+stopAllMock.mockImplementation(() => { callOrder.push('stopAll'); });
 vi.mock('../audio/createPlaybackEngine', () => ({
   createPlaybackEngine: () => ({
     initialize: vi.fn().mockResolvedValue(undefined),
@@ -27,7 +32,7 @@ vi.mock('../audio/createPlaybackEngine', () => ({
     playParts: playPartsMock,
     suspend: vi.fn().mockResolvedValue(undefined),
     resume: vi.fn().mockResolvedValue(undefined),
-    stopAll: vi.fn(),
+    stopAll: stopAllMock,
     dispose: vi.fn(),
     setInstrument: vi.fn(),
     setSoundProfile: vi.fn(),
@@ -117,6 +122,8 @@ describe('ScorePage: 小節番号を指定した途中再生（Issue #545）', (
   beforeEach(() => {
     localStorageMock.clear();
     playPartsMock.mockClear();
+    stopAllMock.mockClear();
+    callOrder.length = 0;
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get: () => 900, configurable: true });
   });
@@ -169,5 +176,44 @@ describe('ScorePage: 小節番号を指定した途中再生（Issue #545）', (
       expect(screen.getByTestId('edit-notice').textContent).toContain('この作品は4小節までのため');
     }, { timeout: 5000 });
     expect(playPartsMock).not.toHaveBeenCalled();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('再生中に番号を指定すると、停止（stopAll）してからその小節で鳴らし直す（round1 P2）', async () => {
+    seedFourMeasureWork();
+    await renderAndOpenPlaybackTab();
+
+    // まず通常再生を開始する
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(1); }, { timeout: 15000 });
+
+    // 再生中に番号ジャンプ → stopAll が先に走ってから2回目の playParts
+    fireEvent.change(screen.getByLabelText('再生を開始する小節番号'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: '指定した小節から再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(2); }, { timeout: 15000 });
+    const secondPlayAt = callOrder.lastIndexOf('playParts');
+    const lastStopAt = callOrder.lastIndexOf('stopAll');
+    expect(lastStopAt).toBeGreaterThan(-1);
+    expect(lastStopAt).toBeLessThan(secondPlayAt);
+
+    // 2回目はちゃんと2小節目の頭から
+    const measures = playPartsMock.mock.calls[1][0][0].measures as Array<unknown>;
+    expect(measures.length).toBe(3); // 4小節中、2小節目から末尾まで
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('番号ジャンプは小節の選択と Undo 履歴を変えない（round1 P2）', async () => {
+    seedFourMeasureWork();
+    await renderAndOpenPlaybackTab();
+
+    // Undo 履歴の基準: ジャンプ前に「元に戻す」が無効であること
+    const undoButton = screen.getByRole('button', { name: '元に戻す' }) as HTMLButtonElement;
+    const undoDisabledBefore = undoButton.disabled;
+
+    fireEvent.change(screen.getByLabelText('再生を開始する小節番号'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: '指定した小節から再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalled(); }, { timeout: 15000 });
+
+    // 選択マーカーが増えず、Undo の有効状態も変わらない（履歴が積まれていない）
+    expect(document.querySelector('rect.vf-measure-selected')).toBeNull();
+    expect((screen.getByRole('button', { name: '元に戻す' }) as HTMLButtonElement).disabled).toBe(undoDisabledBefore);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

@@ -170,6 +170,10 @@ export function resolvePlaybackStartMeasureNumber(
     return { ok: false, reason: 'outOfRange' };
   }
 
+  // 表示番号 → 実インデックスの対応はこの1か所に集約している。
+  // 現在の main は弱起（#473）未実装で表示番号は常に1始まり（=インデックス+1）。
+  // 弱起（表示番号0始まり）が入るときは、#473 側でこの対応だけを差し替えること
+  //（getDisplayedMeasureNumber の逆引き。呼び出し側に -1 を散らさない）
   return { ok: true, measureIndex: measureNumber - 1 };
 }
 

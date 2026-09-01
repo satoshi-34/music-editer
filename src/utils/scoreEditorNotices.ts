@@ -652,7 +652,12 @@ export function describePlaybackFromMeasure(startMeasure: number): string {
  * 選択起点（describePlaybackFromMeasure）とは戻し方の案内が違うので文言を分けている
  * （こちらは選択していないため Escape では先頭に戻らない）。
  */
-export function describePlaybackFromMeasureNumber(startMeasure: number): string {
+export function describePlaybackFromMeasureNumber(startMeasure: number, hasMeasureSelection: boolean): string {
+  // 小節の範囲選択が残っていると、停止→再生では選択位置から始まる（選択起点の途中再生）。
+  // その状態で「停止して再生すれば先頭」と案内すると嘘になるため出し分ける（#545 round1 P2）
+  if (hasMeasureSelection) {
+    return `${startMeasure + 1}小節目から再生します（先頭から聴くには Escape で小節の選択を外し、停止してから再生してください）`;
+  }
   return `${startMeasure + 1}小節目から再生します（先頭から聴くには停止してから再生してください）`;
 }
 

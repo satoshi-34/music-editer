@@ -1754,7 +1754,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           if (startFromSelection || explicitStartMeasure != null) {
             setCurrentPosition({ measureIndex: startMeasure, beatPosition: 0, noteIndex: 0 });
             notifyScoreEdit(explicitStartMeasure != null
-              ? describePlaybackFromMeasureNumber(startMeasure)
+              ? describePlaybackFromMeasureNumber(startMeasure, selectedMeasures != null)
               : describePlaybackFromMeasure(startMeasure));
           }
           schedulePositionTimeline(0);
