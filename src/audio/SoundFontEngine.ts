@@ -120,6 +120,14 @@ export class SoundFontEngine implements PlaybackEngine {
   // playerCache は「同じ楽器をもう一度使うときに、毎回ネット読み込みし直さない」ための置き場。
   // キーは「SoundFontパック名 + 楽器名」の組み合わせにしている。
   private readonly playerCache = new Map<string, SoundFontPlayer>();
+
+  /**
+   * 出力経路の世代番号（#525 round3 P1）。stopAll のたびに進める。
+   * 非同期の player 作成（module.instrument）が完了したとき、開始時と世代が
+   * 違っていたら「旧・切断済みマスターへ配線された player」なのでキャッシュせず、
+   * 新しい世代で作り直す。これが無いと停止をまたいだ読み込みが無音 player を残す。
+   */
+  private outputGeneration = 0;
   // すべての player の出力をこの GainNode 経由で destination へ流す。
   // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
   private masterGainNode: GainNode | null = null;
@@ -304,6 +312,7 @@ export class SoundFontEngine implements PlaybackEngine {
     // 旧マスターゲインを destination から切り離し（旧音の尻尾は行き場を失って消える）、
     // 旧マスターへ配線済みの player キャッシュも捨てる（次の再生で新しいマスターに
     // 繋いだ player を作り直す。音源データはブラウザの HTTP キャッシュが効く）
+    this.outputGeneration++;
     if (this.masterGainNode) {
       try {
         this.masterGainNode.disconnect();
@@ -313,6 +322,13 @@ export class SoundFontEngine implements PlaybackEngine {
       this.masterGainNode = null;
     }
     this.playerCache.clear();
+    // 次の再生の待ち時間（読込・デコード・player 構築）を隠すため、現在の楽器を
+    // 裏で先読みしておく（round3 P2）。ユーザーが停止→再生を押すまでの間に済むことが多い
+    if (this.context) {
+      void this.getPlayerForCurrentInstrument().catch(() => {
+        // 先読みの失敗は無視する（実再生時に通常経路で改めて読み込まれる）
+      });
+    }
     console.log('[SoundFontEngine] すべての再生を停止しました');
   }
 
@@ -393,6 +409,7 @@ export class SoundFontEngine implements PlaybackEngine {
       return cached;
     }
 
+    const generationAtStart = this.outputGeneration;
     const module = await this.loadModule();
     const context = this.ensureContext();
 
@@ -405,6 +422,17 @@ export class SoundFontEngine implements PlaybackEngine {
       format: 'mp3',
       destination: this.getOutputNode(context)
     });
+
+    // 作成中に stopAll が走った場合、この player は旧・切断済みマスターへ配線されて
+    // いる可能性がある。キャッシュせず、新しい世代で作り直す（round3 P1）
+    if (generationAtStart !== this.outputGeneration) {
+      try {
+        player.stop();
+      } catch {
+        // 旧世代 player の停止失敗は無視してよい（どこにも繋がっていない）
+      }
+      return this.getPlayerForInstrument(instrument);
+    }
 
     this.playerCache.set(cacheKey, player);
     console.log('[SoundFontEngine] SoundFontを読み込みました:', instrumentName, this.soundfontName);

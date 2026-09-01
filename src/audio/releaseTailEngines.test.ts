@@ -270,6 +270,47 @@ describe('SoundFont のリリースの尻尾（Issue #525）', () => {
     expect(internals.playerCache.size).toBe(0);
   });
 
+  it('player 作成中に stopAll が走ったら旧世代を捨てて作り直す（round3 P1）', async () => {
+    const engine = new SoundFontEngine();
+    const internals = engine as unknown as {
+      context: unknown;
+      masterGainNode: unknown;
+      playerCache: Map<string, unknown>;
+      loadModule: () => Promise<unknown>;
+      ensureContext: () => unknown;
+      getPlayerForInstrument: (instrument: InstrumentType) => Promise<unknown>;
+    };
+    const ctx = { currentTime: 0, destination: {}, createGain: () => ({ gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() }) };
+    internals.context = ctx;
+    internals.ensureContext = () => ctx;
+
+    // 1回目の instrument 作成を保留にして、その間に stopAll を走らせる
+    const madePlayers: { stop: ReturnType<typeof vi.fn> }[] = [];
+    let resolveFirst: ((p: unknown) => void) | null = null;
+    const instrumentMock = vi.fn(() => {
+      const player = { stop: vi.fn(), connect: vi.fn() };
+      madePlayers.push(player);
+      if (madePlayers.length === 1) {
+        return new Promise((resolve) => { resolveFirst = () => resolve(player); });
+      }
+      return Promise.resolve(player);
+    });
+    internals.loadModule = async () => ({ instrument: instrumentMock });
+
+    const pending = internals.getPlayerForInstrument(InstrumentType.PIANO);
+    // loadModule の await を進めて、1回目の instrument 作成が保留になるのを待つ
+    await vi.waitFor(() => { expect(instrumentMock).toHaveBeenCalled(); });
+    engine.stopAll(); // 世代交代（先読みも1回走る）
+    resolveFirst!(null as never);
+    const player = await pending;
+
+    // 返るのは新世代で作り直した player（保留中だった1個目ではない）。
+    // 1個目は停止され、キャッシュにも入らない
+    expect(player).not.toBe(madePlayers[0]);
+    expect(madePlayers[0].stop).toHaveBeenCalled();
+    expect(Array.from(internals.playerCache.values())).not.toContain(madePlayers[0]);
+  });
+
   it('余韻スライダーで尻尾の長さが変わる', () => {
     const engine = new SoundFontEngine();
     const whole = 4;
