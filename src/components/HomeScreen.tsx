@@ -196,7 +196,14 @@ export default function HomeScreen({
       <div className="home-shell">
         {/* 左レール（Issue #512）。Office 系の起動画面と同じく、画面の骨格を左に置く。
             狭い画面では上部の横並びに変わる（CSS 側で切り替え） */}
-        <aside className="home-rail">
+        <aside
+          className="home-rail"
+          onKeyDown={(e) => {
+            // トグルにフォーカスが残ったままの Escape でも閉じられるように、
+            // フライアウトとトグルの**共通祖先（レール全体）**で受ける（#561 round2 P2）
+            if (e.key === 'Escape' && railFlyout) closeRailFlyout(railFlyout);
+          }}
+        >
           <span className="home-rail-mark" aria-hidden="true">♪</span>
           <nav className="home-rail-nav" aria-label="ホーム内の移動">
             {RAIL_LINKS.map(link => (
@@ -239,7 +246,6 @@ export default function HomeScreen({
               className="home-rail-flyout"
               role="group"
               aria-label="ファイルを開く"
-              onKeyDown={(e) => { if (e.key === 'Escape') closeRailFlyout('open'); }}
             >
               {openButtons.map(button => (
                 <button
@@ -262,7 +268,6 @@ export default function HomeScreen({
               className="home-rail-flyout"
               role="group"
               aria-label="設定"
-              onKeyDown={(e) => { if (e.key === 'Escape') closeRailFlyout('settings'); }}
             >
               {SETTINGS_TABS.map(entry => {
                 const label = TOOLBAR_TAB_BUTTONS.find(tab => tab.id === entry.tab)?.label ?? entry.tab;

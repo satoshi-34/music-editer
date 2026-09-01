@@ -239,6 +239,24 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     await waitFor(() => { expect(scoreTitleText()).toContain('古い作品'); }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('レールのフライアウト操作が実際の配線（開く→ファイルタブ）で動き、トグルで Escape が効く（#561）', async () => {
+    seedWork();
+    render(<App />);
+    await waitFor(() => { expect(scoreTitleText()).toContain(SEEDED_TITLE); });
+
+    // トグルにフォーカスがある状態の Escape で閉じる（開いた直後の通常操作）
+    const openToggle = screen.getByTestId('home-rail-open');
+    fireEvent.click(openToggle);
+    (openToggle as HTMLButtonElement).focus();
+    fireEvent.keyDown(openToggle, { key: 'Escape' });
+    expect(screen.queryByTestId('home-open-musicxml')).toBeNull();
+
+    // 実配線: 開く→MusicXML でファイル選択が起動し、譜面画面のファイルタブへ移る
+    fireEvent.click(openToggle);
+    fireEvent.click(screen.getByTestId('home-open-musicxml'));
+    await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('更新が古い作品でも「前回開いていた作品」が一覧の先頭に来る（#528 round1 P1）', async () => {
     // 新しい作品Aを作った後、古い作品Bへ切り替えて（編集せず）終了した状況を再現する。
     // 更新順だけだと先頭は A になり、「先頭 = 前回の続き」が崩れる
