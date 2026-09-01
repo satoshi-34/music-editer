@@ -312,15 +312,86 @@ epsilon 比較パターンをそのまま踏襲した（`StaffCanvas.tsx` に `E
    （`(tool as any)?.tuplet` の truthy 判定はオブジェクトでもそのまま機能するため、
    分岐ロジック自体は変更不要）。
 
-### 2連符（2:3）を対象外とした理由
+### 2連符（2:3）を当初は対象外とした理由
 
 2連符は「付点音価2つ分の時間に2つの音符を詰める」記譜で、8分の6拍子などの
 複合拍子でのみ自然に使われる（単純拍子では「2連符なのに音価が伸びる」という
-直感に反する挙動になる）。今回のタスクでは3/5/6/7連符の追加が主目的であり、
+直感に反する挙動になる）。当時のタスクでは3/5/6/7連符の追加が主目的であり、
 複合拍子特有の付点音価との組み合わせUIまで設計すると工数が膨らむため、
-今回のスコープからは除外した。データモデル（`numNotes`/`notesOccupied`は任意の値を
+そのときのスコープからは除外した。データモデル（`numNotes`/`notesOccupied`は任意の値を
 受け付ける）は2連符も表現できるので、将来的にパレットへボタンを追加するだけで
-対応できる。
+対応できる、と結論していた。
+
+→ **Issue #472 でこの見送りを解消した（下記）。**
+
+## 2連符・4連符の追加（Issue #472）
+
+### 問題
+
+パレットの連符トグルは 3/5/6/7連符だけで、8分の6拍子などの複合拍子で頻出する
+2連符（duplet）・4連符（quadruplet）を入力する手段が無かった
+（出典: 弟フィードバック 2026-08-29「N連符ボタンで二連符とかも選べるように」）。
+
+### 修正設計
+
+上の「対象外とした理由」で予告したとおり、**パレットの一覧へ2件足すだけ**で済んだ。
+
+- `TUPLET_KINDS`（`src/utils/tupletUtils.ts`）へ `{2,3}` と `{4,3}` を追加し、
+  数字の小さい順（2/3/4/5/6/7）に並べ直した。パレットのボタンはこの配列を map して
+  作られるので、UI 側の分岐は増えていない。
+- 比率は浄書の慣例どおり **2連符 = 2:3 / 4連符 = 4:3**。どちらも「同じ音価3個ぶんの
+  時間（＝付点音価1つぶん）に N 個を詰める」記譜なので `notesOccupied` は両方 3 になる。
+- `TupletKind` に表示専用の `hint?: string` を追加し、複合拍子向けであることを
+  ツールチップに出す。ツールチップ本文には比率（`2:3` 等）も併記した。
+  `hint` は `buildTupletGroupPlan` が `numNotes`/`notesOccupied` だけを取り出して
+  `tuplet` 情報を組み立てるため、**保存データには入らない**（テストで固定済み）。
+
+### なぜ既存ロジックを触らずに済むのか
+
+2連符は `numNotes < notesOccupied`、つまり1音あたりの長さが**短くならず伸びる**
+唯一の種類で、ここだけが既存実装との相性の焦点だった。調べた結果、拍の計算は
+どこも `notesOccupied / numNotes` 倍という同じ式で書かれており、「連符は短くなる」を
+前提にした分岐（1未満へのクランプ等）は存在しなかった。
+
+対象を全部確認済み: `tupletUtils.occupiedBeats` / `voiceMeasureUtils.tupletBeatsMultiplier`
+/ `measureLayoutUtils` / `musicXmlExport.eventDurationTicks` / `musicXmlImport`
+/ `midiExport` / `SimpleAudioEngine.durationToSeconds` / `SoundFontEngine`
+/ `ornamentPlaybackUtils` / `RestOverlapFixV2` / `vexFlowTimingUtils.createVexFlowTuplets`
+（VexFlow の `Tuplet` は `notesOccupied > numNotes` をそのまま受け付ける）。
+
+小節の空き判定（`PianoSystemCanvas` の `currentBeats + groupBeats > beatsPerMeasure`、
+`planTupletReplacementForRest` の `groupBeats > restBeats`）も比率から求めた実長で
+比べているため、伸びる側でも正しく効く。8分音符の2連符は実長1.5拍なので、
+**4分休符（1拍）には入らず、付点4分休符（1.5拍）へちょうど収まる**。
+
+### 9連符を入れなかった理由
+
+設計時は MusicXML 書出の分割数 `DIVISIONS = 16` 固定による丸め（8 × 8/9 = 7.11… → 7）を
+理由にしていたが、**#519 の修正（divisions の自動選択）が main に入り、この障害は消えた**
+（9:8 を含む書き出しテストも #519 側にある）。現在の見送り理由は「#472 のスコープ外
+（要望は複合拍子用の 2・4 連符）」であり、必要になれば `TUPLET_KINDS` へ1行で追加できる。
+2連符（3/2倍）・
+4連符（3/4倍）は 8分・16分音符で割り切れるため、この問題は起きない
+（32分・64分音符では丸めが発生するが、これは既存の 3/5/6/7連符と同じ性質）。
+
+### 影響範囲
+
+- 変更したのは `tupletUtils.ts`（一覧＋型）と `Palette.tsx`（ツールチップ文言）のみ。
+  既存の連符（3/5/6/7）の挙動・保存データの形は変わらない。
+- ドキュメント: README（パレット表の連符の並び）・`docs/DEVELOPMENT.md`（連符入力の節）・
+  `helpContent.ts`（目的別ガイドの検索キーワードと手順）を更新。
+
+### テスト
+
+- `src/utils/tupletUtils.test.ts`: 2連符/4連符のグループ構成と実長、`TUPLET_KINDS` の
+  並びと比率、`hint` が保存データに混ざらないこと、付点4分休符への置き換え可否
+  （4分休符には入らない＝伸びる側の空き判定）。
+- `src/utils/musicXmlTuplet.test.ts`: 2連符（2:3）・4連符（4:3）の export→import 往復と、
+  丸め誤差の出ない `<duration>`（8分音符で 12 / 6）。
+- `src/audio/SimpleAudioEngine.test.ts`: `durationToSeconds` が 2連符=1.5倍・4連符=0.75倍。
+- `src/components/PianoSystemCanvasDupletPlacement.test.tsx`（新規・実マウント）:
+  8分の6拍子の小節をクリックして2連符/4連符グループが入ること、実長1.5拍が入らない
+  満杯の小節では何も起きないこと、2連符が VexFlow の連符として描画されること。
 
 ### テスト
 
