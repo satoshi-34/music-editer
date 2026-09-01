@@ -88,7 +88,8 @@ export function createOnceNotice(storageKey: string): OnceNotice {
     // ユーザー操作がきっかけの通知（音符を選ぶ等）は、操作のたびに effect が
     // 走り直すため claim の「この読み込み中は出し直す」逃がしを使うと毎回出てしまう。
     // そちらは消去タイマーを自前で持たない（表示は通知系に任せきり）ので、
-    // StrictMode の再実行で出し直す必要も無い。だから既読だけで判定する。
+    // StrictMode の再実行で出し直す必要も無い。既読（永続）とメモリ側フラグの
+    // 両方で判定し、書き込み失敗環境でも「同じ読み込み中は一度だけ」を守る。
     claimStrict: () => {
       if (strictClaimed || hasSeen()) return false;
       strictClaimed = true;

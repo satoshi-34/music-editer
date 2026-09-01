@@ -48,14 +48,36 @@ effect を「実行→片付け→再実行」するため、「既読なら出�
 ところが今回のきっかけは「音符を選ぶ」というユーザー操作で、選び直すたびに effect が走る。
 `claim()` をそのまま使うと**選択のたびにヒントが出た**（実装中に実際に踏み、テストが捕まえた）。
 この通知は消去タイマーを自前で持たない（表示は通知系に任せきり）ので StrictMode で
-出し直す必要が無く、既読だけで判定する `claimStrict()` を使う。
+出し直す必要が無く、`claimStrict()` を使う。
+
+`claimStrict()` の契約（round 1 P2 で強化）: 既読（localStorage）に加えて**メモリ側の
+strict-claim フラグ**でも判定する。localStorage の書き込みが失敗する環境
+（プライベートブラウジング・quota 超過）では既読が永続化できないが、その場合でも
+「同じページ読み込み中は一度だけ」をメモリ側が保証する（選択のたびに出続ける退行の防止）。
+`resetForTest()` は両フラグを初期化する。
 
 ### 出す場所
 
 `PianoSystemCanvas` の `selected`（音符の選択）を見る `useEffect` 1か所。
 
+**休符ガード（round 1 P2）**: 選択イベントを `partsScore` から引き、`isRest` のときは
+出さず**既読も消費しない**。案内の1つ目「↑↓で音の高さ」は休符に効かず実挙動と食い違うため。
+休符を選んだ後に実音符を選べば、そのとき初回として出る。
+ScorePage 経由では休符クリックが入力ツールの「休符→音符置換」になるため、休符選択の
+初回状態は矢印キー移動（#442）でしか作れない。ガードの固定は選択を直接動かせる
+単体テスト（PianoSystemCanvasArrowKeyHint）側で行う。
+
 譜面は段ごとに別インスタンスなので、どの段で選んでも1回で済むよう、出すかどうかの判断は
 `localStorage` を見る claim 側に任せている（インスタンス間で状態を共有しない）。
+
+### テスト構成（round 1 P2 で追加）
+
+- `ScorePageArrowKeyHintWiring.test.tsx`（配線）: 実マウント→音符クリック→`edit-notice` に
+  ヒント表示→別通知で上書き後に再選択しても再表示なし→再マウント（リロード相当）でも出ない
+- `PianoSystemCanvasArrowKeyHint.test.tsx`（単体）: 休符ガード・通知件数・DOM 非追加
+- `arrowKeyHintNotice.test.ts`: 書き込み失敗環境で true→false（メモリ側契約）
+- `setupTests.ts` の既定既読は各テストの `localStorage.clear()` で消える。選択操作を多用する
+  テスト（例: ScorePageNoteArrowNavigation）は clear 直後に既読キーを明示セットする
 
 ## 影響範囲
 
