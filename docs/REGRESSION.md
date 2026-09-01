@@ -260,3 +260,27 @@
       符幹が上向きなら上、下向きなら下、という従来の見え方が変わっていたら退行。
 - [ ] 固定テスト: vexFlowTimingUtils.test.ts の「連符数字の上下」節（4件）・
       PianoSystemCanvasTupletPlacement.test.tsx（3件）
+
+## W. 毎小節 attributes を書き直した MusicXML の段割り（Issue #526）
+
+> 外部ソフトの書き出しは、変更が無くても毎小節 `<attributes>`（`<key>`・`<time>`）を
+> 書き直すことがある。これを「小節ごとの調号変更・拍子変更」として取り込むと、
+> 段割りの計画が小節の最低幅を水増しし、1段に入る小節数が不当に減る。
+> 設計の詳細は [`.claude/specs/musicxml-defaults-layout/design.md`](../.claude/specs/musicxml-defaults-layout/design.md) の追補（#526）。
+
+- [ ] `docs/qa/regression/moonlight-bars1-9-grandstaff.musicxml` を「ファイル」タブ →
+      「開く」→「MusicXML (.mxl)」で読み込み、**レイアウトタブの「音符の大きさ」を、
+      同じ内容の直接入力譜面（`moonlight-bars1-9.score.json` を読み込んだもの）が
+      1段2小節以上になる値まで下げて（目安: 100%）**、読込側が**同じ段割り**になること。
+      判定基準は「直接入力との一致」（段あたり2小節以上そのものは #559 の別問題）。
+      退行すると同じ設定でも読込側だけが段あたりの小節数が少なくなり、
+      既定の150%では実曲サイズの譜面が全段1小節/段になる。
+- [ ] 読み込んだ譜面に、**2小節目以降の頭で調号が描き直されていない**こと
+      （描画側は元から変化時だけ出すので、退行しても見た目には出ない＝幅だけが増える）。
+- [ ] 途中で本当に調号が変わるファイルでは、従来どおりその小節に記号が出ること
+      （拍子は現状の描画仕様では譜面の先頭にしか描かれないため、データ上
+      `timeSignature` がその小節にだけ付くことを確認する）。
+- [ ] 途中拍子変更を含むファイルの往復（読み込み→書き出し→再読み込み）で、
+      変更が1小節で終わらず継続すること（round1 P1 の固定テストあり）。
+- [ ] 固定テスト: musicXmlRepeatedAttributesLayout.test.ts（5件）・
+      ScorePageMusicXmlRepeatedAttributes.test.tsx（1件・読込→描画の配線）
