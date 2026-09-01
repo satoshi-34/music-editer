@@ -12,7 +12,7 @@ import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/re
 import ScorePage from './ScorePage';
 import {
   createSavedScoreData, createWork, saveWorkAutosaveData, setLastOpenedWorkId,
-  loadWorkAutosaveData,
+  loadWorkAutosaveData, saveScoreData, getLastOpenedWorkId,
 } from '../utils/storage';
 
 const localStorageMock = (() => {
@@ -161,22 +161,75 @@ describe('ScorePage: 作品ごとの全体テンポ（Issue #543）', () => {
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('MIDI 書き出しに作品テンポが乗る（round1 P2）', async () => {
-    const { scoreToMidi } = await import('../utils/midiExport');
+  it('MIDI 書き出しの実操作で作品テンポが Set Tempo に乗る（round1/2 P2: ScorePage 配線）', async () => {
+    const id = seedWork('MIDI配線', 112);
+    setLastOpenedWorkId(id);
+
+    // ダウンロードの Blob を横取りしてバイト列を読む
+    let midiBytes: Uint8Array | null = null;
+    const origCreateObjectURL = URL.createObjectURL;
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn((blob: Blob) => {
+        const reader = new FileReader();
+        reader.onload = () => { midiBytes = new Uint8Array(reader.result as ArrayBuffer); };
+        reader.readAsArrayBuffer(blob);
+        return 'blob:mock';
+      }),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    try {
+      render(<ScorePage />);
+      await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
+      await expectTempoToBe('112');
+
+      fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+      fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'midi' } });
+      fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
+
+      // Set Tempo メタイベント: FF 51 03 + µs/四分音符（112bpm = 535714µs = 0x082CA2）。
+      // buildCurrentScoreData から globalBpm を外すと 120（0x07A120）になって落ちる
+      await waitFor(() => {
+        expect(midiBytes).not.toBeNull();
+        const hex = Array.from(midiBytes!).map((b) => b.toString(16).padStart(2, '0')).join(' ');
+        const tempoUs = Math.round(60000000 / 112);
+        const tempoHex = [16, 8, 0].map((sh) => ((tempoUs >> sh) & 0xff).toString(16).padStart(2, '0')).join(' ');
+        expect(hex).toContain(`ff 51 03 ${tempoHex}`);
+      }, { timeout: 15000 });
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: origCreateObjectURL });
+    }
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('旧手動保存の取り込みで globalBpm が同期保存の時点から明示される（round1 P3）', async () => {
+    // 旧スロット（アプリ全体保存）へテンポ未保存の旧データを仕込む
     const rest = [{ dur: '1' as const, isRest: true, keys: ['b/4'] }];
-    const data = createSavedScoreData(
-      { title: 'midi', subtitle: '', lyricist: '', composer: '', arranger: '' },
+    const legacy = createSavedScoreData(
+      { title: '旧保存', subtitle: '', lyricist: '', composer: '', arranger: '' },
       [{ partId: 'melody', clef: 'treble', measures: [{ events: rest, voices: [{ id: 'voice-1', events: rest }] }] }],
-      1, 1, 'single', 'C', [4, 4],
-      undefined, undefined, undefined, undefined, undefined, undefined,
-      undefined, undefined, undefined, undefined, undefined, undefined,
-      112,
+      1, 1, 'single'
     );
-    const bytes = scoreToMidi(data);
-    // Set Tempo メタイベント: FF 51 03 のあと3バイトが µs/四分音符。112bpm = 535714µs = 0x082D05
-    const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join(' ');
-    const tempoUs = Math.round(60000000 / 112);
-    const tempoHex = [16, 8, 0].map((sh) => ((tempoUs >> sh) & 0xff).toString(16).padStart(2, '0')).join(' ');
-    expect(hex).toContain(`ff 51 03 ${tempoHex}`);
-  });
+    saveScoreData(legacy);
+    localStorage.setItem('music-app-tempo-settings', JSON.stringify({
+      bpm: 88, timeSignature: [4, 4], version: '1.0.0', lastUpdated: Date.now(),
+    }));
+    const startId = seedWork('起点');
+    setLastOpenedWorkId(startId);
+
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    fireEvent.click(screen.getByRole('button', { name: '以前の手動保存' }));
+
+    // 取り込み完了（新作品へ切替）を待ち、その**同期保存の時点**で globalBpm が明示されている。
+    // 3151 付近の明示代入を消すと、自動保存が走るまで undefined のままになり落ちる
+    await waitFor(() => {
+      const newId = getLastOpenedWorkId();
+      expect(newId).not.toBe(startId);
+      const saved = loadWorkAutosaveData(newId!);
+      expect(saved.success).toBe(true);
+      expect(saved.data?.globalBpm).toBe(88);
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });
