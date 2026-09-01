@@ -34,11 +34,19 @@ const profileWithRelease = (release: number) => ({
   release,
 });
 
+type MockGainParam = {
+  setValueAtTime: ReturnType<typeof vi.fn>;
+  linearRampToValueAtTime: ReturnType<typeof vi.fn>;
+  exponentialRampToValueAtTime: ReturnType<typeof vi.fn>;
+};
+
 describe('内蔵音源（SimpleAudioEngine）のリリースの尻尾（Issue #525）', () => {
   let createdOscillators: MockOscillator[];
+  let createdGains: { gain: MockGainParam }[];
 
   beforeEach(() => {
     createdOscillators = [];
+    createdGains = [];
     const createMockOscillator = () => {
       const osc = {
         type: 'sine' as OscillatorType,
@@ -51,14 +59,18 @@ describe('内蔵音源（SimpleAudioEngine）のリリースの尻尾（Issue #5
       createdOscillators.push(osc);
       return osc;
     };
-    const createMockGainNode = () => ({
-      gain: {
-        setValueAtTime: vi.fn(),
-        linearRampToValueAtTime: vi.fn(),
-        exponentialRampToValueAtTime: vi.fn(),
-      },
-      connect: vi.fn(), disconnect: vi.fn(),
-    });
+    const createMockGainNode = () => {
+      const node = {
+        gain: {
+          setValueAtTime: vi.fn(),
+          linearRampToValueAtTime: vi.fn(),
+          exponentialRampToValueAtTime: vi.fn(),
+        },
+        connect: vi.fn(), disconnect: vi.fn(),
+      };
+      createdGains.push(node);
+      return node;
+    };
     const mockContext = {
       state: 'running', currentTime: 0, destination: {},
       resume: vi.fn(), close: vi.fn(),
@@ -109,6 +121,58 @@ describe('内蔵音源（SimpleAudioEngine）のリリースの尻尾（Issue #5
       .toBeCloseTo(MAX_RELEASE_TAIL_SECONDS - MIN_RELEASE_TAIL_SECONDS, 5);
   });
 
+  it('短い音符では音色固有の尻尾も音符長までに抑える（round1 P2）', async () => {
+    const engine = new SimpleAudioEngine();
+    await engine.initialize();
+    createdOscillators.length = 0;
+    engine.setSoundProfile(profileWithRelease(1));
+    engine.setInstrument(InstrumentType.GUITAR);
+    const startTime = 5;
+    const sixteenth = 0.125;
+    await simpleInternals(engine).playNoteAtTime(440, sixteenth, startTime, 0.5);
+
+    // ギター固有の 0.54 秒ではなく、max(0.12, 音符長 0.125) = 0.125 秒で止まる
+    const stoppedAt = createdOscillators[0].stop.mock.calls[0][0] as number;
+    expect(stoppedAt).toBeCloseTo(startTime + sixteenth + 0.125, 5);
+  });
+
+  it('音価の終端に明示のオートメーション点があり、尻尾でほぼゼロへ減衰する（round1 P2）', async () => {
+    const whole = 4;
+    const startTime = 5;
+    const engine = new SimpleAudioEngine();
+    await engine.initialize();
+    createdOscillators.length = 0;
+    createdGains.length = 0;
+    engine.setSoundProfile(profileWithRelease(0.5));
+    await simpleInternals(engine).playNoteAtTime(440, whole, startTime, 0.5);
+
+    // 音符用の GainNode を特定する（出力の下ならし等で別の GainNode も作られ得るため全走査）
+    const expCalls = createdGains.flatMap(
+      (node) => node.gain.exponentialRampToValueAtTime.mock.calls as [number, number][],
+    );
+    // 音価の終端（startTime+duration）ちょうどの点がある
+    expect(expCalls.some(([, time]) => Math.abs(time - (startTime + whole)) < 1e-6)).toBe(true);
+    // 尻尾の終端でほぼゼロ（0.0001）へ落とす
+    const tail = resolveReleaseTailSeconds(0.5, whole);
+    expect(expCalls.some(([value, time]) => value === 0.0001 && Math.abs(time - (startTime + whole + tail)) < 1e-6)).toBe(true);
+  });
+
+  it('stopAll は Safari 簡易経路の音（予約済み含む）も止める（round1 P1）', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Macintosh) AppleWebKit/605 Version/17 Safari/605' });
+    const engine = new SimpleAudioEngine();
+    await engine.initialize();
+    createdOscillators.length = 0;
+    engine.setSoundProfile(profileWithRelease(1));
+    await simpleInternals(engine).playNoteAtTime(440, 4, 5, 0.5);
+    const osc = createdOscillators[0];
+    expect(osc.stop.mock.calls.length).toBe(1); // 予約どおりの停止時刻
+
+    engine.stopAll();
+    // 台帳に登録されているので、stopAll で「今すぐ」の停止も予約される
+    expect(osc.stop.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(osc.stop.mock.calls.at(-1)![0] as number).toBeCloseTo(0, 5);
+  });
+
   it('音色ごとの余韻（ギターの tailSeconds）が共通の下限より長い場合は、その長さを保つ', async () => {
     const engine = new SimpleAudioEngine();
     await engine.initialize();
@@ -143,6 +207,31 @@ describe('SoundFont のリリースの尻尾（Issue #525）', () => {
     expect(options.duration).toBeCloseTo(whole, 5);
     expect(options.release).toBeCloseTo(resolveReleaseTailSeconds(0.5, whole), 5);
     expect(options.release).toBeGreaterThanOrEqual(MIN_RELEASE_TAIL_SECONDS);
+  });
+
+  it('stopAll はマスターゲインで尻尾ごと即時消音する（round1 P1）', () => {
+    const masterGain = {
+      gain: {
+        value: 0.8,
+        cancelScheduledValues: vi.fn(),
+        setValueAtTime: vi.fn(),
+        linearRampToValueAtTime: vi.fn(),
+      },
+      connect: vi.fn(),
+    };
+    const engine = new SoundFontEngine();
+    const internals = engine as unknown as { context: unknown; masterGainNode: unknown };
+    internals.context = { currentTime: 10 };
+    internals.masterGainNode = masterGain;
+
+    engine.stopAll();
+
+    // 尻尾ごと即時（0.03秒）でほぼゼロへ、その後に音量を元へ戻して次の再生へ備える
+    expect(masterGain.gain.cancelScheduledValues).toHaveBeenCalledWith(10);
+    expect(masterGain.gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.0001, 10.03);
+    const restoreCall = masterGain.gain.setValueAtTime.mock.calls.at(-1)!;
+    expect(restoreCall[1]).toBeCloseTo(10.08, 5);
+    expect(restoreCall[0]).toBeGreaterThan(0);
   });
 
   it('余韻スライダーで尻尾の長さが変わる', () => {

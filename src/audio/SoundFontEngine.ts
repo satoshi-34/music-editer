@@ -298,6 +298,22 @@ export class SoundFontEngine implements PlaybackEngine {
         console.warn('[SoundFontEngine] stopAll中の停止エラーを無視します:', error);
       }
     });
+    // sample-player の stop はリリース（尻尾）を鳴らし切ってから止まるため、
+    // #525 で尻尾を 0.3〜0.6 秒へ伸ばした結果、停止直後の再再生と旧音の尻尾が
+    // 重なるようになる（round1 P1）。強制停止はマスターゲインで即時消音し、
+    // 少し後（尻尾が消えたあと）に音量を元へ戻して次の再生に備える
+    if (this.context && this.masterGainNode) {
+      const gain = this.masterGainNode.gain;
+      const now = this.context.currentTime;
+      try {
+        gain.cancelScheduledValues(now);
+        gain.setValueAtTime(gain.value, now);
+        gain.linearRampToValueAtTime(0.0001, now + 0.03);
+        gain.setValueAtTime(getMasterVolumeGain(this.soundProfile), now + 0.08);
+      } catch (error) {
+        console.warn('[SoundFontEngine] stopAll中の消音エラーを無視します:', error);
+      }
+    }
     console.log('[SoundFontEngine] すべての再生を停止しました');
   }
 

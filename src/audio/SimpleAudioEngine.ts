@@ -183,8 +183,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
         adjustedDecayTarget,
         context.currentTime + Math.max(adjustedAttack + 0.01, duration * 0.3)
       );
+      // 音価の終端の明示点 → 尻尾でほぼゼロへ（時刻指定経路と同じ形・round1 P2）
       gainNode.gain.exponentialRampToValueAtTime(
-        adjustedReleaseFloor,
+        Math.max(0.0001, adjustedReleaseFloor),
+        context.currentTime + duration
+      );
+      gainNode.gain.exponentialRampToValueAtTime(
+        0.0001,
         context.currentTime + duration + adjustedTailSeconds
       );
       
@@ -573,8 +578,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
         adjustedDecayTarget,
         startTime + Math.max(adjustedAttack + 0.01, duration * 0.3)
       );
+      // 音価の終端に明示のオートメーション点を置き、そこから尻尾区間でほぼゼロへ減衰させる
+      //（round1 P2: 終端の点が無いと「音価の後のリリース」ではなく音本体の勾配が緩むだけになる）
       gainNode.gain.exponentialRampToValueAtTime(
         adjustedReleaseFloor,
+        startTime + duration
+      );
+      gainNode.gain.exponentialRampToValueAtTime(
+        0.0001,
         startTime + duration + adjustedTailSeconds
       );
       
@@ -1178,6 +1189,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
       Math.max(0.02, adjustedDecayTarget),
       startTime + Math.max(0.08, duration * 0.35)
     );
+    // 音価の終端の明示点 → 尻尾でほぼゼロへ（通常経路と同じ形）
+    gainNode.gain.linearRampToValueAtTime(0.02, startTime + duration);
     gainNode.gain.linearRampToValueAtTime(
       0.0001,
       startTime + duration + adjustedTailSeconds
@@ -1185,9 +1198,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
     oscillator.connect(gainNode);
     gainNode.connect(this.getOutputNode(context));
+    // stopAll で尻尾ごと止められるよう、簡易経路の音も通常経路と同じ台帳に登録する
+    //（round1 P1: 未登録だと停止後も予約済みの音と 0.3〜0.6 秒の尻尾が鳴り続ける）
+    const safariOscillatorId = this.registerOscillators([oscillator], gainNode, instrumentConfig, startTime);
     oscillator.start(startTime);
     oscillator.stop(startTime + duration + adjustedTailSeconds);
     oscillator.addEventListener('ended', () => {
+      this.cleanupOscillator(safariOscillatorId, gainNode);
       try {
         oscillator.disconnect();
       } catch {
@@ -1241,10 +1258,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
     instrumentConfig: { tailSeconds?: number },
     duration: number,
   ): number {
-    return Math.max(
+    const uncapped = Math.max(
       this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0),
       resolveReleaseTailSeconds(this.soundProfile.release, duration),
     );
+    // 音色固有の尻尾（ギター等）も短い音符では音符長まで（下限 0.12 秒）に抑える
+    //（round1 P2: Math.max だけだと音色固有値が短音抑制を迂回し、速いパッセージが濁る）。
+    // 長い音符では duration が上限を押し上げるので、音色の個性はそのまま残る
+    return Math.min(uncapped, Math.max(0.12, duration));
   }
 
   private getAdjustedLayerGainRatio(
