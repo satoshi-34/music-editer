@@ -808,10 +808,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       kind === 'success' ? 3000 : 10000
     );
   }, []);
-  // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける
+  // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける。
+  // テスト環境では teardown 後に発火したタイマーが未処理例外になり、全テスト緑でも
+  // exit 1 になる（既知の CI フレーク）。通知系タイマー ref を増やしたら必ずここにも足す。
   useEffect(() => () => {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
     if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
+    if (feedbackNoticeTimerRef.current) clearTimeout(feedbackNoticeTimerRef.current);
+    if (editNoticeTimerRef.current) clearTimeout(editNoticeTimerRef.current);
+    if (restoreNoticeTimerRef.current) clearTimeout(restoreNoticeTimerRef.current);
   }, []);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
@@ -1130,6 +1135,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     clearPositionTimers();
   }, [clearPositionTimers]);
 
+  // 再生中にアンマウントされても、終了予約・位置表示予約を残さない
+  // （残すとテスト teardown 後に発火して未処理例外になる。通知系タイマーと同じ問題）
+  useEffect(() => () => {
+    clearPlaybackTimer();
+  }, [clearPlaybackTimer]);
+
   const resetPlaybackClock = useCallback(() => {
     // 3 つの ref は「いつ始まったか」「あと何ミリ秒あるか」「全体で何ミリ秒か」のセット。
     // 一部だけ残すと pause/resume 後の位置計算が狂うため、初期化は同時に行う。
@@ -1209,11 +1220,19 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
   }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock]);
 
+  // 無音検知の予約もタイマー ref で持ち、アンマウント時に必ず片付ける
+  // （追跡なしの setTimeout だとテスト teardown 後に発火して未処理例外になる）
+  const outputHealthCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleOutputHealthCheck = useCallback((engine: PlaybackEngine) => {
-    window.setTimeout(() => {
+    if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
+    outputHealthCheckTimerRef.current = setTimeout(() => {
+      outputHealthCheckTimerRef.current = null;
       void runOutputHealthCheck(engine);
     }, SILENT_FAILURE_CHECK_DELAY_MS);
   }, [runOutputHealthCheck]);
+  useEffect(() => () => {
+    if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
+  }, []);
 
   // スコアタイプ切り替え時に左手データを初期化
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
@@ -2906,6 +2925,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem, layoutAttrRevision]);
 
+  // 「保存済み」表示を消す予約もアンマウント時に必ず片付ける（他の通知系タイマーと同じ理由）。
+  // ※自動保存 useEffect の目印コメントと依存配列の間に別の useEffect を置くと
+  //   ScorePageAutosaveDeps.test.tsx の静的検査が誤った依存配列を読むため、この位置に置く。
+  useEffect(() => () => {
+    if (autoSaveStatusTimerRef.current) clearTimeout(autoSaveStatusTimerRef.current);
+  }, []);
+
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
   const updateWorkListPosition = useCallback(() => {
@@ -4196,6 +4222,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 短く表示するお知らせ（他の autoSaveStatus / restoreNotice と同じ「数秒で消える」パターン）。
   const [settingsProfileNotice, setSettingsProfileNotice] = useState<string | null>(null);
   const settingsProfileNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // この通知タイマーもアンマウント時に必ず片付ける（宣言位置の都合で個別 useEffect）
+  useEffect(() => () => {
+    if (settingsProfileNoticeTimerRef.current) clearTimeout(settingsProfileNoticeTimerRef.current);
+  }, []);
   const showSettingsProfileNotice = useCallback((message: string) => {
     setSettingsProfileNotice(message);
     if (settingsProfileNoticeTimerRef.current) clearTimeout(settingsProfileNoticeTimerRef.current);
