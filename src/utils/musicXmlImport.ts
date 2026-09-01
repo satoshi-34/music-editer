@@ -496,7 +496,16 @@ function staffPartId(
  * @param measureEls その <part> の <measure> 要素すべて
  * @param staffNumber 取り出す五線の番号。null は「五線で分けない」（<staves> が無い従来の譜）
  */
-function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, staffClef: ClefType): MeasureData[] {
+function buildStaffMeasures(
+  measureEls: Element[],
+  staffNumber: number | null,
+  staffClef: ClefType,
+  // 楽譜全体の調号（fifths）と拍子。先頭の <attributes> から読んだ「この曲の既定値」で、
+  // 各小節の <attributes> が「本当に変更なのか、同じ内容の書き直しなのか」を判断する
+  // 比較相手になる（Issue #526）。
+  scoreKeyFifths: number = 0,
+  scoreTimeSignature: [number, number] = [4, 4],
+): MeasureData[] {
   // 松葉（ヘアピン）は小節をまたぐ場合があるため、パート全体で1つの待ち行列を使い回す。
   // 声部1と声部2で別々に持つのは、<backup> を挟んで別々の松葉が同時に開くことがあるため。
   const openHairpinRefs: HairpinMark[] = [];
@@ -521,6 +530,16 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
   // 次の小節の頭から有効として扱う
   let runningClef: ClefType = staffClef;
   let carriedClef: ClefType | null = null;
+  // 調号・拍子も「前の小節の時点で有効な値」を持ち回り、**変わったときだけ**小節へ記録する
+  // （クレフの runningClef と同じ考え方）。Finale などの書き出しは、変更が無くても
+  // 毎小節 <attributes> に <key>・<time> を書き直すことがある。これをそのまま
+  // 「この小節で調号・拍子が変わる」として取り込むと、段割りの計画（planEffectiveMeasuresPerSystem）
+  // が「この小節には調号と拍子が描かれる」と見なして小節幅を過大に見積もり、
+  // 1段に入る小節数が不当に減る（Issue #526: 読み込むと全段が1小節/段になる）。
+  // 描画側（PianoSystemCanvas）は前の小節と比べて変化したときだけ記号を出すので、
+  // 記録しないことで見た目は変わらない。
+  let runningKeyFifths = scoreKeyFifths;
+  let runningTimeSig: [number, number] = scoreTimeSignature;
   return measureEls.map((measureEl, mi) => {
     const divEl = measureEl.querySelector('attributes divisions');
     const divVal = parseInt(divEl?.textContent ?? '', 10);
@@ -763,20 +782,27 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     if (attrEl) {
       const b = parseInt(attrEl.querySelector('beats')?.textContent ?? '', 10);
       const bt = parseInt(attrEl.querySelector('beat-type')?.textContent ?? '', 10);
-      if (!isNaN(b) && !isNaN(bt) && isValidTimeSignature([b, bt])) {
+      // 同じ拍子の書き直しは「変更」として取り込まない（上の runningTimeSig 参照）
+      if (!isNaN(b) && !isNaN(bt) && isValidTimeSignature([b, bt])
+        && (b !== runningTimeSig[0] || bt !== runningTimeSig[1])) {
         timeSig = [b, bt];
+        runningTimeSig = [b, bt];
       }
     }
 
-    // 小節単位調号変更（先頭小節はグローバル調号として別に扱うため、2小節目以降のみ拾う）
+    // 小節単位調号変更（先頭小節はグローバル調号として別に扱うため、2小節目以降のみ拾う）。
+    // 同じ調号の書き直しは「変更」として取り込まない（上の runningKeyFifths 参照）
     let measureKeySig: KeySignature | undefined;
-    if (mi > 0) {
+    {
       const keyEl = measureEl.querySelector('key fifths');
       if (keyEl) {
         const fifths = parseInt(keyEl.textContent ?? '', 10);
-        if (!isNaN(fifths) && fifths >= -7 && fifths <= 7) {
+        if (!isNaN(fifths) && fifths >= -7 && fifths <= 7 && fifths !== runningKeyFifths) {
           const ks = FIFTHS_TO_KEY[fifths];
-          if (ks && isValidKeySignature(ks)) measureKeySig = ks;
+          if (ks && isValidKeySignature(ks)) {
+            if (mi > 0) measureKeySig = ks;
+            runningKeyFifths = fifths;
+          }
         }
       }
     }
@@ -1001,7 +1027,7 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
 
     for (const staffNumber of staffNumbers) {
       const staffClef = clefForStaff(firstPartAttrs, staffNumber) ?? defaultClef;
-      const measures = buildStaffMeasures(measureEls, staffNumber, staffClef);
+      const measures = buildStaffMeasures(measureEls, staffNumber, staffClef, globalKeyFifths, globalTimeSig);
       sourcePartElIndexByPart.push(partListConsistent ? partListIds.indexOf(partId) : pi);
       parts.push({
         partId: staffPartId(partName, staffNumber, staffCount, partEls.length),
