@@ -109,6 +109,17 @@ export function resolveSoundFontName(rawName: string): string {
  * SoundFont ベースの再生エンジン。
  * 波形を手作りする代わりに、既存の楽器サンプルを読み込んで鳴らす。
  */
+/**
+ * 停止（stopAll）によって進行中の SoundFont 読み込みが中断されたことを表すエラー（#525 round4 P1）。
+ * これを受けた再生要求は「停止された」ものとして静かに終わってよい。
+ */
+export class SoundFontLoadAbortedError extends Error {
+  constructor() {
+    super('停止により SoundFont の読み込みを中断しました');
+    this.name = 'SoundFontLoadAbortedError';
+  }
+}
+
 export class SoundFontEngine implements PlaybackEngine {
   private context: AudioContext | null = null;
   private module: SoundFontModule | null = null;
@@ -128,6 +139,9 @@ export class SoundFontEngine implements PlaybackEngine {
    * 新しい世代で作り直す。これが無いと停止をまたいだ読み込みが無音 player を残す。
    */
   private outputGeneration = 0;
+
+  /** 作成中の player の共有置き場（キー = `${世代}:${soundfont}:${楽器}`・round4 P2） */
+  private readonly playerLoading = new Map<string, Promise<SoundFontPlayer>>();
   // すべての player の出力をこの GainNode 経由で destination へ流す。
   // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
   private masterGainNode: GainNode | null = null;
@@ -409,34 +423,49 @@ export class SoundFontEngine implements PlaybackEngine {
       return cached;
     }
 
+    // 作成中の Promise を楽器×世代単位で共有する（round4 P2）。
+    // 共有しないと「先読みと実再生」「複数パートの同一楽器」で module.instrument が
+    // 重複実行され、先読みの待ち時間短縮も効かなくなる
     const generationAtStart = this.outputGeneration;
-    const module = await this.loadModule();
-    const context = this.ensureContext();
+    const loadKey = `${generationAtStart}:${cacheKey}`;
+    const inFlight = this.playerLoading.get(loadKey);
+    if (inFlight) return inFlight;
 
-    // notes を絞ると初回ダウンロード量は減らせるが、
-    // まずは「どの音域でも鳴る」ことを優先してフルレンジを使う。
-    // ここで soundfontName を差し替えると、MusyngKite / FluidR3_GM などを試せる。
-    // destination をマスター GainNode にすることで、音量スライダーが全 player に効く。
-    const player = await module.instrument(context, instrumentName as never, {
-      soundfont: this.soundfontName,
-      format: 'mp3',
-      destination: this.getOutputNode(context)
-    });
+    const loading = (async (): Promise<SoundFontPlayer> => {
+      const module = await this.loadModule();
+      const context = this.ensureContext();
 
-    // 作成中に stopAll が走った場合、この player は旧・切断済みマスターへ配線されて
-    // いる可能性がある。キャッシュせず、新しい世代で作り直す（round3 P1）
-    if (generationAtStart !== this.outputGeneration) {
-      try {
-        player.stop();
-      } catch {
-        // 旧世代 player の停止失敗は無視してよい（どこにも繋がっていない）
+      // notes を絞ると初回ダウンロード量は減らせるが、
+      // まずは「どの音域でも鳴る」ことを優先してフルレンジを使う。
+      // ここで soundfontName を差し替えると、MusyngKite / FluidR3_GM などを試せる。
+      // destination をマスター GainNode にすることで、音量スライダーが全 player に効く。
+      const player = await module.instrument(context, instrumentName as never, {
+        soundfont: this.soundfontName,
+        format: 'mp3',
+        destination: this.getOutputNode(context)
+      });
+
+      // 作成中に stopAll が走った場合、この player は旧・切断済みマスターへ配線されて
+      // いる可能性がある。**この読み込みを待っていた再生要求ごと中断する**（round4 P1:
+      // 新世代で作り直して返すと、停止したはずの再生がロード完了後に鳴り出してしまう）。
+      // 次の再生に備えるのは stopAll 側の先読み（新世代の別要求）の役割
+      if (generationAtStart !== this.outputGeneration) {
+        try {
+          player.stop();
+        } catch {
+          // 旧世代 player の停止失敗は無視してよい（どこにも繋がっていない）
+        }
+        throw new SoundFontLoadAbortedError();
       }
-      return this.getPlayerForInstrument(instrument);
-    }
 
-    this.playerCache.set(cacheKey, player);
-    console.log('[SoundFontEngine] SoundFontを読み込みました:', instrumentName, this.soundfontName);
-    return player;
+      this.playerCache.set(cacheKey, player);
+      console.log('[SoundFontEngine] SoundFontを読み込みました:', instrumentName, this.soundfontName);
+      return player;
+    })().finally(() => {
+      this.playerLoading.delete(loadKey);
+    });
+    this.playerLoading.set(loadKey, loading);
+    return loading;
   }
 
   private async loadModule(): Promise<SoundFontModule> {

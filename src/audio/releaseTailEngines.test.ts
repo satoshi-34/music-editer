@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { SimpleAudioEngine } from './SimpleAudioEngine';
-import { SoundFontEngine } from './SoundFontEngine';
+import { SoundFontEngine, SoundFontLoadAbortedError } from './SoundFontEngine';
 import { InstrumentType } from './SoundSource';
 import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS } from './playbackSettings';
 import { MIN_RELEASE_TAIL_SECONDS, MAX_RELEASE_TAIL_SECONDS, resolveReleaseTailSeconds } from './releaseTail';
@@ -302,13 +302,38 @@ describe('SoundFont のリリースの尻尾（Issue #525）', () => {
     await vi.waitFor(() => { expect(instrumentMock).toHaveBeenCalled(); });
     engine.stopAll(); // 世代交代（先読みも1回走る）
     resolveFirst!(null as never);
-    const player = await pending;
 
-    // 返るのは新世代で作り直した player（保留中だった1個目ではない）。
-    // 1個目は停止され、キャッシュにも入らない
-    expect(player).not.toBe(madePlayers[0]);
+    // 停止をまたいだ読み込みを待っていた再生要求は**中断**される（round4 P1:
+    // 新世代で作り直して返すと、停止したはずの再生がロード完了後に鳴り出す）。
+    // 旧世代 player は停止され、キャッシュにも入らない
+    await expect(pending).rejects.toBeInstanceOf(SoundFontLoadAbortedError);
     expect(madePlayers[0].stop).toHaveBeenCalled();
     expect(Array.from(internals.playerCache.values())).not.toContain(madePlayers[0]);
+  });
+
+  it('同じ楽器の作成中 Promise は共有され、module.instrument が重複実行されない（round4 P2）', async () => {
+    const engine = new SoundFontEngine();
+    const internals = engine as unknown as {
+      context: unknown;
+      ensureContext: () => unknown;
+      loadModule: () => Promise<unknown>;
+      getPlayerForInstrument: (instrument: InstrumentType) => Promise<unknown>;
+    };
+    const ctx = { currentTime: 0, destination: {}, createGain: () => ({ gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() }) };
+    internals.context = ctx;
+    internals.ensureContext = () => ctx;
+    let resolveLoad: ((p: unknown) => void) | null = null;
+    const instrumentMock = vi.fn(() => new Promise((resolve) => { resolveLoad = () => resolve({ stop: vi.fn(), connect: vi.fn() }); }));
+    internals.loadModule = async () => ({ instrument: instrumentMock });
+
+    const first = internals.getPlayerForInstrument(InstrumentType.PIANO);
+    await vi.waitFor(() => { expect(instrumentMock).toHaveBeenCalledTimes(1); });
+    const second = internals.getPlayerForInstrument(InstrumentType.PIANO);
+    resolveLoad!(null as never);
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(instrumentMock).toHaveBeenCalledTimes(1);
+    expect(a).toBe(b);
   });
 
   it('余韻スライダーで尻尾の長さが変わる', () => {
