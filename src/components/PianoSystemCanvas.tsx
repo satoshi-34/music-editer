@@ -3408,9 +3408,13 @@ export default function PianoSystemCanvas({
     //（立てると解除役の mouseup が来ず、中断後の最初のクリックが1回捨てられる）
     const onPointerCancel = () => { cancelActiveDragSessions({ suppressNextClick: false }); };
     window.addEventListener('mouseup', onWindowMouseUp);
+    // 記号ドラッグは pointer 系へ移行したため、安全弁も pointerup で効かせる（round2 P2:
+    // タッチでは mouseup が保証されず、preventDefault で互換 mouse イベントも抑止され得る）
+    window.addEventListener('pointerup', onWindowMouseUp);
     window.addEventListener('pointercancel', onPointerCancel);
     return () => {
       window.removeEventListener('mouseup', onWindowMouseUp);
+      window.removeEventListener('pointerup', onWindowMouseUp);
       window.removeEventListener('pointercancel', onPointerCancel);
     };
   }, [cancelActiveDragSessions]);
@@ -3550,8 +3554,8 @@ export default function PianoSystemCanvas({
    * 記号のドラッグ移動（Issue #522）の mousemove / mouseup を window で受ける。
    *
    * window で受ける理由は弧のドラッグ（#235）と同じで、さらにもう1つある:
-   * 記号を1px動かすたびに下書きが変わって SVG が作り直されるため、mousedown を受けた
-   * 当たり判定 rect はドラッグの途中で消える。要素側で mousemove を待つと、
+   * 記号を1px動かすたびに下書きが変わって SVG が作り直されるため、pointerdown を受けた
+   * 当たり判定 rect はドラッグの途中で消える。要素側で pointermove を待つと、
    * 動かし始めた直後に記号が指から置き去りになってしまう。
    */
   useEffect(() => {
@@ -4640,9 +4644,11 @@ export default function PianoSystemCanvas({
             pointerId: me.pointerId,
           };
         });
-        // タッチでのドラッグ中にブラウザのスクロール/ズームへ取られないようにする
-        //（つかめる記号の上だけ。通常クリックの記号は従来どおり）
-        if (isOffsetDragTarget()) hit.style.touchAction = 'none';
+        // タッチでのドラッグ中にブラウザのスクロール/ズームへ取られないようにする。
+        // ✥を開いた直後は描画 effect が走らず rect が作り直されないため、
+        // 対象判定に依存せず**常に**設定する（round2 P2。記号の判定 rect は小さく、
+        // その上からページをスクロールし始める操作は実用上無い）
+        hit.style.touchAction = 'none';
         hit.addEventListener('click', (domEvent) => {
           domEvent.stopPropagation();
           // ドラッグで動かした直後の click は、記号を選び直す操作ではないので読み飛ばす

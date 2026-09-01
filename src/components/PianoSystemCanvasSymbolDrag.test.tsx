@@ -228,8 +228,10 @@ describe('記号のドラッグ移動（Issue #522）', () => {
           symbolsClickable={true}
         />
       );
-      // 合成 click が来ない場所で離した（記号ハンドラは drag=null で早期 return する）
-      fireEvent.mouseUp(window);
+      // 合成 click が来ない場所で離した（記号ハンドラは drag=null で早期 return する）。
+      // 実際のポインタ列と同じく pointerup だけを発火する（round2 P2:
+      // タッチでは mouseup が保証されないため、安全弁は pointerup で効く必要がある）
+      fireEvent.pointerUp(window, { pointerId: 1 });
       vi.runOnlyPendingTimers();
 
       // フラグが残留していると、この click が1回無言で捨てられてオーバーレイが開かない
