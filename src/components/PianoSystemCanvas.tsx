@@ -3135,6 +3135,8 @@ export default function PianoSystemCanvas({
       baseX: number; baseY: number;
       /** しきい値を超えて「ドラッグ」になったか（超えるまではただのクリック扱い） */
       moved: boolean;
+      /** つかんだポインタ列（タッチ対応・多点の混線防止。round1 P2） */
+      pointerId: number;
     } | null;
     /**
      * 直前のドラッグで記号を動かしたか。ドラッグの終わりに必ず来る click を
@@ -3392,6 +3394,15 @@ export default function PianoSystemCanvas({
       ) {
         setTimeout(() => { dragSessionsRef.current.arcMoved = false; }, 0);
       }
+      // 記号ドラッグ側の同じ安全弁（#522 round1 P2）: ツール切替の中断で
+      // symbolOffset は null・symbolOffsetMoved は true のまま残る。合成 click が
+      // 来ない場所で離すとフラグが残留し、後日の最初の譜面クリックが1回捨てられる
+      if (
+        dragSessionsRef.current.symbolOffset == null &&
+        dragSessionsRef.current.symbolOffsetMoved
+      ) {
+        setTimeout(() => { dragSessionsRef.current.symbolOffsetMoved = false; }, 0);
+      }
     };
     // pointercancel には mouseup も click も続かないので、click の読み飛ばしは立てない
     //（立てると解除役の mouseup が来ず、中断後の最初のクリックが1回捨てられる）
@@ -3544,10 +3555,12 @@ export default function PianoSystemCanvas({
    * 動かし始めた直後に記号が指から置き去りになってしまう。
    */
   useEffect(() => {
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       const drag = dragSessionsRef.current.symbolOffset;
       const ctx = arcDragContextRef.current;
       if (!drag || !ctx) return;
+      // つかんだ指/ボタンのポインタ列だけを追う（round1 P2: タッチ対応・多点の混線防止）
+      if (ev.pointerId !== drag.pointerId) return;
       if (!drag.moved) {
         // 遊びを超えるまでは「クリック（記号を選ぶ）」のまま。押した指の震えで
         // 記号が動き、Undo 履歴が1件増えるのを防ぐ
@@ -3573,9 +3586,10 @@ export default function PianoSystemCanvas({
       symbolOffsetDragRef.current.applyDraft(nextX, nextY);
     };
 
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
       const drag = dragSessionsRef.current.symbolOffset;
       if (!drag) return;
+      if (ev.pointerId !== drag.pointerId) return;
       dragSessionsRef.current.symbolOffset = null;
       // つかんだだけ（＝記号を選ぶためのクリック）なら保存しない
       if (!drag.moved) return;
@@ -3585,11 +3599,13 @@ export default function PianoSystemCanvas({
       window.setTimeout(() => { dragSessionsRef.current.symbolOffsetMoved = false; }, 0);
     };
 
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    // mouse ではなく pointer で受ける（round1 P2）: タッチの互換マウスイベントは
+    // 指の移動中の連続 mousemove を配送しないため、mouse 系だけだとタッチでドラッグできない
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
     return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
     };
   }, [markOffsetOverlayKeyAdjust]);
 
@@ -4593,9 +4609,12 @@ export default function PianoSystemCanvas({
           hit.style.cursor = isOffsetDragTarget() ? 'grab' : 'pointer';
         });
         hit.addEventListener('mouseleave', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0)'));
-        hit.addEventListener('mousedown', (domEvent) => {
+        hit.addEventListener('pointerdown', (domEvent) => {
           if (!isOffsetDragTarget()) return;  // 通常のクリック（記号を選ぶ）はそのまま通す
-          const me = domEvent as MouseEvent;
+          const me = domEvent as PointerEvent;
+          // 主ポインタの左ボタン/指だけでつかむ（round1 P3: 右クリックや補助ボタンの
+          // ドラッグで保存が始まると、コンテキストメニュー操作のつもりが移動になる）
+          if (!me.isPrimary || me.button !== 0) return;
           // 押した瞬間に入力欄からフォーカスが外れる（blur ＝ 確定して閉じる）のを止める。
           // 閉じてしまうと動かす対象を見失ってドラッグが成立しない
           //（「この記号を削除」ボタンと同じ preventDefault の使い方・Issue #385 続報）
@@ -4618,8 +4637,12 @@ export default function PianoSystemCanvas({
             startSvgX: x, startSvgY: y,
             startClientX: me.clientX, startClientY: me.clientY,
             baseX, baseY, moved: false,
+            pointerId: me.pointerId,
           };
         });
+        // タッチでのドラッグ中にブラウザのスクロール/ズームへ取られないようにする
+        //（つかめる記号の上だけ。通常クリックの記号は従来どおり）
+        if (isOffsetDragTarget()) hit.style.touchAction = 'none';
         hit.addEventListener('click', (domEvent) => {
           domEvent.stopPropagation();
           // ドラッグで動かした直後の click は、記号を選び直す操作ではないので読み飛ばす

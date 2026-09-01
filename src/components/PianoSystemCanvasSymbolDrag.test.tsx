@@ -5,7 +5,7 @@
 //   - 保存はマウスを離した1回だけ（＝ Undo 1回で移動前へ戻る）
 //   - わずかな震え（しきい値以下）は「クリック」のままで、保存もオーバーレイの
 //     開閉も起きない
-//   - 調整中でない記号は mousedown しても動かない（通常のクリック・音符入力と衝突させない）
+//   - 調整中でない記号は pointerdown しても動かない（通常のクリック・音符入力と衝突させない）
 //   - 既存の ✥＋矢印キーの操作に回帰がない
 //
 // 値の反映は矢印キーと同じ「下書き → 離した時点で確定」経路を共用しているので、
@@ -110,9 +110,11 @@ function openOffsetOverlay(container: HTMLElement) {
 
 /** つかむ → 運ぶ → 離す。運ぶ途中の mousemove / mouseup は実装と同じく window で受ける */
 function dragSymbol(container: HTMLElement, from: { x: number; y: number }, to: { x: number; y: number }) {
-  fireEvent.mouseDown(symbolRegion(container), { clientX: from.x, clientY: from.y });
-  fireEvent.mouseMove(window, { clientX: to.x, clientY: to.y });
-  fireEvent.mouseUp(window, { clientX: to.x, clientY: to.y });
+  // 実装は pointer イベントで受ける（round1 P2: タッチ対応）。isPrimary と button=0、
+  // 同一 pointerId をそろえて「主ポインタの左ボタン/指」のドラッグを表す
+  fireEvent.pointerDown(symbolRegion(container), { clientX: from.x, clientY: from.y, button: 0, isPrimary: true, pointerId: 1 });
+  fireEvent.pointerMove(window, { clientX: to.x, clientY: to.y, pointerId: 1 });
+  fireEvent.pointerUp(window, { clientX: to.x, clientY: to.y, pointerId: 1 });
 }
 
 /** onChange に渡された最新の譜面から、先頭イベントの強弱記号の調整値を読む */
@@ -182,5 +184,60 @@ describe('記号のドラッグ移動（Issue #522）', () => {
 
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(savedDynamicsAdjust(onChange)).toMatchObject({ offsetY: 1 });
+  });
+
+  it('右クリック・補助ボタンではドラッグが始まらない（round1 P3）', () => {
+    const { container, onChange } = renderScore([PP_EVENT]);
+    openOffsetOverlay(container);
+
+    fireEvent.pointerDown(symbolRegion(container), { clientX: 10, clientY: 10, button: 2, isPrimary: true, pointerId: 1 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 40, pointerId: 1 });
+    fireEvent.pointerUp(window, { clientX: 40, clientY: 40, pointerId: 1 });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('ツール切替で中断した後、window の mouseup 安全弁がクリック読み飛ばしフラグを解除する（round1 P2）', async () => {
+    vi.useFakeTimers();
+    try {
+      const onChange = vi.fn();
+      const view = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data: [{ events: [PP_EVENT] }], onChange }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+          symbolsClickable={true}
+        />
+      );
+      openOffsetOverlay(view.container);
+      // つかんで動かす（ドラッグ成立）
+      fireEvent.pointerDown(symbolRegion(view.container), { clientX: 10, clientY: 10, button: 0, isPrimary: true, pointerId: 1 });
+      fireEvent.pointerMove(window, { clientX: 40, clientY: 40, pointerId: 1 });
+      // ツール切替 → ドラッグは確定せず中断（symbolOffsetMoved は読み飛ばし用に true）
+      view.rerender(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '8', isRest: false } as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data: [{ events: [PP_EVENT] }], onChange }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+          symbolsClickable={true}
+        />
+      );
+      // 合成 click が来ない場所で離した（記号ハンドラは drag=null で早期 return する）
+      fireEvent.mouseUp(window);
+      vi.runOnlyPendingTimers();
+
+      // フラグが残留していると、この click が1回無言で捨てられてオーバーレイが開かない
+      fireEvent.click(symbolRegion(view.container), { clientX: 10, clientY: 10 });
+      const overlay = view.container.querySelector('.symbol-adjust-overlay') as HTMLElement;
+      expect(overlay).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
