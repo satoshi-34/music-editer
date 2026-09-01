@@ -3514,9 +3514,16 @@ export default function PianoSystemCanvas({
   // localStorage を見る claim 側（utils/arrowKeyHintNotice.ts）に任せている。
   useEffect(() => {
     if (selected == null) return;
+    // 休符の選択では出さない（round1 P2）: 案内の1つ目「↑↓で音の高さ」が休符には
+    // 効かず、実挙動と食い違う。既読も消費しないので、後で実音符を選んだときに出る
+    const selectedEvent = getVoiceEvents(
+      partsScore[selected.partIndex]?.[selected.measure] ?? { events: [] },
+      selected.voiceIndex ?? 0,
+    )[selected.index];
+    if (!selectedEvent || selectedEvent.isRest) return;
     if (!claimArrowKeyHintNotice()) return;
     notifyScoreEdit(ARROW_KEY_HINT_NOTICE_MESSAGE, ARROW_KEY_HINT_NOTICE_DURATION_MS);
-  }, [selected]);
+  }, [selected, partsScore]);
 
   // 選択の一意化（SELECTION_CLAIMED_EVENT のコメント参照）。
   // このインスタンスで何かが選択されたら、他のインスタンスへ「選択を手放して」と通知する。

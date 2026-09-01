@@ -81,8 +81,10 @@ describe('矢印キーの初回ヒント（#524）', () => {
     try {
       resetArrowKeyHintNoticeForTest();
       expect(hasSeenArrowKeyHintNotice()).toBe(false);
-      // 既読を記録できないので毎回 true（出続ける）になるが、アプリは壊れない
+      // 既読は記録できないが、メモリ側フラグで「同じ読み込み中は一度だけ」を守る
+      //（round1 P2: 書き込み失敗環境で選択のたびに出てしまう退行の固定）
       expect(claimArrowKeyHintNotice()).toBe(true);
+      expect(claimArrowKeyHintNotice()).toBe(false);
     } finally {
       restore();
     }

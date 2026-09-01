@@ -214,4 +214,33 @@ describe('PianoSystemCanvas 音符の初回選択で矢印キーのヒントを�
     const added = container.querySelectorAll('*').length - beforeCount;
     expect(added).toBeLessThanOrEqual(container.querySelectorAll('rect.vf-note-selected').length);
   });
+
+  it('休符の選択ではヒントを出さず、既読も消費しない（round1 P2: 休符ガード）', async () => {
+    const { svg, container } = renderScore(TWO_NOTES);
+
+    // 音符を選んでから ← → で休符（3つ目のイベント）へ選択を移す。
+    // ここまでで出るヒントは最初の音符選択の1回だけで、休符への移動では増えない
+    selectNote(svg, 0, 1.5);
+    await waitFor(() => expect(hintCount(notices)).toBe(1));
+
+    // 既読・読み込み内フラグを未読へ戻し、「初回選択が休符」の状態を作って
+    // 選択の変化（音符→休符）を起こす: 休符ガードが無いとここで2回目が出る
+    localStorage.removeItem(ARROW_KEY_HINT_NOTICE_SEEN_KEY);
+    resetArrowKeyHintNoticeForTest();
+    fireEvent.keyDown(window, { key: 'ArrowRight' }); // 2つ目の音符へ
+    await waitFor(() => {
+      expect(container.querySelector('rect.vf-note-selected')?.getAttribute('data-note')).toBe('1');
+    });
+    expect(hintCount(notices)).toBe(2); // 未読へ戻したので音符選択では出る（前提の確認）
+
+    localStorage.removeItem(ARROW_KEY_HINT_NOTICE_SEEN_KEY);
+    resetArrowKeyHintNoticeForTest();
+    fireEvent.keyDown(window, { key: 'ArrowRight' }); // 休符へ
+    await waitFor(() => {
+      expect(container.querySelector('rect.vf-note-selected')?.getAttribute('data-note')).toBe('2');
+    });
+    // 休符の選択ではヒントが増えず、既読も付かない（後で音符を選べば出る）
+    expect(hintCount(notices)).toBe(2);
+    expect(localStorage.getItem(ARROW_KEY_HINT_NOTICE_SEEN_KEY)).toBeNull();
+  });
 });

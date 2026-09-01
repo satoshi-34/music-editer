@@ -46,6 +46,13 @@ export function createOnceNotice(storageKey: string): OnceNotice {
   let shownThisLoad = false;
 
   /**
+   * claimStrict がこの読み込み中に一度 true を返したか。永続化（markSeen）が
+   * quota 超過等で失敗しても、「同じ読み込み中は二度と出さない」契約を守るために
+   * メモリ側でも覚える（round1 P2: 書き込み失敗環境で選択のたびに出てしまう）。
+   */
+  let strictClaimed = false;
+
+  /**
    * localStorage が使えない環境（プライベートブラウジング等）では例外を投げず「未読」を返す。
    * その場合は毎回出てしまうが、アプリが起動しなくなるより無害である
    * （そもそも localStorage が使えない環境では自動保存自体が働かない）。
@@ -83,12 +90,14 @@ export function createOnceNotice(storageKey: string): OnceNotice {
     // そちらは消去タイマーを自前で持たない（表示は通知系に任せきり）ので、
     // StrictMode の再実行で出し直す必要も無い。だから既読だけで判定する。
     claimStrict: () => {
-      if (hasSeen()) return false;
+      if (strictClaimed || hasSeen()) return false;
+      strictClaimed = true;
       markSeen();
       return true;
     },
     resetForTest: () => {
       shownThisLoad = false;
+      strictClaimed = false;
     },
   };
 }
