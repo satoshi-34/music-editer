@@ -505,6 +505,11 @@ function measureToXml(
       // 主声部と同じく音符の直前に <words>（+目安BPMの <sound>）を出す（Codex round1 P2）
       const tempoDirExtra = tempoMarkingDirectionXml(ev, options.staff);
       if (tempoDirExtra) lines.push(tempoDirExtra);
+      // 文字の強弱記号も追加声部の音符に付けられるので、主声部と同じ並び
+      // （標語のあと・音符の直前）で出す。ここを出していないと、声部2に置いた p が
+      // 書き出しの時点で消え、読み込みを直しても往復で戻らない（#552）
+      const dynDirExtra = dynamicsDirectionXml(ev, options.staff);
+      if (dynDirExtra) lines.push(dynDirExtra);
       if (voiceNumber === 2) {
         options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
           lines.push(wedgeDirectionXml(wedgeType, options.staff));

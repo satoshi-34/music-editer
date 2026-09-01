@@ -2,7 +2,7 @@
 // MusicXML ファイルを SavedScoreData 形式にパースする。
 // score-partwise 形式（Finale / Sibelius / MuseScore 等が出力する標準形式）に対応。
 
-import type { SavedScoreData, MeasureData, NoteEvent, PartData, HairpinMark, TimeSignatureStyle } from '../types/storage';
+import type { SavedScoreData, MeasureData, NoteEvent, PartData, HairpinMark, TimeSignatureStyle, AbsoluteDynamicMarking } from '../types/storage';
 import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/clefUtils';
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
@@ -273,13 +273,38 @@ function parseNotes(noteEls: Element[], tupletIdByEl?: Map<Element, string>): No
   return events;
 }
 
+/** 取り込める文字の強弱記号（書き出し側 dynamicsDirectionXml と同じ範囲。#552） */
+const IMPORTABLE_ABSOLUTE_DYNAMICS: readonly AbsoluteDynamicMarking[] = ['pp', 'p', 'mp', 'mf', 'f', 'ff'];
+
 /**
- * 松葉（ヘアピン）を1つの声部の NoteEvent へ復元する。
+ * <direction> の中の <dynamics> から、取り込める文字の強弱記号だけを取り出す（#552）。
+ * <dynamics> の中身は <p/> <ff/> のように「記号名そのものがタグ名」になっている。
+ * 対応表に無いもの（sfz・fp・ppp など）は取り込まない——近い値へ勝手に寄せると
+ * 譜面が黙って書き換わるため。捨てた件数は読み込み後にまとめて通知する
+ * （countUnsupportedDynamics）。
+ */
+function readImportableDynamics(directionEl: Element): AbsoluteDynamicMarking[] {
+  const dynamicsEls = Array.from(directionEl.querySelectorAll('direction-type > dynamics'));
+  const values: AbsoluteDynamicMarking[] = [];
+  for (const dynamicsEl of dynamicsEls) {
+    for (const child of Array.from(dynamicsEl.children)) {
+      const value = child.tagName as AbsoluteDynamicMarking;
+      if (IMPORTABLE_ABSOLUTE_DYNAMICS.includes(value)) values.push(value);
+    }
+  }
+  return values;
+}
+
+/**
+ * 松葉（ヘアピン）と文字の強弱記号（pp〜ff）を1つの声部の NoteEvent へ復元する。
  * 書出側（musicXmlExport.ts）は
  * 「開始音符の直前に <direction><wedge type="crescendo|diminuendo"/></direction>」
  * 「終了音符の直後に <direction><wedge type="stop"/></direction>」
+ * 「音符の直前に <direction><dynamics><p/></dynamics></direction>」
  * という並びで出力しているため、<measure> の直下の子要素（note と direction）を
  * 出現順に読み、直前/直後の note との対応を追いながら組み立てる。
+ * 松葉と文字強弱は「直前の direction を次の音符へ付ける」という同じ規則なので、
+ * 走査を2本に増やさず1本で両方を組み立てる（同じ歩き方の2枚目を作らない。#552）。
  *
  * 声部1（<backup> より前）と声部2（<backup> より後）で同じ処理が使えるので、
  * 呼び出し側が「その声部ぶんの子要素・イベント配列・待ち行列」を渡す形にしてある。
@@ -292,7 +317,7 @@ function parseNotes(noteEls: Element[], tupletIdByEl?: Map<Element, string>): No
  *   声部をまたぐ松葉は作らない設計なので、待ち行列も声部ごとに分ける
  *   （混ぜると声部1の stop が声部2の松葉を閉じてしまう）。
  */
-function attachHairpinsToVoiceEvents(
+function attachDirectionMarksToVoiceEvents(
   children: Element[],
   events: NoteEvent[],
   measureIndex: number,
@@ -301,9 +326,12 @@ function attachHairpinsToVoiceEvents(
 ): void {
   let eventIndex = -1;
   let pendingTypes: Array<'cresc' | 'dim'> = [];
+  // 次の音符へ付ける文字の強弱記号（#552）。松葉の pendingTypes と同じ「待ち」の仕組み
+  let pendingDynamics: AbsoluteDynamicMarking[] = [];
 
   for (const child of children) {
     if (child.tagName === 'direction') {
+      pendingDynamics.push(...readImportableDynamics(child));
       const wedgeType = child.querySelector('wedge')?.getAttribute('type');
       if (wedgeType === 'crescendo') pendingTypes.push('cresc');
       else if (wedgeType === 'diminuendo') pendingTypes.push('dim');
@@ -328,7 +356,7 @@ function attachHairpinsToVoiceEvents(
     const isChordNote = child.querySelector('chord') !== null;
     if (isChordNote) continue;
     eventIndex += 1;
-    if (pendingTypes.length === 0) continue;
+    if (pendingTypes.length === 0 && pendingDynamics.length === 0) continue;
     const ev = events[eventIndex];
     if (!ev) continue;
     for (const type of pendingTypes) {
@@ -337,7 +365,36 @@ function attachHairpinsToVoiceEvents(
       openRefs.push(mark);
     }
     pendingTypes = [];
+    if (pendingDynamics.length > 0) {
+      // 同じ音符に同じ記号が二重に付かないようにする（<dynamics> が重複して
+      // 書かれたファイル・往復で二重に付いたデータのどちらでも1つに畳む）
+      const existing = new Set((ev.dynamics ?? []).map((d) => d.value));
+      const added = pendingDynamics.filter((value) => !existing.has(value));
+      if (added.length > 0) {
+        ev.dynamics = [...(ev.dynamics ?? []), ...added.map((value) => ({ value }))];
+      }
+      pendingDynamics = [];
+    }
   }
+}
+
+/**
+ * ファイル全体で「取り込めなかった文字の強弱記号」の数を数える（#552）。
+ *
+ * 声部・五線ごとの走査で数えると、五線で分けて2回読むパート（大譜表）で
+ * 二重に数えてしまうため、ここで文書全体を1回だけ見る。
+ */
+function countUnsupportedDynamics(root: Element): number {
+  let count = 0;
+  for (const dynamicsEl of Array.from(root.querySelectorAll('direction-type > dynamics'))) {
+    for (const child of Array.from(dynamicsEl.children)) {
+      // <other-dynamics> も「対応表に無い記号」として数える（中身は自由文字列）
+      if (!IMPORTABLE_ABSOLUTE_DYNAMICS.includes(child.tagName as AbsoluteDynamicMarking)) {
+        count += 1;
+      }
+    }
+  }
+  return count;
 }
 
 /** 1つの <part> が持てる五線の数の上限（大譜表=2、オルガン譜=3 を想定した安全弁） */
@@ -680,11 +737,11 @@ function buildStaffMeasures(measureEls: Element[], staffNumber: number | null, s
     const voice2Children = childrenForVoice(2);
 
     const events = parseVoiceChildren(voice1Children);
-    attachHairpinsToVoiceEvents(voice1Children, events, mi, openHairpinRefs, syntheticRestCount);
+    attachDirectionMarksToVoiceEvents(voice1Children, events, mi, openHairpinRefs, syntheticRestCount);
 
     const voice2Events = parseVoiceChildren(voice2Children);
     // 声部2の松葉も同じ方式で復元する（voice2Events の要素を直接書き換える）
-    attachHairpinsToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2, syntheticRestCount);
+    attachDirectionMarksToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2, syntheticRestCount);
 
     // 声部3以降（松葉の復元は現行 UI が2声までなので行わない。「壊れず全声部が戻る」水準）。
     // 疎な番号（間の声部が空）は空の器で埋め、声部番号を保存データ上の位置と一致させる
@@ -878,6 +935,12 @@ export interface MusicXmlImportResult {
    * 全体テンポとみなす。それ以外は従来どおり measure.bpm として保持する。
    */
   globalBpm?: number;
+  /**
+   * 取り込めなかった文字の強弱記号（sfz・fp・ppp など）の件数（#552）。
+   * 0 件のときは undefined。黙って消さずに「N 件は取り込めませんでした」と
+   * 知らせるために返す（#318）。
+   */
+  unsupportedDynamicsCount?: number;
 }
 
 /**
@@ -1125,7 +1188,15 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
     pageMargins: defaults?.pageMargins,
   };
 
-  return { score, defaults, globalBpm };
+  // 対応表に無い強弱記号は取り込まないので、その件数を画面へ返して通知させる（#552）
+  const unsupportedDynamicsCount = countUnsupportedDynamics(root);
+
+  return {
+    score,
+    defaults,
+    globalBpm,
+    unsupportedDynamicsCount: unsupportedDynamicsCount > 0 ? unsupportedDynamicsCount : undefined,
+  };
 }
 
 /**
