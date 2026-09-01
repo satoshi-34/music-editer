@@ -190,4 +190,90 @@ describe('フェルマータの見た目（Issue #527）', () => {
       .filter((p) => /^M [-\d. ]+A /.test(p.getAttribute('d') ?? '') && !/Z$/.test(p.getAttribute('d') ?? ''));
     expect(openArcs.length).toBe(0);
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('ヒット領域（.symbol-hit-region）がフェルマータの外形へ追随する（round1 P2）', async () => {
+    // jsdom には getBBox が無くヒット矩形が作られないため、要素の実属性から近似値を返す
+    (SVGElement.prototype as unknown as { getBBox: () => { x: number; y: number; width: number; height: number } }).getBBox =
+      function (this: SVGElement) {
+        if (this.tagName === 'path') {
+          const arc = parseFermataArc(this.getAttribute('d') ?? '');
+          if (arc) {
+            return {
+              x: arc.centerX - arc.outerRx,
+              y: arc.baseY - arc.outerRy,
+              width: arc.outerRx * 2,
+              height: arc.outerRy,
+            };
+          }
+        }
+        if (this.tagName === 'circle') {
+          const cx = parseFloat(this.getAttribute('cx') ?? '0');
+          const cy = parseFloat(this.getAttribute('cy') ?? '0');
+          const r = parseFloat(this.getAttribute('r') ?? '0');
+          return { x: cx - r, y: cy - r, width: r * 2, height: r * 2 };
+        }
+        return { x: 0, y: 0, width: 10, height: 10 };
+      };
+    try {
+      seedWorkWithFermata();
+      render(<ScorePage />);
+
+      await waitFor(() => {
+        const arcs = findFermataArcs();
+        expect(arcs.length).toBeGreaterThan(0);
+        const regions = [...document.querySelectorAll('.symbol-hit-region')];
+        expect(regions.length).toBeGreaterThan(0);
+        // ヒット矩形がフェルマータの外形（弧の水平範囲）を覆っている
+        //（弧・点を drawnElements へ積み忘れると矩形が消える/旧位置のまま残る）
+        const arc = arcs[0];
+        const covering = regions.some((r) => {
+          const x = parseFloat(r.getAttribute('x') ?? 'NaN');
+          const w = parseFloat(r.getAttribute('width') ?? 'NaN');
+          return x <= arc.centerX - arc.outerRx && x + w >= arc.centerX + arc.outerRx;
+        });
+        expect(covering).toBe(true);
+      }, { timeout: 15000 });
+    } finally {
+      Reflect.deleteProperty(SVGElement.prototype, 'getBBox');
+    }
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('ピアノ大譜表でも右手・左手で同じ正規化寸法と点位置になる（round1 P2）', async () => {
+    const fermataNote = (key: string): NoteEvent[] => [
+      { dur: '4', isRest: false, keys: [key], articulations: ['fermata'] },
+      { dur: '4', isRest: true, keys: ['b/4'] },
+      { dur: '2', isRest: true, keys: ['b/4'] },
+    ];
+    const rh = fermataNote('c/5');
+    const lh = fermataNote('c/3');
+    const data = createSavedScoreData(
+      { title: '大譜表フェルマータ', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'right-hand', clef: 'treble', measures: [{ events: rh, voices: [{ id: 'voice-1', events: rh }] }] },
+        { partId: 'left-hand', clef: 'bass', measures: [{ events: lh, voices: [{ id: 'voice-1', events: lh }] }] },
+      ],
+      1, 1, 'piano'
+    );
+    const created = createWork('大譜表フェルマータ');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      const arcs = findFermataArcs();
+      // 右手・左手の両方に描かれる
+      expect(arcs.length).toBeGreaterThanOrEqual(2);
+      // 位置（baseY・centerX）は違っても、正規化寸法（半径）は完全一致＝同じ実装を通っている
+      const dims = arcs.map((a) => [a.outerRx, a.outerRy, a.innerRx, a.innerRy].join(','));
+      expect(new Set(dims).size).toBe(1);
+      // 点はどちらも弧の開口部中央（centerX 一致・baseY より下側=開口部側でない上向き形状では
+      // baseY 近辺）に置かれる。点の cx が弧の中心と一致することで両者の対応を確かめる
+      const dots = [...document.querySelectorAll('circle[fill="#1f2937"]')]
+        .map((c) => ({ cx: parseFloat(c.getAttribute('cx') ?? 'NaN'), cy: parseFloat(c.getAttribute('cy') ?? 'NaN') }));
+      for (const arc of arcs) {
+        expect(dots.some((d) => Math.abs(d.cx - arc.centerX) < 1e-6)).toBe(true);
+      }
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });
