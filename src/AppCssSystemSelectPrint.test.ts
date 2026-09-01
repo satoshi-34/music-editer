@@ -25,6 +25,8 @@ describe('App.css: 段の選択UIは印刷に出さない（Issue #482）', () =
     const css = printBlock(loadAppCss());
     expect(css).toMatch(/\.system-select-edge\s*\{[^}]*display\s*:\s*none/);
     expect(css).toMatch(/\.system-layout-panel\s*\{[^}]*display\s*:\s*none/);
+    // 段の境界ドラッグ帯（Issue #523）も同じ編集用UI
+    expect(css).toMatch(/\.system-gap-drag-handle\s*\{[^}]*display\s*:\s*none/);
   });
 
   it('@media print で選択中の薄い枠（outline）も消している', () => {

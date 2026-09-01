@@ -18,6 +18,7 @@ import SymbolEditor from './SymbolEditor';
 import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
 import SystemLayoutPanel from './SystemLayoutPanel';
+import SystemGapDragHandle from './SystemGapDragHandle';
 import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
@@ -4594,18 +4595,32 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 追加オフセット単体にも適用し、詰めすぎて段同士が重なるのを防ぐ
   // （合計値ではなく追加オフセット単体をクランプするだけの単純な方式。実際に画面へ
   // 反映する合計値のクランプは CSS の margin-top に任せ、視覚的な破綻はレイアウト側で防ぐ）。
-  const adjustSystemRowGapOverride = useCallback((startMeasure: number, delta: number) => {
-    pushHistory();
+  //
+  // 上書きの書き換え本体。パネルのボタン・直接入力（差分で指定）と、段の境界ドラッグ
+  // （Issue #523・絶対値で指定）の共通の出口にする。同じ upsert とクランプを2か所に
+  // 書くと、片方だけ直したときにもう片方へ修正が届かない（#280 の反省）ため、
+  // 「次の値をどう決めるか」だけを呼び出し側から関数で受け取る形にしている。
+  const updateSystemRowGapOverride = useCallback((startMeasure: number, resolveGapPx: (current: number) => number) => {
     setSystemRowGapOverrides((prev) => {
       const current = prev.find((o) => o.startMeasure === startMeasure)?.gapPx ?? 0;
-      const nextGapPx = Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, current + delta));
+      const nextGapPx = Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, resolveGapPx(current)));
       const next = prev.filter((o) => o.startMeasure !== startMeasure);
       if (nextGapPx !== 0) {
         next.push({ startMeasure, gapPx: nextGapPx });
       }
       return next;
     });
-  }, [pushHistory]);
+  }, []);
+  const adjustSystemRowGapOverride = useCallback((startMeasure: number, delta: number) => {
+    pushHistory();
+    updateSystemRowGapOverride(startMeasure, (current) => current + delta);
+  }, [pushHistory, updateSystemRowGapOverride]);
+  // 段の境界ドラッグ（Issue #523）の移動中に呼ぶ。押している間は履歴を積まず値だけを進め、
+  // 履歴はドラッグの開始時（SystemGapDragHandle の onDragStart）に1件だけ積む。
+  // こうしないと 1px 動かすたびに Undo が1件ずつ増え、元へ戻すのに何十回も押すことになる。
+  const setSystemRowGapOverrideValue = useCallback((startMeasure: number, gapPx: number) => {
+    updateSystemRowGapOverride(startMeasure, () => gapPx);
+  }, [updateSystemRowGapOverride]);
 
   // 指定した段一覧（systemRanges）ぶんの「段ごとの間隔の追加オフセット(px)」配列を作る。
   // 各 Staff コンポーネント（SingleStaff等）の systemGapOverridesPx props にそのまま渡し、
@@ -4777,9 +4792,23 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     const range = visiblePlannedRanges[systemIndex];
     if (!range) return null;
     const rowGapPx = systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0;
+    const systemLabel = `段${systemIndex + 1}`;
     return (
+      <>
+      {/* 段の下端の境界帯（Issue #523）。パネルと同じ「選択中の段にだけ出す差し込み口」に
+          乗せてある（SystemSelectFrame は選択中の段でここを1回だけ描く）ので、
+          4つの譜種コンポーネントへ新しい props を通さずに済む。
+          パネルより手前（z-index）に置かないので、重なる範囲ではパネルの操作が優先される */}
+      <SystemGapDragHandle
+        startMeasure={range.start}
+        systemLabel={systemLabel}
+        gapMinPx={SYSTEM_ROW_GAP_MIN_PX}
+        gapMaxPx={SYSTEM_ROW_GAP_MAX_PX}
+        onDragStart={pushHistory}
+        onDragMove={(gapPx) => setSystemRowGapOverrideValue(range.start, gapPx)}
+      />
       <SystemLayoutPanel
-        systemLabel={`段${systemIndex + 1}`}
+        systemLabel={systemLabel}
         side={selectedSystem.side}
         startMeasure={range.start}
         measureCount={range.count}
@@ -4800,10 +4829,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         onClose={closeSystemSelection}
         onNotice={notifyScoreEdit}
       />
+      </>
     );
   }, [
     selectedSystem, visiblePlannedRanges, systemRowGapOverrides, contentMeasureCount,
     adjustSystemMeasureOverride, adjustSystemRowGapOverride, closeSystemSelection, notifyScoreEdit,
+    pushHistory, setSystemRowGapOverrideValue,
   ]);
 
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）

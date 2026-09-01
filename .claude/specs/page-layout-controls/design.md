@@ -594,3 +594,93 @@ Issue #195（浄書の既定値の棚卸し）を受けて、運用者がプラ�
 
 - 画面表示側の `.screen-final-page-single`（表示段が実質1段だけのページを上揃えにする。Issue #68）は
   今回変更していない。印刷側の例外とは判定基準も対象も異なるため（画面は空の段を含めて数える）。
+
+## 追補: 段の境界（下端）ドラッグで段の間隔を変える（2026-09-01・Issue #523 = #450 の子2）
+
+#482（追補「段ごとの調整UIを『段の選択+フローティングパネル』へ移設」）で「ドラッグは段階2で
+スコープ外」としていた部分の実装。弟フィードバック（#450）の「段等をドラッグ&ドロップで変更+
+数値指定の両方」「つまみは使いづらい」に対する、直接操作側の入口にあたる。
+
+### 修正設計
+
+- **掴みしろは選択中の段にだけ出す**（`src/components/SystemGapDragHandle.tsx`）。段の下端＝次の段との
+  境界帯（`top: 100%`・高さ14px・`cursor: row-resize`）に透明な帯を1本置き、上下ドラッグで
+  その段の間隔（＝段のラッパーの `margin-top`）が変わる。常設しないので、譜面の上に編集用の
+  当たり判定が居座らない（#482 と同じ方針）。
+- **#482 の左右端（`.system-select-edge`）とは物理的に分けてある**（受入条件4）。左右端は五線の外側・
+  カーソルは `pointer`、境界帯は段の下・カーソルは `row-resize` で、位置もカーソルも重ならない。
+  帯は段と段のすき間へ出るため五線（SVG）の上に重ならず、音符のクリックを奪わない。
+- **差し込み口はパネルと共用**した。`SystemSelectFrame` の `renderPanel`（選択中の段にだけ描く
+  重ね物の穴）が返すツリーへ帯とパネルを並べて入れる。どちらも内側ラッパー
+  （`.system-select-inner`＝五線の実描画範囲）を基準に絶対配置するため基準は1つで済み、
+  4つの譜種コンポーネント（SingleStaff / PianoStaff / QuartetStaff / EnsembleStaff）へ
+  新しい props を通す必要が無い。
+- **ドラッグの起点は「いま効いている margin-top」**（`getComputedStyle`）にした。個別の上書きは
+  inline style で入り、全体設定（CSS 変数 `--system-row-gap`）の指定を上書きする関係にあるため、
+  起点を常に0と決め打つと、全体設定が0以外の譜面（ピアノ譜の既定 -30px）で掴んだ瞬間に段が飛ぶ。
+  実際に効いている値を起点にすれば、上書きがまだ無い段でも指へ 1:1 でついてくる。
+- **画面px→レイアウトpx の換算**は、要素自身の「実測の高さ ÷ レイアウト上の高さ」で求めた倍率で割る。
+  譜面は `.print-page` の `transform: scale()` で拡大縮小されるため、これをしないとズーム時に
+  指と段がずれる（変倍の実装＝CSS変数へ依存しない測り方にしてある）。実レイアウトを持たない
+  jsdom では 0 が返るので等倍として扱う。
+- **値は毎回「掴んだ時の値＋総移動量」**で決める。1回ごとの差分を足し込む方式だと、上下限
+  （-60〜+50px）で丸められたぶんが失われ、戻すときに指と段がずれていく（#522 の記号ドラッグと同じ理由）。
+- **3px の遊び**（`DRAG_START_THRESHOLD_PX`）を超えるまでは値を変えない。押した指の震えで
+  間隔が変わり Undo 履歴が1件増えるのを防ぐ（#522 の記号ドラッグと同じ流儀・同じ値）。
+- **`mousemove` / `mouseup` は window で受ける**。帯は14pxしかなく、掴んだ直後にカーソルが帯の外へ
+  出るため、要素で受けると1pxも動かせない（弧のドラッグが #235 で同じ結論に至っている）。
+- **ドラッグ中の現在値**はカーソルの横に吹き出しで出す（受入条件3・#318「何が変わっているか見せる」）。
+  帯は段と一緒に動くので、帯の左端からの相対位置（レイアウトpx）に直して置いている。
+
+#### 既存実装の共用（新しい経路を作らない）
+
+| 役割 | 共用している実装 |
+| --- | --- |
+| 上書きの upsert・上下限のクランプ | `updateSystemRowGapOverride`（`adjustSystemRowGapOverride` から切り出した共通の出口。パネルの － ＋・直接入力は「差分」、ドラッグは「絶対値」で同じ関数を通す） |
+| 画面への反映 | 従来どおり `getSystemGapOverridesPx` → 各 Staff の `systemGapOverridesPx` → ラッパーの `margin-top` |
+| 保存 | `systemRowGapOverrides`（保存・読込・印刷の経路は一切変えていない） |
+| Undo | `pushHistory`。ドラッグの**開始時に1回だけ**積み、移動中は値だけを進める |
+
+「同じロジックの2枚目」を作らない方針（#223 の修正が別実装へ届かず #280 が起きた反省）に沿って、
+上書きを書き換える箇所は `updateSystemRowGapOverride` の1か所だけにしてある。
+
+### Undo が1操作になる仕組み（受入条件4）
+
+パネルの － ＋ は「1クリック＝1履歴」でよいが、ドラッグは 1px 動くたびに値が変わるため、同じ経路
+（`adjustSystemRowGapOverride`）をそのまま使うと履歴が何十件も積まれる。そこで履歴を積む役目だけを
+呼び出し側へ出し、`SystemGapDragHandle` が「遊びを超えて実際に動き始めた瞬間」に `onDragStart`
+（＝`pushHistory`）を1回呼ぶ。移動中は履歴を積まない `setSystemRowGapOverrideValue` で値だけを進める。
+
+### 範囲外（今回やっていないこと）
+
+- **パート間隔（ピアノの両手間など）の境界ドラッグ**は含めていない（Issue #523 の仕様5が
+  「無理なら子3へ分割し Issue に明記」としている選択肢）。理由は、パート間隔が
+  「段ごとの上書き」ではなく**譜面全体の設定**（`partSpacingOffsetPx`・設定プロファイル）であり、
+  当たり判定も五線の内側＝SVG（`PianoSystemCanvas`）に置く必要があって、データモデルも
+  当たり判定の置き場所も本Issueの段間隔とは別物になるため。段ごとの上書きを新設するのか
+  全体設定をドラッグで動かすのかという仕様判断も要る。
+- キーボードからの境界操作は追加していない（数値指定・キーボード操作は #482 のパネル側が担当）。
+
+### 影響範囲
+
+- 追加: `src/components/SystemGapDragHandle.tsx`、`src/components/ScorePageSystemGapDrag.test.tsx`（7件）。
+- `src/components/ScorePage.tsx`: `updateSystemRowGapOverride` の切り出し、`setSystemRowGapOverrideValue` の追加、
+  `renderSystemPanel` が帯とパネルを並べて返すよう変更。
+- `src/components/SystemSelectFrame.tsx`: `renderPanel` の説明を「パネルと境界帯」に更新（実装は変更なし）。
+- `src/App.css`: `.system-gap-drag-handle` / `.system-gap-drag-value` を追加し、`@media print` で非表示に。
+- `src/AppCssSystemSelectPrint.test.ts`: 印刷で帯が出ないことの検査を1件追加。
+- `README.md`（操作の説明を1行追加）・`docs/REGRESSION.md`（セクションW を追加）。
+
+### 検証結果
+
+- vitest（変更に関係するファイル）: `ScorePageSystemGapDrag`（新規7件）・`ScorePageSystemSelectPanel`（既存）・
+  `AppCssSystemSelectPrint` の29件すべて緑。`npx tsc --noEmit` エラーなし。
+  `npm run lint:ratchet -- --check` 基準値ちょうど（324件）。`npm run build` 成功。
+- ブラウザ実測（worktree の一時エントリ経由・単旋律・画面ズーム150%＝`--scale` 1.156）:
+  - 段の左端をクリックして選択 → 下端の帯を実マウスで約50画面px 下へドラッグ → 上書きが `+42px` になり、
+    五線の実描画位置が 48.6画面px（＝42 × 1.156）下へ移動。指と 1:1 でズームの補正も効いている。
+  - パネルの数値も `+42px` に追従し、自動保存の `systemRowGapOverrides` が
+    `[{"startMeasure":0,"gapPx":42}]` になることを localStorage で確認。
+  - 「元に戻す」1回で `margin-top` が消え、五線の位置も元の座標へ戻る（誤差なし）。
+  - ドラッグ中はカーソルの横に `+24px` の吹き出しが出る（離すと消える）。掴んでも段の選択は解けない。
+  - コンソールエラーなし。
