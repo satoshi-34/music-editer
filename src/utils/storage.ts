@@ -46,6 +46,7 @@ import {
   normalizeTimeSignatureStyle,
 } from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
+import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
 import type { ClefType } from '../components/clefUtils';
 import {
   MAX_SYMBOL_DEFS,
@@ -659,6 +660,11 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     (data.notationSizeMultiplier === undefined ||
       (typeof data.notationSizeMultiplier === 'number' && Number.isFinite(data.notationSizeMultiplier))) &&
     (data.pageMargins === undefined || (typeof data.pageMargins === 'object' && data.pageMargins !== null)) &&
+    // 作品ごとの全体テンポ（Issue #543）。範囲外・0 は読み込み時に
+    // normalizeSavedGlobalBpm が正す（0 以下は「未保存」扱い）ので、
+    // ここでは型が違うデータを弾くところまでを見る（他の省略可能項目と同じ方針）。
+    (data.globalBpm === undefined ||
+      (typeof data.globalBpm === 'number' && Number.isFinite(data.globalBpm))) &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -1826,7 +1832,8 @@ export function createSavedScoreData(
   timeSignatureStyle?: TimeSignatureStyle,
   pageSize?: PageSizeId,
   notationSizeMultiplier?: number,
-  pageMargins?: SavedPageMargins
+  pageMargins?: SavedPageMargins,
+  globalBpm?: number
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -1866,6 +1873,11 @@ export function createSavedScoreData(
             topMm: DEFAULT_PAGE_MARGIN_TOP_MM,
             bottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
           }),
+    // 全体テンポ（Issue #543）は、渡されたら**常に明示的に保存する**。
+    // 既定値（120）と同じときに省略すると、読込側の既定（アプリ全体設定へ従う）と
+    // 食い違い、「全体設定が 40 の環境で 120 の作品を開くと 40 になる」穴が開く
+    // （音符の大きさ・#477 round1 P1 と同じ理由）。壊れた値は省略扱いにする。
+    globalBpm: normalizeSavedGlobalBpm(globalBpm),
     instrumentation,
     notationMode,
     titleFontId,
