@@ -33,8 +33,10 @@ export type TupletKind = { numNotes: number; notesOccupied: number; hint?: strin
  * つまり1音あたりの長さが**伸びる**唯一の種類だが、拍数計算はどこも
  * `notesOccupied / numNotes` 倍で統一されているので特別扱いは要らない。
  *
- * 9連符 (9:8) は入れていない。MusicXML 書出の分割数（DIVISIONS=16）では
- * 8/9 倍が整数にならず、往復すると小節の合計拍がずれるため（Issue #519 と同じ原因）。
+ * 9連符 (9:8) は入れていない。当初は MusicXML 書出の丸め（旧 DIVISIONS=16 固定）を
+ * 理由にしていたが、#519 の修正で divisions は連符に合わせて自動選択されるようになり、
+ * その障害は消えた。現在は「Issue #472 のスコープ外（要望が複合拍子用の2・4連符）」が
+ * 理由で、必要になれば TUPLET_KINDS へ1行足すだけで追加できる。
  */
 export const TUPLET_KINDS: TupletKind[] = [
   { numNotes: 2, notesOccupied: 3, hint: '8分の6拍子など複合拍子向け。1音あたりの長さは1.5倍に伸びる' },
