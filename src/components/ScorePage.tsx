@@ -48,6 +48,7 @@ import type { TitleFontWeight } from '../utils/titleFontOptions';
 import HelpPanel from './HelpPanel';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXmlWithDefaults } from '../utils/musicXmlImport';
+import { SoundFontLoadAbortedError } from '../audio/SoundFontEngine';
 import { downloadMidi } from '../utils/midiExport';
 import { useTempoStorage } from '../hooks/useTempoStorage';
 import type { PlaybackEngine } from '../audio/PlaybackEngine';
@@ -1068,6 +1069,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const preferredEngine = await prepareAudioEngine();
       return await action(preferredEngine);
     } catch (error) {
+      // 停止（stopAll）による読み込み中断は「失敗」ではない（#525 round5 P1）。
+      // フォールバックすると、停止したはずの再生が内蔵音源で鳴り始めてしまう。
+      // ユーザーの停止意図どおり、静かに終わる
+      if (error instanceof SoundFontLoadAbortedError) {
+        console.info('[ScorePage] 停止により再生要求を中断しました');
+        return undefined as T;
+      }
       // 実ブラウザでは、SoundFont 失敗だけでなく
       // 既存の built-in AudioContext が不安定化して無音になることもある。
       // そのため「一度失敗したら、新しい built-in エンジンで再試行する」
