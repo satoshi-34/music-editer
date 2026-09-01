@@ -226,4 +226,29 @@ describe('MusicXML の文字強弱（pp〜ff）読み込み（Issue #552）', ()
     // 下段: staff=2 指定の f が付き、staff=1 の p は混入しない
     expect(left.measures[0].events[0].dynamics).toEqual([{ value: 'f' }]);
   });
+
+  it('声部3では松葉を復元しない（round2 P2: 小節またぎで壊れた松葉を作らない）', () => {
+    // 声部3に <wedge> がある（自分の書き出しでは作らないが外部ファイルではあり得る）
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>M</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>16</duration><type>whole</type><voice>1</voice></note>
+      <backup><duration>16</duration></backup>
+      <note><rest/><duration>16</duration><type>whole</type><voice>2</voice></note>
+      <backup><duration>16</duration></backup>
+      <direction><direction-type><wedge type="crescendo"/></direction-type></direction>
+      <direction placement="below"><direction-type><dynamics><f/></dynamics></direction-type></direction>
+      <note><pitch><step>E</step><octave>4</octave></pitch><duration>16</duration><type>whole</type><voice>3</voice></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const imported = parseMusicXml(xml);
+    const v3 = imported.parts[0].measures[0].voices?.[2]?.events?.[0];
+    // 文字強弱は復元し、松葉は付かない
+    expect(v3?.dynamics).toEqual([{ value: 'f' }]);
+    expect(v3?.hairpins).toBeUndefined();
+  });
 });

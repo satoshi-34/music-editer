@@ -323,6 +323,14 @@ function attachDirectionMarksToVoiceEvents(
   measureIndex: number,
   openRefs: HairpinMark[],
   syntheticRestCount?: (el: Element) => number,
+  options?: {
+    /**
+     * 松葉（ヘアピン）を復元しない（round2 P2）。声部3以降は現行 UI が松葉2声まで
+     * のため文字強弱だけを復元する。openRefs に空配列を渡すだけでは無効化にならず、
+     * 同一小節内の松葉が復元され、小節またぎでは開始位置で終わる壊れた松葉が残る
+     */
+    skipHairpins?: boolean;
+  },
 ): void {
   let eventIndex = -1;
   let pendingTypes: Array<'cresc' | 'dim'> = [];
@@ -332,7 +340,9 @@ function attachDirectionMarksToVoiceEvents(
   for (const child of children) {
     if (child.tagName === 'direction') {
       pendingDynamics.push(...readImportableDynamics(child));
-      const wedgeType = child.querySelector('wedge')?.getAttribute('type');
+      const wedgeType = options?.skipHairpins
+        ? null
+        : child.querySelector('wedge')?.getAttribute('type');
       if (wedgeType === 'crescendo') pendingTypes.push('cresc');
       else if (wedgeType === 'diminuendo') pendingTypes.push('dim');
       else if (wedgeType === 'stop') {
@@ -782,8 +792,8 @@ function buildStaffMeasures(
       const eventsN = parseVoiceChildren(childrenN);
       // 強弱は全声部で復元する（round1 P2: 書き出しは全声部へ <dynamics> を出すため、
       // 復元しないと声部3以降の f 等が**無通知のまま**往復で消える）。
-      // 松葉（openRefs）は現行 UI が2声までなので従来どおり復元しない
-      attachDirectionMarksToVoiceEvents(childrenN, eventsN, mi, [], syntheticRestCount);
+      // 松葉は現行 UI が2声までなので skipHairpins で明示的に無効化する（round2 P2）
+      attachDirectionMarksToVoiceEvents(childrenN, eventsN, mi, [], syntheticRestCount, { skipHairpins: true });
       extraVoiceEvents.push(eventsN);
     }
 
