@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { parseMusicXml, parseMusicXmlWithDefaults } from './musicXmlImport';
+import { scoreToMusicXml } from './musicXmlExport';
 import {
   planEffectiveMeasuresPerSystem,
   planSystemMeasureRanges,
@@ -145,5 +146,41 @@ describe('MusicXML: 変更の無い <attributes> の書き直しを段割りへ�
     expect(repeatedPlan.widths).toEqual(oncePlan.widths);
     expect(repeatedPlan.measuresPerSystem).toEqual(oncePlan.measuresPerSystem);
     expect(repeatedPlan.effectiveMeasuresPerSystem).toBe(oncePlan.effectiveMeasuresPerSystem);
+  });
+
+  it('途中拍子変更が往復で継続する（round1 P1: 4/4→3/4→3/4→4/4）', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>M</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+    <measure number="2">
+      <attributes><time><beats>3</beats><beat-type>4</beat-type></time></attributes>
+      <note><pitch><step>D</step><octave>4</octave></pitch><duration>12</duration><type>half</type><dot/></note>
+    </measure>
+    <measure number="3">
+      <note><pitch><step>E</step><octave>4</octave></pitch><duration>12</duration><type>half</type><dot/></note>
+    </measure>
+    <measure number="4">
+      <attributes><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+      <note><pitch><step>F</step><octave>4</octave></pitch><duration>16</duration><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    const first = parseMusicXml(xml);
+    // 正規化: 変わった小節だけ印が残る
+    expect(first.parts[0].measures.map((m) => m.timeSignature ?? null)).toEqual([
+      null, [3, 4], null, [4, 4],
+    ]);
+
+    // 書き出し→再読み込みで同じ形に戻る（3小節目に誤った 4/4 が生えない）
+    const rexml = scoreToMusicXml(first);
+    const second = parseMusicXml(rexml);
+    expect(second.parts[0].measures.map((m) => m.timeSignature ?? null)).toEqual([
+      null, [3, 4], null, [4, 4],
+    ]);
   });
 });
