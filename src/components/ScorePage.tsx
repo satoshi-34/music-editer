@@ -810,10 +810,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       kind === 'success' ? 3000 : 10000
     );
   }, []);
-  // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける
+  // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける。
+  // テスト環境では teardown 後に発火したタイマーが未処理例外になり、全テスト緑でも
+  // exit 1 になる（既知の CI フレーク）。通知系タイマー ref を増やしたら必ずここにも足す。
   useEffect(() => () => {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
     if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
+    if (feedbackNoticeTimerRef.current) clearTimeout(feedbackNoticeTimerRef.current);
+    if (editNoticeTimerRef.current) clearTimeout(editNoticeTimerRef.current);
+    if (restoreNoticeTimerRef.current) clearTimeout(restoreNoticeTimerRef.current);
   }, []);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
@@ -1132,6 +1137,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     clearPositionTimers();
   }, [clearPositionTimers]);
 
+  // 再生中にアンマウントされても、終了予約・位置表示予約を残さない
+  // （残すとテスト teardown 後に発火して未処理例外になる。通知系タイマーと同じ問題）
+  useEffect(() => () => {
+    clearPlaybackTimer();
+  }, [clearPlaybackTimer]);
+
   const resetPlaybackClock = useCallback(() => {
     // 3 つの ref は「いつ始まったか」「あと何ミリ秒あるか」「全体で何ミリ秒か」のセット。
     // 一部だけ残すと pause/resume 後の位置計算が狂うため、初期化は同時に行う。
@@ -1145,6 +1156,17 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // setTimeout 越しのヘルスチェックが「いまの」再生状態を読めるように同期する
     playbackStateRef.current = playbackState;
   }, [playbackState]);
+
+  // 開始済みの無音検知はタイマー解除では止められない（コールバックが約250ms以上の
+  // 非同期チェックを実行中のため）。アンマウント後に setState・recreateAudioEngine が
+  // 走らないよう、await 後にこのフラグで打ち切る（#546 round1 P2）
+  const scorePageUnmountedRef = useRef(false);
+  useEffect(() => {
+    // StrictMode の「実行→片付け→再実行」では cleanup 後も再マウントされるため、
+    // setup で必ず false へ戻す（round2 P2: 戻さないと replay 後の検知が全部捨てられる）
+    scorePageUnmountedRef.current = false;
+    return () => { scorePageUnmountedRef.current = true; };
+  }, []);
 
   const runOutputHealthCheck = useCallback(async (engine: PlaybackEngine) => {
     try {
@@ -1161,6 +1183,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // Safari の silent failure（issue #14）は例外が出ないため、
       // 再生開始後に「音が出ているはずの状態か」を能動的に確認する。
       const report = await checkAudioOutputHealth(engine.getAudioContext?.() ?? null);
+      if (scorePageUnmountedRef.current) return;
 
       // プローブ中（約250ms）に一時停止された場合も同様に無視する
       if (isPausedByUser()) {
@@ -1211,11 +1234,19 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
   }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock]);
 
+  // 無音検知の予約もタイマー ref で持ち、アンマウント時に必ず片付ける
+  // （追跡なしの setTimeout だとテスト teardown 後に発火して未処理例外になる）
+  const outputHealthCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleOutputHealthCheck = useCallback((engine: PlaybackEngine) => {
-    window.setTimeout(() => {
+    if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
+    outputHealthCheckTimerRef.current = setTimeout(() => {
+      outputHealthCheckTimerRef.current = null;
       void runOutputHealthCheck(engine);
     }, SILENT_FAILURE_CHECK_DELAY_MS);
   }, [runOutputHealthCheck]);
+  useEffect(() => () => {
+    if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
+  }, []);
 
   // スコアタイプ切り替え時に左手データを初期化
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
@@ -2786,10 +2817,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // マウント直後の1回だけ実行し、復元の有無に関わらず「復元処理は完了した」ことを
   // autosaveRestoreReady で示す（これが true になるまで下の自動保存 useEffect は書き込みをしない）。
   const restoreAttemptedRef = useRef(false);
+  const restoreRunSeqRef = useRef(0);
   useEffect(() => {
+    // 「完了済みなら再実行しない」。試行中フラグではなく**完了**フラグにするのは、
+    // StrictMode の「実行→片付け→再実行」で1回目が cancelled 打ち切りになったとき、
+    // 2回目が復元をやり直せるようにするため（round2 P2: 試行フラグだと
+    // autosaveRestoreReady が永遠に false のまま自動保存が止まる）
     if (restoreAttemptedRef.current) return;
-    restoreAttemptedRef.current = true;
 
+    // applyLoadedScoreData の await 中にアンマウントされると、cleanup 実行後に
+    // 通知とタイマーを新規予約してしまい二度と片付けられない（#546 round1 P2）。
+    // 世代トークンで await 後の続行を抑止する（applyLoadedScoreData 自体は同じ
+    // データの再適用なので、replay で2回走っても結果は同じ）
+    const runSeq = ++restoreRunSeqRef.current;
+    const isCancelled = () => restoreRunSeqRef.current !== runSeq;
     (async () => {
       // 旧バージョンのデータ（手動保存と自動保存のキーが分かれていない形／作品カタログが
       // 無い形）を、消さずに新しい保存先へ複製してから読み込む（初回起動時のみ・後方互換）。
@@ -2797,6 +2838,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const restored = initializeWorks();
       if (restored) {
         await applyLoadedScoreData(restored);
+        if (isCancelled()) return;
 
         setRestoreNotice('自動保存データから復元しました');
         console.info('[ScorePage] 起動時に自動保存データから復元しました');
@@ -2814,10 +2856,17 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         }
       }
 
+      if (isCancelled()) return;
+      restoreAttemptedRef.current = true;
       setAutosaveRestoreReady(true);
       // 移行・復元が済んだことを App へ知らせる（ホームの一覧の読み直し。round1 P2）
       onLibraryReadyRef.current?.();
     })();
+    return () => {
+      // この実行を無効化する（次の setup が ++ するのを待たず、cleanup 時点で無効化。
+      // アンマウントの場合は誰も再開しないので、通知・タイマーの新規予約が止まる）
+      if (restoreRunSeqRef.current === runSeq) restoreRunSeqRef.current++;
+    };
   // applySettingsProfileToState はレンダーごとに作り直される素の関数のため、
   // handleNewScore と同じ理由で依存配列には含めない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2929,6 +2978,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 進めるカウンタ）を依存に持ち、これらだけを変えて閉じても保存されるようにする（round1 P1）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem, layoutAttrRevision, tempoSettings.bpm]);
+
+  // 「保存済み」表示を消す予約もアンマウント時に必ず片付ける（他の通知系タイマーと同じ理由）。
+  // ※自動保存 useEffect の目印コメントと依存配列の間に別の useEffect を置くと
+  //   ScorePageAutosaveDeps.test.tsx の静的検査が誤った依存配列を読むため、この位置に置く。
+  useEffect(() => () => {
+    if (autoSaveStatusTimerRef.current) clearTimeout(autoSaveStatusTimerRef.current);
+  }, []);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -4227,6 +4283,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 短く表示するお知らせ（他の autoSaveStatus / restoreNotice と同じ「数秒で消える」パターン）。
   const [settingsProfileNotice, setSettingsProfileNotice] = useState<string | null>(null);
   const settingsProfileNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // この通知タイマーもアンマウント時に必ず片付ける（宣言位置の都合で個別 useEffect）
+  useEffect(() => () => {
+    if (settingsProfileNoticeTimerRef.current) clearTimeout(settingsProfileNoticeTimerRef.current);
+  }, []);
   const showSettingsProfileNotice = useCallback((message: string) => {
     setSettingsProfileNotice(message);
     if (settingsProfileNoticeTimerRef.current) clearTimeout(settingsProfileNoticeTimerRef.current);
