@@ -8,6 +8,7 @@
 // ファイルを開く・設定タブを開く）はすべて譜面画面（ScorePage）側の既存処理を
 // 呼び出す形にして、同じ機能を2か所へ書かないようにしている。
 
+import { useState } from 'react';
 import type { ScoreType, WorkSummary } from '../types/storage';
 import { SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
 import { formatWorkTitle, formatWorkUpdatedAt } from '../utils/workDisplay';
@@ -49,8 +50,6 @@ const RAIL_LINKS: ReadonlyArray<{ href: string; label: string; icon: string }> =
   { href: '#home-top', label: 'ホーム', icon: '⌂' },
   { href: '#home-new-heading', label: '新規', icon: '✚' },
   { href: '#home-recent-heading', label: '最近', icon: '🕘' },
-  { href: '#home-open-heading', label: '開く', icon: '📂' },
-  { href: '#home-settings-heading', label: '設定', icon: '⚙' },
 ];
 
 /**
@@ -177,6 +176,9 @@ export default function HomeScreen({
   busy = false,
 }: HomeScreenProps) {
   const openButtons = OPEN_BUTTONS.filter(button => availableOpenKinds.includes(button.kind));
+  // レールのフライアウト（開く/設定）。中央からセクションを撤去したぶんの受け皿で、
+  // 一度にどちらか1つだけ開く（運用者QA 2026-09-02）
+  const [railFlyout, setRailFlyout] = useState<'open' | 'settings' | null>(null);
 
   return (
     <div className="home-screen" role="main" aria-label="ホーム" aria-busy={busy} data-testid="home-screen">
@@ -192,7 +194,67 @@ export default function HomeScreen({
                 <span>{link.label}</span>
               </a>
             ))}
+            {/* 「開く（種類別）」「設定」は中央から撤去し、レールのフライアウトへ（運用者QA 2026-09-02:
+                「ファイルを開くが重複・設定が中央にある」。中央のカードは既定の .score.json を開く
+                1枚だけ残し、種類別と設定はここから1クリックで出す） */}
+            <button
+              type="button"
+              className={`home-rail-link home-rail-button${railFlyout === 'open' ? ' is-active' : ''}`}
+              aria-expanded={railFlyout === 'open'}
+              data-testid="home-rail-open"
+              onClick={() => setRailFlyout(prev => (prev === 'open' ? null : 'open'))}
+            >
+              <span className="home-rail-icon" aria-hidden="true">📂</span>
+              <span>開く</span>
+            </button>
+            <button
+              type="button"
+              className={`home-rail-link home-rail-button${railFlyout === 'settings' ? ' is-active' : ''}`}
+              aria-expanded={railFlyout === 'settings'}
+              data-testid="home-rail-settings"
+              onClick={() => setRailFlyout(prev => (prev === 'settings' ? null : 'settings'))}
+            >
+              <span className="home-rail-icon" aria-hidden="true">⚙</span>
+              <span>設定</span>
+            </button>
           </nav>
+          {railFlyout === 'open' && (
+            <div className="home-rail-flyout" role="group" aria-label="ファイルを開く">
+              {openButtons.map(button => (
+                <button
+                  key={button.kind}
+                  type="button"
+                  disabled={busy}
+                  className="home-secondary-button"
+                  onClick={() => { setRailFlyout(null); onOpen(button.kind); }}
+                  title={button.description}
+                  data-testid={`home-open-${button.kind}`}
+                >
+                  {button.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {railFlyout === 'settings' && (
+            <div className="home-rail-flyout" role="group" aria-label="設定">
+              {SETTINGS_TABS.map(entry => {
+                const label = TOOLBAR_TAB_BUTTONS.find(tab => tab.id === entry.tab)?.label ?? entry.tab;
+                return (
+                  <button
+                    key={entry.tab}
+                    type="button"
+                    disabled={busy}
+                    className="home-secondary-button"
+                    onClick={() => { setRailFlyout(null); onOpenSettings(entry.tab); }}
+                    title={entry.description}
+                    data-testid={`home-settings-${entry.tab}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </aside>
 
         <div className="home-main">
@@ -285,48 +347,6 @@ export default function HomeScreen({
             <p className="home-note">編集内容はこの端末のブラウザへ自動保存されています。</p>
           </section>
 
-          {/* 3. ファイルから開く（種類別）。譜面画面のファイルタブと同じ導線をそのまま呼ぶ */}
-          <section className="home-section" aria-labelledby="home-open-heading">
-            <h2 id="home-open-heading" className="home-section-title">ファイルを開く</h2>
-            <div className="home-button-row">
-              {openButtons.map(button => (
-                <button
-                  key={button.kind}
-                  type="button"
-                  disabled={busy}
-                  className="home-secondary-button"
-                  onClick={() => onOpen(button.kind)}
-                  title={button.description}
-                  data-testid={`home-open-${button.kind}`}
-                >
-                  {button.label}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {/* 4. 設定。譜面画面のタブを開くだけなので、設定そのものは二重に持たない */}
-          <section className="home-section" aria-labelledby="home-settings-heading">
-            <h2 id="home-settings-heading" className="home-section-title">設定</h2>
-            <div className="home-button-row">
-              {SETTINGS_TABS.map(entry => {
-                const label = TOOLBAR_TAB_BUTTONS.find(tab => tab.id === entry.tab)?.label ?? entry.tab;
-                return (
-                  <button
-                    key={entry.tab}
-                    type="button"
-                    disabled={busy}
-                    className="home-secondary-button"
-                    onClick={() => onOpenSettings(entry.tab)}
-                    title={entry.description}
-                    data-testid={`home-settings-${entry.tab}`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
 
           <footer className="home-footer">
             {/* 版番号は「自分が最新版を見ているか」をチェックする人が確かめるためのもの。

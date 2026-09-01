@@ -144,6 +144,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
       expect(scoreTitleText()).toBe(SEEDED_TITLE);
     }, { timeout: 15000 });
 
+    fireEvent.click(screen.getByTestId('home-rail-open'));
     fireEvent.click(screen.getByTestId('home-open-musicxml'));
     expect(clickSpy).toHaveBeenCalledTimes(1);
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
@@ -158,6 +159,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
       expect(scoreTitleText()).toBe(SEEDED_TITLE);
     }, { timeout: 15000 });
 
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
     fireEvent.click(screen.getByTestId('home-settings-layout'));
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
     expect(screen.getByRole('tab', { name: 'レイアウト' }).getAttribute('aria-selected')).toBe('true');
@@ -404,6 +406,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     render(<App />);
     await waitFor(() => { expect(scoreTitleText()).toContain(SEEDED_TITLE); });
 
+    fireEvent.click(screen.getByTestId('home-rail-open'));
     const legacyButton = await screen.findByTestId('home-open-legacy');
     fireEvent.click(legacyButton);
 

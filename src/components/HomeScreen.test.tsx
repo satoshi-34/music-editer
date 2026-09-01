@@ -81,6 +81,7 @@ describe('ホーム画面（Issue #500）', () => {
   it('既存の「開く」導線をすべて呼べる', () => {
     const props = renderHome();
     for (const kind of ALL_OPEN_KINDS) {
+      fireEvent.click(screen.getByTestId('home-rail-open'));
       fireEvent.click(screen.getByTestId(`home-open-${kind}`));
       expect(props.onOpen).toHaveBeenCalledWith(kind);
     }
@@ -88,6 +89,7 @@ describe('ホーム画面（Issue #500）', () => {
 
   it('使えない「開く」導線（PDF変換API無し・旧手動保存なし）は並べない', () => {
     renderHome({ availableOpenKinds: ['file', 'musicxml'] });
+    fireEvent.click(screen.getByTestId('home-rail-open'));
     expect(screen.getByTestId('home-open-file')).toBeTruthy();
     expect(screen.queryByTestId('home-open-pdf')).toBeNull();
     expect(screen.queryByTestId('home-open-legacy')).toBeNull();
@@ -102,10 +104,13 @@ describe('ホーム画面（Issue #500）', () => {
 
   it('設定の入口はツールバーのタブへ送るだけ（設定を二重に持たない）', () => {
     const props = renderHome();
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
     fireEvent.click(screen.getByTestId('home-settings-score'));
     expect(props.onOpenSettings).toHaveBeenCalledWith('score');
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
     fireEvent.click(screen.getByTestId('home-settings-layout'));
     expect(props.onOpenSettings).toHaveBeenCalledWith('layout');
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
     fireEvent.click(screen.getByTestId('home-settings-playback'));
     expect(props.onOpenSettings).toHaveBeenCalledWith('playback');
   });
@@ -134,7 +139,10 @@ describe('ホーム画面（Issue #500）', () => {
         onOpenSettings={() => {}}
       />
     );
-    const buttons = [...document.querySelectorAll('.home-screen button')];
+    // レールの開く/設定トグルはページ内移動と同じく busy の無効化対象にしない
+    //（フライアウトを開くだけで実行はしない。実行ボタン側は無効化される）
+    const buttons = [...document.querySelectorAll('.home-screen button')]
+      .filter((b) => !(b as HTMLElement).classList.contains('home-rail-button'));
     expect(buttons.length).toBeGreaterThan(5);
     for (const button of buttons) {
       expect((button as HTMLButtonElement).disabled).toBe(true);
