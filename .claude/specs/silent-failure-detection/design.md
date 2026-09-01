@@ -146,3 +146,23 @@ enumerateDevices のラベルはマイク権限が無いと空文字になるブ
   エンジンが context を返せないためヘルスチェックは `unknown` で早期 return し、
   通知へ到達しない。到達させるには AudioContext 一式を偽装する必要があり、
   それは配線ではなくモックを検証することになるため見送った（PR に明記）
+
+
+## 追記: 出力先デバイス名の付記（Issue #521・2026-09-01 round1/2 対応）
+
+- **既定デバイスの選び方（round1 P2）**: `resolveAudioOutputDeviceLabel` は
+  「ラベルの有無で絞ってから default を探す」のではなく、**全 audiooutput から
+  `deviceId === 'default'`（無ければ先頭）を先に選び、その項目のラベルが空なら null** を返す。
+  絞ってから探すと、既定のラベルだけ空の環境で別デバイスを「現在の出力先」と誤表示する。
+- **補助情報の失敗を閉じ込める（round1 P3）**: `checkAudioOutputHealth` は差し替え可能な
+  `resolveOutputDeviceLabel` の reject を `.catch(() => null)` で閉じる。補助情報の取得失敗が
+  report 全体を巻き込むと、診断・自動復旧ごと省略されてしまう。
+- **通知文言のビルダー（round1 P3・#318規約）**: 完成通知2本
+  （自動再起動した／異常が続いている）は `scoreEditorNotices.ts` の
+  `describeAudioEngineRestarted` / `describeAudioStillSilent` が組み立て、
+  出力先の案内文（`describeAudioOutputDestination`）を末尾に受け取る。
+- **配線テスト（round1 P2）**: `ScorePageAudioHealthNotice.test.tsx` が
+  `checkAudioOutputHealth` を部分モック（表示系は実物）し、再生ボタンの実クリックから
+  healthy（通知なし+診断ログに出力先）/ unhealthy 初回（既存接頭文+末尾案内）/
+  cooldown 中（継続通知にも案内）の3状態を固定する。
+- README のトラブルシューティングにも出力先確認の案内を追記した。
