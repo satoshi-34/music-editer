@@ -81,6 +81,7 @@ describe('ホーム画面（Issue #500）', () => {
   it('既存の「開く」導線をすべて呼べる', () => {
     const props = renderHome();
     for (const kind of ALL_OPEN_KINDS) {
+      fireEvent.click(screen.getByTestId('home-rail-open'));
       fireEvent.click(screen.getByTestId(`home-open-${kind}`));
       expect(props.onOpen).toHaveBeenCalledWith(kind);
     }
@@ -88,6 +89,7 @@ describe('ホーム画面（Issue #500）', () => {
 
   it('使えない「開く」導線（PDF変換API無し・旧手動保存なし）は並べない', () => {
     renderHome({ availableOpenKinds: ['file', 'musicxml'] });
+    fireEvent.click(screen.getByTestId('home-rail-open'));
     expect(screen.getByTestId('home-open-file')).toBeTruthy();
     expect(screen.queryByTestId('home-open-pdf')).toBeNull();
     expect(screen.queryByTestId('home-open-legacy')).toBeNull();
@@ -102,10 +104,13 @@ describe('ホーム画面（Issue #500）', () => {
 
   it('設定の入口はツールバーのタブへ送るだけ（設定を二重に持たない）', () => {
     const props = renderHome();
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
     fireEvent.click(screen.getByTestId('home-settings-score'));
     expect(props.onOpenSettings).toHaveBeenCalledWith('score');
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
     fireEvent.click(screen.getByTestId('home-settings-layout'));
     expect(props.onOpenSettings).toHaveBeenCalledWith('layout');
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
     fireEvent.click(screen.getByTestId('home-settings-playback'));
     expect(props.onOpenSettings).toHaveBeenCalledWith('playback');
   });
@@ -134,11 +139,67 @@ describe('ホーム画面（Issue #500）', () => {
         onOpenSettings={() => {}}
       />
     );
-    const buttons = [...document.querySelectorAll('.home-screen button')];
+    // レールの開く/設定トグルはページ内移動と同じく busy の無効化対象にしない
+    //（フライアウトを開くだけで実行はしない。実行ボタン側は無効化される）
+    const buttons = [...document.querySelectorAll('.home-screen button')]
+      .filter((b) => !(b as HTMLElement).classList.contains('home-rail-button'));
     expect(buttons.length).toBeGreaterThan(5);
     for (const button of buttons) {
       expect((button as HTMLButtonElement).disabled).toBe(true);
     }
     expect(screen.getByTestId('home-screen').getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('フライアウトの新仕様: busy中トグル可・実行ボタン無効・排他・Escapeでフォーカス復帰（#561）', () => {
+    const { rerender } = render(
+      <HomeScreen
+        appVersion="1.0.0"
+        works={[]}
+        availableOpenKinds={['file', 'musicxml']}
+        busy
+        onSelectWork={() => {}}
+        onCreateNew={() => {}}
+        onOpen={() => {}}
+        onOpenSettings={() => {}}
+      />
+    );
+    // busy 中でもトグルは押せて開く
+    const openToggle = screen.getByTestId('home-rail-open') as HTMLButtonElement;
+    expect(openToggle.disabled).toBe(false);
+    fireEvent.click(openToggle);
+    expect(openToggle.getAttribute('aria-expanded')).toBe('true');
+    // フライアウト内の実行ボタンは busy で無効
+    expect((screen.getByTestId('home-open-file') as HTMLButtonElement).disabled).toBe(true);
+    // 排他: 設定を開くと開く側は閉じる
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
+    expect(screen.queryByTestId('home-open-file')).toBeNull();
+    expect(screen.getByTestId('home-settings-score')).toBeTruthy();
+    // Escape で閉じてトグルへフォーカスが戻る。フライアウト内ボタンから（従来経路）と
+    // トグルにフォーカスが残ったまま（round2 P2 の経路）の両方で効くことを固定する
+    fireEvent.keyDown(screen.getByTestId('home-settings-score'), { key: 'Escape' });
+    expect(screen.queryByTestId('home-settings-score')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId('home-rail-settings'));
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
+    (screen.getByTestId('home-rail-settings') as HTMLButtonElement).focus();
+    fireEvent.keyDown(screen.getByTestId('home-rail-settings'), { key: 'Escape' });
+    expect(screen.queryByTestId('home-settings-score')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId('home-rail-settings'));
+
+    // busy でない状態では実行で自動クローズ+フォーカス復帰
+    rerender(
+      <HomeScreen
+        appVersion="1.0.0"
+        works={[]}
+        availableOpenKinds={['file', 'musicxml']}
+        onSelectWork={() => {}}
+        onCreateNew={() => {}}
+        onOpen={() => {}}
+        onOpenSettings={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByTestId('home-rail-open'));
+    fireEvent.click(screen.getByTestId('home-open-file'));
+    expect(screen.queryByTestId('home-open-file')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId('home-rail-open'));
   });
 });

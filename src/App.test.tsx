@@ -144,6 +144,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
       expect(scoreTitleText()).toBe(SEEDED_TITLE);
     }, { timeout: 15000 });
 
+    fireEvent.click(screen.getByTestId('home-rail-open'));
     fireEvent.click(screen.getByTestId('home-open-musicxml'));
     expect(clickSpy).toHaveBeenCalledTimes(1);
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
@@ -158,6 +159,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
       expect(scoreTitleText()).toBe(SEEDED_TITLE);
     }, { timeout: 15000 });
 
+    fireEvent.click(screen.getByTestId('home-rail-settings'));
     fireEvent.click(screen.getByTestId('home-settings-layout'));
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
     expect(screen.getByRole('tab', { name: 'レイアウト' }).getAttribute('aria-selected')).toBe('true');
@@ -235,6 +237,24 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     fireEvent.click(screen.getByTestId(`home-work-${olderId}`));
     await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); });
     await waitFor(() => { expect(scoreTitleText()).toContain('古い作品'); }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('レールのフライアウト操作が実際の配線（開く→ファイルタブ）で動き、トグルで Escape が効く（#561）', async () => {
+    seedWork();
+    render(<App />);
+    await waitFor(() => { expect(scoreTitleText()).toContain(SEEDED_TITLE); });
+
+    // トグルにフォーカスがある状態の Escape で閉じる（開いた直後の通常操作）
+    const openToggle = screen.getByTestId('home-rail-open');
+    fireEvent.click(openToggle);
+    (openToggle as HTMLButtonElement).focus();
+    fireEvent.keyDown(openToggle, { key: 'Escape' });
+    expect(screen.queryByTestId('home-open-musicxml')).toBeNull();
+
+    // 実配線: 開く→MusicXML でファイル選択が起動し、譜面画面のファイルタブへ移る
+    fireEvent.click(openToggle);
+    fireEvent.click(screen.getByTestId('home-open-musicxml'));
+    await waitFor(() => { expect(screen.queryByTestId('home-screen')).toBeNull(); }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('更新が古い作品でも「前回開いていた作品」が一覧の先頭に来る（#528 round1 P1）', async () => {
@@ -404,6 +424,7 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     render(<App />);
     await waitFor(() => { expect(scoreTitleText()).toContain(SEEDED_TITLE); });
 
+    fireEvent.click(screen.getByTestId('home-rail-open'));
     const legacyButton = await screen.findByTestId('home-open-legacy');
     fireEvent.click(legacyButton);
 
