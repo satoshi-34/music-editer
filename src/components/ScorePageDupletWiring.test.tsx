@@ -90,6 +90,15 @@ async function placeTuplet(workId: string, buttonName: RegExp, numNotes: number,
     expect(tupletEvents[0].tuplet?.numNotes).toBe(numNotes);
     expect(tupletEvents[0].tuplet?.notesOccupied).toBe(notesOccupied);
   }, { timeout: 15000 });
+
+  // 保存だけでなく描画も壊れていないこと（round2 P2）: 再描画された SVG に
+  // 連符グループ（ブラケット+数字。vf-tuplet）が現れる
+  await waitFor(() => {
+    const tupletGroups = document.querySelectorAll('g.vf-tuplet');
+    expect(tupletGroups.length).toBeGreaterThan(0);
+    // 数字（N）がテキストとして描画されている（VexFlow はグリフの rect で数字を組む）
+    expect(tupletGroups[0].querySelectorAll('rect').length).toBeGreaterThan(0);
+  }, { timeout: 15000 });
 }
 
 describe('2連符・4連符のパレット配線（#472 round1 P2）', () => {
