@@ -207,6 +207,7 @@ import {
   notifyScoreEdit,
   describePageSizeChanged,
   describeImportedClefNormalized,
+  describeImportedUnsupportedDynamics,
   describeImportedNotationSize,
   describeImportedNotationSizeShrunk,
   describeImportedPageSizeRounded,
@@ -4980,7 +4981,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       } else {
         xml = new TextDecoder('utf-8').decode(bytes);
       }
-      const { score: loaded, defaults: importedDefaults, globalBpm: importedGlobalBpm } = parseMusicXmlWithDefaults(xml);
+      const { score: loaded, defaults: importedDefaults, globalBpm: importedGlobalBpm, unsupportedDynamicsCount } = parseMusicXmlWithDefaults(xml);
       // 先頭小節の <sound tempo>（全体テンポ）は再生パネルへ反映する（#518）。
       // これが無いと往復で全体テンポが既定 120 に戻る（QA で確定した症状）
       if (importedGlobalBpm != null) setBPM(importedGlobalBpm);
@@ -4995,6 +4996,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const loadedType = loaded.scoreType ?? 'single';
       // 取り込み時の通知は1本にまとめて出す（後勝ちで消えないように・#477 round2 P2）
       const importNotices: string[] = [];
+      // 対応表に無い強弱記号（sfz・fp など）は取り込まないので、黙って消さずに件数を知らせる（#552）
+      if (unsupportedDynamicsCount != null && unsupportedDynamicsCount > 0) {
+        importNotices.push(describeImportedUnsupportedDynamics(unsupportedDynamicsCount));
+      }
       setKeySignature(normalizeKeySignature(loaded.keySignature));
       await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
       // MusicXML の <time symbol="common"/"cut"> を読み込んだ場合はここで表示スタイルへ戻す
