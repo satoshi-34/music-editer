@@ -649,8 +649,9 @@ export function describePlaybackFromMeasure(startMeasure: number): string {
 
 /**
  * 小節番号を指定した途中再生（#545）: その小節から再生を始めたことを知らせる。
- * 選択起点（describePlaybackFromMeasure）とは戻し方の案内が違うので文言を分けている
- * （こちらは選択していないため Escape では先頭に戻らない）。
+ * 戻し方（先頭から聴く方法）は選択の有無で違うため出し分ける（round1/2 P2）:
+ * 小節の範囲選択が残っていると停止→再生は選択位置から始まるので、
+ * まず Escape で選択を外す案内を先に出す。選択が無ければ停止→再生だけで先頭に戻る。
  */
 export function describePlaybackFromMeasureNumber(startMeasure: number, hasMeasureSelection: boolean): string {
   // 小節の範囲選択が残っていると、停止→再生では選択位置から始まる（選択起点の途中再生）。

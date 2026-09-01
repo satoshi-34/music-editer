@@ -216,4 +216,41 @@ describe('ScorePage: 小節番号を指定した途中再生（Issue #545）', (
     expect(document.querySelector('rect.vf-measure-selected')).toBeNull();
     expect((screen.getByRole('button', { name: '元に戻す' }) as HTMLButtonElement).disabled).toBe(undoDisabledBefore);
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('小節を選択したまま番号再生すると、案内が Escape での選択解除に言及する（round2 P2）', async () => {
+    seedFourMeasureWork();
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    // 音符・休符タブの小節選択ツールで1小節目を選択する
+    const selectTool = await screen.findByRole('button', { name: /小節選択/ }, { timeout: 15000 });
+    fireEvent.click(selectTool);
+    const hits = Array.from(document.querySelectorAll('rect.vf-hit')) as SVGRectElement[];
+    const byX = new Map<number, SVGRectElement>();
+    hits.forEach((h) => {
+      const x = Math.round(parseFloat(h.getAttribute('x') ?? '0'));
+      if (!byX.has(x)) byX.set(x, h);
+    });
+    const first = [...byX.entries()].sort((a, b) => a[0] - b[0])[0]?.[1] as SVGRectElement;
+    expect(first).toBeTruthy();
+    fireEvent.mouseDown(first, { clientX: 10, clientY: 10 });
+    fireEvent.mouseUp(first, { clientX: 10, clientY: 10 });
+    fireEvent.click(first, { clientX: 10, clientY: 10 });
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-measure-selected')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    // 選択が残ったまま番号再生 → 案内は「Escape で選択を外し…」の側になる
+    //（引数を常に false に退行させるとこのテストが落ちる）
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.change(screen.getByLabelText('再生を開始する小節番号'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: '指定した小節から再生' }));
+    await waitFor(() => {
+      const notice = screen.queryByTestId('edit-notice');
+      expect(notice?.textContent).toContain('3小節目から再生します');
+      expect(notice?.textContent).toContain('Escape で小節の選択を外し');
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });
