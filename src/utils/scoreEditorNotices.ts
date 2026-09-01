@@ -16,6 +16,7 @@
 import type { NoteEvent } from '../types/storage';
 import type { OmrConvertFailure } from './omrApi';
 import { canReplaceTupletNoteWithRest, type TupletGroupPasteBlockReason } from './tupletUtils';
+import type { PlaybackStartMeasureRejection } from './playbackPositionUtils';
 
 /** 削除など「編集で何が起きたか」を画面へ出すための通知イベント名 */
 export const SCORE_EDIT_NOTICE_EVENT = 'music-editer-score-edit-notice';
@@ -636,6 +637,33 @@ export function describeWorkHistoryRestored(timestamp: number): string {
 /** 途中再生（#108）: 選択小節から再生を始めたことを知らせる */
 export function describePlaybackFromMeasure(startMeasure: number): string {
   return `${startMeasure + 1}小節目から再生します（先頭から聴くには Escape で小節の選択を外してください）`;
+}
+
+/**
+ * 小節番号を指定した途中再生（#545）: その小節から再生を始めたことを知らせる。
+ * 選択起点（describePlaybackFromMeasure）とは戻し方の案内が違うので文言を分けている
+ * （こちらは選択していないため Escape では先頭に戻らない）。
+ */
+export function describePlaybackFromMeasureNumber(startMeasure: number): string {
+  return `${startMeasure + 1}小節目から再生します（先頭から聴くには停止してから再生してください）`;
+}
+
+/**
+ * 小節番号を指定した途中再生（#545）で、その番号では再生できないことを理由つきで返す（#318）。
+ * 入力欄の値を黙って捨てず、「なぜ効かないのか」「どう入れ直せばよいか」まで伝える。
+ */
+export function describePlaybackStartMeasureRejected(
+  reason: PlaybackStartMeasureRejection,
+  totalMeasureCount: number
+): string {
+  switch (reason) {
+    case 'notANumber':
+      return '小節番号は半角の数字で入力してください（例: 5 と入れると5小節目から再生します）';
+    case 'outOfRange':
+      return `この作品は${totalMeasureCount}小節までのため、その小節からは再生できません（1〜${totalMeasureCount} の番号を入れてください）`;
+    case 'noMeasures':
+      return 'まだ再生できる小節がありません（音符を入力してから小節番号を指定してください）';
+  }
 }
 
 /** 拍範囲スライスの削除で消すものが無かったときの通知（#318。履歴も積まない） */

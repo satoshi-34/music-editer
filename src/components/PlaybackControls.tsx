@@ -35,6 +35,14 @@ export interface PlaybackControlsProps {
   onStop: () => void;
   /** シーク時のコールバック */
   onSeek: (position: PlaybackPosition) => void;
+  /**
+   * 小節番号を指定した途中再生（#545）。入力欄の**生の文字列**をそのまま渡す。
+   * 数字として読めるか・範囲内かの判定は総小節数を知っている ScorePage 側に一本化し、
+   * ここでは持たない（同じ判定の2枚目を作らないため）。省略すると入力欄自体を出さない。
+   */
+  onPlayFromMeasure?: (measureNumberInput: string) => void;
+  /** 入力欄の上限に使う総小節数（内容のある小節数）。省略時は上限を指定しない */
+  totalMeasureCount?: number;
   /** テンポ変更時のコールバック */
   onTempoChange: (bpm: number) => void;
   /** 音色変更時のコールバック */
@@ -156,6 +164,8 @@ export default function PlaybackControls({
   onPlay,
   onPause,
   onStop,
+  onPlayFromMeasure,
+  totalMeasureCount,
   onTempoChange,
   onInstrumentChange,
   onInstrumentPreview,
@@ -173,6 +183,8 @@ export default function PlaybackControls({
 }: PlaybackControlsProps) {
   // テンポ入力の内部状態
   const [tempoInput, setTempoInput] = useState(currentTempo.toString());
+  // 途中再生の開始小節（#545）。ボタンを押すまで再生は動かないので、入力中の値だけをここで持つ
+  const [startMeasureInput, setStartMeasureInput] = useState('1');
   const [isTempoInputFocused, setIsTempoInputFocused] = useState(false);
   const [isSoundDetailOpen, setIsSoundDetailOpen] = useState(false);
   // 範囲外のテンポを入れたときの案内文。null なら非表示（Issue #240）
@@ -222,6 +234,32 @@ export default function PlaybackControls({
       onPlay();
     }
   }, [playbackState, onPlay, onPause]);
+
+  /**
+   * 小節番号の入力変更ハンドラ（#545）
+   */
+  const handleStartMeasureInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    setStartMeasureInput(event.target.value);
+  }, []);
+
+  /**
+   * 「この小節から再生」のクリックハンドラ（#545）。
+   * 値の正否は総小節数を知っている親が判定して通知するため、ここでは文字列を渡すだけにする。
+   */
+  const handlePlayFromMeasureClick = useCallback(() => {
+    onPlayFromMeasure?.(startMeasureInput);
+  }, [onPlayFromMeasure, startMeasureInput]);
+
+  /**
+   * 小節番号入力のキーダウンハンドラ（Enter でそのまま再生開始）。
+   * 入力欄からボタンへマウスを動かさずに聴き直せるようにするため。
+   */
+  const handleStartMeasureInputKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      onPlayFromMeasure?.(startMeasureInput);
+    }
+  }, [onPlayFromMeasure, startMeasureInput]);
 
   /**
    * テンポ入力の変更ハンドラ
@@ -689,6 +727,37 @@ export default function PlaybackControls({
         <span className="position-label">位置:</span>
         <span className="position-value">{currentPosition.measureIndex + 1}小節目 {currentPosition.noteIndex + 1}音符目</span>
       </div>
+
+      {/* 小節番号を指定した途中再生（#545）。長い曲で「聴きたい小節まで画面をスクロールして
+          選択する」手間を省くための入口で、鳴らす仕組み自体は選択起点の途中再生と同じ。 */}
+      {onPlayFromMeasure && (
+        <div className="playback-start-measure">
+          <label className="playback-start-measure-label" htmlFor="playback-start-measure-input">
+            小節番号
+          </label>
+          <input
+            id="playback-start-measure-input"
+            type="number"
+            className="playback-start-measure-input"
+            value={startMeasureInput}
+            onChange={handleStartMeasureInputChange}
+            onKeyDown={handleStartMeasureInputKeyDown}
+            min={1}
+            max={totalMeasureCount}
+            step="1"
+            aria-label="再生を開始する小節番号"
+          />
+          <button
+            type="button"
+            className="ghost playback-start-measure-button"
+            onClick={handlePlayFromMeasureClick}
+            title="指定した小節から再生"
+            aria-label="指定した小節から再生"
+          >
+            この小節から再生
+          </button>
+        </div>
+      )}
     </div>
   );
 }

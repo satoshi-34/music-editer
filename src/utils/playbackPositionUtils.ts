@@ -110,6 +110,20 @@ function measureAdvanceBeats(measure: MeasureData, timeSignature: TimeSignature)
   return Math.max(getMeasureDurationBeats(measure), getMeasureBeats(timeSignature));
 }
 
+/** 小節番号の指定を受け付けられなかった理由（#545。通知文の出し分けに使う） */
+export type PlaybackStartMeasureRejection =
+  /** 数字として読めない（空欄・記号だけ など） */
+  | 'notANumber'
+  /** 1 未満、または総小節数を超えている */
+  | 'outOfRange'
+  /** そもそも再生できる小節が無い（まだ何も入力していない譜面） */
+  | 'noMeasures';
+
+/** 小節番号の解決結果。成功なら 0 始まりの小節インデックスを返す */
+export type PlaybackStartMeasureResolution =
+  | { ok: true; measureIndex: number }
+  | { ok: false; reason: PlaybackStartMeasureRejection };
+
 /**
  * 途中再生（#108）の開始位置: 指定の小節が「展開後の再生順」で最初に現れる位置を返す。
  * リピートのある譜面では同じ小節が複数回鳴るため、「最初の出現から」を仕様とする
@@ -124,6 +138,39 @@ export function findPlaybackStartExpandedIndex(
   if (exact >= 0) return exact;
   const after = expandedMeasures.findIndex((item) => item.sourceMeasureIndex > startMeasureIndex);
   return after >= 0 ? after : 0;
+}
+
+/**
+ * 小節番号を指定した途中再生（#545）で、入力欄の文字列を「再生開始の小節インデックス」へ解決する。
+ *
+ * 画面には 1 始まりの小節番号（「3小節目」）を出しているが、内部の配列は 0 始まりなので
+ * ここで 1 つずらす。受け付けられない入力は理由（reason）を返し、呼び出し側が
+ * 「行き止まりは喋る」（#318）の通知文へ変換する。黙って無視しないための戻り値。
+ *
+ * @param input 入力欄の生の文字列（前後の空白は無視する）
+ * @param totalMeasureCount 指定できる小節数の上限（内容のある小節数）
+ */
+export function resolvePlaybackStartMeasureNumber(
+  input: string,
+  totalMeasureCount: number
+): PlaybackStartMeasureResolution {
+  if (totalMeasureCount <= 0) {
+    return { ok: false, reason: 'noMeasures' };
+  }
+
+  const trimmed = input.trim();
+  // 数字だけ（先頭の + / - は符号として許す）かを先に見る。parseInt は "3abc" を 3 と
+  // 読んでしまうため、そのまま使うと打ち間違いを黙って受け入れてしまう
+  if (!/^[+-]?\d+$/.test(trimmed)) {
+    return { ok: false, reason: 'notANumber' };
+  }
+
+  const measureNumber = Number.parseInt(trimmed, 10);
+  if (measureNumber < 1 || measureNumber > totalMeasureCount) {
+    return { ok: false, reason: 'outOfRange' };
+  }
+
+  return { ok: true, measureIndex: measureNumber - 1 };
 }
 
 /**
