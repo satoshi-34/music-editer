@@ -258,3 +258,72 @@ resolveMeasureBpms(measures: MeasureData[], globalBpm: number): number[]
 当初「読み込み直後、再生は 126 になるがパネル表示は既定値のまま」という食い違いを残していたが、
 round1〜3 のレビューで上記 §5 の方式（メタを正本に globalBpm を別枠で返し、ScorePage が
 `setBPM` へ反映）に発展し、パネル表示まで含めて往復するようになった。
+
+## 追記: 全体テンポを作品ごとの属性にする（Issue #543・2026-09-02）
+
+### 問題
+
+運用者QA（2026-09-01）: ♩=112 で作った作品（トルコ行進曲）を開き直したら、テンポ欄に
+無関係な 40（過去にアプリ全体へ設定した値）が出た。
+
+原因は保存の置き場である。全体テンポ（再生パネルの ♩=N）は `TempoManager` が
+localStorage の **`music-app-tempo-settings` にアプリ全体で1つだけ**持っており、作品を
+切り替えても引き継がれる。#518 で MusicXML の**新規取り込み**時はファイルのテンポが
+反映されるようになったが、「保存済み作品を開く」経路には作品のテンポという概念自体が無かった。
+
+### #518 の方針変更（正式な更新・Issue 仕様 5）
+
+上の #518 の節には「保存データ（`SavedScoreData`）にテンポを生やす案は採らなかった:
+保存形式の意味が変わる（＝作品の属性なのか再生設定なのかの裁定が要る）うえ、書き出しの
+問題を直すのに保存形式を変える必要が無いため」と書いてある。その**裁定が本 Issue で
+「作品の属性である」と下りた**ため、この方針は #543 で置き換わる（黙って上書きしたのでは
+なく、#518 が保留した論点の決着である）。#518 の書き出し方式（呼び出し側から `globalBpm`
+を渡す）は変えていない。
+
+### 修正設計
+
+1. **`SavedScoreData.globalBpm?: number`**（作品ごとの全体テンポ）を追加する。位置づけは
+   用紙サイズ（#495）・音符の大きさ（#477）と同じ「作品の属性」。旧データ互換のため省略可。
+2. **正規化は1関数に集約**: `src/audio/tempoRange.ts` の `normalizeSavedGlobalBpm(value)`。
+   数値でない・NaN・0 以下は `undefined`（＝テンポ未保存）を返し、有限な数は `clampBpm` で
+   30〜240 へ寄せる。0 を素通しすると `60 / 0 = Infinity` で再生が進まなくなるため、
+   clamp の前に弾く必要がある（`tempoPlaybackUtils` の `isUsableBpm` と同じ理由）。
+3. **保存は「渡されたら常に明示」**（#477 round1 P1 と同じ判断）。既定値（120）と同じときに
+   項目を省略すると、読込側の既定（＝アプリ全体設定に従う）と食い違い、「全体設定が 40 の
+   環境で 120 の作品を開くと 40 になる」穴がそのまま残る。
+4. **読込は3経路とも同じヘルパを通す**: `ScorePage` の `applySavedGlobalBpm(data)` を
+   起動時の復元・作品一覧からの切替（`applyLoadedScoreData`）・ファイル読み込み
+   （`handleImportFile`）から呼ぶ。1つでも当て忘れると「その作品だけ前のテンポで鳴る」
+   食い違いになるため、声部1/声部2の二重実装と同じ轍を踏まないよう関数を共用する。
+   **テンポ未保存（旧データ）のときは何もしない**のが正しい後方互換で、従来どおり
+   アプリ全体設定（無ければ 120）のまま開く（Issue 仕様 4）。
+5. **自動保存の依存配列に `tempoSettings.bpm` を足す**。これが無いと、再生パネルで
+   テンポだけ変えて閉じたときに作品側へ保存されず、開き直すと元へ戻る（Issue #107・#117 と
+   同じ「依存漏れ＝編集内容の消失」）。
+6. **MusicXML 取り込みの `globalBpm`（#518）は追加配線なしでこの作品テンポに入る**
+   （Issue 仕様 3）: 取り込みハンドラは従来どおり `setBPM(importedGlobalBpm)` を呼び、
+   その後の自動保存が `tempoSettings.bpm` を作品へ書く。
+
+### 判断メモ: アプリ全体設定（`music-app-tempo-settings`）は残す
+
+Issue 仕様 2 は「アプリ全体設定は『新規作成時の既定値』としてのみ残す」。本実装では
+`TempoManager.setBPM` が従来どおり localStorage へも書く（＝全体設定は「最後に使ったテンポ」に
+なる）。役割は**新規作成した作品とテンポ未保存の旧作品の初期値**に縮んでおり、Issue の訴え
+（保存済み作品を開くと無関係な値が出る）は解消する。`setBPM` から永続化を外す案は、
+`TempoManager` の意味（再生設定の永続化クラス）と既存テスト一式を作り替える必要があり、
+受入条件のどれにも必要ないため採らなかった。
+
+なお、テンポ未保存の旧作品は「開いた時点で画面に出ているテンポ」がそのまま自動保存で
+`globalBpm` として書き込まれ、以後はその作品のテンポになる（＝初回編集時に移行する）。
+
+### 影響範囲
+
+- `src/types/storage.ts`: `SavedScoreData.globalBpm` 追加
+- `src/audio/tempoRange.ts`: `normalizeSavedGlobalBpm` / `DEFAULT_GLOBAL_BPM` 追加
+- `src/utils/storage.ts`: `createSavedScoreData` の末尾引数 `globalBpm`、
+  `validateSavedScoreData` の型チェック（他の省略可能項目と同じ方針で型違いのみ弾く）
+- `src/components/ScorePage.tsx`: 保存4経路への引き渡し、`applySavedGlobalBpm`、自動保存の依存配列
+- テスト: `src/audio/tempoRange.test.ts`（正規化）、`src/utils/storage.test.ts`（保存往復・互換）、
+  `src/components/ScorePagePerScoreTempo.test.tsx`（作品を交互に開く実操作。受入1・3）
+- MIDI 書き出し（`midiExport.ts`）・MusicXML 書き出しの方式は変更なし（受入2の回帰は
+  `musicXmlTempo.test.ts` と `ScorePageTempoExportWiring.test.tsx` が担保）

@@ -502,6 +502,16 @@ export interface SavedScoreData {
    * 保存する。notationSizeMultiplier と同じく省略可で、省略時は表示設定に従う。
    */
   pageMargins?: SavedPageMargins;
+  /**
+   * 作品ごとの全体テンポ（♩=N、Issue #543）。再生パネルに出す「その作品のテンポ」で、
+   * 小節ごとの数値テンポ変更（`MeasureData.bpm`）や速度標語より弱い（最初の既定値になる）。
+   *
+   * 用紙サイズ（#495）・音符の大きさ（#477）と同じく**作品の属性**として保存するので、
+   * 別の作品へ切り替えても前の作品のテンポが残らない。旧データ互換のため省略可で、
+   * 省略時は従来どおりアプリ全体設定（localStorage の music-app-tempo-settings）→
+   * 無ければ 120 として開く（normalizeSavedGlobalBpm が正本）。
+   */
+  globalBpm?: number;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;

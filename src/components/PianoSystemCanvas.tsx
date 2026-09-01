@@ -392,6 +392,24 @@ const ARC_HIT_MIN_LEN_SCREEN_PX = 28;
 // 譜面の拡大縮小に合わせて大きさが変わる。
 const ARC_APEX_HANDLE_SIZE = 9;
 
+// フェルマータの形（Issue #527）。単位は五線の描画座標で、記号ごとの scale が掛かる。
+// 外側の弧は従来の見た目（11 × 9 の楕円）をそのまま引き継ぎ、記号が占める大きさを変えない。
+// 内側の弧を「横は外側とほぼ同じ・縦だけ浅く」すると、頂点が太く両端が細い彫版標準の
+// 形になる（頂点 9 - 5.2 = 3.8 に対し、両端は 11 - 9.6 = 1.4 で約1/2.7の細さ）。
+const FERMATA_ARC_OUTER_RX = 11;
+const FERMATA_ARC_OUTER_RY = 9;
+const FERMATA_ARC_INNER_RX = 9.6;
+const FERMATA_ARC_INNER_RY = 5.2;
+// 開口部（下側）の中央に置く点。ベースラインからの高さと半径で、
+// 内側の弧の頂点（5.2）とぶつからない位置に収まる（2.8 + 1.9 = 4.7 < 5.2）。
+const FERMATA_DOT_CENTER_Y = 2.8;
+const FERMATA_DOT_RADIUS = 1.9;
+// 記号のドラッグ移動（Issue #522）が始まるまでの遊び（画面px）。
+// これを超えるまでは「クリック（＝記号を選ぶ）」のまま扱う。押した指のわずかな震えで
+// 記号が動いて Undo 履歴が増えるのを防ぐための下限で、タイ/松葉のプレビュー開始判定
+// （4px）と同じ「画面px基準の小さなしきい値」の流儀にそろえてある。
+const SYMBOL_DRAG_START_THRESHOLD_PX = 3;
+
 // 再クリック巡回（Issue #264）の候補1件ぶん。描画時に当たり判定要素へ紐づけて台帳に積む。
 type ClickCycleTarget = {
   /**
@@ -2069,21 +2087,40 @@ function drawCollectedSymbolEntries(args: {
       if (type === 'fermata') {
         // フェルマータは五線上端より上に配置する（符頭位置に依存しない）
         const baseY = Math.min(staveTopY, noteTopY) - 14 + adjust.offsetY;
-        // 半円弧（下が開いた椀形）
+        // 弧は「外側の弧と内側の弧を閉じた塗り」で描く（Issue #527）。
+        // 以前は太さ一定の細い線（stroke-width 1.6）1本だったため針金のように見えていた。
+        // 彫版標準（SMuFL の fermataAbove など）のフェルマータは、頂点がいちばん太く
+        // 両端へ向かって細くなる塗り形状なので、外側の楕円弧より「縦に薄く・横に長い」
+        // 内側の楕円弧を重ねて閉じることで、その太さの変化を作る:
+        //   ・頂点の太さ = 外Ry − 内Ry（FERMATA_ARC_OUTER_RY - FERMATA_ARC_INNER_RY）
+        //   ・両端の太さ = 外Rx − 内Rx（同上の横方向）で、頂点よりずっと細い
+        // 外側の大きさ（11 × 9）は従来のままにして、記号全体の占める大きさと
+        // 位置調整済みデータ（offsetX/offsetY/scale）の見え方を変えない。
+        const outerRx = FERMATA_ARC_OUTER_RX * s;
+        const outerRy = FERMATA_ARC_OUTER_RY * s;
+        const innerRx = FERMATA_ARC_INNER_RX * s;
+        const innerRy = FERMATA_ARC_INNER_RY * s;
         const arc = document.createElementNS(ns, 'path');
-        arc.setAttribute('d', `M ${ax - 11 * s} ${baseY} A ${11 * s} ${9 * s} 0 0 1 ${ax + 11 * s} ${baseY}`);
-        arc.setAttribute('stroke', '#1f2937');
-        arc.setAttribute('stroke-width', String(1.6 * s));
-        arc.setAttribute('stroke-linecap', 'round');
-        arc.setAttribute('fill', 'none');
+        // 外側は左端→右端へ上を通り（sweep 1）、内側は右端→左端へ上を戻る（sweep 0）。
+        // 同じ向きにすると帯にならず、8の字のようにねじれた形になる
+        arc.setAttribute('d', [
+          `M ${ax - outerRx} ${baseY}`,
+          `A ${outerRx} ${outerRy} 0 0 1 ${ax + outerRx} ${baseY}`,
+          `L ${ax + innerRx} ${baseY}`,
+          `A ${innerRx} ${innerRy} 0 0 0 ${ax - innerRx} ${baseY}`,
+          'Z',
+        ].join(' '));
+        arc.setAttribute('fill', '#1f2937');
         arc.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(arc);
         drawnElements.push(arc);
-        // 中心の点（弧の内側）
+        // 弧の開口部（下側の開いている側）の中央に置く点。
+        // 以前は弧の内側の上寄り（baseY - 4）にあり、標準の「開口部の中央・ベースライン寄り」
+        // からずれていた。内側の弧の頂点（baseY - 内Ry）とぶつからない高さに収める
         const dot = document.createElementNS(ns, 'circle');
         dot.setAttribute('cx', String(ax));
-        dot.setAttribute('cy', String(baseY - 4 * s));
-        dot.setAttribute('r', String(2.5 * s));
+        dot.setAttribute('cy', String(baseY - FERMATA_DOT_CENTER_Y * s));
+        dot.setAttribute('r', String(FERMATA_DOT_RADIUS * s));
         dot.setAttribute('fill', '#1f2937');
         dot.setAttribute('pointer-events', 'none');
         svgRoot.appendChild(dot);
@@ -2964,6 +3001,18 @@ export default function PianoSystemCanvas({
     const rawX = symbolOffsetXInputRef.current?.value ?? String(symbolOffsetEditState.draftX);
     const rawY = symbolOffsetYInputRef.current?.value ?? String(symbolOffsetEditState.draftY);
     const { x, y } = applySymbolOffsetNudge(rawX, rawY, nudge);
+    applySymbolOffsetDraft(x, y);
+  };
+
+  /**
+   * 位置調整の下書き（画面上の見た目）を x, y へそろえる。
+   * 矢印キー（nudgeSymbolOffset）とドラッグ移動（Issue #522）の共通の出口。
+   *
+   * 2つの経路で別々に書くと、片方だけ直したときにもう片方へ修正が届かない
+   * （実際に #223 の修正が別実装へ届かず #280 が起きている）ため、
+   * 「入力欄の表示を更新して下書き state を進める」処理はここ1か所に集約する。
+   */
+  function applySymbolOffsetDraft(x: number, y: number) {
     // DOM の書き換えは setState の更新関数の外で行う。
     // 更新関数は React が2回呼ぶことがある（開発時の StrictMode）ため、
     // 中で副作用を起こすと移動量が2倍になってしまう。
@@ -2972,7 +3021,7 @@ export default function PianoSystemCanvas({
     setSymbolOffsetEditState(prev => (
       prev && (prev.draftX !== x || prev.draftY !== y) ? { ...prev, draftX: x, draftY: y } : prev
     ));
-  };
+  }
 
   /**
    * 矢印キーで調整中は位置調整オーバーレイを半透明にする（Issue #385・裁定C）。
@@ -3003,6 +3052,34 @@ export default function PianoSystemCanvas({
   useEffect(() => {
     if (!symbolOffsetEditState) cancelOffsetOverlayTranslucent();
   }, [symbolOffsetEditState, cancelOffsetOverlayTranslucent]);
+
+  // ── 記号のドラッグ移動（Issue #522）で使う「いつも最新」の入り口 ────────────
+  // ドラッグ中の pointermove / pointerup は window で受ける（理由は下の effect のコメント）。
+  // window のハンドラは1回だけ登録して使い回すため、そのままだと登録した回の
+  // 古い state を掴んだままになる。state を読む処理はここで毎レンダー差し替える。
+  const symbolOffsetEditStateRef = useRef(symbolOffsetEditState);
+  const symbolOffsetDragRef = useRef<{
+    /** 下書き（画面上の見た目）を x, y へそろえる。矢印キーと同じ出口 */
+    applyDraft: (x: number, y: number) => void;
+    /** ドラッグを離した時点の確定。入力欄の現在値をそのまま保存経路へ流す */
+    commit: () => void;
+  }>({ applyDraft: () => {}, commit: () => {} });
+  // 依存配列なし＝毎レンダー実行。React が state を更新したら必ずここも更新される
+  useEffect(() => {
+    symbolOffsetEditStateRef.current = symbolOffsetEditState;
+    symbolOffsetDragRef.current = {
+      applyDraft: applySymbolOffsetDraft,
+      commit: () => {
+        if (!symbolOffsetEditState) return;
+        // 確定は矢印キー（Enter）とまったく同じ関数を通す。値を変えずに離した場合は
+        // handleSymbolOffsetConfirm 側の no-op 判定が Undo 履歴を増やさない
+        handleSymbolOffsetConfirm(
+          symbolOffsetXInputRef.current?.value ?? String(symbolOffsetEditState.draftX),
+          symbolOffsetYInputRef.current?.value ?? String(symbolOffsetEditState.draftY),
+        );
+      },
+    };
+  });
   useEffect(() => () => {
     if (offsetOverlayTranslucentTimerRef.current != null) {
       window.clearTimeout(offsetOverlayTranslucentTimerRef.current);
@@ -3071,10 +3148,37 @@ export default function PianoSystemCanvas({
     /** 拍範囲スライス選択（#333 段2）のドラッグ開始点。null なら小節丸ごとドラッグ */
     beatAnchor: { measure: number; beat: number } | null;
     measureMoved: boolean;
+    /**
+     * 記号のドラッグ移動（Issue #522）。位置調整（✥）オーバーレイを開いている記号を
+     * つかんでいる間だけ入る。動かした値の反映は矢印キーとまったく同じ「下書き」経路
+     * （applySymbolOffsetDraft）に任せるので、ここにはドラッグの起点だけを持つ。
+     */
+    symbolOffset: {
+      /** つかんだ瞬間の SVG 内部座標（オフセット値と同じ単位系） */
+      startSvgX: number; startSvgY: number;
+      /** つかんだ瞬間の画面座標（しきい値の判定用。SVG 内部座標だと拡大率で遊びが変わる） */
+      startClientX: number; startClientY: number;
+      /**
+       * つかんだ瞬間のオフセット値。移動量は毎回「この値＋総移動量」で計算する。
+       * 1回ごとの差分を足し込む方式にすると、上下限で丸められたぶんが失われて
+       * 戻すときに指と記号がずれていく（クランプの累積ずれ）ため。
+       */
+      baseX: number; baseY: number;
+      /** しきい値を超えて「ドラッグ」になったか（超えるまではただのクリック扱い） */
+      moved: boolean;
+      /** つかんだポインタ列（タッチ対応・多点の混線防止。round1 P2） */
+      pointerId: number;
+    } | null;
+    /**
+     * 直前のドラッグで記号を動かしたか。ドラッグの終わりに必ず来る click を
+     * 1回だけ読み飛ばすために使う（弧の arcMoved とまったく同じ役割）。
+     */
+    symbolOffsetMoved: boolean;
   };
   const dragSessionsRef = useRef<DragSessions>({
     arcCp: null, arcEp: null, arcMoved: false, tieStart: null,
     measureAnchor: null, beatAnchor: null, measureMoved: false,
+    symbolOffset: null, symbolOffsetMoved: false,
   });
   // タイ/松葉ドラッグの破線プレビュー要素。実体は描画 effect が SVG ごとに作り直すため、
   // コンポーネント階層の掃除処理（ツール切替・pointercancel・SVG外 mouseup）から
@@ -3288,6 +3392,17 @@ export default function PianoSystemCanvas({
     dragSessionsRef.current.tieStart = null;
     dragSessionsRef.current.measureAnchor = null;
     dragSessionsRef.current.beatAnchor = null;
+    // 記号のドラッグ（Issue #522）も弧と同じ扱い: 確定はせず、つかむ前の位置へ戻す。
+    // ツール切替・pointercancel は利用者の「ここで決めた」ではないため
+    const symbolDrag = dragSessionsRef.current.symbolOffset;
+    dragSessionsRef.current.symbolOffset = null;
+    if (symbolDrag?.moved) {
+      symbolOffsetDragRef.current.applyDraft(symbolDrag.baseX, symbolDrag.baseY);
+      // 読み飛ばしを立てるかどうかの理由は上の arcMoved と同じ
+      dragSessionsRef.current.symbolOffsetMoved = suppressNextClick;
+    } else if (!suppressNextClick) {
+      dragSessionsRef.current.symbolOffsetMoved = false;
+    }
     if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
   }, [cancelArcDrag]);
 
@@ -3310,14 +3425,38 @@ export default function PianoSystemCanvas({
       ) {
         setTimeout(() => { dragSessionsRef.current.arcMoved = false; }, 0);
       }
+      // 記号ドラッグ側の同じ安全弁（#522 round1 P2）: ツール切替の中断で
+      // symbolOffset は null・symbolOffsetMoved は true のまま残る。合成 click が
+      // 来ない場所で離すとフラグが残留し、後日の最初の譜面クリックが1回捨てられる
+      if (
+        dragSessionsRef.current.symbolOffset == null &&
+        dragSessionsRef.current.symbolOffsetMoved
+      ) {
+        setTimeout(() => { dragSessionsRef.current.symbolOffsetMoved = false; }, 0);
+      }
     };
     // pointercancel には mouseup も click も続かないので、click の読み飛ばしは立てない
     //（立てると解除役の mouseup が来ず、中断後の最初のクリックが1回捨てられる）
     const onPointerCancel = () => { cancelActiveDragSessions({ suppressNextClick: false }); };
+    // 記号ドラッグ側の安全弁だけは pointerup でも効かせる（round2 P2: タッチでは mouseup が
+    // 保証されず、preventDefault で互換 mouse イベントも抑止され得る）。
+    // onWindowMouseUp をそのまま pointerup へ登録してはいけない（round3 P1）:
+    // 通常マウスでは pointerup が mouseup より先に来るため、タイ/松葉の掃除
+    //（tieStart=null）が確定処理より先に走り、applyArc/applyHairpin へ到達しなくなる
+    const onWindowPointerUp = () => {
+      if (
+        dragSessionsRef.current.symbolOffset == null &&
+        dragSessionsRef.current.symbolOffsetMoved
+      ) {
+        setTimeout(() => { dragSessionsRef.current.symbolOffsetMoved = false; }, 0);
+      }
+    };
     window.addEventListener('mouseup', onWindowMouseUp);
+    window.addEventListener('pointerup', onWindowPointerUp);
     window.addEventListener('pointercancel', onPointerCancel);
     return () => {
       window.removeEventListener('mouseup', onWindowMouseUp);
+      window.removeEventListener('pointerup', onWindowPointerUp);
       window.removeEventListener('pointercancel', onPointerCancel);
     };
   }, [cancelActiveDragSessions]);
@@ -3452,6 +3591,69 @@ export default function PianoSystemCanvas({
       window.removeEventListener('mouseup', onUp);
     };
   }, [updateArcDragPreview]);
+
+  /**
+   * 記号のドラッグ移動（Issue #522）の pointermove / pointerup を window で受ける。
+   *
+   * window で受ける理由は弧のドラッグ（#235）と同じで、さらにもう1つある:
+   * 記号を1px動かすたびに下書きが変わって SVG が作り直されるため、pointerdown を受けた
+   * 当たり判定 rect はドラッグの途中で消える。要素側で pointermove を待つと、
+   * 動かし始めた直後に記号が指から置き去りになってしまう。
+   */
+  useEffect(() => {
+    const onMove = (ev: PointerEvent) => {
+      const drag = dragSessionsRef.current.symbolOffset;
+      const ctx = arcDragContextRef.current;
+      if (!drag || !ctx) return;
+      // つかんだ指/ボタンのポインタ列だけを追う（round1 P2: タッチ対応・多点の混線防止）
+      if (ev.pointerId !== drag.pointerId) return;
+      if (!drag.moved) {
+        // 遊びを超えるまでは「クリック（記号を選ぶ）」のまま。押した指の震えで
+        // 記号が動き、Undo 履歴が1件増えるのを防ぐ
+        if (
+          Math.abs(ev.clientX - drag.startClientX) < SYMBOL_DRAG_START_THRESHOLD_PX
+          && Math.abs(ev.clientY - drag.startClientY) < SYMBOL_DRAG_START_THRESHOLD_PX
+        ) return;
+        drag.moved = true;
+      }
+      const { x, y } = clientToGroup(ctx.svg, ctx.svgRoot, ev.clientX, ev.clientY);
+      // 移動量は毎回「つかんだ時の値 ＋ つかんだ点からの総移動量」で求める。
+      // 上下限の丸め（clamp）は applySymbolOffsetNudge が矢印キーとまったく同じ規則で行う
+      const { x: nextX, y: nextY } = applySymbolOffsetNudge(
+        String(drag.baseX),
+        String(drag.baseY),
+        { dx: Math.round(x - drag.startSvgX), dy: Math.round(y - drag.startSvgY) },
+      );
+      // ドラッグの終わりに必ず来る click を1回読み飛ばすための目印（弧の arcMoved と同じ）
+      dragSessionsRef.current.symbolOffsetMoved = true;
+      // 矢印キーのときと同じく、動かしている間はオーバーレイを透かして
+      // 記号の行き先（周りの音符）を見えるようにする（#385・裁定C）
+      markOffsetOverlayKeyAdjust();
+      symbolOffsetDragRef.current.applyDraft(nextX, nextY);
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      const drag = dragSessionsRef.current.symbolOffset;
+      if (!drag) return;
+      if (ev.pointerId !== drag.pointerId) return;
+      dragSessionsRef.current.symbolOffset = null;
+      // つかんだだけ（＝記号を選ぶためのクリック）なら保存しない
+      if (!drag.moved) return;
+      symbolOffsetDragRef.current.commit();
+      // click が来なかったときの取りこぼしに備えて必ず下ろす
+      // （click は mouseup と同じタスクで来るので、0ms のタイマーの方が必ず後になる）
+      window.setTimeout(() => { dragSessionsRef.current.symbolOffsetMoved = false; }, 0);
+    };
+
+    // mouse ではなく pointer で受ける（round1 P2）: タッチの互換マウスイベントは
+    // 指の移動中の連続 mousemove を配送しないため、mouse 系だけだとタッチでドラッグできない
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [markOffsetOverlayKeyAdjust]);
 
   // タイドラッグの開始情報（再レンダリングを発生させないためref管理）。
   // voiceIndex は「ドラッグを開始した時点のアクティブ声部」。確定（mouseup）時に
@@ -4429,10 +4631,74 @@ export default function PianoSystemCanvas({
       hit.style.pointerEvents = symbolsInteractive ? 'auto' : 'none';
       if (symbolsInteractive) {
         hit.style.cursor = 'pointer';
-        hit.addEventListener('mouseenter', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0.16)'));
+        /**
+         * いま位置調整（✥）オーバーレイを開いているのが「この記号」か（Issue #522）。
+         * ドラッグで動かせるのは調整中の1件だけにして、通常のクリック（記号を選ぶ）や
+         * 音符の入力・選択と衝突させない。
+         *
+         * 判定に ref を使うのは、オーバーレイを開いただけでは描画 effect が走らず
+         * （下書きがまだ変わっていないため）、この関数を作った時点の state が
+         * 古いままになるから。
+         */
+        const isOffsetDragTarget = (): boolean => {
+          const st = symbolOffsetEditStateRef.current;
+          return !!st
+            && st.partIndex === partIndex
+            && st.measureAbsoluteIndex === measureAbsoluteIndex
+            && st.eventIndex === eventIndex
+            && st.voiceIndex === symbolVoiceIndex
+            && symbolHitRegionKey(st.target) === symbolHitRegionKey(target);
+        };
+        hit.addEventListener('mouseenter', () => {
+          hit.setAttribute('fill', 'rgba(37, 99, 235, 0.16)');
+          // つかめる（＝調整中の）記号は弧のドラッグと同じ 'grab' で知らせる
+          hit.style.cursor = isOffsetDragTarget() ? 'grab' : 'pointer';
+        });
         hit.addEventListener('mouseleave', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0)'));
+        hit.addEventListener('pointerdown', (domEvent) => {
+          if (!isOffsetDragTarget()) return;  // 通常のクリック（記号を選ぶ）はそのまま通す
+          const me = domEvent as PointerEvent;
+          // 主ポインタの左ボタン/指だけでつかむ（round1 P3: 右クリックや補助ボタンの
+          // ドラッグで保存が始まると、コンテキストメニュー操作のつもりが移動になる）
+          if (!me.isPrimary || me.button !== 0) return;
+          // 押した瞬間に入力欄からフォーカスが外れる（blur ＝ 確定して閉じる）のを止める。
+          // 閉じてしまうと動かす対象を見失ってドラッグが成立しない
+          //（「この記号を削除」ボタンと同じ preventDefault の使い方・Issue #385 続報）
+          me.preventDefault();
+          const st = symbolOffsetEditStateRef.current;
+          if (!st) return;
+          // 基準は state ではなく入力欄の現在値。「数値を打ってからドラッグ」でも
+          // 打った値からの移動になるようにそろえる（矢印キーと同じ考え方）
+          const { x: baseX, y: baseY } = applySymbolOffsetNudge(
+            symbolOffsetXInputRef.current?.value ?? String(st.draftX),
+            symbolOffsetYInputRef.current?.value ?? String(st.draftY),
+            { dx: 0, dy: 0 },
+          );
+          // 座標変換に使う SVG は「いま描かれているもの」を台帳から取る。
+          // 描画のたびに作り直されるため、ドラッグ中の window ハンドラと同じ入り口にそろえる
+          const ctx = arcDragContextRef.current;
+          if (!ctx) return;
+          const { x, y } = clientToGroup(ctx.svg, ctx.svgRoot, me.clientX, me.clientY);
+          dragSessionsRef.current.symbolOffset = {
+            startSvgX: x, startSvgY: y,
+            startClientX: me.clientX, startClientY: me.clientY,
+            baseX, baseY, moved: false,
+            pointerId: me.pointerId,
+          };
+        });
+        // タッチでのドラッグ中にブラウザのスクロール/ズームへ取られないようにする。
+        // ✥を開いた直後は描画 effect が走らず rect が作り直されないため、
+        // 対象判定に依存せず**常に**設定する（round2 P2。記号の判定 rect は小さく、
+        // その上からページをスクロールし始める操作は実用上無い）
+        hit.style.touchAction = 'none';
         hit.addEventListener('click', (domEvent) => {
           domEvent.stopPropagation();
+          // ドラッグで動かした直後の click は、記号を選び直す操作ではないので読み飛ばす
+          // （読み飛ばさないと、確定して閉じたオーバーレイがその場で開き直す）
+          if (dragSessionsRef.current.symbolOffsetMoved) {
+            dragSessionsRef.current.symbolOffsetMoved = false;
+            return;
+          }
           // 記号クリックは**常に「その記号を選ぶ」**（2026-08-24 の実機フィードバックで統一）。
           // 一時期は選択中のツールで振り分け（同種の記号ツール中はトグル解除）にしていたが、
           //   - pp ツールを持ったまま pp を押すと消えてしまい、**選択・位置調整ができない**
@@ -4588,8 +4854,11 @@ export default function PianoSystemCanvas({
     // capture フェーズ（＝同一フェーズ）にリスナーが追加されても、消費済み click を
     // 確実に遮断できる（同一フェーズの後続リスナーは stopPropagation では止まらない）。
     svg.addEventListener('click',(e)=>{
-      if(dragSessionsRef.current.arcMoved){
+      // 記号のドラッグ（Issue #522）も同じ扱い。ドラッグ中に SVG は作り直されるため、
+      // 離した後の click は当たり判定 rect ではなく背景へ届くことがある
+      if(dragSessionsRef.current.arcMoved||dragSessionsRef.current.symbolOffsetMoved){
         dragSessionsRef.current.arcMoved=false;
+        dragSessionsRef.current.symbolOffsetMoved=false;
         e.stopImmediatePropagation();
       }
     },true);
@@ -9110,6 +9379,10 @@ export default function PianoSystemCanvas({
           </span>
           <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'sans-serif' }}>
             矢印キーで{SYMBOL_OFFSET_NUDGE_STEP}pxずつ移動（Shiftで{SYMBOL_OFFSET_NUDGE_STEP_LARGE}px）・Enterで確定・Escで元へ戻す
+          </span>
+          {/* ドラッグ移動（Issue #522）は矢印キーと同じ調整の別の入り口なので、同じ場所で知らせる */}
+          <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'sans-serif' }}>
+            記号そのものをドラッグしても動かせます（離した時点で確定）
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
