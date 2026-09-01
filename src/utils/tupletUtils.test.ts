@@ -10,6 +10,7 @@ import {
   generateTupletId,
   planTupletGroupDeletion,
   planTupletReplacementForRest,
+  TUPLET_KINDS,
   toggleAllTupletNumbersInMeasure,
   toggleTupletNumberVisibility,
 } from './tupletUtils';
@@ -77,10 +78,63 @@ describe('tupletUtils', () => {
       expect(plan.groupBeats).toBeCloseTo(1);
     });
 
+    it('2連符(2:3)を組み立てる: 音符1＋連符内休符1個、1音あたりの長さは1.5倍に伸びる（Issue #472）', () => {
+      // 2連符は「同じ音価3個ぶんの時間に2個を詰める」記譜（8分の6拍子などの複合拍子で使う）。
+      // 他の連符と違って numNotes < notesOccupied なので、音は短くならず**伸びる**。
+      const plan = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4', { numNotes: 2, notesOccupied: 3 });
+      expect(plan.groupEvents).toHaveLength(2);
+      expect(plan.groupEvents[0].isRest).toBe(false);
+      expect(plan.groupEvents[1].isRest).toBe(true);
+      expect(plan.groupEvents.every((ev) => ev.tuplet?.numNotes === 2 && ev.tuplet?.notesOccupied === 3)).toBe(true);
+      // 8分音符2個(1拍)が2:3連符では3/2倍→ 付点4分音符1個分(1.5拍)になる
+      expect(plan.groupBeats).toBeCloseTo(1.5);
+    });
+
+    it('4連符(4:3)を組み立てる: 音符1＋連符内休符3個、実長は付点4分音符1個分（Issue #472）', () => {
+      const plan = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4', { numNotes: 4, notesOccupied: 3 });
+      expect(plan.groupEvents).toHaveLength(4);
+      expect(plan.groupEvents[0].isRest).toBe(false);
+      expect(plan.groupEvents.slice(1).every((ev) => ev.isRest)).toBe(true);
+      expect(plan.groupEvents.every((ev) => ev.tuplet?.numNotes === 4 && ev.tuplet?.notesOccupied === 3)).toBe(true);
+      // 8分音符4個(2拍)が4:3連符では3/4倍→ 8分音符3個分(1.5拍)になる
+      expect(plan.groupBeats).toBeCloseTo(1.5);
+    });
+
     it('tupletSpec を省略すると従来どおり3連符(3:2)になる（後方互換）', () => {
       const plan = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4');
       expect(plan.groupEvents).toHaveLength(3);
       expect(plan.groupEvents[0].tuplet).toEqual({ id: plan.groupEvents[0].tuplet!.id, numNotes: 3, notesOccupied: 2 });
+    });
+  });
+
+  describe('TUPLET_KINDS（パレットに並ぶ連符の一覧）', () => {
+    it('2〜7連符が数字の小さい順に並び、比率は浄書の慣例どおり（Issue #472）', () => {
+      expect(TUPLET_KINDS).toEqual([
+        { numNotes: 2, notesOccupied: 3, hint: expect.any(String) },
+        { numNotes: 3, notesOccupied: 2 },
+        { numNotes: 4, notesOccupied: 3, hint: expect.any(String) },
+        { numNotes: 5, notesOccupied: 4 },
+        { numNotes: 6, notesOccupied: 4 },
+        { numNotes: 7, notesOccupied: 4 },
+      ]);
+    });
+
+    it('どの種類も numNotes/notesOccupied が正の整数（保存データの検証条件を満たす）', () => {
+      TUPLET_KINDS.forEach((kind) => {
+        expect(Number.isInteger(kind.numNotes) && kind.numNotes > 0).toBe(true);
+        expect(Number.isInteger(kind.notesOccupied) && kind.notesOccupied > 0).toBe(true);
+      });
+    });
+
+    it('hint は表示用の補足なので、保存データ（tuplet 情報）には混ざらない（Issue #472）', () => {
+      // パレットは TupletKind をそのまま tool へ入れるため、hint 付きの値が
+      // buildTupletGroupPlan へ渡る。保存データに余計なキーが増えると
+      // storage の検証・MusicXML 書出の前提が崩れるので、ここで固定しておく。
+      const duplet = TUPLET_KINDS.find((kind) => kind.numNotes === 2)!;
+      const plan = buildTupletGroupPlan('8', undefined, ['c/4'], 'b/4', duplet);
+      plan.groupEvents.forEach((ev) => {
+        expect(Object.keys(ev.tuplet!).sort()).toEqual(['id', 'notesOccupied', 'numNotes']);
+      });
     });
   });
 
@@ -158,6 +212,26 @@ describe('tupletUtils', () => {
       );
       expect(plan!.groupEvents).toHaveLength(5);
       expect(plan!.remainingBeats).toBe(0);
+    });
+
+    it('2連符（8分×2＝1.5拍）は付点4分休符へちょうど収まる（Issue #472）', () => {
+      // 8分の6拍子で「付点4分休符1つ」を2連符へ置き換える、という一番よくある入れ方。
+      const rest: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'], dots: 1 };
+      const plan = planTupletReplacementForRest(
+        rest, ['c/4'], { duration: '8' }, 'b/4', { numNotes: 2, notesOccupied: 3 }
+      );
+      expect(plan!.groupEvents).toHaveLength(2);
+      expect(plan!.remainingBeats).toBeCloseTo(0, 6);
+    });
+
+    it('2連符（1.5拍）は4分休符（1拍）には入らない（伸びるぶん場所が足りない）', () => {
+      // 2連符は1音あたりが伸びるので、3連符と同じ感覚で4分休符をクリックしても置けない。
+      // 置けないときは null を返し、呼び出し側は「小節が満杯」の通知を出す。
+      const rest: NoteEvent = { dur: '4', isRest: true, keys: ['b/4'] };
+      const plan = planTupletReplacementForRest(
+        rest, ['c/4'], { duration: '8' }, 'b/4', { numNotes: 2, notesOccupied: 3 }
+      );
+      expect(plan).toBeNull();
     });
 
     it('16分3連（0.5拍）は8分休符（0.5拍）へちょうど収まる（誤差で弾かれない）', () => {

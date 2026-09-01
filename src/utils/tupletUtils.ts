@@ -15,19 +15,33 @@ const DURATION_TOOL_VALUES: DurKey[] = ['1', '2', '4', '8', '16', '32', '64'];
 export const DEFAULT_TUPLET_NUM_NOTES = 3;
 export const DEFAULT_TUPLET_NOTES_OCCUPIED = 2;
 
-/** パレットから選べる連符の種類（数字と比率のセット）。 */
-export type TupletKind = { numNotes: number; notesOccupied: number };
+/**
+ * パレットから選べる連符の種類（数字と比率のセット）。
+ * `hint` はパレットのツールチップに足す補足で、保存データ（NoteEvent.tuplet）には入らない。
+ */
+export type TupletKind = { numNotes: number; notesOccupied: number; hint?: string };
 
 /**
- * パレットに用意する連符の一覧。
+ * パレットに用意する連符の一覧（数字の小さい順に並べる）。
+ * - 2連符 (2:3) / 4連符 (4:3) … 複合拍子（8分の6拍子など）用。Issue #472 で追加
  * - 3連符 (3:2) … 既存
- * - 5連符 (5:4) / 6連符 (6:4) / 7連符 (7:4) … 今回追加
- * 2連符 (2:3) は複合拍子（8分の6拍子など）でしか意味を持たず、
- * 単純拍子では「2連符なのに音価が伸びる」という直感に反する挙動になるため、
- * 今回のスコープからは除外した（design.md 参照）。
+ * - 5連符 (5:4) / 6連符 (6:4) / 7連符 (7:4) … 既存
+ *
+ * 比率（notesOccupied）は浄書の慣例に合わせている。2連符・4連符は
+ * 「付点音価1つぶんの時間（同じ音価3個ぶん）に2個／4個を詰める」記譜なので
+ * notesOccupied は両方 3 になる。2連符だけは numNotes < notesOccupied、
+ * つまり1音あたりの長さが**伸びる**唯一の種類だが、拍数計算はどこも
+ * `notesOccupied / numNotes` 倍で統一されているので特別扱いは要らない。
+ *
+ * 9連符 (9:8) は入れていない。当初は MusicXML 書出の丸め（旧 DIVISIONS=16 固定）を
+ * 理由にしていたが、#519 の修正で divisions は連符に合わせて自動選択されるようになり、
+ * その障害は消えた。現在は「Issue #472 のスコープ外（要望が複合拍子用の2・4連符）」が
+ * 理由で、必要になれば TUPLET_KINDS へ1行足すだけで追加できる。
  */
 export const TUPLET_KINDS: TupletKind[] = [
+  { numNotes: 2, notesOccupied: 3, hint: '8分の6拍子など複合拍子向け。1音あたりの長さは1.5倍に伸びる' },
   { numNotes: 3, notesOccupied: 2 },
+  { numNotes: 4, notesOccupied: 3, hint: '8分の6拍子など複合拍子向け' },
   { numNotes: 5, notesOccupied: 4 },
   { numNotes: 6, notesOccupied: 4 },
   { numNotes: 7, notesOccupied: 4 },

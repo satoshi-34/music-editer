@@ -312,11 +312,19 @@ export default function Palette({
           >
             .
           </button>
-          {/* 連符トグル群：3/5/6/7連符。ONの状態で音価ツール+クリックすると、
+          {/* 連符トグル群：2/3/4/5/6/7連符。ONの状態で音価ツール+クリックすると、
               音符1つ＋連符内休符(N-1)個のグループを配置する。
-              同じ数字をもう一度押すとOFFに戻る（他の連符ボタンを押すと切り替わる）。 */}
+              同じ数字をもう一度押すとOFFに戻る（他の連符ボタンを押すと切り替わる）。
+              2連符・4連符（Issue #472）は8分の6拍子などの複合拍子で使う連符で、
+              比率が N:3 になる（2連符は1音あたりの長さが伸びる唯一の種類）。 */}
           {TUPLET_KINDS.map((kind) => {
             const active = activeTupletNumNotes === kind.numNotes;
+            // ツールチップには比率（N:M）も書く。2連符・4連符は「なぜ長さが変わるのか」が
+            // 数字だけでは分からないため、hint（複合拍子向け、等）も続けて出す。
+            const tupletLabel =
+              `${kind.numNotes}連符（${kind.numNotes}:${kind.notesOccupied}）`
+              + `: 選択した音価で1音+休符${kind.numNotes - 1}個のグループを配置する`
+              + (kind.hint ? `。${kind.hint}` : '');
             return (
               <button
                 key={kind.numNotes}
@@ -328,8 +336,8 @@ export default function Palette({
                     onChange({ ...(ROW1[2] as { duration: DurKey; isRest?: boolean }), tuplet: kind });
                   }
                 }}
-                title={`${kind.numNotes}連符（選択した音価で1音+休符${kind.numNotes - 1}個の${kind.numNotes}連符グループを配置する）`}
-                aria-label={`${kind.numNotes}連符（選択した音価で1音+休符${kind.numNotes - 1}個の${kind.numNotes}連符グループを配置する）`}
+                title={tupletLabel}
+                aria-label={tupletLabel}
                 // 他のボタンと同じ幅・高さ（BUTTON_W/H）に揃え、ラベルは折り返さない
                 style={btnStyle(active, { fontSize: 11, fontWeight: 'bold', whiteSpace: 'nowrap' })}
               >
