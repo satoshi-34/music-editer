@@ -62,6 +62,11 @@ import {
   SCORE_NOTE_SELECTION_MOVE_EVENT,
   type ScoreNoteSelectionMoveDetail,
 } from '../utils/scoreEditorNotices';
+import {
+  ARROW_KEY_HINT_NOTICE_DURATION_MS,
+  ARROW_KEY_HINT_NOTICE_MESSAGE,
+  claimArrowKeyHintNotice,
+} from '../utils/arrowKeyHintNotice';
 import { findAdjacentNotePosition } from '../utils/noteNavigationUtils';
 import { computeShiftedKeysWithSelection, applyPitchChangeToMeasures } from '../utils/pitchShiftUtils';
 import {
@@ -3499,6 +3504,26 @@ export default function PianoSystemCanvas({
     setSelectedArc(prev=>(prev&&prev.voiceIndex!==activeVoiceIndex?null:prev));
     setSelectedHairpin(prev=>(prev&&prev.voiceIndex!==activeVoiceIndex?null:prev));
   },[activeVoiceIndex]);
+
+  // 音符を初めて選択したときだけ、キーボード操作の存在を通知で知らせる（Issue #524）。
+  // ↑↓・←→・Delete は実装済み・ヘルプ記載済みだが気づかれていなかった（「機能があるのに
+  // 知られない」）。常時表示のヒントは譜面を騒がしくするので、初回の1回だけにする。
+  //
+  // ここで見るのは「選択が付いた瞬間」ではなく selected の変化そのもの。譜面は段ごとに
+  // 別インスタンスなので、どのインスタンスで選んでも1回で済むよう、出すかどうかの判断は
+  // localStorage を見る claim 側（utils/arrowKeyHintNotice.ts）に任せている。
+  useEffect(() => {
+    if (selected == null) return;
+    // 休符の選択では出さない（round1 P2）: 案内の1つ目「↑↓で音の高さ」が休符には
+    // 効かず、実挙動と食い違う。既読も消費しないので、後で実音符を選んだときに出る
+    const selectedEvent = getVoiceEvents(
+      partsScore[selected.partIndex]?.[selected.measure] ?? { events: [] },
+      selected.voiceIndex ?? 0,
+    )[selected.index];
+    if (!selectedEvent || selectedEvent.isRest) return;
+    if (!claimArrowKeyHintNotice()) return;
+    notifyScoreEdit(ARROW_KEY_HINT_NOTICE_MESSAGE, ARROW_KEY_HINT_NOTICE_DURATION_MS);
+  }, [selected, partsScore]);
 
   // 選択の一意化（SELECTION_CLAIMED_EVENT のコメント参照）。
   // このインスタンスで何かが選択されたら、他のインスタンスへ「選択を手放して」と通知する。

@@ -317,6 +317,15 @@ describe('SimpleAudioEngine', () => {
       expect(engine.durationToSeconds('8', 120, undefined, { numNotes: 3, notesOccupied: 2 }))
         .toBeCloseTo(0.25 * (2 / 3), 10);
     });
+
+    it('2連符(2:3)は 1.5 倍・4連符(4:3)は 0.75 倍で計算される（Issue #472）', () => {
+      // 2連符は「音が伸びる」唯一の連符。倍率が notesOccupied/numNotes に統一されているので
+      // 1未満に丸められたりせず、8分音符1個ぶんが付点8分音符と同じ長さで鳴る。
+      expect(engine.durationToSeconds('8', 120, undefined, { numNotes: 2, notesOccupied: 3 }))
+        .toBeCloseTo(0.25 * 1.5, 10);
+      expect(engine.durationToSeconds('8', 120, undefined, { numNotes: 4, notesOccupied: 3 }))
+        .toBeCloseTo(0.25 * 0.75, 10);
+    });
   });
 
   describe('ダブルシャープ・ダブルフラットの周波数計算（Issue #423）', () => {

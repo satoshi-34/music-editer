@@ -144,6 +144,9 @@ describe('音符選択中の ←/→ で選択を隣のイベントへ移す（I
 
   beforeEach(() => {
     localStorageMock.clear();
+    // clear で setupTests の既読既定も消えるため、初回選択ヒント（#524）を既読へ戻す。
+    // このテストは選択操作を多用するので、ヒント通知が混ざると件数検証が揺れる
+    localStorageMock.setItem('music-score-app-arrow-key-hint-notice-seen', '1');
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
       get: () => TEST_CONTAINER_WIDTH,

@@ -4868,13 +4868,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // ときは run が呼ばれないので、従来どおり何も起きない
     requestExportFileName('musicxml', (fileNameBase) => {
       try {
-        downloadMusicXml(buildCurrentScoreData(), fileNameBase);
+        // 全体テンポ（♩=N）は保存データではなく再生設定側にあるため、書き出しへ明示的に渡す。
+        // 渡さないと先頭小節にテンポが書かれず、読み直したときに既定の 120 へ戻る（Issue #518）
+        downloadMusicXml(buildCurrentScoreData(), fileNameBase, { globalBpm: tempoSettings.bpm });
         showExportStatus('success', '✓ MusicXMLを書き出しました');
       } catch (error) {
         showExportStatus('error', `⚠ MusicXMLを書き出せませんでした: ${describeExportError(error)}`);
       }
     });
-  }, [buildCurrentScoreData, requestExportFileName, showExportStatus]);
+  }, [buildCurrentScoreData, requestExportFileName, showExportStatus, tempoSettings.bpm]);
 
   const handleExportMidi = useCallback(() => {
     requestExportFileName('midi', (fileNameBase) => {
@@ -4949,7 +4951,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       } else {
         xml = new TextDecoder('utf-8').decode(bytes);
       }
-      const { score: loaded, defaults: importedDefaults } = parseMusicXmlWithDefaults(xml);
+      const { score: loaded, defaults: importedDefaults, globalBpm: importedGlobalBpm } = parseMusicXmlWithDefaults(xml);
+      // 先頭小節の <sound tempo>（全体テンポ）は再生パネルへ反映する（#518）。
+      // これが無いと往復で全体テンポが既定 120 に戻る（QA で確定した症状）
+      if (importedGlobalBpm != null) setBPM(importedGlobalBpm);
       // applyLoadedScoreData と同等のロジックで画面に反映する
       // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
       setPartExtractionId(null);
@@ -5083,7 +5088,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-  }, [setTimeSignature, measuresPerSystem, applySavedLayoutAttributes, instrumentLabelAreaWidth,
+  }, [setTimeSignature, setBPM, measuresPerSystem, applySavedLayoutAttributes, instrumentLabelAreaWidth,
     notationSizeMultiplier, pageMarginSideMm, pageMarginTopMm, pageMarginBottomMm]);
 
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
