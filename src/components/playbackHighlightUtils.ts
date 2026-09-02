@@ -81,16 +81,77 @@ export function computePlaybackBandBox(
   systemEls: Element[],
   padX: number
 ): BandBox | null {
-  let left = Number.POSITIVE_INFINITY;
-  let right = Number.NEGATIVE_INFINITY;
-  for (const el of noteEls) {
-    const span = readNoteVisualSpan(el);
-    if (!span) continue;
-    if (span.left < left) left = span.left;
-    if (span.right > right) right = span.right;
-  }
-  if (!Number.isFinite(left) || !Number.isFinite(right)) return null;
+  // 「1音ぶんのかたまりが1つだけ」の場合として複数帯の計算へ委ねる（同じ幾何を2か所に書かない）
+  return computePlaybackBandBoxes([noteEls], systemEls, padX)[0] ?? null;
+}
 
+/**
+ * 「同時に鳴っている音符のかたまり」ごとに縦帯を計算する（Issue #411）。
+ *
+ * #268 の時点では鳴っている音符は1か所しか分からなかったので帯も1本だったが、
+ * 全声部を光らせるようになると、右手と左手・上声と下声が**別の横位置**で
+ * 同時に鳴ることがある。そこで:
+ *
+ * - 横位置が重なる音符どうしは1本の帯にまとめる（和音・同じ拍で縦にそろった音符。
+ *   重なったまま2本引くと半透明が二重に濃くなって、そこだけ色が違って見える）
+ * - 横位置が離れている音符は別々の帯にする（これが #411 で足りていなかった情報）
+ *
+ * 縦（y / height）は従来どおり「その段の当たり判定すべての外接範囲」で共通。
+ * 段の上から下までを帯が貫くので、片方のパートにしか音が無い拍でも高さが変わらない。
+ *
+ * @param noteElGroups 音符1つぶんの当たり判定の集まり（同じ音符の rect が複数枚ある場合があるため配列の配列）
+ * @param systemEls    その段のすべての音符の当たり判定
+ * @param padX         符頭の左右に足す余白（SVG 内部座標）
+ */
+export function computePlaybackBandBoxes(
+  noteElGroups: Element[][],
+  systemEls: Element[],
+  padX: number
+): BandBox[] {
+  const pad = Number.isFinite(padX) ? Math.max(0, padX) : 0;
+
+  // 1音ぶんずつ「余白込みの横範囲」を求める
+  const spans: NoteSpan[] = [];
+  for (const group of noteElGroups) {
+    let left = Number.POSITIVE_INFINITY;
+    let right = Number.NEGATIVE_INFINITY;
+    for (const el of group) {
+      const span = readNoteVisualSpan(el);
+      if (!span) continue;
+      if (span.left < left) left = span.left;
+      if (span.right > right) right = span.right;
+    }
+    if (!Number.isFinite(left) || !Number.isFinite(right)) continue;
+    spans.push({ left: left - pad, right: right + pad });
+  }
+  if (spans.length === 0) return [];
+
+  // 重なる範囲どうしをつなげる（左端の昇順に見ていき、前の範囲と接していたら伸ばす）
+  spans.sort((a, b) => a.left - b.left);
+  const merged: NoteSpan[] = [];
+  for (const span of spans) {
+    const last = merged[merged.length - 1];
+    if (last && span.left <= last.right) {
+      if (span.right > last.right) last.right = span.right;
+    } else {
+      merged.push({ ...span });
+    }
+  }
+
+  const vertical = computeSystemVerticalExtent(systemEls);
+  if (!vertical) return [];
+
+  return merged.map((span) => ({
+    x: span.left,
+    y: vertical.top,
+    // 符頭が極端に細いときでも帯が消えないよう、最低限の幅を残す
+    width: Math.max(1, span.right - span.left),
+    height: Math.max(1, vertical.bottom - vertical.top),
+  }));
+}
+
+/** その段の当たり判定すべての外接範囲（縦）。1つも読めなければ null */
+function computeSystemVerticalExtent(systemEls: Element[]): { top: number; bottom: number } | null {
   let top = Number.POSITIVE_INFINITY;
   let bottom = Number.NEGATIVE_INFINITY;
   for (const el of systemEls) {
@@ -100,15 +161,7 @@ export function computePlaybackBandBox(
     if (box.y + box.height > bottom) bottom = box.y + box.height;
   }
   if (!Number.isFinite(top) || !Number.isFinite(bottom)) return null;
-
-  const pad = Number.isFinite(padX) ? Math.max(0, padX) : 0;
-  return {
-    x: left - pad,
-    y: top,
-    // 符頭が極端に細い（休符など）ときでも帯が消えないよう、最低限の幅を残す
-    width: Math.max(1, right - left + pad * 2),
-    height: Math.max(1, bottom - top),
-  };
+  return { top, bottom };
 }
 
 /**
