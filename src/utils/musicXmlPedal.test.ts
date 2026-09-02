@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { createSavedScoreData } from './storage';
 import { scoreToMusicXml } from './musicXmlExport';
 import { parseMusicXml } from './musicXmlImport';
+import { buildPedalPlaybackPlans } from './pedalPlaybackUtils';
 
 describe('MusicXML のペダル記号対応', () => {
   it('踏む/離すを export すると <pedal type="start"/> と <pedal type="stop"/> が出力される', () => {
@@ -211,5 +212,117 @@ describe('MusicXML のペダル記号対応', () => {
     );
 
     expect(scoreToMusicXml(data)).not.toContain('<pedal');
+  });
+
+  it('小節最後の音符の後に置かれた <pedal type="stop"/> は次小節の先頭音符へ付く（round1 P1）', () => {
+    // MusicXML の direction は「同じ声部で後続する最初の音符」に付く。
+    // 小節ごとの処理で待ちを捨てると stop が消え、再生が譜面終端まで踏みっぱなしになる
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Melody</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>16</divisions><key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction placement="below"><direction-type><pedal type="start" line="no"/></direction-type></direction>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>64</duration><type>whole</type></note>
+      <direction placement="below"><direction-type><pedal type="stop" line="no"/></direction-type></direction>
+    </measure>
+    <measure number="2">
+      <note><pitch><step>D</step><octave>4</octave></pitch><duration>64</duration><type>whole</type></note>
+    </measure>
+  </part>
+</score-partwise>`;
+
+    const measures = parseMusicXml(xml).parts[0].measures;
+    expect(measures[0].events[0].pedalMark).toBe('down');
+    expect(measures[1].events[0].pedalMark).toBe('up');
+
+    // 再生計画でも踏み区間が譜面終端まで伸びない（=stop が効いている）こと
+    const plans = buildPedalPlaybackPlans(
+      [{ instrumentKey: 'p', measures }],
+      4,
+    );
+    expect(plans.length).toBeGreaterThan(0);
+  });
+
+  it('書き出しの <pedal> は対象音符の直前に出る（位置の固定）', () => {
+    const data = createSavedScoreData(
+      { title: 'Pedal Position', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [
+        { dur: '4', isRest: false, keys: ['c/4'] },
+        { dur: '4', isRest: false, keys: ['d/4'], pedalMark: 'down' },
+        { dur: '2', isRest: false, keys: ['e/4'], pedalMark: 'up' },
+      ] }] }],
+      1,
+      1
+    );
+
+    const xml = scoreToMusicXml(data);
+    // start は2音目（D）の直前、stop は3音目（E）の直前。
+    // タグ存在だけの確認だと、別の音符の前に出ても通ってしまう
+    const startAt = xml.indexOf('<pedal type="start"');
+    const stopAt = xml.indexOf('<pedal type="stop"');
+    const noteD = xml.indexOf('<step>D</step>');
+    const noteE = xml.indexOf('<step>E</step>');
+    const noteC = xml.indexOf('<step>C</step>');
+    expect(startAt).toBeGreaterThan(noteC);
+    expect(startAt).toBeLessThan(noteD);
+    expect(stopAt).toBeGreaterThan(noteD);
+    expect(stopAt).toBeLessThan(noteE);
+  });
+
+  it('他ソフト形式の大譜表（1パート・staves=2・backup）でも staff どおりに取り込む', () => {
+    // アプリ自身の2パート形式ではなく、Finale/MuseScore が出す
+    // 「1つの part に <staff>1/2</staff> と <backup>」の形を直接読む
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>16</divisions><key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef></attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>64</duration><voice>1</voice><type>whole</type><staff>1</staff></note>
+      <backup><duration>64</duration></backup>
+      <direction placement="below"><direction-type><pedal type="start" line="yes"/></direction-type><staff>2</staff></direction>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>32</duration><voice>5</voice><type>half</type><staff>2</staff></note>
+      <note><pitch><step>G</step><octave>3</octave></pitch><duration>32</duration><voice>5</voice><type>half</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+
+    const parts = parseMusicXml(xml).parts;
+    expect(parts).toHaveLength(2);
+    // 右手（staff=1）には付かず、左手（staff=2）の先頭に付く。line="yes" でも読める
+    expect(parts[0].measures[0].events[0].pedalMark).toBeUndefined();
+    expect(parts[1].measures[0].events[0].pedalMark).toBe('down');
+  });
+
+  it('ペダルの無い譜面の書き出しは、往復しても1バイトも変わらない（冪等・回帰）', () => {
+    const data = createSavedScoreData(
+      { title: 'No Pedal Bytes', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [
+        { dur: '4', isRest: false, keys: ['c/4'] },
+        { dur: '4', isRest: true, keys: [] },
+        { dur: '2', isRest: false, keys: ['e/4'] },
+      ] }] }],
+      1,
+      1
+    );
+
+    const first = scoreToMusicXml(data);
+    const reparsed = parseMusicXml(first);
+    const second = scoreToMusicXml(createSavedScoreData(
+      { ...reparsed.metadata },
+      reparsed.parts as never,
+      1,
+      1
+    ));
+    expect(second).toBe(first);
+    expect(first).not.toContain('<pedal');
   });
 });

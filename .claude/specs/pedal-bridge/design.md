@@ -14,7 +14,7 @@
 
 `pedalMark: 'down' | 'up'` という単発マークのデータ構造はそのまま維持する。理由:
 
-- Undo/Redo・保存/読込・MusicXML 入出力など、既存のデータフローを一切変更せずに済む
+- Undo/Redo・保存/読込など、既存のデータフローを変更せずに済む（MusicXML 入出力は #568 で pedalMark をそのまま direction/pedal へ対応付け）
 - 「ペダル区間」というオブジェクトを新設すると、区間の分割・結合・部分削除などのUI/データ操作が
   一気に複雑化する（松葉やタイと違い、ペダルは1音符に1マークを付け外しするシンプルな操作にしたい）
 
@@ -79,7 +79,7 @@
 - `src/utils/pedalBridgeUtils.test.ts`（新規）: ペアリングロジックのユニットテスト
 - `src/components/StaffCanvas.tsx`: ペダル描画箇所を `pairPedalMarks` を使う形に変更
 - `src/components/PianoSystemCanvas.tsx`: 同上（ピアノ大譜表側）
-- `NoteEvent.pedalMark` のデータ構造・保存形式（JSON/MusicXML）は変更なし
+- `NoteEvent.pedalMark` のデータ構造・保存形式（JSON）は変更なし。MusicXML は #568 で入出力対応（本書末尾の追補）
 - 印刷CSS（`App.css` の `@media print`）は `svg line` を無条件で黒表示する既存ルールに
   乗るため、破線用に追加のクラス指定は不要（`vf-hairpin-hit` のような除外クラスも付与していない）
 
@@ -125,7 +125,7 @@ v1 では **`change` は「踏む」として取り込む**（音は踏み替え
 | `src/utils/musicXmlPedal.test.ts` | **新規**（往復テスト一式） |
 | `README.md` | MusicXML でペダルが受け渡せる旨を追記 |
 
-データモデル（`NoteEvent.pedalMark`）・描画・再生・保存形式（.score.json）は変更なし。
+データモデル（`NoteEvent.pedalMark`）・描画・再生・保存形式（.score.json）は変更なし。MusicXML の入出力は #568 で対応済み（追補参照）。
 
 ### 受入テスト（Issue #568 の仕様との対応）
 
