@@ -141,6 +141,21 @@ describe('calculateExpandedPlaybackDurationMs（展開済み列の残り時間�
     // 実小節2 + 途中の空小節1 = 3小節ぶん。末尾の空小節2つは含まない
     expect(calculateExpandedPlaybackDurationMs(expanded, 120, [4, 4])).toBe(6000);
   });
+
+  it('再生速度（%）適用後の実効テンポを 30〜240 へ丸め直さない（#544 round1 P1）', () => {
+    // 基準 40BPM × 25% = 10BPM。譜面用の clampBpm を通すと 30BPM に戻り、
+    // 4/4 の1小節が実音 24 秒に対してタイマー 8 秒で止まってしまっていた
+    const slow: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }], bpm: 10 },
+    ];
+    expect(calculateExpandedPlaybackDurationMs(slow, 10, [4, 4])).toBe(24000);
+
+    // 240BPM × 200% = 480BPM。丸め直すと実音終了後もタイマーだけ倍の時間残る
+    const fast: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }], bpm: 480 },
+    ];
+    expect(calculateExpandedPlaybackDurationMs(fast, 480, [4, 4])).toBe(500);
+  });
 });
 
 describe('resolvePlaybackStartMeasureNumber（小節番号の指定・#545）', () => {
