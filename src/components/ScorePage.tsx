@@ -165,6 +165,12 @@ import {
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
 import { resolveScoreMeasureBpms } from '../utils/tempoPlaybackUtils';
+import {
+  DEFAULT_PLAYBACK_SPEED_PERCENT,
+  applyPlaybackSpeedToBpm,
+  applyPlaybackSpeedToBpms,
+  clampPlaybackSpeedPercent,
+} from '../audio/playbackSpeed';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, INSTRUMENT_NAME_MAX_LENGTH, resolveInstrumentPartLabels, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
@@ -970,6 +976,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       return DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS;
     }
   });
+  // 再生速度（%）は soundRuntimeSettings に持たせている（アプリ全体設定・#544）。
+  // 保存値は localStorage 経由で壊れ得るので、使う側では必ず有効範囲へ寄せてから読む。
+  const playbackSpeedPercent = clampPlaybackSpeedPercent(
+    soundRuntimeSettings.playbackSpeedPercent,
+    DEFAULT_PLAYBACK_SPEED_PERCENT
+  );
   // 選択中の方式と実際に鳴っている方式がずれることがあるため、
   // UI 用に「現在の実動作モード」を分けて持つ。
   const [activeSoundEngineMode, setActiveSoundEngineMode] = useState<SoundEngineMode>(
@@ -1626,12 +1638,22 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             partIndex === 0
               ? referenceExpanded
               : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures));
-          const scoreMeasureBpms = resolveScoreMeasureBpms(
+          // 譜面から解決した「小節ごとの本来のテンポ」。ここまでは再生速度と無関係で、
+          // 書き出し・保存に使う値と同じ意味を持つ
+          const notatedMeasureBpms = resolveScoreMeasureBpms(
             tempoSourceParts.map(partMeasures =>
               expandMeasuresForPlaybackWithReference(referenceMeasures, partMeasures)
                 .map(item => item.measure)),
             tempoSettings.bpm,
           );
+          // 再生速度（%）はここで**一度だけ**掛ける（#544）。以降の実音・ハイライト・
+          // 終了タイマー・タイの実時間はすべてこの倍率込みの列と実効テンポを使うので、
+          // 「音だけ半分の速さでハイライトは元の速さ」というズレが起きない。
+          // 全小節へ同じ倍率を掛けるだけなので、標語（Allegro 等）が作る
+          // 小節間の相対関係はそのまま保たれる
+          const scoreMeasureBpms = applyPlaybackSpeedToBpms(notatedMeasureBpms, playbackSpeedPercent);
+          // 小節ごとの指定が無いときにエンジン・終了タイマーが使う基準テンポにも同じ倍率を掛ける
+          const effectiveGlobalBpm = applyPlaybackSpeedToBpm(tempoSettings.bpm, playbackSpeedPercent);
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
@@ -1717,7 +1739,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
               }))
             };
           });
-          await audioEngine.playParts(partObjs, tempoSettings.bpm);
+          await audioEngine.playParts(partObjs, effectiveGlobalBpm);
 
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
@@ -1728,7 +1750,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // のため、拍子長を下限に進む実音・タイムラインより早く stopped になっていた
           const totalDuration = Math.max(
             ...partObjs.map(partObj =>
-              calculateExpandedPlaybackDurationMs(partObj.measures, tempoSettings.bpm, scoreTimeSignature) / 1000)
+              calculateExpandedPlaybackDurationMs(partObj.measures, effectiveGlobalBpm, scoreTimeSignature) / 1000)
           );
           setPlaybackState('playing');
           clearPlaybackTimer();
@@ -1739,7 +1761,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 他パートの反復順もこれに合わせているため、表示の基準としてズレが出にくい。
           positionTimelineRef.current = buildPlaybackPositionTimeline(
             referenceMeasures,
-            tempoSettings.bpm,
+            effectiveGlobalBpm,
             scoreTimeSignature,
             soundRuntimeSettings.swingEnabled,
             startExpandedIndex,
@@ -1767,7 +1789,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         } else {
           // 譜面が空でも「再生ボタンが壊れていないか」は確認できるように、
           // 代表音として C4 を 1拍だけ鳴らす。
-          const duration = 60 / tempoSettings.bpm;
+          const duration = 60 / applyPlaybackSpeedToBpm(tempoSettings.bpm, playbackSpeedPercent);
           await audioEngine.playNoteByName('C4', duration);
           setPlaybackState('playing');
           clearPlaybackTimer();
@@ -1802,7 +1824,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, playbackSpeedPercent, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -1996,6 +2018,18 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
 
   const handleSwingEnabledChange = useCallback((enabled: boolean) => {
     setSoundRuntimeSettings(prev => ({ ...prev, swingEnabled: enabled }));
+  }, []);
+
+  /**
+   * 再生速度（%）の変更（Issue #544）。
+   * 譜面のテンポ（作品ごとに保存する ♩=N）とは別物で、こちらは「聴き方」の設定なので
+   * アプリ全体の再生設定（localStorage）側に置き、作品には保存しない。
+   */
+  const handlePlaybackSpeedPercentChange = useCallback((percent: number) => {
+    setSoundRuntimeSettings(prev => ({
+      ...prev,
+      playbackSpeedPercent: clampPlaybackSpeedPercent(percent, DEFAULT_PLAYBACK_SPEED_PERCENT),
+    }));
   }, []);
 
   const handleKeySignatureChange = useCallback((nextKeySignature: KeySignature) => {
@@ -6641,6 +6675,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 onSoundProfileChange={handleSoundProfileChange}
                 onPreviewAccidentalOnApplyChange={handlePreviewAccidentalOnApplyChange}
                 onSwingEnabledChange={handleSwingEnabledChange}
+                onPlaybackSpeedPercentChange={handlePlaybackSpeedPercentChange}
               />
             </div>
           )}
