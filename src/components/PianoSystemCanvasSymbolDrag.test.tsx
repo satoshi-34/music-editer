@@ -263,9 +263,17 @@ describe('記号のドラッグ移動（Issue #522 / #553）', () => {
 
     fireEvent.pointerDown(region, { clientX: 10, clientY: 10, pointerId: 1, isPrimary: true, button: 0 });
     fireEvent.pointerMove(window, { clientX: 40, clientY: 30, pointerId: 1 });
+    // しきい値を超えたので ✥ が開き、下書き値が移動量ぶん進んでいる
+    const overlay = container.querySelector('.symbol-adjust-overlay') as HTMLElement;
+    expect(overlay).toBeTruthy();
+    const xInput = overlay.querySelector('input') as HTMLInputElement;
+    expect(xInput.value).not.toBe('0');
+
     fireEvent.pointerCancel(window, { pointerId: 1 });
 
+    // 見た目の下書きも掴む前（基準値0）へ戻る（round2 P3: applyDraft の巻き戻しを固定）
     expect(onChange).not.toHaveBeenCalled();
+    expect((overlay.querySelector('input') as HTMLInputElement).value).toBe('0');
   });
 
   it('演奏記号タブでは記号ホバーのカーソルが grab になる（掴めることを見せる・#553 仕様5）', () => {
