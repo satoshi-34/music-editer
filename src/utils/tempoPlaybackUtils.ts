@@ -7,6 +7,7 @@
 
 import type { MeasureData } from '../types/storage';
 import { clampBpm } from '../audio/tempoRange';
+import { clampEffectiveBpm } from '../audio/playbackSpeed';
 import { getMeasureVoices } from './voiceMeasureUtils';
 import { getTempoMarkingBpm } from './tempoMarkingPresets';
 
@@ -52,17 +53,36 @@ function isUsableBpm(bpm: number | undefined): boolean {
  * @param globalBpm 再生パネルで設定している全体テンポ
  */
 export function resolveMeasureBpms(measures: MeasureData[], globalBpm: number): number[] {
+  return resolveMeasureBpmsWithClamp(measures, globalBpm, clampBpm);
+}
+
+/**
+ * resolveMeasureBpms の**実効テンポ版**（#544 round1 P1）。
+ * エンジンへ渡す展開済み列には再生速度（%）を掛けたあとの bpm が載っており、
+ * 譜面用の 30〜240（clampBpm）で丸め直すと、25% や 200% で聴いているときに
+ * 終了タイマーだけ元の範囲へ戻って実音とずれる。beatSpanToSeconds と同じ理由で
+ * clampEffectiveBpm（7.5〜480）を使う。
+ */
+export function resolveEffectiveMeasureBpms(measures: MeasureData[], globalBpm: number): number[] {
+  return resolveMeasureBpmsWithClamp(measures, globalBpm, clampEffectiveBpm);
+}
+
+function resolveMeasureBpmsWithClamp(
+  measures: MeasureData[],
+  globalBpm: number,
+  clamp: (bpm: number, fallback: number) => number,
+): number[] {
   // 全体テンポ自体が壊れている場合の保険。既定値 120 まで戻せば少なくとも鳴る
-  let currentBpm = clampBpm(globalBpm, 120);
+  let currentBpm = clamp(globalBpm, 120);
   const resolved: number[] = [];
 
   for (const measure of measures) {
     if (isUsableBpm(measure?.bpm)) {
-      currentBpm = clampBpm(measure.bpm as number, currentBpm);
+      currentBpm = clamp(measure.bpm as number, currentBpm);
     } else {
       const markingBpm = findTempoMarkingBpmInMeasure(measure);
       if (markingBpm != null) {
-        currentBpm = clampBpm(markingBpm, currentBpm);
+        currentBpm = clamp(markingBpm, currentBpm);
       }
     }
     resolved.push(currentBpm);
@@ -117,6 +137,10 @@ export function resolveScoreMeasureBpms(partMeasureLists: MeasureData[][], globa
  * @param startBeat 起点小節内の開始拍
  * @param endBeat   起点小節の頭から数えた終了拍（起点小節の拍数を超えてよい）
  * @param segments  起点小節から順に並んだ { beats: 小節の拍数, bpm } の列
+ *
+ * 壊れた値の弾き方に `clampBpm`（譜面に書ける 30〜240）ではなく `clampEffectiveBpm` を使うのは、
+ * ここへ渡る bpm が**再生速度（%）を掛けたあとの実効テンポ**だから（#544）。
+ * 30〜240 で丸めると、50% で聴いているときにタイだけ元の速さで数えられてしまう。
  */
 export function beatSpanToSeconds(
   startBeat: number,
@@ -130,7 +154,7 @@ export function beatSpanToSeconds(
     const overlapStart = Math.max(startBeat, segmentStart);
     const overlapEnd = Math.min(endBeat, segmentEnd);
     if (overlapEnd > overlapStart) {
-      seconds += (overlapEnd - overlapStart) * (60 / clampBpm(segment.bpm, 120));
+      seconds += (overlapEnd - overlapStart) * (60 / clampEffectiveBpm(segment.bpm, 120));
     }
     segmentStart = segmentEnd;
     if (segmentStart >= endBeat) break;
@@ -139,7 +163,7 @@ export function beatSpanToSeconds(
   if (segmentStart < endBeat) {
     const lastBpm = segments.length > 0 ? segments[segments.length - 1].bpm : 120;
     const from = Math.max(startBeat, segmentStart);
-    seconds += (endBeat - from) * (60 / clampBpm(lastBpm, 120));
+    seconds += (endBeat - from) * (60 / clampEffectiveBpm(lastBpm, 120));
   }
   return seconds;
 }

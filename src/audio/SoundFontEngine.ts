@@ -237,6 +237,11 @@ export class SoundFontEngine implements PlaybackEngine {
           // タイミング（次の音までの間隔）は duration のまま据え置く。
           const soundDuration = (swingTiming.durationBeats * (60 / measureBpm)) * (event.durationScale ?? 1);
           const eventStartTime = measureStartTime + (swingTiming.startBeat * (60 / measureBpm));
+          // タイ・ペダルの延長はどちらも「小節ごとのテンポ区間」で秒数を積算する。
+          // 区間列づくりは小節数ぶん歩くので、和音の音1つごとに作り直さないよう
+          // このイベントの中で1回だけ作って使い回す。
+          let cachedTempoSegments: ReturnType<typeof tempoSegmentsFrom> | null = null;
+          const tempoSegments = () => (cachedTempoSegments ??= tempoSegmentsFrom(part.measures, measureIndex, measureBpm));
           if (!event.isRest && event.keys.length > 0) {
             // 和音は keys を1つずつ同じ時刻で予約する。
             // SoundFont 側は単音 player なので、「同時刻に複数 start」を積む形で和音にする。
@@ -259,13 +264,27 @@ export class SoundFontEngine implements PlaybackEngine {
                 ? beatSpanToSeconds(
                     swingTiming.startBeat,
                     nominalStartBeat + durationBeats + tieExtendBeats,
-                    tempoSegmentsFrom(part.measures, measureIndex, measureBpm),
+                    tempoSegments(),
                   ) * (event.durationScale ?? 1)
                 : soundDuration;
+              // ペダル（ダンパー）を踏んでいる間は、音価を過ぎても解除位置まで響きが残る（#549）。
+              // スタッカート（durationScale < 1）でも響きは残るので、掛け算ではなく
+              // 「記譜どおりの鳴り終わり」と「ペダル解除位置」の**遅い方**を採る。
+              const pedalExtendBeats = event.pedalExtendBeatsByKey?.[key] ?? 0;
+              const soundingDuration = pedalExtendBeats > 0
+                ? Math.max(
+                    tiedSoundDuration,
+                    beatSpanToSeconds(
+                      swingTiming.startBeat,
+                      nominalStartBeat + durationBeats + pedalExtendBeats,
+                      tempoSegments(),
+                    ),
+                  )
+                : tiedSoundDuration;
               player.play(
                 this.normalizeNoteFormat(key),
                 eventStartTime,
-                this.buildPlaybackOptions(tiedSoundDuration, velocity)
+                this.buildPlaybackOptions(soundingDuration, velocity)
               );
             });
           }
