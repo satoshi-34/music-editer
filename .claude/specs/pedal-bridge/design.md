@@ -82,3 +82,56 @@
 - `NoteEvent.pedalMark` のデータ構造・保存形式（JSON/MusicXML）は変更なし
 - 印刷CSS（`App.css` の `@media print`）は `svg line` を無条件で黒表示する既存ルールに
   乗るため、破線用に追加のクラス指定は不要（`vf-hairpin-hit` のような除外クラスも付与していない）
+
+## 追加対応: MusicXML の書き出し・読み込み（Issue #568）
+
+### 問題
+
+ペダル記号（`NoteEvent.pedalMark`）は描画（本設計書の範囲）と再生（#560）に対応済みだが、
+MusicXML の書き出し・読み込みのどちらにも実装が無く、**MusicXML で受け渡すと往復で消えていた**。
+検聴素材づくり（2026-09-02）で判明。
+
+### 対応方針: 既存の「音符の直前の direction」規則へ相乗りする
+
+MusicXML でのペダルは `<direction><direction-type><pedal type="start|stop"/></direction-type></direction>`
+であり、強弱記号（`<dynamics>`）や松葉（`<wedge>`）とまったく同じ「対象音符の直前に direction を置く」
+規則で表せる。したがって**新しい仕組みは足さず、既存の経路にフィールドを1つ増やす形**で実装した。
+
+- **書き出し**（`musicXmlExport.ts`）: `pedalDirectionXml(ev, staff)` を追加し、
+  `dynamicsDirectionXml` を出している場所（主声部・追加声部の両方）の直後に並べる。
+  `pedalMark: 'down'` → `type="start"`、`'up'` → `type="stop"`。
+  `line="no"` は「横線ではなく Ped. ‥ ✱ の記号で表す」指定で、このアプリの描画と一致する。
+  `<staff>` を付けるのは他の direction と同じ（大譜表で置いた段を保つため）
+- **読み込み**（`musicXmlImport.ts`）: `attachDirectionMarksToVoiceEvents`（松葉と文字強弱を
+  1本の走査で組み立てている既存の関数）に `pendingPedal` を足した。**走査を2本目に増やさない**
+  （#552 で確立した方針。同じ歩き方の2枚目を作ると片方だけ直る事故になる）。
+  1つの音符が持てるペダル記号は1つなので、待ち行列（配列）ではなく最後の1つを覚える形にした
+- 大譜表の段の振り分けは既存の direction フィルタ（`staffNumberOf(el) === staffNumber`）が
+  そのまま効くため、追加の実装は不要だった
+
+### 外部ファイルの `type="change"`（踏み替え）の扱い
+
+他ソフトは「離してすぐ踏む」を `type="change"` の1つで書くことがあるが、このアプリの
+データモデル（`pedalMark = 'down' | 'up'` の単発マーク）では1つの音符に両方を持てない。
+v1 では **`change` は「踏む」として取り込む**（音は踏み替え前の響きが少し残るが、
+ペダルが完全に消えるよりは実害が小さい）。このアプリ自身の書き出しは `change` を出さない。
+
+### 影響範囲
+
+| ファイル | 変更内容 |
+|---|---|
+| `src/utils/musicXmlExport.ts` | `pedalDirectionXml` 新設・主声部/追加声部の両方で出力 |
+| `src/utils/musicXmlImport.ts` | `attachDirectionMarksToVoiceEvents` に `pendingPedal` を追加 |
+| `src/utils/musicXmlPedal.test.ts` | **新規**（往復テスト一式） |
+| `README.md` | MusicXML でペダルが受け渡せる旨を追記 |
+
+データモデル（`NoteEvent.pedalMark`）・描画・再生・保存形式（.score.json）は変更なし。
+
+### 受入テスト（Issue #568 の仕様との対応）
+
+| 仕様 | テスト（`musicXmlPedal.test.ts`） |
+|---|---|
+| 1. 書き出し（対象音符の直前の direction） | `<pedal type="start" line="no"/>` / `stop` が出力されること |
+| 2. 読み込み（change は start 扱い・大譜表は staff 指定に従う） | `type="change"` を 'down' として取り込む／大譜表で下段のペダルが上段へ漏れない |
+| 3. 往復テスト（踏み替え＝連続 start・単独 start を含む） | 同一小節・小節またぎ・連続 down・down のみ・声部2 の5ケース |
+| 4. 記号の無い譜面の出力は不変（回帰） | ペダルの無い譜面の出力に `<pedal` が現れない |

@@ -296,15 +296,16 @@ function readImportableDynamics(directionEl: Element): AbsoluteDynamicMarking[] 
 }
 
 /**
- * 松葉（ヘアピン）と文字の強弱記号（pp〜ff）を1つの声部の NoteEvent へ復元する。
+ * 松葉（ヘアピン）・文字の強弱記号（pp〜ff）・ペダル記号を1つの声部の NoteEvent へ復元する。
  * 書出側（musicXmlExport.ts）は
  * 「開始音符の直前に <direction><wedge type="crescendo|diminuendo"/></direction>」
  * 「終了音符の直後に <direction><wedge type="stop"/></direction>」
  * 「音符の直前に <direction><dynamics><p/></dynamics></direction>」
+ * 「音符の直前に <direction><pedal type="start|stop"/></direction>」（#568）
  * という並びで出力しているため、<measure> の直下の子要素（note と direction）を
  * 出現順に読み、直前/直後の note との対応を追いながら組み立てる。
- * 松葉と文字強弱は「直前の direction を次の音符へ付ける」という同じ規則なので、
- * 走査を2本に増やさず1本で両方を組み立てる（同じ歩き方の2枚目を作らない。#552）。
+ * 松葉・文字強弱・ペダルは「直前の direction を次の音符へ付ける」という同じ規則なので、
+ * 走査を増やさず1本ですべてを組み立てる（同じ歩き方の2枚目を作らない。#552 / #568）。
  *
  * 声部1（<backup> より前）と声部2（<backup> より後）で同じ処理が使えるので、
  * 呼び出し側が「その声部ぶんの子要素・イベント配列・待ち行列」を渡す形にしてある。
@@ -336,10 +337,18 @@ function attachDirectionMarksToVoiceEvents(
   let pendingTypes: Array<'cresc' | 'dim'> = [];
   // 次の音符へ付ける文字の強弱記号（#552）。松葉の pendingTypes と同じ「待ち」の仕組み
   let pendingDynamics: AbsoluteDynamicMarking[] = [];
+  // 次の音符へ付けるペダル記号（#568）。強弱と同じ「待ち」の仕組みに乗せる。
+  // 1つの音符が持てるペダル記号は1つ（down か up）なので、配列ではなく最後の1つを覚える
+  let pendingPedal: 'down' | 'up' | null = null;
 
   for (const child of children) {
     if (child.tagName === 'direction') {
       pendingDynamics.push(...readImportableDynamics(child));
+      const pedalType = child.querySelector('direction-type > pedal')?.getAttribute('type');
+      // type="change"（踏み替え）は、このアプリのデータモデルでは
+      // 「離してすぐ踏む」を1つで表せないため、v1 では「踏む」として取り込む（#568 仕様2）
+      if (pedalType === 'start' || pedalType === 'change') pendingPedal = 'down';
+      else if (pedalType === 'stop') pendingPedal = 'up';
       const wedgeType = options?.skipHairpins
         ? null
         : child.querySelector('wedge')?.getAttribute('type');
@@ -366,9 +375,13 @@ function attachDirectionMarksToVoiceEvents(
     const isChordNote = child.querySelector('chord') !== null;
     if (isChordNote) continue;
     eventIndex += 1;
-    if (pendingTypes.length === 0 && pendingDynamics.length === 0) continue;
+    if (pendingTypes.length === 0 && pendingDynamics.length === 0 && pendingPedal === null) continue;
     const ev = events[eventIndex];
     if (!ev) continue;
+    if (pendingPedal !== null) {
+      ev.pedalMark = pendingPedal;
+      pendingPedal = null;
+    }
     for (const type of pendingTypes) {
       const mark: HairpinMark = { type, endMeasure: measureIndex, endEvent: eventIndex };
       ev.hairpins = [...(ev.hairpins ?? []), mark];
