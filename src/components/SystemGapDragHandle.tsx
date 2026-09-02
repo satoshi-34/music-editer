@@ -175,6 +175,20 @@ export default function SystemGapDragHandle({
     };
   }, [grabbing, gapMinPx, gapMaxPx]);
 
+  // ドラッグ中にこの部品ごとアンマウントされたとき（Esc / Enter で段の選択が解けるなど）は
+  // pointercancel と同じ「なかったこと」扱いにする。これをしないと、積んだ履歴の退避
+  // （呼び出し側の rowGapDragHistoryRef）が残留し、次のドラッグの onDragEnd(false) が
+  // **前回の退避**で履歴を巻き戻して、確定済みの1件まで消してしまう（round2 P2）
+  useEffect(() => () => {
+    const session = sessionRef.current;
+    if (!session) return;
+    sessionRef.current = null;
+    if (session.lastGapPx !== session.baseGapPx) {
+      callbacksRef.current.onDragMove(session.baseGapPx);
+    }
+    callbacksRef.current.onDragEnd(false);
+  }, []);
+
   return (
     <div
       className={`system-gap-drag-handle${grabbing ? ' system-gap-drag-handle--grabbing' : ''}`}

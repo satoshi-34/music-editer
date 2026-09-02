@@ -336,5 +336,9 @@
 - [ ] **タッチでもドラッグできる**（pointer イベント規約・#536）。ドラッグ中に別の指を置いても
       値が飛ばない。着信などでポインタを取り上げられた（pointercancel）ときは掴む前へ戻る。
 - [ ] 帯を掴んでも段の選択が解けない（帯は `data-system-select-keep` を持つ）。
-- [ ] 印刷・印刷プレビューに帯や値の吹き出しが出ない。
-- [ ] 固定テスト: ScorePageSystemGapDrag.test.tsx（13件）・AppCssSystemSelectPrint.test.ts
+- [ ] **実印刷**（ブラウザの印刷）に帯や値の吹き出しが出ない。
+      印刷プレビューでは段調整UIを意図的に残す設計（print-preview/design.md）なので、
+      プレビュー中に帯が見えて操作できるのは仕様。
+- [ ] ドラッグの途中で Esc などにより段の選択が解けても、確定済みの Undo 履歴が壊れない
+      （帯のアンマウント時は pointercancel と同じ「なかったこと」扱い。round2 P2）。
+- [ ] 固定テスト: ScorePageSystemGapDrag.test.tsx（16件）・AppCssSystemSelectPrint.test.ts（帯の上端配置の静的チェックを含む）

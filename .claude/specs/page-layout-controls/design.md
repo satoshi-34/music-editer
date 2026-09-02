@@ -743,7 +743,7 @@ OS にポインタを取り上げられるとドラッグ状態と window のリ
 - `src/components/SystemSelectFrame.tsx`: `renderPanel` の説明を「パネルと境界帯」に更新（実装は変更なし）。
 - `src/App.css`: `.system-gap-drag-handle` / `.system-gap-drag-value` を追加し、`@media print` で非表示に。
 - `src/AppCssSystemSelectPrint.test.ts`: 印刷で帯が出ないことの検査を1件追加。
-- `README.md`（操作の説明を1行追加）・`docs/REGRESSION.md`（セクションX）。
+- `README.md`（操作の説明を1行追加）・`docs/REGRESSION.md`（セクションY。#544 が X を使ったため繰り下げ）。
 
 ### 検証結果
 

@@ -249,6 +249,68 @@ describe('ScorePage: 段の境界ドラッグで段の間隔を変える（Issue
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('2ページ目以降の先頭の段にも帯を出さない（ページ単位の先頭判定・round2 P2）', async () => {
+    await renderScore();
+    // 段数/ページを1にすると、2段目が「2ページ目の先頭」になる。
+    // 先頭判定を「譜面全体の最初の段だけ」（systemIndex > 0）へ退行させると、
+    // ここで帯が出てしまう
+    fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
+    fireEvent.change(screen.getByLabelText('段数/ページ'), { target: { value: '1' } });
+
+    const second = systemStartMeasures()[1];
+    fireEvent.click(screen.getByTestId(`system-select-left-${second}`));
+    await waitFor(() => {
+      expect(screen.getByTestId(`system-layout-panel-${second}`)).toBeTruthy();
+    });
+    expect(screen.queryByTestId(`system-gap-drag-${second}`)).toBeNull();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('ドラッグ中に Esc で選択が解けても、確定済みの Undo 履歴が壊れない（round2 P2）', async () => {
+    await renderScore();
+    const first = await selectSystemWithBoundary();
+
+    // 1回目: 確定するドラッグ（履歴1件）
+    grab(first.handle, 200);
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 300, clientY: 220 });
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 300, clientY: 220 });
+    await waitFor(() => { expect(frameMarginTop(first.start)).toBe('20px'); });
+
+    // 2回目: ドラッグの途中で Esc → 帯ごとアンマウント。pointercancel と同じ扱いで
+    // 値は掴む前（20px）へ戻り、積みかけた履歴も取り消される
+    grab(first.handle, 200, 2);
+    fireEvent.pointerMove(window, { pointerId: 2, clientX: 300, clientY: 230 });
+    await waitFor(() => { expect(frameMarginTop(first.start)).toBe('50px'); });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId(`system-gap-drag-${first.start}`)).toBeNull();
+      expect(frameMarginTop(first.start)).toBe('20px');
+    });
+
+    // 3回目: 再選択して、動かさずに掴んで離す。ここの onDragEnd(false) が
+    // 2回目の残留退避を消費すると、1回目の確定履歴まで消える（round2 P2 の再現手順）
+    const again = await selectSystemWithBoundary();
+    expect(again.start).toBe(first.start);
+    grab(again.handle, 200, 3);
+    fireEvent.pointerUp(window, { pointerId: 3, clientX: 300, clientY: 200 });
+
+    // Undo 1回で1回目のドラッグ前（上書きなし）へ戻れること
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+    await waitFor(() => {
+      expect(frameMarginTop(first.start)).toBe('');
+    }, { timeout: 15000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('帯を mousedown（pointer の互換イベント）で押しても段の選択が解けない', async () => {
+    // 実ブラウザでは pointerdown に続いて互換 mousedown が配送され、ScorePage の
+    // 選択解除リスナーは mousedown を見ている。data-system-select-keep を帯から
+    // 外す退行はこの経路でしか検出できない（round2 P2）
+    await renderScore();
+    const { start, handle } = await selectSystemWithBoundary();
+    fireEvent.mouseDown(handle, { button: 0 });
+    expect(screen.getByTestId(`system-layout-panel-${start}`)).toBeTruthy();
+    expect(screen.getByTestId(`system-gap-drag-${start}`)).toBeTruthy();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('遊び（3px）に満たない動きでは値が変わらない（押した指の震えで動かさない）', async () => {
     await renderScore();
     const { start, handle } = await selectSystemWithBoundary();
