@@ -53,17 +53,36 @@ function isUsableBpm(bpm: number | undefined): boolean {
  * @param globalBpm 再生パネルで設定している全体テンポ
  */
 export function resolveMeasureBpms(measures: MeasureData[], globalBpm: number): number[] {
+  return resolveMeasureBpmsWithClamp(measures, globalBpm, clampBpm);
+}
+
+/**
+ * resolveMeasureBpms の**実効テンポ版**（#544 round1 P1）。
+ * エンジンへ渡す展開済み列には再生速度（%）を掛けたあとの bpm が載っており、
+ * 譜面用の 30〜240（clampBpm）で丸め直すと、25% や 200% で聴いているときに
+ * 終了タイマーだけ元の範囲へ戻って実音とずれる。beatSpanToSeconds と同じ理由で
+ * clampEffectiveBpm（7.5〜480）を使う。
+ */
+export function resolveEffectiveMeasureBpms(measures: MeasureData[], globalBpm: number): number[] {
+  return resolveMeasureBpmsWithClamp(measures, globalBpm, clampEffectiveBpm);
+}
+
+function resolveMeasureBpmsWithClamp(
+  measures: MeasureData[],
+  globalBpm: number,
+  clamp: (bpm: number, fallback: number) => number,
+): number[] {
   // 全体テンポ自体が壊れている場合の保険。既定値 120 まで戻せば少なくとも鳴る
-  let currentBpm = clampBpm(globalBpm, 120);
+  let currentBpm = clamp(globalBpm, 120);
   const resolved: number[] = [];
 
   for (const measure of measures) {
     if (isUsableBpm(measure?.bpm)) {
-      currentBpm = clampBpm(measure.bpm as number, currentBpm);
+      currentBpm = clamp(measure.bpm as number, currentBpm);
     } else {
       const markingBpm = findTempoMarkingBpmInMeasure(measure);
       if (markingBpm != null) {
-        currentBpm = clampBpm(markingBpm, currentBpm);
+        currentBpm = clamp(markingBpm, currentBpm);
       }
     }
     resolved.push(currentBpm);

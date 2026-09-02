@@ -306,4 +306,4 @@
       **ファイルのテンポが元の値のまま**（半分になっていない）こと
 - [ ] 再生速度はページを開き直しても保たれ、**作品を切り替えても変わらない**こと
       （＝作品ごとに戻るのは基準テンポの側だけ）
-- [ ] 固定テスト: playbackSpeed.test.ts（11件）・ScorePagePlaybackSpeed.test.tsx（3件）
+- [ ] 固定テスト: playbackSpeed.test.ts（10件）・ScorePagePlaybackSpeed.test.tsx（5件）・playbackPositionUtils.test.ts の実効テンポ非丸めテスト

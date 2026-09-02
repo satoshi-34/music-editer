@@ -3,7 +3,7 @@ import { expandMeasuresForPlayback, type ExpandedPlaybackMeasure } from '../audi
 import { getMeasureBeats } from './timeSignatureUtils';
 import { getEventDurationBeats, getMeasureDurationBeats, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { applySwingToTiming, shouldApplySwing } from './swingUtils';
-import { resolveMeasureBpms } from './tempoPlaybackUtils';
+import { resolveEffectiveMeasureBpms, resolveMeasureBpms } from './tempoPlaybackUtils';
 
 export interface PlaybackTimelinePosition {
   measureIndex: number;
@@ -203,8 +203,11 @@ export function calculateExpandedPlaybackDurationMs(
   if (lastUsedIndex < 0) return 0;
   // 小節ごとのテンポで数える（Issue #458）。渡ってくるのは「実際にエンジンへ渡す
   // 展開済み・切り出し済みの列」で、各小節には解決済みの bpm が載っている。
-  // 載っていない小節は引数の全体テンポで数える（後方互換）
-  const measureBpms = resolveMeasureBpms(measures, bpm);
+  // 載っていない小節は引数の全体テンポで数える（後方互換）。
+  // ここへ渡る bpm は再生速度（%）適用後の実効値なので、譜面用の 30〜240 ではなく
+  // 実効範囲（clampEffectiveBpm）で解決する（#544 round1 P1: 25%・200% で
+  // 終了タイマーだけ元の速さに戻り、実音より早く/遅く stopped になっていた）
+  const measureBpms = resolveEffectiveMeasureBpms(measures, bpm);
   let totalMs = 0;
   for (let i = 0; i <= lastUsedIndex; i++) {
     const msPerBeat = (60 / measureBpms[i]) * 1000;

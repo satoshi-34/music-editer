@@ -180,6 +180,45 @@ describe('ScorePage: 再生速度（%）の配線（Issue #544）', () => {
     expect(screen.getByText('再生速度: 100%')).toBeInTheDocument();
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('実効テンポが譜面の下限 30BPM を割っても丸め直されない（#544 round1 P1）', async () => {
+    seedWorkWithTempoMarking();
+    await renderAndOpenPlaybackTab();
+
+    // 基準テンポ 40 × 25% = 実効 10BPM。譜面用の clampBpm（30〜240）へ丸め直す経路が
+    // 残っていると、エンジン・終了タイマーが 30BPM として動き、実音とずれる
+    fireEvent.change(screen.getByLabelText('テンポ（BPM）'), { target: { value: '40' } });
+    fireEvent.blur(screen.getByLabelText('テンポ（BPM）'));
+    fireEvent.change(screen.getByLabelText('再生速度（%）'), { target: { value: '25' } });
+
+    const { measures, globalBpm } = await play();
+    expect(measures[0].bpm).toBe(10);
+    expect(globalBpm).toBe(10);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('再生速度は再読込後も保持され、作品の保存データへは混入しない', async () => {
+    seedWorkWithTempoMarking();
+    await renderAndOpenPlaybackTab();
+
+    fireEvent.change(screen.getByLabelText('再生速度（%）'), { target: { value: '50' } });
+    expect(screen.getByText('再生速度: 50%')).toBeInTheDocument();
+
+    // 作品の保存データ（globalBpm）は基準テンポのまま。再生速度が保存へ漏れると、
+    // 50% で聴いていた作品が次に開いたとき半分のテンポの曲になってしまう
+    const savedKeys = Array.from({ length: localStorageMock.length }, (_, i) => localStorageMock.key(i) ?? '');
+    for (const key of savedKeys) {
+      const raw = localStorageMock.getItem(key) ?? '';
+      if (raw.includes('"globalBpm"')) {
+        expect(JSON.parse(raw).globalBpm ?? 120).toBe(120);
+      }
+    }
+
+    // 再マウント（再読込相当）でもスライダーは 50% のまま（localStorage 永続化）
+    cleanup();
+    playPartsMock.mockClear();
+    await renderAndOpenPlaybackTab();
+    expect((screen.getByLabelText('再生速度（%）') as HTMLInputElement).value).toBe('50');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('再生速度は書き出した MusicXML に影響しない（受入2）', async () => {
     seedWorkWithTempoMarking();
     await renderAndOpenPlaybackTab();

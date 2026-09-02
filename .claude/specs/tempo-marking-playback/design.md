@@ -361,7 +361,7 @@ Issue 仕様 2 は「アプリ全体設定は『新規作成時の既定値』�
    元の値をそのまま返す。掛け算を通すと 132 が `132.00000000000003` になり得て、
    「速度を触っていないのに従来と少し違う再生になる」回帰を生むため（受入3）。
 5. **保存先はアプリ全体設定**（Issue 仕様 3）。`PlaybackSoundRuntimeSettings.playbackSpeedPercent`
-   として `music-app-playback-runtime-settings` に持つ。作品側（`SavedScoreData`）には保存しない
+   として `playback-sound-runtime-settings` に持つ。作品側（`SavedScoreData`）には保存しない
    ＝**書き出し・拍計算には一切影響しない**。書き出しは従来どおり `tempoSettings.bpm` を渡す
    経路のままで、再生速度はその経路に触れていない（受入2）。
 
