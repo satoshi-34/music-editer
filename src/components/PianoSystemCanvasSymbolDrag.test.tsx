@@ -224,6 +224,50 @@ describe('記号のドラッグ移動（Issue #522 / #553）', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it('カスタム記号専用の ⤢（customSymbolResize）中も直接ドラッグしない（round1 P2）', () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={1}
+        tool={{ mode: 'customSymbolResize', symbolId: 'custom-1' } as never}
+        scale={1}
+        partsConfig={[{ clef: 'treble', data: [{ events: [PP_EVENT] }], onChange }]}
+        showInstrumentLabels={false}
+        timeSignature={[4, 4]}
+        symbolsClickable={true}
+      />
+    );
+
+    dragSymbol(container, { x: 10, y: 10 }, { x: 40, y: 30 });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('別の指（別 pointerId）の pointercancel では進行中の記号ドラッグを巻き戻さない（round1 P2・#536）', () => {
+    const { container, onChange } = renderScore([PP_EVENT]);
+    const region = symbolRegion(container);
+
+    fireEvent.pointerDown(region, { clientX: 10, clientY: 10, pointerId: 1, isPrimary: true, button: 0 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 30, pointerId: 1 });
+    // 進行中とは別の指が取り上げられた（例: 2本目の指が画面端のジェスチャーに吸われた）
+    fireEvent.pointerCancel(window, { pointerId: 2 });
+    // pointerId 1 のドラッグは生きていて、離した位置で確定する
+    fireEvent.pointerUp(window, { clientX: 40, clientY: 30, pointerId: 1 });
+
+    expect(onChange).toHaveBeenCalled();
+  });
+
+  it('同じ pointerId の pointercancel は掴む前へ巻き戻す（確定しない）', () => {
+    const { container, onChange } = renderScore([PP_EVENT]);
+    const region = symbolRegion(container);
+
+    fireEvent.pointerDown(region, { clientX: 10, clientY: 10, pointerId: 1, isPrimary: true, button: 0 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 30, pointerId: 1 });
+    fireEvent.pointerCancel(window, { pointerId: 1 });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('演奏記号タブでは記号ホバーのカーソルが grab になる（掴めることを見せる・#553 仕様5）', () => {
     const { container } = renderScore([PP_EVENT]);
     const region = symbolRegion(container) as unknown as SVGRectElement & { style: CSSStyleDeclaration };

@@ -3384,7 +3384,17 @@ export default function PianoSystemCanvas({
    * setTool を呼ぶため**マウス押下中でも発生する**） ②SCORE_SELECTION_CLEAR 要求
    * ③pointercancel（OS がポインタを取り上げた。suppressNextClick: false で呼ぶ）。
    */
-  const cancelActiveDragSessions = useCallback((options?: { suppressNextClick?: boolean }) => {
+  const cancelActiveDragSessions = useCallback((options?: {
+    suppressNextClick?: boolean;
+    /**
+     * pointercancel 経路で渡す、取り上げられたポインタの ID（#553 round1 P2）。
+     * 指定時、記号ドラッグのセッションは**同じ pointerId のときだけ**キャンセルする
+     * （#536 規約: move/up/cancel は同じ pointerId のみ処理。別の指の cancel で
+     * 進行中のドラッグを巻き戻さない）。マウスイベント由来の弧・タイ等のセッションは
+     * pointerId を持たないため従来どおり全キャンセル
+     */
+    symbolPointerId?: number;
+  }) => {
     // 既定は true（従来の呼び出し元＝ツール切替・CLEAR の挙動を変えない）
     const suppressNextClick = options?.suppressNextClick !== false;
     const hadActiveArcDrag =
@@ -3408,13 +3418,18 @@ export default function PianoSystemCanvas({
     // 記号のドラッグ（Issue #522）も弧と同じ扱い: 確定はせず、つかむ前の位置へ戻す。
     // ツール切替・pointercancel は利用者の「ここで決めた」ではないため
     const symbolDrag = dragSessionsRef.current.symbolOffset;
-    dragSessionsRef.current.symbolOffset = null;
-    if (symbolDrag?.moved) {
-      symbolOffsetDragRef.current.applyDraft(symbolDrag.baseX, symbolDrag.baseY);
-      // 読み飛ばしを立てるかどうかの理由は上の arcMoved と同じ
-      dragSessionsRef.current.symbolOffsetMoved = suppressNextClick;
-    } else if (!suppressNextClick) {
-      dragSessionsRef.current.symbolOffsetMoved = false;
+    const keepSymbolDrag = options?.symbolPointerId != null
+      && symbolDrag != null
+      && symbolDrag.pointerId !== options.symbolPointerId;
+    if (!keepSymbolDrag) {
+      dragSessionsRef.current.symbolOffset = null;
+      if (symbolDrag?.moved) {
+        symbolOffsetDragRef.current.applyDraft(symbolDrag.baseX, symbolDrag.baseY);
+        // 読み飛ばしを立てるかどうかの理由は上の arcMoved と同じ
+        dragSessionsRef.current.symbolOffsetMoved = suppressNextClick;
+      } else if (!suppressNextClick) {
+        dragSessionsRef.current.symbolOffsetMoved = false;
+      }
     }
     if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
   }, [cancelArcDrag]);
@@ -3450,7 +3465,9 @@ export default function PianoSystemCanvas({
     };
     // pointercancel には mouseup も click も続かないので、click の読み飛ばしは立てない
     //（立てると解除役の mouseup が来ず、中断後の最初のクリックが1回捨てられる）
-    const onPointerCancel = () => { cancelActiveDragSessions({ suppressNextClick: false }); };
+    const onPointerCancel = (e: PointerEvent) => {
+      cancelActiveDragSessions({ suppressNextClick: false, symbolPointerId: e.pointerId });
+    };
     // 記号ドラッグ側の安全弁だけは pointerup でも効かせる（round2 P2: タッチでは mouseup が
     // 保証されず、preventDefault で互換 mouse イベントも抑止され得る）。
     // onWindowMouseUp をそのまま pointerup へ登録してはいけない（round3 P1）:
@@ -4678,7 +4695,12 @@ export default function PianoSystemCanvas({
          * ⤢（サイズ変更ツール）中だけ「大きさ」、それ以外は「位置調整（✥）」。
          */
         const overlayKindForTool = (): 'resize' | 'offset' => (
-          'mode' in tool && tool.mode === 'symbolAdjustResize' ? 'resize' : 'offset'
+          // カスタム記号専用の ⤢（customSymbolResize）も同じ「サイズ変更中」
+          //（#553 round1 P2: 汎用 ⤢ だけ見ていると、カスタム記号の ⤢ 中に
+          // 記号を掴めてしまい、大きさのつもりの操作で位置が変わる）
+          'mode' in tool && (tool.mode === 'symbolAdjustResize' || tool.mode === 'customSymbolResize')
+            ? 'resize'
+            : 'offset'
         );
         /**
          * いまこの記号を「押してそのまま動かす」ことができるか（Issue #553）。
