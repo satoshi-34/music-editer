@@ -25,6 +25,15 @@ describe('App.css: 段の選択UIは印刷に出さない（Issue #482）', () =
     const css = printBlock(loadAppCss());
     expect(css).toMatch(/\.system-select-edge\s*\{[^}]*display\s*:\s*none/);
     expect(css).toMatch(/\.system-layout-panel\s*\{[^}]*display\s*:\s*none/);
+    // 段の境界ドラッグ帯（Issue #523）も同じ編集用UI
+    expect(css).toMatch(/\.system-gap-drag-handle\s*\{[^}]*display\s*:\s*none/);
+  });
+
+  it('境界帯は段の上端（bottom: 100%）に置かれている（round1 の「掴んだ境界が動く」原則）', () => {
+    // jsdom はレイアウトを計算しないため、配置の退行（下端へ戻す）は
+    // 統合テストでは検出できない。ソースの静的チェックで固定する（round2 P2）
+    const css = loadAppCss();
+    expect(css).toMatch(/\.system-gap-drag-handle\s*\{[^}]*bottom\s*:\s*100%/);
   });
 
   it('@media print で選択中の薄い枠（outline）も消している', () => {

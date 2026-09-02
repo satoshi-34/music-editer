@@ -20,7 +20,12 @@ type Props = {
   selectedSystemStart?: number | null;
   /** 左右端がクリックされたときに呼ばれる。渡されないときは当たり判定自体を描かない */
   onSelect?: (startMeasure: number, side: 'left' | 'right') => void;
-  /** 選択中の段にだけ描くフローティングパネル。中身は呼び出し側（ScorePage）が組み立てる */
+  /**
+   * 選択中の段にだけ描く重ね物（レイアウト調整パネルと、段の上端の境界ドラッグ帯）。
+   * 中身は呼び出し側（ScorePage）が組み立てる。どちらも内側ラッパー
+   * （.system-select-inner＝五線の実描画範囲）を基準に絶対配置するので、
+   * ここへまとめて差し込めば置き場所の基準は1つで済む。
+   */
   renderPanel?: (startMeasure: number) => ReactNode;
   className?: string;
   style?: CSSProperties;
