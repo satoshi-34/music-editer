@@ -239,12 +239,13 @@ describe('MusicXML のペダル記号対応', () => {
     expect(measures[0].events[0].pedalMark).toBe('down');
     expect(measures[1].events[0].pedalMark).toBe('up');
 
-    // 再生計画でも踏み区間が譜面終端まで伸びない（=stop が効いている）こと
+    // 再生計画でも「1小節目いっぱいで離す」= 全音符は音価どおりで延長ゼロになること。
+    // stop が失われると区間が譜面終端まで伸び、延長エントリが生まれる（round2 P2）
     const plans = buildPedalPlaybackPlans(
       [{ instrumentKey: 'p', measures }],
       4,
     );
-    expect(plans.length).toBeGreaterThan(0);
+    expect(plans[0].size).toBe(0);
   });
 
   it('書き出しの <pedal> は対象音符の直前に出る（位置の固定）', () => {

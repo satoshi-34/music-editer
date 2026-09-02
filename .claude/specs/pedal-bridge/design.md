@@ -103,9 +103,12 @@ MusicXML でのペダルは `<direction><direction-type><pedal type="start|stop"
   `line="no"` は「横線ではなく Ped. ‥ ✱ の記号で表す」指定で、このアプリの描画と一致する。
   `<staff>` を付けるのは他の direction と同じ（大譜表で置いた段を保つため）
 - **読み込み**（`musicXmlImport.ts`）: `attachDirectionMarksToVoiceEvents`（松葉と文字強弱を
-  1本の走査で組み立てている既存の関数）に `pendingPedal` を足した。**走査を2本目に増やさない**
+  1本の走査で組み立てている既存の関数）へペダルの取り込みを足した。**走査を2本目に増やさない**
   （#552 で確立した方針。同じ歩き方の2枚目を作ると片方だけ直る事故になる）。
-  1つの音符が持てるペダル記号は1つなので、待ち行列（配列）ではなく最後の1つを覚える形にした
+  1つの音符が持てるペダル記号は1つなので、待ち行列（配列）ではなく最後の1つを覚える。
+  待ち状態は関数ローカルではなく、**呼び出し側の `PedalCarry`（声部ごと・小節ループの外）**に
+  持つ（round1 P1: MusicXML の direction は「同じ声部で後続する最初の音符」に付くため、
+  小節最後の音符の後に置かれた `<pedal type="stop"/>` は次小節の先頭音符へ持ち越す必要がある）
 - 大譜表の段の振り分けは既存の direction フィルタ（`staffNumberOf(el) === staffNumber`）が
   そのまま効くため、追加の実装は不要だった
 
@@ -121,7 +124,7 @@ v1 では **`change` は「踏む」として取り込む**（音は踏み替え
 | ファイル | 変更内容 |
 |---|---|
 | `src/utils/musicXmlExport.ts` | `pedalDirectionXml` 新設・主声部/追加声部の両方で出力 |
-| `src/utils/musicXmlImport.ts` | `attachDirectionMarksToVoiceEvents` に `pendingPedal` を追加 |
+| `src/utils/musicXmlImport.ts` | `attachDirectionMarksToVoiceEvents` へペダル取り込みを追加（待ち状態は呼び出し側の `PedalCarry` で小節間を持ち越し） |
 | `src/utils/musicXmlPedal.test.ts` | **新規**（往復テスト一式） |
 | `README.md` | MusicXML でペダルが受け渡せる旨を追記 |
 
