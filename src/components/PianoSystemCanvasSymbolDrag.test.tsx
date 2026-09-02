@@ -5,7 +5,9 @@
 //   - 保存はマウスを離した1回だけ（＝ Undo 1回で移動前へ戻る）
 //   - わずかな震え（しきい値以下）は「クリック」のままで、保存もオーバーレイの
 //     開閉も起きない
-//   - 調整中でない記号は pointerdown しても動かない（通常のクリック・音符入力と衝突させない）
+//   - 未選択の記号も、押してそのまま動かせば移動する（Issue #553）。3px 未満で離した
+//     ときは従来どおり「選択（✥ が開く）」で、位置は変わらない
+//   - ⤢（サイズ変更ツール）中は直接ドラッグしない
 //   - 既存の ✥＋矢印キーの操作に回帰がない
 //
 // 値の反映は矢印キーと同じ「下書き → 離した時点で確定」経路を共用しているので、
@@ -123,7 +125,7 @@ function savedDynamicsAdjust(onChange: ReturnType<typeof vi.fn>) {
   return saved.symbolAdjust?.dynamics;
 }
 
-describe('記号のドラッグ移動（Issue #522）', () => {
+describe('記号のドラッグ移動（Issue #522 / #553）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
   beforeEach(() => {
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
@@ -163,14 +165,72 @@ describe('記号のドラッグ移動（Issue #522）', () => {
     expect(container.querySelector('.symbol-adjust-overlay')).toBeTruthy();
   });
 
-  it('位置調整を開いていない記号は、つかんでも動かない（通常のクリック・音符入力と衝突しない）', () => {
+  // ここから #553（選択なしの直接ドラッグ）。#522 の時点では「調整中の1件だけ掴める」
+  // 設計だったが、動かすたびに 記号クリック→✥→ドラッグ の3手が要る不便さ
+  // （運用者QA 2026-09-01）を解消するため、演奏記号タブでは未選択でも掴めるようにした。
+  it('未選択の記号を直接ドラッグすると、✥ が開いて移動し、離した1回だけ保存される（#553）', () => {
     const { container, onChange } = renderScore([PP_EVENT]);
     // オーバーレイを開かずにいきなりドラッグする
-    dragSymbol(container, { x: 10, y: 10 }, { x: 40, y: 40 });
+    expect(container.querySelector('.symbol-adjust-overlay')).toBeFalsy();
+
+    fireEvent.pointerDown(symbolRegion(container), { clientX: 10, clientY: 10, button: 0, isPrimary: true, pointerId: 1 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 30, pointerId: 1 });
+    // しきい値を超えた時点で✥が開く（運んでいる間、移動量が数値で見える・#553 仕様2）
+    const overlay = container.querySelector('.symbol-adjust-overlay');
+    expect(overlay?.textContent).toContain('記号位置調整');
+    // 開いた入力欄には、開く前に進んだぶんの移動量が入っている
+    // （current ではなく draft を初期表示にしていないと、離した時点の確定で取り消される）
+    expect((overlay!.querySelector('input') as HTMLInputElement).value).toBe('30');
+    expect(onChange).not.toHaveBeenCalled();  // 運んでいる間は下書きのまま
+
+    fireEvent.pointerUp(window, { clientX: 40, clientY: 30, pointerId: 1 });
+
+    // 保存は離した1回だけ（＝ Undo 1回で移動前へ戻る）
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(savedDynamicsAdjust(onChange)).toMatchObject({ offsetX: 30, offsetY: 20 });
+    // 確定して閉じるのは #522（調整中の記号のドラッグ）とまったく同じ振る舞い
+    expect(container.querySelector('.symbol-adjust-overlay')).toBeFalsy();
+  });
+
+  it('未選択の記号でも、しきい値未満で離せば従来どおり「選択」になる（位置は変わらない・#553）', () => {
+    const { container, onChange } = renderScore([PP_EVENT]);
+
+    fireEvent.pointerDown(symbolRegion(container), { clientX: 10, clientY: 10, button: 0, isPrimary: true, pointerId: 1 });
+    fireEvent.pointerMove(window, { clientX: 11, clientY: 11, pointerId: 1 });
+    fireEvent.pointerUp(window, { clientX: 11, clientY: 11, pointerId: 1 });
+    // 実ブラウザと同じく、ドラッグにならなかった pointerup のあとには click が続く
+    fireEvent.click(symbolRegion(container), { clientX: 11, clientY: 11 });
 
     expect(onChange).not.toHaveBeenCalled();
-    // ドラッグが成立していないので、いつもどおり次のクリックで記号を選べる
-    openOffsetOverlay(container);
+    expect(container.querySelector('.symbol-adjust-overlay')?.textContent).toContain('記号位置調整');
+  });
+
+  it('⤢（サイズ変更ツール）中は直接ドラッグしない（その場のクリックは大きさのパネル）', () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <PianoSystemCanvas
+        measuresPerSystem={1}
+        tool={{ mode: 'symbolAdjustResize' } as never}
+        scale={1}
+        partsConfig={[{ clef: 'treble', data: [{ events: [PP_EVENT] }], onChange }]}
+        showInstrumentLabels={false}
+        timeSignature={[4, 4]}
+        symbolsClickable={true}
+      />
+    );
+
+    dragSymbol(container, { x: 10, y: 10 }, { x: 40, y: 30 });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('演奏記号タブでは記号ホバーのカーソルが grab になる（掴めることを見せる・#553 仕様5）', () => {
+    const { container } = renderScore([PP_EVENT]);
+    const region = symbolRegion(container) as unknown as SVGRectElement & { style: CSSStyleDeclaration };
+
+    expect(region.style.cursor).toBe('grab');
+    fireEvent.mouseEnter(region);
+    expect(region.style.cursor).toBe('grab');
   });
 
   it('既存の ✥＋矢印キーの操作に回帰がない（ArrowDown → Enter で保存）', () => {
