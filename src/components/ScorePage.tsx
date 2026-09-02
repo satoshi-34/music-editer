@@ -261,7 +261,7 @@ import {
 } from '../utils/toolbarPlacement';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
-type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
+type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType; pedalGroup?: string };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 
 /**
@@ -1541,6 +1541,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             parts.push({
               measures: part,
               instrument: quartetInstrumentation.parts[partIndex]?.playbackInstrument,
+              pedalGroup: `quartet-${partIndex}`,
             });
           }
         });
@@ -1561,6 +1562,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             parts.push({
               measures: part,
               instrument: instrumentPart?.playbackInstrument,
+              pedalGroup: `ensemble-${partIndex}`,
             });
           }
           // 大譜表（staffCount:2）パートの2段目（低音部）も同じ音色で再生対象に含める。
@@ -1570,17 +1572,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
               parts.push({
                 measures: secondPart,
                 instrument: instrumentPart.playbackInstrument,
+                // ペダルは「同じ楽器の大譜表2段」でだけ共有する（同じ音色の別パートとは
+                // 共有しない・#549 round1 P2）。同じ partIndex のグループへまとめる
+                pedalGroup: `ensemble-${partIndex}`,
               });
             }
           }
         });
       } else if (scoreType === 'piano') {
-        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: InstrumentType.PIANO });
-        if (leftHandData && leftHandData.length > 0) parts.push({ measures: leftHandData, instrument: InstrumentType.PIANO });
+        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: InstrumentType.PIANO, pedalGroup: 'piano' });
+        if (leftHandData && leftHandData.length > 0) parts.push({ measures: leftHandData, instrument: InstrumentType.PIANO, pedalGroup: 'piano' });
         if (rightHandData && rightHandData.length > 0) tempoSourceParts.push(rightHandData);
         if (leftHandData && leftHandData.length > 0) tempoSourceParts.push(leftHandData);
       } else {
-        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: currentInstrument });
+        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: currentInstrument, pedalGroup: 'single' });
         if (rightHandData && rightHandData.length > 0) tempoSourceParts.push(rightHandData);
       }
 
@@ -1640,7 +1645,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 解決し、途中再生でも開始位置より前で踏まれたペダルを引き継ぐ
           const pedalPlans = buildPedalPlaybackPlans(
             parts.map((partSource, partIndex) => ({
-              instrumentKey: String(partSource.instrument ?? 'default'),
+              // 共有単位は「1つの楽器に属する段」だけ（round1 P2: 音色（InstrumentType）で
+              // まとめると、同音色の別楽器＝編成のピアノ2台などへペダルが漏れる）
+              instrumentKey: partSource.pedalGroup ?? `part-${partIndex}`,
               measures: expandedPerPart[partIndex].map(item => item.measure),
             })),
             getMeasureBeats(scoreTimeSignature),

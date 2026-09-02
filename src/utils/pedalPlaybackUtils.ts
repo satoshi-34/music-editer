@@ -95,15 +95,25 @@ type TimelineEvent = {
 function buildTimeline(
   measures: ReadonlyArray<MeasureData>,
   measureBeatsFloor: number,
-): TimelineEvent[] {
+): { events: TimelineEvent[]; totalBeats: number; tieContinuationKeys: Map<string, Set<string>> } {
   const timeline: TimelineEvent[] = [];
+  // タイの継続音（前の音から結ばれている側）。planKey → 結ばれている音高の集合。
+  // 再打鍵判定から除外するために使う（round1 P1: 継続音を再打鍵と誤認すると、
+  // ペダル保持がタイ終端で切れてしまう）
+  const tieContinuationKeys = new Map<string, Set<string>>();
+  const markContinuation = (planKey: string, key: string) => {
+    const set = tieContinuationKeys.get(planKey) ?? new Set<string>();
+    set.add(key);
+    tieContinuationKeys.set(planKey, set);
+  };
   let measureStartBeat = 0;
 
   measures.forEach((measure, measureIndex) => {
     let maxVoiceBeats = 0;
     getMeasureVoices(measure).forEach((voice, voiceIndex) => {
       let cursor = 0;
-      (voice.events ?? []).forEach((event, eventIndex) => {
+      const events = voice.events ?? [];
+      events.forEach((event, eventIndex) => {
         const durationBeats = getEventDurationBeats(event);
         timeline.push({
           planKey: buildTiePlaybackEventKey(measureIndex, voiceIndex, eventIndex),
@@ -114,6 +124,21 @@ function buildTimeline(
           pedalMark: event.pedalMark,
         });
         cursor += durationBeats;
+        // タイの継続先を記録する（tiePlaybackUtils と同じ2形式: arcs kind='tie' と
+        // 旧形式 tiedToNext=「同じ声部のすぐ次の音へ同音でタイ」）
+        (event.arcs ?? []).forEach((arc) => {
+          if (arc.kind !== 'tie') return;
+          markContinuation(
+            buildTiePlaybackEventKey(arc.toMeasureIndex, voiceIndex, arc.toEventIndex),
+            arc.toKey,
+          );
+        });
+        if ((event as { tiedToNext?: boolean }).tiedToNext) {
+          const nextInVoice = eventIndex + 1 < events.length
+            ? buildTiePlaybackEventKey(measureIndex, voiceIndex, eventIndex + 1)
+            : buildTiePlaybackEventKey(measureIndex + 1, voiceIndex, 0);
+          (event.keys ?? []).forEach((key) => markContinuation(nextInVoice, key));
+        }
       });
       maxVoiceBeats = Math.max(maxVoiceBeats, cursor);
     });
@@ -122,7 +147,10 @@ function buildTimeline(
 
   // 複数声部では声部ごとに積み上げるので、時系列順に並べ直してから使う。
   timeline.sort((left, right) => left.startBeat - right.startBeat);
-  return timeline;
+  // totalBeats は「小節送りを含む再生タイムラインの終端」。イベントの最大終端では
+  // なく小節の積算で数える（round1 P2: 段の最後のイベントで終わる扱いにすると、
+  // 空小節や他段だけが続く譜面で単独 Ped の終端が早まる）
+  return { events: timeline, totalBeats: measureStartBeat, tieContinuationKeys };
 }
 
 /**
@@ -130,15 +158,11 @@ function buildTimeline(
  * 対応する up が無い down は「そのパートの終わりまで踏みっぱなし」として扱う
  * （描画では単独の Ped と表示される状態。鳴り方も見た目どおり伸ばす）。
  */
-function collectIntervalsFromTimeline(
-  timeline: TimelineEvent[],
+function collectIntervalsFromMarks(
+  marks: Array<{ mark: 'down' | 'up'; beat: number }>,
   timelineEndBeat: number,
 ): PedalInterval[] {
-  const marks = timeline
-    .filter((event): event is TimelineEvent & { pedalMark: 'down' | 'up' } => !!event.pedalMark)
-    .map((event) => ({ mark: event.pedalMark, beat: event.startBeat }));
-
-  return pairPedalMarks(marks).flatMap((result) => {
+  const intervals = pairPedalMarks(marks).flatMap((result): PedalInterval[] => {
     if (result.kind === 'bridge') {
       return result.up.beat > result.down.beat
         ? [{ downBeat: result.down.beat, upBeat: result.up.beat }]
@@ -153,6 +177,14 @@ function collectIntervalsFromTimeline(
     // 単独の ✱（踏む前の解除）は区間を作らない
     return [];
   });
+  // ペダルは楽器に1つなので、区間は重ならない。連続した Ped（down, down, …）では
+  // 前の区間を次の Ped 位置で終える=踏み替え（round1 P2: 単独 down を終端まで伸ばすと
+  // 後続の ✱ が実質効かなくなる。リピート展開で Ped…||:…Ped…✱ になった場合も同じ）
+  intervals.sort((a, b) => a.downBeat - b.downBeat);
+  for (let i = 0; i + 1 < intervals.length; i++) {
+    intervals[i].upBeat = Math.min(intervals[i].upBeat, intervals[i + 1].downBeat);
+  }
+  return intervals.filter((interval) => interval.upBeat > interval.downBeat);
 }
 
 /** その位置がどのペダル区間の中か（区間外なら null） */
@@ -182,19 +214,30 @@ export function buildPedalPlaybackPlans(
 ): PedalPlaybackPlan[] {
   const timelines = parts.map((part) => buildTimeline(part.measures, measureBeatsFloor));
 
-  // 楽器ごとにペダル区間をまとめる。
-  // 記号がどちらの手（段）に置かれていても、その楽器の全パートへ同じ区間が効く。
-  const intervalsByInstrument = new Map<string, PedalInterval[]>();
+  // 楽器ごとに**生のマーク**を集約してから、楽器単位で一度だけペアリングする
+  //（round1 P1: 段ごとに先にペアリングすると、左手の Ped と右手の ✱ が
+  // ペアにならず「左手は終端まで・右手の ✱ は無視」になる）。
+  const marksByInstrument = new Map<string, Array<{ mark: 'down' | 'up'; beat: number }>>();
+  const endBeatByInstrument = new Map<string, number>();
   parts.forEach((part, partIndex) => {
-    const timeline = timelines[partIndex];
-    const timelineEndBeat = timeline.reduce((max, event) => Math.max(max, event.notatedEndBeat), 0);
-    const intervals = collectIntervalsFromTimeline(timeline, timelineEndBeat);
-    if (intervals.length === 0) return;
-    const merged = intervalsByInstrument.get(part.instrumentKey) ?? [];
-    merged.push(...intervals);
-    intervalsByInstrument.set(part.instrumentKey, merged);
+    const { events, totalBeats } = timelines[partIndex];
+    endBeatByInstrument.set(
+      part.instrumentKey,
+      Math.max(endBeatByInstrument.get(part.instrumentKey) ?? 0, totalBeats),
+    );
+    const marks = marksByInstrument.get(part.instrumentKey) ?? [];
+    events.forEach((event) => {
+      if (event.pedalMark) marks.push({ mark: event.pedalMark, beat: event.startBeat });
+    });
+    marksByInstrument.set(part.instrumentKey, marks);
   });
-  intervalsByInstrument.forEach((intervals) => intervals.sort((a, b) => a.downBeat - b.downBeat));
+  const intervalsByInstrument = new Map<string, PedalInterval[]>();
+  marksByInstrument.forEach((marks, instrumentKey) => {
+    if (marks.length === 0) return;
+    marks.sort((a, b) => a.beat - b.beat);
+    const intervals = collectIntervalsFromMarks(marks, endBeatByInstrument.get(instrumentKey) ?? 0);
+    if (intervals.length > 0) intervalsByInstrument.set(instrumentKey, intervals);
+  });
 
   return parts.map((part, partIndex) => {
     const plan: PedalPlaybackPlan = new Map();
@@ -204,7 +247,7 @@ export function buildPedalPlaybackPlans(
       return plan;
     }
 
-    const timeline = timelines[partIndex];
+    const { events: timeline, tieContinuationKeys } = timelines[partIndex];
     // ペダルで鳴り続けている音の台帳。同音の再打鍵と同時保持数の上限に使う。
     let holding: SoundingNote[] = [];
 
@@ -236,8 +279,11 @@ export function buildPedalPlaybackPlans(
       holding = holding.filter((held) => held.endBeat > event.startBeat + BEAT_EPSILON);
 
       // 同音の再打鍵はペダル中でも前の音を切る（実ピアノでも同じ弦が打ち直されるため）。
+      // ただし**タイの継続音は再打鍵ではない**（round1 P1: 弦は打ち直されず鳴り続けている。
+      // 継続音側は発音自体が抑制されるため、ここで前の音を切るとタイ終端で保持が消える）
+      const continuations = tieContinuationKeys.get(event.planKey);
       holding.forEach((held) => {
-        if (event.keys.includes(held.key)) {
+        if (event.keys.includes(held.key) && !continuations?.has(held.key)) {
           release(held, event.startBeat);
         }
       });

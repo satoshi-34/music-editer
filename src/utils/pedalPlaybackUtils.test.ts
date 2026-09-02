@@ -170,4 +170,90 @@ describe('buildPedalPlaybackPlans', () => {
     const laterExtend = plan.get(buildPedalPlaybackEventKey(0, 0, laterIndex))?.[events[laterIndex].keys[0]] ?? 0;
     expect(laterExtend).toBeGreaterThan(0);
   });
+
+  it('タイの継続音は再打鍵とみなさず、保持がタイ終端で切れない（round1 P1）', () => {
+    // Ped 中に C4四分—タイ—C4四分。継続音（2拍目）で前の音を切ると、
+    // 開始音の延長が消えてタイ終端で保持が終わってしまう
+    const plan = planFor([
+      measure([
+        note(['c/4'], '4', {
+          pedalMark: 'down',
+          arcs: [{ kind: 'tie', fromKey: 'c/4', toKey: 'c/4', toMeasureIndex: 0, toEventIndex: 1 }],
+        }),
+        note(['c/4']),
+        note(['e/4']),
+        note(['f/4'], '4', { pedalMark: 'up' }),
+      ]),
+    ]);
+    // 開始音は「タイで2拍 + ペダルで解除位置（3拍目）まで」…延長は記譜1拍からの差=2拍
+    expect(plan.get(buildPedalPlaybackEventKey(0, 0, 0))).toEqual({ 'c/4': 2 });
+  });
+
+  it('旧形式 tiedToNext の継続音も再打鍵とみなさない（round1 P1）', () => {
+    const plan = planFor([
+      measure([
+        note(['c/4'], '4', { pedalMark: 'down', tiedToNext: true } as Partial<NoteEvent>),
+        note(['c/4']),
+        note(['e/4'], '4', { pedalMark: 'up' }),
+        note(['f/4']),
+      ]),
+    ]);
+    expect(plan.get(buildPedalPlaybackEventKey(0, 0, 0))).toEqual({ 'c/4': 1 });
+  });
+
+  it('大譜表の別段に置かれた Ped と ✱ がペアになる（round1 P1: 楽器単位でペアリング）', () => {
+    // 左手に Ped・右手に ✱（2小節目頭）。段ごとにペアリングすると
+    // 左手=単独Ped（終端まで）・右手=単独✱（無視）になってしまう
+    const plans = buildPedalPlaybackPlans([
+      { instrumentKey: 'piano', measures: [
+        measure([note(['c/5'], '1')]),
+        measure([note(['d/5'], '4', { pedalMark: 'up' }), note(['e/5']), rest(), rest()]),
+      ] },
+      { instrumentKey: 'piano', measures: [
+        measure([note(['c/3'], '4', { pedalMark: 'down' }), note(['d/3']), rest(), rest()]),
+        measure([note(['e/3'], '1')]),
+      ] },
+    ], 4);
+    // 右手の全音符（0拍目〜4拍）はペダル解除（絶対4拍）ちょうどまで → 延長なし。
+    // 左手 1拍目 c/3 は解除（4拍）まで3拍延びる
+    expect(plans[1].get(buildPedalPlaybackEventKey(0, 0, 0))).toEqual({ 'c/3': 3 });
+    // ✱ 以降の音（右手2小節目）は延びない（単独✱扱いで無視されると左手が終端まで延びて failed）
+    expect(plans[0].get(buildPedalPlaybackEventKey(0, 0, 0))).toBeUndefined();
+    expect(plans[1].get(buildPedalPlaybackEventKey(1, 0, 0))).toBeUndefined();
+  });
+
+  it('連続した Ped は次の Ped 位置で前の区間を終える=踏み替え（round1 P2）', () => {
+    const plan = planFor([
+      measure([
+        note(['c/4'], '4', { pedalMark: 'down' }),
+        note(['d/4']),
+        note(['e/4'], '4', { pedalMark: 'down' }),
+        note(['f/4'], '4', { pedalMark: 'up' }),
+      ]),
+    ]);
+    // 1拍目の音は次の Ped（3拍目）までで切れる（終端まで伸びない）→ 延長1拍
+    expect(plan.get(buildPedalPlaybackEventKey(0, 0, 0))).toEqual({ 'c/4': 1 });
+    // 3拍目の音は ✱（4拍目）まで → 音価1拍でちょうどなので延長なし
+    expect(plan.has(buildPedalPlaybackEventKey(0, 0, 2))).toBe(false);
+  });
+
+  it('単独 Ped の終端は小節送りを含む再生タイムラインの終端（round1 P2）', () => {
+    // 左手は1小節目で入力が終わり、右手は2小節目まで続く。
+    // 左手の Ped は「左手の最後のイベント」ではなくタイムライン終端（8拍）まで
+    const plans = buildPedalPlaybackPlans([
+      { instrumentKey: 'piano', measures: [
+        measure([note(['c/3'], '4', { pedalMark: 'down' }), rest(), rest(), rest()]),
+        measure([]),
+      ] },
+      { instrumentKey: 'piano', measures: [
+        measure([note(['c/5'], '1')]),
+        measure([note(['d/5'], '1')]),
+      ] },
+    ], 4);
+    // 左手 c/3（1拍）は終端8拍まで → 延長7拍
+    expect(plans[0].get(buildPedalPlaybackEventKey(0, 0, 0))).toEqual({ 'c/3': 7 });
+    // 右手の2小節目の全音符（4〜8拍）も保持対象 → 延長なし（ちょうど終端）だが
+    // 1小節目の全音符（0〜4拍）は終端まで4拍延びる
+    expect(plans[1].get(buildPedalPlaybackEventKey(0, 0, 0))).toEqual({ 'c/5': 4 });
+  });
 });

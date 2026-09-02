@@ -82,6 +82,26 @@ describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）'
     };
   }
 
+  it('スタッカート（durationScale < 1）でもペダル中は解除位置まで響く（round1 P3: 内蔵側も固定）', async () => {
+    const engine = new SimpleAudioEngine();
+    await engine.initialize();
+    createdOscillators.length = 0;
+    await engine.playParts([{
+      measures: [{
+        measureBeats: 4,
+        bpm: 60,
+        events: [
+          { dur: '4', isRest: false, keys: ['c/4'], durationScale: 0.5, pedalExtendBeatsByKey: { 'c/4': 3 } },
+        ],
+      }],
+    }], 60);
+    const first = createdOscillators[0];
+    const startedAt = first.start.mock.calls[0][0] as number;
+    const stoppedAt = first.stop.mock.calls[0][0] as number;
+    // max（掛け算に退行すると 0.5×4=2秒側になり落ちる）: 解除位置=4秒+尻尾
+    expect(stoppedAt - startedAt).toBeGreaterThanOrEqual(4);
+  });
+
   it('ペダル区間の音は解除位置（音価 + 延長）まで鳴り続ける', async () => {
     const withoutPedal = await playFirstNote();
     // 4分音符（BPM60 = 1秒）を、3拍ぶん先の解除位置まで延ばす
