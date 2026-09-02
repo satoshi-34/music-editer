@@ -40,6 +40,7 @@ import {
   canAddVoice,
   countUsedVoices,
   cycleVoiceIndex,
+  initialVoiceCount,
   layerChipLabel,
   layerPartCount,
   layerPartLabel,
@@ -570,6 +571,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // それ以外の譜種はパート軸が1本なので添字0だけを使う）。
   // 足した直後の声部はまだ音符が無く、データ上は存在しない（空の声部は #305 で自動的に畳まれる）ため、
   // 「ユーザーが足したいと言った本数」はUI側で覚えておかないとチップが押した瞬間に消える。
+  // 初期値はマウント直後に下の useEffect が譜種に合わせて入れ直す（ピアノ譜は2＝#316 の4枚を維持）
   const [requestedVoiceCounts, setRequestedVoiceCounts] = useState<number[]>([1, 1]);
   const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
   // 「音符・休符」タブで直前に選んでいたツール（音価・タイ・臨時記号など）を覚えておくための ref。
@@ -2221,7 +2223,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // （実機確認 2026-09-03 で発覚）。データ側に本当に声部があるぶんは
   // usedVoiceCounts から復活するので、この破棄で声部が見えなくなることはない
   useEffect(() => {
-    setRequestedVoiceCounts([1, 1]);
+    const initial = initialVoiceCount(scoreType);
+    setRequestedVoiceCounts([initial, initial]);
   }, [currentWorkId, scoreType]);
 
   // 声部数が減った（譜面を開き直した・音符を消して空の声部が畳まれた）ときに、

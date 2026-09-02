@@ -16,6 +16,18 @@ import { getMeasureVoices } from './voiceMeasureUtils';
 export const MAX_VOICES_PER_LAYER = 4;
 
 /**
+ * 譜種ごとの「最初から出しておく声部の数」。
+ *
+ * ピアノ譜は #316 以来ずっと「手×声部1/2 の4枚」が常設で、2声はピアノ入力の
+ * 基本機能である。ここを1声から始めると、下声を書くたびに「＋」を押させることになり
+ * 既存の操作が一段深くなる。他の譜種にはもともと声部のUIが無かったので1から始める
+ * （使い始めたときに増える）。
+ */
+export function initialVoiceCount(scoreType: ScoreType): number {
+  return scoreType === 'piano' ? 2 : 1;
+}
+
+/**
  * レイヤーのパート軸の本数。
  *
  * ピアノ譜だけが「右手・左手」という**画面に出しっぱなしのパート軸**を持つ

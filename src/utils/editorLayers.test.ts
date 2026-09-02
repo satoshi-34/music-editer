@@ -10,6 +10,7 @@ import {
   countUsedVoices,
   cycleVoiceIndex,
   layerChipLabel,
+  initialVoiceCount,
   layerPartCount,
   layerPartLabel,
   resolveVoiceSlotCount,
@@ -36,6 +37,21 @@ describe('レイヤーのパート軸（#417）', () => {
   it('ピアノ譜のチップ名は #316 の表記（手・声部N）のまま', () => {
     expect(layerChipLabel('piano', 1, 2)).toBe('左手・声部3');
   });
+});
+
+describe('最初から出しておく声部の数（#417）', () => {
+  it('ピアノ譜は2声から始まる（#316 の「手×声部1/2 の4枚」を保つ）', () => {
+    expect(initialVoiceCount('piano')).toBe(2);
+    expect(buildLayerChips('piano', [initialVoiceCount('piano'), initialVoiceCount('piano')]).map(c => c.label))
+      .toEqual(['右手・声部1', '右手・声部2', '左手・声部1', '左手・声部2']);
+  });
+
+  it.each(['single', 'quartet', 'ensemble'] as const)(
+    '%s はもともと声部のUIが無かったので1声から始まる',
+    (scoreType) => {
+      expect(initialVoiceCount(scoreType)).toBe(1);
+    }
+  );
 });
 
 describe('声部数の解決（#417）', () => {

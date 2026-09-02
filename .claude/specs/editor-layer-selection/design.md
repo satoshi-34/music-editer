@@ -158,6 +158,11 @@ activeLayerPartIndex の受け渡しを外すと落ちることを負のテス�
   `MAX_VOICES_PER_LAYER`(=4) / `layerPartCount` / `layerPartLabel` / `layerChipLabel` /
   `countUsedVoices` / `resolveVoiceSlotCount` / `buildLayerChips` / `cycleVoiceIndex` / `canAddVoice`。
   ラベルは既存の `pianoLayerLabel`（#316）を経由し、表記の正本を二重に持たない
+- **最初に出す声部数**（`initialVoiceCount`）: ピアノ譜は **2**、それ以外は **1**。
+  ピアノ譜を1声から始めると #316 以来の「手×声部1/2 の4枚」が消え、下声を書くたびに
+  「＋」を押させることになる（2声はピアノ入力の基本機能で、既存の操作を一段深くしてしまう）。
+  他の譜種はもともと声部のUIが無かったので1から始める。CI で
+  `ScorePageUiContextBar.test.tsx`（「左手・声部2」を探す）が落ちて気づいた
 - **声部数の決め方**: 「データで実際に使われている声部数」と「＋で足した希望値」の**多いほう**。
   足した直後の声部はまだ音符が無く、データ上は存在しない（#305 の自動掃除で畳まれる）ため、
   希望値を UI 側（`requestedVoiceCounts`）で覚えていないと押した瞬間にチップが消える
