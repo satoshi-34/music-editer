@@ -5,6 +5,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import HomeScreen, { type HomeOpenKind, type HomeScreenProps } from './HomeScreen';
 import type { WorkSummary } from '../types/storage';
+import {
+  HOME_STORAGE_LOCATION_NOTE, HOME_STORAGE_LOCATION_NOTE_SHORT, HOME_STORAGE_PORTABILITY_NOTE,
+} from '../utils/storageLocationNotice';
 
 const WORKS: WorkSummary[] = [
   { id: 'w1', title: 'ソナタ', updatedAt: new Date(2026, 7, 30, 12, 34).getTime(), createdAt: 1 },
@@ -30,6 +33,40 @@ function renderHome(overrides: Partial<HomeScreenProps> = {}) {
 
 describe('ホーム画面（Issue #500）', () => {
   afterEach(() => cleanup());
+
+  // 保存先の常設表示（Issue #570）。
+  // 「ログインが無い＝全世界に公開されているのでは」という誤解は核ユーザーが実際に抱いたもので、
+  // 初回の通知（#497）は数秒で消えるため後から来た不安には答えられない。
+  // ここでは「消えない一言がホームに出ていること」と「文言が定数の1か所から来ていること」を固定する。
+  it('保存先の説明と、持ち出し方の案内がホームに常設で出ている（#570 受入）', () => {
+    renderHome();
+
+    const note = screen.getByTestId('home-storage-location-note');
+    // 直書きの文字列で照合しない: 定数と一致することまで見て、
+    // 将来ログイン（#498）で差し替えたときに2か所へ書き分ける事故を防ぐ
+    expect(note.textContent).toBe(HOME_STORAGE_LOCATION_NOTE);
+    expect(note.textContent).toContain('この端末にだけ保存されます');
+    // 「送信されない」ことまで言えていないと、公開の誤解は解けない
+    expect(note.textContent).toContain('送信されることはありません');
+
+    const portability = screen.getByTestId('home-storage-portability-note');
+    expect(portability.textContent).toBe(HOME_STORAGE_PORTABILITY_NOTE);
+    // 安心の裏返し（端末を変えると持ち出せない）への答えが対で出ている
+    expect(portability.textContent).toContain('書き出し');
+
+    // フッターにも控えめな一行が出るが、上と**同じ文の二度出し**にはしない
+    // （同じ画面に同じ文が2つ並ぶと、かえってどちらも読み飛ばされる）
+    const footer = screen.getByTestId('home-storage-footer-note');
+    expect(footer.textContent).toBe(HOME_STORAGE_LOCATION_NOTE_SHORT);
+    expect(footer.textContent).not.toBe(note.textContent);
+  });
+
+  it('作品が1件も無くても保存先の説明は消えない（不安を持つのは始めたてのユーザー）', () => {
+    renderHome({ works: [] });
+
+    expect(screen.getByTestId('home-works-empty')).toBeTruthy();
+    expect(screen.getByTestId('home-storage-location-note').textContent).toBe(HOME_STORAGE_LOCATION_NOTE);
+  });
 
   it('「最近使ったファイル」の先頭が最新の作品で、1クリックで開ける（#528 受入条件2）', () => {
     const props = renderHome();
