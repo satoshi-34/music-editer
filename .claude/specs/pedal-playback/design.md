@@ -86,22 +86,23 @@ down → up の区間を作る。ここで別のペアリングを書くと、�
 - 強弱・テンポと同じく **反復展開後・途中再生で切る前の全列**で解決し、
   引くときに開始位置ぶんオフセットする（途中再生でも、開始位置より前で踏まれた
   ペダルを引き継ぐ）
-- `instrumentKey` は `PlaybackPartSource.instrument`（編成譜のパート別音色）。
-  ピアノ譜の右手・左手はどちらも `InstrumentType.PIANO` なので同じ楽器としてまとまる
+- `instrumentKey` は **pedalGroup**（round1 P2 で音色単位から変更。詳細は追補参照）:
+  piano=両手で1グループ / ensemble=同一パートの大譜表2段のみ / quartet・single=パートごと。
+  音色（InstrumentType）でまとめると同音色の別楽器（ピアノ2台等）へ漏れるため使わない
 - **トリルで展開された音にはペダル延長を付けない**。トリルは1音符を細かい連打へ割るため、
   サブ音符ごとに「音価の後ろへ N 拍」を足すと鳴り終わりがばらける
   （タイが付いた音をトリル展開しないのと同じ理由）
 
 ## 影響範囲
 
-- `src/utils/pedalPlaybackUtils.ts`（新規・純粋関数）/ `src/utils/pedalPlaybackUtils.test.ts`（新規・11件）
+- `src/utils/pedalPlaybackUtils.ts`（新規・純粋関数）/ `src/utils/pedalPlaybackUtils.test.ts`（新規・17件）
 - `src/audio/PlaybackEngine.ts`: `PlaybackMeasureEvent.pedalExtendBeatsByKey` を追加
 - `src/audio/SoundFontEngine.ts`: 鳴り終わりを `max(タイ込みの長さ, ペダル解除位置)` に。
   併せて、タイ・ペダルが使うテンポ区間列をイベント内で1回だけ作るようにした（和音の音ごとに作り直さない）
 - `src/audio/SimpleAudioEngine.ts`: 同上（`playScore` の引数型にも追加）
-- `src/audio/pedalPlaybackEngines.test.ts`（新規・7件。両音源の契約）
+- `src/audio/pedalPlaybackEngines.test.ts`（新規・8件。両音源の契約）
 - `src/components/ScorePage.tsx`: 計画の解決と配線
-- `src/components/ScorePagePedalPlayback.test.tsx`（新規・1件。実マウントの配線テスト）
+- `src/components/ScorePagePedalPlayback.test.tsx`（新規・2件。実マウントの配線テスト。ピアノ+編成譜の共有単位）
 - 保存形式（JSON/MusicXML）・描画・拍計算は変更なし
 
 ## 受け入れ条件との対応
