@@ -1929,20 +1929,26 @@ button.ghost.active:hover:not(:disabled) {
   border-radius: 4px;
 }
 
-/* 段の下端の境界帯（Issue #523 = #450 の子2・SystemGapDragHandle.tsx）。
-   選択中の段にだけ出す「上下ドラッグの掴みしろ」で、掴んで動かすとその段の間隔
+/* 段の上端＝上の段との境界帯（Issue #523 = #450 の子2・SystemGapDragHandle.tsx）。
+   選択中の段にだけ出す「上下ドラッグの掴みしろ」で、掴んで動かすとその境界そのもの
    （上の段との距離＝ラッパーの margin-top）が指について変わる。
-   左右端の選択判定（.system-select-edge）とは置き場所（左右の外側 / 下端）も
+   下端ではなく上端へ置くのは「掴んだ境界が動く」ようにするため（round1 P1）。段の間隔は
+   後続の段の margin-top として入る値なので、下端を掴んで自分の margin-top を動かすと、
+   掴んだ境界とは別の場所（自分より上のすき間）が動いてしまう。
+   左右端の選択判定（.system-select-edge）とは置き場所（左右の外側 / 上端）も
    カーソル（pointer / row-resize）も分けてあるので、取り違えて掴むことがない（受入条件4）。
-   段と段のすき間へ出すため、五線（SVG）の上には重ならず、音符のクリックを奪わない。 */
+   段と段のすき間へ出すため、五線（SVG）の上には重ならず、音符のクリックを奪わない。
+   touch-action: none は、タッチのドラッグをブラウザのスクロールに取られないようにするため
+   （#536 で確立した pointer 規約）。 */
 .system-gap-drag-handle {
   position: absolute;
   left: 0;
   right: 0;
-  top: 100%;
+  bottom: 100%;
   height: 14px;
   z-index: 4;
   cursor: row-resize;
+  touch-action: none;
 }
 /* 普段は透明。カーソルを乗せたとき・掴んでいる間だけ細い線を出して掴める場所を知らせる */
 .system-gap-drag-handle::before {
@@ -1965,7 +1971,7 @@ button.ghost.active:hover:not(:disabled) {
    カーソルの下敷きにならないよう、当たり判定は持たせない（pointer-events: none） */
 .system-gap-drag-value {
   position: absolute;
-  top: 16px;
+  bottom: 16px;
   z-index: 31;
   padding: 2px 6px;
   font-size: 11px;
