@@ -68,6 +68,15 @@ describe('レイアウトタブのコントロールのアクセシブルな名�
       const control = screen.getByLabelText(name);
       expect(control, `${name} のコントロール`).toBeTruthy();
       expect(control.tagName).toBe('INPUT');
+      // getByLabelText は <label> 本文でも一致してしまうため、aria-label 属性そのものを
+      // 固定する（round1 P2: 数値入力2件は属性を外しても label 本文で通っていた）
+      expect(control, `${name} の aria-label`).toHaveAttribute('aria-label', name);
+    }
+
+    // ロール別にも取得できること（9個がスライダー、2個が数値入力）
+    for (const name of LAYOUT_CONTROL_NAMES) {
+      const role = (name === '段あたり小節数' || name === '段数/ページ') ? 'spinbutton' : 'slider';
+      expect(screen.getByRole(role, { name }), `${name}（role=${role}）`).toBeTruthy();
     }
 
     // 値を動かしても名前は「余白(左右)」のまま（現在値が名前へ混ざらないこと）
