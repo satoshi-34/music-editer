@@ -63,9 +63,13 @@ export interface PlaybackSoundRuntimeSettings {
 
 export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettings = {
   // ユーザー環境では内蔵音源の準備コストが高いことがあるため、
-  // 初回はそのまま試しやすい SoundFont / FluidR3_GM を既定にする。
+  // 初回はそのまま試しやすい SoundFont を既定にする。
+  // パック名を MusyngKite にしているのは、ピアノの長い音（全音符など）の持続が
+  // FluidR3_GM より明確に良いため（運用者検聴 2026-09-01・Issue #551）。
+  // ここは「保存データがまだ無い新規環境」にだけ効く値で、
+  // すでに保存済みの設定（FluidR3_GM を選んでいる既存ユーザー）は書き換えない。
   engineMode: 'soundfont',
-  pluginName: 'FluidR3_GM',
+  pluginName: 'MusyngKite',
   previewAccidentalOnApply: true,
   swingEnabled: false,
   playbackSpeedPercent: DEFAULT_PLAYBACK_SPEED_PERCENT,

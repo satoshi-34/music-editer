@@ -1955,8 +1955,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const resetAudioSettingsToSafeDefaults = useCallback(() => {
     // 無音が続くときは「いまの設定を維持したまま復旧」より、
     // まず確実に鳴る既定状態へ戻すほうが原因切り分けをしやすい。
-    // ここでは built-in + ピアノ + 既定プロファイルへそろえ、
-    // localStorage 側にも同じ安全値を書き戻して次回起動へ持ち越さないようにする。
+    // ここでは既定の再生設定（SoundFont/MusyngKite + ピアノ + 既定プロファイル）へそろえ、
+    // localStorage 側にも同じ安全値を書き戻して次回起動へ持ち越さないようにする（#551）。
     localStorage.setItem(
       PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY,
       JSON.stringify(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS)
@@ -1991,7 +1991,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
       // 手動復旧したら無音検知の通知は役目を終えるので消す
       setAudioHealthNotice(null);
-      alert('音声設定を安全な既定値へ戻して復旧しました。built-in のピアノでもう一度お試しください。');
+      // 実際に戻る既定は SoundFont（MusyngKite）のピアノ（DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS）。
+      // 以前の文言は「built-in のピアノ」で実挙動と食い違っていた（#551 round1 P2）
+      alert('音声設定を安全な既定値へ戻して復旧しました。標準の音源（SoundFont）のピアノでもう一度お試しください。');
     } catch (error) {
       console.error('[ScorePage] 音声復旧に失敗:', error);
       alert('音声復旧に失敗しました。ページ再読み込み、または Safari の開き直しをお試しください。');

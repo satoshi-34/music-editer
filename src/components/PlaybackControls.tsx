@@ -698,6 +698,7 @@ export default function PlaybackControls({
                   <div style={{ fontSize: 12, color: '#4b5563', lineHeight: 1.5 }}>
                     安全に動作確認しやすい SoundFont パック名は `MusyngKite` / `FluidR3_GM` / `FatBoy` / `GeneralUser_GS` です。
                     それ以外の名前は、無音を避けるため内部で `MusyngKite` に戻します。
+                    ピアノの長い音（全音符など）の持続は `MusyngKite` がはっきり良いので、迷ったら `MusyngKite` を推奨します。
                   </div>
                 )}
 

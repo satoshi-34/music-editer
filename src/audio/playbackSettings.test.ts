@@ -6,7 +6,28 @@ import {
   sanitizePlaybackRuntimeSettings
 } from './playbackSettings';
 
+describe('DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS', () => {
+  // Issue #551: 運用者検聴で「ピアノの持続は MusyngKite が明確に良い」と判断されたため、
+  // 保存データがまだ無い新規環境の既定パックを MusyngKite に固定する。
+  it('新規環境の既定 SoundFont パックは MusyngKite', () => {
+    expect(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.engineMode).toBe('soundfont');
+    expect(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.pluginName).toBe('MusyngKite');
+  });
+});
+
 describe('sanitizePlaybackRuntimeSettings', () => {
+  it('既存ユーザーが保存済みのパック名（FluidR3_GM）は既定へ書き換えない', () => {
+    // 既定値を変えても、すでに選んで保存してある設定は勝手に乗り換えさせない。
+    const settings = sanitizePlaybackRuntimeSettings({
+      engineMode: 'soundfont',
+      pluginName: 'FluidR3_GM',
+      previewAccidentalOnApply: true,
+      profile: { brightness: 0.5, attack: 0.5, release: 0.5, richness: 0.5, volume: 0.5 }
+    });
+
+    expect(settings.pluginName).toBe('FluidR3_GM');
+  });
+
   it('未知の値が来たときは安全な既定値へ戻す', () => {
     expect(sanitizePlaybackRuntimeSettings(null)).toEqual(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS);
     expect(sanitizePlaybackRuntimeSettings('invalid')).toEqual(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS);
