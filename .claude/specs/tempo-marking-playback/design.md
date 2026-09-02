@@ -327,3 +327,62 @@ Issue 仕様 2 は「アプリ全体設定は『新規作成時の既定値』�
   `src/components/ScorePagePerScoreTempo.test.tsx`（作品を交互に開く実操作。受入1・3）
 - MIDI 書き出し（`midiExport.ts`）・MusicXML 書き出しの方式は変更なし（受入2の回帰は
   `musicXmlTempo.test.ts` と `ScorePageTempoExportWiring.test.tsx` が担保）
+
+## 追記: 再生パネルの BPM 欄を「再生速度（%）」中心へ転換する（Issue #544・2026-09-02）
+
+### 問題
+
+#516 / #458 で譜面のテンポ指定（♩=N・速度標語）が再生に効くようになり、#543 で全体テンポが
+作品ごとの属性になった結果、再生パネルの「テンポ ♩=N」欄の役割は
+**「譜面に指定が無い部分の基準値」**まで縮んだ。にもかかわらず表示は「テンポ」のままで、
+譜面に書いたテンポと二重管理に見える（#543 の「無関係の数字」事案の再発しやすい形）。
+
+一方で「速いパッセージをゆっくり聴いて確かめたい」という需要はテンポ欄では満たせない。
+テンポ欄を下げると譜面のテンポが変わり、**書き出したファイルの曲そのものが遅くなる**ためである。
+
+### 修正設計
+
+**役割を「テンポは譜面・速度は聴き方」で分ける。**
+
+1. **再生速度（%）を新設**（25〜200%・既定 100%）。パネルではテンポ欄の**上**に置き、
+   速さを変えたいときにまず触る場所が「聴き方」の側になるようにした。
+2. **作品の基準テンポは同じパネルに残す**（Issue 仕様 2 の「同パネル内の別欄」）。
+   ラベルを「テンポ」→「**作品の基準テンポ**」に変え、「作品ごとに保存される」「譜面に
+   ♩=N や速度標語を書いた小節はそちらが優先される」という位置づけを欄の下に添えた。
+   欄そのものを楽譜設定側へ移す案は、#543 で作品属性になったばかりの値の編集場所を
+   もう一度動かすことになり、受入条件のどれにも必要ないため採らなかった。
+3. **倍率は「共有テンポ列へ1回だけ掛ける」**（Issue 仕様 4）。`ScorePage.handlePlay` で
+   `resolveScoreMeasureBpms` が解決した列（＝譜面本来のテンポ列）に
+   `applyPlaybackSpeedToBpms` を通し、以降の実音・ハイライト・終了タイマー・タイの実時間は
+   すべてこの倍率込みの列と実効テンポ（`effectiveGlobalBpm`）だけを見る。
+   全小節へ同じ倍率が掛かるので、標語が作る小節間の相対関係（120 : 132）は保たれる。
+   掛ける場所を分けると「音は半分の速さなのにハイライトは元の速さ」が起きる（#458 と同じ轍）。
+4. **100% は完全な等倍**にする。`applyPlaybackSpeedToBpm` は 100% のとき掛け算を通さず
+   元の値をそのまま返す。掛け算を通すと 132 が `132.00000000000003` になり得て、
+   「速度を触っていないのに従来と少し違う再生になる」回帰を生むため（受入3）。
+5. **保存先はアプリ全体設定**（Issue 仕様 3）。`PlaybackSoundRuntimeSettings.playbackSpeedPercent`
+   として `playback-sound-runtime-settings` に持つ。作品側（`SavedScoreData`）には保存しない
+   ＝**書き出し・拍計算には一切影響しない**。書き出しは従来どおり `tempoSettings.bpm` を渡す
+   経路のままで、再生速度はその経路に触れていない（受入2）。
+
+### 判断メモ: タイの実時間だけ `clampBpm` では足りない
+
+`beatSpanToSeconds`（タイの秒数積算）は壊れた値対策に `clampBpm`（30〜240）を通していた。
+これは**譜面に書けるテンポ**の範囲なので、再生速度を掛けたあとの実効テンポには狭すぎる
+（♩=40 を 50% で聴くと 20 → 30 に丸められ、タイだけ元の速さで数えられてしまう）。
+`src/audio/playbackSpeed.ts` に `clampEffectiveBpm`（倍率込みの範囲＝7.5〜480）を置き、
+`beatSpanToSeconds` の2か所をこちらへ差し替えた。100% では解決済みテンポ列が必ず
+30〜240 に収まっているため、この差し替えによる既存挙動の変化は無い。
+
+### 影響範囲
+
+- `src/audio/playbackSpeed.ts`（新設）: 範囲定数・`clampPlaybackSpeedPercent` /
+  `normalizeSavedPlaybackSpeedPercent` / `applyPlaybackSpeedToBpm(s)` / `clampEffectiveBpm`
+- `src/audio/playbackSettings.ts`: `playbackSpeedPercent` の追加と正規化
+- `src/utils/tempoPlaybackUtils.ts`: `beatSpanToSeconds` の clamp を `clampEffectiveBpm` へ
+- `src/components/PlaybackControls.tsx` / `src/App.css`: 再生速度スライダー・等倍に戻すボタン、
+  テンポ欄のラベル変更と説明文
+- `src/components/ScorePage.tsx`: `playbackSpeedPercent` の保持、`handlePlay` の倍率適用（4か所）、
+  `handlePlaybackSpeedPercentChange`
+- テスト: `src/audio/playbackSpeed.test.ts`（純粋関数）、
+  `src/components/ScorePagePlaybackSpeed.test.tsx`（受入1〜4の実操作配線）
