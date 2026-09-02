@@ -47,7 +47,7 @@ export const STORAGE_LOCATION_NOTICE_DURATION_MS = 10000;
  * 例外なしの断定にすると、β機能を使った瞬間にこの表示が嘘になる。
  */
 export const HOME_STORAGE_LOCATION_NOTE =
-  '作品はこの端末にだけ保存されます（自動でサーバーへ送信されることはありません）。';
+  '🔒 作品はこの端末にだけ保存されます（自動でサーバーへ送信されることはありません）。';
 
 /**
  * フッター用の短い言い方（Issue #570）。
