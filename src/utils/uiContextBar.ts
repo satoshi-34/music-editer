@@ -54,9 +54,11 @@ export interface ContextBarInput {
 /**
  * 文脈バーに出す区画の一覧を作る。
  *
- * レイヤーの区画はピアノ譜のときだけ入れる。単旋律・弦楽四重奏・アンサンブルには
- * 「手 × 声部」のレイヤー選択が無く、無理に出すと**存在しない概念を教えてしまう**ため
- * （空欄や「なし」を出すより、区画ごと出さないほうが誤解が少ない）。
+ * レイヤーの区画は、ピアノ譜は「手 × 声部」、それ以外の譜種は「声部」だけを出す
+ * （#417 で声部レイヤーを全譜種へ広げた。パートはクリックした五線で選ぶので、
+ * バーに出しても選び直せる情報にならない）。
+ * 声部が1つしか無いあいだは区画ごと出さない。存在しない概念を教えてしまうより、
+ * 使い始めたときに増えるほうが誤解が少ない。
  */
 export function buildContextBarSegments(input: ContextBarInput): ContextBarSegment[] {
   const segments: ContextBarSegment[] = [];
@@ -65,6 +67,12 @@ export function buildContextBarSegments(input: ContextBarInput): ContextBarSegme
       key: 'layer',
       caption: 'レイヤー',
       value: pianoLayerLabel(input.activeLayerPart, input.activeVoice),
+    });
+  } else if (input.activeVoice > 0) {
+    segments.push({
+      key: 'layer',
+      caption: 'レイヤー',
+      value: `声部${input.activeVoice + 1}`,
     });
   }
   segments.push({ key: 'tab', caption: 'タブ', value: toolbarTabLabel(input.activeToolbarTab) });

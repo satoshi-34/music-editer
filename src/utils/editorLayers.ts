@@ -1,0 +1,119 @@
+// 編集レイヤーのモデル（Issue #417）。
+//
+// レイヤー = 「編集対象のパート軸」×「声部」。#316 では
+// 「手（右/左）×声部（1/2）の4枚固定」としてピアノ譜にだけ置いていたが、
+// 声部の仕組み（voices 配列・V キー・声部2編集）は譜種に依存しない。
+// ここでは譜種ごとの違い（パート軸を持つか・何本か）と、
+// 声部の本数（可変・最大4）をまとめて扱う。
+import type { MeasureData, ScoreType } from '../types/storage';
+import { pianoLayerLabel } from './editorContextLabels';
+import { getMeasureVoices } from './voiceMeasureUtils';
+
+/**
+ * 1つのパート（＝1段の五線）に置ける声部の上限（運用者裁定 2026-09-02・#417）。
+ * VexFlow の実用上の上限であり、Finale の「レイヤー4つ」とも同じ数。
+ */
+export const MAX_VOICES_PER_LAYER = 4;
+
+/**
+ * レイヤーのパート軸の本数。
+ *
+ * ピアノ譜だけが「右手・左手」という**画面に出しっぱなしのパート軸**を持つ
+ * （#316 の4レイヤー）。単旋律・四重奏・編成譜は、どのパートを編集するかを
+ * 「クリックした五線」で空間的に選ぶ従来どおりの操作なので、チップ列に出すのは
+ * 声部だけでよい（パート軸は1本として数える）。
+ * 編成譜で 8パート×4声=32枚のチップを並べない、という組み合わせ爆発回避でもある。
+ */
+export function layerPartCount(scoreType: ScoreType): number {
+  return scoreType === 'piano' ? 2 : 1;
+}
+
+/**
+ * パート軸のラベル。ピアノ譜以外は null（＝チップに手の名前を出さない）。
+ * null を返すことで、呼び出し側は「声部だけのチップ列」と分岐できる。
+ */
+export function layerPartLabel(scoreType: ScoreType, partIndex: number): string | null {
+  if (scoreType !== 'piano') return null;
+  // 「右手・声部1」から手の部分だけを取り出す（表記の正本を1か所に保つため、
+  // ここで文字列を作らず既存のラベル関数を経由する）
+  return pianoLayerLabel(partIndex, 0).split('・')[0];
+}
+
+/** チップ1枚ぶんの情報。label はボタンに出す文字列そのもの */
+export interface LayerChip {
+  partIndex: number;
+  voiceIndex: number;
+  label: string;
+}
+
+/** レイヤー1つぶんの表示名。ピアノ譜は「右手・声部2」、それ以外は「声部2」 */
+export function layerChipLabel(scoreType: ScoreType, partIndex: number, voiceIndex: number): string {
+  return scoreType === 'piano'
+    ? pianoLayerLabel(partIndex, voiceIndex)
+    : `声部${voiceIndex + 1}`;
+}
+
+/**
+ * データの中で実際に使われている声部の本数を数える。
+ *
+ * 空の末尾声部は保存・編集のたびに自動で畳まれる（#305）ので、
+ * 「譜面を開いた時点で何声あるか」はこの実データからしか分からない。
+ * 空配列（まだ何も無い譜面）でも 1 を返す。
+ */
+export function countUsedVoices(measures: MeasureData[] | undefined): number {
+  if (!measures || measures.length === 0) return 1;
+  let max = 1;
+  for (const measure of measures) {
+    const count = getMeasureVoices(measure).length;
+    if (count > max) max = count;
+  }
+  return Math.min(max, MAX_VOICES_PER_LAYER);
+}
+
+/**
+ * チップ列に出す声部の本数を決める。
+ *
+ * 「データで使われている数」と「＋で足した数（UI 側の希望値）」の多いほうを採る。
+ * 足した直後の声部はまだ音符が無く、データ上は存在しない（#305 の自動掃除）ため、
+ * 希望値を覚えておかないと押した瞬間にチップが消えてしまう。
+ */
+export function resolveVoiceSlotCount(usedInData: number, requested: number): number {
+  const count = Math.max(usedInData, requested, 1);
+  return Math.min(count, MAX_VOICES_PER_LAYER);
+}
+
+/**
+ * レイヤーチップ列を作る。voiceCounts は「パート軸の添字 → その段の声部数」。
+ * 並びは「パート0の声部1..n → パート1の声部1..n」で、#316 の4枚と同じ順序を保つ。
+ */
+export function buildLayerChips(scoreType: ScoreType, voiceCounts: number[]): LayerChip[] {
+  const chips: LayerChip[] = [];
+  for (let partIndex = 0; partIndex < layerPartCount(scoreType); partIndex += 1) {
+    const voiceCount = Math.min(
+      Math.max(voiceCounts[partIndex] ?? 1, 1),
+      MAX_VOICES_PER_LAYER,
+    );
+    for (let voiceIndex = 0; voiceIndex < voiceCount; voiceIndex += 1) {
+      chips.push({ partIndex, voiceIndex, label: layerChipLabel(scoreType, partIndex, voiceIndex) });
+    }
+  }
+  return chips;
+}
+
+/**
+ * V キーの巡回先。声部1→2→…→n→声部1 と回る（#417。従来は 1↔2 のトグル）。
+ * 声部が1本しか無いときは動かない（＝押しても何も起きないので、
+ * 呼び出し側は通知を出すかどうかをこの戻り値との比較で判断できる）。
+ */
+export function cycleVoiceIndex(current: number, voiceCount: number): number {
+  const count = Math.min(Math.max(voiceCount, 1), MAX_VOICES_PER_LAYER);
+  if (count <= 1) return 0;
+  // 現在値が範囲外（データが減って声部が畳まれた直後など）でも 0..count-1 に収める
+  const safeCurrent = current >= 0 && current < count ? current : count - 1;
+  return (safeCurrent + 1) % count;
+}
+
+/** これ以上声部を足せるか（上限 4） */
+export function canAddVoice(voiceCount: number): boolean {
+  return voiceCount < MAX_VOICES_PER_LAYER;
+}

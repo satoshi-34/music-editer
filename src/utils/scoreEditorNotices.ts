@@ -842,3 +842,20 @@ export function describeAudioEngineRestarted(destination: string): string {
 export function describeAudioStillSilent(destination: string): string {
   return `音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。${destination}`;
 }
+
+/**
+ * レイヤーチップの「＋」で声部を足したときの通知（Issue #417）。
+ * 足した声部へそのまま切り替えるので、「どこへ入力されるか」を必ず言葉にする。
+ */
+export function describeVoiceAdded(layerLabel: string): string {
+  return `${layerLabel}を追加しました。このまま入力すると新しい声部に入ります`;
+}
+
+/**
+ * 声部の上限に達していて「＋」が押せないときの理由（Issue #417・#318「行き止まりは喋る」）。
+ * 減らす専用のUIは無い（空の声部は音符を消すと自動で畳まれる）ので、
+ * その代替手順まで含めて言う。
+ */
+export function describeVoiceLimitReached(maxVoices: number): string {
+  return `声部は1つの段につき${maxVoices}つまでです。使わない声部は音符をすべて消すと自動で消えます`;
+}

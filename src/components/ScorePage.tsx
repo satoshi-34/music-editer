@@ -3,7 +3,7 @@
 // ・ツールバー（Palette）と五線（StaffCanvas / PianoStaff）をまとめる"印刷レイアウト"側
 // ─────────────────────────────────────────────────────────────
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Palette, { type Tool } from './Palette';
 import PianoStaff from './PianoStaff';
@@ -33,7 +33,18 @@ import UiVariantBadge from './UiVariantBadge';
 import { useUiVariant } from '../hooks/useUiVariant';
 // タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
 // ツールバーのタブ行と A1 文脈バーで同じ言葉を出すため、両方がこの定数を参照する。
-import { PIANO_LAYER_OPTIONS, SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
+import { SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
+import {
+  MAX_VOICES_PER_LAYER,
+  buildLayerChips,
+  canAddVoice,
+  countUsedVoices,
+  cycleVoiceIndex,
+  layerChipLabel,
+  layerPartCount,
+  layerPartLabel,
+  resolveVoiceSlotCount,
+} from '../utils/editorLayers';
 import { checkAudioOutputHealth, formatAudioHealthReport, describeAudioOutputDestination } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useDevicePixelRatio } from './useDevicePixelRatio';
@@ -215,6 +226,8 @@ import {
   describeSliceMeasureOpUnavailable,
   describeSlicePasteUnavailable,
   notifyScoreEdit,
+  describeVoiceAdded,
+  describeVoiceLimitReached,
   describePageSizeChanged,
   describeImportedClefNormalized,
   describeImportedUnsupportedDynamics,
@@ -546,13 +559,18 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // A1/A3 の文脈バーを出すか。バーは譜面背景の左上に浮くのでツールバーの高さには影響しない
   const showUiContextBar = import.meta.env.DEV && (uiVariant === 'a1' || uiVariant === 'a3');
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
-  // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
-  // 1=声部2（下声・符幹下向き）。ピアノ譜以外では使わないが、
-  // 楽譜種別を切り替えても迷わないように値自体は保持しておく。
-  const [activeVoice, setActiveVoice] = useState<0 | 1>(0);
-  // 編集レイヤーのパート側（#316・ピアノ譜のみ）。レイヤー = (activeLayerPart, activeVoice) の
-  // 4通り（右手/左手 × 声部1/2）。既定は右手（裁定③案A: 常に明示選択）
+  // 編集中の声部。0=声部1（上声・符幹上向き、従来通りの入力）、1=声部2（下声・符幹下向き）。
+  // #417 で 0|1 の2値から number（最大4声）へ広げた。譜種を切り替えても迷わないように
+  // 値自体は保持しておく（範囲外になったときの丸めは下の useEffect が行う）。
+  const [activeVoice, setActiveVoice] = useState<number>(0);
+  // 編集レイヤーのパート側（#316・ピアノ譜のみ）。レイヤー = (activeLayerPart, activeVoice)。
+  // 既定は右手（裁定③案A: 常に明示選択）
   const [activeLayerPart, setActiveLayerPart] = useState<0 | 1>(0);
+  // 「＋」で足した声部の本数（#417）。添字はレイヤーのパート軸（ピアノ譜のみ 0=右手・1=左手、
+  // それ以外の譜種はパート軸が1本なので添字0だけを使う）。
+  // 足した直後の声部はまだ音符が無く、データ上は存在しない（空の声部は #305 で自動的に畳まれる）ため、
+  // 「ユーザーが足したいと言った本数」はUI側で覚えておかないとチップが押した瞬間に消える。
+  const [requestedVoiceCounts, setRequestedVoiceCounts] = useState<number[]>([1, 1]);
   const [activeToolbarTab, setActiveToolbarTab] = useState<ToolbarTab>('notes');
   // 「音符・休符」タブで直前に選んでいたツール（音価・タイ・臨時記号など）を覚えておくための ref。
   // 他のタブ（演奏記号タブなど）へ切り替えたあと再び「音符・休符」タブへ戻ったときに、
@@ -2172,6 +2190,69 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     return parts;
   }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts]);
 
+  // ───────── 編集レイヤー（#417: 声部の一般化） ─────────
+  // レイヤーのパート軸の本数。ピアノ譜だけ「右手・左手」を出しっぱなしにする（#316）。
+  // 他の譜種はどのパートを編集するかをクリックした五線で選ぶので、チップは声部だけになる
+  const layerPartAxisCount = layerPartCount(scoreType);
+  // 各パート軸で実際に何声使われているか（データ側の実態）。
+  // ピアノ譜は右手・左手を別々に数え、それ以外は全パートの最大をそのパート軸の本数とする
+  const usedVoiceCounts = useMemo(() => {
+    const entries = getEditablePartEntries();
+    if (scoreType === 'piano') {
+      return [countUsedVoices(entries[0]?.measures), countUsedVoices(entries[1]?.measures)];
+    }
+    return [entries.reduce((max, entry) => Math.max(max, countUsedVoices(entry.measures)), 1)];
+  }, [getEditablePartEntries, scoreType]);
+  // チップに出す声部の本数 = データの実態と「＋」で足した希望値の多いほう
+  const voiceSlotCounts = useMemo(
+    () => usedVoiceCounts.map((used, i) => resolveVoiceSlotCount(used, requestedVoiceCounts[i] ?? 1)),
+    [usedVoiceCounts, requestedVoiceCounts],
+  );
+  // いま編集しているレイヤーの段が持つ声部数（V キーの巡回・「＋」の可否判定に使う）
+  const activeLayerVoiceCount = voiceSlotCounts[layerPartAxisCount === 1 ? 0 : activeLayerPart] ?? 1;
+  const layerChips = useMemo(
+    () => buildLayerChips(scoreType, voiceSlotCounts),
+    [scoreType, voiceSlotCounts],
+  );
+
+  // 声部数が減った（譜面を開き直した・音符を消して空の声部が畳まれた）ときに、
+  // もう存在しない声部を選んだままにしない。放っておくと「入力しても画面に出ない声部」に
+  // 音符が入り続ける無言の行き止まりになる（#318）
+  useEffect(() => {
+    setActiveVoice(prev => (prev < activeLayerVoiceCount ? prev : Math.max(0, activeLayerVoiceCount - 1)));
+  }, [activeLayerVoiceCount]);
+
+  // V キーのハンドラは登録しっぱなしの window イベントなので、
+  // 巡回に必要な最新値（声部数）を ref 経由で読む（依存配列に足すと毎回貼り替えになる）
+  const activeLayerVoiceCountRef = useRef(activeLayerVoiceCount);
+  activeLayerVoiceCountRef.current = activeLayerVoiceCount;
+
+  /**
+   * レイヤーチップの「＋」で声部を1つ足す（#417）。
+   * 減らす専用のUIは作らない（空の声部は音符を消すと自動で畳まれる・#305）。
+   * 足したらその声部へ切り替えるところまでやる（足しただけで入力先が変わらないと、
+   * 「押したのに何も起きない」ように見えるため）。
+   */
+  const handleAddVoice = useCallback((partAxisIndex: number) => {
+    const current = voiceSlotCounts[partAxisIndex] ?? 1;
+    if (!canAddVoice(current)) {
+      notifyScoreEdit(describeVoiceLimitReached(MAX_VOICES_PER_LAYER));
+      return;
+    }
+    const nextVoiceIndex = current;
+    setRequestedVoiceCounts(prev => {
+      const next = [...prev];
+      next[partAxisIndex] = current + 1;
+      return next;
+    });
+    // 前のレイヤーの音符・弧・松葉が選択のまま残ると、そのあとの Delete / 矢印キーが
+    // 別レイヤーへ届いてしまう（チップのクリックと同じ規則・Issue #238 の型）
+    requestScoreSelectionClear();
+    if (scoreType === 'piano') setActiveLayerPart(partAxisIndex as 0 | 1);
+    setActiveVoice(nextVoiceIndex);
+    notifyScoreEdit(describeVoiceAdded(layerChipLabel(scoreType, partAxisIndex, nextVoiceIndex)));
+  }, [voiceSlotCounts, scoreType]);
+
   // 選択中の小節範囲を半音単位で移調する。
   // Cmd+C/V のコピペと同じく「選択範囲 × 全パート」を対象にする
   // （小節選択の意味を「その小節位置にある全パートのデータ」として扱う既存の挙動に合わせる）。
@@ -3464,14 +3545,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         });
         e.preventDefault();
       }
-      // V キー: ピアノ譜の声部切り替え（声部1↔声部2）。
+      // V キー: 声部の切り替え。#417 で「声部1↔声部2」のトグルから
+      // 「声部1→2→…→n→声部1」の巡回へ変えた（声部が3つ以上あっても一巡できる）。
       // ショートカット一発で切り替えられるようにしておくと、
-      // 右手のメロディと下声を交互に入力するときにマウスへ戻らずに済む。
+      // メロディと下声を交互に入力するときにマウスへ戻らずに済む。
       if (e.key === 'v' || e.key === 'V') {
         // 声部を変えたら譜面の選択も手放す（レイヤーボタンと同じ規則・Issue #238 の型）。
         // 前の声部の音符が選択のまま残ると、Delete / 矢印キーが切替前の声部へ届いてしまう
         requestScoreSelectionClear();
-        setActiveVoice(prev => (prev === 0 ? 1 : 0));
+        setActiveVoice(prev => cycleVoiceIndex(prev, activeLayerVoiceCountRef.current));
         e.preventDefault();
       }
       // . キー: 付点のON/OFFを切り替える（音価が選択されているときのみ有効）
@@ -5948,29 +6030,58 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
               （#316 の仕様）、タブを往復しないと左手に記号を付けられなかった。
               レイヤーはタブ非依存の状態なので、同じくタブ非依存の Undo/Redo の隣へ常設する
               （実機所感 2026-08-25）。音符クリックでの自動切替+通知（#258）は従来どおり */}
-          {scoreType === 'piano' && (
-            <div className="toolbar-chip-group toolbar-layer-chips" role="group" aria-label="編集レイヤー切り替え">
-              <span className="toolbar-group-label">レイヤー</span>
-              {PIANO_LAYER_OPTIONS.map(({ partIndex: partIdx, voiceIndex: voiceIdx, label }) => (
-                <button
-                  key={label}
-                  type="button"
-                  className={`ghost toolbar-chip-button${activeLayerPart === partIdx && activeVoice === voiceIdx ? ' active' : ''}`}
-                  onClick={() => {
-                    // レイヤーを変えたら譜面の選択も手放す（Issue #238 の型）。
-                    // 前のレイヤーの音符・弧・松葉が選択のまま残ると、
-                    // そのあとの Delete / 矢印キーが別レイヤーへ届いてしまう
-                    requestScoreSelectionClear();
-                    setActiveLayerPart(partIdx);
-                    setActiveVoice(voiceIdx);
-                  }}
-                  title={`${label}を編集レイヤーにする（V で同じ手の声部だけ切替）`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* #417: 「手×声部の4枚固定・ピアノ譜だけ」から、譜種に依らないレイヤー列へ一般化した。
+              ピアノ譜は手ごとにチップ列＋「＋」を並べ（どちらの手へ足すかは押す場所で選ぶ）、
+              それ以外の譜種はパートを五線のクリックで選ぶ従来どおりの操作なので声部チップだけを出す */}
+          <div className="toolbar-chip-group toolbar-layer-chips" role="group" aria-label="編集レイヤー切り替え">
+            <span className="toolbar-group-label">レイヤー</span>
+            {Array.from({ length: layerPartAxisCount }, (_unused, partIdx) => {
+              const partVoiceCount = voiceSlotCounts[partIdx] ?? 1;
+              const partName = layerPartLabel(scoreType, partIdx);
+              return (
+                <Fragment key={`layer-part-${partIdx}`}>
+                  {layerChips.filter(chip => chip.partIndex === partIdx).map(chip => {
+                    const isActive = (layerPartAxisCount === 1 || activeLayerPart === chip.partIndex)
+                      && activeVoice === chip.voiceIndex;
+                    return (
+                      <button
+                        key={chip.label}
+                        type="button"
+                        className={`ghost toolbar-chip-button${isActive ? ' active' : ''}`}
+                        // 「いまどのレイヤーか」を見た目（.active）だけでなく状態としても持たせる（#404 の趣旨）。
+                        // 支援技術やテストからも現在のレイヤーが一意に読める
+                        aria-current={isActive ? 'true' : undefined}
+                        onClick={() => {
+                          // レイヤーを変えたら譜面の選択も手放す（Issue #238 の型）。
+                          // 前のレイヤーの音符・弧・松葉が選択のまま残ると、
+                          // そのあとの Delete / 矢印キーが別レイヤーへ届いてしまう
+                          requestScoreSelectionClear();
+                          if (scoreType === 'piano') setActiveLayerPart(chip.partIndex as 0 | 1);
+                          setActiveVoice(chip.voiceIndex);
+                        }}
+                        title={`${chip.label}を編集レイヤーにする（V で${partName ? '同じ手の' : ''}声部を順に切替）`}
+                      >
+                        {chip.label}
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    className="ghost toolbar-chip-button toolbar-add-voice-button"
+                    onClick={() => handleAddVoice(partIdx)}
+                    disabled={!canAddVoice(partVoiceCount)}
+                    // 押せないときは理由まで言う（#318「行き止まりは喋る」）
+                    title={canAddVoice(partVoiceCount)
+                      ? `${partName ? `${partName}に` : ''}声部${partVoiceCount + 1}を追加する`
+                      : describeVoiceLimitReached(MAX_VOICES_PER_LAYER)}
+                    aria-label={`${partName ? `${partName}に` : ''}声部を追加`}
+                  >
+                    ＋
+                  </button>
+                </Fragment>
+              );
+            })}
+          </div>
         </div>
 
         <div className="toolbar-panel" id="toolbar-panel">
@@ -7413,6 +7524,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       timeSignature={scoreTimeSignature}
                       timeSignatureStyle={effectiveTimeSignatureStyle}
                       notationMode={notationMode}
+                      activeVoiceIndex={activeVoice}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
@@ -7447,6 +7559,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       keySignature={keySignature}
                       timeSignature={scoreTimeSignature}
                       timeSignatureStyle={effectiveTimeSignatureStyle}
+                      activeVoiceIndex={activeVoice}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
@@ -7529,6 +7642,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       timeSignature={scoreTimeSignature}
                       timeSignatureStyle={effectiveTimeSignatureStyle}
                       onKeySignatureChange={handleKeySignatureChange}
+                      activeVoiceIndex={activeVoice}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}
@@ -7627,6 +7741,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       onMeasureSelect={handleMeasureSelect}
                       onMeasureRangeSelect={handleMeasureRangeSelect}
                       onBeatRangeSelect={handleBeatRangeSelect}
+                      activeVoiceIndex={activeVoice}
                       customSymbolDefs={customSymbolDefs}
                       symbolsClickable={activeToolbarTab === 'symbols'}
                       isPrintPreview={isPrintPreview}

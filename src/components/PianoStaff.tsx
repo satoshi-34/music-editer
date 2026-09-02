@@ -42,7 +42,8 @@ type Props = {
   onBeatRangeSelect?: (sel: { startMeasure: number; startBeat: number; endMeasure: number; endBeat: number }) => void;
   customSymbolDefs?: CustomSymbolDef[];
   // 声部切り替えトグル（0=声部1・上声、1=声部2・下声）。省略時は従来通り声部1のみ。
-  activeVoiceIndex?: 0 | 1;
+  // #417 で 0|1 から number（最大4声）へ広げた
+  activeVoiceIndex?: number;
   /** 編集レイヤーのパート側（#316）。0=右手・1=左手。省略時は従来の帯域推測 */
   activeLayerPartIndex?: number;
   /** UI案A2（#405 段3）のとき true。譜面側で編集中のレイヤーを示す（PianoSystemCanvas 側のコメント参照） */
