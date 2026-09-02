@@ -6307,6 +6307,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   title={`ページの左右余白です。本文幅（小節を並べる幅）もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
                 >
                   余白(左右)
+                  {/* このタブのスライダー・数値入力には aria-label を明示する（Issue #563）。
+                      <label> で囲んでいるので名前が付いていないわけではないが、その場合の
+                      アクセシブルな名前は「ラベル文字＋現在値」（例: 「余白(左右)14mm」）になり、
+                      値が変わるたびに名前まで変わってしまう。スクリーンリーダーは値を別に読むので、
+                      名前は固定のラベルだけにしておく方が分かりやすい。 */}
                   <input
                     type="range"
                     min={PAGE_MARGIN_SIDE_MIN_MM}
@@ -6321,6 +6326,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="余白(左右)"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginSideMm}mm</span>
                 </label>
@@ -6343,6 +6349,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="余白(上)"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginTopMm}mm</span>
                 </label>
@@ -6365,6 +6372,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="余白(下)"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginBottomMm}mm</span>
                 </label>
@@ -6393,6 +6401,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 90 }}
+                    aria-label="音符の大きさ"
                   />
                   {/* 現在値（%）。既定は楽譜種別により異なる（単旋律・ピアノ=150%、弦楽四重奏・編成譜=100%。Issue #49） */}
                   <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
@@ -6440,6 +6449,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 90 }}
+                    aria-label="小節幅の均等さ"
                   />
                   {/* 現在値（%）。スライダーだけだと今いくつか分からないため小さく添える */}
                   <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(measureWidthEvenness * 100)}%</span>
@@ -6463,6 +6473,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="段の間隔"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{systemRowGapPx}px</span>
                 </label>
@@ -6485,6 +6496,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="パート間隔"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{partSpacingOffsetPx}px</span>
                 </label>
@@ -6514,6 +6526,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                         }
                       }}
                       style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
+                      aria-label="段あたり小節数"
                     />
                   </label>
                   <label
@@ -6537,6 +6550,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                         }
                       }}
                       style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
+                      aria-label="段数/ページ"
                     />
                     {isSystemsPerPageOverflowing && (
                       <span
@@ -6573,6 +6587,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="タイトル余白(上)"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{titleMarginTopMm}mm</span>
                 </label>
@@ -6595,6 +6610,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="タイトル余白(下)"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{titleMarginBottomMm}mm</span>
                 </label>
