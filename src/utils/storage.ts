@@ -352,7 +352,10 @@ export function validateCustomSymbolDef(def: any): def is CustomSymbolDef {
     def.name.length <= MAX_SYMBOL_NAME_LENGTH &&
     Array.isArray(def.shapes) &&
     def.shapes.length <= MAX_SHAPES_PER_SYMBOL &&
-    def.shapes.every(validateShapePrimitive)
+    def.shapes.every(validateShapePrimitive) &&
+    // 手ぶれ補正フラグ。省略可（この機能より前に保存されたデータには存在しない）だが、
+    // 値があるなら真偽値でなければならない
+    (def.smoothing === undefined || typeof def.smoothing === 'boolean')
   );
 }
 

@@ -86,6 +86,13 @@ export interface CustomSymbolDef {
   id: string;
   name: string;
   shapes: ShapePrimitive[];
+  /**
+   * フリーハンド線（path）へ手ぶれ補正（平滑化）をかけて表示するか。
+   * 省略時は false（補正なし）＝この機能より前に保存された記号は従来どおりの見た目になる。
+   * 補正は描画のたびに元の points から計算するだけなので、元のストロークは常に保持され、
+   * オフに戻せば描いたままの線に戻る（「震え自体が意図」の記号のための逃げ道）。
+   */
+  smoothing?: boolean;
 }
 
 /** 強弱記号。NoteEvent にぶら下げて「この音符から効き始める記号」を表す */

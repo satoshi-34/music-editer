@@ -2518,6 +2518,111 @@ describe('Storage Foundation Tests', () => {
       expect(result.success).toBe(false);
     });
 
+    it('手ぶれ補正フラグ（smoothing）込みで保存して読み戻せる', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Smoothing Flag',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_smooth_on',
+            name: '補正オン',
+            shapes: [{ kind: 'path', points: [{ x: 0, y: 0 }, { x: 3, y: -3 }, { x: 6, y: 0 }] }],
+            smoothing: true
+          },
+          {
+            id: 'sym_smooth_off',
+            name: '補正オフ',
+            shapes: [{ kind: 'path', points: [{ x: 0, y: 0 }, { x: 3, y: -3 }, { x: 6, y: 0 }] }],
+            smoothing: false
+          }
+        ]
+      );
+
+      expect(saveScoreData(data).success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.customSymbolDefs?.[0].smoothing).toBe(true);
+      expect(loadResult.data?.customSymbolDefs?.[1].smoothing).toBe(false);
+    });
+
+    it('smoothing を持たない記号定義も従来どおり読み込める（後方互換）', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'No Smoothing Field',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_legacy',
+            name: '旧データ',
+            shapes: [{ kind: 'path', points: [{ x: 0, y: 0 }, { x: 3, y: -3 }, { x: 6, y: 0 }] }]
+          }
+        ]
+      );
+
+      expect(saveScoreData(data).success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.customSymbolDefs?.[0].smoothing).toBeUndefined();
+    });
+
+    it('smoothing が真偽値でない customSymbolDefs は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Bad Smoothing',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_bad_smoothing',
+            name: '不正フラグ',
+            shapes: [{ kind: 'path', points: [{ x: 0, y: 0 }, { x: 3, y: -3 }] }],
+            // 真偽値でない値が外部ファイルから流れ込むケース（any を使わずに型を偽装する）
+            smoothing: 'yes' as unknown as boolean
+          }
+        ]
+      );
+
+      expect(saveScoreData(data).success).toBe(false);
+    });
+
     it('customSymbols に不正な形式を持つ音符イベントは保存を拒否する', () => {
       const data = createSavedScoreData(
         {

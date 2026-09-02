@@ -7061,6 +7061,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 描画をスキップするため、宙ぶらりん参照が残っても安全（設計判断）。
             setCustomSymbolDefs(prev => prev.filter(d => d.id !== symbolId));
           }}
+          onToggleSmoothing={(symbolId, smoothing) => {
+            // 手ぶれ補正は表示のたびに元のストロークから計算するだけなので、
+            // フラグを差し替えるだけで元の線に戻せる（描いたデータは失われない）。
+            setCustomSymbolDefs(prev => prev.map(d => (d.id === symbolId ? { ...d, smoothing } : d)));
+          }}
           onClose={() => setShowSymbolEditor(false)}
         />
       )}
