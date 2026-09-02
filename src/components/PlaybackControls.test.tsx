@@ -370,6 +370,28 @@ describe('PlaybackControls', () => {
     });
   });
 
+  describe('SoundFontパック名の説明文（Issue #551）', () => {
+    it('音色詳細を開くと MusyngKite 推奨の一言が説明文に出る', () => {
+      render(<PlaybackControls {...defaultProps} />);
+
+      // 説明文は「音色詳細」の中にあるので、まず開いてから確認する
+      fireEvent.click(screen.getByRole('button', { name: '音色詳細を開く' }));
+
+      // 説明文は3文が1つの div に入っているため、要素の全文で部分一致を見る。
+      // 親要素も同じ文字列を含んでしまうので、子要素を持たない末端の div だけに絞る。
+      expect(screen.getByText((_content, element) => {
+        if (!element || element.tagName !== 'DIV' || element.children.length > 0) {
+          return false;
+        }
+        const text = element.textContent ?? '';
+        return text.includes('ピアノの長い音') && text.includes('迷ったら `MusyngKite` を推奨します。');
+      })).toBeInTheDocument();
+
+      // 説明文の追記だけで、パック名の入力欄（UI 構造）は増減していない
+      expect(screen.getAllByLabelText('SoundFontパック名')).toHaveLength(1);
+    });
+  });
+
   describe('再生位置表示', () => {
     it('現在の再生位置が正しく表示される', () => {
       const position = { measureIndex: 2, beatPosition: 1.5, noteIndex: 3 };
