@@ -1,3 +1,8 @@
+import {
+  DEFAULT_PLAYBACK_SPEED_PERCENT,
+  normalizeSavedPlaybackSpeedPercent,
+} from './playbackSpeed';
+
 /**
  * 再生時の音源方式。
  * built-in は軽量な内蔵音源、
@@ -46,15 +51,28 @@ export interface PlaybackSoundRuntimeSettings {
    * 既定は false（ストレート再生）で、既存ユーザーの再生結果を変えないようにする。
    */
   swingEnabled: boolean;
+  /**
+   * 再生速度（%）。100 が「譜面に書かれたテンポそのまま」で、
+   * 50 なら半分の速さ、200 なら2倍の速さで聴ける（Issue #544）。
+   *
+   * テンポ（♩=N）は作品の属性として作品ごとに保存されるが、
+   * こちらは**聴き方**の設定なのでアプリ全体で1つだけ持つ（作品には保存しない）。
+   */
+  playbackSpeedPercent: number;
 }
 
 export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettings = {
   // ユーザー環境では内蔵音源の準備コストが高いことがあるため、
-  // 初回はそのまま試しやすい SoundFont / FluidR3_GM を既定にする。
+  // 初回はそのまま試しやすい SoundFont を既定にする。
+  // パック名を MusyngKite にしているのは、ピアノの長い音（全音符など）の持続が
+  // FluidR3_GM より明確に良いため（運用者検聴 2026-09-01・Issue #551）。
+  // ここは「保存データがまだ無い新規環境」にだけ効く値で、
+  // すでに保存済みの設定（FluidR3_GM を選んでいる既存ユーザー）は書き換えない。
   engineMode: 'soundfont',
-  pluginName: 'FluidR3_GM',
+  pluginName: 'MusyngKite',
   previewAccidentalOnApply: true,
   swingEnabled: false,
+  playbackSpeedPercent: DEFAULT_PLAYBACK_SPEED_PERCENT,
   profile: {
     brightness: 0.5,
     attack: 0.5,
@@ -122,6 +140,9 @@ export function sanitizePlaybackRuntimeSettings(raw: unknown): PlaybackSoundRunt
     swingEnabled: typeof raw.swingEnabled === 'boolean'
       ? raw.swingEnabled
       : DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.swingEnabled,
+    // 再生速度は 0 や文字列が入ると再生が進まなくなる（60 / 0 = Infinity）ため、
+    // 専用の正規化関数で必ず 25〜200% の数値へ寄せてから使う
+    playbackSpeedPercent: normalizeSavedPlaybackSpeedPercent(raw.playbackSpeedPercent),
     profile: {
       brightness: clampProfileValue(profile.brightness, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.brightness),
       attack: clampProfileValue(profile.attack, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.attack),

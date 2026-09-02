@@ -1,12 +1,14 @@
 // src/components/HomeScreen.tsx
-// ホーム画面（Issue #500、レイアウトは Issue #512 で Office 系ランチャー風に再構成）。
-// 「前回の続き」「新規作成ギャラリー」「最近使ったファイル」「開く」「設定」を1枚にまとめた玄関。
+// ホーム画面（Issue #500、レイアウトは #512 → #528 で「新規＋最近使ったファイル」中心へ再構成）。
+// 中央は「新しく作る（譜種カード＋ファイルを開く）」と「最近使ったファイル」の2つのカードグリッドで、
+// 「開く（種類別）」「設定」は左レールのフライアウトから辿る（中央には置かない）。
 // 設計の正本: .claude/specs/home-screen/design.md
 //
 // この画面は表示専用（プレゼンテーショナル）にしてある。実際の処理（作品の切替・
 // ファイルを開く・設定タブを開く）はすべて譜面画面（ScorePage）側の既存処理を
 // 呼び出す形にして、同じ機能を2か所へ書かないようにしている。
 
+import { useRef, useState } from 'react';
 import type { ScoreType, WorkSummary } from '../types/storage';
 import { SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
 import { formatWorkTitle, formatWorkUpdatedAt } from '../utils/workDisplay';
@@ -45,10 +47,9 @@ const SETTINGS_TABS: ReadonlyArray<{ tab: ToolbarTab; description: string }> = [
  * ・実行中（busy）でも移動そのものは無害で、ボタンの一括無効化の対象にしないため
  */
 const RAIL_LINKS: ReadonlyArray<{ href: string; label: string; icon: string }> = [
-  { href: '#home-resume-heading', label: 'ホーム', icon: '⌂' },
+  { href: '#home-top', label: 'ホーム', icon: '⌂' },
   { href: '#home-new-heading', label: '新規', icon: '✚' },
-  { href: '#home-open-heading', label: '開く', icon: '📂' },
-  { href: '#home-settings-heading', label: '設定', icon: '⚙' },
+  { href: '#home-recent-heading', label: '最近', icon: '🕘' },
 ];
 
 /**
@@ -113,22 +114,30 @@ function ScoreTypeThumbnail({ type }: { type: ScoreType }) {
   );
 }
 
-/** 「前回の続き」に出す作品の情報（無ければ null） */
-export interface HomeResumeInfo {
-  workId: string;
-  title: string;
-  updatedAt: number;
+/**
+ * 「ファイルを開く」カードのサムネイル（Issue #528）。譜種カードと同じ枠・同じ比率で
+ * 並べたいので、画像ファイルを増やさずに静的 SVG（開いたフォルダ＋上向きの矢印）で描く。
+ */
+function OpenFileThumbnail() {
+  return (
+    <svg className="home-card-thumb" viewBox="0 0 120 76" role="presentation" aria-hidden="true" focusable="false">
+      <rect x="0.5" y="0.5" width="119" height="75" rx="3" fill="#ffffff" stroke="#dee2e6" />
+      <path d="M28 24h16l5 6h43v28H28z" fill="#f1f3f5" stroke="#868e96" strokeWidth="1.4" strokeLinejoin="round" />
+      {/* 「読み込む」向きが一目で分かるよう、フォルダの中へ入る矢印を重ねる */}
+      <path d="M60 32v14m0 0-6-6m6 6 6-6" fill="none" stroke="#1c7c4a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 export interface HomeScreenProps {
   /** 表示するアプリのバージョン（`v` は付けない生の値。例: `3.6.0`） */
   appVersion: string;
-  /** 前回開いていた作品（自動保存済みの作業）。まだ何も無ければ null */
-  resume: HomeResumeInfo | null;
-  /** 保存されている作品の一覧（更新の新しい順で渡される想定） */
+  /**
+   * 保存されている作品の一覧。**先頭は前回開いていた作品**、残りは更新の新しい順で
+   * 渡される想定（並べ替えは App.readHomeSnapshot が行う）。
+   * 先頭が、以前あった「前回の続き」の役目を兼ねる（Issue #528 round1 P1）
+   */
   works: WorkSummary[];
-  /** 「前回の続き」を開く（＝譜面画面へ戻るだけ。読み込みは起動時に済んでいる） */
-  onResume: () => void;
   /** 一覧から作品を選んで開く */
   onSelectWork: (workId: string) => void;
   /** 譜種を選んで新規作成する */
@@ -157,9 +166,7 @@ export interface HomeScreenProps {
 
 export default function HomeScreen({
   appVersion,
-  resume,
   works,
-  onResume,
   onSelectWork,
   onCreateNew,
   onOpen,
@@ -169,13 +176,34 @@ export default function HomeScreen({
   busy = false,
 }: HomeScreenProps) {
   const openButtons = OPEN_BUTTONS.filter(button => availableOpenKinds.includes(button.kind));
+  // レールのフライアウト（開く/設定）。中央からセクションを撤去したぶんの受け皿で、
+  // 一度にどちらか1つだけ開く（運用者QA 2026-09-02）
+  const [railFlyout, setRailFlyout] = useState<'open' | 'settings' | null>(null);
+  const openToggleRef = useRef<HTMLButtonElement>(null);
+  const settingsToggleRef = useRef<HTMLButtonElement>(null);
+  /**
+   * フライアウトを閉じてトグルへフォーカスを戻す（round1 P2）。
+   * 実行ボタン自身が DOM から消えるため、戻さないとフォーカスが body へ落ちて
+   * キーボード利用者が操作位置を見失う（失敗してホームに留まる経路で顕著）
+   */
+  const closeRailFlyout = (which: 'open' | 'settings') => {
+    setRailFlyout(null);
+    (which === 'open' ? openToggleRef : settingsToggleRef).current?.focus();
+  };
 
   return (
     <div className="home-screen" role="main" aria-label="ホーム" aria-busy={busy} data-testid="home-screen">
       <div className="home-shell">
         {/* 左レール（Issue #512）。Office 系の起動画面と同じく、画面の骨格を左に置く。
             狭い画面では上部の横並びに変わる（CSS 側で切り替え） */}
-        <aside className="home-rail">
+        <aside
+          className="home-rail"
+          onKeyDown={(e) => {
+            // トグルにフォーカスが残ったままの Escape でも閉じられるように、
+            // フライアウトとトグルの**共通祖先（レール全体）**で受ける（#561 round2 P2）
+            if (e.key === 'Escape' && railFlyout) closeRailFlyout(railFlyout);
+          }}
+        >
           <span className="home-rail-mark" aria-hidden="true">♪</span>
           <nav className="home-rail-nav" aria-label="ホーム内の移動">
             {RAIL_LINKS.map(link => (
@@ -184,11 +212,85 @@ export default function HomeScreen({
                 <span>{link.label}</span>
               </a>
             ))}
+            {/* 「開く（種類別）」「設定」は中央から撤去し、レールのフライアウトへ（運用者QA 2026-09-02:
+                「ファイルを開くが重複・設定が中央にある」。中央のカードは既定の .score.json を開く
+                1枚だけ残し、種類別と設定はここから1クリックで出す） */}
+            <button
+              type="button"
+              className={`home-rail-link home-rail-button${railFlyout === 'open' ? ' is-active' : ''}`}
+              aria-expanded={railFlyout === 'open'}
+              aria-controls="home-rail-flyout-open"
+              data-testid="home-rail-open"
+              ref={openToggleRef}
+              onClick={() => setRailFlyout(prev => (prev === 'open' ? null : 'open'))}
+            >
+              <span className="home-rail-icon" aria-hidden="true">📂</span>
+              <span>開く</span>
+            </button>
+            <button
+              type="button"
+              className={`home-rail-link home-rail-button${railFlyout === 'settings' ? ' is-active' : ''}`}
+              aria-expanded={railFlyout === 'settings'}
+              aria-controls="home-rail-flyout-settings"
+              data-testid="home-rail-settings"
+              ref={settingsToggleRef}
+              onClick={() => setRailFlyout(prev => (prev === 'settings' ? null : 'settings'))}
+            >
+              <span className="home-rail-icon" aria-hidden="true">⚙</span>
+              <span>設定</span>
+            </button>
           </nav>
+          {railFlyout === 'open' && (
+            <div
+              id="home-rail-flyout-open"
+              className="home-rail-flyout"
+              role="group"
+              aria-label="ファイルを開く"
+            >
+              {openButtons.map(button => (
+                <button
+                  key={button.kind}
+                  type="button"
+                  disabled={busy}
+                  className="home-secondary-button"
+                  onClick={() => { closeRailFlyout('open'); onOpen(button.kind); }}
+                  title={button.description}
+                  data-testid={`home-open-${button.kind}`}
+                >
+                  {button.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {railFlyout === 'settings' && (
+            <div
+              id="home-rail-flyout-settings"
+              className="home-rail-flyout"
+              role="group"
+              aria-label="設定"
+            >
+              {SETTINGS_TABS.map(entry => {
+                const label = TOOLBAR_TAB_BUTTONS.find(tab => tab.id === entry.tab)?.label ?? entry.tab;
+                return (
+                  <button
+                    key={entry.tab}
+                    type="button"
+                    disabled={busy}
+                    className="home-secondary-button"
+                    onClick={() => { closeRailFlyout('settings'); onOpenSettings(entry.tab); }}
+                    title={entry.description}
+                    data-testid={`home-settings-${entry.tab}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </aside>
 
         <div className="home-main">
-          <header className="home-header">
+          <header className="home-header" id="home-top">
             <h1 className="home-title">楽譜エディタ</h1>
             {/* 将来ログイン／アカウントのボタンを置く枠（Issue #500）。
                 いまは何も置かない（お試しの障壁を上げないため、ログインは作らない方針）。
@@ -203,37 +305,9 @@ export default function HomeScreen({
             </p>
           )}
 
-          {/* 1. 前回の続き。起動直後に最短で編集へ戻れるよう最上段へ置く */}
-          <section className="home-section home-resume-section" aria-labelledby="home-resume-heading">
-            <h2 id="home-resume-heading" className="home-section-title">前回の続き</h2>
-            {resume ? (
-              <>
-                <button
-                  type="button"
-                  disabled={busy}
-                  className="home-primary-button"
-                  onClick={onResume}
-                  data-testid="home-resume"
-                >
-                  <span className="home-primary-button-label">前回の続きを開く</span>
-                  <span className="home-primary-button-sub">
-                    {formatWorkTitle(resume.title)}
-                    <span className="home-updated-at">（最終更新 {formatWorkUpdatedAt(resume.updatedAt)}）</span>
-                  </span>
-                </button>
-                {/* 「勝手に消えていないか」という不安に先回りして、保存の状態を明示する
-                    （#318「行き止まりは喋る」と同じ趣旨で、黙って済ませない） */}
-                <p className="home-note">編集内容はこの端末のブラウザへ自動保存されています。</p>
-              </>
-            ) : (
-              <p className="home-note" data-testid="home-resume-empty">
-                まだ保存された作業がありません。下の「新しく作る」から譜面の種類を選んで始めてください。
-              </p>
-            )}
-          </section>
-
-          {/* 2. 新規作成のギャラリー（Issue #512）。Office の「空白のブック＋テンプレート」と
-              同じく、サムネイル付きのカードを横並びにして「まず何を選ぶ画面か」を絵で示す */}
+          {/* 1. 新しく作る（Issue #528）。譜種カード4種の右に「ファイルを開く」カードを1枚並べ、
+              「作る」と「開く」という起動直後にやりたいことを1行で選べるようにする。
+              グリッドは画面幅いっぱいに広がるので、広い画面でも中央に余白が残らない */}
           <section className="home-section" aria-labelledby="home-new-heading">
             <h2 id="home-new-heading" className="home-section-title">新しく作る</h2>
             <div className="home-card-grid">
@@ -252,86 +326,59 @@ export default function HomeScreen({
                   <span className="home-card-description">{type.description}</span>
                 </button>
               ))}
-            </div>
-          </section>
-
-          {/* 3. 最近使ったファイル（Issue #512）。Office の「最近使ったアイテム」と同じ行形式で、
-              作品名と最終更新日時を1行ずつ並べる。選ぶとその作品を開く（切替は譜面画面側の既存処理） */}
-          <section className="home-section" aria-labelledby="home-works-heading">
-            <h2 id="home-works-heading" className="home-section-title">最近使ったファイル</h2>
-            {works.length > 0 ? (
-              <>
-                {/* 行の意味を示す見出し（Office の一覧と同じく「名前」「更新日時」）。
-                    行そのものはボタンなので、この行は装飾として支援技術から隠す */}
-                <div className="home-work-head" aria-hidden="true">
-                  <span>名前</span>
-                  <span>更新日時</span>
-                </div>
-                <ul className="home-work-list">
-                  {works.map(work => (
-                    <li key={work.id}>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        className="home-work-button"
-                        onClick={() => onSelectWork(work.id)}
-                        data-testid={`home-work-${work.id}`}
-                      >
-                        <span className="home-work-icon" aria-hidden="true">♬</span>
-                        <span className="home-work-title">{formatWorkTitle(work.title)}</span>
-                        <span className="home-updated-at">{formatWorkUpdatedAt(work.updatedAt)}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ) : (
-              <p className="home-note">保存された作品はまだありません。</p>
-            )}
-          </section>
-
-          {/* 4. ファイルから開く。譜面画面のファイルタブと同じ導線をそのまま呼ぶ */}
-          <section className="home-section" aria-labelledby="home-open-heading">
-            <h2 id="home-open-heading" className="home-section-title">ファイルを開く</h2>
-            <div className="home-button-row">
-              {openButtons.map(button => (
+              {/* 「開く」は使用頻度が高いので中央にも置く（Issue #528・運用者の指示）。
+                  レールのフライアウト（種類別）と役割分担し、こちらは既定の .score.json を開く
+                  （下段が使えない＝ファイル導線がひとつも無いときは、このカードも出さない） */}
+              {openButtons.length > 0 && (
                 <button
-                  key={button.kind}
                   type="button"
                   disabled={busy}
-                  className="home-secondary-button"
-                  onClick={() => onOpen(button.kind)}
-                  title={button.description}
-                  data-testid={`home-open-${button.kind}`}
+                  className="home-card-button"
+                  onClick={() => onOpen(openButtons[0].kind)}
+                  title={openButtons[0].description}
+                  data-testid="home-new-open"
                 >
-                  {button.label}
+                  <OpenFileThumbnail />
+                  <span className="home-card-label">ファイルを開く</span>
+                  <span className="home-card-description">保存済みの譜面ファイルを開きます</span>
                 </button>
-              ))}
+              )}
             </div>
           </section>
 
-          {/* 5. 設定。譜面画面のタブを開くだけなので、設定そのものは二重に持たない */}
-          <section className="home-section" aria-labelledby="home-settings-heading">
-            <h2 id="home-settings-heading" className="home-section-title">設定</h2>
-            <div className="home-button-row">
-              {SETTINGS_TABS.map(entry => {
-                const label = TOOLBAR_TAB_BUTTONS.find(tab => tab.id === entry.tab)?.label ?? entry.tab;
-                return (
-                  <button
-                    key={entry.tab}
-                    type="button"
-                    disabled={busy}
-                    className="home-secondary-button"
-                    onClick={() => onOpenSettings(entry.tab)}
-                    title={entry.description}
-                    data-testid={`home-settings-${entry.tab}`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
+          {/* 2. 最近使ったファイル（Issue #528）。以前あった「前回の続き」の緑のバナーは廃止し、
+              この一覧の先頭（＝いちばん新しく触った作品）が同じ役割を果たす。
+              カードグリッドにしてあるので、作品が増えても横方向へ流れて画面を使い切る */}
+          <section className="home-section" aria-labelledby="home-recent-heading">
+            <h2 id="home-recent-heading" className="home-section-title">最近使ったファイル</h2>
+            {works.length > 0 ? (
+              <ul className="home-work-list">
+                {works.map(work => (
+                  <li key={work.id}>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className="home-work-button"
+                      onClick={() => onSelectWork(work.id)}
+                      data-testid={`home-work-${work.id}`}
+                    >
+                      <span className="home-work-icon" aria-hidden="true">♬</span>
+                      <span className="home-work-title">{formatWorkTitle(work.title)}</span>
+                      <span className="home-updated-at">{formatWorkUpdatedAt(work.updatedAt)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              /* 作品がまだ無いときは黙って空にせず、次にやることを言葉で示す（#318 の趣旨） */
+              <p className="home-note" data-testid="home-works-empty">
+                まだ保存された作品がありません。上の「新しく作る」から譜面の種類を選んで始めてください。
+              </p>
+            )}
+            {/* 「勝手に消えていないか」という不安に先回りして、保存の場所を明示する（#318・#497） */}
+            <p className="home-note">編集内容はこの端末のブラウザへ自動保存されています。</p>
           </section>
+
 
           <footer className="home-footer">
             {/* 版番号は「自分が最新版を見ているか」をチェックする人が確かめるためのもの。

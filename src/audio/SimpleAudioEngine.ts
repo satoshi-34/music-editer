@@ -394,6 +394,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
         tuplet?: { numNotes: number; notesOccupied: number };
         microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[];
         tieExtendBeatsByKey?: Record<string, number>;
+        /** ペダル（ダンパー）で鳴り終わりを何拍ぶん延ばすか（キーごと・#549） */
+        pedalExtendBeatsByKey?: Record<string, number>;
         tieSuppressedKeys?: string[];
       }>;
       measureBeats?: number;
@@ -497,9 +499,23 @@ export class SimpleAudioEngine implements PlaybackEngine {
                   tempoSegmentsFrom(scoreData, measureIndex, measureBpm),
                 ) * (event.durationScale ?? 1)
               : soundDuration;
+            // ペダル（ダンパー）を踏んでいる間は、音価を過ぎても解除位置まで響きが残る（#549）。
+            // スタッカート（durationScale < 1）でも響きは残るので、掛け算ではなく
+            // 「記譜どおりの鳴り終わり」と「ペダル解除位置」の**遅い方**を採る。
+            const pedalExtendBeats = event.pedalExtendBeatsByKey?.[primaryKey] ?? 0;
+            const soundingDuration = pedalExtendBeats > 0
+              ? Math.max(
+                  tiedSoundDuration,
+                  beatSpanToSeconds(
+                    swingTiming.startBeat,
+                    nominalStartBeat + nominalDurationBeats + pedalExtendBeats,
+                    tempoSegmentsFrom(scoreData, measureIndex, measureBpm),
+                  ),
+                )
+              : tiedSoundDuration;
             await this.playNoteAtTime(
               frequency,
-              tiedSoundDuration,
+              soundingDuration,
               eventStartTime,
               this.normalizePlaybackVelocity((event as { velocity?: number }).velocity)
             );
