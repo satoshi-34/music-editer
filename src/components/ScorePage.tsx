@@ -189,7 +189,7 @@ import {
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber, type PlaybackHighlightPartSource, type PlaybackHighlightTarget, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature, TimeSignatureStyle } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
@@ -537,6 +537,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // onLibraryReady は初期化 effect（依存: 空）から呼ぶため ref 経由で最新を参照する
   const onLibraryReadyRef = useRef(onLibraryReady);
   onLibraryReadyRef.current = onLibraryReady;
+  // 描画側の段（パート）の並び。再生ハイライト（#411）が「この音符は何段目か」を
+  // 引くために使う。layoutParts の定義は handlePlay より後ろにあるため、
+  // 依存配列へ直接書くと初期化前参照になる。ref 経由で最新を渡す
+  const layoutPartsRef = useRef<MeasureLayoutPartContext[]>([]);
   // onHomeActionsReady の「初回だけ」判定（round3 P2）
   const homeActionsReadyNotifiedRef = useRef(false);
   // 適用中のUI案（Issue #405 段1）。URLの `?ui=a1|a2|current` で切り替わり、
@@ -960,7 +964,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const [audioHealthNotice, setAudioHealthNotice] = useState<string | null>(null);
   // 最後に自動復旧（エンジン再作成）した時刻。クールダウン判定に使う
   const lastSilentRecoveryAtRef = useRef(0);
-  const [currentPosition, setCurrentPosition] = useState<{ measureIndex: number; beatPosition: number; noteIndex: number }>({
+  // 再生位置。targets は「その瞬間に鳴っている全パート・全声部の音符」（Issue #411）で、
+  // 譜面のハイライトはこれを見て帯を出す。位置を 0 に戻す既存の経路では
+  // targets が付かない（= 帯なし）ので、停止時に光ったままになることはない
+  const [currentPosition, setCurrentPosition] = useState<{
+    measureIndex: number;
+    beatPosition: number;
+    noteIndex: number;
+    targets?: PlaybackHighlightTarget[];
+  }>({
     measureIndex: 0, beatPosition: 0, noteIndex: 0
   });
   const [currentInstrument, setCurrentInstrument] = useState<InstrumentType>(InstrumentType.PIANO);
@@ -1135,7 +1147,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         return;
       }
       const timeoutId = setTimeout(() => {
-        setCurrentPosition(item.position);
+        // 位置と「鳴っている音符の一覧」は必ず一緒に更新する（別々の state にすると
+        // 片方だけ先に反映された瞬間、別の拍の音符が光る）
+        setCurrentPosition({ ...item.position, targets: item.targets });
       }, item.atMs - fromElapsedMs);
       positionTimeoutsRef.current.push(timeoutId);
     });
@@ -1801,6 +1815,18 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           playbackStartedAtRef.current = Date.now();
           // 位置表示（PlaybackHighlight含む）は先頭パート（referenceMeasures）の展開順を基準に進める。
           // 他パートの反復順もこれに合わせているため、表示の基準としてズレが出にくい。
+          // ハイライトは「鳴っている全パート・全声部」に出す（#411）。
+          // 再生対象の各パートが描画側の何段目かは、小節配列の同一性で引く
+          // （layoutParts と再生の parts は同じ配列（rightHandData 等）を指しているため、
+          // 譜種ごとの並べ替え規則をここへ書き写さずに対応が取れる）。
+          // 引けなかったパートは段が特定できないので対象から外す（別の段の音符を
+          // 光らせるより、光らない方が誤解が少ない）
+          const highlightParts: PlaybackHighlightPartSource[] = parts
+            .map((partSource) => ({
+              partIndex: layoutPartsRef.current.findIndex((layoutPart) => layoutPart.measures === partSource.measures),
+              measures: partSource.measures,
+            }))
+            .filter((source) => source.partIndex >= 0);
           positionTimelineRef.current = buildPlaybackPositionTimeline(
             referenceMeasures,
             effectiveGlobalBpm,
@@ -1810,7 +1836,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 実音と同じスコア共通テンポ列を共有する（#458 round2 P1:
             // タイムライン内部で先頭パートから再解決すると、他段だけに置かれた
             // 標語がハイライトに効かず、実音と累積的にずれる）
-            scoreMeasureBpms
+            scoreMeasureBpms,
+            highlightParts
           );
           // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
           // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
@@ -4593,6 +4620,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
     return [{ measures: rightHandData ?? [], clef: 'treble' }];
   }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, partExtractionSelection]);
+  // 再生ハイライトが段の並びを引けるよう、最新の layoutParts を箱へ入れておく（#411）
+  layoutPartsRef.current = layoutParts;
   // 弦楽四重奏のパート名（Issue #448）。QuartetStaff の既定名（QUARTET_PART_CONFIGS）ではなく、
   // ユーザーが「パート名編集」で書き換えられる instrumentation.parts 側を正本にする。
   // パート数が既定の4と違う編成定義（別の譜種から切り替えた直後など）のときは、
@@ -7669,6 +7698,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           複数ページの譜面で帯が消え残る。 */}
       <PlaybackHighlight
         currentPosition={currentPosition}
+        highlightTargets={currentPosition.targets}
         isPlaying={playbackState === 'playing'}
         containerSelector=".score-area"
         enablePageScroll={true}
