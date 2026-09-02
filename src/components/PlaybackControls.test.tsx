@@ -377,15 +377,9 @@ describe('PlaybackControls', () => {
       // 説明文は「音色詳細」の中にあるので、まず開いてから確認する
       fireEvent.click(screen.getByRole('button', { name: '音色詳細を開く' }));
 
-      // 説明文は3文が1つの div に入っているため、要素の全文で部分一致を見る。
-      // 親要素も同じ文字列を含んでしまうので、子要素を持たない末端の div だけに絞る。
-      expect(screen.getByText((_content, element) => {
-        if (!element || element.tagName !== 'DIV' || element.children.length > 0) {
-          return false;
-        }
-        const text = element.textContent ?? '';
-        return text.includes('ピアノの長い音') && text.includes('迷ったら `MusyngKite` を推奨します。');
-      })).toBeInTheDocument();
+      // タグ構造に依存せず、推奨文そのものの存在を見る（round1 P3:
+      // 「子要素なしの DIV」条件は <p> 化や強調 <span> の追加で壊れる）
+      expect(screen.getByText(/ピアノの長い音/)).toHaveTextContent('迷ったら `MusyngKite` を推奨します。');
 
       // 説明文の追記だけで、パック名の入力欄（UI 構造）は増減していない
       expect(screen.getAllByLabelText('SoundFontパック名')).toHaveLength(1);

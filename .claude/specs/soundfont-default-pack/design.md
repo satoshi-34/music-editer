@@ -34,8 +34,10 @@ FluidR3_GM に設定されていた（過去の音声デバッグ時に変更さ
 ### 1. 新規環境の既定を `MusyngKite` へ戻す
 
 `DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.pluginName` を `MusyngKite` にする（`engineMode` は `soundfont` のまま）。
-`eb2843d` の変更を実質的に差し戻す形になるが、当時のコミットには理由が残っておらず、
-今回は運用者検聴という具体的な根拠（ピアノの持続）があるため、そちらを採る。
+`eb2843d`（engineMode: built-in → soundfont と pluginName: 空 → FluidR3_GM の両方を変更し、
+SoundFont を選ぶ理由はコメントに残している）のうち**パック名の部分だけ**を戻す。
+FluidR3_GM を MusyngKite より選んだ理由は残っておらず、今回は運用者検聴という
+具体的な根拠（ピアノの持続）があるため、そちらを採る（round1 P3 で記述を訂正）。
 
 ### 2. 既存ユーザーの設定は書き換えない
 
@@ -74,6 +76,6 @@ UI 要素の追加・構造変更は行わない（受入条件2）。
 ## 残る論点（本 Issue のスコープ外）
 
 - 長い音の減衰カーブそのものの調整は #550。#549（ペダル再生）の実装後に再判定する順序で裁定済み
-- `resetAudioSettingsToSafeDefaults` のコメントと `alert` は「built-in のピアノへ戻す」と書いているが、
-  実際に戻る `DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.engineMode` は `soundfont` で、説明と挙動が食い違っている。
-  本 Issue の変更で生じた食い違いではない（既存）ため触っていない
+- `resetAudioSettingsToSafeDefaults` の `alert`・DEVELOPMENT.md は「built-in のピアノへ戻す」と
+  書いていたが、実際に戻るのは `soundfont`（MusyngKite）。この PR が変更する定数の直接利用箇所の
+  ため、round1 P2 を受けて**案内・文書を実挙動（SoundFont/MusyngKite）へ統一**した
