@@ -98,6 +98,17 @@ describe('ホーム画面と譜面画面の切り替え（Issue #500）', () => 
     vi.restoreAllMocks();
   });
 
+  it('起動ホームに保存先の案内（端末内保存・書き出しでの持ち出し）が出る（#570）', async () => {
+    seedWork();
+    render(<App />);
+
+    // App 実マウントの起動経路で確認する（HomeScreen 単体テストだけだと、
+    // 呼び出し元の構成変更で表示が消えても検出できない。#570 round1 P2）
+    const home = screen.getByTestId('home-screen');
+    expect(home.textContent).toContain('🔒 作品はこの端末にだけ保存されます');
+    expect(home.textContent).toContain('書き出し');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('起動時はホームが出て、最近使ったファイルの先頭ワンクリックで前回の譜面へ戻れる（#528 受入条件2）', async () => {
     seedWork();
     render(<App />);

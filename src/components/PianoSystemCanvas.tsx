@@ -6887,6 +6887,12 @@ export default function PianoSystemCanvas({
               rect.setAttribute('data-measure',String(absI));
               rect.setAttribute('data-note',String(j));
               rect.setAttribute('data-voice',String(entry.voiceIndex));
+              // パート（段）と符頭の実描画X範囲も公開する（Issue #411）。
+              // 再生ハイライトの帯は「符頭の幅」を基準に引くので、アクティブ声部の
+              // .vf-note-hit と同じ属性名で同じ意味の値を出しておく
+              rect.setAttribute('data-part',String(pi));
+              rect.setAttribute('data-note-left',String(noteVisualLeft));
+              rect.setAttribute('data-note-right',String(noteVisualRight));
               rect.setAttribute('x',String(rectLeft));
               rect.setAttribute('y',String(top));
               rect.setAttribute('width',String(rectWidth));
@@ -7004,6 +7010,11 @@ export default function PianoSystemCanvas({
               rect.setAttribute('class','vf-note-hit');
               rect.setAttribute('data-measure', String(absI));
               rect.setAttribute('data-note', String(j));
+              // どのパート（段）・どの声部の音符かを公開する（Issue #411）。
+              // 再生ハイライトは「鳴っている全声部」を探すため、小節・音符番号だけでは
+              // 大譜表の右手と左手（どちらも声部0・同じ音符番号）を区別できない
+              rect.setAttribute('data-part', String(pi));
+              rect.setAttribute('data-voice', String(activeVoiceIndex));
               // 2枚に分かれた rect のどちらなのかをテストから見分けられるようにする（表示には影響しない）
               rect.setAttribute('data-hit-part', part);
               // 符頭の実描画X範囲。個別音選択は keySelectXPad(svg) でこの範囲近傍に限定されるため、

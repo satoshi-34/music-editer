@@ -13,6 +13,10 @@ import type { ScoreType, WorkSummary } from '../types/storage';
 import { SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
 import { formatWorkTitle, formatWorkUpdatedAt } from '../utils/workDisplay';
 import { formatAppVersion } from '../utils/appVersion';
+// 保存先の文言は「初回の通知」と共通の置き場から読む（#570 仕様4: 差し替え点を1か所に）
+import {
+  HOME_STORAGE_LOCATION_NOTE, HOME_STORAGE_LOCATION_NOTE_SHORT, HOME_STORAGE_PORTABILITY_NOTE,
+} from '../utils/storageLocationNotice';
 
 /** ホームから呼べる「開く」導線の種類。譜面画面のファイルタブにあるものと同じ並び */
 export type HomeOpenKind = 'file' | 'musicxml' | 'pdf' | 'legacy';
@@ -375,8 +379,16 @@ export default function HomeScreen({
                 まだ保存された作品がありません。上の「新しく作る」から譜面の種類を選んで始めてください。
               </p>
             )}
-            {/* 「勝手に消えていないか」という不安に先回りして、保存の場所を明示する（#318・#497） */}
-            <p className="home-note">編集内容はこの端末のブラウザへ自動保存されています。</p>
+            {/* 「勝手に消えていないか」という不安に先回りして、保存の場所を明示する（#318・#497）。
+                #570 でここを常設の保存先表示に格上げした: 初回の通知は数秒で消えるため、
+                「ログインが無い＝全世界に公開されているのでは」という後から来た不安に答えられない。
+                安心（端末内だけ）と、その裏返しの注意（端末を変えると持ち出せない）を対で出す */}
+            <p className="home-note" data-testid="home-storage-location-note">
+              {HOME_STORAGE_LOCATION_NOTE}
+            </p>
+            <p className="home-note" data-testid="home-storage-portability-note">
+              {HOME_STORAGE_PORTABILITY_NOTE}
+            </p>
           </section>
 
 
@@ -384,7 +396,12 @@ export default function HomeScreen({
             {/* 版番号は「自分が最新版を見ているか」をチェックする人が確かめるためのもの。
                 目立たせる必要は無いが、探さずに見つかる位置（フッター左）に置く */}
             <span className="home-version" data-testid="home-version">{formatAppVersion(appVersion)}</span>
-            <span className="home-footer-note">保存先はこの端末のブラウザです（サーバーへは送信されません）。</span>
+            {/* フッターにも同じ事実を置く（作品一覧まで下がらずに目に入る位置）。
+                文言は #570 で1か所（storageLocationNotice.ts）へ集約した。
+                将来ログイン（#498）で「ローカル/クラウド」表示へ発展させるときの差し替え点 */}
+            <span className="home-footer-note" data-testid="home-storage-footer-note">
+              {HOME_STORAGE_LOCATION_NOTE_SHORT}
+            </span>
           </footer>
         </div>
       </div>

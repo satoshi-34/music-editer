@@ -6,6 +6,7 @@ import {
   readHitRectBox,
   readNoteVisualSpan,
   computePlaybackBandBox,
+  computePlaybackBandBoxes,
   isSelectorSafeIndex,
 } from './playbackHighlightUtils';
 
@@ -114,5 +115,34 @@ describe('isSelectorSafeIndex', () => {
     expect(isSelectorSafeIndex(NaN)).toBe(false);
     expect(isSelectorSafeIndex('0"] , [data-measure')).toBe(false);
     expect(isSelectorSafeIndex(undefined)).toBe(false);
+  });
+});
+
+describe('computePlaybackBandBoxes（全声部ハイライト・Issue #411）', () => {
+  const systemEls = [
+    makeHitRect({ x: 100, y: 30, width: 40, height: 60, 'data-note-left': 110, 'data-note-right': 122 }),
+    makeHitRect({ x: 100, y: 150, width: 40, height: 60, 'data-note-left': 110, 'data-note-right': 122 }),
+    makeHitRect({ x: 300, y: 30, width: 40, height: 60, 'data-note-left': 310, 'data-note-right': 322 }),
+  ];
+  const beat1Upper = systemEls[0];
+  const beat1Lower = systemEls[1];
+  const beat2Upper = systemEls[2];
+
+  it('横位置が離れた音符（右手と左手が別の拍）には帯を別々に出す', () => {
+    const boxes = computePlaybackBandBoxes([[beat2Upper], [beat1Lower]], systemEls, 5);
+    expect(boxes.length).toBe(2);
+    // 左から順に並ぶ。どちらの帯も段の上から下までを貫く
+    expect(boxes[0]).toEqual({ x: 105, y: 30, width: 22, height: 180 });
+    expect(boxes[1]).toEqual({ x: 305, y: 30, width: 22, height: 180 });
+  });
+
+  it('横位置が重なる音符（同じ拍の上声・下声）は1本の帯にまとめる', () => {
+    // 重ねて2本引くと半透明が二重になり、そこだけ色が濃く見えてしまう
+    const boxes = computePlaybackBandBoxes([[beat1Upper], [beat1Lower]], systemEls, 5);
+    expect(boxes).toEqual([{ x: 105, y: 30, width: 22, height: 180 }]);
+  });
+
+  it('鳴っている音符が無ければ帯を出さない', () => {
+    expect(computePlaybackBandBoxes([], systemEls, 5)).toEqual([]);
   });
 });
