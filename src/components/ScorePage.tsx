@@ -54,6 +54,7 @@ import { useTempoStorage } from '../hooks/useTempoStorage';
 import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
+import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
 import type {
   CustomSymbolDef,
   InstrumentBracketGroup,
@@ -181,7 +182,7 @@ import {
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature, TimeSignatureStyle } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
@@ -191,6 +192,8 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
+  describePlaybackFromMeasureNumber,
+  describePlaybackStartMeasureRejected,
   describeHomeActionBlocked,
   describeNotationSizeFitSuggestion,
   describeLegacyImportResult,
@@ -810,10 +813,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       kind === 'success' ? 3000 : 10000
     );
   }, []);
-  // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける
+  // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける。
+  // テスト環境では teardown 後に発火したタイマーが未処理例外になり、全テスト緑でも
+  // exit 1 になる（既知の CI フレーク）。通知系タイマー ref を増やしたら必ずここにも足す。
   useEffect(() => () => {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
     if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
+    if (feedbackNoticeTimerRef.current) clearTimeout(feedbackNoticeTimerRef.current);
+    if (editNoticeTimerRef.current) clearTimeout(editNoticeTimerRef.current);
+    if (restoreNoticeTimerRef.current) clearTimeout(restoreNoticeTimerRef.current);
   }, []);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
@@ -1132,6 +1140,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     clearPositionTimers();
   }, [clearPositionTimers]);
 
+  // 再生中にアンマウントされても、終了予約・位置表示予約を残さない
+  // （残すとテスト teardown 後に発火して未処理例外になる。通知系タイマーと同じ問題）
+  useEffect(() => () => {
+    clearPlaybackTimer();
+  }, [clearPlaybackTimer]);
+
   const resetPlaybackClock = useCallback(() => {
     // 3 つの ref は「いつ始まったか」「あと何ミリ秒あるか」「全体で何ミリ秒か」のセット。
     // 一部だけ残すと pause/resume 後の位置計算が狂うため、初期化は同時に行う。
@@ -1145,6 +1159,17 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // setTimeout 越しのヘルスチェックが「いまの」再生状態を読めるように同期する
     playbackStateRef.current = playbackState;
   }, [playbackState]);
+
+  // 開始済みの無音検知はタイマー解除では止められない（コールバックが約250ms以上の
+  // 非同期チェックを実行中のため）。アンマウント後に setState・recreateAudioEngine が
+  // 走らないよう、await 後にこのフラグで打ち切る（#546 round1 P2）
+  const scorePageUnmountedRef = useRef(false);
+  useEffect(() => {
+    // StrictMode の「実行→片付け→再実行」では cleanup 後も再マウントされるため、
+    // setup で必ず false へ戻す（round2 P2: 戻さないと replay 後の検知が全部捨てられる）
+    scorePageUnmountedRef.current = false;
+    return () => { scorePageUnmountedRef.current = true; };
+  }, []);
 
   const runOutputHealthCheck = useCallback(async (engine: PlaybackEngine) => {
     try {
@@ -1161,6 +1186,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // Safari の silent failure（issue #14）は例外が出ないため、
       // 再生開始後に「音が出ているはずの状態か」を能動的に確認する。
       const report = await checkAudioOutputHealth(engine.getAudioContext?.() ?? null);
+      if (scorePageUnmountedRef.current) return;
 
       // プローブ中（約250ms）に一時停止された場合も同様に無視する
       if (isPausedByUser()) {
@@ -1211,11 +1237,19 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
   }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock]);
 
+  // 無音検知の予約もタイマー ref で持ち、アンマウント時に必ず片付ける
+  // （追跡なしの setTimeout だとテスト teardown 後に発火して未処理例外になる）
+  const outputHealthCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleOutputHealthCheck = useCallback((engine: PlaybackEngine) => {
-    window.setTimeout(() => {
+    if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
+    outputHealthCheckTimerRef.current = setTimeout(() => {
+      outputHealthCheckTimerRef.current = null;
       void runOutputHealthCheck(engine);
     }, SILENT_FAILURE_CHECK_DELAY_MS);
   }, [runOutputHealthCheck]);
+  useEffect(() => () => {
+    if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
+  }, []);
 
   // スコアタイプ切り替え時に左手データを初期化
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
@@ -1451,13 +1485,21 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // そこで同じ編集ウィンドウを「名前（正式名・略称）だけ編集できるモード」で開く（Issue #448）。
   const isNameOnlyInstrumentationEditor = scoreType !== 'ensemble';
 
-  const handlePlay = useCallback(async () => {
+  /**
+   * 再生開始。options.startMeasureIndex を渡すと、その小節（0 始まり）から鳴らす。
+   * 小節番号を指定した途中再生（#545）はこの引数だけを使い、選択起点の途中再生（#108）と
+   * 同じ展開・スライスの経路を共用する（同じロジックの2枚目を作らない）。
+   */
+  const handlePlay = useCallback(async (options?: { startMeasureIndex?: number }) => {
+    // 小節番号の指定があるときは「その小節から鳴らし直す」意味なので、
+    // 一時停止からの再開（resume）ではなく通常の開始経路へ進める。
+    const explicitStartMeasure = options?.startMeasureIndex;
     // 再生は「編集の手を止めて聴く」モードへの切り替えなので、譜面の選択も手放す（Issue #238）。
     // 再生中は音を聴きながらキーを触りがちで、選択が残っていると Delete が譜面へ届いてしまう。
     // 一時停止からの再開もモードの切り替わりなので、分岐の手前でまとめて解除する。
     requestScoreSelectionClear();
     try {
-      if (playbackState === 'paused') {
+      if (playbackState === 'paused' && explicitStartMeasure == null) {
         // paused からの再生は「最初から」ではなく AudioContext の resume。
         await getAudioEngine().resume();
         setPlaybackState('playing');
@@ -1546,8 +1588,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // リピートがある譜面では「その小節の最初の出現」から（findPlaybackStartExpandedIndex）。
       // パート譜表示中は総譜で選んだ選択が画面に見えない（選択UIが無い）ため、
       // 見えない選択で途中再生になって混乱しないよう対象外にする（Codex round1 P2）
-      const startFromSelection = !isPartExtractionActive && selectedMeasures != null;
-      const startMeasure = startFromSelection ? selectedMeasures.start : 0;
+      // 小節番号の指定（#545）があればそれが最優先。無ければ従来どおり選択起点を見る
+      const startFromSelection = explicitStartMeasure == null
+        && !isPartExtractionActive && selectedMeasures != null;
+      const startMeasure = explicitStartMeasure
+        ?? (startFromSelection && selectedMeasures ? selectedMeasures.start : 0);
 
       await runWithPlaybackFallback(async (audioEngine) => {
         if (parts.length > 0) {
@@ -1736,9 +1781,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
           // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
           // なので通知する（Codex round1 P3）
-          if (startFromSelection) {
+          if (startFromSelection || explicitStartMeasure != null) {
             setCurrentPosition({ measureIndex: startMeasure, beatPosition: 0, noteIndex: 0 });
-            notifyScoreEdit(describePlaybackFromMeasure(startMeasure));
+            notifyScoreEdit(explicitStartMeasure != null
+              ? describePlaybackFromMeasureNumber(startMeasure, selectedMeasures != null)
+              : describePlaybackFromMeasure(startMeasure));
           }
           schedulePositionTimeline(0);
           playbackTimerRef.current = setTimeout(() => {
@@ -2508,7 +2555,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
   const performExportFile = async (fileNameBase: string) => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, tempoSettings.bpm);
     // 覚えている保存先ハンドルは「同じファイル名のときだけ」使い回す（Issue #507）。
     // 名前を変えたのに前のファイルへ上書きしてしまうと、別名で書き出したつもりの
     // ユーザーが元のファイルを黙って壊すことになる（匿名化コピーの用途では致命的）
@@ -2570,6 +2617,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setTimeSignatureStyle(normalizeTimeSignatureStyle(data.timeSignatureStyle));
     // 旧データは pageSize を持たないので、省略時は A4 として開く（normalizePageSizeId が担保）
     setPageSize(normalizePageSizeId(data.pageSize));
+      // 全体テンポも作品の属性として復元する（Issue #543）。
+      // テンポを持たない旧データは従来どおりアプリ全体設定のまま開く（何もしない）
+      await applySavedGlobalBpm(data);
       // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
       applySavedLayoutAttributes(data);
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
@@ -2628,7 +2678,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // （handleExportFile と同じ理由で通常関数として定義。TDZ 回避）。
   const handleFeedback = async () => {
     const { metadata, parts } = buildScoreData();
-    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
+    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, tempoSettings.bpm);
     const feedbackState = {
       ...scoreData,
       // フィードバック JSON は「開く」の「ファイル」ボタンで読み込める楽譜 JSON なので、
@@ -2699,6 +2749,21 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * localStorage（表示設定）へは書かない: 作品を1つ開いただけで
    * グローバル設定を書き換えてしまわないため（作品の属性であって表示設定ではない）。
    */
+  /**
+   * 作品の属性として保存された全体テンポ（Issue #543）を再生パネルへ当てる。
+   *
+   * 作品を開く経路が3つ（起動時の復元・作品一覧からの切替・ファイル読み込み）あり、
+   * 1つでも当て忘れると「その作品だけ前のテンポで鳴る」食い違いになるため、
+   * 同じ手順をこの1関数に寄せている。
+   * テンポを持たない旧データ（globalBpm 省略）は**何もしない**のが正しい後方互換:
+   * 従来どおりアプリ全体設定（無ければ 120）のまま開く。
+   */
+  const applySavedGlobalBpm = useCallback(async (data: SavedScoreData) => {
+    const savedBpm = normalizeSavedGlobalBpm(data.globalBpm);
+    if (savedBpm === undefined) return;
+    await setBPM(savedBpm);
+  }, [setBPM]);
+
   const applySavedLayoutAttributes = useCallback((data: SavedScoreData, options?: { resetOmitted?: boolean }) => {
     // resetOmitted=false（MusicXML 取り込み経路・round2 P1）: <defaults> の無い取り込みは
     // 「作品の切替」ではないので、省略項目は現在の値のまま（表示設定へも戻さない）。
@@ -2752,6 +2817,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setTitleFontWeight(normalizeTitleFontWeight(restored.titleFontWeight));
     setTimeSignatureStyle(normalizeTimeSignatureStyle(restored.timeSignatureStyle));
     setPageSize(normalizePageSizeId(restored.pageSize));
+    // 全体テンポも作品の属性として復元する（Issue #543。省略時はアプリ全体設定のまま）
+    await applySavedGlobalBpm(restored);
     // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
     applySavedLayoutAttributes(restored);
     setCustomSymbolDefs(restored.customSymbolDefs ?? []);
@@ -2795,10 +2862,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // マウント直後の1回だけ実行し、復元の有無に関わらず「復元処理は完了した」ことを
   // autosaveRestoreReady で示す（これが true になるまで下の自動保存 useEffect は書き込みをしない）。
   const restoreAttemptedRef = useRef(false);
+  const restoreRunSeqRef = useRef(0);
   useEffect(() => {
+    // 「完了済みなら再実行しない」。試行中フラグではなく**完了**フラグにするのは、
+    // StrictMode の「実行→片付け→再実行」で1回目が cancelled 打ち切りになったとき、
+    // 2回目が復元をやり直せるようにするため（round2 P2: 試行フラグだと
+    // autosaveRestoreReady が永遠に false のまま自動保存が止まる）
     if (restoreAttemptedRef.current) return;
-    restoreAttemptedRef.current = true;
 
+    // applyLoadedScoreData の await 中にアンマウントされると、cleanup 実行後に
+    // 通知とタイマーを新規予約してしまい二度と片付けられない（#546 round1 P2）。
+    // 世代トークンで await 後の続行を抑止する（applyLoadedScoreData 自体は同じ
+    // データの再適用なので、replay で2回走っても結果は同じ）
+    const runSeq = ++restoreRunSeqRef.current;
+    const isCancelled = () => restoreRunSeqRef.current !== runSeq;
     (async () => {
       // 旧バージョンのデータ（手動保存と自動保存のキーが分かれていない形／作品カタログが
       // 無い形）を、消さずに新しい保存先へ複製してから読み込む（初回起動時のみ・後方互換）。
@@ -2806,6 +2883,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const restored = initializeWorks();
       if (restored) {
         await applyLoadedScoreData(restored);
+        if (isCancelled()) return;
 
         setRestoreNotice('自動保存データから復元しました');
         console.info('[ScorePage] 起動時に自動保存データから復元しました');
@@ -2823,10 +2901,17 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         }
       }
 
+      if (isCancelled()) return;
+      restoreAttemptedRef.current = true;
       setAutosaveRestoreReady(true);
       // 移行・復元が済んだことを App へ知らせる（ホームの一覧の読み直し。round1 P2）
       onLibraryReadyRef.current?.();
     })();
+    return () => {
+      // この実行を無効化する（次の setup が ++ するのを待たず、cleanup 時点で無効化。
+      // アンマウントの場合は誰も再開しないので、通知・タイマーの新規予約が止まる）
+      if (restoreRunSeqRef.current === runSeq) restoreRunSeqRef.current++;
+    };
   // applySettingsProfileToState はレンダーごとに作り直される素の関数のため、
   // handleNewScore と同じ理由で依存配列には含めない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2861,7 +2946,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // （新規四重奏で名前だけ設定して閉じると失われるため。Codex round1 P1・#448）
       if (!options?.includeEmpty && isEmptyScoreData(parts)
         && !hasCustomInstrumentationLabels(instrumentation, scoreType)) return null;
-      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm });
+      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, tempoSettings.bpm);
     };
   });
 
@@ -2889,7 +2974,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 保存先は「いま開いている作品」の自動保存スロット。まだ作品IDが無い
       // （＝一度も保存していない新規状態）ときは、この保存で新しい作品が作られる。
       const saved = saveCurrentWork(
-        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm })
+        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, tempoSettings.bpm)
       );
       if (saved) {
         lastAutosaveCompletedAtRef.current = Date.now();
@@ -2931,11 +3016,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 大譜表の下段だけを編集して閉じると復元されなかった）。buildScoreData が読む
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
+  // 全体テンポ（作品の属性・Issue #543）も同じ理由で列挙する。これが無いと、
+  // 再生パネルでテンポだけ変えて閉じたときに作品側へ保存されず、開き直すと元に戻る。
   // 「音符の大きさ」「ページ余白」（作品の属性・Issue #477）は state 本体を列挙できない
   // （後方宣言のため TDZ）。代わりに layoutAttrRevision（後方の effect が変更のたびに
   // 進めるカウンタ）を依存に持ち、これらだけを変えて閉じても保存されるようにする（round1 P1）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem, layoutAttrRevision]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem, layoutAttrRevision, tempoSettings.bpm]);
+
+  // 「保存済み」表示を消す予約もアンマウント時に必ず片付ける（他の通知系タイマーと同じ理由）。
+  // ※自動保存 useEffect の目印コメントと依存配列の間に別の useEffect を置くと
+  //   ScorePageAutosaveDeps.test.tsx の静的検査が誤った依存配列を読むため、この位置に置く。
+  useEffect(() => () => {
+    if (autoSaveStatusTimerRef.current) clearTimeout(autoSaveStatusTimerRef.current);
+  }, []);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -3155,7 +3249,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // 自動保存（約1.5秒後）任せだと、その前にリロードすると新作品が空のまま残る。
     // timestamp は現在時刻へ更新する（旧手動保存の保存時刻のままだと updatedAt が古くなり、
     // 取り込んだばかりの作品が更新順の作品一覧で埋もれる。Codex round4）
-    if (!saveCurrentWork({ ...loadedData, timestamp: Date.now() })) {
+    // 旧手動保存にも作品テンポを明示して移行する（#543 round1 P3: 自動保存前に
+    // 終了すると未移行のまま残る）。applyLoadedScoreData が画面へ適用した正規化済みの
+    // 値と同じものを書く
+    if (!saveCurrentWork({
+      ...loadedData,
+      globalBpm: normalizeSavedGlobalBpm(loadedData.globalBpm) ?? tempoSettings.bpm,
+      timestamp: Date.now(),
+    })) {
       const message = describeLegacyImportResult('saveFailed');
       notifyScoreEdit(message);
       return { ok: false, message };
@@ -4227,6 +4328,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 短く表示するお知らせ（他の autoSaveStatus / restoreNotice と同じ「数秒で消える」パターン）。
   const [settingsProfileNotice, setSettingsProfileNotice] = useState<string | null>(null);
   const settingsProfileNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // この通知タイマーもアンマウント時に必ず片付ける（宣言位置の都合で個別 useEffect）
+  useEffect(() => () => {
+    if (settingsProfileNoticeTimerRef.current) clearTimeout(settingsProfileNoticeTimerRef.current);
+  }, []);
   const showSettingsProfileNotice = useCallback((message: string) => {
     setSettingsProfileNotice(message);
     if (settingsProfileNoticeTimerRef.current) clearTimeout(settingsProfileNoticeTimerRef.current);
@@ -4355,6 +4460,28 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           : [rightHandData ?? []];
     return activeParts.reduce((max, part) => Math.max(max, trimTrailingEmptyMeasures(part).length), 0);
   }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts]);
+  /**
+   * 小節番号を指定した途中再生（#545）。「再生・音色」タブの入力欄から呼ばれる。
+   *
+   * 鳴らす仕組みは選択起点の途中再生（#108）と同じ handlePlay を共用し、ここでは
+   * 「入力を小節インデックスへ直す」「範囲外を理由つきで弾く」だけを受け持つ。
+   * 再生中・一時停止中に指定されたときは、いったん停止してから頭出しし直す
+   * （音の途中への飛び込み＝シークは #545 のスコープ外）。
+   */
+  const handlePlayFromMeasureNumber = useCallback(async (measureNumberInput: string) => {
+    const resolution = resolvePlaybackStartMeasureNumber(measureNumberInput, contentMeasureCount);
+    if (!resolution.ok) {
+      // 黙って無視せず、なぜ再生できないかと入れ直し方を伝える（#318）
+      notifyScoreEdit(describePlaybackStartMeasureRejected(resolution.reason, contentMeasureCount));
+      return;
+    }
+
+    if (playbackState === 'playing' || playbackState === 'paused') {
+      handleStop();
+    }
+    await handlePlay({ startMeasureIndex: resolution.measureIndex });
+  }, [contentMeasureCount, handlePlay, handleStop, playbackState]);
+
   // 印刷専用: 「最後に音符（または明示的な記号）がある小節」までを数える（Issue #80）。
   // contentMeasureCount（events が完全に空の小節だけを末尾から除外）より厳しく、末尾の
   // 全休符だけの小節（自動補完・誤操作などで実データに残った編集用の余り小節）も除外する。
@@ -4889,12 +5016,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       instrumentation,
       systems: totalSystems,
       measuresPerSystem,
+      // 作品のテンポ（#543）。ここに入れないと書き出し（.score.json / MIDI）へ
+      // 作品テンポが乗らず、MIDI が常に既定の 120 になる（#543 round1 P2）
+      globalBpm: tempoSettings.bpm,
     };
   }, [
     title, subtitle, lyricist, composer, arranger,
     scoreType, keySignature, scoreTimeSignature, timeSignatureStyle,
     quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData,
-    instrumentation, totalSystems, measuresPerSystem,
+    instrumentation, totalSystems, measuresPerSystem, tempoSettings.bpm,
   ]);
 
   // 書出は成功しても失敗しても画面に何も出ず、例外はコンソールに流れるだけだった（Issue #278）。
@@ -5564,7 +5694,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           className="toolbar-feedback-button"
           onClick={handleGoHome}
           aria-label="ホーム"
-          title="ホーム画面へ戻ります（編集中の内容はこの端末のブラウザへ保存され、ホームの「前回の続き」から開き直せます）"
+          title="ホーム画面へ戻ります（編集中の内容はこの端末のブラウザへ保存され、ホームの「最近使ったファイル」の先頭から開き直せます）"
           data-testid="go-home"
         >
           <span aria-hidden="true">🏠</span>{' '}
@@ -6525,6 +6655,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 onPause={handlePause}
                 onStop={handleStop}
                 onSeek={handleSeek}
+                onPlayFromMeasure={handlePlayFromMeasureNumber}
+                totalMeasureCount={contentMeasureCount}
                 onTempoChange={handleTempoChange}
                 onInstrumentChange={handleInstrumentChange}
                 onInstrumentPreview={handleInstrumentPreview}
