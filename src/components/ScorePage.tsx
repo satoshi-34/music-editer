@@ -1955,8 +1955,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const resetAudioSettingsToSafeDefaults = useCallback(() => {
     // 無音が続くときは「いまの設定を維持したまま復旧」より、
     // まず確実に鳴る既定状態へ戻すほうが原因切り分けをしやすい。
-    // ここでは built-in + ピアノ + 既定プロファイルへそろえ、
-    // localStorage 側にも同じ安全値を書き戻して次回起動へ持ち越さないようにする。
+    // ここでは既定の再生設定（SoundFont/MusyngKite + ピアノ + 既定プロファイル）へそろえ、
+    // localStorage 側にも同じ安全値を書き戻して次回起動へ持ち越さないようにする（#551）。
     localStorage.setItem(
       PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY,
       JSON.stringify(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS)
