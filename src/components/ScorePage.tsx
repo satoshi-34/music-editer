@@ -178,6 +178,7 @@ import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRe
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildTiePlaybackEventKey, buildTiePlaybackPlan } from '../utils/tiePlaybackUtils';
+import { buildPedalPlaybackEventKey, buildPedalPlaybackPlans } from '../utils/pedalPlaybackUtils';
 import { expandTrillForPlayback } from '../utils/ornamentPlaybackUtils';
 import {
   canUseTimeSignatureSymbol,
@@ -266,7 +267,7 @@ import {
 } from '../utils/toolbarPlacement';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
-type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
+type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType; pedalGroup?: string };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 
 /**
@@ -1552,6 +1553,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             parts.push({
               measures: part,
               instrument: quartetInstrumentation.parts[partIndex]?.playbackInstrument,
+              pedalGroup: `quartet-${partIndex}`,
             });
           }
         });
@@ -1572,6 +1574,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             parts.push({
               measures: part,
               instrument: instrumentPart?.playbackInstrument,
+              pedalGroup: `ensemble-${partIndex}`,
             });
           }
           // 大譜表（staffCount:2）パートの2段目（低音部）も同じ音色で再生対象に含める。
@@ -1581,17 +1584,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
               parts.push({
                 measures: secondPart,
                 instrument: instrumentPart.playbackInstrument,
+                // ペダルは「同じ楽器の大譜表2段」でだけ共有する（同じ音色の別パートとは
+                // 共有しない・#549 round1 P2）。同じ partIndex のグループへまとめる
+                pedalGroup: `ensemble-${partIndex}`,
               });
             }
           }
         });
       } else if (scoreType === 'piano') {
-        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: InstrumentType.PIANO });
-        if (leftHandData && leftHandData.length > 0) parts.push({ measures: leftHandData, instrument: InstrumentType.PIANO });
+        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: InstrumentType.PIANO, pedalGroup: 'piano' });
+        if (leftHandData && leftHandData.length > 0) parts.push({ measures: leftHandData, instrument: InstrumentType.PIANO, pedalGroup: 'piano' });
         if (rightHandData && rightHandData.length > 0) tempoSourceParts.push(rightHandData);
         if (leftHandData && leftHandData.length > 0) tempoSourceParts.push(leftHandData);
       } else {
-        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: currentInstrument });
+        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: currentInstrument, pedalGroup: 'single' });
         if (rightHandData && rightHandData.length > 0) tempoSourceParts.push(rightHandData);
       }
 
@@ -1654,6 +1660,24 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           const scoreMeasureBpms = applyPlaybackSpeedToBpms(notatedMeasureBpms, playbackSpeedPercent);
           // 小節ごとの指定が無いときにエンジン・終了タイマーが使う基準テンポにも同じ倍率を掛ける
           const effectiveGlobalBpm = applyPlaybackSpeedToBpm(tempoSettings.bpm, playbackSpeedPercent);
+          // ペダル記号（Ped … ✱）は「踏んでいる間だけ響きを保持する」ので、再生では
+          // 区間内で鳴った音の**鳴り終わりだけ**を解除位置まで延ばす（#549）。
+          // ペダルは楽器に1つなので、大譜表の左手側に置いた記号でも右手の音が伸びるよう、
+          // 同じ楽器のパートをまとめて解決する。強弱・テンポと同じく**切る前の全列**で
+          // 解決し、途中再生でも開始位置より前で踏まれたペダルを引き継ぐ
+          const pedalPlans = buildPedalPlaybackPlans(
+            parts.map((partSource, partIndex) => ({
+              // 共有単位は「1つの楽器に属する段」だけ（round1 P2: 音色（InstrumentType）で
+              // まとめると、同音色の別楽器＝編成のピアノ2台などへペダルが漏れる）
+              instrumentKey: partSource.pedalGroup ?? `part-${partIndex}`,
+              // タイ継続先の解決（round2 P1）に元小節番号が要るため、展開項目ごと渡す
+              measures: expandedPerPart[partIndex].map(item => ({
+                measure: item.measure,
+                sourceMeasureIndex: item.sourceMeasureIndex,
+              })),
+            })),
+            getMeasureBeats(scoreTimeSignature),
+          );
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
@@ -1706,6 +1730,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   const tieAdjustment = tiePlan.get(
                     buildTiePlaybackEventKey(expandedMeasureIndex, event.voiceIndex, event.eventIndex)
                   );
+                  // ペダルの延長は「切る前の全列」で解決してあるので、開始位置ぶんずらして引く。
+                  const pedalExtendBeatsByKey = pedalPlans[partIndex]?.get(
+                    buildPedalPlaybackEventKey(
+                      expandedMeasureIndex + startExpandedIndex,
+                      event.voiceIndex,
+                      event.eventIndex,
+                    )
+                  );
                   const playbackEvent = {
                     ...event,
                     // 強弱未設定や休符では velocity を省略し、
@@ -1724,17 +1756,26 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                     tieSuppressedKeys: tieAdjustment && tieAdjustment.suppressedKeys.length > 0
                       ? tieAdjustment.suppressedKeys
                       : undefined,
+                    // ペダル区間の外や記号の無い譜面では省略して、古い挙動と完全に同じにする。
+                    pedalExtendBeatsByKey: pedalExtendBeatsByKey && Object.keys(pedalExtendBeatsByKey).length > 0
+                      ? pedalExtendBeatsByKey
+                      : undefined,
                   };
                   // トリルは主音と上隣接音（その小節の調号に沿う）の交互連打へ展開して鳴らす。
                   // トリル以外・展開できない形・スウィング対象の音はそのまま1イベントで返る（挙動不変）。
                   // タイの延長・抑制が付いた音は展開しない（タイで伸びた長さの中で
                   // 交互連打を組む対応は別課題。展開するとタイ情報がサブ音符へ複製され拍が壊れる）
                   if (tieAdjustment) return [playbackEvent];
-                  return expandTrillForPlayback(
+                  const expandedEvents = expandTrillForPlayback(
                     playbackEvent,
                     effectiveKeySignatures[expandedMeasureIndex + startExpandedIndex] ?? keySignature,
                     { swingActive },
                   );
+                  // トリルは1つの音符を細かい連打へ割るため、そのままだとサブ音符ごとに
+                  // 「音価の後ろへ N 拍」が足されて鳴り終わりがばらける。
+                  // タイを展開しないのと同じ理由で、割られた音にはペダル延長を付けない
+                  if (expandedEvents.length <= 1) return expandedEvents;
+                  return expandedEvents.map((subEvent) => ({ ...subEvent, pedalExtendBeatsByKey: undefined }));
                 })
               }))
             };
