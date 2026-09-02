@@ -296,15 +296,16 @@ function readImportableDynamics(directionEl: Element): AbsoluteDynamicMarking[] 
 }
 
 /**
- * 松葉（ヘアピン）と文字の強弱記号（pp〜ff）を1つの声部の NoteEvent へ復元する。
+ * 松葉（ヘアピン）・文字の強弱記号（pp〜ff）・ペダル記号を1つの声部の NoteEvent へ復元する。
  * 書出側（musicXmlExport.ts）は
  * 「開始音符の直前に <direction><wedge type="crescendo|diminuendo"/></direction>」
  * 「終了音符の直後に <direction><wedge type="stop"/></direction>」
  * 「音符の直前に <direction><dynamics><p/></dynamics></direction>」
+ * 「音符の直前に <direction><pedal type="start|stop"/></direction>」（#568）
  * という並びで出力しているため、<measure> の直下の子要素（note と direction）を
  * 出現順に読み、直前/直後の note との対応を追いながら組み立てる。
- * 松葉と文字強弱は「直前の direction を次の音符へ付ける」という同じ規則なので、
- * 走査を2本に増やさず1本で両方を組み立てる（同じ歩き方の2枚目を作らない。#552）。
+ * 松葉・文字強弱・ペダルは「直前の direction を次の音符へ付ける」という同じ規則なので、
+ * 走査を増やさず1本ですべてを組み立てる（同じ歩き方の2枚目を作らない。#552 / #568）。
  *
  * 声部1（<backup> より前）と声部2（<backup> より後）で同じ処理が使えるので、
  * 呼び出し側が「その声部ぶんの子要素・イベント配列・待ち行列」を渡す形にしてある。
@@ -317,11 +318,15 @@ function readImportableDynamics(directionEl: Element): AbsoluteDynamicMarking[] 
  *   声部をまたぐ松葉は作らない設計なので、待ち行列も声部ごとに分ける
  *   （混ぜると声部1の stop が声部2の松葉を閉じてしまう）。
  */
+/** 小節をまたぐペダル記号の持ち越し（#568 round1 P1）。声部ごとに1つ持つ */
+type PedalCarry = { pending: 'down' | 'up' | null };
+
 function attachDirectionMarksToVoiceEvents(
   children: Element[],
   events: NoteEvent[],
   measureIndex: number,
   openRefs: HairpinMark[],
+  pedalCarry: PedalCarry,
   syntheticRestCount?: (el: Element) => number,
   options?: {
     /**
@@ -336,10 +341,19 @@ function attachDirectionMarksToVoiceEvents(
   let pendingTypes: Array<'cresc' | 'dim'> = [];
   // 次の音符へ付ける文字の強弱記号（#552）。松葉の pendingTypes と同じ「待ち」の仕組み
   let pendingDynamics: AbsoluteDynamicMarking[] = [];
+  // 次の音符へ付けるペダル記号（#568）。強弱と同じ「待ち」の仕組みに乗せるが、
+  // 小節末の direction を次小節の先頭音符へ持ち越すため、状態は呼び出し側の
+  // pedalCarry（小節ループの外）に置く（round1 P1）。
+  // 1つの音符が持てるペダル記号は1つ（down か up）なので、配列ではなく最後の1つを覚える
 
   for (const child of children) {
     if (child.tagName === 'direction') {
       pendingDynamics.push(...readImportableDynamics(child));
+      const pedalType = child.querySelector('direction-type > pedal')?.getAttribute('type');
+      // type="change"（踏み替え）は、このアプリのデータモデルでは
+      // 「離してすぐ踏む」を1つで表せないため、v1 では「踏む」として取り込む（#568 仕様2）
+      if (pedalType === 'start' || pedalType === 'change') pedalCarry.pending = 'down';
+      else if (pedalType === 'stop') pedalCarry.pending = 'up';
       const wedgeType = options?.skipHairpins
         ? null
         : child.querySelector('wedge')?.getAttribute('type');
@@ -366,9 +380,13 @@ function attachDirectionMarksToVoiceEvents(
     const isChordNote = child.querySelector('chord') !== null;
     if (isChordNote) continue;
     eventIndex += 1;
-    if (pendingTypes.length === 0 && pendingDynamics.length === 0) continue;
+    if (pendingTypes.length === 0 && pendingDynamics.length === 0 && pedalCarry.pending === null) continue;
     const ev = events[eventIndex];
     if (!ev) continue;
+    if (pedalCarry.pending !== null) {
+      ev.pedalMark = pedalCarry.pending;
+      pedalCarry.pending = null;
+    }
     for (const type of pendingTypes) {
       const mark: HairpinMark = { type, endMeasure: measureIndex, endEvent: eventIndex };
       ev.hairpins = [...(ev.hairpins ?? []), mark];
@@ -584,6 +602,13 @@ function buildStaffMeasures(
   // 声部1と声部2で別々に持つのは、<backup> を挟んで別々の松葉が同時に開くことがあるため。
   const openHairpinRefs: HairpinMark[] = [];
   const openHairpinRefsVoice2: HairpinMark[] = [];
+  // 小節をまたいで持ち越すペダル記号（#568 round1 P1）。MusicXML の direction は
+  // 「同じ声部で後続する最初の音符」に付くため、小節最後の音符の**後**に置かれた
+  // <pedal type="stop"/> は次小節の先頭イベントへ付け直す必要がある。
+  // 松葉の openHairpinRefs と同じく、声部ごとに小節ループの外で状態を持つ
+  const pedalCarryVoice1: PedalCarry = { pending: null };
+  const pedalCarryVoice2: PedalCarry = { pending: null };
+  const pedalCarryByVoice = new Map<number, PedalCarry>();
   // <voice> 番号 → アプリの声部番号（1始まり）の対応表は**パート全体から一度だけ**作る。
   // 小節ごとに作ると「voice 6 だけの小節では voice-1、voice 5・6 が揃う小節では voice-2」と
   // 同じ声部が小節境界で入れ替わり、編集レイヤー・再生・松葉の継続が壊れる（Codex round1 P1）
@@ -773,11 +798,11 @@ function buildStaffMeasures(
     const voice2Children = childrenForVoice(2);
 
     const events = parseVoiceChildren(voice1Children);
-    attachDirectionMarksToVoiceEvents(voice1Children, events, mi, openHairpinRefs, syntheticRestCount);
+    attachDirectionMarksToVoiceEvents(voice1Children, events, mi, openHairpinRefs, pedalCarryVoice1, syntheticRestCount);
 
     const voice2Events = parseVoiceChildren(voice2Children);
     // 声部2の松葉も同じ方式で復元する（voice2Events の要素を直接書き換える）
-    attachDirectionMarksToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2, syntheticRestCount);
+    attachDirectionMarksToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2, pedalCarryVoice2, syntheticRestCount);
 
     // 声部3以降（松葉の復元は現行 UI が2声までなので行わない。「壊れず全声部が戻る」水準）。
     // 疎な番号（間の声部が空）は空の器で埋め、声部番号を保存データ上の位置と一致させる
@@ -793,7 +818,9 @@ function buildStaffMeasures(
       // 強弱は全声部で復元する（round1 P2: 書き出しは全声部へ <dynamics> を出すため、
       // 復元しないと声部3以降の f 等が**無通知のまま**往復で消える）。
       // 松葉は現行 UI が2声までなので skipHairpins で明示的に無効化する（round2 P2）
-      attachDirectionMarksToVoiceEvents(childrenN, eventsN, mi, [], syntheticRestCount, { skipHairpins: true });
+      const carryN = pedalCarryByVoice.get(n) ?? { pending: null };
+      pedalCarryByVoice.set(n, carryN);
+      attachDirectionMarksToVoiceEvents(childrenN, eventsN, mi, [], carryN, syntheticRestCount, { skipHairpins: true });
       extraVoiceEvents.push(eventsN);
     }
 

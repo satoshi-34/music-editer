@@ -125,6 +125,18 @@ function dynamicsDirectionXml(ev: NoteEvent, staff: number): string {
 }
 
 /**
+ * ペダル記号 → MusicXML の <pedal> direction（対象音符の直前に配置する。Issue #568）。
+ * MusicXML では「踏む」が type="start"、「離す」が type="stop"。
+ * line="no" は「Ped. ‥ ✱ の記号で表す（横線ではなく）」という指定で、
+ * このアプリの描画（Ped. と ✱ の記号）と合わせている。
+ */
+function pedalDirectionXml(ev: NoteEvent, staff: number): string {
+  if (!ev.pedalMark) return '';
+  const type = ev.pedalMark === 'down' ? 'start' : 'stop';
+  return `<direction placement="below"><direction-type><pedal type="${type}" line="no"/></direction-type><staff>${staff}</staff></direction>`;
+}
+
+/**
  * 速度標語（Andante 等）1つぶんの <direction> を作る（Issue #518）。
  *
  * 標語は MusicXML では <words> で表すが、それだけだと読み込む側は「文字」しか受け取れず、
@@ -468,6 +480,10 @@ function measureToXml(
     if (tempoDir) lines.push(tempoDir);
     const dynDir = dynamicsDirectionXml(ev, options.staff);
     if (dynDir) lines.push(dynDir);
+    // ペダル記号（#568）も強弱と同じく音符の直前に置く。
+    // 踏む（start）・離す（stop）のどちらも「その音符の位置で起きる」ため並びは同じ
+    const pedalDir = pedalDirectionXml(ev, options.staff);
+    if (pedalDir) lines.push(pedalDir);
     // 松葉（ヘアピン）開始: この音符の直前に <wedge type="crescendo|diminuendo"/> を置く
     const hpKey = `${options.measureIndex ?? 0}-${i}`;
     options.hairpins?.starts.get(hpKey)?.forEach((wedgeType) => {
@@ -513,6 +529,9 @@ function measureToXml(
       // 書き出しの時点で消え、読み込みを直しても往復で戻らない（#552）
       const dynDirExtra = dynamicsDirectionXml(ev, options.staff);
       if (dynDirExtra) lines.push(dynDirExtra);
+      // ペダル記号も追加声部の音符に付けられるので、主声部と同じ並びで出す（#568）
+      const pedalDirExtra = pedalDirectionXml(ev, options.staff);
+      if (pedalDirExtra) lines.push(pedalDirExtra);
       if (voiceNumber === 2) {
         options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
           lines.push(wedgeDirectionXml(wedgeType, options.staff));
