@@ -95,14 +95,6 @@ function collectLaneNotes(events: NoteEvent[], swingActive: boolean): LaneNote[]
   return notes;
 }
 
-/** その拍で鳴っている音符（開始 <= 拍 < 終了）を返す。無ければ null */
-function findSoundingNote(notes: LaneNote[], beat: number): LaneNote | null {
-  for (const note of notes) {
-    if (note.startBeat <= beat + BEAT_EPSILON && beat < note.endBeat - BEAT_EPSILON) return note;
-  }
-  return null;
-}
-
 /**
  * 再生ボタン経路用の「見た目の再生位置タイムライン」を作る。
  *
@@ -160,9 +152,12 @@ export function buildPlaybackPositionTimeline(
 
   expandedMeasures.forEach(({ sourceMeasureIndex, measure }, sliceIndex) => {
     const msPerBeat = (60 / measureBpms[sliceStart + sliceIndex]) * 1000;
-    // 小節ごとに拍子が変わる譜面では、その小節の拍子でスウィング対象かどうかを判定する。
-    const measureTimeSignature = measure.timeSignature ?? timeSignature;
-    const swingActiveForMeasure = shouldApplySwing(swingEnabled, measureTimeSignature);
+    // スウィング判定は**グローバル拍子**で行う（#579 round1 P2）。
+    // 実音エンジンへは ScorePage が isCompoundMeter をグローバル拍子から
+    // 全小節一律で渡しており、表示側だけ小節の timeSignature で判定すると
+    // 6/8 の途中小節などで実音とハイライトの裏拍位置がずれる。
+    // 表示は実音に合わせるのが正なので、同じ規則（グローバル一律）にそろえる
+    const swingActiveForMeasure = shouldApplySwing(swingEnabled, timeSignature);
 
     // ── その小節で鳴るレーン（パート×声部）を集める ──
     // 基準パートの主声部は「画面の位置表示（N小節目 M音符目）」の基準として必ず入れる。
@@ -178,40 +173,74 @@ export function buildPlaybackPositionTimeline(
     (highlightParts ?? []).forEach((source, sourceIndex) => {
       const partMeasure = expandedPerHighlightPart[sourceIndex][sliceStart + sliceIndex]?.measure;
       if (!partMeasure) return;
-      // スウィングの判定はそのパートの小節の拍子で行う（拍子は小節ごとに変わり得る）
-      const partSwingActive = shouldApplySwing(swingEnabled, partMeasure.timeSignature ?? timeSignature);
       getMeasureVoices(partMeasure).forEach((voice, voiceIndex) => {
         lanes.push({
           partIndex: source.partIndex,
           voiceIndex,
           emitTargets: true,
-          notes: collectLaneNotes(voice.events, partSwingActive),
+          // スウィング判定も基準と同じグローバル一律（実音エンジンの規則に合わせる）
+          notes: collectLaneNotes(voice.events, swingActiveForMeasure),
         });
       });
     });
 
-    // ── 光らせる時刻（拍）を決める ──
-    // どれか1つの声部で音が始まる拍はすべてタイムラインの節目になる。
+    // ── 光らせる/消す時刻（拍）を決める ──
+    // どれかの声部で音が**始まる**拍と**終わる**拍の両方が節目になる（round1 P1:
+    // 開始拍だけだと「四分音符1つ+休符3拍」で帯が小節末まで残り続けた。
+    // 終了拍を節目にすることで、その時刻に targets から外れて帯が消える）。
     // 主声部の音符だけを節目にしていた頃は、右手が休んでいるあいだ左手が鳴っても
     // 画面が動かなかった（#411 の症状）
-    const tickBeats: number[] = [];
+    const rawTicks: number[] = [];
     lanes.forEach((lane) => {
       lane.notes.forEach((note) => {
-        if (!tickBeats.some((beat) => Math.abs(beat - note.startBeat) < BEAT_EPSILON)) {
-          tickBeats.push(note.startBeat);
-        }
+        rawTicks.push(note.startBeat);
+        // 終了拍の節目はハイライト消灯のためのもの。従来互換の呼び出し
+        // （highlightParts なし）ではタイムラインの形を変えない
+        if (highlightParts) rawTicks.push(note.endBeat);
       });
     });
-    tickBeats.sort((a, b) => a - b);
+    rawTicks.sort((a, b) => a - b);
+    const tickBeats: number[] = [];
+    rawTicks.forEach((beat) => {
+      if (tickBeats.length === 0 || beat - tickBeats[tickBeats.length - 1] >= BEAT_EPSILON) {
+        tickBeats.push(beat);
+      }
+    });
+    // 小節終端ちょうどの節目は次の小節の先頭（同時刻）に任せる。残すと同時刻へ
+    // 空の項目が重複し、次小節の開始 targets を上書きする恐れがある
+    const measureEndBeat = measureAdvanceBeats(measure, timeSignature);
+    while (
+      tickBeats.length > 0 &&
+      tickBeats[tickBeats.length - 1] >= measureEndBeat - BEAT_EPSILON
+    ) {
+      tickBeats.pop();
+    }
+
+    // 各レーンとも音符は開始拍の昇順・重なりなし（同一声部の逐次イベント）なので、
+    // 節目の昇順走査に合わせてレーンごとの読み位置を前進させる（round1 P2:
+    // 節目×全音符の総当たり（最悪二乗）を O(N log N) に抑える）
+    const laneCursors = lanes.map(() => 0);
+    /** その拍で鳴っている音符を返す。カーソルは巻き戻さない前提（tickBeats 昇順で呼ぶ） */
+    const soundingAt = (laneIndex: number, beat: number): LaneNote | null => {
+      const notes = lanes[laneIndex].notes;
+      let cursor = laneCursors[laneIndex];
+      while (cursor < notes.length && notes[cursor].endBeat - BEAT_EPSILON <= beat) cursor++;
+      laneCursors[laneIndex] = cursor;
+      const note = notes[cursor];
+      if (note && note.startBeat <= beat + BEAT_EPSILON && beat < note.endBeat - BEAT_EPSILON) {
+        return note;
+      }
+      return null;
+    };
 
     tickBeats.forEach((beat) => {
       // 位置表示は従来どおり基準パートの主声部で数える。その拍で主声部が鳴っていなければ
       // 直前の音符の番号を保つ（他声部だけが鳴っている拍で番号が 0 へ飛ばないようにする）
-      const referenceNote = findSoundingNote(referenceLane.notes, beat);
+      const referenceNote = soundingAt(0, beat);
       const targets: PlaybackHighlightTarget[] = [];
-      lanes.forEach((lane) => {
+      lanes.forEach((lane, laneIndex) => {
         if (!lane.emitTargets) return;
-        const sounding = findSoundingNote(lane.notes, beat);
+        const sounding = soundingAt(laneIndex, beat);
         if (!sounding) return;
         targets.push({
           partIndex: lane.partIndex,
@@ -228,9 +257,10 @@ export function buildPlaybackPositionTimeline(
           beatPosition: beat,
           noteIndex: referenceNote ? referenceNote.noteIndex : (lastReferenceNoteIndex ?? 0),
         },
-        // 従来の呼び出し（highlightParts なし）では付けない。既存の呼び出し元・テストの
-        // タイムラインの形をそのまま保つため
-        ...(targets.length > 0 ? { targets } : {}),
+        // highlightParts が渡されたときは**空でも** targets を付ける（round1 P1:
+        // 空 = 「いま鳴っている音は無い＝全帯を消す」の指示。undefined は従来互換で
+        // 「対象情報なし＝位置から1件探す」。呼び出し（highlightParts なし）では付けない）
+        ...(highlightParts ? { targets } : {}),
       });
       if (referenceNote) lastReferenceNoteIndex = referenceNote.noteIndex;
     });

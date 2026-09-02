@@ -99,8 +99,9 @@ describe('buildPlaybackPositionTimeline', () => {
       [{ partIndex: 0, measures: rightHand }, { partIndex: 1, measures: leftHand }],
     );
 
-    // 節目は右手声部1の2音（0拍・1拍）。声部2と左手はそこで鳴り続けている
-    expect(timeline.map(item => item.atMs)).toEqual([0, 500]);
+    // 節目は右手声部1の2音の開始（0拍・1拍）と、全声部の鳴り終わり（2拍）。
+    // 終了拍の節目は帯を消すためにある（#579 round1 P1）
+    expect(timeline.map(item => item.atMs)).toEqual([0, 500, 1000]);
     expect(timeline[0].targets).toEqual([
       { partIndex: 0, voiceIndex: 0, measureIndex: 0, noteIndex: 0 },
       { partIndex: 0, voiceIndex: 1, measureIndex: 0, noteIndex: 0 },
@@ -112,6 +113,8 @@ describe('buildPlaybackPositionTimeline', () => {
       { partIndex: 0, voiceIndex: 1, measureIndex: 0, noteIndex: 0 },
       { partIndex: 1, voiceIndex: 0, measureIndex: 0, noteIndex: 0 },
     ]);
+    // 2拍かっきりで全声部が鳴り終わる → 空の targets（=全帯を消す指示）
+    expect(timeline[2].targets).toEqual([]);
   });
 
   it('主声部が休んでいる拍でも、他声部が鳴っていればタイムラインの節目になる（#411）', () => {
@@ -133,7 +136,7 @@ describe('buildPlaybackPositionTimeline', () => {
       [{ partIndex: 0, measures: rightHand }, { partIndex: 1, measures: leftHand }],
     );
 
-    expect(timeline.map(item => item.atMs)).toEqual([0, 500]);
+    expect(timeline.map(item => item.atMs)).toEqual([0, 500, 1000]);
     // 1拍目は左手だけ。主声部が鳴っていない拍でも画面が動く（従来は節目にすらならなかった）
     expect(timeline[0].targets).toEqual([
       { partIndex: 1, voiceIndex: 0, measureIndex: 0, noteIndex: 0 },
@@ -141,6 +144,37 @@ describe('buildPlaybackPositionTimeline', () => {
     expect(timeline[1].targets).toEqual([
       { partIndex: 0, voiceIndex: 0, measureIndex: 0, noteIndex: 1 },
     ]);
+    expect(timeline[2].targets).toEqual([]);
+  });
+
+  it('音符が終わって無音になる拍で targets が空になり、帯を消せる（#579 round1 P1）', () => {
+    // 四分音符1つ + 休符3拍。開始拍だけを節目にすると帯が小節末まで残っていた
+    const measures: MeasureData[] = [
+      {
+        events: [
+          { dur: '4', isRest: false, keys: ['c/4'] },
+          { dur: '4', isRest: true, keys: [] },
+          { dur: '2', isRest: true, keys: [] },
+        ],
+      },
+      { events: [{ dur: '4', isRest: false, keys: ['d/4'] }] },
+    ];
+
+    const timeline = buildPlaybackPositionTimeline(
+      measures, 120, [4, 4], false, 0, undefined,
+      [{ partIndex: 0, measures }],
+    );
+
+    // 0拍=発音、1拍=鳴り終わり（消灯）、次小節頭=次の発音、その鳴り終わり
+    expect(timeline.map(item => item.atMs)).toEqual([0, 500, 2000, 2500]);
+    expect(timeline[0].targets).toEqual([
+      { partIndex: 0, voiceIndex: 0, measureIndex: 0, noteIndex: 0 },
+    ]);
+    expect(timeline[1].targets).toEqual([]);
+    expect(timeline[2].targets).toEqual([
+      { partIndex: 0, voiceIndex: 0, measureIndex: 1, noteIndex: 0 },
+    ]);
+    expect(timeline[3].targets).toEqual([]);
   });
 
   it('highlightParts を渡さない従来の呼び出しでは targets を付けない（後方互換）', () => {

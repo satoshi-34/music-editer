@@ -1795,24 +1795,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
               }))
             };
           });
-          await audioEngine.playParts(partObjs, effectiveGlobalBpm);
-
-          // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
-          // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
-          // ここでは最大値を採用して全体の終了時刻を決める。
-          // 終了タイマーは、実際にエンジンへ渡した展開済み小節列（partObjs.measures）から
-          // calculateExpandedPlaybackDurationMs で数える。選択の有無で分けない（Codex 3巡目）:
-          // 旧 calculateScoreDuration は未充足小節を実長だけで数える・末尾判定が主声部のみ、
-          // のため、拍子長を下限に進む実音・タイムラインより早く stopped になっていた
-          const totalDuration = Math.max(
-            ...partObjs.map(partObj =>
-              calculateExpandedPlaybackDurationMs(partObj.measures, effectiveGlobalBpm, scoreTimeSignature) / 1000)
-          );
-          setPlaybackState('playing');
-          clearPlaybackTimer();
-          remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
-          totalPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
-          playbackStartedAtRef.current = Date.now();
           // 位置表示（PlaybackHighlight含む）は先頭パート（referenceMeasures）の展開順を基準に進める。
           // 他パートの反復順もこれに合わせているため、表示の基準としてズレが出にくい。
           // ハイライトは「鳴っている全パート・全声部」に出す（#411）。
@@ -1839,6 +1821,27 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             scoreMeasureBpms,
             highlightParts
           );
+          // タイムラインは playParts の**前**に作る（#579 round1 P2: 実音の予約後に
+          // 同期計算すると、計算時間ぶんハイライトの0ms起点が遅れて帯が終始ずれる）
+
+          await audioEngine.playParts(partObjs, effectiveGlobalBpm);
+
+          // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
+          // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
+          // ここでは最大値を採用して全体の終了時刻を決める。
+          // 終了タイマーは、実際にエンジンへ渡した展開済み小節列（partObjs.measures）から
+          // calculateExpandedPlaybackDurationMs で数える。選択の有無で分けない（Codex 3巡目）:
+          // 旧 calculateScoreDuration は未充足小節を実長だけで数える・末尾判定が主声部のみ、
+          // のため、拍子長を下限に進む実音・タイムラインより早く stopped になっていた
+          const totalDuration = Math.max(
+            ...partObjs.map(partObj =>
+              calculateExpandedPlaybackDurationMs(partObj.measures, effectiveGlobalBpm, scoreTimeSignature) / 1000)
+          );
+          setPlaybackState('playing');
+          clearPlaybackTimer();
+          remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
+          totalPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
+          playbackStartedAtRef.current = Date.now();
           // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
           // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
           // なので通知する（Codex round1 P3）

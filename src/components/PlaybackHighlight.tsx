@@ -248,9 +248,12 @@ export default function PlaybackHighlight({
     // 前の帯を先に消す（位置が進むたびに、いま鳴っている音符ぶんだけが残る状態にする）
     clearAllHighlights();
 
-    // 鳴っている音符の一覧が渡されていればそれを使う。無い場合は従来どおり
-    // 「再生位置の小節・音符番号」1件だけを探す（パート・声部は絞らない）
-    const resolvedTargets: PlaybackHighlightTarget[] = targets && targets.length > 0
+    // targets の意味は3通り（#579 round1 P1）:
+    //   undefined = 対象情報なし（従来互換）→ 位置の小節・音符番号から1件探す
+    //   []        = 「いま鳴っている音は無い」→ 全帯を消したまま何も出さない
+    //   1件以上   = その音符たちへ帯を出す
+    if (targets && targets.length === 0) return;
+    const resolvedTargets: PlaybackHighlightTarget[] = targets
       ? targets
       : [{
           partIndex: -1,
