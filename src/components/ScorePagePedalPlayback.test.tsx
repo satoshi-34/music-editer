@@ -133,4 +133,65 @@ describe('ScorePage: ペダル記号の再生反映（Issue #549）', () => {
     expect(rightHand.measures[1].events[0].pedalExtendBeatsByKey).toBeUndefined();
     expect(leftHand.measures[1].events[1].pedalExtendBeatsByKey).toBeUndefined();
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('編成譜: 同音色の別パートへは漏れず、大譜表の2段では共有する（#549 round2 P2）', async () => {
+    // 同音連打は「再打鍵で前の音を切る」仕様（正しい挙動）で延長が消えるため、
+    // 検証データは音高を変えて並べる
+    const walk = (o: number) => ([
+      { dur: '4' as const, isRest: false, keys: [`c/${o}`] },
+      { dur: '4' as const, isRest: false, keys: [`d/${o}`] },
+      { dur: '4' as const, isRest: false, keys: [`e/${o}`] },
+      { dur: '4' as const, isRest: false, keys: [`f/${o}`] },
+    ]);
+    const withDown = (o: number) => {
+      const events = walk(o);
+      events[0] = { ...events[0], pedalMark: 'down' as const };
+      return events;
+    };
+    const measureOf = (events: unknown[]) => ({ events, voices: [{ id: 'voice-1', events }] });
+    // ピアノ2台の編成。1台目（pianoA）は大譜表（staffCount 2）で、**2段目**に Ped。
+    // 2台目（pianoB）は同じ音色 piano だが独立した楽器
+    const instrumentation = {
+      presetId: 'custom',
+      name: 'ピアノ2台',
+      parts: [
+        { id: 'pianoA', name: 'Piano A', abbreviation: 'PnA', family: 'keyboard', clef: 'treble', staffCount: 2, transposition: 'C', bracketGroup: 'keyboard', playbackInstrument: 'piano', order: 0 },
+        { id: 'pianoB', name: 'Piano B', abbreviation: 'PnB', family: 'keyboard', clef: 'treble', staffCount: 1, transposition: 'C', bracketGroup: 'keyboard', playbackInstrument: 'piano', order: 1 },
+      ],
+    };
+    const data = createSavedScoreData(
+      { title: 'ペダル共有単位テスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [
+        { partId: 'pianoA', clef: 'treble', measures: [measureOf(walk(5))] },
+        { partId: 'pianoA::2', clef: 'bass', measures: [measureOf(withDown(3))] },
+        { partId: 'pianoB', clef: 'treble', measures: [measureOf(walk(4))] },
+      ] as never,
+      1, 1, 'ensemble', 'C', [4, 4],
+      instrumentation as never,
+    );
+    const created = createWork('ペダル共有単位テスト');
+    if (!created.success || !created.data) throw new Error('createWork failed');
+    saveWorkAutosaveData(created.data.id, data);
+    setLastOpenedWorkId(created.data.id);
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalled(); }, { timeout: 15000 });
+
+    const parts = playPartsMock.mock.calls[0][0] as Array<{ measures: Array<{ events: PlaybackEventShape[] }> }>;
+    // 並び: pianoA(1段目)・pianoA(2段目)・pianoB
+    expect(parts.length).toBe(3);
+    const [aTop, aBottom, b] = parts;
+    // 2段目の単独 Ped（✱なし）は譜面終端まで → 1拍目は3拍延びる。
+    // 同じ楽器の1段目にも効く
+    expect(aBottom.measures[0].events[0].pedalExtendBeatsByKey).toEqual({ 'c/3': 3 });
+    expect(aTop.measures[0].events[0].pedalExtendBeatsByKey).toEqual({ 'c/5': 3 });
+    // 同じ音色でも**別の楽器**（pianoB）へは漏れない
+    expect(b.measures[0].events[0].pedalExtendBeatsByKey).toBeUndefined();
+    expect(b.measures[0].events[1].pedalExtendBeatsByKey).toBeUndefined();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

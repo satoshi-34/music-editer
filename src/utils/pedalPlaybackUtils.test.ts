@@ -256,4 +256,31 @@ describe('buildPedalPlaybackPlans', () => {
     // 1小節目の全音符（0〜4拍）は終端まで4拍延びる
     expect(plans[1].get(buildPedalPlaybackEventKey(0, 0, 0))).toEqual({ 'c/5': 4 });
   });
+
+  it('リピート展開後もタイ継続の再打鍵除外が2周目で効く（round2 P1）', () => {
+    // 元譜2小節（m0→m1 へタイ）を [0,1,0,1] に展開した列。
+    // arc.toMeasureIndex は元小節番号(1)のままなので、展開後の各出現へ解決できないと
+    // 2周目（展開添字2→3）の継続音が再打鍵扱いになり保持が切れる
+    const m0 = measure([
+      note(['c/4'], '1', {
+        pedalMark: 'down',
+        arcs: [{ kind: 'tie', fromKey: 'c/4', toKey: 'c/4', toMeasureIndex: 1, toEventIndex: 0 }],
+      }),
+    ]);
+    const m1 = measure([
+      note(['c/4'], '2'),
+      note(['e/4'], '2', { pedalMark: 'up' }),
+    ]);
+    const expanded = [
+      { measure: m0, sourceMeasureIndex: 0 },
+      { measure: m1, sourceMeasureIndex: 1 },
+      { measure: m0, sourceMeasureIndex: 0 },
+      { measure: m1, sourceMeasureIndex: 1 },
+    ];
+    const plan = buildPedalPlaybackPlans([{ instrumentKey: 'piano', measures: expanded }], 4)[0];
+    // 1周目: m0 の全音符は解除（絶対6拍）まで → 延長2拍
+    expect(plan.get(buildPedalPlaybackEventKey(0, 0, 0))).toEqual({ 'c/4': 2 });
+    // 2周目: 展開添字2の全音符も同様に延長2拍（継続音=添字3の c/4 で切られない）
+    expect(plan.get(buildPedalPlaybackEventKey(2, 0, 0))).toEqual({ 'c/4': 2 });
+  });
 });

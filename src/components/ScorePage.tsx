@@ -1648,7 +1648,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
               // 共有単位は「1つの楽器に属する段」だけ（round1 P2: 音色（InstrumentType）で
               // まとめると、同音色の別楽器＝編成のピアノ2台などへペダルが漏れる）
               instrumentKey: partSource.pedalGroup ?? `part-${partIndex}`,
-              measures: expandedPerPart[partIndex].map(item => item.measure),
+              // タイ継続先の解決（round2 P1）に元小節番号が要るため、展開項目ごと渡す
+              measures: expandedPerPart[partIndex].map(item => ({
+                measure: item.measure,
+                sourceMeasureIndex: item.sourceMeasureIndex,
+              })),
             })),
             getMeasureBeats(scoreTimeSignature),
           );

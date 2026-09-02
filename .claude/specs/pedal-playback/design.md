@@ -124,3 +124,22 @@ down → up の区間を作る。ここで別のペアリングを書くと、�
 - 同時保持数の上限は**パートごと**に数える（大譜表なら実質 24×2）。
   楽器全体で数える形にはしていない
 - 内蔵音源は元から和音の先頭音のみを鳴らす仕様のため、保持も先頭音だけに効く
+
+
+## 追補（round1/2 レビュー対応・2026-09-02）
+
+- **ペアリングは楽器単位で一度だけ**: 段ごとに pairPedalMarks してから区間統合する旧手順は
+  「左手 Ped+右手 ✱」がペアにならない（round1 P1）。生マークを pedalGroup 単位で集約→
+  sort→一度だけ pairPedalMarks へ。
+- **共有単位は pedalGroup**（音色 InstrumentType ではない・round1 P2）: piano=両手 /
+  ensemble=同一パートの大譜表2段のみ / quartet・single=パートごと。同音色の別楽器
+  （ピアノ2台等）へは漏れない。
+- **踏み替え**: 区間を downBeat 順に隣接クリップ（upBeat=min(upBeat, 次のdownBeat)）。
+  連続 Ped・リピート展開で Ped が並ぶ場合も後続の ✱ が効く（round1 P2）。
+- **単独 Ped の終端**は小節送りを含む再生タイムライン終端（buildTimeline の totalBeats を
+  楽器内で max）。段の最終イベントではない（round1 P2）。
+- **タイの継続音は再打鍵ではない**: arcs kind='tie' の toKey と旧 tiedToNext を
+  planKey→Set<key> で記録し、再打鍵 release から除外（round1 P1）。
+  **リピート展開後は arc.toMeasureIndex（元小節番号）を tiePlaybackUtils の
+  resolveTargetExpandedIndex で「この出現から見た正しい出現」へ解決**してからキーを作る
+  （round2 P1）。このため計画の入力は sourceMeasureIndex 付きの展開項目も受ける。

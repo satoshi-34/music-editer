@@ -13,7 +13,7 @@
 import type { MeasureData } from '../types/storage';
 import { getEventDurationBeats, getMeasureVoices } from './voiceMeasureUtils';
 import { pairPedalMarks } from './pedalBridgeUtils';
-import { buildTiePlaybackEventKey } from './tiePlaybackUtils';
+import { buildTiePlaybackEventKey, resolveTargetExpandedIndex } from './tiePlaybackUtils';
 
 /**
  * 計画を引くためのキー（`小節:声部:イベント`）。
@@ -49,8 +49,13 @@ export interface PedalPlaybackPartSource {
    * （左手側に置いた Ped. で右手の音も伸びるのが実機どおり）。
    */
   instrumentKey: string;
-  /** 反復展開済み・再生順に並んだ小節列（ScorePage がエンジンへ渡すのと同じ列） */
-  measures: ReadonlyArray<MeasureData>;
+  /**
+   * 反復展開済み・再生順に並んだ小節列（ScorePage がエンジンへ渡すのと同じ列）。
+   * リピートを含む譜面ではタイの継続先（arcs.toMeasureIndex=**元小節番号**）を
+   * 展開後の正しい出現へ解決する必要があるため、`sourceMeasureIndex` 付きの形も受ける
+   * （#549 round2 P1。省略時は「展開＝恒等（リピート無し）」として添字を使う）
+   */
+  measures: ReadonlyArray<MeasureData | { measure: MeasureData; sourceMeasureIndex: number }>;
 }
 
 /**
@@ -93,7 +98,7 @@ type TimelineEvent = {
  * ここを揃えないと、入力途中の未充足小節がある譜面でペダル区間の位置だけがずれる。
  */
 function buildTimeline(
-  measures: ReadonlyArray<MeasureData>,
+  measuresLike: ReadonlyArray<MeasureData | { measure: MeasureData; sourceMeasureIndex: number }>,
   measureBeatsFloor: number,
 ): { events: TimelineEvent[]; totalBeats: number; tieContinuationKeys: Map<string, Set<string>> } {
   const timeline: TimelineEvent[] = [];
@@ -107,8 +112,12 @@ function buildTimeline(
     tieContinuationKeys.set(planKey, set);
   };
   let measureStartBeat = 0;
+  const expanded = measuresLike.map((item, index) =>
+    'measure' in item && !('events' in item)
+      ? { measure: item.measure, sourceMeasureIndex: item.sourceMeasureIndex }
+      : { measure: item as MeasureData, sourceMeasureIndex: index });
 
-  measures.forEach((measure, measureIndex) => {
+  expanded.forEach(({ measure }, measureIndex) => {
     let maxVoiceBeats = 0;
     getMeasureVoices(measure).forEach((voice, voiceIndex) => {
       let cursor = 0;
@@ -128,8 +137,14 @@ function buildTimeline(
         // 旧形式 tiedToNext=「同じ声部のすぐ次の音へ同音でタイ」）
         (event.arcs ?? []).forEach((arc) => {
           if (arc.kind !== 'tie') return;
+          // arc.toMeasureIndex は**元小節番号**。リピート展開後の列では同じ元小節が
+          // 複数回現れるため、タイ計画と同じ規則で「この出現から見た正しい出現」へ
+          // 解決してからキーを作る（#549 round2 P1: 展開後添字と混同すると、2周目の
+          // 継続音が再打鍵扱いになり保持がタイ終端で切れる）
+          const targetIndex = resolveTargetExpandedIndex(expanded, measureIndex, arc.toMeasureIndex);
+          if (targetIndex == null) return;
           markContinuation(
-            buildTiePlaybackEventKey(arc.toMeasureIndex, voiceIndex, arc.toEventIndex),
+            buildTiePlaybackEventKey(targetIndex, voiceIndex, arc.toEventIndex),
             arc.toKey,
           );
         });
