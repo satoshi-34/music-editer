@@ -10,6 +10,7 @@ import ScorePage from './ScorePage';
 import {
   createSavedScoreData,
   createWork,
+  loadWorkAutosaveData,
   saveWorkAutosaveData,
   setLastOpenedWorkId,
 } from '../utils/storage';
@@ -90,6 +91,7 @@ function seedWorkWithTempoMarking() {
   const saved = saveWorkAutosaveData(created.data.id, data);
   if (!saved.success) throw new Error('saveWorkAutosaveData failed');
   setLastOpenedWorkId(created.data.id);
+  return created.data.id;
 }
 
 /** 譜面が描けるまで待って、再生タブを開く */
@@ -196,21 +198,28 @@ describe('ScorePage: 再生速度（%）の配線（Issue #544）', () => {
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('再生速度は再読込後も保持され、作品の保存データへは混入しない', async () => {
-    seedWorkWithTempoMarking();
+    const workId = seedWorkWithTempoMarking();
     await renderAndOpenPlaybackTab();
+
+    // まず基準テンポを 121 へ変え、自動保存が実際に走ったこと（globalBpm=121）を確認してから
+    // 速度を変える。保存前に見ても回帰を検出できない（round2 P2）ため、
+    // 「更新された保存データ」を対象にする
+    fireEvent.change(screen.getByLabelText('テンポ（BPM）'), { target: { value: '121' } });
+    fireEvent.blur(screen.getByLabelText('テンポ（BPM）'));
+    await waitFor(() => {
+      const loaded = loadWorkAutosaveData(workId);
+      expect(loaded.success && loaded.data?.globalBpm).toBe(121);
+    }, { timeout: 15000 });
 
     fireEvent.change(screen.getByLabelText('再生速度（%）'), { target: { value: '50' } });
     expect(screen.getByText('再生速度: 50%')).toBeInTheDocument();
 
     // 作品の保存データ（globalBpm）は基準テンポのまま。再生速度が保存へ漏れると、
-    // 50% で聴いていた作品が次に開いたとき半分のテンポの曲になってしまう
-    const savedKeys = Array.from({ length: localStorageMock.length }, (_, i) => localStorageMock.key(i) ?? '');
-    for (const key of savedKeys) {
-      const raw = localStorageMock.getItem(key) ?? '';
-      if (raw.includes('"globalBpm"')) {
-        expect(JSON.parse(raw).globalBpm ?? 120).toBe(120);
-      }
-    }
+    // 50% で聴いていた作品が次に開いたとき半分のテンポの曲になってしまう。
+    // 自動保存の間隔（1.5秒）を確実にまたいでから確認する
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const after = loadWorkAutosaveData(workId);
+    expect(after.success && after.data?.globalBpm).toBe(121);
 
     // 再マウント（再読込相当）でもスライダーは 50% のまま（localStorage 永続化）
     cleanup();
