@@ -177,6 +177,33 @@ describe('buildPlaybackPositionTimeline', () => {
     expect(timeline[3].targets).toEqual([]);
   });
 
+  it('小節終端で鳴り終わり、次小節が休符で始まる場合も境界で消灯する（#579 round2 P1）', () => {
+    // 全音符（小節いっぱい鳴る）→ 次小節は1拍休んでから発音。
+    // 境界の消灯節目を削ると、全音符の帯が次の発音（5拍目）まで残ってしまう
+    const measures: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }] },
+      {
+        events: [
+          { dur: '4', isRest: true, keys: [] },
+          { dur: '4', isRest: false, keys: ['d/4'] },
+          { dur: '2', isRest: true, keys: [] },
+        ],
+      },
+    ];
+
+    const timeline = buildPlaybackPositionTimeline(
+      measures, 120, [4, 4], false, 0, undefined,
+      [{ partIndex: 0, measures }],
+    );
+
+    // 0=全音符の発音、2000=小節境界の消灯、2500=次小節の発音、3000=その消灯
+    expect(timeline.map(item => item.atMs)).toEqual([0, 2000, 2500, 3000]);
+    expect(timeline[1].targets).toEqual([]);
+    expect(timeline[2].targets).toEqual([
+      { partIndex: 0, voiceIndex: 0, measureIndex: 1, noteIndex: 1 },
+    ]);
+  });
+
   it('highlightParts を渡さない従来の呼び出しでは targets を付けない（後方互換）', () => {
     const measures: MeasureData[] = [
       { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },

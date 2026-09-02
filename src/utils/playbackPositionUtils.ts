@@ -206,15 +206,10 @@ export function buildPlaybackPositionTimeline(
         tickBeats.push(beat);
       }
     });
-    // 小節終端ちょうどの節目は次の小節の先頭（同時刻）に任せる。残すと同時刻へ
-    // 空の項目が重複し、次小節の開始 targets を上書きする恐れがある
-    const measureEndBeat = measureAdvanceBeats(measure, timeSignature);
-    while (
-      tickBeats.length > 0 &&
-      tickBeats[tickBeats.length - 1] >= measureEndBeat - BEAT_EPSILON
-    ) {
-      tickBeats.pop();
-    }
+    // 小節終端ちょうどの消灯節目も**残す**（round2 P1: 次小節が休符で始まる場合、
+    // 次小節頭に節目が無く、削除すると前小節の帯が次の発音まで残る）。
+    // 次小節の先頭に発音があるときは同じ時刻（atMs）に2項目並ぶが、タイムラインは
+    // 配列順に適用され、後に並ぶ次小節側の targets が最終状態になるので問題ない
 
     // 各レーンとも音符は開始拍の昇順・重なりなし（同一声部の逐次イベント）なので、
     // 節目の昇順走査に合わせてレーンごとの読み位置を前進させる（round1 P2:
