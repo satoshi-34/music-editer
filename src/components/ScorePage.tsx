@@ -2215,6 +2215,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     [scoreType, voiceSlotCounts],
   );
 
+  // 別の作品を開いた・譜種を変えたら「＋で足した声部」の希望値を捨てる。
+  // 希望値はデータではなく「いま編集している譜面でユーザーが足したい本数」なので、
+  // 持ち越すと新規のピアノ譜に前の作品の声部4までのチップが出てしまう
+  // （実機確認 2026-09-03 で発覚）。データ側に本当に声部があるぶんは
+  // usedVoiceCounts から復活するので、この破棄で声部が見えなくなることはない
+  useEffect(() => {
+    setRequestedVoiceCounts([1, 1]);
+  }, [currentWorkId, scoreType]);
+
   // 声部数が減った（譜面を開き直した・音符を消して空の声部が畳まれた）ときに、
   // もう存在しない声部を選んだままにしない。放っておくと「入力しても画面に出ない声部」に
   // 音符が入り続ける無言の行き止まりになる（#318）
