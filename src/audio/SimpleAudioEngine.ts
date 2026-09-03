@@ -3,8 +3,9 @@
 // ブラウザの自動再生ポリシーに完全対応
 
 import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
+import { scheduleLeadSeconds } from './scheduleLead';
 import { InstrumentType } from './SoundSource';
-import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
+import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
   getMasterVolumeGain,
@@ -631,7 +632,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
   /**
    * 複数パート（右手・左手など）を同時再生する
    */
-  async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<void> {
+  async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<PlaybackScheduleInfo> {
     await this.ensureContextReady();
     const context = this.context;
     if (!context) {
@@ -639,7 +640,10 @@ export class SimpleAudioEngine implements PlaybackEngine {
     }
 
     const originalInstrument = this.currentInstrument;
-    const sharedStartTime = context.currentTime;
+    // 「今」に先読みリードを足す（#610。SoundFontEngine と同じ定数）
+    const sharedStartTime = context.currentTime + scheduleLeadSeconds();
+    // 画面側の同期用: 起点を決めたこの瞬間の壁時計（SoundFontEngine と同じ意味）
+    const scheduledAtMs = Date.now();
 
     try {
       for (const part of parts) {
@@ -649,6 +653,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
         this.currentInstrument = part.instrument ?? originalInstrument;
         await this.playScore(part.measures, bpm, sharedStartTime);
       }
+      return { scheduledAtMs };
     } finally {
       // 再生後の UI プレビューなどが別パートの音色に引きずられないよう、
       // 一時的に切り替えた楽器を必ず元へ戻す。

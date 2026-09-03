@@ -1,7 +1,8 @@
 import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
+import { scheduleLeadSeconds } from './scheduleLead';
 import type { Player as SoundFontPlayer } from 'soundfont-player';
 
-import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
+import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
 import type { PlaybackSoundProfile } from './playbackSettings';
 import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS, getMasterVolumeGain } from './playbackSettings';
 import { InstrumentType } from './SoundSource';
@@ -180,14 +181,17 @@ export class SoundFontEngine implements PlaybackEngine {
     console.log('[SoundFontEngine] 音符を再生:', normalizedNote, duration, '秒');
   }
 
-  async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<void> {
+  async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<PlaybackScheduleInfo> {
     await this.initialize();
     const context = this.ensureContext();
     const playableParts = await Promise.all(parts.map(async (part) => ({
       part,
       player: await this.getPlayerForInstrument(part.instrument ?? this.currentInstrument),
     })));
-    const startTime = context.currentTime;
+    // 「今」に先読みリードを足す（#610: 予約ループの実時間ぶん先頭の音が過去にならないように）
+    const startTime = context.currentTime + scheduleLeadSeconds();
+    // 画面側の同期用に、起点を決めたこの瞬間の壁時計を返す（音源ロードの後・予約ループの前）
+    const scheduledAtMs = Date.now();
 
     // 各パートは同じ「今この瞬間」を基準に予約する。
     // こうすると Promise を待たずに、和音や複数パートが同時にそろって鳴る。
@@ -317,6 +321,7 @@ export class SoundFontEngine implements PlaybackEngine {
     });
 
     console.log('[SoundFontEngine] 譜面再生をスケジュールしました:', parts.length, 'パート');
+    return { scheduledAtMs };
   }
 
   async suspend(): Promise<void> {

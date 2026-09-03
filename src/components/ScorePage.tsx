@@ -56,6 +56,7 @@ import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
 import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
+import { scheduleLeadSeconds } from '../audio/scheduleLead';
 import type {
   CustomSymbolDef,
   InstrumentBracketGroup,
@@ -1822,7 +1823,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // タイムラインは playParts の**前**に作る（#579 round1 P2: 実音の予約後に
           // 同期計算すると、計算時間ぶんハイライトの0ms起点が遅れて帯が終始ずれる）
 
-          await audioEngine.playParts(partObjs, effectiveGlobalBpm);
+          // エンジンは「音源ロード後・予約ループ開始時点」の「今＋先読みリード」を実音の起点にし、
+          // その瞬間の壁時計を返す（#610）。playParts 完了後の Date.now() を起点にすると予約処理の
+          // 実時間ぶん帯が遅れ（round1 P2）、呼び出し前の時刻を起点にすると SoundFont の
+          // 音源ロード時間ぶん帯が早まる（round2 P1）ので、エンジンが返す起点だけを使う。
+          // 起点を返さない偽エンジン（テスト）は呼び出し前の時刻で近似する
+          const fallbackScheduledAt = Date.now();
+          const scheduleInfo = await audioEngine.playParts(partObjs, effectiveGlobalBpm);
+          const scheduleElapsedMs = Math.max(0, Date.now() - (scheduleInfo?.scheduledAtMs ?? fallbackScheduledAt));
 
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
@@ -1831,13 +1839,23 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // calculateExpandedPlaybackDurationMs で数える。選択の有無で分けない（Codex 3巡目）:
           // 旧 calculateScoreDuration は未充足小節を実長だけで数える・末尾判定が主声部のみ、
           // のため、拍子長を下限に進む実音・タイムラインより早く stopped になっていた
+          // 実音はエンジン側で先読みリード（#610）ぶん遅れて始まるので、ハイライトの
+          // タイムラインと終了時刻も同じぶんずらす。ずらさないと帯が実音より常に先行する
+          const scheduleLeadMs = scheduleLeadSeconds() * 1000;
+          positionTimelineRef.current = positionTimelineRef.current.map((item) => ({
+            ...item,
+            atMs: item.atMs + scheduleLeadMs,
+          }));
           const totalDuration = Math.max(
             ...partObjs.map(partObj =>
               calculateExpandedPlaybackDurationMs(partObj.measures, effectiveGlobalBpm, scoreTimeSignature) / 1000)
-          );
+          ) + scheduleLeadSeconds();
           setPlaybackState('playing');
           clearPlaybackTimer();
-          remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
+          // 残り時間・終了タイマー・タイムラインの予約はすべて「予約に使った実時間」を
+          // 差し引いた値にする。残りを引いたぶん、時計の起点は「今」（round2 P2:
+          // 起点まで過去にすると一時停止でもう一度同じ時間を引いてしまう）
+          remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000 - scheduleElapsedMs);
           totalPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
           playbackStartedAtRef.current = Date.now();
           // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
@@ -1849,13 +1867,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
               ? describePlaybackFromMeasureNumber(startMeasure, selectedMeasures != null)
               : describePlaybackFromMeasure(startMeasure));
           }
-          schedulePositionTimeline(0);
+          schedulePositionTimeline(scheduleElapsedMs);
           playbackTimerRef.current = setTimeout(() => {
             setPlaybackState('stopped');
             setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
             playbackTimerRef.current = null;
             resetPlaybackClock();
-          }, totalDuration * 1000);
+          }, remainingPlaybackMsRef.current);
         } else {
           // 譜面が空でも「再生ボタンが壊れていないか」は確認できるように、
           // 代表音として C4 を 1拍だけ鳴らす。

@@ -60,6 +60,17 @@ export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
     unit: 'px',
     constName: 'MEASURE_SIDE_PADDING',
   },
+  {
+    key: 'audio.scheduleLead',
+    label: '再生の先読みリード',
+    description: '再生開始時刻に足す余裕（秒）。小さすぎると頭の音が欠ける・和音がプツる（#610）。大きいと押してから鳴るまでが遅れる',
+    defaultValue: 0.1,
+    min: 0,
+    max: 0.5,
+    step: 0.01,
+    unit: 's',
+    constName: 'SCHEDULE_LEAD_SECONDS',
+  },
 ];
 
 function parseOverrides(raw: string | null): Record<string, number> {
