@@ -133,6 +133,12 @@ VITE_OMR_API_URL=http://localhost:8080 npm run dev       # アプリ側に変換
 
 変換API の中身と API 仕様は [`server/omr/README.md`](../server/omr/README.md)、方式決定と AGPL の整理は `.claude/specs/omr-import/design.md` にあります。
 
+`.env.local` に `VITE_OMR_API_URL` を置いたままテストを回すと、この設定で**画面の構造が変わる**
+（PDF 用の隠し input と「PDF (β)」ボタンが増える）ため、環境変数を stub していないテストは
+開発環境でだけ落ちます。この設定に触れるテストは `vi.stubEnv('VITE_OMR_API_URL', ...)` で
+設定あり/なしを明示してください（Issue #587。棚卸しの結果は
+`.claude/specs/omr-import/design.md` の §5）。
+
 ### テストと lint
 
 ```bash
