@@ -76,15 +76,15 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
 
   // Issue #199 の受入条件1。運用者が素の既定値の画面で実測選定した組み合わせ
   // （段どうしは詰め、大譜表の内側を広げる）が初期表示になることを守る。
-  it('新規ユーザー状態: ピアノへ切り替えると音符150%・段間隔-30px・パート間隔38pxになる', () => {
+  it('新規ユーザー状態: ピアノへ切り替えると音符150%・段間隔-3px・パート間隔20pxになる', () => {
     render(<ScorePage />);
     openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
 
     openLayoutTab();
     expect(getNotationSizeSlider().value).toBe('150');
-    expect(getSystemRowGapSlider().value).toBe('-30');
-    expect(getPartSpacingSlider().value).toBe('38');
+    expect(getSystemRowGapSlider().value).toBe('-3');
+    expect(getPartSpacingSlider().value).toBe('20');
   });
 
   it('新規ユーザー状態: 弦楽四重奏・編成譜は従来どおり音符100%・段間隔0px・パート間隔0px', () => {
@@ -118,7 +118,7 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
     expect(getSystemRowGapSlider().value).toBe('10');
     expect(getPartSpacingSlider().value).toBe('5');
 
-    // ピアノに切り替えても、ユーザーが設定した値のまま（150%/-30px/38pxへは戻らない）
+    // ピアノに切り替えても、ユーザーが設定した値のまま（150%/-3px/20pxへは戻らない）
     openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
 
@@ -128,14 +128,14 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
     expect(getPartSpacingSlider().value).toBe('5');
   });
 
-  it('「レイアウトをリセット」の段の間隔・パート間隔は楽譜種別ごとの既定値（ピアノは-30px/38px）に戻る', () => {
+  it('「レイアウトをリセット」の段の間隔・パート間隔は楽譜種別ごとの既定値（ピアノは-3px/20px）に戻る', () => {
     render(<ScorePage />);
     openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
 
     openLayoutTab();
-    expect(getSystemRowGapSlider().value).toBe('-30');
-    expect(getPartSpacingSlider().value).toBe('38');
+    expect(getSystemRowGapSlider().value).toBe('-3');
+    expect(getPartSpacingSlider().value).toBe('20');
 
     // 段の間隔・パート間隔を手動でずらしてから「レイアウトをリセット」を押す
     fireEvent.change(getSystemRowGapSlider(), { target: { value: '-5' } });
@@ -146,8 +146,8 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
     // リセット系4種は Issue #143 で1つのメニューへ集約されたため、押す前にメニューを開く
     fireEvent.click(screen.getByTestId('layout-reset-menu-toggle'));
     fireEvent.click(screen.getByRole('button', { name: 'レイアウトをリセット' }));
-    expect(getSystemRowGapSlider().value).toBe('-30');
-    expect(getPartSpacingSlider().value).toBe('38');
+    expect(getSystemRowGapSlider().value).toBe('-3');
+    expect(getPartSpacingSlider().value).toBe('20');
   });
 
   // Issue #199 追加要望: 段の間隔スライダーの下限を -30 → -60 へ拡張した。
