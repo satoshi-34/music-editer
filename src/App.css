@@ -906,6 +906,20 @@ button.ghost.active:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
+/* 3区画（トランスポート / テンポ・位置 / 音）のまとまり（Issue #562）。
+   区画ごとに薄い枠で囲って、「どこまでが1つのまとまりか」を目で分かるようにする。
+   区画の間の縦線ではなく枠にしているのは、ツールバーの幅が足りないと
+   区画が折り返して縦に積まれるため（縦線だと積まれた瞬間に区切りに見えなくなる）。 */
+.playback-section {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
 /* 再生制御ボタン */
 .playback-buttons {
   display: flex;
@@ -1161,6 +1175,12 @@ button.ghost.active:hover:not(:disabled) {
   
   .playback-buttons {
     justify-content: center;
+  }
+
+  /* 狭い画面では区画の中身も縦に積む（#562） */
+  .playback-section {
+    flex-direction: column;
+    align-items: stretch;
   }
   
   .playback-speed-controls,
