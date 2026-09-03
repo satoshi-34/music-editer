@@ -30,7 +30,9 @@ const FLAG_EXTRA_WIDTH: Record<NoteEvent['dur'], number> = {
   '32': 6,
   '64': 8,
 };
-const MEASURE_SIDE_PADDING = 18;
+// 小節の左右に確保する余白（VexFlow の音符列の外側）。Issue #559 の圧縮率は
+// 「音符の並びの理想間隔」だけに掛けるため、この余白と分けて足せるよう定数を公開する。
+export const MEASURE_SIDE_PADDING = 18;
 const ACCIDENTAL_WIDTH = 6;
 const GRACE_NOTE_WIDTH = 8;
 
@@ -725,12 +727,53 @@ function measurementPartState(
   return { clef: part?.clef ?? 'treble', accidentalState: createMeasureAccidentalState(fallbackKeySignature) };
 }
 
+// VexFlow の「理想的な音符間隔」を、浄書実務の最低幅へ換算する圧縮率（Issue #559）。
+//
+// preCalculateMinTotalWidth が返すのは Formatter が「ゆったり組むならこれくらい欲しい」と
+// する理想幅であって、「これ以上詰めると読めなくなる」下限ではない。これをそのまま
+// 「最低幅」として段割りの判定に使っていたため、月光（8分3連×4組・大譜表）のような密な
+// 譜面が実ブラウザで1小節/段まで膨張していた。
+//
+// 値の決め方（Issue の仕様どおり「月光基準＝2小節/段が成立する値」を実ブラウザで測って選んだ）:
+//   段の本文予算 833（論理単位・A4／余白14mm／音符の大きさ150%）に対し、月光1〜9小節の
+//   最低幅は圧縮率ごとに次のようになった（実測は docs/qa/system-break-min-width/README.md）。
+//     0.75 → 1,1,1,1,1,1,2,1 小節/段（ほぼ改善しない）
+//     0.72 → 2,1,1,1,1,2,1
+//     0.70 → 2,1,1,1,2,2
+//     0.64 → 2,2,2,2,1 ← 全段が2小節（末尾の1は9小節の余り）。受入条件1を満たす最大の値
+//   Issue 本文の「例: 0.7〜0.75」より強い圧縮になったのは、実際の段の予算が例の想定より
+//   狭いため（パート名を描かないピアノ譜でも、段割りの計画は既定の楽器名の余白 74 を
+//   見込んだままにしてある。ScorePage の instrumentLabelAreaWidth 参照。ここを 0 にすると
+//   既存譜面の段割りが全部変わるので #559 では触っていない）。
+//   なお 1音あたりの幅は 45 → 28.8 論理単位（150%表示で約19px）になる。浄書の実物
+//   （月光: 145mm の段に2小節＝1音あたり約22px）よりやや詰まるが、これは月光の5〜6小節目の
+//   ように「旋律と3連符の開始拍がずれて列が増える」小節まで2小節/段に収めるための値である。
+//   最終値は運用者の目視で確定する前提なので、緩めたいときはこの1か所だけを上げればよい。
+//
+// 圧縮しても符頭が重ならないのは、段割りの計画（planEffectiveMeasuresPerSystem）が
+// 「開始拍ごとの符頭・臨時記号の実寸を積んだ見積もり」（combinedMeasureMinimumContentWidth）
+// との Math.max を取り、そちらを過密の下限ガードとして残しているため。
+// 実ブラウザでも、修正前後で符頭の重なりが増えていないことを確認済み
+// （docs/qa/system-break-min-width/README.md の「重なりの実測」）。
+export const VEXFLOW_IDEAL_WIDTH_COMPRESSION = 0.64;
+
 /**
- * 合同 Formatter が実際に必要とする最小幅を VexFlow へ問い合わせる。
+ * VexFlow の理想幅（音符の並びのぶん）を、段割り判定に使う最低幅へ換算する。
+ * 圧縮率を1か所に閉じ込めるための小さな関数で、テストからも同じ換算を参照する。
+ */
+export function engravingMinimumWidthFromIdeal(idealWidth: number): number {
+  return idealWidth * VEXFLOW_IDEAL_WIDTH_COMPRESSION;
+}
+
+/**
+ * 合同 Formatter が必要とする幅を VexFlow へ問い合わせ、段割り判定用の最低幅を返す。
  *
  * 既存の開始拍ベース推定は、編集中の不完全データでも安全に動くため残す。一方で、
  * ここで得られる値は付点、連符、和音、臨時記号の ModifierContext を含む実測値なので、
  * 取得できる場合は必ずこちらを優先して小節幅を決める。
+ *
+ * ただし VexFlow が返すのは「理想的な間隔」なので、そのままでは最低幅として広すぎる。
+ * VEXFLOW_IDEAL_WIDTH_COMPRESSION で浄書実務の密度へ圧縮した値を返す（Issue #559）。
  */
 export function vexFlowCombinedMeasureMinimumContentWidth(
   measures: (MeasureData | undefined)[],
@@ -772,9 +815,13 @@ export function vexFlowCombinedMeasureMinimumContentWidth(
     // これを省くと、各 Voice が単独の列として計測され、右手・左手の拍が揃う実際の
     // Formatter より必要幅を小さく出すケースがある。
     const formatter = new Formatter().joinVoices(voices);
-    const width = formatter.preCalculateMinTotalWidth(voices);
-    return Number.isFinite(width)
-      ? Math.ceil(width + MEASURE_SIDE_PADDING + modifierSafetyWidth)
+    const idealWidth = formatter.preCalculateMinTotalWidth(voices);
+    return Number.isFinite(idealWidth)
+      // preCalculateMinTotalWidth が返すのは「理想的な間隔」であって「これ以上詰めたら
+      // 読めなくなる最低幅」ではない。そのまま最低幅として使うと段割りが広がりすぎるため、
+      // 浄書実務の密度へ圧縮してから最低幅にする（Issue #559。下の定数のコメント参照）。
+      // 圧縮するのは音符の並びのぶんだけで、小節の左右余白と記号の安全幅はそのまま足す。
+      ? Math.ceil(engravingMinimumWidthFromIdeal(idealWidth) + MEASURE_SIDE_PADDING + modifierSafetyWidth)
       : undefined;
   } catch {
     // 壊れた旧データや、声部間で合計拍数が一致しない編集中の状態では Formatter が例外を出す。
