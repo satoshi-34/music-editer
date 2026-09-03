@@ -36,12 +36,17 @@ export const MIN_POINTS_FOR_SMOOTHING = 8;
 
 /**
  * 手描きストロークを補正する。
- * 1. 移動平均で震えを均す（両端は動かさない＝描き始め・描き終わりの位置は必ず保つ）
+ * 1. 移動平均で震えを均す。**開いた線**では両端を動かさない（描き始め・描き終わりを保つ）。
+ *    **閉曲線**（始点＝終点）では円環として全点を循環近傍で均す（端の固定が無いぶん
+ *    偏らない。始点も動くが、閉じた図形に「描き始め」の見た目上の意味は無い）
  * 2. Ramer–Douglas–Peucker 法で、形を保ったまま点を間引く
+ *
+ * 実点数（閉曲線は閉じ用の重複終点を除く）が MIN_POINTS_FOR_SMOOTHING 未満の
+ * ストロークは、クリックで置いた意図的な折れ線とみなして無加工で返す。
  *
  * @param points    元の頂点列（補正しても元データは変更しない。新しい配列を返す）
  * @param tolerance 間引きの許容誤差（論理px）
- * @returns 補正後の頂点列。点が2個以下のときは補正しても意味がないのでそのまま返す
+ * @returns 補正後の頂点列
  */
 export function smoothStrokePoints(
   points: StrokePoint[],
@@ -49,15 +54,20 @@ export function smoothStrokePoints(
 ): StrokePoint[] {
   // 非有限値（NaN など）が混ざっていると平均計算がすべて NaN に伝播するため先に除く
   const finitePoints = points.filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
-  if (finitePoints.length < MIN_POINTS_FOR_SMOOTHING) {
-    return finitePoints.map(p => ({ x: p.x, y: p.y }));
-  }
+  if (finitePoints.length <= 2) return finitePoints.map(p => ({ x: p.x, y: p.y }));
 
   // 始点＝終点（閉曲線）は円環として均す（round1 P2: 開いた線として平均すると
   // 終端だけ固定され、閉じた図形が開始点側へ縮んで偏る）
   const first = finitePoints[0];
   const last = finitePoints[finitePoints.length - 1];
   const isClosed = Math.hypot(first.x - last.x, first.y - last.y) < 1e-6;
+
+  // 最低点数は**実点**（閉曲線は閉じ用の重複終点を除く）で判定する（round2 P2:
+  // 配列長で判定すると、7実点+重複1=長さ8の疎な閉七角形が保護をすり抜けて縮む）
+  const effectivePointCount = isClosed ? finitePoints.length - 1 : finitePoints.length;
+  if (effectivePointCount < MIN_POINTS_FOR_SMOOTHING) {
+    return finitePoints.map(p => ({ x: p.x, y: p.y }));
+  }
 
   let working = finitePoints.map(p => ({ x: p.x, y: p.y }));
   for (let i = 0; i < SMOOTHING_PASSES; i++) {

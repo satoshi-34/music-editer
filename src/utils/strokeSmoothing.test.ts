@@ -125,6 +125,44 @@ describe('smoothStrokePoints', () => {
     expect(Math.min(...radii)).toBeGreaterThan(18);
   });
 
+  it('疎な閉多角形（実点7+閉じの重複1=配列長8）も保護される（round2 P2）', () => {
+    const n = 7;
+    const heptagon = Array.from({ length: n }, (_, i) => ({
+      x: 50 + 20 * Math.cos((2 * Math.PI * i) / n),
+      y: 50 + 20 * Math.sin((2 * Math.PI * i) / n),
+    }));
+    heptagon.push({ ...heptagon[0] });
+    expect(smoothStrokePoints(heptagon)).toEqual(heptagon);
+  });
+
+  it('閉曲線は循環近傍で均される（開いた線として端を固定する旧実装では落ちる）', () => {
+    // 非対称な密の閉曲線: 開始点を巡回シフトしても結果の**形**が一致することを固定する。
+    // 旧実装（開いた線の平均）は始点・終点だけ固定するため、シフト位置によって
+    // 「動かない点」が変わり、形が一致しない
+    const n = 16;
+    const base = Array.from({ length: n }, (_, i) => ({
+      x: 50 + (20 + 6 * Math.sin((6 * Math.PI * i) / n)) * Math.cos((2 * Math.PI * i) / n),
+      y: 50 + (20 + 6 * Math.sin((6 * Math.PI * i) / n)) * Math.sin((2 * Math.PI * i) / n),
+    }));
+    const closed = [...base, { ...base[0] }];
+    const shiftBy = 5;
+    const shifted = [...base.slice(shiftBy), ...base.slice(0, shiftBy)];
+    shifted.push({ ...shifted[0] });
+
+    // RDP の間引きは開始位置の影響を受けるため、平滑化だけを比較できるよう
+    // 許容誤差 0（間引きなし）で回す
+    const a = smoothStrokePoints(closed, 0);
+    const b = smoothStrokePoints(shifted, 0);
+    // a の点集合を b の点集合と突き合わせる（並び順は開始位置ぶんズレる）
+    const uniqueA = a.slice(0, -1);
+    const uniqueB = b.slice(0, -1);
+    expect(uniqueA.length).toBe(uniqueB.length);
+    for (const pa of uniqueA) {
+      const match = uniqueB.some((pb) => Math.hypot(pa.x - pb.x, pa.y - pb.y) < 1e-9);
+      expect(match, `シフト後の結果に対応点が無い: (${pa.x}, ${pa.y})`).toBe(true);
+    }
+  });
+
   it('自己交差する密なストローク（8の字）でも端点が保たれ有限値のまま', () => {
     const n = 40;
     const figure8 = Array.from({ length: n + 1 }, (_, i) => ({
