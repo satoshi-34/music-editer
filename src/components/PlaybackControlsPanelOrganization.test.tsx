@@ -30,7 +30,6 @@ const baseProps: PlaybackControlsProps = {
   onEmergencyBeep: vi.fn(),
   onSoundProfileChange: vi.fn(),
   onPlayFromMeasure: vi.fn(),
-  onPlaybackSpeedPercentChange: vi.fn(),
   soundRuntimeSettings: DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
 };
 
@@ -138,8 +137,8 @@ describe('再生・音色タブ: 3区画レイアウト（#562 案c）', () => {
 
     const tempo = screen.getByRole('region', { name: 'テンポ・位置' });
     expect(within(tempo).getByLabelText('テンポ（BPM）')).toBeInTheDocument();
-    // 作品の値（♩=N）の隣に、聴くときの倍率（%）が並ぶ
-    expect(within(tempo).getByLabelText('再生速度（%）')).toBeInTheDocument();
+    // 再生速度（%）は #588 で撤去済み。区画整理で紛れて復活していないことを固定する
+    expect(within(tempo).queryByLabelText('再生速度（%）')).toBeNull();
     expect(within(tempo).getByLabelText('再生を開始する小節番号')).toBeInTheDocument();
     expect(within(tempo).getByText(/1小節目 1音符目/)).toBeInTheDocument();
 

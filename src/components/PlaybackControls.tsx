@@ -715,18 +715,26 @@ export default function PlaybackControls({
                       2見出しに分ける（#562・設計メモ §3(b)）。同列に並んでいると、
                       音を作り込みたいだけの人が毎回すべてを目で追うことになるため。 */}
                   <div className="sound-detail-group">
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={handleToggleSoundSource}
-                      aria-expanded={isSoundSourceOpen}
-                      aria-controls="playback-sound-source-panel"
-                    >
-                      {isSoundSourceOpen ? '音源 ▾' : '音源 ▸'}
-                    </button>
+                    {/* 見出しとして支援技術の見出しナビゲーションに載せる（#562 round1 P2）。
+                        開閉ボタンを heading の中へ置き、パネルは aria-labelledby で結ぶ */}
+                    <div role="heading" aria-level={4} id="playback-sound-source-heading">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={handleToggleSoundSource}
+                        aria-expanded={isSoundSourceOpen}
+                        aria-controls="playback-sound-source-panel"
+                      >
+                        {isSoundSourceOpen ? '音源 ▾' : '音源 ▸'}
+                      </button>
+                    </div>
 
                     {isSoundSourceOpen && (
-                      <div id="playback-sound-source-panel" style={{ display: 'grid', gap: 10, marginTop: 8 }}>
+                      <div
+                        id="playback-sound-source-panel"
+                        aria-labelledby="playback-sound-source-heading"
+                        style={{ display: 'grid', gap: 10, marginTop: 8 }}
+                      >
                         {/* ここで「軽い内蔵音源にするか」「楽器サンプル付きの SoundFont にするか」を切り替える。
                             plugin は将来の本格連携用なので、今は保存入口だけ残している。 */}
                         <label style={{ display: 'grid', gap: 4 }}>
@@ -784,18 +792,24 @@ export default function PlaybackControls({
                   </div>
 
                   <div className="sound-detail-group">
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={handleToggleSoundDesign}
-                      aria-expanded={isSoundDesignOpen}
-                      aria-controls="playback-sound-design-panel"
-                    >
-                      {isSoundDesignOpen ? '音づくり ▾' : '音づくり ▸'}
-                    </button>
+                    <div role="heading" aria-level={4} id="playback-sound-design-heading">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={handleToggleSoundDesign}
+                        aria-expanded={isSoundDesignOpen}
+                        aria-controls="playback-sound-design-panel"
+                      >
+                        {isSoundDesignOpen ? '音づくり ▾' : '音づくり ▸'}
+                      </button>
+                    </div>
 
                     {isSoundDesignOpen && (
-                      <div id="playback-sound-design-panel" style={{ display: 'grid', gap: 10, marginTop: 8 }}>
+                      <div
+                        id="playback-sound-design-panel"
+                        aria-labelledby="playback-sound-design-heading"
+                        style={{ display: 'grid', gap: 10, marginTop: 8 }}
+                      >
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <input
                             type="checkbox"
