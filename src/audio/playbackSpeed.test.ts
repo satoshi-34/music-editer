@@ -3,7 +3,6 @@ import { describe, it, expect } from 'vitest';
 import {
   MIN_PLAYBACK_SPEED_PERCENT,
   MAX_PLAYBACK_SPEED_PERCENT,
-  DEFAULT_PLAYBACK_SPEED_PERCENT,
   MIN_EFFECTIVE_BPM,
   MAX_EFFECTIVE_BPM,
   clampPlaybackSpeedPercent,
