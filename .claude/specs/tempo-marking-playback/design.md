@@ -377,7 +377,7 @@ Issue 仕様 2 は「アプリ全体設定は『新規作成時の既定値』�
 ### 影響範囲
 
 - `src/audio/playbackSpeed.ts`（新設）: 範囲定数・`clampPlaybackSpeedPercent` /
-  `normalizeSavedPlaybackSpeedPercent` / `applyPlaybackSpeedToBpm(s)` / `clampEffectiveBpm`
+  `applyPlaybackSpeedToBpm(s)` / `clampEffectiveBpm`
 - `src/audio/playbackSettings.ts`: `playbackSpeedPercent` の追加と正規化
 - `src/utils/tempoPlaybackUtils.ts`: `beatSpanToSeconds` の clamp を `clampEffectiveBpm` へ
 - `src/components/PlaybackControls.tsx` / `src/App.css`: 再生速度スライダー・等倍に戻すボタン、
@@ -414,10 +414,10 @@ Issue 仕様 2 は「アプリ全体設定は『新規作成時の既定値』�
 
 ### `normalizeSavedPlaybackSpeedPercent` について
 
-localStorage 用の正規化関数だけは、設定項目が無くなったことで**呼び出し元が無くなった**。
-`playbackSpeed.ts` を「復活の土台」として丸ごと残す方針（Issue 仕様3）に合わせてこれも残し、
-`playbackSpeed.test.ts` の該当テストもそのままにしてある。
-消す場合は速度の復活が無いと確定してからにしたい。
+localStorage 用の正規化関数は、設定項目が無くなったことで呼び出し元が消えた。
+撤去済みの保存項目**専用**の関数で、残す価値のある実効テンポ系
+（clampEffectiveBpm 等）からは独立しているため、**round1 P3 で関数・テストごと削除**した
+（死んだ公開 API を「復活の土台」として残さない）。
 
 ### テストの引き継ぎ
 

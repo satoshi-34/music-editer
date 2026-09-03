@@ -56,20 +56,6 @@ export function clampPlaybackSpeedPercent(percent: number, fallback: number): nu
 }
 
 /**
- * localStorage から読んだ再生速度を、安全な既定値へ寄せながら正規化する。
- *
- * localStorage は利用者やブラウザ拡張から自由に書き換えられるので、
- * 数値でない値・0 以下・NaN は既定（100%）へ戻す。0 を素通しすると
- * テンポが 0 になり `60 / 0 = Infinity` で再生が進まなくなってしまう。
- */
-export function normalizeSavedPlaybackSpeedPercent(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_PLAYBACK_SPEED_PERCENT;
-  }
-  return clampPlaybackSpeedPercent(value, DEFAULT_PLAYBACK_SPEED_PERCENT);
-}
-
-/**
  * 1つのテンポ（BPM）へ再生速度の倍率を掛ける。
  *
  * 100%（既定）のときは**元の値をそのまま返す**。掛け算を通すと 132 が

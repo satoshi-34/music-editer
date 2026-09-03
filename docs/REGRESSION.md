@@ -316,7 +316,7 @@
 - [ ] 基準テンポはページを開き直しても保たれ、**作品を切り替えるとその作品の値に戻る**こと
 - [ ] #544 を使っていた環境（localStorage に `playbackSpeedPercent: 50` が残っている）で
       開いても、**半分の速さにならず楽譜どおりに鳴る**こと
-- [ ] 固定テスト: playbackSpeed.test.ts（11件・配管のみ）・ScorePagePlaybackSpeed.test.tsx（2件）・
+- [ ] 固定テスト: playbackSpeed.test.ts（9件・配管のみ）・ScorePagePlaybackSpeed.test.tsx（2件）・
       playbackPositionUtils.test.ts の実効テンポ非丸めテスト
 
 ## Y. 段の境界ドラッグ（Issue #523）
