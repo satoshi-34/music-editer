@@ -152,8 +152,10 @@ export const PART_SPACING_OFFSET_DEFAULT_PX = 0;
 export const NOTATION_SIZE_MULTIPLIER_DEFAULT = 1;
 export const NOTATION_SIZE_MULTIPLIER_LARGE_DEFAULT = 1.5;
 export const SYSTEM_ROW_GAP_DEFAULT_PX = 0;
-export const SYSTEM_ROW_GAP_PIANO_DEFAULT_PX = -30;
-export const PART_SPACING_OFFSET_PIANO_DEFAULT_PX = 38;
+// 運用者が市販譜（月光ほか）と見比べて確定した値（2026-09-03・#596 のチューニング運用の初回成果。
+// 旧値 -30 は詰まりすぎで、パート間隔 38 は広すぎた=「パート間隔狭くて段間隔広く見える」#586）
+export const SYSTEM_ROW_GAP_PIANO_DEFAULT_PX = -3;
+export const PART_SPACING_OFFSET_PIANO_DEFAULT_PX = 20;
 
 /**
  * 楽譜種別ごとの「音符の大きさ」「段の間隔」「パート間隔」の工場出荷既定値を返す純関数。
