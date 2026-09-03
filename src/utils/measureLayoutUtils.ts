@@ -1,4 +1,5 @@
 import type { MeasureData, NoteEvent, ScoreType } from '../types/storage';
+import { devTuned } from './devTuning';
 import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { Accidental, Dot, Formatter, GraceNote, GraceNoteGroup, StaveNote, Voice } from 'vexflow';
 import { createVexFlowTuplets, vexFlowDotCount } from './vexFlowTimingUtils';
@@ -33,6 +34,12 @@ const FLAG_EXTRA_WIDTH: Record<NoteEvent['dur'], number> = {
 // 小節の左右に確保する余白（VexFlow の音符列の外側）。Issue #559 の圧縮率は
 // 「音符の並びの理想間隔」だけに掛けるため、この余白と分けて足せるよう定数を公開する。
 export const MEASURE_SIDE_PADDING = 18;
+/** dev チューニング（#596）を通した実効値。本番は定数そのもの（devTuned 呼び出しごと消える） */
+function measureSidePadding(): number {
+  return import.meta.env.DEV
+    ? devTuned('layout.measureSidePadding', MEASURE_SIDE_PADDING)
+    : MEASURE_SIDE_PADDING;
+}
 const ACCIDENTAL_WIDTH = 6;
 const GRACE_NOTE_WIDTH = 8;
 
@@ -517,7 +524,7 @@ export function measureMinimumContentWidth(measure?: MeasureData): number {
 
   const contentWidth = primaryEvents.reduce(
     (width, event) => width + eventMinimumWidth(event),
-    MEASURE_SIDE_PADDING,
+    measureSidePadding(),
   );
   const hasWhole = primaryEvents.some((event) => event.dur === '1');
   const hasHalf = primaryEvents.some((event) => event.dur === '2');
@@ -590,7 +597,7 @@ export function combinedMeasureMinimumContentWidth(measures: (MeasureData | unde
   if (!hasAnyEvent) {
     return MIN_MEASURE_CONTENT_WIDTH;
   }
-  let contentWidth = MEASURE_SIDE_PADDING;
+  let contentWidth = measureSidePadding();
   for (const width of columnWidths.values()) contentWidth += width;
 
   if (hasWhole) {
@@ -762,7 +769,11 @@ export const VEXFLOW_IDEAL_WIDTH_COMPRESSION = 0.64;
  * 圧縮率を1か所に閉じ込めるための小さな関数で、テストからも同じ換算を参照する。
  */
 export function engravingMinimumWidthFromIdeal(idealWidth: number): number {
-  return idealWidth * VEXFLOW_IDEAL_WIDTH_COMPRESSION;
+  // dev 環境のみ #596 のチューニングページで上書きできる（本番は定数そのまま。
+  // import.meta.env.DEV を呼び出し位置に置き、本番バンドルから devTuning ごと消す）
+  return idealWidth * (import.meta.env.DEV
+    ? devTuned('layout.compression', VEXFLOW_IDEAL_WIDTH_COMPRESSION)
+    : VEXFLOW_IDEAL_WIDTH_COMPRESSION);
 }
 
 /**
@@ -821,7 +832,7 @@ export function vexFlowCombinedMeasureMinimumContentWidth(
       // 読めなくなる最低幅」ではない。そのまま最低幅として使うと段割りが広がりすぎるため、
       // 浄書実務の密度へ圧縮してから最低幅にする（Issue #559。下の定数のコメント参照）。
       // 圧縮するのは音符の並びのぶんだけで、小節の左右余白と記号の安全幅はそのまま足す。
-      ? Math.ceil(engravingMinimumWidthFromIdeal(idealWidth) + MEASURE_SIDE_PADDING + modifierSafetyWidth)
+      ? Math.ceil(engravingMinimumWidthFromIdeal(idealWidth) + measureSidePadding() + modifierSafetyWidth)
       : undefined;
   } catch {
     // 壊れた旧データや、声部間で合計拍数が一致しない編集中の状態では Formatter が例外を出す。
