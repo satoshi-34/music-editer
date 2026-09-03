@@ -16,7 +16,7 @@
 //    （削除・貼り付け・Undo 等）を各リスナーの入口で無視させる（inert は
 //    フォーカスが body にあるときの window リスナーまでは止められないため）
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import ScorePage, { type HomeActionResult, type ScorePageHomeActions } from './components/ScorePage';
 import HomeScreen, { type HomeOpenKind } from './components/HomeScreen';
 import type { ScoreType, WorkSummary } from './types/storage';
@@ -24,6 +24,12 @@ import type { ToolbarTab } from './utils/editorContextLabels';
 import { getLastOpenedWorkId, hasStoredData, listWorks } from './utils/storage';
 import { getOmrApiUrl } from './utils/omrApi';
 import { APP_VERSION } from './utils/appVersion';
+
+// 開発環境限定の定数チューニングパネル（#596）。動的 import と DEV ガードを
+// 同一関数（このモジュール評価時の三項）に置き、本番バンドルへコードごと含めない
+const DevTuningPanel = import.meta.env.DEV
+  ? lazy(() => import('./components/DevTuningPanel'))
+  : null;
 import { setHomeShown } from './utils/homeVisibility';
 import './App.css';
 
@@ -182,6 +188,11 @@ export default function App() {
 
   return (
     <>
+      {DevTuningPanel && (
+        <Suspense fallback={null}>
+          <DevTuningPanel />
+        </Suspense>
+      )}
       {/* inert: ホーム表示中は譜面画面をフォーカス・クリック・支援技術から切り離す
           （round1 P1）。React 19 は inert を boolean 属性として扱える */}
       <div inert={showHome} data-testid="score-page-holder">
