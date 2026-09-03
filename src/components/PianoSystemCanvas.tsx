@@ -56,6 +56,7 @@ import {
   describeTupletNumbersToggledInMeasure,
   notifyScoreEdit,
   describeDoubleAccidentalKeySignatureUnavailable,
+  describeMicrotoneKeySignatureUnavailable,
   describeNoteNavigationEdge,
   requestActiveVoiceChange,
   requestNoteSelectionMove,
@@ -458,6 +459,20 @@ function getInputAccidental(tool: Tool): AccidentalToolKind | undefined {
     return undefined;
   }
   return tool.accidental;
+}
+/**
+ * 同じく、音価ツールに乗っている微分音（四分音）を取り出す（Issue #548 の統合で属性になった）。
+ * 通常の臨時記号とは排他なので、両方が同時に入ることはない。
+ */
+function getInputMicrotone(tool: Tool): MicrotoneType | undefined {
+  if (!('duration' in tool) || tool.isRest) {
+    return undefined;
+  }
+  return tool.microtone;
+}
+/** 臨時記号ツール（♯/♭/♮/𝄪/♭♭・¼♯/¼♭ のいずれか）を持っているか */
+function hasAccidentalTool(tool: Tool): boolean {
+  return !!getInputAccidental(tool) || !!getInputMicrotone(tool);
 }
 // 付点1個=1.5倍、複付点(2個)=1.75倍。休符差し込み判定・拍数計算で共通利用する
 const dotBeatsMultiplier = (dots?: 1 | 2) => (dots === 1 ? 1.5 : dots === 2 ? 1.75 : 1);
@@ -6315,13 +6330,18 @@ export default function PianoSystemCanvas({
           // 空き拍の判定に使う currentBeats はアクティブ声部の events から求めているので、
           // 声部2の占有拍だけを見て「入るかどうか」を決められる。
           if((tool as any)?.tuplet){
-            const { groupEvents, groupBeats } = buildTupletGroupPlan(
+            const { groupEvents: groupEventsBase, groupBeats } = buildTupletGroupPlan(
               addDuration,
               addDots,
               [key],
               defaultRestKeyForClef(clefHere),
               (tool as any).tuplet
             );
+            // 連符グループの先頭の音符にも微分音を乗せる（通常の臨時記号は key の綴りで既に乗っている）
+            const tupletMicrotone = getInputMicrotone(tool);
+            const groupEvents = tupletMicrotone
+              ? groupEventsBase.map((event) => event.isRest ? event : applyMicrotoneToEvent(event, tupletMicrotone, 0))
+              : groupEventsBase;
             if(currentBeats + groupBeats > beatsPerMeasure + 0.000001){
               // 黙って諦めると「クリック位置が悪いのか、アプリが壊れたのか」が分からない。
               // 拒否は正しい挙動なので、理由と次の一手だけを伝える（Issue #318「行き止まりは喋る」）
@@ -6356,7 +6376,7 @@ export default function PianoSystemCanvas({
             return;
           }
 
-          const insertedEvent:NoteEvent={
+          const insertedEventBase:NoteEvent={
             dur:addDuration,
             isRest:!!(tool as any)?.isRest,
             keys:[(tool as any)?.isRest
@@ -6364,6 +6384,13 @@ export default function PianoSystemCanvas({
               : key],
             dots: addDots,
           };
+          // 微分音（¼♯・¼♭）は音高の綴りではなく microtones[] に持つデータなので、
+          // 通常の臨時記号（key の綴りに寄せる applyInputAccidentalToKey）とは別に
+          // 置いた直後のイベントへ適用する（Issue #548 の統合で入力にも開放した）
+          const insertMicrotone = getInputMicrotone(tool);
+          const insertedEvent:NoteEvent = insertMicrotone && !insertedEventBase.isRest
+            ? applyMicrotoneToEvent(insertedEventBase, insertMicrotone, 0)
+            : insertedEventBase;
 
           const leading=buildLeadingRests(addBeats, voiceCountAfterInsert);
           setScore(prev=>{
@@ -6765,16 +6792,26 @@ export default function PianoSystemCanvas({
             return;
           }
           const {x:lx,y:ly}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-          if('mode' in tool&&tool.mode==='accidental'){
+          // 臨時記号ツール中の背景クリック（Issue #548 の統合で「音符を置く」に変わった）。
+          // 調号領域だけは先に判定しないと、先頭段の調号の上に音符が生えて
+          // 調号変更の経路が音符入力に食われる（設計メモ §3-3・受入ケース11）。
+          if(hasAccidentalTool(tool)){
             if(i===0&&lx>=firstStaveKeySignatureHitBounds.left&&lx<=firstStaveKeySignatureHitBounds.right){
+              const keySignatureAccidental = getInputAccidental(tool);
+              if(!keySignatureAccidental){
+                // 微分音（¼♯・¼♭）は調号には存在しない。ここで挿入へ流すと調号の上に
+                // 音符が生えるので、理由だけ伝えて消費する（#318「行き止まりは喋る」）
+                notifyScoreEdit(describeMicrotoneKeySignatureUnavailable());
+                return;
+              }
               // 臨時記号ツール中の背景クリックは、調号領域なら調号変更へ回す。
               // クリックされた段に固有の調号があれば、それを基準にシフトする。
               // こうすると記譜音モードのときに「画面で見えている調号」に対する
               // 操作になり、ユーザーの期待通りに動く。
               const baseKey = partKeyForAccidental;
-              const nextKey = shiftKeySignatureByAccidental(baseKey, tool.accidental);
+              const nextKey = shiftKeySignatureByAccidental(baseKey, keySignatureAccidental);
               console.info('[PianoSystemCanvas] 調号領域クリック', {
-                tool: tool.accidental,
+                tool: keySignatureAccidental,
                 partIndex: pi,
                 current: baseKey,
                 next: nextKey,
@@ -6784,14 +6821,17 @@ export default function PianoSystemCanvas({
               // 調号が変わらないときは書き換え・履歴を積まない（Issue #423。理由は上の同じ判定を参照）
               if (nextKey !== baseKey) {
                 onKeySignatureChange?.(nextKey, pi);
-              } else if (tool.accidental === 'doubleSharp' || tool.accidental === 'doubleFlat') {
+              } else if (keySignatureAccidental === 'doubleSharp' || keySignatureAccidental === 'doubleFlat') {
                 // 𝄪・𝄫 は調号に存在しないため必ずここへ来る。無言だと「効かない」ようにしか
                 // 見えないので、次の一手を案内する（#318・#430 round1 P2）
-                notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(tool.accidental === 'doubleSharp' ? '##' : 'bb'));
+                notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(keySignatureAccidental === 'doubleSharp' ? '##' : 'bb'));
               }
+              // 調号領域のクリックは調号変更で終わり。ここで抜けないと、
+              // 同じクリックで音符まで生えてしまう（受入ケース11）
+              return;
             }
-            // 調号領域以外の背景クリックでは、音符を新規挿入しない。
-            return;
+            // 調号領域の外は、統合後は「その記号付きの音符を置く」ので下の挿入へ流す
+            // （統合前は無反応だった。設計メモ §3-5 の変更点D）
           }
           // 小節背景クリックは常にアクティブ声部への挿入。
           // 声部2の既存音符の真上をクリックした場合も、doInsert 内の位置判定で
@@ -6805,7 +6845,7 @@ export default function PianoSystemCanvas({
           (doInsertByPart[insertTargetPi] ?? doInsert)(lx, ly, pi);
         });
         svgRoot.appendChild(ir);
-        if ('mode' in tool && tool.mode === 'accidental' && i === 0) {
+        if (getInputAccidental(tool) && i === 0) {
           const keySignatureDebugRect = document.createElementNS('http://www.w3.org/2000/svg','rect');
           keySignatureDebugRect.setAttribute('class','vf-key-signature-debug');
           keySignatureDebugRect.setAttribute('x',String(firstStaveKeySignatureHitBounds.left));
@@ -7259,8 +7299,73 @@ export default function PianoSystemCanvas({
                * 続けることを意味し、旧実装で「フラグ分岐のガードに合致せず if 連鎖を
                * 素通りしていた」経路と1対1に対応する。
                */
+              /**
+               * 臨時記号ツール（Issue #548 の統合後）で符頭を押したときの「付与」（設計メモ §3-2 の表 #2）。
+               *
+               * 付与になるか・音符が生えるかは resolveSelectableKeyIndexAt の戻り値1本で決める。
+               * 同じ関数をホバーのカーソル形状と再クリック巡回（#264）も呼んでいるので、
+               * 「ホバーでは選択に見えるのに押すと別のことが起きる」食い違いが構造的に起きない
+               * （設計メモ §3-4。判定の2枚目を作らないこと自体が目的）。
+               *
+               * 戻り値 null は「付与ではない」＝既定処理（挿入・和音追加・休符置換）へ流す合図。
+               */
+              const accidentalApplyOutcome = (): NoteClickOutcome | null => {
+                const applyAccidental = getInputAccidental(tool);
+                const applyMicrotone = getInputMicrotone(tool);
+                if (!applyAccidental && !applyMicrotone) return null;
+                const isKeySignatureZone = i===0 &&
+                  lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
+                if (clickedIsRest) {
+                  // 空小節の全休符プレースホルダーが背景クリックを拾ってしまう譜面でも、
+                  // 調号領域だけは調号変更へ流す（統合前と同じ・#423／受入ケース11）。
+                  if (isKeySignatureZone) {
+                    if (!applyAccidental) {
+                      notifyScoreEdit(describeMicrotoneKeySignatureUnavailable());
+                      return { kind: 'handled' };
+                    }
+                    const baseKey = partKeyForAccidental;
+                    const nextKey = shiftKeySignatureByAccidental(baseKey, applyAccidental);
+                    if (nextKey !== baseKey) {
+                      onKeySignatureChange?.(nextKey, hitPi);
+                    } else if (applyAccidental === 'doubleSharp' || applyAccidental === 'doubleFlat') {
+                      notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(
+                        applyAccidental === 'doubleSharp' ? '##' : 'bb'));
+                    }
+                    return { kind: 'handled' };
+                  }
+                  // 休符は「その記号付きの音符へ置換」（#233 の1クリック置換に記号が乗る・受入ケース12）
+                  return null;
+                }
+                if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return null;
+                const clickedKeyIndex = resolveSelectableKeyIndexAt(lx, ly);
+                // 符頭から外れたクリックは挿入・和音追加へ（受入ケース2・13）
+                if (clickedKeyIndex < 0) return null;
+                // 最新データで keyIndex を引き直すのは、クリック時点の描画データが
+                // 古い可能性があるため（統合前の付与ツールと同じ手当て）
+                const snappedLine = snapLineForKeySelect(ly);
+                const applyToEvent = <T extends { isRest: boolean; keys: string[]; microtones?: { keyIndex: number; type: MicrotoneType }[] }>(
+                  targetEv: T, keyIndex: number
+                ): T => applyAccidental
+                  ? applyAccidentalToEvent(targetEv, applyAccidental, keyIndex>=0?keyIndex:undefined)
+                  : applyMicrotoneToEvent(targetEv, applyMicrotone!, keyIndex>=0?keyIndex:undefined);
+                const nextEv = applyToEvent(activeEvs[j], clickedKeyIndex);
+                updateHitEvent(j, (targetEv) => {
+                  if(targetEv.isRest)return null;
+                  return applyToEvent(targetEv, findKeyIndexAtLine(targetEv.keys, snappedLine, k2l));
+                });
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex});
+                if (previewAccidentalOnApply) {
+                  playNoteEvent(nextEv, part.playbackInstrument);
+                }
+                return { kind: 'handled' };
+              };
+
               const flagToolOutcome = (): NoteClickOutcome => {
-              if (!('mode' in tool)) return { kind: 'passThrough' };
+              if (!('mode' in tool)) {
+                // 統合後の臨時記号は mode を持たない「音価ツールの属性」なので、
+                // フラグ系のテーブルへ入る前にここで付与かどうかを判定する（#548）
+                return accidentalApplyOutcome() ?? { kind: 'passThrough' };
+              }
               switch (tool.mode) {
               case 'tupletNumberToggle': {
                 // 連符ではない音符を押しても何も起きないため、理由と代替手順を伝える
@@ -7326,99 +7431,6 @@ export default function PianoSystemCanvas({
                 // 成功の報告なので rejected ではなく handled 内の通知（rejected は失敗の終端専用）。
                 notifyScoreEdit(describeCrossStaffToggled(direction, turnedOn, hitVoice));
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                return { kind: 'handled' };
-              }
-              case 'accidental': {
-                const accidentalMode = tool.accidental;
-                if (clickedIsRest) {
-                  // 休符×臨時記号（旧実装では休符分岐の中にあったセルをここへ移設）:
-                  // 先頭段の調号領域だけは調号変更へ流し、それ以外は消費して終える。
-                  const isKeySignatureZone = i===0 &&
-                    lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
-                  if (isKeySignatureZone) {
-                    // 多段譜でも空小節は全休符プレースホルダーが背景クリックを拾うため、
-                    // 調号領域だけはここから調号変更へ流す。
-                    // パート固有調号があればそれを基準にシフトし、partIndex を添えて返す。
-                    const baseKey = partKeyForAccidental;
-                    const nextKey = shiftKeySignatureByAccidental(baseKey, accidentalMode);
-                    console.info('[PianoSystemCanvas] 調号領域クリック', {
-                      tool: accidentalMode,
-                      partIndex: hitPi,
-                      current: baseKey,
-                      next: nextKey,
-                      x: lx,
-                      bounds: firstStaveKeySignatureHitBounds,
-                    });
-                    // 調号が変わらないときは書き換え・履歴を積まない（Issue #423）。
-                    // 𝄪・𝄫 は調号には存在しないため必ず同じ調号が返る。
-                    if (nextKey !== baseKey) {
-                      onKeySignatureChange?.(nextKey, hitPi);
-                    } else if (tool.accidental === 'doubleSharp' || tool.accidental === 'doubleFlat') {
-                      // 無言の行き止まりにしない（#318・#430 round1 P2）
-                      notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(tool.accidental === 'doubleSharp' ? '##' : 'bb'));
-                    }
-                  }
-                  // 調号領域の外は従来から無反応でクリックを消費する（挙動ゼロ差のため
-                  // 通知は足さない。喋るべきかは #318 系の別Issueで扱う）
-                  return { kind: 'handled' };
-                }
-                // 多段譜でも単旋律譜と同じ感覚で使えるよう、
-                // 臨時記号は音符セル内クリックなら適用できるようにする。
-                // 符頭の狭い当たり判定だけにすると「置けない」と感じやすいため、
-                // 和音追加より先にこちらを処理する。
-                // ここでの snappedLine は「どの符頭に付けるか」を決めるためだけに使うので、
-                // 五線から遠い音符にも効くよう選択用の丸め（Issue #218）を使う。
-                const snappedLine = snapLineForKeySelect(ly);
-                const clickedKeyIndex = findKeyIndexAtLine(activeEvs[j].keys, snappedLine, k2l);
-                const nextEv = applyAccidentalToEvent(
-                  activeEvs[j],
-                  accidentalMode,
-                  clickedKeyIndex>=0?clickedKeyIndex:undefined
-                );
-                updateHitEvent(j, (targetEv) => {
-                  if(targetEv.isRest)return null;
-                  const latestKeyIndex = clickedKeyIndex>=0
-                    ? findKeyIndexAtLine(targetEv.keys, snappedLine, k2l)
-                    : -1;
-                  return applyAccidentalToEvent(
-                    targetEv,
-                    accidentalMode,
-                    latestKeyIndex>=0?latestKeyIndex:undefined
-                  );
-                });
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex>=0?clickedKeyIndex:undefined});
-                if (previewAccidentalOnApply) {
-                  playNoteEvent(nextEv, part.playbackInstrument);
-                }
-                return { kind: 'handled' };
-              }
-              case 'microtone': {
-                // 微分音×休符は旧実装どおり既定処理へ（休符置換もされず選択/挿入になる）
-                if (clickedIsRest) return { kind: 'passThrough' };
-                const microtoneMode = tool.type;
-                // 微分音（四分音）も、通常の臨時記号と同じ「音符セルクリックで適用」操作にする。
-                const snappedLine = snapLineForKeySelect(ly);
-                const clickedKeyIndex = findKeyIndexAtLine(activeEvs[j].keys, snappedLine, k2l);
-                const nextEv = applyMicrotoneToEvent(
-                  activeEvs[j],
-                  microtoneMode,
-                  clickedKeyIndex>=0?clickedKeyIndex:undefined
-                );
-                updateHitEvent(j, (targetEv) => {
-                  if(targetEv.isRest)return null;
-                  const latestKeyIndex = clickedKeyIndex>=0
-                    ? findKeyIndexAtLine(targetEv.keys, snappedLine, k2l)
-                    : -1;
-                  return applyMicrotoneToEvent(
-                    targetEv,
-                    microtoneMode,
-                    latestKeyIndex>=0?latestKeyIndex:undefined
-                  );
-                });
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex>=0?clickedKeyIndex:undefined});
-                if (previewAccidentalOnApply) {
-                  playNoteEvent(nextEv, part.playbackInstrument);
-                }
                 return { kind: 'handled' };
               }
               case 'dynamic': {
@@ -7721,8 +7733,15 @@ export default function PianoSystemCanvas({
                 if(currentEv&&!currentEv.keys.includes(newKey)){
                   const newKeys=[...currentEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
                   selectedKeyIndex = newKeys.indexOf(newKey);
-                  playEvent = { ...currentEv, keys: newKeys };
-                  updateHitEvent(j, (targetEv) => targetEv.isRest ? null : {...targetEv,keys:newKeys});
+                  // 和音に足す音にも微分音を乗せる（Issue #548。通常の臨時記号は newKey の綴りで既に乗っている）。
+                  // microtones[] は keyIndex で音を指すので、並べ替え後の位置（selectedKeyIndex）で付ける
+                  const chordMicrotone = getInputMicrotone(tool);
+                  const withChordKey = <T extends NoteEvent>(targetEv: T): T => {
+                    const merged = {...targetEv, keys:newKeys} as T;
+                    return chordMicrotone ? applyMicrotoneToEvent(merged, chordMicrotone, selectedKeyIndex!) : merged;
+                  };
+                  playEvent = withChordKey(currentEv);
+                  updateHitEvent(j, (targetEv) => targetEv.isRest ? null : withChordKey(targetEv));
                 }
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:selectedKeyIndex});
                 playNoteEvent(playEvent, part.playbackInstrument);

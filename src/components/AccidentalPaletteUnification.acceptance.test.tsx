@@ -2,10 +2,9 @@
 //
 // 設計メモ: .claude/specs/accidental-palette-unification/design.md
 //
-// ⚠ この describe は **意図的に skip している**。統合はまだ実装しておらず、
-//   ここに書いてあるのは「実装段で満たすべき合格基準」だから。
-//   実装段では `describe.skip` の `.skip` を外し、全ケースを緑にすることが完了条件になる。
-//   設計時の期待と実装が食い違った場合は、黙って書き換えず「なぜ違ったか」を PR 本文に書く。
+// 実装段（この PR）で `.skip` を外した。設計時の期待から変えたのはケース14だけで、
+// 理由は「運用者裁定でパレットが7個並び → ♯▾/♭▾/♮ の3個+プルダウンへ変わった」ため
+// （¼♯ はトップレベルのボタンではなくプルダウンの項目になったので、開いてから押す）。
 //
 // ケース番号は設計メモ §5 の表と対応している。
 // ケース7（Undo 1回で戻る）・ケース9（既存データの回帰）は、既存の
@@ -79,7 +78,7 @@ function mockSvgLayout(svg: SVGSVGElement) {
   Object.defineProperty(svg, 'height', { value: { baseVal: { value: height } }, configurable: true });
 }
 
-describe.skip('#548 臨時記号パレットの統合（案D）の受入基準', () => {
+describe('#548 臨時記号パレットの統合（案D）の受入基準', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
   beforeEach(() => {
@@ -138,8 +137,9 @@ describe.skip('#548 臨時記号パレットの統合（案D）の受入基準',
     const { container } = render(
       <Palette value={{ duration: '4', isRest: false, accidental: 'sharp' }} onChange={onChange} section="notes" />
     );
-    // 8分音符のボタン（既存の aria-label をそのまま使う）
-    fireEvent.click(buttonByLabelPrefix(container, '8分音符'));
+    // 8分音符のボタン（既存の aria-label は「音符 8分」。設計時のメモが `8分音符` と
+    // 書き間違えていたので、実際のラベルへ直した）
+    fireEvent.click(buttonByLabelPrefix(container, '音符 8分'));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ duration: '8', accidental: 'sharp' }));
   });
 
@@ -187,11 +187,25 @@ describe.skip('#548 臨時記号パレットの統合（案D）の受入基準',
     const { container } = render(
       <Palette value={{ duration: '4', isRest: false, accidental: 'sharp' }} onChange={onChange} section="notes" />
     );
+    // 運用者裁定（2026-09-02）でボタンは ♯▾ / ♭▾ / ♮ の3個になり、¼♯ は ♯ のプルダウンの中にある。
+    // まず ▾ を開いてから選ぶ（設計時は7個並びの想定だったので、その1点だけ手順が増えている）
+    fireEvent.click(buttonByLabelPrefix(container, 'シャープ系の種類を選ぶ'));
     fireEvent.click(buttonByLabelPrefix(container, LABEL_PREFIX.quarterSharp));
     expect(onChange).toHaveBeenCalledWith(
-      // 段1a で Tool へ microtone 属性が入る（設計メモ §3-1）。それまでは型に無いので比較だけ書く
       expect.objectContaining({ duration: '4', accidental: undefined, microtone: 'quarterSharp' })
     );
+  });
+
+  it('ケース14b: プルダウンで選んだ種別はボタンに残る（次からは1クリックで出せる）', () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <Palette value={{ duration: '4', isRest: false }} onChange={onChange} section="notes" />
+    );
+    fireEvent.click(buttonByLabelPrefix(container, 'シャープ系の種類を選ぶ'));
+    fireEvent.click(buttonByLabelPrefix(container, '臨時記号: ダブルシャープ'));
+    // メニューは閉じるが、ボタン本体の名前が 𝄪 に変わっている＝次は1クリックで使える
+    expect(container.querySelector('button[aria-label^="臨時記号: シャープ"]')).toBeNull();
+    expect(container.querySelector('button[aria-label^="臨時記号: ダブルシャープ"]')).toBeTruthy();
   });
 
   // ── 譜面側（段1b で緑になる） ─────────────────────────────────

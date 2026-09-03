@@ -9,7 +9,7 @@
 // 初学者向けにコメントを多めに入れています。
 // ─────────────────────────────────────────────────────────────
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 import type { AccidentalToolKind, MicrotoneType } from '../utils/noteKeyUtils';
 import type { EndingNumber, RepeatMarkerKind } from '../utils/repeatMarkerUtils';
@@ -20,6 +20,7 @@ import { isRelativeDynamicMarkingValue } from '../utils/dynamicMarkingUtils';
 import { symbolDefToPreviewSvg } from '../utils/customSymbolUtils';
 import { type TextElementKind, textElementLabel } from '../utils/textElementUtils';
 import { TUPLET_KINDS, type TupletKind } from '../utils/tupletUtils';
+import ToolVariantButton, { type ToolVariantOption } from './ToolVariantButton';
 // 日本語ラベルは Issue #405 段2 で utils/editorContextLabels.ts へ移した。
 // A1 案の文脈バーが同じ言葉を出すため、正本を1か所にまとめてある（コピーを増やさない）。
 import {
@@ -57,11 +58,13 @@ export function normalizeToVF(d: DurKey): 'w'|'h'|'q'|'8'|'16'|'32'|'64' {
 
 // ツール（「音価」と「休符かどうか」、またはタイモード）
 export type Tool =
-  | { duration: DurKey; isRest?: boolean; dots?: 1; tuplet?: TupletKind; accidental?: AccidentalToolKind }  // 通常の音符/休符入力（dots: 1で付点, tupletに{numNotes,notesOccupied}を入れるとN連符モード, accidentalを入れると置いた音符に臨時記号が付く）
+  // 通常の音符/休符入力（dots: 1で付点, tupletに{numNotes,notesOccupied}を入れるとN連符モード）。
+  // accidental / microtone は「臨時記号の属性」（Issue #470 → #548 で統合）。
+  // ONのあいだ、符頭をクリックすればその音へ付与され、空きをクリックすればその記号付きの音符が置かれる。
+  // 2つは排他（同じ音に ♯ と ¼♯ は付かない）なので、片方を入れるときは必ずもう片方を undefined にする。
+  | { duration: DurKey; isRest?: boolean; dots?: 1; tuplet?: TupletKind; accidental?: AccidentalToolKind; microtone?: MicrotoneType }
   | { mode: 'select' }                      // 小節選択モード（コピー&ペースト用）
   | { mode: 'tie' }                         // タイ記号を付けるモード
-  | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
-  | { mode: 'microtone'; type: MicrotoneType }              // 微分音（四分音）の臨時記号を付けるモード
   | { mode: 'repeat'; repeat: RepeatMarkerKind }            // リピート記号を付けるモード
   | { mode: 'ending'; ending: EndingNumber }                // 1番括弧 / 2番括弧
   | { mode: 'dynamic'; dynamic: DynamicMarkingValue }       // 強弱記号を付けるモード
@@ -86,8 +89,6 @@ export type Tool =
   | { mode: 'ottava'; ottavaType: '8va' | '8vb' | '8vaEnd' | '8vbEnd' } // オッターバ記号を付けるモード
   | { mode: 'hairpin'; hairpinType: 'cresc' | 'dim' };     // 松葉（クレッシェンド＜／デクレッシェンド＞）を付けるモード。タイと同様に開始音符→終了音符へドラッグして設置
 
-type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
-type MicrotoneTool = Extract<Tool, { mode: 'microtone' }>;
 type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
 type EndingTool = Extract<Tool, { mode: 'ending' }>;
 type DynamicTool = Extract<Tool, { mode: 'dynamic' }>;
@@ -122,17 +123,63 @@ const FILL_TWEAKS: Partial<Record<SymKey, number>> = {
 
 // タイツールの定数
 const TIE_TOOL: Tool = { mode: 'tie' };
-const ACCIDENTAL_TOOLS: AccidentalTool[] = [
-  { mode: 'accidental', accidental: 'sharp' },
-  { mode: 'accidental', accidental: 'flat' },
-  { mode: 'accidental', accidental: 'natural' },
-  // ダブルシャープ・ダブルフラット（全音の上げ下げ）。嬰ト短調など♯の多い調で使う
-  { mode: 'accidental', accidental: 'doubleSharp' },
-  { mode: 'accidental', accidental: 'doubleFlat' },
-];
-const MICROTONE_TOOLS: MicrotoneTool[] = [
-  { mode: 'microtone', type: 'quarterSharp' },
-  { mode: 'microtone', type: 'quarterFlat' },
+
+// ── 臨時記号パレット（Issue #548・案D で統合したあとの構成）──────────────
+//
+// 統合前は「すでにある音符へ付ける5個」「これから置く音符に付ける5個」「微分音2個」の
+// 合計12個が並んでいた。同じ記号が意味違いで2家族あるのは初見で区別できず、
+// テスト会で実際に戸惑いを生んだ（#547）。統合後は
+//   ・意味はクリック先で決まる（符頭をクリック=付与／空きをクリック=その記号付きの音符を入力）
+//   ・ボタンは「♯▾ / ♭▾ / ♮」の3個だけ。仲間の記号（𝄪・¼♯ など）は ▾ のプルダウンへ畳む
+// という形にした（運用者裁定 2026-09-02）。
+/** 1つのボタンに割り当てる記号の種別。♯/♭/♮ 系と微分音（四分音）系は排他なので直和で持つ */
+type AccidentalVariant =
+  | { kind: 'accidental'; accidental: AccidentalToolKind }
+  | { kind: 'microtone'; microtone: MicrotoneType };
+
+/** 変種を一意に指す文字列。プルダウンの現在選択を覚えるキーに使う */
+function accidentalVariantKey(variant: AccidentalVariant): string {
+  return variant.kind === 'accidental' ? `accidental:${variant.accidental}` : `microtone:${variant.microtone}`;
+}
+function accidentalVariantSymbol(variant: AccidentalVariant): string {
+  return variant.kind === 'accidental' ? accidentalSymbol(variant.accidental) : microtoneSymbol(variant.microtone);
+}
+function accidentalVariantLabel(variant: AccidentalVariant): string {
+  return variant.kind === 'accidental' ? accidentalLabel(variant.accidental) : microtoneLabel(variant.microtone);
+}
+/**
+ * ボタンの名前。先頭を「臨時記号: <名前>」で揃えてあるのは、
+ * 支援技術で読んだときとテストで探すときの手がかりを1種類にするため（設計メモ §3-6）。
+ */
+function accidentalVariantAriaLabel(variant: AccidentalVariant): string {
+  return `臨時記号: ${accidentalVariantLabel(variant)}`
+    + `（音符をクリックで付与・空きをクリックで${accidentalVariantSymbol(variant)}付きの音符を入力）`;
+}
+
+/** ボタン3個ぶんの定義。variants の先頭が既定（ボタンに最初から出ている記号） */
+const ACCIDENTAL_FAMILIES: { id: string; menuLabel: string; variants: AccidentalVariant[] }[] = [
+  {
+    id: 'sharp',
+    menuLabel: 'シャープ系の種類を選ぶ（𝄪・¼♯）',
+    variants: [
+      { kind: 'accidental', accidental: 'sharp' },
+      // ダブルシャープ（全音上げ）。嬰ト短調など♯の多い調で使う
+      { kind: 'accidental', accidental: 'doubleSharp' },
+      // 微分音（四分音）: 半音の半分（50セント）だけ上げる現代音楽向けの記号
+      { kind: 'microtone', microtone: 'quarterSharp' },
+    ],
+  },
+  {
+    id: 'flat',
+    menuLabel: 'フラット系の種類を選ぶ（♭♭・¼♭）',
+    variants: [
+      { kind: 'accidental', accidental: 'flat' },
+      { kind: 'accidental', accidental: 'doubleFlat' },
+      { kind: 'microtone', microtone: 'quarterFlat' },
+    ],
+  },
+  // ナチュラルは変種が無い（半音上げ下げを打ち消す記号は1つだけ）ので ▾ を出さない
+  { id: 'natural', menuLabel: 'ナチュラル', variants: [{ kind: 'accidental', accidental: 'natural' }] },
 ];
 const REPEAT_TOOLS: RepeatTool[] = [
   { mode: 'repeat', repeat: 'start' },
@@ -218,6 +265,13 @@ export default function Palette({
    */
   crossStaffAvailable?: boolean;
 }) {
+  // 臨時記号ボタン（♯▾・♭▾）が「いまどの変種を出しているか」を覚えておく（Issue #548 運用者裁定）。
+  // プルダウンで 𝄪 を選んだらボタンは 𝄪 のまま残る＝次に使うときも1クリックで出せる。
+  // ツール側（value）には選んだ記号そのものが乗るので、ここで覚えるのは見た目の担当だけ。
+  const [accidentalVariantKeys, setAccidentalVariantKeys] = useState<Record<string, string>>(() =>
+    Object.fromEntries(ACCIDENTAL_FAMILIES.map((family) => [family.id, accidentalVariantKey(family.variants[0])]))
+  );
+
   // 現在の選択状態を判定
   const selectActive = 'mode' in value && value.mode === 'select';
   const tieActive = 'mode' in value && value.mode === 'tie';
@@ -225,11 +279,10 @@ export default function Palette({
   // 現在選ばれている連符の numNotes（3/5/6/7）。どれも選ばれていなければ null。
   const activeTupletNumNotes = 'duration' in value && value.tuplet ? value.tuplet.numNotes : null;
   const tupletNumberToggleActive = 'mode' in value && value.mode === 'tupletNumberToggle';
-  const selectedAccidental = 'mode' in value && value.mode === 'accidental' ? value.accidental : null;
-  // 入力時に付ける臨時記号（Issue #470）。音価ツールに乗っているときだけ「ON」になる。
-  // 適用ツール（mode: 'accidental'）とは別物なので、判定も別に持つ。
+  // 臨時記号は音価ツールに乗る属性（Issue #470 → #548 で1系統へ統合）。
+  // ONのあいだ、符頭クリックは付与・空きクリックは記号付きの入力になる。
   const inputAccidental = 'duration' in value ? value.accidental ?? null : null;
-  const selectedMicrotone = 'mode' in value && value.mode === 'microtone' ? value.type : null;
+  const inputMicrotone = 'duration' in value ? value.microtone ?? null : null;
   const selectedRepeat = 'mode' in value && value.mode === 'repeat' ? value.repeat : null;
   const selectedEnding = 'mode' in value && value.mode === 'ending' ? value.ending : null;
   const selectedDynamic = 'mode' in value && value.mode === 'dynamic' ? value.dynamic : null;
@@ -256,6 +309,42 @@ export default function Palette({
   const ottava8vaEndActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8vaEnd';
   const ottava8vbEndActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8vbEnd';
   const selectedHairpinType = 'mode' in value && value.mode === 'hairpin' ? value.hairpinType : null;
+
+  /**
+   * 臨時記号ボタンの ON/OFF を音価ツールへ反映する（Issue #548）。
+   * variant に null を渡すと OFF（記号なしの入力に戻る）。
+   * ♯/♭/♮ と微分音は排他なので、必ず片方だけを載せてもう片方を undefined にする。
+   */
+  const applyAccidentalVariant = (variant: AccidentalVariant | null) => {
+    const nextAccidental = variant?.kind === 'accidental' ? variant.accidental : undefined;
+    const nextMicrotone = variant?.kind === 'microtone' ? variant.microtone : undefined;
+    if ('duration' in value) {
+      onChange({
+        ...value,
+        // 臨時記号は音符にしか付かない。休符ツールを持ったままONにしたときは、
+        // 同じ音価の「音符」へ切り替える（ONにしたのに何も起きない状態を作らない・#470）
+        isRest: (nextAccidental || nextMicrotone) && value.isRest ? undefined : value.isRest,
+        accidental: nextAccidental,
+        microtone: nextMicrotone,
+      });
+    } else {
+      // 記号系ツールを持っているときは、付点ボタンと同じく四分音符へ戻して付ける
+      onChange({ ...(ROW1[2] as { duration: DurKey }), accidental: nextAccidental, microtone: nextMicrotone });
+    }
+  };
+
+  /**
+   * 音価ボタンを押したときに、ONにしてある臨時記号を引き継ぐ（Issue #548 受入ケース3）。
+   * 統合前は音価ボタンがツールを丸ごと差し替えていたため、♯をONにしたまま8分に持ち替えると
+   * 記号が黙って外れていた。統合後は「♯を持ったまま音価を変える」が主要な使い方になるので引き継ぐ。
+   * 休符ボタンには引き継がない（休符に臨時記号は付かないため）。
+   */
+  const carryAccidentalIntoDurationTool = (next: Tool): Tool => {
+    if (!('duration' in next) || next.isRest) return next;
+    if (!('duration' in value)) return next;
+    if (!value.accidental && !value.microtone) return next;
+    return { ...next, accidental: value.accidental, microtone: value.microtone };
+  };
 
   const ROW_STYLE: React.CSSProperties = { display: 'flex', gap: 3, flexWrap: 'wrap' as const };
 
@@ -285,7 +374,7 @@ export default function Palette({
               <button
                 key={i}
                 type="button"
-                onClick={() => onChange(t)}
+                onClick={() => onChange(carryAccidentalIntoDurationTool(t))}
                 title={`音符 ${durationLabel((t as {duration: DurKey}).duration)}`}
 
                 aria-label={`音符 ${durationLabel((t as {duration: DurKey}).duration)}`}
@@ -398,74 +487,49 @@ export default function Palette({
               <path d="M3 10 Q12 2 21 10" stroke="#111" strokeWidth="2" strokeLinecap="round" fill="none"/>
             </svg>
           </button>
-          {/* 臨時記号 */}
-          {ACCIDENTAL_TOOLS.map((tool) => {
-            const active = selectedAccidental === tool.accidental;
+          {/* 臨時記号（Issue #548 で統合）: ボタンは「♯▾ / ♭▾ / ♮」の3個だけ。
+              ONのあいだ、譜面の符頭をクリックすればその音へ付与され、
+              音の無いところをクリックすればその記号付きの音符が置かれる。
+              「どちらの意味になるか」はクリックする前にカーソルの形で分かる
+              （符頭に乗ると pointer・空きでは copy。PianoSystemCanvas 側で判定を共用）。
+              付点・連符と同じ「入力の属性」なので、音価と同時に選んだままにできる。 */}
+          {ACCIDENTAL_FAMILIES.map((family) => {
+            // ボタンに出す変種は「いまONになっている記号」が最優先。
+            // ツールが外から変わる経路（キーボード操作・作品の切り替え）でも表示と実態がずれないようにする。
+            // どれもONでなければ、プルダウンで最後に選んだ変種を出す（1クリックで戻せる）。
+            const activeVariant = family.variants.find((variant) => variant.kind === 'accidental'
+              ? inputAccidental === variant.accidental
+              : inputMicrotone === variant.microtone);
+            const currentKey = activeVariant
+              ? accidentalVariantKey(activeVariant)
+              : accidentalVariantKeys[family.id] ?? accidentalVariantKey(family.variants[0]);
+            const current = activeVariant
+              ?? family.variants.find((v) => accidentalVariantKey(v) === currentKey)
+              ?? family.variants[0];
+            const active = !!activeVariant;
+            const options: ToolVariantOption[] = family.variants.map((variant) => ({
+              key: accidentalVariantKey(variant),
+              symbol: accidentalVariantSymbol(variant),
+              ariaLabel: accidentalVariantAriaLabel(variant),
+              title: accidentalVariantAriaLabel(variant),
+            }));
             return (
-              <button
-                key={tool.accidental}
-                type="button"
-                onClick={() => onChange(active ? ROW1[2] : tool)}
-                title={`${accidentalLabel(tool.accidental)}（選択して音符をクリック）`}
-
-                aria-label={`${accidentalLabel(tool.accidental)}（選択して音符をクリック）`}
-                style={btnStyle(active, { fontSize: 18, fontFamily: '"Times New Roman", serif' })}
-              >
-                {accidentalSymbol(tool.accidental)}
-              </button>
-            );
-          })}
-          {/* 微分音（四分音）: 半音の半分（50セント）だけ上げ下げする現代音楽向けの臨時記号 */}
-          {MICROTONE_TOOLS.map((tool) => {
-            const active = selectedMicrotone === tool.type;
-            return (
-              <button
-                key={tool.type}
-                type="button"
-                onClick={() => onChange(active ? ROW1[2] : tool)}
-                title={`${microtoneLabel(tool.type)}（選択して音符をクリック）`}
-                aria-label={`${microtoneLabel(tool.type)}（選択して音符をクリック）`}
-                style={btnStyle(active, { fontSize: 16, fontFamily: '"Times New Roman", serif' })}
-              >
-                {microtoneSymbol(tool.type)}
-              </button>
-            );
-          })}
-          {/* 入力時に付ける臨時記号（Issue #470）:
-              上の ♯/♭/♮ が「すでにある音符へ付ける」ツールなのに対し、こちらは
-              **音価と同時にONにしておくトグル**。ONのあいだ、譜面をクリックして置いた音符に
-              最初からその臨時記号が付くので、「四分音符を置く → ♯ツールに持ち替える → もう一度クリック」
-              の2〜3手が1クリックになる（弟フィードバック・ステップ入力の速度）。
-              付点・連符トグルとまったく同じ流儀で、音価・付点・連符と共存できる。
-              ボタンの表記に ♩ を添えているのは、上の適用ツールと見分けるため
-              （「音符に付けて入力する」の意味）。 */}
-          {ACCIDENTAL_TOOLS.map((tool) => {
-            const active = inputAccidental === tool.accidental;
-            return (
-              <button
-                key={`input-${tool.accidental}`}
-                type="button"
-                onClick={() => {
-                  const nextAccidental = active ? undefined : tool.accidental;
-                  if ('duration' in value) {
-                    // 臨時記号は音符にしか付かない。休符ツールを持ったままONにしたときは、
-                    // 同じ音価の「音符」へ切り替える（ONにしたのに何も起きない状態を作らない）。
-                    onChange({
-                      ...value,
-                      isRest: nextAccidental && value.isRest ? undefined : value.isRest,
-                      accidental: nextAccidental,
-                    });
-                  } else {
-                    // 記号ツールを持っているときは、付点ボタンと同じく四分音符へ戻して付ける。
-                    onChange({ ...(ROW1[2] as { duration: DurKey }), accidental: tool.accidental });
-                  }
+              <ToolVariantButton
+                key={family.id}
+                options={options}
+                currentKey={currentKey}
+                active={active}
+                menuAriaLabel={family.menuLabel}
+                buttonStyle={btnStyle}
+                symbolStyle={{ fontSize: 18, fontFamily: '"Times New Roman", serif' }}
+                onActivate={() => applyAccidentalVariant(active ? null : current)}
+                onSelectVariant={(key) => {
+                  const picked = family.variants.find((v) => accidentalVariantKey(v) === key) ?? family.variants[0];
+                  setAccidentalVariantKeys((prev) => ({ ...prev, [family.id]: key }));
+                  // 選んだ時点で有効にする（「選んだのに一度押し直さないと使えない」を避ける）
+                  applyAccidentalVariant(picked);
                 }}
-                title={`${accidentalLabel(tool.accidental)}を付けて入力（音価と同時に選べます。ONのあいだ、置いた音符に${accidentalSymbol(tool.accidental)}が付きます）`}
-                aria-label={`入力時に付ける臨時記号: ${accidentalLabel(tool.accidental)}`}
-                style={btnStyle(active, { width: 42, fontSize: 13, fontFamily: '"Times New Roman", serif', whiteSpace: 'nowrap' })}
-              >
-                {`♩${accidentalSymbol(tool.accidental)}`}
-              </button>
+              />
             );
           })}
           {/* 休符・リピート・括弧も同じ折り返し行に続ける。

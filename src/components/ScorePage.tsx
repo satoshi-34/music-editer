@@ -3470,10 +3470,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       if (e.key === 'r' || e.key === 'R') {
         setTool(prev => {
           if ('duration' in prev) {
-            // 入力用の臨時記号（#470）は音符専用。休符へ切り替えるときに残すと、
+            // 臨時記号（#470 → #548 で統合）は音符専用。休符へ切り替えるときに残すと、
             // ♯ボタンがON表示のままクリックしても効かない無言の行き止まりになる
-            // （#470 round1 P2・#318）。音符へ戻るときは付け直してもらう
-            const { accidental: _dropped, ...rest } = prev;
+            // （#470 round1 P2・#318）。音符へ戻るときは付け直してもらう。
+            // 微分音（¼♯・¼♭）も同じ属性になったので同じように落とす（#548 設計メモ §3-6）
+            const { accidental: _dropped, microtone: _droppedMicrotone, ...rest } = prev;
             return { ...rest, isRest: !prev.isRest };
           }
           return { duration: '4', isRest: true };

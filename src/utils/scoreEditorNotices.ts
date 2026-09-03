@@ -539,6 +539,15 @@ export function describeDoubleAccidentalKeySignatureUnavailable(kind: '##' | 'bb
 }
 
 /**
+ * 微分音（¼♯・¼♭）のツールで調号領域をクリックしたときの案内（Issue #548）。
+ * 統合で「空きクリック＝音符を置く」に変わったため、無言で調号の上に音符を生やさないよう、
+ * ここで消費して理由を伝える（#318「行き止まりは喋る」）。
+ */
+export function describeMicrotoneKeySignatureUnavailable(): string {
+  return '四分音（¼♯・¼♭）は調号には使えません（調号にあるのは♯と♭だけです）。付けたい音符をクリックしてください';
+}
+
+/**
  * MusicXML 読込で大譜表のクレフをピアノ標準（上=ト・下=ヘ）へ正規化したときの通知（#419 round2）。
  * アプリのピアノモデルはクレフ固定のため任意クレフを保持できないが、keys（絶対音名）は
  * そのままなので音の高さは変わらない。黙って見た目が変わる自動処理は通知する（#318）。
