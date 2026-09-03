@@ -126,8 +126,22 @@ describe('MusicXML: 変更の無い <attributes> の書き直しを段割りへ�
     const directPlan = planLayout(direct.parts, direct.timeSignature as [number, number], direct.keySignature);
     const importedPlan = planLayout(imported.parts, imported.timeSignature as [number, number], imported.keySignature);
 
-    // 受入条件1: 1段に2小節以上入る（修正前は最低幅の水増しで1小節/段まで縮んでいた）
-    expect(importedPlan.measuresPerSystem.every((count) => count >= 2)).toBe(true);
+    // 受入条件1: 「全部の段が1小節」ではなくなっている（修正前は最低幅の水増しで1小節/段まで縮んでいた）。
+    //
+    // 期待値の更新（Issue #559・2026-09-03）: 以前は「すべての段が2小節以上」で固定していたが、
+    // #559 で最低幅の過大見積もりを直した結果、内容9小節の詰まり方が 3,3,3 から 4,4,1 になった。
+    // 末尾の「1」は幅が足りないのではなく、9小節を4小節ずつ詰めた余り（内容の最後で段を
+    // 打ち切る breakAt=9 の既存挙動）なので、条件を「余りの段以外は2小節以上」へ改めた。
+    const contentCounts = importedPlan.measuresPerSystem.slice(
+      0,
+      // 内容9小節ぶんの段だけを見る（それ以降は編集用の空きバッファの段）
+      importedPlan.measuresPerSystem.reduce(
+        (acc, count) => (acc.total >= 9 ? acc : { total: acc.total + count, systems: acc.systems + 1 }),
+        { total: 0, systems: 0 },
+      ).systems,
+    );
+    expect(contentCounts.reduce((sum, count) => sum + count, 0)).toBe(9);
+    expect(contentCounts.slice(0, -1).every((count) => count >= 2)).toBe(true);
     // 直接入力と同じ段割りになる
     expect(importedPlan.measuresPerSystem).toEqual(directPlan.measuresPerSystem);
     // 入力済み9小節のうち、書き出し→読込で形が変わらない1〜8小節目は最低幅も一致する
