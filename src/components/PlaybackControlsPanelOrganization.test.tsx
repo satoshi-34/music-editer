@@ -127,6 +127,20 @@ describe('再生・音色タブ: 音色詳細の2見出し（#562 案b）', () =
   });
 });
 
+describe('音色詳細の2見出しのセマンティクス（#562 round2 P2）', () => {
+  it('音源・音づくりが見出しとして公開され、パネルは名前付きグループになる', () => {
+    render(<PlaybackControls {...baseProps} />);
+    fireEvent.click(screen.getByRole('button', { name: '音色詳細を開く' }));
+
+    // 見出しナビゲーションで拾える（role=heading）
+    expect(screen.getByRole('heading', { level: 4, name: /^音源/ })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 4, name: /^音づくり/ })).toBeInTheDocument();
+    // パネルは見出しを名前に持つ group（generic の div では名前が成立しない）
+    expect(screen.getByRole('group', { name: /^音源/ })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: /^音づくり/ })).toBeInTheDocument();
+  });
+});
+
 describe('再生・音色タブ: 3区画レイアウト（#562 案c）', () => {
   it('トランスポート / テンポ・位置 / 音 の3区画に分かれ、要素がそれぞれの区画に入る', () => {
     render(<PlaybackControls {...baseProps} totalMeasureCount={8} />);

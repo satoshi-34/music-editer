@@ -732,6 +732,7 @@ export default function PlaybackControls({
                     {isSoundSourceOpen && (
                       <div
                         id="playback-sound-source-panel"
+                        role="group"
                         aria-labelledby="playback-sound-source-heading"
                         style={{ display: 'grid', gap: 10, marginTop: 8 }}
                       >
@@ -807,6 +808,7 @@ export default function PlaybackControls({
                     {isSoundDesignOpen && (
                       <div
                         id="playback-sound-design-panel"
+                        role="group"
                         aria-labelledby="playback-sound-design-heading"
                         style={{ display: 'grid', gap: 10, marginTop: 8 }}
                       >
