@@ -9,7 +9,6 @@
 // 「新規譜面・初回起動の初期値」という別の役割を持つ（詳細は README / design.md 参照）。
 
 import type { InstrumentationPresetId, ScoreType, TimeSignature } from '../types/storage';
-import { devTuned } from './devTuning';
 import { isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
 import { DEFAULT_TIME_SIGNATURE, isValidTimeSignature, normalizeTimeSignature } from './timeSignatureUtils';
 import {
@@ -118,9 +117,7 @@ export function getFactoryDefaultSettingsProfile(): ScoreSettingsProfile {
     measuresPerSystem: DEFAULT_MEASURES_PER_SYSTEM,
     systemsPerPageSetting: null,
     displayWeight: 'normal',
-    measureWidthEvenness: import.meta.env.DEV
-      ? devTuned('layout.evennessDefault', MEASURE_WIDTH_EVENNESS)
-      : MEASURE_WIDTH_EVENNESS,
+    measureWidthEvenness: MEASURE_WIDTH_EVENNESS,
     notationSizeMultiplier: defaultLayout.notationSizeMultiplier,
     pageMarginSideMm: DEFAULT_PAGE_SIDE_MARGIN_MM,
     pageMarginTopMm: DEFAULT_PAGE_MARGIN_TOP_MM,

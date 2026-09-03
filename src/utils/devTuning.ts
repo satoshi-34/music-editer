@@ -31,7 +31,12 @@ export const DEV_TUNING_STORAGE_KEY = 'dev-tuning-overrides';
 
 /**
  * 調整対象のレジストリ（#596 仕様2: 追加はここへ1件足すだけ）。
- * まずはレイアウト系（市販譜との見比べで決める定数）から。音系は #550 着手時に追加する。
+ *
+ * **登録するのは「利用者が画面から調整できない定数」だけ**（運用者フィードバック 2026-09-03:
+ * 段/パート間隔・均等さはレイアウトタブのスライダーがブラウザ設定として保存されるため、
+ * ここに置くと二重の調整口になり、しかもスライダーを一度でも触った環境では既定値が
+ * 参照されず「効かない項目」になる）。それらの調整は既存スライダーで行い、
+ * 決めた値を工場出荷値としてコードへ反映する。音系は #550 着手時に追加する。
  */
 export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
   {
@@ -54,40 +59,6 @@ export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
     step: 1,
     unit: 'px',
     constName: 'MEASURE_SIDE_PADDING',
-  },
-  {
-    key: 'layout.evennessDefault',
-    label: '小節幅の均等さ（既定）',
-    description: '0=最低幅比例・1=等幅。スライダー未設定時の既定値',
-    defaultValue: 0.5,
-    min: 0,
-    max: 1,
-    step: 0.05,
-    constName: 'MEASURE_WIDTH_EVENNESS',
-  },
-  {
-    key: 'layout.systemRowGapPianoDefault',
-    label: '段の間隔（ピアノ既定）',
-    description: '⚠ 新規作品の既定値のみ。開いている譜面の段間はレイアウトタブの「段の間隔」で（即時反映）',
-    defaultValue: -30,
-    min: -60,
-    max: 50,
-    step: 1,
-    unit: 'px',
-    constName: 'SYSTEM_ROW_GAP_PIANO_DEFAULT_PX',
-    needsReload: true,
-  },
-  {
-    key: 'layout.partSpacingPianoDefault',
-    label: 'パート間隔（ピアノ既定）',
-    description: '⚠ 新規作品の既定値のみ。開いている譜面はレイアウトタブの「パート間隔」で（即時反映）',
-    defaultValue: 38,
-    min: -20,
-    max: 80,
-    step: 1,
-    unit: 'px',
-    constName: 'PART_SPACING_OFFSET_PIANO_DEFAULT_PX',
-    needsReload: true,
   },
 ];
 

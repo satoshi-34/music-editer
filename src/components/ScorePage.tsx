@@ -19,7 +19,6 @@ import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
 import SystemLayoutPanel from './SystemLayoutPanel';
 import SystemGapDragHandle from './SystemGapDragHandle';
-import { devTuned } from '../utils/devTuning';
 import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
@@ -4385,13 +4384,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     const raw = localStorage.getItem(MEASURE_WIDTH_EVENNESS_KEY);
     const n = raw == null ? NaN : parseFloat(raw);
     // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0〜1 へクランプする
-    if (Number.isFinite(n)) return Math.max(0, Math.min(1, n));
-    // 未設定時の既定は dev チューニング（#596）を通す（本番は定数そのまま）。
-    // これが「小節幅の均等さ（既定）」の実配線（round1 P1: allocate 側の省略時引数は
-    // 通常経路で必ず明示指定されるため、ここを通さないとパネルの変更が効かない）
-    return import.meta.env.DEV
-      ? devTuned('layout.evennessDefault', MEASURE_WIDTH_EVENNESS)
-      : MEASURE_WIDTH_EVENNESS;
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : MEASURE_WIDTH_EVENNESS;
   });
 
   // 「譜面設定の初期値プリセット」（issue #39）まわりの状態・処理。

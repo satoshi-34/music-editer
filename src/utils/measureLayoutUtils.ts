@@ -169,14 +169,9 @@ export function resolveDefaultLayoutForScoreType(scoreType: ScoreType): {
     scoreType === 'single' || scoreType === 'piano'
       ? NOTATION_SIZE_MULTIPLIER_LARGE_DEFAULT
       : NOTATION_SIZE_MULTIPLIER_DEFAULT;
-  const pianoRowGap = import.meta.env.DEV
-    ? devTuned('layout.systemRowGapPianoDefault', SYSTEM_ROW_GAP_PIANO_DEFAULT_PX)
-    : SYSTEM_ROW_GAP_PIANO_DEFAULT_PX;
-  const pianoPartSpacing = import.meta.env.DEV
-    ? devTuned('layout.partSpacingPianoDefault', PART_SPACING_OFFSET_PIANO_DEFAULT_PX)
-    : PART_SPACING_OFFSET_PIANO_DEFAULT_PX;
-  const systemRowGapPx = scoreType === 'piano' ? pianoRowGap : SYSTEM_ROW_GAP_DEFAULT_PX;
-  const partSpacingOffsetPx = scoreType === 'piano' ? pianoPartSpacing : PART_SPACING_OFFSET_DEFAULT_PX;
+  const systemRowGapPx = scoreType === 'piano' ? SYSTEM_ROW_GAP_PIANO_DEFAULT_PX : SYSTEM_ROW_GAP_DEFAULT_PX;
+  const partSpacingOffsetPx =
+    scoreType === 'piano' ? PART_SPACING_OFFSET_PIANO_DEFAULT_PX : PART_SPACING_OFFSET_DEFAULT_PX;
   return { notationSizeMultiplier, systemRowGapPx, partSpacingOffsetPx };
 }
 
@@ -869,9 +864,7 @@ export function allocateCombinedMeasureWidths(
   renderScale = SCORE_LAYOUT_RENDER_SCALE,
   // 通常は上の定数をそのまま使う。引数で上書きできるのはテストや将来の
   // 「段ごとに均し具合を変えたい」拡張に備えた口で、既定値は定数と同じ。
-  evenness = import.meta.env.DEV
-    ? devTuned('layout.evennessDefault', MEASURE_WIDTH_EVENNESS)
-    : MEASURE_WIDTH_EVENNESS,
+  evenness = MEASURE_WIDTH_EVENNESS,
 ): { contentWidths: number[]; doesFit: boolean } {
   const usableWidth = Math.max(1, availableWidth);
   // minWidth は VexFlow の論理幅。ctx.scale(s, s) で描く実Canvasでは minWidth*s が

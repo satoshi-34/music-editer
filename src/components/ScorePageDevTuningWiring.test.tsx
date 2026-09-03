@@ -4,12 +4,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react';
 
 import App from '../App';
-import ScorePage from './ScorePage';
 import {
   DEV_TUNING_STORAGE_KEY,
   getDevTuningOverrides,
   resetAllDevTuning,
-  setDevTuningOverride,
 } from '../utils/devTuning';
 import { createSavedScoreData, createWork, saveWorkAutosaveData, setLastOpenedWorkId } from '../utils/storage';
 
@@ -94,18 +92,4 @@ describe('ScorePage/App: dev チューニングの配線（#596）', () => {
     }, { timeout: 30000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('均等さの既定の上書きが、再読込相当（再マウント）で ScorePage のスライダーへ届く（round1 P1）', async () => {
-    seedWork();
-    setDevTuningOverride('layout.evennessDefault', 0.8);
-
-    render(<ScorePage />);
-    await waitFor(() => {
-      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
-    }, { timeout: 30000 });
-
-    fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
-    // スライダーは 0〜100 の%表示（内部値 0.8 → 表示 80）
-    const slider = screen.getByLabelText('小節幅の均等さ') as HTMLInputElement;
-    expect(slider.value).toBe('80');
-  }, MOUNT_HEAVY_TIMEOUT_MS);
 });
