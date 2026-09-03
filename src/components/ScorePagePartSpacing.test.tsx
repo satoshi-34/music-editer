@@ -63,7 +63,7 @@ describe('パート間隔スライダー（Issue #90）', () => {
 
   // Issue #199 でピアノだけ既定値が 38px になった（大譜表の内側に空気を入れる運用者の
   // 実測値）。それ以外の譜種は従来どおり 0（自動計算のまま）であることを守る。
-  it('新規ユーザー状態: 既定値はピアノのみ38px、それ以外は0（自動計算のまま）', () => {
+  it('新規ユーザー状態: 既定値はピアノのみ20px、それ以外は0（自動計算のまま）', () => {
     render(<ScorePage />);
     openLayoutTab();
     expect(getPartSpacingSlider().value).toBe('0');
@@ -71,7 +71,8 @@ describe('パート間隔スライダー（Issue #90）', () => {
     openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
     openLayoutTab();
-    expect(getPartSpacingSlider().value).toBe('38');
+    // 期待値は運用者の市販譜見比べで確定した新既定（2026-09-03: 38 → 20）
+    expect(getPartSpacingSlider().value).toBe('20');
 
     openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: '弦楽四重奏' }));

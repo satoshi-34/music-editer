@@ -576,8 +576,8 @@ describe('resolveDefaultLayoutForScoreType（楽譜種別ごとの音符サイ�
     });
   });
 
-  // ピアノだけは運用者の実測選定値（Issue #199）。段どうしは詰めて（-30px）、
-  // 大譜表の内側（右手と左手の間）に空気を入れる（+38px）という組み合わせ。
+  // ピアノだけは運用者の実測選定値。#199 の旧値（-30/+38）から、市販譜見比べで
+  // -3/+20 へ更新（2026-09-03。旧値は段が詰まりすぎ・内側が広すぎた=#586）。
   it('ピアノ: 音符150%・段間隔-3px・パート間隔20px', () => {
     expect(resolveDefaultLayoutForScoreType('piano')).toEqual({
       notationSizeMultiplier: 1.5,

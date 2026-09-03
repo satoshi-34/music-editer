@@ -347,7 +347,7 @@ describe('ScorePage: 段の境界ドラッグで段の間隔を変える（Issue
     await renderScore();
     const { start, handle } = await selectSystemWithBoundary();
     const frame = screen.getByTestId(`system-frame-${start}`) as HTMLElement;
-    // 全体の「段の間隔」が -30px（ピアノ譜の既定）で効いている状態を作る。
+    // 全体の「段の間隔」が -30px（例: 旧ピアノ既定相当の詰め）で効いている状態を作る。
     // 起点に「いま効いている margin-top」を使う実装だと、-30 + 10 = -20px が
     // この段の上書きとして保存され、以後この段だけ全体設定へ追従しなくなる
     const realGetComputedStyle = window.getComputedStyle.bind(window);
