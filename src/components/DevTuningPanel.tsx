@@ -135,7 +135,17 @@ export default function DevTuningPanel() {
             );
           })}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button type="button" onClick={() => window.location.reload()} style={{ fontWeight: 600 }}>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  // 再読み込み後にホームを挟まず譜面へ直帰する一回きりフラグ（App 側で消費）
+                  window.sessionStorage.setItem('dev-tuning-skip-home', '1');
+                } catch { /* 保存できなくてもリロード自体は行う */ }
+                window.location.reload();
+              }}
+              style={{ fontWeight: 600 }}
+            >
               反映（再読み込み）
             </button>
             <button type="button" onClick={copyForCode}>

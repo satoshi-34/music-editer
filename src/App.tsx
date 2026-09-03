@@ -60,7 +60,20 @@ function resolveAvailableOpenKinds(): HomeOpenKind[] {
 
 export default function App() {
   // 起動時はホームから始める（受入条件1）。譜面画面は裏で復元を進めている
-  const [showHome, setShowHome] = useState(true);
+  const [showHome, setShowHome] = useState<boolean>(() => {
+    // dev チューニングの「反映（再読み込み）」直後だけホームを飛ばして譜面へ直帰する
+    // （#596 運用者フィードバック:「反映を押すとホームに戻る」— 調整ループの摩擦解消）。
+    // sessionStorage の一回きりフラグで、通常の起動（#528 のホーム表示）は変えない
+    if (import.meta.env.DEV) {
+      try {
+        if (window.sessionStorage.getItem('dev-tuning-skip-home') === '1') {
+          window.sessionStorage.removeItem('dev-tuning-skip-home');
+          return false;
+        }
+      } catch { /* sessionStorage が使えない環境では通常どおりホームへ */ }
+    }
+    return true;
+  });
   const homeActionsRef = useRef<ScorePageHomeActions | null>(null);
   // 操作口が入る前にホームのボタンが押された場合の持ち越し（round1 P2）。
   // 捨てると「押したのに何も起きない」無言の失敗になる（#318）。

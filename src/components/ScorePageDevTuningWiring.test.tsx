@@ -81,6 +81,19 @@ describe('ScorePage/App: dev チューニングの配線（#596）', () => {
     expect(JSON.parse(localStorageMock.getItem(DEV_TUNING_STORAGE_KEY) ?? '{}')['layout.compression']).toBe(1);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('「反映」のフラグが立っていると、再読込後はホームを挟まず譜面へ直帰する', async () => {
+    seedWork();
+    window.sessionStorage.setItem('dev-tuning-skip-home', '1');
+    render(<App />);
+
+    // ホームが出ず、譜面がそのまま前面にある（フラグは一回で消費される）
+    expect(screen.queryByTestId('home-screen')).toBeNull();
+    expect(window.sessionStorage.getItem('dev-tuning-skip-home')).toBeNull();
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
+    }, { timeout: 30000 });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('均等さの既定の上書きが、再読込相当（再マウント）で ScorePage のスライダーへ届く（round1 P1）', async () => {
     seedWork();
     setDevTuningOverride('layout.evennessDefault', 0.8);
