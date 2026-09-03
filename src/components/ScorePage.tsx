@@ -19,6 +19,7 @@ import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
 import SystemLayoutPanel from './SystemLayoutPanel';
 import SystemGapDragHandle from './SystemGapDragHandle';
+import NotationSizeDragHandle from './NotationSizeDragHandle';
 import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
@@ -926,6 +927,30 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const [transposeSemitoneInput, setTransposeSemitoneInput] = useState('0');
   const [transposeError, setTransposeError] = useState<string | null>(null);
 
+  // ユーザー設定（レイアウトタブの「音符の大きさ」スライダー、0.8〜2.0）。
+  // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.8〜2.0 へクランプする
+  const [notationSizeMultiplier, setNotationSizeMultiplier] = useState<number>(() => {
+    const raw = localStorage.getItem(NOTATION_SIZE_KEY);
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n)
+      ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n))
+      : resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier;
+  });
+  // スライダーのつまみ操作1回ぶんで Undo 履歴を1件にまとめるための控え（Issue #571）
+  const notationSizeHistoryPushedRef = useRef(false);
+  // 「音符の大きさ」を変える唯一の出口。レイアウトタブのスライダー・段の右下角の
+  // リサイズハンドル（Issue #571）・Undo/Redo の復元がここを通る。クランプと
+  // localStorage への保存を1か所にまとめてあるので、入口が増えても書き忘れが起きない。
+  const applyNotationSizeMultiplier = useCallback((multiplier: number) => {
+    const clamped = Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, multiplier));
+    setNotationSizeMultiplier(clamped);
+    localStorage.setItem(NOTATION_SIZE_KEY, String(clamped));
+  }, []);
+
+  // ↑ この state だけ他のレイアウト設定より前に置いてある。Undo/Redo のスナップショット
+  // （下の ScoreSnapshot と currentScoreRef の初期値）がこの値を読むため、そこより後ろで
+  // 宣言すると初期化前の参照になってしまうから（Issue #571）。
+
   // Undo/Redo 用スナップショット（state ではなく ref で持つ — 変更自体は再レンダーで反映済みなので不要）
   type ScoreSnapshot = {
     rightHandData: MeasureData[] | undefined;
@@ -937,6 +962,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     systemMeasureOverrides: SystemMeasureOverride[];
     // 段ごとの間隔の手動上書きも Undo/Redo の対象にする（+/- 操作やリセットを元に戻せるように）。
     systemRowGapOverrides: SystemRowGapOverride[];
+    // 音符の大きさ（Issue #571）。段の右下角のドラッグでも変えられるようになったため、
+    // スライダーと同じくこの値も Undo/Redo で戻せるようにする。スナップショットに入れる以上、
+    // スライダー側でも操作のたびに履歴を積む必要がある（積まないと、スライダーで変えた値が
+    // 無関係な Undo で古い値へ戻ってしまう）。
+    notationSizeMultiplier: number;
   };
   const MAX_HISTORY = 50;
   const historyStack = useRef<ScoreSnapshot[]>([]);
@@ -944,6 +974,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 常に最新のスコア状態を ref として持つ（ハンドラ内で「変更前の値」を取得するため）
   const currentScoreRef = useRef<ScoreSnapshot>({
     rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides,
+    notationSizeMultiplier,
   });
 
   // useRef(createPlaybackEngine(...)) と引数に直接書くと、useRef は初回しか値を使わないのに
@@ -2106,8 +2137,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
 
   // スコアデータが変わるたびに currentScoreRef を最新に保つ
   useEffect(() => {
-    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides };
-  }, [rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides]);
+    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides, notationSizeMultiplier };
+  }, [rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides, notationSizeMultiplier]);
 
   // ツールバーの「元に戻す/やり直す」ボタンの活性・非活性を切り替えるためのカウンタ。
   // historyStack/futureStack は ref のため、その中身が変わっただけでは再レンダーされない。
@@ -2303,10 +2334,17 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setEnsembleSecondStaffParts(restored.ensembleSecondStaffParts ?? []);
     setSystemMeasureOverrides(restored.systemMeasureOverrides);
     setSystemRowGapOverrides(restored.systemRowGapOverrides);
+    // 音符の大きさ（Issue #571）。古い履歴（この値が入る前に積まれたスナップショット）を
+    // 戻すときは undefined になり得るので、そのときは今の値を保つ（勝手に既定へ戻さない）。
+    // localStorage も一緒に書き戻すのは、スライダーの変更と同じ状態にそろえるため
+    // （state だけ戻すと、次回の起動時に戻す前の値が復活してしまう）
+    if (restored.notationSizeMultiplier !== undefined) {
+      applyNotationSizeMultiplier(restored.notationSizeMultiplier);
+    }
     // Undo/Redo は編集位置とは無関係にデータ全体を丸ごと差し替えるため、
     // 段割りの安定化ヒントも古い編集位置を引きずらないようリセットする（Issue #67）。
     setLastEditedMeasureIndex(null);
-  }, []);
+  }, [applyNotationSizeMultiplier]);
 
   // Undo: 履歴から1つ前の状態を取り出して適用する（キーボードショートカットとボタンの共通処理）
   const handleUndo = useCallback(() => {
@@ -4111,15 +4149,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // ズーム変更後も既存のヒットテスト（getBoundingClientRect ベース）が壊れない。
   const effectiveScale = scale * viewZoom;
 
-  // ユーザー設定（レイアウトタブの「音符の大きさ」スライダー、0.8〜2.0）。
-  // 壊れた保存値（NaN・範囲外）でも安全なよう、必ず 0.8〜2.0 へクランプする
-  const [notationSizeMultiplier, setNotationSizeMultiplier] = useState<number>(() => {
-    const raw = localStorage.getItem(NOTATION_SIZE_KEY);
-    const n = raw == null ? NaN : parseFloat(raw);
-    return Number.isFinite(n)
-      ? Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n))
-      : resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier;
-  });
   // ユーザー設定（レイアウトタブの「パート間隔」スライダー、-20〜80px、Issue #90）。
   // 「段の間隔」と同じく楽譜種別ごとの既定値を持つ（ピアノは+38px、それ以外は0＝
   // 自動計算のまま。Issue #199）。
@@ -4847,18 +4876,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // ドラッグ開始時に積んだ履歴を「取り消せる」ようにするための控え。
   // 履歴スタック（historyStack / futureStack）は push のたびに新しい配列へ差し替わる
   // （scoreHistoryStack は非破壊）ので、積む直前の配列を持っておけばそのまま元へ戻せる。
-  const rowGapDragHistoryRef = useRef<{ history: ScoreSnapshot[]; future: ScoreSnapshot[] } | null>(null);
-  // 値が実際に変わる最初の時点で呼ばれる（SystemGapDragHandle の onDragStart）
-  const beginSystemRowGapDrag = useCallback(() => {
-    rowGapDragHistoryRef.current = { history: historyStack.current, future: futureStack.current };
+  // 段の境界ドラッグ（#523）と段の右下角の大きさドラッグ（#571）で共用する
+  // （ポインタは1本しか掴めないので、2つのドラッグが同時に走ることはない）。
+  const layoutDragHistoryRef = useRef<{ history: ScoreSnapshot[]; future: ScoreSnapshot[] } | null>(null);
+  // 値が実際に変わる最初の時点で呼ばれる（各ドラッグハンドルの onDragStart）
+  const beginLayoutValueDrag = useCallback(() => {
+    layoutDragHistoryRef.current = { history: historyStack.current, future: futureStack.current };
     pushHistory();
   }, [pushHistory]);
   // ドラッグの終わり。掴む前と同じ値に戻って離した（changed=false）ときは、
   // 積んだ履歴を無かったことにする。何も変わっていないのに「元に戻す」が
   // 1回空振りする状態を残さないため（#523 round1 P2）
-  const endSystemRowGapDrag = useCallback((changed: boolean) => {
-    const pushed = rowGapDragHistoryRef.current;
-    rowGapDragHistoryRef.current = null;
+  const endLayoutValueDrag = useCallback((changed: boolean) => {
+    const pushed = layoutDragHistoryRef.current;
+    layoutDragHistoryRef.current = null;
     if (!pushed || changed) return;
     historyStack.current = pushed.history;
     futureStack.current = pushed.future;
@@ -4981,7 +5012,23 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 値の増減そのものは従来の adjustSystemMeasureOverride / adjustSystemRowGapOverride を
   // そのまま呼ぶので、保存・Undo の挙動は移設前と変わらない（入力装置の置き場所だけの変更）。
   const isSystemSelectionEnabled = !isPartExtractionActive && !isEditingDisabled;
+  // 「整えるモード」（Issue #571）。レイアウトタブを開いている間は、段を選んでいなくても
+  // レイアウト調整の掴みしろ（段の上端の境界帯・五線の面・左右端）を出しっぱなしにする。
+  // 「段を選ばないと入口が一切見えない」ため運用者自身が2回続けて機能を見つけられなかった
+  // （運用者QA 2026-09-02 / 2026-09-03）ので、新しいモード機構を作らず
+  // 既存のツールバータブをそのままモードとして使う。他のタブでは従来どおり
+  // 「選択中の段だけ」に戻るので、譜面を書いている間の見た目は一切変わらない。
+  const isLayoutAdjustMode = activeToolbarTab === 'layout' && isSystemSelectionEnabled;
   const closeSystemSelection = useCallback(() => setSelectedSystem(null), []);
+  // 整えるモードで「掴んだ段・押した段をそのまま選ぶ」ための選択。左右端のクリック
+  // （handleSystemSelect）と違ってトグルしないのは、境界帯を掴んだ拍子に選択が
+  // 解けて掴みかけの調整が中断されるのを防ぐため。すでに選んでいる段なら
+  // 選択（どちら側にパネルを出すか）をそのまま保つ。
+  const selectSystemForLayout = useCallback((startMeasure: number) => {
+    setSelectedSystem((prev) => (
+      prev && prev.start === startMeasure ? prev : { start: startMeasure, side: 'left' }
+    ));
+  }, []);
   const handleSystemSelect = useCallback((startMeasure: number, side: 'left' | 'right') => {
     // 同じ端をもう一度押したら閉じる（トグル）。別の段・別の端を押したらそちらへ選択が移る
     setSelectedSystem((prev) => (
@@ -5030,7 +5077,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 選択中の段の横に出すパネル。各 Staff コンポーネントは段のラッパー
   // （SystemSelectFrame）の中でこれを呼ぶだけで、パネルの中身は知らなくてよい。
   const renderSystemPanel = useCallback((startMeasure: number) => {
-    if (selectedSystem === null || selectedSystem.start !== startMeasure) return null;
+    const isSelected = selectedSystem !== null && selectedSystem.start === startMeasure;
+    // 選択中の段（従来どおり）に加えて、整えるモード中はすべての段へ掴みしろを出す。
+    // どちらでもない段には何も描かない（譜面上に常設物を残さない・#482 の原則）
+    if (!isSelected && !isLayoutAdjustMode) return null;
     const systemIndex = visiblePlannedRanges.findIndex((range) => range.start === startMeasure);
     const range = visiblePlannedRanges[systemIndex];
     if (!range) return null;
@@ -5043,25 +5093,60 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     const hasBoundaryAbove = getPageSystemOffset(pageIndex) < systemIndex;
     return (
       <>
+      {isLayoutAdjustMode && (
+      /* 整えるモード中は「五線の面」そのものを段の選択にする（Issue #571 の当たり判定 3層の
+         まんなか）。左右端の細い帯より当てやすく、「段を選べば小節数も間隔も変えられる」
+         ことに気づいてもらう入口になる。音符の編集は他のタブで従来どおりできるので、
+         入力クリックと取り合いにならない（このモードでは音符タブへ戻るまで面は選択専用）。 */
+      <button
+        type="button"
+        className="system-select-surface"
+        data-system-select-keep="true"
+        data-testid={`system-select-surface-${range.start}`}
+        aria-label={`${systemLabel}を選択してレイアウトを調整（小節数・間隔・音符の大きさ）`}
+        title={`クリックで${systemLabel}を選択。小節数（◀▶）・間隔・音符の大きさを調整できます`}
+        onClick={() => selectSystemForLayout(range.start)}
+      />
+      )}
       {hasBoundaryAbove && (
-      /* 段の上端＝上の段との境界帯（Issue #523）。パネルと同じ「選択中の段にだけ出す
-         差し込み口」に乗せてある（SystemSelectFrame は選択中の段でここを1回だけ描く）ので、
-         4つの譜種コンポーネントへ新しい props を通さずに済む。
-         パネル（段の下側）とは上下に分かれているので、操作が重ならない */
+      /* 段の上端＝上の段との境界帯（Issue #523）。パネルと同じ差し込み口に乗せてある
+         （SystemSelectFrame が段ごとにここを1回だけ描く）ので、4つの譜種コンポーネントへ
+         新しい props を通さずに済む。パネル（段の下側）とは上下に分かれているので、
+         操作が重ならない。整えるモード中は選択していない段にも出る（Issue #571）。 */
       <SystemGapDragHandle
         startMeasure={range.start}
         systemLabel={systemLabel}
         currentGapPx={rowGapPx}
         gapMinPx={SYSTEM_ROW_GAP_MIN_PX}
         gapMaxPx={SYSTEM_ROW_GAP_MAX_PX}
-        onDragStart={beginSystemRowGapDrag}
+        onDragStart={beginLayoutValueDrag}
         onDragMove={(gapPx) => setSystemRowGapOverrideValue(range.start, gapPx)}
-        onDragEnd={endSystemRowGapDrag}
+        onDragEnd={endLayoutValueDrag}
+        // 掴んだ段をそのまま選択する。整えるモードでは選択していない段にも帯が出るので、
+        // 「掴む→そのまま調整」が1操作で済む（受入）
+        onGrab={() => selectSystemForLayout(range.start)}
       />
       )}
+      {isSelected && (
+      /* 選択中の段の右下角のリサイズハンドル（◢・Issue #571 の運用者裁定）。
+         変わるのは譜面全体の「音符の大きさ」で、掴んだ段だけではない。
+         誤解を残さないよう、ドラッグ中の吹き出しに「（全体）」を必ず出す。 */
+      <NotationSizeDragHandle
+        startMeasure={range.start}
+        systemLabel={systemLabel}
+        multiplier={notationSizeMultiplier}
+        minMultiplier={NOTATION_SIZE_MULTIPLIER_MIN}
+        maxMultiplier={NOTATION_SIZE_MULTIPLIER_MAX}
+        onDragStart={beginLayoutValueDrag}
+        onDragMove={applyNotationSizeMultiplier}
+        onDragEnd={endLayoutValueDrag}
+      />
+      )}
+      {isSelected && (
       <SystemLayoutPanel
         systemLabel={systemLabel}
-        side={selectedSystem.side}
+        // isSelected が true のときだけ描くので selectedSystem は必ずある
+        side={selectedSystem!.side}
         startMeasure={range.start}
         measureCount={range.count}
         // 引き込めるのは「内容のある小節」まで。編集用の空きバッファ小節まで引き込むと
@@ -5081,13 +5166,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         onClose={closeSystemSelection}
         onNotice={notifyScoreEdit}
       />
+      )}
       </>
     );
   }, [
     selectedSystem, visiblePlannedRanges, systemRowGapOverrides, contentMeasureCount,
     adjustSystemMeasureOverride, adjustSystemRowGapOverride, closeSystemSelection, notifyScoreEdit,
-    beginSystemRowGapDrag, endSystemRowGapDrag, setSystemRowGapOverrideValue,
+    beginLayoutValueDrag, endLayoutValueDrag, setSystemRowGapOverrideValue,
     pageSystemLayoutOptions, getPageSystemOffset,
+    isLayoutAdjustMode, selectSystemForLayout, notationSizeMultiplier, applyNotationSizeMultiplier,
   ]);
 
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
@@ -6473,12 +6560,23 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                     max={200}
                     step={5}
                     value={Math.round(notationSizeMultiplier * 100)}
+                    // 1回のつまみ操作＝Undo 1件にするための区切り。押し直すたびに「まだ履歴を
+                    // 積んでいない」へ戻し、実際に値が変わる最初の1回だけ積む（角ハンドルと同じ流儀）。
+                    // キーボードの矢印は押しっぱなし（repeat）を1件にまとめる
+                    onPointerDown={() => { notationSizeHistoryPushedRef.current = false; }}
+                    onKeyDown={e => { if (!e.repeat) notationSizeHistoryPushedRef.current = false; }}
                     onChange={e => {
                       // スライダーは 80〜200(%) で扱い、内部では 0.8〜2.0 の倍率として保持する
-                      const v = Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, Number(e.target.value) / 100));
+                      const v = Number(e.target.value) / 100;
                       if (!isNaN(v)) {
-                        setNotationSizeMultiplier(v);
-                        localStorage.setItem(NOTATION_SIZE_KEY, String(v));
+                        // 音符の大きさは Undo/Redo のスナップショットに入っている（Issue #571）。
+                        // ここで履歴を積まないと、スライダーで変えた値が無関係な Undo で
+                        // 古い値へ戻ってしまう（スナップショットは常に「その時点の大きさ」を持つため）
+                        if (!notationSizeHistoryPushedRef.current) {
+                          notationSizeHistoryPushedRef.current = true;
+                          pushHistory();
+                        }
+                        applyNotationSizeMultiplier(v);
                       }
                     }}
                     style={{ width: 90 }}
@@ -7374,7 +7472,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   )}
                 </header>
 
-                <div className="score-area" style={{
+                <div className={`score-area${isLayoutAdjustMode ? ' layout-adjust-mode' : ''}`} style={{
                   '--score-stroke-width': String(scoreStrokeWidthVar),
                   '--score-text-weight': displayWeight === 'thin' ? '300' : displayWeight === 'thick' ? '700' : '400',
                   // 画面表示で線が細くなりすぎないようにする下限の倍率（Issue #210）。
