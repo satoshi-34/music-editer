@@ -1755,14 +1755,22 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 bpm: measureBpms[expandedMeasureIndex + startExpandedIndex],
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
-                events: flattenMeasureForPlayback(item.measure).flatMap((event, eventIndex) => {
+                events: flattenMeasureForPlayback(item.measure).flatMap((event) => {
                   // アーティキュレーション（スタッカート＝短く、アクセント＝強く 等）を
                   // 音の長さ・音量の倍率として取り出す。
                   const articulation = getArticulationPlaybackEffect(event);
                   // 強弱記号から決まった基準ベロシティ（未設定なら既定 0.5）に
                   // アクセント等の倍率を掛けて、最後に 0..1 へ収める。
+                  // タイ・ペダルと同じく「声部の中での位置」で引く（#417 Codex round1 P1-6）。
+                  // 畳んだあとの eventIndex は複数声部で並べ替えられているため使えず、
+                  // 使っていた頃は声部2以降の強弱が効かないうえ、多声小節では
+                  // 別の音符の強弱が当たっていた
                   const baseVelocity = dynamicVelocities.get(
-                    buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, eventIndex)
+                    buildDynamicEventKey(
+                      expandedMeasureIndex + startExpandedIndex,
+                      event.eventIndex,
+                      event.voiceIndex,
+                    )
                   ) ?? 0.5;
                   // タイの計画は「声部の中での位置」で引く。
                   // 畳んだあとの eventIndex は複数声部で並べ替えられているため使えない。

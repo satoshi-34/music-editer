@@ -6,7 +6,7 @@ import type {
   NoteEvent,
   RelativeDynamicMarking
 } from '../types/storage';
-import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
+import { getMeasureVoices, getVoiceEvents } from './voiceMeasureUtils';
 import { dynamicSymbol } from './editorContextLabels';
 import { ENGRAVING_TEXT_UNITS, spToUnits } from './engravingDefaults';
 
@@ -37,8 +37,21 @@ function clampVelocity(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-export function buildDynamicEventKey(measureIndex: number, eventIndex: number): string {
-  return `${measureIndex}-${eventIndex}`;
+/**
+ * 強弱ベロシティの索引キー。
+ *
+ * `voiceIndex` を含むのは、声部ごとに強弱が独立しているため（#417 Codex round1 P1-6）。
+ * 含めなかった頃は、主声部の位置だけで引いていたので
+ * (1) 声部2以降に置いた p / f が再生音量に**まったく効かず**、
+ * (2) 多声小節では再生列（全声部を開始拍で並べ替えたもの）の位置と
+ *     主声部の位置がずれるため、**別の音符の強弱が適用されていた**。
+ * タイ（buildTiePlaybackEventKey）・ペダル（buildPedalPlaybackEventKey）は
+ * 先に (小節, 声部, 声部内の位置) の3つ組へ移行済みで、これはその形にそろえたもの。
+ *
+ * @param eventIndex **その声部の中での**位置（畳んだ再生列の位置ではない）
+ */
+export function buildDynamicEventKey(measureIndex: number, eventIndex: number, voiceIndex: number = 0): string {
+  return `${measureIndex}-${voiceIndex}-${eventIndex}`;
 }
 
 export function isAbsoluteDynamicMarkingValue(value: unknown): value is AbsoluteDynamicMarking {
@@ -264,13 +277,35 @@ function createRelativePlan(
  * 変化強弱（cresc., dim.）は次の絶対強弱まで段階的に増減させる。
  */
 export function resolveDynamicVelocities(measures: MeasureData[]): Map<string, number> {
+  const velocities = new Map<string, number>();
+  // 声部ごとに独立して解決する（#417 Codex round1 P1-6）。
+  // 以前は主声部だけを走査していたので、声部2以降の強弱が再生に効かなかった。
+  // 声部をまたいで1本の列にしないのは、cresc. の傾斜が「その声部の次の音符たち」へ
+  // かかるものであり、他の声部の音符数で刻み幅が変わってはいけないため
+  // （2声で同時に cresc. を書いたら、片方の音数が多いほど傾きが緩くなってしまう）
+  const voiceCount = measures.reduce((max, measure) => Math.max(max, getMeasureVoices(measure).length), 1);
+  for (let voiceIndex = 0; voiceIndex < voiceCount; voiceIndex += 1) {
+    resolveDynamicVelocitiesForVoice(measures, voiceIndex, velocities);
+  }
+  return velocities;
+}
+
+/**
+ * 1つの声部ぶんの強弱を解決して `velocities` へ書き込む（resolveDynamicVelocities の中身）。
+ * 声部0は `getVoiceEvents(measure, 0)` ＝正規アクセサ（#244 段5-3）を通るので、
+ * 単声部の譜面では従来とまったく同じ結果になる。
+ */
+function resolveDynamicVelocitiesForVoice(
+  measures: MeasureData[],
+  voiceIndex: number,
+  velocities: Map<string, number>,
+): void {
   const flattenedEvents = measures.flatMap((measure, measureIndex) =>
-    // 主声部の読みは正規アクセサ（#244 段5-3）。再生列挙（ScorePlayer）と同じ並び・件数で
+    // 読みは正規アクセサ（#244 段5-3）。再生列挙と同じ並び・件数で
     // 読まないと、鏡が古い異常データで別音符へ強弱が割り当てられてしまう
-    getPrimaryVoiceEvents(measure).map((event, eventIndex) => ({ measureIndex, eventIndex, event }))
+    getVoiceEvents(measure, voiceIndex).map((event, eventIndex) => ({ measureIndex, eventIndex, event }))
   );
 
-  const velocities = new Map<string, number>();
   let currentVelocity = DEFAULT_DYNAMIC_VELOCITY;
   let relativePlan: RelativePlan | null = null;
 
@@ -291,7 +326,7 @@ export function resolveDynamicVelocities(measures: MeasureData[]): Map<string, n
     }
 
     if (isSoundingEvent(entry.event)) {
-      velocities.set(buildDynamicEventKey(entry.measureIndex, entry.eventIndex), currentVelocity);
+      velocities.set(buildDynamicEventKey(entry.measureIndex, entry.eventIndex, voiceIndex), currentVelocity);
     }
 
     // 松葉（ヘアピン）もテキストの cresc. / dim. と同じ扱いで
@@ -302,6 +337,4 @@ export function resolveDynamicVelocities(measures: MeasureData[]): Map<string, n
       relativePlan = createRelativePlan(flattenedEvents, flatIndex, currentVelocity, relative);
     }
   });
-
-  return velocities;
 }
