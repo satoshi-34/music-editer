@@ -137,7 +137,8 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
 
 /**
  * 定数の現在値を返す。本番では常に defaultValue（localStorage を読まない）。
- * dev では上書きがあればそれを返す（クランプは保存境界=setDevTuningOverride で済んでいる）。
+ * dev では上書きがあればそれを返す（クランプは保存時 setDevTuningOverride と読込時
+ * parseOverrides の双方で済んでいる。旧形式や手書きの範囲外値も読込で寄る）。
  * 読みはモジュール内キャッシュ経由で、localStorage へは初回だけ触る。
  */
 export function devTuned(key: string, defaultValue: number): number {
