@@ -56,6 +56,7 @@ import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
 import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
+import { scheduleLeadSeconds } from '../audio/scheduleLead';
 import type {
   CustomSymbolDef,
   InstrumentBracketGroup,
@@ -1831,10 +1832,17 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // calculateExpandedPlaybackDurationMs で数える。選択の有無で分けない（Codex 3巡目）:
           // 旧 calculateScoreDuration は未充足小節を実長だけで数える・末尾判定が主声部のみ、
           // のため、拍子長を下限に進む実音・タイムラインより早く stopped になっていた
+          // 実音はエンジン側で先読みリード（#610）ぶん遅れて始まるので、ハイライトの
+          // タイムラインと終了時刻も同じぶんずらす。ずらさないと帯が実音より常に先行する
+          const scheduleLeadMs = scheduleLeadSeconds() * 1000;
+          positionTimelineRef.current = positionTimelineRef.current.map((item) => ({
+            ...item,
+            atMs: item.atMs + scheduleLeadMs,
+          }));
           const totalDuration = Math.max(
             ...partObjs.map(partObj =>
               calculateExpandedPlaybackDurationMs(partObj.measures, effectiveGlobalBpm, scoreTimeSignature) / 1000)
-          );
+          ) + scheduleLeadSeconds();
           setPlaybackState('playing');
           clearPlaybackTimer();
           remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);

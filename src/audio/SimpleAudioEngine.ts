@@ -3,6 +3,7 @@
 // ブラウザの自動再生ポリシーに完全対応
 
 import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
+import { scheduleLeadSeconds } from './scheduleLead';
 import { InstrumentType } from './SoundSource';
 import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
 import {
@@ -639,7 +640,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
     }
 
     const originalInstrument = this.currentInstrument;
-    const sharedStartTime = context.currentTime;
+    // 「今」に先読みリードを足す（#610。SoundFontEngine と同じ定数）
+    const sharedStartTime = context.currentTime + scheduleLeadSeconds();
 
     try {
       for (const part of parts) {

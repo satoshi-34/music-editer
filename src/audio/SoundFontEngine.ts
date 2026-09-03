@@ -1,4 +1,5 @@
 import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
+import { scheduleLeadSeconds } from './scheduleLead';
 import type { Player as SoundFontPlayer } from 'soundfont-player';
 
 import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
@@ -187,7 +188,8 @@ export class SoundFontEngine implements PlaybackEngine {
       part,
       player: await this.getPlayerForInstrument(part.instrument ?? this.currentInstrument),
     })));
-    const startTime = context.currentTime;
+    // 「今」に先読みリードを足す（#610: 予約ループの実時間ぶん先頭の音が過去にならないように）
+    const startTime = context.currentTime + scheduleLeadSeconds();
 
     // 各パートは同じ「今この瞬間」を基準に予約する。
     // こうすると Promise を待たずに、和音や複数パートが同時にそろって鳴る。

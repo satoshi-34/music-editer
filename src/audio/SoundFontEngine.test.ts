@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { SCHEDULE_LEAD_SECONDS } from './scheduleLead';
 
 import { InstrumentType } from './SoundSource';
 import {
@@ -77,6 +78,19 @@ const setupEngineWithFakePlayer = async () => {
 };
 
 describe('SoundFontEngine のタイ再生（Issue #445）', () => {
+  it('先頭の音は「今」ではなく先読みリードぶん先に予約される（Issue #610）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+    await engine.playParts([{
+      measures: [{
+        measureBeats: 4,
+        events: [{ dur: '4', isRest: false, keys: ['C4'] }],
+      }],
+    }], 120);
+    expect(play).toHaveBeenCalledTimes(1);
+    // 偽の AudioContext は currentTime: 0。内蔵音源と同じ定数ぶん先に予約する
+    expect(play.mock.calls[0][1]).toBeCloseTo(SCHEDULE_LEAD_SECONDS, 5);
+  });
+
   it('タイ2音は「1回の発音・合計の長さ」で予約される', async () => {
     const { engine, play } = await setupEngineWithFakePlayer();
 
@@ -184,7 +198,7 @@ describe('SoundFontEngine の小節ごとのテンポ（Issue #458）', () => {
       ],
     }], 60);
 
-    const played = play.mock.calls.map((call) => ({ note: call[0], at: call[1], duration: call[2].duration }));
+    const played = play.mock.calls.map((call) => ({ note: call[0], at: call[1] - SCHEDULE_LEAD_SECONDS /* 先読みリード（#610）を除いた相対時刻 */, duration: call[2].duration }));
     expect(played).toHaveLength(2);
     // 1小節目: 60BPM なので頭は 0秒・長さは1秒ぶん
     expect(played[0].at).toBeCloseTo(0, 6);
@@ -204,7 +218,7 @@ describe('SoundFontEngine の小節ごとのテンポ（Issue #458）', () => {
       ],
     }], 60);
 
-    const played = play.mock.calls.map((call) => ({ note: call[0], at: call[1] }));
+    const played = play.mock.calls.map((call) => ({ note: call[0], at: call[1] - SCHEDULE_LEAD_SECONDS /* 先読みリード（#610）を除いた相対時刻 */ }));
     // 120BPM の小節は 4拍 × 0.5秒 = 2秒。次の小節はその直後から始まる
     expect(played[1].at).toBeCloseTo(2, 6);
   });
@@ -219,7 +233,7 @@ describe('SoundFontEngine の小節ごとのテンポ（Issue #458）', () => {
       ],
     }], 120);
 
-    const played = play.mock.calls.map((call) => ({ at: call[1] }));
+    const played = play.mock.calls.map((call) => ({ at: call[1] - SCHEDULE_LEAD_SECONDS /* 先読みリード（#610）を除いた相対時刻 */ }));
     // 120BPM = 1小節2秒
     expect(played[1].at).toBeCloseTo(2, 6);
   });
