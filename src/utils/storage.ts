@@ -22,6 +22,15 @@ import type {
 } from '../types/storage';
 import { StorageErrorType } from '../types/storage';
 import { DEFAULT_PAGE_SIZE_ID, normalizePageSizeId, type PageSizeId } from './pageSize';
+import {
+  DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+  DEFAULT_PAGE_MARGIN_TOP_MM,
+  DEFAULT_PAGE_SIDE_MARGIN_MM,
+  normalizeNotationSizeMultiplier,
+  normalizePageMargins,
+  resolveDefaultLayoutForScoreType,
+  type SavedPageMargins,
+} from './measureLayoutUtils';
 import { normalizeDuplicateChordKeys } from './chordKeyUtils';
 import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type KeySignature } from './noteKeyUtils';
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
@@ -37,6 +46,7 @@ import {
   normalizeTimeSignatureStyle,
 } from './timeSignatureUtils';
 import type { InstrumentType } from '../audio/SoundSource';
+import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
 import type { ClefType } from '../components/clefUtils';
 import {
   MAX_SYMBOL_DEFS,
@@ -342,7 +352,10 @@ export function validateCustomSymbolDef(def: any): def is CustomSymbolDef {
     def.name.length <= MAX_SYMBOL_NAME_LENGTH &&
     Array.isArray(def.shapes) &&
     def.shapes.length <= MAX_SHAPES_PER_SYMBOL &&
-    def.shapes.every(validateShapePrimitive)
+    def.shapes.every(validateShapePrimitive) &&
+    // 手ぶれ補正フラグ。省略可（この機能より前に保存されたデータには存在しない）だが、
+    // 値があるなら真偽値でなければならない
+    (def.smoothing === undefined || typeof def.smoothing === 'boolean')
   );
 }
 
@@ -645,6 +658,16 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     // 用紙サイズ（Issue #495）。未知の文字列は読み込み時に A4 へ正規化されるので、
     // ここでは「文字列でないデータを弾く」ところまでを見る（他の省略可能項目と同じ方針）。
     (data.pageSize === undefined || typeof data.pageSize === 'string') &&
+    // 音符の大きさ・ページ余白（Issue #477）。範囲外は読み込み時にクランプするので、
+    // ここでは型が違うデータを弾くところまでを見る（他の省略可能項目と同じ方針）。
+    (data.notationSizeMultiplier === undefined ||
+      (typeof data.notationSizeMultiplier === 'number' && Number.isFinite(data.notationSizeMultiplier))) &&
+    (data.pageMargins === undefined || (typeof data.pageMargins === 'object' && data.pageMargins !== null)) &&
+    // 作品ごとの全体テンポ（Issue #543）。範囲外・0 は読み込み時に
+    // normalizeSavedGlobalBpm が正す（0 以下は「未保存」扱い）ので、
+    // ここでは型が違うデータを弾くところまでを見る（他の省略可能項目と同じ方針）。
+    (data.globalBpm === undefined ||
+      (typeof data.globalBpm === 'number' && Number.isFinite(data.globalBpm))) &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -726,6 +749,21 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   // 値が入っているときだけ正規化する（未知の判型が入っていた場合は A4 へ倒れる）。
   if (parsedData.pageSize !== undefined) {
     parsedData.pageSize = normalizePageSizeId(parsedData.pageSize);
+  }
+  // 音符の大きさ・ページ余白（Issue #477）も「省略＝表示設定に従う」が正なので、
+  // 値が入っているときだけスライダーの範囲へクランプする。
+  if (parsedData.notationSizeMultiplier !== undefined) {
+    parsedData.notationSizeMultiplier = normalizeNotationSizeMultiplier(
+      parsedData.notationSizeMultiplier,
+      resolveDefaultLayoutForScoreType(parsedData.scoreType ?? 'single').notationSizeMultiplier,
+    );
+  }
+  if (parsedData.pageMargins !== undefined) {
+    parsedData.pageMargins = normalizePageMargins(parsedData.pageMargins, {
+      sideMm: DEFAULT_PAGE_SIDE_MARGIN_MM,
+      topMm: DEFAULT_PAGE_MARGIN_TOP_MM,
+      bottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+    });
   }
 
   // 保存済みデータはユーザーが手編集した JSON や古いバックアップから来ることがある。
@@ -1795,7 +1833,10 @@ export function createSavedScoreData(
   titleFontSize?: number,
   titleFontWeight?: string,
   timeSignatureStyle?: TimeSignatureStyle,
-  pageSize?: PageSizeId
+  pageSize?: PageSizeId,
+  notationSizeMultiplier?: number,
+  pageMargins?: SavedPageMargins,
+  globalBpm?: number
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -1815,6 +1856,31 @@ export function createSavedScoreData(
       pageSize && normalizePageSizeId(pageSize) !== DEFAULT_PAGE_SIZE_ID
         ? normalizePageSizeId(pageSize)
         : undefined,
+    // 音符の大きさ・ページ余白（Issue #477）は、渡されたら**常に明示的に保存する**
+    // （round1 P1）。以前は工場出荷値と同じなら省略していたが、読込側の既定
+    // （表示設定へ戻す）と食い違い、「表示設定120%の環境で工場値と同じ縮尺を
+    // 引き継いだ作品」が再読込で 120% に化ける穴があった。旧データ（項目なし）は
+    // 従来どおり読み込めるため互換性は変わらない
+    notationSizeMultiplier:
+      notationSizeMultiplier === undefined
+        ? undefined
+        : normalizeNotationSizeMultiplier(
+            notationSizeMultiplier,
+            resolveDefaultLayoutForScoreType(scoreType).notationSizeMultiplier,
+          ),
+    pageMargins:
+      pageMargins === undefined
+        ? undefined
+        : normalizePageMargins(pageMargins, {
+            sideMm: DEFAULT_PAGE_SIDE_MARGIN_MM,
+            topMm: DEFAULT_PAGE_MARGIN_TOP_MM,
+            bottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+          }),
+    // 全体テンポ（Issue #543）は、渡されたら**常に明示的に保存する**。
+    // 既定値（120）と同じときに省略すると、読込側の既定（アプリ全体設定へ従う）と
+    // 食い違い、「全体設定が 40 の環境で 120 の作品を開くと 40 になる」穴が開く
+    // （音符の大きさ・#477 round1 P1 と同じ理由）。壊れた値は省略扱いにする。
+    globalBpm: normalizeSavedGlobalBpm(globalBpm),
     instrumentation,
     notationMode,
     titleFontId,

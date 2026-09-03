@@ -1,4 +1,5 @@
 import type { MeasureData, NoteEvent, ScoreType } from '../types/storage';
+import { devTuned } from './devTuning';
 import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { Accidental, Dot, Formatter, GraceNote, GraceNoteGroup, StaveNote, Voice } from 'vexflow';
 import { createVexFlowTuplets, vexFlowDotCount } from './vexFlowTimingUtils';
@@ -30,7 +31,15 @@ const FLAG_EXTRA_WIDTH: Record<NoteEvent['dur'], number> = {
   '32': 6,
   '64': 8,
 };
-const MEASURE_SIDE_PADDING = 18;
+// 小節の左右に確保する余白（VexFlow の音符列の外側）。Issue #559 の圧縮率は
+// 「音符の並びの理想間隔」だけに掛けるため、この余白と分けて足せるよう定数を公開する。
+export const MEASURE_SIDE_PADDING = 18;
+/** dev チューニング（#596）を通した実効値。本番は定数そのもの（devTuned 呼び出しごと消える） */
+function measureSidePadding(): number {
+  return import.meta.env.DEV
+    ? devTuned('layout.measureSidePadding', MEASURE_SIDE_PADDING)
+    : MEASURE_SIDE_PADDING;
+}
 const ACCIDENTAL_WIDTH = 6;
 const GRACE_NOTE_WIDTH = 8;
 
@@ -134,17 +143,16 @@ export const PART_SPACING_OFFSET_DEFAULT_PX = 0;
 // （大編成は ensembleAutoFitMultiplier による自動縮小フォールバックと合成されるため、
 // 既定を上げると縮小との相互作用が読みにくくなる）。
 //
-// ピアノ大譜表の2値は、運用者が素の既定値の画面を見ながらスライダーで詰めて選定した
-// 実測値（Issue #199、2026-08-09）。当初（Issue #49）は「右手/左手の対と次の段の対を
-// 見分けやすくする」ため段の間隔を +30px にしていたが、同じ見分けやすさを
-// 「大譜表の内側（右手と左手の間＝パート間隔）を広げ、段どうしはむしろ詰める」形で
-// 出したほうが自然に見える、という判断で −30px / +38px へ置き換えた
-// （浄書慣行でも「1つの大譜表の中は広く、段の間は詰める」が普通）。
+// ピアノ大譜表の2値は運用者の実測選定値。変遷:
+//   #49: 段の間隔 +30px（右手/左手の対と次の段の対を見分けやすくする）
+//   #199（2026-08-09）: −30px / +38px（「大譜表の内側を広げ、段どうしは詰める」浄書慣行寄り）
+//   #596/#599（2026-09-03）: −3px / +20px ← 現行。市販譜（月光ほか）との見比べで、
+//     −30 は詰まりすぎ・+38 は内側が広すぎた（#586「パート間隔狭くて段間隔広く見える」）
 export const NOTATION_SIZE_MULTIPLIER_DEFAULT = 1;
 export const NOTATION_SIZE_MULTIPLIER_LARGE_DEFAULT = 1.5;
 export const SYSTEM_ROW_GAP_DEFAULT_PX = 0;
-export const SYSTEM_ROW_GAP_PIANO_DEFAULT_PX = -30;
-export const PART_SPACING_OFFSET_PIANO_DEFAULT_PX = 38;
+export const SYSTEM_ROW_GAP_PIANO_DEFAULT_PX = -3;
+export const PART_SPACING_OFFSET_PIANO_DEFAULT_PX = 20;
 
 /**
  * 楽譜種別ごとの「音符の大きさ」「段の間隔」「パート間隔」の工場出荷既定値を返す純関数。
@@ -164,6 +172,66 @@ export function resolveDefaultLayoutForScoreType(scoreType: ScoreType): {
   const partSpacingOffsetPx =
     scoreType === 'piano' ? PART_SPACING_OFFSET_PIANO_DEFAULT_PX : PART_SPACING_OFFSET_DEFAULT_PX;
   return { notationSizeMultiplier, systemRowGapPx, partSpacingOffsetPx };
+}
+
+/** 保存データ由来の「音符の大きさ」倍率を、スライダーの範囲へ正規化する（Issue #477）。 */
+export function normalizeNotationSizeMultiplier(value: unknown, fallback: number): number {
+  const n = typeof value === 'number' ? value : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(NOTATION_SIZE_MULTIPLIER_MAX, n));
+}
+
+/** 作品の属性として保存されたページ余白（mm）。左右はスライダーが1本なので左右同値で持つ。 */
+export interface SavedPageMargins {
+  sideMm: number;
+  topMm: number;
+  bottomMm: number;
+}
+
+/**
+ * 保存データ由来のページ余白を、スライダーの範囲へ正規化する（Issue #477）。
+ * 壊れた値（数値でない・範囲外）が来ても画面を壊さないよう、項目ごとに既定値・
+ * クランプへ倒す。
+ */
+export function normalizePageMargins(value: unknown, fallback: SavedPageMargins): SavedPageMargins {
+  const raw = (value ?? {}) as Partial<SavedPageMargins>;
+  const pick = (n: unknown, min: number, max: number, fb: number): number => {
+    const v = typeof n === 'number' ? n : NaN;
+    if (!Number.isFinite(v)) return fb;
+    return Math.max(min, Math.min(max, v));
+  };
+  return {
+    sideMm: pick(raw.sideMm, PAGE_MARGIN_SIDE_MIN_MM, PAGE_MARGIN_SIDE_MAX_MM, fallback.sideMm),
+    topMm: pick(raw.topMm, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM, fallback.topMm),
+    bottomMm: pick(raw.bottomMm, PAGE_MARGIN_VERTICAL_MIN_MM, PAGE_MARGIN_VERTICAL_MAX_MM, fallback.bottomMm),
+  };
+}
+
+/**
+ * 紙幅に収まる最大の「音符の大きさ」倍率を求める（Issue #477 のフォールバック）。
+ *
+ * planEffectiveMeasuresPerSystem が返す minimumWidths は VexFlow の論理単位（倍率に
+ * 依存しない値）なので、「いちばん広い小節 × SCORE_LAYOUT_RENDER_SCALE × 倍率」が
+ * 本文幅に収まる、という一次不等式を解くだけで求められる。
+ *
+ * @param minimumWidths 各小節の最小幅（論理単位）
+ * @param availableWidthPx 段の本文幅（px。worstCaseSystemContentBudget の値）
+ * @param desiredMultiplier ユーザー（またはファイル）が望んだ倍率。これを超えて拡大はしない
+ * @returns 収まる最大の倍率（5%刻み・スライダーの範囲へクランプ）。desiredMultiplier で
+ *   すでに収まっていればそのまま返す
+ */
+export function fitNotationSizeMultiplier(
+  minimumWidths: readonly number[],
+  availableWidthPx: number,
+  desiredMultiplier: number,
+): number {
+  const widest = minimumWidths.reduce((max, width) => (width > max ? width : max), 0);
+  if (!(widest > 0) || !(availableWidthPx > 0)) return desiredMultiplier;
+  const maxMultiplier = availableWidthPx / (widest * SCORE_LAYOUT_RENDER_SCALE);
+  if (maxMultiplier >= desiredMultiplier) return desiredMultiplier;
+  // 5%刻みで切り下げる（スライダーの刻みに合わせ、境界で溢れないよう必ず下側へ丸める）
+  const stepped = Math.floor(maxMultiplier * 20) / 20;
+  return Math.max(NOTATION_SIZE_MULTIPLIER_MIN, Math.min(desiredMultiplier, stepped));
 }
 
 export function printScoreAreaWidthPx(
@@ -455,7 +523,7 @@ export function measureMinimumContentWidth(measure?: MeasureData): number {
 
   const contentWidth = primaryEvents.reduce(
     (width, event) => width + eventMinimumWidth(event),
-    MEASURE_SIDE_PADDING,
+    measureSidePadding(),
   );
   const hasWhole = primaryEvents.some((event) => event.dur === '1');
   const hasHalf = primaryEvents.some((event) => event.dur === '2');
@@ -528,7 +596,7 @@ export function combinedMeasureMinimumContentWidth(measures: (MeasureData | unde
   if (!hasAnyEvent) {
     return MIN_MEASURE_CONTENT_WIDTH;
   }
-  let contentWidth = MEASURE_SIDE_PADDING;
+  let contentWidth = measureSidePadding();
   for (const width of columnWidths.values()) contentWidth += width;
 
   if (hasWhole) {
@@ -665,12 +733,57 @@ function measurementPartState(
   return { clef: part?.clef ?? 'treble', accidentalState: createMeasureAccidentalState(fallbackKeySignature) };
 }
 
+// VexFlow の「理想的な音符間隔」を、浄書実務の最低幅へ換算する圧縮率（Issue #559）。
+//
+// preCalculateMinTotalWidth が返すのは Formatter が「ゆったり組むならこれくらい欲しい」と
+// する理想幅であって、「これ以上詰めると読めなくなる」下限ではない。これをそのまま
+// 「最低幅」として段割りの判定に使っていたため、月光（8分3連×4組・大譜表）のような密な
+// 譜面が実ブラウザで1小節/段まで膨張していた。
+//
+// 値の決め方（Issue の仕様どおり「月光基準＝2小節/段が成立する値」を実ブラウザで測って選んだ）:
+//   段の本文予算 833（論理単位・A4／余白14mm／音符の大きさ150%）に対し、月光1〜9小節の
+//   最低幅は圧縮率ごとに次のようになった（実測は docs/qa/system-break-min-width/README.md）。
+//     0.75 → 1,1,1,1,1,1,2,1 小節/段（ほぼ改善しない）
+//     0.72 → 2,1,1,1,1,2,1
+//     0.70 → 2,1,1,1,2,2
+//     0.64 → 2,2,2,2,1 ← 全段が2小節（末尾の1は9小節の余り）。受入条件1を満たす最大の値
+//   Issue 本文の「例: 0.7〜0.75」より強い圧縮になったのは、実際の段の予算が例の想定より
+//   狭いため（パート名を描かないピアノ譜でも、段割りの計画は既定の楽器名の余白 74 を
+//   見込んだままにしてある。ScorePage の instrumentLabelAreaWidth 参照。ここを 0 にすると
+//   既存譜面の段割りが全部変わるので #559 では触っていない）。
+//   なお 1音あたりの幅は 45 → 28.8 論理単位（150%表示で約19px）になる。浄書の実物
+//   （月光: 145mm の段に2小節＝1音あたり約22px）よりやや詰まるが、これは月光の5〜6小節目の
+//   ように「旋律と3連符の開始拍がずれて列が増える」小節まで2小節/段に収めるための値である。
+//   最終値は運用者の目視で確定する前提なので、緩めたいときはこの1か所だけを上げればよい。
+//
+// 圧縮しても符頭が重ならないのは、段割りの計画（planEffectiveMeasuresPerSystem）が
+// 「開始拍ごとの符頭・臨時記号の実寸を積んだ見積もり」（combinedMeasureMinimumContentWidth）
+// との Math.max を取り、そちらを過密の下限ガードとして残しているため。
+// 実ブラウザでも、修正前後で符頭の重なりが増えていないことを確認済み
+// （docs/qa/system-break-min-width/README.md の「重なりの実測」）。
+export const VEXFLOW_IDEAL_WIDTH_COMPRESSION = 0.64;
+
 /**
- * 合同 Formatter が実際に必要とする最小幅を VexFlow へ問い合わせる。
+ * VexFlow の理想幅（音符の並びのぶん）を、段割り判定に使う最低幅へ換算する。
+ * 圧縮率を1か所に閉じ込めるための小さな関数で、テストからも同じ換算を参照する。
+ */
+export function engravingMinimumWidthFromIdeal(idealWidth: number): number {
+  // dev 環境のみ #596 のチューニングページで上書きできる（本番は定数そのまま。
+  // import.meta.env.DEV を呼び出し位置に置き、本番バンドルから devTuning ごと消す）
+  return idealWidth * (import.meta.env.DEV
+    ? devTuned('layout.compression', VEXFLOW_IDEAL_WIDTH_COMPRESSION)
+    : VEXFLOW_IDEAL_WIDTH_COMPRESSION);
+}
+
+/**
+ * 合同 Formatter が必要とする幅を VexFlow へ問い合わせ、段割り判定用の最低幅を返す。
  *
  * 既存の開始拍ベース推定は、編集中の不完全データでも安全に動くため残す。一方で、
  * ここで得られる値は付点、連符、和音、臨時記号の ModifierContext を含む実測値なので、
  * 取得できる場合は必ずこちらを優先して小節幅を決める。
+ *
+ * ただし VexFlow が返すのは「理想的な間隔」なので、そのままでは最低幅として広すぎる。
+ * VEXFLOW_IDEAL_WIDTH_COMPRESSION で浄書実務の密度へ圧縮した値を返す（Issue #559）。
  */
 export function vexFlowCombinedMeasureMinimumContentWidth(
   measures: (MeasureData | undefined)[],
@@ -712,9 +825,13 @@ export function vexFlowCombinedMeasureMinimumContentWidth(
     // これを省くと、各 Voice が単独の列として計測され、右手・左手の拍が揃う実際の
     // Formatter より必要幅を小さく出すケースがある。
     const formatter = new Formatter().joinVoices(voices);
-    const width = formatter.preCalculateMinTotalWidth(voices);
-    return Number.isFinite(width)
-      ? Math.ceil(width + MEASURE_SIDE_PADDING + modifierSafetyWidth)
+    const idealWidth = formatter.preCalculateMinTotalWidth(voices);
+    return Number.isFinite(idealWidth)
+      // preCalculateMinTotalWidth が返すのは「理想的な間隔」であって「これ以上詰めたら
+      // 読めなくなる最低幅」ではない。そのまま最低幅として使うと段割りが広がりすぎるため、
+      // 浄書実務の密度へ圧縮してから最低幅にする（Issue #559。下の定数のコメント参照）。
+      // 圧縮するのは音符の並びのぶんだけで、小節の左右余白と記号の安全幅はそのまま足す。
+      ? Math.ceil(engravingMinimumWidthFromIdeal(idealWidth) + measureSidePadding() + modifierSafetyWidth)
       : undefined;
   } catch {
     // 壊れた旧データや、声部間で合計拍数が一致しない編集中の状態では Formatter が例外を出す。

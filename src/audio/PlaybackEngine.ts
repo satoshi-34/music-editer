@@ -36,6 +36,17 @@ export interface PlaybackMeasureEvent {
    */
   tieExtendBeatsByKey?: Record<string, number>;
   /**
+   * ペダル（ダンパー）を踏んでいる間、この音の鳴り終わりを何拍ぶん先へ延ばすか。
+   * タイと同じくキー（"e/4" 形式）ごとに持つ（和音の一部だけが先に打ち直される場合があるため）。
+   *
+   * タイ（tieExtendBeatsByKey）との違いは合成のしかた:
+   * タイは「1つの音として伸ばす」ので durationScale（スタッカート等）も掛かるが、
+   * ペダルは「ダンパーが上がっているから響きが残る」ので、記譜どおりの鳴り終わりと
+   * ペダル解除位置の**遅い方**まで鳴らす（スタッカートでもペダル中は響く）。
+   * 開始時刻・次の音までの間隔は変えない点は durationScale / タイと同じ。
+   */
+  pedalExtendBeatsByKey?: Record<string, number>;
+  /**
    * タイの継続音（弧の後ろ側）として、発音（アタック）を止めるキー。
    * 開始音を伸ばして鳴らしているので、ここで鳴らすと同じ音が2回聞こえてしまう。
    * 音符自体は時間を占め続けるので、次の音の位置は変わらない。
@@ -53,6 +64,14 @@ export interface PlaybackPart {
     events: PlaybackMeasureEvent[];
     /** この小節が本来もつ長さ（4分音符=1拍） */
     measureBeats?: number;
+    /**
+     * この小節を鳴らすテンポ（BPM）。省略時は playParts の引数 bpm（全体テンポ）を使う。
+     *
+     * 途中テンポ変更（♩=XXX）と速度標語（Andante 等）はどちらも「この小節から速さが変わる」
+     * 指定なので、画面側（ScorePage）が tempoPlaybackUtils.resolveMeasureBpms で
+     * 解決した結果をここへ載せて渡す（Issue #458）。
+     */
+    bpm?: number;
     /**
      * この小節が複合拍子（6/8, 9/8, 12/8 など）かどうか。
      * スウィング再生は「4分音符=1拍」を前提にした表拍/裏拍判定のため、

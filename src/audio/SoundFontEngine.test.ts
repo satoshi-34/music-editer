@@ -51,31 +51,32 @@ describe('SoundFontEngine helpers', () => {
   });
 });
 
+/**
+ * SoundFont ファイルの読み込みなど、外へ出る内部メソッドを型付きで差し替えるための入り口。
+ */
+type SoundFontEngineInternals = {
+  getPlayerForInstrument: (instrument: InstrumentType) => Promise<{ play: (...args: unknown[]) => unknown }>;
+  buildPlaybackOptions: (duration: number, velocity?: number) => { gain: number; attack: number; release: number; duration: number };
+};
+const internals = (target: SoundFontEngine) => target as unknown as SoundFontEngineInternals;
+
+/**
+ * SoundFont の実ファイルは読みに行かず、play を記録するだけの偽 player を差し込む。
+ * これで「いつ・どの音を・何秒鳴らすよう予約したか」だけを検証できる。
+ * タイ再生（#445）とテンポ変更（#458）の両方から使う共通の足場。
+ */
+const setupEngineWithFakePlayer = async () => {
+  const play = vi.fn();
+  vi.stubGlobal('AudioContext', vi.fn(function () {
+    return { state: 'running', currentTime: 0, destination: {}, resume: vi.fn(), createGain: vi.fn(() => ({ gain: { value: 1 }, connect: vi.fn() })) };
+  }));
+  const engine = new SoundFontEngine();
+  vi.spyOn(internals(engine), 'getPlayerForInstrument').mockResolvedValue({ play });
+  await engine.initialize();
+  return { engine, play };
+};
+
 describe('SoundFontEngine のタイ再生（Issue #445）', () => {
-  /**
-   * SoundFont ファイルの読み込みなど、外へ出る内部メソッドを型付きで差し替えるための入り口。
-   */
-  type SoundFontEngineInternals = {
-    getPlayerForInstrument: (instrument: InstrumentType) => Promise<{ play: (...args: unknown[]) => unknown }>;
-    buildPlaybackOptions: (duration: number, velocity?: number) => { gain: number; attack: number; release: number; duration: number };
-  };
-  const internals = (target: SoundFontEngine) => target as unknown as SoundFontEngineInternals;
-
-  /**
-   * SoundFont の実ファイルは読みに行かず、play を記録するだけの偽 player を差し込む。
-   * これで「いつ・どの音を・何秒鳴らすよう予約したか」だけを検証できる。
-   */
-  const setupEngineWithFakePlayer = async () => {
-    const play = vi.fn();
-    vi.stubGlobal('AudioContext', vi.fn(function () {
-      return { state: 'running', currentTime: 0, destination: {}, resume: vi.fn(), createGain: vi.fn(() => ({ gain: { value: 1 }, connect: vi.fn() })) };
-    }));
-    const engine = new SoundFontEngine();
-    vi.spyOn(internals(engine), 'getPlayerForInstrument').mockResolvedValue({ play });
-    await engine.initialize();
-    return { engine, play };
-  };
-
   it('タイ2音は「1回の発音・合計の長さ」で予約される', async () => {
     const { engine, play } = await setupEngineWithFakePlayer();
 
@@ -94,6 +95,56 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
     // 予約される duration には音色設定ぶんの余韻が足されるので、
     // 「1.0秒ぶんの音を予約したときの値」と比べる。
     const expectedDuration = internals(engine).buildPlaybackOptions(1.0).duration;
+    expect(play.mock.calls[0][2].duration).toBeCloseTo(expectedDuration, 5);
+  });
+
+  it('テンポ変更をまたぐタイは、またいだ先のテンポで積算される（#458 round2 P2）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+
+    // 1小節目 60BPM の4拍目から、2小節目 120BPM の頭1拍へタイ → 1.0+0.5=1.5秒
+    await engine.playParts([{
+      measures: [
+        {
+          bpm: 60,
+          measureBeats: 4,
+          events: [
+            { dur: '2', isRest: true, keys: ['B4'] },
+            { dur: '4', isRest: true, keys: ['B4'] },
+            { dur: '4', isRest: false, keys: ['C4'], tieExtendBeatsByKey: { C4: 1 } },
+          ],
+        },
+        {
+          bpm: 120,
+          measureBeats: 4,
+          events: [
+            { dur: '4', isRest: false, keys: ['C4'], tieSuppressedKeys: ['C4'] },
+          ],
+        },
+      ],
+    }], 60);
+
+    expect(play).toHaveBeenCalledTimes(1);
+    // 開始小節BPM一律だと 2拍×1.0秒=2.0秒。正しくは 1.5秒
+    const expectedDuration = internals(engine).buildPlaybackOptions(1.5).duration;
+    expect(play.mock.calls[0][2].duration).toBeCloseTo(expectedDuration, 5);
+  });
+
+  it('全体テンポ60（小節bpm省略）のタイは、既定120ではなく実効60で数える（#458 round2 P2）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+
+    await engine.playParts([{
+      measures: [{
+        measureBeats: 4,
+        events: [
+          { dur: '4', isRest: false, keys: ['C4'], tieExtendBeatsByKey: { C4: 1 } },
+          { dur: '4', isRest: false, keys: ['C4'], tieSuppressedKeys: ['C4'] },
+        ],
+      }],
+    }], 60);
+
+    expect(play).toHaveBeenCalledTimes(1);
+    // 60BPM の2拍=2.0秒（固定120退行だと1.0秒）
+    const expectedDuration = internals(engine).buildPlaybackOptions(2.0).duration;
     expect(play.mock.calls[0][2].duration).toBeCloseTo(expectedDuration, 5);
   });
 
@@ -118,5 +169,58 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
     expect(e4[0].duration).toBeCloseTo(internals(engine).buildPlaybackOptions(1.0).duration, 5);
     expect(played.filter((p) => p.note === 'C4')[0].duration)
       .toBeCloseTo(internals(engine).buildPlaybackOptions(0.5).duration, 5);
+  });
+});
+
+describe('SoundFontEngine の小節ごとのテンポ（Issue #458）', () => {
+  it('bpm が付いた小節は、その小節の音がその速さで予約される', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+
+    // 1小節目は引数の全体テンポ 60（4分音符=1秒）、2小節目は bpm=120（4分音符=0.5秒）
+    await engine.playParts([{
+      measures: [
+        { measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C4'] }] },
+        { measureBeats: 4, bpm: 120, events: [{ dur: '4', isRest: false, keys: ['D4'] }] },
+      ],
+    }], 60);
+
+    const played = play.mock.calls.map((call) => ({ note: call[0], at: call[1], duration: call[2].duration }));
+    expect(played).toHaveLength(2);
+    // 1小節目: 60BPM なので頭は 0秒・長さは1秒ぶん
+    expect(played[0].at).toBeCloseTo(0, 6);
+    expect(played[0].duration).toBeCloseTo(internals(engine).buildPlaybackOptions(1.0).duration, 5);
+    // 2小節目の頭は「1小節目ぶん（4拍 × 1秒）」の直後。長さは 120BPM の 0.5秒
+    expect(played[1].at).toBeCloseTo(4, 6);
+    expect(played[1].duration).toBeCloseTo(internals(engine).buildPlaybackOptions(0.5).duration, 5);
+  });
+
+  it('bpm が付いた小節は、次の小節の開始位置もその速さで進む', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+
+    await engine.playParts([{
+      measures: [
+        { measureBeats: 4, bpm: 120, events: [{ dur: '4', isRest: false, keys: ['C4'] }] },
+        { measureBeats: 4, bpm: 120, events: [{ dur: '4', isRest: false, keys: ['D4'] }] },
+      ],
+    }], 60);
+
+    const played = play.mock.calls.map((call) => ({ note: call[0], at: call[1] }));
+    // 120BPM の小節は 4拍 × 0.5秒 = 2秒。次の小節はその直後から始まる
+    expect(played[1].at).toBeCloseTo(2, 6);
+  });
+
+  it('bpm の無い小節は従来どおり引数の全体テンポで鳴る（後方互換）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+
+    await engine.playParts([{
+      measures: [
+        { measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C4'] }] },
+        { measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['D4'] }] },
+      ],
+    }], 120);
+
+    const played = play.mock.calls.map((call) => ({ at: call[1] }));
+    // 120BPM = 1小節2秒
+    expect(played[1].at).toBeCloseTo(2, 6);
   });
 });

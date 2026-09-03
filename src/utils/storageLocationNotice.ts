@@ -8,6 +8,8 @@
 // 方針: 「公開されていないことの証明」ではなく**事実の記述**に徹する。
 // 表示は #318（#238/#306 由来）の通知系をそのまま流用し、既読だけをここで覚える。
 
+import { createOnceNotice } from './onceNotice';
+
 /**
  * 既読フラグの localStorage キー。
  * 他の設定キー（music-score-app-ui-variant 等）と同じ接頭辞にそろえている。
@@ -31,50 +33,68 @@ export const STORAGE_LOCATION_NOTICE_MESSAGE =
 export const STORAGE_LOCATION_NOTICE_DURATION_MS = 10000;
 
 /**
+ * ホームに**常設**で出す保存先の説明（Issue #570）。
+ *
+ * 初回通知（上の MESSAGE）は数秒で消えるため、後から来た不安には答えられない。
+ * 「ログインが無い＝全世界に公開されているのでは」という誤解は核ユーザーが実際に抱いた
+ * もの（発案者ユーザー・2026-08-31 のテスト会）で、消えない一言が要る。
+ *
+ * 文言を定数にしているのは、将来ログイン（#498）が入ったときに「ローカル/クラウド」の
+ * 保存先表示へ発展させる差し替え点を1か所にまとめておくため（#570 仕様4）。
+ *
+ * 「自動で〜送信されることはありません」と**対象を限定**しているのは MESSAGE と同じ理由で、
+ * PDF取り込み（β）だけはユーザーが選んだファイルを変換サーバーへ送るため。
+ * 例外なしの断定にすると、β機能を使った瞬間にこの表示が嘘になる。
+ */
+export const HOME_STORAGE_LOCATION_NOTE =
+  '🔒 作品はこの端末にだけ保存されます（自動でサーバーへ送信されることはありません）。';
+
+/**
+ * フッター用の短い言い方（Issue #570）。
+ * 作品一覧のそばに出す上の一文と**同じ文をもう一度**置くと、同じ画面に同じ文が2つ並んで
+ * かえって読み飛ばされる。フッターは「探さずに見つかる場所の控えめな一行」に徹し、
+ * 詳しい説明（送信していないこと・持ち出し方）は作品一覧側の対に任せる。
+ */
+export const HOME_STORAGE_LOCATION_NOTE_SHORT = '作品の保存先はこの端末の中だけです。';
+
+/**
+ * 上の説明と対にして出す注意（Issue #570 仕様2）。
+ * 「端末内だけ」は安心であると同時に「端末を変えると持ち出せない」という不便でもあるので、
+ * 安心だけを伝えて持ち出し方を伝えないのは不親切になる。
+ */
+export const HOME_STORAGE_PORTABILITY_NOTE =
+  '別の端末で使うときや控えを残したいときは、「書き出し」でファイルに保存してください。';
+
+/**
+ * 既読の判定・記録は他の「一度きりの通知」と共通の部品を使う（Issue #524 で切り出し）。
+ * StrictMode 対策（下の claim のコメント参照）を含む同じ判定を2か所に書かないため。
+ */
+const notice = createOnceNotice(STORAGE_LOCATION_NOTICE_SEEN_KEY);
+
+/**
  * すでに一度見たかどうか。
  * localStorage が使えない環境（プライベートブラウジング等）では例外を投げず「未読」を返す。
- * その場合は毎回出てしまうが、記述内容は常に正しく、アプリが起動しなくなるより無害である
- * （そもそも localStorage が使えない環境では自動保存自体が働かない）。
  */
 export function hasSeenStorageLocationNotice(): boolean {
-  try {
-    return localStorage.getItem(STORAGE_LOCATION_NOTICE_SEEN_KEY) !== null;
-  } catch {
-    return false;
-  }
+  return notice.hasSeen();
 }
 
 /** 既読として記録する。保存に失敗しても致命的ではないので握りつぶす。 */
 export function markStorageLocationNoticeSeen(): void {
-  try {
-    localStorage.setItem(STORAGE_LOCATION_NOTICE_SEEN_KEY, '1');
-  } catch {
-    // quota超過・プライベートブラウジング等。今回の表示が出ていれば目的は果たしている
-  }
+  notice.markSeen();
 }
 
 /**
- * このページ読み込み中に一度でも表示を始めたか（モジュール変数＝リロードで消える）。
- * React の StrictMode は effect を「実行→片付け→再実行」するため、「既読なら出さない」
- * だけの判定だと、1回目で既読が付き2回目が黙ってしまい、片付けで消去タイマーを失った
- * 通知だけが画面に残る（round1 P3）。「この読み込みで出し始めたなら、再実行でも
- * もう一度出し直す（＝タイマーも張り直す）」ためにここで区別する。
- */
-let shownThisLoad = false;
-
-/**
- * 通知を出してよいかを判定し、出すと決めたら既読も記録する（判定と記録を分けると
- * 呼び出し側の順序ミスで「既読だけ付いて表示されない」が起きるため、1関数にまとめる）。
+ * 通知を出してよいかを判定し、出すと決めたら既読も記録する。
+ * StrictMode の「実行→片付け→再実行」でも true を返し続けるので、
+ * 再実行時に通知と消去タイマーが張り直される（round1 P3）。
  * @returns true なら呼び出し側は通知を dispatch する
  */
 export function claimStorageLocationNotice(): boolean {
-  if (!shownThisLoad && hasSeenStorageLocationNotice()) return false;
-  shownThisLoad = true;
-  markStorageLocationNoticeSeen();
-  return true;
+  return notice.claim();
 }
 
 /** テスト専用: ページ読み込み内フラグを初期化する（テスト間の独立性のため） */
 export function resetStorageLocationNoticeForTest(): void {
-  shownThisLoad = false;
+  notice.resetForTest();
 }

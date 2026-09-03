@@ -16,6 +16,7 @@
 import type { NoteEvent } from '../types/storage';
 import type { OmrConvertFailure } from './omrApi';
 import { canReplaceTupletNoteWithRest, type TupletGroupPasteBlockReason } from './tupletUtils';
+import type { PlaybackStartMeasureRejection } from './playbackPositionUtils';
 
 /** 削除など「編集で何が起きたか」を画面へ出すための通知イベント名 */
 export const SCORE_EDIT_NOTICE_EVENT = 'music-editer-score-edit-notice';
@@ -546,6 +547,37 @@ export function describeImportedClefNormalized(): string {
   return '読み込んだ大譜表のクレフを、ピアノ譜の標準（上段=ト音・下段=ヘ音）へ揃えました（音の高さはそのままです）';
 }
 
+/**
+ * MusicXML の `<defaults>` から縮尺を引き継いだときの通知（Issue #477）。
+ * ファイル指定の五線サイズで組み直すと見た目が大きく変わるため、黙って変えずに知らせる（#318）。
+ */
+export function describeImportedNotationSize(percent: number): string {
+  return `ファイルの指定に合わせて音符の大きさを${percent}%にしました（レイアウトタブで変更できます）`;
+}
+
+/**
+ * 紙幅に収まらない小節があったため、読込時に音符の大きさを下げたときの通知（Issue #477）。
+ * ファイルに `<defaults>` が無い（または指定どおりでは収まらない）場合のフォールバック。
+ */
+export function describeImportedNotationSizeShrunk(percent: number): string {
+  return `紙幅に収まらない小節があったため、音符の大きさを${percent}%に調整しました（レイアウトタブで変更できます）`;
+}
+
+/**
+ * 読み込んだファイルの判型に対応するサイズが無く、最も近い判型へ丸めたときの通知（Issue #477）。
+ */
+export function describeImportedPageSizeRounded(label: string): string {
+  return `読み込んだファイルの判型に対応するサイズが無いため、最も近い ${label} で開きました（レイアウトタブで変更できます）`;
+}
+
+/**
+ * MusicXML 読み込みで、対応表に無い強弱記号を取り込めなかったときの通知（Issue #552）。
+ * 近い記号へ勝手に寄せると譜面が黙って書き換わるため、取り込まずに件数だけ知らせる（#318）。
+ */
+export function describeImportedUnsupportedDynamics(count: number): string {
+  return `未対応の強弱記号 ${count} 件は取り込めませんでした（pp・p・mp・mf・f・ff に対応しています。読み込み自体は成功しています）`;
+}
+
 export function describeSliceCopyUnavailable(): string {
   return '選択範囲がこのレイヤーの音符の切れ目に合っていません（レイヤーを替えた場合は、範囲を選び直してからコピーしてください）';
 }
@@ -613,6 +645,39 @@ export function describeWorkHistoryRestored(timestamp: number): string {
 /** 途中再生（#108）: 選択小節から再生を始めたことを知らせる */
 export function describePlaybackFromMeasure(startMeasure: number): string {
   return `${startMeasure + 1}小節目から再生します（先頭から聴くには Escape で小節の選択を外してください）`;
+}
+
+/**
+ * 小節番号を指定した途中再生（#545）: その小節から再生を始めたことを知らせる。
+ * 戻し方（先頭から聴く方法）は選択の有無で違うため出し分ける（round1/2 P2）:
+ * 小節の範囲選択が残っていると停止→再生は選択位置から始まるので、
+ * まず Escape で選択を外す案内を先に出す。選択が無ければ停止→再生だけで先頭に戻る。
+ */
+export function describePlaybackFromMeasureNumber(startMeasure: number, hasMeasureSelection: boolean): string {
+  // 小節の範囲選択が残っていると、停止→再生では選択位置から始まる（選択起点の途中再生）。
+  // その状態で「停止して再生すれば先頭」と案内すると嘘になるため出し分ける（#545 round1 P2）
+  if (hasMeasureSelection) {
+    return `${startMeasure + 1}小節目から再生します（先頭から聴くには Escape で小節の選択を外し、停止してから再生してください）`;
+  }
+  return `${startMeasure + 1}小節目から再生します（先頭から聴くには停止してから再生してください）`;
+}
+
+/**
+ * 小節番号を指定した途中再生（#545）で、その番号では再生できないことを理由つきで返す（#318）。
+ * 入力欄の値を黙って捨てず、「なぜ効かないのか」「どう入れ直せばよいか」まで伝える。
+ */
+export function describePlaybackStartMeasureRejected(
+  reason: PlaybackStartMeasureRejection,
+  totalMeasureCount: number
+): string {
+  switch (reason) {
+    case 'notANumber':
+      return '小節番号は半角の数字で入力してください（例: 5 と入れると5小節目から再生します）';
+    case 'outOfRange':
+      return `この作品は${totalMeasureCount}小節までのため、その小節からは再生できません（1〜${totalMeasureCount} の番号を入れてください）`;
+    case 'noMeasures':
+      return 'まだ再生できる小節がありません（音符を入力してから小節番号を指定してください）';
+  }
 }
 
 /** 拍範囲スライスの削除で消すものが無かったときの通知（#318。履歴も積まない） */
@@ -747,4 +812,33 @@ export function describeHomeActionBlocked(kind: 'create' | 'goHome'): string {
     return `いまの作品を保存できなかったため、新規作成を中止しました（${fallback}）`;
   }
   return `いまの作品を保存できなかったため、ホームへ戻るのを中止しました（${fallback}）`;
+}
+
+/**
+ * <defaults> を持たない MusicXML で紙幅に収まらない小節があるときの提案（Issue #477 round1 P1・#318）。
+ * ファイルにレイアウト指定が無い以上、作品の縮尺を勝手に変えず「次の一手」だけを示す。
+ */
+export function describeNotationSizeFitSuggestion(fittedPercent: number): string {
+  return `現在の音符サイズでは紙幅に収まらない小節があります（レイアウトタブで音符の大きさを ${fittedPercent}% にすると収まります）`;
+}
+
+/**
+ * MusicXML 書き出しが連符の分割数を決められず中止したときの文言（#519 round3 P3）。
+ * 分母が互いに素な巨大連符が多数同居する病的データでのみ起きる。
+ */
+export function describeDivisionsOverflow(): string {
+  return '連符の構成が複雑すぎて MusicXML の分割数を決められません。極端に大きい連符（分母が互いに素な多数の連符の同居）を減らしてから書き出してください';
+}
+
+/**
+ * 無音検知→音声エンジン自動再起動の通知（Issue #521 で出力先の案内を末尾に追加）。
+ * destination は audioOutputHealth.describeAudioOutputDestination の結果。
+ */
+export function describeAudioEngineRestarted(destination: string): string {
+  return `無音状態を検知したため、音声エンジンを自動で再起動しました。もう一度再生をお試しください。${destination}`;
+}
+
+/** 自動再起動しても無音が続くときの通知（Issue #521 で出力先の案内を末尾に追加）。 */
+export function describeAudioStillSilent(destination: string): string {
+  return `音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。${destination}`;
 }

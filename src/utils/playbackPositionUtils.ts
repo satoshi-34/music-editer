@@ -1,8 +1,9 @@
-import type { MeasureData, TimeSignature } from '../types/storage';
-import { expandMeasuresForPlayback, type ExpandedPlaybackMeasure } from '../audio/repeatPlaybackUtils';
+import type { MeasureData, NoteEvent, TimeSignature } from '../types/storage';
+import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference, type ExpandedPlaybackMeasure } from '../audio/repeatPlaybackUtils';
 import { getMeasureBeats } from './timeSignatureUtils';
-import { getEventDurationBeats, getMeasureDurationBeats, getPrimaryVoiceEvents } from './voiceMeasureUtils';
+import { getEventDurationBeats, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { applySwingToTiming, shouldApplySwing } from './swingUtils';
+import { resolveEffectiveMeasureBpms, resolveMeasureBpms } from './tempoPlaybackUtils';
 
 export interface PlaybackTimelinePosition {
   measureIndex: number;
@@ -13,6 +14,85 @@ export interface PlaybackTimelinePosition {
 export interface PlaybackTimelineItem {
   atMs: number;
   position: PlaybackTimelinePosition;
+  /**
+   * その時刻に鳴っている音符（全パート・全声部）。画面のハイライトはこれを見て帯を出す（#411）。
+   * `highlightParts` を渡さずに呼んだときは付かない（従来どおり主声部だけの位置情報になる）。
+   */
+  targets?: PlaybackHighlightTarget[];
+}
+
+/**
+ * ハイライト1つぶんの宛先。描画側の当たり判定 rect（`.vf-note-hit` /
+ * `.vf-inactive-voice-note-hit`）の `data-part` / `data-voice` / `data-measure` / `data-note`
+ * とそのまま対応する（#411）。
+ */
+export interface PlaybackHighlightTarget {
+  /** 描画側の段（パート）インデックス。DOM の data-part と一致する */
+  partIndex: number;
+  /** 声部インデックス（0 = 上声）。声部数の上限を決め打ちしない */
+  voiceIndex: number;
+  measureIndex: number;
+  /** その声部のイベント列での位置。DOM の data-note と一致する */
+  noteIndex: number;
+}
+
+/**
+ * ハイライト対象にするパート（段）。再生に渡す前の**展開していない**小節列を渡す。
+ * 反復の展開は内部で基準パートに合わせて行う（実音と同じ expandMeasuresForPlaybackWithReference）。
+ */
+export interface PlaybackHighlightPartSource {
+  partIndex: number;
+  measures: MeasureData[];
+}
+
+/** 拍位置の比較に使う許容誤差。3連符（1/3 拍）など割り切れない値の突き合わせ用 */
+const BEAT_EPSILON = 1e-6;
+
+/** 1つの声部の「鳴っている区間」1件ぶん */
+interface LaneNote {
+  startBeat: number;
+  endBeat: number;
+  noteIndex: number;
+}
+
+/** 1小節ぶんの「パート×声部」1レーン */
+interface MeasureLane {
+  partIndex: number;
+  voiceIndex: number;
+  /** ハイライト対象として DOM を探すかどうか（従来互換の呼び出しでは false） */
+  emitTargets: boolean;
+  notes: LaneNote[];
+}
+
+/**
+ * 1つの声部のイベント列を「鳴っている区間」の一覧へ変換する。
+ * 休符と空イベントは光らせないので入れない（従来の主声部の扱いと同じ）。
+ */
+function collectLaneNotes(events: NoteEvent[], swingActive: boolean): LaneNote[] {
+  const notes: LaneNote[] = [];
+  let beatPosition = 0;
+  events.forEach((event, noteIndex) => {
+    const durationBeats = getEventDurationBeats(event);
+    if (!event.isRest && Array.isArray(event.keys) && event.keys.length > 0) {
+      // 見た目のハイライトも、実際に鳴る位置（スウィング後）に合わせる
+      const timing = swingActive
+        ? applySwingToTiming(
+            { startBeat: beatPosition, durationBeats },
+            event.dur,
+            event.dots,
+            event.tuplet
+          )
+        : { startBeat: beatPosition, durationBeats };
+      notes.push({
+        startBeat: timing.startBeat,
+        endBeat: timing.startBeat + timing.durationBeats,
+        noteIndex,
+      });
+    }
+    // 次の音符の位置は、スウィングの影響を受けない「本来の拍位置」で進める
+    beatPosition += durationBeats;
+  });
+  return notes;
 }
 
 /**
@@ -29,57 +109,161 @@ export function buildPlaybackPositionTimeline(
   bpm: number,
   timeSignature: TimeSignature,
   swingEnabled: boolean = false,
-  startExpandedIndex: number = 0
+  startExpandedIndex: number = 0,
+  /**
+   * スコア共通の解決済みテンポ列（#458 round2 P1）。渡された場合は内部で再解決せず
+   * これを使う（実音側と同じ列を共有し、他段だけに置かれた標語でもハイライトが同期する）。
+   * 省略時は従来どおり自パート列から解決（単体利用・後方互換）
+   */
+  sharedMeasureBpms?: number[],
+  /**
+   * ハイライト対象の全パート（#411）。渡すと、主声部だけでなく**鳴っている全パート・全声部**の
+   * 音符が `targets` に載る（選択中のレイヤーだけが光る問題の解消）。
+   * 渡さないときは従来どおり、基準パートの主声部だけのタイムラインになる。
+   */
+  highlightParts?: PlaybackHighlightPartSource[]
 ): PlaybackTimelineItem[] {
   // 途中再生（#108）: 展開順の先頭 startExpandedIndex 個を丸ごと飛ばす。
   // 実音側（playParts へ渡す小節列）も同じ位置で切るため、atMs は 0 起点のままで一致する
-  const expandedMeasures = expandMeasuresForPlayback(measures).slice(Math.max(0, startExpandedIndex));
-  const msPerBeat = (60 / bpm) * 1000;
+  const expandedMeasuresFull = expandMeasuresForPlayback(measures);
+  // 小節ごとのテンポ（途中テンポ変更・速度標語）は**切る前の全列**で解決する。
+  // 切ってから解決すると、開始位置より前に置かれた標語やテンポ指定が失われ、
+  // 途中再生のときだけハイライトが実音とズレる（強弱の解決と同じ理由・Issue #458）
+  const measureBpms = sharedMeasureBpms ?? resolveMeasureBpms(expandedMeasuresFull.map((item) => item.measure), bpm);
+  const sliceStart = Math.max(0, startExpandedIndex);
+  const expandedMeasures = expandedMeasuresFull.slice(sliceStart);
   const timeline: PlaybackTimelineItem[] = [];
 
-  let elapsedBeats = 0;
+  // ハイライト対象のパートごとに、基準パート（measures）と同じ反復順へそろえた小節列を先に作る。
+  // 実音側（ScorePage）が使っているのと同じ関数なので、反復・括弧のある譜面でも
+  // 「同じ時刻に同じ小節」を指す（別々に展開すると2周目でパートごとにズレる）。
+  const expandedPerHighlightPart = (highlightParts ?? []).map((source) => (
+    source.measures === measures
+      ? expandedMeasuresFull
+      : expandMeasuresForPlaybackWithReference(measures, source.measures)
+  ));
 
-  expandedMeasures.forEach(({ sourceMeasureIndex, measure }) => {
+  // 小節ごとにテンポが変わるため、経過は「拍」ではなくミリ秒で積む。
+  // 拍のまま積んで最後に1つの msPerBeat を掛けると、テンポ変更前の小節まで
+  // 変更後の速さで数えてしまう
+  let elapsedMs = 0;
+  // 直前に光った主声部の音符番号（位置表示の連続性のために覚えておく）
+  let lastReferenceNoteIndex: number | null = null;
+
+  expandedMeasures.forEach(({ sourceMeasureIndex, measure }, sliceIndex) => {
+    const msPerBeat = (60 / measureBpms[sliceStart + sliceIndex]) * 1000;
+    // スウィング判定は**グローバル拍子**で行う（#579 round1 P2）。
+    // 実音エンジンへは ScorePage が isCompoundMeter をグローバル拍子から
+    // 全小節一律で渡しており、表示側だけ小節の timeSignature で判定すると
+    // 6/8 の途中小節などで実音とハイライトの裏拍位置がずれる。
+    // 表示は実音に合わせるのが正なので、同じ規則（グローバル一律）にそろえる
+    const swingActiveForMeasure = shouldApplySwing(swingEnabled, timeSignature);
+
+    // ── その小節で鳴るレーン（パート×声部）を集める ──
+    // 基準パートの主声部は「画面の位置表示（N小節目 M音符目）」の基準として必ず入れる。
+    // highlightParts が渡されているときは、そこに載っている全パートの全声部も入れる。
     // 主声部の読みは正規アクセサ（#244 段5-3）。再生列挙と同じ源を読むことで索引・時刻を一致させる
-    const visibleEvents = getPrimaryVoiceEvents(measure);
-    let beatPosition = 0;
-    // 小節ごとに拍子が変わる譜面では、その小節の拍子でスウィング対象かどうかを判定する。
-    const measureTimeSignature = measure.timeSignature ?? timeSignature;
-    const swingActiveForMeasure = shouldApplySwing(swingEnabled, measureTimeSignature);
-
-    visibleEvents.forEach((event, noteIndex) => {
-      // 休符は光らせず、実際に音が鳴るイベントだけタイムラインへ積む。
-      if (!event.isRest && Array.isArray(event.keys) && event.keys.length > 0) {
-        // 見た目のハイライトも、実際に鳴る位置（スウィング後）に合わせる。
-        // こうしないと、スウィングON時に「音はズレて鳴っているのにハイライトは
-        // 均等なまま」という違和感が出てしまう。
-        const swingTiming = swingActiveForMeasure
-          ? applySwingToTiming(
-              { startBeat: beatPosition, durationBeats: getEventDurationBeats(event) },
-              event.dur,
-              event.dots,
-              event.tuplet
-            )
-          : { startBeat: beatPosition, durationBeats: getEventDurationBeats(event) };
-
-        timeline.push({
-          atMs: elapsedBeats * msPerBeat + swingTiming.startBeat * msPerBeat,
-          position: {
-            measureIndex: sourceMeasureIndex,
-            beatPosition: swingTiming.startBeat,
-            noteIndex,
-          },
+    const referenceLane: MeasureLane = {
+      partIndex: -1,
+      voiceIndex: 0,
+      emitTargets: false,
+      notes: collectLaneNotes(getPrimaryVoiceEvents(measure), swingActiveForMeasure),
+    };
+    const lanes: MeasureLane[] = [referenceLane];
+    (highlightParts ?? []).forEach((source, sourceIndex) => {
+      const partMeasure = expandedPerHighlightPart[sourceIndex][sliceStart + sliceIndex]?.measure;
+      if (!partMeasure) return;
+      getMeasureVoices(partMeasure).forEach((voice, voiceIndex) => {
+        lanes.push({
+          partIndex: source.partIndex,
+          voiceIndex,
+          emitTargets: true,
+          // スウィング判定も基準と同じグローバル一律（実音エンジンの規則に合わせる）
+          notes: collectLaneNotes(voice.events, swingActiveForMeasure),
         });
-      }
+      });
+    });
 
-      // 次の音符の位置は、スウィングの影響を受けない「本来の拍位置」で進める。
-      beatPosition += getEventDurationBeats(event);
+    // ── 光らせる/消す時刻（拍）を決める ──
+    // どれかの声部で音が**始まる**拍と**終わる**拍の両方が節目になる（round1 P1:
+    // 開始拍だけだと「四分音符1つ+休符3拍」で帯が小節末まで残り続けた。
+    // 終了拍を節目にすることで、その時刻に targets から外れて帯が消える）。
+    // 主声部の音符だけを節目にしていた頃は、右手が休んでいるあいだ左手が鳴っても
+    // 画面が動かなかった（#411 の症状）
+    const rawTicks: number[] = [];
+    lanes.forEach((lane) => {
+      lane.notes.forEach((note) => {
+        rawTicks.push(note.startBeat);
+        // 終了拍の節目はハイライト消灯のためのもの。従来互換の呼び出し
+        // （highlightParts なし）ではタイムラインの形を変えない
+        if (highlightParts) rawTicks.push(note.endBeat);
+      });
+    });
+    rawTicks.sort((a, b) => a - b);
+    const tickBeats: number[] = [];
+    rawTicks.forEach((beat) => {
+      if (tickBeats.length === 0 || beat - tickBeats[tickBeats.length - 1] >= BEAT_EPSILON) {
+        tickBeats.push(beat);
+      }
+    });
+    // 小節終端ちょうどの消灯節目も**残す**（round2 P1: 次小節が休符で始まる場合、
+    // 次小節頭に節目が無く、削除すると前小節の帯が次の発音まで残る）。
+    // 次小節の先頭に発音があるときは同じ時刻（atMs）に2項目並ぶが、タイムラインは
+    // 配列順に適用され、後に並ぶ次小節側の targets が最終状態になるので問題ない
+
+    // 各レーンとも音符は開始拍の昇順・重なりなし（同一声部の逐次イベント）なので、
+    // 節目の昇順走査に合わせてレーンごとの読み位置を前進させる（round1 P2:
+    // 節目×全音符の総当たり（最悪二乗）を O(N log N) に抑える）
+    const laneCursors = lanes.map(() => 0);
+    /** その拍で鳴っている音符を返す。カーソルは巻き戻さない前提（tickBeats 昇順で呼ぶ） */
+    const soundingAt = (laneIndex: number, beat: number): LaneNote | null => {
+      const notes = lanes[laneIndex].notes;
+      let cursor = laneCursors[laneIndex];
+      while (cursor < notes.length && notes[cursor].endBeat - BEAT_EPSILON <= beat) cursor++;
+      laneCursors[laneIndex] = cursor;
+      const note = notes[cursor];
+      if (note && note.startBeat <= beat + BEAT_EPSILON && beat < note.endBeat - BEAT_EPSILON) {
+        return note;
+      }
+      return null;
+    };
+
+    tickBeats.forEach((beat) => {
+      // 位置表示は従来どおり基準パートの主声部で数える。その拍で主声部が鳴っていなければ
+      // 直前の音符の番号を保つ（他声部だけが鳴っている拍で番号が 0 へ飛ばないようにする）
+      const referenceNote = soundingAt(0, beat);
+      const targets: PlaybackHighlightTarget[] = [];
+      lanes.forEach((lane, laneIndex) => {
+        if (!lane.emitTargets) return;
+        const sounding = soundingAt(laneIndex, beat);
+        if (!sounding) return;
+        targets.push({
+          partIndex: lane.partIndex,
+          voiceIndex: lane.voiceIndex,
+          measureIndex: sourceMeasureIndex,
+          noteIndex: sounding.noteIndex,
+        });
+      });
+
+      timeline.push({
+        atMs: elapsedMs + beat * msPerBeat,
+        position: {
+          measureIndex: sourceMeasureIndex,
+          beatPosition: beat,
+          noteIndex: referenceNote ? referenceNote.noteIndex : (lastReferenceNoteIndex ?? 0),
+        },
+        // highlightParts が渡されたときは**空でも** targets を付ける（round1 P1:
+        // 空 = 「いま鳴っている音は無い＝全帯を消す」の指示。undefined は従来互換で
+        // 「対象情報なし＝位置から1件探す」。呼び出し（highlightParts なし）では付けない）
+        ...(highlightParts ? { targets } : {}),
+      });
+      if (referenceNote) lastReferenceNoteIndex = referenceNote.noteIndex;
     });
 
     // 実音エンジンは各小節に measureBeats（グローバル拍子の長さ）を下限として渡されるため、
     // 表示の前進も「全声部の実長と拍子長の大きい方」でそろえる（Codex 2巡目）。
     // 未充足の小節を実長だけで進めると、ハイライトが実音より先へ走ってしまう
-    elapsedBeats += measureAdvanceBeats(measure, timeSignature);
+    elapsedMs += measureAdvanceBeats(measure, timeSignature) * msPerBeat;
   });
 
   return timeline;
@@ -93,6 +277,20 @@ export function buildPlaybackPositionTimeline(
 function measureAdvanceBeats(measure: MeasureData, timeSignature: TimeSignature): number {
   return Math.max(getMeasureDurationBeats(measure), getMeasureBeats(timeSignature));
 }
+
+/** 小節番号の指定を受け付けられなかった理由（#545。通知文の出し分けに使う） */
+export type PlaybackStartMeasureRejection =
+  /** 数字として読めない（空欄・記号だけ など） */
+  | 'notANumber'
+  /** 1 未満、または総小節数を超えている */
+  | 'outOfRange'
+  /** そもそも再生できる小節が無い（まだ何も入力していない譜面） */
+  | 'noMeasures';
+
+/** 小節番号の解決結果。成功なら 0 始まりの小節インデックスを返す */
+export type PlaybackStartMeasureResolution =
+  | { ok: true; measureIndex: number }
+  | { ok: false; reason: PlaybackStartMeasureRejection };
 
 /**
  * 途中再生（#108）の開始位置: 指定の小節が「展開後の再生順」で最初に現れる位置を返す。
@@ -108,6 +306,43 @@ export function findPlaybackStartExpandedIndex(
   if (exact >= 0) return exact;
   const after = expandedMeasures.findIndex((item) => item.sourceMeasureIndex > startMeasureIndex);
   return after >= 0 ? after : 0;
+}
+
+/**
+ * 小節番号を指定した途中再生（#545）で、入力欄の文字列を「再生開始の小節インデックス」へ解決する。
+ *
+ * 画面には 1 始まりの小節番号（「3小節目」）を出しているが、内部の配列は 0 始まりなので
+ * ここで 1 つずらす。受け付けられない入力は理由（reason）を返し、呼び出し側が
+ * 「行き止まりは喋る」（#318）の通知文へ変換する。黙って無視しないための戻り値。
+ *
+ * @param input 入力欄の生の文字列（前後の空白は無視する）
+ * @param totalMeasureCount 指定できる小節数の上限（内容のある小節数）
+ */
+export function resolvePlaybackStartMeasureNumber(
+  input: string,
+  totalMeasureCount: number
+): PlaybackStartMeasureResolution {
+  if (totalMeasureCount <= 0) {
+    return { ok: false, reason: 'noMeasures' };
+  }
+
+  const trimmed = input.trim();
+  // 数字だけ（先頭の + / - は符号として許す）かを先に見る。parseInt は "3abc" を 3 と
+  // 読んでしまうため、そのまま使うと打ち間違いを黙って受け入れてしまう
+  if (!/^[+-]?\d+$/.test(trimmed)) {
+    return { ok: false, reason: 'notANumber' };
+  }
+
+  const measureNumber = Number.parseInt(trimmed, 10);
+  if (measureNumber < 1 || measureNumber > totalMeasureCount) {
+    return { ok: false, reason: 'outOfRange' };
+  }
+
+  // 表示番号 → 実インデックスの対応はこの1か所に集約している。
+  // 現在の main は弱起（#473）未実装で表示番号は常に1始まり（=インデックス+1）。
+  // 弱起（表示番号0始まり）が入るときは、#473 側でこの対応だけを差し替えること
+  //（getDisplayedMeasureNumber の逆引き。呼び出し側に -1 を散らさない）
+  return { ok: true, measureIndex: measureNumber - 1 };
 }
 
 /**
@@ -134,10 +369,17 @@ export function calculateExpandedPlaybackDurationMs(
     }
   }
   if (lastUsedIndex < 0) return 0;
-  const msPerBeat = (60 / bpm) * 1000;
-  let beats = 0;
+  // 小節ごとのテンポで数える（Issue #458）。渡ってくるのは「実際にエンジンへ渡す
+  // 展開済み・切り出し済みの列」で、各小節には解決済みの bpm が載っている。
+  // 載っていない小節は引数の全体テンポで数える（後方互換）。
+  // ここへ渡る bpm は再生速度（%）適用後の実効値なので、譜面用の 30〜240 ではなく
+  // 実効範囲（clampEffectiveBpm）で解決する（#544 round1 P1: 25%・200% で
+  // 終了タイマーだけ元の速さに戻り、実音より早く/遅く stopped になっていた）
+  const measureBpms = resolveEffectiveMeasureBpms(measures, bpm);
+  let totalMs = 0;
   for (let i = 0; i <= lastUsedIndex; i++) {
-    beats += measureAdvanceBeats(measures[i], timeSignature);
+    const msPerBeat = (60 / measureBpms[i]) * 1000;
+    totalMs += measureAdvanceBeats(measures[i], timeSignature) * msPerBeat;
   }
-  return beats * msPerBeat;
+  return totalMs;
 }

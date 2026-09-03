@@ -200,3 +200,47 @@ MusicXML の `<wedge>`（松葉）は別機能で、文字表記の `cresc.` / `
 | `src/utils/dynamicMarkingUtils.ts` | 一覧・文字系判定の共通化・表記を `dynamicSymbol` へ委譲 |
 | `src/utils/editorContextLabels.ts` | `descresc.` の表記と日本語ラベル |
 | `src/components/Palette.tsx` | ボタン追加（演奏記号タブ） |
+
+## MusicXML 読み込みの追加（Issue #552・2026-09-02）
+
+### 問題
+
+書き出し側（`dynamicsDirectionXml`）は `<direction><direction-type><dynamics><p/>…` を
+出していたのに、読み込み側に `<dynamics>` を解釈する処理が無かった（`musicXmlImport.ts` に
+`dynamics` の文字列が1つも無い状態）。松葉（`<wedge>`）だけが復元されるため、
+**自分で書き出したファイルでも往復で文字強弱が消える**非対称が残っていた
+（2026-09-01 の運用者QA「トルコ行進曲・検聴版」で p・f が消えた）。
+
+さらに書き出し側も、追加声部（声部2以降）のループでは強弱の `<direction>` を出していなかった。
+読み込みだけ直しても声部2の往復は戻らないため、こちらも合わせて出すようにした。
+
+### 修正設計
+
+- **走査は増やさない**: 「音符の直前の `<direction>` を次の音符へ付ける」という規則は
+  松葉とまったく同じなので、既存の `attachHairpinsToVoiceEvents` を
+  `attachDirectionMarksToVoiceEvents` へ改名し、その1本の走査の中で
+  `pendingDynamics`（松葉の `pendingTypes` と同じ待ち行列）も解決する。
+  同じ歩き方の2枚目を作らない（別実装が片方だけ直る #280 型の事故を避ける）
+- **五線ごとの振り分けは既存の仕組みに乗る**: 大譜表の読み込みでは、`<direction>` を
+  自五線ぶんだけに絞る既存フィルタ（`allChildren`）を通ったあとの子要素を走査するため、
+  `<staff>` 指定に従って各段へ付く。リハーサルマーク・速度標語の「1番目の五線だけ」規則とは
+  意図的に別（強弱は段ごとに置かれるため。#552 仕様3）
+- **対応外の強弱は取り込まない**: `pp/p/mp/mf/f/ff` 以外（`sfz`・`fp`・`ppp`・
+  `<other-dynamics>` など）は最も近い値へ寄せずに捨てる。勝手に別の記号へ化けるほうが
+  害が大きいため。捨てた件数は `MusicXmlImportResult.unsupportedDynamicsCount` で返し、
+  ScorePage の読み込み通知（`importNotices`）へ
+  `describeImportedUnsupportedDynamics` として積む（#318「黙って消さない」）
+- **件数の数え方**: 声部・五線ごとの走査で数えると、五線で分けて2回読むパート（大譜表）で
+  二重に数える。そこで `countUnsupportedDynamics` が文書全体を1回だけ見る
+- **二重付与の防止**: 同じ音符に既にある値は足さない（`<dynamics>` が重複したファイル・
+  往復で二重化したデータのどちらでも1つに畳む）
+
+### 影響範囲
+
+- `utils/musicXmlImport.ts`（`readImportableDynamics` / `attachDirectionMarksToVoiceEvents` /
+  `countUnsupportedDynamics` / `MusicXmlImportResult.unsupportedDynamicsCount`）
+- `utils/musicXmlExport.ts`（追加声部のループで強弱 `<direction>` を出す）
+- `utils/scoreEditorNotices.ts`（`describeImportedUnsupportedDynamics`）
+- `components/ScorePage.tsx`（読み込み通知へ積む）
+- テスト: `utils/musicXmlDynamics.test.ts`（往復・松葉との共存・声部2・大譜表の staff 振り分け・
+  未対応記号のスキップと件数・強弱が無いファイルの回帰）

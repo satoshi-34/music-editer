@@ -50,9 +50,13 @@ export interface PlaybackSoundRuntimeSettings {
 
 export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettings = {
   // ユーザー環境では内蔵音源の準備コストが高いことがあるため、
-  // 初回はそのまま試しやすい SoundFont / FluidR3_GM を既定にする。
+  // 初回はそのまま試しやすい SoundFont を既定にする。
+  // パック名を MusyngKite にしているのは、ピアノの長い音（全音符など）の持続が
+  // FluidR3_GM より明確に良いため（運用者検聴 2026-09-01・Issue #551）。
+  // ここは「保存データがまだ無い新規環境」にだけ効く値で、
+  // すでに保存済みの設定（FluidR3_GM を選んでいる既存ユーザー）は書き換えない。
   engineMode: 'soundfont',
-  pluginName: 'FluidR3_GM',
+  pluginName: 'MusyngKite',
   previewAccidentalOnApply: true,
   swingEnabled: false,
   profile: {
@@ -95,6 +99,11 @@ function clampProfileValue(value: unknown, fallback: number): number {
 
 /**
  * localStorage から読んだ再生設定を、安全な既定値へ寄せながら正規化する。
+ *
+ * 戻り値は「知っている項目だけを詰め直した新しいオブジェクト」なので、
+ * 保存済みデータに知らない項目が残っていても自動的に捨てられる。
+ * #544 で一時的に持っていた `playbackSpeedPercent`（#588 で取り下げ）が
+ * 古い環境の localStorage に残っていても、この形のおかげで無視される。
  */
 export function sanitizePlaybackRuntimeSettings(raw: unknown): PlaybackSoundRuntimeSettings {
   if (!isRecord(raw)) {

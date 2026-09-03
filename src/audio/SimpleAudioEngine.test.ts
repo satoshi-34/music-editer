@@ -148,6 +148,55 @@ describe('SimpleAudioEngine', () => {
       expect(duration).toBeCloseTo(1.0, 5);
     });
 
+    it('テンポ変更をまたぐタイは、またいだ先のテンポで積算される（#458 round2 P2）', async () => {
+      await engine.initialize();
+      const playNoteAtTimeSpy = vi.spyOn(internals(engine), 'playNoteAtTime').mockResolvedValue(undefined);
+
+      // 1小節目 60BPM の4拍目（=1拍1.0秒）から、2小節目 120BPM の頭1拍（=0.5秒）へタイ
+      await engine.playScore([
+        {
+          bpm: 60,
+          measureBeats: 4,
+          events: [
+            { dur: '1', isRest: true, keys: ['b/4'], startBeat: 0, durationScale: 0 } as never,
+            { dur: '4', isRest: false, keys: ['c/4'], startBeat: 3, tieExtendBeatsByKey: { 'c/4': 1 } } as never,
+          ],
+        },
+        {
+          bpm: 120,
+          measureBeats: 4,
+          events: [
+            { dur: '4', isRest: false, keys: ['c/4'], startBeat: 0, tieSuppressedKeys: ['c/4'] } as never,
+          ],
+        },
+      ] as never, 60);
+
+      const tied = playNoteAtTimeSpy.mock.calls.find(([, duration]) => duration > 0.9);
+      expect(tied).toBeTruthy();
+      // 開始小節BPM一律だと 2拍×1.0秒=2.0秒。正しくは 1.0+0.5=1.5秒
+      expect(tied![1]).toBeCloseTo(1.5, 5);
+    });
+
+    it('全体テンポ60（小節bpm省略）のタイは、既定120ではなく実効60で数える（#458 round2 P2）', async () => {
+      await engine.initialize();
+      const playNoteAtTimeSpy = vi.spyOn(internals(engine), 'playNoteAtTime').mockResolvedValue(undefined);
+
+      await engine.playScore([
+        {
+          measureBeats: 4,
+          events: [
+            { dur: '4', isRest: false, keys: ['c/4'], startBeat: 0, tieExtendBeatsByKey: { 'c/4': 1 } } as never,
+            { dur: '4', isRest: false, keys: ['c/4'], startBeat: 1, tieSuppressedKeys: ['c/4'] } as never,
+          ],
+        },
+      ] as never, 60);
+
+      const tied = playNoteAtTimeSpy.mock.calls.find(([, duration]) => duration > 1.0);
+      expect(tied).toBeTruthy();
+      // 60BPM の 2拍 = 2.0秒（固定120退行だと 1.0秒になる）
+      expect(tied![1]).toBeCloseTo(2.0, 5);
+    });
+
     it('タイの継続音を止めても次の音の位置はずれない', async () => {
       await engine.initialize();
       const playNoteAtTimeSpy = vi.spyOn(internals(engine), 'playNoteAtTime').mockResolvedValue(undefined);
@@ -267,6 +316,15 @@ describe('SimpleAudioEngine', () => {
       expect(engine.durationToSeconds('4', 120, 2)).toBeCloseTo(0.875, 10);
       expect(engine.durationToSeconds('8', 120, undefined, { numNotes: 3, notesOccupied: 2 }))
         .toBeCloseTo(0.25 * (2 / 3), 10);
+    });
+
+    it('2連符(2:3)は 1.5 倍・4連符(4:3)は 0.75 倍で計算される（Issue #472）', () => {
+      // 2連符は「音が伸びる」唯一の連符。倍率が notesOccupied/numNotes に統一されているので
+      // 1未満に丸められたりせず、8分音符1個ぶんが付点8分音符と同じ長さで鳴る。
+      expect(engine.durationToSeconds('8', 120, undefined, { numNotes: 2, notesOccupied: 3 }))
+        .toBeCloseTo(0.25 * 1.5, 10);
+      expect(engine.durationToSeconds('8', 120, undefined, { numNotes: 4, notesOccupied: 3 }))
+        .toBeCloseTo(0.25 * 0.75, 10);
     });
   });
 

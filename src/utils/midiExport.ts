@@ -1,8 +1,10 @@
 // src/utils/midiExport.ts
+import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
 // SavedScoreData を MIDI ファイル（Type 1）に変換してダウンロードする。
 // 参照: https://www.midi.org/specifications-old/item/the-midi-1-0-specification
 
 import type { SavedScoreData, NoteEvent } from '../types/storage';
+import { buildExportFileName } from './exportFileName';
 import { getMeasureVoices, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 
 // 四分音符あたりのティック数（SMF 標準の 480 が一般的）
@@ -193,7 +195,8 @@ export function scoreToMidi(data: SavedScoreData): Uint8Array {
     parts: data.parts.map((p) => ({ ...p, measures: syncMeasuresPrimaryVoiceFromEvents(p.measures) })),
   };
   data = normalizedData;
-  const bpm = 120; // デフォルト BPM（スコアにグローバル BPM がないため固定）
+  // 作品テンポ（#543）があればそれを、無い旧データは従来どおり 120 を使う
+  const bpm = normalizeSavedGlobalBpm(data.globalBpm) ?? 120;
   const timeSig: [number, number] = data.timeSignature ?? [4, 4];
   const numTracks = data.parts.length + 1;
 
@@ -237,7 +240,9 @@ export function downloadMidi(data: SavedScoreData, filename?: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = (filename ?? (data.metadata.title || '楽譜')) + '.mid';
+  // 拡張子はここで付ける（Issue #507）。filename には画面のダイアログで
+  // ユーザーが編集した名前が渡ってくるので、使えない文字と拡張子の重複を落とす
+  a.download = buildExportFileName(filename ?? data.metadata.title, 'midi');
   a.click();
   URL.revokeObjectURL(url);
 }

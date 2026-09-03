@@ -3,14 +3,10 @@
 
 import type { SavedScoreData } from '../types/storage';
 import { normalizeDuplicateChordKeys } from './chordKeyUtils';
+import { buildExportFileName } from './exportFileName';
 import { validateSavedScoreData } from './storage';
 import { normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import { normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
-
-// ファイル名に使えない文字を除去するヘルパー
-function safeFileName(title: string): string {
-  return title.replace(/[\\/:*?"<>|]/g, '').trim() || 'score';
-}
 
 /**
  * JSON 文字列を FileSystemFileHandle へ書き込む（File System Access API）
@@ -95,7 +91,9 @@ export async function exportScoreToFile(
     })),
   };
   const json = JSON.stringify(normalized, null, 2);
-  const fileName = `${safeFileName(title)}.score.json`;
+  // ファイル名は共通ユーティリティで組み立てる（Issue #507）。
+  // title には画面のダイアログでユーザーが編集した名前が渡ってくる
+  const fileName = buildExportFileName(title, 'score');
 
   // File System Access API 対応チェック
   // TypeScript の標準型定義に showSaveFilePicker が含まれていないため any にキャストする

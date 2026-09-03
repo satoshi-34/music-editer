@@ -111,3 +111,15 @@
 
 - 当面の修正: 4か所の :not() リストへ両クラスを追加し、透明リセット／display:none を併記（AppCssInactiveVoiceHitPrint.test.ts で固定）。
 - 構造的対策: **画面専用要素の共通クラス `vf-screen-only`** を導入。クリック判定・選択帯・再生帯・アクティブレイヤー帯に既存クラスと併記し、@media print と .print-preview の両方で一括 `display:none`。**新しい画面専用要素には vf-screen-only を必ず付けること**（除外リストへの追記は不要になる）。既存の意味別クラスとルールは互換のため残す。
+
+## 追補: 最終ページの段配置を「上詰め」に変更（Issue #506、2026-08-31）
+
+本ドキュメントで `.print-preview` 側へ複製した最終ページの配置ルール
+（`.print-preview .print-final-page(-single) .system-stack` の `flex` / `justify-content`）は、
+`@media print` 側と同時に「他ページと同じ行グリッドのまま上詰め」へ変更した
+（`justify-content: flex-start` の1行のみ。`flex` の上書きと `-single` の例外は削除）。
+
+プレビューと実際の印刷で見た目が食い違わないよう**両方を必ず同時に変更する**という本ドキュメントの
+方針は変わっていない。変更の理由・経緯は `.claude/specs/final-barline/design.md` の「追補3」を参照。
+なお、本ドキュメント上の「プレビュー中の編集で段間隔が異常に開く」（Issue #88）で言及していた
+`space-between` による引き伸ばしは、この変更で仕組みごと無くなった。

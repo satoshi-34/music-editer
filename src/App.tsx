@@ -4,8 +4,8 @@
 //
 // 譜面画面（ScorePage）は起動時からずっとマウントしたままにして、ホームは
 // その上に重ねて表示する。こうしている理由:
-//  - 「前回の続き」を1クリックで開けるようにするため。起動時の復元は裏で
-//    済んでいるので、ホームを閉じるだけで編集を再開できる（受入条件1の
+//  - 直前まで開いていた作品を1クリックで開けるようにするため。起動時の復元は裏で
+//    済んでいるので、同じ作品を選び直しても読み直しは起きない（受入条件1の
 //    「起動→即編集の速さを悪化させない」）
 //  - 譜面画面は表示幅を実測して初期の表示倍率を決める（#ScorePageInitialZoomFit）。
 //    display:none で隠すと幅が 0 になり、倍率が狂ってしまう
@@ -16,30 +16,38 @@
 //    （削除・貼り付け・Undo 等）を各リスナーの入口で無視させる（inert は
 //    フォーカスが body にあるときの window リスナーまでは止められないため）
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import ScorePage, { type HomeActionResult, type ScorePageHomeActions } from './components/ScorePage';
-import HomeScreen, { type HomeOpenKind, type HomeResumeInfo } from './components/HomeScreen';
+import HomeScreen, { type HomeOpenKind } from './components/HomeScreen';
 import type { ScoreType, WorkSummary } from './types/storage';
 import type { ToolbarTab } from './utils/editorContextLabels';
 import { getLastOpenedWorkId, hasStoredData, listWorks } from './utils/storage';
 import { getOmrApiUrl } from './utils/omrApi';
 import { APP_VERSION } from './utils/appVersion';
+
+// 開発環境限定の定数チューニングパネル（#596）。動的 import と DEV ガードを
+// 同一関数（このモジュール評価時の三項）に置き、本番バンドルへコードごと含めない
+const DevTuningPanel = import.meta.env.DEV
+  ? lazy(() => import('./components/DevTuningPanel'))
+  : null;
 import { setHomeShown } from './utils/homeVisibility';
 import './App.css';
 
-/** ホームに出す一覧・前回の続きの材料を、保存データから読み直す */
-function readHomeSnapshot(): { works: WorkSummary[]; resume: HomeResumeInfo | null } {
+/**
+ * ホームに出す「最近使ったファイル」の材料を、保存データから読み直す。
+ * 並びは「前回開いていた作品を先頭」+「残りは更新の新しい順」（Issue #528 round1 P1）。
+ * 更新順だけに任せると、古い作品へ切り替えて編集せずに終了した場合に
+ * 「先頭 = 前回の続き」が崩れる（先頭クリックで別の作品へ切り替わってしまう）。
+ * updatedAt を開くだけで書き換える案は「更新日時」表示が嘘になるため採らない。
+ */
+function readHomeSnapshot(): { works: WorkSummary[] } {
   const works = listWorks();
-  // 「前回の続き」は起動時の復元先と同じ決め方にそろえる（記録が無ければ最新の作品）。
-  // ここがずれると、ホームに出ている作品と実際に開かれる作品が食い違う。
   const lastOpenedId = getLastOpenedWorkId();
-  const resumeWork = works.find(work => work.id === lastOpenedId) ?? works[0] ?? null;
-  return {
-    works,
-    resume: resumeWork
-      ? { workId: resumeWork.id, title: resumeWork.title, updatedAt: resumeWork.updatedAt }
-      : null,
-  };
+  if (!lastOpenedId) return { works };
+  const lastOpenedIndex = works.findIndex((w) => w.id === lastOpenedId);
+  if (lastOpenedIndex <= 0) return { works };
+  const reordered = [works[lastOpenedIndex], ...works.slice(0, lastOpenedIndex), ...works.slice(lastOpenedIndex + 1)];
+  return { works: reordered };
 }
 
 /** いま押せる「開く」導線を決める（PDF は変換APIがあるとき、旧手動保存はデータがあるときだけ） */
@@ -52,7 +60,20 @@ function resolveAvailableOpenKinds(): HomeOpenKind[] {
 
 export default function App() {
   // 起動時はホームから始める（受入条件1）。譜面画面は裏で復元を進めている
-  const [showHome, setShowHome] = useState(true);
+  const [showHome, setShowHome] = useState<boolean>(() => {
+    // dev チューニングの「反映（再読み込み）」直後だけホームを飛ばして譜面へ直帰する
+    // （#596 運用者フィードバック:「反映を押すとホームに戻る」— 調整ループの摩擦解消）。
+    // sessionStorage の一回きりフラグで、通常の起動（#528 のホーム表示）は変えない
+    if (import.meta.env.DEV) {
+      try {
+        if (window.sessionStorage.getItem('dev-tuning-skip-home') === '1') {
+          window.sessionStorage.removeItem('dev-tuning-skip-home');
+          return false;
+        }
+      } catch { /* sessionStorage が使えない環境では通常どおりホームへ */ }
+    }
+    return true;
+  });
   const homeActionsRef = useRef<ScorePageHomeActions | null>(null);
   // 操作口が入る前にホームのボタンが押された場合の持ち越し（round1 P2）。
   // 捨てると「押したのに何も起きない」無言の失敗になる（#318）。
@@ -66,7 +87,7 @@ export default function App() {
   const [homeError, setHomeError] = useState<string | null>(null);
   // busy 表示用（ref は同期判定の正本・state は描画用の写し）
   const [actionRunning, setActionRunning] = useState(false);
-  // 一覧・前回の続きはホームを開くたびに読み直す（編集して戻ってきたとき、
+  // 一覧はホームを開くたびに読み直す（編集して戻ってきたとき、
   // 最終更新日時やタイトルが古いままだと「保存されていない」と誤解させるため）
   const [snapshot, setSnapshot] = useState(() => readHomeSnapshot());
   const [availableOpenKinds, setAvailableOpenKinds] = useState<HomeOpenKind[]>(() => resolveAvailableOpenKinds());
@@ -93,7 +114,7 @@ export default function App() {
   /**
    * 譜面画面側で旧データの移行・起動時の復元が済んだとき（round1 P2）。
    * App の初期スナップショットは移行**前**に読んでいるため、単一作品時代からの
-   * 移行ユーザーではここで読み直さないと「前回の続き」「保存した作品」が空のままになる
+   * 移行ユーザーではここで読み直さないと「最近使ったファイル」が空のままになる
    */
   /** 持ち越した操作を順に実行する（操作口が入っていれば） */
   const drainPendingActions = useCallback(() => {
@@ -162,16 +183,10 @@ export default function App() {
     }
   }, []);
 
-  const handleResume = useCallback(() => {
-    // 「前回の続き」も他の操作と同じ busy 制御下に置く（round3 P2:
-    // 実行中の遷移で作品切替と復帰が競合しないように）
-    if (actionRunningRef.current) return;
-    setHomeShown(false);
-    setShowHome(false);
-  }, []);
   const handleSelectWork = useCallback((workId: string) => {
-    // いま開いている作品を選んだ場合も openWork を通す（切替処理が
-    // 「同じ作品なら何もしない」を含めて面倒を見る）
+    // いま開いている作品（＝一覧の先頭になることが多い「前回の続き」）を選んだ場合も
+    // openWork を通す。切替処理が「同じ作品なら読み直さない」を含めて面倒を見るので、
+    // 起動直後に先頭を1クリックすれば、そのまま編集へ戻れる（Issue #528 受入条件2）
     runOnScorePage(actions => actions.openWork(workId));
   }, [runOnScorePage]);
   const handleCreateNew = useCallback((scoreType: ScoreType) => {
@@ -186,6 +201,11 @@ export default function App() {
 
   return (
     <>
+      {DevTuningPanel && (
+        <Suspense fallback={null}>
+          <DevTuningPanel />
+        </Suspense>
+      )}
       {/* inert: ホーム表示中は譜面画面をフォーカス・クリック・支援技術から切り離す
           （round1 P1）。React 19 は inert を boolean 属性として扱える */}
       <div inert={showHome} data-testid="score-page-holder">
@@ -199,12 +219,10 @@ export default function App() {
       {showHome && (
         <HomeScreen
           appVersion={APP_VERSION}
-          resume={snapshot.resume}
           works={snapshot.works}
           availableOpenKinds={availableOpenKinds}
           errorMessage={homeError}
           busy={actionRunning}
-          onResume={handleResume}
           onSelectWork={handleSelectWork}
           onCreateNew={handleCreateNew}
           onOpen={handleOpen}

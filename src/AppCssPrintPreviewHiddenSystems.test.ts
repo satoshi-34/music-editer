@@ -27,9 +27,11 @@ describe('App.css: 印刷プレビューでも末尾の空段・空ページを�
     expect(css).toMatch(/\.print-preview\s+\.print-hidden-page\s*\{[^}]*display\s*:\s*none/);
   });
 
-  it('.print-preview .print-final-page 系の段下端寄せ・上揃えルールが存在する', () => {
+  // Issue #506 で「最終ページだけ段をページ全高へ引き伸ばす」下端寄せは廃止し、
+  // 他ページと同じ行グリッドの上詰めに統一した。プレビュー側にも同じ扱いが
+  // 複製されていること（印刷とプレビューで見た目が食い違わないこと）を確認する。
+  it('.print-preview .print-final-page の段配置が上詰め（flex-start）である', () => {
     const css = loadAppCss();
-    expect(css).toMatch(/\.print-preview\s+\.print-final-page\s+\.system-stack\s*\{\s*justify-content\s*:\s*space-between/);
-    expect(css).toMatch(/\.print-preview\s+\.print-final-page-single\s+\.system-stack\s*\{\s*justify-content\s*:\s*flex-start/);
+    expect(css).toMatch(/\.print-preview\s+\.print-final-page\s+\.system-stack\s*\{\s*justify-content\s*:\s*flex-start/);
   });
 });

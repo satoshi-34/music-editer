@@ -1,6 +1,11 @@
-import { Beam, StaveNote, type Tuplet } from 'vexflow';
+import { Beam, Stave, StaveNote, Tuplet } from 'vexflow';
 import { describe, expect, it } from 'vitest';
-import { createVexFlowTuplets, syncTupletBracketsWithBeams, vexFlowDotCount } from './vexFlowTimingUtils';
+import {
+  createVexFlowTuplets,
+  syncTupletBracketsWithBeams,
+  syncTupletPlacementWithNotes,
+  vexFlowDotCount,
+} from './vexFlowTimingUtils';
 
 /** 連符イベント列を作る小さなヘルパー（テストの意図を読みやすくするため） */
 function tupletEvents(id: string, count: number, numNotes: number, notesOccupied: number) {
@@ -150,5 +155,75 @@ describe('連符数字の非表示指定', () => {
     const tuplets = createVexFlowTuplets(tupletEvents('legacy', 3, 3, 2), notes);
 
     expect(tuplets[0].hideNumber).toBe(false);
+  });
+});
+
+
+// Issue #471: 連符の数字が、自分の音符から五線をまたいだ反対側へ取り残される不具合。
+// VexFlow は上下を符幹の向きだけで決めるため、加線の上に離れた高い音符（符幹下向き）では
+// 数字が五線の下へ回り、多段譜では下の段のビームと重なって読めなくなる。
+describe('連符数字の上下（五線と音符の位置関係）', () => {
+  /** 連符の置き場所（上=1 / 下=-1）。options は protected なので必要な1項目だけ覗く */
+  function locationOf(tuplet: Tuplet): number {
+    return (tuplet as unknown as { options: { location: number } }).options.location;
+  }
+
+  /** 音符を五線に載せ、描画側と同じ順序（連符 → ビーム → 置き場所の見直し）で組む */
+  function buildOnStave(keys: string[]) {
+    const stave = new Stave(10, 40, 400);
+    const notes = keys.map((key) => new StaveNote({ keys: [key], duration: '8' }));
+    notes.forEach((note) => note.setStave(stave));
+    const tuplets = createVexFlowTuplets(
+      keys.map(() => ({ tuplet: { id: 'placement', numNotes: 3, notesOccupied: 2 } })),
+      notes,
+    );
+    Beam.generateBeams(notes, { beamRests: false });
+    return { stave, notes, tuplets };
+  }
+
+  it('五線より上にしかない連符は、符幹が下向きでも数字を上へ置く', () => {
+    const { stave, notes, tuplets } = buildOnStave(['c/6', 'd/6', 'e/6']);
+
+    // 前提の確認: 高い音符なので VexFlow は符幹を下向きにし、数字も下（-1）にする
+    expect(notes[0].getStemDirection()).toBe(-1);
+    expect(locationOf(tuplets[0].tuplet)).toBe(Tuplet.LOCATION_BOTTOM);
+    expect(Math.max(...notes.flatMap((note) => note.getYs()))).toBeLessThan(stave.getYForLine(0));
+
+    syncTupletPlacementWithNotes(tuplets);
+
+    expect(locationOf(tuplets[0].tuplet)).toBe(Tuplet.LOCATION_TOP);
+  });
+
+  it('五線より下にしかない連符は、符幹が上向きでも数字を下へ置く', () => {
+    const { stave, notes, tuplets } = buildOnStave(['c/3', 'd/3', 'e/3']);
+
+    expect(notes[0].getStemDirection()).toBe(1);
+    expect(locationOf(tuplets[0].tuplet)).toBe(Tuplet.LOCATION_TOP);
+    expect(Math.min(...notes.flatMap((note) => note.getYs()))).toBeGreaterThan(stave.getYForLine(4));
+
+    syncTupletPlacementWithNotes(tuplets);
+
+    expect(locationOf(tuplets[0].tuplet)).toBe(Tuplet.LOCATION_BOTTOM);
+  });
+
+  it('五線にかかっている連符の置き場所は変えない（既存譜面の見た目を動かさない）', () => {
+    const { tuplets } = buildOnStave(['c/4', 'd/4', 'e/4']);
+    const before = locationOf(tuplets[0].tuplet);
+
+    syncTupletPlacementWithNotes(tuplets);
+
+    expect(locationOf(tuplets[0].tuplet)).toBe(before);
+  });
+
+  it('五線に紐づいていない音符では何もしない（位置を判断できないため）', () => {
+    const notes = Array.from({ length: 3 }, () => new StaveNote({ keys: ['c/6'], duration: '8' }));
+    const tuplets = createVexFlowTuplets(
+      Array.from({ length: 3 }, () => ({ tuplet: { id: 'no-stave', numNotes: 3, notesOccupied: 2 } })),
+      notes,
+    );
+    const before = locationOf(tuplets[0].tuplet);
+
+    expect(() => syncTupletPlacementWithNotes(tuplets)).not.toThrow();
+    expect(locationOf(tuplets[0].tuplet)).toBe(before);
   });
 });

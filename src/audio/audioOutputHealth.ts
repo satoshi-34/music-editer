@@ -32,6 +32,11 @@ export interface AudioOutputHealthReport {
   signalDetected: boolean | null;
   /** 診断ログ向けの一行説明 */
   reason: string;
+  /**
+   * いま音が出ているはずの出力先デバイス名（Issue #521）。
+   * 取得できない環境（API 非対応・ラベル非公開）では null。
+   */
+  outputDeviceLabel: string | null;
 }
 
 export interface CheckAudioOutputHealthOptions {
@@ -39,12 +44,69 @@ export interface CheckAudioOutputHealthOptions {
   probeMs?: number;
   /** テストから時間経過を差し替えるための待機関数 */
   wait?: (ms: number) => Promise<void>;
+  /**
+   * 出力先デバイス名の取得方法（テストから差し替えるための口）。
+   * 省略時は navigator.mediaDevices を使う。
+   */
+  resolveOutputDeviceLabel?: () => Promise<string | null>;
 }
 
 const DEFAULT_PROBE_MS = 250;
 
 function defaultWait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * いまの音声出力先デバイス名を取得する（Issue #521）。
+ *
+ * 「アプリは信号を出しているのに聞こえない」場合、残る不明点は出力先だけなので、
+ * 診断結果にデバイス名を添えられるようにする（#520 の実例: 外部モニターへ音が流れていた）。
+ *
+ * 注意: enumerateDevices のラベルはマイク権限を与えていないブラウザでは空文字になる。
+ * その場合は「取得できなかった」として null を返し、表示側は従来どおりの文面に戻す
+ * （機能劣化を出さないため。受入条件2）。
+ */
+export async function resolveAudioOutputDeviceLabel(
+  mediaDevices?: MediaDevices | null
+): Promise<string | null> {
+  const devices = mediaDevices
+    ?? (typeof navigator !== 'undefined' ? navigator.mediaDevices : null);
+  if (!devices || typeof devices.enumerateDevices !== 'function') return null;
+  try {
+    const list = await devices.enumerateDevices();
+    const outputs = list.filter((device) => device.kind === 'audiooutput');
+    if (outputs.length === 0) return null;
+    // 既定デバイス（deviceId === 'default'）が「いま鳴っている先」。**先に全出力から**
+    // 既定を選び、そのラベルが空なら null にする（round1 P2: ラベルで絞ってから探すと、
+    // 既定のラベルだけ空の環境で別デバイスを「現在の出力先」と誤表示する）
+    const preferred = outputs.find((device) => device.deviceId === 'default') ?? outputs[0];
+    return preferred.label || null;
+  } catch {
+    // 権限拒否や未対応環境で診断そのものを止めない
+    return null;
+  }
+}
+
+/** 出力先が分かっているときだけ「（出力先: 〜）」を付ける */
+function outputDeviceSuffix(label: string | null): string {
+  return label ? `（出力先: ${label}）` : '';
+}
+
+/**
+ * 「音が出ているはずなのに聞こえない」ときの次の一手（AGENTS.md「行き止まりは喋る」）。
+ * 判定が healthy でも実際に無音なら、残る原因は OS 側の出力先しかない。
+ */
+export const AUDIO_OUTPUT_CHECK_HINT =
+  '音が聞こえない場合は、パソコンの音声の出力先（メニューバーの音量→出力先）をご確認ください。';
+
+/**
+ * 画面の通知・診断ログに添える一文を作る（Issue #521）。
+ * デバイス名を取得できた場合だけ出力先を含め、取れなければヒントだけを返す。
+ */
+export function describeAudioOutputDestination(report: AudioOutputHealthReport): string {
+  const suffix = outputDeviceSuffix(report.outputDeviceLabel);
+  return suffix ? `現在の出力先: ${report.outputDeviceLabel}。${AUDIO_OUTPUT_CHECK_HINT}` : AUDIO_OUTPUT_CHECK_HINT;
 }
 
 /**
@@ -102,6 +164,12 @@ export async function checkAudioOutputHealth(
 ): Promise<AudioOutputHealthReport> {
   const probeMs = options.probeMs ?? DEFAULT_PROBE_MS;
   const wait = options.wait ?? defaultWait;
+  // 出力先デバイス名は判定そのものには使わない（表示用の補助情報）。
+  // 取得に失敗しても null のまま進めて、従来どおりの判定を続ける
+  const resolveLabel = options.resolveOutputDeviceLabel ?? (() => resolveAudioOutputDeviceLabel());
+  // 補助情報の取得失敗が判定全体を巻き込まないよう、ここでも失敗を null へ閉じる
+  //（round1 P3: 差し替え関数が reject すると report が返らず診断・自動復旧ごと省略される）
+  const outputDeviceLabel = await resolveLabel().catch(() => null);
 
   if (!context) {
     // エンジンが context を公開していない場合は判定材料が無い。
@@ -113,6 +181,8 @@ export async function checkAudioOutputHealth(
       currentTimeDelta: null,
       signalDetected: null,
       reason: 'AudioContext が取得できないため判定不能',
+      // context が無くても「どこへ出そうとしていたか」は診断の手がかりになる
+      outputDeviceLabel,
     };
   }
 
@@ -124,6 +194,7 @@ export async function checkAudioOutputHealth(
       currentTimeDelta: null,
       signalDetected: null,
       reason: `AudioContext が running ではない (state=${context.state})`,
+      outputDeviceLabel,
     };
   }
 
@@ -144,6 +215,7 @@ export async function checkAudioOutputHealth(
       currentTimeDelta: delta,
       signalDetected,
       reason: `running 表示なのに currentTime が ${probeMs}ms 進まない（レンダリング停止）`,
+      outputDeviceLabel,
     };
   }
 
@@ -155,6 +227,7 @@ export async function checkAudioOutputHealth(
       currentTimeDelta: delta,
       signalDetected,
       reason: 'currentTime は進むが Analyser プローブが無音（グラフ処理が死んでいる）',
+      outputDeviceLabel,
     };
   }
 
@@ -167,6 +240,7 @@ export async function checkAudioOutputHealth(
     reason: signalDetected === null
       ? 'currentTime は進むが Analyser プローブを実施できなかった'
       : '正常（currentTime 進行・プローブ波形あり）',
+    outputDeviceLabel,
   };
 }
 
@@ -178,6 +252,8 @@ export function formatAudioHealthReport(report: AudioOutputHealthReport): string
     `timeAdvancing=${report.timeAdvancing}`,
     `currentTimeDelta=${report.currentTimeDelta?.toFixed(4) ?? 'n/a'}`,
     `signalDetected=${report.signalDetected}`,
+    // 「healthy なのに聞こえない」報告のとき、残る不明点は出力先だけ（Issue #521）
+    `outputDevice=${report.outputDeviceLabel ?? 'n/a'}`,
     `reason=${report.reason}`,
   ].join(' / ');
 }

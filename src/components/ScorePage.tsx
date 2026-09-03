@@ -18,6 +18,7 @@ import SymbolEditor from './SymbolEditor';
 import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
 import SystemLayoutPanel from './SystemLayoutPanel';
+import SystemGapDragHandle from './SystemGapDragHandle';
 import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
@@ -33,25 +34,28 @@ import { useUiVariant } from '../hooks/useUiVariant';
 // タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
 // ツールバーのタブ行と A1 文脈バーで同じ言葉を出すため、両方がこの定数を参照する。
 import { PIANO_LAYER_OPTIONS, SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
-import { checkAudioOutputHealth, formatAudioHealthReport } from '../audio/audioOutputHealth';
+import { checkAudioOutputHealth, formatAudioHealthReport, describeAudioOutputDestination } from '../audio/audioOutputHealth';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useDevicePixelRatio } from './useDevicePixelRatio';
 import { computeScreenStrokeFloorMultiplier } from '../utils/engravingDefaults';
 import { useScoreStorage } from '../hooks/useScoreStorage';
 import { useWorkLibrary } from '../hooks/useWorkLibrary';
 import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
+import { EXPORT_FILE_TYPES, buildExportFileName, sanitizeFileNameBase, type ExportFileType } from '../utils/exportFileName';
 import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
 import { resolveFreeTextAnnotation } from '../utils/freeTextUtils';
 import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, TITLE_FONT_SIZE_DEFAULT, TITLE_FONT_SIZE_MAX, TITLE_FONT_SIZE_MIN, TITLE_FONT_SIZE_STEP, ensureTitleFontLoaded, normalizeTitleFontSize, normalizeTitleFontWeight, resolveTitleFontOption, titleBlockStyleVars, waitForTitleFontReady } from '../utils/titleFontOptions';
 import type { TitleFontWeight } from '../utils/titleFontOptions';
 import HelpPanel from './HelpPanel';
 import { downloadMusicXml } from '../utils/musicXmlExport';
-import { parseMusicXml } from '../utils/musicXmlImport';
+import { parseMusicXmlWithDefaults } from '../utils/musicXmlImport';
+import { SoundFontLoadAbortedError } from '../audio/SoundFontEngine';
 import { downloadMidi } from '../utils/midiExport';
 import { useTempoStorage } from '../hooks/useTempoStorage';
 import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
+import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
 import type {
   CustomSymbolDef,
   InstrumentBracketGroup,
@@ -96,6 +100,9 @@ import { transposeMeasuresForDisplay } from '../utils/displayTransposeUtils';
 import { instrumentLabelAreaWidthForScore } from '../utils/instrumentLabelUtils';
 import {
   planEffectiveMeasuresPerSystem,
+  fitNotationSizeMultiplier,
+  normalizeNotationSizeMultiplier,
+  normalizePageMargins,
   MEASURE_WIDTH_EVENNESS,
   SCORE_LAYOUT_RENDER_SCALE,
   MIN_MEASURE_CONTENT_WIDTH,
@@ -158,6 +165,12 @@ import {
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
+import { resolveScoreMeasureBpms } from '../utils/tempoPlaybackUtils';
+import {
+  DEFAULT_PLAYBACK_SPEED_PERCENT,
+  applyPlaybackSpeedToBpm,
+  applyPlaybackSpeedToBpms,
+} from '../audio/playbackSpeed';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, INSTRUMENT_NAME_MAX_LENGTH, resolveInstrumentPartLabels, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
 import type { ClefType } from './clefUtils';
@@ -165,6 +178,7 @@ import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRe
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
 import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildTiePlaybackEventKey, buildTiePlaybackPlan } from '../utils/tiePlaybackUtils';
+import { buildPedalPlaybackEventKey, buildPedalPlaybackPlans } from '../utils/pedalPlaybackUtils';
 import { expandTrillForPlayback } from '../utils/ornamentPlaybackUtils';
 import {
   canUseTimeSignatureSymbol,
@@ -174,7 +188,7 @@ import {
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber, type PlaybackHighlightPartSource, type PlaybackHighlightTarget, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature, TimeSignatureStyle } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
@@ -184,7 +198,10 @@ import {
   describeClearedBeatRange,
   describeClearedMeasures,
   describePlaybackFromMeasure,
+  describePlaybackFromMeasureNumber,
+  describePlaybackStartMeasureRejected,
   describeHomeActionBlocked,
+  describeNotationSizeFitSuggestion,
   describeLegacyImportResult,
   describeMxlExtractFailed,
   describeOmrConvertFailed,
@@ -199,9 +216,15 @@ import {
   notifyScoreEdit,
   describePageSizeChanged,
   describeImportedClefNormalized,
+  describeImportedUnsupportedDynamics,
+  describeImportedNotationSize,
+  describeImportedNotationSizeShrunk,
+  describeImportedPageSizeRounded,
   requestScoreSelectionClear,
   type ScoreActiveVoiceChangeDetail,
   type ScoreEditNoticeDetail,
+  describeAudioEngineRestarted,
+  describeAudioStillSilent,
 } from '../utils/scoreEditorNotices';
 import {
   claimStorageLocationNotice,
@@ -225,6 +248,15 @@ import {
 } from '../utils/pageSize';
 import { ignoreWhenHomeShown } from '../utils/homeVisibility';
 import {
+  NOTATION_SIZE_KEY,
+  PAGE_MARGIN_BOTTOM_KEY,
+  PAGE_MARGIN_SIDE_KEY,
+  PAGE_MARGIN_TOP_KEY,
+  PAGE_MARGIN_VERTICAL_LEGACY_KEY,
+  readPersonalNotationSizeSetting,
+  readPersonalPageMarginSettings,
+} from '../utils/personalLayoutSettings';
+import {
   TOOLBAR_PLACEMENT_OPTIONS,
   clampDropdownMenuTop,
   loadStoredToolbarPlacement,
@@ -235,7 +267,7 @@ import {
 } from '../utils/toolbarPlacement';
 
 type PageSpec = { systems: number; systemRanges: SystemMeasureRange[] };
-type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType };
+type PlaybackPartSource = { measures: MeasureData[]; instrument?: InstrumentType; pedalGroup?: string };
 const PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY = 'playback-sound-runtime-settings';
 
 /**
@@ -287,7 +319,6 @@ const VIEW_ZOOM_KEY = 'score-view-zoom';
 // これは画面表示だけでなく印刷結果や段組み（1段に入る小節数）にも影響する。
 // 未保存時の既定値は楽譜種別により異なる（Issue #49、resolveDefaultLayoutForScoreType参照）:
 // 単旋律・ピアノ=1.5、弦楽四重奏・編成譜=1（従来どおり）。
-const NOTATION_SIZE_KEY = 'score-notation-size';
 // 音符の大きさスライダーが取りうる倍率の範囲（0.8〜2.0）。
 // スライダーの min/max、state 初期化時のクランプ、maxSystemsPerPage の動的計算で
 // 同じ範囲を使うため、値のズレが起きないよう定数化しておく（NOTATION_SIZE_MULTIPLIER_MIN/MAX は
@@ -297,7 +328,6 @@ const NOTATION_SIZE_KEY = 'score-notation-size';
 // CSS 側（.print-page の padding）へはここで作る値を CSS カスタムプロパティとして渡す
 // （CSSとJSでの二重定義を避ける）。既定値 14mm は従来の固定 padding と同じにし、
 // スライダーを一度も触らなければ見た目が変わらないようにする。
-const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
 // 「ページ余白（上）」「ページ余白（下）」のユーザー設定（レイアウトタブのスライダー、各8〜25mm）。
 // 以前は「余白(上下)」1本のスライダーで、上 padding の値をそのまま使い、下 padding は
 // 常に「上 − 2mm」を保つ仕様だった（従来の固定値が 上14mm/下12mm だったため）。
@@ -305,9 +335,8 @@ const PAGE_MARGIN_SIDE_KEY = 'score-page-margin-side';
 // 上14mm/下12mmを保つことで、初回表示時の見た目を変えない。
 // 旧キー（score-page-margin-vertical）に保存済みの値がある場合は、後方互換として
 // 旧仕様と同じ計算（上=旧値、下=旧値-2mm）で新キーの初期値へ引き継ぐ。
-const PAGE_MARGIN_VERTICAL_LEGACY_KEY = 'score-page-margin-vertical';
-const PAGE_MARGIN_TOP_KEY = 'score-page-margin-top';
-const PAGE_MARGIN_BOTTOM_KEY = 'score-page-margin-bottom';
+
+
 // 「タイトル余白（上）」「タイトル余白（下）」のユーザー設定（レイアウトタブのスライダー、
 // 各0〜30mm、Issue #103）。タイトルページ（1ページ目）だけに効く追加余白で、上記の
 // 「ページ余白（上/下）」（全ページ共通のページ全体の余白）とは別軸の設定。
@@ -507,6 +536,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // onLibraryReady は初期化 effect（依存: 空）から呼ぶため ref 経由で最新を参照する
   const onLibraryReadyRef = useRef(onLibraryReady);
   onLibraryReadyRef.current = onLibraryReady;
+  // 描画側の段（パート）の並び。再生ハイライト（#411）が「この音符は何段目か」を
+  // 引くために使う。layoutParts の定義は handlePlay より後ろにあるため、
+  // 依存配列へ直接書くと初期化前参照になる。ref 経由で最新を渡す
+  const layoutPartsRef = useRef<MeasureLayoutPartContext[]>([]);
   // onHomeActionsReady の「初回だけ」判定（round3 P2）
   const homeActionsReadyNotifiedRef = useRef(false);
   // 適用中のUI案（Issue #405 段1）。URLの `?ui=a1|a2|current` で切り替わり、
@@ -583,8 +616,18 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // ConfirmDialog に描かせる。null のときはダイアログを出さない。
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
-    /** OK が押されたときに実行する処理（非同期でもよい） */
-    onConfirm: () => void | Promise<void>;
+    /** ダイアログの説明（スクリーンリーダー向け） */
+    ariaLabel?: string;
+    /** 実行ボタンの文言 */
+    confirmLabel?: string;
+    /** 入力欄つきで開くときの初期値（書き出しファイル名など。Issue #507） */
+    inputDefaultValue?: string;
+    /** 入力欄のラベル */
+    inputLabel?: string;
+    /** 入力欄の右に固定で見せる文字（拡張子） */
+    inputSuffix?: string;
+    /** OK が押されたときに実行する処理（非同期でもよい。入力欄つきなら入力値が渡る） */
+    onConfirm: (inputValue: string) => void | Promise<void>;
   } | null>(null);
   // フィードバックボタン（Issue #91）の結果通知。成功は数秒で消えるが、
   // クリップボード書き込み失敗・ポップアップブロックは見落とされると再試行されないため
@@ -780,10 +823,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       kind === 'success' ? 3000 : 10000
     );
   }, []);
-  // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける
+  // アンマウント後に setState が走らないよう、消し忘れたタイマーを片付ける。
+  // テスト環境では teardown 後に発火したタイマーが未処理例外になり、全テスト緑でも
+  // exit 1 になる（既知の CI フレーク）。通知系タイマー ref を増やしたら必ずここにも足す。
   useEffect(() => () => {
     if (fileSaveWarningTimerRef.current) clearTimeout(fileSaveWarningTimerRef.current);
     if (exportStatusTimerRef.current) clearTimeout(exportStatusTimerRef.current);
+    if (feedbackNoticeTimerRef.current) clearTimeout(feedbackNoticeTimerRef.current);
+    if (editNoticeTimerRef.current) clearTimeout(editNoticeTimerRef.current);
+    if (restoreNoticeTimerRef.current) clearTimeout(restoreNoticeTimerRef.current);
   }, []);
   const { tempoSettings, setBPM, setTimeSignature } = useTempoStorage();
   const scoreTimeSignature = normalizeTimeSignature(tempoSettings.timeSignature);
@@ -915,7 +963,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const [audioHealthNotice, setAudioHealthNotice] = useState<string | null>(null);
   // 最後に自動復旧（エンジン再作成）した時刻。クールダウン判定に使う
   const lastSilentRecoveryAtRef = useRef(0);
-  const [currentPosition, setCurrentPosition] = useState<{ measureIndex: number; beatPosition: number; noteIndex: number }>({
+  // 再生位置。targets は「その瞬間に鳴っている全パート・全声部の音符」（Issue #411）で、
+  // 譜面のハイライトはこれを見て帯を出す。位置を 0 に戻す既存の経路では
+  // targets が付かない（= 帯なし）ので、停止時に光ったままになることはない
+  const [currentPosition, setCurrentPosition] = useState<{
+    measureIndex: number;
+    beatPosition: number;
+    noteIndex: number;
+    targets?: PlaybackHighlightTarget[];
+  }>({
     measureIndex: 0, beatPosition: 0, noteIndex: 0
   });
   const [currentInstrument, setCurrentInstrument] = useState<InstrumentType>(InstrumentType.PIANO);
@@ -933,6 +989,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       return DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS;
     }
   });
+  // 再生速度（%）の UI と設定は #588 で取り下げた（「テンポのみでいい」という運用者裁定）。
+  // 倍率を掛ける配管（applyPlaybackSpeedToBpm(s)・実効テンポ系）は将来復活させる場合の
+  // 土台として残すことになっているので、入口をここ1か所で等倍（100%）に固定している。
+  // ＝以降の再生経路は #544 以前とまったく同じ値で動く。
+  const playbackSpeedPercent = DEFAULT_PLAYBACK_SPEED_PERCENT;
   // 選択中の方式と実際に鳴っている方式がずれることがあるため、
   // UI 用に「現在の実動作モード」を分けて持つ。
   const [activeSoundEngineMode, setActiveSoundEngineMode] = useState<SoundEngineMode>(
@@ -1035,6 +1096,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const preferredEngine = await prepareAudioEngine();
       return await action(preferredEngine);
     } catch (error) {
+      // 停止（stopAll）による読み込み中断は「失敗」ではない（#525 round5 P1）。
+      // フォールバックすると、停止したはずの再生が内蔵音源で鳴り始めてしまう。
+      // ユーザーの停止意図どおり、静かに終わる
+      if (error instanceof SoundFontLoadAbortedError) {
+        console.info('[ScorePage] 停止により再生要求を中断しました');
+        return undefined as T;
+      }
       // 実ブラウザでは、SoundFont 失敗だけでなく
       // 既存の built-in AudioContext が不安定化して無音になることもある。
       // そのため「一度失敗したら、新しい built-in エンジンで再試行する」
@@ -1077,7 +1145,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         return;
       }
       const timeoutId = setTimeout(() => {
-        setCurrentPosition(item.position);
+        // 位置と「鳴っている音符の一覧」は必ず一緒に更新する（別々の state にすると
+        // 片方だけ先に反映された瞬間、別の拍の音符が光る）
+        setCurrentPosition({ ...item.position, targets: item.targets });
       }, item.atMs - fromElapsedMs);
       positionTimeoutsRef.current.push(timeoutId);
     });
@@ -1095,6 +1165,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     clearPositionTimers();
   }, [clearPositionTimers]);
 
+  // 再生中にアンマウントされても、終了予約・位置表示予約を残さない
+  // （残すとテスト teardown 後に発火して未処理例外になる。通知系タイマーと同じ問題）
+  useEffect(() => () => {
+    clearPlaybackTimer();
+  }, [clearPlaybackTimer]);
+
   const resetPlaybackClock = useCallback(() => {
     // 3 つの ref は「いつ始まったか」「あと何ミリ秒あるか」「全体で何ミリ秒か」のセット。
     // 一部だけ残すと pause/resume 後の位置計算が狂うため、初期化は同時に行う。
@@ -1108,6 +1184,17 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // setTimeout 越しのヘルスチェックが「いまの」再生状態を読めるように同期する
     playbackStateRef.current = playbackState;
   }, [playbackState]);
+
+  // 開始済みの無音検知はタイマー解除では止められない（コールバックが約250ms以上の
+  // 非同期チェックを実行中のため）。アンマウント後に setState・recreateAudioEngine が
+  // 走らないよう、await 後にこのフラグで打ち切る（#546 round1 P2）
+  const scorePageUnmountedRef = useRef(false);
+  useEffect(() => {
+    // StrictMode の「実行→片付け→再実行」では cleanup 後も再マウントされるため、
+    // setup で必ず false へ戻す（round2 P2: 戻さないと replay 後の検知が全部捨てられる）
+    scorePageUnmountedRef.current = false;
+    return () => { scorePageUnmountedRef.current = true; };
+  }, []);
 
   const runOutputHealthCheck = useCallback(async (engine: PlaybackEngine) => {
     try {
@@ -1124,6 +1211,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // Safari の silent failure（issue #14）は例外が出ないため、
       // 再生開始後に「音が出ているはずの状態か」を能動的に確認する。
       const report = await checkAudioOutputHealth(engine.getAudioContext?.() ?? null);
+      if (scorePageUnmountedRef.current) return;
 
       // プローブ中（約250ms）に一時停止された場合も同様に無視する
       if (isPausedByUser()) {
@@ -1136,6 +1224,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       console.info('[ScorePage] 出力ヘルスチェック:', formatAudioHealthReport(report));
 
       if (report.verdict === 'healthy') {
+        // 判定は正常なのに「聞こえない」場合、残る原因は OS 側の出力先しかない（Issue #521）。
+        // 画面に常時表示を足さない方針なので、次の一手は診断ログにだけ残す
+        console.info('[ScorePage] 出力先:', describeAudioOutputDestination(report));
         setAudioHealthNotice(null);
         return;
       }
@@ -1152,7 +1243,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       if (now - lastSilentRecoveryAtRef.current < SILENT_RECOVERY_COOLDOWN_MS) {
         // 直前に自動復旧したばかりで再発しているなら、作り直しを繰り返しても直らない。
         // ループを避けて手動の復旧手段へ誘導する。
-        setAudioHealthNotice('音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。');
+        setAudioHealthNotice(describeAudioStillSilent(describeAudioOutputDestination(report)));
         return;
       }
       lastSilentRecoveryAtRef.current = now;
@@ -1164,18 +1255,26 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 音源方式などのユーザー設定は維持したまま、エンジン（AudioContext）だけ作り直す。
       // 設定ごと既定値に戻したいときは従来どおり「音声復旧」ボタンを使う。
       recreateAudioEngine();
-      setAudioHealthNotice('無音状態を検知したため、音声エンジンを自動で再起動しました。もう一度再生をお試しください。');
+      setAudioHealthNotice(describeAudioEngineRestarted(describeAudioOutputDestination(report)));
     } catch (error) {
       // 検知自体の失敗で再生機能を巻き込まない
       console.warn('[ScorePage] 無音ヘルスチェックに失敗しました（無視します）:', error);
     }
   }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock]);
 
+  // 無音検知の予約もタイマー ref で持ち、アンマウント時に必ず片付ける
+  // （追跡なしの setTimeout だとテスト teardown 後に発火して未処理例外になる）
+  const outputHealthCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleOutputHealthCheck = useCallback((engine: PlaybackEngine) => {
-    window.setTimeout(() => {
+    if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
+    outputHealthCheckTimerRef.current = setTimeout(() => {
+      outputHealthCheckTimerRef.current = null;
       void runOutputHealthCheck(engine);
     }, SILENT_FAILURE_CHECK_DELAY_MS);
   }, [runOutputHealthCheck]);
+  useEffect(() => () => {
+    if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
+  }, []);
 
   // スコアタイプ切り替え時に左手データを初期化
   const handleScoreTypeChange = useCallback((newType: ScoreType) => {
@@ -1411,13 +1510,21 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // そこで同じ編集ウィンドウを「名前（正式名・略称）だけ編集できるモード」で開く（Issue #448）。
   const isNameOnlyInstrumentationEditor = scoreType !== 'ensemble';
 
-  const handlePlay = useCallback(async () => {
+  /**
+   * 再生開始。options.startMeasureIndex を渡すと、その小節（0 始まり）から鳴らす。
+   * 小節番号を指定した途中再生（#545）はこの引数だけを使い、選択起点の途中再生（#108）と
+   * 同じ展開・スライスの経路を共用する（同じロジックの2枚目を作らない）。
+   */
+  const handlePlay = useCallback(async (options?: { startMeasureIndex?: number }) => {
+    // 小節番号の指定があるときは「その小節から鳴らし直す」意味なので、
+    // 一時停止からの再開（resume）ではなく通常の開始経路へ進める。
+    const explicitStartMeasure = options?.startMeasureIndex;
     // 再生は「編集の手を止めて聴く」モードへの切り替えなので、譜面の選択も手放す（Issue #238）。
     // 再生中は音を聴きながらキーを触りがちで、選択が残っていると Delete が譜面へ届いてしまう。
     // 一時停止からの再開もモードの切り替わりなので、分岐の手前でまとめて解除する。
     requestScoreSelectionClear();
     try {
-      if (playbackState === 'paused') {
+      if (playbackState === 'paused' && explicitStartMeasure == null) {
         // paused からの再生は「最初から」ではなく AudioContext の resume。
         await getAudioEngine().resume();
         setPlaybackState('playing');
@@ -1441,6 +1548,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       resetPlaybackClock();
 
       const parts: PlaybackPartSource[] = [];
+      // テンポ（数値・速度標語）はスコア共通の属性なので、パート譜表示で再生対象を
+      // 絞っても**全段から**解決する（#458 round2 P2）。こちらは絞り込み前の全パート
+      const tempoSourceParts: MeasureData[][] = [];
       // scoreType ごとに保持形式が違うので、
       // ここで「再生したいパート配列」へいったん正規化してから先へ渡す。
       // パート譜表示中（isPartExtractionActive）は、選んだパート以外を除外して
@@ -1448,6 +1558,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       if (scoreType === 'quartet') {
         const quartetInstrumentation = getDefaultInstrumentationForScoreType('quartet');
         quartetParts.forEach((part, partIndex) => {
+          if (part && part.length > 0) tempoSourceParts.push(part);
           if (isPartExtractionActive && partExtractionSelection?.index !== partIndex) {
             return;
           }
@@ -1455,11 +1566,19 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             parts.push({
               measures: part,
               instrument: quartetInstrumentation.parts[partIndex]?.playbackInstrument,
+              pedalGroup: `quartet-${partIndex}`,
             });
           }
         });
       } else if (scoreType === 'ensemble') {
         ensembleParts.forEach((part, partIndex) => {
+          if (part && part.length > 0) tempoSourceParts.push(part);
+          {
+            const secondForTempo = instrumentation.parts[partIndex]?.staffCount === 2
+              ? ensembleSecondStaffParts[partIndex]
+              : undefined;
+            if (secondForTempo && secondForTempo.length > 0) tempoSourceParts.push(secondForTempo);
+          }
           if (isPartExtractionActive && partExtractionSelection?.index !== partIndex) {
             return;
           }
@@ -1468,6 +1587,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             parts.push({
               measures: part,
               instrument: instrumentPart?.playbackInstrument,
+              pedalGroup: `ensemble-${partIndex}`,
             });
           }
           // 大譜表（staffCount:2）パートの2段目（低音部）も同じ音色で再生対象に含める。
@@ -1477,23 +1597,32 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
               parts.push({
                 measures: secondPart,
                 instrument: instrumentPart.playbackInstrument,
+                // ペダルは「同じ楽器の大譜表2段」でだけ共有する（同じ音色の別パートとは
+                // 共有しない・#549 round1 P2）。同じ partIndex のグループへまとめる
+                pedalGroup: `ensemble-${partIndex}`,
               });
             }
           }
         });
       } else if (scoreType === 'piano') {
-        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: InstrumentType.PIANO });
-        if (leftHandData && leftHandData.length > 0) parts.push({ measures: leftHandData, instrument: InstrumentType.PIANO });
+        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: InstrumentType.PIANO, pedalGroup: 'piano' });
+        if (leftHandData && leftHandData.length > 0) parts.push({ measures: leftHandData, instrument: InstrumentType.PIANO, pedalGroup: 'piano' });
+        if (rightHandData && rightHandData.length > 0) tempoSourceParts.push(rightHandData);
+        if (leftHandData && leftHandData.length > 0) tempoSourceParts.push(leftHandData);
       } else {
-        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: currentInstrument });
+        if (rightHandData && rightHandData.length > 0) parts.push({ measures: rightHandData, instrument: currentInstrument, pedalGroup: 'single' });
+        if (rightHandData && rightHandData.length > 0) tempoSourceParts.push(rightHandData);
       }
 
       // 途中再生（#108）: 小節を選択したまま再生すると、その小節から始める。
       // リピートがある譜面では「その小節の最初の出現」から（findPlaybackStartExpandedIndex）。
       // パート譜表示中は総譜で選んだ選択が画面に見えない（選択UIが無い）ため、
       // 見えない選択で途中再生になって混乱しないよう対象外にする（Codex round1 P2）
-      const startFromSelection = !isPartExtractionActive && selectedMeasures != null;
-      const startMeasure = startFromSelection ? selectedMeasures.start : 0;
+      // 小節番号の指定（#545）があればそれが最優先。無ければ従来どおり選択起点を見る
+      const startFromSelection = explicitStartMeasure == null
+        && !isPartExtractionActive && selectedMeasures != null;
+      const startMeasure = explicitStartMeasure
+        ?? (startFromSelection && selectedMeasures ? selectedMeasures.start : 0);
 
       await runWithPlaybackFallback(async (audioEngine) => {
         if (parts.length > 0) {
@@ -1519,15 +1648,56 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 32分へ割るとエンジンのスウィング判定（8分のみ）から外れ、
           // 実音とハイライトの位置がずれるため（裏拍の 2/3 シフトが消える）
           const swingActive = soundRuntimeSettings.swingEnabled && !isCompoundTimeSignature(scoreTimeSignature);
+          // 各パートのリピート展開を先に済ませ、**スコア共通のテンポ列**を1回だけ解決する
+          // （#458 round1 P1: パートごとに解決すると、標語を置いた段だけ速くなり同期が崩れる）。
+          // 解決元は再生対象（parts）ではなく**絞り込み前の全段**（round2 P2:
+          // パート譜表示中でも他段の数値テンポ・標語を引き継ぐ。展開は再生と同じ
+          // 参照順にそろえる）
+          const expandedPerPart = parts.map((partSource, partIndex) =>
+            partIndex === 0
+              ? referenceExpanded
+              : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures));
+          // 譜面から解決した「小節ごとの本来のテンポ」。ここまでは再生速度と無関係で、
+          // 書き出し・保存に使う値と同じ意味を持つ
+          const notatedMeasureBpms = resolveScoreMeasureBpms(
+            tempoSourceParts.map(partMeasures =>
+              expandMeasuresForPlaybackWithReference(referenceMeasures, partMeasures)
+                .map(item => item.measure)),
+            tempoSettings.bpm,
+          );
+          // 再生速度（%）の倍率はここで**一度だけ**掛ける（#544）。以降の実音・ハイライト・
+          // 終了タイマー・タイの実時間はすべてこの列と実効テンポを使うので、
+          // 「音だけ半分の速さでハイライトは元の速さ」というズレが起きない。
+          // 現在は #588 の取り下げにより倍率が常に 100%（等倍）なので、
+          // この行は notatedMeasureBpms をそのまま写すだけの通り道になっている
+          const scoreMeasureBpms = applyPlaybackSpeedToBpms(notatedMeasureBpms, playbackSpeedPercent);
+          // 小節ごとの指定が無いときにエンジン・終了タイマーが使う基準テンポにも同じ倍率を掛ける
+          const effectiveGlobalBpm = applyPlaybackSpeedToBpm(tempoSettings.bpm, playbackSpeedPercent);
+          // ペダル記号（Ped … ✱）は「踏んでいる間だけ響きを保持する」ので、再生では
+          // 区間内で鳴った音の**鳴り終わりだけ**を解除位置まで延ばす（#549）。
+          // ペダルは楽器に1つなので、大譜表の左手側に置いた記号でも右手の音が伸びるよう、
+          // 同じ楽器のパートをまとめて解決する。強弱・テンポと同じく**切る前の全列**で
+          // 解決し、途中再生でも開始位置より前で踏まれたペダルを引き継ぐ
+          const pedalPlans = buildPedalPlaybackPlans(
+            parts.map((partSource, partIndex) => ({
+              // 共有単位は「1つの楽器に属する段」だけ（round1 P2: 音色（InstrumentType）で
+              // まとめると、同音色の別楽器＝編成のピアノ2台などへペダルが漏れる）
+              instrumentKey: partSource.pedalGroup ?? `part-${partIndex}`,
+              // タイ継続先の解決（round2 P1）に元小節番号が要るため、展開項目ごと渡す
+              measures: expandedPerPart[partIndex].map(item => ({
+                measure: item.measure,
+                sourceMeasureIndex: item.sourceMeasureIndex,
+              })),
+            })),
+            getMeasureBeats(scoreTimeSignature),
+          );
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
             // ここで「展開後の再生順」と「各音符のベロシティ」を一緒に作って渡す。
             // 多段譜では各段が別々に repeat 情報を持つと再生順が分かれやすいので、
             // 先頭パートの反復順を基準に他パートも同じ順番へそろえる。
-            const expandedMeasuresFull = partIndex === 0
-              ? referenceExpanded
-              : expandMeasuresForPlaybackWithReference(referenceMeasures, partSource.measures);
+            const expandedMeasuresFull = expandedPerPart[partIndex];
             // 途中再生では、展開後の再生順を開始位置で切ってからエンジンへ渡す。
             // 全パートとも先頭パートの反復順にそろえてあるため、同じ位置で切れば拍が一致する。
             // 強弱（絶対強弱と cresc./dim. の傾斜）は**切る前の全列**で解決し、キーの
@@ -1535,6 +1705,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
             const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
+            // テンポ列はスコア共通（上で1回だけ解決済み・#458 round1 P1）。
+            // 強弱と同じく**切る前の全列**で解決してあるので、途中再生でも
+            // 開始位置より前の標語・テンポ指定を引き継いだ状態で効く
+            const measureBpms = scoreMeasureBpms;
             // タイ（同じ高さの音を結んで1音として伸ばす記号）を再生へ反映する計画。
             // 強弱と違って**切ったあとの列**で解決する: 開始音が開始位置より前にあって
             // 切り落とされた継続音は、抑制せずそのまま鳴らしたい（途中再生で音が消えないため）。
@@ -1549,6 +1723,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 // 再生エンジン側が 3/8 や 6/8 の小節長を正しく保てるよう、
                 // 各小節の「本来ここまで進むべき拍数」を明示して渡す。
                 measureBeats: getMeasureBeats(scoreTimeSignature),
+                // この小節を鳴らすテンポ。元の measure.bpm（数値の途中テンポ変更のみ）を
+                // 解決済みの値で上書きする。標語だけが置かれた小節や、指定が無くて前の
+                // テンポを引き継ぐ小節にも、ここで必ず値が入る（#458）
+                bpm: measureBpms[expandedMeasureIndex + startExpandedIndex],
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
                 events: flattenMeasureForPlayback(item.measure).flatMap((event, eventIndex) => {
@@ -1564,6 +1742,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   // 畳んだあとの eventIndex は複数声部で並べ替えられているため使えない。
                   const tieAdjustment = tiePlan.get(
                     buildTiePlaybackEventKey(expandedMeasureIndex, event.voiceIndex, event.eventIndex)
+                  );
+                  // ペダルの延長は「切る前の全列」で解決してあるので、開始位置ぶんずらして引く。
+                  const pedalExtendBeatsByKey = pedalPlans[partIndex]?.get(
+                    buildPedalPlaybackEventKey(
+                      expandedMeasureIndex + startExpandedIndex,
+                      event.voiceIndex,
+                      event.eventIndex,
+                    )
                   );
                   const playbackEvent = {
                     ...event,
@@ -1583,22 +1769,60 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                     tieSuppressedKeys: tieAdjustment && tieAdjustment.suppressedKeys.length > 0
                       ? tieAdjustment.suppressedKeys
                       : undefined,
+                    // ペダル区間の外や記号の無い譜面では省略して、古い挙動と完全に同じにする。
+                    pedalExtendBeatsByKey: pedalExtendBeatsByKey && Object.keys(pedalExtendBeatsByKey).length > 0
+                      ? pedalExtendBeatsByKey
+                      : undefined,
                   };
                   // トリルは主音と上隣接音（その小節の調号に沿う）の交互連打へ展開して鳴らす。
                   // トリル以外・展開できない形・スウィング対象の音はそのまま1イベントで返る（挙動不変）。
                   // タイの延長・抑制が付いた音は展開しない（タイで伸びた長さの中で
                   // 交互連打を組む対応は別課題。展開するとタイ情報がサブ音符へ複製され拍が壊れる）
                   if (tieAdjustment) return [playbackEvent];
-                  return expandTrillForPlayback(
+                  const expandedEvents = expandTrillForPlayback(
                     playbackEvent,
                     effectiveKeySignatures[expandedMeasureIndex + startExpandedIndex] ?? keySignature,
                     { swingActive },
                   );
+                  // トリルは1つの音符を細かい連打へ割るため、そのままだとサブ音符ごとに
+                  // 「音価の後ろへ N 拍」が足されて鳴り終わりがばらける。
+                  // タイを展開しないのと同じ理由で、割られた音にはペダル延長を付けない
+                  if (expandedEvents.length <= 1) return expandedEvents;
+                  return expandedEvents.map((subEvent) => ({ ...subEvent, pedalExtendBeatsByKey: undefined }));
                 })
               }))
             };
           });
-          await audioEngine.playParts(partObjs, tempoSettings.bpm);
+          // 位置表示（PlaybackHighlight含む）は先頭パート（referenceMeasures）の展開順を基準に進める。
+          // 他パートの反復順もこれに合わせているため、表示の基準としてズレが出にくい。
+          // ハイライトは「鳴っている全パート・全声部」に出す（#411）。
+          // 再生対象の各パートが描画側の何段目かは、小節配列の同一性で引く
+          // （layoutParts と再生の parts は同じ配列（rightHandData 等）を指しているため、
+          // 譜種ごとの並べ替え規則をここへ書き写さずに対応が取れる）。
+          // 引けなかったパートは段が特定できないので対象から外す（別の段の音符を
+          // 光らせるより、光らない方が誤解が少ない）
+          const highlightParts: PlaybackHighlightPartSource[] = parts
+            .map((partSource) => ({
+              partIndex: layoutPartsRef.current.findIndex((layoutPart) => layoutPart.measures === partSource.measures),
+              measures: partSource.measures,
+            }))
+            .filter((source) => source.partIndex >= 0);
+          positionTimelineRef.current = buildPlaybackPositionTimeline(
+            referenceMeasures,
+            effectiveGlobalBpm,
+            scoreTimeSignature,
+            soundRuntimeSettings.swingEnabled,
+            startExpandedIndex,
+            // 実音と同じスコア共通テンポ列を共有する（#458 round2 P1:
+            // タイムライン内部で先頭パートから再解決すると、他段だけに置かれた
+            // 標語がハイライトに効かず、実音と累積的にずれる）
+            scoreMeasureBpms,
+            highlightParts
+          );
+          // タイムラインは playParts の**前**に作る（#579 round1 P2: 実音の予約後に
+          // 同期計算すると、計算時間ぶんハイライトの0ms起点が遅れて帯が終始ずれる）
+
+          await audioEngine.playParts(partObjs, effectiveGlobalBpm);
 
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
@@ -1609,28 +1833,21 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // のため、拍子長を下限に進む実音・タイムラインより早く stopped になっていた
           const totalDuration = Math.max(
             ...partObjs.map(partObj =>
-              calculateExpandedPlaybackDurationMs(partObj.measures, tempoSettings.bpm, scoreTimeSignature) / 1000)
+              calculateExpandedPlaybackDurationMs(partObj.measures, effectiveGlobalBpm, scoreTimeSignature) / 1000)
           );
           setPlaybackState('playing');
           clearPlaybackTimer();
           remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
           totalPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
           playbackStartedAtRef.current = Date.now();
-          // 位置表示（PlaybackHighlight含む）は先頭パート（referenceMeasures）の展開順を基準に進める。
-          // 他パートの反復順もこれに合わせているため、表示の基準としてズレが出にくい。
-          positionTimelineRef.current = buildPlaybackPositionTimeline(
-            referenceMeasures,
-            tempoSettings.bpm,
-            scoreTimeSignature,
-            soundRuntimeSettings.swingEnabled,
-            startExpandedIndex
-          );
           // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
           // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
           // なので通知する（Codex round1 P3）
-          if (startFromSelection) {
+          if (startFromSelection || explicitStartMeasure != null) {
             setCurrentPosition({ measureIndex: startMeasure, beatPosition: 0, noteIndex: 0 });
-            notifyScoreEdit(describePlaybackFromMeasure(startMeasure));
+            notifyScoreEdit(explicitStartMeasure != null
+              ? describePlaybackFromMeasureNumber(startMeasure, selectedMeasures != null)
+              : describePlaybackFromMeasure(startMeasure));
           }
           schedulePositionTimeline(0);
           playbackTimerRef.current = setTimeout(() => {
@@ -1642,7 +1859,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         } else {
           // 譜面が空でも「再生ボタンが壊れていないか」は確認できるように、
           // 代表音として C4 を 1拍だけ鳴らす。
-          const duration = 60 / tempoSettings.bpm;
+          const duration = 60 / applyPlaybackSpeedToBpm(tempoSettings.bpm, playbackSpeedPercent);
           await audioEngine.playNoteByName('C4', duration);
           setPlaybackState('playing');
           clearPlaybackTimer();
@@ -1677,7 +1894,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
+  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, playbackSpeedPercent, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -1767,8 +1984,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const resetAudioSettingsToSafeDefaults = useCallback(() => {
     // 無音が続くときは「いまの設定を維持したまま復旧」より、
     // まず確実に鳴る既定状態へ戻すほうが原因切り分けをしやすい。
-    // ここでは built-in + ピアノ + 既定プロファイルへそろえ、
-    // localStorage 側にも同じ安全値を書き戻して次回起動へ持ち越さないようにする。
+    // ここでは既定の再生設定（SoundFont/MusyngKite + ピアノ + 既定プロファイル）へそろえ、
+    // localStorage 側にも同じ安全値を書き戻して次回起動へ持ち越さないようにする（#551）。
     localStorage.setItem(
       PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY,
       JSON.stringify(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS)
@@ -1803,7 +2020,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
       // 手動復旧したら無音検知の通知は役目を終えるので消す
       setAudioHealthNotice(null);
-      alert('音声設定を安全な既定値へ戻して復旧しました。built-in のピアノでもう一度お試しください。');
+      // 実際に戻る既定は SoundFont（MusyngKite）のピアノ（DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS）。
+      // 以前の文言は「built-in のピアノ」で実挙動と食い違っていた（#551 round1 P2）
+      alert('音声設定を安全な既定値へ戻して復旧しました。標準の音源（SoundFont）のピアノでもう一度お試しください。');
     } catch (error) {
       console.error('[ScorePage] 音声復旧に失敗:', error);
       alert('音声復旧に失敗しました。ページ再読み込み、または Safari の開き直しをお試しください。');
@@ -2371,13 +2590,46 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 取得後は同じファイルへ上書きできるよう ref で保持する。
   const fileHandleRef = useRef<FileSystemFileHandle | null>(null);
 
+  /**
+   * 書き出しの前にファイル名を確認・編集してもらう（Issue #507）。
+   *
+   * これまでファイル名はタイトル由来で実質固定だった。Chrome は保存先ダイアログで
+   * 変えられるが、Safari は showSaveFilePicker が無くダイアログ無しの即ダウンロードに
+   * なるため、名前を変える手段がまったく無かった（MusicXML / MIDI は全ブラウザで同じ）。
+   * どのブラウザでも同じ操作になるよう、アプリ内のダイアログで名前を受け取ってから
+   * 書き出す。拡張子は添え字として見せるだけで、入力欄には含めない（受入条件2）。
+   */
+  const requestExportFileName = useCallback((
+    type: ExportFileType,
+    run: (fileNameBase: string) => void | Promise<void>,
+  ) => {
+    setConfirmDialog({
+      message: 'ファイル名を入力して書き出します',
+      ariaLabel: '書き出しファイル名',
+      confirmLabel: '書き出す',
+      // 既定値はこれまでと同じタイトル由来。使えない文字は先に落としておく
+      inputDefaultValue: sanitizeFileNameBase(title),
+      inputLabel: 'ファイル名',
+      inputSuffix: EXPORT_FILE_TYPES[type].extension,
+      onConfirm: (inputValue) => run(inputValue),
+    });
+  }, [title]);
+
   // ファイルに書き出す（.score.json）
   // totalSystems・measuresPerSystem は後方宣言のため deps に入れられない（TDZ 回避で通常関数として定義）
-  const handleExportFile = async () => {
+  const performExportFile = async (fileNameBase: string) => {
     const { metadata, parts } = buildScoreData();
-    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
+    const data = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, tempoSettings.bpm);
+    // 覚えている保存先ハンドルは「同じファイル名のときだけ」使い回す（Issue #507）。
+    // 名前を変えたのに前のファイルへ上書きしてしまうと、別名で書き出したつもりの
+    // ユーザーが元のファイルを黙って壊すことになる（匿名化コピーの用途では致命的）
+    const requestedFileName = buildExportFileName(fileNameBase, 'score');
+    const previousHandle = fileHandleRef.current;
+    const reusableHandle = previousHandle && previousHandle.name === requestedFileName
+      ? previousHandle
+      : null;
     // 既存ハンドルがあれば上書き、なければ保存先ダイアログを表示
-    const result = await exportScoreToFile(data, title, fileHandleRef.current);
+    const result = await exportScoreToFile(data, fileNameBase, reusableHandle);
     if (result.status === 'saved') {
       fileHandleRef.current = result.handle;
       return;
@@ -2393,6 +2645,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           : '選択した場所へ書き込めなかったため、ダウンロードに保存しました'
       );
     }
+  };
+
+  /** 「書き出し」メニューの「ファイル」。ファイル名を確認してから書き出す（Issue #507） */
+  const handleExportFile = () => {
+    requestExportFileName('score', performExportFile);
   };
 
   // ファイルから読み込む（.score.json）
@@ -2424,6 +2681,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setTimeSignatureStyle(normalizeTimeSignatureStyle(data.timeSignatureStyle));
     // 旧データは pageSize を持たないので、省略時は A4 として開く（normalizePageSizeId が担保）
     setPageSize(normalizePageSizeId(data.pageSize));
+      // 全体テンポも作品の属性として復元する（Issue #543）。
+      // テンポを持たない旧データは従来どおりアプリ全体設定のまま開く（何もしない）
+      await applySavedGlobalBpm(data);
+      // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
+      applySavedLayoutAttributes(data);
       // 旧データにはカスタム記号ライブラリが無いので、省略時は空配列で復元する
       setCustomSymbolDefs(data.customSymbolDefs ?? []);
       if (data.measuresPerSystem && data.measuresPerSystem >= 1 && data.measuresPerSystem <= 8) {
@@ -2480,7 +2742,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // （handleExportFile と同じ理由で通常関数として定義。TDZ 回避）。
   const handleFeedback = async () => {
     const { metadata, parts } = buildScoreData();
-    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
+    const scoreData = createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, tempoSettings.bpm);
     const feedbackState = {
       ...scoreData,
       // フィードバック JSON は「開く」の「ファイル」ボタンで読み込める楽譜 JSON なので、
@@ -2542,6 +2804,60 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * 起動時の復元と、作品一覧からの切替の両方で同じ手順を通す
    * （片方だけ更新し忘れると「切り替えたのに前の譜面の設定が残る」不具合になるため）。
    */
+  /**
+   * 作品の属性として保存されたレイアウト（音符の大きさ・ページ余白。Issue #477）を画面へ当てる。
+   *
+   * 省略されている項目は**表示設定（localStorage の個人既定）へ戻す**（round1 P1）。
+   * 以前の「現状維持」だと、属性つき作品→属性なし作品の切替で前の作品の縮尺・余白が
+   * 画面に残り、次の自動保存で属性なし作品へ混入してしまう。
+   * localStorage（表示設定）へは書かない: 作品を1つ開いただけで
+   * グローバル設定を書き換えてしまわないため（作品の属性であって表示設定ではない）。
+   */
+  /**
+   * 作品の属性として保存された全体テンポ（Issue #543）を再生パネルへ当てる。
+   *
+   * 作品を開く経路が3つ（起動時の復元・作品一覧からの切替・ファイル読み込み）あり、
+   * 1つでも当て忘れると「その作品だけ前のテンポで鳴る」食い違いになるため、
+   * 同じ手順をこの1関数に寄せている。
+   * テンポを持たない旧データ（globalBpm 省略）は**何もしない**のが正しい後方互換:
+   * 従来どおりアプリ全体設定（無ければ 120）のまま開く。
+   */
+  const applySavedGlobalBpm = useCallback(async (data: SavedScoreData) => {
+    const savedBpm = normalizeSavedGlobalBpm(data.globalBpm);
+    if (savedBpm === undefined) return;
+    await setBPM(savedBpm);
+  }, [setBPM]);
+
+  const applySavedLayoutAttributes = useCallback((data: SavedScoreData, options?: { resetOmitted?: boolean }) => {
+    // resetOmitted=false（MusicXML 取り込み経路・round2 P1）: <defaults> の無い取り込みは
+    // 「作品の切替」ではないので、省略項目は現在の値のまま（表示設定へも戻さない）。
+    // 省略時の表示設定復帰は、保存済み作品を開く・切り替える経路（既定 true）だけの約束
+    const resetOmitted = options?.resetOmitted ?? true;
+    if (data.notationSizeMultiplier !== undefined) {
+      setNotationSizeMultiplier(normalizeNotationSizeMultiplier(
+        data.notationSizeMultiplier,
+        resolveDefaultLayoutForScoreType(data.scoreType ?? 'single').notationSizeMultiplier,
+      ));
+    } else if (resetOmitted) {
+      setNotationSizeMultiplier(readPersonalNotationSizeSetting());
+    }
+    if (data.pageMargins !== undefined) {
+      const margins = normalizePageMargins(data.pageMargins, {
+        sideMm: DEFAULT_PAGE_SIDE_MARGIN_MM,
+        topMm: DEFAULT_PAGE_MARGIN_TOP_MM,
+        bottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
+      });
+      setPageMarginSideMm(margins.sideMm);
+      setPageMarginTopMm(margins.topMm);
+      setPageMarginBottomMm(margins.bottomMm);
+    } else if (resetOmitted) {
+      const personal = readPersonalPageMarginSettings();
+      setPageMarginSideMm(personal.sideMm);
+      setPageMarginTopMm(personal.topMm);
+      setPageMarginBottomMm(personal.bottomMm);
+    }
+  }, []);
+
   const applyLoadedScoreData = useCallback(async (restored: SavedScoreData) => {
     // パート譜表示は保存されない一時ビュー（設計書どおり「読込後は必ず総譜」）。
     // 同じパートIDを持つ別作品へ切り替えたときにパート譜表示が引き継がれてしまう
@@ -2565,6 +2881,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setTitleFontWeight(normalizeTitleFontWeight(restored.titleFontWeight));
     setTimeSignatureStyle(normalizeTimeSignatureStyle(restored.timeSignatureStyle));
     setPageSize(normalizePageSizeId(restored.pageSize));
+    // 全体テンポも作品の属性として復元する（Issue #543。省略時はアプリ全体設定のまま）
+    await applySavedGlobalBpm(restored);
+    // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
+    applySavedLayoutAttributes(restored);
     setCustomSymbolDefs(restored.customSymbolDefs ?? []);
     if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
       setMeasuresPerSystem(restored.measuresPerSystem);
@@ -2606,10 +2926,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // マウント直後の1回だけ実行し、復元の有無に関わらず「復元処理は完了した」ことを
   // autosaveRestoreReady で示す（これが true になるまで下の自動保存 useEffect は書き込みをしない）。
   const restoreAttemptedRef = useRef(false);
+  const restoreRunSeqRef = useRef(0);
   useEffect(() => {
+    // 「完了済みなら再実行しない」。試行中フラグではなく**完了**フラグにするのは、
+    // StrictMode の「実行→片付け→再実行」で1回目が cancelled 打ち切りになったとき、
+    // 2回目が復元をやり直せるようにするため（round2 P2: 試行フラグだと
+    // autosaveRestoreReady が永遠に false のまま自動保存が止まる）
     if (restoreAttemptedRef.current) return;
-    restoreAttemptedRef.current = true;
 
+    // applyLoadedScoreData の await 中にアンマウントされると、cleanup 実行後に
+    // 通知とタイマーを新規予約してしまい二度と片付けられない（#546 round1 P2）。
+    // 世代トークンで await 後の続行を抑止する（applyLoadedScoreData 自体は同じ
+    // データの再適用なので、replay で2回走っても結果は同じ）
+    const runSeq = ++restoreRunSeqRef.current;
+    const isCancelled = () => restoreRunSeqRef.current !== runSeq;
     (async () => {
       // 旧バージョンのデータ（手動保存と自動保存のキーが分かれていない形／作品カタログが
       // 無い形）を、消さずに新しい保存先へ複製してから読み込む（初回起動時のみ・後方互換）。
@@ -2617,6 +2947,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const restored = initializeWorks();
       if (restored) {
         await applyLoadedScoreData(restored);
+        if (isCancelled()) return;
 
         setRestoreNotice('自動保存データから復元しました');
         console.info('[ScorePage] 起動時に自動保存データから復元しました');
@@ -2634,14 +2965,27 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         }
       }
 
+      if (isCancelled()) return;
+      restoreAttemptedRef.current = true;
       setAutosaveRestoreReady(true);
       // 移行・復元が済んだことを App へ知らせる（ホームの一覧の読み直し。round1 P2）
       onLibraryReadyRef.current?.();
     })();
+    return () => {
+      // この実行を無効化する（次の setup が ++ するのを待たず、cleanup 時点で無効化。
+      // アンマウントの場合は誰も再開しないので、通知・タイマーの新規予約が止まる）
+      if (restoreRunSeqRef.current === runSeq) restoreRunSeqRef.current++;
+    };
   // applySettingsProfileToState はレンダーごとに作り直される素の関数のため、
   // handleNewScore と同じ理由で依存配列には含めない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyLoadedScoreData, initializeWorks, setTimeSignature]);
+
+  // 「音符の大きさ」「ページ余白」（作品の属性・Issue #477 round1 P1）の変更を
+  // 自動保存へ伝えるためのリビジョン。これらの state 本体はファイル後方で宣言されて
+  // いて依存配列に直接書けない（TDZ）ため、後方の小さな effect が変更のたびに
+  // このカウンタを進め、自動保存はカウンタだけを依存に持つ
+  const [layoutAttrRevision, setLayoutAttrRevision] = useState(0);
 
   // 段あたり小節数。自動保存 useEffect の依存配列に含めるため、useEffect より前で宣言する
   // （以前はここより後方で宣言されており、後方宣言のため deps に入れられなかった。
@@ -2666,7 +3010,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // （新規四重奏で名前だけ設定して閉じると失われるため。Codex round1 P1・#448）
       if (!options?.includeEmpty && isEmptyScoreData(parts)
         && !hasCustomInstrumentationLabels(instrumentation, scoreType)) return null;
-      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize);
+      return createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, tempoSettings.bpm);
     };
   });
 
@@ -2694,7 +3038,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 保存先は「いま開いている作品」の自動保存スロット。まだ作品IDが無い
       // （＝一度も保存していない新規状態）ときは、この保存で新しい作品が作られる。
       const saved = saveCurrentWork(
-        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize)
+        createSavedScoreData(metadata, parts, totalSystems, measuresPerSystem, scoreType, keySignature, scoreTimeSignature, instrumentation, notationMode, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, titleFontId, titleFontSize, titleFontWeight, timeSignatureStyle, pageSize, notationSizeMultiplier, { sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm }, tempoSettings.bpm)
       );
       if (saved) {
         lastAutosaveCompletedAtRef.current = Date.now();
@@ -2736,8 +3080,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 大譜表の下段だけを編集して閉じると復元されなかった）。buildScoreData が読む
   // state はすべてここに含める必要があり、その不変条件は
   // ScorePageAutosaveDeps.test.tsx が検証している。
+  // 全体テンポ（作品の属性・Issue #543）も同じ理由で列挙する。これが無いと、
+  // 再生パネルでテンポだけ変えて閉じたときに作品側へ保存されず、開き直すと元に戻る。
+  // 「音符の大きさ」「ページ余白」（作品の属性・Issue #477）は state 本体を列挙できない
+  // （後方宣言のため TDZ）。代わりに layoutAttrRevision（後方の effect が変更のたびに
+  // 進めるカウンタ）を依存に持ち、これらだけを変えて閉じても保存されるようにする（round1 P1）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem]);
+  }, [autosaveRestoreReady, title, subtitle, lyricist, composer, arranger, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, keySignature, scoreTimeSignature, timeSignatureStyle, pageSize, instrumentation, notationMode, titleFontId, titleFontSize, titleFontWeight, customSymbolDefs, systemMeasureOverrides, systemRowGapOverrides, measuresPerSystem, layoutAttrRevision, tempoSettings.bpm]);
+
+  // 「保存済み」表示を消す予約もアンマウント時に必ず片付ける（他の通知系タイマーと同じ理由）。
+  // ※自動保存 useEffect の目印コメントと依存配列の間に別の useEffect を置くと
+  //   ScorePageAutosaveDeps.test.tsx の静的検査が誤った依存配列を読むため、この位置に置く。
+  useEffect(() => () => {
+    if (autoSaveStatusTimerRef.current) clearTimeout(autoSaveStatusTimerRef.current);
+  }, []);
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -2957,7 +3313,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // 自動保存（約1.5秒後）任せだと、その前にリロードすると新作品が空のまま残る。
     // timestamp は現在時刻へ更新する（旧手動保存の保存時刻のままだと updatedAt が古くなり、
     // 取り込んだばかりの作品が更新順の作品一覧で埋もれる。Codex round4）
-    if (!saveCurrentWork({ ...loadedData, timestamp: Date.now() })) {
+    // 旧手動保存にも作品テンポを明示して移行する（#543 round1 P3: 自動保存前に
+    // 終了すると未移行のまま残る）。applyLoadedScoreData が画面へ適用した正規化済みの
+    // 値と同じものを書く
+    if (!saveCurrentWork({
+      ...loadedData,
+      globalBpm: normalizeSavedGlobalBpm(loadedData.globalBpm) ?? tempoSettings.bpm,
+      timestamp: Date.now(),
+    })) {
       const message = describeLegacyImportResult('saveFailed');
       notifyScoreEdit(message);
       return { ok: false, message };
@@ -3106,7 +3469,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // R キー: 現在の音価で休符入力モードに切り替え
       if (e.key === 'r' || e.key === 'R') {
         setTool(prev => {
-          if ('duration' in prev) return { ...prev, isRest: !prev.isRest };
+          if ('duration' in prev) {
+            // 入力用の臨時記号（#470）は音符専用。休符へ切り替えるときに残すと、
+            // ♯ボタンがON表示のままクリックしても効かない無言の行き止まりになる
+            // （#470 round1 P2・#318）。音符へ戻るときは付け直してもらう
+            const { accidental: _dropped, ...rest } = prev;
+            return { ...rest, isRest: !prev.isRest };
+          }
           return { duration: '4', isRest: true };
         });
         e.preventDefault();
@@ -3884,6 +4253,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
     return DEFAULT_PAGE_MARGIN_BOTTOM_MM;
   });
+
+  // 作品の属性（音符の大きさ・ページ余白）の変更を自動保存へ伝える（Issue #477 round1 P1。
+  // 依存配列の TDZ 制約の迂回。カウンタの正本コメントは自動保存 useEffect の直前を参照）
+  useEffect(() => {
+    setLayoutAttrRevision((revision) => revision + 1);
+  }, [notationSizeMultiplier, pageMarginSideMm, pageMarginTopMm, pageMarginBottomMm]);
   // ユーザー設定（レイアウトタブの「タイトル余白（上）」スライダー、0〜30mm、Issue #103）。
   // タイトルページ（1ページ目）だけに効く。旧キーは無いため、単純に新キーを読むだけでよい。
   const [titleMarginTopMm, setTitleMarginTopMm] = useState<number>(() => {
@@ -4017,6 +4392,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 短く表示するお知らせ（他の autoSaveStatus / restoreNotice と同じ「数秒で消える」パターン）。
   const [settingsProfileNotice, setSettingsProfileNotice] = useState<string | null>(null);
   const settingsProfileNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // この通知タイマーもアンマウント時に必ず片付ける（宣言位置の都合で個別 useEffect）
+  useEffect(() => () => {
+    if (settingsProfileNoticeTimerRef.current) clearTimeout(settingsProfileNoticeTimerRef.current);
+  }, []);
   const showSettingsProfileNotice = useCallback((message: string) => {
     setSettingsProfileNotice(message);
     if (settingsProfileNoticeTimerRef.current) clearTimeout(settingsProfileNoticeTimerRef.current);
@@ -4145,6 +4524,28 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           : [rightHandData ?? []];
     return activeParts.reduce((max, part) => Math.max(max, trimTrailingEmptyMeasures(part).length), 0);
   }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts]);
+  /**
+   * 小節番号を指定した途中再生（#545）。「再生・音色」タブの入力欄から呼ばれる。
+   *
+   * 鳴らす仕組みは選択起点の途中再生（#108）と同じ handlePlay を共用し、ここでは
+   * 「入力を小節インデックスへ直す」「範囲外を理由つきで弾く」だけを受け持つ。
+   * 再生中・一時停止中に指定されたときは、いったん停止してから頭出しし直す
+   * （音の途中への飛び込み＝シークは #545 のスコープ外）。
+   */
+  const handlePlayFromMeasureNumber = useCallback(async (measureNumberInput: string) => {
+    const resolution = resolvePlaybackStartMeasureNumber(measureNumberInput, contentMeasureCount);
+    if (!resolution.ok) {
+      // 黙って無視せず、なぜ再生できないかと入れ直し方を伝える（#318）
+      notifyScoreEdit(describePlaybackStartMeasureRejected(resolution.reason, contentMeasureCount));
+      return;
+    }
+
+    if (playbackState === 'playing' || playbackState === 'paused') {
+      handleStop();
+    }
+    await handlePlay({ startMeasureIndex: resolution.measureIndex });
+  }, [contentMeasureCount, handlePlay, handleStop, playbackState]);
+
   // 印刷専用: 「最後に音符（または明示的な記号）がある小節」までを数える（Issue #80）。
   // contentMeasureCount（events が完全に空の小節だけを末尾から除外）より厳しく、末尾の
   // 全休符だけの小節（自動補完・誤操作などで実データに残った編集用の余り小節）も除外する。
@@ -4208,6 +4609,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
     return [{ measures: rightHandData ?? [], clef: 'treble' }];
   }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, partExtractionSelection]);
+  // 再生ハイライトが段の並びを引けるよう、最新の layoutParts を箱へ入れておく（#411）
+  layoutPartsRef.current = layoutParts;
   // 弦楽四重奏のパート名（Issue #448）。QuartetStaff の既定名（QUARTET_PART_CONFIGS）ではなく、
   // ユーザーが「パート名編集」で書き換えられる instrumentation.parts 側を正本にする。
   // パート数が既定の4と違う編成定義（別の譜種から切り替えた直後など）のときは、
@@ -4415,18 +4818,52 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 追加オフセット単体にも適用し、詰めすぎて段同士が重なるのを防ぐ
   // （合計値ではなく追加オフセット単体をクランプするだけの単純な方式。実際に画面へ
   // 反映する合計値のクランプは CSS の margin-top に任せ、視覚的な破綻はレイアウト側で防ぐ）。
-  const adjustSystemRowGapOverride = useCallback((startMeasure: number, delta: number) => {
-    pushHistory();
+  //
+  // 上書きの書き換え本体。パネルのボタン・直接入力（差分で指定）と、段の境界ドラッグ
+  // （Issue #523・絶対値で指定）の共通の出口にする。同じ upsert とクランプを2か所に
+  // 書くと、片方だけ直したときにもう片方へ修正が届かない（#280 の反省）ため、
+  // 「次の値をどう決めるか」だけを呼び出し側から関数で受け取る形にしている。
+  const updateSystemRowGapOverride = useCallback((startMeasure: number, resolveGapPx: (current: number) => number) => {
     setSystemRowGapOverrides((prev) => {
       const current = prev.find((o) => o.startMeasure === startMeasure)?.gapPx ?? 0;
-      const nextGapPx = Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, current + delta));
+      const nextGapPx = Math.max(SYSTEM_ROW_GAP_MIN_PX, Math.min(SYSTEM_ROW_GAP_MAX_PX, resolveGapPx(current)));
       const next = prev.filter((o) => o.startMeasure !== startMeasure);
       if (nextGapPx !== 0) {
         next.push({ startMeasure, gapPx: nextGapPx });
       }
       return next;
     });
+  }, []);
+  const adjustSystemRowGapOverride = useCallback((startMeasure: number, delta: number) => {
+    pushHistory();
+    updateSystemRowGapOverride(startMeasure, (current) => current + delta);
+  }, [pushHistory, updateSystemRowGapOverride]);
+  // 段の境界ドラッグ（Issue #523）の移動中に呼ぶ。押している間は履歴を積まず値だけを進め、
+  // 履歴はドラッグの開始時（SystemGapDragHandle の onDragStart）に1件だけ積む。
+  // こうしないと 1px 動かすたびに Undo が1件ずつ増え、元へ戻すのに何十回も押すことになる。
+  const setSystemRowGapOverrideValue = useCallback((startMeasure: number, gapPx: number) => {
+    updateSystemRowGapOverride(startMeasure, () => gapPx);
+  }, [updateSystemRowGapOverride]);
+  // ドラッグ開始時に積んだ履歴を「取り消せる」ようにするための控え。
+  // 履歴スタック（historyStack / futureStack）は push のたびに新しい配列へ差し替わる
+  // （scoreHistoryStack は非破壊）ので、積む直前の配列を持っておけばそのまま元へ戻せる。
+  const rowGapDragHistoryRef = useRef<{ history: ScoreSnapshot[]; future: ScoreSnapshot[] } | null>(null);
+  // 値が実際に変わる最初の時点で呼ばれる（SystemGapDragHandle の onDragStart）
+  const beginSystemRowGapDrag = useCallback(() => {
+    rowGapDragHistoryRef.current = { history: historyStack.current, future: futureStack.current };
+    pushHistory();
   }, [pushHistory]);
+  // ドラッグの終わり。掴む前と同じ値に戻って離した（changed=false）ときは、
+  // 積んだ履歴を無かったことにする。何も変わっていないのに「元に戻す」が
+  // 1回空振りする状態を残さないため（#523 round1 P2）
+  const endSystemRowGapDrag = useCallback((changed: boolean) => {
+    const pushed = rowGapDragHistoryRef.current;
+    rowGapDragHistoryRef.current = null;
+    if (!pushed || changed) return;
+    historyStack.current = pushed.history;
+    futureStack.current = pushed.future;
+    setHistoryVersion(v => v + 1);
+  }, []);
 
   // 指定した段一覧（systemRanges）ぶんの「段ごとの間隔の追加オフセット(px)」配列を作る。
   // 各 Staff コンポーネント（SingleStaff等）の systemGapOverridesPx props にそのまま渡し、
@@ -4496,23 +4933,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   }
   const visiblePlannedRanges = [...contentRanges, ...bufferRanges];
   const effectiveTotalSystems = Math.max(1, visiblePlannedRanges.length);
-  // 印刷時、内容のある最後のページだけ最後の段をページ下端へ寄せる（App.css の
+  // 印刷で「内容のある最後のページ」が何ページ目かを求める（App.css の
   // .print-final-page .system-stack 参照）。printVisibleContentSystems は「印刷で実際に
   // 出す段の総数」（最低1）なので、それが何ページ目に収まるかを逆算する。
   // ページごとの段数が可変（1ページ目だけ少ない）ため、単純な割り算ではなく
   // 累積オフセットを1ページずつ進めながら「その段が何ページ目に収まるか」を探す。
+  // Issue #506 以降、このページも他ページと同じ行グリッドで上詰めになるため、
+  // このクラスは「最終ページであること」を示す目印としてだけ使う
+  // （以前あった「可視段が1段だけなら下端寄せをやめる」例外＝print-final-page-single は、
+  //   下端寄せ自体を廃止したことで不要になったので削除した）。
   const finalContentPageIndex = useMemo(
     () => findPageIndexForSystem(printVisibleContentSystems - 1, pageSystemLayoutOptions),
     [printVisibleContentSystems, pageSystemLayoutOptions]
   );
-  // 最終内容ページに表示される「内容のある段数」。これが1段だけだと space-between は
-  // 子が1つしかないため上端に寄ってしまい、終止線がページ下端に届かない
-  // （App.css の .print-final-page-single 参照）。
-  const finalContentPageVisibleSystems = Math.max(0, Math.min(
-    getPageSystemsCapacity(finalContentPageIndex),
-    printVisibleContentSystems - getPageSystemOffset(finalContentPageIndex)
-  ));
-  // 画面表示用の「最終ページ・1段だけ」判定。印刷用（上のfinalContentPageVisibleSystems）は
+  // 画面表示用の「最終ページ・1段だけ」判定。印刷用の段数（printVisibleContentSystems）は
   // 「内容のある段」だけを数えるため、空の譜面や「＋小節を追加」で出した空段が
   // 画面に複数表示されていても1になってしまい、画面の全段が1段用の上詰めレイアウト
   // （.screen-final-page-single）に落ちて段間隔が潰れるバグがあった。
@@ -4601,9 +5035,32 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     const range = visiblePlannedRanges[systemIndex];
     if (!range) return null;
     const rowGapPx = systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0;
+    const systemLabel = `段${systemIndex + 1}`;
+    // 境界帯を出すのは「上に段がある段」だけ。段の間隔は後続の段の margin-top として
+    // 入るので、ページの先頭の段には「上の段との境界」が存在しない（そこで値を動かすと
+    // 境界ではなくページ全体が下へずれるだけになる・round1 P1）。
+    const pageIndex = findPageIndexForSystem(systemIndex, pageSystemLayoutOptions);
+    const hasBoundaryAbove = getPageSystemOffset(pageIndex) < systemIndex;
     return (
+      <>
+      {hasBoundaryAbove && (
+      /* 段の上端＝上の段との境界帯（Issue #523）。パネルと同じ「選択中の段にだけ出す
+         差し込み口」に乗せてある（SystemSelectFrame は選択中の段でここを1回だけ描く）ので、
+         4つの譜種コンポーネントへ新しい props を通さずに済む。
+         パネル（段の下側）とは上下に分かれているので、操作が重ならない */
+      <SystemGapDragHandle
+        startMeasure={range.start}
+        systemLabel={systemLabel}
+        currentGapPx={rowGapPx}
+        gapMinPx={SYSTEM_ROW_GAP_MIN_PX}
+        gapMaxPx={SYSTEM_ROW_GAP_MAX_PX}
+        onDragStart={beginSystemRowGapDrag}
+        onDragMove={(gapPx) => setSystemRowGapOverrideValue(range.start, gapPx)}
+        onDragEnd={endSystemRowGapDrag}
+      />
+      )}
       <SystemLayoutPanel
-        systemLabel={`段${systemIndex + 1}`}
+        systemLabel={systemLabel}
         side={selectedSystem.side}
         startMeasure={range.start}
         measureCount={range.count}
@@ -4624,10 +5081,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         onClose={closeSystemSelection}
         onNotice={notifyScoreEdit}
       />
+      </>
     );
   }, [
     selectedSystem, visiblePlannedRanges, systemRowGapOverrides, contentMeasureCount,
     adjustSystemMeasureOverride, adjustSystemRowGapOverride, closeSystemSelection, notifyScoreEdit,
+    beginSystemRowGapDrag, endSystemRowGapDrag, setSystemRowGapOverrideValue,
+    pageSystemLayoutOptions, getPageSystemOffset,
   ]);
 
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
@@ -4682,34 +5142,45 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       instrumentation,
       systems: totalSystems,
       measuresPerSystem,
+      // 作品のテンポ（#543）。ここに入れないと書き出し（.score.json / MIDI）へ
+      // 作品テンポが乗らず、MIDI が常に既定の 120 になる（#543 round1 P2）
+      globalBpm: tempoSettings.bpm,
     };
   }, [
     title, subtitle, lyricist, composer, arranger,
     scoreType, keySignature, scoreTimeSignature, timeSignatureStyle,
     quartetParts, ensembleParts, ensembleSecondStaffParts, rightHandData, leftHandData,
-    instrumentation, totalSystems, measuresPerSystem,
+    instrumentation, totalSystems, measuresPerSystem, tempoSettings.bpm,
   ]);
 
   // 書出は成功しても失敗しても画面に何も出ず、例外はコンソールに流れるだけだった（Issue #278）。
   // ダウンロードが始まれば成功には気づけるが、失敗すると完全に無言で「押しても何も起きない」
   // ように見えるため、成否のどちらでも右下のインジケータに結果を出す。
   const handleExportMusicXml = useCallback(() => {
-    try {
-      downloadMusicXml(buildCurrentScoreData());
-      showExportStatus('success', '✓ MusicXMLを書き出しました');
-    } catch (error) {
-      showExportStatus('error', `⚠ MusicXMLを書き出せませんでした: ${describeExportError(error)}`);
-    }
-  }, [buildCurrentScoreData, showExportStatus]);
+    // 書き出す前にファイル名を確認する（Issue #507）。ダイアログを閉じた（キャンセル）
+    // ときは run が呼ばれないので、従来どおり何も起きない
+    requestExportFileName('musicxml', (fileNameBase) => {
+      try {
+        // 全体テンポ（♩=N）は保存データではなく再生設定側にあるため、書き出しへ明示的に渡す。
+        // 渡さないと先頭小節にテンポが書かれず、読み直したときに既定の 120 へ戻る（Issue #518）
+        downloadMusicXml(buildCurrentScoreData(), fileNameBase, { globalBpm: tempoSettings.bpm });
+        showExportStatus('success', '✓ MusicXMLを書き出しました');
+      } catch (error) {
+        showExportStatus('error', `⚠ MusicXMLを書き出せませんでした: ${describeExportError(error)}`);
+      }
+    });
+  }, [buildCurrentScoreData, requestExportFileName, showExportStatus, tempoSettings.bpm]);
 
   const handleExportMidi = useCallback(() => {
-    try {
-      downloadMidi(buildCurrentScoreData());
-      showExportStatus('success', '✓ MIDIを書き出しました');
-    } catch (error) {
-      showExportStatus('error', `⚠ MIDIを書き出せませんでした: ${describeExportError(error)}`);
-    }
-  }, [buildCurrentScoreData, showExportStatus]);
+    requestExportFileName('midi', (fileNameBase) => {
+      try {
+        downloadMidi(buildCurrentScoreData(), fileNameBase);
+        showExportStatus('success', '✓ MIDIを書き出しました');
+      } catch (error) {
+        showExportStatus('error', `⚠ MIDIを書き出せませんでした: ${describeExportError(error)}`);
+      }
+    });
+  }, [buildCurrentScoreData, requestExportFileName, showExportStatus]);
 
   // PDF書出: 自前でPDFを生成せず、ブラウザの印刷ダイアログを開く方式にする。
   // App.css の @media print が既に A4 整形済みの印刷スタイルを用意しているため、
@@ -4773,7 +5244,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       } else {
         xml = new TextDecoder('utf-8').decode(bytes);
       }
-      const loaded = parseMusicXml(xml);
+      const { score: loaded, defaults: importedDefaults, globalBpm: importedGlobalBpm, unsupportedDynamicsCount } = parseMusicXmlWithDefaults(xml);
+      // 先頭小節の <sound tempo>（全体テンポ）は再生パネルへ反映する（#518）。
+      // これが無いと往復で全体テンポが既定 120 に戻る（QA で確定した症状）
+      if (importedGlobalBpm != null) setBPM(importedGlobalBpm);
       // applyLoadedScoreData と同等のロジックで画面に反映する
       // （パート譜表示のリセットも同様。「読込後は必ず総譜」）
       setPartExtractionId(null);
@@ -4783,6 +5257,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       setComposer(loaded.metadata.composer);
       setArranger(loaded.metadata.arranger);
       const loadedType = loaded.scoreType ?? 'single';
+      // 取り込み時の通知は1本にまとめて出す（後勝ちで消えないように・#477 round2 P2）
+      const importNotices: string[] = [];
+      // 対応表に無い強弱記号（sfz・fp など）は取り込まないので、黙って消さずに件数を知らせる（#552）
+      if (unsupportedDynamicsCount != null && unsupportedDynamicsCount > 0) {
+        importNotices.push(describeImportedUnsupportedDynamics(unsupportedDynamicsCount));
+      }
       setKeySignature(normalizeKeySignature(loaded.keySignature));
       await setTimeSignature(...normalizeTimeSignature(loaded.timeSignature));
       // MusicXML の <time symbol="common"/"cut"> を読み込んだ場合はここで表示スタイルへ戻す
@@ -4807,7 +5287,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // まず partId で選ぶ。clef だけで選ぶと「両段ともト音」の正当な大譜表で
         // 2段目が読み捨てられ、「上段がヘ音」の曲では左右が逆転する（Codex round1 P1）。
         // partId が無い従来形式（パート分離の2パートXML等）は従来どおり clef で推定する
-        const byId = (id: string) => loaded.parts.find(p => p.partId === id);
+          const byId = (id: string) => loaded.parts.find(p => p.partId === id);
         const rightPart = byId('right-hand')
           ?? loaded.parts.find(p => p.clef === 'treble') ?? loaded.parts[0];
         const leftPart = byId('left-hand')
@@ -4817,14 +5297,83 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         setLeftHandData(leftPart?.measures);
         // アプリのピアノモデルはクレフ固定（上=ト・下=ヘ）で、任意クレフの大譜表
         // （両段ト音など）は保持できない。keys は絶対音名なので音の高さは変わらないが、
-        // 見た目のクレフが黙って変わるのは #318 に反するため通知する（#419 round2 P1）
+        // 見た目のクレフが黙って変わるのは #318 に反するため通知する（#419 round2 P1）。
+        // 単独送信ではなく importNotices へ積む: 通知は後勝ちのため、後続の
+        // レイアウト通知に消されて読めなくなる（#477 round2 P2）
         if (loaded.scoreType === 'piano'
           && ((rightPart && rightPart.clef !== 'treble') || (leftPart && leftPart.clef !== 'bass'))) {
-          notifyScoreEdit(describeImportedClefNormalized());
+          importNotices.push(describeImportedClefNormalized());
         }
         setEnsembleParts([]);
         setEnsembleSecondStaffParts([]);
       }
+      // --- ファイル指定のレイアウト（<defaults>）の引き継ぎ（Issue #477）---
+      // Finale などの書き出しは <defaults> に「その作品をどう組むか」（五線の大きさ・判型・余白）を
+      // 持っている。従来はこれを全部捨てて既定サイズで組んでいたため、実曲を持ち込むと
+      // 紙幅超過警告が出ていた。読めた項目だけを作品の属性として引き継ぐ。
+      if (importedDefaults?.pageSizeRounded) {
+        importNotices.push(describeImportedPageSizeRounded(getPageSize(loaded.pageSize).label));
+      }
+      // 余白・判型はファイル指定があればそれを、無ければ現在の設定のまま使う
+      const importedMargins = loaded.pageMargins ?? {
+        sideMm: pageMarginSideMm, topMm: pageMarginTopMm, bottomMm: pageMarginBottomMm,
+      };
+      applySavedLayoutAttributes(loaded, { resetOmitted: false });
+
+      // ファイル指定（無ければ現在の設定）の縮尺で、1小節すら紙幅に入らない小節が無いか確かめる。
+      // ファイルの縮尺をそのまま使っても収まるとは限らない（音符の間隔の詰め方はアプリ独自の
+      // 浄書のため）。収まらないときだけ 5%刻みで下げ、下げたことを通知する（#318）。
+      const importedContentBudgetPx = worstCaseSystemContentBudget(
+        importedMargins.sideMm, instrumentLabelAreaWidth, pageWidthMm(loaded.pageSize),
+      );
+      const desiredMultiplier = loaded.notationSizeMultiplier ?? notationSizeMultiplier;
+      const importedPlan = planEffectiveMeasuresPerSystem(
+        loaded.parts.map((part) => ({
+          measures: part.measures,
+          // 調号変更の正本は先頭パート（layoutParts と同じ約束）
+          keySignatureMeasures: loaded.parts[0]?.measures,
+          clef: part.clef,
+        })),
+        normalizeTimeSignature(loaded.timeSignature),
+        normalizeKeySignature(loaded.keySignature),
+        loaded.measuresPerSystem ?? measuresPerSystem,
+        importedContentBudgetPx,
+        SCORE_LAYOUT_RENDER_SCALE,
+        { includeTranspositionAccidentalWorstCase: loadedType === 'ensemble' },
+      );
+      const fittedMultiplier = fitNotationSizeMultiplier(
+        importedPlan.minimumWidths, importedContentBudgetPx, desiredMultiplier,
+      );
+      const fittedPercent = Math.round(fittedMultiplier * 100);
+      // <defaults> を持つファイルだけが作品の縮尺を書き換える（round1 P1）。
+      // 持たないファイルは受け入れ条件どおり「従来挙動+提案のみ」: 開いただけで
+      // 作品の縮尺が変わって保存される、を起こさない
+      const hasImportedLayoutDefaults =
+        loaded.notationSizeMultiplier !== undefined
+        || loaded.pageMargins !== undefined
+        || loaded.pageSize !== undefined;
+      if (hasImportedLayoutDefaults) {
+        // applySavedLayoutAttributes が入れた値（ファイル指定）を、収まる大きさで上書きする。
+        // notationSizeMultiplier（この時点では読込前の値）と比べるのではなく必ず設定する:
+        // ファイル指定を当てた直後の値は state にまだ反映されていない（同じレンダー内の
+        // 更新はまとめて適用される）ため、比較で分岐すると設定漏れになる。
+        setNotationSizeMultiplier(fittedMultiplier);
+        if (fittedMultiplier < desiredMultiplier) {
+          importNotices.push(describeImportedNotationSizeShrunk(fittedPercent));
+        } else if (loaded.notationSizeMultiplier !== undefined && fittedMultiplier !== notationSizeMultiplier) {
+          // ファイル指定をそのまま引き継ぎ、かつ読込前の表示から変わったときだけ知らせる
+          importNotices.push(describeImportedNotationSize(fittedPercent));
+        }
+      } else if (fittedMultiplier < desiredMultiplier) {
+        // 縮尺は変えずに、収まる値を提案だけする（#318: 紙幅超過警告の行き止まりに
+        // 「次の一手」を添える）
+        importNotices.push(describeNotationSizeFitSuggestion(fittedPercent));
+      }
+      if (importNotices.length > 0) {
+        // 複数出るときは1本にまとめる（通知は後勝ちで上書きされるため）。読む時間も長めに取る
+        notifyScoreEdit(importNotices.join('／'), 8000);
+      }
+
       // MusicXML には段割り上書きの概念が無いため、前の譜面ぶんを引き継がずリセットする
       setSystemMeasureOverrides([]);
       // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
@@ -4836,7 +5385,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-  }, [setTimeSignature, measuresPerSystem]);
+  }, [setTimeSignature, setBPM, measuresPerSystem, applySavedLayoutAttributes, instrumentLabelAreaWidth,
+    notationSizeMultiplier, pageMarginSideMm, pageMarginTopMm, pageMarginBottomMm]);
 
   const handleImportMusicXml = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -5270,7 +5820,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           className="toolbar-feedback-button"
           onClick={handleGoHome}
           aria-label="ホーム"
-          title="ホーム画面へ戻ります（編集中の内容はこの端末のブラウザへ保存され、ホームの「前回の続き」から開き直せます）"
+          title="ホーム画面へ戻ります（編集中の内容はこの端末のブラウザへ保存され、ホームの「最近使ったファイル」の先頭から開き直せます）"
           data-testid="go-home"
         >
           <span aria-hidden="true">🏠</span>{' '}
@@ -5838,6 +6388,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   title={`ページの左右余白です。本文幅（小節を並べる幅）もこの値に合わせて自動で連動します。既定は${DEFAULT_PAGE_SIDE_MARGIN_MM}mmです`}
                 >
                   余白(左右)
+                  {/* このタブのスライダー・数値入力には aria-label を明示する（Issue #563）。
+                      <label> で囲んでいるので名前が付いていないわけではないが、その場合の
+                      アクセシブルな名前は「ラベル文字＋現在値」（例: 「余白(左右)14mm」）になり、
+                      値が変わるたびに名前まで変わってしまう。スクリーンリーダーは値を別に読むので、
+                      名前は固定のラベルだけにしておく方が分かりやすい。 */}
                   <input
                     type="range"
                     min={PAGE_MARGIN_SIDE_MIN_MM}
@@ -5852,6 +6407,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="余白(左右)"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginSideMm}mm</span>
                 </label>
@@ -5874,6 +6430,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="余白(上)"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginTopMm}mm</span>
                 </label>
@@ -5896,6 +6453,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="余白(下)"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{pageMarginBottomMm}mm</span>
                 </label>
@@ -5924,6 +6482,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 90 }}
+                    aria-label="音符の大きさ"
                   />
                   {/* 現在値（%）。既定は楽譜種別により異なる（単旋律・ピアノ=150%、弦楽四重奏・編成譜=100%。Issue #49） */}
                   <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(notationSizeMultiplier * 100)}%</span>
@@ -5971,6 +6530,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 90 }}
+                    aria-label="小節幅の均等さ"
                   />
                   {/* 現在値（%）。スライダーだけだと今いくつか分からないため小さく添える */}
                   <span style={{ fontSize: 12, color: '#555', width: 34 }}>{Math.round(measureWidthEvenness * 100)}%</span>
@@ -5994,6 +6554,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="段の間隔"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{systemRowGapPx}px</span>
                 </label>
@@ -6016,6 +6577,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="パート間隔"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{partSpacingOffsetPx}px</span>
                 </label>
@@ -6045,6 +6607,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                         }
                       }}
                       style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
+                      aria-label="段あたり小節数"
                     />
                   </label>
                   <label
@@ -6068,6 +6631,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                         }
                       }}
                       style={{ width: 44, fontSize: 13, padding: '2px 4px' }}
+                      aria-label="段数/ページ"
                     />
                     {isSystemsPerPageOverflowing && (
                       <span
@@ -6104,6 +6668,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="タイトル余白(上)"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{titleMarginTopMm}mm</span>
                 </label>
@@ -6126,6 +6691,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                       }
                     }}
                     style={{ width: 70 }}
+                    aria-label="タイトル余白(下)"
                   />
                   <span style={{ fontSize: 12, color: '#555', width: 30 }}>{titleMarginBottomMm}mm</span>
                 </label>
@@ -6231,6 +6797,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 onPause={handlePause}
                 onStop={handleStop}
                 onSeek={handleSeek}
+                onPlayFromMeasure={handlePlayFromMeasureNumber}
+                totalMeasureCount={contentMeasureCount}
                 onTempoChange={handleTempoChange}
                 onInstrumentChange={handleInstrumentChange}
                 onInstrumentPreview={handleInstrumentPreview}
@@ -6482,13 +7050,18 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       {confirmDialog && (
         <ConfirmDialog
           message={confirmDialog.message}
-          onConfirm={() => {
+          ariaLabel={confirmDialog.ariaLabel}
+          confirmLabel={confirmDialog.confirmLabel}
+          inputDefaultValue={confirmDialog.inputDefaultValue}
+          inputLabel={confirmDialog.inputLabel}
+          inputSuffix={confirmDialog.inputSuffix}
+          onConfirm={(inputValue) => {
             // 先にダイアログを閉じてから本体を走らせる。本体（新規作成）は
             // 画面全体を作り直す重い処理なので、確認画面が残ったままだと
             // 「押したのに閉じない」ように見えてしまう。
             const run = confirmDialog.onConfirm;
             setConfirmDialog(null);
-            void run();
+            void run(inputValue);
           }}
           onCancel={() => setConfirmDialog(null)}
         />
@@ -6504,6 +7077,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 描画側（StaffCanvas）は customSymbolDefs.find() が undefined のとき
             // 描画をスキップするため、宙ぶらりん参照が残っても安全（設計判断）。
             setCustomSymbolDefs(prev => prev.filter(d => d.id !== symbolId));
+          }}
+          onToggleSmoothing={(symbolId, smoothing) => {
+            // 手ぶれ補正は表示のたびに元のストロークから計算するだけなので、
+            // フラグを差し替えるだけで元の線に戻せる（描いたデータは失われない）。
+            setCustomSymbolDefs(prev => prev.map(d => (d.id === symbolId ? { ...d, smoothing } : d)));
           }}
           onClose={() => setShowSymbolEditor(false)}
         />
@@ -6709,11 +7287,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           {visiblePages.map((p, i) => (
             <ScaledPageWrapper key={i} scale={effectiveScale} pageHeight={sharedPageHeight}>
               {/* print-hidden-page: 内容のある段が1つもないページは印刷から除外する（画面では表示） */}
-              {/* print-final-page: 内容のある最後のページだけ、印刷時に最後の段をページ下端へ寄せる（App.css 参照） */}
-              {/* print-final-page-single: そのページの可視段が1段だけのときは、下端へ落とさず上揃えにする（1段だけのページは上に置くのが市販譜の作法。App.css 参照） */}
+              {/* print-final-page: 内容のある最後のページの目印。印刷・プレビューでも他ページと同じ行グリッドで上詰めにする（Issue #506。App.css 参照） */}
               {/* screen-final-page-single: 空の段（フィラー）を含めても表示段が実質1段だけのときに限る（Issue #68。フィラーがある場合は他ページと同じ固定スロット配置で統一する） */}
               <section
-                className={`print-page${printVisibleContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === finalContentPageIndex && finalContentPageVisibleSystems === 1 ? ' print-final-page-single' : ''}${i === screenFinalPageIndex && screenFinalPageTotalSystems === 1 ? ' screen-final-page-single' : ''}`}
+                className={`print-page${printVisibleContentSystems - getPageSystemOffset(i) <= 0 ? ' print-hidden-page' : ''}${i === finalContentPageIndex ? ' print-final-page' : ''}${i === screenFinalPageIndex && screenFinalPageTotalSystems === 1 ? ' screen-final-page-single' : ''}`}
                 style={{
                   // ページ余白（左右・上・下）。正本はこの3値のみで、App.css 側は
                   // var(--page-margin-*) を padding へそのまま渡すだけにしてある
@@ -7114,6 +7691,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           複数ページの譜面で帯が消え残る。 */}
       <PlaybackHighlight
         currentPosition={currentPosition}
+        highlightTargets={currentPosition.targets}
         isPlaying={playbackState === 'playing'}
         containerSelector=".score-area"
         enablePageScroll={true}

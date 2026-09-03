@@ -3,6 +3,11 @@
 // また拡張子のみの accept 指定を正しく解釈しないことがある（2026-08-28 実機で発生）。
 // ScorePage 実マウントで「ボタンが対応する input の click を呼ぶ」
 // 「display:none ではない」「a11y 上は隠れている」「accept に MIME 併記」を固定する。
+//
+// 隠し input の本数は変換API（VITE_OMR_API_URL）の設定有無で変わる（設定時だけ PDF 用が増える）。
+// 環境変数を暗黙に読むと、`.env.local` を置いている開発環境だけ落ちるテストになるため
+// （Issue #587。実際に「expected 3 to be 2」で落ちた）、各テストで明示的に
+// stubEnv して**設定なし／設定あり**の両方を固定する。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, fireEvent, screen, within } from '@testing-library/react';
 import ScorePage from './ScorePage';
@@ -31,16 +36,21 @@ describe('開くボタン群と隠しファイル入力の配線（#464）', () 
     localStorageMock.clear();
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get: () => 900, configurable: true });
+    // 既定は「変換APIなし」を明示（空文字は getOmrApiUrl が null と解釈する＝未設定と同じ）。
+    // これを省くと、開発環境の .env.local に VITE_OMR_API_URL がある人だけ
+    // PDF 用の input が増えて本数の期待が崩れる（#587）
+    vi.stubEnv('VITE_OMR_API_URL', '');
   });
 
   afterEach(() => {
     cleanup();
     if (clientWidthSpy) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidthSpy);
     else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth');
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
-  it('ボタンが対応する input の click を呼び、input は Safari 互換の隠し方になっている', async () => {
+  it('変換APIなし: ボタンが対応する input の click を呼び、input は Safari 互換の隠し方になっている', async () => {
     render(<ScorePage />);
     await waitFor(() => {
       expect(document.querySelector('rect.vf-hit')).toBeTruthy();
@@ -84,6 +94,35 @@ describe('開くボタン群と隠しファイル入力の配線（#464）', () 
     expect(xmlButtonTitle).toContain('.mxl');
     // 「開く」が select として存在しない（Safari で無反応になる形へ戻さない）
     expect(screen.queryByRole('combobox', { name: '開く' })).toBeNull();
+  }, 60000);
+
+  it('変換APIあり: PDF 用の3つ目の input と「PDF (β)」ボタンが増える（#587）', async () => {
+    // 開発環境（.env.local に VITE_OMR_API_URL がある状態）の再現。
+    // 本数だけでなく、増えた input が PDF 用であることと、
+    // ボタンからその input へ配線されていることまで見る
+    vi.stubEnv('VITE_OMR_API_URL', 'http://localhost:8080');
+
+    render(<ScorePage />);
+    await waitFor(() => {
+      expect(document.querySelector('rect.vf-hit')).toBeTruthy();
+    }, { timeout: 15000 });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+
+    const inputs = Array.from(document.querySelectorAll('input[type="file"]')) as HTMLInputElement[];
+    expect(inputs.length).toBe(3);
+    const pdfInput = inputs.find((i) => (i.getAttribute('accept') ?? '').includes('.pdf'))!;
+    expect(pdfInput).toBeTruthy();
+    // 隠し方の作法は他の input と同じ（Safari 互換・a11y 上は隠す）
+    expect(getComputedStyle(pdfInput).display).not.toBe('none');
+    expect(pdfInput.tabIndex).toBe(-1);
+    expect(pdfInput.getAttribute('aria-hidden')).toBe('true');
+    expect(pdfInput.getAttribute('accept')).toContain('application/pdf');
+
+    const pdfClick = vi.spyOn(pdfInput, 'click');
+    const openGroup = screen.getByRole('group', { name: '開く' });
+    fireEvent.click(within(openGroup).getByRole('button', { name: 'PDF (β)' }));
+    expect(pdfClick).toHaveBeenCalledTimes(1);
   }, 60000);
 
   it('旧・手動保存がある環境では「以前の手動保存」ボタンが出て、取り込みが動く', async () => {

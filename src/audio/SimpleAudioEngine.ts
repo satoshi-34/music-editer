@@ -2,6 +2,7 @@
 // Web Audio APIを直接使用したシンプルな音声エンジン
 // ブラウザの自動再生ポリシーに完全対応
 
+import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
 import { InstrumentType } from './SoundSource';
 import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
 import {
@@ -11,6 +12,7 @@ import {
 } from './playbackSettings';
 import { applySwingToTiming } from '../utils/swingUtils';
 import { respellDoubleAccidentalKey } from '../utils/noteMidiUtils';
+import { resolveReleaseTailSeconds } from './releaseTail';
 
 interface SimpleInstrumentConfig {
   // 1つの音色を何本の波で作るかを表す。
@@ -174,15 +176,23 @@ export class SimpleAudioEngine implements PlaybackEngine {
       const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain);
       const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget);
       const adjustedReleaseFloor = this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor);
-      const adjustedTailSeconds = this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0);
+      const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
+      // 短音でも「attack→decay→音価終端→尻尾」の時刻順を守る（round2 P2）
+      const envelope = this.clampEnvelopeTimes(
+        adjustedAttack,
+        Math.max(adjustedAttack + 0.01, duration * 0.3),
+        duration,
+      );
       gainNode.gain.setValueAtTime(0, context.currentTime);
-      gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, context.currentTime + adjustedAttack);
+      gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, context.currentTime + envelope.attack);
+      gainNode.gain.exponentialRampToValueAtTime(adjustedDecayTarget, context.currentTime + envelope.decay);
+      // 音価の終端の明示点 → 尻尾でほぼゼロへ（時刻指定経路と同じ形・round1 P2）
       gainNode.gain.exponentialRampToValueAtTime(
-        adjustedDecayTarget,
-        context.currentTime + Math.max(adjustedAttack + 0.01, duration * 0.3)
+        Math.max(0.0001, adjustedReleaseFloor),
+        context.currentTime + duration
       );
       gainNode.gain.exponentialRampToValueAtTime(
-        adjustedReleaseFloor,
+        0.0001,
         context.currentTime + duration + adjustedTailSeconds
       );
       
@@ -384,10 +394,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
         tuplet?: { numNotes: number; notesOccupied: number };
         microtones?: { keyIndex: number; type: 'quarterSharp' | 'quarterFlat' }[];
         tieExtendBeatsByKey?: Record<string, number>;
+        /** ペダル（ダンパー）で鳴り終わりを何拍ぶん延ばすか（キーごと・#549） */
+        pedalExtendBeatsByKey?: Record<string, number>;
         tieSuppressedKeys?: string[];
       }>;
       measureBeats?: number;
       isCompoundMeter?: boolean;
+      /** この小節のテンポ（BPM）。省略時は引数 bpm（全体テンポ）を使う（Issue #458） */
+      bpm?: number;
     }>,
     bpm: number = 120,
     startTime?: number
@@ -411,7 +425,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
         // そのため小節開始時刻を別変数で退避しておく。
         const measureStartTime = currentTime;
         const measureBeats = typeof measure?.measureBeats === 'number' ? measure.measureBeats : 4;
-        const measureSeconds = measureBeats * (60 / bpm);
+        // 途中テンポ変更・速度標語で「この小節だけ速さが違う」ことがある（Issue #458）。
+        // 画面側が解決済みの BPM を小節へ載せてくるので、以降の秒換算はすべてこの値で行う。
+        // 指定が無い小節は従来どおり引数の全体テンポで鳴らす（後方互換）
+        const measureBpm = typeof measure?.bpm === 'number' && Number.isFinite(measure.bpm) && measure.bpm > 0
+          ? measure.bpm
+          : bpm;
+        const measureSeconds = measureBeats * (60 / measureBpm);
         if (!measure || !measure.events || measure.events.length === 0) {
           // 空小節でも拍子どおりの長さだけ進める。
           // 3/8 の譜面を 4/4 扱いすると、ここで他パートとずれてしまう。
@@ -420,13 +440,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
         }
         
         let maxMeasureEndTime = currentTime;
-        const secondsPerBeat = 60 / bpm;
+        const secondsPerBeat = 60 / measureBpm;
         // スウィングは複合拍子（6/8 等）では対象外にする（swingUtils 参照）。
         const swingActiveForMeasure = this.swingEnabled && !measure.isCompoundMeter;
 
         // 小節内の各音符を処理
         for (const event of measure.events) {
-          const duration = this.durationToSeconds(event.dur, bpm, event.dots, event.tuplet);
+          const duration = this.durationToSeconds(event.dur, measureBpm, event.dots, event.tuplet);
           // startBeat を持たない単声部イベントは、直前までの累積時間から拍位置を逆算する。
           const nominalStartBeat = typeof event.startBeat === 'number'
             ? event.startBeat
@@ -470,13 +490,32 @@ export class SimpleAudioEngine implements PlaybackEngine {
             // （表拍8分+裏拍8分のタイが 7/6 拍に伸びる誤差の防止・Codex round1 P1）。
             // 次の音の位置（currentTime）は下で duration のまま進めるのでテンポは崩れない。
             const tieExtendBeats = event.tieExtendBeatsByKey?.[primaryKey] ?? 0;
+            // タイが次小節へまたぐとき、その先の小節はテンポが違うかもしれない（#458 round1 P2）。
+            // 「開始小節のBPM×総拍数」ではなく、小節ごとのテンポ区間で秒数を積算する
             const tiedSoundDuration = tieExtendBeats > 0
-              ? ((nominalStartBeat + nominalDurationBeats + tieExtendBeats) - swingTiming.startBeat)
-                * secondsPerBeat * (event.durationScale ?? 1)
+              ? beatSpanToSeconds(
+                  swingTiming.startBeat,
+                  nominalStartBeat + nominalDurationBeats + tieExtendBeats,
+                  tempoSegmentsFrom(scoreData, measureIndex, measureBpm),
+                ) * (event.durationScale ?? 1)
               : soundDuration;
+            // ペダル（ダンパー）を踏んでいる間は、音価を過ぎても解除位置まで響きが残る（#549）。
+            // スタッカート（durationScale < 1）でも響きは残るので、掛け算ではなく
+            // 「記譜どおりの鳴り終わり」と「ペダル解除位置」の**遅い方**を採る。
+            const pedalExtendBeats = event.pedalExtendBeatsByKey?.[primaryKey] ?? 0;
+            const soundingDuration = pedalExtendBeats > 0
+              ? Math.max(
+                  tiedSoundDuration,
+                  beatSpanToSeconds(
+                    swingTiming.startBeat,
+                    nominalStartBeat + nominalDurationBeats + pedalExtendBeats,
+                    tempoSegmentsFrom(scoreData, measureIndex, measureBpm),
+                  ),
+                )
+              : tiedSoundDuration;
             await this.playNoteAtTime(
               frequency,
-              tiedSoundDuration,
+              soundingDuration,
               eventStartTime,
               this.normalizePlaybackVelocity((event as { velocity?: number }).velocity)
             );
@@ -551,15 +590,24 @@ export class SimpleAudioEngine implements PlaybackEngine {
         0.0001,
         this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor) * velocity
       );
-      const adjustedTailSeconds = this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0);
-      gainNode.gain.setValueAtTime(0, startTime);
-      gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, startTime + adjustedAttack);
-      gainNode.gain.exponentialRampToValueAtTime(
-        adjustedDecayTarget,
-        startTime + Math.max(adjustedAttack + 0.01, duration * 0.3)
+      const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
+      // 短音でも「attack→decay→音価終端→尻尾」の時刻順を守る（round2 P2）
+      const envelope = this.clampEnvelopeTimes(
+        adjustedAttack,
+        Math.max(adjustedAttack + 0.01, duration * 0.3),
+        duration,
       );
+      gainNode.gain.setValueAtTime(0, startTime);
+      gainNode.gain.linearRampToValueAtTime(adjustedPeakGain, startTime + envelope.attack);
+      gainNode.gain.exponentialRampToValueAtTime(adjustedDecayTarget, startTime + envelope.decay);
+      // 音価の終端に明示のオートメーション点を置き、そこから尻尾区間でほぼゼロへ減衰させる
+      //（round1 P2: 終端の点が無いと「音価の後のリリース」ではなく音本体の勾配が緩むだけになる）
       gainNode.gain.exponentialRampToValueAtTime(
         adjustedReleaseFloor,
+        startTime + duration
+      );
+      gainNode.gain.exponentialRampToValueAtTime(
+        0.0001,
         startTime + duration + adjustedTailSeconds
       );
       
@@ -1055,6 +1103,29 @@ export class SimpleAudioEngine implements PlaybackEngine {
     });
   }
 
+  /**
+   * 台帳への登録だけを行う（配線はしない）。Safari 簡易経路用（#525 round2 P1）:
+   * registerOscillators は層ゲインの配線まで行うため、配線済みの簡易経路から呼ぶと
+   * 二重配線（並列加算で音量が変わる+Safari 対策で避けた GainNode の復活）になる。
+   */
+  private trackOscillatorsForStop(oscillators: OscillatorNode[], gainNode: GainNode): string {
+    const oscillatorId = `osc-${this.oscillatorCounter++}`;
+    this.oscillators.set(oscillatorId, { oscillators, gainNode });
+    return oscillatorId;
+  }
+
+  /**
+   * エンベロープの attack / decay の時刻を音価の終端までに収める（#525 round2 P2）。
+   * Web Audio のオートメーション点は時刻順に評価されるため、64分音符などの短音で
+   * attack/decay が音価終端より後ろへ出ると「終端→尻尾」の順序が壊れ、
+   * 終端の後に音量が上がってから尻尾へ入ってしまう。
+   */
+  private clampEnvelopeTimes(attackSeconds: number, decaySeconds: number, duration: number): { attack: number; decay: number } {
+    const attack = Math.min(attackSeconds, Math.max(0.001, duration * 0.5));
+    const decay = Math.min(Math.max(decaySeconds, attack + 0.001), duration);
+    return { attack, decay };
+  }
+
   private registerOscillators(
     oscillators: OscillatorNode[],
     gainNode: GainNode,
@@ -1148,19 +1219,30 @@ export class SimpleAudioEngine implements PlaybackEngine {
     const adjustedAttack = this.getAdjustedAttack(instrumentConfig.attack);
     const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain);
     const adjustedDecayTarget = this.getAdjustedDecayTarget(instrumentConfig.decayTarget);
-    const adjustedTailSeconds = this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0);
+    const adjustedReleaseFloor = Math.max(0.0001, this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor));
+    // 簡易経路でも余韻の長さは通常経路と同じにする（Issue #525。
+    // ここだけ短いと、Safari だけ長い音がプツンと切れて聞こえる）
+    const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
+    // 短音でも「attack→decay→音価終端→尻尾」の時刻順を守る（round2 P2）
+    const envelope = this.clampEnvelopeTimes(
+      Math.max(0.005, adjustedAttack),
+      Math.max(0.08, duration * 0.35),
+      duration,
+    );
 
     // Safari では複雑なノード構成より、単純な直結のほうが安定しやすい。
     // その代わり音色差は少し薄くなるが、まず「鳴る」ことを優先する。
     gainNode.gain.setValueAtTime(0.0001, startTime);
     gainNode.gain.linearRampToValueAtTime(
       Math.max(0.12, Math.min(adjustedPeakGain, 0.25)),
-      startTime + Math.max(0.005, adjustedAttack)
+      startTime + envelope.attack
     );
     gainNode.gain.linearRampToValueAtTime(
       Math.max(0.02, adjustedDecayTarget),
-      startTime + Math.max(0.08, duration * 0.35)
+      startTime + envelope.decay
     );
+    // 音価の終端の明示点（音色ごとの releaseFloor・round2 P2）→ 尻尾でほぼゼロへ
+    gainNode.gain.linearRampToValueAtTime(adjustedReleaseFloor, startTime + duration);
     gainNode.gain.linearRampToValueAtTime(
       0.0001,
       startTime + duration + adjustedTailSeconds
@@ -1168,9 +1250,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
     oscillator.connect(gainNode);
     gainNode.connect(this.getOutputNode(context));
+    // stopAll で尻尾ごと止められるよう、簡易経路の音も台帳に登録する（round1 P1）。
+    // 配線は済んでいるので登録だけ行う（round2 P1: registerOscillators だと二重配線になる）
+    const safariOscillatorId = this.trackOscillatorsForStop([oscillator], gainNode);
     oscillator.start(startTime);
     oscillator.stop(startTime + duration + adjustedTailSeconds);
     oscillator.addEventListener('ended', () => {
+      this.cleanupOscillator(safariOscillatorId, gainNode);
       try {
         oscillator.disconnect();
       } catch {
@@ -1207,6 +1293,32 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
   private getAdjustedTailSeconds(baseTailSeconds: number): number {
     return Math.max(0, baseTailSeconds * (0.6 + this.soundProfile.release * 1.2));
+  }
+
+  /**
+   * 音価のあとに残す余韻（尻尾）の長さ（秒）を決める（Issue #525）。
+   *
+   * 音色ごとの `tailSeconds`（ギターの残響感など、その楽器の個性）と、
+   * 全音源共通の下限（`releaseTail.ts`）の**長い方**を採る。
+   * 下限を入れるのは、ピアノを含む多くの音色の `tailSeconds` が 0.05 秒前後しかなく、
+   * 2分・全音符が音価ちょうどで切られて硬く聞こえていたため（運用者の検聴・2026-08-31）。
+   * 個性として長い尻尾を持つ音色は、**長い音符では**その長さのまま維持される。
+   * 短い音符では音色固有の尻尾も max(0.12, 音符長) を上限に抑える（round1/2 P2）。
+   *
+   * 伸びるのは「鳴り終わりの時刻」だけで、開始時刻・次の音までの間隔は一切変えない。
+   */
+  private resolveEffectiveTailSeconds(
+    instrumentConfig: { tailSeconds?: number },
+    duration: number,
+  ): number {
+    const uncapped = Math.max(
+      this.getAdjustedTailSeconds(instrumentConfig.tailSeconds ?? 0),
+      resolveReleaseTailSeconds(this.soundProfile.release, duration),
+    );
+    // 音色固有の尻尾（ギター等）も短い音符では音符長まで（下限 0.12 秒）に抑える
+    //（round1 P2: Math.max だけだと音色固有値が短音抑制を迂回し、速いパッセージが濁る）。
+    // 長い音符では duration が上限を押し上げるので、音色の個性はそのまま残る
+    return Math.min(uncapped, Math.max(0.12, duration));
   }
 
   private getAdjustedLayerGainRatio(
@@ -1333,3 +1445,4 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
 // デフォルトのSimpleAudioEngineインスタンスをエクスポート
 export const defaultSimpleAudioEngine = new SimpleAudioEngine();
+

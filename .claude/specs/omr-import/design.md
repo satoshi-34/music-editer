@@ -116,6 +116,27 @@ ARG にしているのはこのため）。
 | `server/omr/server.test.js` | 実HTTPで配線を固定: 上限超過でも理由コード付き 413 JSON が届くこと（Content-Length 事前拒否 / chunked 受信中の打ち切りの両方）・maxPdfBytes 指定が PDF 本体の上限にも効くこと・CORS・正常系・OPTIONS / health / 404 |
 | `src/utils/omrApi.test.ts` | fetch モックで送信先/形式、失敗レスポンスの理由コードの持ち上げ、URL 未設定時に通信しないこと |
 | `src/components/ScorePagePdfImport.test.tsx` | ScorePage の配線: URL 未設定ならボタンを出さない／PDF を選ぶと変換APIへ送り、返った .mxl が画面へ反映される／失敗時は理由と代替手順を通知し譜面を変えない |
+| `src/components/ScorePageFileOpenWiring.test.tsx` | 「開く」ボタン群と隠し input の配線（#464）。**変換APIの設定あり/なしの両方**を固定する（#587） |
+
+### テストは環境変数を暗黙に読まない（Issue #587・2026-09-03）
+
+`VITE_OMR_API_URL` は「設定されていれば PDF 用の隠し input と『PDF (β)』ボタンが増える」という
+**画面の構造を変える**設定なので、環境変数を stub せずに書いたテストは
+**`.env.local` を置いている開発環境だけ落ちる**。実際に
+`ScorePageFileOpenWiring.test.tsx` の「input が2つ」の期待が開発環境でだけ
+`expected 3 to be 2` で落ちた（CI は環境変数が無いため緑のまま＝気づきにくい形）。
+
+したがってこの設定に触れるテストは、**必ず `vi.stubEnv` で明示する**（`afterEach` の
+`vi.unstubAllEnvs()` とセット）。未設定を表したいときは空文字を渡せばよい
+（`getOmrApiUrl` は空文字を null と解釈するため、未設定と同じ扱いになる）。
+
+棚卸しの結果（#587 時点）:
+
+| テスト | 状態 |
+| --- | --- |
+| `ScorePageFileOpenWiring.test.tsx` | **これだけが暗黙依存だった** → 未設定を stub、加えて設定ありのケースを追加して両方を固定 |
+| `ScorePagePdfImport.test.tsx` / `omrApi.test.ts` | 以前から各ケースで明示的に stub 済み（`VITE_OMR_API_TOKEN` も両方向を固定）。変更不要 |
+| ほかの隠し input を使うテスト（`ScorePageMxlImport` / `MusicXmlDefaults` / `MusicXmlPedal` / `DynamicsImportNotice` / `MusicXmlRepeatedAttributes` / `TempoExportWiring` / `PartLayout` / `LayerSlice` / `MusicXmlGrandStaff`） | いずれも **`accept` の内容で input を探している**（本数や並び順に依存しない）ため、PDF 用が増えても結果が変わらない。変更不要 |
 
 ## 6. 影響範囲
 

@@ -5,6 +5,7 @@ import type { KeySignature } from '../utils/noteKeyUtils';
 import type { InstrumentType } from '../audio/SoundSource';
 import type { ClefType } from '../components/clefUtils';
 import type { PageSizeId } from '../utils/pageSize';
+import type { SavedPageMargins } from '../utils/measureLayoutUtils';
 
 export type DurKey = '1' | '2' | '4' | '8' | '16' | '32' | '64';
 export type TimeSignature = [number, number];
@@ -85,6 +86,13 @@ export interface CustomSymbolDef {
   id: string;
   name: string;
   shapes: ShapePrimitive[];
+  /**
+   * フリーハンド線（path）へ手ぶれ補正（平滑化）をかけて表示するか。
+   * 省略時は false（補正なし）＝この機能より前に保存された記号は従来どおりの見た目になる。
+   * 補正は描画のたびに元の points から計算するだけなので、元のストロークは常に保持され、
+   * オフに戻せば描いたままの線に戻る（「震え自体が意図」の記号のための逃げ道）。
+   */
+  smoothing?: boolean;
 }
 
 /** 強弱記号。NoteEvent にぶら下げて「この音符から効き始める記号」を表す */
@@ -486,6 +494,31 @@ export interface SavedScoreData {
    * 従来の保存データとの差分は増えない。
    */
   pageSize?: PageSizeId;
+  /**
+   * 「音符の大きさ」倍率（Issue #477）。0.8〜2.0。
+   * MusicXML の `<defaults><scaling>` から引き継いだ縮尺を、その作品の属性として保存する
+   * （#495 の用紙サイズと同じ原則で、別の環境で開き直しても同じ縮尺で開く）。
+   * 旧データ互換のため省略可で、省略時は従来どおり表示設定（localStorage の
+   * 「音符の大きさ」スライダー値）に従う。工場出荷既定値と同じときは項目自体を
+   * 書き出さないため、従来の保存データとの差分は増えない。
+   */
+  notationSizeMultiplier?: number;
+  /**
+   * ページ余白（mm、Issue #477）。左右・上・下。
+   * MusicXML の `<defaults><page-layout><page-margins>` から引き継いだ余白を作品の属性として
+   * 保存する。notationSizeMultiplier と同じく省略可で、省略時は表示設定に従う。
+   */
+  pageMargins?: SavedPageMargins;
+  /**
+   * 作品ごとの全体テンポ（♩=N、Issue #543）。再生パネルに出す「その作品のテンポ」で、
+   * 小節ごとの数値テンポ変更（`MeasureData.bpm`）や速度標語より弱い（最初の既定値になる）。
+   *
+   * 用紙サイズ（#495）・音符の大きさ（#477）と同じく**作品の属性**として保存するので、
+   * 別の作品へ切り替えても前の作品のテンポが残らない。旧データ互換のため省略可で、
+   * 省略時は従来どおりアプリ全体設定（localStorage の music-app-tempo-settings）→
+   * 無ければ 120 として開く（normalizeSavedGlobalBpm が正本）。
+   */
+  globalBpm?: number;
   parts: PartData[];
   systems: number;
   measuresPerSystem: number;

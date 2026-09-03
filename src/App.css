@@ -906,6 +906,20 @@ button.ghost.active:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
+/* 3区画（トランスポート / テンポ・位置 / 音）のまとまり（Issue #562）。
+   区画ごとに薄い枠で囲って、「どこまでが1つのまとまりか」を目で分かるようにする。
+   区画の間の縦線ではなく枠にしているのは、ツールバーの幅が足りないと
+   区画が折り返して縦に積まれるため（縦線だと積まれた瞬間に区切りに見えなくなる）。 */
+.playback-section {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
 /* 再生制御ボタン */
 .playback-buttons {
   display: flex;
@@ -1101,6 +1115,29 @@ button.ghost.active:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+/* 小節番号を指定した途中再生（Issue #545）。位置表示のとなりに並べる */
+.playback-start-measure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #495057;
+}
+
+.playback-start-measure-label {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.playback-start-measure-input {
+  width: 64px;
+  padding: 4px 6px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: center;
+}
+
 /* レスポンシブ対応 */
 @media (max-width: 768px) {
   .toolbar {
@@ -1116,6 +1153,12 @@ button.ghost.active:hover:not(:disabled) {
   .playback-buttons {
     justify-content: center;
   }
+
+  /* 狭い画面では区画の中身も縦に積む（#562） */
+  .playback-section {
+    flex-direction: column;
+    align-items: stretch;
+  }
   
   .tempo-controls,
   .instrument-controls {
@@ -1125,6 +1168,10 @@ button.ghost.active:hover:not(:disabled) {
   .position-display {
     justify-content: center;
     margin-left: 0;
+  }
+
+  .playback-start-measure {
+    justify-content: center;
   }
 
   .toolbar-score-controls,
@@ -1361,6 +1408,38 @@ button.ghost.active:hover:not(:disabled) {
      white-space: nowrap を継承しないため） */
   white-space: normal;
 }
+/* 入力欄つきの確認ダイアログ（Issue #507 の書き出しファイル名）。
+   拡張子はアプリが付けるので、編集できない添え字として入力欄の右に並べる。 */
+.confirm-dialog-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.confirm-dialog-input {
+  box-sizing: border-box;
+  /* 名前が長くても入力欄が伸び縮みできるよう flex で幅を持たせる
+     （min-width: auto のままだと中身の幅でダイアログを押し広げてしまう） */
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  color: #111827;
+  background: #fff;
+}
+.confirm-dialog-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+.confirm-dialog-input-suffix {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: #6b7280;
+}
+
 .confirm-dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -1870,6 +1949,61 @@ button.ghost.active:hover:not(:disabled) {
   border-radius: 4px;
 }
 
+/* 段の上端＝上の段との境界帯（Issue #523 = #450 の子2・SystemGapDragHandle.tsx）。
+   選択中の段にだけ出す「上下ドラッグの掴みしろ」で、掴んで動かすとその境界そのもの
+   （上の段との距離＝ラッパーの margin-top）が指について変わる。
+   下端ではなく上端へ置くのは「掴んだ境界が動く」ようにするため（round1 P1）。段の間隔は
+   後続の段の margin-top として入る値なので、下端を掴んで自分の margin-top を動かすと、
+   掴んだ境界とは別の場所（自分より上のすき間）が動いてしまう。
+   左右端の選択判定（.system-select-edge）とは置き場所（左右の外側 / 上端）も
+   カーソル（pointer / row-resize）も分けてあるので、取り違えて掴むことがない（受入条件4）。
+   段と段のすき間へ出すため、五線（SVG）の上には重ならず、音符のクリックを奪わない。
+   touch-action: none は、タッチのドラッグをブラウザのスクロールに取られないようにするため
+   （#536 で確立した pointer 規約）。 */
+.system-gap-drag-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 14px;
+  z-index: 4;
+  cursor: row-resize;
+  touch-action: none;
+}
+/* 普段は透明。カーソルを乗せたとき・掴んでいる間だけ細い線を出して掴める場所を知らせる */
+.system-gap-drag-handle::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 6px;
+  height: 2px;
+  background: rgba(147, 197, 253, 0.75);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.system-gap-drag-handle:hover::before,
+.system-gap-drag-handle--grabbing::before {
+  opacity: 1;
+}
+/* ドラッグ中にカーソルの近くへ出す現在値（#318「何が変わっているか見せる」）。
+   カーソルの下敷きにならないよう、当たり判定は持たせない（pointer-events: none） */
+.system-gap-drag-value {
+  position: absolute;
+  bottom: 16px;
+  z-index: 31;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: #374151;
+  background: #fff;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* 選択中の段の横に出るレイアウト調整パネル（SystemLayoutPanel.tsx）。
    段の下端の外側（段と段のすき間）へ、クリックされた端の側に寄せて出す。
    五線の中身（音符）を隠さず、上に出す案のように画面上端の固定ツールバーへ
@@ -2210,6 +2344,9 @@ button.ghost.active:hover:not(:disabled) {
      選択中の薄い枠も同様（紙面に編集中の印を残さない）。 */
   .system-select-edge { display: none !important; }
   .system-layout-panel { display: none !important; }
+  /* 段の境界ドラッグ帯（Issue #523）も同じ編集用UI。掴みしろ自体は透明だが、
+     ドラッグ中の値の吹き出しごと紙から消す */
+  .system-gap-drag-handle { display: none !important; }
   /* outline の実体は内側ラッパー側に付く（round1 の当たり判定修正で移動）ため、
      両方をリセットする（外側だけだと選択したまま印刷すると青枠が残る。Codex round2 P2） */
   .system-select-frame--selected { outline: none !important; }
@@ -2346,30 +2483,21 @@ button.ghost.active:hover:not(:disabled) {
   .print-hidden-system { display: none !important; }
   .print-hidden-page { display: none !important; }
 
-  /* 内容のある最後のページだけ、最後の段をページ下端へ寄せる。
-     .system-stack は通常 space-evenly で段を均等配置しているが、末尾の空段が
-     print-hidden-system で消えると最後の段の下に余白だけ残ってしまう。
-     space-between にすると最初の段は上端、最後の段は下端へ付き、
-     終止線がページ右下角で締まって見える（画面表示には影響しない）。 */
-  /* 最終ページは行グリッド（--page-capacity による flex-grow 等分）を無効化し、
-     従来どおり「段の実サイズ＋ justify-content」で配置する。
-     行グリッドのまま space-between/flex-start を付けても、子が flex-grow で
-     残り高さを埋め切ってしまい隙間が生まれず、下端寄せ／上揃えの効果が出ないため。 */
-  .print-final-page .system-stack,
-  .print-final-page-single .system-stack {
-    flex: 1 1 0% !important;
-  }
-  .print-final-page .system-stack > *,
-  .print-final-page-single .system-stack > * {
-    flex: 0 0 auto !important;
-  }
-  .print-final-page .system-stack { justify-content: space-between; }
-  /* ただし、その最後のページの可視段が1段だけの場合は例外として「上揃え」にする。
-     1段しかないページを下端へ落とすと、上が大きく空いて紙面が不自然に見えるため
-     （市販譜でも最終ページが1段だけのときは上に置き、下は余白のままにする作法）。
-     終止線が段の右端に付くことは変わらないので、曲の締まりは損なわれない。
-     2段以上のページは従来の space-between のまま（最後の段が下端へ付く）。 */
-  .print-final-page-single .system-stack { justify-content: flex-start; }
+  /* 内容のある最後のページも、他ページとまったく同じ行グリッド
+     （--page-capacity ベースの固定スロット高＋ --system-row-gap）で「上詰め」にする。
+     段数が足りないぶんはページ下端の余白として残す（Issue #506）。
+     以前はこのページだけ行グリッドを外し（flex: 1 1 0%）、`justify-content: space-between`
+     で最後の段をページ下端へ寄せていた（終止線をページ右下角で締めるため）。しかし
+     15ページ中の最終ページのように残り段数が少ないと、その2〜3段がページ全高へ
+     引き伸ばされて段間隔だけ異常に広がり、最下段がページ番号（.page-foot）へ
+     食い込んで重なっていた。市販譜でも最終ページは上詰めで下を余白にするのが普通で、
+     Finale の書き出し（<system-distance>）も上限つきの控えめな引き伸ばしにとどめ、
+     下余白＝ページ番号の領域は必ず残している。
+     したがってここでは一切の上書きをせず、上の .score-area .system-stack の
+     共通ルールへ委ねる（＝下端寄せの特別扱いを廃止した）。
+     justify-content は既定値のままでも上詰めになるが、「意図して上詰めにしている」ことを
+     宣言として残すため明示する（将来また space-between を足し戻さないための目印）。 */
+  .print-final-page .system-stack { justify-content: flex-start; }
 }
 
 /* ===== 印刷プレビュー（画面上で印刷結果を再現するモード） =====
@@ -2476,19 +2604,9 @@ button.ghost.active:hover:not(:disabled) {
    1ページとして出てしまっていた）。 */
 .print-preview .print-hidden-system { display: none !important; }
 .print-preview .print-hidden-page { display: none !important; }
-/* 内容のある最後のページだけ最後の段をページ下端へ寄せる（@media print 側と同じ理由。
-   上の .print-hidden-system でページ内の末尾の段が消えると、space-evenly のままでは
-   最後の段の下に余白だけ残ってしまうため） */
-.print-preview .print-final-page .system-stack,
-.print-preview .print-final-page-single .system-stack {
-  flex: 1 1 0%;
-}
-.print-preview .print-final-page .system-stack > *,
-.print-preview .print-final-page-single .system-stack > * {
-  flex: 0 0 auto;
-}
-.print-preview .print-final-page .system-stack { justify-content: space-between; }
-.print-preview .print-final-page-single .system-stack { justify-content: flex-start; }
+/* 内容のある最後のページも他ページと同じ行グリッドで上詰めにする（@media print 側と同じ理由。
+   Issue #506。プレビューと実際の印刷で見た目が食い違わないよう、こちらにも同じ扱いを複製する） */
+.print-preview .print-final-page .system-stack { justify-content: flex-start; }
 
 /* 画面表示でも、最終ページに「実際に表示される段」が1段だけのときは上揃えにする。
    通常ページのグリッド配置（flex-grow 等分）だと1段だけのページでは段が
@@ -2572,7 +2690,7 @@ svg { animation: none; transition: none; }
   flex-wrap: wrap;
 }
 
-/* ───────────── ホーム画面（Issue #500） ───────────── */
+/* ───────────── ホーム画面（Issue #500 / レイアウトは #512） ───────────── */
 /* 譜面画面の上に重ねる全画面レイヤー。譜面画面を display:none で消さないのは、
    幅を実測して初期の表示倍率を決める処理（初期ズームフィット）が
    幅 0 で狂ってしまうため。不透明な背景で覆って隠す。
@@ -2583,21 +2701,103 @@ svg { animation: none; transition: none; }
   inset: 0;
   z-index: 3000;
   overflow-y: auto;
-  background: #0b2a1a;
-  color: #f4f7f5;
-  padding: 24px 16px 32px;
+  /* Office 系ランチャーと同じ骨格（色付きの左レール＋淡い背景の作業領域）。
+     色そのものはアプリ既存のトーン（深緑＋白いカード）を引き継ぐ（Issue #512） */
+  background: #eef1ef;
+  color: #212529;
   box-sizing: border-box;
 }
 /* 印刷は譜面のためのもの。ホームが出たまま印刷指示が飛んでも紙に出さない */
 @media print {
   .home-screen { display: none; }
 }
-.home-inner {
-  width: min(880px, 100%);
-  margin: 0 auto;
+/* 左レール＋本文の2列。レールは深緑のままにして、アプリの色の印象を変えない */
+.home-shell {
+  display: grid;
+  grid-template-columns: 176px minmax(0, 1fr);
+  min-height: 100%;
+}
+
+/* ── 左レール（Issue #512）── */
+/* スクロールしても常に見えるよう、スクロール領域（.home-screen）に対して sticky で貼り付ける */
+.home-rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 14px;
+  padding: 20px 12px;
+  background: #0b2a1a;
+  color: #f4f7f5;
+}
+.home-rail-mark {
+  font-size: 22px;
+  line-height: 1;
+  padding: 0 8px;
+  opacity: 0.9;
+}
+.home-rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* レールの「開く/設定」トグルとフライアウト（Issue #528 運用者QA: 中央から撤去した受け皿） */
+.home-rail-button {
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.home-rail-button.is-active {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+}
+.home-rail-flyout {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+.home-rail-flyout .home-secondary-button {
+  width: 100%;
+}
+
+.home-rail-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 13px;
+}
+.home-rail-link:hover { background: rgba(255, 255, 255, 0.12); }
+.home-rail-icon {
+  width: 16px;
+  text-align: center;
+  opacity: 0.85;
+}
+
+/* ── 本文（新規ギャラリー・最近使ったファイル・開く・設定）── */
+.home-main {
+  /* 幅を絞らずに画面いっぱいへ広げる（Issue #528）。カード類は下のグリッドが
+     幅に応じて列数を増やすので、広い画面ほど1行に並ぶ枚数が増える。
+     ただし超ワイド画面で文字が端から端まで散らばらないよう、上限だけ置く */
+  width: 100%;
+  max-width: 1800px;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding: 24px 28px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 .home-header {
   display: flex;
@@ -2619,6 +2819,7 @@ svg { animation: none; transition: none; }
 .home-section {
   background: #ffffff;
   color: #212529;
+  border: 1px solid #e3e6e4;
   border-radius: 10px;
   padding: 14px 16px;
   display: flex;
@@ -2631,23 +2832,6 @@ svg { animation: none; transition: none; }
   font-weight: 700;
   color: #495057;
 }
-.home-primary-button {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  width: 100%;
-  padding: 14px 16px;
-  border: none;
-  border-radius: 8px;
-  background: #1c7c4a;
-  color: #fff;
-  cursor: pointer;
-  text-align: left;
-}
-.home-primary-button:hover { background: #17663d; }
-.home-primary-button-label { font-size: 16px; font-weight: 700; }
-.home-primary-button-sub { font-size: 12px; opacity: 0.92; }
 .home-error {
   margin: 0;
   padding: 10px 14px;
@@ -2665,24 +2849,38 @@ svg { animation: none; transition: none; }
   color: #666;
   line-height: 1.6;
 }
+/* 新規作成ギャラリー（Office の「空白のブック＋テンプレート」に相当） */
 .home-card-grid {
   display: grid;
-  /* 画面が狭いときは自動で段数が減る（スマホでも横スクロールを出さない） */
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 8px;
+  /* 1枚あたりの下限（200px）だけ決めて、あとは幅に応じて列数が増減する。
+     auto-fill にしているのは、カードが少ないときに1枚が横いっぱいへ
+     伸びてしまうのを防ぐため（auto-fit は空の列を潰してカードを引き伸ばす） */
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
 }
 .home-card-button {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 12px;
+  gap: 6px;
+  padding: 10px;
   border: 1px solid #ced4da;
   border-radius: 8px;
-  background: #f8f9fa;
+  background: #fff;
   cursor: pointer;
   text-align: left;
 }
-.home-card-button:hover { background: #e9ecef; }
+.home-card-button:hover {
+  background: #f8f9fa;
+  border-color: #1c7c4a;
+}
+/* サムネイル。縦横比を固定して、段数の違う譜種を並べても高さがそろうようにする */
+.home-card-thumb {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 120 / 76;
+  border-radius: 4px;
+}
 .home-card-label { font-size: 14px; font-weight: 600; }
 .home-card-description { font-size: 11px; color: #666; line-height: 1.5; }
 .home-button-row {
@@ -2699,33 +2897,47 @@ svg { animation: none; transition: none; }
   cursor: pointer;
 }
 .home-secondary-button:hover { background: #e9ecef; }
+/* 最近使ったファイル（Issue #528 でカードグリッドへ。新規作成カードと同じ規則で横へ流す） */
 .home-work-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
   /* 作品が増えても画面が縦に伸び続けないよう、一覧だけスクロールさせる
-     （作品一覧パネルと同じ考え方） */
-  max-height: min(40vh, 300px);
+     （作品一覧パネルと同じ考え方）。列が増えるぶん、行形式のときより高さは緩める */
+  max-height: min(52vh, 420px);
   overflow-y: auto;
 }
 .home-work-button {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  padding: 8px 10px;
-  border: 1px solid #e9ecef;
-  border-radius: 6px;
+  box-sizing: border-box;
+  padding: 12px 12px;
+  border: 1px solid #ced4da;
+  border-radius: 8px;
   background: #fff;
   cursor: pointer;
   text-align: left;
 }
-.home-work-button:hover { background: #f1f3f5; }
-.home-work-title { font-size: 13px; font-weight: 600; }
+.home-work-button:hover {
+  background: #f8f9fa;
+  border-color: #1c7c4a;
+}
+/* 名前は伸ばし、更新日時は右端へ寄せる（長い作品名でもカード幅を押し広げない） */
+.home-work-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-work-icon { color: #1c7c4a; font-size: 15px; }
 .home-updated-at { font-size: 11px; color: #868e96; }
 .home-footer {
   display: flex;
@@ -2733,7 +2945,42 @@ svg { animation: none; transition: none; }
   gap: 10px;
   flex-wrap: wrap;
   font-size: 11px;
-  color: #c8d6cd;
+  color: #6c757d;
 }
 .home-version { font-variant-numeric: tabular-nums; }
 .home-footer-note { opacity: 0.85; }
+
+/* 狭い画面ではレールを縦のままにできないので、上部の横並び（タブのような並び）に変える。
+   Office のモバイル版と同じく、ナビは1行に収めて本文を広く使う */
+@media (max-width: 760px) {
+  .home-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .home-rail {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    overflow-x: auto;
+  }
+  .home-rail-nav {
+    flex-direction: row;
+    gap: 4px;
+  }
+  .home-rail-link {
+    padding: 6px 8px;
+    white-space: nowrap;
+  }
+  .home-main {
+    padding: 16px 12px 24px;
+  }
+  /* 375px 幅でも横スクロールを出さずに2列へ収める（Issue #512 で実測した条件を維持） */
+  .home-card-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+  .home-work-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
