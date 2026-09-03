@@ -99,8 +99,12 @@ function parseOverrides(raw: string | null): Record<string, number> {
     const result: Record<string, number> = {};
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
       // 未登録キーは取り込まない（round1 P2: 残すと「全部リセット」後も上書き中表示が復活する）
-      if (!DEV_TUNING_ENTRIES.some((e) => e.key === k)) continue;
-      if (typeof v === 'number' && Number.isFinite(v)) result[k] = v;
+      const entry = DEV_TUNING_ENTRIES.find((e) => e.key === k);
+      if (!entry) continue;
+      if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+      // 読込側でも範囲へクランプする（round2 P2: 旧形式や手書きの localStorage に
+      // 範囲外の値が残っていると、保存境界のクランプだけでは実効値が壊れる）
+      result[k] = Math.min(entry.max, Math.max(entry.min, v));
     }
     return result;
   } catch {

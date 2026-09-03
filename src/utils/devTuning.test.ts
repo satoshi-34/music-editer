@@ -55,6 +55,11 @@ describe('devTuned', () => {
     resetCacheForTest();
     expect(devTuned('layout.compression', 0.64)).toBe(0.64);
 
+    // 旧形式（読込クランプ前）の範囲外値が localStorage に残っていても、読込時に範囲へ寄る
+    window.localStorage.setItem(DEV_TUNING_STORAGE_KEY, '{"layout.compression":5}');
+    resetCacheForTest();
+    expect(devTuned('layout.compression', 0.64)).toBe(1);
+
     setDevTuningOverride('layout.compression', 0.7);
     resetAllDevTuning();
     expect(window.localStorage.getItem(DEV_TUNING_STORAGE_KEY)).toBeNull();
