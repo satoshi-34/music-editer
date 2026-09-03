@@ -15,19 +15,26 @@ import {
 import { SCHEDULE_LEAD_SECONDS } from '../audio/scheduleLead';
 import { DEFAULT_GLOBAL_BPM } from '../audio/tempoRange';
 
-/** playParts の予約に「かかったことにする」実時間（ms）。Date.now をこのぶん進める */
+/** 音源ロードに「かかったことにする」実時間（ms）。SoundFont の冷間ロードを模す（round2 P1） */
+const LOAD_COST_MS = 300;
+/** 予約ループに「かかったことにする」実時間（ms）。Date.now をこのぶん進める */
 const SCHEDULING_COST_MS = 40;
 let clockOffsetMs = 0;
 const playPartsMock = vi.fn(async () => {
+  // 実エンジンと同じ順: ロードを待つ → 起点を決めて壁時計を控える → 予約ループ
+  clockOffsetMs += LOAD_COST_MS;
+  const scheduledAtMs = Date.now();
   clockOffsetMs += SCHEDULING_COST_MS;
+  return { scheduledAtMs };
 });
+const resumeMock = vi.fn().mockResolvedValue(undefined);
 vi.mock('../audio/createPlaybackEngine', () => ({
   createPlaybackEngine: () => ({
     initialize: vi.fn().mockResolvedValue(undefined),
     playNoteByName: vi.fn().mockResolvedValue(undefined),
     playParts: playPartsMock,
     suspend: vi.fn().mockResolvedValue(undefined),
-    resume: vi.fn().mockResolvedValue(undefined),
+    resume: resumeMock,
     stopAll: vi.fn(),
     dispose: vi.fn(),
     setInstrument: vi.fn(),
@@ -76,6 +83,7 @@ describe('再生の先読みリードと画面側の同期（Issue #610）', () 
   beforeEach(() => {
     localStorageMock.clear();
     playPartsMock.mockClear();
+    resumeMock.mockClear();
     clockOffsetMs = 0;
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get: () => 700, configurable: true });
@@ -111,13 +119,29 @@ describe('再生の先読みリードと画面側の同期（Issue #610）', () 
     const leadMs = SCHEDULE_LEAD_SECONDS * 1000;
     const noteMs = 4 * (60000 / DEFAULT_GLOBAL_BPM);
     // 1拍目のハイライト（タイムライン atMs=0）は、リードぶん遅らせた上で
-    // 予約に使った実時間を差し引いて予約される
+    // 予約ループに使った実時間だけを差し引いて予約される。音源ロードの時間は
+    // 実音の起点より前なので差し引かない（round2 P1）
     await waitFor(() => { expect(delays).toContain(leadMs - SCHEDULING_COST_MS); });
     // 終了タイマー（＝最も遠い予約）も同じ時計: 音の長さ + リード − 予約の実時間
-    expect(Math.max(...delays)).toBe(noteMs + leadMs - SCHEDULING_COST_MS);
-    // リードを足し忘れた／予約後の Date.now() を起点にした形（noteMs や noteMs+leadMs）ではない
+    const endDelay = noteMs + leadMs - SCHEDULING_COST_MS;
+    expect(Math.max(...delays)).toBe(endDelay);
+    // 退行の形を名指しで除外: リード無し／予約後の Date.now() 起点／呼び出し前の時刻起点（ロード込み）
     expect(delays).not.toContain(noteMs);
     expect(delays).not.toContain(noteMs + leadMs);
+    expect(delays).not.toContain(endDelay - LOAD_COST_MS);
+
+    // 一時停止→再開: 再生済みの時間だけが残りから引かれる（round2 P2: 起点を予約前に
+    // 置くと、予約の実時間がここでもう一度引かれて再開後の終了が早まる）
+    const PLAYED_MS = 500;
+    clockOffsetMs += PLAYED_MS;
+    fireEvent.click(screen.getByRole('button', { name: '一時停止' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再開' })).toBeTruthy(); });
+    delays.length = 0;
+    fireEvent.click(screen.getByRole('button', { name: '再開' }));
+    await waitFor(() => { expect(resumeMock).toHaveBeenCalledTimes(1); });
+    await waitFor(() => { expect(delays.length).toBeGreaterThan(0); });
+    expect(Math.max(...delays)).toBe(endDelay - PLAYED_MS);
+    expect(delays).not.toContain(endDelay - PLAYED_MS - SCHEDULING_COST_MS);
 
     timeoutSpy.mockRestore();
     nowSpy.mockRestore();

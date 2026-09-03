@@ -1823,12 +1823,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // タイムラインは playParts の**前**に作る（#579 round1 P2: 実音の予約後に
           // 同期計算すると、計算時間ぶんハイライトの0ms起点が遅れて帯が終始ずれる）
 
-          // エンジンは予約ループの**開始時点**の「今＋先読みリード」を実音の起点にする（#610）。
-          // playParts の完了後の Date.now() を起点にすると、予約処理の実時間ぶん
-          // ハイライトと終了時刻が実音より遅れる（round1 P2）ので、呼ぶ前の時刻を控える
-          const scheduledAt = Date.now();
-          await audioEngine.playParts(partObjs, effectiveGlobalBpm);
-          const scheduleElapsedMs = Date.now() - scheduledAt;
+          // エンジンは「音源ロード後・予約ループ開始時点」の「今＋先読みリード」を実音の起点にし、
+          // その瞬間の壁時計を返す（#610）。playParts 完了後の Date.now() を起点にすると予約処理の
+          // 実時間ぶん帯が遅れ（round1 P2）、呼び出し前の時刻を起点にすると SoundFont の
+          // 音源ロード時間ぶん帯が早まる（round2 P1）ので、エンジンが返す起点だけを使う。
+          // 起点を返さない偽エンジン（テスト）は呼び出し前の時刻で近似する
+          const fallbackScheduledAt = Date.now();
+          const scheduleInfo = await audioEngine.playParts(partObjs, effectiveGlobalBpm);
+          const scheduleElapsedMs = Math.max(0, Date.now() - (scheduleInfo?.scheduledAtMs ?? fallbackScheduledAt));
 
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
@@ -1850,11 +1852,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           ) + scheduleLeadSeconds();
           setPlaybackState('playing');
           clearPlaybackTimer();
-          // 起点は予約開始時刻（scheduledAt）。残り時間・終了タイマー・タイムラインの
-          // 予約はすべて「予約に使った実時間」を差し引いた値にする
+          // 残り時間・終了タイマー・タイムラインの予約はすべて「予約に使った実時間」を
+          // 差し引いた値にする。残りを引いたぶん、時計の起点は「今」（round2 P2:
+          // 起点まで過去にすると一時停止でもう一度同じ時間を引いてしまう）
           remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000 - scheduleElapsedMs);
           totalPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
-          playbackStartedAtRef.current = scheduledAt;
+          playbackStartedAtRef.current = Date.now();
           // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
           // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
           // なので通知する（Codex round1 P3）
