@@ -2988,3 +2988,20 @@ svg { animation: none; transition: none; }
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* レイヤーチップ（#417）: 手ごとのまとまり。折り返しても「＋」がどちらの手のものか分かるよう、
+   手のチップ列と「＋」を1つの箱に入れて、箱の途中では折り返らないようにする（Codex round1 P2-8） */
+.toolbar-layer-part-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /* 箱の中で改行しない = 「右手の…＋」が必ず一緒に並ぶ */
+  flex-wrap: nowrap;
+}
+
+/* 上限に達した「＋」。disabled 属性は使わない（押せると理由が通知される・Codex round1 P2-7）ので、
+   押せなさそうな見た目だけをここで作る */
+.toolbar-add-voice-button.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

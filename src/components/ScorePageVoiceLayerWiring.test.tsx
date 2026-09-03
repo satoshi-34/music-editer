@@ -152,19 +152,28 @@ describe('声部レイヤーの一般化の配線（#417）', () => {
     await waitFor(() => expect(layerChipNames()).toEqual(['声部1', '声部2']));
     expect(currentLayerName()).toBe('声部2');
 
-    // 3. V キーは巡回（2声のあいだは従来どおりのトグルに見える）
+    // 3. V キーは巡回。足しただけで何も書いていない末尾の声部は、そこから離れると
+    //    チップからも消える（#417 Codex round1 P1-1「末尾の空声部は自動で掃除される」）。
+    //    音符が入っていれば消えないことは step 5 以降で確かめる
     fireEvent.keyDown(window, { key: 'v' });
     await waitFor(() => expect(currentLayerName()).toBe('声部1'));
-    fireEvent.keyDown(window, { key: 'v' });
-    await waitFor(() => expect(currentLayerName()).toBe('声部2'));
+    await waitFor(() => expect(layerChipNames()).toEqual(['声部1']));
 
     // 4. 上限（4声）まで足すと「＋」が押せなくなり、理由が title に出る
+    fireEvent.click(addVoiceButton());
+    await waitFor(() => expect(currentLayerName()).toBe('声部2'));
     fireEvent.click(addVoiceButton());
     await waitFor(() => expect(currentLayerName()).toBe('声部3'));
     fireEvent.click(addVoiceButton());
     await waitFor(() => expect(layerChipNames()).toHaveLength(MAX_VOICES_PER_LAYER));
-    expect(addVoiceButton()).toBeDisabled();
+    // disabled にはしない（Codex round1 P2-7）。disabled だとクリックもフォーカスも
+    // 受け付けず、上限の理由を伝える経路が無くなるため、aria-disabled + 通知にしてある
+    expect(addVoiceButton()).not.toBeDisabled();
+    expect(addVoiceButton().getAttribute('aria-disabled')).toBe('true');
     expect(addVoiceButton().getAttribute('title')).toBe(describeVoiceLimitReached(MAX_VOICES_PER_LAYER));
+    // 押しても声部は増えず、理由が通知として出る（行き止まりが喋る・#318）
+    fireEvent.click(addVoiceButton());
+    await waitFor(() => expect(layerChipNames()).toHaveLength(MAX_VOICES_PER_LAYER));
 
     // 5. 声部3へ戻して音符を入れると、保存データの voices[2] に入る
     //    （activeVoice が SingleStaff → PianoSystemCanvas まで配線されている証拠）

@@ -27,6 +27,18 @@ export const SCORE_SELECTION_CLEAR_EVENT = 'music-editer-score-selection-clear';
 /** 譜面のクリックから「アクティブ声部を切り替えてほしい」と伝えるイベント名（Issue #258） */
 export const SCORE_ACTIVE_VOICE_CHANGE_EVENT = 'music-editer-score-active-voice-change';
 
+/**
+ * 譜面のクリックから「いまこの段（パート）を編集している」と伝えるイベント名（Issue #417）。
+ * 非ピアノ譜（単旋律・四重奏・編成譜）はどのパートを編集するかを五線のクリックで選ぶので、
+ * レイヤーチップの本数と「＋」の追加先をその段に合わせるために ScorePage が受け取る。
+ */
+export const SCORE_ACTIVE_PART_CHANGE_EVENT = 'music-editer-score-active-part-change';
+
+export interface ScoreActivePartChangeDetail {
+  /** クリックされた五線のパート添字 */
+  partIndex: number;
+}
+
 /** ←/→ による選択移動で、別の段（システム）へ選択を渡すための要求イベント名（Issue #442） */
 export const SCORE_NOTE_SELECTION_MOVE_EVENT = 'music-editer-score-note-selection-move';
 
@@ -110,6 +122,21 @@ export function requestActiveVoiceChange(voiceIndex: number, partIndex?: number)
   if (typeof window === 'undefined') return;
   window.dispatchEvent(
     new CustomEvent<ScoreActiveVoiceChangeDetail>(SCORE_ACTIVE_VOICE_CHANGE_EVENT, { detail: { voiceIndex, partIndex } })
+  );
+}
+
+/**
+ * 「いま編集している段（パート）」を伝える（Issue #417）。
+ *
+ * 非ピアノ譜のパート選択は「クリックした五線」という空間的な操作で、状態としては
+ * どこにも残っていなかった。声部チップを段ごとに出す（＝「＋」がどの段に足すか決まる）には
+ * 最後に触った段を知る必要があるので、音符を選んだ時点で ScorePage へ知らせる。
+ * 編集の挙動そのものは変えない（従来どおりクリックした五線が編集対象）。
+ */
+export function requestActivePartChange(partIndex: number): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(
+    new CustomEvent<ScoreActivePartChangeDetail>(SCORE_ACTIVE_PART_CHANGE_EVENT, { detail: { partIndex } })
   );
 }
 
@@ -858,4 +885,15 @@ export function describeVoiceAdded(layerLabel: string): string {
  */
 export function describeVoiceLimitReached(maxVoices: number): string {
   return `声部は1つの段につき${maxVoices}つまでです。使わない声部は音符をすべて消すと自動で消えます`;
+}
+
+/**
+ * 上限を超える声部を読込時に落としたときの通知（Issue #417 Codex round1 P1-4）。
+ *
+ * 他アプリの MusicXML や手編集の .score.json は5声以上を持ちうるが、編集 UI は4声までなので
+ * そのまま抱えると「画面に出ないのに鳴り、保存し直すと残る声部」になる。
+ * 落とすこと自体はデータの欠損なので、何小節に効いたかまで言う（#318「行き止まりは喋る」）。
+ */
+export function describeVoiceLimitTrimmed(measureCount: number, maxVoices: number): string {
+  return `${maxVoices}声を超える声部があったため、${measureCount}小節で${maxVoices + 1}声目以降を読み込みませんでした（このアプリは1つの段につき${maxVoices}声までです）`;
 }

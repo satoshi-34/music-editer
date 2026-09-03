@@ -7,7 +7,7 @@ import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/c
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
 import { isValidTimeSignature } from './timeSignatureUtils';
-import { ensureMeasuresPrimaryVoiceMaterialized, getEventDurationBeats } from './voiceMeasureUtils';
+import { MAX_VOICES_PER_PART, ensureMeasuresPrimaryVoiceMaterialized, getEventDurationBeats } from './voiceMeasureUtils';
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { buildRestEventsForBeats } from './measureRestFillUtils';
 import { readMusicXmlDefaults, type MusicXmlDefaultsLayout } from './musicXmlDefaults';
@@ -432,6 +432,24 @@ function countUnsupportedDynamics(root: Element): number {
   return count;
 }
 
+/**
+ * 上限（4声/段）を超える声部を持つ <measure> の数を数える（#417 Codex round1 P1-4）。
+ * 取り込みでは5声目以降を捨てるので、捨てた事実を画面へ返して通知させる（#318）。
+ * countUnsupportedDynamics と同じく、取り込み本体とは独立に XML から数える。
+ */
+function countVoicesOverLimit(root: Element): number {
+  let count = 0;
+  for (const measureEl of Array.from(root.querySelectorAll('measure'))) {
+    let maxVoice = 1;
+    for (const voiceEl of Array.from(measureEl.querySelectorAll('note > voice'))) {
+      const n = Number(voiceEl.textContent ?? '1');
+      if (Number.isFinite(n) && n > maxVoice) maxVoice = n;
+    }
+    if (maxVoice > MAX_VOICES_PER_PART) count += 1;
+  }
+  return count;
+}
+
 /** 1つの <part> が持てる五線の数の上限（大譜表=2、オルガン譜=3 を想定した安全弁） */
 const MAX_STAVES_PER_PART = 4;
 
@@ -602,6 +620,11 @@ function buildStaffMeasures(
   // 声部1と声部2で別々に持つのは、<backup> を挟んで別々の松葉が同時に開くことがあるため。
   const openHairpinRefs: HairpinMark[] = [];
   const openHairpinRefsVoice2: HairpinMark[] = [];
+  // 声部3以降ぶんの待ち行列（#417 Codex round1 P1-5）。編集 UI が N 声になり
+  // 声部3・4にも松葉を置けるようになったので、取り込みでも声部ごとに待ち行列を持つ。
+  // 1本を共用すると、別々の声部で同時に開いた松葉の stop が取り違えられる
+  // （声部1・2を別々に持っているのと同じ理由）
+  const openHairpinRefsByVoice = new Map<number, HairpinMark[]>();
   // 小節をまたいで持ち越すペダル記号（#568 round1 P1）。MusicXML の direction は
   // 「同じ声部で後続する最初の音符」に付くため、小節最後の音符の**後**に置かれた
   // <pedal type="stop"/> は次小節の先頭イベントへ付け直す必要がある。
@@ -812,15 +835,21 @@ function buildStaffMeasures(
       .map((s) => s.voiceNumber);
     const maxVoiceNumber = noteBearingVoiceNumbers.length > 0 ? Math.max(...noteBearingVoiceNumbers) : 1;
     const extraVoiceEvents: NoteEvent[][] = [];
-    for (let n = 3; n <= maxVoiceNumber; n++) {
+    // 上限（4声/段）で打ち切る（#417 Codex round1 P1-4）。5声目以降を読むと、
+    // 編集 UI からは触れないのに再生・再保存にだけ現れる「見えない声部」になる。
+    // 打ち切ったことは parseMusicXmlWithDefaults が件数で返し、画面が通知する
+    for (let n = 3; n <= Math.min(maxVoiceNumber, MAX_VOICES_PER_PART); n++) {
       const childrenN = childrenForVoice(n);
       const eventsN = parseVoiceChildren(childrenN);
       // 強弱は全声部で復元する（round1 P2: 書き出しは全声部へ <dynamics> を出すため、
       // 復元しないと声部3以降の f 等が**無通知のまま**往復で消える）。
-      // 松葉は現行 UI が2声までなので skipHairpins で明示的に無効化する（round2 P2）
+      // 松葉も声部3・4で復元する（#417 Codex round1 P1-5: 編集 UI が N 声になり
+      // 声部3・4へ松葉を置けるようになった以上、往復で消えるのは無通知の欠損になる）
       const carryN = pedalCarryByVoice.get(n) ?? { pending: null };
       pedalCarryByVoice.set(n, carryN);
-      attachDirectionMarksToVoiceEvents(childrenN, eventsN, mi, [], carryN, syntheticRestCount, { skipHairpins: true });
+      const hairpinRefsN = openHairpinRefsByVoice.get(n) ?? [];
+      openHairpinRefsByVoice.set(n, hairpinRefsN);
+      attachDirectionMarksToVoiceEvents(childrenN, eventsN, mi, hairpinRefsN, carryN, syntheticRestCount);
       extraVoiceEvents.push(eventsN);
     }
 
@@ -1017,6 +1046,11 @@ export interface MusicXmlImportResult {
    * 知らせるために返す（#318）。
    */
   unsupportedDynamicsCount?: number;
+  /**
+   * 上限（4声/段）を超えていたため5声目以降を捨てた小節の数（#417 Codex round1 P1-4）。
+   * 0 件のときは undefined。黙って捨てないために返す（#318）。
+   */
+  voicesOverLimitMeasureCount?: number;
 }
 
 /**
@@ -1266,12 +1300,15 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
 
   // 対応表に無い強弱記号は取り込まないので、その件数を画面へ返して通知させる（#552）
   const unsupportedDynamicsCount = countUnsupportedDynamics(root);
+  // 上限（4声/段）を超えて捨てた声部の件数も返す（#417 Codex round1 P1-4）
+  const voicesOverLimitCount = countVoicesOverLimit(root);
 
   return {
     score,
     defaults,
     globalBpm,
     unsupportedDynamicsCount: unsupportedDynamicsCount > 0 ? unsupportedDynamicsCount : undefined,
+    voicesOverLimitMeasureCount: voicesOverLimitCount > 0 ? voicesOverLimitCount : undefined,
   };
 }
 

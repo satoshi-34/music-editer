@@ -15,6 +15,7 @@ import {
   layerPartLabel,
   resolveVoiceSlotCount,
 } from './editorLayers';
+import { MAX_VOICES_PER_PART, enforceVoiceLimitInParts, withVoiceEventsUpdated } from './voiceMeasureUtils';
 
 const note = (key: string): NoteEvent => ({ dur: '4', isRest: false, keys: [key] });
 
@@ -80,12 +81,25 @@ describe('声部数の解決（#417）', () => {
     expect(countUsedVoices([{ events: [note('c/5')], voices }])).toBe(MAX_VOICES_PER_LAYER);
   });
 
-  it('「＋」で足した希望値は、データがまだ空でもチップの本数として残る（#305 の自動掃除に消されない）', () => {
-    // 音符を入れる前は使用中の声部は1つだけ。それでもユーザーが足した3声ぶんを出す
-    expect(resolveVoiceSlotCount(1, 3)).toBe(3);
+  it('「＋」で足した直後の空の声部は、編集中であるあいだチップに残る（#305 の自動掃除に消されない）', () => {
+    // 音符を入れる前は使用中の声部は1つだけ。それでも編集中の声部3（添字2）までは出す
+    expect(resolveVoiceSlotCount(1, 1, 2)).toBe(3);
     // 逆に、データのほうが多ければデータに合わせる（3声の譜面を開いた直後）
-    expect(resolveVoiceSlotCount(3, 1)).toBe(3);
-    expect(resolveVoiceSlotCount(5, 5)).toBe(MAX_VOICES_PER_LAYER);
+    expect(resolveVoiceSlotCount(3, 1, 0)).toBe(3);
+    expect(resolveVoiceSlotCount(5, 1, 4)).toBe(MAX_VOICES_PER_LAYER);
+  });
+
+  it('末尾の空声部は、そこから離れるとチップからも消える（Codex round1 P1-1）', () => {
+    // 声部3を足して何も書かないまま声部1へ戻った状態。データは1声のままなので
+    // チップも1枚へ戻る（「足した本数」を状態で覚えていた頃は増えっぱなしだった）
+    expect(resolveVoiceSlotCount(1, 1, 0)).toBe(1);
+    // ピアノ譜は声部1・2が常設なので、離れても2枚は残る（#316 の4枚を維持）
+    expect(resolveVoiceSlotCount(1, 2, 0)).toBe(2);
+  });
+
+  it('編集対象でない段（null）は、データにある本数だけを出す', () => {
+    expect(resolveVoiceSlotCount(3, 1, null)).toBe(3);
+    expect(resolveVoiceSlotCount(1, 1, null)).toBe(1);
   });
 });
 
@@ -140,5 +154,41 @@ describe('声部の追加可否（#417）', () => {
     expect(canAddVoice(1)).toBe(true);
     expect(canAddVoice(3)).toBe(true);
     expect(canAddVoice(MAX_VOICES_PER_LAYER)).toBe(false);
+  });
+});
+
+describe('声部の上限はデータ層で強制する（#417 Codex round1 P1-4）', () => {
+  it('UI 側の上限（MAX_VOICES_PER_LAYER）はデータ層の上限と同じ値を指す', () => {
+    // 別々の値になると「チップは4枚なのにデータは5声を受け付ける」隠れた声部ができる
+    expect(MAX_VOICES_PER_LAYER).toBe(MAX_VOICES_PER_PART);
+  });
+
+  it('上限を超える声部への書き込みは受け付けない（引数の小節をそのまま返す）', () => {
+    const measure: MeasureData = { events: [note('c/5')] };
+    const written = withVoiceEventsUpdated(measure, MAX_VOICES_PER_PART, () => [note('e/4')]);
+    // 参照ごと同じ = 何も起きていない（Issue #245 の「変化が無ければ引数を返す」約束）
+    expect(written).toBe(measure);
+  });
+
+  it('上限内の声部への書き込みは従来どおり通る', () => {
+    const measure: MeasureData = { events: [note('c/5')] };
+    const written = withVoiceEventsUpdated(measure, MAX_VOICES_PER_PART - 1, () => [note('e/4')]);
+    expect(written.voices).toHaveLength(MAX_VOICES_PER_PART);
+    expect(written.voices?.[MAX_VOICES_PER_PART - 1].events).toHaveLength(1);
+  });
+
+  it('読込の境界で、上限を超える声部を落として件数を返す', () => {
+    const voices = Array.from({ length: 6 }, (_v, i) => ({ id: `voice-${i + 1}`, events: [note('c/5')] }));
+    const parts = [{ id: 'p1', name: 'Piano', clef: 'treble' as const, measures: [{ events: [note('c/5')], voices }] }];
+    const result = enforceVoiceLimitInParts(parts);
+    expect(result.parts[0].measures[0].voices).toHaveLength(MAX_VOICES_PER_PART);
+    // 何小節で落としたかを返す（黙って捨てない・#318）
+    expect(result.droppedMeasureCount).toBe(1);
+  });
+
+  it('上限以内のデータは配列ごとそのまま返す（無駄な再描画を起こさない）', () => {
+    const parts = [{ id: 'p1', name: 'Piano', clef: 'treble' as const, measures: [{ events: [note('c/5')] }] }];
+    expect(enforceVoiceLimitInParts(parts).parts).toBe(parts);
+    expect(enforceVoiceLimitInParts(parts).droppedMeasureCount).toBe(0);
   });
 });

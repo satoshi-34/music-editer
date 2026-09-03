@@ -7,13 +7,16 @@
 // 声部の本数（可変・最大4）をまとめて扱う。
 import type { MeasureData, ScoreType } from '../types/storage';
 import { pianoLayerLabel } from './editorContextLabels';
-import { getMeasureVoices } from './voiceMeasureUtils';
+import { MAX_VOICES_PER_PART, getMeasureVoices } from './voiceMeasureUtils';
 
 /**
  * 1つのパート（＝1段の五線）に置ける声部の上限（運用者裁定 2026-09-02・#417）。
- * VexFlow の実用上の上限であり、Finale の「レイヤー4つ」とも同じ数。
+ *
+ * 実体は**データ層**（voiceMeasureUtils）にある。UI 側だけで上限を持つと、
+ * 取り込み・保存データから来た5声以上を止められず「画面に出ない声部」ができるため
+ * （Codex round1 P1-4）。ここは UI 側から同じ名前で読むための別名。
  */
-export const MAX_VOICES_PER_LAYER = 4;
+export const MAX_VOICES_PER_LAYER = MAX_VOICES_PER_PART;
 
 /**
  * 譜種ごとの「最初から出しておく声部の数」。
@@ -85,12 +88,29 @@ export function countUsedVoices(measures: MeasureData[] | undefined): number {
 /**
  * チップ列に出す声部の本数を決める。
  *
- * 「データで使われている数」と「＋で足した数（UI 側の希望値）」の多いほうを採る。
- * 足した直後の声部はまだ音符が無く、データ上は存在しない（#305 の自動掃除）ため、
- * 希望値を覚えておかないと押した瞬間にチップが消えてしまう。
+ * 3つの下限の最大を採る:
+ * - `usedInData`: データで実際に使われている本数（音符が入っている声部は必ず出す）
+ * - `minimumSlots`: 譜種ごとの常設本数（ピアノ譜の声部1・2＝#316 の4枚）
+ * - `activeVoiceIndexOnThisPart`: いまこの段で編集中の声部（＋で足した直後は
+ *   まだ音符が無くデータ上存在しないので、これが無いと押した瞬間にチップが消える）
+ *
+ * **「＋で足した本数」を状態として覚えない**のがこの設計の要点（Codex round1 P1-1）。
+ * 覚える形（requestedVoiceCounts）だと増える一方で、末尾の空声部を消しても
+ * チップが残り続けた。「編集中の声部までは必ず出す」に言い換えると、
+ * 足した声部は使っているあいだ出続け、何も書かずに別の声部へ移れば自然に消える
+ * ＝Issue 本文の「末尾の空声部は自動で掃除される」がそのまま成り立つ。
+ * 途中の空声部（声部2が空で声部3に音符がある等）は voices 配列の長さに現れるので
+ * usedInData 側で保たれる（collapseEmptyTrailingVoices が末尾しか畳まないため）。
+ *
+ * @param activeVoiceIndexOnThisPart この段が編集対象でなければ null
  */
-export function resolveVoiceSlotCount(usedInData: number, requested: number): number {
-  const count = Math.max(usedInData, requested, 1);
+export function resolveVoiceSlotCount(
+  usedInData: number,
+  minimumSlots: number,
+  activeVoiceIndexOnThisPart: number | null,
+): number {
+  const activeFloor = activeVoiceIndexOnThisPart != null ? activeVoiceIndexOnThisPart + 1 : 1;
+  const count = Math.max(usedInData, minimumSlots, activeFloor, 1);
   return Math.min(count, MAX_VOICES_PER_LAYER);
 }
 
