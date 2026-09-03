@@ -1,16 +1,18 @@
-// 再生速度（%）の ScorePage 配線テスト（Issue #544）。
+// 再生速度（%）の撤去（Issue #588）の ScorePage 配線テスト。
 //
-// playbackSpeed.test.ts は純粋関数だけを見るため、ScorePage がその関数を呼んでいなくても
-// 通ってしまう（配線の削除を検出できない）。ここでは実操作でスライダーを動かしてから
-// 再生ボタンを押し、再生エンジンへ実際に渡った値（playParts の引数）を固定する。
-// 併せて「再生速度は書き出しに影響しない」（受入2）も実操作で確かめる。
+// #544 で入れた再生速度（%）は「テンポだけでよい」という運用者裁定で未リリースのまま
+// 取り下げになった。ここで固定するのは撤去そのものではなく、**撤去してもこれまでどおり
+// 鳴ること**（速度 UI が無い・譜面のテンポと速度標語がそのまま再生へ届く・古い保存データが
+// 残っていても壊れない）の3点で、#544 のときの回帰観点を形を変えて引き継いでいる。
+//
+// 元のファイル名を変えていないのは、#544 の配線テストがどう変わったかを履歴で
+// 追えるようにするため。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react';
+import { render, cleanup, waitFor, fireEvent, screen, within } from '@testing-library/react';
 import ScorePage from './ScorePage';
 import {
   createSavedScoreData,
   createWork,
-  loadWorkAutosaveData,
   saveWorkAutosaveData,
   setLastOpenedWorkId,
 } from '../utils/storage';
@@ -57,6 +59,9 @@ window.ResizeObserver = ResizeObserverMock;
 
 const MOUNT_HEAVY_TIMEOUT_MS = 60000;
 
+/** アプリ全体の再生設定の保存先（ScorePage の PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY と同じ） */
+const RUNTIME_SETTINGS_KEY = 'playback-sound-runtime-settings';
+
 /** 1小節目は指定なし（全体テンポ 120）、2小節目の先頭に Allegro（目安 132）を置いた単旋律 */
 function seedWorkWithTempoMarking() {
   const first = [
@@ -73,7 +78,7 @@ function seedWorkWithTempoMarking() {
   ];
 
   const data = createSavedScoreData(
-    { title: '再生速度配線テスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
+    { title: '速度撤去のテンポ配線テスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
     [{
       partId: 'melody',
       clef: 'treble',
@@ -86,7 +91,7 @@ function seedWorkWithTempoMarking() {
     2,
     'single'
   );
-  const created = createWork('再生速度配線テスト');
+  const created = createWork('速度撤去のテンポ配線テスト');
   if (!created.success || !created.data) throw new Error('createWork failed');
   const saved = saveWorkAutosaveData(created.data.id, data);
   if (!saved.success) throw new Error('saveWorkAutosaveData failed');
@@ -113,135 +118,74 @@ async function play() {
   return { measures: parts[0].measures, globalBpm };
 }
 
-describe('ScorePage: 再生速度（%）の配線（Issue #544）', () => {
+describe('ScorePage: 再生速度（%）の撤去（Issue #588）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
-  let exportedXml: string | null;
-  let origCreateObjectURL: typeof URL.createObjectURL;
 
   beforeEach(() => {
     localStorageMock.clear();
     playPartsMock.mockClear();
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get: () => 900, configurable: true });
-    // 書き出しは Blob → createObjectURL で流れるので、ここで中身を取り出せるようにする
-    exportedXml = null;
-    origCreateObjectURL = URL.createObjectURL;
-    Object.defineProperty(URL, 'createObjectURL', {
-      configurable: true,
-      value: vi.fn((blob: Blob) => {
-        const reader = new FileReader();
-        reader.onload = () => { exportedXml = String(reader.result); };
-        reader.readAsText(blob);
-        return 'blob:mock';
-      }),
-    });
-    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
   });
 
   afterEach(() => {
-    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: origCreateObjectURL });
     cleanup();
     if (clientWidthSpy) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidthSpy);
     else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth');
     vi.restoreAllMocks();
   });
 
-  it('既定（100%）では従来と同一のテンポで鳴る（受入3の回帰）', async () => {
+  it('速度UIが無く、譜面のテンポと速度標語がそのまま再生へ届く（受入1）', async () => {
     seedWorkWithTempoMarking();
     await renderAndOpenPlaybackTab();
 
-    expect((screen.getByLabelText('再生速度（%）') as HTMLInputElement).value).toBe('100');
+    // 速度スライダー・「等倍に戻す」ボタン・見出しのいずれも残っていないこと。
+    // どれか1つでも残っていると、撤去したはずの操作口が画面に生き残る
+    expect(screen.queryByLabelText('再生速度（%）')).toBeNull();
+    expect(screen.queryByRole('button', { name: '再生速度を等倍に戻す' })).toBeNull();
+    // 検索対象は再生パネル（.playback-controls）の中だけに絞る。
+    // 画面全体を対象にすると、譜面のタイトルなど無関係な文字列まで拾ってしまう
+    const panel = document.querySelector('.playback-controls') as HTMLElement | null;
+    expect(panel).toBeTruthy();
+    expect(within(panel as HTMLElement).queryByText(/再生速度/)).toBeNull();
+
+    // テンポ側（作品の基準テンポ）は残す。速度と一緒に消えていないことまで見る
+    expect(screen.getByLabelText('テンポ（BPM）')).toBeInTheDocument();
+    expect(screen.getByText('作品の基準テンポ')).toBeInTheDocument();
 
     const { measures, globalBpm } = await play();
 
-    // 1小節目は全体テンポ 120、2小節目は Allegro の目安 132（#458 と同じ値）
+    // 1小節目は全体テンポ 120、2小節目は Allegro の目安 132（#458 と同じ値）。
+    // 倍率の配管は残したまま常に等倍を渡す形にしたので、#544 以前と同じ値になる
     expect(measures[0].bpm).toBe(120);
     expect(measures[1].bpm).toBe(132);
     expect(globalBpm).toBe(120);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('50% で全小節がちょうど半分の速さになり、標語の相対関係が保たれる（受入1・4）', async () => {
+  it('古い保存データに playbackSpeedPercent が残っていても無視され、保存し直しでも混入しない（受入2）', async () => {
     seedWorkWithTempoMarking();
-    await renderAndOpenPlaybackTab();
+    // #544 を使っていた環境の localStorage を再現する。50% が生き残っていると
+    // 「UI は無いのに半分の速さで鳴る」という直しようのない状態になってしまう
+    localStorageMock.setItem(RUNTIME_SETTINGS_KEY, JSON.stringify({
+      engineMode: 'soundfont',
+      pluginName: 'MusyngKite',
+      previewAccidentalOnApply: true,
+      swingEnabled: false,
+      playbackSpeedPercent: 50,
+      profile: { brightness: 0.5, attack: 0.5, release: 0.5, richness: 0.5, volume: 0.5 },
+    }));
 
-    fireEvent.change(screen.getByLabelText('再生速度（%）'), { target: { value: '50' } });
-    expect(screen.getByText('再生速度: 50%')).toBeInTheDocument();
+    await renderAndOpenPlaybackTab();
 
     const { measures, globalBpm } = await play();
+    expect(measures[0].bpm).toBe(120);
+    expect(measures[1].bpm).toBe(132);
+    expect(globalBpm).toBe(120);
 
-    // 各小節がちょうど半分。エンジンは 60 / bpm 秒で1拍を数えるので、実時間は2倍になる
-    expect(measures[0].bpm).toBe(60);
-    expect(measures[1].bpm).toBe(66);
-    // 標語の相対関係（120 : 132）は 60 : 66 のまま保たれている
-    expect(measures[1].bpm! / measures[0].bpm!).toBeCloseTo(132 / 120, 10);
-    // 小節ごとの指定が無いときにエンジンが使う基準テンポにも同じ倍率が掛かる
-    expect(globalBpm).toBe(60);
-
-    // 「等倍に戻す」で 100% に戻り、次の再生は元のテンポへ戻る
-    fireEvent.click(screen.getByRole('button', { name: '再生速度を等倍に戻す' }));
-    expect(screen.getByText('再生速度: 100%')).toBeInTheDocument();
-  }, MOUNT_HEAVY_TIMEOUT_MS);
-
-  it('実効テンポが譜面の下限 30BPM を割っても丸め直されない（#544 round1 P1）', async () => {
-    seedWorkWithTempoMarking();
-    await renderAndOpenPlaybackTab();
-
-    // 基準テンポ 40 × 25% = 実効 10BPM。譜面用の clampBpm（30〜240）へ丸め直す経路が
-    // 残っていると、エンジン・終了タイマーが 30BPM として動き、実音とずれる
-    fireEvent.change(screen.getByLabelText('テンポ（BPM）'), { target: { value: '40' } });
-    fireEvent.blur(screen.getByLabelText('テンポ（BPM）'));
-    fireEvent.change(screen.getByLabelText('再生速度（%）'), { target: { value: '25' } });
-
-    const { measures, globalBpm } = await play();
-    expect(measures[0].bpm).toBe(10);
-    expect(globalBpm).toBe(10);
-  }, MOUNT_HEAVY_TIMEOUT_MS);
-
-  it('再生速度は再読込後も保持され、作品の保存データへは混入しない', async () => {
-    const workId = seedWorkWithTempoMarking();
-    await renderAndOpenPlaybackTab();
-
-    // まず基準テンポを 121 へ変え、自動保存が実際に走ったこと（globalBpm=121）を確認してから
-    // 速度を変える。保存前に見ても回帰を検出できない（round2 P2）ため、
-    // 「更新された保存データ」を対象にする
-    fireEvent.change(screen.getByLabelText('テンポ（BPM）'), { target: { value: '121' } });
-    fireEvent.blur(screen.getByLabelText('テンポ（BPM）'));
-    await waitFor(() => {
-      const loaded = loadWorkAutosaveData(workId);
-      expect(loaded.success && loaded.data?.globalBpm).toBe(121);
-    }, { timeout: 15000 });
-
-    fireEvent.change(screen.getByLabelText('再生速度（%）'), { target: { value: '50' } });
-    expect(screen.getByText('再生速度: 50%')).toBeInTheDocument();
-
-    // 作品の保存データ（globalBpm）は基準テンポのまま。再生速度が保存へ漏れると、
-    // 50% で聴いていた作品が次に開いたとき半分のテンポの曲になってしまう。
-    // 自動保存の間隔（1.5秒）を確実にまたいでから確認する
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-    const after = loadWorkAutosaveData(workId);
-    expect(after.success && after.data?.globalBpm).toBe(121);
-
-    // 再マウント（再読込相当）でもスライダーは 50% のまま（localStorage 永続化）
-    cleanup();
-    playPartsMock.mockClear();
-    await renderAndOpenPlaybackTab();
-    expect((screen.getByLabelText('再生速度（%）') as HTMLInputElement).value).toBe('50');
-  }, MOUNT_HEAVY_TIMEOUT_MS);
-
-  it('再生速度は書き出した MusicXML に影響しない（受入2）', async () => {
-    seedWorkWithTempoMarking();
-    await renderAndOpenPlaybackTab();
-
-    // 速度を 50% にしても、書き出しへ乗るのは譜面のテンポ（120）のままであること。
-    // 再生速度が書き出しへ漏れると、聴くために速度を落とした状態で書き出した
-    // ファイルが別のテンポの曲になってしまう
-    fireEvent.change(screen.getByLabelText('再生速度（%）'), { target: { value: '50' } });
-
-    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
-    fireEvent.change(screen.getByLabelText('書き出し'), { target: { value: 'musicxml' } });
-    fireEvent.click(screen.getByTestId('confirm-dialog-ok'));
-
-    await waitFor(() => { expect(exportedXml ?? '').toContain('<sound tempo="120"/>'); }, { timeout: 15000 });
-    expect(exportedXml ?? '').not.toContain('tempo="60"');
+    // 読み込んだ設定はサニタイズ後の形で保存し直されるので、旧フィールドは消えている。
+    // 他の設定（音源パック名など）はそのまま引き継がれること
+    const stored = JSON.parse(localStorageMock.getItem(RUNTIME_SETTINGS_KEY) ?? '{}');
+    expect(stored).not.toHaveProperty('playbackSpeedPercent');
+    expect(stored.pluginName).toBe('MusyngKite');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

@@ -386,3 +386,58 @@ Issue 仕様 2 は「アプリ全体設定は『新規作成時の既定値』�
   `handlePlaybackSpeedPercentChange`
 - テスト: `src/audio/playbackSpeed.test.ts`（純粋関数）、
   `src/components/ScorePagePlaybackSpeed.test.tsx`（受入1〜4の実操作配線）
+
+## 追記: 再生速度（%）の取り下げ（Issue #588・2026-09-03）
+
+### 経緯
+
+#544 で入れた再生速度（%）は、**一度もリリースされないまま撤去**した。
+運用者裁定（2026-09-03）は「テンポのみでいいや。再生速度変えるニーズなさそう」で、
+昇格前に外せば利用者には露出しないため、機能として畳む判断になった。
+
+### 何を消して、何を残したか
+
+| | 扱い | 理由 |
+| --- | --- | --- |
+| 再生速度スライダー・「等倍に戻す」ボタン・説明文（`PlaybackControls`） | **撤去** | 操作口を残すと「消したはずの設定」が画面に生き残る |
+| `PlaybackControls` の `onPlaybackSpeedPercentChange` prop と2つのハンドラ | **撤去** | 上と対 |
+| `PlaybackSoundRuntimeSettings.playbackSpeedPercent` と正規化 | **撤去** | 設定として持たない。古い保存データに残っていても `sanitizePlaybackRuntimeSettings` が「知っている項目だけを詰め直す」形なので自動的に捨てられる |
+| `ScorePage` の `handlePlaybackSpeedPercentChange` | **撤去** | 変更する口が無くなったため |
+| `src/audio/playbackSpeed.ts`（`applyPlaybackSpeedToBpm(s)` / `clampEffectiveBpm` ほか） | **残す** | Issue 仕様3。#544 round1 で直した終了タイマー・タイ・ペダルの整合はそれ自体が正しく、将来の復活の土台にもなる |
+| `resolveEffectiveMeasureBpms` / `beatSpanToSeconds` の実効テンポ系 | **残す** | 同上。`clampEffectiveBpm` は今も再生経路で使われている |
+
+`ScorePage` 側は**入口1か所を等倍に固定する最小差分**にした
+（`const playbackSpeedPercent = DEFAULT_PLAYBACK_SPEED_PERCENT;`）。
+`handlePlay` の4か所の呼び出しはそのままなので、倍率を掛ける経路の形は保たれ、
+実際に流れる値は #544 以前と完全に同じ（`applyPlaybackSpeedToBpm` は 100% のとき
+掛け算を通さず元の値を返すため、浮動小数の誤差も入らない）。
+
+### `normalizeSavedPlaybackSpeedPercent` について
+
+localStorage 用の正規化関数だけは、設定項目が無くなったことで**呼び出し元が無くなった**。
+`playbackSpeed.ts` を「復活の土台」として丸ごと残す方針（Issue 仕様3）に合わせてこれも残し、
+`playbackSpeed.test.ts` の該当テストもそのままにしてある。
+消す場合は速度の復活が無いと確定してからにしたい。
+
+### テストの引き継ぎ
+
+`ScorePagePlaybackSpeed.test.tsx` は**ファイル名を変えずに書き換えた**（#544 の配線テストが
+どう変わったかを履歴で追えるようにするため）。5件 → 2件になり、観点は次のように移した:
+
+| #544 のケース | #588 での扱い |
+| --- | --- |
+| 既定（100%）では従来と同一のテンポで鳴る | **残す**（速度 UI が無い状態で 120 / 132 / 基準120 を固定） |
+| 50% で半分・標語の相対関係を保つ | 撤去（操作口が無い） |
+| 実効テンポが 30BPM を割っても丸め直されない | 撤去。同じ観点は `playbackPositionUtils.test.ts` の実効テンポ非丸めテストと `playbackSpeed.test.ts` が単体で持っている |
+| 速度は再読込後も保持・作品の保存データへ混入しない | **形を変えて残す**（旧 `playbackSpeedPercent` を仕込んだ localStorage から起動しても 120 のまま鳴り、保存し直した設定に旧フィールドが残らない） |
+| 速度は書き出した MusicXML に影響しない | 撤去（速度が無いので混入元が無い。書き出しのテンポは `ScorePageTempoExportWiring.test.tsx` が担保） |
+
+### 影響範囲
+
+- `src/components/PlaybackControls.tsx` / `src/App.css`: 速度 UI と専用スタイルの撤去
+- `src/components/ScorePage.tsx`: 等倍固定・ハンドラと prop 受け渡しの撤去
+- `src/audio/playbackSettings.ts`: `playbackSpeedPercent` の撤去（旧データは無視される）
+- `src/audio/playbackSpeed.ts`: 冒頭に「現状は常に等倍」の但し書き
+- テスト: `src/components/ScorePagePlaybackSpeed.test.tsx`（上表）
+- 文書: `docs/REGRESSION.md` X 節、`README.md`、
+  `.claude/specs/toolbar-organization/design.md`（§3(c) の並びから速度欄を除去・Issue 仕様5）
