@@ -227,3 +227,63 @@ describe('連符数字の上下（五線と音符の位置関係）', () => {
     expect(locationOf(tuplets[0].tuplet)).toBe(before);
   });
 });
+
+// Issue #574: 段またぎ連符（クロススタッフ）の数字が下の五線の中に描かれ、
+// 五線の線・左手の音符と重なって読めない不具合。数字は「持ち主のパートの五線の外」へ出す。
+describe('段またぎ連符の数字の置き場所（Issue #574）', () => {
+  function locationOf(tuplet: Tuplet): number {
+    return (tuplet as unknown as { options: { location: number } }).options.location;
+  }
+
+  /**
+   * 大譜表を模した2つの五線に、8分3連の一部だけを下の五線へ載せた状態を作る。
+   * 描画側と同じ順序（連符 → ビーム → 置き場所の見直し）で組み立てる。
+   * crossFlags[i] が true の音符だけ下の五線に載る（＝ renderStaff: 'below' 相当）。
+   */
+  function buildCrossStaffTriplet(crossFlags: boolean[]) {
+    const upper = new Stave(10, 40, 400);   // 第1線 y=40 …… 第5線 y=80
+    const lower = new Stave(10, 140, 400);  // 第1線 y=140 …… 第5線 y=180
+    const keys = ['e/4', 'c/4', 'a/3'];
+    const notes = keys.map((key) => new StaveNote({ keys: [key], duration: '8' }));
+    notes.forEach((note, i) => note.setStave(crossFlags[i] ? lower : upper));
+    const tuplets = createVexFlowTuplets(
+      keys.map(() => ({ tuplet: { id: 'cross', numNotes: 3, notesOccupied: 2 } })),
+      notes,
+    );
+    Beam.generateBeams(notes, { beamRests: false });
+    return { upper, lower, notes, tuplets };
+  }
+
+  it('下へまたぐ連符の数字は、上の五線の上（＝持ち主の側）に出る', () => {
+    const { upper, lower, tuplets } = buildCrossStaffTriplet([false, true, true]);
+
+    syncTupletPlacementWithNotes(tuplets, upper);
+
+    const y = tuplets[0].tuplet.getYPosition();
+    expect(locationOf(tuplets[0].tuplet)).toBe(Tuplet.LOCATION_TOP);
+    // 上の五線の第1線から 1.5 間上（VexFlow が普通の連符に使う余白と同じ値）にそろう。
+    // 上の五線に残った音符がもっと高ければそちらを避けるが、この譜例では五線内なので起きない
+    expect(y).toBeCloseTo(upper.getYForLine(0) - 1.5 * upper.getSpacingBetweenLines(), 5);
+    // 下の五線（ヘ音記号）の中に入っていない＝報告された症状が起きていない
+    expect(y).toBeLessThan(lower.getYForLine(0));
+  });
+
+  it('上へまたぐ連符（左手が上の五線へ出る形）の数字は、下の五線の下に出る', () => {
+    const { upper, lower, tuplets } = buildCrossStaffTriplet([true, true, false]);
+
+    // 持ち主は下のパート（左手）。またぎ先は上の五線
+    syncTupletPlacementWithNotes(tuplets, lower);
+
+    const y = tuplets[0].tuplet.getYPosition();
+    expect(locationOf(tuplets[0].tuplet)).toBe(Tuplet.LOCATION_BOTTOM);
+    expect(y, '下の五線より下に出ている').toBeGreaterThan(lower.getYForLine(4));
+    expect(y).toBeGreaterThan(upper.getYForLine(4));
+  });
+
+  it('持ち主の五線が渡されないときは、一番上の五線の持ち物として扱う（例外を出さない）', () => {
+    const { upper, tuplets } = buildCrossStaffTriplet([false, true, true]);
+
+    expect(() => syncTupletPlacementWithNotes(tuplets)).not.toThrow();
+    expect(tuplets[0].tuplet.getYPosition()).toBeLessThan(upper.getYForLine(0));
+  });
+});

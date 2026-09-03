@@ -1728,7 +1728,8 @@ function drawRenderedVoiceEntries(
       // VexFlow は符幹の向きだけで上下を決めるため、加線の上（下）に離れた音符では
       // 数字だけが五線をまたいで反対側へ取り残され、多段譜では下の段のビームと重なる。
       // 音符と五線の位置関係が要るので、音符が五線へ紐づいたあと（＝描画段）に呼ぶ。
-      syncTupletPlacementWithNotes(entry.tuplets);
+      // 段またぎ連符（#574）はどちら側へ出すかがパートで決まるので、そのパートの五線も渡す。
+      syncTupletPlacementWithNotes(entry.tuplets, stave);
       entry.tuplets.forEach(({ tuplet, hideNumber }, tupletIndex) => {
         // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
         // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
