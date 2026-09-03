@@ -81,6 +81,61 @@ describe('smoothStrokePoints', () => {
     expect(original).toEqual(copy);
   });
 
+  it('点数が少ないストローク（クリックで置いた折れ線）はそのまま返す（round1 P2）', () => {
+    // 3点の山形: 移動平均を掛けると中央点の高さが25%まで潰れ、RDP で消えて直線になる
+    const mountain = [
+      { x: 0, y: 0 },
+      { x: 5, y: 4 },
+      { x: 10, y: 0 },
+    ];
+    expect(smoothStrokePoints(mountain)).toEqual(mountain);
+
+    // 疎な四角形（始点＝終点の5点）: 平均すると角が内側へ縮む
+    const square = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+      { x: 0, y: 0 },
+    ];
+    expect(smoothStrokePoints(square)).toEqual(square);
+  });
+
+  it('閉曲線（始点＝終点）は円環として均し、開始点側へ縮まない（round1 P2）', () => {
+    // 密な円（24点+閉じの1点）。開いた線として平均すると終端だけ固定され偏る
+    const n = 24;
+    const circle = Array.from({ length: n }, (_, i) => ({
+      x: 50 + 20 * Math.cos((2 * Math.PI * i) / n),
+      y: 50 + 20 * Math.sin((2 * Math.PI * i) / n),
+    }));
+    circle.push({ ...circle[0] });
+
+    const smoothed = smoothStrokePoints(circle, 0.1);
+    // 閉じたまま
+    const first = smoothed[0];
+    const last = smoothed[smoothed.length - 1];
+    expect(Math.hypot(first.x - last.x, first.y - last.y)).toBeLessThan(1e-6);
+    // 重心がほぼ動かない（開始点側への偏りが無い）
+    const cx = smoothed.reduce((sum, p) => sum + p.x, 0) / smoothed.length;
+    const cy = smoothed.reduce((sum, p) => sum + p.y, 0) / smoothed.length;
+    expect(Math.abs(cx - 50)).toBeLessThan(1);
+    expect(Math.abs(cy - 50)).toBeLessThan(1);
+    // 半径もほぼ保たれる（一様に縮んでいない）
+    const radii = smoothed.map((p) => Math.hypot(p.x - 50, p.y - 50));
+    expect(Math.min(...radii)).toBeGreaterThan(18);
+  });
+
+  it('自己交差する密なストローク（8の字）でも端点が保たれ有限値のまま', () => {
+    const n = 40;
+    const figure8 = Array.from({ length: n + 1 }, (_, i) => ({
+      x: 50 + 20 * Math.sin((2 * Math.PI * i) / n),
+      y: 50 + 10 * Math.sin((4 * Math.PI * i) / n),
+    }));
+    const smoothed = smoothStrokePoints(figure8);
+    expect(smoothed.length).toBeGreaterThan(2);
+    expect(smoothed.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))).toBe(true);
+  });
+
   it('点が2個以下のときはそのまま返す（補正しても意味がないため）', () => {
     expect(smoothStrokePoints([])).toEqual([]);
     expect(smoothStrokePoints([{ x: 1, y: 2 }])).toEqual([{ x: 1, y: 2 }]);

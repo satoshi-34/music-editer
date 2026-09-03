@@ -26,6 +26,15 @@ export const DEFAULT_SMOOTHING_TOLERANCE = 1.2;
 export const SMOOTHING_PASSES = 2;
 
 /**
+ * 補正を掛ける最低点数。これ未満のストロークはそのまま返す（round1 P2）。
+ * 手ぶれ（ジッター）はマウス/指の連続サンプリングで点が密なときに生じるもので、
+ * 数点しかない線は「クリックで置いた意図的な折れ線」（3点の山・疎な四角形など）。
+ * そこへ移動平均を掛けると、中央点が25%まで潰れる・角が内側へ縮むなど
+ * 意図した形そのものが壊れる。
+ */
+export const MIN_POINTS_FOR_SMOOTHING = 8;
+
+/**
  * 手描きストロークを補正する。
  * 1. 移動平均で震えを均す（両端は動かさない＝描き始め・描き終わりの位置は必ず保つ）
  * 2. Ramer–Douglas–Peucker 法で、形を保ったまま点を間引く
@@ -40,13 +49,45 @@ export function smoothStrokePoints(
 ): StrokePoint[] {
   // 非有限値（NaN など）が混ざっていると平均計算がすべて NaN に伝播するため先に除く
   const finitePoints = points.filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
-  if (finitePoints.length <= 2) return finitePoints.map(p => ({ x: p.x, y: p.y }));
+  if (finitePoints.length < MIN_POINTS_FOR_SMOOTHING) {
+    return finitePoints.map(p => ({ x: p.x, y: p.y }));
+  }
+
+  // 始点＝終点（閉曲線）は円環として均す（round1 P2: 開いた線として平均すると
+  // 終端だけ固定され、閉じた図形が開始点側へ縮んで偏る）
+  const first = finitePoints[0];
+  const last = finitePoints[finitePoints.length - 1];
+  const isClosed = Math.hypot(first.x - last.x, first.y - last.y) < 1e-6;
 
   let working = finitePoints.map(p => ({ x: p.x, y: p.y }));
   for (let i = 0; i < SMOOTHING_PASSES; i++) {
-    working = averageNeighbors(working);
+    working = isClosed ? averageNeighborsClosed(working) : averageNeighbors(working);
   }
   return rdpSimplify(working, tolerance);
+}
+
+/**
+ * 閉曲線（始点＝終点）用の移動平均。重複している終点を除いた円環として、
+ * すべての点を循環近傍（前・自分・次）で均し、最後に始点の複製で閉じ直す。
+ * 開いた線用の averageNeighbors と違い「固定される端」が無いので、
+ * 図形が開始点側へ偏らない。
+ */
+function averageNeighborsClosed(points: StrokePoint[]): StrokePoint[] {
+  const unique = points.slice(0, -1);
+  const n = unique.length;
+  if (n < 3) return points;
+  const result: StrokePoint[] = [];
+  for (let i = 0; i < n; i++) {
+    const prev = unique[(i - 1 + n) % n];
+    const cur = unique[i];
+    const next = unique[(i + 1) % n];
+    result.push({
+      x: prev.x * 0.25 + cur.x * 0.5 + next.x * 0.25,
+      y: prev.y * 0.25 + cur.y * 0.5 + next.y * 0.25,
+    });
+  }
+  result.push({ ...result[0] });
+  return result;
 }
 
 /**
