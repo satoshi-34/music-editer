@@ -9,6 +9,7 @@ import {
   DEV_TUNING_ENTRIES,
   formatDevTuningForCode,
   getDevTuningOverrides,
+  resetAllDevTuning,
   setDevTuningOverride,
 } from '../utils/devTuning';
 
@@ -143,7 +144,7 @@ export default function DevTuningPanel() {
             <button
               type="button"
               onClick={() => {
-                DEV_TUNING_ENTRIES.forEach((e) => setDevTuningOverride(e.key, null));
+                resetAllDevTuning();
                 setOverrides({});
               }}
             >

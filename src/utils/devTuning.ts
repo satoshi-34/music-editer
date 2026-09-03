@@ -91,49 +91,86 @@ export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
   },
 ];
 
-function readOverrides(): Record<string, number> {
+function parseOverrides(raw: string | null): Record<string, number> {
+  if (!raw) return {};
   try {
-    const raw = window.localStorage.getItem(DEV_TUNING_STORAGE_KEY);
-    if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return {};
     const result: Record<string, number> = {};
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      // 未登録キーは取り込まない（round1 P2: 残すと「全部リセット」後も上書き中表示が復活する）
+      if (!DEV_TUNING_ENTRIES.some((e) => e.key === k)) continue;
       if (typeof v === 'number' && Number.isFinite(v)) result[k] = v;
     }
     return result;
   } catch {
-    // localStorage が使えない環境（テスト・プライベートモード等）は上書きなし扱い
     return {};
   }
 }
 
+// レイアウト計算の中から1小節につき数回呼ばれるため、localStorage は毎回読まず
+// モジュール内キャッシュを正本にする（round1 P2: 同期 getItem+JSON.parse の多発で
+// 長い譜面の dev 操作が劣化する）。書き込みは setDevTuningOverride 経由に限られるので
+// そこでキャッシュを更新し、別タブからの変更だけ storage イベントで取り込む。
+let overridesCache: Record<string, number> | null = null;
+
+function readOverrides(): Record<string, number> {
+  if (overridesCache) return overridesCache;
+  try {
+    overridesCache = parseOverrides(window.localStorage.getItem(DEV_TUNING_STORAGE_KEY));
+  } catch {
+    // localStorage が使えない環境（プライベートモード等）は上書きなし扱い
+    overridesCache = {};
+  }
+  return overridesCache;
+}
+
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === DEV_TUNING_STORAGE_KEY) overridesCache = null;
+  });
+}
+
 /**
  * 定数の現在値を返す。本番では常に defaultValue（localStorage を読まない）。
- * dev では上書きがあればレジストリの範囲へクランプして返す。
- *
- * 呼び出しコスト: dev でも localStorage 1回読むだけ（レイアウト計算内で多数回呼ばれるため、
- * 目に見えて重くなったらキャッシュを足す。まずは素朴に）。
+ * dev では上書きがあればそれを返す（クランプは保存境界=setDevTuningOverride で済んでいる）。
+ * 読みはモジュール内キャッシュ経由で、localStorage へは初回だけ触る。
  */
 export function devTuned(key: string, defaultValue: number): number {
   if (!import.meta.env.DEV) return defaultValue;
   const value = readOverrides()[key];
-  if (value === undefined) return defaultValue;
-  const entry = DEV_TUNING_ENTRIES.find((e) => e.key === key);
-  if (!entry) return defaultValue;
-  return Math.min(entry.max, Math.max(entry.min, value));
+  return value === undefined ? defaultValue : value;
 }
 
 /** パネル用: 上書きを保存する（dev 以外では何もしない） */
 export function setDevTuningOverride(key: string, value: number | null): void {
   if (!import.meta.env.DEV) return;
+  const entry = DEV_TUNING_ENTRIES.find((e) => e.key === key);
+  if (!entry) return; // 未登録キーは受け付けない
   try {
-    const overrides = readOverrides();
-    if (value === null) delete overrides[key];
-    else overrides[key] = value;
+    const overrides = { ...readOverrides() };
+    if (value === null || !Number.isFinite(value)) {
+      delete overrides[key];
+    } else {
+      // クランプは**保存境界**で行う（round1 P2: 読み出し時だけだと、表示・コピー値と
+      // 実効値が食い違う。保存した瞬間に実効値へそろえる）
+      overrides[key] = Math.min(entry.max, Math.max(entry.min, value));
+    }
+    overridesCache = overrides;
     window.localStorage.setItem(DEV_TUNING_STORAGE_KEY, JSON.stringify(overrides));
   } catch {
     // 保存できない環境では黙って無視（調整は再読込で消えるだけ）
+  }
+}
+
+/** パネル用: すべての上書きを消す（storage キーごと削除。未知キーの残骸も消える） */
+export function resetAllDevTuning(): void {
+  if (!import.meta.env.DEV) return;
+  overridesCache = {};
+  try {
+    window.localStorage.removeItem(DEV_TUNING_STORAGE_KEY);
+  } catch {
+    // 消せない環境では無視
   }
 }
 

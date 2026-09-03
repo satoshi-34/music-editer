@@ -6,15 +6,21 @@ import {
   DEV_TUNING_STORAGE_KEY,
   devTuned,
   formatDevTuningForCode,
+  resetAllDevTuning,
   setDevTuningOverride,
 } from './devTuning';
+
+/** テストが localStorage を直接書いたあと、モジュール内キャッシュを捨てさせる */
+function resetCacheForTest() {
+  window.dispatchEvent(new StorageEvent('storage', { key: DEV_TUNING_STORAGE_KEY }));
+}
 import {
   engravingMinimumWidthFromIdeal,
   VEXFLOW_IDEAL_WIDTH_COMPRESSION,
 } from './measureLayoutUtils';
 
 beforeEach(() => {
-  window.localStorage.removeItem(DEV_TUNING_STORAGE_KEY);
+  resetAllDevTuning();
 });
 
 describe('devTuned', () => {
@@ -31,19 +37,27 @@ describe('devTuned', () => {
     expect(devTuned('layout.compression', VEXFLOW_IDEAL_WIDTH_COMPRESSION)).toBe(0.8);
     expect(engravingMinimumWidthFromIdeal(100)).toBeCloseTo(80, 10);
 
-    // 範囲外は端へ（0.4〜1.0）
+    // 範囲外は**保存の瞬間に**端へ（0.4〜1.0）。表示・コピー値と実効値がズレない
     setDevTuningOverride('layout.compression', 5);
     expect(devTuned('layout.compression', VEXFLOW_IDEAL_WIDTH_COMPRESSION)).toBe(1);
+    expect(JSON.parse(window.localStorage.getItem(DEV_TUNING_STORAGE_KEY) ?? '{}')['layout.compression']).toBe(1);
 
     setDevTuningOverride('layout.compression', null);
     expect(devTuned('layout.compression', VEXFLOW_IDEAL_WIDTH_COMPRESSION)).toBe(VEXFLOW_IDEAL_WIDTH_COMPRESSION);
   });
 
-  it('未登録キー・壊れた保存値は既定値に落ちる', () => {
+  it('未登録キー・壊れた保存値は既定値に落ち、全リセットでキーごと消える', () => {
     window.localStorage.setItem(DEV_TUNING_STORAGE_KEY, '{"layout.compression":"abc","unknown":1}');
+    resetCacheForTest();
     expect(devTuned('layout.compression', 0.64)).toBe(0.64);
     expect(devTuned('unknown', 7)).toBe(7);
     window.localStorage.setItem(DEV_TUNING_STORAGE_KEY, 'not-json');
+    resetCacheForTest();
+    expect(devTuned('layout.compression', 0.64)).toBe(0.64);
+
+    setDevTuningOverride('layout.compression', 0.7);
+    resetAllDevTuning();
+    expect(window.localStorage.getItem(DEV_TUNING_STORAGE_KEY)).toBeNull();
     expect(devTuned('layout.compression', 0.64)).toBe(0.64);
   });
 

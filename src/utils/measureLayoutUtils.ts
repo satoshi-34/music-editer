@@ -34,9 +34,11 @@ const FLAG_EXTRA_WIDTH: Record<NoteEvent['dur'], number> = {
 // 小節の左右に確保する余白（VexFlow の音符列の外側）。Issue #559 の圧縮率は
 // 「音符の並びの理想間隔」だけに掛けるため、この余白と分けて足せるよう定数を公開する。
 export const MEASURE_SIDE_PADDING = 18;
-/** dev チューニング（#596）を通した実効値。本番は定数と同値 */
+/** dev チューニング（#596）を通した実効値。本番は定数そのもの（devTuned 呼び出しごと消える） */
 function measureSidePadding(): number {
-  return devTuned('layout.measureSidePadding', MEASURE_SIDE_PADDING);
+  return import.meta.env.DEV
+    ? devTuned('layout.measureSidePadding', MEASURE_SIDE_PADDING)
+    : MEASURE_SIDE_PADDING;
 }
 const ACCIDENTAL_WIDTH = 6;
 const GRACE_NOTE_WIDTH = 8;
@@ -167,12 +169,14 @@ export function resolveDefaultLayoutForScoreType(scoreType: ScoreType): {
     scoreType === 'single' || scoreType === 'piano'
       ? NOTATION_SIZE_MULTIPLIER_LARGE_DEFAULT
       : NOTATION_SIZE_MULTIPLIER_DEFAULT;
-  const systemRowGapPx = scoreType === 'piano'
+  const pianoRowGap = import.meta.env.DEV
     ? devTuned('layout.systemRowGapPianoDefault', SYSTEM_ROW_GAP_PIANO_DEFAULT_PX)
-    : SYSTEM_ROW_GAP_DEFAULT_PX;
-  const partSpacingOffsetPx = scoreType === 'piano'
+    : SYSTEM_ROW_GAP_PIANO_DEFAULT_PX;
+  const pianoPartSpacing = import.meta.env.DEV
     ? devTuned('layout.partSpacingPianoDefault', PART_SPACING_OFFSET_PIANO_DEFAULT_PX)
-    : PART_SPACING_OFFSET_DEFAULT_PX;
+    : PART_SPACING_OFFSET_PIANO_DEFAULT_PX;
+  const systemRowGapPx = scoreType === 'piano' ? pianoRowGap : SYSTEM_ROW_GAP_DEFAULT_PX;
+  const partSpacingOffsetPx = scoreType === 'piano' ? pianoPartSpacing : PART_SPACING_OFFSET_DEFAULT_PX;
   return { notationSizeMultiplier, systemRowGapPx, partSpacingOffsetPx };
 }
 
@@ -770,8 +774,11 @@ export const VEXFLOW_IDEAL_WIDTH_COMPRESSION = 0.64;
  * 圧縮率を1か所に閉じ込めるための小さな関数で、テストからも同じ換算を参照する。
  */
 export function engravingMinimumWidthFromIdeal(idealWidth: number): number {
-  // dev 環境のみ #596 のチューニングページで上書きできる（本番は定数そのまま）
-  return idealWidth * devTuned('layout.compression', VEXFLOW_IDEAL_WIDTH_COMPRESSION);
+  // dev 環境のみ #596 のチューニングページで上書きできる（本番は定数そのまま。
+  // import.meta.env.DEV を呼び出し位置に置き、本番バンドルから devTuning ごと消す）
+  return idealWidth * (import.meta.env.DEV
+    ? devTuned('layout.compression', VEXFLOW_IDEAL_WIDTH_COMPRESSION)
+    : VEXFLOW_IDEAL_WIDTH_COMPRESSION);
 }
 
 /**
@@ -862,7 +869,9 @@ export function allocateCombinedMeasureWidths(
   renderScale = SCORE_LAYOUT_RENDER_SCALE,
   // 通常は上の定数をそのまま使う。引数で上書きできるのはテストや将来の
   // 「段ごとに均し具合を変えたい」拡張に備えた口で、既定値は定数と同じ。
-  evenness = devTuned('layout.evennessDefault', MEASURE_WIDTH_EVENNESS),
+  evenness = import.meta.env.DEV
+    ? devTuned('layout.evennessDefault', MEASURE_WIDTH_EVENNESS)
+    : MEASURE_WIDTH_EVENNESS,
 ): { contentWidths: number[]; doesFit: boolean } {
   const usableWidth = Math.max(1, availableWidth);
   // minWidth は VexFlow の論理幅。ctx.scale(s, s) で描く実Canvasでは minWidth*s が
