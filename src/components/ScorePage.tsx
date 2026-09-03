@@ -1823,7 +1823,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // タイムラインは playParts の**前**に作る（#579 round1 P2: 実音の予約後に
           // 同期計算すると、計算時間ぶんハイライトの0ms起点が遅れて帯が終始ずれる）
 
+          // エンジンは予約ループの**開始時点**の「今＋先読みリード」を実音の起点にする（#610）。
+          // playParts の完了後の Date.now() を起点にすると、予約処理の実時間ぶん
+          // ハイライトと終了時刻が実音より遅れる（round1 P2）ので、呼ぶ前の時刻を控える
+          const scheduledAt = Date.now();
           await audioEngine.playParts(partObjs, effectiveGlobalBpm);
+          const scheduleElapsedMs = Date.now() - scheduledAt;
 
           // 複数パートでは、一番長いパートが終わるまで再生状態を保つ必要がある。
           // 右手だけ先に終わっても左手が残っていれば再生中表示を続けたいので、
@@ -1845,9 +1850,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           ) + scheduleLeadSeconds();
           setPlaybackState('playing');
           clearPlaybackTimer();
-          remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
+          // 起点は予約開始時刻（scheduledAt）。残り時間・終了タイマー・タイムラインの
+          // 予約はすべて「予約に使った実時間」を差し引いた値にする
+          remainingPlaybackMsRef.current = Math.max(0, totalDuration * 1000 - scheduleElapsedMs);
           totalPlaybackMsRef.current = Math.max(0, totalDuration * 1000);
-          playbackStartedAtRef.current = Date.now();
+          playbackStartedAtRef.current = scheduledAt;
           // 再生開始位置を即座に表示へ反映し、開始小節を知らせる（#108・#318 の「操作は画面に出す」）。
           // 1小節目を選択した場合（startExpandedIndex === 0）も、選択起点の再生であることは同じ
           // なので通知する（Codex round1 P3）
@@ -1857,13 +1864,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
               ? describePlaybackFromMeasureNumber(startMeasure, selectedMeasures != null)
               : describePlaybackFromMeasure(startMeasure));
           }
-          schedulePositionTimeline(0);
+          schedulePositionTimeline(scheduleElapsedMs);
           playbackTimerRef.current = setTimeout(() => {
             setPlaybackState('stopped');
             setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
             playbackTimerRef.current = null;
             resetPlaybackClock();
-          }, totalDuration * 1000);
+          }, remainingPlaybackMsRef.current);
         } else {
           // 譜面が空でも「再生ボタンが壊れていないか」は確認できるように、
           // 代表音として C4 を 1拍だけ鳴らす。

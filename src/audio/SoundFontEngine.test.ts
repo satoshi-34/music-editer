@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SCHEDULE_LEAD_SECONDS } from './scheduleLead';
+import { resetAllDevTuning, setDevTuningOverride } from '../utils/devTuning';
 
 import { InstrumentType } from './SoundSource';
 import {
@@ -89,6 +90,18 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
     expect(play).toHaveBeenCalledTimes(1);
     // 偽の AudioContext は currentTime: 0。内蔵音源と同じ定数ぶん先に予約する
     expect(play.mock.calls[0][1]).toBeCloseTo(SCHEDULE_LEAD_SECONDS, 5);
+
+    // dev の上書きが実際の予約時刻へ届く（定数を直接使う退行を検出）
+    setDevTuningOverride('audio.scheduleLead', 0.3);
+    try {
+      play.mockClear();
+      await engine.playParts([{
+        measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C4'] }] }],
+      }], 120);
+      expect(play.mock.calls[0][1]).toBeCloseTo(0.3, 5);
+    } finally {
+      resetAllDevTuning();
+    }
   });
 
   it('タイ2音は「1回の発音・合計の長さ」で予約される', async () => {

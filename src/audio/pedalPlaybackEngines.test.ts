@@ -7,6 +7,7 @@
 //   4. 停止ボタン（stopAll）はペダル保持中の音も止める
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SCHEDULE_LEAD_SECONDS } from './scheduleLead';
+import { resetAllDevTuning, setDevTuningOverride } from '../utils/devTuning';
 
 import { SimpleAudioEngine } from './SimpleAudioEngine';
 import { SoundFontEngine } from './SoundFontEngine';
@@ -88,8 +89,15 @@ describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）'
     // mockContext.currentTime は 0。リードが無いと start(0) となり、予約ループの
     // 実時間ぶん先頭の音がアタック途中から鳴る
     expect(startedAt).toBeCloseTo(SCHEDULE_LEAD_SECONDS, 5);
-    // 停止側も同じぶん平行移動する（音の長さは変わらない）
-    expect(stoppedAt).toBeGreaterThan(startedAt);
+    // dev の上書きが実際の予約時刻へ届き、停止側も同じ量だけ平行移動する（音の長さは不変）
+    setDevTuningOverride('audio.scheduleLead', 0.3);
+    try {
+      const shifted = await playFirstNote();
+      expect(shifted.startedAt).toBeCloseTo(0.3, 5);
+      expect(shifted.stoppedAt - shifted.startedAt).toBeCloseTo(stoppedAt - startedAt, 5);
+    } finally {
+      resetAllDevTuning();
+    }
   });
 
   it('スタッカート（durationScale < 1）でもペダル中は解除位置まで響く（round1 P3: 内蔵側も固定）', async () => {
