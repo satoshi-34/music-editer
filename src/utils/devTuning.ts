@@ -68,7 +68,7 @@ export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
   {
     key: 'layout.systemRowGapPianoDefault',
     label: '段の間隔（ピアノ既定）',
-    description: 'ピアノ譜の段間の既定オフセット。新規作品にだけ効く（保存済み作品は自分の値を持つ）',
+    description: '⚠ 新規作品の既定値のみ。開いている譜面の段間はレイアウトタブの「段の間隔」で（即時反映）',
     defaultValue: -30,
     min: -60,
     max: 50,
@@ -80,7 +80,7 @@ export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
   {
     key: 'layout.partSpacingPianoDefault',
     label: 'パート間隔（ピアノ既定）',
-    description: '大譜表の右手/左手の間の既定オフセット。新規作品にだけ効く',
+    description: '⚠ 新規作品の既定値のみ。開いている譜面はレイアウトタブの「パート間隔」で（即時反映）',
     defaultValue: 38,
     min: -20,
     max: 80,
