@@ -240,3 +240,43 @@ A・B・C・Eはリスクが低く（既存コードと機能的に独立、ま�
 **影響範囲**: `computeLayout`/`measuredSystemHeightPx`/`recommendedSystemHeightPx` の新引数はすべて省略可能（既定0）で、既存の呼び出し・テストは変更なしで動く。ピアノの手間程度の最低間隔（`MIN_STAVE_SPACING_PX`=30）は、既存の間隔（80/60）に許容オフセット範囲（-20〜30）を適用しても実際には下限に到達しない値だが、将来オフセット範囲を広げた場合の安全弁として実装している。
 
 **追記（Issue #199、2026-08-09）**: 本節が「楽譜種別による既定値の違いはなく常に0」としていた `partSpacingOffsetPx` の既定値は、**ピアノのみ +38px** になった（運用者の実測選定値。段の間隔を -30px に詰めるかわりに大譜表の内側へ空気を入れる組み合わせ）。解決は「音符の大きさ」「段の間隔」と同じ `resolveDefaultLayoutForScoreType(scoreType)` に統合してあり、4章の上書きカスケード表における auto/override の関係（＝「実際に使う値 = ユーザー上書き ?? 自動値」）そのものは変わっていない。自動値 `staveSpacingForPartCount` も未変更。詳細は `.claude/specs/page-layout-controls/design.md` の Issue #199 の追補を参照。
+
+## 12. Issue #559 実装記録（段割りの最低幅を「理想幅×圧縮率」にする）
+
+8章の第一原理は縦方向（段数/ページ・五線サイズ）の話だが、横方向にも同じ性質の問題があった。
+**「最低幅」であるべき値に、VexFlow が返す「理想的な間隔」をそのまま使っていた**という取り違えである。
+
+**問題**: `vexFlowCombinedMeasureMinimumContentWidth` は `Formatter.preCalculateMinTotalWidth` の値を
+小節の最低幅として返していた。この関数が返すのは「ゆったり組むならこれくらい欲しい」という理想幅で、
+「これ以上詰めると読めなくなる」下限ではない。段割り（`planEffectiveMeasuresPerSystem` /
+`planSystemMeasureRanges`）はこの値を「入るか入らないか」の判定に使うため、密な譜面ほど段が痩せ、
+月光（8分3連×4組・大譜表）は実ブラウザで**1小節/段**まで膨張していた（#526 → #541 → 本Issue）。
+同じ見積もりを使う「この小節は最小の1小節/段でも紙幅を超えます」の警告も、余裕のある譜面で発火していた。
+
+**修正設計**:
+1. 圧縮率 `VEXFLOW_IDEAL_WIDTH_COMPRESSION`（`measureLayoutUtils.ts`・定数1か所）を新設し、
+   `engravingMinimumWidthFromIdeal(ideal)` で換算してから最低幅にする。
+   **圧縮するのは音符の並びのぶんだけ**で、小節の左右余白（`MEASURE_SIDE_PADDING`）と
+   臨時記号・装飾音の安全幅（`modifierSafetyWidth`）はそのまま足す（これらは間隔ではなく実寸のため）。
+2. 過密の下限ガードは変えない。`planEffectiveMeasuresPerSystem` が
+   `Math.max(combinedMeasureMinimumContentWidth（開始拍ごとに符頭・臨時記号の実寸を積んだ見積もり）,
+   圧縮後の実測)` を取る構造をそのまま残してあり、圧縮しすぎてもこの下限より狭くはならない。
+3. 手動上書き（`systemMeasureOverrides`・◀▶）の優先順位は変更なし。
+4. 値は 0.64。Issue 本文の例（0.7〜0.75）より強い圧縮になった理由と、圧縮率ごとの段割りの実測は
+   `docs/qa/system-break-min-width/README.md` にある。要点は「実際の段の予算が例の想定より狭い」こと:
+   ピアノ譜・単旋律譜はパート名を描かないのに、段割りの計画は既定の楽器名の余白（`SYSTEM_MAX_LABEL_WIDTH`=74）を
+   見込んだままにしてある（`ScorePage.tsx` の `instrumentLabelAreaWidth`。0 にすると既存譜面の段割りが
+   全部変わるため、本Issueでは触っていない）。**この余白の見積もりを実際の描画に合わせれば、
+   より緩い圧縮率でも同じ段割りになる**ので、圧縮率を上げたくなったときの最初の候補はここ。
+
+**影響範囲**: 横幅の見積もりを使うすべての経路（自動段割り・紙幅超え警告・読込時の
+`fitNotationSizeMultiplier`）が一律に狭い最低幅を見るようになる。段割りは全体的に「1段に入る小節数が
+増える」方向へ動くため、**保存済みの譜面でも自動段割りの段は詰まる**（手動で段割りを上書きした段は不変）。
+描画そのもの（`allocateCombinedMeasureWidths` の配分）は総和が段の幅に保たれる設計のままで、
+最低幅の比が変わるぶんだけ密な小節への配分がわずかに減る。
+
+**受入の確認**: `src/utils/systemBreakMinimumWidth.test.ts` が、実ブラウザで測った月光の内訳
+（理想幅と固定ぶんを分けた9小節ぶん）を入力に「圧縮なしなら1小節/段・いまの圧縮率なら2小節/段」を固定する。
+jsdom では VexFlow の文字幅が 0 になり実ブラウザの半分以下の幅しか出ないため、症状そのものは
+jsdom で再現できない。ブラウザでの実測（段割り・符頭の重なり・警告の消滅）は
+`docs/qa/system-break-min-width/README.md` に前後の画像つきで残した。

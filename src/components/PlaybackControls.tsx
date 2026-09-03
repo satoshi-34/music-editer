@@ -5,12 +5,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { InstrumentType } from '../audio/SoundSource';
 import { MIN_BPM, MAX_BPM, clampBpm, TEMPO_RANGE_MESSAGE } from '../audio/tempoRange';
-import {
-  MIN_PLAYBACK_SPEED_PERCENT,
-  MAX_PLAYBACK_SPEED_PERCENT,
-  DEFAULT_PLAYBACK_SPEED_PERCENT,
-  clampPlaybackSpeedPercent,
-} from '../audio/playbackSpeed';
 import type { PlaybackPosition } from '../audio/ScorePlayer';
 import type { PlaybackSoundRuntimeSettings, SoundEngineMode } from '../audio/playbackSettings';
 import {
@@ -84,12 +78,6 @@ export interface PlaybackControlsProps {
    * 記譜（見た目・保存データ）は変えず、再生タイミングだけに影響する。
    */
   onSwingEnabledChange?: (enabled: boolean) => void;
-  /**
-   * 再生速度（%）の変更コールバック（Issue #544）。
-   * 譜面のテンポ（♩=N・速度標語）は一切変えず、全体を一律で伸縮させる「聴き方」の設定。
-   * 省略すると再生速度の欄自体を出さない。
-   */
-  onPlaybackSpeedPercentChange?: (percent: number) => void;
 }
 
 /**
@@ -210,8 +198,7 @@ export default function PlaybackControls({
   onPluginNameChange,
   onSoundProfileChange,
   onPreviewAccidentalOnApplyChange,
-  onSwingEnabledChange,
-  onPlaybackSpeedPercentChange
+  onSwingEnabledChange
 }: PlaybackControlsProps) {
   // テンポ入力の内部状態
   const [tempoInput, setTempoInput] = useState(currentTempo.toString());
@@ -410,25 +397,6 @@ export default function PlaybackControls({
   }, [onTempoChange]);
 
   /**
-   * 再生速度スライダーの変更ハンドラ（Issue #544）。
-   * 譜面のテンポは変えず「聴き方」だけを変える設定なので、
-   * 値の保存先も作品ではなくアプリ全体の再生設定側になる。
-   */
-  const handlePlaybackSpeedSliderChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const nextPercent = Number(event.target.value);
-    onPlaybackSpeedPercentChange?.(clampPlaybackSpeedPercent(nextPercent, DEFAULT_PLAYBACK_SPEED_PERCENT));
-  }, [onPlaybackSpeedPercentChange]);
-
-  /**
-   * 再生速度を等倍（100%）へ戻すハンドラ。
-   * スライダーをつまんで 100 ちょうどへ合わせるのは意外と難しいので、
-   * 「元の速さに戻す」を1クリックで確実にできる出口を用意しておく。
-   */
-  const handleResetPlaybackSpeed = useCallback(() => {
-    onPlaybackSpeedPercentChange?.(DEFAULT_PLAYBACK_SPEED_PERCENT);
-  }, [onPlaybackSpeedPercentChange]);
-
-  /**
    * 音色選択の変更ハンドラ
    */
   const handleInstrumentChange = useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -491,13 +459,6 @@ export default function PlaybackControls({
   };
 
   const playPauseContent = getPlayPauseButtonContent();
-
-  // 再生速度は「聴き方」の設定なので、保存済みの値が壊れていても再生が止まらないよう
-  // 表示側でも必ず有効範囲へ寄せてから使う（localStorage は外から書き換えられるため）
-  const playbackSpeedPercent = clampPlaybackSpeedPercent(
-    soundRuntimeSettings?.playbackSpeedPercent ?? DEFAULT_PLAYBACK_SPEED_PERCENT,
-    DEFAULT_PLAYBACK_SPEED_PERCENT
-  );
 
   // 診断の折りたたみは、中身（音声復旧・最小テスト音）が1つも無いときは出さない。
   // 押しても何も起きない見出しだけが残ると、探した人を空振りさせるため
@@ -618,42 +579,6 @@ export default function PlaybackControls({
             </div>
           )}
         </div>
-
-        {/* 再生速度（Issue #544）。譜面のテンポ（上の「作品の基準テンポ」・♩=N・速度標語）は
-            一切変えず、鳴らすときだけ全体を一律で伸縮させる「聴き方」の設定。
-            テンポ欄のすぐ隣に置いて、「作品の値（♩=N）」と「今聴くときの倍率（%）」が
-            別物だと並びから読み取れるようにする（#562・設計メモ §3(c)）。 */}
-        {onPlaybackSpeedPercentChange && (
-          <div className="playback-speed-controls">
-            <label className="playback-speed-label" htmlFor="playback-speed-slider">
-              再生速度: {playbackSpeedPercent}%
-            </label>
-            <input
-              id="playback-speed-slider"
-              className="playback-speed-slider"
-              type="range"
-              value={playbackSpeedPercent}
-              onChange={handlePlaybackSpeedSliderChange}
-              min={MIN_PLAYBACK_SPEED_PERCENT}
-              max={MAX_PLAYBACK_SPEED_PERCENT}
-              step="5"
-              aria-label="再生速度（%）"
-            />
-            <button
-              type="button"
-              className="ghost playback-speed-reset-button"
-              onClick={handleResetPlaybackSpeed}
-              disabled={playbackSpeedPercent === DEFAULT_PLAYBACK_SPEED_PERCENT}
-              title="再生速度を等倍（100%）に戻す"
-              aria-label="再生速度を等倍に戻す"
-            >
-              等倍に戻す
-            </button>
-            <div style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.5 }}>
-              楽譜と書き出しは変わりません。ゆっくり聴いて確かめたいときに使います
-            </div>
-          </div>
-        )}
 
         {/* 小節番号を指定した途中再生（#545）。長い曲で「聴きたい小節まで画面をスクロールして
             選択する」手間を省くための入口で、鳴らす仕組み自体は選択起点の途中再生と同じ。 */}

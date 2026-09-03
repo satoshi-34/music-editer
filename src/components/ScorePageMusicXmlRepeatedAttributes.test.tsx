@@ -101,12 +101,16 @@ describe('ScorePage: 毎小節 attributes を書き直した MusicXML の段割�
     }, { timeout: 30000 });
 
     const measuresPerSystem = renderedMeasuresPerSystem();
-    // 内容のある13小節（入力済み9＋末尾の空4）を受け持つ先頭5段。
+    // 内容のある13小節（入力済み9＋末尾の空4）を受け持つ先頭4段。
     // 修正前は最低幅の水増しで [2, 2, 1, 2, 3] まで縮んでいた（3段目が1小節/段）。
-    // 修正後は直接入力した同じ譜面（moonlight-bars1-9.score.json の段割り上書きを
-    // 外したもの）と同じ [3, 2, 3, …] になる。
-    expect(measuresPerSystem.slice(0, 4)).toEqual([3, 2, 3, 4]);
-    // 受入条件1: 入力済み9小節を受け持つ段は、どれも2小節以上入っている
-    expect(measuresPerSystem.slice(0, 4).every((count) => count >= 2)).toBe(true);
+    //
+    // 期待値の更新（Issue #559・2026-09-03）: 最低幅の過大見積もりを直したことで、
+    // 13小節の詰まり方が [3, 2, 3, 4] から [4, 4, 4, 1] になった。末尾の「1」は幅不足ではなく
+    // 13小節を4小節ずつ詰めた余りで、内容の最後で段を打ち切る breakAt の既存挙動そのもの。
+    expect(measuresPerSystem.slice(0, 4)).toEqual([4, 4, 4, 1]);
+    // 受入条件1: 入力済みの小節を受け持つ段は、余りの段を除いてどれも2小節以上入っている
+    expect(measuresPerSystem.slice(0, 3).every((count) => count >= 2)).toBe(true);
+    // 4段で13小節ぜんぶを受け持っている（段が痩せて後ろへあふれていない）
+    expect(measuresPerSystem.slice(0, 4).reduce((sum, count) => sum + count, 0)).toBe(13);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

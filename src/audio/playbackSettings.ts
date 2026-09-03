@@ -1,8 +1,3 @@
-import {
-  DEFAULT_PLAYBACK_SPEED_PERCENT,
-  normalizeSavedPlaybackSpeedPercent,
-} from './playbackSpeed';
-
 /**
  * 再生時の音源方式。
  * built-in は軽量な内蔵音源、
@@ -51,14 +46,6 @@ export interface PlaybackSoundRuntimeSettings {
    * 既定は false（ストレート再生）で、既存ユーザーの再生結果を変えないようにする。
    */
   swingEnabled: boolean;
-  /**
-   * 再生速度（%）。100 が「譜面に書かれたテンポそのまま」で、
-   * 50 なら半分の速さ、200 なら2倍の速さで聴ける（Issue #544）。
-   *
-   * テンポ（♩=N）は作品の属性として作品ごとに保存されるが、
-   * こちらは**聴き方**の設定なのでアプリ全体で1つだけ持つ（作品には保存しない）。
-   */
-  playbackSpeedPercent: number;
 }
 
 export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettings = {
@@ -72,7 +59,6 @@ export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettin
   pluginName: 'MusyngKite',
   previewAccidentalOnApply: true,
   swingEnabled: false,
-  playbackSpeedPercent: DEFAULT_PLAYBACK_SPEED_PERCENT,
   profile: {
     brightness: 0.5,
     attack: 0.5,
@@ -113,6 +99,11 @@ function clampProfileValue(value: unknown, fallback: number): number {
 
 /**
  * localStorage から読んだ再生設定を、安全な既定値へ寄せながら正規化する。
+ *
+ * 戻り値は「知っている項目だけを詰め直した新しいオブジェクト」なので、
+ * 保存済みデータに知らない項目が残っていても自動的に捨てられる。
+ * #544 で一時的に持っていた `playbackSpeedPercent`（#588 で取り下げ）が
+ * 古い環境の localStorage に残っていても、この形のおかげで無視される。
  */
 export function sanitizePlaybackRuntimeSettings(raw: unknown): PlaybackSoundRuntimeSettings {
   if (!isRecord(raw)) {
@@ -140,9 +131,6 @@ export function sanitizePlaybackRuntimeSettings(raw: unknown): PlaybackSoundRunt
     swingEnabled: typeof raw.swingEnabled === 'boolean'
       ? raw.swingEnabled
       : DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.swingEnabled,
-    // 再生速度は 0 や文字列が入ると再生が進まなくなる（60 / 0 = Infinity）ため、
-    // 専用の正規化関数で必ず 25〜200% の数値へ寄せてから使う
-    playbackSpeedPercent: normalizeSavedPlaybackSpeedPercent(raw.playbackSpeedPercent),
     profile: {
       brightness: clampProfileValue(profile.brightness, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.brightness),
       attack: clampProfileValue(profile.attack, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.attack),

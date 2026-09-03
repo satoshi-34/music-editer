@@ -1,5 +1,11 @@
 // 再生速度（%）の正本モジュール（Issue #544）。
 //
+// **現状（#588 以降）: この倍率を変える UI と設定は取り下げられており、呼び出し側は
+// 常に 100%（等倍）を渡す。** 「テンポだけでよい」という運用者裁定によるもので、
+// モジュールを残しているのは、#544 round1 で直した終了タイマー・タイ・ペダルの
+// 整合（実効テンポ系の clampEffectiveBpm）がそれ自体として正しく、将来速度を
+// 復活させる場合の土台にもなるため。`clampEffectiveBpm` は今も再生経路で使われている。
+//
 // 「テンポ」と「再生速度」は役割が違う:
 // - テンポ（BPM）は**譜面の側**の情報。♩=N や速度標語として作品に書かれ、書き出しにも乗る
 // - 再生速度は**聴き方**の設定。ゆっくり聴いて確認したいときに全体を一律で伸縮させるだけで、
@@ -47,20 +53,6 @@ export function clampPlaybackSpeedPercent(percent: number, fallback: number): nu
     return fallback;
   }
   return Math.min(MAX_PLAYBACK_SPEED_PERCENT, Math.max(MIN_PLAYBACK_SPEED_PERCENT, percent));
-}
-
-/**
- * localStorage から読んだ再生速度を、安全な既定値へ寄せながら正規化する。
- *
- * localStorage は利用者やブラウザ拡張から自由に書き換えられるので、
- * 数値でない値・0 以下・NaN は既定（100%）へ戻す。0 を素通しすると
- * テンポが 0 になり `60 / 0 = Infinity` で再生が進まなくなってしまう。
- */
-export function normalizeSavedPlaybackSpeedPercent(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_PLAYBACK_SPEED_PERCENT;
-  }
-  return clampPlaybackSpeedPercent(value, DEFAULT_PLAYBACK_SPEED_PERCENT);
 }
 
 /**

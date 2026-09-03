@@ -170,7 +170,6 @@ import {
   DEFAULT_PLAYBACK_SPEED_PERCENT,
   applyPlaybackSpeedToBpm,
   applyPlaybackSpeedToBpms,
-  clampPlaybackSpeedPercent,
 } from '../audio/playbackSpeed';
 import { getArticulationPlaybackEffect } from '../utils/articulationMarkingUtils';
 import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId, ensembleSecondStaffPartId, INSTRUMENT_NAME_MAX_LENGTH, resolveInstrumentPartLabels, totalEnsembleStaffCount } from '../utils/instrumentationPartUtils';
@@ -990,12 +989,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       return DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS;
     }
   });
-  // 再生速度（%）は soundRuntimeSettings に持たせている（アプリ全体設定・#544）。
-  // 保存値は localStorage 経由で壊れ得るので、使う側では必ず有効範囲へ寄せてから読む。
-  const playbackSpeedPercent = clampPlaybackSpeedPercent(
-    soundRuntimeSettings.playbackSpeedPercent,
-    DEFAULT_PLAYBACK_SPEED_PERCENT
-  );
+  // 再生速度（%）の UI と設定は #588 で取り下げた（「テンポのみでいい」という運用者裁定）。
+  // 倍率を掛ける配管（applyPlaybackSpeedToBpm(s)・実効テンポ系）は将来復活させる場合の
+  // 土台として残すことになっているので、入口をここ1か所で等倍（100%）に固定している。
+  // ＝以降の再生経路は #544 以前とまったく同じ値で動く。
+  const playbackSpeedPercent = DEFAULT_PLAYBACK_SPEED_PERCENT;
   // 選択中の方式と実際に鳴っている方式がずれることがあるため、
   // UI 用に「現在の実動作モード」を分けて持つ。
   const [activeSoundEngineMode, setActiveSoundEngineMode] = useState<SoundEngineMode>(
@@ -1667,11 +1665,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 .map(item => item.measure)),
             tempoSettings.bpm,
           );
-          // 再生速度（%）はここで**一度だけ**掛ける（#544）。以降の実音・ハイライト・
-          // 終了タイマー・タイの実時間はすべてこの倍率込みの列と実効テンポを使うので、
+          // 再生速度（%）の倍率はここで**一度だけ**掛ける（#544）。以降の実音・ハイライト・
+          // 終了タイマー・タイの実時間はすべてこの列と実効テンポを使うので、
           // 「音だけ半分の速さでハイライトは元の速さ」というズレが起きない。
-          // 全小節へ同じ倍率を掛けるだけなので、標語（Allegro 等）が作る
-          // 小節間の相対関係はそのまま保たれる
+          // 現在は #588 の取り下げにより倍率が常に 100%（等倍）なので、
+          // この行は notatedMeasureBpms をそのまま写すだけの通り道になっている
           const scoreMeasureBpms = applyPlaybackSpeedToBpms(notatedMeasureBpms, playbackSpeedPercent);
           // 小節ごとの指定が無いときにエンジン・終了タイマーが使う基準テンポにも同じ倍率を掛ける
           const effectiveGlobalBpm = applyPlaybackSpeedToBpm(tempoSettings.bpm, playbackSpeedPercent);
@@ -2092,18 +2090,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
 
   const handleSwingEnabledChange = useCallback((enabled: boolean) => {
     setSoundRuntimeSettings(prev => ({ ...prev, swingEnabled: enabled }));
-  }, []);
-
-  /**
-   * 再生速度（%）の変更（Issue #544）。
-   * 譜面のテンポ（作品ごとに保存する ♩=N）とは別物で、こちらは「聴き方」の設定なので
-   * アプリ全体の再生設定（localStorage）側に置き、作品には保存しない。
-   */
-  const handlePlaybackSpeedPercentChange = useCallback((percent: number) => {
-    setSoundRuntimeSettings(prev => ({
-      ...prev,
-      playbackSpeedPercent: clampPlaybackSpeedPercent(percent, DEFAULT_PLAYBACK_SPEED_PERCENT),
-    }));
   }, []);
 
   const handleKeySignatureChange = useCallback((nextKeySignature: KeySignature) => {
@@ -6827,7 +6813,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 onSoundProfileChange={handleSoundProfileChange}
                 onPreviewAccidentalOnApplyChange={handlePreviewAccidentalOnApplyChange}
                 onSwingEnabledChange={handleSwingEnabledChange}
-                onPlaybackSpeedPercentChange={handlePlaybackSpeedPercentChange}
               />
             </div>
           )}

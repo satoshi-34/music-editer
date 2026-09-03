@@ -961,29 +961,6 @@ button.ghost.active:hover:not(:disabled) {
   border-color: #dc3545;
 }
 
-/* ===== 再生速度（Issue #544） =====
-   譜面のテンポとは別の「聴き方」の設定。テンポ欄のすぐ上に、
-   同じ横並びの見た目でそろえて置く。 */
-.playback-speed-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.playback-speed-label {
-  font-size: 12px;
-  font-weight: 500;
-  color: #495057;
-  white-space: nowrap;
-  /* "再生速度: 200%" まで伸びても並びがガタつかないよう最小幅を確保 */
-  min-width: 96px;
-}
-
-.playback-speed-slider {
-  width: 140px;
-}
-
 /* テンポ制御 */
 .tempo-controls {
   display: flex;
@@ -1183,7 +1160,6 @@ button.ghost.active:hover:not(:disabled) {
     align-items: stretch;
   }
   
-  .playback-speed-controls,
   .tempo-controls,
   .instrument-controls {
     justify-content: space-between;
