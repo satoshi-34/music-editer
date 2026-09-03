@@ -14,6 +14,7 @@
 // （SELECTION_CLAIMED_EVENT）の前例があるため、同じ作法にそろえた。
 
 import type { NoteEvent } from '../types/storage';
+import { MAX_VOICES_PER_PART } from './voiceMeasureUtils';
 import type { OmrConvertFailure } from './omrApi';
 import { canReplaceTupletNoteWithRest, type TupletGroupPasteBlockReason } from './tupletUtils';
 import type { PlaybackStartMeasureRejection } from './playbackPositionUtils';
@@ -192,12 +193,13 @@ export function describeCrossBandInsert(targetPartLabel: string, voiceIndex: num
 }
 
 /**
- * UI が対応していない声部（3声以降）への切り替えを求められたときの案内（#244 段5-5）。
- * データ・再生・書き出しは N 声対応だが、編集 UI（声部トグル）は2声まで。
- * 黙って無視すると「クリックしたのに何も起きない」行き止まりになる（#318）。
+ * 上限（4声/段）を超える声部への切り替えを求められたときの案内（#244 段5-5・#417）。
+ * 上限超えのデータは読込の境界で落としている（enforceVoiceLimitInParts）のでここへは
+ * 来ない想定だが、来たときに黙って無視すると「クリックしたのに何も起きない」
+ * 行き止まりになる（#318）。#417 より前は「2声まで」の案内だった。
  */
 export function describeVoiceSwitchUnavailable(voiceIndex: number): string {
-  return `声部${voiceIndex + 1}の音符です（表示・再生・書き出しのみ対応）。編集ツールでの切り替えは声部1・2までです`;
+  return `声部${voiceIndex + 1}の音符です（表示・再生・書き出しのみ対応）。編集できるのは1つの段につき${MAX_VOICES_PER_PART}声までです`;
 }
 
 /**

@@ -6848,7 +6848,7 @@ export default function PianoSystemCanvas({
           const otherVfNotes=entry.vfNotes;
           const otherEvs=entry.sourceEvents;
           if(otherVfNotes.length===0)return;
-          // 切り替え先の声部。声部トグルは 0/1 の2つだけなので、型もその2値へそろえる。
+          // 切り替え先の声部（#417 で 0..3 の4声まで）。
           const targetVoiceIndex=entry.voiceIndex;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const anchors=otherVfNotes.map((n:any,j)=>n.getAbsoluteX?n.getAbsoluteX():measLeft+(j+1)*(measRight-measLeft)/(otherVfNotes.length+1));

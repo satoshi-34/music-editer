@@ -330,9 +330,10 @@ function attachDirectionMarksToVoiceEvents(
   syntheticRestCount?: (el: Element) => number,
   options?: {
     /**
-     * 松葉（ヘアピン）を復元しない（round2 P2）。声部3以降は現行 UI が松葉2声まで
-     * のため文字強弱だけを復元する。openRefs に空配列を渡すだけでは無効化にならず、
-     * 同一小節内の松葉が復元され、小節またぎでは開始位置で終わる壊れた松葉が残る
+     * 松葉（ヘアピン）を復元しない。#417 で全声部の松葉を復元するようになったため
+     * 現在この経路の呼び出しは無いが、「openRefs に空配列を渡すだけでは無効化にならず、
+     * 同一小節内の松葉が復元され、小節またぎでは開始位置で終わる壊れた松葉が残る」
+     * という性質は変わらないので、無効化が要るときのための入口として残してある
      */
     skipHairpins?: boolean;
   },
@@ -827,7 +828,7 @@ function buildStaffMeasures(
     // 声部2の松葉も同じ方式で復元する（voice2Events の要素を直接書き換える）
     attachDirectionMarksToVoiceEvents(voice2Children, voice2Events, mi, openHairpinRefsVoice2, pedalCarryVoice2, syntheticRestCount);
 
-    // 声部3以降（松葉の復元は現行 UI が2声までなので行わない。「壊れず全声部が戻る」水準）。
+    // 声部3以降（#417 で松葉も復元するようになった）。
     // 疎な番号（間の声部が空）は空の器で埋め、声部番号を保存データ上の位置と一致させる
     const noteBearingVoiceNumbers = sectionsWithVoice
       .filter((s) => s.children.some((el) => el.tagName === 'note'
