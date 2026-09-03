@@ -53,6 +53,10 @@ describe('PlaybackControls', () => {
       // 音色選択
       expect(screen.getByLabelText('楽器選択')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '音色プレビュー' })).toBeInTheDocument();
+      // 音声復旧は診断（L3）として「音の調子がおかしいとき」へ畳んだので、
+      // 常設ではなく折りたたみを開いてから出る（Issue #562）
+      expect(screen.queryByRole('button', { name: '音声復旧' })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /音の調子がおかしいとき/ }));
       expect(screen.getByRole('button', { name: '音声復旧' })).toBeInTheDocument();
 
       // 再生位置表示（テキストが複数要素に分かれている可能性を考慮）
@@ -347,6 +351,8 @@ describe('PlaybackControls', () => {
       const onAudioRecovery = vi.fn();
       render(<PlaybackControls {...defaultProps} onAudioRecovery={onAudioRecovery} />);
 
+      // 診断は折りたたみの中にあるので、まず開いてから押す（Issue #562）
+      fireEvent.click(screen.getByRole('button', { name: /音の調子がおかしいとき/ }));
       const recoveryButton = screen.getByRole('button', { name: '音声復旧' });
       fireEvent.click(recoveryButton);
 
