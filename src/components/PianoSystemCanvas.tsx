@@ -3168,6 +3168,19 @@ export default function PianoSystemCanvas({
       moved: boolean;
       /** つかんだポインタ列（タッチ対応・多点の混線防止。round1 P2） */
       pointerId: number;
+      /**
+       * 未選択の記号を直接つかんだとき（Issue #553）に、しきい値を超えた時点で
+       * 「その記号を選ぶ（＝✥ オーバーレイを開く）」ために呼ぶ処理。
+       * すでに調整中の記号をつかんだ場合は null（開き直す必要がない）。
+       *
+       * ここで初めて開くのは、押した瞬間に開いてしまうと「選ぶつもりの1クリック」でも
+       * オーバーレイが2回開き直すことになり、3px 未満は従来どおりの click に任せる
+       * という仕様（#553 受入2）が守れないため。
+       *
+       * 戻り値 false は「開けなかった」（例: 編集 UI の無い3声以降の記号）。
+       * その場合ドラッグは成立させず中止する。
+       */
+      beginAdjust: ((clientX: number, clientY: number) => boolean) | null;
     } | null;
     /**
      * 直前のドラッグで記号を動かしたか。ドラッグの終わりに必ず来る click を
@@ -3371,7 +3384,17 @@ export default function PianoSystemCanvas({
    * setTool を呼ぶため**マウス押下中でも発生する**） ②SCORE_SELECTION_CLEAR 要求
    * ③pointercancel（OS がポインタを取り上げた。suppressNextClick: false で呼ぶ）。
    */
-  const cancelActiveDragSessions = useCallback((options?: { suppressNextClick?: boolean }) => {
+  const cancelActiveDragSessions = useCallback((options?: {
+    suppressNextClick?: boolean;
+    /**
+     * pointercancel 経路で渡す、取り上げられたポインタの ID（#553 round1 P2）。
+     * 指定時、記号ドラッグのセッションは**同じ pointerId のときだけ**キャンセルする
+     * （#536 規約: move/up/cancel は同じ pointerId のみ処理。別の指の cancel で
+     * 進行中のドラッグを巻き戻さない）。マウスイベント由来の弧・タイ等のセッションは
+     * pointerId を持たないため従来どおり全キャンセル
+     */
+    symbolPointerId?: number;
+  }) => {
     // 既定は true（従来の呼び出し元＝ツール切替・CLEAR の挙動を変えない）
     const suppressNextClick = options?.suppressNextClick !== false;
     const hadActiveArcDrag =
@@ -3395,13 +3418,18 @@ export default function PianoSystemCanvas({
     // 記号のドラッグ（Issue #522）も弧と同じ扱い: 確定はせず、つかむ前の位置へ戻す。
     // ツール切替・pointercancel は利用者の「ここで決めた」ではないため
     const symbolDrag = dragSessionsRef.current.symbolOffset;
-    dragSessionsRef.current.symbolOffset = null;
-    if (symbolDrag?.moved) {
-      symbolOffsetDragRef.current.applyDraft(symbolDrag.baseX, symbolDrag.baseY);
-      // 読み飛ばしを立てるかどうかの理由は上の arcMoved と同じ
-      dragSessionsRef.current.symbolOffsetMoved = suppressNextClick;
-    } else if (!suppressNextClick) {
-      dragSessionsRef.current.symbolOffsetMoved = false;
+    const keepSymbolDrag = options?.symbolPointerId != null
+      && symbolDrag != null
+      && symbolDrag.pointerId !== options.symbolPointerId;
+    if (!keepSymbolDrag) {
+      dragSessionsRef.current.symbolOffset = null;
+      if (symbolDrag?.moved) {
+        symbolOffsetDragRef.current.applyDraft(symbolDrag.baseX, symbolDrag.baseY);
+        // 読み飛ばしを立てるかどうかの理由は上の arcMoved と同じ
+        dragSessionsRef.current.symbolOffsetMoved = suppressNextClick;
+      } else if (!suppressNextClick) {
+        dragSessionsRef.current.symbolOffsetMoved = false;
+      }
     }
     if (tiePreviewPathRef.current) tiePreviewPathRef.current.style.display = 'none';
   }, [cancelArcDrag]);
@@ -3437,7 +3465,9 @@ export default function PianoSystemCanvas({
     };
     // pointercancel には mouseup も click も続かないので、click の読み飛ばしは立てない
     //（立てると解除役の mouseup が来ず、中断後の最初のクリックが1回捨てられる）
-    const onPointerCancel = () => { cancelActiveDragSessions({ suppressNextClick: false }); };
+    const onPointerCancel = (e: PointerEvent) => {
+      cancelActiveDragSessions({ suppressNextClick: false, symbolPointerId: e.pointerId });
+    };
     // 記号ドラッグ側の安全弁だけは pointerup でも効かせる（round2 P2: タッチでは mouseup が
     // 保証されず、preventDefault で互換 mouse イベントも抑止され得る）。
     // onWindowMouseUp をそのまま pointerup へ登録してはいけない（round3 P1）:
@@ -3615,6 +3645,20 @@ export default function PianoSystemCanvas({
           && Math.abs(ev.clientY - drag.startClientY) < SYMBOL_DRAG_START_THRESHOLD_PX
         ) return;
         drag.moved = true;
+        // 未選択の記号を直接つかんだ場合（Issue #553）は、ここで初めて ✥ を開く。
+        // 押した瞬間ではなくしきい値を超えた時点にするのは、3px 未満で離した操作を
+        // 従来どおりの click（＝記号を選ぶ）に任せきるため
+        if (drag.beginAdjust) {
+          const opened = drag.beginAdjust(ev.clientX, ev.clientY);
+          drag.beginAdjust = null;
+          if (!opened) {
+            // 開けなかった（例: 編集 UI の無い3声以降）。移動はさせず、
+            // 断りの通知を二重に出さないよう、続く click も1回読み飛ばす
+            dragSessionsRef.current.symbolOffset = null;
+            dragSessionsRef.current.symbolOffsetMoved = true;
+            return;
+          }
+        }
       }
       const { x, y } = clientToGroup(ctx.svg, ctx.svgRoot, ev.clientX, ev.clientY);
       // 移動量は毎回「つかんだ時の値 ＋ つかんだ点からの総移動量」で求める。
@@ -4630,11 +4674,8 @@ export default function PianoSystemCanvas({
       hit.setAttribute('data-symbol-target', symbolHitRegionKey(target));
       hit.style.pointerEvents = symbolsInteractive ? 'auto' : 'none';
       if (symbolsInteractive) {
-        hit.style.cursor = 'pointer';
         /**
          * いま位置調整（✥）オーバーレイを開いているのが「この記号」か（Issue #522）。
-         * ドラッグで動かせるのは調整中の1件だけにして、通常のクリック（記号を選ぶ）や
-         * 音符の入力・選択と衝突させない。
          *
          * 判定に ref を使うのは、オーバーレイを開いただけでは描画 effect が走らず
          * （下書きがまだ変わっていないため）、この関数を作った時点の state が
@@ -4649,31 +4690,89 @@ export default function PianoSystemCanvas({
             && st.voiceIndex === symbolVoiceIndex
             && symbolHitRegionKey(st.target) === symbolHitRegionKey(target);
         };
+        /**
+         * この記号をクリックしたときに開く調整オーバーレイの種類。
+         * ⤢（サイズ変更ツール）中だけ「大きさ」、それ以外は「位置調整（✥）」。
+         */
+        const overlayKindForTool = (): 'resize' | 'offset' => (
+          // カスタム記号専用の ⤢（customSymbolResize）も同じ「サイズ変更中」
+          //（#553 round1 P2: 汎用 ⤢ だけ見ていると、カスタム記号の ⤢ 中に
+          // 記号を掴めてしまい、大きさのつもりの操作で位置が変わる）
+          'mode' in tool && (tool.mode === 'symbolAdjustResize' || tool.mode === 'customSymbolResize')
+            ? 'resize'
+            : 'offset'
+        );
+        /**
+         * いまこの記号を「押してそのまま動かす」ことができるか（Issue #553）。
+         *
+         * #522 では掴めるのを「✥ を開いている1件だけ」に絞っていたが、動かすたびに
+         * 記号クリック→✥→ドラッグ の3手が要る不便さ（運用者QA 2026-09-01）を解消するため、
+         * 演奏記号タブでは未選択の記号もそのまま掴めるようにした。
+         * ⤢（サイズ変更）中だけは従来どおり掴めない — その場のクリックは「大きさ」の
+         * パネルを開く操作で、位置のドラッグと意味が混ざるため。
+         */
+        const canDirectDrag = (): boolean => isOffsetDragTarget() || overlayKindForTool() === 'offset';
+        /**
+         * いま譜面データに保存されている、この記号のオフセット（横・縦）。
+         * ✥ を開く前に掴んだとき（Issue #553）の「つかんだ時の値」に使う。
+         * 記号の種類で置き場所が違うので、openSymbolAdjustEditor と同じ読み方にそろえる
+         * （ズレると、掴んだ瞬間に記号が飛ぶ）。
+         */
+        const currentSymbolOffset = (): { x: number; y: number } | null => {
+          if (target.type === 'custom') {
+            const existing = event.customSymbols?.find(sym => sym.symbolId === target.symbolId);
+            if (!existing) return null;
+            return { x: existing.offsetX ?? 0, y: existing.offsetY ?? 0 };
+          }
+          const adjust = getSymbolAdjust(event, target.kind);
+          return { x: adjust.offsetX, y: adjust.offsetY };
+        };
+        // 掴める記号は弧のドラッグと同じ 'grab' で知らせる（#553 仕様5）
+        hit.style.cursor = canDirectDrag() ? 'grab' : 'pointer';
         hit.addEventListener('mouseenter', () => {
           hit.setAttribute('fill', 'rgba(37, 99, 235, 0.16)');
-          // つかめる（＝調整中の）記号は弧のドラッグと同じ 'grab' で知らせる
-          hit.style.cursor = isOffsetDragTarget() ? 'grab' : 'pointer';
+          // ツールはホバーのたびに変わりうるので、ここでも都度求め直す
+          hit.style.cursor = canDirectDrag() ? 'grab' : 'pointer';
         });
         hit.addEventListener('mouseleave', () => hit.setAttribute('fill', 'rgba(37, 99, 235, 0)'));
         hit.addEventListener('pointerdown', (domEvent) => {
-          if (!isOffsetDragTarget()) return;  // 通常のクリック（記号を選ぶ）はそのまま通す
           const me = domEvent as PointerEvent;
           // 主ポインタの左ボタン/指だけでつかむ（round1 P3: 右クリックや補助ボタンの
           // ドラッグで保存が始まると、コンテキストメニュー操作のつもりが移動になる）
           if (!me.isPrimary || me.button !== 0) return;
-          // 押した瞬間に入力欄からフォーカスが外れる（blur ＝ 確定して閉じる）のを止める。
-          // 閉じてしまうと動かす対象を見失ってドラッグが成立しない
-          //（「この記号を削除」ボタンと同じ preventDefault の使い方・Issue #385 続報）
-          me.preventDefault();
-          const st = symbolOffsetEditStateRef.current;
-          if (!st) return;
-          // 基準は state ではなく入力欄の現在値。「数値を打ってからドラッグ」でも
-          // 打った値からの移動になるようにそろえる（矢印キーと同じ考え方）
-          const { x: baseX, y: baseY } = applySymbolOffsetNudge(
-            symbolOffsetXInputRef.current?.value ?? String(st.draftX),
-            symbolOffsetYInputRef.current?.value ?? String(st.draftY),
-            { dx: 0, dy: 0 },
-          );
+          if (!canDirectDrag()) return;  // ⤢（サイズ変更）中のクリックはそのまま通す
+          // すでに ✥ を開いている記号か、それとも未選択の記号を直接つかんだか（Issue #553）。
+          // 前者は入力欄の現在値、後者は譜面データの保存値が「つかんだ時の値」になる。
+          const alreadyAdjusting = isOffsetDragTarget();
+          let baseX: number;
+          let baseY: number;
+          if (alreadyAdjusting) {
+            // 押した瞬間に入力欄からフォーカスが外れる（blur ＝ 確定して閉じる）のを止める。
+            // 閉じてしまうと動かす対象を見失ってドラッグが成立しない
+            //（「この記号を削除」ボタンと同じ preventDefault の使い方・Issue #385 続報）
+            //
+            // 未選択の記号（#553）では守るべき入力欄がまだ無いので preventDefault しない。
+            // ここで既定動作を止めると、ブラウザによっては続く click が出ず
+            // 「3px 未満で離したら選択」（受入2）が壊れる恐れがあるため
+            me.preventDefault();
+            const st = symbolOffsetEditStateRef.current;
+            if (!st) return;
+            // 基準は state ではなく入力欄の現在値。「数値を打ってからドラッグ」でも
+            // 打った値からの移動になるようにそろえる（矢印キーと同じ考え方）
+            ({ x: baseX, y: baseY } = applySymbolOffsetNudge(
+              symbolOffsetXInputRef.current?.value ?? String(st.draftX),
+              symbolOffsetYInputRef.current?.value ?? String(st.draftY),
+              { dx: 0, dy: 0 },
+            ));
+          } else {
+            // ✥ を開く前なので、いま保存されているオフセットが基準になる。
+            // 読み出し方は openSymbolAdjustEditor と同じ（記号の種類で置き場所が違う）
+            const saved = currentSymbolOffset();
+            if (!saved) return;
+            ({ x: baseX, y: baseY } = applySymbolOffsetNudge(
+              String(saved.x), String(saved.y), { dx: 0, dy: 0 },
+            ));
+          }
           // 座標変換に使う SVG は「いま描かれているもの」を台帳から取る。
           // 描画のたびに作り直されるため、ドラッグ中の window ハンドラと同じ入り口にそろえる
           const ctx = arcDragContextRef.current;
@@ -4684,6 +4783,11 @@ export default function PianoSystemCanvas({
             startClientX: me.clientX, startClientY: me.clientY,
             baseX, baseY, moved: false,
             pointerId: me.pointerId,
+            // 未選択なら、しきい値を超えた時点で ✥ を開く（#553 仕様2）。
+            // 位置調整のドラッグなので開くのは必ず 'offset' 側
+            beginAdjust: alreadyAdjusting
+              ? null
+              : (clientX, clientY) => selectSymbolForAdjust(clientX, clientY, 'offset'),
           };
         });
         // タッチでのドラッグ中にブラウザのスクロール/ズームへ取られないようにする。
@@ -4699,6 +4803,24 @@ export default function PianoSystemCanvas({
             dragSessionsRef.current.symbolOffsetMoved = false;
             return;
           }
+          const me = domEvent as MouseEvent;
+          selectSymbolForAdjust(me.clientX, me.clientY, overlayKindForTool());
+        });
+        /**
+         * この記号を選んで調整オーバーレイを開く。クリック（従来）と、未選択の記号を
+         * 直接つかんだときのドラッグ開始（Issue #553）の共通の入り口。
+         *
+         * 2か所へ同じ処理を書き写すと、片方だけ直したときにもう片方へ修正が届かない
+         * （#223 の修正が別実装へ届かず #280 が起きた反省）ため、レイヤー切り替え・
+         * 声部ガード・オーバーレイの回避位置まで含めてここ1か所に集約する。
+         *
+         * 戻り値: 実際に開いたら true。編集 UI の無い声部で断った場合は false。
+         */
+        function selectSymbolForAdjust(
+          clientX: number,
+          clientY: number,
+          overlayKind: 'resize' | 'offset',
+        ): boolean {
           // 記号クリックは**常に「その記号を選ぶ」**（2026-08-24 の実機フィードバックで統一）。
           // 一時期は選択中のツールで振り分け（同種の記号ツール中はトグル解除）にしていたが、
           //   - pp ツールを持ったまま pp を押すと消えてしまい、**選択・位置調整ができない**
@@ -4712,8 +4834,7 @@ export default function PianoSystemCanvas({
           const hitRect = hit.getBoundingClientRect();
           const anchor = (hitRect.width || hitRect.height)
             ? toContainerRect(hitRect)
-            : anchorFromClientPoint((domEvent as MouseEvent).clientX, (domEvent as MouseEvent).clientY);
-          const overlayKind = 'mode' in tool && tool.mode === 'symbolAdjustResize' ? 'resize' : 'offset';
+            : anchorFromClientPoint(clientX, clientY);
           // 別のレイヤー（手×声部）の記号をクリックしたときは、**そのレイヤーへ切り替えてから**
           // 調整の小窓を開く（#316 の音符クリックと同じ型。切り替えは必ず画面に出す）。
           // こうしないと「レイヤーを合わせないと記号を触れない」うえ、どの記号がどの声部の
@@ -4726,7 +4847,7 @@ export default function PianoSystemCanvas({
           // ガード・#318 / #244 段5-5）
           if (voiceChanged && symbolVoiceIndex > 1) {
             notifyScoreEdit(describeVoiceSwitchUnavailable(symbolVoiceIndex));
-            return;
+            return false;
           }
           if (layerPartChanged || voiceChanged) {
             requestActiveVoiceChange(symbolVoiceIndex, activeLayerPartIndex != null ? partIndex : undefined);
@@ -4738,7 +4859,8 @@ export default function PianoSystemCanvas({
           // 声部も記号自身のもの（symbolVoiceIndex）を渡してそろえる
           // （声部2の音符に付いた記号をクリックしたとき、声部1側を書き換えないため）。
           openSymbolAdjustEditor(overlayKind, partIndex, measureAbsoluteIndex, eventIndex, symbolVoiceIndex, target, event, anchor);
-        });
+          return true;
+        }
       }
       svgRoot.appendChild(hit);
     }
@@ -6787,6 +6909,12 @@ export default function PianoSystemCanvas({
               rect.setAttribute('data-measure',String(absI));
               rect.setAttribute('data-note',String(j));
               rect.setAttribute('data-voice',String(entry.voiceIndex));
+              // パート（段）と符頭の実描画X範囲も公開する（Issue #411）。
+              // 再生ハイライトの帯は「符頭の幅」を基準に引くので、アクティブ声部の
+              // .vf-note-hit と同じ属性名で同じ意味の値を出しておく
+              rect.setAttribute('data-part',String(pi));
+              rect.setAttribute('data-note-left',String(noteVisualLeft));
+              rect.setAttribute('data-note-right',String(noteVisualRight));
               rect.setAttribute('x',String(rectLeft));
               rect.setAttribute('y',String(top));
               rect.setAttribute('width',String(rectWidth));
@@ -6904,6 +7032,11 @@ export default function PianoSystemCanvas({
               rect.setAttribute('class','vf-note-hit');
               rect.setAttribute('data-measure', String(absI));
               rect.setAttribute('data-note', String(j));
+              // どのパート（段）・どの声部の音符かを公開する（Issue #411）。
+              // 再生ハイライトは「鳴っている全声部」を探すため、小節・音符番号だけでは
+              // 大譜表の右手と左手（どちらも声部0・同じ音符番号）を区別できない
+              rect.setAttribute('data-part', String(pi));
+              rect.setAttribute('data-voice', String(activeVoiceIndex));
               // 2枚に分かれた rect のどちらなのかをテストから見分けられるようにする（表示には影響しない）
               rect.setAttribute('data-hit-part', part);
               // 符頭の実描画X範囲。個別音選択は keySelectXPad(svg) でこの範囲近傍に限定されるため、
@@ -9380,9 +9513,9 @@ export default function PianoSystemCanvas({
           <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'sans-serif' }}>
             矢印キーで{SYMBOL_OFFSET_NUDGE_STEP}pxずつ移動（Shiftで{SYMBOL_OFFSET_NUDGE_STEP_LARGE}px）・Enterで確定・Escで元へ戻す
           </span>
-          {/* ドラッグ移動（Issue #522）は矢印キーと同じ調整の別の入り口なので、同じ場所で知らせる */}
+          {/* ドラッグ移動（Issue #522 / #553）は矢印キーと同じ調整の別の入り口なので、同じ場所で知らせる */}
           <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'sans-serif' }}>
-            記号そのものをドラッグしても動かせます（離した時点で確定）
+            記号そのものをドラッグしても動かせます（選択なしで直接つかんでもOK・離した時点で確定）
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
@@ -9408,7 +9541,11 @@ export default function PianoSystemCanvas({
                 type="number"
                 min={MIN_SYMBOL_OFFSET}
                 max={MAX_SYMBOL_OFFSET}
-                defaultValue={symbolOffsetEditState.currentX}
+                // 下書き（draft）を初期表示にする。通常はオーバーレイを開いた時点で
+                // current と draft は同じ値だが、ドラッグの途中で開いた場合（Issue #553）は
+                // 開く前に下書きが進んでいる。current を出すと、その1回ぶんの移動が
+                // 入力欄に反映されず、離した時点の確定（入力欄の値を読む）で取り消されてしまう
+                defaultValue={symbolOffsetEditState.draftX}
                 placeholder="0"
                 style={{
                   border: '1px solid #ddd',
@@ -9457,7 +9594,11 @@ export default function PianoSystemCanvas({
                 type="number"
                 min={MIN_SYMBOL_OFFSET}
                 max={MAX_SYMBOL_OFFSET}
-                defaultValue={symbolOffsetEditState.currentY}
+                // 下書き（draft）を初期表示にする。通常はオーバーレイを開いた時点で
+                // current と draft は同じ値だが、ドラッグの途中で開いた場合（Issue #553）は
+                // 開く前に下書きが進んでいる。current を出すと、その1回ぶんの移動が
+                // 入力欄に反映されず、離した時点の確定（入力欄の値を読む）で取り消されてしまう
+                defaultValue={symbolOffsetEditState.draftY}
                 placeholder="0"
                 style={{
                   border: '1px solid #ddd',

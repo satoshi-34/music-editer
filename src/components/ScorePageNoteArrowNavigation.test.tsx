@@ -102,10 +102,18 @@ function mockSvgLayout(svg: SVGSVGElement): { toClientX: (x: number) => number; 
 
 /** 音符の符頭をクリックして選択する（c/5 はト音記号の第3線と第2線の間 = line 1.5） */
 async function selectNote(measure: number, note: number) {
+  // 直前の操作（段またぎの移動など）による再描画が CI の遅いランナーでは
+  // まだ終わっていないことがあるため、当たり判定が生えるまで待ってから選択する
+  //（#568 の CI で「小節1のイベント0の当たり判定: null」が2回連続で再現）
+  await waitFor(() => {
+    expect(
+      document.querySelector(`rect.vf-note-hit[data-measure="${measure}"][data-note="${note}"]`),
+      `小節${measure + 1}のイベント${note}の当たり判定`
+    ).toBeTruthy();
+  }, { timeout: 15000 });
   const hit = document.querySelector(
     `rect.vf-note-hit[data-measure="${measure}"][data-note="${note}"]`
   ) as SVGRectElement | null;
-  expect(hit, `小節${measure + 1}のイベント${note}の当たり判定`).toBeTruthy();
   const svg = hit!.closest('svg') as SVGSVGElement;
   const { toClientX, toClientY } = mockSvgLayout(svg);
   // jsdom には getBBox が無く符頭の幅が 0 になるため、left と right は同じ値になる

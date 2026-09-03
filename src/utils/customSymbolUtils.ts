@@ -3,6 +3,7 @@
 // 座標系: (0,0) = アンカー点（音符への接続点）、y がマイナスで上方向。
 
 import type { CustomSymbolDef, NoteEvent, ShapePrimitive } from '../types/storage';
+import { smoothStrokePoints, type StrokePoint } from './strokeSmoothing';
 
 // ── 上限値の定数 ──────────────────────────────────────────
 // エディタ（描画時の制限）とバリデーション（保存/読込時の検査）の両方から
@@ -80,6 +81,32 @@ export function setCustomSymbolOffset(
     s.symbolId === symbolId ? { ...s, offsetX: clampedX, offsetY: clampedY } : s
   ));
   return { ...event, customSymbols: next };
+}
+
+/**
+ * 補正済みストロークの計算結果をおぼえておくための入れ物（キャッシュ）。
+ * 楽譜は音符を1つ動かすたびに全体を描き直すため、同じストロークの補正計算が
+ * 何度も走る。points 配列そのものをキーにした WeakMap にしておくと、
+ * 記号が消えたときにキャッシュも一緒に破棄される（メモリが増え続けない）。
+ */
+const smoothedStrokeCache = new WeakMap<StrokePoint[], StrokePoint[]>();
+
+/**
+ * フリーハンド線を描くときに実際に使う頂点列を返す。
+ * smoothing が true の記号だけ手ぶれ補正をかけ、false（既定・旧データ）は
+ * 記録したままの頂点列を返す。元の points は書き換えないので、
+ * 補正をオフに戻せばいつでも描いたままの線に戻せる。
+ */
+export function resolveStrokePoints(
+  points: { x: number; y: number }[],
+  smoothing: boolean | undefined,
+): { x: number; y: number }[] {
+  if (!smoothing) return points;
+  const cached = smoothedStrokeCache.get(points);
+  if (cached) return cached;
+  const smoothed = smoothStrokePoints(points);
+  smoothedStrokeCache.set(points, smoothed);
+  return smoothed;
 }
 
 /** 数値が有限でなければ fallback を返す（バリデーションをすり抜けた不正値の保険） */
@@ -343,7 +370,7 @@ export function renderCustomSymbol(
       case 'path': {
         // 非有限値の点を含む場合は d 文字列生成の時点で除外されるが、
         // 万一 points 自体が空になった場合は描画をスキップする
-        const points = shape.points
+        const points = resolveStrokePoints(shape.points, def.smoothing)
           .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
           .map(p => ({ x: anchorX + p.x * scale, y: anchorY + p.y * scale }));
         if (points.length === 0) break;
@@ -372,8 +399,12 @@ interface ShapeBBox {
   maxY: number;
 }
 
-/** 図形のバウンディングボックスを求める。非有限値が混ざる図形は null（スキップ対象）を返す */
-function getShapeBBox(shape: ShapePrimitive): ShapeBBox | null {
+/**
+ * 図形のバウンディングボックスを求める。非有限値が混ざる図形は null（スキップ対象）を返す。
+ * フリーハンド線は補正の有無で通る位置がわずかに変わるため、実際に描く頂点列
+ * （= resolveStrokePoints の結果）で計算する。
+ */
+function getShapeBBox(shape: ShapePrimitive, smoothing?: boolean): ShapeBBox | null {
   switch (shape.kind) {
     case 'circle': {
       const { cx, cy, r } = shape;
@@ -398,7 +429,8 @@ function getShapeBBox(shape: ShapePrimitive): ShapeBBox | null {
       return { minX: cx - r, minY: cy - r, maxX: cx + r, maxY: cy + r };
     }
     case 'path': {
-      const finitePoints = shape.points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+      const finitePoints = resolveStrokePoints(shape.points, smoothing)
+        .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
       if (finitePoints.length === 0) return null;
       const xs = finitePoints.map(p => p.x);
       const ys = finitePoints.map(p => p.y);
@@ -413,7 +445,9 @@ function getShapeBBox(shape: ShapePrimitive): ShapeBBox | null {
 export function symbolDefToPreviewSvg(def: CustomSymbolDef, size = 32): string {
   // フリーハンドはアンカー近傍に収まる保証がないため、固定アンカー中心ではなく
   // 全図形のバウンディングボックスを計算して viewBox をフィットさせる。
-  const bboxes = def.shapes.map(getShapeBBox).filter((b): b is ShapeBBox => b !== null);
+  const bboxes = def.shapes
+    .map(shape => getShapeBBox(shape, def.smoothing))
+    .filter((b): b is ShapeBBox => b !== null);
 
   let minX = -10, minY = -10, maxX = 10, maxY = 10;
   if (bboxes.length > 0) {
@@ -431,7 +465,7 @@ export function symbolDefToPreviewSvg(def: CustomSymbolDef, size = 32): string {
   const parts = def.shapes.map((shape: ShapePrimitive) => {
     // 非有限値の図形は SVG 文字列へ補間するとレイアウト崩壊や
     // （バリデーションをすり抜けた場合の）不正な文字列混入につながるためスキップする
-    if (getShapeBBox(shape) === null) return '';
+    if (getShapeBBox(shape, def.smoothing) === null) return '';
     switch (shape.kind) {
       case 'circle':
         return `<circle cx="${finiteOr(shape.cx, 0)}" cy="${finiteOr(shape.cy, 0)}" r="${finiteOr(shape.r, 0)}"
@@ -455,7 +489,8 @@ export function symbolDefToPreviewSvg(def: CustomSymbolDef, size = 32): string {
           stroke="#111" stroke-width="1.5" stroke-linecap="round" fill="none"/>`;
       }
       case 'path': {
-        const points = shape.points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+        const points = resolveStrokePoints(shape.points, def.smoothing)
+          .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
         const d = pathPointsToD(points);
         if (!d) return '';
         return `<path d="${d}" stroke="#111" stroke-width="${Number.isFinite(shape.strokeWidth) ? shape.strokeWidth : 1.5}"

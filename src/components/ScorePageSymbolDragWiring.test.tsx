@@ -1,4 +1,4 @@
-// 記号ドラッグ（Issue #522）の ScorePage 配線テスト（round1 P3）。
+// 記号ドラッグ（Issue #522 / #553）の ScorePage 配線テスト（round1 P3）。
 // PianoSystemCanvas 直接マウントの単体テストでは、ScorePage の演奏記号タブ→
 // symbolsClickable→保存（作品データ）→Undo までの配線が壊れても通ってしまう。
 // ここでは実経路（タブ切替→記号クリックで✥→ポインタドラッグ）で固定する。
@@ -85,7 +85,7 @@ function seedWork() {
   return created.data.id;
 }
 
-describe('記号ドラッグの配線（#522 round1 P3）', () => {
+describe('記号ドラッグの配線（#522 round1 P3 / #553）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
   beforeEach(() => {
@@ -107,7 +107,7 @@ describe('記号ドラッグの配線（#522 round1 P3）', () => {
     vi.restoreAllMocks();
   });
 
-  it('演奏記号タブ→記号クリック→ドラッグで保存され、Undo 1回で戻る', async () => {
+  it('演奏記号タブ→記号クリック→ドラッグで保存され、Undo 1回で戻る／選択なしの直接ドラッグも同じ経路に載る', async () => {
     const workId = seedWork();
     render(<ScorePage />);
     await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
@@ -144,6 +144,23 @@ describe('記号ドラッグの配線（#522 round1 P3）', () => {
       const saved = loadWorkAutosaveData(workId);
       const ev = saved.data?.parts?.[0]?.measures?.[0]?.events?.[0];
       expect(ev?.symbolAdjust?.dynamics ?? null).toBeNull();
+    }, { timeout: 15000 });
+
+    // ── ここから #553: 選択（✥）を挟まずに、いきなり掴んで動かす ────────────
+    // ScorePage を2回マウントするとテストが終わらなくなるため、同じマウントのまま続ける
+    // （記号クリック→✥ の1手を省いても、同じ保存経路に載ることを配線として固定する）
+    await waitFor(() => {
+      expect(document.querySelector('.symbol-adjust-overlay')).toBeFalsy();
+    }, { timeout: 15000 });
+    fireEvent.pointerDown(document.querySelector('.symbol-hit-region')!, { clientX: 10, clientY: 10, button: 0, isPrimary: true, pointerId: 2 });
+    fireEvent.pointerMove(window, { clientX: 30, clientY: 25, pointerId: 2 });
+    fireEvent.pointerUp(window, { clientX: 30, clientY: 25, pointerId: 2 });
+
+    await waitFor(() => {
+      const saved = loadWorkAutosaveData(workId);
+      const ev = saved.data?.parts?.[0]?.measures?.[0]?.events?.[0];
+      // クリックを挟んだ場合とまったく同じ値になる（＝同じ換算・同じ保存経路を通っている）
+      expect(ev?.symbolAdjust?.dynamics).toMatchObject({ offsetX: 30, offsetY: 23 });
     }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

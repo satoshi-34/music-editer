@@ -15,6 +15,7 @@ import {
   fitArcFromDragPoints,
   generateSymbolId,
   pathPointsToD,
+  resolveStrokePoints,
   simplifyPoints,
   symbolDefToPreviewSvg,
   MAX_PATH_POINTS,
@@ -115,6 +116,12 @@ export interface SymbolEditorProps {
   existingDefs: CustomSymbolDef[];
   onSave: (def: CustomSymbolDef) => void;
   onDelete: (symbolId: string) => void;
+  /**
+   * 保存済みの記号の手ぶれ補正をオン/オフする。
+   * 補正は元のストロークを書き換えず表示のたびに計算するだけなので、
+   * 何度切り替えても描いたままの線に戻せる。
+   */
+  onToggleSmoothing: (symbolId: string, smoothing: boolean) => void;
   onClose: () => void;
   /** 将来の再編集用（今回は新規作成のみ対応。渡されても現状は無視する） */
   initialDef?: CustomSymbolDef;
@@ -124,12 +131,16 @@ export default function SymbolEditor({
   existingDefs,
   onSave,
   onDelete,
+  onToggleSmoothing,
   onClose,
 }: SymbolEditorProps) {
   const [shapes, setShapes] = useState<ShapePrimitive[]>([]);
   const [tool, setTool] = useState<DrawTool>('freehand');
   const [strokeWidth, setStrokeWidth] = useState<number>(1.5);
   const [name, setName] = useState('');
+  // 手ぶれ補正（フリーハンド線の平滑化）。新規作成では既定でオンにし、
+  // 「震え自体が意図」の記号のためにいつでもオフへ戻せるようにしている。
+  const [smoothing, setSmoothing] = useState(true);
   // 「選択」ツールで選んだ図形のインデックス（矢印キーでの位置調整対象）
   const [selectedShapeIndex, setSelectedShapeIndex] = useState<number | null>(null);
 
@@ -331,6 +342,7 @@ export default function SymbolEditor({
       id: generateSymbolId(),
       name: name.trim(),
       shapes,
+      smoothing,
     };
     onSave(def);
     // 保存後は続けて別の記号を作れるよう、キャンバスだけ空にする
@@ -418,9 +430,9 @@ export default function SymbolEditor({
               <line x1={0} y1={-4} x2={0} y2={4} stroke="#94a3b8" strokeWidth={0.5} />
               {noteHeadGhost}
 
-              {/* 確定済みの図形 */}
+              {/* 確定済みの図形（描き終わった線には手ぶれ補正の結果を反映して見せる） */}
               {shapes.map((shape, i) => (
-                <ShapePreview key={i} shape={shape} />
+                <ShapePreview key={i} shape={shape} smoothing={smoothing} />
               ))}
 
               {/* 選択中の図形のハイライト（選択ツール時のみ意味を持つ） */}
@@ -531,6 +543,22 @@ export default function SymbolEditor({
               </div>
             </div>
 
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>手ぶれ補正</div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={smoothing}
+                  onChange={(e) => setSmoothing(e.target.checked)}
+                  aria-label="手ぶれ補正"
+                />
+                フリーハンド線をなめらかにする
+              </label>
+              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                元の線は残るので、あとからオフに戻せます。
+              </div>
+            </div>
+
             <div style={{ display: 'flex', gap: 4 }}>
               <button
                 type="button"
@@ -626,6 +654,27 @@ export default function SymbolEditor({
                   <div style={{ fontSize: 10, color: '#374151', maxWidth: 60, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={def.name}>
                     {def.name}
                   </div>
+                  {/* 補正の切り替えはフリーハンド線を含む記号だけに意味があるので、
+                      それ以外（○・直線・弧だけの記号）ではボタンを出さない */}
+                  {def.shapes.some(s => s.kind === 'path') && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleSmoothing(def.id, !def.smoothing)}
+                      title={def.smoothing ? `${def.name} の手ぶれ補正をオフにする` : `${def.name} の手ぶれ補正をオンにする`}
+                      aria-label={def.smoothing ? `${def.name} の手ぶれ補正をオフにする` : `${def.name} の手ぶれ補正をオンにする`}
+                      style={{
+                        border: def.smoothing ? '1px solid #2563eb' : '1px solid #d1d5db',
+                        borderRadius: 4,
+                        background: def.smoothing ? '#eff6ff' : '#fff',
+                        color: def.smoothing ? '#2563eb' : '#6b7280',
+                        fontSize: 10,
+                        padding: '2px 6px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {def.smoothing ? '補正オン' : '補正オフ'}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => onDelete(def.id)}
@@ -648,7 +697,7 @@ export default function SymbolEditor({
 // 図形1つを SVG 要素として描く（キャンバスプレビュー用）。
 // 保存済みの本描画（customSymbolUtils.renderCustomSymbol）とは別に、
 // エディタ内だけの軽量なプレビュー表示として React 要素で直接描く。
-function ShapePreview({ shape }: { shape: ShapePrimitive }) {
+function ShapePreview({ shape, smoothing }: { shape: ShapePrimitive; smoothing?: boolean }) {
   switch (shape.kind) {
     case 'circle':
       return <circle cx={shape.cx} cy={shape.cy} r={shape.r} stroke="#1f2937" strokeWidth={1.5} fill={shape.filled ? '#1f2937' : 'none'} />;
@@ -666,7 +715,7 @@ function ShapePreview({ shape }: { shape: ShapePrimitive }) {
       return <path d={`M ${x1} ${y1} A ${shape.r} ${shape.r} 0 ${largeArc} ${sweep} ${x2} ${y2}`} stroke="#1f2937" strokeWidth={1.5} fill="none" strokeLinecap="round" />;
     }
     case 'path':
-      return <path d={pathPointsToD(shape.points)} stroke="#1f2937" strokeWidth={shape.strokeWidth ?? 1.5} fill="none" strokeLinejoin="round" strokeLinecap="round" />;
+      return <path d={pathPointsToD(resolveStrokePoints(shape.points, smoothing))} stroke="#1f2937" strokeWidth={shape.strokeWidth ?? 1.5} fill="none" strokeLinejoin="round" strokeLinecap="round" />;
     default:
       return null;
   }
