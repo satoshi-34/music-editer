@@ -31,3 +31,20 @@
 ## やらなかったこと
 - `requestAnimationFrame` や AudioWorklet での進行。裏タブで止まる／過剰なので setTimeout で足りる
 - ハイライトのタイムライン（#579）の窓化。setTimeout の予約はノードではないので負荷が違う
+
+## Codex ゲートでの追加（PR #623 round1〜5）
+
+- **予約失敗の伝え方**（round1〜3）: 先頭の窓の失敗は `playParts` の失敗（内蔵音源は Promise.all の再送出、
+  SoundFont は `start()` が同期例外を投げる）として画面のフォールバックへ。後続の窓の失敗は scheduler が
+  境界（同期例外・Promise 拒否）で捕まえて窓を止め `onError` → エンジンの `onSchedulingFailure`
+  （`PlaybackEngine` の任意メソッド）→ ScorePage が停止・タイマー解除・通知
+  （`describePlaybackAbortedBySchedulingError`）。先頭の窓の Promise 拒否は `onError` を呼ばない（二重処理防止）
+- **stopped と exhausted の分離**（round3）: 全部投入し終えても明示停止までは最終窓の非同期失敗を受け付ける
+- **購読のライフサイクル**（round3〜4）: 解除は `clearPlaybackTimer` に集約（無音復旧・手動復旧・譜面リセット・
+  バックグラウンド移行・サンプル読込・新しい再生・失敗コールバック）。一時停止と再開だけ
+  `{ keepSchedulingSubscription: true }` で維持。サンプル読込では `stopAll()` も呼ぶ（旧譜面の窓を止める）
+- **期限切れの飛ばし**（round5）: tick が大きく遅れたとき（スリープ復帰・タイマー間引き）、`now` より前に
+  始まるはずだった音は一括予約せず飛ばす（過ぎた音を即時に集中発音すると、防ぎたい負荷と崩れが再発する）。
+  先頭の窓は起点が「今＋先読みリード」なので対象外。飛ばした数は `stats().expired` と警告ログに出す
+- 配線テスト: `ScorePagePlaybackWindow.test.tsx`（実エンジン内蔵音源+偽 AudioContext で窓の進行と停止、
+  失敗通知で停止と通知、一時停止→再開後の失敗通知）

@@ -38,10 +38,19 @@ export function takeDueVoices<T extends TimedVoice>(
   sorted: readonly T[],
   cursor: number,
   untilTime: number,
-): { due: T[]; nextCursor: number } {
+  /**
+   * これより前に始まるはずだった音は「期限切れ」として予約せず飛ばす（round5 P2:
+   * スリープ復帰・タイマー間引きで tick が大きく遅れたとき、過ぎた音を一括予約すると
+   * 即時に集中発音して、防ぎたいノード負荷と再生崩れが再発する）。省略時は飛ばさない
+   */
+  expiredBefore = -Infinity,
+): { due: T[]; nextCursor: number; expired: number } {
   let i = cursor;
+  let expired = 0;
+  while (i < sorted.length && sorted[i].startTime < expiredBefore) { i++; expired++; }
+  const from = i;
   while (i < sorted.length && sorted[i].startTime < untilTime) i++;
-  return { due: sorted.slice(cursor, i), nextCursor: i };
+  return { due: sorted.slice(from, i), nextCursor: i, expired };
 }
 
 export interface WindowedScheduler {
@@ -49,8 +58,8 @@ export interface WindowedScheduler {
   start(): void;
   /** 以後の窓を作らない。作成済みの音はエンジン側（stopAll）が止める */
   stop(): void;
-  /** 計測用: 生成済みの音の数と全体数。active は「まだ投入する窓が残っている」 */
-  stats(): { scheduled: number; total: number; active: boolean };
+  /** 計測用: 生成済みの音の数・全体数・期限切れで飛ばした数。active は「まだ投入する窓が残っている」 */
+  stats(): { scheduled: number; total: number; active: boolean; expired: number };
 }
 
 export function createWindowedScheduler<T extends TimedVoice>(options: {
@@ -103,9 +112,15 @@ export function createWindowedScheduler<T extends TimedVoice>(options: {
     }
     options.onError?.(error);
   };
+  let expiredTotal = 0;
   const advance = () => {
-    const { due, nextCursor } = takeDueVoices(sorted, cursor, options.now() + lookahead);
+    const now = options.now();
+    // 先頭の窓は期限切れを作らない（起点は「今＋先読みリード」で必ず未来）。
+    // 以後の窓では、tick が遅れて過ぎてしまった音は飛ばす
+    const { due, nextCursor, expired } = takeDueVoices(sorted, cursor, now + lookahead, inStart ? -Infinity : now);
     cursor = nextCursor;
+    expiredTotal += expired;
+    if (expired > 0) console.warn(`[scheduleWindow] 窓の進行が遅れ、期限切れの ${expired} 音を飛ばしました`);
     const fromStart = inStart;
     for (const voice of due) {
       if (stopped) return;
@@ -140,7 +155,7 @@ export function createWindowedScheduler<T extends TimedVoice>(options: {
     },
     stop,
     stats() {
-      return { scheduled: cursor, total: sorted.length, active: !stopped && !exhausted };
+      return { scheduled: cursor - expiredTotal, total: sorted.length, active: !stopped && !exhausted, expired: expiredTotal };
     },
   };
 }
