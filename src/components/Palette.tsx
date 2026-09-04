@@ -293,6 +293,7 @@ export default function Palette({
    */
   accidentalVariantKeys?: Record<string, string>;
   onAccidentalVariantKeyChange?: (familyId: string, key: string) => void;
+  /**
    * ▾ のプルダウンで最後に選んだ連符（numNotes の文字列）。#569 の「セッション内保持」。
    * このパレットはタブを切り替えるとアンマウントされるため、選択の保持は
    * 親（ScorePage）が持つ。未指定なら既定の3連符を出す（round1 P2 の指摘）。

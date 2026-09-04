@@ -57,6 +57,7 @@ import {
   notifyScoreEdit,
   describeDoubleAccidentalKeySignatureUnavailable,
   describeMicrotoneKeySignatureUnavailable,
+  describeAccidentalTargetNoteLost,
   describeNoteNavigationEdge,
   requestActiveVoiceChange,
   requestNoteSelectionMove,
@@ -7340,30 +7341,44 @@ export default function PianoSystemCanvas({
                 const clickedKeyIndex = resolveSelectableKeyIndexAt(lx, ly);
                 // 符頭から外れたクリックは挿入・和音追加へ（受入ケース2・13）
                 if (clickedKeyIndex < 0) return null;
-                // 最新データで keyIndex を引き直すのは、クリック時点の描画データが
-                // 古い可能性があるため（統合前の付与ツールと同じ手当て）
                 const snappedLine = snapLineForKeySelect(ly);
                 const applyToEvent = <T extends { isRest: boolean; keys: string[]; microtones?: { keyIndex: number; type: MicrotoneType }[] }>(
                   targetEv: T, keyIndex: number
                 ): T => applyAccidental
                   ? applyAccidentalToEvent(targetEv, applyAccidental, keyIndex>=0?keyIndex:undefined)
                   : applyMicrotoneToEvent(targetEv, applyMicrotone!, keyIndex>=0?keyIndex:undefined);
-                const nextEv = applyToEvent(activeEvs[j], clickedKeyIndex);
+                // 「どの音へ付けるか」は最新データ（partsScoreRef。毎レンダーで同期している
+                // 保存データのミラー）で引き直す。当たり判定は VexFlow が描いた時点の図形から
+                // 作られるので、描画が1手遅れている間はクリック時の keyIndex が古い和音を
+                // 指していることがあるため。
+                //
+                // 判定を setScore の updater の外でやるのは #318 の決まりごと（updater の中で
+                // 通知すると React が updater を2回呼ぶ場面で通知が二重に出る）に従うためで、
+                // ここで失敗を確定させておけば「対象が消えていた」を通知付きで断れる。
+                const latestEv = getVoiceEvents(
+                  partsScoreRef.current[hitPi]?.[absI] ?? { events: [] }, hitVoice
+                )[j];
+                // 行番号→鍵の引き直しは、当たり判定と同じ noteK2l を使う。段またぎの音符は
+                // 隣の五線（別クレフ）に描かれているので、元パートの k2l で引くと別の行を指し、
+                // 解決に失敗する（#548 round1 P2-1）。
+                const resolvedKeyIndex = latestEv && !latestEv.isRest
+                  ? findKeyIndexAtLine(latestEv.keys, snappedLine, noteK2l)
+                  : -1;
+                if (resolvedKeyIndex < 0 || resolvedKeyIndex >= (latestEv?.keys.length ?? 0)) {
+                  // 引き直しに失敗した＝押した音がもう無い。ここで古い clickedKeyIndex へ
+                  // 落とすと「押していない音に記号が付く」ので、付けずに断る（#548 round2 P2-2）。
+                  // 選択の移動も確認音も行わない（「音は鳴ったが譜面は変わらない」を作らない）。
+                  return { kind: 'rejected', notice: describeAccidentalTargetNoteLost() };
+                }
+                const nextEv = applyToEvent(latestEv, resolvedKeyIndex);
                 updateHitEvent(j, (targetEv) => {
                   if(targetEv.isRest)return null;
-                  // 行番号→鍵の引き直しは、当たり判定と同じ noteK2l を使う。段またぎの音符は
-                  // 隣の五線（別クレフ）に描かれているので、元パートの k2l で引くと別の行を指し、
-                  // 解決に失敗する（#548 round1 P2-1）。
-                  const reResolved = findKeyIndexAtLine(targetEv.keys, snappedLine, noteK2l);
-                  // 解決に失敗しても keyIndex を undefined にはしない。undefined は
-                  // applyAccidentalToEvent/applyMicrotoneToEvent では「和音全体へ付ける」の意味で、
-                  // #548 で廃止したはずの一括付与が段またぎ和音でだけ復活してしまう。
-                  // クリック時点で確定している clickedKeyIndex（同じ音を指す）へ落とす。
-                  const keyIndex = reResolved >= 0 ? reResolved : clickedKeyIndex;
-                  if (keyIndex < 0 || keyIndex >= targetEv.keys.length) return null;
-                  return applyToEvent(targetEv, keyIndex);
+                  // ここまで来ても書き込み直前に和音が縮んでいることはあり得るので、
+                  // 範囲だけは最後にもう一度確かめる（外れていたら書かない＝通知は上で済み）。
+                  if (resolvedKeyIndex >= targetEv.keys.length) return null;
+                  return applyToEvent(targetEv, resolvedKeyIndex);
                 });
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex});
+                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:resolvedKeyIndex});
                 if (previewAccidentalOnApply) {
                   playNoteEvent(nextEv, part.playbackInstrument);
                 }
@@ -7741,19 +7756,33 @@ export default function PianoSystemCanvas({
                 let playEvent = currentEv;
                 let selectedKeyIndex: number | undefined;
                 if(currentEv&&!currentEv.keys.includes(newKey)){
-                  const newKeys=[...currentEv.keys,newKey].sort((a,b)=>k2l(b)-k2l(a));
-                  selectedKeyIndex = newKeys.indexOf(newKey);
+                  // 並べ替えは「元の位置を貼り付けた札」ごと動かす。こうしておくと
+                  // 並べ替え後に「元の何番目が今どこにいるか」を綴りに頼らず引ける。
+                  // 綴りで引く（indexOf）と、同じ綴りが2つある和音（例: 片方だけ四分音の
+                  // ['a/3','a/3']。微分音では正規のデータ）で両方が先頭へ寄ってしまう
+                  // （#548 round2 P2-1）。
+                  const NEW_KEY_MARK = -1;
+                  const sortedEntries = [
+                    ...currentEv.keys.map((key, oldIndex) => ({ key, oldIndex })),
+                    { key: newKey, oldIndex: NEW_KEY_MARK },
+                  ].sort((a,b)=>k2l(b.key)-k2l(a.key));
+                  const newKeys = sortedEntries.map((entry) => entry.key);
+                  // 元の位置 → 並べ替え後の位置の対応表
+                  const oldIndexToNewIndex = new Map<number, number>();
+                  sortedEntries.forEach((entry, newIndex) => {
+                    if (entry.oldIndex !== NEW_KEY_MARK) oldIndexToNewIndex.set(entry.oldIndex, newIndex);
+                  });
+                  selectedKeyIndex = sortedEntries.findIndex((entry) => entry.oldIndex === NEW_KEY_MARK);
                   // 和音に足す音にも微分音を乗せる（Issue #548。通常の臨時記号は newKey の綴りで既に乗っている）。
                   // microtones[] は keyIndex で音を指すので、並べ替え後の位置（selectedKeyIndex）で付ける
                   const chordMicrotone = getInputMicrotone(tool);
                   const withChordKey = <T extends NoteEvent>(targetEv: T): T => {
                     // 既に付いている微分音は「元の keys の位置」で音を指している。音を1つ足すと
-                    // 並べ替えで位置がずれるので、鍵の綴りを手がかりに新しい位置へ付け替える。
+                    // 並べ替えで位置がずれるので、上の対応表で新しい位置へ付け替える。
                     // 付け替えないと、低い音を足したときに既存の ¼♯ が別の音へ移る（#548 round1 P2-2）。
                     const remappedMicrotones = targetEv.microtones
                       ?.map((microtone) => {
-                        const keyAtOldIndex = targetEv.keys[microtone.keyIndex];
-                        const nextIndex = keyAtOldIndex === undefined ? -1 : newKeys.indexOf(keyAtOldIndex);
+                        const nextIndex = oldIndexToNewIndex.get(microtone.keyIndex) ?? -1;
                         return nextIndex >= 0 ? { ...microtone, keyIndex: nextIndex } : null;
                       })
                       .filter((microtone): microtone is NonNullable<typeof microtone> => microtone !== null);

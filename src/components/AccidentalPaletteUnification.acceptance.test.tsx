@@ -18,6 +18,7 @@ import Palette from './Palette';
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { Tool } from './Palette';
 import type { MeasureData } from '../types/storage';
+import { SCORE_EDIT_NOTICE_EVENT, type ScoreEditNoticeDetail } from '../utils/scoreEditorNotices';
 
 vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function() {
@@ -421,5 +422,84 @@ describe('#548 臨時記号パレットの統合（案D）の受入基準', () =
     // ¼♯ は「元から付いていた b/4」を指したままである
     expect(event.microtones).toHaveLength(1);
     expect(event.keys[event.microtones![0].keyIndex]).toBe('b/4');
+  });
+
+  it('round2 P2-1: 同じ綴りが2つある和音へ低い音を足しても、四分音が別の音へ移らない', async () => {
+    // 同じ "b/4" が2つ並んだ和音。片方が ¼♯・もう片方が ¼♭ なので、鳴る高さは別の音である
+    // （chordKeyUtils の重複判定も四分音まで見て「別の音」と扱う＝正規のデータ）。
+    // 綴り（indexOf）で位置を引き直すと、2つとも先頭を指してしまって記号が片方へ寄る。
+    const data: MeasureData[] = [{
+      events: [{
+        dur: '1', isRest: false, keys: ['b/4', 'b/4'],
+        microtones: [
+          { keyIndex: 0, type: 'quarterSharp' },
+          { keyIndex: 1, type: 'quarterFlat' },
+        ],
+      }],
+    }];
+    // 足す側は記号なしの音価ツール（既存の付け替えだけを見る）
+    const { svg, onChange } = renderCanvas(data, { duration: '4', isRest: false });
+
+    const hit = noteHit(svg, 0);
+    const noteLeft = parseFloat(hit.getAttribute('data-note-left')!);
+    const noteRight = parseFloat(hit.getAttribute('data-note-right')!);
+    // 既存の b/4（ライン2）より低い高さをクリックして、和音に1音足す
+    fireEvent.click(hit, { clientX: (noteLeft + noteRight) / 2, clientY: clickYForLine(hit, 4) });
+
+    await waitFor(() => { expect(onChange).toHaveBeenCalled(); });
+    const event = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events[0];
+    // keys は低い音が先。足した音が先頭に入るので、元の2音はそろって1つ後ろへずれる
+    expect(event.keys).toEqual(['e/4', 'b/4', 'b/4']);
+    // 2つの四分音が、足す前と同じ音（元の1音目＝¼♯・2音目＝¼♭）を指したままである。
+    // 綴りで引き直す実装だとどちらも同じ位置（先頭の b/4）を指してしまう
+    expect(event.microtones).toEqual([
+      { keyIndex: 1, type: 'quarterSharp' },
+      { keyIndex: 2, type: 'quarterFlat' },
+    ]);
+  });
+
+  it('round2 P2-2: 押した音が最新の譜面に無いときは、別の音へ付けずに理由を伝えて断る', async () => {
+    // 当たり判定は VexFlow が描いた図形から作るので、描画がデータより1手遅れている間は
+    // 「クリックした位置の音がもう無い」状態が起こり得る。ここでは再描画前の当たり判定を
+    // 掴んだまま押すことで、その状態を再現する（古い keyIndex へ落として別の音へ付けない）。
+    const data: MeasureData[] = [{ events: [{ dur: '1', isRest: false, keys: ['b/4'] }] }];
+    const onChange = vi.fn();
+    const props = (measures: MeasureData[]) => ({
+      measuresPerSystem: 1,
+      tool: { duration: '4', isRest: false, accidental: 'sharp' } as Tool,
+      scale: 1,
+      partsConfig: [{ clef: 'treble' as const, data: measures, onChange }],
+      showInstrumentLabels: false,
+      timeSignature: [4, 4] as [number, number],
+    });
+    const rendered = render(<PianoSystemCanvas {...props(data)} />);
+    const svg = rendered.container.querySelector('svg') as SVGSVGElement;
+    mockSvgLayout(svg);
+    const staleHit = noteHit(svg, 0);
+    const noteLeft = parseFloat(staleHit.getAttribute('data-note-left')!);
+    const noteRight = parseFloat(staleHit.getAttribute('data-note-right')!);
+    const staleClientY = clickYForLine(staleHit, 2); // ライン2 = 描画時点の b/4
+
+    // 譜面だけ差し替える。画面は描き直され、上で掴んだ当たり判定は古いデータのまま残る
+    const moved: MeasureData[] = [{ events: [{ dur: '1', isRest: false, keys: ['f/5'] }] }];
+    rendered.rerender(<PianoSystemCanvas {...props(moved)} />);
+    await waitFor(() => { expect(svg.querySelector('rect.vf-note-hit')).toBeTruthy(); });
+    onChange.mockClear();
+
+    const notices: string[] = [];
+    const onNotice = (e: Event) => {
+      notices.push((e as CustomEvent<ScoreEditNoticeDetail>).detail.message);
+    };
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    try {
+      fireEvent.click(staleHit, { clientX: (noteLeft + noteRight) / 2, clientY: staleClientY });
+      await waitFor(() => { expect(notices.length).toBeGreaterThan(0); });
+    } finally {
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    }
+    // 譜面は書き換えない（＝押していない f/5 に ♯ が付かない）
+    expect(onChange).not.toHaveBeenCalled();
+    // 無言で終わらない（#318）
+    expect(notices.join('\n')).toContain('見つかりませんでした');
   });
 });
