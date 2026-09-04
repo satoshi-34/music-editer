@@ -315,6 +315,51 @@ describe('段またぎ連符の数字の置き場所（Issue #574）', () => {
     expect(tuplets[0].tuplet.getYPosition()).toBeCloseTo(withoutObstacle, 5);
   });
 
+  /**
+   * 符幹の先（`getStemExtents().topY`）を差し替えて、「梁の高さがちょうど持ち主の五線の中に
+   * 収まっている」状態を作る。この状態では実測では側を決められないので、
+   * `isBeamSideBelow` はフォールバック（またいだ先の向き）へ落ちる。
+   * VexFlow に符幹の位置を外から与える API は無いので、読んでいるメソッドだけ差し替える。
+   */
+  function forceStemTipY(notes: readonly StaveNote[], y: number): void {
+    notes.forEach((note) => {
+      (note as unknown as { getStemExtents: () => { topY: number; baseY: number } }).getStemExtents =
+        () => ({ topY: y, baseY: y });
+    });
+  }
+
+  it('梁が持ち主（上のパート）の五線の中に収まっているときは、またいだ先＝下へ出す', () => {
+    const { upper, lower, notes, tuplets } = buildCrossStaffTriplet([false, true, true]);
+    // 第3線＝五線のど真ん中。上下どちらとも言えない高さなので、実測では側を決められない
+    const insideOwner = upper.getYForLine(2);
+    forceStemTipY(notes, insideOwner);
+
+    // 前提の確認: 梁の高さ（符幹の先の平均）が持ち主の五線の第1線と第5線の間にある
+    expect(insideOwner, '第1線より下').toBeGreaterThan(upper.getYForLine(0));
+    expect(insideOwner, '第5線より上').toBeLessThan(upper.getYForLine(4));
+
+    syncTupletPlacementWithNotes(tuplets, { ownerStave: upper });
+
+    // またいだ先は下の五線なので、フォールバックでも数字は下側へ出る
+    expect(locationOf(tuplets[0].tuplet)).toBe(Tuplet.LOCATION_BOTTOM);
+    expect(tuplets[0].tuplet.getYPosition()).toBeGreaterThan(lower.getYForLine(4));
+  });
+
+  it('梁が持ち主（下のパート）の五線の中に収まっているときは、またいだ先＝上へ出す', () => {
+    const { upper, lower, notes, tuplets } = buildCrossStaffTriplet([true, true, false]);
+    const insideOwner = lower.getYForLine(2);
+    forceStemTipY(notes, insideOwner);
+
+    expect(insideOwner, '第1線より下').toBeGreaterThan(lower.getYForLine(0));
+    expect(insideOwner, '第5線より上').toBeLessThan(lower.getYForLine(4));
+
+    syncTupletPlacementWithNotes(tuplets, { ownerStave: lower });
+
+    // 持ち主が下のパートなら、またいだ先＝上の五線の側へ出る
+    expect(locationOf(tuplets[0].tuplet)).toBe(Tuplet.LOCATION_TOP);
+    expect(tuplets[0].tuplet.getYPosition()).toBeLessThan(upper.getYForLine(0));
+  });
+
   it('持ち主の五線が渡されないときは、一番上の五線の持ち物として扱う（例外を出さない）', () => {
     const { lower, tuplets } = buildCrossStaffTriplet([false, true, true]);
 

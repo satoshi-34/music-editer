@@ -127,6 +127,18 @@ function setTupletYOffset(tuplet: Tuplet, yOffset: number): void {
  */
 export type TupletObstacleRect = { x: number; y: number; w: number; h: number };
 
+/**
+ * 連符数字の高さの半分（五線1間を単位にした概算値）。
+ *
+ * VexFlow は数字を「求めた高さ（yPos）に**中心**をそろえて」描く（`Tuplet.draw()` の
+ * `yPos + textElement.getHeight() / 2`）。そのため五線・音符から空ける間隔を yPos で
+ * 測ると、yPos の位置自体は空いていても**文字の上端（下端）が音符へ食い込む**。
+ * 本当は実寸を測りたいが、`textElement.getHeight()` は canvas の無い環境（テストや
+ * 一部の書き出し経路）で 0 になるので、音楽フォントの数字の公称の高さ（約1.5間）の
+ * 半分を定数で持つ。
+ */
+const TUPLET_NUMBER_HALF_HEIGHT_SPACES = 0.75;
+
 /** 段またぎ連符の置き直しに使う追加情報（またぎでない連符では使わない） */
 export type TupletPlacementContext = {
   /** その連符を持っているパートの五線（描画側の stave）。梁の向きの判定の基準にする */
@@ -270,6 +282,10 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, context: TupletPlacementCon
     (rect) => !xRange || (rect.x <= xRange.right && rect.x + rect.w >= xRange.left),
   );
 
+  // 数字は yPos に中心をそろえて描かれるので、避ける相手からの間隔には
+  // 数字の高さの半分を足しておく（足さないと文字の上端・下端だけが食い込む）
+  const halfNumberHeight = TUPLET_NUMBER_HALF_HEIGHT_SPACES * lineSpacing;
+
   let targetY: number;
   if (toBottom) {
     targetY = farStave.getYForLine(4) + 2 * lineSpacing;
@@ -279,11 +295,11 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, context: TupletPlacementCon
       });
       const tipY = stemTipYOf(note);
       if (tipY !== null) {
-        targetY = Math.max(targetY, tipY + lineSpacing);
+        targetY = Math.max(targetY, tipY + lineSpacing + halfNumberHeight);
       }
     });
     obstacles.forEach((rect) => {
-      targetY = Math.max(targetY, rect.y + rect.h + lineSpacing);
+      targetY = Math.max(targetY, rect.y + rect.h + lineSpacing + halfNumberHeight);
     });
   } else {
     targetY = farStave.getYForLine(0) - 1.5 * lineSpacing;
@@ -293,11 +309,11 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, context: TupletPlacementCon
       });
       const tipY = stemTipYOf(note);
       if (tipY !== null) {
-        targetY = Math.min(targetY, tipY - lineSpacing);
+        targetY = Math.min(targetY, tipY - lineSpacing - halfNumberHeight);
       }
     });
     obstacles.forEach((rect) => {
-      targetY = Math.min(targetY, rect.y - lineSpacing);
+      targetY = Math.min(targetY, rect.y - lineSpacing - halfNumberHeight);
     });
   }
 

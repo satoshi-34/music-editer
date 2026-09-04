@@ -5884,6 +5884,30 @@ export default function PianoSystemCanvas({
       let cachedSystemNoteRects: TupletObstacleRect[] | null = null;
       const getSystemNoteRects = (): readonly TupletObstacleRect[] => {
         if (cachedSystemNoteRects) return cachedSystemNoteRects;
+        // 先に「この段の全パートのビーム」を post-format しておく（#574 round2 P1）。
+        // 連桁の音符は、ビームの傾きに合わせて符幹が伸ばされる（VexFlow の
+        // Beam.postFormat → applyStemExtensions）。これは既定では Beam.draw() の中で
+        // 初めて走るため、右手を描く時点ではまだ描いていない左手の符幹が「伸ばされる前の
+        // 短い長さ」のままになり、あとで伸びて数字とぶつかることがあった。
+        // postFormat は2回目以降は何もしない（postFormatted フラグ）ので、
+        // このあと Beam.draw() が呼ばれても結果は変わらない。
+        partVoiceCache.forEach((cache) => {
+          cache?.renderedVoiceEntries.forEach((entry) => {
+            // 段またぎ声部は、合同整形で消えたビームの参照と符幹の向きを先に戻す（#319）。
+            // 向きが戻る前に post-format すると、間違った向きのまま符幹長が確定してしまう
+            // （描画時の復元は同じ内容なので、ここで先に呼んでも二重には効かない）
+            if (entry.hasCrossStaffNote) {
+              restoreCrossStaffBeamAssignments(entry.beams);
+            }
+            entry.beams.forEach((beam) => {
+              try {
+                (beam as unknown as { postFormat?: () => void }).postFormat?.();
+              } catch {
+                // 整形が済んでいないビームでは失敗し得る。そのビームを諦めるだけでよい
+              }
+            });
+          });
+        });
         const rects: TupletObstacleRect[] = [];
         partVoiceCache.forEach((cache) => {
           cache?.renderedVoiceEntries.forEach((entry) => {
