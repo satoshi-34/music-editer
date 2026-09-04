@@ -16,6 +16,7 @@ import {
   resolveDefaultLayoutForScoreType,
   SYSTEM_ROW_GAP_MIN_PX,
   measurePlannerSafetyPadding,
+  VEXFLOW_IDEAL_WIDTH_COMPRESSION,
 } from './measureLayoutUtils';
 
 describe('printScoreAreaWidthPx / worstCaseSystemContentBudget（ページ余白と本文幅の連動）', () => {
@@ -181,7 +182,11 @@ describe('measureMinimumContentWidth', () => {
       })),
     };
 
-    expect(vexFlowCombinedMeasureMinimumContentWidth([rightHand, leftHand], [4, 4])!).toBeGreaterThan(240);
+    // 閾値は圧縮率に比例する（0.64 のとき 240 超 → 0.3 のとき 112 超）。符頭の重なりの下限は
+    // 別の実寸見積もり（combinedMeasureMinimumContentWidth）が張るので、ここは「VexFlow の理想幅を
+    // 圧縮率どおりに縮めた値が返る」ことの固定
+    expect(vexFlowCombinedMeasureMinimumContentWidth([rightHand, leftHand], [4, 4])!)
+      .toBeGreaterThan(240 * (VEXFLOW_IDEAL_WIDTH_COMPRESSION / 0.64));
   });
 
   it('調号由来のnatural・courtesy・三和音の臨時記号を本描画と同じ状態機械で計測する', () => {

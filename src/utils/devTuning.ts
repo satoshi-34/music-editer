@@ -1,7 +1,7 @@
 // src/utils/devTuning.ts
 // 開発環境限定の定数チューニング（Issue #596）。
 //
-// 「圧縮率0.64は運用者の目視で確定」（#589）のような、目と耳で最終値を決める定数を、
+// 「圧縮率は運用者の目視で確定」（#589 で 0.64、2026-09-04 に 0.3）のような、目と耳で最終値を決める定数を、
 // コード書き換えなしで調整するための上書きレイヤー。
 //
 // 設計の約束（#596 仕様5）:
@@ -43,7 +43,7 @@ export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
     key: 'layout.compression',
     label: '段割りの圧縮率',
     description: 'VexFlow の理想間隔をどこまで詰めて最低幅とみなすか（#589）。小さいほど1段に多く入る',
-    defaultValue: 0.64,
+    defaultValue: 0.3,
     min: 0.2,
     max: 1,
     step: 0.01,
