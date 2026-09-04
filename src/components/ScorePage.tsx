@@ -167,7 +167,10 @@ import {
   type SoundEngineMode
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
-import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
+import { buildDynamicEventKey, resolveDynamicVelocities,
+  mergeGrandStaffDynamics,
+  findPrimaryEventIndexAtBeat,
+} from '../utils/dynamicMarkingUtils';
 import { resolveScoreMeasureBpms } from '../utils/tempoPlaybackUtils';
 import {
   DEFAULT_PLAYBACK_SPEED_PERCENT,
@@ -1766,6 +1769,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             })),
             getMeasureBeats(scoreTimeSignature),
           );
+          // 大譜表（ピアノ）では強弱記号は両手に共通（#626）。片手に付いた p / cresc. を
+          // 他方の主声部へ写してから、パートごとに従来どおり解決する。四重奏・編成譜は
+          // 各パートに自分の強弱が書かれるので写さない
+          const dynamicsSourceByPart = scoreType === 'piano'
+            ? mergeGrandStaffDynamics(expandedPerPart.map((items) => items.map((item) => item.measure)))
+            : expandedPerPart.map((items) => items.map((item) => item.measure));
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
@@ -1779,7 +1788,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 小節番号をオフセットして引く。切った後で解決し直すと、開始位置より前で
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
-            const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
+            const dynamicVelocities = resolveDynamicVelocities(dynamicsSourceByPart[partIndex]);
             // テンポ列はスコア共通（上で1回だけ解決済み・#458 round1 P1）。
             // 強弱と同じく**切る前の全列**で解決してあるので、途中再生でも
             // 開始位置より前の標語・テンポ指定を引き継いだ状態で効く
@@ -1804,15 +1813,23 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 bpm: measureBpms[expandedMeasureIndex + startExpandedIndex],
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
-                events: flattenMeasureForPlayback(item.measure).flatMap((event, eventIndex) => {
+                events: flattenMeasureForPlayback(item.measure).flatMap((event) => {
                   // アーティキュレーション（スタッカート＝短く、アクセント＝強く 等）を
                   // 音の長さ・音量の倍率として取り出す。
                   const articulation = getArticulationPlaybackEffect(event);
                   // 強弱記号から決まった基準ベロシティ（未設定なら既定 0.5）に
                   // アクセント等の倍率を掛けて、最後に 0..1 へ収める。
-                  const baseVelocity = dynamicVelocities.get(
-                    buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, eventIndex)
-                  ) ?? 0.5;
+                  // 解決結果は主声部の「声部内 index」で持つ。畳んだ後の eventIndex は複数声部で
+                  // 並べ替えられているため使わない。副声部の音は同じ拍位置以前の主声部の音の
+                  // 基準音量を引く（#626: 副声部も同じ基準音量）
+                  const primaryIndexForVelocity = event.voiceIndex === 0
+                    ? event.eventIndex
+                    : findPrimaryEventIndexAtBeat(item.measure, event.startBeat ?? 0);
+                  const baseVelocity = (primaryIndexForVelocity >= 0
+                    ? dynamicVelocities.get(
+                        buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, primaryIndexForVelocity)
+                      )
+                    : undefined) ?? 0.5;
                   // タイの計画は「声部の中での位置」で引く。
                   // 畳んだあとの eventIndex は複数声部で並べ替えられているため使えない。
                   const tieAdjustment = tiePlan.get(

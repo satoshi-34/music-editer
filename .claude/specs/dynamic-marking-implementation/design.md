@@ -244,3 +244,25 @@ MusicXML の `<wedge>`（松葉）は別機能で、文字表記の `cresc.` / `
 - `components/ScorePage.tsx`（読み込み通知へ積む）
 - テスト: `utils/musicXmlDynamics.test.ts`（往復・松葉との共存・声部2・大譜表の staff 振り分け・
   未対応記号のスキップと件数・強弱が無いファイルの回帰）
+
+## 大譜表では強弱を両手に共有する（Issue #626・2026-09-04）
+
+運用者QA（悲愴 第2楽章 8小節版）「全声部同じ音量で何か違う」。原因: 強弱の解決
+（`resolveDynamicVelocities`）がパート単位・主声部のみで、右手に付いた p は右手だけを下げ、
+左手の伴奏は既定 0.5 のまま＝伴奏が旋律より大きく鳴っていた。記譜の意味では強弱は
+「その時点の全体の音量」で、旋律を浮かせるのは奏者の匙加減（別件）。
+
+- `mergeGrandStaffDynamics(partsMeasures)`（dynamicMarkingUtils）: 各パート・各声部の強弱
+  （絶対・cresc./dim.・松葉）を小節ごとに拍位置つきで集め、他のパートの主声部の
+  「同じ拍位置以降の最初の音」へ写す（その音に同種の記号が無いときだけ）。元データは変えず
+  浅い複製を返す。写した後は従来どおりパートごとに `resolveDynamicVelocities` を掛けるので、
+  傾斜の計算は不変
+- ScorePage の再生経路で `scoreType === 'piano'` のときだけ使う。四重奏・編成譜は各パートに
+  自分の強弱が書かれるので写さない
+- **副声部の基準音量**: 解決結果は主声部の「声部内 index」で持つ。従来は畳んだ後の
+  eventIndex で引いていたため複数声部の小節では主声部すら食い違い、副声部は既定に落ちていた。
+  主声部は `event.eventIndex`、副声部は `findPrimaryEventIndexAtBeat`（同じ拍位置以前の主声部の音）で引く
+- やらないこと: 旋律を浮かせる声部バランス係数（#626 の項目3）。聴き比べてから別途
+
+テスト: `dynamicMarkingUtils.test.ts`（写し・拍位置・自分の記号優先・松葉・副声部の引き方）、
+`ScorePageGrandStaffDynamicsWiring.test.tsx`（実マウントで右手だけの p が左手と副声部の velocity へ届く）

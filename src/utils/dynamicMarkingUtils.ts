@@ -6,7 +6,7 @@ import type {
   NoteEvent,
   RelativeDynamicMarking
 } from '../types/storage';
-import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
+import { getEventDurationBeats, getMeasureVoices, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { dynamicSymbol } from './editorContextLabels';
 import { ENGRAVING_TEXT_UNITS, spToUnits } from './engravingDefaults';
 
@@ -304,4 +304,80 @@ export function resolveDynamicVelocities(measures: MeasureData[]): Map<string, n
   });
 
   return velocities;
+}
+
+/**
+ * 大譜表（ピアノ）では強弱記号は両手に共通の「その時点の音量」（Issue #626）。
+ * 右手に付いた p が左手の伴奏に効かず、伴奏が旋律より大きく鳴っていた（運用者QA 2026-09-04・悲愴）。
+ *
+ * 各パートの各声部に付いた強弱（絶対・cresc./dim.・松葉）を小節ごとに集め、他のパートの
+ * 主声部で**同じ拍位置以降の最初の音**へ写す（その音に同種の記号が無いときだけ）。
+ * 写した結果に対して従来の resolveDynamicVelocities をパートごとに掛けるので、
+ * 傾斜（cresc./dim.）の計算は変えない。元データは変更しない（浅い複製を返す）。
+ * 四重奏・編成譜は各パートに自分の強弱が書かれるので、呼び出し側でピアノのときだけ使う。
+ */
+export function mergeGrandStaffDynamics(partsMeasures: MeasureData[][]): MeasureData[][] {
+  if (partsMeasures.length <= 1) return partsMeasures;
+  const measureCount = Math.max(...partsMeasures.map((measures) => measures.length));
+  type Marking = { beat: number; dynamics?: DynamicMarking[]; hairpins?: NoteEvent['hairpins'] };
+  const markingsByMeasure: Marking[][] = Array.from({ length: measureCount }, () => []);
+  partsMeasures.forEach((measures) => {
+    measures.forEach((measure, measureIndex) => {
+      getMeasureVoices(measure).forEach((voice) => {
+        let beat = 0;
+        voice.events.forEach((event) => {
+          if (event.dynamics?.length || event.hairpins?.length) {
+            markingsByMeasure[measureIndex].push({ beat, dynamics: event.dynamics, hairpins: event.hairpins });
+          }
+          beat += getEventDurationBeats(event);
+        });
+      });
+    });
+  });
+  return partsMeasures.map((measures) => measures.map((measure, measureIndex) => {
+    const markings = markingsByMeasure[measureIndex];
+    if (markings.length === 0) return measure;
+    const primary = getPrimaryVoiceEvents(measure);
+    if (primary.length === 0) return measure;
+    const starts: number[] = [];
+    let beat = 0;
+    primary.forEach((event) => { starts.push(beat); beat += getEventDurationBeats(event); });
+    const merged = primary.map((event) => ({ ...event }));
+    let changed = false;
+    markings.forEach((marking) => {
+      let target = starts.findIndex((start) => start >= marking.beat - 1e-6);
+      if (target < 0) target = merged.length - 1;
+      const event = merged[target];
+      if (marking.dynamics && !event.dynamics?.length) {
+        event.dynamics = marking.dynamics.map((dynamic) => ({ ...dynamic }));
+        changed = true;
+      }
+      if (marking.hairpins && !event.hairpins?.length) {
+        event.hairpins = marking.hairpins.map((hairpin) => ({ ...hairpin }));
+        changed = true;
+      }
+    });
+    if (!changed) return measure;
+    const voices = measure.voices
+      ? measure.voices.map((voice, index) => (index === 0 ? { ...voice, events: merged } : voice))
+      : undefined;
+    return { ...measure, events: merged, ...(voices ? { voices } : {}) };
+  }));
+}
+
+/**
+ * 副声部（voice-2 以降）の音が「いまの基準音量」を引くための、主声部側の音の index。
+ * 強弱の解決（resolveDynamicVelocities）は主声部の音ごとに velocity を持つので、
+ * 同じ拍位置かそれより前の主声部の音を返す（Issue #626: 副声部も同じ基準音量）。
+ */
+export function findPrimaryEventIndexAtBeat(measure: MeasureData, beat: number): number {
+  const primary = getPrimaryVoiceEvents(measure);
+  let cursor = 0;
+  let found = -1;
+  for (let index = 0; index < primary.length; index++) {
+    if (cursor <= beat + 1e-6) found = index;
+    else break;
+    cursor += getEventDurationBeats(primary[index]);
+  }
+  return found;
 }

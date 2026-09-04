@@ -9,7 +9,10 @@ import {
   orderedDynamicMarkings,
   RELATIVE_DYNAMIC_VALUES,
   getPreviewVelocityForEvent,
-  resolveDynamicVelocities
+  resolveDynamicVelocities,
+  mergeGrandStaffDynamics,
+  findPrimaryEventIndexAtBeat,
+  getAbsoluteDynamicVelocity,
 } from './dynamicMarkingUtils';
 
 function createNoteEvent(overrides: Partial<NoteEvent> = {}): NoteEvent {
@@ -111,5 +114,57 @@ describe('descresc.', () => {
     expect(velocities.get(buildDynamicEventKey(0, 1))).toBeLessThan(0.74);
     expect(velocities.get(buildDynamicEventKey(0, 1))).toBeGreaterThan(0.34);
     expect(velocities.get(buildDynamicEventKey(0, 2))).toBeCloseTo(0.34, 5);
+  });
+});
+
+describe('大譜表の強弱の共有（Issue #626）', () => {
+  const q = (keys: string[], extra: Partial<NoteEvent> = {}): NoteEvent => ({ dur: '4', isRest: false, keys, ...extra });
+
+  it('右手だけに付いた p が左手の主声部の同じ拍位置の音へ写る（元データは変わらない）', () => {
+    const rh: MeasureData[] = [{ events: [q(['c/5'], { dynamics: [{ value: 'p' }] }), q(['d/5']), q(['e/5']), q(['f/5'])] }];
+    const lh: MeasureData[] = [{ events: [q(['c/3']), q(['e/3']), q(['g/3']), q(['c/4'])] }];
+    const [mergedRh, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
+    expect(mergedLh[0].events[0].dynamics).toEqual([{ value: 'p' }]);
+    expect(lh[0].events[0].dynamics).toBeUndefined();
+    expect(mergedRh[0]).toBe(rh[0]);
+    // 左手だけで解決しても p が効く
+    expect(resolveDynamicVelocities(mergedLh).get(buildDynamicEventKey(0, 0))).toBe(getAbsoluteDynamicVelocity('p'));
+  });
+
+  it('拍位置がずれた記号は、その拍以降の最初の音へ写る（3拍目の f → 左手の2分音符の2つ目）', () => {
+    const rh: MeasureData[] = [{ events: [q(['c/5']), q(['d/5']), q(['e/5'], { dynamics: [{ value: 'f' }] }), q(['f/5'])] }];
+    const lh: MeasureData[] = [{ events: [{ dur: '2', isRest: false, keys: ['c/3'] }, { dur: '2', isRest: false, keys: ['g/3'] }] }];
+    const [, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
+    expect(mergedLh[0].events[0].dynamics).toBeUndefined();
+    expect(mergedLh[0].events[1].dynamics).toEqual([{ value: 'f' }]);
+  });
+
+  it('自分の強弱がある音には写さない（両手に別々の指示があれば各自を優先）', () => {
+    const rh: MeasureData[] = [{ events: [q(['c/5'], { dynamics: [{ value: 'p' }] })] }];
+    const lh: MeasureData[] = [{ events: [q(['c/3'], { dynamics: [{ value: 'f' }] })] }];
+    const [mergedRh, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
+    expect(mergedRh[0].events[0].dynamics).toEqual([{ value: 'p' }]);
+    expect(mergedLh[0].events[0].dynamics).toEqual([{ value: 'f' }]);
+  });
+
+  it('松葉（cresc.）も写り、左手側の傾斜として解決される', () => {
+    const rh: MeasureData[] = [{ events: [q(['c/5'], { dynamics: [{ value: 'p' }], hairpins: [{ type: 'cresc', endMeasure: 0, endEvent: 3 }] }), q(['d/5']), q(['e/5']), q(['f/5'])] }];
+    const lh: MeasureData[] = [{ events: [q(['c/3']), q(['e/3']), q(['g/3']), q(['c/4'])] }];
+    const [, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
+    const v = resolveDynamicVelocities(mergedLh);
+    expect(v.get(buildDynamicEventKey(0, 3))!).toBeGreaterThan(v.get(buildDynamicEventKey(0, 0))!);
+  });
+
+  it('副声部の音は同じ拍位置以前の主声部の音を引く', () => {
+    const measure: MeasureData = {
+      events: [q(['c/5']), q(['d/5']), q(['e/5']), q(['f/5'])],
+      voices: [
+        { id: 'v1', events: [q(['c/5']), q(['d/5']), q(['e/5']), q(['f/5'])] },
+        { id: 'v2', events: [{ dur: '2', isRest: false, keys: ['a/4'] }, { dur: '2', isRest: false, keys: ['g/4'] }] },
+      ],
+    };
+    expect(findPrimaryEventIndexAtBeat(measure, 0)).toBe(0);
+    expect(findPrimaryEventIndexAtBeat(measure, 2)).toBe(2);
+    expect(findPrimaryEventIndexAtBeat(measure, 2.5)).toBe(2);
   });
 });
