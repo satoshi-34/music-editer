@@ -134,6 +134,33 @@ describe('自然終了後の後始末（Issue #605）', () => {
     expect(stopAllMock).toHaveBeenCalledTimes(1);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('余韻待ち中に譜面へ音符を置いた確認音でも、後始末を先に済ませる（round3 P2）', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(1); });
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再生' })).toBeTruthy(); }, { timeout: 5000 });
+    expect(stopAllMock).not.toHaveBeenCalled();
+
+    // 小節の空きをクリックして音符を置く（PianoSystemCanvas → onPreviewNoteEvent → handleInputNotePreview）
+    const background = document.querySelector('rect.vf-hit') as SVGRectElement;
+    expect(background).toBeTruthy();
+    const svg = background.ownerSVGElement as SVGSVGElement;
+    const height = parseFloat(svg.getAttribute('height') ?? '0') || 300;
+    svg.getBoundingClientRect = vi.fn(() => ({
+      left: 0, top: 0, right: 700, bottom: height, width: 700, height, x: 0, y: 0, toJSON: () => ({}),
+    })) as unknown as typeof svg.getBoundingClientRect;
+    const x = parseFloat(background.getAttribute('x')!) + parseFloat(background.getAttribute('width')!) / 2;
+    const y = parseFloat(background.getAttribute('y')!) + parseFloat(background.getAttribute('height')!) / 2;
+    fireEvent.click(background, { clientX: x, clientY: y });
+
+    await waitFor(() => { expect(playNoteByNameMock).toHaveBeenCalled(); });
+    expect(stopAllMock).toHaveBeenCalledTimes(1);
+    expect(stopAllMock.mock.invocationCallOrder[0]).toBeLessThan(playNoteByNameMock.mock.invocationCallOrder[0]);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('一時停止→再開→鳴り終わり でも余韻の後に stopAll が呼ばれる（round1 P2）', async () => {
     // 4分音符（500ms）にして、鳴っている途中で一時停止できるようにする
     seedWork('4');

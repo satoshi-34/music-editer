@@ -612,7 +612,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
     try {
       if (this.shouldUseSafariSafeVoice()) {
-        this.playSafariSafeVoice(context, frequency, duration, startTime);
+        this.playSafariSafeVoice(context, frequency, duration, startTime, tailOverride);
         return;
       }
 
@@ -1258,7 +1258,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
     context: AudioContext,
     frequency: number,
     duration: number,
-    startTime: number
+    startTime: number,
+    /** 尻尾の長さの上書き（同時発音数の上限で詰められた音・#605）。通常経路と同じ意味 */
+    tailOverride?: number,
   ): void {
     const instrumentConfig = this.getInstrumentConfig();
     const primaryOscillatorSpec = instrumentConfig.oscillators[0] ?? { type: 'triangle' as OscillatorType };
@@ -1277,7 +1279,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
     const adjustedReleaseFloor = Math.max(0.0001, this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor));
     // 簡易経路でも余韻の長さは通常経路と同じにする（Issue #525。
     // ここだけ短いと、Safari だけ長い音がプツンと切れて聞こえる）
-    const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
+    // 上限で詰められた音は尻尾を上書きで受け取る（#605 round3 P1: 簡易経路だけ余韻が残ると
+    // Safari で同時発音数が上限を超える）。尻尾 0 でも時刻順を崩さないよう最小 1ms
+    const adjustedTailSeconds = Math.max(0.001, tailOverride ?? this.resolveEffectiveTailSeconds(instrumentConfig, duration));
     // 短音でも「attack→decay→音価終端→尻尾」の時刻順を守る（round2 P2）
     const envelope = this.clampEnvelopeTimes(
       Math.max(0.005, adjustedAttack),

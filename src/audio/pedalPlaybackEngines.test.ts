@@ -151,6 +151,26 @@ describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）'
     }
   });
 
+  it('Safari 簡易経路でも、詰められた音の尻尾は上書きどおり切られる（#605 round3 P1）', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Macintosh) AppleWebKit/605 Version/17 Safari/605' });
+    setDevTuningOverride('audio.maxPolyphony', 1);
+    try {
+      const engine = new SimpleAudioEngine();
+      await engine.initialize();
+      createdOscillators.length = 0;
+      await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+        { dur: '4', isRest: false, keys: ['c/4'] },
+        { dur: '4', isRest: false, keys: ['d/4'] },
+      ] }] }], 60);
+      const first = createdOscillators[0];
+      const startedAt = first.start.mock.calls[0][0] as number;
+      const stoppedAt = first.stop.mock.calls[0][0] as number;
+      expect(stoppedAt - startedAt).toBeCloseTo(1.001, 4);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
   it('スタッカート（durationScale < 1）でもペダル中は解除位置まで響く（round1 P3: 内蔵側も固定）', async () => {
     const engine = new SimpleAudioEngine();
     await engine.initialize();
