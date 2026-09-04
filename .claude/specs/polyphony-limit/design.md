@@ -49,7 +49,8 @@
 - `polyphonyLimit.test.ts`: 上限内は無変更・上限+1で最古が詰まる・鳴り終わりは数えない・
   同時刻の和音は無音化・入力順が時刻順でなくても正しい・既定値と dev 上書き
 - `SoundFontEngine.test.ts`: 6音和音が上限4で4回予約・ペダル延長の古い音が新しい音の開始で止まる
-- `pedalPlaybackEngines.test.ts`: 内蔵側で上限2なら2音ぶんのオシレーターしか作られない
+- `pedalPlaybackEngines.test.ts`: 内蔵側で上限2なら2音ぶんのオシレーターしか作られない、詰めた音は
+  音本体を残して尻尾だけ切られる（通常経路・Safari 簡易経路の両方）
 - `ScorePagePlaybackEndCleanup.test.tsx`: 自然終了→余韻後に stopAll が1回、余韻待ち中の再生開始で即時実行（重複なし）、一時停止→再開→自然終了でも後始末
 
 ## やらなかったこと
