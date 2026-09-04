@@ -321,59 +321,81 @@ export function resolveDynamicVelocities(measures: MeasureData[]): Map<string, n
  */
 export interface DynamicVelocityTimeline {
   velocityAt(absoluteBeat: number): number;
+  /** 小節番号と小節内拍から絶対拍へ（途中拍子変更・拍子より長い小節は実際の前進幅で数える） */
+  positionOf(measureIndex: number, beatInMeasure: number): number;
   /** 計測・テスト用: 記号の数 */
   readonly markingCount: number;
+}
+
+/**
+ * 各小節が実際に何拍進むか。再生エンジンは「拍子の拍数」と「その小節の中身の長さ」の
+ * 大きいほうで次の小節へ進む（途中拍子変更や埋まりすぎた小節）ので、絶対拍もそれに合わせる
+ * （round3 P2: 小節番号 × 拍子の拍数だと 3/4 の中の 4/4 小節で位置が衝突する）。
+ */
+export function measureAdvanceBeats(
+  partsMeasures: readonly (readonly MeasureData[])[],
+  beatsPerMeasure: number,
+): number[] {
+  const count = Math.max(0, ...partsMeasures.map((measures) => measures.length));
+  const advances: number[] = [];
+  for (let measureIndex = 0; measureIndex < count; measureIndex++) {
+    let longest = beatsPerMeasure;
+    partsMeasures.forEach((measures) => {
+      const measure = measures[measureIndex];
+      if (!measure) return;
+      getMeasureVoices(measure).forEach((voice) => {
+        const total = voice.events.reduce((sum, event) => sum + getEventDurationBeats(event), 0);
+        longest = Math.max(longest, total);
+      });
+    });
+    advances.push(longest);
+  }
+  return advances;
 }
 
 export function buildDynamicVelocityTimeline(
   partsMeasures: readonly (readonly MeasureData[])[],
   beatsPerMeasure: number,
 ): DynamicVelocityTimeline {
+  const advances = measureAdvanceBeats(partsMeasures, beatsPerMeasure);
+  // 小節頭の絶対拍（前向きの累積）
+  const measureStarts: number[] = [];
+  let acc = 0;
+  advances.forEach((advance) => { measureStarts.push(acc); acc += advance; });
+  const endBeat = acc;
+  const positionOf = (measureIndex: number, beatInMeasure: number): number =>
+    (measureStarts[measureIndex] ?? (endBeat + (measureIndex - advances.length) * beatsPerMeasure)) + beatInMeasure;
+
   type Marking = { at: number; order: number; absolute: AbsoluteDynamicMarking | null; relative: RelativeDynamicMarking | null };
   const markings: Marking[] = [];
-  let endBeat = 0;
   partsMeasures.forEach((measures) => {
-    endBeat = Math.max(endBeat, measures.length * beatsPerMeasure);
     measures.forEach((measure, measureIndex) => {
       getMeasureVoices(measure).forEach((voice) => {
         let beat = 0;
         voice.events.forEach((event) => {
           const absolute = getAbsoluteDynamicFromEvent(event);
           const relative = getRelativeDynamicFromEvent(event) ?? event.hairpins?.[0]?.type ?? null;
-          if (absolute || relative) {
-            markings.push({ at: measureIndex * beatsPerMeasure + beat, order: markings.length, absolute, relative });
-          }
+          // 同じ音に p と cresc. が両方あれば、絶対→相対の順に別々の記号として扱う
+          if (absolute) markings.push({ at: positionOf(measureIndex, beat), order: markings.length, absolute, relative: null });
+          if (relative) markings.push({ at: positionOf(measureIndex, beat), order: markings.length, absolute: null, relative });
           beat += getEventDurationBeats(event);
         });
       });
     });
   });
-  markings.sort((left, right) => (left.at - right.at) || (left.order - right.order));
+  // 同一位置では絶対強弱を先に（round3 P2: パートの走査順で cresc. が p の前に来ると長さ 0 の区間になる）
+  markings.sort((left, right) =>
+    (left.at - right.at) || ((left.absolute ? 0 : 1) - (right.absolute ? 0 : 1)) || (left.order - right.order));
+  // 各記号から見た「次の絶対強弱」を後ろ向きに1回で決める（round3 P3）
+  const nextAbsoluteIndex: number[] = new Array(markings.length).fill(-1);
+  for (let index = markings.length - 2, next = markings.length - 1; index >= 0; index--) {
+    if (markings[index + 1].absolute) next = index + 1;
+    nextAbsoluteIndex[index] = markings[next]?.absolute && next > index ? next : -1;
+  }
 
-  // 区間ごとの「開始音量・終了音量・開始位置・終了位置」を前から積む
   type Segment = { from: number; to: number; startLevel: number; endLevel: number };
   const segments: Segment[] = [];
-  let level = DEFAULT_DYNAMIC_VELOCITY;
-  markings.forEach((marking, index) => {
-    if (marking.absolute) {
-      level = getAbsoluteDynamicVelocity(marking.absolute);
-      segments.push({ from: marking.at, to: marking.at, startLevel: level, endLevel: level });
-    }
-    // 同じ音に p と cresc. が両方付いていれば、p に切り替えてから cresc. を始める
-    if (!marking.relative) return;
-    // 次の絶対強弱まで（無ければ終端まで ±0.2）
-    const nextAbsolute = markings.slice(index + 1).find((candidate) => candidate.absolute);
-    const to = nextAbsolute ? nextAbsolute.at : Math.max(endBeat, marking.at);
-    const target = nextAbsolute
-      ? getAbsoluteDynamicVelocity(nextAbsolute.absolute!)
-      : clampVelocity(level + (marking.relative === 'cresc' ? RELATIVE_DYNAMIC_DELTA : -RELATIVE_DYNAMIC_DELTA));
-    segments.push({ from: marking.at, to, startLevel: level, endLevel: target });
-    // 次の記号（相対）が来たときは、その位置での音量から続ける
-    level = target;
-  });
-
-  const velocityAt = (absoluteBeat: number): number => {
-    // 位置以前の最後の区間を二分探索で引く（性能: 音ごとに O(log 記号数)）
+  const levelAt = (absoluteBeat: number): number => {
     let low = 0;
     let high = segments.length - 1;
     let found = -1;
@@ -387,5 +409,29 @@ export function buildDynamicVelocityTimeline(
     const ratio = Math.min(1, Math.max(0, (absoluteBeat - segment.from) / (segment.to - segment.from)));
     return clampVelocity(segment.startLevel + (segment.endLevel - segment.startLevel) * ratio);
   };
-  return { velocityAt, markingCount: markings.length };
+  markings.forEach((marking, index) => {
+    if (marking.absolute) {
+      const level = getAbsoluteDynamicVelocity(marking.absolute);
+      segments.push({ from: marking.at, to: marking.at, startLevel: level, endLevel: level });
+      return;
+    }
+    if (!marking.relative) return;
+    // 相対記号は「その位置での実音量」から始める（round3 P2: 先行区間の終端値から始めると
+    // cresc. の途中の dim. で音量が跳ぶ）。先行区間はここで打ち切る
+    const startLevel = levelAt(marking.at);
+    const previous = segments[segments.length - 1];
+    if (previous && previous.to > marking.at) {
+      previous.endLevel = startLevel;
+      previous.to = marking.at;
+    }
+    const nextIndex = nextAbsoluteIndex[index];
+    const nextAbsolute = nextIndex >= 0 ? markings[nextIndex] : null;
+    const to = nextAbsolute ? nextAbsolute.at : Math.max(endBeat, marking.at);
+    const target = nextAbsolute
+      ? getAbsoluteDynamicVelocity(nextAbsolute.absolute!)
+      : clampVelocity(startLevel + (marking.relative === 'cresc' ? RELATIVE_DYNAMIC_DELTA : -RELATIVE_DYNAMIC_DELTA));
+    segments.push({ from: marking.at, to, startLevel, endLevel: target });
+  });
+
+  return { velocityAt: levelAt, positionOf, markingCount: markings.length };
 }

@@ -183,6 +183,42 @@ describe('拍位置で引く強弱の時系列（Issue #626）', () => {
     expect(t.velocityAt(1)).toBe(F);
   });
 
+  it('途中で小節が拍子より長くなっても（途中拍子変更）、絶対拍は実際の前進幅で数える（round3 P2）', () => {
+    // 3/4 の中に 4 拍の小節。2小節目の頭の p が、1小節目の 4 拍目に早く効かない
+    const rh: MeasureData[] = [
+      { events: [q(['c/5']), q(['d/5']), q(['e/5']), q(['f/5'])] },
+      { events: [q(['c/5'], { dynamics: [{ value: 'p' }] }), q(['d/5']), q(['e/5'])] },
+    ];
+    const t = buildDynamicVelocityTimeline([rh], 3);
+    expect(t.positionOf(1, 0)).toBe(4);
+    expect(t.velocityAt(t.positionOf(0, 3))).toBe(0.5);
+    expect(t.velocityAt(t.positionOf(1, 0))).toBe(P);
+  });
+
+  it('cresc. の途中の dim. は、その位置の実音量から始まる（跳ばない）', () => {
+    const rh: MeasureData[] = [{ events: [
+      q(['c/5'], { dynamics: [{ value: 'p' }], hairpins: [{ type: 'cresc', endMeasure: 0, endEvent: 3 }] }),
+      q(['d/5']),
+      q(['e/5'], { hairpins: [{ type: 'dim', endMeasure: 0, endEvent: 3 }] }),
+      q(['f/5']),
+    ] }];
+    const t = buildDynamicVelocityTimeline([rh], 4);
+    const beforeDim = t.velocityAt(1.999);
+    const atDim = t.velocityAt(2);
+    expect(Math.abs(atDim - beforeDim)).toBeLessThan(0.01);
+    expect(t.velocityAt(3.5)).toBeLessThan(atDim);
+  });
+
+  it('同じ位置に右手の cresc. と左手の p があれば、どちらの順で読んでも p → cresc. になる（round3 P2）', () => {
+    const rh: MeasureData[] = [{ events: [q(['c/5'], { hairpins: [{ type: 'cresc', endMeasure: 0, endEvent: 3 }] }), q(['d/5']), q(['e/5']), q(['f/5'])] }];
+    const lh: MeasureData[] = [{ events: [q(['c/3'], { dynamics: [{ value: 'p' }] }), q(['e/3']), q(['g/3']), q(['c/4'])] }];
+    const a = buildDynamicVelocityTimeline([rh, lh], 4);
+    const b = buildDynamicVelocityTimeline([lh, rh], 4);
+    expect(a.velocityAt(0)).toBe(P);
+    expect(a.velocityAt(2)).toBeGreaterThan(P);
+    expect(b.velocityAt(2)).toBeCloseTo(a.velocityAt(2), 9);
+  });
+
   it('記号が無ければ常に既定 0.5', () => {
     const t = buildDynamicVelocityTimeline([[{ events: [q(['c/5'])] }]], 4);
     expect(t.markingCount).toBe(0);

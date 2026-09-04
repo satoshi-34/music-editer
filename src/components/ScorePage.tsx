@@ -1816,19 +1816,26 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 bpm: measureBpms[expandedMeasureIndex + startExpandedIndex],
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
-                events: flattenMeasureForPlayback(item.measure).flatMap((event, flatIndex, flattened) => {
+                events: (() => {
+                  const flattened = flattenMeasureForPlayback(item.measure);
+                  // 単声部の小節は startBeat を持たない（エンジンが順に積む合図）ので、
+                  // 前向きの累積で各音の拍位置を1回だけ出す（round3 P3）
+                  const beatStarts: number[] = [];
+                  let cursor = 0;
+                  flattened.forEach((entry) => {
+                    beatStarts.push(entry.startBeat ?? cursor);
+                    if (entry.startBeat == null) cursor += getEventDurationBeats(entry);
+                  });
+                  return flattened.flatMap((event, flatIndex) => {
                   // アーティキュレーション（スタッカート＝短く、アクセント＝強く 等）を
                   // 音の長さ・音量の倍率として取り出す。
                   const articulation = getArticulationPlaybackEffect(event);
                   // 強弱記号から決まった基準ベロシティ（未設定なら既定 0.5）に
                   // アクセント等の倍率を掛けて、最後に 0..1 へ収める。
                   // 基準音量は「この音の拍位置」で時系列から引く（#626: どの声部でも同じ扱い）。
-                  // 単声部の小節は startBeat を持たない（エンジンが順に積む合図）ので、
-                  // 畳んだ列の前の音の長さを足して拍位置を出す
-                  const beatInMeasure = event.startBeat
-                    ?? flattened.slice(0, flatIndex).reduce((sum, previous) => sum + getEventDurationBeats(previous), 0);
+                  // 絶対拍は時系列側の positionOf（各小節の実際の前進幅の累積）で求める
                   const baseVelocity = dynamicTimeline.velocityAt(
-                    (expandedMeasureIndex + startExpandedIndex) * measureBeatsForDynamics + beatInMeasure
+                    dynamicTimeline.positionOf(expandedMeasureIndex + startExpandedIndex, beatStarts[flatIndex])
                   );
                   // タイの計画は「声部の中での位置」で引く。
                   // 畳んだあとの eventIndex は複数声部で並べ替えられているため使えない。
@@ -1881,7 +1888,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   // タイを展開しないのと同じ理由で、割られた音にはペダル延長を付けない
                   if (expandedEvents.length <= 1) return expandedEvents;
                   return expandedEvents.map((subEvent) => ({ ...subEvent, pedalExtendBeatsByKey: undefined }));
-                })
+                  });
+                })(),
               }))
             };
           });
