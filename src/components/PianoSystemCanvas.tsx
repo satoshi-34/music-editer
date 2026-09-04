@@ -217,7 +217,7 @@ import {
 // Issue #38）。既存のテスト（PianoSystemCanvasPartSpacing.test.tsx）はこのファイルからの
 // named import を使っているため、後方互換として re-export する。
 export { computeLayout, staveSpacingForPartCount };
-import { createVexFlowTuplets, syncTupletBracketsWithBeams, syncTupletPlacementWithNotes, vexFlowDotCount, type RenderedTuplet } from '../utils/vexFlowTimingUtils';
+import { createVexFlowTuplets, syncTupletBracketsWithBeams, syncTupletPlacementWithNotes, vexFlowDotCount, type RenderedTuplet, type TupletObstacleRect } from '../utils/vexFlowTimingUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 import {
@@ -1671,6 +1671,9 @@ function drawRenderedVoiceEntries(
   vexCtx: ReturnType<Renderer['getContext']>,
   stave: Stave,
   renderedVoiceEntries: RenderedVoiceEntry[],
+  // 段またぎ連符の数字が避ける障害物（他パート・他声部の音符の描画範囲）を返す関数。
+  // 段またぎ連符があったときだけ呼ばれる（#574）
+  getTupletObstacles?: () => readonly TupletObstacleRect[],
 ): void {
     renderedVoiceEntries.forEach((entry) => {
       try{
@@ -1728,8 +1731,9 @@ function drawRenderedVoiceEntries(
       // VexFlow は符幹の向きだけで上下を決めるため、加線の上（下）に離れた音符では
       // 数字だけが五線をまたいで反対側へ取り残され、多段譜では下の段のビームと重なる。
       // 音符と五線の位置関係が要るので、音符が五線へ紐づいたあと（＝描画段）に呼ぶ。
-      // 段またぎ連符（#574）はどちら側へ出すかがパートで決まるので、そのパートの五線も渡す。
-      syncTupletPlacementWithNotes(entry.tuplets, stave);
+      // 段またぎ連符（#574）は「梁の側」の判定に持ち主のパートの五線が要るので一緒に渡し、
+      // 左手の和音などを避けるための障害物も（またぎがあったときだけ）引けるようにする。
+      syncTupletPlacementWithNotes(entry.tuplets, { ownerStave: stave, getObstacles: getTupletObstacles });
       entry.tuplets.forEach(({ tuplet, hideNumber }, tupletIndex) => {
         // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
         // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
@@ -5873,6 +5877,31 @@ export default function PianoSystemCanvas({
       // Pass 2: 合同フォーマット。実体は formatSystemColumnVoices（module スコープ・#244 段4c-1）
       formatSystemColumnVoices(allVoicesForFormatting, restAlignVoices, staveSets[0][i]);
 
+      // 段またぎ連符の数字が避ける障害物（#574）: この段のすべてのパート・声部の音符の
+      // 描画範囲。Pass 2 の合同フォーマットが済んだ後なので、まだ描いていないパート
+      // （左手）の音符でも位置は確定している ＝ 右手を描く時点で左手の和音を避けられる。
+      // 段またぎ連符がある小節でしか要らないので、最初に必要になった時点で1回だけ作る。
+      let cachedSystemNoteRects: TupletObstacleRect[] | null = null;
+      const getSystemNoteRects = (): readonly TupletObstacleRect[] => {
+        if (cachedSystemNoteRects) return cachedSystemNoteRects;
+        const rects: TupletObstacleRect[] = [];
+        partVoiceCache.forEach((cache) => {
+          cache?.renderedVoiceEntries.forEach((entry) => {
+            entry.vfNotes.forEach((note) => {
+              try {
+                const bb = (note as unknown as { getBoundingBox?: () => { getX: () => number; getY: () => number; getW: () => number; getH: () => number } }).getBoundingBox?.();
+                if (!bb) return;
+                rects.push({ x: bb.getX(), y: bb.getY(), w: bb.getW(), h: bb.getH() });
+              } catch {
+                // 整形が済んでいない音符では範囲を取れないことがある。その音符を諦めるだけでよい
+              }
+            });
+          });
+        });
+        cachedSystemNoteRects = rects;
+        return rects;
+      };
+
       // Pass 3: フォーマット済みの Voice を使って実際の描画・イベントハンドラ設定を行う。
       // 空白クリック挿入のパートごとの実体。レイヤー明示選択中は「クリックした帯」では
       // なく「選択レイヤーのパート」の doInsert を呼ぶため（裁定②案A）、後段の ir ハンドラ
@@ -5953,7 +5982,7 @@ export default function PianoSystemCanvas({
         }
 
         // 声部・ビーム・連符の描画（実体は drawRenderedVoiceEntries・#244 段4c-2）
-        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries);
+        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries, getSystemNoteRects);
 
         // 自動衝突回避（#340 段1）の障害物: 描画した全声部の音符の BoundingBox
         // （符頭＋符幹を含む）を段ごとに集める。編集レイヤーやアクティブ声部の

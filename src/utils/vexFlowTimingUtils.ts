@@ -121,8 +121,25 @@ function setTupletYOffset(tuplet: Tuplet, yOffset: number): void {
   (tuplet as unknown as TupletWithYOffset).options.yOffset = yOffset;
 }
 
+/**
+ * 段またぎ連符の数字が避ける障害物（音符の描画範囲＝符頭＋符幹＋旗）。
+ * 左手（下段）の和音のように、連符自身の音符ではないものを避けるために使う。
+ */
+export type TupletObstacleRect = { x: number; y: number; w: number; h: number };
+
+/** 段またぎ連符の置き直しに使う追加情報（またぎでない連符では使わない） */
+export type TupletPlacementContext = {
+  /** その連符を持っているパートの五線（描画側の stave）。梁の向きの判定の基準にする */
+  ownerStave?: Stave;
+  /**
+   * 同じ段に描かれる音符の描画範囲。段またぎ連符が実際にあったときだけ呼ぶ
+   * （関数で受けるのは、またぎの無い大多数の小節で無駄に集めないため）
+   */
+  getObstacles?: () => readonly TupletObstacleRect[];
+};
+
 /** その音符の符頭の y（複数音＝和音なら全部）。休符・符頭を持たない音符では空配列 */
-function noteheadYs(note: Note): number[] {
+function noteheadYsOf(note: Note): number[] {
   try {
     return note.getYs();
   } catch {
@@ -132,8 +149,77 @@ function noteheadYs(note: Note): number[] {
 }
 
 /**
+ * 符幹の先（符頭と反対側の端）の y。梁（連桁）はこの高さに渡るので、
+ * 「梁がどこにあるか」を実測する物差しとして使う。符幹を持たない音符では null。
+ */
+function stemTipYOf(note: Note): number | null {
+  try {
+    // Note 型には符幹の情報が無い（符幹を持つのは StemmableNote 系）ので、
+    // 使う2つのメソッドだけに絞って型を付ける
+    const stemmable = note as unknown as {
+      hasStem?: () => boolean;
+      getStemExtents?: () => { topY: number; baseY: number };
+    };
+    if (!stemmable.hasStem?.() || !stemmable.getStemExtents) {
+      return null;
+    }
+    // topY は「符幹の先」（上向きなら上端・下向きなら下端）、baseY は符頭側の端
+    return stemmable.getStemExtents().topY;
+  } catch {
+    // ビームの整形前などで内部状態がそろっていないと例外になる。読めないだけなので null
+    return null;
+  }
+}
+
+/** 連符グループが横に占める範囲（障害物を「この連符の下にあるものだけ」に絞るために使う） */
+function noteXRangeOf(notes: readonly Note[]): { left: number; right: number } | null {
+  const lefts: number[] = [];
+  const rights: number[] = [];
+  notes.forEach((note) => {
+    try {
+      const x = note.getAbsoluteX();
+      if (!Number.isFinite(x)) return;
+      lefts.push(x);
+      rights.push(x + (note.getWidth?.() ?? 0));
+    } catch {
+      // 整形前の音符では x を取れない。範囲が作れなければ絞り込みを諦める（null を返す）
+    }
+  });
+  if (lefts.length === 0) {
+    return null;
+  }
+  return { left: Math.min(...lefts), right: Math.max(...rights) };
+}
+
+/**
+ * 連符の「梁の側」（＝数字を置く側）が下かどうかを決める。
+ *
+ * 浄書では連符数字は梁と同じ側に置く（Gould, Behind Bars）。段またぎでは梁が
+ * 相手の五線の方へ渡るので、**梁の高さ（符幹の先の平均）が持ち主の五線より下なら下側**、
+ * 上なら上側になる。月光7〜8小節の右手（下段へ食い込む3連符）はこの判定で「下側」になる。
+ *
+ * 符幹が読めない場合や、梁が持ち主の五線の中に収まっている場合は、
+ * 「グループがどちらの五線へまたいでいるか」で決める（またいだ先が梁の向き）。
+ */
+function isBeamSideBelow(notes: readonly Note[], owner: Stave, bottomStave: Stave): boolean {
+  const tipYs = notes
+    .map((note) => stemTipYOf(note))
+    .filter((y): y is number => y !== null);
+  if (tipYs.length > 0) {
+    const beamY = tipYs.reduce((sum, y) => sum + y, 0) / tipYs.length;
+    if (beamY > owner.getYForLine(4)) {
+      return true;
+    }
+    if (beamY < owner.getYForLine(0)) {
+      return false;
+    }
+  }
+  return bottomStave.getYForLine(4) > owner.getYForLine(4);
+}
+
+/**
  * 段またぎ連符（音符が2つの五線にまたがるグループ）の数字を、
- * **どちらの五線にも重ならない位置**へ置き直す（Issue #574）。
+ * **梁の側で、どちらの五線にも音符にも重ならない位置**へ置き直す（Issue #574）。
  *
  * ## 何が問題だったか
  *
@@ -147,20 +233,17 @@ function noteheadYs(note: Note): number[] {
  *
  * ## どう直すか
  *
- * 浄書では連符数字は五線の外に置く。ここでは
- * **その連符を持っているパートの五線の外側**（右手が下へまたぐなら上の五線の上、
- * 左手が上へまたぐなら下の五線の下）へ出す。五線と五線の間（連桁のある側）は、
- * 段またぎ連桁とその符幹が通る場所なので空けておく。
+ * 1. 梁の側を実測で決める（`isBeamSideBelow`）。右手が下段へ食い込む形なら「下」
+ * 2. その側の一番外の五線（下側なら一番下の五線）の外へ出す。起点の 1.5間・2間は
+ *    VexFlow が普通の連符に使っている余白と同じ値
+ * 3. そこからさらに、**連符自身の音符（符頭・符幹の先）と、同じ横位置にある他の音符
+ *    （左手の和音など）を避ける**ように外へ押し出す。これで五線・音符のどちらとも重ならない
  *
- * この置き場所には副次的な利点もある: またぎでない連符の数字も同じ「自分の五線の外」に
- * 出るため、同じパートの連符数字が同じ高さ帯に並ぶ（例: 月光の右手なら、またぐ小節も
- * またがない小節も「3」がト音記号の五線の上に並ぶ）。左手の音符・符幹とも構造的に
- * 重ならない（五線1つぶん離れる）。
- *
- * @param ownerStave その連符を持っているパートの五線。省略時（単体テストなど）は
- *   音符が載っている五線のうち一番上のものを持ち主とみなす
+ * 五線と五線の間（梁そのものが通る場所）には置かない。段またぎ連桁と符幹が通っていて、
+ * 大譜表の段間（実測 40px 程度）には数字を入れる余地が無いため、
+ * 「梁の側」は満たしつつ**五線の外へ抜けた位置**を選ぶ。
  */
-function placeCrossStaffTupletNumber(tuplet: Tuplet, ownerStave?: Stave): void {
+function placeCrossStaffTupletNumber(tuplet: Tuplet, context: TupletPlacementContext): void {
   const notes = tuplet.getNotes();
   const staves = notes
     .map((note) => note.getStave())
@@ -172,34 +255,56 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, ownerStave?: Stave): void {
   // 音符が載っている五線のうち、一番上のものと一番下のもの
   const topStave = staves.reduce((a, b) => (b.getYForLine(0) < a.getYForLine(0) ? b : a));
   const bottomStave = staves.reduce((a, b) => (b.getYForLine(4) > a.getYForLine(4) ? b : a));
+  // 持ち主の五線が渡されないとき（単体テストなど）は、一番上の五線を持ち主とみなす
+  const owner = context.ownerStave ?? topStave;
+  const lineSpacing = owner.getSpacingBetweenLines();
 
-  // 持ち主が上の五線なら上へ、下の五線なら下へ出す（またぎの向きと反対側＝連桁の無い側）
-  const owner = ownerStave ?? topStave;
-  const toTop = owner.getYForLine(0) <= topStave.getYForLine(0);
-  const nearStave = toTop ? topStave : bottomStave;
-  const lineSpacing = nearStave.getSpacingBetweenLines();
+  const toBottom = isBeamSideBelow(notes, owner, bottomStave);
+  // 出す側の一番外の五線。ここから外側へ数字を置く（両方の五線の外に出る）
+  const farStave = toBottom ? bottomStave : topStave;
 
-  // 出す側の五線に残っている音符の符頭も避ける（加線の上/下に出た音の上へ数字が重ならないように）。
-  // 起点の 1.5間・2間は VexFlow が普通の連符で使っている余白と同じ値にそろえている
-  const nearNoteYs = notes
-    .filter((note) => note.getStave() === nearStave)
-    .flatMap((note) => noteheadYs(note));
+  // 障害物は「この連符の真下（真上）にあるもの」だけに絞る。
+  // 小節の別の場所にある音符まで見ると、関係の無い音のせいで数字が遠くへ飛んでしまう
+  const xRange = noteXRangeOf(notes);
+  const obstacles = (context.getObstacles?.() ?? []).filter(
+    (rect) => !xRange || (rect.x <= xRange.right && rect.x + rect.w >= xRange.left),
+  );
+
   let targetY: number;
-  if (toTop) {
-    targetY = nearStave.getYForLine(0) - 1.5 * lineSpacing;
-    if (nearNoteYs.length > 0) {
-      targetY = Math.min(targetY, Math.min(...nearNoteYs) - 2 * lineSpacing);
-    }
+  if (toBottom) {
+    targetY = farStave.getYForLine(4) + 2 * lineSpacing;
+    notes.forEach((note) => {
+      noteheadYsOf(note).forEach((y) => {
+        targetY = Math.max(targetY, y + 2 * lineSpacing);
+      });
+      const tipY = stemTipYOf(note);
+      if (tipY !== null) {
+        targetY = Math.max(targetY, tipY + lineSpacing);
+      }
+    });
+    obstacles.forEach((rect) => {
+      targetY = Math.max(targetY, rect.y + rect.h + lineSpacing);
+    });
   } else {
-    targetY = nearStave.getYForLine(4) + 2 * lineSpacing;
-    if (nearNoteYs.length > 0) {
-      targetY = Math.max(targetY, Math.max(...nearNoteYs) + 2 * lineSpacing);
-    }
+    targetY = farStave.getYForLine(0) - 1.5 * lineSpacing;
+    notes.forEach((note) => {
+      noteheadYsOf(note).forEach((y) => {
+        targetY = Math.min(targetY, y - 2 * lineSpacing);
+      });
+      const tipY = stemTipYOf(note);
+      if (tipY !== null) {
+        targetY = Math.min(targetY, tipY - lineSpacing);
+      }
+    });
+    obstacles.forEach((rect) => {
+      targetY = Math.min(targetY, rect.y - lineSpacing);
+    });
   }
 
   // VexFlow が計算する縦位置（＝またぎで壊れている値）との差を yOffset で埋める。
-  // 位置を直接書き込む API が無いため、いったん 0 に戻して素の値を測ってから差分を入れる
-  tuplet.setTupletLocation(toTop ? Tuplet.LOCATION_TOP : Tuplet.LOCATION_BOTTOM);
+  // 位置を直接書き込む API が無いため、いったん 0 に戻して素の値を測ってから差分を入れる。
+  // 括弧も数字と同じ yPos から描かれるので、この1か所で両方が一緒に動く
+  tuplet.setTupletLocation(toBottom ? Tuplet.LOCATION_BOTTOM : Tuplet.LOCATION_TOP);
   setTupletYOffset(tuplet, 0);
   try {
     setTupletYOffset(tuplet, targetY - tuplet.getYPosition());
@@ -232,7 +337,7 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, ownerStave?: Stave): void {
  */
 export function syncTupletPlacementWithNotes(
   tuplets: readonly RenderedTuplet[],
-  ownerStave?: Stave,
+  context: TupletPlacementContext = {},
 ): void {
   tuplets.forEach(({ tuplet }) => {
     const notes = tuplet.getNotes();
@@ -245,7 +350,7 @@ export function syncTupletPlacementWithNotes(
     // （#574）。先頭音符の五線を物差しにする以下の判定は「同じ五線の中で符幹が
     // 内側を向いた」ケース（#471）専用で、またぎに使うと配置を反転させてしまう。
     if (notes.some((note) => note.getStave() !== stave)) {
-      placeCrossStaffTupletNumber(tuplet, ownerStave);
+      placeCrossStaffTupletNumber(tuplet, context);
       return;
     }
 
