@@ -7,7 +7,7 @@ import { scheduleLeadSeconds } from './scheduleLead';
 import { limitPolyphony, maxPolyphony, type VoiceSpan } from './polyphonyLimit';
 
 /** playScore が積む「鳴らす予定の1音」。同時発音数の上限を掛けてから予約する（#605） */
-type SimpleVoice = VoiceSpan & { frequency: number; velocity: number; instrument: InstrumentType; tail: number };
+type SimpleVoice = VoiceSpan & { frequency: number; velocity: number; instrument: InstrumentType; duration: number; tail: number };
 import { InstrumentType } from './SoundSource';
 import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
 import {
@@ -529,6 +529,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
             const tail = this.resolveEffectiveTailSeconds(this.getInstrumentConfig(), soundingDuration);
             voices.push({
               frequency,
+              duration: soundingDuration,
               tail,
               startTime: eventStartTime,
               endTime: eventStartTime + soundingDuration + tail,
@@ -576,11 +577,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
     const restoreInstrument = this.currentInstrument;
     try {
       for (const voice of limited.voices) {
-        // 余韻ぶんを戻した「鳴らす長さ」。詰められて 0 以下になった音は予約しない
-        const duration = voice.endTime - voice.startTime - voice.tail;
-        if (duration <= 0) continue;
+        // 詰められた占有期間に「音本体 → 尻尾」の順で収める（round2 P1: 尻尾の全量を先に
+        // 引くと、尻尾だけ切れば足りる短音まで丸ごと無音化する）。占有 0 以下の音だけ予約しない
+        const occupancy = voice.endTime - voice.startTime;
+        if (occupancy <= 0) continue;
+        const duration = Math.min(voice.duration, occupancy);
+        const tail = Math.max(0, occupancy - duration);
         this.currentInstrument = voice.instrument;
-        await this.playNoteAtTime(voice.frequency, duration, voice.startTime, voice.velocity);
+        await this.playNoteAtTime(voice.frequency, duration, voice.startTime, voice.velocity, tail);
       }
     } finally {
       this.currentInstrument = restoreInstrument;
@@ -596,7 +600,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
     frequency: number,
     duration: number,
     startTime: number,
-    velocity: number = 0.5
+    velocity: number = 0.5,
+    /** 尻尾（余韻）の長さを直接指定する（同時発音数の上限で詰められた音・#605）。省略時は共通計算 */
+    tailOverride?: number
   ): Promise<void> {
     await this.ensureContextReady();
     const context = this.context;
@@ -631,7 +637,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
         0.0001,
         this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor) * velocity
       );
-      const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
+      const adjustedTailSeconds = tailOverride ?? this.resolveEffectiveTailSeconds(instrumentConfig, duration);
       // 短音でも「attack→decay→音価終端→尻尾」の時刻順を守る（round2 P2）
       const envelope = this.clampEnvelopeTimes(
         adjustedAttack,
@@ -649,13 +655,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
       );
       gainNode.gain.exponentialRampToValueAtTime(
         0.0001,
-        startTime + duration + adjustedTailSeconds
+        // 尻尾 0（上限で詰められた音）でもオートメーション点の時刻順を崩さないよう、最小 1ms は置く
+        startTime + duration + Math.max(0.001, adjustedTailSeconds)
       );
       
       // 再生時刻も停止時刻も「今すぐ」ではなく未来の秒数で予約する。
       oscillators.forEach((oscillator, index) => {
         oscillator.start(startTime);
-        oscillator.stop(startTime + duration + adjustedTailSeconds);
+        oscillator.stop(startTime + duration + Math.max(0.001, adjustedTailSeconds));
         if (index === 0) {
           oscillator.addEventListener('ended', () => {
             this.cleanupOscillator(oscillatorId, gainNode);

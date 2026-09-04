@@ -2006,6 +2006,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   }, [getAudioEngine]);
 
   const handleInstrumentPreview = useCallback(async () => {
+    // 自然終了の後始末（余韻後の stopAll）が残っていれば先に済ませる（#605 round2 P2:
+    // 残したままだとプレビューの発音途中で stopAll が走り、読み込み中なら中断扱いで無言に失敗する）
+    flushPendingPlaybackCleanup();
     try {
       // プレビューは「いま選んでいる音源方式 + 楽器 + 音色調整」をそのまま確認するための入口。
       await runWithPlaybackFallback(async (audioEngine) => {
@@ -2016,12 +2019,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     } catch (error) {
       console.error('[ScorePage] 音色プレビューに失敗:', error);
     }
-  }, [runWithPlaybackFallback, scheduleOutputHealthCheck]);
+  }, [flushPendingPlaybackCleanup, runWithPlaybackFallback, scheduleOutputHealthCheck]);
 
   const handleInputNotePreview = useCallback(async (noteEvent: NoteEvent, instrument?: InstrumentType) => {
     if (noteEvent.isRest || noteEvent.keys.length === 0) {
       return;
     }
+    // 音色プレビューと同じ理由で、残っている後始末を先に済ませる（#605 round2 P2）
+    flushPendingPlaybackCleanup();
 
     const previewDuration = getPreviewDurationSeconds(noteEvent.dur);
     await runWithPlaybackFallback(async (audioEngine) => {
@@ -2041,7 +2046,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         }
       }
     });
-  }, [currentInstrument, runWithPlaybackFallback]);
+  }, [flushPendingPlaybackCleanup, currentInstrument, runWithPlaybackFallback]);
 
   const resetAudioSettingsToSafeDefaults = useCallback(() => {
     // 無音が続くときは「いまの設定を維持したまま復旧」より、

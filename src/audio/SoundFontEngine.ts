@@ -200,7 +200,7 @@ export class SoundFontEngine implements PlaybackEngine {
     // endTime は「音価・ペダル終端 + 余韻（release）」＝ノードが実際に生きている期間（round1 P1:
     // 余韻を含めないと、詰めた古い音の余韻と新しい音が重なって上限を超える）。
     // tail は詰めた後の長さを戻すために控える（duration' = endTime' − startTime − tail）
-    const voices: Array<VoiceSpan & { player: SoundFontPlayer; note: string; velocity: number; tail: number }> = [];
+    const voices: Array<VoiceSpan & { player: SoundFontPlayer; note: string; velocity: number; duration: number; tail: number }> = [];
 
     // 各パートは同じ「今この瞬間」を基準に予約する。
     // こうすると Promise を待たずに、和音や複数パートが同時にそろって鳴る。
@@ -299,6 +299,7 @@ export class SoundFontEngine implements PlaybackEngine {
                 player,
                 note: this.normalizeNoteFormat(key),
                 velocity,
+                duration: soundingDuration,
                 tail,
                 startTime: eventStartTime,
                 endTime: eventStartTime + soundingDuration + tail,
@@ -335,10 +336,13 @@ export class SoundFontEngine implements PlaybackEngine {
 
     const limited = limitPolyphony(voices, maxPolyphony());
     limited.voices.forEach((voice) => {
-      // 余韻ぶんを戻した「鳴らす長さ」。詰められて 0 以下になった音（余韻すら入らない）は予約しない
-      const duration = voice.endTime - voice.startTime - voice.tail;
-      if (duration <= 0) return;
-      voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity));
+      // 詰められた占有期間に「音本体 → 余韻」の順で収める（round2 P1: 余韻の全量を先に引くと、
+      // 余韻だけ切れば足りる短音まで丸ごと無音化する）。占有 0 以下の音だけ予約しない
+      const occupancy = voice.endTime - voice.startTime;
+      if (occupancy <= 0) return;
+      const duration = Math.min(voice.duration, occupancy);
+      const release = Math.max(0, occupancy - duration);
+      voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity, release));
     });
 
     console.log('[SoundFontEngine] 譜面再生をスケジュールしました:', parts.length, 'パート',
@@ -573,7 +577,11 @@ export class SoundFontEngine implements PlaybackEngine {
     return note;
   }
 
-  private buildPlaybackOptions(duration: number, velocity: number = 0.5) {
+  /**
+   * @param releaseOverride 余韻の長さを直接指定する（同時発音数の上限で詰められた音・#605）。
+   *   省略時は releaseTail.ts の共通計算
+   */
+  private buildPlaybackOptions(duration: number, velocity: number = 0.5, releaseOverride?: number) {
     const { brightness, attack, release, richness } = this.soundProfile;
 
     // SoundFont 側は元サンプルのキャラが強いので、
@@ -592,7 +600,7 @@ export class SoundFontEngine implements PlaybackEngine {
       // 全音符でも尻尾が 0.3 秒に届かず「早く切られた」印象になっていた（Issue #525）。
       // 尻尾の長さは内蔵音源と共通の計算（releaseTail.ts）へ一本化し、
       // duration は記譜どおりに戻す（音の開始位置・次の音までの間隔は変わらない）
-      release: resolveReleaseTailSeconds(release, duration),
+      release: releaseOverride ?? resolveReleaseTailSeconds(release, duration),
       duration
     };
   }

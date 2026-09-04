@@ -130,6 +130,27 @@ describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）'
     }
   });
 
+  it('内蔵側も、詰められた音は音本体を残して尻尾だけ切られる（#605 round2 P1）', async () => {
+    setDevTuningOverride('audio.maxPolyphony', 1);
+    try {
+      const engine = new SimpleAudioEngine();
+      await engine.initialize();
+      createdOscillators.length = 0;
+      // 60BPM の4分（1秒）が2つ。上限1なので1音目は2音目の開始（1秒）で尻尾ごと終わる
+      await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+        { dur: '4', isRest: false, keys: ['c/4'] },
+        { dur: '4', isRest: false, keys: ['d/4'] },
+      ] }] }], 60);
+      const first = createdOscillators[0];
+      const startedAt = first.start.mock.calls[0][0] as number;
+      const stoppedAt = first.stop.mock.calls[0][0] as number;
+      // 音本体 1 秒はそのまま、尻尾は最小 1ms だけ
+      expect(stoppedAt - startedAt).toBeCloseTo(1.001, 4);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
   it('スタッカート（durationScale < 1）でもペダル中は解除位置まで響く（round1 P3: 内蔵側も固定）', async () => {
     const engine = new SimpleAudioEngine();
     await engine.initialize();

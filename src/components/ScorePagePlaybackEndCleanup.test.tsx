@@ -15,10 +15,11 @@ import {
 
 const playPartsMock = vi.fn().mockResolvedValue(undefined);
 const stopAllMock = vi.fn();
+const playNoteByNameMock = vi.fn().mockResolvedValue(undefined);
 vi.mock('../audio/createPlaybackEngine', () => ({
   createPlaybackEngine: () => ({
     initialize: vi.fn().mockResolvedValue(undefined),
-    playNoteByName: vi.fn().mockResolvedValue(undefined),
+    playNoteByName: playNoteByNameMock,
     playParts: playPartsMock,
     suspend: vi.fn().mockResolvedValue(undefined),
     resume: vi.fn().mockResolvedValue(undefined),
@@ -71,6 +72,7 @@ describe('自然終了後の後始末（Issue #605）', () => {
     localStorageMock.clear();
     playPartsMock.mockClear();
     stopAllMock.mockClear();
+    playNoteByNameMock.mockClear();
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get: () => 700, configurable: true });
   });
@@ -111,6 +113,25 @@ describe('自然終了後の後始末（Issue #605）', () => {
     await waitFor(() => { expect(screen.getByRole('button', { name: '再生' })).toBeTruthy(); }, { timeout: 5000 });
     await new Promise((resolve) => setTimeout(resolve, 1400));
     expect(stopAllMock).toHaveBeenCalledTimes(2);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('余韻待ち中に音色プレビューを鳴らすと、後始末を先に済ませてからプレビューする（round2 P2）', async () => {
+    seedWork();
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(1); });
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再生' })).toBeTruthy(); }, { timeout: 5000 });
+    expect(stopAllMock).not.toHaveBeenCalled();
+    // 余韻待ちの途中でプレビュー → 残っていた後始末が即時に走り（1回）、その後にプレビューが鳴る
+    fireEvent.click(screen.getAllByRole('button', { name: /プレビュー/ })[0]);
+    await waitFor(() => { expect(playNoteByNameMock).toHaveBeenCalled(); });
+    expect(stopAllMock).toHaveBeenCalledTimes(1);
+    expect(stopAllMock.mock.invocationCallOrder[0]).toBeLessThan(playNoteByNameMock.mock.invocationCallOrder[0]);
+    // 予約されていた後始末は消えているので、期限を越えても2回目は来ない
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    expect(stopAllMock).toHaveBeenCalledTimes(1);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('一時停止→再開→鳴り終わり でも余韻の後に stopAll が呼ばれる（round1 P2）', async () => {
