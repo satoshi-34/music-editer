@@ -167,6 +167,28 @@ describe('ToolVariantButton のプルダウンの出し方（#569 round1）', ()
     outside.remove();
   });
 
+  it('Safari 流の「mousedown で relatedTarget=null の blur」でも、項目クリックが届く（round3 P2）', () => {
+    const onSelectVariant = vi.fn();
+    const { container, trigger } = renderButton(onSelectVariant);
+    fakeTriggerRect(trigger, { left: 20, bottom: 300 });
+    fireEvent.click(trigger);
+    const menu = openedMenu(container);
+    const item = within(menu).getByRole('button', { name: '5連符' });
+    // Safari: 項目の mousedown → ▾ から blur（relatedTarget null）→ click の順（WebKit Bug 254655）
+    fireEvent.mouseDown(item);
+    fireEvent.focusOut(trigger, { relatedTarget: null });
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`), '閉じていない').toBeTruthy();
+    fireEvent.mouseUp(item);
+    fireEvent.click(item);
+    expect(onSelectVariant).toHaveBeenCalledWith('5');
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeNull();
+    // 押下が部品の外で始まった null blur は従来どおり閉じる
+    fireEvent.click(trigger);
+    openedMenu(container);
+    fireEvent.focusOut(trigger, { relatedTarget: null });
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeNull();
+  });
+
   it('▾ の名乗りと中身が食い違わない（aria-haspopup="menu" を付けない）', () => {
     const { container, trigger } = renderButton();
     expect(trigger.getAttribute('aria-haspopup')).toBeNull();

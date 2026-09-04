@@ -1640,4 +1640,3 @@ Issue #526 に切り分け済み（本件のトリアージコメントで受入
 | 項目選択・Escape の後にフォーカスが ▾ へ戻る | 同上 |
 | 5連符 → 演奏記号タブ → 音符タブ で選択が残り、1クリックで置ける | `ScorePageTupletVariantWiring.test.tsx` |
 | 選択を親が持つ形（制御コンポーネント）でも保持が効く | `PaletteTupletVariant.test.tsx` |
-

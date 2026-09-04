@@ -67,6 +67,10 @@ export default function ToolVariantButton({
   const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const wrapperRef = useRef<HTMLSpanElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  // 部品の中で押下が始まっているか。Safari はボタンの mousedown でフォーカスを外しつつ
+  // blur の relatedTarget を null にする（WebKit Bug 254655）ため、null を「外へ出た」と
+  // 即断すると項目クリックの click より先に閉じて選択が届かない（round3 P2）
+  const pressingInsideRef = useRef(false);
   const menuRef = useRef<HTMLSpanElement>(null);
   const current = options.find((option) => option.key === currentKey) ?? options[0];
 
@@ -161,11 +165,22 @@ export default function ToolVariantButton({
       // キーボードで Tab 移動して部品の外へ出たら閉じる（round2 P2: mousedown だけだと
       // Enter/Space でツールバーを折りたたんだとき open のまま隠れ、再展開で勝手に復活する）。
       // relatedTarget が部品の中（本体ボタン・▾・項目）なら開いたままにする
+      onPointerDownCapture={() => { pressingInsideRef.current = true; }}
+      onMouseDownCapture={() => { pressingInsideRef.current = true; }}
       onBlur={(e) => {
         if (!open) return;
         const next = e.relatedTarget as Node | null;
-        if (!next || !wrapperRef.current?.contains(next)) setOpen(false);
+        if (next) {
+          if (!wrapperRef.current?.contains(next)) setOpen(false);
+          return;
+        }
+        // relatedTarget が無いときは、部品の中で押下が始まっていれば「項目を押している最中」
+        // として閉じない（click の後に外側 mousedown / 選択で閉じる）。それ以外は外へ出た
+        if (!pressingInsideRef.current) setOpen(false);
       }}
+      onClickCapture={() => { pressingInsideRef.current = false; }}
+      onPointerUpCapture={() => { pressingInsideRef.current = false; }}
+      onMouseUpCapture={() => { pressingInsideRef.current = false; }}
       onKeyDown={(e) => {
         // Escape で閉じられないと、キーボードだけで使う人がメニューから抜け出せない
         if (e.key === 'Escape' && open) {
