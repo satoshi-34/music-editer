@@ -7,7 +7,7 @@ import { scheduleLeadSeconds } from './scheduleLead';
 import { limitPolyphony, maxPolyphony, type VoiceSpan } from './polyphonyLimit';
 
 /** playScore が積む「鳴らす予定の1音」。同時発音数の上限を掛けてから予約する（#605） */
-type SimpleVoice = VoiceSpan & { frequency: number; velocity: number; instrument: InstrumentType };
+type SimpleVoice = VoiceSpan & { frequency: number; velocity: number; instrument: InstrumentType; tail: number };
 import { InstrumentType } from './SoundSource';
 import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
 import {
@@ -525,10 +525,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
                   ),
                 )
               : tiedSoundDuration;
+            // endTime は尻尾（余韻）込み＝オシレーターが実際に生きている期間（#605 round1 P1）
+            const tail = this.resolveEffectiveTailSeconds(this.getInstrumentConfig(), soundingDuration);
             voices.push({
               frequency,
+              tail,
               startTime: eventStartTime,
-              endTime: eventStartTime + soundingDuration,
+              endTime: eventStartTime + soundingDuration + tail,
               velocity: this.normalizePlaybackVelocity((event as { velocity?: number }).velocity),
               instrument: this.currentInstrument,
             });
@@ -573,8 +576,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
     const restoreInstrument = this.currentInstrument;
     try {
       for (const voice of limited.voices) {
-        const duration = voice.endTime - voice.startTime;
-        // 詰められて長さ 0 になった音（上限を超える和音の古い側）は予約しない
+        // 余韻ぶんを戻した「鳴らす長さ」。詰められて 0 以下になった音は予約しない
+        const duration = voice.endTime - voice.startTime - voice.tail;
         if (duration <= 0) continue;
         this.currentInstrument = voice.instrument;
         await this.playNoteAtTime(voice.frequency, duration, voice.startTime, voice.velocity);

@@ -1,6 +1,6 @@
 // src/audio/polyphonyLimit.test.ts — Issue #605 同時発音数の上限
 import { afterEach, describe, expect, it } from 'vitest';
-import { MAX_POLYPHONY, limitPolyphony, maxPolyphony } from './polyphonyLimit';
+import { MAX_POLYPHONY, limitPolyphony, maxPolyphony, peakConcurrency } from './polyphonyLimit';
 import { DEV_TUNING_ENTRIES, resetAllDevTuning, setDevTuningOverride } from '../utils/devTuning';
 
 describe('limitPolyphony（Issue #605）', () => {
@@ -65,6 +65,14 @@ describe('limitPolyphony（Issue #605）', () => {
     // 5秒時点で 0/1/2 の3音が鳴っており上限。最古の 0 が 5 で止まる
     expect(result.voices[1].endTime).toBe(5);
     expect(result.voices[0].endTime).toBe(6);
+  });
+
+  it('peakBefore は詰める前のピーク（上限 48 に 100 音が重なれば 100）', () => {
+    const voices = Array.from({ length: 100 }, (_, i) => ({ startTime: i * 0.01, endTime: 10 }));
+    const result = limitPolyphony(voices, 48);
+    expect(result.peakBefore).toBe(100);
+    expect(peakConcurrency(voices)).toBe(100);
+    expect(result.stolen).toBe(52);
   });
 
   it('既定 48 で、dev 調整パネルの登録値・上書きが実効値に届く', () => {

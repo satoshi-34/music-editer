@@ -48,6 +48,9 @@ export interface PolyphonyLimitResult<T extends VoiceSpan> {
  */
 export function limitPolyphony<T extends VoiceSpan>(input: T[], max: number): PolyphonyLimitResult<T> {
   const cap = Math.max(1, Math.floor(max));
+  // 計測用のピークは**詰める前**の区間で独立に数える（round1 P2: 走査中の active は
+  // 詰めた後の終了時刻で外していくため、上限+1 までしか増えず本来のピークが分からない）
+  const peakBefore = peakConcurrency(input);
   // 入力順は保ったまま返したいので、複製を作ってから index つきで開始時刻順に並べる
   const voices = input.map((voice) => ({ ...voice }));
   const order = voices.map((_, index) => index).sort((a, b) => {
@@ -56,7 +59,6 @@ export function limitPolyphony<T extends VoiceSpan>(input: T[], max: number): Po
   });
   // 鳴っている最中のボイス（index）。鳴り始めの古い順に並んでいる
   const active: number[] = [];
-  let peakBefore = 0;
   let stolen = 0;
   for (const index of order) {
     const voice = voices[index];
@@ -64,7 +66,6 @@ export function limitPolyphony<T extends VoiceSpan>(input: T[], max: number): Po
     for (let i = active.length - 1; i >= 0; i--) {
       if (voices[active[i]].endTime <= voice.startTime) active.splice(i, 1);
     }
-    peakBefore = Math.max(peakBefore, active.length + 1);
     while (active.length >= cap) {
       const oldest = active.shift()!;
       voices[oldest].endTime = Math.min(voices[oldest].endTime, voice.startTime);
@@ -74,4 +75,21 @@ export function limitPolyphony<T extends VoiceSpan>(input: T[], max: number): Po
   }
   const dropped = voices.filter((voice) => voice.endTime <= voice.startTime).length;
   return { voices, peakBefore, stolen, dropped };
+}
+
+/** 区間の重なりの最大数（詰める前の同時発音のピーク） */
+export function peakConcurrency(spans: readonly VoiceSpan[]): number {
+  // 同時刻は「終わり→始まり」の順に処理する（end <= start の音は同時に鳴っていない扱い、
+  // limitPolyphony の除外判定と同じ向き）
+  const points = spans.flatMap((span) => [
+    { time: span.startTime, delta: 1 },
+    { time: span.endTime, delta: -1 },
+  ]).sort((a, b) => (a.time - b.time) || (a.delta - b.delta));
+  let current = 0;
+  let peak = 0;
+  for (const point of points) {
+    current += point.delta;
+    peak = Math.max(peak, current);
+  }
+  return peak;
 }

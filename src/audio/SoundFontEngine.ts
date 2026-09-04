@@ -197,7 +197,10 @@ export class SoundFontEngine implements PlaybackEngine {
     // 予約はいったん一覧に集めてから、同時発音数の上限（#605）を静的に適用して鳴らす。
     // 一覧にする理由: 右手→左手の順に組み立てるため、鳴らしながらでは「その時点で何音
     // 鳴っているか」が分からない。開始・終了時刻が全部そろってから詰める
-    const voices: Array<VoiceSpan & { player: SoundFontPlayer; note: string; velocity: number }> = [];
+    // endTime は「音価・ペダル終端 + 余韻（release）」＝ノードが実際に生きている期間（round1 P1:
+    // 余韻を含めないと、詰めた古い音の余韻と新しい音が重なって上限を超える）。
+    // tail は詰めた後の長さを戻すために控える（duration' = endTime' − startTime − tail）
+    const voices: Array<VoiceSpan & { player: SoundFontPlayer; note: string; velocity: number; tail: number }> = [];
 
     // 各パートは同じ「今この瞬間」を基準に予約する。
     // こうすると Promise を待たずに、和音や複数パートが同時にそろって鳴る。
@@ -291,12 +294,14 @@ export class SoundFontEngine implements PlaybackEngine {
                     ),
                   )
                 : tiedSoundDuration;
+              const tail = resolveReleaseTailSeconds(this.soundProfile.release, soundingDuration);
               voices.push({
                 player,
                 note: this.normalizeNoteFormat(key),
                 velocity,
+                tail,
                 startTime: eventStartTime,
-                endTime: eventStartTime + soundingDuration,
+                endTime: eventStartTime + soundingDuration + tail,
               });
             });
           }
@@ -330,8 +335,8 @@ export class SoundFontEngine implements PlaybackEngine {
 
     const limited = limitPolyphony(voices, maxPolyphony());
     limited.voices.forEach((voice) => {
-      const duration = voice.endTime - voice.startTime;
-      // 詰められて長さ 0 になった音（上限を超える和音の古い側）は予約しない
+      // 余韻ぶんを戻した「鳴らす長さ」。詰められて 0 以下になった音（余韻すら入らない）は予約しない
+      const duration = voice.endTime - voice.startTime - voice.tail;
       if (duration <= 0) return;
       voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity));
     });

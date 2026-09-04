@@ -1014,7 +1014,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 再生が最後まで鳴り終わった後の後始末（#605）。sample-player は鳴り終わったノードの
   // 参照を捨てないため、自然終了のたびに世代交代（stopAll）で解放しないと、全曲を
   // 繰り返し聴くほどノードが積み上がる（運用者QA: 繰り返し再生で無音化したタブ）
-  const playbackCleanupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playbackCleanupRef = useRef<{ timer: ReturnType<typeof setTimeout>; engine: PlaybackEngine } | null>(null);
   // 一時停止から再開するため、「いつ再生を始めたか」を覚えておく。
   const playbackStartedAtRef = useRef<number | null>(null);
   // 一時停止時点で「あと何ミリ秒残っているか」を覚えておく。
@@ -1173,11 +1173,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       clearTimeout(playbackTimerRef.current);
       playbackTimerRef.current = null;
     }
-    if (playbackCleanupTimerRef.current !== null) {
-      // 次の再生が始まったら、前の再生の後始末（stopAll）は走らせない。
-      // 走ると新しい再生を止めてしまう
-      clearTimeout(playbackCleanupTimerRef.current);
-      playbackCleanupTimerRef.current = null;
+    if (playbackCleanupRef.current !== null) {
+      // 予約中の後始末（stopAll）は走らせない。走ると新しい再生を止めてしまう。
+      // 「捨てるべき旧世代」を残さないための即時実行は flushPendingPlaybackCleanup 側
+      clearTimeout(playbackCleanupRef.current.timer);
+      playbackCleanupRef.current = null;
     }
     // 位置表示の予約も、再生終了予約と同じタイミングで必ず片付ける。
     clearPositionTimers();
@@ -1196,6 +1196,39 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     remainingPlaybackMsRef.current = 0;
     totalPlaybackMsRef.current = 0;
     positionTimelineRef.current = [];
+  }, []);
+
+  /**
+   * 再生が最後まで鳴り切ったときの共通処理（通常・一時停止からの再開・代表音の全経路から呼ぶ。
+   * round1 P2: 経路ごとに書くと後始末の抜けが出る）。stopped へ戻し、余韻が鳴り切ってから
+   * **予約時のエンジン**で stopAll する（後始末を発火時の getAudioEngine() にすると、余韻待ち中に
+   * 音源方式を切り替えたとき新しいエンジンの音色プレビューを止めてしまう）
+   */
+  const finishPlaybackNaturally = useCallback((engine: PlaybackEngine) => {
+    setPlaybackState('stopped');
+    setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+    playbackTimerRef.current = null;
+    resetPlaybackClock();
+    // 余韻（最大 0.6 秒）が鳴り切ってから後始末する（#605）。停止ボタンと同じ stopAll なので、
+    // 次の再生の音源先読みもここで走る
+    const timer = setTimeout(() => {
+      playbackCleanupRef.current = null;
+      engine.stopAll();
+    }, PLAYBACK_END_CLEANUP_DELAY_MS);
+    playbackCleanupRef.current = { timer, engine };
+  }, [resetPlaybackClock]);
+
+  /**
+   * 余韻待ち中の後始末が残っていれば、いま実行する（次の再生の直前に呼ぶ）。
+   * 取り消すだけだと、余韻待ち 1.1 秒以内に再生を繰り返す限り旧世代のノードが
+   * 捨てられないまま次の全曲が積まれる（round1 P1）
+   */
+  const flushPendingPlaybackCleanup = useCallback(() => {
+    const pending = playbackCleanupRef.current;
+    if (pending === null) return;
+    clearTimeout(pending.timer);
+    playbackCleanupRef.current = null;
+    pending.engine.stopAll();
   }, []);
 
   useEffect(() => {
@@ -1544,16 +1577,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     try {
       if (playbackState === 'paused' && explicitStartMeasure == null) {
         // paused からの再生は「最初から」ではなく AudioContext の resume。
-        await getAudioEngine().resume();
+        const resumedEngine = getAudioEngine();
+        await resumedEngine.resume();
         setPlaybackState('playing');
         const remainingMs = Math.max(0, remainingPlaybackMsRef.current);
         clearPlaybackTimer();
         playbackStartedAtRef.current = Date.now();
         playbackTimerRef.current = setTimeout(() => {
-          playbackTimerRef.current = null;
-          resetPlaybackClock();
-          setPlaybackState('stopped');
-          setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+          finishPlaybackNaturally(resumedEngine);
         }, remainingMs);
         // 一時停止で消えた分の予約を、経過ミリ秒（全体 - 残り）から先だけ組み直す。
         const elapsedMs = Math.max(0, totalPlaybackMsRef.current - remainingMs);
@@ -1561,6 +1592,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         return;
       }
 
+      // 前回の再生の後始末（余韻後の stopAll）がまだなら、いま済ませて旧世代を捨てる（#605）
+      flushPendingPlaybackCleanup();
       // 連続再生時に前回の停止予約が残ると UI だけ先に stopped に戻るため、先に解除する
       clearPlaybackTimer();
       resetPlaybackClock();
@@ -1886,16 +1919,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           }
           schedulePositionTimeline(scheduleElapsedMs);
           playbackTimerRef.current = setTimeout(() => {
-            setPlaybackState('stopped');
-            setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
-            playbackTimerRef.current = null;
-            resetPlaybackClock();
-            // 余韻（最大 0.6 秒）が鳴り切ってから後始末する（#605）。停止ボタンと同じ
-            // stopAll なので、次の再生の音源先読みもここで走る
-            playbackCleanupTimerRef.current = setTimeout(() => {
-              playbackCleanupTimerRef.current = null;
-              getAudioEngine().stopAll();
-            }, PLAYBACK_END_CLEANUP_DELAY_MS);
+            finishPlaybackNaturally(audioEngine);
           }, remainingPlaybackMsRef.current);
         } else {
           // 譜面が空でも「再生ボタンが壊れていないか」は確認できるように、
@@ -1911,10 +1935,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           positionTimelineRef.current = [];
           playbackStartedAtRef.current = Date.now();
           playbackTimerRef.current = setTimeout(() => {
-            setPlaybackState('stopped');
-            setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
-            playbackTimerRef.current = null;
-            resetPlaybackClock();
+            finishPlaybackNaturally(audioEngine);
           }, duration * 1000);
         }
 
@@ -1935,7 +1956,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, playbackSpeedPercent, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
+  }, [clearPlaybackTimer, currentInstrument, finishPlaybackNaturally, flushPendingPlaybackCleanup, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, playbackSpeedPercent, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {

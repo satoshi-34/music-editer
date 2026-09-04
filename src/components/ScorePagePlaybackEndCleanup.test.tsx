@@ -50,9 +50,9 @@ window.ResizeObserver = ResizeObserverMock;
 
 const MOUNT_HEAVY_TIMEOUT_MS = 60000;
 
-function seedWork() {
-  // 16分音符1つ（既定テンポ 120 なら 125ms）。短くして実時間の待ちを抑える
-  const events = [{ dur: '16' as const, isRest: false, keys: ['c/5'] }];
+function seedWork(dur: '16' | '4' = '16') {
+  // 既定は 16分音符1つ（既定テンポ 120 なら 125ms）。短くして実時間の待ちを抑える
+  const events = [{ dur, isRest: false, keys: ['c/5'] }];
   const data = createSavedScoreData(
     { title: '後始末配線', subtitle: '', lyricist: '', composer: '', arranger: '' },
     [{ partId: 'melody', clef: 'treble', measures: [{ events, voices: [{ id: 'voice-1', events }] }] }],
@@ -96,15 +96,40 @@ describe('自然終了後の後始末（Issue #605）', () => {
     // 余韻（最大 0.6 秒 + 余裕）の後に後始末
     await waitFor(() => { expect(stopAllMock).toHaveBeenCalledTimes(1); }, { timeout: 5000 });
 
-    // 2回目: 鳴り終わった直後（後始末の前）に次の再生を始める
+    // 2回目: 鳴り終わった直後（後始末の前）に次の再生を始める → 旧世代の後始末は
+    // 取り消すのではなく**その場で**済ませる（round1 P1: 取り消すだけだと 1.1 秒以内の
+    // 繰り返し再生で旧ノードが捨てられない）
     stopAllMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: '再生' }));
     await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(2); });
     await waitFor(() => { expect(screen.getByRole('button', { name: '再生' })).toBeTruthy(); }, { timeout: 5000 });
     fireEvent.click(screen.getByRole('button', { name: '再生' }));
     await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(3); });
-    // 3回目の再生中に、2回目の後始末が走って止めてしまわない
+    expect(stopAllMock).toHaveBeenCalledTimes(1);
+    // 3回目が鳴り終わり、その後始末（1回）だけが走る。2回目の後始末が遅れて重なって
+    // 2回にならない（後始末の期限 1.1 秒を越えて待つ）
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再生' })).toBeTruthy(); }, { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    expect(stopAllMock).toHaveBeenCalledTimes(2);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('一時停止→再開→鳴り終わり でも余韻の後に stopAll が呼ばれる（round1 P2）', async () => {
+    // 4分音符（500ms）にして、鳴っている途中で一時停止できるようにする
+    seedWork('4');
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(1); });
     await new Promise((resolve) => setTimeout(resolve, 100));
+    fireEvent.click(screen.getByRole('button', { name: '一時停止' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再開' })).toBeTruthy(); });
     expect(stopAllMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '再開' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再生' })).toBeTruthy(); }, { timeout: 5000 });
+    // 鳴り終わった直後は余韻の途中なので後始末はまだ
+    expect(stopAllMock).not.toHaveBeenCalled();
+    await waitFor(() => { expect(stopAllMock).toHaveBeenCalledTimes(1); }, { timeout: 5000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

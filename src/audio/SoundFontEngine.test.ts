@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SCHEDULE_LEAD_SECONDS } from './scheduleLead';
 import { resetAllDevTuning, setDevTuningOverride } from '../utils/devTuning';
+import { resolveReleaseTailSeconds } from './releaseTail';
 
 import { InstrumentType } from './SoundSource';
 import {
@@ -138,9 +139,14 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
         }],
       }], 120);
       expect(play).toHaveBeenCalledTimes(3);
-      // C4 は本来 2.0 秒（小節末まで）だが、3音目 E4 が始まる 1.0 秒で止まる
+      // C4 は本来 2.0 秒（小節末まで）だが、3音目 E4 が始まる 1.0 秒で**余韻ごと**終わる
+      // （round1 P1: 余韻を含めないと詰めた音の尻尾と新しい音が重なって上限を超える）。
+      // 鳴らす長さは 1.0 − 余韻
+      const tail = resolveReleaseTailSeconds(
+        (engine as unknown as { soundProfile: { release: number } }).soundProfile.release, 2.0);
+      expect(tail).toBeGreaterThan(0);
       const c4 = play.mock.calls.find((call) => call[0] === 'C4')!;
-      expect(c4[2].duration).toBeCloseTo(internals(engine).buildPlaybackOptions(1.0).duration, 5);
+      expect(c4[2].duration).toBeCloseTo(internals(engine).buildPlaybackOptions(1.0 - tail).duration, 5);
       const d4 = play.mock.calls.find((call) => call[0] === 'D4')!;
       expect(d4[2].duration).toBeCloseTo(internals(engine).buildPlaybackOptions(1.5).duration, 5);
     } finally {
