@@ -167,7 +167,10 @@ import {
   type SoundEngineMode
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
-import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
+import {
+  buildDynamicVelocityTimeline,
+  collectDynamicMarkings,
+} from '../utils/dynamicMarkingUtils';
 import { resolveScoreMeasureBpms } from '../utils/tempoPlaybackUtils';
 import {
   DEFAULT_PLAYBACK_SPEED_PERCENT,
@@ -179,7 +182,9 @@ import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId,
 import type { ClefType } from './clefUtils';
 import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
-import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated,
+  getEventDurationBeats,
+} from '../utils/voiceMeasureUtils';
 import { buildTiePlaybackEventKey, buildTiePlaybackPlan } from '../utils/tiePlaybackUtils';
 import { buildPedalPlaybackEventKey, buildPedalPlaybackPlans } from '../utils/pedalPlaybackUtils';
 import { expandTrillForPlayback } from '../utils/ornamentPlaybackUtils';
@@ -1766,6 +1771,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             })),
             getMeasureBeats(scoreTimeSignature),
           );
+          // 強弱は「拍位置で引く1本の時系列」で解決する（#626）。大譜表（ピアノ）では
+          // 強弱記号は両手に共通なので両パートの記号を1本にまとめ、四重奏・編成譜は
+          // 各パートに自分の強弱が書かれるのでパートごとに作る。どの声部の音も自分の拍位置で引く
+          const measureBeatsForDynamics = getMeasureBeats(scoreTimeSignature);
+          // 記号の出どころ: ピアノは両手ぶん（片手の p が両手に効く）。他はパートごと。
+          // 絶対拍の時計は各パート自身（エンジン・ハイライト・タイ・ペダルと同じ前進幅）
+          const sharedDynamicMarkings = scoreType === 'piano'
+            ? collectDynamicMarkings(expandedPerPart.map((items) => items.map((item) => item.measure)))
+            : null;
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
@@ -1779,7 +1793,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 小節番号をオフセットして引く。切った後で解決し直すと、開始位置より前で
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
-            const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
+            const ownMeasuresForDynamics = expandedMeasuresFull.map((item) => item.measure);
+            const dynamicTimeline = buildDynamicVelocityTimeline(
+              sharedDynamicMarkings ?? collectDynamicMarkings([ownMeasuresForDynamics]),
+              ownMeasuresForDynamics,
+              measureBeatsForDynamics,
+            );
             // テンポ列はスコア共通（上で1回だけ解決済み・#458 round1 P1）。
             // 強弱と同じく**切る前の全列**で解決してあるので、途中再生でも
             // 開始位置より前の標語・テンポ指定を引き継いだ状態で効く
@@ -1804,15 +1823,27 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 bpm: measureBpms[expandedMeasureIndex + startExpandedIndex],
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
-                events: flattenMeasureForPlayback(item.measure).flatMap((event, eventIndex) => {
+                events: (() => {
+                  const flattened = flattenMeasureForPlayback(item.measure);
+                  // 単声部の小節は startBeat を持たない（エンジンが順に積む合図）ので、
+                  // 前向きの累積で各音の拍位置を1回だけ出す（round3 P3）
+                  const beatStarts: number[] = [];
+                  let cursor = 0;
+                  flattened.forEach((entry) => {
+                    beatStarts.push(entry.startBeat ?? cursor);
+                    if (entry.startBeat == null) cursor += getEventDurationBeats(entry);
+                  });
+                  return flattened.flatMap((event, flatIndex) => {
                   // アーティキュレーション（スタッカート＝短く、アクセント＝強く 等）を
                   // 音の長さ・音量の倍率として取り出す。
                   const articulation = getArticulationPlaybackEffect(event);
                   // 強弱記号から決まった基準ベロシティ（未設定なら既定 0.5）に
                   // アクセント等の倍率を掛けて、最後に 0..1 へ収める。
-                  const baseVelocity = dynamicVelocities.get(
-                    buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, eventIndex)
-                  ) ?? 0.5;
+                  // 基準音量は「この音の拍位置」で時系列から引く（#626: どの声部でも同じ扱い）。
+                  // 絶対拍は時系列側の positionOf（各小節の実際の前進幅の累積）で求める
+                  const baseVelocity = dynamicTimeline.velocityAt(
+                    dynamicTimeline.positionOf(expandedMeasureIndex + startExpandedIndex, beatStarts[flatIndex])
+                  );
                   // タイの計画は「声部の中での位置」で引く。
                   // 畳んだあとの eventIndex は複数声部で並べ替えられているため使えない。
                   const tieAdjustment = tiePlan.get(
@@ -1864,7 +1895,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   // タイを展開しないのと同じ理由で、割られた音にはペダル延長を付けない
                   if (expandedEvents.length <= 1) return expandedEvents;
                   return expandedEvents.map((subEvent) => ({ ...subEvent, pedalExtendBeatsByKey: undefined }));
-                })
+                  });
+                })(),
               }))
             };
           });
