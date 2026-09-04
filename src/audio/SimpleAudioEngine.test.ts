@@ -2,7 +2,14 @@
 // SimpleAudioEngine の停止処理テスト
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetAllDevTuning, setDevTuningOverride } from '../utils/devTuning';
 import { SimpleAudioEngine } from './SimpleAudioEngine';
+
+// 先読み窓（#622）は既定 4 秒。ここの多くのテストは「playParts が返った時点で譜面全体が
+// 予約済み」を前提にしているので、窓を最大まで広げて従来の検証をそのまま保つ。
+// 窓の進行そのものは scheduleWindow.test.ts と各エンジンの #622 テストで固定している
+beforeEach(() => { setDevTuningOverride('audio.lookahead', 12); });
+afterEach(() => { resetAllDevTuning(); });
 
 describe('SimpleAudioEngine', () => {
   let engine: SimpleAudioEngine;
@@ -113,8 +120,8 @@ describe('SimpleAudioEngine', () => {
     ], 120);
 
     // 第5引数は尻尾の長さ（同時発音数の上限で詰められた音用・#605）。ここでは値を問わない
-    expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(1, expect.any(Number), expect.any(Number), expect.any(Number), 0.22, expect.any(Number));
-    expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(2, expect.any(Number), expect.any(Number), expect.any(Number), 0.74, expect.any(Number));
+    expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(1, expect.any(Number), expect.any(Number), expect.any(Number), 0.22, expect.any(Number), expect.anything());
+    expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(2, expect.any(Number), expect.any(Number), expect.any(Number), 0.74, expect.any(Number), expect.anything());
   });
 
   describe('タイで結ばれた音の再生（Issue #445）', () => {

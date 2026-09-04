@@ -5,6 +5,7 @@
 //   2. 音の開始時刻は一切変わらない（テンポ・リズムは不変）
 //   3. 「音色」の余韻スライダー（profile.release）で尻尾の長さが変わる
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { resetAllDevTuning, setDevTuningOverride } from '../utils/devTuning';
 
 import { SimpleAudioEngine } from './SimpleAudioEngine';
 import { SoundFontEngine, SoundFontLoadAbortedError } from './SoundFontEngine';
@@ -39,6 +40,12 @@ type MockGainParam = {
   linearRampToValueAtTime: ReturnType<typeof vi.fn>;
   exponentialRampToValueAtTime: ReturnType<typeof vi.fn>;
 };
+
+// 先読み窓（#622）は既定 4 秒。ここの多くのテストは「playParts が返った時点で譜面全体が
+// 予約済み」を前提にしているので、窓を最大まで広げて従来の検証をそのまま保つ。
+// 窓の進行そのものは scheduleWindow.test.ts と各エンジンの #622 テストで固定している
+beforeEach(() => { setDevTuningOverride('audio.lookahead', 12); });
+afterEach(() => { resetAllDevTuning(); });
 
 describe('内蔵音源（SimpleAudioEngine）のリリースの尻尾（Issue #525）', () => {
   let createdOscillators: MockOscillator[];

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { SCHEDULE_LEAD_SECONDS } from './scheduleLead';
 import { resetAllDevTuning, setDevTuningOverride } from '../utils/devTuning';
 
@@ -8,6 +8,12 @@ import {
   mapInstrumentTypeToSoundFontName,
   resolveSoundFontName
 } from './SoundFontEngine';
+
+// 先読み窓（#622）は既定 4 秒。ここの多くのテストは「playParts が返った時点で譜面全体が
+// 予約済み」を前提にしているので、窓を最大まで広げて従来の検証をそのまま保つ。
+// 窓の進行そのものは scheduleWindow.test.ts と各エンジンの #622 テストで固定している
+beforeEach(() => { setDevTuningOverride('audio.lookahead', 12); });
+afterEach(() => { resetAllDevTuning(); vi.useRealTimers(); });
 
 describe('SoundFontEngine helpers', () => {
   it('楽器タイプを SoundFont の既知名へ変換できる', () => {
@@ -174,6 +180,37 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
       expect(d4[2].release).toBeGreaterThan(0);
     } finally {
       resetAllDevTuning();
+    }
+  });
+
+  it('長い譜面は先読み窓ぶんだけ先に予約し、時計が進むと続きを予約する。stopAll で止まる（Issue #622）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+    const context = (engine as unknown as { context: { currentTime: number } }).context;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // 60BPM の全音符 = 4秒 × 10小節 = 40秒。先読み窓（既定 4 秒）なら先頭は 1〜2 音だけ
+      await engine.playParts([{
+        measures: Array.from({ length: 10 }, (_, i) => ({
+          measureBeats: 4,
+          events: [{ dur: '1', isRest: false, keys: [['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5', 'D5', 'E5'][i]] }],
+        })),
+      }], 60);
+      const firstBatch = play.mock.calls.length;
+      expect(firstBatch).toBeGreaterThan(0);
+      expect(firstBatch).toBeLessThan(10);
+      // 時計を進めてタイマーを発火させると続きが予約される
+      context.currentTime = 10;
+      await vi.advanceTimersByTimeAsync(600);
+      expect(play.mock.calls.length).toBeGreaterThan(firstBatch);
+      expect(play.mock.calls.length).toBeLessThan(10);
+      // stopAll 以後は時計が進んでも予約しない
+      const atStop = play.mock.calls.length;
+      engine.stopAll();
+      context.currentTime = 100;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(play.mock.calls.length).toBe(atStop);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

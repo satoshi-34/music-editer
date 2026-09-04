@@ -30,6 +30,12 @@ function measuresWithPedal(pedalExtendBeatsByKey?: Record<string, number>): Play
   ];
 }
 
+// 先読み窓（#622）は既定 4 秒。ここの多くのテストは「playParts が返った時点で譜面全体が
+// 予約済み」を前提にしているので、窓を最大まで広げて従来の検証をそのまま保つ。
+// 窓の進行そのものは scheduleWindow.test.ts と各エンジンの #622 テストで固定している
+beforeEach(() => { setDevTuningOverride('audio.lookahead', 12); });
+afterEach(() => { resetAllDevTuning(); vi.useRealTimers(); });
+
 describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）', () => {
   type MockOscillator = { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> };
   let createdOscillators: MockOscillator[];
@@ -168,6 +174,34 @@ describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）'
       expect(stoppedAt - startedAt).toBeCloseTo(1.001, 4);
     } finally {
       resetAllDevTuning();
+    }
+  });
+
+  it('内蔵側も、長い譜面は先読み窓ぶんだけ先にオシレーターを作り、stopAll で止まる（Issue #622）', async () => {
+    // initialize は内部で実時間の待ちを使うので、偽タイマーは予約の直前から
+    const engine = new SimpleAudioEngine();
+    await engine.initialize();
+    createdOscillators.length = 0;
+    const context = (engine as unknown as { context: { currentTime: number } }).context;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // 60BPM の全音符 × 10小節 = 40秒
+      await engine.playParts([{ measures: Array.from({ length: 10 }, () => ({
+        measureBeats: 4, bpm: 60, events: [{ dur: '1', isRest: false, keys: ['c/4'] }],
+      })) }], 60);
+      await vi.advanceTimersByTimeAsync(0);
+      const perNote = createdOscillators.length; // 先頭の窓（1〜2音）ぶん
+      expect(perNote).toBeGreaterThan(0);
+      context.currentTime = 10;
+      await vi.advanceTimersByTimeAsync(600);
+      expect(createdOscillators.length).toBeGreaterThan(perNote);
+      const atStop = createdOscillators.length;
+      engine.stopAll();
+      context.currentTime = 100;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(createdOscillators.length).toBe(atStop);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

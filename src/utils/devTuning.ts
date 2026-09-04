@@ -83,6 +83,17 @@ export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
     unit: '音',
     constName: 'MAX_POLYPHONY',
   },
+  {
+    key: 'audio.lookahead',
+    label: '再生の先読み窓',
+    description: '何秒先までノードを先に作るか（#622）。短いほど軽いが、タブが裏に回ったときの余裕が減る',
+    defaultValue: 4,
+    min: 1,
+    max: 12,
+    step: 0.5,
+    unit: 's',
+    constName: 'LOOKAHEAD_SECONDS',
+  },
 ];
 
 function parseOverrides(raw: string | null): Record<string, number> {
