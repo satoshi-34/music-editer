@@ -106,6 +106,13 @@ describe('SimpleAudioEngine', () => {
     expect(mockContext.resume).toHaveBeenCalled();
   });
 
+  it('先頭の窓の予約が失敗したら playParts が失敗として伝える（#622 round1 P2: 無音で再生状態へ進まない）', async () => {
+    await engine.initialize();
+    vi.spyOn(engine as any, 'playNoteAtTime').mockRejectedValue(new Error('予約失敗'));
+    await expect(engine.playParts([{ measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }] }], 120))
+      .rejects.toThrow('予約失敗');
+  });
+
   it('playScore で event.velocity を発音時の強さに反映できる', async () => {
     await engine.initialize();
     const playNoteAtTimeSpy = vi.spyOn(engine as any, 'playNoteAtTime').mockResolvedValue(undefined);

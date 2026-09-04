@@ -588,6 +588,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
     this.activeScheduler?.stop();
     // 先頭の窓の予約（playNoteAtTime の非同期部分）は待ってから返す（呼び出し側は
     // 「playParts が返ったら先頭の音は予約済み」を前提にしている）。以後の窓は待たない
+    // 先頭の窓の失敗は playParts の失敗として呼び出し側（ScorePage のフォールバック）へ伝える。
+    // 後続の窓の失敗は伝える先が無いので、警告を出して窓を止める（無音で進み続けない）
     let firstWindow: Promise<void>[] | null = [];
     const scheduler = createWindowedScheduler({
       voices: playable,
@@ -596,16 +598,27 @@ export class SimpleAudioEngine implements PlaybackEngine {
         const occupancy = voice.endTime - voice.startTime;
         const duration = Math.min(voice.duration, occupancy);
         const tail = Math.max(0, occupancy - duration);
-        const scheduled = this.playNoteAtTime(voice.frequency, duration, voice.startTime, voice.velocity, tail, voice.instrument)
-          .catch((error) => console.warn('[SimpleAudioEngine] 窓内の予約に失敗:', error));
-        firstWindow?.push(scheduled);
+        const scheduled = this.playNoteAtTime(voice.frequency, duration, voice.startTime, voice.velocity, tail, voice.instrument);
+        if (firstWindow) {
+          firstWindow.push(scheduled);
+        } else {
+          scheduled.catch((error) => {
+            console.warn('[SimpleAudioEngine] 後続の窓の予約に失敗したため以後の予約を止めます:', error);
+            scheduler.stop();
+          });
+        }
       },
     });
     this.activeScheduler = scheduler;
     scheduler.start();
     const pending = firstWindow;
     firstWindow = null;
-    await Promise.all(pending);
+    try {
+      await Promise.all(pending);
+    } catch (error) {
+      scheduler.stop();
+      throw error;
+    }
     console.log('[SimpleAudioEngine] 同時発音:',
       `ボイス ${voices.length} / 最大同時 ${limited.peakBefore} / 詰め ${limited.stolen}（うち無音化 ${limited.dropped}）/ 上限 ${maxPolyphony()}`,
       `/ 先読み窓 ${lookaheadSeconds()}s で先頭 ${scheduler.stats().scheduled} 音を予約`);

@@ -183,18 +183,25 @@ describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）'
     await engine.initialize();
     createdOscillators.length = 0;
     const context = (engine as unknown as { context: { currentTime: number } }).context;
+    // 1音あたりのオシレーター本数を先に測る
+    await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [{ dur: '1', isRest: false, keys: ['c/4'] }] }] }], 60);
+    const perNote = createdOscillators.length;
+    expect(perNote).toBeGreaterThan(0);
+    engine.stopAll();
+    createdOscillators.length = 0;
+    // このテストだけは本番既定（4 秒）で数える（ファイル全体の 12 秒上書きを外す）
+    resetAllDevTuning();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
-      // 60BPM の全音符 × 10小節 = 40秒
+      // 60BPM の全音符 × 10小節 = 40秒（開始 0,4,...36）。窓 [0,4) なら先頭は1音
       await engine.playParts([{ measures: Array.from({ length: 10 }, () => ({
         measureBeats: 4, bpm: 60, events: [{ dur: '1', isRest: false, keys: ['c/4'] }],
       })) }], 60);
-      await vi.advanceTimersByTimeAsync(0);
-      const perNote = createdOscillators.length; // 先頭の窓（1〜2音）ぶん
-      expect(perNote).toBeGreaterThan(0);
+      expect(createdOscillators.length).toBe(perNote * 1);
       context.currentTime = 10;
       await vi.advanceTimersByTimeAsync(600);
-      expect(createdOscillators.length).toBeGreaterThan(perNote);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(createdOscillators.length).toBe(perNote * 4);
       const atStop = createdOscillators.length;
       engine.stopAll();
       context.currentTime = 100;

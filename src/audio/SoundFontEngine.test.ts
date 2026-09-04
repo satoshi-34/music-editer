@@ -186,23 +186,23 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
   it('長い譜面は先読み窓ぶんだけ先に予約し、時計が進むと続きを予約する。stopAll で止まる（Issue #622）', async () => {
     const { engine, play } = await setupEngineWithFakePlayer();
     const context = (engine as unknown as { context: { currentTime: number } }).context;
+    // このテストだけは本番既定（4 秒）で数える（ファイル全体の 12 秒上書きを外す）
+    resetAllDevTuning();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
-      // 60BPM の全音符 = 4秒 × 10小節 = 40秒。先読み窓（既定 4 秒）なら先頭は 1〜2 音だけ
+      // 60BPM の全音符 = 4秒 × 10小節 = 40秒。開始時刻は 0,4,8,...36。
+      // 先読み窓 4 秒（半開区間 [0,4)）なら先頭は t=0 の1音だけ
       await engine.playParts([{
         measures: Array.from({ length: 10 }, (_, i) => ({
           measureBeats: 4,
           events: [{ dur: '1', isRest: false, keys: [['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5', 'D5', 'E5'][i]] }],
         })),
       }], 60);
-      const firstBatch = play.mock.calls.length;
-      expect(firstBatch).toBeGreaterThan(0);
-      expect(firstBatch).toBeLessThan(10);
-      // 時計を進めてタイマーを発火させると続きが予約される
+      expect(play.mock.calls.length).toBe(1);
+      // 時計を 10 秒へ進めてタイマーを発火させると [.., 14) の 4・8・12 秒の音が足される
       context.currentTime = 10;
       await vi.advanceTimersByTimeAsync(600);
-      expect(play.mock.calls.length).toBeGreaterThan(firstBatch);
-      expect(play.mock.calls.length).toBeLessThan(10);
+      expect(play.mock.calls.length).toBe(4);
       // stopAll 以後は時計が進んでも予約しない
       const atStop = play.mock.calls.length;
       engine.stopAll();
