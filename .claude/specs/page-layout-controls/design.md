@@ -882,3 +882,70 @@ ScorePage も `selectedSystem` を見ているので、判断が二重になる�
   - コンソールエラーなし（※ dev サーバーが編集前のモジュールを配信していた間だけ
     React の "Maximum update depth exceeded" が2回出た。`curl` で配信内容と worktree の
     食い違いを確認 → コンテナ再起動後は上記の一連の操作でも1件も出ない）
+
+### round1 の差し戻しへの対応（2026-09-04・PR #614）
+
+#### P1: 角のドラッグがスナップバックする（ドラッグの主を ScorePage へ移した）
+
+**問題**: 角の◢を引くと、値が掴む前へ跳ね戻り、積んだ Undo 履歴まで取り消されていた。
+
+原因は「◢がドラッグの状態を自分で持っていた」こと。音符の大きさは譜面全体に効くので、
+値が変わると段割り・ページ割りが計算し直される。◢は「ページ → 段（`SystemSelectFrame`）」と
+辿った先に描いているため、掴んでいた段が別のページの子へ移ると、React から見ると**親が
+変わる＝いったんアンマウント**になる。`useValueDragSession` にはアンマウントを
+「ドラッグ中止」とみなす後始末（#523 round2 P2 で入れたもの）があるので、これが
+引いている最中に走って値を戻し、履歴も巻き戻していた。
+
+**修正**: ドラッグの主（`useValueDragSession` の呼び出し）を、動的なページツリーより上の
+**`ScorePage` 直下に1つだけ**置いた。`ScorePage` はドラッグ中にアンマウントされないので、
+◢が消えて描き直されても値・履歴・window のイベントはそのまま生き続ける。
+各段の◢（`NotationSizeDragHandle`）は掴み口（`onPointerDown`）を借りるだけの
+**状態を持たない見た目の部品**になった。値の決め方（%への読み替え・5%刻み・斜めの平均）は
+両者から使うので `src/utils/notationSizeDrag.ts` へ出してある。
+
+副作用として、ドラッグ中の吹き出しも◢の中では出せなくなった（◢と一緒に消えてしまい、
+いちばん値が動いている最中に「いま何%か」が見えない）。`ScorePage` がページの繰り返しの外へ
+1つだけ、`position: fixed` でポインタの横に出す形へ移した。そのため
+`useValueDragSession` の `valueHint` に画面座標（`clientX` / `clientY`）を足している
+（掴みしろの中へ絶対配置する段の境界帯は、従来どおり `offsetXPx` を使う）。
+
+なお境界帯（#523）の側は掴みしろが消える経路が無いため、フックの後始末はそのまま残している
+（Esc で段の選択が解けたときに「なかったこと」にする本来の役割は維持）。
+
+**受入テスト**: `ScorePageLayoutAdjustMode.test.tsx`
+「角を引いて段がページをまたいでも、値が跳ね戻らない（round1 P1）」。16小節で
+1ページ目の後方の段を掴み、200% まで引いて**その段が次のページへ移ったこと**
+（`.print-page` をまたいだこと＝◢が描き直されたこと）を確かめたうえで、値が留まること・
+離しても確定値のままであること・「元に戻す」1回で掴む前へ戻ることを固定した。
+修正前のコードに対して実際に落ちることを確認済み（負のテスト）。
+
+#### P2: 段を選んだまま他タブへ戻ると◢が残る
+
+表示条件が「選択中の段」だけだったため、レイアウトタブで段を選んでから音符・休符タブへ
+戻ると◢だけが譜面に残り、「他のタブでは譜面を書いている間の見た目を変えない」という
+約束を破っていた。条件を `isSelected && isLayoutAdjustMode` にした（選択そのものは
+残してよい。従来どおり選択中の段にはパネルが出る）。
+受入テストはタブ切替の配線（レイアウト → 音符・休符 → レイアウト）で固定した。
+
+#### P3: `renderPanel` の中の `findIndex` が段数の2乗になる
+
+`renderSystemPanel` は段の数だけ呼ばれるので、その中で `visiblePlannedRanges` を
+`findIndex` で走査すると全体で段数の2乗に比例する。先頭小節 → 段の通し番号の `Map` を
+`useMemo`（依存は `visiblePlannedRanges`）で作り、引き当てを定数時間にした。
+
+#### 却下された指摘（記録のみ）
+
+「印刷プレビューに調整UIが残る」は #539 で確定した規則（実印刷のみ非表示・プレビューは
+段調整のため表示が仕様。REGRESSION Y 節）と整合しており、修正しない。
+
+#### 影響範囲（追加分）
+
+- `src/utils/notationSizeDrag.ts`（新規）: 角のドラッグの値の決め方と吹き出しの文言
+- `src/hooks/useValueDragSession.ts`: `valueHint` に画面座標を追加。掴みしろが
+  画面から外れたあとは `offsetXPx` を据え置く
+- `src/components/NotationSizeDragHandle.tsx`: 状態を持たない見た目の部品へ
+- `src/components/ScorePage.tsx`: 角のドラッグセッションを直下に1つ保持／
+  吹き出しをページの外へ1つだけ描画／◢の表示条件に `isLayoutAdjustMode`／
+  `systemIndexByStartMeasure` の索引
+- `src/App.css`: `.notation-size-drag-value` を `position: fixed` へ（`@media print` でも非表示）
+- テスト: `ScorePageLayoutAdjustMode.test.tsx` に2件追加（計10件）

@@ -61,8 +61,23 @@ type Options = {
 
 type ValueHint = {
   value: number;
-  /** 掴みしろの左端からの相対位置（レイアウトpx）。吹き出しをカーソルの近くへ置くのに使う */
+  /**
+   * 掴みしろの左端からの相対位置（レイアウトpx）。吹き出しを掴みしろの中へ
+   * 絶対配置で置く呼び出し側（段の境界帯）が使う。
+   * 掴みしろが画面から消えたあと（下記 clientX/clientY の説明を参照）は
+   * 直前の値のまま据え置くので、吹き出しが左端へ飛ぶことはない。
+   */
   offsetXPx: number;
+  /**
+   * ポインタの画面座標（clientX/clientY）。掴みしろの中ではなく画面へ直に
+   * （position: fixed で）吹き出しを出す呼び出し側が使う。
+   *
+   * なぜ2種類あるか: 角のリサイズハンドル（#571）は値を変えると段割りが変わり、
+   * 掴んでいたハンドル要素そのものが消えることがある。消えた要素を基準にすると
+   * 吹き出しの置き場所が決まらないので、画面座標で置けるようにしてある。
+   */
+  clientX: number;
+  clientY: number;
 };
 
 export function useValueDragSession({
@@ -143,9 +158,16 @@ export function useValueDragSession({
         callbacksRef.current.onDragMove(nextValue);
       }
       // 吹き出しはカーソルの近くに出す。掴みしろは譜面と一緒に動くので、
-      // 掴みしろの左端からの相対位置（レイアウトpx）に直してから置く
-      const handleLeft = session.handle.getBoundingClientRect().left;
-      setValueHint({ value: nextValue, offsetXPx: (e.clientX - handleLeft) / session.scale });
+      // 掴みしろの左端からの相対位置（レイアウトpx）に直してから置く。
+      // ただし掴みしろが画面から外された（isConnected === false）あとは
+      // getBoundingClientRect が 0 を返し、吹き出しが画面の左端へ飛んでしまうので、
+      // そのときは直前の相対位置を据え置く（画面座標を使う呼び出し側には影響しない）
+      setValueHint((prev) => {
+        const offsetXPx = session.handle.isConnected
+          ? (e.clientX - session.handle.getBoundingClientRect().left) / session.scale
+          : prev?.offsetXPx ?? 0;
+        return { value: nextValue, offsetXPx, clientX: e.clientX, clientY: e.clientY };
+      });
     };
     const handlePointerUp = (e: PointerEvent) => {
       const session = sessionRef.current;

@@ -52,9 +52,9 @@ function sparseMeasure(): MeasureData {
   return { events: [{ dur: '1', isRest: false, keys: ['c/5'] }] };
 }
 
-function seedWork() {
+function seedWork(measureCount: number = MEASURE_COUNT) {
   const parts: PartData[] = [
-    { partId: 'melody', clef: 'treble' as const, measures: Array.from({ length: MEASURE_COUNT }, sparseMeasure) },
+    { partId: 'melody', clef: 'treble' as const, measures: Array.from({ length: measureCount }, sparseMeasure) },
   ];
   const data = createSavedScoreData(
     { title: '整えるモードテスト', subtitle: '', lyricist: '', composer: '', arranger: '' },
@@ -70,8 +70,8 @@ function seedWork() {
   setLastOpenedWorkId(created.data.id);
 }
 
-async function renderScore() {
-  seedWork();
+async function renderScore(measureCount: number = MEASURE_COUNT) {
+  seedWork(measureCount);
   render(<ScorePage />);
   await waitFor(() => {
     expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
@@ -97,6 +97,12 @@ function frameMarginTop(startMeasure: number): string {
 /** 「音符の大きさ」スライダーのいまの値（%） */
 function notationSizePercent(): number {
   return Number((screen.getByLabelText('音符の大きさ') as HTMLInputElement).value);
+}
+
+/** その先頭小節で始まる段が、いま何ページ目に描かれているか（0始まり・無ければ -1） */
+function pageIndexOfSystem(startMeasure: number): number {
+  return Array.from(document.querySelectorAll('.print-page'))
+    .findIndex((page) => page.querySelector(`[data-testid="system-frame-${startMeasure}"]`) !== null);
 }
 
 /** 主ポインタの左ボタンで掴む（#536 の規約どおり isPrimary / button / pointerId をそろえる） */
@@ -221,13 +227,15 @@ describe('ScorePage: レイアウトタブ＝整えるモード（Issue #571）'
     await waitFor(() => {
       expect(notationSizePercent()).toBe(before + 20);
     });
-    // 吹き出しは「（全体）」を必ず出す（この段だけと誤解させないため・運用者裁定）
-    const hint = screen.getByTestId(`notation-size-drag-value-${target}`);
+    // 吹き出しは「（全体）」を必ず出す（この段だけと誤解させないため・運用者裁定）。
+    // 置き場所は◢の中ではなく画面（ScorePage が1つだけ出す）。◢は段割りの変化で
+    // 消えることがあり、中に置くといちばん値が動いている最中に見えなくなるため
+    const hint = screen.getByTestId('notation-size-drag-value');
     expect(hint.textContent).toBe(`音符の大きさ（全体）: ${before + 20}%`);
 
     fireEvent.pointerUp(window, { pointerId: 1, clientX: 450, clientY: 350 });
     expect(notationSizePercent()).toBe(before + 20);
-    expect(screen.queryByTestId(`notation-size-drag-value-${target}`)).toBeNull();
+    expect(screen.queryByTestId('notation-size-drag-value')).toBeNull();
 
     // Undo はドラッグ全体で1件（#523 の規約に準拠）
     fireEvent.click(screen.getByTitle(/元に戻す/));
@@ -255,6 +263,83 @@ describe('ScorePage: レイアウトタブ＝整えるモード（Issue #571）'
     fireEvent.click(screen.getByTitle(/元に戻す/));
     await waitFor(() => {
       expect(notationSizePercent()).toBe(before);
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('角を引いて段がページをまたいでも、値が跳ね戻らない（round1 P1）', async () => {
+    // 音符の大きさを変えると段割り・ページ割りが計算し直され、掴んでいた段が
+    // 別のページの子へ移る。React から見ると親が変わる＝いったんアンマウントなので、
+    // ドラッグの状態を◢側に持たせていた初版では、そこで「ドラッグ中止」と解釈されて
+    // 値が掴む前へ跳ね戻り、積んだ Undo 履歴まで取り消されていた。
+    // いまはドラッグの主が ScorePage 側に1つだけあるので、◢の出入りに左右されない。
+    await renderScore(16);
+    openTab('レイアウト');
+    const starts = systemStartMeasures();
+    // 1ページ目の最後のほうの段を掴む（大きくすると後ろのページへ押し出される段）
+    const target = starts[4];
+    const pageBefore = pageIndexOfSystem(target);
+    expect(pageBefore).toBe(0);
+    const before = notationSizePercent();
+
+    fireEvent.click(await screen.findByTestId(`system-select-surface-${target}`));
+    const corner = await screen.findByTestId(`notation-size-drag-${target}`);
+
+    // 外へ 250px + 250px = +100%（上限 200% でクランプされる）
+    grab(corner as HTMLElement, 400, 300);
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 650, clientY: 550 });
+
+    // 掴んだ段が別のページへ移った（＝◢の要素はいったん消えて描き直された）
+    await waitFor(() => {
+      expect(pageIndexOfSystem(target)).toBeGreaterThan(pageBefore);
+    });
+    // それでも値は引いたところに留まっている（初版はここで before へ戻っていた）
+    expect(notationSizePercent()).toBe(200);
+
+    // 離すまで引き続けられる（◢が描き直されたあとの pointermove も効く）。
+    // 少し戻す向きに動かすと、上限に張り付いたままではなく値が追従する
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 500, clientY: 400 });
+    await waitFor(() => {
+      expect(notationSizePercent()).toBeLessThan(200);
+    });
+    expect(notationSizePercent()).toBeGreaterThan(before);
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 500, clientY: 400 });
+
+    // 離したあとも確定値のまま（スナップバックしない）
+    const settled = notationSizePercent();
+    expect(settled).toBeGreaterThan(before);
+    await waitFor(() => {
+      expect(notationSizePercent()).toBe(settled);
+    });
+
+    // 履歴も取り消されていない。ドラッグ全体で1件なので「元に戻す」1回で掴む前へ戻る
+    fireEvent.click(screen.getByTitle(/元に戻す/));
+    await waitFor(() => {
+      expect(notationSizePercent()).toBe(before);
+    });
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('段を選んだまま音符・休符タブへ戻ると角ハンドルも消える（round1 P2）', async () => {
+    // 「他のタブでは譜面を書いている間の見た目を変えない」という約束は◢にも及ぶ。
+    // 初版は表示条件が「選択中の段」だけだったので、選択を残したままタブを戻すと
+    // ◢だけが譜面に残っていた。
+    await renderScore();
+    openTab('レイアウト');
+    const target = systemStartMeasures()[0];
+    fireEvent.click(await screen.findByTestId(`system-select-surface-${target}`));
+    expect(await screen.findByTestId(`notation-size-drag-${target}`)).toBeTruthy();
+
+    openTab('音符・休符');
+    await waitFor(() => {
+      expect(document.querySelector('.notation-size-drag-handle')).toBeNull();
+    });
+    // 選択そのものは残っていてよい（パネルは従来どおり選択中の段に出る）。
+    // 消すのは整えるモード用の掴みしろだけ
+    expect(document.querySelector('.system-select-surface')).toBeNull();
+
+    // レイアウトタブへ戻せばまた出る（消しっぱなしにはしない）
+    openTab('レイアウト');
+    await waitFor(() => {
+      expect(document.querySelector('.notation-size-drag-handle')).toBeTruthy();
     });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 

@@ -53,6 +53,12 @@ import { parseMusicXmlWithDefaults } from '../utils/musicXmlImport';
 import { SoundFontLoadAbortedError } from '../audio/SoundFontEngine';
 import { downloadMidi } from '../utils/midiExport';
 import { useTempoStorage } from '../hooks/useTempoStorage';
+import { useValueDragSession } from '../hooks/useValueDragSession';
+import {
+  formatNotationSizeHint,
+  measureNotationSizeDragDistance,
+  resolveNotationSizeMultiplier,
+} from '../utils/notationSizeDrag';
 import type { PlaybackEngine } from '../audio/PlaybackEngine';
 import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
@@ -4896,6 +4902,35 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setHistoryVersion(v => v + 1);
   }, []);
 
+  // 段の右下角の◢（音符の大きさ・Issue #571）のドラッグの主。
+  //
+  // **ここ（ScorePage 直下）に1つだけ置くのが肝**（round1 P1 の修正）。音符の大きさを
+  // 変えると段割り・ページ割りが計算し直され、掴んでいた段が別のページへ移ったり、
+  // その先頭小節で始まる段そのものが消えたりする。◢ はページ→段と辿った先に描いて
+  // いるので、そうなると◢の要素はアンマウントされる。ドラッグの状態を◢側に持たせて
+  // いた初版では、そのアンマウントが「ドラッグ中止」と解釈されて値が掴む前へ跳ね戻り、
+  // 積んだ Undo 履歴まで取り消されていた（＝引いた瞬間にスナップバックする）。
+  // ScorePage はドラッグ中にアンマウントされないので、ここへ移せば◢の出入りに
+  // 左右されずに最後まで引き続けられる。
+  //
+  // ドラッグ中の値・履歴・window のイベントはすべてこのセッションが持ち、
+  // 各段の◢は掴み口（handlePointerDown）を借りるだけの見た目の部品になっている。
+  const {
+    grabbing: isNotationSizeDragging,
+    valueHint: notationSizeHint,
+    handlePointerDown: handleNotationSizeDragStart,
+  } = useValueDragSession({
+    baseValue: notationSizeMultiplier,
+    min: NOTATION_SIZE_MULTIPLIER_MIN,
+    max: NOTATION_SIZE_MULTIPLIER_MAX,
+    resolveValue: resolveNotationSizeMultiplier,
+    measureDistancePx: measureNotationSizeDragDistance,
+    frameSelector: '.system-select-frame',
+    onDragStart: beginLayoutValueDrag,
+    onDragMove: applyNotationSizeMultiplier,
+    onDragEnd: endLayoutValueDrag,
+  });
+
   // 指定した段一覧（systemRanges）ぶんの「段ごとの間隔の追加オフセット(px)」配列を作る。
   // 各 Staff コンポーネント（SingleStaff等）の systemGapOverridesPx props にそのまま渡し、
   // 該当する段の直前へ marginTop として反映させる。上書きが無い段は 0（従来どおり）。
@@ -5074,6 +5109,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
   }, [selectedSystem, visiblePlannedRanges]);
 
+  // 先頭小節 → 段の通し番号（0始まり）の索引。renderSystemPanel は段の数だけ呼ばれるので、
+  // その中で findIndex を回すと段数の2乗に比例した走査になる（round1 P3）。
+  // 段割りが変わったときだけ作り直せば、1段あたりの引き当ては定数時間で済む。
+  const systemIndexByStartMeasure = useMemo(() => {
+    const index = new Map<number, number>();
+    visiblePlannedRanges.forEach((range, i) => index.set(range.start, i));
+    return index;
+  }, [visiblePlannedRanges]);
+
   // 選択中の段の横に出すパネル。各 Staff コンポーネントは段のラッパー
   // （SystemSelectFrame）の中でこれを呼ぶだけで、パネルの中身は知らなくてよい。
   const renderSystemPanel = useCallback((startMeasure: number) => {
@@ -5081,7 +5125,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // 選択中の段（従来どおり）に加えて、整えるモード中はすべての段へ掴みしろを出す。
     // どちらでもない段には何も描かない（譜面上に常設物を残さない・#482 の原則）
     if (!isSelected && !isLayoutAdjustMode) return null;
-    const systemIndex = visiblePlannedRanges.findIndex((range) => range.start === startMeasure);
+    const systemIndex = systemIndexByStartMeasure.get(startMeasure) ?? -1;
     const range = visiblePlannedRanges[systemIndex];
     if (!range) return null;
     const rowGapPx = systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0;
@@ -5127,19 +5171,25 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         onGrab={() => selectSystemForLayout(range.start)}
       />
       )}
-      {isSelected && (
+      {isSelected && isLayoutAdjustMode && (
       /* 選択中の段の右下角のリサイズハンドル（◢・Issue #571 の運用者裁定）。
          変わるのは譜面全体の「音符の大きさ」で、掴んだ段だけではない。
-         誤解を残さないよう、ドラッグ中の吹き出しに「（全体）」を必ず出す。 */
+         誤解を残さないよう、ドラッグ中の吹き出しに「（全体）」を必ず出す。
+
+         出すのは整えるモード（レイアウトタブ）の間だけ（round1 P2）。この条件が
+         無いと、段を選んだまま音符・休符タブへ戻ったときに◢だけが譜面に残り、
+         「他のタブでは譜面を書いている間の見た目を変えない」という約束を破る。
+
+         ドラッグの状態（値・履歴・window のイベント）は ScorePage が1つだけ持つ
+         セッションの側にあるので、この要素が段割りの変化で消えても引き続けられる。 */
       <NotationSizeDragHandle
         startMeasure={range.start}
         systemLabel={systemLabel}
         multiplier={notationSizeMultiplier}
         minMultiplier={NOTATION_SIZE_MULTIPLIER_MIN}
         maxMultiplier={NOTATION_SIZE_MULTIPLIER_MAX}
-        onDragStart={beginLayoutValueDrag}
-        onDragMove={applyNotationSizeMultiplier}
-        onDragEnd={endLayoutValueDrag}
+        grabbing={isNotationSizeDragging}
+        onPointerDown={handleNotationSizeDragStart}
       />
       )}
       {isSelected && (
@@ -5173,8 +5223,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     selectedSystem, visiblePlannedRanges, systemRowGapOverrides, contentMeasureCount,
     adjustSystemMeasureOverride, adjustSystemRowGapOverride, closeSystemSelection, notifyScoreEdit,
     beginLayoutValueDrag, endLayoutValueDrag, setSystemRowGapOverrideValue,
-    pageSystemLayoutOptions, getPageSystemOffset,
-    isLayoutAdjustMode, selectSystemForLayout, notationSizeMultiplier, applyNotationSizeMultiplier,
+    pageSystemLayoutOptions, getPageSystemOffset, systemIndexByStartMeasure,
+    isLayoutAdjustMode, selectSystemForLayout, notationSizeMultiplier,
+    isNotationSizeDragging, handleNotationSizeDragStart,
   ]);
 
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
@@ -7781,6 +7832,25 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           ))}
         </div>
       </div>
+
+      {/* 角の◢をドラッグしている間だけ出す「いま何%か」の吹き出し（Issue #571）。
+          **（全体）を必ず添える**のがこの表示の肝で、角に置いてあることから
+          「掴んだ段だけが変わる」と誤解されるのを防ぐ（運用者裁定 2026-09-02）。
+
+          ページの繰り返しの**外**に1つだけ置き、position: fixed でポインタの
+          すぐ横へ出す。◢ の中に置いていた初版では、大きさを変えた拍子に段割りが
+          変わって◢ごと消えると吹き出しも一緒に消えてしまい、いちばん値が動いている
+          最中に「いま何%か」が見えなくなっていた（round1 P1 の副作用）。
+          カーソルの下敷きにならないよう当たり判定は持たせない（App.css）。 */}
+      {notationSizeHint && (
+        <span
+          className="notation-size-drag-value"
+          data-testid="notation-size-drag-value"
+          style={{ left: `${notationSizeHint.clientX + 14}px`, top: `${notationSizeHint.clientY + 14}px` }}
+        >
+          {formatNotationSizeHint(notationSizeHint.value)}
+        </span>
+      )}
 
       {/* 再生中の位置を譜面上に縦帯で示す（Issue #268）。
           自分では何も描画しない（return null）コンポーネントで、`.score-area` を

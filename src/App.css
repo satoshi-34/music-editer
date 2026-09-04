@@ -2049,11 +2049,13 @@ button.ghost.active:hover:not(:disabled) {
 .notation-size-drag-handle--grabbing {
   background: linear-gradient(135deg, transparent 55%, rgba(59, 130, 246, 0.95) 55%);
 }
-/* ドラッグ中に出す現在値。カーソルの下敷きにならないよう当たり判定は持たせない */
+/* ドラッグ中に出す現在値。ScorePage が画面へ直に1つだけ出す（Issue #571 round1 P1）。
+   ◢ の中に置くと、大きさを変えた拍子に段割りが変わって◢ごと消えたときに
+   吹き出しまで一緒に消えてしまうため、譜面ではなく画面（position: fixed）を基準にする。
+   カーソルの下敷きにならないよう当たり判定は持たせない */
 .notation-size-drag-value {
-  position: absolute;
-  bottom: 20px;
-  z-index: 31;
+  position: fixed;
+  z-index: 1000;
   padding: 2px 6px;
   font-size: 11px;
   white-space: nowrap;
@@ -2428,6 +2430,9 @@ button.ghost.active:hover:not(:disabled) {
      音符の大きさの角ハンドル（吹き出しごと）を紙から消す */
   .system-select-surface { display: none !important; }
   .notation-size-drag-handle { display: none !important; }
+  /* ドラッグ中の吹き出しは譜面の外（画面基準の position: fixed）に出るので、
+     紙面のクリップに頼らず明示的に消す（Issue #571 round1 P1 で置き場所を移した） */
+  .notation-size-drag-value { display: none !important; }
   /* outline の実体は内側ラッパー側に付く（round1 の当たり判定修正で移動）ため、
      両方をリセットする（外側だけだと選択したまま印刷すると青枠が残る。Codex round2 P2） */
   .system-select-frame--selected { outline: none !important; }
