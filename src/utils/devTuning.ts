@@ -60,6 +60,29 @@ export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
     unit: 'px',
     constName: 'MEASURE_SIDE_PADDING',
   },
+  {
+    key: 'audio.scheduleLead',
+    label: '再生の先読みリード',
+    description: '再生開始時刻に足す余裕（秒）。小さすぎると頭の音が欠ける・和音がプツる（#610）。大きいと押してから鳴るまでが遅れる',
+    defaultValue: 0.1,
+    min: 0,
+    max: 0.5,
+    step: 0.01,
+    unit: 's',
+    constName: 'SCHEDULE_LEAD_SECONDS',
+  },
+  {
+    key: 'audio.maxPolyphony',
+    label: '同時発音数の上限',
+    description: '同時に鳴らすボイスの上限。超えると最も古い音から止まる（#605）。小さいとペダルの響きが薄くなり、大きいと長い曲でプツプツ途切れる',
+    defaultValue: 48,
+    // 下限 1 は「効き方を耳で確かめる」ため（1 にすると単旋律以外は必ず詰まる）
+    min: 1,
+    max: 128,
+    step: 1,
+    unit: '音',
+    constName: 'MAX_POLYPHONY',
+  },
 ];
 
 function parseOverrides(raw: string | null): Record<string, number> {

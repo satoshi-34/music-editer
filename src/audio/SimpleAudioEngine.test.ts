@@ -112,8 +112,9 @@ describe('SimpleAudioEngine', () => {
       }
     ], 120);
 
-    expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(1, expect.any(Number), expect.any(Number), expect.any(Number), 0.22);
-    expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(2, expect.any(Number), expect.any(Number), expect.any(Number), 0.74);
+    // 第5引数は尻尾の長さ（同時発音数の上限で詰められた音用・#605）。ここでは値を問わない
+    expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(1, expect.any(Number), expect.any(Number), expect.any(Number), 0.22, expect.any(Number));
+    expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(2, expect.any(Number), expect.any(Number), expect.any(Number), 0.74, expect.any(Number));
   });
 
   describe('タイで結ばれた音の再生（Issue #445）', () => {

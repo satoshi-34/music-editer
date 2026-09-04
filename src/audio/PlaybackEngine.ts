@@ -85,10 +85,21 @@ export interface PlaybackPart {
  * ScorePage から見た「再生エンジンの共通窓口」。
  * 内蔵音源でも SoundFont でも、画面側は同じメソッド名で扱えるようにする。
  */
+/**
+ * playParts が返す「実音の起点」。エンジンが `currentTime + 先読みリード` を確定した瞬間の
+ * Date.now()（#610 round2 P1）。SoundFont は音源ロードを待ってから起点を決めるため、
+ * 画面側が呼び出し時刻を起点にすると、ロード時間ぶんハイライトと終了が実音より早まる。
+ * 画面側はこの値からの経過時間だけを「予約に使った実時間」として差し引く。
+ */
+export interface PlaybackScheduleInfo {
+  scheduledAtMs: number;
+}
+
 export interface PlaybackEngine {
   initialize(): Promise<void>;
   playNoteByName(note: string, duration?: number): Promise<void>;
-  playParts(parts: PlaybackPart[], bpm?: number): Promise<void>;
+  /** 戻り値は実音の起点（PlaybackScheduleInfo）。テストの偽エンジンは省略してよい */
+  playParts(parts: PlaybackPart[], bpm?: number): Promise<PlaybackScheduleInfo | void>;
   suspend(): Promise<void>;
   resume(): Promise<void>;
   stopAll(): void;
