@@ -9,7 +9,7 @@
 // 初学者向けにコメントを多めに入れています。
 // ─────────────────────────────────────────────────────────────
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 import type { AccidentalToolKind, MicrotoneType } from '../utils/noteKeyUtils';
 import type { EndingNumber, RepeatMarkerKind } from '../utils/repeatMarkerUtils';
@@ -21,6 +21,7 @@ import { symbolDefToPreviewSvg } from '../utils/customSymbolUtils';
 import { type TextElementKind, textElementLabel } from '../utils/textElementUtils';
 import { TUPLET_KINDS, type TupletKind } from '../utils/tupletUtils';
 import ToolVariantButton, { type ToolVariantOption } from './ToolVariantButton';
+import { carryInputAccidental } from '../utils/inputAccidentalTool';
 // 日本語ラベルは Issue #405 段2 で utils/editorContextLabels.ts へ移した。
 // A1 案の文脈バーが同じ言葉を出すため、正本を1か所にまとめてある（コピーを増やさない）。
 import {
@@ -251,6 +252,8 @@ export default function Palette({
   customSymbolDefs = [],
   onOpenSymbolEditor,
   crossStaffAvailable = false,
+  accidentalVariantKeys,
+  onAccidentalVariantKeyChange,
 }: {
   value: Tool;
   onChange: (t: Tool) => void;
@@ -264,13 +267,20 @@ export default function Palette({
    * 載せ替える相手の五線が無いので、ボタンをグレーアウトして理由を出す。
    */
   crossStaffAvailable?: boolean;
+  /**
+   * 臨時記号ボタン（♯▾・♭▾）の ▾ で最後に選んだ変種（family.id → 変種キー）。
+   * このパレットはタブを切り替えるとアンマウントされるため、選択の保持は
+   * 親（ScorePage）が持つ。ここに useState で持つとタブを離れた時点で
+   * 既定（♯・♭）へ戻ってしまう（#548 round1 P2）。
+   * 未指定なら各家族の先頭（＝既定の記号）を出す。
+   */
+  accidentalVariantKeys?: Record<string, string>;
+  onAccidentalVariantKeyChange?: (familyId: string, key: string) => void;
 }) {
-  // 臨時記号ボタン（♯▾・♭▾）が「いまどの変種を出しているか」を覚えておく（Issue #548 運用者裁定）。
-  // プルダウンで 𝄪 を選んだらボタンは 𝄪 のまま残る＝次に使うときも1クリックで出せる。
-  // ツール側（value）には選んだ記号そのものが乗るので、ここで覚えるのは見た目の担当だけ。
-  const [accidentalVariantKeys, setAccidentalVariantKeys] = useState<Record<string, string>>(() =>
-    Object.fromEntries(ACCIDENTAL_FAMILIES.map((family) => [family.id, accidentalVariantKey(family.variants[0])]))
-  );
+  // 臨時記号ボタン（♯▾・♭▾）が「いまどの変種を出しているか」は親（ScorePage）が覚えている。
+  // プルダウンで 𝄪 を選んだらボタンは 𝄪 のまま残る＝次に使うときも1クリックで出せる、を
+  // タブを離れても保つため（#548 運用者裁定・round1 P2）。
+  // ツール側（value）には選んだ記号そのものが乗るので、ここで扱うのは見た目の担当だけ。
 
   // 現在の選択状態を判定
   const selectActive = 'mode' in value && value.mode === 'select';
@@ -337,14 +347,11 @@ export default function Palette({
    * 音価ボタンを押したときに、ONにしてある臨時記号を引き継ぐ（Issue #548 受入ケース3）。
    * 統合前は音価ボタンがツールを丸ごと差し替えていたため、♯をONにしたまま8分に持ち替えると
    * 記号が黙って外れていた。統合後は「♯を持ったまま音価を変える」が主要な使い方になるので引き継ぐ。
-   * 休符ボタンには引き継がない（休符に臨時記号は付かないため）。
+   *
+   * 規則そのものは utils/inputAccidentalTool.ts に置いてある。数字キーの音価ショートカット
+   * （ScorePage 側）が同じ規則を必要とするので、実装を1本に寄せている（#548 round1 P2-4）。
    */
-  const carryAccidentalIntoDurationTool = (next: Tool): Tool => {
-    if (!('duration' in next) || next.isRest) return next;
-    if (!('duration' in value)) return next;
-    if (!value.accidental && !value.microtone) return next;
-    return { ...next, accidental: value.accidental, microtone: value.microtone };
-  };
+  const carryAccidentalIntoDurationTool = (next: Tool): Tool => carryInputAccidental(value, next);
 
   const ROW_STYLE: React.CSSProperties = { display: 'flex', gap: 3, flexWrap: 'wrap' as const };
 
@@ -502,7 +509,7 @@ export default function Palette({
               : inputMicrotone === variant.microtone);
             const currentKey = activeVariant
               ? accidentalVariantKey(activeVariant)
-              : accidentalVariantKeys[family.id] ?? accidentalVariantKey(family.variants[0]);
+              : accidentalVariantKeys?.[family.id] ?? accidentalVariantKey(family.variants[0]);
             const current = activeVariant
               ?? family.variants.find((v) => accidentalVariantKey(v) === currentKey)
               ?? family.variants[0];
@@ -525,7 +532,7 @@ export default function Palette({
                 onActivate={() => applyAccidentalVariant(active ? null : current)}
                 onSelectVariant={(key) => {
                   const picked = family.variants.find((v) => accidentalVariantKey(v) === key) ?? family.variants[0];
-                  setAccidentalVariantKeys((prev) => ({ ...prev, [family.id]: key }));
+                  onAccidentalVariantKeyChange?.(family.id, key);
                   // 選んだ時点で有効にする（「選んだのに一度押し直さないと使えない」を避ける）
                   applyAccidentalVariant(picked);
                 }}

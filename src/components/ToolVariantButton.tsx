@@ -13,9 +13,19 @@
 //   - 本体ボタンを押すと onActivate（親側でトグルON/OFFを決める）
 //   - ▾ を押すとメニューが開き、選ぶと onSelectVariant（親側で currentKey を更新して有効化する）
 //   - 変種が1つだけの options では ▾ を出さない（ナチュラルのように仲間がいない記号のため）
+//   - 「いま選んでいる変種」は親が持つ（この部品は state に持たない）。タブを切り替えると
+//     パレットごとアンマウントされるため、ここに置くと選択が消えるため（#569 round1 P2）
 // ─────────────────────────────────────────────────────────────
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  clampDropdownMenuLeft,
+  clampDropdownMenuTop,
+  estimateVariantMenuWidth,
+  VARIANT_MENU_ESTIMATED_HEIGHT_PX,
+  VARIANT_MENU_ITEM_GAP_PX,
+  VARIANT_MENU_PADDING_PX,
+} from '../utils/toolbarPlacement';
 
 /** プルダウンに並べる変種1つ分 */
 export interface ToolVariantOption {
@@ -53,8 +63,44 @@ export default function ToolVariantButton({
   symbolStyle?: React.CSSProperties;
 }) {
   const [open, setOpen] = useState(false);
+  // メニューは fixed で描くので、位置は「ボタンの実測位置」から毎回決める（下の updateMenuPos）
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const wrapperRef = useRef<HTMLSpanElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLSpanElement>(null);
   const current = options.find((option) => option.key === currentKey) ?? options[0];
+
+  // メニューの位置決め。`position: absolute` にすると、親の `.toolbar-panel`
+  // （`overflow-x: auto`。左＝縦配置では `overflow-x: hidden`）にメニューが切られて
+  // 項目の大半が見えなくなる。既存のリセットメニュー（App.css:448-452）と同じく
+  // 「fixed + ボタンの実測位置 + ビューポート内クランプ」で描く（#569 round1 P1）。
+  const updateMenuPos = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    // 開いた直後は実測できないので、まず個数からの見積もりで置き、描画後に実測で置き直す
+    const menuRect = menuRef.current?.getBoundingClientRect();
+    const menuWidth = menuRect?.width || estimateVariantMenuWidth(options.length);
+    const menuHeight = menuRect?.height || VARIANT_MENU_ESTIMATED_HEIGHT_PX;
+    setMenuPos({
+      top: clampDropdownMenuTop({
+        anchorBottom: rect.bottom,
+        viewportHeight: window.innerHeight,
+        // 既定値（420px）はリセットメニュー用の大きな値。この小さな1行メニューに使うと
+        // 画面下部のボタンから開いたときに不必要に上へ跳ね上がるため、自分の高さを渡す
+        menuMaxHeightPx: menuHeight,
+      }),
+      left: clampDropdownMenuLeft({
+        anchorLeft: rect.left,
+        menuWidthPx: menuWidth,
+        viewportWidth: window.innerWidth,
+      }),
+    });
+  }, [options.length]);
+
+  // 描画されたメニューの実寸で位置を確定させる（見積もりとの差を1フレームで吸収する）
+  useLayoutEffect(() => {
+    if (open) updateMenuPos();
+  }, [open, updateMenuPos]);
 
   // メニューは「外側をクリックしたら閉じる」のが普通の作法。
   // React の onBlur だけだと、メニューの外にある SVG（譜面）を押したときに
@@ -62,20 +108,44 @@ export default function ToolVariantButton({
   useEffect(() => {
     if (!open) return;
     const closeIfOutside = (e: MouseEvent) => {
-      if (!wrapperRef.current?.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      // fixed のメニューは wrapper の外（body 直下相当の位置）に描かれて見えるが、
+      // DOM 上は wrapper の子のままなので contains で判定できる
+      if (!wrapperRef.current?.contains(target)) setOpen(false);
     };
     document.addEventListener('mousedown', closeIfOutside);
     return () => document.removeEventListener('mousedown', closeIfOutside);
   }, [open]);
 
+  // 開いているあいだにツールバーがスクロール・リサイズするとボタンが動くので位置を測り直す。
+  // fixed は画面基準なので、追従させないとメニューだけが取り残される。
+  useEffect(() => {
+    if (!open) return;
+    const onMove = () => updateMenuPos();
+    window.addEventListener('resize', onMove);
+    // capture で受けるのは、スクロールするのが window ではなく `.toolbar-panel` 側だから
+    window.addEventListener('scroll', onMove, true);
+    return () => {
+      window.removeEventListener('resize', onMove);
+      window.removeEventListener('scroll', onMove, true);
+    };
+  }, [open, updateMenuPos]);
+
+  /** メニューを閉じて、キーボード操作の起点だった ▾ ボタンへフォーカスを戻す */
+  const closeAndRefocus = useCallback(() => {
+    setOpen(false);
+    // 戻さないと、閉じた瞬間にフォーカスが文書の先頭へ落ちてキーボード利用者が迷子になる
+    triggerRef.current?.focus();
+  }, []);
+
   return (
     <span
       ref={wrapperRef}
-      style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}
+      style={{ display: 'inline-flex', flexShrink: 0 }}
       onKeyDown={(e) => {
         // Escape で閉じられないと、キーボードだけで使う人がメニューから抜け出せない
         if (e.key === 'Escape' && open) {
-          setOpen(false);
+          closeAndRefocus();
           e.stopPropagation();
         }
       }}
@@ -98,11 +168,19 @@ export default function ToolVariantButton({
       </button>
       {options.length > 1 && (
         <button
+          ref={triggerRef}
           type="button"
-          onClick={() => setOpen((prev) => !prev)}
+          onClick={() => {
+            setOpen((prev) => {
+              // 開く前に位置を決めておく（レイアウト前の1フレームだけ左上に出るのを防ぐ）
+              if (!prev) updateMenuPos();
+              return !prev;
+            });
+          }}
           title={menuAriaLabel}
           aria-label={menuAriaLabel}
-          aria-haspopup="menu"
+          // aria-haspopup="menu" は付けない。中身は role="menu" ではなく
+          // 「並んだボタンの塊（group）」なので、名乗りと実体を一致させる（#569 round1 P2）
           aria-expanded={open}
           style={buttonStyle(false, {
             width: 14,
@@ -118,19 +196,20 @@ export default function ToolVariantButton({
       )}
       {open && (
         <span
+          ref={menuRef}
           // role="menu"/"menuitem" にすると項目がボタンとして探せなくなる（ARIA の role は
           // 暗黙の role を上書きするため）。並んだボタンの塊なので group で表す。
           role="group"
           aria-label={menuAriaLabel}
           style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            zIndex: 20,
+            position: 'fixed',
+            top: menuPos.top,
+            left: menuPos.left,
+            // リセットメニュー（z-index: 1001）と同じ土俵。ツールバーより手前に出す
+            zIndex: 1001,
             display: 'flex',
-            gap: 3,
-            padding: 4,
-            marginTop: 2,
+            gap: VARIANT_MENU_ITEM_GAP_PX,
+            padding: VARIANT_MENU_PADDING_PX / 2,
             background: '#fff',
             border: '1px solid #ccc',
             borderRadius: 6,
@@ -143,7 +222,7 @@ export default function ToolVariantButton({
               type="button"
               onClick={() => {
                 onSelectVariant(option.key);
-                setOpen(false);
+                closeAndRefocus();
               }}
               title={option.title}
               aria-label={option.ariaLabel}

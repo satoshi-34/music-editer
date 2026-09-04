@@ -10,6 +10,7 @@
 // ケース7（Undo 1回で戻る）・ケース9（既存データの回帰）は、既存の
 // `ScorePageInputAccidentalWiring.test.tsx` / `ScorePageDoubleAccidentalWiring.test.tsx` を
 // 統合後のラベル・クリック位置へ移行することで担保する（設計メモ §6 の移行表）。
+import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, fireEvent, waitFor, cleanup } from '@testing-library/react';
 
@@ -197,15 +198,44 @@ describe('#548 臨時記号パレットの統合（案D）の受入基準', () =
   });
 
   it('ケース14b: プルダウンで選んだ種別はボタンに残る（次からは1クリックで出せる）', () => {
-    const onChange = vi.fn();
-    const { container } = render(
-      <Palette value={{ duration: '4', isRest: false }} onChange={onChange} section="notes" />
-    );
+    // 選んだ変種の保持は親（ScorePage）の担当なので、ここでは同じ形の入れ物を用意する
+    // （round1 P2: パレット内の useState だとタブを離れた時点で消えるため引き上げた）。
+    function Harness() {
+      const [variantKeys, setVariantKeys] = React.useState<Record<string, string>>({});
+      return (
+        <Palette
+          value={{ duration: '4', isRest: false }}
+          onChange={() => {}}
+          section="notes"
+          accidentalVariantKeys={variantKeys}
+          onAccidentalVariantKeyChange={(familyId, key) =>
+            setVariantKeys((prev) => ({ ...prev, [familyId]: key }))}
+        />
+      );
+    }
+    const { container } = render(<Harness />);
     fireEvent.click(buttonByLabelPrefix(container, 'シャープ系の種類を選ぶ'));
     fireEvent.click(buttonByLabelPrefix(container, '臨時記号: ダブルシャープ'));
     // メニューは閉じるが、ボタン本体の名前が 𝄪 に変わっている＝次は1クリックで使える
     expect(container.querySelector('button[aria-label^="臨時記号: シャープ"]')).toBeNull();
     expect(container.querySelector('button[aria-label^="臨時記号: ダブルシャープ"]')).toBeTruthy();
+  });
+
+  it('round1 P2: 選んだ種別の保持は親が持つ（パレットを作り直しても親の値で復元される）', () => {
+    // タブを切り替えるとパレットはアンマウントされる。親（ScorePage）が値を持っていれば
+    // 戻ってきたときも 𝄪 のままで、1クリックで使える状態が保たれる。
+    const props = {
+      value: { duration: '4', isRest: false } as Tool,
+      onChange: () => {},
+      section: 'notes' as const,
+      accidentalVariantKeys: { sharp: 'accidental:doubleSharp' },
+      onAccidentalVariantKeyChange: () => {},
+    };
+    const { container, unmount } = render(<Palette {...props} />);
+    expect(container.querySelector('button[aria-label^="臨時記号: ダブルシャープ"]')).toBeTruthy();
+    unmount();
+    const remounted = render(<Palette {...props} />);
+    expect(remounted.container.querySelector('button[aria-label^="臨時記号: ダブルシャープ"]')).toBeTruthy();
   });
 
   // ── 譜面側（段1b で緑になる） ─────────────────────────────────
@@ -363,5 +393,33 @@ describe('#548 臨時記号パレットの統合（案D）の受入基準', () =
     const updated = onChange.mock.calls.at(-1)![0] as MeasureData[];
     expect(updated[0].events).toHaveLength(1);
     expect(updated[0].events[0].keys).toContain('f#/5');
+  });
+
+  it('round1 P2-2: 微分音付きの和音へ低い音を足しても、既存の微分音が別の音へ移らない', async () => {
+    // b/4 に ¼♯ が付いた和音（keys は1つ、microtones は keyIndex 0）。
+    // ここへ b/4 より低い d/4 を足すと keys の並べ替えで b/4 の位置が 0→1 へ動くので、
+    // microtones[].keyIndex を付け替えないと ¼♯ が足したばかりの d/4 へ移ってしまう。
+    const data: MeasureData[] = [{
+      events: [{
+        dur: '1', isRest: false, keys: ['b/4'],
+        microtones: [{ keyIndex: 0, type: 'quarterSharp' }],
+      }],
+    }];
+    // 足す側は記号なしの音価ツール（微分音を新たに乗せない＝既存の付け替えだけを見る）
+    const { svg, onChange } = renderCanvas(data, { duration: '4', isRest: false });
+
+    const hit = noteHit(svg, 0);
+    const noteLeft = parseFloat(hit.getAttribute('data-note-left')!);
+    const noteRight = parseFloat(hit.getAttribute('data-note-right')!);
+    // ライン4 = d/4（既存の b/4 = ライン2 より低い）
+    fireEvent.click(hit, { clientX: (noteLeft + noteRight) / 2, clientY: clickYForLine(hit, 4) });
+
+    await waitFor(() => { expect(onChange).toHaveBeenCalled(); });
+    const updated = onChange.mock.calls.at(-1)![0] as MeasureData[];
+    const event = updated[0].events[0];
+    expect(event.keys).toHaveLength(2);
+    // ¼♯ は「元から付いていた b/4」を指したままである
+    expect(event.microtones).toHaveLength(1);
+    expect(event.keys[event.microtones![0].keyIndex]).toBe('b/4');
   });
 });

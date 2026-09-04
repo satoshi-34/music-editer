@@ -29,6 +29,7 @@ import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
 import UiContextBar from './UiContextBar';
 import { resolveToolbarHeight } from '../utils/toolbarHeight';
+import { carryInputAccidental } from '../utils/inputAccidentalTool';
 import UiVariantBadge from './UiVariantBadge';
 import { useUiVariant } from '../hooks/useUiVariant';
 // タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
@@ -557,6 +558,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // A1/A3 の文脈バーを出すか。バーは譜面背景の左上に浮くのでツールバーの高さには影響しない
   const showUiContextBar = import.meta.env.DEV && (uiVariant === 'a1' || uiVariant === 'a3');
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
+  // 臨時記号ボタン（♯▾・♭▾）の ▾ で最後に選んだ変種（#548）。パレットはタブを切り替えると
+  // アンマウントされるので、選択が消えないようここ（タブ切替で消えない場所）で持つ。
+  // 作品データには保存しないため、リロードすると既定（♯・♭）へ戻る。
+  const [accidentalVariantKeys, setAccidentalVariantKeys] = useState<Record<string, string>>({});
+  const handleAccidentalVariantKeyChange = useCallback((familyId: string, key: string) => {
+    setAccidentalVariantKeys((prev) => ({ ...prev, [familyId]: key }));
+  }, []);
   // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
   // 1=声部2（下声・符幹下向き）。ピアノ譜以外では使わないが、
   // 楽譜種別を切り替えても迷わないように値自体は保持しておく。
@@ -3530,7 +3538,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       if (e.ctrlKey || e.metaKey) return;
       const next = DUR_KEYS[e.key];
       if (next) {
-        setTool(next);
+        // ♯をONにしたまま数字キーで音価を変えても記号を落とさない（#548 round1 P2-4）。
+        // マウス（パレットの音価ボタン）と同じ規則を utils から呼ぶ。入力方法で
+        // 挙動が食い違わないよう、引き継ぎのロジックは1本しか持たない。
+        setTool((prev) => carryInputAccidental(prev, next));
         e.preventDefault();
       }
       // R キー: 現在の音価で休符入力モードに切り替え
@@ -6066,6 +6077,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 value={tool}
                 onChange={handleToolChange}
                 section="notes"
+                accidentalVariantKeys={accidentalVariantKeys}
+                onAccidentalVariantKeyChange={handleAccidentalVariantKeyChange}
                 // 段またぎ表示（Issue #310・#317 でこのタブへ移動）はピアノ譜（右手・左手の2段）でのみ使える。
                 // パート譜表示中は相手の五線が画面に無いため、同じく無効にする。
                 crossStaffAvailable={scoreType === 'piano' && !isPartExtractionActive}

@@ -7351,7 +7351,17 @@ export default function PianoSystemCanvas({
                 const nextEv = applyToEvent(activeEvs[j], clickedKeyIndex);
                 updateHitEvent(j, (targetEv) => {
                   if(targetEv.isRest)return null;
-                  return applyToEvent(targetEv, findKeyIndexAtLine(targetEv.keys, snappedLine, k2l));
+                  // 行番号→鍵の引き直しは、当たり判定と同じ noteK2l を使う。段またぎの音符は
+                  // 隣の五線（別クレフ）に描かれているので、元パートの k2l で引くと別の行を指し、
+                  // 解決に失敗する（#548 round1 P2-1）。
+                  const reResolved = findKeyIndexAtLine(targetEv.keys, snappedLine, noteK2l);
+                  // 解決に失敗しても keyIndex を undefined にはしない。undefined は
+                  // applyAccidentalToEvent/applyMicrotoneToEvent では「和音全体へ付ける」の意味で、
+                  // #548 で廃止したはずの一括付与が段またぎ和音でだけ復活してしまう。
+                  // クリック時点で確定している clickedKeyIndex（同じ音を指す）へ落とす。
+                  const keyIndex = reResolved >= 0 ? reResolved : clickedKeyIndex;
+                  if (keyIndex < 0 || keyIndex >= targetEv.keys.length) return null;
+                  return applyToEvent(targetEv, keyIndex);
                 });
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex});
                 if (previewAccidentalOnApply) {
@@ -7737,7 +7747,21 @@ export default function PianoSystemCanvas({
                   // microtones[] は keyIndex で音を指すので、並べ替え後の位置（selectedKeyIndex）で付ける
                   const chordMicrotone = getInputMicrotone(tool);
                   const withChordKey = <T extends NoteEvent>(targetEv: T): T => {
-                    const merged = {...targetEv, keys:newKeys} as T;
+                    // 既に付いている微分音は「元の keys の位置」で音を指している。音を1つ足すと
+                    // 並べ替えで位置がずれるので、鍵の綴りを手がかりに新しい位置へ付け替える。
+                    // 付け替えないと、低い音を足したときに既存の ¼♯ が別の音へ移る（#548 round1 P2-2）。
+                    const remappedMicrotones = targetEv.microtones
+                      ?.map((microtone) => {
+                        const keyAtOldIndex = targetEv.keys[microtone.keyIndex];
+                        const nextIndex = keyAtOldIndex === undefined ? -1 : newKeys.indexOf(keyAtOldIndex);
+                        return nextIndex >= 0 ? { ...microtone, keyIndex: nextIndex } : null;
+                      })
+                      .filter((microtone): microtone is NonNullable<typeof microtone> => microtone !== null);
+                    const merged = {
+                      ...targetEv,
+                      keys:newKeys,
+                      ...(remappedMicrotones ? { microtones: remappedMicrotones } : {}),
+                    } as T;
                     return chordMicrotone ? applyMicrotoneToEvent(merged, chordMicrotone, selectedKeyIndex!) : merged;
                   };
                   playEvent = withChordKey(currentEv);
@@ -7825,7 +7849,20 @@ export default function PianoSystemCanvas({
                 // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
                 const noteVisualCenter=restBodyCenterX;
                 const noteAfterRest=lx>=noteVisualCenter;
-                const restReplacement=buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest,clefHere);
+                /**
+                 * 休符を音符へ置換・分割するとき、入力中の微分音（¼♯・¼♭）も一緒に乗せる（#548 round1 P2-3）。
+                 * 通常の ♯/♭/♮ は key の綴り（applyInputAccidentalToKey）へ既に入っているが、
+                 * 微分音は綴りではなく microtones[] で音を指すので、置換後のイベントへ別に付ける必要がある。
+                 * 付けないと「¼♯ を選んで休符を押すと、記号だけ黙って落ちた音符が置かれる」行き止まりになる。
+                 */
+                const withInputMicrotone = (events: NoteEvent[] | null): NoteEvent[] | null => {
+                  const restMicrotone = getInputMicrotone(tool);
+                  if (!events || !restMicrotone) return events;
+                  // 置換・分割で入る音符は単音（keys が1つ）なので、指す位置は 0 で固定できる。
+                  // 連符グループでの置換は「音符1つ＋休符 N-1 個」なので、休符はそのまま通す。
+                  return events.map((event) => event.isRest ? event : applyMicrotoneToEvent(event, restMicrotone, 0));
+                };
+                const restReplacement=withInputMicrotone(buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest,clefHere));
                 if(restReplacement){
                   // 休符クリックでは、同音価なら置換、より短い音価なら分割して差し込む。
                   // 音価ツール（音符側）を選んでいるあいだは 1 クリックで置換する（Issue #233）。
@@ -7841,7 +7878,7 @@ export default function PianoSystemCanvas({
                     fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
                     const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
                     if(!targetEv?.isRest)return prev;
-                    const latestReplacement=buildRestEditReplacement(targetEv,key,tool,noteAfterRest,clefHere);
+                    const latestReplacement=withInputMicrotone(buildRestEditReplacement(targetEv,key,tool,noteAfterRest,clefHere));
                     if(!latestReplacement)return prev;
                     next[absI]=withVoiceEventsUpdated(next[absI], hitVoice, (events)=>{
                       const copy=[...events];
