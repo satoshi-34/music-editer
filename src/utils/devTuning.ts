@@ -44,7 +44,7 @@ export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
     label: '段割りの圧縮率',
     description: 'VexFlow の理想間隔をどこまで詰めて最低幅とみなすか（#589）。小さいほど1段に多く入る',
     defaultValue: 0.64,
-    min: 0.4,
+    min: 0.2,
     max: 1,
     step: 0.01,
     constName: 'VEXFLOW_IDEAL_WIDTH_COMPRESSION',
