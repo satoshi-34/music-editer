@@ -133,8 +133,17 @@ export default function ToolVariantButton({
       // DOM 上は wrapper の子のままなので contains で判定できる
       if (!wrapperRef.current?.contains(target)) setOpen(false);
     };
+    // 部品の中で押して外で離すと、部品側の *UpCapture は来ない（イベントは離した要素で発火）。
+    // 立ちっぱなしだと次の null blur を取りこぼすので、window 側でも必ず下ろす
+    const releasePress = () => { pressingInsideRef.current = false; };
     document.addEventListener('mousedown', closeIfOutside);
-    return () => document.removeEventListener('mousedown', closeIfOutside);
+    window.addEventListener('pointerup', releasePress, true);
+    window.addEventListener('mouseup', releasePress, true);
+    return () => {
+      document.removeEventListener('mousedown', closeIfOutside);
+      window.removeEventListener('pointerup', releasePress, true);
+      window.removeEventListener('mouseup', releasePress, true);
+    };
   }, [open]);
 
   // 開いているあいだにツールバーがスクロール・リサイズするとボタンが動くので位置を測り直す。

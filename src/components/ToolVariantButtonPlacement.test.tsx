@@ -189,6 +189,19 @@ describe('ToolVariantButton のプルダウンの出し方（#569 round1）', ()
     expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeNull();
   });
 
+  it('部品の中で押して外で離した後の null blur は閉じる（押下フラグが立ちっぱなしにならない）', () => {
+    const { container, trigger } = renderButton();
+    fakeTriggerRect(trigger, { left: 20, bottom: 300 });
+    fireEvent.click(trigger);
+    const menu = openedMenu(container);
+    const item = within(menu).getByRole('button', { name: '5連符' });
+    fireEvent.mouseDown(item);
+    // 外（document.body）で離す: 部品の *UpCapture には来ない
+    fireEvent.mouseUp(document.body);
+    fireEvent.focusOut(trigger, { relatedTarget: null });
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeNull();
+  });
+
   it('▾ の名乗りと中身が食い違わない（aria-haspopup="menu" を付けない）', () => {
     const { container, trigger } = renderButton();
     expect(trigger.getAttribute('aria-haspopup')).toBeNull();
