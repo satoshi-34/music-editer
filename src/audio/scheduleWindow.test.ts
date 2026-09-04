@@ -75,6 +75,50 @@ describe('createWindowedScheduler', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('予約の同期例外で窓を止め、onError へ伝える（以後の窓は作らない）', () => {
+    let now = 0;
+    const errors: unknown[] = [];
+    const played: number[] = [];
+    const scheduler = createWindowedScheduler({
+      voices: [0, 1, 5, 6].map((t) => ({ startTime: t })),
+      now: () => now,
+      play: (v) => { if (v.startTime === 1) throw new Error('boom'); played.push(v.startTime); },
+      onError: (e) => errors.push(e),
+      lookaheadSeconds: 4,
+      tickMs: 500,
+    });
+    scheduler.start();
+    expect(played).toEqual([0]);
+    expect(errors.map((e) => (e as Error).message)).toEqual(['boom']);
+    expect(scheduler.stats().active).toBe(false);
+    now = 10;
+    vi.advanceTimersByTime(1000);
+    expect(played).toEqual([0]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('予約が返した Promise の拒否でも窓を止め、onError へ伝える', async () => {
+    let now = 0;
+    const errors: unknown[] = [];
+    const played: number[] = [];
+    const scheduler = createWindowedScheduler({
+      voices: [0, 5, 6].map((t) => ({ startTime: t })),
+      now: () => now,
+      play: async (v) => { played.push(v.startTime); if (v.startTime === 5) throw new Error('later'); },
+      onError: (e) => errors.push(e),
+      lookaheadSeconds: 4,
+      tickMs: 500,
+    });
+    scheduler.start();
+    now = 2;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(played).toEqual([0, 5]);
+    expect(errors.map((e) => (e as Error).message)).toEqual(['later']);
+    now = 10;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(played).toEqual([0, 5]);
+  });
+
   it('入力が時刻順でなくても（右手→左手の順）開始時刻順に予約する', () => {
     const { scheduler, played } = setup([3, 0, 1]);
     scheduler.start();

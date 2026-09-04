@@ -228,6 +228,7 @@ import {
   type ScoreEditNoticeDetail,
   describeAudioEngineRestarted,
   describeAudioStillSilent,
+  describePlaybackAbortedBySchedulingError,
 } from '../utils/scoreEditorNotices';
 import {
   claimStorageLocationNotice,
@@ -1020,6 +1021,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 参照を捨てないため、自然終了のたびに世代交代（stopAll）で解放しないと、全曲を
   // 繰り返し聴くほどノードが積み上がる（運用者QA: 繰り返し再生で無音化したタブ）
   const playbackCleanupRef = useRef<{ timer: ReturnType<typeof setTimeout>; engine: PlaybackEngine } | null>(null);
+  // 先読み窓（#622）の後続の予約失敗の購読解除。再生ごとに張り替え、停止・終了・アンマウントで外す
+  const schedulingFailureUnsubscribeRef = useRef<(() => void) | null>(null);
   // 一時停止から再開するため、「いつ再生を始めたか」を覚えておく。
   const playbackStartedAtRef = useRef<number | null>(null);
   // 一時停止時点で「あと何ミリ秒残っているか」を覚えておく。
@@ -1171,6 +1174,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   }, []);
 
   const clearPlaybackTimer = useCallback(() => {
+    // 前の再生の失敗通知を受け続けない（新しい再生を止めてしまう）
+    schedulingFailureUnsubscribeRef.current?.();
+    schedulingFailureUnsubscribeRef.current = null;
     if (playbackTimerRef.current !== null) {
       // 再生終了予約は「最後に 1 つだけ」が正しい。
       // 古い予約を残したままにすると、次の再生中に前の予約が発火して
@@ -1210,6 +1216,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * 音源方式を切り替えたとき新しいエンジンの音色プレビューを止めてしまう）
    */
   const finishPlaybackNaturally = useCallback((engine: PlaybackEngine) => {
+    schedulingFailureUnsubscribeRef.current?.();
+    schedulingFailureUnsubscribeRef.current = null;
     setPlaybackState('stopped');
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     playbackTimerRef.current = null;
@@ -1907,6 +1915,16 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           ) + scheduleLeadSeconds();
           setPlaybackState('playing');
           clearPlaybackTimer();
+          // 先読み窓（#622）の後続の予約が失敗したら、無音のまま「再生中」を残さず止めて知らせる
+          schedulingFailureUnsubscribeRef.current = audioEngine.onSchedulingFailure?.((error) => {
+            console.error('[ScorePage] 再生途中の予約失敗により停止します:', error);
+            clearPlaybackTimer();
+            audioEngine.stopAll();
+            setPlaybackState('stopped');
+            setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+            resetPlaybackClock();
+            notifyScoreEdit(describePlaybackAbortedBySchedulingError());
+          }) ?? null;
           // 残り時間・終了タイマー・タイムラインの予約はすべて「予約に使った実時間」を
           // 差し引いた値にする。残りを引いたぶん、時計の起点は「今」（round2 P2:
           // 起点まで過去にすると一時停止でもう一度同じ時間を引いてしまう）

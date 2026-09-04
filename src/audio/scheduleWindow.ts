@@ -58,8 +58,14 @@ export function createWindowedScheduler<T extends TimedVoice>(options: {
   voices: readonly T[];
   /** 現在の AudioContext.currentTime */
   now: () => number;
-  /** 窓内の音を1つ予約する */
-  play: (voice: T) => void;
+  /** 窓内の音を1つ予約する。Promise を返してもよい（非同期の予約失敗も拾う） */
+  play: (voice: T) => void | Promise<void>;
+  /**
+   * 予約に失敗したとき（同期例外・Promise の拒否のどちらも）。呼ぶ前に窓は止めてある。
+   * 先頭の窓の失敗は呼び出し側が playParts の失敗として受け取り、後続の窓の失敗は
+   * ここからエンジン経由で画面へ伝える（#622 round2 P2: 無音のまま「再生中」を残さない）
+   */
+  onError?: (error: unknown) => void;
   lookaheadSeconds?: number;
   tickMs?: number;
 }): WindowedScheduler {
@@ -73,10 +79,32 @@ export function createWindowedScheduler<T extends TimedVoice>(options: {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let active = false;
 
+  const fail = (error: unknown) => {
+    if (!active) return;
+    stop();
+    options.onError?.(error);
+  };
   const advance = () => {
     const { due, nextCursor } = takeDueVoices(sorted, cursor, options.now() + lookahead);
     cursor = nextCursor;
-    due.forEach(options.play);
+    for (const voice of due) {
+      if (!active) return;
+      try {
+        const result = options.play(voice);
+        if (result && typeof (result as Promise<void>).then === 'function') {
+          (result as Promise<void>).catch(fail);
+        }
+      } catch (error) {
+        fail(error);
+      }
+    }
+  };
+  const stop = () => {
+    active = false;
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
   };
   const tick = () => {
     timer = null;
@@ -96,13 +124,7 @@ export function createWindowedScheduler<T extends TimedVoice>(options: {
       if (cursor < sorted.length) timer = setTimeout(tick, tickMs);
       else active = false;
     },
-    stop() {
-      active = false;
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
-      }
-    },
+    stop,
     stats() {
       return { scheduled: cursor, total: sorted.length, active };
     },

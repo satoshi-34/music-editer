@@ -148,6 +148,20 @@ export class SoundFontEngine implements PlaybackEngine {
   private readonly playerLoading = new Map<string, Promise<SoundFontPlayer>>();
   /** 進行中の先読み窓（#622）。stopAll で止める */
   private activeScheduler: WindowedScheduler | null = null;
+  private readonly schedulingFailureListeners = new Set<(error: unknown) => void>();
+
+  onSchedulingFailure(listener: (error: unknown) => void): () => void {
+    this.schedulingFailureListeners.add(listener);
+    return () => { this.schedulingFailureListeners.delete(listener); };
+  }
+
+  /** 後続の窓の予約失敗を画面へ伝える（#622 round2 P2） */
+  private notifySchedulingFailure(error: unknown): void {
+    this.activeScheduler = null;
+    this.schedulingFailureListeners.forEach((listener) => {
+      try { listener(error); } catch (listenerError) { console.warn('[PlaybackEngine] 失敗通知の受け手で例外:', listenerError); }
+    });
+  }
   // すべての player の出力をこの GainNode 経由で destination へ流す。
   // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
   private masterGainNode: GainNode | null = null;
@@ -352,6 +366,10 @@ export class SoundFontEngine implements PlaybackEngine {
         const duration = Math.min(voice.duration, occupancy);
         const release = Math.max(0, occupancy - duration);
         voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity, release));
+      },
+      onError: (error) => {
+        console.warn('[SoundFontEngine] 窓の予約に失敗したため以後の予約を止めます:', error);
+        this.notifySchedulingFailure(error);
       },
     });
     this.activeScheduler = scheduler;

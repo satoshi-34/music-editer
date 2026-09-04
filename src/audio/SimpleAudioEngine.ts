@@ -65,6 +65,20 @@ interface SimpleInstrumentConfig {
 export class SimpleAudioEngine implements PlaybackEngine {
   /** 進行中の先読み窓（#622）。stopAll で止める */
   private activeScheduler: WindowedScheduler | null = null;
+  private readonly schedulingFailureListeners = new Set<(error: unknown) => void>();
+
+  onSchedulingFailure(listener: (error: unknown) => void): () => void {
+    this.schedulingFailureListeners.add(listener);
+    return () => { this.schedulingFailureListeners.delete(listener); };
+  }
+
+  /** 後続の窓の予約失敗を画面へ伝える（#622 round2 P2） */
+  private notifySchedulingFailure(error: unknown): void {
+    this.activeScheduler = null;
+    this.schedulingFailureListeners.forEach((listener) => {
+      try { listener(error); } catch (listenerError) { console.warn('[PlaybackEngine] 失敗通知の受け手で例外:', listenerError); }
+    });
+  }
   private context: AudioContext | null = null;
   private isInitialized: boolean = false;
   private oscillators: Map<string, { oscillators: OscillatorNode[]; gainNode: GainNode }> = new Map();
@@ -589,7 +603,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
     // 先頭の窓の予約（playNoteAtTime の非同期部分）は待ってから返す（呼び出し側は
     // 「playParts が返ったら先頭の音は予約済み」を前提にしている）。以後の窓は待たない
     // 先頭の窓の失敗は playParts の失敗として呼び出し側（ScorePage のフォールバック）へ伝える。
-    // 後続の窓の失敗は伝える先が無いので、警告を出して窓を止める（無音で進み続けない）
+    // 後続の窓の失敗は onSchedulingFailure で画面へ伝える（無音で「再生中」を残さない）
     let firstWindow: Promise<void>[] | null = [];
     const scheduler = createWindowedScheduler({
       voices: playable,
@@ -599,14 +613,15 @@ export class SimpleAudioEngine implements PlaybackEngine {
         const duration = Math.min(voice.duration, occupancy);
         const tail = Math.max(0, occupancy - duration);
         const scheduled = this.playNoteAtTime(voice.frequency, duration, voice.startTime, voice.velocity, tail, voice.instrument);
-        if (firstWindow) {
-          firstWindow.push(scheduled);
-        } else {
-          scheduled.catch((error) => {
-            console.warn('[SimpleAudioEngine] 後続の窓の予約に失敗したため以後の予約を止めます:', error);
-            scheduler.stop();
-          });
-        }
+        // 先頭の窓は playParts の戻り値で失敗を伝える。後続の窓は scheduler の onError 経由
+        firstWindow?.push(scheduled);
+        return scheduled;
+      },
+      onError: (error) => {
+        // 先頭の窓の失敗は下の Promise.all が投げるので、ここでは後続の窓だけ画面へ伝える
+        if (firstWindow) return;
+        console.warn('[SimpleAudioEngine] 窓の予約に失敗したため以後の予約を止めます:', error);
+        this.notifySchedulingFailure(error);
       },
     });
     this.activeScheduler = scheduler;

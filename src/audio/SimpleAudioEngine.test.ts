@@ -106,11 +106,54 @@ describe('SimpleAudioEngine', () => {
     expect(mockContext.resume).toHaveBeenCalled();
   });
 
-  it('先頭の窓の予約が失敗したら playParts が失敗として伝える（#622 round1 P2: 無音で再生状態へ進まない）', async () => {
+  it('先頭の窓の予約が失敗したら playParts が失敗として伝え、以後の窓も作らない（#622 round1/2 P2）', async () => {
     await engine.initialize();
-    vi.spyOn(engine as unknown as { playNoteAtTime: () => Promise<void> }, 'playNoteAtTime').mockRejectedValue(new Error('予約失敗'));
-    await expect(engine.playParts([{ measures: [{ events: [{ dur: '4', isRest: false, keys: ['c/4'] }] }] }], 120))
-      .rejects.toThrow('予約失敗');
+    resetAllDevTuning();
+    const spy = vi.spyOn(engine as unknown as { playNoteAtTime: () => Promise<void> }, 'playNoteAtTime')
+      .mockRejectedValue(new Error('予約失敗'));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // 60BPM の全音符 × 10 小節（40 秒）。窓 4 秒なので先頭は 1 音
+      await expect(engine.playParts([{ measures: Array.from({ length: 10 }, () => ({
+        measureBeats: 4, bpm: 60, events: [{ dur: '1', isRest: false, keys: ['c/4'] }],
+      })) }], 60)).rejects.toThrow('予約失敗');
+      const calls = spy.mock.calls.length;
+      expect(calls).toBe(1);
+      // この harness の時計は 12.5 秒から始まるので、そこから 10 秒進める
+      (engine as unknown as { context: { currentTime: number } }).context.currentTime = 22.5;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(spy.mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('後続の窓の予約失敗は onSchedulingFailure で伝わり、以後の窓は作らない（#622 round2 P2）', async () => {
+    await engine.initialize();
+    resetAllDevTuning();
+    const spy = vi.spyOn(engine as unknown as { playNoteAtTime: () => Promise<void> }, 'playNoteAtTime')
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error('後続失敗'));
+    const failures: unknown[] = [];
+    const unsubscribe = engine.onSchedulingFailure((e) => failures.push(e));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await engine.playParts([{ measures: Array.from({ length: 10 }, () => ({
+        measureBeats: 4, bpm: 60, events: [{ dur: '1', isRest: false, keys: ['c/4'] }],
+      })) }], 60);
+      expect(failures).toHaveLength(0);
+      // この harness の時計は 12.5 秒から始まるので、そこから 10 秒進める
+      (engine as unknown as { context: { currentTime: number } }).context.currentTime = 22.5;
+      await vi.advanceTimersByTimeAsync(600);
+      expect(failures.map((e) => (e as Error).message)).toEqual(['後続失敗']);
+      const calls = spy.mock.calls.length;
+      (engine as unknown as { context: { currentTime: number } }).context.currentTime = 42.5;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(spy.mock.calls.length).toBe(calls);
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('playScore で event.velocity を発音時の強さに反映できる', async () => {
