@@ -155,6 +155,59 @@ describe('大譜表の強弱の共有（Issue #626）', () => {
     expect(v.get(buildDynamicEventKey(0, 3))!).toBeGreaterThan(v.get(buildDynamicEventKey(0, 0))!);
   });
 
+  it('同じ小節に写し先が無ければ次の小節の最初の音へ持ち越す（小節末の音へ戻して逆行させない）', () => {
+    const rh: MeasureData[] = [
+      { events: [q(['c/5']), q(['d/5']), q(['e/5'], { dynamics: [{ value: 'p' }] }), q(['f/5'])] },
+      { events: [q(['c/5']), q(['d/5']), q(['e/5']), q(['f/5'])] },
+    ];
+    const lh: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/3'] }] },
+      { events: [q(['c/3']), q(['e/3']), q(['g/3']), q(['c/4'])] },
+    ];
+    const [, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
+    expect(mergedLh[0].events[0].dynamics).toBeUndefined();
+    expect(mergedLh[1].events[0].dynamics).toEqual([{ value: 'p' }]);
+  });
+
+  it('空の小節を挟んでも記号は失われず、次の音のある小節へ写る', () => {
+    const rh: MeasureData[] = [{ events: [q(['c/5'], { dynamics: [{ value: 'ff' }] })] }, { events: [] }];
+    const lh: MeasureData[] = [{ events: [] }, { events: [q(['c/3'])] }];
+    const [, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
+    expect(mergedLh[1].events[0].dynamics).toEqual([{ value: 'ff' }]);
+  });
+
+  it('同じ写し先に複数の記号が集まったら時系列で後の記号を採る（cresc. の途中の f が消えない）', () => {
+    const rh: MeasureData[] = [{ events: [
+      q(['c/5'], { dynamics: [{ value: 'p' }], hairpins: [{ type: 'cresc', endMeasure: 0, endEvent: 3 }] }),
+      q(['d/5']),
+      q(['e/5'], { dynamics: [{ value: 'f' }] }),
+      q(['f/5']),
+    ] }];
+    // 左手は全音符1つ: 拍0の p+cresc. と拍2の f が次の小節の頭へ集まる
+    const lh: MeasureData[] = [{ events: [{ dur: '1', isRest: false, keys: ['c/3'] }] }, { events: [q(['c/3'])] }];
+    const [, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
+    expect(mergedLh[0].events[0].dynamics).toEqual([{ value: 'p' }]);
+    expect(mergedLh[1].events[0].dynamics).toEqual([{ value: 'f' }]);
+  });
+
+  it('副声部の音は同じ拍位置以前の主声部の**発音**を引く（主声部が休符の区間でも既定へ戻らない）', () => {
+    const rest = { dur: '4' as const, isRest: true, keys: ['b/4'] };
+    const measure: MeasureData = {
+      events: [q(['c/5'], { dynamics: [{ value: 'p' }] }), rest, rest, q(['f/5'])],
+      voices: [
+        { id: 'v1', events: [q(['c/5'], { dynamics: [{ value: 'p' }] }), rest, rest, q(['f/5'])] },
+        { id: 'v2', events: [{ dur: '2', isRest: false, keys: ['a/4'] }, { dur: '2', isRest: false, keys: ['g/4'] }] },
+      ],
+    };
+    // 拍2 の副声部の音: 主声部は休符なので、直前の発音（index 0）を引く
+    expect(findPrimaryEventIndexAtBeat(measure, 2)).toBe(0);
+    const v = resolveDynamicVelocities([measure]);
+    expect(v.get(buildDynamicEventKey(0, findPrimaryEventIndexAtBeat(measure, 2)))).toBe(getAbsoluteDynamicVelocity('p'));
+    // 小節頭が休符なら後の最初の発音を借りる
+    const restFirst: MeasureData = { events: [rest, q(['c/5'])] };
+    expect(findPrimaryEventIndexAtBeat(restFirst, 0)).toBe(1);
+  });
+
   it('副声部の音は同じ拍位置以前の主声部の音を引く', () => {
     const measure: MeasureData = {
       events: [q(['c/5']), q(['d/5']), q(['e/5']), q(['f/5'])],
