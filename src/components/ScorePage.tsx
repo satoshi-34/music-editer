@@ -228,6 +228,7 @@ import {
   type ScoreEditNoticeDetail,
   describeAudioEngineRestarted,
   describeAudioStillSilent,
+  describePlaybackAbortedBySchedulingError,
 } from '../utils/scoreEditorNotices';
 import {
   claimStorageLocationNotice,
@@ -1020,6 +1021,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 参照を捨てないため、自然終了のたびに世代交代（stopAll）で解放しないと、全曲を
   // 繰り返し聴くほどノードが積み上がる（運用者QA: 繰り返し再生で無音化したタブ）
   const playbackCleanupRef = useRef<{ timer: ReturnType<typeof setTimeout>; engine: PlaybackEngine } | null>(null);
+  // 先読み窓（#622）の後続の予約失敗の購読解除。再生ごとに張り替え、停止・終了・アンマウントで外す
+  const schedulingFailureUnsubscribeRef = useRef<(() => void) | null>(null);
   // 一時停止から再開するため、「いつ再生を始めたか」を覚えておく。
   const playbackStartedAtRef = useRef<number | null>(null);
   // 一時停止時点で「あと何ミリ秒残っているか」を覚えておく。
@@ -1170,7 +1173,21 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     });
   }, []);
 
-  const clearPlaybackTimer = useCallback(() => {
+  /** 先読み窓の失敗通知の購読を外す（停止・自然終了・新しい再生の直前・アンマウント。一時停止では外さない） */
+  const unsubscribeSchedulingFailure = useCallback(() => {
+    schedulingFailureUnsubscribeRef.current?.();
+    schedulingFailureUnsubscribeRef.current = null;
+  }, []);
+
+  /**
+   * 再生の予約をすべて片付ける。停止・終了・復旧・譜面切替など「再生をやめる」全経路が通る
+   * 1か所なので、先読み窓の失敗通知の購読解除もここに集約する（round4 P3）。
+   * 一時停止と再開だけは再生が続くので keepSchedulingSubscription で購読を残す
+   */
+  const clearPlaybackTimer = useCallback((options?: { keepSchedulingSubscription?: boolean }) => {
+    if (!options?.keepSchedulingSubscription) {
+      unsubscribeSchedulingFailure();
+    }
     if (playbackTimerRef.current !== null) {
       // 再生終了予約は「最後に 1 つだけ」が正しい。
       // 古い予約を残したままにすると、次の再生中に前の予約が発火して
@@ -1186,13 +1203,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
     // 位置表示の予約も、再生終了予約と同じタイミングで必ず片付ける。
     clearPositionTimers();
-  }, [clearPositionTimers]);
+  }, [clearPositionTimers, unsubscribeSchedulingFailure]);
 
   // 再生中にアンマウントされても、終了予約・位置表示予約を残さない
   // （残すとテスト teardown 後に発火して未処理例外になる。通知系タイマーと同じ問題）
   useEffect(() => () => {
     clearPlaybackTimer();
-  }, [clearPlaybackTimer]);
+    unsubscribeSchedulingFailure();
+  }, [clearPlaybackTimer, unsubscribeSchedulingFailure]);
 
   const resetPlaybackClock = useCallback(() => {
     // 3 つの ref は「いつ始まったか」「あと何ミリ秒あるか」「全体で何ミリ秒か」のセット。
@@ -1210,6 +1228,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * 音源方式を切り替えたとき新しいエンジンの音色プレビューを止めてしまう）
    */
   const finishPlaybackNaturally = useCallback((engine: PlaybackEngine) => {
+    unsubscribeSchedulingFailure();
     setPlaybackState('stopped');
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     playbackTimerRef.current = null;
@@ -1221,7 +1240,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       engine.stopAll();
     }, PLAYBACK_END_CLEANUP_DELAY_MS);
     playbackCleanupRef.current = { timer, engine };
-  }, [resetPlaybackClock]);
+  }, [resetPlaybackClock, unsubscribeSchedulingFailure]);
 
   /**
    * 余韻待ち中の後始末が残っていれば、いま実行する（次の再生の直前に呼ぶ）。
@@ -1586,7 +1605,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         await resumedEngine.resume();
         setPlaybackState('playing');
         const remainingMs = Math.max(0, remainingPlaybackMsRef.current);
-        clearPlaybackTimer();
+        clearPlaybackTimer({ keepSchedulingSubscription: true });
         playbackStartedAtRef.current = Date.now();
         playbackTimerRef.current = setTimeout(() => {
           finishPlaybackNaturally(resumedEngine);
@@ -1907,6 +1926,19 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           ) + scheduleLeadSeconds();
           setPlaybackState('playing');
           clearPlaybackTimer();
+          // 先読み窓（#622）の後続の予約が失敗したら、無音のまま「再生中」を残さず止めて知らせる。
+          // 購読は再生ごとに張り替え、一時停止では外さない（round3 P2: 再開後の失敗を取りこぼす）
+          unsubscribeSchedulingFailure();
+          schedulingFailureUnsubscribeRef.current = audioEngine.onSchedulingFailure?.((error) => {
+            console.error('[ScorePage] 再生途中の予約失敗により停止します:', error);
+            unsubscribeSchedulingFailure();
+            clearPlaybackTimer();
+            audioEngine.stopAll();
+            setPlaybackState('stopped');
+            setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+            resetPlaybackClock();
+            notifyScoreEdit(describePlaybackAbortedBySchedulingError());
+          }) ?? null;
           // 残り時間・終了タイマー・タイムラインの予約はすべて「予約に使った実時間」を
           // 差し引いた値にする。残りを引いたぶん、時計の起点は「今」（round2 P2:
           // 起点まで過去にすると一時停止でもう一度同じ時間を引いてしまう）
@@ -1961,7 +1993,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, finishPlaybackNaturally, flushPendingPlaybackCleanup, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, playbackSpeedPercent, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
+  }, [clearPlaybackTimer, currentInstrument, finishPlaybackNaturally, flushPendingPlaybackCleanup, unsubscribeSchedulingFailure, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, playbackSpeedPercent, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -1976,7 +2008,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       remainingPlaybackMsRef.current = Math.max(0, remainingPlaybackMsRef.current - elapsedMs);
     }
 
-    clearPlaybackTimer();
+    // 再生は続くので、先読み窓の失敗通知の購読は残す（round3 P2）
+    clearPlaybackTimer({ keepSchedulingSubscription: true });
     playbackStartedAtRef.current = null;
     await getAudioEngine().suspend();
     setPlaybackState('paused');
@@ -3438,6 +3471,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     clearPlaybackTimer();
     resetPlaybackClock();
+    // 再生中にサンプルを読み込んだら旧譜面の予約（先読み窓）も止める（round4 P2:
+    // 画面だけ stopped にすると旧譜面の後続の音が鳴り続ける）
+    getAudioEngine().stopAll();
     setPlaybackState('stopped');
     setHasCustomPianoSample(hasCustomPianoDemoScore());
     // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする

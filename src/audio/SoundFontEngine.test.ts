@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { SCHEDULE_LEAD_SECONDS } from './scheduleLead';
 import { resetAllDevTuning, setDevTuningOverride } from '../utils/devTuning';
 
@@ -8,6 +8,12 @@ import {
   mapInstrumentTypeToSoundFontName,
   resolveSoundFontName
 } from './SoundFontEngine';
+
+// 先読み窓（#622）は既定 4 秒。ここの多くのテストは「playParts が返った時点で譜面全体が
+// 予約済み」を前提にしているので、窓を最大まで広げて従来の検証をそのまま保つ。
+// 窓の進行そのものは scheduleWindow.test.ts と各エンジンの #622 テストで固定している
+beforeEach(() => { setDevTuningOverride('audio.lookahead', 12); });
+afterEach(() => { resetAllDevTuning(); vi.useRealTimers(); });
 
 describe('SoundFontEngine helpers', () => {
   it('楽器タイプを SoundFont の既知名へ変換できる', () => {
@@ -175,6 +181,50 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
     } finally {
       resetAllDevTuning();
     }
+  });
+
+  it('長い譜面は先読み窓ぶんだけ先に予約し、時計が進むと続きを予約する。stopAll で止まる（Issue #622）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+    const context = (engine as unknown as { context: { currentTime: number } }).context;
+    // このテストだけは本番既定（4 秒）で数える（ファイル全体の 12 秒上書きを外す）
+    resetAllDevTuning();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // 60BPM の全音符 = 4秒 × 10小節 = 40秒。開始時刻は 0,4,8,...36。
+      // 先読み窓 4 秒（半開区間 [0,4)）なら先頭は t=0 の1音だけ
+      await engine.playParts([{
+        measures: Array.from({ length: 10 }, (_, i) => ({
+          measureBeats: 4,
+          events: [{ dur: '1', isRest: false, keys: [['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5', 'D5', 'E5'][i]] }],
+        })),
+      }], 60);
+      expect(play.mock.calls.length).toBe(1);
+      // 時計を 3.9 秒へ進めてタイマーを発火させると [3.9, 7.9) の 4 秒の音が足される
+      context.currentTime = 3.9;
+      await vi.advanceTimersByTimeAsync(600);
+      expect(play.mock.calls.length).toBe(2);
+      // 大きく遅れた（10 秒まで止まっていた）ときは、過ぎた 8 秒の音は飛ばし 12 秒だけ足す（round5 P2）
+      context.currentTime = 10;
+      await vi.advanceTimersByTimeAsync(600);
+      expect(play.mock.calls.length).toBe(3);
+      expect(play.mock.calls[2][1]).toBeCloseTo(12 + SCHEDULE_LEAD_SECONDS, 5);
+      // stopAll 以後は時計が進んでも予約しない
+      const atStop = play.mock.calls.length;
+      engine.stopAll();
+      context.currentTime = 100;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(play.mock.calls.length).toBe(atStop);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('先頭の窓で player.play が同期例外を投げたら playParts が失敗として伝える（#622 round3 P2）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+    play.mockImplementation(() => { throw new Error('play failed'); });
+    await expect(engine.playParts([{
+      measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C4'] }] }],
+    }], 120)).rejects.toThrow('play failed');
   });
 
   it('タイ2音は「1回の発音・合計の長さ」で予約される', async () => {

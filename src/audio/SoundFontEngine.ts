@@ -1,6 +1,7 @@
 import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
 import { scheduleLeadSeconds } from './scheduleLead';
 import { limitPolyphony, maxPolyphony, type VoiceSpan } from './polyphonyLimit';
+import { createWindowedScheduler, lookaheadSeconds, type WindowedScheduler } from './scheduleWindow';
 import type { Player as SoundFontPlayer } from 'soundfont-player';
 
 import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
@@ -145,6 +146,22 @@ export class SoundFontEngine implements PlaybackEngine {
 
   /** 作成中の player の共有置き場（キー = `${世代}:${soundfont}:${楽器}`・round4 P2） */
   private readonly playerLoading = new Map<string, Promise<SoundFontPlayer>>();
+  /** 進行中の先読み窓（#622）。stopAll で止める */
+  private activeScheduler: WindowedScheduler | null = null;
+  private readonly schedulingFailureListeners = new Set<(error: unknown) => void>();
+
+  onSchedulingFailure(listener: (error: unknown) => void): () => void {
+    this.schedulingFailureListeners.add(listener);
+    return () => { this.schedulingFailureListeners.delete(listener); };
+  }
+
+  /** 後続の窓の予約失敗を画面へ伝える（#622 round2 P2） */
+  private notifySchedulingFailure(error: unknown): void {
+    this.activeScheduler = null;
+    this.schedulingFailureListeners.forEach((listener) => {
+      try { listener(error); } catch (listenerError) { console.warn('[PlaybackEngine] 失敗通知の受け手で例外:', listenerError); }
+    });
+  }
   // すべての player の出力をこの GainNode 経由で destination へ流す。
   // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
   private masterGainNode: GainNode | null = null;
@@ -335,18 +352,32 @@ export class SoundFontEngine implements PlaybackEngine {
     });
 
     const limited = limitPolyphony(voices, maxPolyphony());
-    limited.voices.forEach((voice) => {
-      // 詰められた占有期間に「音本体 → 余韻」の順で収める（round2 P1: 余韻の全量を先に引くと、
-      // 余韻だけ切れば足りる短音まで丸ごと無音化する）。占有 0 以下の音だけ予約しない
-      const occupancy = voice.endTime - voice.startTime;
-      if (occupancy <= 0) return;
-      const duration = Math.min(voice.duration, occupancy);
-      const release = Math.max(0, occupancy - duration);
-      voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity, release));
+    // 詰められた占有期間に「音本体 → 余韻」の順で収める（round2 P1: 余韻の全量を先に引くと、
+    // 余韻だけ切れば足りる短音まで丸ごと無音化する）。占有 0 以下の音は予約しない
+    const playable = limited.voices.filter((voice) => voice.endTime - voice.startTime > 0);
+    // ノードは曲全体を一括で作らず、先読み窓ぶんだけ逐次作る（#622: 一括生成だと
+    // まだ鳴っていないノードまで音声スレッドが毎量子処理し、序盤ほど途切れる）
+    this.activeScheduler?.stop();
+    const scheduler = createWindowedScheduler({
+      voices: playable,
+      now: () => context.currentTime,
+      play: (voice) => {
+        const occupancy = voice.endTime - voice.startTime;
+        const duration = Math.min(voice.duration, occupancy);
+        const release = Math.max(0, occupancy - duration);
+        voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity, release));
+      },
+      onError: (error) => {
+        console.warn('[SoundFontEngine] 窓の予約に失敗したため以後の予約を止めます:', error);
+        this.notifySchedulingFailure(error);
+      },
     });
+    this.activeScheduler = scheduler;
+    scheduler.start();
 
     console.log('[SoundFontEngine] 譜面再生をスケジュールしました:', parts.length, 'パート',
-      `ボイス ${voices.length} / 最大同時 ${limited.peakBefore} / 詰め ${limited.stolen}（うち無音化 ${limited.dropped}）/ 上限 ${maxPolyphony()}`);
+      `ボイス ${voices.length} / 最大同時 ${limited.peakBefore} / 詰め ${limited.stolen}（うち無音化 ${limited.dropped}）/ 上限 ${maxPolyphony()}`,
+      `/ 先読み窓 ${lookaheadSeconds()}s で先頭 ${scheduler.stats().scheduled} 音を予約`);
     return { scheduledAtMs };
   }
 
@@ -363,6 +394,9 @@ export class SoundFontEngine implements PlaybackEngine {
   }
 
   stopAll(): void {
+    // 以後の窓は作らない（#622）。作成済みの音は下で止める
+    this.activeScheduler?.stop();
+    this.activeScheduler = null;
     const stopTime = this.context?.currentTime;
     this.playerCache.forEach(player => {
       try {

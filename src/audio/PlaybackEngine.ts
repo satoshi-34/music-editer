@@ -118,4 +118,9 @@ export interface PlaybackEngine {
    * currentTime の進行などを観測するために使う。再生制御には使わないこと。
    */
   getAudioContext?(): AudioContext | null;
+  /**
+   * 先読み窓（#622）の後続の予約が失敗したときの通知。playParts が返った後に起きる失敗は
+   * 戻り値では伝えられないので、画面側はこれで停止・通知する。戻り値は解除関数
+   */
+  onSchedulingFailure?(listener: (error: unknown) => void): () => void;
 }
