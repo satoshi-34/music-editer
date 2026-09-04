@@ -16,6 +16,9 @@ describe('takeDueVoices', () => {
   it('expiredBefore より前の音は期限切れとして飛ばし、数だけ返す', () => {
     expect(takeDueVoices(sorted, 0, 12, 2.5)).toEqual({ due: [sorted[3], sorted[4]], nextCursor: 5, expired: 3 });
   });
+  it('expiredBefore ちょうどの音は期限切れにしない（境界は「より前」）', () => {
+    expect(takeDueVoices(sorted, 0, 12, 2)).toEqual({ due: [sorted[2], sorted[3], sorted[4]], nextCursor: 5, expired: 2 });
+  });
 });
 
 describe('createWindowedScheduler', () => {
