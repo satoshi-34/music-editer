@@ -307,106 +307,85 @@ export function resolveDynamicVelocities(measures: MeasureData[]): Map<string, n
 }
 
 /**
- * 大譜表（ピアノ）では強弱記号は両手に共通の「その時点の音量」（Issue #626）。
- * 右手に付いた p が左手の伴奏に効かず、伴奏が旋律より大きく鳴っていた（運用者QA 2026-09-04・悲愴）。
+ * 任意の拍位置の「いまの基準音量」を返す時系列（Issue #626）。
  *
- * 各パートの各声部に付いた強弱（絶対・cresc./dim.・松葉）を小節ごとに集め、他のパートの
- * 主声部で**同じ拍位置以降の最初の音**へ写す（その音に同種の記号が無いときだけ）。
- * 写した結果に対して従来の resolveDynamicVelocities をパートごとに掛けるので、
- * 傾斜（cresc./dim.）の計算は変えない。元データは変更しない（浅い複製を返す）。
- * 四重奏・編成譜は各パートに自分の強弱が書かれるので、呼び出し側でピアノのときだけ使う。
+ * 大譜表（ピアノ）では強弱記号は両手に共通の「その時点の音量」なので、片手に付いた p が
+ * 他方の伴奏に効かない従来の解決（パート単位・主声部の音ごと）では、伴奏が旋律より大きく
+ * 鳴っていた（運用者QA 2026-09-04・悲愴）。ここでは全パート・全声部の記号を絶対拍位置で
+ * 1本の時系列にし、どのパート・どの声部の音も**自分の拍位置**で引く。
+ *   - 絶対強弱（p / f …）はその位置から基準音量を切り替える
+ *   - cresc. / dim.（文字・松葉）はその位置から**次の絶対強弱の位置**まで直線で変化する。
+ *     次が無ければ ±0.2 を終端（最後の記号から先の残り）までかけて変化する
+ * 四重奏・編成譜は各パートに自分の強弱が書かれるので、呼び出し側でパートごとに作る。
+ * 従来の resolveDynamicVelocities（音ごとの段階変化）はプレビュー等の既存用途に残す。
  */
-export function mergeGrandStaffDynamics(partsMeasures: MeasureData[][]): MeasureData[][] {
-  if (partsMeasures.length <= 1) return partsMeasures;
-  type Marking = { measureIndex: number; beat: number; order: number; dynamics?: DynamicMarking[]; hairpins?: NoteEvent['hairpins'] };
-  // 全パート・全声部の記号を「小節・拍位置」つきで集め、時系列順に並べる
+export interface DynamicVelocityTimeline {
+  velocityAt(absoluteBeat: number): number;
+  /** 計測・テスト用: 記号の数 */
+  readonly markingCount: number;
+}
+
+export function buildDynamicVelocityTimeline(
+  partsMeasures: readonly (readonly MeasureData[])[],
+  beatsPerMeasure: number,
+): DynamicVelocityTimeline {
+  type Marking = { at: number; order: number; absolute: AbsoluteDynamicMarking | null; relative: RelativeDynamicMarking | null };
   const markings: Marking[] = [];
+  let endBeat = 0;
   partsMeasures.forEach((measures) => {
+    endBeat = Math.max(endBeat, measures.length * beatsPerMeasure);
     measures.forEach((measure, measureIndex) => {
       getMeasureVoices(measure).forEach((voice) => {
         let beat = 0;
         voice.events.forEach((event) => {
-          if (event.dynamics?.length || event.hairpins?.length) {
-            markings.push({ measureIndex, beat, order: markings.length, dynamics: event.dynamics, hairpins: event.hairpins });
+          const absolute = getAbsoluteDynamicFromEvent(event);
+          const relative = getRelativeDynamicFromEvent(event) ?? event.hairpins?.[0]?.type ?? null;
+          if (absolute || relative) {
+            markings.push({ at: measureIndex * beatsPerMeasure + beat, order: markings.length, absolute, relative });
           }
           beat += getEventDurationBeats(event);
         });
       });
     });
   });
-  if (markings.length === 0) return partsMeasures;
-  markings.sort((left, right) => (left.measureIndex - right.measureIndex) || (left.beat - right.beat) || (left.order - right.order));
+  markings.sort((left, right) => (left.at - right.at) || (left.order - right.order));
 
-  return partsMeasures.map((measures) => {
-    // このパートの主声部の音を「小節・拍位置」つきで一列にする（写し先の探索用）
-    const slots: { measureIndex: number; eventIndex: number; beat: number }[] = [];
-    measures.forEach((measure, measureIndex) => {
-      let beat = 0;
-      getPrimaryVoiceEvents(measure).forEach((event, eventIndex) => {
-        slots.push({ measureIndex, eventIndex, beat });
-        beat += getEventDurationBeats(event);
-      });
-    });
-    if (slots.length === 0) return measures;
-    // 写し先ごとの上書き。自分の記号がある音には写さない。同じ写し先に複数の記号が集まったら
-    // 時系列で**後の**記号を採る（round1 P2: 先に処理した cresc. が後の f を隠さない）
-    const copied = new Map<string, { dynamics?: DynamicMarking[]; hairpins?: NoteEvent['hairpins'] }>();
-    markings.forEach((marking) => {
-      // 記号の拍位置以降の最初の音。同じ小節に無ければ次の小節以降へ持ち越す
-      // （round1 P1: 小節末の音へ戻すと記号が時間的に逆行する）
-      const slot = slots.find((candidate) =>
-        candidate.measureIndex > marking.measureIndex
-        || (candidate.measureIndex === marking.measureIndex && candidate.beat >= marking.beat - 1e-6));
-      if (!slot) return;
-      const key = `${slot.measureIndex}:${slot.eventIndex}`;
-      const entry = copied.get(key) ?? {};
-      if (marking.dynamics?.length) entry.dynamics = marking.dynamics;
-      if (marking.hairpins?.length) entry.hairpins = marking.hairpins;
-      copied.set(key, entry);
-    });
-    if (copied.size === 0) return measures;
-    return measures.map((measure, measureIndex) => {
-      const primary = getPrimaryVoiceEvents(measure);
-      let changed = false;
-      const merged = primary.map((event, eventIndex) => {
-        const entry = copied.get(`${measureIndex}:${eventIndex}`);
-        if (!entry) return event;
-        const next = { ...event };
-        if (entry.dynamics && !event.dynamics?.length) {
-          next.dynamics = entry.dynamics.map((dynamic) => ({ ...dynamic }));
-          changed = true;
-        }
-        if (entry.hairpins && !event.hairpins?.length) {
-          next.hairpins = entry.hairpins.map((hairpin) => ({ ...hairpin }));
-          changed = true;
-        }
-        return changed ? next : event;
-      });
-      if (!changed) return measure;
-      const voices = measure.voices
-        ? measure.voices.map((voice, index) => (index === 0 ? { ...voice, events: merged } : voice))
-        : undefined;
-      return { ...measure, events: merged, ...(voices ? { voices } : {}) };
-    });
-  });
-}
-
-export function findPrimaryEventIndexAtBeat(measure: MeasureData, beat: number): number {
-  const primary = getPrimaryVoiceEvents(measure);
-  let cursor = 0;
-  let found = -1;
-  let firstSoundingAfter = -1;
-  for (let index = 0; index < primary.length; index++) {
-    const sounding = !primary[index].isRest;
-    if (cursor <= beat + 1e-6) {
-      // 休符は velocity を持たない（resolveDynamicVelocities は発音イベントだけに保存する）
-      // ので、同じ拍位置以前の**発音**イベントを返す（round1 P1）
-      if (sounding) found = index;
-    } else if (sounding && firstSoundingAfter < 0) {
-      firstSoundingAfter = index;
+  // 区間ごとの「開始音量・終了音量・開始位置・終了位置」を前から積む
+  type Segment = { from: number; to: number; startLevel: number; endLevel: number };
+  const segments: Segment[] = [];
+  let level = DEFAULT_DYNAMIC_VELOCITY;
+  markings.forEach((marking, index) => {
+    if (marking.absolute) {
+      level = getAbsoluteDynamicVelocity(marking.absolute);
+      segments.push({ from: marking.at, to: marking.at, startLevel: level, endLevel: level });
     }
-    cursor += getEventDurationBeats(primary[index]);
-  }
-  // 前に発音が無ければ（小節頭が休符）、後の最初の発音を借りる（その時点の基準音量は同じ）
-  return found >= 0 ? found : firstSoundingAfter;
+    // 同じ音に p と cresc. が両方付いていれば、p に切り替えてから cresc. を始める
+    if (!marking.relative) return;
+    // 次の絶対強弱まで（無ければ終端まで ±0.2）
+    const nextAbsolute = markings.slice(index + 1).find((candidate) => candidate.absolute);
+    const to = nextAbsolute ? nextAbsolute.at : Math.max(endBeat, marking.at);
+    const target = nextAbsolute
+      ? getAbsoluteDynamicVelocity(nextAbsolute.absolute!)
+      : clampVelocity(level + (marking.relative === 'cresc' ? RELATIVE_DYNAMIC_DELTA : -RELATIVE_DYNAMIC_DELTA));
+    segments.push({ from: marking.at, to, startLevel: level, endLevel: target });
+    // 次の記号（相対）が来たときは、その位置での音量から続ける
+    level = target;
+  });
+
+  const velocityAt = (absoluteBeat: number): number => {
+    // 位置以前の最後の区間を二分探索で引く（性能: 音ごとに O(log 記号数)）
+    let low = 0;
+    let high = segments.length - 1;
+    let found = -1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (segments[mid].from <= absoluteBeat + 1e-6) { found = mid; low = mid + 1; } else { high = mid - 1; }
+    }
+    if (found < 0) return DEFAULT_DYNAMIC_VELOCITY;
+    const segment = segments[found];
+    if (segment.to <= segment.from) return segment.endLevel;
+    const ratio = Math.min(1, Math.max(0, (absoluteBeat - segment.from) / (segment.to - segment.from)));
+    return clampVelocity(segment.startLevel + (segment.endLevel - segment.startLevel) * ratio);
+  };
+  return { velocityAt, markingCount: markings.length };
 }

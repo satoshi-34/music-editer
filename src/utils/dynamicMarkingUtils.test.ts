@@ -10,9 +10,8 @@ import {
   RELATIVE_DYNAMIC_VALUES,
   getPreviewVelocityForEvent,
   resolveDynamicVelocities,
-  mergeGrandStaffDynamics,
-  findPrimaryEventIndexAtBeat,
   getAbsoluteDynamicVelocity,
+  buildDynamicVelocityTimeline,
 } from './dynamicMarkingUtils';
 
 function createNoteEvent(overrides: Partial<NoteEvent> = {}): NoteEvent {
@@ -117,107 +116,77 @@ describe('descresc.', () => {
   });
 });
 
-describe('大譜表の強弱の共有（Issue #626）', () => {
+describe('拍位置で引く強弱の時系列（Issue #626）', () => {
   const q = (keys: string[], extra: Partial<NoteEvent> = {}): NoteEvent => ({ dur: '4', isRest: false, keys, ...extra });
+  const P = getAbsoluteDynamicVelocity('p');
+  const F = getAbsoluteDynamicVelocity('f');
 
-  it('右手だけに付いた p が左手の主声部の同じ拍位置の音へ写る（元データは変わらない）', () => {
+  it('右手だけに付いた p が、左手の同じ位置以降の音量にも効く（元データは変えない）', () => {
     const rh: MeasureData[] = [{ events: [q(['c/5'], { dynamics: [{ value: 'p' }] }), q(['d/5']), q(['e/5']), q(['f/5'])] }];
     const lh: MeasureData[] = [{ events: [q(['c/3']), q(['e/3']), q(['g/3']), q(['c/4'])] }];
-    const [mergedRh, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
-    expect(mergedLh[0].events[0].dynamics).toEqual([{ value: 'p' }]);
+    const t = buildDynamicVelocityTimeline([rh, lh], 4);
+    expect(t.velocityAt(0)).toBe(P);
+    expect(t.velocityAt(3)).toBe(P);
     expect(lh[0].events[0].dynamics).toBeUndefined();
-    expect(mergedRh[0]).toBe(rh[0]);
-    // 左手だけで解決しても p が効く
-    expect(resolveDynamicVelocities(mergedLh).get(buildDynamicEventKey(0, 0))).toBe(getAbsoluteDynamicVelocity('p'));
   });
 
-  it('拍位置がずれた記号は、その拍以降の最初の音へ写る（3拍目の f → 左手の2分音符の2つ目）', () => {
+  it('記号より前の位置は既定、以降は切り替わる（3拍目の f）', () => {
     const rh: MeasureData[] = [{ events: [q(['c/5']), q(['d/5']), q(['e/5'], { dynamics: [{ value: 'f' }] }), q(['f/5'])] }];
-    const lh: MeasureData[] = [{ events: [{ dur: '2', isRest: false, keys: ['c/3'] }, { dur: '2', isRest: false, keys: ['g/3'] }] }];
-    const [, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
-    expect(mergedLh[0].events[0].dynamics).toBeUndefined();
-    expect(mergedLh[0].events[1].dynamics).toEqual([{ value: 'f' }]);
+    const t = buildDynamicVelocityTimeline([rh], 4);
+    expect(t.velocityAt(0)).toBe(0.5);
+    expect(t.velocityAt(1.5)).toBe(0.5);
+    expect(t.velocityAt(2)).toBe(F);
+    expect(t.velocityAt(7)).toBe(F);
   });
 
-  it('自分の強弱がある音には写さない（両手に別々の指示があれば各自を優先）', () => {
-    const rh: MeasureData[] = [{ events: [q(['c/5'], { dynamics: [{ value: 'p' }] })] }];
-    const lh: MeasureData[] = [{ events: [q(['c/3'], { dynamics: [{ value: 'f' }] })] }];
-    const [mergedRh, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
-    expect(mergedRh[0].events[0].dynamics).toEqual([{ value: 'p' }]);
-    expect(mergedLh[0].events[0].dynamics).toEqual([{ value: 'f' }]);
-  });
-
-  it('松葉（cresc.）も写り、左手側の傾斜として解決される', () => {
-    const rh: MeasureData[] = [{ events: [q(['c/5'], { dynamics: [{ value: 'p' }], hairpins: [{ type: 'cresc', endMeasure: 0, endEvent: 3 }] }), q(['d/5']), q(['e/5']), q(['f/5'])] }];
-    const lh: MeasureData[] = [{ events: [q(['c/3']), q(['e/3']), q(['g/3']), q(['c/4'])] }];
-    const [, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
-    const v = resolveDynamicVelocities(mergedLh);
-    expect(v.get(buildDynamicEventKey(0, 3))!).toBeGreaterThan(v.get(buildDynamicEventKey(0, 0))!);
-  });
-
-  it('同じ小節に写し先が無ければ次の小節の最初の音へ持ち越す（小節末の音へ戻して逆行させない）', () => {
+  it('cresc.（松葉）は次の絶対強弱の位置まで直線で変化し、その位置で到達する', () => {
     const rh: MeasureData[] = [
-      { events: [q(['c/5']), q(['d/5']), q(['e/5'], { dynamics: [{ value: 'p' }] }), q(['f/5'])] },
+      { events: [q(['c/5'], { dynamics: [{ value: 'p' }], hairpins: [{ type: 'cresc', endMeasure: 1, endEvent: 0 }] }), q(['d/5']), q(['e/5']), q(['f/5'])] },
+      { events: [q(['c/5'], { dynamics: [{ value: 'f' }] })] },
+    ];
+    const t = buildDynamicVelocityTimeline([rh], 4);
+    expect(t.velocityAt(0)).toBe(P);
+    expect(t.velocityAt(2)).toBeCloseTo(P + (F - P) / 2, 6);
+    expect(t.velocityAt(4)).toBe(F);
+    // 左手が全音符でも、その途中の位置で引けば途中の音量
+    expect(t.velocityAt(3)).toBeGreaterThan(t.velocityAt(1));
+  });
+
+  it('次の絶対強弱が無い cresc. は終端まで +0.2 へ向かう', () => {
+    const rh: MeasureData[] = [
+      { events: [q(['c/5'], { hairpins: [{ type: 'cresc', endMeasure: 1, endEvent: 3 }] }), q(['d/5']), q(['e/5']), q(['f/5'])] },
       { events: [q(['c/5']), q(['d/5']), q(['e/5']), q(['f/5'])] },
     ];
-    const lh: MeasureData[] = [
-      { events: [{ dur: '1', isRest: false, keys: ['c/3'] }] },
-      { events: [q(['c/3']), q(['e/3']), q(['g/3']), q(['c/4'])] },
+    const t = buildDynamicVelocityTimeline([rh], 4);
+    expect(t.velocityAt(0)).toBe(0.5);
+    expect(t.velocityAt(8)).toBeCloseTo(0.7, 6);
+    expect(t.velocityAt(4)).toBeCloseTo(0.6, 6);
+  });
+
+  it('主声部が休符の区間・小節をまたいだ後でも、副声部の位置で引けば直前の p が続く（round2 P1）', () => {
+    const rest = { dur: '1' as const, isRest: true, keys: ['b/4'] };
+    const rh: MeasureData[] = [
+      { events: [q(['c/5'], { dynamics: [{ value: 'p' }] }), q(['d/5']), q(['e/5']), q(['f/5'])] },
+      { events: [rest], voices: [{ id: 'v1', events: [rest] }, { id: 'v2', events: [q(['a/4']), q(['g/4']), q(['a/4']), q(['g/4'])] }] },
     ];
-    const [, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
-    expect(mergedLh[0].events[0].dynamics).toBeUndefined();
-    expect(mergedLh[1].events[0].dynamics).toEqual([{ value: 'p' }]);
+    const t = buildDynamicVelocityTimeline([rh], 4);
+    expect(t.velocityAt(4)).toBe(P);
+    expect(t.velocityAt(7)).toBe(P);
   });
 
-  it('空の小節を挟んでも記号は失われず、次の音のある小節へ写る', () => {
-    const rh: MeasureData[] = [{ events: [q(['c/5'], { dynamics: [{ value: 'ff' }] })] }, { events: [] }];
-    const lh: MeasureData[] = [{ events: [] }, { events: [q(['c/3'])] }];
-    const [, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
-    expect(mergedLh[1].events[0].dynamics).toEqual([{ value: 'ff' }]);
+  it('両手に別々の記号があれば、時系列で後の記号が全体に効く（先読みや先勝ちはしない）', () => {
+    const rh: MeasureData[] = [{ events: [q(['c/5'], { dynamics: [{ value: 'p' }] }), q(['d/5']), q(['e/5']), q(['f/5'])] }];
+    const lh: MeasureData[] = [{ events: [q(['c/3']), q(['e/3'], { dynamics: [{ value: 'f' }] }), q(['g/3']), q(['c/4'])] }];
+    const t = buildDynamicVelocityTimeline([rh, lh], 4);
+    expect(t.velocityAt(0)).toBe(P);
+    expect(t.velocityAt(0.5)).toBe(P);
+    expect(t.velocityAt(1)).toBe(F);
   });
 
-  it('同じ写し先に複数の記号が集まったら時系列で後の記号を採る（cresc. の途中の f が消えない）', () => {
-    const rh: MeasureData[] = [{ events: [
-      q(['c/5'], { dynamics: [{ value: 'p' }], hairpins: [{ type: 'cresc', endMeasure: 0, endEvent: 3 }] }),
-      q(['d/5']),
-      q(['e/5'], { dynamics: [{ value: 'f' }] }),
-      q(['f/5']),
-    ] }];
-    // 左手は全音符1つ: 拍0の p+cresc. と拍2の f が次の小節の頭へ集まる
-    const lh: MeasureData[] = [{ events: [{ dur: '1', isRest: false, keys: ['c/3'] }] }, { events: [q(['c/3'])] }];
-    const [, mergedLh] = mergeGrandStaffDynamics([rh, lh]);
-    expect(mergedLh[0].events[0].dynamics).toEqual([{ value: 'p' }]);
-    expect(mergedLh[1].events[0].dynamics).toEqual([{ value: 'f' }]);
-  });
-
-  it('副声部の音は同じ拍位置以前の主声部の**発音**を引く（主声部が休符の区間でも既定へ戻らない）', () => {
-    const rest = { dur: '4' as const, isRest: true, keys: ['b/4'] };
-    const measure: MeasureData = {
-      events: [q(['c/5'], { dynamics: [{ value: 'p' }] }), rest, rest, q(['f/5'])],
-      voices: [
-        { id: 'v1', events: [q(['c/5'], { dynamics: [{ value: 'p' }] }), rest, rest, q(['f/5'])] },
-        { id: 'v2', events: [{ dur: '2', isRest: false, keys: ['a/4'] }, { dur: '2', isRest: false, keys: ['g/4'] }] },
-      ],
-    };
-    // 拍2 の副声部の音: 主声部は休符なので、直前の発音（index 0）を引く
-    expect(findPrimaryEventIndexAtBeat(measure, 2)).toBe(0);
-    const v = resolveDynamicVelocities([measure]);
-    expect(v.get(buildDynamicEventKey(0, findPrimaryEventIndexAtBeat(measure, 2)))).toBe(getAbsoluteDynamicVelocity('p'));
-    // 小節頭が休符なら後の最初の発音を借りる
-    const restFirst: MeasureData = { events: [rest, q(['c/5'])] };
-    expect(findPrimaryEventIndexAtBeat(restFirst, 0)).toBe(1);
-  });
-
-  it('副声部の音は同じ拍位置以前の主声部の音を引く', () => {
-    const measure: MeasureData = {
-      events: [q(['c/5']), q(['d/5']), q(['e/5']), q(['f/5'])],
-      voices: [
-        { id: 'v1', events: [q(['c/5']), q(['d/5']), q(['e/5']), q(['f/5'])] },
-        { id: 'v2', events: [{ dur: '2', isRest: false, keys: ['a/4'] }, { dur: '2', isRest: false, keys: ['g/4'] }] },
-      ],
-    };
-    expect(findPrimaryEventIndexAtBeat(measure, 0)).toBe(0);
-    expect(findPrimaryEventIndexAtBeat(measure, 2)).toBe(2);
-    expect(findPrimaryEventIndexAtBeat(measure, 2.5)).toBe(2);
+  it('記号が無ければ常に既定 0.5', () => {
+    const t = buildDynamicVelocityTimeline([[{ events: [q(['c/5'])] }]], 4);
+    expect(t.markingCount).toBe(0);
+    expect(t.velocityAt(0)).toBe(0.5);
+    expect(t.velocityAt(100)).toBe(0.5);
   });
 });
