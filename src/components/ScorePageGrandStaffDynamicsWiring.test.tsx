@@ -46,9 +46,9 @@ window.ResizeObserver = ResizeObserverMock;
 
 const MOUNT_HEAVY_TIMEOUT_MS = 60000;
 
-function seedPianoWork() {
+function seedPianoWork(options: { overfillRightHand?: boolean } = {}) {
   const q = (keys: string[], extra: Record<string, unknown> = {}) => ({ dur: '4' as const, isRest: false, keys, ...extra });
-  const rhV1 = [q(['c/5'], { dynamics: [{ value: 'p' }] }), q(['d/5']), q(['e/5']), q(['f/5'])];
+  const rhV1 = [q(['c/5'], { dynamics: [{ value: 'p' }] }), q(['d/5']), q(['e/5']), q(['f/5']), ...(options.overfillRightHand ? [q(['g/5'])] : [])];
   const rhV2 = [{ dur: '2' as const, isRest: false, keys: ['a/4'] }, { dur: '2' as const, isRest: false, keys: ['g/4'] }];
   const lh = [q(['c/3']), q(['e/3']), q(['g/3']), q(['c/4'])];
   const data = createSavedScoreData(
@@ -100,5 +100,18 @@ describe('大譜表の強弱は両手に効く（Issue #626）', () => {
     // 左手: 記号は無いが両手共通なので p
     expect(velocities(parts[1])).toHaveLength(4);
     velocities(parts[1]).forEach((v) => expect(v).toBeCloseTo(pVelocity, 5));
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('片手だけ長い小節があっても、両手に同じ前進幅（両手の最大）を渡して小節頭をそろえる（round4 P2）', async () => {
+    seedPianoWork({ overfillRightHand: true });
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(1); }, { timeout: 15000 });
+    const parts = playPartsMock.mock.calls[0][0] as PlaybackPart[];
+    // 右手は 5 拍ぶん入っている（4/4 に 4分 × 5）。左手も同じ 5 拍で次の小節へ進む
+    expect(parts[0].measures[0].measureBeats).toBe(5);
+    expect(parts[1].measures[0].measureBeats).toBe(5);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
