@@ -18,7 +18,7 @@ import SymbolEditor from './SymbolEditor';
 import ConfirmDialog from './ConfirmDialog';
 import SaveLoadButtons, { type ExportStatus } from './SaveLoadButtons';
 import SystemLayoutPanel from './SystemLayoutPanel';
-import SystemGapDragHandle from './SystemGapDragHandle';
+import LayoutGapDragBand from './LayoutGapDragBand';
 import WorkListPanel from './WorkListPanel';
 import PlaybackControls, {
   INSTRUMENT_GROUPS,
@@ -138,6 +138,8 @@ import {
   isNotationSizeStillOverflowing,
   measuredSystemHeightPx,
   recommendedSystemHeightPx,
+  computeLayout,
+  STAVE_TOP_LINE_OFFSET,
   resolveDefaultLayoutForScoreType,
   type SystemMeasureRange,
   type SystemMeasureOverrideInput,
@@ -4271,6 +4273,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       ? Math.max(PART_SPACING_OFFSET_MIN_PX, Math.min(PART_SPACING_OFFSET_MAX_PX, n))
       : resolveDefaultLayoutForScoreType(scoreType).partSpacingOffsetPx;
   });
+  // 「パート間隔」を書き換える唯一の出口。レイアウトタブのスライダーと、段内のパート境界
+  // ドラッグ（Issue #572）の両方がここを通る。値のクランプと保存先（localStorage）を
+  // 1か所にまとめておかないと、片方だけ直したときにもう片方へ修正が届かない（#280 の反省）。
+  const applyPartSpacingOffsetPx = useCallback((value: number) => {
+    if (!Number.isFinite(value)) return;
+    const next = Math.max(PART_SPACING_OFFSET_MIN_PX, Math.min(PART_SPACING_OFFSET_MAX_PX, value));
+    setPartSpacingOffsetPx(next);
+    localStorage.setItem(PART_SPACING_OFFSET_KEY, String(next));
+  }, []);
   // 現在の楽譜種別で実際に描画される段（五線）の数。PianoSystemCanvas.tsx の
   // computeLayout() に渡す引数（parts.length）と一致させる必要がある
   // （single=1段、piano=右手/左手の2段、quartet=4段、ensemble=編成の総段数。
@@ -5011,6 +5022,38 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const getSystemGapOverridesPx = useCallback((ranges: SystemMeasureRange[]): number[] => (
     ranges.map((range) => systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0)
   ), [systemRowGapOverrides]);
+
+  // 段の中のパート境界（大譜表の右手/左手の間、四重奏の4段、編成譜のパート間）に出す
+  // 掴みしろの置き場所（Issue #572）。動かす値は「パート間隔」＝ partSpacingOffsetPx で、
+  // これは段ごとの上書きではなく譜面全体の設定なので、どの段のどの境界を掴んでも
+  // 段内の全境界が同じだけ動く（layout-pipeline/design.md 不変条件I3「パート間隔が均一」）。
+  //
+  // 位置は DOM の実測ではなく、実際の描画が使うのと同じ純関数（computeLayout）から求める。
+  // 五線の SVG は「論理座標 × effectiveRenderScale」で描かれ、その上端が段の内側ラッパー
+  // （.system-select-inner＝帯の位置の基準）の上端と一致するので、論理 y に倍率を掛けた値が
+  // そのまま帯の top（レイアウトpx）になる。実測に頼らないので、描画前でも位置が決まる。
+  const partGapBands = useMemo(() => {
+    if (partCountForSystemLayout < 2) return [];
+    const { staveYs } = computeLayout(partCountForSystemLayout, partSpacingOffsetPx);
+    // staveYs[k] は上から k 番目の五線に VexFlow へ渡す y で、実際の五線の上端（第1線）は
+    // そこから STAVE_TOP_LINE_OFFSET だけ下（VexFlow が五線の上に取る既定の余白ぶん）。
+    // 境界 i（0始まり）は「i+1 番目の五線の上端」なので、その分を足してから倍率を掛ける。
+    //
+    // パート間隔を1px広げると、その境界より上に i+1 個ぶんの間隔が積み上がって下がる。
+    // 1目盛りあたりの移動量をこの本数ぶんに直しておかないと、下のパートの境界ほど
+    // 指より速く動いてしまう（掴んだ境界が指に付いてくる、という原則が崩れる）。
+    return staveYs.slice(1).map((y, i) => ({
+      boundaryIndex: i,
+      topPx: (y + STAVE_TOP_LINE_OFFSET) * effectiveRenderScale,
+      layoutPxPerValue: (i + 1) * effectiveRenderScale,
+    }));
+  }, [partCountForSystemLayout, partSpacingOffsetPx, effectiveRenderScale]);
+  // パート間隔はレイアウトタブのスライダーと同じ「ブラウザに保存する表示設定」であり、
+  // 譜面データの Undo（pushHistory / historyStack）の対象ではない（スライダーを動かしても
+  // 履歴は積まれない）。帯にだけ履歴を持たせると、「元に戻す」がパート間隔を戻さずに
+  // 譜面の中身だけ巻き戻す食い違いになるため、履歴の口には何もしない関数を渡す
+  // （設計判断は page-layout-controls/design.md の #572 の追補に記録）。
+  const noPartGapHistory = useCallback(() => {}, []);
   // 終止線を描く「内容のある最後の小節」の絶対インデックス。
   // 内容が1小節も無い（空の楽譜）ときは undefined にして、どの Canvas でも終止線を描かせない。
   const finalMeasureIndex = contentMeasureCount > 0 ? contentMeasureCount - 1 : undefined;
@@ -5188,17 +5231,38 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
          差し込み口」に乗せてある（SystemSelectFrame は選択中の段でここを1回だけ描く）ので、
          4つの譜種コンポーネントへ新しい props を通さずに済む。
          パネル（段の下側）とは上下に分かれているので、操作が重ならない */
-      <SystemGapDragHandle
-        startMeasure={range.start}
-        systemLabel={systemLabel}
-        currentGapPx={rowGapPx}
-        gapMinPx={SYSTEM_ROW_GAP_MIN_PX}
-        gapMaxPx={SYSTEM_ROW_GAP_MAX_PX}
+      <LayoutGapDragBand
+        testId={`system-gap-drag-${range.start}`}
+        valueTestId={`system-gap-drag-value-${range.start}`}
+        label={`${systemLabel}の上端。上下にドラッグして上の段との間隔を調整`}
+        currentValue={rowGapPx}
+        minValue={SYSTEM_ROW_GAP_MIN_PX}
+        maxValue={SYSTEM_ROW_GAP_MAX_PX}
         onDragStart={beginSystemRowGapDrag}
         onDragMove={(gapPx) => setSystemRowGapOverrideValue(range.start, gapPx)}
         onDragEnd={endSystemRowGapDrag}
       />
       )}
+      {/* 段の中のパート境界の帯（Issue #572）。段の上端の帯（上）とは置き場所が
+          分かれており（こちらは五線と五線の間）、掴み間違えない。動かす値も別物
+          （こちらは全体設定の「パート間隔」）で、パネルの「間隔」は動かさない */}
+      {partGapBands.map((band) => (
+        <LayoutGapDragBand
+          key={band.boundaryIndex}
+          testId={`part-gap-drag-${range.start}-${band.boundaryIndex}`}
+          valueTestId={`part-gap-drag-value-${range.start}-${band.boundaryIndex}`}
+          label={`パート${band.boundaryIndex + 1}と${band.boundaryIndex + 2}の間。上下にドラッグしてパート間隔を調整（数値での指定はレイアウトタブから）`}
+          variantClassName="system-gap-drag-handle--part"
+          style={{ top: band.topPx }}
+          currentValue={partSpacingOffsetPx}
+          minValue={PART_SPACING_OFFSET_MIN_PX}
+          maxValue={PART_SPACING_OFFSET_MAX_PX}
+          layoutPxPerValue={band.layoutPxPerValue}
+          onDragStart={noPartGapHistory}
+          onDragMove={applyPartSpacingOffsetPx}
+          onDragEnd={noPartGapHistory}
+        />
+      ))}
       <SystemLayoutPanel
         systemLabel={systemLabel}
         side={selectedSystem.side}
@@ -5228,6 +5292,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     adjustSystemMeasureOverride, adjustSystemRowGapOverride, closeSystemSelection, notifyScoreEdit,
     beginSystemRowGapDrag, endSystemRowGapDrag, setSystemRowGapOverrideValue,
     pageSystemLayoutOptions, getPageSystemOffset,
+    partGapBands, partSpacingOffsetPx, applyPartSpacingOffsetPx, noPartGapHistory,
   ]);
 
   // 現在の画面状態から SavedScoreData を組み立てる（エクスポート共通処理）
@@ -6711,13 +6776,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                     max={PART_SPACING_OFFSET_MAX_PX}
                     step={1}
                     value={partSpacingOffsetPx}
-                    onChange={e => {
-                      const v = Math.max(PART_SPACING_OFFSET_MIN_PX, Math.min(PART_SPACING_OFFSET_MAX_PX, Number(e.target.value)));
-                      if (!isNaN(v)) {
-                        setPartSpacingOffsetPx(v);
-                        localStorage.setItem(PART_SPACING_OFFSET_KEY, String(v));
-                      }
-                    }}
+                    onChange={e => applyPartSpacingOffsetPx(Number(e.target.value))}
                     style={{ width: 70 }}
                     aria-label="パート間隔"
                   />

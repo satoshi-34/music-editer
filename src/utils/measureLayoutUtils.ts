@@ -293,6 +293,16 @@ const FIRST_STAVE_Y = 20;
 const STAVE_SPACING = 80; // 段と段の間隔（Y方向）。単旋律・ピアノ・弦楽四重奏用
 const STAVE_SPACING_ENSEMBLE = 60; // 5パート以上の編成譜用（密な既定値）
 const ENSEMBLE_DENSE_SPACING_MIN_PARTS = 5;
+/**
+ * VexFlow の `new Stave(x, y, w)` に渡す y と、実際に描かれる五線の第1線（上端）との差
+ * （ネイティブ単位）。VexFlow は既定オプション（space_above_staff_ln = 4行 × 行間10単位）の
+ * ぶんだけ余白を上に取ってから五線を描くため、`staveYs[i]` そのものは「五線の上端」ではない。
+ * 五線の上端の座標が要る側（段内のパート境界に掴みしろを重ねる Issue #572 など）は、
+ * `staveYs[i] + STAVE_TOP_LINE_OFFSET` を使う（＝描画時の `stave.getYForLine(0)` と一致する）。
+ * 実際の描画と一致していることは ScorePagePartGapDrag.test.tsx が
+ * `data-line0-y`（描画された五線そのものの座標）と突き合わせて固定している。
+ */
+export const STAVE_TOP_LINE_OFFSET = 40;
 // パート間隔スライダー（Issue #90）で自動値をどこまで詰めても、ピアノ大譜表の
 // 右手/左手のような隣接パートが窮屈にならないための下限（ネイティブ単位）。
 export const MIN_STAVE_SPACING_PX = 30;
