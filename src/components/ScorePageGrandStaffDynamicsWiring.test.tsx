@@ -102,7 +102,7 @@ describe('大譜表の強弱は両手に効く（Issue #626）', () => {
     velocities(parts[1]).forEach((v) => expect(v).toBeCloseTo(pVelocity, 5));
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('片手だけ長い小節があっても、両手に同じ前進幅（両手の最大）を渡して小節頭をそろえる（round4 P2）', async () => {
+  it('片手だけ長い小節があっても、エンジンへ渡す measureBeats は拍子どおりで（各手の前進はエンジン任せ）、p は両手に効く', async () => {
     seedPianoWork({ overfillRightHand: true });
     render(<ScorePage />);
     await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
@@ -110,8 +110,11 @@ describe('大譜表の強弱は両手に効く（Issue #626）', () => {
     fireEvent.click(screen.getByRole('button', { name: '再生' }));
     await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(1); }, { timeout: 15000 });
     const parts = playPartsMock.mock.calls[0][0] as PlaybackPart[];
-    // 右手は 5 拍ぶん入っている（4/4 に 4分 × 5）。左手も同じ 5 拍で次の小節へ進む
-    expect(parts[0].measures[0].measureBeats).toBe(5);
-    expect(parts[1].measures[0].measureBeats).toBe(5);
+    // 右手は 5 拍ぶん入っている（4/4 に 4分 × 5）が、measureBeats は従来どおり拍子の 4。
+    // 前進幅（拍子と中身の大きいほう）はエンジンが各パートで決め、強弱の時計も各パート自身に合わせる
+    expect(parts[0].measures[0].measureBeats).toBe(4);
+    expect(parts[1].measures[0].measureBeats).toBe(4);
+    const pVelocity = getAbsoluteDynamicVelocity('p');
+    parts[1].measures[0].events.filter((e) => !e.isRest).forEach((e) => expect(e.velocity).toBeCloseTo(pVelocity, 5));
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

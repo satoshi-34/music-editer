@@ -353,11 +353,49 @@ export function measureAdvanceBeats(
   return advances;
 }
 
+/** 記号の出どころ（小節番号・小節内拍で持つ。絶対拍は時計側のパートで決める） */
+export interface DynamicMarkingSource {
+  measureIndex: number;
+  beat: number;
+  order: number;
+  absolute: AbsoluteDynamicMarking | null;
+  relative: RelativeDynamicMarking | null;
+}
+
+/** 全パート・全声部から強弱記号を「小節番号・小節内拍」つきで集める */
+export function collectDynamicMarkings(partsMeasures: readonly (readonly MeasureData[])[]): DynamicMarkingSource[] {
+  const markings: DynamicMarkingSource[] = [];
+  partsMeasures.forEach((measures) => {
+    measures.forEach((measure, measureIndex) => {
+      getMeasureVoices(measure).forEach((voice) => {
+        let beat = 0;
+        voice.events.forEach((event) => {
+          const absolute = getAbsoluteDynamicFromEvent(event);
+          const relative = getRelativeDynamicFromEvent(event) ?? event.hairpins?.[0]?.type ?? null;
+          // 同じ音に p と cresc. が両方あれば、絶対→相対の順に別々の記号として扱う
+          if (absolute) markings.push({ measureIndex, beat, order: markings.length, absolute, relative: null });
+          if (relative) markings.push({ measureIndex, beat, order: markings.length, absolute: null, relative });
+          beat += getEventDurationBeats(event);
+        });
+      });
+    });
+  });
+  return markings;
+}
+
+/**
+ * @param sourceMarkings 記号の出どころ（ピアノは両手ぶん、他は自パートぶん）
+ * @param clockMeasures  絶対拍の時計にするパートの小節列（自パート）。エンジンは各パートを
+ *   独立に「拍子の拍数と中身の長さの大きいほう」で進めるので、絶対拍もそのパート自身の前進幅で
+ *   数える（round4〜5: 両手の最大で共有するとエンジン・ハイライト・タイ・ペダルの全部と食い違う）。
+ *   他方の手の記号は「小節番号・小節内拍」のまま受け取り、この時計へ置き直す
+ */
 export function buildDynamicVelocityTimeline(
-  partsMeasures: readonly (readonly MeasureData[])[],
+  sourceMarkings: readonly DynamicMarkingSource[],
+  clockMeasures: readonly MeasureData[],
   beatsPerMeasure: number,
 ): DynamicVelocityTimeline {
-  const advances = measureAdvanceBeats(partsMeasures, beatsPerMeasure);
+  const advances = measureAdvanceBeats([clockMeasures], beatsPerMeasure);
   // 小節頭の絶対拍（前向きの累積）
   const measureStarts: number[] = [];
   let acc = 0;
@@ -367,22 +405,12 @@ export function buildDynamicVelocityTimeline(
     (measureStarts[measureIndex] ?? (endBeat + (measureIndex - advances.length) * beatsPerMeasure)) + beatInMeasure;
 
   type Marking = { at: number; order: number; absolute: AbsoluteDynamicMarking | null; relative: RelativeDynamicMarking | null };
-  const markings: Marking[] = [];
-  partsMeasures.forEach((measures) => {
-    measures.forEach((measure, measureIndex) => {
-      getMeasureVoices(measure).forEach((voice) => {
-        let beat = 0;
-        voice.events.forEach((event) => {
-          const absolute = getAbsoluteDynamicFromEvent(event);
-          const relative = getRelativeDynamicFromEvent(event) ?? event.hairpins?.[0]?.type ?? null;
-          // 同じ音に p と cresc. が両方あれば、絶対→相対の順に別々の記号として扱う
-          if (absolute) markings.push({ at: positionOf(measureIndex, beat), order: markings.length, absolute, relative: null });
-          if (relative) markings.push({ at: positionOf(measureIndex, beat), order: markings.length, absolute: null, relative });
-          beat += getEventDurationBeats(event);
-        });
-      });
-    });
-  });
+  const markings: Marking[] = sourceMarkings.map((marking) => ({
+    at: positionOf(marking.measureIndex, marking.beat),
+    order: marking.order,
+    absolute: marking.absolute,
+    relative: marking.relative,
+  }));
   // 同一位置では絶対強弱を先に（round3 P2: パートの走査順で cresc. が p の前に来ると長さ 0 の区間になる）
   markings.sort((left, right) =>
     (left.at - right.at) || ((left.absolute ? 0 : 1) - (right.absolute ? 0 : 1)) || (left.order - right.order));

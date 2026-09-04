@@ -169,7 +169,7 @@ import {
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
 import {
   buildDynamicVelocityTimeline,
-  measureAdvanceBeats,
+  collectDynamicMarkings,
 } from '../utils/dynamicMarkingUtils';
 import { resolveScoreMeasureBpms } from '../utils/tempoPlaybackUtils';
 import {
@@ -1775,14 +1775,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 強弱記号は両手に共通なので両パートの記号を1本にまとめ、四重奏・編成譜は
           // 各パートに自分の強弱が書かれるのでパートごとに作る。どの声部の音も自分の拍位置で引く
           const measureBeatsForDynamics = getMeasureBeats(scoreTimeSignature);
-          const sharedDynamicTimeline = scoreType === 'piano'
-            ? buildDynamicVelocityTimeline(expandedPerPart.map((items) => items.map((item) => item.measure)), measureBeatsForDynamics)
-            : null;
-          // ピアノでは両手の小節頭をそろえる: エンジンは各パートを独立に「拍子の拍数と中身の長さの
-          // 大きいほう」で進めるので、片手だけ長い小節があると次小節の頭が左右でずれ、共有した
-          // 強弱の位置と実音がずれる（round4 P2）。両手に同じ前進幅（両手の最大）を渡す
-          const sharedMeasureBeats = scoreType === 'piano'
-            ? measureAdvanceBeats(expandedPerPart.map((items) => items.map((item) => item.measure)), measureBeatsForDynamics)
+          // 記号の出どころ: ピアノは両手ぶん（片手の p が両手に効く）。他はパートごと。
+          // 絶対拍の時計は各パート自身（エンジン・ハイライト・タイ・ペダルと同じ前進幅）
+          const sharedDynamicMarkings = scoreType === 'piano'
+            ? collectDynamicMarkings(expandedPerPart.map((items) => items.map((item) => item.measure)))
             : null;
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
@@ -1797,8 +1793,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 小節番号をオフセットして引く。切った後で解決し直すと、開始位置より前で
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
-            const dynamicTimeline = sharedDynamicTimeline
-              ?? buildDynamicVelocityTimeline([expandedMeasuresFull.map((item) => item.measure)], measureBeatsForDynamics);
+            const ownMeasuresForDynamics = expandedMeasuresFull.map((item) => item.measure);
+            const dynamicTimeline = buildDynamicVelocityTimeline(
+              sharedDynamicMarkings ?? collectDynamicMarkings([ownMeasuresForDynamics]),
+              ownMeasuresForDynamics,
+              measureBeatsForDynamics,
+            );
             // テンポ列はスコア共通（上で1回だけ解決済み・#458 round1 P1）。
             // 強弱と同じく**切る前の全列**で解決してあるので、途中再生でも
             // 開始位置より前の標語・テンポ指定を引き継いだ状態で効く
@@ -1816,8 +1816,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 ...item.measure,
                 // 再生エンジン側が 3/8 や 6/8 の小節長を正しく保てるよう、
                 // 各小節の「本来ここまで進むべき拍数」を明示して渡す。
-                // ピアノでは両手で同じ前進幅（両手の最大・#626）にして小節頭をそろえる
-                measureBeats: sharedMeasureBeats?.[expandedMeasureIndex + startExpandedIndex] ?? getMeasureBeats(scoreTimeSignature),
+                measureBeats: getMeasureBeats(scoreTimeSignature),
                 // この小節を鳴らすテンポ。元の measure.bpm（数値の途中テンポ変更のみ）を
                 // 解決済みの値で上書きする。標語だけが置かれた小節や、指定が無くて前の
                 // テンポを引き継ぐ小節にも、ここで必ず値が入る（#458）
