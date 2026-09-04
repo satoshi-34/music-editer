@@ -1173,10 +1173,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     });
   }, []);
 
-  const clearPlaybackTimer = useCallback(() => {
-    // 前の再生の失敗通知を受け続けない（新しい再生を止めてしまう）
+  /** 先読み窓の失敗通知の購読を外す（停止・自然終了・新しい再生の直前・アンマウント。一時停止では外さない） */
+  const unsubscribeSchedulingFailure = useCallback(() => {
     schedulingFailureUnsubscribeRef.current?.();
     schedulingFailureUnsubscribeRef.current = null;
+  }, []);
+
+  const clearPlaybackTimer = useCallback(() => {
     if (playbackTimerRef.current !== null) {
       // 再生終了予約は「最後に 1 つだけ」が正しい。
       // 古い予約を残したままにすると、次の再生中に前の予約が発火して
@@ -1198,7 +1201,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // （残すとテスト teardown 後に発火して未処理例外になる。通知系タイマーと同じ問題）
   useEffect(() => () => {
     clearPlaybackTimer();
-  }, [clearPlaybackTimer]);
+    unsubscribeSchedulingFailure();
+  }, [clearPlaybackTimer, unsubscribeSchedulingFailure]);
 
   const resetPlaybackClock = useCallback(() => {
     // 3 つの ref は「いつ始まったか」「あと何ミリ秒あるか」「全体で何ミリ秒か」のセット。
@@ -1216,8 +1220,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * 音源方式を切り替えたとき新しいエンジンの音色プレビューを止めてしまう）
    */
   const finishPlaybackNaturally = useCallback((engine: PlaybackEngine) => {
-    schedulingFailureUnsubscribeRef.current?.();
-    schedulingFailureUnsubscribeRef.current = null;
+    unsubscribeSchedulingFailure();
     setPlaybackState('stopped');
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     playbackTimerRef.current = null;
@@ -1229,7 +1232,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       engine.stopAll();
     }, PLAYBACK_END_CLEANUP_DELAY_MS);
     playbackCleanupRef.current = { timer, engine };
-  }, [resetPlaybackClock]);
+  }, [resetPlaybackClock, unsubscribeSchedulingFailure]);
 
   /**
    * 余韻待ち中の後始末が残っていれば、いま実行する（次の再生の直前に呼ぶ）。
@@ -1915,9 +1918,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           ) + scheduleLeadSeconds();
           setPlaybackState('playing');
           clearPlaybackTimer();
-          // 先読み窓（#622）の後続の予約が失敗したら、無音のまま「再生中」を残さず止めて知らせる
+          // 先読み窓（#622）の後続の予約が失敗したら、無音のまま「再生中」を残さず止めて知らせる。
+          // 購読は再生ごとに張り替え、一時停止では外さない（round3 P2: 再開後の失敗を取りこぼす）
+          unsubscribeSchedulingFailure();
           schedulingFailureUnsubscribeRef.current = audioEngine.onSchedulingFailure?.((error) => {
             console.error('[ScorePage] 再生途中の予約失敗により停止します:', error);
+            unsubscribeSchedulingFailure();
             clearPlaybackTimer();
             audioEngine.stopAll();
             setPlaybackState('stopped');
@@ -1979,7 +1985,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, finishPlaybackNaturally, flushPendingPlaybackCleanup, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, playbackSpeedPercent, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
+  }, [clearPlaybackTimer, currentInstrument, finishPlaybackNaturally, flushPendingPlaybackCleanup, unsubscribeSchedulingFailure, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, playbackSpeedPercent, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -2003,12 +2009,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const handleStop = useCallback(() => {
     // stop は「音を止める」だけでなく、「一時停止用の残り時間」も捨てる。
     // ここで resetPlaybackClock を呼ばないと、次の再生開始時に古い残り時間を再利用してしまう。
+    unsubscribeSchedulingFailure();
     clearPlaybackTimer();
     getAudioEngine().stopAll();
     setPlaybackState('stopped');
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     resetPlaybackClock();
-  }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
+  }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock, unsubscribeSchedulingFailure]);
 
   const handleSeek = useCallback((position: { measureIndex: number; beatPosition: number; noteIndex: number }) => {
     // 現状の再生ボタン経路は「見た目上の位置表示」だけを更新している。

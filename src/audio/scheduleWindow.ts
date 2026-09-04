@@ -45,11 +45,11 @@ export function takeDueVoices<T extends TimedVoice>(
 }
 
 export interface WindowedScheduler {
-  /** 先頭の窓を同期的に作り、以後はタイマーで進める */
+  /** 先頭の窓を同期的に作り、以後はタイマーで進める。先頭の窓の同期例外はここから投げる */
   start(): void;
   /** 以後の窓を作らない。作成済みの音はエンジン側（stopAll）が止める */
   stop(): void;
-  /** 計測用: 生成済みの音の数と全体数 */
+  /** 計測用: 生成済みの音の数と全体数。active は「まだ投入する窓が残っている」 */
   stats(): { scheduled: number; total: number; active: boolean };
 }
 
@@ -77,56 +77,70 @@ export function createWindowedScheduler<T extends TimedVoice>(options: {
   const tickMs = options.tickMs ?? SCHEDULE_TICK_MS;
   let cursor = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let active = false;
+  // stopped: 明示的に止めた（stop / 失敗）。exhausted: 全部投入し終えた（Promise は未決着でもよい）。
+  // 2つを分けるのは、最後の窓の非同期な失敗も受け付けるため（round3 P2: 投入完了＝active=false に
+  // すると最終窓の reject が握りつぶされる）
+  let stopped = false;
+  let exhausted = false;
+  // start() の中（先頭の窓）で起きた失敗は、呼び出し側が playParts の失敗として受け取る。
+  // 同期例外は start() から投げ、Promise の拒否は呼び出し側の await に任せて onError は呼ばない
+  let inStart = false;
+  let startError: { error: unknown } | null = null;
 
-  const fail = (error: unknown) => {
-    if (!active) return;
-    stop();
-    options.onError?.(error);
-  };
-  const advance = () => {
-    const { due, nextCursor } = takeDueVoices(sorted, cursor, options.now() + lookahead);
-    cursor = nextCursor;
-    for (const voice of due) {
-      if (!active) return;
-      try {
-        const result = options.play(voice);
-        if (result && typeof (result as Promise<void>).then === 'function') {
-          (result as Promise<void>).catch(fail);
-        }
-      } catch (error) {
-        fail(error);
-      }
-    }
-  };
   const stop = () => {
-    active = false;
+    stopped = true;
     if (timer !== null) {
       clearTimeout(timer);
       timer = null;
     }
   };
-  const tick = () => {
-    timer = null;
-    if (!active) return;
-    advance();
-    if (cursor >= sorted.length) {
-      active = false;
+  const fail = (error: unknown, fromStart: boolean) => {
+    if (stopped) return;
+    stop();
+    if (fromStart) {
+      startError ??= { error };
       return;
     }
-    timer = setTimeout(tick, tickMs);
+    options.onError?.(error);
+  };
+  const advance = () => {
+    const { due, nextCursor } = takeDueVoices(sorted, cursor, options.now() + lookahead);
+    cursor = nextCursor;
+    const fromStart = inStart;
+    for (const voice of due) {
+      if (stopped) return;
+      try {
+        const result = options.play(voice);
+        if (result && typeof (result as Promise<void>).then === 'function') {
+          (result as Promise<void>).catch((error) => fail(error, fromStart));
+        }
+      } catch (error) {
+        fail(error, fromStart);
+      }
+    }
+    if (cursor >= sorted.length) exhausted = true;
+  };
+  const tick = () => {
+    timer = null;
+    if (stopped) return;
+    advance();
+    if (!stopped && !exhausted) timer = setTimeout(tick, tickMs);
   };
 
   return {
     start() {
-      active = true;
-      advance();
-      if (cursor < sorted.length) timer = setTimeout(tick, tickMs);
-      else active = false;
+      inStart = true;
+      try {
+        advance();
+      } finally {
+        inStart = false;
+      }
+      if (startError) throw startError.error;
+      if (!stopped && !exhausted) timer = setTimeout(tick, tickMs);
     },
     stop,
     stats() {
-      return { scheduled: cursor, total: sorted.length, active };
+      return { scheduled: cursor, total: sorted.length, active: !stopped && !exhausted };
     },
   };
 }

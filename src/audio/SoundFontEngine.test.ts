@@ -214,6 +214,14 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
     }
   });
 
+  it('先頭の窓で player.play が同期例外を投げたら playParts が失敗として伝える（#622 round3 P2）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+    play.mockImplementation(() => { throw new Error('play failed'); });
+    await expect(engine.playParts([{
+      measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C4'] }] }],
+    }], 120)).rejects.toThrow('play failed');
+  });
+
   it('タイ2音は「1回の発音・合計の長さ」で予約される', async () => {
     const { engine, play } = await setupEngineWithFakePlayer();
 

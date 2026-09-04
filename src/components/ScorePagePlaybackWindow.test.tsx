@@ -174,4 +174,23 @@ describe('先読み窓の逐次スケジューリング（Issue #622）', () => 
     // 停止後は購読が外れている（前の再生の失敗が次の再生を止めない）
     expect(fakeEngineState.listeners).toHaveLength(0);
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('一時停止→再開の後の失敗も止めて知らせる（round3 P2: 一時停止で購読を外さない）', async () => {
+    fakeEngineState.useFake = true;
+    seedWork(4);
+    render(<ScorePage />);
+    await waitFor(() => { expect(document.querySelector('rect.vf-note-hit')).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('button', { name: '一時停止' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再開' })).toBeTruthy(); });
+    expect(fakeEngineState.listeners).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: '再開' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy(); });
+    fakeEngineState.listeners[0](new Error('再開後の失敗'));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再生' })).toBeTruthy(); });
+    await waitFor(() => { expect(document.body.textContent).toContain('音の予約に失敗したため停止しました'); });
+    expect(fakeEngineState.listeners).toHaveLength(0);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });

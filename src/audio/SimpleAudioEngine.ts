@@ -617,9 +617,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
         firstWindow?.push(scheduled);
         return scheduled;
       },
+      // 先頭の窓の失敗は scheduler が onError を呼ばず、下の Promise.all が投げる（後続の窓だけ通知）
       onError: (error) => {
-        // 先頭の窓の失敗は下の Promise.all が投げるので、ここでは後続の窓だけ画面へ伝える
-        if (firstWindow) return;
         console.warn('[SimpleAudioEngine] 窓の予約に失敗したため以後の予約を止めます:', error);
         this.notifySchedulingFailure(error);
       },
