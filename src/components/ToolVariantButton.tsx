@@ -77,6 +77,22 @@ export default function ToolVariantButton({
   const updateMenuPos = useCallback(() => {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
+    // ▾ ボタンが画面外へスクロールで消えた・折りたたみで非表示になった（矩形 0）ときは閉じる。
+    // fixed のメニューはクランプで画面端に留まるため、開いたままだと ▾ の無い場所に
+    // メニューだけが残って別の操作群へ重なる（round2 P2）
+    // 非表示は checkVisibility で判定する（矩形 0 で判定すると、レイアウトを持たない
+    // テスト環境=jsdom でも「消えた」扱いになり、開いた瞬間に閉じてしまう）。
+    // 画面外の判定は矩形に大きさがあるときだけ行う
+    const trigger = triggerRef.current;
+    const hidden = typeof trigger?.checkVisibility === 'function' && !trigger.checkVisibility();
+    const hasSize = rect.width > 0 && rect.height > 0;
+    const offscreen = hasSize && (
+      rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth
+    );
+    if (hidden || offscreen) {
+      setOpen(false);
+      return;
+    }
     // 開いた直後は実測できないので、まず個数からの見積もりで置き、描画後に実測で置き直す
     const menuRect = menuRef.current?.getBoundingClientRect();
     const menuWidth = menuRect?.width || estimateVariantMenuWidth(options.length);
@@ -142,6 +158,14 @@ export default function ToolVariantButton({
     <span
       ref={wrapperRef}
       style={{ display: 'inline-flex', flexShrink: 0 }}
+      // キーボードで Tab 移動して部品の外へ出たら閉じる（round2 P2: mousedown だけだと
+      // Enter/Space でツールバーを折りたたんだとき open のまま隠れ、再展開で勝手に復活する）。
+      // relatedTarget が部品の中（本体ボタン・▾・項目）なら開いたままにする
+      onBlur={(e) => {
+        if (!open) return;
+        const next = e.relatedTarget as Node | null;
+        if (!next || !wrapperRef.current?.contains(next)) setOpen(false);
+      }}
       onKeyDown={(e) => {
         // Escape で閉じられないと、キーボードだけで使う人がメニューから抜け出せない
         if (e.key === 'Escape' && open) {
