@@ -106,8 +106,10 @@ function pageIndexOfSystem(startMeasure: number): number {
 }
 
 /** 主ポインタの左ボタンで掴む（#536 の規約どおり isPrimary / button / pointerId をそろえる） */
-function grab(handle: HTMLElement, clientX: number, clientY: number) {
-  fireEvent.pointerDown(handle, { button: 0, isPrimary: true, pointerId: 1, pointerType: 'mouse', clientX, clientY });
+function grab(handle: HTMLElement, clientX: number, clientY: number, pointerId: number = 1) {
+  // pointerId を変えられるのは「2本目のポインタ」を作るため（round2 P2-1 のテスト）。
+  // タッチとマウスのように種類が違うポインタは、どちらも isPrimary=true で同時に成立する
+  fireEvent.pointerDown(handle, { button: 0, isPrimary: true, pointerId, pointerType: 'mouse', clientX, clientY });
 }
 
 describe('ScorePage: レイアウトタブ＝整えるモード（Issue #571）', () => {
@@ -360,5 +362,86 @@ describe('ScorePage: レイアウトタブ＝整えるモード（Issue #571）'
     // 「元に戻す」が空振りしない（＝履歴が1件も増えていない）ことは、
     // ボタンが無効のままであることで確かめる
     expect((screen.getByTitle(/元に戻す/) as HTMLButtonElement).disabled).toBe(true);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('ドラッグ中は2本目のポインタが別の掴みしろを掴めない（round2 P2-1）', async () => {
+    // Undo の退避先（layoutDragHistoryRef）は1つしか無いので、2つのドラッグが同時に
+    // 走ると後発が退避を上書きし、片方の確定後にもう片方が中止されると確定済みの履歴まで
+    // 巻き戻る。共有ロックで2本目を掴ませない（先着優先）ことで、その競合ごと防ぐ。
+    await renderScore();
+    openTab('レイアウト');
+    const starts = systemStartMeasures();
+    expect(starts.length).toBeGreaterThan(2);
+    const first = starts[1];
+    const second = starts[2];
+    const firstHandle = await screen.findByTestId(`system-gap-drag-${first}`);
+    const secondHandle = await screen.findByTestId(`system-gap-drag-${second}`);
+
+    // 1本目が段2の帯を掴む（掴んだ段が選ばれる）
+    grab(firstHandle as HTMLElement, 300, 200, 1);
+    await waitFor(() => {
+      expect(screen.getByTestId(`system-layout-panel-${first}`)).toBeTruthy();
+    });
+
+    // 2本目が別の段の帯を掴もうとしても掴めない。掴めていれば onGrab で
+    // 段の選択が移るはずなので、選択が1本目の段のままであることで確かめる
+    grab(secondHandle as HTMLElement, 300, 400, 2);
+    expect(screen.queryByTestId(`system-layout-panel-${second}`)).toBeNull();
+    expect(screen.getByTestId(`system-layout-panel-${first}`)).toBeTruthy();
+
+    // 2本目を動かしても、その段の間隔は変わらない（セッションが成立していない）
+    fireEvent.pointerMove(window, { pointerId: 2, clientX: 300, clientY: 460 });
+    expect(frameMarginTop(second)).toBe('');
+
+    // 1本目は最後まで引き続けられる（2本目に邪魔されない）
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 300, clientY: 220 });
+    await waitFor(() => {
+      expect(frameMarginTop(first)).toBe('20px');
+    });
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 300, clientY: 220 });
+
+    // 離せばロックは外れる。次のドラッグは普通に掴める（掴めなくなったら退行）
+    grab(secondHandle as HTMLElement, 300, 400, 3);
+    fireEvent.pointerMove(window, { pointerId: 3, clientX: 300, clientY: 430 });
+    await waitFor(() => {
+      expect(frameMarginTop(second)).toBe('30px');
+    });
+    fireEvent.pointerUp(window, { pointerId: 3, clientX: 300, clientY: 430 });
+    // 1本目の確定ぶんも残っている（後発のドラッグに巻き込まれて消えない）
+    expect(frameMarginTop(first)).toBe('20px');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('非先頭段を選んだまま音符・休符タブへ戻すと境界帯も消える（round2 P2-2）', async () => {
+    // 「音符・休符タブでは帯も面も無い」（REGRESSION Z）は、段を選んでいる場合にも及ぶ。
+    // 帯の表示条件に整えるモードが入っていなかったため、ページの先頭ではない段
+    // （＝上に境界がある段）を選んだままタブを戻すと帯だけが譜面に残っていた。
+    await renderScore();
+    openTab('レイアウト');
+    const starts = systemStartMeasures();
+    const target = starts[1];
+
+    // ページの先頭ではない段を選ぶ（この段には上端の境界帯が出る）
+    fireEvent.click(await screen.findByTestId(`system-select-surface-${target}`));
+    await waitFor(() => {
+      expect(screen.getByTestId(`system-layout-panel-${target}`)).toBeTruthy();
+    });
+    expect(screen.getByTestId(`system-gap-drag-${target}`)).toBeTruthy();
+
+    openTab('音符・休符');
+    await waitFor(() => {
+      expect(screen.queryByTestId(`system-gap-drag-${target}`)).toBeNull();
+    });
+    // 帯・面・◢ のどれも残らない
+    expect(document.querySelector('.system-gap-drag-handle')).toBeNull();
+    expect(document.querySelector('.system-select-surface')).toBeNull();
+    expect(document.querySelector('.notation-size-drag-handle')).toBeNull();
+    // 選択そのものとパネルは従来どおり残ってよい
+    expect(screen.getByTestId(`system-layout-panel-${target}`)).toBeTruthy();
+
+    // レイアウトタブへ戻せば帯もまた出る（消しっぱなしにはしない）
+    openTab('レイアウト');
+    await waitFor(() => {
+      expect(screen.getByTestId(`system-gap-drag-${target}`)).toBeTruthy();
+    });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

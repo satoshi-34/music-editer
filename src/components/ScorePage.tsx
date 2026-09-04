@@ -53,7 +53,7 @@ import { parseMusicXmlWithDefaults } from '../utils/musicXmlImport';
 import { SoundFontLoadAbortedError } from '../audio/SoundFontEngine';
 import { downloadMidi } from '../utils/midiExport';
 import { useTempoStorage } from '../hooks/useTempoStorage';
-import { useValueDragSession } from '../hooks/useValueDragSession';
+import { useValueDragSession, createValueDragLock } from '../hooks/useValueDragSession';
 import {
   formatNotationSizeHint,
   measureNotationSizeDragDistance,
@@ -4885,6 +4885,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 段の境界ドラッグ（#523）と段の右下角の大きさドラッグ（#571）で共用する
   // （ポインタは1本しか掴めないので、2つのドラッグが同時に走ることはない）。
   const layoutDragHistoryRef = useRef<{ history: ScoreSnapshot[]; future: ScoreSnapshot[] } | null>(null);
+  // その退避先が1つしか無いので、2つのドラッグが同時に走ると後発が退避を上書きしてしまう。
+  // Pointer Events では primary のポインタが同時に2本成立し得る（タッチとマウスなど種類が
+  // 違う場合。「ポインタは1本しか掴めない」は成り立たない・round2 P2-1）ため、
+  // 帯と◢のすべてのドラッグで**同じロックの箱**を共有し、先に掴んだ1つだけを通す。
+  const layoutDragLockRef = useRef(createValueDragLock());
   // 値が実際に変わる最初の時点で呼ばれる（各ドラッグハンドルの onDragStart）
   const beginLayoutValueDrag = useCallback(() => {
     layoutDragHistoryRef.current = { history: historyStack.current, future: futureStack.current };
@@ -4929,6 +4934,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     onDragStart: beginLayoutValueDrag,
     onDragMove: applyNotationSizeMultiplier,
     onDragEnd: endLayoutValueDrag,
+    // 段の境界帯と同じ Undo 退避先を使うので、同時に掴めないようにする（round2 P2-1）
+    lock: layoutDragLockRef.current,
   });
 
   // 指定した段一覧（systemRanges）ぶんの「段ごとの間隔の追加オフセット(px)」配列を作る。
@@ -5118,6 +5125,31 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     return index;
   }, [visiblePlannedRanges]);
 
+  // 先頭小節 → その段の「間隔の上書き(px)」の索引。上書きは配列で持っている（保存形式の正本）が、
+  // 段ごとに find で線形探索すると、こちらも段数×上書き数の走査になる（round2 P3）。
+  // 上書きが変わったときだけ作り直せば、引き当ては段あたり定数時間で済む。
+  const systemRowGapByStartMeasure = useMemo(() => {
+    const index = new Map<number, number>();
+    systemRowGapOverrides.forEach((o) => index.set(o.startMeasure, o.gapPx));
+    return index;
+  }, [systemRowGapOverrides]);
+
+  // 「各ページの先頭にあたる段の通し番号」の集合。段の上端の境界帯を出してよいかの判定
+  // （＝ページの先頭の段ではない）に使う。段ごとに findPageIndexForSystem を呼ぶと
+  // 先頭ページからのループが段の数だけ走る（round2 P3）ので、ここで一度だけ数え上げる。
+  // ページの段数は必ず1以上として進める（0 だと無限ループになるため）。
+  const pageStartSystemIndexes = useMemo(() => {
+    const starts = new Set<number>();
+    let systemIndex = 0;
+    let pageIndex = 0;
+    while (systemIndex < visiblePlannedRanges.length) {
+      starts.add(systemIndex);
+      systemIndex += Math.max(1, getPageSystemsCapacityPure(pageIndex, pageSystemLayoutOptions));
+      pageIndex += 1;
+    }
+    return starts;
+  }, [visiblePlannedRanges.length, pageSystemLayoutOptions]);
+
   // 選択中の段の横に出すパネル。各 Staff コンポーネントは段のラッパー
   // （SystemSelectFrame）の中でこれを呼ぶだけで、パネルの中身は知らなくてよい。
   const renderSystemPanel = useCallback((startMeasure: number) => {
@@ -5128,13 +5160,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     const systemIndex = systemIndexByStartMeasure.get(startMeasure) ?? -1;
     const range = visiblePlannedRanges[systemIndex];
     if (!range) return null;
-    const rowGapPx = systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0;
+    const rowGapPx = systemRowGapByStartMeasure.get(range.start) ?? 0;
     const systemLabel = `段${systemIndex + 1}`;
     // 境界帯を出すのは「上に段がある段」だけ。段の間隔は後続の段の margin-top として
     // 入るので、ページの先頭の段には「上の段との境界」が存在しない（そこで値を動かすと
     // 境界ではなくページ全体が下へずれるだけになる・round1 P1）。
-    const pageIndex = findPageIndexForSystem(systemIndex, pageSystemLayoutOptions);
-    const hasBoundaryAbove = getPageSystemOffset(pageIndex) < systemIndex;
+    const hasBoundaryAbove = !pageStartSystemIndexes.has(systemIndex);
     return (
       <>
       {isLayoutAdjustMode && (
@@ -5152,11 +5183,16 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         onClick={() => selectSystemForLayout(range.start)}
       />
       )}
-      {hasBoundaryAbove && (
+      {isLayoutAdjustMode && hasBoundaryAbove && (
       /* 段の上端＝上の段との境界帯（Issue #523）。パネルと同じ差し込み口に乗せてある
          （SystemSelectFrame が段ごとにここを1回だけ描く）ので、4つの譜種コンポーネントへ
          新しい props を通さずに済む。パネル（段の下側）とは上下に分かれているので、
-         操作が重ならない。整えるモード中は選択していない段にも出る（Issue #571）。 */
+         操作が重ならない。整えるモード中は選択していない段にも出る（Issue #571）。
+
+         出すのは整えるモード（レイアウトタブ）の間だけ（round2 P2-2）。◢ と同じ理由で、
+         段を選んだまま音符・休符タブへ戻ったときに帯だけが譜面に残ると
+         「他のタブでは譜面を書いている間の見た目を変えない」という約束を破る
+         （REGRESSION Z「音符・休符タブでは帯も面も無い」）。 */
       <SystemGapDragHandle
         startMeasure={range.start}
         systemLabel={systemLabel}
@@ -5169,6 +5205,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // 掴んだ段をそのまま選択する。整えるモードでは選択していない段にも帯が出るので、
         // 「掴む→そのまま調整」が1操作で済む（受入）
         onGrab={() => selectSystemForLayout(range.start)}
+        // 角の◢と Undo の退避先を共有しているので、同時には掴めないようにする（round2 P2-1）
+        dragLock={layoutDragLockRef.current}
       />
       )}
       {isSelected && isLayoutAdjustMode && (
@@ -5220,10 +5258,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       </>
     );
   }, [
-    selectedSystem, visiblePlannedRanges, systemRowGapOverrides, contentMeasureCount,
+    selectedSystem, visiblePlannedRanges, contentMeasureCount,
     adjustSystemMeasureOverride, adjustSystemRowGapOverride, closeSystemSelection, notifyScoreEdit,
     beginLayoutValueDrag, endLayoutValueDrag, setSystemRowGapOverrideValue,
-    pageSystemLayoutOptions, getPageSystemOffset, systemIndexByStartMeasure,
+    systemIndexByStartMeasure, systemRowGapByStartMeasure, pageStartSystemIndexes,
     isLayoutAdjustMode, selectSystemForLayout, notationSizeMultiplier,
     isNotationSizeDragging, handleNotationSizeDragStart,
   ]);

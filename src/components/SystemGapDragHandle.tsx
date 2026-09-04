@@ -15,7 +15,7 @@
 //
 // ポインタの作法（#536）・遊び・Undo を1操作にまとめる手順は、角のリサイズハンドル
 // （NotationSizeDragHandle・#571）と共通なので useValueDragSession へ寄せてある。
-import { useValueDragSession } from '../hooks/useValueDragSession';
+import { useValueDragSession, type ValueDragLock } from '../hooks/useValueDragSession';
 
 type Props = {
   /** この段の先頭小節。data-testid に使う（譜面全体で一意） */
@@ -49,6 +49,12 @@ type Props = {
    * 帯が出ているため、「掴んだ段をそのまま選択状態にする」ために使う。
    */
   onGrab?: () => void;
+  /**
+   * 同時ドラッグを防ぐ共有ロック。角の◢（音符の大きさ）と Undo の退避先を
+   * 共有しているため、どちらか1つしか掴めないようにする（round2 P2-1）。
+   * 呼び出し側（ScorePage）が1個だけ作り、すべての帯と◢へ同じ箱を渡す。
+   */
+  dragLock?: ValueDragLock;
 };
 
 /** パネルの数値表示と同じ書き方（正の値には + を付ける） */
@@ -66,6 +72,7 @@ export default function SystemGapDragHandle({
   onDragMove,
   onDragEnd,
   onGrab,
+  dragLock,
 }: Props) {
   const { grabbing, valueHint, handlePointerDown } = useValueDragSession({
     baseValue: currentGapPx,
@@ -80,6 +87,7 @@ export default function SystemGapDragHandle({
     onDragMove,
     onDragEnd,
     onGrab,
+    lock: dragLock,
   });
 
   return (

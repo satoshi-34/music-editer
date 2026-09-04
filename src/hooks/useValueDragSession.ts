@@ -20,6 +20,30 @@ import { useEffect, useRef, useState } from 'react';
 export const DRAG_START_THRESHOLD_PX = 3;
 
 /**
+ * 「同時に掴めるのは1つだけ」を守るための共有ロック（Issue #571 round2 P2-1）。
+ *
+ * 段の境界帯は段の数だけ、角の◢は1つ、とドラッグの主（このフック）は画面に複数ある。
+ * それぞれが「自分のポインタ列（pointerId）だけを見る」作りなので、セッション同士は
+ * 互いを知らない。ところが Pointer Events では **primary のポインタが同時に2本
+ * 成立し得る**（タッチとマウスのように種類が違えば、どちらも isPrimary=true になる。
+ * 指でも操作できるノートPCなど）。2本目が別のハンドルを掴むと、
+ * Undo の退避先（ScorePage の layoutDragHistoryRef）が1つしか無いため上書きされ、
+ * 片方の確定が退避を消した後にもう片方が中止されると、確定済みの履歴まで巻き戻る。
+ *
+ * そこで「いま誰が掴んでいるか」だけを持つ小さな箱を全セッションで共有し、
+ * 既に誰かが掴んでいる間の2本目の pointerdown は**掴ませない**（先着優先）。
+ */
+export type ValueDragLock = {
+  /** 掴んでいるセッションの目印。誰も掴んでいなければ null */
+  ownerToken: object | null;
+};
+
+/** 共有ロックの箱を1つ作る。呼び出し側（ScorePage）が useRef で1つだけ持ち、各ハンドルへ配る */
+export function createValueDragLock(): ValueDragLock {
+  return { ownerToken: null };
+}
+
+/**
  * 画面の拡大率（ズーム）。譜面は .print-page の transform: scale() で拡大縮小されるため、
  * マウスの移動量（画面px）をそのまま値に使うと、拡大時に指と譜面がずれる。
  * 変倍の実装（CSS 変数）へ依存せずに済むよう、要素自身の「実測の高さ ÷ レイアウト上の高さ」で求める。
@@ -57,6 +81,11 @@ type Options = {
   onDragEnd: (changed: boolean) => void;
   /** 掴んだ瞬間（遊びの判定より前）に1回だけ呼ぶ。段の選択などに使う */
   onGrab?: () => void;
+  /**
+   * 同時ドラッグを防ぐ共有ロック（上記 ValueDragLock）。同じ Undo 退避先を使う
+   * ハンドル同士へ**同じ箱**を渡すこと。渡さない場合は従来どおり排他しない
+   */
+  lock?: ValueDragLock;
 };
 
 type ValueHint = {
@@ -91,6 +120,7 @@ export function useValueDragSession({
   onDragMove,
   onDragEnd,
   onGrab,
+  lock,
 }: Options) {
   // ドラッグ中に出す「いまの値」の吹き出し。null のときは掴んでいない（または遊びの中）
   const [valueHint, setValueHint] = useState<ValueHint | null>(null);
@@ -115,6 +145,17 @@ export function useValueDragSession({
   // 登録した回の古い関数を掴んだままになる。毎レンダー差し替えて最新を呼ぶ
   const callbacksRef = useRef({ onDragStart, onDragMove, onDragEnd, resolveValue, measureDistancePx });
   callbacksRef.current = { onDragStart, onDragMove, onDragEnd, resolveValue, measureDistancePx };
+  // 共有ロック（同時ドラッグの排他・round2 P2-1）。掴んだのが自分かどうかを見分けるため、
+  // このフック1つにつき1個だけの目印（空オブジェクト）を持つ
+  const lockRef = useRef(lock);
+  lockRef.current = lock;
+  const ownTokenRef = useRef<object>({});
+  // 自分が掴んでいるときだけロックを外す。別のセッションが掴んでいるときに
+  // 横から外すと、そちらの排他が効かなくなるため必ず持ち主を確認する
+  const releaseLock = useRef(() => {
+    const current = lockRef.current;
+    if (current && current.ownerToken === ownTokenRef.current) current.ownerToken = null;
+  }).current;
 
   // pointermove / pointerup を掴みしろそのものではなく window で受ける。掴みしろは十数pxしかなく、
   // 掴んだ直後にカーソルはその外へ出るため、要素で受けると1pxも動かせない
@@ -127,6 +168,7 @@ export function useValueDragSession({
     /** 掴んだ状態の後始末。ウィンドウ外で離しても必ずここを通る */
     const finish = (changed: boolean) => {
       sessionRef.current = null;
+      releaseLock();
       setGrabbing(false);
       setValueHint(null);
       callbacksRef.current.onDragEnd(changed);
@@ -205,6 +247,9 @@ export function useValueDragSession({
   // **前回の退避**で履歴を巻き戻して、確定済みの1件まで消してしまう（#523 round2 P2）
   useEffect(() => () => {
     const session = sessionRef.current;
+    // 掴んだ直後（遊びの中）に消えた場合もあるので、セッションの有無に関わらず先に外す。
+    // 外し忘れると誰も掴んでいないのにロックが残り、以降まったく掴めなくなる
+    releaseLock();
     if (!session) return;
     sessionRef.current = null;
     if (session.lastValue !== session.baseValue) {
@@ -220,6 +265,14 @@ export function useValueDragSession({
     if (!e.isPrimary || e.button !== 0) return;
     const frame = e.currentTarget.closest(frameSelector);
     if (!(frame instanceof HTMLElement)) return;
+    // 先に掴んでいるドラッグがあれば2本目は掴ませない（先着優先・round2 P2-1）。
+    // ここで通知を出さないのは、これが「操作の行き止まり」ではなく
+    // 2本目の指が滑り込んだ一瞬の競合であり、先に掴んでいる操作は継続中のため
+    // （通知を出すと引いている最中に吹き出しが割り込んで邪魔になる）。
+    // 利用者から見れば「片手で引いている間、もう一方は反応しない」だけで済む
+    const sharedLock = lockRef.current;
+    if (sharedLock && sharedLock.ownerToken !== null) return;
+    if (sharedLock) sharedLock.ownerToken = ownTokenRef.current;
     // ドラッグ中に文字列の範囲選択が始まると画面が青く反転して譜面が見づらいので止める
     e.preventDefault();
     sessionRef.current = {

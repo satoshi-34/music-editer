@@ -949,3 +949,61 @@ ScorePage も `selectedSystem` を見ているので、判断が二重になる�
   `systemIndexByStartMeasure` の索引
 - `src/App.css`: `.notation-size-drag-value` を `position: fixed` へ（`@media print` でも非表示）
 - テスト: `ScorePageLayoutAdjustMode.test.tsx` に2件追加（計10件）
+
+### round 2 の差し戻しへの対応（2026-09-05・PR #614）
+
+#### P2-1: 同時ドラッグで Undo の退避先が壊れる（共有ロックで2本目を拒否）
+
+Undo の退避先（`ScorePage` の `layoutDragHistoryRef`）は1つしか無く、「ポインタは1本しか
+掴めない」という前提でそれを帯と◢で共有していた。しかし Pointer Events では、種類の違う
+ポインタ（タッチとマウスなど）が**同時に primary として成立する**。2本目が別の掴みしろを
+掴むと後発の `beginLayoutValueDrag` が退避を上書きし、片方の確定で退避が消えたあとに
+もう片方が中止されると、空振りの Undo や確定済み履歴の巻き戻りが起きる。
+
+対策は共有ロック（レビューの推奨案・単純な先着優先）:
+
+- `useValueDragSession` に `ValueDragLock`（`{ ownerToken: object | null }` の小さな箱）と
+  `createValueDragLock()` を追加。フック1つにつき1個の目印を持ち、`pointerdown` の時点で
+  箱が空のときだけ掴んで目印を入れる。埋まっていれば**掴ませない**（`grabbing` にもしない）
+- 外すのは自分が持ち主のときだけ（`finish()` と、アンマウント時のクリーンアップ）。
+  アンマウント側はセッションの有無に関わらず先に外す（掴んだ直後に消えた場合の外し忘れ防止。
+  外し忘れると誰も掴んでいないのに永久に掴めなくなる）
+- `ScorePage` が箱を1つだけ持ち（`layoutDragLockRef`）、◢のセッションとすべての帯
+  （`SystemGapDragHandle` の `dragLock` props）へ同じ箱を配る
+
+2本目を黙って無視する（通知しない）のは、これが操作の行き止まりではなく一瞬の競合で、
+先に掴んでいる操作は継続中のため。引いている最中に吹き出しが割り込むほうが邪魔になる
+（理由はコードのコメントにも残した・「行き止まりは喋る」原則の例外の記録）。
+
+#### P2-2: 帯もレイアウトタブの間だけにする
+
+◢（round1 P2）と同じ理由で、境界帯の描画条件にも `isLayoutAdjustMode` を入れた。
+これで「音符・休符タブでは帯も面も無い」（REGRESSION Z）が、段を選んだままの場合にも成り立つ。
+
+**この変更で #523 の受入の前提が1つ変わる**: 帯は「選択中の段に出る」ものから
+「整えるモード中に出る」ものになった（パネルからの数値指定はどのタブでも従来どおり）。
+そのため `ScorePageSystemGapDrag.test.tsx` は段を選ぶ前にレイアウトタブを開くようにし、
+「ドラッグ中に Esc で選択が解けても履歴が壊れない」テストは、Esc では帯が消えなくなった
+（#571 で選択していない段にも帯が出るため）ので、帯が消える操作＝タブ切替へ手順を移した。
+見ている中身（アンマウント＝pointercancel 扱い・退避の残留が次のドラッグを壊さないこと）は同じ。
+
+#### P3: 間隔の上書きとページ先頭判定も索引化
+
+round1 で段の通し番号だけを `Map` 化したが、`renderSystemPanel` にはまだ段数に比例する
+走査が2つ残っていた。どちらも段の数だけ呼ばれるので、全体では段数の2乗になる。
+
+- 間隔の上書き（配列が保存形式の正本）: 先頭小節 → `gapPx` の `Map` を `useMemo` で作る
+- ページの先頭の段かどうか: `findPageIndexForSystem` は先頭ページからループするため、
+  各ページの先頭にあたる段の通し番号の `Set` を一度だけ数え上げる。
+  ページの段数は `Math.max(1, ...)` で下限を付ける（0 だと無限ループになるため）
+
+#### 影響範囲（round 2 の追加分）
+
+- `src/hooks/useValueDragSession.ts`: `ValueDragLock` / `createValueDragLock()` と
+  `lock` オプション（掴む前の排他・持ち主だけが外す）
+- `src/components/SystemGapDragHandle.tsx`: `dragLock` props をフックへ渡すだけ
+- `src/components/ScorePage.tsx`: 共有ロックを1つ保持して帯と◢へ配る／帯の表示条件に
+  `isLayoutAdjustMode`／`systemRowGapByStartMeasure`・`pageStartSystemIndexes` の索引
+- テスト: `ScorePageLayoutAdjustMode.test.tsx` に2件追加（計12件）／
+  `ScorePageSystemGapDrag.test.tsx` は帯を触る前にレイアウトタブを開くよう更新（16件のまま）
+- `docs/REGRESSION.md`: Y 節（帯はモード中だけ・手順の移動）と Z 節（帯の消失・同時ドラッグ）へ追記
