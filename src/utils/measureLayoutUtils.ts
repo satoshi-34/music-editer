@@ -766,11 +766,10 @@ function measurementPartState(
 //   0.3 での実測（月光以外の譜種・重なりの計測）は未記録。docs/qa/system-break-min-width の
 //   画像・数値は 0.64 時点のもの。
 //
-// 圧縮しても符頭が重ならないのは、段割りの計画（planEffectiveMeasuresPerSystem）が
-// 「開始拍ごとの符頭・臨時記号の実寸を積んだ見積もり」（combinedMeasureMinimumContentWidth）
-// との Math.max を取り、そちらを過密の下限ガードとして残しているため。
-// 実ブラウザでも、修正前後で符頭の重なりが増えていないことを確認済み
-// （docs/qa/system-break-min-width/README.md の「重なりの実測」）。
+// 段割りの計画（planEffectiveMeasuresPerSystem）は「開始拍ごとの符頭・臨時記号の実寸を積んだ
+// 見積もり」（combinedMeasureMinimumContentWidth）との Math.max を取り、そちらを過密の下限ガードとして
+// 残している。**0.64 時点の月光だけ**は、実ブラウザで修正前後の符頭の重なりが増えていないことを確認した
+// 過去記録がある（docs/qa/system-break-min-width/README.md の「重なりの実測」）。0.3 での確認は未記録。
 export const VEXFLOW_IDEAL_WIDTH_COMPRESSION = 0.3;
 
 /**
