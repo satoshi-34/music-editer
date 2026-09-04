@@ -104,6 +104,79 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
     }
   });
 
+  it('同時発音数の上限を超える和音は、上限ぶんだけ予約される（Issue #605）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+    setDevTuningOverride('audio.maxPolyphony', 4);
+    try {
+      await engine.playParts([{
+        measures: [{
+          measureBeats: 4,
+          events: [{ dur: '1', isRest: false, keys: ['C3', 'E3', 'G3', 'C4', 'E4', 'G4'] }],
+        }],
+      }], 120);
+      expect(play).toHaveBeenCalledTimes(4);
+      // 残った音は入力順の後ろ側（新しい側）
+      expect(play.mock.calls.map((call) => call[0])).toEqual(['G3', 'C4', 'E4', 'G4']);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
+  it('ペダルで伸びた古い音は、上限に達した時点で新しい音の開始時刻まで詰められる（Issue #605）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+    setDevTuningOverride('audio.maxPolyphony', 2);
+    try {
+      // 120BPM: 4分=0.5秒。3音とも小節末まで踏みっぱなし（延長 3/2/1 拍）
+      await engine.playParts([{
+        measures: [{
+          measureBeats: 4,
+          events: [
+            { dur: '4', isRest: false, keys: ['C4'], pedalExtendBeatsByKey: { C4: 3 } },
+            { dur: '4', isRest: false, keys: ['D4'], pedalExtendBeatsByKey: { D4: 2 } },
+            { dur: '4', isRest: false, keys: ['E4'], pedalExtendBeatsByKey: { E4: 1 } },
+          ],
+        }],
+      }], 120);
+      expect(play).toHaveBeenCalledTimes(3);
+      // C4 は本来 2.0 秒（小節末まで）だが、3音目 E4 が始まる 1.0 秒で**余韻ごと**終わる
+      // （round1 P1: 余韻を含めないと詰めた音の尻尾と新しい音が重なって上限を超える）。
+      // 音本体を 1.0 秒残し、余韻が 0 になる（round2 P1: 余韻から先に削る）
+      const c4 = play.mock.calls.find((call) => call[0] === 'C4')!;
+      expect(c4[2].duration).toBeCloseTo(1.0, 5);
+      expect(c4[2].release).toBe(0);
+      const d4 = play.mock.calls.find((call) => call[0] === 'D4')!;
+      expect(d4[2].duration).toBeCloseTo(internals(engine).buildPlaybackOptions(1.5).duration, 5);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
+  it('詰められた短音は音本体を残して余韻だけ切られる（round2 P1: 丸ごと無音化しない）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+    setDevTuningOverride('audio.maxPolyphony', 3);
+    try {
+      // 120BPM の16分（0.125秒）の3音和音が2つ続く。余韻込みでは前の和音が次の和音と重なる
+      await engine.playParts([{
+        measures: [{
+          measureBeats: 4,
+          events: [
+            { dur: '16', isRest: false, keys: ['C4', 'E4', 'G4'] },
+            { dur: '16', isRest: false, keys: ['D4', 'F4', 'A4'] },
+          ],
+        }],
+      }], 120);
+      // 6音すべて鳴る。前の和音は音価どおり 0.125 秒鳴って、余韻だけ 0 になる
+      expect(play).toHaveBeenCalledTimes(6);
+      const c4 = play.mock.calls.find((call) => call[0] === 'C4')!;
+      expect(c4[2].duration).toBeCloseTo(0.125, 5);
+      expect(c4[2].release).toBe(0);
+      const d4 = play.mock.calls.find((call) => call[0] === 'D4')!;
+      expect(d4[2].release).toBeGreaterThan(0);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
   it('タイ2音は「1回の発音・合計の長さ」で予約される', async () => {
     const { engine, play } = await setupEngineWithFakePlayer();
 

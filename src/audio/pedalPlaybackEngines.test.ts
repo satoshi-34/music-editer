@@ -100,6 +100,77 @@ describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）'
     }
   });
 
+  it('同時発音数の上限を超える分は予約されない（Issue #605・内蔵側も同じ規約）', async () => {
+    // 1音あたりのオシレーター数を先に測る（音色によって 1〜3 本）
+    const single = new SimpleAudioEngine();
+    await single.initialize();
+    createdOscillators.length = 0;
+    await single.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+      { dur: '1', isRest: false, keys: ['c/4'] },
+    ] }] }], 60);
+    const perNote = createdOscillators.length;
+    expect(perNote).toBeGreaterThan(0);
+
+    setDevTuningOverride('audio.maxPolyphony', 2);
+    try {
+      const engine = new SimpleAudioEngine();
+      await engine.initialize();
+      createdOscillators.length = 0;
+      // 同時刻（startBeat 0）に 5 音。内蔵音源は1イベント1音なので、5 イベントで積む
+      await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+        { dur: '1', isRest: false, keys: ['c/4'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['e/4'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['g/4'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['c/5'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['e/5'], startBeat: 0 },
+      ] }] }], 60);
+      expect(createdOscillators.length).toBe(perNote * 2);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
+  it('内蔵側も、詰められた音は音本体を残して尻尾だけ切られる（#605 round2 P1）', async () => {
+    setDevTuningOverride('audio.maxPolyphony', 1);
+    try {
+      const engine = new SimpleAudioEngine();
+      await engine.initialize();
+      createdOscillators.length = 0;
+      // 60BPM の4分（1秒）が2つ。上限1なので1音目は2音目の開始（1秒）で尻尾ごと終わる
+      await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+        { dur: '4', isRest: false, keys: ['c/4'] },
+        { dur: '4', isRest: false, keys: ['d/4'] },
+      ] }] }], 60);
+      const first = createdOscillators[0];
+      const startedAt = first.start.mock.calls[0][0] as number;
+      const stoppedAt = first.stop.mock.calls[0][0] as number;
+      // 音本体 1 秒はそのまま、尻尾は最小 1ms だけ
+      expect(stoppedAt - startedAt).toBeCloseTo(1.001, 4);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
+  it('Safari 簡易経路でも、詰められた音の尻尾は上書きどおり切られる（#605 round3 P1）', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Macintosh) AppleWebKit/605 Version/17 Safari/605' });
+    setDevTuningOverride('audio.maxPolyphony', 1);
+    try {
+      const engine = new SimpleAudioEngine();
+      await engine.initialize();
+      createdOscillators.length = 0;
+      await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+        { dur: '4', isRest: false, keys: ['c/4'] },
+        { dur: '4', isRest: false, keys: ['d/4'] },
+      ] }] }], 60);
+      const first = createdOscillators[0];
+      const startedAt = first.start.mock.calls[0][0] as number;
+      const stoppedAt = first.stop.mock.calls[0][0] as number;
+      expect(stoppedAt - startedAt).toBeCloseTo(1.001, 4);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
   it('スタッカート（durationScale < 1）でもペダル中は解除位置まで響く（round1 P3: 内蔵側も固定）', async () => {
     const engine = new SimpleAudioEngine();
     await engine.initialize();

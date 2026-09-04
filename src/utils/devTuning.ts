@@ -71,6 +71,18 @@ export const DEV_TUNING_ENTRIES: DevTuningEntry[] = [
     unit: 's',
     constName: 'SCHEDULE_LEAD_SECONDS',
   },
+  {
+    key: 'audio.maxPolyphony',
+    label: '同時発音数の上限',
+    description: '同時に鳴らすボイスの上限。超えると最も古い音から止まる（#605）。小さいとペダルの響きが薄くなり、大きいと長い曲でプツプツ途切れる',
+    defaultValue: 48,
+    // 下限 1 は「効き方を耳で確かめる」ため（1 にすると単旋律以外は必ず詰まる）
+    min: 1,
+    max: 128,
+    step: 1,
+    unit: '音',
+    constName: 'MAX_POLYPHONY',
+  },
 ];
 
 function parseOverrides(raw: string | null): Record<string, number> {
