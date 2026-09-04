@@ -1,5 +1,6 @@
 import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
 import { scheduleLeadSeconds } from './scheduleLead';
+import { limitPolyphony, maxPolyphony, type VoiceSpan } from './polyphonyLimit';
 import type { Player as SoundFontPlayer } from 'soundfont-player';
 
 import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
@@ -193,6 +194,11 @@ export class SoundFontEngine implements PlaybackEngine {
     // 画面側の同期用に、起点を決めたこの瞬間の壁時計を返す（音源ロードの後・予約ループの前）
     const scheduledAtMs = Date.now();
 
+    // 予約はいったん一覧に集めてから、同時発音数の上限（#605）を静的に適用して鳴らす。
+    // 一覧にする理由: 右手→左手の順に組み立てるため、鳴らしながらでは「その時点で何音
+    // 鳴っているか」が分からない。開始・終了時刻が全部そろってから詰める
+    const voices: Array<VoiceSpan & { player: SoundFontPlayer; note: string; velocity: number }> = [];
+
     // 各パートは同じ「今この瞬間」を基準に予約する。
     // こうすると Promise を待たずに、和音や複数パートが同時にそろって鳴る。
     playableParts.forEach(({ part, player }) => {
@@ -285,11 +291,13 @@ export class SoundFontEngine implements PlaybackEngine {
                     ),
                   )
                 : tiedSoundDuration;
-              player.play(
-                this.normalizeNoteFormat(key),
-                eventStartTime,
-                this.buildPlaybackOptions(soundingDuration, velocity)
-              );
+              voices.push({
+                player,
+                note: this.normalizeNoteFormat(key),
+                velocity,
+                startTime: eventStartTime,
+                endTime: eventStartTime + soundingDuration,
+              });
             });
           }
           if (typeof event.startBeat !== 'number') {
@@ -320,7 +328,16 @@ export class SoundFontEngine implements PlaybackEngine {
       }
     });
 
-    console.log('[SoundFontEngine] 譜面再生をスケジュールしました:', parts.length, 'パート');
+    const limited = limitPolyphony(voices, maxPolyphony());
+    limited.voices.forEach((voice) => {
+      const duration = voice.endTime - voice.startTime;
+      // 詰められて長さ 0 になった音（上限を超える和音の古い側）は予約しない
+      if (duration <= 0) return;
+      voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity));
+    });
+
+    console.log('[SoundFontEngine] 譜面再生をスケジュールしました:', parts.length, 'パート',
+      `ボイス ${voices.length} / 最大同時 ${limited.peakBefore} / 詰め ${limited.stolen}（うち無音化 ${limited.dropped}）/ 上限 ${maxPolyphony()}`);
     return { scheduledAtMs };
   }
 

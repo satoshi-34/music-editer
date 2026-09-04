@@ -104,6 +104,50 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
     }
   });
 
+  it('同時発音数の上限を超える和音は、上限ぶんだけ予約される（Issue #605）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+    setDevTuningOverride('audio.maxPolyphony', 4);
+    try {
+      await engine.playParts([{
+        measures: [{
+          measureBeats: 4,
+          events: [{ dur: '1', isRest: false, keys: ['C3', 'E3', 'G3', 'C4', 'E4', 'G4'] }],
+        }],
+      }], 120);
+      expect(play).toHaveBeenCalledTimes(4);
+      // 残った音は入力順の後ろ側（新しい側）
+      expect(play.mock.calls.map((call) => call[0])).toEqual(['G3', 'C4', 'E4', 'G4']);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
+  it('ペダルで伸びた古い音は、上限に達した時点で新しい音の開始時刻まで詰められる（Issue #605）', async () => {
+    const { engine, play } = await setupEngineWithFakePlayer();
+    setDevTuningOverride('audio.maxPolyphony', 2);
+    try {
+      // 120BPM: 4分=0.5秒。3音とも小節末まで踏みっぱなし（延長 3/2/1 拍）
+      await engine.playParts([{
+        measures: [{
+          measureBeats: 4,
+          events: [
+            { dur: '4', isRest: false, keys: ['C4'], pedalExtendBeatsByKey: { C4: 3 } },
+            { dur: '4', isRest: false, keys: ['D4'], pedalExtendBeatsByKey: { D4: 2 } },
+            { dur: '4', isRest: false, keys: ['E4'], pedalExtendBeatsByKey: { E4: 1 } },
+          ],
+        }],
+      }], 120);
+      expect(play).toHaveBeenCalledTimes(3);
+      // C4 は本来 2.0 秒（小節末まで）だが、3音目 E4 が始まる 1.0 秒で止まる
+      const c4 = play.mock.calls.find((call) => call[0] === 'C4')!;
+      expect(c4[2].duration).toBeCloseTo(internals(engine).buildPlaybackOptions(1.0).duration, 5);
+      const d4 = play.mock.calls.find((call) => call[0] === 'D4')!;
+      expect(d4[2].duration).toBeCloseTo(internals(engine).buildPlaybackOptions(1.5).duration, 5);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
   it('タイ2音は「1回の発音・合計の長さ」で予約される', async () => {
     const { engine, play } = await setupEngineWithFakePlayer();
 

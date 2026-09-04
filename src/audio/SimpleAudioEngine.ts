@@ -4,6 +4,10 @@
 
 import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
 import { scheduleLeadSeconds } from './scheduleLead';
+import { limitPolyphony, maxPolyphony, type VoiceSpan } from './polyphonyLimit';
+
+/** playScore が積む「鳴らす予定の1音」。同時発音数の上限を掛けてから予約する（#605） */
+type SimpleVoice = VoiceSpan & { frequency: number; velocity: number; instrument: InstrumentType };
 import { InstrumentType } from './SoundSource';
 import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
 import {
@@ -405,7 +409,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
       bpm?: number;
     }>,
     bpm: number = 120,
-    startTime?: number
+    startTime?: number,
+    /**
+     * 同時発音数の上限（#605）を複数パートまとめて掛けるための受け皿。
+     * playParts が渡す。渡されたときは音を予約せず、ここへ積むだけにする
+     * （鳴らすのは playParts 側が全パートぶん詰めた後）。省略時は単独で上限を掛けて鳴らす
+     */
+    collector?: SimpleVoice[]
   ): Promise<void> {
     await this.ensureContextReady();
     const context = this.context;
@@ -413,6 +423,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
       throw new Error('AudioContextが初期化されていません');
     }
 
+    const voices: SimpleVoice[] = collector ?? [];
     try {
       console.log('[SimpleAudioEngine] 譜面再生を開始:', scoreData.length, '小節');
       
@@ -514,12 +525,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
                   ),
                 )
               : tiedSoundDuration;
-            await this.playNoteAtTime(
+            voices.push({
               frequency,
-              soundingDuration,
-              eventStartTime,
-              this.normalizePlaybackVelocity((event as { velocity?: number }).velocity)
-            );
+              startTime: eventStartTime,
+              endTime: eventStartTime + soundingDuration,
+              velocity: this.normalizePlaybackVelocity((event as { velocity?: number }).velocity),
+              instrument: this.currentInstrument,
+            });
           }
 
           if (typeof event.startBeat === 'number') {
@@ -541,12 +553,37 @@ export class SimpleAudioEngine implements PlaybackEngine {
         currentTime = Math.max(maxMeasureEndTime, measureStartTime + measureSeconds);
       }
       
+      if (!collector) {
+        await this.playLimitedVoices(voices);
+      }
       console.log('[SimpleAudioEngine] 譜面再生スケジュール完了');
       
     } catch (error) {
       console.error('[SimpleAudioEngine] 譜面再生に失敗:', error);
       throw error;
     }
+  }
+
+  /**
+   * 集めたボイスに同時発音数の上限（#605・SoundFontEngine と同じ規約）を掛けてから予約する。
+   * 音色はボイスごとに控えた楽器で鳴らす（パート別音色を保つため、予約中だけ切り替える）
+   */
+  private async playLimitedVoices(voices: SimpleVoice[]): Promise<void> {
+    const limited = limitPolyphony(voices, maxPolyphony());
+    const restoreInstrument = this.currentInstrument;
+    try {
+      for (const voice of limited.voices) {
+        const duration = voice.endTime - voice.startTime;
+        // 詰められて長さ 0 になった音（上限を超える和音の古い側）は予約しない
+        if (duration <= 0) continue;
+        this.currentInstrument = voice.instrument;
+        await this.playNoteAtTime(voice.frequency, duration, voice.startTime, voice.velocity);
+      }
+    } finally {
+      this.currentInstrument = restoreInstrument;
+    }
+    console.log('[SimpleAudioEngine] 同時発音:',
+      `ボイス ${voices.length} / 最大同時 ${limited.peakBefore} / 詰め ${limited.stolen}（うち無音化 ${limited.dropped}）/ 上限 ${maxPolyphony()}`);
   }
 
   /**
@@ -640,6 +677,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
     }
 
     const originalInstrument = this.currentInstrument;
+    const voices: SimpleVoice[] = [];
     // 「今」に先読みリードを足す（#610。SoundFontEngine と同じ定数）
     const sharedStartTime = context.currentTime + scheduleLeadSeconds();
     // 画面側の同期用: 起点を決めたこの瞬間の壁時計（SoundFontEngine と同じ意味）
@@ -651,8 +689,10 @@ export class SimpleAudioEngine implements PlaybackEngine {
         // パートごとに設定を切り替えてから同じ開始時刻へ予約すると、
         // Flute / Violin などの音色を分けつつ、発音タイミングはそろえられる。
         this.currentInstrument = part.instrument ?? originalInstrument;
-        await this.playScore(part.measures, bpm, sharedStartTime);
+        await this.playScore(part.measures, bpm, sharedStartTime, voices);
       }
+      // 全パートぶんそろってから同時発音数の上限を掛けて鳴らす（#605）
+      await this.playLimitedVoices(voices);
       return { scheduledAtMs };
     } finally {
       // 再生後の UI プレビューなどが別パートの音色に引きずられないよう、

@@ -100,6 +100,36 @@ describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）'
     }
   });
 
+  it('同時発音数の上限を超える分は予約されない（Issue #605・内蔵側も同じ規約）', async () => {
+    // 1音あたりのオシレーター数を先に測る（音色によって 1〜3 本）
+    const single = new SimpleAudioEngine();
+    await single.initialize();
+    createdOscillators.length = 0;
+    await single.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+      { dur: '1', isRest: false, keys: ['c/4'] },
+    ] }] }], 60);
+    const perNote = createdOscillators.length;
+    expect(perNote).toBeGreaterThan(0);
+
+    setDevTuningOverride('audio.maxPolyphony', 2);
+    try {
+      const engine = new SimpleAudioEngine();
+      await engine.initialize();
+      createdOscillators.length = 0;
+      // 同時刻（startBeat 0）に 5 音。内蔵音源は1イベント1音なので、5 イベントで積む
+      await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+        { dur: '1', isRest: false, keys: ['c/4'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['e/4'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['g/4'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['c/5'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['e/5'], startBeat: 0 },
+      ] }] }], 60);
+      expect(createdOscillators.length).toBe(perNote * 2);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
   it('スタッカート（durationScale < 1）でもペダル中は解除位置まで響く（round1 P3: 内蔵側も固定）', async () => {
     const engine = new SimpleAudioEngine();
     await engine.initialize();

@@ -57,6 +57,7 @@ import { createPlaybackEngine } from '../audio/createPlaybackEngine';
 import { InstrumentType } from '../audio/SoundSource';
 import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
 import { scheduleLeadSeconds } from '../audio/scheduleLead';
+import { MAX_RELEASE_TAIL_SECONDS } from '../audio/releaseTail';
 import type {
   CustomSymbolDef,
   InstrumentBracketGroup,
@@ -533,6 +534,12 @@ export interface ScorePageProps {
   onHomeActionsReady?: () => void;
 }
 
+/**
+ * 自然終了から後始末（stopAll）までの待ち時間（#605）。終了タイマーは音価の終端で鳴るので、
+ * 最後の音の余韻（最大 MAX_RELEASE_TAIL_SECONDS）が鳴り切る余裕を足す
+ */
+const PLAYBACK_END_CLEANUP_DELAY_MS = (MAX_RELEASE_TAIL_SECONDS + 0.5) * 1000;
+
 export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, onHomeActionsReady }: ScorePageProps = {}) {
   // onLibraryReady は初期化 effect（依存: 空）から呼ぶため ref 経由で最新を参照する
   const onLibraryReadyRef = useRef(onLibraryReady);
@@ -1004,6 +1011,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // playbackTimerRef は「再生が終わったら stopped に戻す予約」を保持する。
   // 再生し直しや停止時に clearTimeout できるよう、ref で持っている。
   const playbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 再生が最後まで鳴り終わった後の後始末（#605）。sample-player は鳴り終わったノードの
+  // 参照を捨てないため、自然終了のたびに世代交代（stopAll）で解放しないと、全曲を
+  // 繰り返し聴くほどノードが積み上がる（運用者QA: 繰り返し再生で無音化したタブ）
+  const playbackCleanupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 一時停止から再開するため、「いつ再生を始めたか」を覚えておく。
   const playbackStartedAtRef = useRef<number | null>(null);
   // 一時停止時点で「あと何ミリ秒残っているか」を覚えておく。
@@ -1161,6 +1172,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // UI だけ stopped に戻ることがあるため、ここで必ず消す。
       clearTimeout(playbackTimerRef.current);
       playbackTimerRef.current = null;
+    }
+    if (playbackCleanupTimerRef.current !== null) {
+      // 次の再生が始まったら、前の再生の後始末（stopAll）は走らせない。
+      // 走ると新しい再生を止めてしまう
+      clearTimeout(playbackCleanupTimerRef.current);
+      playbackCleanupTimerRef.current = null;
     }
     // 位置表示の予約も、再生終了予約と同じタイミングで必ず片付ける。
     clearPositionTimers();
@@ -1873,6 +1890,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
             playbackTimerRef.current = null;
             resetPlaybackClock();
+            // 余韻（最大 0.6 秒）が鳴り切ってから後始末する（#605）。停止ボタンと同じ
+            // stopAll なので、次の再生の音源先読みもここで走る
+            playbackCleanupTimerRef.current = setTimeout(() => {
+              playbackCleanupTimerRef.current = null;
+              getAudioEngine().stopAll();
+            }, PLAYBACK_END_CLEANUP_DELAY_MS);
           }, remainingPlaybackMsRef.current);
         } else {
           // 譜面が空でも「再生ボタンが壊れていないか」は確認できるように、
@@ -2040,7 +2063,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       setAudioHealthNotice(null);
       // 実際に戻る既定は SoundFont（MusyngKite）のピアノ（DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS）。
       // 以前の文言は「built-in のピアノ」で実挙動と食い違っていた（#551 round1 P2）
-      alert('音声設定を安全な既定値へ戻して復旧しました。標準の音源（SoundFont）のピアノでもう一度お試しください。');
+      alert('音声設定を安全な既定値へ戻して復旧しました。標準の音源（SoundFont）のピアノでもう一度お試しください。それでも鳴らない場合は、このタブを閉じて開き直してください（音声復旧では直らないタブの状態があります）。');
     } catch (error) {
       console.error('[ScorePage] 音声復旧に失敗:', error);
       alert('音声復旧に失敗しました。ページ再読み込み、または Safari の開き直しをお試しください。');
