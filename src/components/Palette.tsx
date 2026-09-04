@@ -19,7 +19,7 @@ import { ornamentLabel } from '../utils/ornamentUtils';
 import { isRelativeDynamicMarkingValue } from '../utils/dynamicMarkingUtils';
 import { symbolDefToPreviewSvg } from '../utils/customSymbolUtils';
 import { type TextElementKind, textElementLabel } from '../utils/textElementUtils';
-import { TUPLET_KINDS, type TupletKind } from '../utils/tupletUtils';
+import { DEFAULT_TUPLET_NUM_NOTES, TUPLET_KINDS, type TupletKind } from '../utils/tupletUtils';
 import ToolVariantButton, { type ToolVariantOption } from './ToolVariantButton';
 import { carryInputAccidental } from '../utils/inputAccidentalTool';
 // 日本語ラベルは Issue #405 段2 で utils/editorContextLabels.ts へ移した。
@@ -246,6 +246,21 @@ function accentBtnStyle(active: boolean): React.CSSProperties {
   };
 }
 
+/**
+ * 連符ボタン・プルダウンに出す説明文。
+ * 比率（N:M）まで書くのは、2連符・4連符が「なぜ1音の長さが変わるのか」を
+ * 数字だけでは読み取れないため。hint（複合拍子向け、等）があれば続けて出す。
+ */
+function tupletVariantLabel(kind: TupletKind): string {
+  return `${kind.numNotes}連符（${kind.numNotes}:${kind.notesOccupied}）`
+    + `: 選択した音価で1音+休符${kind.numNotes - 1}個のグループを配置する`
+    + (kind.hint ? `。${kind.hint}` : '');
+}
+
+/** 既定の連符（3連符）。使用頻度が圧倒的に高いので、ボタンの初期表示はこれにする（#569） */
+const DEFAULT_TUPLET_KIND: TupletKind =
+  TUPLET_KINDS.find((kind) => kind.numNotes === DEFAULT_TUPLET_NUM_NOTES) ?? TUPLET_KINDS[0];
+
 export default function Palette({
   value, onChange,
   section = 'notes',
@@ -254,6 +269,8 @@ export default function Palette({
   crossStaffAvailable = false,
   accidentalVariantKeys,
   onAccidentalVariantKeyChange,
+  tupletVariantKey,
+  onTupletVariantKeyChange,
 }: {
   value: Tool;
   onChange: (t: Tool) => void;
@@ -276,6 +293,12 @@ export default function Palette({
    */
   accidentalVariantKeys?: Record<string, string>;
   onAccidentalVariantKeyChange?: (familyId: string, key: string) => void;
+   * ▾ のプルダウンで最後に選んだ連符（numNotes の文字列）。#569 の「セッション内保持」。
+   * このパレットはタブを切り替えるとアンマウントされるため、選択の保持は
+   * 親（ScorePage）が持つ。未指定なら既定の3連符を出す（round1 P2 の指摘）。
+   */
+  tupletVariantKey?: string;
+  onTupletVariantKeyChange?: (key: string) => void;
 }) {
   // 臨時記号ボタン（♯▾・♭▾）が「いまどの変種を出しているか」は親（ScorePage）が覚えている。
   // プルダウンで 𝄪 を選んだらボタンは 𝄪 のまま残る＝次に使うときも1クリックで出せる、を
@@ -288,6 +311,26 @@ export default function Palette({
   const dotActive = 'duration' in value && !!value.dots;
   // 現在選ばれている連符の numNotes（3/5/6/7）。どれも選ばれていなければ null。
   const activeTupletNumNotes = 'duration' in value && value.tuplet ? value.tuplet.numNotes : null;
+  // プルダウンで最後に選んだ連符（既定は3連符）。作品データには保存せず、
+  // アプリを開いているあいだ（＝セッション内）だけ親が覚える（#569 仕様3）。
+  const pickedTupletVariantKey = tupletVariantKey ?? String(DEFAULT_TUPLET_KIND.numNotes);
+  // ボタンに出す連符は「いまONになっている連符」を最優先にする（臨時記号 #548 と同じ考え方）。
+  // ツールが外から変わる経路（作品の切り替え・別のツールを選ぶ等）でも、表示と実態がずれない。
+  // どれもONでなければ、プルダウンで最後に選んだ連符を出す（次から1クリックで戻せる）。
+  const currentTupletKind =
+    TUPLET_KINDS.find((kind) => kind.numNotes === activeTupletNumNotes)
+    ?? TUPLET_KINDS.find((kind) => String(kind.numNotes) === pickedTupletVariantKey)
+    ?? DEFAULT_TUPLET_KIND;
+  // 連符ツールのON/OFF。null を渡すと外れる。
+  // 音価ツール以外（記号ツールなど）が選ばれているときは4分音符ツールへ戻してから連符を乗せる
+  // （従来の連符ボタン6個と同じ挙動をそのまま保つ）。
+  const applyTupletKind = (kind: TupletKind | null) => {
+    if ('duration' in value) {
+      onChange({ ...value, tuplet: kind ?? undefined });
+    } else {
+      onChange({ ...(ROW1[2] as { duration: DurKey; isRest?: boolean }), tuplet: kind ?? undefined });
+    }
+  };
   const tupletNumberToggleActive = 'mode' in value && value.mode === 'tupletNumberToggle';
   // 臨時記号は音価ツールに乗る属性（Issue #470 → #548 で1系統へ統合）。
   // ONのあいだ、符頭クリックは付与・空きクリックは記号付きの入力になる。
@@ -408,39 +451,34 @@ export default function Palette({
           >
             .
           </button>
-          {/* 連符トグル群：2/3/4/5/6/7連符。ONの状態で音価ツール+クリックすると、
-              音符1つ＋連符内休符(N-1)個のグループを配置する。
-              同じ数字をもう一度押すとOFFに戻る（他の連符ボタンを押すと切り替わる）。
+          {/* 連符（Issue #569 でボタン6個 → 1個+▾ へ集約）:
+              既定は3連符で、ボタンを押すとON/OFFが切り替わる（従来の3連符ボタンと同じ1クリック）。
+              ▾ から 2〜7連符を選ぶと、それが「いまの連符」になってボタンの表示も変わり、
+              選んだ時点で有効になる（選んだのに押し直しが要る、を避けるため）。
+              ONの状態で音価ツール+クリックすると、音符1つ＋連符内休符(N-1)個のグループを配置する。
               2連符・4連符（Issue #472）は8分の6拍子などの複合拍子で使う連符で、
               比率が N:3 になる（2連符は1音あたりの長さが伸びる唯一の種類）。 */}
-          {TUPLET_KINDS.map((kind) => {
-            const active = activeTupletNumNotes === kind.numNotes;
-            // ツールチップには比率（N:M）も書く。2連符・4連符は「なぜ長さが変わるのか」が
-            // 数字だけでは分からないため、hint（複合拍子向け、等）も続けて出す。
-            const tupletLabel =
-              `${kind.numNotes}連符（${kind.numNotes}:${kind.notesOccupied}）`
-              + `: 選択した音価で1音+休符${kind.numNotes - 1}個のグループを配置する`
-              + (kind.hint ? `。${kind.hint}` : '');
-            return (
-              <button
-                key={kind.numNotes}
-                type="button"
-                onClick={() => {
-                  if ('duration' in value) {
-                    onChange({ ...value, tuplet: active ? undefined : kind });
-                  } else {
-                    onChange({ ...(ROW1[2] as { duration: DurKey; isRest?: boolean }), tuplet: kind });
-                  }
-                }}
-                title={tupletLabel}
-                aria-label={tupletLabel}
-                // 他のボタンと同じ幅・高さ（BUTTON_W/H）に揃え、ラベルは折り返さない
-                style={btnStyle(active, { fontSize: 11, fontWeight: 'bold', whiteSpace: 'nowrap' })}
-              >
-                {kind.numNotes}連符
-              </button>
-            );
-          })}
+          <ToolVariantButton
+            options={TUPLET_KINDS.map((kind) => ({
+              key: String(kind.numNotes),
+              symbol: `${kind.numNotes}連符`,
+              ariaLabel: tupletVariantLabel(kind),
+              title: tupletVariantLabel(kind),
+            }))}
+            currentKey={String(currentTupletKind.numNotes)}
+            active={activeTupletNumNotes !== null}
+            menuAriaLabel="連符の種類を選ぶ（2〜7連符）"
+            buttonStyle={btnStyle}
+            // 「3連符」の3文字が ▾ ぶん狭くなった本体ボタン（28px）に収まるよう、
+            // 従来の 11px から 1px だけ小さくして折り返しを止める
+            symbolStyle={{ fontSize: 10, fontWeight: 'bold', whiteSpace: 'nowrap' }}
+            onActivate={() => applyTupletKind(activeTupletNumNotes !== null ? null : currentTupletKind)}
+            onSelectVariant={(key) => {
+              const picked = TUPLET_KINDS.find((kind) => String(kind.numNotes) === key) ?? DEFAULT_TUPLET_KIND;
+              onTupletVariantKeyChange?.(key);
+              applyTupletKind(picked);
+            }}
+          />
           {/* 連符数字の表示/非表示トグル（Issue #269）:
               このボタンを押してから連符の音符をクリックすると、そのグループの数字が消える
               （もう一度クリックすると戻る）。同じ連符が続く曲では最初のグループにだけ

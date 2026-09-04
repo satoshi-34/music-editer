@@ -100,11 +100,106 @@ describe('ToolVariantButton のプルダウンの出し方（#569 round1）', ()
     fireEvent.click(trigger);
 
     const menu = openedMenu(container);
+    // 実寸を偽装してから位置を測り直させる（jsdom は高さ 0 を返すため）
+    const MENU_HEIGHT = 44;
+    menu.getBoundingClientRect = vi.fn(() => ({
+      left: 20, right: 275, top: 0, bottom: MENU_HEIGHT, width: 255, height: MENU_HEIGHT, x: 20, y: 0, toJSON: () => ({}),
+    })) as unknown as typeof menu.getBoundingClientRect;
+    fireEvent(window, new Event('resize'));
     const top = parseFloat(menu.style.top);
     expect(top).toBeGreaterThanOrEqual(8);
-    // メニューの高さぶんの余地が画面下に残っている
-    expect(top).toBeLessThanOrEqual(window.innerHeight - 8);
-    expect(top).toBeLessThan(window.innerHeight - 8);
+    // メニュー**全体**が画面内（下の余白 8px）に収まっている（round2 P3: top だけ見ると
+    // 下端がはみ出す実装でも通ってしまう）
+    expect(top + MENU_HEIGHT).toBeLessThanOrEqual(window.innerHeight - 8);
+  });
+
+  it('描画後の実寸で位置を置き直し、resize でも追従する（見積もりより広いメニュー）', () => {
+    const { container, trigger } = renderButton();
+    fakeTriggerRect(trigger, { left: window.innerWidth - 20, bottom: 60 });
+    fireEvent.click(trigger);
+    const menu = openedMenu(container);
+    const REAL_WIDTH = estimateVariantMenuWidth(OPTIONS.length) + 120;
+    menu.getBoundingClientRect = vi.fn(() => ({
+      left: 0, right: REAL_WIDTH, top: 66, bottom: 110, width: REAL_WIDTH, height: 44, x: 0, y: 66, toJSON: () => ({}),
+    })) as unknown as typeof menu.getBoundingClientRect;
+    fireEvent(window, new Event('resize'));
+    // 実寸ぶん左へ寄る（見積もりのままだと右端がはみ出す）
+    expect(menu.style.left).toBe(`${window.innerWidth - REAL_WIDTH - 8}px`);
+  });
+
+  it('▾ ボタンがスクロールで画面外へ出たら、メニューを画面端に残さず閉じる（round2 P2）', () => {
+    const { container, trigger } = renderButton();
+    fakeTriggerRect(trigger, { left: 20, bottom: 300 });
+    fireEvent.click(trigger);
+    openedMenu(container);
+    // 縦ツールバーを下へスクロールしてボタンが上へ消えた状態
+    fakeTriggerRect(trigger, { left: 20, bottom: -40 });
+    fireEvent(window, new Event('scroll'));
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeNull();
+  });
+
+  it('▾ ボタンが折りたたみで非表示（矩形 0）になったら閉じる', () => {
+    const { container, trigger } = renderButton();
+    fakeTriggerRect(trigger, { left: 20, bottom: 300 });
+    fireEvent.click(trigger);
+    openedMenu(container);
+    // 折りたたみは display:none なので checkVisibility が false になる（矩形 0 で判定すると
+    // レイアウトの無い jsdom で常に「消えた」扱いになるため、こちらで見る）
+    (trigger as unknown as { checkVisibility: () => boolean }).checkVisibility = () => false;
+    fireEvent(window, new Event('resize'));
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeNull();
+  });
+
+  it('キーボードで部品の外へフォーカスが移ったら閉じる（round2 P2: Tab 移動・折りたたみ）', () => {
+    const { container, trigger } = renderButton();
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    fakeTriggerRect(trigger, { left: 20, bottom: 300 });
+    fireEvent.click(trigger);
+    const menu = openedMenu(container);
+    // 部品の中（項目）へのフォーカス移動では閉じない
+    const firstItem = within(menu).getAllByRole('button')[0];
+    fireEvent.focusOut(trigger, { relatedTarget: firstItem });
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeTruthy();
+    // 部品の外へ出たら閉じる
+    fireEvent.focusOut(firstItem, { relatedTarget: outside });
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeNull();
+    outside.remove();
+  });
+
+  it('Safari 流の「mousedown で relatedTarget=null の blur」でも、項目クリックが届く（round3 P2）', () => {
+    const onSelectVariant = vi.fn();
+    const { container, trigger } = renderButton(onSelectVariant);
+    fakeTriggerRect(trigger, { left: 20, bottom: 300 });
+    fireEvent.click(trigger);
+    const menu = openedMenu(container);
+    const item = within(menu).getByRole('button', { name: '5連符' });
+    // Safari: 項目の mousedown → ▾ から blur（relatedTarget null）→ click の順（WebKit Bug 254655）
+    fireEvent.mouseDown(item);
+    fireEvent.focusOut(trigger, { relatedTarget: null });
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`), '閉じていない').toBeTruthy();
+    fireEvent.mouseUp(item);
+    fireEvent.click(item);
+    expect(onSelectVariant).toHaveBeenCalledWith('5');
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeNull();
+    // 押下が部品の外で始まった null blur は従来どおり閉じる
+    fireEvent.click(trigger);
+    openedMenu(container);
+    fireEvent.focusOut(trigger, { relatedTarget: null });
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeNull();
+  });
+
+  it('部品の中で押して外で離した後の null blur は閉じる（押下フラグが立ちっぱなしにならない）', () => {
+    const { container, trigger } = renderButton();
+    fakeTriggerRect(trigger, { left: 20, bottom: 300 });
+    fireEvent.click(trigger);
+    const menu = openedMenu(container);
+    const item = within(menu).getByRole('button', { name: '5連符' });
+    fireEvent.mouseDown(item);
+    // 外（document.body）で離す: 部品の *UpCapture には来ない
+    fireEvent.mouseUp(document.body);
+    fireEvent.focusOut(trigger, { relatedTarget: null });
+    expect(container.querySelector(`[role="group"][aria-label="${MENU_LABEL}"]`)).toBeNull();
   });
 
   it('▾ の名乗りと中身が食い違わない（aria-haspopup="menu" を付けない）', () => {

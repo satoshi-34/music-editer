@@ -30,6 +30,7 @@ import ScaledPageWrapper from './ScaledPageWrapper';
 import UiContextBar from './UiContextBar';
 import { resolveToolbarHeight } from '../utils/toolbarHeight';
 import { carryInputAccidental } from '../utils/inputAccidentalTool';
+import { DEFAULT_TUPLET_NUM_NOTES } from '../utils/tupletUtils';
 import UiVariantBadge from './UiVariantBadge';
 import { useUiVariant } from '../hooks/useUiVariant';
 // タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
@@ -167,7 +168,10 @@ import {
   type SoundEngineMode
 } from '../audio/playbackSettings';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference } from '../audio/repeatPlaybackUtils';
-import { buildDynamicEventKey, resolveDynamicVelocities } from '../utils/dynamicMarkingUtils';
+import {
+  buildDynamicVelocityTimeline,
+  collectDynamicMarkings,
+} from '../utils/dynamicMarkingUtils';
 import { resolveScoreMeasureBpms } from '../utils/tempoPlaybackUtils';
 import {
   DEFAULT_PLAYBACK_SPEED_PERCENT,
@@ -179,7 +183,9 @@ import { alignMeasuresToInstrumentationParts, createUniqueInstrumentationPartId,
 import type { ClefType } from './clefUtils';
 import { planSlicePasteAdvance, extractVoiceSlice, pasteVoiceSlice, remapVoiceRefsAfterSliceEdit, replaceVoiceSliceWithRests, sliceBoundaryFitsVoice, type VoiceSliceEdit } from '../utils/beatSliceUtils';
 import { buildRestEventsForBeats } from '../utils/measureRestFillUtils';
-import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { collapseEmptyTrailingVoices, flattenMeasureForPlayback, getMeasureVoices, normalizeMeasuresForPersistence, withVoiceEventsUpdated,
+  getEventDurationBeats,
+} from '../utils/voiceMeasureUtils';
 import { buildTiePlaybackEventKey, buildTiePlaybackPlan } from '../utils/tiePlaybackUtils';
 import { buildPedalPlaybackEventKey, buildPedalPlaybackPlans } from '../utils/pedalPlaybackUtils';
 import { expandTrillForPlayback } from '../utils/ornamentPlaybackUtils';
@@ -228,6 +234,7 @@ import {
   type ScoreEditNoticeDetail,
   describeAudioEngineRestarted,
   describeAudioStillSilent,
+  describePlaybackAbortedBySchedulingError,
 } from '../utils/scoreEditorNotices';
 import {
   claimStorageLocationNotice,
@@ -565,6 +572,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const handleAccidentalVariantKeyChange = useCallback((familyId: string, key: string) => {
     setAccidentalVariantKeys((prev) => ({ ...prev, [familyId]: key }));
   }, []);
+  // 連符プルダウン（#569）で最後に選んだ連符。パレットはタブを切り替えると
+  // アンマウントされるので、選択が消えないようここ（タブ切替で消えない場所）で持つ。
+  // 作品データには保存しないため、リロードすると既定の3連符へ戻る（#569 仕様3）。
+  const [tupletVariantKey, setTupletVariantKey] = useState<string>(String(DEFAULT_TUPLET_NUM_NOTES));
   // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
   // 1=声部2（下声・符幹下向き）。ピアノ譜以外では使わないが、
   // 楽譜種別を切り替えても迷わないように値自体は保持しておく。
@@ -1023,6 +1034,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 参照を捨てないため、自然終了のたびに世代交代（stopAll）で解放しないと、全曲を
   // 繰り返し聴くほどノードが積み上がる（運用者QA: 繰り返し再生で無音化したタブ）
   const playbackCleanupRef = useRef<{ timer: ReturnType<typeof setTimeout>; engine: PlaybackEngine } | null>(null);
+  // 先読み窓（#622）の後続の予約失敗の購読解除。再生ごとに張り替え、停止・終了・アンマウントで外す
+  const schedulingFailureUnsubscribeRef = useRef<(() => void) | null>(null);
   // 一時停止から再開するため、「いつ再生を始めたか」を覚えておく。
   const playbackStartedAtRef = useRef<number | null>(null);
   // 一時停止時点で「あと何ミリ秒残っているか」を覚えておく。
@@ -1173,7 +1186,21 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     });
   }, []);
 
-  const clearPlaybackTimer = useCallback(() => {
+  /** 先読み窓の失敗通知の購読を外す（停止・自然終了・新しい再生の直前・アンマウント。一時停止では外さない） */
+  const unsubscribeSchedulingFailure = useCallback(() => {
+    schedulingFailureUnsubscribeRef.current?.();
+    schedulingFailureUnsubscribeRef.current = null;
+  }, []);
+
+  /**
+   * 再生の予約をすべて片付ける。停止・終了・復旧・譜面切替など「再生をやめる」全経路が通る
+   * 1か所なので、先読み窓の失敗通知の購読解除もここに集約する（round4 P3）。
+   * 一時停止と再開だけは再生が続くので keepSchedulingSubscription で購読を残す
+   */
+  const clearPlaybackTimer = useCallback((options?: { keepSchedulingSubscription?: boolean }) => {
+    if (!options?.keepSchedulingSubscription) {
+      unsubscribeSchedulingFailure();
+    }
     if (playbackTimerRef.current !== null) {
       // 再生終了予約は「最後に 1 つだけ」が正しい。
       // 古い予約を残したままにすると、次の再生中に前の予約が発火して
@@ -1189,13 +1216,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
     // 位置表示の予約も、再生終了予約と同じタイミングで必ず片付ける。
     clearPositionTimers();
-  }, [clearPositionTimers]);
+  }, [clearPositionTimers, unsubscribeSchedulingFailure]);
 
   // 再生中にアンマウントされても、終了予約・位置表示予約を残さない
   // （残すとテスト teardown 後に発火して未処理例外になる。通知系タイマーと同じ問題）
   useEffect(() => () => {
     clearPlaybackTimer();
-  }, [clearPlaybackTimer]);
+    unsubscribeSchedulingFailure();
+  }, [clearPlaybackTimer, unsubscribeSchedulingFailure]);
 
   const resetPlaybackClock = useCallback(() => {
     // 3 つの ref は「いつ始まったか」「あと何ミリ秒あるか」「全体で何ミリ秒か」のセット。
@@ -1213,6 +1241,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * 音源方式を切り替えたとき新しいエンジンの音色プレビューを止めてしまう）
    */
   const finishPlaybackNaturally = useCallback((engine: PlaybackEngine) => {
+    unsubscribeSchedulingFailure();
     setPlaybackState('stopped');
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     playbackTimerRef.current = null;
@@ -1224,7 +1253,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       engine.stopAll();
     }, PLAYBACK_END_CLEANUP_DELAY_MS);
     playbackCleanupRef.current = { timer, engine };
-  }, [resetPlaybackClock]);
+  }, [resetPlaybackClock, unsubscribeSchedulingFailure]);
 
   /**
    * 余韻待ち中の後始末が残っていれば、いま実行する（次の再生の直前に呼ぶ）。
@@ -1589,7 +1618,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         await resumedEngine.resume();
         setPlaybackState('playing');
         const remainingMs = Math.max(0, remainingPlaybackMsRef.current);
-        clearPlaybackTimer();
+        clearPlaybackTimer({ keepSchedulingSubscription: true });
         playbackStartedAtRef.current = Date.now();
         playbackTimerRef.current = setTimeout(() => {
           finishPlaybackNaturally(resumedEngine);
@@ -1750,6 +1779,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             })),
             getMeasureBeats(scoreTimeSignature),
           );
+          // 強弱は「拍位置で引く1本の時系列」で解決する（#626）。大譜表（ピアノ）では
+          // 強弱記号は両手に共通なので両パートの記号を1本にまとめ、四重奏・編成譜は
+          // 各パートに自分の強弱が書かれるのでパートごとに作る。どの声部の音も自分の拍位置で引く
+          const measureBeatsForDynamics = getMeasureBeats(scoreTimeSignature);
+          // 記号の出どころ: ピアノは両手ぶん（片手の p が両手に効く）。他はパートごと。
+          // 絶対拍の時計は各パート自身（エンジン・ハイライト・タイ・ペダルと同じ前進幅）
+          const sharedDynamicMarkings = scoreType === 'piano'
+            ? collectDynamicMarkings(expandedPerPart.map((items) => items.map((item) => item.measure)))
+            : null;
           const partObjs = parts.map((partSource, partIndex) => {
             // 強弱記号は小節の見た目だけでなく再生音量にも効かせたい。
             // ただし現在の PlaybackEngine は ScorePlayer ではなく ScorePage から直接呼ばれるため、
@@ -1763,7 +1801,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             // 小節番号をオフセットして引く。切った後で解決し直すと、開始位置より前で
             // 指定された p / f まで既定値へ戻ってしまう（Codex round1 P2）
             const expandedMeasures = expandedMeasuresFull.slice(startExpandedIndex);
-            const dynamicVelocities = resolveDynamicVelocities(expandedMeasuresFull.map(item => item.measure));
+            const ownMeasuresForDynamics = expandedMeasuresFull.map((item) => item.measure);
+            const dynamicTimeline = buildDynamicVelocityTimeline(
+              sharedDynamicMarkings ?? collectDynamicMarkings([ownMeasuresForDynamics]),
+              ownMeasuresForDynamics,
+              measureBeatsForDynamics,
+            );
             // テンポ列はスコア共通（上で1回だけ解決済み・#458 round1 P1）。
             // 強弱と同じく**切る前の全列**で解決してあるので、途中再生でも
             // 開始位置より前の標語・テンポ指定を引き継いだ状態で効く
@@ -1788,15 +1831,27 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 bpm: measureBpms[expandedMeasureIndex + startExpandedIndex],
                 // 6/8 などの複合拍子ではスウィング対象から除外する（swingUtils 参照）。
                 isCompoundMeter: isCompoundTimeSignature(scoreTimeSignature),
-                events: flattenMeasureForPlayback(item.measure).flatMap((event, eventIndex) => {
+                events: (() => {
+                  const flattened = flattenMeasureForPlayback(item.measure);
+                  // 単声部の小節は startBeat を持たない（エンジンが順に積む合図）ので、
+                  // 前向きの累積で各音の拍位置を1回だけ出す（round3 P3）
+                  const beatStarts: number[] = [];
+                  let cursor = 0;
+                  flattened.forEach((entry) => {
+                    beatStarts.push(entry.startBeat ?? cursor);
+                    if (entry.startBeat == null) cursor += getEventDurationBeats(entry);
+                  });
+                  return flattened.flatMap((event, flatIndex) => {
                   // アーティキュレーション（スタッカート＝短く、アクセント＝強く 等）を
                   // 音の長さ・音量の倍率として取り出す。
                   const articulation = getArticulationPlaybackEffect(event);
                   // 強弱記号から決まった基準ベロシティ（未設定なら既定 0.5）に
                   // アクセント等の倍率を掛けて、最後に 0..1 へ収める。
-                  const baseVelocity = dynamicVelocities.get(
-                    buildDynamicEventKey(expandedMeasureIndex + startExpandedIndex, eventIndex)
-                  ) ?? 0.5;
+                  // 基準音量は「この音の拍位置」で時系列から引く（#626: どの声部でも同じ扱い）。
+                  // 絶対拍は時系列側の positionOf（各小節の実際の前進幅の累積）で求める
+                  const baseVelocity = dynamicTimeline.velocityAt(
+                    dynamicTimeline.positionOf(expandedMeasureIndex + startExpandedIndex, beatStarts[flatIndex])
+                  );
                   // タイの計画は「声部の中での位置」で引く。
                   // 畳んだあとの eventIndex は複数声部で並べ替えられているため使えない。
                   const tieAdjustment = tiePlan.get(
@@ -1848,7 +1903,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   // タイを展開しないのと同じ理由で、割られた音にはペダル延長を付けない
                   if (expandedEvents.length <= 1) return expandedEvents;
                   return expandedEvents.map((subEvent) => ({ ...subEvent, pedalExtendBeatsByKey: undefined }));
-                })
+                  });
+                })(),
               }))
             };
           });
@@ -1910,6 +1966,19 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           ) + scheduleLeadSeconds();
           setPlaybackState('playing');
           clearPlaybackTimer();
+          // 先読み窓（#622）の後続の予約が失敗したら、無音のまま「再生中」を残さず止めて知らせる。
+          // 購読は再生ごとに張り替え、一時停止では外さない（round3 P2: 再開後の失敗を取りこぼす）
+          unsubscribeSchedulingFailure();
+          schedulingFailureUnsubscribeRef.current = audioEngine.onSchedulingFailure?.((error) => {
+            console.error('[ScorePage] 再生途中の予約失敗により停止します:', error);
+            unsubscribeSchedulingFailure();
+            clearPlaybackTimer();
+            audioEngine.stopAll();
+            setPlaybackState('stopped');
+            setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+            resetPlaybackClock();
+            notifyScoreEdit(describePlaybackAbortedBySchedulingError());
+          }) ?? null;
           // 残り時間・終了タイマー・タイムラインの予約はすべて「予約に使った実時間」を
           // 差し引いた値にする。残りを引いたぶん、時計の起点は「今」（round2 P2:
           // 起点まで過去にすると一時停止でもう一度同じ時間を引いてしまう）
@@ -1964,7 +2033,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         alert('音声の再生に失敗しました。ページを再読み込みしてお試しください。');
       }
     }
-  }, [clearPlaybackTimer, currentInstrument, finishPlaybackNaturally, flushPendingPlaybackCleanup, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, playbackSpeedPercent, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
+  }, [clearPlaybackTimer, currentInstrument, finishPlaybackNaturally, flushPendingPlaybackCleanup, unsubscribeSchedulingFailure, getAudioEngine, instrumentation.parts, playbackState, resetPlaybackClock, schedulePositionTimeline, soundRuntimeSettings.swingEnabled, playbackSpeedPercent, tempoSettings.bpm, scoreTimeSignature, keySignature, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, scoreType, runWithPlaybackFallback, scheduleOutputHealthCheck, isPartExtractionActive, partExtractionSelection, selectedMeasures]);
 
   const handlePause = useCallback(async () => {
     if (playbackState !== 'playing') {
@@ -1979,7 +2048,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       remainingPlaybackMsRef.current = Math.max(0, remainingPlaybackMsRef.current - elapsedMs);
     }
 
-    clearPlaybackTimer();
+    // 再生は続くので、先読み窓の失敗通知の購読は残す（round3 P2）
+    clearPlaybackTimer({ keepSchedulingSubscription: true });
     playbackStartedAtRef.current = null;
     await getAudioEngine().suspend();
     setPlaybackState('paused');
@@ -3441,6 +3511,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     clearPlaybackTimer();
     resetPlaybackClock();
+    // 再生中にサンプルを読み込んだら旧譜面の予約（先読み窓）も止める（round4 P2:
+    // 画面だけ stopped にすると旧譜面の後続の音が鳴り続ける）
+    getAudioEngine().stopAll();
     setPlaybackState('stopped');
     setHasCustomPianoSample(hasCustomPianoDemoScore());
     // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
@@ -6079,6 +6152,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 section="notes"
                 accidentalVariantKeys={accidentalVariantKeys}
                 onAccidentalVariantKeyChange={handleAccidentalVariantKeyChange}
+                tupletVariantKey={tupletVariantKey}
+                onTupletVariantKeyChange={setTupletVariantKey}
                 // 段またぎ表示（Issue #310・#317 でこのタブへ移動）はピアノ譜（右手・左手の2段）でのみ使える。
                 // パート譜表示中は相手の五線が画面に無いため、同じく無効にする。
                 crossStaffAvailable={scoreType === 'piano' && !isPartExtractionActive}

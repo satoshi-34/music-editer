@@ -851,3 +851,11 @@ export function describeAudioEngineRestarted(destination: string): string {
 export function describeAudioStillSilent(destination: string): string {
   return `音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。${destination}`;
 }
+
+/**
+ * 先読み窓（#622）の後続の予約に失敗して再生を止めたときの通知。
+ * 無音のまま「再生中」表示が曲末まで進むのを避け、理由と次の一手を伝える（#318）
+ */
+export function describePlaybackAbortedBySchedulingError(): string {
+  return '再生の途中で音の予約に失敗したため停止しました。もう一度再生してください。続く場合は「音の調子がおかしいとき」の音声復旧をお試しください';
+}

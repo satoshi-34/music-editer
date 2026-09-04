@@ -63,7 +63,8 @@ function logicalSystemBudget(): number {
 describe('段割りの最低幅は VexFlow の理想幅をそのまま使わない（Issue #559）', () => {
   it('圧縮率は理想幅より狭く、極端に詰めもしない', () => {
     // 具体値は運用者の目視で確定する前提（Issue の仕様）。テストは方向と桁だけを見張る。
-    expect(VEXFLOW_IDEAL_WIDTH_COMPRESSION).toBeGreaterThan(0.5);
+    // 2026-09-04 に運用者が dev パネル（#596）で 0.64 → 0.3 へ詰めた（下限は dev パネルと同じ 0.2）
+    expect(VEXFLOW_IDEAL_WIDTH_COMPRESSION).toBeGreaterThanOrEqual(0.2);
     expect(VEXFLOW_IDEAL_WIDTH_COMPRESSION).toBeLessThan(1);
     expect(engravingMinimumWidthFromIdeal(100)).toBeCloseTo(100 * VEXFLOW_IDEAL_WIDTH_COMPRESSION, 10);
   });
@@ -73,7 +74,16 @@ describe('段割りの最低幅は VexFlow の理想幅をそのまま使わな�
     expect(ranges.map((range) => range.count)).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1]);
   });
 
-  it('受入条件1: いまの圧縮率なら月光が2小節/段に収まる（末尾は9小節の余り）', () => {
+  it('#559 の受入条件1: 0.64 なら月光が2小節/段に収まる（末尾は9小節の余り）', () => {
+    // #559 で確定した値の記録。既定値は 2026-09-04 に 0.3 へ変わったが、この段割りの実測モデルは残す
+    const ranges = planSystemMeasureRanges(minimumWidthsAt(0.64), 4, logicalSystemBudget(), 9);
+    const counts = ranges.map((range) => range.count);
+    expect(counts.reduce((sum, count) => sum + count, 0)).toBe(9);
+    expect(counts.slice(0, -1).every((count) => count >= 2)).toBe(true);
+    expect(counts.every((count) => count <= 2)).toBe(true);
+  });
+
+  it('いまの既定（0.3）では月光が3小節/段になる（運用者判断 2026-09-04: 浄書の2小節/段より詰める）', () => {
     const ranges = planSystemMeasureRanges(
       minimumWidthsAt(VEXFLOW_IDEAL_WIDTH_COMPRESSION),
       4,
@@ -81,12 +91,10 @@ describe('段割りの最低幅は VexFlow の理想幅をそのまま使わな�
       9,
     );
     const counts = ranges.map((range) => range.count);
-
     expect(counts.reduce((sum, count) => sum + count, 0)).toBe(9);
-    // 余り（最後の段）以外はすべて2小節以上
+    // 余り以外はすべて2小節以上（1小節/段への逆戻りは無い）
     expect(counts.slice(0, -1).every((count) => count >= 2)).toBe(true);
-    // 詰めすぎ（3小節/段）にはしない。浄書の実物と同じ2小節/段に留まること
-    expect(counts.every((count) => count <= 2)).toBe(true);
+    expect(counts).toEqual([3, 3, 3]);
   });
 
   it('過密の下限ガードは維持する: 圧縮後も開始拍ベースの見積もり幅を下回らない', () => {
