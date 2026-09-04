@@ -198,10 +198,16 @@ describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）'
         measureBeats: 4, bpm: 60, events: [{ dur: '1', isRest: false, keys: ['c/4'] }],
       })) }], 60);
       expect(createdOscillators.length).toBe(perNote * 1);
+      // 3.9 秒: 4 秒の音が足される
+      context.currentTime = 3.9;
+      await vi.advanceTimersByTimeAsync(600);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(createdOscillators.length).toBe(perNote * 2);
+      // 10 秒まで止まっていた: 過ぎた 8 秒は飛ばし、12 秒だけ足される（round5 P2）
       context.currentTime = 10;
       await vi.advanceTimersByTimeAsync(600);
       await vi.advanceTimersByTimeAsync(0);
-      expect(createdOscillators.length).toBe(perNote * 4);
+      expect(createdOscillators.length).toBe(perNote * 3);
       const atStop = createdOscillators.length;
       engine.stopAll();
       context.currentTime = 100;

@@ -199,10 +199,15 @@ describe('SoundFontEngine のタイ再生（Issue #445）', () => {
         })),
       }], 60);
       expect(play.mock.calls.length).toBe(1);
-      // 時計を 10 秒へ進めてタイマーを発火させると [.., 14) の 4・8・12 秒の音が足される
+      // 時計を 3.9 秒へ進めてタイマーを発火させると [3.9, 7.9) の 4 秒の音が足される
+      context.currentTime = 3.9;
+      await vi.advanceTimersByTimeAsync(600);
+      expect(play.mock.calls.length).toBe(2);
+      // 大きく遅れた（10 秒まで止まっていた）ときは、過ぎた 8 秒の音は飛ばし 12 秒だけ足す（round5 P2）
       context.currentTime = 10;
       await vi.advanceTimersByTimeAsync(600);
-      expect(play.mock.calls.length).toBe(4);
+      expect(play.mock.calls.length).toBe(3);
+      expect(play.mock.calls[2][1]).toBeCloseTo(12 + SCHEDULE_LEAD_SECONDS, 5);
       // stopAll 以後は時計が進んでも予約しない
       const atStop = play.mock.calls.length;
       engine.stopAll();
