@@ -5,6 +5,7 @@
 // ここでは実クリックだけで
 //   （1）既定の3連符が1クリックのまま置けること
 //   （2）▾ で選んだ5連符が「選ぶ→譜面をクリック」の2手で置けること
+//        （タブを往復しても選択が残ること＝保持が ScorePage 側にあること・round1 P2）
 // を、保存データ（比率）と描画（vf-tuplet）の両方で固定する。
 //
 // ScorePage の全体マウントは重いので、1ファイル1マウント（2小節に続けて置く）にしている。
@@ -142,6 +143,28 @@ describe('連符ボタン1個+▾ の ScorePage 配線（#569）', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^5連符（5:4）/ }).textContent).toBe('5連符');
     }, { timeout: 15000 });
+
+    // いったん連符をOFFにしてから「演奏記号」タブへ行って戻る。
+    // パレットは音符タブ以外ではアンマウントされるので、選んだ連符を Palette の state に
+    // 置いていると、ここで既定の3連符へ戻ってしまう（#569 round1 P2 の差し戻し理由）。
+    // OFFにしてから往復するのは、ONのままだと「いま有効な連符」から表示を作れてしまい、
+    // 保持が効いているのかどうかを見分けられないため。
+    fireEvent.click(screen.getByRole('button', { name: /^5連符（5:4）/ }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^5連符（5:4）/ }).getAttribute('aria-pressed')).toBe('false');
+    }, { timeout: 15000 });
+
+    fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
+    await waitFor(() => {
+      expect(screen.queryAllByRole('button', { name: /連符（/ }).length).toBe(0);
+    }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '音符・休符' }));
+
+    // 戻ってきても5連符のまま。押し直し1クリックで有効になる（▾ を開き直さなくてよい）
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^5連符（5:4）/ }).textContent).toBe('5連符');
+    }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('button', { name: /^5連符（5:4）/ }));
 
     clickFirstMeasureBackground();
 

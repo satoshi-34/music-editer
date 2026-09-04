@@ -7,8 +7,28 @@
 //   - 選んだ連符はセッション内で保持され、OFFにしてもボタンに残る（作品データには保存しない）
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent, cleanup, within } from '@testing-library/react';
+import { useState } from 'react';
 
 import Palette, { type Tool } from './Palette';
+import { DEFAULT_TUPLET_NUM_NOTES } from '../utils/tupletUtils';
+
+/**
+ * 「プルダウンで選んだ連符」は Palette ではなく親（ScorePage）が持つ設計にした
+ * （#569 round1 P2: タブを切り替えると Palette ごとアンマウントされて選択が消えるため）。
+ * ここでは ScorePage と同じ形の小さな親でくるんで、保持の挙動を確かめる。
+ */
+function ControlledPalette({ value, onChange }: { value: Tool; onChange: (t: Tool) => void }) {
+  const [tupletVariantKey, setTupletVariantKey] = useState(String(DEFAULT_TUPLET_NUM_NOTES));
+  return (
+    <Palette
+      value={value}
+      onChange={onChange}
+      section="notes"
+      tupletVariantKey={tupletVariantKey}
+      onTupletVariantKeyChange={setTupletVariantKey}
+    />
+  );
+}
 
 /** aria-label の先頭で目的のボタンを探す（ツールチップは末尾に操作説明が付くため） */
 function buttonByLabelPrefix(container: HTMLElement, prefix: string): HTMLButtonElement {
@@ -96,7 +116,7 @@ describe('Palette 連符ボタンの集約（Issue #569）', () => {
   it('選んだ連符はOFFにしても残り、次は1クリックで同じ連符に戻せる（セッション内保持）', () => {
     const onChange = vi.fn();
     const { container, rerender } = render(
-      <Palette value={{ duration: '8', isRest: false }} onChange={onChange} section="notes" />
+      <ControlledPalette value={{ duration: '8', isRest: false }} onChange={onChange} />
     );
 
     fireEvent.click(tupletMenuButton(container));
@@ -104,7 +124,7 @@ describe('Palette 連符ボタンの集約（Issue #569）', () => {
 
     // 連符を外した状態（別の音価ボタンを押した直後などに起きる）へ描き直す
     onChange.mockClear();
-    rerender(<Palette value={{ duration: '8', isRest: false }} onChange={onChange} section="notes" />);
+    rerender(<ControlledPalette value={{ duration: '8', isRest: false }} onChange={onChange} />);
 
     // ボタンには7連符が残っていて、押せばそのまま7連符が有効になる（もう一度 ▾ を開かなくてよい）
     const button = buttonByLabelPrefix(container, '7連符');

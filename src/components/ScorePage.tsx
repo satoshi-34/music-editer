@@ -29,6 +29,7 @@ import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
 import UiContextBar from './UiContextBar';
 import { resolveToolbarHeight } from '../utils/toolbarHeight';
+import { DEFAULT_TUPLET_NUM_NOTES } from '../utils/tupletUtils';
 import UiVariantBadge from './UiVariantBadge';
 import { useUiVariant } from '../hooks/useUiVariant';
 // タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
@@ -549,6 +550,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // A1/A3 の文脈バーを出すか。バーは譜面背景の左上に浮くのでツールバーの高さには影響しない
   const showUiContextBar = import.meta.env.DEV && (uiVariant === 'a1' || uiVariant === 'a3');
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
+  // 連符プルダウン（#569）で最後に選んだ連符。パレットはタブを切り替えると
+  // アンマウントされるので、選択が消えないようここ（タブ切替で消えない場所）で持つ。
+  // 作品データには保存しないため、リロードすると既定の3連符へ戻る（#569 仕様3）。
+  const [tupletVariantKey, setTupletVariantKey] = useState<string>(String(DEFAULT_TUPLET_NUM_NOTES));
   // ピアノ譜の声部切り替えトグル。0=声部1（上声・符幹上向き、従来通りの入力）、
   // 1=声部2（下声・符幹下向き）。ピアノ譜以外では使わないが、
   // 楽譜種別を切り替えても迷わないように値自体は保持しておく。
@@ -5998,6 +6003,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 value={tool}
                 onChange={handleToolChange}
                 section="notes"
+                tupletVariantKey={tupletVariantKey}
+                onTupletVariantKeyChange={setTupletVariantKey}
                 // 段またぎ表示（Issue #310・#317 でこのタブへ移動）はピアノ譜（右手・左手の2段）でのみ使える。
                 // パート譜表示中は相手の五線が画面に無いため、同じく無効にする。
                 crossStaffAvailable={scoreType === 'piano' && !isPartExtractionActive}

@@ -9,7 +9,7 @@
 // 初学者向けにコメントを多めに入れています。
 // ─────────────────────────────────────────────────────────────
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 import type { AccidentalToolKind, MicrotoneType } from '../utils/noteKeyUtils';
 import type { EndingNumber, RepeatMarkerKind } from '../utils/repeatMarkerUtils';
@@ -220,6 +220,8 @@ export default function Palette({
   customSymbolDefs = [],
   onOpenSymbolEditor,
   crossStaffAvailable = false,
+  tupletVariantKey,
+  onTupletVariantKeyChange,
 }: {
   value: Tool;
   onChange: (t: Tool) => void;
@@ -233,6 +235,13 @@ export default function Palette({
    * 載せ替える相手の五線が無いので、ボタンをグレーアウトして理由を出す。
    */
   crossStaffAvailable?: boolean;
+  /**
+   * ▾ のプルダウンで最後に選んだ連符（numNotes の文字列）。#569 の「セッション内保持」。
+   * このパレットはタブを切り替えるとアンマウントされるため、選択の保持は
+   * 親（ScorePage）が持つ。未指定なら既定の3連符を出す（round1 P2 の指摘）。
+   */
+  tupletVariantKey?: string;
+  onTupletVariantKeyChange?: (key: string) => void;
 }) {
   // 現在の選択状態を判定
   const selectActive = 'mode' in value && value.mode === 'select';
@@ -241,14 +250,14 @@ export default function Palette({
   // 現在選ばれている連符の numNotes（3/5/6/7）。どれも選ばれていなければ null。
   const activeTupletNumNotes = 'duration' in value && value.tuplet ? value.tuplet.numNotes : null;
   // プルダウンで最後に選んだ連符（既定は3連符）。作品データには保存せず、
-  // このパレットが表示されているあいだ（＝セッション内）だけ覚える（#569 仕様3）。
-  const [tupletVariantKey, setTupletVariantKey] = useState<string>(String(DEFAULT_TUPLET_KIND.numNotes));
+  // アプリを開いているあいだ（＝セッション内）だけ親が覚える（#569 仕様3）。
+  const pickedTupletVariantKey = tupletVariantKey ?? String(DEFAULT_TUPLET_KIND.numNotes);
   // ボタンに出す連符は「いまONになっている連符」を最優先にする（臨時記号 #548 と同じ考え方）。
   // ツールが外から変わる経路（作品の切り替え・別のツールを選ぶ等）でも、表示と実態がずれない。
   // どれもONでなければ、プルダウンで最後に選んだ連符を出す（次から1クリックで戻せる）。
   const currentTupletKind =
     TUPLET_KINDS.find((kind) => kind.numNotes === activeTupletNumNotes)
-    ?? TUPLET_KINDS.find((kind) => String(kind.numNotes) === tupletVariantKey)
+    ?? TUPLET_KINDS.find((kind) => String(kind.numNotes) === pickedTupletVariantKey)
     ?? DEFAULT_TUPLET_KIND;
   // 連符ツールのON/OFF。null を渡すと外れる。
   // 音価ツール以外（記号ツールなど）が選ばれているときは4分音符ツールへ戻してから連符を乗せる
@@ -372,7 +381,7 @@ export default function Palette({
             onActivate={() => applyTupletKind(activeTupletNumNotes !== null ? null : currentTupletKind)}
             onSelectVariant={(key) => {
               const picked = TUPLET_KINDS.find((kind) => String(kind.numNotes) === key) ?? DEFAULT_TUPLET_KIND;
-              setTupletVariantKey(key);
+              onTupletVariantKeyChange?.(key);
               applyTupletKind(picked);
             }}
           />
