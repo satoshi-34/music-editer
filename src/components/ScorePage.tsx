@@ -1179,7 +1179,15 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     schedulingFailureUnsubscribeRef.current = null;
   }, []);
 
-  const clearPlaybackTimer = useCallback(() => {
+  /**
+   * 再生の予約をすべて片付ける。停止・終了・復旧・譜面切替など「再生をやめる」全経路が通る
+   * 1か所なので、先読み窓の失敗通知の購読解除もここに集約する（round4 P3）。
+   * 一時停止と再開だけは再生が続くので keepSchedulingSubscription で購読を残す
+   */
+  const clearPlaybackTimer = useCallback((options?: { keepSchedulingSubscription?: boolean }) => {
+    if (!options?.keepSchedulingSubscription) {
+      unsubscribeSchedulingFailure();
+    }
     if (playbackTimerRef.current !== null) {
       // 再生終了予約は「最後に 1 つだけ」が正しい。
       // 古い予約を残したままにすると、次の再生中に前の予約が発火して
@@ -1195,7 +1203,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     }
     // 位置表示の予約も、再生終了予約と同じタイミングで必ず片付ける。
     clearPositionTimers();
-  }, [clearPositionTimers]);
+  }, [clearPositionTimers, unsubscribeSchedulingFailure]);
 
   // 再生中にアンマウントされても、終了予約・位置表示予約を残さない
   // （残すとテスト teardown 後に発火して未処理例外になる。通知系タイマーと同じ問題）
@@ -1597,7 +1605,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         await resumedEngine.resume();
         setPlaybackState('playing');
         const remainingMs = Math.max(0, remainingPlaybackMsRef.current);
-        clearPlaybackTimer();
+        clearPlaybackTimer({ keepSchedulingSubscription: true });
         playbackStartedAtRef.current = Date.now();
         playbackTimerRef.current = setTimeout(() => {
           finishPlaybackNaturally(resumedEngine);
@@ -2000,7 +2008,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       remainingPlaybackMsRef.current = Math.max(0, remainingPlaybackMsRef.current - elapsedMs);
     }
 
-    clearPlaybackTimer();
+    // 再生は続くので、先読み窓の失敗通知の購読は残す（round3 P2）
+    clearPlaybackTimer({ keepSchedulingSubscription: true });
     playbackStartedAtRef.current = null;
     await getAudioEngine().suspend();
     setPlaybackState('paused');
@@ -2009,13 +2018,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const handleStop = useCallback(() => {
     // stop は「音を止める」だけでなく、「一時停止用の残り時間」も捨てる。
     // ここで resetPlaybackClock を呼ばないと、次の再生開始時に古い残り時間を再利用してしまう。
-    unsubscribeSchedulingFailure();
     clearPlaybackTimer();
     getAudioEngine().stopAll();
     setPlaybackState('stopped');
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     resetPlaybackClock();
-  }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock, unsubscribeSchedulingFailure]);
+  }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
 
   const handleSeek = useCallback((position: { measureIndex: number; beatPosition: number; noteIndex: number }) => {
     // 現状の再生ボタン経路は「見た目上の位置表示」だけを更新している。
@@ -3463,6 +3471,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     clearPlaybackTimer();
     resetPlaybackClock();
+    // 再生中にサンプルを読み込んだら旧譜面の予約（先読み窓）も止める（round4 P2:
+    // 画面だけ stopped にすると旧譜面の後続の音が鳴り続ける）
+    getAudioEngine().stopAll();
     setPlaybackState('stopped');
     setHasCustomPianoSample(hasCustomPianoDemoScore());
     // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
