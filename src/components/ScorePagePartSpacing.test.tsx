@@ -46,11 +46,12 @@ function openResetMenu() {
   fireEvent.click(screen.getByTestId('layout-reset-menu-toggle'));
 }
 
-function getPartSpacingSlider() {
-  return screen.getByRole('slider', { name: /パート間隔/ }) as HTMLInputElement;
+function getPartSpacingInput() {
+  // Issue #578 でスライダーから数値入力（spinbutton）へ置き換えた
+  return screen.getByRole('spinbutton', { name: /パート間隔/ }) as HTMLInputElement;
 }
 
-describe('パート間隔スライダー（Issue #90）', () => {
+describe('パート間隔の数値入力（Issue #90）', () => {
   beforeEach(() => {
     localStorageMock.clear();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -66,65 +67,65 @@ describe('パート間隔スライダー（Issue #90）', () => {
   it('新規ユーザー状態: 既定値はピアノのみ20px、それ以外は0（自動計算のまま）', () => {
     render(<ScorePage />);
     openLayoutTab();
-    expect(getPartSpacingSlider().value).toBe('0');
+    expect(getPartSpacingInput().value).toBe('0');
 
     openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
     openLayoutTab();
     // 期待値は運用者の市販譜見比べで確定した新既定（2026-09-03: 38 → 20）
-    expect(getPartSpacingSlider().value).toBe('20');
+    expect(getPartSpacingInput().value).toBe('20');
 
     openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: '弦楽四重奏' }));
     openLayoutTab();
-    expect(getPartSpacingSlider().value).toBe('0');
+    expect(getPartSpacingInput().value).toBe('0');
 
     openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: '編成譜' }));
     openLayoutTab();
-    expect(getPartSpacingSlider().value).toBe('0');
+    expect(getPartSpacingInput().value).toBe('0');
   });
 
   it('スライダーを操作すると値が変わり、localStorageへ保存される', () => {
     render(<ScorePage />);
     openLayoutTab();
 
-    fireEvent.change(getPartSpacingSlider(), { target: { value: '15' } });
-    expect(getPartSpacingSlider().value).toBe('15');
+    fireEvent.change(getPartSpacingInput(), { target: { value: '15' } });
+    expect(getPartSpacingInput().value).toBe('15');
     expect(localStorageMock.getItem('score-part-spacing-offset')).toBe('15');
   });
 
   it('範囲（-20〜80px）が正しく設定されている', () => {
     render(<ScorePage />);
     openLayoutTab();
-    const slider = getPartSpacingSlider();
-    expect(slider.min).toBe('-20');
+    const input = getPartSpacingInput();
+    expect(input.min).toBe('-20');
     // 上限は 2026-08-23 に 50→80 へ拡大（月光級の深い音型 + #382 クランプの逃げ場）
-    expect(slider.max).toBe('80');
+    expect(input.max).toBe('80');
   });
 
   it('保存済みの値はリロード（再マウント）後も復元される', () => {
     const { unmount } = render(<ScorePage />);
     openLayoutTab();
-    fireEvent.change(getPartSpacingSlider(), { target: { value: '-10' } });
+    fireEvent.change(getPartSpacingInput(), { target: { value: '-10' } });
     unmount();
     cleanup();
 
     render(<ScorePage />);
     openLayoutTab();
-    expect(getPartSpacingSlider().value).toBe('-10');
+    expect(getPartSpacingInput().value).toBe('-10');
   });
 
   it('「レイアウトをリセット」を押すと既定値0に戻る', () => {
     render(<ScorePage />);
     openLayoutTab();
 
-    fireEvent.change(getPartSpacingSlider(), { target: { value: '20' } });
-    expect(getPartSpacingSlider().value).toBe('20');
+    fireEvent.change(getPartSpacingInput(), { target: { value: '20' } });
+    expect(getPartSpacingInput().value).toBe('20');
 
     openResetMenu();
     fireEvent.click(screen.getByRole('button', { name: 'レイアウトをリセット' }));
-    expect(getPartSpacingSlider().value).toBe('0');
+    expect(getPartSpacingInput().value).toBe('0');
     expect(localStorageMock.getItem('score-part-spacing-offset')).toBe('0');
   });
 
@@ -132,7 +133,7 @@ describe('パート間隔スライダー（Issue #90）', () => {
     render(<ScorePage />);
     openLayoutTab();
 
-    fireEvent.change(getPartSpacingSlider(), { target: { value: '8' } });
+    fireEvent.change(getPartSpacingInput(), { target: { value: '8' } });
     openResetMenu();
     fireEvent.click(screen.getByRole('button', { name: '既定として保存' }));
 

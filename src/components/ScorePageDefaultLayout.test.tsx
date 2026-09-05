@@ -42,16 +42,17 @@ function openLayoutTab() {
   fireEvent.click(layoutTab);
 }
 
-function getNotationSizeSlider() {
-  return screen.getByRole('slider', { name: /音符の大きさ/ }) as HTMLInputElement;
+// Issue #578 でレイアウトタブのスライダーは数値入力（spinbutton）へ置き換わった
+function getNotationSizeInput() {
+  return screen.getByRole('spinbutton', { name: /音符の大きさ/ }) as HTMLInputElement;
 }
 
-function getSystemRowGapSlider() {
-  return screen.getByRole('slider', { name: /段の間隔/ }) as HTMLInputElement;
+function getSystemRowGapInput() {
+  return screen.getByRole('spinbutton', { name: /段の間隔/ }) as HTMLInputElement;
 }
 
-function getPartSpacingSlider() {
-  return screen.getByRole('slider', { name: /パート間隔/ }) as HTMLInputElement;
+function getPartSpacingInput() {
+  return screen.getByRole('spinbutton', { name: /パート間隔/ }) as HTMLInputElement;
 }
 
 describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ごとの既定値（Issue #49・#199）', () => {
@@ -69,9 +70,9 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
     render(<ScorePage />);
     openLayoutTab();
 
-    expect(getNotationSizeSlider().value).toBe('150');
-    expect(getSystemRowGapSlider().value).toBe('0');
-    expect(getPartSpacingSlider().value).toBe('0');
+    expect(getNotationSizeInput().value).toBe('150');
+    expect(getSystemRowGapInput().value).toBe('0');
+    expect(getPartSpacingInput().value).toBe('0');
   });
 
   // Issue #199 の受入条件1。運用者が素の既定値の画面で実測選定した組み合わせ
@@ -82,9 +83,9 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
 
     openLayoutTab();
-    expect(getNotationSizeSlider().value).toBe('150');
-    expect(getSystemRowGapSlider().value).toBe('-3');
-    expect(getPartSpacingSlider().value).toBe('20');
+    expect(getNotationSizeInput().value).toBe('150');
+    expect(getSystemRowGapInput().value).toBe('-3');
+    expect(getPartSpacingInput().value).toBe('20');
   });
 
   it('新規ユーザー状態: 弦楽四重奏・編成譜は従来どおり音符100%・段間隔0px・パート間隔0px', () => {
@@ -93,17 +94,17 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
     fireEvent.click(screen.getByRole('button', { name: '弦楽四重奏' }));
 
     openLayoutTab();
-    expect(getNotationSizeSlider().value).toBe('100');
-    expect(getSystemRowGapSlider().value).toBe('0');
-    expect(getPartSpacingSlider().value).toBe('0');
+    expect(getNotationSizeInput().value).toBe('100');
+    expect(getSystemRowGapInput().value).toBe('0');
+    expect(getPartSpacingInput().value).toBe('0');
 
     openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: '編成譜' }));
 
     openLayoutTab();
-    expect(getNotationSizeSlider().value).toBe('100');
-    expect(getSystemRowGapSlider().value).toBe('0');
-    expect(getPartSpacingSlider().value).toBe('0');
+    expect(getNotationSizeInput().value).toBe('100');
+    expect(getSystemRowGapInput().value).toBe('0');
+    expect(getPartSpacingInput().value).toBe('0');
   });
 
   it('ユーザーが明示的に音符の大きさ・段の間隔・パート間隔を設定した後は、楽譜種別を切り替えても上書きされない', () => {
@@ -111,21 +112,21 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
     openLayoutTab();
 
     // ユーザーが手動でスライダーを動かす（明示的な設定）
-    fireEvent.change(getNotationSizeSlider(), { target: { value: '120' } });
-    fireEvent.change(getSystemRowGapSlider(), { target: { value: '10' } });
-    fireEvent.change(getPartSpacingSlider(), { target: { value: '5' } });
-    expect(getNotationSizeSlider().value).toBe('120');
-    expect(getSystemRowGapSlider().value).toBe('10');
-    expect(getPartSpacingSlider().value).toBe('5');
+    fireEvent.change(getNotationSizeInput(), { target: { value: '120' } });
+    fireEvent.change(getSystemRowGapInput(), { target: { value: '10' } });
+    fireEvent.change(getPartSpacingInput(), { target: { value: '5' } });
+    expect(getNotationSizeInput().value).toBe('120');
+    expect(getSystemRowGapInput().value).toBe('10');
+    expect(getPartSpacingInput().value).toBe('5');
 
     // ピアノに切り替えても、ユーザーが設定した値のまま（150%/-3px/20pxへは戻らない）
     openScoreTab();
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
 
     openLayoutTab();
-    expect(getNotationSizeSlider().value).toBe('120');
-    expect(getSystemRowGapSlider().value).toBe('10');
-    expect(getPartSpacingSlider().value).toBe('5');
+    expect(getNotationSizeInput().value).toBe('120');
+    expect(getSystemRowGapInput().value).toBe('10');
+    expect(getPartSpacingInput().value).toBe('5');
   });
 
   it('「レイアウトをリセット」の段の間隔・パート間隔は楽譜種別ごとの既定値（ピアノは-3px/20px）に戻る', () => {
@@ -134,41 +135,41 @@ describe('音符の大きさ・段の間隔・パート間隔の楽譜種別ご�
     fireEvent.click(screen.getByRole('button', { name: 'ピアノ' }));
 
     openLayoutTab();
-    expect(getSystemRowGapSlider().value).toBe('-3');
-    expect(getPartSpacingSlider().value).toBe('20');
+    expect(getSystemRowGapInput().value).toBe('-3');
+    expect(getPartSpacingInput().value).toBe('20');
 
     // 段の間隔・パート間隔を手動でずらしてから「レイアウトをリセット」を押す
-    fireEvent.change(getSystemRowGapSlider(), { target: { value: '-5' } });
-    fireEvent.change(getPartSpacingSlider(), { target: { value: '-5' } });
-    expect(getSystemRowGapSlider().value).toBe('-5');
-    expect(getPartSpacingSlider().value).toBe('-5');
+    fireEvent.change(getSystemRowGapInput(), { target: { value: '-5' } });
+    fireEvent.change(getPartSpacingInput(), { target: { value: '-5' } });
+    expect(getSystemRowGapInput().value).toBe('-5');
+    expect(getPartSpacingInput().value).toBe('-5');
 
     // リセット系4種は Issue #143 で1つのメニューへ集約されたため、押す前にメニューを開く
     fireEvent.click(screen.getByTestId('layout-reset-menu-toggle'));
     fireEvent.click(screen.getByRole('button', { name: 'レイアウトをリセット' }));
-    expect(getSystemRowGapSlider().value).toBe('-3');
-    expect(getPartSpacingSlider().value).toBe('20');
+    expect(getSystemRowGapInput().value).toBe('-3');
+    expect(getPartSpacingInput().value).toBe('20');
   });
 
-  // Issue #199 追加要望: 段の間隔スライダーの下限を -30 → -60 へ拡張した。
+  // Issue #199 追加要望: 段の間隔の下限を -30 → -60 へ拡張した。
   // 「下限まで下げた値が localStorage 経由で復元される」ところまで確認する
   // （画面ズーム #176 のときと同じ、範囲を広げたときの互換確認の観点）。
-  it('段の間隔スライダーは-60pxまで下げられ、その値が保存される', () => {
+  it('段の間隔は-60pxまで下げられ、その値が保存される', () => {
     render(<ScorePage />);
     openLayoutTab();
 
-    const slider = getSystemRowGapSlider();
-    expect(slider.min).toBe('-60');
-    expect(slider.max).toBe('50');
+    const input = getSystemRowGapInput();
+    expect(input.min).toBe('-60');
+    expect(input.max).toBe('50');
 
-    fireEvent.change(slider, { target: { value: '-60' } });
-    expect(getSystemRowGapSlider().value).toBe('-60');
+    fireEvent.change(input, { target: { value: '-60' } });
+    expect(getSystemRowGapInput().value).toBe('-60');
     expect(localStorageMock.getItem('score-system-row-gap')).toBe('-60');
 
     // 保存済みの -60 は、読み直し（再マウント）でもクランプされずそのまま復元される
     cleanup();
     render(<ScorePage />);
     openLayoutTab();
-    expect(getSystemRowGapSlider().value).toBe('-60');
+    expect(getSystemRowGapInput().value).toBe('-60');
   });
 });

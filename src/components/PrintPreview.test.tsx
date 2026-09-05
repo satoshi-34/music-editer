@@ -84,12 +84,13 @@ describe('印刷プレビューモード', () => {
 
     expect(appRoot?.classList.contains('print-preview')).toBe(true);
 
-    // プレビューON中でも「レイアウト」タブのスライダー類（例: ページ余白）が
-    // disabled になっていないことを確認する
-    const sliders = screen.getAllByRole('slider');
-    expect(sliders.length).toBeGreaterThan(0);
-    sliders.forEach(slider => {
-      expect(slider).not.toBeDisabled();
+    // プレビューON中でも「レイアウト」タブの調整コントロール（例: ページ余白）が
+    // disabled になっていないことを確認する。Issue #578 でレイアウトタブのスライダーは
+    // 数値入力（spinbutton）へ置き換わったため、両方のロールを見る
+    const controls = [...screen.getAllByRole('spinbutton'), ...screen.getAllByRole('slider')];
+    expect(controls.length).toBeGreaterThan(0);
+    controls.forEach(control => {
+      expect(control).not.toBeDisabled();
     });
   });
 });
