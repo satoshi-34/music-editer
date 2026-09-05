@@ -8002,6 +8002,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                         className="score-title"
                         role="button"
                         tabIndex={0}
+                        // アクセシブルな名前は aria-label で固定する。付けないと名前が
+                        // 「譜面のタイトルの文字そのもの」になり、役割が button である以上
+                        // 「その文字を名前に持つボタン」として拾われてしまう
+                        // （実際に CI で、タイトルが「弱起配線テスト」の譜面において
+                        //  弱起ボタンを名前で探すテストが2件ヒットして落ちた）
+                        aria-label="タイトルを編集"
                         title="クリックするとタイトルを編集できます"
                         onClick={openTitleEditDialog}
                         onKeyDown={(event) => {
@@ -8017,6 +8023,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                         className="score-subtitle"
                         role="button"
                         tabIndex={0}
+                        aria-label="サブタイトルを編集"
                         title="クリックするとタイトルを編集できます"
                         onClick={openTitleEditDialog}
                         onKeyDown={(event) => {
@@ -8041,6 +8048,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                           className="score-credit"
                           role="button"
                           tabIndex={0}
+                          aria-label="作詞者・作曲者・編曲者を編集"
                           title="クリックするとタイトル・作者を編集できます"
                           onClick={openTitleEditDialog}
                           onKeyDown={(event) => {
