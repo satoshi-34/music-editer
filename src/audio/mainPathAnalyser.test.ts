@@ -8,6 +8,7 @@ import {
   tapOutputToMainPathAnalyser,
   readMainPathPeak,
   startMainPathPeakWatch,
+  getMainPathPeakResolution,
 } from './mainPathAnalyser';
 
 /** 指定した振幅の波形を返す偽 Analyser（float 版） */
@@ -118,5 +119,26 @@ describe('startMainPathPeakWatch', () => {
     const watch = startMainPathPeakWatch(null);
     expect(watch.getPeak()).toBeNull();
     expect(() => watch.stop()).not.toThrow();
+  });
+});
+
+describe('getMainPathPeakResolution（#618 round1 P3）', () => {
+  it('浮動小数で読めるなら量子化の下限は無い（0）', () => {
+    const analyser = {
+      getFloatTimeDomainData(data: Float32Array) { data.fill(0); },
+    } as unknown as AnalyserNode;
+    expect(getMainPathPeakResolution(analyser)).toBe(0);
+  });
+
+  it('8bit しか読めないなら 1 目盛は 1/128（これより細かいしきい値では判定できない）', () => {
+    const analyser = {
+      getByteTimeDomainData(data: Uint8Array) { data.fill(128); },
+    } as unknown as AnalyserNode;
+    expect(getMainPathPeakResolution(analyser)).toBeCloseTo(1 / 128, 6);
+  });
+
+  it('どちらも読めない・Analyser が無いときは null', () => {
+    expect(getMainPathPeakResolution({} as unknown as AnalyserNode)).toBeNull();
+    expect(getMainPathPeakResolution(null)).toBeNull();
   });
 });

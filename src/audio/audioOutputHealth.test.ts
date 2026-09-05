@@ -168,6 +168,78 @@ describe('実音経路のピークで判定する（issue #618）', () => {
     expect(report.mainPathSilent).toBe(false);
   });
 
+  it('音量スライダーを絞っているだけの正常なタブを「壊れています」と言わない（round1 P1-2）', async () => {
+    // 音量 20% → gain 0.16。正常なタブのピーク（0.006）も 0.16 倍の 0.00096 まで縮み、
+    // 固定しきい値 0.001 のままだと正常な音が「無音」に見えていた
+    const { context, wait } = createMockContext({ analyserSample: 128 });
+    const report = await checkAudioOutputHealth(context, {
+      wait,
+      mainPathAnalyser: createMainPathAnalyser(0.00096),
+      masterGain: 0.16,
+    });
+    expect(report.verdict).toBe('healthy');
+    expect(report.mainPathSilent).toBe(false);
+  });
+
+  it('音量を絞っていても、完全な無音（ピーク 0）なら壊れていると判定できる（round1 P1-2）', async () => {
+    const { context, wait } = createMockContext({ analyserSample: 200 });
+    const report = await checkAudioOutputHealth(context, {
+      wait,
+      mainPathAnalyser: createMainPathAnalyser(0),
+      masterGain: 0.16,
+    });
+    expect(report.verdict).toBe('unhealthy');
+    expect(report.mainPathSilent).toBe(true);
+  });
+
+  it('音量をほぼ 0 まで絞っているときは実音経路で判定しない（round1 P1-2）', async () => {
+    const { context, wait } = createMockContext({ analyserSample: 200 });
+    const report = await checkAudioOutputHealth(context, {
+      wait,
+      mainPathAnalyser: createMainPathAnalyser(0),
+      masterGain: 0.004,
+    });
+    // プローブ（別経路）は有音なので、従来どおりの判定に落ちる
+    expect(report.verdict).toBe('healthy');
+    expect(report.mainPathSilent).toBe(false);
+  });
+
+  it('8bit でしか読めない Analyser では実音経路で判定しない（round1 P3・量子化で 0 に丸まる）', async () => {
+    const { context, wait } = createMockContext({ analyserSample: 200 });
+    // getFloatTimeDomainData を持たない＝1 目盛 1/128 ≒ 0.0078 でしか測れない
+    const byteOnlyAnalyser = {
+      fftSize: 4,
+      getByteTimeDomainData(data: Uint8Array) { data.fill(128); },
+    } as unknown as AnalyserNode;
+    const report = await checkAudioOutputHealth(context, { wait, mainPathAnalyser: byteOnlyAnalyser });
+    expect(report.mainPathSilent).toBe(false);
+    expect(report.verdict).toBe('healthy');
+  });
+
+  it('currentTime が進まないときは「タブの音声経路が壊れている」にしない（round1 P1-3・Safari の自動復旧を残す）', async () => {
+    // レンダリングが止まれば実音経路の Analyser も 0 になるが、これは従来
+    // エンジンの作り直しで直っていたケース。mainPathSilent にすると復旧が走らなくなる
+    const { context, wait } = createMockContext({ advancePerWait: 0, analyserSample: 200 });
+    const report = await checkAudioOutputHealth(context, {
+      wait,
+      mainPathAnalyser: createMainPathAnalyser(0),
+    });
+    expect(report.verdict).toBe('unhealthy');
+    expect(report.mainPathSilent).toBe(false);
+    expect(report.reason).toContain('レンダリング停止');
+  });
+
+  it('補助プローブも無音のときは「タブが壊れている」にしない（round1 P1-3・グラフ全体の死は復旧対象）', async () => {
+    const { context, wait } = createMockContext({ analyserSample: 128 });
+    const report = await checkAudioOutputHealth(context, {
+      wait,
+      mainPathAnalyser: createMainPathAnalyser(0),
+    });
+    expect(report.verdict).toBe('unhealthy');
+    expect(report.mainPathSilent).toBe(false);
+    expect(report.reason).toContain('グラフ処理が死んでいる');
+  });
+
   it('Analyser が無い環境では従来どおりプローブで判定する（機能劣化なし）', async () => {
     const { context, wait } = createMockContext({ analyserSample: 128 });
     const report = await checkAudioOutputHealth(context, { wait });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber } from './playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findFirstSoundingOnsetMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber } from './playbackPositionUtils';
 import type { MeasureData } from '../types/storage';
 import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
 
@@ -299,6 +299,67 @@ describe('calculateExpandedPlaybackDurationMs（展開済み列の残り時間�
       { events: [{ dur: '1', isRest: false, keys: ['c/4'] }], bpm: 480 },
     ];
     expect(calculateExpandedPlaybackDurationMs(fast, 480, [4, 4])).toBe(500);
+  });
+});
+
+describe('findFirstSoundingOnsetMs（最初に音が鳴る時刻・#618 round1 P1-1）', () => {
+  it('先頭の小節に音符があれば 0（拍の頭から鳴る）', () => {
+    const expanded: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }] },
+    ];
+    expect(findFirstSoundingOnsetMs(expanded, 120, [4, 4])).toBe(0);
+  });
+
+  it('先頭が全休符なら、次に音符が来る小節の時刻を返す（自己診断の窓の外だと分かる）', () => {
+    const expanded: MeasureData[] = [
+      { events: [{ dur: '1', isRest: true, keys: ['b/4'] }] },
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }] },
+    ];
+    // 4/4 @120BPM: 1小節 = 2000ms
+    expect(findFirstSoundingOnsetMs(expanded, 120, [4, 4])).toBe(2000);
+  });
+
+  it('小節の途中から鳴り始める（弱起・休符始まり）ときはその拍の時刻', () => {
+    const expanded: MeasureData[] = [
+      {
+        events: [
+          { dur: '4', isRest: true, keys: ['b/4'] },
+          { dur: '4', isRest: false, keys: ['c/4'] },
+        ],
+      },
+    ];
+    // 120BPM の4分音符 = 500ms
+    expect(findFirstSoundingOnsetMs(expanded, 120, [4, 4])).toBe(500);
+  });
+
+  it('声部2だけに音がある小節も見る（主声部が休符でも鳴っている）', () => {
+    const expanded: MeasureData[] = [
+      {
+        events: [{ dur: '1', isRest: true, keys: ['b/4'] }],
+        voices: [
+          { id: 'v1', events: [{ dur: '1', isRest: true, keys: ['b/4'] }] },
+          { id: 'v2', events: [{ dur: '1', isRest: false, keys: ['c/3'] }], stemDirection: 'down' },
+        ],
+      },
+    ];
+    expect(findFirstSoundingOnsetMs(expanded, 120, [4, 4])).toBe(0);
+  });
+
+  it('音符が1つも無ければ null（鳴らないのが正しい譜面）', () => {
+    const expanded: MeasureData[] = [
+      { events: [{ dur: '1', isRest: true, keys: ['b/4'] }] },
+      { events: [] },
+    ];
+    expect(findFirstSoundingOnsetMs(expanded, 120, [4, 4])).toBeNull();
+  });
+
+  it('小節ごとのテンポ変更を反映する（遅い小節ぶんだけ後ろへずれる）', () => {
+    const expanded: MeasureData[] = [
+      { events: [{ dur: '1', isRest: true, keys: ['b/4'] }], bpm: 60 },
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }], bpm: 60 },
+    ];
+    // 60BPM の 4/4 は1小節 4000ms
+    expect(findFirstSoundingOnsetMs(expanded, 60, [4, 4])).toBe(4000);
   });
 });
 

@@ -37,7 +37,7 @@ import { useUiVariant } from '../hooks/useUiVariant';
 // タブ・レイヤーの表示名は utils/editorContextLabels.ts が正本（Issue #405 段2）。
 // ツールバーのタブ行と A1 文脈バーで同じ言葉を出すため、両方がこの定数を参照する。
 import { PIANO_LAYER_OPTIONS, SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
-import { checkAudioOutputHealth, formatAudioHealthReport, describeAudioOutputDestination } from '../audio/audioOutputHealth';
+import { AUDIO_HEALTH_PROBE_MS, checkAudioOutputHealth, formatAudioHealthReport, describeAudioOutputDestination } from '../audio/audioOutputHealth';
 import { startMainPathPeakWatch, type MainPathPeakWatch } from '../audio/mainPathAnalyser';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useDevicePixelRatio } from './useDevicePixelRatio';
@@ -207,7 +207,7 @@ import {
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber, type PlaybackHighlightPartSource, type PlaybackHighlightTarget, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findFirstSoundingOnsetMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber, type PlaybackHighlightPartSource, type PlaybackHighlightTarget, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature, TimeSignatureStyle } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
@@ -421,6 +421,12 @@ function ensembleAutoFitBudgetPx(pageHeightMmValue: number): number {
 // 無音検知（issue #14）のタイミング設定。
 // 再生予約の直後はまだ音が立ち上がっていないため、少し待ってから測る。
 const SILENT_FAILURE_CHECK_DELAY_MS = 600;
+/**
+ * 実音経路の観測窓から差し引く安全マージン（ms・#618 round1 P1-1）。
+ * 予約処理の実時間や音源ロードのばらつきで発音が少し後ろへずれても、
+ * 「窓の中に音がある」と数えて誤報しないよう、窓を狭める側に倒している。
+ */
+const MAIN_PATH_OBSERVATION_SAFETY_MS = 150;
 // 自動復旧（エンジン再作成）の連発防止。これより短い間隔で再検知したら手動復旧へ誘導する。
 const SILENT_RECOVERY_COOLDOWN_MS = 30_000;
 // 削除通知（Issue #238）を出しておく時間。
@@ -1048,7 +1054,19 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // ときだけ行う。切替後に始めた B の再生まで A の後始末で止めないため（round3 P1）
   const activePlaybackSeqRef = useRef<number | null>(null);
   // 無音検知（issue #14）の通知文。null のときは何も表示しない
-  const [audioHealthNotice, setAudioHealthNotice] = useState<string | null>(null);
+  const [audioHealthNotice, setAudioHealthNoticeText] = useState<string | null>(null);
+  // その通知から「音の調子がおかしいとき（音声復旧）」への導線を出してよいか（#618 round1 P3）。
+  // タブの音声経路そのものが壊れているときは音声復旧では直らないと分かっているので、
+  // 案内と導線が食い違わないよう false にする
+  const [audioHealthNoticeAllowsRecovery, setAudioHealthNoticeAllowsRecovery] = useState(true);
+  /**
+   * 無音検知の通知を出す・消す。文言と「音声復旧の導線を出すか」を必ずセットで更新するため、
+   * 直接 state を触らずこの関数を通す（片方だけ書き換わって食い違うのを防ぐ）。
+   */
+  const setAudioHealthNotice = useCallback((text: string | null, options: { allowsRecovery?: boolean } = {}) => {
+    setAudioHealthNoticeText(text);
+    setAudioHealthNoticeAllowsRecovery(options.allowsRecovery ?? true);
+  }, []);
   // 最後に自動復旧（エンジン再作成）した時刻。クールダウン判定に使う
   const lastSilentRecoveryAtRef = useRef(0);
   // 再生位置。targets は「その瞬間に鳴っている全パート・全声部の音符」（Issue #411）で、
@@ -1371,6 +1389,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       const report = await checkAudioOutputHealth(engine.getAudioContext?.() ?? null, {
         mainPathAnalyser: engine.getMainPathAnalyser?.() ?? null,
         observedMainPathPeak: peakWatch?.getPeak() ?? null,
+        // ピークは音量スライダーの倍率でそのまま縮むので、しきい値を合わせるために渡す
+        // （round1 P1-2: 音量 20% の正常なタブを「壊れています」と誤報していた）
+        masterGain: getMasterVolumeGain(soundRuntimeSettings.profile),
         silenceIsExpected: !expectsSound || getMasterVolumeGain(soundRuntimeSettings.profile) <= 0,
       });
       if (scorePageUnmountedRef.current) return;
@@ -1405,7 +1426,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // 実音経路そのものが無音のときは、エンジンを作り直しても直らないことが
         // 運用者の実機で確認済み（#605・#618）。効かない手段は勧めず、
         // 唯一直った「タブを開き直す」だけを案内する。
-        setAudioHealthNotice(describeAudioMainPathBroken());
+        // 音は1つも出ていないので、案内だけ出して帯（再生位置）を進め続けない（round1 P3）。
+        clearPlaybackTimer();
+        resetPlaybackClock();
+        setPlaybackState('stopped');
+        setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+        engine.stopAll();
+        setAudioHealthNotice(describeAudioMainPathBroken(), { allowsRecovery: false });
         return;
       }
 
@@ -1430,7 +1457,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 検知自体の失敗で再生機能を巻き込まない
       console.warn('[ScorePage] 無音ヘルスチェックに失敗しました（無視します）:', error);
     }
-  }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock, soundRuntimeSettings.profile]);
+  }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock, setAudioHealthNotice, soundRuntimeSettings.profile]);
 
   // 無音検知の予約もタイマー ref で持ち、アンマウント時に必ず片付ける
   // （追跡なしの setTimeout だとテスト teardown 後に発火して未処理例外になる）
@@ -1455,6 +1482,19 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       });
     }, SILENT_FAILURE_CHECK_DELAY_MS);
   }, [runOutputHealthCheck]);
+  /**
+   * 予約済みの無音チェックとピーク観測を取り消す（#618 round1 P2）。
+   * 停止すると stopAll でマスターゲインごと切り離されるため、そのままチェックが走ると
+   * 「実音経路が無音」＝故障として誤報してしまう。止めたら判定もやめる。
+   */
+  const cancelOutputHealthCheck = useCallback(() => {
+    if (outputHealthCheckTimerRef.current) {
+      clearTimeout(outputHealthCheckTimerRef.current);
+      outputHealthCheckTimerRef.current = null;
+    }
+    mainPathPeakWatchRef.current?.stop();
+    mainPathPeakWatchRef.current = null;
+  }, []);
   useEffect(() => () => {
     if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
     mainPathPeakWatchRef.current?.stop();
@@ -2072,8 +2112,22 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 音源ロード時間ぶん帯が早まる（round2 P1）ので、エンジンが返す起点だけを使う。
           // 起点を返さない偽エンジン（テスト）は呼び出し前の時刻で近似する
           const fallbackScheduledAt = Date.now();
-          expectsSound = partObjs.some((partObj) => partObj.measures.some((measure) =>
-            measure.events.some((event) => !event.isRest && event.keys.length > 0)));
+          // 自己診断が実際に耳を澄ませているのは「再生開始から約 0.85 秒」の窓だけ
+          // （600ms 後にチェック開始 → プローブ 250ms）。「譜面のどこかに音符がある」では
+          // 先頭が休符の譜面で窓の中が無音になり、正常なタブを「壊れています」と誤報する
+          //（round1 P1-1）。窓の中に発音が予定されているかで判断する。
+          // 実音は先読みリード（scheduleLead）ぶん遅れて始まるので、そのぶん窓を狭めたうえで、
+          // 予約処理の実時間などの誤差も見込んで安全側（誤報しない側）へさらに削る。
+          const soundObservationWindowMs = SILENT_FAILURE_CHECK_DELAY_MS + AUDIO_HEALTH_PROBE_MS
+            - scheduleLeadSeconds() * 1000
+            - MAIN_PATH_OBSERVATION_SAFETY_MS;
+          const firstOnsetMs = Math.min(
+            ...partObjs.map((partObj) => (
+              findFirstSoundingOnsetMs(partObj.measures, effectiveGlobalBpm, scoreTimeSignature, soundRuntimeSettings.swingEnabled)
+                ?? Number.POSITIVE_INFINITY
+            ))
+          );
+          expectsSound = Number.isFinite(firstOnsetMs) && firstOnsetMs <= soundObservationWindowMs;
           const scheduleInfo = await audioEngine.playParts(partObjs, effectiveGlobalBpm);
           // 予約（音源ロード込み）を待つ間に切替・停止が起きていたら、予約済みの音を止めて
           // 「再生中」へは戻さない（#609 round1 P1: 切替後に前の作品が鳴り出す）
@@ -2212,11 +2266,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // stop は「音を止める」だけでなく、「一時停止用の残り時間」も捨てる。
     // ここで resetPlaybackClock を呼ばないと、次の再生開始時に古い残り時間を再利用してしまう。
     clearPlaybackTimer();
+    // 停止で切り離した音を「無音の故障」と誤検知しないよう、予約済みの自己診断も取り消す（#618）
+    cancelOutputHealthCheck();
     getAudioEngine().stopAll();
     setPlaybackState('stopped');
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     resetPlaybackClock();
-  }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
+  }, [cancelOutputHealthCheck, clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
 
   /**
    * 作品の切替・復元の開始と終了（#609）。開始時に再生中・一時停止中なら停止して、
@@ -2356,6 +2412,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     getAudioEngine,
     resetAudioSettingsToSafeDefaults,
     resetPlaybackClock,
+    setAudioHealthNotice,
   ]);
 
   const handleEmergencyBeep = useCallback(async () => {
@@ -7353,6 +7410,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 onInstrumentPreview={handleInstrumentPreview}
                 onAudioRecovery={handleAudioRecovery}
                 audioHealthNotice={audioHealthNotice}
+                audioHealthNoticeAllowsRecovery={audioHealthNoticeAllowsRecovery}
                 onEmergencyBeep={handleEmergencyBeep}
                 soundRuntimeSettings={soundRuntimeSettings}
                 activeSoundEngineMode={activeSoundEngineMode}

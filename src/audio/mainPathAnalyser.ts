@@ -63,6 +63,32 @@ export function tapOutputToMainPathAnalyser(
 }
 
 /**
+ * ピークをどれくらい細かく読めるかを返す（0 に近いほど細かい）。
+ *
+ * なぜ必要か（#618 round1 P3）:
+ * 8bit 版の `getByteTimeDomainData` しか無いブラウザでは 1 目盛が 1/128 ≒ 0.0078 しかなく、
+ * それより小さい正常な音（音量スライダーを下げている・pp）は 0 に丸められて
+ * 「無音」に見えてしまう。しきい値がこの目盛より細かいときは
+ * 「測れていない」として判定を諦めるために使う。
+ *
+ * - 浮動小数で読める: 0（量子化による下限が無い）
+ * - 8bit でしか読めない: 1/128
+ * - どちらも読めない: null
+ */
+export function getMainPathPeakResolution(analyser: AnalyserNode | null): number | null {
+  if (!analyser) {
+    return null;
+  }
+  if (typeof analyser.getFloatTimeDomainData === 'function') {
+    return 0;
+  }
+  if (typeof analyser.getByteTimeDomainData === 'function') {
+    return 1 / 128;
+  }
+  return null;
+}
+
+/**
  * Analyser が今この瞬間に見ている波形のピーク振幅（0〜1）を読む。
  * 読めない環境では null を返す。
  *
