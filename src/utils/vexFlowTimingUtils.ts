@@ -301,7 +301,8 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, context: TupletPlacementCon
       const tipY = stemTipYOf(note);
       if (tipY !== null) y = Math.max(y, tipY + lineSpacing + halfNumberHeight);
     });
-    // 下側の候補は「下の五線の側にある」障害物だけを見る（上段の上にある音符に引きずられない）
+    // 下側の候補は「下の五線の側にある」障害物だけを見る。max の初期値が下の五線の外なので
+    // 上段の上にある矩形が結果を変えることは無いが、意図を明示するための守り（結果は変えない）
     obstacles.forEach((rect) => {
       if (rect.y + rect.h <= topStave.getYForLine(0)) return;
       y = Math.max(y, rect.y + rect.h + lineSpacing + halfNumberHeight);
@@ -316,7 +317,7 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, context: TupletPlacementCon
       const tipY = stemTipYOf(note);
       if (tipY !== null) y = Math.min(y, tipY - lineSpacing - halfNumberHeight);
     });
-    // 上側の候補は「上の五線の側にある」障害物だけを見る（下段の下にある音符に引きずられない）
+    // 上側の候補は「上の五線の側にある」障害物だけを見る（同上・明示のための守り）
     obstacles.forEach((rect) => {
       if (rect.y >= bottomStave.getYForLine(4)) return;
       y = Math.min(y, rect.y - lineSpacing - halfNumberHeight);

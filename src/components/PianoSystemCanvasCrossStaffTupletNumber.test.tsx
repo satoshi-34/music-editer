@@ -382,7 +382,7 @@ describe('PianoSystemCanvas 段またぎ連符の数字（Issue #574）', () => 
     // 段の箱（sysH）は下の五線の第5線ちょうど。公称の予算 SYSTEM_BREATHING_ROOM_PX（70）を足した範囲の内側
     const boxBottom = lower.line0Y + 4 * lower.spacing;
     expect(y).toBeGreaterThan(boxBottom);
-    expect(y + 0.75 * lower.spacing + 2).toBeLessThanOrEqual(boxBottom + 70);
+    expect(y + 0.75 * lower.spacing + 2).toBeLessThanOrEqual(boxBottom + SYSTEM_BREATHING_ROOM_PX);
     unmount();
   });
 

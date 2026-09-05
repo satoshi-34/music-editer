@@ -632,7 +632,7 @@ VexFlow の `Tuplet.getYPosition()` は「**先頭音符の五線**」を起点�
 
 | ファイル | 変更 |
 | --- | --- |
-| `src/utils/vexFlowTimingUtils.ts` | `placeCrossStaffTupletNumber`（梁側の判定・五線と音符のクランプ）を追加。`syncTupletPlacementWithNotes` は第2引数で `{ ownerStave, getObstacles }` を受け取る（省略時は一番上の五線を持ち主とみなし、障害物なしで動く＝単体テスト向けのフォールバック） |
+| `src/utils/vexFlowTimingUtils.ts` | `placeCrossStaffTupletNumber`（梁側の判定・五線と音符のクランプ）を追加。`syncTupletPlacementWithNotes` は第2引数で `{ ownerStave, getObstacles, verticalBounds }` を受け取る（省略時は一番上の五線を持ち主とみなし、障害物なしで動く＝単体テスト向けのフォールバック） |
 | `src/components/PianoSystemCanvas.tsx` | 呼び出しに持ち主の五線と障害物の取得関数を渡す。Pass 3 の手前に「この段の全音符の描画範囲」を遅延で集める `getSystemNoteRects` を追加 |
 
 段またぎでない連符は分岐に入らないため、**既存譜面の数字位置は 1px も動かない**
@@ -694,7 +694,7 @@ VexFlow の `Tuplet.getYPosition()` は「**先頭音符の五線**」を起点�
 **指摘（P1）**: 左手の障害物を避けて `targetY` を際限なく下へ押し出す一方、段の縦レイアウトに余白を
 予約していない。PR の実ブラウザ確認でも数字が段の viewBox 下端を 39px 越えていた。
 
-**事実の確認**: 段の箱（`computeLayout` の sysH）は最下段の第5線で終わっていて**下余白を持たない**
+**事実の確認**: 段の箱（`computeLayout` の sysH）は、Ped の下余白の延長（#604・`pedalBottomExtensionPx`）を除けば最下段の第5線で終わっていて**下余白を持たない**
 （FIRST_STAVE_Y + 五線の上 4 行 + 五線 = ちょうど sysH）。五線の下に置く記号（Ped +25・pp・
 連符数字）はもともと段の箱の外に描かれている。つまり「箱を越える」こと自体は既存の全記号と同じで、
 問題は「次の段やページ下端に食い込む」こと。実際の段間は段のスロット高（ページ譜面領域÷段数）と
@@ -718,5 +718,6 @@ VexFlow の `Tuplet.getYPosition()` は「**先頭音符の五線**」を起点�
 入っていないので、ペダルのある段では数字が Ped の線と重なりうる（round 4 P3-3）。
 
 round 4 で追加: 障害物の絞り込みは「側」も見る（上側の候補は上の五線の側にある矩形だけ、
-下側は下の五線の側だけ。ピアノの上に声楽パートがある段で数字が跳ばないため）。マウント側で
+下側は下の五線の側だけ）。max/min の初期値が五線の外にあるので結果は変わらず、意図を明示する守り。
+`syncTupletPlacementWithNotes` の第2引数は `{ ownerStave, getObstacles, verticalBounds }`。マウント側で
 「基準の形は予算内で下に出る」「左手が予算を越えるほど深いと上へ逃げる」を固定。
