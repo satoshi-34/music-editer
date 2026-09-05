@@ -859,6 +859,15 @@ export function describeAudioEngineRestarted(destination: string): string {
   return `無音状態を検知したため、音声エンジンを自動で再起動しました。もう一度再生をお試しください。${destination}`;
 }
 
+/**
+ * 実音経路（マスターゲイン出口）そのものが無音だったときの通知（Issue #618）。
+ * このタブの音声経路が壊れている状態で、エンジンの作り直し（音声復旧）では
+ * 直らないことが実機で確認済みのため、案内は「タブを開き直す」の一手に絞る。
+ */
+export function describeAudioMainPathBroken(): string {
+  return 'このタブの音声経路が壊れています。タブを閉じて開き直してください。';
+}
+
 /** 自動再起動しても無音が続くときの通知（Issue #521 で出力先の案内を末尾に追加）。 */
 export function describeAudioStillSilent(destination: string): string {
   return `音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。${destination}`;

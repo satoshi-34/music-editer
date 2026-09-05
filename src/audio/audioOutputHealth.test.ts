@@ -109,6 +109,74 @@ describe('checkAudioOutputHealth', () => {
   });
 });
 
+describe('実音経路のピークで判定する（issue #618）', () => {
+  /** 指定した振幅を返す偽の実音経路 Analyser */
+  function createMainPathAnalyser(amplitude: number): AnalyserNode {
+    return {
+      fftSize: 4,
+      getFloatTimeDomainData(data: Float32Array) {
+        data.fill(0);
+        data[0] = amplitude;
+      },
+    } as unknown as AnalyserNode;
+  }
+
+  it('実音経路が無音なら、プローブが有音でも unhealthy（従来はここで healthy と誤報告していた）', async () => {
+    const { context, wait } = createMockContext({ analyserSample: 200 });
+    const report = await checkAudioOutputHealth(context, {
+      wait,
+      mainPathAnalyser: createMainPathAnalyser(0),
+    });
+    expect(report.verdict).toBe('unhealthy');
+    expect(report.mainPathSilent).toBe(true);
+    expect(report.signalDetected).toBe(false);
+    // プローブ自体は波形を観測できている＝別経路なので当てにならない、を記録に残す
+    expect(report.probeSignalDetected).toBe(true);
+    expect(report.reason).toContain('実音経路');
+  });
+
+  it('実音経路に信号があれば、プローブが無音でも healthy', async () => {
+    const { context, wait } = createMockContext({ analyserSample: 128 });
+    const report = await checkAudioOutputHealth(context, {
+      wait,
+      mainPathAnalyser: createMainPathAnalyser(0.04),
+    });
+    expect(report.verdict).toBe('healthy');
+    expect(report.mainPathSilent).toBe(false);
+    expect(report.mainPathPeak).toBeCloseTo(0.04, 5);
+  });
+
+  it('発音直後に観測しておいたピークも判定に使う（短い音が鳴り終わっていても healthy）', async () => {
+    const { context, wait } = createMockContext();
+    const report = await checkAudioOutputHealth(context, {
+      wait,
+      mainPathAnalyser: createMainPathAnalyser(0),
+      observedMainPathPeak: 0.2,
+    });
+    expect(report.verdict).toBe('healthy');
+    expect(report.mainPathPeak).toBeCloseTo(0.2, 5);
+  });
+
+  it('無音が正常なとき（音量 0・休符だけの譜面）は実音経路で判定しない', async () => {
+    const { context, wait } = createMockContext({ analyserSample: 200 });
+    const report = await checkAudioOutputHealth(context, {
+      wait,
+      mainPathAnalyser: createMainPathAnalyser(0),
+      silenceIsExpected: true,
+    });
+    expect(report.verdict).toBe('healthy');
+    expect(report.mainPathSilent).toBe(false);
+  });
+
+  it('Analyser が無い環境では従来どおりプローブで判定する（機能劣化なし）', async () => {
+    const { context, wait } = createMockContext({ analyserSample: 128 });
+    const report = await checkAudioOutputHealth(context, { wait });
+    expect(report.verdict).toBe('unhealthy');
+    expect(report.mainPathPeak).toBeNull();
+    expect(report.mainPathSilent).toBe(false);
+  });
+});
+
 describe('formatAudioHealthReport', () => {
   it('診断ログ用の一行文字列に整形できる', async () => {
     const { context, wait } = createMockContext();
@@ -117,6 +185,8 @@ describe('formatAudioHealthReport', () => {
     expect(line).toContain('verdict=healthy');
     expect(line).toContain('timeAdvancing=true');
     expect(line).toContain('signalDetected=true');
+    // 切り分けを1行で済ませるための実測値（issue #618）
+    expect(line).toContain('mainPathPeak=');
   });
 });
 

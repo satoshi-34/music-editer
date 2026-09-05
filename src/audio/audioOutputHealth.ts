@@ -8,17 +8,36 @@
 // 1. currentTime 進行チェック:
 //    running 表示でもレンダリングが止まっていると currentTime が進まない。
 //    一定時間あけて 2 回読み、差が無ければ確実に壊れていると判定できる。
-// 2. AnalyserNode 無音プローブ:
+// 2. 実音経路のピーク（issue #618・これが主判定）:
+//    マスターゲインの直後に常設した AnalyserNode（src/audio/mainPathAnalyser.ts）で、
+//    実際にスピーカーへ向かっている信号の振幅を測る。
+//    「音が出ない」と言っているタブで無音を実測できるのはここだけ。
+// 3. AnalyserNode 無音プローブ（issue #618 で補助へ格下げ）:
 //    テスト用オシレーターを AnalyserNode にだけつなぎ（destination には接続しない＝無音）、
 //    波形が観測できるかを見る。これでグラフ処理そのものが生きているかを確認できる。
 //    （AnalyserNode は出力先に接続しなくても処理されると仕様で定められている）
+//    ただしプローブは実音とは別の経路なので、実音経路が無音でも波形が出てしまう。
+//    実音経路を測れたときは、こちらの結果で判定を左右させない。
 //
-// 注意: この 2 つが両方正常でも、OS の出力デバイス段で音が消えるケースは
+// 注意: これらが全て正常でも、OS の出力デバイス段で音が消えるケースは
 // JavaScript からは観測できない。そのため判定は 3 値にして、
 // 「unhealthy が確定したときだけ」自動復旧を動かす方針にしている。
 
+import { readMainPathPeak } from './mainPathAnalyser';
+
 /** ヘルスチェックの最終判定。unknown のときは何もしないこと（誤検知防止） */
 export type AudioOutputVerdict = 'healthy' | 'unhealthy' | 'unknown';
+
+/**
+ * 実音経路が「無音」と言い切るピークのしきい値（issue #618）。
+ *
+ * 実測（Chromium・音色プレビューと再生）では、正常なタブのピークは 0.006〜0.04 で、
+ * 経路が切れているときはちょうど 0.0 になる（無音は誤差ではなく厳密な 0）。
+ * 誤って「壊れています」と出す方が実害が大きいので、しきい値は下側に大きく振り、
+ * いちばん小さかった実測値（0.006）の 6 分の 1 に置いている。
+ * 8bit 版の Analyser（1/128 ≒ 0.0078 刻み）でも 1 目盛の振れを有音と判定できる。
+ */
+export const MAIN_PATH_SILENCE_THRESHOLD = 0.001;
 
 export interface AudioOutputHealthReport {
   verdict: AudioOutputVerdict;
@@ -28,8 +47,18 @@ export interface AudioOutputHealthReport {
   timeAdvancing: boolean | null;
   /** プローブ時間内の currentTime の増分（秒） */
   currentTimeDelta: number | null;
-  /** Analyser プローブで波形を観測できたか。実施できなかった場合 null */
+  /**
+   * 音が出ていると判断できたか。
+   * 実音経路を測れたときはその結果（issue #618）、測れないときは従来どおりプローブの結果。
+   * どちらも実施できなかった場合は null。
+   */
   signalDetected: boolean | null;
+  /** 実音経路（マスターゲイン直後）で観測したピーク振幅。測れない場合 null */
+  mainPathPeak: number | null;
+  /** 実音経路が無音だったか（＝このタブの音声経路が壊れている疑い） */
+  mainPathSilent: boolean;
+  /** 補助のプローブ（別経路のオシレーター）で波形を観測できたか */
+  probeSignalDetected: boolean | null;
   /** 診断ログ向けの一行説明 */
   reason: string;
   /**
@@ -49,6 +78,21 @@ export interface CheckAudioOutputHealthOptions {
    * 省略時は navigator.mediaDevices を使う。
    */
   resolveOutputDeviceLabel?: () => Promise<string | null>;
+  /** 実音経路（マスターゲイン直後）に常設した診断用 AnalyserNode（issue #618） */
+  mainPathAnalyser?: AnalyserNode | null;
+  /**
+   * ヘルスチェックが始まる前（発音直後）に観測しておいたピーク。
+   * 音色プレビュー（0.5秒）のような短い音はチェック開始時には鳴り終わっているため、
+   * startMainPathPeakWatch で拾っておいた最大値をここへ渡す。
+   */
+  observedMainPathPeak?: number | null;
+  /** 無音と判断するしきい値（既定 MAIN_PATH_SILENCE_THRESHOLD） */
+  mainPathPeakThreshold?: number;
+  /**
+   * 無音が正常な場合（音量スライダーが 0・休符だけの譜面など）に true。
+   * このときピークが 0 なのは故障ではないため、実音経路での判定を行わない。
+   */
+  silenceIsExpected?: boolean;
 }
 
 const DEFAULT_PROBE_MS = 250;
@@ -164,6 +208,8 @@ export async function checkAudioOutputHealth(
 ): Promise<AudioOutputHealthReport> {
   const probeMs = options.probeMs ?? DEFAULT_PROBE_MS;
   const wait = options.wait ?? defaultWait;
+  const analyser = options.mainPathAnalyser ?? null;
+  const threshold = options.mainPathPeakThreshold ?? MAIN_PATH_SILENCE_THRESHOLD;
   // 出力先デバイス名は判定そのものには使わない（表示用の補助情報）。
   // 取得に失敗しても null のまま進めて、従来どおりの判定を続ける
   const resolveLabel = options.resolveOutputDeviceLabel ?? (() => resolveAudioOutputDeviceLabel());
@@ -180,6 +226,9 @@ export async function checkAudioOutputHealth(
       timeAdvancing: null,
       currentTimeDelta: null,
       signalDetected: null,
+      mainPathPeak: null,
+      mainPathSilent: false,
+      probeSignalDetected: null,
       reason: 'AudioContext が取得できないため判定不能',
       // context が無くても「どこへ出そうとしていたか」は診断の手がかりになる
       outputDeviceLabel,
@@ -193,6 +242,9 @@ export async function checkAudioOutputHealth(
       timeAdvancing: null,
       currentTimeDelta: null,
       signalDetected: null,
+      mainPathPeak: null,
+      mainPathSilent: false,
+      probeSignalDetected: null,
       reason: `AudioContext が running ではない (state=${context.state})`,
       outputDeviceLabel,
     };
@@ -200,10 +252,24 @@ export async function checkAudioOutputHealth(
 
   const probe = startSilentProbe(context);
   const startTime = context.currentTime;
+  // 待つ前と後の 2 回読むのは、観測窓の中で音が始まった／鳴り終わった場合に
+  // 片方だけでは山を取りこぼすため（発音直後からの観測値も合わせて最大を採る）
+  const peakBeforeWait = readMainPathPeak(analyser);
   await wait(probeMs);
+  const peakAfterWait = readMainPathPeak(analyser);
   const delta = context.currentTime - startTime;
-  const signalDetected = probe.read();
+  const probeSignalDetected = probe.read();
   probe.stop();
+
+  const observedPeaks = [options.observedMainPathPeak, peakBeforeWait, peakAfterWait]
+    .filter((value): value is number => typeof value === 'number');
+  const mainPathPeak = observedPeaks.length === 0 ? null : Math.max(...observedPeaks);
+  // 「鳴らないのが正しい」ときの無音は故障ではないので、実音経路での判定は行わない
+  const canJudgeByMainPath = mainPathPeak !== null && options.silenceIsExpected !== true;
+  const mainPathSilent = canJudgeByMainPath && mainPathPeak < threshold;
+  // 実音経路を測れたならそれが主判定。測れないときだけ従来のプローブ結果を使う（issue #618）
+  const signalDetected = canJudgeByMainPath ? !mainPathSilent : probeSignalDetected;
+  const peakText = mainPathPeak === null ? 'n/a' : mainPathPeak.toFixed(4);
 
   const timeAdvancing = delta > 0;
 
@@ -214,30 +280,70 @@ export async function checkAudioOutputHealth(
       timeAdvancing,
       currentTimeDelta: delta,
       signalDetected,
+      mainPathPeak,
+      mainPathSilent,
+      probeSignalDetected,
       reason: `running 表示なのに currentTime が ${probeMs}ms 進まない（レンダリング停止）`,
       outputDeviceLabel,
     };
   }
 
-  if (signalDetected === false) {
+  if (mainPathSilent) {
     return {
       verdict: 'unhealthy',
       contextState: context.state,
       timeAdvancing,
       currentTimeDelta: delta,
       signalDetected,
+      mainPathPeak,
+      mainPathSilent,
+      probeSignalDetected,
+      reason: `実音経路（マスターゲイン出口）が無音（mainPathPeak=${peakText}）。このタブの音声経路が壊れている`,
+      outputDeviceLabel,
+    };
+  }
+
+  if (canJudgeByMainPath) {
+    // 実音経路で信号を観測できているなら、補助プローブの結果は判定に使わない
+    return {
+      verdict: 'healthy',
+      contextState: context.state,
+      timeAdvancing,
+      currentTimeDelta: delta,
+      signalDetected,
+      mainPathPeak,
+      mainPathSilent,
+      probeSignalDetected,
+      reason: `正常（currentTime 進行・実音経路のピーク ${peakText}）`,
+      outputDeviceLabel,
+    };
+  }
+
+  if (probeSignalDetected === false) {
+    return {
+      verdict: 'unhealthy',
+      contextState: context.state,
+      timeAdvancing,
+      currentTimeDelta: delta,
+      signalDetected,
+      mainPathPeak,
+      mainPathSilent,
+      probeSignalDetected,
       reason: 'currentTime は進むが Analyser プローブが無音（グラフ処理が死んでいる）',
       outputDeviceLabel,
     };
   }
 
   return {
-    verdict: signalDetected === null ? 'unknown' : 'healthy',
+    verdict: probeSignalDetected === null ? 'unknown' : 'healthy',
     contextState: context.state,
     timeAdvancing,
     currentTimeDelta: delta,
     signalDetected,
-    reason: signalDetected === null
+    mainPathPeak,
+    mainPathSilent,
+    probeSignalDetected,
+    reason: probeSignalDetected === null
       ? 'currentTime は進むが Analyser プローブを実施できなかった'
       : '正常（currentTime 進行・プローブ波形あり）',
     outputDeviceLabel,
@@ -252,6 +358,9 @@ export function formatAudioHealthReport(report: AudioOutputHealthReport): string
     `timeAdvancing=${report.timeAdvancing}`,
     `currentTimeDelta=${report.currentTimeDelta?.toFixed(4) ?? 'n/a'}`,
     `signalDetected=${report.signalDetected}`,
+    // 実音経路の実測値。切り分けをこの1行で済ませるため必ず出す（issue #618）
+    `mainPathPeak=${report.mainPathPeak === null ? 'n/a' : report.mainPathPeak.toFixed(4)}`,
+    `probeSignalDetected=${report.probeSignalDetected}`,
     // 「healthy なのに聞こえない」報告のとき、残る不明点は出力先だけ（Issue #521）
     `outputDevice=${report.outputDeviceLabel ?? 'n/a'}`,
     `reason=${report.reason}`,

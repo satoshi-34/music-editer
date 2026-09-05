@@ -184,3 +184,80 @@ ScorePage のタイマーを横串で片付ける方針を定めた。
      recreateAudioEngine を打ち切る。
 - 回帰テスト ScorePageTimerCleanup は保留 setTimeout を追跡して固定する。afterEach で
   追跡中 ID を強制回収してから復元する（退行検出時に実タイマーを残さない）。
+
+
+## 追記: 実音経路（マスターゲイン出口）での判定（issue #618）
+
+### 問題
+
+運用者QAで「タブでは音が出ないのに、コンソールのヘルスチェックは `verdict=healthy /
+signalDetected=true`」という食い違いが2日続けて起きた（#605 コメント・#618）。
+原因は判定の作りにある。従来の `signalDetected` は **destination へ繋がない別経路の
+オシレーター**（無音プローブ）を見ていたため、SoundFont の実音経路（player →
+マスターゲイン → destination）が無音でも「グラフは動いている＝healthy」と言えてしまう。
+同じビルドを別のブラウザペインで開き、マスターゲイン出口に AnalyserNode を挿して測ると
+ピーク 0.04 の信号があり、アプリの経路自体は健全＝**タブ固有の状態**であることも分かっていた。
+また、この状態は「音声復旧（エンジン再構築）」では直らず、タブを開き直すと全快する。
+
+### 修正設計
+
+1. **実音経路に診断用 AnalyserNode を常設**（`src/audio/mainPathAnalyser.ts` 新規）
+   - `ensureMainPathAnalyser(context, existing)`: context ごとに1つだけ作る（作れない環境は null）
+   - `tapOutputToMainPathAnalyser(outputNode, analyser)`: マスターゲインの出口から**枝**を張る。
+     Analyser は出力先へ繋がなくても処理されるので、本線（→ destination）には影響しない
+   - `readMainPathPeak(analyser)`: `getFloatTimeDomainData`（無ければ 8bit 版）でピーク振幅を読む
+   - `startMainPathPeakWatch(analyser)`: 50ms ごとに読んで**最大値を持ち回る**。
+     ヘルスチェックは再生の 600ms 後に走るが、音色プレビュー（0.5秒）は
+     そのときには鳴り終わっているため、発音直後から観測を始めないと山を取りこぼす
+   - 両エンジン（`SoundFontEngine` / `SimpleAudioEngine`）は `getOutputNode()` で
+     マスターゲインを作り直すたびに枝を張り直す。SoundFont は `stopAll()` で
+     マスターゲインを世代交代させるため、「作った時に1回」では次の再生で測れなくなる
+   - `PlaybackEngine.getMainPathAnalyser?()` で画面側へ渡す（診断専用・optional）
+2. **判定の主役を実音経路にする**（`audioOutputHealth.ts`）
+   - 実音経路を測れたときは `signalDetected` をそのピークで決め、**無音プローブは判定に使わない**
+     （プローブは「context が動くか」の補助へ格下げ。実音が無音でも通ってしまうため）
+   - しきい値 `MAIN_PATH_SILENCE_THRESHOLD = 0.001`。実測（Chromium）では正常時 0.006〜0.04、
+     経路が切れているときは厳密に 0.0 だったため、**誤って「壊れています」と出さない側**へ大きく寄せた
+   - `silenceIsExpected`（音量0・休符だけの譜面）のときは実音経路で判定しない
+   - 診断ログに `mainPathPeak=` を必ず出す（切り分けを1行で終わらせるため）
+3. **案内は「タブを開き直す」だけ**（`describeAudioMainPathBroken`）
+   - 実音経路が無音のときは、エンジン再作成（自動復旧）も「音声復旧」ボタンの案内も出さない。
+     実機で効かないことが確認済みの手段を勧めない（#605）
+   - 従来の unhealthy（state が running でない・currentTime が止まる・プローブ無音）は
+     これまでどおり自動復旧＋クールダウンの分岐を通る（回帰なし）
+
+### 検証
+
+- 単体テスト: `mainPathAnalyser.test.ts`（10件・Analyser の作成/分岐/ピーク読取/観測）、
+  `audioOutputHealth.test.ts` に5件追加（実音無音でプローブ有音→unhealthy、実音有音で
+  プローブ無音→healthy、発音直後の観測値の採用、無音が正常なときは判定しない、
+  Analyser が無い環境では従来どおり）
+- 配線テスト: `ScorePageMainPathSilentNotice.test.tsx`（ScorePage 実マウント。
+  `checkAudioOutputHealth` はモックせず、エンジンが返す running な context と
+  無音の Analyser から通しで「タブを開き直す」案内が出ることを固定）
+- 実ブラウザ（Chromium・worktree を dev サーバーへ載せて確認）:
+  - 音色プレビュー → `mainPathPeak=0.0084` / 再生 → `0.0058` で healthy・通知なし
+  - `AnalyserNode.prototype.getFloatTimeDomainData` を「常に無音」へ差し替えると
+    `verdict=unhealthy … mainPathPeak=0.0000` となり、画面に
+    「このタブの音声経路が壊れています。タブを閉じて開き直してください。」が出た
+    （自動再起動の通知は出ない）
+  - 参考計測: 同じブラウザで gain → destination の経路を自作して測ると、
+    無音は厳密に 0.0、440Hz のオシレーターは 1.0。しきい値の根拠にした
+
+### 影響範囲
+
+- `src/audio/mainPathAnalyser.ts` / `.test.ts` — 新規
+- `src/audio/audioOutputHealth.ts` — レポートに `mainPathPeak` / `mainPathSilent` /
+  `probeSignalDetected` を追加（`AudioOutputHealthReport` を組み立てているテストは要更新）
+- `src/audio/PlaybackEngine.ts` — optional メソッド追加（既存実装への破壊的変更なし）
+- `src/audio/SoundFontEngine.ts` / `SimpleAudioEngine.ts` — 枝の張り直しとアクセサ
+- `src/components/ScorePage.tsx` — 観測の開始/停止、新しい案内の分岐、休符だけの譜面の除外
+- `src/utils/scoreEditorNotices.ts` — `describeAudioMainPathBroken` を追加
+
+### やってはいけないこと（追記）
+
+- 実音経路の Analyser を destination へ繋がない（繋ぐ必要は無く、繋ぐと二重出力になる）
+- マスターゲインを作り直したときに枝を張り直し忘れない（SoundFont は停止のたびに作り直す）
+- 実音経路が無音のときに「音声復旧」を案内しない（実機で効かないことが確認済み）
+- しきい値を上げない（正常時のピークは 0.006 程度まで小さくなり得る。上げると誤検知する）
+- ピーク観測（`setInterval`）を止め忘れない（ScorePage はアンマウント・次の予約で必ず stop する）

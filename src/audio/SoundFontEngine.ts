@@ -6,6 +6,7 @@ import type { Player as SoundFontPlayer } from 'soundfont-player';
 
 import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
 import type { PlaybackSoundProfile } from './playbackSettings';
+import { ensureMainPathAnalyser, tapOutputToMainPathAnalyser } from './mainPathAnalyser';
 import { DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS, getMasterVolumeGain } from './playbackSettings';
 import { InstrumentType } from './SoundSource';
 import { getDurationBeats, tupletBeatsMultiplier } from '../utils/voiceMeasureUtils';
@@ -165,6 +166,9 @@ export class SoundFontEngine implements PlaybackEngine {
   // すべての player の出力をこの GainNode 経由で destination へ流す。
   // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
   private masterGainNode: GainNode | null = null;
+  // 診断専用: マスターゲインの出口を覗く AnalyserNode（issue #618）。
+  // destination には繋がないので音は増えない。context ごとに1つだけ持つ。
+  private mainPathAnalyser: AnalyserNode | null = null;
 
   constructor(soundfontName: string = DEFAULT_SOUNDFONT_NAME) {
     this.soundfontName = resolveSoundFontName(soundfontName);
@@ -439,8 +443,9 @@ export class SoundFontEngine implements PlaybackEngine {
         this.context.close();
         this.context = null;
       }
-      // 閉じた context に属する GainNode は再利用できないため捨てる
+      // 閉じた context に属する GainNode・AnalyserNode は再利用できないため捨てる
       this.masterGainNode = null;
+      this.mainPathAnalyser = null;
       console.log('[SoundFontEngine] リソースを解放しました');
     } catch (error) {
       console.error('[SoundFontEngine] dispose中にエラーが発生しました:', error);
@@ -476,6 +481,10 @@ export class SoundFontEngine implements PlaybackEngine {
       this.masterGainNode = context.createGain();
       this.masterGainNode.gain.value = getMasterVolumeGain(this.soundProfile);
       this.masterGainNode.connect(context.destination);
+      // 実音の有無を測るための枝を張り直す（issue #618）。
+      // マスターゲインは停止のたびに作り直されることがあるので、そのたびに繋ぎ直す。
+      this.mainPathAnalyser = ensureMainPathAnalyser(context, this.mainPathAnalyser);
+      tapOutputToMainPathAnalyser(this.masterGainNode, this.mainPathAnalyser);
     }
     return this.masterGainNode;
   }
@@ -493,6 +502,14 @@ export class SoundFontEngine implements PlaybackEngine {
    */
   getAudioContext(): AudioContext | null {
     return this.context;
+  }
+
+  /**
+   * 診断専用: 実音経路（マスターゲイン直後）の AnalyserNode を返す（issue #618）。
+   * まだ一度も発音していない場合は null（マスターゲインと同時に用意されるため）。
+   */
+  getMainPathAnalyser(): AnalyserNode | null {
+    return this.mainPathAnalyser;
   }
 
   private async getPlayerForCurrentInstrument(): Promise<SoundFontPlayer> {

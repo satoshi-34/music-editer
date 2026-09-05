@@ -119,6 +119,12 @@ export interface PlaybackEngine {
    */
   getAudioContext?(): AudioContext | null;
   /**
+   * 診断専用: 実音経路（マスターゲイン直後）に常設した AnalyserNode を返す（issue #618）。
+   * ヘルスチェックが「実際にスピーカーへ向かっている信号」の振幅を測るために使う。
+   * 用意できない環境では null を返してよい（診断できないだけで再生には影響しない）。
+   */
+  getMainPathAnalyser?(): AnalyserNode | null;
+  /**
    * 先読み窓（#622）の後続の予約が失敗したときの通知。playParts が返った後に起きる失敗は
    * 戻り値では伝えられないので、画面側はこれで停止・通知する。戻り値は解除関数
    */

@@ -38,6 +38,7 @@ import { useUiVariant } from '../hooks/useUiVariant';
 // ツールバーのタブ行と A1 文脈バーで同じ言葉を出すため、両方がこの定数を参照する。
 import { PIANO_LAYER_OPTIONS, SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
 import { checkAudioOutputHealth, formatAudioHealthReport, describeAudioOutputDestination } from '../audio/audioOutputHealth';
+import { startMainPathPeakWatch, type MainPathPeakWatch } from '../audio/mainPathAnalyser';
 import { useAutoPageScale } from './useAutoPageScale';
 import { useDevicePixelRatio } from './useDevicePixelRatio';
 import { computeScreenStrokeFloorMultiplier } from '../utils/engravingDefaults';
@@ -171,6 +172,7 @@ import {
 } from '../utils/systemLayoutPrefs';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
+  getMasterVolumeGain,
   sanitizePlaybackRuntimeSettings,
   type PlaybackSoundRuntimeSettings,
   type SoundEngineMode
@@ -241,6 +243,7 @@ import {
   type ScoreActiveVoiceChangeDetail,
   type ScoreEditNoticeDetail,
   describeAudioEngineRestarted,
+  describeAudioMainPathBroken,
   describeAudioStillSilent,
   describePlaybackAbortedBySchedulingError,
   describePlaybackBlockedWhileRestoringWork,
@@ -1344,7 +1347,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     return () => { scorePageUnmountedRef.current = true; };
   }, []);
 
-  const runOutputHealthCheck = useCallback(async (engine: PlaybackEngine) => {
+  const runOutputHealthCheck = useCallback(async (
+    engine: PlaybackEngine,
+    peakWatch?: MainPathPeakWatch,
+    expectsSound: boolean = true,
+  ) => {
     try {
       // ユーザーが一時停止した直後は AudioContext が suspended になるのが正しい状態。
       // ここで判定すると「無音故障」と誤検知してしまうため、チェック自体をやめる。
@@ -1358,7 +1365,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
 
       // Safari の silent failure（issue #14）は例外が出ないため、
       // 再生開始後に「音が出ているはずの状態か」を能動的に確認する。
-      const report = await checkAudioOutputHealth(engine.getAudioContext?.() ?? null);
+      // 実音経路（マスターゲイン出口）のピークを主判定にする（issue #618）。
+      // ただし「鳴らないのが正しい」場合（音量 0・休符だけの譜面）の無音は故障ではないので、
+      // 実音経路での判定から外すことを伝える（誤って「壊れています」と出さないため）。
+      const report = await checkAudioOutputHealth(engine.getAudioContext?.() ?? null, {
+        mainPathAnalyser: engine.getMainPathAnalyser?.() ?? null,
+        observedMainPathPeak: peakWatch?.getPeak() ?? null,
+        silenceIsExpected: !expectsSound || getMasterVolumeGain(soundRuntimeSettings.profile) <= 0,
+      });
       if (scorePageUnmountedRef.current) return;
 
       // プローブ中（約250ms）に一時停止された場合も同様に無視する
@@ -1387,6 +1401,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // Safari 実機からの報告にそのまま貼ってもらえる形式で診断ログを残す
       console.warn('[ScorePage] 無音状態を検知しました:', formatAudioHealthReport(report));
 
+      if (report.mainPathSilent) {
+        // 実音経路そのものが無音のときは、エンジンを作り直しても直らないことが
+        // 運用者の実機で確認済み（#605・#618）。効かない手段は勧めず、
+        // 唯一直った「タブを開き直す」だけを案内する。
+        setAudioHealthNotice(describeAudioMainPathBroken());
+        return;
+      }
+
       const now = Date.now();
       if (now - lastSilentRecoveryAtRef.current < SILENT_RECOVERY_COOLDOWN_MS) {
         // 直前に自動復旧したばかりで再発しているなら、作り直しを繰り返しても直らない。
@@ -1408,20 +1430,35 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 検知自体の失敗で再生機能を巻き込まない
       console.warn('[ScorePage] 無音ヘルスチェックに失敗しました（無視します）:', error);
     }
-  }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock]);
+  }, [clearPlaybackTimer, recreateAudioEngine, resetPlaybackClock, soundRuntimeSettings.profile]);
 
   // 無音検知の予約もタイマー ref で持ち、アンマウント時に必ず片付ける
   // （追跡なしの setTimeout だとテスト teardown 後に発火して未処理例外になる）
   const outputHealthCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scheduleOutputHealthCheck = useCallback((engine: PlaybackEngine) => {
+  // 実音経路のピーク観測（issue #618）も ref で持ち、次の予約・アンマウントで必ず止める
+  //（setInterval が残ると、テスト teardown 後まで回り続けてしまう）
+  const mainPathPeakWatchRef = useRef<MainPathPeakWatch | null>(null);
+  const scheduleOutputHealthCheck = useCallback((engine: PlaybackEngine, expectsSound: boolean = true) => {
     if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
+    mainPathPeakWatchRef.current?.stop();
+    // ヘルスチェックが走るのは 600ms 後だが、音色プレビュー（0.5秒）のような短い音は
+    // そのときにはもう鳴り終わっている。発音直後から観測を回してピークを持ち回る。
+    const peakWatch = startMainPathPeakWatch(engine.getMainPathAnalyser?.() ?? null);
+    mainPathPeakWatchRef.current = peakWatch;
     outputHealthCheckTimerRef.current = setTimeout(() => {
       outputHealthCheckTimerRef.current = null;
-      void runOutputHealthCheck(engine);
+      void runOutputHealthCheck(engine, peakWatch, expectsSound).finally(() => {
+        peakWatch.stop();
+        if (mainPathPeakWatchRef.current === peakWatch) {
+          mainPathPeakWatchRef.current = null;
+        }
+      });
     }, SILENT_FAILURE_CHECK_DELAY_MS);
   }, [runOutputHealthCheck]);
   useEffect(() => () => {
     if (outputHealthCheckTimerRef.current) clearTimeout(outputHealthCheckTimerRef.current);
+    mainPathPeakWatchRef.current?.stop();
+    mainPathPeakWatchRef.current = null;
   }, []);
 
   // スコアタイプ切り替え時に左手データを初期化
@@ -1802,6 +1839,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       await runWithPlaybackFallback(async (audioEngine) => {
         // 音源の準備（initialize）を待つ間に作品が切り替わった・停止された → 予約せずに抜ける
         if (isPlayRequestStale()) return;
+        // 休符だけの譜面は「鳴らないのが正しい」ので、実音経路の無音を故障と判定しない（issue #618）。
+        // 譜面が空のとき（else 側）は代表音の C4 を鳴らすので、鳴る前提のままでよい。
+        let expectsSound = true;
         if (parts.length > 0) {
           const referenceMeasures = parts[0]?.measures ?? [];
           const referenceExpanded = expandMeasuresForPlayback(referenceMeasures);
@@ -2032,6 +2072,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 音源ロード時間ぶん帯が早まる（round2 P1）ので、エンジンが返す起点だけを使う。
           // 起点を返さない偽エンジン（テスト）は呼び出し前の時刻で近似する
           const fallbackScheduledAt = Date.now();
+          expectsSound = partObjs.some((partObj) => partObj.measures.some((measure) =>
+            measure.events.some((event) => !event.isRest && event.keys.length > 0)));
           const scheduleInfo = await audioEngine.playParts(partObjs, effectiveGlobalBpm);
           // 予約（音源ロード込み）を待つ間に切替・停止が起きていたら、予約済みの音を止めて
           // 「再生中」へは戻さない（#609 round1 P1: 切替後に前の作品が鳴り出す）
@@ -2118,7 +2160,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
 
         // 再生予約が通っても Safari では実音が出ていないことがある（issue #14）。
         // 少し待ってから出力経路のヘルスチェックを行い、無音なら自動復旧する。
-        scheduleOutputHealthCheck(audioEngine);
+        // 休符だけの譜面は鳴らないのが正しいので、実音経路の無音判定からは外す（issue #618）
+        scheduleOutputHealthCheck(audioEngine, expectsSound);
       });
     } catch (error: unknown) {
       // 始められなかった要求はエンジンを使っていない。active のままだと、失効した古い要求の
