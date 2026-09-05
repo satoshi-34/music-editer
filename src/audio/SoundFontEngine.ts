@@ -484,25 +484,26 @@ export class SoundFontEngine implements PlaybackEngine {
     if (!this.velocityTimbreEnabled) return;
     const audioNode = node as { connect?: (dest: AudioNode) => unknown; disconnect?: (dest?: AudioNode) => void } | null;
     if (!audioNode || typeof audioNode.connect !== 'function' || typeof audioNode.disconnect !== 'function') return;
+    // sample-player は player.out（出力の GainNode）を公開している。外すときはそこだけを外し、
+    // 失敗したらそこへ戻す（round1 P2: 外した後に失敗すると無音になる）。
+    // player.out が無い想定外の player では配線を触らない（round2 P2-1: 引数なしの disconnect は
+    // 挟んだばかりのフィルタへの接続も切ってしまい無音になる）→ 従来どおり鳴らす
+    const playerOut = (player as unknown as { out?: AudioNode }).out;
+    if (!playerOut) return;
     const filter = createVelocityFilter(context, velocity);
     if (!filter) return;
-    // sample-player は player.out（出力の GainNode）を公開している。外すときはそこだけを外し、
-    // 失敗したらそこへ戻す（round1 P2: 外した後に失敗すると無音になる）
-    const playerOut = (player as unknown as { out?: AudioNode }).out;
     try {
       // 先にフィルタ→マスターを結んでから音ノードをフィルタへ。最後に player の出力から外す
       filter.connect(this.getOutputNode(context));
       audioNode.connect(filter);
-      if (playerOut) audioNode.disconnect(playerOut);
-      else audioNode.disconnect();
+      audioNode.disconnect(playerOut);
     } catch (error) {
       console.warn('[SoundFontEngine] 強弱の音色変化を配線できませんでした（素通しで鳴らします）:', error);
       try {
         // 途中まで進んでいた配線を戻す: フィルタを外し、player の出力へつなぎ直す
         filter.disconnect?.();
         audioNode.disconnect();
-        if (playerOut) audioNode.connect(playerOut);
-        else audioNode.connect(this.getOutputNode(context));
+        audioNode.connect(playerOut);
       } catch {
         // ここで失敗したらその音だけ鳴らない。再生全体は止めない（#358 の教訓）
       }

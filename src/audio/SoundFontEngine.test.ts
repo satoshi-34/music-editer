@@ -421,7 +421,7 @@ describe('SoundFontEngine の強弱→音色（Issue #670）', () => {
     expect(filters[0].frequency.value).toBeLessThan(filters[1].frequency.value);
   });
 
-  it('つなぎ直しの途中で失敗したら player の出力へ戻す（無音にしない）／play() が undefined でも落ちない', async () => {
+  it('つなぎ直しの途中で失敗したら player の出力へ戻す（無音にしない）／player.out 無し・play() undefined でも触らない', async () => {
     const { engine, filters, playerOut } = await setup();
     // 1 回目（フィルタへの接続）だけ失敗し、戻すための 2 回目は成功する
     const failing = {
@@ -436,6 +436,17 @@ describe('SoundFontEngine の強弱→音色（Issue #670）', () => {
     // 失敗後: フィルタは外され、音ノードは player.out へ戻される（2 回目の connect）
     expect(filters.length).toBe(1);
     expect(failing.connect).toHaveBeenLastCalledWith(playerOut);
+
+    // player.out を持たない想定外の player では配線を触らない（従来どおり鳴る）
+    const bare = { connect: vi.fn(), disconnect: vi.fn() };
+    const noOut = { play: vi.fn(() => bare) };
+    vi.spyOn(internals(engine), 'getPlayerForInstrument').mockResolvedValue(noOut as never);
+    await engine.playParts([{
+      measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C4'], velocity: 0.22 }] }],
+    }], 120);
+    expect(bare.disconnect).not.toHaveBeenCalled();
+    expect(bare.connect).not.toHaveBeenCalled();
+    expect(filters.length).toBe(1);
 
     const silent = { play: vi.fn(() => undefined), out: playerOut };
     vi.spyOn(internals(engine), 'getPlayerForInstrument').mockResolvedValue(silent as never);
