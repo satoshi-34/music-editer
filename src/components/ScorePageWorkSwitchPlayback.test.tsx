@@ -14,13 +14,15 @@ import { SCORE_EDIT_NOTICE_EVENT, type ScoreEditNoticeDetail } from '../utils/sc
 const playPartsMock = vi.fn();
 const stopAllMock = vi.fn();
 const initializeMock = vi.fn();
+const suspendMock = vi.fn();
+const resumeMock = vi.fn();
 vi.mock('../audio/createPlaybackEngine', () => ({
   createPlaybackEngine: () => ({
     initialize: initializeMock,
     playNoteByName: vi.fn().mockResolvedValue(undefined),
     playParts: playPartsMock,
-    suspend: vi.fn().mockResolvedValue(undefined),
-    resume: vi.fn().mockResolvedValue(undefined),
+    suspend: suspendMock,
+    resume: resumeMock,
     stopAll: stopAllMock,
     dispose: vi.fn(),
     setInstrument: vi.fn(),
@@ -98,6 +100,10 @@ describe('作品切替直後の再生は切替先が鳴る（Issue #609）', () 
     playPartsMock.mockImplementation(async () => ({ scheduledAtMs: Date.now() }));
     initializeMock.mockReset();
     initializeMock.mockResolvedValue(undefined);
+    suspendMock.mockReset();
+    suspendMock.mockResolvedValue(undefined);
+    resumeMock.mockReset();
+    resumeMock.mockResolvedValue(undefined);
     stopAllMock.mockReset();
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get: () => 700, configurable: true });
@@ -238,6 +244,59 @@ describe('作品切替直後の再生は切替先が鳴る（Issue #609）', () 
     expect(stopAllMock).toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: '一時停止' })).toBeNull();
 
+    const playButton = screen.getByRole('button', { name: '再生' }) as HTMLButtonElement;
+    await waitFor(() => { expect(playButton.disabled).toBe(false); }, { timeout: 15000 });
+    fireEvent.click(playButton);
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(2); }, { timeout: 15000 });
+    expect(playedKeys(1)).toEqual(['e/4']);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('一時停止（suspend）待ちの間にBへ切り替えると paused に戻らず、Bの再生は最初から鳴る（round2 P1）', async () => {
+    await renderWithWorks();
+    openPlaybackTab();
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy(); }, { timeout: 15000 });
+    let finishSuspend: () => void = () => {};
+    suspendMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finishSuspend = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: '一時停止' }));
+    await waitFor(() => { expect(suspendMock).toHaveBeenCalled(); });
+
+    selectWork('作品B');
+    openPlaybackTab();
+    await waitFor(() => { expect(screen.getAllByText('作品B').length).toBeGreaterThan(0); }, { timeout: 15000 });
+    finishSuspend();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 古い一時停止が stopped を paused で上書きしない（「再開」が出ない）
+    expect(screen.queryByRole('button', { name: '再開' })).toBeNull();
+    const playButton = screen.getByRole('button', { name: '再生' }) as HTMLButtonElement;
+    await waitFor(() => { expect(playButton.disabled).toBe(false); }, { timeout: 15000 });
+    fireEvent.click(playButton);
+    // resume 経路ではなく、B の小節列で playParts が呼ばれる
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(2); }, { timeout: 15000 });
+    expect(playedKeys(1)).toEqual(['e/4']);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('再開（resume）待ちの間にBへ切り替えると、明けても「再生中」に戻らない（round2 P1）', async () => {
+    await renderWithWorks();
+    openPlaybackTab();
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('button', { name: '一時停止' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再開' })).toBeTruthy(); }, { timeout: 15000 });
+    let finishResume: () => void = () => {};
+    resumeMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finishResume = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: '再開' }));
+    await waitFor(() => { expect(resumeMock).toHaveBeenCalled(); });
+    stopAllMock.mockClear();
+
+    selectWork('作品B');
+    openPlaybackTab();
+    await waitFor(() => { expect(screen.getAllByText('作品B').length).toBeGreaterThan(0); }, { timeout: 15000 });
+    finishResume();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 明けた再開は playing にもタイマーにも戻らず、音は止め直される
+    expect(screen.queryByRole('button', { name: '一時停止' })).toBeNull();
+    expect(stopAllMock).toHaveBeenCalled();
     const playButton = screen.getByRole('button', { name: '再生' }) as HTMLButtonElement;
     await waitFor(() => { expect(playButton.disabled).toBe(false); }, { timeout: 15000 });
     fireEvent.click(playButton);

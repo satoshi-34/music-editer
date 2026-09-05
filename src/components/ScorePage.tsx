@@ -1670,7 +1670,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       if (playbackState === 'paused' && explicitStartMeasure == null) {
         // paused からの再生は「最初から」ではなく AudioContext の resume。
         const resumedEngine = getAudioEngine();
+        // 再開の待ちの間に切替・停止が起きたら、明けても「再生中」へ戻さない（round2 P1）。
+        // 切替側の stopAll は resume 前に走っているので、明けた音はここで止め直す
+        const resumeSeq = playRequestSeqRef.current;
         await resumedEngine.resume();
+        if (resumeSeq !== playRequestSeqRef.current) {
+          resumedEngine.stopAll();
+          return;
+        }
         setPlaybackState('playing');
         const remainingMs = Math.max(0, remainingPlaybackMsRef.current);
         clearPlaybackTimer({ keepSchedulingSubscription: true });
@@ -2121,7 +2128,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // 再生は続くので、先読み窓の失敗通知の購読は残す（round3 P2）
     clearPlaybackTimer({ keepSchedulingSubscription: true });
     playbackStartedAtRef.current = null;
+    // suspend の待ちの間に切替・停止が起きたら paused へ戻さない（round2 P1: stopped を
+    // paused で上書きすると、切替先で「再生」が resume 経路に入り playParts が呼ばれず鳴らない）
+    const pauseSeq = playRequestSeqRef.current;
     await getAudioEngine().suspend();
+    if (pauseSeq !== playRequestSeqRef.current) return;
     setPlaybackState('paused');
   }, [clearPlaybackTimer, getAudioEngine, playbackState]);
 
