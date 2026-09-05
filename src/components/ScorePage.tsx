@@ -47,8 +47,9 @@ import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
 import { EXPORT_FILE_TYPES, buildExportFileName, sanitizeFileNameBase, type ExportFileType } from '../utils/exportFileName';
 import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
 import { resolveFreeTextAnnotation } from '../utils/freeTextUtils';
-import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, TITLE_FONT_SIZE_DEFAULT, TITLE_FONT_SIZE_MAX, TITLE_FONT_SIZE_MIN, TITLE_FONT_SIZE_STEP, ensureTitleFontLoaded, normalizeTitleFontSize, normalizeTitleFontWeight, resolveTitleFontOption, titleBlockStyleVars, waitForTitleFontReady } from '../utils/titleFontOptions';
+import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_SIZE_DEFAULT, ensureTitleFontLoaded, normalizeTitleFontSize, normalizeTitleFontWeight, resolveTitleFontOption, titleBlockStyleVars, waitForTitleFontReady } from '../utils/titleFontOptions';
 import type { TitleFontWeight } from '../utils/titleFontOptions';
+import TextFormatContextPanel from './TextFormatContextPanel';
 import HelpPanel from './HelpPanel';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXmlWithDefaults } from '../utils/musicXmlImport';
@@ -761,6 +762,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // サイズは 1 = 従来どおり、太さは undefined = 従来どおり（タイトル行だけ太字）
   const [titleFontSize, setTitleFontSize] = useState<number>(TITLE_FONT_SIZE_DEFAULT);
   const [titleFontWeight, setTitleFontWeight] = useState<TitleFontWeight | undefined>(undefined);
+  // タイトル欄を編集中かどうか（Issue #576）。true の間だけ書式のコンテキストUIを出す。
+  // 「編集中」の判定はフォーカスで行う（クリックでも Tab でも同じように出したいため）
+  const [isTitleFormatPanelOpen, setIsTitleFormatPanelOpen] = useState(false);
   // 空文字 = 上書きなし（既定）。CSS 変数 --title-font-override を注入しない
   const titleFontOption = resolveTitleFontOption(titleFontId);
   const titleFontStack = titleFontOption.stack;
@@ -6695,48 +6699,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   </select>
                 </label>
 
-                <label className="toolbar-select-label" title="タイトル・サブタイトル・作詞/作曲/編曲者の文字の書体を変えます（音符や記号の書体は変わりません）">
-                  <span>タイトルの書体</span>
-                  <select
-                    value={titleFontId}
-                    onChange={(event) => setTitleFontId(event.target.value)}
-                    aria-label="タイトルの書体"
-                  >
-                    {TITLE_FONT_OPTIONS.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                {/* 文字サイズ（倍率）と太さ（Issue #420）。タイトル・サブタイトル・作者欄へ一括で効く */}
-                <label className="toolbar-select-label" title="タイトル・サブタイトル・作詞/作曲/編曲者の文字の大きさを、既定の見た目に対する倍率で変えます">
-                  <span>タイトルの文字サイズ</span>
-                  <input
-                    type="range"
-                    min={TITLE_FONT_SIZE_MIN}
-                    max={TITLE_FONT_SIZE_MAX}
-                    step={TITLE_FONT_SIZE_STEP}
-                    value={titleFontSize}
-                    onChange={(event) => setTitleFontSize(normalizeTitleFontSize(Number(event.target.value)))}
-                    aria-label="タイトルの文字サイズ"
-                  />
-                  <span className="toolbar-range-value">{Math.round(titleFontSize * 100)}%</span>
-                </label>
-
-                <label className="toolbar-select-label" title="タイトル・サブタイトル・作詞/作曲/編曲者の文字の太さをまとめて変えます（未設定のときはタイトル行だけが太字の従来どおりの見た目です）">
-                  <span>タイトルの太さ</span>
-                  <select
-                    value={titleFontWeight ?? ''}
-                    onChange={(event) => setTitleFontWeight(normalizeTitleFontWeight(event.target.value))}
-                    aria-label="タイトルの太さ"
-                  >
-                    <option value="">既定（タイトルのみ太字）</option>
-                    <option value="normal">標準</option>
-                    <option value="bold">太字</option>
-                  </select>
-                </label>
+                {/* タイトルの書体・文字サイズ・太さ（#342/#420）は、ここ（楽譜設定タブの常設）から
+                    タイトル欄を編集したときに出るコンテキストUIへ移した（Issue #576）。
+                    使う頻度が「まれ」なのに常に見えていて、パレットが混むためのタブ整理。
+                    実体は components/TextFormatContextPanel.tsx（#451 と共用予定の共通部品）。 */}
               </div>
 
               <div className="instrumentation-summary" aria-live="polite">
@@ -7809,6 +7775,16 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
               >
                 <header
                   className={`page-head${i === 0 ? ' page-head--title' : ''}`}
+                  // タイトル欄（1ページ目）を編集し始めたら書式パネルを出し、欄から離れたら消す（Issue #576）。
+                  // React の onFocus/onBlur は focusin/focusout（＝子要素からも上がってくる）なので、
+                  // タイトル・サブタイトル・作者欄のどれを触っても1か所で受けられる。
+                  // 閉じる判定で relatedTarget（次にフォーカスが移る先）を見るのが要点で、
+                  // これが無いとパネル内のセレクトを押した瞬間にパネル自身が消えて操作できない。
+                  onFocus={i === 0 ? () => setIsTitleFormatPanelOpen(true) : undefined}
+                  onBlur={i === 0 ? (event) => {
+                    const next = event.relatedTarget as Node | null;
+                    if (!next || !event.currentTarget.contains(next)) setIsTitleFormatPanelOpen(false);
+                  } : undefined}
                   style={{
                     ...(i === 0 ? {
                       // タイトル余白（上下）はタイトルページ（1ページ目）だけに効く。
@@ -7862,6 +7838,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                           {arranger ? <div contentEditable suppressContentEditableWarning onBlur={(e) => setArranger(e.currentTarget.innerText)}>{arranger}</div> : null}
                         </div>
                       ) : null}
+                      {isTitleFormatPanelOpen && (
+                        // 書式（書体・文字サイズ・太さ）のコンテキストUI（Issue #576）。
+                        // タイトル欄を編集している間だけ出る。位置は App.css の
+                        // .text-format-context-panel（タイトルブロックの直下・中央）。
+                        <TextFormatContextPanel
+                          labelPrefix="タイトル"
+                          fontId={titleFontId}
+                          fontSize={titleFontSize}
+                          fontWeight={titleFontWeight}
+                          onFontIdChange={setTitleFontId}
+                          onFontSizeChange={setTitleFontSize}
+                          onFontWeightChange={setTitleFontWeight}
+                        />
+                      )}
                       {isPartExtractionActive && (
                         // パート譜表示中は、どのパートを見ているかをタイトル欄の下へ小さく表示する。
                         // 編集できないパート（大譜表など）のときだけ「閲覧・印刷専用」と補足する。

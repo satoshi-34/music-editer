@@ -1,8 +1,12 @@
 // タイトル書体・サイズ・太さ（#420）の ScorePage 配線テスト（Codex round1 P1）。
 //
-// titleFontOptions.test.ts は純関数だけを見る。ここでは実際の楽譜設定タブの操作から
+// titleFontOptions.test.ts は純関数だけを見る。ここでは実際の操作から
 // タイトルブロックの CSS 変数が変わること、自動保存で往復すること、
 // 新規作成で既定へ戻ること（round1 で見つかったリセット漏れ）を DOM で固定する。
+//
+// #576 で操作の入口が「楽譜設定タブの常設3項目」から
+// 「タイトル欄を編集したときに出るコンテキストUI」へ移ったため、
+// 開き方（フォーカス）と閉じ方（フォーカスが外れる）もここで固定する。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react';
 import ScorePage from './ScorePage';
@@ -51,6 +55,29 @@ function titleBlockStyle(): string {
   return el?.getAttribute('style') ?? '';
 }
 
+/**
+ * タイトル欄（h1）へフォーカスを入れて書式のコンテキストUIを開く（#576）。
+ * React の onFocus は focusin で受けているので focusIn を送る（jsdom の
+ * contentEditable は element.focus() では activeElement にならないため）。
+ */
+function openTitleFormatPanel(): HTMLElement {
+  const titleEl = document.querySelector('.score-title') as HTMLElement;
+  fireEvent.focusIn(titleEl);
+  return titleEl;
+}
+
+/**
+ * タイトル欄からフォーカスを外す（＝編集をやめる）。
+ * jsdom には innerText が無く、ScorePage の onBlur が読む値が undefined になって
+ * タイトル文字列が消えてしまうため、送る前にその要素へだけ innerText を生やす
+ * （ScoreHeadCreditLayout.test.tsx と同じ既存の対処）。
+ */
+function blurTitle(relatedTarget: Element): void {
+  const titleEl = document.querySelector('.score-title') as HTMLElement;
+  Object.defineProperty(titleEl, 'innerText', { value: titleEl.textContent ?? '', configurable: true });
+  fireEvent.focusOut(titleEl, { relatedTarget });
+}
+
 describe('ScorePage: タイトル書体・サイズ・太さの配線（#420）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
@@ -67,14 +94,22 @@ describe('ScorePage: タイトル書体・サイズ・太さの配線（#420）'
     vi.restoreAllMocks();
   });
 
-  it('設定タブの操作で CSS 変数が変わり、保存へ往復し、新規作成で既定へ戻る', async () => {
+  it('タイトル編集時のコンテキストUIで CSS 変数が変わり、保存へ往復し、新規作成で既定へ戻る（#576）', async () => {
     seedWork();
     render(<ScorePage />);
     await waitFor(() => {
       expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
     }, { timeout: 15000 });
 
+    // 楽譜設定タブからは撤去されている（#576 の受入条件）
     fireEvent.click(screen.getByRole('tab', { name: '楽譜設定' }));
+    await screen.findByLabelText('調号', {}, { timeout: 15000 });
+    expect(screen.queryByLabelText('タイトルの書体')).toBeNull();
+    expect(screen.queryByLabelText('タイトルの文字サイズ')).toBeNull();
+    expect(screen.queryByLabelText('タイトルの太さ')).toBeNull();
+
+    // タイトル欄をクリック（＝フォーカス）すると、その場に書式のコントロールが出る
+    openTitleFormatPanel();
     const sizeSlider = await screen.findByLabelText('タイトルの文字サイズ', {}, { timeout: 15000 });
     fireEvent.change(sizeSlider, { target: { value: '1.4' } });
     fireEvent.change(screen.getByLabelText('タイトルの太さ'), { target: { value: 'bold' } });
@@ -93,7 +128,26 @@ describe('ScorePage: タイトル書体・サイズ・太さの配線（#420）'
       expect(data?.titleFontWeight).toBe('bold');
     }, { timeout: 15000 });
 
+    // パネル内のコントロールへフォーカスが移っても消えない（消えると操作できない）
+    blurTitle(screen.getByLabelText('タイトルの書体'));
+    expect(screen.queryByLabelText('タイトルの書体')).not.toBeNull();
+
+    // タイトル欄の外へフォーカスが出るとパネルは消える（受入条件4）
+    fireEvent.focusOut(screen.getByLabelText('タイトルの書体'), { relatedTarget: document.body });
+    await waitFor(() => {
+      expect(screen.queryByLabelText('タイトルの書体')).toBeNull();
+    }, { timeout: 15000 });
+    // 消えても値は残る（パネルは入口であって保存先ではない）
+    expect(titleBlockStyle()).toContain('--title-font-scale: 1.4');
+
+    // 開き直しても現在値が入っている
+    openTitleFormatPanel();
+    await waitFor(() => {
+      expect((screen.getByLabelText('タイトルの太さ') as HTMLSelectElement).value).toBe('bold');
+    }, { timeout: 15000 });
+
     // 新規作成で既定へ戻る（round1 のリセット漏れ: 書体だけ戻ってサイズ・太さが残る）
+    blurTitle(document.body);
     fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
     fireEvent.click(await screen.findByRole('button', { name: /新規作成/ }, { timeout: 15000 }));
     // アプリ内確認ダイアログ（ConfirmDialog）の確定ボタンを押す
@@ -113,7 +167,7 @@ describe('ScorePage: タイトル書体・サイズ・太さの配線（#420）'
       expect(document.querySelector('rect.vf-note-hit')).toBeTruthy();
     }, { timeout: 15000 });
 
-    fireEvent.click(screen.getByRole('tab', { name: '楽譜設定' }));
+    openTitleFormatPanel();
     const fontSelect = await screen.findByLabelText('タイトルの書体', {}, { timeout: 15000 });
     fireEvent.change(fontSelect, { target: { value: 'noto-serif-jp' } });
 
