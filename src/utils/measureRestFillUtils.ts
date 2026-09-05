@@ -30,7 +30,10 @@ export function buildRestEventsForBeats(beats: number, clef: ClefType): NoteEven
 export function fillPriorMeasureRests(
   measures: MeasureData[],
   targetMeasureIndex: number,
-  beatsPerMeasure: number,
+  // 小節の容量。弱起（アウフタクト）があると小節ごとに違うため、数値だけでなく
+  // 「小節インデックス → 容量」の関数も受け取れるようにしている（Issue #473）。
+  // 数値を渡したときの動きは従来とまったく同じ（全小節が同じ拍数）。
+  beatsPerMeasure: number | ((measureIndex: number) => number),
   clef: ClefType
 ): void {
   // 複数段譜用の自動休符補完。
@@ -46,7 +49,10 @@ export function fillPriorMeasureRests(
     }
     const measure = measures[measureIndex];
     const currentBeats = getPrimaryVoiceEvents(measure).reduce((sum, event) => sum + getEventDurationBeats(event), 0);
-    const remainingBeats = beatsPerMeasure - currentBeats;
+    const capacityBeats = typeof beatsPerMeasure === 'function'
+      ? beatsPerMeasure(measureIndex)
+      : beatsPerMeasure;
+    const remainingBeats = capacityBeats - currentBeats;
     if (remainingBeats > 0.0001) {
       // 正規 API 経由で書く（#244 段5-1）。measure.events を直接 push すると
       // voices[0] を持つ小節で dual-write が効かず、鏡が古いまま残る

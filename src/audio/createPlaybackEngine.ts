@@ -18,6 +18,8 @@ export function createPlaybackEngine(
   // こうしないと、エンジンを作り直した直後の初回再生だけ
   // ストレートに戻ってしまう瞬間ができてしまう。
   engine.setSwingEnabled(settings.swingEnabled);
+  // 強弱→音色（#670）も生成直後に反映する（スウィングと同じ理由: 作り直した直後の初回再生で戻らないように）
+  engine.setVelocityTimbreEnabled?.(settings.velocityTimbreEnabled);
 
   return engine;
 }

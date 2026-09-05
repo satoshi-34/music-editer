@@ -114,8 +114,10 @@ export function buildTiePlaybackPlan(
    * エンジンへ渡すのと同じ値）。小節をまたぐタイの「実時間」を、エンジンの
    * 小節送り（内容と拍子長の大きい方）と同じ物差しで数えるために使う。
    * 省略時は各小節の内容拍のみで数える（旧挙動互換・テスト用）。
+   * 弱起（アウフタクト）のある譜面では小節ごとに容量が違うため、
+   * 「元の小節インデックス → 拍数」を返す関数も渡せる（Issue #473）。
    */
-  measureBeatsFloor?: number,
+  measureBeatsFloor?: number | ((sourceMeasureIndex: number) => number),
 ): TiePlaybackPlan {
   // タイの実時間を数えるための絶対位置表:
   // - measureTimelineStart[mi] = その小節の開始が再生タイムライン上で何拍目か
@@ -136,8 +138,11 @@ export function buildTiePlaybackPlan(
         });
         maxVoiceBeats = Math.max(maxVoiceBeats, cursor);
       });
-      // エンジンと同じ小節送り: 内容の実長と拍子長の大きい方
-      timeline += Math.max(maxVoiceBeats, measureBeatsFloor ?? 0);
+      // エンジンと同じ小節送り: 内容の実長と拍子長（弱起の小節はその容量）の大きい方
+      const floorHere = typeof measureBeatsFloor === 'function'
+        ? measureBeatsFloor(expandedMeasure.sourceMeasureIndex)
+        : measureBeatsFloor ?? 0;
+      timeline += Math.max(maxVoiceBeats, floorHere);
     });
   }
   /** イベントの「鳴り終わり」がタイムライン上で何拍目か */

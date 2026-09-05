@@ -80,6 +80,7 @@ export type Tool =
   | { mode: 'textElement'; textKind: TextElementKind }      // テキスト要素（歌詞・コード・テンポ・発想標語）を付けるモード
   | { mode: 'measureTempo' }                                // 小節単位のテンポ変更モード
   | { mode: 'measureTimeSig' }                             // 小節単位の拍子変更モード
+  | { mode: 'measurePickup' }                               // 弱起（アウフタクト）の設定モード（小節をクリックして長さを選ぶ・Issue #473）
   | { mode: 'measureKeySig' }                               // 小節単位の調号変更モード
   | { mode: 'measureClef' }                                  // 小節単位のクレフ（音部記号）変更モード
   | { mode: 'measureRehearsal' }                            // 小節単位のリハーサルマーク（練習番号）設定モード
@@ -376,6 +377,7 @@ export default function Palette({
   const selectedTextKind = 'mode' in value && value.mode === 'textElement' ? value.textKind : null;
   const measureTempoActive = 'mode' in value && value.mode === 'measureTempo';
   const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
+  const measurePickupActive = 'mode' in value && value.mode === 'measurePickup';
   const measureKeySigActive = 'mode' in value && value.mode === 'measureKeySig';
   const measureClefActive = 'mode' in value && value.mode === 'measureClef';
   const measureRehearsalActive = 'mode' in value && value.mode === 'measureRehearsal';
@@ -700,6 +702,22 @@ export default function Palette({
             <line x1="1" y1="10" x2="10" y2="10" stroke="#111" strokeWidth="1.2"/>
             <text x="1" y="17" fontSize="9" fontFamily='"Times New Roman", serif' fontWeight="bold" fill="#111">8</text>
             <text x="12" y="14" fontSize="10" fill="#e05">?</text>
+          </svg>
+        </button>
+        {/* 弱起（アウフタクト）: 拍が足りない不完全小節にする（Issue #473） */}
+        <button
+          type="button"
+          onClick={() => onChange(measurePickupActive ? ROW1[2] : { mode: 'measurePickup' })}
+          title="弱起（アウフタクト。小節をクリックして長さを選ぶと、その小節は拍子より短い不完全小節になり、小節番号に数えなくなる）"
+
+          aria-label="弱起（アウフタクト。小節をクリックして長さを選ぶ）"
+          style={btnStyle(measurePickupActive, { width: 34 })}
+        >
+          {/* 4分音符1つ＋小節線 ＝「拍が足りないまま次の小節へ」を表す絵 */}
+          <svg width="26" height="18" viewBox="0 0 26 18" aria-hidden="true">
+            <ellipse cx="6" cy="13" rx="4" ry="3" fill="#111" transform="rotate(-20 6 13)" />
+            <line x1="10" y1="12" x2="10" y2="2" stroke="#111" strokeWidth="1.4" />
+            <line x1="18" y1="1" x2="18" y2="17" stroke="#111" strokeWidth="1.4" />
           </svg>
         </button>
         {/* 調号変更 */}

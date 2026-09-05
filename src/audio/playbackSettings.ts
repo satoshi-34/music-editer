@@ -46,6 +46,12 @@ export interface PlaybackSoundRuntimeSettings {
    * 既定は false（ストレート再生）で、既存ユーザーの再生結果を変えないようにする。
    */
   swingEnabled: boolean;
+  /**
+   * 強弱を音色にも効かせるか（Issue #670）。弱い音ほど高域を削って柔らかく、強い音は硬く明るく。
+   * 既定は true（発案者の要望が動機なので新規環境では最初から効かせる）。
+   * 既存の保存データに項目が無ければ true として読む
+   */
+  velocityTimbreEnabled: boolean;
 }
 
 export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettings = {
@@ -59,6 +65,7 @@ export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettin
   pluginName: 'MusyngKite',
   previewAccidentalOnApply: true,
   swingEnabled: false,
+  velocityTimbreEnabled: true,
   profile: {
     brightness: 0.5,
     attack: 0.5,
@@ -131,6 +138,9 @@ export function sanitizePlaybackRuntimeSettings(raw: unknown): PlaybackSoundRunt
     swingEnabled: typeof raw.swingEnabled === 'boolean'
       ? raw.swingEnabled
       : DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.swingEnabled,
+    velocityTimbreEnabled: typeof raw.velocityTimbreEnabled === 'boolean'
+      ? raw.velocityTimbreEnabled
+      : DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.velocityTimbreEnabled,
     profile: {
       brightness: clampProfileValue(profile.brightness, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.brightness),
       attack: clampProfileValue(profile.attack, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.attack),

@@ -113,6 +113,13 @@ export interface PlaybackEngine {
    */
   setSwingEnabled(enabled: boolean): void;
   /**
+   * 強弱を音色にも効かせる（velocity → ローパスのカットオフ・Issue #670）の ON/OFF。
+   * optional なのは、既存テストの偽エンジン（createPlaybackEngine の vi.mock・約 20 ファイル）が
+   * この項目を持たないため。両方の実エンジン（SimpleAudioEngine / SoundFontEngine）は実装している。
+   * 呼び出し側は必ず `?.()` で呼び、createPlaybackEngine でも生成直後に反映する
+   */
+  setVelocityTimbreEnabled?(enabled: boolean): void;
+  /**
    * 診断専用: 内部の AudioContext を返す（未初期化なら null）。
    * Safari silent failure（issue #14）のヘルスチェックが
    * currentTime の進行などを観測するために使う。再生制御には使わないこと。
