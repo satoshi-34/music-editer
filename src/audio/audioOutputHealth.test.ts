@@ -367,3 +367,11 @@ describe('出力先デバイス名（Issue #521）', () => {
     expect(report.outputDeviceLabel).toBeNull();
   });
 });
+
+describe('MAIN_PATH_SILENCE_THRESHOLD（#618 round2 P1: pp＋ローパスでも有音）', () => {
+  it('pp 単音相当のピーク（0.0005）は無音扱いにならず、厳密な 0 だけが無音', async () => {
+    const { MAIN_PATH_SILENCE_THRESHOLD } = await import('./audioOutputHealth');
+    expect(0.0005).toBeGreaterThan(MAIN_PATH_SILENCE_THRESHOLD);
+    expect(0).toBeLessThan(MAIN_PATH_SILENCE_THRESHOLD);
+  });
+});

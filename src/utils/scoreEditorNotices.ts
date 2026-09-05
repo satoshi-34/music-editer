@@ -888,10 +888,15 @@ export function describeAudioEngineRestarted(destination: string): string {
  * このタブの音声経路が壊れている状態で、エンジンの作り直し（音声復旧）では
  * 直らないことが実機で確認済みのため、案内は「タブを開き直す」の一手に絞る。
  */
+/** 実音経路の無音を初めて観測したときの通知（#618 round2 P2: 初回は止めずに案内だけ） */
+export function describeAudioMainPathSuspected(): string {
+  return 'このタブの音声が出ていないようです。聞こえない場合は、タブを閉じて開き直してください（作った譜面は保存されています）。';
+}
+
 export function describeAudioMainPathBroken(): string {
   // 音は1つも出ていないので再生も止める（#618 round1 P3）。止めたことを文言でも伝えて、
   // 「押したのに勝手に止まった」と見えないようにする
-  return 'このタブの音声経路が壊れています。音が出ていないため再生を止めました。タブを閉じて開き直してください。';
+  return 'このタブの音声が出ていません。再生を止めました。タブを閉じて開き直してください（作った譜面は保存されています）。';
 }
 
 /** 自動再起動しても無音が続くときの通知（Issue #521 で出力先の案内を末尾に追加）。 */

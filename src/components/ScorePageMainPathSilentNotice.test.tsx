@@ -106,13 +106,25 @@ describe('実音経路が無音のときの案内（issue #618）', () => {
     fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
     fireEvent.click(screen.getByRole('button', { name: '再生' }));
 
+    // 初回は案内だけで、再生は止めない（round2 P2: Safari 未検証のうちは再生不能にしない）
     await waitFor(() => {
-      const notice = screen.getByText(/このタブの音声経路が壊れています/);
+      const notice = screen.getByText(/このタブの音声が出ていないようです/);
       expect(notice.textContent).toContain('タブを閉じて開き直してください');
     }, { timeout: 15000 });
+    expect(stopAllMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '停止' })).toBeTruthy();
 
     // 効かないと分かっている手段（自動再起動・音声復旧ボタン）は案内しない
     expect(screen.queryByText(/音声エンジンを自動で再起動しました/)).toBeNull();
     expect(screen.queryByText(/音声出力の異常が続いています/)).toBeNull();
+
+    // 続けて 2 回目も無音なら本物: 再生を止めて「止めました」を出す
+    fireEvent.click(screen.getByRole('button', { name: '停止' }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => {
+      const notice = screen.getByText(/このタブの音声が出ていません。再生を止めました/);
+      expect(notice.textContent).toContain('タブを閉じて開き直してください');
+    }, { timeout: 15000 });
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再生' })).toBeTruthy(); }, { timeout: 15000 });
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });

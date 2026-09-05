@@ -244,6 +244,7 @@ import {
   type ScoreEditNoticeDetail,
   describeAudioEngineRestarted,
   describeAudioMainPathBroken,
+  describeAudioMainPathSuspected,
   describeAudioStillSilent,
   describePlaybackAbortedBySchedulingError,
   describePlaybackBlockedWhileRestoringWork,
@@ -1069,6 +1070,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   }, []);
   // 最後に自動復旧（エンジン再作成）した時刻。クールダウン判定に使う
   const lastSilentRecoveryAtRef = useRef(0);
+  /** 実音経路の無音が続けて何回観測されたか（#618 round2: 初回は案内だけ、2 回目から止める） */
+  const mainPathSilentStreakRef = useRef(0);
   // 再生位置。targets は「その瞬間に鳴っている全パート・全声部の音符」（Issue #411）で、
   // 譜面のハイライトはこれを見て帯を出す。位置を 0 に戻す既存の経路では
   // targets が付かない（= 帯なし）ので、停止時に光ったままになることはない
@@ -1416,6 +1419,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // 判定は正常なのに「聞こえない」場合、残る原因は OS 側の出力先しかない（Issue #521）。
         // 画面に常時表示を足さない方針なので、次の一手は診断ログにだけ残す
         console.info('[ScorePage] 出力先:', describeAudioOutputDestination(report));
+        mainPathSilentStreakRef.current = 0;
         setAudioHealthNotice(null);
         return;
       }
@@ -1432,7 +1436,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // 実音経路そのものが無音のときは、エンジンを作り直しても直らないことが
         // 運用者の実機で確認済み（#605・#618）。効かない手段は勧めず、
         // 唯一直った「タブを開き直す」だけを案内する。
-        // 音は1つも出ていないので、案内だけ出して帯（再生位置）を進め続けない（round1 P3）。
+        // 止めるのは 2 回目から（round2 P2）: Safari 実機で未検証のうちは、環境固有の理由で
+        // Analyser が 0 を返しても再生が一切できなくならないよう、初回は案内だけにする。
+        // 続けて 2 回無音なら本物なので、帯（再生位置）を進め続けない（round1 P3）
+        mainPathSilentStreakRef.current += 1;
+        if (mainPathSilentStreakRef.current < 2) {
+          setAudioHealthNotice(describeAudioMainPathSuspected(), { allowsRecovery: false });
+          return;
+        }
         clearPlaybackTimer();
         resetPlaybackClock();
         setPlaybackState('stopped');
