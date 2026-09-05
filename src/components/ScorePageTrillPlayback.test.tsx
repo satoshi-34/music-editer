@@ -1,4 +1,4 @@
-// トリル再生の ScorePage 配線テスト（弟フィードバック 2026-08-29）。
+// トリル再生の ScorePage 配線テスト（ユーザーフィードバック 2026-08-29）。
 // ornamentPlaybackUtils の単体テストだけでは「ScorePage の再生経路が展開を通すこと」を
 // 検出できないため、再生エンジンをモックして playParts へ届くイベント列を実マウントで固定する。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

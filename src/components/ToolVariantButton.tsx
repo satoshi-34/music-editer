@@ -201,7 +201,7 @@ export default function ToolVariantButton({
       <button
         type="button"
         onClick={onActivate}
-        title={current.title}
+        data-tip={current.title}
         aria-label={current.ariaLabel}
         aria-pressed={active}
         style={buttonStyle(active, {
@@ -225,7 +225,7 @@ export default function ToolVariantButton({
               return !prev;
             });
           }}
-          title={menuAriaLabel}
+          data-tip={menuAriaLabel}
           aria-label={menuAriaLabel}
           // aria-haspopup="menu" は付けない。中身は role="menu" ではなく
           // 「並んだボタンの塊（group）」なので、名乗りと実体を一致させる（#569 round1 P2）
@@ -272,7 +272,7 @@ export default function ToolVariantButton({
                 onSelectVariant(option.key);
                 closeAndRefocus();
               }}
-              title={option.title}
+              data-tip={option.title}
               aria-label={option.ariaLabel}
               style={buttonStyle(option.key === currentKey, { ...symbolStyle })}
             >

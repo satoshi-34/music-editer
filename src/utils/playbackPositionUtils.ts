@@ -1,6 +1,7 @@
 import type { MeasureData, NoteEvent, TimeSignature } from '../types/storage';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference, type ExpandedPlaybackMeasure } from '../audio/repeatPlaybackUtils';
 import { getMeasureBeats } from './timeSignatureUtils';
+import { getDisplayedMeasureNumber, resolveMeasureCapacityBeats } from './measureCapacityUtils';
 import { getEventDurationBeats, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { applySwingToTiming, shouldApplySwing } from './swingUtils';
 import { resolveEffectiveMeasureBpms, resolveMeasureBpms } from './tempoPlaybackUtils';
@@ -263,7 +264,12 @@ export function buildPlaybackPositionTimeline(
     // 実音エンジンは各小節に measureBeats（グローバル拍子の長さ）を下限として渡されるため、
     // 表示の前進も「全声部の実長と拍子長の大きい方」でそろえる（Codex 2巡目）。
     // 未充足の小節を実長だけで進めると、ハイライトが実音より先へ走ってしまう
-    elapsedMs += measureAdvanceBeats(measure, timeSignature) * msPerBeat;
+    // 弱起（アウフタクト）の小節は拍子より短いので、小節ごとの容量で進める（Issue #473）。
+    // 途中拍子変更のある小節も同じ経路で正しい長さになる（設計メモ §6-1）
+    elapsedMs += measureAdvanceBeats(
+      measure,
+      resolveMeasureCapacityBeats(measures, sourceMeasureIndex, timeSignature),
+    ) * msPerBeat;
   });
 
   return timeline;
@@ -274,8 +280,60 @@ export function buildPlaybackPositionTimeline(
  * 下限に小節を進めるため、タイムライン・残り時間の両方をこの共通規則でそろえる:
  * max(全声部の実長, 拍子の長さ)。空小節は拍子ぶん、あふれた小節は実長で進む。
  */
-function measureAdvanceBeats(measure: MeasureData, timeSignature: TimeSignature): number {
-  return Math.max(getMeasureDurationBeats(measure), getMeasureBeats(timeSignature));
+function measureAdvanceBeats(measure: MeasureData, capacityBeats: number): number {
+  return Math.max(getMeasureDurationBeats(measure), capacityBeats);
+}
+
+/**
+ * 展開済みの小節が「最低限占める拍数」。実音エンジンへ渡す小節オブジェクトには
+ * ScorePage が measureBeats（小節ごとの容量・弱起を含む）を載せているので、
+ * 載っていればそれを使う（実音と同じ物差しで数えるため）。
+ * 載っていない呼び出し（単体テスト・旧経路）は従来どおり拍子ぶんで数える。
+ */
+function measureCapacityFloor(measure: MeasureData, timeSignature: TimeSignature): number {
+  const carried = (measure as MeasureData & { measureBeats?: number }).measureBeats;
+  return typeof carried === 'number' && Number.isFinite(carried) ? carried : getMeasureBeats(timeSignature);
+}
+
+/**
+ * すでに展開済み（リピートを再生順へ並べ替え済み）の小節列で、
+ * **最初に音が鳴り始める時刻**（再生開始からのミリ秒）を返す。音符が1つも無ければ null。
+ *
+ * 何のためか（#618 round1 P1-1）:
+ * 無音の自己診断は「再生開始から約 0.85 秒」の窓しか観測しない。
+ * 一方で「譜面のどこかに音符があるか」だけを見て判定していたため、
+ * 先頭が全休符・弱起の休符始まり・休符の拍からの途中再生では、
+ * 正常なタブでも窓の中が無音になり「タブが壊れています」と誤報していた。
+ * 窓の中に発音が予定されているかをこの時刻で判断する。
+ *
+ * 前進規則（小節ごとの拍数・テンポ）は calculateExpandedPlaybackDurationMs と共通にして、
+ * 実音・終了タイマー・ハイライトと同じ時間軸で数える。
+ * 休符・空イベントを飛ばす規則は collectLaneNotes（ハイライトと同じ）を再利用する。
+ */
+export function findFirstSoundingOnsetMs(
+  measures: MeasureData[],
+  bpm: number,
+  timeSignature: TimeSignature,
+  swingEnabled: boolean = false,
+): number | null {
+  if (measures.length === 0) return null;
+  const measureBpms = resolveEffectiveMeasureBpms(measures, bpm);
+  const swingActive = shouldApplySwing(swingEnabled, timeSignature);
+  let elapsedMs = 0;
+  for (let i = 0; i < measures.length; i++) {
+    const msPerBeat = (60 / measureBpms[i]) * 1000;
+    // その小節の全声部から、いちばん早く鳴り始める音を探す（声部2だけに音がある小節もある）
+    let earliestBeat = Number.POSITIVE_INFINITY;
+    for (const voice of getMeasureVoices(measures[i])) {
+      for (const note of collectLaneNotes(voice.events, swingActive)) {
+        if (note.startBeat < earliestBeat) earliestBeat = note.startBeat;
+      }
+    }
+    if (Number.isFinite(earliestBeat)) return elapsedMs + earliestBeat * msPerBeat;
+    // 小節の容量は「弱起（#473）を含む実音と同じ物差し」で採る（durationMs と同じ measureCapacityFloor）
+    elapsedMs += measureAdvanceBeats(measures[i], measureCapacityFloor(measures[i], timeSignature)) * msPerBeat;
+  }
+  return null;
 }
 
 /** 小節番号の指定を受け付けられなかった理由（#545。通知文の出し分けに使う） */
@@ -318,9 +376,32 @@ export function findPlaybackStartExpandedIndex(
  * @param input 入力欄の生の文字列（前後の空白は無視する）
  * @param totalMeasureCount 指定できる小節数の上限（内容のある小節数）
  */
+/**
+ * 表示番号 → 実インデックスの対応の材料。弱起（#473）は画面の小節番号を進めない
+ * （弱起の小節は 0・次の小節が 1）ので、実インデックス+1 とは限らない。
+ * 省略時は従来どおり「表示番号 = インデックス+1」（弱起の無い譜面と同じ）
+ */
+export interface PlaybackStartMeasureNumbering {
+  measures: readonly MeasureData[];
+  timeSignature: TimeSignature;
+}
+
+/** 入力できる表示番号の範囲（案内文用）。弱起が先頭にあれば 0 から */
+export function playbackStartMeasureNumberRange(
+  totalMeasureCount: number,
+  numbering?: PlaybackStartMeasureNumbering,
+): { min: number; max: number } {
+  if (totalMeasureCount <= 0) return { min: 1, max: 0 };
+  if (!numbering) return { min: 1, max: totalMeasureCount };
+  const first = getDisplayedMeasureNumber(numbering.measures, 0, numbering.timeSignature);
+  const last = getDisplayedMeasureNumber(numbering.measures, totalMeasureCount - 1, numbering.timeSignature);
+  return { min: first, max: last };
+}
+
 export function resolvePlaybackStartMeasureNumber(
   input: string,
-  totalMeasureCount: number
+  totalMeasureCount: number,
+  numbering?: PlaybackStartMeasureNumbering,
 ): PlaybackStartMeasureResolution {
   if (totalMeasureCount <= 0) {
     return { ok: false, reason: 'noMeasures' };
@@ -334,15 +415,24 @@ export function resolvePlaybackStartMeasureNumber(
   }
 
   const measureNumber = Number.parseInt(trimmed, 10);
-  if (measureNumber < 1 || measureNumber > totalMeasureCount) {
-    return { ok: false, reason: 'outOfRange' };
+  // 表示番号 → 実インデックスの対応はこの1か所に集約している（呼び出し側に -1 を散らさない）。
+  // 弱起（#473）が無ければ従来どおり「表示番号 = インデックス+1」。弱起があれば
+  // getDisplayedMeasureNumber の逆引き: 表示番号 0 は先頭の弱起、1 はその次の小節。
+  // 曲中の弱起（番号を進めない小節）は表示番号で指せない（その手前の完全小節から聴く）
+  if (!numbering) {
+    if (measureNumber < 1 || measureNumber > totalMeasureCount) {
+      return { ok: false, reason: 'outOfRange' };
+    }
+    return { ok: true, measureIndex: measureNumber - 1 };
   }
-
-  // 表示番号 → 実インデックスの対応はこの1か所に集約している。
-  // 現在の main は弱起（#473）未実装で表示番号は常に1始まり（=インデックス+1）。
-  // 弱起（表示番号0始まり）が入るときは、#473 側でこの対応だけを差し替えること
-  //（getDisplayedMeasureNumber の逆引き。呼び出し側に -1 を散らさない）
-  return { ok: true, measureIndex: measureNumber - 1 };
+  for (let index = 0; index < totalMeasureCount; index++) {
+    if (getDisplayedMeasureNumber(numbering.measures, index, numbering.timeSignature) === measureNumber) {
+      // 表示番号 0 は「先頭の弱起」だけを指す（曲中の弱起も 0 だが、先頭以外は指せない）
+      if (measureNumber === 0 && index !== 0) break;
+      return { ok: true, measureIndex: index };
+    }
+  }
+  return { ok: false, reason: 'outOfRange' };
 }
 
 /**
@@ -379,7 +469,7 @@ export function calculateExpandedPlaybackDurationMs(
   let totalMs = 0;
   for (let i = 0; i <= lastUsedIndex; i++) {
     const msPerBeat = (60 / measureBpms[i]) * 1000;
-    totalMs += measureAdvanceBeats(measures[i], timeSignature) * msPerBeat;
+    totalMs += measureAdvanceBeats(measures[i], measureCapacityFloor(measures[i], timeSignature)) * msPerBeat;
   }
   return totalMs;
 }

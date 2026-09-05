@@ -80,6 +80,7 @@ export type Tool =
   | { mode: 'textElement'; textKind: TextElementKind }      // テキスト要素（歌詞・コード・テンポ・発想標語）を付けるモード
   | { mode: 'measureTempo' }                                // 小節単位のテンポ変更モード
   | { mode: 'measureTimeSig' }                             // 小節単位の拍子変更モード
+  | { mode: 'measurePickup' }                               // 弱起（アウフタクト）の設定モード（小節をクリックして長さを選ぶ・Issue #473）
   | { mode: 'measureKeySig' }                               // 小節単位の調号変更モード
   | { mode: 'measureClef' }                                  // 小節単位のクレフ（音部記号）変更モード
   | { mode: 'measureRehearsal' }                            // 小節単位のリハーサルマーク（練習番号）設定モード
@@ -98,6 +99,14 @@ type ArticulationTool = Extract<Tool, { mode: 'articulation' }>;
 // 並べるアイテム（上段=音符, 下段=休符）
 const ROW1: Tool[] = ['1','2','4','8','16','32','64'].map(d => ({ duration: d as DurKey }));
 const ROW2: Tool[] = ROW1.map(t => ({ ...t, isRest: true }));
+
+// 音価グリッド（Issue #577）のレイアウト。
+// 「列＝1つの音価」で、列の中に音符（上）と同じ音価の休符（下）を縦に積む。
+// 音符7個の行・休符7個の行、と行単位で並べる作り方にしないのは、狭い画面で
+// 折り返したときに上下の折り返し位置がずれて「四分音符の下が四分休符」という
+// 対応が崩れてしまうため（列ごと折り返せば対応は常に保たれる）。
+const DURATION_GRID_STYLE: React.CSSProperties = { display: 'flex', gap: 3, flexWrap: 'wrap' };
+const DURATION_COLUMN_STYLE: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 3 };
 
 // ─────────────────────────────────────────────────────────────
 // ★ ここが"サイズ調整ダイヤル"です！
@@ -152,9 +161,27 @@ function accidentalVariantLabel(variant: AccidentalVariant): string {
  * ボタンの名前。先頭を「臨時記号: <名前>」で揃えてあるのは、
  * 支援技術で読んだときとテストで探すときの手がかりを1種類にするため（設計メモ §3-6）。
  */
+/**
+ * その記号が音高をどう変えるか（効く「量」）。ホバーで「臨時記号＝クリックした音だけ」と
+ * 「途中調号変更＝その小節から先」の違いが1文で分かるようにするための説明（#633）
+ */
+function accidentalVariantEffect(variant: AccidentalVariant): string {
+  if (variant.kind === 'microtone') {
+    return variant.microtone === 'quarterSharp' ? '四分音（半音の半分）上げる' : '四分音（半音の半分）下げる';
+  }
+  switch (variant.accidental) {
+    case 'sharp': return '半音上げる';
+    case 'flat': return '半音下げる';
+    case 'doubleSharp': return '全音（半音2つ）上げる';
+    case 'doubleFlat': return '全音（半音2つ）下げる';
+    default: return '調号どおりの高さに戻す';
+  }
+}
 function accidentalVariantAriaLabel(variant: AccidentalVariant): string {
-  return `臨時記号: ${accidentalVariantLabel(variant)}`
-    + `（音符をクリックで付与・空きをクリックで${accidentalVariantSymbol(variant)}付きの音符を入力）`;
+  // 先頭の「臨時記号: <名前>」は据え置き（テスト・支援技術の手がかり）。効く範囲＝
+  // 「クリックした音だけ」を先に言い、操作の説明は後ろに置く（途中調号変更との対比・#633）
+  return `臨時記号: ${accidentalVariantLabel(variant)} — クリックした音だけ${accidentalVariantEffect(variant)}`
+    + `（空きをクリックすると${accidentalVariantSymbol(variant)}付きの音符を入力）`;
 }
 
 /** ボタン3個ぶんの定義。variants の先頭が既定（ボタンに最初から出ている記号） */
@@ -350,6 +377,7 @@ export default function Palette({
   const selectedTextKind = 'mode' in value && value.mode === 'textElement' ? value.textKind : null;
   const measureTempoActive = 'mode' in value && value.mode === 'measureTempo';
   const measureTimeSigActive = 'mode' in value && value.mode === 'measureTimeSig';
+  const measurePickupActive = 'mode' in value && value.mode === 'measurePickup';
   const measureKeySigActive = 'mode' in value && value.mode === 'measureKeySig';
   const measureClefActive = 'mode' in value && value.mode === 'measureClef';
   const measureRehearsalActive = 'mode' in value && value.mode === 'measureRehearsal';
@@ -402,13 +430,14 @@ export default function Palette({
   if (section === 'notes') {
     return (
       <div className="palette-panel" style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {/* 音符行：選択 + 7音価 + タイ + 臨時記号3 */}
-        <div style={ROW_STYLE}>
+        {/* 音符行：選択 + 音価グリッド（音符/休符の2段）+ タイ + 臨時記号3 + リピート/括弧。
+            グリッドだけが2段ぶんの高さを持つので、他のボタンは縦中央にそろえる。 */}
+        <div style={{ ...ROW_STYLE, alignItems: 'center' }}>
           {/* 選択ツール */}
           <button
             type="button"
             onClick={() => onChange(selectActive ? ROW1[2] : { mode: 'select' })}
-            title="小節選択（クリックで選択・ドラッグで範囲選択 → Cmd+C でコピー → Cmd+V でペースト／他のツール中でも Shift+クリックで選択できます）"
+            data-tip="小節選択（クリックで選択・ドラッグで範囲選択 → Cmd+C でコピー → Cmd+V でペースト／他のツール中でも Shift+クリックで選択できます）"
 
             aria-label="小節選択（クリックで選択・ドラッグで範囲選択 → Cmd+C でコピー → Cmd+V でペースト／他のツール中でも Shift+クリックで選択できます）"
             style={btnStyle(selectActive, { fontSize: 15 })}
@@ -418,23 +447,44 @@ export default function Palette({
               <path d="M8 6 L12 9 L9.5 9.5 L11 13 L9.5 13.5 L8 10 L6 12 Z" fill="#333"/>
             </svg>
           </button>
-          {ROW1.map((t, i) => {
-            const active = !tieActive && 'duration' in value && 'duration' in t &&
-              value.duration === t.duration && !value.isRest;
-            return (
-              <button
-                key={i}
-                type="button"
-                onClick={() => onChange(carryAccidentalIntoDurationTool(t))}
-                title={`音符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-
-                aria-label={`音符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-                style={btnStyle(active)}
-              >
-                <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={false} />
-              </button>
-            );
-          })}
+          {/* 音価グリッド（Issue #577）: 上段＝音符、下段＝同じ音価の休符。
+              「四分音符ボタンの下は四分休符」と縦に対応させることで、探す手間を減らし、
+              横1列に14個並んでいた頃より横幅も約半分になる。
+              ツールの意味（音符入力／休符入力のトグル関係）は従来のまま変えていない。 */}
+          <div style={DURATION_GRID_STYLE}>
+            {ROW1.map((noteTool, i) => {
+              const restTool = ROW2[i];
+              const duration = (noteTool as { duration: DurKey }).duration;
+              // タイなど別モード中は音価ボタンを選択状態にしない（従来の判定をそのまま使う）
+              const noteActive = !tieActive && 'duration' in value &&
+                value.duration === duration && !value.isRest;
+              const restActive = !tieActive && 'duration' in value &&
+                value.duration === duration && !!value.isRest;
+              return (
+                <div key={duration} style={DURATION_COLUMN_STYLE}>
+                  <button
+                    type="button"
+                    onClick={() => onChange(carryAccidentalIntoDurationTool(noteTool))}
+                    data-tip={`音符 ${durationLabel(duration)}`}
+                    aria-label={`音符 ${durationLabel(duration)}`}
+                    style={btnStyle(noteActive)}
+                  >
+                    <NoteIcon duration={duration} isRest={false} />
+                  </button>
+                  {/* 休符は音符と違い臨時記号を持てないので、引き継ぎ（carry）を通さず素のツールを渡す */}
+                  <button
+                    type="button"
+                    onClick={() => onChange(restTool)}
+                    data-tip={`休符 ${durationLabel(duration)}`}
+                    aria-label={`休符 ${durationLabel(duration)}`}
+                    style={btnStyle(restActive)}
+                  >
+                    <NoteIcon duration={duration} isRest={true} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
           {/* 付点トグル：ONのまま音符/休符を置くと dots:1 が付く（キーボードの「.」でも切替可） */}
           <button
             type="button"
@@ -445,7 +495,7 @@ export default function Palette({
                 onChange({ ...(ROW1[2] as { duration: DurKey; isRest?: boolean }), dots: 1 });
               }
             }}
-            title="付点（音価を1.5倍に伸ばす。「.」キーでも切替可）"
+            data-tip="付点（音価を1.5倍に伸ばす。「.」キーでも切替可）"
             aria-label="付点（音価を1.5倍に伸ばす。「.」キーでも切替可）"
             // 付点ONのときは背景色を変えて、押し忘れ/押しっぱなしが見た目で分かるようにする
             style={btnStyle(dotActive, { fontSize: 20, fontWeight: 'bold' })}
@@ -487,7 +537,7 @@ export default function Palette({
           <button
             type="button"
             onClick={() => onChange(tupletNumberToggleActive ? ROW1[2] : { mode: 'tupletNumberToggle' })}
-            title="連符数字の表示/非表示（選択して連符の音符をクリック。グループ単位で切り替わる）"
+            data-tip="連符数字の表示/非表示（選択して連符の音符をクリック。グループ単位で切り替わる）"
             aria-label="連符数字の表示/非表示（選択して連符の音符をクリック。グループ単位で切り替わる）"
             style={btnStyle(tupletNumberToggleActive, { fontSize: 11, fontWeight: 'bold', whiteSpace: 'nowrap' })}
           >
@@ -507,7 +557,7 @@ export default function Palette({
             type="button"
             disabled={!crossStaffAvailable}
             onClick={() => onChange(crossStaffToggleActive ? ROW1[2] : { mode: 'crossStaffToggle' })}
-            title={crossStaffAvailable
+            data-tip={crossStaffAvailable
               ? '段またぎ表示（選択して音符をクリック。その音符だけを隣の五線へ描き移す／もう一度で戻る）'
               : '段またぎ表示は五線が2段以上ある譜面（ピアノ譜など）でのみ使えます'}
             aria-label="段またぎ表示（選択して音符をクリック。その音符だけを隣の五線へ描き移す）"
@@ -524,7 +574,7 @@ export default function Palette({
           <button
             type="button"
             onClick={() => onChange(tieActive ? ROW1[2] : TIE_TOOL)}
-            title="タイ（隣接する同音符を結ぶ弧線）"
+            data-tip="タイ（隣接する同音符を結ぶ弧線）"
 
             aria-label="タイ（隣接する同音符を結ぶ弧線）"
             style={btnStyle(tieActive)}
@@ -578,27 +628,8 @@ export default function Palette({
               />
             );
           })}
-          {/* 休符・リピート・括弧も同じ折り返し行に続ける。
-              以前は音符行と休符行を別の行に分けていたが、広い画面では右側が
-              大きく空いてしまうため、1つの折り返し行にして横幅を使い切り、
-              狭い画面では自動で折り返すようにする。 */}
-          {ROW2.map((t, i) => {
-            const active = !tieActive && 'duration' in value && 'duration' in t &&
-              value.duration === t.duration && !!value.isRest;
-            return (
-              <button
-                key={i}
-                type="button"
-                onClick={() => onChange(t)}
-                title={`休符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-
-                aria-label={`休符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-                style={btnStyle(active)}
-              >
-                <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={true} />
-              </button>
-            );
-          })}
+          {/* リピート・括弧は音価グリッドと同じ折り返し行に続ける（横幅を使い切るため）。
+              休符は Issue #577 で音価グリッドの下段へ移したので、ここには並べない。 */}
           {/* リピート記号 */}
           {REPEAT_TOOLS.map((tool) => {
             const active = selectedRepeat === tool.repeat;
@@ -607,7 +638,7 @@ export default function Palette({
                 key={tool.repeat}
                 type="button"
                 onClick={() => onChange(active ? ROW1[2] : tool)}
-                title={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
+                data-tip={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
 
                 aria-label={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
                 style={btnStyle(active, { fontSize: 13, fontFamily: '"Times New Roman", serif' })}
@@ -624,7 +655,7 @@ export default function Palette({
                 key={tool.ending}
                 type="button"
                 onClick={() => onChange(active ? ROW1[2] : tool)}
-                title={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
+                data-tip={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
 
                 aria-label={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
                 style={btnStyle(active, { fontSize: 13, fontFamily: '"Times New Roman", serif' })}
@@ -647,7 +678,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureTempoActive ? ROW1[2] : { mode: 'measureTempo' })}
-          title="途中テンポ変更（小節をクリックしてBPMを設定）"
+          data-tip="途中テンポ変更（小節をクリックしてBPMを設定）"
 
           aria-label="途中テンポ変更（小節をクリックしてBPMを設定）"
           style={btnStyle(measureTempoActive, { width: 44 })}
@@ -661,7 +692,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureTimeSigActive ? ROW1[2] : { mode: 'measureTimeSig' })}
-          title="途中拍子変更（小節をクリックして拍子を選択）"
+          data-tip="途中拍子変更（小節をクリックして拍子を選択）"
 
           aria-label="途中拍子変更（小節をクリックして拍子を選択）"
           style={btnStyle(measureTimeSigActive, { width: 38 })}
@@ -673,13 +704,28 @@ export default function Palette({
             <text x="12" y="14" fontSize="10" fill="#e05">?</text>
           </svg>
         </button>
+        {/* 弱起（アウフタクト）: 拍が足りない不完全小節にする（Issue #473） */}
+        <button
+          type="button"
+          onClick={() => onChange(measurePickupActive ? ROW1[2] : { mode: 'measurePickup' })}
+          title="弱起（アウフタクト。小節をクリックして長さを選ぶと、その小節は拍子より短い不完全小節になり、小節番号に数えなくなる）"
+
+          aria-label="弱起（アウフタクト。小節をクリックして長さを選ぶ）"
+          style={btnStyle(measurePickupActive, { width: 34 })}
+        >
+          {/* 4分音符1つ＋小節線 ＝「拍が足りないまま次の小節へ」を表す絵 */}
+          <svg width="26" height="18" viewBox="0 0 26 18" aria-hidden="true">
+            <ellipse cx="6" cy="13" rx="4" ry="3" fill="#111" transform="rotate(-20 6 13)" />
+            <line x1="10" y1="12" x2="10" y2="2" stroke="#111" strokeWidth="1.4" />
+            <line x1="18" y1="1" x2="18" y2="17" stroke="#111" strokeWidth="1.4" />
+          </svg>
+        </button>
         {/* 調号変更 */}
         <button
           type="button"
           onClick={() => onChange(measureKeySigActive ? ROW1[2] : { mode: 'measureKeySig' })}
-          title="途中調号変更（小節をクリックして調号を選択）"
-
-          aria-label="途中調号変更（小節をクリックして調号を選択）"
+          data-tip="途中調号変更 — クリックした小節から先の調を変える（調号を選んで指定）"
+          aria-label="途中調号変更 — クリックした小節から先の調を変える（調号を選んで指定）"
           style={btnStyle(measureKeySigActive, { width: 30 })}
         >
           <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true">
@@ -691,7 +737,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureClefActive ? ROW1[2] : { mode: 'measureClef' })}
-          title="途中音部記号変更（小節をクリックすると小節の頭から、音符をクリックするとその音からクレフが変わる）"
+          data-tip="途中音部記号変更（小節をクリックすると小節の頭から、音符をクリックするとその音からクレフが変わる）"
 
           aria-label="途中音部記号変更（小節をクリックすると小節の頭から、音符をクリックするとその音からクレフが変わる）"
           style={btnStyle(measureClefActive, { width: 30 })}
@@ -704,7 +750,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureRehearsalActive ? ROW1[2] : { mode: 'measureRehearsal' })}
-          title="リハーサルマーク（練習番号。小節をクリックしてA, B, C…を設定）"
+          data-tip="リハーサルマーク（練習番号。小節をクリックしてA, B, C…を設定）"
 
           aria-label="リハーサルマーク（練習番号。小節をクリックしてA, B, C…を設定）"
           style={btnStyle(measureRehearsalActive, { width: 26 })}
@@ -718,7 +764,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureTextActive ? ROW1[2] : { mode: 'measureText' })}
-          title="自由注釈テキスト（小節をクリックして、その段の上に文章を置く）"
+          data-tip="自由注釈テキスト（小節をクリックして、その段の上に文章を置く）"
 
           aria-label="自由注釈テキスト（小節をクリックして、その段の上に文章を置く）"
           style={btnStyle(measureTextActive, { width: 26 })}
@@ -736,7 +782,7 @@ export default function Palette({
               key={tool.dynamic}
               type="button"
               onClick={() => onChange(active ? ROW1[2] : tool)}
-              title={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
+              data-tip={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
 
               aria-label={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
               style={btnStyle(active, {
@@ -752,12 +798,12 @@ export default function Palette({
           );
         })}
         {/* 松葉（クレッシェンド／デクレッシェンド）: タイと同じくドラッグで開始音符→終了音符を結ぶ。
-            松葉＞の説明文言は「デクレッシェンド」で統一する（弟フィードバック・Issue #444）。
+            松葉＞の説明文言は「デクレッシェンド」で統一する（ユーザーフィードバック・Issue #444）。
             文字表記の dim. ボタン（dynamicLabel）は別の記号なので「ディミヌエンド」のまま変えない */}
         <button
           type="button"
           onClick={() => onChange(selectedHairpinType === 'cresc' ? ROW1[2] : { mode: 'hairpin', hairpinType: 'cresc' })}
-          title="クレッシェンドの松葉＜（開始音符から終了音符へドラッグ）"
+          data-tip="クレッシェンドの松葉＜（開始音符から終了音符へドラッグ）"
           aria-label="クレッシェンドの松葉＜（開始音符から終了音符へドラッグ）"
           style={btnStyle(selectedHairpinType === 'cresc')}
         >
@@ -768,7 +814,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedHairpinType === 'dim' ? ROW1[2] : { mode: 'hairpin', hairpinType: 'dim' })}
-          title="デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）"
+          data-tip="デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）"
           aria-label="デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）"
           style={btnStyle(selectedHairpinType === 'dim')}
         >
@@ -786,7 +832,7 @@ export default function Palette({
               key={tool.articulation}
               type="button"
               onClick={() => onChange(active ? ROW1[2] : tool)}
-              title={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
+              data-tip={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
 
               aria-label={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
               style={btnStyle(active)}
@@ -799,7 +845,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(graceNoteActive ? ROW1[2] : { mode: 'graceNote' })}
-          title="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
+          data-tip="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
 
           aria-label="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
           style={accentBtnStyle(graceNoteActive)}
@@ -810,7 +856,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedOrnamentType === 'trill' ? ROW1[2] : { mode: 'ornament', ornamentType: 'trill' })}
-          title="トリル（対象の音符をクリック。再クリックで解除）"
+          data-tip="トリル（対象の音符をクリック。再クリックで解除）"
 
           aria-label="トリル（対象の音符をクリック。再クリックで解除）"
           style={accentBtnStyle(selectedOrnamentType === 'trill')}
@@ -821,7 +867,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedOrnamentType === 'mordent' ? ROW1[2] : { mode: 'ornament', ornamentType: 'mordent' })}
-          title={`${ornamentLabel('mordent')}（対象の音符をクリック。再クリックで解除）`}
+          data-tip={`${ornamentLabel('mordent')}（対象の音符をクリック。再クリックで解除）`}
 
           aria-label={`${ornamentLabel('mordent')}（対象の音符をクリック。再クリックで解除）`}
           style={accentBtnStyle(selectedOrnamentType === 'mordent')}
@@ -832,7 +878,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedOrnamentType === 'mordentInverted' ? ROW1[2] : { mode: 'ornament', ornamentType: 'mordentInverted' })}
-          title={`${ornamentLabel('mordentInverted')}（対象の音符をクリック。再クリックで解除）`}
+          data-tip={`${ornamentLabel('mordentInverted')}（対象の音符をクリック。再クリックで解除）`}
 
           aria-label={`${ornamentLabel('mordentInverted')}（対象の音符をクリック。再クリックで解除）`}
           style={accentBtnStyle(selectedOrnamentType === 'mordentInverted')}
@@ -843,7 +889,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedOrnamentType === 'turn' ? ROW1[2] : { mode: 'ornament', ornamentType: 'turn' })}
-          title={`${ornamentLabel('turn')}（対象の音符をクリック。再クリックで解除）`}
+          data-tip={`${ornamentLabel('turn')}（対象の音符をクリック。再クリックで解除）`}
 
           aria-label={`${ornamentLabel('turn')}（対象の音符をクリック。再クリックで解除）`}
           style={accentBtnStyle(selectedOrnamentType === 'turn')}
@@ -858,7 +904,7 @@ export default function Palette({
               key={tool.textKind}
               type="button"
               onClick={() => onChange(active ? ROW1[2] : tool)}
-              title={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
+              data-tip={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
 
               aria-label={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
               style={btnStyle(active, {
@@ -875,7 +921,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(pedalDownActive ? ROW1[2] : { mode: 'pedal', pedalType: 'down' })}
-          title="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
+          data-tip="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
 
           aria-label="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
           style={accentBtnStyle(pedalDownActive)}
@@ -885,7 +931,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(pedalUpActive ? ROW1[2] : { mode: 'pedal', pedalType: 'up' })}
-          title="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
+          data-tip="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
 
           aria-label="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
           style={accentBtnStyle(pedalUpActive)}
@@ -901,7 +947,7 @@ export default function Palette({
               key={ot}
               type="button"
               onClick={() => onChange(active ? ROW1[2] : { mode: 'ottava', ottavaType: ot })}
-              title={`${lbl}記号を付ける。対象の音符をクリック。再クリックで解除`}
+              data-tip={`${lbl}記号を付ける。対象の音符をクリック。再クリックで解除`}
 
               aria-label={`${lbl}記号を付ける。対象の音符をクリック。再クリックで解除`}
               style={accentBtnStyle(active)}
@@ -921,7 +967,7 @@ export default function Palette({
               <button
                 type="button"
                 onClick={() => onChange(active ? ROW1[2] : { mode: 'customSymbol', symbolId: def.id })}
-                title={`${def.name}（対象の音符をクリック）`}
+                data-tip={`${def.name}（対象の音符をクリック）`}
 
                 aria-label={`${def.name}（対象の音符をクリック）`}
                 style={btnStyle(active)}
@@ -931,7 +977,7 @@ export default function Palette({
               <button
                 type="button"
                 onClick={() => onChange(resizeActive ? ROW1[2] : { mode: 'customSymbolResize', symbolId: def.id })}
-                title={`${def.name}のサイズを変更（対象の音符をクリック）`}
+                data-tip={`${def.name}のサイズを変更（対象の音符をクリック）`}
                 aria-label={`${def.name}のサイズを変更（対象の音符をクリック）`}
                 style={btnStyle(resizeActive, { width: 20, fontSize: 11, color: '#6b7280' })}
               >
@@ -941,7 +987,7 @@ export default function Palette({
               <button
                 type="button"
                 onClick={() => onChange(offsetActive ? ROW1[2] : { mode: 'customSymbolOffset', symbolId: def.id })}
-                title={`${def.name}の位置を調整（対象の音符をクリック）`}
+                data-tip={`${def.name}の位置を調整（対象の音符をクリック）`}
                 aria-label={`${def.name}の位置を調整（対象の音符をクリック）`}
                 style={btnStyle(offsetActive, { width: 20, fontSize: 11, color: '#6b7280' })}
               >
@@ -956,7 +1002,7 @@ export default function Palette({
           <button
             type="button"
             onClick={() => onChange(symbolAdjustResizeActive ? ROW1[2] : { mode: 'symbolAdjustResize' })}
-            title="記号のサイズを変更（運指・強弱・カスタム記号など。対象の音符をクリック）"
+            data-tip="記号のサイズを変更（運指・強弱・カスタム記号など。対象の音符をクリック）"
             aria-label="記号のサイズを変更（運指・強弱・カスタム記号など。対象の音符をクリック）"
             style={btnStyle(symbolAdjustResizeActive, { width: 22, fontSize: 12, color: '#374151' })}
           >
@@ -965,7 +1011,7 @@ export default function Palette({
           <button
             type="button"
             onClick={() => onChange(symbolAdjustOffsetActive ? ROW1[2] : { mode: 'symbolAdjustOffset' })}
-            title="記号の位置を調整（運指・強弱・カスタム記号など。対象の音符をクリック）"
+            data-tip="記号の位置を調整（運指・強弱・カスタム記号など。対象の音符をクリック）"
             aria-label="記号の位置を調整（運指・強弱・カスタム記号など。対象の音符をクリック）"
             style={btnStyle(symbolAdjustOffsetActive, { width: 22, fontSize: 12, color: '#374151' })}
           >
@@ -978,7 +1024,7 @@ export default function Palette({
         <button
           type="button"
           onClick={onOpenSymbolEditor}
-          title="カスタム記号を新規作成"
+          data-tip="カスタム記号を新規作成"
 
           aria-label="カスタム記号を新規作成"
           style={{

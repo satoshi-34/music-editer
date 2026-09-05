@@ -97,9 +97,18 @@ type TimelineEvent = {
  * 小節の進み方は再生エンジンと同じ「内容の実長と拍子長の大きい方」。
  * ここを揃えないと、入力途中の未充足小節がある譜面でペダル区間の位置だけがずれる。
  */
+/**
+ * 各小節が最低限占める拍数。数値なら全小節共通（拍子ぶん）、関数なら元小節番号ごとに解決する
+ * （弱起の小節はその拍数だけ進む・Issue #473）。エンジンの小節送りと同じ物差しにすること
+ */
+export type MeasureBeatsFloor = number | ((sourceMeasureIndex: number) => number);
+function floorAt(floor: MeasureBeatsFloor, sourceMeasureIndex: number): number {
+  return typeof floor === 'number' ? floor : floor(sourceMeasureIndex);
+}
+
 function buildTimeline(
   measuresLike: ReadonlyArray<MeasureData | { measure: MeasureData; sourceMeasureIndex: number }>,
-  measureBeatsFloor: number,
+  measureBeatsFloor: MeasureBeatsFloor,
 ): { events: TimelineEvent[]; totalBeats: number; tieContinuationKeys: Map<string, Set<string>> } {
   const timeline: TimelineEvent[] = [];
   // タイの継続音（前の音から結ばれている側）。planKey → 結ばれている音高の集合。
@@ -117,7 +126,7 @@ function buildTimeline(
       ? { measure: item.measure, sourceMeasureIndex: item.sourceMeasureIndex }
       : { measure: item as MeasureData, sourceMeasureIndex: index });
 
-  expanded.forEach(({ measure }, measureIndex) => {
+  expanded.forEach(({ measure, sourceMeasureIndex }, measureIndex) => {
     let maxVoiceBeats = 0;
     getMeasureVoices(measure).forEach((voice, voiceIndex) => {
       let cursor = 0;
@@ -157,7 +166,7 @@ function buildTimeline(
       });
       maxVoiceBeats = Math.max(maxVoiceBeats, cursor);
     });
-    measureStartBeat += Math.max(maxVoiceBeats, measureBeatsFloor);
+    measureStartBeat += Math.max(maxVoiceBeats, floorAt(measureBeatsFloor, sourceMeasureIndex));
   });
 
   // 複数声部では声部ごとに積み上げるので、時系列順に並べ直してから使う。
@@ -225,7 +234,7 @@ function findIntervalFor(intervals: PedalInterval[], beat: number): PedalInterva
  */
 export function buildPedalPlaybackPlans(
   parts: ReadonlyArray<PedalPlaybackPartSource>,
-  measureBeatsFloor: number,
+  measureBeatsFloor: MeasureBeatsFloor,
 ): PedalPlaybackPlan[] {
   const timelines = parts.map((part) => buildTimeline(part.measures, measureBeatsFloor));
 

@@ -121,7 +121,7 @@ VexFlow の音符本体とは別に、描画後の SVG へテキストを直接�
 
 **問題**: 強弱記号が通常フォント（Century Schoolbook イタリック）の文字 "pp" で、
 音符・臨時記号（VexFlow 5 同梱の Bravura = SMuFL 準拠）と字形の系統が違っていた。
-市販譜の強弱は専用グリフで、作曲科ユーザー（弟）の見慣れた字形と差が出る。
+市販譜の強弱は専用グリフで、作曲科ユーザーの見慣れた字形と差が出る。
 
 **修正設計**:
 - `dynamicMarkingUtils.dynamicGlyphFor()` — 絶対強弱（pp/p/mp/mf/f/ff）を SMuFL の

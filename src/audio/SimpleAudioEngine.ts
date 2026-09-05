@@ -16,6 +16,8 @@ import {
   getMasterVolumeGain,
   type PlaybackSoundProfile
 } from './playbackSettings';
+import { ensureMainPathAnalyser, tapOutputToMainPathAnalyser } from './mainPathAnalyser';
+import { createVelocityFilterChain, velocityToAttackSeconds, normalizeVelocityTimbreStrength } from './velocityTimbre';
 import { applySwingToTiming } from '../utils/swingUtils';
 import { respellDoubleAccidentalKey } from '../utils/noteMidiUtils';
 import { resolveReleaseTailSeconds } from './releaseTail';
@@ -91,6 +93,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
   // すべての発音をこの GainNode 経由で destination へ流す。
   // ここの gain を変えるだけで全体音量（音量スライダー）が効く。
   private masterGainNode: GainNode | null = null;
+  // 診断専用: マスターゲインの出口を覗く AnalyserNode（issue #618）。
+  // destination には繋がないので音は増えない。context ごとに1つだけ持つ。
+  private mainPathAnalyser: AnalyserNode | null = null;
 
   constructor() {
     console.log('[SimpleAudioEngine] SimpleAudioEngineが初期化されました（AudioContextはユーザーインタラクション時に作成）');
@@ -369,6 +374,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
    */
   getAudioContext(): AudioContext | null {
     return this.context;
+  }
+
+  /**
+   * 診断専用: 実音経路（マスターゲイン直後）の AnalyserNode を返す（issue #618）。
+   * まだ一度も発音していない場合は null（マスターゲインと同時に用意されるため）。
+   */
+  getMainPathAnalyser(): AnalyserNode | null {
+    return this.mainPathAnalyser;
   }
 
   /**
@@ -659,6 +672,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
     try {
       if (this.shouldUseSafariSafeVoice()) {
+        // Safari の簡易経路には挟まない（round1 P2: 「1 osc + 1 gain に絞る」という経路の存在理由と
+        // 衝突する。Safari では音量差だけになるが、鳴らないより優先）
         this.playSafariSafeVoice(context, frequency, duration, startTime, tailOverride, instrument);
         return;
       }
@@ -672,10 +687,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
         startTime,
         instrumentConfig
       );
-      const oscillatorId = this.registerOscillators(oscillators, gainNode, instrumentConfig, startTime);
+      const oscillatorId = this.registerOscillators(oscillators, gainNode, instrumentConfig, startTime, velocity);
       
       // 未来の startTime を基準に、同じエンベロープを予約する。
-      const adjustedAttack = this.getAdjustedAttack(instrumentConfig.attack);
+      // 弱い音は立ち上がりも鈍らせる（#670 段2）。設定 OFF なら従来どおり
+      const adjustedAttack = this.velocityTimbreEnabled
+        ? velocityToAttackSeconds(velocity, this.getAdjustedAttack(instrumentConfig.attack), this.velocityTimbreStrength)
+        : this.getAdjustedAttack(instrumentConfig.attack);
       // velocity は「その音符だけ、どのくらい強く鳴らすか」。
       // 音色プリセットの形は保ちつつ、包絡線（音量カーブ）全体へ倍率として掛ける。
       const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain) * velocity;
@@ -803,6 +821,32 @@ export class SimpleAudioEngine implements PlaybackEngine {
     console.log('[SimpleAudioEngine] スウィング再生を切り替えました:', enabled);
   }
 
+  /** 強弱を音色にも効かせる（#670）。既定 ON */
+  private velocityTimbreEnabled = true;
+  private velocityTimbreStrength = 1;
+  setVelocityTimbreEnabled(enabled: boolean): void {
+    this.velocityTimbreEnabled = enabled;
+  }
+
+  setVelocityTimbreStrength(strength: number): void {
+    this.velocityTimbreStrength = normalizeVelocityTimbreStrength(strength);
+  }
+
+  /**
+   * 音ごとのゲインを出力へつなぐ。強弱の音色変化が ON なら、間に velocity で決めた
+   * ローパスを 1 つ挟む（弱いほど高域を削る・#670）。フィルタを作れない context では素通し
+   */
+  private connectVoiceToOutput(context: AudioContext, gainNode: GainNode, velocity: number): void {
+    const output = this.getOutputNode(context);
+    const chain = this.velocityTimbreEnabled ? createVelocityFilterChain(context, velocity, this.velocityTimbreStrength) : null;
+    if (chain) {
+      gainNode.connect(chain.input);
+      chain.output.connect(output);
+    } else {
+      gainNode.connect(output);
+    }
+  }
+
   /**
    * 発音ノードの接続先（マスター GainNode）を返す。
    * AudioContext が作り直されたときは古い GainNode を使えないため、
@@ -813,6 +857,10 @@ export class SimpleAudioEngine implements PlaybackEngine {
       this.masterGainNode = context.createGain();
       this.masterGainNode.gain.value = getMasterVolumeGain(this.soundProfile);
       this.masterGainNode.connect(context.destination);
+      // 実音の有無を測るための枝を張り直す（issue #618）。
+      // マスターゲインは context を作り直すたびに新しくなるので、そのたびに繋ぎ直す。
+      this.mainPathAnalyser = ensureMainPathAnalyser(context, this.mainPathAnalyser);
+      tapOutputToMainPathAnalyser(this.masterGainNode, this.mainPathAnalyser);
     }
     return this.masterGainNode;
   }
@@ -1237,7 +1285,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
     oscillators: OscillatorNode[],
     gainNode: GainNode,
     instrumentConfig: SimpleInstrumentConfig,
-    startTime: number
+    startTime: number,
+    /** 譜面再生の強弱（#670）。省略（確認音・テスト音）は素通し＝従来どおり */
+    velocity?: number,
   ): string {
     const oscillatorId = `osc-${this.oscillatorCounter++}`;
 
@@ -1251,7 +1301,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
       oscillator.connect(layerGain);
       layerGain.connect(gainNode);
     });
-    gainNode.connect(this.getOutputNode(this.context!));
+    if (velocity === undefined) gainNode.connect(this.getOutputNode(this.context!));
+    else this.connectVoiceToOutput(this.context!, gainNode, velocity);
     this.oscillators.set(oscillatorId, { oscillators, gainNode });
 
     return oscillatorId;
@@ -1542,8 +1593,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
         this.context.close();
         this.context = null;
       }
-      // 閉じた context に属する GainNode は再利用できないため捨てる
+      // 閉じた context に属する GainNode・AnalyserNode は再利用できないため捨てる
       this.masterGainNode = null;
+      this.mainPathAnalyser = null;
       
       this.isInitialized = false;
       this.hasPrimedOutput = false;

@@ -23,6 +23,8 @@ export type PlaybackState = 'stopped' | 'playing' | 'paused' | 'loading';
 export interface PlaybackControlsProps {
   /** 現在の再生状態 */
   playbackState: PlaybackState;
+  /** 作品の切替・復元中（#609）。再生ボタンを無効にし、理由をラベルで示す */
+  workRestoring?: boolean;
   /** 現在の再生位置 */
   currentPosition: PlaybackPosition;
   /** 現在のテンポ（BPM） */
@@ -47,6 +49,8 @@ export interface PlaybackControlsProps {
   onPlayFromMeasure?: (measureNumberInput: string) => void;
   /** 入力欄の上限に使う総小節数（内容のある小節数）。省略時は上限を指定しない */
   totalMeasureCount?: number;
+  /** 入力できる小節番号の下限。弱起（#473）が先頭にある作品は 0（弱起の小節）から */
+  measureNumberMin?: number;
   /** テンポ変更時のコールバック */
   onTempoChange: (bpm: number) => void;
   /** 音色変更時のコールバック */
@@ -57,6 +61,12 @@ export interface PlaybackControlsProps {
   onAudioRecovery?: () => void;
   /** 無音検知（issue #14）の通知メッセージ。null なら非表示 */
   audioHealthNotice?: string | null;
+  /**
+   * その通知から「音の調子がおかしいとき」（音声復旧）への導線を出してよいか（#618 round1 P3）。
+   * タブの音声経路そのものが壊れているという案内のときは false。
+   * 効かないと分かっている手段を勧めると、案内と導線が食い違って利用者を迷わせるため。
+   */
+  audioHealthNoticeAllowsRecovery?: boolean;
   /** 再生エンジンを通さない最小テスト音 */
   onEmergencyBeep?: () => void;
   /** 詳細な音源設定 */
@@ -78,6 +88,9 @@ export interface PlaybackControlsProps {
    * 記譜（見た目・保存データ）は変えず、再生タイミングだけに影響する。
    */
   onSwingEnabledChange?: (enabled: boolean) => void;
+  /** 強弱を音色にも効かせる（#670）の ON/OFF */
+  onVelocityTimbreEnabledChange?: (enabled: boolean) => void;
+  onVelocityTimbreStrengthChange?: (strength: number) => void;
 }
 
 /**
@@ -176,6 +189,7 @@ const SOUND_ENGINE_MODE_OPTIONS: ReadonlyArray<{ value: SoundEngineMode; label: 
  */
 export default function PlaybackControls({
   playbackState,
+  workRestoring = false,
   currentPosition,
   currentTempo,
   currentInstrument,
@@ -185,11 +199,13 @@ export default function PlaybackControls({
   onStop,
   onPlayFromMeasure,
   totalMeasureCount,
+  measureNumberMin = 1,
   onTempoChange,
   onInstrumentChange,
   onInstrumentPreview,
   onAudioRecovery,
   audioHealthNotice = null,
+  audioHealthNoticeAllowsRecovery = true,
   onEmergencyBeep,
   soundRuntimeSettings,
   activeSoundEngineMode,
@@ -198,7 +214,9 @@ export default function PlaybackControls({
   onPluginNameChange,
   onSoundProfileChange,
   onPreviewAccidentalOnApplyChange,
-  onSwingEnabledChange
+  onSwingEnabledChange,
+  onVelocityTimbreEnabledChange,
+  onVelocityTimbreStrengthChange,
 }: PlaybackControlsProps) {
   // テンポ入力の内部状態
   const [tempoInput, setTempoInput] = useState(currentTempo.toString());
@@ -441,10 +459,19 @@ export default function PlaybackControls({
   const handleSwingEnabledChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     onSwingEnabledChange?.(event.target.checked);
   }, [onSwingEnabledChange]);
+  const handleVelocityTimbreEnabledChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    onVelocityTimbreEnabledChange?.(event.target.checked);
+  }, [onVelocityTimbreEnabledChange]);
+  const handleVelocityTimbreStrengthChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const next = Number.parseFloat(event.target.value);
+    if (Number.isFinite(next)) onVelocityTimbreStrengthChange?.(Math.min(1, Math.max(0, next)));
+  }, [onVelocityTimbreStrengthChange]);
 
   /**
    * 再生/一時停止ボタンのアイコンとラベルを取得
    */
+  // 作品の読み込み中は「押せない理由」をツールチップで示す（押しても何も起きないを作らない・#318）
+  const WORK_RESTORING_PLAY_TITLE = '作品を読み込み中です。終わると再生できます';
   const getPlayPauseButtonContent = () => {
     switch (playbackState) {
       case 'playing':
@@ -475,8 +502,8 @@ export default function PlaybackControls({
           <button
             className="ghost playback-button play-pause-button"
             onClick={handlePlayPauseClick}
-            disabled={playbackState === 'loading'}
-            title={playPauseContent.label}
+            disabled={playbackState === 'loading' || workRestoring}
+            title={workRestoring ? WORK_RESTORING_PLAY_TITLE : playPauseContent.label}
             aria-label={playPauseContent.label}
           >
             <span className="button-icon" aria-hidden="true">
@@ -509,7 +536,7 @@ export default function PlaybackControls({
             {audioHealthNotice}
             {/* 診断（音声復旧・最小テスト音）は「音」区画の折りたたみの中へ移したので、
                 困っている人が探さずに済むよう通知から1クリックで開ける導線を置く（#562） */}
-            {hasDiagnostics && (
+            {hasDiagnostics && audioHealthNoticeAllowsRecovery && (
               <div style={{ marginTop: 6 }}>
                 <button
                   type="button"
@@ -594,7 +621,7 @@ export default function PlaybackControls({
               value={startMeasureInput}
               onChange={handleStartMeasureInputChange}
               onKeyDown={handleStartMeasureInputKeyDown}
-              min={1}
+              min={measureNumberMin}
               max={totalMeasureCount}
               step="1"
               aria-label="再生を開始する小節番号"
@@ -838,6 +865,41 @@ export default function PlaybackControls({
                             </span>
                           </span>
                         </label>
+
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <input
+                            type="checkbox"
+                            checked={soundRuntimeSettings?.velocityTimbreEnabled ?? true}
+                            onChange={handleVelocityTimbreEnabledChange}
+                            aria-label="強弱で音色も変える"
+                          />
+                          <span>
+                            強弱で音色も変える
+                            <span style={{ display: 'block', fontSize: 11, color: '#6b7280' }}>
+                              弱い音は柔らかく、強い音は硬く明るく鳴らします（音量だけでなく音色が変わります）
+                            </span>
+                          </span>
+                        </label>
+
+                        {(soundRuntimeSettings?.velocityTimbreEnabled ?? true) && (
+                          <label style={{ display: 'grid', gap: 4 }}>
+                            <span>
+                              弱い音の柔らかさ: {Math.round((soundRuntimeSettings?.velocityTimbreStrength ?? 1) * 100)}%
+                              <span style={{ display: 'block', fontSize: 11, color: '#6b7280' }}>
+                                右ほど pp が柔らかく（高い成分が減り、鳴り始めが鈍く）なります。強い音には効きません
+                              </span>
+                            </span>
+                            <input
+                              type="range"
+                              min="0"
+                              max="1"
+                              step="0.05"
+                              value={soundRuntimeSettings?.velocityTimbreStrength ?? 1}
+                              onChange={handleVelocityTimbreStrengthChange}
+                              aria-label="弱い音の柔らかさ"
+                            />
+                          </label>
+                        )}
 
                         {/* 4 本のスライダーは、シンセの専門パラメータを直接見せる代わりに
                             「耳で分かる言葉」に置き換えた簡易 UI。 */}

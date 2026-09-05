@@ -112,6 +112,7 @@ export function describeTool(tool: Tool, customSymbolNames?: Record<string, stri
     case 'textElement': return textElementLabel(tool.textKind);
     case 'measureTempo': return '途中テンポ変更';
     case 'measureTimeSig': return '途中拍子変更';
+    case 'measurePickup': return '弱起（アウフタクト）';
     case 'measureKeySig': return '途中調号変更';
     case 'measureClef': return '途中音部記号変更';
     case 'measureRehearsal': return 'リハーサルマーク';
