@@ -30,6 +30,7 @@ import PlaybackHighlight from './PlaybackHighlight';
 import ScaledPageWrapper from './ScaledPageWrapper';
 import UiContextBar from './UiContextBar';
 import { resolveToolbarHeight } from '../utils/toolbarHeight';
+import { carryInputAccidental } from '../utils/inputAccidentalTool';
 import { DEFAULT_TUPLET_NUM_NOTES } from '../utils/tupletUtils';
 import UiVariantBadge from './UiVariantBadge';
 import { useUiVariant } from '../hooks/useUiVariant';
@@ -571,6 +572,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // A1/A3 の文脈バーを出すか。バーは譜面背景の左上に浮くのでツールバーの高さには影響しない
   const showUiContextBar = import.meta.env.DEV && (uiVariant === 'a1' || uiVariant === 'a3');
   const [tool, setTool] = useState<Tool>({ duration: '4', isRest: false });
+  // 臨時記号ボタン（♯▾・♭▾）の ▾ で最後に選んだ変種（#548）。パレットはタブを切り替えると
+  // アンマウントされるので、選択が消えないようここ（タブ切替で消えない場所）で持つ。
+  // 作品データには保存しないため、リロードすると既定（♯・♭）へ戻る。
+  const [accidentalVariantKeys, setAccidentalVariantKeys] = useState<Record<string, string>>({});
+  const handleAccidentalVariantKeyChange = useCallback((familyId: string, key: string) => {
+    setAccidentalVariantKeys((prev) => ({ ...prev, [familyId]: key }));
+  }, []);
   // 連符プルダウン（#569）で最後に選んだ連符。パレットはタブを切り替えると
   // アンマウントされるので、選択が消えないようここ（タブ切替で消えない場所）で持つ。
   // 作品データには保存しないため、リロードすると既定の3連符へ戻る（#569 仕様3）。
@@ -3647,17 +3655,21 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       if (e.ctrlKey || e.metaKey) return;
       const next = DUR_KEYS[e.key];
       if (next) {
-        setTool(next);
+        // ♯をONにしたまま数字キーで音価を変えても記号を落とさない（#548 round1 P2-4）。
+        // マウス（パレットの音価ボタン）と同じ規則を utils から呼ぶ。入力方法で
+        // 挙動が食い違わないよう、引き継ぎのロジックは1本しか持たない。
+        setTool((prev) => carryInputAccidental(prev, next));
         e.preventDefault();
       }
       // R キー: 現在の音価で休符入力モードに切り替え
       if (e.key === 'r' || e.key === 'R') {
         setTool(prev => {
           if ('duration' in prev) {
-            // 入力用の臨時記号（#470）は音符専用。休符へ切り替えるときに残すと、
+            // 臨時記号（#470 → #548 で統合）は音符専用。休符へ切り替えるときに残すと、
             // ♯ボタンがON表示のままクリックしても効かない無言の行き止まりになる
-            // （#470 round1 P2・#318）。音符へ戻るときは付け直してもらう
-            const { accidental: _dropped, ...rest } = prev;
+            // （#470 round1 P2・#318）。音符へ戻るときは付け直してもらう。
+            // 微分音（¼♯・¼♭）も同じ属性になったので同じように落とす（#548 設計メモ §3-6）
+            const { accidental: _dropped, microtone: _droppedMicrotone, ...rest } = prev;
             return { ...rest, isRest: !prev.isRest };
           }
           return { duration: '4', isRest: true };
@@ -6317,6 +6329,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 value={tool}
                 onChange={handleToolChange}
                 section="notes"
+                accidentalVariantKeys={accidentalVariantKeys}
+                onAccidentalVariantKeyChange={handleAccidentalVariantKeyChange}
                 tupletVariantKey={tupletVariantKey}
                 onTupletVariantKeyChange={setTupletVariantKey}
                 // 段またぎ表示（Issue #310・#317 でこのタブへ移動）はピアノ譜（右手・左手の2段）でのみ使える。
