@@ -108,22 +108,19 @@ async function importXml(xml: string, name = 'defaults.xml') {
   fireEvent.change(input, { target: { files: [file] } });
 }
 
-/** レイアウトタブの「音符の大きさ」スライダー（80〜200% の range）。 */
-function notationSizeSlider(): HTMLInputElement {
+// レイアウトタブの調整欄は Issue #578 でスライダーから数値入力（spinbutton）へ置き換わった。
+// 属性（min/max）で拾うと同じ値域の欄（余白の上下）と見分けが付かないため、名前で取得する。
+
+/** レイアウトタブの「音符の大きさ」の数値入力（80〜200%）。 */
+function notationSizeInput(): HTMLInputElement {
   fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
-  const slider = Array.from(document.querySelectorAll('input[type="range"]'))
-    .find((i) => i.getAttribute('min') === '80' && i.getAttribute('max') === '200') as HTMLInputElement;
-  expect(slider).toBeTruthy();
-  return slider;
+  return screen.getByRole('spinbutton', { name: '音符の大きさ' }) as HTMLInputElement;
 }
 
-/** レイアウトタブの「ページ余白（左右）」スライダー（8〜25mm の range のうち先頭）。 */
-function sideMarginSlider(): HTMLInputElement {
+/** レイアウトタブの「ページ余白（左右）」の数値入力（8〜25mm）。 */
+function sideMarginInput(): HTMLInputElement {
   fireEvent.click(screen.getByRole('tab', { name: 'レイアウト' }));
-  const slider = Array.from(document.querySelectorAll('input[type="range"]'))
-    .find((i) => i.getAttribute('min') === '8' && i.getAttribute('max') === '25') as HTMLInputElement;
-  expect(slider).toBeTruthy();
-  return slider;
+  return screen.getByRole('spinbutton', { name: '余白(左右)' }) as HTMLInputElement;
 }
 
 describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとして引き継ぐ（#477）', () => {
@@ -156,8 +153,8 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
       expect(document.body.textContent).toContain('defaults の曲');
     }, { timeout: 15000 });
 
-    expect(notationSizeSlider().value).toBe('120');
-    expect(sideMarginSlider().value).toBe('12');
+    expect(notationSizeInput().value).toBe('120');
+    expect(sideMarginInput().value).toBe('12');
     // 引き継いだことは黙らずに知らせる（#318）
     expect(document.body.textContent).toContain('音符の大きさを120%にしました');
   }, MOUNT_HEAVY_TIMEOUT_MS);
@@ -177,7 +174,7 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
       expect(document.body.textContent).toContain('紙幅に収まらない小節があったため');
     }, { timeout: 15000 });
     expect(document.body.textContent).toContain('defaults の曲');
-    expect(Number(notationSizeSlider().value)).toBeLessThan(200);
+    expect(Number(notationSizeInput().value)).toBeLessThan(200);
     // 受入条件1: 読み込んだ直後に紙幅超過の警告が出ていない
     expect(document.body.textContent).not.toContain('この小節は最小の1小節/段でも紙幅を超えます');
   }, MOUNT_HEAVY_TIMEOUT_MS);
@@ -273,13 +270,13 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
     cleanup();
     render(<ScorePage />);
     await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
-    const before = notationSizeSlider().value;
+    const before = notationSizeInput().value;
     expect(before).toBe('200');
     await importXml(scoreXml('', denseNotes(32)));
     await waitFor(() => { expect(document.body.textContent).toContain('defaults の曲'); }, { timeout: 15000 });
 
     // 縮尺は変わらない（開いただけで作品の縮尺が変更・保存される、を起こさない）
-    expect(notationSizeSlider().value).toBe(before);
+    expect(notationSizeInput().value).toBe(before);
     // 提案だけが通知される
     expect(document.body.textContent).toContain('にすると収まります');
   }, MOUNT_HEAVY_TIMEOUT_MS);
@@ -316,8 +313,8 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
 
     render(<ScorePage />);
     await waitFor(() => { expect(document.body.textContent).toContain('属性つき'); }, { timeout: 15000 });
-    expect(notationSizeSlider().value).toBe('120');
-    expect(sideMarginSlider().value).toBe('12');
+    expect(notationSizeInput().value).toBe('120');
+    expect(sideMarginInput().value).toBe('12');
 
     // 作品一覧から属性なし作品へ切り替える（一覧ボタンはファイルタブにある）
     fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
@@ -331,19 +328,19 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
     }, { timeout: 15000 });
 
     // 前の作品の 120%/12mm ではなく、表示設定の 130%/10mm へ戻る
-    expect(notationSizeSlider().value).toBe('130');
-    expect(sideMarginSlider().value).toBe('10');
+    expect(notationSizeInput().value).toBe('130');
+    expect(sideMarginInput().value).toBe('10');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
-  it('縮尺スライダーだけを変えても自動保存へ反映される（round1/round2 P1: layoutAttrRevision 経路）', async () => {
+  it('縮尺の数値入力だけを変えても自動保存へ反映される（round1/round2 P1: layoutAttrRevision 経路）', async () => {
     seedEmptyWork();
     render(<ScorePage />);
     await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
     const workId = getLastOpenedWorkId();
     expect(workId).toBeTruthy();
 
-    // 譜面本体には触れず、スライダーだけを 120% へ
-    fireEvent.change(notationSizeSlider(), { target: { value: '120' } });
+    // 譜面本体には触れず、「音符の大きさ」の欄だけを 120% へ
+    fireEvent.change(notationSizeInput(), { target: { value: '120' } });
 
     // デバウンス（1.5秒）後の自動保存で作品属性が更新される
     await waitFor(() => {
@@ -359,8 +356,8 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
     await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
 
     // 現在の作品を 120%/12mm にし、個人設定はそれと異なる 130%/10mm にしておく
-    fireEvent.change(notationSizeSlider(), { target: { value: '120' } });
-    fireEvent.change(sideMarginSlider(), { target: { value: '12' } });
+    fireEvent.change(notationSizeInput(), { target: { value: '120' } });
+    fireEvent.change(sideMarginInput(), { target: { value: '12' } });
     localStorageMock.setItem('score-notation-size', '1.3');
     localStorageMock.setItem('score-page-margin-side', '10');
 
@@ -369,8 +366,8 @@ describe('ScorePage: MusicXML の <defaults> を作品のレイアウトとし�
     await waitFor(() => { expect(document.body.textContent).toContain('defaults の曲'); }, { timeout: 15000 });
 
     // 取り込みは作品切替ではないので、120%/12mm のまま（130/10 へ化けない）
-    expect(notationSizeSlider().value).toBe('120');
-    expect(sideMarginSlider().value).toBe('12');
+    expect(notationSizeInput().value).toBe('120');
+    expect(sideMarginInput().value).toBe('12');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
   it('旧・縦余白キーの換算は state 初期化と同順（生値−2mm→クランプ。round4 P2）', () => {
