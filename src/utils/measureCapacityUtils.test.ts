@@ -140,6 +140,13 @@ describe('sanitizePickupBeatsInParts（保存・読み込みの境界での正�
     expect(sanitizePickupBeatsInParts(clean, [4, 4])[0]).toBe(clean[0]);
   });
 
+  it('壊れた要素（null）は触らず、そのまま返す（検証に任せる）', () => {
+    const parts = [{ measures: [null as unknown as MeasureData, { events: [], pickupBeats: 1 }] }];
+    const out = sanitizePickupBeatsInParts(parts, [4, 4]);
+    expect(out[0].measures[0]).toBeNull();
+    expect(out[0].measures[1].pickupBeats).toBe(1);
+  });
+
   it('途中拍子変更のある小節は、その小節の拍子で判定する', () => {
     const parts = [{ measures: [{ events: [] }, { events: [], timeSignature: [2, 4] as [number, number], pickupBeats: 2 }] }];
     // 2/4 の小節で 2 拍は不完全小節ではないので落ちる

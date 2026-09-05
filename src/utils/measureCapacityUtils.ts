@@ -171,7 +171,7 @@ export function buildPickupBeatOptions(timeSignature: TimeSignature): PickupBeat
  *   弾く方式だと「その瞬間から自動保存が止まる」事故になる
  * - 不変条件2: 正本はパート0。他のパートの `pickupBeats` はパート0の値へそろえる
  *   （食い違ったデータは MusicXML 書き出しの小節番号がパート間で不一致になる）
- * 変更が無ければ同じ配列（参照）を返す
+ * 変更が無い小節・パートは同じオブジェクト（参照）を保つ（配列自体は新しく作る）
  */
 export function sanitizePickupBeatsInParts<T extends { measures: MeasureData[] }>(
   parts: readonly T[],
@@ -181,9 +181,12 @@ export function sanitizePickupBeatsInParts<T extends { measures: MeasureData[] }
   if (parts.length === 0 || parts.some((part) => !Array.isArray(part?.measures))) return [...parts];
   const primary = parts[0].measures;
   let anyChanged = false;
-  const next = parts.map((part, partIndex) => {
+  const next = parts.map((part) => {
     let changed = false;
     const measures = part.measures.map((measure, measureIndex) => {
+      // 壊れた要素（null など）は触らず検証に弾かせる（round5 P2-1: ここで落ちると
+      // ファイル取り込みの Promise が settle せず無言で止まる）
+      if (!measure || typeof measure !== 'object') return measure;
       // 正本（パート0）の値を、その小節で有効な拍子で正規化した結果が全パートの値
       const effective = resolveTimeSignatureAtMeasure(primary, measureIndex, globalTimeSignature);
       const wanted = normalizePickupBeats(primary[measureIndex]?.pickupBeats, effective);
@@ -196,7 +199,6 @@ export function sanitizePickupBeatsInParts<T extends { measures: MeasureData[] }
     });
     if (!changed) return part;
     anyChanged = true;
-    void partIndex;
     return { ...part, measures };
   });
   return anyChanged ? next : [...parts];
