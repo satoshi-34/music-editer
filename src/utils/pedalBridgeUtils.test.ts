@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pairPedalMarks } from './pedalBridgeUtils';
+import { pairPedalMarks, resolvePedalBaselineY, PEDAL_TEXT_ASCENT_PX, PEDAL_CLEARANCE_MARGIN_PX } from './pedalBridgeUtils';
 
 type Entry = { id: string; mark: 'down' | 'up' };
 
@@ -54,5 +54,54 @@ describe('pairPedalMarks', () => {
 
   it('空配列に対しては空配列を返す', () => {
     expect(pairPedalMarks([])).toEqual([]);
+  });
+});
+
+describe('resolvePedalBaselineY（Ped/✱ を最下音の下へクランプ・Issue #604）', () => {
+  const baseY = 125; // 五線下端 100 + 25
+
+  it('障害物が無ければ従来位置をそのまま返す（1px も動かさない）', () => {
+    expect(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles: [] })).toBe(baseY);
+  });
+
+  it('字面の上端より上で終わる音符（通常音域）では動かさない', () => {
+    // 字面の上端は 125 - 10 = 115。下端 110 の音符は余白 4 を足しても 114 < 115
+    const obstacles = [{ x: 20, y: 80, w: 12, h: 30 }];
+    expect(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles })).toBe(baseY);
+  });
+
+  it('下端が字面の上端ちょうど（かすめる）でも動かさない。1px 食い込めば下げる', () => {
+    // 字面の上端は 115。下端 115 は「接している」だけ
+    expect(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles: [{ x: 20, y: 80, w: 12, h: 35 }] })).toBe(baseY);
+    // 下端 116 は 1px 食い込む → 116 + 余白 + アセント
+    expect(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles: [{ x: 20, y: 80, w: 12, h: 36 }] }))
+      .toBe(116 + PEDAL_CLEARANCE_MARGIN_PX + PEDAL_TEXT_ASCENT_PX);
+  });
+
+  it('区間内に低い音があれば、その下端＋余白が字面の上端になる高さまで下げる', () => {
+    // 下端 140 の和音（深い加線）。字面の上端 = 144、baseline = 144 + 10 = 154
+    const obstacles = [{ x: 20, y: 90, w: 12, h: 50 }];
+    expect(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles }))
+      .toBe(140 + PEDAL_CLEARANCE_MARGIN_PX + PEDAL_TEXT_ASCENT_PX);
+  });
+
+  it('横に重ならない低い音は無視する（区間外の音で下がらない）', () => {
+    const obstacles = [{ x: 200, y: 90, w: 12, h: 50 }];
+    expect(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles })).toBe(baseY);
+  });
+
+  it('複数の低い音があれば最下音を基準にする（ペアの Ped と ✱ が同じ高さになる）', () => {
+    const obstacles = [
+      { x: 15, y: 90, w: 12, h: 40 },  // 下端 130
+      { x: 50, y: 90, w: 12, h: 60 },  // 下端 150（最下）
+    ];
+    expect(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles }))
+      .toBe(150 + PEDAL_CLEARANCE_MARGIN_PX + PEDAL_TEXT_ASCENT_PX);
+  });
+
+  it('span の左右が逆でも同じ結果になる', () => {
+    const obstacles = [{ x: 20, y: 90, w: 12, h: 50 }];
+    expect(resolvePedalBaselineY({ baseY, spanX1: 60, spanX2: 10, obstacles }))
+      .toBe(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles }));
   });
 });

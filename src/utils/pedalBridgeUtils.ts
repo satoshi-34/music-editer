@@ -7,6 +7,8 @@
 // 対応する区間だけ破線で結ぶ。対応が取れないマーク（down だけ、up だけ）は
 // 従来どおり単独表示のままにする（入力途中の状態や後方互換のため）。
 
+import { rectsIntersect, type CollisionRect } from './symbolCollisionUtils';
+
 /** ペアリング対象になる最小限の情報。実際の描画エントリはこれを拡張して使う */
 export interface PedalMarkLike {
   mark: 'down' | 'up';
@@ -91,4 +93,52 @@ export function drawPedalBridgeLine(params: PedalBridgeLineParams): void {
   line.setAttribute('stroke-dasharray', '3,3');
   line.setAttribute('pointer-events', 'none');
   svgRoot.appendChild(line);
+}
+
+/**
+ * Ped/✱ の字面の見積もり（SVG text・baseline 基準）。Ped は 13px italic、✱ は 14px。
+ * 上に約 10px（アセント）・下に約 3px（ディセント）。破線は baseline - 4 に引く。
+ */
+export const PEDAL_TEXT_ASCENT_PX = 10;
+export const PEDAL_TEXT_DESCENT_PX = 3;
+/** 最下音の描画下端と Ped/✱ の字面の上端との間にあける余白（px） */
+export const PEDAL_CLEARANCE_MARGIN_PX = 4;
+
+/**
+ * ペダル記号の baseline Y を「従来の固定位置」と「区間内の最下音の下端＋余白」の
+ * 大きい方へクランプする（Issue #604）。
+ *
+ * - baseY: 従来の固定位置（五線下端 + 25）。低音が無ければ**この値をそのまま返す**
+ *   （低音の無い譜面で 1px も動かさない、が受入条件）
+ * - spanX1..spanX2: Ped〜✱ の横の範囲（字面の半幅込み）。ペア（破線でつなぐ区間）は
+ *   区間全体を1つの箱として見るので、Ped と ✱ と破線が**同じ高さ**にそろう
+ * - obstacles: 同じパートの音符（符頭＋符幹）の描画範囲。強弱記号の回避（#340/#382）と
+ *   同じ noteObstacles を渡す。横に重ならない障害物は無視する
+ *
+ * 強弱記号のような「step ずつ押し出す」探索ではなく一発のクランプにしているのは、
+ * ペダルは五線の**最下段**にしか付かず（下に別の五線が来る #382 の境界が無い）、
+ * 「最下音の下」が唯一の答えだから。
+ */
+export function resolvePedalBaselineY(params: {
+  baseY: number;
+  spanX1: number;
+  spanX2: number;
+  obstacles: CollisionRect[];
+}): number {
+  const { baseY, spanX1, spanX2, obstacles } = params;
+  const x = Math.min(spanX1, spanX2);
+  const w = Math.abs(spanX2 - spanX1);
+  // 字面の箱（従来位置）。障害物とこの箱の横が重なり、かつ障害物の下端が字面の上端より
+  // 下（＋余白）にあるときだけ、その下端まで下げる
+  const textTop = baseY - PEDAL_TEXT_ASCENT_PX;
+  const probe: CollisionRect = { x, y: textTop, w, h: PEDAL_TEXT_ASCENT_PX + PEDAL_TEXT_DESCENT_PX };
+  let requiredTop = textTop;
+  for (const obstacle of obstacles) {
+    // 字面の箱に**実際に食い込む**障害物だけを見る（余白なしの交差判定）。
+    // 下向きの符幹が字面の上端をかすめる程度（通常音域）では動かさない＝低音の無い
+    // 譜面で 1px も変わらない、を守るため。食い込んだら下端＋余白まで下げる
+    if (!rectsIntersect(probe, obstacle, 0)) continue;
+    requiredTop = Math.max(requiredTop, obstacle.y + obstacle.h + PEDAL_CLEARANCE_MARGIN_PX);
+  }
+  return requiredTop === textTop ? baseY : requiredTop + PEDAL_TEXT_ASCENT_PX;
 }

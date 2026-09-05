@@ -404,3 +404,13 @@
 - [ ] 固定テスト: ScorePageLayoutAdjustMode.test.tsx（12件。うち4件は round1 P1・P2 と round2 P2-1・P2-2 の
       再発検出で、修正前のコードに対して実際に落ちることを確認済み）・AppCssSystemSelectPrint.test.ts（印刷と
       `.layout-adjust-mode` の静的チェック）・ScorePageSystemGapDrag.test.tsx（16件・共通フック化の退行検出）
+
+## AB. Ped/✱ と五線下の低音（Issue #604）
+
+> Ped/✱ の縦位置は「五線下端 + 25」と「区間内の最下音の下端 + 余白」の大きい方。
+> 設計の詳細は [`.claude/specs/pedal-bridge/design.md`](../.claude/specs/pedal-bridge/design.md) の追補（2026-09-05）。
+
+- [ ] 月光検聴版（ペダル付き）の 1〜8 小節で、Ped/✱ が左手の和音・加線と重ならない
+- [ ] 同じ区間の Ped と ✱ と破線が**同じ高さ**（片方だけ下がって破線が斜めにならない）
+- [ ] 低音の無い譜面（左手が五線内）では Ped の位置が従来と 1px も変わらない
+- [ ] 右手に低い音があっても左手の Ped は動かない（障害物は同じパートの音符だけ）

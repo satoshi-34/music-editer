@@ -30,7 +30,7 @@ import {
 import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
 import { armClickCycle, planClickCycle, type ClickCycleState } from './clickCycleUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
-import { pairPedalMarks, drawPedalBridgeLine } from '../utils/pedalBridgeUtils';
+import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
 import {
   SCORE_SELECTION_CLEAR_EVENT,
@@ -1556,7 +1556,7 @@ type RenderCollectors = {
    * ペダル記号（五線の最下行より下に表示）。stave も持たせておくのは、down→up の
    * 破線ブリッジが段またぎになるかどうかを松葉（ヘアピン）と同じ基準（五線Yの差）で判定するため
    */
-  pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave }>;
+  pedalMarkEntries: Array<{ anchorX: number; botY: number; mark: 'down' | 'up'; stave: Stave; partIndex: number }>;
   /**
    * 歌詞（データ駆動: 歌詞を持つイベントが属する段の五線上端を基準にする）。
    * StaffCanvas と同じ座標計算・見た目を drawLyricsEntry（lyricsRenderUtils.ts）で共有する
@@ -2313,14 +2313,24 @@ function drawCollectedSymbolEntries(args: {
   // ペダル記号: 五線下端より下（botY + 25）に Ped または ✱ を表示する
   // Ped と ✱ が時系列でペアになる区間は、間を破線でつないで「踏み続けている範囲」を示す
   // （実装の詳細・設計判断は StaffCanvas.tsx の同名処理・pedalBridgeUtils.ts を参照）
+  //
+  // 縦位置は「五線下端 + 25」と「区間内の最下音の下端 + 余白」の大きい方（Issue #604）。
+  // 従来は固定オフセットだけで、左手の深い加線の和音（月光の c#2 など）と重なっていた。
+  // 障害物は強弱記号の回避（#340/#382）と同じ noteObstacles（同じパートぶん）を使い、
+  // ペアは区間全体を1つの箱として見るので Ped・✱・破線が同じ高さにそろう。
+  // 段またぎ（前段の Ped と次段の ✱）は、それぞれの段の範囲で別々に求める
   const pedalTextY = (botY: number) => botY + 25;
   const PED_TEXT_HALF_WIDTH = 12;
   const AST_TEXT_HALF_WIDTH = 6;
-  const drawPedalText = (anchorX: number, botY: number, mark: 'down' | 'up') => {
+  const pedalObstaclesFor = (partIndex: number) =>
+    noteObstacles.filter((obstacle) => obstacle.partIndex === partIndex);
+  const pedalBaselineFor = (entry: { botY: number; partIndex: number }, spanX1: number, spanX2: number) =>
+    resolvePedalBaselineY({ baseY: pedalTextY(entry.botY), spanX1, spanX2, obstacles: pedalObstaclesFor(entry.partIndex) });
+  const drawPedalText = (anchorX: number, baselineY: number, mark: 'down' | 'up') => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     el.textContent = mark === 'down' ? 'Ped' : '✱';
     el.setAttribute('x', String(anchorX));
-    el.setAttribute('y', String(pedalTextY(botY)));
+    el.setAttribute('y', String(baselineY));
     el.setAttribute('text-anchor', 'middle');
     el.setAttribute('fill', '#1e293b');
     el.setAttribute('font-family', SCORE_TEXT_FONT_FAMILY);
@@ -2331,39 +2341,48 @@ function drawCollectedSymbolEntries(args: {
   };
   pairPedalMarks(pedalMarkEntries).forEach((result) => {
     if (result.kind === 'down') {
-      drawPedalText(result.down.anchorX, result.down.botY, 'down');
+      const { down } = result;
+      drawPedalText(down.anchorX, pedalBaselineFor(down, down.anchorX - PED_TEXT_HALF_WIDTH, down.anchorX + PED_TEXT_HALF_WIDTH), 'down');
       return;
     }
     if (result.kind === 'up') {
-      drawPedalText(result.up.anchorX, result.up.botY, 'up');
+      const { up } = result;
+      drawPedalText(up.anchorX, pedalBaselineFor(up, up.anchorX - AST_TEXT_HALF_WIDTH, up.anchorX + AST_TEXT_HALF_WIDTH), 'up');
       return;
     }
     const { down, up } = result;
-    drawPedalText(down.anchorX, down.botY, 'down');
-    drawPedalText(up.anchorX, up.botY, 'up');
     const crossSystem = Math.abs(down.stave.getYForLine(2) - up.stave.getYForLine(2)) > 30
       || up.anchorX < down.anchorX;
     if (!crossSystem) {
+      // 区間全体（Ped の左端〜✱ の右端）で1つの高さを決める（仕様2）
+      const baselineY = pedalBaselineFor(down, down.anchorX - PED_TEXT_HALF_WIDTH, up.anchorX + AST_TEXT_HALF_WIDTH);
+      drawPedalText(down.anchorX, baselineY, 'down');
+      drawPedalText(up.anchorX, baselineY, 'up');
       drawPedalBridgeLine({
         svgRoot: svgRoot as unknown as SVGElement,
         x1: down.anchorX + PED_TEXT_HALF_WIDTH,
         x2: up.anchorX - AST_TEXT_HALF_WIDTH,
-        y: pedalTextY(down.botY) - 4,
+        y: baselineY - 4,
       });
     } else {
+      // 段またぎ: 前段は Ped〜段の右端、次段は段の左端〜✱ をそれぞれの範囲で求める（仕様3）
       const edgeX1 = down.stave.getX() + down.stave.getWidth();
       const edgeX2 = up.stave.getX();
+      const downBaselineY = pedalBaselineFor(down, down.anchorX - PED_TEXT_HALF_WIDTH, edgeX1);
+      const upBaselineY = pedalBaselineFor(up, edgeX2, up.anchorX + AST_TEXT_HALF_WIDTH);
+      drawPedalText(down.anchorX, downBaselineY, 'down');
+      drawPedalText(up.anchorX, upBaselineY, 'up');
       drawPedalBridgeLine({
         svgRoot: svgRoot as unknown as SVGElement,
         x1: down.anchorX + PED_TEXT_HALF_WIDTH,
         x2: edgeX1,
-        y: pedalTextY(down.botY) - 4,
+        y: downBaselineY - 4,
       });
       drawPedalBridgeLine({
         svgRoot: svgRoot as unknown as SVGElement,
         x1: edgeX2,
         x2: up.anchorX - AST_TEXT_HALF_WIDTH,
-        y: pedalTextY(up.botY) - 4,
+        y: upBaselineY - 4,
       });
     }
   });
@@ -8070,6 +8089,8 @@ export default function PianoSystemCanvas({
                     botY: stave.getYForLine(4),
                     mark: ev.pedalMark,
                     stave,
+                    // 低音との衝突回避（#604）で「このパートの音符」だけを障害物にするための帰属
+                    partIndex: pi,
                   });
                 }
                 if (!ev.isRest && ev.fingering) {
