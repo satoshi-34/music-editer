@@ -83,6 +83,40 @@ describe('ホーム画面（Issue #500）', () => {
     expect(props.onSelectWork).toHaveBeenCalledTimes(1);
   });
 
+  it('最近使ったファイルは1行＝1作品で、長い名前も切らずに読める（Issue #608）', () => {
+    // 運用者QAで「区別できない」と言われた実物と同じ長さ・同じ書き出しの2件
+    const longWorks: WorkSummary[] = [
+      { id: 'w1', title: '月光 第1楽章（全曲・ペダル校訂つき・検聴版）', updatedAt: new Date(2026, 8, 3, 21, 5).getTime(), createdAt: 1 },
+      { id: 'w2', title: '月光 第1楽章（全曲・ペダル校訂なし・下書き）', updatedAt: new Date(2026, 8, 2, 8, 30).getTime(), createdAt: 1 },
+    ];
+    renderHome({ works: longWorks });
+
+    const list = document.querySelector('.home-work-list')!;
+    // 1作品＝1行（li）で縦に積む
+    const items = [...list.children];
+    expect(items.map(item => item.tagName)).toEqual(['LI', 'LI']);
+
+    for (const work of longWorks) {
+      const row = screen.getByTestId(`home-work-${work.id}`);
+      expect(row.parentElement).toBe(items.find(item => item.contains(row)));
+      // 行の中身は「♬ / 作品名 / 更新日時」の3つがこの順
+      const parts = [...row.children].map(child => child.className);
+      expect(parts).toEqual(['home-work-icon', 'home-work-title', 'home-updated-at']);
+      // 名前は切り詰めた文字列ではなく全文が入っている（見た目の省略はCSSに任せる）
+      expect(row.querySelector('.home-work-title')!.textContent).toBe(work.title);
+      // 行の幅に収まらないほど長いときのために、全文は title 属性でも読める
+      expect(row.getAttribute('title')).toBe(work.title);
+    }
+
+    // 末尾が違うだけの2件が、名前だけで区別できる（切り詰めで同じ文字列にならない）
+    const titles = [...list.querySelectorAll('.home-work-title')].map(el => el.textContent);
+    expect(new Set(titles).size).toBe(2);
+
+    // 🔒 端末内保存の注記は、これまでどおり一覧の下に残る（#570・#608 仕様4）
+    const note = screen.getByTestId('home-storage-location-note');
+    expect(list.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('作品が1つも無いときも、レイアウトは崩れず次にやることを言葉で示す（#528 受入条件3）', () => {
     renderHome({ works: [] });
     expect(document.querySelector('.home-work-list')).toBeNull();
