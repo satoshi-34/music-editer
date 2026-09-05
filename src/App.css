@@ -1823,10 +1823,12 @@ button.ghost.active:hover:not(:disabled) {
 .text-format-context-panel__field input[type="range"] { width: 84px; }
 .text-format-context-panel__value { font-variant-numeric: tabular-nums; min-width: 34px; }
 /* 画面専用の操作パネルなので、印刷・PDF には出さない（受入条件「印刷・書き出しへの影響なし」）。
+   印刷側の指定は下の既存の @media print ブロックの中に置いてある。
+   **新しい @media print ブロックを作ってはいけない**: App.css の印刷指定を
+   静的に検査しているテスト（AppCssUiVariantBadgePrint.test.ts 等）は
+   「最初に見つかった @media print の中身」だけを見るため、前に別ブロックを足すと
+   本来の印刷ブロックが検査されなくなる。
    印刷プレビュー（画面上のモーダル）でも同じ理由で隠す */
-@media print {
-  .text-format-context-panel { display: none !important; }
-}
 .print-preview .text-format-context-panel { display: none; }
 /* ── アプリ内ヘルプ（Issue #341） ─────────────────────────────
    ヘッダー右端の「❓ ヘルプ」から開くモーダル。dropdown-overlay（既存）で背景を閉じ、
@@ -2612,6 +2614,8 @@ button.ghost.active:hover:not(:disabled) {
      （#203 symbol-hit-region / #268 vf-playback-band / 2026-08-26 vf-inactive-voice-note-hit）。
      新しい画面専用要素には vf-screen-only を必ず付けること */
   .print-page svg .vf-screen-only { display: none !important; }
+  /* タイトル欄の書式コンテキストUI（#576）も画面専用。紙・PDF には出さない */
+  .text-format-context-panel { display: none !important; }
   /* 強弱記号・運指番号・リハーサルマーク・ペダル・オッターバなどのテキストは
      ダークグレー系（#1f2937 等）で描かれているため、印刷では純粋な黒に統一する */
   .print-page svg text { fill: var(--print-ink) !important; }
