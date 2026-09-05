@@ -16,6 +16,7 @@ import {
   getMasterVolumeGain,
   type PlaybackSoundProfile
 } from './playbackSettings';
+import { createVelocityFilter } from './velocityTimbre';
 import { applySwingToTiming } from '../utils/swingUtils';
 import { respellDoubleAccidentalKey } from '../utils/noteMidiUtils';
 import { resolveReleaseTailSeconds } from './releaseTail';
@@ -659,6 +660,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
     try {
       if (this.shouldUseSafariSafeVoice()) {
+        // Safari の簡易経路には挟まない（round1 P2: 「1 osc + 1 gain に絞る」という経路の存在理由と
+        // 衝突する。Safari では音量差だけになるが、鳴らないより優先）
         this.playSafariSafeVoice(context, frequency, duration, startTime, tailOverride, instrument);
         return;
       }
@@ -672,7 +675,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
         startTime,
         instrumentConfig
       );
-      const oscillatorId = this.registerOscillators(oscillators, gainNode, instrumentConfig, startTime);
+      const oscillatorId = this.registerOscillators(oscillators, gainNode, instrumentConfig, startTime, velocity);
       
       // 未来の startTime を基準に、同じエンベロープを予約する。
       const adjustedAttack = this.getAdjustedAttack(instrumentConfig.attack);
@@ -801,6 +804,27 @@ export class SimpleAudioEngine implements PlaybackEngine {
   setSwingEnabled(enabled: boolean): void {
     this.swingEnabled = enabled;
     console.log('[SimpleAudioEngine] スウィング再生を切り替えました:', enabled);
+  }
+
+  /** 強弱を音色にも効かせる（#670）。既定 ON */
+  private velocityTimbreEnabled = true;
+  setVelocityTimbreEnabled(enabled: boolean): void {
+    this.velocityTimbreEnabled = enabled;
+  }
+
+  /**
+   * 音ごとのゲインを出力へつなぐ。強弱の音色変化が ON なら、間に velocity で決めた
+   * ローパスを 1 つ挟む（弱いほど高域を削る・#670）。フィルタを作れない context では素通し
+   */
+  private connectVoiceToOutput(context: AudioContext, gainNode: GainNode, velocity: number): void {
+    const output = this.getOutputNode(context);
+    const filter = this.velocityTimbreEnabled ? createVelocityFilter(context, velocity) : null;
+    if (filter) {
+      gainNode.connect(filter);
+      filter.connect(output);
+    } else {
+      gainNode.connect(output);
+    }
   }
 
   /**
@@ -1237,7 +1261,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
     oscillators: OscillatorNode[],
     gainNode: GainNode,
     instrumentConfig: SimpleInstrumentConfig,
-    startTime: number
+    startTime: number,
+    /** 譜面再生の強弱（#670）。省略（確認音・テスト音）は素通し＝従来どおり */
+    velocity?: number,
   ): string {
     const oscillatorId = `osc-${this.oscillatorCounter++}`;
 
@@ -1251,7 +1277,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
       oscillator.connect(layerGain);
       layerGain.connect(gainNode);
     });
-    gainNode.connect(this.getOutputNode(this.context!));
+    if (velocity === undefined) gainNode.connect(this.getOutputNode(this.context!));
+    else this.connectVoiceToOutput(this.context!, gainNode, velocity);
     this.oscillators.set(oscillatorId, { oscillators, gainNode });
 
     return oscillatorId;

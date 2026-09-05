@@ -3,6 +3,7 @@ import { scheduleLeadSeconds } from './scheduleLead';
 import { limitPolyphony, maxPolyphony, type VoiceSpan } from './polyphonyLimit';
 import { createWindowedScheduler, lookaheadSeconds, type WindowedScheduler } from './scheduleWindow';
 import type { Player as SoundFontPlayer } from 'soundfont-player';
+import { createVelocityFilter } from './velocityTimbre';
 
 import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
 import type { PlaybackSoundProfile } from './playbackSettings';
@@ -365,7 +366,8 @@ export class SoundFontEngine implements PlaybackEngine {
         const occupancy = voice.endTime - voice.startTime;
         const duration = Math.min(voice.duration, occupancy);
         const release = Math.max(0, occupancy - duration);
-        voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity, release));
+        const node = voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity, release));
+        this.applyVelocityTimbre(context, voice.player, node, voice.velocity);
       },
       onError: (error) => {
         console.warn('[SoundFontEngine] 窓の予約に失敗したため以後の予約を止めます:', error);
@@ -464,6 +466,48 @@ export class SoundFontEngine implements PlaybackEngine {
   setSwingEnabled(enabled: boolean): void {
     this.swingEnabled = enabled;
     console.log('[SoundFontEngine] スウィング再生を切り替えました:', enabled);
+  }
+
+  /** 強弱を音色にも効かせる（#670）。既定 ON */
+  private velocityTimbreEnabled = true;
+  setVelocityTimbreEnabled(enabled: boolean): void {
+    this.velocityTimbreEnabled = enabled;
+  }
+
+  /**
+   * soundfont-player の play() が返す音ノード（GainNode）を、player の出力ではなく
+   * velocity で決めたローパス経由でマスターゲインへつなぎ直す（#670）。
+   * play() は内部で node→out→destination と配線してしまうので、いったん外してから挟む。
+   * フィルタを作れない context・想定外のノードでは何もしない（従来どおり鳴る）
+   */
+  private applyVelocityTimbre(context: AudioContext, player: SoundFontPlayer, node: unknown, velocity: number): void {
+    if (!this.velocityTimbreEnabled) return;
+    const audioNode = node as { connect?: (dest: AudioNode) => unknown; disconnect?: (dest?: AudioNode) => void } | null;
+    if (!audioNode || typeof audioNode.connect !== 'function' || typeof audioNode.disconnect !== 'function') return;
+    // sample-player は player.out（出力の GainNode）を公開している。外すときはそこだけを外し、
+    // 失敗したらそこへ戻す（round1 P2: 外した後に失敗すると無音になる）。
+    // player.out が無い想定外の player では配線を触らない（round2 P2-1: 引数なしの disconnect は
+    // 挟んだばかりのフィルタへの接続も切ってしまい無音になる）→ 従来どおり鳴らす
+    const playerOut = (player as unknown as { out?: AudioNode }).out;
+    if (!playerOut) return;
+    const filter = createVelocityFilter(context, velocity);
+    if (!filter) return;
+    try {
+      // 先にフィルタ→マスターを結んでから音ノードをフィルタへ。最後に player の出力から外す
+      filter.connect(this.getOutputNode(context));
+      audioNode.connect(filter);
+      audioNode.disconnect(playerOut);
+    } catch (error) {
+      console.warn('[SoundFontEngine] 強弱の音色変化を配線できませんでした（素通しで鳴らします）:', error);
+      try {
+        // 途中まで進んでいた配線を戻す: フィルタを外し、player の出力へつなぎ直す
+        filter.disconnect?.();
+        audioNode.disconnect();
+        audioNode.connect(playerOut);
+      } catch {
+        // ここで失敗したらその音だけ鳴らない。再生全体は止めない（#358 の教訓）
+      }
+    }
   }
 
   /**

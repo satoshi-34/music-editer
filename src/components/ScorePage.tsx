@@ -1157,6 +1157,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     audioEngine.setInstrument(currentInstrument);
     audioEngine.setSoundProfile(soundRuntimeSettings.profile);
     audioEngine.setSwingEnabled(soundRuntimeSettings.swingEnabled);
+    audioEngine.setVelocityTimbreEnabled?.(soundRuntimeSettings.velocityTimbreEnabled);
     await audioEngine.initialize();
     setActiveSoundEngineMode(soundRuntimeSettings.engineMode);
     setIsTemporaryBuiltInFallback(false);
@@ -1175,6 +1176,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     fallbackEngine.setInstrument(currentInstrument);
     fallbackEngine.setSoundProfile(soundRuntimeSettings.profile);
     fallbackEngine.setSwingEnabled(soundRuntimeSettings.swingEnabled);
+    fallbackEngine.setVelocityTimbreEnabled?.(soundRuntimeSettings.velocityTimbreEnabled);
     await fallbackEngine.initialize();
     audioEngineRef.current = fallbackEngine;
     setActiveSoundEngineMode('built-in');
@@ -1218,6 +1220,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     localStorage.setItem(PLAYBACK_RUNTIME_SETTINGS_STORAGE_KEY, JSON.stringify(soundRuntimeSettings));
     getAudioEngine().setSoundProfile(soundRuntimeSettings.profile);
     getAudioEngine().setSwingEnabled(soundRuntimeSettings.swingEnabled);
+    getAudioEngine().setVelocityTimbreEnabled?.(soundRuntimeSettings.velocityTimbreEnabled);
   }, [getAudioEngine, soundRuntimeSettings]);
 
   const clearPositionTimers = useCallback(() => {
@@ -2384,6 +2387,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
 
   const handleSwingEnabledChange = useCallback((enabled: boolean) => {
     setSoundRuntimeSettings(prev => ({ ...prev, swingEnabled: enabled }));
+  }, []);
+  const handleVelocityTimbreEnabledChange = useCallback((enabled: boolean) => {
+    setSoundRuntimeSettings(prev => ({ ...prev, velocityTimbreEnabled: enabled }));
   }, []);
 
   const handleKeySignatureChange = useCallback((nextKeySignature: KeySignature) => {
@@ -7361,6 +7367,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 onSoundProfileChange={handleSoundProfileChange}
                 onPreviewAccidentalOnApplyChange={handlePreviewAccidentalOnApplyChange}
                 onSwingEnabledChange={handleSwingEnabledChange}
+                onVelocityTimbreEnabledChange={handleVelocityTimbreEnabledChange}
               />
             </div>
           )}
