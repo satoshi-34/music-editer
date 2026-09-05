@@ -605,3 +605,19 @@ A再生→停止→B切替→即再生 / A再生中にB切替（stopAll） / A�
 
 **注意**: 復元中の状態は state の flush が最初の `await` まで遅れるが、ガードは ref で
 同期的に立てているので、`await` 前に届いた再生要求も止まる。
+
+### Codex round 1 対応（2026-09-05）
+
+- **P1 再生開始要求の失効（`playRequestSeqRef`）**: `handlePlay` は音源の準備（`initialize`）と
+  予約（`playParts`）を await する。その間に切替が起きても `playbackState` はまだ stopped なので
+  `beginWorkRestore` の `handleStop` に掛からず、待ちが明けた要求が**前の作品**を予約して
+  「再生中」に戻していた。開始時に世代を取り（`playSeq`）、`beginWorkRestore` と `handleStop` で
+  世代を進め、await のあと（`runWithPlaybackFallback` の入口・`playParts` 後・代表音の後）で
+  世代が変わっていたら、予約済みなら `stopAll` して何もせず抜ける
+- **P1 取り込み経路**: JSON ファイル（`handleImportFile`）と MusicXML/PDF（`applyImportedMusicXmlBytes`）
+  は `applyLoadedScoreData` を通らない別実装なので、それぞれ解析が済んだ直後から
+  `beginWorkRestore()` … `finally { endWorkRestore() }` で包んだ（解析に失敗したときは
+  再生を止めない）。共通の復元適用経路への集約は別 Issue 候補（3か所の重複は以前からの負債）
+- **P2 テスト**: 無効なボタンの click は React に届かないため、復元中の要求は小節番号指定の
+  再生（#545・無効化していない入口）から送る形に直した。準備待ち／予約待ちの途中で切り替える
+  2件を deferred Promise で追加（計5件）
