@@ -1,7 +1,7 @@
 // src/hooks/useValueDragSession.ts
 // 「譜面の上の掴みしろを引っぱって数値を変える」ドラッグの共通部分（Issue #571）。
 //
-// 段の境界帯（SystemGapDragHandle・#523）と、段の右下角のリサイズハンドル
+// 段の境界帯（LayoutGapDragBand・#523）と、段の右下角のリサイズハンドル
 // （NotationSizeDragHandle・#571）は、変える値が違うだけで手順はまったく同じ:
 //
 //   掴む（pointerdown） → 遊び(3px)を超えたらドラッグ開始 → 値が実際に変わる最初の1回で
