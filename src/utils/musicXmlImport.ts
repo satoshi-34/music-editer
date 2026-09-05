@@ -1043,8 +1043,18 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   // <movement-title>（単一楽章の題）へフォールバックする（Issue #502）。
   // Finale は単曲書き出しで movement-title 側だけを使うため、work-title のみを
   // 見ると Finale 持ち込み（#419 系）でタイトルが空になる
+  // 複数行タイトル（Issue #576 / #636）は <credit> の credit-words が1行につき1つ。
+  // work-title は1本の文字列なので、行が分かれている情報は credit 側にしかない。
+  // credit-type が title のものだけを見る（作曲者・著作権表示にも credit を使うため）
+  const titleCredit = Array.from(doc.querySelectorAll('credit')).find((credit) => (
+    credit.querySelector('credit-type')?.textContent?.trim() === 'title'
+  ));
+  const titleCreditLines = titleCredit
+    ? Array.from(titleCredit.querySelectorAll('credit-words')).map((w) => w.textContent ?? '')
+    : [];
   const title =
-    doc.querySelector('work-title')?.textContent
+    (titleCreditLines.length > 1 ? titleCreditLines.join('\n') : null)
+    ?? doc.querySelector('work-title')?.textContent
     ?? doc.querySelector('movement-title')?.textContent
     ?? '';
   const composer = doc.querySelector('creator[type="composer"]')?.textContent ?? '';

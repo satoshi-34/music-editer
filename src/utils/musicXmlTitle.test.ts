@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { parseMusicXml } from './musicXmlImport';
+import { scoreToMusicXml } from './musicXmlExport';
 
 /** 最小の score-partwise を組み立てる（head にタイトル系タグを差し込む） */
 function xmlWith(headTags: string): string {
@@ -38,5 +39,33 @@ describe('parseMusicXml のタイトル解決（#502）', () => {
   it('どちらも無ければ空タイトル', () => {
     const data = parseMusicXml(xmlWith(''));
     expect(data.metadata.title).toBe('');
+  });
+});
+
+// ── 複数行タイトルの往復（Issue #576 / #636） ─────────────────────────
+// タイトル編集ダイアログで Enter を押すと改行が入る。MusicXML は work-title が
+// 「1本の文字列」なので、行が分かれている情報は <credit> の credit-words にしか残らない。
+describe('複数行タイトルの MusicXML 往復（#576 / #636）', () => {
+  it('2行のタイトルが書き出し→読み込みで改行ごと保たれる', () => {
+    const source = parseMusicXml(xmlWith('<work><work-title>もとの題</work-title></work>'));
+    const twoLine = {
+      ...source,
+      metadata: { ...source.metadata, title: '月光 第1楽章\n（ペダル校訂つき）' },
+    };
+
+    const xml = scoreToMusicXml(twoLine);
+    // 標準の <credit> にも1行ずつ出す（他アプリが紙面の見た目を復元できるように）
+    expect(xml).toContain('<credit-words>月光 第1楽章</credit-words><credit-words>（ペダル校訂つき）</credit-words>');
+    // work-title 側は数値文字参照で改行を保つ（生の改行は読み手の空白の扱いで潰れ得る）
+    expect(xml).toContain('&#10;');
+
+    expect(parseMusicXml(xml).metadata.title).toBe('月光 第1楽章\n（ペダル校訂つき）');
+  });
+
+  it('1行のタイトルでは credit を足さない（従来の出力を変えない）', () => {
+    const source = parseMusicXml(xmlWith('<work><work-title>ふつうの題</work-title></work>'));
+    const xml = scoreToMusicXml(source);
+    expect(xml).not.toContain('<credit');
+    expect(parseMusicXml(xml).metadata.title).toBe('ふつうの題');
   });
 });

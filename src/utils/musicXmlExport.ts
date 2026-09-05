@@ -675,11 +675,22 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
 
   const title = metadata.title || '無題';
   const composer = metadata.composer || '';
+  // タイトルは複数行にできる（Issue #576 / #636）。MusicXML の要素本文に生の改行を置くと
+  // 読み手の空白の扱い次第で潰れる恐れがあるため、改行は数値文字参照（&#10;）で書く。
+  // これは XML の仕様上かならず改行1文字として読み戻される。
+  const titleXmlText = escXml(title).replace(/\n/g, '&#10;');
+  // あわせて MusicXML 標準の <credit> にも1行ずつ出す。work-title は「1本の文字列」なので、
+  // 他アプリ（Finale/MuseScore 等）はそこから行分けを復元できない。紙面上の見た目を持つのは
+  // credit のほうなので、2行以上のときだけ credit-words を行数ぶん並べる
+  // （1行のときは出力を従来と1バイトも変えないため、何も足さない）。
+  const titleCreditXml = title.includes('\n')
+    ? `\n  <credit page="1"><credit-type>title</credit-type>${title.split('\n').map((line) => `<credit-words>${escXml(line)}</credit-words>`).join('')}</credit>`
+    : '';
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
 <score-partwise version="3.1">
-  <work><work-title>${escXml(title)}</work-title></work>
+  <work><work-title>${titleXmlText}</work-title></work>${titleCreditXml}
   <identification>
     <creator type="composer">${escXml(composer)}</creator>
     <encoding><software>my-music-app</software></encoding>${(() => {
