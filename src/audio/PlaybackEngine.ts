@@ -36,6 +36,17 @@ export interface PlaybackMeasureEvent {
    */
   tieExtendBeatsByKey?: Record<string, number>;
   /**
+   * ペダル（ダンパー）を踏んでいる間、この音の鳴り終わりを何拍ぶん先へ延ばすか。
+   * タイと同じくキー（"e/4" 形式）ごとに持つ（和音の一部だけが先に打ち直される場合があるため）。
+   *
+   * タイ（tieExtendBeatsByKey）との違いは合成のしかた:
+   * タイは「1つの音として伸ばす」ので durationScale（スタッカート等）も掛かるが、
+   * ペダルは「ダンパーが上がっているから響きが残る」ので、記譜どおりの鳴り終わりと
+   * ペダル解除位置の**遅い方**まで鳴らす（スタッカートでもペダル中は響く）。
+   * 開始時刻・次の音までの間隔は変えない点は durationScale / タイと同じ。
+   */
+  pedalExtendBeatsByKey?: Record<string, number>;
+  /**
    * タイの継続音（弧の後ろ側）として、発音（アタック）を止めるキー。
    * 開始音を伸ばして鳴らしているので、ここで鳴らすと同じ音が2回聞こえてしまう。
    * 音符自体は時間を占め続けるので、次の音の位置は変わらない。
@@ -74,10 +85,21 @@ export interface PlaybackPart {
  * ScorePage から見た「再生エンジンの共通窓口」。
  * 内蔵音源でも SoundFont でも、画面側は同じメソッド名で扱えるようにする。
  */
+/**
+ * playParts が返す「実音の起点」。エンジンが `currentTime + 先読みリード` を確定した瞬間の
+ * Date.now()（#610 round2 P1）。SoundFont は音源ロードを待ってから起点を決めるため、
+ * 画面側が呼び出し時刻を起点にすると、ロード時間ぶんハイライトと終了が実音より早まる。
+ * 画面側はこの値からの経過時間だけを「予約に使った実時間」として差し引く。
+ */
+export interface PlaybackScheduleInfo {
+  scheduledAtMs: number;
+}
+
 export interface PlaybackEngine {
   initialize(): Promise<void>;
   playNoteByName(note: string, duration?: number): Promise<void>;
-  playParts(parts: PlaybackPart[], bpm?: number): Promise<void>;
+  /** 戻り値は実音の起点（PlaybackScheduleInfo）。テストの偽エンジンは省略してよい */
+  playParts(parts: PlaybackPart[], bpm?: number): Promise<PlaybackScheduleInfo | void>;
   suspend(): Promise<void>;
   resume(): Promise<void>;
   stopAll(): void;
@@ -96,4 +118,9 @@ export interface PlaybackEngine {
    * currentTime の進行などを観測するために使う。再生制御には使わないこと。
    */
   getAudioContext?(): AudioContext | null;
+  /**
+   * 先読み窓（#622）の後続の予約が失敗したときの通知。playParts が返った後に起きる失敗は
+   * 戻り値では伝えられないので、画面側はこれで停止・通知する。戻り値は解除関数
+   */
+  onSchedulingFailure?(listener: (error: unknown) => void): () => void;
 }

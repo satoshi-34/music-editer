@@ -32,6 +32,28 @@
   min-width: min-content;
 }
 
+/* 即時ツールチップ（Issue #633）。出す仕組みは components/InstantTooltip.tsx（アプリに1つ、
+   data-tip を持つ要素のホバー／フォーカスを委譲で拾って画面座標に固定表示）。
+   CSS の ::after で作らないのは、ツールバーの各段（.toolbar-panel）が横スクロール用に
+   overflow:auto で、その中の吹き出しは外へ出られず切れるため。 */
+.instant-tooltip {
+  position: fixed;
+  z-index: 60;                 /* ツールバー（20）やプルダウン（50）より手前 */
+  width: max-content;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  color: #fff;
+  background: #1f2937f0;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  pointer-events: none;        /* 吹き出しの上にマウスが乗っても消えない／クリックを奪わない */
+}
+
 /* ヘッダー（ツールバー） */
 .toolbar {
   position: fixed;            /* スクロールしても常に上に固定 */
@@ -906,6 +928,20 @@ button.ghost.active:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
+/* 3区画（トランスポート / テンポ・位置 / 音）のまとまり（Issue #562）。
+   区画ごとに薄い枠で囲って、「どこまでが1つのまとまりか」を目で分かるようにする。
+   区画の間の縦線ではなく枠にしているのは、ツールバーの幅が足りないと
+   区画が折り返して縦に積まれるため（縦線だと積まれた瞬間に区切りに見えなくなる）。 */
+.playback-section {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
 /* 再生制御ボタン */
 .playback-buttons {
   display: flex;
@@ -1101,6 +1137,29 @@ button.ghost.active:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+/* 小節番号を指定した途中再生（Issue #545）。位置表示のとなりに並べる */
+.playback-start-measure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #495057;
+}
+
+.playback-start-measure-label {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.playback-start-measure-input {
+  width: 64px;
+  padding: 4px 6px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: center;
+}
+
 /* レスポンシブ対応 */
 @media (max-width: 768px) {
   .toolbar {
@@ -1116,6 +1175,12 @@ button.ghost.active:hover:not(:disabled) {
   .playback-buttons {
     justify-content: center;
   }
+
+  /* 狭い画面では区画の中身も縦に積む（#562） */
+  .playback-section {
+    flex-direction: column;
+    align-items: stretch;
+  }
   
   .tempo-controls,
   .instrument-controls {
@@ -1125,6 +1190,10 @@ button.ghost.active:hover:not(:disabled) {
   .position-display {
     justify-content: center;
     margin-left: 0;
+  }
+
+  .playback-start-measure {
+    justify-content: center;
   }
 
   .toolbar-score-controls,
@@ -1902,6 +1971,140 @@ button.ghost.active:hover:not(:disabled) {
   border-radius: 4px;
 }
 
+/* 段の上端＝上の段との境界帯（Issue #523 = #450 の子2・SystemGapDragHandle.tsx）。
+   選択中の段にだけ出す「上下ドラッグの掴みしろ」で、掴んで動かすとその境界そのもの
+   （上の段との距離＝ラッパーの margin-top）が指について変わる。
+   下端ではなく上端へ置くのは「掴んだ境界が動く」ようにするため（round1 P1）。段の間隔は
+   後続の段の margin-top として入る値なので、下端を掴んで自分の margin-top を動かすと、
+   掴んだ境界とは別の場所（自分より上のすき間）が動いてしまう。
+   左右端の選択判定（.system-select-edge）とは置き場所（左右の外側 / 上端）も
+   カーソル（pointer / row-resize）も分けてあるので、取り違えて掴むことがない（受入条件4）。
+   段と段のすき間へ出すため、五線（SVG）の上には重ならず、音符のクリックを奪わない。
+   touch-action: none は、タッチのドラッグをブラウザのスクロールに取られないようにするため
+   （#536 で確立した pointer 規約）。 */
+.system-gap-drag-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 14px;
+  z-index: 4;
+  cursor: row-resize;
+  touch-action: none;
+}
+/* 普段は透明。カーソルを乗せたとき・掴んでいる間だけ細い線を出して掴める場所を知らせる */
+.system-gap-drag-handle::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 6px;
+  height: 2px;
+  background: rgba(147, 197, 253, 0.75);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.system-gap-drag-handle:hover::before,
+.system-gap-drag-handle--grabbing::before {
+  opacity: 1;
+}
+/* 整えるモード（Issue #571）
+   ------------------------------------------------------------------
+   レイアウトタブを開いている間だけ .score-area へ .layout-adjust-mode が付く。
+   このモードでは「段を選ばないと掴みしろが一切見えない」のをやめ、調整の入口を
+   出しっぱなしにする（段の間隔ドラッグ #539 と段あたり小節数の ◀▶ を、運用者自身が
+   2回続けて発見できなかったため。運用者QA 2026-09-02 / 2026-09-03）。
+   当たり判定は3層に分けてある: 帯＝間隔 / 面＝段の選択 / 角＝音符の大きさ（全体）。
+   他のタブではこのクラスが付かないので、譜面を書いている間の見た目は一切変わらない。 */
+
+/* 五線の面（段の選択）。整えるモード中だけ差し込まれる透明なボタンで、
+   五線そのものをクリックすると段が選ばれる。左右端の帯（34px）より当てやすい。
+   z-index は帯（4）・角（5）・パネル（30）より下に置き、掴みしろを覆わないようにする。 */
+.system-select-surface {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+/* 「ここを押すと段を選べる」ことをカーソルを乗せたときだけ薄く知らせる
+   （常時色を敷くと譜面が読みづらくなる） */
+.system-select-surface:hover,
+.system-select-surface:focus-visible {
+  background: rgba(147, 197, 253, 0.10);
+  border-radius: 4px;
+}
+/* 整えるモード中は、段の左右端の掴みしろ（普段は完全に透明）を薄く見せる。
+   「段は選べるものだ」と気づくための表示なので、譜面の邪魔にならない薄さにとどめる */
+.layout-adjust-mode .system-select-edge {
+  background: rgba(147, 197, 253, 0.12);
+  border-radius: 4px;
+}
+/* 段の上端の境界帯も同じ理由で薄く出す。掴んだとき・カーソルを乗せたときは
+   従来どおり濃く出る（下の :hover / --grabbing の指定が後から効く） */
+.layout-adjust-mode .system-gap-drag-handle::before {
+  opacity: 0.45;
+}
+
+/* 選択中の段の右下角のリサイズハンドル（◢・Issue #571 の運用者裁定）。
+   斜めにドラッグすると譜面全体の「音符の大きさ」が変わる。
+   角に置いているが効くのは全体なので、ドラッグ中の吹き出しで「（全体）」と明示する
+   （見た目の置き場所から「この段だけ」と誤解されるのを防ぐ・NotationSizeDragHandle.tsx）。
+   touch-action: none は #536 の pointer 規約（タッチのドラッグをスクロールに取られない）。 */
+.notation-size-drag-handle {
+  position: absolute;
+  right: -14px;
+  bottom: -14px;
+  width: 18px;
+  height: 18px;
+  z-index: 5;
+  cursor: nwse-resize;
+  touch-action: none;
+  /* ◢ の三角を CSS だけで描く（画像・フォントに依存しないため） */
+  background: linear-gradient(135deg, transparent 55%, rgba(147, 197, 253, 0.9) 55%);
+  border-radius: 0 0 4px 0;
+}
+.notation-size-drag-handle:hover,
+.notation-size-drag-handle--grabbing {
+  background: linear-gradient(135deg, transparent 55%, rgba(59, 130, 246, 0.95) 55%);
+}
+/* ドラッグ中に出す現在値。ScorePage が画面へ直に1つだけ出す（Issue #571 round1 P1）。
+   ◢ の中に置くと、大きさを変えた拍子に段割りが変わって◢ごと消えたときに
+   吹き出しまで一緒に消えてしまうため、譜面ではなく画面（position: fixed）を基準にする。
+   カーソルの下敷きにならないよう当たり判定は持たせない */
+.notation-size-drag-value {
+  position: fixed;
+  z-index: 1000;
+  padding: 2px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: #374151;
+  background: #fff;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+/* ドラッグ中にカーソルの近くへ出す現在値（#318「何が変わっているか見せる」）。
+   カーソルの下敷きにならないよう、当たり判定は持たせない（pointer-events: none） */
+.system-gap-drag-value {
+  position: absolute;
+  bottom: 16px;
+  z-index: 31;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: #374151;
+  background: #fff;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* 選択中の段の横に出るレイアウト調整パネル（SystemLayoutPanel.tsx）。
    段の下端の外側（段と段のすき間）へ、クリックされた端の側に寄せて出す。
    五線の中身（音符）を隠さず、上に出す案のように画面上端の固定ツールバーへ
@@ -2242,6 +2445,16 @@ button.ghost.active:hover:not(:disabled) {
      選択中の薄い枠も同様（紙面に編集中の印を残さない）。 */
   .system-select-edge { display: none !important; }
   .system-layout-panel { display: none !important; }
+  /* 段の境界ドラッグ帯（Issue #523）も同じ編集用UI。掴みしろ自体は透明だが、
+     ドラッグ中の値の吹き出しごと紙から消す */
+  .system-gap-drag-handle { display: none !important; }
+  /* 整えるモード（Issue #571）の重ね物も同じ編集用UI。五線の面の当たり判定と、
+     音符の大きさの角ハンドル（吹き出しごと）を紙から消す */
+  .system-select-surface { display: none !important; }
+  .notation-size-drag-handle { display: none !important; }
+  /* ドラッグ中の吹き出しは譜面の外（画面基準の position: fixed）に出るので、
+     紙面のクリップに頼らず明示的に消す（Issue #571 round1 P1 で置き場所を移した） */
+  .notation-size-drag-value { display: none !important; }
   /* outline の実体は内側ラッパー側に付く（round1 の当たり判定修正で移動）ため、
      両方をリセットする（外側だけだと選択したまま印刷すると青枠が残る。Codex round2 P2） */
   .system-select-frame--selected { outline: none !important; }
@@ -2638,6 +2851,31 @@ svg { animation: none; transition: none; }
   flex-direction: column;
   gap: 2px;
 }
+/* レールの「開く/設定」トグルとフライアウト（Issue #528 運用者QA: 中央から撤去した受け皿） */
+.home-rail-button {
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.home-rail-button.is-active {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+}
+.home-rail-flyout {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+.home-rail-flyout .home-secondary-button {
+  width: 100%;
+}
+
 .home-rail-link {
   display: flex;
   align-items: center;
@@ -2657,10 +2895,14 @@ svg { animation: none; transition: none; }
 
 /* ── 本文（新規ギャラリー・最近使ったファイル・開く・設定）── */
 .home-main {
-  width: min(880px, 100%);
+  /* 幅を絞らずに画面いっぱいへ広げる（Issue #528）。カード類は下のグリッドが
+     幅に応じて列数を増やすので、広い画面ほど1行に並ぶ枚数が増える。
+     ただし超ワイド画面で文字が端から端まで散らばらないよう、上限だけ置く */
+  width: 100%;
+  max-width: 1800px;
   margin: 0 auto;
   box-sizing: border-box;
-  padding: 24px 20px 28px;
+  padding: 24px 28px 28px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -2698,23 +2940,6 @@ svg { animation: none; transition: none; }
   font-weight: 700;
   color: #495057;
 }
-.home-primary-button {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  width: 100%;
-  padding: 14px 16px;
-  border: none;
-  border-radius: 8px;
-  background: #1c7c4a;
-  color: #fff;
-  cursor: pointer;
-  text-align: left;
-}
-.home-primary-button:hover { background: #17663d; }
-.home-primary-button-label { font-size: 16px; font-weight: 700; }
-.home-primary-button-sub { font-size: 12px; opacity: 0.92; }
 .home-error {
   margin: 0;
   padding: 10px 14px;
@@ -2735,8 +2960,10 @@ svg { animation: none; transition: none; }
 /* 新規作成ギャラリー（Office の「空白のブック＋テンプレート」に相当） */
 .home-card-grid {
   display: grid;
-  /* 画面が狭いときは自動で段数が減る（スマホでも横スクロールを出さない） */
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  /* 1枚あたりの下限（200px）だけ決めて、あとは幅に応じて列数が増減する。
+     auto-fill にしているのは、カードが少ないときに1枚が横いっぱいへ
+     伸びてしまうのを防ぐため（auto-fit は空の列を潰してカードを引き伸ばす） */
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 12px;
 }
 .home-card-button {
@@ -2778,42 +3005,46 @@ svg { animation: none; transition: none; }
   cursor: pointer;
 }
 .home-secondary-button:hover { background: #e9ecef; }
-/* 最近使ったファイルの一覧（Office の「最近使ったアイテム」に相当する行形式） */
-.home-work-head {
-  display: flex;
-  justify-content: space-between;
-  padding: 0 10px 4px;
-  border-bottom: 1px solid #e9ecef;
-  font-size: 11px;
-  color: #868e96;
-}
+/* 最近使ったファイル（Issue #528 でカードグリッドへ → Issue #608 で行リストへ）。
+   横へ流すと1枚が 220px 前後に狭まり、「月光 第1楽章（全曲・ペダル校訂つき・検聴版）」の
+   ように頭が同じ作品名が全部同じところで切り詰められて区別できなかった（運用者QA）。
+   横幅は列を増やすためではなく「名前を長く出す」ために使う。
+   ※ Issue #528 で避けたかったのは"大きいカードの縦積み"（画面を持て余す）で、
+      1行が薄いリストの縦積みは幅を使い切るのでその裁定とは矛盾しない（#608 で整理済み） */
 .home-work-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  /* 1行＝1作品。横には並べない */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
   /* 作品が増えても画面が縦に伸び続けないよう、一覧だけスクロールさせる
-     （作品一覧パネルと同じ考え方） */
-  max-height: min(40vh, 300px);
+     （作品一覧パネルと同じ考え方）。行は薄いので高さの上限も戻す */
+  max-height: min(44vh, 340px);
   overflow-y: auto;
 }
 .home-work-button {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  padding: 9px 10px;
-  border: none;
-  border-bottom: 1px solid #f1f3f5;
-  border-radius: 0;
+  box-sizing: border-box;
+  /* 行を薄くして、狭い画面でも一度に見える件数を減らさない（#608 仕様2） */
+  padding: 8px 12px;
+  border: 1px solid #ced4da;
+  border-radius: 8px;
   background: #fff;
   cursor: pointer;
   text-align: left;
 }
-.home-work-button:hover { background: #f1f3f5; }
-.home-work-icon { color: #1c7c4a; font-size: 15px; }
-/* 名前は伸ばし、更新日時は右端へ寄せる（Office の一覧と同じ読み方になる） */
+.home-work-button:hover {
+  background: #f8f9fa;
+  border-color: #1c7c4a;
+}
+/* 名前は伸ばし、更新日時は右端へ寄せる（長い作品名でも行の幅を押し広げない）。
+   行いっぱいまで名前を出し、それでも入りきらないときだけ末尾を省略する
+   （全文はボタンの title 属性で読める。#608 仕様1） */
 .home-work-title {
   flex: 1;
   min-width: 0;
@@ -2823,7 +3054,16 @@ svg { animation: none; transition: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.home-updated-at { font-size: 11px; color: #868e96; }
+.home-work-icon { color: #1c7c4a; font-size: 15px; }
+.home-updated-at {
+  font-size: 11px;
+  color: #868e96;
+  /* 名前がどれだけ長くても日時は潰さず、折り返しもしない */
+  flex-shrink: 0;
+  white-space: nowrap;
+  /* 数字の字幅をそろえ、行が変わっても日時の桁が縦にそろって読める */
+  font-variant-numeric: tabular-nums;
+}
 .home-footer {
   display: flex;
   align-items: baseline;
@@ -2860,5 +3100,9 @@ svg { animation: none; transition: none; }
   }
   .home-main {
     padding: 16px 12px 24px;
+  }
+  /* 375px 幅でも横スクロールを出さずに2列へ収める（Issue #512 で実測した条件を維持） */
+  .home-card-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   }
 }

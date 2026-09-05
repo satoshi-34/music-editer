@@ -1,4 +1,5 @@
 // src/utils/midiExport.ts
+import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
 // SavedScoreData を MIDI ファイル（Type 1）に変換してダウンロードする。
 // 参照: https://www.midi.org/specifications-old/item/the-midi-1-0-specification
 
@@ -194,7 +195,8 @@ export function scoreToMidi(data: SavedScoreData): Uint8Array {
     parts: data.parts.map((p) => ({ ...p, measures: syncMeasuresPrimaryVoiceFromEvents(p.measures) })),
   };
   data = normalizedData;
-  const bpm = 120; // デフォルト BPM（スコアにグローバル BPM がないため固定）
+  // 作品テンポ（#543）があればそれを、無い旧データは従来どおり 120 を使う
+  const bpm = normalizeSavedGlobalBpm(data.globalBpm) ?? 120;
   const timeSig: [number, number] = data.timeSignature ?? [4, 4];
   const numTracks = data.parts.length + 1;
 

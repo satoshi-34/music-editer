@@ -20,7 +20,19 @@ type Props = {
   selectedSystemStart?: number | null;
   /** 左右端がクリックされたときに呼ばれる。渡されないときは当たり判定自体を描かない */
   onSelect?: (startMeasure: number, side: 'left' | 'right') => void;
-  /** 選択中の段にだけ描くフローティングパネル。中身は呼び出し側（ScorePage）が組み立てる */
+  /**
+   * 段の上に描く重ね物（レイアウト調整パネル・段の上端の境界ドラッグ帯・
+   * 整えるモードの当たり判定）。中身は呼び出し側（ScorePage）が組み立てる。
+   * どれも内側ラッパー（.system-select-inner＝五線の実描画範囲）を基準に
+   * 絶対配置するので、ここへまとめて差し込めば置き場所の基準は1つで済む。
+   *
+   * Issue #571 で「選択中の段だけ」から「選択できる段すべて」へ広げた。
+   * 整えるモード（レイアウトタブを開いている間）は選択していない段にも境界帯を
+   * 出す必要があるためで、どの段に何を出すかの判断は呼び出し側が持つ
+   * （このラッパーに「いまモードか」を知らせる props を4つの譜種コンポーネント
+   * 越しに通さずに済む）。選択中かどうかは呼び出し側も selectedSystemStart と
+   * 同じ state を見ているので、判断が二重になることはない。
+   */
   renderPanel?: (startMeasure: number) => ReactNode;
   className?: string;
   style?: CSSProperties;
@@ -73,7 +85,7 @@ export default function SystemSelectFrame({
           onClick={() => onSelect!(startMeasure!, side)}
         />
       ))}
-      {selected && renderPanel?.(startMeasure!)}
+      {selectable && renderPanel?.(startMeasure!)}
       </div>
     </div>
   );

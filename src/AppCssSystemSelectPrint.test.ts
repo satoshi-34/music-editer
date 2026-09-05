@@ -25,6 +25,27 @@ describe('App.css: 段の選択UIは印刷に出さない（Issue #482）', () =
     const css = printBlock(loadAppCss());
     expect(css).toMatch(/\.system-select-edge\s*\{[^}]*display\s*:\s*none/);
     expect(css).toMatch(/\.system-layout-panel\s*\{[^}]*display\s*:\s*none/);
+    // 段の境界ドラッグ帯（Issue #523）も同じ編集用UI
+    expect(css).toMatch(/\.system-gap-drag-handle\s*\{[^}]*display\s*:\s*none/);
+    // 整えるモード（Issue #571）で足した重ね物も紙には出さない。
+    // 面の当たり判定が残ると紙面の上に透明なボタンが乗り、角ハンドルは◢が印刷されてしまう
+    expect(css).toMatch(/\.system-select-surface\s*\{[^}]*display\s*:\s*none/);
+    expect(css).toMatch(/\.notation-size-drag-handle\s*\{[^}]*display\s*:\s*none/);
+  });
+
+  it('整えるモードの掴みしろの表示は .layout-adjust-mode の中だけで効く（Issue #571）', () => {
+    // クラスの外へ書くと、譜面を書いている間（他のタブ）も掴みしろが薄く光ってしまう。
+    // jsdom では CSS が効かないため、ここも静的チェックで固定する
+    const css = loadAppCss();
+    expect(css).toMatch(/\.layout-adjust-mode\s+\.system-select-edge\s*\{/);
+    expect(css).toMatch(/\.layout-adjust-mode\s+\.system-gap-drag-handle::before\s*\{/);
+  });
+
+  it('境界帯は段の上端（bottom: 100%）に置かれている（round1 の「掴んだ境界が動く」原則）', () => {
+    // jsdom はレイアウトを計算しないため、配置の退行（下端へ戻す）は
+    // 統合テストでは検出できない。ソースの静的チェックで固定する（round2 P2）
+    const css = loadAppCss();
+    expect(css).toMatch(/\.system-gap-drag-handle\s*\{[^}]*bottom\s*:\s*100%/);
   });
 
   it('@media print で選択中の薄い枠（outline）も消している', () => {

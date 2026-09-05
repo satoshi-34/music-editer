@@ -124,3 +124,33 @@ export function clampDropdownMenuTop(input: {
   );
   return Math.max(8, Math.min(input.anchorBottom + 6, input.viewportHeight - menuMax - 8));
 }
+
+/**
+ * ボタン直下へ開く fixed メニューの left を、画面内へ収まるようにクランプする。
+ * 縦の `clampDropdownMenuTop` と対になる横版で、ツールバーの右端に近いボタンから
+ * 開いたときにメニューが画面外へはみ出して読めなくなるのを防ぐ（最低 8px は残す）。
+ */
+export function clampDropdownMenuLeft(input: {
+  anchorLeft: number;
+  menuWidthPx: number;
+  viewportWidth: number;
+}): number {
+  return Math.max(8, Math.min(input.anchorLeft, input.viewportWidth - input.menuWidthPx - 8));
+}
+
+/**
+ * 「1個 + ▾」のツールボタン（ToolVariantButton）のプルダウンの寸法。
+ * jsdom のようにレイアウトしない環境では実測が 0 になるため、個数から見積もる用。
+ * 見た目（gap・padding）も同じ値を使い、見積もりと実物がずれないようにする。
+ */
+export const VARIANT_MENU_ITEM_WIDTH_PX = 36;
+export const VARIANT_MENU_ITEM_GAP_PX = 3;
+export const VARIANT_MENU_PADDING_PX = 8;
+export const VARIANT_MENU_ESTIMATED_HEIGHT_PX = 48;
+
+/** options の個数からプルダウンの横幅を見積もる（実測できるときは実測が優先） */
+export function estimateVariantMenuWidth(optionCount: number): number {
+  return optionCount * VARIANT_MENU_ITEM_WIDTH_PX
+    + Math.max(0, optionCount - 1) * VARIANT_MENU_ITEM_GAP_PX
+    + VARIANT_MENU_PADDING_PX;
+}

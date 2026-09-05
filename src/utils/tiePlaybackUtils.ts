@@ -76,7 +76,7 @@ const MAX_TIE_CHAIN_LENGTH = 128;
  * null を返し、記譜どおり2音として鳴らす＝音が消えるより安全側に倒す。
  * 詳細は関数内コメントを参照。
  */
-function resolveTargetExpandedIndex(
+export function resolveTargetExpandedIndex(
   expandedMeasures: TiePlaybackExpandedMeasure[],
   fromExpandedIndex: number,
   toMeasureIndex: number,

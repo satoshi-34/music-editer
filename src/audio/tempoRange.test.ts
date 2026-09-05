@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MIN_BPM, MAX_BPM, clampBpm, TEMPO_RANGE_MESSAGE } from './tempoRange';
+import { MIN_BPM, MAX_BPM, clampBpm, normalizeSavedGlobalBpm, TEMPO_RANGE_MESSAGE } from './tempoRange';
 
 describe('tempoRange', () => {
   it('有効範囲は 30〜240（Grave 〜 Prestissimo）', () => {
@@ -24,6 +24,29 @@ describe('tempoRange', () => {
     expect(clampBpm(NaN, 120)).toBe(120);
     expect(clampBpm(Infinity, 120)).toBe(120);
     expect(clampBpm(-Infinity, 99)).toBe(99);
+  });
+
+  describe('normalizeSavedGlobalBpm（作品ごとの全体テンポ・Issue #543）', () => {
+    it('保存されている有効な値はそのまま採用する', () => {
+      expect(normalizeSavedGlobalBpm(112)).toBe(112);
+      expect(normalizeSavedGlobalBpm(54)).toBe(54);
+    });
+
+    it('範囲外の値は端へ寄せる（保存データが手書きで壊れていても鳴らせる）', () => {
+      expect(normalizeSavedGlobalBpm(1000)).toBe(MAX_BPM);
+      expect(normalizeSavedGlobalBpm(1)).toBe(MIN_BPM);
+    });
+
+    it('テンポ未保存・壊れた値は undefined（＝アプリ全体設定に従う）', () => {
+      // 0 や負値を素通しすると 60 / 0 = Infinity で再生が止まるため、必ず弾く
+      expect(normalizeSavedGlobalBpm(undefined)).toBeUndefined();
+      expect(normalizeSavedGlobalBpm(0)).toBeUndefined();
+      expect(normalizeSavedGlobalBpm(-120)).toBeUndefined();
+      expect(normalizeSavedGlobalBpm(NaN)).toBeUndefined();
+      expect(normalizeSavedGlobalBpm(Infinity)).toBeUndefined();
+      expect(normalizeSavedGlobalBpm('112')).toBeUndefined();
+      expect(normalizeSavedGlobalBpm(null)).toBeUndefined();
+    });
   });
 
   it('案内文に有効範囲がそのまま載る', () => {

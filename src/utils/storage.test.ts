@@ -38,6 +38,8 @@ import {
   loadWorkHistory,
   pushWorkHistoryGeneration,
   restoreWorkHistoryGeneration,
+  getStorageCapacityState,
+  isStorageAvailable,
 } from './storage';
 import type {
   SavedScoreData,
@@ -203,6 +205,61 @@ describe('Storage Foundation Tests', () => {
         }),
         { numRuns: 20 }
       );
+    });
+  });
+
+  describe('作品ごとの全体テンポの保存互換（Issue #543）', () => {
+    // 位置引数が長いので、テンポだけを差し替えられる作りにしておく
+    const makeTempoData = (globalBpm?: number) => createSavedScoreData(
+      { title: 'Tempo Test', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+      1,
+      4,
+      'single',
+      'C',
+      [4, 4],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      globalBpm,
+    );
+
+    it('全体テンポを保存して読み戻せる（保存往復）', () => {
+      const scoreData = makeTempoData(112);
+      expect(scoreData.globalBpm).toBe(112);
+      expect(saveScoreData(scoreData).success).toBe(true);
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.globalBpm).toBe(112);
+    });
+
+    it('既定値（120）でも省略せず明示的に保存する', () => {
+      // 省略すると読込側の既定（アプリ全体設定へ従う）と食い違い、
+      // 「全体設定が 40 の環境で 120 の作品を開くと 40 になる」穴が開く（#477 round1 P1 と同じ）
+      expect(makeTempoData(120).globalBpm).toBe(120);
+    });
+
+    it('範囲外・壊れた値は正規化される（端へ寄せる／未保存扱い）', () => {
+      expect(makeTempoData(1000).globalBpm).toBe(240);
+      expect(makeTempoData(0).globalBpm).toBeUndefined();
+      expect(makeTempoData(NaN).globalBpm).toBeUndefined();
+    });
+
+    it('テンポ無しの旧データも従来どおり有効（既定値互換）', () => {
+      const scoreData = makeTempoData(undefined);
+      expect(scoreData.globalBpm).toBeUndefined();
+      expect(validateSavedScoreData(scoreData)).toBe(true);
+      // 数値以外の globalBpm は弾く（手書き JSON の取り込み対策）
+      expect(validateSavedScoreData({ ...scoreData, globalBpm: '112' })).toBe(false);
     });
   });
 
@@ -701,7 +758,7 @@ describe('Storage Foundation Tests', () => {
           expect(result.success).toBe(false);
           expect(result.error).toBeDefined();
           expect(result.error?.type).toBe('quota_exceeded');
-          expect(result.error?.message).toContain('quota');
+          expect(result.error?.message).toContain('満杯');
           expect(result.error?.recoverable).toBe(true);
         }),
         { numRuns: 100 }
@@ -744,8 +801,8 @@ describe('Storage Foundation Tests', () => {
           expect(result.success).toBe(false);
           expect(result.error).toBeDefined();
           expect(result.error?.type).toBe('storage_disabled');
-          // The message will be "localStorage is not available" from isStorageAvailable()
-          expect(result.error?.message).toContain('not available');
+          // 使えない（SecurityError）ときは日本語の案内（#640/#641）
+          expect(result.error?.message).toContain('保存ができません');
           expect(result.error?.recoverable).toBe(false);
         }),
         { numRuns: 100 }
@@ -2463,6 +2520,111 @@ describe('Storage Foundation Tests', () => {
       expect(result.success).toBe(false);
     });
 
+    it('手ぶれ補正フラグ（smoothing）込みで保存して読み戻せる', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Smoothing Flag',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_smooth_on',
+            name: '補正オン',
+            shapes: [{ kind: 'path', points: [{ x: 0, y: 0 }, { x: 3, y: -3 }, { x: 6, y: 0 }] }],
+            smoothing: true
+          },
+          {
+            id: 'sym_smooth_off',
+            name: '補正オフ',
+            shapes: [{ kind: 'path', points: [{ x: 0, y: 0 }, { x: 3, y: -3 }, { x: 6, y: 0 }] }],
+            smoothing: false
+          }
+        ]
+      );
+
+      expect(saveScoreData(data).success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.customSymbolDefs?.[0].smoothing).toBe(true);
+      expect(loadResult.data?.customSymbolDefs?.[1].smoothing).toBe(false);
+    });
+
+    it('smoothing を持たない記号定義も従来どおり読み込める（後方互換）', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'No Smoothing Field',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_legacy',
+            name: '旧データ',
+            shapes: [{ kind: 'path', points: [{ x: 0, y: 0 }, { x: 3, y: -3 }, { x: 6, y: 0 }] }]
+          }
+        ]
+      );
+
+      expect(saveScoreData(data).success).toBe(true);
+
+      const loadResult = loadScoreData();
+      expect(loadResult.success).toBe(true);
+      expect(loadResult.data?.customSymbolDefs?.[0].smoothing).toBeUndefined();
+    });
+
+    it('smoothing が真偽値でない customSymbolDefs は保存を拒否する', () => {
+      const data = createSavedScoreData(
+        {
+          title: 'Bad Smoothing',
+          subtitle: '',
+          lyricist: '',
+          composer: '',
+          arranger: ''
+        },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }],
+        1,
+        1,
+        'single',
+        'C',
+        [4, 4],
+        undefined,
+        undefined,
+        [
+          {
+            id: 'sym_bad_smoothing',
+            name: '不正フラグ',
+            shapes: [{ kind: 'path', points: [{ x: 0, y: 0 }, { x: 3, y: -3 }] }],
+            // 真偽値でない値が外部ファイルから流れ込むケース（any を使わずに型を偽装する）
+            smoothing: 'yes' as unknown as boolean
+          }
+        ]
+      );
+
+      expect(saveScoreData(data).success).toBe(false);
+    });
+
     it('customSymbols に不正な形式を持つ音符イベントは保存を拒否する', () => {
       const data = createSavedScoreData(
         {
@@ -3292,5 +3454,59 @@ describe('Storage Foundation Tests', () => {
 
       expect(listWorks().map(work => work.id)).toEqual([existing.id]);
     });
+  });
+});
+
+describe('保存領域の満杯と使えないの区別（Issue #641）', () => {
+  const originalSetItem = localStorageMock.setItem;
+  afterEach(() => {
+    localStorageMock.setItem = originalSetItem;
+    localStorageMock.clear();
+  });
+
+  function makeFull() {
+    // 読み出しと削除は通るが、書き込みだけが容量超過で失敗する（Chrome の 10MB 上限の状態）
+    localStorageMock.setItem = () => {
+      throw new DOMException('QuotaExceededError', 'QuotaExceededError');
+    };
+  }
+
+  it('満杯は「使えない」ではなく full と判定し、isStorageAvailable は true のまま', () => {
+    makeFull();
+    expect(getStorageCapacityState()).toBe('full');
+    expect(isStorageAvailable()).toBe(true);
+  });
+
+  it('SecurityError は unavailable', () => {
+    localStorageMock.setItem = () => { throw new DOMException('SecurityError', 'SecurityError'); };
+    expect(getStorageCapacityState()).toBe('unavailable');
+    expect(isStorageAvailable()).toBe(false);
+  });
+
+  it('満杯でも作品一覧は読めて、削除もできる（ホームから抜け出せる）', () => {
+    const created = createWork('満杯テスト');
+    expect(created.success).toBe(true);
+    const id = created.data!.id;
+    makeFull();
+    expect(listWorks().map((w) => w.id)).toContain(id);
+    // 削除は index の書き換え（setItem）を伴うので満杯では失敗しうる。その場合も例外で落ちず、
+    // 理由（満杯）を返す。removeItem 自体は通る
+    const removed = deleteWork(id);
+    if (!removed.success) {
+      expect(removed.error?.type).toBe('quota_exceeded');
+      expect(removed.error?.message).toContain('満杯');
+    }
+  });
+
+  it('満杯のときの保存失敗は日本語の理由（満杯・削除か書き出し）を返す', () => {
+    makeFull();
+    const result = saveScoreData(createSavedScoreData(
+      { title: 't', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }], 1, 1, 'single'
+    ));
+    expect(result.success).toBe(false);
+    expect(result.error?.type).toBe('quota_exceeded');
+    expect(result.error?.message).toContain('満杯');
+    expect(result.error?.recoverable).toBe(true);
   });
 });

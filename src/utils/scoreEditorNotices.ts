@@ -16,6 +16,7 @@
 import type { NoteEvent } from '../types/storage';
 import type { OmrConvertFailure } from './omrApi';
 import { canReplaceTupletNoteWithRest, type TupletGroupPasteBlockReason } from './tupletUtils';
+import type { PlaybackStartMeasureRejection } from './playbackPositionUtils';
 
 /** 削除など「編集で何が起きたか」を画面へ出すための通知イベント名 */
 export const SCORE_EDIT_NOTICE_EVENT = 'music-editer-score-edit-notice';
@@ -538,6 +539,27 @@ export function describeDoubleAccidentalKeySignatureUnavailable(kind: '##' | 'bb
 }
 
 /**
+ * 微分音（¼♯・¼♭）のツールで調号領域をクリックしたときの案内（Issue #548）。
+ * 統合で「空きクリック＝音符を置く」に変わったため、無言で調号の上に音符を生やさないよう、
+ * ここで消費して理由を伝える（#318「行き止まりは喋る」）。
+ */
+export function describeMicrotoneKeySignatureUnavailable(): string {
+  return '四分音（¼♯・¼♭）は調号には使えません（調号にあるのは♯と♭だけです）。付けたい音符をクリックしてください';
+}
+
+/**
+ * 臨時記号・四分音を付けようとしたが、押した音が最新のデータに見つからなかったときの案内
+ * （Issue #548 round2 P2-2）。
+ *
+ * 当たり判定は VexFlow が描いた図形から作るため、描画がデータより1手遅れている間は
+ * クリックした位置の音がもう無いことがある。ここで黙って別の音へ付けると
+ * 「押していない音に記号が付く」ので、付けずに理由を伝える（#318「行き止まりは喋る」）。
+ */
+export function describeAccidentalTargetNoteLost(): string {
+  return '記号を付ける音が見つかりませんでした（譜面が変わった可能性があります）。もう一度その音符をクリックしてください';
+}
+
+/**
  * MusicXML 読込で大譜表のクレフをピアノ標準（上=ト・下=ヘ）へ正規化したときの通知（#419 round2）。
  * アプリのピアノモデルはクレフ固定のため任意クレフを保持できないが、keys（絶対音名）は
  * そのままなので音の高さは変わらない。黙って見た目が変わる自動処理は通知する（#318）。
@@ -567,6 +589,14 @@ export function describeImportedNotationSizeShrunk(percent: number): string {
  */
 export function describeImportedPageSizeRounded(label: string): string {
   return `読み込んだファイルの判型に対応するサイズが無いため、最も近い ${label} で開きました（レイアウトタブで変更できます）`;
+}
+
+/**
+ * MusicXML 読み込みで、対応表に無い強弱記号を取り込めなかったときの通知（Issue #552）。
+ * 近い記号へ勝手に寄せると譜面が黙って書き換わるため、取り込まずに件数だけ知らせる（#318）。
+ */
+export function describeImportedUnsupportedDynamics(count: number): string {
+  return `未対応の強弱記号 ${count} 件は取り込めませんでした（pp・p・mp・mf・f・ff に対応しています。読み込み自体は成功しています）`;
 }
 
 export function describeSliceCopyUnavailable(): string {
@@ -655,6 +685,39 @@ export function describePickupSet(pickupBeats: number): string {
 /** 弱起（アウフタクト）を解除したことを知らせる（Issue #473） */
 export function describePickupCleared(): string {
   return '弱起（アウフタクト）を解除しました。先頭小節も拍子ぶんの長さになります';
+}
+
+/**
+ * 小節番号を指定した途中再生（#545）: その小節から再生を始めたことを知らせる。
+ * 戻し方（先頭から聴く方法）は選択の有無で違うため出し分ける（round1/2 P2）:
+ * 小節の範囲選択が残っていると停止→再生は選択位置から始まるので、
+ * まず Escape で選択を外す案内を先に出す。選択が無ければ停止→再生だけで先頭に戻る。
+ */
+export function describePlaybackFromMeasureNumber(startMeasure: number, hasMeasureSelection: boolean): string {
+  // 小節の範囲選択が残っていると、停止→再生では選択位置から始まる（選択起点の途中再生）。
+  // その状態で「停止して再生すれば先頭」と案内すると嘘になるため出し分ける（#545 round1 P2）
+  if (hasMeasureSelection) {
+    return `${startMeasure + 1}小節目から再生します（先頭から聴くには Escape で小節の選択を外し、停止してから再生してください）`;
+  }
+  return `${startMeasure + 1}小節目から再生します（先頭から聴くには停止してから再生してください）`;
+}
+
+/**
+ * 小節番号を指定した途中再生（#545）で、その番号では再生できないことを理由つきで返す（#318）。
+ * 入力欄の値を黙って捨てず、「なぜ効かないのか」「どう入れ直せばよいか」まで伝える。
+ */
+export function describePlaybackStartMeasureRejected(
+  reason: PlaybackStartMeasureRejection,
+  totalMeasureCount: number
+): string {
+  switch (reason) {
+    case 'notANumber':
+      return '小節番号は半角の数字で入力してください（例: 5 と入れると5小節目から再生します）';
+    case 'outOfRange':
+      return `この作品は${totalMeasureCount}小節までのため、その小節からは再生できません（1〜${totalMeasureCount} の番号を入れてください）`;
+    case 'noMeasures':
+      return 'まだ再生できる小節がありません（音符を入力してから小節番号を指定してください）';
+  }
 }
 
 /** 拍範囲スライスの削除で消すものが無かったときの通知（#318。履歴も積まない） */
@@ -818,4 +881,21 @@ export function describeAudioEngineRestarted(destination: string): string {
 /** 自動再起動しても無音が続くときの通知（Issue #521 で出力先の案内を末尾に追加）。 */
 export function describeAudioStillSilent(destination: string): string {
   return `音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。${destination}`;
+}
+
+/**
+ * 先読み窓（#622）の後続の予約に失敗して再生を止めたときの通知。
+ * 無音のまま「再生中」表示が曲末まで進むのを避け、理由と次の一手を伝える（#318）
+ */
+export function describePlaybackAbortedBySchedulingError(): string {
+  return '再生の途中で音の予約に失敗したため停止しました。もう一度再生してください。続く場合は「音の調子がおかしいとき」の音声復旧をお試しください';
+}
+
+/**
+ * 作品の切替・復元が終わる前に再生を押したときの通知（#609）。
+ * 復元は非同期で、途中で押すと「画面は新しい作品なのに前の作品が鳴る」ことがあるため、
+ * 復元が終わるまでは再生を始めず、理由と次の一手だけ伝える（#318）
+ */
+export function describePlaybackBlockedWhileRestoringWork(): string {
+  return '作品を読み込んでいる途中です。読み込みが終わってから、もう一度「再生」を押してください';
 }

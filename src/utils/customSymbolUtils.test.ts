@@ -13,6 +13,7 @@ import {
   MIN_SYMBOL_SCALE,
   pathPointsToD,
   renderCustomSymbol,
+  resolveStrokePoints,
   setCustomSymbolOffset,
   setCustomSymbolScale,
   simplifyPoints,
@@ -378,5 +379,116 @@ describe('fitArcFromDragPoints', () => {
     const forward = fitArcFromDragPoints(makePoints(200, 340));
     const backward = fitArcFromDragPoints(makePoints(340, 200));
     expect(Math.sign(forward.sweepAngle)).not.toBe(Math.sign(backward.sweepAngle));
+  });
+});
+
+describe('手ぶれ補正（smoothing）の描画反映', () => {
+  function makeSvgRoot(): SVGGElement {
+    return document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  }
+
+  /** 1点ごとに上下へ揺れる手描き線（震え）を作る */
+  function makeZigzagPoints(count: number, amplitude: number): { x: number; y: number }[] {
+    return Array.from({ length: count }, (_, i) => ({
+      x: i * 2,
+      y: i % 2 === 0 ? amplitude : -amplitude,
+    }));
+  }
+
+  function makeZigzagDef(smoothing?: boolean): CustomSymbolDef {
+    return {
+      id: 'sym_smooth',
+      name: 'ジグザグ',
+      shapes: [{ kind: 'path', points: makeZigzagPoints(41, 3), strokeWidth: 1.5 }],
+      ...(smoothing === undefined ? {} : { smoothing }),
+    };
+  }
+
+  it('smoothing を省略した記号は補正なしで描画される（既存データの見た目を変えない）', () => {
+    const def = makeZigzagDef();
+    const svgRoot = makeSvgRoot();
+    renderCustomSymbol(def, 0, 0, svgRoot);
+    const d = svgRoot.querySelector('path')!.getAttribute('d')!;
+    // 補正なしなので、記録した頂点がそのまま d に反映される
+    expect(d).toBe(pathPointsToD(makeZigzagPoints(41, 3)));
+  });
+
+  it('smoothing: true の記号は補正された（点数の減った）線として描画される', () => {
+    const rawD = pathPointsToD(makeZigzagPoints(41, 3));
+    const svgRoot = makeSvgRoot();
+    renderCustomSymbol(makeZigzagDef(true), 0, 0, svgRoot);
+    const d = svgRoot.querySelector('path')!.getAttribute('d')!;
+
+    expect(d).not.toBe(rawD);
+    // Q コマンド（曲線）の数＝経由する点の数。補正で明確に減っていること
+    const countQ = (s: string) => (s.match(/Q/g) ?? []).length;
+    expect(countQ(d)).toBeLessThan(countQ(rawD));
+  });
+
+  it('補正後の d はひと続きのパスになる（M は1つだけ・NaN を含まない）', () => {
+    const svgRoot = makeSvgRoot();
+    renderCustomSymbol(makeZigzagDef(true), 10, 20, svgRoot);
+    const d = svgRoot.querySelector('path')!.getAttribute('d')!;
+
+    expect((d.match(/M/g) ?? []).length).toBe(1);
+    expect(d.startsWith('M ')).toBe(true);
+    expect(d).not.toContain('NaN');
+    expect(d).not.toContain('Infinity');
+  });
+
+  it('補正をオフに戻すと元のストロークの描画に戻る（元データは書き換わらない）', () => {
+    const def = makeZigzagDef(true);
+    const svgRootOn = makeSvgRoot();
+    renderCustomSymbol(def, 0, 0, svgRootOn);
+
+    // 記号定義の smoothing を false にしただけで、shapes（元のストローク）はそのまま
+    const offDef: CustomSymbolDef = { ...def, smoothing: false };
+    const svgRootOff = makeSvgRoot();
+    renderCustomSymbol(offDef, 0, 0, svgRootOff);
+
+    expect(svgRootOff.querySelector('path')!.getAttribute('d')).toBe(
+      pathPointsToD(makeZigzagPoints(41, 3)),
+    );
+    expect(offDef.shapes).toEqual(makeZigzagDef().shapes);
+  });
+
+  it('プレビューSVGにも補正が反映され、不正な値が混ざらない', () => {
+    const svg = symbolDefToPreviewSvg(makeZigzagDef(true), 32);
+    expect(svg).not.toContain('NaN');
+    expect(svg).toContain('<path');
+    // 補正なしのプレビューとは d が変わる
+    expect(svg).not.toBe(symbolDefToPreviewSvg(makeZigzagDef(), 32));
+  });
+
+  it('円・直線・弧は補正の対象外（smoothing を変えても描画は同じ）', () => {
+    const shapes: CustomSymbolDef['shapes'] = [
+      { kind: 'circle', cx: 0, cy: -4, r: 3, filled: true },
+      { kind: 'line', x1: -5, y1: 0, x2: 5, y2: 0, strokeWidth: 1.5 },
+      { kind: 'arc', cx: 0, cy: 0, r: 6, startAngle: 0, sweepAngle: 180 },
+    ];
+    const rootOff = makeSvgRoot();
+    const rootOn = makeSvgRoot();
+    renderCustomSymbol({ id: 'a', name: 'a', shapes }, 0, 0, rootOff);
+    renderCustomSymbol({ id: 'a', name: 'a', shapes, smoothing: true }, 0, 0, rootOn);
+    expect(rootOn.innerHTML).toBe(rootOff.innerHTML);
+  });
+});
+
+describe('resolveStrokePoints', () => {
+  const zigzag = Array.from({ length: 41 }, (_, i) => ({ x: i * 2, y: i % 2 === 0 ? 3 : -3 }));
+
+  it('smoothing が false / 未指定なら元の配列をそのまま返す', () => {
+    expect(resolveStrokePoints(zigzag, false)).toBe(zigzag);
+    expect(resolveStrokePoints(zigzag, undefined)).toBe(zigzag);
+  });
+
+  it('smoothing が true なら補正した頂点列を返す', () => {
+    const resolved = resolveStrokePoints(zigzag, true);
+    expect(resolved).not.toBe(zigzag);
+    expect(resolved.length).toBeLessThan(zigzag.length);
+  });
+
+  it('同じストロークを2回解決しても同じ結果を返す（描き直しのたびに計算し直さない）', () => {
+    expect(resolveStrokePoints(zigzag, true)).toBe(resolveStrokePoints(zigzag, true));
   });
 });

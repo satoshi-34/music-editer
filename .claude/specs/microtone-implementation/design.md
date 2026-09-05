@@ -166,3 +166,35 @@ export interface NoteEvent {
 - MusicXML 読み込み時の microtone 復元
 - 内蔵エンジンでの譜面全体再生時、和音の2音目以降の microtone 反映
   （クリック確認音・ピアノ譜含む描画は和音全体対応）
+
+
+## 追記: 臨時記号パレットの統合後の微分音（Issue #548, 2026-09-04）
+
+§2「入力UI（Palette.tsx）」で想定していた「¼♯・¼♭の独立した2ボタン」は #548 で無くなった。
+現在は ♯▾ / ♭▾ のプルダウンの中にあり、選ぶと音価ツールの `microtone` 属性が立つ
+（詳細は `.claude/specs/accidental-palette-unification/design.md`）。
+
+統合にあたって、`microtones[]` が **keyIndex（`keys` 配列の位置）で音を指す** ことに
+由来する取り扱いを3つ足した。いずれも round1 の差し戻しで判明したもの。
+
+1. **和音に音を足したら keyIndex を付け替える**（round1 P2-2）。
+   `keys` は追加のたびに音高順へ並べ替えるので、既存の音より低い音を足すと元の音の位置がずれる。
+   位置だけを見ていると ¼♯ が足したばかりの音へ移ってしまうため、**鍵の綴りを手がかりに**
+   新しい位置を引き直す（新しい `keys` に見つからない微分音は落とす）。
+   実装は `PianoSystemCanvas.tsx` の和音追加（`noteDefaultOutcome`）。
+2. **休符を音符へ置換・分割するときも微分音を乗せる**（round1 P2-3）。
+   通常の ♯/♭/♮ は鍵の綴り（`applyInputAccidentalToKey`）へ入るが、微分音は綴りではなく
+   `microtones[]` で持つため、`buildRestEditReplacement` の結果へ別に付ける必要がある。
+   付けないと「¼♯ を選んで休符を押すと記号だけ黙って落ちる」行き止まりになる。
+   置換で入る音符は単音なので keyIndex は 0 固定。連符グループでの置換は音符1つ＋休符 N-1 個なので、
+   休符はそのまま通す。
+3. **調号領域のクリックは微分音では使えない**（統合前からの仕様を明文化）。
+   四分音の調号は持たないため、¼♯・¼♭ で調号領域を押したときは理由を通知して終わる。
+
+### この追記に対応するテスト
+
+| ケース | ファイル |
+| --- | --- |
+| 和音追加での keyIndex 付け替え | `AccidentalPaletteUnification.acceptance.test.tsx`「round1 P2-2」 |
+| 微分音の空きクリック入力（実マウント） | `ScorePageAccidentalPaletteWiring.test.tsx` |
+| 休符置換に微分音が乗る（実マウント） | 同上 |

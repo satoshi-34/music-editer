@@ -16,6 +16,7 @@ import {
   resolveDefaultLayoutForScoreType,
   SYSTEM_ROW_GAP_MIN_PX,
   measurePlannerSafetyPadding,
+  VEXFLOW_IDEAL_WIDTH_COMPRESSION,
 } from './measureLayoutUtils';
 
 describe('printScoreAreaWidthPx / worstCaseSystemContentBudget（ページ余白と本文幅の連動）', () => {
@@ -181,7 +182,11 @@ describe('measureMinimumContentWidth', () => {
       })),
     };
 
-    expect(vexFlowCombinedMeasureMinimumContentWidth([rightHand, leftHand], [4, 4])!).toBeGreaterThan(240);
+    // 閾値は圧縮率に比例する（0.64 のとき 240 超 → 0.3 のとき 112 超）。符頭の重なりの下限は
+    // 別の実寸見積もり（combinedMeasureMinimumContentWidth）が張るので、ここは「VexFlow の理想幅を
+    // 圧縮率どおりに縮めた値が返る」ことの固定
+    expect(vexFlowCombinedMeasureMinimumContentWidth([rightHand, leftHand], [4, 4])!)
+      .toBeGreaterThan(240 * (VEXFLOW_IDEAL_WIDTH_COMPRESSION / 0.64));
   });
 
   it('調号由来のnatural・courtesy・三和音の臨時記号を本描画と同じ状態機械で計測する', () => {
@@ -576,13 +581,14 @@ describe('resolveDefaultLayoutForScoreType（楽譜種別ごとの音符サイ�
     });
   });
 
-  // ピアノだけは運用者の実測選定値（Issue #199）。段どうしは詰めて（-30px）、
-  // 大譜表の内側（右手と左手の間）に空気を入れる（+38px）という組み合わせ。
-  it('ピアノ: 音符150%・段間隔-30px・パート間隔38px', () => {
+  // ピアノだけは運用者の実測選定値。#199 の旧値（-30/+38）から、市販譜見比べで
+  // -3/+20 へ更新（2026-09-03。旧値は段が詰まりすぎ・内側が広すぎた=#586）。
+  it('ピアノ: 音符150%・段間隔-3px・パート間隔20px', () => {
     expect(resolveDefaultLayoutForScoreType('piano')).toEqual({
       notationSizeMultiplier: 1.5,
-      systemRowGapPx: -30,
-      partSpacingOffsetPx: 38,
+      // 期待値は運用者の市販譜見比べで確定した新既定（2026-09-03: -30/38 → -3/20）
+      systemRowGapPx: -3,
+      partSpacingOffsetPx: 20,
     });
   });
 

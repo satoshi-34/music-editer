@@ -53,6 +53,10 @@ describe('PlaybackControls', () => {
       // 音色選択
       expect(screen.getByLabelText('楽器選択')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '音色プレビュー' })).toBeInTheDocument();
+      // 音声復旧は診断（L3）として「音の調子がおかしいとき」へ畳んだので、
+      // 常設ではなく折りたたみを開いてから出る（Issue #562）
+      expect(screen.queryByRole('button', { name: '音声復旧' })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /音の調子がおかしいとき/ }));
       expect(screen.getByRole('button', { name: '音声復旧' })).toBeInTheDocument();
 
       // 再生位置表示（テキストが複数要素に分かれている可能性を考慮）
@@ -347,6 +351,8 @@ describe('PlaybackControls', () => {
       const onAudioRecovery = vi.fn();
       render(<PlaybackControls {...defaultProps} onAudioRecovery={onAudioRecovery} />);
 
+      // 診断は折りたたみの中にあるので、まず開いてから押す（Issue #562）
+      fireEvent.click(screen.getByRole('button', { name: /音の調子がおかしいとき/ }));
       const recoveryButton = screen.getByRole('button', { name: '音声復旧' });
       fireEvent.click(recoveryButton);
 
@@ -367,6 +373,22 @@ describe('PlaybackControls', () => {
       render(<PlaybackControls {...defaultProps} onInstrumentPreview={undefined} />);
       
       expect(screen.queryByRole('button', { name: '音色プレビュー' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('SoundFontパック名の説明文（Issue #551）', () => {
+    it('音色詳細を開くと MusyngKite 推奨の一言が説明文に出る', () => {
+      render(<PlaybackControls {...defaultProps} />);
+
+      // 説明文は「音色詳細」の中にあるので、まず開いてから確認する
+      fireEvent.click(screen.getByRole('button', { name: '音色詳細を開く' }));
+
+      // タグ構造に依存せず、推奨文そのものの存在を見る（round1 P3:
+      // 「子要素なしの DIV」条件は <p> 化や強調 <span> の追加で壊れる）
+      expect(screen.getByText(/ピアノの長い音/)).toHaveTextContent('迷ったら `MusyngKite` を推奨します。');
+
+      // 説明文の追記だけで、パック名の入力欄（UI 構造）は増減していない
+      expect(screen.getAllByLabelText('SoundFontパック名')).toHaveLength(1);
     });
   });
 

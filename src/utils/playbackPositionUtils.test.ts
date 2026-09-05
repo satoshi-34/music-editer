@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex } from './playbackPositionUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber } from './playbackPositionUtils';
 import type { MeasureData } from '../types/storage';
 import { expandMeasuresForPlayback } from '../audio/repeatPlaybackUtils';
 
@@ -68,6 +68,150 @@ describe('buildPlaybackPositionTimeline', () => {
     // 30 BPM なら1拍 = 2000ms、240 BPM なら1拍 = 250ms
     expect(buildPlaybackPositionTimeline(measures, 30, [4, 4]).map(item => item.atMs)).toEqual([0, 2000]);
     expect(buildPlaybackPositionTimeline(measures, 240, [4, 4]).map(item => item.atMs)).toEqual([0, 250]);
+  });
+  it('全パート・全声部を渡すと、鳴っている音符すべてがハイライト対象になる（#411）', () => {
+    // 右手: 4分音符2つ（声部1）＋ 2分音符1つ（声部2・2拍のあいだ鳴り続ける）
+    const rightHand: MeasureData[] = [
+      {
+        events: [
+          { dur: '4', isRest: false, keys: ['c/5'] },
+          { dur: '4', isRest: false, keys: ['d/5'] },
+        ],
+        voices: [
+          {
+            id: 'voice-1',
+            events: [
+              { dur: '4', isRest: false, keys: ['c/5'] },
+              { dur: '4', isRest: false, keys: ['d/5'] },
+            ],
+          },
+          { id: 'voice-2', events: [{ dur: '2', isRest: false, keys: ['g/4'] }] },
+        ],
+      },
+    ];
+    // 左手: 2分音符1つ（右手の2つ目の音が鳴るあいだも鳴り続ける）
+    const leftHand: MeasureData[] = [
+      { events: [{ dur: '2', isRest: false, keys: ['c/3'] }] },
+    ];
+
+    const timeline = buildPlaybackPositionTimeline(
+      rightHand, 120, [4, 4], false, 0, undefined,
+      [{ partIndex: 0, measures: rightHand }, { partIndex: 1, measures: leftHand }],
+    );
+
+    // 節目は右手声部1の2音の開始（0拍・1拍）と、全声部の鳴り終わり（2拍）。
+    // 終了拍の節目は帯を消すためにある（#579 round1 P1）
+    expect(timeline.map(item => item.atMs)).toEqual([0, 500, 1000]);
+    expect(timeline[0].targets).toEqual([
+      { partIndex: 0, voiceIndex: 0, measureIndex: 0, noteIndex: 0 },
+      { partIndex: 0, voiceIndex: 1, measureIndex: 0, noteIndex: 0 },
+      { partIndex: 1, voiceIndex: 0, measureIndex: 0, noteIndex: 0 },
+    ]);
+    // 2拍目でも、伸びている声部2・左手は光ったまま（右手の声部1だけが進む）
+    expect(timeline[1].targets).toEqual([
+      { partIndex: 0, voiceIndex: 0, measureIndex: 0, noteIndex: 1 },
+      { partIndex: 0, voiceIndex: 1, measureIndex: 0, noteIndex: 0 },
+      { partIndex: 1, voiceIndex: 0, measureIndex: 0, noteIndex: 0 },
+    ]);
+    // 2拍かっきりで全声部が鳴り終わる → 空の targets（=全帯を消す指示）
+    expect(timeline[2].targets).toEqual([]);
+  });
+
+  it('主声部が休んでいる拍でも、他声部が鳴っていればタイムラインの節目になる（#411）', () => {
+    // 右手は1拍目が休符・左手だけが1拍目に鳴る
+    const rightHand: MeasureData[] = [
+      {
+        events: [
+          { dur: '4', isRest: true, keys: ['b/4'] },
+          { dur: '4', isRest: false, keys: ['d/5'] },
+        ],
+      },
+    ];
+    const leftHand: MeasureData[] = [
+      { events: [{ dur: '4', isRest: false, keys: ['c/3'] }] },
+    ];
+
+    const timeline = buildPlaybackPositionTimeline(
+      rightHand, 120, [4, 4], false, 0, undefined,
+      [{ partIndex: 0, measures: rightHand }, { partIndex: 1, measures: leftHand }],
+    );
+
+    expect(timeline.map(item => item.atMs)).toEqual([0, 500, 1000]);
+    // 1拍目は左手だけ。主声部が鳴っていない拍でも画面が動く（従来は節目にすらならなかった）
+    expect(timeline[0].targets).toEqual([
+      { partIndex: 1, voiceIndex: 0, measureIndex: 0, noteIndex: 0 },
+    ]);
+    expect(timeline[1].targets).toEqual([
+      { partIndex: 0, voiceIndex: 0, measureIndex: 0, noteIndex: 1 },
+    ]);
+    expect(timeline[2].targets).toEqual([]);
+  });
+
+  it('音符が終わって無音になる拍で targets が空になり、帯を消せる（#579 round1 P1）', () => {
+    // 四分音符1つ + 休符3拍。開始拍だけを節目にすると帯が小節末まで残っていた
+    const measures: MeasureData[] = [
+      {
+        events: [
+          { dur: '4', isRest: false, keys: ['c/4'] },
+          { dur: '4', isRest: true, keys: [] },
+          { dur: '2', isRest: true, keys: [] },
+        ],
+      },
+      { events: [{ dur: '4', isRest: false, keys: ['d/4'] }] },
+    ];
+
+    const timeline = buildPlaybackPositionTimeline(
+      measures, 120, [4, 4], false, 0, undefined,
+      [{ partIndex: 0, measures }],
+    );
+
+    // 0拍=発音、1拍=鳴り終わり（消灯）、次小節頭=次の発音、その鳴り終わり
+    expect(timeline.map(item => item.atMs)).toEqual([0, 500, 2000, 2500]);
+    expect(timeline[0].targets).toEqual([
+      { partIndex: 0, voiceIndex: 0, measureIndex: 0, noteIndex: 0 },
+    ]);
+    expect(timeline[1].targets).toEqual([]);
+    expect(timeline[2].targets).toEqual([
+      { partIndex: 0, voiceIndex: 0, measureIndex: 1, noteIndex: 0 },
+    ]);
+    expect(timeline[3].targets).toEqual([]);
+  });
+
+  it('小節終端で鳴り終わり、次小節が休符で始まる場合も境界で消灯する（#579 round2 P1）', () => {
+    // 全音符（小節いっぱい鳴る）→ 次小節は1拍休んでから発音。
+    // 境界の消灯節目を削ると、全音符の帯が次の発音（5拍目）まで残ってしまう
+    const measures: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }] },
+      {
+        events: [
+          { dur: '4', isRest: true, keys: [] },
+          { dur: '4', isRest: false, keys: ['d/4'] },
+          { dur: '2', isRest: true, keys: [] },
+        ],
+      },
+    ];
+
+    const timeline = buildPlaybackPositionTimeline(
+      measures, 120, [4, 4], false, 0, undefined,
+      [{ partIndex: 0, measures }],
+    );
+
+    // 0=全音符の発音、2000=小節境界の消灯、2500=次小節の発音、3000=その消灯
+    expect(timeline.map(item => item.atMs)).toEqual([0, 2000, 2500, 3000]);
+    expect(timeline[1].targets).toEqual([]);
+    expect(timeline[2].targets).toEqual([
+      { partIndex: 0, voiceIndex: 0, measureIndex: 1, noteIndex: 1 },
+    ]);
+  });
+
+  it('highlightParts を渡さない従来の呼び出しでは targets を付けない（後方互換）', () => {
+    const measures: MeasureData[] = [
+      { events: [{ dur: '4', isRest: false, keys: ['c/4'] }] },
+    ];
+
+    const timeline = buildPlaybackPositionTimeline(measures, 120, [4, 4]);
+
+    expect(timeline[0].targets).toBeUndefined();
   });
 });
 
@@ -140,5 +284,50 @@ describe('calculateExpandedPlaybackDurationMs（展開済み列の残り時間�
     ];
     // 実小節2 + 途中の空小節1 = 3小節ぶん。末尾の空小節2つは含まない
     expect(calculateExpandedPlaybackDurationMs(expanded, 120, [4, 4])).toBe(6000);
+  });
+
+  it('再生速度（%）適用後の実効テンポを 30〜240 へ丸め直さない（#544 round1 P1）', () => {
+    // 基準 40BPM × 25% = 10BPM。譜面用の clampBpm を通すと 30BPM に戻り、
+    // 4/4 の1小節が実音 24 秒に対してタイマー 8 秒で止まってしまっていた
+    const slow: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }], bpm: 10 },
+    ];
+    expect(calculateExpandedPlaybackDurationMs(slow, 10, [4, 4])).toBe(24000);
+
+    // 240BPM × 200% = 480BPM。丸め直すと実音終了後もタイマーだけ倍の時間残る
+    const fast: MeasureData[] = [
+      { events: [{ dur: '1', isRest: false, keys: ['c/4'] }], bpm: 480 },
+    ];
+    expect(calculateExpandedPlaybackDurationMs(fast, 480, [4, 4])).toBe(500);
+  });
+});
+
+describe('resolvePlaybackStartMeasureNumber（小節番号の指定・#545）', () => {
+  it('画面の小節番号（1始まり）を配列のインデックス（0始まり）へ直す', () => {
+    expect(resolvePlaybackStartMeasureNumber('1', 8)).toEqual({ ok: true, measureIndex: 0 });
+    expect(resolvePlaybackStartMeasureNumber('5', 8)).toEqual({ ok: true, measureIndex: 4 });
+    // 最終小節ちょうどは受け付ける（境界）
+    expect(resolvePlaybackStartMeasureNumber('8', 8)).toEqual({ ok: true, measureIndex: 7 });
+  });
+
+  it('前後の空白は無視する', () => {
+    expect(resolvePlaybackStartMeasureNumber('  3 ', 8)).toEqual({ ok: true, measureIndex: 2 });
+  });
+
+  it('0以下・総小節数超は範囲外として弾く', () => {
+    expect(resolvePlaybackStartMeasureNumber('0', 8)).toEqual({ ok: false, reason: 'outOfRange' });
+    expect(resolvePlaybackStartMeasureNumber('-2', 8)).toEqual({ ok: false, reason: 'outOfRange' });
+    expect(resolvePlaybackStartMeasureNumber('9', 8)).toEqual({ ok: false, reason: 'outOfRange' });
+  });
+
+  it('数字として読めない入力は弾く（parseInt の部分解釈に頼らない）', () => {
+    expect(resolvePlaybackStartMeasureNumber('', 8)).toEqual({ ok: false, reason: 'notANumber' });
+    expect(resolvePlaybackStartMeasureNumber('３', 8)).toEqual({ ok: false, reason: 'notANumber' });
+    expect(resolvePlaybackStartMeasureNumber('3abc', 8)).toEqual({ ok: false, reason: 'notANumber' });
+    expect(resolvePlaybackStartMeasureNumber('2.5', 8)).toEqual({ ok: false, reason: 'notANumber' });
+  });
+
+  it('再生できる小節がまだ無い譜面は、番号の前に「小節が無い」を理由にする', () => {
+    expect(resolvePlaybackStartMeasureNumber('1', 0)).toEqual({ ok: false, reason: 'noMeasures' });
   });
 });

@@ -66,7 +66,7 @@ describe('Palette 段またぎ表示ボタン（Issue #310）', () => {
     );
     const btn = crossStaffButton(container);
     expect(btn.disabled).toBe(true);
-    expect(btn.getAttribute('title')).toContain('2段以上');
+    expect(btn.getAttribute('data-tip')).toContain('2段以上');
 
     fireEvent.click(btn);
     expect(onChange).not.toHaveBeenCalled();

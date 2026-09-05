@@ -48,6 +48,7 @@ import {
 } from './timeSignatureUtils';
 import { resolveTimeSignatureAtMeasure } from './measureCapacityUtils';
 import type { InstrumentType } from '../audio/SoundSource';
+import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
 import type { ClefType } from '../components/clefUtils';
 import {
   MAX_SYMBOL_DEFS,
@@ -353,7 +354,10 @@ export function validateCustomSymbolDef(def: any): def is CustomSymbolDef {
     def.name.length <= MAX_SYMBOL_NAME_LENGTH &&
     Array.isArray(def.shapes) &&
     def.shapes.length <= MAX_SHAPES_PER_SYMBOL &&
-    def.shapes.every(validateShapePrimitive)
+    def.shapes.every(validateShapePrimitive) &&
+    // 手ぶれ補正フラグ。省略可（この機能より前に保存されたデータには存在しない）だが、
+    // 値があるなら真偽値でなければならない
+    (def.smoothing === undefined || typeof def.smoothing === 'boolean')
   );
 }
 
@@ -685,6 +689,11 @@ export function validateSavedScoreData(data: any): data is SavedScoreData {
     (data.notationSizeMultiplier === undefined ||
       (typeof data.notationSizeMultiplier === 'number' && Number.isFinite(data.notationSizeMultiplier))) &&
     (data.pageMargins === undefined || (typeof data.pageMargins === 'object' && data.pageMargins !== null)) &&
+    // 作品ごとの全体テンポ（Issue #543）。範囲外・0 は読み込み時に
+    // normalizeSavedGlobalBpm が正す（0 以下は「未保存」扱い）ので、
+    // ここでは型が違うデータを弾くところまでを見る（他の省略可能項目と同じ方針）。
+    (data.globalBpm === undefined ||
+      (typeof data.globalBpm === 'number' && Number.isFinite(data.globalBpm))) &&
     Array.isArray(data.parts) &&
     data.parts.length > 0 &&
     data.parts.every(validatePartData) &&
@@ -846,14 +855,14 @@ function createStorageError(error: unknown): StorageError {
     if (error.name === 'QuotaExceededError') {
       return {
         type: StorageErrorType.QUOTA_EXCEEDED,
-        message: 'Storage quota exceeded. Please clear some data or use export functionality.',
+        message: STORAGE_FULL_MESSAGE,
         recoverable: true
       };
     }
     if (error.name === 'SecurityError') {
       return {
         type: StorageErrorType.STORAGE_DISABLED,
-        message: 'Storage is disabled (private browsing mode). Data cannot be saved.',
+        message: STORAGE_UNAVAILABLE_MESSAGE,
         recoverable: false
       };
     }
@@ -877,16 +886,48 @@ function createStorageError(error: unknown): StorageError {
 /**
  * Checks if localStorage is available and functional
  */
-export function isStorageAvailable(): boolean {
+/**
+ * 保存領域（localStorage）の状態。
+ * - 'ok': 読み書きできる
+ * - 'full': **存在するが満杯**（試し書きが容量超過で失敗）。読み出し・削除はできる
+ * - 'unavailable': 使えない（シークレットウィンドウ・サイトデータのブロックなど）
+ *
+ * 以前は「試し書きが失敗＝使えない」とひとまとめにしていたため、履歴で 10MB を使い切ると
+ * 作品一覧が空に見え、ホームから抜け出せなくなった（運用者の実測 2026-09-05・Issue #641）。
+ * 満杯は「読める・消せる」ので、一覧・開く・削除・書き出しを止めてはいけない。
+ */
+export type StorageCapacityState = 'ok' | 'full' | 'unavailable';
+
+/** 容量超過の例外か（ブラウザごとに名前・コードが違うので広めに見る） */
+export function isQuotaExceededError(error: unknown): boolean {
+  if (!(error instanceof DOMException)) return false;
+  return error.name === 'QuotaExceededError'
+    || error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+    || error.code === 22
+    || error.code === 1014;
+}
+
+export function getStorageCapacityState(): StorageCapacityState {
   try {
     const testKey = '__storage_test__';
     localStorage.setItem(testKey, 'test');
     localStorage.removeItem(testKey);
-    return true;
-  } catch {
-    return false;
+    return 'ok';
+  } catch (error) {
+    return isQuotaExceededError(error) ? 'full' : 'unavailable';
   }
 }
+
+/** 保存領域が存在するか（満杯でも true。書けるかどうかは書き込み時の例外で判定する） */
+export function isStorageAvailable(): boolean {
+  return getStorageCapacityState() !== 'unavailable';
+}
+
+/** 満杯・使えないときに利用者へ見せる文言（ホーム・ファイルタブ・保存失敗の通知で共用） */
+export const STORAGE_FULL_MESSAGE =
+  '保存領域が満杯です（この端末のブラウザ保存・約10MB）。新しい編集は保存されません。作品一覧から不要な作品を削除するか、「書き出し」でファイルへ退避してください';
+export const STORAGE_UNAVAILABLE_MESSAGE =
+  'この画面では保存ができません（ブラウザが保存領域を許可していません）。編集した内容は残りません。シークレットウィンドウの場合は通常のウィンドウで開き直してください';
 
 /** 保存先スロット1組ぶんのキー名 */
 interface StorageSlotKeys {
@@ -919,7 +960,7 @@ function saveScoreDataToSlot(data: SavedScoreData, keys: StorageSlotKeys): Stora
         success: false,
         error: {
           type: StorageErrorType.STORAGE_DISABLED,
-          message: 'localStorage is not available',
+          message: STORAGE_UNAVAILABLE_MESSAGE,
           recoverable: false
         }
       };
@@ -1030,7 +1071,7 @@ function loadScoreDataFromSlot(keys: StorageSlotKeys): StorageResult<SavedScoreD
         success: false,
         error: {
           type: StorageErrorType.STORAGE_DISABLED,
-          message: 'localStorage is not available',
+          message: STORAGE_UNAVAILABLE_MESSAGE,
           recoverable: false
         }
       };
@@ -1176,7 +1217,7 @@ function clearStoredDataInSlot(keys: StorageSlotKeys): StorageResult<boolean> {
         success: false,
         error: {
           type: StorageErrorType.STORAGE_DISABLED,
-          message: 'localStorage is not available',
+          message: STORAGE_UNAVAILABLE_MESSAGE,
           recoverable: false
         }
       };
@@ -1303,7 +1344,7 @@ function createInvalidWorkIdError(): StorageError {
 function createStorageDisabledError(): StorageError {
   return {
     type: StorageErrorType.STORAGE_DISABLED,
-    message: 'localStorage is not available',
+    message: STORAGE_UNAVAILABLE_MESSAGE,
     recoverable: false
   };
 }
@@ -1855,7 +1896,8 @@ export function createSavedScoreData(
   timeSignatureStyle?: TimeSignatureStyle,
   pageSize?: PageSizeId,
   notationSizeMultiplier?: number,
-  pageMargins?: SavedPageMargins
+  pageMargins?: SavedPageMargins,
+  globalBpm?: number
 ): SavedScoreData {
   return {
     version: CURRENT_VERSION,
@@ -1895,6 +1937,11 @@ export function createSavedScoreData(
             topMm: DEFAULT_PAGE_MARGIN_TOP_MM,
             bottomMm: DEFAULT_PAGE_MARGIN_BOTTOM_MM,
           }),
+    // 全体テンポ（Issue #543）は、渡されたら**常に明示的に保存する**。
+    // 既定値（120）と同じときに省略すると、読込側の既定（アプリ全体設定へ従う）と
+    // 食い違い、「全体設定が 40 の環境で 120 の作品を開くと 40 になる」穴が開く
+    // （音符の大きさ・#477 round1 P1 と同じ理由）。壊れた値は省略扱いにする。
+    globalBpm: normalizeSavedGlobalBpm(globalBpm),
     instrumentation,
     notationMode,
     titleFontId,
