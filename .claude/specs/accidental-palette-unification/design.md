@@ -542,3 +542,14 @@ Finale / Dorico / MuseScore も「臨時記号＝音符の性質」「調号＝�
   ¼♯ 四分音（半音の半分）。プルダウンの項目にも同じ文言（`ToolVariantOption.title`）
 - 途中調号変更: 「途中調号変更 — **クリックした小節から先**の調を変える（調号を選んで指定）」
 - aria-label の先頭「臨時記号: <名前>」は据え置き（§3-6 の手がかり。テストは先頭一致）
+
+### 即時ツールチップ（2026-09-05・運用者要望「カーソルを置いた瞬間に出す」）
+
+title 属性は約1秒待たないと出ず、埋め込みブラウザでは出ないこともある。CSS の ::after 案は
+`.toolbar-panel`（横スクロール用の overflow:auto）に切られて使えなかった。そこでプルダウン
+（#613）と同じ「画面座標で固定表示」を、アプリに1つだけ置く部品 `InstantTooltip.tsx` に集約した:
+- 出したい要素は `title` の代わりに `data-tip="文言"` を付けるだけ（Palette・ToolVariantButton の
+  全ボタンを置換済み）。aria-label は別に持つ
+- document の mouseover/mouseout/focusin/focusout を委譲で拾い、押す・キー・スクロール・リサイズで消す
+- 横は `clampDropdownMenuLeft` で画面内に収め、画面下寄り（残り 120px 未満）では上へ出す
+- 他の画面（再生パネルなど）へ広げるときも `data-tip` を付けるだけ。仕組みの2枚目を作らない

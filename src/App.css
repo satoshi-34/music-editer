@@ -32,6 +32,28 @@
   min-width: min-content;
 }
 
+/* 即時ツールチップ（Issue #633）。出す仕組みは components/InstantTooltip.tsx（アプリに1つ、
+   data-tip を持つ要素のホバー／フォーカスを委譲で拾って画面座標に固定表示）。
+   CSS の ::after で作らないのは、ツールバーの各段（.toolbar-panel）が横スクロール用に
+   overflow:auto で、その中の吹き出しは外へ出られず切れるため。 */
+.instant-tooltip {
+  position: fixed;
+  z-index: 60;                 /* ツールバー（20）やプルダウン（50）より手前 */
+  width: max-content;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  color: #fff;
+  background: #1f2937f0;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  pointer-events: none;        /* 吹き出しの上にマウスが乗っても消えない／クリックを奪わない */
+}
+
 /* ヘッダー（ツールバー） */
 .toolbar {
   position: fixed;            /* スクロールしても常に上に固定 */

@@ -19,6 +19,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import ScorePage, { type HomeActionResult, type ScorePageHomeActions } from './components/ScorePage';
 import HomeScreen, { type HomeOpenKind } from './components/HomeScreen';
+import InstantTooltip from './components/InstantTooltip';
 import type { ScoreType, WorkSummary } from './types/storage';
 import type { ToolbarTab } from './utils/editorContextLabels';
 import { getLastOpenedWorkId, hasStoredData, listWorks } from './utils/storage';
@@ -201,6 +202,8 @@ export default function App() {
 
   return (
     <>
+      {/* 即時ツールチップ（#633）。data-tip を持つ要素のホバーを document で拾うので、アプリに1つだけ */}
+      <InstantTooltip />
       {DevTuningPanel && (
         <Suspense fallback={null}>
           <DevTuningPanel />

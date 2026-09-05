@@ -77,27 +77,27 @@ describe('Palette 入力時に付ける臨時記号（Issue #470）', () => {
     cleanup();
   });
 
-  it('ホバーで「その音だけ」か「その小節から先」かが分かる（Issue #633）', () => {
+  it('ホバーで「その音だけ」か「その小節から先」かが分かる（Issue #633）。文言は即時ツールチップ（data-tip）に載る', () => {
     const { container } = render(
       <Palette value={{ duration: '4', isRest: false }} onChange={vi.fn()} section="notes" />
     );
     const sharp = buttonByLabelPrefix(container, '臨時記号: シャープ');
-    expect(sharp.title).toContain('クリックした音だけ半音上げる');
+    expect(sharp.getAttribute('data-tip')).toContain('クリックした音だけ半音上げる');
     // 途中調号変更は演奏記号タブ（section="symbols"）側にある
     const symbols = render(
       <Palette value={{ duration: '4', isRest: false }} onChange={vi.fn()} section="symbols" />
     );
     const keyChange = symbols.container.querySelector('button[aria-label^="途中調号変更"]') as HTMLButtonElement | null;
     expect(keyChange, '途中調号変更のボタン').toBeTruthy();
-    expect(keyChange!.title).toContain('クリックした小節から先');
+    expect(keyChange!.getAttribute('data-tip')).toContain('クリックした小節から先');
     // プルダウンの項目にも効く量の説明が付く
     fireEvent.click(container.querySelector('button[aria-label^="シャープ系の種類を選ぶ"]') as HTMLButtonElement);
     const doubleSharp = container.querySelector('button[aria-label^="臨時記号: ダブルシャープ"]') as HTMLButtonElement | null;
     expect(doubleSharp, '𝄪 の項目').toBeTruthy();
-    expect(doubleSharp!.title).toContain('全音');
+    expect(doubleSharp!.getAttribute('data-tip')).toContain('全音');
     const quarter = container.querySelector('button[aria-label^="臨時記号: 四分音上げ"]') as HTMLButtonElement | null;
     expect(quarter, '¼♯ の項目').toBeTruthy();
-    expect(quarter!.title).toContain('半音の半分');
+    expect(quarter!.getAttribute('data-tip')).toContain('半音の半分');
     cleanup();
   });
 });
