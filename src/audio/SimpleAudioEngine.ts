@@ -3,8 +3,14 @@
 // ブラウザの自動再生ポリシーに完全対応
 
 import { beatSpanToSeconds, tempoSegmentsFrom } from '../utils/tempoPlaybackUtils';
+import { scheduleLeadSeconds } from './scheduleLead';
+import { limitPolyphony, maxPolyphony, type VoiceSpan } from './polyphonyLimit';
+import { createWindowedScheduler, lookaheadSeconds, type WindowedScheduler } from './scheduleWindow';
+
+/** playScore が積む「鳴らす予定の1音」。同時発音数の上限を掛けてから予約する（#605） */
+type SimpleVoice = VoiceSpan & { frequency: number; velocity: number; instrument: InstrumentType; duration: number; tail: number };
 import { InstrumentType } from './SoundSource';
-import type { PlaybackEngine, PlaybackPart } from './PlaybackEngine';
+import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
 import {
   DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS,
   getMasterVolumeGain,
@@ -57,6 +63,22 @@ interface SimpleInstrumentConfig {
  * Tone.jsを使わずにWeb Audio APIを直接使用してブラウザの自動再生ポリシーに対応
  */
 export class SimpleAudioEngine implements PlaybackEngine {
+  /** 進行中の先読み窓（#622）。stopAll で止める */
+  private activeScheduler: WindowedScheduler | null = null;
+  private readonly schedulingFailureListeners = new Set<(error: unknown) => void>();
+
+  onSchedulingFailure(listener: (error: unknown) => void): () => void {
+    this.schedulingFailureListeners.add(listener);
+    return () => { this.schedulingFailureListeners.delete(listener); };
+  }
+
+  /** 後続の窓の予約失敗を画面へ伝える（#622 round2 P2） */
+  private notifySchedulingFailure(error: unknown): void {
+    this.activeScheduler = null;
+    this.schedulingFailureListeners.forEach((listener) => {
+      try { listener(error); } catch (listenerError) { console.warn('[PlaybackEngine] 失敗通知の受け手で例外:', listenerError); }
+    });
+  }
   private context: AudioContext | null = null;
   private isInitialized: boolean = false;
   private oscillators: Map<string, { oscillators: OscillatorNode[]; gainNode: GainNode }> = new Map();
@@ -404,7 +426,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
       bpm?: number;
     }>,
     bpm: number = 120,
-    startTime?: number
+    startTime?: number,
+    /**
+     * 同時発音数の上限（#605）を複数パートまとめて掛けるための受け皿。
+     * playParts が渡す。渡されたときは音を予約せず、ここへ積むだけにする
+     * （鳴らすのは playParts 側が全パートぶん詰めた後）。省略時は単独で上限を掛けて鳴らす
+     */
+    collector?: SimpleVoice[]
   ): Promise<void> {
     await this.ensureContextReady();
     const context = this.context;
@@ -412,6 +440,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
       throw new Error('AudioContextが初期化されていません');
     }
 
+    const voices: SimpleVoice[] = collector ?? [];
     try {
       console.log('[SimpleAudioEngine] 譜面再生を開始:', scoreData.length, '小節');
       
@@ -513,12 +542,17 @@ export class SimpleAudioEngine implements PlaybackEngine {
                   ),
                 )
               : tiedSoundDuration;
-            await this.playNoteAtTime(
+            // endTime は尻尾（余韻）込み＝オシレーターが実際に生きている期間（#605 round1 P1）
+            const tail = this.resolveEffectiveTailSeconds(this.getInstrumentConfig(), soundingDuration);
+            voices.push({
               frequency,
-              soundingDuration,
-              eventStartTime,
-              this.normalizePlaybackVelocity((event as { velocity?: number }).velocity)
-            );
+              duration: soundingDuration,
+              tail,
+              startTime: eventStartTime,
+              endTime: eventStartTime + soundingDuration + tail,
+              velocity: this.normalizePlaybackVelocity((event as { velocity?: number }).velocity),
+              instrument: this.currentInstrument,
+            });
           }
 
           if (typeof event.startBeat === 'number') {
@@ -540,6 +574,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
         currentTime = Math.max(maxMeasureEndTime, measureStartTime + measureSeconds);
       }
       
+      if (!collector) {
+        await this.playLimitedVoices(voices);
+      }
       console.log('[SimpleAudioEngine] 譜面再生スケジュール完了');
       
     } catch (error) {
@@ -549,13 +586,70 @@ export class SimpleAudioEngine implements PlaybackEngine {
   }
 
   /**
+   * 集めたボイスに同時発音数の上限（#605・SoundFontEngine と同じ規約）を掛けてから予約する。
+   * 音色はボイスごとに控えた楽器で鳴らす（パート別音色を保つため、予約中だけ切り替える）
+   */
+  private async playLimitedVoices(voices: SimpleVoice[]): Promise<void> {
+    const limited = limitPolyphony(voices, maxPolyphony());
+    // 詰められた占有期間に「音本体 → 尻尾」の順で収める（round2 P1: 尻尾の全量を先に
+    // 引くと、尻尾だけ切れば足りる短音まで丸ごと無音化する）。占有 0 以下の音は予約しない
+    const playable = limited.voices.filter((voice) => voice.endTime - voice.startTime > 0);
+    const context = this.context;
+    if (!context) return;
+    // ノードは先読み窓ぶんだけ逐次作る（#622。SoundFontEngine と同じ計画部）。
+    // 窓内の1音は playNoteAtTime に任せる（context は準備済みなので即座に予約される）。
+    // 音色はボイスごとに控えた楽器を playNoteAtTime へ渡す（一時切り替えは非同期で混線する）
+    this.activeScheduler?.stop();
+    // 先頭の窓の予約（playNoteAtTime の非同期部分）は待ってから返す（呼び出し側は
+    // 「playParts が返ったら先頭の音は予約済み」を前提にしている）。以後の窓は待たない
+    // 先頭の窓の失敗は playParts の失敗として呼び出し側（ScorePage のフォールバック）へ伝える。
+    // 後続の窓の失敗は onSchedulingFailure で画面へ伝える（無音で「再生中」を残さない）
+    let firstWindow: Promise<void>[] | null = [];
+    const scheduler = createWindowedScheduler({
+      voices: playable,
+      now: () => context.currentTime,
+      play: (voice) => {
+        const occupancy = voice.endTime - voice.startTime;
+        const duration = Math.min(voice.duration, occupancy);
+        const tail = Math.max(0, occupancy - duration);
+        const scheduled = this.playNoteAtTime(voice.frequency, duration, voice.startTime, voice.velocity, tail, voice.instrument);
+        // 先頭の窓は playParts の戻り値で失敗を伝える。後続の窓は scheduler の onError 経由
+        firstWindow?.push(scheduled);
+        return scheduled;
+      },
+      // 先頭の窓の失敗は scheduler が onError を呼ばず、下の Promise.all が投げる（後続の窓だけ通知）
+      onError: (error) => {
+        console.warn('[SimpleAudioEngine] 窓の予約に失敗したため以後の予約を止めます:', error);
+        this.notifySchedulingFailure(error);
+      },
+    });
+    this.activeScheduler = scheduler;
+    scheduler.start();
+    const pending = firstWindow;
+    firstWindow = null;
+    try {
+      await Promise.all(pending);
+    } catch (error) {
+      scheduler.stop();
+      throw error;
+    }
+    console.log('[SimpleAudioEngine] 同時発音:',
+      `ボイス ${voices.length} / 最大同時 ${limited.peakBefore} / 詰め ${limited.stolen}（うち無音化 ${limited.dropped}）/ 上限 ${maxPolyphony()}`,
+      `/ 先読み窓 ${lookaheadSeconds()}s で先頭 ${scheduler.stats().scheduled} 音を予約`);
+  }
+
+  /**
    * 指定した時刻に音符を再生する（内部用）
    */
   private async playNoteAtTime(
     frequency: number,
     duration: number,
     startTime: number,
-    velocity: number = 0.5
+    velocity: number = 0.5,
+    /** 尻尾（余韻）の長さを直接指定する（同時発音数の上限で詰められた音・#605）。省略時は共通計算 */
+    tailOverride?: number,
+    /** 鳴らす楽器（#622: 先読み窓からパート別に渡す）。省略時は現在の楽器 */
+    instrument: InstrumentType = this.currentInstrument
   ): Promise<void> {
     await this.ensureContextReady();
     const context = this.context;
@@ -565,13 +659,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
     try {
       if (this.shouldUseSafariSafeVoice()) {
-        this.playSafariSafeVoice(context, frequency, duration, startTime);
+        this.playSafariSafeVoice(context, frequency, duration, startTime, tailOverride, instrument);
         return;
       }
 
       // playNote と同じ考え方で、未来の時刻に向けた音量変化を予約する。
       const gainNode = context.createGain();
-      const instrumentConfig = this.getInstrumentConfig();
+      const instrumentConfig = this.getInstrumentConfig(instrument);
       const oscillators = this.createOscillators(
         context,
         frequency,
@@ -590,7 +684,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
         0.0001,
         this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor) * velocity
       );
-      const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
+      const adjustedTailSeconds = tailOverride ?? this.resolveEffectiveTailSeconds(instrumentConfig, duration);
       // 短音でも「attack→decay→音価終端→尻尾」の時刻順を守る（round2 P2）
       const envelope = this.clampEnvelopeTimes(
         adjustedAttack,
@@ -608,13 +702,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
       );
       gainNode.gain.exponentialRampToValueAtTime(
         0.0001,
-        startTime + duration + adjustedTailSeconds
+        // 尻尾 0（上限で詰められた音）でもオートメーション点の時刻順を崩さないよう、最小 1ms は置く
+        startTime + duration + Math.max(0.001, adjustedTailSeconds)
       );
       
       // 再生時刻も停止時刻も「今すぐ」ではなく未来の秒数で予約する。
       oscillators.forEach((oscillator, index) => {
         oscillator.start(startTime);
-        oscillator.stop(startTime + duration + adjustedTailSeconds);
+        oscillator.stop(startTime + duration + Math.max(0.001, adjustedTailSeconds));
         if (index === 0) {
           oscillator.addEventListener('ended', () => {
             this.cleanupOscillator(oscillatorId, gainNode);
@@ -631,7 +726,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
   /**
    * 複数パート（右手・左手など）を同時再生する
    */
-  async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<void> {
+  async playParts(parts: PlaybackPart[], bpm: number = 120): Promise<PlaybackScheduleInfo> {
     await this.ensureContextReady();
     const context = this.context;
     if (!context) {
@@ -639,7 +734,11 @@ export class SimpleAudioEngine implements PlaybackEngine {
     }
 
     const originalInstrument = this.currentInstrument;
-    const sharedStartTime = context.currentTime;
+    const voices: SimpleVoice[] = [];
+    // 「今」に先読みリードを足す（#610。SoundFontEngine と同じ定数）
+    const sharedStartTime = context.currentTime + scheduleLeadSeconds();
+    // 画面側の同期用: 起点を決めたこの瞬間の壁時計（SoundFontEngine と同じ意味）
+    const scheduledAtMs = Date.now();
 
     try {
       for (const part of parts) {
@@ -647,8 +746,11 @@ export class SimpleAudioEngine implements PlaybackEngine {
         // パートごとに設定を切り替えてから同じ開始時刻へ予約すると、
         // Flute / Violin などの音色を分けつつ、発音タイミングはそろえられる。
         this.currentInstrument = part.instrument ?? originalInstrument;
-        await this.playScore(part.measures, bpm, sharedStartTime);
+        await this.playScore(part.measures, bpm, sharedStartTime, voices);
       }
+      // 全パートぶんそろってから同時発音数の上限を掛けて鳴らす（#605）
+      await this.playLimitedVoices(voices);
+      return { scheduledAtMs };
     } finally {
       // 再生後の UI プレビューなどが別パートの音色に引きずられないよう、
       // 一時的に切り替えた楽器を必ず元へ戻す。
@@ -718,7 +820,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
   /**
    * 楽器ごとの簡易音色設定を返す
    */
-  private getInstrumentConfig(): SimpleInstrumentConfig {
+  private getInstrumentConfig(instrument: InstrumentType = this.currentInstrument): SimpleInstrumentConfig {
+    // instrument を渡すと「その楽器の設計図」を返す（#622: 先読み窓ではパート別の音を
+    // 非同期に予約するため、instrument の一時切り替えでは混線する）
     // 音色調整の中心はこのメソッド。
     // 迷ったら、まずここを見ると「どの値が何に効くか」を追いやすい。
     //
@@ -774,7 +878,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
     // - sawtooth: やや硬い
     // - square: 硬い
 
-    switch (this.currentInstrument) {
+    switch (instrument) {
       case InstrumentType.ORGAN:
         return {
           // オルガンは倍音が豊かで、押している間は比較的まっすぐ伸びる音を目指す。
@@ -852,14 +956,14 @@ export class SimpleAudioEngine implements PlaybackEngine {
         return {
           oscillators: [
             { type: 'triangle', gainRatio: 1 },
-            { type: 'sawtooth', detune: this.currentInstrument === InstrumentType.BASSOON ? -4 : 3, gainRatio: 0.16 },
-            { type: 'sine', detune: this.currentInstrument === InstrumentType.ENGLISH_HORN ? -8 : -5, gainRatio: 0.12 }
+            { type: 'sawtooth', detune: instrument === InstrumentType.BASSOON ? -4 : 3, gainRatio: 0.16 },
+            { type: 'sine', detune: instrument === InstrumentType.ENGLISH_HORN ? -8 : -5, gainRatio: 0.12 }
           ],
-          attack: this.currentInstrument === InstrumentType.BASSOON ? 0.045 : 0.035,
+          attack: instrument === InstrumentType.BASSOON ? 0.045 : 0.035,
           peakGain: 0.19,
-          decayTarget: this.currentInstrument === InstrumentType.ENGLISH_HORN ? 0.13 : 0.11,
+          decayTarget: instrument === InstrumentType.ENGLISH_HORN ? 0.13 : 0.11,
           releaseFloor: 0.015,
-          tailSeconds: this.currentInstrument === InstrumentType.BASSOON ? 0.1 : 0.08
+          tailSeconds: instrument === InstrumentType.BASSOON ? 0.1 : 0.08
         };
       case InstrumentType.SOPRANO_SAX:
       case InstrumentType.ALTO_SAX:
@@ -868,8 +972,8 @@ export class SimpleAudioEngine implements PlaybackEngine {
         return {
           oscillators: [
             { type: 'sawtooth', gainRatio: 1 },
-            { type: 'triangle', detune: this.currentInstrument === InstrumentType.BARITONE_SAX ? -6 : -2, gainRatio: 0.2 },
-            { type: 'sine', detune: this.currentInstrument === InstrumentType.TENOR_SAX || this.currentInstrument === InstrumentType.BARITONE_SAX ? -10 : -5, gainRatio: 0.15 }
+            { type: 'triangle', detune: instrument === InstrumentType.BARITONE_SAX ? -6 : -2, gainRatio: 0.2 },
+            { type: 'sine', detune: instrument === InstrumentType.TENOR_SAX || instrument === InstrumentType.BARITONE_SAX ? -10 : -5, gainRatio: 0.15 }
           ],
           attack: 0.025,
           peakGain: 0.21,
@@ -884,28 +988,28 @@ export class SimpleAudioEngine implements PlaybackEngine {
       case InstrumentType.TUBA:
         return {
           oscillators: [
-            { type: this.currentInstrument === InstrumentType.HORN || this.currentInstrument === InstrumentType.EUPHONIUM ? 'triangle' : 'square', gainRatio: 1 },
-            { type: 'sawtooth', detune: this.currentInstrument === InstrumentType.TUBA ? -7 : 4, gainRatio: 0.18 },
-            { type: 'sine', detune: this.currentInstrument === InstrumentType.TUBA ? -12 : -5, gainRatio: 0.14 }
+            { type: instrument === InstrumentType.HORN || instrument === InstrumentType.EUPHONIUM ? 'triangle' : 'square', gainRatio: 1 },
+            { type: 'sawtooth', detune: instrument === InstrumentType.TUBA ? -7 : 4, gainRatio: 0.18 },
+            { type: 'sine', detune: instrument === InstrumentType.TUBA ? -12 : -5, gainRatio: 0.14 }
           ],
-          attack: this.currentInstrument === InstrumentType.TUBA ? 0.05 : 0.025,
-          peakGain: this.currentInstrument === InstrumentType.TRUMPET ? 0.24 : 0.22,
-          decayTarget: this.currentInstrument === InstrumentType.HORN ? 0.15 : 0.13,
+          attack: instrument === InstrumentType.TUBA ? 0.05 : 0.025,
+          peakGain: instrument === InstrumentType.TRUMPET ? 0.24 : 0.22,
+          decayTarget: instrument === InstrumentType.HORN ? 0.15 : 0.13,
           releaseFloor: 0.02,
-          tailSeconds: this.currentInstrument === InstrumentType.TROMBONE || this.currentInstrument === InstrumentType.TUBA ? 0.14 : 0.09
+          tailSeconds: instrument === InstrumentType.TROMBONE || instrument === InstrumentType.TUBA ? 0.14 : 0.09
         };
       case InstrumentType.TIMPANI:
       case InstrumentType.PERCUSSION:
         return {
           oscillators: [
             { type: 'triangle', gainRatio: 1 },
-            { type: 'sine', detune: -12, gainRatio: this.currentInstrument === InstrumentType.TIMPANI ? 0.24 : 0.12 }
+            { type: 'sine', detune: -12, gainRatio: instrument === InstrumentType.TIMPANI ? 0.24 : 0.12 }
           ],
           attack: 0.003,
           peakGain: 0.25,
-          decayTarget: this.currentInstrument === InstrumentType.TIMPANI ? 0.08 : 0.04,
+          decayTarget: instrument === InstrumentType.TIMPANI ? 0.08 : 0.04,
           releaseFloor: 0.002,
-          tailSeconds: this.currentInstrument === InstrumentType.TIMPANI ? 0.18 : 0.05
+          tailSeconds: instrument === InstrumentType.TIMPANI ? 0.18 : 0.05
         };
       case InstrumentType.VIOLIN:
         return {
@@ -1059,6 +1163,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
    * 現在鳴っている音と予約済みの音をすべて停止する
    */
   stopAll(): void {
+    // 以後の窓は作らない（#622）。作成済みの音は下で止める
+    this.activeScheduler?.stop();
+    this.activeScheduler = null;
     if (!this.context) {
       return;
     }
@@ -1203,9 +1310,12 @@ export class SimpleAudioEngine implements PlaybackEngine {
     context: AudioContext,
     frequency: number,
     duration: number,
-    startTime: number
+    startTime: number,
+    /** 尻尾の長さの上書き（同時発音数の上限で詰められた音・#605）。通常経路と同じ意味 */
+    tailOverride?: number,
+    instrument: InstrumentType = this.currentInstrument,
   ): void {
-    const instrumentConfig = this.getInstrumentConfig();
+    const instrumentConfig = this.getInstrumentConfig(instrument);
     const primaryOscillatorSpec = instrumentConfig.oscillators[0] ?? { type: 'triangle' as OscillatorType };
     const oscillator = context.createOscillator();
     const gainNode = context.createGain();
@@ -1222,7 +1332,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
     const adjustedReleaseFloor = Math.max(0.0001, this.getAdjustedReleaseFloor(instrumentConfig.releaseFloor));
     // 簡易経路でも余韻の長さは通常経路と同じにする（Issue #525。
     // ここだけ短いと、Safari だけ長い音がプツンと切れて聞こえる）
-    const adjustedTailSeconds = this.resolveEffectiveTailSeconds(instrumentConfig, duration);
+    // 上限で詰められた音は尻尾を上書きで受け取る（#605 round3 P1: 簡易経路だけ余韻が残ると
+    // Safari で同時発音数が上限を超える）。尻尾 0 でも時刻順を崩さないよう最小 1ms
+    const adjustedTailSeconds = Math.max(0.001, tailOverride ?? this.resolveEffectiveTailSeconds(instrumentConfig, duration));
     // 短音でも「attack→decay→音価終端→尻尾」の時刻順を守る（round2 P2）
     const envelope = this.clampEnvelopeTimes(
       Math.max(0.005, adjustedAttack),

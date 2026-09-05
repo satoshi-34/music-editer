@@ -23,6 +23,8 @@ export type PlaybackState = 'stopped' | 'playing' | 'paused' | 'loading';
 export interface PlaybackControlsProps {
   /** 現在の再生状態 */
   playbackState: PlaybackState;
+  /** 作品の切替・復元中（#609）。再生ボタンを無効にし、理由をラベルで示す */
+  workRestoring?: boolean;
   /** 現在の再生位置 */
   currentPosition: PlaybackPosition;
   /** 現在のテンポ（BPM） */
@@ -176,6 +178,7 @@ const SOUND_ENGINE_MODE_OPTIONS: ReadonlyArray<{ value: SoundEngineMode; label: 
  */
 export default function PlaybackControls({
   playbackState,
+  workRestoring = false,
   currentPosition,
   currentTempo,
   currentInstrument,
@@ -445,6 +448,8 @@ export default function PlaybackControls({
   /**
    * 再生/一時停止ボタンのアイコンとラベルを取得
    */
+  // 作品の読み込み中は「押せない理由」をツールチップで示す（押しても何も起きないを作らない・#318）
+  const WORK_RESTORING_PLAY_TITLE = '作品を読み込み中です。終わると再生できます';
   const getPlayPauseButtonContent = () => {
     switch (playbackState) {
       case 'playing':
@@ -475,8 +480,8 @@ export default function PlaybackControls({
           <button
             className="ghost playback-button play-pause-button"
             onClick={handlePlayPauseClick}
-            disabled={playbackState === 'loading'}
-            title={playPauseContent.label}
+            disabled={playbackState === 'loading' || workRestoring}
+            title={workRestoring ? WORK_RESTORING_PLAY_TITLE : playPauseContent.label}
             aria-label={playPauseContent.label}
           >
             <span className="button-icon" aria-hidden="true">

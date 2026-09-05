@@ -8,7 +8,8 @@
 // ファイルを開く・設定タブを開く）はすべて譜面画面（ScorePage）側の既存処理を
 // 呼び出す形にして、同じ機能を2か所へ書かないようにしている。
 
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { getStorageCapacityState, STORAGE_FULL_MESSAGE, STORAGE_UNAVAILABLE_MESSAGE } from '../utils/storage';
 import type { ScoreType, WorkSummary } from '../types/storage';
 import { SCORE_TYPE_BUTTONS, TOOLBAR_TAB_BUTTONS, type ToolbarTab } from '../utils/editorContextLabels';
 import { formatWorkTitle, formatWorkUpdatedAt } from '../utils/workDisplay';
@@ -179,6 +180,15 @@ export default function HomeScreen({
   errorMessage = null,
   busy = false,
 }: HomeScreenProps) {
+  // 保存領域の状態は、ホームを開くたび・作品の増減のたびに測り直す（削除で空いたら消える）
+  const storageNotice = useMemo(() => {
+    const state = getStorageCapacityState();
+    if (state === 'full') return STORAGE_FULL_MESSAGE;
+    if (state === 'unavailable') return STORAGE_UNAVAILABLE_MESSAGE;
+    return null;
+    // works が変わる＝作品の削除・作成があった、という合図として使う
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [works]);
   const openButtons = OPEN_BUTTONS.filter(button => availableOpenKinds.includes(button.kind));
   // レールのフライアウト（開く/設定）。中央からセクションを撤去したぶんの受け皿で、
   // 一度にどちらか1つだけ開く（運用者QA 2026-09-02）
@@ -302,6 +312,13 @@ export default function HomeScreen({
             <div className="home-header-slot" aria-hidden="true" />
           </header>
 
+          {/* 保存領域が満杯・使えないときの常設の案内（Issue #641 / #640）。
+              満杯でも作品は消えていない（読める・消せる）ので、ここから削除・書き出しで抜け出せる */}
+          {storageNotice && (
+            <p className="home-error" role="alert" data-testid="home-storage-notice">
+              {storageNotice}
+            </p>
+          )}
           {/* 直前の操作が失敗した理由（round2 P2）。role=alert で支援技術にも即時に届く */}
           {errorMessage && (
             <p className="home-error" role="alert" data-testid="home-error">
@@ -352,7 +369,9 @@ export default function HomeScreen({
 
           {/* 2. 最近使ったファイル（Issue #528）。以前あった「前回の続き」の緑のバナーは廃止し、
               この一覧の先頭（＝いちばん新しく触った作品）が同じ役割を果たす。
-              カードグリッドにしてあるので、作品が増えても横方向へ流れて画面を使い切る */}
+              Issue #608 で横並びのカードから「横幅いっぱいの薄い行」の縦リストへ変えた。
+              横に並べると1枚が狭く、頭が同じ作品名（「月光 第1楽章…」）が同じところで
+              切り詰められて区別できなかったため、幅は名前を出すことに使う */}
           <section className="home-section" aria-labelledby="home-recent-heading">
             <h2 id="home-recent-heading" className="home-section-title">最近使ったファイル</h2>
             {works.length > 0 ? (
@@ -364,6 +383,8 @@ export default function HomeScreen({
                       disabled={busy}
                       className="home-work-button"
                       onClick={() => onSelectWork(work.id)}
+                      // 行の幅に収まりきらないほど長い名前でも、カーソルを乗せれば全文を読める
+                      title={formatWorkTitle(work.title)}
                       data-testid={`home-work-${work.id}`}
                     >
                       <span className="home-work-icon" aria-hidden="true">♬</span>

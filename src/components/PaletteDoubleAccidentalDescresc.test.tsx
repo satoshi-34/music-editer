@@ -1,8 +1,12 @@
 // Issue #423: ダブルシャープ（𝄪）・ダブルフラット（𝄫）と descresc. のパレット追加。
 //
 // 受入条件のうち UI 側を固定する。
-//   - 音符・休符タブに 𝄪 / 𝄫 のボタンがあり、押すと臨時記号ツールになる（既存の ♯/♭/♮ と同じ操作）
-//   - 選択中にもう一度押すと通常の音符ツールへ戻る（既存の臨時記号ボタンと同じトグル）
+//   - 音符・休符タブから 𝄪 / 𝄫 を選べ、選ぶと臨時記号ツールになる
+//   - 選択中にもう一度押すとOFFに戻る（既存の臨時記号ボタンと同じトグル）
+//
+// Issue #548 でパレットを統合したため、𝄪 / 𝄫 は独立したボタンではなく
+// 「♯▾ / ♭▾」のプルダウンの中の項目になった（運用者裁定 2026-09-02）。
+// 固定したい受入条件（選べる・トグルで戻る）は同じなので、探し方だけを移行している。
 //   - 演奏記号タブに descresc. のボタンがあり、押すと強弱記号ツールになる
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent, cleanup } from '@testing-library/react';
@@ -23,27 +27,36 @@ describe('Palette ダブルシャープ・ダブルフラット（Issue #423）'
       <Palette value={{ duration: '4' }} onChange={onChange} section="notes" />
     );
 
-    fireEvent.click(buttonByLabelPrefix(container, 'ダブルシャープ'));
-    expect(onChange).toHaveBeenCalledWith({ mode: 'accidental', accidental: 'doubleSharp' });
+    fireEvent.click(buttonByLabelPrefix(container, 'シャープ系の種類を選ぶ'));
+    fireEvent.click(buttonByLabelPrefix(container, '臨時記号: ダブルシャープ'));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ duration: '4', accidental: 'doubleSharp', microtone: undefined })
+    );
 
     onChange.mockClear();
-    fireEvent.click(buttonByLabelPrefix(container, 'ダブルフラット'));
-    expect(onChange).toHaveBeenCalledWith({ mode: 'accidental', accidental: 'doubleFlat' });
+    fireEvent.click(buttonByLabelPrefix(container, 'フラット系の種類を選ぶ'));
+    fireEvent.click(buttonByLabelPrefix(container, '臨時記号: ダブルフラット'));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ duration: '4', accidental: 'doubleFlat', microtone: undefined })
+    );
     cleanup();
   });
 
-  it('選択中にもう一度押すと通常の音符ツールへ戻る', () => {
+  it('選択中にもう一度押すとOFFに戻る', () => {
     const onChange = vi.fn();
     const { container } = render(
       <Palette
-        value={{ mode: 'accidental', accidental: 'doubleSharp' }}
+        value={{ duration: '4', accidental: 'doubleSharp' }}
         onChange={onChange}
         section="notes"
       />
     );
 
-    fireEvent.click(buttonByLabelPrefix(container, 'ダブルシャープ'));
-    expect(onChange).toHaveBeenCalledWith({ duration: '4' });
+    // ONになっている変種はボタン本体に出る（プルダウンを開かずに押せる）
+    fireEvent.click(buttonByLabelPrefix(container, '臨時記号: ダブルシャープ'));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ duration: '4', accidental: undefined, microtone: undefined })
+    );
     cleanup();
   });
 });

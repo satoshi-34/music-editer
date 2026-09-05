@@ -309,11 +309,15 @@ export function staveSpacingForPartCount(n: number): number {
  */
 export function computeLayout(
   n: number,
-  partSpacingOffsetPx: number = 0
+  partSpacingOffsetPx: number = 0,
+  // 段の下余白の追加分（px・論理座標）。ペダル記号が最下音を避けて下がるぶん
+  // （estimatePedalBottomExtensionPx・Issue #604）。0 なら従来と同じ高さ
+  bottomExtensionPx: number = 0
 ): { staveYs: number[]; sysH: number; staveSpacing: number } {
   const staveSpacing = Math.max(MIN_STAVE_SPACING_PX, staveSpacingForPartCount(n) + partSpacingOffsetPx);
   const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * staveSpacing);
-  const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20;
+  const safeExtension = Number.isFinite(bottomExtensionPx) ? Math.max(0, bottomExtensionPx) : 0;
+  const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20 + safeExtension;
   return { staveYs, sysH, staveSpacing };
 }
 
@@ -329,9 +333,9 @@ export function computeLayout(
  * （旧 estimateEnsembleSystemHeightPx はパート間隔の変更に追従しない固定係数だったため、
  * 段数/ページの上限が実際より厳しく頭打ちされる不具合の原因になっていた。Issue #38）。
  */
-export function measuredSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0): number {
+export function measuredSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0, bottomExtensionPx: number = 0): number {
   const safeCount = Math.max(1, Math.floor(partCount));
-  return computeLayout(safeCount, partSpacingOffsetPx).sysH * SCORE_LAYOUT_RENDER_SCALE;
+  return computeLayout(safeCount, partSpacingOffsetPx, bottomExtensionPx).sysH * SCORE_LAYOUT_RENDER_SCALE;
 }
 
 /**
@@ -356,8 +360,8 @@ export const SYSTEM_BREATHING_ROOM_PX = 70;
  * 初期表示の推奨段数を求めるときに使う「1段ぶんが占める高さ」（px、音符の大きさ100%時）。
  * 実際に描かれる高さ（measuredSystemHeightPx）＋段間の余白（SYSTEM_BREATHING_ROOM_PX）。
  */
-export function recommendedSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0): number {
-  return measuredSystemHeightPx(partCount, partSpacingOffsetPx) + SYSTEM_BREATHING_ROOM_PX;
+export function recommendedSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0, bottomExtensionPx: number = 0): number {
+  return measuredSystemHeightPx(partCount, partSpacingOffsetPx, bottomExtensionPx) + SYSTEM_BREATHING_ROOM_PX;
 }
 // ===== ここまで段のレイアウト計算 =====
 
@@ -756,12 +760,21 @@ function measurementPartState(
 //   ように「旋律と3連符の開始拍がずれて列が増える」小節まで2小節/段に収めるための値である。
 //   最終値は運用者の目視で確定する前提なので、緩めたいときはこの1か所だけを上げればよい。
 //
-// 圧縮しても符頭が重ならないのは、段割りの計画（planEffectiveMeasuresPerSystem）が
-// 「開始拍ごとの符頭・臨時記号の実寸を積んだ見積もり」（combinedMeasureMinimumContentWidth）
-// との Math.max を取り、そちらを過密の下限ガードとして残しているため。
-// 実ブラウザでも、修正前後で符頭の重なりが増えていないことを確認済み
-// （docs/qa/system-break-min-width/README.md の「重なりの実測」）。
-export const VEXFLOW_IDEAL_WIDTH_COMPRESSION = 0.64;
+// 変遷: 0.64（#589・2026-09-03）→ **0.3**（運用者指示・2026-09-04）。運用者が dev の調整パネル
+//   （#596）で月光検聴版（音符 150%・段の間隔 -60px・パート間隔 19px）を見ながら 0.4 → 0.3 と
+//   詰めて「これでいい」と判断した値。段割りの計画では下の実寸見積もり
+//   （combinedMeasureMinimumContentWidth）との Math.max が過密の下限を張るが、最終の小節幅は
+//   allocateCombinedMeasureWidths で均等幅とブレンドされるため、密疎が混在する段では密な小節が
+//   計画上の下限より縮み得る（#602/#603 と同じ、見積もりと実描画の乖離。0.64 のときから同じ構造）。
+//   この値を下げるほどその余地は広がるので、四重奏・編成譜で詰まりすぎと感じたらここを上げる。
+//   0.3 での実測（月光以外の譜種・重なりの計測）は未記録。docs/qa/system-break-min-width の
+//   画像・数値は 0.64 時点のもの。
+//
+// 段割りの計画（planEffectiveMeasuresPerSystem）は「開始拍ごとの符頭・臨時記号の実寸を積んだ
+// 見積もり」（combinedMeasureMinimumContentWidth）との Math.max を取り、そちらを過密の下限ガードとして
+// 残している。**0.64 時点の月光だけ**は、実ブラウザで修正前後の符頭の重なりが増えていないことを確認した
+// 過去記録がある（docs/qa/system-break-min-width/README.md の「重なりの実測」）。0.3 での確認は未記録。
+export const VEXFLOW_IDEAL_WIDTH_COMPRESSION = 0.3;
 
 /**
  * VexFlow の理想幅（音符の並びのぶん）を、段割り判定に使う最低幅へ換算する。

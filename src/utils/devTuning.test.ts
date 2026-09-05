@@ -37,7 +37,7 @@ describe('devTuned', () => {
     expect(devTuned('layout.compression', VEXFLOW_IDEAL_WIDTH_COMPRESSION)).toBe(0.8);
     expect(engravingMinimumWidthFromIdeal(100)).toBeCloseTo(80, 10);
 
-    // 範囲外は**保存の瞬間に**端へ（0.4〜1.0）。表示・コピー値と実効値がズレない
+    // 範囲外は**保存の瞬間に**端へ（0.2〜1.0）。表示・コピー値と実効値がズレない
     setDevTuningOverride('layout.compression', 5);
     expect(devTuned('layout.compression', VEXFLOW_IDEAL_WIDTH_COMPRESSION)).toBe(1);
     expect(JSON.parse(window.localStorage.getItem(DEV_TUNING_STORAGE_KEY) ?? '{}')['layout.compression']).toBe(1);
