@@ -38,6 +38,8 @@ import {
   loadWorkHistory,
   pushWorkHistoryGeneration,
   restoreWorkHistoryGeneration,
+  getStorageCapacityState,
+  isStorageAvailable,
 } from './storage';
 import type {
   SavedScoreData,
@@ -756,7 +758,7 @@ describe('Storage Foundation Tests', () => {
           expect(result.success).toBe(false);
           expect(result.error).toBeDefined();
           expect(result.error?.type).toBe('quota_exceeded');
-          expect(result.error?.message).toContain('quota');
+          expect(result.error?.message).toContain('満杯');
           expect(result.error?.recoverable).toBe(true);
         }),
         { numRuns: 100 }
@@ -799,8 +801,8 @@ describe('Storage Foundation Tests', () => {
           expect(result.success).toBe(false);
           expect(result.error).toBeDefined();
           expect(result.error?.type).toBe('storage_disabled');
-          // The message will be "localStorage is not available" from isStorageAvailable()
-          expect(result.error?.message).toContain('not available');
+          // 使えない（SecurityError）ときは日本語の案内（#640/#641）
+          expect(result.error?.message).toContain('保存ができません');
           expect(result.error?.recoverable).toBe(false);
         }),
         { numRuns: 100 }
@@ -3452,5 +3454,59 @@ describe('Storage Foundation Tests', () => {
 
       expect(listWorks().map(work => work.id)).toEqual([existing.id]);
     });
+  });
+});
+
+describe('保存領域の満杯と使えないの区別（Issue #641）', () => {
+  const originalSetItem = localStorageMock.setItem;
+  afterEach(() => {
+    localStorageMock.setItem = originalSetItem;
+    localStorageMock.clear();
+  });
+
+  function makeFull() {
+    // 読み出しと削除は通るが、書き込みだけが容量超過で失敗する（Chrome の 10MB 上限の状態）
+    localStorageMock.setItem = () => {
+      throw new DOMException('QuotaExceededError', 'QuotaExceededError');
+    };
+  }
+
+  it('満杯は「使えない」ではなく full と判定し、isStorageAvailable は true のまま', () => {
+    makeFull();
+    expect(getStorageCapacityState()).toBe('full');
+    expect(isStorageAvailable()).toBe(true);
+  });
+
+  it('SecurityError は unavailable', () => {
+    localStorageMock.setItem = () => { throw new DOMException('SecurityError', 'SecurityError'); };
+    expect(getStorageCapacityState()).toBe('unavailable');
+    expect(isStorageAvailable()).toBe(false);
+  });
+
+  it('満杯でも作品一覧は読めて、削除もできる（ホームから抜け出せる）', () => {
+    const created = createWork('満杯テスト');
+    expect(created.success).toBe(true);
+    const id = created.data!.id;
+    makeFull();
+    expect(listWorks().map((w) => w.id)).toContain(id);
+    // 削除は index の書き換え（setItem）を伴うので満杯では失敗しうる。その場合も例外で落ちず、
+    // 理由（満杯）を返す。removeItem 自体は通る
+    const removed = deleteWork(id);
+    if (!removed.success) {
+      expect(removed.error?.type).toBe('quota_exceeded');
+      expect(removed.error?.message).toContain('満杯');
+    }
+  });
+
+  it('満杯のときの保存失敗は日本語の理由（満杯・削除か書き出し）を返す', () => {
+    makeFull();
+    const result = saveScoreData(createSavedScoreData(
+      { title: 't', subtitle: '', lyricist: '', composer: '', arranger: '' },
+      [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }] }], 1, 1, 'single'
+    ));
+    expect(result.success).toBe(false);
+    expect(result.error?.type).toBe('quota_exceeded');
+    expect(result.error?.message).toContain('満杯');
+    expect(result.error?.recoverable).toBe(true);
   });
 });

@@ -239,4 +239,31 @@ describe('ホーム画面（Issue #500）', () => {
     expect(screen.queryByTestId('home-open-file')).toBeNull();
     expect(document.activeElement).toBe(screen.getByTestId('home-rail-open'));
   });
+
+  it('保存領域が満杯のときは、作品一覧を出したまま満杯の案内を出す（Issue #641）', () => {
+    // jsdom の Storage はプロパティ代入を setItem として扱うので、prototype をスパイする
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('QuotaExceededError', 'QuotaExceededError');
+    });
+    try {
+      renderHome();
+      expect(screen.getByTestId('home-storage-notice').textContent).toContain('満杯');
+      // 作品は消えていない（一覧に出る）ので、ここから削除・書き出しで抜け出せる
+      expect(screen.getByText(WORKS[0].title)).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('保存領域が使えないときは、その旨の案内を出す（Issue #640）', () => {
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('SecurityError', 'SecurityError');
+    });
+    try {
+      renderHome();
+      expect(screen.getByTestId('home-storage-notice').textContent).toContain('保存ができません');
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
