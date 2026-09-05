@@ -670,3 +670,62 @@ A再生→停止→B切替→即再生 / A再生中にB切替（stopAll） / A�
 
 **残り（第2段・#641 の仕様 1・2・5）**: 履歴の世代数/容量の上限、全体予算を超えたときの自動整理、
 使用量の表示。夜間ルーチンへ。
+
+## 追補: 履歴の上限・全体予算の自動整理・使用量表示（Issue #641・2026-09-06・第2段）
+
+**問題**: 第1段で「満杯でもホームから抜け出せる」ようにはなったが、**満杯になること自体**は
+止まっていなかった。復元履歴には世代数の上限（5世代）しか無く、1世代が 1MB を超える大きな
+作品では 5世代で数MBに達する。運用者の実測（2026-09-05）では履歴 2.3MB＋1.5MB＋1.0MB で
+Chrome の上限 10MB ちょうどに達し、自動保存が黙って止まっていた。
+
+### 修正設計
+
+**仕様1（履歴の上限・`utils/storage.ts`）**
+
+- `WORK_HISTORY_MAX_BYTES = 1MB`。`limitWorkHistory()` が **世代数と容量の両方**を満たすまで
+  古い世代から捨てる。容量は「JSON の文字数 × `STORAGE_BYTES_PER_CHAR`(=2)」で見積もる
+  （ブラウザは UTF-16 の文字数で容量を数えるため）
+- 新しい1世代だけで 1MB を超える作品では**履歴を持たない**（空にする）。ここで最新世代を
+  必ず残す作りにすると、上限が実質 1.2MB などへ膨らみ、受入条件「履歴が上限を超えない
+  （世代数・容量の両方）」を満たせなくなるため。自動保存の本体は別キーなので編集内容は失われない。
+  このケースは通知しない（自動保存のたびに出て邪魔になるうえ、本体の保存は成功している）
+- `trimWorkHistoryToLimits(workId)`: 上限の導入**前**に積まれた巨大な履歴を上限まで縮める（仕様6）。
+  起動時の整理から全作品ぶん呼ぶ。上限内の履歴は JSON を解析せずに素通りさせる（起動を遅くしない）
+
+**仕様2（全体予算と自動整理・`utils/storageBudget.ts` 新設）**
+
+- `STORAGE_TOTAL_BUDGET_BYTES = 8MB`（表示の分母 `STORAGE_QUOTA_BYTES = 10MB` の手前）。
+  上限に達してからでは整理のための書き込みすら通らないので、予算は上限より手前に置く
+- `enforceStorageBudget()`: ①全作品の履歴を上限まで縮める → ②まだ予算超過なら
+  **更新の古い作品の復元履歴から順に**まるごと手放す（予算内に収まったら止める）。
+  **自動保存の本体（作品そのもの）は決して消さない**ので、作品一覧は変わらない
+- `dropOldestWorkHistory()`: 満杯で保存が失敗したときの再試行用に1件ずつ手放す
+- 呼び出し口は `hooks/useWorkLibrary.ts`:
+  - `initializeWorks()`（起動時・旧データ移行の直後）で `enforceStorageBudget()`
+  - `saveCurrentWork()` が `QUOTA_EXCEEDED` で失敗したら、`dropOldestWorkHistory()` →
+    保存し直し、を手放せる履歴が無くなるまで繰り返す（**自動保存が黙って止まらない**）
+- 通知は `buildStorageCleanupMessage()`（履歴を**まるごと手放したときだけ**文言を作る。
+  上限まで縮めただけの日常の掃除では黙る）。ScorePage は #318 の通知（画面下端中央の
+  `edit-notice`）へ流す。**ファイル保存の警告トーストは使えない**: あれは「ファイル」タブを
+  開いているあいだしか描画されず、起動直後の整理では誰にも届かない（実装中に実際に踏んだ）
+- `createStorageError()` の容量超過判定を `isQuotaExceededError()` に一本化した。
+  ここだけ `name === 'QuotaExceededError'` を直に見ており、Firefox の
+  `NS_ERROR_DOM_QUOTA_REACHED` や古い Safari の code 22 が「原因不明の失敗」に落ちて
+  自動整理・再試行に入れなかった
+
+**仕様5（使用量の表示）**
+
+- `getStorageUsage()` / `formatStorageUsage()` → 「保存領域 6.2 / 10 MB」。
+  使用量は**全キー**（キー名＋値の文字数 × 2）で数える。アプリ以外のキーも同じ保存領域を
+  使うため、絞ると「まだ空いている」と嘘をつく
+- 表示は「ファイル」タブ（`SaveLoadButtons`）。8割超えで橙、予算（8MB）超えで赤。
+  測るのは `ScorePage`（タブ切替・自動保存・作品の増減で測り直す）で、表示側は受け取るだけ
+
+### 影響範囲
+
+- `src/utils/storage.ts`（履歴の上限・整理関数・容量超過判定の一本化）
+- `src/utils/storageBudget.ts`（新設）／`src/hooks/useWorkLibrary.ts`（起動時整理・満杯時の再試行）
+- `src/components/ScorePage.tsx`（通知の中継・使用量の計測）／`src/components/SaveLoadButtons.tsx`（表示）
+- テスト: `src/utils/storageBudget.test.ts`（上限・整理・通知の分岐）、
+  `src/hooks/useWorkLibrary.test.ts`（満杯時の再試行）、
+  `src/components/ScorePageStorageBudget.test.tsx`（実マウントの配線）

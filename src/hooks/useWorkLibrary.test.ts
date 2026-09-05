@@ -10,9 +10,11 @@ import { useWorkLibrary } from './useWorkLibrary';
 import {
   STORAGE_KEYS,
   createSavedScoreData,
+  createWork,
   getWorkStorageKeys,
   listWorks,
-  loadWorkIndex
+  loadWorkIndex,
+  saveWorkAutosaveData
 } from '../utils/storage';
 import type { SavedScoreData } from '../types/storage';
 
@@ -335,6 +337,117 @@ describe('useWorkLibrary（作品カタログの操作・Issue #181）', () => {
       const titles = result.current.works.map((work) => work.title);
       expect(titles[0]).toBe('新しい作品');
       expect(titles).toContain('古い作品');
+    });
+  });
+
+  describe('保存領域が満杯のときの自動整理（Issue #641 仕様2）', () => {
+    /**
+     * 「これ以上書くと容量超過」を再現する localStorage。
+     * limitChars を超える書き込みだけ QuotaExceededError を投げ、読み出しと削除は通す
+     * （満杯の localStorage と同じふるまい）。
+     */
+    function withQuota(limitChars: number, run: () => void): void {
+      const realSetItem = localStorageMock.setItem;
+      localStorageMock.setItem = (key: string, value: string) => {
+        let total = 0;
+        for (let i = 0; i < localStorageMock.length; i += 1) {
+          const existing = localStorageMock.key(i);
+          if (existing === null || existing === key) continue;
+          total += existing.length + (localStorageMock.getItem(existing)?.length ?? 0);
+        }
+        if (total + key.length + String(value).length > limitChars) {
+          throw new DOMException('quota exceeded', 'QuotaExceededError');
+        }
+        realSetItem(key, value);
+      };
+      try {
+        run();
+      } finally {
+        localStorageMock.setItem = realSetItem;
+      }
+    }
+
+    /** 小節数の多い譜面（保存すると数KBになる）。上限に当てるための「大きな編集」 */
+    function makeBigScore(title: string): SavedScoreData {
+      return createSavedScoreData(
+        { title, subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{
+          partId: 'melody',
+          clef: 'treble',
+          measures: Array.from({ length: 200 }, () => ({
+            events: [{ dur: '4' as const, isRest: false, keys: ['c/4'] }],
+          })),
+        }],
+        1,
+        4,
+        'single',
+      );
+    }
+
+    /** いま保存領域が使っている文字数（テストで上限を決めるために測る） */
+    function usedChars(): number {
+      let total = 0;
+      for (let i = 0; i < localStorageMock.length; i += 1) {
+        const key = localStorageMock.key(i);
+        if (key === null) continue;
+        total += key.length + (localStorageMock.getItem(key)?.length ?? 0);
+      }
+      return total;
+    }
+
+    it('満杯で保存に失敗したら、古い作品の復元履歴を手放して保存し直し、整理したことを知らせる', () => {
+      // 古い作品（大きな復元履歴つき）と、いま編集している作品を用意する
+      const oldWorkId = createWork('古い作品').data!.id;
+      const past = makeScore('古い作品');
+      past.timestamp = Date.now() - 60 * 60 * 1000;
+      saveWorkAutosaveData(oldWorkId, past);
+      localStorage.setItem(getWorkStorageKeys(oldWorkId).history, 'x'.repeat(500000));
+
+      const currentWorkId = createWork('編集中の作品').data!.id;
+      saveWorkAutosaveData(currentWorkId, makeScore('編集中の作品'));
+
+      const { result } = renderHook(() => useWorkLibrary());
+      act(() => { result.current.initializeWorks(); });
+      act(() => { result.current.switchWork(currentWorkId, null); });
+
+      // 「いまの内容＋わずかな余白」しか書けない状態。編集の保存はそのままでは入らない
+      const limit = usedChars() + 100;
+      let saved = false;
+      withQuota(limit, () => {
+        act(() => { saved = result.current.saveCurrentWork(makeBigScore('編集中の作品')); });
+      });
+
+      // 自動保存が黙って止まらない（受入条件1）
+      expect(saved).toBe(true);
+      // 手放されたのは古い作品の復元履歴だけ。作品そのものは残っている
+      expect(localStorage.getItem(getWorkStorageKeys(oldWorkId).history)).toBeNull();
+      expect(localStorage.getItem(getWorkStorageKeys(oldWorkId).primary)).not.toBeNull();
+      expect(listWorks()).toHaveLength(2);
+      // 整理したことが通知として伝わる（仕様2）
+      expect(result.current.storageCleanupNotice).toContain('古い復元履歴を整理しました');
+
+      act(() => { result.current.clearStorageCleanupNotice(); });
+      expect(result.current.storageCleanupNotice).toBeNull();
+    });
+
+    it('手放せる復元履歴が無ければ、保存の失敗として理由を返す', () => {
+      const workId = createWork('作品').data!.id;
+      saveWorkAutosaveData(workId, makeScore('作品'));
+
+      const { result } = renderHook(() => useWorkLibrary());
+      act(() => { result.current.initializeWorks(); });
+      act(() => { result.current.switchWork(workId, null); });
+
+      const limit = usedChars() + 10;
+      let saved = true;
+      withQuota(limit, () => {
+        act(() => { saved = result.current.saveCurrentWork(makeBigScore('作品')); });
+      });
+
+      expect(saved).toBe(false);
+      expect(result.current.workError).toContain('保存領域が満杯です');
+      // 整理していないので通知は出さない（何もしていないのに「整理しました」と言わない）
+      expect(result.current.storageCleanupNotice).toBeNull();
     });
   });
 });

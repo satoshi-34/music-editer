@@ -860,7 +860,11 @@ function restorePrimaryFromBackup(backupRaw: string, primaryKey: string): void {
  */
 function createStorageError(error: unknown): StorageError {
   if (error instanceof DOMException) {
-    if (error.name === 'QuotaExceededError') {
+    // 容量超過の判定は isQuotaExceededError に一本化する（Issue #641）。
+    // ここだけ error.name === 'QuotaExceededError' で見ていたため、Firefox の
+    // NS_ERROR_DOM_QUOTA_REACHED や古い Safari の code 22 が「原因不明の失敗」に落ち、
+    // 満杯時の自動整理・再試行へ入れなかった
+    if (isQuotaExceededError(error)) {
       return {
         type: StorageErrorType.QUOTA_EXCEEDED,
         message: STORAGE_FULL_MESSAGE,
@@ -1407,6 +1411,34 @@ export const WORK_HISTORY_MAX_GENERATIONS = 5;
  * 世代化せず読み飛ばす（直前1世代の -backup は従来どおり毎回退避される）
  */
 export const WORK_HISTORY_MIN_INTERVAL_MS = 10 * 60 * 1000;
+/**
+ * localStorage の使用量を「文字数」から見積もるときの1文字あたりのバイト数。
+ * ブラウザは文字列を UTF-16（1文字=2バイト）で数えて容量の上限に当てるため、
+ * 表示・上限判定はどちらもこの換算でそろえる（Chrome の上限 10MB ＝ 約 500 万文字）
+ */
+export const STORAGE_BYTES_PER_CHAR = 2;
+/**
+ * 1作品の復元履歴に使ってよい容量の上限（Issue #641 仕様1）。
+ * 世代数（WORK_HISTORY_MAX_GENERATIONS）と**両方**を満たすまで古い世代から捨てる。
+ * 世代数だけでは、1世代が 1MB を超える大きな作品（運用者の実測: 本体 1.2MB の作品）を
+ * 止められず、履歴だけで 2.3MB を使って保存領域 10MB を使い切っていた
+ */
+export const WORK_HISTORY_MAX_BYTES = 1024 * 1024;
+
+/**
+ * 世代の配列を上限（世代数・容量）まで新しい順に切り詰める。
+ * 容量は「JSON にしたときの文字数 × 2バイト」で見積もる（STORAGE_BYTES_PER_CHAR）。
+ * 1世代だけで上限を超える大きな作品では**空になる**（＝その作品は履歴を持たない）。
+ * 履歴が無くても自動保存の本体は別キーに残るので、編集中の内容は失われない
+ */
+function limitWorkHistory(generations: WorkHistoryGeneration[]): WorkHistoryGeneration[] {
+  let limited = generations.slice(0, WORK_HISTORY_MAX_GENERATIONS);
+  while (limited.length > 0
+    && JSON.stringify(limited).length * STORAGE_BYTES_PER_CHAR > WORK_HISTORY_MAX_BYTES) {
+    limited = limited.slice(0, limited.length - 1);
+  }
+  return limited;
+}
 
 /**
  * 作品の復元履歴を新しい順で返す。壊れた世代（構造検証・チェックサムに落ちるもの）は黙って除く。
@@ -1470,8 +1502,21 @@ export function pushWorkHistoryGeneration(
     checksum: generateChecksum(JSON.stringify(sanitizedData)),
     data: sanitizedData,
   };
-  let next: WorkHistoryGeneration[] = [newGeneration, ...history].slice(0, WORK_HISTORY_MAX_GENERATIONS);
   const key = getWorkStorageKeys(workId).history;
+  // 世代数と容量の両方で打ち切る（#641 仕様1）
+  let next: WorkHistoryGeneration[] = limitWorkHistory([newGeneration, ...history]);
+  if (next.length === 0) {
+    // 新しい1世代だけで容量の上限を超える大きな作品。履歴は持てないので、
+    // 同じく上限を超えている既存の履歴を手放して保存領域を返す。
+    // ここでは通知しない: 自動保存のたびに出ることになり邪魔になるうえ、
+    // 本体（autosave スロット）の保存は成功していて実害が無いため（「行き止まりは喋る」の例外）
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // 消せなくても編集は続けられるので握りつぶす
+    }
+    return { success: true, data: false };
+  }
   // 容量不足なら、古い世代を1つずつ落としながら新しい世代だけでも残るまで縮めて再試行する
   while (next.length > 0) {
     try {
@@ -1482,6 +1527,49 @@ export function pushWorkHistoryGeneration(
     }
   }
   return { success: false, error: { type: StorageErrorType.QUOTA_EXCEEDED, message: '復元履歴を保存する空き容量がありません', recoverable: true } };
+}
+
+/**
+ * すでに保存されている履歴を、いまの上限（世代数・容量）まで整理する（Issue #641 仕様1・6）。
+ * 上限を導入する前に積まれた巨大な履歴は、次に世代を積むまで縮まないため、
+ * 起動時の整理（enforceStorageBudget）から全作品ぶん呼ぶ。
+ * 戻り値は「実際に書き換えたか」。
+ */
+export function trimWorkHistoryToLimits(workId: string): boolean {
+  if (!isValidWorkId(workId) || typeof localStorage === 'undefined') return false;
+  const key = getWorkStorageKeys(workId).history;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return false;
+    // 上限内の履歴は JSON を解析せずに素通りさせる（起動のたびに全作品ぶん解析しないため）。
+    // 世代数の上限は積むときに必ず効いているので、ここで見るのは容量だけでよい
+    if (raw.length * STORAGE_BYTES_PER_CHAR <= WORK_HISTORY_MAX_BYTES) return false;
+    const limited = limitWorkHistory(loadWorkHistory(workId));
+    if (limited.length === 0) {
+      localStorage.removeItem(key);
+      return true;
+    }
+    localStorage.setItem(key, JSON.stringify(limited));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 作品の復元履歴だけを手放す（自動保存の本体・カタログの登録は残す）。
+ * 保存領域が予算を超えたときの自動整理（#641 仕様2）で、古い作品から順に呼ぶ。
+ */
+export function clearWorkHistory(workId: string): boolean {
+  if (!isValidWorkId(workId) || typeof localStorage === 'undefined') return false;
+  try {
+    const key = getWorkStorageKeys(workId).history;
+    if (localStorage.getItem(key) === null) return false;
+    localStorage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

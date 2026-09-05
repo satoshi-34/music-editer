@@ -250,6 +250,7 @@ import {
   STORAGE_LOCATION_NOTICE_DURATION_MS,
   STORAGE_LOCATION_NOTICE_MESSAGE,
 } from '../utils/storageLocationNotice';
+import { getStorageUsage } from '../utils/storageBudget';
 import { isSameScoreIgnoringPadding, trimTrailingEmptyMeasures, trimTrailingPrintableMeasures, findFirstDifferingMeasureIndex } from '../utils/scoreDataEquality';
 import { getPartExtractionOptions, isPartExtractionEditable, resolvePartExtractionSelection } from '../utils/partExtractionUtils';
 import { findPageIndexForSystem, getPageSystemOffset as getPageSystemOffsetPure, getPageSystemsCapacity as getPageSystemsCapacityPure } from '../utils/pageSystemLayoutUtils';
@@ -265,7 +266,7 @@ import {
   pageWidthMm,
   type PageSizeId,
 } from '../utils/pageSize';
-import { ignoreWhenHomeShown } from '../utils/homeVisibility';
+import { ignoreWhenHomeShown, isHomeShown } from '../utils/homeVisibility';
 import {
   NOTATION_SIZE_KEY,
   PAGE_MARGIN_BOTTOM_KEY,
@@ -782,6 +783,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 作品一覧の操作（切替・新規作成・削除）はこのフックが受け持つ。
   const {
     works, currentWorkId, workError,
+    storageCleanupNotice, clearStorageCleanupNotice,
     refreshWorks, initializeWorks, saveCurrentWork, switchWork, startNewWork, deleteWorkById,
     listHistory, restoreFromHistory
   } = useWorkLibrary();
@@ -3432,6 +3434,16 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   useEffect(() => () => {
     if (autoSaveStatusTimerRef.current) clearTimeout(autoSaveStatusTimerRef.current);
   }, []);
+
+  // 保存領域の使用量の目安（Issue #641 仕様5）。ファイルタブを開いたとき・自動保存のたび・
+  // 作品の増減のたびに測り直す（削除で空いたらすぐ表示へ反映される）。
+  // localStorage を読むだけの副作用の無い処理なので useMemo で足りる（ホーム画面の
+  // 保存領域バナーと同じ考え方）
+  const storageUsage = useMemo(
+    () => getStorageUsage(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeToolbarTab, autoSaveStatus, works],
+  );
 
   // ここから作品一覧（Issue #181）の操作。ポップアップの位置決めは
   // リセットメニュー（Issue #143）と同じ「ボタンを実測して fixed で出す」方式にそろえる。
@@ -6223,6 +6235,30 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     notifyScoreEdit(STORAGE_LOCATION_NOTICE_MESSAGE, STORAGE_LOCATION_NOTICE_DURATION_MS);
   }, []);
 
+  // 保存領域が足りずに古い復元履歴を自動整理したことを知らせる（Issue #641 仕様2）。
+  // 表示は #318 の通知（画面下端中央の editNotice）に相乗りする。ファイル保存の警告
+  // トーストを使わないのは、あちらが「ファイル」タブを開いているあいだしか描画されず、
+  // 起動直後の整理（別のタブが開いている）では誰にも届かないため。
+  // この useEffect も上の #497 と同じ理由で**通知リスナーの後ろ**に置いている。
+  //
+  // ホーム表示中は出さずに待つ: 整理は起動直後（＝ホームが譜面画面の上に出ている間）に
+  // 起こることが多く、そのまま出すと画面外に描かれたまま数秒で消える（ブラウザ確認で
+  // 実際に見えなかった。譜面画面はホームの裏でマウントされたままのため）。
+  // ホームの表示状態は App だけが書く共有フラグ（utils/homeVisibility.ts）で、変化を
+  // 知らせる仕組みが無いので短い間隔で見に行く。**1回目も間隔を待ってから**見るのは、
+  // App がフラグを書くのは自分の effect の中＝子（この画面）の effect より後で、
+  // マウント直後の値は当てにならないため
+  useEffect(() => {
+    if (!storageCleanupNotice) return;
+    const timer = setInterval(() => {
+      if (isHomeShown()) return;
+      clearInterval(timer);
+      notifyScoreEdit(storageCleanupNotice, 8000);
+      clearStorageCleanupNotice();
+    }, 500);
+    return () => clearInterval(timer);
+  }, [storageCleanupNotice, clearStorageCleanupNotice]);
+
   // 非アクティブ声部の音符をクリックしたときに、譜面側から届く「声部を切り替えて」の要求（Issue #258）。
   // 声部の状態（activeVoice）はこの画面が持っているので、ここで受けて切り替える。
   // 通知そのものは譜面側が notifyScoreEdit で出すため、ここでは声部を変えるだけでよい。
@@ -7389,6 +7425,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 canSaveCurrentAsSample={scoreType === 'piano'}
                 hasCustomPianoSample={hasCustomPianoSample}
                 autoSaveStatus={autoSaveStatus}
+                storageUsage={storageUsage}
                 exportStatus={exportStatus}
                 restoreNotice={restoreNotice}
                 warningNotice={fileSaveWarning}

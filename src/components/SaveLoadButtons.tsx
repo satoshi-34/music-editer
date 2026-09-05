@@ -6,6 +6,7 @@
 import { useState } from 'react';
 
 import type { DemoScoreId } from '../data/demoScores';
+import { formatStorageUsage, type StorageUsage } from '../utils/storageBudget';
 
 /**
  * 書出（MusicXML / MIDI）の結果表示の状態（Issue #278）。
@@ -22,6 +23,12 @@ export interface SaveLoadButtonsProps {
   canSaveCurrentAsSample?: boolean;
   hasCustomPianoSample?: boolean;
   autoSaveStatus?: 'idle' | 'saving' | 'saved';
+  /**
+   * 保存領域の使用量の目安（Issue #641 仕様5）。「あと どれくらい書けるか」が
+   * 満杯になる前に分かるよう、ファイルタブへ常設で出す。
+   * 測るのは呼び出し側（ScorePage）で、ここは表示だけを受け持つ
+   */
+  storageUsage?: StorageUsage | null;
   /**
    * 書き出し（MusicXML / MIDI）の結果（Issue #278。ファイル .score.json の結果は
    * warningNotice 経由で別表示）。書き出しメニューは
@@ -50,6 +57,7 @@ export default function SaveLoadButtons({
   canSaveCurrentAsSample = false,
   hasCustomPianoSample = false,
   autoSaveStatus = 'idle',
+  storageUsage = null,
   exportStatus = null,
   restoreNotice,
   warningNotice,
@@ -78,6 +86,12 @@ export default function SaveLoadButtons({
           ? { text: '✓ 自動保存済み', color: '#4caf50', role: 'status' }
           : null;
 
+  // 使用量の色（仕様5: 8割を超えたら色を変える）。'over' は予算（8MB）を超えていて、
+  // 放っておくと満杯で保存が止まる一歩手前なので、警告色をさらに強くする
+  const storageUsageColor = storageUsage?.level === 'over'
+    ? '#d32f2f'
+    : storageUsage?.level === 'warn' ? '#d9822b' : '#666';
+
   return (
     <div className="save-load-buttons">
       {onNewScore && (
@@ -89,6 +103,20 @@ export default function SaveLoadButtons({
         >
           新規作成
         </button>
+      )}
+
+      {/* 保存領域の使用量の目安（Issue #641 仕様5）。満杯になってから知るのでは遅いので、
+          ファイルタブに常設で出す。8割を超えたら色が変わる */}
+      {storageUsage && storageUsage.usedBytes > 0 && (
+        <span
+          data-testid="storage-usage"
+          style={{ fontSize: 11, color: storageUsageColor, alignSelf: 'center' }}
+          title={'この端末のブラウザに保存されている量の目安です。'
+            + 'いっぱいになると新しい編集が保存できなくなるので、'
+            + '不要な作品は作品一覧から削除するか、「書き出し」でファイルへ退避してください'}
+        >
+          {formatStorageUsage(storageUsage)}
+        </span>
       )}
 
       {/* 保存ステータスはツールバーの流れから外し、画面右下に小さく固定表示する。
