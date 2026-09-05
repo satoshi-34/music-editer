@@ -309,11 +309,15 @@ export function staveSpacingForPartCount(n: number): number {
  */
 export function computeLayout(
   n: number,
-  partSpacingOffsetPx: number = 0
+  partSpacingOffsetPx: number = 0,
+  // 段の下余白の追加分（px・論理座標）。ペダル記号が最下音を避けて下がるぶん
+  // （estimatePedalBottomExtensionPx・Issue #604）。0 なら従来と同じ高さ
+  bottomExtensionPx: number = 0
 ): { staveYs: number[]; sysH: number; staveSpacing: number } {
   const staveSpacing = Math.max(MIN_STAVE_SPACING_PX, staveSpacingForPartCount(n) + partSpacingOffsetPx);
   const staveYs = Array.from({ length: n }, (_, i) => FIRST_STAVE_Y + i * staveSpacing);
-  const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20;
+  const safeExtension = Number.isFinite(bottomExtensionPx) ? Math.max(0, bottomExtensionPx) : 0;
+  const sysH = FIRST_STAVE_Y + (n - 1) * staveSpacing + 60 + 20 + safeExtension;
   return { staveYs, sysH, staveSpacing };
 }
 
@@ -329,9 +333,9 @@ export function computeLayout(
  * （旧 estimateEnsembleSystemHeightPx はパート間隔の変更に追従しない固定係数だったため、
  * 段数/ページの上限が実際より厳しく頭打ちされる不具合の原因になっていた。Issue #38）。
  */
-export function measuredSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0): number {
+export function measuredSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0, bottomExtensionPx: number = 0): number {
   const safeCount = Math.max(1, Math.floor(partCount));
-  return computeLayout(safeCount, partSpacingOffsetPx).sysH * SCORE_LAYOUT_RENDER_SCALE;
+  return computeLayout(safeCount, partSpacingOffsetPx, bottomExtensionPx).sysH * SCORE_LAYOUT_RENDER_SCALE;
 }
 
 /**
@@ -356,8 +360,8 @@ export const SYSTEM_BREATHING_ROOM_PX = 70;
  * 初期表示の推奨段数を求めるときに使う「1段ぶんが占める高さ」（px、音符の大きさ100%時）。
  * 実際に描かれる高さ（measuredSystemHeightPx）＋段間の余白（SYSTEM_BREATHING_ROOM_PX）。
  */
-export function recommendedSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0): number {
-  return measuredSystemHeightPx(partCount, partSpacingOffsetPx) + SYSTEM_BREATHING_ROOM_PX;
+export function recommendedSystemHeightPx(partCount: number, partSpacingOffsetPx: number = 0, bottomExtensionPx: number = 0): number {
+  return measuredSystemHeightPx(partCount, partSpacingOffsetPx, bottomExtensionPx) + SYSTEM_BREATHING_ROOM_PX;
 }
 // ===== ここまで段のレイアウト計算 =====
 

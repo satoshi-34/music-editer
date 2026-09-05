@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { pairPedalMarks, resolvePedalBaselineY, PEDAL_TEXT_ASCENT_PX, PEDAL_CLEARANCE_MARGIN_PX } from './pedalBridgeUtils';
+import { pairPedalMarks, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_ASCENT_PX, PEDAL_CLEARANCE_MARGIN_PX } from './pedalBridgeUtils';
+import type { MeasureData } from '../types/storage';
 
 type Entry = { id: string; mark: 'down' | 'up' };
 
@@ -103,5 +104,59 @@ describe('resolvePedalBaselineY（Ped/✱ を最下音の下へクランプ・Is
     const obstacles = [{ x: 20, y: 90, w: 12, h: 50 }];
     expect(resolvePedalBaselineY({ baseY, spanX1: 60, spanX2: 10, obstacles }))
       .toBe(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles }));
+  });
+});
+
+describe('estimatePedalBottomExtensionPx（段の下余白の見積もり・Issue #604）', () => {
+  const note = (keys: string[], extra: Partial<MeasureData['events'][number]> = {}) =>
+    ({ dur: '2' as const, isRest: false, keys, ...extra });
+  const treble = (events: MeasureData['events']): MeasureData => ({ events });
+
+  it('ペダル記号が無ければ 0（段の高さは従来どおり）', () => {
+    const parts = [
+      { measures: [treble([note(['c/5'])])], clef: 'treble' as const },
+      { measures: [treble([note(['c/2', 'c/3'])])], clef: 'bass' as const },
+    ];
+    expect(estimatePedalBottomExtensionPx(parts)).toBe(0);
+  });
+
+  it('ペダルがあっても最下パートが五線内なら 0', () => {
+    const parts = [
+      { measures: [treble([note(['c/5'])])], clef: 'treble' as const },
+      { measures: [treble([note(['d/3'], { pedalMark: 'down' }), note(['d/3'], { pedalMark: 'up' })])], clef: 'bass' as const },
+    ];
+    expect(estimatePedalBottomExtensionPx(parts)).toBe(0);
+  });
+
+  it('深い加線の和音（c/2）があれば、そのぶん段の下余白を広げる', () => {
+    // ヘ音記号の c/2 は五線下端から 2 本目の加線（line 6）: 符頭の下端 = 20 + 5 = 25px
+    // baseline = 25 + 4 + 10 = 39、字面の下端 = 42 → 余白 40 を 2px 超える
+    const parts = [
+      { measures: [treble([note(['c/5'])])], clef: 'treble' as const },
+      { measures: [treble([note(['c/2', 'c/3'], { pedalMark: 'down' }), note(['d/3'], { pedalMark: 'up' })])], clef: 'bass' as const },
+    ];
+    expect(estimatePedalBottomExtensionPx(parts)).toBe(2);
+  });
+
+  it('さらに低い音（a/1）ほど広がる。ペダルが別の小節にあっても譜面全体で見る', () => {
+    // a/1 は g/2（下端の線 = line 4）の 6 度下 = line 7: 符頭の下端 = 30 + 5 = 35 → baseline 49、下端 52 → +12
+    const parts = [
+      { measures: [treble([note(['c/5'])]), treble([note(['c/5'], { pedalMark: 'down' })])], clef: 'treble' as const },
+      { measures: [treble([note(['a/1'])]), treble([note(['d/3'])])], clef: 'bass' as const },
+    ];
+    expect(estimatePedalBottomExtensionPx(parts)).toBe(12);
+  });
+
+  it('上のパートから最下段へ描く段またぎ音符（renderStaff: below）も数える。上へ逃がした音符は数えない', () => {
+    const withBelow = [
+      { measures: [treble([note(['c/2'], { renderStaff: 'below', pedalMark: 'down' })])], clef: 'treble' as const },
+      { measures: [treble([note(['d/3'])])], clef: 'bass' as const },
+    ];
+    expect(estimatePedalBottomExtensionPx(withBelow)).toBe(2);
+    const withAbove = [
+      { measures: [treble([note(['c/5'], { pedalMark: 'down' })])], clef: 'treble' as const },
+      { measures: [treble([note(['c/2'], { renderStaff: 'above' })])], clef: 'bass' as const },
+    ];
+    expect(estimatePedalBottomExtensionPx(withAbove)).toBe(0);
   });
 });

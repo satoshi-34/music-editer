@@ -7,7 +7,12 @@
 // 対応する区間だけ破線で結ぶ。対応が取れないマーク（down だけ、up だけ）は
 // 従来どおり単独表示のままにする（入力途中の状態や後方互換のため）。
 
-import { rectsIntersect, type CollisionRect } from './symbolCollisionUtils';
+import { type CollisionRect } from './symbolCollisionUtils';
+import type { MeasureData } from '../types/storage';
+import type { ClefType } from '../components/clefUtils';
+import { keyToLine } from '../components/clefUtils';
+import { resolveMeasureClef } from './clefMeasureUtils';
+import { getMeasureVoices } from './voiceMeasureUtils';
 
 /** ペアリング対象になる最小限の情報。実際の描画エントリはこれを拡張して使う */
 export interface PedalMarkLike {
@@ -103,6 +108,16 @@ export const PEDAL_TEXT_ASCENT_PX = 10;
 export const PEDAL_TEXT_DESCENT_PX = 3;
 /** 最下音の描画下端と Ped/✱ の字面の上端との間にあける余白（px） */
 export const PEDAL_CLEARANCE_MARGIN_PX = 4;
+/** 加線が符頭の左右へ張り出す量の見込み（px・片側）。VexFlow の既定（符頭幅 + 約4px×2）に合わせる */
+export const PEDAL_LEDGER_OVERHANG_PX = 4;
+/** 従来の固定位置: 五線下端からペダル記号の baseline までの距離（px） */
+export const PEDAL_BASELINE_OFFSET_PX = 25;
+/** 段の下端（computeLayout の sysH）が五線下端の下に確保している余白（px） */
+export const SYSTEM_BOTTOM_PADDING_PX = 40;
+/** 五線の行間（VexFlow 既定・論理座標 px） */
+const STAVE_LINE_SPACING_PX = 10;
+/** 符頭の半分の高さ（論理座標 px）。行間の半分 */
+const NOTEHEAD_HALF_HEIGHT_PX = 5;
 
 /**
  * ペダル記号の baseline Y を「従来の固定位置」と「区間内の最下音の下端＋余白」の
@@ -134,11 +149,74 @@ export function resolvePedalBaselineY(params: {
   const probe: CollisionRect = { x, y: textTop, w, h: PEDAL_TEXT_ASCENT_PX + PEDAL_TEXT_DESCENT_PX };
   let requiredTop = textTop;
   for (const obstacle of obstacles) {
-    // 字面の箱に**実際に食い込む**障害物だけを見る（余白なしの交差判定）。
-    // 下向きの符幹が字面の上端をかすめる程度（通常音域）では動かさない＝低音の無い
-    // 譜面で 1px も変わらない、を守るため。食い込んだら下端＋余白まで下げる
-    if (!rectsIntersect(probe, obstacle, 0)) continue;
+    // 横: 加線は符頭より左右に張り出して描かれる（VexFlow は加線を別の path で描き、
+    // 符頭の BoundingBox には含まれない）ので、横だけ加線ぶんの余裕を見る。
+    // 縦: 字面の箱に**実際に食い込む**障害物だけを見る（余白なし）。下向きの符幹が
+    // 字面の上端をかすめる程度（通常音域）では動かさない＝低音の無い譜面で 1px も
+    // 変わらない、を守るため。食い込んだら下端＋余白まで下げる
+    const overlapsX = obstacle.x - PEDAL_LEDGER_OVERHANG_PX < probe.x + probe.w
+      && obstacle.x + obstacle.w + PEDAL_LEDGER_OVERHANG_PX > probe.x;
+    const intrudesY = obstacle.y < probe.y + probe.h && obstacle.y + obstacle.h > probe.y;
+    if (!overlapsX || !intrudesY) continue;
     requiredTop = Math.max(requiredTop, obstacle.y + obstacle.h + PEDAL_CLEARANCE_MARGIN_PX);
   }
   return requiredTop === textTop ? baseY : requiredTop + PEDAL_TEXT_ASCENT_PX;
+}
+
+/**
+ * ペダル記号が最下音を避けて下がるぶん、段の下端をどれだけ広げる必要があるか（px・論理座標）
+ * を**譜面データから**見積もる（Issue #604）。
+ *
+ * 描画後の実測（resolvePedalBaselineY）で Ped を下げても、段の高さ（computeLayout の sysH）が
+ * 固定のままでは SVG の外へはみ出し、印刷/PDF で欠けたり次段と重なったりする。段の高さは
+ * 描画の前に決まるので、ここでは「最下パートの最低音の深さ」から必要量を先に求めて
+ * 段の下余白へ足す（描画側のクランプと同じ式）。
+ *
+ * - ペダル記号が譜面のどこにも無ければ 0（ペダルの無い譜面の段の高さは 1px も変えない）
+ * - 全段で同じ値にする（ページの段数計算が「段の高さは一定」を前提にしているため。
+ *   区間ごとに変えると段の高さが段ごとに違ってしまう）
+ * - 対象は最下パートの音符（全声部）と、その1つ上のパートから最下段へ描かれる段またぎ音符
+ *   （renderStaff: 'below'）。符幹は低音では上向きなので見ない
+ */
+export function estimatePedalBottomExtensionPx(
+  parts: ReadonlyArray<{ measures: readonly MeasureData[]; clef: ClefType }>,
+): number {
+  if (parts.length === 0) return 0;
+  const hasPedal = parts.some((part) => part.measures.some((measure) =>
+    getMeasureVoices(measure).some((voice) => voice.events.some((ev) => ev.pedalMark))));
+  if (!hasPedal) return 0;
+
+  const bottomIndex = parts.length - 1;
+  const bottom = parts[bottomIndex];
+  const above = parts[bottomIndex - 1];
+  let deepestBottomPx = -Infinity; // 五線下端を 0 とした、最も深い符頭の下端
+  const consider = (key: string, clef: ClefType) => {
+    const line = keyToLine(clef, key);
+    if (!Number.isFinite(line)) return;
+    const headBottom = (line - 4) * STAVE_LINE_SPACING_PX + NOTEHEAD_HALF_HEIGHT_PX;
+    if (headBottom > deepestBottomPx) deepestBottomPx = headBottom;
+  };
+  bottom.measures.forEach((measure, i) => {
+    const clef = resolveMeasureClef(bottom.measures, i, bottom.clef);
+    getMeasureVoices(measure).forEach((voice) => voice.events.forEach((ev) => {
+      if (ev.isRest || ev.renderStaff === 'above') return;
+      ev.keys.forEach((key) => consider(key, clef));
+    }));
+  });
+  if (above) {
+    above.measures.forEach((measure, i) => {
+      const clef = resolveMeasureClef(bottom.measures, i, bottom.clef);
+      getMeasureVoices(measure).forEach((voice) => voice.events.forEach((ev) => {
+        if (ev.isRest || ev.renderStaff !== 'below') return;
+        ev.keys.forEach((key) => consider(key, clef));
+      }));
+    });
+  }
+  if (!Number.isFinite(deepestBottomPx)) return 0;
+  // 描画側のクランプ（resolvePedalBaselineY）と同じ式で必要な baseline を求め、
+  // 段の下余白（SYSTEM_BOTTOM_PADDING_PX）に収まらないぶんだけ広げる
+  const textTop = PEDAL_BASELINE_OFFSET_PX - PEDAL_TEXT_ASCENT_PX;
+  if (deepestBottomPx <= textTop) return 0;
+  const baseline = deepestBottomPx + PEDAL_CLEARANCE_MARGIN_PX + PEDAL_TEXT_ASCENT_PX;
+  return Math.max(0, Math.ceil(baseline + PEDAL_TEXT_DESCENT_PX - SYSTEM_BOTTOM_PADDING_PX));
 }

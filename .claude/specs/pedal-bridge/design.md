@@ -169,3 +169,19 @@ v1 では **`change` は「踏む」として取り込む**（音は踏み替え
 
 **対象外**: StaffCanvas（単旋律の旧描画）は同名処理を持つが、単旋律譜のペダルは実運用が無く
 今回は触っていない。#416（記号の積み順の一元化）で両キャンバスをまとめて扱う
+
+### Codex round 1 対応（2026-09-05）
+
+- **P1 段の下余白の予約**: 描画後のクランプで Ped を下げても段の高さ（`computeLayout` の sysH）が
+  固定では SVG の外へはみ出す（印刷は `overflow: hidden`）。段の高さは描画前に決まるので、
+  `estimatePedalBottomExtensionPx(parts)` で**譜面データから**必要量（最下パートの最低音の深さ
+  ＋段またぎ below の音符）を先に見積もり、`computeLayout(n, partSpacingOffsetPx, bottomExtensionPx)`
+  の下余白へ足す。ScorePage 側のページ段数の見積もり（`measuredSystemHeightPx` /
+  `recommendedSystemHeightPx`）も同じ純関数・同じ入力で同じ値を足すので、段の実高さと一致する。
+  ペダルの無い譜面では 0（段の高さは従来どおり）。全段で同じ値（ページ計算が「段の高さは一定」前提）
+- **P1 加線の張り出し**: 加線は符頭の BoundingBox に入らないので、横だけ `PEDAL_LEDGER_OVERHANG_PX`
+  ぶん余裕を見る（縦は食い込み判定のまま）
+- **P1 段またぎの帰属**: ペダルの五線・パートを `resolveRenderStave(ev)` / `resolveRenderPartIndexFor(ev)`
+  でそろえ、描画先の低音を避ける
+- **P2 テスト**: `ScorePagePedalClearanceWiring.test.tsx`（ScorePage 実マウント・低音あり/なしの差分と
+  SVG 高さ）、canvas テストに SVG 高さ・段またぎの2件、純関数に見積もりの5件を追加

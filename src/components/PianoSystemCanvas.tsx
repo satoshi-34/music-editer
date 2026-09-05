@@ -30,7 +30,7 @@ import {
 import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
 import { armClickCycle, planClickCycle, type ClickCycleState } from './clickCycleUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
-import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY } from '../utils/pedalBridgeUtils';
+import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
 import {
   SCORE_SELECTION_CLEAR_EVENT,
@@ -4473,7 +4473,12 @@ export default function PianoSystemCanvas({
     ref.current.innerHTML='';
     ref.current.style.overflow='visible';
 
-    const { staveYs, sysH, staveSpacing } = computeLayout(parts.length, partSpacingOffsetPx);
+    // ペダル記号が最下音を避けて下がるぶんの段の下余白（#604）。ScorePage 側のページ段数の
+    // 見積もり（measuredSystemHeightPx）も同じ純関数で同じ値を足すので、段の実高さと一致する
+    const pedalBottomExtensionPx = estimatePedalBottomExtensionPx(
+      parts.map((part, pi) => ({ measures: partsScoreForRender[pi] ?? part.data, clef: part.clef })),
+    );
+    const { staveYs, sysH, staveSpacing } = computeLayout(parts.length, partSpacingOffsetPx, pedalBottomExtensionPx);
     const W=ref.current.parentElement?.clientWidth??ref.current.clientWidth??700;
     const renderer=new Renderer(ref.current,Renderer.Backends.SVG);
     // sysH は FIRST_STAVE_Y / STAVE_SPACING という「論理座標（ctx.scale適用前）」で
@@ -8084,13 +8089,17 @@ export default function PianoSystemCanvas({
                 const symbolEntry = buildCustomSymbolEntry(ev, cx, stave.getYForLine(0), absI, j, pi, entry.voiceIndex);
                 if (symbolEntry) customSymbolEntries.push(symbolEntry);
                 if (ev.pedalMark) {
+                  // 段またぎ（renderStaff）の音符に付いたペダルは、実際に描かれた五線の下に出す。
+                  // 障害物（noteObstacles）も描画先パートへ帰属しているので、五線・パートを
+                  // 同じ基準でそろえないと自分の低音を避けられない（#604 round1 P1）
+                  const pedalStave = resolveRenderStave(ev);
                   pedalMarkEntries.push({
                     anchorX: cx,
-                    botY: stave.getYForLine(4),
+                    botY: pedalStave.getYForLine(4),
                     mark: ev.pedalMark,
-                    stave,
+                    stave: pedalStave,
                     // 低音との衝突回避（#604）で「このパートの音符」だけを障害物にするための帰属
-                    partIndex: pi,
+                    partIndex: resolveRenderPartIndexFor(ev),
                   });
                 }
                 if (!ev.isRest && ev.fingering) {

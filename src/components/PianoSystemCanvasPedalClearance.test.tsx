@@ -123,4 +123,40 @@ describe('Ped/✱ と五線下の低音の衝突回避（Issue #604）', () => {
     const container = renderPiano(right, left);
     expect(textY(container, 'Ped')).toBe(bassStaveBottomY(container) + PEDAL_FIXED_OFFSET_PX);
   });
+
+  it('下がった Ped は SVG（段の箱）の中に収まる（段の下余白がデータから広がる）', () => {
+    const left: MeasureData[] = [{ events: [
+      { dur: '2', isRest: false, keys: ['a/1', 'a/2'], pedalMark: 'down' },
+      { dur: '2', isRest: false, keys: ['d/3'], pedalMark: 'up' },
+    ] }];
+    const container = renderPiano(rightHand, left);
+    const svg = container.querySelector('svg') as SVGSVGElement;
+    const svgHeight = parseFloat(svg.getAttribute('height')!);
+    const pedY = textY(container, 'Ped');
+    // baseline + ディセント（3）が SVG の高さを超えない（印刷/PDF で欠けない・次段と重ならない）
+    expect(pedY + 3).toBeLessThanOrEqual(svgHeight / 0.44 + 0.01);
+    // 同じ譜面でペダルを外すと段の高さは従来に戻る（ペダルの無い譜面の高さは変えない）
+    const leftNoPedal: MeasureData[] = [{ events: [
+      { dur: '2', isRest: false, keys: ['a/1', 'a/2'] },
+      { dur: '2', isRest: false, keys: ['d/3'] },
+    ] }];
+    const container2 = renderPiano(rightHand, leftNoPedal);
+    const svgHeight2 = parseFloat((container2.querySelector('svg') as SVGSVGElement).getAttribute('height')!);
+    expect(svgHeight).toBeGreaterThan(svgHeight2);
+  });
+
+  it('段またぎ（renderStaff: below）で左手の五線に描いた右手の音に付けた Ped は、左手の五線の下で自分の低音を避ける', () => {
+    const right: MeasureData[] = [{ events: [
+      { dur: '2', isRest: false, keys: ['c/2', 'c/3'], renderStaff: 'below', pedalMark: 'down' },
+      { dur: '2', isRest: false, keys: ['e/5'], pedalMark: 'up' },
+    ] }];
+    const left: MeasureData[] = [{ events: [
+      { dur: '2', isRest: false, keys: ['d/3'] },
+      { dur: '2', isRest: false, keys: ['d/3'] },
+    ] }];
+    const container = renderPiano(right, left);
+    const fixedBass = bassStaveBottomY(container) + PEDAL_FIXED_OFFSET_PX;
+    // Ped は右手（上段）ではなく左手（下段）の五線の下に出て、c/2 の下へ下がる
+    expect(textY(container, 'Ped')).toBeGreaterThan(fixedBass);
+  });
 });
