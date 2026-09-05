@@ -4938,12 +4938,23 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     lock: layoutDragLockRef.current,
   });
 
+  // 先頭小節 → その段の「間隔の上書き(px)」の索引。上書きは配列で持っている（保存形式の正本）が、
+  // 段ごとに find で線形探索すると、こちらも段数×上書き数の走査になる（round2 P3）。
+  // 上書きが変わったときだけ作り直せば、引き当ては段あたり定数時間で済む。
+  const systemRowGapByStartMeasure = useMemo(() => {
+    const index = new Map<number, number>();
+    systemRowGapOverrides.forEach((o) => index.set(o.startMeasure, o.gapPx));
+    return index;
+  }, [systemRowGapOverrides]);
+
   // 指定した段一覧（systemRanges）ぶんの「段ごとの間隔の追加オフセット(px)」配列を作る。
   // 各 Staff コンポーネント（SingleStaff等）の systemGapOverridesPx props にそのまま渡し、
   // 該当する段の直前へ marginTop として反映させる。上書きが無い段は 0（従来どおり）。
+  // 引き当ては上の索引（systemRowGapByStartMeasure）で段あたり定数時間。ページごとに全段ぶん
+  // 呼ばれるので、ここで find（上書き数の走査）を残すと段数×上書き数に戻る（round3 P3）
   const getSystemGapOverridesPx = useCallback((ranges: SystemMeasureRange[]): number[] => (
-    ranges.map((range) => systemRowGapOverrides.find((o) => o.startMeasure === range.start)?.gapPx ?? 0)
-  ), [systemRowGapOverrides]);
+    ranges.map((range) => systemRowGapByStartMeasure.get(range.start) ?? 0)
+  ), [systemRowGapByStartMeasure]);
   // 終止線を描く「内容のある最後の小節」の絶対インデックス。
   // 内容が1小節も無い（空の楽譜）ときは undefined にして、どの Canvas でも終止線を描かせない。
   const finalMeasureIndex = contentMeasureCount > 0 ? contentMeasureCount - 1 : undefined;
@@ -5125,14 +5136,6 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     return index;
   }, [visiblePlannedRanges]);
 
-  // 先頭小節 → その段の「間隔の上書き(px)」の索引。上書きは配列で持っている（保存形式の正本）が、
-  // 段ごとに find で線形探索すると、こちらも段数×上書き数の走査になる（round2 P3）。
-  // 上書きが変わったときだけ作り直せば、引き当ては段あたり定数時間で済む。
-  const systemRowGapByStartMeasure = useMemo(() => {
-    const index = new Map<number, number>();
-    systemRowGapOverrides.forEach((o) => index.set(o.startMeasure, o.gapPx));
-    return index;
-  }, [systemRowGapOverrides]);
 
   // 「各ページの先頭にあたる段の通し番号」の集合。段の上端の境界帯を出してよいかの判定
   // （＝ページの先頭の段ではない）に使う。段ごとに findPageIndexForSystem を呼ぶと

@@ -411,6 +411,80 @@ describe('ScorePage: レイアウトタブ＝整えるモード（Issue #571）'
     expect(frameMarginTop(first)).toBe('20px');
   }, MOUNT_HEAVY_TIMEOUT_MS);
 
+  it('境界帯を掴んでいる間は◢を掴めず、帯の Undo が壊れない（round2 P2-1・帯→角）', async () => {
+    // 問題だったのは「帯と◢が同じ Undo 退避先を共有する」こと。帯同士のテストだけでは
+    // ◢側のロック配線（NotationSizeDragHandle の lock）を外しても通ってしまうので、
+    // 帯→◢・◢→帯の両方向を実マウントで固定する（round3 P2）
+    await renderScore();
+    openTab('レイアウト');
+    const starts = systemStartMeasures();
+    expect(starts.length).toBeGreaterThan(1);
+    const target = starts[1];
+    const sizeBefore = notationSizePercent();
+
+    // 1本目が段2の帯を掴む → その段が選ばれ、◢も出る
+    grab((await screen.findByTestId(`system-gap-drag-${target}`)) as HTMLElement, 300, 200, 1);
+    const corner = await screen.findByTestId(`notation-size-drag-${target}`);
+
+    // 2本目が◢を掴んで引いても、大きさは変わらない（セッションが成立していない）
+    grab(corner as HTMLElement, 400, 300, 2);
+    fireEvent.pointerMove(window, { pointerId: 2, clientX: 450, clientY: 350 });
+    expect(notationSizePercent()).toBe(sizeBefore);
+    expect(screen.queryByTestId('notation-size-drag-value')).toBeNull();
+    fireEvent.pointerUp(window, { pointerId: 2, clientX: 450, clientY: 350 });
+
+    // 1本目は最後まで引ける
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 300, clientY: 220 });
+    await waitFor(() => {
+      expect(frameMarginTop(target)).toBe('20px');
+    });
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 300, clientY: 220 });
+    expect(notationSizePercent()).toBe(sizeBefore);
+
+    // 先行した帯の Undo は1件で戻る（◢の割り込みで履歴が上書き・二重化されていない）
+    fireEvent.click(screen.getByTitle(/元に戻す/));
+    await waitFor(() => {
+      expect(frameMarginTop(target)).toBe('');
+    });
+    expect((screen.getByTitle(/元に戻す/) as HTMLButtonElement).disabled).toBe(true);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('◢を掴んでいる間は境界帯を掴めず、◢の Undo が壊れない（round2 P2-1・角→帯）', async () => {
+    await renderScore();
+    openTab('レイアウト');
+    const starts = systemStartMeasures();
+    expect(starts.length).toBeGreaterThan(2);
+    const selected = starts[0];
+    const other = starts[2];
+    const sizeBefore = notationSizePercent();
+
+    fireEvent.click(await screen.findByTestId(`system-select-surface-${selected}`));
+    const corner = await screen.findByTestId(`notation-size-drag-${selected}`);
+    grab(corner as HTMLElement, 400, 300, 1);
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 450, clientY: 350 });
+    await waitFor(() => {
+      expect(notationSizePercent()).toBe(sizeBefore + 20);
+    });
+
+    // 2本目が別の段の帯を掴んでも、選択は移らず間隔も変わらない
+    const otherHandle = await screen.findByTestId(`system-gap-drag-${other}`);
+    grab(otherHandle as HTMLElement, 300, 400, 2);
+    expect(screen.queryByTestId(`system-layout-panel-${other}`)).toBeNull();
+    fireEvent.pointerMove(window, { pointerId: 2, clientX: 300, clientY: 460 });
+    expect(frameMarginTop(other)).toBe('');
+    fireEvent.pointerUp(window, { pointerId: 2, clientX: 300, clientY: 460 });
+
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 450, clientY: 350 });
+    expect(notationSizePercent()).toBe(sizeBefore + 20);
+
+    // 先行した◢の Undo は1件で戻る
+    fireEvent.click(screen.getByTitle(/元に戻す/));
+    await waitFor(() => {
+      expect(notationSizePercent()).toBe(sizeBefore);
+    });
+    expect((screen.getByTitle(/元に戻す/) as HTMLButtonElement).disabled).toBe(true);
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
   it('非先頭段を選んだまま音符・休符タブへ戻すと境界帯も消える（round2 P2-2）', async () => {
     // 「音符・休符タブでは帯も面も無い」（REGRESSION Z）は、段を選んでいる場合にも及ぶ。
     // 帯の表示条件に整えるモードが入っていなかったため、ページの先頭ではない段

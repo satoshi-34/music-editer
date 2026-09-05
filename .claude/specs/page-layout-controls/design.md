@@ -992,7 +992,9 @@ Undo の退避先（`ScorePage` の `layoutDragHistoryRef`）は1つしか無く
 round1 で段の通し番号だけを `Map` 化したが、`renderSystemPanel` にはまだ段数に比例する
 走査が2つ残っていた。どちらも段の数だけ呼ばれるので、全体では段数の2乗になる。
 
-- 間隔の上書き（配列が保存形式の正本）: 先頭小節 → `gapPx` の `Map` を `useMemo` で作る
+- 間隔の上書き（配列が保存形式の正本）: 先頭小節 → `gapPx` の `Map` を `useMemo` で作る。
+  各 Staff へ配る `getSystemGapOverridesPx`（ページごとに全段ぶん呼ばれる）も同じ索引を
+  引くようにした（round3 P3。`find` を残すとそこだけ段数×上書き数に戻る）
 - ページの先頭の段かどうか: `findPageIndexForSystem` は先頭ページからループするため、
   各ページの先頭にあたる段の通し番号の `Set` を一度だけ数え上げる。
   ページの段数は `Math.max(1, ...)` で下限を付ける（0 だと無限ループになるため）
@@ -1004,6 +1006,7 @@ round1 で段の通し番号だけを `Map` 化したが、`renderSystemPanel` �
 - `src/components/SystemGapDragHandle.tsx`: `dragLock` props をフックへ渡すだけ
 - `src/components/ScorePage.tsx`: 共有ロックを1つ保持して帯と◢へ配る／帯の表示条件に
   `isLayoutAdjustMode`／`systemRowGapByStartMeasure`・`pageStartSystemIndexes` の索引
-- テスト: `ScorePageLayoutAdjustMode.test.tsx` に2件追加（計12件）／
+- テスト: `ScorePageLayoutAdjustMode.test.tsx` に2件追加（計12件）。round 3 で帯→◢・◢→帯の
+  両方向のロック配線テストを2件追加（計14件。帯同士だけでは◢側の `lock` を外しても通るため）／
   `ScorePageSystemGapDrag.test.tsx` は帯を触る前にレイアウトタブを開くよう更新（16件のまま）
 - `docs/REGRESSION.md`: Y 節（帯はモード中だけ・手順の移動）と Z 節（帯の消失・同時ドラッグ）へ追記
