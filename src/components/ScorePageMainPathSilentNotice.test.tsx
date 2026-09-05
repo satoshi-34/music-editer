@@ -34,6 +34,7 @@ const silentMainPathAnalyser = {
   getFloatTimeDomainData(data: Float32Array) { data.fill(0); },
 } as unknown as AnalyserNode;
 
+const stopAllMock = vi.fn();
 vi.mock('../audio/createPlaybackEngine', () => ({
   createPlaybackEngine: () => ({
     initialize: vi.fn().mockResolvedValue(undefined),
@@ -41,7 +42,7 @@ vi.mock('../audio/createPlaybackEngine', () => ({
     playParts: vi.fn().mockResolvedValue(undefined),
     suspend: vi.fn().mockResolvedValue(undefined),
     resume: vi.fn().mockResolvedValue(undefined),
-    stopAll: vi.fn(),
+    stopAll: stopAllMock,
     dispose: vi.fn(),
     setInstrument: vi.fn(),
     setSoundProfile: vi.fn(),
