@@ -4,6 +4,7 @@ import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/re
 import ScorePage from './ScorePage';
 
 const setVelocityTimbreEnabledMock = vi.fn();
+const setVelocityTimbreStrengthMock = vi.fn();
 vi.mock('../audio/createPlaybackEngine', () => ({
   createPlaybackEngine: () => ({
     initialize: vi.fn().mockResolvedValue(undefined),
@@ -17,6 +18,7 @@ vi.mock('../audio/createPlaybackEngine', () => ({
     setSoundProfile: vi.fn(),
     setSwingEnabled: vi.fn(),
     setVelocityTimbreEnabled: setVelocityTimbreEnabledMock,
+    setVelocityTimbreStrength: setVelocityTimbreStrengthMock,
     getAudioContext: () => null,
   }),
 }));
@@ -43,6 +45,7 @@ describe('ScorePage: 強弱で音色も変える（Issue #670）', () => {
   beforeEach(() => {
     localStorageMock.clear();
     setVelocityTimbreEnabledMock.mockClear();
+    setVelocityTimbreStrengthMock.mockClear();
     clientWidthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get: () => 900, configurable: true });
   });
@@ -66,5 +69,22 @@ describe('ScorePage: 強弱で音色も変える（Issue #670）', () => {
       const saved = JSON.parse(localStorageMock.getItem('playback-sound-runtime-settings') ?? '{}');
       expect(saved.velocityTimbreEnabled).toBe(false);
     }, { timeout: 15000 });
+  }, 60000);
+
+  it('柔らかさスライダー（既定 100%）を動かすとエンジンへ強さが届き、設定にも保存される。OFF では隠れる', async () => {
+    render(<ScorePage />);
+    await waitFor(() => { expect(screen.getByRole('tab', { name: '再生・音色' })).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    fireEvent.click(screen.getByRole('button', { name: '音色詳細を開く' }));
+    const slider = screen.getByLabelText('弱い音の柔らかさ') as HTMLInputElement;
+    expect(slider.value).toBe('1');
+    fireEvent.change(slider, { target: { value: '0.5' } });
+    await waitFor(() => { expect(setVelocityTimbreStrengthMock).toHaveBeenCalledWith(0.5); }, { timeout: 15000 });
+    await waitFor(() => {
+      const saved = JSON.parse(localStorageMock.getItem('playback-sound-runtime-settings') ?? '{}');
+      expect(saved.velocityTimbreStrength).toBe(0.5);
+    }, { timeout: 15000 });
+    fireEvent.click(screen.getByLabelText('強弱で音色も変える'));
+    await waitFor(() => { expect(screen.queryByLabelText('弱い音の柔らかさ')).toBeNull(); });
   }, 60000);
 });

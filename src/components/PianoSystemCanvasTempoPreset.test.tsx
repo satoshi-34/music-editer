@@ -135,7 +135,7 @@ describe('PianoSystemCanvas テンポ表記の定番候補（Issue #457）', () 
 
     const options = Array.from(datalist!.querySelectorAll('option')).map((o) => o.getAttribute('value'));
     expect(options).toEqual([...TEMPO_MARKING_PRESETS]);
-    // 弟フィードバックで名指しされた2語は必ず入っている
+    // ユーザーフィードバックで名指しされた2語は必ず入っている
     expect(options).toContain('Andante');
     expect(options).toContain('Allegro');
   });

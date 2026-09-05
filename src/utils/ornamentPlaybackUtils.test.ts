@@ -1,4 +1,4 @@
-// トリル再生展開のユニットテスト（弟フィードバック 2026-08-29）。
+// トリル再生展開のユニットテスト（ユーザーフィードバック 2026-08-29）。
 import { describe, it, expect } from 'vitest';
 import { expandTrillForPlayback, trillUpperNeighborKey } from './ornamentPlaybackUtils';
 import { getDurationBeats, tupletBeatsMultiplier } from './voiceMeasureUtils';

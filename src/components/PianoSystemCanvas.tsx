@@ -2180,7 +2180,7 @@ function drawCollectedSymbolEntries(args: {
         aboveOffset += 10 * s;
       } else if (type === 'accent') {
         // アクセント: 横向きの「>」（先端が右）。以前は下向きの楔（∨）で描いていたが、
-        // 記譜の作法として誤りで、マルカート（∧系）とも紛らわしかった（Issue #474・弟の実使用指摘）
+        // 記譜の作法として誤りで、マルカート（∧系）とも紛らわしかった（Issue #474・ユーザーの実使用指摘）
         const bottomY = noteTopY - 5 - aboveOffset + adjust.offsetY;
         const midY = bottomY - 5.5 * s;
         const topY = bottomY - 11 * s;
@@ -6569,7 +6569,7 @@ export default function PianoSystemCanvas({
          * 旧・案B（帯域のパートへ入れて自動切替）は、月光 m5 の低い右手三連符のような
          * 「片手が帯域を外れる」常態的な音型で明示選択が壊れたため差し替えた
          * （①実例 ②交差・月光型はピアノ曲で常態 ③Finale も選択レイヤー絶対方式で
-         * 弟のメンタルモデルもこれ。テスト会で引っかかりの逆流が無いか検証する。
+         * ユーザーのメンタルモデルもこれ。テスト会で引っかかりの逆流が無いか検証する。
          * 経緯は .claude/specs/editor-layer-selection/design.md の追補を参照）
          */
         const notifyCrossBandInsert = (sourceBandPi: number) => {
