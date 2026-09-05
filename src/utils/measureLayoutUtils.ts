@@ -300,7 +300,7 @@ const ENSEMBLE_DENSE_SPACING_MIN_PARTS = 5;
  * 五線の上端の座標が要る側（段内のパート境界に掴みしろを重ねる Issue #572 など）は、
  * `staveYs[i] + STAVE_TOP_LINE_OFFSET` を使う（＝描画時の `stave.getYForLine(0)` と一致する）。
  * 実際の描画と一致していることは ScorePagePartGapDrag.test.tsx が
- * `data-line0-y`（描画された五線そのものの座標）と突き合わせて固定している。
+ * 描画された五線（`.vf-stave` の path）の座標と突き合わせて固定している。
  */
 export const STAVE_TOP_LINE_OFFSET = 40;
 // パート間隔スライダー（Issue #90）で自動値をどこまで詰めても、ピアノ大譜表の
