@@ -82,6 +82,8 @@ export interface PlaybackControlsProps {
    * 記譜（見た目・保存データ）は変えず、再生タイミングだけに影響する。
    */
   onSwingEnabledChange?: (enabled: boolean) => void;
+  /** 強弱を音色にも効かせる（#670）の ON/OFF */
+  onVelocityTimbreEnabledChange?: (enabled: boolean) => void;
 }
 
 /**
@@ -204,7 +206,8 @@ export default function PlaybackControls({
   onPluginNameChange,
   onSoundProfileChange,
   onPreviewAccidentalOnApplyChange,
-  onSwingEnabledChange
+  onSwingEnabledChange,
+  onVelocityTimbreEnabledChange,
 }: PlaybackControlsProps) {
   // テンポ入力の内部状態
   const [tempoInput, setTempoInput] = useState(currentTempo.toString());
@@ -447,6 +450,9 @@ export default function PlaybackControls({
   const handleSwingEnabledChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     onSwingEnabledChange?.(event.target.checked);
   }, [onSwingEnabledChange]);
+  const handleVelocityTimbreEnabledChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    onVelocityTimbreEnabledChange?.(event.target.checked);
+  }, [onVelocityTimbreEnabledChange]);
 
   /**
    * 再生/一時停止ボタンのアイコンとラベルを取得
@@ -843,6 +849,21 @@ export default function PlaybackControls({
                                 チェックボックスの隣で一言添えておく。楽譜が変わったと誤解されないようにするため。 */}
                             <span style={{ display: 'block', fontSize: 11, color: '#6b7280' }}>
                               記譜は変えず、8分音符の再生だけを「タッタ」と跳ねさせます
+                            </span>
+                          </span>
+                        </label>
+
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <input
+                            type="checkbox"
+                            checked={soundRuntimeSettings?.velocityTimbreEnabled ?? true}
+                            onChange={handleVelocityTimbreEnabledChange}
+                            aria-label="強弱で音色も変える"
+                          />
+                          <span>
+                            強弱で音色も変える
+                            <span style={{ display: 'block', fontSize: 11, color: '#6b7280' }}>
+                              弱い音は柔らかく、強い音は硬く明るく鳴らします（音量だけでなく音色が変わります）
                             </span>
                           </span>
                         </label>

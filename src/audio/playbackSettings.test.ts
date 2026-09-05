@@ -28,6 +28,12 @@ describe('sanitizePlaybackRuntimeSettings', () => {
     expect(settings.pluginName).toBe('FluidR3_GM');
   });
 
+  it('強弱→音色（#670）は既定 ON。保存済みの false は尊重する', () => {
+    expect(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.velocityTimbreEnabled).toBe(true);
+    expect(sanitizePlaybackRuntimeSettings({ engineMode: 'soundfont' }).velocityTimbreEnabled).toBe(true);
+    expect(sanitizePlaybackRuntimeSettings({ engineMode: 'soundfont', velocityTimbreEnabled: false }).velocityTimbreEnabled).toBe(false);
+  });
+
   it('未知の値が来たときは安全な既定値へ戻す', () => {
     expect(sanitizePlaybackRuntimeSettings(null)).toEqual(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS);
     expect(sanitizePlaybackRuntimeSettings('invalid')).toEqual(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS);

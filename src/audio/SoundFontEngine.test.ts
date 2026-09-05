@@ -374,3 +374,54 @@ describe('SoundFontEngine の小節ごとのテンポ（Issue #458）', () => {
     expect(played[1].at).toBeCloseTo(2, 6);
   });
 });
+
+describe('SoundFontEngine の強弱→音色（Issue #670）', () => {
+  const setup = async () => {
+    const filters: Array<{ type: string; frequency: { value: number }; Q: { value: number }; connect: ReturnType<typeof vi.fn> }> = [];
+    vi.stubGlobal('AudioContext', vi.fn(function () {
+      return {
+        state: 'running', currentTime: 0, destination: {}, resume: vi.fn(),
+        createGain: vi.fn(() => ({ gain: { value: 1 }, connect: vi.fn() })),
+        createBiquadFilter: vi.fn(() => {
+          const filter = { type: '', frequency: { value: 0 }, Q: { value: 0 }, connect: vi.fn() };
+          filters.push(filter);
+          return filter;
+        }),
+      };
+    }));
+    const nodes: Array<{ connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }> = [];
+    const play = vi.fn(() => { const node = { connect: vi.fn(), disconnect: vi.fn() }; nodes.push(node); return node; });
+    const engine = new SoundFontEngine();
+    vi.spyOn(internals(engine), 'getPlayerForInstrument').mockResolvedValue({ play });
+    await engine.initialize();
+    return { engine, play, nodes, filters };
+  };
+
+  it('play() が返す音ノードを player の出力から外し、velocity のローパス経由でマスターへつなぎ直す', async () => {
+    const { engine, nodes, filters } = await setup();
+    await engine.playParts([{
+      measures: [{ measureBeats: 4, events: [
+        { dur: '4', isRest: false, keys: ['C4'], velocity: 0.22 },
+        { dur: '4', isRest: false, keys: ['D4'], velocity: 0.74 },
+      ] }],
+    }], 120);
+    expect(nodes.length).toBe(2);
+    expect(filters.length).toBe(2);
+    nodes.forEach((node, i) => {
+      expect(node.disconnect).toHaveBeenCalledTimes(1);
+      expect(node.connect).toHaveBeenCalledWith(filters[i]);
+      expect(filters[i].connect).toHaveBeenCalledTimes(1);
+    });
+    expect(filters[0].frequency.value).toBeLessThan(filters[1].frequency.value);
+  });
+
+  it('OFF ならつなぎ直さない（従来どおり player の出力へ）', async () => {
+    const { engine, nodes, filters } = await setup();
+    engine.setVelocityTimbreEnabled(false);
+    await engine.playParts([{
+      measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C4'], velocity: 0.22 }] }],
+    }], 120);
+    expect(filters.length).toBe(0);
+    expect(nodes[0].disconnect).not.toHaveBeenCalled();
+  });
+});

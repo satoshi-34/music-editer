@@ -17,11 +17,13 @@ describe('SimpleAudioEngine', () => {
   let mockOscillatorB: any;
   let createdOscillators: any[];
   let createdGains: any[];
+  let createdFilters: Array<{ type: string; frequency: { value: number }; Q: { value: number }; connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }>;
   let mockContext: any;
 
   beforeEach(() => {
     createdOscillators = [];
     createdGains = [];
+    createdFilters = [];
 
     const createMockOscillator = () => ({
       type: 'sine',
@@ -76,7 +78,13 @@ describe('SimpleAudioEngine', () => {
       }),
       close: vi.fn(),
       createOscillator: vi.fn(() => createdOscillators.shift() ?? createMockOscillator()),
-      createGain: vi.fn(() => createdGains.shift() ?? createMockGainNode())
+      createGain: vi.fn(() => createdGains.shift() ?? createMockGainNode()),
+      // 強弱→音色（#670）のローパス。作った順に記録して、velocity との対応を検証する
+      createBiquadFilter: vi.fn(() => {
+        const filter = { type: '', frequency: { value: 0 }, Q: { value: 0 }, connect: vi.fn(), disconnect: vi.fn() };
+        createdFilters.push(filter);
+        return filter;
+      })
     };
 
     vi.stubGlobal('AudioContext', vi.fn(function () {
@@ -172,6 +180,38 @@ describe('SimpleAudioEngine', () => {
     // 第5引数は尻尾の長さ（同時発音数の上限で詰められた音用・#605）。ここでは値を問わない
     expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(1, expect.any(Number), expect.any(Number), expect.any(Number), 0.22, expect.any(Number), expect.anything());
     expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(2, expect.any(Number), expect.any(Number), expect.any(Number), 0.74, expect.any(Number), expect.anything());
+  });
+
+  describe('強弱を音色にも効かせる（Issue #670）', () => {
+    it('譜面再生では音ごとにローパスを 1 つ挟み、弱い音ほどカットオフが低い', async () => {
+      await engine.initialize();
+      await engine.playParts([{
+        measures: [{ measureBeats: 4, events: [
+          { dur: '4', isRest: false, keys: ['c/4'], velocity: 0.22 },
+          { dur: '4', isRest: false, keys: ['d/4'], velocity: 0.74 },
+        ] }],
+      }], 120);
+      expect(createdFilters.length).toBe(2);
+      expect(createdFilters[0].type).toBe('lowpass');
+      expect(createdFilters[0].frequency.value).toBeLessThan(createdFilters[1].frequency.value);
+      // 配線: ゲイン → フィルタ → 出力（フィルタが出力へつながっている）
+      createdFilters.forEach((filter) => { expect(filter.connect).toHaveBeenCalledTimes(1); });
+    });
+
+    it('OFF にすると従来どおりフィルタを作らない', async () => {
+      await engine.initialize();
+      engine.setVelocityTimbreEnabled(false);
+      await engine.playParts([{
+        measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['c/4'], velocity: 0.22 }] }],
+      }], 120);
+      expect(createdFilters.length).toBe(0);
+    });
+
+    it('確認音（velocity 無し）にはフィルタを挟まない', async () => {
+      await engine.initialize();
+      await engine.playNoteByName('C4', 0.3);
+      expect(createdFilters.length).toBe(0);
+    });
   });
 
   describe('タイで結ばれた音の再生（Issue #445）', () => {
