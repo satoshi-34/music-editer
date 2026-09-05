@@ -204,8 +204,8 @@ import {
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { normalizePickupBeats, resolveMeasureCapacityBeats, resolveTimeSignatureAtMeasure } from '../utils/measureCapacityUtils';
-import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, resolvePlaybackStartMeasureNumber, type PlaybackHighlightPartSource, type PlaybackHighlightTarget, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
+import { getDisplayedMeasureNumber, isPickupMeasure, normalizePickupBeats, resolveMeasureCapacityBeats, resolveTimeSignatureAtMeasure } from '../utils/measureCapacityUtils';
+import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, playbackStartMeasureNumberRange, resolvePlaybackStartMeasureNumber, type PlaybackHighlightPartSource, type PlaybackHighlightTarget, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature, TimeSignatureStyle } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
 import {
@@ -1866,12 +1866,18 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 sourceMeasureIndex: item.sourceMeasureIndex,
               })),
             })),
-            getMeasureBeats(scoreTimeSignature),
+            // 弱起の小節はその拍数だけ進む（#473）。エンジンへ渡す measureBeats と同じ解決
+            (sourceMeasureIndex) => resolveMeasureCapacityBeats(referenceMeasures, sourceMeasureIndex, scoreTimeSignature),
           );
           // 強弱は「拍位置で引く1本の時系列」で解決する（#626）。大譜表（ピアノ）では
           // 強弱記号は両手に共通なので両パートの記号を1本にまとめ、四重奏・編成譜は
           // 各パートに自分の強弱が書かれるのでパートごとに作る。どの声部の音も自分の拍位置で引く
-          const measureBeatsForDynamics = getMeasureBeats(scoreTimeSignature);
+          // 展開後の小節番号 → 元小節の容量（弱起はその拍数・#473）。時計のパートは展開済みなので
+          // 展開項目の sourceMeasureIndex から引く
+          const expandedSourceIndexes = expandedPerPart[0]?.map((item) => item.sourceMeasureIndex) ?? [];
+          const measureBeatsForDynamics = (expandedIndex: number) => resolveMeasureCapacityBeats(
+            referenceMeasures, expandedSourceIndexes[expandedIndex] ?? expandedIndex, scoreTimeSignature,
+          );
           // 記号の出どころ: ピアノは両手ぶん（片手の p が両手に効く）。他はパートごと。
           // 絶対拍の時計は各パート自身（エンジン・ハイライト・タイ・ペダルと同じ前進幅）
           const sharedDynamicMarkings = scoreType === 'piano'
@@ -2093,7 +2099,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           if (startFromSelection || explicitStartMeasure != null) {
             setCurrentPosition({ measureIndex: startMeasure, beatPosition: 0, noteIndex: 0 });
             notifyScoreEdit(explicitStartMeasure != null
-              ? describePlaybackFromMeasureNumber(startMeasure, selectedMeasures != null)
+              ? describePlaybackFromMeasureNumber(
+                getDisplayedMeasureNumber(referenceMeasures, startMeasure, scoreTimeSignature), selectedMeasures != null)
               : describePlaybackFromMeasure(startMeasure));
           }
           schedulePositionTimeline(scheduleElapsedMs);
@@ -4915,10 +4922,14 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * （音の途中への飛び込み＝シークは #545 のスコープ外）。
    */
   const handlePlayFromMeasureNumber = useCallback(async (measureNumberInput: string) => {
-    const resolution = resolvePlaybackStartMeasureNumber(measureNumberInput, contentMeasureCount);
+    // 表示番号 → 実インデックスは弱起（#473）で 1 ずれうるので、正本パートの小節列で解決する
+    const numbering = { measures: getEditablePartEntries()[0]?.measures ?? [], timeSignature: scoreTimeSignature };
+    const resolution = resolvePlaybackStartMeasureNumber(measureNumberInput, contentMeasureCount, numbering);
     if (!resolution.ok) {
       // 黙って無視せず、なぜ再生できないかと入れ直し方を伝える（#318）
-      notifyScoreEdit(describePlaybackStartMeasureRejected(resolution.reason, contentMeasureCount));
+      notifyScoreEdit(describePlaybackStartMeasureRejected(
+        resolution.reason, contentMeasureCount, playbackStartMeasureNumberRange(contentMeasureCount, numbering),
+      ));
       return;
     }
 
@@ -4926,7 +4937,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       handleStop();
     }
     await handlePlay({ startMeasureIndex: resolution.measureIndex });
-  }, [contentMeasureCount, handlePlay, handleStop, playbackState]);
+  }, [contentMeasureCount, handlePlay, handleStop, playbackState, getEditablePartEntries, scoreTimeSignature]);
 
   // 印刷専用: 「最後に音符（または明示的な記号）がある小節」までを数える（Issue #80）。
   // contentMeasureCount（events が完全に空の小節だけを末尾から除外）より厳しく、末尾の
@@ -7347,6 +7358,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 onSeek={handleSeek}
                 onPlayFromMeasure={handlePlayFromMeasureNumber}
                 totalMeasureCount={contentMeasureCount}
+                measureNumberMin={isPickupMeasure(getEditablePartEntries()[0]?.measures, 0, scoreTimeSignature) ? 0 : 1}
                 onTempoChange={handleTempoChange}
                 onInstrumentChange={handleInstrumentChange}
                 onInstrumentPreview={handleInstrumentPreview}

@@ -143,6 +143,9 @@ describe('ScorePage: 弱起（アウフタクト）の配線（Issue #473）', (
 
     await openPickupOverlay(0);
     await waitFor(() => { expect(pickupSelect()).toBeTruthy(); }, { timeout: 15000 });
+    // 弱起ツールを選んだ状態での描画数（Undo 後の比較基準。ツールによって描かれる
+    // 補助要素が変わるので、同じツールのまま測る）
+    const beforeWithTool = drawnNoteCount();
     fireEvent.change(pickupSelect()!, { target: { value: '1' } });
 
     // 保存データ（自動保存）へ弱起が書かれる。2小節目には書かれない
@@ -156,6 +159,39 @@ describe('ScorePage: 弱起（アウフタクト）の配線（Issue #473）', (
       expect(drawnNoteCount()).toBeLessThanOrEqual(beforeCount - 3);
     }, { timeout: 15000 });
     const withPickup = drawnNoteCount();
+
+    // 受入（運用者裁定 2026-09-04）: 弱起化は Undo 1回で戻る（可逆）。やり直すで再び弱起になる
+    fireEvent.click(screen.getByTitle(/元に戻す/));
+    await waitFor(() => {
+      expect(loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.pickupBeats).toBeUndefined();
+    }, { timeout: 15000 });
+    await waitFor(() => { expect(drawnNoteCount()).toBe(beforeWithTool); }, { timeout: 15000 });
+    fireEvent.click(screen.getByTitle(/やり直す/));
+    await waitFor(() => {
+      expect(loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.pickupBeats).toBe(1);
+    }, { timeout: 15000 });
+    await waitFor(() => { expect(drawnNoteCount()).toBe(withPickup); }, { timeout: 15000 });
+
+    // 小節番号を指定した再生（#545）は画面の番号（弱起 = 0、次が 1）で受け付ける:
+    // 「1」で 2 番目の小節（実インデックス 1）から鳴り、案内も「1小節目から」
+    fireEvent.click(screen.getByRole('tab', { name: '再生・音色' }));
+    expect((screen.getByLabelText('再生を開始する小節番号') as HTMLInputElement).min).toBe('0');
+    fireEvent.change(screen.getByLabelText('再生を開始する小節番号'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: '指定した小節から再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalled(); }, { timeout: 15000 });
+    {
+      const fromNumber = playPartsMock.mock.calls[0][0][0].measures as Array<{ measureBeats?: number }>;
+      // 弱起（1拍）の小節は含まれず、2番目の小節（4拍）から末尾まで
+      expect(fromNumber[0].measureBeats).toBe(4);
+    }
+    await waitFor(() => {
+      expect(screen.getByTestId('edit-notice').textContent).toContain('1小節目から再生します');
+    }, { timeout: 5000 });
+    fireEvent.click(screen.getByRole('button', { name: '停止' }));
+    playPartsMock.mockClear();
+    // タブを切り替えるとツールは既定（4分音符）へ戻る仕様なので、弱起ツールを選び直す
+    fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
+    fireEvent.click(screen.getByRole('button', { name: /弱起/ }));
 
     // 「（解除）」で普通の小節へ戻る: 補完休符が戻り、番号も従来どおりになる
     await openPickupOverlay(0, { selectTool: false });

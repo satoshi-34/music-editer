@@ -1,7 +1,7 @@
 import type { MeasureData, NoteEvent, TimeSignature } from '../types/storage';
 import { expandMeasuresForPlayback, expandMeasuresForPlaybackWithReference, type ExpandedPlaybackMeasure } from '../audio/repeatPlaybackUtils';
 import { getMeasureBeats } from './timeSignatureUtils';
-import { resolveMeasureCapacityBeats } from './measureCapacityUtils';
+import { getDisplayedMeasureNumber, resolveMeasureCapacityBeats } from './measureCapacityUtils';
 import { getEventDurationBeats, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { applySwingToTiming, shouldApplySwing } from './swingUtils';
 import { resolveEffectiveMeasureBpms, resolveMeasureBpms } from './tempoPlaybackUtils';
@@ -335,9 +335,32 @@ export function findPlaybackStartExpandedIndex(
  * @param input 入力欄の生の文字列（前後の空白は無視する）
  * @param totalMeasureCount 指定できる小節数の上限（内容のある小節数）
  */
+/**
+ * 表示番号 → 実インデックスの対応の材料。弱起（#473）は画面の小節番号を進めない
+ * （弱起の小節は 0・次の小節が 1）ので、実インデックス+1 とは限らない。
+ * 省略時は従来どおり「表示番号 = インデックス+1」（弱起の無い譜面と同じ）
+ */
+export interface PlaybackStartMeasureNumbering {
+  measures: readonly MeasureData[];
+  timeSignature: TimeSignature;
+}
+
+/** 入力できる表示番号の範囲（案内文用）。弱起が先頭にあれば 0 から */
+export function playbackStartMeasureNumberRange(
+  totalMeasureCount: number,
+  numbering?: PlaybackStartMeasureNumbering,
+): { min: number; max: number } {
+  if (totalMeasureCount <= 0) return { min: 1, max: 0 };
+  if (!numbering) return { min: 1, max: totalMeasureCount };
+  const first = getDisplayedMeasureNumber(numbering.measures, 0, numbering.timeSignature);
+  const last = getDisplayedMeasureNumber(numbering.measures, totalMeasureCount - 1, numbering.timeSignature);
+  return { min: first, max: last };
+}
+
 export function resolvePlaybackStartMeasureNumber(
   input: string,
-  totalMeasureCount: number
+  totalMeasureCount: number,
+  numbering?: PlaybackStartMeasureNumbering,
 ): PlaybackStartMeasureResolution {
   if (totalMeasureCount <= 0) {
     return { ok: false, reason: 'noMeasures' };
@@ -351,15 +374,24 @@ export function resolvePlaybackStartMeasureNumber(
   }
 
   const measureNumber = Number.parseInt(trimmed, 10);
-  if (measureNumber < 1 || measureNumber > totalMeasureCount) {
-    return { ok: false, reason: 'outOfRange' };
+  // 表示番号 → 実インデックスの対応はこの1か所に集約している（呼び出し側に -1 を散らさない）。
+  // 弱起（#473）が無ければ従来どおり「表示番号 = インデックス+1」。弱起があれば
+  // getDisplayedMeasureNumber の逆引き: 表示番号 0 は先頭の弱起、1 はその次の小節。
+  // 曲中の弱起（番号を進めない小節）は表示番号で指せない（その手前の完全小節から聴く）
+  if (!numbering) {
+    if (measureNumber < 1 || measureNumber > totalMeasureCount) {
+      return { ok: false, reason: 'outOfRange' };
+    }
+    return { ok: true, measureIndex: measureNumber - 1 };
   }
-
-  // 表示番号 → 実インデックスの対応はこの1か所に集約している。
-  // 現在の main は弱起（#473）未実装で表示番号は常に1始まり（=インデックス+1）。
-  // 弱起（表示番号0始まり）が入るときは、#473 側でこの対応だけを差し替えること
-  //（getDisplayedMeasureNumber の逆引き。呼び出し側に -1 を散らさない）
-  return { ok: true, measureIndex: measureNumber - 1 };
+  for (let index = 0; index < totalMeasureCount; index++) {
+    if (getDisplayedMeasureNumber(numbering.measures, index, numbering.timeSignature) === measureNumber) {
+      // 表示番号 0 は「先頭の弱起」だけを指す（曲中の弱起も 0 だが、先頭以外は指せない）
+      if (measureNumber === 0 && index !== 0) break;
+      return { ok: true, measureIndex: index };
+    }
+  }
+  return { ok: false, reason: 'outOfRange' };
 }
 
 /**
