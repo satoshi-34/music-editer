@@ -2,6 +2,7 @@
 // 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { resolveBelowSymbolShifts, BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX, type CollisionRect } from '../utils/symbolCollisionUtils';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
@@ -7370,17 +7371,33 @@ export default function PianoSystemCanvas({
                   // 選択の移動も確認音も行わない（「音は鳴ったが譜面は変わらない」を作らない）。
                   return { kind: 'rejected', notice: describeAccidentalTargetNoteLost() };
                 }
-                const nextEv = applyToEvent(latestEv, resolvedKeyIndex);
-                updateHitEvent(j, (targetEv) => {
-                  if(targetEv.isRest)return null;
-                  // ここまで来ても書き込み直前に和音が縮んでいることはあり得るので、
-                  // 範囲だけは最後にもう一度確かめる（外れていたら書かない＝通知は上で済み）。
-                  if (resolvedKeyIndex >= targetEv.keys.length) return null;
-                  return applyToEvent(targetEv, resolvedKeyIndex);
+                // 上の引き直しは「描画のミラー」を見ているだけで、書き込みは React の state に
+                // 対して行われる。同じ tick に別の更新（選択中の音の Delete など）が積まれて
+                // いると、ミラーでは在った音が書き込み時点では消えていることがある
+                // （#548 round3 P2）。そこで書き込みを flushSync で**この場で確定**させ、
+                // 「実際に書けたか」を見てから選択・確認音・通知を決める。updater の中では
+                // 通知しない（#318: updater が2回呼ばれる場面で二重に出る）ので、
+                // 書けたかどうかの印だけを外へ持ち出す。
+                let written = false;
+                let writtenEv: typeof latestEv | null = null;
+                flushSync(() => {
+                  updateHitEvent(j, (targetEv) => {
+                    if(targetEv.isRest)return null;
+                    if (resolvedKeyIndex >= targetEv.keys.length) return null;
+                    const applied = applyToEvent(targetEv, resolvedKeyIndex);
+                    written = true;
+                    writtenEv = applied;
+                    return applied;
+                  });
                 });
+                if (!written || !writtenEv) {
+                  // 書けなかった＝押した音は書き込みの瞬間にもう無かった。選択も確認音も
+                  // 行わずに断る（「音は鳴ったが譜面は変わらない」を作らない）。
+                  return { kind: 'rejected', notice: describeAccidentalTargetNoteLost() };
+                }
                 setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:resolvedKeyIndex});
                 if (previewAccidentalOnApply) {
-                  playNoteEvent(nextEv, part.playbackInstrument);
+                  playNoteEvent(writtenEv, part.playbackInstrument);
                 }
                 return { kind: 'handled' };
               };

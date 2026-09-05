@@ -12,7 +12,7 @@
 // 統合後のラベル・クリック位置へ移行することで担保する（設計メモ §6 の移行表）。
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 
 import Palette from './Palette';
 import PianoSystemCanvas from './PianoSystemCanvas';
@@ -500,6 +500,72 @@ describe('#548 臨時記号パレットの統合（案D）の受入基準', () =
     // 譜面は書き換えない（＝押していない f/5 に ♯ が付かない）
     expect(onChange).not.toHaveBeenCalled();
     // 無言で終わらない（#318）
+    expect(notices.join('\n')).toContain('見つかりませんでした');
+  });
+
+  it('round3 P2: 同じ tick で選択中の音が消える更新が先に積まれていても、選択も確認音も無しで断る', async () => {
+    // 引き直し（描画のミラー partsScoreRef）では音が在るのに、書き込み時点（React の state）
+    // では和音が縮んでいる、という競合窓の再現。window の keydown（Delete）と符頭の click は
+    // どちらも React 外の素のリスナーなので、1つの act の中で続けて dispatch すると
+    // 両方の state 更新が同じバッチに入る（Delete の結果はミラーへまだ写らない）。
+    const data: MeasureData[] = [{
+      events: [{ dur: '1', isRest: false, keys: ['c/4', 'e/4', 'g/4'] }],
+    }];
+    const onChange = vi.fn();
+    const onPreviewNoteEvent = vi.fn().mockResolvedValue(undefined);
+    const rendered = render(
+      <PianoSystemCanvas
+        measuresPerSystem={1}
+        tool={{ duration: '4', isRest: false, accidental: 'sharp' }}
+        scale={1}
+        partsConfig={[{ clef: 'treble', data, onChange }]}
+        showInstrumentLabels={false}
+        timeSignature={[4, 4]}
+        onPreviewNoteEvent={onPreviewNoteEvent}
+      />
+    );
+    const svg = rendered.container.querySelector('svg') as SVGSVGElement;
+    mockSvgLayout(svg);
+
+    // まず最上音（g/4 = ライン3）へ ♯ を付ける。これで keyIndex 2 が選択された状態になる
+    const firstHit = noteHit(svg, 0);
+    const noteLeft = parseFloat(firstHit.getAttribute('data-note-left')!);
+    const noteRight = parseFloat(firstHit.getAttribute('data-note-right')!);
+    const clickX = (noteLeft + noteRight) / 2;
+    const topY = clickYForLine(firstHit, 3);
+    fireEvent.click(firstHit, { clientX: clickX, clientY: topY });
+    await waitFor(() => { expect(onChange).toHaveBeenCalled(); });
+    expect((onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events[0].keys).toEqual(['c/4', 'e/4', 'g#/4']);
+    expect(onPreviewNoteEvent).toHaveBeenCalledTimes(1);
+    onChange.mockClear();
+    onPreviewNoteEvent.mockClear();
+
+    const notices: string[] = [];
+    const onNotice = (e: Event) => {
+      notices.push((e as CustomEvent<ScoreEditNoticeDetail>).detail.message);
+    };
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    try {
+      // 描き直し後の当たり判定を掴み直してから、「選択中の音を Delete」→「同じ音を click」を
+      // 同じ tick に積む（act を1つにまとめ、fireEvent の自動 flush を避ける）
+      await waitFor(() => { expect(svg.querySelector('rect.vf-note-hit')).toBeTruthy(); });
+      const hit = noteHit(svg, 0);
+      const mid = (parseFloat(hit.getAttribute('data-note-left')!) + parseFloat(hit.getAttribute('data-note-right')!)) / 2;
+      const y = clickYForLine(hit, 3);
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+        hit.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: mid, clientY: y }));
+      });
+      await waitFor(() => { expect(notices.length).toBeGreaterThan(0); });
+    } finally {
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    }
+    // Delete 側の書き換え（和音が2音になる）は通る。♯の付与はどこにも書かれない
+    const finalKeys = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events[0].keys;
+    expect(finalKeys).toEqual(['c/4', 'e/4']);
+    // 消えた音に対する確認音は鳴らない（「音は鳴ったが譜面は変わらない」を作らない）
+    expect(onPreviewNoteEvent).not.toHaveBeenCalled();
+    // 「見つかりませんでした」の通知が出る（Delete の通知とは別に）
     expect(notices.join('\n')).toContain('見つかりませんでした');
   });
 });

@@ -511,3 +511,22 @@ ScorePage の実マウントを1ファイル1テストにしているのは、1�
 
 「プルダウンで選んだ種別の保持は `Palette` のローカル状態」と書いたままだったので、
 実装（`ScorePage` が持つ・§11-1）に合わせて書き換えた。
+
+## 13. round3 差し戻しへの対応（2026-09-05・メインセッション）
+
+### 13-1. 書き込み時点の不成立を通知付き rejected で断つ（P2）
+
+§12-3 の「updater の中で範囲外なら書かない」は、書かなかったことを外へ伝えていなかった。
+引き直し（描画のミラー `partsScoreRef`）と書き込み（React の state）の間には同じ tick に
+別の更新（選択中の音の Delete など）が積まれる窓があり、そこでは「譜面は変わらないのに
+選択が移って確認音が鳴り、通知も出ない」＝ #318 違反になっていた。
+
+対応: 書き込みを `flushSync` でその場で確定させ、updater が実際に書いたかの印（`written`）
+だけを外へ持ち出して、書けなかったときは `rejected`（`describeAccidentalTargetNoteLost`）を
+返す。選択の移動と確認音は「書けた」ときだけ行う。通知は従来どおり updater の外
+（`NoteClickOutcome` の末尾処理）で出すので、updater が2回呼ばれる場面でも二重にならない。
+
+再現テスト（`AccidentalPaletteUnification.acceptance.test.tsx` round3 P2）: window の
+keydown（Delete）と符頭の click はどちらも React 外の素のリスナーなので、1つの `act` の
+中で続けて dispatch すると両方の更新が同じバッチに入り、この窓を決定的に再現できる。
+修正を外すと「確認音が1回鳴る」で落ちることを確認済み。
