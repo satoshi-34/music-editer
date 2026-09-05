@@ -404,3 +404,14 @@
 - [ ] 固定テスト: ScorePageLayoutAdjustMode.test.tsx（12件。うち4件は round1 P1・P2 と round2 P2-1・P2-2 の
       再発検出で、修正前のコードに対して実際に落ちることを確認済み）・AppCssSystemSelectPrint.test.ts（印刷と
       `.layout-adjust-mode` の静的チェック）・ScorePageSystemGapDrag.test.tsx（16件・共通フック化の退行検出）
+
+## AA. 作品切替直後の再生（Issue #609）
+
+> 切替の復元は非同期。復元中の再生を止めないと「画面は切替先なのに前の作品が鳴る」。
+> 設計の詳細は [`.claude/specs/multi-score-storage/design.md`](../.claude/specs/multi-score-storage/design.md) の追補（2026-09-05）。
+
+- [ ] 作品Aを再生→停止→作品一覧でBへ切替→**すぐ**再生: 鳴るのは必ずB。切替直後の一瞬は
+      再生ボタンが無効になり、ツールチップに「作品を読み込み中」が出る
+- [ ] Aを**再生中**にBへ切り替える: Aの音がその場で止まる（後続の小節が鳴り続けない）
+- [ ] Aを**一時停止中**にBへ切り替える: ボタンが「再開」ではなく「再生」に戻り、押すとBの最初から鳴る
+- [ ] 起動直後（前回の作品の復元）に再生の開始が遅くなっていない（復元中だけ無効・終われば即押せる）

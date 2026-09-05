@@ -871,3 +871,12 @@ export function describeAudioStillSilent(destination: string): string {
 export function describePlaybackAbortedBySchedulingError(): string {
   return '再生の途中で音の予約に失敗したため停止しました。もう一度再生してください。続く場合は「音の調子がおかしいとき」の音声復旧をお試しください';
 }
+
+/**
+ * 作品の切替・復元が終わる前に再生を押したときの通知（#609）。
+ * 復元は非同期で、途中で押すと「画面は新しい作品なのに前の作品が鳴る」ことがあるため、
+ * 復元が終わるまでは再生を始めず、理由と次の一手だけ伝える（#318）
+ */
+export function describePlaybackBlockedWhileRestoringWork(): string {
+  return '作品を読み込んでいる途中です。読み込みが終わってから、もう一度「再生」を押してください';
+}

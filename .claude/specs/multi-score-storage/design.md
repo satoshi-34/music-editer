@@ -577,3 +577,77 @@ max-wait 超過状態で新規作成・作品切替をすると、切替処理�
 リセット完了後になるため、修正を外しても統合テストは通る）。統合テスト
 「max-wait 超過後に新規作成しても旧内容が新作品へ保存されない」は競合そのものの検出ではなく
 **不変条件の回帰網**として維持している。修正は競合窓を原理的に閉じる予防措置。
+
+## 追補: 作品切替直後の再生で前の作品が鳴る（Issue #609・2026-09-05）
+
+**現象**: 作品Aを再生→停止→作品一覧でBへ切替→再生、でAが流れる（画面はB）。
+
+**原因（本命）**: 切替の復元 `applyLoadedScoreData` は非同期（拍子・テンポの反映で
+`await` する）で、その途中でも再生ボタンは押せる。`handlePlay` は押した時点の譜面 state
+から小節列を組むので、復元前に押すと**前の作品の小節列**で `playParts` が呼ばれる。
+対抗仮説（停止の取りこぼし）は、切替時に stopAll を呼んでいなかった点だけが当たり
+（再生中に切り替えると A の先読み窓の後続が鳴り続ける）。
+
+**対応**:
+- `workRestoreInProgressRef` / `isWorkRestoring`（ScorePage）: `applyLoadedScoreData` と
+  `resetScoreStateToEmpty` の先頭で `beginWorkRestore()`、`finally` で `endWorkRestore()`。
+  切替・起動時復元・履歴復元・新規作成・削除後リセットの全経路がこの2関数を通る
+- `handlePlay` の入口で ref を同期的に見て、復元中なら `describePlaybackBlockedWhileRestoringWork`
+  を通知して始めない（キーボード経由も同じ入口なので塞がる・#318「行き止まりは喋る」）
+- `PlaybackControls` に `workRestoring` を渡し、再生ボタンを無効化＋ツールチップで理由を示す
+- `beginWorkRestore` は再生中・一時停止中なら `handleStop()`（stopAll＋世代交代）。
+  stopped のときは呼ばない（起動時の復元で音声エンジンを作らせないため）。
+  一時停止中の切替は「再開」ではなく切替先の最初からになる（仕様4）
+
+**テスト**: `ScorePageWorkSwitchPlayback.test.tsx`（実マウント・作品一覧→再生ボタンの実経路）。
+A再生→停止→B切替→即再生 / A再生中にB切替（stopAll） / A一時停止中にB切替 の3件。
+修正を外すと3件とも落ちる（復元中にボタンが押せて A の小節列で `playParts` が呼ばれる）。
+
+**注意**: 復元中の状態は state の flush が最初の `await` まで遅れるが、ガードは ref で
+同期的に立てているので、`await` 前に届いた再生要求も止まる。
+
+### Codex round 1 対応（2026-09-05）
+
+- **P1 再生開始要求の失効（`playRequestSeqRef`）**: `handlePlay` は音源の準備（`initialize`）と
+  予約（`playParts`）を await する。その間に切替が起きても `playbackState` はまだ stopped なので
+  `beginWorkRestore` の `handleStop` に掛からず、待ちが明けた要求が**前の作品**を予約して
+  「再生中」に戻していた。開始時に世代を取り（`playSeq`）、`beginWorkRestore` と `handleStop` で
+  世代を進め、await のあと（`runWithPlaybackFallback` の入口・`playParts` 後・代表音の後）で
+  世代が変わっていたら、予約済みなら `stopAll` して何もせず抜ける
+- **P1 取り込み経路**: JSON ファイル（`handleImportFile`）と MusicXML/PDF（`applyImportedMusicXmlBytes`）
+  は `applyLoadedScoreData` を通らない別実装なので、それぞれ解析が済んだ直後から
+  `beginWorkRestore()` … `finally { endWorkRestore() }` で包んだ（解析に失敗したときは
+  再生を止めない）。共通の復元適用経路への集約は別 Issue 候補（3か所の重複は以前からの負債）
+- **P2 テスト**: 無効なボタンの click は React に届かないため、復元中の要求は小節番号指定の
+  再生（#545・無効化していない入口）から送る形に直した。準備待ち／予約待ちの途中で切り替える
+  2件を deferred Promise で追加（計5件）
+
+### Codex round 2 対応（2026-09-05）
+
+- **P1 一時停止／再開の待ち**: `handlePause` の `suspend()` 待ちの間に切替が起きると、切替側が
+  stopped にした後で古い一時停止が `paused` を上書きし、切替先の「再生」が resume 経路に入って
+  `playParts` が呼ばれず鳴らなくなっていた。逆に `resume()` 待ちの間の切替は、明けた再開が
+  playing とタイマーを復活させていた。どちらも待ちの前に世代を取り、明けたときに世代が
+  変わっていれば state・タイマーを触らない（resume は音を止め直す）
+- テスト: suspend 待ち／resume 待ちの途中で切り替える2件を追加（計7件）
+
+### Codex round 3 対応（2026-09-05）
+
+- **P1 失効した要求の後始末が現行の再生を止める**: 失効した A の待ちが明けたときに無条件で
+  `stopAll()` していたため、その前に始めた B の再生まで止まっていた。`activePlaybackSeqRef`
+  （いまエンジンを使っている要求の世代。停止・切替で null）を足し、後始末の stopAll は
+  **その後に誰も始めていない（null の）ときだけ**行う。あわせて `beginWorkRestore` は
+  「再生中・一時停止中」に加えて「準備・予約待ちの要求がある」ときも `handleStop()` を呼び、
+  切替の時点で A の音を確実に消す（起動時の復元ではどちらでもないのでエンジンに触れない）
+- テスト: 「A の予約待ち／再開待ちが明ける前に B を再生 → A の後始末で B が止まらない」2件（計9件）
+
+### Codex round 4 対応（2026-09-05）
+
+- **P1 自然終了後の後始末**: `finishPlaybackNaturally`（と先読み窓の失敗停止・再生開始の失敗）で
+  `activePlaybackSeqRef` を null に戻す。戻さないと「A の予約待ち中に B へ切替→B 再生→B が
+  鳴り終わる→A の待ちが明ける」の順で、A の後始末が「B がまだ使っている」と誤判定して
+  A の音を止められなかった
+- **P1 復元の入れ子**: `workRestoreSeqRef` で復元ごとに番号を配り、`endWorkRestore(token)` は
+  最新の復元だけが解除できる。B 復元中に C を選ぶと、B の finally が C の途中でフラグを
+  下ろして再生を受け付けていた
+- テスト2件追加（B 自然終了後に A の待ちが明ける／B→C の入れ子。計11件）
