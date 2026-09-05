@@ -10,8 +10,12 @@
 // 純関数（velocityToCutoffHz）と Web Audio のノード生成（createVelocityFilter）を分け、
 // 対応表は前者で単体テストできるようにしてある。
 
-/** velocity が最小のときのカットオフ（Hz）。pp を「柔らかいが曇りすぎない」音にする値 */
-export const VELOCITY_TIMBRE_MIN_CUTOFF_HZ = 1400;
+/**
+ * velocity が最小のときのカットオフ（Hz）。
+ * 初版 1400（pp ≈ 4.1kHz）は運用者の検聴（Op.28-20 の pp・2026-09-05）で「柔らかさが足りない」→ 600 に下げた
+ * （pp 0.22 ≈ 2.5kHz、p 0.35 ≈ 6kHz）。さらに下げると pp がこもって輪郭が消えるので、次に強めるなら段数（傾き）で
+ */
+export const VELOCITY_TIMBRE_MIN_CUTOFF_HZ = 600;
 /** 素通しのときのカットオフ（Hz）。可聴域の上端付近＝従来と同じ音 */
 export const VELOCITY_TIMBRE_MAX_CUTOFF_HZ = 16000;
 /**
@@ -30,7 +34,7 @@ export const VELOCITY_TIMBRE_FILTER_Q = 0;
  * velocity（0〜1）→ ローパスのカットオフ周波数（Hz）。
  * - 素通し境界（0.5）以上: 最大（従来の音）。範囲外・非数も素通し（強弱の情報が無い音を曇らせない）
  * - それ未満: 最小（v=0）〜最大（v=0.5）を対数補間（耳は周波数を対数で感じる）。
- *   pp（0.22）で約 4.1kHz、p（0.35）で約 7.7kHz
+ *   pp（0.22）で約 2.5kHz、p（0.35）で約 6kHz
  */
 export function velocityToCutoffHz(velocity: number): number {
   if (!Number.isFinite(velocity)) return VELOCITY_TIMBRE_MAX_CUTOFF_HZ;
