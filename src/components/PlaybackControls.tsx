@@ -84,6 +84,7 @@ export interface PlaybackControlsProps {
   onSwingEnabledChange?: (enabled: boolean) => void;
   /** 強弱を音色にも効かせる（#670）の ON/OFF */
   onVelocityTimbreEnabledChange?: (enabled: boolean) => void;
+  onVelocityTimbreStrengthChange?: (strength: number) => void;
 }
 
 /**
@@ -208,6 +209,7 @@ export default function PlaybackControls({
   onPreviewAccidentalOnApplyChange,
   onSwingEnabledChange,
   onVelocityTimbreEnabledChange,
+  onVelocityTimbreStrengthChange,
 }: PlaybackControlsProps) {
   // テンポ入力の内部状態
   const [tempoInput, setTempoInput] = useState(currentTempo.toString());
@@ -453,6 +455,10 @@ export default function PlaybackControls({
   const handleVelocityTimbreEnabledChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     onVelocityTimbreEnabledChange?.(event.target.checked);
   }, [onVelocityTimbreEnabledChange]);
+  const handleVelocityTimbreStrengthChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const next = Number.parseFloat(event.target.value);
+    if (Number.isFinite(next)) onVelocityTimbreStrengthChange?.(Math.min(1, Math.max(0, next)));
+  }, [onVelocityTimbreStrengthChange]);
 
   /**
    * 再生/一時停止ボタンのアイコンとラベルを取得
@@ -867,6 +873,26 @@ export default function PlaybackControls({
                             </span>
                           </span>
                         </label>
+
+                        {(soundRuntimeSettings?.velocityTimbreEnabled ?? true) && (
+                          <label style={{ display: 'grid', gap: 4 }}>
+                            <span>
+                              弱い音の柔らかさ: {Math.round((soundRuntimeSettings?.velocityTimbreStrength ?? 1) * 100)}%
+                              <span style={{ display: 'block', fontSize: 11, color: '#6b7280' }}>
+                                右ほど pp が柔らかく（高い成分が減り、鳴り始めが鈍く）なります。強い音には効きません
+                              </span>
+                            </span>
+                            <input
+                              type="range"
+                              min="0"
+                              max="1"
+                              step="0.05"
+                              value={soundRuntimeSettings?.velocityTimbreStrength ?? 1}
+                              onChange={handleVelocityTimbreStrengthChange}
+                              aria-label="弱い音の柔らかさ"
+                            />
+                          </label>
+                        )}
 
                         {/* 4 本のスライダーは、シンセの専門パラメータを直接見せる代わりに
                             「耳で分かる言葉」に置き換えた簡易 UI。 */}

@@ -119,6 +119,8 @@ export interface PlaybackEngine {
    * 呼び出し側は必ず `?.()` で呼び、createPlaybackEngine でも生成直後に反映する
    */
   setVelocityTimbreEnabled?(enabled: boolean): void;
+  /** 強弱→音色の効きの強さ（0〜1）。optional の理由は setVelocityTimbreEnabled と同じ */
+  setVelocityTimbreStrength?(strength: number): void;
   /**
    * 診断専用: 内部の AudioContext を返す（未初期化なら null）。
    * Safari silent failure（issue #14）のヘルスチェックが
