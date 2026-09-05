@@ -369,7 +369,9 @@ export default function HomeScreen({
 
           {/* 2. 最近使ったファイル（Issue #528）。以前あった「前回の続き」の緑のバナーは廃止し、
               この一覧の先頭（＝いちばん新しく触った作品）が同じ役割を果たす。
-              カードグリッドにしてあるので、作品が増えても横方向へ流れて画面を使い切る */}
+              Issue #608 で横並びのカードから「横幅いっぱいの薄い行」の縦リストへ変えた。
+              横に並べると1枚が狭く、頭が同じ作品名（「月光 第1楽章…」）が同じところで
+              切り詰められて区別できなかったため、幅は名前を出すことに使う */}
           <section className="home-section" aria-labelledby="home-recent-heading">
             <h2 id="home-recent-heading" className="home-section-title">最近使ったファイル</h2>
             {works.length > 0 ? (
@@ -381,6 +383,8 @@ export default function HomeScreen({
                       disabled={busy}
                       className="home-work-button"
                       onClick={() => onSelectWork(work.id)}
+                      // 行の幅に収まりきらないほど長い名前でも、カーソルを乗せれば全文を読める
+                      title={formatWorkTitle(work.title)}
                       data-testid={`home-work-${work.id}`}
                     >
                       <span className="home-work-icon" aria-hidden="true">♬</span>
