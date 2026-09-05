@@ -12,6 +12,7 @@ import { render } from '@testing-library/react';
 
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { MeasureData, NoteEvent } from '../types/storage';
+import { SYSTEM_BREATHING_ROOM_PX } from '../utils/measureLayoutUtils';
 
 vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function() {
