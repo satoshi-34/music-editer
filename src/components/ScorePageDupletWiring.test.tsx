@@ -77,6 +77,9 @@ async function placeTuplet(workId: string, buttonName: RegExp, numNotes: number,
 
   // 8分音符ツール + N連符トグル ON → 空小節の背景をクリック（新規挿入経路）
   fireEvent.click(screen.getByRole('button', { name: '音符 8分' }));
+  // Issue #569 で連符ボタンは「1個+▾」へ集約された。既定は3連符なので、
+  // 2連符・4連符は ▾（連符の種類を選ぶ）を開いてから選ぶ操作に変わっている。
+  fireEvent.click(screen.getByRole('button', { name: /^連符の種類を選ぶ/ }));
   fireEvent.click(screen.getByRole('button', { name: buttonName }));
   clickMeasureBackground();
 

@@ -6,6 +6,8 @@
 //   3. ペダル記号が無い譜面は従来どおり（回帰なし）
 //   4. 停止ボタン（stopAll）はペダル保持中の音も止める
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { SCHEDULE_LEAD_SECONDS } from './scheduleLead';
+import { resetAllDevTuning, setDevTuningOverride } from '../utils/devTuning';
 
 import { SimpleAudioEngine } from './SimpleAudioEngine';
 import { SoundFontEngine } from './SoundFontEngine';
@@ -27,6 +29,12 @@ function measuresWithPedal(pedalExtendBeatsByKey?: Record<string, number>): Play
     },
   ];
 }
+
+// 先読み窓（#622）は既定 4 秒。ここの多くのテストは「playParts が返った時点で譜面全体が
+// 予約済み」を前提にしているので、窓を最大まで広げて従来の検証をそのまま保つ。
+// 窓の進行そのものは scheduleWindow.test.ts と各エンジンの #622 テストで固定している
+beforeEach(() => { setDevTuningOverride('audio.lookahead', 12); });
+afterEach(() => { resetAllDevTuning(); vi.useRealTimers(); });
 
 describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）', () => {
   type MockOscillator = { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> };
@@ -81,6 +89,134 @@ describe('内蔵音源（SimpleAudioEngine）のペダル保持（Issue #549）'
       secondStartedAt: createdOscillators[1].start.mock.calls[0][0] as number,
     };
   }
+
+  it('先頭の音は「今」ではなく先読みリードぶん先に予約される（Issue #610）', async () => {
+    const { startedAt, stoppedAt } = await playFirstNote();
+    // mockContext.currentTime は 0。リードが無いと start(0) となり、予約ループの
+    // 実時間ぶん先頭の音がアタック途中から鳴る
+    expect(startedAt).toBeCloseTo(SCHEDULE_LEAD_SECONDS, 5);
+    // dev の上書きが実際の予約時刻へ届き、停止側も同じ量だけ平行移動する（音の長さは不変）
+    setDevTuningOverride('audio.scheduleLead', 0.3);
+    try {
+      const shifted = await playFirstNote();
+      expect(shifted.startedAt).toBeCloseTo(0.3, 5);
+      expect(shifted.stoppedAt - shifted.startedAt).toBeCloseTo(stoppedAt - startedAt, 5);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
+  it('同時発音数の上限を超える分は予約されない（Issue #605・内蔵側も同じ規約）', async () => {
+    // 1音あたりのオシレーター数を先に測る（音色によって 1〜3 本）
+    const single = new SimpleAudioEngine();
+    await single.initialize();
+    createdOscillators.length = 0;
+    await single.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+      { dur: '1', isRest: false, keys: ['c/4'] },
+    ] }] }], 60);
+    const perNote = createdOscillators.length;
+    expect(perNote).toBeGreaterThan(0);
+
+    setDevTuningOverride('audio.maxPolyphony', 2);
+    try {
+      const engine = new SimpleAudioEngine();
+      await engine.initialize();
+      createdOscillators.length = 0;
+      // 同時刻（startBeat 0）に 5 音。内蔵音源は1イベント1音なので、5 イベントで積む
+      await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+        { dur: '1', isRest: false, keys: ['c/4'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['e/4'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['g/4'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['c/5'], startBeat: 0 },
+        { dur: '1', isRest: false, keys: ['e/5'], startBeat: 0 },
+      ] }] }], 60);
+      expect(createdOscillators.length).toBe(perNote * 2);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
+  it('内蔵側も、詰められた音は音本体を残して尻尾だけ切られる（#605 round2 P1）', async () => {
+    setDevTuningOverride('audio.maxPolyphony', 1);
+    try {
+      const engine = new SimpleAudioEngine();
+      await engine.initialize();
+      createdOscillators.length = 0;
+      // 60BPM の4分（1秒）が2つ。上限1なので1音目は2音目の開始（1秒）で尻尾ごと終わる
+      await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+        { dur: '4', isRest: false, keys: ['c/4'] },
+        { dur: '4', isRest: false, keys: ['d/4'] },
+      ] }] }], 60);
+      const first = createdOscillators[0];
+      const startedAt = first.start.mock.calls[0][0] as number;
+      const stoppedAt = first.stop.mock.calls[0][0] as number;
+      // 音本体 1 秒はそのまま、尻尾は最小 1ms だけ
+      expect(stoppedAt - startedAt).toBeCloseTo(1.001, 4);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
+  it('Safari 簡易経路でも、詰められた音の尻尾は上書きどおり切られる（#605 round3 P1）', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Macintosh) AppleWebKit/605 Version/17 Safari/605' });
+    setDevTuningOverride('audio.maxPolyphony', 1);
+    try {
+      const engine = new SimpleAudioEngine();
+      await engine.initialize();
+      createdOscillators.length = 0;
+      await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [
+        { dur: '4', isRest: false, keys: ['c/4'] },
+        { dur: '4', isRest: false, keys: ['d/4'] },
+      ] }] }], 60);
+      const first = createdOscillators[0];
+      const startedAt = first.start.mock.calls[0][0] as number;
+      const stoppedAt = first.stop.mock.calls[0][0] as number;
+      expect(stoppedAt - startedAt).toBeCloseTo(1.001, 4);
+    } finally {
+      resetAllDevTuning();
+    }
+  });
+
+  it('内蔵側も、長い譜面は先読み窓ぶんだけ先にオシレーターを作り、stopAll で止まる（Issue #622）', async () => {
+    // initialize は内部で実時間の待ちを使うので、偽タイマーは予約の直前から
+    const engine = new SimpleAudioEngine();
+    await engine.initialize();
+    createdOscillators.length = 0;
+    const context = (engine as unknown as { context: { currentTime: number } }).context;
+    // 1音あたりのオシレーター本数を先に測る
+    await engine.playParts([{ measures: [{ measureBeats: 4, bpm: 60, events: [{ dur: '1', isRest: false, keys: ['c/4'] }] }] }], 60);
+    const perNote = createdOscillators.length;
+    expect(perNote).toBeGreaterThan(0);
+    engine.stopAll();
+    createdOscillators.length = 0;
+    // このテストだけは本番既定（4 秒）で数える（ファイル全体の 12 秒上書きを外す）
+    resetAllDevTuning();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // 60BPM の全音符 × 10小節 = 40秒（開始 0,4,...36）。窓 [0,4) なら先頭は1音
+      await engine.playParts([{ measures: Array.from({ length: 10 }, () => ({
+        measureBeats: 4, bpm: 60, events: [{ dur: '1', isRest: false, keys: ['c/4'] }],
+      })) }], 60);
+      expect(createdOscillators.length).toBe(perNote * 1);
+      // 3.9 秒: 4 秒の音が足される
+      context.currentTime = 3.9;
+      await vi.advanceTimersByTimeAsync(600);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(createdOscillators.length).toBe(perNote * 2);
+      // 10 秒まで止まっていた: 過ぎた 8 秒は飛ばし、12 秒だけ足される（round5 P2）
+      context.currentTime = 10;
+      await vi.advanceTimersByTimeAsync(600);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(createdOscillators.length).toBe(perNote * 3);
+      const atStop = createdOscillators.length;
+      engine.stopAll();
+      context.currentTime = 100;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(createdOscillators.length).toBe(atStop);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('スタッカート（durationScale < 1）でもペダル中は解除位置まで響く（round1 P3: 内蔵側も固定）', async () => {
     const engine = new SimpleAudioEngine();

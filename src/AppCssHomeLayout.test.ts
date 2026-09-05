@@ -26,8 +26,25 @@ describe('App.css: ホーム画面v2 の横展開グリッド（Issue #528）', 
     }
   });
 
-  it('新規作成ギャラリーと最近使ったファイルは auto-fill/minmax のグリッドで折り返す', () => {
+  it('新規作成ギャラリーは auto-fill/minmax のグリッドで折り返す', () => {
     expect(ruleBody('.home-card-grid')).toMatch(/grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(\d+px,\s*1fr\)\)/);
-    expect(ruleBody('.home-work-list')).toMatch(/grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(\d+px,\s*1fr\)\)/);
+  });
+
+  // Issue #608: 最近使ったファイルだけは横並びをやめ、1行＝1作品の縦リストにした。
+  // #528 が避けたかったのは「大きいカードの縦積み」（画面を持て余す）で、
+  // 横幅いっぱいの薄い行を縦に積むのは幅を使い切るため矛盾しない（#608 で整理済み）。
+  // ここでは「カード風の複数列へ戻さない」ことと、行として読める体裁を固定する。
+  it('最近使ったファイルは1行＝1作品の縦リストで、名前に幅を使う（Issue #608）', () => {
+    const list = ruleBody('.home-work-list');
+    expect(list).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+    expect(list).not.toMatch(/repeat\(auto-fill/);
+    // 長い名前でも日時が潰れず、桁が縦にそろって読める
+    const updatedAt = ruleBody('.home-updated-at');
+    expect(updatedAt).toContain('font-variant-numeric: tabular-nums');
+    expect(updatedAt).toContain('flex-shrink: 0');
+    // 名前は行の幅いっぱいまで伸ばし、入りきらないときだけ末尾を省略する
+    const title = ruleBody('.home-work-title');
+    expect(title).toContain('flex: 1');
+    expect(title).toContain('text-overflow: ellipsis');
   });
 });

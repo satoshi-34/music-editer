@@ -19,7 +19,9 @@ import { ornamentLabel } from '../utils/ornamentUtils';
 import { isRelativeDynamicMarkingValue } from '../utils/dynamicMarkingUtils';
 import { symbolDefToPreviewSvg } from '../utils/customSymbolUtils';
 import { type TextElementKind, textElementLabel } from '../utils/textElementUtils';
-import { TUPLET_KINDS, type TupletKind } from '../utils/tupletUtils';
+import { DEFAULT_TUPLET_NUM_NOTES, TUPLET_KINDS, type TupletKind } from '../utils/tupletUtils';
+import ToolVariantButton, { type ToolVariantOption } from './ToolVariantButton';
+import { carryInputAccidental } from '../utils/inputAccidentalTool';
 // 日本語ラベルは Issue #405 段2 で utils/editorContextLabels.ts へ移した。
 // A1 案の文脈バーが同じ言葉を出すため、正本を1か所にまとめてある（コピーを増やさない）。
 import {
@@ -57,11 +59,13 @@ export function normalizeToVF(d: DurKey): 'w'|'h'|'q'|'8'|'16'|'32'|'64' {
 
 // ツール（「音価」と「休符かどうか」、またはタイモード）
 export type Tool =
-  | { duration: DurKey; isRest?: boolean; dots?: 1; tuplet?: TupletKind; accidental?: AccidentalToolKind }  // 通常の音符/休符入力（dots: 1で付点, tupletに{numNotes,notesOccupied}を入れるとN連符モード, accidentalを入れると置いた音符に臨時記号が付く）
+  // 通常の音符/休符入力（dots: 1で付点, tupletに{numNotes,notesOccupied}を入れるとN連符モード）。
+  // accidental / microtone は「臨時記号の属性」（Issue #470 → #548 で統合）。
+  // ONのあいだ、符頭をクリックすればその音へ付与され、空きをクリックすればその記号付きの音符が置かれる。
+  // 2つは排他（同じ音に ♯ と ¼♯ は付かない）なので、片方を入れるときは必ずもう片方を undefined にする。
+  | { duration: DurKey; isRest?: boolean; dots?: 1; tuplet?: TupletKind; accidental?: AccidentalToolKind; microtone?: MicrotoneType }
   | { mode: 'select' }                      // 小節選択モード（コピー&ペースト用）
   | { mode: 'tie' }                         // タイ記号を付けるモード
-  | { mode: 'accidental'; accidental: AccidentalToolKind }  // 臨時記号を付けるモード
-  | { mode: 'microtone'; type: MicrotoneType }              // 微分音（四分音）の臨時記号を付けるモード
   | { mode: 'repeat'; repeat: RepeatMarkerKind }            // リピート記号を付けるモード
   | { mode: 'ending'; ending: EndingNumber }                // 1番括弧 / 2番括弧
   | { mode: 'dynamic'; dynamic: DynamicMarkingValue }       // 強弱記号を付けるモード
@@ -86,8 +90,6 @@ export type Tool =
   | { mode: 'ottava'; ottavaType: '8va' | '8vb' | '8vaEnd' | '8vbEnd' } // オッターバ記号を付けるモード
   | { mode: 'hairpin'; hairpinType: 'cresc' | 'dim' };     // 松葉（クレッシェンド＜／デクレッシェンド＞）を付けるモード。タイと同様に開始音符→終了音符へドラッグして設置
 
-type AccidentalTool = Extract<Tool, { mode: 'accidental' }>;
-type MicrotoneTool = Extract<Tool, { mode: 'microtone' }>;
 type RepeatTool = Extract<Tool, { mode: 'repeat' }>;
 type EndingTool = Extract<Tool, { mode: 'ending' }>;
 type DynamicTool = Extract<Tool, { mode: 'dynamic' }>;
@@ -96,6 +98,14 @@ type ArticulationTool = Extract<Tool, { mode: 'articulation' }>;
 // 並べるアイテム（上段=音符, 下段=休符）
 const ROW1: Tool[] = ['1','2','4','8','16','32','64'].map(d => ({ duration: d as DurKey }));
 const ROW2: Tool[] = ROW1.map(t => ({ ...t, isRest: true }));
+
+// 音価グリッド（Issue #577）のレイアウト。
+// 「列＝1つの音価」で、列の中に音符（上）と同じ音価の休符（下）を縦に積む。
+// 音符7個の行・休符7個の行、と行単位で並べる作り方にしないのは、狭い画面で
+// 折り返したときに上下の折り返し位置がずれて「四分音符の下が四分休符」という
+// 対応が崩れてしまうため（列ごと折り返せば対応は常に保たれる）。
+const DURATION_GRID_STYLE: React.CSSProperties = { display: 'flex', gap: 3, flexWrap: 'wrap' };
+const DURATION_COLUMN_STYLE: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 3 };
 
 // ─────────────────────────────────────────────────────────────
 // ★ ここが"サイズ調整ダイヤル"です！
@@ -122,17 +132,81 @@ const FILL_TWEAKS: Partial<Record<SymKey, number>> = {
 
 // タイツールの定数
 const TIE_TOOL: Tool = { mode: 'tie' };
-const ACCIDENTAL_TOOLS: AccidentalTool[] = [
-  { mode: 'accidental', accidental: 'sharp' },
-  { mode: 'accidental', accidental: 'flat' },
-  { mode: 'accidental', accidental: 'natural' },
-  // ダブルシャープ・ダブルフラット（全音の上げ下げ）。嬰ト短調など♯の多い調で使う
-  { mode: 'accidental', accidental: 'doubleSharp' },
-  { mode: 'accidental', accidental: 'doubleFlat' },
-];
-const MICROTONE_TOOLS: MicrotoneTool[] = [
-  { mode: 'microtone', type: 'quarterSharp' },
-  { mode: 'microtone', type: 'quarterFlat' },
+
+// ── 臨時記号パレット（Issue #548・案D で統合したあとの構成）──────────────
+//
+// 統合前は「すでにある音符へ付ける5個」「これから置く音符に付ける5個」「微分音2個」の
+// 合計12個が並んでいた。同じ記号が意味違いで2家族あるのは初見で区別できず、
+// テスト会で実際に戸惑いを生んだ（#547）。統合後は
+//   ・意味はクリック先で決まる（符頭をクリック=付与／空きをクリック=その記号付きの音符を入力）
+//   ・ボタンは「♯▾ / ♭▾ / ♮」の3個だけ。仲間の記号（𝄪・¼♯ など）は ▾ のプルダウンへ畳む
+// という形にした（運用者裁定 2026-09-02）。
+/** 1つのボタンに割り当てる記号の種別。♯/♭/♮ 系と微分音（四分音）系は排他なので直和で持つ */
+type AccidentalVariant =
+  | { kind: 'accidental'; accidental: AccidentalToolKind }
+  | { kind: 'microtone'; microtone: MicrotoneType };
+
+/** 変種を一意に指す文字列。プルダウンの現在選択を覚えるキーに使う */
+function accidentalVariantKey(variant: AccidentalVariant): string {
+  return variant.kind === 'accidental' ? `accidental:${variant.accidental}` : `microtone:${variant.microtone}`;
+}
+function accidentalVariantSymbol(variant: AccidentalVariant): string {
+  return variant.kind === 'accidental' ? accidentalSymbol(variant.accidental) : microtoneSymbol(variant.microtone);
+}
+function accidentalVariantLabel(variant: AccidentalVariant): string {
+  return variant.kind === 'accidental' ? accidentalLabel(variant.accidental) : microtoneLabel(variant.microtone);
+}
+/**
+ * ボタンの名前。先頭を「臨時記号: <名前>」で揃えてあるのは、
+ * 支援技術で読んだときとテストで探すときの手がかりを1種類にするため（設計メモ §3-6）。
+ */
+/**
+ * その記号が音高をどう変えるか（効く「量」）。ホバーで「臨時記号＝クリックした音だけ」と
+ * 「途中調号変更＝その小節から先」の違いが1文で分かるようにするための説明（#633）
+ */
+function accidentalVariantEffect(variant: AccidentalVariant): string {
+  if (variant.kind === 'microtone') {
+    return variant.microtone === 'quarterSharp' ? '四分音（半音の半分）上げる' : '四分音（半音の半分）下げる';
+  }
+  switch (variant.accidental) {
+    case 'sharp': return '半音上げる';
+    case 'flat': return '半音下げる';
+    case 'doubleSharp': return '全音（半音2つ）上げる';
+    case 'doubleFlat': return '全音（半音2つ）下げる';
+    default: return '調号どおりの高さに戻す';
+  }
+}
+function accidentalVariantAriaLabel(variant: AccidentalVariant): string {
+  // 先頭の「臨時記号: <名前>」は据え置き（テスト・支援技術の手がかり）。効く範囲＝
+  // 「クリックした音だけ」を先に言い、操作の説明は後ろに置く（途中調号変更との対比・#633）
+  return `臨時記号: ${accidentalVariantLabel(variant)} — クリックした音だけ${accidentalVariantEffect(variant)}`
+    + `（空きをクリックすると${accidentalVariantSymbol(variant)}付きの音符を入力）`;
+}
+
+/** ボタン3個ぶんの定義。variants の先頭が既定（ボタンに最初から出ている記号） */
+const ACCIDENTAL_FAMILIES: { id: string; menuLabel: string; variants: AccidentalVariant[] }[] = [
+  {
+    id: 'sharp',
+    menuLabel: 'シャープ系の種類を選ぶ（𝄪・¼♯）',
+    variants: [
+      { kind: 'accidental', accidental: 'sharp' },
+      // ダブルシャープ（全音上げ）。嬰ト短調など♯の多い調で使う
+      { kind: 'accidental', accidental: 'doubleSharp' },
+      // 微分音（四分音）: 半音の半分（50セント）だけ上げる現代音楽向けの記号
+      { kind: 'microtone', microtone: 'quarterSharp' },
+    ],
+  },
+  {
+    id: 'flat',
+    menuLabel: 'フラット系の種類を選ぶ（♭♭・¼♭）',
+    variants: [
+      { kind: 'accidental', accidental: 'flat' },
+      { kind: 'accidental', accidental: 'doubleFlat' },
+      { kind: 'microtone', microtone: 'quarterFlat' },
+    ],
+  },
+  // ナチュラルは変種が無い（半音上げ下げを打ち消す記号は1つだけ）ので ▾ を出さない
+  { id: 'natural', menuLabel: 'ナチュラル', variants: [{ kind: 'accidental', accidental: 'natural' }] },
 ];
 const REPEAT_TOOLS: RepeatTool[] = [
   { mode: 'repeat', repeat: 'start' },
@@ -198,12 +272,31 @@ function accentBtnStyle(active: boolean): React.CSSProperties {
   };
 }
 
+/**
+ * 連符ボタン・プルダウンに出す説明文。
+ * 比率（N:M）まで書くのは、2連符・4連符が「なぜ1音の長さが変わるのか」を
+ * 数字だけでは読み取れないため。hint（複合拍子向け、等）があれば続けて出す。
+ */
+function tupletVariantLabel(kind: TupletKind): string {
+  return `${kind.numNotes}連符（${kind.numNotes}:${kind.notesOccupied}）`
+    + `: 選択した音価で1音+休符${kind.numNotes - 1}個のグループを配置する`
+    + (kind.hint ? `。${kind.hint}` : '');
+}
+
+/** 既定の連符（3連符）。使用頻度が圧倒的に高いので、ボタンの初期表示はこれにする（#569） */
+const DEFAULT_TUPLET_KIND: TupletKind =
+  TUPLET_KINDS.find((kind) => kind.numNotes === DEFAULT_TUPLET_NUM_NOTES) ?? TUPLET_KINDS[0];
+
 export default function Palette({
   value, onChange,
   section = 'notes',
   customSymbolDefs = [],
   onOpenSymbolEditor,
   crossStaffAvailable = false,
+  accidentalVariantKeys,
+  onAccidentalVariantKeyChange,
+  tupletVariantKey,
+  onTupletVariantKeyChange,
 }: {
   value: Tool;
   onChange: (t: Tool) => void;
@@ -217,19 +310,59 @@ export default function Palette({
    * 載せ替える相手の五線が無いので、ボタンをグレーアウトして理由を出す。
    */
   crossStaffAvailable?: boolean;
+  /**
+   * 臨時記号ボタン（♯▾・♭▾）の ▾ で最後に選んだ変種（family.id → 変種キー）。
+   * このパレットはタブを切り替えるとアンマウントされるため、選択の保持は
+   * 親（ScorePage）が持つ。ここに useState で持つとタブを離れた時点で
+   * 既定（♯・♭）へ戻ってしまう（#548 round1 P2）。
+   * 未指定なら各家族の先頭（＝既定の記号）を出す。
+   */
+  accidentalVariantKeys?: Record<string, string>;
+  onAccidentalVariantKeyChange?: (familyId: string, key: string) => void;
+  /**
+   * ▾ のプルダウンで最後に選んだ連符（numNotes の文字列）。#569 の「セッション内保持」。
+   * このパレットはタブを切り替えるとアンマウントされるため、選択の保持は
+   * 親（ScorePage）が持つ。未指定なら既定の3連符を出す（round1 P2 の指摘）。
+   */
+  tupletVariantKey?: string;
+  onTupletVariantKeyChange?: (key: string) => void;
 }) {
+  // 臨時記号ボタン（♯▾・♭▾）が「いまどの変種を出しているか」は親（ScorePage）が覚えている。
+  // プルダウンで 𝄪 を選んだらボタンは 𝄪 のまま残る＝次に使うときも1クリックで出せる、を
+  // タブを離れても保つため（#548 運用者裁定・round1 P2）。
+  // ツール側（value）には選んだ記号そのものが乗るので、ここで扱うのは見た目の担当だけ。
+
   // 現在の選択状態を判定
   const selectActive = 'mode' in value && value.mode === 'select';
   const tieActive = 'mode' in value && value.mode === 'tie';
   const dotActive = 'duration' in value && !!value.dots;
   // 現在選ばれている連符の numNotes（3/5/6/7）。どれも選ばれていなければ null。
   const activeTupletNumNotes = 'duration' in value && value.tuplet ? value.tuplet.numNotes : null;
+  // プルダウンで最後に選んだ連符（既定は3連符）。作品データには保存せず、
+  // アプリを開いているあいだ（＝セッション内）だけ親が覚える（#569 仕様3）。
+  const pickedTupletVariantKey = tupletVariantKey ?? String(DEFAULT_TUPLET_KIND.numNotes);
+  // ボタンに出す連符は「いまONになっている連符」を最優先にする（臨時記号 #548 と同じ考え方）。
+  // ツールが外から変わる経路（作品の切り替え・別のツールを選ぶ等）でも、表示と実態がずれない。
+  // どれもONでなければ、プルダウンで最後に選んだ連符を出す（次から1クリックで戻せる）。
+  const currentTupletKind =
+    TUPLET_KINDS.find((kind) => kind.numNotes === activeTupletNumNotes)
+    ?? TUPLET_KINDS.find((kind) => String(kind.numNotes) === pickedTupletVariantKey)
+    ?? DEFAULT_TUPLET_KIND;
+  // 連符ツールのON/OFF。null を渡すと外れる。
+  // 音価ツール以外（記号ツールなど）が選ばれているときは4分音符ツールへ戻してから連符を乗せる
+  // （従来の連符ボタン6個と同じ挙動をそのまま保つ）。
+  const applyTupletKind = (kind: TupletKind | null) => {
+    if ('duration' in value) {
+      onChange({ ...value, tuplet: kind ?? undefined });
+    } else {
+      onChange({ ...(ROW1[2] as { duration: DurKey; isRest?: boolean }), tuplet: kind ?? undefined });
+    }
+  };
   const tupletNumberToggleActive = 'mode' in value && value.mode === 'tupletNumberToggle';
-  const selectedAccidental = 'mode' in value && value.mode === 'accidental' ? value.accidental : null;
-  // 入力時に付ける臨時記号（Issue #470）。音価ツールに乗っているときだけ「ON」になる。
-  // 適用ツール（mode: 'accidental'）とは別物なので、判定も別に持つ。
+  // 臨時記号は音価ツールに乗る属性（Issue #470 → #548 で1系統へ統合）。
+  // ONのあいだ、符頭クリックは付与・空きクリックは記号付きの入力になる。
   const inputAccidental = 'duration' in value ? value.accidental ?? null : null;
-  const selectedMicrotone = 'mode' in value && value.mode === 'microtone' ? value.type : null;
+  const inputMicrotone = 'duration' in value ? value.microtone ?? null : null;
   const selectedRepeat = 'mode' in value && value.mode === 'repeat' ? value.repeat : null;
   const selectedEnding = 'mode' in value && value.mode === 'ending' ? value.ending : null;
   const selectedDynamic = 'mode' in value && value.mode === 'dynamic' ? value.dynamic : null;
@@ -257,18 +390,52 @@ export default function Palette({
   const ottava8vbEndActive = 'mode' in value && value.mode === 'ottava' && (value as any).ottavaType === '8vbEnd';
   const selectedHairpinType = 'mode' in value && value.mode === 'hairpin' ? value.hairpinType : null;
 
+  /**
+   * 臨時記号ボタンの ON/OFF を音価ツールへ反映する（Issue #548）。
+   * variant に null を渡すと OFF（記号なしの入力に戻る）。
+   * ♯/♭/♮ と微分音は排他なので、必ず片方だけを載せてもう片方を undefined にする。
+   */
+  const applyAccidentalVariant = (variant: AccidentalVariant | null) => {
+    const nextAccidental = variant?.kind === 'accidental' ? variant.accidental : undefined;
+    const nextMicrotone = variant?.kind === 'microtone' ? variant.microtone : undefined;
+    if ('duration' in value) {
+      onChange({
+        ...value,
+        // 臨時記号は音符にしか付かない。休符ツールを持ったままONにしたときは、
+        // 同じ音価の「音符」へ切り替える（ONにしたのに何も起きない状態を作らない・#470）
+        isRest: (nextAccidental || nextMicrotone) && value.isRest ? undefined : value.isRest,
+        accidental: nextAccidental,
+        microtone: nextMicrotone,
+      });
+    } else {
+      // 記号系ツールを持っているときは、付点ボタンと同じく四分音符へ戻して付ける
+      onChange({ ...(ROW1[2] as { duration: DurKey }), accidental: nextAccidental, microtone: nextMicrotone });
+    }
+  };
+
+  /**
+   * 音価ボタンを押したときに、ONにしてある臨時記号を引き継ぐ（Issue #548 受入ケース3）。
+   * 統合前は音価ボタンがツールを丸ごと差し替えていたため、♯をONにしたまま8分に持ち替えると
+   * 記号が黙って外れていた。統合後は「♯を持ったまま音価を変える」が主要な使い方になるので引き継ぐ。
+   *
+   * 規則そのものは utils/inputAccidentalTool.ts に置いてある。数字キーの音価ショートカット
+   * （ScorePage 側）が同じ規則を必要とするので、実装を1本に寄せている（#548 round1 P2-4）。
+   */
+  const carryAccidentalIntoDurationTool = (next: Tool): Tool => carryInputAccidental(value, next);
+
   const ROW_STYLE: React.CSSProperties = { display: 'flex', gap: 3, flexWrap: 'wrap' as const };
 
   if (section === 'notes') {
     return (
       <div className="palette-panel" style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {/* 音符行：選択 + 7音価 + タイ + 臨時記号3 */}
-        <div style={ROW_STYLE}>
+        {/* 音符行：選択 + 音価グリッド（音符/休符の2段）+ タイ + 臨時記号3 + リピート/括弧。
+            グリッドだけが2段ぶんの高さを持つので、他のボタンは縦中央にそろえる。 */}
+        <div style={{ ...ROW_STYLE, alignItems: 'center' }}>
           {/* 選択ツール */}
           <button
             type="button"
             onClick={() => onChange(selectActive ? ROW1[2] : { mode: 'select' })}
-            title="小節選択（クリックで選択・ドラッグで範囲選択 → Cmd+C でコピー → Cmd+V でペースト／他のツール中でも Shift+クリックで選択できます）"
+            data-tip="小節選択（クリックで選択・ドラッグで範囲選択 → Cmd+C でコピー → Cmd+V でペースト／他のツール中でも Shift+クリックで選択できます）"
 
             aria-label="小節選択（クリックで選択・ドラッグで範囲選択 → Cmd+C でコピー → Cmd+V でペースト／他のツール中でも Shift+クリックで選択できます）"
             style={btnStyle(selectActive, { fontSize: 15 })}
@@ -278,23 +445,44 @@ export default function Palette({
               <path d="M8 6 L12 9 L9.5 9.5 L11 13 L9.5 13.5 L8 10 L6 12 Z" fill="#333"/>
             </svg>
           </button>
-          {ROW1.map((t, i) => {
-            const active = !tieActive && 'duration' in value && 'duration' in t &&
-              value.duration === t.duration && !value.isRest;
-            return (
-              <button
-                key={i}
-                type="button"
-                onClick={() => onChange(t)}
-                title={`音符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-
-                aria-label={`音符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-                style={btnStyle(active)}
-              >
-                <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={false} />
-              </button>
-            );
-          })}
+          {/* 音価グリッド（Issue #577）: 上段＝音符、下段＝同じ音価の休符。
+              「四分音符ボタンの下は四分休符」と縦に対応させることで、探す手間を減らし、
+              横1列に14個並んでいた頃より横幅も約半分になる。
+              ツールの意味（音符入力／休符入力のトグル関係）は従来のまま変えていない。 */}
+          <div style={DURATION_GRID_STYLE}>
+            {ROW1.map((noteTool, i) => {
+              const restTool = ROW2[i];
+              const duration = (noteTool as { duration: DurKey }).duration;
+              // タイなど別モード中は音価ボタンを選択状態にしない（従来の判定をそのまま使う）
+              const noteActive = !tieActive && 'duration' in value &&
+                value.duration === duration && !value.isRest;
+              const restActive = !tieActive && 'duration' in value &&
+                value.duration === duration && !!value.isRest;
+              return (
+                <div key={duration} style={DURATION_COLUMN_STYLE}>
+                  <button
+                    type="button"
+                    onClick={() => onChange(carryAccidentalIntoDurationTool(noteTool))}
+                    data-tip={`音符 ${durationLabel(duration)}`}
+                    aria-label={`音符 ${durationLabel(duration)}`}
+                    style={btnStyle(noteActive)}
+                  >
+                    <NoteIcon duration={duration} isRest={false} />
+                  </button>
+                  {/* 休符は音符と違い臨時記号を持てないので、引き継ぎ（carry）を通さず素のツールを渡す */}
+                  <button
+                    type="button"
+                    onClick={() => onChange(restTool)}
+                    data-tip={`休符 ${durationLabel(duration)}`}
+                    aria-label={`休符 ${durationLabel(duration)}`}
+                    style={btnStyle(restActive)}
+                  >
+                    <NoteIcon duration={duration} isRest={true} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
           {/* 付点トグル：ONのまま音符/休符を置くと dots:1 が付く（キーボードの「.」でも切替可） */}
           <button
             type="button"
@@ -305,46 +493,41 @@ export default function Palette({
                 onChange({ ...(ROW1[2] as { duration: DurKey; isRest?: boolean }), dots: 1 });
               }
             }}
-            title="付点（音価を1.5倍に伸ばす。「.」キーでも切替可）"
+            data-tip="付点（音価を1.5倍に伸ばす。「.」キーでも切替可）"
             aria-label="付点（音価を1.5倍に伸ばす。「.」キーでも切替可）"
             // 付点ONのときは背景色を変えて、押し忘れ/押しっぱなしが見た目で分かるようにする
             style={btnStyle(dotActive, { fontSize: 20, fontWeight: 'bold' })}
           >
             .
           </button>
-          {/* 連符トグル群：2/3/4/5/6/7連符。ONの状態で音価ツール+クリックすると、
-              音符1つ＋連符内休符(N-1)個のグループを配置する。
-              同じ数字をもう一度押すとOFFに戻る（他の連符ボタンを押すと切り替わる）。
+          {/* 連符（Issue #569 でボタン6個 → 1個+▾ へ集約）:
+              既定は3連符で、ボタンを押すとON/OFFが切り替わる（従来の3連符ボタンと同じ1クリック）。
+              ▾ から 2〜7連符を選ぶと、それが「いまの連符」になってボタンの表示も変わり、
+              選んだ時点で有効になる（選んだのに押し直しが要る、を避けるため）。
+              ONの状態で音価ツール+クリックすると、音符1つ＋連符内休符(N-1)個のグループを配置する。
               2連符・4連符（Issue #472）は8分の6拍子などの複合拍子で使う連符で、
               比率が N:3 になる（2連符は1音あたりの長さが伸びる唯一の種類）。 */}
-          {TUPLET_KINDS.map((kind) => {
-            const active = activeTupletNumNotes === kind.numNotes;
-            // ツールチップには比率（N:M）も書く。2連符・4連符は「なぜ長さが変わるのか」が
-            // 数字だけでは分からないため、hint（複合拍子向け、等）も続けて出す。
-            const tupletLabel =
-              `${kind.numNotes}連符（${kind.numNotes}:${kind.notesOccupied}）`
-              + `: 選択した音価で1音+休符${kind.numNotes - 1}個のグループを配置する`
-              + (kind.hint ? `。${kind.hint}` : '');
-            return (
-              <button
-                key={kind.numNotes}
-                type="button"
-                onClick={() => {
-                  if ('duration' in value) {
-                    onChange({ ...value, tuplet: active ? undefined : kind });
-                  } else {
-                    onChange({ ...(ROW1[2] as { duration: DurKey; isRest?: boolean }), tuplet: kind });
-                  }
-                }}
-                title={tupletLabel}
-                aria-label={tupletLabel}
-                // 他のボタンと同じ幅・高さ（BUTTON_W/H）に揃え、ラベルは折り返さない
-                style={btnStyle(active, { fontSize: 11, fontWeight: 'bold', whiteSpace: 'nowrap' })}
-              >
-                {kind.numNotes}連符
-              </button>
-            );
-          })}
+          <ToolVariantButton
+            options={TUPLET_KINDS.map((kind) => ({
+              key: String(kind.numNotes),
+              symbol: `${kind.numNotes}連符`,
+              ariaLabel: tupletVariantLabel(kind),
+              title: tupletVariantLabel(kind),
+            }))}
+            currentKey={String(currentTupletKind.numNotes)}
+            active={activeTupletNumNotes !== null}
+            menuAriaLabel="連符の種類を選ぶ（2〜7連符）"
+            buttonStyle={btnStyle}
+            // 「3連符」の3文字が ▾ ぶん狭くなった本体ボタン（28px）に収まるよう、
+            // 従来の 11px から 1px だけ小さくして折り返しを止める
+            symbolStyle={{ fontSize: 10, fontWeight: 'bold', whiteSpace: 'nowrap' }}
+            onActivate={() => applyTupletKind(activeTupletNumNotes !== null ? null : currentTupletKind)}
+            onSelectVariant={(key) => {
+              const picked = TUPLET_KINDS.find((kind) => String(kind.numNotes) === key) ?? DEFAULT_TUPLET_KIND;
+              onTupletVariantKeyChange?.(key);
+              applyTupletKind(picked);
+            }}
+          />
           {/* 連符数字の表示/非表示トグル（Issue #269）:
               このボタンを押してから連符の音符をクリックすると、そのグループの数字が消える
               （もう一度クリックすると戻る）。同じ連符が続く曲では最初のグループにだけ
@@ -352,7 +535,7 @@ export default function Palette({
           <button
             type="button"
             onClick={() => onChange(tupletNumberToggleActive ? ROW1[2] : { mode: 'tupletNumberToggle' })}
-            title="連符数字の表示/非表示（選択して連符の音符をクリック。グループ単位で切り替わる）"
+            data-tip="連符数字の表示/非表示（選択して連符の音符をクリック。グループ単位で切り替わる）"
             aria-label="連符数字の表示/非表示（選択して連符の音符をクリック。グループ単位で切り替わる）"
             style={btnStyle(tupletNumberToggleActive, { fontSize: 11, fontWeight: 'bold', whiteSpace: 'nowrap' })}
           >
@@ -372,7 +555,7 @@ export default function Palette({
             type="button"
             disabled={!crossStaffAvailable}
             onClick={() => onChange(crossStaffToggleActive ? ROW1[2] : { mode: 'crossStaffToggle' })}
-            title={crossStaffAvailable
+            data-tip={crossStaffAvailable
               ? '段またぎ表示（選択して音符をクリック。その音符だけを隣の五線へ描き移す／もう一度で戻る）'
               : '段またぎ表示は五線が2段以上ある譜面（ピアノ譜など）でのみ使えます'}
             aria-label="段またぎ表示（選択して音符をクリック。その音符だけを隣の五線へ描き移す）"
@@ -389,7 +572,7 @@ export default function Palette({
           <button
             type="button"
             onClick={() => onChange(tieActive ? ROW1[2] : TIE_TOOL)}
-            title="タイ（隣接する同音符を結ぶ弧線）"
+            data-tip="タイ（隣接する同音符を結ぶ弧線）"
 
             aria-label="タイ（隣接する同音符を結ぶ弧線）"
             style={btnStyle(tieActive)}
@@ -398,97 +581,53 @@ export default function Palette({
               <path d="M3 10 Q12 2 21 10" stroke="#111" strokeWidth="2" strokeLinecap="round" fill="none"/>
             </svg>
           </button>
-          {/* 臨時記号 */}
-          {ACCIDENTAL_TOOLS.map((tool) => {
-            const active = selectedAccidental === tool.accidental;
+          {/* 臨時記号（Issue #548 で統合）: ボタンは「♯▾ / ♭▾ / ♮」の3個だけ。
+              ONのあいだ、譜面の符頭をクリックすればその音へ付与され、
+              音の無いところをクリックすればその記号付きの音符が置かれる。
+              「どちらの意味になるか」はクリックする前にカーソルの形で分かる
+              （符頭に乗ると pointer・空きでは copy。PianoSystemCanvas 側で判定を共用）。
+              付点・連符と同じ「入力の属性」なので、音価と同時に選んだままにできる。 */}
+          {ACCIDENTAL_FAMILIES.map((family) => {
+            // ボタンに出す変種は「いまONになっている記号」が最優先。
+            // ツールが外から変わる経路（キーボード操作・作品の切り替え）でも表示と実態がずれないようにする。
+            // どれもONでなければ、プルダウンで最後に選んだ変種を出す（1クリックで戻せる）。
+            const activeVariant = family.variants.find((variant) => variant.kind === 'accidental'
+              ? inputAccidental === variant.accidental
+              : inputMicrotone === variant.microtone);
+            const currentKey = activeVariant
+              ? accidentalVariantKey(activeVariant)
+              : accidentalVariantKeys?.[family.id] ?? accidentalVariantKey(family.variants[0]);
+            const current = activeVariant
+              ?? family.variants.find((v) => accidentalVariantKey(v) === currentKey)
+              ?? family.variants[0];
+            const active = !!activeVariant;
+            const options: ToolVariantOption[] = family.variants.map((variant) => ({
+              key: accidentalVariantKey(variant),
+              symbol: accidentalVariantSymbol(variant),
+              ariaLabel: accidentalVariantAriaLabel(variant),
+              title: accidentalVariantAriaLabel(variant),
+            }));
             return (
-              <button
-                key={tool.accidental}
-                type="button"
-                onClick={() => onChange(active ? ROW1[2] : tool)}
-                title={`${accidentalLabel(tool.accidental)}（選択して音符をクリック）`}
-
-                aria-label={`${accidentalLabel(tool.accidental)}（選択して音符をクリック）`}
-                style={btnStyle(active, { fontSize: 18, fontFamily: '"Times New Roman", serif' })}
-              >
-                {accidentalSymbol(tool.accidental)}
-              </button>
-            );
-          })}
-          {/* 微分音（四分音）: 半音の半分（50セント）だけ上げ下げする現代音楽向けの臨時記号 */}
-          {MICROTONE_TOOLS.map((tool) => {
-            const active = selectedMicrotone === tool.type;
-            return (
-              <button
-                key={tool.type}
-                type="button"
-                onClick={() => onChange(active ? ROW1[2] : tool)}
-                title={`${microtoneLabel(tool.type)}（選択して音符をクリック）`}
-                aria-label={`${microtoneLabel(tool.type)}（選択して音符をクリック）`}
-                style={btnStyle(active, { fontSize: 16, fontFamily: '"Times New Roman", serif' })}
-              >
-                {microtoneSymbol(tool.type)}
-              </button>
-            );
-          })}
-          {/* 入力時に付ける臨時記号（Issue #470）:
-              上の ♯/♭/♮ が「すでにある音符へ付ける」ツールなのに対し、こちらは
-              **音価と同時にONにしておくトグル**。ONのあいだ、譜面をクリックして置いた音符に
-              最初からその臨時記号が付くので、「四分音符を置く → ♯ツールに持ち替える → もう一度クリック」
-              の2〜3手が1クリックになる（弟フィードバック・ステップ入力の速度）。
-              付点・連符トグルとまったく同じ流儀で、音価・付点・連符と共存できる。
-              ボタンの表記に ♩ を添えているのは、上の適用ツールと見分けるため
-              （「音符に付けて入力する」の意味）。 */}
-          {ACCIDENTAL_TOOLS.map((tool) => {
-            const active = inputAccidental === tool.accidental;
-            return (
-              <button
-                key={`input-${tool.accidental}`}
-                type="button"
-                onClick={() => {
-                  const nextAccidental = active ? undefined : tool.accidental;
-                  if ('duration' in value) {
-                    // 臨時記号は音符にしか付かない。休符ツールを持ったままONにしたときは、
-                    // 同じ音価の「音符」へ切り替える（ONにしたのに何も起きない状態を作らない）。
-                    onChange({
-                      ...value,
-                      isRest: nextAccidental && value.isRest ? undefined : value.isRest,
-                      accidental: nextAccidental,
-                    });
-                  } else {
-                    // 記号ツールを持っているときは、付点ボタンと同じく四分音符へ戻して付ける。
-                    onChange({ ...(ROW1[2] as { duration: DurKey }), accidental: tool.accidental });
-                  }
+              <ToolVariantButton
+                key={family.id}
+                options={options}
+                currentKey={currentKey}
+                active={active}
+                menuAriaLabel={family.menuLabel}
+                buttonStyle={btnStyle}
+                symbolStyle={{ fontSize: 18, fontFamily: '"Times New Roman", serif' }}
+                onActivate={() => applyAccidentalVariant(active ? null : current)}
+                onSelectVariant={(key) => {
+                  const picked = family.variants.find((v) => accidentalVariantKey(v) === key) ?? family.variants[0];
+                  onAccidentalVariantKeyChange?.(family.id, key);
+                  // 選んだ時点で有効にする（「選んだのに一度押し直さないと使えない」を避ける）
+                  applyAccidentalVariant(picked);
                 }}
-                title={`${accidentalLabel(tool.accidental)}を付けて入力（音価と同時に選べます。ONのあいだ、置いた音符に${accidentalSymbol(tool.accidental)}が付きます）`}
-                aria-label={`入力時に付ける臨時記号: ${accidentalLabel(tool.accidental)}`}
-                style={btnStyle(active, { width: 42, fontSize: 13, fontFamily: '"Times New Roman", serif', whiteSpace: 'nowrap' })}
-              >
-                {`♩${accidentalSymbol(tool.accidental)}`}
-              </button>
+              />
             );
           })}
-          {/* 休符・リピート・括弧も同じ折り返し行に続ける。
-              以前は音符行と休符行を別の行に分けていたが、広い画面では右側が
-              大きく空いてしまうため、1つの折り返し行にして横幅を使い切り、
-              狭い画面では自動で折り返すようにする。 */}
-          {ROW2.map((t, i) => {
-            const active = !tieActive && 'duration' in value && 'duration' in t &&
-              value.duration === t.duration && !!value.isRest;
-            return (
-              <button
-                key={i}
-                type="button"
-                onClick={() => onChange(t)}
-                title={`休符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-
-                aria-label={`休符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-                style={btnStyle(active)}
-              >
-                <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={true} />
-              </button>
-            );
-          })}
+          {/* リピート・括弧は音価グリッドと同じ折り返し行に続ける（横幅を使い切るため）。
+              休符は Issue #577 で音価グリッドの下段へ移したので、ここには並べない。 */}
           {/* リピート記号 */}
           {REPEAT_TOOLS.map((tool) => {
             const active = selectedRepeat === tool.repeat;
@@ -497,7 +636,7 @@ export default function Palette({
                 key={tool.repeat}
                 type="button"
                 onClick={() => onChange(active ? ROW1[2] : tool)}
-                title={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
+                data-tip={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
 
                 aria-label={`${repeatLabel(tool.repeat)}（対象の小節をクリック）`}
                 style={btnStyle(active, { fontSize: 13, fontFamily: '"Times New Roman", serif' })}
@@ -514,7 +653,7 @@ export default function Palette({
                 key={tool.ending}
                 type="button"
                 onClick={() => onChange(active ? ROW1[2] : tool)}
-                title={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
+                data-tip={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
 
                 aria-label={`${endingLabel(tool.ending)}（対象の小節をクリック）`}
                 style={btnStyle(active, { fontSize: 13, fontFamily: '"Times New Roman", serif' })}
@@ -537,7 +676,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureTempoActive ? ROW1[2] : { mode: 'measureTempo' })}
-          title="途中テンポ変更（小節をクリックしてBPMを設定）"
+          data-tip="途中テンポ変更（小節をクリックしてBPMを設定）"
 
           aria-label="途中テンポ変更（小節をクリックしてBPMを設定）"
           style={btnStyle(measureTempoActive, { width: 44 })}
@@ -551,7 +690,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureTimeSigActive ? ROW1[2] : { mode: 'measureTimeSig' })}
-          title="途中拍子変更（小節をクリックして拍子を選択）"
+          data-tip="途中拍子変更（小節をクリックして拍子を選択）"
 
           aria-label="途中拍子変更（小節をクリックして拍子を選択）"
           style={btnStyle(measureTimeSigActive, { width: 38 })}
@@ -567,9 +706,8 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureKeySigActive ? ROW1[2] : { mode: 'measureKeySig' })}
-          title="途中調号変更（小節をクリックして調号を選択）"
-
-          aria-label="途中調号変更（小節をクリックして調号を選択）"
+          data-tip="途中調号変更 — クリックした小節から先の調を変える（調号を選んで指定）"
+          aria-label="途中調号変更 — クリックした小節から先の調を変える（調号を選んで指定）"
           style={btnStyle(measureKeySigActive, { width: 30 })}
         >
           <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true">
@@ -581,7 +719,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureClefActive ? ROW1[2] : { mode: 'measureClef' })}
-          title="途中音部記号変更（小節をクリックすると小節の頭から、音符をクリックするとその音からクレフが変わる）"
+          data-tip="途中音部記号変更（小節をクリックすると小節の頭から、音符をクリックするとその音からクレフが変わる）"
 
           aria-label="途中音部記号変更（小節をクリックすると小節の頭から、音符をクリックするとその音からクレフが変わる）"
           style={btnStyle(measureClefActive, { width: 30 })}
@@ -594,7 +732,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureRehearsalActive ? ROW1[2] : { mode: 'measureRehearsal' })}
-          title="リハーサルマーク（練習番号。小節をクリックしてA, B, C…を設定）"
+          data-tip="リハーサルマーク（練習番号。小節をクリックしてA, B, C…を設定）"
 
           aria-label="リハーサルマーク（練習番号。小節をクリックしてA, B, C…を設定）"
           style={btnStyle(measureRehearsalActive, { width: 26 })}
@@ -608,7 +746,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureTextActive ? ROW1[2] : { mode: 'measureText' })}
-          title="自由注釈テキスト（小節をクリックして、その段の上に文章を置く）"
+          data-tip="自由注釈テキスト（小節をクリックして、その段の上に文章を置く）"
 
           aria-label="自由注釈テキスト（小節をクリックして、その段の上に文章を置く）"
           style={btnStyle(measureTextActive, { width: 26 })}
@@ -626,7 +764,7 @@ export default function Palette({
               key={tool.dynamic}
               type="button"
               onClick={() => onChange(active ? ROW1[2] : tool)}
-              title={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
+              data-tip={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
 
               aria-label={`${dynamicLabel(tool.dynamic)}（対象の音符をクリック）`}
               style={btnStyle(active, {
@@ -647,7 +785,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedHairpinType === 'cresc' ? ROW1[2] : { mode: 'hairpin', hairpinType: 'cresc' })}
-          title="クレッシェンドの松葉＜（開始音符から終了音符へドラッグ）"
+          data-tip="クレッシェンドの松葉＜（開始音符から終了音符へドラッグ）"
           aria-label="クレッシェンドの松葉＜（開始音符から終了音符へドラッグ）"
           style={btnStyle(selectedHairpinType === 'cresc')}
         >
@@ -658,7 +796,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedHairpinType === 'dim' ? ROW1[2] : { mode: 'hairpin', hairpinType: 'dim' })}
-          title="デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）"
+          data-tip="デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）"
           aria-label="デクレッシェンドの松葉＞（開始音符から終了音符へドラッグ）"
           style={btnStyle(selectedHairpinType === 'dim')}
         >
@@ -676,7 +814,7 @@ export default function Palette({
               key={tool.articulation}
               type="button"
               onClick={() => onChange(active ? ROW1[2] : tool)}
-              title={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
+              data-tip={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
 
               aria-label={`${articulationLabel(tool.articulation)}（対象の音符をクリック）`}
               style={btnStyle(active)}
@@ -689,7 +827,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(graceNoteActive ? ROW1[2] : { mode: 'graceNote' })}
-          title="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
+          data-tip="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
 
           aria-label="前打音（対象の音符をクリック。同じ音符を再クリックで解除）"
           style={accentBtnStyle(graceNoteActive)}
@@ -700,7 +838,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedOrnamentType === 'trill' ? ROW1[2] : { mode: 'ornament', ornamentType: 'trill' })}
-          title="トリル（対象の音符をクリック。再クリックで解除）"
+          data-tip="トリル（対象の音符をクリック。再クリックで解除）"
 
           aria-label="トリル（対象の音符をクリック。再クリックで解除）"
           style={accentBtnStyle(selectedOrnamentType === 'trill')}
@@ -711,7 +849,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedOrnamentType === 'mordent' ? ROW1[2] : { mode: 'ornament', ornamentType: 'mordent' })}
-          title={`${ornamentLabel('mordent')}（対象の音符をクリック。再クリックで解除）`}
+          data-tip={`${ornamentLabel('mordent')}（対象の音符をクリック。再クリックで解除）`}
 
           aria-label={`${ornamentLabel('mordent')}（対象の音符をクリック。再クリックで解除）`}
           style={accentBtnStyle(selectedOrnamentType === 'mordent')}
@@ -722,7 +860,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedOrnamentType === 'mordentInverted' ? ROW1[2] : { mode: 'ornament', ornamentType: 'mordentInverted' })}
-          title={`${ornamentLabel('mordentInverted')}（対象の音符をクリック。再クリックで解除）`}
+          data-tip={`${ornamentLabel('mordentInverted')}（対象の音符をクリック。再クリックで解除）`}
 
           aria-label={`${ornamentLabel('mordentInverted')}（対象の音符をクリック。再クリックで解除）`}
           style={accentBtnStyle(selectedOrnamentType === 'mordentInverted')}
@@ -733,7 +871,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(selectedOrnamentType === 'turn' ? ROW1[2] : { mode: 'ornament', ornamentType: 'turn' })}
-          title={`${ornamentLabel('turn')}（対象の音符をクリック。再クリックで解除）`}
+          data-tip={`${ornamentLabel('turn')}（対象の音符をクリック。再クリックで解除）`}
 
           aria-label={`${ornamentLabel('turn')}（対象の音符をクリック。再クリックで解除）`}
           style={accentBtnStyle(selectedOrnamentType === 'turn')}
@@ -748,7 +886,7 @@ export default function Palette({
               key={tool.textKind}
               type="button"
               onClick={() => onChange(active ? ROW1[2] : tool)}
-              title={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
+              data-tip={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
 
               aria-label={`${textElementLabel(tool.textKind)}（対象の音符をクリックして入力）`}
               style={btnStyle(active, {
@@ -765,7 +903,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(pedalDownActive ? ROW1[2] : { mode: 'pedal', pedalType: 'down' })}
-          title="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
+          data-tip="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
 
           aria-label="ペダル記号（Ped）を付ける。対象の音符をクリック。再クリックで解除"
           style={accentBtnStyle(pedalDownActive)}
@@ -775,7 +913,7 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(pedalUpActive ? ROW1[2] : { mode: 'pedal', pedalType: 'up' })}
-          title="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
+          data-tip="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
 
           aria-label="ペダル解除記号（✱）を付ける。対象の音符をクリック。再クリックで解除"
           style={accentBtnStyle(pedalUpActive)}
@@ -791,7 +929,7 @@ export default function Palette({
               key={ot}
               type="button"
               onClick={() => onChange(active ? ROW1[2] : { mode: 'ottava', ottavaType: ot })}
-              title={`${lbl}記号を付ける。対象の音符をクリック。再クリックで解除`}
+              data-tip={`${lbl}記号を付ける。対象の音符をクリック。再クリックで解除`}
 
               aria-label={`${lbl}記号を付ける。対象の音符をクリック。再クリックで解除`}
               style={accentBtnStyle(active)}
@@ -811,7 +949,7 @@ export default function Palette({
               <button
                 type="button"
                 onClick={() => onChange(active ? ROW1[2] : { mode: 'customSymbol', symbolId: def.id })}
-                title={`${def.name}（対象の音符をクリック）`}
+                data-tip={`${def.name}（対象の音符をクリック）`}
 
                 aria-label={`${def.name}（対象の音符をクリック）`}
                 style={btnStyle(active)}
@@ -821,7 +959,7 @@ export default function Palette({
               <button
                 type="button"
                 onClick={() => onChange(resizeActive ? ROW1[2] : { mode: 'customSymbolResize', symbolId: def.id })}
-                title={`${def.name}のサイズを変更（対象の音符をクリック）`}
+                data-tip={`${def.name}のサイズを変更（対象の音符をクリック）`}
                 aria-label={`${def.name}のサイズを変更（対象の音符をクリック）`}
                 style={btnStyle(resizeActive, { width: 20, fontSize: 11, color: '#6b7280' })}
               >
@@ -831,7 +969,7 @@ export default function Palette({
               <button
                 type="button"
                 onClick={() => onChange(offsetActive ? ROW1[2] : { mode: 'customSymbolOffset', symbolId: def.id })}
-                title={`${def.name}の位置を調整（対象の音符をクリック）`}
+                data-tip={`${def.name}の位置を調整（対象の音符をクリック）`}
                 aria-label={`${def.name}の位置を調整（対象の音符をクリック）`}
                 style={btnStyle(offsetActive, { width: 20, fontSize: 11, color: '#6b7280' })}
               >
@@ -846,7 +984,7 @@ export default function Palette({
           <button
             type="button"
             onClick={() => onChange(symbolAdjustResizeActive ? ROW1[2] : { mode: 'symbolAdjustResize' })}
-            title="記号のサイズを変更（運指・強弱・カスタム記号など。対象の音符をクリック）"
+            data-tip="記号のサイズを変更（運指・強弱・カスタム記号など。対象の音符をクリック）"
             aria-label="記号のサイズを変更（運指・強弱・カスタム記号など。対象の音符をクリック）"
             style={btnStyle(symbolAdjustResizeActive, { width: 22, fontSize: 12, color: '#374151' })}
           >
@@ -855,7 +993,7 @@ export default function Palette({
           <button
             type="button"
             onClick={() => onChange(symbolAdjustOffsetActive ? ROW1[2] : { mode: 'symbolAdjustOffset' })}
-            title="記号の位置を調整（運指・強弱・カスタム記号など。対象の音符をクリック）"
+            data-tip="記号の位置を調整（運指・強弱・カスタム記号など。対象の音符をクリック）"
             aria-label="記号の位置を調整（運指・強弱・カスタム記号など。対象の音符をクリック）"
             style={btnStyle(symbolAdjustOffsetActive, { width: 22, fontSize: 12, color: '#374151' })}
           >
@@ -868,7 +1006,7 @@ export default function Palette({
         <button
           type="button"
           onClick={onOpenSymbolEditor}
-          title="カスタム記号を新規作成"
+          data-tip="カスタム記号を新規作成"
 
           aria-label="カスタム記号を新規作成"
           style={{

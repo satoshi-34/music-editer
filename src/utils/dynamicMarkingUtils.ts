@@ -6,7 +6,7 @@ import type {
   NoteEvent,
   RelativeDynamicMarking
 } from '../types/storage';
-import { getPrimaryVoiceEvents } from './voiceMeasureUtils';
+import { getEventDurationBeats, getMeasureVoices, getPrimaryVoiceEvents } from './voiceMeasureUtils';
 import { dynamicSymbol } from './editorContextLabels';
 import { ENGRAVING_TEXT_UNITS, spToUnits } from './engravingDefaults';
 
@@ -304,4 +304,162 @@ export function resolveDynamicVelocities(measures: MeasureData[]): Map<string, n
   });
 
   return velocities;
+}
+
+/**
+ * 任意の拍位置の「いまの基準音量」を返す時系列（Issue #626）。
+ *
+ * 大譜表（ピアノ）では強弱記号は両手に共通の「その時点の音量」なので、片手に付いた p が
+ * 他方の伴奏に効かない従来の解決（パート単位・主声部の音ごと）では、伴奏が旋律より大きく
+ * 鳴っていた（運用者QA 2026-09-04・悲愴）。ここでは全パート・全声部の記号を絶対拍位置で
+ * 1本の時系列にし、どのパート・どの声部の音も**自分の拍位置**で引く。
+ *   - 絶対強弱（p / f …）はその位置から基準音量を切り替える
+ *   - cresc. / dim.（文字・松葉）はその位置から**次の絶対強弱の位置**まで直線で変化する。
+ *     次が無ければ ±0.2 を終端（最後の記号から先の残り）までかけて変化する
+ * 四重奏・編成譜は各パートに自分の強弱が書かれるので、呼び出し側でパートごとに作る。
+ * 従来の resolveDynamicVelocities（音ごとの段階変化）はプレビュー等の既存用途に残す。
+ */
+export interface DynamicVelocityTimeline {
+  velocityAt(absoluteBeat: number): number;
+  /** 小節番号と小節内拍から絶対拍へ（途中拍子変更・拍子より長い小節は実際の前進幅で数える） */
+  positionOf(measureIndex: number, beatInMeasure: number): number;
+  /** 計測・テスト用: 記号の数 */
+  readonly markingCount: number;
+}
+
+/**
+ * 各小節が実際に何拍進むか。再生エンジンは「拍子の拍数」と「その小節の中身の長さ」の
+ * 大きいほうで次の小節へ進む（途中拍子変更や埋まりすぎた小節）ので、絶対拍もそれに合わせる
+ * （round3 P2: 小節番号 × 拍子の拍数だと 3/4 の中の 4/4 小節で位置が衝突する）。
+ */
+export function measureAdvanceBeats(
+  partsMeasures: readonly (readonly MeasureData[])[],
+  beatsPerMeasure: number,
+): number[] {
+  const count = Math.max(0, ...partsMeasures.map((measures) => measures.length));
+  const advances: number[] = [];
+  for (let measureIndex = 0; measureIndex < count; measureIndex++) {
+    let longest = beatsPerMeasure;
+    partsMeasures.forEach((measures) => {
+      const measure = measures[measureIndex];
+      if (!measure) return;
+      getMeasureVoices(measure).forEach((voice) => {
+        const total = voice.events.reduce((sum, event) => sum + getEventDurationBeats(event), 0);
+        longest = Math.max(longest, total);
+      });
+    });
+    advances.push(longest);
+  }
+  return advances;
+}
+
+/** 記号の出どころ（小節番号・小節内拍で持つ。絶対拍は時計側のパートで決める） */
+export interface DynamicMarkingSource {
+  measureIndex: number;
+  beat: number;
+  order: number;
+  absolute: AbsoluteDynamicMarking | null;
+  relative: RelativeDynamicMarking | null;
+}
+
+/** 全パート・全声部から強弱記号を「小節番号・小節内拍」つきで集める */
+export function collectDynamicMarkings(partsMeasures: readonly (readonly MeasureData[])[]): DynamicMarkingSource[] {
+  const markings: DynamicMarkingSource[] = [];
+  partsMeasures.forEach((measures) => {
+    measures.forEach((measure, measureIndex) => {
+      getMeasureVoices(measure).forEach((voice) => {
+        let beat = 0;
+        voice.events.forEach((event) => {
+          const absolute = getAbsoluteDynamicFromEvent(event);
+          const relative = getRelativeDynamicFromEvent(event) ?? event.hairpins?.[0]?.type ?? null;
+          // 同じ音に p と cresc. が両方あれば、絶対→相対の順に別々の記号として扱う
+          if (absolute) markings.push({ measureIndex, beat, order: markings.length, absolute, relative: null });
+          if (relative) markings.push({ measureIndex, beat, order: markings.length, absolute: null, relative });
+          beat += getEventDurationBeats(event);
+        });
+      });
+    });
+  });
+  return markings;
+}
+
+/**
+ * @param sourceMarkings 記号の出どころ（ピアノは両手ぶん、他は自パートぶん）
+ * @param clockMeasures  絶対拍の時計にするパートの小節列（自パート）。エンジンは各パートを
+ *   独立に「拍子の拍数と中身の長さの大きいほう」で進めるので、絶対拍もそのパート自身の前進幅で
+ *   数える（round4〜5: 両手の最大で共有するとエンジン・ハイライト・タイ・ペダルの全部と食い違う）。
+ *   他方の手の記号は「小節番号・小節内拍」のまま受け取り、この時計へ置き直す
+ */
+export function buildDynamicVelocityTimeline(
+  sourceMarkings: readonly DynamicMarkingSource[],
+  clockMeasures: readonly MeasureData[],
+  beatsPerMeasure: number,
+): DynamicVelocityTimeline {
+  const advances = measureAdvanceBeats([clockMeasures], beatsPerMeasure);
+  // 小節頭の絶対拍（前向きの累積）
+  const measureStarts: number[] = [];
+  let acc = 0;
+  advances.forEach((advance) => { measureStarts.push(acc); acc += advance; });
+  const endBeat = acc;
+  const positionOf = (measureIndex: number, beatInMeasure: number): number =>
+    (measureStarts[measureIndex] ?? (endBeat + (measureIndex - advances.length) * beatsPerMeasure)) + beatInMeasure;
+
+  type Marking = { at: number; order: number; absolute: AbsoluteDynamicMarking | null; relative: RelativeDynamicMarking | null };
+  const markings: Marking[] = sourceMarkings.map((marking) => ({
+    at: positionOf(marking.measureIndex, marking.beat),
+    order: marking.order,
+    absolute: marking.absolute,
+    relative: marking.relative,
+  }));
+  // 同一位置では絶対強弱を先に（round3 P2: パートの走査順で cresc. が p の前に来ると長さ 0 の区間になる）
+  markings.sort((left, right) =>
+    (left.at - right.at) || ((left.absolute ? 0 : 1) - (right.absolute ? 0 : 1)) || (left.order - right.order));
+  // 各記号から見た「次の絶対強弱」を後ろ向きに1回で決める（round3 P3）
+  const nextAbsoluteIndex: number[] = new Array(markings.length).fill(-1);
+  for (let index = markings.length - 2, next = markings.length - 1; index >= 0; index--) {
+    if (markings[index + 1].absolute) next = index + 1;
+    nextAbsoluteIndex[index] = markings[next]?.absolute && next > index ? next : -1;
+  }
+
+  type Segment = { from: number; to: number; startLevel: number; endLevel: number };
+  const segments: Segment[] = [];
+  const levelAt = (absoluteBeat: number): number => {
+    let low = 0;
+    let high = segments.length - 1;
+    let found = -1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (segments[mid].from <= absoluteBeat + 1e-6) { found = mid; low = mid + 1; } else { high = mid - 1; }
+    }
+    if (found < 0) return DEFAULT_DYNAMIC_VELOCITY;
+    const segment = segments[found];
+    if (segment.to <= segment.from) return segment.endLevel;
+    const ratio = Math.min(1, Math.max(0, (absoluteBeat - segment.from) / (segment.to - segment.from)));
+    return clampVelocity(segment.startLevel + (segment.endLevel - segment.startLevel) * ratio);
+  };
+  markings.forEach((marking, index) => {
+    if (marking.absolute) {
+      const level = getAbsoluteDynamicVelocity(marking.absolute);
+      segments.push({ from: marking.at, to: marking.at, startLevel: level, endLevel: level });
+      return;
+    }
+    if (!marking.relative) return;
+    // 相対記号は「その位置での実音量」から始める（round3 P2: 先行区間の終端値から始めると
+    // cresc. の途中の dim. で音量が跳ぶ）。先行区間はここで打ち切る
+    const startLevel = levelAt(marking.at);
+    const previous = segments[segments.length - 1];
+    if (previous && previous.to > marking.at) {
+      previous.endLevel = startLevel;
+      previous.to = marking.at;
+    }
+    const nextIndex = nextAbsoluteIndex[index];
+    const nextAbsolute = nextIndex >= 0 ? markings[nextIndex] : null;
+    const to = nextAbsolute ? nextAbsolute.at : Math.max(endBeat, marking.at);
+    const target = nextAbsolute
+      ? getAbsoluteDynamicVelocity(nextAbsolute.absolute!)
+      : clampVelocity(startLevel + (marking.relative === 'cresc' ? RELATIVE_DYNAMIC_DELTA : -RELATIVE_DYNAMIC_DELTA));
+    segments.push({ from: marking.at, to, startLevel, endLevel: target });
+  });
+
+  return { velocityAt: levelAt, positionOf, markingCount: markings.length };
 }
