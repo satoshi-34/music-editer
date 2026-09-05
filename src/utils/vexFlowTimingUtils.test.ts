@@ -303,6 +303,36 @@ describe('段またぎ連符の数字の置き場所（Issue #574）', () => {
     expect(y, '左手の和音の下端より下へ逃げている').toBeGreaterThan(obstacleBottom);
   });
 
+  it('段の下端に入り切らないときは上側へ逃がし、どちらにも入らなければ範囲内へクランプする（round3 P1）', () => {
+    const { upper, lower, notes, tuplets } = buildCrossStaffTriplet([false, true, true]);
+    const spacing = lower.getSpacingBetweenLines();
+    // 下の五線の下 3 間まで届く左手の和音 → 本来は下へ逃げたい
+    const obstacleBottom = lower.getYForLine(4) + 3 * spacing;
+    const xs = notes.map((note) => note.getAbsoluteX());
+    const obstacle = {
+      x: Math.min(...xs) - 5, y: lower.getYForLine(2),
+      w: Math.max(...xs) - Math.min(...xs) + 10, h: obstacleBottom - lower.getYForLine(2),
+    };
+    // 段の箱の下端が下の五線のすぐ下（余白 15px）しか無い → 下には入らない
+    const bounds = { topY: 0, bottomY: lower.getYForLine(4) + 15 };
+    syncTupletPlacementWithNotes(tuplets, { ownerStave: upper, getObstacles: () => [obstacle], verticalBounds: bounds });
+    const y = tuplets[0].tuplet.getYPosition();
+    expect(locationOf(tuplets[0].tuplet), '上側へ逃げる').toBe(Tuplet.LOCATION_TOP);
+    expect(y).toBeLessThan(upper.getYForLine(0));
+    expect(y).toBeGreaterThanOrEqual(bounds.topY);
+
+    // 上にも余地が無い（箱の上端が上の五線の直上）ときは、梁の側のまま下端の内側へクランプ
+    const { upper: u2, lower: l2, notes: n2, tuplets: t2 } = buildCrossStaffTriplet([false, true, true]);
+    const xs2 = n2.map((note) => note.getAbsoluteX());
+    const obstacle2 = { ...obstacle, x: Math.min(...xs2) - 5, w: Math.max(...xs2) - Math.min(...xs2) + 10 };
+    const tight = { topY: u2.getYForLine(0) - 5, bottomY: l2.getYForLine(4) + 15 };
+    syncTupletPlacementWithNotes(t2, { ownerStave: u2, getObstacles: () => [obstacle2], verticalBounds: tight });
+    const y2 = t2[0].tuplet.getYPosition();
+    expect(locationOf(t2[0].tuplet)).toBe(Tuplet.LOCATION_BOTTOM);
+    expect(y2).toBeLessThanOrEqual(tight.bottomY);
+    expect(y2).toBeGreaterThan(l2.getYForLine(4));
+  });
+
   it('離れた場所にある音符は避ける対象にしない（数字が無関係に遠くへ飛ばない）', () => {
     const { upper, lower, notes, tuplets } = buildCrossStaffTriplet([false, true, true]);
     const far = Math.max(...notes.map((note) => note.getAbsoluteX())) + 200;

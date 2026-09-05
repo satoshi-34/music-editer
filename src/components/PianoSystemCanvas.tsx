@@ -204,6 +204,7 @@ import {
   measurePlannerSafetyPadding,
   SCORE_LAYOUT_RENDER_SCALE,
   staveSpacingForPartCount,
+  SYSTEM_BREATHING_ROOM_PX,
   SYSTEM_FIRST_CLEF_PADDING,
   SYSTEM_PAGE_SIDE_PADDING,
   SYSTEM_TARGET_FILL,
@@ -1691,6 +1692,8 @@ function drawRenderedVoiceEntries(
   // 段またぎ連符の数字が避ける障害物（他パート・他声部の音符の描画範囲）を返す関数。
   // 段またぎ連符があったときだけ呼ばれる（#574）
   getTupletObstacles?: () => readonly TupletObstacleRect[],
+  // 段（SVG の箱）の縦の範囲。段またぎ連符の数字をこの外へ出さない（#574 round3）
+  tupletVerticalBounds?: { topY: number; bottomY: number },
 ): void {
     renderedVoiceEntries.forEach((entry) => {
       try{
@@ -1750,7 +1753,9 @@ function drawRenderedVoiceEntries(
       // 音符と五線の位置関係が要るので、音符が五線へ紐づいたあと（＝描画段）に呼ぶ。
       // 段またぎ連符（#574）は「梁の側」の判定に持ち主のパートの五線が要るので一緒に渡し、
       // 左手の和音などを避けるための障害物も（またぎがあったときだけ）引けるようにする。
-      syncTupletPlacementWithNotes(entry.tuplets, { ownerStave: stave, getObstacles: getTupletObstacles });
+      syncTupletPlacementWithNotes(entry.tuplets, {
+        ownerStave: stave, getObstacles: getTupletObstacles, verticalBounds: tupletVerticalBounds,
+      });
       entry.tuplets.forEach(({ tuplet, hideNumber }, tupletIndex) => {
         // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
         // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
@@ -6056,7 +6061,13 @@ export default function PianoSystemCanvas({
         }
 
         // 声部・ビーム・連符の描画（実体は drawRenderedVoiceEntries・#244 段4c-2）
-        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries, getSystemNoteRects);
+        // 段またぎ連符の数字の縦の許容範囲（#574 round3）。段の箱（sysH）は最下段の第5線で
+        // 終わっていて下余白を持たないので、五線下の記号（Ped・pp・連符数字）は段と段の間の
+        // 余白（SYSTEM_BREATHING_ROOM_PX）に描かれる。数字もその余白までは下へ出してよく、
+        // それを越えるなら反対側（上）へ逃がす。上は段の箱の上端（五線の上の 4 行ぶん）まで
+        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries, getSystemNoteRects, {
+          topY: 0, bottomY: sysH + SYSTEM_BREATHING_ROOM_PX,
+        });
 
         // 自動衝突回避（#340 段1）の障害物: 描画した全声部の音符の BoundingBox
         // （符頭＋符幹を含む）を段ごとに集める。編集レイヤーやアクティブ声部の

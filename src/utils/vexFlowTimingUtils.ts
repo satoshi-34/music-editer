@@ -148,7 +148,16 @@ export type TupletPlacementContext = {
    * （関数で受けるのは、またぎの無い大多数の小節で無駄に集めないため）
    */
   getObstacles?: () => readonly TupletObstacleRect[];
+  /**
+   * 段（SVG の箱）の縦の範囲（論理座標）。数字はこの外へは出さない（round3 P1: 段の下端を
+   * 越えると印刷/PDF で欠け、次の段と重なる）。梁の側に入り切らないときは反対側へ逃がし、
+   * どちらにも入らなければ範囲内へクランプする（重なりより「欠ける」方が害が大きい）
+   */
+  verticalBounds?: { topY: number; bottomY: number };
 };
+
+/** 数字と段の端との最小の隙間（px）。ぴったりだと印刷で欠けて見える */
+const TUPLET_NUMBER_EDGE_MARGIN_PX = 2;
 
 /** その音符の符頭の y（複数音＝和音なら全部）。休符・符頭を持たない音符では空配列 */
 function noteheadYsOf(note: Note): number[] {
@@ -272,8 +281,6 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, context: TupletPlacementCon
   const lineSpacing = owner.getSpacingBetweenLines();
 
   const toBottom = isBeamSideBelow(notes, owner, bottomStave);
-  // 出す側の一番外の五線。ここから外側へ数字を置く（両方の五線の外に出る）
-  const farStave = toBottom ? bottomStave : topStave;
 
   // 障害物は「この連符の真下（真上）にあるもの」だけに絞る。
   // 小節の別の場所にある音符まで見ると、関係の無い音のせいで数字が遠くへ飛んでしまう
@@ -286,41 +293,63 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, context: TupletPlacementCon
   // 数字の高さの半分を足しておく（足さないと文字の上端・下端だけが食い込む）
   const halfNumberHeight = TUPLET_NUMBER_HALF_HEIGHT_SPACES * lineSpacing;
 
+  // 下側の候補: 下の五線の外、連符自身の符頭・符幹の先、真下の障害物、のすべてより下
+  const belowY = (): number => {
+    let y = bottomStave.getYForLine(4) + 2 * lineSpacing;
+    notes.forEach((note) => {
+      noteheadYsOf(note).forEach((headY) => { y = Math.max(y, headY + 2 * lineSpacing); });
+      const tipY = stemTipYOf(note);
+      if (tipY !== null) y = Math.max(y, tipY + lineSpacing + halfNumberHeight);
+    });
+    obstacles.forEach((rect) => { y = Math.max(y, rect.y + rect.h + lineSpacing + halfNumberHeight); });
+    return y;
+  };
+  // 上側の候補: 上の五線の外、連符自身の符頭・符幹の先、真上の障害物、のすべてより上
+  const aboveY = (): number => {
+    let y = topStave.getYForLine(0) - 1.5 * lineSpacing;
+    notes.forEach((note) => {
+      noteheadYsOf(note).forEach((headY) => { y = Math.min(y, headY - 2 * lineSpacing); });
+      const tipY = stemTipYOf(note);
+      if (tipY !== null) y = Math.min(y, tipY - lineSpacing - halfNumberHeight);
+    });
+    obstacles.forEach((rect) => { y = Math.min(y, rect.y - lineSpacing - halfNumberHeight); });
+    return y;
+  };
+
+  // 段の箱に入るか。範囲が渡されないとき（単体テストの一部・旧呼び出し）は常に入るとみなす
+  const bounds = context.verticalBounds;
+  const bottomLimit = bounds ? bounds.bottomY - halfNumberHeight - TUPLET_NUMBER_EDGE_MARGIN_PX : Infinity;
+  const topLimit = bounds ? bounds.topY + halfNumberHeight + TUPLET_NUMBER_EDGE_MARGIN_PX : -Infinity;
+  const fitsBelow = (y: number) => y <= bottomLimit;
+  const fitsAbove = (y: number) => y >= topLimit;
+
+  // 1. 梁の側に置く。2. 入り切らなければ反対側へ逃がす（round3 P1: 段の下端を越えて印刷で
+  // 欠けるより、反対側に出る方が読める）。3. どちらにも入らなければ梁の側のまま範囲内へ
+  // クランプする（音符と重なりうるが、段の外へ消えるよりはよい）
+  let placeBottom = toBottom;
   let targetY: number;
   if (toBottom) {
-    targetY = farStave.getYForLine(4) + 2 * lineSpacing;
-    notes.forEach((note) => {
-      noteheadYsOf(note).forEach((y) => {
-        targetY = Math.max(targetY, y + 2 * lineSpacing);
-      });
-      const tipY = stemTipYOf(note);
-      if (tipY !== null) {
-        targetY = Math.max(targetY, tipY + lineSpacing + halfNumberHeight);
-      }
-    });
-    obstacles.forEach((rect) => {
-      targetY = Math.max(targetY, rect.y + rect.h + lineSpacing + halfNumberHeight);
-    });
+    const y = belowY();
+    if (fitsBelow(y)) targetY = y;
+    else {
+      const alt = aboveY();
+      if (fitsAbove(alt)) { placeBottom = false; targetY = alt; }
+      else targetY = bottomLimit;
+    }
   } else {
-    targetY = farStave.getYForLine(0) - 1.5 * lineSpacing;
-    notes.forEach((note) => {
-      noteheadYsOf(note).forEach((y) => {
-        targetY = Math.min(targetY, y - 2 * lineSpacing);
-      });
-      const tipY = stemTipYOf(note);
-      if (tipY !== null) {
-        targetY = Math.min(targetY, tipY - lineSpacing - halfNumberHeight);
-      }
-    });
-    obstacles.forEach((rect) => {
-      targetY = Math.min(targetY, rect.y - lineSpacing - halfNumberHeight);
-    });
+    const y = aboveY();
+    if (fitsAbove(y)) targetY = y;
+    else {
+      const alt = belowY();
+      if (fitsBelow(alt)) { placeBottom = true; targetY = alt; }
+      else targetY = topLimit;
+    }
   }
 
   // VexFlow が計算する縦位置（＝またぎで壊れている値）との差を yOffset で埋める。
   // 位置を直接書き込む API が無いため、いったん 0 に戻して素の値を測ってから差分を入れる。
   // 括弧も数字と同じ yPos から描かれるので、この1か所で両方が一緒に動く
-  tuplet.setTupletLocation(toBottom ? Tuplet.LOCATION_BOTTOM : Tuplet.LOCATION_TOP);
+  tuplet.setTupletLocation(placeBottom ? Tuplet.LOCATION_BOTTOM : Tuplet.LOCATION_TOP);
   setTupletYOffset(tuplet, 0);
   try {
     setTupletYOffset(tuplet, targetY - tuplet.getYPosition());
