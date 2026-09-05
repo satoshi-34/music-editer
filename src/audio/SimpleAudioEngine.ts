@@ -660,7 +660,9 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
     try {
       if (this.shouldUseSafariSafeVoice()) {
-        this.playSafariSafeVoice(context, frequency, duration, startTime, tailOverride, instrument, velocity);
+        // Safari の簡易経路には挟まない（round1 P2: 「1 osc + 1 gain に絞る」という経路の存在理由と
+        // 衝突する。Safari では音量差だけになるが、鳴らないより優先）
+        this.playSafariSafeVoice(context, frequency, duration, startTime, tailOverride, instrument);
         return;
       }
 
@@ -1339,8 +1341,6 @@ export class SimpleAudioEngine implements PlaybackEngine {
     /** 尻尾の長さの上書き（同時発音数の上限で詰められた音・#605）。通常経路と同じ意味 */
     tailOverride?: number,
     instrument: InstrumentType = this.currentInstrument,
-    /** 譜面再生の強弱（#670）。省略は素通し */
-    velocity?: number,
   ): void {
     const instrumentConfig = this.getInstrumentConfig(instrument);
     const primaryOscillatorSpec = instrumentConfig.oscillators[0] ?? { type: 'triangle' as OscillatorType };
@@ -1388,8 +1388,7 @@ export class SimpleAudioEngine implements PlaybackEngine {
     );
 
     oscillator.connect(gainNode);
-    if (velocity === undefined) gainNode.connect(this.getOutputNode(context));
-    else this.connectVoiceToOutput(context, gainNode, velocity);
+    gainNode.connect(this.getOutputNode(context));
     // stopAll で尻尾ごと止められるよう、簡易経路の音も台帳に登録する（round1 P1）。
     // 配線は済んでいるので登録だけ行う（round2 P1: registerOscillators だと二重配線になる）
     const safariOscillatorId = this.trackOscillatorsForStop([oscillator], gainNode);

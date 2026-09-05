@@ -183,19 +183,29 @@ describe('SimpleAudioEngine', () => {
   });
 
   describe('強弱を音色にも効かせる（Issue #670）', () => {
-    it('譜面再生では音ごとにローパスを 1 つ挟み、弱い音ほどカットオフが低い', async () => {
+    it('弱い音（0.5 未満）だけローパスを 1 つ挟み、弱いほどカットオフが低い。mf 以上は従来どおり', async () => {
       await engine.initialize();
+      const gainsBefore = mockContext.createGain.mock.results.length;
       await engine.playParts([{
         measures: [{ measureBeats: 4, events: [
           { dur: '4', isRest: false, keys: ['c/4'], velocity: 0.22 },
-          { dur: '4', isRest: false, keys: ['d/4'], velocity: 0.74 },
+          { dur: '4', isRest: false, keys: ['d/4'], velocity: 0.35 },
+          { dur: '4', isRest: false, keys: ['e/4'], velocity: 0.74 },
         ] }],
       }], 120);
       expect(createdFilters.length).toBe(2);
       expect(createdFilters[0].type).toBe('lowpass');
       expect(createdFilters[0].frequency.value).toBeLessThan(createdFilters[1].frequency.value);
-      // 配線: ゲイン → フィルタ → 出力（フィルタが出力へつながっている）
-      createdFilters.forEach((filter) => { expect(filter.connect).toHaveBeenCalledTimes(1); });
+      // 配線: 音のゲイン → フィルタ → マスターゲイン
+      const gainsAfter = mockContext.createGain.mock.results.slice(gainsBefore).map((r: { value: unknown }) => r.value);
+      createdFilters.forEach((filter) => {
+        const feeding = gainsAfter.filter((g: { connect: { mock: { calls: unknown[][] } } }) =>
+          g.connect.mock.calls.some((call) => call[0] === filter));
+        expect(feeding.length, 'フィルタへつないだ音のゲインが 1 つ').toBe(1);
+        expect(filter.connect).toHaveBeenCalledTimes(1);
+        const dest = filter.connect.mock.calls[0][0] as { gain?: unknown };
+        expect(dest && 'gain' in dest, 'フィルタの接続先はマスターゲイン').toBe(true);
+      });
     });
 
     it('OFF にすると従来どおりフィルタを作らない', async () => {

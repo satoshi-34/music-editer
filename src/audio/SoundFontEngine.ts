@@ -367,7 +367,7 @@ export class SoundFontEngine implements PlaybackEngine {
         const duration = Math.min(voice.duration, occupancy);
         const release = Math.max(0, occupancy - duration);
         const node = voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity, release));
-        this.applyVelocityTimbre(context, node, voice.velocity);
+        this.applyVelocityTimbre(context, voice.player, node, voice.velocity);
       },
       onError: (error) => {
         console.warn('[SoundFontEngine] 窓の予約に失敗したため以後の予約を止めます:', error);
@@ -480,18 +480,32 @@ export class SoundFontEngine implements PlaybackEngine {
    * play() は内部で node→out→destination と配線してしまうので、いったん外してから挟む。
    * フィルタを作れない context・想定外のノードでは何もしない（従来どおり鳴る）
    */
-  private applyVelocityTimbre(context: AudioContext, node: unknown, velocity: number): void {
+  private applyVelocityTimbre(context: AudioContext, player: SoundFontPlayer, node: unknown, velocity: number): void {
     if (!this.velocityTimbreEnabled) return;
-    const audioNode = node as { connect?: (dest: AudioNode) => unknown; disconnect?: () => void } | null;
+    const audioNode = node as { connect?: (dest: AudioNode) => unknown; disconnect?: (dest?: AudioNode) => void } | null;
     if (!audioNode || typeof audioNode.connect !== 'function' || typeof audioNode.disconnect !== 'function') return;
     const filter = createVelocityFilter(context, velocity);
     if (!filter) return;
+    // sample-player は player.out（出力の GainNode）を公開している。外すときはそこだけを外し、
+    // 失敗したらそこへ戻す（round1 P2: 外した後に失敗すると無音になる）
+    const playerOut = (player as unknown as { out?: AudioNode }).out;
     try {
-      audioNode.disconnect();
-      audioNode.connect(filter);
+      // 先にフィルタ→マスターを結んでから音ノードをフィルタへ。最後に player の出力から外す
       filter.connect(this.getOutputNode(context));
+      audioNode.connect(filter);
+      if (playerOut) audioNode.disconnect(playerOut);
+      else audioNode.disconnect();
     } catch (error) {
       console.warn('[SoundFontEngine] 強弱の音色変化を配線できませんでした（素通しで鳴らします）:', error);
+      try {
+        // 途中まで進んでいた配線を戻す: フィルタを外し、player の出力へつなぎ直す
+        filter.disconnect?.();
+        audioNode.disconnect();
+        if (playerOut) audioNode.connect(playerOut);
+        else audioNode.connect(this.getOutputNode(context));
+      } catch {
+        // ここで失敗したらその音だけ鳴らない。再生全体は止めない（#358 の教訓）
+      }
     }
   }
 

@@ -114,7 +114,9 @@ export interface PlaybackEngine {
   setSwingEnabled(enabled: boolean): void;
   /**
    * 強弱を音色にも効かせる（velocity → ローパスのカットオフ・Issue #670）の ON/OFF。
-   * optional なのは、テストの偽エンジンや外部プラグイン経路が持たなくても呼べるようにするため
+   * optional なのは、既存テストの偽エンジン（createPlaybackEngine の vi.mock・約 20 ファイル）が
+   * この項目を持たないため。両方の実エンジン（SimpleAudioEngine / SoundFontEngine）は実装している。
+   * 呼び出し側は必ず `?.()` で呼び、createPlaybackEngine でも生成直後に反映する
    */
   setVelocityTimbreEnabled?(enabled: boolean): void;
   /**
