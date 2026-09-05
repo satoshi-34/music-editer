@@ -177,7 +177,8 @@ export function sanitizePickupBeatsInParts<T extends { measures: MeasureData[] }
   parts: readonly T[],
   globalTimeSignature: TimeSignature,
 ): T[] {
-  if (parts.length === 0) return [...parts];
+  // 壊れた入力（手編集した JSON・古いバックアップ）は検証に弾かせる。ここでは触らない
+  if (parts.length === 0 || parts.some((part) => !Array.isArray(part?.measures))) return [...parts];
   const primary = parts[0].measures;
   let anyChanged = false;
   const next = parts.map((part, partIndex) => {

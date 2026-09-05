@@ -647,10 +647,14 @@ function validateSavedPartIds(data: SavedScoreData): boolean {
  */
 function hasValidPickupBeats(parts: PartData[], timeSignature: unknown): boolean {
   const globalTimeSignature = normalizeTimeSignature(timeSignature);
+  // 拍子の解決元は正本のパート0（sanitizePickupBeatsInParts と同じ物差し・#473 round4 P2-1）。
+  // 各パート自身の小節列で解くと、途中拍子変更がパート0にしか書かれていない場合に
+  // 正規化後のデータを検証が弾き、保存が止まる
+  const primary = parts[0]?.measures ?? [];
   return parts.every((part) =>
     part.measures.every((measure, measureIndex) => {
       if (measure.pickupBeats === undefined) return true;
-      const effective = resolveTimeSignatureAtMeasure(part.measures, measureIndex, globalTimeSignature);
+      const effective = resolveTimeSignatureAtMeasure(primary, measureIndex, globalTimeSignature);
       return measure.pickupBeats < getMeasureBeats(effective);
     })
   );
@@ -1456,10 +1460,15 @@ export function pushWorkHistoryGeneration(
   if (!options?.force && history.length > 0 && now - history[0].timestamp < WORK_HISTORY_MIN_INTERVAL_MS) {
     return { success: true, data: false };
   }
+  // 世代も保存と同じ境界の正規化を通す（#473 round4 P2-2: 生データのまま積むと、読み出しの
+  // 検証で世代ごと黙って落ちる）
+  const sanitizedData: SavedScoreData = Array.isArray(data.parts)
+    ? { ...data, parts: sanitizePickupBeatsInParts(data.parts, normalizeTimeSignature(data.timeSignature)) }
+    : data;
   const newGeneration: WorkHistoryGeneration = {
     timestamp: now,
-    checksum: generateChecksum(JSON.stringify(data)),
-    data,
+    checksum: generateChecksum(JSON.stringify(sanitizedData)),
+    data: sanitizedData,
   };
   let next: WorkHistoryGeneration[] = [newGeneration, ...history].slice(0, WORK_HISTORY_MAX_GENERATIONS);
   const key = getWorkStorageKeys(workId).history;

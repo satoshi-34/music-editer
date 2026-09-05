@@ -5,7 +5,7 @@
 //   2. 弱起（MeasureData.pickupBeats）ありの作品は保存 → 読み直しでそのまま戻る
 //   3. 不変条件1（正の有限・その小節の拍子未満）を検証の境界で弾く
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createSavedScoreData, loadScoreData, saveScoreData, validateSavedScoreData } from './storage';
+import { createSavedScoreData, loadScoreData, saveScoreData, validateSavedScoreData, STORAGE_KEYS } from './storage';
 import type { MeasureData, PartData } from '../types/storage';
 
 const localStorageMock = (() => {
@@ -94,6 +94,25 @@ describe('弱起（アウフタクト）の保存（Issue #473）', () => {
       );
       const saved = saveScoreData(data);
       expect(saved.success).toBe(true);
+      const loaded = loadScoreData();
+      expect(loaded.success).toBe(true);
+      expect((loaded.data!.parts[0].measures[0] as { pickupBeats?: number }).pickupBeats).toBeUndefined();
+    });
+
+    it('localStorage に残った生の不正値（旧ビルド）も、読み込み時に正して開ける', () => {
+      const good = createSavedScoreData(
+        { title: 't', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{ partId: 'melody', clef: 'treble', measures: [{ events: [] }, { events: [] }] }],
+        1, 1, 'single'
+      );
+      expect(saveScoreData(good).success).toBe(true);
+      // 保存済みの JSON を直接書き換えて、拍子ぶん以上の pickupBeats を仕込む
+      const key = STORAGE_KEYS.PRIMARY;
+      const raw = JSON.parse(localStorage.getItem(key)!);
+      raw.parts[0].measures[0].pickupBeats = 4;
+      localStorage.setItem(key, JSON.stringify(raw));
+      // 直接書き換えたので保存時のチェックサムとは合わない。旧ビルドが書いた形に寄せるため外す
+      localStorage.removeItem(STORAGE_KEYS.METADATA);
       const loaded = loadScoreData();
       expect(loaded.success).toBe(true);
       expect((loaded.data!.parts[0].measures[0] as { pickupBeats?: number }).pickupBeats).toBeUndefined();
