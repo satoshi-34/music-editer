@@ -404,3 +404,25 @@ export function getDisplayedMeasureNumber(
 §5 の非スコープはそのまま。加えて:
 - `src/audio/ScorePlayer.ts` の未使用実装（§6-3）は今回も触っていない。#244 へ回す。
 - MIDI 書き出し（`src/utils/midiExport.ts`）は弱起を見ていない。別 Issue。
+
+## 8. round 3（メインセッション・2026-09-05）: main への追従と受入の追加
+
+round 2（案B・`MeasureData.pickupBeats`）のあと 5 日ぶんの main（#616〜#635: 先読み窓・
+強弱の両手共有・ペダル位置・小節番号指定再生ほか）を取り込み、次を足した。
+
+- **強弱（#626/#627）とペダル（#605）の再生も小節の容量で進む**: `measureAdvanceBeats` /
+  `buildDynamicVelocityTimeline`（`BeatsPerMeasureResolver`）と `buildPedalPlaybackPlans`
+  （`MeasureBeatsFloor`）が「数値（全小節共通）」か「小節番号→拍数の関数」を受け、ScorePage は
+  `resolveMeasureCapacityBeats` を関数で渡す。弱起の小節で強弱の絶対拍・ペダルの区間がずれない
+  （エンジンの `measureBeats` と同じ物差し）
+- **小節番号指定の再生（#545）は画面の番号で受ける**: `resolvePlaybackStartMeasureNumber` に
+  `numbering`（正本パートの小節列と拍子）を渡すと `getDisplayedMeasureNumber` の逆引きになる
+  （0 = 先頭の弱起、1 = その次）。案内文（`describePlaybackFromMeasureNumber` は表示番号を受ける）
+  と入力欄の下限（`measureNumberMin`）も追従。曲中の弱起は表示番号で指せない（手前の完全小節から）
+- **受入の追加（運用者裁定 2026-09-04）**: 弱起化／解除は Undo 1 回で戻り Redo で再び弱起
+  （`ScorePagePickupWiring`）。検聴セットのトルコ行進曲は整形（先頭の 4 分休符）を外した弱起版
+  （`src/test-fixtures/turkishMarchPickup.ts`・実機用は `トルコ行進曲_8小節_検聴版_弱起.score.json`）
+  を弱起小節のまま読み込み・表示・再生できる（`ScorePagePickupTurkishMarch`: 弱起なし版と比べて
+  補完休符が右手・左手 1 つずつ消える／measureBeats が 1 → 2）
+- 操作は「演奏記号タブ → 弱起ツール → 小節をクリック → 拍数を選ぶ（『（解除）』で戻す）」。
+  1 クリック＋1 選択で弱起化／解除でき、履歴は 1 件
