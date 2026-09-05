@@ -53,6 +53,40 @@ function firstNoteHit(): SVGRectElement {
     ?? document.querySelector('rect.vf-note-hit') as SVGRectElement;
 }
 
+/** jsdom はレイアウトを持たないので、SVG の表示サイズを固定して座標換算を成立させる */
+function mockSvgLayout(svg: SVGSVGElement): number {
+  const width = parseFloat(svg.getAttribute('width') ?? '0') || 900;
+  const height = parseFloat(svg.getAttribute('height') ?? '0') || 300;
+  svg.getBoundingClientRect = vi.fn(() => ({
+    left: 0, top: 0, right: width, bottom: height, width, height, x: 0, y: 0, toJSON: () => ({}),
+  })) as unknown as typeof svg.getBoundingClientRect;
+  Object.defineProperty(svg, 'width', { value: { baseVal: { value: width } }, configurable: true });
+  Object.defineProperty(svg, 'height', { value: { baseVal: { value: height } }, configurable: true });
+  return width;
+}
+
+/**
+ * 1音目（g/4）の符頭そのものをクリックする。
+ * Issue #548 の統合で、臨時記号の付与は「符頭に当たったクリック」だけになったため
+ * （セル中央を押すと音符が増える）。g/4 はト音譜表の第2線の下＝line 3。
+ */
+function clickFirstNoteHead() {
+  const hit = firstNoteHit();
+  const svg = hit.ownerSVGElement as SVGSVGElement;
+  const width = mockSvgLayout(svg);
+  const vbParts = (svg.getAttribute('viewBox') ?? '').split(/\s+/);
+  const ratio = vbParts.length === 4 && parseFloat(vbParts[2]) > 0 ? width / parseFloat(vbParts[2]) : 1;
+  const x = (parseFloat(hit.getAttribute('data-note-left')!) + parseFloat(hit.getAttribute('data-note-right')!)) / 2;
+  const y = parseFloat(hit.getAttribute('data-line0-y')!) + 3 * parseFloat(hit.getAttribute('data-line-spacing')!);
+  fireEvent.click(hit, { clientX: x * ratio, clientY: y * ratio });
+}
+
+/** 統合後のパレット: 「♯▾」のプルダウンを開いて変種（𝄪 など）を選ぶ */
+function selectAccidentalVariant(familyMenu: RegExp, variant: RegExp) {
+  fireEvent.click(screen.getByRole('button', { name: familyMenu }));
+  fireEvent.click(screen.getByRole('button', { name: variant }));
+}
+
 describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
@@ -69,10 +103,9 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
     vi.restoreAllMocks();
   });
 
-  // Issue #470 で「入力時に付ける臨時記号」のトグル（aria-label は
-  // 「入力時に付ける臨時記号: ダブルシャープ（全音上げ）」など）が増え、同じ語を含む
-  // ボタンが2つになった。ここで試したいのは**すでにある音符へ付ける**適用ツールのほうなので、
-  // 名前は先頭一致（^）で探して取り違えないようにする。
+  // Issue #548 でパレットを統合したので、𝄪 は「♯▾」のプルダウンの中にある。
+  // ツールは1つ（付与も入力も同じツール）で、意味はクリック先で決まるため、
+  // ここでは符頭そのものを押して「付与」の経路を通す。
   it('𝄪 ツールで音符をクリックすると keys が ## になり、保存・SVG まで届く', async () => {
     seedWork();
     render(<ScorePage />);
@@ -85,8 +118,8 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
     // 「臨時記号グリフが描画された」ことを検出する（適用前後で同じ譜面・同じ音符数）
     const svgTextCount = () => document.querySelectorAll('.system-stack svg text').length;
     const before = svgTextCount();
-    fireEvent.click(screen.getByRole('button', { name: /^ダブルシャープ（全音上げ）/ }));
-    fireEvent.click(firstNoteHit());
+    selectAccidentalVariant(/^シャープ系の種類を選ぶ/, /^臨時記号: ダブルシャープ/);
+    clickFirstNoteHead();
 
     await waitFor(() => {
       const ev = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.events?.[0];
@@ -97,8 +130,8 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
       expect(svgTextCount()).toBeGreaterThan(before);
     }, { timeout: 15000 });
     // 外すのは♮（既存の♯♭と同じ規則。同じ記号の再クリックは維持）
-    fireEvent.click(screen.getByRole('button', { name: /^ナチュラル/ }));
-    fireEvent.click(firstNoteHit());
+    fireEvent.click(screen.getByRole('button', { name: /^臨時記号: ナチュラル/ }));
+    clickFirstNoteHead();
     await waitFor(() => {
       const ev = loadWorkAutosaveData(workId).data?.parts?.[0]?.measures?.[0]?.events?.[0];
       expect(ev?.keys?.[0]).toBe('g/4');
@@ -138,7 +171,7 @@ describe('ScorePage: ダブル記号と descresc. の配線（#423）', () => {
     // 調号領域のデバッグ rect（vf-key-signature-debug）は**臨時記号ツールを選んだ後**に
     // だけ描かれる。先にツールを選び、出現を必須アサーションにする（round3 P2:
     // 早期 return で空洞化していた）
-    fireEvent.click(screen.getByRole('button', { name: /^ダブルシャープ（全音上げ）/ }));
+    selectAccidentalVariant(/^シャープ系の種類を選ぶ/, /^臨時記号: ダブルシャープ/);
     await waitFor(() => {
       expect(document.querySelector('rect.vf-key-signature-debug')).toBeTruthy();
     }, { timeout: 15000 });

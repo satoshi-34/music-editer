@@ -2,22 +2,23 @@
 //
 // 設計メモ: .claude/specs/accidental-palette-unification/design.md
 //
-// ⚠ この describe は **意図的に skip している**。統合はまだ実装しておらず、
-//   ここに書いてあるのは「実装段で満たすべき合格基準」だから。
-//   実装段では `describe.skip` の `.skip` を外し、全ケースを緑にすることが完了条件になる。
-//   設計時の期待と実装が食い違った場合は、黙って書き換えず「なぜ違ったか」を PR 本文に書く。
+// 実装段（この PR）で `.skip` を外した。設計時の期待から変えたのはケース14だけで、
+// 理由は「運用者裁定でパレットが7個並び → ♯▾/♭▾/♮ の3個+プルダウンへ変わった」ため
+// （¼♯ はトップレベルのボタンではなくプルダウンの項目になったので、開いてから押す）。
 //
 // ケース番号は設計メモ §5 の表と対応している。
 // ケース7（Undo 1回で戻る）・ケース9（既存データの回帰）は、既存の
 // `ScorePageInputAccidentalWiring.test.tsx` / `ScorePageDoubleAccidentalWiring.test.tsx` を
 // 統合後のラベル・クリック位置へ移行することで担保する（設計メモ §6 の移行表）。
+import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 
 import Palette from './Palette';
 import PianoSystemCanvas from './PianoSystemCanvas';
 import type { Tool } from './Palette';
 import type { MeasureData } from '../types/storage';
+import { SCORE_EDIT_NOTICE_EVENT, type ScoreEditNoticeDetail } from '../utils/scoreEditorNotices';
 
 vi.mock('../audio/NotePlayer', () => ({
   NotePlayer: vi.fn().mockImplementation(function() {
@@ -79,7 +80,7 @@ function mockSvgLayout(svg: SVGSVGElement) {
   Object.defineProperty(svg, 'height', { value: { baseVal: { value: height } }, configurable: true });
 }
 
-describe.skip('#548 臨時記号パレットの統合（案D）の受入基準', () => {
+describe('#548 臨時記号パレットの統合（案D）の受入基準', () => {
   let clientWidthSpy: PropertyDescriptor | undefined;
 
   beforeEach(() => {
@@ -138,8 +139,9 @@ describe.skip('#548 臨時記号パレットの統合（案D）の受入基準',
     const { container } = render(
       <Palette value={{ duration: '4', isRest: false, accidental: 'sharp' }} onChange={onChange} section="notes" />
     );
-    // 8分音符のボタン（既存の aria-label をそのまま使う）
-    fireEvent.click(buttonByLabelPrefix(container, '8分音符'));
+    // 8分音符のボタン（既存の aria-label は「音符 8分」。設計時のメモが `8分音符` と
+    // 書き間違えていたので、実際のラベルへ直した）
+    fireEvent.click(buttonByLabelPrefix(container, '音符 8分'));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ duration: '8', accidental: 'sharp' }));
   });
 
@@ -187,11 +189,54 @@ describe.skip('#548 臨時記号パレットの統合（案D）の受入基準',
     const { container } = render(
       <Palette value={{ duration: '4', isRest: false, accidental: 'sharp' }} onChange={onChange} section="notes" />
     );
+    // 運用者裁定（2026-09-02）でボタンは ♯▾ / ♭▾ / ♮ の3個になり、¼♯ は ♯ のプルダウンの中にある。
+    // まず ▾ を開いてから選ぶ（設計時は7個並びの想定だったので、その1点だけ手順が増えている）
+    fireEvent.click(buttonByLabelPrefix(container, 'シャープ系の種類を選ぶ'));
     fireEvent.click(buttonByLabelPrefix(container, LABEL_PREFIX.quarterSharp));
     expect(onChange).toHaveBeenCalledWith(
-      // 段1a で Tool へ microtone 属性が入る（設計メモ §3-1）。それまでは型に無いので比較だけ書く
       expect.objectContaining({ duration: '4', accidental: undefined, microtone: 'quarterSharp' })
     );
+  });
+
+  it('ケース14b: プルダウンで選んだ種別はボタンに残る（次からは1クリックで出せる）', () => {
+    // 選んだ変種の保持は親（ScorePage）の担当なので、ここでは同じ形の入れ物を用意する
+    // （round1 P2: パレット内の useState だとタブを離れた時点で消えるため引き上げた）。
+    function Harness() {
+      const [variantKeys, setVariantKeys] = React.useState<Record<string, string>>({});
+      return (
+        <Palette
+          value={{ duration: '4', isRest: false }}
+          onChange={() => {}}
+          section="notes"
+          accidentalVariantKeys={variantKeys}
+          onAccidentalVariantKeyChange={(familyId, key) =>
+            setVariantKeys((prev) => ({ ...prev, [familyId]: key }))}
+        />
+      );
+    }
+    const { container } = render(<Harness />);
+    fireEvent.click(buttonByLabelPrefix(container, 'シャープ系の種類を選ぶ'));
+    fireEvent.click(buttonByLabelPrefix(container, '臨時記号: ダブルシャープ'));
+    // メニューは閉じるが、ボタン本体の名前が 𝄪 に変わっている＝次は1クリックで使える
+    expect(container.querySelector('button[aria-label^="臨時記号: シャープ"]')).toBeNull();
+    expect(container.querySelector('button[aria-label^="臨時記号: ダブルシャープ"]')).toBeTruthy();
+  });
+
+  it('round1 P2: 選んだ種別の保持は親が持つ（パレットを作り直しても親の値で復元される）', () => {
+    // タブを切り替えるとパレットはアンマウントされる。親（ScorePage）が値を持っていれば
+    // 戻ってきたときも 𝄪 のままで、1クリックで使える状態が保たれる。
+    const props = {
+      value: { duration: '4', isRest: false } as Tool,
+      onChange: () => {},
+      section: 'notes' as const,
+      accidentalVariantKeys: { sharp: 'accidental:doubleSharp' },
+      onAccidentalVariantKeyChange: () => {},
+    };
+    const { container, unmount } = render(<Palette {...props} />);
+    expect(container.querySelector('button[aria-label^="臨時記号: ダブルシャープ"]')).toBeTruthy();
+    unmount();
+    const remounted = render(<Palette {...props} />);
+    expect(remounted.container.querySelector('button[aria-label^="臨時記号: ダブルシャープ"]')).toBeTruthy();
   });
 
   // ── 譜面側（段1b で緑になる） ─────────────────────────────────
@@ -349,5 +394,178 @@ describe.skip('#548 臨時記号パレットの統合（案D）の受入基準',
     const updated = onChange.mock.calls.at(-1)![0] as MeasureData[];
     expect(updated[0].events).toHaveLength(1);
     expect(updated[0].events[0].keys).toContain('f#/5');
+  });
+
+  it('round1 P2-2: 微分音付きの和音へ低い音を足しても、既存の微分音が別の音へ移らない', async () => {
+    // b/4 に ¼♯ が付いた和音（keys は1つ、microtones は keyIndex 0）。
+    // ここへ b/4 より低い d/4 を足すと keys の並べ替えで b/4 の位置が 0→1 へ動くので、
+    // microtones[].keyIndex を付け替えないと ¼♯ が足したばかりの d/4 へ移ってしまう。
+    const data: MeasureData[] = [{
+      events: [{
+        dur: '1', isRest: false, keys: ['b/4'],
+        microtones: [{ keyIndex: 0, type: 'quarterSharp' }],
+      }],
+    }];
+    // 足す側は記号なしの音価ツール（微分音を新たに乗せない＝既存の付け替えだけを見る）
+    const { svg, onChange } = renderCanvas(data, { duration: '4', isRest: false });
+
+    const hit = noteHit(svg, 0);
+    const noteLeft = parseFloat(hit.getAttribute('data-note-left')!);
+    const noteRight = parseFloat(hit.getAttribute('data-note-right')!);
+    // ライン4 = d/4（既存の b/4 = ライン2 より低い）
+    fireEvent.click(hit, { clientX: (noteLeft + noteRight) / 2, clientY: clickYForLine(hit, 4) });
+
+    await waitFor(() => { expect(onChange).toHaveBeenCalled(); });
+    const updated = onChange.mock.calls.at(-1)![0] as MeasureData[];
+    const event = updated[0].events[0];
+    expect(event.keys).toHaveLength(2);
+    // ¼♯ は「元から付いていた b/4」を指したままである
+    expect(event.microtones).toHaveLength(1);
+    expect(event.keys[event.microtones![0].keyIndex]).toBe('b/4');
+  });
+
+  it('round2 P2-1: 同じ綴りが2つある和音へ低い音を足しても、四分音が別の音へ移らない', async () => {
+    // 同じ "b/4" が2つ並んだ和音。片方が ¼♯・もう片方が ¼♭ なので、鳴る高さは別の音である
+    // （chordKeyUtils の重複判定も四分音まで見て「別の音」と扱う＝正規のデータ）。
+    // 綴り（indexOf）で位置を引き直すと、2つとも先頭を指してしまって記号が片方へ寄る。
+    const data: MeasureData[] = [{
+      events: [{
+        dur: '1', isRest: false, keys: ['b/4', 'b/4'],
+        microtones: [
+          { keyIndex: 0, type: 'quarterSharp' },
+          { keyIndex: 1, type: 'quarterFlat' },
+        ],
+      }],
+    }];
+    // 足す側は記号なしの音価ツール（既存の付け替えだけを見る）
+    const { svg, onChange } = renderCanvas(data, { duration: '4', isRest: false });
+
+    const hit = noteHit(svg, 0);
+    const noteLeft = parseFloat(hit.getAttribute('data-note-left')!);
+    const noteRight = parseFloat(hit.getAttribute('data-note-right')!);
+    // 既存の b/4（ライン2）より低い高さをクリックして、和音に1音足す
+    fireEvent.click(hit, { clientX: (noteLeft + noteRight) / 2, clientY: clickYForLine(hit, 4) });
+
+    await waitFor(() => { expect(onChange).toHaveBeenCalled(); });
+    const event = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events[0];
+    // keys は低い音が先。足した音が先頭に入るので、元の2音はそろって1つ後ろへずれる
+    expect(event.keys).toEqual(['e/4', 'b/4', 'b/4']);
+    // 2つの四分音が、足す前と同じ音（元の1音目＝¼♯・2音目＝¼♭）を指したままである。
+    // 綴りで引き直す実装だとどちらも同じ位置（先頭の b/4）を指してしまう
+    expect(event.microtones).toEqual([
+      { keyIndex: 1, type: 'quarterSharp' },
+      { keyIndex: 2, type: 'quarterFlat' },
+    ]);
+  });
+
+  it('round2 P2-2: 押した音が最新の譜面に無いときは、別の音へ付けずに理由を伝えて断る', async () => {
+    // 当たり判定は VexFlow が描いた図形から作るので、描画がデータより1手遅れている間は
+    // 「クリックした位置の音がもう無い」状態が起こり得る。ここでは再描画前の当たり判定を
+    // 掴んだまま押すことで、その状態を再現する（古い keyIndex へ落として別の音へ付けない）。
+    const data: MeasureData[] = [{ events: [{ dur: '1', isRest: false, keys: ['b/4'] }] }];
+    const onChange = vi.fn();
+    const props = (measures: MeasureData[]) => ({
+      measuresPerSystem: 1,
+      tool: { duration: '4', isRest: false, accidental: 'sharp' } as Tool,
+      scale: 1,
+      partsConfig: [{ clef: 'treble' as const, data: measures, onChange }],
+      showInstrumentLabels: false,
+      timeSignature: [4, 4] as [number, number],
+    });
+    const rendered = render(<PianoSystemCanvas {...props(data)} />);
+    const svg = rendered.container.querySelector('svg') as SVGSVGElement;
+    mockSvgLayout(svg);
+    const staleHit = noteHit(svg, 0);
+    const noteLeft = parseFloat(staleHit.getAttribute('data-note-left')!);
+    const noteRight = parseFloat(staleHit.getAttribute('data-note-right')!);
+    const staleClientY = clickYForLine(staleHit, 2); // ライン2 = 描画時点の b/4
+
+    // 譜面だけ差し替える。画面は描き直され、上で掴んだ当たり判定は古いデータのまま残る
+    const moved: MeasureData[] = [{ events: [{ dur: '1', isRest: false, keys: ['f/5'] }] }];
+    rendered.rerender(<PianoSystemCanvas {...props(moved)} />);
+    await waitFor(() => { expect(svg.querySelector('rect.vf-note-hit')).toBeTruthy(); });
+    onChange.mockClear();
+
+    const notices: string[] = [];
+    const onNotice = (e: Event) => {
+      notices.push((e as CustomEvent<ScoreEditNoticeDetail>).detail.message);
+    };
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    try {
+      fireEvent.click(staleHit, { clientX: (noteLeft + noteRight) / 2, clientY: staleClientY });
+      await waitFor(() => { expect(notices.length).toBeGreaterThan(0); });
+    } finally {
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    }
+    // 譜面は書き換えない（＝押していない f/5 に ♯ が付かない）
+    expect(onChange).not.toHaveBeenCalled();
+    // 無言で終わらない（#318）
+    expect(notices.join('\n')).toContain('見つかりませんでした');
+  });
+
+  it('round3 P2: 同じ tick で選択中の音が消える更新が先に積まれていても、選択も確認音も無しで断る', async () => {
+    // 引き直し（描画のミラー partsScoreRef）では音が在るのに、書き込み時点（React の state）
+    // では和音が縮んでいる、という競合窓の再現。window の keydown（Delete）と符頭の click は
+    // どちらも React 外の素のリスナーなので、1つの act の中で続けて dispatch すると
+    // 両方の state 更新が同じバッチに入る（Delete の結果はミラーへまだ写らない）。
+    const data: MeasureData[] = [{
+      events: [{ dur: '1', isRest: false, keys: ['c/4', 'e/4', 'g/4'] }],
+    }];
+    const onChange = vi.fn();
+    const onPreviewNoteEvent = vi.fn().mockResolvedValue(undefined);
+    const rendered = render(
+      <PianoSystemCanvas
+        measuresPerSystem={1}
+        tool={{ duration: '4', isRest: false, accidental: 'sharp' }}
+        scale={1}
+        partsConfig={[{ clef: 'treble', data, onChange }]}
+        showInstrumentLabels={false}
+        timeSignature={[4, 4]}
+        onPreviewNoteEvent={onPreviewNoteEvent}
+      />
+    );
+    const svg = rendered.container.querySelector('svg') as SVGSVGElement;
+    mockSvgLayout(svg);
+
+    // まず最上音（g/4 = ライン3）へ ♯ を付ける。これで keyIndex 2 が選択された状態になる
+    const firstHit = noteHit(svg, 0);
+    const noteLeft = parseFloat(firstHit.getAttribute('data-note-left')!);
+    const noteRight = parseFloat(firstHit.getAttribute('data-note-right')!);
+    const clickX = (noteLeft + noteRight) / 2;
+    const topY = clickYForLine(firstHit, 3);
+    fireEvent.click(firstHit, { clientX: clickX, clientY: topY });
+    await waitFor(() => { expect(onChange).toHaveBeenCalled(); });
+    expect((onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events[0].keys).toEqual(['c/4', 'e/4', 'g#/4']);
+    expect(onPreviewNoteEvent).toHaveBeenCalledTimes(1);
+    onChange.mockClear();
+    onPreviewNoteEvent.mockClear();
+
+    const notices: string[] = [];
+    const onNotice = (e: Event) => {
+      notices.push((e as CustomEvent<ScoreEditNoticeDetail>).detail.message);
+    };
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    try {
+      // 描き直し後の当たり判定を掴み直してから、「選択中の音を Delete」→「同じ音を click」を
+      // 同じ tick に積む（act を1つにまとめ、fireEvent の自動 flush を避ける）
+      await waitFor(() => { expect(svg.querySelector('rect.vf-note-hit')).toBeTruthy(); });
+      const hit = noteHit(svg, 0);
+      const mid = (parseFloat(hit.getAttribute('data-note-left')!) + parseFloat(hit.getAttribute('data-note-right')!)) / 2;
+      const y = clickYForLine(hit, 3);
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+        hit.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: mid, clientY: y }));
+      });
+      await waitFor(() => { expect(notices.length).toBeGreaterThan(0); });
+    } finally {
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    }
+    // Delete 側の書き換え（和音が2音になる）は通る。♯の付与はどこにも書かれない
+    const finalKeys = (onChange.mock.calls.at(-1)![0] as MeasureData[])[0].events[0].keys;
+    expect(finalKeys).toEqual(['c/4', 'e/4']);
+    // 消えた音に対する確認音は鳴らない（「音は鳴ったが譜面は変わらない」を作らない）
+    expect(onPreviewNoteEvent).not.toHaveBeenCalled();
+    // 「見つかりませんでした」の通知が出る（Delete の通知とは別に）
+    expect(notices.join('\n')).toContain('見つかりませんでした');
   });
 });
