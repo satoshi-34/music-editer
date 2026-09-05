@@ -612,7 +612,7 @@ SVG の `getComputedTextLength()` は描画後にしか測れないため、幅�
 
 ## チェロの正式名を Violoncello にする（Issue #443）
 
-弟フィードバック（2026-08-28）「チェロの楽器名は Violoncello がベター」への対応。
+ユーザーフィードバック（2026-08-28）「チェロの楽器名は Violoncello がベター」への対応。
 **略称 `Vc.` は据え置き**で、フル名だけを `Cello` → `Violoncello` に変えた。
 
 ### 名前が2系統ある
@@ -674,7 +674,7 @@ SVG の `getComputedTextLength()` は描画後にしか測れないため、幅�
 
 ### 問題
 
-弟フィードバック「楽器名や楽器の略称も好みがあるので、変更できると良い」。
+ユーザーフィードバック「楽器名や楽器の略称も好みがあるので、変更できると良い」。
 編成譜（`ensemble`）は以前から「パート編集」ウィンドウで `instrumentation.parts[].name` /
 `abbreviation` を書き換えられたが、弦楽四重奏（`quartet`）はパート名が
 `QuartetStaff.QUARTET_PART_CONFIGS` に固定で埋め込まれており、

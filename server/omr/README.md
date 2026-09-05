@@ -65,7 +65,7 @@ openssl rand -hex 32
    Cloudflare アカウントで named tunnel を作ります）。
 3. **Vercel のプレビュー環境にだけ**環境変数を設定（Settings → Environment Variables で
    対象を Preview のみにする）: `VITE_OMR_API_URL`＝トンネルのURL、`VITE_OMR_API_TOKEN`＝同じトークン。
-4. プレビューデプロイのURLを試用者（弟）に渡す。**本番（Production）には設定しない**こと。
+4. プレビューデプロイのURLを試用者（発案者ユーザー）に渡す。**本番（Production）には設定しない**こと。
    本番バンドルには PDF ボタンもトークンも載りません。
 
 注意: Air がスリープ中は変換できません。また x86_64 コンテナのため Apple Silicon では
