@@ -18,8 +18,8 @@ describe('松葉ボタンの説明文言', () => {
     renderSymbolsPalette();
 
     const button = screen.getByRole('button', { name: /^デクレッシェンドの松葉＞/ });
-    // ツールチップ（title 属性）も同じ文言に揃っていること
-    expect(button).toHaveAttribute('title', expect.stringContaining('デクレッシェンドの松葉＞'));
+    // ツールチップ（即時ツールチップの data-tip 属性）も同じ文言に揃っていること
+    expect(button).toHaveAttribute('data-tip', expect.stringContaining('デクレッシェンドの松葉＞'));
   });
 
   it('松葉＞の説明に「ディミヌエンド」は使わない', () => {
