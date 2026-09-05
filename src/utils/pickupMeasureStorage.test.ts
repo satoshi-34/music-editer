@@ -81,4 +81,39 @@ describe('弱起（アウフタクト）の保存（Issue #473）', () => {
     expect(restored.success).toBe(true);
     expect(restored.data?.parts[0].measures[0].pickupBeats).toBeUndefined();
   });
+
+  describe('境界での正規化（round3 P1-2 / P2-2: 弾かずに直す）', () => {
+    it('拍子ぶん以上の pickupBeats は保存時に落とされ、保存は成功する（自動保存が止まらない）', () => {
+      const data = createSavedScoreData(
+        { title: 't', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [{ partId: 'melody', clef: 'treble', measures: [
+          { events: [], pickupBeats: 4 } as never,   // 4/4 で 4 拍＝不完全小節ではない
+          { events: [] },
+        ] }],
+        1, 1, 'single'
+      );
+      const saved = saveScoreData(data);
+      expect(saved.success).toBe(true);
+      const loaded = loadScoreData();
+      expect(loaded.success).toBe(true);
+      expect((loaded.data!.parts[0].measures[0] as { pickupBeats?: number }).pickupBeats).toBeUndefined();
+    });
+
+    it('パート間で食い違う pickupBeats はパート0の値へそろえて保存する（不変条件2）', () => {
+      const data = createSavedScoreData(
+        { title: 't', subtitle: '', lyricist: '', composer: '', arranger: '' },
+        [
+          { partId: 'right-hand', clef: 'treble', measures: [{ events: [], pickupBeats: 1 } as never, { events: [] }] },
+          { partId: 'left-hand', clef: 'bass', measures: [{ events: [] }, { events: [], pickupBeats: 2 } as never] },
+        ],
+        1, 1, 'piano'
+      );
+      expect(saveScoreData(data).success).toBe(true);
+      const loaded = loadScoreData();
+      expect(loaded.success).toBe(true);
+      const m = (i: number, j: number) => (loaded.data!.parts[i].measures[j] as { pickupBeats?: number }).pickupBeats;
+      expect([m(0, 0), m(1, 0)]).toEqual([1, 1]);
+      expect([m(0, 1), m(1, 1)]).toEqual([undefined, undefined]);
+    });
+  });
 });

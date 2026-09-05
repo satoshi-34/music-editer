@@ -162,3 +162,41 @@ export function buildPickupBeatOptions(timeSignature: TimeSignature): PickupBeat
   }
   return options;
 }
+
+/**
+ * 保存データの弱起を境界で正規化する（Issue #473 round3 P1-2 / P2-2）。
+ * - 不変条件1: 拍子ぶん以上・非正・非有限の `pickupBeats` は**落とす**（弾かない）。
+ *   途中拍子変更ツール・拍子変更のある小節の削除・小節丸ごと貼り付けなど、編集で不整合が
+ *   生まれる経路をすべて塞ぐのは無理なので、保存と読み込みの境界で必ず直す。
+ *   弾く方式だと「その瞬間から自動保存が止まる」事故になる
+ * - 不変条件2: 正本はパート0。他のパートの `pickupBeats` はパート0の値へそろえる
+ *   （食い違ったデータは MusicXML 書き出しの小節番号がパート間で不一致になる）
+ * 変更が無ければ同じ配列（参照）を返す
+ */
+export function sanitizePickupBeatsInParts<T extends { measures: MeasureData[] }>(
+  parts: readonly T[],
+  globalTimeSignature: TimeSignature,
+): T[] {
+  if (parts.length === 0) return [...parts];
+  const primary = parts[0].measures;
+  let anyChanged = false;
+  const next = parts.map((part, partIndex) => {
+    let changed = false;
+    const measures = part.measures.map((measure, measureIndex) => {
+      // 正本（パート0）の値を、その小節で有効な拍子で正規化した結果が全パートの値
+      const effective = resolveTimeSignatureAtMeasure(primary, measureIndex, globalTimeSignature);
+      const wanted = normalizePickupBeats(primary[measureIndex]?.pickupBeats, effective);
+      const current = measure.pickupBeats;
+      if (wanted === undefined && current === undefined) return measure;
+      if (wanted !== undefined && current === wanted) return measure;
+      changed = true;
+      const { pickupBeats: _dropped, ...rest } = measure;
+      return wanted === undefined ? rest : { ...rest, pickupBeats: wanted };
+    });
+    if (!changed) return part;
+    anyChanged = true;
+    void partIndex;
+    return { ...part, measures };
+  });
+  return anyChanged ? next : [...parts];
+}

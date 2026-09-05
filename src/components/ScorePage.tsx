@@ -204,7 +204,7 @@ import {
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
 import { isCompoundTimeSignature } from '../utils/swingUtils';
-import { getDisplayedMeasureNumber, isPickupMeasure, normalizePickupBeats, resolveMeasureCapacityBeats, resolveTimeSignatureAtMeasure } from '../utils/measureCapacityUtils';
+import { getDisplayedMeasureNumber, isPickupMeasure, resolveMeasureCapacityBeats } from '../utils/measureCapacityUtils';
 import { buildPlaybackPositionTimeline, calculateExpandedPlaybackDurationMs, findPlaybackStartExpandedIndex, playbackStartMeasureNumberRange, resolvePlaybackStartMeasureNumber, type PlaybackHighlightPartSource, type PlaybackHighlightTarget, type PlaybackTimelineItem } from '../utils/playbackPositionUtils';
 import type { TimeSignature, TimeSignatureStyle } from '../types/storage';
 import { pushHistorySnapshot, undoHistory, redoHistory } from '../utils/scoreHistoryStack';
@@ -2409,7 +2409,16 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const [historyVersion, setHistoryVersion] = useState(0);
 
   // 変更前のスナップショットを履歴に積む（undo 可能にする）
+  // 同じ操作から続けて呼ばれた pushHistory を 1 件に併合する印（#473 round3 P1-1）。
+  // 全パートへ一度に書く操作（弱起・途中拍子変更など）は、Canvas が右手・左手の onChange を
+  // 同じ effect の中で別々に呼ぶため、履歴が 2 件積まれて Undo 1 回では片手だけ戻る
+  // 中間状態（パート間の食い違い）で止まっていた。同一マイクロタスク内の 2 回目以降は
+  // 積まない。人の操作は別々のイベント（別のタスク）で来るので併合されない
+  const historyCoalesceRef = useRef(false);
   const pushHistory = useCallback(() => {
+    if (historyCoalesceRef.current) return;
+    historyCoalesceRef.current = true;
+    queueMicrotask(() => { historyCoalesceRef.current = false; });
     const { history, future } = pushHistorySnapshot(
       historyStack.current,
       futureStack.current,
@@ -3879,31 +3888,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     });
   }, [measureCapacityBeatsAt]);
 
-  /**
-   * 拍子を変えて弱起が成り立たなくなったら（弱起の拍数がその小節の拍子ぶん以上になったら）、
-   * 小節データから弱起の指定を外す（Issue #473）。
-   *
-   * 描画・再生は正規化を通すので画面上は既に弱起なしとして扱われるが、保存データには
-   * 「拍子以上の pickupBeats」という不正な値が残ってしまい、読み込みの検証で弾かれる
-   * （storage.ts の不変条件1）。残さないよう、拍子を変えた時点で落とす。
-   */
-  useEffect(() => {
-    getEditablePartEntries().forEach((entry) => {
-      let changed = false;
-      const nextMeasures = entry.measures.map((measure, index) => {
-        if (measure.pickupBeats === undefined) return measure;
-        const effective = resolveTimeSignatureAtMeasure(entry.measures, index, scoreTimeSignature);
-        if (normalizePickupBeats(measure.pickupBeats, effective) !== undefined) return measure;
-        changed = true;
-        const { pickupBeats: _removed, ...rest } = measure;
-        return rest;
-      });
-      if (changed) entry.apply(nextMeasures);
-    });
-    // 拍子を変えたときだけ点検すればよい（小節データの変更のたびに走らせると、
-    // 入力のたびに全小節を舐めることになる）
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scoreTimeSignature]);
+  // 弱起の不変条件（拍子未満・全パート同値）は保存・読み込みの境界（storage.ts の
+  // sanitizePickupBeatsInParts）で正す。以前は「拍子を変えたら外す」effect をここに置いていたが、
+  // 途中拍子変更・小節の削除・貼り付けなど編集で不整合が生まれる経路を全部は覆えず、
+  // 覆えない経路で保存が止まる事故になるため境界へ移した（#473 round3 P1-2）
 
   // Cmd+Z / Cmd+Shift+Z: Undo / Redo
   useEffect(() => {

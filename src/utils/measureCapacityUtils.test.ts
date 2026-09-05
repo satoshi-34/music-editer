@@ -14,6 +14,7 @@ import {
   normalizePickupBeats,
   resolveMeasureCapacityBeats,
   resolveTimeSignatureAtMeasure,
+  sanitizePickupBeatsInParts,
 } from './measureCapacityUtils';
 import type { MeasureData } from '../types/storage';
 
@@ -120,5 +121,28 @@ describe('getPickupBeats / getDisplayedMeasureNumber（表示用の小節番号�
   it('小節データがまだ無い位置でも通し番号の続きとして数える（描画途中の防御）', () => {
     expect(getDisplayedMeasureNumber([], 2, [4, 4])).toBe(3);
     expect(getDisplayedMeasureNumber([{ events: [], pickupBeats: 1 }], 2, [4, 4])).toBe(2);
+  });
+});
+
+describe('sanitizePickupBeatsInParts（保存・読み込みの境界での正規化）', () => {
+  it('不正な値は落とし、パート0の値を全パートへそろえる。変更が無ければ同じ小節オブジェクトを保つ', () => {
+    const parts = [
+      { measures: [{ events: [], pickupBeats: 1 }, { events: [], pickupBeats: 4 }, { events: [] }] },
+      { measures: [{ events: [] }, { events: [], pickupBeats: 4 }, { events: [], pickupBeats: 2 }] },
+    ];
+    const out = sanitizePickupBeatsInParts(parts, [4, 4]);
+    expect(out[0].measures.map((m) => m.pickupBeats)).toEqual([1, undefined, undefined]);
+    expect(out[1].measures.map((m) => m.pickupBeats)).toEqual([1, undefined, undefined]);
+    // 変更の無い小節は同じ参照
+    expect(out[0].measures[2]).toBe(parts[0].measures[2]);
+    // 何も直すものが無ければパートも同じ参照
+    const clean = [{ measures: [{ events: [], pickupBeats: 1 }, { events: [] }] }];
+    expect(sanitizePickupBeatsInParts(clean, [4, 4])[0]).toBe(clean[0]);
+  });
+
+  it('途中拍子変更のある小節は、その小節の拍子で判定する', () => {
+    const parts = [{ measures: [{ events: [] }, { events: [], timeSignature: [2, 4] as [number, number], pickupBeats: 2 }] }];
+    // 2/4 の小節で 2 拍は不完全小節ではないので落ちる
+    expect(sanitizePickupBeatsInParts(parts, [4, 4])[0].measures[1].pickupBeats).toBeUndefined();
   });
 });

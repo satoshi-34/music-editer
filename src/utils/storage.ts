@@ -46,7 +46,7 @@ import {
   normalizeTimeSignature,
   normalizeTimeSignatureStyle,
 } from './timeSignatureUtils';
-import { resolveTimeSignatureAtMeasure } from './measureCapacityUtils';
+import { resolveTimeSignatureAtMeasure, sanitizePickupBeatsInParts } from './measureCapacityUtils';
 import type { InstrumentType } from '../audio/SoundSource';
 import { normalizeSavedGlobalBpm } from '../audio/tempoRange';
 import type { ClefType } from '../components/clefUtils';
@@ -797,6 +797,10 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
 
   // 保存済みデータはユーザーが手編集した JSON や古いバックアップから来ることがある。
   // ここで必ず検証してから返すことで、画面側は「読み込めたデータは安全」と考えられる。
+  // 弱起の不変条件は検証の前に正す（旧ビルドが残した不正値で開けなくならないように・#473）
+  if (parsedData && Array.isArray(parsedData.parts) && Array.isArray(parsedData.timeSignature)) {
+    parsedData.parts = sanitizePickupBeatsInParts(parsedData.parts, normalizeTimeSignature(parsedData.timeSignature));
+  }
   if (!validateSavedScoreData(parsedData)) {
     return {
       success: false,
@@ -979,6 +983,13 @@ function saveScoreDataToSlot(data: SavedScoreData, keys: StorageSlotKeys): Stora
           }))
         : (data as any).parts,
     };
+    // 弱起の不変条件（拍子未満・全パート同値）を保存の境界で正す（#473 round3 P1-2）。
+    // 弾くと「その瞬間から自動保存が止まる」ので、落として保存する
+    if (Array.isArray(normalizedData.parts)) {
+      normalizedData.parts = sanitizePickupBeatsInParts(
+        normalizedData.parts, normalizeTimeSignature(normalizedData.timeSignature),
+      );
+    }
 
     // 保存前の検証（Issue #282）。連符グループが分断されたデータを書き出そうとしていたら、
     // それを作った編集操作にバグがあるということなので、開発中に気づけるよう警告を出す。

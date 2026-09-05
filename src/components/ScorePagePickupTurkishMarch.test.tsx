@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react';
 import ScorePage from './ScorePage';
-import { createWork, saveWorkAutosaveData, setLastOpenedWorkId } from '../utils/storage';
+import { createWork, listWorks, loadWorkAutosaveData, saveWorkAutosaveData, setLastOpenedWorkId } from '../utils/storage';
 import type { SavedScoreData } from '../types/storage';
 import { turkishMarchPickupFixture as fixture } from '../test-fixtures/turkishMarchPickup';
 
@@ -119,5 +119,32 @@ describe('弱起の受入: トルコ行進曲（8小節・検聴版）を弱起�
       expect(part.measures[1].measureBeats).toBe(2);
     });
     expect((screen.getByLabelText('再生を開始する小節番号') as HTMLInputElement).min).toBe('0');
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('ピアノ譜（2パート）でも弱起の解除は Undo 1 回で両手そろって戻る（受入・round3 P1-1）', async () => {
+    await mountAndCount(fixture);
+    // 演奏記号タブの弱起ツールで先頭小節を開き「（解除）」
+    fireEvent.click(screen.getByRole('tab', { name: '演奏記号' }));
+    fireEvent.click(screen.getByRole('button', { name: /弱起/ }));
+    await waitFor(() => { expect(document.querySelector('rect.vf-hit')).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.click(document.querySelector('rect.vf-hit') as SVGRectElement, { clientX: 10, clientY: 10 });
+    const select = () => Array.from(document.querySelectorAll('select')).find((el) =>
+      Array.from(el.options).some((option) => option.value === 'none' && option.text.includes('解除')));
+    await waitFor(() => { expect(select()).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.change(select()!, { target: { value: 'none' } });
+    const pickupOf = (partIndex: number) => {
+      const works = listWorks();
+      const data = loadWorkAutosaveData(works[0].id).data;
+      return (data?.parts[partIndex].measures[0] as { pickupBeats?: number } | undefined)?.pickupBeats;
+    };
+    await waitFor(() => {
+      expect([pickupOf(0), pickupOf(1)]).toEqual([undefined, undefined]);
+    }, { timeout: 15000 });
+    // Undo 1 回で右手・左手とも弱起に戻る（片手だけ戻る中間状態で止まらない）
+    fireEvent.click(screen.getByTitle(/元に戻す/));
+    await waitFor(() => {
+      expect([pickupOf(0), pickupOf(1)]).toEqual([1, 1]);
+    }, { timeout: 15000 });
+    expect((screen.getByTitle(/元に戻す/) as HTMLButtonElement).disabled).toBe(true);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
