@@ -204,6 +204,7 @@ import {
   measurePlannerSafetyPadding,
   SCORE_LAYOUT_RENDER_SCALE,
   staveSpacingForPartCount,
+  SYSTEM_BREATHING_ROOM_PX,
   SYSTEM_FIRST_CLEF_PADDING,
   SYSTEM_PAGE_SIDE_PADDING,
   SYSTEM_TARGET_FILL,
@@ -220,7 +221,7 @@ import {
 // Issue #38）。既存のテスト（PianoSystemCanvasPartSpacing.test.tsx）はこのファイルからの
 // named import を使っているため、後方互換として re-export する。
 export { computeLayout, staveSpacingForPartCount };
-import { createVexFlowTuplets, syncTupletBracketsWithBeams, syncTupletPlacementWithNotes, vexFlowDotCount, type RenderedTuplet } from '../utils/vexFlowTimingUtils';
+import { createVexFlowTuplets, syncTupletBracketsWithBeams, syncTupletPlacementWithNotes, vexFlowDotCount, type RenderedTuplet, type TupletObstacleRect } from '../utils/vexFlowTimingUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 import {
@@ -1688,6 +1689,11 @@ function drawRenderedVoiceEntries(
   vexCtx: ReturnType<Renderer['getContext']>,
   stave: Stave,
   renderedVoiceEntries: RenderedVoiceEntry[],
+  // 段またぎ連符の数字が避ける障害物（他パート・他声部の音符の描画範囲）を返す関数。
+  // 段またぎ連符があったときだけ呼ばれる（#574）
+  getTupletObstacles?: () => readonly TupletObstacleRect[],
+  // 段（SVG の箱）の縦の範囲。段またぎ連符の数字をこの外へ出さない（#574 round3）
+  tupletVerticalBounds?: { topY: number; bottomY: number },
 ): void {
     renderedVoiceEntries.forEach((entry) => {
       try{
@@ -1745,7 +1751,11 @@ function drawRenderedVoiceEntries(
       // VexFlow は符幹の向きだけで上下を決めるため、加線の上（下）に離れた音符では
       // 数字だけが五線をまたいで反対側へ取り残され、多段譜では下の段のビームと重なる。
       // 音符と五線の位置関係が要るので、音符が五線へ紐づいたあと（＝描画段）に呼ぶ。
-      syncTupletPlacementWithNotes(entry.tuplets);
+      // 段またぎ連符（#574）は「梁の側」の判定に持ち主のパートの五線が要るので一緒に渡し、
+      // 左手の和音などを避けるための障害物も（またぎがあったときだけ）引けるようにする。
+      syncTupletPlacementWithNotes(entry.tuplets, {
+        ownerStave: stave, getObstacles: getTupletObstacles, verticalBounds: tupletVerticalBounds,
+      });
       entry.tuplets.forEach(({ tuplet, hideNumber }, tupletIndex) => {
         // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
         // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
@@ -5922,6 +5932,55 @@ export default function PianoSystemCanvas({
       // Pass 2: 合同フォーマット。実体は formatSystemColumnVoices（module スコープ・#244 段4c-1）
       formatSystemColumnVoices(allVoicesForFormatting, restAlignVoices, staveSets[0][i]);
 
+      // 段またぎ連符の数字が避ける障害物（#574）: この段のすべてのパート・声部の音符の
+      // 描画範囲。Pass 2 の合同フォーマットが済んだ後なので、まだ描いていないパート
+      // （左手）の音符でも位置は確定している ＝ 右手を描く時点で左手の和音を避けられる。
+      // 段またぎ連符がある小節でしか要らないので、最初に必要になった時点で1回だけ作る。
+      let cachedSystemNoteRects: TupletObstacleRect[] | null = null;
+      const getSystemNoteRects = (): readonly TupletObstacleRect[] => {
+        if (cachedSystemNoteRects) return cachedSystemNoteRects;
+        // 先に「この段の全パートのビーム」を post-format しておく（#574 round2 P1）。
+        // 連桁の音符は、ビームの傾きに合わせて符幹が伸ばされる（VexFlow の
+        // Beam.postFormat → applyStemExtensions）。これは既定では Beam.draw() の中で
+        // 初めて走るため、右手を描く時点ではまだ描いていない左手の符幹が「伸ばされる前の
+        // 短い長さ」のままになり、あとで伸びて数字とぶつかることがあった。
+        // postFormat は2回目以降は何もしない（postFormatted フラグ）ので、
+        // このあと Beam.draw() が呼ばれても結果は変わらない。
+        partVoiceCache.forEach((cache) => {
+          cache?.renderedVoiceEntries.forEach((entry) => {
+            // 段またぎ声部は、合同整形で消えたビームの参照と符幹の向きを先に戻す（#319）。
+            // 向きが戻る前に post-format すると、間違った向きのまま符幹長が確定してしまう
+            // （描画時の復元は同じ内容なので、ここで先に呼んでも二重には効かない）
+            if (entry.hasCrossStaffNote) {
+              restoreCrossStaffBeamAssignments(entry.beams);
+            }
+            entry.beams.forEach((beam) => {
+              try {
+                (beam as unknown as { postFormat?: () => void }).postFormat?.();
+              } catch {
+                // 整形が済んでいないビームでは失敗し得る。そのビームを諦めるだけでよい
+              }
+            });
+          });
+        });
+        const rects: TupletObstacleRect[] = [];
+        partVoiceCache.forEach((cache) => {
+          cache?.renderedVoiceEntries.forEach((entry) => {
+            entry.vfNotes.forEach((note) => {
+              try {
+                const bb = (note as unknown as { getBoundingBox?: () => { getX: () => number; getY: () => number; getW: () => number; getH: () => number } }).getBoundingBox?.();
+                if (!bb) return;
+                rects.push({ x: bb.getX(), y: bb.getY(), w: bb.getW(), h: bb.getH() });
+              } catch {
+                // 整形が済んでいない音符では範囲を取れないことがある。その音符を諦めるだけでよい
+              }
+            });
+          });
+        });
+        cachedSystemNoteRects = rects;
+        return rects;
+      };
+
       // Pass 3: フォーマット済みの Voice を使って実際の描画・イベントハンドラ設定を行う。
       // 空白クリック挿入のパートごとの実体。レイヤー明示選択中は「クリックした帯」では
       // なく「選択レイヤーのパート」の doInsert を呼ぶため（裁定②案A）、後段の ir ハンドラ
@@ -6002,7 +6061,16 @@ export default function PianoSystemCanvas({
         }
 
         // 声部・ビーム・連符の描画（実体は drawRenderedVoiceEntries・#244 段4c-2）
-        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries);
+        // 段またぎ連符の数字の縦の許容範囲（#574 round3）。段の箱（sysH・論理座標）は Ped の
+        // 下余白の延長（#604）を除けば最下段の第5線で終わっていて下余白を持たないので、五線下の記号（Ped・pp・連符数字）は段の箱の
+        // 外に描かれる。下側の**公称の予算**として SYSTEM_BREATHING_ROOM_PX（70・本来は段数の
+        // 推奨値の見積もりに使う物理 px の目安）を論理座標のまま足す＝物理では 70×描画倍率
+        // （100% で約 31px）。実際の段間は段のスロット高と段の間隔（ユーザー設定）で決まるので
+        // これは上限の目安にすぎず、実測に基づく予約は #668 で扱う。
+        // 予算を越えるなら反対側（上）へ逃がす。上は段の箱の上端（第1線の上 6 間ぶん）まで
+        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries, getSystemNoteRects, {
+          topY: 0, bottomY: sysH + SYSTEM_BREATHING_ROOM_PX,
+        });
 
         // 自動衝突回避（#340 段1）の障害物: 描画した全声部の音符の BoundingBox
         // （符頭＋符幹を含む）を段ごとに集める。編集レイヤーやアクティブ声部の
