@@ -99,6 +99,14 @@ type ArticulationTool = Extract<Tool, { mode: 'articulation' }>;
 const ROW1: Tool[] = ['1','2','4','8','16','32','64'].map(d => ({ duration: d as DurKey }));
 const ROW2: Tool[] = ROW1.map(t => ({ ...t, isRest: true }));
 
+// 音価グリッド（Issue #577）のレイアウト。
+// 「列＝1つの音価」で、列の中に音符（上）と同じ音価の休符（下）を縦に積む。
+// 音符7個の行・休符7個の行、と行単位で並べる作り方にしないのは、狭い画面で
+// 折り返したときに上下の折り返し位置がずれて「四分音符の下が四分休符」という
+// 対応が崩れてしまうため（列ごと折り返せば対応は常に保たれる）。
+const DURATION_GRID_STYLE: React.CSSProperties = { display: 'flex', gap: 3, flexWrap: 'wrap' };
+const DURATION_COLUMN_STYLE: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 3 };
+
 // ─────────────────────────────────────────────────────────────
 // ★ ここが"サイズ調整ダイヤル"です！
 //    ・BASE_FILL … 全体の基準の大きさ（数値が小さいほど"見た目が小さく"なる）
@@ -420,8 +428,9 @@ export default function Palette({
   if (section === 'notes') {
     return (
       <div className="palette-panel" style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {/* 音符行：選択 + 7音価 + タイ + 臨時記号3 */}
-        <div style={ROW_STYLE}>
+        {/* 音符行：選択 + 音価グリッド（音符/休符の2段）+ タイ + 臨時記号3 + リピート/括弧。
+            グリッドだけが2段ぶんの高さを持つので、他のボタンは縦中央にそろえる。 */}
+        <div style={{ ...ROW_STYLE, alignItems: 'center' }}>
           {/* 選択ツール */}
           <button
             type="button"
@@ -436,23 +445,44 @@ export default function Palette({
               <path d="M8 6 L12 9 L9.5 9.5 L11 13 L9.5 13.5 L8 10 L6 12 Z" fill="#333"/>
             </svg>
           </button>
-          {ROW1.map((t, i) => {
-            const active = !tieActive && 'duration' in value && 'duration' in t &&
-              value.duration === t.duration && !value.isRest;
-            return (
-              <button
-                key={i}
-                type="button"
-                onClick={() => onChange(carryAccidentalIntoDurationTool(t))}
-                data-tip={`音符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-
-                aria-label={`音符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-                style={btnStyle(active)}
-              >
-                <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={false} />
-              </button>
-            );
-          })}
+          {/* 音価グリッド（Issue #577）: 上段＝音符、下段＝同じ音価の休符。
+              「四分音符ボタンの下は四分休符」と縦に対応させることで、探す手間を減らし、
+              横1列に14個並んでいた頃より横幅も約半分になる。
+              ツールの意味（音符入力／休符入力のトグル関係）は従来のまま変えていない。 */}
+          <div style={DURATION_GRID_STYLE}>
+            {ROW1.map((noteTool, i) => {
+              const restTool = ROW2[i];
+              const duration = (noteTool as { duration: DurKey }).duration;
+              // タイなど別モード中は音価ボタンを選択状態にしない（従来の判定をそのまま使う）
+              const noteActive = !tieActive && 'duration' in value &&
+                value.duration === duration && !value.isRest;
+              const restActive = !tieActive && 'duration' in value &&
+                value.duration === duration && !!value.isRest;
+              return (
+                <div key={duration} style={DURATION_COLUMN_STYLE}>
+                  <button
+                    type="button"
+                    onClick={() => onChange(carryAccidentalIntoDurationTool(noteTool))}
+                    data-tip={`音符 ${durationLabel(duration)}`}
+                    aria-label={`音符 ${durationLabel(duration)}`}
+                    style={btnStyle(noteActive)}
+                  >
+                    <NoteIcon duration={duration} isRest={false} />
+                  </button>
+                  {/* 休符は音符と違い臨時記号を持てないので、引き継ぎ（carry）を通さず素のツールを渡す */}
+                  <button
+                    type="button"
+                    onClick={() => onChange(restTool)}
+                    data-tip={`休符 ${durationLabel(duration)}`}
+                    aria-label={`休符 ${durationLabel(duration)}`}
+                    style={btnStyle(restActive)}
+                  >
+                    <NoteIcon duration={duration} isRest={true} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
           {/* 付点トグル：ONのまま音符/休符を置くと dots:1 が付く（キーボードの「.」でも切替可） */}
           <button
             type="button"
@@ -596,27 +626,8 @@ export default function Palette({
               />
             );
           })}
-          {/* 休符・リピート・括弧も同じ折り返し行に続ける。
-              以前は音符行と休符行を別の行に分けていたが、広い画面では右側が
-              大きく空いてしまうため、1つの折り返し行にして横幅を使い切り、
-              狭い画面では自動で折り返すようにする。 */}
-          {ROW2.map((t, i) => {
-            const active = !tieActive && 'duration' in value && 'duration' in t &&
-              value.duration === t.duration && !!value.isRest;
-            return (
-              <button
-                key={i}
-                type="button"
-                onClick={() => onChange(t)}
-                data-tip={`休符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-
-                aria-label={`休符 ${durationLabel((t as {duration: DurKey}).duration)}`}
-                style={btnStyle(active)}
-              >
-                <NoteIcon duration={(t as {duration: DurKey}).duration} isRest={true} />
-              </button>
-            );
-          })}
+          {/* リピート・括弧は音価グリッドと同じ折り返し行に続ける（横幅を使い切るため）。
+              休符は Issue #577 で音価グリッドの下段へ移したので、ここには並べない。 */}
           {/* リピート記号 */}
           {REPEAT_TOOLS.map((tool) => {
             const active = selectedRepeat === tool.repeat;
