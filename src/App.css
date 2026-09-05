@@ -1987,6 +1987,85 @@ button.ghost.active:hover:not(:disabled) {
 .system-gap-drag-handle--grabbing::before {
   opacity: 1;
 }
+/* 整えるモード（Issue #571）
+   ------------------------------------------------------------------
+   レイアウトタブを開いている間だけ .score-area へ .layout-adjust-mode が付く。
+   このモードでは「段を選ばないと掴みしろが一切見えない」のをやめ、調整の入口を
+   出しっぱなしにする（段の間隔ドラッグ #539 と段あたり小節数の ◀▶ を、運用者自身が
+   2回続けて発見できなかったため。運用者QA 2026-09-02 / 2026-09-03）。
+   当たり判定は3層に分けてある: 帯＝間隔 / 面＝段の選択 / 角＝音符の大きさ（全体）。
+   他のタブではこのクラスが付かないので、譜面を書いている間の見た目は一切変わらない。 */
+
+/* 五線の面（段の選択）。整えるモード中だけ差し込まれる透明なボタンで、
+   五線そのものをクリックすると段が選ばれる。左右端の帯（34px）より当てやすい。
+   z-index は帯（4）・角（5）・パネル（30）より下に置き、掴みしろを覆わないようにする。 */
+.system-select-surface {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+/* 「ここを押すと段を選べる」ことをカーソルを乗せたときだけ薄く知らせる
+   （常時色を敷くと譜面が読みづらくなる） */
+.system-select-surface:hover,
+.system-select-surface:focus-visible {
+  background: rgba(147, 197, 253, 0.10);
+  border-radius: 4px;
+}
+/* 整えるモード中は、段の左右端の掴みしろ（普段は完全に透明）を薄く見せる。
+   「段は選べるものだ」と気づくための表示なので、譜面の邪魔にならない薄さにとどめる */
+.layout-adjust-mode .system-select-edge {
+  background: rgba(147, 197, 253, 0.12);
+  border-radius: 4px;
+}
+/* 段の上端の境界帯も同じ理由で薄く出す。掴んだとき・カーソルを乗せたときは
+   従来どおり濃く出る（下の :hover / --grabbing の指定が後から効く） */
+.layout-adjust-mode .system-gap-drag-handle::before {
+  opacity: 0.45;
+}
+
+/* 選択中の段の右下角のリサイズハンドル（◢・Issue #571 の運用者裁定）。
+   斜めにドラッグすると譜面全体の「音符の大きさ」が変わる。
+   角に置いているが効くのは全体なので、ドラッグ中の吹き出しで「（全体）」と明示する
+   （見た目の置き場所から「この段だけ」と誤解されるのを防ぐ・NotationSizeDragHandle.tsx）。
+   touch-action: none は #536 の pointer 規約（タッチのドラッグをスクロールに取られない）。 */
+.notation-size-drag-handle {
+  position: absolute;
+  right: -14px;
+  bottom: -14px;
+  width: 18px;
+  height: 18px;
+  z-index: 5;
+  cursor: nwse-resize;
+  touch-action: none;
+  /* ◢ の三角を CSS だけで描く（画像・フォントに依存しないため） */
+  background: linear-gradient(135deg, transparent 55%, rgba(147, 197, 253, 0.9) 55%);
+  border-radius: 0 0 4px 0;
+}
+.notation-size-drag-handle:hover,
+.notation-size-drag-handle--grabbing {
+  background: linear-gradient(135deg, transparent 55%, rgba(59, 130, 246, 0.95) 55%);
+}
+/* ドラッグ中に出す現在値。ScorePage が画面へ直に1つだけ出す（Issue #571 round1 P1）。
+   ◢ の中に置くと、大きさを変えた拍子に段割りが変わって◢ごと消えたときに
+   吹き出しまで一緒に消えてしまうため、譜面ではなく画面（position: fixed）を基準にする。
+   カーソルの下敷きにならないよう当たり判定は持たせない */
+.notation-size-drag-value {
+  position: fixed;
+  z-index: 1000;
+  padding: 2px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: #374151;
+  background: #fff;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
 /* ドラッグ中にカーソルの近くへ出す現在値（#318「何が変わっているか見せる」）。
    カーソルの下敷きにならないよう、当たり判定は持たせない（pointer-events: none） */
 .system-gap-drag-value {
@@ -2347,6 +2426,13 @@ button.ghost.active:hover:not(:disabled) {
   /* 段の境界ドラッグ帯（Issue #523）も同じ編集用UI。掴みしろ自体は透明だが、
      ドラッグ中の値の吹き出しごと紙から消す */
   .system-gap-drag-handle { display: none !important; }
+  /* 整えるモード（Issue #571）の重ね物も同じ編集用UI。五線の面の当たり判定と、
+     音符の大きさの角ハンドル（吹き出しごと）を紙から消す */
+  .system-select-surface { display: none !important; }
+  .notation-size-drag-handle { display: none !important; }
+  /* ドラッグ中の吹き出しは譜面の外（画面基準の position: fixed）に出るので、
+     紙面のクリップに頼らず明示的に消す（Issue #571 round1 P1 で置き場所を移した） */
+  .notation-size-drag-value { display: none !important; }
   /* outline の実体は内側ラッパー側に付く（round1 の当たり判定修正で移動）ため、
      両方をリセットする（外側だけだと選択したまま印刷すると青枠が残る。Codex round2 P2） */
   .system-select-frame--selected { outline: none !important; }
