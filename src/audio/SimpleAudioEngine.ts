@@ -16,7 +16,7 @@ import {
   getMasterVolumeGain,
   type PlaybackSoundProfile
 } from './playbackSettings';
-import { createVelocityFilter } from './velocityTimbre';
+import { createVelocityFilterChain, velocityToAttackSeconds, normalizeVelocityTimbreStrength } from './velocityTimbre';
 import { applySwingToTiming } from '../utils/swingUtils';
 import { respellDoubleAccidentalKey } from '../utils/noteMidiUtils';
 import { resolveReleaseTailSeconds } from './releaseTail';
@@ -678,7 +678,10 @@ export class SimpleAudioEngine implements PlaybackEngine {
       const oscillatorId = this.registerOscillators(oscillators, gainNode, instrumentConfig, startTime, velocity);
       
       // 未来の startTime を基準に、同じエンベロープを予約する。
-      const adjustedAttack = this.getAdjustedAttack(instrumentConfig.attack);
+      // 弱い音は立ち上がりも鈍らせる（#670 段2）。設定 OFF なら従来どおり
+      const adjustedAttack = this.velocityTimbreEnabled
+        ? velocityToAttackSeconds(velocity, this.getAdjustedAttack(instrumentConfig.attack), this.velocityTimbreStrength)
+        : this.getAdjustedAttack(instrumentConfig.attack);
       // velocity は「その音符だけ、どのくらい強く鳴らすか」。
       // 音色プリセットの形は保ちつつ、包絡線（音量カーブ）全体へ倍率として掛ける。
       const adjustedPeakGain = this.getAdjustedPeakGain(instrumentConfig.peakGain) * velocity;
@@ -808,8 +811,13 @@ export class SimpleAudioEngine implements PlaybackEngine {
 
   /** 強弱を音色にも効かせる（#670）。既定 ON */
   private velocityTimbreEnabled = true;
+  private velocityTimbreStrength = 1;
   setVelocityTimbreEnabled(enabled: boolean): void {
     this.velocityTimbreEnabled = enabled;
+  }
+
+  setVelocityTimbreStrength(strength: number): void {
+    this.velocityTimbreStrength = normalizeVelocityTimbreStrength(strength);
   }
 
   /**
@@ -818,10 +826,10 @@ export class SimpleAudioEngine implements PlaybackEngine {
    */
   private connectVoiceToOutput(context: AudioContext, gainNode: GainNode, velocity: number): void {
     const output = this.getOutputNode(context);
-    const filter = this.velocityTimbreEnabled ? createVelocityFilter(context, velocity) : null;
-    if (filter) {
-      gainNode.connect(filter);
-      filter.connect(output);
+    const chain = this.velocityTimbreEnabled ? createVelocityFilterChain(context, velocity, this.velocityTimbreStrength) : null;
+    if (chain) {
+      gainNode.connect(chain.input);
+      chain.output.connect(output);
     } else {
       gainNode.connect(output);
     }

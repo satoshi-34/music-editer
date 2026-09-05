@@ -1158,6 +1158,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     audioEngine.setSoundProfile(soundRuntimeSettings.profile);
     audioEngine.setSwingEnabled(soundRuntimeSettings.swingEnabled);
     audioEngine.setVelocityTimbreEnabled?.(soundRuntimeSettings.velocityTimbreEnabled);
+    audioEngine.setVelocityTimbreStrength?.(soundRuntimeSettings.velocityTimbreStrength);
     await audioEngine.initialize();
     setActiveSoundEngineMode(soundRuntimeSettings.engineMode);
     setIsTemporaryBuiltInFallback(false);
@@ -1177,6 +1178,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     fallbackEngine.setSoundProfile(soundRuntimeSettings.profile);
     fallbackEngine.setSwingEnabled(soundRuntimeSettings.swingEnabled);
     fallbackEngine.setVelocityTimbreEnabled?.(soundRuntimeSettings.velocityTimbreEnabled);
+    fallbackEngine.setVelocityTimbreStrength?.(soundRuntimeSettings.velocityTimbreStrength);
     await fallbackEngine.initialize();
     audioEngineRef.current = fallbackEngine;
     setActiveSoundEngineMode('built-in');
@@ -1221,6 +1223,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     getAudioEngine().setSoundProfile(soundRuntimeSettings.profile);
     getAudioEngine().setSwingEnabled(soundRuntimeSettings.swingEnabled);
     getAudioEngine().setVelocityTimbreEnabled?.(soundRuntimeSettings.velocityTimbreEnabled);
+    getAudioEngine().setVelocityTimbreStrength?.(soundRuntimeSettings.velocityTimbreStrength);
   }, [getAudioEngine, soundRuntimeSettings]);
 
   const clearPositionTimers = useCallback(() => {
@@ -2390,6 +2393,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   }, []);
   const handleVelocityTimbreEnabledChange = useCallback((enabled: boolean) => {
     setSoundRuntimeSettings(prev => ({ ...prev, velocityTimbreEnabled: enabled }));
+  }, []);
+  const handleVelocityTimbreStrengthChange = useCallback((strength: number) => {
+    setSoundRuntimeSettings(prev => ({ ...prev, velocityTimbreStrength: strength }));
   }, []);
 
   const handleKeySignatureChange = useCallback((nextKeySignature: KeySignature) => {
@@ -7368,6 +7374,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                 onPreviewAccidentalOnApplyChange={handlePreviewAccidentalOnApplyChange}
                 onSwingEnabledChange={handleSwingEnabledChange}
                 onVelocityTimbreEnabledChange={handleVelocityTimbreEnabledChange}
+                onVelocityTimbreStrengthChange={handleVelocityTimbreStrengthChange}
               />
             </div>
           )}

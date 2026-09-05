@@ -52,6 +52,11 @@ export interface PlaybackSoundRuntimeSettings {
    * 既存の保存データに項目が無ければ true として読む
    */
   velocityTimbreEnabled: boolean;
+  /**
+   * 強弱→音色の効きの強さ（0〜1・Issue #670 段2）。1 が既定（下限 600Hz・立ち上がり +0.035s）、
+   * 0 で効果なし。ユーザーが「もっと柔らかく」「こもりすぎ」を自分で追い込めるように
+   */
+  velocityTimbreStrength: number;
 }
 
 export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettings = {
@@ -66,6 +71,7 @@ export const DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS: PlaybackSoundRuntimeSettin
   previewAccidentalOnApply: true,
   swingEnabled: false,
   velocityTimbreEnabled: true,
+  velocityTimbreStrength: 1,
   profile: {
     brightness: 0.5,
     attack: 0.5,
@@ -141,6 +147,7 @@ export function sanitizePlaybackRuntimeSettings(raw: unknown): PlaybackSoundRunt
     velocityTimbreEnabled: typeof raw.velocityTimbreEnabled === 'boolean'
       ? raw.velocityTimbreEnabled
       : DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.velocityTimbreEnabled,
+    velocityTimbreStrength: clampProfileValue(raw.velocityTimbreStrength, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.velocityTimbreStrength),
     profile: {
       brightness: clampProfileValue(profile.brightness, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.brightness),
       attack: clampProfileValue(profile.attack, DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.profile.attack),

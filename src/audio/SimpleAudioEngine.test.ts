@@ -193,18 +193,20 @@ describe('SimpleAudioEngine', () => {
           { dur: '4', isRest: false, keys: ['e/4'], velocity: 0.74 },
         ] }],
       }], 120);
-      expect(createdFilters.length).toBe(2);
+      // 弱い音 2 つ × 2 段
+      expect(createdFilters.length).toBe(4);
       expect(createdFilters[0].type).toBe('lowpass');
-      expect(createdFilters[0].frequency.value).toBeLessThan(createdFilters[1].frequency.value);
-      // 配線: 音のゲイン → フィルタ → マスターゲイン
+      expect(createdFilters[0].frequency.value).toBeLessThan(createdFilters[2].frequency.value);
+      // 配線: 音のゲイン → 1 段目 → 2 段目 → マスターゲイン
       const gainsAfter = mockContext.createGain.mock.results.slice(gainsBefore).map((r: { value: unknown }) => r.value);
-      createdFilters.forEach((filter) => {
+      [[createdFilters[0], createdFilters[1]], [createdFilters[2], createdFilters[3]]].forEach(([first, last]) => {
         const feeding = gainsAfter.filter((g: { connect: { mock: { calls: unknown[][] } } }) =>
-          g.connect.mock.calls.some((call) => call[0] === filter));
-        expect(feeding.length, 'フィルタへつないだ音のゲインが 1 つ').toBe(1);
-        expect(filter.connect).toHaveBeenCalledTimes(1);
-        const dest = filter.connect.mock.calls[0][0] as { gain?: unknown };
-        expect(dest && 'gain' in dest, 'フィルタの接続先はマスターゲイン').toBe(true);
+          g.connect.mock.calls.some((call) => call[0] === first));
+        expect(feeding.length, '1 段目へつないだ音のゲインが 1 つ').toBe(1);
+        expect(first.connect).toHaveBeenCalledWith(last);
+        expect(last.connect).toHaveBeenCalledTimes(1);
+        const dest = last.connect.mock.calls[0][0] as { gain?: unknown };
+        expect(dest && 'gain' in dest, '2 段目の接続先はマスターゲイン').toBe(true);
       });
     });
 
