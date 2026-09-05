@@ -152,9 +152,27 @@ function accidentalVariantLabel(variant: AccidentalVariant): string {
  * ボタンの名前。先頭を「臨時記号: <名前>」で揃えてあるのは、
  * 支援技術で読んだときとテストで探すときの手がかりを1種類にするため（設計メモ §3-6）。
  */
+/**
+ * その記号が音高をどう変えるか（効く「量」）。ホバーで「臨時記号＝クリックした音だけ」と
+ * 「途中調号変更＝その小節から先」の違いが1文で分かるようにするための説明（#633）
+ */
+function accidentalVariantEffect(variant: AccidentalVariant): string {
+  if (variant.kind === 'microtone') {
+    return variant.microtone === 'quarterSharp' ? '四分音（半音の半分）上げる' : '四分音（半音の半分）下げる';
+  }
+  switch (variant.accidental) {
+    case 'sharp': return '半音上げる';
+    case 'flat': return '半音下げる';
+    case 'doubleSharp': return '全音（半音2つ）上げる';
+    case 'doubleFlat': return '全音（半音2つ）下げる';
+    default: return '調号どおりの高さに戻す';
+  }
+}
 function accidentalVariantAriaLabel(variant: AccidentalVariant): string {
-  return `臨時記号: ${accidentalVariantLabel(variant)}`
-    + `（音符をクリックで付与・空きをクリックで${accidentalVariantSymbol(variant)}付きの音符を入力）`;
+  // 先頭の「臨時記号: <名前>」は据え置き（テスト・支援技術の手がかり）。効く範囲＝
+  // 「クリックした音だけ」を先に言い、操作の説明は後ろに置く（途中調号変更との対比・#633）
+  return `臨時記号: ${accidentalVariantLabel(variant)} — クリックした音だけ${accidentalVariantEffect(variant)}`
+    + `（空きをクリックすると${accidentalVariantSymbol(variant)}付きの音符を入力）`;
 }
 
 /** ボタン3個ぶんの定義。variants の先頭が既定（ボタンに最初から出ている記号） */
@@ -677,9 +695,8 @@ export default function Palette({
         <button
           type="button"
           onClick={() => onChange(measureKeySigActive ? ROW1[2] : { mode: 'measureKeySig' })}
-          title="途中調号変更（小節をクリックして調号を選択）"
-
-          aria-label="途中調号変更（小節をクリックして調号を選択）"
+          title="途中調号変更 — クリックした小節から先の調を変える（調号を選んで指定）"
+          aria-label="途中調号変更 — クリックした小節から先の調を変える（調号を選んで指定）"
           style={btnStyle(measureKeySigActive, { width: 30 })}
         >
           <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true">
