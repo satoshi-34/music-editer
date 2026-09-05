@@ -100,6 +100,15 @@ describe('resolvePedalBaselineY（Ped/✱ を最下音の下へクランプ・Is
       .toBe(150 + PEDAL_CLEARANCE_MARGIN_PX + PEDAL_TEXT_ASCENT_PX);
   });
 
+  it('maxBaselineY（下の五線の手前）が指定されていれば、そこで止める。従来位置より上へは動かさない', () => {
+    const obstacles = [{ x: 20, y: 90, w: 12, h: 50 }]; // 本来は 154 まで下げたい
+    expect(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles, maxBaselineY: 140 })).toBe(140);
+    // 下限が従来位置より上（＝もう余地が無い）なら従来位置のまま
+    expect(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles, maxBaselineY: 100 })).toBe(baseY);
+    // 障害物が無ければ下限に関係なく従来位置
+    expect(resolvePedalBaselineY({ baseY, spanX1: 10, spanX2: 60, obstacles: [], maxBaselineY: 100 })).toBe(baseY);
+  });
+
   it('span の左右が逆でも同じ結果になる', () => {
     const obstacles = [{ x: 20, y: 90, w: 12, h: 50 }];
     expect(resolvePedalBaselineY({ baseY, spanX1: 60, spanX2: 10, obstacles }))

@@ -159,4 +159,30 @@ describe('Ped/✱ と五線下の低音の衝突回避（Issue #604）', () => {
     // Ped は右手（上段）ではなく左手（下段）の五線の下に出て、c/2 の下へ下がる
     expect(textY(container, 'Ped')).toBeGreaterThan(fixedBass);
   });
+
+  it('最下段以外（右手）の Ped は、下の五線（左手）の手前で止まり、段の高さも変わらない', () => {
+    // 右手に深い加線の音（c/3・ト音記号で加線4本）＋ Ped。本来はもっと下げたいが、下に左手の五線がある
+    const right: MeasureData[] = [{ events: [
+      { dur: '2', isRest: false, keys: ['c/3'], pedalMark: 'down' },
+      { dur: '2', isRest: false, keys: ['e/5'], pedalMark: 'up' },
+    ] }];
+    const left: MeasureData[] = [{ events: [
+      { dur: '2', isRest: false, keys: ['d/3'] },
+      { dur: '2', isRest: false, keys: ['d/3'] },
+    ] }];
+    const container = renderPiano(right, left);
+    const ys = [...new Set(Array.from(container.querySelectorAll('.vf-note-hit'))
+      .map((el) => parseFloat(el.getAttribute('data-line0-y')!)))].sort((a, b) => a - b);
+    const trebleBottom = ys[0] + 40;
+    const bassTop = ys[1];
+    const pedY = textY(container, 'Ped');
+    expect(pedY).toBeGreaterThanOrEqual(trebleBottom + PEDAL_FIXED_OFFSET_PX);
+    // 字面の下端（baseline + 3）が左手の五線の上端の手前で止まる
+    expect(pedY + 3).toBeLessThanOrEqual(bassTop - 3 + 0.01);
+    // 段の高さは広がらない（下余白の予約は最下段ぶんだけ）
+    const svgHeight = parseFloat((container.querySelector('svg') as SVGSVGElement).getAttribute('height')!);
+    const plain = renderPiano(rightHand, left);
+    const svgHeightPlain = parseFloat((plain.querySelector('svg') as SVGSVGElement).getAttribute('height')!);
+    expect(svgHeight).toBe(svgHeightPlain);
+  });
 });

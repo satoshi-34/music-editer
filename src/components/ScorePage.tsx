@@ -4353,6 +4353,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 足すのと同じ純関数・同じ入力で求め、ページの段数見積もりを実際の段の高さと一致させる。
   // ペダルの無い譜面では 0（段の高さは従来どおり）
   const pedalBottomExtensionPx = useMemo(() => {
+    // パート譜表示中は canvas に渡る段も選択パートだけなので、同じ並びで見積もる（round2 P1）
+    if (isPartExtractionActive && partExtractionSelection) {
+      const index = partExtractionSelection.index;
+      if (scoreType === 'quartet') {
+        return estimatePedalBottomExtensionPx([{ measures: quartetParts[index] ?? [], clef: QUARTET_PART_CONFIGS[index].clef }]);
+      }
+      if (scoreType === 'ensemble') {
+        const part = instrumentation.parts[index];
+        if (!part) return 0;
+        return estimatePedalBottomExtensionPx(part.staffCount === 2
+          ? [{ measures: ensembleParts[index] ?? [], clef: part.clef }, { measures: ensembleSecondStaffParts[index] ?? [], clef: 'bass' as const }]
+          : [{ measures: ensembleParts[index] ?? [], clef: part.clef }]);
+      }
+    }
     if (scoreType === 'piano') {
       return estimatePedalBottomExtensionPx([
         { measures: rightHandData ?? [], clef: 'treble' },
@@ -4372,7 +4386,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       )));
     }
     return estimatePedalBottomExtensionPx([{ measures: rightHandData ?? [], clef: 'treble' }]);
-  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts]);
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, isPartExtractionActive, partExtractionSelection]);
   const partSpacingHeightRatio = useMemo(() => {
     const baseHeight = measuredSystemHeightPx(partCountForSystemLayout, 0, pedalBottomExtensionPx);
     if (baseHeight <= 0) return 1;

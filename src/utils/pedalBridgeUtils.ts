@@ -139,8 +139,15 @@ export function resolvePedalBaselineY(params: {
   spanX1: number;
   spanX2: number;
   obstacles: CollisionRect[];
+  /**
+   * 下げてよい baseline の下限（px）。最下段以外のパート（下に別の五線がある）に付いた
+   * ペダルは、段の下余白の予約（estimatePedalBottomExtensionPx）の対象外なので、
+   * 「下の五線の上端の手前」で止める（強弱記号の #382 と同じ境界停止）。
+   * 未指定（最下段）は境界なし。下限が従来位置より上なら従来位置のまま（上へは動かさない）
+   */
+  maxBaselineY?: number;
 }): number {
-  const { baseY, spanX1, spanX2, obstacles } = params;
+  const { baseY, spanX1, spanX2, obstacles, maxBaselineY } = params;
   const x = Math.min(spanX1, spanX2);
   const w = Math.abs(spanX2 - spanX1);
   // 字面の箱（従来位置）。障害物とこの箱の横が重なり、かつ障害物の下端が字面の上端より
@@ -160,7 +167,10 @@ export function resolvePedalBaselineY(params: {
     if (!overlapsX || !intrudesY) continue;
     requiredTop = Math.max(requiredTop, obstacle.y + obstacle.h + PEDAL_CLEARANCE_MARGIN_PX);
   }
-  return requiredTop === textTop ? baseY : requiredTop + PEDAL_TEXT_ASCENT_PX;
+  if (requiredTop === textTop) return baseY;
+  const wanted = requiredTop + PEDAL_TEXT_ASCENT_PX;
+  if (maxBaselineY === undefined || !Number.isFinite(maxBaselineY)) return wanted;
+  return Math.max(baseY, Math.min(wanted, maxBaselineY));
 }
 
 /**
@@ -179,6 +189,12 @@ export function resolvePedalBaselineY(params: {
  *   （renderStaff: 'below'）。符幹は低音では上向きなので見ない
  */
 export function estimatePedalBottomExtensionPx(
+  /**
+   * **画面に描く段の並び**（パート譜表示中は選択パートだけ）。ScorePage と PianoSystemCanvas が
+   * 同じ並びを渡すことで、段の高さの見積もりと実際の SVG の高さが一致する。
+   * 最下段以外のペダルは下の五線の手前で止まる（resolvePedalBaselineY の maxBaselineY）ので、
+   * ここで見るのは最下段だけでよい
+   */
   parts: ReadonlyArray<{ measures: readonly MeasureData[]; clef: ClefType }>,
 ): number {
   if (parts.length === 0) return 0;

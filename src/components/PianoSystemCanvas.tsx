@@ -30,7 +30,7 @@ import {
 import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
 import { armClickCycle, planClickCycle, type ClickCycleState } from './clickCycleUtils';
 import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
-import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx } from '../utils/pedalBridgeUtils';
+import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
 import {
   SCORE_SELECTION_CLEAR_EVENT,
@@ -2324,8 +2324,17 @@ function drawCollectedSymbolEntries(args: {
   const AST_TEXT_HALF_WIDTH = 6;
   const pedalObstaclesFor = (partIndex: number) =>
     noteObstacles.filter((obstacle) => obstacle.partIndex === partIndex);
-  const pedalBaselineFor = (entry: { botY: number; partIndex: number }, spanX1: number, spanX2: number) =>
-    resolvePedalBaselineY({ baseY: pedalTextY(entry.botY), spanX1, spanX2, obstacles: pedalObstaclesFor(entry.partIndex) });
+  const pedalBaselineFor = (entry: { botY: number; partIndex: number }, spanX1: number, spanX2: number) => {
+    // 最下段以外（下に別の五線がある）は、下の五線の上端の手前で止める（#382 と同じ境界停止）。
+    // 段の下余白の予約は最下段ぶんしか無いので、ここで止めないと隣の五線へ食い込む（round2 P1）
+    const nextStaveTopY = staveTopYByPart.get(entry.partIndex + 1);
+    const maxBaselineY = nextStaveTopY === undefined
+      ? undefined
+      : nextStaveTopY - BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX - PEDAL_TEXT_DESCENT_PX;
+    return resolvePedalBaselineY({
+      baseY: pedalTextY(entry.botY), spanX1, spanX2, obstacles: pedalObstaclesFor(entry.partIndex), maxBaselineY,
+    });
+  };
   const drawPedalText = (anchorX: number, baselineY: number, mark: 'down' | 'up') => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     el.textContent = mark === 'down' ? 'Ped' : '✱';
