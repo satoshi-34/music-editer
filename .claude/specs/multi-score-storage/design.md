@@ -577,3 +577,31 @@ max-wait 超過状態で新規作成・作品切替をすると、切替処理�
 リセット完了後になるため、修正を外しても統合テストは通る）。統合テスト
 「max-wait 超過後に新規作成しても旧内容が新作品へ保存されない」は競合そのものの検出ではなく
 **不変条件の回帰網**として維持している。修正は競合窓を原理的に閉じる予防措置。
+
+## 追補: 作品切替直後の再生で前の作品が鳴る（Issue #609・2026-09-05）
+
+**現象**: 作品Aを再生→停止→作品一覧でBへ切替→再生、でAが流れる（画面はB）。
+
+**原因（本命）**: 切替の復元 `applyLoadedScoreData` は非同期（拍子・テンポの反映で
+`await` する）で、その途中でも再生ボタンは押せる。`handlePlay` は押した時点の譜面 state
+から小節列を組むので、復元前に押すと**前の作品の小節列**で `playParts` が呼ばれる。
+対抗仮説（停止の取りこぼし）は、切替時に stopAll を呼んでいなかった点だけが当たり
+（再生中に切り替えると A の先読み窓の後続が鳴り続ける）。
+
+**対応**:
+- `workRestoreInProgressRef` / `isWorkRestoring`（ScorePage）: `applyLoadedScoreData` と
+  `resetScoreStateToEmpty` の先頭で `beginWorkRestore()`、`finally` で `endWorkRestore()`。
+  切替・起動時復元・履歴復元・新規作成・削除後リセットの全経路がこの2関数を通る
+- `handlePlay` の入口で ref を同期的に見て、復元中なら `describePlaybackBlockedWhileRestoringWork`
+  を通知して始めない（キーボード経由も同じ入口なので塞がる・#318「行き止まりは喋る」）
+- `PlaybackControls` に `workRestoring` を渡し、再生ボタンを無効化＋ツールチップで理由を示す
+- `beginWorkRestore` は再生中・一時停止中なら `handleStop()`（stopAll＋世代交代）。
+  stopped のときは呼ばない（起動時の復元で音声エンジンを作らせないため）。
+  一時停止中の切替は「再開」ではなく切替先の最初からになる（仕様4）
+
+**テスト**: `ScorePageWorkSwitchPlayback.test.tsx`（実マウント・作品一覧→再生ボタンの実経路）。
+A再生→停止→B切替→即再生 / A再生中にB切替（stopAll） / A一時停止中にB切替 の3件。
+修正を外すと3件とも落ちる（復元中にボタンが押せて A の小節列で `playParts` が呼ばれる）。
+
+**注意**: 復元中の状態は state の flush が最初の `await` まで遅れるが、ガードは ref で
+同期的に立てているので、`await` 前に届いた再生要求も止まる。

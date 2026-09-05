@@ -242,6 +242,7 @@ import {
   describeAudioEngineRestarted,
   describeAudioStillSilent,
   describePlaybackAbortedBySchedulingError,
+  describePlaybackBlockedWhileRestoringWork,
 } from '../utils/scoreEditorNotices';
 import {
   claimStorageLocationNotice,
@@ -1023,6 +1024,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // ヘルスチェックは setTimeout 越しに走るため、実行時点の最新の再生状態を ref で参照する。
   // （state を直接読むと予約時点の古い値に固定されてしまう）
   const playbackStateRef = useRef<PlaybackState>('stopped');
+  // 作品の切替・復元（applyLoadedScoreData / resetScoreStateToEmpty）が走っている間の印（#609）。
+  // 復元は非同期（拍子・テンポの反映で await する）で、その途中でも再生ボタンは押せてしまう。
+  // handlePlay は押した時点の譜面 state を掴むので、復元前に押すと**前の作品の小節列**で鳴る。
+  // ref は handlePlay の入口で同期的に見る用（キーボード経由も塞ぐ）、state はボタンの無効化用
+  const workRestoreInProgressRef = useRef(false);
+  const [isWorkRestoring, setIsWorkRestoring] = useState(false);
   // 無音検知（issue #14）の通知文。null のときは何も表示しない
   const [audioHealthNotice, setAudioHealthNotice] = useState<string | null>(null);
   // 最後に自動復旧（エンジン再作成）した時刻。クールダウン判定に使う
@@ -1641,6 +1648,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * 同じ展開・スライスの経路を共用する（同じロジックの2枚目を作らない）。
    */
   const handlePlay = useCallback(async (options?: { startMeasureIndex?: number }) => {
+    // 作品の切替・復元の途中は始めない（#609）。ここで止めないと、復元前の state（前の作品）
+    // で parts を組んでしまい、画面は切替先なのに前の作品が鳴る。行き止まりは喋る（#318）
+    if (workRestoreInProgressRef.current) {
+      notifyScoreEdit(describePlaybackBlockedWhileRestoringWork());
+      return;
+    }
     // 小節番号の指定があるときは「その小節から鳴らし直す」意味なので、
     // 一時停止からの再開（resume）ではなく通常の開始経路へ進める。
     const explicitStartMeasure = options?.startMeasureIndex;
@@ -2101,6 +2114,22 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     resetPlaybackClock();
   }, [clearPlaybackTimer, getAudioEngine, resetPlaybackClock]);
+
+  /**
+   * 作品の切替・復元の開始と終了（#609）。開始時に再生中・一時停止中なら停止して、
+   * 前の作品の予約済みの音（先読み窓の後続を含む）を世代交代で黙らせる。
+   * stopped のときは何もしない（起動時の復元で音声エンジンを作らせないため）。
+   * 終了は必ず finally から呼ぶ（復元が途中で失敗しても再生ボタンが戻るように）
+   */
+  const beginWorkRestore = useCallback(() => {
+    workRestoreInProgressRef.current = true;
+    setIsWorkRestoring(true);
+    if (playbackStateRef.current !== 'stopped') handleStop();
+  }, [handleStop]);
+  const endWorkRestore = useCallback(() => {
+    workRestoreInProgressRef.current = false;
+    setIsWorkRestoring(false);
+  }, []);
 
   const handleSeek = useCallback((position: { measureIndex: number; beatPosition: number; noteIndex: number }) => {
     // 現状の再生ボタン経路は「見た目上の位置表示」だけを更新している。
@@ -2677,66 +2706,71 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * 同じ状態へ戻す必要があるため、リセット処理だけを切り出してある。
    */
   const resetScoreStateToEmpty = useCallback(async () => {
-    clearPlaybackTimer();
-    resetPlaybackClock();
-    getAudioEngine().stopAll();
-    // パート譜表示は保存されない一時ビュー（「読込後は必ず総譜」）。空の譜面にも引き継がない
-    setPartExtractionId(null);
-    historyStack.current = [];
-    futureStack.current = [];
-    setSelectedMeasures(null);
-    setClipboard(null);
-    // 拍範囲スライスのクリップボード（#333 段2）も空にする。
-    // 残っていると前の譜面のスライスを新しい譜面へ持ち越して貼れてしまう
-    setSliceClipboard(null);
-    // 連符グループのクリップボード（Issue #234）も一緒に空にする。
-    // 残っていると、新規譜面で休符をクリックしただけで前の譜面の連符が現れてしまう。
-    setTupletClipboardGroup(null);
-    setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
-    setPlaybackState('stopped');
-    setTitle('タイトル');
-    setSubtitle('サブタイトル');
-    setLyricist('作詞者');
-    setComposer('作曲者');
-    setArranger('編曲者');
-    setTool({ duration: '4', isRest: false });
-    setNotationMode('concert');
-    setTitleFontId(DEFAULT_TITLE_FONT_ID);
-    // タイトルの文字サイズ・太さも既定へ戻す（書体だけ戻してサイズが残ると、
-    // 新規譜面が前の作品の見た目を引きずる。#420 Codex round1）
-    setTitleFontSize(TITLE_FONT_SIZE_DEFAULT);
-    setTitleFontWeight(undefined);
-    // 拍子の表示スタイルも工場出荷値（数字表記）へ戻す。
-    // 戻し忘れると、前の譜面で記号表示にしていた設定が新規譜面へ持ち越される。
-    setTimeSignatureStyle('numeric');
-    // 楽譜の種類・拍子・調号・段組み・余白などは、保存済みの初期値プリセット（issue #39）が
-    // あればその値、無ければ従来どおりのコード上の既定値（工場出荷値）を適用する。
-    await applySettingsProfileToState(loadSettingsProfile());
-    setRightHandData([]);
-    setLeftHandData(undefined);
-    setQuartetParts(Array.from({ length: 4 }, () => []));
-    setEnsembleParts([]);
-    setEnsembleSecondStaffParts([]);
-    // 新規作成では手動保存スロットには触れないため、hasStoredData（手動保存の有無）は
-    // 現在の実際の状態を読み直す（消していないので通常は変化しない）。
-    setStoredDataAvailable(hasStoredData());
-    fileHandleRef.current = null;
-    // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
-    setExtraEditingMeasures(0);
-    // 前の譜面用の段割り手動上書きも引き継がない
-    setSystemMeasureOverrides([]);
-    // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
-    setLastEditedMeasureIndex(null);
-    // 前の譜面用の段の間隔手動上書きも引き継がない
-    setSystemRowGapOverrides([]);
-    // 用紙サイズも作品の属性なので、新しい譜面では既定（A4）へ戻す（Issue #495）
-    setPageSize(DEFAULT_PAGE_SIZE_ID);
-  // applySettingsProfileToState はレンダーごとに作り直される素の関数（安定な setter・
-  // インポート済みの純関数だけを参照するため、依存に加えても再生成のたびに
-  // resetScoreStateToEmpty 自体を再構築するだけで挙動は変わらない）。他の setter 群と同様、
-  // 依存配列には含めない。
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
+    beginWorkRestore();
+    try {
+      clearPlaybackTimer();
+      resetPlaybackClock();
+      getAudioEngine().stopAll();
+      // パート譜表示は保存されない一時ビュー（「読込後は必ず総譜」）。空の譜面にも引き継がない
+      setPartExtractionId(null);
+      historyStack.current = [];
+      futureStack.current = [];
+      setSelectedMeasures(null);
+      setClipboard(null);
+      // 拍範囲スライスのクリップボード（#333 段2）も空にする。
+      // 残っていると前の譜面のスライスを新しい譜面へ持ち越して貼れてしまう
+      setSliceClipboard(null);
+      // 連符グループのクリップボード（Issue #234）も一緒に空にする。
+      // 残っていると、新規譜面で休符をクリックしただけで前の譜面の連符が現れてしまう。
+      setTupletClipboardGroup(null);
+      setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
+      setPlaybackState('stopped');
+      setTitle('タイトル');
+      setSubtitle('サブタイトル');
+      setLyricist('作詞者');
+      setComposer('作曲者');
+      setArranger('編曲者');
+      setTool({ duration: '4', isRest: false });
+      setNotationMode('concert');
+      setTitleFontId(DEFAULT_TITLE_FONT_ID);
+      // タイトルの文字サイズ・太さも既定へ戻す（書体だけ戻してサイズが残ると、
+      // 新規譜面が前の作品の見た目を引きずる。#420 Codex round1）
+      setTitleFontSize(TITLE_FONT_SIZE_DEFAULT);
+      setTitleFontWeight(undefined);
+      // 拍子の表示スタイルも工場出荷値（数字表記）へ戻す。
+      // 戻し忘れると、前の譜面で記号表示にしていた設定が新規譜面へ持ち越される。
+      setTimeSignatureStyle('numeric');
+      // 楽譜の種類・拍子・調号・段組み・余白などは、保存済みの初期値プリセット（issue #39）が
+      // あればその値、無ければ従来どおりのコード上の既定値（工場出荷値）を適用する。
+      await applySettingsProfileToState(loadSettingsProfile());
+      setRightHandData([]);
+      setLeftHandData(undefined);
+      setQuartetParts(Array.from({ length: 4 }, () => []));
+      setEnsembleParts([]);
+      setEnsembleSecondStaffParts([]);
+      // 新規作成では手動保存スロットには触れないため、hasStoredData（手動保存の有無）は
+      // 現在の実際の状態を読み直す（消していないので通常は変化しない）。
+      setStoredDataAvailable(hasStoredData());
+      fileHandleRef.current = null;
+      // 前の譜面用に増やしていた画面専用の編集用空き段はリセットする
+      setExtraEditingMeasures(0);
+      // 前の譜面用の段割り手動上書きも引き継がない
+      setSystemMeasureOverrides([]);
+      // 前の譜面の小節位置を引きずらないよう、段割りの安定化ヒントもリセットする（Issue #67）
+      setLastEditedMeasureIndex(null);
+      // 前の譜面用の段の間隔手動上書きも引き継がない
+      setSystemRowGapOverrides([]);
+      // 用紙サイズも作品の属性なので、新しい譜面では既定（A4）へ戻す（Issue #495）
+      setPageSize(DEFAULT_PAGE_SIZE_ID);
+    // applySettingsProfileToState はレンダーごとに作り直される素の関数（安定な setter・
+    // インポート済みの純関数だけを参照するため、依存に加えても再生成のたびに
+    // resetScoreStateToEmpty 自体を再構築するだけで挙動は変わらない）。他の setter 群と同様、
+    // 依存配列には含めない。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    } finally {
+      endWorkRestore();
+    }
+  }, [beginWorkRestore, endWorkRestore, 
     clearPlaybackTimer,
     getAudioEngine,
     hasStoredData,
@@ -3048,68 +3082,73 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   }, []);
 
   const applyLoadedScoreData = useCallback(async (restored: SavedScoreData) => {
-    // パート譜表示は保存されない一時ビュー（設計書どおり「読込後は必ず総譜」）。
-    // 同じパートIDを持つ別作品へ切り替えたときにパート譜表示が引き継がれてしまう
-    // 取りこぼしがあった（Codex round1 P3）
-    setPartExtractionId(null);
-    setTitle(restored.metadata.title);
-    setSubtitle(restored.metadata.subtitle);
-    setLyricist(restored.metadata.lyricist);
-    setComposer(restored.metadata.composer);
-    setArranger(restored.metadata.arranger);
+    beginWorkRestore();
+    try {
+      // パート譜表示は保存されない一時ビュー（設計書どおり「読込後は必ず総譜」）。
+      // 同じパートIDを持つ別作品へ切り替えたときにパート譜表示が引き継がれてしまう
+      // 取りこぼしがあった（Codex round1 P3）
+      setPartExtractionId(null);
+      setTitle(restored.metadata.title);
+      setSubtitle(restored.metadata.subtitle);
+      setLyricist(restored.metadata.lyricist);
+      setComposer(restored.metadata.composer);
+      setArranger(restored.metadata.arranger);
 
-    const restoredType = restored.scoreType ?? 'single';
-    setKeySignature(normalizeKeySignature(restored.keySignature));
-    await setTimeSignature(...normalizeTimeSignature(restored.timeSignature));
-    setScoreType(restoredType);
-    // 旧既定の略称（Vln. I 等）で保存された未編集の四重奏を新既定（Vn. I 等）へ移行する（#448 round3）
-    setInstrumentation(migrateLegacyQuartetAbbreviations(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType), restored.version));
-    setNotationMode(restored.notationMode ?? 'concert');
-    setTitleFontId(resolveTitleFontOption(restored.titleFontId).id);
-    setTitleFontSize(normalizeTitleFontSize(restored.titleFontSize));
-    setTitleFontWeight(normalizeTitleFontWeight(restored.titleFontWeight));
-    setTimeSignatureStyle(normalizeTimeSignatureStyle(restored.timeSignatureStyle));
-    setPageSize(normalizePageSizeId(restored.pageSize));
-    // 全体テンポも作品の属性として復元する（Issue #543。省略時はアプリ全体設定のまま）
-    await applySavedGlobalBpm(restored);
-    // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
-    applySavedLayoutAttributes(restored);
-    setCustomSymbolDefs(restored.customSymbolDefs ?? []);
-    if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
-      setMeasuresPerSystem(restored.measuresPerSystem);
-    }
+      const restoredType = restored.scoreType ?? 'single';
+      setKeySignature(normalizeKeySignature(restored.keySignature));
+      await setTimeSignature(...normalizeTimeSignature(restored.timeSignature));
+      setScoreType(restoredType);
+      // 旧既定の略称（Vln. I 等）で保存された未編集の四重奏を新既定（Vn. I 等）へ移行する（#448 round3）
+      setInstrumentation(migrateLegacyQuartetAbbreviations(restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType), restored.version));
+      setNotationMode(restored.notationMode ?? 'concert');
+      setTitleFontId(resolveTitleFontOption(restored.titleFontId).id);
+      setTitleFontSize(normalizeTitleFontSize(restored.titleFontSize));
+      setTitleFontWeight(normalizeTitleFontWeight(restored.titleFontWeight));
+      setTimeSignatureStyle(normalizeTimeSignatureStyle(restored.timeSignatureStyle));
+      setPageSize(normalizePageSizeId(restored.pageSize));
+      // 全体テンポも作品の属性として復元する（Issue #543。省略時はアプリ全体設定のまま）
+      await applySavedGlobalBpm(restored);
+      // 音符の大きさ・ページ余白も作品の属性として復元する（Issue #477。省略時は現状維持）
+      applySavedLayoutAttributes(restored);
+      setCustomSymbolDefs(restored.customSymbolDefs ?? []);
+      if (restored.measuresPerSystem && restored.measuresPerSystem >= 1 && restored.measuresPerSystem <= 8) {
+        setMeasuresPerSystem(restored.measuresPerSystem);
+      }
 
-    if (restoredType === 'quartet') {
-      const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
-      setQuartetParts(QUARTET_IDS.map(id =>
-        restored.parts.find(p => p.partId === id)?.measures ?? []
-      ));
-      setEnsembleParts([]);
-      setEnsembleSecondStaffParts([]);
-    } else if (restoredType === 'ensemble') {
-      const restoredInstrumentation = restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType);
-      setEnsembleParts(restoredInstrumentation.parts.map(part =>
-        restored.parts.find(p => p.partId === part.id)?.measures ?? []
-      ));
-      setEnsembleSecondStaffParts(restoredInstrumentation.parts.map(part =>
-        part.staffCount === 2 ? restored.parts.find(p => p.partId === ensembleSecondStaffPartId(part.id))?.measures ?? [] : []
-      ));
-    } else {
-      const rightPart = restored.parts.find(p => p.clef === 'treble') ?? restored.parts[0];
-      const leftPart  = restored.parts.find(p => p.clef === 'bass');
-      setRightHandData(rightPart?.measures ?? []);
-      setLeftHandData(leftPart?.measures);
-      setEnsembleParts([]);
-      setEnsembleSecondStaffParts([]);
+      if (restoredType === 'quartet') {
+        const QUARTET_IDS = ['violin-1', 'violin-2', 'viola', 'cello'];
+        setQuartetParts(QUARTET_IDS.map(id =>
+          restored.parts.find(p => p.partId === id)?.measures ?? []
+        ));
+        setEnsembleParts([]);
+        setEnsembleSecondStaffParts([]);
+      } else if (restoredType === 'ensemble') {
+        const restoredInstrumentation = restored.instrumentation ?? getDefaultInstrumentationForScoreType(restoredType);
+        setEnsembleParts(restoredInstrumentation.parts.map(part =>
+          restored.parts.find(p => p.partId === part.id)?.measures ?? []
+        ));
+        setEnsembleSecondStaffParts(restoredInstrumentation.parts.map(part =>
+          part.staffCount === 2 ? restored.parts.find(p => p.partId === ensembleSecondStaffPartId(part.id))?.measures ?? [] : []
+        ));
+      } else {
+        const rightPart = restored.parts.find(p => p.clef === 'treble') ?? restored.parts[0];
+        const leftPart  = restored.parts.find(p => p.clef === 'bass');
+        setRightHandData(rightPart?.measures ?? []);
+        setLeftHandData(leftPart?.measures);
+        setEnsembleParts([]);
+        setEnsembleSecondStaffParts([]);
+      }
+      setSystemMeasureOverrides(restored.systemMeasureOverrides ?? []);
+      setSystemRowGapOverrides(restored.systemRowGapOverrides ?? []);
+      // 前の譜面用に増やしていた画面専用の編集用空き段は引き継がない（Codex #109 第4段 round3。
+      // 旧 handleLoad にあったリセット。切替・復元・取り込みの全経路で効くようここへ置く）
+      setExtraEditingMeasures(0);
+      // 開き直した譜面は編集位置とは無関係なので、段割りの安定化ヒントもリセットする（Issue #67）
+      setLastEditedMeasureIndex(null);
+    } finally {
+      endWorkRestore();
     }
-    setSystemMeasureOverrides(restored.systemMeasureOverrides ?? []);
-    setSystemRowGapOverrides(restored.systemRowGapOverrides ?? []);
-    // 前の譜面用に増やしていた画面専用の編集用空き段は引き継がない（Codex #109 第4段 round3。
-    // 旧 handleLoad にあったリセット。切替・復元・取り込みの全経路で効くようここへ置く）
-    setExtraEditingMeasures(0);
-    // 開き直した譜面は編集位置とは無関係なので、段割りの安定化ヒントもリセットする（Issue #67）
-    setLastEditedMeasureIndex(null);
-  }, [setTimeSignature]);
+  }, [beginWorkRestore, endWorkRestore, setTimeSignature]);
 
   // 起動時のサイレント復元: 前回開いていた作品があれば読み込んで続きから編集できるようにする。
   // マウント直後の1回だけ実行し、復元の有無に関わらず「復元処理は完了した」ことを
@@ -7135,6 +7174,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             <div className="toolbar-section">
               <PlaybackControls
                 playbackState={playbackState}
+                workRestoring={isWorkRestoring}
                 currentPosition={currentPosition}
                 currentTempo={tempoSettings.bpm}
                 currentInstrument={currentInstrument}
