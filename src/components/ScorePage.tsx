@@ -1035,6 +1035,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // 待ちが明けてから**前の作品**を予約して「再生中」に戻してしまう。開始時に世代を取り、
   // 切替・停止で世代を進め、await のあとで世代が変わっていたら何もせず（予約済みなら止めて）抜ける
   const playRequestSeqRef = useRef(0);
+  // いまエンジンを使っている（準備・予約待ち〜再生中）要求の世代。停止・切替で null に戻る。
+  // 失効した要求の後始末（stopAll）は、この値が null のとき＝「その後に誰も始めていない」
+  // ときだけ行う。切替後に始めた B の再生まで A の後始末で止めないため（round3 P1）
+  const activePlaybackSeqRef = useRef<number | null>(null);
   // 無音検知（issue #14）の通知文。null のときは何も表示しない
   const [audioHealthNotice, setAudioHealthNotice] = useState<string | null>(null);
   // 最後に自動復旧（エンジン再作成）した時刻。クールダウン判定に使う
@@ -1673,9 +1677,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // 再開の待ちの間に切替・停止が起きたら、明けても「再生中」へ戻さない（round2 P1）。
         // 切替側の stopAll は resume 前に走っているので、明けた音はここで止め直す
         const resumeSeq = playRequestSeqRef.current;
+        activePlaybackSeqRef.current = resumeSeq;
         await resumedEngine.resume();
         if (resumeSeq !== playRequestSeqRef.current) {
-          resumedEngine.stopAll();
+          // 切替後に B が始まっていれば止めない（round3 P1）。誰も始めていなければ A の音を止める
+          if (activePlaybackSeqRef.current === null) resumedEngine.stopAll();
           return;
         }
         setPlaybackState('playing');
@@ -1698,7 +1704,13 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       resetPlaybackClock();
       // この開始要求の世代。以降の await の後で照合する（切替・停止で失効する）
       const playSeq = ++playRequestSeqRef.current;
+      activePlaybackSeqRef.current = playSeq;
       const isPlayRequestStale = () => playSeq !== playRequestSeqRef.current;
+      // 失効時の後始末。切替・停止の時点で stopAll は済んでいるので、ここで止めるのは
+      // 「その後に予約が明けて鳴り出した A の音」だけ。B が始まっていれば触らない
+      const stopStaleLeftovers = (engine: { stopAll: () => void }) => {
+        if (activePlaybackSeqRef.current === null) engine.stopAll();
+      };
 
       const parts: PlaybackPartSource[] = [];
       // テンポ（数値・速度標語）はスコア共通の属性なので、パート譜表示で再生対象を
@@ -2014,7 +2026,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           // 予約（音源ロード込み）を待つ間に切替・停止が起きていたら、予約済みの音を止めて
           // 「再生中」へは戻さない（#609 round1 P1: 切替後に前の作品が鳴り出す）
           if (isPlayRequestStale()) {
-            audioEngine.stopAll();
+            stopStaleLeftovers(audioEngine);
             return;
           }
           const scheduleElapsedMs = Math.max(0, Date.now() - (scheduleInfo?.scheduledAtMs ?? fallbackScheduledAt));
@@ -2077,7 +2089,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
           const duration = 60 / applyPlaybackSpeedToBpm(tempoSettings.bpm, playbackSpeedPercent);
           await audioEngine.playNoteByName('C4', duration);
           if (isPlayRequestStale()) {
-            audioEngine.stopAll();
+            stopStaleLeftovers(audioEngine);
             return;
           }
           setPlaybackState('playing');
@@ -2139,6 +2151,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const handleStop = useCallback(() => {
     // 準備・予約待ちの再生開始要求も失効させる（待ちが明けてから鳴り出さないように・#609）
     playRequestSeqRef.current += 1;
+    activePlaybackSeqRef.current = null;
     // stop は「音を止める」だけでなく、「一時停止用の残り時間」も捨てる。
     // ここで resetPlaybackClock を呼ばないと、次の再生開始時に古い残り時間を再利用してしまう。
     clearPlaybackTimer();
@@ -2160,7 +2173,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // 準備・予約待ちの開始要求は、まだ playbackState が stopped のままなので handleStop の
     // 条件に掛からない。世代だけは必ず進めて、待ちが明けた要求を失効させる（round1 P1）
     playRequestSeqRef.current += 1;
-    if (playbackStateRef.current !== 'stopped') handleStop();
+    // 再生中・一時停止中に加えて、準備・予約待ちの要求がある（activePlaybackSeq が立っている）
+    // ときも止める。待ちの間に予約が始まっていた A の音を、この時点で確実に消すため。
+    // どちらでもない（起動時の復元など）ときはエンジンに触れない
+    if (playbackStateRef.current !== 'stopped' || activePlaybackSeqRef.current !== null) handleStop();
   }, [handleStop]);
   const endWorkRestore = useCallback(() => {
     workRestoreInProgressRef.current = false;
@@ -2806,7 +2822,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     } finally {
       endWorkRestore();
     }
-  }, [beginWorkRestore, endWorkRestore, 
+  }, [beginWorkRestore, endWorkRestore,
     clearPlaybackTimer,
     getAudioEngine,
     hasStoredData,

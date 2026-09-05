@@ -303,4 +303,62 @@ describe('作品切替直後の再生は切替先が鳴る（Issue #609）', () 
     await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(2); }, { timeout: 15000 });
     expect(playedKeys(1)).toEqual(['e/4']);
   }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('Aの予約待ちが明ける前にBを再生した場合、Aの後始末でBを止めない（round3 P1）', async () => {
+    await renderWithWorks();
+    openPlaybackTab();
+    let finishPlayParts: () => void = () => {};
+    playPartsMock.mockImplementationOnce(() => new Promise<{ scheduledAtMs: number }>((resolve) => {
+      finishPlayParts = () => resolve({ scheduledAtMs: Date.now() });
+    }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(1); }, { timeout: 15000 });
+
+    selectWork('作品B');
+    openPlaybackTab();
+    await waitFor(() => { expect(screen.getAllByText('作品B').length).toBeGreaterThan(0); }, { timeout: 15000 });
+    // 切替の時点で A は止められている（予約待ちでも stopAll が走る）
+    expect(stopAllMock).toHaveBeenCalled();
+    const playButton = screen.getByRole('button', { name: '再生' }) as HTMLButtonElement;
+    await waitFor(() => { expect(playButton.disabled).toBe(false); }, { timeout: 15000 });
+    fireEvent.click(playButton);
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(2); }, { timeout: 15000 });
+    expect(playedKeys(1)).toEqual(['e/4']);
+    await waitFor(() => { expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy(); }, { timeout: 15000 });
+
+    // ここで A の古い予約待ちが明ける。B は止まらず「再生中」のまま
+    stopAllMock.mockClear();
+    finishPlayParts();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stopAllMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('Aの再開待ちが明ける前にBを再生した場合も、Bを止めない（round3 P1）', async () => {
+    await renderWithWorks();
+    openPlaybackTab();
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy(); }, { timeout: 15000 });
+    fireEvent.click(screen.getByRole('button', { name: '一時停止' }));
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再開' })).toBeTruthy(); }, { timeout: 15000 });
+    let finishResume: () => void = () => {};
+    resumeMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finishResume = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: '再開' }));
+    await waitFor(() => { expect(resumeMock).toHaveBeenCalled(); });
+
+    selectWork('作品B');
+    openPlaybackTab();
+    await waitFor(() => { expect(screen.getAllByText('作品B').length).toBeGreaterThan(0); }, { timeout: 15000 });
+    const playButton = screen.getByRole('button', { name: '再生' }) as HTMLButtonElement;
+    await waitFor(() => { expect(playButton.disabled).toBe(false); }, { timeout: 15000 });
+    fireEvent.click(playButton);
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(2); }, { timeout: 15000 });
+    await waitFor(() => { expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy(); }, { timeout: 15000 });
+
+    stopAllMock.mockClear();
+    finishResume();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stopAllMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
 });
