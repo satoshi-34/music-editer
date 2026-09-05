@@ -9,8 +9,8 @@ velocity を**ゲイン（音量）にだけ**掛けていたので、pp でも�
 - **弱い音だけ**にローパスフィルタ（BiquadFilter・Q 0 dB）を 1 つ挟み、カットオフを velocity で動かす。
   対応表は純関数 `velocityToCutoffHz`（`src/audio/velocityTimbre.ts`）: velocity **0.5 以上は素通し**
   （強弱記号の無い音＝0.5、mf＝0.58、f 以上を 1 音も変えない。round1 P1: 中点補間だと無記号譜面が
-  一律にこもった）。0.5 未満は 1.4kHz（v=0）〜16kHz（v=0.5）を対数補間（pp 0.22 で約 4.1kHz、
-  p 0.35 で約 7.7kHz）。素通しの音にはフィルタ自体を作らない（ノードを増やさない）
+  一律にこもった）。0.5 未満は 600Hz（v=0）〜16kHz（v=0.5）を対数補間（pp 0.22 で約 2.5kHz、
+  p 0.35 で約 6kHz。初版の 1.4kHz 下限は運用者検聴で「柔らかさ不足」→ 600Hz に）。素通しの音にはフィルタ自体を作らない（ノードを増やさない）
 - **内蔵音源（SimpleAudioEngine）**: 音ごとの GainNode → フィルタ → マスターゲイン。
   `registerOscillators` に velocity を渡したとき（＝譜面再生）だけ挟む。確認音・テスト音（velocity
   無し）は素通し。**Safari の簡易経路（`playSafariSafeVoice`）には挟まない**（「1 osc + 1 gain に
