@@ -374,3 +374,98 @@ describe('SoundFontEngine の小節ごとのテンポ（Issue #458）', () => {
     expect(played[1].at).toBeCloseTo(2, 6);
   });
 });
+
+describe('SoundFontEngine の強弱→音色（Issue #670）', () => {
+  const setup = async () => {
+    const filters: Array<{ type: string; frequency: { value: number }; Q: { value: number }; connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }> = [];
+    vi.stubGlobal('AudioContext', vi.fn(function () {
+      return {
+        state: 'running', currentTime: 0, destination: {}, resume: vi.fn(),
+        createGain: vi.fn(() => ({ gain: { value: 1 }, connect: vi.fn() })),
+        createBiquadFilter: vi.fn(() => {
+          const filter = { type: '', frequency: { value: 0 }, Q: { value: 0 }, connect: vi.fn(), disconnect: vi.fn() };
+          filters.push(filter);
+          return filter;
+        }),
+      };
+    }));
+    const nodes: Array<{ connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }> = [];
+    const playerOut = { gain: { value: 1 }, connect: vi.fn() };
+    const play = vi.fn(() => { const node = { connect: vi.fn(), disconnect: vi.fn() }; nodes.push(node); return node; });
+    const engine = new SoundFontEngine();
+    vi.spyOn(internals(engine), 'getPlayerForInstrument').mockResolvedValue({ play, out: playerOut } as never);
+    await engine.initialize();
+    return { engine, play, nodes, filters, playerOut };
+  };
+
+  it('弱い音の音ノードを player の出力からだけ外し、ローパス経由でマスターへつなぎ直す。mf 以上は触らない', async () => {
+    const { engine, nodes, filters, playerOut } = await setup();
+    await engine.playParts([{
+      measures: [{ measureBeats: 4, events: [
+        { dur: '4', isRest: false, keys: ['C4'], velocity: 0.22 },
+        { dur: '4', isRest: false, keys: ['D4'], velocity: 0.35 },
+        { dur: '4', isRest: false, keys: ['E4'], velocity: 0.74 },
+      ] }],
+    }], 120);
+    expect(nodes.length).toBe(3);
+    // 弱い音 2 つ × 2 段
+    expect(filters.length).toBe(4);
+    [0, 1].forEach((i) => {
+      const first = filters[i * 2]; const last = filters[i * 2 + 1];
+      // 外すのは player.out への接続だけ（引数なしの disconnect で他の接続を巻き込まない）
+      expect(nodes[i].disconnect).toHaveBeenCalledWith(playerOut);
+      expect(nodes[i].connect).toHaveBeenCalledWith(first);
+      expect(first.connect).toHaveBeenCalledWith(last);
+      // 最終段の接続先はマスターゲイン（GainNode）
+      const dest = last.connect.mock.calls[0][0] as { gain?: unknown };
+      expect(dest && 'gain' in dest).toBe(true);
+    });
+    expect(nodes[2].disconnect).not.toHaveBeenCalled();
+    expect(filters[0].frequency.value).toBeLessThan(filters[2].frequency.value);
+  });
+
+  it('つなぎ直しの途中で失敗したら player の出力へ戻す（無音にしない）／player.out 無し・play() undefined でも触らない', async () => {
+    const { engine, filters, playerOut } = await setup();
+    // 1 回目（フィルタへの接続）だけ失敗し、戻すための 2 回目は成功する
+    const failing = {
+      connect: vi.fn().mockImplementationOnce(() => { throw new Error('connect failed'); }),
+      disconnect: vi.fn(),
+    };
+    const player = { play: vi.fn(() => failing), out: playerOut };
+    vi.spyOn(internals(engine), 'getPlayerForInstrument').mockResolvedValue(player as never);
+    await engine.playParts([{
+      measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C4'], velocity: 0.22 }] }],
+    }], 120);
+    // 失敗後: フィルタは外され、音ノードは player.out へ戻される（2 回目の connect）
+    expect(filters.length).toBe(2);
+    filters.forEach((f) => { expect(f.disconnect).toHaveBeenCalled(); });
+    expect(failing.connect).toHaveBeenLastCalledWith(playerOut);
+
+    // player.out を持たない想定外の player では配線を触らない（従来どおり鳴る）
+    const bare = { connect: vi.fn(), disconnect: vi.fn() };
+    const noOut = { play: vi.fn(() => bare) };
+    vi.spyOn(internals(engine), 'getPlayerForInstrument').mockResolvedValue(noOut as never);
+    await engine.playParts([{
+      measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C4'], velocity: 0.22 }] }],
+    }], 120);
+    expect(bare.disconnect).not.toHaveBeenCalled();
+    expect(bare.connect).not.toHaveBeenCalled();
+    expect(filters.length).toBe(2);
+
+    const silent = { play: vi.fn(() => undefined), out: playerOut };
+    vi.spyOn(internals(engine), 'getPlayerForInstrument').mockResolvedValue(silent as never);
+    await expect(engine.playParts([{
+      measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C9'], velocity: 0.22 }] }],
+    }], 120)).resolves.not.toThrow();
+  });
+
+  it('OFF ならつなぎ直さない（従来どおり player の出力へ）', async () => {
+    const { engine, nodes, filters } = await setup();
+    engine.setVelocityTimbreEnabled(false);
+    await engine.playParts([{
+      measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['C4'], velocity: 0.22 }] }],
+    }], 120);
+    expect(filters.length).toBe(0);
+    expect(nodes[0].disconnect).not.toHaveBeenCalled();
+  });
+});

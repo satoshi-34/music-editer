@@ -16,6 +16,13 @@ describe('DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS', () => {
 });
 
 describe('sanitizePlaybackRuntimeSettings', () => {
+  it('velocityTimbreStrength: 無ければ 1、範囲外や非数は丸めて既定へ（#670 段2）', () => {
+    expect(sanitizePlaybackRuntimeSettings({}).velocityTimbreStrength).toBe(1);
+    expect(sanitizePlaybackRuntimeSettings({ velocityTimbreStrength: 0.4 }).velocityTimbreStrength).toBe(0.4);
+    expect(sanitizePlaybackRuntimeSettings({ velocityTimbreStrength: 'x' }).velocityTimbreStrength).toBe(1);
+    expect(sanitizePlaybackRuntimeSettings({ velocityTimbreStrength: 5 }).velocityTimbreStrength).toBe(1);
+  });
+
   it('既存ユーザーが保存済みのパック名（FluidR3_GM）は既定へ書き換えない', () => {
     // 既定値を変えても、すでに選んで保存してある設定は勝手に乗り換えさせない。
     const settings = sanitizePlaybackRuntimeSettings({
@@ -26,6 +33,12 @@ describe('sanitizePlaybackRuntimeSettings', () => {
     });
 
     expect(settings.pluginName).toBe('FluidR3_GM');
+  });
+
+  it('強弱→音色（#670）は既定 ON。保存済みの false は尊重する', () => {
+    expect(DEFAULT_PLAYBACK_SOUND_RUNTIME_SETTINGS.velocityTimbreEnabled).toBe(true);
+    expect(sanitizePlaybackRuntimeSettings({ engineMode: 'soundfont' }).velocityTimbreEnabled).toBe(true);
+    expect(sanitizePlaybackRuntimeSettings({ engineMode: 'soundfont', velocityTimbreEnabled: false }).velocityTimbreEnabled).toBe(false);
   });
 
   it('未知の値が来たときは安全な既定値へ戻す', () => {

@@ -17,11 +17,13 @@ describe('SimpleAudioEngine', () => {
   let mockOscillatorB: any;
   let createdOscillators: any[];
   let createdGains: any[];
+  let createdFilters: Array<{ type: string; frequency: { value: number }; Q: { value: number }; connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }>;
   let mockContext: any;
 
   beforeEach(() => {
     createdOscillators = [];
     createdGains = [];
+    createdFilters = [];
 
     const createMockOscillator = () => ({
       type: 'sine',
@@ -76,7 +78,13 @@ describe('SimpleAudioEngine', () => {
       }),
       close: vi.fn(),
       createOscillator: vi.fn(() => createdOscillators.shift() ?? createMockOscillator()),
-      createGain: vi.fn(() => createdGains.shift() ?? createMockGainNode())
+      createGain: vi.fn(() => createdGains.shift() ?? createMockGainNode()),
+      // 強弱→音色（#670）のローパス。作った順に記録して、velocity との対応を検証する
+      createBiquadFilter: vi.fn(() => {
+        const filter = { type: '', frequency: { value: 0 }, Q: { value: 0 }, connect: vi.fn(), disconnect: vi.fn() };
+        createdFilters.push(filter);
+        return filter;
+      })
     };
 
     vi.stubGlobal('AudioContext', vi.fn(function () {
@@ -172,6 +180,50 @@ describe('SimpleAudioEngine', () => {
     // 第5引数は尻尾の長さ（同時発音数の上限で詰められた音用・#605）。ここでは値を問わない
     expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(1, expect.any(Number), expect.any(Number), expect.any(Number), 0.22, expect.any(Number), expect.anything());
     expect(playNoteAtTimeSpy).toHaveBeenNthCalledWith(2, expect.any(Number), expect.any(Number), expect.any(Number), 0.74, expect.any(Number), expect.anything());
+  });
+
+  describe('強弱を音色にも効かせる（Issue #670）', () => {
+    it('弱い音（0.5 未満）だけローパスを 1 つ挟み、弱いほどカットオフが低い。mf 以上は従来どおり', async () => {
+      await engine.initialize();
+      const gainsBefore = mockContext.createGain.mock.results.length;
+      await engine.playParts([{
+        measures: [{ measureBeats: 4, events: [
+          { dur: '4', isRest: false, keys: ['c/4'], velocity: 0.22 },
+          { dur: '4', isRest: false, keys: ['d/4'], velocity: 0.35 },
+          { dur: '4', isRest: false, keys: ['e/4'], velocity: 0.74 },
+        ] }],
+      }], 120);
+      // 弱い音 2 つ × 2 段
+      expect(createdFilters.length).toBe(4);
+      expect(createdFilters[0].type).toBe('lowpass');
+      expect(createdFilters[0].frequency.value).toBeLessThan(createdFilters[2].frequency.value);
+      // 配線: 音のゲイン → 1 段目 → 2 段目 → マスターゲイン
+      const gainsAfter = mockContext.createGain.mock.results.slice(gainsBefore).map((r: { value: unknown }) => r.value);
+      [[createdFilters[0], createdFilters[1]], [createdFilters[2], createdFilters[3]]].forEach(([first, last]) => {
+        const feeding = gainsAfter.filter((g: { connect: { mock: { calls: unknown[][] } } }) =>
+          g.connect.mock.calls.some((call) => call[0] === first));
+        expect(feeding.length, '1 段目へつないだ音のゲインが 1 つ').toBe(1);
+        expect(first.connect).toHaveBeenCalledWith(last);
+        expect(last.connect).toHaveBeenCalledTimes(1);
+        const dest = last.connect.mock.calls[0][0] as { gain?: unknown };
+        expect(dest && 'gain' in dest, '2 段目の接続先はマスターゲイン').toBe(true);
+      });
+    });
+
+    it('OFF にすると従来どおりフィルタを作らない', async () => {
+      await engine.initialize();
+      engine.setVelocityTimbreEnabled(false);
+      await engine.playParts([{
+        measures: [{ measureBeats: 4, events: [{ dur: '4', isRest: false, keys: ['c/4'], velocity: 0.22 }] }],
+      }], 120);
+      expect(createdFilters.length).toBe(0);
+    });
+
+    it('確認音（velocity 無し）にはフィルタを挟まない', async () => {
+      await engine.initialize();
+      await engine.playNoteByName('C4', 0.3);
+      expect(createdFilters.length).toBe(0);
+    });
   });
 
   describe('タイで結ばれた音の再生（Issue #445）', () => {

@@ -49,6 +49,9 @@ import {
   describeLeadingRestFill,
   describeMeasureFull,
   describeNoTupletInMeasure,
+  describePickupCleared,
+  describePickupOverflow,
+  describePickupSet,
   describeOttavaPlaced,
   describeOttavaRemoved,
   describeSymbolToolUnavailable,
@@ -169,7 +172,7 @@ import {
   widenThinBarlineRect,
   markThickBarlineRect,
 } from '../utils/engravingDefaults';
-import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
+import { buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDurationBeats, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildBeatColumns, planLeadingRestFillBeats, type BeatColumn } from '../utils/beatColumnUtils';
 import { sliceBoundaryCandidates, snapToSliceBoundary } from '../utils/beatSliceUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
@@ -191,10 +194,17 @@ import { snapInsertIndexOutOfTupletGroup } from '../utils/tupletGroupIntegrity';
 import { getTupletClipboardGroup, setTupletClipboardGroup } from '../utils/tupletClipboard';
 import {
   formatTimeSignature,
-  getMeasureBeats,
   normalizeTimeSignature,
   normalizeTimeSignatureStyle,
 } from '../utils/timeSignatureUtils';
+import {
+  buildPickupBeatOptions,
+  getDisplayedMeasureNumber,
+  getPickupBeats,
+  normalizePickupBeats,
+  resolveMeasureCapacityBeats,
+  resolveTimeSignatureAtMeasure,
+} from '../utils/measureCapacityUtils';
 import { getVoltaRenderConfig } from '../utils/endingBracketUtils';
 import {
   allocateCombinedMeasureWidths,
@@ -204,6 +214,7 @@ import {
   measurePlannerSafetyPadding,
   SCORE_LAYOUT_RENDER_SCALE,
   staveSpacingForPartCount,
+  SYSTEM_BREATHING_ROOM_PX,
   SYSTEM_FIRST_CLEF_PADDING,
   SYSTEM_PAGE_SIDE_PADDING,
   SYSTEM_TARGET_FILL,
@@ -220,7 +231,7 @@ import {
 // Issue #38）。既存のテスト（PianoSystemCanvasPartSpacing.test.tsx）はこのファイルからの
 // named import を使っているため、後方互換として re-export する。
 export { computeLayout, staveSpacingForPartCount };
-import { createVexFlowTuplets, syncTupletBracketsWithBeams, syncTupletPlacementWithNotes, vexFlowDotCount, type RenderedTuplet } from '../utils/vexFlowTimingUtils';
+import { createVexFlowTuplets, syncTupletBracketsWithBeams, syncTupletPlacementWithNotes, vexFlowDotCount, type RenderedTuplet, type TupletObstacleRect } from '../utils/vexFlowTimingUtils';
 import type { IncomingArcEntry } from '../utils/incomingArcUtils';
 import { suggestNextRehearsalMark } from '../utils/rehearsalMarkUtils';
 import {
@@ -1054,6 +1065,10 @@ type BuildPartVoicesInput = {
   normalizedKeySignature: KeySignature;
   /** この小節時点で有効な調号（途中調号変更を解決済みの値） */
   effectiveKeySigForMeasure: KeySignature;
+  /**
+   * この小節の容量（何拍ぶん入るか）。弱起（アウフタクト）の小節では拍子より短い
+   * （Issue #473）。表示用の補完休符をどこまで足すかの基準になる。
+   */
   beatsPerMeasure: number;
   timeSignatureNumerator: number;
   timeSignatureDenominator: number;
@@ -1688,6 +1703,11 @@ function drawRenderedVoiceEntries(
   vexCtx: ReturnType<Renderer['getContext']>,
   stave: Stave,
   renderedVoiceEntries: RenderedVoiceEntry[],
+  // 段またぎ連符の数字が避ける障害物（他パート・他声部の音符の描画範囲）を返す関数。
+  // 段またぎ連符があったときだけ呼ばれる（#574）
+  getTupletObstacles?: () => readonly TupletObstacleRect[],
+  // 段（SVG の箱）の縦の範囲。段またぎ連符の数字をこの外へ出さない（#574 round3）
+  tupletVerticalBounds?: { topY: number; bottomY: number },
 ): void {
     renderedVoiceEntries.forEach((entry) => {
       try{
@@ -1745,7 +1765,11 @@ function drawRenderedVoiceEntries(
       // VexFlow は符幹の向きだけで上下を決めるため、加線の上（下）に離れた音符では
       // 数字だけが五線をまたいで反対側へ取り残され、多段譜では下の段のビームと重なる。
       // 音符と五線の位置関係が要るので、音符が五線へ紐づいたあと（＝描画段）に呼ぶ。
-      syncTupletPlacementWithNotes(entry.tuplets);
+      // 段またぎ連符（#574）は「梁の側」の判定に持ち主のパートの五線が要るので一緒に渡し、
+      // 左手の和音などを避けるための障害物も（またぎがあったときだけ）引けるようにする。
+      syncTupletPlacementWithNotes(entry.tuplets, {
+        ownerStave: stave, getObstacles: getTupletObstacles, verticalBounds: tupletVerticalBounds,
+      });
       entry.tuplets.forEach(({ tuplet, hideNumber }, tupletIndex) => {
         // 数字を隠す指定のグループは描画そのものを行わない（Issue #269）。
         // VexFlow の Tuplet.draw() は数字を必ず描くので「数字だけ消す」ができない。
@@ -2156,7 +2180,7 @@ function drawCollectedSymbolEntries(args: {
         aboveOffset += 10 * s;
       } else if (type === 'accent') {
         // アクセント: 横向きの「>」（先端が右）。以前は下向きの楔（∨）で描いていたが、
-        // 記譜の作法として誤りで、マルカート（∧系）とも紛らわしかった（Issue #474・弟の実使用指摘）
+        // 記譜の作法として誤りで、マルカート（∧系）とも紛らわしかった（Issue #474・ユーザーの実使用指摘）
         const bottomY = noteTopY - 5 - aboveOffset + adjust.offsetY;
         const midY = bottomY - 5.5 * s;
         const topY = bottomY - 11 * s;
@@ -2509,7 +2533,6 @@ export default function PianoSystemCanvas({
   const normalizedTimeSignature = normalizeTimeSignature(timeSignature);
   const timeSignatureNumerator = normalizedTimeSignature[0];
   const timeSignatureDenominator = normalizedTimeSignature[1];
-  const beatsPerMeasure = getMeasureBeats(normalizedTimeSignature);
   const normalizedTimeSignatureStyle = normalizeTimeSignatureStyle(timeSignatureStyle);
   const formattedTimeSignature = formatTimeSignature(normalizedTimeSignature, normalizedTimeSignatureStyle);
   const ref = useRef<HTMLDivElement>(null);
@@ -2565,6 +2588,19 @@ export default function PianoSystemCanvas({
   const [partsScore, setPartsScore] = useState<MeasureData[][]>(
     () => parts.map(p => mkInit(p.data))
   );
+
+  /**
+   * その小節に何拍ぶん入るか（小節の容量）。弱起（アウフタクト）の小節は拍子より短いので、
+   * 「段に1つの拍数」ではなく小節ごとに解決する（Issue #473）。
+   * 弱起が無いときは全小節で拍子ぶん＝従来と同じ値を返す。
+   *
+   * 弱起・途中拍子変更の正本はパート0の小節（keySignature と同じ読み取り規約）。
+   * 記号ドラッグ中の下書きコピー（partsScoreForRender）ではなく保存データ側の partsScore を
+   * 見ているのは、下書きが変えるのは記号のオフセットだけで拍数には影響しないため。
+   */
+  const capacityBeatsAt = (absoluteMeasureIndex: number): number =>
+    resolveMeasureCapacityBeats(partsScore[0] ?? parts[0]?.data ?? [], absoluteMeasureIndex, normalizedTimeSignature);
+
   const toggleRepeatMarkerAcrossParts = (measureIndex: number, kind: 'start' | 'end') => {
     // リピート記号はシステム全体でそろって見える方が自然なので、
     // 多段譜ではクリックした1段だけでなく全パートへ同じ印を付ける。
@@ -2585,7 +2621,8 @@ export default function PianoSystemCanvas({
     selectedHairpin: SelectedHairpinSel;
     activeVoiceIndex: number;
     activeLayerPartIndex: number | undefined;
-    beatsPerMeasure: number;
+    /** 小節の容量を解決する関数（弱起対応・Issue #473）。単一の拍数では弱起を表せない */
+    capacityBeatsAt: (absoluteMeasureIndex: number) => number;
     selectedMeasures: { start: number; end: number; startBeat?: number; endBeat?: number } | null;
     disabled: boolean;
     isPrintPreview: boolean;
@@ -2599,7 +2636,7 @@ export default function PianoSystemCanvas({
     selectedHairpin: null,
     activeVoiceIndex,
     activeLayerPartIndex,
-    beatsPerMeasure,
+    capacityBeatsAt,
     selectedMeasures: selectedMeasures ?? null,
     disabled,
     isPrintPreview,
@@ -2684,6 +2721,13 @@ export default function PianoSystemCanvas({
   // 従来の個別 setState と同一なので挙動はゼロ差。
   type OverlayStates = {
     timeSig: {
+    measureAbsoluteIndex: number;
+    currentValue: string;
+    overlayX: number;
+    overlayY: number;
+    } | null;
+    /** 弱起（アウフタクト＝不完全小節）の設定オーバーレイ（Issue #473） */
+    pickup: {
     measureAbsoluteIndex: number;
     currentValue: string;
     overlayX: number;
@@ -2863,7 +2907,7 @@ export default function PianoSystemCanvas({
         dispatchEditorLocal({ type: 'OVERLAY_SET', kind, value });
     return {
       note: selectionSetter('note'), arc: selectionSetter('arc'), hairpin: selectionSetter('hairpin'),
-      timeSig: overlaySetter('timeSig'), keySig: overlaySetter('keySig'), clef: overlaySetter('clef'),
+      timeSig: overlaySetter('timeSig'), pickup: overlaySetter('pickup'), keySig: overlaySetter('keySig'), clef: overlaySetter('clef'),
       bpm: overlaySetter('bpm'), rehearsal: overlaySetter('rehearsal'), text: overlaySetter('text'),
       freeText: overlaySetter('freeText'),
       symbolResize: overlaySetter('symbolResize'), symbolOffset: overlaySetter('symbolOffset'),
@@ -2879,6 +2923,8 @@ export default function PianoSystemCanvas({
   const setSelectedHairpin = editorLocalSetters.hairpin;
   const timeSigEditState = editorLocal.overlay?.kind === 'timeSig' ? editorLocal.overlay.payload : null;
   const setTimeSigEditState = editorLocalSetters.timeSig;
+  const pickupEditState = editorLocal.overlay?.kind === 'pickup' ? editorLocal.overlay.payload : null;
+  const setPickupEditState = editorLocalSetters.pickup;
   const keySigEditState = editorLocal.overlay?.kind === 'keySig' ? editorLocal.overlay.payload : null;
   const setKeySigEditState = editorLocalSetters.keySig;
   const clefEditState = editorLocal.overlay?.kind === 'clef' ? editorLocal.overlay.payload : null;
@@ -3772,7 +3818,7 @@ export default function PianoSystemCanvas({
       selectedHairpin,
       activeVoiceIndex,
       activeLayerPartIndex,
-      beatsPerMeasure,
+      capacityBeatsAt,
       selectedMeasures: selectedMeasures ?? null,
       disabled,
       isPrintPreview,
@@ -4313,7 +4359,7 @@ export default function PianoSystemCanvas({
         }
         // 貼り付け先の声部は「いま編集中の声部」（コピー元の声部は問わない）。
         const targetVoiceIndex=latestRef.current.activeVoiceIndex;
-        const beatsLimit=latestRef.current.beatsPerMeasure;
+        const beatsLimit=latestRef.current.capacityBeatsAt(measure);
         // 空き拍の判定は setPartsScore の updater の**外**で行う（Issue #331）。
         // updater の中で通知すると、React が updater を2回呼ぶ場面（StrictMode など）で
         // 同じ通知が二重に出てしまうため（.claude/specs/dead-end-speaks/design.md の約束）。
@@ -5338,12 +5384,22 @@ export default function PianoSystemCanvas({
         }
         // 小節番号: 段の先頭小節（i===0）・最上段（pi===0）にだけ、絶対小節番号を表示する。
         // 曲頭（絶対インデックス0）は慣習として番号を出さない。
+        // 弱起（アウフタクト）があるときは、慣習どおり弱起を0と数えるため番号が1つずつ
+        // 繰り下がる（弱起の次の小節が「1」）。getDisplayMeasureNumber が正本（Issue #473）。
         if (pi === 0 && i === 0 && startMeasureIndex !== 0) {
-          measureNumberEntries.push({
-            x: x / s,
-            topY: stave.getYForLine(0),
-            number: startMeasureIndex + 1,
-          });
+          // 弱起は 0（＝番号を出さない小節）として返る
+          const displayNumber = getDisplayedMeasureNumber(
+            partsScoreForRender[0] ?? parts[0]?.data ?? [],
+            startMeasureIndex,
+            normalizedTimeSignature
+          );
+          if (displayNumber !== 0) {
+            measureNumberEntries.push({
+              x: x / s,
+              topY: stave.getYForLine(0),
+              number: displayNumber,
+            });
+          }
         }
       });
 
@@ -5902,7 +5958,7 @@ export default function PianoSystemCanvas({
           pi, systemColumnIndex: i, absI, staveSets, parts,
           partsScoreForRender, normalizedKeySignature,
           effectiveKeySigForMeasure: effectiveKeySigPerMeasure[i],
-          beatsPerMeasure, timeSignatureNumerator, timeSignatureDenominator,
+          beatsPerMeasure: capacityBeatsAt(absI), timeSignatureNumerator, timeSignatureDenominator,
           selected, activeVoiceIndex,
           highlightedLayerPartIndex: activeLayerHighlightPartIndex,
           prevMeasureState: prevMeasureStatePerPart[pi],
@@ -5921,6 +5977,55 @@ export default function PianoSystemCanvas({
 
       // Pass 2: 合同フォーマット。実体は formatSystemColumnVoices（module スコープ・#244 段4c-1）
       formatSystemColumnVoices(allVoicesForFormatting, restAlignVoices, staveSets[0][i]);
+
+      // 段またぎ連符の数字が避ける障害物（#574）: この段のすべてのパート・声部の音符の
+      // 描画範囲。Pass 2 の合同フォーマットが済んだ後なので、まだ描いていないパート
+      // （左手）の音符でも位置は確定している ＝ 右手を描く時点で左手の和音を避けられる。
+      // 段またぎ連符がある小節でしか要らないので、最初に必要になった時点で1回だけ作る。
+      let cachedSystemNoteRects: TupletObstacleRect[] | null = null;
+      const getSystemNoteRects = (): readonly TupletObstacleRect[] => {
+        if (cachedSystemNoteRects) return cachedSystemNoteRects;
+        // 先に「この段の全パートのビーム」を post-format しておく（#574 round2 P1）。
+        // 連桁の音符は、ビームの傾きに合わせて符幹が伸ばされる（VexFlow の
+        // Beam.postFormat → applyStemExtensions）。これは既定では Beam.draw() の中で
+        // 初めて走るため、右手を描く時点ではまだ描いていない左手の符幹が「伸ばされる前の
+        // 短い長さ」のままになり、あとで伸びて数字とぶつかることがあった。
+        // postFormat は2回目以降は何もしない（postFormatted フラグ）ので、
+        // このあと Beam.draw() が呼ばれても結果は変わらない。
+        partVoiceCache.forEach((cache) => {
+          cache?.renderedVoiceEntries.forEach((entry) => {
+            // 段またぎ声部は、合同整形で消えたビームの参照と符幹の向きを先に戻す（#319）。
+            // 向きが戻る前に post-format すると、間違った向きのまま符幹長が確定してしまう
+            // （描画時の復元は同じ内容なので、ここで先に呼んでも二重には効かない）
+            if (entry.hasCrossStaffNote) {
+              restoreCrossStaffBeamAssignments(entry.beams);
+            }
+            entry.beams.forEach((beam) => {
+              try {
+                (beam as unknown as { postFormat?: () => void }).postFormat?.();
+              } catch {
+                // 整形が済んでいないビームでは失敗し得る。そのビームを諦めるだけでよい
+              }
+            });
+          });
+        });
+        const rects: TupletObstacleRect[] = [];
+        partVoiceCache.forEach((cache) => {
+          cache?.renderedVoiceEntries.forEach((entry) => {
+            entry.vfNotes.forEach((note) => {
+              try {
+                const bb = (note as unknown as { getBoundingBox?: () => { getX: () => number; getY: () => number; getW: () => number; getH: () => number } }).getBoundingBox?.();
+                if (!bb) return;
+                rects.push({ x: bb.getX(), y: bb.getY(), w: bb.getW(), h: bb.getH() });
+              } catch {
+                // 整形が済んでいない音符では範囲を取れないことがある。その音符を諦めるだけでよい
+              }
+            });
+          });
+        });
+        cachedSystemNoteRects = rects;
+        return rects;
+      };
 
       // Pass 3: フォーマット済みの Voice を使って実際の描画・イベントハンドラ設定を行う。
       // 空白クリック挿入のパートごとの実体。レイヤー明示選択中は「クリックした帯」では
@@ -6002,7 +6107,16 @@ export default function PianoSystemCanvas({
         }
 
         // 声部・ビーム・連符の描画（実体は drawRenderedVoiceEntries・#244 段4c-2）
-        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries);
+        // 段またぎ連符の数字の縦の許容範囲（#574 round3）。段の箱（sysH・論理座標）は Ped の
+        // 下余白の延長（#604）を除けば最下段の第5線で終わっていて下余白を持たないので、五線下の記号（Ped・pp・連符数字）は段の箱の
+        // 外に描かれる。下側の**公称の予算**として SYSTEM_BREATHING_ROOM_PX（70・本来は段数の
+        // 推奨値の見積もりに使う物理 px の目安）を論理座標のまま足す＝物理では 70×描画倍率
+        // （100% で約 31px）。実際の段間は段のスロット高と段の間隔（ユーザー設定）で決まるので
+        // これは上限の目安にすぎず、実測に基づく予約は #668 で扱う。
+        // 予算を越えるなら反対側（上）へ逃がす。上は段の箱の上端（第1線の上 6 間ぶん）まで
+        drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries, getSystemNoteRects, {
+          topY: 0, bottomY: sysH + SYSTEM_BREATHING_ROOM_PX,
+        });
 
         // 自動衝突回避（#340 段1）の障害物: 描画した全声部の音符の BoundingBox
         // （符頭＋符幹を含む）を段ごとに集める。編集レイヤーやアクティブ声部の
@@ -6331,7 +6445,7 @@ export default function PianoSystemCanvas({
               clickX:lx,
               currentBeats,
               addBeats,
-              beatsPerMeasure,
+              beatsPerMeasure: capacityBeatsAt(absI),
             });
             if(fillBeats<=0)return {rests:[],startBeat:currentBeats};
             // 埋める休符の高さは、画面に見えている補完休符（computeVoiceDisplayPadding）と
@@ -6377,7 +6491,7 @@ export default function PianoSystemCanvas({
             const groupEvents = tupletMicrotone
               ? groupEventsBase.map((event) => event.isRest ? event : applyMicrotoneToEvent(event, tupletMicrotone, 0))
               : groupEventsBase;
-            if(currentBeats + groupBeats > beatsPerMeasure + 0.000001){
+            if(currentBeats + groupBeats > capacityBeatsAt(absI) + 0.000001){
               // 黙って諦めると「クリック位置が悪いのか、アプリが壊れたのか」が分からない。
               // 拒否は正しい挙動なので、理由と次の一手だけを伝える（Issue #318「行き止まりは喋る」）
               notifyScoreEdit(describeMeasureFull());
@@ -6388,7 +6502,7 @@ export default function PianoSystemCanvas({
             setScore(prev=>{
               const next=prev.map(cloneMeasureData);
               while(absI>=next.length)next.push(createEmptyMeasure());
-              fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+              fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
               // 通常音符の挿入と同じ経路（withVoiceEventsUpdated）へそろえる。
               // 直接 m.events を触ると、声部2がアクティブでも声部1へ書き込んでしまう。
               next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
@@ -6405,7 +6519,7 @@ export default function PianoSystemCanvas({
           }
 
           const addBeats = beatsFromVF(toVFDur(addDuration)) * dotBeatsMultiplier(addDots);
-          if(currentBeats + addBeats > beatsPerMeasure){
+          if(currentBeats + addBeats > capacityBeatsAt(absI)){
             // 連符グループと同じく、入らない理由と代替手順を伝える（Issue #318）
             notifyScoreEdit(describeMeasureFull());
             return;
@@ -6431,7 +6545,7 @@ export default function PianoSystemCanvas({
           setScore(prev=>{
             const next=prev.map(cloneMeasureData);
             while(absI>=next.length)next.push(createEmptyMeasure());
-            fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+            fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
             next[absI]=withVoiceEventsUpdated(next[absI], activeVoiceIndex, (events)=>{
               const copy=[...events];
               copy.splice(Math.max(0,Math.min(at,copy.length)),0,...leading.rests,insertedEvent);
@@ -6455,7 +6569,7 @@ export default function PianoSystemCanvas({
          * 旧・案B（帯域のパートへ入れて自動切替）は、月光 m5 の低い右手三連符のような
          * 「片手が帯域を外れる」常態的な音型で明示選択が壊れたため差し替えた
          * （①実例 ②交差・月光型はピアノ曲で常態 ③Finale も選択レイヤー絶対方式で
-         * 弟のメンタルモデルもこれ。テスト会で引っかかりの逆流が無いか検証する。
+         * ユーザーのメンタルモデルもこれ。テスト会で引っかかりの逆流が無いか検証する。
          * 経緯は .claude/specs/editor-layer-selection/design.md の追補を参照）
          */
         const notifyCrossBandInsert = (sourceBandPi: number) => {
@@ -6468,8 +6582,9 @@ export default function PianoSystemCanvas({
         const sliceSelection = selectedMeasures != null && absI >= selectedMeasures.start && absI <= selectedMeasures.end
           ? (() => {
               const fromBeat = absI === selectedMeasures.start ? (selectedMeasures.startBeat ?? 0) : 0;
-              const toBeat = absI === selectedMeasures.end ? (selectedMeasures.endBeat ?? beatsPerMeasure) : beatsPerMeasure;
-              const partial = fromBeat > 0.0001 || toBeat < beatsPerMeasure - 0.0001;
+              const measureBeatsHere = capacityBeatsAt(absI);
+              const toBeat = absI === selectedMeasures.end ? (selectedMeasures.endBeat ?? measureBeatsHere) : measureBeatsHere;
+              const partial = fromBeat > 0.0001 || toBeat < measureBeatsHere - 0.0001;
               return { partial, fromBeat, toBeat };
             })()
           : null;
@@ -6496,7 +6611,7 @@ export default function PianoSystemCanvas({
           if (columns.length === 0 || !hasRealEvents) {
             // 空小節: 小節幅の線形補間で読む
             const ratio = Math.max(0, Math.min(1, (lx - measLeft) / Math.max(1, measRight - measLeft)));
-            return ratio * beatsPerMeasure;
+            return ratio * capacityBeatsAt(absI);
           }
           let best = columns[0];
           for (const col of columns) {
@@ -6504,7 +6619,7 @@ export default function PianoSystemCanvas({
           }
           // 最終列より右は小節末とみなす（末尾の音符の後ろをなぞったとき）
           const last = columns.reduce((a, b) => (a.x > b.x ? a : b));
-          if (lx > last.x + (last.x - measLeft) * 0.0 + 12) return beatsPerMeasure;
+          if (lx > last.x + (last.x - measLeft) * 0.0 + 12) return capacityBeatsAt(absI);
           return best.beats;
         };
         const sliceCandidatesHere = (): number[] => {
@@ -6516,9 +6631,9 @@ export default function PianoSystemCanvas({
           if (activeLayerPartIndex != null) {
             const layerMeasure = (partsScoreForRender[activeLayerPartIndex] ?? [])[absI];
             const layerEvents = getMeasureVoices(layerMeasure)[activeVoiceIndex]?.events ?? [];
-            return sliceBoundaryCandidates([{ events: layerEvents }], beatsPerMeasure);
+            return sliceBoundaryCandidates([{ events: layerEvents }], capacityBeatsAt(absI));
           }
-          return sliceBoundaryCandidates(parts.map((_, otherPi) => (partsScoreForRender[otherPi] ?? [])[absI]), beatsPerMeasure);
+          return sliceBoundaryCandidates(parts.map((_, otherPi) => (partsScoreForRender[otherPi] ?? [])[absI]), capacityBeatsAt(absI));
         };
         const snappedBeatAtX = (lx: number): number =>
           snapToSliceBoundary(beatAtX(lx), sliceCandidatesHere());
@@ -6637,6 +6752,21 @@ export default function PianoSystemCanvas({
               });
               return 'handled';
             }
+            case 'measurePickup': {
+              // 弱起（不完全小節）はパート間で食い違わせない約束なので、拍子と同じく
+              // 正本のパート0から現在値を読む（書き込みは全パートへ・Issue #473）
+              const currentPickup = getPickupBeats(
+                partsScoreForRender[0] ?? parts[0]?.data ?? [],
+                absI,
+                normalizedTimeSignature
+              );
+              setPickupEditState({
+                measureAbsoluteIndex: absI,
+                currentValue: currentPickup != null ? String(currentPickup) : '',
+                ...overlayAt(),
+              });
+              return 'handled';
+            }
             case 'measureKeySig': {
               // 調号は最上段（partsScore[0]）の小節データに保存する（読み取りは描画用コピー）
               const currentKS = partsScoreForRender[0]?.[absI]?.keySignature;
@@ -6733,11 +6863,11 @@ export default function PianoSystemCanvas({
         // 強調表示もそのパートの五線にだけ出す。他の段まで塗ると「全パートに効く」ように見える
         if (sliceSelection?.partial && (activeLayerPartIndex == null || pi === activeLayerPartIndex)) {
           const xForBeat = (b: number): number => {
-            if (b >= beatsPerMeasure - 0.0001) return measRight;
+            if (b >= capacityBeatsAt(absI) - 0.0001) return measRight;
             if (b <= 0.0001) return measLeft;
             const columns = beatColumnsByMeasureP.get(absI) ?? [];
             const hit = columns.find((c) => Math.abs(c.beats - b) < 0.0001);
-            return hit ? hit.x : measLeft + (b / beatsPerMeasure) * (measRight - measLeft);
+            return hit ? hit.x : measLeft + (b / capacityBeatsAt(absI)) * (measRight - measLeft);
           };
           const x1 = xForBeat(sliceSelection.fromBeat);
           const x2 = xForBeat(sliceSelection.toBeat);
@@ -7886,7 +8016,7 @@ export default function PianoSystemCanvas({
                   if(paste){
                     setHitScore(prev=>{
                       const next=prev.map(cloneMeasureData);
-                      fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+                      fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
                       const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
                       if(!targetEv?.isRest)return prev;
                       // 最新データで計画を作り直す（クリック時点の描画データは古い可能性があるため）。
@@ -7954,7 +8084,7 @@ export default function PianoSystemCanvas({
                   setHitScore(prev=>{
                     const next=prev.map(cloneMeasureData);
                     // 声部1側の休符補完は従来どおり必要（声部2の拍位置合わせのため）。
-                    fillPriorMeasureRests(next, absI, beatsPerMeasure, clefHere);
+                    fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
                     const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
                     if(!targetEv?.isRest)return prev;
                     const latestReplacement=withInputMicrotone(buildRestEditReplacement(targetEv,key,tool,noteAfterRest,clefHere));
@@ -8695,7 +8825,7 @@ export default function PianoSystemCanvas({
   // （＝声部2に切り替えたのにクリックが声部1を書き換える）。ブラウザ確認で発覚（Issue #112）。
   // symbolOffsetDraftKey: 矢印キーで記号を動かしている最中だけ変化する文字列。
   // これを入れておかないと、下書きを更新しても五線が描き直されず記号が動いて見えない（Issue #205）。
-  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,beatsPerMeasure,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,freeTextFontReadyTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
+  },[partsScore,symbolOffsetDraftKey,partsLayoutSignature,tool,scale,selected,selectedArc,selectedHairpin,startMeasureIndex,measuresPerSystem,showInstrumentLabels,showFullInstrumentLabels,normalizedKeySignature,formattedTimeSignature,normalizedTimeSignatureStyle,timeSignatureNumerator,timeSignatureDenominator,selectedMeasures,customSymbolDefs,measureWidthEvenness,containerWidthTick,freeTextFontReadyTick,pageMarginSideMm,symbolsClickable,partSpacingOffsetPx,activeVoiceIndex,activeLayerPartIndex,activeLayerHighlightPartIndex,disabled]);
 
   // TODO(phase2): 以下の各 Confirm ハンドラは、入力パース部分は
   // utils/measureMetaInputUtils.ts に共通化済みだが、setState 部分（setPartsScore で
@@ -8718,6 +8848,46 @@ export default function PianoSystemCanvas({
       })
     );
     setTimeSigEditState(null);
+  }
+
+  /**
+   * 弱起（アウフタクト＝拍が足りない不完全小節）を確定する（Issue #473）。
+   *
+   * 拍子と同じく全パートの同じ小節へ同じ値を書く（「右手だけ弱起」のような
+   * パート間の食い違いを構造的に作らせないため）。
+   * 音符は勝手に消さない: 容量を超える音符が残っていても、データはそのままにして
+   * 事実だけを通知する（黙って消えるのは #238 の事故と同じ形）。
+   */
+  function handlePickupConfirm(value: string) {
+    if (!pickupEditState) return;
+    const { measureAbsoluteIndex } = pickupEditState;
+    const measuresForMeta = partsScoreRef.current[0] ?? [];
+    // 「拍子未満か」はその小節で有効な拍子（途中拍子変更を解決した値）で判定する
+    const effectiveTimeSignature = resolveTimeSignatureAtMeasure(
+      measuresForMeta, measureAbsoluteIndex, normalizedTimeSignature
+    );
+    const parsed = value === 'none' ? undefined : normalizePickupBeats(Number(value), effectiveTimeSignature);
+    setPartsScore(prev =>
+      prev.map(partData => {
+        if (measureAbsoluteIndex >= partData.length) return partData;
+        const next = partData.map(cloneMeasureData);
+        // 既定（弱起なし）のときは項目自体を消す。旧データとの差分を増やさないため
+        const { pickupBeats: _cleared, ...rest } = next[measureAbsoluteIndex];
+        next[measureAbsoluteIndex] = parsed === undefined ? rest : { ...rest, pickupBeats: parsed };
+        return next;
+      })
+    );
+    if (parsed === undefined) {
+      notifyScoreEdit(describePickupCleared());
+    } else {
+      // 容量を超える音符が残っているかは、いま画面に出ている全パートの実長で見る
+      const overflows = partsScoreRef.current.some((partData) => {
+        const measure = partData[measureAbsoluteIndex];
+        return measure != null && getMeasureDurationBeats(measure) > parsed + 0.0001;
+      });
+      notifyScoreEdit(overflows ? describePickupOverflow(parsed) : describePickupSet(parsed));
+    }
+    setPickupEditState(null);
   }
 
   /**
@@ -9158,6 +9328,64 @@ export default function PianoSystemCanvas({
             <option value="5/4">5/4</option>
             <option value="7/8">7/8</option>
             <option value="12/8">12/8</option>
+          </select>
+        </div>
+      )}
+      {pickupEditState && (
+        <div
+          style={{
+            position: 'absolute',
+            left: pickupEditState.overlayX,
+            top: pickupEditState.overlayY - 10,
+            zIndex: 200,
+            background: '#fff',
+            border: '1.5px solid #7c3aed',
+            borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            minWidth: 200,
+          }}
+        >
+          <span style={{ fontSize: 10, color: '#7c3aed', fontFamily: 'sans-serif' }}>
+            弱起（アウフタクト。「解除」で普通の小節に戻す）
+          </span>
+          <select
+            // 開いた瞬間にキーボードで選べるようにする（他の小節メタのオーバーレイと同じ）
+            autoFocus
+            aria-label="弱起（アウフタクト）の長さ"
+            defaultValue={pickupEditState.currentValue || 'none'}
+            style={{
+              fontSize: 13,
+              fontFamily: 'sans-serif',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              padding: '2px 4px',
+              outline: 'none',
+            }}
+            onChange={(e) => {
+              handlePickupConfirm(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setPickupEditState(null);
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              if (e.relatedTarget === null) setPickupEditState(null);
+            }}
+          >
+            <option value="none">（解除）</option>
+            {buildPickupBeatOptions(
+              resolveTimeSignatureAtMeasure(
+                partsScoreForRender[0] ?? parts[0]?.data ?? [],
+                pickupEditState.measureAbsoluteIndex,
+                normalizedTimeSignature
+              )
+            ).map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
           </select>
         </div>
       )}

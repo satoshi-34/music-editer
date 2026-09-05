@@ -491,7 +491,7 @@ loadWorkAutosaveData(workId) → applyLoadedScoreData() で画面へ反映
 - 実測: 実物相当の譜面（月光 第1楽章 13小節・2声・段またぎ・記号付き）の autosave JSON は
   約 26.6KB。復元履歴は最大5世代 + backup 1世代 + meta で、**1作品あたり上限 ≒ 190KB**
 - localStorage の目安 5MB に対し、**約25作品**まで履歴フル保持で収まる計算。
-  実運用（本人+弟の数作品）には十分な余裕がある
+  実運用（運用者+発案者ユーザーの数作品）には十分な余裕がある
 - **判定: IndexedDB への移行は現時点で不要**。作品数が20を超える運用が見えた時点で
   別 Issue として切り出す（第3段の Quota 時縮小再試行が安全弁として機能する）
 
@@ -651,3 +651,22 @@ A再生→停止→B切替→即再生 / A再生中にB切替（stopAll） / A�
   最新の復元だけが解除できる。B 復元中に C を選ぶと、B の finally が C の途中でフラグを
   下ろして再生を受け付けていた
 - テスト2件追加（B 自然終了後に A の待ちが明ける／B→C の入れ子。計11件）
+
+## 追補: 保存領域の満杯と「使えない」の区別（Issue #641・2026-09-05・第1段）
+
+**現象**: 復元履歴で localStorage が 10MB（Chrome の上限）に達すると、`isStorageAvailable()`
+（試し書きの成否）が false になり、一覧・開く・削除まで止まってホームから抜け出せなくなった
+（運用者の実測: 履歴 2.3MB＋1.5MB＋1.0MB）。
+
+**対応（第1段・抜け出しに必要な最小限）**:
+- `getStorageCapacityState(): 'ok' | 'full' | 'unavailable'`。試し書きが容量超過
+  （`isQuotaExceededError`: QuotaExceededError / NS_ERROR_DOM_QUOTA_REACHED / code 22・1014）で
+  失敗したら **'full'**、それ以外の失敗は 'unavailable'。`isStorageAvailable()` は
+  'unavailable' 以外で true → 満杯でも一覧・開く・削除・書き出しが動く（読み出し・removeItem は通る）
+- 文言を日本語に統一: `STORAGE_FULL_MESSAGE`（削除か書き出しで退避）／`STORAGE_UNAVAILABLE_MESSAGE`
+  （シークレット・ブロック）。保存失敗の error.message、ファイルタブのバッジ、ホームのバナー
+  （`home-storage-notice`）で共用
+- 書き込みは従来どおり例外で判定（満杯なら QUOTA_EXCEEDED・recoverable）
+
+**残り（第2段・#641 の仕様 1・2・5）**: 履歴の世代数/容量の上限、全体予算を超えたときの自動整理、
+使用量の表示。夜間ルーチンへ。

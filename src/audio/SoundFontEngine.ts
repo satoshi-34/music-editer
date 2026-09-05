@@ -3,6 +3,7 @@ import { scheduleLeadSeconds } from './scheduleLead';
 import { limitPolyphony, maxPolyphony, type VoiceSpan } from './polyphonyLimit';
 import { createWindowedScheduler, lookaheadSeconds, type WindowedScheduler } from './scheduleWindow';
 import type { Player as SoundFontPlayer } from 'soundfont-player';
+import { createVelocityFilterChain, velocityToAttackSeconds, normalizeVelocityTimbreStrength } from './velocityTimbre';
 
 import type { PlaybackEngine, PlaybackPart, PlaybackScheduleInfo } from './PlaybackEngine';
 import type { PlaybackSoundProfile } from './playbackSettings';
@@ -369,7 +370,8 @@ export class SoundFontEngine implements PlaybackEngine {
         const occupancy = voice.endTime - voice.startTime;
         const duration = Math.min(voice.duration, occupancy);
         const release = Math.max(0, occupancy - duration);
-        voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity, release));
+        const node = voice.player.play(voice.note, voice.startTime, this.buildPlaybackOptions(duration, voice.velocity, release));
+        this.applyVelocityTimbre(context, voice.player, node, voice.velocity);
       },
       onError: (error) => {
         console.warn('[SoundFontEngine] 窓の予約に失敗したため以後の予約を止めます:', error);
@@ -469,6 +471,53 @@ export class SoundFontEngine implements PlaybackEngine {
   setSwingEnabled(enabled: boolean): void {
     this.swingEnabled = enabled;
     console.log('[SoundFontEngine] スウィング再生を切り替えました:', enabled);
+  }
+
+  /** 強弱を音色にも効かせる（#670）。既定 ON */
+  private velocityTimbreEnabled = true;
+  private velocityTimbreStrength = 1;
+  setVelocityTimbreEnabled(enabled: boolean): void {
+    this.velocityTimbreEnabled = enabled;
+  }
+
+  setVelocityTimbreStrength(strength: number): void {
+    this.velocityTimbreStrength = normalizeVelocityTimbreStrength(strength);
+  }
+
+  /**
+   * soundfont-player の play() が返す音ノード（GainNode）を、player の出力ではなく
+   * velocity で決めたローパス経由でマスターゲインへつなぎ直す（#670）。
+   * play() は内部で node→out→destination と配線してしまうので、いったん外してから挟む。
+   * フィルタを作れない context・想定外のノードでは何もしない（従来どおり鳴る）
+   */
+  private applyVelocityTimbre(context: AudioContext, player: SoundFontPlayer, node: unknown, velocity: number): void {
+    if (!this.velocityTimbreEnabled) return;
+    const audioNode = node as { connect?: (dest: AudioNode) => unknown; disconnect?: (dest?: AudioNode) => void } | null;
+    if (!audioNode || typeof audioNode.connect !== 'function' || typeof audioNode.disconnect !== 'function') return;
+    // sample-player は player.out（出力の GainNode）を公開している。外すときはそこだけを外し、
+    // 失敗したらそこへ戻す（round1 P2: 外した後に失敗すると無音になる）。
+    // player.out が無い想定外の player では配線を触らない（round2 P2-1: 引数なしの disconnect は
+    // 挟んだばかりのフィルタへの接続も切ってしまい無音になる）→ 従来どおり鳴らす
+    const playerOut = (player as unknown as { out?: AudioNode }).out;
+    if (!playerOut) return;
+    const chain = createVelocityFilterChain(context, velocity, this.velocityTimbreStrength);
+    if (!chain) return;
+    try {
+      // 先にフィルタ→マスターを結んでから音ノードをフィルタへ。最後に player の出力から外す
+      chain.output.connect(this.getOutputNode(context));
+      audioNode.connect(chain.input);
+      audioNode.disconnect(playerOut);
+    } catch (error) {
+      console.warn('[SoundFontEngine] 強弱の音色変化を配線できませんでした（素通しで鳴らします）:', error);
+      try {
+        // 途中まで進んでいた配線を戻す: フィルタを外し、player の出力へつなぎ直す
+        for (const n of chain.nodes) n.disconnect?.();
+        audioNode.disconnect();
+        audioNode.connect(playerOut);
+      } catch {
+        // ここで失敗したらその音だけ鳴らない。再生全体は止めない（#358 の教訓）
+      }
+    }
   }
 
   /**
@@ -646,7 +695,8 @@ export class SoundFontEngine implements PlaybackEngine {
       // gain は音色キャラに加えて、強弱記号から来た velocity でも上下させる。
       // ただし極端な値は歪みや無音の原因になるため、最後に安全域へ丸める。
       gain: Math.max(0.05, Math.min(1, (0.45 + brightness * 0.15 + richness * 0.35) * velocity)),
-      attack: 0.001 + attack * 0.04,
+      // 弱い音は立ち上がりも鈍らせる（#670 段2）。確認音（velocity 既定 0.5）と設定 OFF は従来どおり
+      attack: this.velocityTimbreEnabled ? velocityToAttackSeconds(velocity, 0.001 + attack * 0.04, this.velocityTimbreStrength) : 0.001 + attack * 0.04,
       // 以前は release=0.05〜0.5 と「duration に release×0.15 を足す」の合わせ技だったが、
       // 全音符でも尻尾が 0.3 秒に届かず「早く切られた」印象になっていた（Issue #525）。
       // 尻尾の長さは内蔵音源と共通の計算（releaseTail.ts）へ一本化し、
