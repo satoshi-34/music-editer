@@ -151,6 +151,7 @@ import {
   type SystemMeasureOverrideInput,
   type MeasureLayoutPartContext,
 } from '../utils/measureLayoutUtils';
+import { estimatePedalBottomExtensionPx } from '../utils/pedalBridgeUtils';
 import {
   type ScoreSettingsProfile,
   loadSettingsProfile,
@@ -4462,11 +4463,49 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // desiredMultiplier へ乗算する形で補正する。offset=0 のときは比が常に1になるため、
   // 既存の計算結果と完全に一致する（既定値での見た目を変えない、というIssue #90の
   // 受入条件を、この補正でも壊さないようにするため）。
+  // ペダル記号が最下音を避けて下がるぶんの段の下余白（#604）。PianoSystemCanvas が段の高さに
+  // 足すのと同じ純関数・同じ入力で求め、ページの段数見積もりを実際の段の高さと一致させる。
+  // ペダルの無い譜面では 0（段の高さは従来どおり）
+  const pedalBottomExtensionPx = useMemo(() => {
+    // パート譜表示中は canvas に渡る段も選択パートだけなので、同じ並びで見積もる（round2 P1）
+    if (isPartExtractionActive && partExtractionSelection) {
+      const index = partExtractionSelection.index;
+      if (scoreType === 'quartet') {
+        return estimatePedalBottomExtensionPx([{ measures: quartetParts[index] ?? [], clef: QUARTET_PART_CONFIGS[index].clef }]);
+      }
+      if (scoreType === 'ensemble') {
+        const part = instrumentation.parts[index];
+        if (!part) return 0;
+        return estimatePedalBottomExtensionPx(part.staffCount === 2
+          ? [{ measures: ensembleParts[index] ?? [], clef: part.clef }, { measures: ensembleSecondStaffParts[index] ?? [], clef: 'bass' as const }]
+          : [{ measures: ensembleParts[index] ?? [], clef: part.clef }]);
+      }
+    }
+    if (scoreType === 'piano') {
+      return estimatePedalBottomExtensionPx([
+        { measures: rightHandData ?? [], clef: 'treble' },
+        { measures: leftHandData ?? [], clef: 'bass' },
+      ]);
+    }
+    if (scoreType === 'quartet') {
+      return estimatePedalBottomExtensionPx(QUARTET_PART_CONFIGS.map((part, index) => ({
+        measures: quartetParts[index] ?? [], clef: part.clef,
+      })));
+    }
+    if (scoreType === 'ensemble') {
+      return estimatePedalBottomExtensionPx(instrumentation.parts.flatMap((part, index) => (
+        part.staffCount === 2
+          ? [{ measures: ensembleParts[index] ?? [], clef: part.clef }, { measures: ensembleSecondStaffParts[index] ?? [], clef: 'bass' as const }]
+          : [{ measures: ensembleParts[index] ?? [], clef: part.clef }]
+      )));
+    }
+    return estimatePedalBottomExtensionPx([{ measures: rightHandData ?? [], clef: 'treble' }]);
+  }, [scoreType, rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, instrumentation.parts, isPartExtractionActive, partExtractionSelection]);
   const partSpacingHeightRatio = useMemo(() => {
-    const baseHeight = measuredSystemHeightPx(partCountForSystemLayout, 0);
+    const baseHeight = measuredSystemHeightPx(partCountForSystemLayout, 0, pedalBottomExtensionPx);
     if (baseHeight <= 0) return 1;
-    return measuredSystemHeightPx(partCountForSystemLayout, partSpacingOffsetPx) / baseHeight;
-  }, [partCountForSystemLayout, partSpacingOffsetPx]);
+    return measuredSystemHeightPx(partCountForSystemLayout, partSpacingOffsetPx, pedalBottomExtensionPx) / baseHeight;
+  }, [partCountForSystemLayout, partSpacingOffsetPx, pedalBottomExtensionPx]);
   const ensembleAutoFitMultiplier = useMemo(() => (
     computeEnsembleAutoFitMultiplier(
       partCountForSystemLayout,
@@ -4640,9 +4679,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // パート数の多い弦楽四重奏・編成譜ほど推奨段数が過剰に少なくなり（四重奏2段・
   // 室内オーケストラ1段）、新規作成直後にページの下半分が空白になっていた（Issue #71）。
   const recommendedMaxSystemsPerPage = useMemo(() => {
-    const baseHeight = recommendedSystemHeightPx(partCountForSystemLayout, partSpacingOffsetPx);
+    const baseHeight = recommendedSystemHeightPx(partCountForSystemLayout, partSpacingOffsetPx, pedalBottomExtensionPx);
     return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * effectiveNotationSizeMultiplier + systemRowGapPx)));
-  }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx, partSpacingOffsetPx]);
+  }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx, partSpacingOffsetPx, pedalBottomExtensionPx]);
   // 段数/ページの実際の上限（実測ベース）。これを超えると段がページからあふれる。
   // PianoSystemCanvas.tsx が実際の描画に使う寸法計算（computeLayout の sysH）を正とし、
   // 実際の描画倍率（SCORE_LAYOUT_RENDER_SCALE）を掛けた measuredSystemHeightPx() で
@@ -4652,9 +4691,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // ユーザーがこの上限を手動で超えて指定した場合はクランプせず受け付け、
   // 画面にあふれ警告を表示したうえで指定どおり描画する（isSystemsPerPageOverflowing）。
   const maxSystemsPerPage = useMemo(() => {
-    const baseHeight = measuredSystemHeightPx(partCountForSystemLayout, partSpacingOffsetPx);
+    const baseHeight = measuredSystemHeightPx(partCountForSystemLayout, partSpacingOffsetPx, pedalBottomExtensionPx);
     return Math.max(1, Math.floor(systemHeightBudgetPx / (baseHeight * effectiveNotationSizeMultiplier + systemRowGapPx)));
-  }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx, partSpacingOffsetPx]);
+  }, [partCountForSystemLayout, effectiveNotationSizeMultiplier, systemHeightBudgetPx, systemRowGapPx, partSpacingOffsetPx, pedalBottomExtensionPx]);
   // 推奨値（初期値）。ピアノは物理的に収まる限り常に4段を既定とする（運用者指定・
   // 2026-08-23。3段より4段の方が行間が自然）。以前は「余白込みの目安段数
   // （recommendedMaxSystemsPerPage）」でもクランプしていたため、段の間隔を一度でも
