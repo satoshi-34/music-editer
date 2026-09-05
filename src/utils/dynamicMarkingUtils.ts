@@ -332,14 +332,23 @@ export interface DynamicVelocityTimeline {
  * 大きいほうで次の小節へ進む（途中拍子変更や埋まりすぎた小節）ので、絶対拍もそれに合わせる
  * （round3 P2: 小節番号 × 拍子の拍数だと 3/4 の中の 4/4 小節で位置が衝突する）。
  */
+/**
+ * 小節の最低の前進幅。数値なら全小節共通（拍子ぶん）、関数なら小節番号ごと
+ * （弱起の小節はその拍数・Issue #473）。エンジン・ペダル・ハイライトと同じ物差しにすること
+ */
+export type BeatsPerMeasureResolver = number | ((measureIndex: number) => number);
+function beatsFloorAt(resolver: BeatsPerMeasureResolver, measureIndex: number): number {
+  return typeof resolver === 'number' ? resolver : resolver(measureIndex);
+}
+
 export function measureAdvanceBeats(
   partsMeasures: readonly (readonly MeasureData[])[],
-  beatsPerMeasure: number,
+  beatsPerMeasure: BeatsPerMeasureResolver,
 ): number[] {
   const count = Math.max(0, ...partsMeasures.map((measures) => measures.length));
   const advances: number[] = [];
   for (let measureIndex = 0; measureIndex < count; measureIndex++) {
-    let longest = beatsPerMeasure;
+    let longest = beatsFloorAt(beatsPerMeasure, measureIndex);
     partsMeasures.forEach((measures) => {
       const measure = measures[measureIndex];
       if (!measure) return;
@@ -393,7 +402,7 @@ export function collectDynamicMarkings(partsMeasures: readonly (readonly Measure
 export function buildDynamicVelocityTimeline(
   sourceMarkings: readonly DynamicMarkingSource[],
   clockMeasures: readonly MeasureData[],
-  beatsPerMeasure: number,
+  beatsPerMeasure: BeatsPerMeasureResolver,
 ): DynamicVelocityTimeline {
   const advances = measureAdvanceBeats([clockMeasures], beatsPerMeasure);
   // 小節頭の絶対拍（前向きの累積）
@@ -402,7 +411,7 @@ export function buildDynamicVelocityTimeline(
   advances.forEach((advance) => { measureStarts.push(acc); acc += advance; });
   const endBeat = acc;
   const positionOf = (measureIndex: number, beatInMeasure: number): number =>
-    (measureStarts[measureIndex] ?? (endBeat + (measureIndex - advances.length) * beatsPerMeasure)) + beatInMeasure;
+    (measureStarts[measureIndex] ?? (endBeat + (measureIndex - advances.length) * beatsFloorAt(beatsPerMeasure, measureIndex))) + beatInMeasure;
 
   type Marking = { at: number; order: number; absolute: AbsoluteDynamicMarking | null; relative: RelativeDynamicMarking | null };
   const markings: Marking[] = sourceMarkings.map((marking) => ({

@@ -669,18 +669,40 @@ export function describePlaybackFromMeasure(startMeasure: number): string {
 }
 
 /**
+ * 弱起（アウフタクト）を後から設定したとき、先頭小節に容量を超える音符が残っていることを
+ * 知らせる（Issue #473）。音符を黙って消すのは「無言で消える」事故（#238）と同じ形なので、
+ * データは変えずに事実と次の一手だけを伝える。
+ */
+export function describePickupOverflow(pickupBeats: number): string {
+  return `弱起を${pickupBeats}拍にしました。先頭小節にはこれを超える音符が残っています（いらない音符を選んで Delete で消せます）`;
+}
+
+/** 弱起（アウフタクト）を設定したことを知らせる（Issue #473） */
+export function describePickupSet(pickupBeats: number): string {
+  return `弱起を${pickupBeats}拍にしました（先頭小節は${pickupBeats}拍まで入り、小節番号は次の小節から1になります）`;
+}
+
+/** 弱起（アウフタクト）を解除したことを知らせる（Issue #473） */
+export function describePickupCleared(): string {
+  return '弱起（アウフタクト）を解除しました。先頭小節も拍子ぶんの長さになります';
+}
+
+/**
  * 小節番号を指定した途中再生（#545）: その小節から再生を始めたことを知らせる。
  * 戻し方（先頭から聴く方法）は選択の有無で違うため出し分ける（round1/2 P2）:
  * 小節の範囲選択が残っていると停止→再生は選択位置から始まるので、
  * まず Escape で選択を外す案内を先に出す。選択が無ければ停止→再生だけで先頭に戻る。
  */
-export function describePlaybackFromMeasureNumber(startMeasure: number, hasMeasureSelection: boolean): string {
+export function describePlaybackFromMeasureNumber(displayedMeasureNumber: number, hasMeasureSelection: boolean): string {
+  // 番号は画面に出ている小節番号（弱起があれば 0 始まり・#473）。呼び出し側が
+  // getDisplayedMeasureNumber で解決して渡す（ここで +1 しない）
+  const where = displayedMeasureNumber === 0 ? '弱起の小節' : `${displayedMeasureNumber}小節目`;
   // 小節の範囲選択が残っていると、停止→再生では選択位置から始まる（選択起点の途中再生）。
   // その状態で「停止して再生すれば先頭」と案内すると嘘になるため出し分ける（#545 round1 P2）
   if (hasMeasureSelection) {
-    return `${startMeasure + 1}小節目から再生します（先頭から聴くには Escape で小節の選択を外し、停止してから再生してください）`;
+    return `${where}から再生します（先頭から聴くには Escape で小節の選択を外し、停止してから再生してください）`;
   }
-  return `${startMeasure + 1}小節目から再生します（先頭から聴くには停止してから再生してください）`;
+  return `${where}から再生します（先頭から聴くには停止してから再生してください）`;
 }
 
 /**
@@ -689,13 +711,15 @@ export function describePlaybackFromMeasureNumber(startMeasure: number, hasMeasu
  */
 export function describePlaybackStartMeasureRejected(
   reason: PlaybackStartMeasureRejection,
-  totalMeasureCount: number
+  totalMeasureCount: number,
+  // 入力できる表示番号の範囲（弱起があれば 0 始まり・#473）。省略時は 1〜総小節数
+  range: { min: number; max: number } = { min: 1, max: totalMeasureCount }
 ): string {
   switch (reason) {
     case 'notANumber':
       return '小節番号は半角の数字で入力してください（例: 5 と入れると5小節目から再生します）';
     case 'outOfRange':
-      return `この作品は${totalMeasureCount}小節までのため、その小節からは再生できません（1〜${totalMeasureCount} の番号を入れてください）`;
+      return `この作品は${range.max}小節までのため、その小節からは再生できません（${range.min}〜${range.max} の番号を入れてください）`;
     case 'noMeasures':
       return 'まだ再生できる小節がありません（音符を入力してから小節番号を指定してください）';
   }

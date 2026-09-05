@@ -49,6 +49,8 @@ export interface PlaybackControlsProps {
   onPlayFromMeasure?: (measureNumberInput: string) => void;
   /** 入力欄の上限に使う総小節数（内容のある小節数）。省略時は上限を指定しない */
   totalMeasureCount?: number;
+  /** 入力できる小節番号の下限。弱起（#473）が先頭にある作品は 0（弱起の小節）から */
+  measureNumberMin?: number;
   /** テンポ変更時のコールバック */
   onTempoChange: (bpm: number) => void;
   /** 音色変更時のコールバック */
@@ -188,6 +190,7 @@ export default function PlaybackControls({
   onStop,
   onPlayFromMeasure,
   totalMeasureCount,
+  measureNumberMin = 1,
   onTempoChange,
   onInstrumentChange,
   onInstrumentPreview,
@@ -599,7 +602,7 @@ export default function PlaybackControls({
               value={startMeasureInput}
               onChange={handleStartMeasureInputChange}
               onKeyDown={handleStartMeasureInputKeyDown}
-              min={1}
+              min={measureNumberMin}
               max={totalMeasureCount}
               step="1"
               aria-label="再生を開始する小節番号"

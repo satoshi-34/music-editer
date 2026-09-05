@@ -7,7 +7,8 @@ import { defaultRestDisplayKeyForDuration, type ClefType } from '../components/c
 import type { KeySignature } from './noteKeyUtils';
 import { isValidKeySignature } from './noteKeyUtils';
 import { isValidTimeSignature } from './timeSignatureUtils';
-import { ensureMeasuresPrimaryVoiceMaterialized, getEventDurationBeats } from './voiceMeasureUtils';
+import { ensureMeasuresPrimaryVoiceMaterialized, getEventDurationBeats, getMeasureDurationBeats } from './voiceMeasureUtils';
+import { normalizePickupBeats, resolveTimeSignatureAtMeasure } from './measureCapacityUtils';
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { buildRestEventsForBeats } from './measureRestFillUtils';
 import { readMusicXmlDefaults, type MusicXmlDefaultsLayout } from './musicXmlDefaults';
@@ -1240,6 +1241,31 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
       }
     }
   }
+
+  // 弱起（不完全小節）の読み取り（Issue #473）。
+  // MusicXML では不完全小節を <measure implicit="yes"> と書く（曲頭の弱起なら number="0"）。
+  // 「何拍ぶんか」を書く欄は仕様に無いので、実際に入っている音価の合計から測る。
+  // 拍が足りている（＝ただ implicit と書かれているだけの完全小節）ファイルでは
+  // normalizePickupBeats が undefined を返すため、弱起にはしない。
+  // 弱起は小節の属性なので、曲頭だけでなく曲中の implicit（新しい節の頭など）も同じ形で読める。
+  // 値は全パートの同じ位置へ書く（正本はパート0・パート間で食い違わせない規約）。
+  const firstPartMeasureEls = Array.from(partEls[0]?.getElementsByTagName('measure') ?? []);
+  firstPartMeasureEls.forEach((measureEl, measureIndex) => {
+    const implicit =
+      measureEl.getAttribute('implicit') === 'yes' ||
+      (measureIndex === 0 && measureEl.getAttribute('number') === '0');
+    if (!implicit) return;
+    const referenceMeasure = parts[0]?.measures[measureIndex];
+    if (!referenceMeasure) return;
+    // その小節で有効な拍子（途中拍子変更を解決した値）と比べて、短ければ弱起として記録する
+    const effectiveTimeSignature = resolveTimeSignatureAtMeasure(parts[0].measures, measureIndex, globalTimeSig);
+    const pickupBeats = normalizePickupBeats(getMeasureDurationBeats(referenceMeasure), effectiveTimeSignature);
+    if (pickupBeats === undefined) return;
+    for (const part of parts) {
+      const measure = part.measures[measureIndex];
+      if (measure) part.measures[measureIndex] = { ...measure, pickupBeats };
+    }
+  });
 
   const score: SavedScoreData = {
     version: '1.0',
