@@ -375,6 +375,40 @@ describe('PianoSystemCanvas 段またぎ連符の数字（Issue #574）', () => 
     unmount();
   });
 
+  it('round4: 基準の形（月光 7〜8 小節）は下側の予算（段の箱＋公称の余白）に収まり、下に出たまま', () => {
+    const { svg, unmount } = renderWith(rightHandTriplet({ crossFrom: 1 }), lowLeftHandMeasure());
+    const [, lower] = allStaveGeometries(svg);
+    const y = tupletNumberYs(svg)[0];
+    // 段の箱（sysH）は下の五線の第5線ちょうど。公称の予算 SYSTEM_BREATHING_ROOM_PX（70）を足した範囲の内側
+    const boxBottom = lower.line0Y + 4 * lower.spacing;
+    expect(y).toBeGreaterThan(boxBottom);
+    expect(y + 0.75 * lower.spacing + 2).toBeLessThanOrEqual(boxBottom + 70);
+    unmount();
+  });
+
+  it('round4: 左手が予算を越えるほど深いと、数字は反対側（上の五線の上）へ逃げる', () => {
+    // 左手を加線 8 本（c/1）まで下げ、連桁付きにして障害物の下端を予算の外へ出す
+    const deep: MeasureData = {
+      events: [
+        { dur: '8', isRest: false, keys: ['c/1', 'f/1'], tuplet: { id: 'lh', numNotes: 3, notesOccupied: 2, hideNumber: true } },
+        { dur: '8', isRest: false, keys: ['c/1', 'g/1'], tuplet: { id: 'lh', numNotes: 3, notesOccupied: 2, hideNumber: true } },
+        { dur: '8', isRest: false, keys: ['c/1', 'b/1'], tuplet: { id: 'lh', numNotes: 3, notesOccupied: 2, hideNumber: true } },
+        { dur: '4', isRest: false, keys: ['c/3'] },
+        { dur: '4', isRest: false, keys: ['c/3'] },
+        { dur: '4', isRest: false, keys: ['c/3'] },
+      ],
+    };
+    const { svg, unmount } = renderWith(rightHandTriplet({ crossFrom: 1 }), deep);
+    const [upper, lower] = allStaveGeometries(svg);
+    const y = tupletNumberYs(svg)[0];
+    const boxBottom = lower.line0Y + 4 * lower.spacing;
+    // 下の予算には入らない → 上へ。上の五線の第1線より上で、段の箱（y=0）の内側
+    expect(y).toBeLessThan(upper.line0Y);
+    expect(y).toBeGreaterThanOrEqual(0);
+    expect(y).toBeLessThan(boxBottom);
+    unmount();
+  });
+
   it('受入1c: 数字が避ける障害物は、連桁で伸びたあとの符幹まで含んでいる（round2 P1）', () => {
     capturedObstacles.length = 0;
     const { svg, unmount } = renderWith(rightHandTriplet({ crossFrom: 1 }), lowLeftHandMeasure());

@@ -301,7 +301,11 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, context: TupletPlacementCon
       const tipY = stemTipYOf(note);
       if (tipY !== null) y = Math.max(y, tipY + lineSpacing + halfNumberHeight);
     });
-    obstacles.forEach((rect) => { y = Math.max(y, rect.y + rect.h + lineSpacing + halfNumberHeight); });
+    // 下側の候補は「下の五線の側にある」障害物だけを見る（上段の上にある音符に引きずられない）
+    obstacles.forEach((rect) => {
+      if (rect.y + rect.h <= topStave.getYForLine(0)) return;
+      y = Math.max(y, rect.y + rect.h + lineSpacing + halfNumberHeight);
+    });
     return y;
   };
   // 上側の候補: 上の五線の外、連符自身の符頭・符幹の先、真上の障害物、のすべてより上
@@ -312,7 +316,11 @@ function placeCrossStaffTupletNumber(tuplet: Tuplet, context: TupletPlacementCon
       const tipY = stemTipYOf(note);
       if (tipY !== null) y = Math.min(y, tipY - lineSpacing - halfNumberHeight);
     });
-    obstacles.forEach((rect) => { y = Math.min(y, rect.y - lineSpacing - halfNumberHeight); });
+    // 上側の候補は「上の五線の側にある」障害物だけを見る（下段の下にある音符に引きずられない）
+    obstacles.forEach((rect) => {
+      if (rect.y >= bottomStave.getYForLine(4)) return;
+      y = Math.min(y, rect.y - lineSpacing - halfNumberHeight);
+    });
     return y;
   };
 

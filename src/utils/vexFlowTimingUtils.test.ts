@@ -329,7 +329,9 @@ describe('段またぎ連符の数字の置き場所（Issue #574）', () => {
     syncTupletPlacementWithNotes(t2, { ownerStave: u2, getObstacles: () => [obstacle2], verticalBounds: tight });
     const y2 = t2[0].tuplet.getYPosition();
     expect(locationOf(t2[0].tuplet)).toBe(Tuplet.LOCATION_BOTTOM);
-    expect(y2).toBeLessThanOrEqual(tight.bottomY);
+    // クランプ先は「箱の下端 − 数字の半分の高さ − 端の隙間」ちょうど
+    const halfNumber = 0.75 * l2.getSpacingBetweenLines();
+    expect(y2).toBeCloseTo(tight.bottomY - halfNumber - 2, 3);
     expect(y2).toBeGreaterThan(l2.getYForLine(4));
   });
 

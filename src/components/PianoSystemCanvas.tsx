@@ -6061,10 +6061,13 @@ export default function PianoSystemCanvas({
         }
 
         // 声部・ビーム・連符の描画（実体は drawRenderedVoiceEntries・#244 段4c-2）
-        // 段またぎ連符の数字の縦の許容範囲（#574 round3）。段の箱（sysH）は最下段の第5線で
-        // 終わっていて下余白を持たないので、五線下の記号（Ped・pp・連符数字）は段と段の間の
-        // 余白（SYSTEM_BREATHING_ROOM_PX）に描かれる。数字もその余白までは下へ出してよく、
-        // それを越えるなら反対側（上）へ逃がす。上は段の箱の上端（五線の上の 4 行ぶん）まで
+        // 段またぎ連符の数字の縦の許容範囲（#574 round3）。段の箱（sysH・論理座標）は最下段の
+        // 第5線で終わっていて下余白を持たないので、五線下の記号（Ped・pp・連符数字）は段の箱の
+        // 外に描かれる。下側の**公称の予算**として SYSTEM_BREATHING_ROOM_PX（70・本来は段数の
+        // 推奨値の見積もりに使う物理 px の目安）を論理座標のまま足す＝物理では 70×描画倍率
+        // （100% で約 31px）。実際の段間は段のスロット高と段の間隔（ユーザー設定）で決まるので
+        // これは上限の目安にすぎず、実測に基づく予約は #668 で扱う。
+        // 予算を越えるなら反対側（上）へ逃がす。上は段の箱の上端（第1線の上 6 間ぶん）まで
         drawRenderedVoiceEntries(ctx, stave, renderedVoiceEntries, getSystemNoteRects, {
           topY: 0, bottomY: sysH + SYSTEM_BREATHING_ROOM_PX,
         });
