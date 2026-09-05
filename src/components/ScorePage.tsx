@@ -1030,6 +1030,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // ref は handlePlay の入口で同期的に見る用（キーボード経由も塞ぐ）、state はボタンの無効化用
   const workRestoreInProgressRef = useRef(false);
   const [isWorkRestoring, setIsWorkRestoring] = useState(false);
+  // 復元の世代（round4 P1）。復元中にさらに別の作品を選ぶと復元が入れ子になり、先に始めた
+  // 方の finally が後から始めた方の途中でフラグを下ろしてしまう。開始ごとに番号を配り、
+  // 「最新の復元」だけが解除できるようにする
+  const workRestoreSeqRef = useRef(0);
   // 再生開始要求の世代（#609 round1 P1）。handlePlay は音源の準備（initialize）と予約
   // （playParts）を await するので、その間に作品の切替や停止が起きても要求だけが生き残り、
   // 待ちが明けてから**前の作品**を予約して「再生中」に戻してしまう。開始時に世代を取り、
@@ -1295,6 +1299,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    */
   const finishPlaybackNaturally = useCallback((engine: PlaybackEngine) => {
     unsubscribeSchedulingFailure();
+    // この世代の再生は終わった。失効した古い要求の後始末（stopAll）を許可する（round4 P1）
+    activePlaybackSeqRef.current = null;
     setPlaybackState('stopped');
     setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
     playbackTimerRef.current = null;
@@ -1670,6 +1676,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // 再生中は音を聴きながらキーを触りがちで、選択が残っていると Delete が譜面へ届いてしまう。
     // 一時停止からの再開もモードの切り替わりなので、分岐の手前でまとめて解除する。
     requestScoreSelectionClear();
+    // この呼び出しが取った世代（失敗時に active を戻すため。resume 経路は取らない）
+    let startedSeq: number | null = null;
     try {
       if (playbackState === 'paused' && explicitStartMeasure == null) {
         // paused からの再生は「最初から」ではなく AudioContext の resume。
@@ -1705,6 +1713,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // この開始要求の世代。以降の await の後で照合する（切替・停止で失効する）
       const playSeq = ++playRequestSeqRef.current;
       activePlaybackSeqRef.current = playSeq;
+      startedSeq = playSeq;
       const isPlayRequestStale = () => playSeq !== playRequestSeqRef.current;
       // 失効時の後始末。切替・停止の時点で stopAll は済んでいるので、ここで止めるのは
       // 「その後に予約が明けて鳴り出した A の音」だけ。B が始まっていれば触らない
@@ -2059,6 +2068,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
             unsubscribeSchedulingFailure();
             clearPlaybackTimer();
             audioEngine.stopAll();
+            activePlaybackSeqRef.current = null;
             setPlaybackState('stopped');
             setCurrentPosition({ measureIndex: 0, beatPosition: 0, noteIndex: 0 });
             resetPlaybackClock();
@@ -2110,6 +2120,9 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         scheduleOutputHealthCheck(audioEngine);
       });
     } catch (error: unknown) {
+      // 始められなかった要求はエンジンを使っていない。active のままだと、失効した古い要求の
+      // 後始末が「誰かが使っている」と誤判定して止められなくなる（round4 P1）
+      if (startedSeq !== null && activePlaybackSeqRef.current === startedSeq) activePlaybackSeqRef.current = null;
       console.error('[ScorePage] 再生開始に失敗:', error);
       if (error instanceof Error) {
         if (error.message.includes('user gesture') || error.message.includes('not allowed to start') ||
@@ -2167,7 +2180,8 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * stopped のときは何もしない（起動時の復元で音声エンジンを作らせないため）。
    * 終了は必ず finally から呼ぶ（復元が途中で失敗しても再生ボタンが戻るように）
    */
-  const beginWorkRestore = useCallback(() => {
+  const beginWorkRestore = useCallback((): number => {
+    const token = ++workRestoreSeqRef.current;
     workRestoreInProgressRef.current = true;
     setIsWorkRestoring(true);
     // 準備・予約待ちの開始要求は、まだ playbackState が stopped のままなので handleStop の
@@ -2177,8 +2191,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // ときも止める。待ちの間に予約が始まっていた A の音を、この時点で確実に消すため。
     // どちらでもない（起動時の復元など）ときはエンジンに触れない
     if (playbackStateRef.current !== 'stopped' || activePlaybackSeqRef.current !== null) handleStop();
+    return token;
   }, [handleStop]);
-  const endWorkRestore = useCallback(() => {
+  const endWorkRestore = useCallback((token: number) => {
+    // 自分より後に始まった復元があれば、解除はそちらに任せる
+    if (token !== workRestoreSeqRef.current) return;
     workRestoreInProgressRef.current = false;
     setIsWorkRestoring(false);
   }, []);
@@ -2758,7 +2775,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * 同じ状態へ戻す必要があるため、リセット処理だけを切り出してある。
    */
   const resetScoreStateToEmpty = useCallback(async () => {
-    beginWorkRestore();
+    const restoreToken = beginWorkRestore();
     try {
       clearPlaybackTimer();
       resetPlaybackClock();
@@ -2820,7 +2837,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // 依存配列には含めない。
     // eslint-disable-next-line react-hooks/exhaustive-deps
     } finally {
-      endWorkRestore();
+      endWorkRestore(restoreToken);
     }
   }, [beginWorkRestore, endWorkRestore,
     clearPlaybackTimer,
@@ -2939,7 +2956,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // applyLoadedScoreData と同等のロジックで画面へ反映する
       // （パート譜表示のリセットも同様。同じパートIDを持つ譜面を開くと表示が継続してしまう）。
       // 取り込みも「復元」なので、途中の再生は塞ぐ（#609 round1 P1）
-      beginWorkRestore();
+      const restoreToken = beginWorkRestore();
       try {
         setPartExtractionId(null);
         setTitle(data.metadata.title);
@@ -3001,7 +3018,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // 段の間隔の手動上書きも保存データどおりに復元する（旧データは省略時 undefined → 空配列）
         setSystemRowGapOverrides(data.systemRowGapOverrides ?? []);
       } finally {
-        endWorkRestore();
+        endWorkRestore(restoreToken);
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'ファイルの読み込みに失敗しました');
@@ -3140,7 +3157,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   }, []);
 
   const applyLoadedScoreData = useCallback(async (restored: SavedScoreData) => {
-    beginWorkRestore();
+    const restoreToken = beginWorkRestore();
     try {
       // パート譜表示は保存されない一時ビュー（設計書どおり「読込後は必ず総譜」）。
       // 同じパートIDを持つ別作品へ切り替えたときにパート譜表示が引き継がれてしまう
@@ -3204,7 +3221,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
       // 開き直した譜面は編集位置とは無関係なので、段割りの安定化ヒントもリセットする（Issue #67）
       setLastEditedMeasureIndex(null);
     } finally {
-      endWorkRestore();
+      endWorkRestore(restoreToken);
     }
   }, [beginWorkRestore, endWorkRestore, setTimeSignature]);
 
@@ -5679,7 +5696,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         // applyLoadedScoreData と同等のロジックで画面に反映する
         // （パート譜表示のリセットも同様。「読込後は必ず総譜」）。
         // 取り込みも「復元」なので、途中の再生は塞ぐ（#609 round1 P1）
-        beginWorkRestore();
+        const restoreToken = beginWorkRestore();
         try {
         setPartExtractionId(null);
         setTitle(loaded.metadata.title);
@@ -5813,7 +5830,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         setSystemRowGapOverrides([]);
         return true;
       } finally {
-        endWorkRestore();
+        endWorkRestore(restoreToken);
       }
     } catch (err) {
       alert(`MusicXML の読み込みに失敗しました:\n${err instanceof Error ? err.message : String(err)}`);

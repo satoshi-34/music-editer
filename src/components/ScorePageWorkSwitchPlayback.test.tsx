@@ -52,8 +52,8 @@ window.ResizeObserver = ResizeObserverMock;
 const MOUNT_HEAVY_TIMEOUT_MS = 60000;
 
 /** 1小節・全音符1つの作品を作る。音高で「どの作品が鳴ったか」を見分ける */
-function seedWork(title: string, key: string): string {
-  const events = [{ dur: '1' as const, isRest: false, keys: [key] }];
+function seedWork(title: string, key: string, dur: '1' | '4' = '1'): string {
+  const events = [{ dur, isRest: false, keys: [key] }];
   const data = createSavedScoreData(
     { title, subtitle: '', lyricist: '', composer: '', arranger: '' },
     [{ partId: 'melody', clef: 'treble', measures: [{ events, voices: [{ id: 'voice-1', events }] }] }],
@@ -82,8 +82,9 @@ function selectWork(title: string) {
   fireEvent.click(screen.getByText(title));
 }
 
-async function renderWithWorks() {
-  seedWork('作品B', 'e/4');
+async function renderWithWorks(options: { shortB?: boolean; withC?: boolean } = {}) {
+  if (options.withC) seedWork('作品C', 'g/4');
+  seedWork('作品B', 'e/4', options.shortB ? '4' : '1');
   const idA = seedWork('作品A', 'c/5');
   setLastOpenedWorkId(idA);
   render(<ScorePage />);
@@ -360,5 +361,52 @@ describe('作品切替直後の再生は切替先が鳴る（Issue #609）', () 
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(stopAllMock).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('Bが鳴り終わったあとにAの古い予約待ちが明けたら、Aの音は止められる（round4 P1・自然終了で active を戻す）', async () => {
+    await renderWithWorks({ shortB: true });
+    openPlaybackTab();
+    let finishPlayParts: () => void = () => {};
+    playPartsMock.mockImplementationOnce(() => new Promise<{ scheduledAtMs: number }>((resolve) => {
+      finishPlayParts = () => resolve({ scheduledAtMs: Date.now() });
+    }));
+    fireEvent.click(screen.getByRole('button', { name: '再生' }));
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(1); }, { timeout: 15000 });
+
+    selectWork('作品B');
+    openPlaybackTab();
+    await waitFor(() => { expect(screen.getAllByText('作品B').length).toBeGreaterThan(0); }, { timeout: 15000 });
+    const playButton = screen.getByRole('button', { name: '再生' }) as HTMLButtonElement;
+    await waitFor(() => { expect(playButton.disabled).toBe(false); }, { timeout: 15000 });
+    fireEvent.click(playButton);
+    await waitFor(() => { expect(screen.getByRole('button', { name: '一時停止' })).toBeTruthy(); }, { timeout: 15000 });
+    // B（4分音符1つ）は自然に鳴り終わる
+    await waitFor(() => { expect(screen.getByRole('button', { name: '再生' })).toBeTruthy(); }, { timeout: 15000 });
+
+    // ここで A の古い予約待ちが明ける。誰も使っていないので A の音は止められる
+    stopAllMock.mockClear();
+    finishPlayParts();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stopAllMock).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: '一時停止' })).toBeNull();
+  }, MOUNT_HEAVY_TIMEOUT_MS);
+
+  it('復元中にさらに別の作品を選んでも、最後に選んだ作品の復元が終わるまで再生は塞がれ、鳴るのはその作品（round4 P1・入れ子）', async () => {
+    await renderWithWorks({ withC: true });
+    openPlaybackTab();
+    // B を選んだ直後（復元の await 中）に C を選ぶ。先に始めた B の finally が
+    // C の復元中にフラグを下ろさないことを、再生ボタンが戻った時点で C が鳴ることで確かめる
+    fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
+    fireEvent.click(screen.getByTestId('work-list-toggle'));
+    fireEvent.click(screen.getByText('作品B'));
+    fireEvent.click(screen.getByText('作品C'));
+    openPlaybackTab();
+    const playButton = screen.getByRole('button', { name: '再生' }) as HTMLButtonElement;
+    expect(playButton.disabled).toBe(true);
+    await waitFor(() => { expect(playButton.disabled).toBe(false); }, { timeout: 15000 });
+    await waitFor(() => { expect(screen.getAllByText('作品C').length).toBeGreaterThan(0); }, { timeout: 15000 });
+    fireEvent.click(playButton);
+    await waitFor(() => { expect(playPartsMock).toHaveBeenCalledTimes(1); }, { timeout: 15000 });
+    expect(playedKeys(0)).toEqual(['g/4']);
   }, MOUNT_HEAVY_TIMEOUT_MS);
 });
