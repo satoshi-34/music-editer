@@ -826,14 +826,14 @@ function createStorageError(error: unknown): StorageError {
     if (error.name === 'QuotaExceededError') {
       return {
         type: StorageErrorType.QUOTA_EXCEEDED,
-        message: 'Storage quota exceeded. Please clear some data or use export functionality.',
+        message: STORAGE_FULL_MESSAGE,
         recoverable: true
       };
     }
     if (error.name === 'SecurityError') {
       return {
         type: StorageErrorType.STORAGE_DISABLED,
-        message: 'Storage is disabled (private browsing mode). Data cannot be saved.',
+        message: STORAGE_UNAVAILABLE_MESSAGE,
         recoverable: false
       };
     }
@@ -857,16 +857,48 @@ function createStorageError(error: unknown): StorageError {
 /**
  * Checks if localStorage is available and functional
  */
-export function isStorageAvailable(): boolean {
+/**
+ * 保存領域（localStorage）の状態。
+ * - 'ok': 読み書きできる
+ * - 'full': **存在するが満杯**（試し書きが容量超過で失敗）。読み出し・削除はできる
+ * - 'unavailable': 使えない（シークレットウィンドウ・サイトデータのブロックなど）
+ *
+ * 以前は「試し書きが失敗＝使えない」とひとまとめにしていたため、履歴で 10MB を使い切ると
+ * 作品一覧が空に見え、ホームから抜け出せなくなった（運用者の実測 2026-09-05・Issue #641）。
+ * 満杯は「読める・消せる」ので、一覧・開く・削除・書き出しを止めてはいけない。
+ */
+export type StorageCapacityState = 'ok' | 'full' | 'unavailable';
+
+/** 容量超過の例外か（ブラウザごとに名前・コードが違うので広めに見る） */
+export function isQuotaExceededError(error: unknown): boolean {
+  if (!(error instanceof DOMException)) return false;
+  return error.name === 'QuotaExceededError'
+    || error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+    || error.code === 22
+    || error.code === 1014;
+}
+
+export function getStorageCapacityState(): StorageCapacityState {
   try {
     const testKey = '__storage_test__';
     localStorage.setItem(testKey, 'test');
     localStorage.removeItem(testKey);
-    return true;
-  } catch {
-    return false;
+    return 'ok';
+  } catch (error) {
+    return isQuotaExceededError(error) ? 'full' : 'unavailable';
   }
 }
+
+/** 保存領域が存在するか（満杯でも true。書けるかどうかは書き込み時の例外で判定する） */
+export function isStorageAvailable(): boolean {
+  return getStorageCapacityState() !== 'unavailable';
+}
+
+/** 満杯・使えないときに利用者へ見せる文言（ホーム・ファイルタブ・保存失敗の通知で共用） */
+export const STORAGE_FULL_MESSAGE =
+  '保存領域が満杯です（この端末のブラウザ保存・約10MB）。新しい編集は保存されません。作品一覧から不要な作品を削除するか、「書き出し」でファイルへ退避してください';
+export const STORAGE_UNAVAILABLE_MESSAGE =
+  'この画面では保存ができません（ブラウザが保存領域を許可していません）。編集した内容は残りません。シークレットウィンドウの場合は通常のウィンドウで開き直してください';
 
 /** 保存先スロット1組ぶんのキー名 */
 interface StorageSlotKeys {
@@ -899,7 +931,7 @@ function saveScoreDataToSlot(data: SavedScoreData, keys: StorageSlotKeys): Stora
         success: false,
         error: {
           type: StorageErrorType.STORAGE_DISABLED,
-          message: 'localStorage is not available',
+          message: STORAGE_UNAVAILABLE_MESSAGE,
           recoverable: false
         }
       };
@@ -1010,7 +1042,7 @@ function loadScoreDataFromSlot(keys: StorageSlotKeys): StorageResult<SavedScoreD
         success: false,
         error: {
           type: StorageErrorType.STORAGE_DISABLED,
-          message: 'localStorage is not available',
+          message: STORAGE_UNAVAILABLE_MESSAGE,
           recoverable: false
         }
       };
@@ -1156,7 +1188,7 @@ function clearStoredDataInSlot(keys: StorageSlotKeys): StorageResult<boolean> {
         success: false,
         error: {
           type: StorageErrorType.STORAGE_DISABLED,
-          message: 'localStorage is not available',
+          message: STORAGE_UNAVAILABLE_MESSAGE,
           recoverable: false
         }
       };
@@ -1283,7 +1315,7 @@ function createInvalidWorkIdError(): StorageError {
 function createStorageDisabledError(): StorageError {
   return {
     type: StorageErrorType.STORAGE_DISABLED,
-    message: 'localStorage is not available',
+    message: STORAGE_UNAVAILABLE_MESSAGE,
     recoverable: false
   };
 }
