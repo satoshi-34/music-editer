@@ -41,6 +41,11 @@ type Props = {
   /** 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。描画は PianoSystemCanvas に委譲する */
   timeSignatureStyle?: TimeSignatureStyle;
   onKeySignatureChange?: (keySignature: KeySignature) => void;
+  /**
+   * 編集中の声部（#417 でピアノ譜以外にも声部レイヤーを広げた）。
+   * どのパートを編集するかは従来どおりクリックした五線で決まるので、パート軸の prop は持たない。
+   */
+  activeVoiceIndex?: number;
   customSymbolDefs?: CustomSymbolDef[];
   // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
   // 省略時は全段を印刷する。画面表示には影響しない。
@@ -122,6 +127,7 @@ export default function QuartetStaff({
   timeSignature = [4, 4],
   timeSignatureStyle = 'numeric',
   onKeySignatureChange,
+  activeVoiceIndex = 0,
   customSymbolDefs,
   printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
@@ -187,6 +193,7 @@ export default function QuartetStaff({
             timeSignature={timeSignature}
             timeSignatureStyle={timeSignatureStyle}
             onKeySignatureChange={onKeySignatureChange}
+            activeVoiceIndex={activeVoiceIndex}
             customSymbolDefs={customSymbolDefs}
             plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
             incomingArcIndex={incomingArcIndex}

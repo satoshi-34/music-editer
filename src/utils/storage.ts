@@ -36,7 +36,8 @@ import { isValidNoteKeyString, isValidKeySignature, normalizeKeySignature, type 
 import { isDynamicMarkingValue } from './dynamicMarkingUtils';
 import { isArticulationMarkingValue } from './articulationMarkingUtils';
 import { isRenderStaffDirection } from './crossStaffUtils';
-import { normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
+import { enforceVoiceLimitInParts, normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
+import { recordDroppedVoiceMeasures } from './scoreEditorNotices';
 import { ensembleSecondStaffPartId } from './instrumentationPartUtils';
 import { collectTupletContinuityIssues, normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
 import {
@@ -826,6 +827,14 @@ function parseAndNormalizeStoredScore(rawData: string): StorageResult<SavedScore
   // 空の器が残っていると多声小節と判定され、符幹の向き固定やスラーの符幹アンカーが
   // 効いたままの「2声部の残骸」として描かれてしまう。
   parsedData.parts = normalizeEmptyVoicesInParts(parsedData.parts);
+
+  // 上限（4声/段）を超える声部を落とす（#417 Codex round1 P1-4）。
+  // 落とすと編集できないデータが黙って消えることになるので、理由を必ず画面へ出す
+  const voiceLimited = enforceVoiceLimitInParts(parsedData.parts);
+  parsedData.parts = voiceLimited.parts;
+  if (voiceLimited.droppedMeasureCount > 0) {
+    recordDroppedVoiceMeasures(voiceLimited.droppedMeasureCount);
+  }
 
   // 読込境界で不変条件「voices を持つ小節では events ≡ voices[0]」を確立する（#244 段5-3）。
   // 保存側は syncMeasuresPrimaryVoiceFromEvents 済みだが、旧バージョンの保存物や

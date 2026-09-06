@@ -7,7 +7,7 @@ import type { SavedScoreData, NoteEvent, MeasureData, TimeSignatureStyle } from 
 import type { KeySignature } from './noteKeyUtils';
 import type { ClefType } from '../components/clefUtils';
 import { resolveMeasureClef, resolveClefAtMeasureEnd } from './clefMeasureUtils';
-import { getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
+import { MAX_VOICES_PER_PART, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, syncMeasuresPrimaryVoiceFromEvents } from './voiceMeasureUtils';
 import { getTempoMarkingBpm } from './tempoMarkingPresets';
 import { describeDivisionsOverflow } from './scoreEditorNotices';
 import { getDisplayedMeasureNumber, isPickupMeasure } from './measureCapacityUtils';
@@ -394,7 +394,12 @@ function measureToXml(
     /** 声部1の松葉（ヘアピン）の開始/終了位置マップ（パート全体で事前計算したもの） */
     hairpins?: HairpinPositionMaps;
     /** 声部2の松葉（ヘアピン）の開始/終了位置マップ（同上・声部ごとに別マップ） */
-    hairpinsVoice2?: HairpinPositionMaps;
+    /**
+     * 追加声部（声部2以降）の松葉の位置マップ。添字0が声部2、添字1が声部3…（#417 P1-5）。
+     * 旧実装は声部2の1本だけ（hairpinsVoice2）で、声部3・4に置いた松葉が
+     * 書き出しで消えて往復で失われていた。編集 UI が N 声になったので声部ぶん受け取る
+     */
+    hairpinsExtraVoices?: HairpinPositionMaps[];
     /** この小節の絶対インデックス（hairpins のキー照合に使う） */
     measureIndex?: number;
     /**
@@ -515,7 +520,7 @@ function measureToXml(
   // 音符・direction はすべてその声部の側に属する（読込側も <backup> を境に声部を分けている）。
   // #244 段5-5: 旧実装は voices[1]（声部2）の明示参照だった。§2-5 完了条件に従い
   // 全声部ループへ一般化（2声のときの出力は従来と同一。3声以降も「壊れず全声部が出る」）。
-  // 松葉の位置マップ（hairpinsVoice2）は現行 UI が2声までなので声部2にだけ適用する。
+  // 松葉の位置マップは声部ごとに受け取り、その声部ぶんだけを適用する（#417 P1-5）。
   const voicesForXml = getMeasureVoices(measure);
   let prevWrittenVoiceTicks = events.reduce((sum, ev) => sum + eventDurationTicks(ev, options.divisions), 0);
   voicesForXml.slice(1).forEach((voice, extraIndex) => {
@@ -539,17 +544,15 @@ function measureToXml(
       // ペダル記号も追加声部の音符に付けられるので、主声部と同じ並びで出す（#568）
       const pedalDirExtra = pedalDirectionXml(ev, options.staff);
       if (pedalDirExtra) lines.push(pedalDirExtra);
-      if (voiceNumber === 2) {
-        options.hairpinsVoice2?.starts.get(hpKey)?.forEach((wedgeType) => {
-          lines.push(wedgeDirectionXml(wedgeType, options.staff));
-        });
-      }
+      // この声部ぶんの松葉。声部1と同じ並び（開始音符の直前・終了音符の直後）で出す
+      const hairpinsForVoice = options.hairpinsExtraVoices?.[extraIndex];
+      hairpinsForVoice?.starts.get(hpKey)?.forEach((wedgeType) => {
+        lines.push(wedgeDirectionXml(wedgeType, options.staff));
+      });
       lines.push(noteToXml(ev, voiceNumber, options.staff, options.divisions));
-      if (voiceNumber === 2) {
-        const stopCount = options.hairpinsVoice2?.stops.get(hpKey) ?? 0;
-        for (let k = 0; k < stopCount; k++) {
-          lines.push(wedgeDirectionXml('stop', options.staff));
-        }
+      const stopCount = hairpinsForVoice?.stops.get(hpKey) ?? 0;
+      for (let k = 0; k < stopCount; k++) {
+        lines.push(wedgeDirectionXml('stop', options.staff));
       }
     });
     prevWrittenVoiceTicks = voiceEvents.reduce((sum, ev) => sum + eventDurationTicks(ev, options.divisions), 0);
@@ -632,7 +635,12 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
     let prevClef: ClefType | undefined;
     // 松葉（ヘアピン）の開始/終了位置をパート全体で事前計算しておく（声部ごとに別マップ）
     const hairpins = buildHairpinPositionMaps(p.measures, 0);
-    const hairpinsVoice2 = buildHairpinPositionMaps(p.measures, 1);
+    // 追加声部ぶんの松葉（声部2..MAX）。声部2だけを特別扱いしていたのをやめ、
+    // 上限までまとめて作る（#417 P1-5。使われていない声部のマップは空になるだけ）
+    const hairpinsExtraVoices = Array.from(
+      { length: MAX_VOICES_PER_PART - 1 },
+      (_unused, i) => buildHairpinPositionMaps(p.measures, i + 1),
+    );
     const measuresXml = p.measures.map((m, mi) => {
       // 途中調号変更: この小節に keySignature があれば、それ以降有効な調号として更新する
       if (m.keySignature) {
@@ -656,7 +664,7 @@ export function scoreToMusicXml(data: SavedScoreData, options: MusicXmlExportOpt
         prevKeyFifths,
         effectiveKeyFifths,
         hairpins,
-        hairpinsVoice2,
+        hairpinsExtraVoices,
         measureIndex: mi,
         isPickupMeasure: isPickupMeasure(p.measures, mi, globalTimeSig),
         timeSignatureStyle,

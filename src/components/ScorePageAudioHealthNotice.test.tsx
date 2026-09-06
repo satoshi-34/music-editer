@@ -61,6 +61,10 @@ function report(verdict: AudioOutputHealthReport['verdict']): AudioOutputHealthR
     timeAdvancing: true,
     currentTimeDelta: 0.1,
     signalDetected: verdict === 'healthy',
+    // 実音経路の実測（#618）は、この既存テストの対象外なので「測れなかった」形にする
+    mainPathPeak: null,
+    mainPathSilent: false,
+    probeSignalDetected: verdict === 'healthy',
     reason: verdict === 'healthy' ? '' : '無音',
     outputDeviceLabel: 'テスト用スピーカー',
   };

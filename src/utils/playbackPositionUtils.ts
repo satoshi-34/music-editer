@@ -295,6 +295,47 @@ function measureCapacityFloor(measure: MeasureData, timeSignature: TimeSignature
   return typeof carried === 'number' && Number.isFinite(carried) ? carried : getMeasureBeats(timeSignature);
 }
 
+/**
+ * すでに展開済み（リピートを再生順へ並べ替え済み）の小節列で、
+ * **最初に音が鳴り始める時刻**（再生開始からのミリ秒）を返す。音符が1つも無ければ null。
+ *
+ * 何のためか（#618 round1 P1-1）:
+ * 無音の自己診断は「再生開始から約 0.85 秒」の窓しか観測しない。
+ * 一方で「譜面のどこかに音符があるか」だけを見て判定していたため、
+ * 先頭が全休符・弱起の休符始まり・休符の拍からの途中再生では、
+ * 正常なタブでも窓の中が無音になり「タブが壊れています」と誤報していた。
+ * 窓の中に発音が予定されているかをこの時刻で判断する。
+ *
+ * 前進規則（小節ごとの拍数・テンポ）は calculateExpandedPlaybackDurationMs と共通にして、
+ * 実音・終了タイマー・ハイライトと同じ時間軸で数える。
+ * 休符・空イベントを飛ばす規則は collectLaneNotes（ハイライトと同じ）を再利用する。
+ */
+export function findFirstSoundingOnsetMs(
+  measures: MeasureData[],
+  bpm: number,
+  timeSignature: TimeSignature,
+  swingEnabled: boolean = false,
+): number | null {
+  if (measures.length === 0) return null;
+  const measureBpms = resolveEffectiveMeasureBpms(measures, bpm);
+  const swingActive = shouldApplySwing(swingEnabled, timeSignature);
+  let elapsedMs = 0;
+  for (let i = 0; i < measures.length; i++) {
+    const msPerBeat = (60 / measureBpms[i]) * 1000;
+    // その小節の全声部から、いちばん早く鳴り始める音を探す（声部2だけに音がある小節もある）
+    let earliestBeat = Number.POSITIVE_INFINITY;
+    for (const voice of getMeasureVoices(measures[i])) {
+      for (const note of collectLaneNotes(voice.events, swingActive)) {
+        if (note.startBeat < earliestBeat) earliestBeat = note.startBeat;
+      }
+    }
+    if (Number.isFinite(earliestBeat)) return elapsedMs + earliestBeat * msPerBeat;
+    // 小節の容量は「弱起（#473）を含む実音と同じ物差し」で採る（durationMs と同じ measureCapacityFloor）
+    elapsedMs += measureAdvanceBeats(measures[i], measureCapacityFloor(measures[i], timeSignature)) * msPerBeat;
+  }
+  return null;
+}
+
 /** 小節番号の指定を受け付けられなかった理由（#545。通知文の出し分けに使う） */
 export type PlaybackStartMeasureRejection =
   /** 数字として読めない（空欄・記号だけ など） */

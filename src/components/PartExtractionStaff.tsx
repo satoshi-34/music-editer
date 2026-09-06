@@ -51,6 +51,8 @@ type Props = {
   timeSignature?: TimeSignature;
   /** 拍子記号を数字で描くか記号（C / 𝄵）で描くか（Issue #422）。描画は PianoSystemCanvas に委譲する */
   timeSignatureStyle?: TimeSignatureStyle;
+  /** 編集中の声部（#417）。パート譜表示でも本譜と同じレイヤーで編集できるようにする */
+  activeVoiceIndex?: number;
   customSymbolDefs?: CustomSymbolDef[];
   plannedMeasureWidths?: number[];
   systemRanges?: SystemMeasureRange[];
@@ -100,6 +102,7 @@ export default function PartExtractionStaff({
   keySignature = 'C',
   timeSignature = [4, 4],
   timeSignatureStyle = 'numeric',
+  activeVoiceIndex = 0,
   customSymbolDefs, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
   pageMarginSideMm,
@@ -142,6 +145,7 @@ export default function PartExtractionStaff({
             keySignature={keySignature}
             timeSignature={timeSignature}
             timeSignatureStyle={timeSignatureStyle}
+            activeVoiceIndex={activeVoiceIndex}
             customSymbolDefs={customSymbolDefs}
             plannedMeasureWidths={systemRanges?.[i]?.minimumWidths ?? plannedMeasureWidths?.slice(i * measuresPerSystem, (i + 1) * measuresPerSystem)}
             incomingArcIndex={incomingArcIndex}
