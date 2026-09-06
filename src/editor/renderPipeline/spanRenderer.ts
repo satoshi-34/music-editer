@@ -17,15 +17,12 @@ import { resolveArcUpward } from '../../utils/arcDirectionUtils';
 import { resolveArcEndpointY, resolveSlurObstacleY, shouldAnchorArcToStemSide } from '../../utils/arcStemAnchorUtils';
 import { ENGRAVING_THICKNESS_UNITS } from '../../utils/engravingDefaults';
 import { ARC_APEX_HANDLE_SIZE, ARC_HIT_MIN_LEN_SCREEN_PX, ARC_HIT_STROKE_SCREEN_PX } from './arcConstants';
-import type {
-  ArcGeom, ArcIdentityP, ClickCycleTarget, DragSessions, PartConfig, Sel, SelectedArcSel, SelectedHairpinSel,
-} from '../../components/PianoSystemCanvas';
+import type { ArcGeom, ArcIdentityP, ClickCycleTarget, DragSessions, PendingClickCycle, Sel, SelectedArcSel, SelectedHairpinSel } from '../types';
+import type { PartConfig } from '../../components/PianoSystemCanvas';
 
 export type TieNoteP={note:StaveNote;keys:string[];tiedToNext:boolean;isRest:boolean;stave:Stave;isMultiVoice:boolean};
 export type PendingArcP={partIndex:number;voiceIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startClef:ClefType;startMeasureIdx:number;startEventIdx:number;startIsMultiVoice:boolean};
 export type PendingHairpinP={partIndex:number;voiceIndex:number;hairpin:HairpinMark;hairpinIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
-
-export type PendingClickCycle = { clientX: number; clientY: number; consumed: string[]; activate: () => void };
 
 /** createSpanRenderer が閉包の代わりに受け取るもの（PianoSystemCanvas の描画 effect のローカル） */
 export interface SpanRendererDeps {

@@ -11,9 +11,8 @@ import { HAIRPIN_Y_OFFSET, drawHairpinSegment } from '../../utils/hairpinRenderU
 import { asRenderedPartIndex, type RenderedPartIndex } from '../../utils/crossStaffUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../../utils/arcDirectionUtils';
 import { resolveArcEndpointY, shouldAnchorArcToStemSide } from '../../utils/arcStemAnchorUtils';
-import type {
-  ClickCycleTarget, NotePositionP, PartConfig, RenderCollectors, Sel, SelectedArcSel, SelectedHairpinSel,
-} from '../../components/PianoSystemCanvas';
+import type { ClickCycleTarget, NotePositionP, Sel, SelectedArcSel, SelectedHairpinSel } from '../types';
+import type { PartConfig, RenderCollectors } from '../../components/PianoSystemCanvas';
 import type { SpanRenderer } from './spanRenderer';
 
 export interface SystemSpansDeps {
