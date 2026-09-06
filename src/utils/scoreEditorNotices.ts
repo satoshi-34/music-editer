@@ -14,6 +14,7 @@
 // （SELECTION_CLAIMED_EVENT）の前例があるため、同じ作法にそろえた。
 
 import type { NoteEvent } from '../types/storage';
+import { MAX_VOICES_PER_PART } from './voiceMeasureUtils';
 import type { OmrConvertFailure } from './omrApi';
 import { canReplaceTupletNoteWithRest, type TupletGroupPasteBlockReason } from './tupletUtils';
 import type { PlaybackStartMeasureRejection } from './playbackPositionUtils';
@@ -26,6 +27,18 @@ export const SCORE_SELECTION_CLEAR_EVENT = 'music-editer-score-selection-clear';
 
 /** 譜面のクリックから「アクティブ声部を切り替えてほしい」と伝えるイベント名（Issue #258） */
 export const SCORE_ACTIVE_VOICE_CHANGE_EVENT = 'music-editer-score-active-voice-change';
+
+/**
+ * 譜面のクリックから「いまこの段（パート）を編集している」と伝えるイベント名（Issue #417）。
+ * 非ピアノ譜（単旋律・四重奏・編成譜）はどのパートを編集するかを五線のクリックで選ぶので、
+ * レイヤーチップの本数と「＋」の追加先をその段に合わせるために ScorePage が受け取る。
+ */
+export const SCORE_ACTIVE_PART_CHANGE_EVENT = 'music-editer-score-active-part-change';
+
+export interface ScoreActivePartChangeDetail {
+  /** クリックされた五線のパート添字 */
+  partIndex: number;
+}
 
 /** ←/→ による選択移動で、別の段（システム）へ選択を渡すための要求イベント名（Issue #442） */
 export const SCORE_NOTE_SELECTION_MOVE_EVENT = 'music-editer-score-note-selection-move';
@@ -114,6 +127,21 @@ export function requestActiveVoiceChange(voiceIndex: number, partIndex?: number)
 }
 
 /**
+ * 「いま編集している段（パート）」を伝える（Issue #417）。
+ *
+ * 非ピアノ譜のパート選択は「クリックした五線」という空間的な操作で、状態としては
+ * どこにも残っていなかった。声部チップを段ごとに出す（＝「＋」がどの段に足すか決まる）には
+ * 最後に触った段を知る必要があるので、音符を選んだ時点で ScorePage へ知らせる。
+ * 編集の挙動そのものは変えない（従来どおりクリックした五線が編集対象）。
+ */
+export function requestActivePartChange(partIndex: number): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(
+    new CustomEvent<ScoreActivePartChangeDetail>(SCORE_ACTIVE_PART_CHANGE_EVENT, { detail: { partIndex } })
+  );
+}
+
+/**
  * ←/→ の選択移動で、移動先が別の段（システム）だったときに選択を渡す（Issue #442）。
  *
  * 段は1つずつ別の PianoSystemCanvas インスタンスで、選択状態（青枠）もインスタンスごとに
@@ -165,12 +193,13 @@ export function describeCrossBandInsert(targetPartLabel: string, voiceIndex: num
 }
 
 /**
- * UI が対応していない声部（3声以降）への切り替えを求められたときの案内（#244 段5-5）。
- * データ・再生・書き出しは N 声対応だが、編集 UI（声部トグル）は2声まで。
- * 黙って無視すると「クリックしたのに何も起きない」行き止まりになる（#318）。
+ * 上限（4声/段）を超える声部への切り替えを求められたときの案内（#244 段5-5・#417）。
+ * 上限超えのデータは読込の境界で落としている（enforceVoiceLimitInParts）のでここへは
+ * 来ない想定だが、来たときに黙って無視すると「クリックしたのに何も起きない」
+ * 行き止まりになる（#318）。#417 より前は「2声まで」の案内だった。
  */
 export function describeVoiceSwitchUnavailable(voiceIndex: number): string {
-  return `声部${voiceIndex + 1}の音符です（表示・再生・書き出しのみ対応）。編集ツールでの切り替えは声部1・2までです`;
+  return `声部${voiceIndex + 1}の音符です（表示・再生・書き出しのみ対応）。編集できるのは1つの段につき${MAX_VOICES_PER_PART}声までです`;
 }
 
 /**
@@ -902,6 +931,56 @@ export function describeAudioMainPathBroken(): string {
 /** 自動再起動しても無音が続くときの通知（Issue #521 で出力先の案内を末尾に追加）。 */
 export function describeAudioStillSilent(destination: string): string {
   return `音声出力の異常が続いています。「音声復旧」ボタンか、ページの再読み込みをお試しください。${destination}`;
+}
+
+/**
+ * レイヤーチップの「＋」で声部を足したときの通知（Issue #417）。
+ * 足した声部へそのまま切り替えるので、「どこへ入力されるか」を必ず言葉にする。
+ */
+export function describeVoiceAdded(layerLabel: string): string {
+  return `${layerLabel}を追加しました。このまま入力すると新しい声部に入ります`;
+}
+
+/** V キーで巡回する声部が 1 本しか無いときの通知（#417 round2 P3・#318「行き止まりは喋る」） */
+export function describeVoiceCycleUnavailable(): string {
+  return '声部は1つだけです。レイヤーの「＋」で声部を追加すると V で切り替えられます';
+}
+
+/**
+ * 声部の上限に達していて「＋」が押せないときの理由（Issue #417・#318「行き止まりは喋る」）。
+ * 減らす専用のUIは無い（空の声部は音符を消すと自動で畳まれる）ので、
+ * その代替手順まで含めて言う。
+ */
+export function describeVoiceLimitReached(maxVoices: number): string {
+  return `声部は1つの段につき${maxVoices}つまでです。使わない声部は音符をすべて消すと自動で消えます`;
+}
+
+/**
+ * 上限を超える声部を読込時に落としたときの通知（Issue #417 Codex round1 P1-4）。
+ *
+ * 他アプリの MusicXML や手編集の .score.json は5声以上を持ちうるが、編集 UI は4声までなので
+ * そのまま抱えると「画面に出ないのに鳴り、保存し直すと残る声部」になる。
+ * 落とすこと自体はデータの欠損なので、何小節に効いたかまで言う（#318「行き止まりは喋る」）。
+ */
+/**
+ * 読込境界（localStorage / ファイル）で上限超えの声部を落とした小節数の受け渡し（#417 round2 P2-3）。
+ * パーサの中で notifyScoreEdit を直接呼ぶと、起動時の初回復元ではリスナー登録前で通知が消え、
+ * バックアップ復旧で 3 回まで呼ばれると重複する。パーサは件数を記録するだけにし、
+ * 画面へ反映する側（applyLoadedScoreData / ファイル取り込み）が takeDroppedVoiceMeasureCount で
+ * 1 回だけ取り出して通知する
+ */
+let droppedVoiceMeasureCount = 0;
+export function recordDroppedVoiceMeasures(measureCount: number): void {
+  if (Number.isFinite(measureCount) && measureCount > 0) droppedVoiceMeasureCount = Math.max(droppedVoiceMeasureCount, measureCount);
+}
+export function takeDroppedVoiceMeasureCount(): number {
+  const count = droppedVoiceMeasureCount;
+  droppedVoiceMeasureCount = 0;
+  return count;
+}
+
+export function describeVoiceLimitTrimmed(measureCount: number, maxVoices: number): string {
+  return `${maxVoices}声を超える声部があったため、${measureCount}小節で${maxVoices + 1}声目以降を読み込みませんでした（このアプリは1つの段につき${maxVoices}声までです）`;
 }
 
 /**

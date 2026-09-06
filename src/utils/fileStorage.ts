@@ -8,7 +8,8 @@ import { validateSavedScoreData } from './storage';
 import { sanitizePickupBeatsInParts } from './measureCapacityUtils';
 import { normalizeTimeSignature } from './timeSignatureUtils';
 import { normalizeTupletGroupsInParts } from './tupletGroupIntegrity';
-import { normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
+import { enforceVoiceLimitInParts, normalizeEmptyVoicesInParts, normalizeMeasuresForPersistence } from './voiceMeasureUtils';
+import { recordDroppedVoiceMeasures } from './scoreEditorNotices';
 
 /**
  * JSON 文字列を FileSystemFileHandle へ書き込む（File System Access API）
@@ -197,7 +198,14 @@ export async function importScoreFromFile(file: File): Promise<SavedScoreData> {
       //    判定され、符幹の向き固定・スラーの符幹アンカーが効いたままの見た目になる。
       const dedupedParts = normalizeDuplicateChordKeys(data.parts);
       const tupletNormalizedParts = normalizeTupletGroupsInParts(dedupedParts);
-      const normalizedParts = normalizeEmptyVoicesInParts(tupletNormalizedParts);
+      const voiceLimited = enforceVoiceLimitInParts(normalizeEmptyVoicesInParts(tupletNormalizedParts));
+      const normalizedParts = voiceLimited.parts;
+      // ③-2 上限（4声/段）を超える声部は落とす（#417 Codex round1 P1-4）。
+      //     編集 UI に出ない声部を残すと、再生と再保存にだけ現れる「見えない声部」になる。
+      //     捨てたことは必ず言う（#318「行き止まりは喋る」）
+      if (voiceLimited.droppedMeasureCount > 0) {
+        recordDroppedVoiceMeasures(voiceLimited.droppedMeasureCount);
+      }
       // ④ 鏡の同期（#244 段5-3）: read が voices[0] を優先するため、旧バージョンや
       //    手編集のファイルで鏡が古い場合にここで events（正本）から同期する
       const mirrorSyncedParts = normalizedParts.map((part) => ({

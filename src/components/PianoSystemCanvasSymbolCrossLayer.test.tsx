@@ -133,10 +133,9 @@ describe('他レイヤーの記号クリック（2026-08-24 裁定A）', () => {
     }
   });
 
-  it('声部3以降の記号は、編集UIが対応していないことを伝えて終わる（切替も小窓も出さない）', () => {
-    // 編集 UI（声部トグル）は2声まで。ScorePage が切替要求を無視するため、
-    // 通知だけ出して調整画面を開くと「切り替えたと言われたのに実状態は変わらない」
-    // 食い違いになる（音符クリックと同じガード・Codex最終ゲート P2）
+  it('声部3の記号もクリックでその声部へ切り替わる（#417: 編集UIが4声まで対応した）', () => {
+    // 以前は「編集 UI は2声まで」として通知だけ出して終えていたが、#417 で
+    // 声部3・4も編集できるようになったので、音符クリックと同じく切り替えて小窓を開く
     const threeVoices: MeasureData[] = [{
       events: [{ dur: '1', isRest: false, keys: ['a/4'] }],
       voices: [
@@ -167,10 +166,57 @@ describe('他レイヤーの記号クリック（2026-08-24 裁定A）', () => {
       const region = container.querySelector('.symbol-hit-region') as SVGRectElement;
       expect(region).toBeTruthy();
       fireEvent.click(region, { clientX: 5, clientY: 5 });
-      // 切替イベントも小窓も出さず、理由だけ伝える
+      // 声部3（添字2）へ切り替える要求を出し、調整の小窓も開く
+      expect(events).toHaveLength(1);
+      expect(events[0].voiceIndex).toBe(2);
+      expect(container.querySelector('.symbol-adjust-overlay')).toBeTruthy();
+      // 切り替えは必ず画面に出す（Issue #238）
+      expect(notices.join(' ')).toContain('声部3');
+    } finally {
+      window.removeEventListener(SCORE_ACTIVE_VOICE_CHANGE_EVENT, onChange);
+      window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    }
+  });
+
+  it('上限（4声）を超える声部の記号は、理由を伝えて終わる（切替も小窓も出さない）', () => {
+    // 上限超えのデータは読込の境界で落としているのでここへは来ない想定だが、
+    // 万一来たときに黙って無視すると「切り替えたと言われたのに実状態は変わらない」
+    // 食い違いになる（#318「行き止まりは喋る」・#417 Codex round1 P1-2）
+    const fiveVoices: MeasureData[] = [{
+      events: [{ dur: '1', isRest: false, keys: ['a/4'] }],
+      voices: [
+        { id: 'voice-1', events: [{ dur: '1', isRest: false, keys: ['a/4'] }] },
+        { id: 'voice-2', events: [{ dur: '1', isRest: false, keys: ['g/4'] }] },
+        { id: 'voice-3', events: [{ dur: '1', isRest: false, keys: ['f/4'] }] },
+        { id: 'voice-4', events: [{ dur: '1', isRest: false, keys: ['e/4'] }] },
+        { id: 'voice-5', events: [{ dur: '1', isRest: false, keys: ['c/4'], dynamics: [{ value: 'ff' }] }] },
+      ],
+    }];
+    const events: ScoreActiveVoiceChangeDetail[] = [];
+    const notices: string[] = [];
+    const onChange = (e: Event) => events.push((e as CustomEvent<ScoreActiveVoiceChangeDetail>).detail);
+    const onNotice = (e: Event) => notices.push((e as CustomEvent<{ message: string }>).detail?.message ?? '');
+    window.addEventListener(SCORE_ACTIVE_VOICE_CHANGE_EVENT, onChange);
+    window.addEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);
+    try {
+      const { container } = render(
+        <PianoSystemCanvas
+          measuresPerSystem={1}
+          tool={{ duration: '4', isRest: false } as never}
+          scale={1}
+          partsConfig={[{ clef: 'treble', data: fiveVoices, onChange: vi.fn(), label: '右手' }]}
+          showInstrumentLabels={false}
+          timeSignature={[4, 4]}
+          symbolsClickable={true}
+          activeVoiceIndex={0}
+        />
+      );
+      const region = container.querySelector('.symbol-hit-region') as SVGRectElement;
+      expect(region).toBeTruthy();
+      fireEvent.click(region, { clientX: 5, clientY: 5 });
       expect(events).toHaveLength(0);
       expect(container.querySelector('.symbol-adjust-overlay')).toBeNull();
-      expect(notices.join(' ')).toContain('声部3');
+      expect(notices.join(' ')).toContain('声部5');
     } finally {
       window.removeEventListener(SCORE_ACTIVE_VOICE_CHANGE_EVENT, onChange);
       window.removeEventListener(SCORE_EDIT_NOTICE_EVENT, onNotice);

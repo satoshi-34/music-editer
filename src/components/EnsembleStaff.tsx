@@ -47,6 +47,11 @@ type Props = {
    * 編集も許可し、入力された音符は実音へ逆変換してから保存する。
    */
   notationMode?: ScoreNotationMode;
+  /**
+   * 編集中の声部（#417 でピアノ譜以外にも声部レイヤーを広げた）。
+   * どのパートを編集するかは従来どおりクリックした五線で決まるので、パート軸の prop は持たない。
+   */
+  activeVoiceIndex?: number;
   customSymbolDefs?: CustomSymbolDef[];
   // 印刷時に表示する段数。これ以降（内容のない末尾の段）は @media print で非表示になる。
   // 省略時は全段を印刷する。画面表示には影響しない。
@@ -128,6 +133,7 @@ export default function EnsembleStaff({
   timeSignatureStyle = 'numeric',
   onKeySignatureChange,
   notationMode = 'concert',
+  activeVoiceIndex = 0,
   customSymbolDefs,
   printVisibleSystems, plannedMeasureWidths, systemRanges, incomingArcIndex,
   measureWidthEvenness,
@@ -273,6 +279,7 @@ export default function EnsembleStaff({
               const concertKey = fifths === 0 ? newKey : shiftKeySignatureByFifths(newKey, -fifths);
               onKeySignatureChange(concertKey);
             }}
+            activeVoiceIndex={activeVoiceIndex}
             customSymbolDefs={customSymbolDefs}
             plannedMeasureWidths={systemRanges?.[systemIndex]?.minimumWidths ?? plannedMeasureWidths?.slice(systemIndex * measuresPerSystem, (systemIndex + 1) * measuresPerSystem)}
             incomingArcIndex={incomingArcIndex}
