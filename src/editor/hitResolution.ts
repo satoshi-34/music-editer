@@ -114,6 +114,12 @@ export function keySelectXPad(svg: SVGSVGElement): number {
 
 export const EXTRA_TOP = 4, EXTRA_BOTTOM = 6;
 
+/**
+ * 休符の「本体クリック」判定の半幅（group 座標）。休符の bounding box は横に広く返る場合があるため、
+ * 休符だけは描画アンカー中心 ± この幅で本体か否かを決める（旧 PianoSystemCanvas のモジュール定数。#695 段6b-4e で移設）
+ */
+export const REST_BODY_HIT_HALF_WIDTH = 18;
+
 // クリックYを五線の「線／間」（0.5ライン刻み）へ丸める。
 // minLine / maxLine は丸め先の候補範囲。省略時は音符を新しく置ける範囲
 // （五線 ± EXTRA_TOP / EXTRA_BOTTOM）で、これが従来からの挙動。

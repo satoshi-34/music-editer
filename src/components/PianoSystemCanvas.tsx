@@ -2,7 +2,6 @@
 // 1システム分のスタッフを N 段（ピアノ2段、弦楽四重奏4段など）1つのSVGに描画する。
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 import { resolveBelowSymbolShifts, BELOW_SYMBOL_STAVE_BOUNDARY_MARGIN_PX, type CollisionRect } from '../utils/symbolCollisionUtils';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
@@ -50,7 +49,9 @@ import { ornamentNoteClick, ottavaNoteClick, pedalNoteClick } from '../editor/ha
 import { customSymbolOffsetNoteClick, customSymbolResizeNoteClick, symbolAdjustNoteClick } from '../editor/handlers/noteClick/symbolAdjust';
 import { crossStaffToggleNoteClick, graceNoteNoteClick, tupletNumberToggleNoteClick } from '../editor/handlers/noteClick/scoreToggle';
 import { textElementNoteClick } from '../editor/handlers/noteClick/textElement';
-import type { NoteTarget, NoteUiWriter, NoteWriter } from '../editor/handlers/noteClick/types';
+import { accidentalApplyNoteClick } from '../editor/handlers/noteClick/accidentalApply';
+import { noteDefaultNoteClick, restDefaultNoteClick } from '../editor/handlers/noteClick/defaultOutcome';
+import type { NoteReader, NoteTarget, NoteUiWriter, NoteWriter } from '../editor/handlers/noteClick/types';
 import { getInputAccidental, getInputMicrotone } from '../editor/inputAccidental';
 import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
@@ -74,9 +75,6 @@ import {
   describePickupSet,
   describeTupletGroupPasteUnavailable,
   notifyScoreEdit,
-  describeDoubleAccidentalKeySignatureUnavailable,
-  describeMicrotoneKeySignatureUnavailable,
-  describeAccidentalTargetNoteLost,
   describeNoteNavigationEdge,
   requestActiveVoiceChange,
   requestNoteSelectionMove,
@@ -114,7 +112,6 @@ import {
   applyKeySignatureToNaturalKey,
   hasVisibleKeySignature,
   normalizeKeySignature,
-  shiftKeySignatureByAccidental,
   createMeasureAccidentalState,
   isValidNoteKeyString,
   resolveDisplayAccidentalsForKeys,
@@ -127,7 +124,7 @@ import {
   type KeySignature,
   type MicrotoneType,
   } from '../utils/noteKeyUtils';
-import { applyAccidentalToEvent, applyInputAccidentalToKey, applyMicrotoneToEvent } from '../utils/accidentalUtils';
+import { applyInputAccidentalToKey, applyMicrotoneToEvent } from '../utils/accidentalUtils';
 import { placeKeySignatureAfterTimeSignature } from '../utils/staveModifierLayoutUtils';
 import { resolveMeasureKeySignature } from '../utils/keySignatureMeasureUtils';
 import {
@@ -152,8 +149,8 @@ import {
   ACTIVE_LAYER_BAND_PAD,
   INACTIVE_LAYER_SYMBOL_OPACITY,
   keySelectXPad,
+  REST_BODY_HIT_HALF_WIDTH,
   snapLine,
-  findKeyIndexAtLine,
   getRawPerScreenPxSafe,
   clientToGroup,
   resolveNoteHitGeometry,
@@ -202,7 +199,6 @@ import {
   buildTupletGroupPlan,
   buildTupletRestReplacement,
   copyTupletGroupForClipboard,
-  findTupletGroupPasteBlockReason,
   instantiateTupletGroup,
   planTupletGroupPasteIntoRest,
   planTupletReplacementForRest,
@@ -383,7 +379,6 @@ const PAGE_LEFT = SYSTEM_PAGE_SIDE_PADDING, PAGE_RIGHT = SYSTEM_PAGE_SIDE_PADDIN
 const TARGET_FILL = SYSTEM_TARGET_FILL;
 const CLEF_PAD_FIRST = SYSTEM_FIRST_CLEF_PADDING;
 
-const REST_BODY_HIT_HALF_WIDTH = 18;
 // クリック帰属ポリシー（#244 段3b）。現行は帯域推測のみ。
 // #316（編集レイヤー明示選択）はここを 'explicitLayer' に差し替える実装を追加する。
 const HIT_ATTRIBUTION_POLICY: HitAttributionPolicy = { attribution: 'band' };
@@ -4323,7 +4318,7 @@ export default function PianoSystemCanvas({
 
     const clickCycle = createClickCycle(svg, { clickCycleStateRef, clickCycleTargetsRef });
     // effect 内で直接呼ぶ 3 つだけ展開する（prepareClickCycle / commitClickCycle は spanRenderer が束経由で使う）
-    const { registerClickCycleTarget, tryClickCycle, armClickCycleFor } = clickCycle;
+    const { registerClickCycleTarget, tryClickCycle } = clickCycle;
 
     /**
      * StaveConnector（段の左右の縦線・グループ括弧）を描き、そのとき増えた
@@ -6795,8 +6790,15 @@ export default function PianoSystemCanvas({
               const isOnNote=lx>=noteVisualLeft-CHORD_HIT_PAD&&lx<=noteVisualRight+CHORD_HIT_PAD&&ly>=chordTopY&&ly<=chordBotY;
               // モード別ハンドラ（editor/handlers/noteClick・#695 段6b-4）へ渡す対象と書き込み口。
               // 中身は上のローカルそのもの（束ねても挙動は変わらない）
-              const noteTarget: NoteTarget = { pi, absI, j, hitPi, hitVoice, activeEvs, clickedIsRest, part, parts, clientX: me.clientX, clientY: me.clientY };
-              const noteWriter: NoteWriter = { updateHitEvent, setSelected, playNoteEvent, setHitScore };
+              const noteTarget: NoteTarget = {
+                pi, absI, j, i, hitPi, hitVoice, activeEvs, clickedIsRest, part, parts, clientX: me.clientX, clientY: me.clientY,
+                clefHere, partKeyForAccidental, firstStaveKeySignatureHitBounds, cycleId: noteCycleId,
+                // 幾何（段6b-4e）: 当たり判定の道具立て（buildNoteHitGeometry）とクリック点。中身は上のローカルそのもの
+                geometry: { lx, ly, isOnNote, chordTopY, chordBotY, restBodyCenterX: anchors[j], stave, l2k, k2l, noteK2l, snapLineForKeySelect, resolveSelectableKeyIndexAt },
+              };
+              const noteWriter: NoteWriter = { updateHitEvent, setSelected, playNoteEvent, setHitScore, doInsert, onKeySignatureChange };
+              // 読む口（段6b-4e）: 譜面の最新ミラー・小節容量・ツールから置き物を導く関数・設定。書かない側を noteWriter と分けて渡す
+              const noteReader: NoteReader = { partsScoreRef, capacityBeatsAt, getDurationTool, buildRestEditReplacement, previewAccidentalOnApply };
               // UI（調整オーバーレイ）を開く書き込み口（段6b-4c）。譜面を書く noteWriter と分けて渡す
               const noteUiWriter: NoteUiWriter = {
                 setSymbolResizeEditState, setSymbolOffsetEditState, setSymbolAdjustPickerState, setTextEditState, openSymbolAdjustEditor,
@@ -6805,116 +6807,15 @@ export default function PianoSystemCanvas({
               /**
                * フラグ系ツール15モードのテーブル（#244 段3c）。
                * 各 case が「モード×対象種別（音符/休符/placeholder）」のセルに相当する。
-               * passThrough は既定の対象種別処理（noteDefaultOutcome / restDefaultOutcome）へ
+               * passThrough は既定の対象種別処理（defaultOutcome.ts の noteDefaultNoteClick / restDefaultNoteClick）へ
                * 続けることを意味し、旧実装で「フラグ分岐のガードに合致せず if 連鎖を
                * 素通りしていた」経路と1対1に対応する。
                */
-              /**
-               * 臨時記号ツール（Issue #548 の統合後）で符頭を押したときの「付与」（設計メモ §3-2 の表 #2）。
-               *
-               * 付与になるか・音符が生えるかは resolveSelectableKeyIndexAt の戻り値1本で決める。
-               * 同じ関数をホバーのカーソル形状と再クリック巡回（#264）も呼んでいるので、
-               * 「ホバーでは選択に見えるのに押すと別のことが起きる」食い違いが構造的に起きない
-               * （設計メモ §3-4。判定の2枚目を作らないこと自体が目的）。
-               *
-               * 戻り値 null は「付与ではない」＝既定処理（挿入・和音追加・休符置換）へ流す合図。
-               */
-              const accidentalApplyOutcome = (): NoteClickOutcome | null => {
-                const applyAccidental = getInputAccidental(tool);
-                const applyMicrotone = getInputMicrotone(tool);
-                if (!applyAccidental && !applyMicrotone) return null;
-                const isKeySignatureZone = i===0 &&
-                  lx>=firstStaveKeySignatureHitBounds.left && lx<=firstStaveKeySignatureHitBounds.right;
-                if (clickedIsRest) {
-                  // 空小節の全休符プレースホルダーが背景クリックを拾ってしまう譜面でも、
-                  // 調号領域だけは調号変更へ流す（統合前と同じ・#423／受入ケース11）。
-                  if (isKeySignatureZone) {
-                    if (!applyAccidental) {
-                      notifyScoreEdit(describeMicrotoneKeySignatureUnavailable());
-                      return { kind: 'handled' };
-                    }
-                    const baseKey = partKeyForAccidental;
-                    const nextKey = shiftKeySignatureByAccidental(baseKey, applyAccidental);
-                    if (nextKey !== baseKey) {
-                      onKeySignatureChange?.(nextKey, hitPi);
-                    } else if (applyAccidental === 'doubleSharp' || applyAccidental === 'doubleFlat') {
-                      notifyScoreEdit(describeDoubleAccidentalKeySignatureUnavailable(
-                        applyAccidental === 'doubleSharp' ? '##' : 'bb'));
-                    }
-                    return { kind: 'handled' };
-                  }
-                  // 休符は「その記号付きの音符へ置換」（#233 の1クリック置換に記号が乗る・受入ケース12）
-                  return null;
-                }
-                if (!activeEvs[j] || activeEvs[j].__isPlaceholder) return null;
-                const clickedKeyIndex = resolveSelectableKeyIndexAt(lx, ly);
-                // 符頭から外れたクリックは挿入・和音追加へ（受入ケース2・13）
-                if (clickedKeyIndex < 0) return null;
-                const snappedLine = snapLineForKeySelect(ly);
-                const applyToEvent = <T extends { isRest: boolean; keys: string[]; microtones?: { keyIndex: number; type: MicrotoneType }[] }>(
-                  targetEv: T, keyIndex: number
-                ): T => applyAccidental
-                  ? applyAccidentalToEvent(targetEv, applyAccidental, keyIndex>=0?keyIndex:undefined)
-                  : applyMicrotoneToEvent(targetEv, applyMicrotone!, keyIndex>=0?keyIndex:undefined);
-                // 「どの音へ付けるか」は最新データ（partsScoreRef。毎レンダーで同期している
-                // 保存データのミラー）で引き直す。当たり判定は VexFlow が描いた時点の図形から
-                // 作られるので、描画が1手遅れている間はクリック時の keyIndex が古い和音を
-                // 指していることがあるため。
-                //
-                // 判定を setScore の updater の外でやるのは #318 の決まりごと（updater の中で
-                // 通知すると React が updater を2回呼ぶ場面で通知が二重に出る）に従うためで、
-                // ここで失敗を確定させておけば「対象が消えていた」を通知付きで断れる。
-                const latestEv = getVoiceEvents(
-                  partsScoreRef.current[hitPi]?.[absI] ?? { events: [] }, hitVoice
-                )[j];
-                // 行番号→鍵の引き直しは、当たり判定と同じ noteK2l を使う。段またぎの音符は
-                // 隣の五線（別クレフ）に描かれているので、元パートの k2l で引くと別の行を指し、
-                // 解決に失敗する（#548 round1 P2-1）。
-                const resolvedKeyIndex = latestEv && !latestEv.isRest
-                  ? findKeyIndexAtLine(latestEv.keys, snappedLine, noteK2l)
-                  : -1;
-                if (resolvedKeyIndex < 0 || resolvedKeyIndex >= (latestEv?.keys.length ?? 0)) {
-                  // 引き直しに失敗した＝押した音がもう無い。ここで古い clickedKeyIndex へ
-                  // 落とすと「押していない音に記号が付く」ので、付けずに断る（#548 round2 P2-2）。
-                  // 選択の移動も確認音も行わない（「音は鳴ったが譜面は変わらない」を作らない）。
-                  return { kind: 'rejected', notice: describeAccidentalTargetNoteLost() };
-                }
-                // 上の引き直しは「描画のミラー」を見ているだけで、書き込みは React の state に
-                // 対して行われる。同じ tick に別の更新（選択中の音の Delete など）が積まれて
-                // いると、ミラーでは在った音が書き込み時点では消えていることがある
-                // （#548 round3 P2）。そこで書き込みを flushSync で**この場で確定**させ、
-                // 「実際に書けたか」を見てから選択・確認音・通知を決める。updater の中では
-                // 通知しない（#318: updater が2回呼ばれる場面で二重に出る）ので、
-                // 書けたかどうかの印だけを外へ持ち出す。
-                let written = false;
-                let writtenEv: typeof latestEv | null = null;
-                flushSync(() => {
-                  updateHitEvent(j, (targetEv) => {
-                    if(targetEv.isRest)return null;
-                    if (resolvedKeyIndex >= targetEv.keys.length) return null;
-                    const applied = applyToEvent(targetEv, resolvedKeyIndex);
-                    written = true;
-                    writtenEv = applied;
-                    return applied;
-                  });
-                });
-                if (!written || !writtenEv) {
-                  // 書けなかった＝押した音は書き込みの瞬間にもう無かった。選択も確認音も
-                  // 行わずに断る（「音は鳴ったが譜面は変わらない」を作らない）。
-                  return { kind: 'rejected', notice: describeAccidentalTargetNoteLost() };
-                }
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:resolvedKeyIndex});
-                if (previewAccidentalOnApply) {
-                  playNoteEvent(writtenEv, part.playbackInstrument);
-                }
-                return { kind: 'handled' };
-              };
-
               const flagToolOutcome = (): NoteClickOutcome => {
               if (!('mode' in tool)) {
                 // 統合後の臨時記号は mode を持たない「音価ツールの属性」なので、
                 // フラグ系のテーブルへ入る前にここで付与かどうかを判定する（#548）
-                return accidentalApplyOutcome() ?? { kind: 'passThrough' };
+                return accidentalApplyNoteClick(noteTarget, noteReader, noteWriter, tool) ?? { kind: 'passThrough' };
               }
               switch (tool.mode) {
               case 'tupletNumberToggle':
@@ -6950,240 +6851,14 @@ export default function PianoSystemCanvas({
               }
               };
 
-              /**
-               * 既定処理・音符セル（#244 段3c）: 符頭の個別選択 → 和音追加 → 隣接挿入。
-               * 中身は旧実装の `!isRest` 分岐そのまま（挙動ゼロ差）。
-               */
-              const noteDefaultOutcome = (): NoteClickOutcome => {
-                const snappedLine = snapLine(stave,ly);
-                // 和音に足す音にも、入力時の臨時記号（Issue #470）をそのまま効かせる。
-                const newKey=applyInputAccidentalToKey(
-                  applyKeySignatureToNaturalKey(l2k(snappedLine), partKeyForAccidental),
-                  getInputAccidental(tool)
-                );
-                const currentEv=activeEvs[j];
-                // 和音内の既存音を個別選択する入口。
-                // クリック位置が既存の構成音を指していたら keyIndex を保存し、
-                // Delete/矢印/臨時記号がその1音だけに効くようにする。
-                // isOnNote（和音追加）より先に判定するので、符頭のX範囲内では
-                // 選択が和音追加より優先される（Issue #271・案A）。
-                //
-                // 判定式は resolveSelectableKeyIndexAt に集約してある。ホバーの
-                // カーソル形状（pointer/copy）と再クリック巡回（Issue #264）も
-                // 同じ関数を呼ぶので、3者の食い違いが起きない。
-                const clickedKeyIndex = resolveSelectableKeyIndexAt(lx, ly);
-                if(clickedKeyIndex>=0){
-                  // 符頭を選んだ = 巡回の起点。次に同じ場所を押したら奥の候補へ進む（Issue #264）。
-                  // 「選択で終わったクリック」だけを起点にすることで、休符の1クリック置換（#233）や
-                  // 奏法記号のトグルのように再クリックへ既存の意味がある操作を巻き込まない。
-                  armClickCycleFor(noteCycleId,me.clientX,me.clientY);
-                  setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:clickedKeyIndex});
-                  playNoteEvent({...currentEv,keys:[currentEv.keys[clickedKeyIndex]]}, part.playbackInstrument);
-                  return { kind: 'handled' };
-                }
-                if(!isOnNote){
-                  // 五線から遠い音符のためにヒット領域を広げた領域（固定範囲の外側）は、
-                  // 選択にならなかったら何もしない（Issue #218 / 上の NOTE_HIT_EXTENSION）。
-                  // ここは隣のパートの領域と重なっている可能性があるので、
-                  // 挿入まで引き受けると「隣の段を押したのにこちらへ音符が増える」誤配置になる。
-                  // 固定範囲の中（＝従来からクリックが届いていた範囲）の挙動は変えない。
-                  // 消費して終える意図的な無反応（誤配置防止）なので handled（挙動ゼロ差）。
-                  if(ly<chordTopY||ly>chordBotY)return { kind: 'handled' };
-                  doInsert(lx,ly);
-                  return { kind: 'handled' };
-                }
-                // 音符の描画範囲内 → 和音追加
-                let playEvent = currentEv;
-                let selectedKeyIndex: number | undefined;
-                if(currentEv&&!currentEv.keys.includes(newKey)){
-                  // 並べ替えは「元の位置を貼り付けた札」ごと動かす。こうしておくと
-                  // 並べ替え後に「元の何番目が今どこにいるか」を綴りに頼らず引ける。
-                  // 綴りで引く（indexOf）と、同じ綴りが2つある和音（例: 片方だけ四分音の
-                  // ['a/3','a/3']。微分音では正規のデータ）で両方が先頭へ寄ってしまう
-                  // （#548 round2 P2-1）。
-                  const NEW_KEY_MARK = -1;
-                  const sortedEntries = [
-                    ...currentEv.keys.map((key, oldIndex) => ({ key, oldIndex })),
-                    { key: newKey, oldIndex: NEW_KEY_MARK },
-                  ].sort((a,b)=>k2l(b.key)-k2l(a.key));
-                  const newKeys = sortedEntries.map((entry) => entry.key);
-                  // 元の位置 → 並べ替え後の位置の対応表
-                  const oldIndexToNewIndex = new Map<number, number>();
-                  sortedEntries.forEach((entry, newIndex) => {
-                    if (entry.oldIndex !== NEW_KEY_MARK) oldIndexToNewIndex.set(entry.oldIndex, newIndex);
-                  });
-                  selectedKeyIndex = sortedEntries.findIndex((entry) => entry.oldIndex === NEW_KEY_MARK);
-                  // 和音に足す音にも微分音を乗せる（Issue #548。通常の臨時記号は newKey の綴りで既に乗っている）。
-                  // microtones[] は keyIndex で音を指すので、並べ替え後の位置（selectedKeyIndex）で付ける
-                  const chordMicrotone = getInputMicrotone(tool);
-                  const withChordKey = <T extends NoteEvent>(targetEv: T): T => {
-                    // 既に付いている微分音は「元の keys の位置」で音を指している。音を1つ足すと
-                    // 並べ替えで位置がずれるので、上の対応表で新しい位置へ付け替える。
-                    // 付け替えないと、低い音を足したときに既存の ¼♯ が別の音へ移る（#548 round1 P2-2）。
-                    const remappedMicrotones = targetEv.microtones
-                      ?.map((microtone) => {
-                        const nextIndex = oldIndexToNewIndex.get(microtone.keyIndex) ?? -1;
-                        return nextIndex >= 0 ? { ...microtone, keyIndex: nextIndex } : null;
-                      })
-                      .filter((microtone): microtone is NonNullable<typeof microtone> => microtone !== null);
-                    const merged = {
-                      ...targetEv,
-                      keys:newKeys,
-                      ...(remappedMicrotones ? { microtones: remappedMicrotones } : {}),
-                    } as T;
-                    return chordMicrotone ? applyMicrotoneToEvent(merged, chordMicrotone, selectedKeyIndex!) : merged;
-                  };
-                  playEvent = withChordKey(currentEv);
-                  updateHitEvent(j, (targetEv) => targetEv.isRest ? null : withChordKey(targetEv));
-                }
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice,keyIndex:selectedKeyIndex});
-                playNoteEvent(playEvent, part.playbackInstrument);
-                return { kind: 'handled' };
-              };
-
-              /**
-               * 既定処理・休符セル（#244 段3c）: 連符グループ貼り付け → 置換/分割 → 選択/挿入。
-               * 中身は旧実装の `isRest` 分岐から、フラグ系ツールのセル（記号系の通知と
-               * 臨時記号の調号領域）をテーブル側へ移した残り（挙動ゼロ差）。
-               */
-              const restDefaultOutcome = (): NoteClickOutcome => {
-                // 休符を音符へ置き換えるときも、入力時の臨時記号（Issue #470）を反映する。
-                const key=applyInputAccidentalToKey(
-                  applyKeySignatureToNaturalKey(l2k(snapLine(stave,ly)), partKeyForAccidental),
-                  getInputAccidental(tool)
-                );
-                // 休符の bounding box は横に広く返る場合があるため、
-                // 休符だけは描画アンカー中心の固定幅で「本体クリック」を判定する。
-                const restBodyCenterX=anchors[j];
-                // 五線±3加線のY範囲（＝固定ヒット領域の内側）。休符まわりの判定はすべてこの中でだけ行う。
-                const isInRestRowY=ly>=chordTopY&&ly<=chordBotY;
-                const isOnRest=Math.abs(lx-restBodyCenterX)<=REST_BODY_HIT_HALF_WIDTH&&isInRestRowY;
-                // コピー済みの連符グループがあるときは、休符のクリック1回でそれを貼り付ける（Issue #234）。
-                // 対象は音価ツール（音符側・休符側どちらでも）を選んでいるときだけにして、
-                // タイ・臨時記号などの記号ツールの挙動は変えない。
-                // クリップボードが空のときはこの分岐に入らないので、従来の休符編集はそのまま。
-                //
-                // Issue #325: コピー中だけは当たり判定を「休符の記号の±18」ではなく
-                // **休符の時間枠（列）全体**にする。記号の帯は4分休符の列（幅240前後）の1割ほどしかなく、
-                // 列の残り9割をクリックすると隣接挿入（満杯の小節では無言 return）へ流れていて、
-                // 「クリックしても何も起きない」体験になっていた。
-                // 既存実装自身が「貼り付けるつもりのクリックで別の音符が増えるほうが分かりにくい」として
-                // 記号帯の中では挿入へ流さない設計にしているので、列全体をその考え方にそろえる。
-                // コピー中でないときの±18の線引き（本体＝置換／外＝隣接挿入）は一切変えない。
-                const clipboardGroup=getTupletClipboardGroup();
-                if(clipboardGroup&&getDurationTool(tool)&&isInRestRowY){
-                  const paste=planTupletGroupPasteIntoRest(activeEvs[j],clipboardGroup);
-                  if(paste){
-                    setHitScore(prev=>{
-                      const next=prev.map(cloneMeasureData);
-                      fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
-                      const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
-                      if(!targetEv?.isRest)return prev;
-                      // 最新データで計画を作り直す（クリック時点の描画データは古い可能性があるため）。
-                      const latestPaste=planTupletGroupPasteIntoRest(targetEv,clipboardGroup);
-                      if(!latestPaste)return prev;
-                      next[absI]=withVoiceEventsUpdated(next[absI], hitVoice, (events)=>{
-                        const copy=[...events];
-                        // 余った拍は Issue #224 と同じ規則で通常の休符としてグループの後ろに残す。
-                        copy.splice(j,1,...latestPaste.groupEvents,...buildRestEventsForBeats(latestPaste.remainingBeats, clefHere));
-                        return copy;
-                      });
-                      return next;
-                    });
-                    setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                    const pastedNote=paste.groupEvents.find((event)=>!event.isRest);
-                    if(pastedNote)playNoteEvent(pastedNote, part.playbackInstrument);
-                    return { kind: 'handled' };
-                  }
-                  // 入らない休符（グループより短い・連符内の休符）では譜面を変えない。
-                  // 音符を置く動作へ流さないのは、貼り付けるつもりのクリックで
-                  // 別の音符が増えるほうが分かりにくいため（ホバー時のカーソルで事前に判別できる）。
-                  // ただし無言で終わらせない（Issue #318 の「行き止まりは喋る」・Issue #325）。
-                  const blockReason=findTupletGroupPasteBlockReason(activeEvs[j],clipboardGroup);
-                  if(blockReason)return { kind: 'rejected', notice: describeTupletGroupPasteUnavailable(blockReason) };
-                  // 理由を特定できない不成立は従来どおり無反応で消費する（挙動ゼロ差。
-                  // findTupletGroupPasteBlockReason が plan の失敗理由を網羅すれば起きない経路）
-                  return { kind: 'handled' };
-                }
-                if(!isOnRest){
-                  // 休符の透明 hit rect は、隣接挿入しやすいよう時間枠全体を覆っている。
-                  // 休符本体から外れたクリックまで置換扱いにすると、
-                  // 「8分休符の次に8分音符」が休符置換になってしまうため挿入へ回す。
-                  doInsert(lx,ly);
-                  return { kind: 'handled' };
-                }
-
-                // 休符の視覚的中心（符頭バウンディングボックスの中央）を基準にする。
-                // ヒット矩形は小節全体を覆うため、その中点（クレフを含む左端の半分）を使うと
-                // 休符より左の位置に閾値が偏り「前に音符を挿入」と誤判定される。
-                const noteVisualCenter=restBodyCenterX;
-                const noteAfterRest=lx>=noteVisualCenter;
-                /**
-                 * 休符を音符へ置換・分割するとき、入力中の微分音（¼♯・¼♭）も一緒に乗せる（#548 round1 P2-3）。
-                 * 通常の ♯/♭/♮ は key の綴り（applyInputAccidentalToKey）へ既に入っているが、
-                 * 微分音は綴りではなく microtones[] で音を指すので、置換後のイベントへ別に付ける必要がある。
-                 * 付けないと「¼♯ を選んで休符を押すと、記号だけ黙って落ちた音符が置かれる」行き止まりになる。
-                 */
-                const withInputMicrotone = (events: NoteEvent[] | null): NoteEvent[] | null => {
-                  const restMicrotone = getInputMicrotone(tool);
-                  if (!events || !restMicrotone) return events;
-                  // 置換・分割で入る音符は単音（keys が1つ）なので、指す位置は 0 で固定できる。
-                  // 連符グループでの置換は「音符1つ＋休符 N-1 個」なので、休符はそのまま通す。
-                  return events.map((event) => event.isRest ? event : applyMicrotoneToEvent(event, restMicrotone, 0));
-                };
-                const restReplacement=withInputMicrotone(buildRestEditReplacement(activeEvs[j],key,tool,noteAfterRest,clefHere));
-                if(restReplacement){
-                  // 休符クリックでは、同音価なら置換、より短い音価なら分割して差し込む。
-                  // 音価ツール（音符側）を選んでいるあいだは 1 クリックで置換する（Issue #233）。
-                  // 以前は「1回目で選択・2回目で置換」の2段階だったが、三連符が主体の曲では
-                  // 音符の 2/3 がこの2クリック操作になり入力テンポを大きく削いでいた。
-                  // 誤クリックは Undo（1操作＝1履歴）で戻せる。
-                  // 休符を選択したい場合は休符ツール・調整ツール（音符を置かないツール）を使う。
-                  // それらのツールでは buildRestEditReplacement が null を返すため、
-                  // 下の setSelected（従来どおりの選択）へ落ちる。
-                  setHitScore(prev=>{
-                    const next=prev.map(cloneMeasureData);
-                    // 声部1側の休符補完は従来どおり必要（声部2の拍位置合わせのため）。
-                    fillPriorMeasureRests(next, absI, capacityBeatsAt, clefHere);
-                    const targetEv=getVoiceEvents(next[absI], hitVoice)[j];
-                    if(!targetEv?.isRest)return prev;
-                    const latestReplacement=withInputMicrotone(buildRestEditReplacement(targetEv,key,tool,noteAfterRest,clefHere));
-                    if(!latestReplacement)return prev;
-                    next[absI]=withVoiceEventsUpdated(next[absI], hitVoice, (events)=>{
-                      const copy=[...events];
-                      copy.splice(j,1,...latestReplacement);
-                      return copy;
-                    });
-                    return next;
-                  });
-                  setSelected({partIndex:hitPi,measure:absI,index:j+(restReplacement.length===2&&noteAfterRest?1:0),voiceIndex:hitVoice});
-                  const insertedEvent = restReplacement.find((event) => !event.isRest);
-                  if (insertedEvent) {
-                    // 休符を音符へ置換・分割したときも、新しく入った音だけ確認できるようにする。
-                    playNoteEvent(insertedEvent, part.playbackInstrument);
-                  }
-                  return { kind: 'handled' };
-                }
-                // ここへ来るのは置換できないクリック（休符ツール・調整ツールを選んでいる、
-                // または音価ツールだが連符内で音価が違う・ツールの音符のほうが長い、など）。
-                // **休符本体のクリックは選択だけで終える**（Issue #233）。
-                // 以前はここから doInsert() へ流していたが、休符の位置に音符・休符が
-                // 割り込むため、連符グループの中の休符を選ぼうとするとグループが壊れて
-                // ブラケットごと消えていた（実機で確認）。休符クリックの1クリック化で
-                // 「休符を選びたいときは休符ツール」の重要性が上がったので、
-                // 選択の入口が壊れないことを優先する。
-                // 休符の隣へ置きたいときは、休符本体の外側をクリックすれば
-                // 従来どおり doInsert() へ流れる（上の !isOnRest 分岐）。
-                setSelected({partIndex:hitPi,measure:absI,index:j,voiceIndex:hitVoice});
-                return { kind: 'handled' };
-              };
-
               // テーブルの評価: フラグ系 → （passThrough なら）対象種別の既定処理。
               // rejected の通知はここで機械的に送る（#318。テーブル本体は通知手段を知らない）。
               const outcome = ((): NoteClickOutcome => {
                 const flag = flagToolOutcome();
                 if (flag.kind !== 'passThrough') return flag;
-                return clickedIsRest ? restDefaultOutcome() : noteDefaultOutcome();
+                return clickedIsRest
+                  ? restDefaultNoteClick(noteTarget, noteReader, noteWriter, tool)
+                  : noteDefaultNoteClick({ cycle: clickCycle }, noteTarget, noteWriter, tool);
               })();
               // テスト会の切り分け用（開発時のみ）: クリックが処理に届いたことと、
               // どう裁かれたかをコンソールへ残す。「反応しない」の原因が

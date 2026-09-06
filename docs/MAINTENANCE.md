@@ -23,8 +23,8 @@ docker exec -w /app music-editer-dev npm run lint:ratchet
 
 | 症状 | まず見るファイル | 設計メモ |
 | --- | --- | --- |
-| クリックしても音符が置けない・変な場所に入る | `src/editor/hitResolution.ts`（当たり判定の座標計算）と `src/components/PianoSystemCanvas.tsx` のクリックテーブル（「段3c」で検索） | `editor-state-refactor` §2-3 |
-| クリックで何も起きないのに**通知も出ない** | クリックテーブルの `rejected`/`handled` の分岐（無言の行き止まりは型で禁止されている。例外は理由コメント付き） | `dead-end-speaks` |
+| クリックしても音符が置けない・変な場所に入る | `src/editor/hitResolution.ts`（当たり判定の座標計算）と `src/components/PianoSystemCanvas.tsx` のクリックテーブル（「段3c」で検索。各モードの本文は `src/editor/handlers/noteClick/`、小節背景は `src/editor/handlers/measureClick.ts`） | `editor-state-refactor` §2-3 |
+| クリックで何も起きないのに**通知も出ない** | クリックテーブルの `rejected`/`handled` の分岐（本文は `src/editor/handlers/noteClick/` と `measureClick.ts`。無言の行き止まりは型で禁止されている。例外は理由コメント付き） | `dead-end-speaks` |
 | 譜面の描画が崩れる（音符・連桁・連符） | `buildPartVoicesForMeasure`（PianoSystemCanvas 内、「Pass 1」で検索）。連桁の束ね方はこの関数の中だけにある | `editor-state-refactor` §2-4 / `cross-staff-notation` |
 | 右手・左手の拍が縦に揃わない | `formatSystemColumnVoices`（「Pass 2」で検索） | 同上 |
 | 強弱・ペダル・歌詞などの**記号**が出ない/ずれる | `drawCollectedSymbolEntries`（記号13種の最終描画）と `RenderCollectors`（記号の収集器） | `editor-state-refactor` §10 |
