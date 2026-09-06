@@ -1,6 +1,6 @@
 // src/editor/handlers/noteClick/index.ts
-// 符頭クリックの薄い入口（#695 段6b-末）。hitResolution の分岐表（#244 段3c の「(ツールモード, 対象種別) → 3値結果」）を
-// 評価して NoteClickOutcome を返すだけで、通知（notifyScoreEdit）やログは呼び出し側（PianoSystemCanvas のリスナ末尾）に残す。
+// 符頭クリックの薄い入口（#695 段6b-末）。#244 段3c の分岐表「(ツールモード, 対象種別) → 3値結果」を評価して
+// hitResolution の NoteClickOutcome を返すだけで、通知（notifyScoreEdit）やログは呼び出し側（PianoSystemCanvas のリスナ末尾）に残す。
 // 本文は PianoSystemCanvas の flagToolOutcome とテーブル評価の IIFE から物理移設（挙動ゼロ差。束の変数名を
 // noteTarget / noteWriter / noteReader / noteUiWriter → target / writer / reader / uiWriter に機械的に付け替えただけ）。
 import type { Tool } from '../../../components/Palette';
@@ -83,7 +83,7 @@ export function dispatchNoteClick(
   };
 
   // テーブルの評価: フラグ系 → （passThrough なら）対象種別の既定処理。
-  // rejected の通知はここで機械的に送る（#318。テーブル本体は通知手段を知らない）。
+  // rejected の通知は呼び出し側（Canvas のリスナ末尾）が機械的に送る（#318。テーブル本体は通知手段を知らない）。
   const outcome = ((): NoteClickOutcome => {
     const flag = flagToolOutcome();
     if (flag.kind !== 'passThrough') return flag;
