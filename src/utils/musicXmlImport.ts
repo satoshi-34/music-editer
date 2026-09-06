@@ -1099,10 +1099,35 @@ export function parseMusicXmlWithDefaults(xmlString: string): MusicXmlImportResu
   // <movement-title>（単一楽章の題）へフォールバックする（Issue #502）。
   // Finale は単曲書き出しで movement-title 側だけを使うため、work-title のみを
   // 見ると Finale 持ち込み（#419 系）でタイトルが空になる
-  const title =
-    doc.querySelector('work-title')?.textContent
-    ?? doc.querySelector('movement-title')?.textContent
-    ?? '';
+  // 複数行タイトル（Issue #576 / #636）は <credit> の credit-words が1行につき1つ。
+  // work-title は1本の文字列なので、行が分かれている情報は credit 側にしかない。
+  // credit-type が title のものだけを見る（作曲者・著作権表示にも credit を使うため）
+  const titleCredit = Array.from(doc.querySelectorAll('credit')).find((credit) => (
+    credit.querySelector('credit-type')?.textContent?.trim() === 'title'
+  ));
+  const titleCreditLines = titleCredit
+    ? Array.from(titleCredit.querySelectorAll('credit-words')).map((w) => w.textContent ?? '')
+    : [];
+  const workTitle = doc.querySelector('work-title')?.textContent ?? null;
+  const movementTitle = doc.querySelector('movement-title')?.textContent ?? null;
+  // 1本の文字列としてのタイトル（従来の優先順位: work-title → movement-title）
+  const singleLineTitle = workTitle ?? movementTitle ?? '';
+  // credit-words が複数あっても、それが「複数行の題」とは限らない（#576 round1 P2-1）。
+  // Finale は 1 行の中で書式が切り替わるだけでも credit-words を分けて出すため、
+  // 「2つ以上あれば改行で結合」だと 1 行の題が 2 行に化け、正しい work-title まで上書きされる。
+  // そこで credit を採用するのは次の2つの場合だけに絞る:
+  //   (1) work-title も movement-title も無い（credit しか題の手がかりが無い）
+  //   (2) credit の行を空白でつないだ文字列が、work-title（movement-title）と一致する
+  //       ＝ 同じ題を行分けしただけだと確認できる
+  // (2) の比較は連続する空白（改行を含む）を1つの半角空白に潰してから行う。
+  // このアプリ自身の書き出しは work-title 側の改行を &#10; で保つので、
+  // 潰さずに比べると「改行 vs 半角空白」の差で自分の書いたファイルすら一致しなくなる。
+  const normalizeForCompare = (text: string) => text.replace(/\s+/g, ' ').trim();
+  const shouldUseCreditLines = titleCreditLines.length > 1 && (
+    (workTitle === null && movementTitle === null)
+    || normalizeForCompare(titleCreditLines.join(' ')) === normalizeForCompare(singleLineTitle)
+  );
+  const title = shouldUseCreditLines ? titleCreditLines.join('\n') : singleLineTitle;
   const composer = doc.querySelector('creator[type="composer"]')?.textContent ?? '';
 
   // デフォルト設定（最初の attributes から取得する）

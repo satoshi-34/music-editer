@@ -11,7 +11,7 @@
 // 実際の配置はブラウザ実測で確認する（PR に実測値とスクリーンショットを添付）。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, act } from '@testing-library/react';
+import { render, cleanup, fireEvent, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ScorePage from './ScorePage';
@@ -93,18 +93,17 @@ describe('タイトルページの見出しの DOM 構造', () => {
   });
 
   /**
-   * contentEditable の欄を空にして確定する（blur）。
-   * 2点だけ jsdom / React 固有の事情がある:
-   * - jsdom には innerText が無く、ScorePage の onBlur が読む値が undefined になるので、
-   *   その要素にだけ innerText を生やしてから送る
-   * - React の onBlur は実際には focusout（バブルする方）を見ているため、両方送る
+   * 作者欄をダイアログから空にして確定する（Issue #576 で譜面上の直接入力は廃止した）。
+   * 作者行（.score-credit）をクリック → 3つの欄を空にする → 「決定」、の一連。
    */
-  function clearEditable(el: Element) {
-    Object.defineProperty(el, 'innerText', { value: '', configurable: true });
-    act(() => {
-      el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
-      el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    });
+  function clearCreditsViaDialog(container: HTMLElement) {
+    const credit = container.querySelector('.score-credit') as HTMLElement;
+    expect(credit, '作者行があること').toBeTruthy();
+    fireEvent.click(credit);
+    for (const label of ['作詞者', '作曲者', '編曲者']) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value: '' } });
+    }
+    fireEvent.click(screen.getByRole('button', { name: '決定' }));
   }
 
   it('タイトル → サブタイトル → 作者行 の順に縦へ並ぶ', () => {
@@ -121,8 +120,12 @@ describe('タイトルページの見出しの DOM 構造', () => {
     expect(children[1].classList.contains('score-subtitle')).toBe(true);
     expect(children[2].classList.contains('score-credit')).toBe(true);
 
-    // 作者行は 作詞者・作曲者・編曲者 の3つを縦に並べ、すべて編集できる
-    expect(children[2].querySelectorAll('[contenteditable]')).toHaveLength(3);
+    // 作者行は 作詞者・作曲者・編曲者 の3つを縦に並べる。
+    // 編集は #576 でダイアログへ一本化したので、行そのものが押せる入口になっている
+    expect(children[2].querySelectorAll('div')).toHaveLength(3);
+    expect(children[2].getAttribute('role')).toBe('button');
+    // 譜面上で直接タイプする方式（contentEditable）は廃止した（#576 仕様5）
+    expect(head!.querySelectorAll('[contenteditable]')).toHaveLength(0);
     // 幅をそろえるための「見えない控え」（#204）はもう無い
     expect(head!.querySelector('[aria-hidden="true"]')).toBeNull();
   }, MOUNT_HEAVY_TIMEOUT_MS);
@@ -130,14 +133,9 @@ describe('タイトルページの見出しの DOM 構造', () => {
   it('作者欄を3つとも空にすると作者行そのものが消え、タイトルとサブタイトルだけが残る', () => {
     const { container } = render(<ScorePage />);
 
-    // 空欄になった行から順に消えるため、そのつど残っている先頭の欄を空にする
-    for (let i = 0; i < 3; i++) {
-      const editable = container.querySelector('.score-credit [contenteditable]');
-      expect(editable, `${i + 1}回目: まだ作者欄が残っていること`).toBeTruthy();
-      clearEditable(editable!);
-    }
+    clearCreditsViaDialog(container);
 
-    // 空の contentEditable もブラウザでは1行ぶんの高さを取るため、
+    // 空の欄もブラウザでは1行ぶんの高さを取るため、
     // 「中身が空の div を置いたまま」ではなく行ごと消す必要がある
     expect(container.querySelector('.score-credit')).toBeNull();
     const head = container.querySelector('.page-head--title');

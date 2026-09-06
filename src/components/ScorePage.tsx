@@ -60,8 +60,9 @@ import { exportScoreToFile, importScoreFromFile } from '../utils/fileStorage';
 import { EXPORT_FILE_TYPES, buildExportFileName, sanitizeFileNameBase, type ExportFileType } from '../utils/exportFileName';
 import { createSavedScoreData, isEmptyScoreData } from '../utils/storage';
 import { resolveFreeTextAnnotation } from '../utils/freeTextUtils';
-import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, TITLE_FONT_SIZE_DEFAULT, TITLE_FONT_SIZE_MAX, TITLE_FONT_SIZE_MIN, TITLE_FONT_SIZE_STEP, ensureTitleFontLoaded, normalizeTitleFontSize, normalizeTitleFontWeight, resolveTitleFontOption, titleBlockStyleVars, waitForTitleFontReady } from '../utils/titleFontOptions';
+import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_SIZE_DEFAULT, ensureTitleFontLoaded, normalizeTitleFontSize, normalizeTitleFontWeight, resolveTitleFontOption, titleBlockStyleVars, waitForTitleFontReady } from '../utils/titleFontOptions';
 import type { TitleFontWeight } from '../utils/titleFontOptions';
+import TitleEditDialog from './TitleEditDialog';
 import HelpPanel from './HelpPanel';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { parseMusicXmlWithDefaults } from '../utils/musicXmlImport';
@@ -586,6 +587,40 @@ export interface ScorePageProps {
  * 自然終了から後始末（stopAll）までの待ち時間（#605）。終了タイマーは音価の終端で鳴るので、
  * 最後の音の余韻（最大 MAX_RELEASE_TAIL_SECONDS）が鳴り切る余裕を足す
  */
+/**
+ * タイトル編集ダイアログ（Issue #576）が持ち主になっている項目。
+ * 「決定で積むスナップショット」「変更があったかの判定」「キャンセルで書き戻す先」で
+ * 同じ 8 項目を列挙する必要があるため、正本をここ 1 か所に置く
+ * （#451 で同じダイアログを使い回す予定があり、列挙が散らばると足し忘れが起きる）。
+ */
+const TITLE_SNAPSHOT_KEYS = [
+  'title', 'subtitle', 'lyricist', 'composer', 'arranger',
+  'titleFontId', 'titleFontSize', 'titleFontWeight',
+] as const;
+
+/** 上の 8 項目を持つ形（ScoreSnapshot はコンポーネント内の型なので、構造だけで受ける） */
+type TitleSnapshotFields = { [K in typeof TITLE_SNAPSHOT_KEYS[number]]?: unknown };
+
+/**
+ * base の 8 項目だけを source の値へ差し替えた新しいオブジェクトを返す。
+ * 「いまの譜面（音符などは最新）＋タイトルはダイアログを開いた時点」という
+ * スナップショットを作るために使う。
+ */
+function withTitleFieldsFrom<T extends TitleSnapshotFields>(base: T, source: T): T {
+  const next: T = { ...base };
+  for (const key of TITLE_SNAPSHOT_KEYS) {
+    // キーごとに型が違う（string / number / union）ので、まとめて代入するにはここだけ緩める。
+    // 代入元・代入先とも同じ T の同じキーなので、実際の値の型は食い違わない
+    (next as Record<string, unknown>)[key] = source[key];
+  }
+  return next;
+}
+
+/** 8 項目のどれかが変わっているか（変わっていなければ履歴を積まない） */
+function hasTitleFieldChanges<T extends TitleSnapshotFields>(a: T, b: T): boolean {
+  return TITLE_SNAPSHOT_KEYS.some((key) => a[key] !== b[key]);
+}
+
 const PLAYBACK_END_CLEANUP_DELAY_MS = (MAX_RELEASE_TAIL_SECONDS + 0.5) * 1000;
 
 export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, onHomeActionsReady }: ScorePageProps = {}) {
@@ -800,6 +835,10 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   // サイズは 1 = 従来どおり、太さは undefined = 従来どおり（タイトル行だけ太字）
   const [titleFontSize, setTitleFontSize] = useState<number>(TITLE_FONT_SIZE_DEFAULT);
   const [titleFontWeight, setTitleFontWeight] = useState<TitleFontWeight | undefined>(undefined);
+  // タイトル編集ダイアログ（Issue #576）を開いているか。開いている間の入力は本物の state を
+  // 直接書き換える（＝後ろの譜面が即座に変わる＝即時プレビュー）ので、下書き用の state は持たない。
+  // 代わりに「開いた時点の値」を ref に控えておき、キャンセル・Esc ではそこへ丸ごと戻す
+  const [isTitleEditOpen, setIsTitleEditOpen] = useState(false);
   // 空文字 = 上書きなし（既定）。CSS 変数 --title-font-override を注入しない
   const titleFontOption = resolveTitleFontOption(titleFontId);
   const titleFontStack = titleFontOption.stack;
@@ -1067,6 +1106,20 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     // スライダー側でも操作のたびに履歴を積む必要がある（積まないと、スライダーで変えた値が
     // 無関係な Undo で古い値へ戻ってしまう）。
     notationSizeMultiplier: number;
+    // タイトル・サブタイトル・作者欄と、その書式（Issue #576）。
+    // タイトル編集ダイアログの「決定」を Undo 1件で戻せるようにするために入れている。
+    // 音符の大きさ（#571）と同じ考え方で、「入口（ダイアログ）は保存先ではない」＝
+    // 実体はここまで含めた譜面の状態、という形にそろえてある。
+    // 古い履歴（この値が入る前のスナップショット）では undefined になり得るので、
+    // 復元側（applySnapshot）は undefined のときに今の値を保つ
+    title?: string;
+    subtitle?: string;
+    lyricist?: string;
+    composer?: string;
+    arranger?: string;
+    titleFontId?: string;
+    titleFontSize?: number;
+    titleFontWeight?: TitleFontWeight | undefined;
     // パート間隔（Issue #572）。段の中のパート境界をドラッグして変えられるようになったため、
     // 音符の大きさとまったく同じ理由で Undo/Redo の対象にする（受入条件「Undo はドラッグ全体で
     // 1件・無変化なら0件」を、段の間隔・音符の大きさと同じ部品のまま満たすため）。
@@ -1079,6 +1132,7 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
   const currentScoreRef = useRef<ScoreSnapshot>({
     rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides,
     notationSizeMultiplier, partSpacingOffsetPx,
+    title, subtitle, lyricist, composer, arranger, titleFontId, titleFontSize, titleFontWeight,
   });
 
   // useRef(createPlaybackEngine(...)) と引数に直接書くと、useRef は初回しか値を使わないのに
@@ -2369,7 +2423,18 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
    * stopped のときは何もしない（起動時の復元で音声エンジンを作らせないため）。
    * 終了は必ず finally から呼ぶ（復元が途中で失敗しても再生ボタンが戻るように）
    */
+  // タイトル編集ダイアログ（Issue #576）を開いた時点の値。キャンセル・Esc で戻す先であり、
+  // 「決定」で履歴へ積む中身でもある。宣言をここに置いているのは、すぐ下の beginWorkRestore
+  // （＝作品の切替・復元の入口）から控えを捨てる必要があるため
+  const titleEditBaselineRef = useRef<ScoreSnapshot | null>(null);
+
   const beginWorkRestore = useCallback((): number => {
+    // 別の作品へ入れ替わるので、開いたままのタイトル編集ダイアログは閉じ、控えも捨てる
+    // （#576 round1 P2-3）。残したままだと、新規作成・ファイル読込・復元のあとに
+    // 「キャンセル」で前の作品のタイトルが新しい譜面へ書き戻され、「決定」では
+    // 前の作品のスナップショットが新しい譜面の履歴に積まれてしまう
+    titleEditBaselineRef.current = null;
+    setIsTitleEditOpen(false);
     const token = ++workRestoreSeqRef.current;
     workRestoreInProgressRef.current = true;
     setIsWorkRestoring(true);
@@ -2582,8 +2647,12 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
 
   // スコアデータが変わるたびに currentScoreRef を最新に保つ
   useEffect(() => {
-    currentScoreRef.current = { rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides, notationSizeMultiplier, partSpacingOffsetPx };
-  }, [rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides, notationSizeMultiplier, partSpacingOffsetPx]);
+    currentScoreRef.current = {
+      rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides, notationSizeMultiplier, partSpacingOffsetPx,
+      title, subtitle, lyricist, composer, arranger, titleFontId, titleFontSize, titleFontWeight,
+    };
+  }, [rightHandData, leftHandData, quartetParts, ensembleParts, ensembleSecondStaffParts, systemMeasureOverrides, systemRowGapOverrides, notationSizeMultiplier, partSpacingOffsetPx,
+    title, subtitle, lyricist, composer, arranger, titleFontId, titleFontSize, titleFontWeight]);
 
   // ツールバーの「元に戻す/やり直す」ボタンの活性・非活性を切り替えるためのカウンタ。
   // historyStack/futureStack は ref のため、その中身が変わっただけでは再レンダーされない。
@@ -2611,6 +2680,81 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     futureStack.current = future;
     setHistoryVersion(v => v + 1);
   }, []);
+
+  // 「いまの状態」ではなく、明示したスナップショットを履歴へ積む（Issue #576）。
+  // タイトル編集ダイアログは即時プレビューのために入力のたび本物の state を書き換えるので、
+  // 「決定」を押した時点の currentScoreRef はもう変更後の値になっている。そのまま
+  // pushHistory すると Undo しても何も戻らない。開いた時点で控えておいた値をここへ渡す。
+  // 併合の印（historyCoalesceRef）は見ない: 直前の編集と1件にまとめられてしまうと
+  // 「ダイアログの変更だけを Undo 1件で戻す」という受入条件を満たせないため
+  const pushHistoryWithSnapshot = useCallback((snapshot: ScoreSnapshot) => {
+    const { history, future } = pushHistorySnapshot(
+      historyStack.current,
+      futureStack.current,
+      { ...snapshot },
+      MAX_HISTORY
+    );
+    historyStack.current = history;
+    futureStack.current = future;
+    setHistoryVersion(v => v + 1);
+  }, []);
+
+  // ── タイトル編集ダイアログ（Issue #576） ────────────────────────────
+  // タイトル欄の中身が5つとも空か（＝見出しの高さが 0 になり、クリックの入口が消える状態）
+  const isTitleBlockEmpty = !title && !subtitle && !lyricist && !composer && !arranger;
+
+  const openTitleEditDialog = useCallback(() => {
+    // 印刷プレビュー中・パート譜の閲覧専用表示では譜面を編集できないので、開かない
+    if (isScoreEditingLocked) return;
+    titleEditBaselineRef.current = { ...currentScoreRef.current };
+    setIsTitleEditOpen(true);
+  }, [isScoreEditingLocked]);
+
+  // 5つの欄の入力。下書きに溜めず本物の state を直接書き換えるので、
+  // 打った瞬間に後ろの譜面のタイトルが変わる（受入条件の「即時プレビュー」）
+  const handleTitleFieldChange = useCallback((field: 'title' | 'subtitle' | 'lyricist' | 'composer' | 'arranger', value: string) => {
+    if (field === 'title') setTitle(value);
+    else if (field === 'subtitle') setSubtitle(value);
+    else if (field === 'lyricist') setLyricist(value);
+    else if (field === 'composer') setComposer(value);
+    else setArranger(value);
+  }, []);
+
+  const closeTitleEditDialog = useCallback(() => {
+    titleEditBaselineRef.current = null;
+    setIsTitleEditOpen(false);
+  }, []);
+
+  const handleTitleEditConfirm = useCallback(() => {
+    const baseline = titleEditBaselineRef.current;
+    closeTitleEditDialog();
+    if (!baseline) return;
+    const now = currentScoreRef.current;
+    // 何も変えずに「決定」した場合まで履歴へ積むと、Undo が1回空振りする。
+    // 8項目のどれかが変わったときだけ積む（＝ダイアログ1回につき最大1件）
+    if (!hasTitleFieldChanges(baseline, now)) return;
+    // 積むのは「開いた時点の譜面まるごと」ではなく、**いまの譜面のタイトル 8 項目だけを
+    // 開いた時点の値へ戻したもの**（#576 round1 P2-2）。このダイアログは暗幕を置いていない
+    // ＝開いたまま音符を編集できるので、開いた時点の譜面をそのまま積むと、そのあとの
+    // Undo で音符の編集まで巻き戻ってしまう
+    pushHistoryWithSnapshot(withTitleFieldsFrom(now, baseline));
+  }, [closeTitleEditDialog, pushHistoryWithSnapshot]);
+
+  const handleTitleEditCancel = useCallback(() => {
+    const baseline = titleEditBaselineRef.current;
+    closeTitleEditDialog();
+    if (!baseline) return;
+    // プレビュー中に変えたものも含めて開く前へ完全に戻す（受入条件「1px も変わらない」）。
+    // 履歴には積んでいないので、取り消しても Undo の並びは荒れない
+    if (baseline.title !== undefined) setTitle(baseline.title);
+    if (baseline.subtitle !== undefined) setSubtitle(baseline.subtitle);
+    if (baseline.lyricist !== undefined) setLyricist(baseline.lyricist);
+    if (baseline.composer !== undefined) setComposer(baseline.composer);
+    if (baseline.arranger !== undefined) setArranger(baseline.arranger);
+    if (baseline.titleFontId !== undefined) setTitleFontId(baseline.titleFontId);
+    if (baseline.titleFontSize !== undefined) setTitleFontSize(baseline.titleFontSize);
+    setTitleFontWeight(baseline.titleFontWeight);
+  }, [closeTitleEditDialog]);
 
   // 「選択中の小節位置にある全パートのデータ」を集める共通ヘルパー。
   // 移調・小節挿入・小節削除はどれも「対象パートを列挙する→各パートに同じ変換をかけて
@@ -2890,6 +3034,19 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
     if (restored.partSpacingOffsetPx !== undefined) {
       applyPartSpacingOffsetPx(restored.partSpacingOffsetPx);
     }
+    // タイトル・サブタイトル・作者欄と書式（Issue #576）。
+    // 音符の大きさと同じく、古い履歴には入っていない（undefined）ので、
+    // そのときは今の値を保つ（勝手に空文字・既定へ戻さない）。
+    if (restored.title !== undefined) setTitle(restored.title);
+    if (restored.subtitle !== undefined) setSubtitle(restored.subtitle);
+    if (restored.lyricist !== undefined) setLyricist(restored.lyricist);
+    if (restored.composer !== undefined) setComposer(restored.composer);
+    if (restored.arranger !== undefined) setArranger(restored.arranger);
+    if (restored.titleFontId !== undefined) setTitleFontId(restored.titleFontId);
+    if (restored.titleFontSize !== undefined) setTitleFontSize(restored.titleFontSize);
+    // 太さだけは undefined そのものが「既定（タイトルのみ太字）」という意味を持つ値なので、
+    // 「入っていない」と区別できない。キーの有無で判定する
+    if ('titleFontWeight' in restored) setTitleFontWeight(restored.titleFontWeight);
     // Undo/Redo は編集位置とは無関係にデータ全体を丸ごと差し替えるため、
     // 段割りの安定化ヒントも古い編集位置を引きずらないようリセットする（Issue #67）。
     setLastEditedMeasureIndex(null);
@@ -7152,48 +7309,11 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                   </select>
                 </label>
 
-                <label className="toolbar-select-label" title="タイトル・サブタイトル・作詞/作曲/編曲者の文字の書体を変えます（音符や記号の書体は変わりません）">
-                  <span>タイトルの書体</span>
-                  <select
-                    value={titleFontId}
-                    onChange={(event) => setTitleFontId(event.target.value)}
-                    aria-label="タイトルの書体"
-                  >
-                    {TITLE_FONT_OPTIONS.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                {/* 文字サイズ（倍率）と太さ（Issue #420）。タイトル・サブタイトル・作者欄へ一括で効く */}
-                <label className="toolbar-select-label" title="タイトル・サブタイトル・作詞/作曲/編曲者の文字の大きさを、既定の見た目に対する倍率で変えます">
-                  <span>タイトルの文字サイズ</span>
-                  <input
-                    type="range"
-                    min={TITLE_FONT_SIZE_MIN}
-                    max={TITLE_FONT_SIZE_MAX}
-                    step={TITLE_FONT_SIZE_STEP}
-                    value={titleFontSize}
-                    onChange={(event) => setTitleFontSize(normalizeTitleFontSize(Number(event.target.value)))}
-                    aria-label="タイトルの文字サイズ"
-                  />
-                  <span className="toolbar-range-value">{Math.round(titleFontSize * 100)}%</span>
-                </label>
-
-                <label className="toolbar-select-label" title="タイトル・サブタイトル・作詞/作曲/編曲者の文字の太さをまとめて変えます（未設定のときはタイトル行だけが太字の従来どおりの見た目です）">
-                  <span>タイトルの太さ</span>
-                  <select
-                    value={titleFontWeight ?? ''}
-                    onChange={(event) => setTitleFontWeight(normalizeTitleFontWeight(event.target.value))}
-                    aria-label="タイトルの太さ"
-                  >
-                    <option value="">既定（タイトルのみ太字）</option>
-                    <option value="normal">標準</option>
-                    <option value="bold">太字</option>
-                  </select>
-                </label>
+                {/* タイトルの書体・文字サイズ・太さ（#342/#420）は、ここ（楽譜設定タブの常設）から
+                    タイトル欄をクリックすると開く編集ダイアログへ移した（Issue #576）。
+                    使う頻度は「まれ」なのに常に見えていてパレットが混むうえ、文字そのものと
+                    書式が別の場所に分かれていた。実体は components/TitleEditDialog.tsx で、
+                    書式の3つは components/TextFormatContextPanel.tsx（#451 と共用予定の共通部品）。 */}
               </div>
 
               <div className="instrumentation-summary" aria-live="polite">
@@ -8044,6 +8164,28 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
         />
       )}
 
+      {isTitleEditOpen && (
+        // タイトル編集ダイアログ（Issue #576）。暗幕は使わず、譜面の上に浮かせるだけ。
+        // 位置決めは App.css の .title-edit-dialog（画面右下・固定）で、
+        // タイトルは紙面の上・中央にあるので編集中も見え続ける
+        <TitleEditDialog
+          title={title}
+          subtitle={subtitle}
+          lyricist={lyricist}
+          composer={composer}
+          arranger={arranger}
+          fontId={titleFontId}
+          fontSize={titleFontSize}
+          fontWeight={titleFontWeight}
+          onFieldChange={handleTitleFieldChange}
+          onFontIdChange={setTitleFontId}
+          onFontSizeChange={setTitleFontSize}
+          onFontWeightChange={setTitleFontWeight}
+          onConfirm={handleTitleEditConfirm}
+          onCancel={handleTitleEditCancel}
+        />
+      )}
+
       {showSymbolEditor && (
         <SymbolEditor
           existingDefs={customSymbolDefs}
@@ -8304,17 +8446,56 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                           #204 で入れた3列グリッド（左に見えない控えを置いてタイトルを中央に保つ細工）は、
                           「横並び」という前提そのものが無くなったので撤去した。
                           見た目の指定は App.css の .score-title / .score-subtitle / .score-credit 側。 */}
+                      {/* クリック（キーボードなら Enter / Space）でタイトル編集ダイアログを開く（Issue #576）。
+                          以前はここで直接タイプできた（contentEditable）が、文字は譜面上・書式は
+                          「楽譜設定」タブという二か所に分かれていた。運用者裁定（2026-09-05）で
+                          ダイアログへ一本化し、譜面上の直接入力は廃止した。
+                          button 要素にはせず role="button" を付けているのは、h1 / p の中に
+                          button を入れると印刷用の見た目（.score-title の字送り・中央寄せ）へ
+                          ブラウザ既定のボタン装飾が混ざるため。 */}
                       <h1
                         className="score-title"
-                        contentEditable suppressContentEditableWarning
-                        onBlur={(e) => setTitle(e.currentTarget.innerText)}
+                        role="button"
+                        tabIndex={0}
+                        // アクセシブルな名前は aria-label で固定する。付けないと名前が
+                        // 「譜面のタイトルの文字そのもの」になり、役割が button である以上
+                        // 「その文字を名前に持つボタン」として拾われてしまう
+                        // （実際に CI で、タイトルが「弱起配線テスト」の譜面において
+                        //  弱起ボタンを名前で探すテストが2件ヒットして落ちた）
+                        aria-label="タイトルを編集"
+                        title="クリックするとタイトルを編集できます"
+                        onClick={openTitleEditDialog}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            openTitleEditDialog();
+                          }
+                        }}
                       >
                         {title}
+                        {/* タイトル・サブタイトル・作者がすべて空だと、h1 も p も高さ 0 になって
+                            クリックの入口そのものが画面から消えてしまう（#576 round1 P2-4）。
+                            譜面上の直接入力を廃止した今、ここが唯一の入口なので、
+                            全部空のときだけ薄い案内文を出して掴めるようにする。
+                            案内文は画面だけのもの。印刷・印刷プレビューでは
+                            App.css 側（@media print / .print-preview）で消える */}
+                        {isTitleBlockEmpty && (
+                          <span className="score-title-placeholder">タイトルを入力</span>
+                        )}
                       </h1>
                       <p
                         className="score-subtitle"
-                        contentEditable suppressContentEditableWarning
-                        onBlur={(e) => setSubtitle(e.currentTarget.innerText)}
+                        role="button"
+                        tabIndex={0}
+                        aria-label="サブタイトルを編集"
+                        title="クリックするとタイトルを編集できます"
+                        onClick={openTitleEditDialog}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            openTitleEditDialog();
+                          }
+                        }}
                       >
                         {subtitle}
                       </p>
@@ -8327,10 +8508,23 @@ export default function ScorePage({ homeActionsRef, onGoHome, onLibraryReady, on
                           「作曲者だけの譜面」で上下に空行ができ、市販譜の配置からずれてしまう。
                           3つとも空なら作者行そのものが消える（高さを取らない）。 */}
                       {(lyricist || composer || arranger) ? (
-                        <div className="score-credit">
-                          {lyricist ? <div contentEditable suppressContentEditableWarning onBlur={(e) => setLyricist(e.currentTarget.innerText)}>{lyricist}</div> : null}
-                          {composer ? <div contentEditable suppressContentEditableWarning onBlur={(e) => setComposer(e.currentTarget.innerText)}>{composer}</div> : null}
-                          {arranger ? <div contentEditable suppressContentEditableWarning onBlur={(e) => setArranger(e.currentTarget.innerText)}>{arranger}</div> : null}
+                        <div
+                          className="score-credit"
+                          role="button"
+                          tabIndex={0}
+                          aria-label="作詞者・作曲者・編曲者を編集"
+                          title="クリックするとタイトル・作者を編集できます"
+                          onClick={openTitleEditDialog}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              openTitleEditDialog();
+                            }
+                          }}
+                        >
+                          {lyricist ? <div>{lyricist}</div> : null}
+                          {composer ? <div>{composer}</div> : null}
+                          {arranger ? <div>{arranger}</div> : null}
                         </div>
                       ) : null}
                       {isPartExtractionActive && (
