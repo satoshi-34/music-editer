@@ -2,7 +2,6 @@
 // 段の全小節を描いた後に走る一括描画（#695 段6a）: arcs[] ベースの弧・松葉・レガシータイ。
 // PianoSystemCanvas の描画 effect 末尾から、閉包の代わりに SystemSpansDeps を受け取る関数へ
 // 物理移設した。本文は移設前のまま（挙動ゼロ差）。
-import type React from 'react';
 import type { Stave, StaveNote } from 'vexflow';
 import type { IncomingArcEntry } from '../../utils/incomingArcUtils';
 import { keyToLine as keyToLineForClef } from '../../components/clefUtils';
@@ -11,39 +10,36 @@ import { HAIRPIN_Y_OFFSET, drawHairpinSegment } from '../../utils/hairpinRenderU
 import { asRenderedPartIndex, type RenderedPartIndex } from '../../utils/crossStaffUtils';
 import { isSlurObstacleNote, resolveArcUpward } from '../../utils/arcDirectionUtils';
 import { resolveArcEndpointY, shouldAnchorArcToStemSide } from '../../utils/arcStemAnchorUtils';
-import type { ClickCycleTarget, NotePositionP, Sel, SelectedArcSel, SelectedHairpinSel } from '../types';
-import type { PartConfig, RenderCollectors } from '../../components/PianoSystemCanvas';
+import type { ClickCycleApi, LayerContext, LedgerContext, SelectionContext, SvgContext } from '../types';
+import type { PartConfig } from '../../components/PianoSystemCanvas';
 import type { SpanRenderer } from './spanRenderer';
 
+/**
+ * drawSystemSpans が閉包の代わりに受け取るもの。
+ * #695 段6b-2: 平らな 19 項目を文脈 5 つ＋spans・parts＋「対象」3 つ（このシステムの小節範囲と
+ * 段またぎ弧の索引）に束ねた（中身は同じ値）。対象は束に混ぜず引数として見えるようにしておく。
+ */
 export interface SystemSpansDeps {
   spans: SpanRenderer;
-  svgRoot: SVGGElement;
+  svg: SvgContext;
+  ledger: LedgerContext;
+  layer: LayerContext;
+  selection: SelectionContext;
+  cycle: ClickCycleApi;
   parts: PartConfig[];
-  selectedArc: SelectedArcSel;
-  selectedHairpin: SelectedHairpinSel;
-  notePositionMapP: Map<string, NotePositionP>;
-  collectors: RenderCollectors;
-  activeLayerHighlightPartIndex: number | null;
-  activeLayerPartIndex: number | undefined;
-  activeVoiceIndex: number;
   measuresPerSystem: number;
   startMeasureIndex: number;
   incomingArcIndex: Map<number, IncomingArcEntry[]> | undefined;
-  setSelected: (value: React.SetStateAction<NonNullable<Sel> | null>) => void;
-  setSelectedArc: (value: React.SetStateAction<NonNullable<SelectedArcSel> | null>) => void;
-  setSelectedHairpin: (value: React.SetStateAction<NonNullable<SelectedHairpinSel> | null>) => void;
-  tryClickCycle: (selfId: string, clientX: number, clientY: number) => boolean;
-  armClickCycleFor: (selfId: string, clientX: number, clientY: number) => void;
-  registerClickCycleTarget: (el: Element, target: ClickCycleTarget) => void;
 }
 
 export function drawSystemSpans(deps: SystemSpansDeps): void {
-  const {
-    spans, svgRoot, parts, selectedArc, selectedHairpin, notePositionMapP, collectors,
-    activeLayerHighlightPartIndex, activeLayerPartIndex, activeVoiceIndex, measuresPerSystem, startMeasureIndex,
-    incomingArcIndex, setSelected, setSelectedArc, setSelectedHairpin, tryClickCycle, armClickCycleFor,
-    registerClickCycleTarget,
-  } = deps;
+  // 束から従来のローカル名へ展開する（以下の本文は束ね直し前と同一）
+  const { spans, parts, measuresPerSystem, startMeasureIndex, incomingArcIndex } = deps;
+  const { svgRoot } = deps.svg;
+  const { notePositionMapP, collectors } = deps.ledger;
+  const { activeLayerHighlightPartIndex, activeLayerPartIndex, activeVoiceIndex } = deps.layer;
+  const { selectedArc, selectedHairpin, setSelected, setSelectedArc, setSelectedHairpin } = deps.selection;
+  const { tryClickCycle, armClickCycleFor, registerClickCycleTarget } = deps.cycle;
   const { carryTies, partLineNotes, notePosKeyP, pendingArcsP, pendingHairpinsP, arcKeyP, tieRepKeyP, drawArcPathP, stemTipYOfP, drawTieArcP } = spans;
   // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
   // UI案A2（#405 段3）: 弧を淡くするかは「実際に描かれている五線」で決める。

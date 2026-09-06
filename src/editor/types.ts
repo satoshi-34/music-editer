@@ -3,8 +3,13 @@
 // 1 か所に寄せた。コンポーネントの実装（props・state・閉包）に依存しない型だけを置く。
 // 描画台帳の塊（RenderCollectors）と props 型（PartConfig）は段6b/6c で扱うため、まだ移していない。
 // 各型の中身・コメントは移設前と同一（挙動ゼロ差）。
+import type React from 'react';
+import type { MutableRefObject } from 'react';
 import type { Stave, StaveNote } from 'vexflow';
 import type { ClefType } from '../components/clefUtils';
+// RenderCollectors（描画台帳の塊）は段6c で LedgerContext の内側へ移すまで PianoSystemCanvas に置く。
+// ここでは型だけを借りる（実行時の依存は無い。systemSpans.ts と同じ扱い）
+import type { RenderCollectors } from '../components/PianoSystemCanvas';
 
 // ── 選択 ─────────────────────────────────────────────────
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
@@ -124,3 +129,59 @@ export type DragSessions = {
   symbolOffsetMoved: boolean;
 };
 
+
+// ── 文脈（#695 段6b-2）─────────────────────────────────────
+// 描画 effect のローカルを「変更する理由が同じもの」ごとに束ねた型。描画関数・ハンドラは
+// 平らな十数個の引数ではなく、この束と「対象」（どの小節・どの音符か）を受ける。
+// 束の中身はいずれも effect 内で作った値・ref そのもので、束ねること自体は挙動を変えない。
+
+/**
+ * 「いま何が選ばれているか」と、その setter。
+ * 注意: 値（selected / selectedArc / selectedHairpin）は **effect 開始時のスナップショット**で live ではない。
+ * 閉包が捕まえていた値と同一なのでゼロ差だが、live が要る所（latestRef.current.x を読む箇所）は
+ * 別引数で latestRef を渡す。ハンドラ移設時に latestRef.current.x → selection.x と置換してはいけない。
+ */
+export interface SelectionContext {
+  selected: Sel;
+  selectedArc: SelectedArcSel;
+  selectedHairpin: SelectedHairpinSel;
+  setSelected: (value: React.SetStateAction<NonNullable<Sel> | null>) => void;
+  setSelectedArc: (value: React.SetStateAction<NonNullable<SelectedArcSel> | null>) => void;
+  setSelectedHairpin: (value: React.SetStateAction<NonNullable<SelectedHairpinSel> | null>) => void;
+}
+
+/** 編集レイヤー（#316/#417）: どのパート・声部が編集対象で、どのパートを強調表示するか */
+export interface LayerContext {
+  activeLayerPartIndex: number | undefined;
+  activeVoiceIndex: number;
+  activeLayerHighlightPartIndex: number | null;
+}
+
+/**
+ * 描画台帳（effect 内で生成し、Pass 3 が埋め、末尾が読む）と、ドラッグ中に読む ref。
+ * arcIdentityMap / arcGeomMap / notePositionMapP は collectors の中身と同じ Map を指す
+ * （effect が分割代入したローカル名をそのまま束ねている）。
+ */
+export interface LedgerContext {
+  arcIdentityMap: Map<string, ArcIdentityP>;
+  arcGeomMap: Map<string, ArcGeom>;
+  notePositionMapP: Map<string, NotePositionP>;
+  collectors: RenderCollectors;
+  dragSessionsRef: MutableRefObject<DragSessions>;
+  clickCyclePendingRef: MutableRefObject<PendingClickCycle | null>;
+}
+
+/** 今回の描画が作った SVG とその描画ルート（要素は描画のたびに作り直される） */
+export interface SvgContext {
+  svg: SVGSVGElement;
+  svgRoot: SVGGElement;
+}
+
+/** 再クリック巡回（#264）の入口 5 つ。createClickCycle の戻り値そのもの */
+export interface ClickCycleApi {
+  registerClickCycleTarget: (el: Element, target: ClickCycleTarget) => void;
+  prepareClickCycle: (selfId: string, clientX: number, clientY: number) => PendingClickCycle | null;
+  commitClickCycle: (pending: PendingClickCycle) => void;
+  tryClickCycle: (selfId: string, clientX: number, clientY: number) => boolean;
+  armClickCycleFor: (selfId: string, clientX: number, clientY: number) => void;
+}

@@ -253,6 +253,7 @@ import { OTTAVA_STAFF_GAP_PX, drawOttavaSystemEnd, type PendingOttava, type Otta
 import { drawSystemSpans } from '../editor/renderPipeline/systemSpans';
 import type {
   Sel, SelectedArcSel, SelectedHairpinSel, ClickCycleTarget, ArcGeom, ArcIdentityP, NotePositionP, DragSessions, PendingClickCycle,
+  SelectionContext, LayerContext, LedgerContext, SvgContext,
 } from '../editor/types';
 
 /* ===== 型 ===== */
@@ -4442,8 +4443,9 @@ export default function PianoSystemCanvas({
     const allG=svg.querySelectorAll('g');
     const svgRoot=(allG.length?allG[allG.length-1]:svg) as SVGGElement;
 
-    const { registerClickCycleTarget, prepareClickCycle, commitClickCycle, tryClickCycle, armClickCycleFor } =
-      createClickCycle(svg, { clickCycleStateRef, clickCycleTargetsRef });
+    const clickCycle = createClickCycle(svg, { clickCycleStateRef, clickCycleTargetsRef });
+    // effect 内で直接呼ぶ 3 つだけ展開する（prepareClickCycle / commitClickCycle は spanRenderer が束経由で使う）
+    const { registerClickCycleTarget, tryClickCycle, armClickCycleFor } = clickCycle;
 
     /**
      * StaveConnector（段の左右の縦線・グループ括弧）を描き、そのとき増えた
@@ -4794,6 +4796,13 @@ export default function PianoSystemCanvas({
       chordSymbolEntries, ottavaEntries, noteObstacles, staveTopYByPart,
       arcGeomMap, beatColumnsByMeasureP, notePositionMapP, arcIdentityMap,
     } = collectors;
+    // 文脈（#695 段6b-2）: 描画関数へ渡すローカルを「変更する理由が同じもの」ごとに 1 回だけ束ねる。
+    // 中身は上のローカルそのもの（束ねても挙動は変わらない）。selection の値はこの effect 開始時の
+    // スナップショット（live が要る所は latestRef を使う。types.ts の注意書きを参照）
+    const svgContext: SvgContext = { svg, svgRoot };
+    const selectionContext: SelectionContext = { selected, selectedArc, selectedHairpin, setSelected, setSelectedArc, setSelectedHairpin };
+    const layerContext: LayerContext = { activeLayerPartIndex, activeVoiceIndex, activeLayerHighlightPartIndex };
+    const ledgerContext: LedgerContext = { arcIdentityMap, arcGeomMap, notePositionMapP, collectors, dragSessionsRef, clickCyclePendingRef };
     // ドラッグ中の更新（window の mousemove）から今回の描画結果を参照できるようにしておく。
     // 描画のたびに SVG は作り直される（innerHTML='' → 新しい <svg>）ので、
     // 古い SVG を掴んだままにならないよう毎回ここで差し替える。
@@ -5394,9 +5403,7 @@ export default function PianoSystemCanvas({
     // 弧・タイ・松葉の描画部品と台帳（実体は createSpanRenderer・#695 段6a）。
     // 閉包で参照していたローカルを引数で渡し、戻り値を移設前と同じ名前で受ける（挙動ゼロ差）
     const spans = createSpanRenderer({
-      svg, svgRoot, clickCyclePendingRef, dragSessionsRef, parts, arcIdentityMap, arcGeomMap,
-      activeLayerPartIndex, activeVoiceIndex, setSelected, setSelectedArc, setSelectedHairpin,
-      registerClickCycleTarget, prepareClickCycle, armClickCycleFor, commitClickCycle,
+      svg: svgContext, ledger: ledgerContext, layer: layerContext, selection: selectionContext, cycle: clickCycle, parts,
     });
     // effect 側で直接使う台帳だけを取り出す（描画関数は drawSystemSpans が spans 経由で使う）
     const { partLineNotes, notePosKeyP, pendingArcsP, pendingHairpinsP } = spans;
@@ -8000,10 +8007,8 @@ export default function PianoSystemCanvas({
     // 弧・松葉・レガシータイの一括描画（実体は drawSystemSpans・#695 段6a）。
     // 閉包で参照していたローカルは引数で渡す（挙動ゼロ差の物理移設）
     drawSystemSpans({
-      spans, svgRoot, parts, selectedArc, selectedHairpin, notePositionMapP, collectors,
-      activeLayerHighlightPartIndex, activeLayerPartIndex, activeVoiceIndex, measuresPerSystem, startMeasureIndex,
-      incomingArcIndex, setSelected, setSelectedArc, setSelectedHairpin, tryClickCycle, armClickCycleFor,
-      registerClickCycleTarget,
+      spans, svg: svgContext, ledger: ledgerContext, layer: layerContext, selection: selectionContext, cycle: clickCycle, parts,
+      measuresPerSystem, startMeasureIndex, incomingArcIndex,
     });
     // cleanup（#244 段4a）: この effect が作った SVG を指す ref を破棄する。
     // 次の実行では冒頭で SVG ごと作り直して両 ref を再代入するため、再実行パスの挙動は

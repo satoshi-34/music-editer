@@ -840,6 +840,18 @@ README の「使い方」は取扱説明として残しつつ、そこに混じ�
 - **描画**: VexFlowのモディファイアは使わず、`StaffCanvas.tsx` / `PianoSystemCanvas.tsx` の両方で円・パス・線による手組みのSVGとして描画する（フェルマータ＝弧＋点、スタッカート＝点、アクセント＝ストロークの山形、テヌート＝横線、マルカート＝塗りつぶした山形）。手組み描画のため、⤢/✥ツールでのサイズ・位置調整に対応している（後述）
 
 
+### 描画関数の引数（文脈）を変更したときの確認
+
+- 描画 effect が渡す引数は `src/editor/types.ts` の文脈型（Selection / Layer / Ledger / Svg / ClickCycleApi）に
+  束ねてある。`createSpanRenderer` / `drawSystemSpans` は冒頭で束から従来のローカル名へ展開しているので、
+  束の中身を増減したら展開行も合わせる（本文は触らない）。
+- 束の値は effect 開始時のスナップショット。live の選択が要る処理は `latestRef` を別引数で受ける
+  （types.ts の SelectionContext の注意書き）。
+- 最小の自動確認: `npx vitest --run src/components/PianoSystemCanvasClickCycle.test.tsx src/components/PianoSystemCanvasDragCancel.test.tsx`
+  に加えて `npx tsc --noEmit` と `npm run lint:ratchet`（分割代入の残骸は未使用変数として基準値を超える）。
+- ハンドラの自由変数を数えるときは `node scratchpad/free-ids.cjs src/components/PianoSystemCanvas.tsx <開始行>`
+  （開始行に `addEventListener` があれば終端は自動で拾う）。
+
 ### 再クリック巡回を変更したときの確認
 
 - 入口と候補台帳は `src/editor/clickCycle.ts`、巡回の純粋な判定は

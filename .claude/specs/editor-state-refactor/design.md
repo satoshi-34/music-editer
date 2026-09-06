@@ -682,8 +682,8 @@ live ではない。いまの閉包が捕まえている値と同一なのでゼ
 段6a の Deps を文脈で書き直したときの引数の数（宣言で数えた見込み。6b-2 で実測に置換する）:
 | Deps | いま | Selection | Layer | Ledger | clickCycle | Svg | 残り（parts など） | 文脈化後 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| SpanRendererDeps | 16 | setter 3 | 2 | 4 | 4 | 2 | parts 1 | **6**（selection / layer / ledger / clickCycle / svg / parts） |
-| SystemSpansDeps | 19 | 値 2＋setter 3 | 3 | 2 | 3 | 1 | parts / measuresPerSystem / startMeasureIndex / incomingArcIndex 4 | **9** |
+| SpanRendererDeps | 16 | setter 3 | 2 | 4 | 4 | 2 | parts 1 | **6**（selection / layer / ledger / cycle / svg / parts）— 6b-2 で実測どおり |
+| SystemSpansDeps | 19 | 値 2＋setter 3 | 3 | 2 | 3 | 1 | spans / parts / measuresPerSystem / startMeasureIndex / incomingArcIndex 5 | **10**（見込み 9 は `spans` の数え漏れ。対象 3 つは束に混ぜず引数のまま） |
 
 符頭クリック（54 変数）の内訳は 6b-2 の PR で `free-ids.cjs` の出力を「文脈で吸収 / 対象 / ツール / 書き込み口 / それ以外」に分類して表にし、6b-4 の審査基準にする。
 
@@ -744,6 +744,43 @@ export function handleNoteClick(
 - ブラウザ確認画像を `docs/qa/evidence/click-cycle-selection.png` に保存し、PR本文にも添付した。
   画像は巡回後の表示の証跡であり、選択の往復は上記 DOM 属性の確認結果と合わせて読む。
 
+
+### 段6b-2 本体: 描画関数の引数を文脈で束ね直す（2026-09-06）
+
+- `src/editor/types.ts` に文脈型 `SelectionContext / LayerContext / LedgerContext / SvgContext / ClickCycleApi` を追加。
+  `createClickCycle` の戻り値型を `ClickCycleApi` にした。`LedgerContext.collectors` の型 `RenderCollectors` は
+  段6c で移すまで PianoSystemCanvas から `import type` で借りる（systemSpans.ts が既にしている型だけの逆依存）。
+- 描画 effect は collectors を分割代入した直後に文脈 4 つ（svg / selection / layer / ledger）を 1 回だけ作り、
+  `createSpanRenderer` と `drawSystemSpans` へ束で渡す。両関数の冒頭で束から従来のローカル名へ展開するので、
+  それ以降の本文は束ね直し前とバイト一致（機械比較: spanRenderer 274 行・systemSpans 329 行とも IDENTICAL）。
+- effect 側の `prepareClickCycle / commitClickCycle` の分割代入は不要になったので外した（spanRenderer が束経由で使う）。
+  これを残すと lint:ratchet が 2 件増える。
+- 実測: SpanRendererDeps 16→6、SystemSpansDeps 19→10（上表を更新）。
+
+- 検証: tsc・フルテスト 401 ファイル・3,816 件・lint:ratchet 基準 324 件ちょうど・本文の機械比較 IDENTICAL。
+  ブラウザ（dev コンテナの Vite）: 既存譜面にクレッシェンドの松葉ツールで松葉を 1 本引き（束経由になった
+  createSpanRenderer / drawSystemSpans の描画・当たり判定登録の経路）、青の選択表示とコンソールエラー無しを確認。
+  画像は `docs/qa/evidence/render-args-6b2-hairpin.png`（描画された SVG を Bravura で再描画したもの）。
+  重なり対象の再クリック巡回は既存の配線テスト（PianoSystemCanvasClickCycle）で確認。確認後の松葉は元に戻した。
+
+#### 符頭クリック（744 行・6965〜7708）の自由変数分類（6b-4 の審査基準）
+`scratchpad/free-ids.cjs`（TypeScript AST）で列挙。コンポーネント内ローカル 59 件のうち `T` / `Parameters` /
+`NonNullable` / `const` は型・構文の誤検出なので実質 **55 件**（見込み 54）。ほかに import 42・モジュール関数 7。
+
+| 分類 | 名前（参照回数） | 件数 |
+| --- | --- | --- |
+| 文脈で吸収 | Selection: setSelected(16) setSelectedArc setSelectedHairpin ／ Layer: activeVoiceIndex(2) ／ Svg: svg svgRoot ／ cycle: tryClickCycle armClickCycleFor | 8 |
+| 対象（NoteTarget） | j(66) absI(43) activeEvs(23) part(8) clefHere(5) chordTopY(3) chordBotY(3) stave(2) noteCycleId(2) pi hit noteVisualLeft noteVisualRight i anchors parts | 16 |
+| ツール | tool(27) isSelectTool disabled | 3 |
+| 書き込み口（NoteWriter） | playNoteEvent(8) updateActiveEvent(2) doInsert(2) setScoreFor partsScoreRef onMeasureSelect onKeySignatureChange setSymbolResizeEditState setSymbolOffsetEditState openSymbolAdjustEditor setSymbolAdjustPickerState setTextEditState handleMeasureScopedTool | 13 |
+| ドラッグ状態（明示引数 `drag`） | dragSessionsRef(2) | 1 |
+| それ以外（effect 内ヘルパ・幾何・設定） | partKeyForAccidental(3) findSymbolAnchorRect(3) anchorFromClientPoint(3) firstStaveKeySignatureHitBounds(2) resolveSelectableKeyIndexAt(2) l2k(2) k2l(2) capacityBeatsAt(2) customSymbolDefs(2) containerRef(2) noteK2l snapLineForKeySelect previewAccidentalOnApply AdjustTarget(型) | 14 |
+
+読み方: 「それ以外」の 14 件が 6b-4 の本題。effect 内ヘルパ（l2k / k2l / capacityBeatsAt / anchorFromClientPoint …）は
+モードごとの関数へ移すときに「幾何ユーティリティ」として別モジュールへ出すか、`NoteTarget` に幾何値として畳むかを
+モードごとに決める。書き込み口 13 件は多いので、6b-4 では `NoteWriter` を「譜面を書く（setScoreFor / doInsert /
+updateActiveEvent / partsScoreRef）」と「UI を開く（setSymbol* / setTextEditState / openSymbolAdjustEditor）」の
+2 束に分ける案を先に検討する。
 
 ### 段6b-2 の先行分割: 巡回判定の依存方向整理（2026-09-06）
 
