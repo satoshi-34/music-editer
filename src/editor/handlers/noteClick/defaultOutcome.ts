@@ -16,6 +16,7 @@ import { buildRestEventsForBeats, fillPriorMeasureRests } from '../../../utils/m
 import { findTupletGroupPasteBlockReason, planTupletGroupPasteIntoRest } from '../../../utils/tupletUtils';
 import { getTupletClipboardGroup } from '../../../utils/tupletClipboard';
 import { describeTupletGroupPasteUnavailable } from '../../../utils/scoreEditorNotices';
+import { buildRestEditReplacement, getDurationTool } from '../../durationTools';
 import type { NoteReader, NoteTarget, NoteWriter } from './types';
 
 /**
@@ -132,7 +133,7 @@ export function restDefaultNoteClick(
 ): NoteClickOutcome {
   const { j, hitPi, hitVoice, absI, activeEvs, part, partKeyForAccidental, clefHere } = target;
   const { lx, ly, chordTopY, chordBotY, stave, l2k, restBodyCenterX } = target.geometry;
-  const { capacityBeatsAt, getDurationTool, buildRestEditReplacement } = reader;
+  const { capacityBeatsAt } = reader;
   const { setHitScore, setSelected, playNoteEvent, doInsert } = writer;
   // 休符を音符へ置き換えるときも、入力時の臨時記号（Issue #470）を反映する。
   const key=applyInputAccidentalToKey(
