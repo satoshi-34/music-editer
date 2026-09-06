@@ -29,7 +29,6 @@ import {
 } from './clefUtils';
 import { computeArcGeometry, computeArcTaperGeometry, computeArcHitGeometry, computeArcApexPoint, clampApexXRatio } from './arcUtils';
 import { armClickCycle, planClickCycle, type ClickCycleState } from './clickCycleUtils';
-import { drawHairpinSegment, HAIRPIN_Y_OFFSET } from '../utils/hairpinRenderUtils';
 import { pairPedalMarks, drawPedalBridgeLine, resolvePedalBaselineY, estimatePedalBottomExtensionPx, PEDAL_TEXT_DESCENT_PX } from '../utils/pedalBridgeUtils';
 import { deleteEventFromMeasures, deleteVoiceEventFromMeasures } from '../utils/noteDeletionUtils';
 import {
@@ -176,8 +175,6 @@ import {
 import { MAX_VOICES_PER_PART, buildTrailingRestEventsForBeats, computeVoiceDisplayPadding, getEventDurationBeats, getMeasureDurationBeats, getMeasureVoices, getPrimaryVoiceEvents, getVoiceEvents, resolveVoiceStemDirections, tupletBeatsMultiplier, withVoiceEventsUpdated } from '../utils/voiceMeasureUtils';
 import { buildBeatColumns, planLeadingRestFillBeats, type BeatColumn } from '../utils/beatColumnUtils';
 import { sliceBoundaryCandidates, snapToSliceBoundary } from '../utils/beatSliceUtils';
-import { isSlurObstacleNote, resolveArcUpward } from '../utils/arcDirectionUtils';
-import { resolveArcEndpointY, resolveSlurObstacleY, shouldAnchorArcToStemSide } from '../utils/arcStemAnchorUtils';
 import {
   buildTupletGroupPlan,
   buildTupletRestReplacement,
@@ -249,6 +246,10 @@ import {
 // 自由注釈の書体（Issue #432）はタイトル書体の一覧をそのまま共用する（別リストを作らない）
 import { DEFAULT_TITLE_FONT_ID, TITLE_FONT_OPTIONS, ensureTitleFontLoaded, resolveTitleFontOption, waitForTitleFontReady } from '../utils/titleFontOptions';
 import { ignoreWhenHomeShown } from '../utils/homeVisibility';
+import { ARC_APEX_HANDLE_SIZE, ARC_HIT_MIN_LEN_SCREEN_PX } from '../editor/renderPipeline/arcConstants';
+import { createSpanRenderer } from '../editor/renderPipeline/spanRenderer';
+import { OTTAVA_STAFF_GAP_PX, drawOttavaSystemEnd, type PendingOttava, type OttavaOrigin } from '../editor/renderPipeline/ottavaSystemEnd';
+import { drawSystemSpans } from '../editor/renderPipeline/systemSpans';
 
 /* ===== 型 ===== */
 type DurKey = '1'|'2'|'4'|'8'|'16'|'32'|'64';
@@ -283,10 +284,10 @@ type RenderedVoiceEntry = {
 };
 // voiceIndex: 声部2（下声）の音符を選択したときだけ 1 を入れる。
 // 未指定（voice0/primary）は既存互換のため 0 扱いにする。
-type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number; voiceIndex?: number } | null;
+export type Sel = { partIndex: number; measure: number; index: number; keyIndex?: number; voiceIndex?: number } | null;
 // 選択中の弧・松葉の型（#244 段1: latestRef と useState で共用するため alias 化）
-type SelectedArcSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null;
-type SelectedHairpinSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null;
+export type SelectedArcSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number } | null;
+export type SelectedHairpinSel = { partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; hairpinIndex: number } | null;
 
 /**
  * 弧（タイ／スラー）・松葉が載っているイベントを「その弧が属する声部の中で」書き換える（Issue #190）。
@@ -395,17 +396,6 @@ let selectionOwnerSeq = 0;
 // 画面px換算の許容幅が実際のズーム倍率だけズレてしまう。
 // そこで getSvgVisualMetrics（getBoundingClientRect の実測値）から求めた
 // 「実効スケール（requestedScale × CSSズームを両方含む）」を使うことで、
-// 弧（タイ／スラー）の当たり判定まわりの寸法。どちらも「画面上の見た目の px」で決め、
-// 実際に使うときは getRawPerScreenPx(svg) で SVG 内部座標（raw 単位）へ変換する。
-// raw 単位の定数のままだと、画面表示のズームを変えたときに「画面上の掴みやすさ」が
-// 倍率ぶんズレてしまう（音符側の keySelectXPad と同じ理由・同じ流儀）。
-const ARC_HIT_STROKE_SCREEN_PX = 10;
-// 掴み代の下限。中央 50% だけを当たり判定にすると、全長 15〜20px の短いタイでは
-// 掴める長さが 7〜10px しか残らず、実質つまめなくなるため下限を設ける。
-const ARC_HIT_MIN_LEN_SCREEN_PX = 28;
-// 頂点ハンドル（正方形）の一辺。端点ハンドル（r=5 の丸）と同じく raw 単位なので、
-// 譜面の拡大縮小に合わせて大きさが変わる。
-const ARC_APEX_HANDLE_SIZE = 9;
 
 // フェルマータの形（Issue #527）。単位は五線の描画座標で、記号ごとの scale が掛かる。
 // 外側の弧は従来の見た目（11 × 9 の楕円）をそのまま引き継ぎ、記号が占める大きさを変えない。
@@ -426,7 +416,7 @@ const FERMATA_DOT_RADIUS = 1.9;
 const SYMBOL_DRAG_START_THRESHOLD_PX = 3;
 
 // 再クリック巡回（Issue #264）の候補1件ぶん。描画時に当たり判定要素へ紐づけて台帳に積む。
-type ClickCycleTarget = {
+export type ClickCycleTarget = {
   /**
    * 再描画をまたいでも同じ値になる論理ID。
    * 例: 音符 `note:p0:m3:v0:e2` / 弧 `arc:p0v0m3e2a0` / 松葉 `hairpin:p0v0m3e2h0`
@@ -700,7 +690,7 @@ function setNoteHoverHighlight(vfNote: unknown, active: boolean): void {
  * 弧（タイ／スラー）1本ぶんの形状パラメータ。
  * 描画時に arcGeomMap へ積んでおき、ドラッグ中の再計算（computeArcGeometry の引数）に使う。
  */
-type ArcGeom = {
+export type ArcGeom = {
   x1: number; y1: number; x2: number; y2: number;
   upward: boolean; kind: 'tie' | 'slur'; stemDir: number; obstacleY?: number;
   minNoteY?: number; maxNoteY?: number;
@@ -1508,10 +1498,10 @@ function formatSystemColumnVoices(allVoices: Voice[], restAlign: Voice[], refere
  * （設計メモ§2-4・§10）。各フィールドの型・既定値・ドキュメントは移設前と同一（挙動ゼロ差）。
  */
 /** 音符の描画位置台帳: 弧・松葉の端点解決に使う（キーは pXvXmXeX 形式） */
-type NotePositionP={note:StaveNote;stave:Stave;clef:ClefType;keys:string[];partIndex:number;measureIndex:number;voiceIndex:number;eventIndex:number};
+export type NotePositionP={note:StaveNote;stave:Stave;clef:ClefType;keys:string[];partIndex:number;measureIndex:number;voiceIndex:number;eventIndex:number};
 /** 弧の同定情報（どのパート・声部・イベントの何本目の弧か）。arcKey 文字列の解析を廃止した台帳 */
-type ArcIdentityP={partIndex:number;voiceIndex:number;fromMeasure:number;fromEvent:number;arcIndex:number};
-type RenderCollectors = {
+export type ArcIdentityP={partIndex:number;voiceIndex:number;fromMeasure:number;fromEvent:number;arcIndex:number};
+export type RenderCollectors = {
   dynamicTextEntries: Array<{
     anchorX: number;
     baseY: number;
@@ -1814,7 +1804,7 @@ type SymbolHitRegionAppender = {
  * - 障害物との最低間隔: 範囲内の音符の描画範囲から、五線と反対側へ逃がす
  */
 export const OTTAVA_FONT_SIZE_PX = 22;
-export const OTTAVA_STAFF_GAP_PX = 28;
+// OTTAVA_STAFF_GAP_PX の正本は editor/renderPipeline/ottavaSystemEnd.ts（#695 段6a で移設）
 export const OTTAVA_OBSTACLE_CLEARANCE_PX = 6;
 // "8va"/"8vb"（イタリック3文字）の字面幅の em 係数。破線の開始位置をフォントサイズへ
 // 追従させるための見積もり値（実測: 22px イタリックのセリフ体で約 36px ≒ 1.65em に余裕を足した値）
@@ -2498,6 +2488,79 @@ function drawCollectedSymbolEntries(args: {
     }
   });
 }
+
+/** ドラッグ中の各セッション（#695 段6a でモジュールスコープへ移動。中身は不変） */
+export type DragSessions = {
+  arcCp: {
+  partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
+  startSvgY: number; originalOffset: number;
+  baseArcKey: string;   // arcGeomMap 検索用ベースキー（suffix なし）
+  flipApplied: boolean; // ドラッグ中に方向反転が起きたか
+  segment: '' | '-1' | '-2'; // ドラッグ対象セグメント（'' = 非段またぎ）
+  apex: boolean;        // 頂点ハンドルからのドラッグか
+  startSvgX: number; originalRatio: number;
+  origin: { svgY: number; offset: number; svgX: number; ratio: number };
+  moved: boolean;       // 実際に形が変わったか（クリックしただけなら false）
+  } | null;
+  arcEp: {
+    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
+    endpoint: 'start' | 'end';
+    segment: '' | '-1' | '-2';
+    baseArcKey: string;
+    startSvgX: number; startSvgY: number;
+    originalDx: number; originalDy: number;
+    moved: boolean;       // 実際に動かしたか（クリックしただけなら false）
+  } | null;
+  arcMoved: boolean;
+  tieStart: {
+    partIndex: number; voiceIndex: number; absoluteIndex: number; noteIndex: number;
+    startKey: string; // ドラッグを開始した符頭の key
+    noteX: number; noteY: number; stemDir: number;
+  } | null;
+  measureAnchor: number | null;
+  /** 拍範囲スライス選択（#333 段2）のドラッグ開始点。null なら小節丸ごとドラッグ */
+  beatAnchor: { measure: number; beat: number } | null;
+  measureMoved: boolean;
+  /**
+   * 記号のドラッグ移動（Issue #522）。位置調整（✥）オーバーレイを開いている記号を
+   * つかんでいる間だけ入る。動かした値の反映は矢印キーとまったく同じ「下書き」経路
+   * （applySymbolOffsetDraft）に任せるので、ここにはドラッグの起点だけを持つ。
+   */
+  symbolOffset: {
+    /** つかんだ瞬間の SVG 内部座標（オフセット値と同じ単位系） */
+    startSvgX: number; startSvgY: number;
+    /** つかんだ瞬間の画面座標（しきい値の判定用。SVG 内部座標だと拡大率で遊びが変わる） */
+    startClientX: number; startClientY: number;
+    /**
+     * つかんだ瞬間のオフセット値。移動量は毎回「この値＋総移動量」で計算する。
+     * 1回ごとの差分を足し込む方式にすると、上下限で丸められたぶんが失われて
+     * 戻すときに指と記号がずれていく（クランプの累積ずれ）ため。
+     */
+    baseX: number; baseY: number;
+    /** しきい値を超えて「ドラッグ」になったか（超えるまではただのクリック扱い） */
+    moved: boolean;
+    /** つかんだポインタ列（タッチ対応・多点の混線防止。round1 P2） */
+    pointerId: number;
+    /**
+     * 未選択の記号を直接つかんだとき（Issue #553）に、しきい値を超えた時点で
+     * 「その記号を選ぶ（＝✥ オーバーレイを開く）」ために呼ぶ処理。
+     * すでに調整中の記号をつかんだ場合は null（開き直す必要がない）。
+     *
+     * ここで初めて開くのは、押した瞬間に開いてしまうと「選ぶつもりの1クリック」でも
+     * オーバーレイが2回開き直すことになり、3px 未満は従来どおりの click に任せる
+     * という仕様（#553 受入2）が守れないため。
+     *
+     * 戻り値 false は「開けなかった」（例: 編集 UI の無い3声以降の記号）。
+     * その場合ドラッグは成立させず中止する。
+     */
+    beginAdjust: ((clientX: number, clientY: number) => boolean) | null;
+  } | null;
+  /**
+   * 直前のドラッグで記号を動かしたか。ドラッグの終わりに必ず来る click を
+   * 1回だけ読み飛ばすために使う（弧の arcMoved とまったく同じ役割）。
+   */
+  symbolOffsetMoved: boolean;
+};
 
 export default function PianoSystemCanvas({
   measuresPerSystem=4, tool, scale=0.86, plannedMeasureWidths, incomingArcIndex,
@@ -3209,77 +3272,6 @@ export default function PianoSystemCanvas({
   // タイ/松葉の開始点（tieStart）・小節範囲選択（measureAnchor / measureMoved）を
   // 1つの ref record へ機械的に集約した。ref なので再レンダーは絡まず、
   // フィールドの読み書きは従来の個別 ref とまったく同じタイミングで行われる。
-  type DragSessions = {
-    arcCp: {
-    partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
-    startSvgY: number; originalOffset: number;
-    baseArcKey: string;   // arcGeomMap 検索用ベースキー（suffix なし）
-    flipApplied: boolean; // ドラッグ中に方向反転が起きたか
-    segment: '' | '-1' | '-2'; // ドラッグ対象セグメント（'' = 非段またぎ）
-    apex: boolean;        // 頂点ハンドルからのドラッグか
-    startSvgX: number; originalRatio: number;
-    origin: { svgY: number; offset: number; svgX: number; ratio: number };
-    moved: boolean;       // 実際に形が変わったか（クリックしただけなら false）
-    } | null;
-    arcEp: {
-      partIndex: number; voiceIndex: number; fromMeasure: number; fromEvent: number; arcIndex: number;
-      endpoint: 'start' | 'end';
-      segment: '' | '-1' | '-2';
-      baseArcKey: string;
-      startSvgX: number; startSvgY: number;
-      originalDx: number; originalDy: number;
-      moved: boolean;       // 実際に動かしたか（クリックしただけなら false）
-    } | null;
-    arcMoved: boolean;
-    tieStart: {
-      partIndex: number; voiceIndex: number; absoluteIndex: number; noteIndex: number;
-      startKey: string; // ドラッグを開始した符頭の key
-      noteX: number; noteY: number; stemDir: number;
-    } | null;
-    measureAnchor: number | null;
-    /** 拍範囲スライス選択（#333 段2）のドラッグ開始点。null なら小節丸ごとドラッグ */
-    beatAnchor: { measure: number; beat: number } | null;
-    measureMoved: boolean;
-    /**
-     * 記号のドラッグ移動（Issue #522）。位置調整（✥）オーバーレイを開いている記号を
-     * つかんでいる間だけ入る。動かした値の反映は矢印キーとまったく同じ「下書き」経路
-     * （applySymbolOffsetDraft）に任せるので、ここにはドラッグの起点だけを持つ。
-     */
-    symbolOffset: {
-      /** つかんだ瞬間の SVG 内部座標（オフセット値と同じ単位系） */
-      startSvgX: number; startSvgY: number;
-      /** つかんだ瞬間の画面座標（しきい値の判定用。SVG 内部座標だと拡大率で遊びが変わる） */
-      startClientX: number; startClientY: number;
-      /**
-       * つかんだ瞬間のオフセット値。移動量は毎回「この値＋総移動量」で計算する。
-       * 1回ごとの差分を足し込む方式にすると、上下限で丸められたぶんが失われて
-       * 戻すときに指と記号がずれていく（クランプの累積ずれ）ため。
-       */
-      baseX: number; baseY: number;
-      /** しきい値を超えて「ドラッグ」になったか（超えるまではただのクリック扱い） */
-      moved: boolean;
-      /** つかんだポインタ列（タッチ対応・多点の混線防止。round1 P2） */
-      pointerId: number;
-      /**
-       * 未選択の記号を直接つかんだとき（Issue #553）に、しきい値を超えた時点で
-       * 「その記号を選ぶ（＝✥ オーバーレイを開く）」ために呼ぶ処理。
-       * すでに調整中の記号をつかんだ場合は null（開き直す必要がない）。
-       *
-       * ここで初めて開くのは、押した瞬間に開いてしまうと「選ぶつもりの1クリック」でも
-       * オーバーレイが2回開き直すことになり、3px 未満は従来どおりの click に任せる
-       * という仕様（#553 受入2）が守れないため。
-       *
-       * 戻り値 false は「開けなかった」（例: 編集 UI の無い3声以降の記号）。
-       * その場合ドラッグは成立させず中止する。
-       */
-      beginAdjust: ((clientX: number, clientY: number) => boolean) | null;
-    } | null;
-    /**
-     * 直前のドラッグで記号を動かしたか。ドラッグの終わりに必ず来る click を
-     * 1回だけ読み飛ばすために使う（弧の arcMoved とまったく同じ役割）。
-     */
-    symbolOffsetMoved: boolean;
-  };
   const dragSessionsRef = useRef<DragSessions>({
     arcCp: null, arcEp: null, arcMoved: false, tieStart: null,
     measureAnchor: null, beatAnchor: null, measureMoved: false,
@@ -4978,10 +4970,6 @@ export default function PianoSystemCanvas({
     // 描画のたびに SVG は作り直される（innerHTML='' → 新しい <svg>）ので、
     // 古い SVG を掴んだままにならないよう毎回ここで差し替える。
     arcDragContextRef.current={svg,svgRoot,arcGeomMap};
-    type PendingOttava = {
-      kind: '8va' | '8vb'; startX: number; lineY: number; adjust: ResolvedSymbolAdjust;
-      partIndex?: number; measureAbsoluteIndex?: number; eventIndex?: number; voiceIndex?: number; event?: NoteEvent;
-    };
     // ペア照合の途中状態。**パート×種類ごと**に持つ（#433 Codex round1 P2:
     // 単一変数の共有だと、同じ段で複数パートや 8va/8vb が開始したとき後の開始が
     // 先の開始を上書きし、先のブラケットが消える）
@@ -4992,10 +4980,6 @@ export default function PianoSystemCanvas({
     // 消える。段の外の小節を走査して「前の段から続いている開始」「次の段にある終了」を
     // 判定し、続きの括弧（段左端から／段右端まで・終端フックなし）を作る。
     // 走査の状態機械はペア照合本体と同じ（開始で開く・同種の終了で閉じる・別種は無視）。
-    type OttavaOrigin = {
-      adjust: ResolvedSymbolAdjust;
-      measureAbsoluteIndex: number; eventIndex: number; voiceIndex: number; event: NoteEvent;
-    };
     const scanOttavaState = (pi: number, from: number, to: number) => {
       const open = new Map<'8va' | '8vb', OttavaOrigin>();
       const measures = partsScoreForRender[pi] ?? [];
@@ -5579,278 +5563,15 @@ export default function PianoSystemCanvas({
 
     /* -- 音符と操作領域を描画 -- */
     x=PAGE_LEFT+labelW+(innerW-totalW)/2;
-    // パートごとの小節をまたぐタイ持ち越しと音符データ収集（タイグループ一括処理のため）
-    // isMultiVoice: レガシーのタイも「始点の小節が2声部なら上向き」に合わせるため、
-    // 音符を集めるときに小節の声部数を控えておく（Issue #192）。
-    type TieNoteP={note:StaveNote;keys:string[];tiedToNext:boolean;isRest:boolean;stave:Stave;isMultiVoice:boolean};
-    const carryTies: Array<{ note: StaveNote; keys: string[]; stave: Stave; isMultiVoice: boolean } | null> = parts.map(() => null);
-    const partLineNotes: TieNoteP[][] = parts.map(() => []);
-    // arcs[] ベースの描画用: 全音符の位置マップ。
-    // keys を含めることでスラーの方向計算に範囲内の全音符ラインを使える。
-    //
-    // Issue #186: 声部2の弧も描けるようにするため、キーに声部（voiceIndex）を足した。
-    // ただし以前はこのキーを `split('-')` で読み直している箇所があり、桁を増やすと
-    // 解析側が静かにずれて壊れる。そこで「キーは同定専用の不透明な文字列」と決め、
-    // 必要な情報（パート・小節・声部・イベント）はすべて値側に持たせる方式へ変えた。
-    const notePosKeyP=(partIndex:number,measureIndex:number,voiceIndex:number,eventIndex:number)=>
-      `p${partIndex}v${voiceIndex}m${measureIndex}e${eventIndex}`;
-    // clef: 「その音符を実際に描いた五線のクレフ」（Issue #310）。段またぎの音符は
-    // 隣の五線に載るので、音名→線の換算を自分のパートのクレフで行うと、弧の端点だけが
-    // 五線5本ぶんずれた高さに付いてしまう。五線とクレフは必ず対で持ち回る。
-    // startIsMultiVoice: 弧の「始点がある小節」が2声部かどうか（Issue #192）。
-    // 弧の向きの既定値をここで決めるため、描画待ちリストへ積むときに一緒に控えておく。
-    // 複数小節にまたがる弧でも始点の小節だけで判定するので、途中で声部数が変わっても
-    // 段またぎの2セグメントが食い違わない。
-    type PendingArcP={partIndex:number;voiceIndex:number;arc:TieArc;arcIndex:number;startNote:StaveNote;startStave:Stave;startClef:ClefType;startMeasureIdx:number;startEventIdx:number;startIsMultiVoice:boolean};
-    const pendingArcsP:PendingArcP[]=[];
-    // 松葉（ヘアピン）の描画待ちリスト。arcs と同じく全パート・全小節のレンダリング後にまとめて描く
-    type PendingHairpinP={partIndex:number;voiceIndex:number;hairpin:HairpinMark;hairpinIndex:number;startNote:StaveNote;startStave:Stave;startMeasureIdx:number;startEventIdx:number};
-    const pendingHairpinsP:PendingHairpinP[]=[];
-
-    const arcKeyP=(identity:ArcIdentityP)=>{
-      const key=`p${identity.partIndex}v${identity.voiceIndex}m${identity.fromMeasure}e${identity.fromEvent}a${identity.arcIndex}`;
-      arcIdentityMap.set(key,identity);
-      return key;
-    };
-
-    // tiedToNext レガシー用: 和音から代表符頭キーを選ぶ（upward なら最高音、downward なら最低音）
-    const tieRepKeyP=(clef:ClefType,keys:string[])=>{
-      if(!keys.length)return'b/4';
-      const kl=(k:string)=>keyToLineForClef(clef,k);
-      const avg=keys.reduce((s,k)=>s+kl(k),0)/keys.length;
-      return avg<2?keys[keys.length-1]:keys[0];
-    };
-
-    // 座標を直接受け取って弧パスを描く低レベルヘルパー
-    // arcKey: arcKeyP() が発行する同定用の文字列（段またぎ時は suffix "-1"/"-2"）。
-    // 中身の意味は arcIdentityMap から引く（文字列を解析してはいけない）。
-    const drawArcPathP=(x1:number,y1:number,x2:number,y2:number,upward:boolean,kind:'tie'|'slur',stemDir:number,obstacleY:number|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,minNoteY?:number,maxNoteY?:number,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatioRaw=0)=>{
-      // 保存値は壊れたデータもあり得るのでここで一度だけ丸め、以降は同じ値を使い回す
-      const apexXRatio=clampApexXRatio(apexXRatioRaw);
-      // 表示は「中央が太く端が細い」テーパー形状（Issue #261）。中心線は
-      // computeArcGeometry と同じなので、当たり判定・頂点ハンドルとはズレない。
-      const{dAttr}=computeArcTaperGeometry(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset,apexXRatio);
-      arcGeomMap.set(arcKey,{x1,y1,x2,y2,upward,kind,stemDir,obstacleY,minNoteY,maxNoteY,startDx,startDy,endDx,endDy,cpDyOffset,apexXRatio});
-
-      const baseKey=arcKey.replace(/-[12]$/,'');
-      const seg=arcKey.endsWith('-1')?'-1':arcKey.endsWith('-2')?'-2':'' as ''|'-1'|'-2';
-      const arcIdentity=arcIdentityMap.get(baseKey);
-      // Issue #190（段3）で声部2の弧も掴めるようにした。保存先は arcIdentity.voiceIndex に
-      // そろえてあるので、声部1のデータを壊す心配はもう無い。
-      // ただし掴めるのは「いま編集中の声部」の弧だけにする。音符の当たり判定（.vf-note-hit）が
-      // アクティブ声部にしか作られない既存の考え方（Issue #105）とそろえるためで、
-      // 2声部が重なって描かれる小節で、淡色の裏声部の弧を誤って掴む事故も防げる。
-      // identity が引けない弧は tiedToNext 方式のレガシー弧で、これは従来から編集対象ではない。
-      // レイヤー明示選択（#316）中は、弧のパートもアクティブレイヤーと一致するときだけ編集可
-      // （音符の当たり判定と同じ考え方。未指定なら従来どおり声部だけで判定）
-      const isEditableArc=arcIdentity!==undefined&&arcIdentity.voiceIndex===activeVoiceIndex
-        &&(activeLayerPartIndex==null||arcIdentity.partIndex===activeLayerPartIndex);
-
-      let hitPath:SVGPathElement|null=null;
-      if(isEditableArc){
-        // 当たり判定は弧の中央部（頂点まわり）だけにする。表示パス全体を太らせると
-        // 端点付近の帯が符頭に重なり、音符のクリックを吸ってしまう（Finale 等と同じ方針。
-        // 詳細は computeArcHitGeometry のコメント参照）。
-        // 太さ・掴み代の下限は「画面px基準」で決め、実効スケールで raw 単位へ直す。
-        // 判定に使うのは属性（stroke-width）なので、クリックのたびに測り直すことはできず、
-        // 描画した時点の倍率で焼き込まれる。「画面表示のズーム」は CSS の transform だけを
-        // 変える＝再描画を伴わないため、ズームしてから何も編集せずにクリックすると、
-        // 帯の幅は描画時の倍率のまま（画面px換算ではズーム倍率ぶんズレる）。
-        // ただしこれは raw 単位の定数だった従来と同じズレ方で、基準が「その時点で画面 10px」に
-        // なるぶん必ず従来以上に正確になる。次の再描画（音符の編集・段組みの変更・弧の選択など）で
-        // 正しい値へ戻る。同じ割り切りは符頭側の拡張帯（#246）でも採っている。
-        const rawPerPx=getRawPerScreenPxSafe(svg);
-        const{dAttr:hitDAttr}=computeArcHitGeometry(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset,apexXRatio,ARC_HIT_MIN_LEN_SCREEN_PX*rawPerPx);
-        hitPath=document.createElementNS('http://www.w3.org/2000/svg','path');
-        hitPath.setAttribute('d',hitDAttr);
-        hitPath.setAttribute('stroke','transparent');hitPath.setAttribute('stroke-width',String(ARC_HIT_STROKE_SCREEN_PX*rawPerPx));
-        hitPath.setAttribute('fill','none');hitPath.setAttribute('pointer-events','stroke');
-        // 印刷時に svg path を黒で強制するCSSがあるため、透明な当たり判定パスだと分かるよう目印を付けて印刷から除外する
-        hitPath.setAttribute('class','vf-arc-hit');
-        hitPath.setAttribute('data-arc-key-hit',arcKey);hitPath.style.cursor='grab';
-        // 再クリック巡回の候補として登録する（Issue #264）。
-        // 段またぎで2本に分かれていても論理的には1つの弧なので、ID は baseKey（segment 抜き）にする。
-        const arcCycleId=`arc:${baseKey}`;
-        const selectThisArc=()=>{
-          const{partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai}=arcIdentity!;
-          setSelectedHairpin(null);
-          setSelected(null);
-          setSelectedArc({partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
-        };
-        registerClickCycleTarget(hitPath,{id:arcCycleId,canActivate:()=>true,activate:selectThisArc});
-        hitPath.addEventListener('mousedown',(e)=>{
-          e.preventDefault();e.stopPropagation();
-          const me=e as MouseEvent;
-          // 同じ場所の2回目以降のクリックなら、奥に隠れている対象（符頭・別の弧・松葉）へ譲る。
-          // ただし弧はドラッグの開始も mousedown なので、ここでは**計画を預けるだけ**にして、
-          // 実際の切り替えは「動かさずに離した（＝ただのクリックだった）」と分かる mouseup まで待つ。
-          // こうしないと、選択した弧を同じ場所で掴み直して曲率を変えることができなくなる。
-          clickCyclePendingRef.current=prepareClickCycle(arcCycleId,me.clientX,me.clientY);
-          if(!clickCyclePendingRef.current)armClickCycleFor(arcCycleId,me.clientX,me.clientY);
-          const{partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai}=arcIdentity!;
-          setSelectedArc({partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai});
-          setSelected(null);
-          const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-          // 弧の本体を掴んだときは従来どおり膨らみ（上下）だけ。左右は動かさない
-          dragSessionsRef.current.arcCp={partIndex:pi,voiceIndex:vi,fromMeasure:fm,fromEvent:fe,arcIndex:ai,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,apex:false,startSvgX:svgX,originalRatio:apexXRatio,origin:{svgY,offset:cpDyOffset,svgX,ratio:apexXRatio},moved:false};
-        });
-        // 押した場所で動かさずに離したときだけ、預けてあった巡回を実行する（Issue #264）。
-        // 再描画で当たり判定パスが作り直されていても、計画は ref に預けてあるので拾える。
-        hitPath.addEventListener('mouseup',()=>{
-          const pending=clickCyclePendingRef.current;
-          clickCyclePendingRef.current=null;
-          // ドラッグで形を変えたのなら、それは巡回ではなく編集操作
-          if(!pending||dragSessionsRef.current.arcMoved)return;
-          commitClickCycle(pending);
-        });
-        hitPath.addEventListener('click',(e)=>{e.stopPropagation();});
-        svgRoot.appendChild(hitPath);
-      }
-
-      const visPath=document.createElementNS('http://www.w3.org/2000/svg','path');
-      visPath.setAttribute('d',dAttr);
-      // テーパー形状は「閉じた輪郭を塗る」形なので、線ではなく塗りで色を出す。
-      // 同じ色の細い stroke を重ねているのは端に厚みを残すため（arcUtils の解説を参照）。
-      // 太さは App.css の `path.vf-arc` で指定する（表示ウェイト・印刷・フロアを効かせるため）。
-      const arcColor=isSelected?'#3b82f6':'#000';
-      visPath.setAttribute('fill',arcColor);
-      visPath.setAttribute('stroke',arcColor);
-      // 属性値は CSS が効かない場面（印刷プレビューの外など）のための保険。
-      // 端の太さ 0.10 sp = 1 u をそのまま既定値にしておく。
-      visPath.setAttribute('stroke-width',String(ENGRAVING_THICKNESS_UNITS.slurEndpoint));
-      visPath.setAttribute('stroke-linejoin','round');
-      visPath.setAttribute('stroke-linecap','round');
-      visPath.setAttribute('pointer-events','none');
-      visPath.setAttribute('class','vf-arc');
-      visPath.setAttribute('data-arc-key',arcKey);
-      svgRoot.appendChild(visPath);
-
-      // 掴める場所（中央部）に入ったことを薄く見せる。掴み代が中央だけになった今、
-      // 手がかりが無いと「どこを触れば動くのか」が分からないため
-      //（音符側 setNoteHoverHighlight と同じく opacity で表現し、選択中の青と衝突させない）。
-      if(hitPath){
-        hitPath.addEventListener('mouseenter',()=>{visPath.style.opacity='0.55';});
-        hitPath.addEventListener('mouseleave',()=>{visPath.style.opacity='';});
-      }
-
-      // 選択中: 始点・終点に丸いハンドルを表示（段またぎ -2 には始点不要、-1 には終点不要）
-      if(isSelected&&isEditableArc){
-        const showStart=true;
-        const showEnd  =true;
-        const makeHandle=(cx:number,cy:number,epAttr:string,origDx:number,origDy:number,ep:'start'|'end')=>{
-          const h=document.createElementNS('http://www.w3.org/2000/svg','circle');
-          h.setAttribute('cx',String(cx));h.setAttribute('cy',String(cy));
-          h.setAttribute('r','5');
-          h.setAttribute('fill','#3b82f6');h.setAttribute('stroke','white');
-          h.setAttribute('stroke-width','1.5');
-          h.setAttribute('pointer-events','all');h.style.cursor='grab';
-          h.setAttribute(epAttr,arcKey);
-          h.addEventListener('mousedown',(e)=>{
-            e.preventDefault();e.stopPropagation();
-            const{partIndex:pi2,voiceIndex:vi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2}=arcIdentity!;
-            const{x:sx,y:sy}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-            dragSessionsRef.current.arcEp={partIndex:pi2,voiceIndex:vi2,fromMeasure:fm2,fromEvent:fe2,arcIndex:ai2,endpoint:ep,segment:seg,baseArcKey:baseKey,startSvgX:sx,startSvgY:sy,originalDx:origDx,originalDy:origDy,moved:false};
-          });
-          h.addEventListener('click',e=>e.stopPropagation());
-          svgRoot.appendChild(h);
-        };
-        if(showStart)makeHandle(x1,y1,'data-arc-ep-start',startDx,startDy,'start');
-        if(showEnd)  makeHandle(x2,y2,'data-arc-ep-end',  endDx,  endDy,  'end');
-
-        // 頂点ハンドル（Issue #260）: 上下＝膨らみ、左右＝頂点の左右位置。
-        // 端点の丸ハンドルと区別できるよう白い四角にしている（掴むと両方向へ動くので
-        // カーソルも 'move'）。位置は表示パスと同じ制御点から求めた頂点そのもの。
-        const apex=computeArcApexPoint(x1,y1,x2,y2,upward,kind,stemDir,obstacleY,cpDyOffset,apexXRatio);
-        const apexHandle=document.createElementNS('http://www.w3.org/2000/svg','rect');
-        apexHandle.setAttribute('x',String(apex.x-ARC_APEX_HANDLE_SIZE/2));
-        apexHandle.setAttribute('y',String(apex.y-ARC_APEX_HANDLE_SIZE/2));
-        apexHandle.setAttribute('width',String(ARC_APEX_HANDLE_SIZE));
-        apexHandle.setAttribute('height',String(ARC_APEX_HANDLE_SIZE));
-        apexHandle.setAttribute('fill','white');apexHandle.setAttribute('stroke','#3b82f6');
-        apexHandle.setAttribute('stroke-width','1.5');
-        apexHandle.setAttribute('pointer-events','all');apexHandle.style.cursor='move';
-        apexHandle.setAttribute('data-arc-apex',arcKey);
-        apexHandle.addEventListener('mousedown',(e)=>{
-          e.preventDefault();e.stopPropagation();
-          const{partIndex:pi3,voiceIndex:vi3,fromMeasure:fm3,fromEvent:fe3,arcIndex:ai3}=arcIdentity!;
-          const{x:svgX,y:svgY}=clientToGroup(svg,svgRoot,(e as MouseEvent).clientX,(e as MouseEvent).clientY);
-          dragSessionsRef.current.arcCp={partIndex:pi3,voiceIndex:vi3,fromMeasure:fm3,fromEvent:fe3,arcIndex:ai3,startSvgY:svgY,originalOffset:cpDyOffset,baseArcKey:baseKey,flipApplied:false,segment:seg,apex:true,startSvgX:svgX,originalRatio:apexXRatio,origin:{svgY,offset:cpDyOffset,svgX,ratio:apexXRatio},moved:false};
-        });
-        apexHandle.addEventListener('click',e=>e.stopPropagation());
-        svgRoot.appendChild(apexHandle);
-      }
-    };
-
-    // VexFlow の StaveNote から符幹先端（符頭と反対側の端）のYを取り出す（Issue #296）。
-    //
-    // getStemExtents() は `topY` / `baseY` を返すが、どちらが画面の上かは符幹の向きで
-    // 入れ替わるので、名前ではなく実際の座標の大小で選ぶ。上向きの弧なら「いちばん上」＝ min。
-    // 全音符や休符のように符幹を持たない音符では undefined を返し、呼び出し側が符頭に戻す。
-    const stemTipYOfP=(note:StaveNote|undefined,upward:boolean):number|undefined=>{
-      if(!note)return undefined;
-      try{
-        type R=Record<string,(...a:unknown[])=>unknown>;
-        const hasStem=(note as unknown as R)['hasStem']?.() as boolean|undefined;
-        if(hasStem===false)return undefined;
-        const ext=(note as unknown as R)['getStemExtents']?.() as {topY?:number;baseY?:number}|undefined;
-        if(!ext)return undefined;
-        const ys=[ext.topY,ext.baseY].filter((v):v is number=>typeof v==='number'&&Number.isFinite(v));
-        if(ys.length===0)return undefined;
-        return upward?Math.min(...ys):Math.max(...ys);
-      }catch{
-        // 描画前の音符など、符幹の情報がまだ無い状態でも譜面全体の描画は止めない
-        return undefined;
-      }
-    };
-
-    // fromKey / toKey の音高から個別符頭の正確な Y 座標を求めて弧を描く。
-    // クレフは始点・終点それぞれの「実際に載っている五線」のものを受け取る（Issue #310）。
-    // 段またぎの音符は隣の五線に描かれるため、五線とクレフが食い違うと端点だけがずれる。
-    const drawTieArcP=(clefs:{from:ClefType;to:ClefType},firstNote:StaveNote,fromKey:string,fromStave:Stave,lastNote:StaveNote,toKey:string,toStave:Stave,kind:'tie'|'slur',arcVoiceIndex:number,isMultiVoiceMeasure:boolean,allLines:number[]|undefined,allNoteYs:number[]|undefined,allObstacleNotes:StaveNote[]|undefined,cpDyOffset:number,arcKey:string,isSelected:boolean,flipDirection?:boolean,startDx=0,startDy=0,endDx=0,endDy=0,apexXRatio=0)=>{
-      type R=Record<string,(...a:unknown[])=>unknown>;
-      const bb1=(firstNote as unknown as R)['getBoundingBox']?.() as {getX:()=>number;getW:()=>number}|undefined;
-      const bb2=(lastNote  as unknown as R)['getBoundingBox']?.() as {getX:()=>number;getW:()=>number}|undefined;
-      const absX1=((firstNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
-      const absX2=((lastNote  as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
-      const x1=bb1?bb1.getX()+bb1.getW():absX1+4;
-      const x2=bb2?bb2.getX():absX2-4;
-      const fromLine=keyToLineForClef(clefs.from,fromKey);
-      const toLine=keyToLineForClef(clefs.to,toKey);
-      const stemDir=((firstNote as unknown as R)['getStemDirection']?.() as number|undefined)??0;
-      // 音高から決まる従来の向き（タイは始点の五線位置、スラーは区間内の音符の平均）。
-      // 2声部小節ではこれを使わず「声部1＝上・声部2＝下」に固定する（Issue #192）。
-      let pitchBasedUpward:boolean;
-      if(kind==='tie'){
-        pitchBasedUpward=fromLine<2;
-      }else{
-        const lines=(allLines&&allLines.length>0)?allLines:[fromLine,toLine];
-        pitchBasedUpward=lines.reduce((s,l)=>s+l,0)/lines.length<2;
-      }
-      const upward=resolveArcUpward({isMultiVoiceMeasure,voiceIndex:arcVoiceIndex,pitchBasedUpward,flipDirection});
-      // 多声部小節で弧が符幹と同じ側を通るときは、端点を符頭ではなく符幹先端側へ付ける
-      // （Issue #296）。符頭に付けたままだと、弧の両端が符幹・ビームの中を通ってしまう。
-      const anchorStart=shouldAnchorArcToStemSide({isMultiVoiceMeasure,upward,stemDirection:stemDir});
-      const lastStemDir=((lastNote as unknown as R)['getStemDirection']?.() as number|undefined)??stemDir;
-      const anchorEnd=shouldAnchorArcToStemSide({isMultiVoiceMeasure,upward,stemDirection:lastStemDir});
-      // 端点の隙間は手動調整の有無にかかわらず一律 ARC_NOTEHEAD_GAP（Issue #446 round1 裁定）。
-      const y1=resolveArcEndpointY({noteheadY:fromStave.getYForLine(fromLine),stemTipY:stemTipYOfP(firstNote,upward),upward,anchorToStem:anchorStart});
-      const y2=resolveArcEndpointY({noteheadY:toStave.getYForLine(toLine),stemTipY:stemTipYOfP(lastNote,upward),upward,anchorToStem:anchorEnd});
-      let obstacleY:number|undefined;
-      // minNoteY / maxNoteY は曲率ドラッグの「反転する境目」の基準に使う値なので、
-      // 従来どおり符頭だけから求める（符幹先端を混ぜると反転のしきい値が変わってしまう）。
-      const minNoteY=allNoteYs&&allNoteYs.length>0?Math.min(...allNoteYs):undefined;
-      const maxNoteY=allNoteYs&&allNoteYs.length>0?Math.max(...allNoteYs):undefined;
-      if(kind==='slur'&&allNoteYs&&allNoteYs.length>0){
-        // 符幹側を通る弧では、途中の音符の「符幹先端」も避ける対象に入れる（Issue #296）。
-        // 符頭だけを見ていると、符頭の上にある符幹とビームを弧が貫通してしまう。
-        // 符頭側を通る弧（単声部・手動反転した弧）では従来どおり符頭だけを見る。
-        const stemTipYs=anchorStart&&allObstacleNotes
-          ? allObstacleNotes.map(n=>stemTipYOfP(n,upward)).filter((v):v is number=>v!==undefined)
-          : undefined;
-        obstacleY=resolveSlurObstacleY({upward,noteheadYs:allNoteYs,stemTipYs});
-      }
-      drawArcPathP(x1+startDx,y1+startDy,x2+endDx,y2+endDy,upward,kind,stemDir,obstacleY,cpDyOffset,arcKey,isSelected,minNoteY,maxNoteY,startDx,startDy,endDx,endDy,apexXRatio);
-    };
+    // 弧・タイ・松葉の描画部品と台帳（実体は createSpanRenderer・#695 段6a）。
+    // 閉包で参照していたローカルを引数で渡し、戻り値を移設前と同じ名前で受ける（挙動ゼロ差）
+    const spans = createSpanRenderer({
+      svg, svgRoot, clickCyclePendingRef, dragSessionsRef, parts, arcIdentityMap, arcGeomMap,
+      activeLayerPartIndex, activeVoiceIndex, setSelected, setSelectedArc, setSelectedHairpin,
+      registerClickCycleTarget, prepareClickCycle, armClickCycleFor, commitClickCycle,
+    });
+    // effect 側で直接使う台帳だけを取り出す（描画関数は drawSystemSpans が spans 経由で使う）
+    const { partLineNotes, notePosKeyP, pendingArcsP, pendingHairpinsP } = spans;
 
     // パートごとの前小節臨時記号状態。小節線を越えた courtesy accidental 判定に使う。
     // PianoSystemCanvas は 1 システム（1 SVG）分だけ描くため、
@@ -8369,55 +8090,8 @@ export default function PianoSystemCanvas({
 
       x+=w;
     }
-    // ── オッターバの段またぎ: 段末の後処理（実機報告 2026-08-28）──
-    // (a) この段で開始したまま終了が来なかった括弧は、次の段以降に終了があるなら
-    //     段の右端まで描く（終端フックなし＝続きがあることを示す）
-    // (b) 前の段から開いたまま、この段に開始も終了も無い中間段は、全幅の括弧を描く
-    {
-      const systemRightXOf = (pi: number) => {
-        const staves = staveSets[pi] ?? [];
-        const last = staves[staves.length - 1];
-        return last ? last.getX() + last.getWidth() : 0;
-      };
-      const systemLeftXOf = (pi: number) => {
-        const first = staveSets[pi]?.[0];
-        if (!first) return 0;
-        const g = first as unknown as { getNoteStartX?: () => number };
-        return typeof g.getNoteStartX === 'function' ? g.getNoteStartX() : first.getX();
-      };
-      // (a) この段で開始したまま終了が来なかった括弧（パート×種類ごと）
-      for (const carried of pendingOttavaByKey.values()) {
-        if (carried.partIndex === undefined) continue;
-        if (!ottavaEndsAfter(carried.partIndex, carried.kind)) continue; // 終了がどこにも無い開始は描かない
-        ottavaEntries.push({ ...carried, endX: systemRightXOf(carried.partIndex), openEnd: true });
-      }
-      pendingOttavaByKey.clear();
-      parts.forEach((_, pi) => {
-        if (!partHasOttava(pi)) return;
-        for (const kind of ['8va', '8vb'] as const) {
-          const origin = ottavaOpenBefore(pi).get(kind);
-          if (!origin) continue; // 開いていない／この段の終了で消費済み
-          if (!ottavaEndsAfter(pi, kind)) continue; // 終了がどこにも無い開始は従来どおり描かない
-          const first = staveSets[pi]?.[0];
-          if (!first) continue;
-          const topY = first.getYForLine(0);
-          const botY = first.getYForLine(4);
-          ottavaEntries.push({
-            kind,
-            startX: systemLeftXOf(pi),
-            endX: systemRightXOf(pi),
-            lineY: kind === '8va' ? topY - OTTAVA_STAFF_GAP_PX : botY + OTTAVA_STAFF_GAP_PX,
-            adjust: origin.adjust,
-            partIndex: pi,
-            measureAbsoluteIndex: origin.measureAbsoluteIndex,
-            eventIndex: origin.eventIndex,
-            voiceIndex: origin.voiceIndex,
-            event: origin.event,
-            openEnd: true,
-          });
-        }
-      });
-    }
+    // オッターバの段またぎ: 段末の後処理（実体は drawOttavaSystemEnd・#695 段6a）
+    drawOttavaSystemEnd({ staveSets, parts, pendingOttavaByKey, ottavaEntries, partHasOttava, ottavaOpenBefore, ottavaEndsAfter });
 
     // 音符の当たり判定（.vf-note-hit）を、小節背景（.vf-hit）と弧の当たり判定より前面へ出す。
     // 小節背景は段間クリック帰属（Issue #219）のため隣段側の帯まで覆っており、
@@ -8495,331 +8169,13 @@ export default function PianoSystemCanvas({
       });
     }
 
-    // ── arcs[] ベースの弧を一括描画（arc.fromKey / arc.toKey で個別符頭 Y を指定） ──
-    // UI案A2（#405 段3）: 弧を淡くするかは「実際に描かれている五線」で決める。
-    // Y座標から推測すると、五線間の加線音（ヘ音記号の C5 など）で逆転する
-    // （#409 Codex round4 P2）。描画時に台帳へ控える。
-    // 弧がどの五線に描かれたかの台帳。**描画先パート型**（#376）で持ち、
-    // 所属パート番号（arc.partIndex 等）を誤って入れると型エラーになるようにする
-    // （所属基準の判定は #409 round2/4 で二度逆転バグを生んだ）
-    const arcRenderedPartByKey = new Map<string, RenderedPartIndex>();
-    const partIndexOfStave = (stave: Stave): RenderedPartIndex | undefined => {
-      const top = stave.getYForLine(0);
-      let hit: RenderedPartIndex | undefined;
-      collectors.staveTopYByPart.forEach((t, partIdx) => {
-        if (Math.abs(t - top) <= 1) hit = asRenderedPartIndex(partIdx);
-      });
-      return hit;
-    };
-    pendingArcsP.forEach(({partIndex,voiceIndex,arc,arcIndex,startNote,startStave,startClef,startMeasureIdx,startEventIdx,startIsMultiVoice})=>{
-      // 弧の終点は「同じ声部の events 配列の位置」を指す（設計メモの案A）。
-      // そのため終点の逆引きも必ず同じ声部のキーで行う。
-      const dest=notePositionMapP.get(notePosKeyP(partIndex,arc.toMeasureIndex,voiceIndex,arc.toEventIndex));
-      // 端点の高さは、その音符が実際に載っている五線のクレフで読む（Issue #310）。
-      // 段またぎでない音符では自分のパートのクレフが入っているので従来と同じ値になる。
-      const destClef=dest?.clef??parts[partIndex]?.clef??'treble';
-      const kl=(k:string)=>keyToLineForClef(startClef,k);
-
-      const arcKey=arcKeyP({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,arcIndex});
-      const cpDyOffset=arc.cpDyOffset??0;
-      // 頂点の左右位置。膨らみ（cpDyOffset）と同じく、段またぎでは第2セグメントを独立に持つ
-      const apexXRatio=arc.apexXRatio??0;
-      const startDx=arc.startDx??0,startDy=arc.startDy??0;
-      const endDx=arc.endDx??0,endDy=arc.endDy??0;
-      // selectedArc は声部も持つ（Issue #190）。声部が違えば別の弧なので一致条件に含める。
-      const isSelected=
-        selectedArc!==null&&
-        selectedArc.voiceIndex===voiceIndex&&
-        selectedArc.partIndex===partIndex&&
-        selectedArc.fromMeasure===startMeasureIdx&&
-        selectedArc.fromEvent===startEventIdx&&
-        selectedArc.arcIndex===arcIndex;
-
-      // 可変rangeでは終点が別Canvasにあり得る。従来はここでreturnして開始側の
-      // segment自体が消えていたため、開始音符から現在段右端までを先に描く。
-      if(!dest){
-        try{
-          type R=Record<string,(...a:unknown[])=>unknown>;
-          const bb=(startNote as unknown as R)['getBoundingBox']?.() as{getX:()=>number;getW:()=>number}|undefined;
-          const absX=((startNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
-          const x1=bb?bb.getX()+bb.getW():absX+4;
-          const fromLine=kl(arc.fromKey);
-          const upward=resolveArcUpward({isMultiVoiceMeasure:startIsMultiVoice,voiceIndex,pitchBasedUpward:fromLine<2,flipDirection:arc.flipDirection});
-          const stemDir=((startNote as unknown as R)['getStemDirection']?.() as number|undefined)??0;
-          // 段の右端で切れるセグメントも、始点の付き方は通常の弧とそろえる（Issue #296）
-          const y=resolveArcEndpointY({
-            noteheadY:startStave.getYForLine(fromLine),
-            stemTipY:stemTipYOfP(startNote,upward),
-            upward,
-            anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:stemDir}),
-          })+startDy;
-          const edgeX=startStave.getX()+startStave.getWidth();
-          {
-            const rp = partIndexOfStave(startStave);
-            if (rp !== undefined) arcRenderedPartByKey.set(arcKey+'-1', rp);
-          }
-          drawArcPathP(x1+startDx,y,edgeX+(arc.breakEndDx??0),y+(arc.breakEndDy??0),upward,arc.kind,stemDir,y,cpDyOffset,arcKey+'-1',isSelected,undefined,undefined,startDx,startDy,arc.breakEndDx??0,arc.breakEndDy??0,apexXRatio);
-        }catch{/* 段境界でも本文描画を止めない */}
-        return;
-      }
-
-      let allLines:number[]|undefined;
-      let allNoteYs:number[]|undefined;
-      // 符幹先端まで避けるかどうかは向き（upward）が決まってからでないと選べないので、
-      // ここでは音符そのものを集めておき、判定は drawTieArcP に任せる（Issue #296）。
-      let allObstacleNotes:StaveNote[]|undefined;
-      if(arc.kind==='slur'){
-        allLines=[];allNoteYs=[];allObstacleNotes=[];
-        // 位置マップの「値」に持たせた情報だけを見る（キー文字列は解析しない）。
-        // 避ける対象を「自声部の音符だけ」に絞るのは Issue #192（設計メモ §6）で
-        // 確定した正式仕様。他声部の音符まで避けると弧が不自然に膨らむため
-        // （判定理由は isSlurObstacleNote のコメントを参照）。
-        for(const{note,keys,stave,clef:noteClef,partIndex:pi2,voiceIndex:vi2,measureIndex:m,eventIndex:e} of notePositionMapP.values()){
-          if(pi2!==partIndex)continue;
-          if(!isSlurObstacleNote({arcVoiceIndex:voiceIndex,noteVoiceIndex:vi2}))continue;
-          const afterStart=m>startMeasureIdx||(m===startMeasureIdx&&e>=startEventIdx);
-          const beforeEnd =m<arc.toMeasureIndex||(m===arc.toMeasureIndex&&e<=arc.toEventIndex);
-          if(afterStart&&beforeEnd){
-            allObstacleNotes!.push(note);
-            keys.forEach(k=>{
-              // 障害物（避ける対象）の高さも、その音符が載っている五線とクレフの対で求める
-              const line=keyToLineForClef(noteClef,k);
-              allLines!.push(line);
-              allNoteYs!.push(stave.getYForLine(line));
-            });
-          }
-        }
-      }
-
-      // x2 < x1（終了音符が左にある）は段またぎの確実な証拠（音符は左→右に並ぶため）
-      type R=Record<string,(...a:unknown[])=>unknown>;
-      const roughAbsX1P=((startNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??Infinity;
-      const roughAbsX2P=((dest.note as unknown as R)['getAbsoluteX']?.() as number|undefined)??-Infinity;
-      const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30
-                     ||roughAbsX2P<roughAbsX1P;
-      if(!crossSystem){
-        {
-          // 同一五線に描かれる通常の弧。startStave がその五線
-          const rp = partIndexOfStave(startStave);
-          if (rp !== undefined) arcRenderedPartByKey.set(arcKey, rp);
-        }
-        try{drawTieArcP({from:startClef,to:destClef},startNote,arc.fromKey,startStave,dest.note,arc.toKey,dest.stave,arc.kind,voiceIndex,startIsMultiVoice,allLines,allNoteYs,allObstacleNotes,cpDyOffset,arcKey,isSelected,arc.flipDirection,startDx,startDy,endDx,endDy,apexXRatio);}catch{/* 保険 */}
-      }else{
-        try{
-          const bb1=(startNote as unknown as R)['getBoundingBox']?.() as{getX:()=>number;getW:()=>number}|undefined;
-          const bb2=(dest.note as unknown as R)['getBoundingBox']?.() as{getX:()=>number;getW:()=>number}|undefined;
-          const absX1=((startNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
-          const absX2=((dest.note as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
-          const x1=bb1?bb1.getX()+bb1.getW():absX1+4;
-          const x2=bb2?bb2.getX():absX2-4;
-          const fromLine=kl(arc.fromKey);const toLine=kl(arc.toKey);
-          const avgLines=(allLines&&allLines.length>0)?allLines:[fromLine,toLine];
-          const upward=resolveArcUpward({
-            isMultiVoiceMeasure:startIsMultiVoice,
-            voiceIndex,
-            pitchBasedUpward:avgLines.reduce((s,l)=>s+l,0)/avgLines.length<2,
-            flipDirection:arc.flipDirection,
-          });
-          const stemDir=((startNote as unknown as R)['getStemDirection']?.() as number|undefined)??0;
-          const destStemDir=((dest.note as unknown as R)['getStemDirection']?.() as number|undefined)??stemDir;
-          // 段またぎの2セグメントも、端点の付き方を通常の弧とそろえる（Issue #296）。
-          // ここがずれると、同じ弧なのに段の変わり目で高さが飛んで見える。
-          const y1=resolveArcEndpointY({
-            noteheadY:startStave.getYForLine(fromLine),
-            stemTipY:stemTipYOfP(startNote,upward),
-            upward,
-            anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:stemDir}),
-          });
-          const y2=resolveArcEndpointY({
-            noteheadY:dest.stave.getYForLine(toLine),
-            stemTipY:stemTipYOfP(dest.note,upward),
-            upward,
-            anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure:startIsMultiVoice,upward,stemDirection:destStemDir}),
-          });
-          const crossMinNoteY=allNoteYs&&allNoteYs.length>0?Math.min(...allNoteYs):undefined;
-          const crossMaxNoteY=allNoteYs&&allNoteYs.length>0?Math.max(...allNoteYs):undefined;
-          // 上段の右端: 開始音符が属するスタヴ自身の右端（右縦線）を使う
-          const edgeX1=startStave.getX()+startStave.getWidth();
-          // 下段の左端: 終了音符が属するスタヴ自身の左端（クレフ含む位置）を使う
-          const edgeX2=dest.stave.getX();
-          const cpDy2=arc.cpDyOffset2??0;
-          const breakEndDx=arc.breakEndDx??0;
-          const breakEndDy=arc.breakEndDy??0;
-          const breakStartDx=arc.breakStartDx??0;
-          const breakStartDy=arc.breakStartDy??0;
-          // 段境界のエッジ Y: 全体スラーの「仮想ピーク」を計算し、
-          // -1 は音符から右端に向かって弧方向に傾斜、-2 は左端から音符へ収束するよう見せる
-          const effY1P=y1+startDy;
-          const effY2P=y2+endDy;
-          // 行またぎ片側セグメントは、各段の音符高さを障害物基準にする。
-          // これで曲率ドラッグが制御点へ素直に反映される。
-          const segmentObstacleY1P=effY1P;
-          const segmentObstacleY2P=effY2P;
-          // 段またぎの片側セグメントは、境界点の高さを各段の音符高さに揃える。
-          // ふくらみは制御点で作ることで、不自然な斜め線を避ける。
-          {
-            const rp1 = partIndexOfStave(startStave);
-            const rp2 = partIndexOfStave(dest.stave);
-            if (rp1 !== undefined) arcRenderedPartByKey.set(arcKey+'-1', rp1);
-            if (rp2 !== undefined) arcRenderedPartByKey.set(arcKey+'-2', rp2);
-          }
-          drawArcPathP(x1+startDx,effY1P,edgeX1+breakEndDx,effY1P+breakEndDy,upward,arc.kind,stemDir,segmentObstacleY1P,cpDyOffset,arcKey+'-1',isSelected,crossMinNoteY,crossMaxNoteY,startDx,startDy,breakEndDx,breakEndDy,apexXRatio);
-          drawArcPathP(edgeX2+breakStartDx,effY2P+breakStartDy,x2+endDx,effY2P,upward,arc.kind,0,segmentObstacleY2P,cpDy2,arcKey+'-2',isSelected,crossMinNoteY,crossMaxNoteY,breakStartDx,breakStartDy,endDx,endDy,arc.apexXRatio2??0);
-        }catch{/* 保険 */}
-      }
-    });
-
-    // 終点側Canvas: 範囲外の開始音符を持つ arc をスコア全体から逆引きし、段頭から
-    // 終点へ向かう第2segmentを描く。start/count が可変でも絶対小節番号で照合する。
-    Array.from({ length: measuresPerSystem }, (_, offset) => startMeasureIndex + offset)
-      .flatMap((targetMeasure) => incomingArcIndex?.get(targetMeasure) ?? [])
-      .forEach(({ partIndex, voiceIndex, fromMeasure, fromEvent, arcIndex, arc, isMultiVoiceMeasure }) => {
-          // 終点も開始音符も、弧が載っている声部の中で数えたインデックスを指す（案A）。
-          const targetKey=notePosKeyP(partIndex,arc.toMeasureIndex,voiceIndex,arc.toEventIndex);
-          const dest=notePositionMapP.get(targetKey);
-          // 開始音符がこのCanvas内なら既存のpendingArcsPが両segmentを描くので重複しない。
-          if(!dest || notePositionMapP.has(notePosKeyP(partIndex,fromMeasure,voiceIndex,fromEvent))) return;
-          try{
-            const clef=parts[partIndex]?.clef??'treble';
-            // 段またぎの上下方向は終点音ではなく、開始側の fromKey で一度だけ決める。
-            // d5→b4 のように高さが大きく変わっても -1/-2 segment のふくらみをそろえる。
-            const fromLine=keyToLineForClef(clef,arc.fromKey);
-            const toLine=keyToLineForClef(clef,arc.toKey);
-            // 向きの既定値も始点の小節基準（2声部なら声部1=上・声部2=下）。
-            // 開始側の段の第1セグメントと必ず同じ向きになるようにする。
-            const upward=resolveArcUpward({isMultiVoiceMeasure,voiceIndex,pitchBasedUpward:fromLine<2,flipDirection:arc.flipDirection});
-            type R=Record<string,(...a:unknown[])=>unknown>;
-            const bb=(dest.note as unknown as R)['getBoundingBox']?.() as{getX:()=>number}|undefined;
-            const absX=((dest.note as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
-            const x2=bb?bb.getX():absX-4;
-            // 方向は開始音のまま保つ一方、終点座標は実際の toKey の五線位置を使う。
-            // 端点の付き方（符頭側／符幹側）も第1セグメントとそろえる（Issue #296）。
-            const destStemDir=((dest.note as unknown as R)['getStemDirection']?.() as number|undefined)??0;
-            const y=resolveArcEndpointY({
-              noteheadY:dest.stave.getYForLine(toLine),
-              stemTipY:stemTipYOfP(dest.note,upward),
-              upward,
-              anchorToStem:shouldAnchorArcToStemSide({isMultiVoiceMeasure,upward,stemDirection:destStemDir}),
-            })+(arc.endDy??0);
-            const edgeX=dest.stave.getX();
-            const baseKey=arcKeyP({partIndex,voiceIndex,fromMeasure,fromEvent,arcIndex});
-            const selectedHere=selectedArc!==null&&selectedArc.voiceIndex===voiceIndex&&selectedArc.partIndex===partIndex&&selectedArc.fromMeasure===fromMeasure&&selectedArc.fromEvent===fromEvent&&selectedArc.arcIndex===arcIndex;
-            {
-              const rp = partIndexOfStave(dest.stave);
-              if (rp !== undefined) arcRenderedPartByKey.set(baseKey+'-2', rp);
-            }
-            drawArcPathP(edgeX+(arc.breakStartDx??0),y+(arc.breakStartDy??0),x2+(arc.endDx??0),y,upward,arc.kind,0,y,arc.cpDyOffset2??0,baseKey+'-2',selectedHere,undefined,undefined,arc.breakStartDx??0,arc.breakStartDy??0,arc.endDx??0,arc.endDy??0,arc.apexXRatio2??0);
-          }catch{/* 壊れた旧arcでも他の譜面描画を止めない */}
-      });
-
-    // UI案A2（#405 段3）: 弧（スラー・タイ）も非アクティブなレイヤーでは淡くする。
-    //
-    // 記号（強弱・運指など）は appendSymbolHitRegion の一点を包めば全種類に効くが、
-    // 弧はそこを通らず別経路で描かれるため、淡色化から漏れていた（#409 Codex round1 P2）。
-    // どの五線に描かれたかは描画時に台帳（arcRenderedPartByKey）へ控えてある。
-    //
-    // 既知の範囲外: 松葉（ヘアピン）・ペダル・歌詞。これらは要素に識別情報を持たないため、
-    // 淡色化するには描画側へ属性を足す改修が要る。A2 は「譜面側でレイヤーが分かるか」を
-    // 試すための開発時限定の案であり、主要素（音符・ビーム・記号・弧）が揃えば
-    // 判断はできると考えて範囲外とした。採用する場合は残りも揃える。
-    if (activeLayerHighlightPartIndex != null) {
-      // 判定は描画時に控えた台帳から引く。Y座標からの推測は五線間の加線音で逆転する
-      // （#409 Codex round4 P2）
-      svgRoot.querySelectorAll('path.vf-arc').forEach((el) => {
-        const drawnPart = arcRenderedPartByKey.get(el.getAttribute('data-arc-key') ?? '');
-        if (drawnPart === undefined || drawnPart === activeLayerHighlightPartIndex) return;
-        const target = el as SVGElement;
-        target.setAttribute('opacity', String(INACTIVE_LAYER_SYMBOL_OPACITY));
-        // 印刷では不透明度を戻す。記号と同じクラスを付けて既存の印刷CSSに乗せる
-        target.classList.add('vf-inactive-layer-symbol');
-      });
-    }
-
-    // ── 松葉（ヘアピン）を一括描画（全パート・全小節レンダリング後に実行） ─────
-    // 五線の下（強弱記号と同じ高さ帯）に、開始音符から終了音符まで開く/閉じる2本線を描く
-    pendingHairpinsP.forEach(({partIndex,voiceIndex,hairpin,hairpinIndex,startNote,startStave,startMeasureIdx,startEventIdx})=>{
-      // 松葉の終点（endEvent）も弧と同じく「同じ声部の events 配列の位置」を指す。
-      const dest=notePositionMapP.get(notePosKeyP(partIndex,hairpin.endMeasure,voiceIndex,hairpin.endEvent));
-      if(!dest)return; // このキャンバスの描画範囲外なら無視
-      type R=Record<string,(...a:unknown[])=>unknown>;
-      const x1=((startNote as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
-      const x2=((dest.note as unknown as R)['getAbsoluteX']?.() as number|undefined)??0;
-      // selectedHairpin も声部を持つ（Issue #190）。
-      const isSelected=
-        selectedHairpin!==null&&
-        selectedHairpin.voiceIndex===voiceIndex&&
-        selectedHairpin.partIndex===partIndex&&
-        selectedHairpin.fromMeasure===startMeasureIdx&&
-        selectedHairpin.fromEvent===startEventIdx&&
-        selectedHairpin.hairpinIndex===hairpinIndex;
-      const offsetY=hairpin.offsetY??0;
-      // 松葉も弧と同じく、掴めるのはアクティブ声部のものだけにする（drawArcPathP のコメント参照）。
-      // onClick を渡さないと当たり判定パス自体が作られない（drawHairpinSegment の既存仕様）。
-      const hairpinCycleId=`hairpin:p${partIndex}v${voiceIndex}m${startMeasureIdx}e${startEventIdx}h${hairpinIndex}`;
-      const selectThisHairpin=()=>{
-        setSelected(null);
-        setSelectedArc(null);
-        setSelectedHairpin({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
-      };
-      const onClick=voiceIndex===activeVoiceIndex
-        &&(activeLayerPartIndex==null||partIndex===activeLayerPartIndex)
-        ? (ev:MouseEvent)=>{
-            // 同じ場所の再クリックなら、奥に隠れている対象（符頭・弧）へ譲る（Issue #264）
-            if(tryClickCycle(hairpinCycleId,ev.clientX,ev.clientY))return;
-            armClickCycleFor(hairpinCycleId,ev.clientX,ev.clientY);
-            setSelectedArc(null);
-            setSelectedHairpin({partIndex,voiceIndex,fromMeasure:startMeasureIdx,fromEvent:startEventIdx,hairpinIndex});
-          }
-        : undefined;
-      // 段またぎで2本に分かれても論理的には1つの松葉なので、同じIDで登録する
-      const onHitPathCreated=onClick
-        ? (hit:SVGPathElement)=>registerClickCycleTarget(hit,{id:hairpinCycleId,canActivate:()=>true,activate:selectThisHairpin})
-        : undefined;
-      // 段またぎ判定はタイ/スラーと同じ基準（五線Y差 > 30px、または終点が始点より左）
-      const crossSystem=Math.abs(startStave.getYForLine(2)-dest.stave.getYForLine(2))>30||x2<x1;
-      if(!crossSystem){
-        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1,x2,y:startStave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:0,fracEnd:1,isSelected,onClick,onHitPathCreated});
-      }else{
-        // 段またぎ: 上段（開始音符→段の右端）と下段（次段の左端→終了音符）に分割し、
-        // 開き幅（frac）を横幅の比率でつなげて自然に見せる
-        const edgeX1=startStave.getX()+startStave.getWidth();
-        const edgeX2=dest.stave.getX();
-        const span1=Math.max(edgeX1-x1,1);
-        const span2=Math.max(x2-edgeX2,1);
-        const breakFrac=span1/(span1+span2);
-        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1,x2:edgeX1,y:startStave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:0,fracEnd:breakFrac,isSelected,onClick,onHitPathCreated});
-        drawHairpinSegment({svgRoot:svgRoot as unknown as SVGElement,x1:edgeX2,x2,y:dest.stave.getYForLine(4)+HAIRPIN_Y_OFFSET+offsetY,type:hairpin.type,fracStart:breakFrac,fracEnd:1,isSelected,onClick,onHitPathCreated});
-      }
-    });
-
-    // ── パートごとの tiedToNext タイグループを一括描画（レガシー） ──────────
-    parts.forEach((part,pi)=>{
-      const ln=partLineNotes[pi];
-      let fi=0;
-      if(carryTies[pi]){
-        while(fi<ln.length&&ln[fi].tiedToNext&&!ln[fi].isRest)fi++;
-        if(fi<ln.length&&!ln[fi].isRest){
-          const c=carryTies[pi]!, e=ln[fi];
-          // レガシーのタイは声部1（measure.events）専用なので voiceIndex は常に 0。
-          // 向きの既定値は始点の音符がある小節の声部数で決める（Issue #192）。
-          try{drawTieArcP({from:part.clef,to:part.clef},c.note,tieRepKeyP(part.clef,c.keys),c.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,c.isMultiVoice,undefined,undefined,undefined,0,'legacy',false);}catch{/* 保険 */}
-          fi++;
-        }
-        carryTies[pi]=null;
-      }
-      while(fi<ln.length){
-        if(ln[fi].tiedToNext&&!ln[fi].isRest){
-          const start=fi;
-          while(fi<ln.length&&ln[fi].tiedToNext&&!ln[fi].isRest)fi++;
-          if(fi<ln.length){
-            const s=ln[start], e=ln[fi];
-            try{drawTieArcP({from:part.clef,to:part.clef},s.note,tieRepKeyP(part.clef,s.keys),s.stave,e.note,tieRepKeyP(part.clef,e.keys),e.stave,'tie',0,s.isMultiVoice,undefined,undefined,undefined,0,'legacy',false);}catch{/* 保険 */}
-            fi++;
-          }else{
-            carryTies[pi]={note:ln[start].note,keys:ln[start].keys,stave:ln[start].stave,isMultiVoice:ln[start].isMultiVoice};
-          }
-        }else{fi++;}
-      }
+    // 弧・松葉・レガシータイの一括描画（実体は drawSystemSpans・#695 段6a）。
+    // 閉包で参照していたローカルは引数で渡す（挙動ゼロ差の物理移設）
+    drawSystemSpans({
+      spans, svgRoot, parts, selectedArc, selectedHairpin, notePositionMapP, collectors,
+      activeLayerHighlightPartIndex, activeLayerPartIndex, activeVoiceIndex, measuresPerSystem, startMeasureIndex,
+      incomingArcIndex, setSelected, setSelectedArc, setSelectedHairpin, tryClickCycle, armClickCycleFor,
+      registerClickCycleTarget,
     });
     // cleanup（#244 段4a）: この effect が作った SVG を指す ref を破棄する。
     // 次の実行では冒頭で SVG ごと作り直して両 ref を再代入するため、再実行パスの挙動は

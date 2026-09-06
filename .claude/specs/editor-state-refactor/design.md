@@ -579,3 +579,51 @@ if (graceNoteMode && !activeEvs[j]?.isRest) {
 これは §2-4 の未完ではない: 段4c は §10 の裁定（ハンドラを無理に分離しない）どおり完了しており、
 描画部の独立ファイル化は**当初案から意図的に外した別課題**である。着手するなら新しい
 Issue として起票し、閉包共有（stave 参照等）の受け渡し設計から検討する。
+
+## 16. 第2期（Issue #695・2026-09-06 起票）
+
+### 現状の実測（2026-09-06）
+- `PianoSystemCanvas.tsx` 10,087 行（第1期着手時 7,416 行。段1〜5 のあと #316/#417/#572/#574/#604/#670 などの機能追加で肥大）
+- `ScorePage.tsx` 8,706 行（useCallback/useEffect/useMemo 207 個）
+- 最大の塊は描画 useEffect（約 4,500 行）。§10 の裁定どおりクリックハンドラは閉包に残してあり、
+  描画部の独立ファイル化は第1期のスコープ外だった（§15 末尾）。第2期はそこから始める
+
+### 目標形
+```
+src/editor/renderPipeline/   … 描画 effect のうち「閉包の局所を引数で受ければ独立できる」塊を関数へ
+src/editor/handlers/         … モード別のクリック／ドラッグハンドラ（段6b・hitResolution の分岐表から呼ぶ）
+src/editor/dragSessions/     … 弧CP/端点・小節範囲・タイ/松葉・レイアウト帯のドラッグ（段6c）
+src/components/scorePage/    … ScorePage の 読込/保存・再生制御・編成エディタ・タイトル編集（段7）
+```
+
+### 受け渡しの設計（閉包 → 引数）
+閉包が参照していたローカルは **Deps インターフェース 1 つ**にまとめて渡し、関数の戻り値を
+effect 側で移設前と同じ名前に分割代入する。これで本文は 1 文字も変えずに移せる（挙動ゼロ差の根拠）。
+- 型は当面 `import type` で PianoSystemCanvas から借りる（実行時の循環は無い）。段6b で型を
+  `src/editor/types.ts` へ寄せる
+- 定数（弧の当たり判定寸法・OTTAVA_STAFF_GAP_PX）は新モジュール側を正本にし、コンポーネントは
+  import する。コンポーネントからの re-export はしない（react-refresh の「コンポーネント以外の export」
+  で lint が 1 件増えるため）。テストは新モジュールから import する（OttavaLayout テストを書き換え済み）
+- `PendingClickCycle`（clickCyclePendingRef の中身の型）は spanRenderer.ts で定義した。PianoSystemCanvas 側の
+  インライン型と重複しているので、段6b で `src/editor/types.ts` へ寄せるときに片方へ統一する
+- 「何を閉包から受けているか」は TypeScript の AST で自由変数を機械的に列挙して決めた
+  （`scratchpad/free-ids.cjs`。手で数えると取りこぼす）
+
+### 段6a の実装記録（2026-09-06）
+移したもの（本文は無変更・行数は移設前の PianoSystemCanvas 内）:
+| 新モジュール | 中身 | 元の位置 | 行数 |
+| --- | --- | --- | --- |
+| `renderPipeline/arcConstants.ts` | 弧の当たり判定・頂点ハンドルの寸法 | 398〜408 | 11 |
+| `renderPipeline/spanRenderer.ts` | `createSpanRenderer(deps)`: 台帳（carryTies / partLineNotes / pendingArcsP / pendingHairpinsP）と `notePosKeyP / arcKeyP / tieRepKeyP / drawArcPathP / stemTipYOfP / drawTieArcP` | 5582〜5853 | 272 |
+| `renderPipeline/ottavaSystemEnd.ts` | `drawOttavaSystemEnd(deps)`: 段末のオッターバ括弧処理、`PendingOttava` / `OttavaOrigin` 型、`OTTAVA_STAFF_GAP_PX` | 8372〜8420・4981〜4998 | 57 |
+| `renderPipeline/systemSpans.ts` | `drawSystemSpans(deps)`: arcs[] の弧・松葉・レガシータイの一括描画 | 8498〜8823 | 326 |
+| （モジュールスコープへ） | `DragSessions` 型（中身不変）、`Sel / SelectedArcSel / SelectedHairpinSel / ClickCycleTarget / ArcGeom / ArcIdentityP / NotePositionP / RenderCollectors` の export | 3212〜3282 ほか | — |
+
+PianoSystemCanvas.tsx: 10,087 → 9443 行（-644）。うち描画 effect から出たのは約 650 行、残りは型・定数の移動。
+
+ゼロ差の検証: tsc・フルテスト・lint:ratchet 基準値・月光検聴版の回帰テスト（弧・松葉・オッターバ・段またぎ）。
+ハンドラ（弧の click / 巡回 / ドラッグ開始）は移した関数の中に**そのまま**入っており、
+setter・ref は引数で受けるだけなので、React の state 遷移は 1 つも変わっていない。
+
+次（段6b）: Pass 3 の中のクリックハンドラ群（`ir.addEventListener` 6905〜、符頭の `hit.addEventListener` 7310〜）を
+`src/editor/handlers/` へ。閉包の setter は「コンテキスト」1 オブジェクトで渡す。段6a と同じ手順（AST で自由変数を列挙 → Deps → 分割代入）。
