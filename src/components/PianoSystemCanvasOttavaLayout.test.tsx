@@ -4,7 +4,8 @@
 // - 範囲内に高い音（加線の音）があれば、その上へ逃がす（障害物回避・#340 の型）
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
-import PianoSystemCanvas, { OTTAVA_FONT_SIZE_PX, OTTAVA_STAFF_GAP_PX, OTTAVA_LABEL_WIDTH_EM } from './PianoSystemCanvas';
+import PianoSystemCanvas, { OTTAVA_FONT_SIZE_PX, OTTAVA_LABEL_WIDTH_EM } from './PianoSystemCanvas';
+import { OTTAVA_STAFF_GAP_PX } from '../editor/renderPipeline/ottavaSystemEnd';
 import type { MeasureData } from '../types/storage';
 
 vi.mock('../audio/NotePlayer', () => ({
