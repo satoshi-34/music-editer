@@ -1815,15 +1815,15 @@ button.ghost.active:hover:not(:disabled) {
 /* タイトル・サブタイトル・作者が全部空のときだけ出る案内文（#576 round1 P2-4）。
    全部空だと h1 も p も高さ 0 になり、クリックの入口が画面から消えてしまうため、
    掴めるだけの高さと薄い文字を与える。あくまで画面用の案内なので、
-   印刷と印刷プレビューでは消す（紙面に出したら誤植になる）。 */
+   印刷と印刷プレビューでは消す（紙面に出したら誤植になる）。
+   紙・PDF 側の指定は下の**既存の** @media print ブロックの中に置いてある
+   （App.css の印刷指定を静的に検査しているテストは「最初に見つかった @media print」
+   だけを見るため、前に新しい @media print ブロックを足してはいけない）。 */
 .score-title-placeholder {
   color: #9ca3af;
   font-weight: 400;
 }
 .print-preview .score-title-placeholder { display: none; }
-@media print {
-  .score-title-placeholder { display: none; }
-}
 
 /* ダイアログ本体。暗幕（オーバーレイ）は意図的に置いていない: 書体・文字サイズを
    変えた結果は後ろの譜面のタイトルで確かめるものなので、覆うと用をなさない。
@@ -2531,6 +2531,8 @@ button.ghost.active:hover:not(:disabled) {
      ページ末尾の段が次の紙へ押し出されてしまう */
   body { background: #fff !important; margin: 0 !important; }
   .toolbar { display: none !important; }
+  /* タイトル欄が全部空のときだけ出る画面用の案内文（#576 round1 P2-4）。紙面には出さない */
+  .score-title-placeholder { display: none !important; }
   /* UI案A2（Issue #405 段3・開発時のテスト会用）の「編集中レイヤーの色帯」は
      画面上で今どこを触っているかを示すための表示なので、紙面には出さない。
      非アクティブレイヤーの記号に掛けた不透明度も、紙では他の記号と同じ濃さへ戻す

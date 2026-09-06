@@ -167,6 +167,13 @@ Finale / Dolet のような厳格な読み手では不正扱い、または cred
 （`.score-title-placeholder`）を出す。**画面だけのもの**で、印刷と印刷プレビューでは
 `display: none`（紙面に出したら誤植になる）。
 
+なお紙・PDF 側の指定は、**既存の `@media print` ブロックの中**に書いた。この設計書の
+「積み残し」に書いてあるとおり、App.css の印刷指定を静的に検査しているテストは
+「最初に見つかった `@media print`」だけを見るため、前に新しいブロックを足すと
+本来の印刷ブロックが検査されなくなる。round1 の修正でこれを踏み、ci で
+`AppCssUiVariantBadgePrint.test.ts` と `AppCssToolbarPlacement.test.ts` が落ちた
+（#637 に続き2度目）。**この落とし穴は実在するので、印刷指定は必ず既存ブロックへ足すこと。**
+
 ### P3 のうち取り込んだもの
 
 - Cmd/Ctrl+Enter で決定（各欄が textarea で Enter は改行のため、修飾キーつきにした）
